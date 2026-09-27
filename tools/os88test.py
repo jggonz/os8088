@@ -139,6 +139,7 @@ capability is known to be there.
 import argparse
 import concurrent.futures
 import fnmatch
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -236,6 +237,18 @@ def capabilities():
     # named its parent.
     if os.access(os.path.join(ROOT, "build/cc/SmallerC/smlrcc"), os.X_OK):
         caps.add("cc")
+    # Pillow, for a row that WRITES a picture through it (pxsshots). Probed
+    # by import rather than by name, because a missing module reached the
+    # row as a traceback and a FAIL instead of a skip.
+    if os88build.have_pil():
+        caps.add("pil")
+    # ffmpeg AND numpy, the encoder front end's (tools/os88venc.py, SPEC.md
+    # 98.2.1). Nothing in the build needs either, so they are a capability
+    # and not a dependency, and `make deps` does not install ffmpeg's
+    # hundreds of MB for one row.
+    if shutil.which("ffmpeg") and shutil.which("ffprobe") and \
+            importlib.util.find_spec("numpy"):
+        caps.add("ffmpeg")
     # WIREFRAME is an instrument and does not ship (SPEC.md 78.9), so `all`
     # builds wire.o88 and NO shipped floppy carries it - the disk comes from
     # `make wiredisk` and nothing in the suite runs that. Without this, the

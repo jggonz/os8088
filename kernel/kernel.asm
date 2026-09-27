@@ -3073,9 +3073,9 @@ apic_xm_copy:
     ; (dropped) OSAPI_CXCELL osapi_cm_free_x    ; 0x01C0 - AX = a base segment you own; X
     ; (dropped) OSAPI_CSLOT osapi_cm_caps_x   ; 0x01C8 - AX/DX = largest/total free
                                   ;          PARAGRAPHS, BL = free records
-    OSAPI_RSLOT wm_resize          ; 0x017C - resize a window (SPEC.md 11.1):
+    OSAPI_RSLOT osapi_wm_resize    ; 0x017C - resize a window (SPEC.md 11.1):
                                   ;          BX = win, CX = w, DX = h; lock
-                                  ;          held. Retires the last liberty
+                                  ;          held or not (11.1.2). Retires the last liberty
                                   ;          in docs/plans/completed/PAINT-NOTES.md - an app
                                   ;          writing W_W/W_H itself
     OSAPI_SLOT gfx_blit4          ; 0x0182 - packed 4bpp block (SPEC.md 5.4):
@@ -4425,7 +4425,19 @@ apic_wm_wake:                     ; mem_cpq_run_x's door to the wake (SPEC.md
                                   ;          (SPEC.md 20.5.1.3.3)
     mov [byte cs:bx+W_ONCLICK], ax
     OSAPI_IEND
-osapi_table_end:                  ; 0x0455 today (0x05A8 before pass 4's
+    OSAPI_RNCELL dwf_dskw_read_seq ; 0x0455  N: A STREAMING READ (SPEC.md
+                                  ;          18.4.8): SI = name, DX:BX = the
+                                  ;          buffer, CX = capacity (clusters),
+                                  ;          ES:DI = the caller's 16-byte
+                                  ;          cursor - zero it and set +12 to
+                                  ;          start or seek. READ_AT without
+                                  ;          the per-call walk: the cursor is
+                                  ;          trusted under the mount
+                                  ;          generation it was seeded in and
+                                  ;          re-seeded from the name when
+                                  ;          anything remounted or wrote.
+                                  ;          kern_big; the small door refuses
+osapi_table_end:                  ; 0x045B today (0x05A8 before pass 4's
                                   ; renumber). TWO cells came off the tail in
                                   ; the size pass: OSAPI_MEM_COMPACT_WAKE
                                   ; (0x0598) is 0x0590's MEMC_POST verb
@@ -4443,8 +4455,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 95*6 + 6*3 + 6 + 12*5 + 3*6
-%error "os8088 API jump table must be exactly 0x0445 bytes: 43 SLOT (8), 11 XCELL (7), 95 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
+%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 96*6 + 6*3 + 6 + 12*5 + 3*6
+%error "os8088 API jump table must be exactly 0x044B bytes: 43 SLOT (8), 11 XCELL (7), 96 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
 %endif
 
 ; =============================================================================
@@ -4873,7 +4885,7 @@ api_file_path:
 ; user can neither see nor delete". That is a statement about PACKAGES, and
 ; it still holds - the fence below refuses one. A DRIVER is the other species
 ; (SPEC.md 51): drv_tab is a fixed kernel-side table of known files, a .DRV
-; carries header version 4 which ld_check_hdr refuses for an application, and
+; carries header version DRV_VER which ld_check_hdr refuses for an application, and
 ; disk_mount types only *.O88 as launchable - so the set of things that can
 ; ever be a driver is decided when this kernel is built and a user cannot add
 ; to it. That is a real boundary rather than an honour system, which is why
@@ -5947,31 +5959,7 @@ kmain:
 ; The boot timer is system ticks, 18.2065 Hz, from the boot sector's first
 ; instruction to the first desktop frame, 0xFFFF = never stamped (15.4).
 
-; ---- osapi_mouse - out: CX = [mouse_x], DX = [mouse_y], AL = [mouse_btn] -----
-; A package's tracking loop spins on this and does not return until the button
-; comes up, exactly as menu_track / ui_drag / ui_grow do - so on a machine with
-; no mouse it is a loop the keyboard has to be serviced from, or the button the
-; keyboard latched can never be released and the UI task never comes back
-; (SPEC.md 9.6.1). One compare on every machine that has a mouse.
-osapi_mouse:
-%ifdef KERN_BIG
-    cmp byte [fsx_task], 0xFF       ; A BRACKET IS UP, so a program owns the
-    je .nofsx                       ; machine and may have taken the mouse's
-    call mouse_rearm                ; IRQ out from under us (SPEC.md 9.13).
-.nofsx:                             ; Here because this is the call the DOS
-                                    ; box's own DHK_MOUSE makes on every INT
-                                    ; 33h read and every key poll - the same
-                                    ; choke point kd_mou_read is for kern_dos,
-                                    ; so the recovery needs no new slot at all
-%endif
-    cmp byte [mou_ptr], 0
-    jne .live
-    call kbm_poll
-.live:
-    mov cx, [mouse_x]
-    mov dx, [mouse_y]
-    mov al, [mouse_btn]
-    ret
+; osapi_mouse lives in kernel/mouse.inc beside the IRQ it re-arms (SPEC.md 9.13).
 
 ; ---- osapi_rand - seed = seed*25173 + 13849; out: AX = new seed --------------
 osapi_rand:
@@ -7105,9 +7093,9 @@ cw_gfx_fill_gray:       call gfx_fill_gray
                     retf
 cw_gfx_fill_pat:        call gfx_fill_pat
                     retf
+%ifdef OS88_THEME              ; (kern_small: vga12.inc aliases it)
 cw_thm_desk:            call thm_desk
                     retf
-%ifdef OS88_THEME
 cw_thm_set:             call thm_set
                     retf
 %endif

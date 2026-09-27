@@ -1153,20 +1153,25 @@ dsk_xfer:
 
 
 
+    mov si, cx                  ; SI = sectors remaining - taken HERE, so
+                                ; the warm test below may spend CX, and DX is
+                                ; dead until .sector's CHS arithmetic (kentc_bp
+                                ; banked both for the exit)
 %ifndef KD_BUILD                ; (kern_dos's fpg_busy is a stub: nothing to arm)
-    push cx                     ; **A STOPPED FLOPPY MOTOR IS WARM ALREADY**
-    push dx                     ; (SPEC.md 12.8.3.1). The first transfer of a
-    mov dl, [disk_drive]        ; mount is the one-sector boot read, and it is
-    call dsk_media_ok           ; the one that carries the SPIN-UP - an AT
-    jnc .warm                   ; BIOS waits DPT byte 10 for it, one second on
-    mov cx, FPG_WARM            ; a 286 - so FPG_WARM's sector count put the
-.warm:                          ; widget and the busy pointer up only AFTER the
-    pop dx                      ; second the machine sat dark. dsk_media_ok's
+    mov dl, [disk_drive]        ; **A STOPPED FLOPPY MOTOR IS WARM ALREADY**
+    call dsk_media_ok           ; (SPEC.md 12.8.3.1). The first transfer of a
+    jnc .warm                   ; mount is the one-sector boot read, and it is
+    mov cl, FPG_WARM            ; the one that carries the SPIN-UP - an AT
+.warm:                          ; BIOS waits DPT byte 10 for it, one second on
+                                ; a 286 - so FPG_WARM's sector count put the
+                                ; widget and the busy pointer up only AFTER the
+                                ; second the machine sat dark. dsk_media_ok's
                                 ; CF=1 is exactly "this floppy's motor is not
                                 ; turning" (a fixed disk and a driver volume
                                 ; answer CF=0), so it is asked here as it is
-                                ; asked for the media question; CX goes back
-                                ; below, fpg_busy preserving it
+                                ; asked for the media question. CL and not CX:
+                                ; a transfer is at most 128 sectors (ES:BX is
+                                ; one segment), so CH is already 0
 %endif
     call KERNEL_SEG:fpg_busy    ; **EVERY SECTOR IN THE MACHINE PASSES HERE,
                                 ; SO THIS IS WHERE THE PROGRESS WIDGET IS PUT
@@ -1188,9 +1193,6 @@ dsk_xfer:
                                 ; that draw must not land inside the window
                                 ; where ES:BX is pinned and switching is off.
                                 ; Every register and the flags are preserved
-%ifndef KD_BUILD
-    pop cx                      ; the transfer's own count again
-%endif
 
     inc byte [sch_lock]         ; pause task switching across all int 13h
 %ifdef OS88_COMPACT             ; ...and kern_small pins nothing, because
@@ -1225,8 +1227,7 @@ dsk_xfer:
                                 ; corruption the one time somebody missed it
 %endif
 
-    mov si, cx                  ; SI = sectors remaining
-    mov di, ax                  ; DI = current LBA
+    mov di, ax                  ; DI = current LBA (SI was taken above)
 
     push bx                     ; the volume's transport: a BIOS floppy falls
     mov bl, [disk_drive]        ; into the code below unchanged, and a
@@ -2190,16 +2191,11 @@ osapi_vol_at_x:
     inc al
     cmp al, DVOL_MAX
     jb .scan
-    pop di
-    pop si
+    stc                         ; no row matched...
+.found:                         ; ...and a match arrives on `je`, CF = 0 -
+    pop di                      ; so the one tail serves both (`pop` writes
+    pop si                      ; no flag)
     pop bx
-    stc
-    retf
-.found:
-    pop di
-    pop si
-    pop bx
-    clc
     retf
 
 ; -----------------------------------------------------------------------------
@@ -2307,21 +2303,17 @@ dsk_vol_add:
     call dsk_fatw_claim         ; and its own FAT window, if the heap will
                                 ; fund one (SPEC.md 18.8.1) - a refusal just
                                 ; leaves it sharing, as every volume did
+    clc
+.out:
     pop di
     pop si
     pop dx
     pop cx
     pop bx
-    clc
     ret
 .full:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     stc
-    ret
+    jmp short .out
 
 ; -----------------------------------------------------------------------------
 ; dsk_vol_del - unregister one driver-backed volume (SPEC.md 18.7)
@@ -2450,17 +2442,14 @@ osapi_vol_fence:
     cmp al, DRVC_MAX
     jbe .cls
 .no:
-    pop di
-    pop bx
-    pop ax
     stc
-    ret
-.yes:
-    mov [dsk_vcls], al          ; dsk_vol_add stamps the row with it
+    jmp short .out
+.yes:                           ; CF = 0 from the equal compare, and a `mov`
+    mov [dsk_vcls], al          ; writes none: dsk_vol_add stamps the row with it
+.out:
     pop di
     pop bx
     pop ax
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2726,11 +2715,7 @@ dsk_fat_window:
     mov [dsk_fatw0], ax
 .out:
     pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_dx
 
 ; -----------------------------------------------------------------------------
 ; disk_mount - mount a FAT12/FAT16 data floppy (SPEC.md 18.3)
@@ -2761,6 +2746,9 @@ disk_mount_x:
 %ifdef DISK_COUNTERS
     inc word [dsk_dbg_mnt]
 %endif
+%ifdef KERN_BIG
+    add word [dsk_mgen], 2      ; a new snapshot: READ_SEQ cursors re-seed
+%endif                          ; (SPEC.md 18.4.8)
 
     call dsk_fatw_park          ; the OUTGOING volume's window, banked while
                                 ; [disk_drive] still says which one it is
@@ -3762,13 +3750,7 @@ dsk_bpb_check:
     stc
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_di
 
 ; -----------------------------------------------------------------------------
 ; dsk_ent_zero - blank the staged directory entry (module-internal)
@@ -3940,11 +3922,7 @@ dsk_synth_x:
     mov word [dsk_ent+16], 1
 .typed:
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_dx
 
 ; -----------------------------------------------------------------------------
 ; dsk_sanit - display-name sanitizer (module-internal)
@@ -4352,12 +4330,9 @@ dsk_fatw_pick:
     jz .load
     cmp ax, [dsk_sigcur]        ; the boot sector this mount just read
     jne .load                   ; a different disk: reload, do not trust it
-    mov ax, [bx]
-    mov [dsk_fatw0], ax         ; still resident, and nothing can have
-    pop bx                      ; overwritten it: this window is ours alone
-    pop ax
-    clc
-    ret
+    mov ax, [bx]                ; (the equal compare left CF = 0, and `mov`
+    mov [dsk_fatw0], ax         ; keeps it) still resident, and nothing can
+    jmp short .out              ; have overwritten it: this window is ours
 .homeless:                      ; ABOUT TO WRITE THE KERNEL'S OWN WINDOW
     call dsk_fatw_evict         ; WITHOUT HOLDING THE PIN (SPEC.md 18.8.3), so
                                 ; nobody may go on believing they hold it: the
@@ -4368,9 +4343,10 @@ dsk_fatw_pick:
                                 ; enforced here as well because THIS is the
                                 ; routine that would do the damage
 .load:
+    stc
+.out:
     pop bx
     pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5495,13 +5471,13 @@ dsk_rah_fill:
     mov cx, 288                 ; (SPEC.md 18.95.7.1). The claim has no page
     mul cx                      ; head, so a boundary can fall inside ONE slot,
     add ax, [dsk_rah_seg]       ; and dsk_runcap then splits that fill into two
-    mov cx, ax                  ; int 13h - the whole point of a fill being
-    add cx, 287                 ; that it is one. The slot's first and last
-    xor cx, ax                  ; paragraphs: a different top nibble is a
-    pop ax                      ; different page. The claim is under 64KB, so
-    test ch, 0xF0               ; at most one slot straddles, and the width is
-    jnz .pick                   ; at least DSK_RAH_MIN = 2, so the next one
-                                ; does not
+    and ah, 0x0F                ; int 13h - the whole point of a fill being
+    cmp ax, 0x1000 - 287        ; that it is one. The slot's first paragraph,
+    pop ax                      ; as an offset into its page: 287 more past it
+    jae .pick                   ; is the next page (mem_dmaok's own test).
+                                ; The claim is under 64KB, so at most one slot
+                                ; straddles, and the width is at least
+                                ; DSK_RAH_MIN = 2, so the next one does not
     mov cx, 9
     mul cx                      ; AX = slot * RAH_REC, RAH_REC being 9...
     mov bx, ax
@@ -5529,11 +5505,7 @@ dsk_rah_fill:
 .out:
     pop es
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_dx
 .nofill:
     stc
     jmp short .out
@@ -6168,25 +6140,21 @@ dsk_find_x:
     mov [es:di+6], dx
     mov cx, [dsk_fdord]
     inc cx                      ; the ordinal to ask for next
-    pop di
-    pop bp
-    pop si
-    pop dx
-    pop bx
     clc
-    retf
+    jmp short .out
 .ioerr:
     mov ax, FERR_IO
     jmp short .fail
 .end:
     mov ax, FERR_NOENT
 .fail:
+    stc
+.out:
     pop di
     pop bp
     pop si
     pop dx
     pop bx
-    stc
     retf
 
 ; -----------------------------------------------------------------------------
@@ -6341,19 +6309,17 @@ dsk_media_ok:
     cmp byte [es:0x0040], 0     ; the motor-off countdown: 0 = spun down, so
     je .no                      ; the last two seconds are unaccounted for
     test [es:0x003F], al        ; is THIS drive's motor one of the running
-    jz .no                      ; ones? (a two-drive machine may be mid-copy)
-.yes:
-    pop es
-    pop bx
-    pop ax
-    clc
-    ret
+    jnz .yes                    ; ones? (a two-drive machine may be mid-copy)
 .no:
-    pop es
-    pop bx
-    pop ax
     stc
-    ret
+.yes:                           ; EVERY WAY IN ARRIVES WITH CF = 0, which is why
+    pop es                      ; there is no `clc`: `cmp [DV_KIND], DVK_BIOS`
+    pop bx                      ; is a compare with 0 and cannot borrow, and
+    pop ax                      ; both `test`s clear CF. `pop` writes no flags,
+    ret                         ; so .no's `stc` survives the shared tail
+%if DVK_BIOS != 0
+  %error "dsk_media_ok: .yes takes CF=0 from `cmp [DV_KIND], DVK_BIOS` - 0 only"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dsk_dest - say WHERE the next loud mount writes its listing (SPEC.md 22.6,
@@ -7171,25 +7137,20 @@ dsk_find_name_x:
     mov di, dx
     call dsk_streq              ; CF=0 = the same name, to the NUL - a FOURTH
     jc .nextent                 ; copy of this compare until it had a home
-    mov ax, bx
+    mov ax, bx                  ; ...and that CF = 0 is the answer
+.out:
     pop di
     pop si
     pop dx
     pop cx
     pop bx
-    clc
     ret
 .nextent:
     inc bx
     jmp short .next
 .no:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     stc
-    ret
+    jmp short .out
 
 ; -----------------------------------------------------------------------------
 ; dsk_ent_ofs - one listing slot's offset (module internal)
@@ -8650,6 +8611,19 @@ fdd_wait:
 %endif                           ; NO_FDDPROBE
 %endif                              ; KD_BUILD
 section .text
+
+%ifdef KERN_BIG
+; [dsk_mgen] - the MOUNT GENERATION (SPEC.md 18.4.8): +2 on every snapshot
+; disk_mount_x builds and every write dskw_sync closes, so a READ_SEQ cursor
+; stamped with it is trusted exactly while nothing on the machine has
+; remounted or written. ODD FOR EVER, seeded 1 in .text: a cursor the caller
+; zeroed carries 0, which it can then never match, and the add needs no wrap
+; test. Not .bss - its resting value is not zero (SPEC.md 12.8.5.1)
+dsk_mgen:   dw 1
+dwr_c:      times 16 db 0       ; READ_SEQ's cursor, the kernel's copy for the
+%endif                          ; call (18.4.8). dwr_stat reads it on EVERY
+                                ; READ_AT, so .text and seeded: generation 0
+                                ; is no cursor, and the wrapper leaves it so
 
 ; -----------------------------------------------------------------------------
 ; disk_dir, disk_icons and dsk_secbuf were HERE, and are in kernel/dskwin.inc

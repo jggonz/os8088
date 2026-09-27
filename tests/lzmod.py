@@ -3,6 +3,7 @@
 
     make lzmodtest && python3 tests/lzmod.py              # SPEC.md 20.14.5
     make lzmodtest && python3 tests/lzmod.py --dialog     # SPEC.md 38.6.1
+    make lzmodtest && python3 tests/lzmod.py --nohint     # SPEC.md 20.14.6.3
 
 TWO ROUTES, AND THE SECOND ONE IS WHY THIS FILE HAS A FLAG. Until SPEC.md
 38.6.1 this row drove a double-click ONLY, which is the route that goes
@@ -35,6 +36,13 @@ CROSSING: 116KB is not a segment, so every path in SPEC.md 20.14.5 - the
 bumped ES, the borrowed match source one segment down, lz_cross splitting a
 copy at the boundary, and LZ_F_BUMP retiring the offset compare - runs here and
 nowhere else.
+
+--nohint IS THE FIELD'S DISK. The module's directory hint (SPEC.md 20.14.1)
+is struck on a scratch copy - which is what Windows leaves when the MEDIA
+folder is copied out and back, since it writes NTRes and CrtTimeTenth itself -
+so OSAPI_FILE_FIND reports the PACKED 42KB, Tracker claims that, and the read's
+sniff (20.14.6) finds 116KB. Before 20.14.6.3 that was 'File too big' and no
+module; the read now says how many KB it needs and Tracker claims again.
 
 FOUR ASSERTIONS, and the third is the one that makes the others worth having:
 
@@ -160,6 +168,10 @@ def main():
                          "ever EXECUTED (SPEC.md 20.14.5). It costs ~10s of "
                          "host compression in the FIXTURE, which is why it is "
                          "not the default")
+    ap.add_argument("--nohint", action="store_true",
+                    help="strike BEVERLY.MOD's directory hint on a scratch "
+                         "copy first, as a Windows copy does (SPEC.md "
+                         "20.14.6.3)")
     a = ap.parse_args()
 
     global PACKED, IMG
@@ -176,8 +188,46 @@ def main():
     fails = []
     plain = host_checks(fails)
     P = pkg_syms("apps/tracker/tracker.asm")
+    apps = os88build.at(IMG)
+    if a.nohint:
+        apps = strike(apps)
+    try:
+        return run(a, apps, plain, P, fails)
+    finally:
+        if a.nohint:
+            os.remove(apps)
 
-    with os88marty.launch("build/os8088-360.img", apps=IMG,
+
+def strike(src):
+    """A scratch copy of `src` with BEVERLY.MOD's hint zeroed: the three
+    cells SPEC.md 20.14.1 keeps it in, which a foreign OS writes as its own."""
+    d = bytearray(open(src, "rb").read())
+    bps = struct.unpack_from("<H", d, 11)[0]
+    res = struct.unpack_from("<H", d, 14)[0]
+    nfat, nent = d[16], struct.unpack_from("<H", d, 17)[0]
+    fsz = struct.unpack_from("<H", d, 22)[0]
+    off = (res + nfat * fsz) * bps
+    for i in range(nent):
+        e = off + i * 32
+        if d[e:e + 11] == b"BEVERLY MOD":
+            d[e + CZ_M] = d[e + CZ_H] = 0
+            d[e + CZ_L] = d[e + CZ_L + 1] = 0
+            break
+    else:
+        sys.exit("lzmod: no BEVERLY.MOD in %s to strike" % src)
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                       "build", "lzmod-nohint-%d.img" % os.getpid())
+    out = os.path.abspath(out)          # ABSOLUTE: under a frozen soak tree
+                                        # launch() maps a relative build/
+                                        # path into THAT tree, where this
+                                        # scratch copy is not
+    open(out, "wb").write(d)
+    say("  hint       STRUCK on a scratch copy (--nohint)")
+    return out
+
+
+def run(a, apps, plain, P, fails):
+    with os88marty.launch("build/os8088-360.img", apps=apps,
                           machine=a.machine) as m:
         os88marty.settle(m, gate=os88marty.desktop_up)
         os88marty.no_saver(m)   # SPEC.md 79: it DRAWS, so the settle
@@ -307,6 +357,10 @@ def main():
         os88marty.settle(m)
         modseg = claimed(m)
         if not modseg:
+            msg = int.from_bytes(m.readseg(pseg, P["tui_msgp"], 2), "little")
+            say("  status     %s" % next(
+                (k for k, v in P.items() if v == msg and k.startswith("trk_s_")),
+                "+%04x" % msg))
             fails.append(
                 "[trk_modseg] is 0: Tracker opened and holds no module - a "
                 "read that was REFUSED looks exactly like this" +

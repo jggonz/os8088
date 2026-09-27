@@ -1,6 +1,8 @@
 # The MartyPC debugger
 
 **Full documentation: [docs/MARTYPC-DEBUG.md](../../docs/MARTYPC-DEBUG.md).**
+**What MartyPC does wrong that we would patch someday:
+[docs/plans/MARTYPC-PLAN.md](../../docs/plans/MARTYPC-PLAN.md).**
 Build it with `make marty` (or `./build.sh`); drive it with
 `tools/os88marty.py`.
 

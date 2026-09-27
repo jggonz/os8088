@@ -62,6 +62,8 @@
 1 apps/tracker/trkwin.inc          # the face's transport pictures and its
                                    # option grid, one record (SPEC.md 45.21)
 1 apps/tracker/trklist.inc         # the PlayList editor's six (45.22)
+1 apps/video/video.asm             # the Preview's four pictures - Open, the
+                                   # key before and after, Play (SPEC.md 98.4)
 1 apps/weave/wdraw.inc             # correct through the C SDK's
                                    # os88_wm_onmouseup
 

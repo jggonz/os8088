@@ -33,6 +33,23 @@ FSX_SUBTICK     equ 3           ; sub-ticks per tick when it is asked for
 FSXF_FASTTICK   equ 2           ; ...bit 1 (SPEC.md 53.2.1): IRQ0 three times a
                                 ; tick, so the round-robin quantum is 18 ms
                                 ; instead of 55. [ticks] does not change rate
+FSXF_RATE       equ 4           ; ...bit 2 (SPEC.md 53.2.2, kern_big): IRQ0 at
+                                ; DX, a PIT divisor, with a hook at DI called
+                                ; on every one. [ticks] stays exact by an
+                                ; accumulator
+FSX_RATE_MIN    equ 2048        ; the fastest divisor it takes: 582 Hz
+SCH_RATE        equ FSXF_RATE + 1 ; [sch_fast]'s value while FSXF_RATE is armed:
+                                ; 5, outside sch_fast_on's 2..4 and not 0.
+                                ; fsx_run DERIVES it, and FSX_SUBTICK, from
+                                ; CX as (CL & 6) + 1 - the %if below
+%ifdef KERN_BIG
+%if (sch_rdiv - sch_fdivs) != (SCH_RATE - 2) * 2
+  %error "sch_fast_on reads SCH_RATE's divisor as sch_fdivs' row N: sch_rdiv must follow the table directly"
+%endif
+%endif
+%if FSX_SUBTICK != FSXF_FASTTICK + 1
+  %error "fsx_run derives sch_fast_on's AL as (CL & 6) + 1: FSX_SUBTICK must be FSXF_FASTTICK + 1"
+%endif
 
 ; --- fsx_wait's clock (SPEC.md 53.5; mirrored in apps/os88api.inc) -----------
 FSXW_TICK   equ 0               ; the next [ticks] change, hlt between polls
@@ -147,17 +164,41 @@ fsx_run:
                                 ; to the last non-local label, so moving it
                                 ; above would silently retarget another
                                 ; routine's `.fail`
-    cmp cx, FSXF_KEEPWORKER + FSXF_FASTTICK + 1
+%ifdef KERN_BIG
+    cmp cx, FSXF_FASTTICK + FSXF_RATE ; 6: CX >= 8 is an undefined bit, and 6
+%else                           ; and 7 are FASTTICK WITH RATE, which refuses
+    cmp cx, FSXF_KEEPWORKER + FSXF_FASTTICK + 1 ; too - one channel 0 (53.2.2)
+%endif
                                 ; undefined flag bits refuse, so the word
     jae .fail                   ; stays extensible (SPEC.md 53.1). "any bit
-                                ; above bit 1 is set" and "CX >= 4" are the
-                                ; same statement ONLY BECAUSE THE DEFINED BITS
-                                ; ARE THE LOW TWO: define bit 4 without bits
-                                ; 2-3 and this must go back to a mask test
-    cmp byte [sch_cur], 0       ; the UI task alone may enter - a worker's
-    jne .fail                   ; bracket would freeze the UI task mid-frame
-    cmp byte [fsx_task], 0xFF   ; one bracket at a time
-    jne .fail
+                                ; above the defined ones is set" and "CX >=
+                                ; 2^n" are the same statement ONLY BECAUSE THE
+                                ; DEFINED BITS ARE THE LOW n: define bit 4
+                                ; without bit 3 and this must go back to a
+                                ; mask test
+    cmp word [sch_cur], 0xFF00  ; the UI task alone may enter - a worker's
+    jne .fail                   ; bracket would freeze the UI task mid-frame -
+                                ; and one bracket at a time: [sch_cur] = 0 and
+                                ; [fsx_task] = 0xFF, ONE word (adjacent, the
+                                ; %if at fsx_mine)
+%ifdef KERN_BIG
+    test cl, FSXF_RATE          ; SPEC.md 53.2.2: DX a divisor, DI a hook
+    jz .norate                  ; (never with FASTTICK: refused above)
+    cmp dx, FSX_RATE_MIN
+    jb .fail
+    mov [sch_rdiv], dx          ; banked NOW, because the fence below spends
+    mov [sch_rbp], di           ; DX and DI. Inert until [sch_fast] reads
+    mov [sch_rwin], bx          ; SCH_RATE, which only the arm below writes -
+    xor dx, dx                  ; and no bracket is up (tested above), so no
+    mov [sch_racc], dx          ; live rate is being overwritten. The window
+    mov [sch_rpend], dx         ; is the fence's to prove, below, and the ISR
+.norate:                        ; calls through its record as wm_pkgcall
+                                ; does. The accumulator from 0 and nothing
+                                ; owed: .bss is NOT zeroed (SPEC.md 12.8.5.1).
+                                ; Nothing in flight is [sch_rbusy] = 0, which
+                                ; sched_init stores and every hook call
+                                ; balances
+%endif
     call cur_unlazy              ; the bracket owns the machine and the held
                                 ; lock is what keeps the arrow off it - which
                                 ; a DEFERRED hide would not (SPEC.md 7.1.4).
@@ -172,6 +213,23 @@ fsx_run:
                                 ; bounded, a live package instance whose
                                 ; segment is the caller's own DS, and AX an
                                 ; entry inside its image+bss.  DI = the record
+%ifdef KERN_BIG
+    test cl, FSXF_RATE
+    jz .nohook
+    pop dx                      ; the hook - the caller's DI, which is the
+    push dx                     ; LAST of the six pushes at the door - fenced
+    cmp dx, [di+I_SIZE]         ; as the entry is: inside the SAME instance's
+    jae .fail                   ; image+bss (DX is the fence's scratch, dead
+.nohook:                        ; here)
+%endif
+    call fpg_finish             ; **NO KERNEL CHROME SURVIVES INTO A BRACKET**
+                                ; (SPEC.md 12.8.5.2). fpg_arm refuses once
+                                ; [fsx_task] is set, but a read earlier in this
+                                ; lock hold may have armed it, and a SAME-MODE
+                                ; bracket never reaches fsx_mode's own payoff.
+                                ; It tests [fpg_on] itself - gfx_unlock calls
+                                ; it on every unlock - and it is after every
+                                ; refusal, so a refused call changes nothing
 
 %ifdef DOCK_OPT
     call dock_drop              ; an OPEN dock's hole would clip the app out
@@ -205,14 +263,21 @@ fsx_run:
                                 ; IRQ0 and could not observe a half-written
                                 ; pair either way; one bus pair is if anything
                                 ; stronger than two instructions
-    mov byte [fsx_cur], 0xFF    ; no foreign mode yet
-    test cl, FSXF_FASTTICK      ; ...and the finer quantum, AFTER the arm so
-    jz .nofast                  ; the task set it applies to is already the
-    push ax                     ; frozen one (SPEC.md 53.2.1). AX is the app's
-    mov al, FSX_SUBTICK         ; entry offset, still owed to wm_pkgcall far
-    call sch_fast_on            ; below - the argument register here is AL
-    pop ax
-.nofast:
+                                ; No foreign mode yet: [fsx_cur] is 0xFF
+                                ; already - seeded so, written by fsx_mode
+                                ; alone and put back by fsx_restore, the one
+                                ; way out of every bracket
+    push ax                     ; ...and the finer quantum, AFTER the arm so
+    mov al, cl                  ; the task set it applies to is already the
+    and al, FSXF_FASTTICK + FSXF_RATE ; frozen one (SPEC.md 53.2.1) - or the
+    inc ax                      ; caller's own rate (53.2.2), banked above.
+    call sch_fast_on            ; AL = (CL & 6) + 1: 1 for neither, which
+    pop ax                      ; sch_fast_on refuses as a no-op (N < 2), 3 =
+                                ; FSX_SUBTICK for FASTTICK, 5 = SCH_RATE for
+                                ; RATE - both at once was refused above, and
+                                ; on kern_small bit 2 is. AX is the app's
+                                ; entry offset, still owed to wm_pkgcall far
+                                ; below; the argument register is AL
 
     ; silence what the freeze strands (SPEC.md 53.3) - AFTER the arm, so no
     ; foreign task can take a fresh grant between the two. snd_release_inst
@@ -332,11 +397,12 @@ fsx_restore:
                                 ; bracket run from the next tick
     popf
     mov byte [fsx_cur], 0xFF
-%ifdef KERN_BIG
-    push ax                     ; the DESKTOP's shape back - the union, the
-    mov ah, EXTF_LEAVE          ; primary's chrome - before anything draws on
-    EXTCALL EXT_FSX             ; it (SPEC.md 39.18). EXTD.DRV's: with no image
-    pop ax                      ; there was never a second display to restore
+%ifdef KERN_BIG                 ; (AX is free from the drain above to the
+    mov ah, EXTF_LEAVE          ; pop at the foot: nothing here reads it)
+    EXTCALL EXT_FSX             ; the DESKTOP's shape back - the union, the
+                                ; primary's chrome - before anything draws on
+                                ; it (SPEC.md 39.18). EXTD.DRV's: with no image
+                                ; there was never a second display to restore
 %endif
     call blk_relit              ; the bar and the strip really WERE overdrawn -
                                 ; an exclusive app owned the whole screen
@@ -346,10 +412,8 @@ fsx_restore:
                                 ; inside it destroys them; this is a caller
                                 ; that genuinely did
 %ifdef KERN_BIG
-    push ax                     ; ...and only NOW the dark monitors, because a
-    mov ah, EXTF_UNBLANK        ; blanked card still holds the frame it was
-    EXTCALL EXT_FSX
-    pop ax
+    mov ah, EXTF_UNBLANK        ; ...and only NOW the dark monitors, because a
+    EXTCALL EXT_FSX             ; blanked card still holds the frame it was
                                 ; blanked on and lighting it first shows that
                                 ; one (SPEC.md 39.18.1)
 %endif
@@ -419,21 +483,14 @@ fsx_mode:
                                 ; flags alone on an 8086, so the fixed shift
                                 ; is what actually sets CF. Do not fold them
 
-    cmp byte [fpg_on], 0        ; **NO KERNEL CHROME SURVIVES INTO A FOREIGN
-    je .nofpg                   ; MODE** (SPEC.md 12.8.5). fpg_arm refuses to
-    call fpg_finish             ; arm once [fsx_cur] is set, but a caller may
-.nofpg:                         ; have armed the progress widget from a file
-                                ; read EARLIER IN THE SAME LOCK HOLD - the hold
-                                ; this bracket inherited from its callback - and
-                                ; then fpg_step would draw into the app's raster
-                                ; and fpg_finish would repair a menu bar that is
-                                ; not on the screen. Its own teardown is the
-                                ; right one and it is called HERE, before a
-                                ; single mode register moves, so its erase, its
-                                ; bar repaint and the cursor debt it may owe
-                                ; (SPEC.md 12.8.4) all land on the desktop that
-                                ; is still up. AFTER the caps test, so a
-                                ; REFUSED mode still changes nothing at all.
+                                ; **NO KERNEL CHROME SURVIVES INTO A FOREIGN
+                                ; MODE** (SPEC.md 12.8.5) - and nothing has to
+                                ; be done about it HERE any more: fsx_run paid
+                                ; the progress widget off at the bracket's
+                                ; door (12.8.5.2) and fpg_arm refuses inside
+                                ; any bracket, so [fpg_on] is 0 on every path
+                                ; into this routine. The fpg_finish that stood
+                                ; here was dead from the day the door's went in
 
 %ifdef KERN_BIG
     push ax                     ; ...and ONLY NOW is the machine one display
@@ -485,8 +542,12 @@ fsx_mode:
     rep movsw
     pop di
     pop cx
-    mov [es:di+FSI_MODE], ch
-    mov byte [es:di+FSI_RSVD], 0
+    mov al, ch                  ; FSI_MODE and FSI_RSVD, ONE word: the id,
+    cbw                         ; and 0 above it (ids are < 128). AX is free,
+    mov [es:di+FSI_MODE], ax    ; restored at kret_di
+%if FSI_RSVD != FSI_MODE + 1
+  %error "fsx_mode stores FSI_MODE and FSI_RSVD as one word"
+%endif
     ; the three per-adapter fixups (SPEC.md 53.4)
     cmp ch, FSXM_HERC
     jne .f1

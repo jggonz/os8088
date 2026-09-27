@@ -336,11 +336,18 @@ def main():
             # the band is 384 dots from px_bx, so a pointer resting on its
             # middle turns nothing - the first cut took px_bx + 256 and spun
             # the view 16 a tick - and one 64 dots right of it does turn
+            # ONE PRESS AT A TIME, each waited for by its own effect: windowed V
+            # is also px_set_save's PXSTEIN.CFG write on the UI task, which can
+            # outlast a fixed four ticks - and a second V typed before the first
+            # landed steps past 0 and leaves the wait below on a Size it never
+            # reaches (a soak failure, 0 of 5 alone)
             for _k in range(4):
-                if g.byte("px_sizeix") == 0:
+                s0 = g.byte("px_sizeix")
+                if s0 == 0:
                     break
                 m.type_text("v")
-                ticks(g, 4)
+                os88marty.until(m, lambda mm: g.byte("px_sizeix") != s0,
+                                "V steps the Size row", poll=0.05, limit=30.0)
             os88marty.until(m, lambda mm: g.byte("px_size") == 48, "Size 48", poll=0.05,
                             limit=30.0)
             cx = g.word("px_bx") + g.byte("px_size") * 4

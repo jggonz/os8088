@@ -794,6 +794,101 @@ overlays = [
     subtype = "Hercules"
     clock_mode = "Dynamic"
 
+# os8088_5150_herc_hdd_sb_gla - THE OWNER'S 5150 AS NEAR AS THIS EMULATOR
+# GETS: Hercules, a fixed disk and a Sound Blaster 2.0 on ONE machine, which no
+# profile here had. The Video Player (docs/plans/VIDEO-PLAN.md) is the first
+# thing that needs all three at once - it streams a file off the fixed disk
+# while the card's block interrupt decodes each frame onto a Hercules - and
+# every other profile isolates one of the three. It is `herc_hdd` plus
+# `herc_sb`'s two cards, nothing else.
+#
+# **WHAT IT IS NOT, which matters for every disk number taken on it**: the
+# owner's fixed disk is an ST-225 on an ST11M, a DMA controller whose transfer
+# leaves the CPU spinning in the BIOS, and MartyPC's controller is XT-IDE
+# (above), which moves every byte with the CPU. So a streaming figure here is a
+# CPU-copied disk's, the PicoMEM-like case (VIDEO-PLAN 3.2), and the DMA case
+# is measured on the iron.
+[[machine]]
+name = "os8088_5150_herc_hdd_sb_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "AdLib"
+    io_base = 0x388
+
+    [[machine.sound]]
+    type = "SoundBlaster"
+    io_base = 0x220
+    irq = 7
+    dsp_version = [2, 1]
+
+# ...and the same machine on the period ROM, for a box that has it staged.
+[[machine]]
+name = "os8088_5150_herc_hdd_sb"
+type = "Ibm5150v256K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "AdLib"
+    io_base = 0x388
+
+    [[machine.sound]]
+    type = "SoundBlaster"
+    io_base = 0x220
+    irq = 7
+    dsp_version = [2, 1]
+
 # os8088_xt_hdd_720 - THE ONLY MACHINE HERE THAT HAS BOTH A HARD DISK AND AN
 # 80-CYLINDER FLOPPY DRIVE, and it exists because the absence of one cost a
 # whole diagnosis (docs/DOS-DEBUGGING.md, *Traps*). os8088_xt_hdd's drives are

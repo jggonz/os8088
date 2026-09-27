@@ -485,6 +485,11 @@ SND_CAP_PCM_HI   equ 20h         ; PCM_BG takes rates ABOVE 22,222 Hz - an SB
 ; A driver without it answers AX = 7 with CF = 1: fall back to verb 3
 SND_V_PPOS       equ 9
 
+; verb 10 PAUSES an external ring's stream (SND_OPENF_EXT) where it is, the
+; DSP halted mid-block, and verb 1 with the total resumes it as it resumes an
+; underrun (SPEC.md 34.5.4). AX = 7 for any other stream
+SND_V_PAUSE      equ 10
+
 ; stream states returned by OSAPI_SND_STREAM verb 3 (SPEC.md 20.3/34.5)
 SND_ST_PLAYING   equ 0
 SND_ST_UNDER     equ 1           ; underrun-paused: resumable by a feed
@@ -513,6 +518,32 @@ SND_OPENF_RING   equ 1           ; ring mode (SPEC.md 34.5): SI = ring base,
                                  ; Verbs 0 and 4 answer 8 when a stream the
                                  ; driver must double-buffer cannot have its
                                  ; 8KB, which it claims per stream now.
+SND_OPENF_EXT    equ 2           ; ...an EXTERNAL ring (SPEC.md 34.5.3), with
+                                 ; RING: in YOUR OWN claim, at DI:SI (DI = its
+                                 ; segment), not a grant - so you write it
+                                 ; directly, from anywhere, even an FSXF_RATE
+                                 ; hook that may call nothing. Claim it with
+                                 ; OSAPI_MEM_CLAIM_DMA(_HI), ring AND the two
+                                 ; control words after it inside the page-safe
+                                 ; head; RL = 4096 << the size code in AH bits
+                                 ; 4-5 (SND_OPENF_RLSH). The card plays it in
+                                 ; place or verb 0 refuses (7): it needs an
+                                 ; auto-init DSP and a ring inside one page.
+                                 ; The block IRQ READS your total from
+                                 ; [DI:SI+RL+SND_EXT_TOTAL] and WRITES the
+                                 ; consumed count to [...+SND_EXT_CONS], both
+                                 ; free-running mod 65536, so you feed without
+                                 ; a call; verb 1 is only needed to RESUME an
+                                 ; underrun, and verb 9 still answers exactly
+SND_OPENF_ADPCM4 equ 4           ; ...the bytes are Creative 4-bit ADPCM, the
+                                 ; card decoding them (DSP 7Dh, auto-init with
+                                 ; a reference byte: stream byte 0). DX is the
+                                 ; SAMPLE rate, <= 22,222; the counters count
+                                 ; bytes. Needs DSP >= 2.00, else verb 0
+                                 ; answers 2 (SPEC.md 34.5.3)
+SND_OPENF_RLSH   equ 4           ; the size code's shift: 0 4KB .. 3 32KB
+SND_EXT_TOTAL    equ 0           ; the control words, after the ring
+SND_EXT_CONS     equ 2
 
 ; --- window management (SPEC.md 11.1/11.2) -------------------------------------
 %define OSAPI_WM_SIZABLE    KERNEL_SEG:0x00F1   ; BX=win ptr, AL = 0 clear / non-zero set
@@ -657,7 +688,16 @@ OSAPI_LZ_LZB equ 1
                                  ; (the file's 32-bit size), else AX = FERR_*.
                                  ; FERR_BIG is decided from the directory
                                  ; entry BEFORE any data I/O, so it leaves the
-                                 ; buffer alone.
+                                 ; buffer alone - and answers DX = the KB the
+                                 ; read NEEDS, so a claim sized off FIND can be
+                                 ; made again at the right size (SPEC.md
+                                 ; 20.14.6.3: a compressed file whose hint a
+                                 ; foreign OS dropped is under-reported by
+                                 ; FIND). A kernel before 20.14.6.3 leaves the
+                                 ; size's HIGH WORD in DX, which is never more
+                                 ; than the KB needed - so retry ONCE, and
+                                 ; only if DX is more than you claimed, and
+                                 ; the same code is safe on both.
                                  ; **A COMPRESSED FILE EXPANDS ON THE WAY IN**
                                  ; (SPEC.md 20.14) and DX:AX is what it
                                  ; expanded to, which is also the figure
@@ -1084,7 +1124,7 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
                                  ; which is what the kernel bounds the part's
                                  ; image + bss against.
                                  ; THE PART IS A WHOLE .O88 IMAGE: magic,
-                                 ; version 3, link 0 and the three-byte
+                                 ; PKG_FMT, link 0 and the three-byte
                                  ; dispatcher, its own name and icon, its own
                                  ; entry offset. The kernel does NOT zero its
                                  ; bss - the bss ships inside the part, which
@@ -2010,7 +2050,9 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; readable by contract, not writable, and an
                                  ; app that sets them leaves the shadow, the
                                  ; z-order damage and the dock out of step.
-                                 ; Do NOT hold the gfx lock.
+                                 ; The gfx lock held or not: the slot takes it
+                                 ; if you have none (SPEC.md 11.1.2). Never
+                                 ; from a worker or inside your W_PAINT.
 %define OSAPI_WM_ONSIZE     KERNEL_SEG:0x01BC   ; BX = win ptr, AX = a near proc
                                  ; in YOUR segment (0 clears it). The kernel
                                  ; calls it BEFORE it commits a size the user
@@ -3463,8 +3505,10 @@ OS88_BSS_SIZE equ 0
                                                 ; ptr, CX = flags (bit 0 =
                                                 ; FSXF_KEEPWORKER, bit 1 =
                                                 ; FSXF_FASTTICK - SPEC.md
-                                                ; 53.2.1; all others must be
-                                                ; 0, or it refuses). This
+                                                ; 53.2.1; bit 2 = FSXF_RATE,
+                                                ; with DX and DI - 53.2.2;
+                                                ; all others must be 0, or
+                                                ; it refuses). This
                                                 ; comment said "bit 0; all
                                                 ; others 0" for a cycle after
                                                 ; bit 1 was accepted; trust
@@ -4122,6 +4166,27 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; the copy is compressed too. Bit 0 of
                                  ; OSAPI_FILE_FIND's +22 is how you tell
 
+%define OSAPI_FILE_READ_SEQ KERNEL_SEG:0x0455   ; A STREAMING READ (SPEC.md
+                                 ; 18.4.8, KERN_BIG; the small kernel answers
+                                 ; CF=1 FERR_NAME). SI = the name ON EVERY
+                                 ; CALL, DX:BX = buffer (NOT ES:BX, as the
+                                 ; other file slots take it), CX = its
+                                 ; capacity (a cluster multiple, READ_AT's
+                                 ; rule), ES:DI = YOUR 16-byte cursor, in any
+                                 ; segment. To start or seek: zero it and set
+                                 ; FSEQ_OFF (a cluster multiple). Out CF=0 and
+                                 ; DX:AX = bytes delivered, 0 at the end, the
+                                 ; cursor advanced; CF=1 AX = FERR_*. It is
+                                 ; READ_AT without the walk: READ_AT re-walks
+                                 ; the chain from the front every call (142 ms
+                                 ; a MB of offset, measured on a fixed disk),
+                                 ; this reads from where the cursor stands.
+                                 ; Anything that remounts or writes makes the
+                                 ; next call re-seed from the name silently,
+                                 ; so a stale cursor is never an error. Only
+                                 ; FSEQ_OFF is yours to write
+FSEQ_OFF    equ 12              ; the cursor's offset field (dword)
+FSEQ_SIZE   equ 16              ; ...and the cursor's size
 %define OSAPI_FILE_FIND_RAW KERNEL_SEG:0x03D9   ; OSAPI_FILE_FIND, with +18 the
                                  ; size the file OCCUPIES rather than the one
                                  ; it expands to (SPEC.md 20.14.3). THE CELL A
@@ -4808,6 +4873,23 @@ FSXF_FASTTICK   equ 2           ; OSAPI_FSX_RUN CX bit 1 (SPEC.md 53.2.1): the
                                 ; costs the drawing side a third of what it
                                 ; did. [ticks] keeps its rate, so nothing you
                                 ; time in ticks changes
+FSXF_RATE       equ 4           ; OSAPI_FSX_RUN CX bit 2 (SPEC.md 53.2.2,
+                                ; KERN_BIG - the small kernel refuses it): IRQ0
+                                ; at YOUR rate, DX = a PIT divisor (1,193,182
+                                ; / Hz, FSX_RATE_MIN..65535), and DI = a near
+                                ; proc in your image called on EVERY one, the
+                                ; way a window callback is (SI = your window,
+                                ; DS = your segment, ES = KERNEL_SEG) with AX
+                                ; = the periods since it last ran (>= 1; a
+                                ; skipped call is counted, not lost). IF = 0,
+                                ; EOI sent; you MAY sti, and no task switch
+                                ; happens until you return. It runs on
+                                ; whatever stack IRQ0 interrupted: 48 BYTES
+                                ; AT MOST, and no kernel call at all. It is
+                                ; armed BEFORE your entry proc runs, so make
+                                ; it a no-op until you are ready. Not with
+                                ; FSXF_FASTTICK. [ticks] keeps its rate
+FSX_RATE_MIN    equ 2048        ; ...the fastest divisor: 582 Hz
 FSX_SUBTICK     equ 3           ; ...and this is the divider, so with FASTTICK
                                 ; armed FSXW_FRAME returns 3 x 18.2065 = 54.6
                                 ; times a second. A constant, not a
@@ -4829,7 +4911,8 @@ FSXW_VSYNC  equ 1               ; vertical retrace - and it SPINS on the status
                                 ; FSXF_KEEPWORKER it is what starves the
                                 ; worker, which for an audio feeder means
                                 ; dropouts (SPEC.md 53.5.1)
-FSXW_FRAME  equ 2               ; the next IRQ0 - the SUB-TICK while
+FSXW_FRAME  equ 2               ; the next IRQ0 - YOUR period under
+                                ; FSXF_RATE, the SUB-TICK while
                                 ; FSXF_FASTTICK is armed (54.6 Hz, faster than
                                 ; a Hercules' retrace and evenly spaced by the
                                 ; crystal), the tick otherwise. It waits by

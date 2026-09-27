@@ -1845,8 +1845,15 @@ fm_focus_x:
     cmp al, FSD_ICONS           ; ...and its ENTRIES are, with only the icon
     jne .relist                 ; references dangling after a shed (SPEC.md
     call fmv_icorefs            ; 25.9.5). That is repaired in place for one
-    jnc .drawn                  ; ASSOC.DAT read; a refusal falls through to
+    jc .relist                  ; ASSOC.DAT read; a refusal falls through to
                                 ; the re-list, which settles them on its way
+    call KERNEL_SEG:wm_su_stale ; ...AND THE PICTURE GOES WITH THEM (SPEC.md
+    jmp short .drawn            ; 54.3.3): a new ASSOCIATION marks this debt
+                                ; too, and then the raise cache holds the old
+                                ; glyphs - so a raise put the bare mark back
+                                ; over references that were right. fmv_store
+                                ; is the re-list's copy of this call. After a
+                                ; shed it costs the one raise a whole paint
 .relist:
     call fmv_here               ; it is not, so re-list where we stand -
                                 ; exactly what Refresh costs (SPEC.md 22)
@@ -2450,8 +2457,7 @@ fm_choose:
 %endif
     mov bx, [di+I_WIN]
     call KERNEL_SEG:cw_wm_show
-    call ct_cw_gfx_unlock
-    ret
+    jmp ct_cw_gfx_unlock
 .notopen:
     call fm_count               ; CX = live file-manager instances
     cmp cx, FM_MAXWIN
@@ -2482,8 +2488,7 @@ fm_choose:
     mov si, bx
     call fm_repaint
 .unlock:
-    call ct_cw_gfx_unlock
-    ret
+    jmp ct_cw_gfx_unlock
 
 ; -----------------------------------------------------------------------------
 ; fm_find_view - a live window already showing a directory
@@ -2743,8 +2748,7 @@ fm_seed:
 files_refresh_x:
     call ct_cw_gfx_lock
     call KERNEL_SEG:cw_wm_paint_all
-    call ct_cw_gfx_unlock
-    ret
+    jmp ct_cw_gfx_unlock
 
 ; -----------------------------------------------------------------------------
 ; files_poster and fm_win_of are RETIRED (SPEC.md 22.17)
@@ -3486,11 +3490,7 @@ fm_onclick_x:
     call fm_repaint             ; SI still = window ptr
 .out:
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_dx
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
@@ -4082,6 +4082,7 @@ fm_go:
     mov al, [di+FS_DRV]
     call fmv_load
     call fm_settitle            ; SI is still the caller's name (or 0)
+.tail:                          ; ...and fm_reload's tail too
     pop di
     pop dx
     pop ax
@@ -4097,7 +4098,16 @@ fm_go:
 ; Unlike fm_go this is not navigation: it lands at the ROOT deliberately,
 ; because a disk you just put in the other drive has no meaningful "current
 ; folder".
+;
+; The Folder menu's two commands are its first lines (fm_cmd_tab): Drive B:
+; falls straight in, and Drive A: is two bytes of short jump - where each used
+; to be a stub in the command block that jumped here (size pass 5).
 ; -----------------------------------------------------------------------------
+fm_c_drva:                      ; Nav > Drive A:
+    xor dl, dl
+    jmp short fm_mount
+fm_c_drvb:                      ; Nav > Drive B:
+    mov dl, 1
 fm_mount:
     push ax
     push dx
@@ -4141,10 +4151,7 @@ fm_reload:
     mov di, [fm_vp]
     call fmv_here
     call fmv_load
-    pop di
-    pop dx
-    pop ax
-    ret
+    jmp short fm_go.tail
 
 %ifdef KERN_BIG
 ; =============================================================================
@@ -4575,7 +4582,9 @@ fm_jmp:
                                 ;         SPEC.md 22.3)
     dw fm_c_newwin              ; POSTED - app_launch takes the lock (29.4)
     dw fm_c_opennew             ; POSTED - ditto
-    dw fm_c_refresh             ; inline (fmv_load, like the button)
+    dw fm_reload                ; Refresh: inline (fmv_load, like the button).
+                                ; The body ITSELF - it was an fm_c_refresh
+                                ; that was one `jmp fm_reload` (size pass 5)
     dw fm_c_up                  ; inline (fmv_sync + dsk_dotdot + fmv_load)
     dw fm_c_root                ; inline (fmv_load at the root)
     dw fm_c_drva                ; inline (fmv_load, drive 0)
@@ -4794,15 +4803,12 @@ fm_fmt_ok:
     cmp byte [bx+DV_KIND], DVK_BIOS
     jne .no                     ; a driver-backed volume: its own driver owns
     test byte [bx+DV_UNIT], 0x80    ; formatting it (SPEC.md 52.2), and this
-    jnz .no                     ; module cannot reach its geometry at all
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    pop bx
-    pop ax
+    jz .out                     ; module cannot reach its geometry at all -
+.no:                            ; and a `test` leaves CF = 0, the yes
     stc
+.out:
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5482,19 +5488,16 @@ fm_selfold:
     call fmv_get_dir            ; SI -> the staged entry (SPEC.md 19)
     cmp word [si+16], 2
     jb .no
-    mov bx, [si+18]
+    mov bx, [si+18]             ; CF = 0 from the compare, which `mov` keeps
     mov al, [di+FS_DRV]
+.out:
     pop di
     pop si
     pop cx
-    clc
     ret
 .no:
-    pop di
-    pop si
-    pop cx
     stc
-    ret
+    jmp short .out
 
 fm_c_newwin:                    ; Nav > New Window - a second view of here
     mov di, [fm_vp]
@@ -5559,15 +5562,8 @@ fm_c_elsewhere:                 ; a builtin opened SOMEBODY ELSE'S window,
     jmp short fm_nw_none        ; so this one is untouched - the same no-op
 %endif                          ; KERN_BIG - SPEC.md 14.6
 
-fm_c_refresh:                   ; Nav > Refresh
-    jmp fm_reload
-fm_c_drva:                      ; Nav > Drive A:
-    xor dl, dl
-    jmp short fm_c_mount
-fm_c_drvb:                      ; Nav > Drive B:
-    mov dl, 1
-fm_c_mount:
-    jmp fm_mount
+                                ; (Nav > Drive A: / Drive B: stand in front of
+                                ; fm_mount now, which B: falls into)
 
 fm_c_up:                        ; Nav > Up One Folder
     mov di, [fm_vp]
@@ -6454,19 +6450,16 @@ fm_drag:
 .drop:
     call fm_dgxor               ; erase; the lock stays held to the end
     call fm_dgdrop
+    clc
+.out:
     pop di
     pop si
     pop bx
     pop ax
-    clc
     ret
 .click:
-    pop di
-    pop si
-    pop bx
-    pop ax
     stc
-    ret
+    jmp short .out
 
 ; -----------------------------------------------------------------------------
 ; fm_dgabs - |AX| (module-internal); out AX, clobbers flags
@@ -6815,7 +6808,7 @@ fm_stage_onam:
     cmp word [fm_ftype], 2
     jne .out
     mov byte [fm_odir], 1       ; Delete must call dskw_rmdir for this one
-.out:
+.out:                           ; ...and fm_edit_seed's tail too
     pop di
     pop si
     pop cx
@@ -6881,11 +6874,7 @@ fm_edit_seed:
 .end:
     mov byte [di], 0
     mov [fm_elen], cl
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
+    jmp short fm_stage_onam.out ; the same four pops
 
 ; -----------------------------------------------------------------------------
 ; fm_extkeep - no extension typed? keep the one it had (SPEC.md 22.10)
@@ -7036,8 +7025,7 @@ fm_cfill:
     sub dx, 2                   ; DX = y2
     pop bx                      ; BX = y1
     mov byte [gfx_color], CWHITE
-    call ct_cw_gfx_fill
-    ret
+    jmp ct_cw_gfx_fill
 
 ; -----------------------------------------------------------------------------
 ; fm_repaint - white-fill own content, then redraw everything
@@ -7172,7 +7160,7 @@ fm_draw_icon16:
 .noicon:
     mov si, ico_app16           ; the built-in app icon (library record)
     call KERNEL_SEG:cw_icon_draw
-.done:
+.done:                          ; ...and fm_stage_name's tail too
     pop si
     pop cx
     pop bx
@@ -7211,11 +7199,7 @@ fm_stage_name:
     mov [fm_fsize], ax
     mov ax, [si+6]
     mov [fm_fsizeh], ax
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp short fm_draw_icon16.done   ; the same four pops
 
 ; -----------------------------------------------------------------------------
 ; fm_draw_core - draw the whole content (header, buttons, rows or grid,

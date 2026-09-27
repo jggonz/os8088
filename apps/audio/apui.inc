@@ -828,9 +828,7 @@ ap_diag_dump:
     mov cx, [apdg_t0]
     call OSAPI_FILE_WRITE         ; whole-file write: creates / overwrites
 
-    mov dx, [ap_que_bdir]
-    mov bl, [ap_que_bvol]
-    call OSAPI_FILE_GOTO          ; back to the track's directory (real remount)
+    call ap_que_home              ; back to the track's directory (quiet)
     pop es
     pop di
     pop si

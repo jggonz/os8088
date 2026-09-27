@@ -304,12 +304,10 @@ def main():
         g.eye_poke(px0, py0, 1024)                  # ...turned south: two open
         m.run()                                     # tiles before the wall
         g.wait_frames(1)
-        t0 = g.ticks()
-        m.key("ArrowUp", down=True, up=False)
-        m.advance(frames=WALK_FRAMES)
+        t0 = g.key_edge("ArrowUp", True)            # both ends on the GUEST's
+        m.advance(frames=WALK_FRAMES)               # clock, the machine paused
+        t1 = g.key_edge("ArrowUp", False)           # across each (pxslib)
         m.run()
-        m.key("ArrowUp", down=False, up=True)
-        t1 = g.ticks()
         m.advance(frames=10)                        # the last owed step spent
         m.run()
         px1, py1, _ = g.eye()

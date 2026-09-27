@@ -86,8 +86,10 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))     # LAST, so it wins (pxslib)
 import dispcp                                                   # noqa: E402
 import os88marty                                                # noqa: E402
+import os88geom                                                 # noqa: E402
 import os88mouse                                                # noqa: E402
 import os88sym                                                  # noqa: E402
+import os88ui                                                   # noqa: E402
 import pxslib                                                   # noqa: E402
 
 FAIL = []
@@ -211,7 +213,11 @@ def qpoke(q, writes, port=None):
                 raise RuntimeError("pxswin: gdb stub refused a write at %05x: %r"
                                    % (addr, r))
         sk.sendall(b"$D#44")
-        time.sleep(0.2)
+        time.sleep(0.2)                     # HOST time, and correctly: the
+                                            # gdb stub is a host process
+                                            # taking the detach, and the
+                                            # guest is STOPPED until it has
+                                            # (os88qemu.gone()'s shape)
     finally:
         sk.close()
     q.hmp("gdbserver none")
@@ -221,7 +227,7 @@ def qpoke(q, writes, port=None):
 # QEMU: WIN4 by default, read only
 # =============================================================================
 def qemu_leg(a):
-    import os88fixture, os88qemu                            # noqa: E401,E402
+    import os88fixture, os88geom, os88qemu                  # noqa: E401,E402
     from ethernet import Qemu, SOCK, settle, Mouse          # noqa: E402
     import shot as shotlib                                  # noqa: E402
 
@@ -255,15 +261,26 @@ def qemu_leg(a):
         sys.exit("pxswin: make test failed:\n" + r.stdout + r.stderr)
     q = Qemu()
 
+    # EVERY WAIT IN THIS LEG IS ON THE GUEST'S CLOCK (tests/os88qemu.py: the
+    # BIOS tick, which only guest code advances). It was thirteen host sleeps
+    # and two host deadlines, which hand a loaded box a third of the machine
+    # an idle one gets (docs/WRITING-TESTS.md 7) - `time.sleep(6)` here stood
+    # in for "the desktop is up", which is the UI task asleep with nothing
+    # left to do
+    def idle():
+        try:
+            return os88qemu.ui_idle(q, S)
+        except OSError:
+            return False
+    os88qemu.acted(q, idle, secs=90, what="the desktop's UI task, idle", poll=0.3)
     mo = Mouse()
     settle(q)
-    time.sleep(6)
     dispcp.open_drive(q, mo, S, settle, "B")
     wx, wy = dispcp.win_rect(q, S, dispcp.win_list(q, S)[-1])[:2]
     dispcp.open_named(q, mo, S, settle, wx, wy, "GAMES")
     wx, wy = dispcp.win_rect(q, S, dispcp.win_list(q, S)[-1])[:2]
     dispcp.open_named(q, mo, S, settle, wx, wy, pxslib.FILE)
-    got = pxslib.find(q, S, limit=60.0)
+    got = pxslib.find(q, S, guest=60.0)
     if got is None:
         sys.exit("pxswin: no Pixelstein window on QEMU")
     win, seg = got
@@ -278,9 +295,29 @@ def qemu_leg(a):
     def w(name):
         return pxslib.u16(rd(name, 2))
 
-    t0 = time.time()
-    while w("px_frames") < 1 and time.time() - t0 < 30:
-        time.sleep(0.3)
+    def drawn(f0, what):
+        """A frame past `f0` composed and presented, then the counters STILL:
+        what the fixed two seconds after a poke stood in for. The poke owes
+        a whole frame (px_force), px_frames counts it once it is composed,
+        and the present's BLITP/BLIT4 counts follow it in the same frame."""
+        os88qemu.acted(q, lambda: w("px_frames") != f0, secs=10, what=what, poll=0.1)
+        os88qemu.quiesce(q, lambda: (w("px_frames"), w("px_nbp"), w("px_nb4"),
+                                     w("px_npaint")), secs=0.5, what=what)
+
+    def moved_to(want, what):
+        """The window's frame at `want` (win_rect's x, y), then the UI done."""
+        os88qemu.acted(q, lambda: tuple(dispcp.win_rect(q, S, win)[:2]) == want,
+                       secs=10, what=what, poll=0.1)
+        os88qemu.ui_done(q, S, cap=2.5, what=what)
+
+    def moved_from(was, what):
+        """The window's frame no longer at `was`, then the UI done."""
+        os88qemu.acted(q, lambda: tuple(dispcp.win_rect(q, S, win)[:2]) != was,
+                       secs=10, what=what, poll=0.1)
+        os88qemu.ui_done(q, S, cap=2.5, what=what)
+
+    os88qemu.acted(q, lambda: w("px_frames") >= 1, secs=30, what="the first frame",
+                   poll=0.3)
     print("   QEMU: tier %d, the window's display %d bpp, backend %s, Colour %d"
           % (b("px_tier"), b("px_bpp"), pxslib.PXB.get(b("px_back")), b("px_colour")))
     check(b("px_tier") != 0 and b("px_bpp") == 4,
@@ -291,9 +328,8 @@ def qemu_leg(a):
     check(cap == s["px_s_colon"], "(q0) ...and Detail > Colour is live and says On")
     png("win4-qemu-attract.png")
     keys("sendkey spc")                     # the attract page's Space: PLAY
-    t0 = time.time()
-    while b("px_state") != pxslib.PXST["play"] and time.time() - t0 < 30:
-        time.sleep(0.2)
+    os88qemu.acted(q, lambda: b("px_state") == pxslib.PXST["play"], secs=30,
+                   what="READY giving way to PLAY", poll=0.2)
     # THE POSE IS POKED, not held (review, wave 6 r2): the first cut held
     # `sendkey left 120` "so the two pickups at (6,1) and (9,1) are in the
     # view" - a hold QEMU's host times, onto a floor whose pickups have
@@ -315,11 +351,12 @@ def qemu_leg(a):
               (base + s["px_force"], b"\x01")]
     for name, fill in pxslib.FORCE_ALL:
         writes.append((base + s[name], bytes([fill]) * (2 * pxslib.COLMAX)))
+    f0 = w("px_frames")
     qpoke(q, writes)
     mouse("to", 630, 30)                    # the arrow off the band: it is the
-    time.sleep(2.0)                         # desktop's, drawn over the glass
+    drawn(f0, "scene A's poked frame")      # desktop's, drawn over the glass
     f0 = w("px_frames")
-    time.sleep(1.5)
+    os88qemu.pace(q, 1.5)                   # a NEGATIVE: time, and nothing else
     check(w("px_frames") == f0, "(q) the player stands: no frame in a second and a half")
     bx, by, cx = w("px_bx"), w("px_by"), w("px_cx")
     print("   the band at (%d,%d), the content box's left %d" % (bx, by, cx))
@@ -351,7 +388,9 @@ def qemu_leg(a):
     # --- (q3) a turn: PLANAR, one BLITP a strip, four a frame at most ------
     n0, p0, f0 = w("px_nb4"), w("px_nbp"), w("px_frames")
     keys("sendkey right 600")
-    time.sleep(2.0)
+    os88qemu.acted(q, lambda: w("px_frames") != f0, secs=10, what="the turn's first frame")
+    os88qemu.quiesce(q, lambda: (w("px_frames"), w("px_nbp"), w("px_nb4")), secs=0.5,
+                     what="the turn to end")    # the key released, the frames stop
     n1, p1, f1 = w("px_nb4"), w("px_nbp"), w("px_frames")
     print("   a turn: %d frame(s), %d OSAPI_GFX_BLITP and %d OSAPI_GFX_BLIT4 call(s)"
           % (f1 - f0, p1 - p0, n1 - n0))
@@ -364,7 +403,6 @@ def qemu_leg(a):
     check(bad == 0 and n >= 4, "(q3) ...and its glass is the shadow through the table, "
           "pixel for pixel")
     png("win4-qemu-turn-crop.png", crop=(bx - 8, by - 20, 528, 150), zoom=2)
-    time.sleep(1.0)
     # --- (q3b) the FALLBACK: a window with another over it is BLIT4's -------
     # Up 40 px, under the GAMES window's bottom edge, and GAMES raised by a
     # click on its title: OSAPI_WM_OBSCURED says covered, so the present
@@ -376,9 +414,12 @@ def qemu_leg(a):
     mouse("down", x + 200, y + 9)                 # left, photographed)
     mouse("to", x + 200, y + 9 - 40)
     mouse("up")
+    moved_from((x, y), "the window dragged up under GAMES")
     mouse("click", 200, 88)                 # GAMES' title: raised over us
     mouse("to", 20, 30)
-    time.sleep(2.5)
+    os88qemu.acted(q, lambda: os88geom.zorder(q, S)[-1] != win, secs=10,
+                   what="GAMES raised over the game's window", poll=0.1)
+    os88qemu.ui_done(q, S, cap=2.5, what="GAMES' raise")
     x1, y1 = dispcp.win_rect(q, S, win)[:2]
     n0, p0, f0 = w("px_nb4"), w("px_nbp"), w("px_frames")
     writes = [((seg << 4) + s["px_force"], b"\x01"),   # a WHOLE frame: the
@@ -386,7 +427,7 @@ def qemu_leg(a):
     for name, fill in pxslib.FORCE_ALL:                 # (q5's), or the
         writes.append(((seg << 4) + s[name], bytes([fill]) * (2 * pxslib.COLMAX)))
     qpoke(q, writes)                                    # Δ-fill writes nothing
-    time.sleep(2.0)
+    drawn(f0, "the covered window's forced frame")
     n1, p1, f1 = w("px_nb4"), w("px_nbp"), w("px_frames")
     print("   covered at (%d,%d): %d frame(s), %d BLITP, %d BLIT4"
           % (x1, y1, f1 - f0, p1 - p0, n1 - n0))
@@ -407,10 +448,17 @@ def qemu_leg(a):
     mouse("to", tx, y1 + 9 + (y - y1))
     mouse("up")
     mouse("to", 630, 30)
+    moved_to((x, y), "the window dragged back")
     if b("px_pause"):                       # the sticky pause (px_focus_ck)
         keys("sendkey p")                   # lifted as a player lifts it
-    time.sleep(2.5)
-    if dispcp.win_rect(q, S, win)[:2] != (x, y):
+        os88qemu.acted(q, lambda: b("px_pause") == 0, secs=10,
+                       what="the pause lifted", poll=0.1)
+    # ...and the frames the drag back and the unpause owe DRAWN before q4
+    # counts: q4's zero is about the move, and a frame still in flight from
+    # here lands inside it (the fixed 2.5 s this replaced covered it by luck)
+    os88qemu.quiesce(q, lambda: (w("px_frames"), w("px_npaint")), secs=0.5,
+                     what="the frames owed before the move")
+    if tuple(dispcp.win_rect(q, S, win)[:2]) != (x, y):
         sys.exit("pxswin: the window did not come back to (%d,%d)" % (x, y))
     # --- (q4) a MOVE costs zero repaints ---------------------------------------
     f0, p0 = w("px_frames"), w("px_npaint")
@@ -419,7 +467,9 @@ def qemu_leg(a):
     mouse("to", x + 200 - 40, y + 9 + 24)   # ...dragged...
     mouse("up")                             # ...and let go
     mouse("to", 630, 30)
-    time.sleep(2.5)
+    moved_from((x, y), "the title-bar drag")
+    os88qemu.pace(q, 1.0)                   # a NEGATIVE: time for a frame or a
+                                            # W_PAINT that must NOT come
     x1, y1 = dispcp.win_rect(q, S, win)[:2]
     f1, p1 = w("px_frames"), w("px_npaint")
     print("   moved (%d,%d) -> (%d,%d): %d frame(s) composed, %d W_PAINT(s)"
@@ -448,8 +498,9 @@ def qemu_leg(a):
               (base + s["px_force"], b"\x01")]
     for name, fill in pxslib.FORCE_ALL:
         writes.append((base + s[name], bytes([fill]) * (2 * pxslib.COLMAX)))
+    f0 = w("px_frames")
     qpoke(q, writes)
-    time.sleep(2.0)
+    drawn(f0, "scene C's poked frame")
     nsc = b("px_nsc")
     x, y = dispcp.win_rect(q, S, win)[:2]
     print("   scene C: the eye at tile (%d,%d), %d sprite(s) drawn"
@@ -474,29 +525,42 @@ def disp_origin(m, n):
             pxslib.u16(ctx, n * VID_CTX_SZ + VID_CTX_VY))
 
 
-def detail_menu_shot(m, mo, name):
+def detail_menu_shot(m, ui, name):
     """Press on the bar's Detail title, hold it open, photograph, and let go
-    over the bar (no item)."""
-    x, y = 262, 9
+    over the bar (no item). The title is placed off menu_bar[] - the LIVE
+    bar, os88ui.menus - and the drop is confirmed on the kernel's own
+    menu_dropd/menu_y1 (os88ui.menu_pick's first check) before the settle
+    that the photograph needs; it was a press at a remembered (262, 9)."""
+    cells = [c for c in ui.menus() if c[0].upper() == "DETAIL"]
+    if len(cells) != 1:
+        sys.exit("pxswin: no single Detail menu on the bar: %r"
+                 % [c[0] for c in ui.menus()])
+    _t, x0, x1, _items = cells[0]
+    x, y = (x0 + x1) // 2, os88geom.MBAR_H // 2
+    mo = ui.mo
     mo.to(x, y)
     mo._edge(True)
-    os88marty.settle(m)
+    os88marty.until(m, lambda mm: mm.read(S("menu_dropd"), 1)[0]
+                    and pxslib.u16(mm.read(S("menu_y1"), 2)),
+                    "the Detail menu to drop", poll=0.05, guest=30.0)
+    os88marty.settle(m)                     # PIXELS next: the whole pull-down
     m.pause()
     w, h, px = m.fbuf(0)
     os88marty.write_png_rgb(os.path.join(SHOTS, name), w, h, px)
     m.run()
     mo.to(x + 200, y, l=True)
     mo._edge(False)
-    os88marty.settle(m)
+    os88marty.ui_done(m, "the Detail menu to close")
     print("   shot", os.path.join("build/pxs-shots", name))
 
 
-def drag_to(m, mo, g, x_new, y_new):
-    """The title bar to put the window's frame at (x_new, y_new)."""
-    x, y, ww, wh = dispcp.win_rect(m, S, g.win)
-    gx, gy = x + ww // 2, y + 9
-    mo.drag(gx, gy, gx + (x_new - x), gy + (y_new - y))
-    mo.to(630, 30)                          # the arrow off the band: it is the
+def drag_to(ui, g, x_new, y_new):
+    """The title bar to put the window's frame at (x_new, y_new) - os88ui's
+    move_window, which confirms the press was taken as a drag (ui_dragwin)
+    and reads the frame's arrival off the window record, where mo.drag
+    confirmed each packet and not the gesture (docs/WRITING-TESTS.md 7.2)."""
+    ui.move_window(g.win, x_new, y_new)
+    ui.mo.to(630, 30)                       # the arrow off the band: it is the
                                             # desktop's, drawn over the glass
 
 
@@ -509,6 +573,7 @@ def marty_leg(a):
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
         mo = os88mouse.Mouse(marty=m)
+        ui = os88ui.UI(m, mouse=mo, verbose=False)
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")
         dispcp.close_panel(m, mo, S, os88marty.settle)
@@ -541,7 +606,7 @@ def marty_leg(a):
         check(len(names) >= 30 and not long_,
               "(m1) EVERY caption of the four menus fits a pull-down (%d glyphs)"
               % MENU_MAXCH)
-        detail_menu_shot(m, mo, "wave5-xtvga-colour-greyed.png")
+        detail_menu_shot(m, ui, "wave5-xtvga-colour-greyed.png")
         # --- (m2) 8-aligned, and the pen path's bits ------------------------------
         def pen_leg(card, what):
             m.pause()
@@ -571,7 +636,7 @@ def marty_leg(a):
         # --- (m3) a move on the VGA -------------------------------------------------
         f0, p0 = g.word("px_frames"), g.word("px_npaint")
         x, y = dispcp.win_rect(m, S, g.win)[:2]
-        drag_to(m, mo, g, x - 40, y + 24)
+        drag_to(ui, g, x - 40, y + 24)
         os88marty.settle(m)
         f1, p1 = g.word("px_frames"), g.word("px_npaint")
         x1, y1 = dispcp.win_rect(m, S, g.win)[:2]
@@ -580,7 +645,7 @@ def marty_leg(a):
         check((x1, y1) != (x, y) and f1 == f0 and p1 == p0,
               "(m3) A MOVE COSTS ZERO REPAINTS: no frame composed, no W_PAINT")
         # --- (m4) wholly onto the Hercules: the 1bpp path ---------------------------
-        drag_to(m, mo, g, 640 + 64, 40)
+        drag_to(ui, g, 640 + 64, 40)
         os88marty.settle(m, card=1)
         g.force()
         g.wait_frames(1)
@@ -611,7 +676,7 @@ def marty_leg(a):
         os88marty.settle(m, card=1)
         check(g.byte("px_back") == WIN1 and g.byte("px_btback") == INK_HERC,
               "(m5) a 286 on the Hercules is still WIN1, the Hercules byte set")
-        drag_to(m, mo, g, 64, 40)           # back onto the VGA
+        drag_to(ui, g, 64, 40)           # back onto the VGA
         os88marty.settle(m)
         g.force()
         g.wait_frames(1, limit=300.0)
@@ -639,7 +704,7 @@ def marty_leg(a):
         # card's - the Hercules here - so the window is WIN1 and BLITP is never
         # asked. (BLITP's own straddle refusal is therefore not reachable on
         # the one two-card pair this tree hosts: a VGA beside a Hercules.)
-        drag_to(m, mo, g, 200, 40)          # the band 200..711: 72 px over
+        drag_to(ui, g, 200, 40)          # the band 200..711: 72 px over
         os88marty.settle(m)
         g.force()
         g.wait_frames(1, limit=300.0)
@@ -657,14 +722,13 @@ def marty_leg(a):
               and d4 == 0 and dp == 0,
               "(m5b) a window STRADDLING the seam is the restrictive card's (SPEC.md "
               "39.16.4.2): WIN1, no BLIT4 and no BLITP")
-        drag_to(m, mo, g, 64, 40)           # wholly on the VGA again
+        drag_to(ui, g, 64, 40)           # wholly on the VGA again
         os88marty.settle(m)
         g.force()
         g.wait_frames(1, limit=300.0)
         os88marty.settle(m)
         # --- (m6) Detail > Colour, the one control this wave adds ----------------
-        import os88flush, os88ui                            # noqa: E401,E402
-        ui = os88ui.UI(m, mouse=mo, verbose=False)
+        import os88flush                                    # noqa: E402
 
         def cfg_colour():
             try:
@@ -703,7 +767,7 @@ def marty_leg(a):
                                       table, "(m6) the VGA's glass, Colour On again")
                 check(n >= 4 and bad == 0,
                       "(m6) ...and back to WIN4: the shadow through the table")
-        drag_to(m, mo, g, 640 + 64, 40)     # and onto the Hercules again
+        drag_to(ui, g, 640 + 64, 40)     # and onto the Hercules again
         os88marty.settle(m, card=1)
         g.force()
         g.wait_frames(1, limit=300.0)
@@ -714,7 +778,7 @@ def marty_leg(a):
         check(back == WIN1 and ink == 0x2288 and bt == INK_HERC,
               "(m5) ...and onto the Hercules again: WIN1, the Hercules inks and set")
         check(cap == g.s["px_s_colmono"], "(m5) ...and Colour greyed: needs 16 colours")
-        detail_menu_shot(m, mo, "wave5-xtvgaherc-colmono.png")
+        detail_menu_shot(m, ui, "wave5-xtvgaherc-colmono.png")
 
 
 # =============================================================================

@@ -637,13 +637,7 @@ menu_relayout:
 .done:
     call menu_ab_cell           ; the NAME cell goes LAST (DI = next slot)
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_di
 
 ; -----------------------------------------------------------------------------
 ; menu_ab_cell - turn the app-name label into a bar cell (SPEC.md 12.7)
@@ -933,11 +927,7 @@ menu_furniture:
     mov byte [menu_bdirty], 1
 
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_dx
 
 ; -----------------------------------------------------------------------------
 ; menu_bar_text - the menus segment: compose it, diff it, emit what moved
@@ -1123,13 +1113,7 @@ menu_bar_text:
     jbe .piece
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_di
 
 ; -----------------------------------------------------------------------------
 ; menu_bemit - letter cells BX..DX of the menus segment in one font_run
@@ -1665,13 +1649,7 @@ menu_draw_clock:
     call thm_ink                   ; the documented parting state, on both
                                    ; paths - font_run leaves its own
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_di
 
 ; -----------------------------------------------------------------------------
 ; menu_track - run one full BAR menu interaction. Finds the title under the

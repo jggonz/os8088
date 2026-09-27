@@ -3168,3 +3168,21 @@ reads `Starting`; raise `OVL_KNOBGIVE` and build with `NOOVLCHK=1`. Keep the
 hook as THIN as possible — v5 is the proof that a heavy one makes the bug
 disappear.
 
+
+## 62. Clear Skies flies with a horizon and nothing else — no runway, no buildings (FIXED — the cull's skip test read ZERO as a tick: SPEC.md 88.5.2.4)
+
+Reported off the owner's 5150 (docs/FIELD-MACHINES.md), every time the
+machine was being demonstrated and never reproduced on purpose: boot, install
+to the hard disk, show a lot of the OS with the extended desktop on, launch
+Clear Skies, default aeroplane, default Paris, Fly — horizon, cockpit and
+instruments, and no runway and no buildings. The extended desktop and the
+hard disk were the two suspects because they were always on. **Both were
+coincidence; the common factor was UPTIME.** `cs_consider` compared an
+object's skip tick against `[ticks]` with a signed difference, and 0 — "never
+skipped", which every object starts with — reads as in the future whenever
+the tick count's top bit is set: from 30 minutes after boot to 60, and every
+other half hour after. The runway is a cull object too, so it went with the
+world. Worth keeping for how it was found: the runway is exempt from Detail
+(SPEC.md 88.13.1), so a missing RUNWAY ruled out the settings and pointed at
+the cull, and the cull's only input that grows with a long session is the
+clock. `tests/skiesticks.py` sets `[ticks]` and reproduces it in 25 seconds.

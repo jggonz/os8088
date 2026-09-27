@@ -917,16 +917,16 @@ osapi_snd_stream:
 .have:
     push bx
     push bp
-    cmp al, 3
-    je .status
-    cmp al, 9                   ; verb 9 answers in DX as verb 3 does (SPEC.md
-    je .status                  ; 34.5.1)
-    push dx                     ; every other verb gets its DX back
     mov bx, es                  ; BX = the CALLER'S SEGMENT, which verbs 5 and
                                 ; 6 copy to and from: the X stub put the
                                 ; caller's DS in ES, and ES is KERNEL_SEG by
                                 ; the time the driver runs (drv_call), so BX
                                 ; is the only way it can reach them
+    cmp al, 3
+    je .status
+    cmp al, 9                   ; verb 9 answers in DX as verb 3 does (SPEC.md
+    je .status                  ; 34.5.1)
+    push dx                     ; every other verb gets its DX back
     cmp al, 0
     je .rate
     cmp al, 4
@@ -937,20 +937,19 @@ osapi_snd_stream:
                                 ; so the kernel is what banks DX
                                 ; (SPEC.md 34.5).
 .go:
-    call snd_req_inst           ; DH = the requester
-    mov bp, [drv_svc+DSV_STREAM]
-    call drv_svc_call
+    call .svc
     pop dx                      ; ...only the main path owes this one
 .pops:
     pop bp
     pop bx
     ret
 .status:                        ; verb 3: DX is the ANSWER, so nothing banks
-    mov bx, es                  ; it and nothing puts it back
-    call snd_req_inst
-    mov bp, [drv_svc+DSV_STREAM]
-    call drv_svc_call
+    call .svc                   ; it and nothing puts it back
     jmp short .pops             ; jmp does not touch the CF just answered with
+.svc:                           ; THE CALL ITSELF, once for both paths (size
+    call snd_req_inst           ; pass 5): stamp, select, and tail into
+    mov bp, [drv_svc+DSV_STREAM]    ; drv_svc_call, whose `ret` is ours - so
+    jmp drv_svc_call            ; its CF comes back through the `call .svc`
 
 %endif                          ; OS88_SNDCARD - the stream slot's live body
 
@@ -997,10 +996,10 @@ osapi_snd_tone:
 ; the way it is - but the question stopped being the sound tier's alone when
 ; the file API needed the same answer to stand the volume in the calling
 ; app's own directory (SPEC.md 19.2.1). Two copies of "who is asking?" is
-; the kind of pair that drifts silently, so there is one.
+; the kind of pair that drifts silently, so there is one - and since size pass
+; 5 it is not even a jump: `snd_req_inst` is a second LABEL on inst_caller's
+; first instruction (instance.inc), so its callers reach the body directly.
 ; -----------------------------------------------------------------------------
-snd_req_inst:
-    jmp inst_caller
 
 ; -----------------------------------------------------------------------------
 ; osapi_snd_play - PCM_EXCL clip, run-to-completion (slot 0x00DB, SPEC.md

@@ -394,8 +394,7 @@ app_about_center_x:
     add cx, [bx+W_X]
     inc cx                      ; content left = W_X + 1
     mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground:
-    call ct_cw_font_run                       ; W_PAINT arrives white-filled (6.6.5)
-    ret
+    jmp ct_cw_font_run                        ; W_PAINT arrives white-filled (6.6.5)
 %ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
 
 ; =============================================================================

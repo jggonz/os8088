@@ -106,6 +106,10 @@ UNREGISTERED = {
     "trklog.inc": "tracker's logging build, %included by apps/tracker",
     "trkscrl.inc": "tracker's scroll-gate build, %included by apps/tracker",
     "npbench.inc": "a benchmark body, %included",
+    "fatdel.py": "deletes one file anywhere in a FAT12 image, a sub-folder "
+                 "too, which tools/os88fat.py's `del` refuses - imported by "
+                 "assocstale.py to take a program out from under the "
+                 "ASSOC.DAT that names it; library, not a test",
     "harness.py": "tests/unit/'s check library - check(), eq(), done() - "
                   "imported by every t_*.py there, not a test",
     "mkclick.py": "a GENERATOR, not a test: it writes build/click.mod - a "

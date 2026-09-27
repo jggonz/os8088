@@ -83,11 +83,11 @@ def main():
         with open(p, "rb") as f:        # whether it should have been
             raw = f.read()
         img = os88drv.image_unwrap(raw)
-        check(len(img) >= 32 and img[:2] == b"O8",
+        check(len(img) >= 32 and img[:2] == b"O8" and img[2] == os88drv.DRV_VER,
               "%s expands to a driver-shaped image" % name,
               "what %s will read through OSAPI_FILE_READ is the IMAGE, and "
               "its header check runs against these bytes" % found[name],
-              got=img[:4].hex(), want="'O8', version 4")
+              got=img[:4].hex(), want="'O8', version %d" % os88drv.DRV_VER)
         if others:
             check(raw[:2] == b"CZ",
                   "%s is compressed with the rest" % name,

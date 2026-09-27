@@ -682,7 +682,7 @@ void os88_wm_grow(void *win);                    /* a resizable window's own
                                                   * repaint must END with this
                                                   * - the white fill erased
                                                   * the grow box */
-void os88_wm_resize(void *win, int w, int h);    /* do NOT hold the lock */
+void os88_wm_resize(void *win, int w, int h);    /* lock held or not (11.1.2) */
 
 /* os88_wm_minsize - "below this my layout stops working; do not cut me past
  * it, even to fit a screen" (11.100.2). w and h are the OUTER window, frame

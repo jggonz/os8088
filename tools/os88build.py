@@ -574,6 +574,21 @@ def nasm_version(path):
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
+def have_pil():
+    """Can THIS interpreter write a picture through Pillow?
+
+    `from PIL import Image` and not `import PIL`: an archive Pillow built for
+    another python3 imports as a package and fails only at its `_imaging`
+    extension, which is how the `pxsshots` row died with a traceback on a box
+    whose preflight had called the capability present.
+    """
+    try:
+        from PIL import Image                                   # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def nasm3():
     """The path to an nasm >= 3 on this box, or None.
 

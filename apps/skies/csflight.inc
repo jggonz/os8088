@@ -120,6 +120,10 @@ cs_runway_build:
     mov [di + CSO_Y], ax
     mov word [di + CSO_RANGE], 16000
     mov word [di + CSO_LOD], 0
+    mov word [di + CSO_SKIP], 0     ; ...and never skipped on arrival: this is
+                                    ; every bracket entry, and cs_skipclr walks
+                                    ; the WORLD's table, not this record
+                                    ; (SPEC.md 88.5.2.4)
     mov ax, [si + CSA_NAME]
     mov [di + CSO_NAME], ax
     mov word [di + CSO_FLAGS], CSO_TERRAIN   ; the runway is the world's

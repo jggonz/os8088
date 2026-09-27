@@ -355,8 +355,9 @@ A_LOCKED = A_RDONLY | A_ARCH                # visible, but not yours to delete
 ASC_NAME  = b"ASSOC   DAT"   # SPEC.md 54.7: the volume's icon + assoc cache
 ASC_MAGIC = b"OS88AC"
 ASC_VER   = 2                # rows carry the glyph column (SPEC.md 54.3.2);
-                             # the kernel reads version 1 too, nothing
-                             # writes it any more
+                             # the ONLY version the kernel reads - it
+                             # dropped version 1 in kernel size pass 5, so
+                             # any other byte here is a cold cache
 ASC_HDR   = 16
 ASC_ROW   = 88               # stem 8 + size 2 + cluster 2 + 4 rsvd + icon 64
                              # + document glyph 8
@@ -1399,7 +1400,7 @@ def verify_hdd(path: str) -> int:
                     d += psec(data_lba + (c - 2) * spc, spc)
                     c = ent(f1, c)
                     guard += 1
-            subs = []
+            subs, names = [], set()
             for i in range(0, len(d), 32):
                 e = d[i:i + 32]
                 if not e or e[0] == 0:
@@ -1416,6 +1417,11 @@ def verify_hdd(path: str) -> int:
                 clus, = struct.unpack_from("<H", e, 26)
                 size, = struct.unpack_from("<I", e, 28)
                 full = path_ + nm + ("." + ex if ex else "")
+                if e[0:11] in names:
+                    # two entries, one name: every lookup finds the first
+                    # and the second's clusters are unreachable by name
+                    errors.append(f"{full}: DUPLICATE NAME in {path_}")
+                names.add(e[0:11])
                 if attr & 0x10:
                     if clus:
                         chain(clus, full + "/ (dir)")

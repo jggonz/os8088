@@ -452,6 +452,24 @@ class Flush(object):
                 pass
 
 
+def vhd_volume(path, part=0):
+    """Partition PART of a fixed-disk image (a flat VHD, footer and all), as a
+    Volume - the hard-disk twin of `Flush.volume`, which reads floppies.
+
+    Read it AFTER the instance is closed: MartyPC writes the image in place,
+    and a read taken while it runs can see a FAT that is still in flight.
+    """
+    with open(path, "rb") as f:
+        img = f.read()
+    if len(img) < SECTOR or img[510:512] != b"\x55\xaa":
+        raise FlushError("%s: no partition table" % path)
+    ent = 446 + part * 16
+    lba = struct.unpack_from("<I", img, ent + 8)[0]
+    if not img[ent + 4] or not lba:
+        raise FlushError("%s: partition %d is empty" % (path, part))
+    return Volume(img[lba * SECTOR:], "%s partition %d" % (path, part))
+
+
 def _fmt_entry(e):
     kind = "<DIR>" if e.is_dir else "%7d" % e.size
     flags = "".join(c for c, bit in (("r", ATTR_RDONLY), ("h", ATTR_HIDDEN),

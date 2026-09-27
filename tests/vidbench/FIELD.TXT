@@ -1,0 +1,41 @@
+VIDEO PLAYER - WAVE 0 FIELD DISK
+================================
+
+Three benches for the four questions an emulator cannot
+answer (docs/plans/VIDEO-PLAN.md section 8). All three
+only READ. Nothing here writes to any disk.
+
+Put this disk in B: (or A: once the desktop is up) and
+open it. Each bench opens a window: press R to run,
+then Space / PgDn / PgUp to page the results. Please
+photograph every page.
+
+VIDBENCH.O88  -  Hercules wait states
+  Needs VIDBENCH.DAT beside it (it is on this disk).
+  R takes the screen for up to a few minutes: garbage
+  on the screen is the frames being timed. The results
+  come back in the window. Any line saying BAD, or a
+  row with no number, is a finding too.
+
+VIDSND.O88  -  the Sound Blaster and the ST-225
+  Suspends the drivers, programs the SB by hand and
+  finds its IRQ itself. Needs HIBER.DRV on the disk
+  the machine booted from. Four rows of 5 seconds each
+  (PCM at 30 and 60 fps, then 4-bit ADPCM), then four
+  more reading whole tracks off the fixed disk while
+  the sound interrupt burns 0/25/50/75% of a frame.
+  The buffer is silence, so expect little or nothing
+  to hear: the interrupt COUNT on each row is the
+  answer. An ADPCM count of 0 means the card did not
+  play it.
+  The drivers come back on every path.
+
+VIDDISK.O88  -  the ST-225's raw ceiling
+  Times int 13h reading whole tracks and single
+  sectors off the first fixed disk. Its READ_AT rows
+  need a STREAM.DAT of 12.6 MB beside it and say so
+  and skip without one; the emulator already answered
+  that question.
+
+Run them on the ST-225 machine first. On the PicoMEM 2
+machine VIDSND and VIDDISK are the interesting pair.

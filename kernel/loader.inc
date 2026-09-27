@@ -543,8 +543,7 @@ ld_say_status:
 .say:
     mov bx, fm_stattab
     mov cx, LD_NSTAT
-    call ct_toast_say
-    ret
+    jmp ct_toast_say
 
 ; -----------------------------------------------------------------------------
 ; ld_owed - WHAT DOES THE SCREEN STILL OWE THIS LOAD? (SPEC.md 22.17)
@@ -1465,8 +1464,7 @@ ld_start:
     mov ax, [ld_base]
     mov bp, wm_destroy_seg
     call ct_cw_mem_disp
-    call ct_cw_gfx_unlock
-    ret
+    jmp ct_cw_gfx_unlock
 
 ; -----------------------------------------------------------------------------
 ; ld_pkg_start - OSAPI_PKG_START: START THE PACKAGE CALLED NAME

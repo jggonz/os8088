@@ -1809,6 +1809,7 @@ IBM_TWIN = {
     # it. `os8088_5150_herc_hdd_gla` already existed and was simply unmapped.
     "os8088_5150_cga_hdd":  "os8088_5150_cga_hdd_gla",
     "os8088_5150_herc_hdd": "os8088_5150_herc_hdd_gla",
+    "os8088_5150_herc_hdd_sb": "os8088_5150_herc_hdd_sb_gla",
     "os8088_5150_cga_4fdd": "os8088_5150_cga_4fdd_gla",
 }
 

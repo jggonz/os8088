@@ -1,0 +1,135 @@
+--- a/crates/marty_core/src/devices/sblaster.rs
++++ b/crates/marty_core/src/devices/sblaster.rs
+@@ -45,8 +45,17 @@
+     two entirely different pieces of guest code, and a card that can only be
+     one of them can only test one of them. `dsp_version` picks.
+ 
++    ADPCM4 (os8088 patch 06): command 0x7D, auto-init 4-bit ADPCM with a
++    reference byte - Creative's scheme as DOSBox decodes it (its scaleMap and
++    adjustMap), the reference being the first byte of the transfer and taken,
++    not played. The DSP's time constant is the SAMPLE rate, so the bytes go at
++    half of it, two samples each, high nibble first; the block length counts
++    BYTES. os8088's Video Player (SPEC.md 98.3.1) and tools/os88vid.py's
++    encoder are written against this decoder, so a card that disagrees is
++    heard as noise and not as silence.
++
+     WHAT IS NOT HERE. No mixer beyond the registers a driver reads to find its
+-    own IRQ, no 16-bit or stereo modes, no ADPCM, no MIDI/MPU-401. A DSP 2.01
++    own IRQ, no 16-bit or stereo modes, no 2.6- or 3-bit ADPCM, no MIDI/MPU-401. A DSP 2.01
+     card had none of those either; the SB16 commands (0x41 sample rate, 0xB0/
+     0xC6 16-bit) are refused rather than half-implemented, because a command
+     that is accepted and does the wrong thing is worse than one that is not
+@@ -160,8 +169,28 @@
+     /// sample is due per call, which is most of them.
+     pending_frac: f64,
+     last_sample: f32,
++    // --- ADPCM4 (patch 06) ---
++    adpcm: bool,
++    adpcm_ref_due: bool,
++    adpcm_ref: u8,
++    adpcm_scale: i32,
++    /// The low nibble of the last byte, not yet played.
++    adpcm_low: Option<u8>,
+ }
+ 
++const ADPCM4_SCALE: [i32; 64] = [
++    0, 1, 2, 3, 4, 5, 6, 7, 0, -1, -2, -3, -4, -5, -6, -7,
++    1, 3, 5, 7, 9, 11, 13, 15, -1, -3, -5, -7, -9, -11, -13, -15,
++    2, 6, 10, 14, 18, 22, 26, 30, -2, -6, -10, -14, -18, -22, -26, -30,
++    4, 12, 20, 28, 36, 44, 52, 60, -4, -12, -20, -28, -36, -44, -52, -60,
++];
++const ADPCM4_ADJUST: [i32; 64] = [
++    0, 0, 0, 0, 0, 16, 16, 16, 0, 0, 0, 0, 0, 16, 16, 16,
++    -16, 0, 0, 0, 0, 16, 16, 16, -16, 0, 0, 0, 0, 16, 16, 16,
++    -16, 0, 0, 0, 0, 16, 16, 16, -16, 0, 0, 0, 0, 16, 16, 16,
++    -16, 0, 0, 0, 0, 0, 0, 0, -16, 0, 0, 0, 0, 0, 0, 0,
++];
++
+ impl SoundBlasterCard {
+     pub fn new(io_base: u16, irq: u8, dsp_version: (u8, u8), sample_rate: u32, sender: Sender<AudioSample>) -> Self {
+         log::debug!(
+@@ -201,6 +230,11 @@
+             accum: 0.0,
+             pending_frac: 0.0,
+             last_sample: 0.0,
++            adpcm: false,
++            adpcm_ref_due: false,
++            adpcm_ref: 0x80,
++            adpcm_scale: 0,
++            adpcm_low: None,
+         }
+     }
+ 
+@@ -241,6 +275,8 @@
+         if let Some(l) = len {
+             self.block_len = l;
+         }
++        self.adpcm = false;
++        self.adpcm_low = None;
+         self.direction = dir;
+         self.auto_init = auto_init && self.supports_auto_init();
+         self.block_left = self.block_len.wrapping_add(1);
+@@ -256,6 +292,13 @@
+             0x24 => self.start_transfer(Direction::Input, false, Some(u16::from_le_bytes([ops[0], ops[1]]))),
+             0x1C => self.start_transfer(Direction::Output, true, None),
+             0x2C => self.start_transfer(Direction::Input, true, None),
++            // ADPCM4, auto-init, with reference (patch 06)
++            0x7D => {
++                self.start_transfer(Direction::Output, true, None);
++                self.adpcm = self.supports_auto_init();
++                self.adpcm_ref_due = true;
++                self.adpcm_scale = 0;
++            }
+             0x48 => self.block_len = u16::from_le_bytes([ops[0], ops[1]]),
+             0x40 => self.time_constant = ops[0],
+ 
+@@ -365,6 +408,14 @@
+         }
+     }
+ 
++    /// One 4-bit ADPCM nibble against the running reference and scale.
++    fn adpcm4(&mut self, nibble: u8) -> u8 {
++        let i = (nibble as i32 + self.adpcm_scale).clamp(0, 63) as usize;
++        self.adpcm_ref = (self.adpcm_ref as i32 + ADPCM4_SCALE[i]).clamp(0, 255) as u8;
++        self.adpcm_scale = (self.adpcm_scale + ADPCM4_ADJUST[i]).clamp(0, 48);
++        self.adpcm_ref
++    }
++
+     fn raise_irq(&mut self, bus: &mut BusInterface) {
+         if self.irq_pending {
+             // The previous block's interrupt was never acknowledged: the
+@@ -418,6 +469,34 @@
+                 break;
+             }
+             match self.direction {
++                Direction::Output if self.adpcm => {
++                    // Two samples a byte: the low nibble of the last one is
++                    // owed first, and takes no DMA at all
++                    if let Some(n) = self.adpcm_low.take() {
++                        let s = self.adpcm4(n);
++                        self.emit(s);
++                        continue;
++                    }
++                    let mut byte = dma.do_dma_read_u8(bus, SB_DMA);
++                    if self.adpcm_ref_due {
++                        // the reference: the starting sample, not a sound
++                        self.adpcm_ref_due = false;
++                        self.adpcm_ref = byte;
++                        self.block_left = self.block_left.saturating_sub(1);
++                        if self.block_left == 0 {
++                            self.blocks_done += 1;
++                            self.raise_irq(bus);
++                            self.block_left = self.block_len.wrapping_add(1);
++                        }
++                        if !dma.check_dma_ready(SB_DMA) {
++                            break;
++                        }
++                        byte = dma.do_dma_read_u8(bus, SB_DMA);
++                    }
++                    let s = self.adpcm4(byte >> 4);
++                    self.adpcm_low = Some(byte & 0x0F);
++                    self.emit(s);
++                }
+                 Direction::Output => {
+                     let byte = dma.do_dma_read_u8(bus, SB_DMA);
+                     self.emit(byte);

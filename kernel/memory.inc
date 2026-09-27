@@ -2131,15 +2131,12 @@ mem_in_xfer:
     mov bx, [ss:si+MC_SEG]
     add bx, [ss:si+MC_PARA]
     cmp ax, bx
-    jae .no
-    pop bx
-    pop ax
-    stc
-    ret
+    jb .out                     ; inside - and `jb` is CF = 1, the answer
 .no:
+    clc
+.out:
     pop bx
     pop ax
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4369,15 +4366,13 @@ mem_owner_of_x:
     je .hit
     add si, MC_SIZE
     loop .scan
-    pop si
-    pop cx
     stc
-    ret
-.hit:
+    jmp short .out
+.hit:                           ; `je` arrives with CF = 0, and `mov` keeps it
     mov bx, [ss:si+MC_OWN]
+.out:
     pop si
     pop cx
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
