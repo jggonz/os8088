@@ -2121,6 +2121,23 @@ def no_saver(m):
     the failure this prevents.
     """
     S = _syms().linear
+    # NOT BEFORE THE BOOT HAS APPLIED ITS SETTINGS. `drv_boot_x` loads
+    # SYSTEM.CFG and runs `ss_mins2idle` late in kmain_o, and that REWRITES
+    # [ss_idle] - so a write that lands earlier is undone and the saver comes
+    # back five guest minutes later, inside whatever the row was waiting on
+    # (skiesfleet in the whole soak of 2026-09-27: "the screen was still
+    # changing after 542 GUEST seconds because ... [blk_on] is set"). Where
+    # it landed was host polling against guest progress, which is why a
+    # loaded box found it: the guest runs slower per poll, so an early gate is
+    # seen earlier in guest time. `spl_finish` is kmain_o's last act, so the
+    # desktop's own word live and the splash done IS the end of the boot. A
+    # caller past the boot - nearly all of them - finds it true at once.
+    def booted(_):
+        return m.read(S("desk_rows"), 2) != b"\0\0" and \
+            m.read(S("spl_live"), 1)[0] == 0
+    if not booted(m):
+        until(m, booted, "the boot to apply its settings before the saver "
+              "is turned off", poll=0.05, guest=300.0)
     m.write(S("ss_idle"), b"\0\0")
     m.write(S("ss_mins"), b"\0")
 

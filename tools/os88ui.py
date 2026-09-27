@@ -260,8 +260,21 @@ class UI:
         screens in it and the loading screen between two disk reads is as
         still as a finished desktop. It is what makes the settle safe, and
         the window in between is where the screen saver has to be turned off.
+
+        **AND `[spl_live]` = 0, WHICH IS WHAT MAKES `no_saver` STICK.** The two
+        words go live in kmain_o's `menu_init` and desk setup, BEFORE
+        `drv_boot_x` loads SYSTEM.CFG and runs `ss_mins2idle` - which rewrites
+        `[ss_idle]`. A `no_saver` landing in between was simply undone, and
+        where it landed was decided by host polling against guest progress:
+        on a loaded box the guest is slower per poll, so the gate was seen
+        EARLIER in guest time and the saver came back five guest minutes into
+        the settle that followed (skiesfleet, in the whole soak: "the screen
+        was still changing after 542 GUEST seconds because ... [blk_on] is
+        set"). `spl_finish` is kmain_o's last act, after the settings, so
+        both words live and the splash done is the end of the boot.
         """
-        self._wait(lambda: self._word("desk_rows") and self._word("menu_nbar"),
+        self._wait(lambda: self._word("desk_rows") and self._word("menu_nbar")
+                   and not self._byte("spl_live"),
                    "the kernel to reach the desktop", limit)
         return self
 
