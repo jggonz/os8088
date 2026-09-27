@@ -2203,7 +2203,10 @@ layout (no shadow copy); `font_run_cell`'s masked row loop (~20 kernel
 bytes, ~210 cycles a clipped cell).
 
 **Recorded, not player defects** (15.7): `vidlivesndl`, `vidfskeysflip` and
-(once) `vidplay` fail now and then under parallel load and pass alone;
+`vidwinshd` (its hold at frame 100, once, 2026-09-27) fail now and then
+under parallel load and pass alone. `vidplay` WAS on this list and was the
+harness's: its first hold was polled every 0.3 host s, which could read the
+1.5 s "Low memory" toast after it had gone - polled at 0.02 now (ab2aed4d);
 MartyPC loses a key press under the same load; MartyPC's VGA draws text
 attribute 6 red (MARTYPC-PLAN 1).
 
