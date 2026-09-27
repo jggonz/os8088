@@ -7260,6 +7260,16 @@ SOAK = [
         "table (instrest's apparatus). Opens the installer and writes "
         "nothing. Measured 132s for the three boots, serially.",
         needs=("marty",), serial=True, timeout=900),
+    Row("instkeep", "soak", py("tests/instkeep.py"), 200.0,
+        "SPEC.md 52.10.15: an install that KEEPS the volume's files. The "
+        "fixture is MartyPC's DOS 3.3 partition with two holes punched and a "
+        "user's USER.TXT, SYSTEM.CFG and SYSTEM/APPDATA/NOTE.CFG planted by "
+        "mtools, so cluster 2 is IO.SYS's and the kernel MUST go elsewhere: "
+        "the row asserts the user's files byte for byte, the kernel ONE RUN, "
+        "and the VBR's BOOTHD_KOFS/KSECS naming it - then boots C:, upgrades "
+        "the booted-from volume IN PLACE with the system disk in B:, and "
+        "boots it again.",
+        needs=("marty", "mtools"), serial=True, timeout=1500),
     Row("hddcp", "soak",
         py("tests/hddcp.py", "build/os8088-360.img", "build/hddcp-out.bin"),
         90.0,

@@ -81343,7 +81343,9 @@ computed from `BPB_RsvdSecCnt`, `BPB_NumFATs`, `BPB_FATSz16` and
 `BPB_RootEntCnt` rather than from a format. A FAT16 partition needs no new
 code in it at all.
 
-**`KERNEL.SYS` must be first and contiguous**, exactly as on a floppy: the
+**`KERNEL.SYS` must be contiguous**, and after a format it is first — §52.10.15
+added `BOOTHD_KOFS` so a kept volume's kernel may start anywhere in the data
+area. It must be contiguous exactly as on a floppy: the
 sector reads it as a flat run rather than walking a cluster chain, which is
 what makes it fit in 512 bytes (§19.3). `os88disk.py` guarantees that at
 image-build time by allocating it from cluster 2; the installer guarantees it
@@ -81600,6 +81602,11 @@ click, and the row reads `Booted From` in place of its FAT type — because
 what matters about that slot is not which FAT it holds. **Three windows now
 say the same word for the same fact**, which is the point of putting it in
 the state rather than beside it.
+
+**§52.10.15 narrows everything below to ERASING.** An install that keeps the
+volume's files may take the booted-from volume, and does, with the Erase box
+clear; the `Booted From` refusal and its caption now belong to the box being
+ticked.
 
 **Which leaves the machine no way to replace its own system volume from
 inside itself, and that is correct.** The install set is two floppies and
@@ -82746,6 +82753,128 @@ cannot: that every app row's cluster names a folder that is really on the
 installed volume, that the packages the volume carries are the ones the file
 describes, and that `BROWSER.HTM`'s program is reachable from its row. The
 installer says `Done` either way.
+
+### 52.10.15 Install without erasing: the volume's files are kept
+
+**An install that does not format is the default over any slot that holds a
+volume.** Everything the install disks carry is written over what is there —
+`KERNEL.SYS`, every driver, every package, font and document — and nothing
+else is touched: the user's own files, their `SYSTEM.CFG`, and whatever an
+application keeps in an `APPDATA` folder (§19.9). `ASSOC.DAT` is rebuilt from
+what is on the volume afterwards exactly as §52.10.14 already does, so it
+describes the user's packages as well as ours.
+
+The installer carries one new control, a check box reading **`Erase the
+partition first`**, between the slot list and the buttons. It is not a second
+button because it is not a second verb: the action button installs either way
+and the box decides whether the volume survives it.
+
+| the selected slot | the box | the arm caption |
+|---|---|---|
+| a FAT volume (`C: FAT16`, `FAT12`, …) | **clear** — its files are kept; tick it to format | `Keeps its files: Install again to confirm` |
+| the volume the machine **booted from** | clear; ticking it greys Install and the caption says `Boot from a floppy to erase it` | as above |
+| anything else — `Unpartitioned`, `Not Formatted` | **set and greyed**: there is nothing to keep (§47, a fact and not a choice) | `Erases it: Install again to confirm` |
+
+It greys once the install has written anything, and picking another row puts
+it back to that row's default.
+
+#### The kernel no longer has to be at cluster 2
+
+`boot/boothd.asm` reads `KERNEL.SYS` as a flat run from the start of the data
+area (§52.10.2), and a format guarantees that start is free. A kept volume
+guarantees nothing — the MartyPC fixture disk has DOS 3.3's `IO.SYS` there —
+so the sector now adds **`BOOTHD_KOFS`**, a dword at offset **504**, directly
+below `BOOTHD_KSECS`: the kernel's first sector as an offset into the data
+area. A format leaves it 0 and the sector reads cluster 2 exactly as before.
+The eight bytes of code and four of data were paid for by moving the loader's
+working variables **out of the sector**: every one is written before it is
+read, so none needed an initialiser, and they live at `0600h` in the segment
+the sector relocated to — which `.nomem` already proves is clear of the
+kernel's read, with the stack at `7C00h` and the blob at the heap floor below
+both. `boot_drive` stays in the sector, being read after the blob has run.
+Seven bytes are still spare.
+
+**The run is arranged with nothing but the file API.** `dskw_alloc` is
+next-fit from `[dsk_rover]`, and `disk_mount` puts the rover back at cluster 2
+on every mount — so after a fresh mount the allocator's order is the FAT's
+order, and a file of N clusters takes the lowest N free ones. `hd_inst_keep`:
+
+1. **cuts the old `KERNEL.SYS` to nothing** — a zero-length replace through
+   `OSAPI_FILE_WRITE_SYS`, the one verb that may touch a hidden + system file
+   (§19.6) — so its clusters are free;
+2. **plans** (`hd_kplan`): reads the BPB and walks the FAT raw, three sectors
+   at a time through the copy buffer (1,536 bytes is exactly 1,024 FAT12
+   entries or 768 FAT16 ones, so no entry is ever split), and finds the
+   **first** run of free clusters long enough for the new kernel, counting the
+   free clusters below it. First fit, because the pad costs a write of every
+   cluster it covers;
+3. writes **`KPAD.TMP`** of exactly that many clusters, after a remount, so it
+   takes precisely the holes below the run;
+4. **copies the kernel** — every cluster it is handed is the next one in the
+   run, whether the rover survived a chunk or a remount put it back at 2,
+   because the pad has taken everything underneath;
+5. deletes the pad, **checks the chain on the disk** (`hd_kverify`: the
+   directory says where it starts, the FAT says whether each cluster is
+   followed by the next), and only then writes the VBR — with this volume's
+   OWN BPB, the template's code laid over everything but the first 62 bytes,
+   `BPB_HiddSec` taken from the partition table — and that is the commit.
+
+The partition does not boot between steps 3 and 5, which is seconds; the
+format path's window is its whole system phase. A check that fails at step 5
+commits nothing: the VBR and MBR are what they were, and on the fixture the
+partition still boots DOS.
+
+**The rest of the tree is the ordinary copy**, which already replaces a file
+that exists and already treats `FERR_EXIST` from `MKDIR` as the second time
+(§52.10.13). `hd_ikeepit` is the one addition: on a kept volume a root
+`SYSTEM.CFG`, and any file inside a folder named `APPDATA` (inherited down the
+walk's level stack), is copied **only where the destination has none**. The
+install disks ship no `SYSTEM.CFG` and an empty `APPDATA` today, so this is
+what keeps a future default from overwriting a user's setting rather than a
+rule that fires on the current disks.
+
+#### The booted-from volume can be upgraded in place
+
+§52.10.4.1 refused the volume the machine is running from, and that stands
+for **erasing** it. Keeping it is different in kind — the running kernel is in
+RAM, its drivers are loaded images, and every file is replaced through the
+same API as on any other volume — so `HIS_LIVE` is installable with the box
+clear. `hd_inst_keep` adopts the kernel's own volume (`hd_kvol`) rather than
+mounting it, and two guards make the source honest where it now could not be:
+**the destination is never the source** (a user booted from C: is standing on
+a volume with `KERNEL.SYS` on it, and a copy of a volume onto itself replaces
+each file with its own first chunk), and **the system disk is looked for in
+every floppy drive**, lowest first, where it was A: alone — a machine that
+boots its hard disk has a blank in A: or nothing, and the new system disk in
+whichever drive the BIOS was not reading. The apps phase takes the same
+destination guard. The caption for a disk it cannot find reads `No system
+disk found - nothing done`.
+
+What this does **not** do is make a running machine consistent with what it
+just installed: the new kernel and drivers are on the disk and the old ones
+are in memory until the Restart the action button offers.
+
+#### What it cost, and what gates it
+
+**No kernel byte.** `boothd.bin` is still 512 bytes with seven spare.
+`HDDTOOL.DRV` **+1,619** (`hd_tentry` `380Fh` → `3E62h`), of which the check
+box is `os88ui.inc`'s shared control, opted into with `OS88UI_CHK`; that moves
+**`HDTOOL_KB` 17 → 19**, the transient claim while the Drives page is open.
+`HDD.DRV` is unchanged.
+
+**`tests/instkeep.py`** is the gate. Its fixture is MartyPC's DOS partition
+with two holes punched and a user's `USER.TXT`, `SYSTEM.CFG` and
+`SYSTEM/APPDATA/NOTE.CFG` planted on the host with mtools, so the kernel
+**must** go past cluster 2 (it lands at 77, `BOOTHD_KOFS` 300): it asserts the
+user's files byte for byte, DOS intact, the kernel one run with the VBR naming
+it, and the pad gone; boots C:; upgrades the booted-from volume in place with
+the system disk in B:; asserts it all again and boots once more. Broken on
+purpose both ways: `BOOTHD_KOFS` written as 0 fails the host check and the
+boot, and the pad skipped leaves the kernel in the holes (38–41, 56–57, 61–63,
+67, …) with nothing committed. **`tests/instdeep.py` ticks the box**, so it
+and the rows built on it (`hdboot`, `instassoc`) still test the erasing
+install they were written for, and it now refuses a volume on which the
+fixture's DOS survived.
 
 ## 52.11 Two images: the transport, and the tool
 

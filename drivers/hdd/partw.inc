@@ -653,6 +653,8 @@ HD_MBRCODE   equ 446            ; the space in front of the table
 ; documented offset in that file precisely so this side can find it without
 ; knowing anything else about the sector's layout.
 BOOTHD_KSECS equ 508
+BOOTHD_KOFS  equ 504             ; ...and the kernel's start in the data area,
+                                ; a dword (SPEC.md 52.10.15)
 hd_bootvbr:
     incbin "boothd.bin"
 hd_bootvbr_end:

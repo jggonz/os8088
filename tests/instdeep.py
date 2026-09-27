@@ -232,6 +232,7 @@ HDP_B2X, HDP_BW2 = 74, 64          # ...Install, the middle of the three
                                    #    buttons (SPEC.md 52.4)
 HIW_BY, HIW_BH = 96, 16            # inst.inc: the installer's own button row
 HIW_B0X, HIW_BW0 = 8, 88           # ...and Install / Copy Apps, the first one
+HIW_LX, HIW_CKY, HIW_CKH = 8, 78, 12   # ...and the Erase box (SPEC.md 52.10.15)
 WIN_BORDER, WIN_TITLE = 1, 18      # a window's content origin, from its rect
 
 
@@ -279,6 +280,20 @@ def open_installer(m):
     print("  installer window = %s" % (iw,))
     ix, iy = content(iw)
     return mo, ix, iy
+
+
+def tick_erase(m, mo, ix, iy):
+    """Tick `Erase the partition first` (SPEC.md 52.10.15), and CHECK it took.
+
+    A slot with a volume on it defaults to KEEPING that volume's files, and
+    the MartyPC XT-IDE disk ships a DOS 3.3 partition - so a row that means a
+    FRESH install has to say so, or it is testing the other one.
+    """
+    mo.click(ix + HIW_LX + 6, iy + HIW_CKY + HIW_CKH // 2, settle=2.0)
+    # It is proved AFTER the install, not here: the box lives in HDDTOOL.DRV's
+    # heap image, where no symbol reader reaches, and the disk answers the
+    # question better anyway - main() refuses a volume that still carries the
+    # DOS files the fixture partition was shipped with.
 
 
 def run_install(m, mo, ix, iy):
@@ -333,8 +348,11 @@ def run_install(m, mo, ix, iy):
     print("  the drive went quiet")
 
 
-def install(m):
+def install(m, wipe=True):
     """Drive the installer on `m`, and REFUSE a disk that is already installed.
+
+    `wipe` ticks the Erase box first, which is what every row written before
+    SPEC.md 52.10.15 meant by an install.
 
     The pre-flight is here because the alternative is a 600-second timeout
     saying nothing useful: an already-installed disk gets the same MBR written
@@ -360,6 +378,8 @@ def install(m):
             "  Restore it from its .pristine copy beside it, or delete it and "
             "re-run `make marty`." % BASE_VHD)
     mo, ix, iy = open_installer(m)
+    if wipe:
+        tick_erase(m, mo, ix, iy)
     run_install(m, mo, ix, iy)
 
 
@@ -390,6 +410,10 @@ def main():
         print("    %-28s %s" % (p, "<dir>" if tree[p][0] else tree[p][1]))
 
     bad = []
+    if "IO.SYS" in tree or "COMMAND.COM" in tree:
+        bad.append("the DOS files the fixture partition carries are still "
+                   "there - the install KEPT the volume instead of erasing it "
+                   "(the Erase box, SPEC.md 52.10.15)")
     for p in WANT_DIRS:
         if p not in tree:
             bad.append("%s is MISSING" % p)
