@@ -20614,6 +20614,28 @@ wearing the fix's clothes, and caught by the gate's own first check reading
 `fm_scrollpaint`, `fm_status_only`) deliberately do not clear it: a strip made
 current says nothing about the rest.
 
+**There is a THIRD end, and leaving it out made a paid debt permanent.**
+`fm_focus_x` raises the bit on both of its debt arms — the re-list through
+`fmv_store`, and the `FSD_ICONS` repair of §54.3.3, which calls `wm_su_stale`
+itself — and then either draws the window (AL = 1, `fm_repaint`, which clears
+it) or hands the draw back to `wm_raise` (AL = 0, `CF = 1` meaning *"you MUST
+now draw it whole"*). The second arm draws through `wm_draw_win` →
+`fm_paint_x`, which is the W_PAINT and may be a clipped strip, so it must not
+clear the bit — and nothing did. So the ONE raise that paid the debt left the
+window stale for the rest of the session: never banked again, every later
+raise of it a full repaint, until a navigation happened to reach
+`fm_repaint`. It is ordinary rather than exotic, because §54.3.3 marks
+**every** Disk window `FSD_ICONS` whenever an association is learned or
+repointed — opening a second drive whose `ASSOC.DAT` names a new extension is
+enough — and `tests/dispsave.py` found it as *"no raise cache on display 1"*
+when it was no cache on any display. `fm_focus_x` therefore clears the bit at
+`.drawn`, on both arms: the caller's whole draw is what makes the glass
+current, and nothing banks the window between that label and the draw —
+`wm_raise`'s own `wm_su_take` is the OUTGOING window's, and `wm_dmg_mine`
+keeps the dock's damage pass off this one. Four bytes of `.cold` on each
+kernel, on a path that has just read `ASSOC.DAT` or re-listed a folder; a
+raise or a drag with no debt never reaches it.
+
 **A package cannot reach this state**, which is why the bit is not published:
 the only way in is the kernel replacing a window's data behind the
 application's back, and the only thing that does that is the file manager on

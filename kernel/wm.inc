@@ -269,7 +269,9 @@ WF_STALE   equ 0x8000          ; W_FLAGS bit15: THE PIXELS ON THE GLASS NO
                                ; that changed (SPEC.md 22.14). Set THERE and
                                ; cleared in fm_repaint, the one place a Disk
                                ; window is drawn from that listing - NOT in
-                               ; wm_draw_win, which every navigation bypasses;
+                               ; wm_draw_win, which every navigation bypasses
+                               ; - and in fm_focus_x, whose AL = 0 caller
+                               ; draws it whole through wm_draw_win instead;
                                ; and read in ONE place, wm_su_take
 ; THE KERNEL'S BITS IN THE SHAPE BYTE, named once (SPEC.md 11.96.17). This
 ; was a rule in prose - WF_NOANIM's banner says "the two places that touch the
