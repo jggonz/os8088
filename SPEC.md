@@ -57354,8 +57354,14 @@ What differs from a grant ring (§34.5.2):
 **ADPCM4** is `SND_OPENF_ADPCM4` on the same verb: the start byte after
 `48h` is **7Dh** (auto-init 4-bit ADPCM, with a reference byte) instead of
 1Ch, DX is the SAMPLE rate, and the counters count bytes, two samples each.
-It needs auto-init and the time-constant regime (DSP ≥ 2.00, ≤ 22,222 Hz);
-otherwise verb 0 answers 2. The format is §98.1.1.1's. MartyPC's card
+It needs auto-init and the time-constant regime (DSP 2.00-3.xx, ≤ 22,222
+Hz); otherwise verb 0 answers 2. **A DSP 4.xx (SB16) is refused**: Creative
+dropped the ADPCM commands (74h-77h, 7Dh, 7Fh) from the SB16's DSP, so on
+real hardware a 7Dh start there is silence rather than a sound. 86Box's SB16
+does not model that, which is why the 286 run on its DSP 4.05 counted
+ADPCM4's interrupts (docs/reports/VIDEO-86BOX-286-2026-09-26.md). What
+counted was interrupts, not audio. The Video Player takes the refusal as
+any other (§98.3.1): the play goes on silent, paced by `FSXF_RATE`. The format is §98.1.1.1's. MartyPC's card
 decodes it since `tools/martypc/patches/06-sblaster-adpcm4.patch`, with the
 tables `tools/os88vid.py` encodes against; 86Box's card played it in wave 0's
 field run (150 interrupts in 5 s, docs/reports/VIDEO-86BOX-ST11R-2026-09-25.md),

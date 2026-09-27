@@ -486,7 +486,8 @@ sbl_hw_start:
     call sbl_dsp_wr
     cmp byte [sbl_adpcm], 0     ; ...or 7Dh, auto-init 4-bit ADPCM with its
     je .start                   ; reference byte (SPEC.md 34.5.3), which
-    mov ah, 0x7D                ; only the legacy regime reaches
+    mov ah, 0x7D                ; only the legacy regime on a DSP < 4.00
+                                ; reaches (the open refuses it otherwise)
 .start:
     mov al, ah                  ; 1Ch legacy / 90h high-speed / 7Dh ADPCM4
     call sbl_dsp_wr
@@ -1286,6 +1287,9 @@ sbl_v_open:
     je .e2x                     ; the card decodes it at the SAMPLE rate
     cmp word [sbl_half], SBL_HALF
     jne .e2x
+    cmp byte [sbl_verhi], 4     ; ...and DSP 2.00-3.xx only: an SB16's DSP
+    jae .e2x                    ; 4.xx dropped Creative's ADPCM commands, so
+                                ; 7Dh there is no sound rather than a refusal
     mov byte [sbl_adpcm], 1
 .noad:
     mov ax, [sbl_poolseg]       ; where the ring is: the pool...

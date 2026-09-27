@@ -327,9 +327,14 @@ sched_init:
     mov byte [sch_cur], 0
 %ifdef KERN_BIG
     mov word [sch_rbusy], 0     ; the lock, and FSXF_RATE's re-entry byte
-%else                           ; beside it (53.2.2) in one word: sch_rhook
-    mov byte [sch_lock], 0      ; balances it from here on, so fsx_run need
-%endif                          ; not    mov word [ticks], 0
+                                ; beside it (53.2.2) in one word: sch_rhook
+                                ; balances it from here on, so fsx_run need
+                                ; not zero it itself
+%else
+    mov byte [sch_lock], 0
+%endif
+    mov word [ticks], 0         ; nothing clears .bss, and the PIT arming
+                                ; below takes [ticks] = 0 as its high word
     mov byte [sch_fast], 0      ; no sub-tick until a bracket asks (53.8)
     mov byte [sch_coop], 0      ; pre-emptive until the Control Panel says
     mov byte [sch_hold], SCH_WD_TICKS
