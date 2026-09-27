@@ -2170,6 +2170,14 @@ and not a transcript. Each line names where the detail is.
 
 **Next, and in this order:**
 - Nothing picked. **Live in colour** (15.2) is BUILT (2026-09-27).
+- **MUTE** is BUILT (2026-09-27, SPEC.md 98.3.17, 34.5.3.1): the owner's ask
+  after elendilon's "no ADPCM4 on an SB16" fix - *"I have some knockoff
+  cards that are getting identified as an sb16 that play ADPCM4 just fine"*,
+  and *"a 10Mhz XT could probably play 11Khz fine"*. Both refusals became the
+  DEFAULT of a mute the user can undo (M, S, a button, the menu); muted, no
+  sound is run at all. SOUND.DRV publishes `SND_CAP_ADPCM4Q` on a DSP 4.xx
+  and takes `SND_OPENF_FORCE`. Nobody has heard a knockoff card through it
+  yet - that is the field check it wants.
 
 **Features not started:**
 - **The About box link** (15.3): a kernel-byte question first - is the

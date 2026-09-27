@@ -210,6 +210,9 @@ snd_hicap:
     cmp byte [sbl_verhi], 3
     jb .out
     or word [snd_services+DSV_CAPS], SND_CAP_PCM_HI
+    cmp byte [sbl_verhi], 4     ; ...and a DSP 4.xx, whose ADPCM4 is a
+    jb .out                     ; question (SPEC.md 34.5.3.1): a package
+    or word [snd_services+DSV_CAPS], SND_CAP_ADPCM4Q   ; asks the user
 .out:
     ret
 
@@ -246,7 +249,7 @@ snd_tier:
     je .table                   ; already off
     call sbl_detach             ; cannot fail (SPEC.md 51.2)
     mov word [snd_services+DSV_STREAM], 0
-    and word [snd_services+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_PCM_HI)
+    and word [snd_services+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_PCM_HI | SND_CAP_ADPCM4Q)
     cmp word [snd_services+DSV_TONE], 0
     je .table                   ; no OPL2 either: the name stays as it was
     mov word [snd_services+DSV_NAME], snd_s_opl   ; the card is an AdLib now

@@ -146,13 +146,21 @@ def main():
                     help="play in the full screen: F, then Space")
     ap.add_argument("--fs-off", action="store_true",
                     help="--full, and S part way through: silence, now")
+    ap.add_argument("--unmute", action="store_true",
+                    help="M before the play: past VP_SPKMAX, where an 8088 "
+                    "defaults to MUTED (98.3.17), the speaker plays anyway")
+    ap.add_argument("--fs-on", action="store_true",
+                    help="M before the play, F, Space, then M part way "
+                    "through: the speaker on from the key at or before it")
     ap.add_argument("--keep", help="copy the capture here")
     a = ap.parse_args()
-    a.full = a.full or a.fs_off
+    a.full = a.full or a.fs_off or a.fs_on
     c_s = 0
     os.chdir(ROOT)
-    spk = not a.silent and a.rate <= 8000   # past VP_SPKMAX an 8088 is silent
-                                            # (SPEC.md 34.11.4)
+    spk = not a.silent and (a.rate <= 8000 or a.unmute)
+    # past VP_SPKMAX an 8088 defaults to MUTED (SPEC.md 34.11.4, 98.3.17),
+    # and M is how the user says play it anyway
+    fast = a.rate > 8000
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
@@ -209,11 +217,21 @@ def main():
                 if rt != 1 or caps & 4:
                     bad.append("0: the card is not off: route %d, caps %04x"
                                % (rt, caps))
-            if a.silent:
+            mw = (rb("vp_mute"), rb("vp_mwhy"))
+            print("   0: opened muted %d, why %d (2 = too fast for this "
+                  "speaker)" % mw)
+            if mw != ((1, 2) if fast else (0, 0)):
+                bad.append("0: muted %d why %d at the open" % mw)
+            if a.silent or a.fs_on:
                 m.type_text("s")
-                os88marty.until(m, lambda mm: rb("vp_spkoff") == 1,
+                os88marty.until(m, lambda mm: rb("vp_mute") == 1,
                                 "S to choose silence", poll=0.3,
                                 limit=120.0, guest=10.0)
+            if a.unmute:
+                m.type_text("m")
+                os88marty.until(m, lambda mm: rb("vp_mute") == 0,
+                                "M to unmute", poll=0.3, limit=120.0,
+                                guest=10.0)
             m.write(base + syms["vp_played"], b"\0")
             # ONE TRACE, three phases the callback walks: the door's open
             # (its cycle), then PULSES port writes to 42h (each count and its
@@ -332,6 +350,11 @@ def main():
                     tr.until(lambda: rb("vp_ready") == 1, "the full screen",
                              limit=300.0)   # the door
                     m.type_text(" ")
+                    if a.fs_on:             # M a second in: the door opens
+                        tr.until(lambda: rw("vp_done") >= FPS,  # at the key
+                                 "a second of frames", limit=300.0)  # it
+                        c_s = m.status()["cycles"]              # seeks to
+                        m.type_text("m")
                     if a.fs_off:            # S once the trace has its pulses:
                         tr.until(lambda: len(ev["w"]) >= PULSES,
                                  "the pulses", limit=300.0)
@@ -406,10 +429,23 @@ def main():
                 lost = edges - (len(ev["w"]) - 1)
                 print("   3: in them, %.0f of %.0f PIT periods had no pulse "
                       "(%.1f%%)" % (lost, edges, 100.0 * lost / edges))
-                if lost > LOSS * edges:
+                # (not after M in the full screen: its 800 pulses are the
+                # first after a seek, the ring being read again from the
+                # disk while they play - 15.4% measured, SPEC.md 98.3.17)
+                if lost > LOSS * edges and not fast and not a.fs_on:
                     bad.append("3: %.1f%% of the pulses were lost"
                                % (100.0 * lost / edges))
-            if a.fs_off:                    # S: CLOSED THERE, not played out
+            if a.fs_on:                     # M: OPENED THERE, in step
+                ok_ = ev["open"] and ev["open"] > c_s and (
+                    ev["open"] - c_s) / 4772727.0 < 2.0
+                print("   3: M opened the speaker %.2f guest s after it was "
+                      "pressed" % (((ev["open"] or c_s) - c_s) / 4772727.0))
+                if not ok_:
+                    bad.append("3: M did not turn the speaker on")
+            elif fast and len(ev["w"]) > 1:     # UNMUTED past what an 8088
+                print("   3: past VP_SPKMAX: its pulses and its time are "   # keeps
+                      "the machine's to lose, and not checked")           # up with
+            elif a.fs_off:                  # S: CLOSED THERE, not played out
                 ok_ = ev["close"] and ev["close"] > c_s and (
                     ev["close"] - c_s) / 4772727.0 < 1.0 and rsnd == 0
                 print("   3: S closed the speaker %.2f guest s after it was "

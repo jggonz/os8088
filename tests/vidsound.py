@@ -124,6 +124,92 @@ def clip(tmp, nf, afmt, loop=None, resident=None, live=False):
     return out
 
 
+def snd_sym(name):
+    """A symbol's offset in SOUND.DRV's image, off nasm's own map"""
+    with tempfile.TemporaryDirectory() as d:
+        cp, mp = os.path.join(d, "s.asm"), os.path.join(d, "s.map")
+        open(cp, "w").write(open("drivers/sound/sound.asm").read() +
+                            "\n[map symbols %s]\n" % mp)
+        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I",
+                        "drivers/sound/", "-I", "drivers/", "-I", "apps/",
+                        "-o", os.path.join(d, "s.bin"), cp], check=True)
+        for line in open(mp):
+            f = line.split()
+            if len(f) >= 3 and f[-1] == name:
+                return int(f[1], 16)
+    raise KeyError(name)
+
+
+def button(m, ui, base, rw, rb, bad):
+    """--button: the Mute button, clicked, on the desktop and mid-play"""
+    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
+
+    def until(cond, what, guest=20.0):
+        os88marty.until(m, cond, what, poll=0.1, limit=300.0, guest=guest)
+
+    def at():                       # (the rect is re-read: a play moves it)
+        x1, y1, x2, y2 = struct.unpack(
+            "<4H", m.read(base + syms["vp_brects"] + 5 * 8, 8))
+        return (x1 + x2) // 2, (y1 + y2) // 2
+
+    def click():
+        ui.mo.click(*at())
+
+    def hold(cond, what, guest=20.0):
+        """A press IN A BRACKET, held until the player has acted on it: the
+        play polls the buttons between frames and a press is an edge
+        between two polls, so a click shorter than a poll can fall between
+        them - as it cannot for a hand, whose click is ~100 ms"""
+        ui.mo.to(*at())
+        ui.mo._sep()
+        ui.mo._edge(True)
+        until(cond, what, guest)
+        ui.mo._edge(False)
+    click()
+    until(lambda mm: rb("vp_mute") == 1, "a click to mute")
+    lat = u16(m.read(base + syms["vp_bflags"] + 10, 2))
+    click()
+    until(lambda mm: rb("vp_mute") == 0, "a click to unmute")
+    print("   on the desktop: muted, the button %s, and unmuted" %
+          ("DOWN" if lat & 0x0020 else "up (flags %04x)" % lat))
+    m.type_text("p")
+    until(lambda mm: rb("vp_ready") == 1 and rb("vp_sopn") == 1,
+          "the play, with its sound", 60.0)
+    if rb("vp_winm") != 1:
+        bad.append("the play is not in the window")
+    until(lambda mm: rw("vp_done") >= 30, "a second of frames", 60.0)
+    hold(lambda mm: rb("vp_snd") == 0 and rb("vp_sopn") == 0,
+         "the click to mute the play")  # MUTED MID-PLAY: at once, and on
+    d0 = rw("vp_done")
+    c0 = int(m.status()["cycles"])
+    until(lambda mm: rw("vp_done") > d0 + 15, "the play going on silent")
+    fps = (rw("vp_done") - d0) / ((int(m.status()["cycles"]) - c0) /
+                                  4772727.0)
+    mid = (rb("vp_ready"), rb("vp_winm"))
+    d1 = rw("vp_done")
+    hold(lambda mm: rb("vp_mute") == 0, "the click to unmute the play")
+    until(lambda mm: rb("vp_winm") == 1 and rb("vp_ready") == 1 and
+          rb("vp_snd") == 1 and rb("vp_sopn") == 1,
+          "the play again in the window, with its sound", 60.0)
+    print("   mid-play: muted at frame %d, on silent at %.1f fps in the "
+          "window %s; unmuted at %d, on again from frame %d with its sound"
+          % (d0, fps, mid, d1, rw("vp_base")))
+    if not 25 <= fps <= 35:
+        bad.append("muted, the play ran at %.1f fps, not 30" % fps)
+    if rw("vp_base") > d1:
+        bad.append("unmuted, the play went on from frame %d, past %d"
+                   % (rw("vp_base"), d1))
+    if not lat & 0x0020:
+        bad.append("the Mute button did not stand down")
+    if mid != (1, 1):
+        bad.append("muting stopped the play (ready %d, window %d)" % mid)
+    for b in bad:
+        print("   FAIL: %s" % b)
+    if not bad:
+        print("\n   ok")
+    return 1 if bad else 0
+
+
 def captured_bytes(path):
     """The card's bytes back out of MartyPC's capture: a sample-and-hold
     resample of each byte to the host rate, so a byte is a RUN of equal host
@@ -170,6 +256,20 @@ def main():
                     help="the clip LIVE (98.3.10.1): resident, 160 x 60 on "
                     "LIN80 for the Hercules desktop, played on the desktop "
                     "by the worker with the card the clock")
+    ap.add_argument("--dsp4", action="store_true",
+                    help="the card made to answer DSP 4.xx (SPEC.md 98.3.17):"
+                    " SOUND.DRV's [sbl_verhi] = 4 and SND_CAP_ADPCM4Q in the "
+                    "caps, before the file opens - an ADPCM4 play must then "
+                    "default to MUTED, and play nothing")
+    ap.add_argument("--unmute", action="store_true",
+                    help="with --dsp4: M before the play - it must then play "
+                    "the sound whole, the open FORCED past the driver's "
+                    "DSP 4.xx refusal")
+    ap.add_argument("--button", action="store_true",
+                    help="THE MUTE BUTTON (SPEC.md 98.3.17): clicked on the "
+                    "desktop, on and off; then in a window play - the sound "
+                    "off at once and the play going on, and again, the play "
+                    "started again in the window WITH its sound")
     ap.add_argument("--rate", type=int,
                     help="the sound's rate (default 22,050; 11,025 Live) - "
                     "5512 is the encoder's half-size option (98.1.7.2)")
@@ -221,6 +321,11 @@ def main():
         try:
             ui = os88ui.UI(m)
             ui.ready(limit=240)
+            if a.dsp4:                  # A CARD THAT ANSWERS 4.xx: the
+                dseg = u16(m.read(m.sym("drv_tab") + 2, 2)) << 4   # driver's
+                m.write(dseg + snd_sym("sbl_verhi"), b"\x04")  # row 0, and
+                cp_ = m.sym("drv_svc")      # the caps the kernel answers with
+                m.write(cp_, struct.pack("<H", u16(m.read(cp_, 2)) | 0x40))
             w = ui.path("C:/CLIP.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
@@ -237,12 +342,24 @@ def main():
                             guest=30.0)
             if rb("vp_ok") != 1:
                 sys.exit("vidsound: the player will not play the clip here")
+            if a.dsp4:                  # DEFAULTED TO MUTED, for the reason
+                print("   DSP 4.xx: muted %d, why %d (1 = ADPCM4 on a DSP "
+                      "4.xx)" % (rb("vp_mute"), rb("vp_mwhy")))
+                if (rb("vp_mute"), rb("vp_mwhy")) != (1, 1):
+                    bad.append("a DSP 4.xx did not default the play to muted")
+                if a.unmute:            # ...and the user's to undo
+                    m.type_text("m")
+                    os88marty.until(m, lambda mm: rb("vp_mute") == 0,
+                                    "M to unmute", poll=0.2, limit=120.0,
+                                    guest=10.0)
             for _ in range(a.seek):             # Right to the keyframe
                 n0 = rw("vp_sel")
                 m.key("ArrowRight")
                 os88marty.until(m, lambda mm: rw("vp_sel") == n0 + 1,
                                 "Right to pick a key", poll=0.3,
                                 limit=300.0, guest=30.0)
+            if a.button:
+                return button(m, ui, base, rw, rb, bad)
             m.write(base + syms["vp_played"], b"\0")
             m.type_text("f" if a.fs else "p")
             os88marty.until(m, lambda mm: rb("vp_ready") == 1,
@@ -355,6 +472,22 @@ def main():
         allcaps = sorted(glob.glob(cap + "*.wav"))
         caps = [c for c in allcaps if "blaster" in c.lower()
                 or ".sb" in c.lower()]
+        if a.dsp4 and not a.unmute:     # MUTED: the picture whole, and no
+            heard = False               # sound run at all
+            if caps:
+                got, _ = captured_bytes(caps[0])
+                heard = runs(got).find(runs(audio)[:64]) >= 0
+            print("   muted: drew %d of %d, the sound %s, the clip's sound "
+                  "%s in the capture" % (st["vp_done"], nf,
+                                         "OPEN" if st["vp_snd"] else "off",
+                                         "IS" if heard else "is not"))
+            if st["vp_snd"] or heard or st["vp_done"] != nf:
+                bad.append("the muted play was not silent and whole")
+            for b in bad:
+                print("   FAIL: %s" % b)
+            if not bad:
+                print("\n   ok")
+            return 1 if bad else 0
 
         secs = st["vp_dt"] * 65536 / 1193182.0     # the player's own ticks
         # (the host polls the end once a second, so a cycle count taken

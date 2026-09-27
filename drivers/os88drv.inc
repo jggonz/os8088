@@ -89,6 +89,8 @@ SND_CAP_PCM_BG   equ 04h        ; self-clocked block PCM out - background-safe
 SND_CAP_PCM_IN   equ 10h        ; block PCM input (recording)
 SND_CAP_PCM_HI   equ 20h        ; ...and PCM_BG above 22,222 Hz: DSP >= 3.00,
                                 ; an SB Pro or SB16 (SPEC.md 34.2.1)
+SND_CAP_ADPCM4Q  equ 40h        ; ...and a DSP 4.xx, whose ADPCM4 is asked
+                                ; for with SND_OPENF_FORCE (SPEC.md 34.5.3.1)
 
 ; --- sound tiers (SPEC.md 34.8): what DRVV_TIER's AH carries -----------------
 ; The kernel's own [snd_route], mirrored here so a driver can compare against

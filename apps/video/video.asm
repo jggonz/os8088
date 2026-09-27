@@ -88,7 +88,7 @@ VP_LPITCH   equ 11                  ; ...and its line pitch
 ;     depends on the file and the screen is vp_layfit's, in the vp_l* words
 VP_BOXX     equ 8                   ; the picture box's inside, top left
 VP_BOXY     equ 6
-VP_MINBW    equ 208                 ; ...never narrower than the button row
+VP_MINBW    equ 256                 ; ...never narrower than the button row
 VP_BARH     equ 10                  ; the scrub bar, frame included
 VP_THW      equ 8                   ; the thumb's width
 VP_CARDW    equ 280                 ; the info card: VP_COLS cells
@@ -100,7 +100,7 @@ VP_BTW      equ 28                  ; a button (Tracker's transport, SPEC.md
 VP_BTH      equ 20                  ; 45), and their pitch
 VP_BTP      equ 32
 VP_NB       equ 4                   ; Open, previous key, Play, next key...
-VP_NBTN     equ VP_NB + 2           ; ...Repeat, and the info card's
+VP_NBTN     equ VP_NB + 3           ; ...Repeat, Mute, and the info card's
 VP_CURW     equ 8                   ; a stream cursor, in words (vp_next)
 VC_PC       equ 0                   ; ...its fields: the chunk, the offset,
 VC_PO       equ 2                   ; the super-packet's sectors, the next
@@ -470,6 +470,8 @@ vp_oncmd:                           ; AL = item, AH = menu, SI = window
     je vp_cardtog
     cmp al, 6
     je vp_reptog
+    cmp al, 7
+    je vp_mutetog
     sub al, 3                       ; 3, 4: the key before, the key after
     mov ax, -1
     je .s
@@ -516,14 +518,14 @@ vp_onkey:                           ; AL = ascii, AH = scan, SI = window
     je .rep
     cmp al, 's'
     je .spk
+    cmp al, 'm'
+    je .spk
     cmp al, 'i'
     jne .out
     call vp_cardtog
     jmp short .out
 .spk:
-    xor byte [vp_spkoff], 1         ; THE SPEAKER, on or off - from the next
-    call vp_fmt                     ; play; the info line says which (98.3.15)
-    call vp_repaint
+    call vp_mutetog                 ; M or S: MUTE (98.3.17)
     jmp short .out
 .rep:
     call vp_reptog
@@ -723,7 +725,12 @@ vp_onup:                            ; W_ONMOUSEUP: the button FIRES here
     jz .next
     dec ax
     jz .rep
+    dec ax
+    jz .mute
     call vp_cardtog
+    jmp short .out
+.mute:
+    call vp_mutetog
     jmp short .out
 .rep:
     call vp_reptog
@@ -1627,6 +1634,7 @@ vp_canplay:
 .md:
     mov [vp_mode], al
     mov byte [vp_ok], 1
+    call vp_mdet                    ; MUTED, if this machine may not play it
     mov al, [vp_tlay]               ; THE FULL SCREEN's, kept: a bracket in the
     mov [vp_fslay], al              ; window sets its own (98.3.7)
     mov al, [vp_mode]
@@ -4978,54 +4986,11 @@ vp_sstart:
 .k0ok:
     ; --- the sound (SPEC.md 98.3.1): a card, audio in the file, and the ring
     ;     the card will read in place, page-safe and never moved (MC_DMA)
-    mov byte [vp_snd], 0
     xor ax, ax
     mov [vp_aseg], ax
     mov [vp_keep], ax
     mov [vp_ring], ax
-    cmp byte [vp_audio], 0
-    je .nosnd
-    cmp byte [vp_nosnd], 0
-    jne .nosnd
-    call OSAPI_SND_CAPS
-    test ax, SND_CAP_PCM_BG
-    jz .spk
-    mov ax, VP_RL / 1024 + 1        ; the ring and its two control words
-    mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI
-    jc .nosnd                       ; no room for it: the play is silent
-    mov [vp_aseg], dx
-    mov byte [vp_snd], 1
-    jmp short .nosnd
-.spk:                               ; NO CARD: THE SPEAKER (98.3.15) - PCM8
-    cmp byte [vp_spkoff], 0         ; at a rate it can play, not Live (the
-    jne .nosnd                      ; desktop cannot give up channel 0), and
-    cmp byte [vp_livem], 0          ; not when the user chose silence. The
-    jne .nosnd                      ; ring the card would read, and the table
-    cmp byte [vp_audio], 1          ; its counts are made through
-    jne .nosnd
-    cmp byte [vp_tier], CPU_8086    ; AN 8088 PAYS ~400 CYCLES A PULSE
-    jne .spr                        ; (34.11.4): past VP_SPKMAX it has nothing
-    cmp word [vp_rate], VP_SPKMAX   ; left to draw with, so the play is silent
-    ja .nosnd                       ; rather than five times too long
-.spr:
-    mov ax, VP_RL / 1024 + 1        ; (RL + 272 of it: the table follows
-    call OSAPI_MEM_CLAIM            ; the control words)
-    jc .nosnd
-    mov [vp_aseg], dx
-    push di
-    mov di, dx
-    mov ah, VP_RLCODE << SND_OPENF_RLSH
-    mov dx, [vp_rate]
-    call os88spk_init
-    pop di
-    jc .spkno                       ; a rate it cannot: silent
-    mov byte [vp_snd], VP_SPK
-    jmp short .nosnd
-.spkno:
-    mov dx, [vp_aseg]
-    call OSAPI_MEM_FREE
-    mov word [vp_aseg], 0
+    call vp_sndprep
 .nosnd:
     ; --- THE CANVAS KEEPER (98.3.7): the file's own layout's memory image,
     ;     black. Where a bracket decodes through the SHADOW (98.3.2) it IS the
@@ -5414,7 +5379,7 @@ vp_srun:
     cmp al, VPX_SWAP
     je .swap
     cmp al, VPX_DESK
-    je .out
+    je .desk
     call vp_sstop                   ; STOPPED: over, and where it got to kept
     jmp short .out
 .swap:
@@ -5427,6 +5392,17 @@ vp_srun:
     je .tw
     call vp_lback
     jmp short .out
+.desk:
+    cmp byte [vp_unmq], 0           ; UNMUTED in the window (98.3.17): the
+    je .out                         ; play starts again from the key at or
+    mov byte [vp_unmq], 0           ; before where it was, its sound in step,
+    mov al, 1                       ; in the window again
+    call vp_stopfor
+    mov byte [vp_startp], 0
+    call vp_sstart
+    jc .out
+    mov byte [vp_wantwin], 1
+    jmp .again
 .tw:
     cmp byte [vp_autop], 0          ; on in it if it was playing and the
     je .out                         ; window can host it, else paused there
@@ -6158,6 +6134,19 @@ vp_poll:
     pop cx
     jmp short .rep
 .dsk:
+    mov bx, vp_brects + 5 * 8       ; ...on MUTE it is Mute (98.3.17)
+    cmp cx, [bx]
+    jb .dsk2
+    cmp cx, [bx+4]
+    ja .dsk2
+    cmp dx, [bx+2]
+    jb .dsk2
+    cmp dx, [bx+6]
+    ja .dsk2
+    pop dx
+    pop cx
+    jmp .spk
+.dsk2:
     pop dx
     pop cx
     jmp .desk
@@ -6183,12 +6172,15 @@ vp_poll:
     je .swap
     cmp al, 's'
     je .spk
+    cmp al, 'm'
+    je .spk
     cmp al, 'r'
     jne .none
 .rep:
     xor byte [vp_rep], 1            ; REPEAT, mid-play: the reader and both
     cmp byte [vp_winm], 0           ; cursors read it at the file's end; in
     je .rtoast                      ; the window its button turns over - by
+    mov word [vp_wvr], vp_brects + 4 * 8
     call vp_winv                    ; an XOR, which is exact here: nothing
 .none:                              ; repaints inside a bracket, and the
     xor al, al                      ; exit's repaint draws it from [vp_rep]
@@ -6196,15 +6188,32 @@ vp_poll:
 .rtoast:
     call vo_toast_rep               ; ...and in the full screen it SAYS so
     jmp short .none                 ; (98.3.13)
-.spk:                               ; S: THE SPEAKER OFF, now (98.3.15) - the
-    cmp byte [vp_snd], VP_SPK       ; play goes on silent, on the PIT, and has
-    jne .none                       ; the machine back
-    mov byte [vp_spkoff], 1
-    call vp_sclose
-    mov byte [vp_snd], 0
-    mov word [vp_owed], 0
+.spk:                               ; M or S: MUTE, mid-play (98.3.17)
+    cmp byte [vp_audio], 0
+    je .none
+    xor byte [vp_mute], 1
+    mov al, [vp_mute]
+    mov [vp_umute], al
+    cmp byte [vp_winm], 0
+    je .mfs
+    mov word [vp_wvr], vp_brects + 5 * 8
+    call vp_winv                    ; (its button turns over, as Repeat's)
+    cmp byte [vp_mute], 0
+    je .munw
+    call vp_sndoff                  ; MUTED: now, and the play goes on
+    jmp short .none
+.munw:
+    mov byte [vp_unmq], 1           ; UNMUTED in the window: to the desktop,
+    jmp .desk                       ; where the play starts again, in step
+.mfs:
+    cmp byte [vp_mute], 0
+    je .mfon
+    call vp_sndoff                  ; ...in the full screen, now
     mov al, VOK_SNDOFF
     call vo_toastk
+    jmp short .none
+.mfon:
+    call vp_unmfs                   ; ...and on again from the key here
     jmp short .none
 .ext:
     cmp byte [vp_winm], 0
@@ -6233,12 +6242,12 @@ vp_poll:
     call vp_upaus
     mov byte [vo_pz], 1
     call vo_update
-    jmp short .none
+    jmp .none
 .sres:
     mov byte [vo_pz], 0
     call vo_update
     call vp_upaus
-    jmp short .none
+    jmp .none
 .stop:
     mov al, VPX_STOP
     ret
@@ -6429,8 +6438,11 @@ vp_skdue:
     ret
 .go:
     mov byte [vo_skp], 0
+    cmp byte [vp_skhere], 0         ; UNMUTED (98.3.17): to the key at or
+    jne .here                       ; before the frame on the glass
     cmp word [vp_skn], 0            ; the presses cancelled out
     je .back
+.here:
     cmp word [vp_nkeys], 0          ; a file with no keyframes has nowhere
     je .nokey                       ; to start but its first
     call vp_sktarget
@@ -6444,6 +6456,8 @@ vp_skdue:
     mov ax, [vp_skk]
     call vp_kent
     jc .fr
+    cmp byte [vp_skhere], 0
+    jne .ok
     cmp word [vp_skn], 0
     jl .ok
     mov ax, [vp_ke+KE_K]
@@ -6457,6 +6471,7 @@ vp_skdue:
     call vp_kent
     jc .fr
 .ok:
+    mov byte [vp_skhere], 0
     mov dx, [vp_rdseg]
     call OSAPI_MEM_FREE
     mov ax, [vp_skk]
@@ -6474,6 +6489,7 @@ vp_skdue:
     mov al, VOK_NOKEY
     call vo_toastk
 .back:
+    mov byte [vp_skhere], 0
     call vo_update                  ; the seek's text off
     cmp byte [vp_skwas], 0
     je .no
@@ -6935,6 +6951,13 @@ vp_winv:
     push bp
     push es
     pushf
+    push ds                         ; the button's rect, [vp_wvr]'s
+    pop es
+    mov si, [vp_wvr]
+    mov di, vp_wvq
+    mov cx, 4
+    cld
+    rep movsw
     cli
     mov es, [vp_dseg]
     cmp byte [vp_dlay], 2
@@ -6943,21 +6966,21 @@ vp_winv:
     mov ax, 0x1803
     out dx, ax
 .g:
-    mov bx, vp_brects + 4 * 8
+    mov bx, vp_wvq
     mov si, [bx+2]
     inc si                          ; SI = the first row inside
 .row:
-    mov ax, [vp_brects + 4 * 8 + 6]
+    mov ax, [vp_wvq + 6]
     cmp si, ax
     jae .d
     mov ax, si
     mov bl, [vp_dlay]
     call vp_rowaddr
     mov bp, ax                      ; BP = the row's start
-    mov cx, [vp_brects + 4 * 8]
+    mov cx, [vp_wvq]
     inc cx                          ; CX = the first x inside...
 .x:
-    cmp cx, [vp_brects + 4 * 8 + 4]
+    cmp cx, [vp_wvq + 4]
     jae .nr
     mov di, cx                      ; ...its byte, and the bits from it to
     shr di, 1                       ; the byte's end or the inside's
@@ -6973,7 +6996,7 @@ vp_winv:
     or dx, 7
     inc dx                          ; DX = the next byte's first x
     mov ah, 0xFF
-    mov bx, [vp_brects + 4 * 8 + 4] ; the inside ends before x2: the bits
+    mov bx, [vp_wvq + 4] ; the inside ends before x2: the bits
     cmp bx, dx                      ; from x2 on are kept
     jae .m
     push cx
@@ -7055,7 +7078,9 @@ vp_sopen:
     mov bl, SND_OPENF_RING + SND_OPENF_EXT + (VP_RLCODE << SND_OPENF_RLSH)
     cmp byte [vp_audio], 2
     jne .pf
-    or bl, SND_OPENF_ADPCM4         ; ADPCM4: stream byte 0 is the card's
+    or bl, SND_OPENF_ADPCM4 + SND_OPENF_FORCE   ; ADPCM4 (FORCE: on a DSP
+                                    ; 4.xx it was the user's call to unmute,
+                                    ; 98.3.17): stream byte 0 is the card's
     mov al, [vp_aref]               ; reference - 80h, or a keyframe's
     mov [es:0], al                  ; (98.3.5) - and the silence is a
     mov word [vp_atot], 1           ; nibble of no change
@@ -7100,29 +7125,244 @@ vp_sopen:
     mov byte [vp_snd], 0            ; the card said no: a silent play
     ret
 
-; vp_spkinfo - the info line's word on THE SPEAKER (98.3.15), at DI: with no
-; card and PCM8 sound, whether a play will use it or S has chosen silence.
+; =============================================================================
+; MUTE (SPEC.md 98.3.17): a play with NO sound run at all - no ring claimed,
+; no card stream, no speaker ISR - so the machine is the picture's. The
+; user's to choose with M, S, the button or the menu, from anywhere; and
+; the DEFAULT where this machine may not play the file's sound: ADPCM4 on a
+; card whose DSP answers 4.xx (SND_CAP_ADPCM4Q - Creative's SB16 dropped the
+; command, some compatibles did not), or PCM8 through an 8088's speaker past
+; VP_SPKMAX. Unmuted, those are tried anyway, which is the point
+; =============================================================================
+
+; vp_mdet - a file just opened: [vp_mwhy] why its sound should default to
+; silence (0 it should not), and [vp_mute] that or the user's own mute.
 ; Preserves all
+vp_mdet:
+    push ax
+    push bx
+    push dx
+    mov byte [vp_mwhy], 0
+    call OSAPI_SND_CAPS
+    cmp byte [vp_audio], 2
+    jne .p8
+    test ax, SND_CAP_PCM_BG         ; ADPCM4 on the card that answers 4.xx
+    jz .set
+    test ax, SND_CAP_ADPCM4Q
+    jz .set
+    mov byte [vp_mwhy], 1
+    jmp short .set
+.p8:
+    cmp byte [vp_audio], 1          ; PCM8 through an 8088's speaker, faster
+    jne .set                        ; than it keeps up with (34.11.4)
+    test ax, SND_CAP_PCM_BG
+    jnz .set
+    cmp byte [vp_tier], CPU_8086
+    jne .set
+    cmp word [vp_rate], VP_SPKMAX
+    jbe .set
+    mov byte [vp_mwhy], 2
+.set:
+    mov al, [vp_mwhy]
+    or al, [vp_umute]
+    jz .m
+    mov al, 1
+.m:
+    mov [vp_mute], al
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; vp_mutetog - M, S, the Mute button or the menu, off a bracket: MUTED from
+; now, a play's sound off where it is; or unmuted, the next play has it and
+; a session under way starts again from the key at or before where it is,
+; its sound with it - playing if it was. Lock held
+vp_mutetog:
+    cmp byte [vp_ok], 1
+    jne .ret
+    cmp byte [vp_audio], 0          ; (nothing to hear, nothing to mute)
+    je .ret
+    push ax
+    xor byte [vp_mute], 1
+    mov al, [vp_mute]
+    mov [vp_umute], al
+    cmp byte [vp_sess], 0
+    je .show
+    or al, al
+    jz .on
+    call vp_sndoff
+    jmp short .show
+.on:
+    mov ah, [vp_lrun]               ; (a LIVE play running: on again)
+    push ax
+    mov al, 1
+    call vp_stopfor
+    pop ax
+    or ah, ah
+    jz .show
+    call vp_play
+.show:
+    call vp_fmt
+    call vp_repaint
+    pop ax
+.ret:
+    ret
+
+; vp_sndoff - the sound off NOW, the play going on silent on the PIT: the
+; card's stream or the speaker closed, and its ring given back. Preserves all
+vp_sndoff:
+    cmp byte [vp_snd], 0
+    je .ret
+    push ax
+    push dx
+    cmp byte [vp_sopn], 0
+    je .c
+    call vp_sclose
+.c:
+    mov byte [vp_snd], 0            ; (the hook reads it: before the free)
+    mov byte [vp_sdefer], 0         ; ...and a card deferred to the first
+    mov word [vp_owed], 0           ; Space is not started on a freed ring
+    xor dx, dx
+    xchg dx, [vp_aseg]
+    or dx, dx
+    jz .p
+    call OSAPI_MEM_FREE
+.p:
+    pop dx
+    pop ax
+.ret:
+    ret
+
+; vp_sndprep - the sound this play will have (SPEC.md 98.3.1, 98.3.15): its
+; ring claimed and [vp_snd] = 1 the card's stream, VP_SPK the speaker - or
+; 0 none: no audio, MUTED, told to be silent, or no room. The card is not
+; opened here. Clobbers AX, CX, DX
+vp_sndprep:
+    mov byte [vp_snd], 0
+    cmp byte [vp_audio], 0
+    je .ret
+    cmp byte [vp_nosnd], 0
+    jne .ret
+    cmp byte [vp_mute], 0           ; MUTED: nothing claimed, nothing run
+    jne .ret
+    push bx
+    call OSAPI_SND_CAPS
+    pop bx
+    test ax, SND_CAP_PCM_BG
+    jz .spk
+    mov ax, VP_RL / 1024 + 1        ; A CARD: the ring and its two control
+    mov cx, ax                      ; words, page-safe and never moved
+    call OSAPI_MEM_CLAIM_DMA_HI
+    jc .ret                         ; no room for it: the play is silent
+    mov [vp_aseg], dx
+    mov byte [vp_snd], 1
+.ret:
+    ret
+.spk:                               ; NO CARD: THE SPEAKER (98.3.15) - PCM8,
+    cmp byte [vp_livem], 0          ; not Live (the desktop cannot give up
+    jne .ret                        ; channel 0). The ring the card would
+    cmp byte [vp_audio], 1          ; read, and the table its counts are
+    jne .ret                        ; made through
+    mov ax, VP_RL / 1024 + 1        ; (RL + 272 of it: the table follows
+    call OSAPI_MEM_CLAIM            ; the control words)
+    jc .ret
+    mov [vp_aseg], dx
+    push di
+    mov di, dx
+    mov ah, VP_RLCODE << SND_OPENF_RLSH
+    mov dx, [vp_rate]
+    call os88spk_init
+    pop di
+    jc .spkno                       ; a rate it cannot: silent
+    mov byte [vp_snd], VP_SPK
+    ret
+.spkno:
+    mov dx, [vp_aseg]
+    call OSAPI_MEM_FREE
+    mov word [vp_aseg], 0
+    ret
+
+; vp_unmfs - UNMUTED in the full screen: the sound claimed, and the play
+; moved to the key at or before the frame on the glass - a seek that lands
+; where it is (98.3.14) - so the card or the speaker starts in step with it.
+; With no key to go to, the sound is the next play's. Preserves all
+vp_unmfs:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp word [vp_nkeys], 0
+    je .next
+    cmp byte [vo_skp], 0            ; a seek on its way lands with it
+    jne .prep
+    mov byte [vo_skp], 1
+    mov word [vp_skn], 0
+    mov byte [vp_skhere], 1
+    mov bx, [vp_done]
+    or bx, bx
+    jz .z
+    dec bx
+.z:
+    mov [vp_skb], bx
+    mov byte [vp_skwas], 0
+    cmp byte [vp_upause], 0         ; PAUSED FIRST, while there is no sound
+    jne .pz                         ; for the pause to touch
+    mov byte [vp_skwas], 1
+    call vp_upaus
+.pz:
+    call OSAPI_GET_TICKS            ; ...and due at once
+    mov dl, [vp_skwt]
+    xor dh, dh
+    sub ax, dx
+    mov [vp_sktk], ax
+.prep:
+    cmp byte [vp_snd], 0
+    jne .say
+    call vp_sndprep
+    mov al, VOK_LOWMEM              ; (no room for its ring)
+    cmp byte [vp_snd], 0
+    je .t
+.say:
+    mov al, VOK_SNDON
+    jmp short .t
+.next:
+    mov al, VOK_SNDNX
+.t:
+    call vo_toastk
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vp_spkinfo - the info line's word on the sound (98.3.15, 98.3.17), at DI:
+; MUTED and why, or with no card, the speaker. Preserves all
 vp_spkinfo:
-    cmp byte [vp_audio], 1
-    jne .r
+    cmp byte [vp_audio], 0
+    je .r
     push ax
     push bx
     push dx
     push si
+    mov si, vp_s_muted
+    cmp byte [vp_mute], 0
+    je .on
+    cmp byte [vp_mwhy], 1           ; the card may not decode it
+    jne .m2
+    mov si, vp_s_mdsp
+.m2:
+    cmp byte [vp_mwhy], 2           ; ...or too fast for this one's speaker
+    jne .p                          ; (34.11.4)
+    mov si, vp_s_spkfast
+    jmp short .p
+.on:
     call OSAPI_SND_CAPS
     test ax, SND_CAP_PCM_BG
     jnz .o                          ; a card plays it
-    mov si, vp_s_spkfast            ; ...or too fast for this one's speaker
-    cmp byte [vp_tier], CPU_8086    ; (34.11.4), which is silence
-    jne .sn
-    cmp word [vp_rate], VP_SPKMAX
-    ja .p
-.sn:
+    cmp byte [vp_audio], 1
+    jne .o
     mov si, vp_s_spkon
-    cmp byte [vp_spkoff], 0
-    je .p
-    mov si, vp_s_spkoff
 .p:
     call vp_puts
 .o:
@@ -8954,17 +9194,20 @@ vp_track:
     call vp_rect
     add ax, VP_BTP
     loop .r
-    mov cx, ax                      ; REPEAT: fifth in the card's row, or at
-    mov ax, VP_NB + 1               ; the box's left edge under the bar,
-    cmp byte [vp_lbin], 0           ; where the card's sixth is at its right
-    je .ub
-    mov ax, cx
+    mov cx, ax                      ; REPEAT and MUTE: fifth and sixth in the
+    cmp byte [vp_lbin], 0           ; card's row, or at the box's left edge
+    je .ub                          ; under the bar, where the card's seventh
+    mov ax, cx                      ; is at its right
     call vp_rect
-    mov ax, VP_NB + 1
+    add ax, VP_BTP
+    call vp_rect
+    mov ax, VP_NB + 2
     jmp short .n
 .ub:
     mov ax, [vp_cx0]
     add ax, VP_BOXX
+    call vp_rect
+    add ax, VP_BTP
     call vp_rect
     mov ax, [vp_cx0]
     add ax, VP_BOXX
@@ -9021,11 +9264,24 @@ vp_buttons:
     or bx, OS88UI_LATCH
 .r:
     mov [vp_bflags+8], bx
+    mov bx, ax                      ; MUTE stands DOWN while muted, and there
+    cmp byte [vp_mute], 0           ; is nothing to mute without a file that
+    je .m                           ; has sound (98.3.17)
+    or bx, OS88UI_LATCH
+.m:
+    cmp byte [vp_ok], 1
+    jne .md
+    cmp byte [vp_audio], 0
+    jne .mo
+.md:
+    or bx, OS88UI_DIS
+.mo:
+    mov [vp_bflags+10], bx
     cmp byte [vp_lcard], 0          ; the card's button stands DOWN while the
     je .c                           ; card is out (OS88UI_LATCH)
     or ax, OS88UI_LATCH
 .c:
-    mov [vp_bflags+10], ax
+    mov [vp_bflags+12], ax
     cmp word [vp_sel], 0
     jne .p1
     or byte [vp_bflags+2], OS88UI_DIS
@@ -10211,7 +10467,7 @@ vp_tpl:
     dw vp_cap, vp_paint, vp_onkey, vp_clickw
 
     OS88_MENUSET vp_menus, vp_ttl, vp_oncmd
-        OS88_MENU vp_m_file, vp_i_file, 7
+        OS88_MENU vp_m_file, vp_i_file, 8
     OS88_MENUSET_END vp_menus
 vp_ttl:       db 'Video Player', 0
 vp_pfx1:      db 'Video Player - ', 0
@@ -10220,7 +10476,7 @@ vp_cap:       db 'Video Player', 0  ; the window's caption (98.4.3): the
               times 15 + VP_COLS + 1 - 13 db 0  ; longest is pfx1 + a title
 vp_m_file:    db 'File', 0
 vp_i_file:    dw vp_it_open, vp_it_play, vp_it_fs, vp_it_prev, vp_it_next
-              dw vp_it_info, vp_it_rep
+              dw vp_it_info, vp_it_rep, vp_it_mute
 vp_it_open:   db 'Open...', 0
 vp_it_play:   db 'Play (Space)', 0
 vp_it_fs:     db 'Full screen (F)', 0
@@ -10228,11 +10484,12 @@ vp_it_prev:   db 'Previous key (Left)', 0
 vp_it_next:   db 'Next key (Right)', 0
 vp_it_info:   db 'Info (I)', 0
 vp_it_rep:    db 'Repeat (R)', 0
+vp_it_mute:   db 'Mute (M)', 0
 
 ; the buttons (SPEC.md 20.5.1.3): Tracker's transport pictures, 16 x 10
     OS88UI_BTNREC vp_btns, vp_brects, vp_blabels, vp_bflags, VP_NB
 vp_blabels:   dw vp_i_open, vp_i_prev, vp_i_play, vp_i_next, vp_i_rep
-              dw vp_i_info
+              dw vp_i_mute, vp_i_info
 vp_bflags:    times VP_NBTN dw OS88UI_IMG
 vp_brects:    times VP_NBTN * 4 dw 0
 vp_i_pause:                         ; ||
@@ -10244,6 +10501,11 @@ vp_i_rep:                           ; two arrows round: Repeat (98.3.9)
     times 10 dw 0FFFFh
     dw 00020h, 01FF0h, 03FF8h, 03030h, 03020h
     dw 0040Ch, 00C0Ch, 01FFCh, 00FF8h, 00400h
+vp_i_mute:                          ; a speaker, struck: Mute (98.3.17)
+    db 1, 10
+    times 10 dw 0FFFFh
+    dw 00100h, 00304h, 03F88h, 03F90h, 03FA0h
+    dw 03F90h, 03F88h, 00304h, 00100h, 00000h
 vp_i_info:                          ; an i: the info card
     db 1, 10
     times 10 dw 0FFFFh
@@ -10368,8 +10630,9 @@ vp_s_silent:  db 'silent', 0
 vp_s_pcm8:    db 'sound PCM8', 0
 vp_s_adpcm:   db 'sound ADPCM4', 0
 vp_s_spkon:   db ', speaker', 0
-vp_s_spkoff:  db ', S: speaker', 0
-vp_s_spkfast: db ', mute: too fast', 0     ; (35 columns: 16 left here)
+vp_s_muted:   db ', muted', 0
+vp_s_mdsp:    db ', muted: DSP 4', 0         ; (35 columns: 16 left here)
+vp_s_spkfast: db ', muted: fast', 0
 vp_s_nokeys:  db 'No keyframes: plays from the start', 0
 vp_s_start:   db 'From the start; keys ', 0
 vp_s_fromk:   db 'From key ', 0
@@ -10509,7 +10772,14 @@ vp_skipn:     db 0                  ; shadow copies skipped in a row
 ; the sound (SPEC.md 98.3.1)
 vp_audio:     db 0                  ; the file's: 0 none, 1 PCM8, 2 ADPCM4
 vp_nosnd:     db 0                  ; 1: play silent whatever the machine has
-vp_spkoff:    db 0                  ; 1: no card, and the user chose SILENCE
+vp_mute:      db 0                  ; MUTED (98.3.17): no sound run at all,
+vp_mwhy:      db 0                  ; ...defaulted there: 1 ADPCM4 on a DSP
+                                    ; 4.xx, 2 PCM8 past VP_SPKMAX on an 8088
+vp_umute:     db 0                  ; ...and the user's own last choice
+vp_unmq:      db 0                  ; unmuted in the window: play on, synced
+vp_skhere:    db 0                  ; a seek to the frame on the glass
+vp_wvr:       dw 0                  ; vp_winv's button: its rect...
+vp_wvq:       dw 0, 0, 0, 0         ; ...copied
                                     ; over the speaker (S, 98.3.15)
 vp_snd:       db 0                  ; this play has the card
 vp_hand:      db 0

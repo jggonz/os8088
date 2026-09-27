@@ -1288,9 +1288,13 @@ sbl_v_open:
     cmp word [sbl_half], SBL_HALF
     jne .e2x
     cmp byte [sbl_verhi], 4     ; ...and DSP 2.00-3.xx only: an SB16's DSP
-    jae .e2x                    ; 4.xx dropped Creative's ADPCM commands, so
+    jb .adok                    ; 4.xx dropped Creative's ADPCM commands, so
                                 ; 7Dh there is no sound rather than a refusal
-    mov byte [sbl_adpcm], 1
+    test byte [sbl_oflags], SND_OPENF_FORCE
+    jz .e2x                     ; ...UNLESS THE CALLER ASKS: compatible cards
+.adok:                          ; that answer 4.xx and decode it do exist, and
+    mov byte [sbl_adpcm], 1     ; the user is the one who can hear which
+                                ; (SPEC.md 34.5.3.1)
 .noad:
     mov ax, [sbl_poolseg]       ; where the ring is: the pool...
     test byte [sbl_oflags], SND_OPENF_EXT

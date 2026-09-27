@@ -8348,9 +8348,24 @@ SOAK = [
                "build/mbr.bin", "build/ctrl.drv")),
     Row("vidspkfast", "soak", py("tests/vidspk.py", "--rate", "11025"),
         24.0,
-        "SPEC.md 34.11.4: 11,025 Hz PCM8 on an 8088 is SILENT - a pulse "
-        "every 432 cycles leaves the machine nothing, and the play measured "
-        "20 s for a 4 s clip before VP_SPKMAX refused it",
+        "SPEC.md 34.11.4, 98.3.17: 11,025 Hz PCM8 on an 8088 opens MUTED "
+        "(why 2) and plays silent - a pulse every 432 cycles leaves the "
+        "machine nothing, and the play measured 20 s for a 4 s clip",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv")),
+    Row("vidspkunmute", "soak", py("tests/vidspk.py", "--rate", "11025",
+                                   "--unmute"), 60.0,
+        "SPEC.md 98.3.17: the same, unmuted with M - the speaker plays it "
+        "anyway, its pulses the clip's counts in order (its time and its "
+        "losses are the 8088's to lose, and not checked)",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv")),
+    Row("vidspkfson", "soak", py("tests/vidspk.py", "--fs-on"), 40.0,
+        "SPEC.md 98.3.17: muted with S, F and Space, then M a second into "
+        "the full screen - the door opens within 2 guest s, from the key at "
+        "or before the frame on the glass, its pulses the clip's in order",
         needs=("marty", "nasm"),
         wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
                "build/mbr.bin", "build/ctrl.drv")),
@@ -8901,6 +8916,36 @@ SOAK = [
         "against, so the capture must hold the stream DECODED sample for "
         "sample. It proves the path, not the tables: 86Box and a real card "
         "are the independent check",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/hdd.drv", "build/hiber.drv",
+               "build/ctrl.drv", "build/sound.drv")),
+    Row("vidsndmute", "soak", py("tests/vidsound.py", "--secs", "10",
+                                 "--button"), 45.0,
+        "SPEC.md 98.3.17: THE MUTE BUTTON - clicked on the desktop it "
+        "mutes and stands down, and unmutes; in a window play it turns the "
+        "card off at once and the play goes on silent at its rate, and "
+        "clicked again the play starts again in the window from the key at "
+        "or before it, the card open",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/hdd.drv", "build/hiber.drv",
+               "build/ctrl.drv", "build/sound.drv")),
+    Row("vidsndad4", "soak", py("tests/vidsound.py", "--secs", "10",
+                                "--audio", "adpcm4", "--dsp4"), 45.0,
+        "SPEC.md 34.5.3.1, 98.3.17: an ADPCM4 file on a card made to "
+        "answer DSP 4.xx and publish SND_CAP_ADPCM4Q opens MUTED (why 1), "
+        "and plays every frame with no sound run and none captured",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/hdd.drv", "build/hiber.drv",
+               "build/ctrl.drv", "build/sound.drv")),
+    Row("vidsndad4on", "soak", py("tests/vidsound.py", "--secs", "10",
+                                  "--audio", "adpcm4", "--dsp4",
+                                  "--unmute"), 45.0,
+        "SPEC.md 34.5.3.1, 98.3.17: the same, unmuted with M - the open "
+        "FORCED past the driver's DSP 4.xx refusal, and the capture holds "
+        "the stream decoded, whole and in order. Red without the FORCE",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
                "build/mbr.bin", "build/hdd.drv", "build/hiber.drv",

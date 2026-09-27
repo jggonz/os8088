@@ -40,8 +40,10 @@ VOK_SEEK    equ 2
 VOK_REPON   equ 3
 VOK_REPOFF  equ 4
 VOK_NOKEY   equ 5
-VOK_SNDOFF  equ 6                   ; S: the speaker off (98.3.15)
+VOK_SNDOFF  equ 6                   ; M, S: muted (98.3.17)
 VOK_LOWMEM  equ 7                   ; the ring short of the stream's
+VOK_SNDON   equ 8                   ; ...and on again
+VOK_SNDNX   equ 9                   ; ...from the next play (no key to seek)
 VOM_1       equ 1                   ; the renderers
 VOM_2       equ 2
 VOM_8       equ 3
@@ -271,8 +273,16 @@ vo_update:
     mov si, vo_s_lowmem
 .s4:
     cmp al, VOK_SNDOFF
-    jne .s5
+    jne .s45
     mov si, vo_s_soff
+.s45:
+    cmp al, VOK_SNDON
+    jne .s46
+    mov si, vo_s_son
+.s46:
+    cmp al, VOK_SNDNX
+    jne .s5
+    mov si, vo_s_snx
 .s5:
     xor ah, ah
     call vo_show
@@ -1323,6 +1333,8 @@ vo_s_pause:   db 'Paused', 0
 vo_s_ron:     db 'Repeat on', 0
 vo_s_roff:    db 'Repeat off', 0
 vo_s_soff:    db 'Sound off', 0
+vo_s_son:     db 'Sound on', 0
+vo_s_snx:     db 'Next play', 0
 vo_s_nokey:   db 'No seeking', 0
 vo_s_lowmem:  db 'Low memory', 0    ; (VO_MAXC: ten at most)
 vo_mode:      db 0                  ; the renderer, 0 none

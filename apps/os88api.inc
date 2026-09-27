@@ -479,6 +479,13 @@ SND_CAP_PCM_HI   equ 20h         ; PCM_BG takes rates ABOVE 22,222 Hz - an SB
                                  ; Pro or SB16 (DSP >= 3.00). Without it verb
                                  ; 0 answers 2 for any such rate, so do not offer
                                  ; the choice at all (SPEC.md 34.2.1)
+SND_CAP_ADPCM4Q  equ 40h         ; the DSP answers 4.xx, where Creative DROPPED
+                                 ; the ADPCM commands - yet compatible cards
+                                 ; that answer 4.xx and play it exist. So an
+                                 ; SND_OPENF_ADPCM4 open is refused (2) unless
+                                 ; it also passes SND_OPENF_FORCE: default to
+                                 ; silence and let the user choose (SPEC.md
+                                 ; 34.5.3.1)
 
 ; verb 9 is verb 3 with DX = the bytes PLAYED EXACTLY, the DMA's progress into
 ; the block now sounding added to the block-granular count (SPEC.md 34.5.1).
@@ -541,6 +548,8 @@ SND_OPENF_ADPCM4 equ 4           ; ...the bytes are Creative 4-bit ADPCM, the
                                  ; SAMPLE rate, <= 22,222; the counters count
                                  ; bytes. Needs DSP >= 2.00, else verb 0
                                  ; answers 2 (SPEC.md 34.5.3)
+SND_OPENF_FORCE  equ 8           ; ...ADPCM4 even on a DSP 4.xx
+                                 ; (SND_CAP_ADPCM4Q): the user asked for it
 SND_OPENF_RLSH   equ 4           ; the size code's shift: 0 4KB .. 3 32KB
 SND_EXT_TOTAL    equ 0           ; the control words, after the ring
 SND_EXT_CONS     equ 2

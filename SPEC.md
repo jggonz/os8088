@@ -57459,7 +57459,8 @@ What differs from a grant ring (§34.5.2):
 `48h` is **7Dh** (auto-init 4-bit ADPCM, with a reference byte) instead of
 1Ch, DX is the SAMPLE rate, and the counters count bytes, two samples each.
 It needs auto-init and the time-constant regime (DSP 2.00-3.xx, ≤ 22,222
-Hz); otherwise verb 0 answers 2. **A DSP 4.xx (SB16) is refused**: Creative
+Hz); otherwise verb 0 answers 2. **A DSP 4.xx (SB16) is refused unless the
+open asks with `SND_OPENF_FORCE`** (§34.5.3.1): Creative
 dropped the ADPCM commands (74h-77h, 7Dh, 7Fh) from the SB16's DSP, so on
 real hardware a 7Dh start there is silence rather than a sound. 86Box's SB16
 does not model that, which is why the 286 run on its DSP 4.05 counted
@@ -57475,6 +57476,29 @@ owner's ear (98.1.1.1).
 
 **Cost: 194 bytes** (6,371 → 6,565), inside the driver's 7KB claim, so no
 heap at all. `tests/vidsound.py` is the gate.
+
+#### 34.5.3.1 A DSP 4.xx: refused unless the caller asks, and said so
+
+**The refusal above was right about Creative's cards and wrong about the
+machine class.** Compatible cards exist that answer the DSP version query
+with 4.xx - the owner has some - and decode `7Dh` perfectly well, so a hard
+refusal took their sound away with nothing a user could do about it. The
+refusal stays the DEFAULT; the choice moves to the user:
+
+- **`SND_CAP_ADPCM4Q` (40h)** is published beside `SND_CAP_PCM_HI` whenever
+  the attached DSP answers 4.xx (`snd_hicap`), and cleared with the DSP tier
+  (`snd_tier`). It says *ADPCM4 is a question here*: a package reads it and
+  defaults to silence rather than finding out by refusal.
+- **`SND_OPENF_FORCE` (8)**, with `SND_OPENF_ADPCM4`, passes the DSP 4.xx
+  fence: the open goes on to the 7Dh start as on a DSP 2.00-3.xx. It moves
+  none of the other fences - auto-init, the time-constant regime, the
+  22,222 Hz ceiling still answer 2.
+
+The Video Player is the consumer (§98.3.17): an ADPCM4 file on such a card
+opens MUTED, and unmuting it is the user saying *this card plays it*, which
+is what the open then forces. **+19 bytes of driver image** (6,641 →
+6,660). `vidsndad4` / `vidsndad4on` are the gates (`tests/vidsound.py
+--dsp4`), on MartyPC's DSP 2.x made to answer 4.xx and publish the bit.
 
 #### 34.5.4 Pausing an external ring (verb 10)
 
@@ -152923,20 +152947,22 @@ PCM8 sound plays through **the PC speaker** (§34.11). Its clock is the
 speaker's CONS in place of the card's, and `vp_adue` cannot tell the
 difference. `[vp_snd]` = `VP_SPK` (2) says which it is. The play is silent
 instead, on the PIT's clock as before, when any of these holds:
-- the user chose silence with **S** (`[vp_spkoff]`);
+- the play is **MUTED** (§98.3.17) - by the user, or by default where the
+  rate is **past `VP_SPKMAX` = 8,000 Hz on an 8086-class CPU** (§34.11.4),
+  which the info line says as `muted: fast`. That was a hard silence until
+  §98.3.17: a 10 MHz XT may well keep up at 11,025, so unmuting plays it;
 - the play is **Live** (§98.3.10): the desktop cannot give up channel 0 (§34.1);
-- the sound is **ADPCM4**, which only the card decodes;
-- the rate is **past `VP_SPKMAX` = 8,000 Hz on an 8086-class CPU**
-  (§34.11.4). The info line says `mute: too fast`.
+- the sound is **ADPCM4**, which only the card decodes.
 
 **The costs are the reason S exists.** The speaker takes ~52% of a 4.77 MHz
 8088 at 5,512 Hz translating a card's samples. A clip made for a card at that
 rate was budgeted for the whole machine, so on the speaker it runs short of
 time. A clip made for the speaker (`--audio speaker`, §98.2.15) was budgeted
 around the pulses, carries the counts so the player only copies them
-(98.1.1.3, ~48%), and plays as made. S is how the user picks between the two:
-- **in the window** it toggles the choice for the next play, and the info
-  line's third row says which: `, speaker` or `, S: speaker`;
+(98.1.1.3, ~48%), and plays as made. **S, which is now M's other name, MUTES
+it** (§98.3.17) - and mute is the one choice for every kind of sound:
+- **in the window** it takes effect now, and the info line's third row says
+  which: `, speaker` or `, muted`;
 - **in the full screen** it turns the speaker off NOW: the door closes, the
   play goes on silent on the PIT, and a toast says `Sound off`.
 
@@ -152964,7 +152990,9 @@ pointer's ISR needs kept atomic (§34.11.3).
 - `vidspkfull`: the full screen, which opens the door on the resume path;
 - `vidspkoff`: S in the full screen;
 - `vidspksilent`: S before Play;
-- `vidspkfast`: 11,025 Hz on the 8088.
+- `vidspkfast`: 11,025 Hz on the 8088, which opens MUTED (§98.3.17);
+- `vidspkunmute`: the same, unmuted with M - the speaker plays it anyway;
+- `vidspkfson`: muted, then M mid-play in the full screen - on from the key.
 
 #### 98.3.16 TEXT: full screen, on any adapter
 
@@ -153007,6 +153035,74 @@ and at four holds every character and attribute in the screen's memory
 QUARTER of every cell whose glyph no ROM draws differently - the space,
 the full block and the four half blocks - the foreground where it is lit
 and the background where not, and every dot round the canvas black.
+
+#### 98.3.17 Mute
+
+**One choice for every kind of sound, and the default where the machine may
+not play it.** Two cases used to be hard refusals: ADPCM4 on a card whose
+DSP answers 4.xx (§34.5.3.1), and PCM8 through an 8088's speaker past
+`VP_SPKMAX` (§34.11.4). Both are right about the hardware they were measured
+on and wrong about some the owner has - compatible cards that answer 4.xx
+and decode ADPCM4, and a 10 MHz XT that may keep up at 11,025 Hz. So they
+became the DEFAULT of a mute the user can undo, and the same mute is there
+for anyone who wants silence for any reason.
+
+**Muted, no sound is run at all** - which is the point of it on an 8088:
+- no ring is claimed, the card is not opened, the speaker's door is not
+  opened, and no audio is copied (`vp_sndprep` leaves `[vp_snd]` 0);
+- the play is paced by the PIT, as a play with no sound always was (§98.3.1);
+- a resident file's audio block is still loaded, so unmuting costs no disk.
+
+**What sets it** (`vp_mdet`, when a file opens): `[vp_mwhy]` = 1 for ADPCM4
+on a card publishing `SND_CAP_ADPCM4Q`, 2 for PCM8 through the speaker on
+`CPU_8086` past `VP_SPKMAX`, else 0; and `[vp_mute]` is that, or the user's
+own last choice (`[vp_umute]`), which carries from file to file. Unmuting a
+defaulted file is the user overriding the default for that file only.
+
+**Where it is**: M or S (a key anywhere), the **Mute** button - a struck
+speaker, standing down while muted, beside Repeat - and `Mute (M)` in the
+File menu. The info line's third row says `, muted`, `, muted: DSP 4` or
+`, muted: fast`.
+
+**Muting mid-play is immediate** (`vp_sndoff`): the stream or the door
+closed where it is, `[vp_snd]` 0 before the ring is given back (the hook
+reads it), `[vp_sdefer]` cleared so a card deferred to the first Space is
+not started on a freed ring, and the play goes on on the PIT from zero owed
+periods - no jump. The full screen toasts `Sound off`; the window turns the
+button over by the XOR Repeat's uses (`vp_winv`, now told which rect).
+
+**Unmuting mid-play is IN STEP**: the sound has to start at the frame the
+picture is on, so the play moves to the key at or before it - the same key
+a seek there would land on.
+- **In the full screen** (`vp_unmfs`) it IS a seek (§98.3.14), with no
+  presses: `[vp_skhere]` makes `vp_skdue` take the key at or before the
+  frame on the glass. The play is paused FIRST, while there is no sound for
+  the pause to touch, then the ring is claimed; the seek's own resume opens
+  the card or the speaker. A toast says `Sound on` - `Low memory` when the
+  ring could not be had, `Next play` when the file has no key to go to.
+  Measured on the 8088 with the speaker: the door opens 0.57 guest s after
+  M. The first 800 pulses after it lose 15.4% - they play while the ring is
+  read again from the disk, as after any seek, where a play that starts
+  with the ring already read loses ~2% (§34.11.4).
+- **In the window** the bracket hands the play back to the desktop
+  (`[vp_unmq]`), which stops it at that key and starts it again, sound and
+  all, in the window.
+- **Live, or a session waiting on the desktop**: stopped at the key and, if
+  it was playing, played again from it.
+
+**The card path forces**: every ADPCM4 open passes `SND_OPENF_FORCE`
+(§34.5.3.1). The player only reaches the open unmuted, and on a card where
+ADPCM4 is a question unmuted means the user asked.
+
+**+668 bytes of the package** (31,944 -> 32,612), and §34.5.3.1's 19 of
+`SOUND.DRV`; no kernel byte.
+
+The gates: `vidsndmute` (the button, on the desktop and mid-play in the
+window: muted, the play runs on at its rate; unmuted, it starts again from
+the key with the card open), `vidsndad4` (an ADPCM4 file on a card answering 4.xx opens muted,
+plays whole and silent), `vidsndad4on` (M, and the sound plays whole - red
+without the FORCE), `vidspkfast`, `vidspkunmute`, `vidspkfson` and
+`vidspksilent` (§98.3.15).
 
 ### 98.4 The window: the Preview (wave 6)
 
@@ -153098,7 +153194,8 @@ the largest part of the growth; the table and the text lines are the bss.
 
 **The picture is shown at the video's own size when the screen has the
 room, else at a half, else a quarter**, and under it the scrub bar and the
-button row - the transport four centred, the card's `i` at the right edge.
+button row - the transport four centred, Repeat and Mute at the left edge,
+the card's `i` at the right.
 `vp_layfit` tries each scale in turn, and at each one:
 - **the buttons under the bar**, if the picture, the bar and the row fit the
   screen's height; the card beside the picture if it is asked for, which
@@ -153111,7 +153208,8 @@ button row - the transport four centred, the card's `i` at the right edge.
 So the order is the owner's: the video's size first, the row under it if
 there is room, the card's area for the buttons only if there is not, and a
 smaller picture only when neither fits. The box is never narrower than the
-button row (208), a narrower picture centred in black.
+button row (256 since Mute joined it, §98.3.17; 208 before), a narrower
+picture centred in black.
 
 **The room is the display's height less the menu bar and the title, OVER
 THE DOCK**: the window sets `WF_KEEPH` (§11.93), because a CGA's 156-row

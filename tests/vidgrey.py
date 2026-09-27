@@ -38,6 +38,8 @@ from cycweb import pkg_syms                                   # noqa: E402
 
 WF_OWNBG = 64
 GREY = tuple((v * 255 + 31) // 63 for v in vid.STD16[3 * 7:3 * 7 + 3])
+NBTN = 7                        # VP_NBTN: the four, Repeat, Mute (SPEC.md
+                                # 98.3.17) and the info card's
 VP_BOXX, VP_BOXY, VP_BARH = 8, 6, 10
 VP_TXTY, VP_LPITCH, VP_LINES, VP_CARDW = 6, 11, 8, 280
 VP_CARDH = VP_TXTY + VP_LINES * VP_LPITCH + 4
@@ -105,9 +107,9 @@ def main():
                         sw("vp_by2") + 1),
                        (cx0 + VP_BOXX - 1, cy0 + lbary, cx0 + VP_BOXX + lbw,
                         cy0 + lbary + VP_BARH - 1)]
-                br = m.read(base + syms["vp_brects"], 6 * 8)
+                br = m.read(base + syms["vp_brects"], NBTN * 8)
                 out += [struct.unpack_from("<4h", br, 8 * i)
-                        for i in range(6)]
+                        for i in range(NBTN)]
                 card = None
                 if rb("vp_lcard"):
                     x = cx0 + rw("vp_lcardx")
