@@ -71,7 +71,6 @@ base, and bisect only where those two disagree - and the first step is
 """
 import argparse
 import errno
-import importlib.util
 import json
 import os
 import re
@@ -220,9 +219,10 @@ def requirements():
 
     req.append(("ffmpeg", bool(shutil.which("ffmpeg"))
                 and bool(shutil.which("ffprobe"))
-                and importlib.util.find_spec("numpy") is not None,
-                "videnc, the video encoder's gate (SPEC.md 98.2.1).",
-                "apt-get install -y ffmpeg python3-numpy"))
+                and os88build.have_numpy(),
+                "videnc and vencgui, the video encoder's gates (SPEC.md 98.2.1).",
+                "apt-get install -y ffmpeg python3-numpy   (and where python3 "
+                "is not the system one: python3 -m pip install numpy)"))
 
     # THE FOUR DISKS `all` DELIBERATELY DOES NOT BUILD.  This is the item the
     # pass-3 soak found by hand after fifteen runs had skipped on it, and the

@@ -139,7 +139,6 @@ capability is known to be there.
 import argparse
 import concurrent.futures
 import fnmatch
-import importlib.util
 import os
 import shutil
 import subprocess
@@ -247,7 +246,7 @@ def capabilities():
     # and not a dependency, and `make deps` does not install ffmpeg's
     # hundreds of MB for one row.
     if shutil.which("ffmpeg") and shutil.which("ffprobe") and \
-            importlib.util.find_spec("numpy"):
+            os88build.have_numpy():
         caps.add("ffmpeg")
     # WIREFRAME is an instrument and does not ship (SPEC.md 78.9), so `all`
     # builds wire.o88 and NO shipped floppy carries it - the disk comes from

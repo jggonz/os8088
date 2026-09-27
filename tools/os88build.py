@@ -589,6 +589,23 @@ def have_pil():
     return True
 
 
+def have_numpy():
+    """Can THIS interpreter import numpy - its C extension, not just the name?
+
+    `importlib.util.find_spec("numpy")` answers for a numpy apt built for the
+    SYSTEM python3, found on a /usr/local python3's path: the package is
+    there and `numpy.core._multiarray_umath` is not, so the preflight called
+    the capability present and `videnc`/`vencgui` then died on the import.
+    have_pil()'s shape, for have_pil()'s reason.
+    """
+    try:
+        import numpy                                            # noqa: F401
+        numpy.zeros(1)
+    except Exception:
+        return False
+    return True
+
+
 def nasm3():
     """The path to an nasm >= 3 on this box, or None.
 
