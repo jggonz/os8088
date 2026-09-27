@@ -110,6 +110,25 @@ def main():
         except os88marty.MartyError:
             pass                                # ...reported below
 
+        # THE CHROME IS JUDGED ONCE THE OPERATION HAS GIVEN IT BACK. The mount
+        # raises the file-progress widget in the menu bar for its whole locked
+        # hold (SPEC.md 12.8.3), and off a stopped motor it always does
+        # (12.8.3.1's warm-motor rule). The Disk window is drawn INSIDE that
+        # hold, so it appears while the bar is still the widget, and
+        # fpg_finish gives the bar back at gfx_unlock. Read the screen before
+        # that and a healthy machine reads 86% lit. So wait on the guest's own
+        # flag, in guest time; a widget that never comes down is a failure of
+        # its own, named below.
+        lin_fpg = os88sym.linear("fpg_on")
+        try:
+            os88marty.until(m, lambda _: m.read(lin_fpg, 1)[0] == 0,
+                            "the progress widget to give the bar back",
+                            poll=0.05, guest=5.0 * os88marty.GUEST_PACE)
+        except os88marty.MartyError:
+            fail.append("the file-progress widget never came down after the "
+                        "mount ([fpg_on] = %d)" % m.read(lin_fpg, 1)[0])
+        os88marty.settle(m)                     # ...and its repaint landed
+
         t1 = int.from_bytes(m.read(lin_ticks, 2), "little")
         try:
             wins1 = len(dispcp.win_list(m, S))
