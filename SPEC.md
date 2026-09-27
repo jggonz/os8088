@@ -150962,6 +150962,16 @@ reads at IF = 0:
 - **Paused, the hook returns at once.** Nothing is owed and no period is
   counted, so the silent clock and the card's extrapolation both stand
   where the picture stands, and resume from there.
+- **...except the pause's FIRST call, whose periods PLAYED.** AX is every
+  period since the last call, and Space is taken between two calls - so
+  through the shadow (98.3.2), where a call is a whole copy long, it lands
+  with 5 or 6 periods the kernel has not yet delivered. `vp_upaus` sets
+  `[vp_pfresh]` before `[vp_upause]`, and the first paused call adds its AX
+  to `[vp_pers]` and, silent, to `[vp_owed]`, so the resume's first call
+  draws them. Dropped, as they were, the picture fell that far behind the
+  clock at every pause: 97 to 99 ticks for the clip below where an unpaused
+  play reads 94 to 95, by where Space landed. The error left is the one
+  period the first call straddles.
 - **The card is halted where it is** - SOUND.DRV's verb 10 (§34.5.4), `D0h`
   mid-block - not left to play out its ring: the ring is the player's and it
   keeps it full, so waiting for it to run dry would have sounded for up to
@@ -150975,7 +150985,10 @@ reads at IF = 0:
 **Measured** (`tests/vidpreview.py`, `tests/vidsound.py --pause`): paused
 for 1.5 guest seconds at frame 56, not one frame is drawn; the play then
 finishes all 150 frames with no stall and no late period in 91 ticks
-against 91.0. With the card, a 2-second pause draws no frame and the card
+against 91.0. Through the shadow on the Hercules 5150 (`--layout cga
+--screen herc`), Space pinned on frame 40's decode pauses at 42 and the play
+reads 94 or 95 ticks wherever it is paused - frames 31 to 127 measured -
+with every pending period on the clock. With the card, a 2-second pause draws no frame and the card
 consumes **no byte**, and the capture still holds the clip's 441,000
 samples whole and in order. With the hook's test removed, 107 frames are
 drawn while paused.

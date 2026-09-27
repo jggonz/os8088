@@ -8224,7 +8224,7 @@ SOAK = [
         "at the layout's scale (98.4.1): half on CGA, its own size on "
         "Hercules. Broken on purpose (the dither's thresholds swapped, the "
         "play's base left at 0, the hook's pause test removed, the position "
-        "not kept) it FAILS",
+        "not kept, the periods pending at Space dropped) it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidprevherc", "soak", py("tests/vidpreview.py", "--layout",
@@ -8238,7 +8238,9 @@ SOAK = [
         "SPEC.md 98.3.2, 98.3.5: vidpreview's CGA clip on the Hercules "
         "5150, through the SHADOW - the keyframe decoded into it and copied "
         "before the stream starts, every hold read where the copy put the "
-        "rows",
+        "rows; and a pause, pinned on frame 40's decode, costs the play "
+        "nothing - the 5 periods a copy-long call leaves pending at Space "
+        "reach the clock (98.3.4)",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidsndpause", "soak", py("tests/vidsound.py", "--secs", "20",
