@@ -37019,8 +37019,9 @@ Kernel size pass 4 took the table from 179 uniform cells and 1,432 bytes to
 jump cells and the one far cell. Its last change (C3, below) then made fifteen
 cells **inline** and took the table to **1,093 bytes**: 43 plain SLOTs and 11
 X cells hot, 95 rare cells, 15 inline cells, six jump cells and the far cell.
-`OSAPI_FILE_READ_SEQ` (18.4.8) has since added a 96th rare cell, **1,099
-bytes**, which is what `kernel.asm`'s length guard asserts from the counts.
+`OSAPI_FILE_READ_SEQ` (18.4.8) and `OSAPI_FSX_SPK` (34.11) have since added a
+96th and a 97th rare cell, **1,105 bytes**, which is what `kernel.asm`'s length
+guard asserts from the counts.
 Those counts are the tree it landed on, not a contract; `t_api_abi` prints
 the span it walked.
 
@@ -40648,8 +40649,10 @@ says `File too big` about a module that fits the machine five times over.
 that came from the hint or from the sniff, and it threw `AX` away to make
 room for `FERR_BIG`. So `OSAPI_FILE_READ`'s `FERR_BIG` now also answers
 **`DX` = the KB the read needs**, rounded up (one KB over on an exact
-multiple). A caller that sized its claim from FIND can free it, claim `DX`,
-and ask again. The refusal still comes before any data I/O, so the retry
+multiple). A file of 64MB or more, which a big volume (§18.7.5) can hold,
+**saturates at `DX` = 0xFFFF**: no claim meets that, so the one retry below
+is refused honestly rather than sized off a figure the conversion wrapped. A
+caller that sized its claim from FIND can free it, claim `DX`, and ask again. The refusal still comes before any data I/O, so the retry
 reads no more of the disk than the first attempt did: the directory walk and
 the header sector are what §18.95's cache has just filled.
 
@@ -40668,7 +40671,7 @@ the header sector are what §18.95's cache has just filled.
   from FIND can take the same few lines: ModPlug and Paint are the obvious
   next ones.
 
-**Cost:** `.cold` +11 (the conversion, in `.toobig` itself). Tracker's
+**Cost:** `.cold` +22 (the conversion and its saturation, in `.toobig` itself). Tracker's
 retry is package code. `tests/lzmod.py --nohint` is the gate: the lzmodtest
 disk with BEVERLY.MOD's hint struck on a scratch copy, double-clicked. It must
 load all 116,085 bytes byte for byte, and before this section it reads
@@ -120672,13 +120675,18 @@ into range kept the tick it had been given, and that tick comes round
 continuous flight hid everything that had once been out of range, for up to
 thirty more.
 
-**The fix is three stores and one test, all in the package**:
+**The fix is three stores and two tests, all in the package**:
 
 - `cs_consider` tests zero AS ITSELF (`or ax, ax` / `jz .look`) before the
   subtraction, and puts an expired skip back to zero on the way past, so no
   real tick is ever left standing to wrap. A skip that happens to be computed
   as 0 reads as *look* — one lost skip in 65,536, which costs a frame one
   cull and nothing else.
+- The difference is tested AS a difference: `or ax, ax` between the `sub`
+  and the `jg` clears OF. Straight off the `sub`, `jg` compares the skip and
+  the tick as two signed numbers rather than asking whether the skip is ahead,
+  so a skip at 0x7FFE read as ahead of a tick at 0x8002 for the next hour, and
+  its expiry never ran.
 - `cs_fsx_main` calls `cs_skipclr` on a RESUMED flight too, where only a
   reset did: the title page can stand for half an hour between flights, and a
   skip left from the last one would read as still ahead for 32,768 ticks.
@@ -131003,7 +131011,9 @@ menu dispatch arrives with the lock taken. So the knowing and the doing are
 split: those set `[dd_wantfit]` and call `OSAPI_WM_WAKE`, which is legal from
 anywhere, and **`dd_onwake` is the one callback the kernel runs with the lock
 free** (§74.1). It reads the frame as `W_W − [dd_cw]`, adds the content the
-board needs, and resizes.
+board needs, and resizes. *(§11.1.2 has since withdrawn the restriction: the
+slot takes the lock itself when the caller has none and works with it held, so
+the split is Dot Delirium's own choice now and no longer a requirement.)*
 
 Three rules keep it from fighting the user or itself:
 
@@ -154339,8 +154349,8 @@ border.
 
 **A new layout is the wake's**: a file opened or the card toggled sets
 `[vp_relay]` and posts `OSAPI_WM_WAKE`, and `W_ONWAKE` makes the picture
-again if its scale moved, then - without the lock, as `OSAPI_WM_RESIZE`
-requires - resizes the window, which repaints it.
+again if its scale moved, then - from `W_ONWAKE`, the unlocked callback -
+resizes the window, which repaints it.
 
 ##### 98.4.1.1 Compact: the row under the bar, before the card takes it
 

@@ -3079,6 +3079,9 @@ hbm_wake:
     mov bp, dsk_rah_flush
     call COLD_SEG:wm_cbd
     mov word [mem_pinseg], 0    ; dsk_xfer's pin, mid-transfer in the image
+%ifdef OS88_BIGVOL
+    mov word [dsk_lbahi], 0     ; ...and its LBA's high word, which only its
+%endif                          ; .out spends (SPEC.md 18.7.5)
     ; ...AND THE EXTENT LIST THE PICTURE WAS TAKEN OVER (SPEC.md 87.6.1).
     ; `mem_pinseg` one level up: a word that was true of the machine that
     ; wrote the image and is meaningless in the machine that reads it - except

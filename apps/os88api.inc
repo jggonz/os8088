@@ -750,9 +750,11 @@ OSAPI_LZ_LZB equ 1
                                  ; made again at the right size (SPEC.md
                                  ; 20.14.6.3: a compressed file whose hint a
                                  ; foreign OS dropped is under-reported by
-                                 ; FIND). A kernel before 20.14.6.3 leaves the
-                                 ; size's HIGH WORD in DX, which is never more
-                                 ; than the KB needed - so retry ONCE, and
+                                 ; FIND; 64MB or more answers DX = 0xFFFF,
+                                 ; which no claim meets). A kernel before
+                                 ; 20.14.6.3 leaves the size's HIGH WORD in
+                                 ; DX, which is never more than the KB
+                                 ; needed - so retry ONCE, and
                                  ; only if DX is more than you claimed, and
                                  ; the same code is safe on both.
                                  ; **A COMPRESSED FILE EXPANDS ON THE WAY IN**

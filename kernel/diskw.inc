@@ -1943,12 +1943,18 @@ dskw_rbody:
     cmp ax, [dskw_cap]
     jbe .fits
 .toobig:                        ; too big for the buffer: nothing is written
+    cmp dx, 0x3FF               ; 64MB or more SATURATES at 0xFFFF KB, which
+    jb .kb                      ; no claim meets: the shift below would drop
+    mov dx, 0xFFFF              ; U's top bits and the inc would wrap, and a
+    jmp short .kbsaid           ; small wrong figure is a retry that lies
+.kb:
     mov cl, 10                  ; ...and DX = the KB it WOULD take, rounded
     shr ax, cl                  ; up (SPEC.md 20.14.6.3). U is in hand here
     mov cl, 6                   ; and nowhere a caller can reach: a HINTLESS
     shl dx, cl                  ; compressed file was sized by FIND at what
     or dx, ax                   ; it OCCUPIES, and only this read's sniff
     inc dx                      ; knows what it becomes. One over on an
+.kbsaid:
     mov ax, FERR_BIG            ; exact multiple, which a claim in KB does
     stc                         ; not mind; CX is dskw_read_x's to restore
     ret

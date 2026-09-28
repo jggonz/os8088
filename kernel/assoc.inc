@@ -1317,7 +1317,8 @@ assoc_run_x:
     call assoc_back             ; no volume knows it: the package route's own
     mov al, LD_EBAD             ; verdict ('Load failed'), which is what this
     call ld_say_status          ; double-click answered before the search
-    jmp short .refresh
+    jmp short .out              ; ...and, like that route's failed load, owes
+                                ; the screen nothing (ld_owed, SPEC.md 22.17)
 .nofile:
     call assoc_back
     mov si, assoc_pnbuf         ; 'Needs TRACKER.O88', because "Program not

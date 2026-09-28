@@ -984,7 +984,7 @@ fcp_relink:
     jnc .no                     ; it does: the copy path knows how to ask
     cmp ax, FERR_NOENT
     jne .no
-    cmp word [dskw_fsec], 0xFFFF
+    cmp word [DSKW_FNONE], 0xFFFF
     je .no                      ; no reusable slot: FERR_DIRFULL is the copy
                                 ; engine's to report, with its own message
 

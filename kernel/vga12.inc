@@ -6079,6 +6079,10 @@ gfx_bpwalk:
     pop di
     clc
 .ret:
+%ifdef KERN_BIG
+    mov byte [gfx_bp_hk], 0     ; the probe's and the pieces' hooks were THEIR
+%endif                          ; own, and each came down: the caller's
+                                ; teardown must not bring down one more
     retf
 
 ; gfx_bppiece - one piece of that walk: gfx_blitp with its plane step in DI

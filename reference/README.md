@@ -37,7 +37,7 @@ scheme; it is not a claim to reproduce its RGB values on CGA.
 
 Use the maintained versions, rather than duplicating interface contracts:
 
-- [SPEC.md §53 and §98](../SPEC.md): exclusive display ownership and Gorillas.
+- [SPEC.md §53 and §99](../SPEC.md): exclusive display ownership and Gorillas.
 - [SDK](../apps/os88api.inc): `FSX_RUN`, `FSX_MODE`, and drawing contracts.
 - [Dot Delirium](../apps/dotdel/dotdel.asm): fullscreen lifecycle.
 - [Tank rasterizer](../apps/tank/tkraster.inc): CGA color-select and VGA DAC examples.
