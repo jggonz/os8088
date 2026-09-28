@@ -152442,7 +152442,7 @@ leave**:
   low at 5,512 Hz and ~8 at 8,000. *The late plays first blamed on it were
   not the ISR's*: MartyPC's only hard disk is an XT-IDE, whose transfers
   the CPU makes byte by byte, and the owner's ST11M makes them by DMA; the
-  owner's `02-PCSPK` demo, 1,161 frames late there, runs on schedule on the
+  owner's first `02-PCSPK` demo (5.5 kHz; 98.5 carries its 8 kHz successor), 1,161 frames late there, runs on schedule on the
   5150 (98.2.15.4).
 - **`CYC_SPK_BYTE` = 15** is the player's copy of the counts, measured
   (98.1.1.3). It was 65, a guess at the translation the counts removed.
@@ -152601,7 +152601,7 @@ already lifted up to 30 dB, only 1-4 dB - they are not silent by then.
 ##### 98.2.15.4 What 8 kHz leaves for the picture
 
 At 8,000 Hz the speaker is ~78% of a 5150 and decode gets 11% of a period
-on average (23% at 5,512). Bad Carrot re-encoded at the owner's `02-PCSPK`
+on average (23% at 5,512). Bad Carrot re-encoded at the first `02-PCSPK`'s
 geometry (496 × 181, 25 fps, the window), profile `5150-st225`:
 
 | | frames cut to the budget | picture wrong |
@@ -154567,6 +154567,11 @@ to come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
   byte for byte the owner's hand-made disk's entry - and `os88hdd.py
   --wrap` puts it under the card's hidden cylinder, its parameter record
   and a VHD footer. `--verify-hdd` passes the volume before it is wrapped.
+- **The Hercules set was re-cut on 2026-09-28**: `02-PCSPK` became a
+  56 s excerpt of Bad Carrot on the speaker at 8 kHz (98.2.15.5's
+  `herc-spk`, 360 x 131 at 23 fps) and `03-ADPCM` the whole song full
+  screen, where it had been the other way round; the old `08-PCM11` (K
+  Project) was dropped for space and `09-LIVE` is `08-LIVE`.
 - **`00-VIDS.TXT` is written for Note Pad** and held to `checkreadme.py`'s
   rules as `README.TXT` is: prose one line a paragraph, the per-video
   blocks indented and 28 columns at most, plain ASCII, CRLF on the disk.
@@ -154574,8 +154579,9 @@ to come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
 Each disk booted on MartyPC's 5150 of its adapter (the same volume at
 615/4/26 on its XT-IDE, which has no ST11R): the desktop from C:, the text
 in Note Pad and a video in the window at its own size - `05-ADPCM.V88` on
-the Hercules (75 files, 15,599 of 15,891 clusters), `02-BWPCS.V88` on the
-CGA (77 files, 14,687). **The titles inside the files are what each video
-SHOWS OFF** - "Composite 512 Color 160*100 OldStyle", "PC Speaker Audio" -
+the Hercules (75 files, 15,599 of 15,891 clusters then; 74 and 14,628 for
+the 2026-09-28 set), `02-BWPCS.V88` on the CGA (77 files, 14,687). **The
+titles inside the files are what each video SHOWS OFF** - "Composite 512
+Color 160*100 OldStyle", "PC Speaker (Set it in Ctrl Panel)" -
 and not what it is of: this is a disk of the player, not of the films (the
 owner's rule). The text names both.
