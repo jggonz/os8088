@@ -35341,7 +35341,7 @@ at a stride of 24. `kernel/dskwin.inc` carries the `%error` for each.
 | 0   | 16   | display name, NUL-padded: raw name[0..7] with trailing spaces trimmed, then '.', then ext[0..2] trimmed (dot omitted when the ext is blank); **every byte outside 0x21..0x7E replaced with '_'** (OEM-codepage bytes never reach the font renderer). Max 12 chars — fits every §22 truncation budget |
 | 16  | 2    | type: 1 = loadable package, 2 = subdirectory, 3 = the parent link (§19.5), else 0 (rules below) |
 | 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1, and `dsk_chdir` only behind type==2). FstClusHI (@20) is FAT32-only per spec — ignored |
-| 20  | 4    | size in bytes = raw size dword @28, verbatim (lo word @20, hi @22 — drawn whole by `fm_ultoa`); forced to 0 for type 2 |
+| 20  | 4    | size in bytes = raw size dword @28, verbatim (lo word @20, hi @22 — drawn whole by `fm_ultoa`, or in K/M by `fm_szfig_x` per §22.7.1); forced to 0 for type 2 |
 | 24  | 8    | zero — and **not stored in a staged listing**: `DSK_DE_STRIDE` stops at 24, `dsk_ent` is still 32 wide, and no consumer in the tree reads these eight bytes |
 
 **The type word** (binding — defense in depth with §21 step 1), tested in
@@ -41707,7 +41707,7 @@ or any §18.2 BPB rule failed. N is the accepted-entry count (≤ 32, §19's
 cap — the header count always equals the listed count), read from this
 window's `FS_N`, not from the global `[disk_nfiles]`. File names are
 the synthesized 8.3 display names of §19 (e.g. `"MINES.O88"`, ≤ 12
-chars); sizes are the §19 staged size dword, drawn in full (`fm_ultoa`). Folders count and list exactly like files — a type-2 entry (§19)
+chars); sizes are the §19 staged size dword, drawn in the unit §22.7.1 picks (`fm_szfig_x`: bytes, then `K` from 10KB and `M` from 10MB; bytes in full on `kern_small`). Folders count and list exactly like files — a type-2 entry (§19)
 shows the built-in folder icon and a blank size column. Two buttons at the top right,
 1px black frames, labels centered: **Refresh** from (cw−68, 2) to
 (cw−6, 15) — remounts the current drive so a swapped disk shows its real
@@ -43947,6 +43947,45 @@ end of the current FAT sector (or the next window validation is skipped for
 entries that are not in it) and to `[dsk_maxclus]` (or it counts past the end
 of the volume). Clamping to one and not the other is the bug that reads as a
 free-space figure which is merely plausible.
+
+#### 22.7.1 K past 10KB, M past 10MB — sizes in the unit a person reads
+
+§22.7's two figures were KB in a word and the size column was **bytes**, which
+was the era's right answer on a floppy and stopped being one when a volume
+passed 32MB (§18.7.5). A 321MB partition is 328,704 KB free — **more than a
+word**, so the figure was silently the low 16 bits of the truth — and a 40MB
+file in the column is `41943040`, a number to count the digits of.
+
+**One rule, used by all three places a size is drawn** — the Disk window's
+size column, its status line, and the Standard File dialog's size column
+(§38):
+
+| the size | drawn as |
+|---|---|
+| under 10,240 bytes | the bytes, as before: `1234` |
+| 10KB to under 10MB | whole KB and a `K`: `113K` |
+| 10MB and up | whole MB and an `M`: `321M` |
+
+Both steps are at **ten** of the smaller unit, so a figure never shows fewer
+than two significant digits, and every one is **truncated**, which is what
+the status line already did. The status line's figures had only the K arm, so
+for them the table is K below 10MB and M from there.
+
+**`FS_FREE` and `FS_USED` stay one word each**, and the unit rides in bit 15
+(`fm_kbenc`): clear is KB below 10,240, set is `8000h | MB`. That is the whole
+reason no per-window byte moved — 4GB of bytes is `0x8FFF`, so the encoding
+can never produce the `0xFFFF` not-known sentinel, and the "a hostile listing
+could sum past the sentinel" test `FS_USED` carried is unnecessary on this
+arm. `fm_kbfig` draws either half, `fm_szfig_x` takes a dword of bytes for the
+two columns.
+
+**kern_big only** (and kern_emu with it). `kern_small` is on a diet (§39.27.4)
+and draws what it always did — bytes, and `K` on the status line: it mounts no
+volume past 32MB, so its KB figure fits the word it is in, and the display
+alone is not a case for spending there. It is `%ifdef OS88_BIGVOL`, the
+switch §18.7.5 already put on every site that differs, and `kern_small`
+assembles byte for byte the kernel it was. The cost on `kern_big` is **73
+bytes of `.cold`**, resident.
 
 ### 22.8 A write marks the folder; the focus spends the mark
 
@@ -81349,6 +81388,51 @@ floppy.
 geometry to the BPB and the probe now wins over the saved row, so a disk
 installed before that change presents exactly this state — the platter at
 17×4, the row at whatever the drive reports.
+
+#### 52.2.7 The size line — Format takes as much as the user types
+
+Format took **the whole extent** `hd_slot_extent` found — the largest free
+hole, or the slot's own entry — up to FAT16's ceiling (§18.7.5), and there was
+no way to ask for less. On a 40MB XT disk that is what anybody wants; once
+volumes reached 2GB it made a 500MB drive one volume where the user wanted two.
+
+So a line sits between the slot rows and the buttons:
+
+```
+Size: all 321M - type MB to change        <- nothing typed: the whole extent
+Size: 100M of 321M                        <- typed
+```
+
+**It is typed, not picked.** The digits and Backspace go to the tool while it
+is in front (`W_ONKEY`, `hd_tw_key`), and they edit one word, `[hd_tsize]`, in
+MB. `0` is *all*, which is the old behaviour to the byte, so a user who never
+types gets exactly what Format always did. The line is redrawn ALONE and
+opaquely, padded to a fixed width, so a keystroke costs one text run rather
+than a window.
+
+**The figure on the line is always one Format will honour.** A digit that would
+take it past the extent (`[hd_tsmax]`, the extent in whole MB) is refused
+rather than clamped, and a leading `0` is refused because it says nothing.
+Whatever the number was typed against is re-measured — and the number reset to
+*all* — whenever it changes: another row, a Format, a Delete
+(`hd_tw_szmax`, which reads only the table in RAM). A keystroke also disarms a
+Format that was one click from firing, because the question it asked was
+about the old size (§52.2.3).
+
+**The number is rounded UP to a cylinder, and then capped by the extent**
+(`hd_tw_cap`). §52.2.5's rule still holds — every extent ends on a boundary —
+but rounding DOWN would turn `1` on a 255-head drive, whose cylinder is ~8MB,
+into nothing at all. The extent is already cylinder-trimmed, so the smaller of
+two boundaries is still a boundary. What the user gets is therefore at least
+what they typed and never more than a cylinder over it — 504KB on a 16-head,
+63-sector drive — and the row reads the MB it came out at.
+
+It applies to all three of §52.2.1's cases, reuse in place included: typing
+less on a slot that already holds a volume makes the new one smaller and gives
+the rest back as free space, which the next slot's scan will find. The
+installer does not read it — an install puts the system on a slot as it
+stands (§52.10), and `[hd_tsize]` is the disk tool's alone. All of it is in
+`HDDTOOL.DRV`, so it costs no resident byte.
 
 ### 52.3 The formatter
 

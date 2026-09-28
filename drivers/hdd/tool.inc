@@ -67,6 +67,10 @@ HTW_ROWH     equ 12
 HTW_BY       equ 96             ; the button row
 HTW_BH       equ 16
 HTW_CAPY     equ 120
+HTW_SZY      equ 78             ; the size line (SPEC.md 52.2.7), between the
+                                ; last slot row and the buttons
+HTW_SZN      equ 35             ; ...padded to this many cells, so the opaque
+                                ; run covers whatever the last one said
 HTW_CFORMAT  equ 1              ; control ids (SPEC.md 13.8.4), 1-based so 0
 HTW_CDELETE  equ 2              ; can mean "nothing is down"
 HTW_CCLOSE   equ 3
@@ -109,7 +113,7 @@ HTS_LIVE     equ 4              ; ...and the volume THIS MACHINE BOOTED FROM,
                                 ; important thing about that slot and the row
                                 ; is where a user looks for it
 
-hd_ttpl:    dw 90, 90, HTW_W, HTW_H, hd_s_ttitle, hd_tw_paint, 0, hd_tw_click
+hd_ttpl:    dw 90, 90, HTW_W, HTW_H, hd_s_ttitle, hd_tw_paint, hd_tw_key, hd_tw_click
 hd_s_ttitle: db 'Format', 0
 
 ; -----------------------------------------------------------------------------
@@ -135,6 +139,7 @@ hd_tw_open:
     pop di
     call hd_tw_scan
     mov byte [hd_tsel], 0
+    call hd_tw_szmax
     mov byte [hd_tarm], 0
     mov word [hd_tmsg], hd_s_tready
     cmp byte [hd_mbrok], HMB_BAD    ; the read FAILED. hd_mbr is a blank we
@@ -354,6 +359,7 @@ hd_tw_paint:
     inc cl
     cmp cl, 4
     jb .row
+    call hd_tw_szdraw
 
     mov si, hd_s_tfmt           ; the shared control takes the pen itself and
     mov ax, HTW_B0X             ; leaves it live, so there is no CBLACK to set
@@ -631,6 +637,7 @@ hd_tw_click:
     cmp al, 4
     jae .done
     mov [hd_tsel], al
+    call hd_tw_szmax            ; ...and a different extent to size
     mov byte [hd_tarm], 0       ; a different row is a different question
     mov word [hd_tmsg], hd_s_tready
     jmp short .repaint
@@ -928,6 +935,7 @@ hd_tw_format:
     mov al, [hd_tsel]
     call hd_slot_extent         ; -> [hd_fbase] / [hd_fsecs] (SPEC.md 52.2.1)
     jc .noroom
+    call hd_tw_cap              ; ...no longer than the size typed (52.2.7)
     call hd_fmt_plan            ; -> the cluster size and the FAT type
     jc .nofit
 
@@ -967,6 +975,7 @@ hd_tw_format:
     mov al, [hd_tdev]            ; the states again, which re-reads the boot
     call hd_dev_row             ; sector we just wrote: the row is what the
     call hd_tw_scan             ; DISK says and not what we hoped
+    call hd_tw_szmax            ; ...and the slot's extent is its own now
 .out:
     pop di
     pop si
@@ -1059,6 +1068,7 @@ hd_tw_delete:
     mov al, [hd_tdev]            ; the states again, off the disk rather than
     call hd_dev_row             ; off what we hoped we wrote
     call hd_tw_scan
+    call hd_tw_szmax
     jmp short .out
 .notable:
     mov byte [hd_tarm], 0
@@ -1227,6 +1237,202 @@ hd_tw_arm:
     ret
 
 ; -----------------------------------------------------------------------------
+; THE SIZE LINE (SPEC.md 52.2.7) - how much of the slot's extent Format takes
+;
+; Format used to take the whole extent hd_slot_extent found - the largest hole,
+; or the slot's own entry - up to FAT16's ceiling, with no way to ask for less.
+; On a 40MB XT disk that is what anybody wants; on a 500MB drive it is one
+; volume where the user wanted two. So the line under the rows names the
+; extent in MB and the user TYPES a smaller one: digits and Backspace, while
+; this window is in front. 0 is 'all', which is the old behaviour to the byte,
+; so a user who never types gets exactly what Format always did.
+;
+; A digit that would pass the extent is refused rather than clamped - the
+; figure on the line is always one Format will honour - and a leading 0 is
+; refused because it means nothing. The number resets to 'all' whenever the
+; extent it was typed against changes: another row, a Format, a Delete.
+;
+; What the number becomes is a LENGTH rounded UP to the cylinder its end falls
+; in, then the smaller of that and the extent (hd_tw_cap). Up, because
+; hd_cyl_trim's rounding down would turn a 1MB ask on a 255-head drive into
+; nothing at all; and the extent is already cylinder-trimmed, so the smaller
+; of two boundaries is still a boundary (52.2.5).
+; -----------------------------------------------------------------------------
+
+; --- hd_tw_szmax - [hd_tsmax] = the selected slot's extent, whole MB --------
+; in: [hd_tdev], [hd_tsel]; out: [hd_tsize] = 0 (all); all registers preserved
+; No I/O: hd_slot_extent reads the table in RAM and the device row.
+hd_tw_szmax:
+    push ax
+    push cx
+    push dx
+    push di
+    xor ax, ax
+    mov [hd_tsize], ax
+    mov [hd_tsmax], ax
+    mov al, [hd_tdev]
+    call hd_dev_row
+    mov al, [hd_tsel]
+    call hd_slot_extent
+    jc .out                     ; no room: the line says 'all' and no digit
+    mov ax, [hd_fsecs]          ; is accepted, and Format says why
+    mov dx, [hd_fsecs+2]
+    mov cl, 11                  ; sectors -> MB. DX <= 3Fh under the ceiling
+    shr ax, cl                  ; (SPEC.md 18.7.5), so DX << 5 fits a word
+    mov cl, 5
+    shl dx, cl
+    or ax, dx
+    mov [hd_tsmax], ax
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; --- hd_tw_cap - [hd_fsecs] no longer than the size typed -------------------
+; in: [hd_tsize], [hd_fbase]/[hd_fsecs] from hd_slot_extent, DI = the device
+; row; out: nothing (all registers preserved)
+hd_tw_cap:
+    push ax
+    push cx
+    push dx
+    mov ax, [hd_tsize]
+    or ax, ax
+    jz .out                     ; 'all': the extent as it stands
+    mov dx, ax
+    mov cl, 5                   ; DX:AX = MB * 2,048 sectors
+    shr dx, cl
+    mov cl, 11
+    shl ax, cl
+    add ax, [hd_fbase]          ; the END, rounded up to its cylinder...
+    adc dx, [hd_fbase+2]
+    call hd_cyl_up
+    sub ax, [hd_fbase]          ; ...back to a length
+    sbb dx, [hd_fbase+2]
+    call hd_fsecs_min
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; --- hd_tw_szdraw - the size line, padded and opaque ------------------------
+; in: DI = content left, BP = content top; the lock is held
+; out: nothing (all registers preserved)
+hd_tw_szdraw:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    mov di, hd_line             ; the row painter's buffer, and free: every
+    mov si, hd_s_tsz0           ; row has been drawn by the time this runs
+    call hd_scat
+    mov ax, [hd_tsize]
+    or ax, ax
+    jz .all
+    call hd_utoa                ; 'Size: 100M of 321M'
+    mov si, hd_s_tszof
+    call hd_scat
+    mov ax, [hd_tsmax]
+    call hd_utoa
+    mov si, hd_s_mb
+    jmp short .tail
+.all:
+    mov si, hd_s_tszall         ; 'Size: all 321M - type MB to change'
+    call hd_scat
+    mov ax, [hd_tsmax]
+    or ax, ax
+    jz .pad                     ; under a megabyte: 'all' is all there is
+    call hd_utoa
+    mov si, hd_s_tszty
+.tail:
+    call hd_scat
+.pad:
+    mov cx, hd_line + HTW_SZN
+    sub cx, di
+    jbe .end
+    mov al, ' '
+.sp:
+    mov [di], al
+    inc di
+    loop .sp
+.end:
+    mov byte [di], 0
+    pop di
+    push di
+    mov si, hd_line
+    mov cx, di
+    add cx, HTW_LX
+    mov dx, bp
+    add dx, HTW_SZY
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the padding is the erase
+    call OSAPI_FONT_RUN
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tw_key - W_ONKEY: AL = ascii, AH = scan, SI = the window; lock held
+; Digits and Backspace edit [hd_tsize]; everything else is not ours.
+; -----------------------------------------------------------------------------
+hd_tw_key:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov bl, al
+    mov ax, [hd_tsize]
+    mov cx, 10
+    xor dx, dx
+    cmp bl, 8
+    je .bs
+    sub bl, '0'
+    cmp bl, 9
+    ja .out                     ; not a digit (the subtract wraps below '0')
+    mul cx
+    xor bh, bh
+    add ax, bx
+    jz .out                     ; a leading 0 says nothing
+    cmp ax, [hd_tsmax]          ; DX = 0: 2,047 * 10 + 9 fits a word
+    ja .out                     ; past the extent: refused, not clamped
+    jmp short .set
+.bs:
+    div cx
+.set:
+    cmp ax, [hd_tsize]
+    je .out                     ; Backspace on 'all': nothing changed
+    mov [hd_tsize], ax
+    cmp byte [hd_tarm], 0       ; an armed Format asked about the OLD size:
+    je .line                    ; disarm it, and the caption with it
+    mov byte [hd_tarm], 0
+    mov word [hd_tmsg], hd_s_tready
+    call hd_tw_repaint
+    jmp short .out
+.line:
+    mov bx, si
+    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
+    mov di, ax
+    mov bp, dx
+    call hd_tw_szdraw           ; ONE line, not the window (PERFORMANCE.md)
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_tw_repaint - redraw the tool's content (module internal)
 ; in:  nothing; the lock is held
 ; out: nothing (all registers preserved)
@@ -1254,6 +1460,10 @@ hd_tw_repaint:
     ret
 
 hd_s_kb:      db 'K', 0
+hd_s_tsz0:    db 'Size: ', 0
+hd_s_tszof:   db 'M of ', 0
+hd_s_tszall:  db 'all ', 0
+hd_s_tszty:   db 'M - type MB to change', 0
 hd_s_thdr:    db 'Slot  Size   State', 0
 hd_s_four:    db '     ', 0     ; slot digit -> size column
 hd_s_nosize:  db '     ', 0     ; ...and the size column when nothing claims it
@@ -1305,6 +1515,9 @@ hd_tdropv:   db 0xFF            ; the last kernel volume index an unmount took,
 hd_tdrop:    db 0               ; a Delete unmounted a volume, so the caption
                                 ; says so and the mounted set is re-staged
 hd_tmsg:     dw 0               ; ...and its caption
+hd_tsize:    dw 0               ; the size typed on the size line, MB; 0 =
+                                ; all of the extent (SPEC.md 52.2.7)
+hd_tsmax:    dw 0               ; ...and the extent it may not pass, MB
 hd_tstate:   times 4 db 0       ; HTS_* per slot, worked out when the tool
                                 ; opens and after every format
 hd_ask:      times 40 db 0      ; the confirm question, built into a buffer of
