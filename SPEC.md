@@ -153320,6 +153320,10 @@ shipped. `--wav` writes that track alone.
 play it with; and the live media. **Never the 360KB system disk** (the
 owner's rule, VIDEO-PLAN 14.7, L8). It never plays by itself.
 
+**On a CGA its window is COMPACT** (98.4.1.1): the buttons under the bar
+and the window 336 wide, not the card beside the picture and the window
+the width of the screen - the picture at its own size either way.
+
 The gates: `vidlogo` (Hercules), `vidlogocga`, `vidlogovga` - the committed
 file is the generator's shape and under budget; the screen's own rendition
 plays Live at box scale 1; seven held frames over two laps of the seam in
@@ -154016,6 +154020,24 @@ border.
 `[vp_relay]` and posts `OSAPI_WM_WAKE`, and `W_ONWAKE` makes the picture
 again if its scale moved, then - without the lock, as `OSAPI_WM_RESIZE`
 requires - resizes the window, which repaints it.
+
+##### 98.4.1.1 Compact: the row under the bar, before the card takes it
+
+**Between the row under the bar and the buttons in the card there is a
+third try, at the same scale**: the box's slack cut to what the desktop's
+banks need - 1 row on a CGA, none on a VGA, 3 on a Hercules
+(`vp_boxxy`'s rounding) - and the gaps from the box to the bar and from
+the bar to the buttons 3 rows each instead of 6 (`vp_laycomp`). A layout
+that fitted before is laid out exactly as before; this only takes the
+place of the card, or of a smaller picture.
+
+What it is for is **the logo video on a CGA** (98.3.11, the owner's
+report). Its 320 x 112 picture wants 168 rows with the row under the bar,
+and a CGA has 161 over the dock - so the buttons went into the card, and
+the window was 620 of the screen's 640 wide, where the video exists to be
+played WHILE the desktop is used. Compact is 160: the window is 336 wide,
+the buttons under the bar, the desktop beside it. Measured on MartyPC's
+CGA 5150 (`vp_lch` 160 of `vp_lchm` 161, `vp_lcw` 336 against 620).
 
 #### 98.4.2 Dragging the thumb
 

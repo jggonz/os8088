@@ -13,6 +13,9 @@ by hand: it needs numpy and the build does not), on the screen named:
    it whole (vp_ps 1) - the one thing a file can be refused Live for.
    And the status line says READY: a rendition made for this screen is
    not "Made for VGA: plays via a copy" because its layout is lin80's.
+   And the window leaves the desktop beside it: the buttons under the bar,
+   no card, 3/4 of the screen wide or less - on a CGA the COMPACT layout
+   (98.4.1.1), without which it FAILS (the card out, 620 wide).
 3. EVERY HELD FRAME, IN THE BOX: before the burn, mid-burn, the last frame
    and the first after the seam, over two laps - the desktop's pixels
    against the rendition's host decode.
@@ -137,6 +140,18 @@ def main():
                 if msg != syms["vp_s_ready"]:
                     bad.append("the status line says %s, not ready: the "
                                "rendition is MADE for this screen" % name)
+                # 2b. THE DESKTOP BESIDE IT (SPEC.md 98.4.1.1): the buttons
+                # under the bar and no card, so the window is 3/4 of the
+                # screen or less - the logo is played WHILE the desktop is
+                # used. On a CGA that is the COMPACT layout; before it the
+                # card held the buttons and the window was 620 of 640 wide
+                lay = (rb("vp_lbin"), rb("vp_lcard"), rw("vp_lcw"))
+                print("   buttons %s, card %s, content %d wide"
+                      % ("in the card" if lay[0] else "under the bar",
+                         "out" if lay[1] else "in", lay[2]))
+                if lay[0] or lay[1] or lay[2] * 4 > stride * 8 * 3:
+                    bad.append("the window takes the desktop (buttons in "
+                               "the card %d, card out %d, %d wide)" % lay)
                 ui.mo.to(8, rows - 8 if rows < 400 else 470)
                 stops = (10, 30, NF, L + 1, 80, NF, L + 1)
                 ww("vp_stopat", stops[0])

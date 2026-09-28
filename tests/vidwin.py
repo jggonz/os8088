@@ -230,9 +230,15 @@ def main():
                 m.type_text("p")
                 fills = []
                 while rb("vp_ready") == 0:
-                    # (vp_fcap: 0 until a bracket has placed its origin)
-                    if rb("vp_winm") == 1 and rw("vp_fcap"):
+                    # a look is taken with the guest STOPPED, and only while
+                    # the black is still owed (vp_kblk: the fill; it is
+                    # drawn just before the first frame, which is right) and
+                    # the bracket has placed its origin (vp_fcap)
+                    m.pause()
+                    if rb("vp_winm") == 1 and rw("vp_fcap") and \
+                            rb("vp_kblk") == 1:
                         fills.append(canvas() == vid.decode_at(r, pkey))
+                    m.run()
                     os88marty.pace(m, 0.05)
                 print("   the fill: %d looks, %d of them the poster"
                       % (len(fills), sum(fills)))

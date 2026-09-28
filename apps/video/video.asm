@@ -116,6 +116,10 @@ VP_LCAP     equ 4                   ; a live pass's most frames (98.3.10)
 VP_DRAGT    equ 9                   ; ticks between loads mid-drag, 286 up
 VP_BSLACK   equ 3                   ; the box's rows under the picture: its
                                     ; top goes down to a bank (98.3.7)
+VP_BGAP     equ 6                   ; ...and the rows from the box to the bar,
+VP_CGAP     equ 3                   ; and the bar to the buttons - or, COMPACT
+                                    ; (98.4.1.1), these, the slack the
+                                    ; desktop's banks need and no more
 VPX_STOP    equ 1                   ; how a bracket ended (98.3.7): stopped,
 VPX_SWAP    equ 2                   ; swapped between window and full screen,
 VPX_DESK    equ 3                   ; back to the desktop, paused - never 0,
@@ -9937,12 +9941,18 @@ vp_layfit:
     mov [vp_lchm], bx
     mov ax, [vp_ps]
     mov [vp_lops], ax
+    call vp_dinfo                   ; (the desktop's banks, for COMPACT)
     mov si, 1                       ; SI = the scale tried: 1, 2, 4
 .s:
     call vp_laysize                 ; the picture's size at SI -> vp_lpw/lph
     mov cl, [vp_card]
+    call vp_laynorm
     call vp_layA
     jnc .a
+    call vp_laycomp                 ; COMPACT (98.4.1.1): the row under the
+    call vp_layA                    ; bar still, before the card takes it
+    jnc .a
+    call vp_laynorm
     call vp_layB
     jnc .b
     shl si, 1
@@ -9951,6 +9961,7 @@ vp_layfit:
     mov si, 4                       ; nothing fits: a quarter, buttons below
     call vp_laysize
     mov cl, [vp_card]
+    call vp_laynorm
     call vp_layA
 .a:
     mov byte [vp_lbin], 0
@@ -9966,11 +9977,13 @@ vp_layfit:
 .bw:
     mov [vp_lbw], bx
     mov ax, [vp_lph]
-    add ax, VP_BSLACK               ; the picture's row goes down to a bank
+    add ax, [vp_lslk]               ; the picture's row goes down to a bank
     mov [vp_lbh], ax
-    add ax, VP_BOXY + 6
+    add ax, VP_BOXY
+    add ax, [vp_lgap]
     mov [vp_lbary], ax              ; the bar's frame, under the box
-    add ax, VP_BARH + 6
+    add ax, VP_BARH
+    add ax, [vp_lgap]
     mov [vp_lbty], ax               ; the button row, under the bar
     mov ax, bx                      ; the card: past the box, on a byte
     add ax, VP_BOXX + 8 + 7
@@ -10034,8 +10047,11 @@ vp_layA:
     cmp ax, [vp_lcwm]
     ja .no
     mov [vp_lcw], ax
-    mov ax, [vp_lph]
-    add ax, VP_BSLACK + VP_BOXY + 6 + VP_BARH + 6 + VP_BTH + 5
+    mov ax, [vp_lgap]
+    shl ax, 1
+    add ax, [vp_lph]
+    add ax, [vp_lslk]
+    add ax, VP_BOXY + VP_BARH + VP_BTH + 5
     mov bx, VP_CARDH                ; the card's own height, when it is shown
     or cl, cl
     jz .h
@@ -10068,7 +10084,7 @@ vp_layB:
     ja .no
     mov [vp_lcw], ax
     mov ax, [vp_lph]
-    add ax, VP_BSLACK + VP_BOXY + 6 + VP_BARH + 5
+    add ax, VP_BSLACK + VP_BOXY + VP_BGAP + VP_BARH + 5
     cmp ax, VP_CARDHB
     jae .h
     mov ax, VP_CARDHB
@@ -10082,6 +10098,37 @@ vp_layB:
 .no:
     pop ax
     stc
+    ret
+
+; vp_laynorm / vp_laycomp - the box's slack and the bar's gaps for vp_layA:
+; the layout's own, or COMPACT (98.4.1.1) - a CGA's 161 rows over the dock
+; held a 320 x 112 picture and its bar but not the row too, by seven, so
+; the logo (98.3.11) put its buttons in a card as wide as the screen. The
+; slack is only what the desktop's banks need (1 on a CGA, 0 on a VGA, 3 on
+; a Hercules: vp_boxxy's rounding) and the gaps are VP_CGAP. Preserves all
+vp_laynorm:
+    mov word [vp_lslk], VP_BSLACK
+    mov word [vp_lgap], VP_BGAP
+    ret
+
+vp_laycomp:
+    push ax
+    push bx
+    push cx
+    mov bl, [vp_dlay]               ; the banks, as vp_boxxy asks for them
+    xor bh, bh
+    mov ax, bx
+    shl bx, 1
+    add bx, ax
+    shl bx, 1
+    mov al, [vp_laytab+bx+1]
+    xor ah, ah
+    dec ax
+    mov [vp_lslk], ax
+    mov word [vp_lgap], VP_CGAP
+    pop cx
+    pop bx
+    pop ax
     ret
 
 vp_laybw:                           ; AX = the box's width at vp_lpw
@@ -11861,6 +11908,8 @@ vp_lpw:       dw 0                  ; the picture at it, pixels and rows
 vp_lph:       dw 0
 vp_lbw:       dw 0                  ; the box: its width and height
 vp_lbh:       dw 0
+vp_lslk:      dw VP_BSLACK          ; the layout's slack and gaps (vp_laynorm,
+vp_lgap:      dw VP_BGAP            ; vp_laycomp)
 vp_lbary:     dw 0                  ; the bar's frame top, the button row's
 vp_lbty:      dw 0
 vp_lcardx:    dw 0                  ; the card's x
