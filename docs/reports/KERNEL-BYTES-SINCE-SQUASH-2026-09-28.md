@@ -16,37 +16,37 @@ It is the fifth of its family, after
 none of them. It is taken to open the next `elendilon -> main` PR, so the
 question is the PR's: **what does this squash cost `main`'s kernel?**
 
-**It is taken before the cycle is closed.** Work from the Video Player
-session has still to land on `elendilon`. B below is the branch as it stands;
-if what lands touches a kernel input, the bill moves, and the answer is a new
-report rather than an edit of this one.
+**It was re-taken once before it was sent.** The first measurement stood
+at `7b54c2d2`, before the Video Player session's speaker round had landed;
+that round moved one kernel file by 15 bytes, and the file was revised to
+the tip the PR carries rather than joined by a second report, because
+upstream reads one report per squash. Once sent it is not edited again.
 
 ## The points
 
 | | commit | what it is |
 |---|---|---|
 | **A** | `6212352d` | **the last squash with `main`**: *Elendilon -> Main (Kernel -4.5KB, Word Optimized, Tracker and MogPlug Merged, DOS Bugfixes, Blit1 30% faster, Sound Driver -8 to 10kb ram usage)* (#199), 2026-09-26 |
-| **B** | `7b54c2d2` | `elendilon` at its tip, **+59 commits** over A (48 of them not merges) |
-| **C** | `b6e1a6d6` | upstream `jggonz/os8088` `main` at its tip, **+1 commit** over A: #201 |
-| **D** | `fbe01cf8` | a TRIAL merge of B and C, built for this report and pushed nowhere: what the PR carries |
+| **B** | `2eff69ed` | `elendilon` at its tip, 2026-09-28, **+81 commits** over A: 65 of its own that are not merges, 15 merges, and C |
+| **C** | `b6e1a6d6` | `main` at its tip (synced with upstream `jggonz/os8088`), **+1 commit** over A: #201 |
+| **D** | `201813cb` | `elendilon-pr`, what the PR carries: B plus `main`'s own `CLAUDE.md` and the two lines this round adds to it |
 
-**A→B is the branch's own arm, A→C is everything `main` did, and A→D is the
-bill.** `git merge-base` of B and C is A, so the arms share no commit and
-there is no overlap to discount. The fork's own `origin/main` is still at A;
-C was fetched from upstream, which is one squash ahead of it.
+**A→C is everything `main` did, A→B is the branch's arm with C merged into
+it, and A→D is the bill.** C touches no kernel input (below), so B's kernel is
+the branch's own arm to the byte, and D is B's kernel to the byte: the PR tip
+differs from B only in `CLAUDE.md`.
 
-**D does not merge cleanly, and neither conflict is a kernel input.** The
-trial merge stops in `SPEC.md` and `docs/INDEX.md`, and the reason is below
-(*A section-number collision*). For the measurement D takes `elendilon`'s
-side of those two files; `git diff B D -- kernel apps/os88ui.inc boot` is
-empty, so the resolution cannot move a kernel byte either way.
+**C came in through a merge with two conflicts, neither a kernel input.**
+`SPEC.md` and `docs/INDEX.md`, for the reason under *A section-number
+collision* below. `2ee4ebec` resolved them, and against its first parent it
+changes no file under `kernel/` or `boot/` and not `apps/os88ui.inc`.
 
 **The build number contributes nothing to any delta here.** `BUILD_STR` is
-the commit count (SPEC.md 14.2), and the four counts are 166, 225, 167 and
-227: three digits everywhere.
+the commit count (SPEC.md 14.2), and the four counts are 166, 247, 167 and
+250: three digits everywhere.
 
 **`associco.inc` is byte-identical at all four points** (`676544b2...`), on
-both kernels, and at every one of the 64 intermediate points measured below.
+both kernels, and at every intermediate point measured below.
 It is the one generated include a PACKAGE commit could move a kernel byte
 through (it is built from Paint's, Note Pad's, Tracker's, Artful's and the
 DOS box's icons). `font8x8.inc` is generated only under the `FONT=` knob and
@@ -61,18 +61,18 @@ points.** Nothing below is a budget move.
 
 | section | A base | B elendilon | C main | D merged | **B−A** | **C−A** | **D−A** |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `.text` | 47,383 | 47,767 | 47,383 | 47,767 | **+384** | **0** | **+384** |
+| `.text` | 47,383 | 47,782 | 47,383 | 47,782 | **+399** | **0** | **+399** |
 | `.bss` | 5,525 | 5,545 | 5,525 | 5,545 | **+20** | **0** | **+20** |
 | `.cold` | 40,447 | 40,831 | 40,447 | 40,831 | **+384** | **0** | **+384** |
 | `.ovl` | 1,837 | 1,837 | 1,837 | 1,837 | 0 | 0 | 0 |
 | `.ovlw` | 5,104 | 5,105 | 5,104 | 5,105 | +1 | 0 | +1 |
 | `.lowbss` | 6,366 | 6,366 | 6,366 | 6,366 | 0 | 0 | 0 |
 | `.vgabuf` | 336 | 336 | 336 | 336 | 0 | 0 | 0 |
-| **sum** | | | | | **+789** | **0** | **+789** |
+| **sum** | | | | | **+804** | **0** | **+804** |
 | **`KERN_SIZE`** | 105,984 | 107,008 | 105,984 | 107,008 | **+1,024** | **0** | **+1,024** |
 | spare of `KERN_BUDGET` | 23,552 | 22,528 | 23,552 | 22,528 | | | |
 
-**+788 resident** (`.text`, `.bss`, `.cold`, `.lowbss`, `.vgabuf`) and +1
+**+803 resident** (`.text`, `.bss`, `.cold`, `.lowbss`, `.vgabuf`) and +1
 overlay. **Two rungs crossed**: the image rung once and the cold rung once.
 A is exactly the previous report's endpoint (105,984), so the two files
 chain.
@@ -101,8 +101,8 @@ whoever is next, and the heap figure did not move.
 ## `main`'s arm: zero, measured
 
 **#201 costs the kernel NOTHING, on both kernels, in every section and every
-module row of `kernsize --modules`.** C is A to the byte and D is B to the
-byte.
+module row of `kernsize --modules`.** C is A to the byte, and B, which has C
+merged into it, is its own arm to the byte.
 
 | commit | what it touched | kernel bytes |
 |---|---|---:|
@@ -119,13 +119,13 @@ both kernels.
 ## Our arm, by concept
 
 **The attribution is exact, not apportioned.** Every non-merge commit in
-A..B, all 48 of them, was measured against its own first parent on both
-kernels, 55 distinct points each in a clean worktree. 11 move a byte.
+A..B that is not #201, all 65 of them, was measured against its own first
+parent on both kernels, each point in a clean worktree. 12 move a byte.
 **The brackets sum to the A→B total in every section on both kernels with
 one residual, and it is explained to the byte**: +6 of overlay, because the
 same change (*"`sched_init` zeroes `[ticks]` again"*, `b6410f33` and
 `7e558089`) was made on two branches and the merge carries it once. The
-arm's 11 merges contributed no byte of their own.
+arm's 15 merges contributed no byte of their own.
 
 ### Two of the commits are squashes, and were taken apart
 
@@ -175,8 +175,9 @@ On `kern_small`, `snd.inc` +5 and the API table +6.
 | **Disk window sizes**: K past 10KB and M past 10MB (+73), with two decimals (+39), both `kern_big` only | `5e1b8203` `5c12c7a0` | **+112** | 0 | 0 | 0 |
 | a paid refresh debt no longer leaves the Disk window stale | `ddaddc63` | +4 | 0 | +4 | 0 |
 | `sched_init` zeroes `[ticks]` again (boot overlay only; counted once, see above) | `b6410f33` = `7e558089` | 0 | +6 | 0 | +6 |
+| **the PC speaker's pulse floor by CPU tier**: 22 kHz on a 286, the speaker door's pulse floor lowered only when `[cpu_tier]` is past `CPU_8086` (SPEC.md 34.11.8) | `dcace0ac` | **+15** | 0 | 0 | 0 |
 | kernel-touching and measured at 0: a harness-matching fix | `6ac6a8ae` | 0 | 0 | 0 | 0 |
-| **added** | | **+1,730** | **+6** | **+100** | **+6** |
+| **added** | | **+1,745** | **+6** | **+100** | **+6** |
 
 ### What it removed
 
@@ -191,15 +192,15 @@ On `kern_small`, `snd.inc` +5 and the API table +6.
 
 | | `kern_big` resident | overlay | `kern_small` resident | overlay |
 |---|---:|---:|---:|---:|
-| added | +1,730 | +6 | +100 | +6 |
+| added | +1,745 | +6 | +100 | +6 |
 | removed | −942 | −5 | −395 | −6 |
-| **net** | **+788** | **+1** | **−295** | **0** |
+| **net** | **+803** | **+1** | **−295** | **0** |
 
 **The two kernels went opposite ways, and for one reason.** Almost everything
 this cycle added is `kern_big`-only by design: the Video Player's fullscreen
 and speaker paths, `OS88_BIGVOL`, the Disk window's byte-exact sizes and the
 window-clip fix are all `%ifdef`'d off the floor machine (SPEC.md 39.27.4's
-diet), which took **100 bytes** of the 1,730. Pass 5 took 377 out of it
+diet), which took **100 bytes** of the 1,745. Pass 5 took 377 out of it
 regardless, so `kern_small` came out smaller.
 
 **Rungs do not add, and this cycle shows it.** The brackets' `KERN_SIZE`
@@ -212,9 +213,10 @@ crossed from its own parent, and together they needed two rungs, not three.
 Pass 5 reached the old line's work (its §1 is the per-topic account: video
 37%, associations 36%, gfx 9% under a hot-path rule). **What landed after it
 has not had one**: `5e88d453` +430, `dd89dfc9` +259, `5e1b8203` +73,
-`5c12c7a0` +39, `74258a5d` +31 and `ddaddc63` +4, **836 bytes of `kern_big`
-and 23 of `kern_small`**, all committed 2026-09-27 and 2026-09-28. Against
-the 50% target pass 5 was briefed with, that is ~420 bytes still owed on
+`5c12c7a0` +39, `74258a5d` +31, `dcace0ac` +15 and `ddaddc63` +4, **851
+bytes of `kern_big` and 23 of `kern_small`**, all committed 2026-09-27 and
+2026-09-28. Against the 50% target pass 5 was briefed with, that is ~425
+bytes still owed on
 `kern_big`, which is less than the rung either crossing cost and more than
 the cold rung has left (below).
 
@@ -246,7 +248,7 @@ build.
 
 | file | `kern_big` | `kern_small` |
 |---|---|---|
-| `snd.inc` | +256 / 0 / +6 | +2 / 0 / 0 |
+| `snd.inc` | +271 / 0 / +6 | +2 / 0 / 0 |
 | `vga12.inc` | +41 / +251 / +2 | −3 / −8 / 0 |
 | `diskw.inc` | 0 / +150 / −2 | 0 / −65 / −4 |
 | `disk.inc` | +20 / +107 / +2 | 0 / −48 / 0 |
@@ -278,11 +280,11 @@ only topic to clear 50% on its own file.
 | `KERN_SIZE` at the PR tip (D) | **107,008** | **71,168** |
 | **change** | **+1,024** (two rungs) | **0** |
 | of which `main`'s own arm | **0** | **0** |
-| resident bytes, net | **+788** | **−295** |
+| resident bytes, net | **+803** | **−295** |
 | overlay bytes, net | +1 | 0 |
 | heap a machine gives up | **1,024** | **0** |
 | spare of the budget | 23,552 → **22,528** (46 → 44 steps) | 36,352 → **36,352** (71 steps) |
-| `.text`+`.bss` of `KERN_CODE_MAX` (65,536) | 52,908 → **53,312**: 12,628 → **12,224 left** | 39,177 → **39,055**: 26,359 → **26,481 left** |
+| `.text`+`.bss` of `KERN_CODE_MAX` (65,536) | 52,908 → **53,327**: 12,628 → **12,209 left** | 39,177 → **39,055**: 26,359 → **26,481 left** |
 
 **How close B stands to the next rung**, which is what the next addition is
 billed against even though it is not what this cycle cost:
@@ -290,7 +292,7 @@ billed against even though it is not what this cycle cost:
 | | image rung (`.text`+`.bss`) | cold rung | low rung |
 |---|---:|---:|---:|
 | `kern_big` at A | 340 left | **1 left** | 290 left |
-| `kern_big` at B | 448 left | **129 left** | 290 left |
+| `kern_big` at B | 433 left | **129 left** | 290 left |
 | `kern_small` at B | 369 left | 212 left | 460 left |
 
 A stood **one byte** from the cold rung's edge, so the cold rung was always
@@ -300,44 +302,45 @@ going to be the first thing any `.cold` addition crossed. B has 129.
 
 - **`main`** spent **nothing** on either kernel. Gorillas is a 14,261-byte
   package on the games disk.
-- **We** added **1,730 resident bytes on `kern_big` and 100 on `kern_small`**:
-  the Video Player's kernel side in two waves (960 of it), FAT16 volumes past
-  32MB, the window-clip fix for `gfx_blit1` and `font_run`, association
-  search, and the Disk window's sizes. Kernel size pass 5 took **926 and 377**
+- **We** added **1,745 resident bytes on `kern_big` and 100 on `kern_small`**:
+  the Video Player's kernel side in two waves (960 of it) and the speaker's
+  pulse floor on a 286 (15), FAT16 volumes past 32MB, the window-clip fix
+  for `gfx_blit1` and `font_run`, association search, and the Disk window's
+  sizes. Kernel size pass 5 took **926 and 377**
   back out.
 - **Together**, the PR tip is **1,024 bytes and two rungs larger than the
   #199 squash on `kern_big`** and **exactly the same size on `kern_small`,
   which is 295 bytes smaller inside its rungs**. After two squashes that could, this
-  one cannot say *both kernels smaller*. Of the 836 `kern_big` bytes
+  one cannot say *both kernels smaller*. Of the 851 `kern_big` bytes
   no pass has reached, the Video Player's second squash is half.
 
 ## Found on the way
 
-- **A section-number collision, which is what the trial merge stopped on.**
-  Upstream #201 published Gorillas as **SPEC.md 98**; `elendilon`'s §98 is
-  the Video Player (SPEC.md 98, `apps/video/`), cited as SPEC.md 98 from 43
-  files of `apps/`, `tests/`, `tools/`, `drivers/` and `kernel/` on
-  `elendilon`, where #201's Gorillas cites its §98 from its own source,
-  README, Makefile rule and suite rows. Each side
-  cites its own §98 from code, so a textual resolution of `SPEC.md` alone
-  would leave one of the two packages pointing at the other's section.
-  One of the two has to be renumbered before the PR can merge, and that is
-  a decision for the owner, not a merge detail. It moves no kernel byte
-  either way.
+- **A section-number collision, and the renumber that settled it.**
+  #201 published Gorillas as **SPEC.md 98**, and `elendilon`'s §98 is the
+  Video Player (`apps/video/`), cited as SPEC.md 98 from 43 files of
+  `apps/`, `tests/`, `tools/`, `drivers/` and `kernel/`. Each side cites its
+  own §98 from code, so a textual resolution of `SPEC.md` alone would have
+  left one package pointing at the other's section. **Gorillas is §99 in
+  this PR**, by the owner's choice of the smaller side: its section's six
+  headings and one "98's", its source header, README link, `gorillas_art.py`,
+  Makefile comment, PERFORMANCE.md row and six suite rows (`2ee4ebec`). It
+  moves no kernel byte.
 - **The same fix, twice.** `b6410f33` and `7e558089` both restore
   `sched_init`'s zeroing of `[ticks]` (+6 bytes of the boot overlay each);
   the merge keeps one copy, which is why the brackets over-count the overlay
   by exactly six.
 - **Every commit message that quotes a figure agrees with its bracket**:
   `dd89dfc9` (kern_big +259, kern_small −3), `b723db53` (−3), `74258a5d`
-  (+31), `5e1b8203` (+73), `ddaddc63` (+4), `5c12c7a0` (16 of `.bss`, with
-  +23 of `.cold` beside it), and both `[ticks]` commits (+6 of `.ovlw`).
+  (+31), `5e1b8203` (+73), `ddaddc63` (+4), `dcace0ac` (+15 of `.text`,
+  `kern_small` +0), `5c12c7a0` (16 of `.bss`, with +23 of `.cold` beside it),
+  and both `[ticks]` commits (+6 of `.ovlw`).
   Pass 5's record agrees too, above.
 
 ## Appendix: every kernel-moving commit, against its own first parent
 
 *Resident* is `.text` + `.bss` + `.cold` + `.lowbss` + `.vgabuf`; *overlay*
-is `.ovl` + `.ovlw`. The other 37 non-merge commits in A..B measure 0 in
+is `.ovl` + `.ovlw`. The other 53 non-merge commits in A..B measure 0 in
 every section on both kernels. The resident columns sum to the headline
 tables exactly; the overlay column over-counts by the duplicate +6; the
 `KERN_SIZE` column does not sum, which is the point made above.
@@ -355,6 +358,7 @@ tables exactly; the overlay column over-counts by the duplicate +6; the
 | `dd89dfc9` | Volumes past 32MB, to FAT16's own 2GB ceiling (SPEC.md 18.7.5, 52.3.1) | +2 | +10 | +247 | 0 | **+259** | +512 | **−3** | 0 | 0 |
 | `5e1b8203` | Disk window sizes in K past 10KB and M past 10MB (SPEC.md 22.7.1) | 0 | 0 | +73 | 0 | **+73** | 0 | **0** | 0 | 0 |
 | `5c12c7a0` | Disk window sizes with two decimals: 113.37K, 40.00M (SPEC.md 22.7.1) | 0 | +16 | +23 | 0 | **+39** | 0 | **0** | 0 | 0 |
+| `dcace0ac` | Speaker: 22 kHz on a 286 - the door's pulse floor by CPU tier (SPEC.md 34.11.8) | +15 | 0 | 0 | 0 | **+15** | 0 | **0** | 0 | 0 |
 
 **And the old line inside `927c5aab`**, `8f5dafe9` → `dfbe2b3b`, the nine
 commits that touch a kernel input, against their own first parents:
