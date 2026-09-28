@@ -13,6 +13,10 @@ n_palette:
     out dx,al
     inc dx
     mov si,n_dac
+    cmp word [n_stage],29
+    jb .normalpal
+    mov si,n_latedac
+.normalpal:
     mov cx,N_COLORS*3
 .loop:
     lodsb
@@ -97,8 +101,22 @@ n_loadgfx:
     mov bp,N_C_SUM
 .read:
     call n_readbank
+    jc .out
+    mov es,[n_graphics2]
+    mov si,n_vxfile
+    mov cx,N_VX_SIZE
+    mov bp,N_VX_SUM
+    cmp byte [n_cga],0
+    je .extra
+    mov si,n_cxfile
+    mov cx,N_CX_SIZE
+    mov bp,N_CX_SUM
+.extra:
+    call n_readbank
 .out:
     ret
+n_vxfile: db '1942VX.GFX',0
+n_cxfile: db '1942CX.GFX',0
 n_lfile: db '1942L.GFX',0
 n_vfile: db '1942V.GFX',0
 n_cfile: db '1942C.GFX',0
@@ -290,6 +308,12 @@ n_sprite:
     and cx,0fffeh
 .position:
     mov es,[n_graphics]
+    cmp bx,N_SPRITE_SPLIT*2
+    jb .bankselected
+    sub bx,N_SPRITE_SPLIT*2
+    mov es,[n_graphics2]
+.bankselected:
+    mov [n_spriteseg],es
     mov si,[es:bx+8]
     xor bx,bx
     mov bl,[es:si]
@@ -323,7 +347,7 @@ n_sprite:
     cmp word [n_cacheptr],0
     jne .cached
     mov es,[n_fsi+FSI_SEG]
-    mov ds,[n_graphics]
+    mov ds,[n_spriteseg]
     mov word [cs:n_plane],0
 .plane:
     mov bx,[cs:n_plane]
@@ -413,7 +437,7 @@ n_sprite:
     mov es,[n_canvas]
     test byte [n_compiled],128
     jnz .compiled
-    mov ds,[n_graphics]
+    mov ds,[n_spriteseg]
 .crun:
     lodsw
     cmp ax,0ffffh
@@ -436,7 +460,7 @@ n_sprite:
     jmp .crun
 .compiled:
     mov [n_blitptr],si
-    mov ax,[n_graphics]
+    mov ax,[n_spriteseg]
     mov [n_blitptr+2],ax
     mov di,[n_vorigin]
     call far [n_blitptr]
@@ -559,6 +583,7 @@ n_restore:
     ret
 %unmacro N_RESTORE_ADVANCE 0
 n_fullrect: dw 0,80,240
+n_playrect: dw 16*80+8,64,224
 n_cfullrect: dw 0,80,200
 n_hudrect: dw 8,64,16
 n_chudrect: dw 0,80,14
@@ -599,7 +624,12 @@ n_clear:
     ret
 n_erase:
     SAVE
+    cmp word [n_flightphase],0
+    jne .noscroll
+    cmp byte [n_bosslive],0
+    jne .noscroll
     call n_scrollstep
+.noscroll:
     mov byte [n_damagevalid],0
     cmp byte [n_cga],0
     jne .cga
@@ -638,12 +668,21 @@ n_erase:
     mov [n_vbases+bx],ax
     mov [n_drawbase],ax
     mov word [n_counts+bx],0
-    mov si,n_fullrect
+    ; The side gutters stay black from mode setup. Rebase only the actual
+    ; playfield and HUD, avoiding 3,840 needless VGA latch reads/writes.
+    mov si,n_playrect
+    call n_restore
+    mov si,n_hudrect
     call n_restore
     jmp .done
 .cga:
     ; MC6845 start address scrolls both 8KB banks by one pair of scanlines.
     ; This moves every visible terrain pixel without copying the playfield.
+    mov word [n_shift],0
+    cmp word [n_flightphase],0
+    jne .list
+    cmp byte [n_bosslive],0
+    jne .list
     sub word [n_cgastart],80
     and word [n_cgastart],1fffh
     mov word [n_shift],160

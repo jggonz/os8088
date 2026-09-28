@@ -149035,7 +149035,7 @@ text. These are emulator cycle measurements, not hardware measurements.
 
 A standalone native game. `make 1942disk` builds 360KB and 1.44MB game
 floppies. With a local `1942.nes`, or `N1942_ROM=/path/to/1942.nes`, the host
-imports cartridge aircraft and terrain; `N1942_ROM=` selects the committed
+imports cartridge aircraft, terrain, encounter tables and note streams; `N1942_ROM=` selects the committed
 original artwork. Normal builds need NASM and Python's standard library.
 The cartridge and extracted assets are local inputs/outputs, never committed
 or downloaded. This is a native remake, not an NES emulator: movement,
@@ -149078,7 +149078,7 @@ VGA keeps its terrain ring in offscreen video RAM after the two display
 pages, followed by the sprite cache. The original-art build scrolls a cyclic
 native backdrop through the same display paths.
 
-Two instance-owned 64KB claims hold sprites and terrain/canvas data; the
+Three instance-owned 64KB claims hold two sprite banks and terrain/canvas data; the
 loader releases them. The XT target remains 640KB RAM. Enter/F enters or
 resumes the FSX bracket; Escape/F restores the desktop. An executable-resident
 bitmap says `1942  LOADING GRAPHICS` before the first disk read, including
@@ -149087,7 +149087,8 @@ Missing or invalid graphics return to the launcher with an error.
 
 ### 99.2 Graphics files
 
-`1942V.GFX` / `1942C.GFX`: magic `N42V` / `N42C`, word total length,
+`1942V.GFX` / `1942C.GFX` and their `1942VX.GFX` / `1942CX.GFX`
+continuation banks: magic `N42V` / `N42C`, word total length,
 word sprite count, then word record offsets. Records contain width/height
 bytes and four word stream offsets. VGA streams represent planes; CGA
 streams represent horizontal phases. Width bit 7 identifies compiled CGA
@@ -149132,17 +149133,24 @@ rebuilds the matching package and disks.
 ### 99.3 Gameplay and validation
 
 Arrows move; Space/Z fires; X rolls; P pauses; M toggles sound; C selects
-CGA colors; N starts again. Three lives, weapon pickups, 32 stages, bosses
-every fourth stage. Normal waves include seven enemy kinds: fighters,
-orange pickup aircraft, fast interceptors, scouts, divers, medium bombers
-and heavy bombers. Their speed, weave and hit points differ. Cartridge
-builds use distinct aircraft assemblies and a banking fighter frame; original
-builds reuse the available original aircraft art for the added behaviors.
+CGA colors; N starts again. Keyboard 1/2 selects player count at the title.
+There are three initial lives and three rolls per stage. The 32 stages use
+scripted formations, small-plane maneuvers and bomber paths. Complete orange
+formations award a weapon upgrade, screen clear, wingmen, extra roll or extra
+life. Wingmen fire and absorb bullet/contact hits independently. A secret
+plane appears after 200 kills, then every 150, dropping a 5,000-point reward.
+
+Carrier takeoff and landing bracket combat. Results award the cartridge's
+shooting-percentage bonus (500 at 50% up to 100,000 at 100%) and 1,000 per
+unused roll. Extra lives are awarded at 20,000, 80,000 and each further 80,000.
+Scores use 32-bit accumulation; the instance high score appears on the title.
 Collision extents and horizontal bounds follow each kind's sprite dimensions.
 
 `make 1942test` exercises both adapters on pinned 4.77MHz MartyPC models:
-pre-I/O loading pixels, controls, collisions, roll/grace, pickups, natural
-spawning, all aircraft kinds, bosses, victory, scenery/route transitions,
+pre-I/O loading pixels, controls, collisions, roll/grace, all POWs, formation
+completion/escape controls, results bonus boundaries, extra lives, two-player
+turns, sound controls, natural spawning, all aircraft kinds, bosses, victory,
+scenery/route transitions,
 ring wrapping, pause/resume, palette cycling, full-refresh equivalence and
 missing/damaged file rejection. The independent terrain reference reads
 CHR, metatiles and route bytes directly from the local cartridge rather than
@@ -149152,5 +149160,41 @@ and pacing; loading is outside combat timing. Emulator results do not imply
 physical-hardware rates.
 
 The crowded-combat regression retains a 5fps minimum, including the slowest
-measured frame. Re-run the emulator gate after renderer changes; host asset
+measured frame. The expanded cartridge build measured 6.66fps average /
+5.97fps slowest on VGA and 5.64 / 5.40 on CGA with twelve planes, sixteen
+enemy bullets, sixteen player shots and four explosions. These are emulator
+guest-cycle measurements. Re-run the emulator gate after renderer changes; host asset
 checks alone do not establish frame rate or correct hardware scanout.
+
+### 99.4 Cartridge gameplay expansion
+
+The native engine uses build-time decoded stage events from $E26F and wave
+records from $EB19. Events are triggered by logical route distance, with a
+bounded twelve-entry wave scheduler. Complete orange formations earn typed
+POWs; escaped members invalidate their reward. The native movement interpreter
+uses cartridge waypoints and small-plane entry tables at $F3EC/$F12E/$F550,
+with dive/reversal, sweep and crossing maneuvers and aimed firing implemented
+in 8086. No 6502 interpreter is shipped. Timing is adapted to the host frame
+rate and is not a claim of cycle-level NES equivalence.
+
+Stage flow includes takeoff, combat, landing, percentage/roll results and
+completion. The large boss encounters occur on played stages 7,15,23,31.
+Their aircraft is terrain page 2, with a 144x96 collision body and three firing positions.
+Scrolling holds during the encounter; destruction rebuilds the cache using
+sea in place of the boss page.
+Two-player games alternate on death, retaining each player's score, lives,
+weapon, stage and extend state. A returning player restarts their stage.
+Keyboard 1/2 selects player count at the title; Enter starts or advances
+results. High scores last for the instance.
+
+Cartridge sprites include loop frames, directional aircraft, wingmen, POWs,
+projectiles and NES glyphs. Common sprites retain the compiled/latch fast
+paths; uncommon animation frames use bounded sprite streams. Rebase copies
+exclude the static VGA gutters; the HUD and playfield are restored separately.
+The frame loop yields to FSXW_FRAME only when the BIOS tick has not changed
+during the iteration, so a busy frame does not incur another pacing delay.
+Music/effect note streams are decoded at build time from $A413 and reduced to the speaker
+through SND_TONE. NES multichannel timbre cannot be reproduced by one speaker.
+Both palette sets at $A770/$A790 are available for the cartridge's final area.
+Original-art builds implement the same game rules using original fallback
+assets and native schedules. No extracted cartridge content is committed.

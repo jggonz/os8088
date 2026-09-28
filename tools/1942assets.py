@@ -10,7 +10,8 @@ ROOT=Path(__file__).resolve().parents[1]
 ART=ROOT/'apps/1942/art'
 
 def accelerated(s):
-    return not s['name'].startswith('font') and s['name'] not in ('carrier','ship','island')
+    if s['name'] in ('dir28_3','dir28_4','dir28_5','dir28_11','dir28_12','dir28_13'):return True
+    return not s['name'].startswith(('font','dir','loop','pow','title')) and s['name'] not in ('carrier','ship','island','wing','roll')
 
 def sources(rom=None):
     pal=json.loads((ART.parent/'palette.json').read_text())
@@ -23,6 +24,20 @@ def sources(rom=None):
         spec=importlib.util.spec_from_file_location('nes1942',ROOT/'tools/1942nes.py')
         mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
         sprites,pal,world=mod.import_art(rom,sprites,pal)
+    if not rom:
+        byname={s['name']:s for s in sprites}
+        sprites.append(dict(byname['scout'],name='secret'))
+        sprites.append(dict(byname['pick'],name='bonus'))
+        for base,source in [(0x10,'elite'),(0x28,'enemy'),(0x40,'scout')]:
+            for i in range(8,16):sprites.append(dict(byname[source],name='dir%02x_%d'%(base,i)))
+        for i in range(7):sprites.append(dict(byname['roll'],name='loop%d'%i))
+        sprites.append(dict(byname['player'],name='wing',w=12,h=12,
+                            pixels=bytes(bytes.fromhex(byname['player']['pixels'])[y*2*24+x*2] for y in range(12) for x in range(12)).hex()))
+        for i in range(5):sprites.append(dict(byname['pick'],name='pow%d'%i))
+        for base,source in [(0x10,'elite'),(0x28,'enemy'),(0x40,'scout'),(0x50,'blue'),(0x60,'diver')]:
+            for i in range(8):sprites.append(dict(byname[source],name='dir%02x_%d'%(base,i)))
+        for i in range(4):sprites.append(dict(name='title%d'%i,w=1,h=1,pixels='00'))
+        pal['late_rgb']=pal['rgb']
     return sprites,pal,world
 def word(n):return struct.pack('<H',n)
 def checksum(data):return sum(data)&65535
@@ -179,6 +194,16 @@ def build(out,rom=None):
     sprites,pal,world=sources(rom);validate(pal,sprites)
     out.mkdir(parents=True,exist_ok=True)
     inc=['; Generated adapter-native graphics.', 'N_ROM equ %d'%bool(world)]
+    spec=importlib.util.spec_from_file_location('data1942',ROOT/'tools/1942data.py')
+    data=importlib.util.module_from_spec(spec);spec.loader.exec_module(data)
+    if rom:
+        spec=importlib.util.spec_from_file_location('nes1942',ROOT/'tools/1942nes.py')
+        nes=importlib.util.module_from_spec(spec);spec.loader.exec_module(nes)
+        cart=nes.Cartridge(rom);campaign,audio=data.campaign(cart),data.sounds(cart)
+    else:campaign,audio=data.fallback()
+    inc+=data.assembly(campaign,audio)
+    write(out/'1942-campaign.json',(json.dumps(campaign)+'\n').encode())
+    write(out/'1942-audio.json',(json.dumps(audio)+'\n').encode())
     # An executable-resident bitmap is available before the first file read.
     font={s['name']:s for s in sprites}
     loading='1942  LOADING GRAPHICS'
@@ -188,11 +213,11 @@ def build(out,rom=None):
         bits=[sum((1<<(7-x)) for x,v in enumerate(r) if v) for r in row]
         inc.append('    db '+','.join(map(str,bits)))
     inc.append('N_LOAD_WIDTH equ %d'%len(loading))
-    inc.append('n_enemyarts: dw n_enemyart,n_eliteart,n_bossart,n_blueart,n_scoutart,n_diverart,n_bomberart,n_heavyart')
-    enemy_names=['enemy','elite','boss','blue','scout','diver','bomber','heavy']
+    inc.append('n_enemyarts: dw n_enemyart,n_eliteart,n_bossart,n_blueart,n_scoutart,n_diverart,n_bomberart,n_heavyart,n_secretart')
+    enemy_names=['enemy','elite','boss','blue','scout','diver','bomber','heavy','secret']
     byname={s['name']:s for s in sprites}
-    inc.append('n_enemywidths: dw '+','.join(str(byname[n]['w']) for n in enemy_names))
-    inc.append('n_enemyheights: dw '+','.join(str(byname[n]['h']) for n in enemy_names))
+    inc.append('n_enemywidths: dw '+','.join(str(144 if world and n=='boss' else byname[n]['w']) for n in enemy_names))
+    inc.append('n_enemyheights: dw '+','.join(str(96 if world and n=='boss' else byname[n]['h']) for n in enemy_names))
     write(out/'1942-sprites.json',(json.dumps(sprites)+'\n').encode())
     write(out/'1942-palette.json',(json.dumps(pal)+'\n').encode())
     if world:
@@ -220,13 +245,18 @@ def build(out,rom=None):
         inc.append(name+':')
         for i in range(0,len(data),16):inc.append('    db '+','.join(map(str,data[i:i+16])))
     emit('n_dac',[v*63//255 for c in pal['rgb'] for v in c]);inc.append('N_COLORS equ %d'%len(pal['rgb']))
-    emit('n_cgainks',pal['cga_map'])
+    emit('n_latedac',[v*63//255 for c in pal['late_rgb'] for v in c]);emit('n_cgainks',pal['cga_map'])
     emit('n_cgaregs',[p['register'] for p in pal['cga']])
     cached,commands=vga_cache(sprites);inc+=commands
     write(out/'1942L.GFX',cached)
     inc+=['N_L_SIZE equ %d'%len(cached),'N_L_SUM equ %d'%checksum(cached)]
     for cga in (False,True):
-        tag='C' if cga else 'V';data=bank(sprites,pal,cga);write(out/('1942%s.GFX'%tag),data)
+        tag='C' if cga else 'V'
+        split=next(i for i,s in enumerate(sprites) if s['name']=='loop0')
+        if not cga:inc.append('N_SPRITE_SPLIT equ %d'%split)
+        extra=bank(sprites[split:],pal,cga);write(out/('1942%sX.GFX'%tag),extra)
+        inc+=['N_%sX_SIZE equ %d'%(tag,len(extra)),'N_%sX_SUM equ %d'%(tag,checksum(extra))]
+        data=bank(sprites[:split],pal,cga);write(out/('1942%s.GFX'%tag),data)
         inc+=['N_%s_SIZE equ %d'%(tag,len(data)),'N_%s_SUM equ %d'%(tag,checksum(data))]
         for name in (() if world else ('SEA','REEF','PORT')):
             data=scene((ART/(name.lower()+'.idx')).read_bytes(),pal,cga);write(out/(name+'.'+tag+'42'),data)

@@ -11853,7 +11853,7 @@ ALLAPPSIMG120 := $(BUILD)/apps-all-120.img
 # A local cartridge is optional; extracted files stay in the build directory.
 N1942_ROM ?= $(wildcard 1942.nes)
 N1942SCENES = $(if $(strip $(N1942_ROM)),WORLD.V42 WORLD.C42,SEA.V42 REEF.V42 PORT.V42 SEA.C42 REEF.C42 PORT.C42)
-N1942LIVE := $(BUILD)/1942.o88 $(addprefix $(BUILD)/,1942V.GFX 1942C.GFX 1942L.GFX $(N1942SCENES))
+N1942LIVE := $(BUILD)/1942.o88 $(addprefix $(BUILD)/,1942V.GFX 1942C.GFX 1942VX.GFX 1942CX.GFX 1942L.GFX $(N1942SCENES))
 ALLAPPSFILES := $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
@@ -13327,12 +13327,12 @@ N1942DISK = $(BUILD)/1942.o88 $(N1942BANKS)
 n1942-config: | $(BUILD)
 	@python3 -c 'from pathlib import Path; p=Path("$(BUILD)/.1942source"); s="$(N1942_ROM)"; p.write_text(s) if not p.exists() or p.read_text()!=s else None'
 $(BUILD)/.1942source: n1942-config
-$(BUILD)/.1942assets: $(N1942ART) tools/1942assets.py tools/1942nes.py $(N1942_ROM) $(BUILD)/.1942source | $(BUILD)
+$(BUILD)/.1942assets: $(N1942ART) tools/1942assets.py tools/1942nes.py tools/1942data.py $(N1942_ROM) $(BUILD)/.1942source | $(BUILD)
 	python3 tools/1942assets.py -o $(BUILD) $(if $(N1942_ROM),--rom "$(N1942_ROM)")
 	@touch $@
 $(BUILD)/1942art.inc $(N1942BANKS): $(BUILD)/.1942assets
 	@test -f $@ || python3 tools/1942assets.py -o $(BUILD) $(if $(N1942_ROM),--rom "$(N1942_ROM)")
-$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/game.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc
+$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/game.inc apps/1942/campaign.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/1942/ -I $(BUILD)/ -l $(BUILD)/1942.lst -o $@ $<
 $(BUILD)/1942.o88: $(BUILD)/1942.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@

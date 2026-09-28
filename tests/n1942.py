@@ -43,35 +43,39 @@ def assets():
         except ValueError:pass
         else:raise AssertionError('bad palette accepted')
     for cga in (False,True):
-        bank=mod.bank(sprites,pal,cga)
+        split=next(i for i,s in enumerate(sprites) if s['name']=='loop0')
+        bank=mod.bank(sprites[:split],pal,cga)
+        extra=mod.bank(sprites[split:],pal,cga)
+        assert len(extra)<65536
         assert len(bank)<65536 and struct.unpack_from('<H',bank,4)[0]==len(bank)
-        for i,sprite in enumerate(sprites):
-            record=struct.unpack_from('<H',bank,8+i*2)[0]
-            for phase in range(4):
-                stream=struct.unpack_from('<H',bank,record+2+phase*2)[0]
-                touched=set()
-                if cga and bank[record]&128:
-                    while bank[stream]!=0xcb:
-                        assert bank[stream]==0x26
-                        op,modrm=bank[stream+1:stream+3]
-                        assert (op,modrm) in ((0xc6,0x85),(0xc7,0x85),(0x80,0xa5),(0x80,0x8d),(0x81,0xa5),(0x81,0x8d))
-                        size=2 if op in (0xc7,0x81) else 1
-                        off=struct.unpack_from('<H',bank,stream+3)[0]
-                        assert off//80<sprite['h'] and off%80+size<=21
-                        stream+=5+size
-                    continue
-                while True:
-                    off=struct.unpack_from('<H',bank,stream)[0];stream+=2
-                    if off==65535:break
-                    n=bank[stream];stream+=1
-                    assert n>0 and off//80<sprite['h'] and off%80+n<=21
-                    assert not touched.intersection(range(off,off+n))
-                    touched.update(range(off,off+n))
-                    if cga:
-                        kind=bank[stream];stream+=1;assert kind in (0,1)
-                        stream+=n*(1+kind)
-                    else:stream+=n
-                    assert stream<=len(bank)
+        for bank,subset in ((bank,sprites[:split]),(extra,sprites[split:])):
+            for i,sprite in enumerate(subset):
+                record=struct.unpack_from('<H',bank,8+i*2)[0]
+                for phase in range(4):
+                    stream=struct.unpack_from('<H',bank,record+2+phase*2)[0]
+                    touched=set()
+                    if cga and bank[record]&128:
+                        while bank[stream]!=0xcb:
+                            assert bank[stream]==0x26
+                            op,modrm=bank[stream+1:stream+3]
+                            assert (op,modrm) in ((0xc6,0x85),(0xc7,0x85),(0x80,0xa5),(0x80,0x8d),(0x81,0xa5),(0x81,0x8d))
+                            size=2 if op in (0xc7,0x81) else 1
+                            off=struct.unpack_from('<H',bank,stream+3)[0]
+                            assert off//80<sprite['h'] and off%80+size<=21
+                            stream+=5+size
+                        continue
+                    while True:
+                        off=struct.unpack_from('<H',bank,stream)[0];stream+=2
+                        if off==65535:break
+                        n=bank[stream];stream+=1
+                        assert n>0 and off//80<sprite['h'] and off%80+n<=21
+                        assert not touched.intersection(range(off,off+n))
+                        touched.update(range(off,off+n))
+                        if cga:
+                            kind=bank[stream];stream+=1;assert kind in (0,1)
+                            stream+=n*(1+kind)
+                        else:stream+=n
+                        assert stream<=len(bank)
     if rom_build():
         spec=importlib.util.spec_from_file_location('nes1942',ROOT/'tools/1942nes.py')
         nes=importlib.util.module_from_spec(spec);spec.loader.exec_module(nes)
@@ -83,6 +87,20 @@ def assets():
                 try:nes.Cartridge(path)
                 except ValueError:pass
                 else:raise AssertionError('unsupported cartridge accepted')
+        campaign=json.loads((ROOT/os88build.at('build/1942-campaign.json')).read_text())
+        def byte(a):return rom[16+a-0x8000]
+        def pointer(a):return byte(a)+256*byte(a+1)
+        assert len(campaign['stages'])==32 and campaign['bosses']==[7,15,23,31]
+        for stage,events in enumerate(campaign['stages'],1):
+            p=pointer(0xe26f+((256-stage*8)&255)//4)
+            expected=[]
+            while any(byte(p+i) for i in range(3)):
+                expected.append([1936-byte(p)*240-byte(p+1),byte(p+2)]);p+=3
+            assert events==expected
+        assert campaign['bonuses'][50]==500 and campaign['bonuses'][100]==100000
+        audio=json.loads((ROOT/os88build.at('build/1942-audio.json')).read_text())
+        assert len(audio)==23 and audio[14]['loop'] and not audio[21]['loop']
+        assert len(audio[14]['notes'])==92
         for tag in ('V','C'):
             world=(ROOT / os88build.at('build/WORLD.'+tag+'42')).read_bytes()
             assert world[:4]==b'N42W' and struct.unpack_from('<H',world,4)[0]==len(world)<=32768
@@ -98,7 +116,7 @@ def assets():
 def symbols():
     source = (ROOT/'apps/1942/1942.asm').read_text()
     names = re.findall(r'^VAR (n_\w+),', source, re.M)
-    code = ['n_vfile','n_cfile','n_scenesums','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw','n_loading','n_readbank','n_spawn']
+    code = ['n_vfile','n_cfile','n_scenesums','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw','n_loading','n_readbank','n_spawn','n_stageinit','n_scripts','n_awardpow','n_results','n_kill','n_addscore','n_depart','n_flightphaseupdate','n_campaignnew','n_turn','n_audio','n_soundtab','n_event','n_highmsg','n_freeslot','n_hitplayer','n_move_bullets','n_stageevents','n_move_enemies','n_move_shots']
     source = source.replace('OS88_IMAGE_END','')
     source += '\n'+'\n'.join('dw '+n+'-os88_image_end' for n in names)
     source += '\n'+'\n'.join('dw '+n for n in code)+'\nOS88_IMAGE_END\n'
@@ -141,17 +159,18 @@ class Game:
         for r,v in saved.items():
             if r in REGS:m.setreg(r,v)
     def fixture(self):
-        for k,size in [('enemies',12*14),('blasts',8*6)]:
+        self.call('n_stageinit')
+        for k,size in [('enemies',12*24),('blasts',8*6)]:
             self.m.write(self.base+self.off['n_'+k],bytes(size))
         for k,size in [('shots',16*4),('bullets',16*8)]:
             self.m.write(self.base+self.off['n_'+k],b'\xff'*size)
         for k,v in dict(px=120,py=208,lives=3,rolls=3,roll=0,grace=0,
                         scorelo=0,scorehi=0,spawnwait=1000,spawned=0,frames=0,
-                        stage=1,weapon=1,fire=0,picky=65535).items():self.put(k,v)
+                        stage=1,weapon=1,fire=0,picky=65535,flightphase=0,distance=0,kills=0,wings=0,players=1,nextlife=400,extended=0,secretkills=0,secretlimit=200).items():self.put(k,v)
         for k,v in dict(state=1,paused=0,bossmade=0,xheld=0).items():self.put(k,v,1)
         self.call('n_refresh')
     def enemy(self,x=100,y=100,hp=1,kind=0):
-        self.m.write(self.base+self.off['n_enemies'],struct.pack('<7H',x,y,0,hp,kind,0,1))
+        self.m.write(self.base+self.off['n_enemies'],struct.pack('<7H',x,y,0,hp,kind,0,1)+bytes(10))
     def shot(self,x=108,y=110):
         self.m.write(self.base+self.off['n_shots'],struct.pack('<2H',x,y))
     def bullet(self):
@@ -211,6 +230,7 @@ def reference(g,tag):
             if sy>=h:sy-=h;page=(page-1)&7
             logical=sy*6//5 if cga else sy
             mapid=read(0x844b+(g.get('scrollstage')-1)*8+page)
+            if mapid==2 and g.get('bossmade',1) and not g.get('bosslive',1):mapid=1
             for x in range(w):
                 sx=x*4//5 if cga else x
                 meta=read(0x854b+mapid*240+(logical//16)*16+sx//16)
@@ -232,7 +252,7 @@ def reference(g,tag):
     frame[:w*(14 if cga else 16)]=bytes([0 if cga else 1])*(w*(14 if cga else 16))
     def draw(name,x,y):
         sprite=byname[name];sw,sh=sprite['w'],sprite['h'];pixels=bytes.fromhex(sprite['pixels'])
-        if not cga and name not in ('carrier','ship','island') and not name.startswith('font'):x &= ~1
+        if not cga and ((name not in ('carrier','ship','island','wing','roll') and not name.startswith(('font','dir','loop','pow','title'))) or name in ('dir28_3','dir28_4','dir28_5','dir28_11','dir28_12','dir28_13')):x &= ~1
         if x<0 or y<0 or x+sw>256 or y+sh>240:return
         if cga:
             x=x*5//4;y=y*5//6;dw=(sw*5+3)//4;dh=(sh*5+5)//6
@@ -247,11 +267,22 @@ def reference(g,tag):
     state=g.get('state',1)
     if state==1:
         for i in range(12):
-            x,y,vx,hp,kind,age,on=struct.unpack('<7H',g.m.read(g.base+g.off['n_enemies']+i*14,14))
-            if on:draw('enemybank' if kind==0 and age&8 else ('enemy','elite','boss','blue','scout','diver','bomber','heavy')[kind],x,y)
+            x,y,vx,hp,kind,age,on,path,etype,group,aux,vy=struct.unpack('<12H',g.m.read(g.base+g.off['n_enemies']+i*24,24))
+            if on and not (rom and kind==2):
+                name=('enemy','elite','boss','blue','scout','diver','bomber','heavy','secret')[kind]
+                if kind<6 and kind!=2:
+                    sx=-1 if vx&32768 else 1 if vx else 0
+                    sy=-1 if vy&32768 else 1 if vy else 0
+                    angle={(-1,-1):7,(0,-1):0,(1,-1):1,(-1,0):6,(0,0):4,(1,0):2,(-1,1):5,(0,1):4,(1,1):3}[sx,sy]
+                    base={1:'10',4:'40',5:'60'}.get(kind,'28')
+                    if base!='60' and age&4:angle+=8
+                    name='dir%s_%d'%(base,angle)
+                draw(name,x,y)
         if not g.get('grace') or not g.get('frames')&2:
-            name='roll' if g.get('roll')&8 else sprites[g.get('bank')]['name']
-            draw(name,g.get('px'),g.get('py'))
+            name='loop%d'%min(6,(48-g.get('roll'))//7) if g.get('roll') else sprites[g.get('bank')]['name']
+            draw(name,max(0,min(224,g.get('px')-4)) if g.get('roll') else g.get('px'),g.get('py'))
+        if g.get('wings')&1:draw('wing',g.get('px')-20,g.get('py')+4)
+        if g.get('wings')&2:draw('wing',g.get('px')+28,g.get('py')+4)
         for key,n,size,name in [('shots',16,4,'shot'),('bullets',16,8,'bullet'),('blasts',8,6,'blast')]:
             for i in range(n):
                 raw=g.m.read(g.base+g.off['n_'+key]+i*size,size);x,y=struct.unpack_from('<2H',raw)
@@ -259,11 +290,27 @@ def reference(g,tag):
                     life=struct.unpack_from('<H',raw,4)[0]
                     if life:draw('blast%d'%((8-life)//2),x,y)
                 else:draw(name,x,y)
-        draw('pick',g.get('pickx'),g.get('picky'))
+        draw('bonus' if g.get('picktype')==5 else 'pow%d'%g.get('picktype'),g.get('pickx'),g.get('picky'))
+        phase=g.get('flightphase')
+        if phase in (1,4):text('PLAYER %d  READY'%(g.get('activeplayer')+1),64,88)
+        if phase==3:
+            text('MISSION RESULTS',56,64)
+            text('DOWNED %03d%%'%g.get('percent'),48,96)
+            text('PERCENT    %06d'%g.get('percentbonus',4),40,112)
+            text('ROLL BONUS %05d'%g.get('rollbonus'),40,128)
+            text('ENTER TO CONTINUE',48,152)
     else:
-        text('1 9 4 2',100,56);draw('player',120,88)
+        if rom:
+            for i in range(4):draw('title%d'%i,i*64,56)
+        else:text('1 9 4 2',100,56)
         line,x=('ENTER TO TAKE OFF',64) if state==0 else ('GAME OVER',92) if state==2 else ('MISSION COMPLETE',64)
-        text(line,x,128);text('SPACE FIRES  X ROLLS' if state==0 else 'N FOR A NEW GAME',52 if state==0 else 68,152)
+        text(line,x,120)
+        if state==0:
+            text('1 OR 2 PLAYERS    %d'%g.get('players'),24,144)
+            text('SPACE FIRES  X ROLLS',52,168)
+        else:text('N FOR A NEW GAME',68,152)
+        high=g.get('highlo')+65536*g.get('highhi')
+        text('HIGH %06d'%(high%1000000),80,200)
     hud=g.m.read(g.base+g.code['n_hud'],24).split(b'\0')[0].decode()
     text(hud,8,4)
     if cga:
@@ -300,6 +347,82 @@ def capture(g,tag,name):
         w,h,rgb=m.fbuf();M.write_png_rgb(str(ROOT/'build'/('1942-'+tag+'-'+name+'.png')),w,h,rgb)
 
 
+def rules(g,tag):
+    """Exercise native game rules through the assembled 8086 entry points."""
+    m=g.m
+    # A formation is awarded only after every member dies. An escaped member
+    # makes the otherwise identical control formation ineligible.
+    for escaped in (False,True):
+        g.fixture()
+        wave=g.off['n_waveslive']
+        m.write(g.base+wave,struct.pack('<8H',1,5,10,0,1,5,0,2))
+        for i in range(5):
+            actor=struct.pack('<12H',80+i*16,80,0,1,1,0,1,0,10,wave,0,2)
+            m.write(g.base+g.off['n_enemies']+i*24,actor)
+        for i in range(5):
+            # Game.call preserves SI, permitting a real per-enemy death call.
+            m.setreg('si',g.off['n_enemies']+i*24)
+            if escaped and i==0:
+                m.setreg('ax',0);g.call('n_depart')
+            else:g.call('n_kill')
+            if i<4:assert g.get('picky')==65535,'early formation reward'
+        assert (g.get('picky')!=65535)==(not escaped),'formation completion/escape rule'
+        if not escaped:assert g.get('picktype')==2
+    # All distinct POW effects, including the negative control for wing hits.
+    g.fixture();g.put('picktype',2);g.call('n_awardpow');assert g.get('wings')==3
+    g.put('picktype',3);g.call('n_awardpow');assert g.get('rolls')==4
+    g.put('picktype',4);g.call('n_awardpow');assert g.get('lives')==4
+    old=g.get('scorelo');g.put('picktype',5);g.call('n_awardpow');assert g.get('scorelo')-old==5000
+    g.fixture();g.put('wings',3)
+    m.write(g.base+g.off['n_bullets'],struct.pack('<4H',g.get('px')-16,g.get('py')+8,0,0))
+    g.call('n_move_bullets');assert g.get('wings')==2 and g.get('lives')==3
+    g.fixture();g.put('wings',3);g.enemy(x=g.get('px')+32,y=g.get('py'),kind=0)
+    g.call('n_move_enemies');assert g.get('wings')==1 and g.get('lives')==3
+    g.fixture();g.enemy(kind=0);g.put('picktype',1);g.call('n_awardpow')
+    assert g.data('enemies',14)[12]==0 and g.get('kills')==1
+    # Secret-plane thresholds, collectible value, and repeat threshold.
+    g.fixture();g.put('secretkills',199);g.call('n_scripts')
+    assert not any(g.data('enemies',12*24)[12::24])
+    g.put('secretkills',200);g.call('n_scripts')
+    assert struct.unpack_from('<H',g.data('enemies',24),8)[0]==8
+    assert g.get('secretkills')==0 and g.get('secretlimit')==150
+    m.setreg('si',g.off['n_enemies']);g.call('n_kill')
+    assert g.get('picktype')==5 and g.get('picky')!=65535
+    # Dive reversal and cross-screen pass preserve their direction after turn.
+    g.fixture();g.put('grace',100)
+    actor=struct.pack('<12H',60,210,1,1,3,1,1,0,3,0,0,2)
+    m.write(g.base+g.off['n_enemies'],actor);g.call('n_move_enemies')
+    raw=struct.unpack('<12H',g.data('enemies',24));assert raw[7]==1 and raw[11]==65533
+    actor=struct.pack('<12H',60,180,1,1,4,1,1,0,6,0,0,2)
+    m.write(g.base+g.off['n_enemies'],actor);g.call('n_move_enemies')
+    raw=struct.unpack('<12H',g.data('enemies',24));assert raw[7]==1 and raw[2]==3 and raw[11]==0
+    g.put('px',0);g.call('n_move_enemies')
+    assert struct.unpack_from('<H',g.data('enemies',24),4)[0]==3
+    # Boundary checks on percentage brackets and the 100% award (>16 bits).
+    for kills,expected in ((49,0),(50,500),(55,1000),(80,5000),(85,8000),(99,20000),(100,100000)):
+        g.fixture();g.put('spawned',100);g.put('kills',kills);g.put('rolls',2)
+        g.call('n_results')
+        assert g.get('percent')==kills and g.get('percentbonus',4)==expected
+        assert g.get('scorelo')+65536*g.get('scorehi')==expected+2000
+    g.call('n_refresh');g.frame(2);check_video(g,tag);capture(g,tag,'results')
+    g.fixture();g.put('wings',3);g.frame(2);check_video(g,tag);capture(g,tag,'wingmen')
+    # Extend awards at 20,000 and 80,000; both words of score carry correctly.
+    g.fixture();m.setreg('ax',19950);g.call('n_addscore');assert g.get('lives')==3
+    m.setreg('ax',50);g.call('n_addscore');assert g.get('lives')==4
+    m.setreg('ax',60000);g.call('n_addscore');assert g.get('lives')==5
+    assert g.get('scorelo')+65536*g.get('scorehi')==80000
+    # Alternation preserves each player's score, stage, lives and extend state.
+    g.fixture();g.put('players',2);g.call('n_campaignnew');g.put('lives',2);g.put('scorelo',12300)
+    g.call('n_turn');assert g.get('activeplayer')==1 and g.get('scorelo')==0 and g.get('lives')==3
+    g.put('lives',1);g.put('scorelo',300);g.call('n_turn')
+    assert g.get('activeplayer')==0 and g.get('scorelo')==12300 and g.get('lives')==2
+    # Keep P1 dead and prove the surviving player retains control.
+    g.put('lives',0);g.call('n_turn');assert g.get('activeplayer')==1
+    g.put('lives',0);g.call('n_turn');assert g.get('state',1)==2
+    g.fixture();g.put('activeplayer',0)
+    print(tag+': formations, POWs, wing loss, score brackets, extends and two-player turns passed',flush=True)
+
+
 def combat_bench(g,tag):
     """Hold a crowded formation on screen; no quiet-scene FPS substitution."""
     g.fixture();g.put('grace',60000);g.put('weapon',3)
@@ -309,7 +432,7 @@ def combat_bench(g,tag):
         # Refill on the host without advancing guest cycles. The actual frame
         # still moves, collides, erases and draws every object through game code.
         for i in range(12):
-            g.m.write(g.base+g.off['n_enemies']+i*14,struct.pack('<7H',24+(i%6)*36,28+(i//6)*40,1,100,0,i,1))
+            g.m.write(g.base+g.off['n_enemies']+i*24,struct.pack('<12H',24+(i%6)*36,28+(i//6)*40,1,100,0,i,1,0,0,0,0,2))
         for i in range(16):
             g.m.write(g.base+g.off['n_bullets']+i*8,struct.pack('<4H',24+(i%8)*28,112+(i//8)*32,0,3))
             g.m.write(g.base+g.off['n_shots']+i*4,struct.pack('<2H',22+(i%8)*28,176+(i//8)*16))
@@ -352,16 +475,23 @@ def run(tag,off,code):
         g.frame()
         assert g.get('infs',1)==1 and g.get('error',1)==0
         assert g.data('fsi',16)[14]==(8 if tag=='vga' else 2)
-        check_video(g,tag)
+        check_video(g,tag);capture(g,tag,'title')
         g.key('Enter');assert g.get('state',1)==1
+        assert g.get('flightphase')==1
+        g.frame(34);assert g.get('flightphase')==0
         m.key('ArrowLeft',up=False);g.frame();m.key('Space',up=False);g.frame(8)
         m.key('ArrowLeft',down=False);g.frame();m.key('Space',down=False);g.frame(2)
         assert g.get('px')<116 and any(struct.unpack_from('<H',g.data('shots',64),i+2)[0]!=65535 for i in range(0,64,4)),'held movement/fire failed'
         check_video(g,tag)
         # Pause advances neither simulation nor its timer.
         g.key('KeyP');assert g.get('paused',1)==1
+        assert m.inb(0x61)&3==0,'pause left the speaker enabled'
         frozen=g.get('frames');g.frame(3);assert g.get('frames')==frozen
         g.key('KeyP');assert g.get('paused',1)==0
+        g.key('KeyM');assert g.get('sound',1)==0 and m.inb(0x61)&3==0
+        audio=(g.get('musicptr'),g.get('effectptr'));g.frame(3)
+        assert audio==(g.get('musicptr'),g.get('effectptr')),'muting advanced audio streams'
+        g.key('KeyM');assert g.get('sound',1)==1
         g.key('KeyX');assert g.get('rolls')==2 and g.get('roll')>0
         g.bullet();g.frame();assert g.get('lives')==3,'roll failed to protect'
         # Natural gameplay, and actual guest-clock frame rate.
@@ -381,16 +511,10 @@ def run(tag,off,code):
         # Let a complete video raster scan out without moving the simulation.
         g.put('paused',1,1);g.frame(2);capture(g,tag,'gameplay');g.put('paused',0,1)
         combat_bench(g,tag)
-        g.fixture();g.call('n_scenecheck');seen=set()
-        for _ in range(8):
-            g.put('spawnwait',0);g.call('n_spawn')
-        raw=g.data('enemies',12*14)
-        for i in range(12):
-            x,y,vx,hp,kind,age,on=struct.unpack_from('<7H',raw,i*14)
-            if on:seen.add(kind)
-        assert seen=={0,1,3,4,5,6,7},('missing natural enemy variety',seen)
+        rules(g,tag)
+        g.fixture();g.call('n_scenecheck')
         for i,kind in enumerate((0,1,2,3,4,5,6,7)):
-            m.write(g.base+g.off['n_enemies']+i*14,struct.pack('<7H',16+(i%4)*60,28+(i//4)*70,1,100,kind,0,1))
+            m.write(g.base+g.off['n_enemies']+i*24,struct.pack('<7H',16+(i%4)*60,28+(i//4)*70,1,100,kind,0,1)+bytes(10))
         g.frame();check_video(g,tag)
         # Force a route rich in land, cross native row / metatile / map and
         # circular-cache boundaries, then compare every displayed pixel.
@@ -408,12 +532,12 @@ def run(tag,off,code):
         g.fixture();g.enemy();g.shot(x=90);g.frame()
         assert g.get('scorelo')==0 and g.data('enemies',14)[12]==1
         g.fixture();g.enemy();g.shot();g.frame()
-        assert g.get('scorelo')==100 and g.data('enemies',14)[12]==0
-        # Orange enemy -> pickup -> dual gun.
+        assert g.get('scorelo')==50 and g.data('enemies',14)[12]==0
+        # A single orange enemy is not an entire formation.
         g.fixture();g.enemy(hp=1,kind=1);g.shot();g.frame()
-        assert g.get('scorelo')==500 and g.get('picky')!=65535
-        g.put('pickx',g.get('px')+4);g.put('picky',g.get('py'));g.frame()
-        assert g.get('weapon')==2 and g.get('scorelo')==1000
+        assert g.get('scorelo')==100 and g.get('picky')==65535
+        g.put('picktype',0);g.put('pickx',g.get('px')+4);g.put('picky',g.get('py'));g.frame()
+        assert g.get('weapon')==2 and g.get('scorelo')==1100
         # Roll uses an edge, not the held key level.
         g.fixture();m.key('KeyX',up=False);g.frame(12)
         assert g.get('rolls')==2
@@ -426,18 +550,32 @@ def run(tag,off,code):
             g.put('grace',0);g.bullet();g.frame();assert g.get('lives')==life
         assert g.get('state',1)==2
         g.key('KeyN');assert g.get('lives')==3 and g.get('state',1)==1
-        # Boss threshold, kill, stage roll refill, and last-stage completion.
-        g.fixture();g.put('stage',4);g.put('spawned',24);g.frame()
-        assert struct.unpack('<7H',g.data('enemies',14))[4]==2
-        g.enemy(x=100,y=100,hp=1,kind=2);g.shot();g.frame()
-        assert g.get('stage')==5 and g.get('scorelo')==3000 and g.get('rolls')==3
-        g.fixture();g.put('stage',32);g.put('spawned',24);g.put('bossmade',1,1);g.frame()
-        assert g.get('state',1)==3
+        # Cartridge boss stage, results and explicit stage advancement.
+        g.fixture();g.put('stage',7);g.call('n_scenecheck')
+        g.put('worldpage',6);g.put('worldy',46 if tag=='cga' else 56)
+        g.put('distance',1398);g.put('rebuild',1,1);g.frame(2)
+        assert g.get('bosslive',1)==1
+        check_video(g,tag);capture(g,tag,'boss')
+        for i in range(12):
+            actor=g.data('enemies',12*24)[i*24:(i+1)*24]
+            if actor[8]==2 and actor[12]:
+                m.setreg('si',g.off['n_enemies']+i*24);g.call('n_kill');break
+        assert g.get('bosslive',1)==0 and g.get('scorelo')>=20000
+        g.frame(2);check_video(g,tag)
+        g.fixture();g.put('stage',32);g.put('distance',1824);g.put('bossmade',1,1);g.frame()
+        assert g.get('flightphase')==2
+        g.put('py',120);g.frame();assert g.get('flightphase')==3
+        g.put('flightphasetime',0);g.frame();assert g.get('state',1)==3
         # Cycled mapping affects output but preserves the simulation.
         g.key('KeyN')
         if tag=='cga':
             for expected in (1,2,0):
                 g.key('KeyC');assert g.get('profile',1)==expected;check_video(g,tag)
+        else:
+            pal=json.loads((ROOT/os88build.at('build/1942-palette.json')).read_text())
+            for stage,key in ((29,'late_rgb'),(1,'rgb')):
+                g.put('stage',stage);g.frame(2);m.outb(0x3c7,0)
+                assert [m.inb(0x3c9) for _ in range(len(pal[key])*3)]==[v*63//255 for c in pal[key] for v in c]
         # Re-enter twice: unchanged state and restored desktop mode.
         for _ in range(2):
             g.key('KeyP');assert g.get('paused',1)==1

@@ -37,6 +37,10 @@ n_entry:
     call OSAPI_MEM_CLAIM
     jc .out
     mov [n_graphics], dx
+    mov ax,64
+    call OSAPI_MEM_CLAIM
+    jc .out
+    mov [n_graphics2],dx
     mov si, n_tpl
     call OSAPI_WM_CREATE
     jc .out
@@ -48,6 +52,7 @@ n_entry:
     or ax, 1
     mov [n_seed], ax
     mov byte [n_sound], 1
+    mov word [n_players],1
     call n_new
     mov byte [n_state], 0
     mov bx, [n_win]
@@ -159,6 +164,8 @@ n_exclusive:
     call n_scenecheck
     jc n_assetfailed
 n_loop:
+    call OSAPI_GET_TICKS
+    mov [n_frametick],ax
     mov ah, 1
     int 16h
     jz .frame
@@ -191,6 +198,20 @@ n_loop:
     xor byte [n_paused], 1
     call n_refresh
 .notpause:
+    cmp byte [n_state],0
+    jne .selected
+    cmp al,'1'
+    je .one
+    cmp al,'2'
+    jne .selected
+    mov word [n_players],2
+    call n_refresh
+    jmp n_loop
+.one:
+    mov word [n_players],1
+    call n_refresh
+    jmp n_loop
+.selected:
     cmp al, 'n'
     je .new
     ; OR 20h changed CR to 2Dh.
@@ -198,6 +219,10 @@ n_loop:
     jne n_loop
     cmp byte [n_state], 1
     jne .new
+    cmp word [n_flightphase],3
+    jne .unpause
+    mov word [n_flightphasetime],0
+.unpause:
     mov byte [n_paused], 0
     call n_refresh
     jmp n_loop
@@ -219,8 +244,14 @@ n_loop:
     je .present
     call n_refresh
 .present:
+    call n_audio
     call n_present
 n_frame_end:
+    ; Rendering already paces a busy XT. Only yield to the frame clock when
+    ; this iteration has not consumed a full BIOS tick (also covers pause).
+    call OSAPI_GET_TICKS
+    cmp ax,[n_frametick]
+    jne n_loop
     mov al, FSXW_FRAME
     call OSAPI_FSX_WAIT
     jmp n_loop
@@ -242,8 +273,8 @@ n_tone:
     cmp byte [n_sound], 0
     je .out
 .play:
-    mov cx, 1
-    mov dl, 40h
+    mov cx,0
+    mov dl,40h
     call OSAPI_SND_TONE
 .out:
     RESTORE
@@ -264,6 +295,7 @@ n_credit: db 'Native remake for os8088',0
 n_credit2: db '1942 original game: Capcom (1985)',0
 n_credit3: db 'Original art / native VGA and CGA sprites',0
 n_hud: db '000000  L3 R3  STAGE 01',0
+n_msgselect: db '1 OR 2 PLAYERS    1',0
 n_msgtitle: db '1 9 4 2',0
 n_msgstart: db 'ENTER TO TAKE OFF',0
 n_msghint: db 'SPACE FIRES  X ROLLS',0
@@ -275,6 +307,7 @@ n_msgresume: db 'P TO RESUME',0
 %include "1942art.inc"
 %include "video.inc"
 %include "game.inc"
+%include "campaign.inc"
 %include "scroll.inc"
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
@@ -312,7 +345,7 @@ VAR n_spawnwait,2
 VAR n_frames,2
 VAR n_bossmade,1
 VAR n_huddirty,1
-VAR n_enemies,12*14
+VAR n_enemies,12*ESIZE
 VAR n_shots,16*4
 VAR n_bullets,16*8
 VAR n_blasts,8*6
@@ -322,6 +355,7 @@ VAR n_islandy,2
 VAR n_wavey,2
 ; Native renderer scratch and per-page damage lists.
 VAR n_graphics,2
+VAR n_graphics2,2
 VAR n_scene,2
 VAR n_bank,2
 VAR n_page,2
@@ -372,5 +406,36 @@ VAR n_vscrolls,4
 VAR n_shift,2
 VAR n_showbase,2
 VAR n_spriteid,2
+VAR n_spriteseg,2
+VAR n_players,2
+VAR n_activeplayer,2
+VAR n_playersave,36
+VAR n_flightphase,2
+VAR n_flightphasetime,2
+VAR n_distance,2
+VAR n_routefrac,2
+VAR n_event,2
+VAR n_waveslive,192
+VAR n_kills,2
+VAR n_picktype,2
+VAR n_wings,2
+VAR n_percent,2
+VAR n_percentbonus,4
+VAR n_rollbonus,2
+VAR n_nextlife,2
+VAR n_secretkills,2
+VAR n_secretlimit,2
+VAR n_highlo,2
+VAR n_highhi,2
+VAR n_extended,2
+VAR n_bosslive,1
+VAR n_rebuild,1
+VAR n_musicptr,2
+VAR n_musicwait,2
+VAR n_effectptr,2
+VAR n_effectwait,2
+VAR n_audiotick,2
+VAR n_frametick,2
+VAR n_audioelapsed,2
 OS88_BSS NBSS
 OS88_IMAGE_END

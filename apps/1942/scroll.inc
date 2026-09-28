@@ -77,10 +77,16 @@ n_scenecheck:
     cmp ax,[n_scrollstage]
     je .rebuild
 .stage:
+    cmp byte [n_rebuild],0
+    je .stagecheck
+    mov byte [n_rebuild],0
+    jmp .rebuild
+.stagecheck:
     mov ax,[n_stage]
     cmp ax,[n_scrollstage]
     je .same
     mov [n_scrollstage],ax
+    call n_palette
     mov word [n_worldpage],0
     call n_scrollsetup
     xor dx,dx
@@ -161,6 +167,14 @@ n_worldrow:
     mov ds,[n_canvas]
     xor ax,ax
     mov al,[N_ROUTE+bx]
+    cmp al,2
+    jne .map
+    cmp byte [cs:n_bossmade],0
+    je .map
+    cmp byte [cs:n_bosslive],0
+    jne .map
+    mov al,1
+.map:
     mov bx,240
     mul bx
     add ax,N_MAPS

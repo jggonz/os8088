@@ -15,7 +15,10 @@ RGB = {0x00:(84,84,84),0x02:(8,16,144),0x0a:(0,80,0),0x0f:(0,0,0),
        0x10:(152,150,152),0x12:(48,50,236),0x16:(152,34,32),
        0x19:(8,124,0),0x1a:(0,118,40),0x20:(236,238,236),
        0x26:(236,106,100),0x28:(160,170,0),0x29:(116,196,0),
-       0x38:(204,210,120)}
+       0x38:(204,210,120),0x37:(212,178,132),0x09:(8,58,0),
+       0x35:(236,174,236),0x06:(84,4,0),0x2c:(56,180,204),
+       0x1c:(0,102,120),0x17:(120,60,0),0x2b:(76,208,32),
+       0x21:(76,154,236),0x15:(160,20,100),0x18:(84,90,0),0x14:(84,30,176)}
 
 class Cartridge:
     def __init__(self, path):
@@ -80,13 +83,14 @@ def import_art(path, sprites, pal):
     pal['cga_map']=[0,0,1,3,3,0,3,1,2,0,1,2,0,0,3,1,0,
                     0,2,3,1,0,3,3,2,0,2,1,3,0,2,3,1]
     definitions={'player':(0x00,0,(24,24)), 'bankleft':(0x00,0,(24,24)),
-        'bankright':(0x00,0,(24,24)), 'roll':(0x01,0,(24,24)),
+        'bankright':(0x00,0,(24,24)), 'roll':(0xa1,0,(32,24)),
         'enemy':(0x28,0,None),'elite':(0x28,1,None),'blue':(0x44,2,None),
         'boss':(0x72,3,None),'blast0':(0x90,3,(24,24)),
         'blast1':(0x91,3,(24,24)),'blast2':(0x92,3,(24,24)),
         'blast3':(0x93,3,(24,24)), 'scout':(0x40,2,None),
         'diver':(0x60,0,None),'bomber':(0x58,3,None),'heavy':(0x68,3,None),
-        'enemybank':(0x29,0,None)}
+        'enemybank':(0x29,0,None), 'pick':(0x7a,0,None),
+        'shot':(0x08,1,None),'bullet':(0x07,0,None)}
     out=[]
     for s in sprites:
         if s['name'] in definitions:
@@ -94,5 +98,50 @@ def import_art(path, sprites, pal):
         elif not s['name'].startswith('font'):
             # Original projectiles/pickups are small code-authored effects.
             s=dict(s);s['pixels']=bytes(min(v,7) for v in bytes.fromhex(s['pixels'])).hex()
+        if s['name']=='shot':
+            raw=bytes.fromhex(s['pixels']);w=s['w']
+            s=dict(s,w=8,pixels=b''.join(raw[y*w:y*w+8] for y in range(s['h'])).hex())
+        if s['name'] in ('shot','bullet'):
+            raw=bytes.fromhex(s['pixels']);w=s['w']
+            used=[(i%w,i//w) for i,v in enumerate(raw) if v]
+            left,right=min(x for x,y in used),max(x for x,y in used)
+            top,bottom=min(y for x,y in used),max(y for x,y in used)
+            s=dict(s,w=right-left+1,h=bottom-top+1,
+                   pixels=b''.join(raw[y*w+left:y*w+right+1] for y in range(top,bottom+1)).hex())
         out.append(s)
+    # Background-pattern glyphs: cartridge strings encode 0..9, A..Z as 0..35.
+    for s in out:
+        if s['name'].startswith('font'):
+            ch=int(s['name'][4:]);tile=ch-48 if 48<=ch<=57 else ch-55 if 65<=ch<=90 else 0x25 if ch==37 else 0x24 if ch==45 else None
+            if tile is not None:
+                s['pixels']=bytes(4 if v else 0 for v in cart.tile(tile)).hex()
+    out.append(cart.sprite('secret',0x74,0))
+    out.append(cart.sprite('bonus',0xab,1))  # 5,000-point secret-plane reward
+    for base,group in [(0x10,1),(0x28,0),(0x40,2)]:
+        # Regular and orange fighters share the rotating airframe, with
+        # different palettes. $28..$2f are banking frames, not compass angles.
+        framebase=0x10 if base==0x28 else base
+        for i in range(8,16):out.append(cart.sprite('dir%02x_%d'%(base,i),framebase+i,group))
+    for i in range(7):out.append(cart.sprite('loop%d'%i,0xa1+i,0,(32,24)))
+    out.append(cart.sprite('wing',1,0,(16,16)))
+    for i in range(5):out.append(cart.sprite('pow%d'%i,0x7a+i,0,(16,16)))
+    for base,group in [(0x10,1),(0x28,0),(0x40,2),(0x50,2),(0x60,0)]:
+        for i in range(8):
+            out.append(cart.sprite('dir%02x_%d'%(base,i),(0x10 if base==0x28 else base)+i,group))
+    # The NES title occupies five nametable rows starting at $2100.
+    titlepal=[list(RGB[cart.read(0xbb51+i)]) for i in range(16)]
+    pal['rgb']+=titlepal;pal['cga_map'] += [0,3,3,3,0,3,1,1,0,2,2,2,0,2,2,2]
+    for part in range(4):
+        pixels=bytearray(64*40)
+        for y in range(40):
+            for x in range(64):
+                tx=part*8+x//8;ty=8+y//8
+                t=cart.read(0xbbbf+(ty-8)*32+tx)
+                attr=cart.read(0xbb71+(ty//4)*8+tx//4)
+                group=(attr>>(((ty&2)*2)+(tx&2)))&3
+                v=cart.tile(256+t)[(y%8)*8+x%8]
+                pixels[y*64+x]=33+group*4+v
+        out.append(dict(name='title%d'%part,w=64,h=40,pixels=pixels.hex()))
+    pal['late_rgb']=[[0,0,0]]+[list(RGB[cart.read(0xa790+i)]) for i in range(32)]+titlepal
+    pal['late_rgb'][4]=[236,238,236]
     return out,pal,cart.world()

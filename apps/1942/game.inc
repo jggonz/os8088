@@ -1,4 +1,5 @@
-; Native simulation. All coordinates are unsigned logical pixels.
+; Native simulation. Actor coordinates are signed logical pixels so scripted
+; paths can enter and leave outside the playfield.
 EX equ 0
 EY equ 2
 EVX equ 4
@@ -6,7 +7,12 @@ EHP equ 6
 EKIND equ 8
 EAGE equ 10
 EON equ 12
-ESIZE equ 14
+EPATH equ 14
+ETYPE equ 16
+EGROUP equ 18
+EAUX equ 20
+EDY equ 22
+ESIZE equ 24
 
 n_rand:
     push bx
@@ -60,6 +66,7 @@ n_new:
     xor ax, ax
     mov cx, 8*3
     rep stosw
+    call n_campaignnew
     RESTORE
     ret
 
@@ -82,42 +89,64 @@ n_refresh:
     call n_text
     jmp .out
 .message:
-    mov si, n_msgtitle
-    mov cx, 100
-    mov dx, 56
-    call n_text
-    mov si, n_playerart
-    mov cx, 120
-    mov dx, 88
+%if N_ROM
+    mov si,n_title0art
+    xor cx,cx
+    mov dx,56
+.titlepart:
     call n_sprite
-    mov si, n_msgstart
-    mov cx, 64
-    mov dx, 128
-    cmp byte [n_state], 0
+    add cx,64
+    inc si
+    cmp si,n_title3art
+    jbe .titlepart
+%else
+    mov si,n_msgtitle
+    mov cx,100
+    mov dx,56
+    call n_text
+%endif
+    mov si,n_msgstart
+    mov cx,64
+    mov dx,120
+    cmp byte [n_state],0
     je .headline
-    mov si, n_msgover
-    mov cx, 92
-    cmp byte [n_state], 2
+    mov si,n_msgover
+    mov cx,92
+    cmp byte [n_state],2
     je .headline
-    mov si, n_msgwin
-    mov cx, 64
+    mov si,n_msgwin
+    mov cx,64
 .headline:
     call n_text
-    mov si, n_msghint
-    mov cx, 52
-    mov dx, 152
-    cmp byte [n_state], 0
-    je .hint
-    mov si, n_msgnew
-    mov cx, 68
-.hint:
+    cmp byte [n_state],0
+    jne .endhint
+    mov si,n_msgselect
+    mov ax,[n_players]
+    add al,'0'
+    mov [n_msgselect+18],al
+    mov cx,24
+    mov dx,144
     call n_text
+    mov si,n_msghint
+    mov cx,52
+    mov dx,168
+    call n_text
+    jmp .high
+.endhint:
+    mov si,n_msgnew
+    mov cx,68
+    mov dx,152
+    call n_text
+.high:
+    call n_hightext
     call n_scoretext
 .out:
     RESTORE
     ret
 
 n_update:
+    cmp word [n_flightphase],0
+    jne n_flightphaseupdate
     SAVE
     inc word [n_frames]
     inc word [n_wavey]
@@ -153,8 +182,8 @@ n_update:
     dec word [n_rolls]
     mov word [n_roll], 48
     mov byte [n_huddirty], 1
-    mov ax, 900
-    call n_tone
+    mov ax,21
+    call n_effect
     jmp .move
 .xup:
     mov byte [n_xheld], 0
@@ -203,22 +232,21 @@ n_update:
     jnc .spawn
 .shoot:
     mov word [n_fire], 5
-    mov cx, [n_px]
-    add cx, 11
-    cmp word [n_weapon], 1
-    je .single
-    sub cx, 5
+    mov cx,[n_px]
+    add cx,6
     call n_shot
-    add cx, 10
+    add cx,8
     call n_shot
-    cmp word [n_weapon], 3
+    cmp word [n_weapon],2
     jb .shotdone
-    sub cx, 5
-.single:
+    sub cx,16
+    call n_shot
+    add cx,24
     call n_shot
 .shotdone:
-    mov ax, 1400
-    call n_tone
+    call n_wingfire
+    mov ax,18
+    call n_effect
 .spawn:
     call n_spawn
     call n_move_enemies
@@ -257,64 +285,44 @@ n_shot:                              ; CX=x
     RESTORE
     ret
 n_spawn:
-    cmp word [n_spawned], 24
-    jae .out
-    cmp word [n_spawnwait], 0
-    je .findslot
-    dec word [n_spawnwait]
-    ret
-.findslot:
-    mov si, n_enemies
-.find:
-    cmp word [si+EON], 0
-    je .slot
-    add si, ESIZE
-    cmp si, n_enemies+12*ESIZE
-    jb .find
-    ret
-.slot:
-    call n_rand
-    mov bx, ax
-    and ax, 127
-    add ax, 48
-    mov [si+EX], ax
-    mov word [si+EY], 18
-    mov word [si+EVX], 1
-    test bx, 8000h
-    jz .dir
-    mov word [si+EVX], -1
-.dir:
-    mov word [si+EON], 1
-    mov word [si+EHP], 1
-    mov word [si+EKIND], 0
-    mov word [si+EAGE], 0
-    mov bx, [n_spawned]
-    and bx, 7
-    mov bl, [n_wavekinds+bx]
-    xor bh, bh
-    mov [si+EKIND], bx
-    mov al, [n_wavehp+bx]
-    xor ah, ah
-    mov [si+EHP], ax
-.normal:
-    inc word [n_spawned]
-    mov ax, 30
-    sub ax, [n_stage]
-    cmp ax, 12
-    jge .delay
-    mov ax, 12
-.delay:
-    mov [n_spawnwait], ax
-.out:
-    ret
-n_wavekinds: db 0,3,4,1,5,6,7,1
-n_wavehp: db 1,2,30,1,1,2,3,5
+    jmp n_scripts
 n_move_enemies:
     mov si, n_enemies
 .loop:
     cmp word [si+EON], 0
     je .next
     inc word [si+EAGE]
+    cmp word [si+EKIND],2
+    je .waypoint
+    cmp word [si+EKIND],6
+    jae .waypoint
+    cmp word [si+ETYPE],10
+    jae .waypoint
+    call n_smallmove
+    jc .escaped
+    mov bx,[si+EKIND]
+    shl bx,1
+    jmp .attack
+.waypoint:
+    cmp word [si+EPATH],0
+    je .straight
+    call n_pathmove
+    jc .escaped
+    mov bx,[si+EKIND]
+    shl bx,1
+    jmp .attack
+.escaped:
+    xor ax,ax
+    call n_depart
+    jmp .next
+.straight:
+%if N_ROM
+    cmp word [si+EKIND],2
+    jne .mobile
+    mov bx,4
+    jmp .attack
+.mobile:
+%endif
     mov ax, [si+EVX]
     add [si+EX], ax
     mov bx, [si+EKIND]
@@ -329,6 +337,13 @@ n_move_enemies:
 .bounce:
     neg word [si+EVX]
 .vertical:
+    cmp word [si+EKIND],8
+    jne .bosscheck
+    sub word [si+EY],3
+    cmp word [si+EY],18
+    jb .escaped
+    jmp .attack
+.bosscheck:
     cmp word [si+EKIND], 2
     jne .small
     cmp word [si+EY], 44
@@ -354,14 +369,27 @@ n_move_enemies:
     sub ax, [n_enemyheights+bx]
     cmp [si+EY], ax
     jbe .attack
-    mov word [si+EON], 0
+    xor ax,ax
+    call n_depart
     jmp .next
 .attack:
     mov ax, [si+EAGE]
     and ax, 31
     jnz .contact
     call n_enemyfire
+    cmp word [si+EKIND],2
+    jne .contact
+    add word [si+EX],24
+    call n_enemyfire
+    sub word [si+EX],48
+    call n_enemyfire
+    add word [si+EX],24
 .contact:
+    cmp word [n_wings],0
+    je .playercontact
+    call n_wingcontact
+    jc .contacted
+.playercontact:
     mov ax, [n_px]
     add ax, 24
     cmp [si+EX], ax
@@ -379,19 +407,35 @@ n_move_enemies:
     cmp ax, [n_py]
     jbe .next
     call n_hitplayer
+.contacted:
     cmp word [si+EKIND], 2
     je .next
-    mov word [si+EON], 0
+    xor ax,ax
+    call n_depart
     mov cx, [si+EX]
     mov dx, [si+EY]
     call n_blast
 .next:
+    cmp word [si+EON],0
+    je .advance
+    push si
+    push di
+    mov di,si
+    call n_enemyframe
+    mov [di+EAUX],si
+    pop di
+    pop si
+.advance:
     add si, ESIZE
     cmp si, n_enemies+12*ESIZE
     jb .loop
     ret
 n_enemyfire:
     SAVE
+    cmp word [si+EX],232
+    ja .out
+    cmp word [si+EY],216
+    ja .out
     mov di, n_bullets
 .find:
     cmp word [di+2], 0ffffh
@@ -402,25 +446,58 @@ n_enemyfire:
     jmp .out
 .slot:
     mov ax, [si+EX]
-    add ax, 12
+    add ax,12
+%if N_ROM
+    cmp word [si+EKIND],2
+    jne .muzzle
+    add ax,60
+.muzzle:
+%endif
     mov [di], ax
-    mov bx, [n_px]
-    add bx, 12
-    sub bx, ax
-    mov word [di+4], 0
-    cmp bx, 12
-    jle .left
-    mov word [di+4], 1
-    jmp .y
-.left:
-    cmp bx, -12
-    jge .y
-    mov word [di+4], -1
-.y:
-    mov ax, [si+EY]
-    add ax, 16
-    mov [di+2], ax
-    mov word [di+6], 3
+    mov ax,[si+EY]
+    add ax,12
+%if N_ROM
+    cmp word [si+EKIND],2
+    jne .muzzley
+    add ax,64
+.muzzley:
+%endif
+    mov [di+2],ax
+    mov ax,[n_px]
+    add ax,12
+    sub ax,[di]
+    mov bp,ax
+    mov bx,[n_py]
+    add bx,12
+    sub bx,[di+2]
+    mov cx,bx
+    or cx,cx
+    jns .absy
+    neg cx
+.absy:
+    mov dx,ax
+    or dx,dx
+    jns .absx
+    neg dx
+.absx:
+    cmp cx,dx
+    jae .norm
+    mov cx,dx
+.norm:
+    or cx,cx
+    jnz .velocity
+    inc cx
+.velocity:
+    mov ax,bp
+    mov dx,3
+    imul dx
+    idiv cx
+    mov [di+4],ax
+    mov ax,bx
+    mov dx,3
+    imul dx
+    idiv cx
+    mov [di+6],ax
 .out:
     RESTORE
     ret
@@ -471,34 +548,83 @@ n_move_shots:
     ret
 n_kill:
     SAVE
-    mov word [si+EON], 0
-    mov cx, [si+EX]
-    mov dx, [si+EY]
+    mov ax,1
+    call n_depart
+    inc word [n_kills]
+    inc word [n_secretkills]
+    mov cx,[si+EX]
+    mov dx,[si+EY]
     call n_blast
-    mov ax, 100
-    cmp word [si+EKIND], 0
-    je .score
-    mov ax, 500
-    cmp word [si+EKIND], 1
-    jne .boss
-    mov [n_pickx], cx
-    mov [n_picky], dx
+    cmp word [si+EKIND],8
+    jne .ordinary
+    mov [n_pickx],cx
+    mov [n_picky],dx
+    mov word [n_picktype],5
+.ordinary:
+    mov ax,50
+    cmp word [si+EKIND],1
+    jne .large
+    mov ax,100
     jmp .score
-.boss:
-    mov ax, 200
-    cmp word [si+EKIND], 2
+.large:
+    cmp word [si+EKIND],2
+    jne .medium
+    mov ax,20000
+    jmp .score
+.medium:
+    cmp word [si+EKIND],6
+    jb .score
+    mov ax,1000
+    cmp word [si+EKIND],7
     jne .score
-    mov ax, 3000
+    mov ax,1500
 .score:
     call n_addscore
-    mov ax, 180
-    call n_tone
+    mov ax,19
+    call n_effect
     RESTORE
     ret
 n_addscore:
-    add [n_scorelo], ax
-    adc word [n_scorehi], 0
-    mov byte [n_huddirty], 1
+    push ax
+    push bx
+    push dx
+    add [n_scorelo],ax
+    adc word [n_scorehi],0
+    ; Extend counter is in 50-point units, so 80,000 fits one word.
+    xor dx,dx
+    mov bx,50
+    div bx
+    sub [n_nextlife],ax
+    jg .high
+    cmp word [n_lives],9
+    jae .threshold
+    inc word [n_lives]
+.threshold:
+    cmp word [n_extended],0
+    jne .later
+    mov word [n_extended],1
+    add word [n_nextlife],1200
+    jmp .high
+.later:
+    add word [n_nextlife],1600
+.high:
+    mov ax,[n_scorehi]
+    cmp ax,[n_highhi]
+    jb .done
+    ja .record
+    mov ax,[n_scorelo]
+    cmp ax,[n_highlo]
+    jbe .done
+.record:
+    mov ax,[n_scorelo]
+    mov [n_highlo],ax
+    mov ax,[n_scorehi]
+    mov [n_highhi],ax
+.done:
+    mov byte [n_huddirty],1
+    pop dx
+    pop bx
+    pop ax
     ret
 n_blast:                            ; CX/DX position
     SAVE
@@ -528,14 +654,13 @@ n_hitplayer:
     dec word [n_lives]
     mov word [n_grace], 75
     mov word [n_weapon], 1
+    mov word [n_wings],0
     mov word [n_px], 116
     mov word [n_py], 204
     mov byte [n_huddirty], 1
-    mov ax, 80
-    call n_tone
-    cmp word [n_lives], 0
-    jne .out
-    mov byte [n_state], 2
+    mov ax,20
+    call n_effect
+    call n_turn
 .out:
     RESTORE
     ret
@@ -552,6 +677,10 @@ n_move_bullets:
     ja .remove
     cmp word [si+2], 236
     ja .remove
+    mov cx,[si]
+    mov dx,[si+2]
+    call n_winghit
+    jc .remove
     mov ax, [si]
     sub ax, [n_px]
     cmp ax, 24
@@ -584,60 +713,35 @@ n_move_pickup:
     add ax, 12
     cmp ax, 24
     jae .out
-    cmp word [n_weapon], 3
-    jae .score
-    inc word [n_weapon]
-.score:
-    mov ax, 500
-    call n_addscore
-    mov ax, 1800
-    call n_tone
+    call n_awardpow
 .remove:
     mov word [n_picky], 0ffffh
 .out:
     ret
 n_nextstage:
-    cmp byte [n_state], 1
+    cmp byte [n_state],1
     jne .out
-    cmp word [n_spawned], 24
+    cmp word [n_flightphase],0
+    jne .out
+    cmp word [n_distance],1824
     jb .out
-    mov si, n_enemies
-.loop:
-    cmp word [si+EON], 0
+    cmp byte [n_bosslive],0
     jne .out
-    add si, ESIZE
-    cmp si, n_enemies+12*ESIZE
-    jb .loop
-    test word [n_stage], 3
-    jnz .advance
-    cmp byte [n_bossmade], 0
-    jne .advance
-    mov byte [n_bossmade], 1
-    mov si, n_enemies
-    mov word [si+EX], 112
-    mov word [si+EY], 18
-    mov word [si+EVX], 1
-    mov ax, [n_stage]
-    shl ax, 1
-    add ax, 30
-    mov [si+EHP], ax
-    mov word [si+EKIND], 2
-    mov word [si+EAGE], 0
-    mov word [si+EON], 1
-    ret
-.advance:
-    inc word [n_stage]
-    cmp word [n_stage], 32
-    jbe .stage
-    mov byte [n_state], 3
-    mov word [n_stage], 32
-    ret
-.stage:
-    mov word [n_spawned], 0
-    mov word [n_spawnwait], 60
-    mov byte [n_bossmade], 0
-    mov word [n_rolls], 3
-    mov byte [n_huddirty], 1
+    mov word [n_flightphase],2
+    mov si,n_enemies
+.clear:
+    xor ax,ax
+    call n_depart
+    add si,ESIZE
+    cmp si,n_enemies+12*ESIZE
+    jb .clear
+    push ds
+    pop es
+    mov di,n_bullets
+    mov ax,0ffffh
+    mov cx,16*4
+    rep stosw
+    mov [n_picky],ax
 .out:
     ret
 
@@ -657,14 +761,11 @@ n_drawactors:
 .enemy:
     cmp word [di+EON], 0
     je .enext
-    mov bx, [di+EKIND]
-    shl bx, 1
-    mov si, [n_enemyarts+bx]
-    cmp bx, 0
-    jne .eart
-    test word [di+EAGE], 8
-    jz .eart
-    mov si, n_enemybankart
+%if N_ROM
+    cmp word [di+EKIND],2
+    je .enext
+%endif
+    mov si,[di+EAUX]
 .eart:
     mov cx, [di+EX]
     mov dx, [di+EY]
@@ -681,14 +782,33 @@ n_drawactors:
     mov si, [n_bank]
     cmp word [n_roll], 0
     je .part
-    test word [n_roll], 8
-    jz .part
-    mov si, n_rollart
+    mov ax,48
+    sub ax,[n_roll]
+    xor dx,dx
+    mov bx,7
+    div bx
+    cmp ax,6
+    jbe .loopframe
+    mov ax,6
+.loopframe:
+    mov si,n_loop0art
+    add si,ax
 .part:
     mov cx, [n_px]
+    cmp word [n_roll],0
+    je .playerpos
+    sub cx,4
+    jnc .rollright
+    xor cx,cx
+.rollright:
+    cmp cx,224
+    jbe .playerpos
+    mov cx,224
+.playerpos:
     mov dx, [n_py]
     call n_sprite
 .shots:
+    call n_wingdraw
     mov di, n_shots
 .sloop:
     mov cx, [di]
@@ -709,7 +829,12 @@ n_drawactors:
     jb .bloop
     mov cx, [n_pickx]
     mov dx, [n_picky]
-    mov si, n_pickart
+    mov si,n_pow0art
+    add si,[n_picktype]
+    cmp word [n_picktype],5
+    jne .pickup
+    mov si,n_bonusart
+.pickup:
     call n_sprite
     mov di, n_blasts
 .xloop:
@@ -726,6 +851,7 @@ n_drawactors:
     add di, 6
     cmp di, n_blasts+8*6
     jb .xloop
+    call n_flightphaseart
     cmp byte [n_huddirty], 0
     je .hud
     call n_scoretext
@@ -762,7 +888,8 @@ n_scoretext:
     mov ax, [n_rolls]
     add al, '0'
     mov [n_hud+12], al
-    mov ax, [n_stage]
+    mov ax,33
+    sub ax,[n_stage]
     xor dx, dx
     div cx
     add al, '0'

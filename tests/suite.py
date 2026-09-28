@@ -2406,9 +2406,10 @@ SOAK = [
         "it. In soak and not fast for docs/WRITING-TESTS.md 2.1's reason: it "
         "is about one package",
         needs=("nasm",)),
-    Row("1942", "soak", py("tests/n1942.py"), 98.0,
+    Row("1942", "soak", py("tests/n1942.py"), 216.1,
         "Native VGA/CGA graphics, pre-I/O loading, scrolling/ring wrap, aircraft "
-        "variety, combat, XT frame rate, missing/damaged banks and desktop restore; "
+        "variety, formations, POWs, results, two-player turns, sound controls, combat, "
+        "XT frame rate, missing/damaged banks and desktop restore; "
         "uses a local cartridge when the package was built with one",
         needs=("marty", "nasm"), wants=("build/1942-360.img", "build/os8088-360.img")),
     Row("gorillas", "soak", py("tests/gorillas.py"), 100.0,
