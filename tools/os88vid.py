@@ -684,42 +684,56 @@ F_RUNS = 16                     # a LIVE file's frame records carry their blit
                                 # RUNS after their lists (98.1.3.4)
 F_SPKPWM = 32                   # PCM8 stored as the SPEAKER's PWM counts
                                 # (98.1.1.3), made for a machine with no card
-F_KNOWN = F_RESIDENT | F_LOOPREC | F_REPEAT | F_LIVE | F_RUNS | F_SPKPWM
+F_SPKMUL = 64                   # ...made for PULSES A SAMPLE past one: the
+H_SPKP = 24                     # header byte says how many (98.1.1.3.1)
+F_KNOWN = F_RESIDENT | F_LOOPREC | F_REPEAT | F_LIVE | F_RUNS | F_SPKPWM \
+    | F_SPKMUL
 
 PIT_HZ = 1193182
 
 
-def spk_table(rate):
+def spk_table(rate, pulses=1):
     """SPEC.md 34.11.2's count table for a rate: t[s] = 1 + s(N-2)/255, N =
-    1,193,182 / rate - apps/os88spk.inc's os88spk_init, to the byte"""
+    1,193,182 / rate / pulses - a PULSE's period, 34.11.7 - apps/os88spk.inc's
+    os88spk_init, to the byte"""
     n = PIT_HZ // rate
+    if not 1 <= pulses <= 4 or n % pulses:
+        raise V88Error("%d pulses a sample at %d Hz: N = %d, which they do "
+                       "not divide" % (pulses, rate, n))
+    n //= pulses
     if not 74 <= n <= 255:
-        raise V88Error("%d Hz is not a rate the speaker plays (N = %d, "
-                       "74..255)" % (rate, n))
+        raise V88Error("%d Hz%s is not a rate the speaker plays (a pulse of "
+                       "%d counts, 74..255)" % (
+                           rate, " x %d pulses" % pulses if pulses > 1
+                           else "", n))
     return bytes(1 + s * (n - 2) // 255 for s in range(256))
 
 
-def spk_counts(samples, rate):
+def spk_counts(samples, rate, pulses=1):
     """PCM8 samples as the speaker's counts (98.1.1.3)"""
-    return bytes(samples).translate(spk_table(rate))
+    return bytes(samples).translate(spk_table(rate, pulses))
 
 
-def spk_samples(counts, rate):
+def spk_samples(counts, rate, pulses=1):
     """spk_counts undone: each count back to the lowest sample that makes
     it (the table is monotonic, and several samples share a count)"""
     inv = [None] * 256
-    for s, c in enumerate(spk_table(rate)):
+    for s, c in enumerate(spk_table(rate, pulses)):
         if inv[c] is None:
             inv[c] = s
     return bytes(inv[c] if inv[c] is not None else 128 for c in counts)
 
 
 SPK_HP = 250                    # the speaker's high-pass, Hz (98.2.15.1)
-SPK_DRIVE = 0.45                # ...and its level, an RMS of full scale
+SPK_DRIVE = 0.5                 # ...and its level, an RMS of full scale
+SPK_LOWS = 0.5                  # ...the band under SPK_SPLIT, against it
+SPK_RANGE = 24                  # ...and the most a quiet passage is raised
+SPK_RATIO = 2.0                 # ...the leveller's ratio, 2:1
 SPK_SPLIT = 700                 # ...and where --spk-lows starts, Hz
 
 
-def spk_shape(pcm, rate, hp=SPK_HP, drive=SPK_DRIVE, clip="soft", lows=1.0):
+def spk_shape(pcm, rate, hp=SPK_HP, drive=SPK_DRIVE, clip="soft",
+              lows=SPK_LOWS, rng=SPK_RANGE, ratio=SPK_RATIO):
     """SOUND SHAPED FOR THE SPEAKER (98.2.15.1): unsigned 8-bit PCM in and
     out, the same length. A pulse's width is the only thing the speaker
     has, and it spends it on whatever is loudest - in most music the bass
@@ -727,13 +741,14 @@ def spk_shape(pcm, rate, hp=SPK_HP, drive=SPK_DRIVE, clip="soft", lows=1.0):
     under the carrier. So: nothing under `hp` Hz and the top tilted up
     (+9 dB from 400 Hz to 2.4 kHz, where the cone and the ear are both
     at their best), the level evened out over ~30 ms (quiet passages
-    raised, at most 24 dB, silence left silent), then driven to an RMS of
+    raised - `ratio`:1, at most `rng` dB - silence left silent), then
+    driven to an RMS of
     `drive` of full scale through a soft clip - loudness is what a pulse
     width buys, and ~5% of samples rounded off is the cheap end of it"""
     import numpy as np
     return spk_shape_f(np.frombuffer(bytes(pcm), dtype=np.uint8)
                        .astype(np.float64) - 128.0, rate, hp, drive,
-                       bytes(pcm), clip, lows)
+                       bytes(pcm), clip, lows, rng=rng, ratio=ratio)
 
 
 def spk_limit(y, rate, ceil=0.98, look=0.002):
@@ -754,7 +769,8 @@ def spk_limit(y, rate, ceil=0.98, look=0.002):
 
 
 def spk_shape_f(x, rate, hp=SPK_HP, drive=SPK_DRIVE, raw=None, clip="soft",
-                lows=1.0, split=SPK_SPLIT):
+                lows=SPK_LOWS, split=SPK_SPLIT, rng=SPK_RANGE,
+                ratio=SPK_RATIO):
     """spk_shape's body, from samples at any scale (the encoder hands it
     ffmpeg's floats, so the quiet passages it raises are not raised out of
     8-bit steps). Out: unsigned 8-bit PCM; `raw` is what an input too
@@ -775,7 +791,7 @@ def spk_shape_f(x, rate, hp=SPK_HP, drive=SPK_DRIVE, raw=None, clip="soft",
         X *= 10.0 ** (9.0 * tilt / 20.0)
         x = np.fft.irfft(X, n)
 
-    def level(x):
+    def env_of(x):
         w = max(1, int(rate * 0.03))    # the level: a centred 30 ms RMS...
         c = np.concatenate(([0.0], np.cumsum(x * x)))
         lo = np.clip(np.arange(n) - w // 2, 0, n)
@@ -784,12 +800,16 @@ def spk_shape_f(x, rate, hp=SPK_HP, drive=SPK_DRIVE, raw=None, clip="soft",
         # ...held over the window either side, so a transient is not pumped
         k = np.lib.stride_tricks.sliding_window_view(
             np.pad(env, (w, w), mode="edge"), 2 * w + 1)
-        env = k.max(axis=1)
-        top = np.percentile(env, 99.5)
+        return k.max(axis=1)
+
+    def level(x, top=None):
+        env = env_of(x)
+        if top is None:
+            top = np.percentile(env, 99.5)
         if top <= 0:
             return x * 0.0
-        floor = top / 16.0              # -24 dB: below it, gain stops growing
-        gain = np.sqrt(top / np.maximum(env, floor))    # a 2:1 compressor
+        floor = top / 10 ** (rng / 20.0)    # below it, gain stops growing
+        gain = (top / np.maximum(env, floor)) ** (1.0 - 1.0 / ratio)
         gate = np.clip(env / (top / 250.0), 0.0, 1.0)   # silence (-48 dB) stays
         return x * gain * gate
     if lows != 1.0 and hp:
@@ -798,10 +818,10 @@ def spk_shape_f(x, rate, hp=SPK_HP, drive=SPK_DRIVE, raw=None, clip="soft",
         # drive while the lower tones, which are what the clip bends first,
         # are given less of it
         m = np.clip((f - split * 0.8) / (split * 0.4), 0.0, 1.0)
-        lo, hi = level(np.fft.irfft(X * (1 - m), n)), \
-            level(np.fft.irfft(X * m, n))
-        lo *= np.sqrt(np.mean(hi * hi) / max(np.mean(lo * lo), 1e-12))
-        y = hi + lows * lo
+        top = np.percentile(env_of(x), 99.5)    # ONE reference for both,
+        lo, hi = level(np.fft.irfft(X * (1 - m), n), top), \
+            level(np.fft.irfft(X * m, n), top)  # so a band with nothing
+        y = hi + lows * lo                      # in it stays that way
     else:
         y = level(x)
     if not np.any(y):
@@ -1433,7 +1453,7 @@ class Writer:
     def __init__(self, g, rate, spf, audio_fmt, abytes, pixfmt, title="",
                  credits="", aspect=None, keysecs=KEY_SECS, palette=None,
                  rowscale=1, flip=False, loop=None, repeat=False,
-                 cgapal=None, spk=False, live=None):
+                 cgapal=None, spk=False, live=None, spkp=1):
         # `live` (a TARGETS value): a STREAMED Live file (98.3.18.1) - its
         # frame records and seam carry blit runs between lists and audio
         if live is not None and (pixfmt not in (PF_MONO1, PF_VGA4)
@@ -1447,9 +1467,11 @@ class Writer:
         self.live = live
         if spk and audio_fmt != AUD_PCM8:
             raise V88Error("speaker counts are PCM8's (98.1.1.3)")
+        if spkp > 1 and not spk:
+            raise V88Error("pulses a sample are a speaker file's (98.1.1.3.1)")
         if spk:
-            spk_table(rate)
-        self.spk = spk
+            spk_table(rate, spkp)
+        self.spk, self.spkp = spk, spkp
         if (pixfmt in (PF_CGA4, PF_C512, PF_TEXT)) != (cgapal is not None):
             raise V88Error("a CGA4 file carries its palette byte, a C512 "
                            "file its card and a TEXT file its colour, and "
@@ -1661,11 +1683,14 @@ class Writer:
         hdr[0:4] = V88_SIG
         flags = (F_LOOPREC if seam else 0) | (F_REPEAT if self.repeat else 0) \
             | (F_SPKPWM if self.spk else 0) \
+            | (F_SPKMUL if self.spkp > 1 else 0) \
             | (F_LIVE | F_RUNS if self.live is not None else 0)
         struct.pack_into("<HHIHHBBH", hdr, 4, 1, flags, len(self.recs),
                          self.rate,
                          self.spf, self.audio_fmt, 1, self.abytes)
         struct.pack_into("<HB", hdr, 20, *pit_rate(self.rate, self.spf))
+        if self.spkp > 1:
+            hdr[H_SPKP] = self.spkp
         hdr[H_RING] = getattr(self, "ring", 0)
         for off, size, text in ((32, 48, self.title), (80, 96, self.credits)):
             t = text.encode("ascii", "replace")[:size - 1]
@@ -2075,8 +2100,13 @@ class Reader:
         if self.spk and self.audio != AUD_PCM8:
             raise V88Error("speaker counts in a file whose audio is not "
                            "PCM8 (98.1.1.3)")
+        self.spkp = d[H_SPKP] if flags & F_SPKMUL else 1
+        if flags & F_SPKMUL and (not self.spk or not 2 <= self.spkp <= 4):
+            raise V88Error("%d pulses a sample (98.1.1.3.1)" % self.spkp)
+        if not flags & F_SPKMUL and d[H_SPKP]:
+            raise V88Error("a pulses byte with no SPKMUL flag")
         if self.spk:
-            spk_table(self.rate)
+            spk_table(self.rate, self.spkp)
         if self.runs and not self.live:
             raise V88Error("blit runs in a file that is not LIVE (98.1.3.4)")
         self.target = d[self.slot + R_TARGET]
@@ -2447,7 +2477,57 @@ def set_title(path, title):
     return t.decode("ascii")
 
 
-def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE, lows=1.0):
+def spk_preview(counts, rate, pulses=1, fs=44100):
+    """WHAT THE SPEAKER LINE CARRIES (98.2.15.2), as floats at `fs`: the
+    pulses the counts drive, built at the PIT's own 1,193,182 Hz - low for
+    a count's ticks from each write, high for the rest of the pulse - and
+    brought down to `fs` through a 4x oversampled bin and a brick wall at
+    20 kHz, so the carrier and its harmonics are there as they are and
+    none of them folds into a false tone. reenigne's mod_convert does the
+    same for 8088 MPH. It is the ELECTRICAL line: no cone, no room"""
+    import numpy as np
+    n = PIT_HZ // rate // pulses
+    c = np.frombuffer(bytes(counts), dtype=np.uint8).astype(np.int64)
+    over, out, tail = fs * 4, [], None
+    per = 4 * rate                      # samples a chunk (4 s)
+    for at in range(0, len(c), per):
+        cc = np.repeat(c[at:at + per], pulses)
+        t = np.ones(len(cc) * n, dtype=np.float32)      # 1 = high
+        k = np.arange(n)
+        t[(np.arange(len(cc))[:, None] * n + k)[k < cc[:, None]]] = 0.0
+        cs = np.concatenate(([0.0], np.cumsum(t, dtype=np.float64)))
+        t0 = at * pulses * n
+        edges = np.arange(np.ceil(t0 * over / PIT_HZ),
+                          (t0 + len(t)) * over / PIT_HZ) * PIT_HZ / over - t0
+        edges = edges[(edges >= 0) & (edges <= len(t))]
+        v = np.diff(np.interp(edges, np.arange(len(cs)), cs)) / \
+            np.diff(edges)
+        out.append(v)
+    y = np.concatenate(out) if out else np.zeros(0)
+    Y = np.fft.rfft(y - y.mean())
+    f = np.fft.rfftfreq(len(y), 1.0 / over)
+    Y[(f > 20000) | (f < 20)] = 0
+    y = np.fft.irfft(Y, len(y))[::4]
+    pk = np.abs(y).max() if len(y) else 0
+    return y / pk * 0.9 if pk else y
+
+
+def write_spk_preview(path, counts, rate, pulses=1, fs=44100):
+    """spk_preview into a 16-bit mono WAV"""
+    import numpy as np
+    import wave
+    y = spk_preview(counts, rate, pulses, fs)
+    w = wave.open(path, "wb")
+    w.setnchannels(1)
+    w.setsampwidth(2)
+    w.setframerate(fs)
+    w.writeframes((np.clip(y, -1, 1) * 32767).astype("<i2").tobytes())
+    w.close()
+    return len(y) / float(fs)
+
+
+def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE, lows=SPK_LOWS,
+                rng=SPK_RANGE, ratio=SPK_RATIO):
     """A SPEAKER FILE'S SOUND SHAPED AFTER THE FACT (98.2.15.1): every
     rendition's counts read back to samples, spk_shape'd and written as
     counts again, in the same bytes - each frame record's last `abytes`
@@ -2478,8 +2558,10 @@ def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE, lows=1.0):
                            % (ri, len(where), r.frames))
         ab = r.abytes
         old = b"".join(bytes(d[w:w + ab]) for w in where)
-        new = spk_counts(spk_shape(spk_samples(old, r.rate), r.rate, hp,
-                                   drive, lows=lows), r.rate)
+        new = spk_counts(spk_shape(spk_samples(old, r.rate, r.spkp), r.rate,
+                                   hp, drive, lows=lows, rng=rng,
+                                   ratio=ratio), r.rate,
+                         r.spkp)
         for f, w in enumerate(where):
             d[w:w + ab] = new[f * ab:(f + 1) * ab]
         if r.loop is not None:
@@ -3031,7 +3113,7 @@ def audio_chunks(pcm, nf, spf, afmt, keys=(), search=0, join=None):
 def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
                   keysecs=KEY_SECS, poster=None, audio_fmt=AUD_PCM8,
                   loop=None, repeat=False, resident=None, live=None,
-                  spk=False):
+                  spk=False, spkp=1):
     """SPEC.md 98.2's minimal encoder: every changed byte, losslessly.
     `spk` stores PCM8 as the speaker's counts (98.1.1.3)
     `live` (cga, herc, vga) makes the file LIVE for that screen (98.3.10) -
@@ -3055,7 +3137,7 @@ def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
             join=(loop if loop is not None else "start")
             if resident is not None and afmt == AUD_ADPCM4 else None)
         if spk:
-            chunks = [spk_counts(c, rate) for c in chunks]
+            chunks = [spk_counts(c, rate, spkp) for c in chunks]
     else:
         rate, spf, afmt, abytes = max(1, round(fps * 100)), 100, AUD_NONE, 0
         samples = b""
@@ -3066,7 +3148,7 @@ def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
         rab = 0                         # one block beside them
     wr = Writer(g, rate, spf, afmt if rab else AUD_NONE, rab, PF_MONO1,
                 title=title, keysecs=keysecs, loop=loop, repeat=repeat,
-                spk=spk and bool(rab),
+                spk=spk and bool(rab), spkp=spkp if spk and rab else 1,
                 live=TARGETS[live] if live and resident is None else None)
     surf = bytearray(65536)
     for f, path in enumerate(paths):
@@ -3177,8 +3259,19 @@ def cmd_title(a):
     print("os88vid: %s: title '%s'" % (a.file, t))
 
 
+def cmd_spkwav(a):
+    r = Reader(a.file, a.rendition)
+    if not r.spk:
+        raise V88Error("%s is not made for the speaker (98.1.1.3)" % a.file)
+    c = b"".join(rec[-r.abytes:] for rec, at, i in r.records())
+    secs = write_spk_preview(a.out, c, r.rate, r.spkp)
+    print("os88vid: %s: %.1f s of the speaker line at %d Hz x %d pulse%s"
+          % (a.out, secs, r.rate, r.spkp, "" if r.spkp == 1 else "s"))
+
+
 def cmd_speaker(a):
-    n = spk_reshape(a.file, a.out, a.highpass, a.drive, a.lows)
+    n = spk_reshape(a.file, a.out, a.highpass, a.drive, a.lows, a.range,
+                    a.ratio)
     print("os88vid: %s: %d rendition%s' sound shaped for the speaker "
           "(high-pass %d Hz, drive %.2f)" % (a.out, n, "" if n == 1 else "s",
                                              a.highpass, a.drive))
@@ -3854,6 +3947,12 @@ def main():
     s.add_argument("file")
     s.add_argument("title", help="up to 47 characters; the player's panel "
                    "shows the first 35")
+    s = sub.add_parser("spkwav", help="what a speaker .V88 drives the "
+                       "speaker line with, as a WAV - carrier and all "
+                       "(SPEC.md 98.2.15.2)")
+    s.add_argument("file")
+    s.add_argument("out")
+    s.add_argument("--rendition", type=int, default=0)
     s = sub.add_parser("speaker", help="a speaker .V88's sound shaped for "
                        "the speaker, into a new file (SPEC.md 98.2.15.1)")
     s.add_argument("file")
@@ -3863,10 +3962,15 @@ def main():
     s.add_argument("--drive", type=float, default=SPK_DRIVE,
                    help="the level, an RMS of full scale (default "
                         "%(default)s)")
-    s.add_argument("--lows", type=float, default=1.0,
+    s.add_argument("--lows", type=float, default=SPK_LOWS,
                    help="the band under %d Hz against the one over it, "
-                        "each levelled apart (default 1: one band)"
-                        % SPK_SPLIT)
+                        "each levelled apart (1: one band; default "
+                        "%%(default)s)" % SPK_SPLIT)
+    s.add_argument("--ratio", type=float, default=SPK_RATIO,
+                   help="the leveller's ratio (default %(default)s:1)")
+    s.add_argument("--range", type=float, default=SPK_RANGE,
+                   help="dB: the most a quiet passage is raised (default "
+                        "%(default)s)")
     s = sub.add_parser("decode")
     s.add_argument("file")
     s.add_argument("--frame", type=int, required=True)
@@ -3895,7 +3999,8 @@ def main():
         return {"stat": cmd_stat, "verify": cmd_verify, "import": cmd_import,
                 "encode": cmd_encode, "info": cmd_info, "decode": cmd_decode,
                 "benchdat": cmd_benchdat, "poster": cmd_poster,
-                "title": cmd_title, "speaker": cmd_speaker}[a.cmd](a) or 0
+                "title": cmd_title, "speaker": cmd_speaker,
+                "spkwav": cmd_spkwav}[a.cmd](a) or 0
     except (XdvError, V88Error) as e:
         sys.exit("os88vid: %s" % e)
 

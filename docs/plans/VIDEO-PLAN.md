@@ -2236,14 +2236,29 @@ screen, `spk2x.py`'s shape (the session's scratch instrument):
 With the ~60-cycle acknowledge each, two pulses are ~781 of a sample's
 864 cycles - **~90% of the machine against 48%**. A clip as light as Bad
 Carrot's (decode 1.2% on average) plays; a clip budgeted for one pulse
-does not play at all. An optimised build (counts pre-halved in the file,
-a cheaper toggle) might reach ~80%, which is still a different budget
-class: it would be a per-file choice the encoder budgets for (a header
-flag - a FORMAT change), never the player's default. **Waiting on the
-owner's listen to the prototype** (`badcar2x-ST11M.VHD`: this player and
-the shaped Bad Carrot) - whether an 11 kHz carrier is worth that at all.
-11,025 Hz files stay dead: SPEC.md 34.11.4 measured a 4 s clip taking
-20. The "5150 speaker" preview in the encoder is last.
+does not play at all. The owner's listen to the prototype: *"much better,
+the ringing whine is higher pitched but less annoying"*.
+
+**BUILT as a per-file choice** (SPEC.md 34.11.7, 98.1.1.3.1): flag 64
+SPKMUL and header byte 24 = pulses a sample, the counts made for N / P,
+`--spk-pulses 2`, the library's `os88spk_isrm` with a self-modifying jump
+for the toggle (whole 462, half 248 cycles to resume - the floor on an
+8088). It is **~96% of a 5150**, so the encoder refuses it on a `speed` 1
+profile (the 80% rule) and the player mutes it there by default (M plays
+it). **The 5150's answer is one pulse at 8,000 Hz: an 8 kHz carrier for
+~75%**, which leaves ~25% for the picture and needs nothing new
+(34.11.7.1). Two pulses belong to a faster machine: ~40% on a 10 MHz 8088,
+~15-20% on a 12 MHz 286 (D, neither measurable here), and a 286 could take
+22,050 Hz at one pulse - no audible carrier - if the door's 74-count floor
+is lowered for `CPU_286` (kernel work, not done).
+
+**The owner's third listen** picked `--spk-lows 0.5 --spk-drive 0.5`,
+the defaults now (98.2.15.1); the soft intro is the part still lost.
+**Next listen** (`badcar4-ST11M.VHD`, this player): ratio 4 / range 36 /
+cut 150 (BADCARI), ratio 6 (BADCARJ), BADCARI at 8,000 Hz (BADCAR8I) and
+at two pulses (BADCAR2I, muted by default - M), BADCARW for reference.
+Each has its `--spk-preview` WAV (98.2.15.2), reenigne's mod_convert's
+idea, so the next choice can start at the desk.
 
 **PC speaker follow-ons** (15.9):
 - **Tracker's full screen and Audio**: a HANDOFF to another session,

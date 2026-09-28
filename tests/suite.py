@@ -8350,6 +8350,17 @@ SOAK = [
         "result verifying. Broken on purpose (the filter, the compressor and "
         "the drive taken out of spk_shape_f) - red at both",
         needs=("ffmpeg",)),
+    Row("vidspk2", "soak", py("tests/vidspk.py", "--pulses", "2"), 32.0,
+        "SPEC.md 34.11.7, 98.1.1.3.1: vidspk on a clip made for TWO PULSES "
+        "A SAMPLE (SPKMUL) - an 11 kHz carrier from 5,512 Hz sound. An 8088 "
+        "opens it muted (vp_mwhy 2) and M plays it; the 800 writes to 42h "
+        "are each count TWICE, the whole path's and the half path's, in "
+        "order; at most 4% of the half-period PIT periods without a pulse "
+        "(3.5% measured); the play takes the sound's time. Broken on purpose "
+        "(os88spk_isrm's half path without its out 0x42) - red at 2 and 3",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv")),
     Row("vidspkcounts", "soak", py("tests/vidspk.py", "--counts"), 30.0,
         "SPEC.md 98.1.1.3: vidspk on a clip MADE for the speaker - its PCM8 "
         "stored as the counts (SPKPWM), which the player copies rather than "

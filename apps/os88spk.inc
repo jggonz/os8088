@@ -23,15 +23,14 @@
 ; encoder budgets frames against them (98.2.15).
 ;
 ;   os88spk_init  DI = the ring's segment, AH bits 4-5 = its size code, DX =
-;                 the rate (4,679..16,124 Hz). Writes the table; plays
-;                 nothing. CF=1 the rate cannot be played. Any time
+;                 the rate, CL = PULSES A SAMPLE (0 or 1: one). The pulse's
+;                 period is N / pulses, N = 1,193,182 / rate, and must be
+;                 74..255 PIT counts - so the CARRIER is the rate x pulses
+;                 (SPEC.md 34.11.7). Writes the table, for that period;
+;                 plays nothing. CF=1 it cannot be played. Any time
 ;   os88spk_go    the speaker plays the ring from CONS. INSIDE YOUR OWN
 ;                 FSXF_RATE BRACKET; CF=1, AX = SPK_E_* refused. The hook's
 ;                 periods become K samples each (OSAPI_FSX_SPK)
-;   SPK2X (a PROTOTYPE define, no Makefile knob): two pulses a sample, the
-;   carrier at twice the rate - every other entry the held count again.
-;   ~90% of an 8088 at 5,512 Hz against 48%: docs/plans/VIDEO-PLAN.md 15.10
-;
 ;   os88spk_stop  it stops where it is - a pause, a stop, a seek. CONS is
 ;                 exact; the ring is kept, and os88spk_go goes on from it.
 ;                 The bracket's end stops it too, so call go again in the next
@@ -49,6 +48,7 @@ os88spk_init:
     push dx
     push di
     push es
+    mov [cs:os88spk_pin], cl
     mov cl, ah                      ; RL = 4096 << the size code, taken
     and cl, 0x30                    ; before the divide spends AX
     shr cl, 1
@@ -65,6 +65,18 @@ os88spk_init:
     mov ax, 0x34DE
     div bx                          ; AX = N
     pop bx
+    mov cl, [cs:os88spk_pin]        ; CL = pulses a sample (0 is one)
+    or cl, cl
+    jnz .pp
+    inc cx
+.pp:
+    cmp cl, 2                       ; (two is what os88spk_isrm plays;
+    ja .no                          ; 3 and 4 are the format's, 34.11.7)
+    mov [cs:os88spk_pp], cl
+    div cl                          ; AL = N / pulses, the pulse's period
+    or ah, ah                       ; (N < 1,024 here, so AH is the
+    jnz .no                         ; remainder): exact, or not played
+    xor ah, ah
     cmp ax, 74                      ; ...and 74 the shortest period a pulse
     jb .no                          ; ends in (SPEC.md 34.4)
     mov [cs:os88spk_n], ax
@@ -123,11 +135,16 @@ os88spk_go:
     mov word [cs:os88spk_kr], 1     ; ...which ends a period: the door has
     popf                            ; written K and the chain by then
     mov dx, [cs:os88spk_n]
-%ifdef SPK2X
-    shr dx, 1                       ; SPK2X: two pulses a sample, a carrier
-    mov byte [cs:os88spk_ph], 0     ; at twice the rate; the first entry a
-%endif                              ; whole one
     mov si, os88spk_isr
+    mov al, [cs:os88spk_pp]
+    cmp al, 1
+    je .one
+    mov byte [cs:os88spk_isrm.j+1], os88spk_isrm.whole - (os88spk_isrm.j + 2)
+    mov al, [cs:os88spk_sil]        ; PULSES A SAMPLE (34.11.7): the first
+    mov [cs:os88spk_isrm.hv+1], al  ; entry a whole one, and the half path
+                                    ; silence until it has a count
+    mov si, os88spk_isrm
+.one:
     mov di, os88spk_kn              ; K, and the chain after it
     xor al, al
     push di
@@ -170,26 +187,10 @@ os88spk_stop:
 ; -----------------------------------------------------------------------------
 os88spk_isr:
     push ax
-%ifdef SPK2X
-    xor byte [cs:os88spk_ph], 1     ; SPK2X: every other entry the SAME
-    jnz .whole                      ; count again, and nothing else
-    mov al, [cs:os88spk_hold]
-    out 0x42, al
-    mov al, 0x20
-    out 0x20, al
-    pop ax
-    iret
-.whole:
-%endif
     push si
     push ds
     lds si, [cs:os88spk_rp]
     lodsb                           ; a PWM count, 1..N-1
-%ifdef SPK2X
-    shr al, 1                       ; (the counts are N's: halved, never 0)
-    adc al, 0
-    mov [cs:os88spk_hold], al
-%endif
     out 0x42, al                    ; ...and the pulse
     mov [cs:os88spk_rp], si
     dec word [cs:os88spk_left]
@@ -214,15 +215,67 @@ os88spk_isr:
     iret
 .per:                               ; A RATE PERIOD, played: the next one's
     mov ax, [cs:os88spk_kn]         ; samples granted, and the entry the
-%ifdef SPK2X
-    shr ax, 1                       ; (SPK2X: K is the door's ENTRIES)
-%endif
-    mov [cs:os88spk_kr], ax         ; kernel would have had
+    cmp byte [cs:os88spk_pp], 1     ; kernel would have had - K is the
+    je .k1                          ; door's ENTRIES, a sample's pulses
+    push dx                         ; each (34.11.7): once a period
+    xor dx, dx
+    push bx
+    mov bl, [cs:os88spk_pp]
+    xor bh, bh
+    div bx
+    pop bx
+    pop dx
+.k1:
+    mov [cs:os88spk_kr], ax
     call os88spk_grant
     pop ds
     pop si
     pop ax
     jmp far [cs:os88spk_chain]
+
+; -----------------------------------------------------------------------------
+; os88spk_isrm - os88spk_isr for TWO PULSES A SAMPLE (34.11.7): channel 0 runs
+; at N / 2, so the carrier is twice the rate. A sample's first entry is the
+; WHOLE path - os88spk_isr's, and its count written into the half path's own
+; immediate; the second is the HALF PATH - that count again and the EOI,
+; nothing read, nothing counted. Which one an entry takes is the displacement
+; of the jump it starts with, each path pointing it at the other: 35 cycles
+; a whole pulse cheaper than a counter byte (34.11.7.1). The event paths
+; are os88spk_isr's, entered with the same three words pushed
+; -----------------------------------------------------------------------------
+os88spk_isrm:
+.j:
+    jmp short .whole                ; (the displacement is the toggle: the
+.half:                              ; whole path points it here, this path
+    push ax                         ; back there)
+    mov byte [cs:.j+1], .whole - (.j + 2)
+.hv:
+    mov al, 0                       ; (the whole path's count, patched in)
+    out 0x42, al
+    mov al, 0x20
+    out 0x20, al
+    pop ax
+    iret
+.whole:
+    push ax
+    mov byte [cs:.j+1], .half - (.j + 2)
+    push si
+    push ds
+    lds si, [cs:os88spk_rp]
+    lodsb                           ; a PWM count, made for N / pulses
+    out 0x42, al
+    mov [cs:.hv+1], al
+    mov [cs:os88spk_rp], si
+    dec word [cs:os88spk_left]
+    jz .ev
+    mov al, 0x20
+    out 0x20, al
+    pop ds
+    pop si
+    pop ax
+    iret
+.ev:
+    jmp os88spk_isr.ev
 
 ; -----------------------------------------------------------------------------
 ; os88spk_grant - IF = 0: what the last grant played added to CONS, and the
@@ -294,8 +347,6 @@ os88spk_sil:    db 0                ; a dry grant's count: the table's middle
 os88spk_dry:    db 0                ; the grant is that, and plays nothing
 os88spk_rl:     dw 0                ; RL: where TOTAL and CONS are
 os88spk_rseg:   dw 0                ; the ring's segment
-os88spk_n:      dw 0                ; N, the PIT counts a sample
-%ifdef SPK2X
-os88spk_ph:     db 0                ; SPK2X: 1 after a whole entry
-os88spk_hold:   db 0                ; ...and the count it wrote
-%endif
+os88spk_n:      dw 0                ; the PIT counts a PULSE: N / pulses
+os88spk_pp:     db 1                ; pulses a sample (34.11.7)
+os88spk_pin:    db 0                ; ...as init was handed it

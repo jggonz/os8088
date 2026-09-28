@@ -58146,6 +58146,71 @@ The experiment's code is not in the tree; the three ICW values above are all
 of it.
 
 
+#### 34.11.7 Pulses a sample: the carrier above the rate
+
+**The whine a speaker clip plays over is the CARRIER** - one pulse a
+sample, so a 5,512 Hz clip whines at 5,524 Hz, where the ear and a 2¼-inch
+cone are both at their most sensitive (98.2.15.1 measures it off the
+owner's 5150). The owner heard the carrier doubled - an 11 kHz whine - as
+*"much better, the ringing whine is higher pitched but less annoying"*.
+
+So `os88spk_init` takes **CL = pulses a sample, P** (0 or 1 is one; the
+library plays 1 and 2, and refuses more). It builds the table for a
+pulse's period, N / P, and `os88spk_go` opens the door at that period, so
+channel 0 interrupts P times a sample and the carrier is the rate × P. The
+door is unchanged: it sees a shorter N.
+- **P = 1 is the ISR it always was**, byte for byte: a file that asks for
+  nothing pays nothing.
+- **P = 2 enters `os88spk_isrm`**, which starts with a `jmp short` whose
+  displacement is the toggle. The WHOLE path points it at the half path,
+  puts its count out and writes it into the half path's own `mov al, imm8`;
+  the **half path** points it back, puts that immediate out, sends the EOI
+  and returns - nothing read from the ring, nothing counted.
+- **The door's K is ENTRIES**, so a period's samples are K / P, divided
+  once a period at the chain. K must be a multiple of P or the period would
+  end on a half entry, so the Video Player rounds its speaker bracket's
+  period to whole SAMPLES (N counts) when P > 1 - within a sample of the
+  file's, as the door's own rounding already is.
+- **Auto-EOI stays refused** (34.11.6): the half path keeps its EOI.
+- **The player mutes a P = 2 file by default on an 8086-class CPU**
+  (98.3.17's `vp_mwhy` 2, as for PCM past `VP_SPKMAX`); M plays it anyway.
+
+##### 34.11.7.1 What pulses cost, measured
+
+On MartyPC's 4.77 MHz Hercules 5150 with a fixed disk, the Video Player
+full screen, *Bad Carrot* at 160 × 58, 5 fps. Each pulse is timed from the
+ISR's first instruction to the first instruction back in the code it
+interrupted (so its `iret` is in), plus ~60 cycles for the acknowledge:
+
+| | whole / half path, cycles | the pulses' share | lost | 300 frames |
+|---|---|---|---|---|
+| 5,512 Hz, one pulse (5.5 kHz carrier) | 389 / - | ~52% | 2.5% | 0 late |
+| 8,000 Hz, one pulse (8 kHz) | 390 / - | ~75% | 2.5% | 0 late |
+| 5,512 Hz, two, a counter byte (11 kHz) | 497 / 246 | ~100% | 3.5% | 0 late |
+| 5,512 Hz, two, the jump toggle (11 kHz) | 462 / 248 | ~96% | 2.4% | 0 late |
+
+The toggle bought 35 cycles a whole pulse over a counter byte; the half
+path is at its floor, where an 8088 is fetch-bound and every entry still
+pays the acknowledge, the EOI and the `iret`. **So two pulses a sample are
+~96% of a 5150**: a clip as still as Bad Carrot plays, and a 400 × 145
+30 fps one budgeted for one pulse took 845 s to play 30 (VIDEO-PLAN 15.10).
+The encoder's model is `CYC_SPK_WHOLE2` 476 and `CYC_SPK_HALF` 262, the
+same convention as `CYC_SPK_PULSE` (entry to `iret` plus the acknowledge),
+so on a `speed` 1 profile `--spk-pulses 2` is ~87% and refused by 98.2.15's
+80% rule, with the advice to take `--rate 8000` instead: **the 8 kHz
+carrier is the 5150's**, at ~75%, and needs nothing new in the file.
+
+A faster machine is where two pulses belong, and none of these is
+measured: MartyPC's only faster machine is a 7.16 MHz turbo XT, and there
+is no 286 in any emulator here that can be timed. Scaled from the cycles
+above:
+- **a 10 MHz 8088** takes two pulses at 5,512 Hz for ~40% (D);
+- **a 12 MHz 286**, whose interrupt and `iret` are a fraction of an
+  8088's, is estimated at ~15-20% for the same, and could take one pulse
+  at 22,050 Hz - no audible carrier at all - for ~25% (D). That needs the
+  door's 74-count floor lowered on `CPU_286` and up (a pulse of 54 counts),
+  which is kernel work not done.
+
 ## 35. Recorder — the sound layer's recording client
 
 `apps/recorder` needs `SND_CAP_PCM_IN` (a Sound Blaster) to record and
@@ -150514,6 +150579,23 @@ The rules:
   on a card as for any PCM8 file.
 - `--audio speaker` (98.2.15) is what writes it.
 
+##### 98.1.1.3.1 SPKMUL: pulses a sample
+
+**Flag 64 says the speaker plays P pulses a sample**, and header byte 24
+says P, 2..4 (§34.11.7). The counts are then made for a pulse's period,
+N / P, rather than for N: t[s] = 1 + s·(N/P − 2)/255. P must divide N
+exactly and N / P must be 74..255, so at 5,512 Hz (N = 216) P = 2 is the
+one that fits.
+- **Only with SPKPWM**: SPKMUL alone is a bad file, and so is byte 24
+  outside 2..4 with the flag, or anything but 0 without it.
+- **A player that knows neither refuses the file**, by the header's own
+  rule for an unknown flag, rather than playing counts made for half the
+  period as if they were whole ones.
+- **A card plays it as it plays any SPKPWM file** - the counts are the
+  samples, scaled by (N/P − 2)/255 and so quieter again.
+- `--spk-pulses P` (98.2.15) is what writes it; a resident file is refused
+  it for now.
+
 #### 98.1.2 Layouts: the file is laid out for its surface on the host
 
 **Every address in a file is the target surface's own memory image**, with
@@ -152372,11 +152454,17 @@ from ffmpeg's floats, not 8-bit steps):
    wall with a squared one-octave ramp, and the top **tilted up +9 dB from
    400 Hz to 2.4 kHz**, where the cone and the ear are both at their best;
 2. **the level evened out** over a centred 30 ms RMS held over the window
-   either side - a 2:1 compressor, its gain growing no further below −24 dB
-   of the loudest 0.5%, and **silence left silent** below −48 dB;
-3. **driven to an RMS of `--spk-drive`** (0.45 of full scale) through a
-   `tanh` soft clip, which rounds off ~5% of samples. Loudness is what a
+   either side - a `--spk-ratio`:1 compressor (2), its gain growing no
+   further below `--spk-range` dB (24) under the loudest 0.5%, and
+   **silence left silent** below −48 dB - in TWO BANDS, under 700 Hz and
+   over it, each levelled against the whole signal's loudest so that a
+   band with nothing in it stays empty, and the lower one scaled by
+   `--spk-lows` (0.5);
+3. **driven to an RMS of `--spk-drive`** (0.5 of full scale) through a
+   `tanh` soft clip, which rounds off ~6% of samples. Loudness is what a
    pulse width buys, and on this speaker clipping is the cheap end of it.
+
+Those defaults are the owner's pick of four listens, below.
 
 **The owner's listens** (2026-09-28, on the 5150): at 0.45 *"clearly
 audible, even good - except the coil whine still dominates"*; at 0.6 *"the
@@ -152392,8 +152480,25 @@ and the band over it levelled apart, brought to one level and the lows
 scaled by L, so the voice keeps its drive and the lower tones get less.
 At L 0.35 and drive 0.55 the voice band is as loud as at 0.6 (−4.2 dB
 under the carrier), the lows 4 dB quieter and 8.0% clipped; at L 0.5 and
-drive 0.5, 5.9%. The default stays one band at 0.45 until the owner has
-heard both.
+drive 0.5, 5.9%.
+
+The third listen, the song in three parts - a soft intro that is a beat,
+music before the singing, and the singing on: L 0.35 at 0.55 *"better than
+0.6? the intro still mostly inaudible, the music almost audible"*, and L 0.5
+at 0.5 **"the best so far"** - the intro *"for the first time barely
+audible"*, the music *"clearly audible"*, and under the singing still fuzz
+between the voice and the whine. So the defaults are L 0.5 at 0.5. The
+first build levelled each band against its OWN loudest and then matched
+their levels, which raised an empty band's noise to the voice's: it is
+the shared reference now, and measures within 0.3 dB of the file heard
+on the voice band and 2 dB lower on the lows.
+
+What is left is the intro, and a gentler leveller was the limit there,
+not its range: at ratio 2 the intro is 24 counts RMS against the singing's
+46.5, and a 36 dB range moves it to 25. **Ratio 4, range 36 and a cut at
+150 Hz** - the beat's own punch is under 250 - takes it to 33 against
+52.5, the voice to −3.6 dB under the carrier, clipping unchanged (6.6%).
+That is the next listen, with ratio 6 beside it.
 
 A synthetic clip of a loud 60 Hz bass and a quiet 880 Hz line measures it
 the other way round: the line −43.0 dB → −5.4 dB of full scale, the bass
@@ -152401,12 +152506,32 @@ the other way round: the line −43.0 dB → −5.4 dB of full scale, the bass
 speaker file before this was.
 
 **A file already made is shaped after the fact** by `os88vid.py speaker IN
-OUT [--highpass HZ] [--drive D]`: each rendition's counts read back to
+OUT [--highpass HZ] [--drive D] [--lows L] [--ratio R] [--range DB]`: each
+rendition's counts read back to
 samples (`spk_samples`), shaped, and written as counts into the same bytes -
 each frame record's last `abytes` and the seam's - so nothing else in the
 file moves, and it is re-read whole. A resident file's sound is a packed
-block and is refused: encode it again. The result is unproven on the iron
-until the owner has heard it; that is the check this wants.
+block and is refused: encode it again.
+
+##### 98.2.15.2 Hearing it here: `--spk-preview` and `os88vid spkwav`
+
+**An emulator plays a speaker clip better than the 5150 does**, because it
+filters the carrier away (98.2.15.1), so it is no place to judge one. The
+preview is what the SPEAKER LINE carries: `os88vid.spk_preview` builds the
+pulses at the PIT's own 1,193,182 Hz - low for a count's ticks from each
+write, high for the rest - integrates them into 4 × 44,100 Hz bins, and
+takes them to 44,100 Hz through a brick wall at 20 kHz, so the carrier and
+its harmonics are there as they are and none folds into a false tone.
+reenigne's `mod_convert` does the same for 8088 MPH (*"a little emulator of
+the PC speaker circuit"*). It is the electrical line - no cone, no room, no
+case - so it tells drive, clipping and balance apart, and the carrier's
+share, and not how loud the machine is.
+
+`os88venc --spk-preview OUT.WAV` writes it with the encode; `os88vid.py
+spkwav FILE.V88 OUT.WAV` writes it for a file already made, either pulse
+count. Measured on the file the owner picked, the preview's bands agree
+with the analysis above to ~1 dB: the carrier −3.6 dB, the voice band's
+four octaves −12 to −14.
 
 #### 98.2.16 Text video: `--pixfmt text`, and what CLARITY costs
 

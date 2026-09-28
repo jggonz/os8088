@@ -431,6 +431,8 @@ CYC_AUDIO = 13.0        # the interrupt's copy of a PCM8 byte into the
 # than merely played through it
 CYC_SPK_PULSE = 400.0
 CYC_SPK_BYTE = 15.0     # a plain copy: the file carries the counts
+CYC_SPK_WHOLE2 = 476.0  # --spk-pulses 2: the whole pulse, and the half one,
+CYC_SPK_HALF = 262.0    # measured the same way as CYC_SPK_PULSE (34.11.7.1)
                         # (98.1.1.3), so the table is the encoder's, not the
                         # player's. MEASURED: vp_aput 27.7 cycles a byte of
                         # wall time on MartyPC's 5150, ~15 its own once the
@@ -2724,7 +2726,11 @@ def _encode(a, keep, tick, readers):
                                "through the speaker - VIDEO.O88 mutes %d "
                                "(SPEC.md 98.3.15)" % (SPK_MAX_8088, r))
         a.rate = r
-    if audio == "none" or not has_audio:
+        if a.spk_pulses > 1 and a.resident:
+            raise vid.V88Error("--spk-pulses: a streamed file's, not a "
+                               "resident one's (34.11.7)")
+        vid.spk_table(r, a.spk_pulses)  # (the pulses divide N, and a
+    if audio == "none" or not has_audio:  # pulse is 74..255 counts)
         afmt, rate, spf, abytes = vid.AUD_NONE, round(fps * 100), 100, 0
     else:
         afmt = vid.AUD_BY_NAME[audio]
@@ -2744,12 +2750,17 @@ def _encode(a, keep, tick, readers):
         # THE SPEAKER TAKES ITS SHARE OF EVERYTHING (98.2.15): the pulses are
         # interrupts on top of the whole machine - decode, the disk's calls,
         # the loop - so the profile's shares are of what is LEFT
-        spk_share = rate * (CYC_SPK_PULSE + CYC_SPK_BYTE) / (
+        spk_share = rate * ((CYC_SPK_PULSE if a.spk_pulses == 1 else
+                             CYC_SPK_WHOLE2 + CYC_SPK_HALF) + CYC_SPK_BYTE) / (
             vid.HZ * (prof.get("speed") or 1))
         if spk_share >= 0.8:
-            raise vid.V88Error("--audio speaker: %d Hz takes %.0f%% of this "
-                               "machine and leaves too little to draw with"
-                               % (rate, 100 * spk_share))
+            raise vid.V88Error("--audio speaker: %d Hz%s takes %.0f%% of this "
+                               "machine and leaves too little to draw with%s"
+                               % (rate, " x %d pulses" % a.spk_pulses
+                                  if a.spk_pulses > 1 else "",
+                                  100 * spk_share,
+                                  " - --rate 8000 raises the whine to 8 kHz "
+                                  "for ~70%" if a.spk_pulses > 1 else ""))
         prof["avg"] *= 1 - spk_share
         prof["peak"] *= 1 - spk_share
         if prof.get("owe"):             # ...and of an owed frame's periods
@@ -2922,6 +2933,7 @@ def _encode(a, keep, tick, readers):
                     loop=None if a.loop_from is None else
                     max(0, round(a.loop_from * fps)),
                     repeat=a.repeat, spk=spk and bool(afmt),
+                    spkp=a.spk_pulses if spk and afmt else 1,
                     live=vid.TARGETS[a.live] if a.live and not a.resident
                     else None)
     if not a.resident and enc.disk.per is not None:
@@ -2936,7 +2948,8 @@ def _encode(a, keep, tick, readers):
         # would otherwise sit 25-30 dB under the pulses' own carrier
         pcm = vid.spk_shape_f(np.frombuffer(ffmpeg_audio(
             a.src, rate, a.start, a.end, a.volume, "f32le"), dtype="<f4"),
-            rate, a.spk_highpass, a.spk_drive, lows=a.spk_lows)
+            rate, a.spk_highpass, a.spk_drive, lows=a.spk_lows,
+            rng=a.spk_range, ratio=a.spk_ratio)
         say("   speaker: shaped - nothing under %d Hz, the level evened out "
             "and driven to %.0f%% RMS (--spk-shape off to take the sound "
             "as it is)" % (a.spk_highpass, 100 * a.spk_drive))
@@ -2987,7 +3000,8 @@ def _encode(a, keep, tick, readers):
         nf, wr.keyint, wr.key0), search=jobs if a.adpcm == "search" else 0,
         join=join) if afmt else None
     if spk and chunks:                  # THE SPEAKER'S COUNTS, not samples
-        chunks = [vid.spk_counts(c, rate) for c in chunks]  # (98.1.1.3)
+        chunks = [vid.spk_counts(c, rate, a.spk_pulses)     # (98.1.1.3)
+                  for c in chunks]
     sound = []
     for f, target in enumerate(pend):
         tick("encode", f, nf)
@@ -3153,6 +3167,13 @@ def _encode(a, keep, tick, readers):
     say("   %d keyframes = %d bytes (%.1f%% of the file), poster %d"
         % (res["keys"], res["keybytes"],
            100.0 * res["keybytes"] / res["bytes"], res["poster"]))
+    if getattr(a, "spk_preview", None) and spk and afmt:
+        rp = vid.Reader(a.out)          # WHAT THE 5150's SPEAKER LINE WILL
+        secs = vid.write_spk_preview(   # CARRY (98.2.15.2), carrier and all
+            a.spk_preview, b"".join(rec[-rp.abytes:]
+                                    for rec, at, i in rp.records()),
+            rp.rate, rp.spkp)
+        say("   speaker preview: %s, %.1f s" % (a.spk_preview, secs))
     return res
 
 
@@ -3257,12 +3278,30 @@ def parser():
     ap.add_argument("--spk-highpass", type=int, default=vid.SPK_HP,
                     metavar="HZ", help="with --spk-shape: nothing under this "
                     "(default %(default)s; 0 keeps the bass)")
-    ap.add_argument("--spk-lows", type=float, default=1.0,
+    ap.add_argument("--spk-pulses", type=int, choices=(1, 2),
+                    default=1,
+                    help="with --audio speaker: pulses a sample, so the "
+                         "speaker's whine is the rate times this - 2 at "
+                         "5512 Hz is an 11 kHz carrier, much quieter to the "
+                         "ear, at the price of the machine the extra pulses "
+                         "take (SPEC.md 34.11.7, 98.1.1.3.1). Older players refuse the "
+                         "file")
+    ap.add_argument("--spk-preview", metavar="WAV",
+                    help="with --audio speaker: also write what the speaker "
+                         "line will carry - the pulses, carrier and all - as "
+                         "a WAV to listen to here (SPEC.md 98.2.15.2)")
+    ap.add_argument("--spk-ratio", type=float, default=vid.SPK_RATIO,
+                    help="with --spk-shape: the leveller's ratio - higher "
+                         "lifts quiet passages more (default %(default)s:1)")
+    ap.add_argument("--spk-range", type=float, default=vid.SPK_RANGE,
+                    metavar="DB", help="with --spk-shape: the most a quiet "
+                    "passage is raised (default %(default)s)")
+    ap.add_argument("--spk-lows", type=float, default=vid.SPK_LOWS,
                     help="with --spk-shape: the band under %d Hz levelled "
                          "apart from the one over it and scaled by this, so "
                          "the voice keeps its drive while the lower tones - "
-                         "what the clip bends first - get less (default 1: "
-                         "one band)" % vid.SPK_SPLIT)
+                         "what the clip bends first - get less (1: one band; "
+                         "default %s)" % (vid.SPK_SPLIT, vid.SPK_LOWS))
     ap.add_argument("--spk-drive", type=float, default=vid.SPK_DRIVE,
                     help="with --spk-shape: the level, an RMS of full scale "
                          "(default %(default)s; higher is louder and clips "

@@ -149,8 +149,10 @@ V88F_REPEAT equ 4                   ; (98.1.1.2); Repeat on at the start
 V88F_LIVE   equ 8                   ; ...may play on the live desktop (98.3.10)
 V88F_RUNS   equ 16                  ; ...its frame records carry BLIT RUNS
 V88F_SPKPWM equ 32                  ; ...its PCM8 is the SPEAKER's counts
+V88F_SPKMUL equ 64                  ; ...made for PULSES A SAMPLE past one
+V88_SPKP    equ 24                  ; (98.1.1.3.1): how many, 2..4
 V88F_KNOWN  equ V88F_RESIDENT | V88F_LOOPREC | V88F_REPEAT | V88F_LIVE \
-                | V88F_RUNS | V88F_SPKPWM
+                | V88F_RUNS | V88F_SPKPWM | V88F_SPKMUL
 R_TARGET    equ 53                  ; LIVE: the screen a rendition was drawn
                                     ; for - 1 CGA, 2 Hercules, 3 VGA/EGA
 V88_AUDBLK  equ 176                 ; RESIDENT: the audio block's offset,
@@ -1045,6 +1047,18 @@ vp_parse:
     jne .bad
     mov byte [vp_spkpwm], 1
 .ncnt:
+    mov byte [vp_spkp], 1           ; PULSES A SAMPLE (98.1.1.3.1): the
+    test byte [es:V88_FLAGS], V88F_SPKMUL   ; counts made for N / pulses,
+    jz .np1                         ; which only a speaker file carries
+    cmp byte [vp_spkpwm], 0
+    je .bad
+    mov ah, [es:V88_SPKP]
+    cmp ah, 2
+    jb .bad
+    cmp ah, 4
+    ja .bad
+    mov [vp_spkp], ah
+.np1:
     xor bx, bx
     or al, al
     jz .aud
@@ -5978,6 +5992,23 @@ vp_sstart:
     shr dx, 1
     shl al, 1
 .clk:
+    cmp byte [vp_snd], VP_SPK       ; PULSES A SAMPLE (34.11.7): the period
+    jne .clk2                       ; a whole number of SAMPLES, so the
+    cmp byte [vp_spkp], 1           ; door's K is a multiple of the pulses
+    je .clk2                        ; and the kernel's entry is a sample's
+    push ax                         ; first - within a sample of the
+    push bx                         ; file's, as the door's own rounding
+    mov al, [cs:os88spk_n]          ; is
+    mul byte [vp_spkp]              ; AX = N, the counts a sample
+    mov bx, ax
+    mov ax, dx
+    xor dx, dx
+    div bx
+    mul bx
+    mov dx, ax
+    pop bx
+    pop ax
+.clk2:
     mov [vp_pitper], al
     mov [vp_pdiv], dx
     mov byte [vp_sess], 1
@@ -8042,8 +8073,11 @@ vp_mdet:
     jnz .set
     cmp byte [vp_tier], CPU_8086
     jne .set
+    cmp byte [vp_spkp], 1           ; (two pulses a sample are ~96% of an
+    ja .fast                        ; 8088: 34.11.7.1)
     cmp word [vp_rate], VP_SPKMAX
     jbe .set
+.fast:
     mov byte [vp_mwhy], 2
 .set:
     mov al, [vp_mwhy]
@@ -8155,7 +8189,10 @@ vp_sndprep:
     mov di, dx
     mov ah, VP_RLCODE << SND_OPENF_RLSH
     mov dx, [vp_rate]
+    push cx
+    mov cl, [vp_spkp]               ; pulses a sample (98.1.1.3.1)
     call os88spk_init
+    pop cx
     pop di
     jc .spkno                       ; a rate it cannot: silent
     mov byte [vp_snd], VP_SPK
@@ -11777,6 +11814,7 @@ vp_sopn:      db 0                  ; the stream is open (and owes a close)
 vp_sflag:     db 0
 vp_afn:       db 0                  ; the silence byte
 vp_spkpwm:    db 0                  ; the PCM8 is speaker counts (98.1.1.3)
+vp_spkp:      db 1                  ; ...made for this many pulses a sample
 vp_aseg:      dw 0                  ; the ring, and its control words
 vp_tdr:       dw 0
 vp_szero:                           ; --- zeroed at every open ---
