@@ -38,7 +38,9 @@ so it is checked here with no Tk at all:
    rendition and not one other byte, the file still verifies, the panel's
    keyframe for a frame is the one a play from it starts at, drawn exactly
    as the stream draws that frame - on a five-key encode and on the
-   three-rendition logo.
+   three-rendition logo. set_title changes the header's title field and
+   not one other byte: a long title cut to 47, a shorter one after it with
+   no tail of the old, a control character a '?'.
 10. THE PREVIEW STARTS WHERE THE SCREEN DOES (SPEC.md 98.2.9): a VGA8
    frame 0 too big for one record is pre-rolled, and a colour play starts
    at key 0 past it - so the preview's first frame is key 0's whole
@@ -446,6 +448,29 @@ def leg9(tmp, bad):
             if not np.array_equal(np.asarray(fr), np.asarray(img)):
                 bad.append("9: %s key %d is not drawn as frame %d is"
                            % (os.path.basename(path), i, k))
+        # ...and THE TITLE, IN PLACE: a long one cut to the field, a short
+        # one after it leaving no tail, a control character a '?' - each
+        # changing header bytes 32..79 and no other, the file verifying
+        field = set(range(vid.TITLE_AT, vid.TITLE_AT + vid.TITLE_LEN))
+        for want, title in (("L" * 47, "L" * 60), ("Short?one", "Short\tone")):
+            before = open(path, "rb").read()
+            got = vid.set_title(path, title)
+            after = open(path, "rb").read()
+            diff = {i for i in range(len(before)) if before[i] != after[i]}
+            vid.verify_v88(path)
+            r = vid.Reader(path)
+            raw = after[vid.TITLE_AT:vid.TITLE_AT + vid.TITLE_LEN]
+            ok = got == want and r.title == want and diff and \
+                diff <= field and raw == want.encode() + bytes(
+                    vid.TITLE_LEN - len(want))
+            print("   9: %s: title '%s' -> '%s', %d byte(s) changed, all in "
+                  "the title field: %s" % (
+                      os.path.basename(path), title[:12], r.title[:12],
+                      len(diff), diff <= field))
+            if not ok:
+                bad.append("9: %s: title %r set as %r (header %r), changed "
+                           "bytes %s" % (os.path.basename(path), title,
+                                         r.title, raw, sorted(diff)[:8]))
 
 
 def leg10(tmp, bad):

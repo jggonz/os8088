@@ -905,7 +905,7 @@ class App(object):
         ob = ttk.Button(hd, text="Open a .V88...", command=self.browse_v88)
         ob.pack(side="right")
         Tip(ob, "Look at a .V88 made before - to scrub it, or to change its "
-                "poster.")
+                "poster or its title.")
         self.canvas = tk.Canvas(right, width=400, height=300,
                                 background="black", highlightthickness=0)
         self.canvas.pack()
@@ -924,6 +924,22 @@ class App(object):
         fl.pack(anchor="w", fill="x")
         fi.bind("<Configure>", lambda e: fl.config(
             wraplength=max(120, e.width - 16)))
+        tf = ttk.Frame(fi)              # the title, changed in place
+        tf.pack(fill="x", pady=(6, 0))
+        ttk.Label(tf, text="Title").pack(side="left")
+        self.titlev = tk.StringVar(value="")
+        self.titlee = ttk.Entry(tf, textvariable=self.titlev, width=30,
+                                state="disabled")
+        self.titlee.pack(side="left", padx=4, fill="x", expand=True)
+        self.titlee.bind("<Return>", lambda e: self.set_title())
+        self.titlebtn = ttk.Button(tf, text="Set title",
+                                   command=self.set_title, state="disabled")
+        self.titlebtn.pack(side="left")
+        for w in (self.titlee, self.titlebtn):
+            Tip(w, "Change the title the player shows. Only the title "
+                   "changes: the file is not encoded again. Up to %d "
+                   "characters; the player's panel shows the first 35."
+                % (vid.TITLE_LEN - 1))
         kf = ttk.Frame(fi)
         kf.pack(fill="x", pady=(6, 0))
         self.kcanvas = tk.Canvas(kf, width=160, height=120,
@@ -1081,6 +1097,27 @@ class App(object):
                       self.reader.keys[self.reader.poster][0], self.cur))
         self.show_frame(self.scrub.get())
 
+    def set_title(self):
+        if self.busy or not self.cur:
+            return
+        try:
+            t = vid.set_title(self.cur, self.titlev.get())
+            self.reader = vid.Reader(self.cur)
+        except Exception as e:
+            messagebox.showerror(APPNAME, "The title was not changed: %s"
+                                 % e)
+            return
+        self.titlev.set(t)
+        self.write("The title is now '%s', in %s.\n" % (t, self.cur))
+        self.show_frame(self.scrub.get())
+
+    def title_state(self):
+        """The title field follows the file in the preview: filled from its
+        header when one is loaded, and closed while a job runs"""
+        st = "normal" if self.cur and not self.busy else "disabled"
+        self.titlee.config(state=st)
+        self.titlebtn.config(state=st)
+
     def argv(self):
         return argv_from(self.src.get(), self.out.get(),
                          {k: v.get() for k, v in self.vars.items()},
@@ -1121,6 +1158,7 @@ class App(object):
         self.prog = ("prepare", 0, 0)
         self.gobtn.config(state="disabled")
         self.posterbtn.config(state="disabled")
+        self.title_state()
         self.stopbtn.config(state="normal")
         return self.job
 
@@ -1189,6 +1227,7 @@ class App(object):
         self.stopbtn.config(state="disabled")
         self.bar.config(value=1000 * frac)
         self.status.set(text)
+        self.title_state()
 
     def _pump(self):
         prog = self.prog
@@ -1214,6 +1253,7 @@ class App(object):
                     self.show_frame(self.scrub.get())
                 else:
                     self.cur, self.reader, self.frames = val
+                    self.titlev.set(self.reader.title)
                     self.kshown = None
                     self.scrub.config(to=max(0, len(self.frames) - 1))
                     self.scrub.set(0)

@@ -7,6 +7,7 @@
     python3 tools/os88vid.py info     FILE.V88...
     python3 tools/os88vid.py decode   FILE.V88 --frame N --png OUT.PNG
     python3 tools/os88vid.py poster   FILE.V88 --key K | --frame F  (in place)
+    python3 tools/os88vid.py title    FILE.V88 "A title"              (in place)
     python3 tools/os88vid.py verify   FILE.V88... [--against IN.XDV]
     python3 tools/os88vid.py verify   FILE.XDV...     (the lists vs XDC's code)
     python3 tools/os88vid.py stat     FILE.XDV...
@@ -2275,6 +2276,35 @@ def set_poster(path, frame):
     return posters
 
 
+TITLE_AT, TITLE_LEN = 32, 48       # the header's title field (98.1.1)
+
+
+def title_bytes(title):
+    """A title as the header holds it: ASCII, a character the model face
+    has no glyph for a '?', cut to the field less its NUL - the Writer's
+    own rule, so a title set later is the title an encode would have
+    written"""
+    t = "".join(c if " " <= c <= "~" else "?" for c in title.strip())
+    return t.encode("ascii")[:TITLE_LEN - 1]
+
+
+def set_title(path, title):
+    """THE TITLE, CHANGED IN PLACE (98.2.11): the header's 48 bytes at +32
+    rewritten - the title, then NULs to the field's end, so no tail of a
+    longer old one is left behind it - and nothing else in the file
+    touched. The file is re-read whole afterwards, every rendition;
+    returns the title written"""
+    t = title_bytes(title)
+    d = bytearray(open(path, "rb").read(SECTOR))
+    n = Reader(path).nrend
+    d[TITLE_AT:TITLE_AT + TITLE_LEN] = t + bytes(TITLE_LEN - len(t))
+    with open(path, "r+b") as f:
+        f.write(d)
+    for ri in range(n):
+        Reader(path, ri)
+    return t.decode("ascii")
+
+
 def cycles_of(rec, planar=False, layout=None):
     """The wave 0 model's cycles for one record, writing CGA's screen: the
     frame's fixed cost, a set-up per skip segment, each entry by its list,
@@ -2952,6 +2982,11 @@ def cmd_poster(a):
           % (a.file, "/".join(str(p) for p in ps), Reader(a.file).keys[ps[0]][0]))
 
 
+def cmd_title(a):
+    t = set_title(a.file, a.title)
+    print("os88vid: %s: title '%s'" % (a.file, t))
+
+
 def cmd_info(a):
     for path in a.files:
         r = Reader(path)
@@ -3617,6 +3652,11 @@ def main():
     w.add_argument("--key", type=int, help="the keyframe, by its index")
     w.add_argument("--frame", type=int, help="the keyframe a play from this "
                    "frame starts at")
+    s = sub.add_parser("title", help="set a .V88's title in place, "
+                       "with no re-encode (SPEC.md 98.2.11)")
+    s.add_argument("file")
+    s.add_argument("title", help="up to 47 characters; the player's panel "
+                   "shows the first 35")
     s = sub.add_parser("decode")
     s.add_argument("file")
     s.add_argument("--frame", type=int, required=True)
@@ -3644,7 +3684,8 @@ def main():
     try:
         return {"stat": cmd_stat, "verify": cmd_verify, "import": cmd_import,
                 "encode": cmd_encode, "info": cmd_info, "decode": cmd_decode,
-                "benchdat": cmd_benchdat, "poster": cmd_poster}[a.cmd](a) or 0
+                "benchdat": cmd_benchdat, "poster": cmd_poster,
+                "title": cmd_title}[a.cmd](a) or 0
     except (XdvError, V88Error) as e:
         sys.exit("os88vid: %s" % e)
 

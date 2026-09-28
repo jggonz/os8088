@@ -151920,6 +151920,17 @@ is placed by the key's FRAME. A key past the player's 61,440 bytes is named
 as one that would show no poster. The command line has it too:
 `os88vid.py poster FILE --key K | --frame F`.
 
+**Set title** does the same for the TITLE. The panel's Title field is
+filled from the header when a file is loaded, and Set title (or Return in
+the field) writes it back WITHOUT re-encoding: `os88vid.set_title(path,
+title)` rewrites the header's 48 bytes at +32 (98.1.1) and no other byte,
+then re-reads every rendition. The title goes in by the Writer's own rule,
+so a title set later is the one an encode would have written: printable
+ASCII, anything else a `?`, cut to 47 characters. The rest of the field is
+NULs, so a shorter title leaves no tail of a longer old one behind it. The
+player's info panel shows the first 35 characters (`VP_COLS`). The command
+line is `os88vid.py title FILE "A title"`.
+
 **The preview starts where the screen does.** A colour play (VGA8, VGA4,
 CGA4, C160) starts at key 0 (98.2.9), past any pre-roll, so
 `preview_frames` starts there too (`os88vid.first_shown`). The owner's Spice
@@ -151935,7 +151946,10 @@ too.
   left.
 - **Leg 9:** `set_poster` changes only poster words, on a five-key encode
   and on the three-rendition logo, and the file still verifies. With the
-  word's offset wrong, it FAILS.
+  word's offset wrong, it FAILS. `set_title` changes only the title field
+  on both: a 60-character title comes out as 47, a shorter one after it
+  leaves no tail, and a tab becomes a `?`. With the field one byte off, or
+  with the NUL fill left out (the old title's tail survives), it FAILS.
 - **Leg 10:** the preview's first frame is key 0's whole picture. With the
   preview from frame 0, it FAILS.
 
