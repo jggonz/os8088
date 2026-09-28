@@ -145,6 +145,10 @@ IMPLYING = ("preset", "pixfmt", "profile", "live")
 # OFF, the fixed per-frame ceiling (98.2.1.1)
 SUGGEST = {"rate": ["", "22050", "11025", "5512"],
            "owe": ["", "0", "1.6"]}
+# a free-text option that NAMES A FILE the encode writes: a Browse... beside
+# it, a Save dialog of that type, started beside the .V88 under its name
+SAVE_FILE = {"spk_preview": ("The speaker preview", ".wav",
+                             [("WAV sound", "*.wav")])}
 # what the window runs itself, and so does not offer
 HIDDEN = {"help", "src", "out", "preview_png", "quiet", "profiles",
           "progress"}
@@ -871,16 +875,19 @@ class App(object):
                 p.columnconfigure(c0 - 1, minsize=16)
             lab = ttk.Label(p, text=f["label"])
             lab.grid(row=r, column=c0, sticky="w", pady=1)
+            # a TWO-COLUMN tab's fields are narrower, or the right-hand
+            # column's "?" and Browse... fall off the pane's edge
+            fw = 22 if half[f["tab"]] == per[f["tab"]] else 13
             if f["kind"] == "bool":
                 v = tk.StringVar(value="")
                 w = ttk.Checkbutton(p, variable=v, onvalue="1", offvalue="")
             elif f["kind"] == "choice" or f["choices"]:
                 v = tk.StringVar(value=f["default"])
                 w = ttk.Combobox(p, textvariable=v, values=f["choices"],
-                                 width=22)
+                                 width=fw)
             else:
                 v = tk.StringVar(value=f["default"])
-                w = ttk.Entry(p, textvariable=v, width=24)
+                w = ttk.Entry(p, textvariable=v, width=fw + 2)
             w.grid(row=r, column=c0 + 1, sticky="w", padx=4, pady=1)
             if f["dest"] in IMPLYING:
                 w.bind("<<ComboboxSelected>>",
@@ -890,6 +897,13 @@ class App(object):
                        lambda e: self.apply_audio())
             Tip(lab, f["tip"])
             Tip(w, f["tip"])
+            if f["dest"] in SAVE_FILE:  # A FILE IT WRITES: chosen, not typed
+                bb = ttk.Button(p, text="Browse...",
+                                command=lambda f=f, v=v:
+                                self.browse_save(f, v))
+                bb.grid(row=r, column=c0 + 2, sticky="w", pady=1)
+                Tip(bb, "Choose where %s is written"
+                    % SAVE_FILE[f["dest"]][0].lower())
             if f["help"]:               # WHAT EACH CHOICE IS, a click away
                 hb = ttk.Button(p, text="?", width=2,
                                 command=lambda f=f, v=v:
@@ -1034,6 +1048,21 @@ class App(object):
             self.sfps = None
         if cur.get("fps", "") in ("", was):     # ...unless it was edited
             self.vars["fps"].set(implied_values(cur, self.sfps)["fps"])
+
+    def browse_save(self, f, v):
+        """A SAVE_FILE option's Browse...: its type, beside the .V88 and
+        under the .V88's name unless it already names a file of its own"""
+        what, ext, types = SAVE_FILE[f["dest"]]
+        cur = v.get().strip() or os.path.splitext(self.out.get().strip())[0]
+        kw = {}
+        if cur:
+            d, n = os.path.split(cur)
+            kw = dict(initialdir=d or None,
+                      initialfile=os.path.splitext(n)[0] + ext)
+        p = filedialog.asksaveasfilename(title=what, defaultextension=ext,
+                                         filetypes=types, **kw)
+        if p:
+            v.set(p)
 
     def browse_out(self):
         p = filedialog.asksaveasfilename(defaultextension=".V88",
