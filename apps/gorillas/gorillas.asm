@@ -709,24 +709,26 @@ gr_city:
     div bx
     sub dx, 10
     mov [gr_wind], dx
-    ; Eight buildings; varying roof heights, facades and lit windows.
+    ; Ten 20..32-pixel lots fill the skyline, with a gutter on each side.
     xor bp, bp
+    xor cx, cx
 .building:
+    mov bx, bp
+    mov [gr_lots+bx], cl
+    call gr_lotwidth
+    mov [gr_widths+bx], al
+    mov si, cx
+    add si, ax
+    dec si
+    dec si
+    inc cx
     call gr_rand
+    mov al, ah
     and ax, 31
     add ax, 63
     mov bx, bp
     mov [gr_roofs+bx], al
     mov dx, ax
-    mov cx, bp
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1
-    inc cx
-    mov si, cx
-    add si, 29
     mov di, 127
     mov al, [gr_facades+bx]
     call gr_rect
@@ -762,25 +764,91 @@ gr_city:
     add dx, 6
     cmp dx, 126
     jb .windows
+    mov cx, si
+    add cx, 2
     inc bp
-    cmp bp, 8
+    cmp bp, 10
     jb .building
-    ; The players stand on the second and seventh roofs.
-    mov word [gr_gx], 40
-    mov word [gr_gx+2], 200
-    xor ax, ax
-    mov al, [gr_roofs+1]
-    sub ax, 20
-    mov [gr_gy], ax
-    mov al, [gr_roofs+6]
-    sub ax, 20
-    mov [gr_gy+2], ax
+    ; Choose from the four lots at either end, rejecting the one pair
+    ; with fewer than three whole buildings between the gorillas.
+.places:
+    call gr_rand
+    mov al, ah
+    and ax, 3
+    mov si, ax
+    call gr_rand
+    mov al, ah
+    and ax, 3
+    add ax, 6
+    mov di, ax
+    sub ax, si
+    cmp ax, 4
+    jb .places
+    mov bx, si
+    xor bp, bp
+    call gr_place
+    mov bx, di
+    mov bp, 2
+    call gr_place
     xor bp, bp
     call gr_gorilla
     mov bp, 2
     call gr_gorilla
     call gr_sun
     call gr_hud
+    ret
+
+; CX=lot start, BP=lot index. Return AX=width, preserving other registers.
+; Clamp the random width so every remaining lot can still be 20..32 wide.
+gr_lotwidth:
+    push bx
+    push dx
+    push si
+    push di
+    mov bx, 9
+    sub bx, bp
+    mov ax, 20
+    mul bx
+    mov di, 256
+    sub di, cx
+    sub di, ax                 ; maximum width leaving 20 for each later lot
+    mov ax, 32
+    mul bx
+    mov si, 256
+    sub si, cx
+    sub si, ax                 ; minimum width leaving at most 32 for each
+    call gr_rand
+    xor dx, dx
+    mov bx, 13
+    div bx
+    mov ax, dx
+    add ax, 20
+    cmp ax, di
+    jbe .minimum
+    mov ax, di
+.minimum:
+    cmp ax, si
+    jge .done                  ; minimum may be negative for early lots
+    mov ax, si
+.done:
+    pop di
+    pop si
+    pop dx
+    pop bx
+    ret
+
+; Center a 16-pixel gorilla on lot BX; BP selects the player (0 or 2).
+gr_place:
+    xor ax, ax
+    mov al, [gr_widths+bx]
+    sub ax, 16
+    shr ax, 1
+    add al, [gr_lots+bx]
+    mov [ds:gr_gx+bp], ax
+    xor ax, ax
+    mov al, [gr_roofs+bx]
+    sub ax, 20
+    mov [ds:gr_gy+bp], ax
     ret
 
 ; Packed 16x20 art. Zero is transparent sky; 1/10/11 are the orange
@@ -1781,7 +1849,8 @@ gr_background:
 ; Render AX=x (8-aligned), BX=y, CX=width (8-aligned), DX=height.
 ; Native ink-pair tables combine palette mapping, scaling and bit packing.
 ; Convert logical rows once, then duplicate native bytes vertically.
-; Up to 32 rows for narrow strips; wide bands retain the 6144-byte bound.
+; Up to 32 rows for strips <=56 pixels wide, or 7 rows for wider bands.
+; At sx=2, sy=3, either path needs at most 5376 scratch bytes.
 gr_blit:
     SAVE
     push ds
@@ -1877,8 +1946,8 @@ gr_blit:
 .bands:
     mov ax, [gr_endy]
     sub ax, [gr_ry]
-    mov bx, 8
-    cmp word [gr_rw], 64
+    mov bx, 7
+    cmp word [gr_rw], 56
     ja .limit
     mov bx, 32
 .limit:
@@ -2265,7 +2334,7 @@ gr_textdouble:
     dw ((gr_bits >> 8) | ((gr_bits & 255) << 8))
 %assign gr_n gr_n+1
 %endrep
-gr_facades: db 5,6,7,5,7,6,5,7
+gr_facades: db 5,6,7,5,7,6,5,7,6,5
 %include "grart.inc"
 
 ; sin(degrees)*256, rounded; cosine uses symmetry.
@@ -2328,6 +2397,7 @@ VAR gr_aivx, 2
 VAR gr_aiyhi, 2
 VAR gr_aiwrem, 2
 VAR gr_aigrem, 2
+VAR gr_aitarget, 2
 VAR gr_name1, 11
 VAR gr_name2, 11
 VAR gr_setupfield, 1
@@ -2352,7 +2422,9 @@ VAR gr_edit, 1
 VAR gr_angle, 2
 VAR gr_power, 2
 VAR gr_wind, 2
-VAR gr_roofs, 8
+VAR gr_roofs, 10
+VAR gr_lots, 10
+VAR gr_widths, 10
 VAR gr_gx, 4
 VAR gr_gy, 4
 VAR gr_fs, 1
@@ -2412,7 +2484,7 @@ VAR gr_planestep, 2
 VAR gr_vgdest, 2
 VAR gr_vgheight, 2
 VAR gr_scene, 16384
-VAR gr_band, 6144
+VAR gr_band, 5376
 
 OS88_BSS GR_BSS
 OS88_IMAGE_END

@@ -148742,7 +148742,10 @@ disks. The kernel is unchanged.
 A native 8086 adaptation of the supplied Microsoft QBasic `gorilla.bas`
 (1990), packaged as `GORILLAS.O88`. One player faces a computer opponent,
 or two local players alternate angle and velocity entries, throwing bananas
-over a generated, destructible skyline.
+over a generated, destructible skyline. Ten building lots fill the 256-pixel
+width, each 20..32 pixels wide with one-pixel gutters on both sides. Each
+gorilla is centered on a randomly selected roof among the four at its end;
+pairs with fewer than three intervening buildings are rejected.
 Angles are 0..180 degrees measured inward from each player's horizontal;
 velocity is 1..150. Wind accelerates the projectile horizontally, gravity
 vertically. Collision is swept in substeps against the persistent terrain
@@ -148759,10 +148762,10 @@ rows clear to sky and the banana can traverse them. Text stays hidden while
 a shot is paused and returns on impact or a miss. The remaining rows are the
 skyline. The kernel's own font glyphs letter the scene. Integer scaling depends on the
 live surface and pixel aspect. Full repaints finish 32-pixel-wide strips from
-left to right; each strip contains one building. Native bands convert packed
-ink pairs through lookup tables before repeating scanlines. Windowed VGA uses
+left to right, independent of the variable building boundaries. Native bands
+convert packed ink pairs through lookup tables before repeating scanlines. Windowed VGA uses
 the planar API when the rectangle is wholly drawable, retaining packed bands
-for clipping/API refusal. Scratch remains bounded at 6,144 bytes;
+for clipping/API refusal. Scratch remains bounded at 5,376 bytes;
 projectile frames restore and replace a small saved rectangle, so they never
 repaint the whole city. Hercules and the monochrome CGA desktop receive
 1bpp bands; VGA receives planar or packed 4bpp bands. Fullscreen uses §53's exclusive bracket,
@@ -148805,7 +148808,8 @@ Gravity uses tenths of m/s² with a remainder accumulator: 9.8 produces the
 previous four fixed-point velocity units per frame. The solo opponent in
 `grai.inc` evaluates one candidate power per worker tick, predicting wind
 and gravity substeps at a 55-degree angle. It chooses the closest crossing of
-the human's center and launches an ordinary shot; terrain can intercept it.
+the human's current center, then adds a fresh -8..+8 velocity error,
+clamped to 1..150, before launching an ordinary shot. Terrain can intercept it.
 Pause, focus and About suspend aiming. Humans cannot edit a pending computer
 shot. Only the active player’s name appears at the top left, with Angle and
 Velocity inputs on separate rows below it. Signed wind is right-aligned on
@@ -148932,11 +148936,11 @@ to finish and reach setup.
 ### 98.4. Skyline redraws on an XT
 
 Full gameplay paints complete eight 32-pixel logical strips from left to right,
-so each building finishes before its neighbor. Opaque scene bands replace the
+revealing successive sections of the skyline. Opaque scene bands replace the
 previous pixels directly; only the surrounding margins are cleared. This also
 preserves the scene's craters and any visible projectile on exposure or mode
 changes. Facades and windows use packed-byte rectangle fills with masked edge
-nibbles instead of per-pixel `gr_put` calls; the seeded city is unchanged.
+nibbles instead of per-pixel `gr_put` calls.
 
 Ink-pair tables combine palette mapping, horizontal scaling and native bit
 packing. VGA converts to planes before vertical repetition and uses
@@ -148949,17 +148953,22 @@ rectangles use packed black/white bands through `OSAPI_GFX_BLIT4`: the
 reuse the previous converted row. Empty VGA sky bands use a solid fill, with
 all four planes selected together in fullscreen.
 
-Bands contain at most eight logical rows for wide rectangles or 32 for widths
-up to 64 pixels, always within the existing 6,144-byte scratch allocation.
+Bands contain at most seven logical rows for wide rectangles or 32 for widths
+up to 56 pixels, within a 5,376-byte scratch allocation. The smaller buffer
+keeps the variable skyline and softer opponent within the 60 KB instance limit.
 The fullscreen doubled-plane lookup occupies the first 1,024 bytes of the
 inactive intro cache. Cache key `8000h` marks this use; returning to the
 frontend rebuilds its animation cache. No heap or kernel memory is added.
-The package grows by 3,343 image bytes and one BSS byte per instance.
+The original redraw optimization added 3,343 image bytes and one BSS byte
+per instance.
 
 `tests/gorillascity.py` measures seeded city construction and complete redraws
 in MartyPC at 4,772,727 Hz, with interrupts enabled under the graphics lock.
-The fixed-seed scene hash must match the previous renderer. A separate host
-pixel decoder checks all palette pairs, both horizontal scales, small terrain
+The fixed-seed scene must match across modes and adapters. Across 32 seeds,
+checks enforce width limits, roof support, intact gutters, all four rooftop
+choices at each end, and at least three intervening buildings. Computer checks
+cover the moving target, varied release power, and velocity bounds. A separate
+host pixel decoder checks all palette pairs, both horizontal scales, small terrain
 patches and an odd-edged clipped region, including unchanged VRAM outside it.
 A deliberately changed scene pixel must fail the pixel oracle. VGA readback
 uses guest `MOVSB` under Read Map Select: MartyPC's debugger peek always reads

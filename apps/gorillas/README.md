@@ -3,7 +3,9 @@
 A native 8086 adaptation of the supplied Microsoft QBasic `gorilla.bas`
 (1990). One player faces the computer, or two people share the keyboard, throwing
 exploding bananas across a random city skyline. Wind bends the trajectory,
-buildings retain craters, and a banana can hit its thrower.
+buildings retain craters, and a banana can hit its thrower. Each skyline has ten
+buildings with varied widths. Gorillas choose among the four rooftops at their
+respective ends, always leaving at least three buildings between them.
 
 Build with `make gorillas`. Open `GAMES/GORILLAS.O88` on the applications
 disk, or `GORILLAS.O88` at the root of the games disk. `make build/games360.img` builds the 360 KB games disk.
@@ -89,7 +91,9 @@ buffered typing without a tick wait per character.
 The original game's floating-point simulation is adapted to swept integer
 fixed-point physics, including a fractional gravity accumulator. The solo
 opponent predicts candidate trajectories using the same wind and gravity,
-then throws normally; buildings can intercept its shots and retain craters.
+then adds a random velocity error of up to eight points in either direction
+before throwing. This makes it more forgiving; buildings can also intercept
+its shots and retain craters.
 Its aiming work is spread over worker ticks so pause and menus stay usable.
 
 The intro, dance, throw and impact note sequences come from the reference
@@ -154,14 +158,14 @@ Measured initial angle replacement (`45` → `9`), milliseconds per handler:
 These are emulator cycle measurements, not hardware measurements. The faster
 renderer adds 1,476 bytes of image and state per instance.
 
-Full skyline redraws now finish one building-width strip at a time from left
+Full skyline redraws finish one 32-pixel strip at a time from left
 to right. Packed facade/window fills, native ink-pair conversion, repeated-row
 reuse and a fast empty-sky path reduce the work. Repaints overwrite the old
 scene directly, so the city no longer flashes blank first. Craters and the
 current banana remain part of the scene.
 
-Measured complete redraws of the same seeded city, milliseconds at an
-emulated 4.77 MHz (excluding city generation):
+Historical measurements of the original eight-building seeded city, in
+milliseconds at an emulated 4.77 MHz (excluding city generation):
 
 | Adapter / mode | Before | After |
 |---|---:|---:|
@@ -178,6 +182,11 @@ The change adds 3,344 bytes per instance and uses the existing scratch and
 intro-cache allocations. No additional heap or kernel memory is needed.
 
 Run `python3 tests/gorillascity.py --output build/gorillas-city.json` for the
-cycle and pixel gate. It checks the unchanged seeded city, every ink pair,
-scaling, partial terrain updates and clipping. VGA checks read all four planes
-with guest memory copies; debugger peeks alone return only plane zero.
+cycle and pixel gate. It checks rooftop placement and spacing across 32 seeds,
+variable widths, computer aiming error, reproducible cities across adapters,
+every ink pair, scaling, partial terrain updates and clipping. VGA checks read
+all four planes with guest memory copies; debugger peeks alone return only plane zero.
+
+The variable skyline and softer computer fit within the existing 60 KB instance
+limit. Rendering uses a 5,376-byte scratch buffer, with up to 32 rows for strips
+no wider than 56 pixels and seven rows for wider updates.

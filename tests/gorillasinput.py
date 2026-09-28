@@ -8,6 +8,7 @@ Use --output to retain a before/after JSON report. No guest instrumentation.
 import argparse
 import json
 from pathlib import Path
+import re
 import struct
 import subprocess
 import tempfile
@@ -81,9 +82,11 @@ def video_bytes(m, tag):
     # registers/scratch bytes. The caller is paused under the graphics lock.
     p = m.gorillas_probe
     stub, scratch = p.offsets['gr_under'], p.offsets['gr_band']
+    source = (G.ROOT / 'apps/gorillas/gorillas.asm').read_text()
+    scratch_size = int(re.search(r'^VAR gr_band, (\d+)$', source, re.M)[1])
     saved = m.regs()
     original_stub = m.read(p.base + stub, 9)
-    original_scratch = m.read(p.base + scratch, 6144)
+    original_scratch = m.read(p.base + scratch, scratch_size)
     m.write(p.base + stub, bytes.fromhex('fa b8 00 a0 8e d8 f3 a4 90'))
     index = m.inb(0x3ce)
     m.outb(0x3ce, 5)
@@ -94,8 +97,8 @@ def video_bytes(m, tag):
     planes = []
     for plane in range(4):
         m.outb(0x3cf, plane)
-        for offset in range(0, 38400, 6144):
-            count = min(6144, 38400-offset)
+        for offset in range(0, 38400, scratch_size):
+            count = min(scratch_size, 38400-offset)
             m.cmd(cmd='park', cs=p.base >> 4, ip=stub)
             for reg, value in (('es', p.base >> 4), ('si', offset),
                                ('di', scratch), ('cx', count),

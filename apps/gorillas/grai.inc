@@ -1,6 +1,7 @@
 ; Solo opponent: try one candidate throw per worker tick, keeping input,
 ; menus and pause responsive. Predict the same wind/gravity substeps as the
-; live shot, aiming at the human's center. Buildings may intercept a throw;
+; live shot, aiming at the human's center with an imperfect release power.
+; Buildings may intercept a throw;
 ; these misses make real craters. No scores, terrain or live shot are poked.
 gr_aitick:
     cmp byte [gr_players], 1
@@ -12,6 +13,11 @@ gr_aitick:
     mov word [gr_aipower], 1
     mov word [gr_aierror], 0ffffh
     mov word [gr_aibest], 70
+    mov ax, [gr_gx]
+    add ax, 8
+    mov cl, 6
+    shl ax, cl
+    mov [gr_aitarget], ax
 .batch:
     call gr_aipredict
     add word [gr_aipower], 2
@@ -21,7 +27,22 @@ gr_aitick:
     ret
 .fire:
     mov word [gr_angle], 55
+    ; A fresh -8..+8 velocity error makes even a clear shot fallible.
+    call gr_rand
+    xor dx, dx
+    mov bx, 17
+    div bx
     mov ax, [gr_aibest]
+    add ax, dx
+    sub ax, 8
+    cmp ax, 1
+    jge .upper
+    mov ax, 1
+.upper:
+    cmp ax, 150
+    jle .power
+    mov ax, 150
+.power:
     mov [gr_power], ax
     mov word [gr_aipower], 0
     call gr_fire
@@ -65,8 +86,8 @@ gr_aipredict:
     cwd
     add [gr_aiy], ax
     adc [gr_aiyhi], dx
-    ; The human's center is 48 pixels from the left edge.
-    cmp word [gr_aix], 48*64
+    mov ax, [gr_aitarget]
+    cmp [gr_aix], ax
     jbe .crossed
     cmp word [gr_aix], 256*64
     jae .out
