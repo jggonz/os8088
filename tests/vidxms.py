@@ -2,7 +2,7 @@
 """VIDEO.O88 holds a streamed .V88 in XMS and plays it from there - SPEC.md
 98.3.18.
 
-    make && python3 tests/vidxms.py [--arm xms|idle|nox|live|liverep|livenox]
+    make && python3 tests/vidxms.py [--arm xms|idle|nox|live|liverep|livenox|livevga4]
 
 WHY QEMU: docs/TESTING.md's closed list, entry 1. XMS is a 286-and-up store
 and every MartyPC machine is an 8088, which has nothing above 1MB - there is
@@ -40,6 +40,10 @@ be drawn. ARM liverep is the same file repeating from frame 10, over a lap
 and a half. ARM livenox is `-m 1`: Play must NOT be Live. Broken on purpose
 - `call vp_lask` out of the worker - the play stalls at frame 96.
 
+ARM livevga4 is the same in COLOUR: a 1.1 MB VGA4 stream, the keeper sized to
+plane 3's base + 64 KB (a stream's writes are checked by nothing ahead), and
+the four planes compared with the decode's sixteen colours.
+
 ARM nox (`-m 1`, no memory above 1MB): the NEGATIVE CONTROL, and the
 fallback. No hold is taken, the play runs off the disk to the last frame -
 and after the same swap the same Right arrow FAILS. That is what says the
@@ -74,6 +78,45 @@ from cycweb import pkg_syms                                 # noqa: E402
 
 NF = 300
 FPS = 30.0
+
+
+V4NF, V4FPS = 110, 15.0
+
+
+def live_clip4(tmp):
+    """A STREAMED Live file in COLOUR (98.3.18.1, 98.3.10.4): 160 x 120
+    VGA4, every pixel a new one of sixteen colours every frame - ~10 KB a
+    frame on four planes, ~1.1 MB, four times the biggest ring"""
+    import random
+    rnd = random.Random(4816)
+    g = vid.Geom(vid.LAY_LIN80, LWB, LH, bitplanes=True)
+    w = vid.Writer(g, int(V4FPS * 100), 100, vid.AUD_NONE, 0, vid.PF_VGA4,
+                   title="vidxms live vga4", live=vid.TARGETS["vga"])
+    surf, prev = g.surface(), bytes(LWB * 8 * LH)
+    for f in range(V4NF):
+        cv = bytes(rnd.randrange(16) for _ in range(LWB * 8 * LH))
+        subs = vid.vga4_subs(cv, prev, g)
+        g.put(surf, cv)
+        w.frame(subs, surf)
+        prev = cv
+    out = os.path.join(tmp, "CLIP.V88")
+    w.write(out)
+    vid.verify_v88(out)
+    return out
+
+
+def planes_canvas(q, seg, plsp, g):
+    """The picture in a VGA4 keeper: plane p at seg + p x plsp paragraphs,
+    each at the file's own addresses - as Geom.canvas reads a surface"""
+    pl = [q.read((seg + p * plsp) << 4, g.base[-1] + g.wb) for p in range(4)]
+    out = bytearray(g.w * g.h)
+    for y, b in enumerate(g.base):
+        for xb in range(g.wb):
+            bt = [pl[p][b + xb] for p in range(4)]
+            for i in range(8):
+                out[y * g.w + xb * 8 + i] = sum(
+                    ((bt[p] >> (7 - i)) & 1) << p for p in range(4))
+    return bytes(out)
 
 
 def u16(b, i=0):
@@ -175,7 +218,8 @@ class Q(object):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", choices=("xms", "idle", "nox", "live",
-                                      "livenox", "liverep"), default="xms")
+                                      "livenox", "liverep", "livevga4"),
+                    default="xms")
     a = ap.parse_args()
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
@@ -186,8 +230,9 @@ def main():
             sys.exit("vidxms: no %s - run `make`" % p)
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
-        islive = a.arm in ("live", "livenox", "liverep")
-        v88 = live_clip(tmp, 10 if a.arm == "liverep" else None) \
+        islive = a.arm in ("live", "livenox", "liverep", "livevga4")
+        v88 = live_clip4(tmp) if a.arm == "livevga4" else \
+            live_clip(tmp, 10 if a.arm == "liverep" else None) \
             if islive else clip(tmp)
         data = open(v88, "rb").read()
         size = len(data)
@@ -297,7 +342,7 @@ def main():
                 bad.append("a streamed Live file played LIVE with no hold - "
                            "the worker would have read the disk")
             q.hmp("sendkey esc")
-        elif a.arm in ("live", "liverep"):
+        elif a.arm in ("live", "liverep", "livevga4"):
             # --- the hold whole, B: blank, and Play is LIVE
             if rb("vp_xon") != 1:
                 sys.exit("vidxms: no hold was taken: %s" % state())
@@ -313,8 +358,12 @@ def main():
             nf = rd88.frames
             checked = 0
             laps = a.arm == "liverep"
+            colour = a.arm == "livevga4"
+            if colour and rb("vp_pixfmt") != 3:     # PF_VGA4, less one
+                bad.append("the live play is not the VGA4 rendition "
+                           "(pixfmt %d)" % rb("vp_pixfmt"))
             for n in range(7 if laps else 4):
-                os88qemu.pace(q, 3)
+                os88qemu.pace(q, 1.5 if colour else 3)
                 for _ in range(40):         # a moment with no frame half
                     q.hmp("stop")           # decoded: the lock free
                     if q.read(lock, 1)[0] == 0:
@@ -324,8 +373,12 @@ def main():
                 done = rw("vp_done")
                 shseg = rw("vp_shseg")
                 if rb("vp_lsess") == 1 and done:
-                    sh = q.read(shseg << 4, LH * 80)
-                    got = b"".join(sh[y * 80:y * 80 + LWB] for y in range(LH))
+                    if colour:
+                        got = planes_canvas(q, shseg, rw("vp_plsp"), rd88.g)
+                    else:
+                        sh = q.read(shseg << 4, LH * 80)
+                        got = b"".join(sh[y * 80:y * 80 + LWB]
+                                       for y in range(LH))
                     want = vid.decode_at(rd88, done - 1)
                     diff = sum(1 for j in range(len(got))
                                if got[j] != want[j])
@@ -355,6 +408,8 @@ def main():
                 return report(bad, a.arm)
             wait(lambda: rb("vp_lsess") == 0 or rw("vp_done") >= nf,
                  "the Live play to end", 90)
+            print("   keeper %d KB, planes %d paragraphs apart"
+                  % (rb("vp_kkb"), rw("vp_plsp")))
             print("   live play: done=%d of %d err=%d stalls %d lend=%d"
                   % (rw("vp_done"), nf, rb("vp_err"), rw("vp_stall"),
                      rb("vp_lend")))

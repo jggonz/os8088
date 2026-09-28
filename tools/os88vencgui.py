@@ -130,7 +130,7 @@ TAB_OF = {
     "loop_from": "Loop and keys", "repeat": "Loop and keys",
     "keysecs": "Loop and keys", "poster": "Loop and keys",
     "poster_at": "Loop and keys", "resident": "Loop and keys",
-    "live": "Loop and keys",
+    "live": "Loop and keys", "xms": "Loop and keys",
 }
 # the choices that IMPLY others (os88venc.implied): changing one refills them
 IMPLYING = ("preset", "pixfmt", "profile", "live")

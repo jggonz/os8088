@@ -151281,8 +151281,8 @@ the logo's (320 x 112 on a CGA, 360 x 144 on a Hercules, 320 x 200 on a VGA)
 `--live vga --pixfmt vga4` makes it sixteen colours instead (98.3.10.4), the
 Live blit priced at four planes a byte. `--live ... --xms` makes it a STREAM
 instead of resident (98.3.18.1): any length, sound in its records, played
-Live once the player holds it in XMS and in the window elsewhere - one bit
-only, so not with `--pixfmt vga4`. One rendition: a file for every screen is `tools/os88logovid.py`'s shape,
+Live once the player holds it in XMS and in the window elsewhere - one bit,
+or VGA4 with `--live vga`. One rendition: a file for every screen is `tools/os88logovid.py`'s shape,
 several encodes made into one, and the encoder does not make it.
 
 **A Live file's CPU budget counts its BLIT** (the owner, 2026-09-27: *"option
@@ -152530,7 +152530,7 @@ where every other play takes the screen in a bracket. The owner's rule
 in-window play**; everything else keeps it.
 - **What may be LIVE**: a RESIDENT file (98.1.7) - no disk is read while
   it plays, which is what lets a worker play it at all (20.6 rule 7) - or a
-  one-bit STREAM held whole in XMS (98.3.18.1), for the same reason -
+  STREAM held whole in XMS (98.3.18.1), for the same reason -
   whose renditions are one-bit **LIN80** canvases, because the shadow the
   worker decodes into is then exactly the band `OSAPI_GFX_BLIT1` takes: row
   *y* at *y* x 80. So every screen's rendition is LIN80 and names the
@@ -153239,14 +153239,21 @@ of the hold is milliseconds where a read held the picture ~100 ms (15.5 of
 docs/plans/VIDEO-PLAN.md). What changes:
 - **The file** (98.1.1, 98.1.3.4): LIVE and RUNS on a stream - its frame
   records and its seam carry their blit runs between the lists and the
-  audio, its keyframes none, the target byte naming its screen. One bit,
-  LIN80. `tools/os88venc.py --live <screen> --xms` makes one.
+  audio, its keyframes none, the target byte naming its screen. LIN80, one
+  bit - or VGA4 for the VGA (98.3.10.4). `tools/os88venc.py --live <screen>
+  --xms` makes one, with `--pixfmt vga4` for colour.
 - **When** (`vp_canlive`): as for a resident Live file, and the whole file
-  in the hold (`[vp_xon]` and `[vp_xfull]`), and MONO1 - a VGA4 stream is
-  refused, its keeper being the planes exactly with nothing checking a
-  stream's writes ahead of the play. Not held (every 8088, or a hold still
-  filling): Play is the in-window play, which fills the hold behind it, so
-  the NEXT Play is Live.
+  in the hold (`[vp_xon]` and `[vp_xfull]`). Not held (every 8088, or a
+  hold still filling): Play is the in-window play, which fills the hold
+  behind it, so the NEXT Play is Live.
+- **A VGA4 stream's keeper is plane 3's base + 64 KB** (`vp_sstart`'s
+  `.kps`, the keyframe claim's rule, `VP_MXSHD`), where a resident VGA4
+  Live file's is the four planes exactly. A resident block's writes are all
+  checked against the canvas once, at load (98.1.7.3); a stream's records
+  arrive during the play and nothing checks them ahead, so the CLAIM is the
+  bound - every write is a 16-bit offset from one plane's base, and none can
+  leave a claim that runs 64 KB past the last one. A 160 x 120 canvas: 93 KB
+  against 38. A one-bit stream's keeper was 64 KB already.
 - **The worker reads, the UI task fills.** The session is a stream's, ring
   and all; `vp_lsetup` fills the ring (`vp_lprime`: `vp_fill` until it is
   full, out of the hold, then the records before the key's frame stepped
@@ -153263,7 +153270,8 @@ docs/plans/VIDEO-PLAN.md). What changes:
   audio read out of the ring's records, as a bracket reads it - the same
   code. NOT YET RUN WITH A CARD: no row drives it.
 
-+189 bytes of the package; the encoder's `Writer(live=)` and `--xms`.
++189 bytes of the package for one bit, +23 more for VGA4; the encoder's
+`Writer(live=)` and `--xms`.
 
 The gates, on QEMU: `vidxmslive` - a 1.2 MB streamed Live file for the VGA
 desktop, four times the biggest ring, held, B: changed to a BLANK floppy,
@@ -153271,7 +153279,9 @@ Play: a live session and not a bracket, the worker's shadow the decode to
 the byte at four moments (the VM stopped with the gfx lock free), all 450
 frames, 0 stalls, the ring refilled from chunk 8 to 37. `vidxmsliverep`,
 the same file repeating from frame 10: over a lap and a half, the shadow
-right in the second lap. `vidxmslivenox` (`-m 1`): Play is NOT Live. Broken
+right in the second lap. `vidxmslivevga4`: a 1.2 MB VGA4 stream Live, the
+four planes the decode's sixteen colours at four moments, 110 of 110.
+`vidxmslivenox` (`-m 1`): Play is NOT Live. Broken
 on purpose - `vp_lask` out of the worker - the play stalls at frame 96 with
 the ring empty, and `vidxmslive` FAILS.
 

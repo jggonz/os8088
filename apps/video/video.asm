@@ -3926,12 +3926,12 @@ vp_fsenter:                         ; F, Alt+Enter: full screen, PAUSED -
 vp_canlive:
     cmp byte [vp_flive], 0
     je .no
-    cmp byte [vp_resid], 0          ; A STREAM (98.3.18.1): one-bit, and the
-    jne .rs                         ; whole file held in XMS - a worker may
-    cmp byte [vp_pixfmt], 0         ; not read a file, and the UI task's copy
-    jne .no                         ; out of the hold is what feeds it. Not
-    cmp byte [vp_xon], 0            ; yet held: the in-window play, which
-    je .no                          ; fills the hold behind it
+    cmp byte [vp_resid], 0          ; A STREAM (98.3.18.1): the whole file
+    jne .rs                         ; held in XMS - a worker may not read a
+    cmp byte [vp_xon], 0            ; file, and the UI task's copy out of the
+    je .no                          ; hold is what feeds it. Not yet held:
+                                    ; the in-window play, which fills the
+                                    ; hold behind it
     cmp byte [vp_xfull], 0
     je .no
 .rs:
@@ -5589,10 +5589,23 @@ vp_sstart:
     cmp byte [vp_planar], 0         ; four planes' image (98.1.3.1)
     je .kr
     cmp byte [vp_resid], 0          ; a LIVE one decodes INTO it (98.3.10.4):
-    je .kpl                         ; its planes' writes checked as a one-bit
+    je .kps                         ; its planes' writes checked as a one-bit
     cmp byte [vp_livem], 0          ; canvas's are (98.1.7.3) - the four
     je .kpl                         ; planes are the claim exactly
     mov byte [vp_kneed], 1
+    jmp short .kpl                  ; (checked at load: the planes exactly)
+.kps:
+    cmp byte [vp_livem], 0          ; A LIVE STREAM (98.3.18.1): nothing
+    je .kpl                         ; checks its records ahead, so the claim
+    mov ax, [vp_plsp]               ; is the bound, as a keyframe's is
+    mov cx, ax                      ; (VP_MXSHD): plane 3's base + 64 KB, and
+    shl ax, 1                       ; a 16-bit write from any plane stays in
+    add ax, cx                      ; it
+    add ax, 63
+    mov cl, 6
+    shr ax, cl
+    add ax, 64
+    jmp short .kc
 .kpl:
     mov ax, [vp_plsp]               ; 4 x plsp paragraphs, in KB - 64
     shl ax, 1                       ; paragraphs to the KB (it was 16: the

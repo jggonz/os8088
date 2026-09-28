@@ -2572,10 +2572,7 @@ def _encode(a, keep, tick, readers):
             raise vid.V88Error("--live is one bit, or --pixfmt vga4 with "
                                "--live vga: no --pixfmt %s" % a.pixfmt)
         # ...RESIDENT - or, with --xms, a STREAM that plays Live once the
-        # player holds it in XMS (98.3.18.1), which is one bit only
-        if getattr(a, "xms", False) and a.pixfmt not in (None, "mono"):
-            raise vid.V88Error("--live --xms is one bit: no --pixfmt %s"
-                               % a.pixfmt)
+        # player holds it in XMS (98.3.18.1)
         a.pixfmt = a.pixfmt or "mono"
         a.resident = not getattr(a, "xms", False)
         lay = "lin80"
@@ -3358,7 +3355,7 @@ def parser():
                          "that plays on the desktop once the player holds it "
                          "whole in XMS - a 286 or better with extended "
                          "memory - and in the window elsewhere (98.3.18.1). "
-                         "One bit")
+                         "One bit, or --pixfmt vga4 with --live vga")
     ap.add_argument("--title",
                     help="the name the player shows (default: the file's)")
     ap.add_argument("--credits",

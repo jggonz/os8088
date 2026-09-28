@@ -1322,10 +1322,14 @@ class Writer:
                  cgapal=None, spk=False, live=None):
         # `live` (a TARGETS value): a STREAMED Live file (98.3.18.1) - its
         # frame records and seam carry blit runs between lists and audio
-        if live is not None and (pixfmt != PF_MONO1 or g.layout != LAY_LIN80
+        if live is not None and (pixfmt not in (PF_MONO1, PF_VGA4)
+                                 or g.layout != LAY_LIN80
+                                 or (pixfmt == PF_VGA4 and live !=
+                                     TARGETS["vga"])
                                  or g.h > 255 or g.wb > 255):
-            raise V88Error("a streamed live file is a MONO1 LIN80 canvas of "
-                           "at most 255 rows and bytes")
+            raise V88Error("a streamed live file is a MONO1 LIN80 canvas, or "
+                           "a VGA4 one for the VGA, of at most 255 rows and "
+                           "bytes")
         self.live = live
         if spk and audio_fmt != AUD_PCM8:
             raise V88Error("speaker counts are PCM8's (98.1.1.3)")
@@ -1963,7 +1967,7 @@ class Reader:
             raise V88Error("blit runs in a file that is not LIVE (98.1.3.4)")
         self.target = d[self.slot + R_TARGET]
         # a LIVE file is RESIDENT, or a stream played Live once it is held
-        # in XMS (98.3.18.1) - one-bit, the player's rule for that
+        # in XMS (98.3.18.1)
         if self.target > 3 or (self.target and not self.resident
                                and not self.live):
             raise V88Error("a target of %d" % self.target)

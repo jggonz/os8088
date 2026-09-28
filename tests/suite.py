@@ -8923,6 +8923,16 @@ SOAK = [
         "shadow the decode in the second lap too, then Esc",
         needs=("qemu", "nasm"),
         wants=("build/video.o88", "build/os8088.img")),
+    Row("vidxmslivevga4", "soak", py("tests/vidxms.py", "--arm", "livevga4"),
+        50.0,
+        "SPEC.md 98.3.18.1 IN COLOUR: a 1.2 MB VGA4 stream for the VGA "
+        "desktop, held, B: blank, Play LIVE - the keeper sized to plane 3's "
+        "base + 64 KB, because nothing checks a stream's writes ahead of the "
+        "play - and the four planes the decode's sixteen colours at four "
+        "moments, all 110 frames. Broken on purpose - vp_canlive one-bit "
+        "only for a stream again - Play is not Live and the row FAILS",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
     Row("vidxmslivenox", "soak", py("tests/vidxms.py", "--arm", "livenox"),
         45.0,
         "SPEC.md 98.3.18.1's other half: on -m 1 (no pool) the streamed Live "

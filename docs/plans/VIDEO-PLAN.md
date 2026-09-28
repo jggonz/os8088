@@ -2188,9 +2188,10 @@ and not a transcript. Each line names where the detail is.
   **Open from it**: Live with SOUND from a stream is the bracket's reader
   code and has never been run with a card - it wants a row (QEMU `-device
   sb16` and SOUND.DRV on a hard-disk template, `tests/vidsound.py`'s
-  shape) or a 286 in the field. A VGA4 stream is refused Live (its keeper
-  is the planes exactly and a stream's writes are not checked ahead); the
-  encoder GUI has no `--xms` box yet.
+  shape) or a 286 in the field. **VGA4 streams play Live too** (2026-09-28),
+  their keeper plane 3's base + 64 KB since a stream's writes are not
+  checked ahead (`vidxmslivevga4`). The encoder GUI's `--xms` box sits beside
+  "live" on Loop and keys.
 - **Live in colour** (15.2) is BUILT (2026-09-27).
 - **MUTE** is BUILT (2026-09-27, SPEC.md 98.3.17, 34.5.3.1): the owner's ask
   after elendilon's "no ADPCM4 on an SB16" fix - *"I have some knockoff
