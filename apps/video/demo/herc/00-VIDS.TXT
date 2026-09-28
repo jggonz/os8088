@@ -23,12 +23,12 @@ Sound wants a Sound Blaster, except 02, which is made for the PC speaker (see be
 
 02 is encoded and timed for the PC speaker. The speaker takes most of the machine to play sound at 8 kHz, so the picture is smaller than the others; 03 is the whole song with a Sound Blaster. To hear 02 on the speaker, choose PC Speaker on the Control Panel's Sound page first; with a Sound Blaster chosen it plays through the card instead.
 
-03-ADPCM.V88
+03-PCM11.V88
   Bad Carrot
   720 x 261 pixels
   Full screen
-  ADPCM 5.5 kHz sound
-  25 fps, 3:36, 12.8 MB
+  PCM 11 kHz sound
+  25 fps, 3:36, 14.4 MB
 
 04-ADPCM.V88
   Star Wars: trench run

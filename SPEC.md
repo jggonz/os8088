@@ -154569,9 +154569,10 @@ to come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
   and a VHD footer. `--verify-hdd` passes the volume before it is wrapped.
 - **The Hercules set was re-cut on 2026-09-28**: `02-PCSPK` became a
   56 s excerpt of Bad Carrot on the speaker at 8 kHz (98.2.15.5's
-  `herc-spk`, 360 x 131 at 23 fps) and `03-ADPCM` the whole song full
-  screen, where it had been the other way round; the old `08-PCM11` (K
-  Project) was dropped for space and `09-LIVE` is `08-LIVE`.
+  `herc-spk`, 360 x 131 at 23 fps) and `03-PCM11` the whole song full
+  screen at 11 kHz PCM, where it had been the other way round; the old
+  `08-PCM11` (K Project) was dropped and its room spent on 03's sound
+  rather than on another video, and `09-LIVE` is `08-LIVE`.
 - **`00-VIDS.TXT` is written for Note Pad** and held to `checkreadme.py`'s
   rules as `README.TXT` is: prose one line a paragraph, the per-video
   blocks indented and 28 columns at most, plain ASCII, CRLF on the disk.
@@ -154579,7 +154580,7 @@ to come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
 Each disk booted on MartyPC's 5150 of its adapter (the same volume at
 615/4/26 on its XT-IDE, which has no ST11R): the desktop from C:, the text
 in Note Pad and a video in the window at its own size - `05-ADPCM.V88` on
-the Hercules (75 files, 15,599 of 15,891 clusters then; 74 and 14,628 for
+the Hercules (75 files, 15,599 of 15,891 clusters then; 74 and 15,470 for
 the 2026-09-28 set), `02-BWPCS.V88` on the CGA (77 files, 14,687). **The
 titles inside the files are what each video SHOWS OFF** - "Composite 512
 Color 160*100 OldStyle", "PC Speaker (Set it in Ctrl Panel)" -
