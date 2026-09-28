@@ -1176,6 +1176,8 @@ section .text
 ; the ~400 the owner set for a kernel call.
 ; =============================================================================
 SPK_NMIN        equ 74          ; a pulse ends inside its period (34.4)...
+SPK_NMIN_AT     equ 48          ; ...on a 286 or better, whose ISR is a
+                                ; fraction of an 8088's: 24,858 Hz (34.11.8)
 SPK_NMAX        equ 255         ; ...and mode 0 is programmed lobyte-only
 
 ; -----------------------------------------------------------------------------
@@ -1204,7 +1206,12 @@ osapi_fsx_spk:
     jne .err
     inc ax
     cmp dx, SPK_NMIN
+    jae .nlo
+    cmp dx, SPK_NMIN_AT         ; shorter, on a 286 or better alone
     jb .err
+    cmp byte [cpu_tier], CPU_8086
+    je .err
+.nlo:
     cmp dx, SPK_NMAX
     ja .err
     inc ax

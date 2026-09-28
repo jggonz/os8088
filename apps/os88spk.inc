@@ -25,7 +25,8 @@
 ;   os88spk_init  DI = the ring's segment, AH bits 4-5 = its size code, DX =
 ;                 the rate, CL = PULSES A SAMPLE (0 or 1: one). The pulse's
 ;                 period is N / pulses, N = 1,193,182 / rate, and must be
-;                 74..255 PIT counts - so the CARRIER is the rate x pulses
+;                 74..255 PIT counts, 48..255 on a 286 or better (34.11.8)
+;                 - so the CARRIER is the rate x pulses
 ;                 (SPEC.md 34.11.7). Writes the table, for that period;
 ;                 plays nothing. CF=1 it cannot be played. Any time
 ;   os88spk_go    the speaker plays the ring from CONS. INSIDE YOUR OWN
@@ -78,7 +79,15 @@ os88spk_init:
     jnz .no                         ; remainder): exact, or not played
     xor ah, ah
     cmp ax, 74                      ; ...and 74 the shortest period a pulse
-    jb .no                          ; ends in (SPEC.md 34.4)
+    jae .nlo                        ; ends in (SPEC.md 34.4) - or 48 on a
+    cmp al, 48                      ; 286 or better, whose ISR is a fraction
+    jb .no                          ; of an 8088's (34.11.8), as the door
+    push ax                         ; has it
+    call OSAPI_CPU_INFO
+    cmp al, CPU_8086
+    pop ax
+    je .no
+.nlo:
     mov [cs:os88spk_n], ax
     mov [cs:os88spk_rl], bx
     mov [cs:os88spk_rseg], di

@@ -107,11 +107,11 @@ PROFILES = {
                    what="a 360 KB floppy, a cylinder a call (predicted)"),
     "286": dict(disk=150000, avg=1.50, peak=2.50, owe=1.6, speed=3,
                 ring=8,
-                rate=22050, audio="pcm8",
+                rate=22050, audio="pcm8", spk_us=(23.0, 13.0),
                 what="a 6 MHz 286: ~3x the 8088's cycles (predicted)"),
     "286-vga": dict(disk=400000, avg=3.00, peak=5.00, owe=1.6, speed=6,
                     ring=8,
-                    rate=22050, audio="pcm8",
+                    rate=22050, audio="pcm8", spk_us=(11.5, 6.5),
                     what="a 12-16 MHz 286 with a VGA, for VGA8: the VGA's "
                          "bus binds, and it stores ~4.5x as fast as the "
                          "5150's CGA; its IDE disk 627 KB/s with half the "
@@ -439,6 +439,7 @@ CYC_SPK_HALF = 262.0    # measured the same way as CYC_SPK_PULSE (34.11.7.1)
                         # pulses' ~46% is taken out; translating was 92.8/~50
 SPK_RATE = 5512         # the speaker target's default rate
 SPK_MIN = 4679          # N = 1,193,182 / rate is a lobyte count of 74..255
+SPK_MAX_AT = 24858      # ...or 48..255 on a 286 profile (SPEC.md 34.11.8)
 SPK_MAX_8088 = 8000     # VIDEO.O88's VP_SPKMAX: past it an 8088 is SILENT
 REC_OVER = 6 + 10       # a record's header and its ten list terminators
 REC_MAX = 30 * 1024     # a frame record rides in a super-packet of 32 KB
@@ -2717,9 +2718,12 @@ def _encode(a, keep, tick, readers):
     if spk:                             # PCM8, at a rate the speaker plays
         audio = "pcm8"
         r = a.rate or SPK_RATE
-        if not SPK_MIN <= r <= 16124:
+        top = SPK_MAX_AT if prof.get("spk_us") else 16124
+        if not SPK_MIN <= r <= top:
             raise vid.V88Error("--audio speaker: %d Hz is not a rate the PWM "
-                               "plays (%d..16124)" % (r, SPK_MIN))
+                               "plays on this profile (%d..%d%s)" % (
+                                   r, SPK_MIN, top, "" if top > 16124 else
+                                   "; a 286 profile goes to %d" % SPK_MAX_AT))
         if prof["avg"] is not None and prof.get("speed") == 1 \
                 and r > SPK_MAX_8088:
             raise vid.V88Error("--audio speaker: an 8088 plays at most %d Hz "
@@ -2729,8 +2733,9 @@ def _encode(a, keep, tick, readers):
         if a.spk_pulses > 1 and a.resident:
             raise vid.V88Error("--spk-pulses: a streamed file's, not a "
                                "resident one's (34.11.7)")
-        vid.spk_table(r, a.spk_pulses)  # (the pulses divide N, and a
-    if audio == "none" or not has_audio:  # pulse is 74..255 counts)
+        vid.spk_table(r, a.spk_pulses,  # (the pulses divide N, and a
+                      fast=bool(prof.get("spk_us")))  # pulse is 74..255
+    if audio == "none" or not has_audio:  # counts, 48..255 on a 286)
         afmt, rate, spf, abytes = vid.AUD_NONE, round(fps * 100), 100, 0
     else:
         afmt = vid.AUD_BY_NAME[audio]
@@ -2750,9 +2755,14 @@ def _encode(a, keep, tick, readers):
         # THE SPEAKER TAKES ITS SHARE OF EVERYTHING (98.2.15): the pulses are
         # interrupts on top of the whole machine - decode, the disk's calls,
         # the loop - so the profile's shares are of what is LEFT
-        spk_share = rate * ((CYC_SPK_PULSE if a.spk_pulses == 1 else
-                             CYC_SPK_WHOLE2 + CYC_SPK_HALF) + CYC_SPK_BYTE) / (
-            vid.HZ * (prof.get("speed") or 1))
+        if prof.get("spk_us"):          # A 286 PROFILE: its own time a
+            w_us, h_us = prof["spk_us"]     # pulse (34.11.8, predicted) -
+            spk_share = rate * (w_us + (a.spk_pulses - 1) * h_us) / 1e6
+        else:                           # an interrupt is not 3x an 8088's
+            spk_share = rate * ((CYC_SPK_PULSE if a.spk_pulses == 1 else
+                                 CYC_SPK_WHOLE2 + CYC_SPK_HALF) +
+                                CYC_SPK_BYTE) / (
+                vid.HZ * (prof.get("speed") or 1))
         if spk_share >= 0.8:
             raise vid.V88Error("--audio speaker: %d Hz%s takes %.0f%% of this "
                                "machine and leaves too little to draw with%s"

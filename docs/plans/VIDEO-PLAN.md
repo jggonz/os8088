@@ -2252,6 +2252,22 @@ it). **The 5150's answer is one pulse at 8,000 Hz: an 8 kHz carrier for
 22,050 Hz at one pulse - no audible carrier - if the door's 74-count floor
 is lowered for `CPU_286` (kernel work, not done).
 
+**22 kHz on a 286 is BUILT** (the owner: *"a 286 with no sound card is a
+legitimate period possibility; one of my childhood systems was exactly
+this"*): SPEC.md 34.11.8 - the door's floor 48 on `CPU_286` and up (+15
+bytes of kern_big `.text`), the library's the same, `--rate` to 24,858 on a
+286 profile with its own predicted cost a pulse (~25% at 22,050 Hz on
+12 MHz, ~51% on 6 MHz). `vidspkat` (QEMU) is the function gate and
+`vidspk22` (MartyPC) the 8088's refusal. How it SOUNDS is a field listen
+on a 286; nothing here times one.
+
+**The preview is not the cone** (the owner, on the WAVs): the pitch of the
+5.5 kHz whine is right, but the real speaker's is *"choppy and ringing"*
+where the WAV's is a constant whine. The preview has no lost pulses and
+no interrupt jitter; the machine loses ~1 pulse a rate period at the
+chain (34.11.3) and its writes land a variable latency after each IRQ0.
+Modelling both in `spk_preview` is the obvious next step for it.
+
 **The owner's third listen** picked `--spk-lows 0.5 --spk-drive 0.5`,
 the defaults now (98.2.15.1); the soft intro is the part still lost.
 **Next listen** (`badcar4-ST11M.VHD`, this player): ratio 4 / range 36 /

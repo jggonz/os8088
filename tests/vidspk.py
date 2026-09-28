@@ -163,7 +163,10 @@ def main():
         a.counts, a.unmute = True, True     # only a speaker file has it)
     c_s = 0
     os.chdir(ROOT)
-    spk = not a.silent and (a.rate <= 8000 or a.unmute)
+    # ...and a pulse shorter than 74 counts is a 286's (SPEC.md 34.11.8):
+    # on this 8088 even M finds the door shut, and the play is SILENT
+    shut = (1193182 // a.rate) // a.pulses < 74
+    spk = not a.silent and not shut and (a.rate <= 8000 or a.unmute)
     # past VP_SPKMAX an 8088 defaults to MUTED (SPEC.md 34.11.4, 98.3.17),
     # and M is how the user says play it anyway
     fast = a.rate > 8000

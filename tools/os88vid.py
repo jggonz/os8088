@@ -692,20 +692,24 @@ F_KNOWN = F_RESIDENT | F_LOOPREC | F_REPEAT | F_LIVE | F_RUNS | F_SPKPWM \
 PIT_HZ = 1193182
 
 
-def spk_table(rate, pulses=1):
+def spk_table(rate, pulses=1, fast=True):
     """SPEC.md 34.11.2's count table for a rate: t[s] = 1 + s(N-2)/255, N =
     1,193,182 / rate / pulses - a PULSE's period, 34.11.7 - apps/os88spk.inc's
-    os88spk_init, to the byte"""
+    os88spk_init, to the byte. A pulse is 74..255 counts on an 8088 and
+    48..255 on a 286 or better (34.11.8): `fast` says a 286 may play it,
+    and a FILE is valid down to 48 - which machine plays it is the
+    player's to decide"""
     n = PIT_HZ // rate
     if not 1 <= pulses <= 4 or n % pulses:
         raise V88Error("%d pulses a sample at %d Hz: N = %d, which they do "
                        "not divide" % (pulses, rate, n))
     n //= pulses
-    if not 74 <= n <= 255:
+    if not (48 if fast else 74) <= n <= 255:
         raise V88Error("%d Hz%s is not a rate the speaker plays (a pulse of "
-                       "%d counts, 74..255)" % (
+                       "%d counts, %d..255)" % (
                            rate, " x %d pulses" % pulses if pulses > 1
-                           else "", n))
+                           else "", n, 48 if fast else 74) + ("" if fast else
+                                          "; 48.. on a 286 or better"))
     return bytes(1 + s * (n - 2) // 255 for s in range(256))
 
 

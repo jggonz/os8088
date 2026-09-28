@@ -58211,6 +58211,40 @@ above:
   door's 74-count floor lowered on `CPU_286` and up (a pulse of 54 counts),
   which is kernel work not done.
 
+#### 34.11.8 A shorter pulse on a 286: 22 kHz with no audible carrier
+
+**A 286 with no sound card is a period machine**, and on one the carrier
+can simply go above hearing: 22,050 Hz at one pulse a sample is a pulse of
+N = 54 PIT counts. The door's floor was 74 for the 8088's sake - its ISR is
+~400 cycles, near a whole 5,512 Hz period - and a 286's is a fraction of
+that. So **the floor is 48 on `CPU_286` and up** (`SPK_NMIN_AT`, 24,858
+Hz), and stays 74 on an 8086:
+- **the door** (`osapi_fsx_spk`): a DX of 48..73 is refused unless
+  `[cpu_tier]` is past `CPU_8086`. **+15 bytes of `kern_big` `.text`**, no
+  rung crossed; `kern_small`'s door refuses everything anyway;
+- **the library** (`os88spk_init`): the same test through
+  `OSAPI_CPU_INFO`, so a table is not built for a door that will say no;
+- **the file**: a pulse of 48..255 counts is VALID (`os88vid.spk_table`),
+  and which machine may play it is the player's question;
+- **the player**: `VP_SPKMAX` already binds an 8086-class CPU alone, so a
+  22 kHz file opens MUTED on an 8088 (M then finds the door shut, and the
+  play is silent) and plays on anything else;
+- **the encoder**: `--rate` up to 24,858 on a 286 profile. Its cost is not
+  the 8088's cycles divided by the profile's speed - an interrupt, a
+  `push` and an `iret` are a fraction of an 8088's on a 286 - so a 286
+  profile carries its own time a pulse, `spk_us`: 23 us whole and 13 us
+  half on `286` (6 MHz), 11.5 and 6.5 on `286-vga` (12-16 MHz), from a
+  count of `os88spk_isr`'s instructions at 286 timings with a wait state a
+  memory access and ~1 us an ISA `out`. **Predicted, not measured**: 22,050
+  Hz is ~51% of a 6 MHz 286 and ~25% of a 12 MHz one. No emulator here
+  can time a 286 (MartyPC is an 8088; QEMU counts work and not time).
+
+`tests/vidspkat.py` (QEMU's 386) is the function gate: the clip opens
+unmuted, its sound goes to the speaker, the door is open to the player
+with a rate divisor of whole 54-count pulses, the ring is played from and
+every frame drawn; `vidspk --rate 22050 --unmute` (MartyPC's 8088) is the
+refusal. How it SOUNDS on a 286's speaker is the owner's to hear.
+
 ## 35. Recorder — the sound layer's recording client
 
 `apps/recorder` needs `SND_CAP_PCM_IN` (a Sound Blaster) to record and
