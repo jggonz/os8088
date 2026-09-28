@@ -151271,7 +151271,8 @@ python3 tools/os88venc.py IN OUT.V88 [--preset P | --layout L --box WxH]
     [--levels auto|none] [--gamma G] [--contrast C] [--brightness B]
     [--invert] [--title T] [--credits C] [--keysecs S]
     [--poster K | --poster-at SECS] [--preview-png DIR]
-    [--text-colour colour|mono] [--text-glyphs blocks|shades|ascii|dots|dots-plus]
+    [--text-colour colour|mono]
+    [--text-glyphs blocks|shades|ascii|dots|dots-plus|blocks-only|blocks-only-shade]
     [--text-detail D] [--text-sharpen S] [--text-busy B] [--text-stable E]
 python3 tools/os88venc.py --profiles
 ```
@@ -151838,6 +151839,15 @@ form parsing to the parser's defaults, every choice with its line in
 `CHOICE_HELP`, every target encoding to the format
 it names, every preview at its screen's shape, and the disk.
 
+**It fits its own default size** (1080 x 760). The log, the progress bar
+and the Encode row are packed from the BOTTOM and before the tabs, so a
+short window takes its height from the tabs; and a tab of more than ten
+options is laid out in two columns, down the first and then the second.
+The Picture tab's 21 in one column were taller than the window, and the log
+- packed last - got nothing at all, with Encode cut off the end of its row
+by the disk list (the owner's report; both seen on the glass under Xvfb).
+The gate has no display, so this is looked at, not asserted.
+
 
 #### 98.2.9 The pre-roll: the first picture is whole before the keyframes start
 
@@ -152401,7 +152411,8 @@ choice it replaced:
   characters churn - the least clear thing a text picture can do.
 
 **`--text-glyphs`** is what the picture is made of - `blocks` (the default),
-`shades`, `ascii`, `dots` or `dots-plus`: `blocks`
+`shades`, `ascii`, `dots`, `dots-plus`, `blocks-only` or
+`blocks-only-shade`: `blocks`
 is printable ASCII, the four shades and the four half blocks - a half
 block with a colour each side makes a cell two dots of sixteen colours, so
 the screen is 80 x 50 where the picture wants it - `shades` leaves out the
@@ -152414,7 +152425,11 @@ ascii's: the dots are the point, with a slight lean to a solid cell on a
 tie (0, 2 and 5 looked alike on the photographs). **`dots-plus`** is the
 same with four more marks - `"` a pair of dots high, `*` a small star, `:`
 and `;` two stacked - for the middle tones, the owner keeping `dots` as the
-clean one; its penalty is 2 as well.
+clean one; its penalty is 2 as well. **`blocks-only`** and
+**`blocks-only-shade`** have no letters at all (the owner's ask): the space,
+the full block and the four half blocks - a picture of flat colour at two
+dots a cell - and the same with the three lighter shades for the tones
+between. Every glyph in them is plain, so no letter penalty applies.
 
 **What the choice costs.** Per glyph the least-squares colours for its lit
 and unlit dots, the two nearest of the sixteen to each, and all four pairs
@@ -154058,6 +154073,32 @@ beats the Bayer cell. The glyphs are the MACHINE's for the codes it has
 (`vp_tquadt`, the model's own, `BLOCK_QUADS`); any other code is half lit
 and 0 is dark. `vidtext` holds it byte for byte, with the glyphs the
 player names.
+
+##### 98.4.6.1 A text poster in well under a second
+
+**It took 4.6 s of CPU on a 5150** for an 80 x 25 canvas (MartyPC's
+Hercules 5150, sampled), the picture on the glass 5 s after the key: every
+POSTER ROW visited every cell, called `vp_tquad` for its glyph quadrants
+and `vp_tmix` twice for their lumas - 2,700 cycles a cell a row, four rows
+a cell. But a cell's four poster rows are two halves, and a half's two
+quadrant lumas are the same for both of its rows; only the Bayer
+thresholds differ. So:
+- `vp_tqbuild` counts the quadrants of every code ONCE, into a table: half
+  lit, then the blocks' table, then the machine's glyphs over both - the
+  order `vp_tquad` asks in, and `vp_tquad` is still what counts one;
+- `vp_thalf` mixes each cell HALF once, into a row of lumas - one 8-bit
+  `mul` a quadrant, as `bg + (fg - bg) x n >> 4` or `fg + (bg - fg) x
+  (16 - n) >> 4` by which difference is not negative, which is the
+  reference's `(bg x (16 - n) + fg x n) >> 4` exactly - and a cell the same
+  as the one before (a flat area's run) reuses its lumas;
+- `vp_temit` makes each poster row as compares against that row alone.
+
+The tables and the row are a 2 KB scratch claim, freed at the end; refused,
+the poster is black. **0.47 s of CPU, the picture on the glass ~0.75 s
+after the key**, on the same clip - so the encoder carries no pre-made
+poster for a text file, which was the fallback had this missed a second.
+`vidtext`, `vidtextherc` and `vidtextvga` hold it byte for byte (a swapped
+threshold fails 3,766 of 4,000 bytes). VIDEO.O88 +240 bytes.
 
 #### 98.4.7 A document on another disk: the instance goes there, and a failure opens the card
 

@@ -277,6 +277,11 @@ CHOICE_HELP = {
                 "other classic text-art style",
         "dots-plus": "The dots set with : ; \" * as well - more marks for "
                      "the middle tones, a little busier",
+        "blocks-only": "No letters: the full block and the four half "
+                       "blocks alone - flat colour, two dots a cell",
+        "blocks-only-shade": "No letters: the four shades and the four half "
+                             "blocks - the blocks-only look with tones "
+                             "between",
     },
     "fit": {
         "fit": "The whole picture; the canvas shrinks to its shape, no bars",
@@ -3262,7 +3267,8 @@ def parser():
                          "which (text, text-mono); colour otherwise")
     ap.add_argument("--text-glyphs",
                     choices=("blocks", "shades", "ascii", "dots",
-                             "dots-plus"),
+                             "dots-plus", "blocks-only",
+                             "blocks-only-shade"),
                     default="blocks",
                     help="text: the characters the picture is made of - "
                          "printable ASCII and, with shades, the four "
@@ -3271,7 +3277,9 @@ def parser():
                          "are the clearest - or dots: the full and half "
                          "blocks for shapes and , . ' ` for the edges and "
                          "dithers a block is too coarse for, and dots-plus "
-                         "those with : ; \" * as well")
+                         "those with : ; \" * as well - or blocks-only, the "
+                         "full and half blocks alone, and blocks-only-shade "
+                         "those and the shades: no letters at all")
     ap.add_argument("--text-detail", type=float, default=0.5,
                     help="text: 0..1, how much a cell is judged dot for dot "
                          "(which way an edge runs) against through the eye "
