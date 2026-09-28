@@ -125,7 +125,7 @@ TAB_OF = {
     "levels_mix": "Colour", "flip": "Colour",
     "audio": "Sound", "rate": "Sound", "adpcm": "Sound", "jobs": "Sound",
     "volume": "Sound", "spk_shape": "Sound", "spk_highpass": "Sound",
-    "spk_drive": "Sound",
+    "spk_drive": "Sound", "spk_lows": "Sound",
     "disk": "Budget", "avg": "Budget", "peak": "Budget", "owe": "Budget",
     "lookahead": "Budget", "error": "Budget", "reserve": "Budget",
     "aim": "Basic", "worth": "Budget",

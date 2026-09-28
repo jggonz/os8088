@@ -716,9 +716,10 @@ def spk_samples(counts, rate):
 
 SPK_HP = 250                    # the speaker's high-pass, Hz (98.2.15.1)
 SPK_DRIVE = 0.45                # ...and its level, an RMS of full scale
+SPK_SPLIT = 700                 # ...and where --spk-lows starts, Hz
 
 
-def spk_shape(pcm, rate, hp=SPK_HP, drive=SPK_DRIVE):
+def spk_shape(pcm, rate, hp=SPK_HP, drive=SPK_DRIVE, clip="soft", lows=1.0):
     """SOUND SHAPED FOR THE SPEAKER (98.2.15.1): unsigned 8-bit PCM in and
     out, the same length. A pulse's width is the only thing the speaker
     has, and it spends it on whatever is loudest - in most music the bass
@@ -732,10 +733,28 @@ def spk_shape(pcm, rate, hp=SPK_HP, drive=SPK_DRIVE):
     import numpy as np
     return spk_shape_f(np.frombuffer(bytes(pcm), dtype=np.uint8)
                        .astype(np.float64) - 128.0, rate, hp, drive,
-                       bytes(pcm))
+                       bytes(pcm), clip, lows)
 
 
-def spk_shape_f(x, rate, hp=SPK_HP, drive=SPK_DRIVE, raw=None):
+def spk_limit(y, rate, ceil=0.98, look=0.002):
+    """A PEAK LIMITER in place of a clip (98.2.15.1): the gain dips around a
+    peak - a centred max over `look` seconds either side, held and ramped
+    over the same again - so the waveform is scaled rather than bent, and a
+    loud low tone is not given the harmonics a clip adds. What little still
+    passes `ceil` is clipped"""
+    import numpy as np
+    L = max(1, int(round(rate * look)))
+    sw = np.lib.stride_tricks.sliding_window_view
+    pk = sw(np.pad(np.abs(y), (L, L), mode="edge"), 2 * L + 1).max(axis=1)
+    g = np.minimum(1.0, ceil / np.maximum(pk, 1e-12))
+    g = sw(np.pad(g, (L, L), mode="edge"), 2 * L + 1).min(axis=1)
+    k = np.ones(2 * L + 1) / (2 * L + 1)
+    g = np.convolve(np.pad(g, (L, L), mode="edge"), k, mode="valid")
+    return np.clip(y * g, -1.0, 1.0)
+
+
+def spk_shape_f(x, rate, hp=SPK_HP, drive=SPK_DRIVE, raw=None, clip="soft",
+                lows=1.0, split=SPK_SPLIT):
     """spk_shape's body, from samples at any scale (the encoder hands it
     ffmpeg's floats, so the quiet passages it raises are not raised out of
     8-bit steps). Out: unsigned 8-bit PCM; `raw` is what an input too
@@ -755,26 +774,45 @@ def spk_shape_f(x, rate, hp=SPK_HP, drive=SPK_DRIVE, raw=None):
                        / np.log2(6.0), 0.0, 1.0)
         X *= 10.0 ** (9.0 * tilt / 20.0)
         x = np.fft.irfft(X, n)
-    w = max(1, int(rate * 0.03))    # the level: a centred 30 ms RMS...
-    c = np.concatenate(([0.0], np.cumsum(x * x)))
-    lo = np.clip(np.arange(n) - w // 2, 0, n)
-    hi = np.clip(np.arange(n) + w // 2 + 1, 0, n)
-    env = np.sqrt((c[hi] - c[lo]) / (hi - lo))
-    # ...held over the window either side, so a transient is not pumped
-    k = np.lib.stride_tricks.sliding_window_view(
-        np.pad(env, (w, w), mode="edge"), 2 * w + 1)
-    env = k.max(axis=1)
-    top = np.percentile(env, 99.5)
-    if top <= 0:
+
+    def level(x):
+        w = max(1, int(rate * 0.03))    # the level: a centred 30 ms RMS...
+        c = np.concatenate(([0.0], np.cumsum(x * x)))
+        lo = np.clip(np.arange(n) - w // 2, 0, n)
+        hi = np.clip(np.arange(n) + w // 2 + 1, 0, n)
+        env = np.sqrt((c[hi] - c[lo]) / (hi - lo))
+        # ...held over the window either side, so a transient is not pumped
+        k = np.lib.stride_tricks.sliding_window_view(
+            np.pad(env, (w, w), mode="edge"), 2 * w + 1)
+        env = k.max(axis=1)
+        top = np.percentile(env, 99.5)
+        if top <= 0:
+            return x * 0.0
+        floor = top / 16.0              # -24 dB: below it, gain stops growing
+        gain = np.sqrt(top / np.maximum(env, floor))    # a 2:1 compressor
+        gate = np.clip(env / (top / 250.0), 0.0, 1.0)   # silence (-48 dB) stays
+        return x * gain * gate
+    if lows != 1.0 and hp:
+        # TWO BANDS (98.2.15.1): under `split` and over it levelled apart,
+        # brought to one level, and the lows scaled - the voice keeps its
+        # drive while the lower tones, which are what the clip bends first,
+        # are given less of it
+        m = np.clip((f - split * 0.8) / (split * 0.4), 0.0, 1.0)
+        lo, hi = level(np.fft.irfft(X * (1 - m), n)), \
+            level(np.fft.irfft(X * m, n))
+        lo *= np.sqrt(np.mean(hi * hi) / max(np.mean(lo * lo), 1e-12))
+        y = hi + lows * lo
+    else:
+        y = level(x)
+    if not np.any(y):
         return raw
-    floor = top / 16.0              # -24 dB: below it, gain stops growing
-    gain = np.sqrt(top / np.maximum(env, floor))    # a 2:1 compressor
-    gate = np.clip(env / (top / 250.0), 0.0, 1.0)   # silence (-48 dB) stays
-    y = x * gain * gate
     rms = np.sqrt(np.mean(y * y))
     if rms <= 0:
         return raw
-    y = np.tanh(y * (drive / rms)) / np.tanh(1.0)
+    if clip == "limit":
+        y = spk_limit(y * (drive / rms), rate)
+    else:
+        y = np.tanh(y * (drive / rms)) / np.tanh(1.0)
     y = np.clip(np.round(y * 127.0), -127, 127) + 128
     return y.astype(np.uint8).tobytes()
 RUNS_MAX = 32                   # ...at most this many a record
@@ -2409,7 +2447,7 @@ def set_title(path, title):
     return t.decode("ascii")
 
 
-def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE):
+def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE, lows=1.0):
     """A SPEAKER FILE'S SOUND SHAPED AFTER THE FACT (98.2.15.1): every
     rendition's counts read back to samples, spk_shape'd and written as
     counts again, in the same bytes - each frame record's last `abytes`
@@ -2441,7 +2479,7 @@ def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE):
         ab = r.abytes
         old = b"".join(bytes(d[w:w + ab]) for w in where)
         new = spk_counts(spk_shape(spk_samples(old, r.rate), r.rate, hp,
-                                   drive), r.rate)
+                                   drive, lows=lows), r.rate)
         for f, w in enumerate(where):
             d[w:w + ab] = new[f * ab:(f + 1) * ab]
         if r.loop is not None:
@@ -3140,7 +3178,7 @@ def cmd_title(a):
 
 
 def cmd_speaker(a):
-    n = spk_reshape(a.file, a.out, a.highpass, a.drive)
+    n = spk_reshape(a.file, a.out, a.highpass, a.drive, a.lows)
     print("os88vid: %s: %d rendition%s' sound shaped for the speaker "
           "(high-pass %d Hz, drive %.2f)" % (a.out, n, "" if n == 1 else "s",
                                              a.highpass, a.drive))
@@ -3825,6 +3863,10 @@ def main():
     s.add_argument("--drive", type=float, default=SPK_DRIVE,
                    help="the level, an RMS of full scale (default "
                         "%(default)s)")
+    s.add_argument("--lows", type=float, default=1.0,
+                   help="the band under %d Hz against the one over it, "
+                        "each levelled apart (default 1: one band)"
+                        % SPK_SPLIT)
     s = sub.add_parser("decode")
     s.add_argument("file")
     s.add_argument("--frame", type=int, required=True)

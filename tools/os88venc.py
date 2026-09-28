@@ -2936,7 +2936,7 @@ def _encode(a, keep, tick, readers):
         # would otherwise sit 25-30 dB under the pulses' own carrier
         pcm = vid.spk_shape_f(np.frombuffer(ffmpeg_audio(
             a.src, rate, a.start, a.end, a.volume, "f32le"), dtype="<f4"),
-            rate, a.spk_highpass, a.spk_drive)
+            rate, a.spk_highpass, a.spk_drive, lows=a.spk_lows)
         say("   speaker: shaped - nothing under %d Hz, the level evened out "
             "and driven to %.0f%% RMS (--spk-shape off to take the sound "
             "as it is)" % (a.spk_highpass, 100 * a.spk_drive))
@@ -3257,6 +3257,12 @@ def parser():
     ap.add_argument("--spk-highpass", type=int, default=vid.SPK_HP,
                     metavar="HZ", help="with --spk-shape: nothing under this "
                     "(default %(default)s; 0 keeps the bass)")
+    ap.add_argument("--spk-lows", type=float, default=1.0,
+                    help="with --spk-shape: the band under %d Hz levelled "
+                         "apart from the one over it and scaled by this, so "
+                         "the voice keeps its drive while the lower tones - "
+                         "what the clip bends first - get less (default 1: "
+                         "one band)" % vid.SPK_SPLIT)
     ap.add_argument("--spk-drive", type=float, default=vid.SPK_DRIVE,
                     help="with --spk-shape: the level, an RMS of full scale "
                          "(default %(default)s; higher is louder and clips "

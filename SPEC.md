@@ -152378,6 +152378,23 @@ from ffmpeg's floats, not 8-bit steps):
    `tanh` soft clip, which rounds off ~5% of samples. Loudness is what a
    pulse width buys, and on this speaker clipping is the cheap end of it.
 
+**The owner's listens** (2026-09-28, on the 5150): at 0.45 *"clearly
+audible, even good - except the coil whine still dominates"*; at 0.6 *"the
+voice is much better, almost louder and clearer than the whine. But the
+lower tones are more fuzzed out - louder, but less distinct"*. The two
+differ only in the drive, so the fuzz is the soft clip: 4.0% of samples
+pass full scale at 0.45 and 10.3% at 0.6, and the loud lower tones are
+what they are. A peak limiter in its place (`spk_limit`, kept for the
+record) cuts a steady low tone's harmonics from −26 to −59 dB but caps
+this song at 0.38 RMS, quieter than 0.45 - its peaks sit too far above
+its average. **`--spk-lows L`** is the other way: the band under 700 Hz
+and the band over it levelled apart, brought to one level and the lows
+scaled by L, so the voice keeps its drive and the lower tones get less.
+At L 0.35 and drive 0.55 the voice band is as loud as at 0.6 (−4.2 dB
+under the carrier), the lows 4 dB quieter and 8.0% clipped; at L 0.5 and
+drive 0.5, 5.9%. The default stays one band at 0.45 until the owner has
+heard both.
+
 A synthetic clip of a loud 60 Hz bass and a quiet 880 Hz line measures it
 the other way round: the line −43.0 dB → −5.4 dB of full scale, the bass
 −21.9 → −65.8. `--spk-shape off` takes the sound as it is, which is what every
