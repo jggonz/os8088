@@ -154174,3 +154174,297 @@ The first build read `OSAPI_VIDEO`'s DL after popping DX, so it was
 switching on a stale register and turned the grey on for Hercules. The
 Hercules row caught it.
 
+
+## 99. Gorillas (`apps/gorillas/gorillas.asm`)
+
+A native 8086 adaptation of the supplied Microsoft QBasic `gorilla.bas`
+(1990), packaged as `GORILLAS.O88`. One player faces a computer opponent,
+or two local players alternate angle and velocity entries, throwing bananas
+over a generated, destructible skyline. Eight to twelve building lots fill the 256-pixel
+width, each 18..36 pixels wide with one-pixel gutters on both sides. Each
+gorilla occupies the second or third rooftop from its edge. Random colors
+and heights follow rising, falling, valley or hill trends. Angles are 0..360
+whole degrees, measured inward from each player's
+horizontal; velocity is a whole number from 0..360. Wind accelerates the projectile horizontally, gravity
+vertically. Collision is swept in substeps against the persistent terrain
+and both gorillas, including the thrower. Setup selects a winning score from
+1..99 (default 3). The first player to reach that score wins the match.
+Enter advances angle to velocity, then throws; Tab selects the other field;
+digits replace a field, Backspace edits it, arrows adjust it. N opens match
+setup, P pauses, F or Alt+Enter toggles full
+screen, and Escape returns to the desktop. After the celebration and an eighteen-tick pause, the next skyline starts
+automatically. Enter can skip the pause. Throwers alternate across rounds.
+Each player retains her own last angle and velocity across turns and skylines,
+including when facing the computer. A new match resets both players to angle
+45 and velocity 70.
+
+The instance owns a 256x128 packed 4bpp scene and a bounded scratch band.
+The first 24 rows show the HUD between shots; during flight all three text
+rows clear to sky and the banana can traverse them. Text stays hidden while
+a shot is paused and returns on impact or a miss. The remaining rows are the
+skyline. The kernel's own font glyphs letter the scene. Integer scaling depends on the
+live surface and pixel aspect. Full repaints finish 32-pixel-wide strips from
+left to right, independent of the variable building boundaries. Native bands
+convert packed ink pairs through lookup tables before repeating scanlines. Windowed VGA uses
+the planar API when the rectangle is wholly drawable, retaining packed bands
+for clipping/API refusal. Scratch remains bounded at 5,376 bytes;
+projectile frames restore and replace a small saved rectangle, so they never
+repaint the whole city. Hercules and the monochrome CGA desktop receive
+1bpp bands; VGA receives planar or packed 4bpp bands. Fullscreen uses §53's exclusive bracket,
+following Dot Delirium (§93). CGA fullscreen selects `FSXM_CGA320` and writes
+packed 2bpp rows to the documented foreign-mode framebuffer. The CGA desktop
+remains monochrome, as elsewhere in this OS. No kernel changes are required.
+
+One restartable worker advances windowed play. The exclusive bracket freezes
+it and runs the same game step itself. A covered or unfocused window pauses
+its simulation. All model mutations and drawing are serialized by the graphics
+lock; worker liveness is checked outside it. Every draw derives its origin
+again from the window. About uses the shared OS card and suspends play.
+The package is included in the games media and has a standalone `make gorillas`
+target. No BASIC interpreter, floating-point unit, external assets or source
+file is required at runtime.
+
+The startup splash automatically plays the opening tune followed by the full
+gorilla dance score, with a circulating sparkle border and alternating raised-arm
+gorillas. Music starts on the first worker frame after the initial paint. The
+completed score or any key opens setup: one/two players (default two), two names (ten
+characters each, default Player 1/Player 2 or Computer), winning score, and
+positive decimal gravity (0.001..9999.999 m/s², default 9.8). Enter accepts defaults;
+Backspace edits. Invalid numeric entries remain on the current question. Name
+entry consumes printable keys before gameplay shortcuts. Alt+Enter/Escape and
+the Game menu remain available. V selects the optional musical dance; P/Enter
+starts play immediately. Any key skips the dance, which also ends naturally.
+
+Frontend states 4/5/6/7/8 are splash/setup/choice/dance/final scorecard. `grfront.inc` uses the
+same packed text scene and font as gameplay; the character cache covers all
+16 logical text rows. `grdraw.inc` draws animation as a separate layer from
+generated masks and native sprite pixels. `grmusic.inc`, generated from the reference PLAY strings by
+`tools/gorillas_music.py`, supplies intro, dance, launch and impact scores.
+An instance-owned nonblocking sequencer, also serviced between converted
+planes/bands during longer paints, schedules tones at priority 0x40;
+durations round to 18.2 Hz ticks, minimum one tick. Timed tones expire even
+while covered; score progression resumes with the worker. No direct speaker
+port writes or blocking waits run under the graphics lock.
+
+During flight, crossing sun ink opens an oval mouth without stopping the shot;
+the banana remains hidden until it leaves the sun.
+The expression stays shocked until impact or a miss, then returns to a smile.
+Sun changes update only its rectangle after restoring the previous banana patch.
+Every scored point (including self-hits and the match's final point) queues the
+reference `VictoryDance`: four left/right raised-arm pairs on the scorer, each
+playing `MFO0L32EFGEFDC` followed by a four-tick rest. Poses advance only when
+their phrase finishes. Enter waits for the dance to finish; pause, new match,
+About, focus handling and fullscreen transitions retain their usual behavior.
+`tests/gorillasreactions.py` checks the swept sun reaction, patch restoration,
+scorer selection, all eight poses, music and incremental pixels on each adapter.
+
+`grphysics.inc` scales the reference equations to the native scene: Q6
+coordinates, a signed 32-bit height, Q14 sine lookup, midpoint velocities
+and fractional acceleration accumulators. One frame represents .1 simulated
+seconds; adaptive substeps move at most one logical pixel per axis and test
+actual gorilla ink. The minimum gravity and maximum velocity keep peak height
+within the signed 32-bit range. The solo opponent in `grai.inc` evaluates one
+candidate power per worker tick using the same motion routines at 55 degrees,
+then adds -8..+8 velocity error, clamped to 1..360. Candidate searches stop after
+512 frames; difficult extreme-gravity shots may miss. Terrain can intercept it.
+Pause, focus and About suspend aiming. Humans cannot edit a pending computer
+shot. Only the active player's name and both scores appear in the first HUD row, with Angle and
+Velocity below. Wind appears beside Angle and as a proportional arrow in the
+reserved rows below the buildings. The arrow remains visible during flight.
+
+`tests/gorillasfront.py` exercises animation, name/number validation, chosen
+gravity, optional and completed dance, sound progression, setup across
+fullscreen transitions, and real solo turns on VGA, CGA and Hercules.
+
+### 99.0. Feature parity revision
+
+The implementation tracked in `docs/plans/GORILLAS-PARITY-PLAN.md` supersedes
+99's earlier gameplay limits and HUD description. Only the active player's name and both scores are
+visible between throws; a proportional wind arrow remains during flight. A
+separate sparkling final scorecard displays both totals and the first player
+to reach the winning score. Any key returns to setup.
+Throws alternate across cities; after the explosion, musical victory dance and
+a short pause, the next city starts automatically. Enter can advance the pause.
+
+The skyline varies in count, facade colors and overall height trend. Wind uses
+the reference distribution: -4..5 initially, with a one-in-three chance of adding
+1..10 in its existing direction (zero gusts left), yielding -14..15. Gorillas
+occupy the second or third building from either edge. Shots accept 0..360,
+including zero velocity. Angle and velocity accept whole numbers only and
+display without zero padding. Gravity accepts positive decimal values from
+0.001 through 9999.999, with at most three fractional digits (default 9.8).
+The optional intro centers both names inside the animated border. Trajectories use the
+reference equations scaled to the native scene; collision tests gorilla ink,
+not empty pixels in its enclosing rectangle. Throwing arms, four banana
+orientations, sun occlusion and distinct animated terrain/gorilla blasts precede
+the existing victory dance. All animation remains nonblocking and repaintable.
+
+Sparkle caches store horizontal expansion only; each drawn strip duplicates its
+rows into the existing scratch band. This recovers 8,960 bytes of per-instance
+memory while preserving all five cached phases. No kernel budget changes.
+
+### 99.1. Adapter palettes and artwork
+
+The scene stores **game ink indices**, not desktop EGA colors. Index zero
+remains empty sky for collision even when rendered blue. The colors follow
+`reference/gorillas/gorilla.bas`, `SetScreen`: blue sky, orange gorillas,
+yellow sun, gray/red/cyan buildings, yellow lit windows and dark unlit ones.
+The 16x20 gorillas have brows, nostrils, chest and limb detail; the sun has
+rays and a smile. Windows vary between lit and unlit, with a roof ledge.
+
+Windowed VGA uses a translation table into the shared desktop palette;
+expanded orange pixels mix light red and yellow to approximate EGA color 46
+without changing other windows' colors. Fullscreen VGA now requests
+`FSXM_VGA12`, writes its own planar bands and programs the original EGA RGB
+values into the DAC. No kernel drawing calls are used in that foreign mode.
+§53 restores the desktop mode and palette on return. Hercules keeps its
+high-contrast monochrome interpretation of the same scene.
+
+Fullscreen CGA explicitly writes `11h` to color-select port `3D9h`: blue
+background, high-intensity palette 0 (light green/light red/yellow). The
+scene maps buildings to light red/green, gorillas/sun/lit windows to yellow, and
+unlit windows to blue. This is an approximation of the EGA artwork, not an
+arbitrary four-color DAC palette. Standard RGB CGA has a selectable background
+and fixed foreground groups; it cannot reproduce the EGA colors exactly.
+The reference directory records IBM's register description and source URLs.
+
+Before a foreign mode set, the bracket waits for Alt and Enter to be released.
+A rapid Alt+Enter followed immediately by VGA BIOS mode 12h lost the Alt
+break code in emulator testing, leaving BIOS keyboard flag `40:17` bit 3
+set. The input map is polled while IRQ1 can still service both releases;
+no keyboard flags are patched by the application. Tests check that flag and
+then enter and fire another numeric shot after the second fullscreen entry.
+
+### 99.2. Incremental aiming input
+
+The gameplay HUD uses three rows of the 16-row, 32-column character cache.
+A numeric edit formats and
+compares only the selected seven-cell numeric field; field selection compares only
+the two markers. Unchanged cells do no drawing. Other HUD transitions compare
+the complete lines, padding shorter messages with spaces. Adjacent changed
+cells share a band, without spanning unchanged labels or crossing text rows.
+Clearing the scene for a new city also invalidates the character cache.
+
+Opaque glyph rows update the packed scene through a 16-entry nibble table,
+preserving exact full-repaint contents. Incremental drawing composes scaled
+bands directly from `OSAPI_FONT_GLYPHS`, following Dot Delirium's text-band
+approach (§93.5.5). Windowed rendering uses `OSAPI_GFX_BLIT1`, with white ink
+on blue paper on VGA through `OSAPI_GFX_BLIT1_PEN`; clipping remains the
+kernel's responsibility. A refused band falls back to the scene blitter.
+Foreign CGA doubles glyph bits into 2bpp color 3 on background 0. Foreign VGA
+writes the same glyph bits to all ink planes together and clears the remaining
+planes. The general scene scaler and 4bpp converter are absent from input
+redraws. Text retains its original font, scale, placement and colors.
+
+Paused numeric edits update the model without overwriting the pause message;
+resume rebuilds the visible prompt. Fullscreen drains already-buffered aiming
+keys without a tick wait between characters. Active projectile simulation
+retains its tick pacing. No kernel changes or heap allocation are involved;
+the optimization adds 1,277 image bytes and 199 BSS bytes per instance.
+
+`tests/gorillasinput.py` brackets real `gr_key` calls with MartyPC debugger
+breakpoints, counting guest cycles at 4,772,727 Hz. Interrupts and drawing
+are included; keyboard delivery, the window callback's layout work and the
+fullscreen idle wait are outside the bracket. Digit/edit/selection handlers
+have a 20 ms regression budget. Six BIOS-buffered keys (`90<Tab>150`) must
+complete within 55 ms; measured totals are VGA 35.21 ms, CGA 30.27 ms and
+Hercules 34.13 ms. `--max-input-ms 0` disables performance assertions for
+before/after measurement. `--check-repaint` additionally compares all video
+memory (all four planes on VGA) against a full repaint after every key.
+The gate independently checks scene glyphs, unchanged terrain, bounds,
+backspace, selection, paused edits and zero velocity. `tests/gorillas.py`
+continues to cover gameplay and repeated fullscreen restoration.
+
+### 99.3. XT menu and intro drawing
+
+Setup field changes and validation errors flush only changed glyph spans.
+The title/help survive question changes; shorter input and error messages
+erase through blank cells. Blank scene cells use zero stores, and completely
+blank display spans use a zero-filled band. Full frontend paints clear the
+background and draw occupied text cells directly, avoiding a full scene
+conversion. Buffered fullscreen setup input drains without per-key tick waits.
+
+Each setup answer has a blinking underscore at the next character position,
+including empty and ten-character entries. It starts visible on each question
+and accepted edit, toggles every nine BIOS ticks (about half a second), and
+never becomes part of the answer. The existing worker/exclusive loop advances
+it only in setup; window focus, coverage and About suspend its animation.
+Blinking updates one cached glyph cell and its scene pixels, preserving the
+current phase across exposure and fullscreen changes. Leaving setup clears it.
+
+The five marquee phases are generated 1bpp masks. The two gorilla poses have
+native monochrome, CGA, packed desktop VGA and planar VGA forms, with horizontal
+scaling and palette conversion performed by `tools/gorillas_art.py`. Runtime
+work copies/vertically repeats rows. Windowed planar draws first test the entire
+scene against the current clip region under the graphics lock, temporarily
+disarm clipping only when wholly drawable, and probe the planar API. Refusal
+uses the clipped packed renderer; the window clip is restored afterward.
+Foreign VGA copies selected planes directly. CGA alternates video banks and
+advances by 80 bytes after odd scanlines instead of multiplying per row.
+Scaled light masks and VGA sprite planes are cached once per surface
+geometry, using 6,400 bytes of per-instance RAM. Light masks cache horizontal
+expansion only; vertical repetition occurs for the strips actually drawn. Side strips repaint only rows
+touched by old or new crosses; the short bands also stay below the OS height
+limit. Exposure redraws the current phase without advancing animation.
+
+`tests/gorillasmenu.py` times actual menu handlers and animation ticks at
+4,772,727 Hz, including interrupts and drawing. It checks text against the OS
+font, checks natural setup cursor blink edges and empty/full-length answers,
+compares incremental menu VRAM to full repaint, and compares all five
+marquee phases/both poses to independently assembled scene pixels rendered
+through the original generic path. All three adapters run windowed/fullscreen.
+Budgets are 150 ms per transition, 20 ms per ordinary character edit, and
+75 ms per complete animation frame (the animation interval is three BIOS ticks).
+`tests/gorillasfront.py` additionally waits for both automatic startup scores
+to finish and reach setup.
+
+### 99.4. Skyline redraws on an XT
+
+Between shots full paints draw the three HUD rows through the font-band path;
+during flight they use the scene because the banana may cover the HUD rows.
+The remaining gameplay paint completes eight 32-pixel strips from left to right,
+revealing successive sections of the skyline. Opaque scene bands replace the
+previous pixels directly; only the surrounding margins are cleared. This also
+preserves the scene's craters and any visible projectile on exposure or mode
+changes. Facades and windows use packed-byte rectangle fills with masked edge
+nibbles instead of per-pixel `gr_put` calls.
+
+Ink-pair tables combine palette mapping, horizontal scaling and native bit
+packing. VGA converts to planes before vertical repetition and uses
+`OSAPI_GFX_BLITP` when the entire requested rectangle passes the clip test and
+API probe. Clipping is restored before returning; a covered rectangle or API
+refusal retains packed `OSAPI_GFX_BLIT4`. Foreign VGA writes planes directly.
+CGA and Hercules use native packed/1bpp tables. Partially visible mono
+rectangles use packed black/white bands through `OSAPI_GFX_BLIT4`: the
+1bpp API does not apply the current horizontal fragment mask. Equal neighboring scene rows
+reuse the previous converted row. Empty VGA sky bands use a solid fill, with
+all four planes selected together in fullscreen.
+
+Bands contain at most seven logical rows for wide rectangles or 32 for widths
+up to 56 pixels, within a 5,376-byte scratch allocation. The smaller buffer
+keeps the variable skyline and softer opponent within the 60 KB instance limit.
+The fullscreen doubled-plane lookup occupies the first 1,024 bytes of the
+inactive intro cache. Cache key `8000h` marks this use; returning to the
+frontend rebuilds its animation cache. No heap or kernel memory is added.
+The original redraw optimization added 3,343 image bytes and one BSS byte
+per instance.
+
+`tests/gorillascity.py` measures seeded city construction and complete redraws
+in MartyPC at 4,772,727 Hz, with interrupts enabled under the graphics lock.
+The fixed-seed scene must match across modes and adapters. Across 32 seeds,
+checks enforce width limits, roof support, intact gutters, both rooftop
+choices at each end, variable building counts/colors, all six profile selectors,
+and gusts exceeding ten units in both directions. Computer checks
+cover the moving target, varied release power, and velocity bounds. A separate
+host pixel decoder checks all palette pairs, both horizontal scales, small terrain
+patches and an odd-edged clipped region, including unchanged VRAM outside it.
+A deliberately changed scene pixel must fail the pixel oracle. VGA readback
+uses guest `MOVSB` under Read Map Select: MartyPC's debugger peek always reads
+plane zero and cannot validate the other three planes. Readback is outside
+the timed interval and restores the guest registers and scratch bytes.
+
+Budgets are 400 ms for city construction, 1,800 ms for VGA redraw and 600 ms
+for CGA/Hercules redraw. `--max-paint-ms 0` permits baseline measurements.
+The existing gameplay, frontend, input and animation gates cover throws,
+craters, fullscreen restoration, borrowed-cache transitions and incremental
+text. These are emulator cycle measurements, not hardware measurements.

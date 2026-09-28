@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+"""Exercise the shipped 8086 Gorillas on VGA, CGA and Hercules.
+
+Uses real keyboard throws, including low-power self-hits through five rounds
+(first to three points), pause/resume, terrain destruction, and repeated fullscreen
+entry/exit. Reads package state, checks rendered pixels and saves proof images.
+The CGA leg requires the foreign-mode color backend, not a monochrome frame.
+"""
+import argparse
+from pathlib import Path
+import re
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools'))
+import os88build
+import os88geom as G
+import os88marty as M
+import os88ui
+
+ARMS = {'vga': 'os8088_xt_vga', 'cga': 'os8088_5150_cga_gla',
+        'herc': 'os8088_5150_herc_gla'}
+
+
+def offsets():
+    source = (ROOT / 'apps/gorillas/gorillas.asm').read_text()
+    names = re.findall(r'^VAR (gr_\w+),', source, re.M)
+    # This symbol-only image is never executed. Do not charge its appended
+    # offset table against the shipped package's image+BSS memory budget.
+    probe = source.replace('OS88_IMAGE_END', '').replace('OS88_BSS GR_BSS', 'OS88_BSS 0') + '\n'
+    probe += '\n'.join('dw %s-os88_image_end' % n for n in names)
+    probe += '\nOS88_IMAGE_END\n'
+    with tempfile.TemporaryDirectory() as td:
+        asm, binary = Path(td) / 'probe.asm', Path(td) / 'probe.bin'
+        asm.write_text(probe)
+        subprocess.run(['nasm', '-f', 'bin', '-I', 'apps/', '-I', 'apps/gorillas/', '-o', str(binary),
+                        str(asm)], cwd=ROOT, check=True)
+        values = struct.unpack('<%dH' % len(names),
+                               binary.read_bytes()[-2 * len(names):])
+    size = struct.unpack_from('<H', Path(os88build.at('build/gorillas.bin')).read_bytes(), 8)[0]
+    return {n: size + v for n, v in zip(names, values)}
+
+
+class Probe:
+    def __init__(self, ui, offsets):
+        self.m, self.offsets = ui.m, offsets
+        win = ui.window('Gorillas')
+        raw = self.m.read(self.m.sym('wm_wins'), G.MAX_WIN * G.WIN_SIZE)
+        self.base = struct.unpack_from('<H', raw, win.i * G.WIN_SIZE + G.W_SEG)[0] << 4
+        assert self.base
+
+    def data(self, name, count=1):
+        return self.m.read(self.base + self.offsets['gr_' + name], count)
+
+    def b(self, name):
+        return self.data(name)[0]
+
+    def w(self, name):
+        return struct.unpack('<H', self.data(name, 2))[0]
+
+
+def wait(m, pred, what):
+    try:
+        M.until(m, lambda _: pred(), what, poll=.1, limit=30)
+    except M.MartyError:
+        p = getattr(m, 'gorillas_probe', None)
+        if p:
+            print('Gorillas failure state:',
+                  {n: p.b(n) for n in ('state', 'field', 'turn', 'fs', 'vga', 'cga')},
+                  {n: p.w(n) for n in ('angle', 'power', 'px', 'py', 'age')},
+                  flush=True)
+        raise
+
+
+def key(m, name):
+    m.key(name)
+    M.pace(m, .15)
+    # An active worker takes the drawing lock every tick; waiting for a
+    # sustained idle UI can accidentally wait for the entire shot to end.
+    p = m.gorillas_probe
+    computer = (p.b('state') == 0 and p.b('players') == 1
+                and p.b('turn') == 1 and not p.b('paused'))
+    if not p.b('fs') and p.b('state') not in (1, 4, 7) and not computer:
+        M.ui_done(m)
+
+
+def setup(m, points=5):
+    """Accept default two-player names/gravity and skip the optional dance."""
+    p = m.gorillas_probe
+    if p.b('state') == 4:
+        key(m, 'Space')
+        wait(m, lambda: p.b('state') == 5, 'splash advances to setup')
+        M.ui_done(m)
+    assert p.b('state') == 5
+    for field in range(3):
+        key(m, 'Enter')
+        wait(m, lambda: p.b('setupfield') == field+1, 'next setup field')
+    for digit in str(points):
+        key(m, 'Digit' + digit)
+    key(m, 'Enter')
+    wait(m, lambda: p.b('setupfield') == 4, 'gravity setup')
+    key(m, 'Enter')
+    wait(m, lambda: p.b('state') == 6, 'intro choice')
+    key(m, 'KeyP')
+    wait(m, lambda: p.b('state') == 0, 'game starts')
+    if not p.b('fs'):
+        M.ui_done(m)
+
+
+def new_match(m, points=5):
+    key(m, 'KeyN')
+    setup(m, points)
+
+
+def capture(m, p, path):
+    # Native 1bpp VRAM decoding is invalid in CGA's four-color mode.
+    if m.video()['type'] == 'vga' or p.b('cga'):
+        w, h, pixels = m.fbuf(0)
+        M.write_png_rgb(str(path), w, h, pixels)
+        colors = set(zip(pixels[0::3], pixels[1::3], pixels[2::3]))
+        assert len(colors) >= 4, ('missing color scene', colors)
+        assert any(r < 20 and g < 20 and b > 120 for r, g, b in colors), \
+            ('the reference blue sky is missing', colors)
+        if p.b('cga'):
+            assert any(r < 120 and g > 200 and b < 120 for r, g, b in colors), \
+                ('CGA warm palette lacks bright green', colors)
+            assert any(r > 200 and g < 120 and b < 120 for r, g, b in colors), \
+                ('CGA warm palette lacks bright red', colors)
+            assert not any(r > 200 and g < 120 and b > 200 for r, g, b in colors), \
+                'CGA still uses the old magenta palette'
+        else:
+            present = {ink for b in p.data("scene", 16384) for ink in (b >> 4, b & 15)}
+            for ink, name, predicate in (
+                (5, 'gray building', lambda r,g,b: 130 < r < 200 and r == g == b),
+                (6, 'red building', lambda r,g,b: r > 120 and g < 20 and b < 20),
+                (7, 'cyan building', lambda r,g,b: r < 20 and g > 120 and b > 120),
+                (14, 'yellow windows', lambda r,g,b: r > 200 and g > 200 and b < 120),
+            ):
+                if ink in present:
+                    assert any(predicate(*rgb) for rgb in colors), (name, colors)
+            if p.b('vga'):
+                assert any(r > 200 and 120 < g < 210 and 25 < b < 110
+                           for r,g,b in colors), ('original orange is missing', colors)
+            else:
+                assert (0, 0, 0) in colors, 'desktop black was recolored on return'
+
+    else:
+        w, h, rows = m.vram()
+        M.write_png(str(path), w, h, rows)
+        ox, oy, sx, sy = (p.w(n) for n in ('ox', 'oy', 'sx', 'sy'))
+        scene = [v for row in rows[oy + 24*sy:oy + 128*sy]
+                 for v in row[ox:ox + 256*sx]]
+        assert 0 < sum(scene) < len(scene), 'blank monochrome scene'
+        hud = [v for row in rows[oy + 8*sy:oy + 16*sy]
+               for v in row[ox:ox + 256*sx]]
+        assert sum(hud) > 20, 'monochrome aiming/status text disappeared'
+
+
+
+def arm(tag, off, disk, out):
+    with os88ui.boot(os88build.at('build/os8088-360.img'), apps=str(disk),
+                     machine=ARMS[tag]) as ui:
+        m = ui.m
+        ui.open_drive('B')
+        ui.open('GORILLAS.O88')
+        M.pace(m, .3)
+        p = Probe(ui, off)
+        m.gorillas_probe = p
+        setup(m)
+        assert p.b('spawned') == 1
+        assert p.w('angle') == 45 and p.w('power') == 70
+        capture(m, p, out / (tag + '-window.png'))
+
+        # Editing bounds, field selection, backspace and per-field replacement.
+        key(m, 'Digit9'); key(m, 'Digit0')
+        assert p.w('angle') == 90
+        key(m, 'Digit9')                 # 909 rejected
+        assert p.w('angle') == 90
+        key(m, 'Backspace')
+        assert p.w('angle') == 9
+        key(m, 'Enter')
+        assert p.b('field') == 1
+        key(m, 'Digit1'); key(m, 'Digit5'); key(m, 'Digit0')
+        assert p.w('power') == 150
+        key(m, 'Digit1')                 # 1501 rejected
+        assert p.w('power') == 150
+        key(m, 'KeyG')
+        assert (p.w('gwhole')*10 + p.w('gfrac')//100) == 98
+        new_match(m)
+        assert (p.w('gwhole')*10 + p.w('gfrac')//100) == 98 and p.b('turn') == 0
+
+        # Near-horizontal throw into terrain: persistent hole, turn changes.
+        key(m, 'Digit0'); key(m, 'Enter')
+        key(m, 'Digit3'); key(m, 'Digit0')
+        before = p.data('scene', 16384)
+        key(m, 'Enter')
+        wait(m, lambda: p.b('state') != 1, 'terrain impact')
+        after = p.data('scene', 16384)
+        assert p.b('turn') == 1 and p.b('state') == 0
+        erased = any(((a >> shift) & 15) and not ((b >> shift) & 15)
+                     for a, b in zip(before[42*128:], after[42*128:])
+                     for shift in (0, 4))
+        assert erased, 'impact did not destroy terrain'
+        assert (p.w('angle'), p.w('power')) == (45, 70), 'player 2 inherited player 1 input'
+
+        # High-power shots leave the skyline; each returning player gets
+        # her own values, including when she accepts them without editing.
+        key(m, 'Digit6'); key(m, 'Digit0'); key(m, 'Enter')
+        key(m, 'Digit3'); key(m, 'Digit6'); key(m, 'Digit0'); key(m, 'Enter')
+        wait(m, lambda: p.b('state') == 0, 'player 2 shot ends')
+        assert p.b('turn') == 0 and (p.w('angle'), p.w('power')) == (0, 30)
+        key(m, 'Digit6'); key(m, 'Digit5'); key(m, 'Enter')
+        key(m, 'Digit3'); key(m, 'Digit5'); key(m, 'Digit9'); key(m, 'Enter')
+        wait(m, lambda: p.b('state') == 0, 'player 1 shot ends')
+        assert p.b('turn') == 1 and (p.w('angle'), p.w('power')) == (60, 360)
+        key(m, 'Enter'); key(m, 'Enter')
+        wait(m, lambda: p.b('state') == 0, 'remembered player 2 shot ends')
+        assert p.b('turn') == 0 and (p.w('angle'), p.w('power')) == (65, 359)
+
+        # Pause is sticky: launch vertically with sufficient airtime.
+        new_match(m); key(m, 'Digit9'); key(m, 'Digit0')
+        key(m, 'Enter'); key(m, 'Digit1'); key(m, 'Digit5'); key(m, 'Digit0')
+        key(m, 'Enter'); key(m, 'KeyP')
+        assert p.b('state') == 1 and p.b('paused') == 1
+        paused = p.data('px', 8)
+        M.pace(m, .5)
+        assert p.data('px', 8) == paused, 'paused projectile moved'
+        key(m, 'Enter')
+        wait(m, lambda: p.data('px', 8) != paused, 'Enter resumes paused flight')
+        new_match(m, points=3)
+
+        # Actual keyboard throws, no poked scores/state: a power-one throw
+        # returns onto the thrower. The OTHER player must receive the point.
+        remembered = [(45, 70), (45, 70)]
+        for round_no in range(5):
+            thrower = p.b('turn')
+            assert (p.w('angle'), p.w('power')) == remembered[thrower], 'new skyline lost player input'
+            scores = list(p.data('scores', 2))
+            key(m, 'Digit4'); key(m, 'Digit' + str(round_no))
+            key(m, 'Enter'); key(m, 'Digit' + str(round_no % 2)); key(m, 'Enter')
+            remembered[thrower] = (40 + round_no, round_no % 2)
+            wait(m, lambda: p.b('state') in (2, 3), 'self-hit and score')
+            scores[thrower ^ 1] += 1
+            assert list(p.data('scores', 2)) == scores
+            assert p.b('winner') == thrower ^ 1
+            assert p.b('state') == (3 if max(scores) == 3 else 2)
+            wait(m, lambda: p.b('roundwait') != 0, 'scoring gorilla finishes musical dance')
+            if round_no < 4:
+                wait(m, lambda: p.b('state') == 0, 'automatic next skyline')
+        wait(m, lambda: p.b('state') == 8, 'final scorecard')
+        M.ui_done(m)  # The sparkle border intentionally never becomes still.
+        # The scorecard has text and sparkles, not building palette colors.
+        from gorillasfront import screenshot
+        screenshot(m, p, out / (tag + '-match.png'))
+        key(m, 'Enter')
+        setup(m)
+        assert p.data('scores', 2) == b'\0\0'
+        assert (p.w('angle'), p.w('power')) == (45, 70), 'new match retained player 1 input'
+
+        # Exclusive mode restores the exact logical terrain; repeated entry
+        # catches stale fullscreen flags and framebuffer geometry.
+        for attempt in range(2):
+            if attempt == 0:
+                key(m, 'KeyF')
+            else:
+                m.alt('Enter')
+            wait(m, lambda: p.b('fsready') == 1, 'fullscreen scene ready')
+            assert not (m.read(0x417, 1)[0] & 8), 'Alt release lost across mode switch'
+            assert p.b('cga') == (tag == 'cga')
+            if tag == 'cga':
+                assert p.b('depth') == 2
+            # Play inside the bracket too: its own loop must advance a shot.
+            key(m, 'Enter'); key(m, 'Digit1'); key(m, 'Enter')
+            wait(m, lambda: p.b('state') == 2, 'fullscreen hit')
+            # Freeze the hit animation before checking exact mode restoration.
+            key(m, 'KeyP')
+            assert p.b('paused')
+            M.pace(m, .3)
+            capture(m, p, out / (tag + '-full.png'))
+            scene = p.data('scene', 16384)
+            if attempt == 0:
+                key(m, 'Escape')
+            else:
+                m.alt('Enter', hold=.15)
+            wait(m, lambda: p.b('fs') == 0, 'fullscreen exit')
+            ui.settle()
+            assert p.b('cga') == 0
+            assert p.data('scene', 16384) == scene
+            key(m, 'KeyP')
+            wait(m, lambda: p.b('state') == 0, 'automatic round after fullscreen hit')
+            assert p.b('field') == 0
+            assert (p.w('angle'), p.w('power')) == (45, 70 if attempt == 0 else 1)
+        # state 0 is set when the automatic round BEGINS; its skyline paint
+        # follows (~1.4 s on VGA, PERFORMANCE.md), so a capture straight after
+        # the wait above raced it and, when it lost, compared the old city on
+        # the glass with the new one in `scene` - a missing "cyan building"
+        # that was really a paint still to come. Wait for the UI to be done.
+        M.ui_done(m)
+        capture(m, p, out / (tag + '-restored.png'))
+        ui.close(ui.window('Gorillas'))
+        print('PASS', tag, 'input, per-player aim, terrain, pause, five rounds, fullscreen/restore, close', flush=True)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--arm', choices=ARMS)
+    ap.add_argument('--capture', type=Path, default=ROOT / 'build/gorillas-proof')
+    args = ap.parse_args()
+    args.capture.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    subprocess.run([sys.executable, 'tools/gorillas_art.py', '--check'],
+                   cwd=ROOT, check=True)
+    off = offsets()
+    with tempfile.TemporaryDirectory() as td:
+        disk = Path(td) / 'gorillas.img'
+        subprocess.run([sys.executable, 'tools/os88disk.py', '-o', str(disk),
+                        '--size', '360', os88build.at('build/gorillas.o88')],
+                       cwd=ROOT, check=True)
+        for tag in ([args.arm] if args.arm else ARMS):
+            arm(tag, off, disk, args.capture)
+    print('Gorillas: %.1fs' % (time.monotonic() - started))
+
+
+if __name__ == '__main__':
+    main()
