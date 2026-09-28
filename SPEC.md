@@ -154745,7 +154745,7 @@ The setup preference persists across skylines. M toggles music during aiming,
 flight, celebrations and computer turns, in windowed and fullscreen play;
 while paused, enabling music waits for resume. Muting releases channels and
 retains the score position without changing reference effects. Carrier total
-levels add four 0.75 dB steps (3 dB, approximately 30% lower amplitude) to all
+levels add eighteen 0.75 dB steps (13.5 dB attenuation) to all
 nine music patches; modulator levels and sound-effect volume are unchanged.
 Unavailable FM or fewer than three free channels leaves the original effects
 working; partial claims are released and the next skyline retries. Pause,

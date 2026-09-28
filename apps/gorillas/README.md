@@ -145,8 +145,8 @@ and celebrations. A new match starts with the first track again:
 Each has 16 bars with independent melody, bass and accompaniment voices.
 Sound Blaster uses its FM synthesizer through the same `SOUND.DRV` API as
 AdLib. The original effects play alongside the music on the reserved tone
-channel. Music plays approximately 30% quieter than its original mix (3 dB
-less); sound effects keep their original volume. Speaker-only machines retain
+channel. Music is mixed quietly behind the sound effects, which keep their
+original volume. Speaker-only machines retain
 the original tunes and effects.
 Setup's Yes/No choice controls gameplay music, and **M** changes that choice
 during play. Muting retains the phrase position and releases its FM channels.

@@ -147,9 +147,10 @@ gr_bgmtick:
 
 ; 5 modulator registers, 5 carrier registers, then feedback/connection.
 ; EGT clear on both operators: notes decay even without the next key-off.
-; Carrier TL +4 = 3 dB attenuation, approximately 70.8% of the previous
-; amplitude (OPL steps are 0.75 dB). Leave modulators and tone/SFX unchanged.
-GR_BGM_QUIET equ 4
+; Carrier TL +18 = 13.5 dB attenuation (OPL steps are 0.75 dB).
+; The additional 14 steps reduce the previous mix by approximately 70%.
+; Leave modulators and tone/SFX unchanged.
+GR_BGM_QUIET equ 18
 gr_bgmpatches: dw gr_bgmbright, gr_bgmsoft, gr_bgmtwang
 gr_bgmbright:
     db 01h,22h,0f3h,57h,00h, 01h,08h+GR_BGM_QUIET,0f4h,67h,00h, 04h ; mallet
