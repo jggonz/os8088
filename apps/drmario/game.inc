@@ -14,6 +14,7 @@ dm_random:
     ret
 
 dm_newgame:
+    call dm_animreset
     push ds
     pop es
     mov di, dm_board
@@ -128,11 +129,22 @@ dm_newgame:
     mov al, 1
     jmp .colorcheck
 .put:
+    mov si, ax
+    and si, 3
+    inc byte [dm_colorcount+si]
     or al, 50h
     mov [dm_board+bx], al
     pop cx
     dec cx
     jnz .place
+    mov bx, 3
+.mascot:
+    cmp byte [dm_colorcount+bx], 0
+    jne .present
+    mov byte [dm_actorpose+bx], 3
+.present:
+    dec bx
+    jnz .mascot
     call dm_nextpair
     call dm_spawn
     mov byte [dm_dirty], 2
@@ -259,6 +271,7 @@ dm_halves:
 dm_tick:
     cmp byte [dm_paused], 0
     jne .out
+    call dm_animtick
     cmp byte [dm_state], 0
     je .fall
     cmp byte [dm_state], 1
@@ -450,6 +463,10 @@ dm_remove:
     jmp .clear
 .virus:
     dec byte [dm_viruses]
+    mov si, ax
+    and si, 3
+    dec byte [dm_colorcount+si]
+    mov byte [dm_hits+si], 2
     xor ax, ax
     mov al, [dm_speed]
     inc ax

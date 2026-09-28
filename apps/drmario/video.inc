@@ -112,6 +112,9 @@ dm_invalidate:
     mov word [dm_oldnext], 0ffffh
     mov byte [dm_dirty], 2
     mov byte [dm_huddirty], 1
+    mov word [dm_actorshadow], 0ffffh
+    mov word [dm_actorshadow+2], 0ffffh
+    mov byte [dm_animdirty], 1
     ret
 
 ; AX=byte x (x/4), BX=y, CX=byte width, DX=height, BP=solid pixel.
@@ -236,7 +239,7 @@ dm_render:
     jne .compose
     cmp byte [dm_huddirty], 0
     jne .compose
-    ret                         ; idle frame: absolutely no VRAM writes
+    jmp dm_animpaint             ; unchanged animation: no VRAM writes
 .compose:
     mov word [dm_qend], dm_queue
     cmp byte [dm_dirty], 0
@@ -320,10 +323,10 @@ dm_render:
     mov [dm_oldnext], ax
     push ax
     or al, 10h
-    mov di, 56*80+60
+    mov di, 52*80+60
     cmp byte [dm_cga], 0
     je .p1
-    mov di, 22*80+60          ; CGA y=44: below NEXT, above the portrait
+    mov di, 20*80+60          ; CGA y=40: below NEXT, above the bouncing doctor
 .p1:
     push di
     call dm_enqueue
@@ -340,11 +343,27 @@ dm_render:
     mov byte [dm_huddirty], 0
     call dm_hudcompose
     call dm_hudpaint
-.out: ret
+.out: jmp dm_animpaint
 
 ; BX=cell index. Preserve BX/CX/BP for either dirty traversal.
 dm_cellcheck:
     mov al, [dm_scene+bx]
+    cmp al, 51h
+    jb .compare
+    cmp al, 53h
+    ja .compare
+    push bx
+    mov ah, bl
+    and ah, 8
+    shr ah, 1                   ; odd board rows use the second phase bank
+    mov bl, al
+    and bx, 3
+    or bl, ah
+    cmp byte [dm_viruspose+bx], 0
+    pop bx
+    je .compare
+    add al, 20h
+.compare:
     cmp al, [dm_shadow+bx]
     je .out
     mov [dm_shadow+bx], al
@@ -683,9 +702,11 @@ dm_cgaaddr:
 %endrep
 dm_tilemap:
 %assign i 0
-%rep 97
+%rep 116
 %if i = 96
     db 19
+%elif i >= 113 && i <= 115
+    db i-93
 %elif (i & 15) >= 1 && (i & 15) <= 3 && (i >> 4) <= 5
     db (i >> 4)*3+(i & 15)
 %else
@@ -695,19 +716,17 @@ dm_tilemap:
 %endrep
 dm_vgaptrs:
 %assign i 0
-%rep 20
+%rep 23
     dw dm_vgatiles+i*192
 %assign i i+1
 %endrep
 dm_cgaptrs:
 %assign i 0
-%rep 20
+%rep 23
     dw dm_cgatiles+i*40
 %assign i i+1
 %endrep
 dm_vgatiles: incbin "dm-vga.bin"
-    times 192 db 7
 dm_cgatiles: incbin "dm-cga.bin"
-    times 40 db 0ffh
 dm_screenvga: incbin "dm-screen-vga.bin"
 dm_screencga: incbin "dm-screen-cga.bin"

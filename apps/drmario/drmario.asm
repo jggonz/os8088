@@ -379,6 +379,7 @@ dm_hi: db 'HI ',0
 
 %include "game.inc"
 %include "video.inc"
+%include "anim.inc"
 %include "dm-tables.inc"
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
@@ -439,5 +440,17 @@ VAR dm_hudshadow,256
 VAR dm_glyphs,768
 VAR dm_fontvga,6144
 VAR dm_fontcga,1536
+VAR dm_animstart,0
+VAR dm_animclock,1
+VAR dm_animslot,1
+VAR dm_animpending,1
+VAR dm_blinktimer,1
+VAR dm_colorcount,4
+VAR dm_hits,4
+VAR dm_viruspose,8
+VAR dm_actorpose,4
+VAR dm_animend,0
+VAR dm_actorshadow,4
+VAR dm_animdirty,1
 OS88_BSS DM_BSS
 OS88_IMAGE_END

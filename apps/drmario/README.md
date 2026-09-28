@@ -32,8 +32,27 @@ The original doctor and laboratory surround are committed in
 prompt in [`art/PROMPT.md`](art/PROMPT.md). The compiler uses Pillow to resize
 and map this artwork to native palettes, then emits compact run-length streams
 for each VGA plane and CGA bank. These are drawn once on fullscreen entry or
-reentry; ordinary game frames do not decode the background. Native art previews
-are written to `build/drmario-art/drmarco-{vga,cga}-art.png`.
+reentry; ordinary game frames do not decode the background. Static background
+previews are written to `build/drmario-art/drmarco-{vga,cga}-art.png`, with
+separate `dm-{vga,cga}-actor*-*.png` pose previews in the same directory.
+
+During play, bottle viruses wiggle and three original googly-eyed germs dance
+below DrMarco. Clearing a color makes its mascot dizzy; it disappears after
+the reaction if no viruses of that color remain. DrMarco blinks briefly about
+every five seconds while his portrait stays still. Pause freezes the animation
+clock and reactions; returning from the desktop restores the current poses.
+
+The compiler draws the geometric mascots and two tiny eye patches for the
+existing portrait. Animation uses native byte spans, four actor shadows and
+three extra bottle tiles. Each virus color advances every 24 ticks
+(about 0.44 seconds). The doctor clock runs every eight ticks: 32 beats open,
+one beat closed (about 0.15 seconds), with a 4.8-second blink cycle. Updates are
+staggered at four-tick intervals. Only eye pixels are overwritten; there is no
+head clearing or repositioning. Even and odd bottle rows update one tick apart
+to spread dense-board copies. These are deliberate native timings, inspired by the NES
+bank switch at $89C9 and color-specific reactions at $89D4–$8C27.
+The animation never consumes gameplay RNG or changes capsule/control timing.
+Capsule throws, timed placement and illustrated end panels remain roadmap work.
 
 The desktop launcher selects level 0–20 with Left/Right and LOW/MED/HI speed
 with S. Enter, a click, F or Alt+Enter enters fullscreen. Leaving fullscreen
@@ -61,7 +80,7 @@ The font is cached from the OS at launch. A 128-byte shadow detects changed
 bottle cells, including the active capsule. Movement checks only its two old and two new
 cells; locks and cascades compare the whole bottle. VGA batches writes by plane, and
 CGA alternates banks while copying complete packed rows. Text compares cached
-characters. Idle frames write no video memory. No full framebuffer, heap,
+characters. Frames with no gameplay or animation change write no video memory. No full framebuffer, heap,
 background worker or per-pixel game-loop drawing is needed.
 
 The reference capsule generator, color tables and speed curve are retained;
@@ -84,12 +103,15 @@ The main gate runs actual 8088 code in MartyPC on VGA and CGA, checks every
 starting level, matches, cascades, connected gravity, rotation wall kicks,
 game over, level progression, held keys, short taps, pause, and mode restoration.
 It compares video memory with the source CHR pixels, verifies the embedded
-background decoder against the uncompressed art, checks that the portrait,
-capsule preview and footer survive HUD updates, and requires incremental
-paints to equal full repaints. A corrupted pixel must fail the oracle.
+background decoder against the uncompressed art, checks that all character poses,
+the capsule preview and footer survive HUD updates, and requires incremental
+paints to equal full repaints. Animation fixtures cover per-color counts,
+reactions, disappearance, pause and unchanged board/RNG/sequence data.
+A corrupted pixel must fail the oracle.
 Use `--source /path/to/Dr. Mario` with a nondefault asset directory.
 
-Screenshots and timings are in `build/drmario-proof/`. MartyPC's display
+Screenshots and timings are in `build/drmario-proof/`. The gate also writes
+`vga-dance.gif` and `cga-dance.gif` animation previews. MartyPC's display
 capture crops Mode X after the BIOS mode transition; the `*-native.png`
 images decode all video planes, and `vga-qemu.png` verifies the complete
 320×240 display using a second emulator. QEMU supplies no speed measurements.
@@ -98,15 +120,20 @@ Measured in MartyPC at 4,772,727 Hz (2026-09-28):
 
 | Operation | VGA | CGA |
 |---|---:|---:|
-| Horizontal capsule move: renderer | 3.41 ms | 1.37 ms |
-| Idle renderer, minimum of eight samples | 0.022 ms | 0.022 ms |
-| Slowest setup across levels 0–20 | 39.12 ms | 39.13 ms |
-| Background decode, fullscreen entry only | 331.96 ms | 97.33 ms |
+| Horizontal capsule move: renderer | 3.45 ms | 1.40 ms |
+| Idle renderer, minimum of eight samples | 0.035 ms | 0.035 ms |
+| Slowest setup across levels 0–20 | 39.58 ms | 40.69 ms |
+| Background decode, fullscreen entry only | 318.11 ms | 92.84 ms |
+| Doctor blink, maximum sampled | 0.89 ms | 0.42 ms |
+| Animation with 84 viruses, maximum sampled | 27.26 ms | 14.30 ms |
 
 Movement timings include changed-cell detection and video writes, and any
 interrupts during that call; keyboard delivery and the frame wait are excluded.
 The earlier whole-bottle comparison took 6.23 ms VGA and 4.19 ms CGA for the
 same move. These are emulator cycle measurements, not physical XT measurements.
-The instance uses 36,189 image bytes plus 10,194 BSS bytes (46,383 total);
-the compressed package is 14,312 bytes. No kernel allocation or framebuffer
+Animation costs include incremental rendering with a stationary capsule on the
+seeded level-20 stress board; they do not promise a locked 54.6 FPS redraw rate.
+The instance uses 46,868 image bytes plus 10,223 BSS bytes (57,091 total);
+the compressed package is 18,409 bytes. Animation adds 29 bytes of BSS.
+No kernel allocation or framebuffer
 is added. Background decoding runs only when entering/reentering fullscreen.

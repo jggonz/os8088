@@ -5,8 +5,8 @@ Updated: 2026-09-28. Product name: **DrMarco**.
 This is the roadmap for bringing the native os8088 puzzle game up to the
 feature coverage of the supplied NES Dr. Mario reference, using original
 DrMarco screen art and characters. Work is incremental; an unchecked item is
-planned, not implemented. The present task covers branding and a first static
-artwork pass, not the complete roadmap.
+planned, not implemented. Branding, the original surround and gameplay character
+animation are implemented incrementally; the complete roadmap remains open.
 
 ## Baseline and reference
 
@@ -58,10 +58,12 @@ artwork pass, not the complete roadmap.
 - [ ] Add timed virus placement and the opening ready delay.
 - [ ] Animate DrMarco throwing the preview capsule into the bottle; preserve
   preview sequencing and reject control of a capsule before its entry state.
-- [ ] Animate the three large virus characters, including reactions to clears
+- [x] DrMarco occasionally blinks, independent of capsule timing. Keep the
+  portrait still and update only the eyes to avoid head-redraw flicker.
+- [x] Animate the three large virus characters, including reactions to clears
   and disappearance when their color is exhausted. Track per-color counts.
-- [ ] Add animated bottle viruses, clear effects, victory and loss reactions,
-  and illustrated stage-clear/game-over panels.
+- [x] Animate bottle viruses with staggered per-color wiggles.
+- [ ] Add further clear effects and illustrated stage-clear/game-over panels.
 - [ ] Match pause presentation by hiding the playfield and restoring it on
   resume. Keep desktop exit/resume behavior intact.
 - [ ] Audit lock, clear, gravity, spawn and held-key delays against NES frame
@@ -162,3 +164,29 @@ separate from user-supplied reference assets.
   VGA/CGA movement rendering: 3.41/1.37 ms; idle: 0.022 ms each. Background
   decode on entry: 331.96/97.33 ms. These are 4.77 MHz MartyPC cycle measurements,
   not physical XT measurements. Proof images and results: `build/drmario-proof/`.
+- 2026-09-28: Gameplay character animation completed. DrMarco has a reusable
+  bobblehead sprite with idle, clear/victory and loss poses. Three original
+  geometric mascots dance, become dizzy on clears, and disappear when their
+  color is exhausted. Bottle viruses alternate mirrored poses. The doctor
+  advances every eight ticks, each color every 24; alternating bottle rows
+  follow one tick apart to bound dense-board copies. No gameplay RNG, capsule
+  sequence or control state is consumed by the decorative clock. Throws,
+  timed placement and illustrated end panels remain open.
+- Validation: MartyPC VGA/CGA gameplay and animation gates pass, including
+  all pose transitions, counts, reactions, disappearance, pause between row
+  updates, incremental/full repaint equality and desktop reentry. QEMU confirms
+  the complete Mode X display and desktop restoration. All four disk geometries
+  verify. Animation previews: `build/drmario-proof/{vga,cga}-dance.gif`.
+- Initial animation measurements (4.77 MHz MartyPC): movement 3.45/1.41 ms VGA/CGA;
+  unchanged renderer 0.038 ms each; doctor update 18.58/9.50 ms; peak sampled
+  animation rendering with 84 viruses 27.81/14.71 ms. Image 45,678 bytes +
+  10,226 BSS = 55,904 bytes; compressed package 18,118 bytes. Animation adds
+  32 BSS bytes and no framebuffer. Full background decode remains entry-only.
+- 2026-09-28: Replaced the bobblehead and terminal head motions with a brief
+  blink about every 4.8 seconds, following feedback about flicker. The portrait
+  is static; tiny opaque eye patches close and restore the eyes without clearing
+  the head. Virus animation and pause behavior are preserved.
+- Blink validation: VGA/CGA guest suites pass, including blink cadence,
+  eye-only pixel changes, exact reopening restoration, pause and mode reentry.
+  Blink redraw costs 0.89/0.42 ms VGA/CGA. Image 46,868 bytes + 10,223 BSS =
+  57,091 bytes; compressed package 18,409 bytes. All four disk geometries verify.

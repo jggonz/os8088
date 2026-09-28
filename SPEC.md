@@ -149053,7 +149053,7 @@ conversion produces palette-indexed VGA planes and packed CGA banks, encoded
 as (nonzero byte count, repeated byte) runs with a zero-count stream terminator.
 Each VGA stream expands to 19,200 bytes; each CGA bank to 8,000 bytes. Only
 fullscreen entry/reentry decodes this trusted embedded art directly to VRAM.
-There is no new framebuffer or BSS. The right HUD reserves the doctor portrait;
+There is no new framebuffer. The right HUD reserves the doctor portrait;
 the game draws its own title, bottle boundary, score and state text over the
 surround. Capsule and bottle-virus tiles still require the local NES reference.
 
@@ -149068,8 +149068,34 @@ CGA copies packed rows with bank alternation. A 128-byte displayed-cell shadow
 includes the active capsule. Ordinary movement visits only its two old and
 two new cells; locks, clears and gravity compare the complete 128-cell board.
 No pixel framebuffer is scanned or copied during ordinary play. Unchanged
-ticks perform no video writes. Text has a character shadow and cached native glyphs. Initial paint and mode reentry invalidate the
+ticks without an animation change perform no video writes. Text has a character shadow and cached native glyphs. Initial paint and mode reentry invalidate the
 shadows. Board address tables eliminate per-cell coordinate multiplication.
+
+`anim.inc` supplies a decorative clock independent of the capsule state machine
+and RNG. Every four 54.6Hz ticks it advances one actor: blue, doctor, red,
+doctor, yellow, doctor. Each bottle-virus color alternates its original and
+mirrored tile every 24 ticks, with odd rows following even rows one tick later
+to bound dense-board video traffic; board data remains unchanged. Per-color counts
+increment at placement and decrement once per marked virus at removal.
+The matching geometric mascot shows crossed eyes for two scheduled beats,
+then resumes dancing or disappears if its count is zero. DrMarco blinks for
+eight ticks once per 264-tick cycle (about 4.8 seconds), including terminal
+states. The head and body stay fixed. Pause freezes the clock, phases and
+reaction counters. Mode reentry preserves poses
+and invalidates all four actor shadows.
+
+The asset compiler emits original geometric mascot poses and open/closed eye
+patches for DrMarco. His complete portrait remains in the static background;
+mascot pixels are stored only in their animation streams. Trusted animation
+streams contain absolute native destination words, byte lengths and literal
+data, with FFFF plane terminators.
+Mascot spans cover the union of all four pose footprints, including erasure.
+The doctor overwrites only the lens interiors and restores their original pixels
+on reopening, without a clear pass or head movement. VGA and CGA use separate
+native streams. Neither needs a scratch image or per-pixel conversion at runtime.
+The capsule preview is at (240,52) on VGA and (240,40) on CGA, above the doctor.
+These animations deliberately adapt NES $89B6, $89C9 and $89D4–$8C27;
+capsule throws and timed opening placement are still separate roadmap work.
 
 The bottle is 8x16. Cell low bits are color (1..3); high nibble distinguishes
 single, left, right, top, bottom and virus. Four-or-longer horizontal and

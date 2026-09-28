@@ -5,6 +5,12 @@ is `drmarco-screen.png`. Native VGA/CGA caches are derived at build time.
 This replaces the screen surround only; capsule and bottle-virus tiles still
 come from the user-supplied NES reference.
 
+Gameplay animation (2026-09-28) reuses this source unchanged. The offline
+compiler makes open/closed eye patches for DrMarco and draws three
+original geometric germ mascots with waving arms, googly eyes and dizzy faces.
+These procedural poses live in `tools/drmario_assets.py`; their palette-native
+streams and pose preview PNGs are generated under `build/drmario-art/`.
+
 ## Generation prompt
 
 Use case: stylized-concept

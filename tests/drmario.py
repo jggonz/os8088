@@ -24,7 +24,7 @@ import os88geom as G
 def symbols():
     source=(ROOT/'apps/drmario/drmario.asm').read_text()
     names=re.findall(r'^VAR (dm_\w+),',source,re.M)
-    for file in ('drmario.asm','game.inc','video.inc'):
+    for file in ('drmario.asm','game.inc','video.inc','anim.inc'):
         names += re.findall(r'^(dm_\w+):', (ROOT/'apps/drmario'/file).read_text(),re.M)
     with tempfile.TemporaryDirectory() as td:
         p=Path(td)/'probe.asm';b=Path(td)/'probe.bin'
@@ -101,6 +101,7 @@ def check_pixels(p,tag,raw):
     # Independent source decoder, not the generated native cache under test.
     chrdata=(SOURCE/'CHR_ROM.chr').read_bytes()
     scene=p.data('scene',128);px=pixels(p,tag,raw)
+    viruspose=p.data('viruspose',8)
     height,top=(12,32) if tag=='vga' else (10,24)
     for i,cell in enumerate(scene):
         group,color=cell>>4,cell&3
@@ -110,15 +111,23 @@ def check_pixels(p,tag,raw):
                 if cell==0x60:expected=7 if tag=='vga' else 3
                 elif tile is None:expected=0
                 else:
-                    yy=y*8//height;bit=7-x//2
+                    yy=y*8//height
+                    bit=x//2 if group==5 and viruspose[color+4*((i//8)&1)] else 7-x//2
                     v=((chrdata[tile*16+yy]>>bit)&1)+2*((chrdata[tile*16+yy+8]>>bit)&1)
                     expected=(0,3,2,1)[v]
                 assert px[top+(i//8)*height+y][96+(i%8)*16+x]==expected,(tag,i,x,y,cell)
-    # The portrait must survive HUD/score/state updates and full repaints.
-    art=Image.open(ROOT/f'build/drmario-art/drmarco-{tag}-art.png')
-    for y in range(80 if tag=='vga' else 72,165 if tag=='vga' else 138):
-        for x in range(272,320):
-            assert px[y][x]==art.getpixel((x,y)),('art overwritten',tag,x,y)
+    # Compare every actor to the compiler's uncompressed pose oracle, including
+    # black restoration pixels. The guest uses compact native span streams.
+    for actor,pose in enumerate(p.data('actorpose',4)):
+        art=Image.open(ROOT/f'build/drmario-art/dm-{tag}-actor{actor}-{pose}.png')
+        if actor==0:
+            x0,x1,y0,y1=240,320,64 if tag=='vga' else 52,172 if tag=='vga' else 144
+        else:
+            x0=240+(actor-1)*24;x1=x0+24
+            y0=174 if tag=='vga' else 144;y1=y0+26
+        for y in range(y0,y1):
+            for x in range(x0,x1):
+                assert px[y][x]==art.getpixel((x,y)),('actor',tag,actor,pose,x,y)
     # Preview stays intact on both adapters (including after the first HUD).
     a,b=p.data('next',2)
     for half,color in enumerate((a,b)):
@@ -128,7 +137,7 @@ def check_pixels(p,tag,raw):
                 yy=y*8//height;bit=7-x//2
                 v=((chrdata[tile*16+yy]>>bit)&1)+2*((chrdata[tile*16+yy+8]>>bit)&1)
                 expected=(0,3,2,1)[v]
-                assert px[(56 if tag=='vga' else 44)+y][240+half*16+x]==expected,('preview',tag,x,y)
+                assert px[(52 if tag=='vga' else 40)+y][240+half*16+x]==expected,('preview',tag,x,y)
     footer=p.data('footer',64).split(b'\0')[0]
     glyphs=p.data('glyphs',768)
     for i,ch in enumerate(footer):
@@ -153,6 +162,7 @@ def fixture(p,cells,state=2):
     p.put('board',board);p.put('state',state);p.put('paused',0)
     p.put('dirty',2);p.put('huddirty',1);p.put('delay',1)
     p.put('viruses',sum(v>=0x50 for v in board))
+    p.put('colorcount',[0]+[sum(v==0x50+c for v in board) for c in range(1,4)])
     return board
 
 
@@ -171,6 +181,7 @@ def gameplay(p,tag):
         times.append(p.call('newgame'))
         board=p.data('board',128)
         assert sum(v>=0x50 for v in board)==4*(level+1)
+        assert list(p.data('colorcount',4))==[0]+[board.count(0x50+c) for c in range(1,4)]
         p.call('findmatches');assert p.b('matched')==0
     result['max_level_setup_ms']=max(times)
     # Cross intersection: 7 unique cells, counted exactly once.
@@ -180,6 +191,7 @@ def gameplay(p,tag):
     assert sum(p.data('marks',128))==7
     p.put('score',bytes(4));p.put('speed',0);p.call('remove')
     assert p.b('viruses')==0 and not any(p.data('board',128))
+    assert p.data('colorcount',4)==bytes(4)
     assert int.from_bytes(p.data('score',4),'little')==9500
     # Row boundary must not wrap a horizontal match.
     fixture(p,{6:2,7:2,8:2,9:2});p.call('findmatches');assert p.b('matched')==0
@@ -244,6 +256,89 @@ def gameplay(p,tag):
     return result
 
 
+def animation_checks(p,tag):
+    result={}
+    p.put('level',20);p.call('newgame');p.call('render')
+    p.put('blinktimer',31)  # include one close/reopen in the timing sample
+    board=p.data('board',128);sequence=p.data('sequence',128);seed=p.data('seed',2)
+    # Run the complete staggered dance without moving the capsule. Verify
+    # every phase against source pixels and an independent full repaint.
+    times=[];doctimes=[];virtimes=[];shots=[]
+    for beat in range(12):
+        for tick in range(4):
+            p.call('animtick')
+            elapsed=p.call('render');times.append(elapsed)
+            if p.b('animclock')==0 and p.b('animslot')%2==0:doctimes.append(elapsed)
+            else:virtimes.append(elapsed)
+        raw=repaint(p,tag)
+        shots.append(native_image(p,tag,raw))
+    result['max_animation_render_ms']=max(times)
+    result['max_doctor_render_ms']=max(doctimes)
+    result['max_virus_render_ms']=max(virtimes)
+    assert board==p.data('board',128) and sequence==p.data('sequence',128) and seed==p.data('seed',2)
+    assert len({im.tobytes() for im in shots})>3,'animation did not change pixels'
+    shots[0].save(ROOT/f'build/drmario-proof/{tag}-dance.gif',save_all=True,
+                  append_images=shots[1:],duration=73,loop=0)
+    # All eye/mascot transitions; every destination
+    # must restore pixels written by ANY previous pose, not just its neighbor.
+    for old in range(4):
+        for new in range(4):
+            p.put('actorpose',[old&1,old,old,old]);p.put('animdirty',1);p.call('render')
+            p.put('actorpose',[new&1,new,new,new]);p.put('animdirty',1)
+            repaint(p,tag)
+    # Clear only red: other colors keep dancing; red gets dizzy, then vanishes.
+    fixture(p,{120:0x52,121:0x52,122:0x52,123:0x52,112:0x51,127:0x53})
+    p.call('findmatches');p.call('remove')
+    assert p.data('colorcount',4)==bytes([0,1,0,1])
+    p.put('animslot',2);p.put('animclock',3);p.call('animtick')
+    assert p.data('actorpose',4)[2]==2
+    repaint(p,tag)
+    for _ in range(48):p.call('animtick')
+    assert p.data('actorpose',4)[2]==3
+    repaint(p,tag)
+    # Occasional blinking also works in terminal states, without head movement.
+    for state in (3,4):
+        p.put('state',state);p.put('blinktimer',0);p.put('huddirty',1)
+        p.put('actorpose',bytes([0])+p.data('actorpose',4)[1:]);p.put('animdirty',1)
+        repaint(p,tag)
+        p.put('animpending',0)
+        opened=pixels(p,tag,video(p,tag))
+        for beat in range(1,34):
+            p.put('animslot',1);p.put('animclock',3);p.call('tick')
+            assert p.b('actorpose')==(1 if beat==32 else 0)
+            if beat>=32:
+                raw=repaint(p,tag);now=pixels(p,tag,raw)
+                changed={(x,y) for y in range(len(now)) for x in range(320) if now[y][x]!=opened[y][x]}
+                if beat==32:
+                    assert changed and all(268<=x<288 and (94 if tag=='vga' else 78)<=y<(103 if tag=='vga' else 85) for x,y in changed)
+                else:assert not changed,'reopening did not restore the portrait'
+    # Freeze between the even-row and odd-row updates, then resume exactly
+    # that pending half-beat. Reentry must preserve the mixed row phases too.
+    p.put('animslot',0);p.put('animclock',3);p.call('tick')
+    assert p.b('animpending')==1
+    p.put('paused',1);p.put('huddirty',1);p.call('render')
+    frozen=p.data('animstart',p.sym['dm_animend']-p.sym['dm_animstart'])
+    for _ in range(30):p.call('tick')
+    assert frozen==p.data('animstart',len(frozen))
+    # Full mode entry restores the current poses even halfway through a reaction.
+    before=video(p,tag);p.call('invalidate');p.call('framepaint')
+    assert before==video(p,tag)
+    p.put('paused',0);p.put('huddirty',1);p.call('tick')
+    assert p.b('animpending')==0 and p.data('viruspose',8)[1]==p.data('viruspose',8)[5]
+    repaint(p,tag)
+    print(tag,'animation',result,flush=True)
+    assert result['max_animation_render_ms']<40,result
+    return result
+
+
+def native_image(p,tag,raw):
+    rgb=((0,0,0),(48,96,252),(252,48,64),(252,224,32),(20,40,120),
+         (120,16,20),(120,96,8),(252,252,252)) if tag=='vga' else (
+         (0,0,0),(85,255,85),(255,85,85),(255,255,85))
+    px=pixels(p,tag,raw)
+    return Image.frombytes('RGB',(320,len(px)),bytes(c for row in px for v in row for c in rgb[v]))
+
+
 def live_key(p,name,seconds=.15,held=False):
     # Separate make/break in guest time. A same-host-instant debugger pair
     # can drop break codes in the emulated XT keyboard (latched scans remain
@@ -297,6 +392,7 @@ def arm(tag,sym,input_only=False):
         capture(m,out/(tag+'-play.png'))
         m.bp_exec(p.addr('input'));m.run();assert m.wait_stop(30)=='breakpoint'
         result={} if input_only else gameplay(p,tag)
+        if not input_only:result.update(animation_checks(p,tag))
         input_checks(p,tag)
         p.put('level',8);p.call('newgame');p.call('render')
         raw=repaint(p,tag)
