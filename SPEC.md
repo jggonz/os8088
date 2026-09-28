@@ -148758,10 +148758,14 @@ The first 24 rows show the HUD between shots; during flight all three text
 rows clear to sky and the banana can traverse them. Text stays hidden while
 a shot is paused and returns on impact or a miss. The remaining rows are the
 skyline. The kernel's own font glyphs letter the scene. Integer scaling depends on the
-live surface and pixel aspect. Repaints compose eight source rows at a time;
+live surface and pixel aspect. Full repaints finish 32-pixel-wide strips from
+left to right; each strip contains one building. Native bands convert packed
+ink pairs through lookup tables before repeating scanlines. Windowed VGA uses
+the planar API when the rectangle is wholly drawable, retaining packed bands
+for clipping/API refusal. Scratch remains bounded at 6,144 bytes;
 projectile frames restore and replace a small saved rectangle, so they never
 repaint the whole city. Hercules and the monochrome CGA desktop receive
-1bpp bands; VGA receives 4bpp bands. Fullscreen uses §53's exclusive bracket,
+1bpp bands; VGA receives planar or packed 4bpp bands. Fullscreen uses §53's exclusive bracket,
 following Dot Delirium (§93). CGA fullscreen selects `FSXM_CGA320` and writes
 packed 2bpp rows to the documented foreign-mode framebuffer. The CGA desktop
 remains monochrome, as elsewhere in this OS. No kernel changes are required.
@@ -148792,7 +148796,7 @@ same packed text scene and font as gameplay; the character cache covers all
 generated masks and native sprite pixels. `grmusic.inc`, generated from the reference PLAY strings by
 `tools/gorillas_music.py`, supplies intro, dance, launch and impact scores.
 An instance-owned nonblocking sequencer, also serviced between converted
-scanlines during longer paints, schedules tones at priority 0x40;
+planes/bands during longer paints, schedules tones at priority 0x40;
 durations round to 18.2 Hz ticks, minimum one tick. Timed tones expire even
 while covered; score progression resumes with the worker. No direct speaker
 port writes or blocking waits run under the graphics lock.
@@ -148914,3 +148918,46 @@ Budgets are 150 ms per transition, 20 ms per ordinary character edit, and
 75 ms per complete animation frame (the animation interval is three BIOS ticks).
 `tests/gorillasfront.py` additionally waits for both automatic startup scores
 to finish and reach setup.
+
+### 98.4. Skyline redraws on an XT
+
+Full gameplay paints complete eight 32-pixel logical strips from left to right,
+so each building finishes before its neighbor. Opaque scene bands replace the
+previous pixels directly; only the surrounding margins are cleared. This also
+preserves the scene's craters and any visible projectile on exposure or mode
+changes. Facades and windows use packed-byte rectangle fills with masked edge
+nibbles instead of per-pixel `gr_put` calls; the seeded city is unchanged.
+
+Ink-pair tables combine palette mapping, horizontal scaling and native bit
+packing. VGA converts to planes before vertical repetition and uses
+`OSAPI_GFX_BLITP` when the entire requested rectangle passes the clip test and
+API probe. Clipping is restored before returning; a covered rectangle or API
+refusal retains packed `OSAPI_GFX_BLIT4`. Foreign VGA writes planes directly.
+CGA and Hercules use native packed/1bpp tables. Partially visible mono
+rectangles use packed black/white bands through `OSAPI_GFX_BLIT4`: the
+1bpp API does not apply the current horizontal fragment mask. Equal neighboring scene rows
+reuse the previous converted row. Empty VGA sky bands use a solid fill, with
+all four planes selected together in fullscreen.
+
+Bands contain at most eight logical rows for wide rectangles or 32 for widths
+up to 64 pixels, always within the existing 6,144-byte scratch allocation.
+The fullscreen doubled-plane lookup occupies the first 1,024 bytes of the
+inactive intro cache. Cache key `8000h` marks this use; returning to the
+frontend rebuilds its animation cache. No heap or kernel memory is added.
+The package grows by 3,343 image bytes and one BSS byte per instance.
+
+`tests/gorillascity.py` measures seeded city construction and complete redraws
+in MartyPC at 4,772,727 Hz, with interrupts enabled under the graphics lock.
+The fixed-seed scene hash must match the previous renderer. A separate host
+pixel decoder checks all palette pairs, both horizontal scales, small terrain
+patches and an odd-edged clipped region, including unchanged VRAM outside it.
+A deliberately changed scene pixel must fail the pixel oracle. VGA readback
+uses guest `MOVSB` under Read Map Select: MartyPC's debugger peek always reads
+plane zero and cannot validate the other three planes. Readback is outside
+the timed interval and restores the guest registers and scratch bytes.
+
+Budgets are 400 ms for city construction, 1,800 ms for VGA redraw and 600 ms
+for CGA/Hercules redraw. `--max-paint-ms 0` permits baseline measurements.
+The existing gameplay, frontend, input and animation gates cover throws,
+craters, fullscreen restoration, borrowed-cache transitions and incremental
+text. These are emulator cycle measurements, not hardware measurements.

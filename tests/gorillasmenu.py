@@ -49,10 +49,16 @@ def animation(m, p, code, tag):
                 ink = (raw[y*8+col//2] >> (0 if col & 1 else 4)) & 15
                 pixel(x+col, 80+y, ink)
     state, music = p.b('state'), p.w('musicptr')
+    # The gameplay renderer may borrow the inactive intro cache. This
+    # debugger-only reference paint must not force the next timed animation
+    # to rebuild it (real gameplay -> intro transitions do rebuild it).
+    cache, cachekey = p.data('lightcache', 15360), p.data('cachekey', 2)
     m.write(p.base + p.offsets['gr_scene'], reference)
     m.write(p.base + p.offsets['gr_state'], b'\0')
     m.write(p.base + p.offsets['gr_musicptr'], b'\0\0')
     I.check_repaint(m, p, code, tag)
+    m.write(p.base + p.offsets['gr_lightcache'], cache)
+    m.write(p.base + p.offsets['gr_cachekey'], cachekey)
     m.write(p.base + p.offsets['gr_scene'], scene)
     m.write(p.base + p.offsets['gr_state'], bytes([state]))
     m.write(p.base + p.offsets['gr_musicptr'], struct.pack('<H', music))

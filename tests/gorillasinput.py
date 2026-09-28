@@ -16,11 +16,11 @@ import time
 import gorillas as G
 
 
-def code_offsets():
+def code_offsets(extra=()):
     source = (G.ROOT / 'apps/gorillas/gorillas.asm').read_text()
     names = ('gr_key', 'gr_tick', 'gr_fullpaint', 'gr_status', 'gr_prompt', 'gr_help',
              'gr_pausemsg', 'gr_roundmsg', 'gr_matchmsg', 'gr_animate',
-             'gr_apeleft', 'gr_aperight')
+             'gr_apeleft', 'gr_aperight') + tuple(extra)
     source = source.replace('OS88_IMAGE_END', '')
     source += '\n' + '\n'.join('dw ' + n for n in names) + '\nOS88_IMAGE_END\n'
     with tempfile.TemporaryDirectory() as td:
@@ -64,17 +64,47 @@ def check_hud(m, p, code):
 
 def video_bytes(m, tag):
     if tag != 'vga':
-        return m.read(0xb0000 if tag == 'herc' else 0xb8000, 32768)
-    # Read each VGA plane under Read Map Select, then restore the controller.
+        # CGA has 16 KB; the next 16 KB aliases it on this card model.
+        return m.read(0xb0000, 32768) if tag == 'herc' else m.read(0xb8000, 16384)
+    # MartyPC's side-effect-free VGA peek hardcodes plane 0. Actual guest
+    # MOVSB reads honor Read Map Select; use a temporary stub and restore all
+    # registers/scratch bytes. The caller is paused under the graphics lock.
+    p = m.gorillas_probe
+    stub, scratch = p.offsets['gr_under'], p.offsets['gr_band']
+    saved = m.regs()
+    original_stub = m.read(p.base + stub, 9)
+    original_scratch = m.read(p.base + scratch, 6144)
+    m.write(p.base + stub, bytes.fromhex('fa b8 00 a0 8e d8 f3 a4 90'))
     index = m.inb(0x3ce)
+    m.outb(0x3ce, 5)
+    mode = m.inb(0x3cf)
+    m.outb(0x3cf, mode & ~8)
     m.outb(0x3ce, 4)
     selected = m.inb(0x3cf)
     planes = []
     for plane in range(4):
         m.outb(0x3cf, plane)
-        planes.append(m.read(0xa0000, 38400))
+        for offset in range(0, 38400, 6144):
+            count = min(6144, 38400-offset)
+            m.cmd(cmd='park', cs=p.base >> 4, ip=stub)
+            for reg, value in (('es', p.base >> 4), ('si', offset),
+                               ('di', scratch), ('cx', count),
+                               ('flags', saved['flags'] & ~0x600)):
+                m.setreg(reg, value)
+            m.bp_exec(p.base + stub + 8)
+            m.run()
+            assert m.wait_stop(30) == 'breakpoint', 'VGA readback stub hung'
+            planes.append(m.read(p.base + scratch, count))
     m.outb(0x3cf, selected)
+    m.outb(0x3ce, 5)
+    m.outb(0x3cf, mode)
     m.outb(0x3ce, index)
+    m.write(p.base + stub, original_stub)
+    m.write(p.base + scratch, original_scratch)
+    m.cmd(cmd='park', cs=saved['cs'], ip=saved['ip'])
+    for reg in ('ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp',
+                'ss', 'ds', 'es', 'flags'):
+        m.setreg(reg, saved[reg])
     return b''.join(planes)
 
 

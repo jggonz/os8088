@@ -2417,10 +2417,33 @@ SOAK = [
         "states are injected by the test. Saves screenshots of each adapter",
         needs=("marty", "nasm"), serial=True,
         wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("gorillascity", "soak", py("tests/gorillascity.py"), 100.0,
+        "Gorillas skyline redraw (SPEC.md 98.4): seed-stable city construction "
+        "under 400 ms; complete VGA paints under 1800 ms and mono/CGA under "
+        "600 ms at 4.77 MHz. Independent native VRAM decoding checks all ink "
+        "pairs, both horizontal scales, partial terrain updates and exact "
+        "window clipping. A negative pixel control must fail. VGA planes are "
+        "read by guest MOVSB, not the debugger's plane-zero-only peek",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("gorillasfront", "soak", py("tests/gorillasfront.py"), 90.0,
+        "Gorillas frontend (SPEC.md 98): setup validation, player names, "
+        "gravity, music, dance, solo play and fullscreen transitions on all "
+        "three adapters; 88s measured",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("gorillasmenu", "soak", py("tests/gorillasmenu.py"), 160.0,
+        "Gorillas menu and animation budgets (SPEC.md 98.3): character edits "
+        "under 20 ms, transitions under 150 ms and complete animation frames "
+        "under 75 ms. Checks all marquee phases/poses against scene pixels "
+        "and reads all VGA planes; the oracle restores the borrowed intro "
+        "cache before measuring the next frame",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
     Row("gorillasinput", "soak",
-        py("tests/gorillasinput.py", "--check-repaint"), 200.0,
-        "Gorillas XT input (SPEC.md 98.2): 189s measured for the three-adapter "
-        "input/repaint checks, plus a buffered-key check. Real keyboard "
+        py("tests/gorillasinput.py", "--check-repaint"), 300.0,
+        "Gorillas XT input (SPEC.md 98.2): three-adapter input/repaint checks "
+        "with actual guest reads of all VGA planes and buffered keys. Real keyboard "
         "handlers must stay under 20 ms; six buffered fullscreen aiming keys "
         "must complete within one BIOS tick. Compares the scene to OS glyphs "
         "and incremental VRAM to a full repaint after each edit, including "

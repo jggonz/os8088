@@ -29,7 +29,9 @@ ARMS = {'vga': 'os8088_xt_vga', 'cga': 'os8088_5150_cga_gla',
 def offsets():
     source = (ROOT / 'apps/gorillas/gorillas.asm').read_text()
     names = re.findall(r'^VAR (gr_\w+),', source, re.M)
-    probe = source.replace('OS88_IMAGE_END', '') + '\n'
+    # This symbol-only image is never executed. Do not charge its appended
+    # offset table against the shipped package's image+BSS memory budget.
+    probe = source.replace('OS88_IMAGE_END', '').replace('OS88_BSS GR_BSS', 'OS88_BSS 0') + '\n'
     probe += '\n'.join('dw %s-os88_image_end' % n for n in names)
     probe += '\nOS88_IMAGE_END\n'
     with tempfile.TemporaryDirectory() as td:

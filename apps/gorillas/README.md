@@ -150,3 +150,31 @@ Measured initial angle replacement (`45` → `9`), milliseconds per handler:
 
 These are emulator cycle measurements, not hardware measurements. The faster
 renderer adds 1,476 bytes of image and state per instance.
+
+Full skyline redraws now finish one building-width strip at a time from left
+to right. Packed facade/window fills, native ink-pair conversion, repeated-row
+reuse and a fast empty-sky path reduce the work. Repaints overwrite the old
+scene directly, so the city no longer flashes blank first. Craters and the
+current banana remain part of the scene.
+
+Measured complete redraws of the same seeded city, milliseconds at an
+emulated 4.77 MHz (excluding city generation):
+
+| Adapter / mode | Before | After |
+|---|---:|---:|
+| VGA window | 3303 | 1393 |
+| VGA fullscreen | 5917 | 1631 |
+| CGA window | 2901 | 355 |
+| CGA fullscreen | 2341 | 322 |
+| Hercules window | 3001 | 461 |
+| Hercules fullscreen | 2996 | 508 |
+
+City generation separately drops from 1540–1564 ms to 300–306 ms. VGA still
+has a visible reveal on an XT; it is now confined to successive buildings.
+The change adds 3,344 bytes per instance and uses the existing scratch and
+intro-cache allocations. No additional heap or kernel memory is needed.
+
+Run `python3 tests/gorillascity.py --output build/gorillas-city.json` for the
+cycle and pixel gate. It checks the unchanged seeded city, every ink pair,
+scaling, partial terrain updates and clipping. VGA checks read all four planes
+with guest memory copies; debugger peeks alone return only plane zero.

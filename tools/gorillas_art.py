@@ -58,6 +58,30 @@ def generate():
     for plane in range(4):
         emit([(((i >> (plane + 4)) & 1) << 1) | ((i >> plane) & 1)
               for i in range(256)])
+    # Convert semantic ink pairs directly to the destination's bit order.
+    # Planar tables include horizontal doubling and the desktop orange mix.
+    for name, desktop, scale in (('gr_winplanes', True, 1),
+                                 ('gr_winplanesx2', True, 2)):
+        result.append(name + ':')
+        for plane in range(4):
+            values = []
+            for pair in range(256):
+                bits = 0
+                for ink in (pair >> 4, pair & 15):
+                    pixels = ((12, 14) if desktop and scale == 2 and ink == 1 else
+                              ((DESKTOP[ink] if desktop else ink),)*scale)
+                    for pixel in pixels:
+                        bits = (bits << 1) | ((pixel >> plane) & 1)
+                values.append(bits)
+            emit(values)
+    mono = (0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1)
+    cga = (0, 3, 2, 3, 0, 2, 2, 1, 0, 3, 3, 2, 2, 0, 3, 3)
+    for name, mapping, shift, factor in (('gr_monopairs', mono, 1, 1),
+                                        ('gr_monopairsx2', mono, 2, 3),
+                                        ('gr_cgapairs', cga, 2, 1)):
+        result.append(name + ':')
+        emit([(mapping[i >> 4]*factor << shift) | mapping[i & 15]*factor
+              for i in range(256)])
     result.append('; Exact QBasic EGA colors in the VGA DAC\ngr_dac:')
     emit([c for value in EGA for c in ega_rgb6(value)], per=12)
     result.append('; 16x20 packed 4bpp gorilla. 0=transparent, 1/A/B=body/light/shadow.\ngr_ape:')

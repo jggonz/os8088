@@ -587,17 +587,84 @@ gr_get:
 ; Inclusive model rectangle (CX,DX)..(SI,DI), colour AL.
 gr_rect:
     SAVE
-.row:
+    cmp cx, 256
+    jae .out
+    cmp dx, 128
+    jae .out
+    cmp si, 255
+    jbe .right
+    mov si, 255
+.right:
+    cmp di, 127
+    jbe .bottom
+    mov di, 127
+.bottom:
+    cmp si, cx
+    jb .out
+    cmp di, dx
+    jb .out
+    sub di, dx
+    inc di
+    push di                      ; row count
+    mov bp, dx
     push cx
-.pixel:
-    call gr_put
-    inc cx
-    cmp cx, si
-    jbe .pixel
+    mov cl, 7
+    shl bp, cl
     pop cx
-    inc dx
-    cmp dx, di
-    jbe .row
+    xor bx, bx
+    test cl, 1
+    jz .left
+    or bl, 1                     ; left edge owns only the low nibble
+.left:
+    test si, 1
+    jnz .edges
+    or bl, 2                     ; right edge owns only the high nibble
+.edges:
+    inc cx
+    shr cx, 1
+    shr si, 1
+    sub si, cx
+    test bl, 2
+    jnz .width
+    inc si
+.width:
+    ; A single even-x pixel has no complete bytes; its right edge handles it.
+    mov dx, cx
+    add dx, bp
+    add dx, gr_scene
+    mov bp, si                   ; complete packed bytes per row
+    mov ah, al
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    or al, ah
+    mov ah, al
+    push ds
+    pop es
+    pop si                       ; rows
+.row:
+    mov di, dx
+    test bl, 1
+    jz .fill
+    and byte [di-1], 0f0h
+    and al, 15
+    or [di-1], al
+    mov al, ah
+.fill:
+    mov cx, bp
+    rep stosb
+    test bl, 2
+    jz .next
+    and byte [di], 15
+    and al, 0f0h
+    or [di], al
+    mov al, ah
+.next:
+    add dx, 128
+    dec si
+    jnz .row
+.out:
     RESTORE
     ret
 
@@ -676,19 +743,15 @@ gr_city:
     mov al, 8
 .lit:
     pop dx
-    call gr_put
-    inc cx
-    call gr_put
-    inc dx
-    call gr_put
-    dec cx
-    call gr_put
-    inc dx
-    call gr_put
-    inc cx
-    call gr_put
-    dec cx
-    sub dx, 2
+    push si
+    push di
+    mov si, cx
+    inc si
+    mov di, dx
+    add di, 2
+    call gr_rect
+    pop di
+    pop si
     add cx, 6
     cmp cx, si
     jb .window
@@ -1633,13 +1696,73 @@ gr_fullpaint:
     jne .scene
     cmp byte [gr_cga], 0
     jne .scene
-    call gr_background
+    call gr_margins
 .scene:
     xor ax, ax
+.strip:
     xor bx, bx
-    mov cx, 256
+    mov cx, 32
     mov dx, 128
-    jmp gr_blit
+    call gr_blit
+    add ax, 32
+    cmp ax, 256
+    jb .strip
+    ret
+
+; Full scene bands are opaque: clear only the four surrounding margins.
+; Clearing the city first both doubles the writes and flashes a blank frame.
+gr_margins:
+    mov al, CBLACK
+    cmp byte [gr_depth], 4
+    jne .pen
+    mov al, CBLUE
+.pen:
+    call OSAPI_SET_COLOR
+    mov ax, [gr_left]
+    mov cx, ax
+    add cx, [gr_width]
+    dec cx
+    mov bx, [gr_top]
+    mov dx, [gr_oy]
+    dec dx
+    call .fill
+    mov bx, [gr_sy]
+    mov dx, 128
+    push ax
+    mov ax, bx
+    mul dx
+    add ax, [gr_oy]
+    mov bx, ax
+    pop ax
+    mov dx, [gr_top]
+    add dx, [gr_height]
+    dec dx
+    call .fill
+    mov bx, [gr_oy]
+    mov dx, [gr_sy]
+    push cx
+    mov cl, 7
+    shl dx, cl
+    pop cx
+    add dx, bx
+    dec dx
+    mov cx, [gr_ox]
+    dec cx
+    call .fill
+    xor ax, ax
+    mov ah, [gr_sx]           ; sx*256 (sx is 1 or 2)
+    add ax, [gr_ox]
+    mov cx, [gr_left]
+    add cx, [gr_width]
+    dec cx
+.fill:
+    cmp ax, cx
+    jg .out
+    cmp bx, dx
+    jg .out
+    call OSAPI_GFX_FILL
+.out:
+    ret
 
 gr_background:
     mov al, CBLACK
@@ -1659,9 +1782,10 @@ gr_background:
     call OSAPI_GFX_FILL
     ret
 
-; Render AX=x (8-aligned), BX=y, CX=width, DX=height in logical pixels.
-; Eight logical rows per band bound scratch space at 512*24/2 = 6144.
-; The 1bpp path maps every nonzero ink to white: black windows stay readable.
+; Render AX=x (8-aligned), BX=y, CX=width (8-aligned), DX=height.
+; Native ink-pair tables combine palette mapping, scaling and bit packing.
+; Convert logical rows once, then duplicate native bytes vertically.
+; Up to 32 rows for narrow strips; wide bands retain the 6144-byte bound.
 gr_blit:
     SAVE
     push ds
@@ -1670,6 +1794,10 @@ gr_blit:
     jae .done
     cmp ax, 256
     jae .done
+    or cx, cx
+    jz .done
+    or dx, dx
+    jz .done
     mov [gr_rx], ax
     mov [gr_ry], bx
     add cx, ax
@@ -1685,16 +1813,143 @@ gr_blit:
     mov dx, 128
 .bottom:
     mov [gr_endy], dx
-.band:
+    sub dx, bx
+    mov [gr_rh], dx
+    mov byte [gr_planar], 0
+    mov byte [gr_reclip], 0
+    mov byte [gr_pairbits], 4
+    mov word [gr_frontsource], gr_band
+    mov ax, cx
+    mul word [gr_sx]
+    shr ax, 1
+    mov [gr_stride], ax
+    cmp byte [gr_vga], 0
+    jne .native
+    cmp byte [gr_depth], 2
+    je .packed
+    ; The OS planar API refuses an armed region. Only disarm after proving
+    ; the whole requested rectangle drawable, and restore even on refusal.
+    call gr_frontcoords
+    add cx, ax
+    dec cx
+    add dx, bx
+    dec dx
+    call OSAPI_WM_CLIP_TEST
+    jnc .visible
+    mov byte [gr_pairbits], 0   ; packed fallback also preserves mono edge pixels
+    jmp .bands
+.visible:
+    cmp byte [gr_depth], 1
+    je .packed
+    call OSAPI_WM_CLIP_CLEAR
+    mov byte [gr_reclip], 1
+    call gr_frontcoords
+    mov di, 8000h
+    call OSAPI_GFX_BLITP
+    jc .bands
+    mov bx, gr_winplanes
+    cmp word [gr_sx], 1
+    je .planar
+    mov bx, gr_winplanesx2
+    jmp short .planar
+.native:
+    mov bx, gr_planebits
+    cmp word [gr_sx], 1
+    je .planar
+    call gr_nativeprepare
+    mov bx, gr_lightcache
+.planar:
+    mov byte [gr_planar], 1
+    cmp word [gr_sx], 1
+    jne .mono_stride
+    mov byte [gr_pairbits], 2
+    jmp short .mono_stride
+.packed:
+    mov bx, gr_cgapairs
+    cmp byte [gr_depth], 2
+    je .cga_stride
+    mov bx, gr_monopairsx2
+    cmp word [gr_sx], 1
+    jne .mono_stride
+    mov bx, gr_monopairs
+    mov byte [gr_pairbits], 2
+.mono_stride:
+    shr word [gr_stride], 1
+.cga_stride:
+    shr word [gr_stride], 1
+    mov [gr_pairtable], bx
+.bands:
     mov ax, [gr_endy]
     sub ax, [gr_ry]
-    cmp ax, 8
+    mov bx, 8
+    cmp word [gr_rw], 64
+    ja .limit
+    mov bx, 32
+.limit:
+    cmp ax, bx
     jbe .rows
-    mov ax, 8
+    mov ax, bx
 .rows:
     mov [gr_rh], ax
-    mov [gr_rows], ax
+    mul word [gr_sy]
+    mul word [gr_stride]
+    mov [gr_planestep], ax
+    ; Sky is ink zero. Clear an empty planar band with all planes selected
+    ; together (or the OS's solid fill), avoiding four identical conversions.
+    cmp byte [gr_planar], 0
+    je .compose
+    mov bp, [gr_rh]
+    mov di, [gr_ry]
+    mov cl, 7
+    shl di, cl
+    mov ax, [gr_rx]
+    shr ax, 1
+    add di, ax
+    add di, gr_scene
+    xor ax, ax
+.skyrow:
+    mov cx, [gr_rw]
+    shr cx, 1
+    shr cx, 1
+    push di
+    repe scasw
+    pop di
+    jne .compose
+    add di, 128
+    dec bp
+    jnz .skyrow
+    cmp byte [gr_vga], 0
+    je .skynative
     mov di, gr_band
+    mov cx, [gr_planestep]
+    rep stosb
+    call gr_frontcoords
+    mov byte [gr_frontplane], 15
+    call gr_frontvgaplane
+    push ds
+    pop es
+    jmp .advance
+.skynative:
+    mov al, CBLUE
+    call OSAPI_SET_COLOR
+    call gr_frontcoords
+    add cx, ax
+    dec cx
+    add dx, bx
+    dec dx
+    call OSAPI_GFX_FILL
+    jmp .advance
+.compose:
+    mov di, gr_band
+    mov bx, [gr_pairtable]
+    mov [gr_worktable], bx
+    mov byte [gr_planesleft], 1
+    cmp byte [gr_planar], 0
+    je .plane
+    mov byte [gr_planesleft], 4
+.plane:
+    mov ax, [gr_rh]
+    mov [gr_rows], ax
     mov ax, [gr_ry]
     mov cl, 7
     shl ax, cl
@@ -1702,84 +1957,114 @@ gr_blit:
     shr si, 1
     add si, ax
     add si, gr_scene
-    mov ax, [gr_rw]
-    mul word [gr_sx]
-    mov [gr_outw], ax
-    cmp byte [gr_depth], 4
-    je .stride4
-    cmp byte [gr_depth], 2
-    je .stride2
-    shr ax, 1
-.stride2:
-    shr ax, 1
-.stride4:
-    shr ax, 1
-    mov [gr_stride], ax
-.row:
     call gr_musicservice
+.row:
     push si
     mov [gr_rowstart], di
+    ; Building windows repeat for three rows, blank facade rows for three
+    ; more. Reuse the previous native row (sky too) within each band/plane.
+    mov ax, [gr_rows]
+    cmp ax, [gr_rh]
+    je .changed
+    push di
+    mov di, si
+    sub si, 128
     mov cx, [gr_rw]
     shr cx, 1
+    shr cx, 1
+    repe cmpsw
+    pop di
+    je .same
+.changed:
+    pop si
+    push si
+    cmp byte [gr_planar], 0
+    jne .native_row
     cmp byte [gr_depth], 4
-    jne .packed
-.color:
+    je .color
+    cmp byte [gr_pairbits], 0
+    jne .native_row
+    mov cx, [gr_rw]
+    shr cx, 1
+.monopacked:
     lodsb
-    cmp byte [gr_vga], 0
-    jne .nativecolor
-    xor bx, bx
-    mov bl, al
+    mov bx, gr_monopairs
+    xlat
+    xor ah, ah
+    mov bx, ax
     cmp word [gr_sx], 1
-    jne .expanded
-    mov al, [gr_winmap+bx]
+    jne .monodouble
+    mov al, [gr_monopacked+bx]
     stosb
-    loop .color
+    jmp short .mononext
+.monodouble:
+    shl bx, 1
+    mov ax, [gr_monowords+bx]
+    stosw
+.mononext:
+    loop .monopacked
+    jmp .repeat
+.color:
+    ; Packed desktop fallback, for a covered/straddling window or refusal.
+    mov cx, [gr_rw]
+    shr cx, 1
+    mov bx, gr_winmap
+    cmp word [gr_sx], 1
+    jne .color2
+.color1:
+    lodsb
+    xlat
+    stosb
+    loop .color1
     jmp short .repeat
-.expanded:
+.color2:
+    lodsb
+    xor ah, ah
+    mov bx, ax
     shl bx, 1
     mov ax, [gr_winx2+bx]
     stosw
-    loop .color
+    loop .color2
     jmp short .repeat
-.nativecolor:
-    cmp word [gr_sx], 1
-    je .single
-    mov ah, al
-    and al, 0f0h
-    mov bl, al
-    shr al, 1
-    shr al, 1
-    shr al, 1
-    shr al, 1
-    or al, bl
-    stosb
-    mov al, ah
-    and al, 15
-    mov bl, al
-    shl al, 1
-    shl al, 1
-    shl al, 1
-    shl al, 1
-    or al, bl
-.single:
-    stosb
-    loop .color
-    jmp short .repeat
-.packed:
-    xor bp, bp                 ; bits accumulated
-    xor dh, dh                 ; output byte
-.byte:
+.native_row:
+    mov bx, [gr_worktable]
+    mov cx, [gr_stride]
+    cmp byte [gr_pairbits], 2
+    je .two
+.four:
     lodsb
+    xlat
     mov ah, al
-    shr al, 1
-    shr al, 1
-    shr al, 1
-    shr al, 1
-    call gr_packpixel
+    shl ah, 1
+    shl ah, 1
+    shl ah, 1
+    shl ah, 1
+    lodsb
+    xlat
+    or al, ah
+    stosb
+    loop .four
+    jmp short .repeat
+.two:
+    lodsb
+    xlat
+    mov ah, al
+%rep 3
+    shl ah, 1
+    shl ah, 1
+    lodsb
+    xlat
+    or ah, al
+%endrep
     mov al, ah
-    and al, 15
-    call gr_packpixel
-    loop .byte
+    stosb
+    loop .two
+    jmp short .repeat
+.same:
+    mov si, di
+    sub si, [gr_stride]
+    mov cx, [gr_stride]
+    rep movsb
 .repeat:
     mov bx, [gr_sy]
     dec bx
@@ -1795,90 +2080,80 @@ gr_blit:
     add si, 128
     dec word [gr_rows]
     jnz .row
-    mov ax, [gr_rx]
-    mul word [gr_sx]
-    add ax, [gr_ox]
-    mov bx, ax
-    mov ax, [gr_ry]
-    mul word [gr_sy]
-    add ax, [gr_oy]
-    xchg ax, bx                ; AX destination x, BX y
-    mov cx, [gr_outw]
-    mov dx, [gr_rh]
-    push ax
-    mov ax, dx
-    mul word [gr_sy]
-    mov dx, ax
-    pop ax
-    mov bp, [gr_stride]
-    mov si, gr_band
+    add word [gr_worktable], 256
+    dec byte [gr_planesleft]
+    jnz .plane
+    call gr_frontcoords
     cmp byte [gr_vga], 0
     jne .vga
     cmp byte [gr_cga], 0
     jne .cga
+    cmp byte [gr_planar], 0
+    jne .osplanes
+    cmp byte [gr_pairbits], 0
+    je .blit4
     cmp byte [gr_depth], 1
     je .mono
+.blit4:
     call OSAPI_GFX_BLIT4
     jmp short .advance
 .mono:
     call OSAPI_GFX_BLIT1
     jmp short .advance
+.osplanes:
+    mov di, [gr_planestep]
+    call OSAPI_GFX_BLITP
+    jmp short .advance
 .cga:
     call gr_cgablit
     jmp short .advance
 .vga:
-    call gr_vgablit
+    mov byte [gr_frontplane], 1
+.vgaplane:
+    call gr_frontcoords
+    call gr_frontvgaplane
+    mov ax, [gr_planestep]
+    add [gr_frontsource], ax
+    shl byte [gr_frontplane], 1
+    cmp byte [gr_frontplane], 16
+    jb .vgaplane
+    mov word [gr_frontsource], gr_band
+    push ds
+    pop es
 .advance:
     mov ax, [gr_rh]
     add [gr_ry], ax
     mov ax, [gr_ry]
     cmp ax, [gr_endy]
-    jb .band
+    jb .bands
+    cmp byte [gr_reclip], 0
+    je .done
+    mov bx, [gr_win]
+    call OSAPI_WM_CLIP_SET
 .done:
     RESTORE
     ret
 
-; AL logical colour, AH saved source byte, DH accumulator, BP bit count.
-gr_packpixel:
-    push cx
-    push bx
-    mov cx, [gr_sx]
-    cmp byte [gr_depth], 2
-    je .cga
-    xor bx, bx
-    mov bl, al
-    mov al, [gr_monomap+bx]
-.mono:
-    shl dh, 1
-    or dh, al
-    inc bp
-    cmp bp, 8
-    jne .again
-    mov [es:di], dh
-    inc di
-    xor dh, dh
-    xor bp, bp
-.again:
-    loop .mono
-    jmp short .done
-.cga:
-    xor bx, bx
-    mov bl, al
-    mov al, [gr_cgamap+bx]
-    shl dh, 1
-    shl dh, 1
-    or dh, al
-    add bp, 2
-    cmp bp, 8
-    jne .done
-    mov [es:di], dh
-    inc di
-    xor dh, dh
-    xor bp, bp
-.done:
-    pop bx
-    pop cx
+; Fullscreen's doubled plane table shares the inactive intro cache. The
+; high cache-key bit makes the next frontend paint rebuild its sprite cache.
+gr_nativeprepare:
+    cmp word [gr_cachekey], 8000h
+    je .out
+    mov word [gr_cachekey], 8000h
+    mov si, gr_planebits
+    mov di, gr_lightcache
+    mov bx, gr_pairdouble
+    mov cx, 1024
+.byte:
+    lodsb
+    xlat
+    stosb
+    loop .byte
+.out:
     ret
+gr_pairdouble: db 0,3,12,15
+gr_monopacked: db 0,15,240,255
+gr_monowords: dw 0,0ff00h,00ffh,0ffffh
 
 ; VGA fullscreen owns a foreign mode. Set identity attribute indices, then
 ; load the original six-bit EGA colors converted to six-bit DAC components.
@@ -1915,65 +2190,6 @@ gr_vgapalette:
     out dx, ax
     mov ax, 0ff08h              ; every bit writable
     out dx, ax
-    ret
-
-; AX/BX=physical x/y, CX/DX=width/height; DS:SI=packed 4bpp band.
-; All rectangles are byte-aligned. Each plane is written once, with no
-; read/modify/write cycle per pixel and no kernel drawing in the foreign mode.
-gr_vgablit:
-    push es
-    mov [gr_vgsrc], si
-    mov [gr_vgheight], dx
-    shr cx, 1
-    shr cx, 1
-    shr cx, 1
-    mov [gr_vgcols], cx
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    mov di, ax
-    mov ax, bx
-    mov cx, 80
-    mul cx
-    add di, ax
-    mov [gr_vgdest], di
-    mov ax, 0a000h
-    mov es, ax
-    mov byte [gr_vgmask], 1
-    mov bx, gr_planebits
-.plane:
-    mov dx, 03c4h
-    mov al, 2
-    mov ah, [gr_vgmask]
-    out dx, ax
-    mov si, [gr_vgsrc]
-    mov di, [gr_vgdest]
-    mov ax, [gr_vgheight]
-    mov [gr_vgrows], ax
-.row:
-    mov bp, [gr_vgcols]
-.byte:
-    xor ah, ah
-%rep 4
-    lodsb
-    xlat                         ; two plane bits, high nibble first
-    shl ah, 1
-    shl ah, 1
-    or ah, al
-%endrep
-    mov al, ah
-    stosb
-    dec bp
-    jnz .byte
-    add di, 80
-    sub di, [gr_vgcols]
-    dec word [gr_vgrows]
-    jnz .row
-    add bx, 256
-    shl byte [gr_vgmask], 1
-    cmp byte [gr_vgmask], 16
-    jb .plane
-    pop es
     ret
 
 ; Foreign mode 4: 80 bytes per row, odd rows at +2000h. No kernel drawing
@@ -2054,10 +2270,6 @@ gr_textdouble:
 %assign gr_n gr_n+1
 %endrep
 gr_facades: db 5,6,7,5,7,6,5,7
-; Semantic inks: sky, ape, explosion, sun, black, gray/red/cyan facade,
-; unlit window, white text, ape highlight/shadow, roof, spare, lit window, text.
-gr_cgamap: db 0,3,2,3,0,2,2,1,0,3,3,2,2,0,3,3
-gr_monomap: db 0,1,1,1,0,1,1,1,0,1,1,1,1,0,0,1
 %include "grart.inc"
 
 ; sin(degrees)*256, rounded; cosine uses symmetry.
@@ -2191,16 +2403,18 @@ VAR gr_rh, 2
 VAR gr_endy, 2
 VAR gr_rows, 2
 VAR gr_stride, 2
-VAR gr_outw, 2
 VAR gr_rowstart, 2
 VAR gr_cgax, 2
 VAR gr_cgarows, 2
-VAR gr_vgsrc, 2
+VAR gr_planar, 1
+VAR gr_reclip, 1
+VAR gr_pairbits, 1
+VAR gr_pairtable, 2
+VAR gr_worktable, 2
+VAR gr_planesleft, 1
+VAR gr_planestep, 2
 VAR gr_vgdest, 2
-VAR gr_vgcols, 2
 VAR gr_vgheight, 2
-VAR gr_vgrows, 2
-VAR gr_vgmask, 1
 VAR gr_scene, 16384
 VAR gr_band, 6144
 
