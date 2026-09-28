@@ -148804,6 +148804,17 @@ durations round to 18.2 Hz ticks, minimum one tick. Timed tones expire even
 while covered; score progression resumes with the worker. No direct speaker
 port writes or blocking waits run under the graphics lock.
 
+During flight, crossing sun ink opens an oval mouth without stopping the shot.
+The expression stays shocked until impact or a miss, then returns to a smile.
+Sun changes update only its rectangle after restoring the previous banana patch.
+Every scored point (including self-hits and the match's final point) queues the
+reference `VictoryDance`: four left/right raised-arm pairs on the scorer, each
+playing `MFO0L32EFGEFDC` followed by a four-tick rest. Poses advance only when
+their phrase finishes. Enter waits for the dance to finish; pause, new match,
+About, focus handling and fullscreen transitions retain their usual behavior.
+`tests/gorillasreactions.py` checks the swept sun reaction, patch restoration,
+scorer selection, all eight poses, music and incremental pixels on each adapter.
+
 Gravity uses tenths of m/s² with a remainder accumulator: 9.8 produces the
 previous four fixed-point velocity units per frame. The solo opponent in
 `grai.inc` evaluates one candidate power per worker tick, predicting wind

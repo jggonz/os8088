@@ -186,3 +186,14 @@ gr_musichit:
     dw 73,2
     dw 65,2
     dw 0ffffh
+gr_musicvictory:
+    ; PLAY "MFO0L32EFGEFDC"
+    dw 82,1
+    dw 87,1
+    dw 98,1
+    dw 82,1
+    dw 87,1
+    dw 73,1
+    dw 65,1
+    dw 0,4 ; Rest .2, rounded to BIOS ticks
+    dw 0ffffh

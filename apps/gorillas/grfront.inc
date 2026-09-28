@@ -34,6 +34,7 @@ gr_intro:
 
 gr_setup:
     call gr_musicstop
+    mov byte [gr_dancing], 0
     push ds
     pop es
     mov byte [gr_state], 5

@@ -227,6 +227,7 @@ def arm(tag, off, disk, out):
             assert list(p.data('scores', 2)) == scores
             assert p.b('winner') == thrower ^ 1
             assert p.b('state') == (3 if sum(scores) == 5 else 2)
+            wait(m, lambda: p.b('dancing') == 0, 'scoring gorilla finishes musical dance')
             if round_no < 4:
                 key(m, 'Enter')
                 assert p.b('state') == 0
@@ -251,6 +252,7 @@ def arm(tag, off, disk, out):
             # Play inside the bracket too: its own loop must advance a shot.
             key(m, 'Enter'); key(m, 'Digit1'); key(m, 'Enter')
             wait(m, lambda: p.b('state') == 2, 'fullscreen hit')
+            wait(m, lambda: p.b('dancing') == 0, 'fullscreen victory dance')
             M.pace(m, .3)
             capture(m, p, out / (tag + '-full.png'))
             scene = p.data('scene', 16384)

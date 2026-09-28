@@ -72,6 +72,12 @@ All game text hides during a throw so the banana remains visible through
 the top of the sky, and returns when the shot ends. Pausing a shot keeps
 the text hidden; **P** or **Enter** still resumes it.
 
+A banana crossing the sun opens its mouth in shock until the throw ends.
+After every point, the scoring gorilla performs the original four left/right
+arm pairs, each accompanied by `VictoryDance`'s seven-note tune and short rest.
+This includes self-hits and the final point. **Enter** continues once the dance
+finishes; pause, fullscreen and new match controls remain available during it.
+
 Angle, velocity, setup edits and menu transitions redraw only changed character
 cells. Invalid input draws only the error line. Like Dot
 Delirium, the HUD composes opaque bands directly from the OS font. Windowed
@@ -109,6 +115,7 @@ Run the actual guest gameplay gate on all three adapters:
 ```sh
 make gorillas
 python3 tests/gorillas.py
+python3 tests/gorillasreactions.py
 python3 tests/gorillasfront.py
 python3 tests/gorillasmenu.py --output build/gorillas-menu.json
 python3 tests/gorillasinput.py --check-repaint --output build/gorillas-input.json

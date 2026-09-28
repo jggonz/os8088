@@ -263,6 +263,8 @@ gr_key:
 .enter:
     cmp byte [gr_paused], 0
     jne .pause
+    cmp byte [gr_dancing], 0
+    jne .out
     cmp byte [gr_state], 1
     je .out
     cmp byte [gr_state], 2
@@ -298,6 +300,8 @@ gr_key:
 gr_worker:
     mov bx, [gr_win]
     call OSAPI_TASK_ALIVE
+    cmp byte [gr_dancing], 0
+    jne .active
     cmp word [gr_musicptr], 0
     jne .active
     mov al, [gr_state]
@@ -699,6 +703,8 @@ gr_city:
     mov word [gr_aipower], 0
     mov byte [gr_state], 0
     mov byte [gr_saved], 0
+    mov byte [gr_sunhit], 0
+    mov byte [gr_dancing], 0
     mov byte [gr_field], 0
     mov byte [gr_edit], 0
     mov word [gr_angle], 45
@@ -910,6 +916,72 @@ gr_sun:
     inc dx
     dec bp
     jnz .row
+    ret
+
+; Only the mouth changes. Keep nearby gorillas and the ray tips intact.
+gr_sunface:
+    mov si, gr_sunart + 11*25 + 8
+    mov dx, 36
+    mov bp, 6
+.row:
+    mov cx, 124
+    mov di, 9
+.pixel:
+    lodsb
+    or al, al
+    jz .put
+    mov al, 3
+.put:
+    call gr_put
+    inc cx
+    dec di
+    jnz .pixel
+    add si, 16
+    inc dx
+    dec bp
+    jnz .row
+    cmp byte [gr_sunhit], 0
+    je .out
+    ; Fill the smile, then cut an oval mouth out of the yellow face.
+    mov cx, 124
+    mov dx, 37
+    mov si, 132
+    mov di, 39
+    mov al, 3
+    call gr_rect
+    mov cx, 127
+    mov dx, 36
+    mov si, 129
+    mov di, 40
+    xor al, al
+    call gr_rect
+    mov cx, 126
+    mov dx, 37
+    mov si, 130
+    mov di, 39
+    call gr_rect
+.out:
+    ret
+
+; The banana has already been restored before changing the sun's face.
+; Preserve the swept collision coordinates and remaining substeps.
+gr_sunpaint:
+    SAVE
+    call gr_sunface
+    mov ax, 120
+    mov bx, 36
+    mov cx, 16
+    mov dx, 6
+    call gr_blit
+    RESTORE
+    ret
+
+gr_sunreset:
+    cmp byte [gr_sunhit], 0
+    je .out
+    mov byte [gr_sunhit], 0
+    call gr_sunpaint
+.out:
     ret
 
 ; Opaque HUD cells, still mirrored into the scene for exposure/full paints.
@@ -1494,6 +1566,8 @@ gr_tick:
     cmp byte [gr_paused], 0
     jne .out
     call gr_musictick
+    cmp byte [gr_dancing], 0
+    jne gr_victorytick
     cmp byte [gr_state], 4
     jae gr_fronttick
     cmp byte [gr_state], 0
@@ -1546,12 +1620,16 @@ gr_tick:
     add si, 2
     cmp si, 4
     jb .ape
-    ; Sun is decorative and may be crossed without impact.
-    cmp dx, 42
-    jb .next
+    ; Sun ink triggers surprise, but never stops the projectile.
     call gr_get
-    cmp al, 3                  ; sun rays are not terrain
-    je .next
+    cmp al, 3
+    jne .solid
+    cmp byte [gr_sunhit], 0
+    jne .next
+    mov byte [gr_sunhit], 1
+    call gr_sunpaint
+    jmp short .next
+.solid:
     or al, al
     jnz .terrain
 .next:
@@ -1578,6 +1656,7 @@ gr_tick:
 .out:
     ret
 .miss:
+    call gr_sunreset
     xor byte [gr_turn], 1
     mov word [gr_aipower], 0
     mov byte [gr_state], 0
@@ -1604,9 +1683,50 @@ gr_tick:
     mov byte [gr_state], 3
 .explode:
     call gr_crater
+    call gr_sunreset
+    ; Let the hit sound finish before the eight musical arm poses.
+    mov byte [gr_dancing], 9
     mov si, gr_musichit
     call gr_musicstart
     jmp gr_hudpaint
+
+; VictoryDance: four left/right pairs, each with PLAY EFGEFDC and Rest .2.
+; Each phrase includes its rest; pose changes wait for the sequencer, so
+; rendering, pause and focus changes cannot run the dance ahead of the tune.
+gr_victorytick:
+    cmp word [gr_musicptr], 0
+    jne .out
+    dec byte [gr_dancing]
+    jz .out
+    xor bx, bx
+    mov bl, [gr_winner]
+    shl bx, 1
+    mov bp, bx
+    mov cx, [gr_gx+bx]
+    mov dx, [gr_gy+bx]
+    mov si, cx
+    add si, 15
+    mov di, dx
+    add di, 19
+    xor al, al
+    call gr_rect
+    mov si, gr_apeleft
+    test byte [gr_dancing], 1
+    jz .draw
+    mov si, gr_aperight
+.draw:
+    call gr_gorillapose
+    ; Gorillas need not start on an eight-pixel blit boundary.
+    mov ax, [ds:gr_gx+bp]
+    and ax, 0fff8h
+    mov bx, [ds:gr_gy+bp]
+    mov cx, 24
+    mov dx, 20
+    call gr_blit
+    mov si, gr_musicvictory
+    call gr_musicstart
+.out:
+    ret
 
 ; A persistent circular crater: collision and all later repaints see the hole.
 gr_crater:
@@ -2382,6 +2502,8 @@ VAR gr_state, 1
 VAR gr_paused, 1
 VAR gr_turn, 1
 VAR gr_winner, 1
+VAR gr_dancing, 1
+VAR gr_sunhit, 1
 VAR gr_scores, 2
 VAR gr_grav10, 2
 VAR gr_grem, 2
