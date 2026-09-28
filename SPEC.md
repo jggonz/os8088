@@ -149121,6 +149121,9 @@ on loss of focus and is cancelled on fullscreen entry. AdLib and Sound Blaster u
 three OPL2 music voices through OSAPI_SND_FM; PC speaker uses the lead voice
 through OSAPI_SND_TONE. Sound Blaster uses FM, without PCM mixing or DMA.
 Effects take priority over the speaker melody and use a separate FM voice.
+Music patches use attack rate 14 instead of the instantaneous rate 15 to
+soften note onsets; the effect patch retains rate 15. The OPL chip shapes
+the envelope, with no per-frame software work or CPU-specific timing change.
 The sequencer runs once per fullscreen frame, with bounded work, fractional
 60Hz note timing and no missed-frame replay. Pausing freezes music position;
 exit silences and releases audio; reentry resumes the saved music position.

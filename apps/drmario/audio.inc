@@ -22,6 +22,11 @@ dm_audio_open:
     xor cx, cx
 .patch:
     mov si, dm_audio_patch
+    cmp cl, 3
+    jne .music
+    mov si, dm_audio_fxpatch
+    jmp .load
+.music:
     cmp cl, 2
     jne .load
     mov si, dm_audio_bass
@@ -400,9 +405,14 @@ dm_audio_fmnote:
 .out: ret
 
 dm_audio_patch:
+    ; AR=14 softens music onsets in hardware, without extra tick work.
+    ; Keep decay, sustain, release, levels and note articulation unchanged.
+    db 21h,24h,0e2h,07h,00h,21h,0ch,0e2h,07h,00h,04h
+dm_audio_fxpatch:
+    ; Short gameplay cues retain their original immediate attack.
     db 21h,24h,0f2h,07h,00h,21h,0ch,0f2h,07h,00h,04h
 dm_audio_bass:
-    db 21h,3fh,0f0h,07h,00h,21h,10h,0f0h,07h,00h,00h
+    db 21h,3fh,0e0h,07h,00h,21h,10h,0e0h,07h,00h,00h
 ; Native tonal arrangements of NES event roles ($8D10/$8DDE/$8E39/$8F3A,
 ; $926F/$927C); no per-frame NES envelopes or sampled percussion.
 dm_effects: dw dm_fx_cursor,dm_fx_move,dm_fx_rotate,dm_fx_fall

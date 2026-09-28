@@ -217,7 +217,9 @@ separate from user-supplied reference assets.
   Movement rendering remains 3.45/1.40 ms VGA/CGA. The existing decorative clock
   stays independent to preserve its timing and cost; music synchronization is
   still open. These are emulator results, not physical XT measurements.
-- Memory: 54,576 image + 6,617 BSS = 61,193 bytes; compressed 23,230 bytes.
+- FM music uses hardware attack rate 14 to soften note onsets; effects retain
+  rate 15. No extra per-frame work or CPU-specific timing changes.
+- Memory: 54,598 image + 6,617 BSS = 61,215 bytes; compressed 23,254 bytes.
   Sharing the VGA/CGA native font cache and storing 63 used glyphs recovers
   3,648 bytes of BSS, rebuilt on mode entry only. No mixer, worker, new IRQ,
   heap allocation or kernel API was added. Proofs: `build/drmario-proof/`.

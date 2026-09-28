@@ -100,6 +100,10 @@ no PCM stream or DMA buffer. The PC speaker plays the lead melody, with effects
 briefly taking priority. Missing or busy FM channels fall back to the tone
 service. Music OFF keeps effects enabled.
 
+FM music uses a slightly softer hardware attack (rate 14 rather than 15)
+to reduce sharp note onsets. Effects keep their immediate attack. This adds
+no per-frame CPU work and uses the same timing on XT and faster machines.
+
 FEVER, CHILL, their stage-clear jingles, title/options and game-over music are
 local-reference arrangements, not original compositions. The build compiler
 walks all four NES channels to retain shared tempo/transposition changes,
@@ -198,6 +202,6 @@ VGA/CGA. The existing dense animation peaks still span multiple frame periods;
 these measurements do not claim fixed 54.6 FPS on every animation frame or
 physical-hardware validation.
 
-The audio build uses 54,576 image + 6,617 BSS = 61,193 bytes, within the
-61,440-byte package limit. The compressed package is 23,230 bytes. Music adds
+The audio build uses 54,598 image + 6,617 BSS = 61,215 bytes, within the
+61,440-byte package limit. The compressed package is 23,254 bytes. Music adds
 no framebuffer or kernel allocation.
