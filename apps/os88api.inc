@@ -486,6 +486,8 @@ SND_CAP_ADPCM4Q  equ 40h         ; the DSP answers 4.xx, where Creative DROPPED
                                  ; it also passes SND_OPENF_FORCE: default to
                                  ; silence and let the user choose (SPEC.md
                                  ; 34.5.3.1)
+SND_CAP_EXTBLK   equ 80h         ; verb 0 honours SND_OPENF_BLKSH
+                                 ; (SPEC.md 34.5.3)
 
 ; verb 9 is verb 3 with DX = the bytes PLAYED EXACTLY, the DMA's progress into
 ; the block now sounding added to the block-granular count (SPEC.md 34.5.1).
@@ -551,6 +553,11 @@ SND_OPENF_ADPCM4 equ 4           ; ...the bytes are Creative 4-bit ADPCM, the
 SND_OPENF_FORCE  equ 8           ; ...ADPCM4 even on a DSP 4.xx
                                  ; (SND_CAP_ADPCM4Q): the user asked for it
 SND_OPENF_RLSH   equ 4           ; the size code's shift: 0 4KB .. 3 32KB
+SND_OPENF_BLKSH  equ 6           ; EXT only: the card's block is 2,048 >> the
+                                 ; code in AH bits 6-7 (256 at 3), so a slow
+                                 ; stream need not queue seconds ahead. Only
+                                 ; with SND_CAP_EXTBLK; an older driver
+                                 ; ignores the bits and plays 2,048
 SND_EXT_TOTAL    equ 0           ; the control words, after the ring
 SND_EXT_CONS     equ 2
 SND_EXT_TAB      equ 16          ; os88spk.inc's PWM table, written by its

@@ -57598,6 +57598,24 @@ owner's ear (98.1.1.1).
 **Cost: 194 bytes** (6,371 → 6,565), inside the driver's 7KB claim, so no
 heap at all. `tests/vidsound.py` is the gate.
 
+**An external ring may ask for a SMALLER BLOCK** (`SND_OPENF_BLKSH`): the
+half is 2,048 bytes shifted right by the code in AH bits 6-7 - 1,024, 512
+or 256 - and the driver says it takes the bits with **`SND_CAP_EXTBLK`**
+(80h). A block is 2,048 BYTES at every rate, so at 5,512 Hz ADPCM4 (2,756
+bytes a second) it was 0.74 s of sound, and the ISR halts at a boundary
+whose next block is not all queued: the producer had to keep 0.74 s
+queued, which for the Video Player is the reader 20 frames ahead of the
+picture (98.2.1.3). Shifted to 512 it is 0.19 s, 11 kHz PCM8's own.
+Nothing else in the driver changes: the ISR's underrun question, verb 1's
+resume bound, verb 9 and the DSP's 48h block length all read `[sbl_half]`
+already. The shift is applied after the ADPCM4 test and the watchdog, which
+read the full half - so the watchdog stays sized for 2,048, as long as it
+was. A driver without the bit ignores AH bits 6-7 and plays 2,048, so a
+package asks only where the cap says; one that never sets them - every
+package but the Video Player - is unchanged. **26 bytes** (6,660 →
+6,686), inside the same 7KB claim. `vidsndad55` is the gate: without the
+cap it FAILS on the block, with it the capture is whole.
+
 #### 34.5.3.1 A DSP 4.xx: refused unless the caller asks, and said so
 
 **The refusal above was right about Creative's cards and wrong about the
@@ -151266,7 +151284,8 @@ python3 tools/os88venc.py IN OUT.V88 [--preset P | --layout L --box WxH]
     [--levels auto|none] [--gamma G] [--contrast C] [--brightness B]
     [--invert] [--title T] [--credits C] [--keysecs S]
     [--poster K | --poster-at SECS] [--preview-png DIR]
-    [--text-colour colour|mono] [--text-glyphs blocks|shades|ascii|dots|dots-plus]
+    [--text-colour colour|mono]
+    [--text-glyphs blocks|shades|ascii|dots|dots-plus|blocks-only|blocks-only-shade]
     [--text-detail D] [--text-sharpen S] [--text-busy B] [--text-stable E]
 python3 tools/os88venc.py --profiles
 ```
@@ -151487,6 +151506,43 @@ CGA:
 
 A clip in sustained motion gains a few percent; one that bursts and wanes
 is what the reserve is for.
+
+**With sound the reserve also carries THE SOUND'S LEAD** (`audio_lead`,
+`Encoder.disk_floor`). The card halts at a block boundary unless the whole
+next block is queued (34.5.2's ISR question), and the player queues a
+frame's sound only once its record is in the ring (98.3.1) - so the reader
+must stay a BLOCK of sound ahead of the frame playing. The block was 2,048
+bytes whatever the rate (4,096 above 22,222 Hz), so the slower the sound
+the more frames it spanned: **20 at 5,512 Hz ADPCM4** and 25 fps, which in a
+burst is most of the ring. The player now asks for a smaller one where the
+sound is slow (98.3.1, `audio_block` here), so the lead is 4 to 7 frames
+at every rate - 6 at 5,512 Hz ADPCM4. The bucket may therefore not
+be spent below the 32 KB floor PLUS what the disk refilled over the last
+lead's frames: by the time the card reaches the frame being encoded, that
+much more has to have been read. A resident file has no disk and no lead.
+
+The owner's 5150 found it (Hercules, SB 2.0, ST-225): a 600 x 165 clip at
+25 fps with 5,512 Hz ADPCM4 froze for half a second, sound and picture,
+2 s in, where the clip cuts from black to a bright field with two white
+flashes - 47 frames of ~7.6 KB, 190 KB/s against the file's 83. The
+encoder had spent its 192 KB reserve to the floor across them, which left
+the reader ~6 frames ahead of the picture where the card wanted 19; at the
+8,192nd byte the card halted. Replayed on MartyPC's Hercules 5150 with the
+card (`os8088_5150_herc_hdd_sb_gla`), encoded for its disk
+(`--profile 5150-xtide`), the first 12 s:
+
+| | card underruns | late periods | error as seen |
+|---|---|---|---|
+| before | 2 | 0 | 1.21% |
+| the sound's lead, 2,048-byte blocks | 0 | 0 | 1.76% |
+| **...and 512-byte blocks** | **0** | **0** | **1.38%** |
+
+The picture pays for it in the burst and nowhere else: over the whole
+38 s clip for the ST-225, 0.78% before, 0.90% with the lead in 2,048-byte
+blocks, **0.82%** in 512. The ORIGINAL file, unchanged, on the new player
+and driver: the card still runs dry twice on MartyPC's slower disk, but
+for a block of 512 and not 2,048 - the picture never stops (4 late
+periods against 13 and a second's freeze).
 
 ##### 98.2.1.4 `--aim`: what a budget the video does not use is for
 
@@ -151795,6 +151851,15 @@ it with no display: every option on a tab with a tooltip, the untouched
 form parsing to the parser's defaults, every choice with its line in
 `CHOICE_HELP`, every target encoding to the format
 it names, every preview at its screen's shape, and the disk.
+
+**It fits its own default size** (1080 x 760). The log, the progress bar
+and the Encode row are packed from the BOTTOM and before the tabs, so a
+short window takes its height from the tabs; and a tab of more than ten
+options is laid out in two columns, down the first and then the second.
+The Picture tab's 21 in one column were taller than the window, and the log
+- packed last - got nothing at all, with Encode cut off the end of its row
+by the disk list (the owner's report; both seen on the glass under Xvfb).
+The gate has no display, so this is looked at, not asserted.
 
 
 #### 98.2.9 The pre-roll: the first picture is whole before the keyframes start
@@ -152359,7 +152424,8 @@ choice it replaced:
   characters churn - the least clear thing a text picture can do.
 
 **`--text-glyphs`** is what the picture is made of - `blocks` (the default),
-`shades`, `ascii`, `dots` or `dots-plus`: `blocks`
+`shades`, `ascii`, `dots`, `dots-plus`, `blocks-only` or
+`blocks-only-shade`: `blocks`
 is printable ASCII, the four shades and the four half blocks - a half
 block with a colour each side makes a cell two dots of sixteen colours, so
 the screen is 80 x 50 where the picture wants it - `shades` leaves out the
@@ -152372,7 +152438,11 @@ ascii's: the dots are the point, with a slight lean to a solid cell on a
 tie (0, 2 and 5 looked alike on the photographs). **`dots-plus`** is the
 same with four more marks - `"` a pair of dots high, `*` a small star, `:`
 and `;` two stacked - for the middle tones, the owner keeping `dots` as the
-clean one; its penalty is 2 as well.
+clean one; its penalty is 2 as well. **`blocks-only`** and
+**`blocks-only-shade`** have no letters at all (the owner's ask): the space,
+the full block and the four half blocks - a picture of flat colour at two
+dots a cell - and the same with the three lighter shades for the tones
+between. Every glyph in them is plain, so no letter penalty applies.
 
 **What the choice costs.** Per glyph the least-squares colours for its lit
 and unlit dots, the two nearest of the sixteen to each, and all four pairs
@@ -152545,8 +152615,17 @@ never overtake the audio cursor**: a frame whose audio is not queued is not
 drawn, which is also what keeps the chunks under the audio cursor from being
 reused.
 
+**The card's block** (`vp_sblk`) is 2,048 bytes, halved - up to three
+times, `SND_OPENF_BLKSH` (34.5.3) - while the sound is under 11,000 bytes a
+second, on a driver with `SND_CAP_EXTBLK`: 1,024 at 5.5 kHz PCM8 and 11 kHz
+ADPCM4, **512 at 5.5 kHz ADPCM4**, so no block is much longer than 11 kHz
+PCM8's 0.19 s. It is what the card must have queued at each boundary, so
+it is the reader's lead over the picture, a burst's cost (98.2.1.3), the
+resume threshold and the clock's report interval at once. The fill before
+the open is still 2,048, which verb 0 checks against the full half.
+
 **The clock.** The card reports only at its block interrupts (2,048 bytes:
-93 ms of 22 kHz PCM8, 186 ms of ADPCM4), so the hook:
+93 ms of 22 kHz PCM8, 186 ms of ADPCM4 at 22 kHz), so the hook:
 - reads the consumed count; when it has moved, the frames due are the frames
   wholly played (bytes past the reference byte, over the audio bytes a
   frame), plus one, and the period count is noted;
@@ -152562,7 +152641,12 @@ frames behind the sound four times, at twice it none.
 **The foreground** keeps the reader going as before and, each pass, asks the
 stream's state (verb 3):
 - a card paused for want of data resumes (verb 1) the moment a whole block
-  is queued, counted as a **pause**;
+  is queued, counted as a **pause**. **Every pass asks**, the reader's
+  included: it was asked only on a pass with nothing to read, and after an
+  underrun the reader is catching up, so a chunk arrived every pass and
+  the card sat silent until the ring was FULL again rather than until one
+  block was queued - on MartyPC's 5150, 3.93 s to 5.2 s silent with 2,259
+  bytes queued the whole time, and ~0.7 s sooner asked every pass;
 - a card the driver's watchdog ENDED makes the rest of the play silent on
   the timer - never a picture held for a clock that has gone.
 
@@ -154002,6 +154086,32 @@ beats the Bayer cell. The glyphs are the MACHINE's for the codes it has
 (`vp_tquadt`, the model's own, `BLOCK_QUADS`); any other code is half lit
 and 0 is dark. `vidtext` holds it byte for byte, with the glyphs the
 player names.
+
+##### 98.4.6.1 A text poster in well under a second
+
+**It took 4.6 s of CPU on a 5150** for an 80 x 25 canvas (MartyPC's
+Hercules 5150, sampled), the picture on the glass 5 s after the key: every
+POSTER ROW visited every cell, called `vp_tquad` for its glyph quadrants
+and `vp_tmix` twice for their lumas - 2,700 cycles a cell a row, four rows
+a cell. But a cell's four poster rows are two halves, and a half's two
+quadrant lumas are the same for both of its rows; only the Bayer
+thresholds differ. So:
+- `vp_tqbuild` counts the quadrants of every code ONCE, into a table: half
+  lit, then the blocks' table, then the machine's glyphs over both - the
+  order `vp_tquad` asks in, and `vp_tquad` is still what counts one;
+- `vp_thalf` mixes each cell HALF once, into a row of lumas - one 8-bit
+  `mul` a quadrant, as `bg + (fg - bg) x n >> 4` or `fg + (bg - fg) x
+  (16 - n) >> 4` by which difference is not negative, which is the
+  reference's `(bg x (16 - n) + fg x n) >> 4` exactly - and a cell the same
+  as the one before (a flat area's run) reuses its lumas;
+- `vp_temit` makes each poster row as compares against that row alone.
+
+The tables and the row are a 2 KB scratch claim, freed at the end; refused,
+the poster is black. **0.47 s of CPU, the picture on the glass ~0.75 s
+after the key**, on the same clip - so the encoder carries no pre-made
+poster for a text file, which was the fallback had this missed a second.
+`vidtext`, `vidtextherc` and `vidtextvga` hold it byte for byte (a swapped
+threshold fails 3,766 of 4,000 bytes). VIDEO.O88 +240 bytes.
 
 #### 98.4.7 A document on another disk: the instance goes there, and a failure opens the card
 

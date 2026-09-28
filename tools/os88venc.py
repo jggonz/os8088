@@ -277,6 +277,11 @@ CHOICE_HELP = {
                 "other classic text-art style",
         "dots-plus": "The dots set with : ; \" * as well - more marks for "
                      "the middle tones, a little busier",
+        "blocks-only": "No letters: the full block and the four half "
+                       "blocks alone - flat colour, two dots a cell",
+        "blocks-only-shade": "No letters: the four shades and the four half "
+                             "blocks - the blocks-only look with tones "
+                             "between",
     },
     "fit": {
         "fit": "The whole picture; the canvas shrinks to its shape, no bars",
@@ -445,6 +450,40 @@ DISK_LOOKAHEAD = 96 * 1024  # what the disk bucket may bank: THREE of the
                         # stream spent a surplus the player could not hold,
                         # and stalled a second in (the owner's TRK830)
 VP_KMAXREC = 61440      # apps/video/video.asm's own cap on a keyframe
+SND_HALF = 2048         # SOUND.DRV's block on an external ring: the card
+SND_HALF_HI = 4096      # interrupts once a block, and at each it HALTS
+SND_HALF_RATE = 22222   # unless the whole next block is queued (SPEC.md
+                        # 34.5.2's ISR question) - 4096 above 22,222 Hz
+VP_BLKBPS = 11000       # apps/video/video.asm's: the player HALVES the block
+                        # (up to three times, SND_OPENF_BLKSH) while the
+                        # sound is slower than this many bytes a second
+
+
+def audio_block(afmt, rate):
+    """The card's block the player asks for (vp_sblk, SPEC.md 98.3.1):
+    2,048 bytes (4,096 above 22,222 Hz), halved while the sound's bytes a
+    second are under VP_BLKBPS - so no block is much longer than 11 kHz
+    PCM8's 0.19 s. 5,512 Hz ADPCM4 is 512"""
+    if afmt == vid.AUD_PCM8 and rate > SND_HALF_RATE:
+        return SND_HALF_HI
+    bps = rate // 2 if afmt == vid.AUD_ADPCM4 else rate
+    half, n = SND_HALF, 0
+    while bps < VP_BLKBPS and n < 3:
+        bps, half, n = bps * 2, half // 2, n + 1
+    return half
+
+
+def audio_lead(afmt, rate, abytes):
+    """THE SOUND'S LEAD (98.2.1.3): the frames the reader must have loaded
+    PAST the one playing, because the audio cursor queues a frame's sound
+    only once its record is in the ring and the card halts at a block
+    boundary whose next block is not all queued. So a block of sound, in
+    frames, and one more for the frame the block ends inside: 6 at 11,025
+    Hz PCM8 and 25 fps, 6 at 5,512 Hz ADPCM4 (512-byte blocks) - which was
+    20 while every block was 2,048"""
+    if not afmt or not abytes:
+        return 0
+    return -(-audio_block(afmt, rate) // abytes) + 1
 
 
 def key_limit(clb):
@@ -1720,6 +1759,7 @@ class Encoder:
             # reserve stalled 3 times in 20 s without it and 0 with it
             self.dfloor = min(float(vid.SLOT), self.reserve / 4.0)
             self.drate, self.abps, self.fps = prof["disk"], audio_bps, fps
+        self.alead, self.arefill = 0, []    # the sound's lead (disk_floor)
         # OWED TIME (98.2.1.1): the player's schedule, simulated. On when
         # a frame may run to more than the per-frame ceiling allows
         self.audio_cyc = audio_cyc
@@ -1775,6 +1815,7 @@ class Encoder:
         self.cpu.tick()
         if not self.dcurve:
             self.disk.tick()
+            self.refilled(self.disk.per)
         self.wascut, self.cpucut = self.cpucut, False
         if self.owe is None:
             self.ceil = self.peak
@@ -1803,6 +1844,27 @@ class Encoder:
             self.ceil = self.peak if self.wascut else self.owe  # the last
                                             # frame was already short of time
 
+    def refilled(self, per):
+        """A frame's refill of the disk bucket, kept for the sound's lead"""
+        if self.alead:
+            self.arefill.append(per or 0.0)
+            del self.arefill[:-self.alead]
+
+    def disk_floor(self):
+        """What the disk bucket may not be spent below: a READ_SEQ in
+        flight (dfloor), and THE SOUND'S LEAD (audio_lead) - the reader
+        must stay a block of sound ahead of the frame playing, and at the
+        frame now being encoded that is the lead's frames later, so the
+        bucket must still hold what the disk refilled over the last
+        `alead` frames. Without it a burst spends the ring down to one
+        slot while the card wants a block of it queued, and at 5.5 kHz
+        ADPCM4 the card halted mid-burst (the owner's 5150, 98.2.1.3).
+        The level CAN now be under it - the lead rises with the refill,
+        and a small reserve starts below it - so a caller clamps the room
+        at 0: negative, the retry's `eb *= room / len` flipped its sign
+        and spent bytes the bucket did not have"""
+        return self.dfloor + sum(self.arefill)
+
     def disk_rel(self, share):
         """The disk's rate at a hook `share` of the period, over its rate
         at `avg`: the profile's measured points, straight between them"""
@@ -1821,6 +1883,7 @@ class Encoder:
             per = (self.drate * self.disk_rel(share) * 0.99 - self.abps) \
                 / self.fps
             self.disk.level = min(self.disk.cap, self.disk.level + per)
+            self.refilled(per)
         if self.owe is None:
             return
         f = self.s_start + (c + self.audio_cyc + HOOK_CYC) / (1.0 - self.spk)
@@ -1851,7 +1914,7 @@ class Encoder:
                 self.stats["exact"] += 1
                 return [], vid.record([], g, audio)
         cyc_room = min(self.cpu.room(), self.ceil)
-        byte_room = self.disk.room() - self.dfloor
+        byte_room = max(0.0, self.disk.room() - self.disk_floor())
         costs = [span_cost(bs, run, g.layout) for a, bs, run in sp]
         order = None
         er = cyc_room - vid.cyc_table(g.layout)[0]
@@ -2143,7 +2206,7 @@ class EncoderX(Encoder):
         cand = [(m, a, bs, run) for m, sp in subs for a, bs, run in sp]
         costs = [span_cost(bs, run) for m, a, bs, run in cand]
         cyc_room = min(self.cpu.room(), self.ceil) - self.prev_c
-        byte_room = self.disk.room() - self.dfloor
+        byte_room = max(0.0, self.disk.room() - self.disk_floor())
         order = None
         er = cyc_room - vid.CYC_FRAME - 7 * vid.CYC_SUB
         eb = min(byte_room, REC_MAX - len(audio)) - REC_OVER - 7
@@ -2288,7 +2351,7 @@ class EncoderP(Encoder):
                 for a, bs, run in sp]
         costs = [span_cost(bs, run) for m, a, bs, run in cand]
         cyc_room = min(self.cpu.room(), self.ceil)
-        byte_room = self.disk.room() - self.dfloor
+        byte_room = max(0.0, self.disk.room() - self.disk_floor())
         order = None
         er = cyc_room - vid.CYC_FRAME - 15 * vid.CYC_SUB
         eb = min(byte_room, REC_MAX - len(audio)) - REC_OVER - 15
@@ -2817,6 +2880,8 @@ def _encode(a, keep, tick, readers):
         Encoder(g, prof, fps, audio_cyc, audio_bps, palette)
     enc.live = bool(a.live)
     enc.spk = spk_share
+    if enc.reserve and not a.resident:  # (a disk to keep ahead: 98.2.1.3;
+        enc.alead = audio_lead(afmt, rate, abytes)   # resident: none)
     # WHAT A CUT FRAME SPENDS ON (98.2.1.2)
     enc.look, enc.vis = a.lookahead, a.error == "visible"
     enc.thr = (a.worth if a.worth is not None else AIM_WORTH) \
@@ -3202,7 +3267,8 @@ def parser():
                          "which (text, text-mono); colour otherwise")
     ap.add_argument("--text-glyphs",
                     choices=("blocks", "shades", "ascii", "dots",
-                             "dots-plus"),
+                             "dots-plus", "blocks-only",
+                             "blocks-only-shade"),
                     default="blocks",
                     help="text: the characters the picture is made of - "
                          "printable ASCII and, with shades, the four "
@@ -3211,7 +3277,9 @@ def parser():
                          "are the clearest - or dots: the full and half "
                          "blocks for shapes and , . ' ` for the edges and "
                          "dithers a block is too coarse for, and dots-plus "
-                         "those with : ; \" * as well")
+                         "those with : ; \" * as well - or blocks-only, the "
+                         "full and half blocks alone, and blocks-only-shade "
+                         "those and the shades: no letters at all")
     ap.add_argument("--text-detail", type=float, default=0.5,
                     help="text: 0..1, how much a cell is judged dot for dot "
                          "(which way an edge runs) against through the eye "

@@ -99,6 +99,7 @@ TARGETS = [t + ({},) if len(t) == 4 else t for t in TARGETS]
 
 # the tabs, and which options go on which - an option named nowhere here
 # still appears, on Advanced
+TAB_ROWS = 10    # more options than this and a tab takes two columns
 TABS = ("Basic", "Picture", "Colour", "Sound", "Budget", "Loop and keys",
         "Advanced")
 TAB_OF = {
@@ -819,6 +820,16 @@ class App(object):
         ttk.Label(ess, textvariable=self.info, foreground="#555").grid(
             row=3, column=1, columnspan=2, sticky="w", padx=4)
         ess.columnconfigure(1, weight=1)
+        # --- make a disk, go, the progress and the log: packed from the
+        # BOTTOM and before the tabs, so it is the tabs that give way in a
+        # short window and not the log (which the default size cut off
+        # entirely - and the Encode button with it, off the row's end)
+        self.log = tk.Text(left, height=9, wrap="word")
+        self.log.pack(side="bottom", fill="x", pady=(6, 0))
+        pr = ttk.Frame(left)
+        pr.pack(side="bottom", fill="x", pady=(6, 0))
+        go = ttk.Frame(left)
+        go.pack(side="bottom", fill="x")
         # --- every option, on tabs
         nb = ttk.Notebook(left)
         nb.pack(fill="both", expand=True, pady=6)
@@ -827,11 +838,22 @@ class App(object):
             pages[t] = ttk.Frame(nb, padding=6)
             nb.add(pages[t], text=t)
         rows = {t: 0 for t in TABS}
+        # a tab of more than TAB_ROWS options is laid out in TWO columns,
+        # down the first and then down the second: the Picture tab's 21
+        # in one were taller than the window
+        per = {t: 0 for t in TABS}
         for f in fields():
-            p, r = pages[f["tab"]], rows[f["tab"]]
+            per[f["tab"]] += 1
+        half = {t: n if n <= TAB_ROWS else -(-n // 2)
+                for t, n in per.items()}
+        for f in fields():
+            p, i = pages[f["tab"]], rows[f["tab"]]
             rows[f["tab"]] += 1
+            r, c0 = i % half[f["tab"]], 4 * (i // half[f["tab"]])
+            if c0:
+                p.columnconfigure(c0 - 1, minsize=16)
             lab = ttk.Label(p, text=f["label"])
-            lab.grid(row=r, column=0, sticky="w", pady=1)
+            lab.grid(row=r, column=c0, sticky="w", pady=1)
             if f["kind"] == "bool":
                 v = tk.StringVar(value="")
                 w = ttk.Checkbutton(p, variable=v, onvalue="1", offvalue="")
@@ -842,7 +864,7 @@ class App(object):
             else:
                 v = tk.StringVar(value=f["default"])
                 w = ttk.Entry(p, textvariable=v, width=24)
-            w.grid(row=r, column=1, sticky="w", padx=4, pady=1)
+            w.grid(row=r, column=c0 + 1, sticky="w", padx=4, pady=1)
             if f["dest"] in IMPLYING:
                 w.bind("<<ComboboxSelected>>",
                        lambda e: self.apply_implied())
@@ -855,13 +877,20 @@ class App(object):
                 hb = ttk.Button(p, text="?", width=2,
                                 command=lambda f=f, v=v:
                                 self.choices_help(f, v))
-                hb.grid(row=r, column=2, sticky="w", pady=1)
+                hb.grid(row=r, column=c0 + 2, sticky="w", pady=1)
                 Tip(hb, "What each choice of %s is - click one to take it"
                     % f["label"])
             self.vars[f["dest"]] = v
-        # --- make a disk, and go
-        go = ttk.Frame(left)
-        go.pack(fill="x")
+        # --- make a disk, and go: the buttons packed FIRST, so a narrow
+        # row squeezes the disk list rather than cutting Encode off
+        self.stopbtn = ttk.Button(go, text="Cancel", command=self.stop,
+                                  state="disabled")
+        self.stopbtn.pack(side="right")
+        Tip(self.stopbtn, "Stop the encode. The .V88 is written only at the "
+                          "end, so nothing is written, and a file it would "
+                          "have replaced is left as it was.")
+        self.gobtn = ttk.Button(go, text="Encode", command=self.encode)
+        self.gobtn.pack(side="right", padx=4)
         cb = ttk.Checkbutton(go, text="...and make a disk of it:",
                              variable=self.mkdisk)
         cb.pack(side="left")
@@ -876,28 +905,16 @@ class App(object):
                "but does not boot: " + HD_NOBOOT_NOTE)
         Tip(cb, tip)
         dc = ttk.Combobox(go, textvariable=self.disksize, state="readonly",
-                          values=DISK_LABELS, width=44)
-        dc.pack(side="left", padx=4)
+                          values=DISK_LABELS, width=30)
+        dc.pack(side="left", padx=4, fill="x", expand=True)
         dc.bind("<<ComboboxSelected>>",
                 lambda e: setattr(self, "diskpicked", True))
         Tip(dc, tip)
-        self.stopbtn = ttk.Button(go, text="Cancel", command=self.stop,
-                                  state="disabled")
-        self.stopbtn.pack(side="right")
-        Tip(self.stopbtn, "Stop the encode. The .V88 is written only at the "
-                          "end, so nothing is written, and a file it would "
-                          "have replaced is left as it was.")
-        self.gobtn = ttk.Button(go, text="Encode", command=self.encode)
-        self.gobtn.pack(side="right", padx=4)
-        pr = ttk.Frame(left)
-        pr.pack(fill="x", pady=(6, 0))
         self.bar = ttk.Progressbar(pr, maximum=1000, mode="determinate")
         self.bar.pack(fill="x")
         self.status = tk.StringVar(value="")
         ttk.Label(pr, textvariable=self.status, foreground="#555").pack(
             anchor="w")
-        self.log = tk.Text(left, height=9, wrap="word")
-        self.log.pack(fill="x", pady=(6, 0))
         # --- the preview
         hd = ttk.Frame(right)
         hd.pack(fill="x")

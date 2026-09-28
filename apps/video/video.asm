@@ -73,6 +73,8 @@ VP_CHUNK    equ 32768               ; a ring slot, and a READ_SEQ call
 VP_RL       equ 16384               ; the audio ring (SPEC.md 98.3.1)...
 VP_RLCODE   equ 2                   ; ...4096 << 2
 VP_BLOCK    equ 2048                ; the card's block: one interrupt each
+VP_BLKBPS   equ 11000               ; ...halved while the sound is slower
+                                    ; than this many bytes a second (vp_sblk)
 VP_SPK      equ 2                   ; [vp_snd]: the SPEAKER plays it (98.3.15)
 VP_SPKMAX   equ 8000                ; the fastest PCM an 8088 plays through
                                     ; the speaker (SPEC.md 34.11.4)
@@ -2243,7 +2245,23 @@ vp_cmono:
 ; from the attribute's background luma to its foreground's beats the 4 x 4
 ; Bayer cell. The glyphs are the MACHINE's (OSAPI_FONT_GLYPHS) for the
 ; codes it has, and a table for the shades and blocks; anything else is
-; half lit. tools/os88vid.py's text_mono is the reference. Preserves all
+; half lit. tools/os88vid.py's text_mono is the reference. Preserves all.
+;
+; THE WORK IS PER CELL HALF, NOT PER POSTER ROW (98.4.6.1): a cell's four
+; poster rows share two halves, and a half's two quadrant lumas are the
+; same for both of its rows - only the thresholds differ. So each half is
+; mixed ONCE into a row of lumas (vp_thalf) and each poster row is only the
+; compare (vp_temit); the quadrant counts come off a table of every code,
+; built once (vp_tquad, 512 calls). It was 2,700 cycles a cell a poster
+; row, 4.6 s for an 80 x 25 canvas on a 5150, all of it in the three
+; routines this replaced. The tables are a 2 KB scratch claim, freed at the
+; end; refused, the poster is black
+VP_TQ0      equ 0                   ; the scratch: half 0's quadrants, a word
+VP_TQ1      equ 512                 ; a code (L, R); half 1's;
+VP_TLUM     equ 1024                ; the sixteen lumas;
+VP_TLB      equ 1040                ; a half-row's lumas, L and R a cell;
+VP_TKEY     equ 1024 + 16 + 160     ; and the cell whose lumas were last
+VP_TSCRKB   equ 2
 vp_tmono:
     push ax
     push bx
@@ -2251,11 +2269,56 @@ vp_tmono:
     push dx
     push si
     push di
+    push bp
     push es
-    mov byte [vp_tqok], 0
-    push es
-    call OSAPI_FONT_GLYPHS          ; DX:SI, AL..AH, CX bytes a glyph
+    mov ax, VP_TSCRKB
+    call OSAPI_MEM_CLAIM
+    jnc .have
+    mov ax, [vp_pwb]                ; NO ROOM: the poster black
+    mul word [vp_ph]
+    mov cx, ax
+    mov es, [vp_pseg]
+    xor di, di
+    xor al, al
+    cld
+    rep stosb
+    jmp short .out
+.have:
+    mov [vp_tscr], dx
+    call vp_tqbuild
+    xor dx, dx                      ; DX = the poster's row
+    xor di, di                      ; DI = its first byte, in [vp_pseg]
+.row:
+    cmp dx, [vp_ph]
+    jae .fin
+    test dl, 1                      ; a half's first row: its lumas
+    jnz .emit
+    call vp_thalf
+.emit:
+    call vp_temit
+    inc dx
+    jmp short .row
+.fin:
+    mov dx, [vp_tscr]
+    call OSAPI_MEM_FREE
+.out:
     pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vp_tqbuild - the scratch's tables: every code's two halves' quadrant
+; counts (vp_tquad, the machine's glyph or the blocks' table), and the
+; sixteen lumas. Clobbers AX, BX, CX, SI, DI, ES
+vp_tqbuild:
+    push dx
+    mov byte [vp_tqok], 0
+    call OSAPI_FONT_GLYPHS          ; DX:SI, AL..AH, CX bytes a glyph
     cmp cx, 8
     jne .nf
     mov [vp_tqg], dx
@@ -2263,86 +2326,193 @@ vp_tmono:
     mov [vp_tqf], ax                ; (the first, and the last)
     mov byte [vp_tqok], 1
 .nf:
-    mov es, [vp_kshd]
-    xor di, di                      ; DI = the output byte
-    xor dx, dx                      ; DX = the poster's row
-.row:
-    cmp dx, [vp_ph]
-    jae .done
-    mov ax, dx                      ; four poster rows a cell row
+    mov es, [vp_tscr]
+    cld
+    mov si, vp_c16lum
+    mov di, VP_TLUM
+    mov cx, 8
+    rep movsw
+    xor di, di                      ; every code half lit, as vp_tquad says
+    mov ax, 0x0808                  ; of a code it knows nothing of...
+    mov cx, 512
+    rep stosw
+    mov si, vp_tquadt               ; ...the blocks' table over that...
+    mov cx, VP_TQN
+.t:
+    mov bl, [si]
+    xor bh, bh
+    shl bx, 1
+    mov ax, [si+1]
+    mov [es:VP_TQ0+bx], ax
+    mov ax, [si+3]
+    mov [es:VP_TQ1+bx], ax
+    add si, 5
+    loop .t
+    cmp byte [vp_tqok], 0           ; ...and the machine's glyphs over both,
+    je .d                           ; the order vp_tquad asks in
+    mov bl, [vp_tqf]
+.c:
+    xor bh, bh
+    mov di, bx
+    shl di, 1
+    xor al, al
+    call vp_tquad
+    mov [es:VP_TQ0+di], cx
+    mov al, 1
+    call vp_tquad
+    mov [es:VP_TQ1+di], cx
+    cmp bl, [vp_tql]
+    je .d
+    inc bl
+    jmp short .c
+.d:
+    pop dx
+    ret
+
+; vp_thalf - DX = a poster row, the first of a cell half's two: that half's
+; two quadrant lumas for every cell of the row, into the scratch's VP_TLB -
+; (bg x (16 - n) + fg x n) >> 4, as bg + ((fg - bg) x n >> 4) or fg + ((bg
+; - fg) x (16 - n) >> 4), whichever difference is not negative, which is
+; the same number exactly. Preserves DX, DI
+vp_thalf:
+    push dx
+    push di
+    mov ax, dx
     shr ax, 1
     shr ax, 1
     mov bl, LAY_TEXT
     call vp_rowaddr
-    mov si, ax                      ; ES:SI = the cell row's first cell
-    mov bx, dx                      ; the row's four thresholds
+    mov si, ax                      ; SI = the cell row, in the canvas
+    mov bp, VP_TQ0
+    test dl, 2
+    jz .h0
+    mov bp, VP_TQ1
+.h0:
+    mov cx, [vp_pwb]
+    shl cx, 1                       ; CX = the cells
+    mov es, [vp_tscr]
+    mov di, VP_TLB
+    push ds
+    mov ds, [vp_kshd]
+    cld
+    mov ax, [si]                    ; (a key the first cell is not)
+    not ax
+    mov [es:VP_TKEY], ax
+    jmp short .c
+.nx:
+    loop .c                         ; (the body is past a short loop's reach)
+    jmp .dd
+.c:
+    lodsw                           ; AL = the character, AH its attribute
+    cmp ax, [es:VP_TKEY]            ; THE CELL BEFORE AGAIN - a flat area's
+    jne .new                        ; run of spaces or blocks: its lumas
+    mov ax, [es:di-2]
+    stosw
+    jmp short .nx
+.new:
+    mov [es:VP_TKEY], ax
+    mov bl, ah
+    and bx, 15
+    mov dl, [es:VP_TLUM+bx]         ; DL = the foreground's luma
+    mov bl, ah
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    mov dh, [es:VP_TLUM+bx]         ; DH = the background's
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    add bx, bp
+    mov bx, [es:bx]                 ; BL, BH = the quadrants' lit dots
+    cmp dl, dh
+    jb .dn
+    sub dl, dh                      ; fg >= bg: bg + (fg - bg) x n >> 4
+    mov al, bl
+    mul dl
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    add al, dh
+    stosb
+    mov al, bh
+    mul dl
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    add al, dh
+    stosb
+    jmp .nx
+.dn:
+    sub dh, dl                      ; fg < bg: fg + (bg - fg) x (16 - n) >> 4
+    mov al, 16
+    sub al, bl
+    mul dh
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    add al, dl
+    stosb
+    mov al, 16
+    sub al, bh
+    mul dh
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    add al, dl
+    stosb
+    jmp .nx
+.dd:
+    pop ds
+    pop di
+    pop dx
+    ret
+
+; vp_temit - DX = a poster row: its bytes from VP_TLB's lumas against the
+; row's four Bayer thresholds, two cells a byte, into [vp_pseg] at DI - and
+; DI past them. Preserves DX
+vp_temit:
+    push dx
+    mov bx, dx
     and bx, 3
     shl bx, 1
     shl bx, 1
-    mov ax, [vp_bayer4+bx]
-    mov [vp_rthr], ax
-    mov ax, [vp_bayer4+bx+2]
-    mov [vp_rthr+2], ax
+    mov dx, [vp_bayer4+bx+2]        ; DL, DH = the right quadrant's pixels'
+    mov bx, [vp_bayer4+bx]          ; BL, BH = the left's
     mov cx, [vp_pwb]
-.ob:
-    push cx
-    mov cx, 2                       ; two cells a byte
-.cell:
-    push cx
-    mov bl, [es:si+1]               ; the attribute's two lumas
-    and bx, 15
-    mov al, [vp_c16lum+bx]
-    mov [vp_tfg], al
-    mov bl, [es:si+1]
-    mov cl, 4
-    shr bl, cl
-    xor bh, bh
-    mov al, [vp_c16lum+bx]
-    mov [vp_tbg], al
-    mov bl, [es:si]                 ; the character's quadrants, on this
-    add si, 2                       ; row's half of the cell
-    mov al, dl
-    shr al, 1
-    and al, 1
-    call vp_tquad                   ; CL, CH = left, right
-    mov al, cl
-    call vp_tmix
-    mov [vp_tv], al
-    mov al, ch
-    call vp_tmix
-    mov [vp_tv+1], al
-    xor bx, bx
-.px:
-    mov al, [vp_tv]                 ; pixels 0 and 1 the left quadrant, 2
-    cmp bl, 2                       ; and 3 the right
-    jb .pl
-    mov al, [vp_tv+1]
-.pl:
-    cmp [vp_rthr+bx], al            ; CF = threshold < luma: lit
-    rcl byte [vp_tob], 1
-    inc bx
-    cmp bx, 4
-    jb .px
-    pop cx
-    loop .cell
-    mov al, [vp_tob]
+    mov es, [vp_pseg]
     push ds
-    mov ds, [vp_pseg]
-    mov [di], al
+    mov ds, [vp_tscr]
+    mov si, VP_TLB
+    cld
+.b:
+    lodsw                           ; the first cell: AL its left luma, AH
+    cmp bl, al                      ; its right; CF = threshold < luma: lit
+    rcl bp, 1
+    cmp bh, al
+    rcl bp, 1
+    cmp dl, ah
+    rcl bp, 1
+    cmp dh, ah
+    rcl bp, 1
+    lodsw                           ; ...and the second
+    cmp bl, al
+    rcl bp, 1
+    cmp bh, al
+    rcl bp, 1
+    cmp dl, ah
+    rcl bp, 1
+    cmp dh, ah
+    rcl bp, 1
+    xchg ax, bp
+    stosb
+    loop .b
     pop ds
-    inc di
-    pop cx
-    loop .ob
-    inc dx
-    jmp .row
-.done:
-    pop es
-    pop di
-    pop si
     pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; vp_tquad - BL = a character, AL = 0 its top half, 1 its bottom -> CL, CH
@@ -2413,28 +2583,6 @@ vp_tquad:
     pop dx
     pop bx
     pop ax
-    ret
-
-; vp_tmix - AL = a quadrant's lit dots, 0..16 -> AL = its luma between
-; [vp_tbg] and [vp_tfg]: (bg x (16 - n) + fg x n) >> 4. Preserves all but AX
-vp_tmix:
-    push bx
-    push dx
-    mov dl, al
-    mov bl, 16
-    sub bl, al
-    mov al, [vp_tbg]
-    mul bl
-    mov bx, ax
-    mov al, [vp_tfg]
-    mul dl
-    add ax, bx
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    pop dx
-    pop bx
     ret
 
 ; vp_cgaset - CGA's colours, once the bracket has set its mode (98.3.12).
@@ -6659,10 +6807,15 @@ vp_main:
     cmp ax, [vp_frames]             ; - unless it repeats (98.3.9)
     jae .drain
 .rd:
+    call vp_skeep                   ; EVERY pass, not only an idle one: after
+                                    ; an underrun the reader is catching up,
+                                    ; so a chunk arrives each pass and the
+                                    ; card sat silent until the whole ring
+                                    ; was full again rather than until one
+                                    ; block was queued (98.3.1)
     call vp_fill
     jnc .loop                       ; a chunk arrived: poll, and try again
-    call vp_skeep
-    call vp_wthumb                  ; (in the window, the thumb moves)
+    call vp_wthumb                 ; (in the window, the thumb moves)
     mov al, FSXW_FRAME              ; nothing to read yet: give the period
     call OSAPI_FSX_WAIT             ; to the hook
     jmp short .loop
@@ -7742,7 +7895,8 @@ vp_sopen:
     mov ax, [vp_afr0]
     mov [vp_afr], ax
     mov byte [vp_afn], 0x80         ; PCM8's silence
-    mov ax, VP_BLOCK                ; frames the clock may run on past the
+    call vp_sblk                    ; the card's block, [vp_blk]
+    mov ax, [vp_blk]                ; frames the clock may run on past the
     xor dx, dx                      ; card's last word: one block's worth,
     div word [vp_abytes]            ; and two more
     add ax, 2
@@ -7752,6 +7906,7 @@ vp_sopen:
     mov [es:VP_RL+SND_EXT_TOTAL], ax
     mov [es:VP_RL+SND_EXT_CONS], ax
     mov bl, SND_OPENF_RING + SND_OPENF_EXT + (VP_RLCODE << SND_OPENF_RLSH)
+    or bl, [vp_bflg]                ; ...and its block (34.5.3)
     cmp byte [vp_audio], 2
     jne .pf
     or bl, SND_OPENF_ADPCM4 + SND_OPENF_FORCE   ; ADPCM4 (FORCE: on a DSP
@@ -8089,6 +8244,45 @@ vp_acur:
     pop cx
     ret
 
+; vp_sblk - THE CARD'S BLOCK (SPEC.md 98.3.1, 34.5.3): 2,048 bytes, or on a
+; driver that takes SND_OPENF_BLKSH the largest that is still at most a
+; block of 11 kHz PCM8 (~0.19 s) - so 5.5 kHz ADPCM4 plays in 512-byte
+; blocks and the reader keeps 6 frames of stream ahead of the picture, not
+; 20. [vp_blk] the bytes, [vp_bflg] the open flag's bits. Clobbers AX, CX
+vp_sblk:
+    mov word [vp_blk], VP_BLOCK
+    mov byte [vp_bflg], 0
+    cmp byte [vp_snd], 1            ; the card's only
+    jne .r
+    push bx
+    push dx
+    call OSAPI_SND_CAPS
+    pop dx
+    pop bx
+    test al, SND_CAP_EXTBLK
+    jz .r                           ; an older driver: 2,048, and no bits
+    mov ax, [vp_rate]               ; AX = the bytes a second
+    cmp byte [vp_audio], 2
+    jne .b
+    shr ax, 1                       ; (ADPCM4: two samples a byte)
+.b:
+    xor cx, cx
+.l:
+    cmp ax, VP_BLKBPS
+    jae .d
+    cmp cl, 3
+    je .d
+    inc cx
+    shl ax, 1
+    jmp short .l
+.d:
+    shr word [vp_blk], cl
+    ror cl, 1                       ; the code into bits 6-7
+    ror cl, 1
+    mov [vp_bflg], cl
+.r:
+    ret
+
 vp_skeep:
     cmp byte [vp_snd], 1            ; the card's alone: the speaker takes more
     jne .out                        ; the moment it is queued, and never ends
@@ -8108,7 +8302,7 @@ vp_skeep:
     jne .out
     mov ax, [vp_atot]
     sub ax, dx
-    cmp ax, VP_BLOCK
+    cmp ax, [vp_blk]
     jb .out
     mov al, 1
     mov ah, [vp_hand]
@@ -9529,8 +9723,12 @@ vp_afill:
     jne .pw                         ; the last byte, once
     mov ax, [vp_atot]
     mov [vp_afinal], ax
-    add ax, 2 * VP_BLOCK - 1
-    and ax, -VP_BLOCK
+    mov cx, [vp_blk]                ; (the card's block: vp_sblk)
+    add ax, cx
+    add ax, cx
+    dec ax
+    neg cx
+    and ax, cx
     mov [vp_apend], ax
 .pw:
     mov cx, [vp_apend]
@@ -11440,10 +11638,7 @@ vp_tqo:       dw 0                  ; offset,
 vp_tqf:       db 0                  ; first code,
 vp_tql:       db 0                  ; last,
 vp_tqok:      db 0                  ; and whether there are any
-vp_tfg:       db 0                  ; a cell's two lumas,
-vp_tbg:       db 0
-vp_tv:        db 0, 0               ; its half's two quadrants' lumas,
-vp_tob:       db 0                  ; and the poster byte being built
+vp_tscr:      dw 0                  ; vp_tmono's scratch: its tables
 vp_c4sets:    db 2, 4, 6, 3, 5, 7, 3, 4, 7  ; CGA4's three sets' colours 1-3
 vp_c16crt:    db 4, 127, 5, 6, 6, 100, 7, 112, 9, 1, 10, 0x20  ; SPEC.md 88.15.2
 vp_tlay:      db 0                  ; the screen's layout (= [vp_layout] native)
@@ -11501,6 +11696,8 @@ vp_syncp:     dw 0                  ; [vp_pers] then
 vp_pers:      dw 0                  ; periods, free-running
 vp_a0:        dw 0                  ; stream bytes before frame 0's
 vp_pause:     dw 0                  ; times the card ran dry
+vp_blk:       dw VP_BLOCK           ; the card's block (vp_sblk)
+vp_bflg:      db 0                  ; ...as verb 0's flag bits
 vp_skmax:     dw 0                  ; most frames the picture trailed
 vp_gap:       dw 0                  ; most periods between two hook calls
 vp_aend:      db 0                  ; 1 the end's silence queued, 2 stopped

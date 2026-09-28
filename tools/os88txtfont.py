@@ -53,6 +53,11 @@ GLYPH_SETS = {
     # ...and the same with four more: a pair of dots high, a small star,
     # and the two stacked pairs - more marks to shade a middle tone with
     "dots-plus": (0x20, 0xDB) + HALVES + DOTS + MOREDOTS,
+    # NO LETTERS AT ALL: the solid block and the four half blocks alone, a
+    # picture of flat colour at two dots a cell...
+    "blocks-only": (0x20, 0xDB) + HALVES,
+    # ...and the same with the three shades for the tones between
+    "blocks-only-shade": (0x20,) + SHADES + HALVES,
 }
 GLYPH_SET_DEFAULT = "blocks"
 

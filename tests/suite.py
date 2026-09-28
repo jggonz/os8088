@@ -9027,6 +9027,20 @@ SOAK = [
         wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
                "build/mbr.bin", "build/hdd.drv", "build/hiber.drv",
                "build/ctrl.drv", "build/sound.drv")),
+    Row("vidsndad55", "soak", py("tests/vidsound.py", "--secs", "20",
+                                 "--audio", "adpcm4", "--rate", "5512"),
+        60.0,
+        "SPEC.md 98.3.1/34.5.3: vidsound's play STREAMED with 5,512 Hz "
+        "ADPCM4, whose 2,048-byte block was 0.74 s of sound and made the "
+        "reader keep 20 frames ahead of the picture - the owner's 5150 "
+        "froze in a burst for it. The player asks SOUND.DRV for a 512-byte "
+        "block (SND_OPENF_BLKSH) and the row requires it, with the capture "
+        "whole and no pause; a driver that does not advertise "
+        "SND_CAP_EXTBLK leaves it at 2,048 and FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/hdd.drv", "build/hiber.drv",
+               "build/ctrl.drv", "build/sound.drv")),
     Row("vidsndmute", "soak", py("tests/vidsound.py", "--secs", "10",
                                  "--button"), 45.0,
         "SPEC.md 98.3.17: THE MUTE BUTTON - clicked on the desktop it "

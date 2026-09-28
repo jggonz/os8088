@@ -1296,6 +1296,14 @@ sbl_v_open:
     mov byte [sbl_adpcm], 1     ; the user is the one who can hear which
                                 ; (SPEC.md 34.5.3.1)
 .noad:
+    mov al, [sbl_oflags]        ; AN EXTERNAL RING'S BLOCK (SPEC.md 34.5.3):
+    test al, SND_OPENF_EXT      ; the half shifted right by the code in AH
+    jz .blk                     ; bits 6-7, so a slow stream's block is not
+    mov cl, SND_OPENF_BLKSH     ; seconds long. After the watchdog and the
+    shr al, cl                  ; ADPCM4 test, which read the full half
+    mov cl, al
+    shr word [sbl_half], cl
+.blk:
     mov ax, [sbl_poolseg]       ; where the ring is: the pool...
     test byte [sbl_oflags], SND_OPENF_EXT
     jz .rseg
