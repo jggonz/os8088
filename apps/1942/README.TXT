@@ -1,10 +1,12 @@
 1942 - a standalone native shooter for os8088
 
-Open 1942.O88, press Enter for fullscreen, then 1/2 selects players and Enter takes off.
+Open 1942.O88. Select 1/2 players (or Up/Down), then Enter takes off.
+Click either player option to start. H shows controls. Space/F also starts.
 Arrows: move   Space/Z: fire   X: invulnerable roll (3 per stage)
 P: pause      M: sound        C: cycle CGA palette
 Escape/F: desktop            N: new game
 Enter in the launcher resumes your game and route position.
+N or clicking New Game returns to player selection.
 Enter also advances the mission results screen.
 
 VGA: 320x240 Mode X, centered 256x240 playfield.
@@ -44,6 +46,13 @@ and its .GFX, .V42 and .C42 companions together. The cartridge is only a
 build input; the XT runs the compiled native package and graphics files.
 
 GRAPHICS
+The desktop splash uses a native-resolution green and white vector logo on
+VGA, with contour line art on Hercules and monochrome CGA. Hercules can
+display the splash and help; gameplay requires VGA or color CGA hardware.
+The embedded title is independent of cartridge assets and reuses the canvas
+claim outside fullscreen. The title reveals in six-row timer steps, leaving
+time for input between bands on a 4.77MHz XT. Selection redraws only the
+aircraft pointer; help redraws the menu region. Completed art stays cached.
 A loading message appears before graphics I/O. Terrain uses a circular
 cache: only incoming rows are decoded, with no full-buffer memory shift.
 VGA scrolls and flips two hidden pages with hardware start addresses and
@@ -63,6 +72,8 @@ and timing, rather than an emulator or cycle-faithful NES conversion.
 
 TEST
   make 1942test
-Checks VGA/CGA pixels, loading, scrolling, aircraft, formation rewards, POWs,
-results, two-player turns, combat, pause/resume, sound controls, file validation and desktop restoration on 4.77MHz MartyPC. Guest-cycle
-performance includes rendering and presentation; disk loading is separate.
+Checks splash pixels and input on VGA/CGA/Hercules, plus VGA/CGA gameplay
+pixels, loading, scrolling, aircraft, formation rewards, POWs, results,
+two-player turns, combat, pause/resume, sound controls, file validation and
+desktop restoration on 4.77MHz MartyPC. Guest-cycle performance includes
+rendering and presentation; disk loading is separate.

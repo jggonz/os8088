@@ -13675,7 +13675,7 @@ distclean: clean clean-marty clean-cc clean-nasm3
 N1942ART = apps/1942/art/sprites.json apps/1942/art/sea.idx apps/1942/art/reef.idx apps/1942/art/port.idx apps/1942/palette.json
 N1942BANKS = $(filter-out $(BUILD)/1942.o88,$(N1942LIVE))
 N1942DISK = $(BUILD)/1942.o88 $(N1942BANKS)
-.PHONY: 1942 1942disk 1942test n1942-config
+.PHONY: 1942 1942disk 1942test 1942fronttest n1942-config
 1942: $(N1942DISK)
 # Track source selection as well as its mtime: switching back to original art
 # must invalidate a previous cartridge build in the same output directory.
@@ -13687,7 +13687,9 @@ $(BUILD)/.1942assets: $(N1942ART) tools/1942assets.py tools/1942nes.py tools/194
 	@touch $@
 $(BUILD)/1942art.inc $(N1942BANKS): $(BUILD)/.1942assets
 	@test -f $@ || python3 tools/1942assets.py -o $(BUILD) $(if $(N1942_ROM),--rom "$(N1942_ROM)")
-$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/game.inc apps/1942/campaign.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc
+$(BUILD)/1942front.inc: tools/1942front.py tools/os88lz.py apps/1942/art/splash.json apps/1942/art/sprites.json | $(BUILD)
+	python3 tools/1942front.py -o $(BUILD)
+$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/front.inc $(BUILD)/1942front.inc apps/1942/game.inc apps/1942/campaign.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/1942/ -I $(BUILD)/ -l $(BUILD)/1942.lst -o $@ $<
 $(BUILD)/1942.o88: $(BUILD)/1942.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@
@@ -13697,7 +13699,10 @@ $(BUILD)/1942.img: $(N1942DISK) apps/1942/README.TXT tools/os88disk.py
 $(BUILD)/1942-360.img: $(N1942DISK) apps/1942/README.TXT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(N1942DISK) apps/1942/README.TXT
 1942test: 1942disk $(BUILD)/os8088-360.img
+	python3 tests/n1942front.py
 	python3 tests/n1942.py
+1942fronttest: 1942disk $(BUILD)/os8088-360.img
+	python3 tests/n1942front.py
 all: $(N1942DISK)
 
 # Native DrMarco. NES cell tiles remain local; original surround is committed.

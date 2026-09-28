@@ -46,6 +46,16 @@ n_entry:
     jc .out
     mov [n_win], bx
     OS88_REGION_MOVABLE
+    mov si,n_pref
+    call OSAPI_WM_PREFER
+    mov al,1
+    call OSAPI_WM_SNAP
+    mov ax,n_fronttimer
+    call OSAPI_WM_ONTIMER
+    mov byte [n_frontstatic],0
+    jnc .timer
+    inc byte [n_frontstatic]
+.timer:
     mov si, n_about
     call OSAPI_ABOUT_SET
     call OSAPI_GET_TICKS
@@ -55,6 +65,7 @@ n_entry:
     mov word [n_players],1
     call n_new
     mov byte [n_state], 0
+    call n_frontprepare
     mov bx, [n_win]
     clc
 .out:
@@ -62,70 +73,23 @@ n_entry:
 
 n_paint:
     SAVE
-    call OSAPI_WM_CONTENT
-    add ax, 10
-    add dx, 8
-    mov cx, ax
-    mov ax, (CWHITE << 8) | CBLACK
-    mov si, n_l1
-    call OSAPI_FONT_RUN
-    add dx, 14
-    mov si, n_l2
-    call OSAPI_FONT_RUN
-    add dx, 14
-    mov si, n_l3
-    call OSAPI_FONT_RUN
-    add dx, 14
-    mov si, n_l4
-    call OSAPI_FONT_RUN
-    add dx, 14
-    mov si, n_l5
-    call OSAPI_FONT_RUN
-    add dx, 14
-    mov si, n_l6
-    cmp byte [n_error], 0
-    je .line
-    mov si, n_errmsg
-    cmp byte [n_error], 2
-    jne .line
-    mov si, n_asseterr
-.line:
-    call OSAPI_FONT_RUN
+    call n_frontpaint
+    cmp byte [n_abon],0
+    je .out
+    mov bx,[n_win]
+    mov si,n_ablines
+    call os88ui_about_d
+.out:
     RESTORE
     ret
 n_about:
     SAVE
+    mov byte [n_abon],1
     mov si, n_ablines
     call os88ui_about
     RESTORE
     ret
-n_click:
-    ret
-n_key:
-    SAVE
-    cmp al, 13
-    je .run
-    or al, 20h
-    cmp al, 'f'
-    jne .out
-.run:
-    mov bx, [n_win]
-    call OSAPI_FSX_CAPS
-    test ax, (1 << FSXM_MODEX) | (1 << FSXM_CGA320)
-    jz .error
-    mov byte [n_error], 0
-    mov ax, n_exclusive
-    mov bx, [n_win]
-    mov cx, FSXF_FASTTICK
-    call OSAPI_FSX_RUN
-    jnc .out
-.error:
-    mov byte [n_error], 1
-    mov bx, [n_win]
-    call n_paint
-.out:
-    RESTORE
-    ret
+%include "front.inc"
 
 n_exclusive:
     mov byte [n_infs], 1
@@ -135,6 +99,9 @@ n_exclusive:
     call OSAPI_KEY_DOWN
     jc .waitrelease
     mov al, 21h                     ; F
+    call OSAPI_KEY_DOWN
+    jc .waitrelease
+    mov al,KSC_SPACE
     call OSAPI_KEY_DOWN
     jnc .mode
 .waitrelease:
@@ -280,14 +247,9 @@ n_tone:
     RESTORE
     ret
 
-n_tpl: dw 100,70,390,118,n_title,n_paint,n_key,n_click
+n_tpl: dw 52,32,452,284,n_title,n_paint,n_key,n_click
+OS88_PREFER n_pref,452,284,452,284,452,154
 n_title: db '1942',0
-n_l1: db '1942 - native vertical shooter',0
-n_l2: db 'Enter / F: fullscreen or resume',0
-n_l3: db 'Arrows move. Space / Z fires. X rolls.',0
-n_l4: db 'P pause. M sound. C CGA palette. N new.',0
-n_l5: db 'Escape / F returns to this window.',0
-n_l6: db 'VGA 320x240 / color CGA 320x200',0
 n_errmsg: db 'Fullscreen requires a VGA or CGA display.',0
 n_asseterr: db 'Missing or damaged 1942 graphics files.',0
 n_ablines: dw n_title,n_credit,n_credit2,n_credit3,0
@@ -317,6 +279,16 @@ n_msgresume: db 'P TO RESUME',0
     %1 equ os88_image_end + NBSS
     %assign NBSS NBSS + %2
 %endmacro
+VAR n_abon,1
+VAR n_frontstatic,1
+VAR n_frontready,2
+VAR n_frontband,2
+VAR n_frontx,2
+VAR n_fronty,2
+VAR n_frontscale,1
+VAR n_frontkind,1
+VAR n_frontwant,1
+VAR n_fronthelp,1
 VAR n_canvas,2
 VAR n_win,2
 VAR n_seed,2

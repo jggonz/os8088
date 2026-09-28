@@ -13718,3 +13718,43 @@ before, so the new money is the *second*, landing on the next tick, which paid
 nothing. A DOT DELIRIUM frame on this adapter is **44.13 ms of a 54.93 ms
 tick**, so 418 µs is **3.9% of the slack**, on a quarter of the ticks. The
 answer to "do we have the headroom" is yes, with the arithmetic attached.
+
+### Set 147 — 1942 desktop splash on the XT (SPEC.md §101.5)
+
+Measured 2026-09-28 by `tests/n1942front.py` on MartyPC's cycle-accurate
+4.77 MHz 8088 models: `os8088_xt_vga`, `os8088_5150_cga_gla` and
+`os8088_5150_herc_gla`, using the full kernel and cartridge game package.
+The test brackets guest calls at the locked keyboard callback and checks
+all reveal steps. Times include the native decoder, clipping and blit.
+
+| operation (ms) | VGA | mono CGA | Hercules |
+| --- | ---: | ---: | ---: |
+| initial black surround and controls | 77.32 | 61.13 | 101.95 |
+| slowest six-row decode/reveal step | 45.87 | 12.39 | 12.19 |
+| complete cached repaint | 239.03 | 91.59 | 162.08 |
+| player selection (pointer only) | 6.52 | 5.98 | 9.33 |
+| slowest help/menu change | 59.40 | 57.85 | 69.13 |
+
+The initial whole-image decoder took 470.93 ms on VGA before drawing. The
+shipped implementation uses the existing window timer to decode and reveal
+one six-row band, then returns. Every step stays below a 55 ms BIOS tick;
+there is no background worker. The completed cache needs no further decode
+until fullscreen reuses it or the window changes adapters. Full window
+repaints are measured separately from selection and help; ordinary selection
+changes only the two aircraft-pointer cells.
+
+Artwork is generated at build time from original vector contours. VGA uses
+native planes through `GFX_BLITP`'s ownership-region walk, with packed fallback
+pixels in each cached band. Monochrome adapters use `GFX_BLIT1` contour bands,
+without per-pixel runtime drawing or dithering. The existing 64 KB canvas
+holds the cache (62,208 bytes for VGA, 8,064 for Hercules, 4,032 for CGA).
+The splash adds no memory claim. Kernels lacking window timers prepare the
+same static cache during entry; the progressive timing figures above apply
+to the full kernel.
+
+The regression compares every logo pixel to its build-time raster on all
+three adapters and checks input, help, About/reveal interaction, dragging,
+mouse launch, resume, new game and desktop restoration. It gates reveal
+steps below 55 ms, selection below 20 ms, menu changes below 100 ms and
+cached repaint below 250 ms. These are guest-cycle measurements, not a
+claim of a hardware field run; package disk loading is outside the brackets.

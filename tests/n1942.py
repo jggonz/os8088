@@ -116,7 +116,7 @@ def assets():
 def symbols():
     source = (ROOT/'apps/1942/1942.asm').read_text()
     names = re.findall(r'^VAR (n_\w+),', source, re.M)
-    code = ['n_vfile','n_cfile','n_scenesums','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw','n_loading','n_readbank','n_spawn','n_stageinit','n_scripts','n_awardpow','n_results','n_kill','n_addscore','n_depart','n_flightphaseupdate','n_campaignnew','n_turn','n_audio','n_soundtab','n_event','n_highmsg','n_freeslot','n_hitplayer','n_move_bullets','n_stageevents','n_move_enemies','n_move_shots']
+    code = ['n_about','n_frontprepare','n_paint','n_key','n_click','n_frontpaint','n_fronttimer','n_frontload','n_vfile','n_cfile','n_scenesums','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw','n_loading','n_readbank','n_spawn','n_stageinit','n_scripts','n_awardpow','n_results','n_kill','n_addscore','n_depart','n_flightphaseupdate','n_campaignnew','n_turn','n_audio','n_soundtab','n_event','n_highmsg','n_freeslot','n_hitplayer','n_move_bullets','n_stageevents','n_move_enemies','n_move_shots']
     source = source.replace('OS88_IMAGE_END','')
     source += '\n'+'\n'.join('dw '+n+'-os88_image_end' for n in names)
     source += '\n'+'\n'.join('dw '+n for n in code)+'\nOS88_IMAGE_END\n'
@@ -475,8 +475,8 @@ def run(tag,off,code):
         g.frame()
         assert g.get('infs',1)==1 and g.get('error',1)==0
         assert g.data('fsi',16)[14]==(8 if tag=='vga' else 2)
-        check_video(g,tag);capture(g,tag,'title')
-        g.key('Enter');assert g.get('state',1)==1
+        check_video(g,tag);capture(g,tag,'takeoff')
+        assert g.get('state',1)==1
         assert g.get('flightphase')==1
         g.frame(34);assert g.get('flightphase')==0
         m.key('ArrowLeft',up=False);g.frame();m.key('Space',up=False);g.frame(8)

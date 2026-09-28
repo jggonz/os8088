@@ -155296,3 +155296,30 @@ through SND_TONE. NES multichannel timbre cannot be reproduced by one speaker.
 Both palette sets at $A770/$A790 are available for the cartridge's final area.
 Original-art builds implement the same game rules using original fallback
 assets and native schedules. No extracted cartridge content is committed.
+
+### 101.5 Desktop title splash
+
+The launcher paints a black title splash with an original vector recreation
+of the outlined 1942 logo and aircraft menu pointer. VGA uses native desktop
+resolution and the shared 16-color palette. Hercules uses white contour art;
+monochrome CGA uses a vertically compact contour version. These are separate
+build-time renders, with no runtime scaling or dithering. The window keeps
+its normal close, move and About affordances.
+
+1/2 or Up/Down selects players; Enter, Space or F starts directly with
+carrier takeoff. Mouse selection is supported. H displays controls. Returning
+from fullscreen offers Resume and New Game; resume preserves campaign state.
+Hercules displays the splash and controls with an explicit VGA/CGA gameplay
+requirement. Missing gameplay banks retain their existing error message.
+
+Compressed splash artwork is embedded in the executable, independent of the
+optional cartridge. Decode reuses the existing terrain/canvas claim while
+outside fullscreen. Native planes and a packed fallback fit together in that
+claim; fullscreen invalidates the decoded splash, and the next desktop paint
+rebuilds it. Native blits retain ownership clipping. The window timer decodes
+and reveals six artwork rows per tick, keeping each reveal step
+below one 55 ms tick on a 4.77 MHz XT. Completed bands stay cached. Help
+redraws only the menu area; player selection redraws only the pointer.
+The reveal pauses while About is visible. No new memory claim or worker is
+required. Kernels without window timers decode the cache during entry and
+show the static splash.

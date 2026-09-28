@@ -2438,6 +2438,10 @@ SOAK = [
         "it. In soak and not fast for docs/WRITING-TESTS.md 2.1's reason: it "
         "is about one package",
         needs=("nasm",)),
+    Row("1942front", "soak", py("tests/n1942front.py"), 180.0,
+        "1942 desktop splash: native color/contour pixels, XT paint timing, "
+        "player selection, help, dragging, direct launch and resume on three adapters",
+        needs=("marty", "nasm", "pil"), wants=("build/1942-360.img", "build/os8088-360.img")),
     Row("1942", "soak", py("tests/n1942.py"), 216.1,
         "Native VGA/CGA graphics, pre-I/O loading, scrolling/ring wrap, aircraft "
         "variety, formations, POWs, results, two-player turns, sound controls, combat, "
