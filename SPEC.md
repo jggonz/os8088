@@ -154573,6 +154573,10 @@ to come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
   screen at 11 kHz PCM, where it had been the other way round; the old
   `08-PCM11` (K Project) was dropped and its room spent on 03's sound
   rather than on another video, and `09-LIVE` is `08-LIVE`.
+- **The CGA set's `02-BWPCS` was re-encoded the same day** at `cga-spk`
+  (360 x 84 at 23 fps, the speaker at 8 kHz), still the whole of Bad
+  Carrot: that disk has less room to trade. Its text had named 02 and
+  03 "Bad Apple"; 02 is Bad Carrot and 03, by its frames, Trackmania.
 - **`00-VIDS.TXT` is written for Note Pad** and held to `checkreadme.py`'s
   rules as `README.TXT` is: prose one line a paragraph, the per-video
   blocks indented and 28 columns at most, plain ASCII, CRLF on the disk.
