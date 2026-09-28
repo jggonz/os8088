@@ -254,7 +254,7 @@ had added.
     "ovl": 1837,
     "ovlw": 5105,
     "stk0": 512,
-    "text": 47782,
+    "text": 47820,
     "vgabuf": 336,
     "vgabufpara": 32
   },
@@ -674,11 +674,11 @@ there and nowhere else.
 | the file system, end to end | 32,877 | 37.1% |
 | the window system and its furniture | 23,048 | 26.0% |
 | drawing: adapters, primitives, glyphs, icons | 13,632 | 15.4% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,295 | 10.5% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,333 | 10.5% |
 | the kernel proper: API table, heap, scheduler, events | 7,749 | 8.7% |
 | the three built-in kinds | 1,482 | 1.7% |
 | the Control Panel | 546 | 0.6% |
-| **total** | **88,629** | |
+| **total** | **88,667** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -701,7 +701,7 @@ there and nowhere else.
 | `instance.inc` — instances and the built-in kinds (§29) | 1,984 | 160 | **2,144** | 724 | — | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,529 | — | **1,529** | 216 | 2,944 | — |
 | `apps.inc` — the three built-in kinds (§14) | 282 | 1,200 | **1,482** | 11 | 240 | — |
-| `snd.inc` — the sound layer (§34) | 1,306 | — | **1,306** | 293 | — | — |
+| `snd.inc` — the sound layer (§34) | 1,344 | — | **1,344** | 293 | — | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,297 | — | **1,297** | 20 | — | — |
 | `loader.inc` — the package loader (§21) | 4 | 1,231 | **1,235** | 46 | — | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 21 | 1,048 | **1,069** | 53 | — | — |
@@ -735,7 +735,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,349 | 163 | **2,512** | — | — | 421 |
-| **total** | **47,782** | **40,847** | **88,629** | **5,545** | **6,366** | **2,249** |
+| **total** | **47,820** | **40,847** | **88,667** | **5,545** | **6,366** | **2,249** |
 <!-- END generated table -->
 
 ### Reading it

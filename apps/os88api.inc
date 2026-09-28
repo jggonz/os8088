@@ -553,8 +553,10 @@ SND_OPENF_ADPCM4 equ 4           ; ...the bytes are Creative 4-bit ADPCM, the
 SND_OPENF_FORCE  equ 8           ; ...ADPCM4 even on a DSP 4.xx
                                  ; (SND_CAP_ADPCM4Q): the user asked for it
 SND_OPENF_RLSH   equ 4           ; the size code's shift: 0 4KB .. 3 32KB
-SND_OPENF_BLKSH  equ 6           ; EXT only: the card's block is 2,048 >> the
-                                 ; code in AH bits 6-7 (256 at 3), so a slow
+SND_OPENF_BLKSH  equ 6           ; EXT only: the card's block is the regime's
+                                 ; half (2,048, or 4,096 above 22,222 Hz on a
+                                 ; DSP 4.xx or SB Pro) >> the code in AH bits
+                                 ; 6-7 (256 at 3 below 22,222), so a slow
                                  ; stream need not queue seconds ahead. Only
                                  ; with SND_CAP_EXTBLK; an older driver
                                  ; ignores the bits and plays 2,048
@@ -570,7 +572,9 @@ SND_EXT_TAB      equ 16          ; os88spk.inc's PWM table, written by its
                                  ; no card. apps/os88spk.inc is the ring player
                                  ; built on it; this is the door it opens.
                                  ; AL = 0 OPEN: DX = N, the PIT counts a sample
-                                 ; (74..255 = 16,124..4,679 Hz), SI = your
+                                 ; (74..255 = 16,124..4,679 Hz; 48..255 when
+                                 ; OSAPI_CPU_INFO answers past CPU_8086,
+                                 ; SPEC.md 34.11.8), SI = your
                                  ; SAMPLE ISR, a near offset in your image, DI
                                  ; = a 6-byte block in your image the kernel
                                  ; fills with K and the chain (below) BEFORE
@@ -598,9 +602,12 @@ SND_EXT_TAB      equ 16          ; os88spk.inc's PWM table, written by its
                                  ; CF=1 AX = SPK_E_*
 SPK_E_NOTRATE    equ 1           ; not in your own FSXF_RATE bracket (and
                                  ; always, on kern_small)
-SPK_E_N          equ 2           ; N is outside 74..255
+SPK_E_N          equ 2           ; N is outside 74..255 (48..255 on a 286
+                                 ; or better)
 SPK_E_BUSY       equ 3           ; open already, or a clip plays
 SPK_E_NOTOPEN    equ 4           ; close with nothing open
+SPK_E_ADDR       equ 5           ; SI, or DI's 6 bytes, not inside your
+                                 ; image+bss
 
 ; --- window management (SPEC.md 11.1/11.2) -------------------------------------
 %define OSAPI_WM_SIZABLE    KERNEL_SEG:0x00F1   ; BX=win ptr, AL = 0 clear / non-zero set

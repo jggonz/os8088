@@ -1289,6 +1289,8 @@ def record(ops, g, audio=b"", limit=SP_MAX * SECTOR - 4):
 
 PREV_MAX = 31 * 1024             # a flipped play's copy of the last record
                                 # (98.3.8): the seam passes through it too
+FRAMES_MAX = 65535              # the player's frame count is a word, and it
+KEYS_MAX = 16383                # refuses more; keyframes 0..16,383 (98.1.1)
 
 
 def seam_ops(a, b, g):
@@ -1576,7 +1578,14 @@ class Writer:
             raise V88Error("frame %d has %d audio bytes, not %d"
                            % (len(self.recs), len(audio), self.abytes))
         k = len(self.recs)
-        self.recs.append(self.with_runs(record(ops, self.g), audio))
+        if k >= FRAMES_MAX:
+            raise V88Error("frame %d: a file is %d frames at most"
+                           % (k, FRAMES_MAX))
+        rec = self.with_runs(record(ops, self.g), audio)
+        if self.flip and len(rec) > PREV_MAX:
+            raise V88Error("frame %d is %d bytes, past a flipped play's %d"
+                           % (k, len(rec), PREV_MAX))
+        self.recs.append(rec)
         self.last = surf
         if k == self.loop:
             self.loop_surf, self.loop_audio = bytes(surf), audio
@@ -1663,6 +1672,8 @@ class Writer:
                 raise V88Error("the seam is %d bytes, past a flipped play's "
                                "%d" % (len(seam), PREV_MAX))
         nk = len(keys)
+        if nk > KEYS_MAX:
+            raise V88Error("%d keyframes: %d at most" % (nk, KEYS_MAX))
         ktab = -(-16 * nk // SECTOR) * SECTOR if nk else 0
         krec = sum(len(r) for k, r, c in keys) + len(seam)
         pal = SECTOR if self.palette else 0     # the palette: sector 1
@@ -1947,6 +1958,8 @@ def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
                 kk.append((k, r + bytes([ref]), c))
             keys = kk
         nk = len(keys)
+        if nk > KEYS_MAX:
+            raise V88Error("%d keyframes: %d at most" % (nk, KEYS_MAX))
         ktab = base + len(body) if nk else 0
         kt = bytearray()
         o = base + len(body) + -(-16 * nk // SECTOR) * SECTOR
@@ -2084,7 +2097,8 @@ class Reader:
             raise V88Error("version %d, flags %04x: this reader knows "
                            "version 1 and flags %04x" % (ver, flags, F_KNOWN))
         self.flags = self.flags_ = flags
-        if self.frames < 1 or self.spf < 1 or self.rate < 1:
+        if not 1 <= self.frames <= FRAMES_MAX or self.spf < 1 or \
+                self.rate < 1:
             raise V88Error("frames %d, rate %d, samples per frame %d"
                            % (self.frames, self.rate, self.spf))
         if not 1 <= self.nrend <= 4:
@@ -2209,6 +2223,8 @@ class Reader:
                 or self.sp0 % SECTOR:
             raise V88Error("first super-packet at %d, %d sectors, largest %d"
                            % (self.sp0, self.sp0n, self.spmax))
+        if self.nkeys > KEYS_MAX:
+            raise V88Error("%d keyframes: %d at most" % (self.nkeys, KEYS_MAX))
         if self.nkeys and (self.ktab % SECTOR or
                            self.ktab + 16 * self.nkeys > len(d)):
             raise V88Error("the keyframe table at %d does not fit" % self.ktab)

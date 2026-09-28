@@ -198,6 +198,7 @@ os88spk_isr:
     push ax
     push si
     push ds
+    cld                             ; the interrupted code's DF is not ours
     lds si, [cs:os88spk_rp]
     lodsb                           ; a PWM count, 1..N-1
     out 0x42, al                    ; ...and the pulse
@@ -270,6 +271,7 @@ os88spk_isrm:
     mov byte [cs:.j+1], .half - (.j + 2)
     push si
     push ds
+    cld                             ; (os88spk_isr's reason)
     lds si, [cs:os88spk_rp]
     lodsb                           ; a PWM count, made for N / pulses
     out 0x42, al

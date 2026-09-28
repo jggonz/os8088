@@ -1192,7 +1192,8 @@ SPK_NMAX        equ 255         ; ...and mode 0 is programmed lobyte-only
 ;      AL = 1 CLOSE
 ; out: OPEN CF = 0: AX = K and DX:BX = that address too. CF =
 ;      1: AX = 1 not in your own FSXF_RATE bracket, 2 N out of range, 3 the
-;      speaker is taken, 4 (close) nothing open. Preserves the rest
+;      speaker is taken, 4 (close) nothing open, 5 SI or DI's 6 bytes not
+;      inside your image+bss. Preserves the rest
 ; -----------------------------------------------------------------------------
 osapi_fsx_spk:
     cmp al, 1
@@ -1219,6 +1220,21 @@ osapi_fsx_spk:
     jne .err
     cmp byte [snd_pcm_busy], 0  ; a clip (34.4)
     jne .err
+    inc ax                      ; 5 (4 is the close's): SI and DI inside the
+    inc ax                      ; bracket owner's image+bss, fenced as
+    push bx                     ; fsx_run fences the hook - IRQ0 jumps to SI
+    push di                     ; on every sample and the block takes 6 bytes
+    mov bx, [sch_rwin]          ; fsx_run's fence proved it owned and live,
+    call inst_of_win            ; and fsx_mine above that it is the caller's
+    mov cx, [di+I_SIZE]
+    pop di
+    pop bx
+    cmp si, cx
+    jae .err
+    sub cx, 6                   ; DI + 6 <= the size, with no carry to lose
+    jb .err
+    cmp di, cx
+    ja .err
     mov cx, dx                  ; CX = N
     mov ax, [sch_rdiv]
     xor dx, dx

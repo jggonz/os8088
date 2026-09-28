@@ -57607,9 +57607,10 @@ owner's ear (98.1.1.1).
 heap at all. `tests/vidsound.py` is the gate.
 
 **An external ring may ask for a SMALLER BLOCK** (`SND_OPENF_BLKSH`): the
-half is 2,048 bytes shifted right by the code in AH bits 6-7 - 1,024, 512
-or 256 - and the driver says it takes the bits with **`SND_CAP_EXTBLK`**
-(80h). A block is 2,048 BYTES at every rate, so at 5,512 Hz ADPCM4 (2,756
+half is the regime's - 2,048 bytes, or 4,096 above 22,222 Hz on a DSP 4.xx
+or an SB Pro - shifted right by the code in AH bits 6-7 (at 2,048: 1,024,
+512 or 256), and the driver says it takes the bits with **`SND_CAP_EXTBLK`**
+(80h). A block is 2,048 BYTES at every rate up to 22,222 Hz, so at 5,512 Hz ADPCM4 (2,756
 bytes a second) it was 0.74 s of sound, and the ISR halts at a boundary
 whose next block is not all queued: the producer had to keep 0.74 s
 queued, which for the Video Player is the reader 20 frames ahead of the
@@ -57617,7 +57618,7 @@ picture (98.2.1.3). Shifted to 512 it is 0.19 s, 11 kHz PCM8's own.
 Nothing else in the driver changes: the ISR's underrun question, verb 1's
 resume bound, verb 9 and the DSP's 48h block length all read `[sbl_half]`
 already. The shift is applied after the ADPCM4 test and the watchdog, which
-read the full half - so the watchdog stays sized for 2,048, as long as it
+read the full half - so the watchdog stays sized for the full half, as long as it
 was. A driver without the bit ignores AH bits 6-7 and plays 2,048, so a
 package asks only where the cap says; one that never sets them - every
 package but the Video Player - is unchanged. **26 bytes** (6,660 →
@@ -57974,8 +57975,9 @@ halves:
 - **the player**, `apps/os88spk.inc`, in the package that plays: the ISR, the
   count table, and the ring it reads.
 
-**Measured cost**: `kern_big` **+314 bytes** (`.text` +308, `.bss` +6; it
-crosses one 512-byte footprint rung), `kern_small` **+11** (the API cell and a
+**Measured cost**: `kern_big` **+352 bytes** (`.text` +346, `.bss` +6; it
+crosses one 512-byte footprint rung, and 38 of it is §34.11.1's SI and DI
+fence), `kern_small` **+11** (the API cell and a
 stub that refuses). The library is ~480 bytes of the including package.
 
 #### 34.11.1 The door
@@ -57985,8 +57987,12 @@ stub that refuses). The library is ~480 bytes of the including package.
 `apps/os88api.inc`. In short:
 - **AL = 0 opens.** DX = N, the PIT counts a sample. It must be 74..255,
   which is 16,124..4,679 Hz: 255 is mode 0's lobyte, and 74 is the shortest
-  period a pulse still ends inside. SI = the package's sample ISR (a near
-  offset in its image). DI = a 6-byte block in its image.
+  period a pulse still ends inside - on an 8088; past `CPU_8086` it may be
+  48..255 (§34.11.8). SI = the package's sample ISR (a near
+  offset in its image). DI = a 6-byte block in its image. **Both are
+  fenced** against the bracket owner's `I_SIZE`, as `fsx_run` fences the
+  hook: SI below it and DI + 6 no further, because IRQ0 jumps to SI on
+  every sample and the kernel writes the block before the vector is set.
 - **The kernel then**:
   1. works out K = the caller's divisor / N, the samples in one rate period,
      and sets the divisor to exactly K × N (within a sample of what was asked
@@ -58008,7 +58014,8 @@ stub that refuses). The library is ~480 bytes of the including package.
   package that leaves its bracket by any path leaves nothing behind.
 - **Refusals** (CF = 1, AX = `SPK_E_*`): not in the caller's own rate bracket
   (always, on `kern_small`); N out of range; the speaker already taken by a
-  clip or another door; close with nothing open.
+  clip or another door; close with nothing open; and `SPK_E_ADDR` = 5, SI or
+  DI's block outside the caller's image+bss.
 
 #### 34.11.2 The library
 
