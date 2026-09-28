@@ -1558,9 +1558,17 @@ fm_measure:
     jc .used
     mov dl, [dsk_spc]
     xor dh, dh
-    mul dx                      ; DX:AX = free sectors (a volume caps at
-                                ; 65,535 sectors, SPEC.md 18.7, so DX = 0)
-    shr ax, 1                   ; ...and a sector is half a KB
+    mul dx                      ; DX:AX = free sectors
+%ifdef OS88_BIGVOL
+    shr dx, 1                   ; ...and a sector is half a KB. PAST 32MB
+    rcr ax, 1                   ; (SPEC.md 18.7.5) that is more KB than a
+    call fm_kbenc               ; word holds - a 321MB volume is 328,000 of
+                                ; them - so the figure is ENCODED: K below
+                                ; 10MB, M at or above it (SPEC.md 22.7.1)
+%else
+    shr ax, 1                   ; ...and a sector is half a KB (a volume caps
+                                ; at 65,535 sectors here, so DX = 0)
+%endif
     mov [di+FS_FREE], ax
 
 .used:                          ; --- used: sum this folder's listed sizes ---
@@ -1601,8 +1609,13 @@ fm_measure:
     shr dx, 1
     rcr ax, 1
     loop .shift
+%ifdef OS88_BIGVOL
+    call fm_kbenc               ; K or M, and never the sentinel: the most a
+                                ; dword of bytes can be is 0x8FFF (22.7.1)
+%else
     cmp ax, 0xFFFF              ; a hostile listing could sum past the
     je .out                     ; sentinel: leave it saying "not known"
+%endif
     mov [di+FS_USED], ax
 .out:
     jmp kretc_si
@@ -7751,8 +7764,12 @@ fm_draw_lrow:
     mov dx, [fm_fsizeh]
     push di
     mov di, fm_numbuf
+%ifdef OS88_BIGVOL
+    call fm_szfig_x             ; bytes, K past 10KB, M past 10MB (22.7.1)
+%else
     call fm_ultoa_x             ; the full dword: BEVERLY.MOD is 116,085
-    pop di                      ; bytes, not 65,535
+%endif                          ; bytes, not 65,535
+    pop di
     mov si, fm_numbuf
     call ct_font_width         ; AX = string width, px
     mov cx, [fm_rgt]            ; right-align ending at cw-22 (clear of
@@ -8620,8 +8637,20 @@ fm_scat:
 fm_kbfig:
     cmp ax, 0xFFFF
     je .unknown
+%ifdef OS88_BIGVOL
+    push ax                     ; bit 15 is the unit (fm_kbenc): M set, K clear
+    and ah, 0x7F
+    call fm_utoa
+    pop ax
+    mov byte [di], 'K'
+    test ah, 0x80
+    jz .unit
+    mov byte [di], 'M'
+.unit:
+%else
     call fm_utoa
     mov byte [di], 'K'
+%endif
     inc di
     mov byte [di], 0
     ret
@@ -8630,6 +8659,67 @@ fm_kbfig:
     inc di
     mov byte [di], 0
     ret
+
+%ifdef OS88_BIGVOL
+; -----------------------------------------------------------------------------
+; fm_kbenc - a dword of KB as the one word fm_kbfig draws (SPEC.md 22.7.1)
+; in:  DX:AX = KB, DX <= 3Fh (under 4GB of bytes)
+; out: AX = the KB when under 10,240 (10MB), else 8000h | whole MB
+; clobbers: AX (the output), flags
+;
+; A KB figure stopped fitting a word the day a volume passed 64MB (SPEC.md
+; 18.7.5), and it stopped being READABLE long before that: `328704K` is a
+; number to count the digits of. So a figure of 10MB or more is carried in
+; MB, with bit 15 saying so - FS_FREE and FS_USED stay one word each, and the
+; not-known sentinel 0xFFFF can never be produced (4GB is 0x8FFF).
+; -----------------------------------------------------------------------------
+fm_kbenc:
+    or dx, dx
+    jnz .mb
+    cmp ax, 10240
+    jb .out
+.mb:
+    mov al, ah                  ; >> 8, DH being 0 ...
+    mov ah, dl
+    shr ax, 1                   ; ... and >> 2 more: whole MB
+    shr ax, 1
+    or ah, 0x80
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_szfig_x - a file's size in the unit a person reads (SPEC.md 22.7.1)
+; in:  DX:AX = bytes, DI = destination (8 bytes is enough)
+; out: DI -> the stored NUL
+; clobbers: DI (the output), flags
+;
+; Bytes under 10KB, as it always was - `1234` is exact and short. From 10KB
+; it is whole KB with a K, and from 10MB whole MB with an M, the status
+; line's units, so a column of sizes and the line under it read alike.
+; Truncated rather than rounded, which is what the status line already did.
+; -----------------------------------------------------------------------------
+fm_szfig_x:
+    or dx, dx
+    jnz .kb
+    cmp ax, 10240
+    jb fm_ultoa_x               ; bytes: the dword printer, tail-called
+.kb:
+    push ax
+    push dx
+    mov al, ah                  ; bytes >> 8 ...
+    mov ah, dl
+    mov dl, dh
+    xor dh, dh
+    shr dx, 1                   ; ... >> 2 more: KB, DX <= 3Fh
+    rcr ax, 1
+    shr dx, 1
+    rcr ax, 1
+    call fm_kbenc
+    call fm_kbfig
+    pop dx
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; fm_utoa - unsigned word to decimal ASCII, no leading zeros
