@@ -104,6 +104,8 @@ def arm(tag, off, disk, out):
         assert p.b('turn') == 1 and p.w('angle') == 55
         G.wait(m, lambda: p.b('state') != 1, 'computer throw lands')
         assert p.b('turn') == 0 or p.b('state') == 3
+        if p.b('state') == 0:
+            assert (p.w('angle'), p.w('power')) == (0, 30), 'computer overwrote human input'
         if p.b('fs'):
             G.key(m, 'Escape')
             G.wait(m, lambda: not p.b('fs'), 'solo fullscreen exit')

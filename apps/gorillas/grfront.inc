@@ -550,7 +550,7 @@ gr_questions: dw gr_qplayers, gr_qname1, gr_qname2, gr_qpoints, gr_qgravity
 gr_defaults: dw gr_defplayers, gr_defname1, gr_defname2, gr_defpoints, gr_defgravity
 gr_qname1: db 'Name of Player 1 (10 characters)',0
 gr_qname2: db 'Name of Player 2 (10 characters)',0
-gr_qpoints: db 'Play how many total points? 1-99',0
+gr_qpoints: db 'First to how many points? 1-99',0
 gr_qgravity: db 'Gravity: 0.001 to 9999.999',0
 gr_defname1: db 'Default: Player 1',0
 gr_defname2: db 'Default: Player 2 / Computer',0

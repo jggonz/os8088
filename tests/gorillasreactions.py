@@ -73,6 +73,28 @@ def reactions(m, p, code, tag):
     assert pixels(116, 25, 25, 21) == happy, 'smile did not return after miss'
     C.check_pixels(m, p, tag)
 
+    # Only the scoring player's total can end a match. Cover both winners,
+    # self-hits, combined scores at/above the target, and custom limits.
+    for target, scores, victim in ((1, (0, 0), 0), (1, (0, 0), 1),
+                                   (3, (1, 1), 1), (3, (2, 2), 0),
+                                   (7, (5, 6), 1), (7, (6, 6), 1),
+                                   (99, (98, 98), 0), (99, (98, 98), 1)):
+        call('city')
+        byte('turn', 0)
+        byte('target', target)
+        m.write(p.base + p.offsets['gr_scores'], bytes(scores))
+        xs, ys = (struct.unpack('<2H', p.data(n, 4)) for n in ('gx', 'gy'))
+        shot(xs[victim]+8, ys[victim]+8)
+        call('tick')
+        expected = list(scores)
+        winner = victim ^ 1
+        expected[winner] += 1
+        assert list(p.data('scores', 2)) == expected
+        assert p.b('winner') == winner
+        assert p.b('state') == (3 if expected[winner] == target else 2), \
+            ('first-to scoring failed', target, expected, winner)
+        call('musicstop')
+
     # Both winners, an opponent hit, a self-hit, and a match-ending point.
     for thrower, victim, target in ((0, 1, 3), (0, 0, 1)):
         call('city')
@@ -145,17 +167,17 @@ def parity(m, p, code, tag):
         v = p.data('scene', 16384)[y*128+x//2]
         return (v >> (0 if x & 1 else 4)) & 15
 
-    # Overall winner is independent of the final point's scorer; ties are
-    # explicit. Verify glyph cache, native pixels after repaint, and restart.
-    for scores, winner in (((3, 1), b'Player 1'), ((1, 3), b'Player 2'), ((2, 2), None)):
+    # The final point's scorer reached the target. Verify both winners,
+    # glyph cache, native pixels after repaint, and restart.
+    for scores, winner in (((3, 2), b'Player 1'), ((2, 3), b'Player 2')):
         m.write(p.base + p.offsets['gr_scores'], bytes(scores))
-        byte('winner', 1 if scores[0] > scores[1] else 0)
+        byte('winner', 0 if scores[0] > scores[1] else 1)
         call('results')
         chars = p.data('hudchars', 512)
         assert b'GAME OVER!' in chars
         assert b'Player 1' in chars[160:192] and ('%03d' % scores[0]).encode() in chars[160:192]
         assert b'Player 2' in chars[224:256] and ('%03d' % scores[1]).encode() in chars[224:256]
-        assert (winner + b' ' in chars[320:352] and b'wins!' in chars[320:352]) if winner else b'tied match' in chars
+        assert winner + b' ' in chars[320:352] and b'wins!' in chars[320:352]
         I.check_repaint(m, p, code, tag)
         # Marquee must animate without drawing intro gorillas over the results.
         before = I.video_bytes(m, tag)
@@ -168,7 +190,7 @@ def parity(m, p, code, tag):
         out = G.ROOT / 'build/gorillas-proof'
         out.mkdir(exist_ok=True)
         screenshot(m, p, out / ('%s-results-%s-%s.png' %
-                   (tag, 'full' if p.b('fs') else 'window', 'tie' if winner is None else winner.decode().replace(' ', ''))))
+                   (tag, 'full' if p.b('fs') else 'window', winner.decode().replace(' ', ''))))
         call('key', ax=ord('x'))
         assert p.b('state') == 5
 
@@ -317,7 +339,7 @@ ret
         actualy = struct.unpack('<i', p.data('py', 4))[0]/64
         assert abs(actualx-x) < .75 and abs(actualy-y) < .75, (angle, actualx, x, actualy, y)
     m.write(p.base+scratch, saved)
-    print('PASS', tag, 'scorecard/tie, numeric ranges, pixel collisions, blasts, sprites, reference curves', flush=True)
+    print('PASS', tag, 'first-to scoring, scorecard, numeric ranges, pixel collisions, blasts, sprites, reference curves', flush=True)
 
 
 def main():

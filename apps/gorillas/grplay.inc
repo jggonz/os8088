@@ -95,18 +95,14 @@ gr_results:
     mov si, gr_resultline
     mov dx, 56
     call gr_fronttext
-    mov si, gr_tiemsg
-    mov al, [gr_scores]
-    cmp al, [gr_scores+1]
-    je .winner
     mov si, gr_name1
-    ja .name
+    cmp byte [gr_winner], 0
+    je .name
     mov si, gr_name2
 .name:
     mov di, gr_winsmsg+4
     call gr_namecopy
     mov si, gr_winsmsg
-.winner:
     mov dx, 80
     call gr_fronttext
     mov si, gr_continue
@@ -118,7 +114,6 @@ gr_results:
 gr_gameover: db '           GAME OVER!',0
 gr_resultline: db '                                ',0
 gr_winsmsg: db '               wins!',0
-gr_tiemsg: db '          A tied match!',0
 
 ; BP=gorilla word offset, SI=pose; replace only its 16x20 sprite rectangle.
 gr_posepaint:

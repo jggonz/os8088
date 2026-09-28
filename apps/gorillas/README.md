@@ -22,9 +22,8 @@ press any key to skip directly to setup:
    controlled by the computer.
 2. Enter both **names**, up to 10 characters. Empty entries use Player 1 and
    Player 2, or Computer in solo mode. The computer can also be renamed.
-3. Choose **total points**, from 1 to 99 (default 3). As in the BASIC source,
-   this counts points scored by both players together; the higher score at
-   the end wins. An even total can produce a tie.
+3. Choose the **winning score**, from 1 to 99 (default 3). The first player
+   to reach that many points wins the match.
 4. Enter **gravity**, from 0.001 to 9999.999 m/s², with up to three decimal places
    (default 9.8). Smaller values give longer, higher arcs.
 5. Press **V** to view the musical gorilla dance, or **P / Enter** to play.
@@ -39,6 +38,8 @@ throughout setup. The Game menu can restart setup or change fullscreen mode.
   horizontal toward the opponent. Velocity runs from 0 to 360. Both fields
   accept whole numbers only and display without zero padding.
   Zero and one cause a self-hit. Angles above 180 aim downward.
+  Each player remembers her own last angle and velocity across turns and
+  skylines. A new match resets both players to angle 45 and velocity 70.
 - **Tab** switches fields; the first digit replaces the previous value.
   **Backspace** deletes a digit; **arrow keys** adjust the selected value.
 - The HUD shows **only the active player's name and both running scores**. **Angle** and **Velocity** appear below. Signed wind
@@ -49,7 +50,7 @@ throughout setup. The Game menu can restart setup or change fullscreen mode.
   skyline starts automatically following the celebration and a short pause;
   **Enter** can skip that pause. Throwers alternate across skylines.
 - A sparkling **final scorecard** lists both scores and declares the overall
-  winner or tie. Press any key to set up another match.
+  winner. Press any key to set up another match.
 - **F** or **Alt+Enter** enters/leaves fullscreen; **Escape** returns to
   the window. The Game menu also offers fullscreen, pause and new match.
 - The system **About** card supplies credits. Dismiss it with a click or
@@ -216,7 +217,7 @@ no wider than 56 pixels and seven rows for wider updates.
 
 The feature-parity revision is recorded in
 [the implementation plan](../../docs/plans/GORILLAS-PARITY-PLAN.md), including
-current guest measurements. The package uses 24,774 image bytes and 29,545
-BSS bytes (54,319 total), below the unchanged 60 KB instance ceiling. The
-reactions gate now also checks final winners/ties, numeric limits, silhouette
+current guest measurements. The package uses 24,787 image bytes and 29,553
+BSS bytes (54,340 total), below the unchanged 60 KB instance ceiling. The
+reactions gate now also checks winning scores, numeric limits, silhouette
 collision, blast repaint bounds and reference-equation trajectory samples.

@@ -635,7 +635,22 @@ gr_new:
     mov word [gr_scores], 0
     mov byte [gr_turn], 0
     mov byte [gr_paused], 0
+    mov word [gr_angles], 45
+    mov word [gr_angles+2], 45
+    mov word [gr_powers], 70
+    mov word [gr_powers+2], 70
     jmp gr_city
+
+; Restore the active player's last throw (AX/BX clobbered).
+gr_recallaim:
+    xor bx, bx
+    mov bl, [gr_turn]
+    shl bx, 1
+    mov ax, [gr_angles+bx]
+    mov [gr_angle], ax
+    mov ax, [gr_powers+bx]
+    mov [gr_power], ax
+    ret
 
 gr_city:
     push ds
@@ -659,8 +674,7 @@ gr_city:
     mov byte [gr_roundwait], 0
     mov byte [gr_field], 0
     mov byte [gr_edit], 0
-    mov word [gr_angle], 45
-    mov word [gr_power], 70
+    call gr_recallaim
     call gr_rand
     xor dx, dx
     mov ax, 10
@@ -1516,7 +1530,9 @@ gr_fire:
     shl bx, 1
     mov bp, bx
     mov si, gr_px
+    mov [gr_powers+bx], ax
     mov ax, [gr_angle]
+    mov [gr_angles+bx], ax
     call gr_initmotion
     call gr_throwpose
     mov si, gr_musicthrow
@@ -1613,6 +1629,7 @@ gr_tick:
 .miss:
     call gr_sunreset
     xor byte [gr_turn], 1
+    call gr_recallaim
     mov word [gr_aipower], 0
     mov byte [gr_state], 0
     mov byte [gr_field], 0
@@ -1635,8 +1652,7 @@ gr_tick:
     xor byte [gr_turn], 1
     inc byte [gr_scores+si]
     mov byte [gr_state], 2
-    mov al, [gr_scores]
-    add al, [gr_scores+1]
+    mov al, [gr_scores+si]
     cmp al, [gr_target]
     jb .explode
     mov byte [gr_state], 3
@@ -2517,6 +2533,8 @@ VAR gr_field, 1
 VAR gr_edit, 1
 VAR gr_angle, 2
 VAR gr_power, 2
+VAR gr_angles, 4
+VAR gr_powers, 4
 VAR gr_wind, 2
 VAR gr_gwhole, 2
 VAR gr_gfrac, 2

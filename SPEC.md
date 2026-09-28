@@ -148749,13 +148749,16 @@ and heights follow rising, falling, valley or hill trends. Angles are 0..360
 whole degrees, measured inward from each player's
 horizontal; velocity is a whole number from 0..360. Wind accelerates the projectile horizontally, gravity
 vertically. Collision is swept in substeps against the persistent terrain
-and both gorillas, including the thrower. Setup selects 1..99 total points
-(default 3), counted across both players as in the BASIC source.
+and both gorillas, including the thrower. Setup selects a winning score from
+1..99 (default 3). The first player to reach that score wins the match.
 Enter advances angle to velocity, then throws; Tab selects the other field;
 digits replace a field, Backspace edits it, arrows adjust it. N opens match
 setup, P pauses, F or Alt+Enter toggles full
 screen, and Escape returns to the desktop. After the celebration and an eighteen-tick pause, the next skyline starts
 automatically. Enter can skip the pause. Throwers alternate across rounds.
+Each player retains her own last angle and velocity across turns and skylines,
+including when facing the computer. A new match resets both players to angle
+45 and velocity 70.
 
 The instance owns a 256x128 packed 4bpp scene and a bounded scratch band.
 The first 24 rows show the HUD between shots; during flight all three text
@@ -148787,7 +148790,7 @@ The startup splash automatically plays the opening tune followed by the full
 gorilla dance score, with a circulating sparkle border and alternating raised-arm
 gorillas. Music starts on the first worker frame after the initial paint. The
 completed score or any key opens setup: one/two players (default two), two names (ten
-characters each, default Player 1/Player 2 or Computer), total points, and
+characters each, default Player 1/Player 2 or Computer), winning score, and
 positive decimal gravity (0.001..9999.999 m/s², default 9.8). Enter accepts defaults;
 Backspace edits. Invalid numeric entries remain on the current question. Name
 entry consumes printable keys before gameplay shortcuts. Alt+Enter/Escape and
@@ -148840,8 +148843,8 @@ fullscreen transitions, and real solo turns on VGA, CGA and Hercules.
 The implementation tracked in `docs/plans/GORILLAS-PARITY-PLAN.md` supersedes
 98's earlier gameplay limits and HUD description. Only the active player's name and both scores are
 visible between throws; a proportional wind arrow remains during flight. A
-separate sparkling final scorecard displays both totals and the overall winner
-or tie, independently of the last point's scorer. Any key returns to setup.
+separate sparkling final scorecard displays both totals and the first player
+to reach the winning score. Any key returns to setup.
 Throws alternate across cities; after the explosion, musical victory dance and
 a short pause, the next city starts automatically. Enter can advance the pause.
 

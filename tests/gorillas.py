@@ -2,7 +2,7 @@
 """Exercise the shipped 8086 Gorillas on VGA, CGA and Hercules.
 
 Uses real keyboard throws, including low-power self-hits through five rounds
-(five total points), pause/resume, terrain destruction, and repeated fullscreen
+(first to three points), pause/resume, terrain destruction, and repeated fullscreen
 entry/exit. Reads package state, checks rendered pixels and saves proof images.
 The CGA leg requires the foreign-mode color backend, not a monochrome frame.
 """
@@ -205,6 +205,21 @@ def arm(tag, off, disk, out):
                      for a, b in zip(before[42*128:], after[42*128:])
                      for shift in (0, 4))
         assert erased, 'impact did not destroy terrain'
+        assert (p.w('angle'), p.w('power')) == (45, 70), 'player 2 inherited player 1 input'
+
+        # High-power shots leave the skyline; each returning player gets
+        # her own values, including when she accepts them without editing.
+        key(m, 'Digit6'); key(m, 'Digit0'); key(m, 'Enter')
+        key(m, 'Digit3'); key(m, 'Digit6'); key(m, 'Digit0'); key(m, 'Enter')
+        wait(m, lambda: p.b('state') == 0, 'player 2 shot ends')
+        assert p.b('turn') == 0 and (p.w('angle'), p.w('power')) == (0, 30)
+        key(m, 'Digit6'); key(m, 'Digit5'); key(m, 'Enter')
+        key(m, 'Digit3'); key(m, 'Digit5'); key(m, 'Digit9'); key(m, 'Enter')
+        wait(m, lambda: p.b('state') == 0, 'player 1 shot ends')
+        assert p.b('turn') == 1 and (p.w('angle'), p.w('power')) == (60, 360)
+        key(m, 'Enter'); key(m, 'Enter')
+        wait(m, lambda: p.b('state') == 0, 'remembered player 2 shot ends')
+        assert p.b('turn') == 0 and (p.w('angle'), p.w('power')) == (65, 359)
 
         # Pause is sticky: launch vertically with sufficient airtime.
         new_match(m); key(m, 'Digit9'); key(m, 'Digit0')
@@ -216,19 +231,23 @@ def arm(tag, off, disk, out):
         assert p.data('px', 8) == paused, 'paused projectile moved'
         key(m, 'Enter')
         wait(m, lambda: p.data('px', 8) != paused, 'Enter resumes paused flight')
-        new_match(m)
+        new_match(m, points=3)
 
         # Actual keyboard throws, no poked scores/state: a power-one throw
         # returns onto the thrower. The OTHER player must receive the point.
+        remembered = [(45, 70), (45, 70)]
         for round_no in range(5):
             thrower = p.b('turn')
+            assert (p.w('angle'), p.w('power')) == remembered[thrower], 'new skyline lost player input'
             scores = list(p.data('scores', 2))
+            key(m, 'Digit4'); key(m, 'Digit' + str(round_no))
             key(m, 'Enter'); key(m, 'Digit' + str(round_no % 2)); key(m, 'Enter')
+            remembered[thrower] = (40 + round_no, round_no % 2)
             wait(m, lambda: p.b('state') in (2, 3), 'self-hit and score')
             scores[thrower ^ 1] += 1
             assert list(p.data('scores', 2)) == scores
             assert p.b('winner') == thrower ^ 1
-            assert p.b('state') == (3 if sum(scores) == 5 else 2)
+            assert p.b('state') == (3 if max(scores) == 3 else 2)
             wait(m, lambda: p.b('roundwait') != 0, 'scoring gorilla finishes musical dance')
             if round_no < 4:
                 wait(m, lambda: p.b('state') == 0, 'automatic next skyline')
@@ -240,6 +259,7 @@ def arm(tag, off, disk, out):
         key(m, 'Enter')
         setup(m)
         assert p.data('scores', 2) == b'\0\0'
+        assert (p.w('angle'), p.w('power')) == (45, 70), 'new match retained player 1 input'
 
         # Exclusive mode restores the exact logical terrain; repeated entry
         # catches stale fullscreen flags and framebuffer geometry.
@@ -273,9 +293,10 @@ def arm(tag, off, disk, out):
             key(m, 'KeyP')
             wait(m, lambda: p.b('state') == 0, 'automatic round after fullscreen hit')
             assert p.b('field') == 0
+            assert (p.w('angle'), p.w('power')) == (45, 70 if attempt == 0 else 1)
         capture(m, p, out / (tag + '-restored.png'))
         ui.close(ui.window('Gorillas'))
-        print('PASS', tag, 'input, terrain, pause, five rounds, fullscreen/restore, close', flush=True)
+        print('PASS', tag, 'input, per-player aim, terrain, pause, five rounds, fullscreen/restore, close', flush=True)
 
 
 def main():
