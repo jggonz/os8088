@@ -2471,7 +2471,9 @@ def ffmpeg_video(src, w, h, crop_dar, fps_expr, start, end, eq, pix="gray"):
         p.wait()
 
 
-def ffmpeg_audio(src, rate, start, end, volume):
+def ffmpeg_audio(src, rate, start, end, volume, fmt="u8"):
+    """The sound, mono at `rate`: unsigned 8-bit, or with fmt="f32le" the
+    floats the speaker's shaping starts from (98.2.15.1)"""
     cmd = ["ffmpeg", "-v", "error", "-nostdin"]
     if start:
         cmd += ["-ss", "%.3f" % start]
@@ -2481,8 +2483,8 @@ def ffmpeg_audio(src, rate, start, end, volume):
     af = ["aresample=%d" % rate]
     if volume:
         af.append("volume=%s" % volume)
-    cmd += ["-vn", "-ac", "1", "-af", ",".join(af), "-f", "u8", "-acodec",
-            "pcm_u8", "-"]
+    cmd += ["-vn", "-ac", "1", "-af", ",".join(af), "-f", fmt, "-acodec",
+            "pcm_" + fmt, "-"]
     return subprocess.run(cmd, capture_output=True, check=True).stdout
 
 
@@ -2929,7 +2931,18 @@ def _encode(a, keep, tick, readers):
                 "--reserve %d KB: the player's ring banks %d KB at most"
                 % (enc.reserve // 1024,
                    (vid.RING_SLOTS[-1] - 1) * vid.SLOT // 1024))
-    pcm = ffmpeg_audio(a.src, rate, a.start, a.end, a.volume) if afmt else b""
+    if spk and afmt and a.spk_shape == "on":
+        # SHAPED FOR THE SPEAKER (98.2.15.1): what a 5150's cone can play
+        # would otherwise sit 25-30 dB under the pulses' own carrier
+        pcm = vid.spk_shape_f(np.frombuffer(ffmpeg_audio(
+            a.src, rate, a.start, a.end, a.volume, "f32le"), dtype="<f4"),
+            rate, a.spk_highpass, a.spk_drive)
+        say("   speaker: shaped - nothing under %d Hz, the level evened out "
+            "and driven to %.0f%% RMS (--spk-shape off to take the sound "
+            "as it is)" % (a.spk_highpass, 100 * a.spk_drive))
+    else:
+        pcm = ffmpeg_audio(a.src, rate, a.start, a.end, a.volume) \
+            if afmt else b""
     cyc, recs, n = [], [], 0
     pend = []
     if isinstance(dith, CompDiffuser) and (a.jobs or os.cpu_count() or 1) > 1:
@@ -3236,6 +3249,18 @@ def parser():
     ap.add_argument("--jobs", type=int, help="cores for the search "
                     "(default: all)")
     ap.add_argument("--volume", help="ffmpeg's volume= (e.g. 1.5, 3dB)")
+    ap.add_argument("--spk-shape", choices=("on", "off"), default="on",
+                    help="with --audio speaker: cut what the speaker cannot "
+                         "play, even the level out and drive it loud, so the "
+                         "sound is heard over the pulses' whine (SPEC.md "
+                         "98.2.15.1). off takes the sound as it is")
+    ap.add_argument("--spk-highpass", type=int, default=vid.SPK_HP,
+                    metavar="HZ", help="with --spk-shape: nothing under this "
+                    "(default %(default)s; 0 keeps the bass)")
+    ap.add_argument("--spk-drive", type=float, default=vid.SPK_DRIVE,
+                    help="with --spk-shape: the level, an RMS of full scale "
+                         "(default %(default)s; higher is louder and clips "
+                         "more)")
     ap.add_argument("--dither", choices=("bayer", "bluenoise", "threshold"),
                     default="bayer",
                     help="one bit: an ordered 8 x 8 pattern, a noise pattern, "

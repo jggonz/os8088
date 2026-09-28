@@ -152338,6 +152338,59 @@ a rate above `VP_SPKMAX` (8,000 Hz) on a profile whose `speed` is 1, since the
 player would mute it (§98.3.15), and a share of 80% or more. The GUI offers
 it on the Sound tab, because its choices are the parser's.
 
+##### 98.2.15.1 Sound shaped for the speaker: `--spk-shape`
+
+**On the owner's 5150 a speaker clip was the carrier and nothing else**
+(2026-09-28): a loud 5,524 Hz whine, no music, where every emulator played
+the song. The pulses were right - the carrier's harmonics follow the file's
+samples at exactly 1.0x speed (r 0.39 over 20 ms windows, at the one offset
+the recording was taken from) - and the song was simply not there to hear.
+An emulator filters the speaker to its host's rate, which takes the carrier
+away and hands the bass to a PC's speakers; the 5150 does neither. The
+pulse train the file drove, rebuilt at the PIT's resolution, is the reason:
+
+| band | the file as encoded | shaped |
+|---|---|---|
+| under 150 Hz | −9.4 dB | −37.9 dB |
+| 150–400 Hz | −16.9 dB | −13.2 dB |
+| 400–800 Hz | −25.4 dB | −13.7 dB |
+| 800–1,600 Hz | −27.8 dB | −13.1 dB |
+| 1,600–2,700 Hz | −30.7 dB | −13.6 dB |
+| the carrier, 5,524 Hz | −2.5 dB | −3.3 dB |
+
+(shares of the 20 Hz – 20 kHz power, ten seconds of *Bad Carrot*). A pulse
+width is all the speaker has, and a straight encode spends it on bass a
+2¼-inch cone cannot move, leaving what it CAN play 23–28 dB under the
+whine. XDC's speaker path (Scalibq/XDC, `PCSPKR.PAS`, `XDC_PLAY.PAS`) is the
+same mechanism to the formula - mode 0, lobyte, one count an IRQ0, t[s] =
+1 + s(N−2)/255 - and its compiler takes the WAV as it is, so there is no
+playback difference to copy: what the pulses carry is the whole question.
+
+**So `--audio speaker` shapes the sound by default** (`os88vid.spk_shape_f`,
+from ffmpeg's floats, not 8-bit steps):
+1. **nothing under `--spk-highpass`** (250 Hz; 0 keeps the bass), a brick
+   wall with a squared one-octave ramp, and the top **tilted up +9 dB from
+   400 Hz to 2.4 kHz**, where the cone and the ear are both at their best;
+2. **the level evened out** over a centred 30 ms RMS held over the window
+   either side - a 2:1 compressor, its gain growing no further below −24 dB
+   of the loudest 0.5%, and **silence left silent** below −48 dB;
+3. **driven to an RMS of `--spk-drive`** (0.45 of full scale) through a
+   `tanh` soft clip, which rounds off ~5% of samples. Loudness is what a
+   pulse width buys, and on this speaker clipping is the cheap end of it.
+
+A synthetic clip of a loud 60 Hz bass and a quiet 880 Hz line measures it
+the other way round: the line −43.0 dB → −5.4 dB of full scale, the bass
+−21.9 → −65.8. `--spk-shape off` takes the sound as it is, which is what every
+speaker file before this was.
+
+**A file already made is shaped after the fact** by `os88vid.py speaker IN
+OUT [--highpass HZ] [--drive D]`: each rendition's counts read back to
+samples (`spk_samples`), shaped, and written as counts into the same bytes -
+each frame record's last `abytes` and the seam's - so nothing else in the
+file moves, and it is re-read whole. A resident file's sound is a packed
+block and is refused: encode it again. The result is unproven on the iron
+until the owner has heard it; that is the check this wants.
+
 #### 98.2.16 Text video: `--pixfmt text`, and what CLARITY costs
 
 `--preset text` is TEXT in colour, **`--preset text-mono`** in the three

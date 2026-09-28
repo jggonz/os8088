@@ -2212,6 +2212,18 @@ and not a transcript. Each line names where the detail is.
 - **The keeper relocatable** (15.4 D): the blocks move, the keeper stays
   pinned until its use across window calls is proven safe.
 
+**The speaker on the 5150** (2026-09-28): the owner's first listen was a
+loud 5,524 Hz whine and no music, where every emulator played the song.
+The pulses were right (the carrier's harmonics follow the file at 1.0x);
+a straight encode put what a 2¼-inch cone can play 23-28 dB under the
+carrier. SPEC.md 98.2.15.1 shapes the sound for the speaker - on by
+default, and `os88vid speaker` for a file already made - which takes that
+band to ~10 dB under it. **Waiting on the owner's second listen**. Then, in
+order, if the whine is still the problem: two pulses a sample (an 11 kHz
+carrier, twice the ISR - the owner doubts the CPU is there beside a
+video), 11,025 Hz files (the same doubt), and a "5150 speaker" preview in
+the encoder that keeps the carrier and drops the bass.
+
 **PC speaker follow-ons** (15.9):
 - **Tracker's full screen and Audio**: a HANDOFF to another session,
   docs/plans/SPEAKER-PCM-HANDOFF.md. Audio needs a full-screen play first.

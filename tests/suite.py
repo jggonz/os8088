@@ -8340,6 +8340,16 @@ SOAK = [
         needs=("marty", "nasm"),
         wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
                "build/mbr.bin", "build/ctrl.drv")),
+    Row("vidspkshape", "soak", py("tests/vidspkshape.py"), 2.0,
+        "SPEC.md 98.2.15.1: a speaker clip's sound SHAPED for the speaker, on "
+        "the host - a loud 60 Hz bass and a quiet 880 Hz line through "
+        "os88venc --audio speaker with --spk-shape on and off: the line at "
+        "least 25 dB up and the bass 25 dB down, read off the counts in the "
+        "file; and os88vid speaker doing the same to the unshaped file after "
+        "the fact, no byte outside the frame records' sound changed, the "
+        "result verifying. Broken on purpose (the filter, the compressor and "
+        "the drive taken out of spk_shape_f) - red at both",
+        needs=("ffmpeg",)),
     Row("vidspkcounts", "soak", py("tests/vidspk.py", "--counts"), 30.0,
         "SPEC.md 98.1.1.3: vidspk on a clip MADE for the speaker - its PCM8 "
         "stored as the counts (SPKPWM), which the player copies rather than "

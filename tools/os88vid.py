@@ -702,6 +702,81 @@ def spk_table(rate):
 def spk_counts(samples, rate):
     """PCM8 samples as the speaker's counts (98.1.1.3)"""
     return bytes(samples).translate(spk_table(rate))
+
+
+def spk_samples(counts, rate):
+    """spk_counts undone: each count back to the lowest sample that makes
+    it (the table is monotonic, and several samples share a count)"""
+    inv = [None] * 256
+    for s, c in enumerate(spk_table(rate)):
+        if inv[c] is None:
+            inv[c] = s
+    return bytes(inv[c] if inv[c] is not None else 128 for c in counts)
+
+
+SPK_HP = 250                    # the speaker's high-pass, Hz (98.2.15.1)
+SPK_DRIVE = 0.45                # ...and its level, an RMS of full scale
+
+
+def spk_shape(pcm, rate, hp=SPK_HP, drive=SPK_DRIVE):
+    """SOUND SHAPED FOR THE SPEAKER (98.2.15.1): unsigned 8-bit PCM in and
+    out, the same length. A pulse's width is the only thing the speaker
+    has, and it spends it on whatever is loudest - in most music the bass
+    a 2 1/4-inch cone cannot move, which leaves what it CAN play 25-30 dB
+    under the carrier. So: nothing under `hp` Hz and the top tilted up
+    (+9 dB from 400 Hz to 2.4 kHz, where the cone and the ear are both
+    at their best), the level evened out over ~30 ms (quiet passages
+    raised, at most 24 dB, silence left silent), then driven to an RMS of
+    `drive` of full scale through a soft clip - loudness is what a pulse
+    width buys, and ~5% of samples rounded off is the cheap end of it"""
+    import numpy as np
+    return spk_shape_f(np.frombuffer(bytes(pcm), dtype=np.uint8)
+                       .astype(np.float64) - 128.0, rate, hp, drive,
+                       bytes(pcm))
+
+
+def spk_shape_f(x, rate, hp=SPK_HP, drive=SPK_DRIVE, raw=None):
+    """spk_shape's body, from samples at any scale (the encoder hands it
+    ffmpeg's floats, so the quiet passages it raises are not raised out of
+    8-bit steps). Out: unsigned 8-bit PCM; `raw` is what an input too
+    short or all silence comes back as"""
+    import numpy as np
+    x = np.asarray(x, dtype=np.float64)
+    n = len(x)
+    if raw is None:
+        raw = bytes([128]) * n
+    if n < 16:
+        return raw
+    if hp:                          # a brick wall with a one-octave ramp,
+        X = np.fft.rfft(x)          # squared so it is smooth at both ends
+        f = np.fft.rfftfreq(n, 1.0 / rate)
+        X *= np.clip((f - hp / 2.0) / (hp / 2.0), 0.0, 1.0) ** 2
+        tilt = np.clip(np.log2(np.maximum(f, 1.0) / 400.0)
+                       / np.log2(6.0), 0.0, 1.0)
+        X *= 10.0 ** (9.0 * tilt / 20.0)
+        x = np.fft.irfft(X, n)
+    w = max(1, int(rate * 0.03))    # the level: a centred 30 ms RMS...
+    c = np.concatenate(([0.0], np.cumsum(x * x)))
+    lo = np.clip(np.arange(n) - w // 2, 0, n)
+    hi = np.clip(np.arange(n) + w // 2 + 1, 0, n)
+    env = np.sqrt((c[hi] - c[lo]) / (hi - lo))
+    # ...held over the window either side, so a transient is not pumped
+    k = np.lib.stride_tricks.sliding_window_view(
+        np.pad(env, (w, w), mode="edge"), 2 * w + 1)
+    env = k.max(axis=1)
+    top = np.percentile(env, 99.5)
+    if top <= 0:
+        return raw
+    floor = top / 16.0              # -24 dB: below it, gain stops growing
+    gain = np.sqrt(top / np.maximum(env, floor))    # a 2:1 compressor
+    gate = np.clip(env / (top / 250.0), 0.0, 1.0)   # silence (-48 dB) stays
+    y = x * gain * gate
+    rms = np.sqrt(np.mean(y * y))
+    if rms <= 0:
+        return raw
+    y = np.tanh(y * (drive / rms)) / np.tanh(1.0)
+    y = np.clip(np.round(y * 127.0), -127, 127) + 128
+    return y.astype(np.uint8).tobytes()
 RUNS_MAX = 32                   # ...at most this many a record
 # What a Live pass's blit costs (98.3.10.2), fitted by timing vp_blitb on
 # MartyPC's CGA and Hercules 5150s over Live plays: a call's fixed part,
@@ -2334,6 +2409,52 @@ def set_title(path, title):
     return t.decode("ascii")
 
 
+def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE):
+    """A SPEAKER FILE'S SOUND SHAPED AFTER THE FACT (98.2.15.1): every
+    rendition's counts read back to samples, spk_shape'd and written as
+    counts again, in the same bytes - each frame record's last `abytes`
+    and the seam's - so nothing else in the file moves. A resident file's
+    sound is a packed block, so it is refused: encode it again. Returns
+    the renditions done"""
+    d = bytearray(open(src, "rb").read())
+    n = Reader(src).nrend
+    for ri in range(n):
+        r = Reader(src, ri)
+        if not r.spk:
+            raise V88Error("rendition %d is not made for the speaker (no "
+                           "SPKPWM, 98.1.1.3)" % ri)
+        if r.resident:
+            raise V88Error("a resident file's sound is packed: encode it "
+                           "again with --audio speaker")
+        at, nsec, where = r.sp0, r.sp0n, []
+        while nsec:
+            nf, nxt = struct.unpack_from("<HH", d, at)
+            o = at + 4
+            for i in range(nf):
+                m = struct.unpack_from("<H", d, o)[0]
+                where.append(o + m - r.abytes)
+                o += m
+            at, nsec = at + nsec * SECTOR, nxt
+        if len(where) != r.frames:
+            raise V88Error("rendition %d: %d records for %d frames"
+                           % (ri, len(where), r.frames))
+        ab = r.abytes
+        old = b"".join(bytes(d[w:w + ab]) for w in where)
+        new = spk_counts(spk_shape(spk_samples(old, r.rate), r.rate, hp,
+                                   drive), r.rate)
+        for f, w in enumerate(where):
+            d[w:w + ab] = new[f * ab:(f + 1) * ab]
+        if r.loop is not None:
+            L, off, m = r.loop[:3]
+            d[off + m - ab:off + m] = new[L * ab:(L + 1) * ab]
+    with open(dst, "wb") as f:
+        f.write(d)
+    for ri in range(n):
+        for rec, at, i in Reader(dst, ri).records():
+            pass
+    return n
+
+
 def cycles_of(rec, planar=False, layout=None):
     """The wave 0 model's cycles for one record, writing CGA's screen: the
     frame's fixed cost, a set-up per skip segment, each entry by its list,
@@ -3018,6 +3139,13 @@ def cmd_title(a):
     print("os88vid: %s: title '%s'" % (a.file, t))
 
 
+def cmd_speaker(a):
+    n = spk_reshape(a.file, a.out, a.highpass, a.drive)
+    print("os88vid: %s: %d rendition%s' sound shaped for the speaker "
+          "(high-pass %d Hz, drive %.2f)" % (a.out, n, "" if n == 1 else "s",
+                                             a.highpass, a.drive))
+
+
 def cmd_info(a):
     for path in a.files:
         r = Reader(path)
@@ -3688,6 +3816,15 @@ def main():
     s.add_argument("file")
     s.add_argument("title", help="up to 47 characters; the player's panel "
                    "shows the first 35")
+    s = sub.add_parser("speaker", help="a speaker .V88's sound shaped for "
+                       "the speaker, into a new file (SPEC.md 98.2.15.1)")
+    s.add_argument("file")
+    s.add_argument("out")
+    s.add_argument("--highpass", type=int, default=SPK_HP,
+                   help="Hz; nothing under it (default %(default)s, 0 off)")
+    s.add_argument("--drive", type=float, default=SPK_DRIVE,
+                   help="the level, an RMS of full scale (default "
+                        "%(default)s)")
     s = sub.add_parser("decode")
     s.add_argument("file")
     s.add_argument("--frame", type=int, required=True)
@@ -3716,7 +3853,7 @@ def main():
         return {"stat": cmd_stat, "verify": cmd_verify, "import": cmd_import,
                 "encode": cmd_encode, "info": cmd_info, "decode": cmd_decode,
                 "benchdat": cmd_benchdat, "poster": cmd_poster,
-                "title": cmd_title}[a.cmd](a) or 0
+                "title": cmd_title, "speaker": cmd_speaker}[a.cmd](a) or 0
     except (XdvError, V88Error) as e:
         sys.exit("os88vid: %s" % e)
 
