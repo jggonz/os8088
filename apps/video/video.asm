@@ -121,8 +121,9 @@ VPX_DESK    equ 3                   ; back to the desktop, paused - never 0,
 VP_KMAXREC  equ 61440               ; the largest keyframe record we will read:
                                     ; a VGA8 one is up to a canvas (98.1.3),
                                     ; and what bounds it is the read - the
-                                    ; record and a cluster either side in one
-                                    ; 64 KB claim, which vp_parse works out
+                                    ; record's clusters at the worst offset
+                                    ; in one 64 KB claim (vp_spankb), which
+                                    ; vp_parse works out
 
 ; --- the file (SPEC.md 98.1.1) -------------------------------------------------
 V88_FRAMES  equ 8
@@ -1315,21 +1316,11 @@ vp_parse:
     cmp bx, VP_KMAXREC
     ja .nokeys
     mov [vp_kmaxb], bx
-    push dx
-    xor dx, dx
-    mov cx, [vp_clb]                ; its read: the record and a cluster
-    add bx, cx                      ; either side, whole KB - ONE 64 KB claim
-    adc dx, 0                       ; at most, which keeps the read one call
-    add bx, cx                      ; of READ_AT (a word of bytes). Summed in
-    adc dx, 0                       ; 32 bits: 61,440 and two 2 KB clusters
-    add bx, 1023                    ; is 65,536 exactly, which a 16-bit sum
-    adc dx, 0                       ; with a carry test refused
-    mov cl, 10
-    shr bx, cl
-    mov cl, 6
-    shl dx, cl
-    or bx, dx
-    pop dx
+    push ax                         ; its read: the record's clusters at the
+    mov cx, bx                      ; worst offset, whole KB - ONE 64 KB claim
+    call vp_spankb                  ; at most, which a ring's two slots hold.
+    mov bx, ax                      ; A 32 KB cluster's is 64 KB for a record
+    pop ax                          ; up to 32 KB and a byte
     cmp bx, 64
     ja .nokeys
     mov [vp_kbkb], bx
@@ -1401,15 +1392,10 @@ vp_parse:
     cmp ax, VP_PREVKB * 1024
     ja .nolp
 .lfl:
-    mov cx, [vp_clb]                ; ...and one read: it and a cluster either
-    add ax, cx                      ; side, whole KB, as a keyframe's
-    jc .nolp
-    add ax, cx
-    jc .nolp
-    add ax, 1023
-    jc .nolp
-    mov cl, 10
-    shr ax, cl
+    mov cx, ax                      ; ...and one read: its clusters at the
+    call vp_spankb                  ; worst offset, whole KB, as a keyframe's
+    cmp ax, 64
+    ja .nolp
     mov [vp_lkb], ax
     mov byte [vp_lkind], 1
 .nolp:
@@ -2642,11 +2628,8 @@ vp_rdpal:
     push si
     push di
     push es
-    mov ax, [vp_clb]                ; 768 bytes and a cluster either side
-    add ax, ax
-    add ax, 768 + 1023
-    mov cl, 10
-    shr ax, cl
+    mov cx, 768                     ; 768 bytes' clusters, whole KB (two
+    call vp_spankb                  ; 32 KB clusters' sum was 0 in a word)
     call OSAPI_MEM_CLAIM
     jc .mem
     mov [vp_rdseg], dx
@@ -3138,50 +3121,123 @@ vp_zero:
     pop ax
     ret
 
-; vp_rdat - DX:AX = a file offset, CX = bytes wanted (<= 64 KB less two
-; clusters): the clusters under them read into [vp_rdseg]:0 (READ_AT takes
-; whole clusters). out: CF=0 SI = where the offset landed; CF=1 the disk
-; failed, or the file stops short of them
+; vp_rdat - DX:AX = a file offset, CX = bytes wanted: the clusters under
+; them read into [vp_rdseg]:0 - READ_AT takes whole clusters, and one call
+; moves at most 64 KB less a cluster (a word of them), so a span wider than
+; that - a 32 KB cluster's, on a volume near 2 GB - is read in two or three.
+; The buffer holds SI + CX rounded up to a cluster, which vp_spankb bounds.
+; out: CF=0 SI = where the offset landed; CF=1 the disk failed, or the file
+; stops short of them
 vp_rdat:
     push ax
     push bx
     push cx
     push dx
+    push di
     push es
     mov bx, [vp_clb]
-    dec bx
+    dec bx                          ; BX = a cluster's mask, throughout
     mov si, ax
     and si, bx                      ; SI = into its cluster
-    sub ax, si
-    add cx, si                      ; the end, from that cluster's start
-    jc .bad
+    sub ax, si                      ; DX:AX = that cluster's start
+    add cx, si                      ; the bytes owed from there, 17 bits
     mov [vp_rdend], cx
-    add cx, bx                      ; ...in whole clusters
-    jc .bad
-    not bx
-    and cx, bx
+    mov word [vp_rdend+2], 0
+    adc word [vp_rdend+2], 0
     mov es, [vp_rdseg]
-    xor bx, bx
+.l:
+    mov di, [vp_clb]
+    neg di                          ; DI = a call's most, whole clusters
+    mov cx, di                      ; CX = what this one must deliver
+    cmp word [vp_rdend+2], 0
+    jne .rd
+    cmp [vp_rdend], di
+    ja .rd
+    mov cx, [vp_rdend]              ; ...the rest, in one call
+    mov di, cx
+    add di, bx
+    not bx
+    and di, bx
+    not bx
+.rd:
+    push ax
+    push dx
     push si
+    push bx
+    push cx
+    mov cx, di
+    xor bx, bx
     mov si, vp_name
     call OSAPI_FILE_READ_AT         ; DX:AX = the bytes delivered
+    pop cx
+    pop bx
     pop si
-    jc .bad
+    jc .badp
     or dx, dx
-    jnz .ok
-    cmp ax, [vp_rdend]
-    jb .bad
-.ok:
-    clc
-    jmp short .out
+    jnz .next
+    cmp ax, cx
+    jb .badp
+.next:
+    pop dx
+    pop ax
+    add ax, di                      ; the next call's offset...
+    adc dx, 0
+    sub [vp_rdend], di              ; ...and what is still owed
+    sbb word [vp_rdend+2], 0
+    jc .ok
+    mov cx, [vp_rdend]
+    or cx, [vp_rdend+2]
+    jz .ok
+    mov cl, 4                       ; ...into the buffer past this call's
+    shr di, cl
+    mov cx, es
+    add cx, di
+    mov es, cx
+    jmp short .l
+.badp:
+    pop dx
+    pop ax
 .bad:
     stc
+    jmp short .out
+.ok:
+    clc
 .out:
     pop es
+    pop di
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; vp_spankb - CX = bytes at any offset: AX = the KB vp_rdat's read of them
+; can take - CX and a cluster less a byte, rounded up to whole clusters
+; (the offset's own place in its cluster is the most it can be moved on)
+vp_spankb:
+    push bx
+    push cx
+    push dx
+    mov bx, [vp_clb]
+    dec bx
+    xor dx, dx
+    mov ax, cx
+    add ax, bx
+    adc dx, 0
+    add ax, bx
+    adc dx, 0
+    not bx
+    and ax, bx                      ; (a cluster divides 64 KB: DX stands)
+    add ax, 1023
+    adc dx, 0
+    mov cl, 10
+    shr ax, cl
+    mov cl, 6
+    shl dx, cl
+    or ax, dx
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4188,16 +4244,21 @@ vp_ldblk:
     jc .io
     jmp .ok
 .rd1:
-    call vp_bkrd                    ; CX = the read, whole clusters - which
-    jc .bad                         ; vp_bkkb has put inside the claim
-    mov ax, [vp_ldkb]
+    call vp_bkrd                    ; DI:CX = the read, whole clusters -
+    mov ax, [vp_ldkb]               ; which vp_bkkb has put inside the claim
     mov dx, 64
     mul dx
     add ax, [vp_ldseg]              ; AX = the claim's end, a paragraph
-    shr cx, 1
-    shr cx, 1
-    shr cx, 1
-    shr cx, 1
+    push ax
+    mov ax, cx                      ; DI:CX >> 4 = the read in paragraphs
+    mov dx, di
+    mov cx, 4
+.rp:
+    shr dx, 1
+    rcr ax, 1
+    loop .rp
+    mov cx, ax
+    pop ax
     sub ax, cx
     mov [vp_rdseg], ax
     mov ax, [bx+BK_OFF]
@@ -4205,6 +4266,11 @@ vp_ldblk:
     mov cx, [bx+BK_PACKED]
     call vp_rdat                    ; SI = where the block landed
     jc .io
+    mov ax, si                      ; ...as a segment of its own: SI and 60
+    mov cl, 4                       ; KB can pass the claim's first 64 KB
+    shr ax, cl                      ; when a cluster is 32 KB (98.1.7.5)
+    add [vp_rdseg], ax
+    and si, 15
     mov cl, [bx+BK_PACK]
     dec cl
     mov al, cl                      ; AL = OSAPI_LZ_*
@@ -4257,13 +4323,18 @@ vp_bkkb:
     adc dx, 0
     jmp short .kb
 .pk:                                ; PACKED: or the READ, when that is
-    or dx, dx                       ; bigger, so the read that ends at the
-    jnz .kb                         ; claim's top starts inside it - a
-    call vp_bkrd                    ; packing need not shrink, and the
-    jc .kb                          ; cluster under its start adds to it
-    cmp ax, cx                      ; (98.1.7; vp_ldblk refuses the carry)
-    jae .kb
+    push di                         ; bigger, so the read that ends at the
+    call vp_bkrd                    ; claim's top starts inside it - a
+    cmp dx, di                      ; packing need not shrink, and the
+    ja .pkd                         ; cluster under its start adds to it
+    jb .rdk                         ; (98.1.7; in 32 bits, 98.1.7.5)
+    cmp ax, cx
+    jae .pkd
+.rdk:
     mov ax, cx
+    mov dx, di
+.pkd:
+    pop di
 .kb:
     add ax, 1023
     adc dx, 0
@@ -4276,26 +4347,27 @@ vp_bkkb:
     pop cx
     ret
 
-; vp_bkrd - BX = a PACKED block's fields: CX = its read - from the cluster
-; under its start, in whole clusters, which is what vp_rdat reads. CF=1 the
-; sum carried, as vp_rdat's own would, and the block is refused. Preserves
-; all else
+; vp_bkrd - BX = a PACKED block's fields: DI:CX = its read - from the
+; cluster under its start, in whole clusters, which is what vp_rdat reads.
+; In 32 bits: 60 KB packed and a 32 KB cluster either side is past a word,
+; and a 16-bit sum refused the file as damaged (98.1.7.5). Preserves all
+; else
 vp_bkrd:
     push ax
     push si
     mov si, [vp_clb]
     dec si
     and si, [bx+BK_OFF]             ; SI = into its cluster
+    xor di, di
     mov cx, [bx+BK_PACKED]
     add cx, si
-    jc .out
+    adc di, 0
     mov ax, [vp_clb]
     dec ax
     add cx, ax
-    jc .out
+    adc di, 0
     not ax
-    and cx, ax                      ; (CF = 0)
-.out:
+    and cx, ax
     pop si
     pop ax
     ret
@@ -10880,7 +10952,7 @@ vp_sel:       dw 0                  ; the key Play starts at; 0 = the start
 vp_kload:     dw 0xFFFF             ; the key vp_ke holds
 vp_ke:        times 16 db 0         ; its table entry (98.1.3)
 vp_rdseg:     dw 0                  ; vp_rdat's destination
-vp_rdend:     dw 0
+vp_rdend:     dd 0
 vp_kshd:      dw 0
 vp_pseg:      dw 0                  ; the poster: its claim, 0 = none...
 vp_pbw:       dw 0                  ; ...its bytes a row...

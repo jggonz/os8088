@@ -150784,8 +150784,10 @@ file is that shape:
   slot's chain fields are 0 and its stream length is the unpacked block.
   **Keyframes stay in the file** as a streamed file has them, their
   super-packet fields 0: the Preview's poster and a seek read them there.
-- **The bounds are the machine's**: a block packs to at most 60 KB (one
-  `READ_AT` of it and a cluster either side) and unpacks to under 128 KB;
+- **The bounds are the machine's**: a block packs to at most 60 KB and
+  unpacks to under 128 KB, a stored one any size under 1 MB (98.1.7.1);
+  its clusters are read in `READ_AT` calls of at most 64 KB less a cluster
+  (98.1.7.5);
   `tools/os88vid.py` stores one that packing would not make smaller.
 
 **The player takes the best rendition this screen has** (`vp_open`): its
@@ -150806,7 +150808,7 @@ the READ when that is bigger - a packing need not shrink, and a stored
 block's cluster slack either side can take the read a cluster past its
 size, so a claim sized by the unpacked bytes alone put a hostile LZ block's
 read (and a valid stored one's, on 2 KB clusters) BELOW the claim; the read
-is summed as `vp_rdat` sums it and a carry refuses the block; the
+is summed in 32 bits and read as `vp_rdat` reads it (98.1.7.5); the
 packed block read so its clusters END at the claim's top, which puts it
 above where it expands to - SPEC.md 20.13.7's raw tail is what makes that
 enough - and `OSAPI_DECOMP` down to the claim's base. The audio block the
@@ -151068,6 +151070,48 @@ could not move. Broken on purpose, it FAILS:
 - never declared: no C can be picked;
 - a proc that patches nothing: the block is not a claim after the move, and
   B stops.
+
+##### 98.1.7.5 A read wider than one call - 32 KB clusters
+
+**`OSAPI_FILE_READ_AT` takes whole clusters and a WORD of bytes** (18.4.4),
+so one call moves at most 64 KB less a cluster - 32 KB, on the volume near
+2 GB that 18.7.5 formats with 64 sectors a cluster. `vp_rdat` reads the
+clusters under a span in as many calls as that takes, each landing where
+the last one ended, and each must deliver its share or the file stops short
+of them. A span that fits one call - every one on clusters of 16 KB or
+less, and all but the largest blocks on those - is read in ONE, exactly as
+before.
+
+It was ONE call always, summed in 16 bits, and a carry refused the block
+as damaged: a 31,848-byte block 10,240 bytes into a 32 KB cluster comes to
+74,855, so the shipped `OS8088.V88` answered **"This .V88 is damaged"** off
+an installed 2 GB C: while the same file played off the floppy (the
+owner's report). Three things follow from the wider read:
+
+- **A packed block's first byte can be past the claim's first 64 KB** (60
+  KB packed, up to 32 KB into its cluster), so `vp_ldblk` hands
+  `OSAPI_DECOMP` a segment of the block's own - its linear address
+  unchanged, so the raw tail's argument stands - and `vp_bkrd` sums the
+  read in 32 bits. A stored block was already read in 32 KB pieces from a
+  cluster boundary (98.1.7.1), which a 32 KB cluster reads one a call.
+- **A buffer is sized by `vp_spankb`**: the bytes and a cluster less a
+  byte, rounded up to whole clusters - the most `vp_rdat` can read for
+  them at any offset, in 32 bits. The palette's claim was the cluster
+  twice plus 768 in a WORD, which two 32 KB clusters make a 1 KB claim for
+  a 32 KB read.
+- **A keyframe or seam record is still one 64 KB claim at most** - a
+  ring's two slots are what hold it - but sized by `vp_spankb` rather than
+  the record and a whole cluster either side: `VP_KMAXREC` on clusters up
+  to 4 KB where 4 KB stopped at 57,344, and **32,769 on 32 KB**, where the
+  looser sum refused every key and a 2 GB volume played every file with no
+  poster and no seek (`key_limit()` in tools/os88venc.py follows it).
+
+`vidbigclus` is the gate: bigvol's 321MB disk formatted by mtools at 64
+sectors a cluster, `OS8088.V88` in `C:/MEDIA`, HDD.DRV mounting it off the
+system floppy on the Hercules 5150 - Play starts a session, the
+rendition's block lands byte for byte across two calls, frames are drawn.
+Broken on purpose (the player before it) it FAILS with the damaged-file
+sentence.
 
 ### 98.2 The host tools — `tools/os88vid.py`
 
@@ -151476,8 +151520,8 @@ measured retry are the same code (VIDEO-PLAN W11a).
   A keyframe is not in a super-packet and is bounded by its length word;
   the encoder says when one is past what the player reads off a volume of
   2 KB clusters - **61,440**, `VP_KMAXREC` itself: `vp_parse` sizes the
-  record plus a cluster either side in 32 bits as one 64 KB claim, so 2 KB
-  clusters reach it exactly and 4 KB clusters stop at 57,344 (`key_limit()`
+  record's clusters at the worst offset in 32 bits as one 64 KB claim, so
+  clusters up to 4 KB reach it and 32 KB ones stop at 32,769 (`key_limit()`
   in tools/os88venc.py is that arithmetic, worked rather than restated).
 - **15 fps by default.** A byte a pixel doubles what a moving camera costs
   against one bit: Trackmania at 320 × 150 needs ~500 KB/s at 30 fps and
@@ -152266,6 +152310,8 @@ side on a volume of 2 KB clusters; past what the volume's clusters allow,
 The bound is the record plus two clusters, rounded up to whole KB, **no more
 than 64 KB**: 61,440 on clusters of 2 KB or less and 57,344 on 4 KB, and
 `vp_parse` sums it in 32 bits because on 2 KB clusters it is 65,536 exactly.
+(98.1.7.5 has since tightened it to the record's clusters at the worst
+offset: 61,440 on 4 KB clusters too, and 32,769 on 32 KB.)
 It was summed in 16 bits with a carry test at every add - and one add too
 many, the cluster three times and taken back once - so a 2 KB volume
 refused every key over 59,391 while this paragraph promised 61,440.
