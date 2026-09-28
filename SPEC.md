@@ -149068,7 +149068,8 @@ CGA copies packed rows with bank alternation. A 128-byte displayed-cell shadow
 includes the active capsule. Ordinary movement visits only its two old and
 two new cells; locks, clears and gravity compare the complete 128-cell board.
 No pixel framebuffer is scanned or copied during ordinary play. Unchanged
-ticks without an animation change perform no video writes. Text has a character shadow and cached native glyphs. Initial paint and mode reentry invalidate the
+ticks without an animation change perform no video writes. Text has a character shadow and 63 cached native glyphs. VGA/CGA share
+4,032 bytes of native font storage, rebuilt only on mode entry. Initial paint and mode reentry invalidate the
 shadows. Board address tables eliminate per-cell coordinate multiplication.
 
 `anim.inc` supplies a decorative clock independent of the capsule state machine
@@ -149112,8 +149113,25 @@ keyboard typematic. BIOS-buffered action makes preserve taps shorter than
 one frame; repeats of held action keys are ignored. Timing is bounded and
 does not replay missed frames.
 
-The adaptation does not include NES music, endings, attract sequences or
-competitive two-player mode. Speaker cues are nonblocking OS sound requests.
+Audio uses local-reference note arrangements compiled offline from the NES
+music sequencer ($DDEF–$E017); generated music stays in build/drmario-art.
+M selects FEVER / CHILL / OFF in the launcher or fullscreen; the HUD shows
+the selection. Initial launcher title/options audio uses WM_ONTIMER, suspends
+on loss of focus and is cancelled on fullscreen entry. AdLib and Sound Blaster use
+three OPL2 music voices through OSAPI_SND_FM; PC speaker uses the lead voice
+through OSAPI_SND_TONE. Sound Blaster uses FM, without PCM mixing or DMA.
+Effects take priority over the speaker melody and use a separate FM voice.
+The sequencer runs once per fullscreen frame, with bounded work, fractional
+60Hz note timing and no missed-frame replay. Pausing freezes music position;
+exit silences and releases audio; reentry resumes the saved music position.
+Music OFF retains effects. Steady sequencer updates are capped at two notes per
+frame,
+including one immediate effect. Pending music voices use fair rotating service;
+a third simultaneous voice follows within one frame normally, two with effects.
+Only the latest pitch is retained. Speaker output has finite leases, refreshed
+before expiry. Whole-game frame timing and the deterministic decorative clock
+are unchanged. There are no new IRQs, workers or kernel services.
+Endings, attract sequences and competitive two-player mode remain absent.
 Guest tests must cover matches, links, gravity, rotation, game over, progression,
 input, mode restoration, incremental/full repaint equivalence and actual 8088
 cycle costs on VGA and CGA. Timing claims must distinguish emulator results

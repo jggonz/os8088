@@ -83,16 +83,21 @@ animation are implemented incrementally; the complete roadmap remains open.
 
 ### 5. Audio
 
-- [ ] Implement FEVER / CHILL / OFF selection and gameplay arrangements through
-  the OS sound service. Decide and document whether music uses local reference
-  data or original DrMarco compositions before bundling any music assets.
-- [ ] Add title/options, stage-clear, game-over, versus and ending music.
-- [ ] Add cursor, move, rotate, land, falling fragments, clear, speed-up, pause
-  and attack cues. Define music/effect priority and audio ownership.
+- [x] Implement FEVER / CHILL / OFF selection and gameplay arrangements through
+  the OS sound service. Music is compiled from the local NES reference into
+  build-only assets; OPL patches and speaker tones are native arrangements.
+- [x] Add title/options, stage-clear and game-over music for existing scenes.
+- [ ] Add versus and ending music alongside those future game modes/scenes.
+- [x] Add cursor, move, rotate, land, falling fragments, clear, speed-up and pause
+  cues. Effects override speaker music and have a dedicated FM voice; OS channel
+  claims and priorities govern ownership. Sound Blaster uses its OPL FM tier.
+- [ ] Add attack cues alongside competitive play.
 - [ ] Synchronize virus dance frames with music where practical; provide a
   deterministic beat when music is off.
-- [ ] Verify sound on the speaker, clean stop on fullscreen exit, pause/resume,
-  channel arbitration, and bounded CPU cost without blocking gameplay.
+- [x] Verify speaker, AdLib and Sound Blaster FM, clean stop on fullscreen exit,
+  pause/resume, channel arbitration, and bounded CPU cost without blocking
+  gameplay in the 4.77 MHz MartyPC model. Physical XT listening remains a
+  hardware acceptance check.
 
 ### 6. Milestone scenes and endings
 
@@ -190,3 +195,29 @@ separate from user-supplied reference assets.
   eye-only pixel changes, exact reopening restoration, pause and mode reentry.
   Blink redraw costs 0.89/0.42 ms VGA/CGA. Image 46,868 bytes + 10,223 BSS =
   57,091 bytes; compressed package 18,409 bytes. All four disk geometries verify.
+
+- 2026-09-28: Audio implemented for current single-player scenes. M selects
+  FEVER/CHILL/OFF in either view; the fullscreen HUD shows the selection.
+  Local NES note data is compiled offline with source hashes, repeats, shared
+  tempo/transposition and phrase deduplication. Three OPL music voices plus an
+  effect voice serve AdLib and Sound Blaster; the speaker uses the lead voice
+  with effect priority. Title/options, clear and loss music and eight gameplay
+  cues are connected. Versus/attack/ending scenes remain future work.
+- Audio validation: independent execution of the original 6502 sequencer agrees
+  with every imported pitch/duration through three loops. XT speaker, AdLib-only
+  emulation and SB profiles pass note, effects, priority, OFF, pause,
+  exit/reentry, refused claims and channel release tests. Captures contain
+  audible speaker/OPL output; SB PCM stays idle. VGA/CGA gameplay, pixel and
+  animation gates pass; QEMU confirms complete Mode X display and restoration.
+  All four application disk geometries verify.
+- Audio costs: speaker averages 0.20/0.18 ms for FEVER/CHILL; FM averages
+  0.88/0.60 ms. Peak sampled SB audio is 6.06 ms after limiting steady updates
+  to two voices per tick with rotating pending notes. A movement frame including
+  input, logic, rendering and peak audio totals 11.64 ms versus an 18.32 ms tick.
+  Movement rendering remains 3.45/1.40 ms VGA/CGA. The existing decorative clock
+  stays independent to preserve its timing and cost; music synchronization is
+  still open. These are emulator results, not physical XT measurements.
+- Memory: 54,576 image + 6,617 BSS = 61,193 bytes; compressed 23,230 bytes.
+  Sharing the VGA/CGA native font cache and storing 63 used glyphs recovers
+  3,648 bytes of BSS, rebuilt on mode entry only. No mixer, worker, new IRQ,
+  heap allocation or kernel API was added. Proofs: `build/drmario-proof/`.

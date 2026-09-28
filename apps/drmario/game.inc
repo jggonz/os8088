@@ -14,6 +14,7 @@ dm_random:
     ret
 
 dm_newgame:
+    call dm_audio_game
     call dm_animreset
     push ds
     pop es
@@ -178,6 +179,8 @@ dm_spawn:
     call dm_valid
     jnc .ok
     mov byte [dm_state], 3
+    mov al, 6
+    call dm_audio_song
 .ok: ret
 
 ; Return BX=anchor (left or bottom), SI=other (right or top).
@@ -227,7 +230,8 @@ dm_move:
     ret
 .ok:
     or byte [dm_dirty], 1
-    ret
+    mov al, DM_FX_MOVE
+    jmp dm_effect
 
 dm_rotate:
     mov ah, [dm_rotation]
@@ -251,7 +255,8 @@ dm_rotate:
 .ok:
     pop ax
     or byte [dm_dirty], 1
-    ret
+    mov al, DM_FX_ROTATE
+    jmp dm_effect
 
 ; AX=encoded halves for the current rotation; BX/SI from valid.
 dm_halves:
@@ -301,6 +306,8 @@ dm_tick:
     call dm_halves
     mov [dm_board+bx], al
     mov [dm_board+si], ah
+    mov al, DM_FX_LAND
+    call dm_effect
     inc byte [dm_pillcount]
     cmp byte [dm_pillcount], 10
     jb .match
@@ -308,6 +315,8 @@ dm_tick:
     cmp byte [dm_accel], 49
     jae .match
     inc byte [dm_accel]
+    mov al, DM_FX_SPEED
+    call dm_effect
 .match:
     call dm_findmatches
     cmp byte [dm_matched], 0
@@ -323,8 +332,8 @@ dm_tick:
     mov byte [dm_state], 1
     mov byte [dm_delay], 12
     mov byte [dm_dirty], 2
-    mov ax, 880
-    jmp dm_tone
+    mov al, DM_FX_CLEAR
+    jmp dm_effect
 .flash:
     dec byte [dm_delay]
     jnz .out
@@ -338,7 +347,11 @@ dm_tick:
     mov byte [dm_delay], 3
     call dm_gravity
     cmp byte [dm_moved], 0
-    jne .changed
+    je .settled
+    mov al, DM_FX_FALL
+    call dm_effect
+    jmp .changed
+.settled:
     call dm_findmatches
     cmp byte [dm_matched], 0
     jne .beginflash
@@ -346,16 +359,12 @@ dm_tick:
     jne .spawn
     mov byte [dm_state], 4
     mov byte [dm_huddirty], 1
-    mov ax, 1320
-    jmp dm_tone
+    mov al, [dm_music]
+    and al, 1
+    add al, 2
+    jmp dm_audio_song
 .spawn:
     call dm_spawn
-    ret
-
-dm_tone:
-    mov cx, 2
-    mov dl, 40h
-    call OSAPI_SND_TONE
     ret
 
 dm_speedbase: db 15,25,31

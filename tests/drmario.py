@@ -24,7 +24,7 @@ import os88geom as G
 def symbols():
     source=(ROOT/'apps/drmario/drmario.asm').read_text()
     names=re.findall(r'^VAR (dm_\w+),',source,re.M)
-    for file in ('drmario.asm','game.inc','video.inc','anim.inc'):
+    for file in ('drmario.asm','game.inc','video.inc','anim.inc','audio.inc'):
         names += re.findall(r'^(dm_\w+):', (ROOT/'apps/drmario'/file).read_text(),re.M)
     with tempfile.TemporaryDirectory() as td:
         p=Path(td)/'probe.asm';b=Path(td)/'probe.bin'
@@ -69,14 +69,14 @@ def video(p,tag):
     # VGA debugger peeks ignore the selected read plane. Execute MOVSB in
     # the guest for all four planes, preserving borrowed code/data/registers.
     saved=m.regs();stub=p.sym['dm_queue'];scratch=p.sym['dm_fontvga']
-    oldstub=m.read(p.base+stub,9);olddata=m.read(p.base+scratch,6144)
+    oldstub=m.read(p.base+stub,9);olddata=m.read(p.base+scratch,4032)
     m.write(p.base+stub,bytes.fromhex('fa b8 00 a0 8e d8 f3 a4 90'))
     index=m.inb(0x3ce);m.outb(0x3ce,4);selected=m.inb(0x3cf)
     result=[]
     for plane in range(4):
         m.outb(0x3cf,plane)
-        for start in range(0,19200,6144):
-            count=min(6144,19200-start)
+        for start in range(0,19200,4032):
+            count=min(4032,19200-start)
             m.cmd(cmd='park',cs=p.base>>4,ip=stub)
             for r,v in [('es',p.base>>4),('si',start),('di',scratch),('cx',count),
                         ('flags',saved['flags']&~0x600)]:m.setreg(r,v)

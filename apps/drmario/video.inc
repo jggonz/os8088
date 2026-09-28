@@ -39,9 +39,32 @@ dm_fontcache:
     mov cx, 768
     rep movsb
     pop ds
+    ; Fullscreen text uses ASCII 32..90 plus a/c/o/r in the DrMarco title.
+    ; Fold those four glyphs into otherwise unused punctuation slots.
+    mov di, dm_glyphs+59*8
+%assign letter 'a'
+%rep 4
+    mov si, dm_glyphs+(letter-32)*8
+    mov cx, 4
+    rep movsw
+%if letter == 'a'
+%assign letter 'c'
+%elif letter == 'c'
+%assign letter 'o'
+%else
+%assign letter 'r'
+%endif
+%endrep
+    ret
+
+dm_fontbuild:
+    push ds
+    pop es
+    cmp byte [dm_cga], 0
+    jne .cga
     mov bx, dm_glyphs
     mov di, dm_fontvga
-    mov bp, 96
+    mov bp, 63
 .glyph:
     mov dx, 0880h
 .plane:
@@ -67,9 +90,11 @@ dm_fontcache:
     add bx, 8
     dec bp
     jnz .glyph
+    ret
+.cga:
     mov si, dm_glyphs
     mov di, dm_fontcga
-    mov cx, 768
+    mov cx, 504
 .cgarow:
     lodsb
     xor dx, dx
@@ -462,6 +487,10 @@ dm_text:
 dm_glyph:
     SAVE
     sub al, 32
+    push bx
+    mov bx, dm_fontmap
+    xlat
+    pop bx
     xor ah, ah
     mov si, ax
     mov cl, 6
@@ -536,6 +565,13 @@ dm_hudcompose:
     HUD dm_lspeed,96
     HUD dm_lvirus,144
     HUD dm_lnext,8
+    xor bx, bx
+    mov bl, [dm_music]
+    shl bx, 1
+    mov si, [dm_musicnames+bx]
+    mov di, dm_hud+192
+    mov cx, 5
+    rep movsb
     mov di, dm_hud+16
     call dm_scoretext
     xor ax, ax
@@ -673,7 +709,7 @@ dm_hudpaint:
     ret
 
 dm_titlecaps: db 'DrMarco',0
-dm_footer: db 'Z/X ROTATE  P PAUSE  ESC EXIT',0
+dm_footer: db 'Z/X ROTATE P PAUSE M MUSIC ESC EXIT',0
 dm_lscore: db 'SCORE',0
 dm_llevel: db 'LEVEL',0
 dm_lspeed: db 'SPEED',0
@@ -730,3 +766,23 @@ dm_vgatiles: incbin "dm-vga.bin"
 dm_cgatiles: incbin "dm-cga.bin"
 dm_screenvga: incbin "dm-screen-vga.bin"
 dm_screencga: incbin "dm-screen-cga.bin"
+
+; Packed native glyph indices. Only the title uses lowercase.
+dm_fontmap:
+%assign ch 32
+%rep 96
+%if ch == 'a'
+    db 59
+%elif ch == 'c'
+    db 60
+%elif ch == 'o'
+    db 61
+%elif ch == 'r'
+    db 62
+%elif ch <= 'Z'
+    db ch-32
+%else
+    db 0
+%endif
+%assign ch ch+1
+%endrep

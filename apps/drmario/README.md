@@ -23,7 +23,9 @@ The default reference directory is `../NES-Games-Disassembly/Dr. Mario`.
 Override it with `make drmarco DRMARIO_SOURCE='/path/to/Dr. Mario'`.
 The supplied reference is revision `df2c8e5`; the importer records SHA-256
 hashes of both inputs in `build/drmario-art/dm-source.txt`.
-NES graphics are imported into `build/drmario-art/`, never committed.
+NES graphics and music are imported into `build/drmario-art/`, never committed.
+`tools/drmario_audio.py` compiles the music; `dm-music.json` records its source
+hash and phrase counts.
 `make drmario-assets` refreshes the import. No external files are needed at
 runtime: open `DRMARCO.O88` from the generated application disk.
 
@@ -55,12 +57,14 @@ The animation never consumes gameplay RNG or changes capsule/control timing.
 Capsule throws, timed placement and illustrated end panels remain roadmap work.
 
 The desktop launcher selects level 0–20 with Left/Right and LOW/MED/HI speed
-with S. Enter, a click, F or Alt+Enter enters fullscreen. Leaving fullscreen
+with S, and FEVER / CHILL / OFF music with M. Enter, a click, F or Alt+Enter
+enters fullscreen. Leaving fullscreen
 preserves the board; Enter resumes it. Changing setup discards the old board.
 
 - Left/Right: move; Down: faster fall.
 - Z/X: turn counterclockwise/clockwise; Up also turns clockwise.
 - P: pause; N: restart at the current level.
+- M: cycle FEVER / CHILL / OFF (also available in the launcher).
 - Enter after a clear: next level; Enter after game over: retry.
 - Escape or Alt+Enter: restore the desktop.
 
@@ -87,8 +91,39 @@ The reference capsule generator, color tables and speed curve are retained;
 timing rounds to os8088's 54.6 Hz fullscreen clock. Virus placement applies
 the source's level height and distance-two color exclusions, with a native
 random retry scheme. This is an adaptation, not a cycle-exact NES port:
-competitive multiplayer, NES music, attract scenes and endings are absent.
-PC speaker cues use the OS sound service. See SPEC.md §99.
+competitive multiplayer, attract scenes and endings are absent. See SPEC.md §99.
+
+Audio uses the OS sound service and its Control Panel sound selection. With
+`SOUND.DRV` loaded, AdLib and Sound Blaster play three FM music voices and a
+separate effect voice. Sound Blaster uses its OPL synthesizer; the game opens
+no PCM stream or DMA buffer. The PC speaker plays the lead melody, with effects
+briefly taking priority. Missing or busy FM channels fall back to the tone
+service. Music OFF keeps effects enabled.
+
+FEVER, CHILL, their stage-clear jingles, title/options and game-over music are
+local-reference arrangements, not original compositions. The build compiler
+walks all four NES channels to retain shared tempo/transposition changes,
+expands repeats and deduplicates note phrases. Native OPL patches replace NES
+envelopes and vibrato; noise/DPCM percussion is omitted. Effects are short native
+tonal arrangements for cursor, successful movement/rotation, landing, falling
+fragments, clears, speed increases and pause. Larger cues override movement;
+no sound blocks the game. Versus/attack and ending scenes remain roadmap work.
+
+Music advances with a fractional 60/54.6 clock, without replaying missed game
+frames. Pause freezes the music position and silences sustained notes; a short
+pause cue finishes independently. Exit stops audio and releases FM channels;
+reentry restores the saved melody. Title/options playback uses the existing
+window timer and stops when the launcher loses focus. Returning from fullscreen
+leaves the desktop silent until a setting is changed or play resumes.
+
+During steady gameplay, at most two FM note updates are issued per sequencer
+tick, including the effect
+voice. Simultaneous music changes are served in rotating order, so a third
+voice normally follows one frame later (at most two frames while effects also
+change). Pending notes are replaced by their current pitch, never accumulated.
+The speaker uses finite tone leases. There is no sample mixer, background task,
+new interrupt, heap claim or runtime NES interpreter. Decorative animation keeps
+its independent deterministic clock, including when music is off.
 
 
 Verification:
@@ -97,6 +132,7 @@ Verification:
 make drmarcodisk build/os8088-360.img
 python3 tests/drmario.py
 python3 tests/drmario.py --qemu-display
+python3 tests/drmario_audio.py
 ```
 
 The main gate runs actual 8088 code in MartyPC on VGA and CGA, checks every
@@ -109,6 +145,13 @@ paints to equal full repaints. Animation fixtures cover per-color counts,
 reactions, disappearance, pause and unchanged board/RNG/sequence data.
 A corrupted pixel must fail the oracle.
 Use `--source /path/to/Dr. Mario` with a nondefault asset directory.
+The audio gate boots XT profiles with a speaker, an AdLib with no DSP, and a
+Sound Blaster. It checks pitches, effect priority, pause/resume, music selection,
+channel refusal/release, absence of PCM playback and bounded cycle costs.
+WAV captures and timing JSON go to `build/drmario-proof/audio-*`.
+For an independent import oracle, install `py65==1.2.0` in a test environment
+with Pillow and run `python3 tests/drmario_audio.py --reference-cpu`. It executes
+the original 6502 sequencer and checks every pitch/duration through three loops.
 
 Screenshots and timings are in `build/drmario-proof/`. The gate also writes
 `vga-dance.gif` and `cga-dance.gif` animation previews. MartyPC's display
@@ -122,10 +165,10 @@ Measured in MartyPC at 4,772,727 Hz (2026-09-28):
 |---|---:|---:|
 | Horizontal capsule move: renderer | 3.45 ms | 1.40 ms |
 | Idle renderer, minimum of eight samples | 0.035 ms | 0.035 ms |
-| Slowest setup across levels 0–20 | 39.58 ms | 40.69 ms |
-| Background decode, fullscreen entry only | 318.11 ms | 92.84 ms |
+| Slowest setup across levels 0–20 | 40.28 ms | 40.29 ms |
+| Background decode, fullscreen entry only | 318.17 ms | 93.34 ms |
 | Doctor blink, maximum sampled | 0.89 ms | 0.42 ms |
-| Animation with 84 viruses, maximum sampled | 27.26 ms | 14.30 ms |
+| Animation with 84 viruses, maximum sampled | 27.49 ms | 14.30 ms |
 
 Movement timings include changed-cell detection and video writes, and any
 interrupts during that call; keyboard delivery and the frame wait are excluded.
@@ -133,7 +176,28 @@ The earlier whole-bottle comparison took 6.23 ms VGA and 4.19 ms CGA for the
 same move. These are emulator cycle measurements, not physical XT measurements.
 Animation costs include incremental rendering with a stationary capsule on the
 seeded level-20 stress board; they do not promise a locked 54.6 FPS redraw rate.
-The instance uses 46,868 image bytes plus 10,223 BSS bytes (57,091 total);
-the compressed package is 18,409 bytes. Animation adds 29 bytes of BSS.
-No kernel allocation or framebuffer
-is added. Background decoding runs only when entering/reentering fullscreen.
+The fullscreen font cache stores the 63 glyphs actually used by the game.
+VGA and CGA share its 4,032-byte native storage; it is rebuilt only on mode
+entry. This recovers space for music without adding work to capsule rendering.
+No kernel allocation or framebuffer is added. Background decoding still runs
+only when entering/reentering fullscreen.
+
+Audio measurements on the same 4.77 MHz XT model (256 ticks per tune):
+
+| Backend | FEVER mean / peak | CHILL mean / peak |
+|---|---:|---:|
+| PC speaker | 0.20 / 1.27 ms | 0.18 / 1.26 ms |
+| AdLib | 0.88 / 5.85 ms | 0.61 / 5.39 ms |
+| Sound Blaster FM | 0.88 / 6.06 ms | 0.60 / 5.38 ms |
+
+These include OS sound calls and any interrupts inside the bracket. A forced
+chord plus clear effect takes 4.74 ms with FM. Input, logic, a horizontal move
+and rendering, charged with the worst sampled SB audio cost, total 11.64 ms,
+within one 18.32 ms frame. Ordinary movement rendering remains 3.45/1.40 ms
+VGA/CGA. The existing dense animation peaks still span multiple frame periods;
+these measurements do not claim fixed 54.6 FPS on every animation frame or
+physical-hardware validation.
+
+The audio build uses 54,576 image + 6,617 BSS = 61,193 bytes, within the
+61,440-byte package limit. The compressed package is 23,230 bytes. Music adds
+no framebuffer or kernel allocation.

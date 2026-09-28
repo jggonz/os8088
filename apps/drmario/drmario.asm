@@ -43,6 +43,14 @@ dm_entry:
     or ax, 1
     mov [dm_seed], ax
     call dm_fontcache
+    mov al, 4
+    call dm_audio_song
+    call dm_audio_open
+    mov bx, [dm_win]
+    mov ax, dm_audio_timer
+    call OSAPI_WM_ONTIMER
+    mov ax, 1
+    call OSAPI_WM_TIMER
     mov bx, [dm_win]
     clc
 .out: ret
@@ -82,6 +90,17 @@ dm_paint:
     mov [di], ax
     mov al, [si+2]
     mov [di+2], al
+    mov bl, [dm_music]
+    xor bh, bh
+    shl bx, 1
+    mov si, [dm_musicnames+bx]
+    mov di, dm_setting+27
+    mov cx, 5
+.copy_music:
+    lodsb
+    mov [di], al
+    inc di
+    loop .copy_music
     pop dx
     pop cx
     mov si, dm_setting
@@ -136,6 +155,8 @@ dm_onkey:
     je .new
     cmp al, 's'
     je .speed
+    cmp al, 'm'
+    je .music
     cmp ah, KSC_LEFT
     je .less
     cmp ah, KSC_RIGHT
@@ -156,7 +177,21 @@ dm_onkey:
     cmp byte [dm_speed], 3
     jb .new
     mov byte [dm_speed], 0
+    jmp .new
+.music:
+    call dm_music_cycle
+    jmp .paint
 .new:
+    call dm_audio_quiet
+    mov al, 5
+    call dm_audio_song
+    call dm_audio_open
+    mov byte [dm_paused], 0
+    mov bx, [dm_win]
+    mov ax, 1
+    call OSAPI_WM_TIMER
+    mov al, DM_FX_CURSOR
+    call dm_effect
     mov byte [dm_started], 0
     jmp .paint
 .go:
@@ -175,6 +210,9 @@ dm_launch:
     call OSAPI_FSX_CAPS
     test ax, (1 << FSXM_MODEX) | (1 << FSXM_CGA320)
     jz .out
+    xor ax, ax
+    call OSAPI_WM_TIMER
+    call dm_audio_quiet
     mov ax, dm_fullscreen
     mov cx, FSXF_FASTTICK
     call OSAPI_FSX_RUN
@@ -208,6 +246,7 @@ dm_fullscreen:
     jc .done
     mov byte [dm_fs], 1
     call dm_palette
+    call dm_fontbuild
     call dm_addresses
     cmp byte [dm_started], 0
     jne .resume
@@ -220,6 +259,8 @@ dm_fullscreen:
     mov word [dm_pressed], 0
     call dm_invalidate
     call dm_framepaint
+    call dm_audio_open
+    call dm_audio_restore
 .loop:
     call os88alt_edge
     jc .done
@@ -235,11 +276,13 @@ dm_fullscreen:
 .input:
     call dm_input
     call dm_tick
+    call dm_audio_tick
     call dm_render
     mov al, FSXW_FRAME
     call OSAPI_FSX_WAIT
     jmp .loop
 .done:
+    call dm_audio_quiet
     mov byte [dm_fs], 0
     mov byte [dm_paused], 1
     ret
@@ -250,7 +293,7 @@ dm_fullscreen:
 dm_bufferkey:
     mov si, dm_scans+3
     mov bx, 8
-    mov cx, 6
+    mov cx, 7
 .find:
     cmp ah, [si]
     je .found
@@ -269,7 +312,7 @@ dm_input:
     xor bx, bx
     mov di, 1
     mov si, dm_scans
-    mov cx, 9
+    mov cx, 10
 .poll:
     lodsb
     call OSAPI_KEY_DOWN
@@ -284,6 +327,12 @@ dm_input:
     and dx, bx
     or dx, [dm_pressed]
     mov word [dm_pressed], 0
+    test dx, 200h
+    jz .newkey
+    push dx
+    call dm_music_cycle
+    pop dx
+.newkey:
     test dx, 80h
     jz .pause
     mov word [dm_score], 0
@@ -294,6 +343,16 @@ dm_input:
     test dx, 40h
     jz .enter
     xor byte [dm_paused], 1
+    push dx
+    call dm_audio_quiet
+    call dm_audio_open
+    cmp byte [dm_paused], 0
+    jne .pausecue
+    call dm_audio_restore
+.pausecue:
+    mov al, DM_FX_PAUSE
+    call dm_effect
+    pop dx
     mov byte [dm_huddirty], 1
 .enter:
     test dx, 100h
@@ -354,7 +413,7 @@ dm_input:
     jmp dm_move
 .out: ret
 
-dm_scans: db KSC_LEFT,KSC_RIGHT,KSC_DOWN,2ch,2dh,KSC_UP,19h,31h,KSC_ENTER
+dm_scans: db KSC_LEFT,KSC_RIGHT,KSC_DOWN,2ch,2dh,KSC_UP,19h,31h,KSC_ENTER,32h
 
 dm_tpl: dw 52, 32, 410, 154, dm_title, dm_paint, dm_onkey, dm_click
 OS88_PREFER dm_pref, 410,154,410,154,410,154
@@ -364,10 +423,14 @@ dm_line1: db 'ENTER or click: play / resume full screen',0
 dm_line2: db 'Arrows: move / drop   Z / X: rotate',0
 dm_line3: db 'P: pause   N: new game   ESC: desktop',0
 dm_line4: db 'Match four colors to clear the viruses.',0
-dm_line5: db 'Setup: Left/Right = level, S = speed',0
+dm_line5: db 'Setup: Left/Right level, S speed, M music',0
 dm_line6: db 'VGA: 320x240   CGA: 320x200 color',0
 dm_line7: db 'VGA or CGA required for play.',0
-dm_setting: db 'Level 00  Speed LOW',0
+dm_setting: db 'Level 00  Speed LOW  Music FEVER',0
+dm_musicnames: dw dm_fever,dm_chill,dm_off
+dm_fever: db 'FEVER'
+dm_chill: db 'CHILL'
+dm_off: db 'OFF  '
 dm_credits: dw dm_title,dm_credit1,dm_credit2,dm_credit3,0
 dm_credit1: db 'Gameplay reference: Nintendo (1990)',0
 dm_credit2: db 'Native 8086 single-player adaptation',0
@@ -378,6 +441,7 @@ dm_med: db 'MED',0
 dm_hi: db 'HI ',0
 
 %include "game.inc"
+%include "audio.inc"
 %include "video.inc"
 %include "anim.inc"
 %include "dm-tables.inc"
@@ -438,8 +502,8 @@ VAR dm_mask,1
 VAR dm_hud,256
 VAR dm_hudshadow,256
 VAR dm_glyphs,768
-VAR dm_fontvga,6144
-VAR dm_fontcga,1536
+VAR dm_fontvga,4032
+dm_fontcga equ dm_fontvga
 VAR dm_animstart,0
 VAR dm_animclock,1
 VAR dm_animslot,1
@@ -452,5 +516,18 @@ VAR dm_actorpose,4
 VAR dm_animend,0
 VAR dm_actorshadow,4
 VAR dm_animdirty,1
+VAR dm_audio_pending,3
+VAR dm_audio_turn,1
+VAR dm_music,1
+VAR dm_audio_fm,1
+VAR dm_audio_live,1
+VAR dm_audio_phase,2
+VAR dm_audio_sent,2
+VAR dm_audio_lease,1
+VAR dm_audio_voices,24
+VAR dm_fx_ptr,2
+VAR dm_fx_hz,2
+VAR dm_fx_wait,1
+VAR dm_fx_priority,1
 OS88_BSS DM_BSS
 OS88_IMAGE_END
