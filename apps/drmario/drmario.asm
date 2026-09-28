@@ -37,6 +37,8 @@ dm_entry:
     OS88_ALTENTER_ARM
     mov si, dm_pref
     call OSAPI_WM_PREFER
+    mov al, 1
+    call OSAPI_WM_SNAP
     mov si, dm_about
     call OSAPI_ABOUT_SET
     call OSAPI_GET_TICKS
@@ -57,24 +59,17 @@ dm_entry:
 
 dm_paint:
     SAVE
+    call dm_frontpaint
+    cmp byte [dm_abon], 0
+    je .done
     mov bx, [dm_win]
-    call OSAPI_WM_CONTENT
-    mov cx, ax
-    add cx, 12
-    add dx, 8
-    mov di, dm_lines
-.line:
-    mov si, [di]
-    or si, si
-    jz .settings
-    mov ax, (CWHITE << 8) | CBLACK
-    call OSAPI_FONT_RUN
-    add dx, 12
-    add di, 2
-    jmp .line
-.settings:
-    push cx
-    push dx
+    mov si, dm_credits
+    call os88ui_about_d
+.done:
+    RESTORE
+    ret
+
+dm_settingcompose:
     mov al, [dm_level]
     xor ah, ah
     mov di, dm_setting+6
@@ -101,18 +96,6 @@ dm_paint:
     mov [di], al
     inc di
     loop .copy_music
-    pop dx
-    pop cx
-    mov si, dm_setting
-    mov ax, (CWHITE << 8) | CBLACK
-    call OSAPI_FONT_RUN
-    cmp byte [dm_abon], 0
-    je .done
-    mov bx, [dm_win]
-    mov si, dm_credits
-    call os88ui_about_d
-.done:
-    RESTORE
     ret
 
 dm_about:
@@ -131,9 +114,41 @@ dm_click:
     mov byte [dm_abon], 0
     jmp .paint
 .go:
+    ; Cached window drags can move the pixels without invoking our painter.
+    push dx
+    mov bx, [dm_win]
+    call OSAPI_WM_CONTENT
+    pop di
+    sub cx, ax
+    sub di, dx
+    mov dx, di
+    cmp byte [dm_frontscale], 2
+    jne .hit
+    shr dx, 1
+.hit:
+    cmp byte [dm_help], 0
+    jne .back
+    cmp cx, 112
+    jb .done
+    cmp cx, 328
+    ja .done
+    cmp dx, 98
+    jb .start
+    cmp dx, 110
+    ja .done
+.back:
+    xor byte [dm_help], 1
+    call dm_frontreset
+    jmp .paint
+.start:
+    cmp dx, 84
+    jb .done
+    cmp dx, 98
+    ja .done
     call dm_launch
 .paint:
     call dm_paint
+.done:
     RESTORE
     ret
 
@@ -144,11 +159,15 @@ dm_onkey:
     mov byte [dm_abon], 0
     jmp .paint
 .key:
+    cmp al, 27
+    je .back
     cmp ax, KEY_ALTENTER
     je .go
     cmp al, 13
     je .go
     or al, 20h
+    cmp al, 'h'
+    je .help
     cmp al, 'f'
     je .go
     cmp al, 'n'
@@ -162,6 +181,16 @@ dm_onkey:
     cmp ah, KSC_RIGHT
     je .more
     jmp .done
+.help:
+    xor byte [dm_help], 1
+    call dm_frontreset
+    jmp .paint
+.back:
+    cmp byte [dm_help], 0
+    je .done
+    mov byte [dm_help], 0
+    call dm_frontreset
+    jmp .paint
 .less:
     cmp byte [dm_level], 0
     je .done
@@ -180,7 +209,7 @@ dm_onkey:
     jmp .new
 .music:
     call dm_music_cycle
-    jmp .paint
+    jmp .settings
 .new:
     call dm_audio_quiet
     mov al, 5
@@ -193,7 +222,9 @@ dm_onkey:
     mov al, DM_FX_CURSOR
     call dm_effect
     mov byte [dm_started], 0
-    jmp .paint
+.settings:
+    call dm_frontsettings
+    jmp .done
 .go:
     call dm_launch
 .paint:
@@ -216,6 +247,14 @@ dm_launch:
     mov ax, dm_fullscreen
     mov cx, FSXF_FASTTICK
     call OSAPI_FSX_RUN
+    ; Enter can beat the first artwork timer. Resume its deferred load after
+    ; gameplay, while leaving the saved game music paused on the desktop.
+    cmp byte [dm_artkind], 0
+    jne .loaded
+    call dm_frontreset
+    jmp .out
+.loaded:
+    mov word [dm_reveal], 264
 .out: ret
 
 dm_fullscreen:
@@ -415,17 +454,9 @@ dm_input:
 
 dm_scans: db KSC_LEFT,KSC_RIGHT,KSC_DOWN,2ch,2dh,KSC_UP,19h,31h,KSC_ENTER,32h
 
-dm_tpl: dw 52, 32, 410, 154, dm_title, dm_paint, dm_onkey, dm_click
-OS88_PREFER dm_pref, 410,154,410,154,410,154
+dm_tpl: dw 52, 32, 452, 284, dm_title, dm_paint, dm_onkey, dm_click
+OS88_PREFER dm_pref, 452,284,452,284,452,154
 dm_title: db 'DrMarco',0
-dm_lines: dw dm_line1,dm_line2,dm_line3,dm_line4,dm_line5,dm_line6,dm_line7,0
-dm_line1: db 'ENTER or click: play / resume full screen',0
-dm_line2: db 'Arrows: move / drop   Z / X: rotate',0
-dm_line3: db 'P: pause   N: new game   ESC: desktop',0
-dm_line4: db 'Match four colors to clear the viruses.',0
-dm_line5: db 'Setup: Left/Right level, S speed, M music',0
-dm_line6: db 'VGA: 320x240   CGA: 320x200 color',0
-dm_line7: db 'VGA or CGA required for play.',0
 dm_setting: db 'Level 00  Speed LOW  Music FEVER',0
 dm_musicnames: dw dm_fever,dm_chill,dm_off
 dm_fever: db 'FEVER'
@@ -444,6 +475,7 @@ dm_hi: db 'HI ',0
 %include "audio.inc"
 %include "video.inc"
 %include "anim.inc"
+%include "front.inc"
 %include "dm-tables.inc"
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
@@ -459,6 +491,24 @@ VAR dm_win,2
 VAR dm_fs,1
 VAR dm_cga,1
 VAR dm_abon,1
+VAR dm_help,1
+VAR dm_frontx,2
+VAR dm_fronty,2
+VAR dm_frontscale,1
+VAR dm_frontcolor,1
+VAR dm_frontplay,1
+VAR dm_frontheight,2
+VAR dm_frontrow,2
+VAR dm_frontend,2
+VAR dm_fronttextfrom,2
+VAR dm_fronttextto,2
+VAR dm_frontbatch,2
+VAR dm_frontstride,2
+VAR dm_frontptr,2
+VAR dm_reveal,2
+VAR dm_artseg,2
+VAR dm_artsize,2
+VAR dm_artkind,1
 VAR dm_fsi,FSI_SIZE
 VAR dm_seed,2
 VAR dm_started,1

@@ -15,14 +15,57 @@ CGA_PALETTE = [(0,0,0),(85,255,85),(255,85,85),(255,255,85)]
 
 
 def runs(data):
-    """Trusted embedded stream: byte count/value pairs, zero terminator."""
+    """Row packets: 1..127 repeat an ink, 128..255 copy 1..128 literals."""
     out = bytearray()
     pos = 0
     while pos < len(data):
         end = pos + 1
-        while end < len(data) and end-pos < 255 and data[end] == data[pos]:
+        while end < len(data) and end-pos < 127 and data[end] == data[pos]:
             end += 1
-        out.extend((end-pos, data[pos]))
+        if end-pos >= 3:
+            out.extend((end-pos, data[pos]))
+        else:
+            end = pos+1
+            while end < len(data) and end-pos < 128:
+                if data[end:end+3] == data[end:end+1]*3:
+                    break
+                end += 1
+            out.append(128+end-pos-1)
+            out.extend(data[pos:end])
+        pos = end
+    out.append(0)
+    return out
+
+
+def screen_runs(data, vga=False):
+    """Repeat identical native scanlines without storing their runs again.
+
+    Each record is a repeat count followed by one zero-terminated packet row.
+    A zero repeat count ends the plane/bank. Decoding replays the source row,
+    so Mode X needs no video reads or read-plane register changes.
+    """
+    rows = [data[i:i+80] for i in range(0,len(data),80)]
+    out = bytearray()
+    pos = 0
+    while pos < len(rows):
+        end = pos+1
+        while end < len(rows) and end-pos < 255 and rows[end] == rows[pos]:
+            end += 1
+        out.append(end-pos)
+        if vga:
+            # VGA uses only eight inks: one byte holds a 1..31 pixel run
+            # in its upper five bits and the ink in its lower three.
+            row = rows[pos]
+            x = 0
+            while x < len(row):
+                stop = x+1
+                while stop < len(row) and stop-x < 31 and row[stop] == row[x]:
+                    stop += 1
+                out.append(((stop-x)<<3) | row[x])
+                x = stop
+            out.append(0)
+        else:
+            out.extend(runs(rows[pos]))
         pos = end
     out.append(0)
     return out
@@ -44,6 +87,7 @@ def screen_art(out):
         colors = VGA_PALETTE if tag == 'vga' else CGA_PALETTE
         preview.putpalette(sum((list(c) for c in colors), []) + [0]*(768-len(colors)*3))
         preview.putdata(pixels)
+        screen_surround(preview, tag)
         animation_art(out, tag, preview)
         # Mascots replace the small decorations; the doctor stays in the background.
         preview.paste(0,(240,174 if tag=='vga' else 144,312,200 if tag=='vga' else 170))
@@ -54,8 +98,121 @@ def screen_art(out):
                      for bank in range(2)]
         else:
             banks = [pixels[plane::4] for plane in range(4)]
-        (out/f'dm-screen-{tag}.bin').write_bytes(b''.join(runs(b) for b in banks))
+        (out/f'dm-screen-{tag}.bin').write_bytes(b''.join(screen_runs(b, tag=='vga') for b in banks))
         preview.save(out/f'drmarco-{tag}-art.png')
+
+
+def front_art(out):
+    """Disk-resident splash/help: indexed game artwork, one bounded row at a time."""
+    ega=[(0,0,0),(0,0,170),(0,170,0),(0,170,170),(170,0,0),(170,0,170),
+         (170,85,0),(170,170,170),(85,85,85),(85,85,255),(85,255,85),
+         (85,255,255),(255,85,85),(255,85,255),(255,255,85),(255,255,255)]
+    palette=Image.new('P',(1,1));palette.putpalette(sum(map(list,ega),[])+[0]*720)
+    splash=Image.open(ART.with_name('drmarco-splash.png')).convert('RGB').resize(
+        (432,264),Image.Resampling.NEAREST).quantize(palette=palette,dither=Image.Dither.NONE)
+    # Help keeps actual gameplay portrait and cells, with a black writing area.
+    help_image=splash.copy();d=ImageDraw.Draw(help_image)
+    d.rectangle((8,8,314,258),fill=0,outline=9)
+    d.rectangle((315,8,431,263),fill=0)
+    game=Image.open(ART).convert('RGB').resize((320,240),Image.Resampling.NEAREST)
+    portrait=game.crop((240,64,320,172)).resize((96,130),Image.Resampling.NEAREST)
+    help_image.paste(portrait.quantize(palette=palette,dither=Image.Dither.NONE),(328,12))
+    d.rectangle((330,158,424,244),fill=0,outline=9)
+    # Native capsule/virus tiles are decoded from the gameplay cache, preserving
+    # their exact silhouettes and three colors in the matching-four illustration.
+    tiles=(out/'dm-vga.bin').read_bytes()
+    inks=(0,9,12,14,1,4,6,15)
+    for tile,x,y in [(5,336,178),(8,352,178),(5,368,178),(8,384,178),
+                     (17,338,224),(16,398,224)]:
+        raw=tiles[tile*192:(tile+1)*192]
+        im=Image.new('P',(16,12));im.putpalette(palette.getpalette())
+        im.putdata([inks[raw[(xx%4)*48+yy*4+xx//4]] for yy in range(12) for xx in range(16)])
+        help_image.paste(im,(x,y))
+    # Reserve runtime menu lettering, including the compact settings line.
+    ImageDraw.Draw(splash).rectangle((104,166,328,261),fill=0)
+    sizes=[]
+    for tag,height,mono in [('VGA',264,False),('HRC',264,True),('CGA',132,True)]:
+        rows=[]
+        for name,original in [('splash',splash),('help',help_image)]:
+            im=original.resize((432,height),Image.Resampling.NEAREST)
+            if mono:
+                # Trace palette boundaries, not luminance dithering. Remove
+                # green checks first so the line-art foreground stays readable.
+                source=list(im.getdata());p=[0 if v in (2,10) else v for v in source]
+                edge=Image.new('1',im.size)
+                edge.putdata([bool(p[y*432+x]) and any(p[yy*432+xx]!=p[y*432+x]
+                    for xx,yy in ((max(0,x-1),y),(min(431,x+1),y),(x,max(0,y-1)),(x,min(height-1,y+1))))
+                    for y in range(height) for x in range(432)])
+                im=edge
+                data=im.tobytes();stride=54
+            else:
+                p=bytes(im.getdata())
+                data=bytes(sum(((p[y*432+x+j]>>plane)&1)<<(7-j) for j in range(8))
+                           for y in range(height) for plane in range(4) for x in range(0,432,8))
+                stride=216
+            im.save(out/f'drmarco-{tag.lower()}-{name}.png')
+            rows.extend(data[i:i+stride] for i in range(0,len(data),stride))
+        header=bytearray(b'DMF1'+struct.pack('<HHH',432,height,1 if mono else 4))
+        offset=len(header)+2*len(rows);directory=bytearray();payload=bytearray()
+        shared={}
+        for row in rows:
+            if row not in shared:
+                shared[row]=offset+len(payload)
+                payload.extend(runs(row))
+            directory.extend(struct.pack('<H',shared[row]))
+        blob=header+directory+payload
+        if len(blob)>65535:raise ValueError('frontend graphics exceed one segment')
+        (out/f'DRMARCO.{tag}').write_bytes(blob)
+        sizes.append(f'DM_FRONT_{tag}_SIZE equ {len(blob)}')
+    (out/'dm-front.inc').write_text('\n'.join(sizes)+'\n')
+
+
+def screen_surround(screen, tag):
+    """Original native checker/clipboard layout, composed only at build time.
+
+    NES tbl_C198_playfield_1p_mode alternates FC/FF background tiles around
+    opaque score and setup boards. Keep that separation at our wider bottle
+    size, with black writing surfaces matching the opaque native font cache.
+    """
+    vga = tag == 'vga'
+    height = screen.height
+    art = screen.copy()
+    d = ImageDraw.Draw(screen)
+    d.rectangle((0,0,319,height-1),fill=0)
+    # Larger squares keep the surround quiet at native resolution. CGA has
+    # no dark ink: alternate red scanlines with black inside its lit squares.
+    for y in range(height):
+        if not vga and y % 2:
+            continue
+        for x in range(0,320,24):
+            if (x//24+y//24) % 2 == 0:
+                d.line((x,y,x+23,y),fill=4 if vga else 2)
+    # Preserve the bottle's opaque interior/neck and the complete portrait.
+    # Outside them, retain the original glass highlights over the checker.
+    for box in [(92,24 if vga else 20,228,228 if vga else 188),
+                (112,12,208,32 if vga else 24),
+                (240,64 if vga else 52,320,200 if vga else 170)]:
+        screen.paste(art.crop(box),box)
+    mask = art.point(lambda p: 255 if p else 0, 'L')
+    screen.paste(art,(0,0),mask)
+
+    edge, highlight = (6,3) if vga else (2,3)
+    def panel(box, clip=False):
+        x0,y0,x1,y1 = box
+        d.rectangle((x0+2,y0+2,min(x1+2,319),min(y1+2,height-1)),fill=0)
+        d.rectangle(box,fill=0,outline=edge)
+        d.line((x0+1,y1-1,x0+1,y0+1,x1-1,y0+1),fill=highlight)
+        if clip:
+            cx = (x0+x1)//2
+            d.rectangle((cx-10,y0-4,cx+10,y0+3),fill=edge)
+            d.rectangle((cx-7,y0-3,cx+7,y0),fill=highlight)
+            d.line((cx-4,y0-2,cx+4,y0-2),fill=0)
+
+    panel((3,26,77,184),clip=True)          # all left HUD rows, including status
+    panel((236,26,315,67 if vga else 51),clip=True)
+    panel((236,202 if vga else 174,315,215 if vga else 187))
+    panel((124,3,195,20))                  # title
+    panel((28,height-12,315,height-1))     # controls
 
 
 def animation_art(out, tag, background):
@@ -126,6 +283,7 @@ def animation_art(out, tag, background):
         actors.append(poses)
     blob = bytearray()
     pointers = []
+    stored = {}
     for actor, poses in enumerate(actors):
         frames = [native(im) for im in poses]
         reference = base
@@ -133,7 +291,7 @@ def animation_art(out, tag, background):
                            if any(f[plane][i] != v for f in frames)]
                           for plane in range(len(base))]
         for pose, frame in enumerate(frames):
-            pointers.append(len(blob))
+            start_offset = len(blob)
             for plane, data in enumerate(frame):
                 # Merge nearby changes: a few unchanged bytes cost less than
                 # another record and keep the 8088 copy loop short.
@@ -148,6 +306,12 @@ def animation_art(out, tag, background):
                     blob.extend(struct.pack('<HB',dest,end-start+1))
                     blob.extend(data[start:end+1])
                 blob.extend(b'\xff\xff')
+            encoded = bytes(blob[start_offset:])
+            if encoded in stored:
+                del blob[start_offset:]
+            else:
+                stored[encoded] = start_offset
+            pointers.append(stored[encoded])
         for pose, im in enumerate(poses):
             im.save(out/f'dm-{tag}-actor{actor}-{pose}.png')
     (out/f'dm-anim-{tag}.bin').write_bytes(blob)
@@ -201,6 +365,7 @@ def build(source, out):
     screen_art(out)
     (out/'dm-vga.bin').write_bytes(b''.join(map(vgacell,cells)))
     (out/'dm-cga.bin').write_bytes(b''.join(map(cgacell,cells)))
+    front_art(out)
     text = ['; Generated from local Dr. Mario bank_FF.asm. Do not edit.']
     for name, addr, n in [('dm_speeds',0xa795,81), ('dm_pair_a',0xa7fd,9),
                            ('dm_viruscolors',0xa7ed,16), ('dm_pair_b',0xa806,9), ('dm_heights',0xa3de,21)]:

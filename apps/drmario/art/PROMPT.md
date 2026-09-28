@@ -11,6 +11,12 @@ original geometric germ mascots with waving arms, googly eyes and dizzy faces.
 These procedural poses live in `tools/drmario_assets.py`; their palette-native
 streams and pose preview PNGs are generated under `build/drmario-art/`.
 
+The checkered backdrop and clipboard/prompt/title/control panels are original
+procedural artwork in the same compiler. They use the alternating background
+tiles and opaque information boards in NES `tbl_C198_playfield_1p_mode` as a
+layout reference; their pixels are drawn locally, not imported from CHR.
+The source PNG remains the original generated portrait and bottle artwork.
+
 ## Generation prompt
 
 Use case: stylized-concept

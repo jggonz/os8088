@@ -24,7 +24,7 @@ import os88geom as G
 def symbols():
     source=(ROOT/'apps/drmario/drmario.asm').read_text()
     names=re.findall(r'^VAR (dm_\w+),',source,re.M)
-    for file in ('drmario.asm','game.inc','video.inc','anim.inc','audio.inc'):
+    for file in ('drmario.asm','game.inc','video.inc','anim.inc','audio.inc','front.inc'):
         names += re.findall(r'^(dm_\w+):', (ROOT/'apps/drmario'/file).read_text(),re.M)
     with tempfile.TemporaryDirectory() as td:
         p=Path(td)/'probe.asm';b=Path(td)/'probe.bin'
@@ -146,6 +146,29 @@ def check_pixels(p,tag,raw):
             for x in range(8):
                 expected=(7 if tag=='vga' else 3) if bits&(128>>x) else 0
                 assert px[(230 if tag=='vga' else 190)+y][32+i*8+x]==expected,('footer',tag,i,x,y)
+    # Opaque glyphs may update only their writing surfaces. Check the whole
+    # static surround after moves, clears, pause, animation and mode reentry,
+    # including clipboard edges that blank HUD rows used to overwrite.
+    art=Image.open(ROOT/f'build/drmario-art/drmarco-{tag}-art.png')
+    mutable=[(92,28 if tag=='vga' else 20,228,228 if tag=='vga' else 188),
+             (132,8,188,16),(32,230 if tag=='vga' else 190,32+8*len(footer),238 if tag=='vga' else 198),
+             (8,32,72,180),(240,32,304,40),
+             (240,52 if tag=='vga' else 40,272,64 if tag=='vga' else 50),
+             (240,64 if tag=='vga' else 52,320,200 if tag=='vga' else 170),
+             (240,204 if tag=='vga' else 176,304,212 if tag=='vga' else 184)]
+    for y,row in enumerate(px):
+        for x,value in enumerate(row):
+            if not any(x0<=x<x1 and y0<=y<y1 for x0,y0,x1,y1 in mutable):
+                assert value==art.getpixel((x,y)),('surround',tag,x,y)
+    hud=p.data('hud',256)
+    for row in range(15):
+        for col in range(8):
+            ch=hud[row*16+col]
+            for y in range(8):
+                bits=glyphs[(ch-32)*8+y]
+                for x in range(8):
+                    expected=(7 if tag=='vga' else 3) if bits&(128>>x) else 0
+                    assert px[32+row*10+y][8+col*8+x]==expected,('hud',tag,row,col,x,y)
     # Negative control: a changed bottle pixel must fail this same oracle.
 
 

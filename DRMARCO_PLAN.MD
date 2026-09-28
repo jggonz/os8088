@@ -37,6 +37,8 @@ animation are implemented incrementally; the complete roadmap remains open.
   native resolutions. Do not add art work to ordinary movement frames.
 - [x] Verify all four disk geometries, gameplay, art survival across HUD
   updates and fullscreen restoration, and XT rendering costs.
+- [x] Add an original checker surround and clipboard-style information panels,
+  keeping text opaque and the backdrop static across gameplay updates.
 
 ### 2. Single-player progression and score tracking
 
@@ -73,9 +75,12 @@ animation are implemented incrementally; the complete roadmap remains open.
 
 ### 4. Title, options and attract mode
 
-- [ ] Build a DrMarco title screen, original logo/lettering, animated characters,
-  and fullscreen options with player count, levels, speeds and music selection.
-- [ ] Preserve the desktop launcher as the os8088 entry point.
+- [x] Replace the plain desktop launcher with a DrMarco capsule-logo splash,
+  game-style sprites, title music, Enter to play and H for illustrated help.
+  Use color on VGA and line drawings on CGA/Hercules, with a window-shade reveal.
+- [x] Preserve the desktop launcher as the os8088 entry point.
+- [ ] Add animated title characters and fullscreen options with player count,
+  levels, speeds and music selection.
 - [ ] Add an idle-triggered scripted demonstration using deterministic board,
   capsule sequence and input playback; any start action must exit cleanly
   without overwriting the user's chosen settings or TOP score.
@@ -134,7 +139,8 @@ animation are implemented incrementally; the complete roadmap remains open.
   native retry adaptation or implement exact placement; record the choice.
 - [ ] Compare deterministic capsule/movement/rotation/match/score traces with
   the reference. Keep timing approximations and intentional bug fixes explicit.
-- [ ] Complete original title/options/intermission artwork and lettering.
+- [x] Add original capsule-logo title artwork and illustrated desktop help.
+- [ ] Complete fullscreen options/intermission artwork and lettering.
   Optionally replace capsule and small virus tiles to remove the CHR dependency;
   this requires replacing the current CHR-based pixel oracle too.
 - [ ] Refresh README, SPEC, screenshots, package size, BSS and cycle measurements.
@@ -223,3 +229,69 @@ separate from user-supplied reference assets.
   Sharing the VGA/CGA native font cache and storing 63 used glyphs recovers
   3,648 bytes of BSS, rebuilt on mode entry only. No mixer, worker, new IRQ,
   heap allocation or kernel API was added. Proofs: `build/drmario-proof/`.
+- 2026-09-28: Added a 24-pixel checker surround, clipped HUD/preview boards
+  and matching title, state-prompt and controls plaques, following the layout
+  separation in NES `tbl_C198_playfield_1p_mode`. VGA uses navy checks; CGA
+  uses alternate red/black scanlines inside lit checks. All lettering retains
+  black writing surfaces. The source portrait/bottle PNG is unchanged.
+  Unused HUD row 15 no longer erases the clipboard's lower edge.
+- Background row packets now support literal bytes and repeated scanlines;
+  identical animation streams share storage. Image 54,525 + 6,617 BSS =
+  61,142 bytes (73 fewer than before); compressed package 25,536 bytes.
+  The backdrop still decodes only on entry/reentry, with no framebuffer or
+  extra movement-frame drawing. MartyPC VGA/CGA movement: 3.45/1.40 ms;
+  idle: 0.035 ms; background entry decode: 364.55/92.11 ms. VGA/CGA gameplay,
+  animation and restoration gates pass; QEMU confirms the full Mode X screen
+  and desktop restoration. Native previews: `build/drmario-proof/*-native.png`.
+- Focused VGA/CGA pixel checks verify every left HUD glyph and all static
+  surround pixels outside the dynamic drawing regions after input, pause,
+  clear/restart and reentry. All four application disk geometries verify.
+- 2026-09-28: Replaced the text launcher with a capsule-logo title screen
+  following the supplied NES screenshot's composition: green checks, a large
+  blue/red DrMarco capsule, and a black menu plaque with character sprites.
+  H opens illustrated help using the existing gameplay portrait and native
+  capsule/virus tiles. Enter starts/resumes; H/Escape returns from help.
+  VGA uses color; CGA and Hercules use line drawings. Hercules remains a
+  frontend-only adapter. Music and an eight-row window-shade reveal share the
+  existing desktop timer; no worker, framebuffer or new kernel API was added.
+- Supporting DRMARCO.VGA/CGA/HRC files ship on all four application disks.
+  Only one compressed resource is held in an instance-owned movable claim;
+  bounded row decoding borrows the idle game queue. Fully drawable VGA bands
+  use native planar copies, with a clipped packed-pixel fallback. Window drags
+  preserve correct mouse targets, and returning from play preserves the board
+  and restores the completed help/splash page.
+- A compact eight-ink VGA background codec recovers embedded image space.
+  The application is 49,433 image + 6,640 BSS = 56,073 bytes; compressed package
+  25,338 bytes. Supporting VGA/CGA/Hercules files are 34,554/5,921/11,754 bytes.
+  The generated source and exact built-in imagegen prompt are committed as
+  apps/drmario/art/drmarco-splash.png and SPLASH_PROMPT.md. Fullscreen options,
+  animated title characters, attract demo and intermissions remain open.
+- Validation: VGA/CGA/Hercules frontend gates pass pixel comparisons, music,
+  help/settings navigation, moved-window clicks and game return. Maximum
+  sampled unobscured splash/help reveal steps are 52.23/45.90 ms VGA,
+  24.92/27.35 ms CGA and 24.93/28.00 ms Hercules at 4.77 MHz. The VGA packed
+  fallback also matches the uncompressed image. Gameplay/animation and all
+  three audio backend suites pass; QEMU confirms Mode X display/restoration.
+  Fresh gameplay measurements include interrupt costs: movement 3.45–4.08 ms
+  VGA / 1.40–2.04 ms CGA; idle 0.035 ms; entry-only backdrop 505.84/93.54 ms.
+  All four disks verify. Guest screenshots: build/drmario-proof/*-splash.png
+  and *-help.png; these are emulator checks, not physical XT measurements.
+- 2026-09-28: Optimized splash interaction for the 4.77 MHz XT. Setup keys
+  update only the settings text row; unused keys and help-page setup changes
+  do not repaint artwork. Controls and help text appear before the image,
+  with the initial file read deferred until after the first paint. Enter may
+  start play before that read; returning schedules the outstanding load.
+- Identical resource rows now share offsets (also across splash/help), reducing
+  VGA art from 34,554 to 26,947 bytes, CGA to 5,139 and Hercules to 10,112.
+  Bounded REP decoding and batched OS blits borrow the existing idle font cache;
+  fullscreen entry rebuilds it. No new pixel buffer is allocated. Twelve-row
+  reveal steps replace eight-row steps: 22 callbacks instead of 33 on VGA and
+  Hercules, 11 instead of 17 on CGA. Visible text is restored only where a
+  reveal band crosses it. The complete image remains pixel-identical.
+- Settings handlers measured about 7–9 ms; first controls paint 57–85 ms before
+  file I/O. Peak splash/help steps: VGA 47.33/38.02 ms, CGA 23.06/28.40 ms,
+  Hercules 19.32/22.97 ms. These are emulator CPU measurements, excluding
+  application startup and physical floppy latency. Image 49,685 + 6,648 BSS =
+  56,333 bytes; compressed package 25,550. Fullscreen gameplay/animation gates
+  pass on VGA/CGA; frontend gates check actual key delivery, no artwork decode
+  on setup keys, unchanged surrounding pixels, deferred loading and mode return.

@@ -26,14 +26,20 @@ hashes of both inputs in `build/drmario-art/dm-source.txt`.
 NES graphics and music are imported into `build/drmario-art/`, never committed.
 `tools/drmario_audio.py` compiles the music; `dm-music.json` records its source
 hash and phrase counts.
-`make drmario-assets` refreshes the import. No external files are needed at
-runtime: open `DRMARCO.O88` from the generated application disk.
+`make drmario-assets` refreshes the import. Open `DRMARCO.O88` from the generated
+application disk. Keep `DRMARCO.VGA`, `DRMARCO.CGA`, and `DRMARCO.HRC` beside it
+when copying the game: these supporting files contain the splash/help artwork.
+All four disk images include them. Gameplay assets and music remain embedded.
 
 The original doctor and laboratory surround are committed in
 [`art/drmarco-screen.png`](art/drmarco-screen.png), with the built-in imagegen
 prompt in [`art/PROMPT.md`](art/PROMPT.md). The compiler uses Pillow to resize
 and map this artwork to native palettes, then emits compact run-length streams
-for each VGA plane and CGA bank. These are drawn once on fullscreen entry or
+for each VGA plane and CGA bank. The compiler adds a checkered backdrop and
+gold-edged clipboard panels with opaque black writing surfaces for the HUD
+and next capsule, plus matching title, status-prompt and control plaques.
+VGA uses navy checks; CGA uses red scanlines within alternate squares to
+soften the pattern without changing the capsule palette. These are drawn once on fullscreen entry or
 reentry; ordinary game frames do not decode the background. Static background
 previews are written to `build/drmario-art/drmarco-{vga,cga}-art.png`, with
 separate `dm-{vga,cga}-actor*-*.png` pose previews in the same directory.
@@ -56,8 +62,20 @@ bank switch at $89C9 and color-specific reactions at $89D4–$8C27.
 The animation never consumes gameplay RNG or changes capsule/control timing.
 Capsule throws, timed placement and illustrated end panels remain roadmap work.
 
-The desktop launcher selects level 0–20 with Left/Right and LOW/MED/HI speed
-with S, and FEVER / CHILL / OFF music with M. Enter, a click, F or Alt+Enter
+The desktop opens with a capsule-logo splash, checkerboard and DrMarco/virus
+sprites. Title music plays while a top-to-bottom window-shade reveal uncovers
+the artwork. Controls appear before disk loading, and remain usable during
+the reveal. Level, speed and music keys repaint only the small settings row.
+Enter starts/resumes the game; H opens the illustrated help page,
+and H or Escape returns to the splash. The menu choices are clickable.
+VGA uses color artwork; CGA and Hercules use palette-boundary line drawings.
+Hercules supports splash/help and music; gameplay still requires VGA or CGA.
+The generated source and built-in imagegen prompt are in
+[`art/drmarco-splash.png`](art/drmarco-splash.png) and
+[`art/SPLASH_PROMPT.md`](art/SPLASH_PROMPT.md).
+
+The launcher selects level 0–20 with Left/Right and LOW/MED/HI speed
+with S, and FEVER / CHILL / OFF music with M. Enter, the Start choice, F or Alt+Enter
 enters fullscreen. Leaving fullscreen
 preserves the board; Enter resumes it. Changing setup discards the old board.
 
@@ -136,6 +154,7 @@ Verification:
 make drmarcodisk build/os8088-360.img
 python3 tests/drmario.py
 python3 tests/drmario.py --qemu-display
+python3 tests/drmario_front.py
 python3 tests/drmario_audio.py
 ```
 
@@ -153,6 +172,10 @@ The audio gate boots XT profiles with a speaker, an AdLib with no DSP, and a
 Sound Blaster. It checks pitches, effect priority, pause/resume, music selection,
 channel refusal/release, absence of PCM playback and bounded cycle costs.
 WAV captures and timing JSON go to `build/drmario-proof/audio-*`.
+The frontend gate checks VGA/CGA/Hercules artwork pixels, reveal timing,
+title music, help navigation, moved-window click targets and game restoration.
+It also verifies that settings keys never enter the artwork decoder and change
+no pixels outside the settings row, and that controls paint before resource I/O.
 For an independent import oracle, install `py65==1.2.0` in a test environment
 with Pillow and run `python3 tests/drmario_audio.py --reference-cpu`. It executes
 the original 6502 sequencer and checks every pitch/duration through three loops.
@@ -167,10 +190,10 @@ Measured in MartyPC at 4,772,727 Hz (2026-09-28):
 
 | Operation | VGA | CGA |
 |---|---:|---:|
-| Horizontal capsule move: renderer | 3.45 ms | 1.40 ms |
+| Horizontal capsule move: renderer | 3.45–4.08 ms | 1.40–2.04 ms |
 | Idle renderer, minimum of eight samples | 0.035 ms | 0.035 ms |
 | Slowest setup across levels 0–20 | 40.28 ms | 40.29 ms |
-| Background decode, fullscreen entry only | 318.17 ms | 93.34 ms |
+| Background decode, fullscreen entry only | 505.84 ms | 93.54 ms |
 | Doctor blink, maximum sampled | 0.89 ms | 0.42 ms |
 | Animation with 84 viruses, maximum sampled | 27.49 ms | 14.30 ms |
 
@@ -183,8 +206,11 @@ seeded level-20 stress board; they do not promise a locked 54.6 FPS redraw rate.
 The fullscreen font cache stores the 63 glyphs actually used by the game.
 VGA and CGA share its 4,032-byte native storage; it is rebuilt only on mode
 entry. This recovers space for music without adding work to capsule rendering.
-No kernel allocation or framebuffer is added. Background decoding still runs
-only when entering/reentering fullscreen.
+Fullscreen adds no allocation or framebuffer. The desktop holds one compressed
+splash/help resource in a movable claim. It borrows the idle fullscreen font
+cache for decoded bands and the game queue for clipped fallback rows; mode
+entry rebuilds the font cache. Background decoding still runs only when entering/reentering
+fullscreen.
 
 Audio measurements on the same 4.77 MHz XT model (256 ticks per tune):
 
@@ -202,6 +228,14 @@ VGA/CGA. The existing dense animation peaks still span multiple frame periods;
 these measurements do not claim fixed 54.6 FPS on every animation frame or
 physical-hardware validation.
 
-The audio build uses 54,598 image + 6,617 BSS = 61,215 bytes, within the
-61,440-byte package limit. The compressed package is 23,254 bytes. Music adds
-no framebuffer or kernel allocation.
+The splash build uses 49,685 image + 6,648 BSS = 56,333 bytes, within the
+61,440-byte package limit. The compressed package is 25,550 bytes. Supporting
+VGA/CGA/Hercules artwork files are 26,947/5,139/10,112 bytes; only the current
+adapter's file is loaded. Music adds no framebuffer or kernel allocation.
+
+XT splash optimization (4.77 MHz emulator): settings handlers take about
+7–9 ms; the initial controls paint takes 57–85 ms before disk I/O. The reveal
+uses 12-row steps, down from 33 to 22 callbacks on VGA/Hercules and 17 to 11
+on CGA. Drawing is batched in the existing idle font cache using bounded REP
+copies. Repeated image rows share storage, reducing the VGA resource by 22%.
+These timings exclude application startup and physical floppy seek latency.

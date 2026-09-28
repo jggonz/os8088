@@ -185,9 +185,13 @@ dm_music_cycle:
     jmp dm_effect
 
 ; Desktop title/options use the existing 18.2Hz window timer. Stop on loss
-; of focus and never arm this timer on return from fullscreen.
+; of focus. After fullscreen, only a newly requested reveal rearms the timer;
+; the game's saved music stays paused until play resumes or setup changes.
 dm_audio_timer:
     SAVE
+    call dm_fronttick
+    cmp byte [dm_paused], 0
+    jne .arm
     call OSAPI_WM_TOP
     cmp bx, [dm_win]
     jne .quiet
@@ -209,6 +213,13 @@ dm_audio_timer:
 .arm:
     mov bx, [dm_win]
     mov ax, 1
+    cmp byte [dm_paused], 0
+    je .timer
+    mov dx, [dm_reveal]
+    cmp dx, [dm_frontheight]
+    jb .timer
+    xor ax, ax
+.timer:
     call OSAPI_WM_TIMER
     RESTORE
     ret

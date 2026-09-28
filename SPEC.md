@@ -149049,15 +149049,54 @@ compatibility aliases. Internal source names and disk-image paths stay stable.
 
 The original generated screen surround is committed at
 `apps/drmario/art/drmarco-screen.png`, with its prompt beside it. Build-time
-conversion produces palette-indexed VGA planes and packed CGA banks, encoded
-as (nonzero byte count, repeated byte) runs with a zero-count stream terminator.
+conversion adds an original 24-pixel checker surround, clipboard HUD/preview
+panels and title/prompt/control plaques. Writing surfaces stay black for the
+opaque glyph cache; unused HUD row 15 is never painted over the lower border.
+VGA checks are navy; CGA checks alternate red and black scanlines.
+The palette-indexed VGA planes and packed CGA banks use repeated-row records:
+a nonzero repeat byte precedes one encoded 80-byte native row. VGA packets
+pack a 1..31 pixel run in the upper five bits and an ink in the lower three.
+CGA packets 1..127 repeat the following byte; 128..255 copy 1..128 literal bytes.
+Zero terminates a row, and a zero repeat count terminates a plane/bank.
+Repeated rows replay source packets without reading video memory.
 Each VGA stream expands to 19,200 bytes; each CGA bank to 8,000 bytes. Only
 fullscreen entry/reentry decodes this trusted embedded art directly to VRAM.
 There is no new framebuffer. The right HUD reserves the doctor portrait;
 the game draws its own title, bottle boundary, score and state text over the
 surround. Capsule and bottle-virus tiles still require the local NES reference.
 
-A desktop launcher supplies controls and settings. Enter/Alt+Enter opens the
+A desktop splash supplies controls and settings. `front.inc` draws a generated
+capsule-logo/checkerboard scene with DrMarco and virus sprites; H opens a help
+page using the existing gameplay portrait and tile graphics. VGA gets 432x264
+color art; Hercules gets 432x264 line drawings and CGA gets 432x132 line drawings.
+The supporting `DRMARCO.VGA`, `.HRC`, and `.CGA` files ship beside the package.
+Each has a DMF1 header, dimensions/depth, two row-offset directories and bounded
+repeat/literal row streams (four native VGA planes per color row, packed bits
+per monochrome row). Repeated rows share directory offsets, including across
+the two pages. Only the current adapter's resource is loaded into
+an instance-owned movable claim. The painter uses bounded REP span decoding
+into the idle fullscreen font cache, then presents up to 16 rows per OS blit.
+Mode entry rebuilds that cache; the game queue holds a single-row packed
+fallback. No framebuffer or extra pixel storage is added. A real window
+ownership clip tests the whole band before temporarily disarming clipping for
+native planar copies; covered or otherwise refused copies retain a packed
+4bpp fallback. Clipping is restored before labels are drawn. Missing assets
+leave keyboard navigation and gameplay available with a visible explanation.
+The first paint shows controls and a loading message before disk I/O; the next
+timer callback loads the resource. Starting play before that callback is valid:
+returning to the desktop schedules the still-pending load with music paused.
+Setup keys repaint only the settings text row, without decoding art; on help
+they change state without repainting. The existing music timer reveals twelve
+rows per callback, preserves the
+revealed extent across exposures and shares no gameplay animation state.
+Labels appear immediately and are restored only where the reveal crosses them.
+Help/splash transitions restart this window-shade effect; returning from the
+game restores the complete page. Title music continues on help. H/Escape returns
+to the splash. Mouse hit testing asks for the live content origin after drags.
+The frontend guest gate is `tests/drmario_front.py`; Hercules gameplay remains
+unsupported.
+
+Enter/Alt+Enter opens the
 exclusive bracket; Escape/Alt+Enter restores the desktop with the game paused.
 VGA selects FSXM_MODEX (320x240); CGA selects FSXM_CGA320 (320x200), black
 background and bright green/red/yellow palette 0 (3D9h=10h). VGA retains

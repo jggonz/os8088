@@ -212,16 +212,54 @@ dm_background:
     ret
 
 dm_unpack:
+    push bx
+    push dx
+    xor ax, ax
+.rows:
+    lodsb                       ; count of identical native scanlines
+    or al, al
+    jz .done
+    mov bx, ax
+    mov dx, si                  ; replay this row's RLE, without VRAM reads
+.repeat:
+    mov si, dx
     xor cx, cx
+    cmp byte [dm_cga], 0
+    je .vgarun
 .run:
     lodsb
     or al, al
-    jz .done
+    jz .rowdone
+    js .literal
     mov cl, al
     lodsb
     rep stosb
     jmp .run
-.done: ret
+.literal:
+    and al, 7fh
+    mov cl, al
+    inc cx
+    rep movsb
+    jmp .run
+.vgarun:
+    lodsb
+    or al, al
+    jz .rowdone
+    mov cl, al
+    shr cl, 1
+    shr cl, 1
+    shr cl, 1
+    and al, 7
+    rep stosb
+    jmp .vgarun
+.rowdone:
+    dec bx
+    jnz .repeat
+    jmp .rows
+.done:
+    pop dx
+    pop bx
+    ret
 
 dm_framepaint:
     call dm_background
@@ -657,14 +695,14 @@ dm_scoretext:
 dm_hudpaint:
     xor si, si
 .next:
+    cmp si, 240                 ; unused row 15 must not erase the clipboard
+    jae .same
     ; Only NEXT (row 0) and the state prompt (row 14) own right HUD cells.
     ; Blank rows would erase the CGA preview, character art or footer.
     test si, 8
     jz .hudcell
     cmp si, 24
     jb .hudcell
-    cmp si, 240
-    jae .same
     cmp si, 224
     jb .same
 .hudcell:
