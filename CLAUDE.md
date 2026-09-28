@@ -248,6 +248,15 @@ make loomdisk   #   in-OS IDE that edits a project's sources and packs the
                 #   which is the same shape plus `CATALOG.TXT`: a WHOLE
                 #   program per folder is a correctness requirement on both
                 #   (WEAVE-SPEC §11.2), not a layout choice
+make viddemo    # the VIDEO PLAYER (§98, apps/video/): VIDEO.O88 ships on
+make vencbundle #   every apps disk and plays `.V88` files, made on the host
+                #   by tools/os88venc.py or by the encoder's own window,
+                #   tools/os88vencgui.py. `viddemo` builds one hard disk per
+                #   directory of apps/video/demo/ - a whole install with the
+                #   COMMITTED demo videos in MEDIA/ - for 86Box's ST11R XTs;
+                #   `vencbundle` zips the encoder, the tools it runs and
+                #   VIDEO.O88 for someone with no os8088 tree (§98.2.13).
+                #   Both on demand
 make netbench   # THE STACK'S PROFILER (SPEC.md 72.15): NETBENCH.O88 beside
                 #   FTPD.O88 on one disk, in all three geometries. ETHER.DRV
                 #   brackets its own ten stages with the PIT and this is the
