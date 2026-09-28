@@ -11850,7 +11850,8 @@ ALLAPPSIMG120 := $(BUILD)/apps-all-120.img
 # rather than refuses, so a second claimant on .DOC would win or lose by
 # directory order. Scribe designed the collision out at the source; the disk
 # list went on believing in it.
-ALLAPPSFILES := $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
+N1942LIVE := $(BUILD)/1942.o88 $(addprefix $(BUILD)/,1942V.GFX 1942C.GFX 1942L.GFX SEA.V42 REEF.V42 PORT.V42 SEA.C42 REEF.C42 PORT.C42)
+ALLAPPSFILES := $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
                 $(PACCMANDISK) \
@@ -11897,6 +11898,7 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                                    apps/apple2/README.TXT \
                                    apps/apple2/COPYING) \
                $(addprefix WEAVE:,$(WEAVEDISK)) \
+               $(addprefix 1942:,$(N1942LIVE)) \
                $(addprefix LOOM:,$(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS)) \
                $(APPSYSARGS) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS))
@@ -13311,22 +13313,26 @@ clean-nasm3:
 
 distclean: clean clean-marty clean-cc clean-nasm3
 
-# Native 1942 remake. The cartridge is a private build input, never fetched.
-NESROM ?= 1942.nes
-.PHONY: 1942 1942disk 1942-assets-force
-1942-assets-force:
-1942: $(BUILD)/1942.o88
-$(BUILD)/1942art.inc: 1942-assets-force $(NESROM) apps/1942/palette.json tools/1942assets.py | $(BUILD)
-	python3 tools/1942assets.py "$(NESROM)" -o $@
+# Standalone 1942: committed artwork, compiled into adapter-native banks.
+N1942ART = apps/1942/art/sprites.json apps/1942/art/sea.idx apps/1942/art/reef.idx apps/1942/art/port.idx apps/1942/palette.json
+N1942BANKS = $(filter-out $(BUILD)/1942.o88,$(N1942LIVE))
+N1942DISK = $(BUILD)/1942.o88 $(N1942BANKS)
+.PHONY: 1942 1942disk 1942test
+1942: $(N1942DISK)
+$(BUILD)/.1942assets: $(N1942ART) tools/1942assets.py | $(BUILD)
+	python3 tools/1942assets.py -o $(BUILD)
+	@touch $@
+$(BUILD)/1942art.inc $(N1942BANKS): $(BUILD)/.1942assets
+	@test -f $@ || python3 tools/1942assets.py -o $(BUILD)
 $(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/game.inc apps/1942/video.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/1942/ -I $(BUILD)/ -l $(BUILD)/1942.lst -o $@ $<
 $(BUILD)/1942.o88: $(BUILD)/1942.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@
 1942disk: $(BUILD)/1942.img $(BUILD)/1942-360.img
-$(BUILD)/1942.img: $(BUILD)/1942.o88 apps/1942/README.TXT tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/1942.o88 apps/1942/README.TXT
-$(BUILD)/1942-360.img: $(BUILD)/1942.o88 apps/1942/README.TXT tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/1942.o88 apps/1942/README.TXT
-.PHONY: 1942test
+$(BUILD)/1942.img: $(N1942DISK) apps/1942/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(N1942DISK) apps/1942/README.TXT
+$(BUILD)/1942-360.img: $(N1942DISK) apps/1942/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(N1942DISK) apps/1942/README.TXT
 1942test: 1942disk $(BUILD)/os8088-360.img
 	python3 tests/n1942.py
+all: $(N1942DISK)

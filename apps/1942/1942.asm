@@ -33,6 +33,10 @@ n_entry:
     call OSAPI_MEM_CLAIM
     jc .out
     mov [n_canvas], dx
+    mov ax, 64
+    call OSAPI_MEM_CLAIM
+    jc .out
+    mov [n_graphics], dx
     mov si, n_tpl
     call OSAPI_WM_CREATE
     jc .out
@@ -57,29 +61,31 @@ n_paint:
     add ax, 10
     add dx, 8
     mov cx, ax
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+    mov ax, (CWHITE << 8) | CBLACK
     mov si, n_l1
-    call OSAPI_FONT_STR_XPARENT
+    call OSAPI_FONT_RUN
     add dx, 14
     mov si, n_l2
-    call OSAPI_FONT_STR_XPARENT
+    call OSAPI_FONT_RUN
     add dx, 14
     mov si, n_l3
-    call OSAPI_FONT_STR_XPARENT
+    call OSAPI_FONT_RUN
     add dx, 14
     mov si, n_l4
-    call OSAPI_FONT_STR_XPARENT
+    call OSAPI_FONT_RUN
     add dx, 14
     mov si, n_l5
-    call OSAPI_FONT_STR_XPARENT
+    call OSAPI_FONT_RUN
     add dx, 14
     mov si, n_l6
     cmp byte [n_error], 0
     je .line
     mov si, n_errmsg
+    cmp byte [n_error], 2
+    jne .line
+    mov si, n_asseterr
 .line:
-    call OSAPI_FONT_STR_XPARENT
+    call OSAPI_FONT_RUN
     RESTORE
     ret
 n_about:
@@ -146,7 +152,11 @@ n_exclusive:
     call OSAPI_FSX_MODE
     jc n_failed
     call n_palette
-    call n_refresh
+    call n_loadgfx
+    jc n_assetfailed
+    mov word [n_scene], 0ffffh
+    call n_scenecheck
+    jc n_assetfailed
 n_loop:
     mov ah, 1
     int 16h
@@ -172,7 +182,6 @@ n_loop:
     mov byte [n_profile], 0
 .pal:
     call n_palette
-    call n_dirtyall
 .notpal:
     cmp al, 'p'
     jne .notpause
@@ -196,6 +205,8 @@ n_loop:
     call n_refresh
     jmp n_loop
 .frame:
+    call n_scenecheck
+    jc n_assetfailed
     cmp byte [n_state], 1
     jne .present
     cmp byte [n_paused], 0
@@ -211,11 +222,12 @@ n_loop:
 n_frame_end:
     mov al, FSXW_FRAME
     call OSAPI_FSX_WAIT
-    mov al, FSXW_FRAME
-    call OSAPI_FSX_WAIT
     jmp n_loop
 n_failed:
     mov byte [n_error], 1
+    jmp n_exit
+n_assetfailed:
+    mov byte [n_error], 2
 n_exit:
     xor ax, ax
     call n_tone
@@ -245,10 +257,11 @@ n_l4: db 'P pause. M sound. C CGA palette. N new.',0
 n_l5: db 'Escape / F returns to this window.',0
 n_l6: db 'VGA 320x240 / color CGA 320x200',0
 n_errmsg: db 'Fullscreen requires a VGA or CGA display.',0
+n_asseterr: db 'Missing or damaged 1942 graphics files.',0
 n_ablines: dw n_title,n_credit,n_credit2,n_credit3,0
 n_credit: db 'Native remake for os8088',0
 n_credit2: db '1942 original game: Capcom (1985)',0
-n_credit3: db 'Font and textures from your NES cartridge',0
+n_credit3: db 'Original art / native VGA and CGA sprites',0
 n_hud: db '000000  L3 R3  STAGE 01',0
 n_msgtitle: db '1 9 4 2',0
 n_msgstart: db 'ENTER TO TAKE OFF',0
@@ -280,9 +293,6 @@ VAR n_sound,1
 VAR n_state,1
 VAR n_paused,1
 VAR n_fsi,FSI_SIZE
-VAR n_dirty,240
-VAR n_vbits,1
-VAR n_vblocks,1
 VAR n_px,2
 VAR n_py,2
 VAR n_lives,2
@@ -308,20 +318,27 @@ VAR n_pickx,2
 VAR n_picky,2
 VAR n_islandy,2
 VAR n_wavey,2
-; Renderer scratch, confined to the exclusive bracket.
-VAR n_sx,2
-VAR n_sy,2
-VAR n_src,2
-VAR n_pwidth,2
-VAR n_pheight,2
-VAR n_pplane,2
-VAR n_fontsprite,66
-VAR n_sw,2
-VAR n_sh,2
-VAR n_color,1
-VAR n_vrow,2
-VAR n_vplane,2
-VAR n_vmask,1
-VAR n_pairs,4096
+; Native renderer scratch and per-page damage lists.
+VAR n_graphics,2
+VAR n_scene,2
+VAR n_bank,2
+VAR n_page,2
+VAR n_drawbase,2
+VAR n_background,1
+VAR n_rendered,1
+VAR n_savedbase,2
+VAR n_counts,4
+VAR n_oldcount,2
+VAR n_rects,3072
+VAR n_origin,2
+VAR n_width,2
+VAR n_height,2
+VAR n_phase,2
+VAR n_cacheptr,2
+VAR n_compiled,1
+VAR n_blitptr,4
+VAR n_record,2
+VAR n_plane,2
+VAR n_vorigin,2
 OS88_BSS NBSS
 OS88_IMAGE_END

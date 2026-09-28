@@ -149033,57 +149033,94 @@ text. These are emulator cycle measurements, not hardware measurements.
 
 ## 99. 1942 — native vertical shooter (`apps/1942/`)
 
-A native remake, not NES emulation. `make 1942disk NESROM=/path/1942.nes`
-uses the user's NROM-256 cartridge as a build input; the ROM and extracted
-assets are not committed. `tools/1942assets.py` validates the cartridge and
-extracts the character font and terrain/explosion textures. Aircraft layouts,
-gameplay, formations, collision, sound effects and stage progression are native.
-This does not reproduce the NES game instruction for instruction.
+A standalone native game. `make 1942disk` builds the 360KB and 1.44MB game
+floppies using committed original artwork. No NES cartridge, extracted ROM
+assets, network service or C compiler is a build input. `art/` contains the
+original artwork and indexed production source; the host compiler is
+`tools/1942assets.py`. The rendering engine lives in the package; its CGA
+sprite bank also contains compiled graphics programs.
 
-The launcher owns a standard window with an About handler. Enter/F starts or
-resumes an `OSAPI_FSX_RUN` bracket on that window's display. VGA selects
-`FSXM_MODEX` (320x240); CGA selects `FSXM_CGA320` (320x200); unsupported
-adapters remain in the launcher with an explanation. Escape/F returns to the
-launcher; the bracket restores the desktop. No drawing slots run in a foreign
-mode. The playfield is 256x240, centered at x=32 on VGA with black side borders.
-CGA expands horizontally 5:4 and samples 240 source rows into 200 rows. VGA programs 16
-DAC colors; CGA uses legal 3D9h palettes and a 16-to-4 ink map. C cycles the
-three CGA profiles. `apps/1942/palette.json` is the editable build-time RGB,
-CGA background/group/intensity and ink-map contract; invalid values fail the
-asset build.
+### 99.1 Video and memory
 
-The package claims 64KB for a 61,440-byte canvas: four contiguous 64x240
-planes on VGA, byte-per-pixel on CGA. VGA presents contiguous spans with
-word copies rather than gathering one pixel at a time. The loader
-owns its lifetime. Per-row dirty masks limit transfers to changed 32-pixel blocks;
-there is no second full framebuffer and no per-pixel OS drawing call. Assembly
-is restricted to the 8086. Gameplay advances once per presented frame, paced
-by two `FSXW_FRAME` waits with `FSXF_FASTTICK`; slower machines slow the
-simulation instead of accumulating unbounded work. No real-time XT claim is
-made without measurement.
+VGA uses FSXM_MODEX, 320x240, with a 256x240 playfield at x=32. Pages 0 and 1
+alternate through OSAPI_FSX_PAGE. Page 2 holds the stage backdrop. Dirty
+rectangles from each page's previous use are restored with VGA write-mode-1
+latch copies: a byte transfers four pixels across the four planes. Moving
+sprites are cached in offscreen VGA memory above offset 57600,
+with two horizontal phases (even x positions). Grouped map masks and latch
+copies draw four pixels per transfer. Text retains opaque runs per plane;
+no transparent-pixel branch or
+chunky-to-planar conversion occurs in the frame loop. Only the hidden page
+is erased or drawn. The GC write mode and sequencer map mask are set by the
+package inside its FSX bracket and restored by the bracket on exit.
 
-Arrows move, Space/Z fires, X performs an invulnerable roll (three per stage),
-P pauses, M toggles speaker effects, N starts a new game. Three lives; contact
-or enemy bullets cost one life and grant a respawn grace period. Orange
-aircraft award a weapon pickup. A stage contains 24 enemies, followed every
-fourth stage by a large aircraft; 32 cleared stages win. Scoring uses two
-16-bit words for a six-digit decimal score. Gameplay state survives leaving
-fullscreen. The title/game-over/victory screens and palette changes use the
-same renderer as play.
+CGA uses FSXM_CGA320, 320x200. Logical coordinates scale 5:4 horizontally
+and 5:6 vertically. Its sprites are prepacked into four horizontal phases,
+with opaque byte runs and masked edge bytes. Aircraft, explosions and projectiles
+use precompiled 8086 ES:DI stores (word masks/immediates), ending in RETF;
+these are graphics programs in the validated bank, called by the package.
+A native 2bpp RAM canvas holds
+the finished pixels; only old/new sprite rectangles transfer to the two CGA
+banks. There is no runtime conversion of a chunky full-screen canvas.
+C selects the three legal 3D9h profiles in palette.json. VGA uses the
+shared RGB palette; CGA's four colors remain the hardware's fixed groups.
 
-The private-cartridge gate is `make 1942test NESROM=...` (`tests/n1942.py`).
-It boots both adapters, independently checks all VGA plane bytes and both
-CGA banks, compares incremental composition with full refresh, and drives
-held movement/fire, pause, rolls, pickups, collisions, grace, bosses,
-completion, palette changes and desktop restoration. A near-miss fixture
-is the collision negative control. Asset validation has malformed-ROM and
-palette rejection controls and runs without a cartridge. It is exempted
-from the default test registry because the build needs a user-owned ROM.
+Two 64KB claims hold the adapter's sprite bank and stage/canvas storage.
+They are instance-owned and released by the loader. The ordinary launcher
+uses OSAPI_FONT_RUN and an About handler. Enter/F enters/resumes the FSX
+bracket; Escape/F restores the desktop. Missing or invalid graphics files
+return to the launcher with an error rather than drawing unvalidated data.
 
-On the pinned MartyPC 4.77MHz models, the firing-heavy 90-frame sequence
-measured 3.48 fps VGA and 3.93 fps CGA. Quiet-scene measurements must not be
-used as the busy-scene rate. This is not a real-time XT port; faster hardware
-is recommended. No physical-hardware performance claim is made. The pinned
-emulator's cropped VGA aperture retains a 400-line height after the Mode X
-switch; the test captures all 480 raster lines from its debug aperture and
-checks the actual 320x240 plane data, including the bottom 40 logical rows.
+### 99.2 Graphics files
+
+The adapter bank is `1942V.GFX` or `1942C.GFX`. It starts with `N42V` or
+`N42C`, a 16-bit total byte length, a 16-bit sprite count and a table of
+16-bit record offsets. A record holds width/height bytes and four stream
+offsets. VGA streams are source planes; CGA streams are horizontal phases.
+Width bit 7 marks a compiled CGA record; its four pointers name 8086
+graphics programs rather than streams. They modify only the rectangle at
+ES:DI using immediate AND/OR/MOV and return with RETF. The host gate decodes
+and checks their opcodes and store bounds. The package verifies the expected
+length and 16-bit byte checksum before using a bank; these checks detect
+accidental damage and are not authentication for untrusted executable files.
+Other streams have offset/count records terminated by offset FFFFh. VGA runs
+carry literal color bytes. CGA runs additionally carry a type byte: zero
+for opaque literals, one for interleaved AND-mask/OR-data pairs. Offsets are
+relative to the destination origin at an 80-byte row stride.
+
+`1942L.GFX` holds four planes of the VGA sprite cache. Its grouped-mask
+display lists are generated into the package, so no per-pixel transparency
+test or planar conversion runs in combat.
+
+`SEA.V42`, `REEF.V42`, `PORT.V42` contain `N42B`, length, adapter byte 0,
+reserved byte 0, then 61,440 indexed pixels in four 64x240 planes.
+The corresponding `.C42` files use adapter byte 1 and 16,000 packed bytes
+in linear 80x200 order. These are loaded as the stage family changes;
+only one family resides at a time. Stage families cycle every four stages.
+The HUD is baked into the background cache when its values change and
+copied to the current draw page without rerasterizing text each frame.
+
+### 99.3 Gameplay and validation
+
+Arrows move; Space/Z fires; X rolls; P pauses; M toggles sound; C selects
+CGA colors; N starts again. Three lives, weapon pickups, 32 stages, bosses
+every fourth stage. Aircraft bank with movement, explosions animate, and
+scenery banks distinguish the ocean, reef and harbor stages. Game speed is
+paced by rendering and the FSX frame wait.
+
+`make 1942test` exercises both adapters on the pinned 4.77MHz MartyPC,
+including video readback, gameplay, asset loads, palette cycling, page reuse
+and desktop restoration. The performance acceptance target is at least 5fps
+under sustained crowded combat, including the slowest measured frame.
+Timings must include render,
+presentation and frame pacing; loading is measured separately. No physical
+hardware rate is implied by an emulator measurement.
+
+Measured on the pinned 4.77MHz models after the sprite-cache/compiler change:
+VGA 7.44fps average / 6.63fps slowest frame; CGA 5.53fps / 5.14fps in the
+64-frame crowded fixture (12 aircraft, 16 player shots, 16 enemy bullets and
+four explosions, replenished each frame). A 90-frame ordinary firing run
+measured about 17–21fps. These are guest-cycle measurements, not host time.
+The reference compositor checks the actual displayed page and CGA banks;
+the VGA graphics-controller 256-color shift bit is checked separately,
+because correct plane bytes alone cannot prove a correct scanout mode.

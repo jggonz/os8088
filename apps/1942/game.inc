@@ -23,8 +23,8 @@ n_new:
     SAVE
     mov byte [n_state], 1
     mov byte [n_paused], 0
-    mov word [n_px], 120
-    mov word [n_py], 208
+    mov word [n_px], 116
+    mov word [n_py], 204
     mov word [n_lives], 3
     mov word [n_rolls], 3
     mov word [n_roll], 0
@@ -37,6 +37,7 @@ n_new:
     mov word [n_frames], 0
     mov word [n_islandy], 24
     mov word [n_wavey], 60
+    mov word [n_bank], n_playerart
     mov word [n_picky], 0ffffh
     mov word [n_spawned], 0
     mov word [n_spawnwait], 30
@@ -114,92 +115,6 @@ n_refresh:
     RESTORE
     ret
 
-; Restore the previous dynamic footprints to ocean, before moving anything.
-n_erase:
-    SAVE
-    mov al, 1
-    mov cx, [n_px]
-    mov dx, [n_py]
-    mov bx, 16
-    mov bp, 16
-    call n_rect
-    mov si, n_enemies
-.enemies:
-    cmp word [si+EON], 0
-    je .enext
-    mov cx, [si+EX]
-    mov dx, [si+EY]
-    mov bx, 16
-    mov bp, 16
-    cmp word [si+EKIND], 2
-    jne .erect
-    mov bx, 32
-    mov bp, 32
-.erect:
-    call n_rect
-.enext:
-    add si, ESIZE
-    cmp si, n_enemies+12*ESIZE
-    jb .enemies
-    mov si, n_shots
-.shots:
-    mov cx, [si]
-    mov dx, [si+2]
-    mov bx, 2
-    mov bp, 6
-    call n_rect
-    add si, 4
-    cmp si, n_shots+16*4
-    jb .shots
-    mov si, n_bullets
-.bullets:
-    mov cx, [si]
-    mov dx, [si+2]
-    mov bx, 3
-    mov bp, 3
-    call n_rect
-    add si, 8
-    cmp si, n_bullets+16*8
-    jb .bullets
-    mov si, n_blasts
-.blasts:
-    cmp word [si+4], 0
-    je .bnext
-    mov cx, [si]
-    mov dx, [si+2]
-    mov bx, 16
-    mov bp, 16
-    call n_rect
-.bnext:
-    add si, 6
-    cmp si, n_blasts+8*6
-    jb .blasts
-    mov cx, [n_pickx]
-    mov dx, [n_picky]
-    mov bx, 8
-    mov bp, 8
-    call n_rect
-    mov cx, 0
-    mov dx, [n_islandy]
-    mov bx, 32
-    mov bp, 32
-    call n_rect
-    mov cx, 224
-    mov dx, 224
-    sub dx, [n_islandy]
-    call n_rect
-    mov cx, 48
-    mov dx, [n_wavey]
-    mov bx, 8
-    mov bp, 1
-    call n_rect
-    mov cx, 120
-    call n_rect
-    mov cx, 192
-    call n_rect
-    RESTORE
-    ret
-
 n_update:
     SAVE
     inc word [n_frames]
@@ -242,19 +157,22 @@ n_update:
 .xup:
     mov byte [n_xheld], 0
 .move:
+    mov word [n_bank], n_playerart
     mov al, KSC_LEFT
     call OSAPI_KEY_DOWN
     jnc .right
     cmp word [n_px], 3
     jb .right
     sub word [n_px], 3
+    mov word [n_bank], n_bankleftart
 .right:
     mov al, KSC_RIGHT
     call OSAPI_KEY_DOWN
     jnc .up
-    cmp word [n_px], 237
+    cmp word [n_px], 229
     ja .up
     add word [n_px], 3
+    mov word [n_bank], n_bankrightart
 .up:
     mov al, KSC_UP
     call OSAPI_KEY_DOWN
@@ -266,7 +184,7 @@ n_update:
     mov al, KSC_DOWN
     call OSAPI_KEY_DOWN
     jnc .fire
-    cmp word [n_py], 221
+    cmp word [n_py], 213
     ja .fire
     add word [n_py], 3
 .fire:
@@ -284,7 +202,7 @@ n_update:
 .shoot:
     mov word [n_fire], 5
     mov cx, [n_px]
-    add cx, 7
+    add cx, 11
     cmp word [n_weapon], 1
     je .single
     sub cx, 5
@@ -393,10 +311,10 @@ n_move_enemies:
     inc word [si+EAGE]
     mov ax, [si+EVX]
     add [si+EX], ax
-    mov ax, 232
+    mov ax, 224
     cmp word [si+EKIND], 2
     jne .bound
-    mov ax, 216
+    mov ax, 208
 .bound:
     cmp [si+EX], ax
     jae .bounce
@@ -413,7 +331,7 @@ n_move_enemies:
     jmp .attack
 .small:
     add word [si+EY], 2
-    cmp word [si+EY], 222
+    cmp word [si+EY], 212
     jbe .attack
     mov word [si+EON], 0
     jmp .next
@@ -457,10 +375,10 @@ n_enemyfire:
     jmp .out
 .slot:
     mov ax, [si+EX]
-    add ax, 8
+    add ax, 12
     mov [di], ax
     mov bx, [n_px]
-    add bx, 8
+    add bx, 12
     sub bx, ax
     mov word [di+4], 0
     cmp bx, 12
@@ -491,10 +409,10 @@ n_move_shots:
 .enemy:
     cmp word [si+EON], 0
     je .enext
-    mov bx, 16
+    mov bx, 24
     cmp word [si+EKIND], 2
     jne .size
-    mov bx, 32
+    mov bx, 40
 .size:
     mov ax, [di]
     sub ax, [si+EX]
@@ -580,8 +498,8 @@ n_hitplayer:
     dec word [n_lives]
     mov word [n_grace], 75
     mov word [n_weapon], 1
-    mov word [n_px], 120
-    mov word [n_py], 208
+    mov word [n_px], 116
+    mov word [n_py], 204
     mov byte [n_huddirty], 1
     mov ax, 80
     call n_tone
@@ -606,11 +524,11 @@ n_move_bullets:
     ja .remove
     mov ax, [si]
     sub ax, [n_px]
-    cmp ax, 16
+    cmp ax, 24
     jae .next
     mov ax, [si+2]
     sub ax, [n_py]
-    cmp ax, 16
+    cmp ax, 24
     jae .next
     call n_hitplayer
 .remove:
@@ -628,12 +546,12 @@ n_move_pickup:
     ja .remove
     mov ax, [n_pickx]
     sub ax, [n_px]
-    add ax, 8
+    add ax, 12
     cmp ax, 24
     jae .out
     mov ax, [n_picky]
     sub ax, [n_py]
-    add ax, 8
+    add ax, 12
     cmp ax, 24
     jae .out
     cmp word [n_weapon], 3
@@ -695,24 +613,15 @@ n_nextstage:
 
 n_draw:
     SAVE
-    mov si, n_islandart
-    mov cx, 0
-    mov dx, [n_islandy]
-    call n_sprite
-    mov cx, 224
-    mov dx, 224
-    sub dx, [n_islandy]
-    call n_sprite
-    mov al, 2
+    ; Small water wakes move independently over the cached terrain.
+    mov si, n_wakeart
     mov cx, 48
     mov dx, [n_wavey]
-    mov bx, 8
-    mov bp, 1
-    call n_rect
+    call n_sprite
     mov cx, 120
-    call n_rect
+    call n_sprite
     mov cx, 192
-    call n_rect
+    call n_sprite
     mov di, n_enemies
 .enemy:
     cmp word [di+EON], 0
@@ -737,7 +646,7 @@ n_draw:
     test word [n_frames], 2
     jnz .shots
 .player:
-    mov si, n_playerart
+    mov si, [n_bank]
     cmp word [n_roll], 0
     je .part
     test word [n_roll], 8
@@ -748,27 +657,23 @@ n_draw:
     mov dx, [n_py]
     call n_sprite
 .shots:
-    mov si, n_shots
+    mov di, n_shots
 .sloop:
-    mov al, 4
-    mov cx, [si]
-    mov dx, [si+2]
-    mov bx, 2
-    mov bp, 6
-    call n_rect
-    add si, 4
-    cmp si, n_shots+16*4
+    mov cx, [di]
+    mov dx, [di+2]
+    mov si, n_shotart
+    call n_sprite
+    add di, 4
+    cmp di, n_shots+16*4
     jb .sloop
-    mov si, n_bullets
+    mov di, n_bullets
 .bloop:
-    mov al, 6
-    mov cx, [si]
-    mov dx, [si+2]
-    mov bx, 3
-    mov bp, 3
-    call n_rect
-    add si, 8
-    cmp si, n_bullets+16*8
+    mov cx, [di]
+    mov dx, [di+2]
+    mov si, n_bulletart
+    call n_sprite
+    add di, 8
+    cmp di, n_bullets+16*8
     jb .bloop
     mov cx, [n_pickx]
     mov dx, [n_picky]
@@ -780,21 +685,27 @@ n_draw:
     je .xnext
     mov cx, [di]
     mov dx, [di+2]
-    mov si, n_blastart
+    mov si, 8
+    sub si, [di+4]
+    shr si, 1
+    add si, n_blast0art
     call n_sprite
 .xnext:
     add di, 6
     cmp di, n_blasts+8*6
     jb .xloop
     cmp byte [n_huddirty], 0
-    je .out
+    je .hud
     call n_scoretext
     mov byte [n_huddirty], 0
+.hud:
+    call n_hudcopy
 .out:
     RESTORE
     ret
 n_scoretext:
     SAVE
+    call n_hudbegin
     mov bx, [n_scorelo]
     mov bp, [n_scorehi]
     mov si, n_hud+5
@@ -829,5 +740,7 @@ n_scoretext:
     mov cx, 8
     mov dx, 4
     call n_text
+    call n_hudend
+    call n_hudcopy
     RESTORE
     ret
