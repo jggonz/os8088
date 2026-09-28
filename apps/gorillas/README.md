@@ -139,7 +139,7 @@ python3 tests/gorillasinput.py --check-repaint --output build/gorillas-input.jso
 ```
 
 Use `--arm vga`, `--arm cga` or `--arm herc` for one adapter. Screenshots
-are saved in `build/gorillas-proof/`. The contract is [SPEC.md §98](../../SPEC.md#98-gorillas-appsgorillasgorillasasm).
+are saved in `build/gorillas-proof/`. The contract is [SPEC.md §99](../../SPEC.md#99-gorillas-appsgorillasgorillasasm).
 
 The reference source and IBM hardware documents are preserved in
 [`reference/`](../../reference/README.md). Reproduce/check the committed

@@ -632,7 +632,8 @@ _os88_wm_title:
     ret
 
 ; void os88_wm_resize(void *win, int w, int h) - the WHOLE window, frame
-; included. Do NOT hold the gfx lock. Call this instead of writing W_W/W_H:
+; included. The gfx lock held or not - the slot takes it if you have none
+; (SPEC.md 11.1.2). Call this instead of writing W_W/W_H:
 ; the fields are readable by contract and not writable.
 _os88_wm_resize:
     push bp

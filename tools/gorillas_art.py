@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rebuild the native Gorillas art and ink tables (SPEC.md 98.1).
+"""Rebuild the native Gorillas art and ink tables (SPEC.md 99.1).
 
 Reference: reference/gorillas/gorilla.bas, SetScreen/DrawGorilla/DoSun.
 The BASIC's EGA palette values are six-bit rgbrgb colors, not VGA indices.

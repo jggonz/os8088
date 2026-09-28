@@ -117,7 +117,14 @@ def main(argv):
     def off(n):
         return dispapps.bss_off("skies", n)
 
-    with os88ui.boot(a.image, apps=a.apps, machine=a.machine) as ui:
+    # THE SAVER STAYS ON AND THE BOOT DOES NOT SETTLE. This row's longest
+    # input-free stretch is 25 guest seconds of 200, so it has no use for
+    # os88ui's saver opt-out; and its one long input-free wait was the boot's
+    # screen settle, which a whole soak once watched run 540 guest seconds
+    # without converging. os88ui's `up` waits for the boot to END, and every
+    # step after it is confirmed off guest state.
+    with os88ui.boot(a.image, apps=a.apps, machine=a.machine, saver=True,
+                     settle=False) as ui:
         m = ui.m
         ui.path("B:/GAMES/SKIES.O88")
         slot, seg = dispapps.pkg_seg(m, 0)

@@ -1,4 +1,4 @@
-; Gorillas for os8088. See SPEC.md 98 and README.md.
+; Gorillas for os8088. See SPEC.md 99 and README.md.
 ; Gameplay adapted from the supplied Microsoft QBasic Gorillas (1990).
 ; Native renderer and fixed-point simulation; no BASIC runtime required.
 %include "os88api.inc"

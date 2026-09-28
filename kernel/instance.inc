@@ -651,10 +651,7 @@ inst_restart_set:
     mov [bx+inst_restart], ax   ; this being the only WORD table among them
     clc                         ; inst_fhome_idx clobbers the flags
 .no:
-    pop di
-    pop bx
-    pop ax
-    ret
+    jmp short inst_parksafe_set.no  ; the same three pops, one routine up
 
 ; -----------------------------------------------------------------------------
 ; inst_park_req - ask every package worker to stand still, and wait for them
@@ -1093,7 +1090,8 @@ inst_alloc:
 ; This body was snd_req_inst and is instance.inc's now, because the question
 ; it answers - who is the kernel doing this on behalf of? - stopped being the
 ; sound tier's alone when the file API needed it (SPEC.md 19.2.1).
-; snd_req_inst is a jump to it, so SPEC.md 34.3's contract is untouched.
+; snd_req_inst is a second name for it - a label on the same instruction and
+; not a jump (size pass 5) - so SPEC.md 34.3's contract is untouched.
 ;
 ; The stamp is only the answer for a caller running INSIDE that callback, and
 ; the callback runs on one task. A worker that pre-empts it is a different
@@ -1111,6 +1109,7 @@ inst_alloc:
 ; the instance's. It is the FIRST thing a package runs and the natural place
 ; to size itself, which is what made it worth the four instructions.
 ; -----------------------------------------------------------------------------
+snd_req_inst:                   ; SPEC.md 34.3's name for the same question
 inst_caller:
     push bx
     mov bx, [snd_inst]          ; BL = the stamped instance, BH = the task

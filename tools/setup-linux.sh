@@ -81,6 +81,7 @@ fi
 # one. So it is REPORTED and never installed.
 
 have_libudev() { pkg-config --exists libudev 2>/dev/null; }
+have_pil() { python3 -c 'from PIL import Image' >/dev/null 2>&1; }
 
 missing_list() {
     command -v nasm            >/dev/null 2>&1 || echo nasm
@@ -96,6 +97,14 @@ missing_list() {
     # run down to 37 minutes with 0 of 267 rows reported over exactly this.
     command -v inform6 >/dev/null 2>&1 \
         || command -v inform >/dev/null 2>&1 || echo inform6-compiler
+    # Pillow. `tests/pxsshots.py` writes its photographs through it, and
+    # tools/os88pix.py falls back to it for a picture that is not a PNG. The
+    # row died on an ImportError in a soak rather than skipping, because
+    # nothing named the module - so it is a probed capability now (`pil`,
+    # tools/os88test.py) and installed here for the same reason as inform6.
+    # `PIL.Image` and not `PIL`: the package imports on an interpreter its C
+    # extension was not built for, and only the extension says so.
+    have_pil || echo python3-pil
 }
 
 report() {
@@ -131,6 +140,10 @@ status() {
         report inform6 "MISSING - build/zt/ZOPS.Z5, so the zmove and
                      editmove rows have no disk to boot"
     fi
+    have_pil \
+        && report pillow "$(python3 -c 'import PIL; print(PIL.__version__)' 2>/dev/null)" \
+        || report pillow "MISSING - the pxsshots row SKIPs (its photographs
+                     are written through it)"
     # nasm 3 is a PROBED CAPABILITY and not a dependency - nothing in any
     # tier needs one to build, and the `nasm3` row SKIPs without it. So it is
     # reported and never installed, and no distribution packages one anyway:
@@ -250,6 +263,21 @@ for pkg in $MISSING; do
         }
         ;;
     pkg-config) : ;;   # installed alongside libudev-dev above
+    python3-pil)
+        # The archive's Pillow is built for the ARCHIVE'S python3, and the
+        # `python3` on PATH need not be that one: this container runs a
+        # /usr/local 3.11 against a distro 3.12, and apt's copy then imports
+        # as a package whose `_imaging` extension will not load. So apt first,
+        # and pip for the interpreter the tools actually run under if that
+        # did not produce a working import. `--ignore-installed` because that
+        # interpreter also has the archive's dist-packages on its path, so a
+        # plain pip calls the broken copy "already satisfied" and does nothing.
+        say "==> installing Pillow  (pxsshots' photographs)"
+        apt_install python3-pil || :
+        have_pil || python3 -m pip install -q --ignore-installed pillow \
+            >/dev/null 2>&1 || :
+        have_pil || warn "setup-linux.sh: Pillow would not install; only the pxsshots row needs it"
+        ;;
     *)
         say "==> installing $pkg"
         apt_install "$pkg" || { warn "setup-linux.sh: $pkg would not install"; exit 1; }

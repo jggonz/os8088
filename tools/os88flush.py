@@ -452,6 +452,34 @@ class Flush(object):
                 pass
 
 
+def vhd_volume(path, part=0):
+    """Partition PART of a fixed-disk image (a flat VHD, footer and all), as a
+    Volume - the hard-disk twin of `Flush.volume`, which reads floppies.
+
+    Read it AFTER the instance is closed: MartyPC writes the image in place,
+    and a read taken while it runs can see a FAT that is still in flight.
+    """
+    with open(path, "rb") as f:
+        img = f.read()
+    if img[:2] == b"\xDA\xBE":
+        # A SEAGATE ST11 layout (tools/os88hdd.py --st11): the card's
+        # parameter record - DA BE, cylinders big-endian, heads, sectors -
+        # is in physical cylinder 0, which it hides, so the BIOS's sector 0
+        # (the MBR, and what every partition LBA counts from) is cylinder 1
+        _, heads, spt = struct.unpack_from(">HBB", img, 2)
+        if not heads or not spt:
+            raise FlushError("%s: an ST11 record with %d heads and %d "
+                             "sectors" % (path, heads, spt))
+        img = img[heads * spt * SECTOR:]
+    if len(img) < SECTOR or img[510:512] != b"\x55\xaa":
+        raise FlushError("%s: no partition table" % path)
+    ent = 446 + part * 16
+    lba = struct.unpack_from("<I", img, ent + 8)[0]
+    if not img[ent + 4] or not lba:
+        raise FlushError("%s: partition %d is empty" % (path, part))
+    return Volume(img[lba * SECTOR:], "%s partition %d" % (path, part))
+
+
 def _fmt_entry(e):
     kind = "<DIR>" if e.is_dir else "%7d" % e.size
     flags = "".join(c for c, bit in (("r", ATTR_RDONLY), ("h", ATTR_HIDDEN),

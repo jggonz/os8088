@@ -90,16 +90,21 @@ def runs(src):
         return None
     body, out = m.group(1), []
     cx = None
+    ch0 = False             # CH is known 0 - only after a `rep` has run out
     for line in body.splitlines():
         line = line.split(";")[0]
-        c = re.match(r"\s*mov\s+cx\s*,\s*(\d+)\s*$", line)
+        c = re.match(r"\s*mov\s+c([xl])\s*,\s*(\d+)\s*$", line)
         if c:
-            cx = int(c.group(1))
+            # `mov cl, N` is a count of N only where CH is already 0, which
+            # is after a run (kernel size pass 5 takes that byte three times).
+            # Anywhere else the count is unknown, and None fails the replay.
+            cx = int(c.group(2)) if (c.group(1) == "x" or ch0) else None
             continue
         r = re.match(r"\s*rep\s+(movsw|stosw)\s*$", line)
         if r:
             out.append((r.group(1), cx))
             cx = None
+            ch0 = True
             continue
         if re.match(r"\s*stosw\s*$", line):
             out.append(("stosw", 1))

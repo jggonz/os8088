@@ -1415,23 +1415,33 @@ mouse_unhook:
     pop ax
     ret
 
-%ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
-; mouse_rearm - a program may TAKE the mouse's IRQ, and a driver takes it back
-; ins:  none
-; outs: none (all registers preserved)
+; osapi_mouse - out: CX = [mouse_x], DX = [mouse_y], AL = [mouse_btn]
+;
+; A package's tracking loop spins on this and does not return until the button
+; comes up, exactly as menu_track / ui_drag / ui_grow do - so on a machine with
+; no mouse it is a loop the keyboard has to be serviced from, or the button the
+; keyboard latched can never be released and the UI task never comes back
+; (SPEC.md 9.6.1). One compare on every machine that has a mouse.
+;
+; kern_big: A PROGRAM MAY TAKE THE MOUSE'S IRQ, AND THIS TAKES IT BACK (SPEC.md
+; 9.13). Inside an fsx bracket a program owns the machine and may have hooked
+; the mouse's vector out from under us; this is the call the DOS box's own
+; DHK_MOUSE makes on every INT 33h read and every key poll - the same choke
+; point kd_mou_read is for kern_dos - so the recovery needs no new slot.
 ;
 ; **KERN_BIG ONLY, AND THAT IS A FACT ABOUT THE DISK** rather than a judgement:
-; the only programs that take an IRQ out from under this kernel are DOS
-; programs inside an fsx bracket, and `DOS.O88` is on no kern_small floppy at
-; all - `build/small360.img` is 27 files and none of them is the box. A
-; kern_small machine has nothing that can do this, so it pays nothing for it.
+; `DOS.O88` is on no kern_small floppy, so that machine has nothing that can
+; do this and pays nothing for it.
+;
+; It was a routine of its own (mouse_rearm) called from here; folded in (size
+; pass 5) it shares this slot's [mou_ptr] test instead of repeating it, has no
+; call/ret, and spends CX - an OUTPUT, dead until .live - where it pushed AX.
 ;
 ; **THE SEGMENT IS THE WHOLE TEST.** A DOS program's CS is never KERNEL_SEG, so
 ; the segment word alone says whether the vector is still ours - and a vector
 ; pointing INTO the kernel at some other offset is neither a theft this could
-; distinguish nor one the machine would survive. That is 15 bytes the obvious
-; offset-and-segment compare spends for nothing.
+; distinguish nor one the machine would survive.
 ;
 ; `[mou_port]` IS the word tables' byte offset already - 0 or 2, and
 ; MOU_P2ROW = 4 which is no serial row - so it indexes them with no shift.
@@ -1441,43 +1451,44 @@ mouse_unhook:
 ; vector and its stub are the LINE's row (SPEC.md 9.5.2.1, kd_mou_vec), since
 ; a 2F8 card jumpered to IRQ4 speaks on int 0Ch, which is row 0's.
 ; -----------------------------------------------------------------------------
-mouse_rearm:
-    cmp byte [mou_ptr], 0           ; nothing has proven itself a pointer, so
-    je .out                         ; there is no port of OURS to defend and a
-                                    ; program using a UART is entitled to it
-    cmp byte [mou_port], MOU_PEND   ; the PS/2 row (and the driver row) are not
-    jae .out                        ; a UART and index no serial table
+osapi_mouse:
+    cmp byte [mou_ptr], 0           ; nothing has proven itself a pointer: poll
+%ifdef KERN_BIG                     ; the keyboard mouse, and there is no port
+    je .poll                        ; of OURS to defend either
+    cmp byte [fsx_task], 0xFF       ; no bracket up, so nothing can have taken
+    je .live                        ; the IRQ: every ordinary caller stops here
     push ax
     push bx
     push si
     push di
     push es
+    mov bl, [mou_port]
+    cmp bl, MOU_PEND                ; the PS/2 row (and the driver row) are not
+    jae .done                       ; a UART and index no serial table
+    xor bh, bh                      ; BX = the PORT's row, for mou_pout
     xor di, di                      ; DI = the LINE's row: IRQ4 is row 0's
     cmp byte [mou_line], MOU_L4     ; int 0Ch and mou_isr, IRQ3 row 2's -
     je .row                         ; whichever base the card answered at
     mov di, 2
 .row:
     mov si, [di+mou_ivecs]
-    mov bl, [mou_port]              ; ...and BX the PORT's, for mou_pout
-    xor bh, bh
     xor ax, ax
     mov es, ax
-    mov ax, cs
-    cmp [es:si+2], ax               ; still ours? ONE compare, which is what
+    mov cx, cs
+    cmp [es:si+2], cx               ; still ours? ONE compare, which is what
     je .done                        ; every pass but a theft pays
     pushf                           ; ...and one critical section over the
     cli                             ; vector AND the mask, not two
-    mov [es:si+2], ax
+    mov [es:si+2], cx
     mov ax, [di+mou_isrs]
     mov [es:si], ax
     mov ax, 0x040B                  ; MCR: DTR|RTS|OUT2 - a program that took
     call mou_pout                   ; the vector took the UART with it, and
     mov ax, 0x0101                  ; Battle Chess leaves MCR = 08h, which is a
     call mou_pout                   ; Microsoft mouse with no power. IER = 1 is
-    mov al, [mou_line]              ; the one thing mouse_init alone wrote
-    not al                          ; (SPEC.md 96.45.2), so it is written here
-    mov ah, al
-    in  al, 0x21
+    in  al, 0x21                    ; the one thing mouse_init alone wrote
+    mov ah, [mou_line]              ; (SPEC.md 96.45.2), so it is written here
+    not ah
     and al, ah
     out 0x21, al
     popf
@@ -1487,9 +1498,17 @@ mouse_rearm:
     pop si
     pop bx
     pop ax
-.out:
-    ret
+    jmp short .live
+.poll:
+%else
+    jne .live
 %endif
+    call kbm_poll
+.live:
+    mov cx, [mouse_x]
+    mov dx, [mouse_y]
+    mov al, [mouse_btn]
+    ret
 
 %ifdef KERN_BIG
 ; =============================================================================

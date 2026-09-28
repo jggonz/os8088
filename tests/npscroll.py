@@ -86,6 +86,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "tools", "notepad"))
 import os88marty                                            # noqa: E402
 import os88ui                                               # noqa: E402
+from os88pkg import PKG_FMT                                 # noqa: E402
 from state import offsets                                   # noqa: E402
 
 IMG = os.path.join(ROOT, "build", "os8088-360.img")
@@ -147,7 +148,7 @@ class Note(object):
     def _find(self, name=b"NOTEPAD", lo=0x1000, hi=0xA000):
         # A package sits on a paragraph boundary off the top of the heap
         # (SPEC.md 20.1/50.3), so the scan is over paragraphs and the match is
-        # 'O8' + version 3 + the header's own name field.
+        # 'O8' + PKG_FMT + the header's own name field.
         hits = []
         for base in range(lo, hi, 0x400):
             n = min(0x400, hi - base) * 16
@@ -156,7 +157,7 @@ class Note(object):
             except Exception:
                 continue
             for i in range(0, len(data) - 32, 16):
-                if (data[i] == 0x4F and data[i + 1] == 0x38 and data[i + 2] == 3
+                if (data[i] == 0x4F and data[i + 1] == 0x38 and data[i + 2] == PKG_FMT
                         and bytes(data[i + 16:i + 32]).split(b"\0")[0] == name):
                     hits.append(base + i // 16)
         if not hits:

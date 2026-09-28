@@ -134,7 +134,8 @@ class _Booted(object):
             ui.up(limit=limit)
             if not self._kw.get("saver", False):
                 os88marty.no_saver(m)
-            ui.settle(limit=limit)
+            if self._kw.get("settle", True):
+                ui.settle(limit=limit)
         except BaseException:
             self._cm.__exit__(*sys.exc_info())
             raise
@@ -145,7 +146,8 @@ class _Booted(object):
 
 
 def boot(image, apps=None, machine="os8088_5150_cga", card=None,
-         saver=False, why_ibm=None, verbose=True, limit=180.0, **kw):
+         saver=False, why_ibm=None, verbose=True, limit=180.0, settle=True,
+         **kw):
     """Launch, boot to a settled desktop, turn the saver off, hand back a UI.
 
     THE THREE LINES 175 SCRIPTS OPEN WITH, and the two things most of them
@@ -161,13 +163,23 @@ def boot(image, apps=None, machine="os8088_5150_cga", card=None,
         that waits on a slow build, or an emulator lane sharing four cores
         with three others, gets there - and what it then compares is a black
         screen. `saver=True` keeps it, for the rows whose subject it is.
+        **A row that never goes five guest minutes without input does not
+        need it off** - pass `saver=True` and it cannot hide behind the
+        opt-out; tests/skiesfleet.py measured 200 guest seconds and a longest
+        input-free stretch of 25.
+      * `settle=False` skips the picture half of `ready`. `up` already waits
+        for the END of the boot ([spl_live] = 0), so a row whose every next
+        step is confirmed off guest state - every os88ui verb is - does not
+        need the screen to stop moving first, and the settle was the one
+        long input-free wait such a row had.
 
     Everything else is `os88marty.launch`'s, passed straight through.
     """
     cm = os88marty.launch(image, apps=apps,
                           machine=os88marty.machine(machine, why_ibm),
                           card=card, **kw)
-    return _Booted(cm, card=card, saver=saver, verbose=verbose, limit=limit)
+    return _Booted(cm, card=card, saver=saver, verbose=verbose, limit=limit,
+                   settle=settle)
 
 
 # =============================================================================
@@ -260,8 +272,21 @@ class UI:
         screens in it and the loading screen between two disk reads is as
         still as a finished desktop. It is what makes the settle safe, and
         the window in between is where the screen saver has to be turned off.
+
+        **AND `[spl_live]` = 0, WHICH IS WHAT MAKES `no_saver` STICK.** The two
+        words go live in kmain_o's `menu_init` and desk setup, BEFORE
+        `drv_boot_x` loads SYSTEM.CFG and runs `ss_mins2idle` - which rewrites
+        `[ss_idle]`. A `no_saver` landing in between was simply undone, and
+        where it landed was decided by host polling against guest progress:
+        on a loaded box the guest is slower per poll, so the gate was seen
+        EARLIER in guest time and the saver came back five guest minutes into
+        the settle that followed (skiesfleet, in the whole soak: "the screen
+        was still changing after 542 GUEST seconds because ... [blk_on] is
+        set"). `spl_finish` is kmain_o's last act, after the settings, so
+        both words live and the splash done is the end of the boot.
         """
-        self._wait(lambda: self._word("desk_rows") and self._word("menu_nbar"),
+        self._wait(lambda: self._word("desk_rows") and self._word("menu_nbar")
+                   and not self._byte("spl_live"),
                    "the kernel to reach the desktop", limit)
         return self
 

@@ -1450,7 +1450,33 @@ trk_fdone:
     jmp .failfree
 .big:
     mov si, trk_s_toobig
-    jmp .failfree
+    cmp dx, [trk_capk]              ; THE READ SAYS HOW MANY KB IT NEEDS
+    jbe .failfree                   ; (SPEC.md 20.14.6.3), and more than we
+                                    ; claimed means our SIZE was wrong, not
+                                    ; the file: a compressed module whose
+                                    ; directory hint a foreign OS dropped, so
+                                    ; FIND reported what it OCCUPIES. Claim
+                                    ; again at the real size - ONCE, because
+                                    ; that claim is DX and the next answer
+                                    ; cannot be more than it
+    push dx
+    mov dx, [trk_modseg]            ; the short claim goes back first, so the
+    call OSAPI_MEM_FREE             ; heap test below sees the room it held
+    mov word [trk_modseg], 0
+    pop ax                          ; AX = KB
+    mov dx, ax
+    mov cl, 10
+    shl ax, cl
+    mov cl, 6
+    shr dx, cl
+    mov [trk_fsize], ax             ; KB -> bytes, banked where the dialog's
+    mov [trk_fsize_hi], dx          ; figure lives - so a compaction this
+    jmp .load                       ; retry posts (trk_cpqload) reloads with
+                                    ; it and not with the one that was wrong.
+                                    ; Nothing new is read off the disk: the
+                                    ; refusal came before any data I/O, and
+                                    ; the directory and the header sector it
+                                    ; walked are what the retry walks again
 .noent:
     mov si, trk_s_noent
     jmp .failfree

@@ -22,6 +22,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import os88marty as M                                       # noqa: E402
+from os88pkg import PKG_FMT                                 # noqa: E402
 
 CPU_HZ = 4772727.0          # 4.77MHz 8088 - the machine every figure is in
 
@@ -93,7 +94,7 @@ class Lab:
 
         A package is loaded on a paragraph boundary off the top of the heap
         (SPEC.md 20.1/50.3), so the scan is over paragraphs and the match is
-        'O8' + version 3 + the 16-byte name field. Returns the LAST hit: the
+        'O8' + PKG_FMT + the 16-byte name field. Returns the LAST hit: the
         heap hands regions out downward, so a second instance of the same
         package sits below the first and is the one most recently launched.
         """
@@ -106,7 +107,7 @@ class Lab:
             except Exception:
                 continue
             for i in range(0, len(data) - 32, 16):
-                if data[i] == 0x4F and data[i + 1] == 0x38 and data[i + 2] == 3:
+                if data[i] == 0x4F and data[i + 1] == 0x38 and data[i + 2] == PKG_FMT:
                     if bytes(data[i + 16:i + 32]).split(b"\0")[0] == name:
                         hits.append(base + i // 16)
         if not hits:

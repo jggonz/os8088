@@ -1073,23 +1073,30 @@ ap_find_sibling:
     clc
     ret
 
+%if %isdef(AP_HANDOFF) || %isdef(APROF) ; the root move: the handoff's, and
+                                  ; APROF's dump. The shipped package calls
+                                  ; neither, so it carries none of it
 ; =============================================================================
 ; ap_que_root - move this instance to the system volume's root (where
 ;               APQUEUE.DAT lives).  clobbers AX, BX, DX.  CF = 1 on failure.
 ;
-; OSAPI_FILE_GOTO, not its quiet twin: GOTO_Q sets only a transient by-cluster
-; resolution dir and OSAPI_FILE_WRITE / _READ by NAME still land in the
-; instance's own launched-from folder (measured - APDIAG.TXT and the queue file
-; both missed the root). The real GOTO moves the instance, so every caller
-; banks OSAPI_FILE_HERE first and GOTOs back (the SYSTEM/FONTS pattern, in
-; os88type.inc).
+; OSAPI_FILE_GOTO_QM (SPEC.md 74.1, 86.11.1). NOT GOTO_Q: that moves the
+; machine and not the instance, and every file cell first puts the machine
+; back in the instance's own folder (inst_vol_enter) - so a READ or WRITE by
+; NAME lands in the launched-from folder (measured - APDIAG.TXT and the queue
+; file both missed the root). And not the full GOTO this used to be: that is a
+; REMOUNT - BPB, FAT window, root scan, sort, icon harvest - which is what made
+; the poll unaffordable on an XT. GOTO_QM moves the instance, quietly: a word
+; on the volume already mounted, a quiet mount across volumes. Every caller
+; banks OSAPI_FILE_HERE first and GOTO_QMs back.
 ; =============================================================================
 ap_que_root:
     call OSAPI_VOL_SYS             ; BL = the volume this machine booted from
     xor dx, dx
-    call OSAPI_FILE_GOTO          ; DX = 0 (root), BL = volume; REMOUNT
+    call OSAPI_FILE_GOTO_QM       ; DX = 0 (root), BL = volume; quiet, moves us
     ret
 
+%ifdef AP_HANDOFF                 ; the handoff itself (SPEC.md 86.11.1)
 ; =============================================================================
 ; ap_que_write - append the banked ARG_FILE document to APQUEUE.DAT on the
 ;                system volume root (SPEC.md 86.11.1).  Entry-proc only.
@@ -1176,7 +1183,7 @@ ap_que_write:
     ; --- restore our folder regardless -----------------------------------
     mov dx, [ap_que_bdir]
     mov bl, [ap_que_bvol]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_QM
     popf
     jc .fail
     clc
@@ -1225,13 +1232,16 @@ ap_que_poll:
 .qfull:
     APCNT apc_quechk
 
-    ; GOTO_Q, not the real GOTO: this runs on every idle ap_onwake, and a real
-    ; remount of the system root (scan + sort + icon harvest) is seconds on an
-    ; XT. GOTO_Q only re-points name resolution and does not move us, so there
-    ; is nothing to restore afterwards.
-    call OSAPI_VOL_SYS            ; BL = the system volume
-    xor dx, dx
-    call OSAPI_FILE_GOTO_Q        ; resolve names at the root; cheap, no move
+    ; GOTO_QM, for ap_que_root's reason: this runs on every idle ap_onwake,
+    ; so it must be the quiet stand, and it must MOVE us - GOTO_Q did not, and
+    ; the read looked for APQUEUE.DAT in our own folder, so a handoff was never
+    ; seen unless this package lived at the system root. Our folder is banked
+    ; first and stood in again after.
+    call OSAPI_FILE_HERE
+    mov [ap_que_bdir], dx
+    mov [ap_que_bvol], bl
+    call ap_que_root
+    jc .qhome
     push ds
     pop es
     mov si, ap_qfile
@@ -1246,11 +1256,8 @@ ap_que_poll:
     mov si, ap_qfile
     call OSAPI_FILE_DELETE        ; still resolving at the root
     pop cx
-    ; re-point name resolution back to our own folder before ap_add_file:
-    ; OSAPI_FILE_HERE is unmoved by GOTO_Q, so it still names where we live.
-    push cx
-    call OSAPI_FILE_HERE
-    call OSAPI_FILE_GOTO_Q
+    push cx                      ; back to our own folder before ap_add_file
+    call ap_que_home
     pop cx
 
     mov si, ap_querec
@@ -1270,8 +1277,7 @@ ap_que_poll:
     sub cx, AP_QUEREC
     jmp .rec
 .qhome:
-    call OSAPI_FILE_HERE
-    call OSAPI_FILE_GOTO_Q        ; name resolution back to our folder
+    call ap_que_home              ; back to our folder
 .done:
     cmp byte [ap_que_hit], 0
     pop di
@@ -1287,6 +1293,16 @@ ap_que_poll:
     stc
     ret
 
+%endif                            ; AP_HANDOFF
+; ap_que_home - back to the folder banked in [ap_que_bdir]/[ap_que_bvol].
+; clobbers AX, BX, DX
+ap_que_home:
+    mov dx, [ap_que_bdir]
+    mov bl, [ap_que_bvol]
+    call OSAPI_FILE_GOTO_QM       ; a CALL: the cell is far and ends in retf,
+    ret                           ; so a tail jmp would return to nowhere
+
     APB  ap_que_hit
     APW  ap_que_bdir
     APB  ap_que_bvol
+%endif                            ; AP_HANDOFF or APROF

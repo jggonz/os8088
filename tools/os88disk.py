@@ -355,8 +355,9 @@ A_LOCKED = A_RDONLY | A_ARCH                # visible, but not yours to delete
 ASC_NAME  = b"ASSOC   DAT"   # SPEC.md 54.7: the volume's icon + assoc cache
 ASC_MAGIC = b"OS88AC"
 ASC_VER   = 2                # rows carry the glyph column (SPEC.md 54.3.2);
-                             # the kernel reads version 1 too, nothing
-                             # writes it any more
+                             # the ONLY version the kernel reads - it
+                             # dropped version 1 in kernel size pass 5, so
+                             # any other byte here is a cold cache
 ASC_HDR   = 16
 ASC_ROW   = 88               # stem 8 + size 2 + cluster 2 + 4 rsvd + icon 64
                              # + document glyph 8
@@ -868,6 +869,22 @@ def build(args) -> int:
         if len(mbr) != HP_TBL:
             fail(f"{args.mbr} is {len(mbr)} bytes, not {HP_TBL}")
         spt, heads, tot, media = HDD_SPT, HDD_HEADS, HDD_PSECS, 0xF8
+        hcyls, hbase, htot = HDD_CYLS, HDD_BASE, HDD_TOT
+        if args.geometry:
+            # A GEOMETRY OF ITS OWN (the demo video disks, an ST-238R on an
+            # ST11R): the partition from the MBR's own track to the end, as
+            # drivers/hdd/part.inc and tools/os88hdd.py lay one out, capped
+            # at the kernel's 65,535-sector volume on a track boundary
+            try:
+                hcyls, heads, spt = parse_geometry(args.geometry)
+            except ValueError as e:
+                fail(str(e))
+            if hcyls is None:
+                fail("--hdd --geometry wants C/H/S")
+            hbase, htot = spt, hcyls * heads * spt
+            tot = htot - hbase
+            if tot > 65535:
+                tot = (65535 // spt) * spt
     else:
         spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
         if args.fatcap:
@@ -1176,7 +1193,7 @@ def build(args) -> int:
     body = bytes(fat.buf + fat.buf + root + data_area)
     image = bytearray(boot_sector(spt, heads, tot, spc, fatsz, root_ent,
                                   media, lay, boot, label,
-                                  hidden=HDD_BASE if args.hdd else 0,
+                                  hidden=hbase if args.hdd else 0,
                                   drvnum=0x80 if args.hdd else 0,
                                   ksecs=ksecs if args.hdd else 0,
                                   volid=vol_id(body)))
@@ -1192,15 +1209,16 @@ def build(args) -> int:
         sec0[0:HP_TBL] = mbr
         ent = bytearray(16)
         ent[0] = 0x80                            # active
-        ent[1:4] = hdd_chs(HDD_BASE)
+        ent[1:4] = hdd_chs(hbase, heads, spt)
         ent[4] = 0x04                            # FAT16 under 32MB
-        ent[5:8] = hdd_chs(HDD_BASE + HDD_PSECS - 1)
-        struct.pack_into("<I", ent, 8, HDD_BASE)
-        struct.pack_into("<I", ent, 12, HDD_PSECS)
+        ent[5:8] = hdd_chs(hbase + tot - 1, heads, spt)
+        struct.pack_into("<I", ent, 8, hbase)
+        struct.pack_into("<I", ent, 12, tot)
         sec0[HP_TBL:HP_TBL + 16] = ent
         sec0[510:512] = b"\x55\xAA"
-        image = bytes(sec0) + bytes((HDD_BASE - 1) * SECTOR) + bytes(image)
-        assert len(image) == HDD_TOT * SECTOR
+        image = bytes(sec0) + bytes((hbase - 1) * SECTOR) + bytes(image)
+        image += bytes((htot - hbase - tot) * SECTOR)  # (past the cap)
+        assert len(image) == htot * SECTOR
 
     try:
         with open(args.output, "wb") as f:
@@ -1208,8 +1226,8 @@ def build(args) -> int:
     except OSError as e:
         fail(f"cannot write {args.output}: {e}")
 
-    geom = (f"{HDD_CYLS}/{HDD_HEADS}/{HDD_SPT} hdd, partition at LBA "
-            f"{HDD_BASE} for {HDD_PSECS} sectors" if args.hdd
+    geom = (f"{hcyls}/{heads}/{spt} hdd, partition at LBA "
+            f"{hbase} for {tot} sectors" if args.hdd
             else f"{args.size}KB, {spt} spt")
     print(f"os88disk: {args.output} ({geom}, "
           f"{lay.type_name}) {len(files)} file(s)"
@@ -1399,7 +1417,7 @@ def verify_hdd(path: str) -> int:
                     d += psec(data_lba + (c - 2) * spc, spc)
                     c = ent(f1, c)
                     guard += 1
-            subs = []
+            subs, names = [], set()
             for i in range(0, len(d), 32):
                 e = d[i:i + 32]
                 if not e or e[0] == 0:
@@ -1416,6 +1434,11 @@ def verify_hdd(path: str) -> int:
                 clus, = struct.unpack_from("<H", e, 26)
                 size, = struct.unpack_from("<I", e, 28)
                 full = path_ + nm + ("." + ex if ex else "")
+                if e[0:11] in names:
+                    # two entries, one name: every lookup finds the first
+                    # and the second's clusters are unreachable by name
+                    errors.append(f"{full}: DUPLICATE NAME in {path_}")
+                names.add(e[0:11])
                 if attr & 0x10:
                     if clus:
                         chain(clus, full + "/ (dir)")
@@ -1685,7 +1708,11 @@ def main() -> int:
     ap.add_argument("--geometry", metavar="[C/]H/S",
                     help="with --retarget: heads/sectors-per-track, or a "
                          "whole C/H/S line - the cylinders are checked "
-                         "against the image's size and written nowhere")
+                         "against the image's size and written nowhere. "
+                         "With --hdd: the C/H/S to BUILD for, the partition "
+                         "from the MBR's track to the end (an ST-238R on an "
+                         "ST11R is 613/4/26: tools/os88hdd.py --wrap adds "
+                         "the card's hidden cylinder and a VHD footer)")
     ap.add_argument("--boot", metavar="BOOT.bin",
                     help="os8088's own 512-byte boot sector: makes this a "
                          "bootable SYSTEM disk (needs --kernel)")
@@ -1720,7 +1747,7 @@ def main() -> int:
                          "folder above it too")
     args = ap.parse_args()
 
-    if args.retarget or args.geometry:
+    if args.retarget or (args.geometry and not args.hdd):
         if not (args.retarget and args.geometry and args.output):
             ap.error("--retarget needs --geometry and -o")
         if args.size or args.scramble or args.packages or args.folder \

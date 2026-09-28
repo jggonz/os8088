@@ -109,7 +109,7 @@ The reference capsule generator, color tables and speed curve are retained;
 timing rounds to os8088's 54.6 Hz fullscreen clock. Virus placement applies
 the source's level height and distance-two color exclusions, with a native
 random retry scheme. This is an adaptation, not a cycle-exact NES port:
-competitive multiplayer, attract scenes and endings are absent. See SPEC.md §99.
+competitive multiplayer, attract scenes and endings are absent. See SPEC.md §100.
 
 Audio uses the OS sound service and its Control Panel sound selection. With
 `SOUND.DRV` loaded, AdLib and Sound Blaster play three FM music voices and a

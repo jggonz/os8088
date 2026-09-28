@@ -351,7 +351,13 @@ PTH_SIZE    equ PTH_BUF+PTH_MAX
 
 %ifdef KERN_BIG
 FS_PATH     equ 24              ; PTH_SIZE bytes, the block above
-FS_SIZE     equ FS_PATH+PTH_SIZE    ; = the Disk kind's KD_SSIZE
+FS_FREEH    equ FS_PATH+PTH_SIZE    ; word: the HIGH halves of FS_FREE and
+FS_USEDH    equ FS_FREEH+2      ; FS_USED, which on this build are BYTES in
+                                ; a dword (SPEC.md 22.7.1): two decimals of
+                                ; a K or an M need what a KB word threw away.
+                                ; 0xFFFF here is the not-known sentinel - a
+                                ; FAT volume never reaches 4GB
+FS_SIZE     equ FS_USEDH+2      ; = the Disk kind's KD_SSIZE
 %else
 FS_SIZE     equ 24              ; = the Disk kind's KD_SSIZE
 %endif
@@ -1289,8 +1295,18 @@ fmv_demote:
 ;
 ; A window that already owes the STRONGER debt keeps it: FSD_CACHE re-lists,
 ; and a re-list settles the references on its way past.
+;
+; `fmv_icostale_but` is the same walk with ONE window left out: the one whose
+; listing is AX (`FS_VSEG`). `assoc_point` passes `[dsk_dseg]`, because a new
+; association is learned INSIDE a mount's harvest, and the window that mount
+; is filling has its document icons decided by pass 4b AFTER it - so marking
+; it charged a window that was already right a repair and a second, identical
+; paint straight after its first (SPEC.md 54.3.3). The shed passes nothing:
+; its references can dangle in any window, the one being filled included.
 ; -----------------------------------------------------------------------------
 fmv_icostale:
+    mov ax, 0xFFFF              ; no window's listing lives at FFFF: skip none
+fmv_icostale_but:
     push di                     ; **DI ALONE.** The contract above is the one
                                 ; `mem_pg_forget` needs and it already holds:
                                 ; the purge protocol brackets every demoter
@@ -1310,6 +1326,8 @@ fmv_icostale:
                                 ; whose claim was refused reads 0 there too.
                                 ; fmv_ifirst/fmv_inext answer the question
                                 ; itself: a LIVE instance of KIND_FILES
+    cmp [di+FS_VSEG], ax
+    je .next                    ; the window being filled (see the header)
     cmp byte [di+FS_DIRTY], 0
     jne .next                   ; already owed something at least as strong
     mov byte [di+FS_DIRTY], FSD_ICONS
@@ -1537,8 +1555,13 @@ fm_measure:
     push cx
     push dx
     push si
+%ifdef OS88_BIGVOL
+    mov word [di+FS_FREEH], 0xFFFF  ; the sentinel is the high half here
+    mov word [di+FS_USEDH], 0xFFFF
+%else
     mov word [di+FS_FREE], 0xFFFF
     mov word [di+FS_USED], 0xFFFF
+%endif
     cmp byte [di+FS_MOK], 0
     je .out                     ; no good mount: no figures, and say so
 
@@ -1546,9 +1569,19 @@ fm_measure:
     jc .used
     mov dl, [dsk_spc]
     xor dh, dh
-    mul dx                      ; DX:AX = free sectors (a volume caps at
-                                ; 65,535 sectors, SPEC.md 18.7, so DX = 0)
-    shr ax, 1                   ; ...and a sector is half a KB
+    mul dx                      ; DX:AX = free sectors
+%ifdef OS88_BIGVOL
+    mov dh, dl                  ; ...and a sector is 512 BYTES: << 8 ...
+    mov dl, ah
+    mov ah, al
+    xor al, al
+    shl ax, 1                   ; ... << 1 more. A dword, because past 64MB
+    rcl dx, 1                   ; (SPEC.md 18.7.5) a word of KB is not the
+    mov [di+FS_FREEH], dx       ; figure, and two decimals need the bytes
+%else
+    shr ax, 1                   ; ...and a sector is half a KB (a volume caps
+                                ; at 65,535 sectors here, so DX = 0)
+%endif
     mov [di+FS_FREE], ax
 
 .used:                          ; --- used: sum this folder's listed sizes ---
@@ -1582,6 +1615,10 @@ fm_measure:
     cmp ax, dx
     jb .sum
 .kb:
+%ifdef OS88_BIGVOL
+    mov [di+FS_USED], cx        ; the bytes themselves (SPEC.md 22.7.1): a
+    mov [di+FS_USEDH], bx       ; high half of 0xFFFF would need 4GB listed
+%else
     mov ax, cx                  ; bytes -> KB: (hi:lo) >> 10, and the result
     mov dx, bx                  ; is a word because a volume caps at 32MB
     mov cx, 10
@@ -1592,6 +1629,7 @@ fm_measure:
     cmp ax, 0xFFFF              ; a hostile listing could sum past the
     je .out                     ; sentinel: leave it saying "not known"
     mov [di+FS_USED], ax
+%endif
 .out:
     jmp kretc_si
 
@@ -1845,13 +1883,37 @@ fm_focus_x:
     cmp al, FSD_ICONS           ; ...and its ENTRIES are, with only the icon
     jne .relist                 ; references dangling after a shed (SPEC.md
     call fmv_icorefs            ; 25.9.5). That is repaired in place for one
-    jnc .drawn                  ; ASSOC.DAT read; a refusal falls through to
+    jc .relist                  ; ASSOC.DAT read; a refusal falls through to
                                 ; the re-list, which settles them on its way
+    call KERNEL_SEG:wm_su_stale ; ...AND THE PICTURE GOES WITH THEM (SPEC.md
+    jmp short .drawn            ; 54.3.3): a new ASSOCIATION marks this debt
+                                ; too, and then the raise cache holds the old
+                                ; glyphs - so a raise put the bare mark back
+                                ; over references that were right. fmv_store
+                                ; is the re-list's copy of this call. After a
+                                ; shed it costs the one raise a whole paint
 .relist:
     call fmv_here               ; it is not, so re-list where we stand -
                                 ; exactly what Refresh costs (SPEC.md 22)
     call fmv_load
 .drawn:
+    and byte [bx+W_FLAGS+1], (~WF_STALE >> 8) & 0xFF
+                                ; THE PIXELS ARE ABOUT TO DESCRIBE THE LISTING
+                                ; AGAIN (SPEC.md 11.96.16.1), on BOTH arms:
+                                ; AL = 1 is fm_repaint below, which clears it
+                                ; too, and AL = 0 is wm_raise drawing it whole
+                                ; through wm_draw_win -> fm_paint_x, which does
+                                ; not and must not (a W_PAINT may be a clipped
+                                ; strip). Both routes up here RAISED the bit -
+                                ; fmv_store's re-list and the FSD_ICONS repair
+                                ; just above - so without this the one raise
+                                ; that paid the debt left the window stale for
+                                ; good: never banked again, every later raise a
+                                ; full repaint, until a navigation happened to
+                                ; reach fm_repaint. Nothing banks this window
+                                ; between here and that draw: wm_raise's own
+                                ; wm_su_take is the OUTGOING window's, and
+                                ; wm_dmg_mine keeps the dock's pass off it
     cmp ch, 0
     je .owed                    ; the caller is drawing this window
     mov si, bx
@@ -2450,8 +2512,7 @@ fm_choose:
 %endif
     mov bx, [di+I_WIN]
     call KERNEL_SEG:cw_wm_show
-    call ct_cw_gfx_unlock
-    ret
+    jmp ct_cw_gfx_unlock
 .notopen:
     call fm_count               ; CX = live file-manager instances
     cmp cx, FM_MAXWIN
@@ -2482,8 +2543,7 @@ fm_choose:
     mov si, bx
     call fm_repaint
 .unlock:
-    call ct_cw_gfx_unlock
-    ret
+    jmp ct_cw_gfx_unlock
 
 ; -----------------------------------------------------------------------------
 ; fm_find_view - a live window already showing a directory
@@ -2743,8 +2803,7 @@ fm_seed:
 files_refresh_x:
     call ct_cw_gfx_lock
     call KERNEL_SEG:cw_wm_paint_all
-    call ct_cw_gfx_unlock
-    ret
+    jmp ct_cw_gfx_unlock
 
 ; -----------------------------------------------------------------------------
 ; files_poster and fm_win_of are RETIRED (SPEC.md 22.17)
@@ -2897,6 +2956,14 @@ fm_layout:
     ; list-view name budget: (cw - 96)/8 chars, clamped 0..16 (the name
     ; column must stop short of the size column, SPEC.md 22)
     mov ax, [fm_cw]
+%ifdef OS88_BIGVOL
+    sub ax, 124                 ; 124 on this build: the size column is up to
+                                ; NINE cells here - `10239.99K`, SPEC.md
+                                ; 22.7.1 - and starts at cw-92, so the name
+                                ; stops at cw-92 and never under it. Only a
+                                ; window under 220px of content loses a
+                                ; character of an 8.3 name to it
+%else
     sub ax, 96                  ; 96, not 88: the name pen moved 24 -> 32 with
                                 ; the icon, and this is what keeps the column's
                                 ; RIGHT edge where it was - cw-64 either way,
@@ -2904,6 +2971,7 @@ fm_layout:
                                 ; and the only loss is one character on a
                                 ; window narrower than 184px of content, where
                                 ; an 8.3 name is already being truncated
+%endif
     jg .nchpos
     xor ax, ax
     jmp .nchclamp
@@ -3486,11 +3554,7 @@ fm_onclick_x:
     call fm_repaint             ; SI still = window ptr
 .out:
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_dx
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
@@ -4082,6 +4146,7 @@ fm_go:
     mov al, [di+FS_DRV]
     call fmv_load
     call fm_settitle            ; SI is still the caller's name (or 0)
+.tail:                          ; ...and fm_reload's tail too
     pop di
     pop dx
     pop ax
@@ -4097,7 +4162,16 @@ fm_go:
 ; Unlike fm_go this is not navigation: it lands at the ROOT deliberately,
 ; because a disk you just put in the other drive has no meaningful "current
 ; folder".
+;
+; The Folder menu's two commands are its first lines (fm_cmd_tab): Drive B:
+; falls straight in, and Drive A: is two bytes of short jump - where each used
+; to be a stub in the command block that jumped here (size pass 5).
 ; -----------------------------------------------------------------------------
+fm_c_drva:                      ; Nav > Drive A:
+    xor dl, dl
+    jmp short fm_mount
+fm_c_drvb:                      ; Nav > Drive B:
+    mov dl, 1
 fm_mount:
     push ax
     push dx
@@ -4141,10 +4215,7 @@ fm_reload:
     mov di, [fm_vp]
     call fmv_here
     call fmv_load
-    pop di
-    pop dx
-    pop ax
-    ret
+    jmp short fm_go.tail
 
 %ifdef KERN_BIG
 ; =============================================================================
@@ -4575,7 +4646,9 @@ fm_jmp:
                                 ;         SPEC.md 22.3)
     dw fm_c_newwin              ; POSTED - app_launch takes the lock (29.4)
     dw fm_c_opennew             ; POSTED - ditto
-    dw fm_c_refresh             ; inline (fmv_load, like the button)
+    dw fm_reload                ; Refresh: inline (fmv_load, like the button).
+                                ; The body ITSELF - it was an fm_c_refresh
+                                ; that was one `jmp fm_reload` (size pass 5)
     dw fm_c_up                  ; inline (fmv_sync + dsk_dotdot + fmv_load)
     dw fm_c_root                ; inline (fmv_load at the root)
     dw fm_c_drva                ; inline (fmv_load, drive 0)
@@ -4794,15 +4867,12 @@ fm_fmt_ok:
     cmp byte [bx+DV_KIND], DVK_BIOS
     jne .no                     ; a driver-backed volume: its own driver owns
     test byte [bx+DV_UNIT], 0x80    ; formatting it (SPEC.md 52.2), and this
-    jnz .no                     ; module cannot reach its geometry at all
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    pop bx
-    pop ax
+    jz .out                     ; module cannot reach its geometry at all -
+.no:                            ; and a `test` leaves CF = 0, the yes
     stc
+.out:
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5482,19 +5552,16 @@ fm_selfold:
     call fmv_get_dir            ; SI -> the staged entry (SPEC.md 19)
     cmp word [si+16], 2
     jb .no
-    mov bx, [si+18]
+    mov bx, [si+18]             ; CF = 0 from the compare, which `mov` keeps
     mov al, [di+FS_DRV]
+.out:
     pop di
     pop si
     pop cx
-    clc
     ret
 .no:
-    pop di
-    pop si
-    pop cx
     stc
-    ret
+    jmp short .out
 
 fm_c_newwin:                    ; Nav > New Window - a second view of here
     mov di, [fm_vp]
@@ -5559,15 +5626,8 @@ fm_c_elsewhere:                 ; a builtin opened SOMEBODY ELSE'S window,
     jmp short fm_nw_none        ; so this one is untouched - the same no-op
 %endif                          ; KERN_BIG - SPEC.md 14.6
 
-fm_c_refresh:                   ; Nav > Refresh
-    jmp fm_reload
-fm_c_drva:                      ; Nav > Drive A:
-    xor dl, dl
-    jmp short fm_c_mount
-fm_c_drvb:                      ; Nav > Drive B:
-    mov dl, 1
-fm_c_mount:
-    jmp fm_mount
+                                ; (Nav > Drive A: / Drive B: stand in front of
+                                ; fm_mount now, which B: falls into)
 
 fm_c_up:                        ; Nav > Up One Folder
     mov di, [fm_vp]
@@ -6454,19 +6514,16 @@ fm_drag:
 .drop:
     call fm_dgxor               ; erase; the lock stays held to the end
     call fm_dgdrop
+    clc
+.out:
     pop di
     pop si
     pop bx
     pop ax
-    clc
     ret
 .click:
-    pop di
-    pop si
-    pop bx
-    pop ax
     stc
-    ret
+    jmp short .out
 
 ; -----------------------------------------------------------------------------
 ; fm_dgabs - |AX| (module-internal); out AX, clobbers flags
@@ -6815,7 +6872,7 @@ fm_stage_onam:
     cmp word [fm_ftype], 2
     jne .out
     mov byte [fm_odir], 1       ; Delete must call dskw_rmdir for this one
-.out:
+.out:                           ; ...and fm_edit_seed's tail too
     pop di
     pop si
     pop cx
@@ -6881,11 +6938,7 @@ fm_edit_seed:
 .end:
     mov byte [di], 0
     mov [fm_elen], cl
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
+    jmp short fm_stage_onam.out ; the same four pops
 
 ; -----------------------------------------------------------------------------
 ; fm_extkeep - no extension typed? keep the one it had (SPEC.md 22.10)
@@ -7036,8 +7089,7 @@ fm_cfill:
     sub dx, 2                   ; DX = y2
     pop bx                      ; BX = y1
     mov byte [gfx_color], CWHITE
-    call ct_cw_gfx_fill
-    ret
+    jmp ct_cw_gfx_fill
 
 ; -----------------------------------------------------------------------------
 ; fm_repaint - white-fill own content, then redraw everything
@@ -7172,7 +7224,7 @@ fm_draw_icon16:
 .noicon:
     mov si, ico_app16           ; the built-in app icon (library record)
     call KERNEL_SEG:cw_icon_draw
-.done:
+.done:                          ; ...and fm_stage_name's tail too
     pop si
     pop cx
     pop bx
@@ -7211,11 +7263,7 @@ fm_stage_name:
     mov [fm_fsize], ax
     mov ax, [si+6]
     mov [fm_fsizeh], ax
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp short fm_draw_icon16.done   ; the same four pops
 
 ; -----------------------------------------------------------------------------
 ; fm_draw_core - draw the whole content (header, buttons, rows or grid,
@@ -7738,8 +7786,12 @@ fm_draw_lrow:
     mov dx, [fm_fsizeh]
     push di
     mov di, fm_numbuf
+%ifdef OS88_BIGVOL
+    call fm_szfig_x             ; bytes, K past 10KB, M past 10MB (22.7.1)
+%else
     call fm_ultoa_x             ; the full dword: BEVERLY.MOD is 116,085
-    pop di                      ; bytes, not 65,535
+%endif                          ; bytes, not 65,535
+    pop di
     mov si, fm_numbuf
     call ct_font_width         ; AX = string width, px
     mov cx, [fm_rgt]            ; right-align ending at cw-22 (clear of
@@ -8457,12 +8509,23 @@ fm_draw_status:
     mov bx, [fm_vp]
     mov si, fm_s_size
     call fm_scat
+%ifdef OS88_BIGVOL
+    mov ax, [bx+FS_USED]        ; bytes, and at least a K (SPEC.md 22.7.1)
+    mov dx, [bx+FS_USEDH]
+    call fm_szfig_k
+    mov si, fm_s_free
+    call fm_scat
+    mov ax, [bx+FS_FREE]
+    mov dx, [bx+FS_FREEH]
+    call fm_szfig_k
+%else
     mov ax, [bx+FS_USED]
     call fm_kbfig
     mov si, fm_s_free
     call fm_scat
     mov ax, [bx+FS_FREE]
     call fm_kbfig
+%endif
     pop bx
     mov byte [di], 0
     jmp short .fs_stat_drawn
@@ -8594,6 +8657,7 @@ fm_scat:
 .done:
     ret
 
+%ifndef OS88_BIGVOL
 ; -----------------------------------------------------------------------------
 ; fm_kbfig - stage one KB figure, or '?' for the not-known sentinel
 ; in:  AX = KB (0xFFFF = not known), DI = destination
@@ -8602,7 +8666,8 @@ fm_scat:
 ;
 ; The sentinel is drawn rather than skipped: a Disk window whose mount failed
 ; still has a status line, and a blank one there reads as "no free space" -
-; the one thing it must not be mistaken for (SPEC.md 22.7).
+; the one thing it must not be mistaken for (SPEC.md 22.7). kern_small's; the
+; big build carries bytes and draws them with fm_szfig_k (22.7.1).
 ; -----------------------------------------------------------------------------
 fm_kbfig:
     cmp ax, 0xFFFF
@@ -8617,6 +8682,88 @@ fm_kbfig:
     inc di
     mov byte [di], 0
     ret
+%else
+; -----------------------------------------------------------------------------
+; fm_szfig_x - a size in the unit a person reads (SPEC.md 22.7.1)
+; fm_szfig_k - ...never below K, and DX = 0xFFFF draws '?'
+; in:  DX:AX = bytes, DI = destination (10 bytes: `10239.99K` and a NUL)
+; out: DI -> the stored NUL
+; clobbers: DI (the output), flags
+;
+; Bytes under 10KB, exact and short: `1234`. From 10KB whole KB and two
+; decimals with a K, from 10MB whole MB and two decimals with an M -
+; `113.37K`, `40.00M`. The decimals are hundredths of the unit, TRUNCATED
+; like the whole part, so no figure ever claims more than is there. The
+; columns take the first entry; the status line takes the second, because a
+; free-space figure without a unit is a number to wonder about, and its
+; sentinel is the one a failed mount leaves (22.7).
+; -----------------------------------------------------------------------------
+fm_szfig_x:
+    or dx, dx
+    jnz fm_szfig_k
+    cmp ax, 10240
+    jb fm_ultoa_x               ; bytes: the dword printer, tail-called
+fm_szfig_k:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp dx, 0xFFFF
+    je .unknown
+    mov bx, ax                  ; BX = what is below a K, in bytes
+    and bx, 1023
+    mov al, ah                  ; >> 8 ...
+    mov ah, dl
+    mov dl, dh
+    xor dh, dh
+    shr dx, 1                   ; ... >> 2 more: KB, DX <= 3Fh
+    rcr ax, 1
+    shr dx, 1
+    rcr ax, 1
+    mov cl, 'K'
+    or dx, dx
+    jnz .mb
+    cmp ax, 10240
+    jb .fig
+.mb:
+    mov bx, ax                  ; BX = what is below an M, in KB
+    and bx, 1023
+    mov al, ah                  ; KB >> 10: whole MB, <= 4,095
+    mov ah, dl
+    shr ax, 1
+    shr ax, 1
+    mov cl, 'M'
+.fig:
+    call fm_utoa                ; the whole units
+    mov byte [di], '.'
+    inc di
+    xchg ax, bx                 ; AX = the remainder, 0..1023 of the unit
+    mov bx, 100
+    mul bx                      ; DX:AX = remainder * 100, under 102,400
+    mov al, ah                  ; >> 10: hundredths, 0..99
+    mov ah, dl
+    shr ax, 1
+    shr ax, 1
+    mov bl, 10
+    div bl                      ; AL = tens, AH = units
+    add ax, '00'
+    mov [di], ax                ; both digits, the leading zero kept
+    inc di
+    inc di
+    mov [di], cl
+    inc di
+    jmp short .nul
+.unknown:
+    mov byte [di], '?'
+    inc di
+.nul:
+    mov byte [di], 0
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; fm_utoa - unsigned word to decimal ASCII, no leading zeros
@@ -8688,8 +8835,8 @@ fmv_ux2:    resw 1              ; spent as ONE wm_paint_dmg so that no window
 fmv_uy2:    resw 1              ; is painted twice
 fmv_uany:   resb 1              ; 0 = nothing folded in yet
 %ifdef KERN_BIG
-fm_pool:    resb 4*57           ; FM_MAXWIN x FS_SIZE (4 x 57; a literal per
- %if FM_MAXWIN*FS_SIZE != 4*57  ; the no-forward-ref-in-bss rule - so the equs
+fm_pool:    resb 4*61           ; FM_MAXWIN x FS_SIZE (4 x 61; a literal per
+ %if FM_MAXWIN*FS_SIZE != 4*61  ; the no-forward-ref-in-bss rule - so the equs
   %error "files: fm_pool's literal has drifted from FM_MAXWIN x FS_SIZE"
  %endif                         ; check it, or growing the block silently
 %else                           ; overruns the pool into the words below it

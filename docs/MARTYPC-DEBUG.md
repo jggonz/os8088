@@ -1549,7 +1549,12 @@ It models the reset handshake, `0xE1` version, `0xF2` forced IRQ (how a
 driver *finds* its line), `0x40` time constant, `0x48` block length,
 `0x14`/`0x24` single-cycle and `0x1C`/`0x2C` auto-init in both directions,
 `0xD0`/`0xD4` pause and continue, `0xD1`/`0xD3` speaker and `0xDA`
-exit-at-the-block-boundary. Reading base+0xE acknowledges the 8-bit IRQ, and
+exit-at-the-block-boundary - and, since patch 06, **`0x7D` auto-init 4-bit
+ADPCM with a reference byte**, decoded with DOSBox's tables, which are the
+ones `tools/os88vid.py` encodes against (SPEC.md 98.1.1.1). That makes the
+Video Player's ADPCM4 path testable here (`tests/vidsound.py --audio
+adpcm4`), but only against itself: 86Box's card and a real one are the
+independent check of the tables. Reading base+0xE acknowledges the 8-bit IRQ, and
 a block completing while the previous interrupt is still unacknowledged is
 counted as a **missed ack** rather than hidden. It pulls bytes through the
 real 8237 (`do_dma_read_u8`, the FDC's call) and resamples through a carried

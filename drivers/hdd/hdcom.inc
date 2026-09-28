@@ -356,6 +356,27 @@ hd_part_used:
     ret
 
 ; -----------------------------------------------------------------------------
+; hd_part_big - is this entry past the volume ceiling? (SPEC.md 18.7.5)
+; in:  SI = the entry
+; out: CF = 1 = it is longer than any FAT16 volume (HP_MAXHI:HP_MAXLO)
+; clobbers: flags
+;
+; It was `cmp word [si+HP_SECS+2], 0` at five sites, which is the 32MB
+; ceiling SPEC.md 18.7 set when an LBA was a word. The ceiling is FAT16's own
+; now, and one routine is what keeps the five from disagreeing about it.
+; -----------------------------------------------------------------------------
+hd_part_big:
+    push ax
+    mov ax, HP_MAXHI
+    cmp ax, [si+HP_SECS+2]      ; CF = 1 when the ceiling is BELOW it
+    jne .out
+    mov ax, HP_MAXLO
+    cmp ax, [si+HP_SECS]
+.out:
+    pop ax                      ; (pop leaves the flags)
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_part_isfat - is this slot a FAT volume we could mount?
 ; in:  SI = the entry
 ; out: CF = 0 yes; CF = 1 = free, or a type that is not FAT

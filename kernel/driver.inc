@@ -1855,8 +1855,7 @@ drv_blk_call_x:
     call far [es:drv_blkfp]
     pop es
     pop ds                      ; ...and DS names the kernel again, which is
-    call wm_nest_pop            ; the segment the pop reads
-    ret
+    jmp wm_nest_pop             ; the segment the pop reads
 .none:
     pop ax
     pop di
@@ -2023,15 +2022,12 @@ drv_fs_has:
     pop ax
     jae .no
     cmp word [es:di], 0
-    je .no
-    pop di
-    pop es
-    clc
-    ret
-.no:
-    pop di
-    pop es
+    jne .out                    ; published - and a compare with 0 cannot
+.no:                            ; borrow, so CF = 0 is already the answer
     stc
+.out:
+    pop di
+    pop es
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2212,22 +2208,18 @@ osapi_drv_cfg_x:
                                 ; there is no reachable flush from here now
                                 ; (SPEC.md 31.8)
 .ok:
+    clc
+.out:
     pop di
     pop si
     pop dx
     pop bx
     pop ax
-    clc
     retf
 .no:
     xor cx, cx
-    pop di
-    pop si
-    pop dx
-    pop bx
-    pop ax
     stc
-    retf
+    jmp short .out
 
 ; -----------------------------------------------------------------------------
 ; drv_row_ix_of - which drv_tab row is running in this segment? (internal)
@@ -2285,19 +2277,16 @@ drv_blob_of:
     add si, DRV_BLOBE
     loop .scan
 .no:
-    pop si
-    pop cx
-    pop ax
     stc
-    ret
+    jmp short .out
 .got:
     mov dl, [si+1]
-    xor dh, dh
+    xor dh, dh                  ; ...which is CF = 0, and `mov`/`pop` keep it
     mov di, [si+2]
+.out:
     pop si
     pop cx
     pop ax
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2398,26 +2387,21 @@ osapi_drv_dlg_x:
                                 ; is dispatched into `.cold` (SPEC.md 2.6.3)
     mov al, [drv_dlg_mode]
     call fdlg_open_x            ; near - fdlg.inc is `.cold` too
-    jc .disarm
+    jc .disarm                  ; ...and not taken is CF = 0, the answer
+.out:
     pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
-    clc
     retf                        ; FAR: the only entry is kernel.asm's
+                                ; `call COLD_SEG:osapi_drv_dlg_x` (SPEC.md 2.6.1)
 .disarm:
     mov word [drv_dlg_row], 0
 .no:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     stc
-    retf                        ; `call COLD_SEG:osapi_drv_dlg_x` (SPEC.md 2.6.1)
+    jmp short .out
 
 ; -----------------------------------------------------------------------------
 ; drv_dlg_done - the dialog committed; hand the answer to the driver
@@ -2546,7 +2530,7 @@ drv_cp_name_x:
     mov cx, DRV_CPNSZ - 1
     call fm_ncpye               ; ES:SI (the driver's) -> DS:DI (ours), NUL
     pop si
-.out:
+.out:                           ; ...and drv_svc_clear's tail too, below
     pop es
     pop di
     pop cx
@@ -2578,11 +2562,7 @@ drv_svc_clear:
     cld
     rep stosb
 .out:
-    pop es
-    pop di
-    pop cx
-    pop ax
-    ret
+    jmp short drv_cp_name_x.out ; the same four pops, one routine up
 
 ; -----------------------------------------------------------------------------
 ; drv_svc_clear_all - forget every class's services (module internal)
@@ -2884,7 +2864,7 @@ drv_load_row:
 ; (loader.inc, .cold, so the call is near), because SPEC.md 51.1 defines a
 ; driver header as a package header with a different version byte and these
 ; offsets are identical by construction. What stays here is what is a
-; DRIVER's: version 4 instead of 3 is the argument, and the row's own class,
+; DRIVER's: DRV_VER instead of PKG_FMT is the argument, and the row's own class,
 ; the image-is-the-file rule and the entry bound are the rest.
 ;
 ; SI is the header cursor the shared body wants, and it is zero throughout -
@@ -2992,13 +2972,8 @@ drv_bss:
     clc
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax                      ; `pop` leaves the flags alone, so the answer
-    ret                         ; set above survives the whole unwind
+    jmp kretc_di                ; `pop` leaves the flags alone, so the answer
+                                ; set above survives the whole unwind
 .nofit:
     stc
     jmp short .out

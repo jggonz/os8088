@@ -21,7 +21,6 @@ handoff words the loader left at the head of the bss (97.9's PXH_*).
 """
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -32,7 +31,7 @@ ROOT = os.path.dirname(HERE)
 # re-inserted tools/ at 0 as a side effect
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
-import os88marty, os88mouse, os88sym, os88geom, os88build, dispcp   # noqa: E402
+import os88marty, os88sym, os88geom, os88build, os88ui       # noqa: E402
 import os88parts                                                 # noqa: E402
 from cycweb import pkg_syms, u16                                # noqa: E402
 # ...AND AGAIN, because cycweb inserts tests/ at sys.path[0] on import (main's
@@ -126,19 +125,43 @@ def layout():
                 QEND=qtex + 4, Q=qtex + 6, SCAL=qtex + 6 + PXG_QN * PXG_QSZ)
 
 
-def find(m, S=None, limit=120.0, title=TITLE):
-    """(window index, part 0's segment) of the game's window - or of the
-    window whose caption starts `title` (tests/pxsbench.py's) - or None."""
-    S = S or os88sym.linear
-    t0 = time.time()
-    while time.time() - t0 < limit:
-        for w in os88geom.windows(m, S):
-            if w.title.startswith(title):
-                seg = u16(m.read(os88geom.winptr(m, w.i, S) + os88geom.W_SEG, 2))
-                if seg:
-                    return w.i, seg
-        time.sleep(0.3)
+def _window(m, S, title):
+    """(window index, part 0's segment) of the first window whose caption
+    starts `title` and whose W_SEG is written - or None. One look."""
+    for w in os88geom.windows(m, S):
+        if w.title.startswith(title):
+            seg = u16(m.read(os88geom.winptr(m, w.i, S) + os88geom.W_SEG, 2))
+            if seg:
+                return w.i, seg
     return None
+
+
+def find(m, S=None, guest=0.0, title=TITLE):
+    """(window index, part 0's segment) of the game's window - or of the
+    window whose caption starts `title` (tests/pxsbench.py's) - or None.
+
+    `guest` is how long to WAIT for it, in the GUEST's own seconds; 0 is one
+    look. It was a host deadline around `time.sleep(0.3)`, which allows a
+    loaded box a third of the machine an idle one gets (docs/WRITING-TESTS.md
+    7). MartyPC and QEMU both: tests/pxswin.py's --qemu arm finds its window
+    through here, and QEMU's clock is the BIOS tick (tests/os88qemu.py)."""
+    S = S or os88sym.linear
+    got = _window(m, S, title)
+    if got is not None or guest <= 0:
+        return got
+    what = "a %r window with its segment written" % title
+    if isinstance(m, os88marty.Marty):
+        try:
+            os88marty.until(m, lambda mm: _window(mm, S, title) is not None,
+                            what, poll=0.3, guest=guest)
+        except os88marty.MartyError as e:
+            print("   pxslib: %s" % str(e).split("\n")[0])  # budget or a stop,
+            return None                                     # and it says which
+    else:
+        import os88qemu                                     # noqa: E402
+        os88qemu.acted(m, lambda: _window(m, S, title) is not None,
+                       secs=guest, what=what, poll=0.3)
+    return _window(m, S, title)
 
 
 class Game:
@@ -453,6 +476,46 @@ class Game:
     def ticks(self):
         """The BIOS tick count (0040:006C), the clock the steps are owed by."""
         return int.from_bytes(self.m.read(0x46C, 4), "little")
+
+    def key_edge(self, name, down, step=20000, most=400, resend=25):
+        """Press (down=True) or release `name` on a PAUSED machine and step it
+        in guest cycles until the kernel's key map (kbd_dnmap, what
+        OSAPI_KEY_DOWN reads) agrees - and answer the BIOS tick at that
+        moment. The machine is left PAUSED.
+
+        THE WALK'S TWO ENDS, measured by the guest. They were read off a
+        RUNNING machine around `m.key()`, so the host's round trips were in
+        the bracket: at a lane of four the eye walked 21 ticks' worth while
+        the row counted 17 (pixelstein-win, once `alone` came off it). A
+        key held down is a level the package reads once a tick, so the
+        kernel's map turning over IS the edge the step clock sees, and
+        tools/os88mouse.py's double-click is stepped the same way."""
+        # A LOST EDGE IS SENT AGAIN, every `resend` steps (~0.1 guest s):
+        # release_held's finding, that a break code the guest never saw
+        # leaves the kernel believing the key held - the final run of this
+        # change lost the ArrowUp break on the CGA and C160 brackets and
+        # waited out all 8M cycles. The tick answered is still the one at
+        # which the kernel's map turned over, so a resend costs the
+        # measurement nothing; os88ui's _edge_until is the same cure.
+        m = self.m
+        base = m.sym("kbd_dnmap")
+        sc = SCAN[name]
+        m.pause()
+        sent = 0
+        for i in range(most):
+            if i % resend == 0:
+                m.key(name, down=down, up=not down)
+                sent += 1
+            bit = m.read(base + (sc >> 3), 1)[0] & (1 << (sc & 7))
+            if bool(bit) == down:
+                if sent > 1:
+                    print("   pxslib: %s %s reached the kernel on send %d of the "
+                          "edge" % (name, "down" if down else "up", sent))
+                return self.ticks()
+            m.advance(cycles=step)
+        raise os88marty.MartyError(
+            "%s %s: the kernel's key map did not follow in %d guest cycles, "
+            "sent %d times" % (name, "down" if down else "up", most * step, sent))
 
     def kticks(self):
         """The KERNEL's tick word - what OSAPI_GET_TICKS answers, and so the
@@ -776,101 +839,31 @@ PXST = dict(play=0, dying=1, attract=2, ready=3, done=4, over=5, enter=6,
             demo=7)                     # pxgame.asm's PXST_* (97.13)
 
 
-def _disk_reads(m):
-    """The floppy controller's read count, read from OUTSIDE the guest -
-    os88ui.open's witness that a mount (or here, a launch) is under way."""
-    try:
-        return m.disk().get("reads")
-    except Exception:                                       # noqa: BLE001
-        return None
+def open_file(m, name, title, S=None, folder=None):
+    """B:, then `folder` if one is given, then the package `name` - each step
+    an os88ui verb, so each one CONFIRMS on guest state - and answer the
+    (window index, part 0's segment) of the window it opened.
 
-
-def _launch(m, mo, S, x, y, look=6.0, title=TITLE):
-    """Double-click PXSTEIN.O88's row, and again if nothing happened.
-
-    Wave 4's verifier measured 6 launches in ~20 lost this way: the row
-    selected and nothing opened - the two presses landed as a SINGLE click
-    that tools/os88mouse.py's 9-tick check (DBL_TICKS, the kernel's own
-    window) could not see, because the ticks it compares are the guest's and
-    the kernel's own double-click test is a different read of the same edge.
-    find() then waited its 120 host seconds and the row failed after 137.
-
-    When the check DOES see it (os88mouse raises: the presses were 9 ticks
-    apart), that is usually the same single click said out loud - a row died
-    on it here after the first fix - but not always, because the check runs
-    after both edges went out; so it is WATCHED exactly like the quiet case
-    below and clicked again only when nothing moved - up to TRIES times.
-
-    So after the double-click this waits `look` GUEST seconds for either a
-    window or the LOAD - the floppy controller's read count moving, read
-    from outside the guest (os88ui.open's witness for a mount): a launch in
-    progress is reading the disk, a single click is not. Nothing moving is
-    the single click, and the double-click is sent again (TRIES in all). A launch that
-    DID start is never clicked twice - a second instance would take the
-    contiguous parts run from the first (SPEC.md 97.9) and refuse in words,
-    which is a different row's failure."""
-    for attempt in range(TRIES):
-        r0 = _disk_reads(m)
-        try:
-            mo.dblclick(x, y)
-        except os88marty.MartyError as e:   # the 9-tick check raised - but
-            print("   pxslib: %s - watching before clicking again" % e)
-            # it raises only AFTER both presses and both releases went out
-            # (tools/os88mouse.py), and so does an _edge failure: a double-
-            # click near the 9-tick boundary may already be LAUNCHING. So it
-            # is not clicked again blind (review, wave 5 - that was a second
-            # instance, or a click on the new window): it falls through to
-            # the same two witnesses as the quiet case
-        t0 = time.time()
-        g0 = int.from_bytes(m.read(0x46C, 4), "little")
-        while True:
-            got = find(m, S, limit=0.5, title=title)
-            if got is not None:
-                return got
-            r1 = _disk_reads(m)
-            if r0 is not None and r1 is not None and r1 != r0:
-                return find(m, S, title=title)  # it is loading: wait for it
-            g1 = int.from_bytes(m.read(0x46C, 4), "little")
-            if (g1 - g0) & 0xFFFFFFFF >= int(look * 18.2) or time.time() - t0 > 60.0:
-                break
-            time.sleep(0.2)
-        if attempt + 1 < TRIES:
-            print("   pxslib: no window and no disk read %.0f guest seconds after the "
-                  "double-click - a single click; clicking again (%d of %d)"
-                  % (look, attempt + 2, TRIES))
-    return find(m, S, limit=5.0, title=title)
-
-
-TRIES = 3       # a double-click and TWO re-clicks, each watched: wave 5's
-                # review run saw the re-click's own presses land 10 ticks apart
-                # straight after the first's 9 (w5r1/pixelstein-cga.log), on a
-                # quiet host - and a re-click is only ever sent when neither
-                # witness moved, so a third costs nothing a launch could lose
-
-
-def open_b(m, mo, S=None):
-    """Open B:'s Disk window, once more if the icon's double-click was lost.
-    Every PIXELSTEIN row opens B: through here - tests/pxsbench.py too,
-    which hand-rolled its own and died on exactly this in wave 6's
-    verification soak ("the two presses were 10 ticks apart and the window
-    is 9"; wave 6's close)."""
+    This replaced a hand-rolled launch that double-clicked up to THREE times,
+    and a B: icon opened up to twice, because a double-click's two presses
+    were then spaced by host round trips and a loaded box let them cross the
+    kernel's 9-tick window (wave 4 measured 6 launches in ~20 lost). The
+    presses are stepped in GUEST cycles now (tools/os88mouse.py DBL_STEP), and
+    the retries went out of every other row with that fix (the Weave rows'
+    among them): a retry that covers nothing could only hide a mouse path
+    that broke. os88ui.open waits for the NEW window rather than a settle, so
+    a running game - which never settles again - is not a problem for it."""
     S = S or os88sym.linear
-    try:                                    # THE SAME SINGLE CLICK, one step
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")  # earlier: the B:
-    except (os88marty.MartyError, RuntimeError) as e:   # icon's double-click
-        # seen as two first clicks (pxsmove, wave 5). RuntimeError TOO:
-        # tests/dispcp.py's open_drive re-raises os88ui's UIError as one, so
-        # the retry above caught nothing on that path - pxsfsx died on it in
-        # wave 6's review soak ("a Disk window showing B: ... every window:
-        # []"), and a screendump script twice
-        print("   pxslib: %s - opening B: again, once" % str(e).split("\n")[0])
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")  # (pxsmove, wave 5)
-
-
-def launch_row(m, mo, S, x, y, title):
-    """The watched double-click of _launch, for a package other than the
-    game (tests/pxsbench.py's PXSBENCH.O88): (window, segment) or None."""
-    return _launch(m, mo, S, x, y, title=title)
+    ui = os88ui.UI(m, verbose=False, sym=S)
+    ui.open_drive("B")
+    if folder:
+        ui.open(folder)
+    ui.open(name)
+    got = find(m, S, guest=30.0, title=title)
+    if got is None:
+        sys.exit("pxslib: %s opened a window, and no '%s' window has its "
+                 "segment written" % (name, title))
+    return ui, got
 
 
 # the kernel's key map (kbd_dnmap, the bitmap OSAPI_KEY_DOWN reads, SPEC.md
@@ -925,26 +918,12 @@ def open_game(m, apps_root=True, S=None, play=True):
                                     # came up mid-row (px_hidden set by an
                                     # empty clip, the frame counter still)
                                     # once tests/pxssim.py grew a third scene
-    mo = os88mouse.Mouse(marty=m)
-    open_b(m, mo, S)
-    disk = dispcp.win_list(m, S)[-1]
-    wx, wy = dispcp.win_rect(m, S, disk)[:2]
-    if not apps_root:
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "GAMES")
-        wx, wy = dispcp.win_rect(m, S, disk)[:2]
-    rows = [r[0] for r in dispcp.listing(m, S)]
-    if FILE not in rows:
-        sys.exit("pxslib: %s is not on the apps disk (%s)" % (FILE, rows))
-    row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, rows.index(FILE))
-    x, y = dispcp.row_xy(wx, wy, row)
-    got = _launch(m, mo, S, x, y)           # NOT open_named: a running game
-    if got is None:                         # never settles again
-        sys.exit("pxslib: %s did not open a '%s' window" % (FILE, TITLE))
-    win, seg = got
+    ui, (win, seg) = open_file(m, FILE, TITLE, S,
+                               folder=None if apps_root else "GAMES")
     g = Game(m, win, seg)
     os88marty.until(m, lambda mm: g.word("px_frames") >= 1, "the first frame",
                     poll=0.3, limit=120.0)
-    mo.to(4, 4)                             # the pointer parked off the window
+    ui.mo.to(4, 4)                          # the pointer parked off the window
     if play:
         g.start()
     return g

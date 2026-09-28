@@ -13,8 +13,9 @@ What it enforces (kernel/driver.inc's drv_check does all of it again at load
 time, against the image that actually arrived in memory):
 
   +0   magic 'O8'                the package magic; the version tells them apart
-  +2   version 4                 3 is an application. A 3 here would be a
-                                 driver the app loader would try to RUN.
+  +2   version DRV_VER (7)       PKG_FMT (6) is an application. A 6 here would
+                                 be a driver the app loader would try to RUN.
+                                 Both are the API table's (SPEC.md 20.2.0).
   +3   class                     1 = sound; must be one this tool knows.
                                  4 = an overlay, which is a driver's own
                                  loadable half and not a kernel class

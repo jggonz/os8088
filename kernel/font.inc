@@ -1877,12 +1877,20 @@ font_run_cell:
     call wm_clip_rows           ; CX and DX are spent here and NOT put back:
     pop ax                      ; nothing below reads them, the masks arriving
     jc .out                     ; in CX from memory instead
+%ifdef KERN_BIG
+    mov dl, [wm_clip_cm]        ; SPEC.md 11.3.4: the COLUMNS too. DX is free
+                                ; from here to the epilogue, which puts the
+                                ; caller's back
+%endif
     jmp short .have_rows
 .noclip:
     mov word [wm_clip_r0], (8 << 8) | 0     ; the whole cell, in ONE store -
                                 ; font_char's own spelling eight lines from
                                 ; here, and the pair is adjacent by assertion
                                 ; (wm.inc)
+%ifdef KERN_BIG
+    mov dl, 0FFh                ; ...and every column
+%endif
 .have_rows:
     cmp al, FONT_FIRST
     jb .blank
@@ -1931,6 +1939,11 @@ font_run_cell:
     inc si
     and al, cl                  ; a set bit picks ink, a clear bit background
     xor al, ch                  ; - the same byte, three instructions fewer
+%ifdef KERN_BIG
+    cmp dl, 0FFh                ; SPEC.md 11.3.4.2: a column cut. The region
+    jne .merge                  ; overlaps the cell now rather than containing
+.store:                         ; it, so a window over part of the byte is
+%endif                          ; NOT ours to store over
     mov [es:di], al             ; the cell owns the byte: store, never merge
     xor cl, [font_rn_dt]        ; SPEC.md 6.1.12: 0 unless this is disabled
     add di, [cs:vid_rowadd]     ; (gfx_nextrow inlined - see font_char_bb)
@@ -1949,6 +1962,14 @@ font_run_cell:
     pop bx
     pop ax
     ret
+%ifdef KERN_BIG
+.merge:                         ; ...so only the mask's bits change: old ^
+    mov ah, [es:di]             ; ((old ^ new) & mask). Out of line, because a
+    xor al, ah                  ; cut cell is at most the two at a run's ends
+    and al, dl                  ; and the whole one is every other
+    xor al, ah
+    jmp short .store
+%endif
 
 ; -----------------------------------------------------------------------------
 ; font_run_scell - internal: one opaque cell the SLOW way, for a run an armed
@@ -1990,7 +2011,9 @@ font_run_scell:
     add dx, 7
     call wm_clip_rows           ; ...in ROWS (SPEC.md 11.3.2), so a cell an
     jc .out                     ; edge crosses draws its visible band rather
-                                ; than nothing; a vertical cut still refuses
+                                ; than nothing - and on kern_big a vertical
+                                ; cut too (11.3.4): gfx_fill clips the band per
+                                ; pixel and font_char masks the columns
     push ax                     ; bank the cell's own origin - the fill wants
     push bx                     ; the band, font_char wants the cell
     push cx
