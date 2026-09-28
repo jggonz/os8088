@@ -213,6 +213,23 @@ def cfg_bytes(m):
         return b""
 
 
+def cfg_when(m, want, what):
+    """PXSTEIN.CFG once `want(bytes)` holds, or as it stands after the budget.
+
+    The game saves from INSIDE its menu handler (px_set_save, pxset.inc) - a
+    FAT write of several int 13h at ~400 ms each - and a menu pick returns
+    when it is decoded, not when that handler is done. A read that follows a
+    pick by a fixed number of ticks is a race the drive usually wins; this
+    waits on the file itself, in guest seconds, and leaves the verdict to the
+    caller's check."""
+    try:
+        os88marty.until(m, lambda mm: want(cfg_bytes(m)), what, poll=0.5,
+                        limit=30.0)
+    except os88marty.MartyError:
+        pass
+    return cfg_bytes(m)
+
+
 def away_point(m, g):
     """A point to click that takes the focus from the game: another window's
     title bar where the game's window does not cover it, else the bare
@@ -387,8 +404,9 @@ def main():
             check(g.byte("px_ammo") == a0 - 1 and g.word("px_sfxn") == n0,
                   "...and a shot with Sound off (a round spent, %d -> %d) plays nothing"
                   % (a0, g.byte("px_ammo")))
-            cfg = cfg_bytes(m)
             col = 1 if g.byte("px_tier") >= 1 else 0    # Colour defaults on
+            cfg = cfg_when(m, lambda c: len(c) == 12 and c[9] == 0 and c[10] == 1,
+                           "PXSTEIN.CFG to take Sound off and Mouse on")
             check(len(cfg) == 12 and cfg[:4] == b"PXC\x02" and cfg[9] == 0 and cfg[10] == 1
                   and cfg[11] == col,                     # from the 286 (97.14)
                   "PXSTEIN.CFG on the floppy says sound 0, mouse 1, colour %d (%r) - eight "
@@ -399,7 +417,8 @@ def main():
             ui.menu_pick("Game", "Mouse")
             ticks(g, 6)
             mo.to(4, 4)
-            cfg = cfg_bytes(m)
+            cfg = cfg_when(m, lambda c: len(c) == 12 and c[9] == 1 and c[10] == 0,
+                           "PXSTEIN.CFG to take both picks back")
             check(g.byte("px_sound") == 1 and g.byte("px_mouse") == 0 and len(cfg) == 12
                   and cfg[9] == 1 and cfg[10] == 0,
                   "both picked back: the game and the file follow (%r)" % cfg)

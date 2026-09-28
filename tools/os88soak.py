@@ -812,15 +812,31 @@ def _frozen_targets(a):
                        for f in getattr(r, "wants", ())})
     except Exception:                                       # noqa: BLE001
         arts = []
-    # THE SHIPPED SET IS SPELLED OUT rather than asked for as `all`, because
-    # `all` ends in `checkdocs` and `test-fast` - gates, not artefacts, and
-    # ones that would run against the tree for no reason and fail it for
-    # somebody else's. These are `all`'s own image list (Makefile), which is
-    # every kernel, package and driver the rows read, since each image names
-    # them as prerequisites.
-    shipped = ("os8088.img", "os8088-120.img", "os8088-720.img",
-               "os8088-360.img", "apps.img", "apps120.img", "apps720.img",
-               "apps360.img", "media360.img", "wire.o88")
+    # THE SHIPPED SET IS NAMED rather than asked for as `all`, because `all`
+    # ends in `checkdocs` and `test-fast` - gates, not artefacts, and ones
+    # that would run against the tree for no reason and fail it for somebody
+    # else's. It is the Makefile's own $(SHIPIMGS), which is every kernel,
+    # package and driver the rows read, since each image names them as
+    # prerequisites - READ OUT OF THE MAKEFILE by t_volsig's reader and not
+    # restated. A restated copy went stale here: it stopped at media360.img
+    # when the three category disks (SPEC.md 24.6) joined $(SHIPIMGS), so a
+    # scoped `start -k pxsstate` built a tree with no games360.img and the
+    # row died in launch() on a FileNotFoundError naming the tree - a full
+    # soak never saw it, because some OTHER selected row happened to declare
+    # the disk. The tuple below is the fallback for a Makefile that cannot
+    # be read, not a second authority.
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "tests", "unit"))
+        from t_volsig import ship_images
+        imgs = tuple(ship_images())
+    except Exception:                                       # noqa: BLE001
+        imgs = ()
+    if len(imgs) < 8:
+        imgs = ("os8088.img", "os8088-120.img", "os8088-720.img",
+                "os8088-360.img", "apps.img", "apps120.img", "apps720.img",
+                "apps360.img", "media360.img", "office360.img",
+                "network360.img", "games360.img")
+    shipped = imgs + ("wire.o88",)
     return shipped + tuple(a[len("build/"):] for a in arts
                            if a.startswith("build/"))
 
