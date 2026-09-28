@@ -2218,11 +2218,32 @@ The pulses were right (the carrier's harmonics follow the file at 1.0x);
 a straight encode put what a 2¼-inch cone can play 23-28 dB under the
 carrier. SPEC.md 98.2.15.1 shapes the sound for the speaker - on by
 default, and `os88vid speaker` for a file already made - which takes that
-band to ~10 dB under it. **Waiting on the owner's second listen**. Then, in
-order, if the whine is still the problem: two pulses a sample (an 11 kHz
-carrier, twice the ISR - the owner doubts the CPU is there beside a
-video), 11,025 Hz files (the same doubt), and a "5150 speaker" preview in
-the encoder that keeps the carrier and drops the bass.
+band to ~10 dB under it. **The owner's second listen: "clearly audible,
+even good - except the coil whine still dominates."**
+
+**Two pulses a sample, MEASURED** (2026-09-28, `SPK2X` in
+apps/os88spk.inc, a prototype: not a Makefile knob, and the shipped
+player is byte-identical without it). Channel 0 at N/2, an 11,047 Hz
+carrier; every other entry re-writes the held count and nothing else; the
+whole path halves the file's counts. On MartyPC's Hercules 5150, full
+screen, `spk2x.py`'s shape (the session's scratch instrument):
+
+| | ISR whole / half, cycles | lost | a 160x58 5 fps clip | a 400x145 30 fps clip |
+|---|---|---|---|---|
+| one pulse a sample | 346-352 / - | 1.9-2.2% | 300 of 300, 0 late, +2.1% | 900 of 900, 0 late, +1.5% |
+| two (SPK2X) | 441 / 220 | 2.9-3.4% | 300 of 300, 0 late, +3.0% | 900, **24,165 late, 845 s for 30** |
+
+With the ~60-cycle acknowledge each, two pulses are ~781 of a sample's
+864 cycles - **~90% of the machine against 48%**. A clip as light as Bad
+Carrot's (decode 1.2% on average) plays; a clip budgeted for one pulse
+does not play at all. An optimised build (counts pre-halved in the file,
+a cheaper toggle) might reach ~80%, which is still a different budget
+class: it would be a per-file choice the encoder budgets for (a header
+flag - a FORMAT change), never the player's default. **Waiting on the
+owner's listen to the prototype** (`badcar2x-ST11M.VHD`: this player and
+the shaped Bad Carrot) - whether an 11 kHz carrier is worth that at all.
+11,025 Hz files stay dead: SPEC.md 34.11.4 measured a 4 s clip taking
+20. The "5150 speaker" preview in the encoder is last.
 
 **PC speaker follow-ons** (15.9):
 - **Tracker's full screen and Audio**: a HANDOFF to another session,
