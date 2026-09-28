@@ -1420,10 +1420,23 @@ def _tag(label):
     a timestamp alone does not, because two launches in the same millisecond
     would share a directory, and `makedirs(exist_ok=True)` would let them -
     silently, which is the exact class of failure this whole layer removes.
+
+    **AND A NAME NEVER RECURS**, which pid-label-seq alone did not promise:
+    a PID wraps in minutes on a busy box, so the same name comes round again.
+    `launch` refuses a directory that EXISTS, and that was not enough - a
+    `reap()` acts on the snapshot `instances()` took when it started, so when
+    another reaper had already pruned an ended record's tree, the name was
+    free, a new launch built its tree there, and the first reaper then got to
+    that record in its snapshot and `rmtree`d the NEW instance: an emulator
+    that "exited at once", its log saying `./media/hdds` does not exist
+    (bootsmoke, in a scoped soak beside four other rows). Six random hex
+    digits make a stale record and a live instance different directories, so
+    a snapshot can be as old as it likes.
     """
     _seq[0] += 1
-    return "%d-%s-%d" % (os.getpid(),
-                         re.sub(r"[^A-Za-z0-9_.-]", "_", label)[:24], _seq[0])
+    return "%d-%s-%d-%s" % (os.getpid(),
+                            re.sub(r"[^A-Za-z0-9_.-]", "_", label)[:24],
+                            _seq[0], os.urandom(3).hex())
 
 
 # How long an ENDED instance's directory is kept, in minutes. It is a few KB
