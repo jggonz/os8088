@@ -35,6 +35,11 @@ And at every hold the scrub bar holds ONE black 8-pixel block, at the
 offset the player last drew it at, on white - the single-pass move's masks
 (98.3.7) - and it has moved along the play.
 
+And from Play to the first frame - the ring's fill, off the floppy - the
+window holds the POSTER the box showed and never the black the first frame
+is drawn on (98.3.7.1). With the black drawn before the fill, as it was,
+every look fails.
+
 And before any of it: the poster's row is on a Hercules bank. A box placed
 before the first play once rounded it to CGA's two (the vp_dinfo call
 missing from vp_boxxy): it FAILS with row 46.
@@ -114,15 +119,19 @@ def main():
                     raise Stop("%s never happened (%s)"
                                % (what, str(e).split(".")[0]))
 
-            def screen(n, what):
-                """the desktop at the window's origin against frame n"""
+            def canvas():
+                """the desktop's bytes at the window's origin"""
                 sb, lay, rows = DESK["herc"]
                 dg = vid.Geom(lay, g.wb, rows)
                 ty0, tx0 = rw("vp_ty0"), rw("vp_tx0")
                 seg = bytes(m.read(sb, 65536))
-                got = b"".join(seg[dg.base[ty0 + y] + tx0:
-                                   dg.base[ty0 + y] + tx0 + g.wb]
-                               for y in range(g.h))
+                return b"".join(seg[dg.base[ty0 + y] + tx0:
+                                    dg.base[ty0 + y] + tx0 + g.wb]
+                                for y in range(g.h))
+
+            def screen(n, what):
+                """the desktop at the window's origin against frame n"""
+                got = canvas()
                 want = vid.decode_at(r, n)
                 d = sum(1 for x, y in zip(got, want) if x != y)
                 print("   %s: the window holds frame %d, %d bytes of %d "
@@ -213,7 +222,26 @@ def main():
                 stops = (1, 23, 64, 111, nf)
                 ww("vp_stopat", stops[0])
                 m.write(base + syms["vp_played"], b"\0")
+                # THE PICTURE STAYS UP WHILE THE RING FILLS (98.3.7.1): from
+                # the bracket's start to the first frame the window holds
+                # the poster the box showed, never the black the first
+                # frame is drawn on - which it did for the whole fill
+                pkey = r.keys[rw("vp_dkey")][0]
                 m.type_text("p")
+                fills = []
+                while rb("vp_ready") == 0:
+                    # (vp_fcap: 0 until a bracket has placed its origin)
+                    if rb("vp_winm") == 1 and rw("vp_fcap"):
+                        fills.append(canvas() == vid.decode_at(r, pkey))
+                    os88marty.pace(m, 0.05)
+                print("   the fill: %d looks, %d of them the poster"
+                      % (len(fills), sum(fills)))
+                if not fills:
+                    bad.append("the fill was never seen: nothing tested")
+                elif not all(fills):
+                    bad.append("the window left the poster during the fill "
+                               "(%d looks of %d)" % (len(fills) - sum(fills),
+                                                     len(fills)))
                 wait(lambda mm: rb("vp_ready") == 1, "the play to start")
                 if rb("vp_winm") != 1 or rb("vp_shadow") != int(shadow):
                     bad.append("the play went %s, %s" % (

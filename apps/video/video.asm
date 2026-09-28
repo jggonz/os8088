@@ -6684,10 +6684,10 @@ vp_main:
     mov word [vp_poff], VP_PAGE
 .pg:
     ; THE CANVAS onto this surface (98.3.7): where the session got to, black
-    ; before its first frame
-    call vp_kput
+    ; before its first frame - but NOT YET on a session's first bracket
     cmp byte [vp_sfirst], 0
-    jne .first
+    jne .sfst
+    call vp_kput
     cmp byte [vp_autop], 0          ; A LATER BRACKET: on from where it was,
     je .rdy                         ; playing again if the last one's end was
     mov byte [vp_autop], 0          ; what paused it
@@ -6695,8 +6695,21 @@ vp_main:
 .rdy:
     mov byte [vp_ready], 1
     jmp .loop
-.first:
+.sfst:
+    ; THE PICTURE STAYS UP UNTIL THE PLAY CAN DRAW OVER IT (98.3.7.1): the
+    ; ring's fill is seconds off a disk, and blacking the canvas before it
+    ; left the window black for all of them. From frame 0 the black waits
+    ; for the fill; from a key the screen already shows, it is not needed
+    ; at all - the key's writes are the bytes already there
     mov byte [vp_sfirst], 0
+    mov byte [vp_kblk], 1           ; (from frame 0: black after the fill)
+    cmp word [vp_krec], 0xFFFF
+    je .first
+    mov byte [vp_kblk], 0
+    call vp_kheld
+    jnc .first
+    call vp_kput                    ; another picture: black, then the key
+.first:
     ; THE KEYFRAME (98.3.5): the screen after frame k, decoded onto the black
     ; - or into the shadow, and copied - before the ring is filled over its
     ; record
@@ -6748,6 +6761,11 @@ vp_main:
 .skn:
     loop .sk
 .sk0:
+    cmp byte [vp_kblk], 0           ; FROM FRAME 0: the black the first frame
+    je .sk0b                        ; is drawn on, now that it is next
+    mov byte [vp_kblk], 0
+    call vp_kput
+.sk0b:
     cmp byte [vp_startp], 0         ; F / Alt+Enter: IN PAUSED (98.3.6), on
     je .snd                         ; the picture where the play would start
     call vp_acur                    ; (the card, later, from HERE)
@@ -7471,6 +7489,36 @@ vp_kput:
     mov word [vp_kpo], 0
 .one:
     pop ax
+    ret
+
+; vp_kheld - CF=0 when the glass already holds the key a play starts from,
+; exactly where the play draws it (98.3.7.1): in the window, decoded in
+; place (no shadow, no pages), a one-bit file, and the box's picture that
+; key's at its own size - the poster rule places it on the play's rows, and
+; vp_srun repaints it there after a drag. Preserves all
+vp_kheld:
+    push ax
+    cmp byte [vp_winm], 0
+    je .no
+    cmp byte [vp_shadow], 0
+    jne .no
+    cmp byte [vp_flip], 0
+    jne .no
+    cmp byte [vp_pixfmt], PF_VGA8   ; (MONO1, CGACOMP: the poster at its own
+    jae .no                         ; size IS the canvas's bytes)
+    cmp word [vp_pseg], 0
+    je .no
+    cmp word [vp_pscale], 1
+    jne .no
+    mov ax, [vp_dkey]
+    cmp ax, [vp_kload]
+    jne .no
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
     ret
 
 vp_kget:
@@ -11800,6 +11848,7 @@ vp_tx:        dw 0
 vp_pdh:       dw 0                  ; the picture's rows drawn
 vp_brem:      dw 0                  ; vp_blitb's rows left
 vp_dkey:      dw 0xFFFF             ; the key the picture is, FFFFh none
+vp_kblk:      db 0                  ; a first bracket's black, owed (98.3.7.1)
 vp_pscale:    dw 0                  ; ...and the scale it was made at
 ; the layout (98.4.1), vp_layfit's
 vp_card:      db 0                  ; the user's: the info card out

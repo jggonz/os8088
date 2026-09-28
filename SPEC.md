@@ -152980,6 +152980,31 @@ the box kept the picture it had - the poster, or the paused frame - rather
 than that key's, which the owner saw on the 5150. `vidpreview` now reads the
 box off the screen after a stop.
 
+##### 98.3.7.1 The picture stays up until the play can draw over it
+
+**A session's first bracket blacked the canvas and THEN filled the ring**
+(the owner's report, on the Hercules 5150: *"it blacks the viewport, then
+starts playback"*). The black is what a play from frame 0 draws on, and a
+key is decoded onto it - but the fill between is the ring's whole read,
+seconds off a disk, and the window showed black for all of it where the
+picture had been. So on a first bracket (`.sfst` in `vp_main`):
+- **from frame 0** the black waits for the fill (`[vp_kblk]`): the poster
+  stays until the first frame is next, and the black is drawn just before
+  it;
+- **from a key the screen already shows** (`vp_kheld`: in the window,
+  decoded in place, no pages, a one-bit file, and the box's picture that
+  key's at its own size - the poster rule puts it on the play's rows, and
+  `vp_srun` repaints it there after a drag) there is no black at all: the
+  key's writes are the bytes already on the glass, and it is decoded over
+  them for its ADPCM4 reference byte as before;
+- **from any other key**, black and the key as before - a key's record is
+  read into the ring, so it is decoded before the fill overwrites it.
+
+A seek while playing (98.3.14) re-enters past this and is unchanged, as is
+every later bracket, which puts the keeper back. `vidwin` looks at the
+window every 0.05 s from Play to the first frame and requires the poster:
+35 looks of 35 off its floppy, and 0 of 35 with the old order. +99 bytes.
+
 #### 98.3.8 Page flipping (Mode X, optional)
 
 **A file the encoder made with `--flip` is played on two pages**, so no
