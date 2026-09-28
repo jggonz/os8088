@@ -151475,6 +151475,36 @@ CGA:
 A clip in sustained motion gains a few percent; one that bursts and wanes
 is what the reserve is for.
 
+**With sound the reserve also carries THE SOUND'S LEAD** (`audio_lead`,
+`Encoder.disk_floor`). The card halts at a block boundary unless the whole
+next block is queued (34.5.2's ISR question), and the player queues a
+frame's sound only once its record is in the ring (98.3.1) - so the reader
+must stay a BLOCK of sound ahead of the frame playing. A block is 2,048
+bytes whatever the rate (4,096 above 22,222 Hz), so the slower the sound
+the more frames it spans: 6 at 11,025 Hz PCM8 and 25 fps, **20 at 5,512 Hz
+ADPCM4**, which in a burst is most of the ring. The bucket may therefore not
+be spent below the 32 KB floor PLUS what the disk refilled over the last
+lead's frames: by the time the card reaches the frame being encoded, that
+much more has to have been read. A resident file has no disk and no lead.
+
+The owner's 5150 found it (Hercules, SB 2.0, ST-225): a 600 x 165 clip at
+25 fps with 5,512 Hz ADPCM4 froze for half a second, sound and picture,
+2 s in, where the clip cuts from black to a bright field with two white
+flashes - 47 frames of ~7.6 KB, 190 KB/s against the file's 83. The
+encoder had spent its 192 KB reserve to the floor across them, which left
+the reader ~6 frames ahead of the picture where the card wanted 19; at the
+8,192nd byte the card halted. Replayed on MartyPC's Hercules 5150 with the
+card (`os8088_5150_herc_hdd_sb_gla`), encoded for its disk
+(`--profile 5150-xtide`), the first 12 s:
+
+| | card underruns | late periods | error as seen |
+|---|---|---|---|
+| before | 2 | 0 | 1.21% |
+| **the sound's lead** | **0** | **0** | 1.76% |
+
+The picture pays for it in the burst and nowhere else: over the whole
+38 s clip for the ST-225, 0.78% -> 0.90%.
+
 ##### 98.2.1.4 `--aim`: what a budget the video does not use is for
 
 **`asked`** (the default) encodes what the options say. The other two answer
@@ -152549,7 +152579,12 @@ frames behind the sound four times, at twice it none.
 **The foreground** keeps the reader going as before and, each pass, asks the
 stream's state (verb 3):
 - a card paused for want of data resumes (verb 1) the moment a whole block
-  is queued, counted as a **pause**;
+  is queued, counted as a **pause**. **Every pass asks**, the reader's
+  included: it was asked only on a pass with nothing to read, and after an
+  underrun the reader is catching up, so a chunk arrived every pass and
+  the card sat silent until the ring was FULL again rather than until one
+  block was queued - on MartyPC's 5150, 3.93 s to 5.2 s silent with 2,259
+  bytes queued the whole time, and ~0.7 s sooner asked every pass;
 - a card the driver's watchdog ENDED makes the rest of the play silent on
   the timer - never a picture held for a clock that has gone.
 

@@ -6659,10 +6659,15 @@ vp_main:
     cmp ax, [vp_frames]             ; - unless it repeats (98.3.9)
     jae .drain
 .rd:
+    call vp_skeep                   ; EVERY pass, not only an idle one: after
+                                    ; an underrun the reader is catching up,
+                                    ; so a chunk arrives each pass and the
+                                    ; card sat silent until the whole ring
+                                    ; was full again rather than until one
+                                    ; block was queued (98.3.1)
     call vp_fill
     jnc .loop                       ; a chunk arrived: poll, and try again
-    call vp_skeep
-    call vp_wthumb                  ; (in the window, the thumb moves)
+    call vp_wthumb                 ; (in the window, the thumb moves)
     mov al, FSXW_FRAME              ; nothing to read yet: give the period
     call OSAPI_FSX_WAIT             ; to the hook
     jmp short .loop
