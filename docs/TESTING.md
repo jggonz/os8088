@@ -54,6 +54,13 @@ need" is something you check rather than argue yourself into:
    `kern_emu` out of `build/emuk/` — the shipped kernel has no resident half
    to turn on.
 
+8. **Mode X display capture after mode 13h** (`tests/drmario.py --qemu-display`).
+   MartyPC's VGA `update_clock` in `devices/vga/mod.rs` shrinks an aperture
+   for 400-line sync, then does not expand it when the same 25 MHz clock
+   switches to 480-line sync. Its capture crops the last 40 logical rows.
+   Check all four planes and XT cycle costs on MartyPC, and use QEMU only
+   to verify the complete 320×240 display and desktop restoration.
+
 That is the list. **"It is quicker to type" is not on it, and neither is
 "I already know the QMP commands."** An eighth entry goes here, not into a
 row's docstring. Entries 4–7 share the shape that gets on the list easily:

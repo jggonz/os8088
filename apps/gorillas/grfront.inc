@@ -45,6 +45,7 @@ gr_intro:
     ret
 
 gr_setup:
+    call gr_bgmstop
     call gr_musicstop
     mov byte [gr_dancing], 0
     mov byte [gr_throwticks], 0
@@ -61,6 +62,7 @@ gr_setup:
     call gr_gravity
     mov byte [gr_target], 3
     mov byte [gr_players], 2
+    mov byte [gr_bgmenabled], 1
     mov si, gr_default1
     mov di, gr_name1
     mov cx, 11
@@ -96,6 +98,12 @@ gr_inputpage:
     mov si, [gr_defaults+bx]
     mov dx, 64
     call gr_fronttext
+    cmp byte [gr_setupfield], 5
+    jne .input
+    mov si, gr_musichelp
+    mov dx, 112
+    call gr_fronttext
+.input:
     jmp gr_inputtext
 
 gr_frontdirtyclear:
@@ -190,6 +198,8 @@ gr_frontkey:
     ja .out
     cmp bx, 10
     jae .out
+    cmp byte [gr_setupfield], 5
+    je .append
     cmp byte [gr_setupfield], 0
     je .count
     cmp byte [gr_setupfield], 3
@@ -235,6 +245,8 @@ gr_frontkey:
     ret
 .accept:
     mov al, [gr_setupfield]
+    cmp al, 5
+    je .music
     or al, al
     jz .players
     cmp al, 3
@@ -254,6 +266,43 @@ gr_frontkey:
     inc cx
     rep movsb
     jmp .next
+.music:
+    cmp byte [gr_inputlen], 0
+    je .next
+    mov al, [gr_input]
+    or al, 20h
+    mov bl, 1
+    mov si, gr_yes
+    cmp al, 'y'
+    je .musicword
+    xor bl, bl
+    mov si, gr_no
+    cmp al, 'n'
+    jne .badmusic
+.musicword:
+    cmp byte [gr_inputlen], 1
+    je .musicstore
+    mov di, gr_input
+.musicchar:
+    lodsb
+    mov ah, [di]
+    inc di
+    or al, al
+    jz .musicend
+    or ah, 20h
+    cmp al, ah
+    je .musicchar
+    jmp short .badmusic
+.musicend:
+    or ah, ah
+    jnz .badmusic
+.musicstore:
+    mov [gr_bgmenabled], bl
+    jmp .next
+.badmusic:
+    call gr_frontdirtyclear
+    mov si, gr_badmusic
+    jmp .error
 .players:
     cmp byte [gr_inputlen], 0
     je .next
@@ -300,7 +349,7 @@ gr_frontkey:
     call gr_gravity
 .next:
     inc byte [gr_setupfield]
-    cmp byte [gr_setupfield], 5
+    cmp byte [gr_setupfield], 6
     jb gr_nextinput
     mov byte [gr_state], 6
     call gr_frontdirtyclear
@@ -321,6 +370,7 @@ gr_frontkey:
 .invalid:
     call gr_frontdirtyclear
     mov si, gr_badinput
+.error:
     mov dx, 96
     call gr_fronttext
     jmp gr_frontflush
@@ -485,13 +535,12 @@ gr_namecopy:
 ; Nonblocking, instance-owned score. Notes expire even when the window loses
 ; focus; the worker resumes the sequence only while the window can advance.
 gr_musicservice:
-    cmp word [gr_musicptr], 0
-    je .out
     cmp byte [gr_paused], 0
     jne .out
     cmp byte [gr_abon], 0
     jne .out
     SAVE
+    call gr_bgmtick
     call gr_musictick
     RESTORE
 .out:
@@ -546,12 +595,18 @@ gr_help3: db ' Arrow direction = wind flow.',0
 gr_help4: db ' Arrow length = wind strength.',0
 gr_continue: db '   Press any key for setup',0
 gr_setuptitle: db '         GAME SETUP',0
-gr_questions: dw gr_qplayers, gr_qname1, gr_qname2, gr_qpoints, gr_qgravity
-gr_defaults: dw gr_defplayers, gr_defname1, gr_defname2, gr_defpoints, gr_defgravity
+gr_questions: dw gr_qplayers, gr_qname1, gr_qname2, gr_qpoints, gr_qgravity, gr_qmusic
+gr_defaults: dw gr_defplayers, gr_defname1, gr_defname2, gr_defpoints, gr_defgravity, gr_defmusic
 gr_qname1: db 'Name of Player 1 (10 characters)',0
 gr_qname2: db 'Name of Player 2 (10 characters)',0
 gr_qpoints: db 'First to how many points? 1-99',0
 gr_qgravity: db 'Gravity: 0.001 to 9999.999',0
+gr_qmusic: db 'Gameplay music? Yes or No',0
+gr_defmusic: db 'Default: Yes (Y/N also accepted)',0
+gr_musichelp: db 'M toggles music during gameplay',0
+gr_badmusic: db 'Enter Yes or No (Y/N).',0
+gr_yes: db 'yes',0
+gr_no: db 'no',0
 gr_defname1: db 'Default: Player 1',0
 gr_defname2: db 'Default: Player 2 / Computer',0
 gr_defpoints: db 'Default: 3',0

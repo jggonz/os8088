@@ -248,8 +248,13 @@ def main():
         # --- 8. regs=True attributes a hit -----------------------------------
         print("\n8. regs=True records the registers that attribute a hit")
         closed(ui)
+        # Stay until the paint has RUN (section 10): open_drive returns when
+        # the window is registered, and on a loaded box the wm_draw_win it
+        # triggers can land after the block would have cleared the breakpoint
+        # - which a soak at lane 4 caught as "0 of 0 stops".
         with os88marty.bp_trace(m, "wm_draw_win", regs=True) as tr5:
             ui.open_drive("B")
+            tr5.until(lambda: bool(tr5.hits), "a window paint", limit=60.0)
         got = [h for h in tr5.hits if "regs" in h]
         check(bool(got), "%d of %d stops carry a register set"
               % (len(got), len(tr5.hits)))
@@ -272,6 +277,7 @@ def main():
         closed(ui)
         with os88marty.bp_trace(m, "wm_draw_win", on_hit=peek) as tr6:
             ui.open_drive("B")
+            tr6.until(lambda: bool(tr6.hits), "a window paint", limit=60.0)
         got = [h for h in tr6.hits if "hit" in h]
         check(len(got) == len(tr6.hits) and bool(got),
               "every one of %d stop(s) carries its on_hit answer" % len(got))

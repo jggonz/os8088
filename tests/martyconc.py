@@ -146,8 +146,16 @@ def isolation(quick):
               "both instances are in the registry")
         check(all(live[p]["owner_alive"] for p in (a.port, b.port)),
               "...both owned by this process")
+        # Not `killed == 0`: the registry is the BOX's, and a soak row that
+        # died beside this one leaves an orphan reap() is right to take. The
+        # promise is about live work, so count what was fair game first.
+        orphans = sum(1 for d in M.instances()
+                      if d["alive"] and not d["owner_alive"]
+                      and not d.get("detached"))
         killed, _ = M.reap()
-        check(killed == 0, "reap() killed nothing while both owners are alive")
+        check(killed <= orphans,
+              "reap() killed nothing while both owners are alive",
+              "killed %d with %d orphan(s) on the box" % (killed, orphans))
         check(a.status()["cycles"] == 0 and b.status()["cycles"] == 0,
               "...and both machines are still answering")
 
@@ -245,9 +253,24 @@ def _orphan_against(by):
     check(by.status()["cycles"] == 0,
           "the live instance beside it is untouched by the orphan's arrival")
 
+    # THE REGISTRY IS SHARED WITH EVERY OTHER ROW ON THE BOX, and every
+    # `launch()` reaps on the way in. So in a soak another row's launch can
+    # take this orphan first - our reap() then reports 0 - or can leave an
+    # orphan of its own for ours to take, and it reports 2. "killed == 1" was
+    # a claim about the box and not about reap(); the contract is that THIS
+    # orphan ends up gone and retired as reaped, that nothing but orphans was
+    # killed, and (below) that the owned bystander never noticed.
+    orphans = sum(1 for d in M.instances()
+                  if d["alive"] and not d["owner_alive"]
+                  and not d.get("detached"))
     killed, _ = M.reap()
-    check(killed == 1, "reap() killed exactly the orphan", "killed %d" % killed)
+    check(killed <= orphans, "reap() killed orphans and nothing else",
+          "killed %d with %d orphan(s) on the box" % (killed, orphans))
     check(not M._is_marty(pid), "...the orphan is gone")
+    rec = [d for d in M.instances(include_ended=True) if d.get("pid") == pid]
+    check(bool(rec) and str(rec[0].get("ended_reason", "")).startswith("reaped"),
+          "...and its record is retired as reaped",
+          rec[0].get("ended_reason") if rec else "no record")
     check(by.status()["cycles"] == 0,
           "...and the live, owned instance beside it never noticed")
 

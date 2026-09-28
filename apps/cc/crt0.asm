@@ -49,7 +49,7 @@
 ; exactly like a truncated file.
 ;
 ; So a C package does not use OS88_HEADER / OS88_IMAGE_END. It uses the pair
-; below, which have the same field layout, the same magic, the same version 3
+; below, which have the same field layout, the same magic, the same PKG_FMT
 ; and the same dispatcher bytes, and differ in exactly one thing: the image
 ; size is an ABSOLUTE LABEL rather than a difference. With `.text start=0` and
 ; every other section chained to it by `follows=`, a label's value IS its

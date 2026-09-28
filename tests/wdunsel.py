@@ -108,7 +108,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     dispcp.open_drive(m, mo, S, M.settle, "B")
     w = dispcp.win_list(m, S)[-1]; dx, dy = dispcp.win_rect(m, S, w)[:2]
     dispcp.open_named(m, mo, S, M.settle, dx, dy, "WELCOME.DOC")
-    time.sleep(2.5); M.settle(m)
+    M.pace(m, 2.5); M.settle(m)
 
     raw = m.read(S("inst_tab"), 32*12); seg = None
     for i in range(12):
@@ -140,37 +140,43 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     ryb = lambda r: u16(m.read(P("wd_ryb") + 2*r, 2))
 
     def page_round_trip(g, top0):
-        mo.to(g["sbx"], g["ydn"]); time.sleep(0.25)
-        m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.5)
+        mo.to(g["sbx"], g["ydn"]); M.pace(m, 0.25)
+        m.mouse(l=True); M.pace(m, 0.08); m.mouse(l=False); M.pace(m, 1.5)
+        M.quiesce(m, lambda: rw("wd_top"))
         for _ in range(12):
             if rw("wd_top") <= top0:
                 break
-            mo.to(g["sbx"], g["yup"]); time.sleep(0.25)
-            m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.5)
-        mo.to(4, 4); time.sleep(1.0); M.settle(m)
+            mo.to(g["sbx"], g["yup"]); M.pace(m, 0.25)
+            m.mouse(l=True); M.pace(m, 0.08); m.mouse(l=False); M.pace(m, 1.5)
+            M.quiesce(m, lambda: rw("wd_top"))
+        mo.to(4, 4); M.pace(m, 1.0); M.settle(m)
         return rw("wd_top") == top0
 
     def to_top(g):
         for _ in range(12):
             if rw("wd_top") == 0:
                 return
-            mo.to(g["sbx"], g["yup"]); time.sleep(0.25)
-            m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.5)
+            mo.to(g["sbx"], g["yup"]); M.pace(m, 0.25)
+            m.mouse(l=True); M.pace(m, 0.08); m.mouse(l=False); M.pace(m, 1.5)
+            M.quiesce(m, lambda: rw("wd_top"))
         M.settle(m)
 
     def select(g, r0, x0, r1, x1, hold_below=0):
-        mo.to(g["tx"] + x0, ryb(r0) + 2); time.sleep(0.4)
-        mo._edge(True); time.sleep(0.4)
+        mo.to(g["tx"] + x0, ryb(r0) + 2); M.pace(m, 0.4)
+        mo._edge(True); M.pace(m, 0.4)
         if hold_below:
             mo.to(g["tx"] + x1, g["bot"] + 3, l=True)
-            deadline = time.time() + 60
             t0 = rw("wd_top")
-            while rw("wd_top") < t0 + hold_below and time.time() < deadline:
-                time.sleep(0.3)
-            mo.to(g["tx"] + x1, ryb(r1) + 2, l=True); time.sleep(1.2)
+            try:                    # a miss is the caller's case-check
+                M.until(m, lambda mm: rw("wd_top") >= t0 + hold_below,
+                        "the drag to auto-scroll %d rows" % hold_below,
+                        poll=0.3, limit=60.0)
+            except M.MartyError:
+                pass
+            mo.to(g["tx"] + x1, ryb(r1) + 2, l=True); M.pace(m, 1.2)
         else:
-            mo.to(g["tx"] + x1, ryb(r1) + 2, l=True); time.sleep(1.2)
-        mo._edge(False); time.sleep(1.0); M.settle(m)
+            mo.to(g["tx"] + x1, ryb(r1) + 2, l=True); M.pace(m, 1.2)
+        mo._edge(False); M.pace(m, 1.0); M.settle(m)
         return rb("wd_selon"), rw("wd_sel0"), rw("wd_sel1")
 
     def nvis(g):
@@ -183,7 +189,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
         """Click at the start of `row`; (fast path ran, guest ms up to
         wd_dragsel - the pointer-following loop after it waits on the HOST's
         release, so it is timed out rather than in)."""
-        mo.to(g["tx"] + 4, ryb(row) + 2); time.sleep(0.4); M.settle(m)
+        mo.to(g["tx"] + 4, ryb(row) + 2); M.pace(m, 0.4); M.settle(m)
         T, hit = {}, []
         NM = {}
         for nm in ("wd_onclick", "wd_dragsel", "wd_sxdesel.ret"):
@@ -201,15 +207,15 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
             return None
         with M.bp_trace(m, P("wd_onclick"), P("wd_dragsel"), P("wd_sxdesel.ret"),
                         on_hit=on, cap=64):
-            mo._edge(True); time.sleep(0.15); mo._edge(False)
+            mo._edge(True); M.pace(m, 0.15); mo._edge(False)
             M.quiesce(m, lambda: (rb("wd_selon"), rw("wd_cur")))
-            time.sleep(0.5)
-        mo.to(4, 4); time.sleep(0.8); M.settle(m)
+            M.pace(m, 0.5)
+        mo.to(4, 4); M.pace(m, 0.8); M.settle(m)
         return (bool(hit) and hit[0]), ms(T.get("out", 0) - T.get("in", 0))
 
     def inside(g, x, y):
         """A click that lands INSIDE the selection: (fast path, rows flushed)."""
-        mo.to(x, y); time.sleep(0.4); M.settle(m)
+        mo.to(x, y); M.pace(m, 0.4); M.settle(m)
         st = {"fast": None, "rf": 0}
         NM = {}
         for nm in ("wd_sxdesel.ret", "wd_rflush"):
@@ -224,10 +230,10 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
                 st["fast"] = not (mm.regs()["flags"] & 1)
             return None
         with M.bp_trace(m, P("wd_sxdesel.ret"), P("wd_rflush"), on_hit=on, cap=400):
-            mo._edge(True); time.sleep(0.15); mo._edge(False)
+            mo._edge(True); M.pace(m, 0.15); mo._edge(False)
             M.quiesce(m, lambda: (rb("wd_selon"), rw("wd_cur")))
-            time.sleep(0.6)
-        mo.to(4, 4); time.sleep(0.8); M.settle(m)
+            M.pace(m, 0.6)
+        mo.to(4, 4); M.pace(m, 0.8); M.settle(m)
         return bool(st["fast"]), st["rf"]
 
     def against_repaint(g):
@@ -246,6 +252,18 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
             print("      differing pixels in x %d..%d, y %d..%d; caret at [wd_cur]=%d, "
                   "row %d" % (min(xs), max(xs), min(ys), max(ys), rw("wd_cur"),
                               rw("wd_currow")))
+            # Keep both pictures. A mismatch here was once seen at lane 4 of a
+            # soak and not again in isolation, and a count is not enough to
+            # say whether the fast path left XOR behind or the capture was
+            # taken mid-paint - the two pictures are.
+            try:
+                from PIL import Image
+                for nm, (W, H, px) in (("now", now), ("repaint", rp)):
+                    out = "build/wdunsel-%d-%s.png" % (len(diff), nm)
+                    Image.frombytes("L", (W, H), bytes(255 if q else 0 for q in px)).save(out)
+                    print("      kept %s" % out)
+            except Exception as e:            # a diagnostic may not fail a row
+                print("      (could not keep the pictures: %s)" % e)
         return len(diff)
 
     settle_height()
@@ -273,15 +291,15 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
           0 < tA < tP + 10 * RA, "%.1f ms against %.1f + %d rows" % (tA, tP, RA))
 
     # ---- leg C: keystrokes over the rows it cleared -------------------------
-    mo.to(g["tx"] + 16, ryb(2) + 2); time.sleep(0.3)
-    m.mouse(l=True); time.sleep(0.1); m.mouse(l=False); time.sleep(1.0)
+    mo.to(g["tx"] + 16, ryb(2) + 2); M.pace(m, 0.3)
+    m.mouse(l=True); M.pace(m, 0.1); m.mouse(l=False); M.pace(m, 1.0)
     select(g, 1, 40, RA - 3, 120)
     deselect(g, RA - 1)
-    mo.to(g["tx"] + 16, ryb(3) + 2); time.sleep(0.3)
-    m.mouse(l=True); time.sleep(0.1); m.mouse(l=False); time.sleep(1.0)
+    mo.to(g["tx"] + 16, ryb(3) + 2); M.pace(m, 0.3)
+    m.mouse(l=True); M.pace(m, 0.1); m.mouse(l=False); M.pace(m, 1.0)
     for _ in range(3):
-        m.key("ArrowDown"); time.sleep(0.9)
-    mo.to(4, 4); time.sleep(0.8); M.settle(m)
+        m.key("ArrowDown"); M.pace(m, 0.9)
+    mo.to(4, 4); M.pace(m, 0.8); M.settle(m)
     dC = against_repaint(g)
     check("C: Down across the cleared rows still equals a repaint", dC == 0,
           "%s differing pixels" % dC)
@@ -363,7 +381,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     mo.to(bx, boxtop + 6); mo._edge(True)
     M.until(m, lambda mm: fopen() == 1, "the Font list to come down", poll=0.15, limit=40.0)
     if rb("wd_nfont") < 1:
-        mo._edge(False); time.sleep(1.0)
+        mo._edge(False); M.pace(m, 1.0)
         check("D: the disk carries a face (case, not assertion)", False, "no faces")
     else:
         top = u16(m.read(Rf + DR_TOP, 2))

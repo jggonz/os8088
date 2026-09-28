@@ -143,8 +143,7 @@ clk_at_eput:
     call clk_at_enc
     mov ah, al
     mov al, ch
-    call clk_at_put
-    ret
+    jmp clk_at_put
 
 ; -----------------------------------------------------------------------------
 ; clk_at_hour - a 0..23 hour back into the chip's hours register

@@ -70,6 +70,7 @@ gr_windarrow:
     ret
 
 gr_results:
+    call gr_bgmstop
     call gr_musicstop
     mov byte [gr_state], 8
     call gr_clear

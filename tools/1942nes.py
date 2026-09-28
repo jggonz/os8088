@@ -2,7 +2,7 @@
 """Read graphics tables from a user's 1942 NROM cartridge (never downloaded).
 
 Addresses are CPU addresses in the 32KB PRG. The payload digest pins the
-layout independently of iNES / NES 2.0 header differences. See SPEC 99.2.
+layout independently of iNES / NES 2.0 header differences. See SPEC 101.2.
 No emulator, Pillow, or third-party Python dependency is required.
 """
 import hashlib

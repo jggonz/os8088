@@ -1,4 +1,4 @@
-; Native 1942 remake for os8088. SPEC 99; no NES CPU interpreter.
+; Native 1942 remake for os8088. SPEC 101; no NES CPU interpreter.
 %include "os88api.inc"
 OS88_HEADER '1942', n_entry, 1, OS88_STACK_256
 OS88_ICON16

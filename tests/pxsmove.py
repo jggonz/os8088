@@ -47,7 +47,6 @@ import argparse
 import os
 import struct
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -55,8 +54,8 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))     # LAST, so it wins (pxslib)
 import os88marty                                                # noqa: E402
 import pxslib                                                   # noqa: E402
-import os88mouse                                                # noqa: E402
-import dispcp                                                   # noqa: E402
+import os88geom                                                 # noqa: E402
+import os88ui                                                   # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "tools"))     # tools/heapmap.py (the
 import heapmap                                      # reader), not tests/'s
 
@@ -72,6 +71,26 @@ def check(ok, what):
 def claims(m, S):
     return heapmap.Map(m, {n: S(n) for n in
                            ("mem_base", "mem_top", "spl_live", "mem_tab")})
+
+
+def filler(m, S):
+    """FILLER's (fl_done, fl_nask) - or None - read through its window, so a
+    compaction that moves it is followed, and only while the gfx lock is FREE:
+    its fill runs inside its first W_PAINT and an ask round inside W_ONKEY,
+    both with the lock held. tests/rehomemove.py's reader, whose FILLER this
+    is; the offsets are filler.asm's bss table."""
+    if m.read(S("gfx_lock_flag"), 1)[0]:
+        return None
+    for w in os88geom.windows(m, S):
+        if w.title.startswith("Filler"):
+            seg = struct.unpack_from("<H", m.read(os88geom.winptr(m, w.i, S)
+                                                  + os88geom.W_SEG, 2))[0]
+            if not seg:
+                return None
+            img = struct.unpack_from("<H", m.read(seg << 4, 32), 8)[0]
+            b = m.read((seg << 4) + img, 22)
+            return b[20], struct.unpack_from("<H", b, 16)[0]  # done, nask
+    return None
 
 
 def carve_of(m, S, seg):
@@ -92,7 +111,7 @@ def main():
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
         S = m.sym
         g = pxslib.open_game(m)
-        mo = os88mouse.Mouse(marty=m)
+        ui = os88ui.UI(m, verbose=False, sym=S)
         seg0 = g.seg
         h0 = g.handoff()
         c0 = carve_of(m, S, seg0)
@@ -119,21 +138,31 @@ def main():
         qtex0 = pxslib.u16(m.read((h0["gen"] << 4) + L["QTEX"], 2)) if h0["gen"] else 0
 
         # --- FILLER, and the forcing asks (tests/rehomemove.py's idiom) ------
-        dslot = [i for i in dispcp.win_list(m, S) if i != g.win][-1]  # the Disk window
-        wx, wy = dispcp.win_rect(m, S, dslot)[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, name="FILLER.O88")
-        time.sleep(8)
-        os88marty.settle(m)
+        # EVERY WAIT IS ON FILLER'S OWN COUNTERS (tests/rehomemove.py's
+        # idiom): the fill done, then each round of asks answered. It was
+        # `time.sleep(8)` and six-second sleeps around a settle, which give a
+        # loaded box a third of the machine an idle one gets
+        ui.open("FILLER.O88")               # the Disk window, raised first
+        try:
+            os88marty.until(m, lambda _: (filler(m, S) or (0,))[0],
+                            "the filler's fill", poll=0.3, guest=180.0)
+        except os88marty.MartyError as e:
+            print("   (%s)" % str(e).split("\n")[0])
         moved = False
         for _ in range(8):
+            was = (filler(m, S) or (0, None))[1]
             m.key("KeyA")
-            time.sleep(6)
-            os88marty.settle(m)
-            got = pxslib.find(m, S, limit=10.0)
+            try:                            # one round of asks, and the
+                os88marty.until(            # compaction a grant made
+                    m, lambda _: (filler(m, S) or (0, was))[1] != was,
+                    "the filler's asks", poll=0.3, guest=90.0)
+            except os88marty.MartyError as e:
+                print("   (%s)" % str(e).split("\n")[0])
+            got = pxslib.find(m, S)
             if got and got[1] != seg0:
                 moved = True
                 break
-        got = pxslib.find(m, S, limit=30.0)
+        got = pxslib.find(m, S, guest=30.0)
         check(got is not None, "the game's window is still findable by title (W_SEG)")
         if not got:
             return report()

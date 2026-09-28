@@ -1,0 +1,104 @@
+VIDEO PLAYER - THE ENCODER'S FIRST CLIPS (wave 8)
+=================================================
+
+A bootable fixed disk: the os8088 kernel, the Video
+Player, and videos made by the new encoder
+(tools/os88venc.py) straight from ordinary video
+files - scaled, dithered and budgeted for a 4.77 MHz
+8088 reading an ST-225.
+
+  VIDENC-HERC-ST11M.VHD  the Hercules clips, for an
+                ST-225 on a Seagate ST11M: 615/4/17,
+                20 MB - the 5150's own disk
+  VIDENC-HERC-ST11R.VHD  the same clips at 615/4/26
+                on an ST11R (31 MB), for 86Box
+  VIDENC-CGA-ST11R.VHD   the CGA clips (640 wide; a
+                VGA plays them too), ST11R
+  VIDENC-VGA-286.VHD     the VGA clips, for a 286 on
+                IDE: 17 sectors, 15 heads, 250
+                cylinders. `make 286-video` is an
+                mr286 at 16 MHz, 4 MB, an OTI067 VGA
+                and an SB16 with it and NO floppy in
+                A:, so it boots the disk. It also
+                carries the four benches (VIDBENCH,
+                VIDDISK, VIDSND, VIDKERN), which
+                save their .TXT results beside
+                them - a 286 measured off the disk
+                it plays from. VIDDISK streams
+                BAPPLE.V88. The whole-track rows
+                read into a DMA-safe buffer now: on
+                the first 286 run every one of them
+                crossed a 64 KB page and failed
+
+The disk has to be read at the geometry it was written
+with, exactly as the wave 0-7 field disks.
+
+THE CLIPS
+  BAPPLE.V88   Bad Apple!!, 219 s, 4:3
+  BCARROT.V88  Bad Carrot, 226 s, 16:9
+  TRACK.V88    Trackmania, 12 s of a run, 16:9
+  TRACKA4.V88  (Hercules disks) the same with its
+               sound as 4-bit ADPCM at 22 kHz, made
+               by the encoder's SEARCH - the card
+               decodes it
+  TRKA11.V88   (Hercules disks) the same ADPCM at
+               11 kHz. A DSP 2.x is rated for 12 kHz
+               of 4-bit ADPCM at most, which only a
+               REAL card can answer. ON 86BOX BOTH
+               CLICK every lap of the player's sound
+               ring (~1.5 s) and pop at the start:
+               86Box's own ADPCM bugs, not the file's
+  TRCOMP.V88   (CGA disk) Trackmania in COMPOSITE
+               COLOUR, ADPCM sound - on a CGA with a
+               composite monitor (86Box: Display ->
+               composite) it is colour; on RGB it is
+               stripes. Error-diffused through the
+               monitor's own model now, the way
+               XDC's are: 294 of 360 frames exact
+  VGA disk     TRACK at 400 x 225 - it plays IN THE
+               WINDOW on a VGA desktop, and the scrub
+               bar's thumb follows it. All at 30 fps:
+               16 COLOURS, mode 12h - IN THE WINDOW
+               too (wave 12):
+                 TRK4    320 x 180, 254 KB/s, every
+                         frame exact
+                 TRK4M   400 x 225, 356 KB/s
+               256 colours, full screen, mode 13h:
+                 TRK830  320 x 150, 396 KB/s
+                 TRK812  detail 1x2, 236, exact
+                 TRK8S   160 x 100, 137
+               ...and Mode X, 320 x 180:
+                 TRKX2   detail 2x1, 292, exact
+                 TRKX22  detail 2x2, 158, exact
+                 TRKX2F  TRKX2 PAGE-FLIPPED: no
+                         tearing, twice the decode,
+                         22 of 360 frames cut
+                 TRKX22F TRKX22 page-flipped, exact
+               The 25 fps and full-detail Mode X cuts
+               are on the previous disk
+
+Each is sized to its source's SHAPE on that screen:
+on Hercules a 4:3 video is 400 x 193 and a 16:9 one
+400 x 145 - both play IN THE WINDOW - and on CGA they
+are 640 x 200 and 640 x 150 (full screen). The sound
+is 8-bit at 11 kHz. Every clip was made for the
+"5150-st225" profile: at most 60,000 bytes a second
+off the disk, decoding at most half the machine on
+average and 85% in any one frame. What a frame could
+not afford is finished in the frames after it.
+
+WHAT TO LOOK FOR
+  - no pauses and no sound drop-outs, fullscreen or
+    in the window
+  - how each reads: Bad Apple is black and white
+    already; Trackmania is grey on grey, which is
+    the hard case for one bit a pixel
+  - smearing after a scene cut: how many frames the
+    picture takes to catch up
+
+HOW THEY WERE MADE (the videos never enter the tree)
+  os88venc.py BadApple.mp4 BAPPLE.V88 --preset herc
+  os88venc.py BadCarrot.mp4 BCARROT.V88 --preset herc
+  os88venc.py Trackmania.mp4 TRACK.V88 --preset herc
+      --start 3 --end 15
+  ...and --preset cga for the CGA disk.

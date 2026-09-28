@@ -162,8 +162,8 @@ SC_SBIDLE   equ SB_IDLE
 
 ; --- NO ASSOCIATION BLOCK, AND THAT IS THE POINT (SPEC.md 54/68.4/88.2) ------
 ; Word declares .DOC. If SCRIBE declared it too, the winner on a disk holding
-; both would be whichever registered LAST: kernel/assoc.inc's assoc_ext_new
-; path ends in `mov [bx+3], dl`, which OVERWRITES the row's app index rather
+; both would be whichever registered LAST: kernel/assoc.inc's assoc_point
+; ends in `mov [bx+3], dl`, which OVERWRITES the row's app index rather
 ; than refusing the second claim. So the owner of a double-click would be
 ; decided by directory order, silently, and would move when a disk was
 ; rebuilt. An extension has one owner.

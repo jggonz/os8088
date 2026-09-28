@@ -2676,16 +2676,17 @@ hbm_extat:
     cmp [cs:hbm_xskip], dx
     jb .here                    ; the part starts inside this cluster
     sub [cs:hbm_xskip], dx      ; ...or past it: step over, reading nothing
-    jmp short .next
-.here:
+    jmp .next                   ; (near: SPEC.md 18.7.5's high word took the
+.here:                          ; short one out of reach)
     mov ax, si
     mov bp, dsk_clus2lba_x
     call COLD_SEG:wm_cbd        ; AX = its first LBA, volume-relative
     jc .bad
     add ax, [cs:hbm_xskip]      ; ...plus however far in the part starts
+    mov bx, [dsk_c2hi]          ; ...in 32 bits: the volume-relative LBA's own
+    adc bx, 0                   ; high word (SPEC.md 18.7.5)
     sub dx, [cs:hbm_xskip]      ; DX = sectors of this cluster we want
     mov word [cs:hbm_xskip], 0
-    xor bx, bx
     add ax, [hb_base]           ; DX:AX would be the absolute LBA, and the
     adc bx, [hb_base + 2]       ; high half is BX because DX is in use
     cmp dx, [cs:hbm_xtake]
@@ -2821,7 +2822,7 @@ hbm_extents:
     mov bp, dsk_clus2lba_x
     call COLD_SEG:wm_cbd  ; AX = its first LBA, volume-relative
     jc .bad
-    xor dx, dx
+    mov dx, [dsk_c2hi]          ; ...and its high word (SPEC.md 18.7.5)
     add ax, [hb_base]
     adc dx, [hb_base + 2]       ; DX:AX = absolute
     mov bl, [dsk_spc]
@@ -3078,6 +3079,9 @@ hbm_wake:
     mov bp, dsk_rah_flush
     call COLD_SEG:wm_cbd
     mov word [mem_pinseg], 0    ; dsk_xfer's pin, mid-transfer in the image
+%ifdef OS88_BIGVOL
+    mov word [dsk_lbahi], 0     ; ...and its LBA's high word, which only its
+%endif                          ; .out spends (SPEC.md 18.7.5)
     ; ...AND THE EXTENT LIST THE PICTURE WAS TAKEN OVER (SPEC.md 87.6.1).
     ; `mem_pinseg` one level up: a word that was true of the machine that
     ; wrote the image and is meaningless in the machine that reads it - except

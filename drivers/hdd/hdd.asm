@@ -519,14 +519,17 @@ hd_geom_store:
 
 ; -----------------------------------------------------------------------------
 ; hd_blk - DSV_BLK
-; in:  AL = 0 read / 1 write, AH = our volume handle, SI = the VOLUME-RELATIVE
-;      LBA, CX = sectors, DX:BX = the buffer
+; in:  AL = 0 read / 1 write, AH = our volume handle, DI:SI = the
+;      VOLUME-RELATIVE LBA (DI the high word, SPEC.md 18.7.5), CX = sectors,
+;      DX:BX = the buffer
 ; out: CF = 0 done; CF = 1 and AL = an int 13h status byte
 ; clobbers: AX (the output), flags
 ;
 ; The whole of what "partitions" means to os8088 is the addition below: the
-; kernel hands a 16-bit volume-relative LBA and this adds the partition's
-; 32-bit base. Everything above it - the FAT, the directory, the write path -
+; kernel hands a volume-relative LBA and this adds the partition's 32-bit
+; base. The LBA was 16 bits until SPEC.md 18.7.5, and a kernel that predates
+; it leaves DI = the low word - which this must never meet, the two shipping
+; together. Everything above it - the FAT, the directory, the write path -
 ; is the floppy's code, unchanged.
 ; -----------------------------------------------------------------------------
 hd_blk:
@@ -539,7 +542,8 @@ hd_blk:
     push di
     push bp
     push es
-
+    mov bp, di                  ; the LBA's high word (SPEC.md 18.7.5), before
+                                ; DI becomes the volume row below
     mov [hd_bseg], dx
     mov [hd_bofs], bx
     mov [hd_bcnt], cx
@@ -550,9 +554,20 @@ hd_blk:
     jc .bad
     mov di, bx
 
-    mov ax, si                  ; the 32-bit LBA: base + volume-relative
-    xor dx, dx
-    add ax, [di+HDV_BASE]
+    mov ax, si                  ; the transfer's END, volume-relative, against
+    mov dx, bp                  ; the partition's length: past 32MB the kernel
+    add ax, cx                  ; was told 'unknown' and its rule 13 bounds
+    adc dx, 0                   ; nothing, so a BPB that overstates its size
+    jc .bad                     ; would reach the NEXT partition - this is the
+    cmp dx, [di+HDV_LEN+2]      ; one party that knows where it ends
+    ja .bad                     ; (SPEC.md 18.7.5)
+    jb .inlen
+    cmp ax, [di+HDV_LEN]
+    ja .bad
+.inlen:
+    mov ax, si                  ; the 32-bit LBA: base + volume-relative, whose
+    mov dx, bp                  ; HIGH word the kernel hands in DI (SPEC.md
+    add ax, [di+HDV_BASE]       ; 18.7.5) - banked in BP at the top
     adc dx, [di+HDV_BASE+2]
     mov [hd_lba], ax
     mov [hd_lba+2], dx
@@ -572,7 +587,8 @@ hd_blk:
     jmp short .out
 .bad:
     mov al, 0x04                ; "sector not found": the honest answer for a
-.fail:                          ; handle that names no volume
+.fail:                          ; handle that names no volume, and for a
+                                ; sector past the partition's end
     stc
 .out:
     pop es

@@ -18,7 +18,7 @@ the same edit went wrong once before - the comment records that taking the
 package off the disk lists took it out of every BUILD too, because APPS_GAMES
 was the only thing that had ever named it.
 
-TWO KINDS, AND `retired` IS CHECKED HARDER THAN `instrument` (SPEC.md 20.16):
+THREE KINDS; `retired` AND `local` ARE CHECKED HARDER THAN `instrument` (SPEC.md 20.16):
 
   * `retired`    a failure. It may not be on any shipped image, may not be in
                  the live payload, and `all` may not even build it. Its source
@@ -27,6 +27,8 @@ TWO KINDS, AND `retired` IS CHECKED HARDER THAN `instrument` (SPEC.md 20.16):
   * `instrument` a bench or a gate that happens to be a package. `all` MAY
                  build it, because keeping it assembling is usually the point,
                  but no shipped image may carry it.
+  * `local`      an application requiring user-supplied assets. Standalone
+                 builds work; standard images, live media and `all` omit it.
 
 THE LIVE PAYLOAD IS READ FROM build/livepayload.txt, which `all` emits from
 $(LIVEARGS) itself - the same file tests/unit/t_livefull.py reads, and for the
@@ -58,12 +60,12 @@ from t_image import Vol, read                             # noqa: E402
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "..", ".."))
 REGISTRY = os.path.join(ROOT, "apps", "RETIRED.txt")
-PKG_STEM = {"pixelstein": "pxstein"}     # apps/<dir> -> build/<stem>.o88 when they differ
+PKG_STEM = {"pixelstein": "pxstein", "drmario": "drmarco"}  # apps/<dir> -> build/<stem>.o88
 BUILD = os.path.join(ROOT, "build")
 MAKEFILE = os.path.join(ROOT, "Makefile")
 LIVEPAYLOAD = os.path.join(BUILD, "livepayload.txt")
 
-KINDS = ("retired", "instrument")
+KINDS = ("retired", "instrument", "local")
 
 # The SHIPPED images, and nothing else: an on-demand disk (zdisk, worddisk,
 # wiredisk, regapp360) is not a product, so an instrument riding one is
@@ -200,7 +202,7 @@ def main():
                   "apps/%s ships on no image and has no apps/RETIRED.txt line"
                   % pkg,
                   why="CLAUDE.md says everything in apps/ ships, so a package "
-                      "that does not needs a `retired` or `instrument` line "
+                      "that does not needs a `retired`, `instrument` or `local` line "
                       "saying so (SPEC.md 20.16). If it is meant to ship, a "
                       "disk list has lost it")
         else:
@@ -220,11 +222,11 @@ def main():
     check(m is not None, "cannot find the `all:` rule in the Makefile")
     allrule = m.group(1) if m else ""
     for kind, pkg, _ in rows:
-        if kind != "retired":
+        if kind not in ("retired", "local"):
             continue
         check("/%s.o88" % pkg not in allrule,
-              "`all` builds %s, which is retired" % pkg,
-              why="a retired package is built by `make %s` alone - keeping it "
+              "`all` builds %s, which is %s" % (pkg, kind),
+              why="this package is built by `make %s` alone - keeping it "
                   "in `all` charges every build for a program that ships "
                   "nowhere" % pkg)
 

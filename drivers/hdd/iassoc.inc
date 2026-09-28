@@ -47,8 +47,8 @@
 ASC_HDR      equ 16             ; magic 6 + version + napp + next + 7 reserved
 ASC_ROW      equ 88             ; stem 8 + size 2 + cluster 2 + 4 + icon 64 +
                                 ; the 8-byte document glyph (a VERSION 2 row,
-                                ; SPEC.md 54.3.2 - the kernel reads the
-                                ; 80-byte version 1 too; this writes only 2)
+                                ; SPEC.md 54.3.2 - the only version the
+                                ; kernel reads; version 1 is a cold cache)
 ASC_ROWCLUS  equ 10             ; the DIRECTORY the program lives in
 ASC_ROWICO   equ 16             ; ...the icon's offset inside a row
 ASC_ROWGLY   equ 80             ; ...and the glyph's: all zero = ships none

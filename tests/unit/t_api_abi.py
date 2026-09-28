@@ -203,6 +203,7 @@ ALIAS = {
     "OSAPI_FILE_APPEND":  "dskw_append",
     "OSAPI_FILE_READ_AT": "dskw_read_at",
     "OSAPI_FILE_WRITE_AT": "dskw_write_at",   # ...and its other half (18.4.7)
+    "OSAPI_FILE_READ_SEQ": "dskw_read_seq",   # ...and READ_AT with a cursor (18.4.8)
     "OSAPI_FILE_MKDIR":   "dskw_mkdir",
     "OSAPI_FILE_RMDIR":   "dskw_rmany",
     "OSAPI_TASK_SPAWN":   "inst_pkg_spawn",

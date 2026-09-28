@@ -88,8 +88,8 @@ def key(m, name):
         M.ui_done(m)
 
 
-def setup(m, points=5):
-    """Accept default two-player names/gravity and skip the optional dance."""
+def setup(m, points=5, music=''):
+    """Accept default names/gravity, choose music, and skip the optional dance."""
     p = m.gorillas_probe
     if p.b('state') == 4:
         key(m, 'Space')
@@ -103,6 +103,12 @@ def setup(m, points=5):
         key(m, 'Digit' + digit)
     key(m, 'Enter')
     wait(m, lambda: p.b('setupfield') == 4, 'gravity setup')
+    key(m, 'Enter')
+    wait(m, lambda: p.b('setupfield') == 5, 'music setup')
+    assert b'Gameplay music? Yes or No' in p.data('hudchars', 512)
+    assert b'M toggles music during gameplay' in p.data('hudchars', 512)
+    for ch in music:
+        key(m, 'Key' + ch.upper())
     key(m, 'Enter')
     wait(m, lambda: p.b('state') == 6, 'intro choice')
     key(m, 'KeyP')
@@ -294,6 +300,12 @@ def arm(tag, off, disk, out):
             wait(m, lambda: p.b('state') == 0, 'automatic round after fullscreen hit')
             assert p.b('field') == 0
             assert (p.w('angle'), p.w('power')) == (45, 70 if attempt == 0 else 1)
+        # state 0 is set when the automatic round BEGINS; its skyline paint
+        # follows (~1.4 s on VGA, PERFORMANCE.md), so a capture straight after
+        # the wait above raced it and, when it lost, compared the old city on
+        # the glass with the new one in `scene` - a missing "cyan building"
+        # that was really a paint still to come. Wait for the UI to be done.
+        M.ui_done(m)
         capture(m, p, out / (tag + '-restored.png'))
         ui.close(ui.window('Gorillas'))
         print('PASS', tag, 'input, per-player aim, terrain, pause, five rounds, fullscreen/restore, close', flush=True)

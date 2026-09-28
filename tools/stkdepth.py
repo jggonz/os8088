@@ -59,6 +59,7 @@ handler STAGED its reply instead of sending it inline" - and the answer, 140
 down to 126, is why that change was not worth making on its own.
 """
 import argparse
+import atexit
 import os
 import re
 import shutil
@@ -86,7 +87,12 @@ RET = re.compile(r"^\s*ret(f|n)?\b")
 
 
 def assemble(asm, includes):
+    # GONE AT EXIT: the callers read the listing and the map after this
+    # returns, so it cannot be a `with` - and a bare mkdtemp left ~2 MB a
+    # package in /tmp on every `make` (the stack-class rows run this), 25 GB
+    # of them in three days of one session before the disk filled
     d = tempfile.mkdtemp()
+    atexit.register(shutil.rmtree, d, True)
     src = os.path.join(d, "a.asm")
     mp = os.path.join(d, "a.map")
     lst = os.path.join(d, "a.lst")

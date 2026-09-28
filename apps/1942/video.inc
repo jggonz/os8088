@@ -1,5 +1,5 @@
 ; Adapter-native renderer. VGA latch restoration/page flipping; CGA packed runs.
-; All ports and foreign-mode stores are confined to the FSX bracket (SPEC 99).
+; All ports and foreign-mode stores are confined to the FSX bracket (SPEC 101).
 N_LIST_BYTES equ 1536
 N_BACK equ N_PAGE_BYTES*2
 N_CBUF equ 16384

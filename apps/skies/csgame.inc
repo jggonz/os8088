@@ -62,7 +62,14 @@ cs_fsx_main:
     call cs_clearall
     call cs_runway_build            ; the runway, from the record
     cmp byte [cs_inited], 0         ; the first flight starts on the runway;
-    jne .keep                       ; a later one carries on where it was
+    je .first                       ; a later one carries on where it was -
+    call cs_skipclr                 ; with every skip CLEARED, because a skip
+    jmp short .keep                 ; is a tick and the title page may have
+                                    ; stood for half an hour: one left over
+                                    ; from the last flight would read as still
+                                    ; in the future for 32,768 ticks after it
+                                    ; had passed (SPEC.md 88.5.2.4)
+.first:
     call cs_reset
 .keep:
     OS88_ALTENTER_SEED              ; the Alt+Enter (or Enter) that got us here

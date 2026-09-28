@@ -190,7 +190,7 @@ def main():
                     blink(m, p, code, tag)
                     keys = ('Digit0', 'Enter', 'Backspace', 'Enter',
                             'KeyA', 'Backspace', 'Enter', 'Enter',
-                            'Enter', 'Enter')
+                            'Enter', 'Enter', 'Enter')
                     values = []
                     for i, key in enumerate(keys):
                         values.append(measure(m, p, code, key, tag))
@@ -200,7 +200,7 @@ def main():
                             measure(m, p, code, 'KeyB', tag)
                             assert p.b('inputlen') == 10
                             assert p.data('input', 11) == b'a' * 10 + b'\0'
-                        if i in (1, 3, 4, 5, 6, 7, 8):
+                        if i in (1, 3, 4, 5, 6, 7, 8, 9):
                             blink(m, p, code, tag)
                     assert p.b('state') == 6 and (p.w('gwhole')*10 + p.w('gfrac')//100) == 98
                     label = tag + '-' + mode

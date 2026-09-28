@@ -210,6 +210,7 @@ VMXTSND := $(CURDIR)/vm/xt-sound
 VMXTSND144 := $(CURDIR)/vm/xt-sound-1.44
 VMXTWIRE := $(CURDIR)/vm/xt-wire
 VM286SND := $(CURDIR)/vm/286-sound
+VM286VID := $(CURDIR)/vm/286-video
 VM386SND := $(CURDIR)/vm/386-sound
 # The top of the range: a 486DX2/66 and a Pentium 133, both with an SB16.
 VM486 := $(CURDIR)/vm/486
@@ -1854,7 +1855,7 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
                              BOOTPROF STKDIAG BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG MOUROUND DOSRMARK FDDSLOW TRACKRUN SBDRAGOFF SBRATE SBRATE286 SBIDLE \
                              ETHPROF FTPDSLOW FTPDBG \
-                             KERN_SMALL KERN_EMU FSNOSTAMP THEMEDARK TITLESNAP SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL LDDIAG DRVDIAG BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK NOKDKBD VGADIRTY DLJUNK DPTROM COMPRESS NOKZIP,\
+                             KERN_SMALL KERN_EMU FSNOSTAMP THEMEDARK TITLESNAP SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL LDDIAG DRVDIAG BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOLIVESND NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK NOKDKBD VGADIRTY DLJUNK DPTROM COMPRESS NOKZIP,\
                              $(if $($(k)),$(k)=$($(k)))))
 # **A KNOB KERNEL IS NOT THE SHIPPED KERNEL, so KERN_BUDGET does not bind it**
 # (kernel.asm guard 1). It is built to answer a question about a machine and
@@ -1880,7 +1881,7 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
 # kern_emu carrying -DKERN_KNOB would SKIP guard 1 (the KERN_BUDGET footprint
 # check), so the one build that adds a feature would be the one build nothing
 # measured.
-ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% NOHEDGE=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
+ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% NOHEDGE=% NOLIVESND=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
 VIDDEF += -DKERN_KNOB
 endif
 
@@ -2015,7 +2016,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-wire \
         286-525-z 286-525-word 286-525-cword 286-525-runcpm 286-525-c64 \
         286-525-weave 286-525-loom 286-525-all \
-        286-sound 386-sound 486 pentium \
+        286-sound 286-video 386-sound 486 pentium \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
@@ -2048,7 +2049,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 WEAVEDEMOS := apps/weave/demos
 WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(SHIPIMGS) $(BUILD)/wire.o88 $(BUILD)/recorder.o88 \
-     $(BUILD)/hello.o88 \
+     $(BUILD)/hello.o88 $(BUILD)/video.o88 \
      $(BUILD)/imgtest.o88 $(BUILD)/scribe.o88 $(BUILD)/livepayload.txt \
      $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
      $(BUILD)/doscore.bin \
@@ -3157,6 +3158,21 @@ APPDATAFOLDER := --folder SYSTEM/APPDATA
 SYSLOGO := $(BUILD)/OS8088.GIF
 SYSLOGOARG := MEDIA:$(SYSLOGO)
 
+# ...and the logo VIDEO (VIDEO-PLAN 14.3, SPEC.md 98.3.10): a LIVE resident
+# file, a rendition per screen, that plays on the desktop and repeats. It is
+# COMMITTED rather than generated, which is the opposite of OS8088.GIF and
+# for a reason of its own: tools/os88logovid.py needs numpy, and a build
+# dependency for a file that changes when somebody redraws the logo is the
+# wrong trade (VIDEO-PLAN 14.7). Re-run that tool by hand; tests/vidlogo.py is
+# the gate. It rides MEDIA/ with VIDEO.O88 beside it in APPS/ on the system
+# disks of 720KB and up and on the live media, so every such boot volume
+# has something to play it with - and NEVER the 360KB system disk, the owner's
+# decision (VIDEO-PLAN 14.7, L8), which is a geometry with 7 clusters spare.
+# At 360KB it is on the MEDIA disk instead, and VIDEO.O88 on the apps disk.
+LOGOVID := apps/video/os8088.v88
+LOGOVIDARG := MEDIA:$(LOGOVID)
+SYSVIDARGS := $(LOGOVIDARG) APPS:$(BUILD)/video.o88
+
 $(SYSLOGO): tools/os88logo.py | $(BUILD)
 	python3 tools/os88logo.py -o $@
 
@@ -4000,11 +4016,11 @@ $(BUILD)/os88net.com: drivers/net/os88sfx.asm $(BUILD)/os88net.lz \
 	$(NASM) -f bin -w+error -I $(BUILD)/ -o $@ $<
 	@echo "os88net.com: $(call FILESIZE,$@) bytes packed - self-extracting, runs on DOS"
 
-$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
+$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
-		$(APPDATAFOLDER)
+		$(SYSVIDARGS) $(APPDATAFOLDER)
 
 # The 720KB 3.5" DD disk (SPEC.md 19). It is the geometry the machines
 # BETWEEN the two shipped ones have: an XT or AT fitted with a 3.5" DD drive,
@@ -4015,11 +4031,11 @@ $(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPP
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
-		$(APPDATAFOLDER)
+		$(SYSVIDARGS) $(APPDATAFOLDER)
 
 # The 1.2MB 5.25" HD disk (SPEC.md 19). The geometry of the machine the 720KB
 # note above describes from the other side: an AT-class box - 286 and up, or a
@@ -4042,11 +4058,11 @@ $(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(C
 # Its OWN boot sector, unlike the pair above it: 15 spt is a different track
 # shape, and boot/boot.asm's whole knowledge of a disk is SPT and HEADS. See
 # build/boot120.bin's rule for why that is three sectors and not four.
-$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
+$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 \
 		--boot $(BUILD)/boot120.bin --kernel $(KERNFILE) \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
-		$(APPDATAFOLDER)
+		$(SYSVIDARGS) $(APPDATAFOLDER)
 
 # ETHERTEST - the system disk with a SYSTEM.CFG that already asks for the
 # Ethernet driver (SPEC.md 72.9). Nothing is ticked by hand, which is what
@@ -4741,6 +4757,31 @@ $(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc apps/os88ui.inc \
 
 $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/hello.bin -o $@
+
+# VIDEO PLAYER (SPEC.md 98.3, docs/plans/VIDEO-PLAN.md), in $(APPS_TOOLS) - on
+# every apps disk, by the owner's decision - and in $(SMALLOMIT), because what
+# it plays through is kern_big's. No video ships beside it yet (the owner's
+# XDC streams are copyrighted; `make vidfieldhd` puts them on a hard disk for
+# the owner alone). tests/vidplay.py makes its own clip.
+# NOLIVESND=1 builds the player WITHOUT Live's sound (SPEC.md 98.3.10.1): a
+# Live play silent again, as it shipped first. It is the A/B, and the way to
+# ship without it should its bytes ever be wanted back - 231 when it landed.
+# NOHEDGE's shape: the player's own stamp, so flipping it rebuilds two files
+ifneq ($(NOLIVESND),)
+VPDEF += -DVP_NOLIVESND
+endif
+VPSTAMP := $(BUILD)/.vplayer-$(if $(NOLIVESND),nolivesnd,livesnd)
+$(shell mkdir -p $(BUILD); \
+        [ -f $(VPSTAMP) ] || { rm -f $(BUILD)/.vplayer-livesnd $(BUILD)/.vplayer-nolivesnd \
+                                      $(BUILD)/video.bin $(BUILD)/video.o88; \
+                                touch $(VPSTAMP); })
+$(BUILD)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88api.inc apps/os88alt.inc \
+                    apps/os88ui.inc $(VPSTAMP) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ $(VPDEF) -o $@ apps/video/video.asm
+	@echo "video:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/video.o88: $(BUILD)/video.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/video.bin -o $@
 
 # WIREFRAME (SPEC.md 78): a rotating solid drawn with nothing but
 # OSAPI_GFX_LINE, and a frame-rate readout, so 5.6.4.1's walk can be SEEN
@@ -6253,11 +6294,11 @@ $(BUILD)/dotdel.bin: $(DOTDEL_SRC) | $(BUILD)
 $(BUILD)/dotdel.o88: $(BUILD)/dotdel.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/dotdel.bin -o $@
 
-# GORILLAS (SPEC.md 98): native skyline artillery, all three adapters.
+# GORILLAS (SPEC.md 99): native skyline artillery, all three adapters.
 .PHONY: gorillas
 gorillas: $(BUILD)/gorillas.o88
 
-$(BUILD)/gorillas.bin: apps/gorillas/gorillas.asm apps/gorillas/grart.inc apps/gorillas/grfront.inc apps/gorillas/grdraw.inc apps/gorillas/grmusic.inc apps/gorillas/grai.inc apps/gorillas/grplay.inc apps/gorillas/grphysics.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc | $(BUILD)
+$(BUILD)/gorillas.bin: apps/gorillas/gorillas.asm apps/gorillas/grart.inc apps/gorillas/grfront.inc apps/gorillas/grdraw.inc apps/gorillas/grmusic.inc apps/gorillas/grbgm.inc apps/gorillas/grbgmdata.inc apps/gorillas/grai.inc apps/gorillas/grplay.inc apps/gorillas/grphysics.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/gorillas/ -o $@ apps/gorillas/gorillas.asm
 
 $(BUILD)/gorillas.o88: $(BUILD)/gorillas.bin tools/os88pkg.py $(PKGZSTAMP)
@@ -9659,6 +9700,305 @@ $(BUILD)/pxsbench.bin: tests/pxsbench/pxsbench.asm tests/benchlib.inc apps/os88a
 $(BUILD)/pxsbench.o88: $(BUILD)/pxsbench.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/pxsbench.bin -o $@
 
+# ...and the Video Player's wave 0 (docs/plans/VIDEO-PLAN.md 8): a video
+# frame decoded three ways - XDC's own program, and the plan's operand lists
+# through apps/video/vdec.inc native and translating - on each adapter,
+# in the mode the player would take. ON DEMAND ONLY and on no disk: its data
+# is built from XDC streams that are not in the tree, so tests/vidbench.py
+# makes VIDBENCH.DAT and a scratch floppy itself. `make vidbench` is the
+# package; `python3 tests/vidbench.py --samples DIR` is the run.
+.PHONY: vidbench
+vidbench: $(BUILD)/vidbench.o88
+
+$(BUILD)/vidbench.bin: tests/vidbench/vidbench.asm apps/video/vdec.inc tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/vidbench/vidbench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/vidbench/vidbench.asm
+	@echo "vidbench: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/vidbench.o88: $(BUILD)/vidbench.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/vidbench.bin -o $@
+
+# ...and wave 0 (b): streaming a 12.6 MB file off the fixed disk, and the
+# controller's own ceiling. tests/viddisk.py builds the VHD it runs on.
+vidbench: $(BUILD)/viddisk.o88
+
+$(BUILD)/viddisk.bin: tests/vidbench/viddisk.asm tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/vidbench/viddisk.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/vidbench/viddisk.asm
+	@echo "viddisk: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/viddisk.o88: $(BUILD)/viddisk.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/viddisk.bin -o $@
+
+# ...and wave 0 (c)(e): one interrupt a frame off the Sound Blaster, ADPCM4,
+# and how much of each frame a streaming disk leaves the interrupt.
+vidbench: $(BUILD)/vidsnd.o88
+
+$(BUILD)/vidsnd.bin: tests/vidbench/vidsnd.asm tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/vidbench/vidsnd.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/vidbench/vidsnd.asm
+	@echo "vidsnd: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/vidsnd.o88: $(BUILD)/vidsnd.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/vidsnd.bin -o $@
+
+# ...and wave 2's gate (VIDEO-PLAN 4.1-4.3): FSXF_RATE, the progress-box
+# fence and OSAPI_FILE_READ_SEQ, one package. tests/vidkern.py builds the VHD
+vidbench: $(BUILD)/vidkern.o88
+
+$(BUILD)/vidkern.bin: tests/vidkern/vidkern.asm tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/vidkern/vidkern.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/vidkern/vidkern.asm
+	@echo "vidkern: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/vidkern.o88: $(BUILD)/vidkern.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/vidkern.bin -o $@
+
+# ...and the three on ONE 360KB floppy for the owner's 5150 - wave 0's four
+# field questions (VIDEO-PLAN 8; docs/reports/VIDEO-W0-2026-09-25.md). The
+# frame file is cut from the owner's XDC streams, which are not in the tree,
+# so it needs XDCSAMPLES=<dir> (or $OS88_XDC_SAMPLES) and is never shipped:
+# the picks and one-construct frames tests/vidbench.py times, plus the three
+# frames that were OUR heaviest in the emulator
+XDCSAMPLES ?= $(OS88_XDC_SAMPLES)
+VIDFIELD_XDV = BADAPPLE THUNDERC TRONDISC BBBB_BW
+.PHONY: vidfield
+vidfield: $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88 tools/os88vid.py tools/os88disk.py tests/vidbench/FIELD.TXT
+	@test -n "$(XDCSAMPLES)" || { echo "vidfield: needs XDCSAMPLES=<dir of the XDC streams>"; exit 1; }
+	rm -rf $(BUILD)/vidfield && mkdir -p $(BUILD)/vidfield
+	python3 tools/os88vid.py benchdat --limit 194560 --synth \
+	    --extra BADAPPLE.XDV:3513 --extra TRONDISC.XDV:396 --extra THUNDERC.XDV:48 \
+	    $(BUILD)/vidfield/VIDBENCH.DAT $(foreach v,$(VIDFIELD_XDV),$(XDCSAMPLES)/$(v).XDV) >/dev/null
+	cp tests/vidbench/FIELD.TXT $(BUILD)/vidfield/README.TXT
+	python3 tools/os88disk.py -o $(BUILD)/vidfield360.img --size 360 \
+	    $(BUILD)/vidfield/README.TXT $(BUILD)/vidbench.o88 $(BUILD)/vidfield/VIDBENCH.DAT \
+	    $(BUILD)/vidsnd.o88 $(BUILD)/viddisk.o88
+	python3 tools/os88disk.py --verify $(BUILD)/vidfield360.img
+
+# ...and VIDDISK alone, with VIDSND, on a 360KB floppy that needs NOTHING from
+# outside the tree: for a machine nobody can copy 12 MB onto. VIDDISK's W
+# writes its own STREAM.DAT in C:'s root and R reads it back from there, so
+# the one number VIDEO-PLAN 15.8 is missing - the ST-225's streaming rate -
+# is a floppy, two keys and a wait. tests/viddisk.py --floppy is its gate
+.PHONY: viddisk360
+viddisk360: $(BUILD)/viddisk360.img
+$(BUILD)/viddisk360.img: $(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88 tests/vidbench/FIELDDISK.TXT tools/os88disk.py
+	rm -rf $(BUILD)/viddisk360 && mkdir -p $(BUILD)/viddisk360
+	cp tests/vidbench/FIELDDISK.TXT $(BUILD)/viddisk360/README.TXT
+	python3 tools/os88disk.py -o $@ --size 360 \
+	    $(BUILD)/viddisk360/README.TXT $(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88
+	python3 tools/os88disk.py --verify $@
+
+# ...and the same benches, the player and the owner's LONG videos on a
+# bootable fixed disk for the PicoMEM machine, which boots a .vhd, and for
+# 86Box (docs/FIELD-MACHINES.md). Each bench SAVES its report as a .TXT beside
+# itself (benchlib's bl_save). XDCSAMPLES, as above: the videos are the
+# owner's and never leave build/. EIGHT images, two layouts on four disks:
+#   VIDHERC / VIDCGA          615/4/26 (RLL, and MartyPC's XT-IDE), 31 MB,
+#                             all five videos
+#   VIDHERC-MFM / VIDCGA-MFM  615/4/17 - an ST-225 on the IBM/Xebec MFM card,
+#                             vm/xt-mfm's configuration, 20 MB, so THUNDERC
+#                             (6 MB) is left off
+#   VIDHERC-ST11R / VIDCGA-ST11R  an ST-238R on a Seagate ST11R: 615/4/26
+#                             with the card's own record in cylinder 0 and the
+#                             volume a cylinder in (os88hdd.py --st11, read off
+#                             a disk that card formatted in 86Box). All five
+#   VIDHERC-ST11M / VIDCGA-ST11M  an ST-225 on a Seagate ST11M - the owner's
+#                             5150 - the same record and layout at 615/4/17,
+#                             read off an ST11M-formatted disk. No THUNDERC
+# Hercules layout on the one, CGA 640x200 (which a VGA plays too, SPEC.md
+# 98.3) on the other: five videos are ~24 MB in one layout.
+VIDHD_XDV = BADAPPLE THUNDERC TRONDISC BBBB_BW BBBBCOMP
+VIDHD_MFM_XDV = BADAPPLE TRONDISC BBBB_BW BBBBCOMP
+# ...and two with their sound as ADPCM4 (SPEC.md 98.1.1.1), for a card to
+# decode: TRONDISC's and BBBB_BW's chunks are even, BADAPPLE's is not.
+# TRONDA4 is 4 MB, so the 20 MB MFM disks carry BBBBA4 alone
+VIDHD_A4 = TRONDISC:TRONDA4 BBBB_BW:BBBBA4
+VIDHD_MFM_A4 = BBBBA4
+VIDHD_A4N = $(foreach va,$(VIDHD_A4),$(lastword $(subst :, ,$(va))))
+VIDHD_TEMPLATE = $(BUILD)/martypc/run/media/hdds/default_xtide.vhd
+VIDHD_BASE = $(BUILD)/kernel.sys $(BUILD)/boothd.bin $(BUILD)/mbr.bin \
+	$(BUILD)/hdd.drv $(BUILD)/hiber.drv $(BUILD)/ctrl.drv $(BUILD)/sound.drv \
+	$(BUILD)/video.o88 $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 \
+	$(BUILD)/vidsnd.o88 $(BUILD)/vidkern.o88
+# $(call vidhd_img,<out>,<layout dir>,<spt>,<videos>[,<more os88hdd flags>])
+define vidhd_img
+	python3 tools/os88hdd.py --template $(VIDHD_TEMPLATE) --out $(1) $(5) \
+	    --spt $(3) --heads 4 --cyls 615 --kernel $(BUILD)/kernel.sys \
+	    --vbr $(BUILD)/boothd.bin --mbr $(BUILD)/mbr.bin \
+	    --file HDD.DRV=$(BUILD)/hdd.drv --file HIBER.DRV=$(BUILD)/hiber.drv \
+	    --file CTRL.DRV=$(BUILD)/ctrl.drv --file SOUND.DRV=$(BUILD)/sound.drv \
+	    --file README.TXT=$(BUILD)/vidhd/README.TXT \
+	    --file VIDEO.O88=$(BUILD)/video.o88 \
+	    --file VIDBENCH.O88=$(BUILD)/vidbench.o88 \
+	    --file VIDBENCH.DAT=$(BUILD)/vidhd/VIDBENCH.DAT \
+	    --file VIDDISK.O88=$(BUILD)/viddisk.o88 \
+	    --file VIDSND.O88=$(BUILD)/vidsnd.o88 \
+	    --file VIDKERN.O88=$(BUILD)/vidkern.o88 \
+	    --file FENCE.DAT=$(BUILD)/vidhd/FENCE.DAT \
+	    $(foreach v,$(4),--file $(v).V88=$(BUILD)/vidhd/$(2)/$(v).V88)
+
+endef
+.PHONY: vidfieldhd
+vidfieldhd: $(VIDHD_BASE) tools/os88vid.py tools/os88hdd.py tests/vidbench/FIELDHD.TXT
+	@test -n "$(XDCSAMPLES)" || { echo "vidfieldhd: needs XDCSAMPLES=<dir of the XDC streams>"; exit 1; }
+	@test -f $(VIDHD_TEMPLATE) || { echo "vidfieldhd: needs $(VIDHD_TEMPLATE) - run make marty"; exit 1; }
+	rm -rf $(BUILD)/vidhd && mkdir -p $(BUILD)/vidhd/herc $(BUILD)/vidhd/cga
+	python3 tools/os88vid.py benchdat --limit 194560 --synth \
+	    --extra BADAPPLE.XDV:3513 --extra TRONDISC.XDV:396 --extra THUNDERC.XDV:48 \
+	    $(BUILD)/vidhd/VIDBENCH.DAT $(foreach v,$(VIDFIELD_XDV),$(XDCSAMPLES)/$(v).XDV) >/dev/null
+	python3 -c "open('$(BUILD)/vidhd/FENCE.DAT','wb').write(bytes(range(256))*32)"
+	cp tests/vidbench/FIELDHD.TXT $(BUILD)/vidhd/README.TXT
+	for t in herc cga; do \
+	    for v in $(VIDHD_XDV); do \
+	        python3 tools/os88vid.py import --target $$t $(XDCSAMPLES)/$$v.XDV \
+	            $(BUILD)/vidhd/$$t/$$v.V88 >/dev/null || exit 1; \
+	    done; \
+	    for va in $(VIDHD_A4); do \
+	        python3 tools/os88vid.py import --target $$t --audio adpcm4 \
+	            $(XDCSAMPLES)/$${va%%:*}.XDV \
+	            $(BUILD)/vidhd/$$t/$${va##*:}.V88 >/dev/null || exit 1; \
+	    done; \
+	done
+	$(call vidhd_img,$(BUILD)/VIDHERC.VHD,herc,26,$(VIDHD_XDV) $(VIDHD_A4N))
+	$(call vidhd_img,$(BUILD)/VIDCGA.VHD,cga,26,$(VIDHD_XDV) $(VIDHD_A4N))
+	$(call vidhd_img,$(BUILD)/VIDHERC-MFM.VHD,herc,17,$(VIDHD_MFM_XDV) $(VIDHD_MFM_A4))
+	$(call vidhd_img,$(BUILD)/VIDCGA-MFM.VHD,cga,17,$(VIDHD_MFM_XDV) $(VIDHD_MFM_A4))
+	$(call vidhd_img,$(BUILD)/VIDHERC-ST11R.VHD,herc,26,$(VIDHD_XDV) $(VIDHD_A4N),--st11)
+	$(call vidhd_img,$(BUILD)/VIDCGA-ST11R.VHD,cga,26,$(VIDHD_XDV) $(VIDHD_A4N),--st11)
+	$(call vidhd_img,$(BUILD)/VIDHERC-ST11M.VHD,herc,17,$(VIDHD_MFM_XDV) $(VIDHD_MFM_A4),--st11)
+	$(call vidhd_img,$(BUILD)/VIDCGA-ST11M.VHD,cga,17,$(VIDHD_MFM_XDV) $(VIDHD_MFM_A4),--st11)
+	@ls -l $(BUILD)/VID*.VHD
+
+# THE ENCODER'S CLIPS on the same disks (SPEC.md 98.2.1). VIDENC=<dir> holds
+# herc/*.V88 and cga/*.V88 made by tools/os88venc.py from the owner's own
+# videos, which never leave build/ - tests/vidbench/FIELDENC.TXT has the
+# commands. THREE images: the Hercules set on the owner's 5150 (ST11M,
+# 615/4/17, 20 MB) and both sets on the ST11R's 31 MB for 86Box - and a
+# FOURTH when there is a vga/: the 286's IDE disk. The three XT disks are
+# the player and the clips; the 286's carries the four benches as well when
+# vidfieldhd has left their data in build/vidhd/ (it comes from the owner's
+# XDC samples), so a 286 on IDE can be measured off the disk it plays from.
+VIDENC_BASE = $(BUILD)/kernel.sys $(BUILD)/boothd.bin $(BUILD)/mbr.bin \
+	$(BUILD)/hdd.drv $(BUILD)/hiber.drv $(BUILD)/ctrl.drv $(BUILD)/sound.drv \
+	$(BUILD)/video.o88
+# ...and, when VIDENC has a vga/, a 286's IDE disk (vm/286-video), 17
+# sectors and 15 heads like the owner's own, sized in cylinders here
+VIDENC_VGA_CYLS ?= 250
+# $(call videnc_img,<out>,<spt>,<layout dir>)
+define videnc_img
+	python3 tools/os88hdd.py --template $(VIDHD_TEMPLATE) --out $(1) --st11 \
+	    --spt $(2) --heads 4 --cyls 615 --kernel $(BUILD)/kernel.sys \
+	    --vbr $(BUILD)/boothd.bin --mbr $(BUILD)/mbr.bin \
+	    --file HDD.DRV=$(BUILD)/hdd.drv --file HIBER.DRV=$(BUILD)/hiber.drv \
+	    --file CTRL.DRV=$(BUILD)/ctrl.drv --file SOUND.DRV=$(BUILD)/sound.drv \
+	    --file README.TXT=tests/vidbench/FIELDENC.TXT \
+	    --file VIDEO.O88=$(BUILD)/video.o88 \
+	    $(foreach v,$(wildcard $(VIDENC)/$(3)/*.V88),--file $(notdir $(v))=$(v))
+
+endef
+.PHONY: videnchd
+videnchd: $(VIDENC_BASE) $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 \
+	$(BUILD)/vidsnd.o88 $(BUILD)/vidkern.o88 tools/os88hdd.py \
+	tests/vidbench/FIELDENC.TXT
+	@test -n "$(VIDENC)" || { echo "videnchd: needs VIDENC=<dir with herc/ and cga/ of .V88s>"; exit 1; }
+	@test -f $(VIDHD_TEMPLATE) || { echo "videnchd: needs $(VIDHD_TEMPLATE) - run make marty"; exit 1; }
+	$(call videnc_img,$(BUILD)/VIDENC-HERC-ST11M.VHD,17,herc)
+	$(call videnc_img,$(BUILD)/VIDENC-HERC-ST11R.VHD,26,herc)
+	$(call videnc_img,$(BUILD)/VIDENC-CGA-ST11R.VHD,26,cga)
+	@if [ -d $(VIDENC)/vga ]; then \
+	    python3 tools/os88hdd.py --template $(VIDHD_TEMPLATE) \
+	        --out $(BUILD)/VIDENC-VGA-286.VHD --spt 17 --heads 15 \
+	        --cyls $(VIDENC_VGA_CYLS) --kernel $(BUILD)/kernel.sys \
+	        --vbr $(BUILD)/boothd.bin --mbr $(BUILD)/mbr.bin \
+	        --file HDD.DRV=$(BUILD)/hdd.drv --file HIBER.DRV=$(BUILD)/hiber.drv \
+	        --file CTRL.DRV=$(BUILD)/ctrl.drv --file SOUND.DRV=$(BUILD)/sound.drv \
+	        --file README.TXT=tests/vidbench/FIELDENC.TXT \
+	        --file VIDEO.O88=$(BUILD)/video.o88 \
+	        $(foreach v,$(wildcard $(VIDENC)/vga/*.V88),--file $(notdir $(v))=$(v)) \
+	        $$(if [ -f $(BUILD)/vidhd/VIDBENCH.DAT ]; then \
+	            echo --file VIDBENCH.O88=$(BUILD)/vidbench.o88 \
+	                 --file VIDBENCH.DAT=$(BUILD)/vidhd/VIDBENCH.DAT \
+	                 --file VIDDISK.O88=$(BUILD)/viddisk.o88 \
+	                 --file VIDSND.O88=$(BUILD)/vidsnd.o88 \
+	                 --file VIDKERN.O88=$(BUILD)/vidkern.o88 \
+	                 --file FENCE.DAT=$(BUILD)/vidhd/FENCE.DAT; fi) \
+	        || exit 1; \
+	fi
+	@ls -l $(BUILD)/VIDENC-*.VHD
+
+# THE DEMO VIDEO DISKS (SPEC.md 98.5): a whole os8088 install on a hard disk
+# with the demo videos in MEDIA/ beside a 00-VIDS.TXT that describes them -
+# what to put in a machine to show the player off. The videos are COMMITTED,
+# under apps/video/demo/<adapter>/, one directory an adapter; this makes a
+# disk of each directory that exists.
+#
+# THE INSTALL IS DERIVED, not listed: the 1.44MB system disk's payload and
+# the 1.44MB apps disk's, with the packages both carry once ($(sort) - their
+# spellings are identical), so a package added to either is on these disks
+# with nobody remembering it here. The apps list's --folder pair comes out
+# of the sort and goes ahead of the files, where argparse wants an option.
+# NO SYSTEM.CFG: the disk boots on the defaults, the sound card mounted when
+# there is one, and a machine's settings are its owner's (the owner's rule).
+#
+# THE DISK is an ST-238R on a Seagate ST11R (615/4/26, 31 MB) for 86Box's
+# 8088s: os88disk.py builds the volume for the 613 cylinders the card hands
+# the BIOS - the partition os8088's own installer makes, from LBA 26 for
+# 63,726 sectors - and os88hdd.py --wrap puts it under the card's hidden
+# cylinder and a VHD footer. On demand: 31 MB of video is no part of `all`.
+VIDDEMO_ADAPTERS := $(notdir $(patsubst %/,%,$(sort $(dir $(wildcard apps/video/demo/*/00-VIDS.TXT)))))
+VIDDEMO_IMGS := $(foreach a,$(VIDDEMO_ADAPTERS),$(BUILD)/VIDDEMO-$(shell echo $(a) | tr a-z A-Z)-ST11R.VHD)
+# (= and $$(APPS) below, not :=: the apps disk's lists are defined further
+# down this file, and an immediate expansion here took them as EMPTY)
+VIDDEMO_INSTALL = $(DRIVERS) $(SYSDOC) \
+	$(sort $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSLOGOARG) \
+	       $(FACESARG) $(SYSVIDARGS) \
+	       $(filter-out --folder SYSTEM/APPDATA,$(APPSARGS)))
+.PHONY: viddemo
+viddemo: $(VIDDEMO_IMGS)
+	@ls -l $(VIDDEMO_IMGS)
+
+# the text, held to Note Pad's rules and given CRLF, as README.TXT is
+.PRECIOUS: $(BUILD)/viddemo/%/00-VIDS.TXT
+$(BUILD)/viddemo/%/00-VIDS.TXT: apps/video/demo/%/00-VIDS.TXT tools/checkreadme.py
+	@mkdir -p $(dir $@)
+	python3 tools/checkreadme.py $<
+	python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); \
+		open(sys.argv[2], 'wb').write(d.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))" \
+		$< $@
+
+.SECONDEXPANSION:
+$(BUILD)/VIDDEMO-%-ST11R.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
+	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
+	$(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 $$(APPS) \
+	$$(BUILD)/viddemo/$$(shell echo $$* | tr A-Z a-z)/00-VIDS.TXT \
+	$$(wildcard apps/video/demo/$$(shell echo $$* | tr A-Z a-z)/*.V88) \
+	tools/os88disk.py tools/os88hdd.py
+	python3 tools/os88disk.py -o $(BUILD)/viddemo/$*.img --hdd \
+		--geometry 613/4/26 --mbr $(BUILD)/mbr.bin \
+		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
+		$(VIDDEMO_INSTALL) \
+		$(addprefix MEDIA:,$(filter %/00-VIDS.TXT %.V88,$^))
+	python3 tools/os88disk.py --verify-hdd $(BUILD)/viddemo/$*.img
+	python3 tools/os88hdd.py --wrap $(BUILD)/viddemo/$*.img --st11 \
+		--cyls 615 --heads 4 --spt 26 --out $@
+	rm -f $(BUILD)/viddemo/$*.img
+
+# THE ENCODER FOR PEOPLE WITH NO os8088 TREE (SPEC.md 98.2.13): the window,
+# every tools/ module it imports or runs (tools/os88vbundle.py COMPUTES the
+# list, so it cannot go stale), VIDEO.O88 and a README, in one folder of one
+# deterministic zip. On demand; unpacked anywhere it encodes and makes disks,
+# its hard disks BOOTING off the kernel and drivers it carries in boot/.
+# `soak -k vencbundle` unpacks it outside the tree and uses it there.
+.PHONY: vencbundle
+vencbundle: $(BUILD)/os8088-encoder.zip
+# ...and the hard disk's BOOT files, so the bundle's hard disks boot: the
+# window's HD_BOOT and HD_WANT, which os88vbundle.py reads out of it
+VENCBOOT := $(addprefix $(BUILD)/,kernel.sys boothd.bin mbr.bin hdd.drv \
+                                  ctrl.drv sound.drv hiber.drv)
+$(BUILD)/os8088-encoder.zip: $(BUILD)/video.o88 $(VENCBOOT) tools/os88vbundle.py $(wildcard tools/os88*.py)
+	python3 tools/os88vbundle.py $@ --player $(BUILD)/video.o88 --boot $(BUILD)
+
 # ...and the one that shows a FACE rather than timing one: it draws the same
 # sentence through the kernel, through face 0, and through both of the
 # library's compose loops, so a screendump is the whole assertion (SPEC.md 6.5).
@@ -10034,7 +10374,13 @@ small: $(BUILD)/small360.img $(BUILD)/small.img
 SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
              $(BUILD)/thewire.o88 \
              $(BUILD)/tracker.o88 \
-             $(BUILD)/audio.o88 $(BUILD)/sheet.o88
+             $(BUILD)/audio.o88 $(BUILD)/sheet.o88 $(BUILD)/video.o88
+# VIDEO (SPEC.md 98.3) is a REQUIREMENT omission of the SOUND rows' kind: it
+# plays through FSXF_RATE (53.2.2) and OSAPI_FILE_READ_SEQ (18.4.8), and both
+# are kern_big's alone by the owner's decision (VIDEO-PLAN 4). On kern_small
+# the bracket refuses the flag and the read answers FERR_NAME, so the package
+# could open a file and never play it.
+#
 # DOT DELIRIUM WAS THE SECOND NAME HERE AND IS NOT ANY MORE (SPEC.md 24.5.5).
 # Its ground was *"kern_small carries no `gfx_blit1` body at all and this
 # renderer is that one call"* - true when it was written and made FALSE the
@@ -11104,7 +11450,8 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
-              $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88
+              $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
+              $(BUILD)/video.o88
 # MODPLUG.O88 IS RETIRED too (SPEC.md 56.15): Tracker's windowed face
 # (SPEC.md 45.21) is ModPlug's player done to the tree's standards, with the
 # playlist, the Repeat modes and the per-adapter faces carried over, so two
@@ -11509,7 +11856,7 @@ APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(AP
 # for the packages that followed it.
 APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
             $(addprefix GAMES:,$(APPS_GAMES)) \
-            $(addprefix MEDIA:,$(APPS_DATA)) \
+            $(addprefix MEDIA:,$(APPS_DATA)) $(LOGOVIDARG) \
             $(APPSYSARGS) \
             $(addprefix SYSTEM/DOS:,$(APPS_DOS)) \
             $(APPDATAFOLDER)
@@ -11541,15 +11888,15 @@ APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
 # is in the folder the Open dialog already opens on whichever disk is in the
 # drive (SPEC.md 38.10) - a user who swaps disks should not have to know that
 # this one keeps its module somewhere else.
-MEDIAARGS360 := $(addprefix MEDIA:,$(MEDIA_DISK_DATA))
+MEDIAARGS360 := $(addprefix MEDIA:,$(MEDIA_DISK_DATA)) $(LOGOVIDARG)
 
-$(APPSIMG): $(APPS) tools/os88disk.py
+$(APPSIMG): $(APPS) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS)
 
-$(APPSIMG120): $(APPS) tools/os88disk.py
+$(APPSIMG120): $(APPS) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS)
 
-$(APPSIMG720): $(APPS) tools/os88disk.py
+$(APPSIMG720): $(APPS) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(APPSARGS)
 
 $(APPSIMG360): $(APPS360) tools/os88disk.py
@@ -11568,7 +11915,7 @@ $(APPSIMG360): $(APPS360) tools/os88disk.py
 # disk to swap in would be a disk with a file the user already has. The rule
 # is the geometry's, not the disk's: a media disk exists exactly where the
 # apps disk had to drop the module, and 1.2MB is not such a geometry.
-$(MEDIAIMG360): $(MEDIA_DISK_DATA) tools/os88disk.py
+$(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(MEDIAARGS360) \
 		--folder SYSTEM/APPDATA
 
@@ -12059,7 +12406,7 @@ $(BUILD)/zcat/live/CATALOG.TXT: tools/getstories.py
 # disks carry it, so the Memory page's `Give DOS the whole machine` arm
 # (SPEC.md 96.36) is live on the live media too - a 26MB partition has none of
 # the 360KB cluster argument that made that a decision.
-LIVEARGS := $(DRIVERS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) $(ALLAPPSARGS) \
+LIVEARGS := $(DRIVERS) $(SYSDOC) $(SYSLOGOARG) $(LOGOVIDARG) $(FACESARG) $(ALLAPPSARGS) \
             $(LIVESYSARGS) $(LIVEPKGARGS) $(LIVESTORYARGS) $(SYSROOTARG)
 
 # ...and the live volume's own FOLDER COUNT, which is NOT $(ALLAPPSFOLDERS).
@@ -12098,7 +12445,7 @@ live: $(USBIMG) $(LIVEISO)
 # into. The GAMES are priced first and the master disk fills what is left,
 # which is RUNCPMIMG's order and is here for its reason.
 $(USBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
-           $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
+           $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(LOGOVID) $(FACES) $(FACELIC) \
            $(SYSAPPS) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
            $(BUILD)/zcat/live/CATALOG.TXT $(BUILD)/cpmsw.stamp \
            tools/getcpmsw.py tools/getstories.py \
@@ -12985,6 +13332,14 @@ xt-wire: $(BUILD)/ether360.img $(BUILD)/wiredata360.img
 	@$(UNPROTECT) $(VM286SND)/86box.cfg
 	$(BOX) -P $(VM286SND) -N
 
+# The owner's 286 (an mr286 at 16 MHz, 4 MB, OTI067 VGA, SB16) with the
+# Video Player's VGA disk on IDE and no floppy in A:, so it boots the disk:
+# `make videnchd VIDENC=<dir>` builds it (SPEC.md 98.2.1)
+286-video: $(APPSIMG)
+	@test -f $(BUILD)/VIDENC-VGA-286.VHD || { echo "286-video: needs $(BUILD)/VIDENC-VGA-286.VHD - make videnchd VIDENC=<dir with vga/>"; exit 1; }
+	@$(UNPROTECT) $(VM286VID)/86box.cfg
+	$(BOX) -P $(VM286VID) -N
+
 386-sound: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM386SND)/86box.cfg
 	$(BOX) -P $(VM386SND) -N
@@ -13344,3 +13699,48 @@ $(BUILD)/1942-360.img: $(N1942DISK) apps/1942/README.TXT tools/os88disk.py
 1942test: 1942disk $(BUILD)/os8088-360.img
 	python3 tests/n1942.py
 all: $(N1942DISK)
+
+# Native DrMarco. NES cell tiles remain local; original surround is committed.
+DRMARIO_SOURCE ?= ../NES-Games-Disassembly/Dr. Mario
+.PHONY: drmarco drmarcodisk drmario drmariodisk drmario-assets drmario-source-check
+drmario-source-check:
+drmario-assets: | $(BUILD)
+	python3 tools/drmario_assets.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
+	python3 tools/drmario_audio.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
+
+$(BUILD)/drmario-art/dm-tables.inc: tools/drmario_assets.py apps/drmario/art/drmarco-screen.png apps/drmario/art/drmarco-splash.png drmario-source-check | $(BUILD)
+	python3 tools/drmario_assets.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
+
+$(BUILD)/drmario-art/dm-music.inc: tools/drmario_audio.py drmario-source-check | $(BUILD)
+	python3 tools/drmario_audio.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
+
+# The graphics compiler emits these alongside dm-tables.inc; the phony source
+# check above refreshes the complete set, including a deleted side output.
+$(BUILD)/drmario-art/dm-anim-vga.inc $(BUILD)/drmario-art/dm-anim-cga.inc: $(BUILD)/drmario-art/dm-tables.inc
+
+$(BUILD)/drmario.bin: apps/drmario/drmario.asm apps/drmario/front.inc apps/drmario/audio.inc $(BUILD)/drmario-art/dm-music.inc $(BUILD)/drmario-art/dm-anim-vga.inc $(BUILD)/drmario-art/dm-anim-cga.inc apps/drmario/game.inc apps/drmario/video.inc apps/drmario/anim.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc $(BUILD)/drmario-art/dm-tables.inc
+	$(NASM) -f bin -w+error -I apps/ -I apps/drmario/ -I $(BUILD)/drmario-art/ -l $(BUILD)/drmario.lst -o $@ $<
+
+$(BUILD)/drmarco.o88: $(BUILD)/drmario.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+
+drmarco: $(BUILD)/drmarco.o88
+drmario: drmarco
+
+DM_FRONT_FILES := $(BUILD)/drmario-art/DRMARCO.VGA $(BUILD)/drmario-art/DRMARCO.CGA $(BUILD)/drmario-art/DRMARCO.HRC
+$(DM_FRONT_FILES): $(BUILD)/drmario-art/dm-tables.inc
+
+$(BUILD)/drmario.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_FILES)
+	python3 tools/os88disk.py -o $@ --size 1440 $^
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/drmario720.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_FILES)
+	python3 tools/os88disk.py -o $@ --size 720 $^
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/drmario120.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_FILES)
+	python3 tools/os88disk.py -o $@ --size 1200 $^
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/drmario360.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_FILES)
+	python3 tools/os88disk.py -o $@ --size 360 $^
+	python3 tools/os88disk.py --verify $@
+drmariodisk: drmarcodisk
+drmarcodisk: $(BUILD)/drmario.img $(BUILD)/drmario720.img $(BUILD)/drmario120.img $(BUILD)/drmario360.img

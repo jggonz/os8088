@@ -1407,6 +1407,20 @@ the artefacts are there by construction. And `os88fixture.make` passes
 worse than either. Their socket and pidfile stay under `build/` because the
 Makefile spells them literally, which is harmless: no `make` writes those.
 
+**A COMMIT is a different build too, and the freeze did not cover it until
+2026-09-27.** The kernel carries the commit count (SPEC.md 14.2), and
+`tools/buildnum.py` answered for the LIVE checkout's HEAD. A row that builds a
+declared artefact runs `make` in the tree hours after the freeze - so the
+first commit made while the whole soak ran put the tree's `kernel.bin` one
+build ahead of the images already in it, and `dispcold`, which compares the
+running kernel's `.cold` with the file's, reported one byte of damage at
+`mod_check+34`: the immediate of `cmp word [es:MOD_H_BUILD], BUILD_NUM`, 0xA7
+in memory against 0xA9 on disk. `os88soak.py start` now exports
+`$OS88_BUILDNUM`, the count it froze at, and `buildnum.py` honours it. **A
+SOURCE edit is still not frozen**: a row that rebuilds an artefact inside the
+tree assembles the live `kernel/`, so commit tools and tests freely while a
+soak runs and hold kernel edits until it ends.
+
 **What is still exposed, and it is the other direction.** The soak no longer
 minds the operator; the operator may still mind the soak. **Three** rows write
 `build/` — `buildmatrix`, `ctoolchain` and `fdlgthumb`, as §14.1 records. The

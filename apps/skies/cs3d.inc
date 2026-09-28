@@ -1103,8 +1103,25 @@ cs_consider:
     jz .out
 .tier:
     mov ax, [si + CSO_SKIP]         ; out of range last time by enough that
-    sub ax, [cs_last]               ; it cannot be back yet (88.5.2)
-    jg .out
+    or ax, ax                       ; it cannot be back yet (88.5.2) - and
+    jz .look                        ; ZERO IS "LOOK", TESTED AS ITSELF
+    sub ax, [cs_last]               ; (88.5.2.4). It is what a world ships
+    or ax, ax
+    jg .out                         ; with and what a reset writes, and
+    mov word [si + CSO_SKIP], 0     ; `0 - [cs_last]` is POSITIVE for half of
+.look:                              ; every 65,536 ticks: from 30 minutes of
+                                    ; uptime to 60 every object in the world
+                                    ; and the runway read as skipped, and the
+                                    ; view was a horizon and nothing else.
+                                    ; An EXPIRED skip goes back to zero for the
+                                    ; same reason - a tick left standing comes
+                                    ; round positive again 32,768 later.
+                                    ; The second `or` clears OF, so `jg` asks if
+                                    ; the skip is AHEAD of the tick: straight
+                                    ; off the `sub` it compared the two as
+                                    ; signed numbers, and a skip at 0x7FFE
+                                    ; read as ahead of a tick at 0x8002 for
+                                    ; the next hour
     mov ax, [si + CSO_X]            ; the world is 16-bit metres and so is
     sub ax, [cs_ex]                 ; the eye's whole part, so the difference
     jo .far                         ; fits a word unless the subtraction

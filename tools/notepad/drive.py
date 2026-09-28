@@ -19,6 +19,7 @@ ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 MARTY = os.path.join(ROOT, "tools", "os88marty.py")
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty as M                                       # noqa: E402
+from os88pkg import PKG_FMT                                 # noqa: E402
 
 # WHERE THE BENCH IS, written by start() and read by every command after it.
 # The lab is a boot-once-poke-many workflow - `lab.py boot`, then `lab.py
@@ -182,7 +183,7 @@ def pkg_present(m, name=b"NOTEPAD", lo=0x1000, hi=0xA000):
         except Exception:
             continue
         for i in range(0, len(data) - 32, 16):
-            if (data[i] == 0x4F and data[i + 1] == 0x38 and data[i + 2] == 3
+            if (data[i] == 0x4F and data[i + 1] == 0x38 and data[i + 2] == PKG_FMT
                     and bytes(data[i + 16:i + 32]).split(b"\0")[0] == name):
                 return True
     return False

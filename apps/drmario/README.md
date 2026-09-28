@@ -1,0 +1,241 @@
+# DrMarco for os8088
+
+A native 8086 single-player adaptation of Nintendo's Dr. Mario (1990), using
+the supplied NES disassembly as the gameplay reference and its capsule/virus
+tiles, with original generated DrMarco screen artwork. No NES CPU or PPU is
+emulated. The feature roadmap is [DRMARCO_PLAN.MD](../../DRMARCO_PLAN.MD).
+
+Build in this worktree:
+
+```
+make drmarco
+make drmarcodisk
+```
+
+The standalone disks are 360 KB, 720 KB, 1.2 MB and 1.44 MB. This application
+is registered as `local`: standard os8088 builds and release images do not
+require or redistribute the user-supplied NES assets.
+The previous `drmario` and `drmariodisk` commands remain aliases. Source folders,
+`DRMARIO_SOURCE`, and `build/drmario*.img` disk paths remain stable; the package
+is now `build/drmarco.o88` and appears on disk as `DRMARCO.O88`.
+
+The default reference directory is `../NES-Games-Disassembly/Dr. Mario`.
+Override it with `make drmarco DRMARIO_SOURCE='/path/to/Dr. Mario'`.
+The supplied reference is revision `df2c8e5`; the importer records SHA-256
+hashes of both inputs in `build/drmario-art/dm-source.txt`.
+NES graphics and music are imported into `build/drmario-art/`, never committed.
+`tools/drmario_audio.py` compiles the music; `dm-music.json` records its source
+hash and phrase counts.
+`make drmario-assets` refreshes the import. Open `DRMARCO.O88` from the generated
+application disk. Keep `DRMARCO.VGA`, `DRMARCO.CGA`, and `DRMARCO.HRC` beside it
+when copying the game: these supporting files contain the splash/help artwork.
+All four disk images include them. Gameplay assets and music remain embedded.
+
+The original doctor and laboratory surround are committed in
+[`art/drmarco-screen.png`](art/drmarco-screen.png), with the built-in imagegen
+prompt in [`art/PROMPT.md`](art/PROMPT.md). The compiler uses Pillow to resize
+and map this artwork to native palettes, then emits compact run-length streams
+for each VGA plane and CGA bank. The compiler adds a checkered backdrop and
+gold-edged clipboard panels with opaque black writing surfaces for the HUD
+and next capsule, plus matching title, status-prompt and control plaques.
+VGA uses navy checks; CGA uses red scanlines within alternate squares to
+soften the pattern without changing the capsule palette. These are drawn once on fullscreen entry or
+reentry; ordinary game frames do not decode the background. Static background
+previews are written to `build/drmario-art/drmarco-{vga,cga}-art.png`, with
+separate `dm-{vga,cga}-actor*-*.png` pose previews in the same directory.
+
+During play, bottle viruses wiggle and three original googly-eyed germs dance
+below DrMarco. Clearing a color makes its mascot dizzy; it disappears after
+the reaction if no viruses of that color remain. DrMarco blinks briefly about
+every five seconds while his portrait stays still. Pause freezes the animation
+clock and reactions; returning from the desktop restores the current poses.
+
+The compiler draws the geometric mascots and two tiny eye patches for the
+existing portrait. Animation uses native byte spans, four actor shadows and
+three extra bottle tiles. Each virus color advances every 24 ticks
+(about 0.44 seconds). The doctor clock runs every eight ticks: 32 beats open,
+one beat closed (about 0.15 seconds), with a 4.8-second blink cycle. Updates are
+staggered at four-tick intervals. Only eye pixels are overwritten; there is no
+head clearing or repositioning. Even and odd bottle rows update one tick apart
+to spread dense-board copies. These are deliberate native timings, inspired by the NES
+bank switch at $89C9 and color-specific reactions at $89D4–$8C27.
+The animation never consumes gameplay RNG or changes capsule/control timing.
+Capsule throws, timed placement and illustrated end panels remain roadmap work.
+
+The desktop opens with a capsule-logo splash, checkerboard and DrMarco/virus
+sprites. Title music plays while a top-to-bottom window-shade reveal uncovers
+the artwork. Controls appear before disk loading, and remain usable during
+the reveal. Level, speed and music keys repaint only the small settings row.
+Enter starts/resumes the game; H opens the illustrated help page,
+and H or Escape returns to the splash. The menu choices are clickable.
+VGA uses color artwork; CGA and Hercules use palette-boundary line drawings.
+Hercules supports splash/help and music; gameplay still requires VGA or CGA.
+The generated source and built-in imagegen prompt are in
+[`art/drmarco-splash.png`](art/drmarco-splash.png) and
+[`art/SPLASH_PROMPT.md`](art/SPLASH_PROMPT.md).
+
+The launcher selects level 0–20 with Left/Right and LOW/MED/HI speed
+with S, and FEVER / CHILL / OFF music with M. Enter, the Start choice, F or Alt+Enter
+enters fullscreen. Leaving fullscreen
+preserves the board; Enter resumes it. Changing setup discards the old board.
+
+- Left/Right: move; Down: faster fall.
+- Z/X: turn counterclockwise/clockwise; Up also turns clockwise.
+- P: pause; N: restart at the current level.
+- M: cycle FEVER / CHILL / OFF (also available in the launcher).
+- Enter after a clear: next level; Enter after game over: retry.
+- Escape or Alt+Enter: restore the desktop.
+
+Match at least four cells of one color horizontally or vertically. Viruses
+stay fixed; capsule halves remain connected until one is cleared. Loose pieces
+fall and can start cascades. Score counts cleared viruses with a multiplier
+for multiple viruses and for speed. The next capsule is always visible.
+
+VGA uses 320×240 Mode X with blue/red/yellow cells. CGA uses fullscreen
+320×200, black background and the bright green/red/yellow hardware palette;
+green represents the NES blue pieces. The three colors are distinct on RGB
+CGA; no composite monitor or programmable DAC is assumed. Other adapters
+can display the launcher but cannot play.
+
+Tiles are converted to native VGA planes and packed CGA bytes at build time.
+The font is cached from the OS at launch. A 128-byte shadow detects changed
+bottle cells, including the active capsule. Movement checks only its two old and two new
+cells; locks and cascades compare the whole bottle. VGA batches writes by plane, and
+CGA alternates banks while copying complete packed rows. Text compares cached
+characters. Frames with no gameplay or animation change write no video memory. No full framebuffer, heap,
+background worker or per-pixel game-loop drawing is needed.
+
+The reference capsule generator, color tables and speed curve are retained;
+timing rounds to os8088's 54.6 Hz fullscreen clock. Virus placement applies
+the source's level height and distance-two color exclusions, with a native
+random retry scheme. This is an adaptation, not a cycle-exact NES port:
+competitive multiplayer, attract scenes and endings are absent. See SPEC.md §100.
+
+Audio uses the OS sound service and its Control Panel sound selection. With
+`SOUND.DRV` loaded, AdLib and Sound Blaster play three FM music voices and a
+separate effect voice. Sound Blaster uses its OPL synthesizer; the game opens
+no PCM stream or DMA buffer. The PC speaker plays the lead melody, with effects
+briefly taking priority. Missing or busy FM channels fall back to the tone
+service. Music OFF keeps effects enabled.
+
+FM music uses a slightly softer hardware attack (rate 14 rather than 15)
+to reduce sharp note onsets. Effects keep their immediate attack. This adds
+no per-frame CPU work and uses the same timing on XT and faster machines.
+
+FEVER, CHILL, their stage-clear jingles, title/options and game-over music are
+local-reference arrangements, not original compositions. The build compiler
+walks all four NES channels to retain shared tempo/transposition changes,
+expands repeats and deduplicates note phrases. Native OPL patches replace NES
+envelopes and vibrato; noise/DPCM percussion is omitted. Effects are short native
+tonal arrangements for cursor, successful movement/rotation, landing, falling
+fragments, clears, speed increases and pause. Larger cues override movement;
+no sound blocks the game. Versus/attack and ending scenes remain roadmap work.
+
+Music advances with a fractional 60/54.6 clock, without replaying missed game
+frames. Pause freezes the music position and silences sustained notes; a short
+pause cue finishes independently. Exit stops audio and releases FM channels;
+reentry restores the saved melody. Title/options playback uses the existing
+window timer and stops when the launcher loses focus. Returning from fullscreen
+leaves the desktop silent until a setting is changed or play resumes.
+
+During steady gameplay, at most two FM note updates are issued per sequencer
+tick, including the effect
+voice. Simultaneous music changes are served in rotating order, so a third
+voice normally follows one frame later (at most two frames while effects also
+change). Pending notes are replaced by their current pitch, never accumulated.
+The speaker uses finite tone leases. There is no sample mixer, background task,
+new interrupt, heap claim or runtime NES interpreter. Decorative animation keeps
+its independent deterministic clock, including when music is off.
+
+
+Verification:
+
+```
+make drmarcodisk build/os8088-360.img
+python3 tests/drmario.py
+python3 tests/drmario.py --qemu-display
+python3 tests/drmario_front.py
+python3 tests/drmario_audio.py
+```
+
+The main gate runs actual 8088 code in MartyPC on VGA and CGA, checks every
+starting level, matches, cascades, connected gravity, rotation wall kicks,
+game over, level progression, held keys, short taps, pause, and mode restoration.
+It compares video memory with the source CHR pixels, verifies the embedded
+background decoder against the uncompressed art, checks that all character poses,
+the capsule preview and footer survive HUD updates, and requires incremental
+paints to equal full repaints. Animation fixtures cover per-color counts,
+reactions, disappearance, pause and unchanged board/RNG/sequence data.
+A corrupted pixel must fail the oracle.
+Use `--source /path/to/Dr. Mario` with a nondefault asset directory.
+The audio gate boots XT profiles with a speaker, an AdLib with no DSP, and a
+Sound Blaster. It checks pitches, effect priority, pause/resume, music selection,
+channel refusal/release, absence of PCM playback and bounded cycle costs.
+WAV captures and timing JSON go to `build/drmario-proof/audio-*`.
+The frontend gate checks VGA/CGA/Hercules artwork pixels, reveal timing,
+title music, help navigation, moved-window click targets and game restoration.
+It also verifies that settings keys never enter the artwork decoder and change
+no pixels outside the settings row, and that controls paint before resource I/O.
+For an independent import oracle, install `py65==1.2.0` in a test environment
+with Pillow and run `python3 tests/drmario_audio.py --reference-cpu`. It executes
+the original 6502 sequencer and checks every pitch/duration through three loops.
+
+Screenshots and timings are in `build/drmario-proof/`. The gate also writes
+`vga-dance.gif` and `cga-dance.gif` animation previews. MartyPC's display
+capture crops Mode X after the BIOS mode transition; the `*-native.png`
+images decode all video planes, and `vga-qemu.png` verifies the complete
+320×240 display using a second emulator. QEMU supplies no speed measurements.
+
+Measured in MartyPC at 4,772,727 Hz (2026-09-28):
+
+| Operation | VGA | CGA |
+|---|---:|---:|
+| Horizontal capsule move: renderer | 3.45–4.08 ms | 1.40–2.04 ms |
+| Idle renderer, minimum of eight samples | 0.035 ms | 0.035 ms |
+| Slowest setup across levels 0–20 | 40.28 ms | 40.29 ms |
+| Background decode, fullscreen entry only | 505.84 ms | 93.54 ms |
+| Doctor blink, maximum sampled | 0.89 ms | 0.42 ms |
+| Animation with 84 viruses, maximum sampled | 27.49 ms | 14.30 ms |
+
+Movement timings include changed-cell detection and video writes, and any
+interrupts during that call; keyboard delivery and the frame wait are excluded.
+The earlier whole-bottle comparison took 6.23 ms VGA and 4.19 ms CGA for the
+same move. These are emulator cycle measurements, not physical XT measurements.
+Animation costs include incremental rendering with a stationary capsule on the
+seeded level-20 stress board; they do not promise a locked 54.6 FPS redraw rate.
+The fullscreen font cache stores the 63 glyphs actually used by the game.
+VGA and CGA share its 4,032-byte native storage; it is rebuilt only on mode
+entry. This recovers space for music without adding work to capsule rendering.
+Fullscreen adds no allocation or framebuffer. The desktop holds one compressed
+splash/help resource in a movable claim. It borrows the idle fullscreen font
+cache for decoded bands and the game queue for clipped fallback rows; mode
+entry rebuilds the font cache. Background decoding still runs only when entering/reentering
+fullscreen.
+
+Audio measurements on the same 4.77 MHz XT model (256 ticks per tune):
+
+| Backend | FEVER mean / peak | CHILL mean / peak |
+|---|---:|---:|
+| PC speaker | 0.20 / 1.27 ms | 0.18 / 1.26 ms |
+| AdLib | 0.88 / 5.85 ms | 0.61 / 5.39 ms |
+| Sound Blaster FM | 0.88 / 6.06 ms | 0.60 / 5.38 ms |
+
+These include OS sound calls and any interrupts inside the bracket. A forced
+chord plus clear effect takes 4.74 ms with FM. Input, logic, a horizontal move
+and rendering, charged with the worst sampled SB audio cost, total 11.64 ms,
+within one 18.32 ms frame. Ordinary movement rendering remains 3.45/1.40 ms
+VGA/CGA. The existing dense animation peaks still span multiple frame periods;
+these measurements do not claim fixed 54.6 FPS on every animation frame or
+physical-hardware validation.
+
+The splash build uses 49,685 image + 6,648 BSS = 56,333 bytes, within the
+61,440-byte package limit. The compressed package is 25,550 bytes. Supporting
+VGA/CGA/Hercules artwork files are 26,947/5,139/10,112 bytes; only the current
+adapter's file is loaded. Music adds no framebuffer or kernel allocation.
+
+XT splash optimization (4.77 MHz emulator): settings handlers take about
+7–9 ms; the initial controls paint takes 57–85 ms before disk I/O. The reveal
+uses 12-row steps, down from 33 to 22 callbacks on VGA/Hercules and 17 to 11
+on CGA. Drawing is batched in the existing idle font cache using bounded REP
+copies. Repeated image rows share storage, reducing the VGA resource by 22%.
+These timings exclude application startup and physical floppy seek latency.

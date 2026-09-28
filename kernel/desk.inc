@@ -805,17 +805,16 @@ desk_learn_x:
     mov al, [bx+DV_FLAGS]
     test al, DVF_GUESS
     jz .out                     ; the drive said what it is
-    mov ah, al
-    or al, DVF_525
-    cmp word [disk_spt], 15
-    je .set
-    cmp word [dsk_totsec], 720
-    jbe .set
-    and al, ~DVF_525 & 0xFF
-.set:
-    cmp al, ah
-    je .out                     ; the guess was right - nothing to repaint
-    mov [bx+DV_FLAGS], al
+    cmp word [disk_spt], 15     ; AL becomes the bit that must FLIP: the
+    je .is525                   ; row's own DVF_525, complemented where the
+    cmp word [dsk_totsec], 720  ; medium says 5.25" - so it is 0 exactly when
+    ja .flip                    ; the guess was right, and the `and` that
+.is525:                         ; isolates it sets ZF on every path in
+    xor al, DVF_525
+.flip:
+    and al, DVF_525
+    jz .out                     ; the guess was right - nothing to repaint
+    xor [bx+DV_FLAGS], al
     call desk_zmark_x           ; the grid owes a repaint (SPEC.md 26.3)
 .out:
     pop bx
@@ -1219,12 +1218,12 @@ desk_zone_hilite:
     call desk_zone_rect         ; the DRAWN rect...
     add ax, DESK_ZOVER          ; ...less the label's overhang at each edge,
     sub cx, DESK_ZOVER          ; which is the HIT rect this one wants
-    call ct_cw_gfx_xor_fill          ; NOT a tail call any more, and it cannot
-    ret                         ; be: a cw_ shim ends in `retf`, so jumping to
-                                ; one pops this routine's NEAR return address
-                                ; as CS:IP and lands in the weeds. The cost is
-                                ; one `ret` - the frame still has nothing to
-                                ; restore (SPEC.md 2.6)
+    jmp ct_cw_gfx_xor_fill      ; A TAIL CALL AGAIN, and a safe one: it is
+                                ; the NEAR trampoline (SPEC.md 2.6.2), whose
+                                ; own `ret` is near. What must never be jumped
+                                ; to is a cw_ shim, which ends in `retf` and
+                                ; would pop this routine's NEAR return address
+                                ; as CS:IP - that is why this was a call
 
 ; -----------------------------------------------------------------------------
 ; desk_draw_zone - repaint one drive zone from scratch: gray desktop fill

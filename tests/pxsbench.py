@@ -44,7 +44,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))   # LAST, so it wins: tests/
                                     # bench could not build, wave 6)
 import pxssim, pxstab           # noqa: E402 - BEFORE cycweb, which puts
                                 # tests/ back at the head of sys.path
-import os88marty, os88mouse, os88sym, os88build, dispcp   # noqa: E402
+import os88marty, os88sym, os88build                          # noqa: E402
 from cycweb import pkg_syms, u16                               # noqa: E402
 import pxslib                   # noqa: E402 - B: and the watched launch, shared
 
@@ -123,24 +123,14 @@ def host_crossings():
     return out
 
 
-def open_bench(m, mo, S):
-    """B: and PXSBENCH.O88 through tests/pxslib.py - its open_b (the B:
-    icon's double-click retried once) and its watched launch (clicked again
-    only when neither a window appeared nor the floppy controller read a
-    sector). The first cut hand-rolled both and died in wave 6's
-    verification soak on the B: icon's double-click ("the two presses were
-    10 ticks apart and the window is 9"), which pxslib had already survived
-    since wave 5 (wave 6's close)."""
-    pxslib.open_b(m, mo, S)
-    disk = dispcp.win_list(m, S)[-1]
-    bx, by = dispcp.win_rect(m, S, disk)[:2]
-    row = dispcp.scroll_to(m, mo, S, os88marty.settle, bx, by,
-                           dispcp.row_of(m, S, "PXSBENCH.O88"))
-    rx, ry = dispcp.row_xy(bx, by, row)
-    got = pxslib.launch_row(m, mo, S, rx, ry, "Pixelstein Bench")
-    if got is None:
-        sys.exit("pxsbench: PXSBENCH.O88 did not open")
-    return got[1]
+def open_bench(m, S):
+    """B: and PXSBENCH.O88 through tests/pxslib.py's open_file - os88ui's
+    verbs, each confirmed on guest state. The first cut hand-rolled both and
+    died in wave 6's verification soak on the B: icon's double-click ("the
+    two presses were 10 ticks apart and the window is 9"); the presses are
+    stepped in guest cycles now, so neither step is retried."""
+    ui, (win, seg) = pxslib.open_file(m, "PXSBENCH.O88", "Pixelstein Bench", S)
+    return ui, seg
 
 
 def main():
@@ -168,12 +158,11 @@ def main():
                           boot=False) as m:
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
-        mo = os88mouse.Mouse(marty=m)
-        seg = open_bench(m, mo, S)
+        ui, seg = open_bench(m, S)
         base = seg << 4
-        os88marty.settle(m)
-        mo.to(4, 4)                 # the pointer parked off the window: the
-        os88marty.settle(m)         # bracket's exit repaint and the blit row
+        os88marty.ui_done(m, "the bench window's first paint")
+        ui.mo.to(4, 4)              # the pointer parked off the window: the
+        os88marty.ui_done(m)        # bracket's exit repaint and the blit row
                                     # would otherwise carry the arrow
 
         def rw(name):

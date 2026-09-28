@@ -239,7 +239,7 @@ def parity(m, p, code, tag):
         byte('inputlen', len(text))
         m.write(p.base+p.offsets['gr_input'], text.encode()+b'\0')
         call('key', ax=13)
-        assert (p.b('state') == 6) == valid, text
+        assert (p.b('setupfield') == 5) == valid, text
         if valid: assert (p.w('gwhole'), p.w('gfrac')) == value
     word('gwhole', 9); word('gfrac', 800); call('gravity')
     call('city'); call('fullpaint')

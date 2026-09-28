@@ -1420,10 +1420,23 @@ def _tag(label):
     a timestamp alone does not, because two launches in the same millisecond
     would share a directory, and `makedirs(exist_ok=True)` would let them -
     silently, which is the exact class of failure this whole layer removes.
+
+    **AND A NAME NEVER RECURS**, which pid-label-seq alone did not promise:
+    a PID wraps in minutes on a busy box, so the same name comes round again.
+    `launch` refuses a directory that EXISTS, and that was not enough - a
+    `reap()` acts on the snapshot `instances()` took when it started, so when
+    another reaper had already pruned an ended record's tree, the name was
+    free, a new launch built its tree there, and the first reaper then got to
+    that record in its snapshot and `rmtree`d the NEW instance: an emulator
+    that "exited at once", its log saying `./media/hdds` does not exist
+    (bootsmoke, in a scoped soak beside four other rows). Six random hex
+    digits make a stale record and a live instance different directories, so
+    a snapshot can be as old as it likes.
     """
     _seq[0] += 1
-    return "%d-%s-%d" % (os.getpid(),
-                         re.sub(r"[^A-Za-z0-9_.-]", "_", label)[:24], _seq[0])
+    return "%d-%s-%d-%s" % (os.getpid(),
+                            re.sub(r"[^A-Za-z0-9_.-]", "_", label)[:24],
+                            _seq[0], os.urandom(3).hex())
 
 
 # How long an ENDED instance's directory is kept, in minutes. It is a few KB
@@ -1486,6 +1499,38 @@ def _killable(d):
     return (not d.get("ended")
             and bool(d.get("pid_start"))
             and _is_marty(d.get("pid", -1), d.get("pid_start")))
+
+
+def _kill_wait(pid, start, secs=10.0):
+    """SIGKILL one emulator and return once it is GONE, not once it is told.
+
+    A signal is asynchronous: `os.kill` returns the moment the kernel has
+    queued it, and a process with a framebuffer, a VHD mapping and a
+    listening socket takes measurable time to finish dying - longer on a
+    loaded box. Returning early is how `reap()` came to report "killed 1"
+    while the emulator was still in /proc and still holding its port, which
+    `tests/martyconc.py` caught with four other emulators running. So this
+    polls `_is_marty(pid, start)` - the same identity test the kill was gated
+    on, so a PID recycled in the meantime reads as gone rather than as a
+    survivor - under a deadline. A zombie reads as gone (its cmdline is
+    empty), which is right: it holds no socket and nothing of ours reaps it.
+
+    Returns True once it is gone, False if it outlived the deadline, and None
+    if the signal was never delivered (it had already exited). HOST
+    time, necessarily: this is waiting on the host's process table, and
+    there is no guest in it.
+    """
+    import time
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        return None                     # not delivered: it was already gone
+    end = time.monotonic() + secs
+    while _is_marty(pid, start):
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.02)
+    return True
 
 
 def _write_record(d):
@@ -1593,15 +1638,14 @@ def reap(kill_orphans=True, verbose=False):
                           "identity (`kill-all --yes` is the hammer)"
                           % (d.get("pid"), d.get("port")))
                 continue
-            try:
-                os.kill(d["pid"], 9)
+            gone = _kill_wait(d["pid"], d.get("pid_start"))
+            if gone is not None:
                 killed += 1
-                if verbose:
-                    print("reap: killed orphan pid %d on port %s (owner %s "
-                          "is gone)" % (d["pid"], d.get("port"),
-                                        d.get("owner_pid")))
-            except OSError:
-                pass
+            if verbose and gone is not None:
+                print("reap: killed orphan pid %d on port %s (owner %s "
+                      "is gone)%s" % (d["pid"], d.get("port"),
+                                      d.get("owner_pid"),
+                                      "" if gone else " - STILL EXITING"))
             d["ended"] = True
             d["ended_reason"] = "reaped: the owning script was gone"
             _write_record(d)
@@ -1639,11 +1683,8 @@ def kill_one(which):
     n = 0
     for d in rows:
         if _killable(d):                 # never a recycled PID: _proc_start
-            try:
-                os.kill(d["pid"], 9)
+            if _kill_wait(d["pid"], d.get("pid_start")) is not None:
                 n += 1
-            except OSError:
-                pass
         d["ended"] = True
         d["ended_reason"] = "killed by hand"
         _write_record(d)
@@ -1809,6 +1850,7 @@ IBM_TWIN = {
     # it. `os8088_5150_herc_hdd_gla` already existed and was simply unmapped.
     "os8088_5150_cga_hdd":  "os8088_5150_cga_hdd_gla",
     "os8088_5150_herc_hdd": "os8088_5150_herc_hdd_gla",
+    "os8088_5150_herc_hdd_sb": "os8088_5150_herc_hdd_sb_gla",
     "os8088_5150_cga_4fdd": "os8088_5150_cga_4fdd_gla",
 }
 
@@ -2120,6 +2162,23 @@ def no_saver(m):
     the failure this prevents.
     """
     S = _syms().linear
+    # NOT BEFORE THE BOOT HAS APPLIED ITS SETTINGS. `drv_boot_x` loads
+    # SYSTEM.CFG and runs `ss_mins2idle` late in kmain_o, and that REWRITES
+    # [ss_idle] - so a write that lands earlier is undone and the saver comes
+    # back five guest minutes later, inside whatever the row was waiting on
+    # (skiesfleet in the whole soak of 2026-09-27: "the screen was still
+    # changing after 542 GUEST seconds because ... [blk_on] is set"). Where
+    # it landed was host polling against guest progress, which is why a
+    # loaded box found it: the guest runs slower per poll, so an early gate is
+    # seen earlier in guest time. `spl_finish` is kmain_o's last act, so the
+    # desktop's own word live and the splash done IS the end of the boot. A
+    # caller past the boot - nearly all of them - finds it true at once.
+    def booted(_):
+        return m.read(S("desk_rows"), 2) != b"\0\0" and \
+            m.read(S("spl_live"), 1)[0] == 0
+    if not booted(m):
+        until(m, booted, "the boot to apply its settings before the saver "
+              "is turned off", poll=0.05, guest=300.0)
     m.write(S("ss_idle"), b"\0\0")
     m.write(S("ss_mins"), b"\0")
 
