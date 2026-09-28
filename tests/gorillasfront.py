@@ -77,6 +77,15 @@ def arm(tag, off, disk, out):
         G.key(m, 'Escape')
         G.wait(m, lambda: not p.b('fs'), 'windowed setup')
         G.key(m, 'Enter')
+        assert p.b('state') == 5 and p.b('setupfield') == 5
+        assert b'M toggles music during gameplay' in p.data('hudchars', 512)
+        screenshot(m, p, out / (tag + '-music-setup.png'))
+        type_text(m, 'maybe'); G.key(m, 'Enter')
+        assert p.b('setupfield') == 5 and b'Enter Yes or No' in p.data('hudchars', 512)
+        for _ in range(5):
+            G.key(m, 'Backspace')
+        type_text(m, 'no'); G.key(m, 'Enter')
+        assert not p.b('bgmenabled')
         assert p.b('state') == 6 and (p.w('gwhole')*10 + p.w('gfrac')//100) == 162
         assert p.b('players') == 1 and p.b('target') == 1
         G.key(m, 'KeyV')
@@ -114,6 +123,9 @@ def arm(tag, off, disk, out):
         for _ in range(4):
             G.key(m, 'Enter')
         type_text(m, '.1'); G.key(m, 'Enter')
+        assert p.b('setupfield') == 5
+        G.key(m, 'Enter')
+        assert p.b('bgmenabled'), 'blank music choice did not default to Yes'
         assert p.b('players') == 2 and p.b('target') == 3
         assert (p.w('gwhole')*10 + p.w('gfrac')//100) == 1
         G.key(m, 'KeyV')

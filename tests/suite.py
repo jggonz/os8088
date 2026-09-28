@@ -2449,6 +2449,15 @@ SOAK = [
         "states are injected by the test. Saves screenshots of each adapter",
         needs=("marty", "nasm"), serial=True,
         wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("gorillasmusic", "soak", py("tests/gorillasmusic.py"), 253.5,
+        "Gorillas FM music (SPEC.md 99): AdLib, Sound Blaster and speaker-only "
+        "guests. Complete loops of three scores, skyline rotation, idle and "
+        "fullscreen progression, Yes/No setup, M during every gameplay state, "
+        "pause/focus/About, driver note/rest state, "
+        "channel contention and cleanup on setup, results, restart and close. "
+        "The corrupted-loop control fails at row 128; measured 253.5s",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
     Row("gorillasreactions", "soak", py("tests/gorillasreactions.py"), 300.0,
         "Gorillas feature parity (SPEC.md 99.0): reference trajectory samples, "
         "numeric bounds, silhouette collision, throw/banana/blast animations, "

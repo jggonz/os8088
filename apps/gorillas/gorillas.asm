@@ -83,6 +83,7 @@ gr_paint:
 
 gr_about:
     SAVE
+    call gr_bgmhold
     mov byte [gr_abon], 1
     mov bx, [gr_win]
     mov si, gr_ablines
@@ -166,6 +167,10 @@ gr_key:
     je .escape
     cmp byte [gr_state], 4
     jae gr_frontkey
+    cmp al, 'M'
+    je gr_bgmtoggle
+    cmp al, 'm'
+    je gr_bgmtoggle
     cmp al, 'F'
     je .full
     cmp al, 'f'
@@ -226,6 +231,7 @@ gr_key:
     jmp gr_setup
 .pause:
     xor byte [gr_paused], 1
+    call gr_bgmhold
     jmp gr_hudpaint
 .escape:
     cmp byte [gr_fs], 0
@@ -264,30 +270,50 @@ gr_worker:
     or al, al
     jne .sleep
     cmp byte [gr_players], 1
-    jne .sleep
+    jne .music
     cmp byte [gr_turn], 1
-    jne .sleep
+    je .active
+.music:
+    ; Idle aiming needs the graphics lock only when an FM row is due.
+    ; Speaker-only machines retain the original sleeping worker.
+    cmp byte [gr_bgmenabled], 0
+    je .sleep
+    cmp byte [gr_bgmstatus], 2
+    je .sleep
+    cmp word [gr_bgmptr], 0
+    je .sleep
+    cmp byte [gr_bgmstatus], 0
+    je .active
+    call OSAPI_GET_TICKS
+    sub ax, [gr_bgmdue]
+    js .sleep
 .active:
     cmp byte [gr_paused], 0
-    jne .sleep
+    jne .hold
     cmp byte [gr_abon], 0
-    jne .sleep
+    jne .hold
     call OSAPI_GFX_LOCK
     mov bx, [gr_win]
     call OSAPI_WM_OBSCURED
-    jc .unlock
+    jc .hidden
     call OSAPI_WM_TOP
     cmp bx, [gr_win]
-    jne .unlock
+    jne .hidden
     call OSAPI_MENU_OWNER
     cmp bx, [gr_win]
-    jne .unlock
+    jne .hidden
     call OSAPI_WM_CLIP_SET
-    jc .unlock
+    jc .hidden
     call gr_layout
     call gr_tick
+    jmp short .unlock
+.hidden:
+    call gr_bgmhold
 .unlock:
     call OSAPI_GFX_UNLOCK
+    jmp short .sleep
+.hold:
+    call gr_bgmhold
 .sleep:
     mov ax, 1
     call OSAPI_TASK_SLEEP
@@ -653,6 +679,7 @@ gr_recallaim:
     ret
 
 gr_city:
+    call gr_bgmstop
     push ds
     pop es
     mov di, gr_scene
@@ -818,7 +845,7 @@ gr_city:
     call gr_sun
     call gr_windarrow
     call gr_hud
-    ret
+    jmp gr_bgmlevel
 
 ; CX=lot start, BP=lot index. Return AX=width, preserving other registers.
 ; Clamp width so all remaining lots can still fit in 18..36 pixels.
@@ -1540,9 +1567,10 @@ gr_fire:
 
 gr_tick:
     cmp byte [gr_abon], 0
-    jne .out
+    jne gr_bgmhold
     cmp byte [gr_paused], 0
-    jne .out
+    jne gr_bgmhold
+    call gr_bgmtick
     call gr_musictick
     cmp byte [gr_blast], 0
     jne gr_blasttick
@@ -2469,6 +2497,7 @@ gr_sin:
 %include "grai.inc"
 %include "grfront.inc"
 %include "grmusic.inc"
+%include "grbgm.inc"
 
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
@@ -2518,6 +2547,13 @@ VAR gr_inputlen, 1
 VAR gr_input, 11
 VAR gr_musicptr, 2
 VAR gr_musicdue, 2
+VAR gr_bgmstart, 2
+VAR gr_bgmptr, 2
+VAR gr_bgmdue, 2
+VAR gr_bgmtrack, 1
+VAR gr_bgmstatus, 1             ; 0 unclaimed, 1 playing, 2 unavailable
+VAR gr_bgmenabled, 1            ; setup choice / M; preserved across skylines
+VAR gr_bgmchannels, 3
 VAR gr_introseq, 1
 VAR gr_frontcols, 2
 VAR gr_frontplane, 1
