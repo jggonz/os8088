@@ -351,7 +351,13 @@ PTH_SIZE    equ PTH_BUF+PTH_MAX
 
 %ifdef KERN_BIG
 FS_PATH     equ 24              ; PTH_SIZE bytes, the block above
-FS_SIZE     equ FS_PATH+PTH_SIZE    ; = the Disk kind's KD_SSIZE
+FS_FREEH    equ FS_PATH+PTH_SIZE    ; word: the HIGH halves of FS_FREE and
+FS_USEDH    equ FS_FREEH+2      ; FS_USED, which on this build are BYTES in
+                                ; a dword (SPEC.md 22.7.1): two decimals of
+                                ; a K or an M need what a KB word threw away.
+                                ; 0xFFFF here is the not-known sentinel - a
+                                ; FAT volume never reaches 4GB
+FS_SIZE     equ FS_USEDH+2      ; = the Disk kind's KD_SSIZE
 %else
 FS_SIZE     equ 24              ; = the Disk kind's KD_SSIZE
 %endif
@@ -1549,8 +1555,13 @@ fm_measure:
     push cx
     push dx
     push si
+%ifdef OS88_BIGVOL
+    mov word [di+FS_FREEH], 0xFFFF  ; the sentinel is the high half here
+    mov word [di+FS_USEDH], 0xFFFF
+%else
     mov word [di+FS_FREE], 0xFFFF
     mov word [di+FS_USED], 0xFFFF
+%endif
     cmp byte [di+FS_MOK], 0
     je .out                     ; no good mount: no figures, and say so
 
@@ -1560,11 +1571,13 @@ fm_measure:
     xor dh, dh
     mul dx                      ; DX:AX = free sectors
 %ifdef OS88_BIGVOL
-    shr dx, 1                   ; ...and a sector is half a KB. PAST 32MB
-    rcr ax, 1                   ; (SPEC.md 18.7.5) that is more KB than a
-    call fm_kbenc               ; word holds - a 321MB volume is 328,000 of
-                                ; them - so the figure is ENCODED: K below
-                                ; 10MB, M at or above it (SPEC.md 22.7.1)
+    mov dh, dl                  ; ...and a sector is 512 BYTES: << 8 ...
+    mov dl, ah
+    mov ah, al
+    xor al, al
+    shl ax, 1                   ; ... << 1 more. A dword, because past 64MB
+    rcl dx, 1                   ; (SPEC.md 18.7.5) a word of KB is not the
+    mov [di+FS_FREEH], dx       ; figure, and two decimals need the bytes
 %else
     shr ax, 1                   ; ...and a sector is half a KB (a volume caps
                                 ; at 65,535 sectors here, so DX = 0)
@@ -1602,6 +1615,10 @@ fm_measure:
     cmp ax, dx
     jb .sum
 .kb:
+%ifdef OS88_BIGVOL
+    mov [di+FS_USED], cx        ; the bytes themselves (SPEC.md 22.7.1): a
+    mov [di+FS_USEDH], bx       ; high half of 0xFFFF would need 4GB listed
+%else
     mov ax, cx                  ; bytes -> KB: (hi:lo) >> 10, and the result
     mov dx, bx                  ; is a word because a volume caps at 32MB
     mov cx, 10
@@ -1609,14 +1626,10 @@ fm_measure:
     shr dx, 1
     rcr ax, 1
     loop .shift
-%ifdef OS88_BIGVOL
-    call fm_kbenc               ; K or M, and never the sentinel: the most a
-                                ; dword of bytes can be is 0x8FFF (22.7.1)
-%else
     cmp ax, 0xFFFF              ; a hostile listing could sum past the
     je .out                     ; sentinel: leave it saying "not known"
-%endif
     mov [di+FS_USED], ax
+%endif
 .out:
     jmp kretc_si
 
@@ -2943,6 +2956,14 @@ fm_layout:
     ; list-view name budget: (cw - 96)/8 chars, clamped 0..16 (the name
     ; column must stop short of the size column, SPEC.md 22)
     mov ax, [fm_cw]
+%ifdef OS88_BIGVOL
+    sub ax, 124                 ; 124 on this build: the size column is up to
+                                ; NINE cells here - `10239.99K`, SPEC.md
+                                ; 22.7.1 - and starts at cw-92, so the name
+                                ; stops at cw-92 and never under it. Only a
+                                ; window under 220px of content loses a
+                                ; character of an 8.3 name to it
+%else
     sub ax, 96                  ; 96, not 88: the name pen moved 24 -> 32 with
                                 ; the icon, and this is what keeps the column's
                                 ; RIGHT edge where it was - cw-64 either way,
@@ -2950,6 +2971,7 @@ fm_layout:
                                 ; and the only loss is one character on a
                                 ; window narrower than 184px of content, where
                                 ; an 8.3 name is already being truncated
+%endif
     jg .nchpos
     xor ax, ax
     jmp .nchclamp
@@ -8487,12 +8509,23 @@ fm_draw_status:
     mov bx, [fm_vp]
     mov si, fm_s_size
     call fm_scat
+%ifdef OS88_BIGVOL
+    mov ax, [bx+FS_USED]        ; bytes, and at least a K (SPEC.md 22.7.1)
+    mov dx, [bx+FS_USEDH]
+    call fm_szfig_k
+    mov si, fm_s_free
+    call fm_scat
+    mov ax, [bx+FS_FREE]
+    mov dx, [bx+FS_FREEH]
+    call fm_szfig_k
+%else
     mov ax, [bx+FS_USED]
     call fm_kbfig
     mov si, fm_s_free
     call fm_scat
     mov ax, [bx+FS_FREE]
     call fm_kbfig
+%endif
     pop bx
     mov byte [di], 0
     jmp short .fs_stat_drawn
@@ -8624,6 +8657,7 @@ fm_scat:
 .done:
     ret
 
+%ifndef OS88_BIGVOL
 ; -----------------------------------------------------------------------------
 ; fm_kbfig - stage one KB figure, or '?' for the not-known sentinel
 ; in:  AX = KB (0xFFFF = not known), DI = destination
@@ -8632,25 +8666,14 @@ fm_scat:
 ;
 ; The sentinel is drawn rather than skipped: a Disk window whose mount failed
 ; still has a status line, and a blank one there reads as "no free space" -
-; the one thing it must not be mistaken for (SPEC.md 22.7).
+; the one thing it must not be mistaken for (SPEC.md 22.7). kern_small's; the
+; big build carries bytes and draws them with fm_szfig_k (22.7.1).
 ; -----------------------------------------------------------------------------
 fm_kbfig:
     cmp ax, 0xFFFF
     je .unknown
-%ifdef OS88_BIGVOL
-    push ax                     ; bit 15 is the unit (fm_kbenc): M set, K clear
-    and ah, 0x7F
-    call fm_utoa
-    pop ax
-    mov byte [di], 'K'
-    test ah, 0x80
-    jz .unit
-    mov byte [di], 'M'
-.unit:
-%else
     call fm_utoa
     mov byte [di], 'K'
-%endif
     inc di
     mov byte [di], 0
     ret
@@ -8659,54 +8682,37 @@ fm_kbfig:
     inc di
     mov byte [di], 0
     ret
-
-%ifdef OS88_BIGVOL
+%else
 ; -----------------------------------------------------------------------------
-; fm_kbenc - a dword of KB as the one word fm_kbfig draws (SPEC.md 22.7.1)
-; in:  DX:AX = KB, DX <= 3Fh (under 4GB of bytes)
-; out: AX = the KB when under 10,240 (10MB), else 8000h | whole MB
-; clobbers: AX (the output), flags
-;
-; A KB figure stopped fitting a word the day a volume passed 64MB (SPEC.md
-; 18.7.5), and it stopped being READABLE long before that: `328704K` is a
-; number to count the digits of. So a figure of 10MB or more is carried in
-; MB, with bit 15 saying so - FS_FREE and FS_USED stay one word each, and the
-; not-known sentinel 0xFFFF can never be produced (4GB is 0x8FFF).
-; -----------------------------------------------------------------------------
-fm_kbenc:
-    or dx, dx
-    jnz .mb
-    cmp ax, 10240
-    jb .out
-.mb:
-    mov al, ah                  ; >> 8, DH being 0 ...
-    mov ah, dl
-    shr ax, 1                   ; ... and >> 2 more: whole MB
-    shr ax, 1
-    or ah, 0x80
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; fm_szfig_x - a file's size in the unit a person reads (SPEC.md 22.7.1)
-; in:  DX:AX = bytes, DI = destination (8 bytes is enough)
+; fm_szfig_x - a size in the unit a person reads (SPEC.md 22.7.1)
+; fm_szfig_k - ...never below K, and DX = 0xFFFF draws '?'
+; in:  DX:AX = bytes, DI = destination (10 bytes: `10239.99K` and a NUL)
 ; out: DI -> the stored NUL
 ; clobbers: DI (the output), flags
 ;
-; Bytes under 10KB, as it always was - `1234` is exact and short. From 10KB
-; it is whole KB with a K, and from 10MB whole MB with an M, the status
-; line's units, so a column of sizes and the line under it read alike.
-; Truncated rather than rounded, which is what the status line already did.
+; Bytes under 10KB, exact and short: `1234`. From 10KB whole KB and two
+; decimals with a K, from 10MB whole MB and two decimals with an M -
+; `113.37K`, `40.00M`. The decimals are hundredths of the unit, TRUNCATED
+; like the whole part, so no figure ever claims more than is there. The
+; columns take the first entry; the status line takes the second, because a
+; free-space figure without a unit is a number to wonder about, and its
+; sentinel is the one a failed mount leaves (22.7).
 ; -----------------------------------------------------------------------------
 fm_szfig_x:
     or dx, dx
-    jnz .kb
+    jnz fm_szfig_k
     cmp ax, 10240
     jb fm_ultoa_x               ; bytes: the dword printer, tail-called
-.kb:
+fm_szfig_k:
     push ax
+    push bx
+    push cx
     push dx
-    mov al, ah                  ; bytes >> 8 ...
+    cmp dx, 0xFFFF
+    je .unknown
+    mov bx, ax                  ; BX = what is below a K, in bytes
+    and bx, 1023
+    mov al, ah                  ; >> 8 ...
     mov ah, dl
     mov dl, dh
     xor dh, dh
@@ -8714,9 +8720,47 @@ fm_szfig_x:
     rcr ax, 1
     shr dx, 1
     rcr ax, 1
-    call fm_kbenc
-    call fm_kbfig
+    mov cl, 'K'
+    or dx, dx
+    jnz .mb
+    cmp ax, 10240
+    jb .fig
+.mb:
+    mov bx, ax                  ; BX = what is below an M, in KB
+    and bx, 1023
+    mov al, ah                  ; KB >> 10: whole MB, <= 4,095
+    mov ah, dl
+    shr ax, 1
+    shr ax, 1
+    mov cl, 'M'
+.fig:
+    call fm_utoa                ; the whole units
+    mov byte [di], '.'
+    inc di
+    xchg ax, bx                 ; AX = the remainder, 0..1023 of the unit
+    mov bx, 100
+    mul bx                      ; DX:AX = remainder * 100, under 102,400
+    mov al, ah                  ; >> 10: hundredths, 0..99
+    mov ah, dl
+    shr ax, 1
+    shr ax, 1
+    mov bl, 10
+    div bl                      ; AL = tens, AH = units
+    add ax, '00'
+    mov [di], ax                ; both digits, the leading zero kept
+    inc di
+    inc di
+    mov [di], cl
+    inc di
+    jmp short .nul
+.unknown:
+    mov byte [di], '?'
+    inc di
+.nul:
+    mov byte [di], 0
     pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 %endif
@@ -8791,8 +8835,8 @@ fmv_ux2:    resw 1              ; spent as ONE wm_paint_dmg so that no window
 fmv_uy2:    resw 1              ; is painted twice
 fmv_uany:   resb 1              ; 0 = nothing folded in yet
 %ifdef KERN_BIG
-fm_pool:    resb 4*57           ; FM_MAXWIN x FS_SIZE (4 x 57; a literal per
- %if FM_MAXWIN*FS_SIZE != 4*57  ; the no-forward-ref-in-bss rule - so the equs
+fm_pool:    resb 4*61           ; FM_MAXWIN x FS_SIZE (4 x 61; a literal per
+ %if FM_MAXWIN*FS_SIZE != 4*61  ; the no-forward-ref-in-bss rule - so the equs
   %error "files: fm_pool's literal has drifted from FM_MAXWIN x FS_SIZE"
  %endif                         ; check it, or growing the block silently
 %else                           ; overruns the pool into the words below it
