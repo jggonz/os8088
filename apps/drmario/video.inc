@@ -153,18 +153,61 @@ dm_rect:
     RESTORE
     ret
 
+; Background is decoded once on mode entry, directly into each native plane
+; or bank. No scratch framebuffer and no work on incremental game frames.
+dm_background:
+    SAVE
+    mov ax, [dm_fsi+FSI_SEG]
+    mov es, ax
+    cmp byte [dm_cga], 0
+    jne .cga
+    mov si, dm_screenvga
+    mov bx, 0102h
+.plane:
+    mov dx, 3c4h
+    mov ax, bx
+    out dx, ax
+    xor di, di
+    call dm_unpack
+    shl bh, 1
+    cmp bh, 16
+    jb .plane
+    jmp .done
+.cga:
+    mov si, dm_screencga
+    xor di, di
+    call dm_unpack
+    mov di, 2000h
+    call dm_unpack
+.done:
+    RESTORE
+    ret
+
+dm_unpack:
+    xor cx, cx
+.run:
+    lodsb
+    or al, al
+    jz .done
+    mov cl, al
+    lodsb
+    rep stosb
+    jmp .run
+.done: ret
+
 dm_framepaint:
+    call dm_background
     ; Static bottle is drawn only when changing mode.
     mov ax, 23
     mov bx, 28
     mov cx, 34
     mov dx, 200
-    mov bp, 7
+    mov bp, 4
     cmp byte [dm_cga], 0
     je .frame
     mov bx, 20
     mov dx, 168
-    mov bp, 0ffh
+    mov bp, 55h
 .frame:
     call dm_rect
     mov ax, 24
@@ -174,7 +217,7 @@ dm_framepaint:
     xor bp, bp
     call dm_rect
     mov si, dm_titlecaps
-    mov ax, 124
+    mov ax, 132
     mov dx, 8
     call dm_text
     mov si, dm_footer
@@ -280,7 +323,7 @@ dm_render:
     mov di, 56*80+60
     cmp byte [dm_cga], 0
     je .p1
-    mov di, 28*80+60
+    mov di, 22*80+60          ; CGA y=44: below NEXT, above the portrait
 .p1:
     push di
     call dm_enqueue
@@ -474,10 +517,6 @@ dm_hudcompose:
     HUD dm_lspeed,96
     HUD dm_lvirus,144
     HUD dm_lnext,8
-    HUD dm_lrotate,104
-    HUD dm_lmove,136
-    HUD dm_lpause,168
-    HUD dm_lexit,200
     mov di, dm_hud+16
     call dm_scoretext
     xor ax, ax
@@ -563,15 +602,17 @@ dm_scoretext:
 dm_hudpaint:
     xor si, si
 .next:
-    ; NEXT's two tiles occupy these four columns across text rows 2/3.
-    ; Even blank glyphs would erase their pixels on the initial HUD paint.
-    mov ax, si
-    and ax, 0efh
-    cmp ax, 40
-    jb .textcell
-    cmp ax, 44
+    ; Only NEXT (row 0) and the state prompt (row 14) own right HUD cells.
+    ; Blank rows would erase the CGA preview, character art or footer.
+    test si, 8
+    jz .hudcell
+    cmp si, 24
+    jb .hudcell
+    cmp si, 240
+    jae .same
+    cmp si, 224
     jb .same
-.textcell:
+.hudcell:
     mov al, [dm_hud+si]
     cmp al, [dm_hudshadow+si]
     je .same
@@ -593,6 +634,16 @@ dm_hudpaint:
     mov dx, 10
     mul dx
     add ax, 32
+    ; State prompt sits below the portrait on both display geometries.
+    test si, 8
+    jz .positioned
+    cmp si, 224
+    jb .positioned
+    add ax, 32
+    cmp byte [dm_cga], 0
+    je .positioned
+    sub ax, 28
+.positioned:
     mov dx, ax
     pop ax
     call dm_glyph
@@ -602,17 +653,13 @@ dm_hudpaint:
     jb .next
     ret
 
-dm_titlecaps: db 'DR. MARIO',0
+dm_titlecaps: db 'DrMarco',0
 dm_footer: db 'Z/X ROTATE  P PAUSE  ESC EXIT',0
 dm_lscore: db 'SCORE',0
 dm_llevel: db 'LEVEL',0
 dm_lspeed: db 'SPEED',0
 dm_lvirus: db 'VIRUS',0
 dm_lnext: db 'NEXT',0
-dm_lrotate: db 'Z/X TURN',0
-dm_lmove: db 'ARROWS',0
-dm_lpause: db 'P PAUSE',0
-dm_lexit: db 'ESC EXIT',0
 dm_lpaused: db 'PAUSED',0
 dm_lgame: db 'GAME',0
 dm_lover: db 'OVER',0
@@ -662,3 +709,5 @@ dm_vgatiles: incbin "dm-vga.bin"
     times 192 db 7
 dm_cgatiles: incbin "dm-cga.bin"
     times 40 db 0ffh
+dm_screenvga: incbin "dm-screen-vga.bin"
+dm_screencga: incbin "dm-screen-cga.bin"

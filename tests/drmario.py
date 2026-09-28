@@ -12,6 +12,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from PIL import Image
 ROOT=Path(__file__).resolve().parents[1]
 SOURCE=Path(os.environ.get('DRMARIO_SOURCE','../NES-Games-Disassembly/Dr. Mario'))
 sys.path.insert(0,str(ROOT/'tools'))
@@ -36,7 +37,7 @@ def symbols():
 class Probe:
     def __init__(self,ui,sym):
         self.m=ui.m;self.sym=sym
-        w=ui.window('Dr. Mario')
+        w=ui.window('DrMarco')
         raw=self.m.read(self.m.sym('wm_wins'),G.MAX_WIN*G.WIN_SIZE)
         self.base=struct.unpack_from('<H',raw,w.i*G.WIN_SIZE+G.W_SEG)[0]<<4
     def addr(self,n):return self.base+self.sym['dm_'+n]
@@ -113,6 +114,29 @@ def check_pixels(p,tag,raw):
                     v=((chrdata[tile*16+yy]>>bit)&1)+2*((chrdata[tile*16+yy+8]>>bit)&1)
                     expected=(0,3,2,1)[v]
                 assert px[top+(i//8)*height+y][96+(i%8)*16+x]==expected,(tag,i,x,y,cell)
+    # The portrait must survive HUD/score/state updates and full repaints.
+    art=Image.open(ROOT/f'build/drmario-art/drmarco-{tag}-art.png')
+    for y in range(80 if tag=='vga' else 72,165 if tag=='vga' else 138):
+        for x in range(272,320):
+            assert px[y][x]==art.getpixel((x,y)),('art overwritten',tag,x,y)
+    # Preview stays intact on both adapters (including after the first HUD).
+    a,b=p.data('next',2)
+    for half,color in enumerate((a,b)):
+        tile=(0x60 if half==0 else 0x70)+3-color
+        for y in range(height):
+            for x in range(16):
+                yy=y*8//height;bit=7-x//2
+                v=((chrdata[tile*16+yy]>>bit)&1)+2*((chrdata[tile*16+yy+8]>>bit)&1)
+                expected=(0,3,2,1)[v]
+                assert px[(56 if tag=='vga' else 44)+y][240+half*16+x]==expected,('preview',tag,x,y)
+    footer=p.data('footer',64).split(b'\0')[0]
+    glyphs=p.data('glyphs',768)
+    for i,ch in enumerate(footer):
+        for y in range(8):
+            bits=glyphs[(ch-32)*8+y]
+            for x in range(8):
+                expected=(7 if tag=='vga' else 3) if bits&(128>>x) else 0
+                assert px[(230 if tag=='vga' else 190)+y][32+i*8+x]==expected,('footer',tag,i,x,y)
     # Negative control: a changed bottle pixel must fail this same oracle.
 
 
@@ -134,6 +158,12 @@ def fixture(p,cells,state=2):
 
 def gameplay(p,tag):
     result={}
+    # Compare the actual 8088 RLE decoder against an uncompressed image.
+    result['background_ms']=p.call('background')
+    raw=video(p,tag)
+    art=Image.open(ROOT/f'build/drmario-art/drmarco-{tag}-art.png')
+    assert bytes(v for row in pixels(p,tag,raw) for v in row)==bytes(art.getdata())
+    p.call('invalidate');p.call('framepaint')
     # All levels, bounded construction, exact counts and no pre-cleared runs.
     times=[]
     for level in range(21):
@@ -252,7 +282,7 @@ def arm(tag,sym,input_only=False):
     out=ROOT/'build/drmario-proof';out.mkdir(exist_ok=True)
     with os88ui.boot(str(ROOT/'build/os8088-360.img'),apps=str(ROOT/'build/drmario360.img'),machine=machine) as ui:
         m=ui.m
-        ui.open_drive('B');ui.open('DRMARIO.O88');ui.settle()
+        ui.open_drive('B');ui.open('DRMARCO.O88');ui.settle()
         p=Probe(ui,sym)
         capture(m,out/(tag+'-launcher.png'))
         m.pause();m.bp_exec(p.addr('input'));m.key('Enter');m.run()
@@ -307,8 +337,8 @@ def qemu_display():
         Q.pace(m,8);E.settle(m)
         dispcp.open_drive(m,mo,S,E.settle,'B')
         w=next(w for w in G.windows(m,S) if w.visible and w.title=='Disk')
-        dispcp.open_named(m,mo,S,E.settle,w.x,w.y,'DRMARIO.O88')
-        win=next(w for w in G.windows(m,S) if w.visible and w.title=='Dr. Mario')
+        dispcp.open_named(m,mo,S,E.settle,w.x,w.y,'DRMARCO.O88')
+        win=next(w for w in G.windows(m,S) if w.visible and w.title=='DrMarco')
         raw=m.read(S('wm_wins'),G.MAX_WIN*G.WIN_SIZE)
         base=struct.unpack_from('<H',raw,win.i*G.WIN_SIZE+G.W_SEG)[0]<<4
         sym=symbols()

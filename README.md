@@ -94,7 +94,7 @@ make runcpmdisk # build the RunCPM floppies - the CP/M 2.2 emulator, its
 make xt-runcpm  # 86Box: the 4.77MHz XT with the 360KB RunCPM disk in B:
 make 286-runcpm # 86Box: the 12.5MHz 286 with the 720KB one - arcade games
 make 386-runcpm # 86Box: the 386DX with the 1.44MB one - everything
-make drmariodisk # native XT Dr. Mario: 320x240 VGA / color CGA;
+make drmarcodisk # native XT DrMarco: 320x240 VGA / color CGA;
                  # requires the local NES reference, see apps/drmario/README.md
 make paccmandisk # build the PaccMan floppy - a second Pac-Man, in C: the
               # Namco arcade layout from Andre Weissflog's pacman.c, in all

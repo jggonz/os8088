@@ -4,6 +4,52 @@ import argparse
 import hashlib
 from pathlib import Path
 import re
+from PIL import Image
+
+
+ART = Path(__file__).resolve().parents[1] / 'apps/drmario/art/drmarco-screen.png'
+VGA_PALETTE = [(0,0,0),(48,96,252),(252,48,64),(252,224,32),
+               (20,40,120),(120,16,20),(120,96,8),(252,252,252)]
+CGA_PALETTE = [(0,0,0),(85,255,85),(255,85,85),(255,255,85)]
+
+
+def runs(data):
+    """Trusted embedded stream: byte count/value pairs, zero terminator."""
+    out = bytearray()
+    pos = 0
+    while pos < len(data):
+        end = pos + 1
+        while end < len(data) and end-pos < 255 and data[end] == data[pos]:
+            end += 1
+        out.extend((end-pos, data[pos]))
+        pos = end
+    out.append(0)
+    return out
+
+
+def screen_art(out):
+    """Compile generated art into native video layouts; no runtime conversion."""
+    source = Image.open(ART).convert('RGB')
+    palette = Image.new('P', (1,1))
+    palette.putpalette(sum((list(c) for c in VGA_PALETTE), []) + [0]*744)
+    for tag, height in [('vga',240), ('cga',200)]:
+        indexed = source.resize((320,height), Image.Resampling.NEAREST).quantize(
+            palette=palette, dither=Image.Dither.NONE)
+        pixels = bytes(indexed.getdata())
+        # Collapse dark shades to the matching CGA hue; white becomes yellow.
+        if tag == 'cga':
+            pixels = bytes((0,1,2,3,1,2,3,3)[p] for p in pixels)
+            banks = [bytes(sum(pixels[y*320+x+j] << (6-2*j) for j in range(4))
+                           for y in range(bank,height,2) for x in range(0,320,4))
+                     for bank in range(2)]
+        else:
+            banks = [pixels[plane::4] for plane in range(4)]
+        (out/f'dm-screen-{tag}.bin').write_bytes(b''.join(runs(b) for b in banks))
+        preview = Image.new('P', (320,height))
+        colors = VGA_PALETTE if tag == 'vga' else CGA_PALETTE
+        preview.putpalette(sum((list(c) for c in colors), []) + [0]*(768-len(colors)*3))
+        preview.putdata(pixels)
+        preview.save(out/f'drmarco-{tag}-art.png')
 
 
 def build(source, out):
@@ -45,6 +91,7 @@ def build(source, out):
         return bytes(sum(row[x+j] << (6-2*j) for j in range(4)) for row in pix for x in range(0,16,4))
     # Font is the OS font at runtime; these caches are exclusively game art.
     out.mkdir(parents=True, exist_ok=True)
+    screen_art(out)
     (out/'dm-vga.bin').write_bytes(b''.join(map(vgacell,cells)))
     (out/'dm-cga.bin').write_bytes(b''.join(map(cgacell,cells)))
     text = ['; Generated from local Dr. Mario bank_FF.asm. Do not edit.']

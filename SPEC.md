@@ -40319,7 +40319,7 @@ gate, a `fast` row. The kinds are checked differently:
 |---|---|---|
 | `retired` | a **failure**. Not worth shipping | on no shipped image, not in the live payload, and **not built by `all` at all** |
 | `instrument` | **not a product** — a bench or a gate that happens to be a package | on no shipped image. `all` MAY build it: keeping a bench assembling is usually the point of having one |
-| `local` | an application requiring user-supplied assets, such as Dr. Mario (§99) | standalone build/disk targets only; no standard image, live payload or `all` dependency |
+| `local` | an application requiring user-supplied assets, such as DrMarco (§99) | standalone build/disk targets only; no standard image, live payload or `all` dependency |
 
 **A `retired` package keeps its source and its SPEC.md section.** Deleting
 them would leave no account of what was tried, and this tree already keeps
@@ -149032,15 +149032,30 @@ The existing gameplay, frontend, input and animation gates cover throws,
 craters, fullscreen restoration, borrowed-cache transitions and incremental
 text. These are emulator cycle measurements, not hardware measurements.
 
-## 99. Dr. Mario (`apps/drmario/drmario.asm`)
+## 99. DrMarco (`apps/drmario/drmario.asm`)
 
 Native 8086 single-player adaptation of the supplied NES Dr. Mario disassembly.
 The reference is external: `NES-Games-Disassembly/Dr. Mario/bank_FF.asm` and
 `CHR_ROM.chr`. `make drmario` imports selected graphics and speed/color tables
-into the build directory, then builds `DRMARIO.O88`; `make drmariodisk` creates
+into the build directory, then builds `DRMARCO.O88`; `make drmarcodisk` creates
 four standalone application floppy geometries. `DRMARIO_SOURCE` overrides the
 reference directory. No NES interpreter, ROM redistribution in source control,
 new API slots, heap claim, worker or kernel change is required.
+
+DrMarco is the displayed name and package identity. `make drmarco` and
+`make drmarcodisk` are the public targets; `drmario` and `drmariodisk` remain
+compatibility aliases. Internal source names and disk-image paths stay stable.
+`DRMARCO_PLAN.MD` tracks the remaining feature work.
+
+The original generated screen surround is committed at
+`apps/drmario/art/drmarco-screen.png`, with its prompt beside it. Build-time
+conversion produces palette-indexed VGA planes and packed CGA banks, encoded
+as (nonzero byte count, repeated byte) runs with a zero-count stream terminator.
+Each VGA stream expands to 19,200 bytes; each CGA bank to 8,000 bytes. Only
+fullscreen entry/reentry decodes this trusted embedded art directly to VRAM.
+There is no new framebuffer or BSS. The right HUD reserves the doctor portrait;
+the game draws its own title, bottle boundary, score and state text over the
+surround. Capsule and bottle-virus tiles still require the local NES reference.
 
 A desktop launcher supplies controls and settings. Enter/Alt+Enter opens the
 exclusive bracket; Escape/Alt+Enter restores the desktop with the game paused.

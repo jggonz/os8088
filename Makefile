@@ -13311,34 +13311,36 @@ clean-nasm3:
 
 distclean: clean clean-marty clean-cc clean-nasm3
 
-# Native Dr. Mario. Original art is imported locally, never vendored.
+# Native DrMarco. NES cell tiles remain local; original surround is committed.
 DRMARIO_SOURCE ?= ../NES-Games-Disassembly/Dr. Mario
-.PHONY: drmario drmariodisk drmario-assets drmario-source-check
+.PHONY: drmarco drmarcodisk drmario drmariodisk drmario-assets drmario-source-check
 drmario-source-check:
 drmario-assets: | $(BUILD)
 	python3 tools/drmario_assets.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
 
-$(BUILD)/drmario-art/dm-tables.inc: tools/drmario_assets.py drmario-source-check | $(BUILD)
+$(BUILD)/drmario-art/dm-tables.inc: tools/drmario_assets.py apps/drmario/art/drmarco-screen.png drmario-source-check | $(BUILD)
 	python3 tools/drmario_assets.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
 
 $(BUILD)/drmario.bin: apps/drmario/drmario.asm apps/drmario/game.inc apps/drmario/video.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc $(BUILD)/drmario-art/dm-tables.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/drmario/ -I $(BUILD)/drmario-art/ -l $(BUILD)/drmario.lst -o $@ $<
 
-$(BUILD)/drmario.o88: $(BUILD)/drmario.bin tools/os88pkg.py $(PKGZSTAMP)
+$(BUILD)/drmarco.o88: $(BUILD)/drmario.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@
 
-drmario: $(BUILD)/drmario.o88
+drmarco: $(BUILD)/drmarco.o88
+drmario: drmarco
 
-$(BUILD)/drmario.img: $(BUILD)/drmario.o88 apps/drmario/README.md
+$(BUILD)/drmario.img: $(BUILD)/drmarco.o88 apps/drmario/README.md
 	python3 tools/os88disk.py -o $@ --size 1440 $^
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/drmario720.img: $(BUILD)/drmario.o88 apps/drmario/README.md
+$(BUILD)/drmario720.img: $(BUILD)/drmarco.o88 apps/drmario/README.md
 	python3 tools/os88disk.py -o $@ --size 720 $^
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/drmario120.img: $(BUILD)/drmario.o88 apps/drmario/README.md
+$(BUILD)/drmario120.img: $(BUILD)/drmarco.o88 apps/drmario/README.md
 	python3 tools/os88disk.py -o $@ --size 1200 $^
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/drmario360.img: $(BUILD)/drmario.o88 apps/drmario/README.md
+$(BUILD)/drmario360.img: $(BUILD)/drmarco.o88 apps/drmario/README.md
 	python3 tools/os88disk.py -o $@ --size 360 $^
 	python3 tools/os88disk.py --verify $@
-drmariodisk: $(BUILD)/drmario.img $(BUILD)/drmario720.img $(BUILD)/drmario120.img $(BUILD)/drmario360.img
+drmariodisk: drmarcodisk
+drmarcodisk: $(BUILD)/drmario.img $(BUILD)/drmario720.img $(BUILD)/drmario120.img $(BUILD)/drmario360.img

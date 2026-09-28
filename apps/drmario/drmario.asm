@@ -1,6 +1,6 @@
-; Native XT Dr. Mario. Contracts and deliberate adaptations: SPEC.md 99.
+; Native XT DrMarco. Contracts and deliberate adaptations: SPEC.md 99.
 %include "os88api.inc"
-OS88_HEADER 'DRMARIO', dm_entry, 1, OS88_STACK_256
+OS88_HEADER 'DRMARCO', dm_entry, 1, OS88_STACK_256
 OS88_ICON16
     dw 0,0x03c0,0x07e0,0x0e70,0x1c38,0x381c,0x7038,0xe070
     dw 0xc0e0,0xc1c0,0x6380,0x7700,0x3e00,0x1c00,0,0
@@ -358,7 +358,7 @@ dm_scans: db KSC_LEFT,KSC_RIGHT,KSC_DOWN,2ch,2dh,KSC_UP,19h,31h,KSC_ENTER
 
 dm_tpl: dw 52, 32, 410, 154, dm_title, dm_paint, dm_onkey, dm_click
 OS88_PREFER dm_pref, 410,154,410,154,410,154
-dm_title: db 'Dr. Mario',0
+dm_title: db 'DrMarco',0
 dm_lines: dw dm_line1,dm_line2,dm_line3,dm_line4,dm_line5,dm_line6,dm_line7,0
 dm_line1: db 'ENTER or click: play / resume full screen',0
 dm_line2: db 'Arrows: move / drop   Z / X: rotate',0
@@ -369,9 +369,9 @@ dm_line6: db 'VGA: 320x240   CGA: 320x200 color',0
 dm_line7: db 'VGA or CGA required for play.',0
 dm_setting: db 'Level 00  Speed LOW',0
 dm_credits: dw dm_title,dm_credit1,dm_credit2,dm_credit3,0
-dm_credit1: db 'Original game: Nintendo (1990)',0
+dm_credit1: db 'Gameplay reference: Nintendo (1990)',0
 dm_credit2: db 'Native 8086 single-player adaptation',0
-dm_credit3: db 'Art imported from local NES disassembly',0
+dm_credit3: db 'Original DrMarco surround; NES cell tiles',0
 dm_speednames: dw dm_low,dm_med,dm_hi
 dm_low: db 'LOW',0
 dm_med: db 'MED',0

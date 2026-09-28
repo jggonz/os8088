@@ -320,7 +320,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | DOS | `apps/dos/dos.asm` | §96 | no |
 | DOS | `apps/dos/dosload.asm` | §96 | no |
 | DOTDEL | `apps/dotdel/dotdel.asm` | §93 | yes |
-| DRMARIO | `apps/drmario/drmario.asm` | §99 | no |
+| DRMARCO | `apps/drmario/drmario.asm` | §99 | no |
 | FONT VIEWER | `apps/fontview/fontview.asm` | §90 | yes |
 | FPTEST | `apps/fptest/fptest.asm` |  | no |
 | FRACTAL | `apps/fractal/fractal.asm` | §40 | yes |
@@ -462,7 +462,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 96 | DOS — running `.COM` and `.EXE` programs (`apps/dos/`) |
 | 97 | PIXELSTEIN 3D — a raycast shooter in a foreign mode (`apps/pixelstein/`) |
 | 98 | Gorillas (`apps/gorillas/gorillas.asm`) |
-| 99 | Dr. Mario (`apps/drmario/drmario.asm`) |
+| 99 | DrMarco (`apps/drmario/drmario.asm`) |
 
 ## docs/
 
