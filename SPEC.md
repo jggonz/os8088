@@ -152201,11 +152201,21 @@ and a README.
   module. A module the encoder needs tomorrow is in tomorrow's zip without
   anyone remembering to add it. A third-party import that is not one of the
   expected three (numpy, Pillow, the optional tkinterdnd2) stops the build,
-  so the README cannot fall behind it. Today the zip holds eight modules,
-  `VIDEO.O88` and `README.TXT`.
+  so the README cannot fall behind it. With the text format's model face,
+  `tallx.f8`, the zip holds eleven modules and it (checked 2026-09-28: every
+  file those modules read or run is among them - `os88disk.py`'s look at
+  `kernel/dskwin.inc` falls back without it), `VIDEO.O88`, `README.TXT`
+  and `boot/`.
 - **`VIDEO.O88` rides beside the tool**, which is where `player_path` looks
   after `build/` (98.2.12.1). So every disk the bundle makes carries the
-  player, and its hard disks are the formatted, unbootable kind.
+  player.
+- **...and so does what a hard disk BOOTS from** (`--boot`, the owner's
+  2026-09-28 ask that the bundle carry everything the encoder uses): the
+  window's own `HD_BOOT` and `HD_WANT` - `kernel.sys`, `boothd.bin`,
+  `mbr.bin`, `HDD.DRV`, `CTRL.DRV`, `SOUND.DRV`, `HIBER.DRV` - in `boot/`,
+  read out of `os88vencgui.py` so the two lists cannot drift, and
+  `boot_dir` looks there after `build/`. Its hard disks boot, as the
+  tree's do; they were the formatted, unbootable kind. ~95 KB of zip.
 - **It is deterministic**: entries in sorted order, every timestamp
   1980-01-01. The same tree makes the same bytes.
 - **It needs, on the user's side**, Python 3 with Tk, numpy, Pillow, and
@@ -152216,10 +152226,12 @@ there, with nothing but its own folder for Python to find an os88 module in:
 - the zip is whole, and made twice it is the same bytes;
 - it encodes a second of ffmpeg's test pattern into a `.V88` that verifies;
 - it makes a 360 KB floppy with the video's 8.3 name and `VIDEO.O88`;
-- it makes an unbootable ST11M disk that `--verify-hdd` passes;
+- it makes an ST11M disk that BOOTS - KERNEL.SYS and HDD.DRV in its root -
+  and that `--verify-hdd` passes;
 - every os88 module was the bundle's.
 
-With `os88pkg.py` taken out, both disks fail.
+With `os88pkg.py` taken out, both disks fail; made without `--boot`, the
+hard disk is the unbootable kind and it fails.
 
 #### 98.2.14 Composite colour on the text hack (`--pixfmt c512`)
 
@@ -154221,3 +154233,36 @@ The first build read `OSAPI_VIDEO`'s DL after popping DX, so it was
 switching on a stale register and turned the grey on for Hercules. The
 Hercules row caught it.
 
+### 98.5 The demo video disks
+
+**A hard disk that shows the player off**: a whole os8088 install with a set
+of demo videos in `MEDIA/` beside a `00-VIDS.TXT` that says what each is.
+`make viddemo` makes one disk for each directory of `apps/video/demo/`
+that holds a `00-VIDS.TXT` - `herc/` today, the owner's (cga/ and vga/ to
+come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
+
+- **The videos are COMMITTED**, one directory an adapter: they are the
+  owner's encodes from their own sources and cannot be remade by `make`,
+  which is `os8088.v88`'s argument (98.3.11) at 30 MB instead of 100 KB.
+  On demand, so no ordinary build carries them.
+- **The install is DERIVED**: the 1.44MB system disk's payload and the
+  1.44MB apps disk's, each package once - so a package added to either is
+  on these disks with no list edited here - with `beverly.mod` and
+  `OS8088.V88` in `MEDIA/` because the apps disk carries them. **No
+  SYSTEM.CFG**: the disk boots on the defaults, the sound card mounted
+  where there is one, and a machine's settings stay its owner's.
+- **The disk is an ST-238R on a Seagate ST11R** (615/4/26, 31 MB) for
+  86Box's 8088s. `os88disk.py --hdd --geometry 613/4/26` lays out the
+  volume, folders and all, for the 613 cylinders the card hands the BIOS -
+  the partition os8088's installer makes, from LBA 26 for 63,726 sectors,
+  byte for byte the owner's hand-made disk's entry - and `os88hdd.py
+  --wrap` puts it under the card's hidden cylinder, its parameter record
+  and a VHD footer. `--verify-hdd` passes the volume before it is wrapped.
+- **`00-VIDS.TXT` is written for Note Pad** and held to `checkreadme.py`'s
+  rules as `README.TXT` is: prose one line a paragraph, the per-video
+  blocks indented and 28 columns at most, plain ASCII, CRLF on the disk.
+
+The Hercules disk, booted on MartyPC's Hercules 5150 (the same volume at
+615/4/26 on its XT-IDE, which has no ST11R): the desktop from C:, the text
+in Note Pad and `05-ADPCM.V88` in the window at its own size. 75 files,
+15,599 of 15,891 clusters.

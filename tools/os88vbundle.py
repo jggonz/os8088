@@ -7,9 +7,10 @@
 One folder, `os8088-encoder/`, holding the encoder window, everything it
 imports or runs, VIDEO.O88 and a README.TXT. Unpacked anywhere and run with
 `python3 os88vencgui.py`, it encodes, previews and makes disks: floppies
-with the player on them, and hard disks that are formatted but do not boot
-(98.2.12.1), the player beside the tool riding every one of them
-(`player_path`).
+with the player on them, and - with `--boot`, which `make vencbundle`
+passes - hard disks that BOOT, the kernel, the boot records and the
+drivers carried in boot/ (`boot_dir`); the player beside the tool rides
+every one of them (`player_path`).
 
 THE FILE LIST IS COMPUTED, NOT WRITTEN. It starts at ROOTS - the window,
 and the three tools it runs as processes rather than importing - and follows
@@ -66,9 +67,8 @@ WHAT IT MAKES
        - a 360 KB, 720 KB, 1.2 MB or 1.44 MB FLOPPY: put it in B: next to
          an os8088 system disk and double-click the video;
        - a 20 MB (ST11M), 32 MB (ST11R) or 32 MB (IDE) HARD DISK, a fixed
-         VHD for 86Box or a real disk. It is formatted but DOES NOT BOOT:
-         boot os8088 from its system floppy, tick the hard-disk driver in
-         the Control Panel, and it comes up as C:.
+         VHD for 86Box or a real disk. It BOOTS os8088 - the kernel and
+         drivers in boot/ go on it - and the video is in its root.
 
 This folder is built from the os8088 tree by `make vencbundle`; the tools'
 own help (`python3 os88venc.py --help`) has every option.
@@ -105,6 +105,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("out")
     ap.add_argument("--player", required=True, help="VIDEO.O88 to ship")
+    ap.add_argument("--boot", metavar="BUILD",
+                    help="a build folder to take the hard disk's BOOT files "
+                    "from (the window's HD_BOOT and HD_WANT: the kernel, the "
+                    "boot records, HDD.DRV, CTRL/SOUND/HIBER.DRV) into "
+                    "boot/, so the bundle's hard disks boot")
     a = ap.parse_args()
     mods, other = closure()
     stray = other - THIRD_PARTY
@@ -119,6 +124,14 @@ def main():
             files.append((name, open(os.path.join(HERE, src), "rb").read(),
                           0o644))
     files.append(("VIDEO.O88", open(a.player, "rb").read(), 0o644))
+    if a.boot:                  # THE BOOT FILES, from the window's own lists
+        sys.path.insert(0, HERE)  # so the two cannot drift (boot_dir)
+        import os88vencgui as gui
+        for _, f in gui.HD_BOOT + gui.HD_WANT:
+            if f != "video.o88":            # (the player, above)
+                files.append(("boot/" + f,
+                              open(os.path.join(a.boot, f), "rb").read(),
+                              0o644))
     files.append(("README.TXT", README.replace("\n", "\r\n").encode(),
                   0o644))
     tmp = a.out + ".part"

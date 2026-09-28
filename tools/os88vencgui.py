@@ -472,10 +472,23 @@ def player_path(build=None):
 
 
 def hd_missing(build=None):
-    """What build/ lacks for a hard disk that BOOTS: [] when it can make
-    one. Anything missing makes the disk unbootable, not refused"""
-    b = build or os.path.join(_ROOT, "build")
+    """What the boot files' folder (boot_dir) lacks for a hard disk that
+    BOOTS: [] when it can make one. Anything missing makes the disk
+    unbootable, not refused"""
+    b = boot_dir(build)
     return [f for _, f in HD_BOOT if not os.path.exists(os.path.join(b, f))]
+
+
+def boot_dir(build=None):
+    """Where a hard disk's boot files come from: build/, or the bundle's
+    boot/ BESIDE this tool (tools/os88vbundle.py --boot, SPEC.md 98.2.13) -
+    so the encoder handed to people with no os8088 tree makes a hard disk
+    that boots, as player_path lets its floppies carry the player"""
+    b = build or os.path.join(_ROOT, "build")
+    for d in (b, os.path.join(_HERE, "boot")):
+        if all(os.path.exists(os.path.join(d, f)) for _, f in HD_BOOT):
+            return d
+    return b
 
 
 def disk_argv(v88, disk, out=None, build=None, stage=None):
@@ -486,7 +499,7 @@ def disk_argv(v88, disk, out=None, build=None, stage=None):
     too - without HD_BOOT it is formatted, not bootable, and takes the
     player alone"""
     label, kind, what = DISKS[disk]
-    b = build or os.path.join(_ROOT, "build")
+    b = boot_dir(build)
     base = os.path.splitext(v88)[0]
     name = short83(v88)
     if kind == "fd":

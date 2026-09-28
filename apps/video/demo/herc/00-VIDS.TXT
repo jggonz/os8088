@@ -1,0 +1,80 @@
+HERCULES DEMO VIDEOS
+====================
+
+Nine short videos made for the Video Player on a Hercules card, to show what it does on a 4.77 MHz IBM PC and a hard disk. They are black and white: a Hercules card is monochrome.
+
+Double-click one to open it, then press Space or click Play. Space pauses, Esc stops, and F moves a play between the window and the full screen. A video wider or taller than the window leaves room for plays full screen.
+
+Sound wants a Sound Blaster, except 02, which is made for the PC speaker (see below).
+
+01-TEXT.V88
+  The Matrix: bullet dodge
+  80 x 19 text characters
+  Full screen
+  PCM 11 kHz sound
+  24 fps, 0:49, 895 KB
+
+02-PCSPK.V88
+  Bad Carrot
+  496 x 181 pixels
+  In the window
+  PC speaker, 5.5 kHz
+  25 fps, 3:46, 8.4 MB
+
+02 is encoded and timed for the PC speaker. To hear it there, choose PC Speaker on the Control Panel's Sound page first; with a Sound Blaster chosen it plays through the card instead.
+
+03-ADPCM.V88
+  Bad Carrot
+  720 x 261 pixels
+  Full screen
+  ADPCM 5.5 kHz sound
+  25 fps, 0:27, 1.5 MB
+
+04-ADPCM.V88
+  Star Wars: trench run
+  600 x 165 pixels
+  In the window
+  ADPCM 5.5 kHz sound
+  25 fps, 0:38, 3.2 MB
+
+05-ADPCM.V88
+  Trackmania: A01
+  600 x 218 pixels
+  In the window
+  ADPCM 5.5 kHz sound
+  25 fps, 0:26, 2.5 MB
+
+06-ADPCM.V88
+  Sin City
+  720 x 261 pixels
+  Full screen
+  ADPCM 5.5 kHz sound
+  24 fps, 0:29, 2.6 MB
+
+07-PCM11.V88
+  Take On Me
+  640 x 309 pixels
+  Full screen
+  PCM 11 kHz sound
+  24 fps, 0:40, 4.0 MB
+
+08-PCM11.V88
+  K Project: opening
+  600 x 218 pixels
+  In the window
+  PCM 11 kHz sound
+  24 fps, 1:11, 6.2 MB
+
+09-LIVE.V88
+  Steamboat Willie
+  248 x 120 pixels
+  Live, on the desktop
+  ADPCM 5.5 kHz sound
+  18 fps, 0:15, 390 KB
+
+09 plays LIVE: on the desktop itself, so the machine stays usable while it plays - open a window, drag it, type. It is loaded into memory whole before it starts.
+
+ALSO IN THIS FOLDER
+===================
+
+OS8088.V88 is the os8088 logo, which plays live and loops. BEVERLY.MOD is a music module for Tracker.
