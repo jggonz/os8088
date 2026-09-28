@@ -323,9 +323,15 @@ vp_onwake:
     push dx
     cmp byte [vp_lwant], 0          ; A LIVE STREAM'S CHUNKS (98.3.18.1),
     je .nlw                         ; asked for by the worker: copied out of
-    mov byte [vp_lwant], 0          ; the hold with no lock taken, so the
-    call vp_lfeed                   ; worker draws on through it - the
-.nlw:                               ; bracket's hook-and-reader protocol
+    mov byte [vp_lwant], 0          ; the hold a chunk at a time, each under
+.lf:                                ; the lock - the worker is a TASK, not
+    call OSAPI_GFX_LOCK             ; the bracket's ISR hook, and pre-empted
+    call vp_lfeed1                  ; between vp_nextw's advance and the
+    sbb al, al                      ; decode its slot would be refilled under
+    call OSAPI_GFX_UNLOCK           ; it; so it waits one copy at most
+    or al, al
+    jz .lf
+.nlw:
     call OSAPI_GFX_LOCK
     cmp byte [vp_lend], 0           ; a LIVE play's end, found by the worker:
     je .nle                         ; finished here, on the UI task
@@ -4096,8 +4102,13 @@ vp_play:                            ; Space, P, Enter, the Play button: play,
     push ax                         ; in the window if it can host it
     cmp byte [vp_ok], 1
     jne .out
+    cmp byte [vp_lsess], 0          ; A LIVE SESSION is paused or resumed as
+    jne .lv                         ; Live, whatever vp_canlive now says (a
+                                    ; hold dropped): a bracket would leave
+                                    ; its worker running on the desktop
     call vp_canlive                 ; ...or LIVE, if the file may and the box
     jc .nl                          ; shows it at its own size (98.3.10)
+.lv:
     call vp_lplay
     jmp short .out
 .nl:
@@ -4382,12 +4393,19 @@ vp_lprime:
 .r:
     ret
 
-; vp_lfeed - a live stream's ring topped up, on the UI task. No lock needed
+; vp_lfeed - a live stream's ring topped up, on the UI task. Lock held
 vp_lfeed:
+    call vp_lfeed1
+    jnc vp_lfeed
+    ret
+
+; vp_lfeed1 - one chunk of it: CF=1 when none was read (no stream, resident,
+; or nothing due). Lock held - the worker reads what vp_fill writes (98.3.18.1)
+vp_lfeed1:
     cmp byte [vp_lsess], 0
-    je .r
+    je .none
     cmp byte [vp_resid], 0
-    jne .r
+    jne .none
     push ax
     push bx
     push cx
@@ -4395,9 +4413,7 @@ vp_lfeed:
     push si
     push di
     push es
-.f:
     call vp_fill
-    jnc .f
     pop es
     pop di
     pop si
@@ -4405,7 +4421,9 @@ vp_lfeed:
     pop cx
     pop bx
     pop ax
-.r:
+    ret
+.none:
+    stc
     ret
 
 ; vp_lask - the worker, after a pass: a slot the play has left, or a seam to
@@ -5795,22 +5813,28 @@ vp_sstart:
     ;     record, but only once key 0's entry is the one in hand - and a
     ;     POSTER at another key put that one there instead, so the play fell
     ;     back to the first record and showed the pre-roll's paint. The entry
-    ;     alone, one short read: the box keeps its poster
-    cmp word [vp_sel], 0
-    jne .k0ok
+    ;     alone, one short read: the box keeps its poster. And ANY key
+    ;     picked whose entry is not the one in hand: a stop for an unmute
+    ;     (98.3.17) picks the key at or before it and loads nothing, and
+    ;     vp_keyat leaves the entry after it in hand - the play went back
+    ;     to frame 0
+    mov ax, [vp_sel]
+    or ax, ax
+    jnz .k0sel
     cmp byte [vp_pixfmt], PF_VGA8
     jb .k0ok
+.k0sel:
     cmp word [vp_nkeys], 0
     je .k0ok
-    cmp word [vp_kload], 0
+    cmp ax, [vp_kload]
     je .k0ok
     push ax
     mov ax, [vp_kbkb]               ; vp_rdat's buffer, as vp_loadkey claims
     call OSAPI_MEM_CLAIM            ; it: a refusal leaves the old start
     jc .k0no
     mov [vp_rdseg], dx
-    xor ax, ax
-    call vp_kent                    ; [vp_ke] and [vp_kload] = key 0's
+    mov ax, [vp_sel]
+    call vp_kent                    ; [vp_ke] and [vp_kload] = the key's
     mov dx, [vp_rdseg]
     call OSAPI_MEM_FREE
 .k0no:
@@ -6294,6 +6318,8 @@ vp_sstop:
     push bx
     mov byte [vp_lrun], 0           ; (the worker, if live, is held off by the
     mov byte [vp_lsess], 0          ; lock we hold, and idles from here)
+    mov byte [vp_lend], 0           ; (a Live end's wake still queued must
+    mov byte [vp_ldrain], 0         ; not stop the NEXT session)
     cmp byte [vp_sess], 0
     je .out
     cmp byte [vp_dtok], 0           ; the time it played, if a bracket's end
@@ -7374,6 +7400,16 @@ vp_skdue:
     mov al, VOK_NOKEY
     call vo_toastk
 .back:
+    cmp byte [vp_snd], 0            ; AN UNMUTE's seek come to nothing
+    je .bk                          ; (98.3.17): its ring claimed and no card
+    cmp byte [vp_sopn], 0           ; opened or deferred - the resume would
+    jne .bk                         ; run a clock nothing plays. Silent on
+    cmp byte [vp_sdefer], 0         ; the PIT instead, as a refused open is
+    jne .bk
+    call vp_sndoff
+    mov al, VOK_SNDNX
+    call vo_toastk
+.bk:
     mov byte [vp_skhere], 0
     call vo_update                  ; the seek's text off
     cmp byte [vp_skwas], 0
@@ -8511,10 +8547,8 @@ vp_fill:
     call vp_xput
     mov ax, cx
 .got:
-    cmp ax, VP_CHUNK
-    je .full
-    mov byte [vp_eof], 1            ; the stream's last, short chunk
-.full:
+    cmp ax, VP_CHUNK                ; ZF=0: the stream's last, short chunk -
+    pushf                           ; said after [vp_lc] has it (vp_nextw)
     mov ax, [vp_lc]
     mov bx, [vp_k]
     dec bx
@@ -8541,6 +8575,10 @@ vp_fill:
     pop ds
 .pub:
     inc word [vp_lc]                ; ...and published LAST
+    popf
+    je .full
+    mov byte [vp_eof], 1            ; ...and then the end: a hook that saw it
+.full:                              ; first would call the last chunk missing
     clc
     ret
 .eof:                               ; THE FILE'S END, REPEATING (98.3.9): the
@@ -9638,6 +9676,11 @@ vp_nextw:
 .one:
     cmp ax, [vp_lc]
     jb .ld
+    cmp byte [vp_eof], 0            ; not all read yet - and never will be at
+    je .nr                          ; the file's end with no Repeat: a stream
+    cmp byte [vp_rep], 0            ; cut short, ended with the reason and
+    je .bsp                         ; not stalled on its last frame for good
+.nr:
     xor al, al                      ; not all read yet
     stc
     ret

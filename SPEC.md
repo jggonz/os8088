@@ -152878,6 +152878,12 @@ on time however long the disk takes:
 - A frame whose super-packet is not yet in memory is not drawn: that call
   counts a **stall**, and the picture holds until the reader catches up.
   With no sound there is nothing else to keep in step; with sound, 98.3.1.
+  **At the file's end with no Repeat there is no catching up**: a
+  super-packet that needs a chunk past the last one read is a stream cut
+  short, and the play ends with the bad-super-packet reason instead of
+  holding its last frame for good (`vp_nextw`). `vp_fill` sets `[vp_eof]`
+  only AFTER it has published `[vp_lc]`, so the hook never sees the end
+  before the last chunk.
 
 **The reader is the foreground**, the bracket's own loop, through
 `OSAPI_FILE_READ_SEQ` in 32 KB chunks:
@@ -153484,7 +153490,10 @@ in-window play**; everything else keeps it.
   choice scores as the layout.
 - **When**: the file says so, the rendition is MONO1 LIN80 - or VGA4 LIN80
   on a sixteen-colour desktop (98.3.10.4) - and the box shows it whole at
-  its own size (`vp_canlive`); else Play is the play it always was.
+  its own size (`vp_canlive`); else Play is the play it always was. A
+  session ALREADY Live is only ever paused or resumed as Live (`vp_play`
+  asks `[vp_lsess]` first): the hold can be dropped under it, and a
+  bracket started then left its worker drawing on the desktop.
 - **How**: Play starts a session as any play does - the block loaded, a
   keeper that is the shadow and only the canvas's size (98.1.7.3), a key
   decoded into it if the play starts at one - and hires the package's ONE worker (20.6), once, declared
@@ -153501,7 +153510,9 @@ in-window play**; everything else keeps it.
 - **F hands it to the full screen**, playing on from the frame it was on,
   and F back hands it to the desktop, Live again; the keeper is the shadow
   both ways. The file's end (Repeat off) is found by the worker and
-  finished on the UI task's wake.
+  finished on the UI task's wake - `[vp_lend]`, which `vp_sstop` clears,
+  so a session ended another way before that wake runs does not hand its
+  end to the next one.
 - **Live with SOUND** is 98.3.10.1.
 - **Live in COLOUR** is 98.3.10.4.
 - **Not built**: **Live fed from the disk**, which the owner's rule drops
@@ -154106,6 +154117,15 @@ a seek there would land on.
   all, in the window.
 - **Live, or a session waiting on the desktop**: stopped at the key and, if
   it was playing, played again from it.
+- **The stop picks the key and does not load it** (`vp_after`'s mode 1), and
+  `vp_keyat` leaves the entry AFTER it in hand, so `vp_sstart` reads the
+  picked key's entry itself whenever it is not the one loaded - one 16-byte
+  read, key 0's colour case generalised. Without it both restarts fell back
+  to the stream's first record: frame 0.
+- **A full-screen seek that comes to nothing** (no key read, its buffer
+  refused) has claimed the ring and opened no card: `vp_skdue` turns the
+  sound off again (`vp_sndoff`) before it resumes, and the play goes on
+  silent on the PIT, as a refused open does.
 
 **The card path forces**: every ADPCM4 open passes `SND_OPENF_FORCE`
 (§34.5.3.1). The player only reaches the open unmuted, and on a card where
@@ -154212,10 +154232,15 @@ docs/plans/VIDEO-PLAN.md). What changes:
   over) and starts the worker. After each pass the worker looks: a slot the
   play has left, or at the file's end with Repeat the seam to read, and it
   posts ONE `OSAPI_WM_WAKE` (`vp_lask`, `[vp_lwant]`); the wake runs
-  `vp_fill` until the ring is full (`vp_lfeed`) BEFORE it takes the gfx
-  lock, so the worker draws on through it. It is the bracket's hook-and-
-  reader protocol with the worker as the hook: `vp_fill` publishes
-  `[vp_lc]` last, and a record not in yet is a stall, not a wait.
+  `vp_fill` until the ring is full, ONE CHUNK AT A TIME UNDER THE GFX LOCK
+  (`vp_lfeed1`), so the worker waits one copy at most. It is the bracket's
+  hook-and-reader protocol with the worker as the hook: `vp_fill` publishes
+  `[vp_lc]` last, and a record not in yet is a stall, not a wait. The lock
+  is what the bracket's ISR hook never needed: the worker is a TASK, and
+  pre-empted between `vp_nextw`'s advance of `[vp_pc]` and the decode of
+  that super-packet's last record, it would have its slot refilled under
+  it - and `vp_mneed` would read `[vp_pc]`/`[vp_po]`/`[vp_psec]` half
+  moved.
 - **F and back**: the bracket's reader takes over and hands back; `vp_lback`
   tops the ring up.
 - **Sound** is the resident Live file's arrangement (98.3.10.1) with the
