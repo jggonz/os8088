@@ -152491,12 +152491,16 @@ playback difference to copy: what the pulses carry is the whole question.
 
 **So `--audio speaker` shapes the sound by default** (`os88vid.spk_shape_f`,
 from ffmpeg's floats, not 8-bit steps):
-1. **nothing under `--spk-highpass`** (250 Hz; 0 keeps the bass), a brick
+0. **a STYLE** (`--spk-style`) sets three of what follows - `lifted`, the
+   default, is the owner's "K": a cut at 200 Hz, ratio 3, range 30; and
+   `natural` is "W": 250 Hz, ratio 2, range 24, more of the song's own rise
+   and fall. Given, `--spk-highpass`, `--spk-ratio` and `--spk-range` win;
+1. **nothing under `--spk-highpass`** (the style's; 0 keeps the bass), a brick
    wall with a squared one-octave ramp, and the top **tilted up +9 dB from
    400 Hz to 2.4 kHz**, where the cone and the ear are both at their best;
 2. **the level evened out** over a centred 30 ms RMS held over the window
-   either side - a `--spk-ratio`:1 compressor (2), its gain growing no
-   further below `--spk-range` dB (24) under the loudest 0.5%, and
+   either side - a `--spk-ratio`:1 compressor, its gain growing no
+   further below `--spk-range` dB under the loudest 0.5%, and
    **silence left silent** below −48 dB - in TWO BANDS, under 700 Hz and
    over it, each levelled against the whole signal's loudest so that a
    band with nothing in it stays empty, and the lower one scaled by
@@ -152540,6 +152544,11 @@ not its range: at ratio 2 the intro is 24 counts RMS against the singing's
 150 Hz** - the beat's own punch is under 250 - takes it to 33 against
 52.5, the voice to −3.6 dB under the carrier, clipping unchanged (6.6%).
 That is the next listen, with ratio 6 beside it.
+
+The fourth: ratio 6 *"too loud, it runs together"*, and the pick between
+the two; ratio 3, range 30, a cut at 200 - **"pretty good"**. The owner
+asked for both to be offered: that is `lifted` and `natural` above, the
+first the default.
 
 A synthetic clip of a loud 60 Hz bass and a quiet 880 Hz line measures it
 the other way round: the line −43.0 dB → −5.4 dB of full scale, the bass

@@ -324,6 +324,24 @@ CHOICE_HELP = {
         "search": "Search for the best ADPCM stream (~7 dB better, slower)",
         "greedy": "A nibble at a time: fast",
     },
+    "spk_shape": {
+        "on": "Shape the sound for the PC speaker: what its cone cannot "
+              "play cut, the level evened out and driven loud enough to "
+              "be heard over its whine",
+        "off": "The sound as it is: most of it lands under the whine on a "
+               "real 5150",
+    },
+    "spk_style": {
+        "lifted": "Quiet passages raised, so a soft intro is heard; the "
+                  "owner's pick of the listens on the 5150",
+        "natural": "More of the song's own rise and fall: a soft passage "
+                   "stays soft",
+    },
+    "spk_pulses": {
+        "1": "One pulse a sample: the whine is at the sound's rate",
+        "2": "Two a sample: the whine at twice the rate, much quieter to "
+             "the ear - ~96% of a 4.77 MHz 8088, so for a 286 or better",
+    },
     "dither": {
         "bayer": "An ordered 8 x 8 pattern: steady, compresses best",
         "bluenoise": "A noise pattern: no visible grid, ~8% more data",
@@ -2957,15 +2975,22 @@ def _encode(a, keep, tick, readers):
                 % (enc.reserve // 1024,
                    (vid.RING_SLOTS[-1] - 1) * vid.SLOT // 1024))
     if spk and afmt and a.spk_shape == "on":
+        st = vid.SPK_STYLES[getattr(a, "spk_style", None) or vid.SPK_STYLE]
+        for k, v in (("spk_highpass", "hp"), ("spk_ratio", "ratio"),
+                     ("spk_range", "rng")):
+            if getattr(a, k, None) is None:
+                setattr(a, k, st[v])
         # SHAPED FOR THE SPEAKER (98.2.15.1): what a 5150's cone can play
         # would otherwise sit 25-30 dB under the pulses' own carrier
         pcm = vid.spk_shape_f(np.frombuffer(ffmpeg_audio(
             a.src, rate, a.start, a.end, a.volume, "f32le"), dtype="<f4"),
             rate, a.spk_highpass, a.spk_drive, lows=a.spk_lows,
             rng=a.spk_range, ratio=a.spk_ratio, idle=a.spk_idle)
-        say("   speaker: shaped - nothing under %d Hz, the level evened out "
-            "and driven to %.0f%% RMS (--spk-shape off to take the sound "
-            "as it is)" % (a.spk_highpass, 100 * a.spk_drive))
+        say("   speaker: shaped %s - nothing under %d Hz, the level evened "
+            "out %g:1 and driven to %.0f%% RMS (--spk-shape off to take the "
+            "sound as it is)" % (getattr(a, "spk_style", None)
+                                 or vid.SPK_STYLE, a.spk_highpass,
+                                 a.spk_ratio, 100 * a.spk_drive))
     else:
         pcm = ffmpeg_audio(a.src, rate, a.start, a.end, a.volume) \
             if afmt else b""
@@ -3288,9 +3313,16 @@ def parser():
                          "play, even the level out and drive it loud, so the "
                          "sound is heard over the pulses' whine (SPEC.md "
                          "98.2.15.1). off takes the sound as it is")
-    ap.add_argument("--spk-highpass", type=int, default=vid.SPK_HP,
+    ap.add_argument("--spk-style", choices=sorted(vid.SPK_STYLES),
+                    default=vid.SPK_STYLE,
+                    help="with --spk-shape: LIFTED levels harder so quiet "
+                         "passages are heard; NATURAL keeps more of the "
+                         "song's own rise and fall (default %(default)s). "
+                         "--spk-highpass, --spk-ratio and --spk-range "
+                         "override it (SPEC.md 98.2.15.1)")
+    ap.add_argument("--spk-highpass", type=int, default=None,
                     metavar="HZ", help="with --spk-shape: nothing under this "
-                    "(default %(default)s; 0 keeps the bass)")
+                    "(the style's; 0 keeps the bass)")
     ap.add_argument("--spk-pulses", type=int, choices=(1, 2),
                     default=1,
                     help="with --audio speaker: pulses a sample, so the "
@@ -3308,12 +3340,12 @@ def parser():
                     "the pulses' resting width to the short end over this "
                     "many seconds, so the whine goes where there is nothing "
                     "to cover it (default %(default)s; 0 off)")
-    ap.add_argument("--spk-ratio", type=float, default=vid.SPK_RATIO,
+    ap.add_argument("--spk-ratio", type=float, default=None,
                     help="with --spk-shape: the leveller's ratio - higher "
-                         "lifts quiet passages more (default %(default)s:1)")
-    ap.add_argument("--spk-range", type=float, default=vid.SPK_RANGE,
+                         "lifts quiet passages more (the style's)")
+    ap.add_argument("--spk-range", type=float, default=None,
                     metavar="DB", help="with --spk-shape: the most a quiet "
-                    "passage is raised (default %(default)s)")
+                    "passage is raised (the style's)")
     ap.add_argument("--spk-lows", type=float, default=vid.SPK_LOWS,
                     help="with --spk-shape: the band under %d Hz levelled "
                          "apart from the one over it and scaled by this, so "

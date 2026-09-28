@@ -728,11 +728,18 @@ def spk_samples(counts, rate, pulses=1):
     return bytes(inv[c] if inv[c] is not None else 128 for c in counts)
 
 
-SPK_HP = 250                    # the speaker's high-pass, Hz (98.2.15.1)
+# THE TWO STYLES (98.2.15.1), both the owner's picks off the 5150: LIFTED
+# levels harder and cuts lower, so a quiet passage is heard ("K"); NATURAL
+# keeps more of the song's own rise and fall ("W"). The defaults below are
+# LIFTED's; a style fills in whatever of hp, ratio and range was not given
+SPK_STYLES = {"lifted": dict(hp=200, ratio=3.0, rng=30.0),
+              "natural": dict(hp=250, ratio=2.0, rng=24.0)}
+SPK_STYLE = "lifted"
+SPK_HP = 200                    # the speaker's high-pass, Hz (98.2.15.1)
 SPK_DRIVE = 0.5                 # ...and its level, an RMS of full scale
 SPK_LOWS = 0.5                  # ...the band under SPK_SPLIT, against it
-SPK_RANGE = 24                  # ...and the most a quiet passage is raised
-SPK_RATIO = 2.0                 # ...the leveller's ratio, 2:1
+SPK_RANGE = 30                  # ...and the most a quiet passage is raised
+SPK_RATIO = 3.0                 # ...the leveller's ratio, 3:1
 SPK_IDLE = 0.02                 # ...and the carrier's slide in the quiet, s
 SPK_SPLIT = 700                 # ...and where --spk-lows starts, Hz
 
@@ -3290,6 +3297,10 @@ def cmd_spkwav(a):
 
 
 def cmd_speaker(a):
+    st = SPK_STYLES[a.style]
+    for k, v in (("highpass", "hp"), ("ratio", "ratio"), ("range", "rng")):
+        if getattr(a, k) is None:
+            setattr(a, k, st[v])
     n = spk_reshape(a.file, a.out, a.highpass, a.drive, a.lows, a.range,
                     a.ratio, a.idle)
     print("os88vid: %s: %d rendition%s' sound shaped for the speaker "
@@ -3977,8 +3988,12 @@ def main():
                        "the speaker, into a new file (SPEC.md 98.2.15.1)")
     s.add_argument("file")
     s.add_argument("out")
-    s.add_argument("--highpass", type=int, default=SPK_HP,
-                   help="Hz; nothing under it (default %(default)s, 0 off)")
+    s.add_argument("--style", choices=sorted(SPK_STYLES), default=SPK_STYLE,
+                   help="lifted: quiet passages raised; natural: more of the "
+                        "song's own rise and fall (default %(default)s). "
+                        "--highpass, --ratio and --range override it")
+    s.add_argument("--highpass", type=int, default=None,
+                   help="Hz; nothing under it (the style's; 0 off)")
     s.add_argument("--drive", type=float, default=SPK_DRIVE,
                    help="the level, an RMS of full scale (default "
                         "%(default)s)")
@@ -3989,11 +4004,11 @@ def main():
     s.add_argument("--idle", type=float, default=SPK_IDLE,
                    help="s: the resting width's slide in the quiet (default "
                         "%(default)s; 0 off)")
-    s.add_argument("--ratio", type=float, default=SPK_RATIO,
-                   help="the leveller's ratio (default %(default)s:1)")
-    s.add_argument("--range", type=float, default=SPK_RANGE,
-                   help="dB: the most a quiet passage is raised (default "
-                        "%(default)s)")
+    s.add_argument("--ratio", type=float, default=None,
+                   help="the leveller's ratio (the style's)")
+    s.add_argument("--range", type=float, default=None,
+                   help="dB: the most a quiet passage is raised (the "
+                        "style's)")
     s = sub.add_parser("decode")
     s.add_argument("file")
     s.add_argument("--frame", type=int, required=True)

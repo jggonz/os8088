@@ -2272,9 +2272,16 @@ Carrot on profile `5150-st225` (98.2.15.4):
 `CYC_SPK_PULSE` is 449 now (the iret counted). The late plays first
 blamed on it were MartyPC's XT-IDE - the only hard disk it has; the
 owner's ST11M is DMA - and the owner's 02 runs on schedule on the 5150.
-**What is open**: whether the defaults move to 8 kHz and the midpoint
-shaping (the owner's listen to BADCARK), and the shipping demo's
-geometry at 8 kHz.
+BADCARK was *"pretty good"*: it is `--spk-style lifted`, the default,
+with W as `natural` beside it (98.2.15.1). **The frame rate has a floor**
+(the owner): *"15 fps is jerky and not viable. 25 is about the lowest for
+Bad Carrot as it depends on smoothness - some other videos can afford as
+low as 18, but they are rare. Smoothness matters more than some amount of
+motion blur."* So 8 kHz is bought with the box or with error, not with
+frames. **What is open**: the owner's encodes in 86Box, which is
+speed-accurate where MartyPC's only hard disk is an XT-IDE - which box at
+25 fps and 8 kHz keeps time on the ST11M, and whether the default speaker
+rate moves to 8,000.
 
 **22 kHz on a 286 is BUILT** (the owner: *"a 286 with no sound card is a
 legitimate period possibility; one of my childhood systems was exactly
