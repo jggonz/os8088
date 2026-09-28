@@ -152,6 +152,7 @@ n_exclusive:
     call OSAPI_FSX_MODE
     jc n_failed
     call n_palette
+    call n_loading
     call n_loadgfx
     jc n_assetfailed
     mov word [n_scene], 0ffffh
@@ -274,6 +275,7 @@ n_msgresume: db 'P TO RESUME',0
 %include "1942art.inc"
 %include "video.inc"
 %include "game.inc"
+%include "scroll.inc"
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
 %include "os88ui.inc"
@@ -340,5 +342,35 @@ VAR n_blitptr,4
 VAR n_record,2
 VAR n_plane,2
 VAR n_vorigin,2
+VAR n_scroll,2
+VAR n_worldy,2
+VAR n_worldpage,2
+VAR n_scrollstage,2
+VAR n_ringstart,2
+VAR n_ringend,2
+VAR n_ringbytes,2
+VAR n_worldheight,2
+VAR n_scanline,256
+VAR n_rowmap,2
+VAR n_rowtile,2
+VAR n_rowhalf,2
+VAR n_cacheend,2
+VAR n_cachestart,2
+VAR n_rowdest,2
+VAR n_rowrepeat,2
+VAR n_toprow,2
+VAR n_toppage,2
+VAR n_logicalrow,2
+VAR n_cgastart,2
+VAR n_prepare,1
+VAR n_damagevalid,1
+VAR n_damagecount,2
+VAR n_damageend,2
+VAR n_spans,400
+VAR n_vbases,4
+VAR n_vscrolls,4
+VAR n_shift,2
+VAR n_showbase,2
+VAR n_spriteid,2
 OS88_BSS NBSS
 OS88_IMAGE_END

@@ -1,7 +1,7 @@
 ; Adapter-native renderer. VGA latch restoration/page flipping; CGA packed runs.
 ; All ports and foreign-mode stores are confined to the FSX bracket (SPEC 99).
 N_LIST_BYTES equ 1536
-N_BACK equ 38400
+N_BACK equ N_PAGE_BYTES*2
 N_CBUF equ 16384
 
 n_palette:
@@ -78,7 +78,7 @@ n_loadgfx:
     mov al,2
     mov ah,bl
     out dx,ax
-    mov di,57600
+    mov di,N_CACHE_START
     mov cx,N_CACHE_BYTES
     rep movsb
     shl bl,1
@@ -102,6 +102,7 @@ n_loadgfx:
 n_lfile: db '1942L.GFX',0
 n_vfile: db '1942V.GFX',0
 n_cfile: db '1942C.GFX',0
+%if !N_ROM
 n_scenefiles: dw n_seav,n_reefv,n_portv,n_seac,n_reefc,n_portc
 n_scenesums: dw N_SEA_V_SUM,N_REEF_V_SUM,N_PORT_V_SUM,N_SEA_C_SUM,N_REEF_C_SUM,N_PORT_C_SUM
 n_seav: db 'SEA.V42',0
@@ -120,6 +121,11 @@ n_scenecheck:
     div bx
     cmp dx,[n_scene]
     je .same
+    call n_loading
+    cmp word [n_scene],0ffffh
+    je .resume
+    mov word [n_scroll],0
+.resume:
     push dx
     mov bx,dx
     cmp byte [n_cga],0
@@ -175,6 +181,7 @@ n_scenecheck:
     rep movsw
     pop ds
 .refresh:
+    call n_scrollsetup
     call n_refresh
 .same:
     clc
@@ -183,6 +190,8 @@ n_scenecheck:
     mov byte [n_error],2
     stc
     ret
+
+%endif
 
 ; Select this page's rectangle list. 256 records is more than all actors,
 ; bullets and message glyphs together, including old/new CGA footprints.
@@ -197,7 +206,11 @@ n_list:
 .out:
     ret
 n_mark:
-    SAVE
+    cmp byte [n_prepare],2
+    je .quick
+    push ax
+    push bx
+    push di
     cmp byte [n_background],0
     jne .out
     mov byte [n_rendered],1
@@ -215,11 +228,14 @@ n_mark:
     shl bx,1
     add word [n_counts+bx],6
 .out:
-    RESTORE
+    pop di
+    pop bx
+    pop ax
+.quick:
     ret
 ; CX,DX position; BX,BP dimensions -> native offset/byte width/height/phase.
 n_geometry:
-    SAVE
+    push si
     mov si,dx
     shl si,1
     mov ax,[n_yv+si]
@@ -231,23 +247,10 @@ n_geometry:
     mov si,cx
     shl si,1
     mov dx,[n_xc+si]
-    mov cx,bx
-    shl bx,1
-    shl bx,1
-    add bx,cx
-    add bx,3
-    shr bx,1
-    shr bx,1
-    push ax
-    mov ax,bp
-    mov cx,5
-    mul cx
-    add ax,5
-    mov cx,6
-    div cx
-    mov [n_height],ax
-    pop ax
-    mov dx,[n_xc+si]
+    mov si,[n_spriteid]
+    mov bx,[n_cgawidths+si]
+    mov bp,[n_cgaheights+si]
+    mov [n_height],bp
     jmp .common
 .vga:
     add ax,8
@@ -264,7 +267,7 @@ n_geometry:
     shr bx,1
     shr bx,1
     mov [n_width],bx
-    RESTORE
+    pop si
     ret
 
 ; SI=sprite number, CX/DX logical origin. Opaque spans are precompiled.
@@ -277,6 +280,7 @@ n_sprite:
     jae .out
     mov bx,si
     shl bx,1
+    mov [n_spriteid],bx
     mov ax,[n_cacheindex+bx]
     mov [n_cacheptr],ax
     cmp byte [n_cga],0
@@ -304,6 +308,15 @@ n_sprite:
     ja .out
     call n_geometry
     call n_mark
+    cmp byte [n_prepare],1
+    jne .draw
+    cmp byte [n_background],0
+    jne .draw
+    ; Hardware scrolling moves VRAM, not the linear composition buffer.
+    ; Prepare every new actor footprint before drawing any actor so masked
+    ; stores see current terrain and overlapping sprites preserve draw order.
+    jmp .out
+.draw:
     mov [n_record],si
     cmp byte [n_cga],0
     jne .cga
@@ -457,6 +470,21 @@ n_text:
     ret
 
 ; Restore one native rectangle from the stage cache. SI -> offset,width,height.
+; Keep the row advance inline: a near call/return per scanline is costly on XT.
+%macro N_RESTORE_ADVANCE 0
+    add si,dx
+    add di,dx
+    cmp si,ax
+    jb %%hud
+    sub si,[cs:n_ringbytes]
+    jmp %%next
+%%hud:
+    ; Only a full refresh crosses from the fixed HUD into the terrain.
+    cmp si,[cs:n_cachestart]
+    jne %%next
+    add si,[cs:n_scroll]
+%%next:
+%endmacro
 n_restore:
     SAVE
     push ds
@@ -464,25 +492,44 @@ n_restore:
     mov bx,[si+2]
     mov bp,[si+4]
     mov si,di
+    mov ax,[n_ringend]
+    mov [n_cacheend],ax
+    mov ax,[n_ringstart]
+    mov [n_cachestart],ax
+    cmp si,ax
+    jb .position
+    add si,[n_scroll]
+    cmp si,[n_ringend]
+    jb .position
+    sub si,[n_ringbytes]
+.position:
     cmp byte [n_cga],0
     jne .cga
     add si,N_BACK
+    add word [n_cacheend],N_BACK
+    add word [n_cachestart],N_BACK
     add di,[n_drawbase]
     mov dx,3ceh
     mov ax,4105h
-    out dx,ax                     ; write mode 1: all four latches
+    out dx,ax
     mov dx,3c4h
     mov ax,0f02h
     out dx,ax
     mov ax,[n_fsi+FSI_SEG]
     mov es,ax
     mov ds,ax
+    mov dx,80
+    sub dx,bx
+    mov ax,[cs:n_cacheend]
     jmp .rows
 .cga:
     add di,N_CBUF
     mov ax,[n_canvas]
     mov es,ax
     mov ds,ax
+    mov dx,80
+    sub dx,bx
+    mov ax,[cs:n_cacheend]
 .crows:
     mov cx,bx
     shr cx,1
@@ -490,20 +537,14 @@ n_restore:
     jnc .ctail
     movsb
 .ctail:
-    add si,80
-    sub si,bx
-    add di,80
-    sub di,bx
+    N_RESTORE_ADVANCE
     dec bp
     jnz .crows
     jmp .restored
 .rows:
     mov cx,bx
     rep movsb
-    add si,80
-    sub si,bx
-    add di,80
-    sub di,bx
+    N_RESTORE_ADVANCE
     dec bp
     jnz .rows
 .restored:
@@ -516,21 +557,29 @@ n_restore:
 .out:
     RESTORE
     ret
+%unmacro N_RESTORE_ADVANCE 0
 n_fullrect: dw 0,80,240
 n_cfullrect: dw 0,80,200
 n_hudrect: dw 8,64,16
 n_chudrect: dw 0,80,14
 n_clear:
     SAVE
+    mov byte [n_damagevalid],0
+    mov word [n_cgastart],0
     mov word [n_counts],0
     mov word [n_counts+2],0
     mov word [n_oldcount],0
     cmp byte [n_cga],0
     jne .cga
     mov si,n_fullrect
-    mov word [n_drawbase],0
+    mov ax,[n_scroll]
+    mov [n_vscrolls],ax
+    mov [n_vscrolls+2],ax
+    mov word [n_vbases],N_PAGE_PAD
+    mov word [n_vbases+2],N_PAGE_BYTES+N_PAGE_PAD
+    mov word [n_drawbase],N_PAGE_PAD
     call n_restore
-    mov word [n_drawbase],19200
+    mov word [n_drawbase],N_PAGE_BYTES+N_PAGE_PAD
     call n_restore
     jmp .done
 .cga:
@@ -541,55 +590,156 @@ n_clear:
     mov word [n_rects+2],80
     mov word [n_rects+4],200
     mov word [n_counts],6
+    mov word [n_oldcount],6
 .done:
     mov word [n_page],0
-    mov word [n_drawbase],0
+    mov word [n_drawbase],N_PAGE_PAD
     mov byte [n_rendered],1
     RESTORE
     ret
 n_erase:
     SAVE
+    call n_scrollstep
+    mov byte [n_damagevalid],0
+    cmp byte [n_cga],0
+    jne .cga
+    ; Both hidden pages have a small row margin. Move the display origin
+    ; through that margin instead of copying terrain. Rebase only when the
+    ; page runs out of margin; the other page remains visible throughout.
+    mov bx,[n_page]
+    shl bx,1
+    mov ax,[n_vscrolls+bx]
+    sub ax,[n_scroll]
+    jnc .delta
+    add ax,[n_ringbytes]
+.delta:
+    mov [n_shift],ax
+    mov dx,[n_scroll]
+    mov [n_vscrolls+bx],dx
+    mov dx,[n_vbases+bx]
+    sub dx,ax
+    jc .rebase
+    xor ax,ax
+    cmp bx,0
+    je .floor
+    mov ax,N_PAGE_BYTES
+.floor:
+    cmp dx,ax
+    jb .rebase
+    mov [n_vbases+bx],dx
+    mov [n_drawbase],dx
+    jmp .list
+.rebase:
+    mov ax,N_PAGE_PAD
+    cmp bx,0
+    je .base
+    add ax,N_PAGE_BYTES
+.base:
+    mov [n_vbases+bx],ax
+    mov [n_drawbase],ax
+    mov word [n_counts+bx],0
+    mov si,n_fullrect
+    call n_restore
+    jmp .done
+.cga:
+    ; MC6845 start address scrolls both 8KB banks by one pair of scanlines.
+    ; This moves every visible terrain pixel without copying the playfield.
+    sub word [n_cgastart],80
+    and word [n_cgastart],1fffh
+    mov word [n_shift],160
+.list:
     call n_list
     mov si,bx
     mov bp,di
-    mov [n_oldcount],di
-.loop:
+.old:
     or bp,bp
-    jz .done
+    jz .incoming
+    ; Last frame's actors moved down two native rows with the display.
+    mov ax,[n_shift]
+    add [si],ax
+    mov ax,[si]
+    xor dx,dx
+    mov bx,80
+    div bx
+    mov bx,[n_worldheight]
+    sub bx,ax
+    jbe .offscreen
+    cmp [si+4],bx
+    jbe .restore
+    mov [si+4],bx
+    jmp .restore
+.offscreen:
+    mov word [si],0
+    mov word [si+2],0
+    mov word [si+4],1
+.restore:
+    cmp byte [n_cga],0
+    jne .collected
     call n_restore
+.collected:
     add si,6
     sub bp,6
-    jmp .loop
-.done:
+    jmp .old
+.incoming:
     cmp byte [n_cga],0
-    jne .keep
+    jne .ctop
     mov bx,[n_page]
     shl bx,1
     mov word [n_counts+bx],0
-.keep:
+    mov ax,[n_shift]
+    xor dx,dx
+    mov bx,80
+    div bx
+    add ax,16
+    mov [n_vtoprect+4],ax
+    mov si,n_vtoprect
+    call n_restore
+    jmp .done
+.ctop:
+    ; Fixed HUD + two newly exposed terrain rows. Old HUD pixels must not
+    ; scroll into the playfield. The rest is already in the CGA hardware ring.
+    mov word [n_origin],0
+    mov word [n_width],80
+    mov word [n_height],16
+    call n_mark
+    mov ax,[n_counts]
+    mov [n_oldcount],ax
+.done:
     mov byte [n_rendered],1
     RESTORE
     ret
+n_vtoprect: dw 0,80,20
 n_present:
     SAVE
     cmp byte [n_rendered],0
     je .out
     cmp byte [n_cga],0
     jne .cga
-    mov ax,[n_page]
-    call OSAPI_FSX_PAGE
+    mov bx,[n_drawbase]
+    mov [n_showbase],bx
+    mov dx,3d4h
+    mov al,0ch
+    mov ah,bh
+    out dx,ax
+    inc al
+    mov ah,bl
+    out dx,ax
+    mov al,FSXW_VSYNC
+    call OSAPI_FSX_WAIT
     xor word [n_page],1
-    mov ax,19200
-    cmp word [n_page],0
-    jne .base
-    xor ax,ax
-.base:
+    mov bx,[n_page]
+    shl bx,1
+    mov ax,[n_vbases+bx]
     mov [n_drawbase],ax
     jmp .done
 .cga:
+    cmp byte [n_damagevalid],0
+    jne .ready
+    call n_damagebuild
+.ready:
     push ds
-    mov bp,[n_counts]
-    mov bx,n_rects
+    mov bp,[n_damagecount]
+    mov bx,n_rects+N_LIST_BYTES
 .rect:
     or bp,bp
     jz .compact
@@ -614,6 +764,11 @@ n_present:
     sub dx,cx
     mov di,ax
     add di,dx
+    mov ax,di
+    and ax,2000h
+    add di,[n_cgastart]
+    and di,1fffh
+    or di,ax
     mov si,[bx]
     add si,N_CBUF
     mov bp,[bx+4]
@@ -621,19 +776,37 @@ n_present:
     mov es,[n_fsi+FSI_SEG]
     mov ds,[n_canvas]
 .row:
+    push di
+    mov dx,di
+    and dx,1fffh
+    neg dx
+    add dx,2000h                   ; bytes left in this physical bank
     mov cx,bx
+    cmp cx,dx
+    jbe .copy
+    mov cx,dx
+    shr cx,1
+    rep movsw
+    jnc .firsttail
+    movsb
+.firsttail:
+    sub di,2000h                   ; wrap within the same even/odd bank
+    mov cx,bx
+    sub cx,dx
+.copy:
     shr cx,1
     rep movsw
     jnc .tail
     movsb
 .tail:
+    pop di
     add si,80
     sub si,bx
-    sub di,bx
     xor di,2000h
     test di,2000h
     jnz .bank
     add di,80
+    and di,1fffh
 .bank:
     dec bp
     jnz .row
@@ -646,6 +819,16 @@ n_present:
     jmp .rect
 .compact:
     pop ds
+    ; The CGA address is in words and wraps separately in each 8KB bank.
+    mov bx,[n_cgastart]
+    shr bx,1
+    mov dx,3d4h
+    mov al,0ch
+    mov ah,bh
+    out dx,ax
+    inc al
+    mov ah,bl
+    out dx,ax
     push ds
     pop es
     mov si,n_rects
@@ -707,7 +890,10 @@ n_hudcopy:
     je .copy
     mov si,n_chudrect
 .copy:
+    cmp byte [n_prepare],1
+    je .mark
     call n_restore
+.mark:
     mov ax,[si]
     mov [n_origin],ax
     mov ax,[si+2]

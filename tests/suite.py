@@ -2407,8 +2407,9 @@ SOAK = [
         "is about one package",
         needs=("nasm",)),
     Row("1942", "soak", py("tests/n1942.py"), 98.0,
-        "Native VGA/CGA graphics, stage banks, combat, XT frame rate and desktop "
-        "restoration; measured 97.4s on both adapters, including bad/missing banks",
+        "Native VGA/CGA graphics, pre-I/O loading, scrolling/ring wrap, aircraft "
+        "variety, combat, XT frame rate, missing/damaged banks and desktop restore; "
+        "uses a local cartridge when the package was built with one",
         needs=("marty", "nasm"), wants=("build/1942-360.img", "build/os8088-360.img")),
     Row("gorillas", "soak", py("tests/gorillas.py"), 100.0,
         "Native Gorillas (SPEC.md 98), measured 97.3s on three adapters: "

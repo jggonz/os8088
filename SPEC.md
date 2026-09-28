@@ -149033,94 +149033,124 @@ text. These are emulator cycle measurements, not hardware measurements.
 
 ## 99. 1942 — native vertical shooter (`apps/1942/`)
 
-A standalone native game. `make 1942disk` builds the 360KB and 1.44MB game
-floppies using committed original artwork. No NES cartridge, extracted ROM
-assets, network service or C compiler is a build input. `art/` contains the
-original artwork and indexed production source; the host compiler is
-`tools/1942assets.py`. The rendering engine lives in the package; its CGA
-sprite bank also contains compiled graphics programs.
+A standalone native game. `make 1942disk` builds 360KB and 1.44MB game
+floppies. With a local `1942.nes`, or `N1942_ROM=/path/to/1942.nes`, the host
+imports cartridge aircraft and terrain; `N1942_ROM=` selects the committed
+original artwork. Normal builds need NASM and Python's standard library.
+The cartridge and extracted assets are local inputs/outputs, never committed
+or downloaded. This is a native remake, not an NES emulator: movement,
+combat, timing and stage progression remain the package's own simulation.
 
 ### 99.1 Video and memory
 
-VGA uses FSXM_MODEX, 320x240, with a 256x240 playfield at x=32. Pages 0 and 1
-alternate through OSAPI_FSX_PAGE. Page 2 holds the stage backdrop. Dirty
-rectangles from each page's previous use are restored with VGA write-mode-1
-latch copies: a byte transfers four pixels across the four planes. Moving
-sprites are cached in offscreen VGA memory above offset 57600,
-with two horizontal phases (even x positions). Grouped map masks and latch
-copies draw four pixels per transfer. Text retains opaque runs per plane;
-no transparent-pixel branch or
-chunky-to-planar conversion occurs in the frame loop. Only the hidden page
-is erased or drawn. The GC write mode and sequencer map mask are set by the
-package inside its FSX bracket and restored by the bracket on exit.
+VGA uses FSXM_MODEX, 320x240, with a 256x240 playfield at x=32. Two
+hidden/draw pages have a small row margin. Scrolling subtracts native rows
+from each page's CRTC start address. Previous actor rectangles move by the
+same displacement and are restored from the terrain ring, followed by the
+fixed HUD and newly exposed rows. When a page exhausts its margin, it is
+rebased and refreshed with write-mode-1 latch copies while the other page
+remains visible. The package programs the start address inside FSX and waits
+through the OS's bounded FSXW_VSYNC service. Page and cache sizes are generated
+from the deduplicated sprite cache so all regions fit below offset 65536.
+Sprite latch commands have two horizontal phases (even x positions); text
+uses opaque runs per plane. No per-pixel conversion runs in combat.
 
 CGA uses FSXM_CGA320, 320x200. Logical coordinates scale 5:4 horizontally
-and 5:6 vertically. Its sprites are prepacked into four horizontal phases,
-with opaque byte runs and masked edge bytes. Aircraft, explosions and projectiles
-use precompiled 8086 ES:DI stores (word masks/immediates), ending in RETF;
-these are graphics programs in the validated bank, called by the package.
-A native 2bpp RAM canvas holds
-the finished pixels; only old/new sprite rectangles transfer to the two CGA
-banks. There is no runtime conversion of a chunky full-screen canvas.
-C selects the three legal 3D9h profiles in palette.json. VGA uses the
-shared RGB palette; CGA's four colors remain the hardware's fixed groups.
+and 5:6 vertically. The MC6845 display start address advances by one pair of
+native scanlines per simulation frame, modulo 8192 bytes per video bank.
+Presentation splits copies crossing a physical bank boundary. The fixed HUD
+and two incoming terrain rows are redrawn at the top; old actor footprints
+move down two rows. Old/new actor damage and the HUD are merged into scanline
+intervals, then equal adjacent intervals become rectangles. Every damaged
+region is restored once in the packed RAM canvas, actors are drawn in order,
+and each region transfers to VRAM once. A separate geometry pass ensures
+masked sprite stores see current terrain despite the hardware scroll.
+Aircraft, explosions and projectiles use compiled 8086 ES:DI stores ending
+in RETF; their geometry and horizontal phases are precomputed. C selects
+three legal 3D9h profiles; CGA's colors remain hardware fixed groups.
 
-Two 64KB claims hold the adapter's sprite bank and stage/canvas storage.
-They are instance-owned and released by the loader. The ordinary launcher
-uses OSAPI_FONT_RUN and an About handler. Enter/F enters/resumes the FSX
-bracket; Escape/F restores the desktop. Missing or invalid graphics files
-return to the launcher with an error rather than drawing unvalidated data.
+Both adapters use a circular terrain cache with a fixed 16-row VGA / 14-row
+CGA HUD and a 224-row / 186-row playfield. Two incoming rows replace the
+oldest rows each simulation frame. Existing terrain does not shift in RAM
+or VRAM. The upper half of the canvas claim holds the cartridge terrain bank;
+CGA uses the lower half for background at 0 and composed pixels at 16384.
+VGA keeps its terrain ring in offscreen video RAM after the two display
+pages, followed by the sprite cache. The original-art build scrolls a cyclic
+native backdrop through the same display paths.
+
+Two instance-owned 64KB claims hold sprites and terrain/canvas data; the
+loader releases them. The XT target remains 640KB RAM. Enter/F enters or
+resumes the FSX bracket; Escape/F restores the desktop. An executable-resident
+bitmap says `1942  LOADING GRAPHICS` before the first disk read, including
+resume and scenery reloads. It does not depend on the graphics being loaded.
+Missing or invalid graphics return to the launcher with an error.
 
 ### 99.2 Graphics files
 
-The adapter bank is `1942V.GFX` or `1942C.GFX`. It starts with `N42V` or
-`N42C`, a 16-bit total byte length, a 16-bit sprite count and a table of
-16-bit record offsets. A record holds width/height bytes and four stream
-offsets. VGA streams are source planes; CGA streams are horizontal phases.
-Width bit 7 marks a compiled CGA record; its four pointers name 8086
-graphics programs rather than streams. They modify only the rectangle at
-ES:DI using immediate AND/OR/MOV and return with RETF. The host gate decodes
-and checks their opcodes and store bounds. The package verifies the expected
-length and 16-bit byte checksum before using a bank; these checks detect
-accidental damage and are not authentication for untrusted executable files.
-Other streams have offset/count records terminated by offset FFFFh. VGA runs
-carry literal color bytes. CGA runs additionally carry a type byte: zero
-for opaque literals, one for interleaved AND-mask/OR-data pairs. Offsets are
-relative to the destination origin at an 80-byte row stride.
+`1942V.GFX` / `1942C.GFX`: magic `N42V` / `N42C`, word total length,
+word sprite count, then word record offsets. Records contain width/height
+bytes and four word stream offsets. VGA streams represent planes; CGA
+streams represent horizontal phases. Width bit 7 identifies compiled CGA
+8086 programs: immediate ES:DI AND/OR/MOV instructions, terminated by RETF.
+The host gate decodes their opcodes and checks store bounds. Other streams
+contain offset/count records terminated by FFFFh; VGA runs contain color
+bytes, CGA runs contain a type (opaque or AND-mask/OR-data) and data.
+Offsets use an 80-byte destination stride. The guest verifies expected
+length and 16-bit byte checksum before following offsets. These checks
+catch accidental damage, not malicious executable files.
 
-`1942L.GFX` holds four planes of the VGA sprite cache. Its grouped-mask
-display lists are generated into the package, so no per-pixel transparency
-test or planar conversion runs in combat.
+`1942L.GFX` holds four planes of the deduplicated VGA sprite cache. Grouped-mask display
+lists are generated into the package. The host refuses segment/cache overflow.
 
-`SEA.V42`, `REEF.V42`, `PORT.V42` contain `N42B`, length, adapter byte 0,
-reserved byte 0, then 61,440 indexed pixels in four 64x240 planes.
-The corresponding `.C42` files use adapter byte 1 and 16,000 packed bytes
-in linear 80x200 order. These are loaded as the stage family changes;
-only one family resides at a time. Stage families cycle every four stages.
-The HUD is baked into the background cache when its values change and
-copied to the current draw page without rerasterizing text each frame.
+`tools/1942nes.py` accepts the pinned 32KB PRG / 8KB CHR NROM payload,
+identified by SHA-256 independently of the iNES/NES 2.0 header. It follows
+the cartridge's metasprite pointers at CPU $C565, coordinate layouts at
+$CE0E, attribute pointers at $D010, CHR tile/flip pairs and palette at $A770.
+Landscape decoding follows the route at $844B, 23 pages of 16x15 metatiles
+at $854B, the four tile indices per metatile at $9ADB and palettes at $9EDB.
+These offsets come from the cartridge's routines at $C45A, $81EE, $824F and
+$82E7. RGB is an NES palette approximation; CGA uses an explicit ink mapping.
+
+`WORLD.V42` / `WORLD.C42`: `N42W`, word length, two reserved bytes,
+256 route IDs (eight pages per stage), 23*240 metatile IDs, 256*4 tile IDs,
+then adapter data. VGA data consists of deduplicated indexed 8x8 tiles with
+palettes resolved. CGA data consists of 256 metatiles, each 16 rows of five
+packed bytes (16 logical pixels -> 20 CGA pixels). Both banks fit in the upper
+32KB of the canvas claim. Each stage starts at its carrier page and moves
+backward through scanlines, advancing through its eight-page route. Native
+CGA row sampling uses floor(y*6/5); VGA uses the cartridge rows directly.
+Pause freezes scrolling; fullscreen resume reconstructs the same route
+position after the video mode and graphics caches are reloaded.
+
+Original-art builds retain `SEA.V42`, `REEF.V42`, `PORT.V42` (`N42B`, length,
+adapter byte 0, reserved byte, four 64x240 planes), and `.C42` equivalents
+(adapter byte 1, 80x200 packed bytes). Families cycle every four stages.
+Generated sprite/palette JSON beside the binaries supports independent tests.
+Source-selection stamps ensure switching between cartridge and original art
+rebuilds the matching package and disks.
 
 ### 99.3 Gameplay and validation
 
 Arrows move; Space/Z fires; X rolls; P pauses; M toggles sound; C selects
 CGA colors; N starts again. Three lives, weapon pickups, 32 stages, bosses
-every fourth stage. Aircraft bank with movement, explosions animate, and
-scenery banks distinguish the ocean, reef and harbor stages. Game speed is
-paced by rendering and the FSX frame wait.
+every fourth stage. Normal waves include seven enemy kinds: fighters,
+orange pickup aircraft, fast interceptors, scouts, divers, medium bombers
+and heavy bombers. Their speed, weave and hit points differ. Cartridge
+builds use distinct aircraft assemblies and a banking fighter frame; original
+builds reuse the available original aircraft art for the added behaviors.
+Collision extents and horizontal bounds follow each kind's sprite dimensions.
 
-`make 1942test` exercises both adapters on the pinned 4.77MHz MartyPC,
-including video readback, gameplay, asset loads, palette cycling, page reuse
-and desktop restoration. The performance acceptance target is at least 5fps
-under sustained crowded combat, including the slowest measured frame.
-Timings must include render,
-presentation and frame pacing; loading is measured separately. No physical
-hardware rate is implied by an emulator measurement.
+`make 1942test` exercises both adapters on pinned 4.77MHz MartyPC models:
+pre-I/O loading pixels, controls, collisions, roll/grace, pickups, natural
+spawning, all aircraft kinds, bosses, victory, scenery/route transitions,
+ring wrapping, pause/resume, palette cycling, full-refresh equivalence and
+missing/damaged file rejection. The independent terrain reference reads
+CHR, metatiles and route bytes directly from the local cartridge rather than
+using the generated world bank or guest cache. VGA scanout mode is checked
+separately from plane contents. Performance includes rendering, presentation
+and pacing; loading is outside combat timing. Emulator results do not imply
+physical-hardware rates.
 
-Measured on the pinned 4.77MHz models after the sprite-cache/compiler change:
-VGA 7.44fps average / 6.63fps slowest frame; CGA 5.53fps / 5.14fps in the
-64-frame crowded fixture (12 aircraft, 16 player shots, 16 enemy bullets and
-four explosions, replenished each frame). A 90-frame ordinary firing run
-measured about 17–21fps. These are guest-cycle measurements, not host time.
-The reference compositor checks the actual displayed page and CGA banks;
-the VGA graphics-controller 256-color shift bit is checked separately,
-because correct plane bytes alone cannot prove a correct scanout mode.
+The crowded-combat regression retains a 5fps minimum, including the slowest
+measured frame. Re-run the emulator gate after renderer changes; host asset
+checks alone do not establish frame rate or correct hardware scanout.

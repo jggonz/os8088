@@ -11850,7 +11850,10 @@ ALLAPPSIMG120 := $(BUILD)/apps-all-120.img
 # rather than refuses, so a second claimant on .DOC would win or lose by
 # directory order. Scribe designed the collision out at the source; the disk
 # list went on believing in it.
-N1942LIVE := $(BUILD)/1942.o88 $(addprefix $(BUILD)/,1942V.GFX 1942C.GFX 1942L.GFX SEA.V42 REEF.V42 PORT.V42 SEA.C42 REEF.C42 PORT.C42)
+# A local cartridge is optional; extracted files stay in the build directory.
+N1942_ROM ?= $(wildcard 1942.nes)
+N1942SCENES = $(if $(strip $(N1942_ROM)),WORLD.V42 WORLD.C42,SEA.V42 REEF.V42 PORT.V42 SEA.C42 REEF.C42 PORT.C42)
+N1942LIVE := $(BUILD)/1942.o88 $(addprefix $(BUILD)/,1942V.GFX 1942C.GFX 1942L.GFX $(N1942SCENES))
 ALLAPPSFILES := $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
@@ -13317,14 +13320,19 @@ distclean: clean clean-marty clean-cc clean-nasm3
 N1942ART = apps/1942/art/sprites.json apps/1942/art/sea.idx apps/1942/art/reef.idx apps/1942/art/port.idx apps/1942/palette.json
 N1942BANKS = $(filter-out $(BUILD)/1942.o88,$(N1942LIVE))
 N1942DISK = $(BUILD)/1942.o88 $(N1942BANKS)
-.PHONY: 1942 1942disk 1942test
+.PHONY: 1942 1942disk 1942test n1942-config
 1942: $(N1942DISK)
-$(BUILD)/.1942assets: $(N1942ART) tools/1942assets.py | $(BUILD)
-	python3 tools/1942assets.py -o $(BUILD)
+# Track source selection as well as its mtime: switching back to original art
+# must invalidate a previous cartridge build in the same output directory.
+n1942-config: | $(BUILD)
+	@python3 -c 'from pathlib import Path; p=Path("$(BUILD)/.1942source"); s="$(N1942_ROM)"; p.write_text(s) if not p.exists() or p.read_text()!=s else None'
+$(BUILD)/.1942source: n1942-config
+$(BUILD)/.1942assets: $(N1942ART) tools/1942assets.py tools/1942nes.py $(N1942_ROM) $(BUILD)/.1942source | $(BUILD)
+	python3 tools/1942assets.py -o $(BUILD) $(if $(N1942_ROM),--rom "$(N1942_ROM)")
 	@touch $@
 $(BUILD)/1942art.inc $(N1942BANKS): $(BUILD)/.1942assets
-	@test -f $@ || python3 tools/1942assets.py -o $(BUILD)
-$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/game.inc apps/1942/video.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc
+	@test -f $@ || python3 tools/1942assets.py -o $(BUILD) $(if $(N1942_ROM),--rom "$(N1942_ROM)")
+$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/game.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/1942/ -I $(BUILD)/ -l $(BUILD)/1942.lst -o $@ $<
 $(BUILD)/1942.o88: $(BUILD)/1942.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@

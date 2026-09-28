@@ -34,6 +34,8 @@ n_new:
     mov word [n_scorelo], 0
     mov word [n_scorehi], 0
     mov word [n_stage], 1
+    mov word [n_scrollstage], 0
+    mov word [n_scroll], 0
     mov word [n_frames], 0
     mov word [n_islandy], 24
     mov word [n_wavey], 60
@@ -286,12 +288,14 @@ n_spawn:
     mov word [si+EHP], 1
     mov word [si+EKIND], 0
     mov word [si+EAGE], 0
-    mov ax, [n_spawned]
-    and ax, 3
-    cmp ax, 3
-    jne .normal
-    mov word [si+EKIND], 1
-    mov word [si+EHP], 2
+    mov bx, [n_spawned]
+    and bx, 7
+    mov bl, [n_wavekinds+bx]
+    xor bh, bh
+    mov [si+EKIND], bx
+    mov al, [n_wavehp+bx]
+    xor ah, ah
+    mov [si+EHP], ax
 .normal:
     inc word [n_spawned]
     mov ax, 30
@@ -303,6 +307,8 @@ n_spawn:
     mov [n_spawnwait], ax
 .out:
     ret
+n_wavekinds: db 0,3,4,1,5,6,7,1
+n_wavehp: db 1,2,30,1,1,2,3,5
 n_move_enemies:
     mov si, n_enemies
 .loop:
@@ -311,10 +317,10 @@ n_move_enemies:
     inc word [si+EAGE]
     mov ax, [si+EVX]
     add [si+EX], ax
-    mov ax, 224
-    cmp word [si+EKIND], 2
-    jne .bound
-    mov ax, 208
+    mov bx, [si+EKIND]
+    shl bx, 1
+    mov ax, 248
+    sub ax, [n_enemywidths+bx]
 .bound:
     cmp [si+EX], ax
     jae .bounce
@@ -330,8 +336,23 @@ n_move_enemies:
     inc word [si+EY]
     jmp .attack
 .small:
-    add word [si+EY], 2
-    cmp word [si+EY], 212
+    inc word [si+EY]
+    cmp word [si+EKIND], 6
+    jae .bottom                     ; bombers are slower and tougher
+    inc word [si+EY]
+    cmp word [si+EKIND], 3
+    jne .weave
+    inc word [si+EY]                 ; interceptor makes a fast pass
+.weave:
+    cmp word [si+EKIND], 4
+    jb .bottom
+    test word [si+EAGE], 15
+    jnz .bottom
+    neg word [si+EVX]
+.bottom:
+    mov ax, 238
+    sub ax, [n_enemyheights+bx]
+    cmp [si+EY], ax
     jbe .attack
     mov word [si+EON], 0
     jmp .next
@@ -341,16 +362,22 @@ n_move_enemies:
     jnz .contact
     call n_enemyfire
 .contact:
+    mov ax, [n_px]
+    add ax, 24
+    cmp [si+EX], ax
+    jae .next
     mov ax, [si+EX]
-    sub ax, [n_px]
-    add ax, 12
-    cmp ax, 24
+    add ax, [n_enemywidths+bx]
+    cmp ax, [n_px]
+    jbe .next
+    mov ax, [n_py]
+    add ax, 24
+    cmp [si+EY], ax
     jae .next
     mov ax, [si+EY]
-    sub ax, [n_py]
-    add ax, 12
-    cmp ax, 24
-    jae .next
+    add ax, [n_enemyheights+bx]
+    cmp ax, [n_py]
+    jbe .next
     call n_hitplayer
     cmp word [si+EKIND], 2
     je .next
@@ -409,10 +436,10 @@ n_move_shots:
 .enemy:
     cmp word [si+EON], 0
     je .enext
-    mov bx, 24
-    cmp word [si+EKIND], 2
-    jne .size
-    mov bx, 40
+    mov bx, [si+EKIND]
+    shl bx, 1
+    mov bp, [n_enemyheights+bx]
+    mov bx, [n_enemywidths+bx]
 .size:
     mov ax, [di]
     sub ax, [si+EX]
@@ -423,7 +450,7 @@ n_move_shots:
     cmp ax, [si+EY]
     jb .enext
     mov ax, [si+EY]
-    add ax, bx
+    add ax, bp
     cmp [di+2], ax
     jae .enext
     dec word [si+EHP]
@@ -458,6 +485,9 @@ n_kill:
     mov [n_picky], dx
     jmp .score
 .boss:
+    mov ax, 200
+    cmp word [si+EKIND], 2
+    jne .score
     mov ax, 3000
 .score:
     call n_addscore
@@ -612,27 +642,29 @@ n_nextstage:
     ret
 
 n_draw:
+    cmp byte [n_cga],0
+    je n_drawactors
+    mov byte [n_prepare],1
+    call n_drawactors
+    call n_damagebuild
+    mov byte [n_prepare],2
+    call n_drawactors
+    mov byte [n_prepare],0
+    ret
+n_drawactors:
     SAVE
-    ; Small water wakes move independently over the cached terrain.
-    mov si, n_wakeart
-    mov cx, 48
-    mov dx, [n_wavey]
-    call n_sprite
-    mov cx, 120
-    call n_sprite
-    mov cx, 192
-    call n_sprite
     mov di, n_enemies
 .enemy:
     cmp word [di+EON], 0
     je .enext
-    mov si, n_enemyart
-    cmp word [di+EKIND], 0
-    je .eart
-    mov si, n_eliteart
-    cmp word [di+EKIND], 1
-    je .eart
-    mov si, n_bossart
+    mov bx, [di+EKIND]
+    shl bx, 1
+    mov si, [n_enemyarts+bx]
+    cmp bx, 0
+    jne .eart
+    test word [di+EAGE], 8
+    jz .eart
+    mov si, n_enemybankart
 .eart:
     mov cx, [di+EX]
     mov dx, [di+EY]
@@ -698,6 +730,7 @@ n_draw:
     je .hud
     call n_scoretext
     mov byte [n_huddirty], 0
+    jmp .out
 .hud:
     call n_hudcopy
 .out:

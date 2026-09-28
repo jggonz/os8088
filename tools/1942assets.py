@@ -1,12 +1,29 @@
 #!/usr/bin/env python3
-"""Compile committed original indexed art to adapter-native 8088 sprite banks."""
+"""Compile original or locally imported cartridge art to native 8088 graphics."""
 import argparse
+import importlib.util
 import json
 from pathlib import Path
 import struct
 
 ROOT=Path(__file__).resolve().parents[1]
 ART=ROOT/'apps/1942/art'
+
+def accelerated(s):
+    return not s['name'].startswith('font') and s['name'] not in ('carrier','ship','island')
+
+def sources(rom=None):
+    pal=json.loads((ART.parent/'palette.json').read_text())
+    sprites=json.loads((ART/'sprites.json').read_text())
+    byname={s['name']:s for s in sprites}
+    for name,source in [('scout','blue'),('diver','blue'),('bomber','boss'),('heavy','boss'),('enemybank','enemy')]:
+        sprites.append(dict(byname[source],name=name))
+    world=None
+    if rom:
+        spec=importlib.util.spec_from_file_location('nes1942',ROOT/'tools/1942nes.py')
+        mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+        sprites,pal,world=mod.import_art(rom,sprites,pal)
+    return sprites,pal,world
 def word(n):return struct.pack('<H',n)
 def checksum(data):return sum(data)&65535
 
@@ -89,9 +106,14 @@ def cga_program(s,pal,phase):
 
 def bank(sprites,pal,cga):
     data=bytearray(b'N42C' if cga else b'N42V')+bytes(2)+word(len(sprites))+bytes(len(sprites)*2)
+    records={}
     for i,s in enumerate(sprites):
+        compiled=cga and accelerated(s)
+        key=(s['w'],s['h'],s['pixels'],compiled)
+        if key in records:
+            struct.pack_into('<H',data,8+i*2,records[key]);continue
+        records[key]=len(data)
         struct.pack_into('<H',data,8+i*2,len(data));start=len(data)
-        compiled=cga and i in (*range(12),14,16,17,18)
         data+=bytes([s['w']|(128 if compiled else 0),s['h']])+bytes(8)
         variants=[cga_program(s,pal,p) for p in range(4)] if compiled else streams(s,pal,cga)
         for p,stream in enumerate(variants):
@@ -112,9 +134,17 @@ def scene(pixels,pal,cga):
     return b'N42B'+word(len(data)+8)+bytes([int(cga),0])+data
 
 def vga_cache(sprites):
-    planes=[bytearray() for _ in range(4)];commands=[];entries=[]
+    unique={(s['w'],s['h'],s['pixels']):s for s in sprites if accelerated(s)}
+    size=sum(((s['w']+p+3)//4)*s['h'] for s in unique.values() for p in (0,2))
+    padding=((65536-57600-size)//160)//4*4
+    if padding<4:raise ValueError('VGA cache leaves no scrolling page margins')
+    pagebytes=(240+padding)*80;cachebase=pagebytes*2+19200
+    planes=[bytearray() for _ in range(4)];commands=[];entries=[];records={}
     for i,s in enumerate(sprites):
-        if i not in (*range(12),14,16,17,18):entries.append('0');continue
+        if not accelerated(s):entries.append('0');continue
+        key=(s['w'],s['h'],s['pixels'])
+        if key in records:entries.append('n_cache%d'%records[key]);continue
+        records[key]=i
         entries.append('n_cache%d'%i);commands+=['n_cache%d: dw n_cache%d_0,n_cache%d_2'%(i,i,i)]
         w,h=s['w'],s['h'];pix=bytes.fromhex(s['pixels'])
         for phase in (0,2):
@@ -133,27 +163,64 @@ def vga_cache(sprites):
                     if not row[x]:x+=1;continue
                     end=x+1
                     while end<stride and row[end]==row[x]:end+=1
-                    groups.setdefault(row[x],[]).append((y*80+x,57600+start+y*stride+x,end-x));x=end
+                    groups.setdefault(row[x],[]).append((y*80+x,cachebase+start+y*stride+x,end-x));x=end
             commands+=['n_cache%d_%d:'%(i,phase)]
             for mask,runs in groups.items():
                 commands+=['    dw %d,%d'%((mask<<8)|2,len(runs))]
                 commands+=['    dw %d,%d,%d'%r for r in runs]
             commands+=['    dw 0']
-    if len(planes[0])>7936:raise ValueError('VGA cache exceeds offscreen memory')
-    return b''.join(planes),['N_CACHE_BYTES equ %d'%len(planes[0]),'n_cacheindex: dw '+','.join(entries)]+commands
+    if len(planes[0])+cachebase>65536:raise ValueError('VGA cache exceeds offscreen memory')
+    return b''.join(planes),['N_PAGE_BYTES equ %d'%pagebytes,'N_PAGE_PAD equ %d'%(padding*80),'N_CACHE_START equ %d'%cachebase,'N_CACHE_BYTES equ %d'%len(planes[0]),'n_cacheindex: dw '+','.join(entries)]+commands
 
 def write(path,data):
     if not path.exists() or path.read_bytes()!=data:path.write_bytes(data)
 
-def build(out):
-    pal=json.loads((ART.parent/'palette.json').read_text());sprites=json.loads((ART/'sprites.json').read_text());validate(pal,sprites)
+def build(out,rom=None):
+    sprites,pal,world=sources(rom);validate(pal,sprites)
     out.mkdir(parents=True,exist_ok=True)
-    inc=['; Generated from committed original graphics; no cartridge required.']
+    inc=['; Generated adapter-native graphics.', 'N_ROM equ %d'%bool(world)]
+    # An executable-resident bitmap is available before the first file read.
+    font={s['name']:s for s in sprites}
+    loading='1942  LOADING GRAPHICS'
+    inc.append('n_loadingbits:')
+    for y in range(8):
+        row=[bytes.fromhex(font['font%d'%ord(c)]['pixels'])[y*8:y*8+8] for c in loading]
+        bits=[sum((1<<(7-x)) for x,v in enumerate(r) if v) for r in row]
+        inc.append('    db '+','.join(map(str,bits)))
+    inc.append('N_LOAD_WIDTH equ %d'%len(loading))
+    inc.append('n_enemyarts: dw n_enemyart,n_eliteart,n_bossart,n_blueart,n_scoutart,n_diverart,n_bomberart,n_heavyart')
+    enemy_names=['enemy','elite','boss','blue','scout','diver','bomber','heavy']
+    byname={s['name']:s for s in sprites}
+    inc.append('n_enemywidths: dw '+','.join(str(byname[n]['w']) for n in enemy_names))
+    inc.append('n_enemyheights: dw '+','.join(str(byname[n]['h']) for n in enemy_names))
+    write(out/'1942-sprites.json',(json.dumps(sprites)+'\n').encode())
+    write(out/'1942-palette.json',(json.dumps(pal)+'\n').encode())
+    if world:
+        write(out/'WORLD.V42',world)
+        meta=8+256+23*240;tiles=meta+1024
+        cworld=bytearray(world[:tiles])
+        for m in range(256):
+            for y in range(16):
+                row=[]
+                for half in range(2):
+                    t=world[meta+m*4+(y//8)*2+half];at=tiles+t*64+(y%8)*8
+                    row+=world[at:at+8]
+                scaled=[pal['cga_map'][row[x*4//5]] for x in range(20)]
+                for x in range(0,20,4):
+                    a,b,c,d=scaled[x:x+4];cworld.append(a<<6|b<<4|c<<2|d)
+        struct.pack_into('<H',cworld,4,len(cworld))
+        assert len(cworld)<=32768
+        write(out/'WORLD.C42',cworld)
+        inc+=['N_WORLD_V_SIZE equ %d'%len(world),'N_WORLD_V_SUM equ %d'%checksum(world),
+              'N_WORLD_C_SIZE equ %d'%len(cworld),'N_WORLD_C_SUM equ %d'%checksum(cworld)]
     for i,s in enumerate(sprites):inc.append('n_%sart equ %d'%(s['name'],i))
+    inc.append('n_cgawidths: dw '+','.join(str((s['w']*5+3)//4) for s in sprites))
+    inc.append('n_cgaheights: dw '+','.join(str((s['h']*5+5)//6) for s in sprites))
     def emit(name,data):
         inc.append(name+':')
         for i in range(0,len(data),16):inc.append('    db '+','.join(map(str,data[i:i+16])))
     emit('n_dac',[v*63//255 for c in pal['rgb'] for v in c]);inc.append('N_COLORS equ %d'%len(pal['rgb']))
+    emit('n_cgainks',pal['cga_map'])
     emit('n_cgaregs',[p['register'] for p in pal['cga']])
     cached,commands=vga_cache(sprites);inc+=commands
     write(out/'1942L.GFX',cached)
@@ -161,15 +228,15 @@ def build(out):
     for cga in (False,True):
         tag='C' if cga else 'V';data=bank(sprites,pal,cga);write(out/('1942%s.GFX'%tag),data)
         inc+=['N_%s_SIZE equ %d'%(tag,len(data)),'N_%s_SUM equ %d'%(tag,checksum(data))]
-        for name in ('SEA','REEF','PORT'):
+        for name in (() if world else ('SEA','REEF','PORT')):
             data=scene((ART/(name.lower()+'.idx')).read_bytes(),pal,cga);write(out/(name+'.'+tag+'42'),data)
             inc+=['N_%s_%s_SUM equ %d'%(name,tag,checksum(data))]
     # Static address tables remove MUL/DIV from every draw operation.
     for name,vals in [('n_yv',[y*80 for y in range(240)]),('n_yc',[(y*5//6)*80 for y in range(240)]),('n_xc',[x*5//4 for x in range(256)])]:
         inc.append(name+':');inc.extend('    dw '+','.join(map(str,vals[i:i+12])) for i in range(0,len(vals),12))
     write(out/'1942art.inc',('\n'.join(inc)+'\n').encode())
-    print('1942 assets: original sprites and three adapter-native scenery banks compiled')
+    print('1942 assets: %s, %d sprites'%('cartridge tiles and scrolling route' if world else 'original art',len(sprites)))
 
 def main():
-    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('-o',type=Path,default=Path('build'));a=ap.parse_args();build(a.o)
+    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('-o',type=Path,default=Path('build'));ap.add_argument('--rom',type=Path);a=ap.parse_args();build(a.o,a.rom)
 if __name__=='__main__':main()

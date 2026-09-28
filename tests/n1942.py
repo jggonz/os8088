@@ -24,11 +24,18 @@ import os88geom as G
 import os88build
 
 
+def rom_build():
+    inc=(ROOT / os88build.at('build/1942art.inc')).read_text()
+    if 'N_ROM equ 1' not in inc:return None
+    p=(ROOT / os88build.at('build/.1942source')).read_text()
+    return ROOT/p
+
+
 def assets():
     spec = importlib.util.spec_from_file_location('assets1942', ROOT/'tools/1942assets.py')
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-    pal=json.loads((ROOT/'apps/1942/palette.json').read_text())
-    sprites=json.loads((ROOT/'apps/1942/art/sprites.json').read_text())
+    pal=json.loads((ROOT / os88build.at('build/1942-palette.json')).read_text())
+    sprites=json.loads((ROOT / os88build.at('build/1942-sprites.json')).read_text())
     mod.validate(pal,sprites)
     for key,value in [('rgb',[[0,0,1]]*64),('cga_map',[4]*64),('cga',[])]:
         bad=dict(pal);bad[key]=value
@@ -65,12 +72,33 @@ def assets():
                         stream+=n*(1+kind)
                     else:stream+=n
                     assert stream<=len(bank)
-    print('original asset validation: both banks, stream bounds and rejection controls passed',flush=True)
+    if rom_build():
+        spec=importlib.util.spec_from_file_location('nes1942',ROOT/'tools/1942nes.py')
+        nes=importlib.util.module_from_spec(spec);spec.loader.exec_module(nes)
+        rom=rom_build().read_bytes()
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'bad.nes'
+            for bad in (rom[:-1],rom[:100]+bytes([rom[100]^1])+rom[101:],b'BAD!'+rom[4:]):
+                path.write_bytes(bad)
+                try:nes.Cartridge(path)
+                except ValueError:pass
+                else:raise AssertionError('unsupported cartridge accepted')
+        for tag in ('V','C'):
+            world=(ROOT / os88build.at('build/WORLD.'+tag+'42')).read_bytes()
+            assert world[:4]==b'N42W' and struct.unpack_from('<H',world,4)[0]==len(world)<=32768
+            assert max(world[8:264])<23
+            assert world[8:264]==rom[16+0x44b:16+0x54b]
+            assert world[264:5784]==rom[16+0x54b:16+0x1adb]
+    cached,commands=mod.vga_cache(sprites)
+    values={k:int(v) for line in commands if ' equ ' in line for k,v in [line.split(' equ ')]}
+    assert values['N_CACHE_START']+values['N_CACHE_BYTES']<=65536
+    assert values['N_CACHE_START']==2*values['N_PAGE_BYTES']+19200
+    print('asset validation: both banks, stream bounds and rejection controls passed',flush=True)
 
 def symbols():
     source = (ROOT/'apps/1942/1942.asm').read_text()
     names = re.findall(r'^VAR (n_\w+),', source, re.M)
-    code = ['n_vfile','n_cfile','n_scenesums','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw']
+    code = ['n_vfile','n_cfile','n_scenesums','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw','n_loading','n_readbank','n_spawn']
     source = source.replace('OS88_IMAGE_END','')
     source += '\n'+'\n'.join('dw '+n+'-os88_image_end' for n in names)
     source += '\n'+'\n'.join('dw '+n for n in code)+'\nOS88_IMAGE_END\n'
@@ -129,7 +157,13 @@ class Game:
     def bullet(self):
         self.m.write(self.base+self.off['n_bullets'],struct.pack('<4H',124,210,0,0))
     def canvas(self):
-        if self.get('cga',1):return self.m.read(0xb8000,16384)
+        if self.get('cga',1):
+            raw=self.m.read(0xb8000,16384);start=self.get('cgastart')
+            out=bytearray(16384)
+            for y in range(200):
+                bank=(y&1)*8192;row=(y//2)*80
+                for x in range(80):out[bank+row+x]=raw[bank+((start+row+x)&8191)]
+            return bytes(out)
         planes=vga_planes(self)
         return bytes(planes[x%4][y*80+8+x//4] for y in range(240) for x in range(256))
 
@@ -148,7 +182,7 @@ def vga_planes(g):
         for start in range(0,19200,4096):
             count=min(4096,19200-start)
             m.cmd(cmd='park',cs=g.base>>4,ip=g.code['n_rand'])
-            for reg,v in [('es',seg),('si',(1-g.get('page'))*19200+start),('di',61440),('cx',count),('flags',saved['flags']&~0x600)]:m.setreg(reg,v)
+            for reg,v in [('es',seg),('si',g.get('showbase')+start),('di',61440),('cx',count),('flags',saved['flags']&~0x600)]:m.setreg(reg,v)
             m.bp_exec(stub+8);m.run();assert m.wait_stop(30)=='breakpoint'
             data.extend(m.read(scratch,count))
         planes.append(data)
@@ -160,13 +194,41 @@ def vga_planes(g):
 
 
 def reference(g,tag):
-    pal=json.loads((ROOT/'apps/1942/palette.json').read_text())
-    sprites=json.loads((ROOT/'apps/1942/art/sprites.json').read_text())
+    pal=json.loads((ROOT / os88build.at('build/1942-palette.json')).read_text())
+    sprites=json.loads((ROOT / os88build.at('build/1942-sprites.json')).read_text())
     byname={s['name']:s for s in sprites}
-    scene=('sea','reef','port')[g.get('scene')]
-    bg=(ROOT/('apps/1942/art/'+scene+'.idx')).read_bytes()
     cga=tag=='cga';w,h=(320,200) if cga else (256,240)
-    frame=bytearray(pal['cga_map'][bg[y*6//5*256+x*4//5]] for y in range(h) for x in range(w)) if cga else bytearray(bg)
+    band=14 if cga else 16
+    rom=rom_build()
+    if rom:
+        # Independently read the cartridge CHR/metatile/route tables, not the
+        # compiled WORLD.GFX or guest's circular cache.
+        raw=rom.read_bytes();prg=raw[16:32784];chr=raw[32784:]
+        def read(a):return prg[a-32768]
+        frame=bytearray(w*h)
+        for y in range(band,h):
+            sy=g.get('worldy')+y-band;page=g.get('worldpage')
+            if sy>=h:sy-=h;page=(page-1)&7
+            logical=sy*6//5 if cga else sy
+            mapid=read(0x844b+(g.get('scrollstage')-1)*8+page)
+            for x in range(w):
+                sx=x*4//5 if cga else x
+                meta=read(0x854b+mapid*240+(logical//16)*16+sx//16)
+                tile=256+read(0x9adb+meta*4+((logical//8)&1)*2+((sx//8)&1))
+                off=tile*16+logical%8;bit=7-sx%8
+                pixel=((chr[off]>>bit)&1)|(((chr[off+8]>>bit)&1)<<1)
+                ink=1+4*read(0x9edb+meta)+pixel if pixel else 1
+                frame[y*w+x]=pal['cga_map'][ink] if cga else ink
+    else:
+        scene=('sea','reef','port')[g.get('scene')]
+        bg=(ROOT/('apps/1942/art/'+scene+'.idx')).read_bytes()
+        frame=bytearray(w*h)
+        scroll=g.get('scroll')//80
+        for y in range(band,h):
+            sy=band+(y-band+scroll)%(h-band)
+            for x in range(w):
+                ink=bg[(sy*6//5 if cga else sy)*256+(x*4//5 if cga else x)]
+                frame[y*w+x]=pal['cga_map'][ink] if cga else ink
     frame[:w*(14 if cga else 16)]=bytes([0 if cga else 1])*(w*(14 if cga else 16))
     def draw(name,x,y):
         sprite=byname[name];sw,sh=sprite['w'],sprite['h'];pixels=bytes.fromhex(sprite['pixels'])
@@ -184,10 +246,9 @@ def reference(g,tag):
             draw('font%d'%ord(char),x,y);x+=8
     state=g.get('state',1)
     if state==1:
-        for x in (48,120,192):draw('wake',x,g.get('wavey'))
         for i in range(12):
             x,y,vx,hp,kind,age,on=struct.unpack('<7H',g.m.read(g.base+g.off['n_enemies']+i*14,14))
-            if on:draw(('enemy','elite','boss')[kind],x,y)
+            if on:draw('enemybank' if kind==0 and age&8 else ('enemy','elite','boss','blue','scout','diver','bomber','heavy')[kind],x,y)
         if not g.get('grace') or not g.get('frames')&2:
             name='roll' if g.get('roll')&8 else sprites[g.get('bank')]['name']
             draw(name,g.get('px'),g.get('py'))
@@ -219,6 +280,11 @@ def check_video(g,tag):
         index=g.m.inb(0x3ce);g.m.outb(0x3ce,5);mode=g.m.inb(0x3cf);g.m.outb(0x3ce,index)
         assert mode&0x40,'VGA lost the 256-color shift mode'
     actual=g.canvas();expected=reference(g,tag)
+    if actual!=expected:
+        bad=[i for i,(a,b) in enumerate(zip(actual,expected)) if a!=b]
+        print('mismatch state', {k:g.get(k) for k in ('frames','scroll','worldy','worldpage','cgastart','counts','oldcount')}, 'count',len(bad),'first',[(i,actual[i],expected[i]) for i in bad[:20]],flush=True)
+        (ROOT/'build/1942-actual.raw').write_bytes(actual)
+        (ROOT/'build/1942-expected.raw').write_bytes(expected)
     assert actual==expected,(tag+' renderer mismatch',next((i for i,(a,b) in enumerate(zip(actual,expected)) if a!=b),None))
 
 def capture(g,tag,name):
@@ -268,7 +334,22 @@ def run(tag,off,code):
     with os88ui.boot('build/os8088-360.img',apps='build/1942-360.img',machine=machine) as ui:
         m=ui.m;ui.open_drive('B');ui.open('1942.O88');g=Game(ui,off,code)
         desktop_mode=m.video()['mode']
-        m.key('Enter');g.frame()
+        m.bp_exec(g.base+code['n_readbank']);m.key('Enter');m.run()
+        assert m.wait_stop(30)=='breakpoint','loading screen did not precede I/O'
+        loading=g.canvas()
+        fonts={s['name']:s for s in json.loads((ROOT / os88build.at('build/1942-sprites.json')).read_text())}
+        expected=bytearray(61440 if tag=='vga' else 16384)
+        for i,char in enumerate('1942  LOADING GRAPHICS'):
+            pixels=bytes.fromhex(fonts['font%d'%ord(char)]['pixels'])
+            for y in range(8):
+                for x in range(8):
+                    if not pixels[y*8+x]:continue
+                    if tag=='vga':expected[(112+y)*256+44+i*8+x]=4
+                    else:
+                        py=96+y;px=76+i*8+x
+                        expected[(py&1)*8192+(py//2)*80+px//4]|=3<<(6-2*(px%4))
+        assert loading==expected,'loading text must be complete before graphics I/O'
+        g.frame()
         assert g.get('infs',1)==1 and g.get('error',1)==0
         assert g.data('fsi',16)[14]==(8 if tag=='vga' else 2)
         check_video(g,tag)
@@ -300,6 +381,29 @@ def run(tag,off,code):
         # Let a complete video raster scan out without moving the simulation.
         g.put('paused',1,1);g.frame(2);capture(g,tag,'gameplay');g.put('paused',0,1)
         combat_bench(g,tag)
+        g.fixture();g.call('n_scenecheck');seen=set()
+        for _ in range(8):
+            g.put('spawnwait',0);g.call('n_spawn')
+        raw=g.data('enemies',12*14)
+        for i in range(12):
+            x,y,vx,hp,kind,age,on=struct.unpack_from('<7H',raw,i*14)
+            if on:seen.add(kind)
+        assert seen=={0,1,3,4,5,6,7},('missing natural enemy variety',seen)
+        for i,kind in enumerate((0,1,2,3,4,5,6,7)):
+            m.write(g.base+g.off['n_enemies']+i*14,struct.pack('<7H',16+(i%4)*60,28+(i//4)*70,1,100,kind,0,1))
+        g.frame();check_video(g,tag)
+        # Force a route rich in land, cross native row / metatile / map and
+        # circular-cache boundaries, then compare every displayed pixel.
+        if rom_build():
+            g.put('stage',9);g.call('n_scenecheck')
+            g.put('worldpage',4);g.put('worldy',1);g.put('scene',65535)
+            g.call('n_scenecheck');g.frame();check_video(g,tag)
+            assert g.get('worldpage')==5,'route page did not advance'
+            g.put('grace',1000);g.frame(125);check_video(g,tag)
+            g.put('paused',1,1);before=(g.get('scroll'),g.get('worldy'),g.get('worldpage'))
+            g.frame(3);assert before==(g.get('scroll'),g.get('worldy'),g.get('worldpage'))
+            g.put('paused',0,1)
+
         # Near miss is the negative control for the collision fixture.
         g.fixture();g.enemy();g.shot(x=90);g.frame()
         assert g.get('scorelo')==0 and g.data('enemies',14)[12]==1
@@ -337,22 +441,26 @@ def run(tag,off,code):
         # Re-enter twice: unchanged state and restored desktop mode.
         for _ in range(2):
             g.key('KeyP');assert g.get('paused',1)==1
-            old=g.get('frames');m.bp_exec();m.key('Escape');m.run()
+            old=g.get('frames');route=(g.get('worldy'),g.get('worldpage'))
+            m.bp_exec();m.key('Escape');m.run()
             M.until(m,lambda _:g.get('infs',1)==0,'desktop restore',limit=30)
             M.ui_done(m);assert g.get('frames')==old
             assert m.video()['mode']==desktop_mode,'desktop video mode not restored'
             m.key('Enter');g.frame();assert g.get('infs',1)==1
+            if rom_build():assert route==(g.get('worldy'),g.get('worldpage')),'resume reset route'
             g.key('KeyP');check_video(g,tag)
         # Every scenery bank is exercised through the actual guest file loader.
         for stage,scene in ((5,1),(9,2),(1,0)):
-            g.put('stage',stage);g.frame(2);assert g.get('scene')==scene
+            g.put('stage',stage);g.frame(2);assert g.get('scrollstage' if rom_build() else 'scene')==(stage if rom_build() else scene)
             check_video(g,tag)
             g.put('paused',1,1);g.frame(2);capture(g,tag,'scene%d'%scene);g.put('paused',0,1)
         # Negative control: change the expected checksum, so an otherwise valid
         # stage is rejected before it can replace the resident backdrop.
-        at=g.base+code['n_scenesums']+(1+(3 if tag=='cga' else 0))*2
+        at=g.base+code['n_scenesums']+((2 if tag=='cga' else 0) if rom_build() else (1+(3 if tag=='cga' else 0))*2)
         saved=m.read(at,2);m.write(at,struct.pack('<H',(int.from_bytes(saved,'little')+1)&65535))
-        g.put('stage',5);m.bp_exec();m.run()
+        g.put('stage',5)
+        if rom_build():g.put('scene',65535)
+        m.bp_exec();m.run()
         M.until(m,lambda _:g.get('infs',1)==0 and g.get('error',1)==2,'damaged bank rejection',limit=60)
         M.ui_done(m);assert m.video()['mode']==desktop_mode
         m.write(at,saved);m.key('Enter');g.frame();assert g.get('error',1)==0
