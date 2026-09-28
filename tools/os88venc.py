@@ -186,18 +186,19 @@ def key_limit(clb):
     """The largest keyframe record the player reads in one go off a volume
     of `clb`-byte clusters - vp_parse's check (apps/video/video.asm, 98.1.3)
     worked out rather than restated: the record must be <= VP_KMAXREC, and
-    it plus a cluster either side, rounded up to whole KB in 32 bits, must
-    be one 64 KB claim at most. Past this it plays from the start only, with
-    no poster and no seek."""
-    return min(VP_KMAXREC, 0x10000 - 2 * clb)
+    its clusters at the worst offset - the record and a cluster less a byte,
+    rounded up to whole clusters (vp_spankb) - must be one 64 KB claim at
+    most. Past this it plays from the start only, with no poster and no
+    seek."""
+    return min(VP_KMAXREC, 0x10000 - clb + 1)
 
 
 KEY_CLB = 2048          # the largest cluster of any disk this encoder makes:
                         # os88hdd's FAT16 is 4 sectors a cluster at 20 and
                         # 32 MB, and every floppy is 1 KB or less
 KEY_PLAYER = key_limit(KEY_CLB)     # 61,440 - VP_KMAXREC itself, which
-                        # 2 KB clusters now reach exactly (61,440 + 2 x 2,048
-                        # is 64 KB); 4 KB clusters would be 57,344
+                        # clusters of 4 KB reach too; 32 KB ones (a volume
+                        # near 2 GB) take 32,769
 
 
 def need_tools():

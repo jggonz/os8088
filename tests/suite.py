@@ -8781,6 +8781,16 @@ SOAK = [
         "or the player left off) it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
+    Row("vidbigclus", "soak", py("tests/vidbigclus.py"), 30.0,
+        "SPEC.md 98.1.7.1: a RESIDENT .V88 (the shipped OS8088.V88) plays off "
+        "a FAT16 C: with 32 KB clusters - bigvol's 321MB disk, formatted by "
+        "mtools at -c 64, mounted by HDD.DRV off the system floppy on the "
+        "Hercules 5150. Play starts a session, the rendition's block lands "
+        "byte for byte across two READ_AT calls, and frames are drawn. "
+        "Broken on purpose (the player before it: one call and a 16-bit "
+        "sum) it FAILS with 'This .V88 is damaged'",
+        needs=("marty", "nasm", "mtools"), serial=True,
+        wants=("build/video.o88",)),
     Row("vencgui", "soak", py("tests/vencguitest.py"), 40.0,
         "SPEC.md 98.2.8: the encoder's WINDOW without a window "
         "(tools/os88vencgui.py): every os88venc option on a tab with a "
