@@ -151425,6 +151425,7 @@ without them (`ffmpeg` capability).
 | `vga` / `vga-mid` / `vga-full` | LIN80 | 320 x 240 / 400 x 300 / 640 x 480 |
 | `live-cga` / `live-herc` / `live-vga` | CGA / HERC / LIN80 | 320 x 100 / 240 x 116 / 160 x 120, VIDEO-PLAN 3.4's |
 | `text` / `text-mono` | TEXT | 80 x 25 CELLS, in colour / in 07h, 0Fh and 70h (98.2.16) |
+| `herc-spk` / `cga-spk` | HERC / CGA | 360 x 160, at 23 fps with the sound on the SPEAKER at 8,000 Hz (98.2.15.5) |
 
 - **The frame rate is one the audio divides**: samples per frame is the
   rate over the fps, rounded, and ffmpeg resamples the picture to *rate /
@@ -152614,6 +152615,37 @@ owner's DMA disk there is margin beyond that. At 8 kHz the price is the
 picture's, not the clock's. **MartyPC has no DMA hard disk** (the Xebec's
 ROM cannot ship here), so whether a clip keeps time on the ST11M is the
 owner's 5150 to say; the trades (frame rate, box) are VIDEO-PLAN 15.10's.
+
+##### 98.2.15.5 The speaker presets, and a disk the CPU copies for
+
+**`--preset herc-spk`** and **`--preset cga-spk`** are the owner's settings
+for a 5150 with no card, found by those listens and by encodes timed on
+86Box: a 360 x 160 box, **23 fps** (15 was jerky and is not offered; 25
+is the floor for a clip that lives on smoothness and 18 for a rare few),
+and the sound on the speaker at **8,000 Hz**. They are the only presets
+that carry their SOUND (`PRESET_DEFAULTS`' `audio` and `rate`), because a
+profile's card sound would otherwise take it back the moment the profile
+changed - so moving to `5150-xtide`, or from `herc-spk` to `cga-spk`,
+keeps the speaker. The window's *Made for* list names the Hercules one and
+says the CGA twin is a preset away, rather than growing a line; its rate
+list offers 8000 always. `--aim quality` does not try 22 kHz on either:
+for the speaker a richer rate is more of the MACHINE, and past what an
+8088 plays at all.
+
+**A disk the CPU copies for costs the picture**. An ST11M or ST11R moves
+its sectors by DMA while the decode runs; an XT-IDE (or a PicoMEM) has the
+8088 copy every byte, so what the speaker and the decode leave is all the
+disk gets. Profile `5150-xtide` charges it through its measured `disk_at`
+curve (98.2.1.3): the rate falls to 49 KB/s at 75% of the machine and to
+nothing at 100%, so under the speaker's 78% the disk, not the CPU, cuts.
+The same 40 s of Bad Carrot at `herc-spk`:
+
+| profile | frames cut, by the disk | picture wrong as seen |
+|---|---|---|
+| `5150-st225` (DMA) | 0 of 920 | 1.19% |
+| `5150-xtide` (the CPU copies) | 417 of 920 | 2.51% |
+
+The window's Budget tab says so under its fields.
 
 #### 98.2.16 Text video: `--pixfmt text`, and what CLARITY costs
 

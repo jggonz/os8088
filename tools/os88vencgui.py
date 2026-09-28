@@ -82,6 +82,10 @@ TARGETS = [
      "screen", "text-mono", "text", "5150-st225"),
     ("IBM 5150/XT, Hercules - black and white", "herc", "mono",
      "5150-st225"),
+    # no sound card: the preset carries the speaker's 8 kHz and 23 fps, and
+    # a CGA is its twin, cga-spk, a preset away rather than a longer list
+    ("IBM 5150/XT, PC speaker - Hercules (preset cga-spk: CGA)",
+     "herc-spk", "mono", "5150-st225"),
     ("IBM 5150/XT, a floppy - small and slow", "cga-small", "mono",
      "floppy"),
     ("286, VGA - 16 colours in the window", "vga4", "vga4", "286-vga"),
@@ -143,12 +147,21 @@ IMPLYING = ("preset", "pixfmt", "profile", "live")
 # rate's 5,512 Hz halves the sound's bytes, which is half a Live clip's
 # memory (98.1.7.2) - any other rate can still be typed. Owed time's 0 is
 # OFF, the fixed per-frame ceiling (98.2.1.1)
-SUGGEST = {"rate": ["", "22050", "11025", "5512"],
+SUGGEST = {"rate": ["", "22050", "11025", "8000", "5512"],
            "owe": ["", "0", "1.6"]}
 # a free-text option that NAMES A FILE the encode writes: a Browse... beside
 # it, a Save dialog of that type, started beside the .V88 under its name
 SAVE_FILE = {"spk_preview": ("The speaker preview", ".wav",
                              [("WAV sound", "*.wav")])}
+# a line under a tab's fields: what no one field says
+TAB_NOTES = {
+    "Budget": "XT-IDE and other disk controllers the CPU copies for "
+              "cost CPU the picture would have had: every byte read is "
+              "the 8088's work, where an ST11M or ST11R's DMA is not. The "
+              "profile says which (Basic): 5150-st225 is DMA, 5150-xtide "
+              "charges the copy - its disk slows as the decode and the "
+              "speaker take the machine, so fewer bytes a frame are "
+              "planned."}
 # what the window runs itself, and so does not offer
 HIDDEN = {"help", "src", "out", "preview_png", "quiet", "profiles",
           "progress"}
@@ -912,6 +925,11 @@ class App(object):
                 Tip(hb, "What each choice of %s is - click one to take it"
                     % f["label"])
             self.vars[f["dest"]] = v
+        for t, text in TAB_NOTES.items():   # a word the fields cannot say
+            n = max(half[t], 1)
+            ttk.Label(pages[t], text=text, foreground="#555",
+                      wraplength=600, justify="left").grid(
+                row=n, column=0, columnspan=8, sticky="w", pady=(10, 0))
         # --- make a disk, and go: the buttons packed FIRST, so a narrow
         # row squeezes the disk list rather than cutting Encode off
         self.stopbtn = ttk.Button(go, text="Cancel", command=self.stop,

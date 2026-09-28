@@ -129,6 +129,11 @@ PRESETS = {
     "herc": ("herc", 400, 200),
     "herc-mid": ("herc", 480, 232),
     "herc-full": ("herc", 720, 348),
+    # THE PC SPEAKER on a 5150 (98.2.15.4): the owner's settings off the
+    # listens and the 86Box encodes - 8 kHz, which the speaker takes ~78% of
+    # the machine to play, leaves the picture this box at 23 fps
+    "herc-spk": ("herc", 360, 160),
+    "cga-spk": ("cga", 360, 160),
     "vga": ("lin80", 320, 240),
     "vga-mid": ("lin80", 400, 300),
     "vga-full": ("lin80", 640, 480),
@@ -178,7 +183,11 @@ PRESET_DEFAULTS = {"vga8": dict(fps=25.0, detail="2x1"),
                    # TEXT at 30: a whole picture is 4,000 bytes, so a
                    # full frame rate costs a text clip little (98.2.16)
                    "text": dict(fps=30.0, text_colour="colour"),
-                   "text-mono": dict(fps=30.0, text_colour="mono")}
+                   "text-mono": dict(fps=30.0, text_colour="mono"),
+                   # the speaker's two: the SOUND is the preset's too, or
+                   # a profile's card sound would take it back (98.2.15.4)
+                   "herc-spk": dict(fps=23.0, audio="speaker", rate=8000),
+                   "cga-spk": dict(fps=23.0, audio="speaker", rate=8000)}
 
 
 # WHAT EACH CHOICE IS (98.2.8): a line per value of every option that takes
@@ -207,6 +216,11 @@ CHOICE_HELP = {
         "herc": "Hercules, black and white: 400 x 200 of its 720 x 348. "
                 "In the window on a Hercules desktop",
         "herc-mid": "Hercules, black and white, bigger: 480 x 232",
+        "herc-spk": "Hercules, black and white, with the sound on the PC "
+                    "SPEAKER: 360 x 160 at 23 fps, 8 kHz - what a 5150 "
+                    "with no card has left once the speaker has its ~78%",
+        "cga-spk": "CGA, black and white, with the sound on the PC SPEAKER: "
+                   "360 x 160 at 23 fps, 8 kHz (herc-spk's, on a CGA)",
         "herc-full": "Hercules, black and white, the whole screen: "
                      "720 x 348",
         "vga": "VGA, black and white: 320 x 240 in mode 12h. In the window "
@@ -291,7 +305,10 @@ CHOICE_HELP = {
     "profile": {
         "5150-st225": "IBM 5150/XT with a Seagate ST-225 hard disk: "
                       "96 KB/s, half the CPU on average (the default)",
-        "5150-xtide": "IBM 5150/XT with an XT-IDE: 91 KB/s",
+        "5150-xtide": "IBM 5150/XT with an XT-IDE, or any disk the CPU "
+                      "copies for: 91 KB/s at half the machine, and less "
+                      "as the picture and the speaker take more of it - "
+                      "the copy is charged",
         "5150-picomem2": "IBM 5150/XT with a PicoMEM 2: 150 KB/s, 22 kHz "
                          "sound (predicted)",
         "floppy": "Played off a floppy: 15 KB/s, 5.5 kHz sound - small and "
@@ -425,8 +442,8 @@ def implied(preset=None, pixfmt=None, profile="5150-st225", live=None,
                owe=num(None if live else prof["owe"]),
                reserve="" if live or prof["disk"] is None else
                num(reserve_bytes(prof) // 1024),
-               rate=num(prof["rate"]),
-               audio=prof["audio"])
+               rate=num(d.get("rate", prof["rate"])),
+               audio=d.get("audio", prof["audio"]))
     return out
 
 HOOK_CYC = 3040.0        # the hook's own cycles a frame, outside the decode
@@ -2611,8 +2628,12 @@ def aim_quality(a, tick, say):
             if not ok:
                 break
             best = b
-    rate = a.rate or PROFILES[a.profile]["rate"]
-    if a.audio != "none" and rate < AIM_SOUND and not a.live:
+    pd = PRESET_DEFAULTS.get(None if a.live else a.preset, {})
+    rate = a.rate or pd.get("rate") or PROFILES[a.profile]["rate"]
+    # (not the SPEAKER's: a richer rate is more of the machine, not more
+    # of the file, and 22 kHz is past what an 8088 plays at all)
+    if (a.audio or pd.get("audio") or PROFILES[a.profile]["audio"]) \
+            not in ("none", "speaker") and rate < AIM_SOUND and not a.live:
         b = copy.copy(best)
         b.rate = AIM_SOUND
         q = trial(b)
@@ -2734,11 +2755,12 @@ def _encode(a, keep, tick, readers):
     fps = a.fps or min(PRESET_DEFAULTS.get(
         None if a.live else a.preset, {}).get(
         "fps", 15.0 if vga8 else 30.0), sfps)
-    audio = a.audio or prof["audio"]
+    pd = PRESET_DEFAULTS.get(None if a.live else a.preset, {})
+    audio = a.audio or pd.get("audio") or prof["audio"]
     spk = audio == "speaker"
     if spk:                             # PCM8, at a rate the speaker plays
         audio = "pcm8"
-        r = a.rate or SPK_RATE
+        r = a.rate or pd.get("rate") or SPK_RATE
         top = SPK_MAX_AT if prof.get("spk_us") else 16124
         if not SPK_MIN <= r <= top:
             raise vid.V88Error("--audio speaker: %d Hz is not a rate the PWM "

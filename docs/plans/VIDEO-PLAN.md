@@ -2316,6 +2316,11 @@ idea, so the next choice can start at the desk.
 - **The last ~one pulse a period** (1.8% lost): the period's own entry.
   Listen on the 5150 before building anything.
 - **A field listen on the 5150**: every speaker figure is MartyPC's.
+- **The speaker presets are in** (SPEC.md 98.2.15.5, 2026-09-28):
+  `herc-spk`/`cga-spk`, 360 x 160 at 23 fps and 8 kHz, and a *Made for*
+  line. Pending the owner: the demo disks swap which Bad Carrot is short
+  and which full length on Hercules and CGA, the speaker one becoming the
+  short demo.
 
 **Optimisation, not taken** (15.8.1): decoding straight onto another
 layout (no shadow copy); `font_run_cell`'s masked row loop (~20 kernel
