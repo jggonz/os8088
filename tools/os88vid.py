@@ -733,11 +733,12 @@ SPK_DRIVE = 0.5                 # ...and its level, an RMS of full scale
 SPK_LOWS = 0.5                  # ...the band under SPK_SPLIT, against it
 SPK_RANGE = 24                  # ...and the most a quiet passage is raised
 SPK_RATIO = 2.0                 # ...the leveller's ratio, 2:1
+SPK_IDLE = 0.02                 # ...and the carrier's slide in the quiet, s
 SPK_SPLIT = 700                 # ...and where --spk-lows starts, Hz
 
 
 def spk_shape(pcm, rate, hp=SPK_HP, drive=SPK_DRIVE, clip="soft",
-              lows=SPK_LOWS, rng=SPK_RANGE, ratio=SPK_RATIO):
+              lows=SPK_LOWS, rng=SPK_RANGE, ratio=SPK_RATIO, idle=SPK_IDLE):
     """SOUND SHAPED FOR THE SPEAKER (98.2.15.1): unsigned 8-bit PCM in and
     out, the same length. A pulse's width is the only thing the speaker
     has, and it spends it on whatever is loudest - in most music the bass
@@ -752,7 +753,8 @@ def spk_shape(pcm, rate, hp=SPK_HP, drive=SPK_DRIVE, clip="soft",
     import numpy as np
     return spk_shape_f(np.frombuffer(bytes(pcm), dtype=np.uint8)
                        .astype(np.float64) - 128.0, rate, hp, drive,
-                       bytes(pcm), clip, lows, rng=rng, ratio=ratio)
+                       bytes(pcm), clip, lows, rng=rng, ratio=ratio,
+                       idle=idle)
 
 
 def spk_limit(y, rate, ceil=0.98, look=0.002):
@@ -774,7 +776,7 @@ def spk_limit(y, rate, ceil=0.98, look=0.002):
 
 def spk_shape_f(x, rate, hp=SPK_HP, drive=SPK_DRIVE, raw=None, clip="soft",
                 lows=SPK_LOWS, split=SPK_SPLIT, rng=SPK_RANGE,
-                ratio=SPK_RATIO):
+                ratio=SPK_RATIO, idle=SPK_IDLE):
     """spk_shape's body, from samples at any scale (the encoder hands it
     ffmpeg's floats, so the quiet passages it raises are not raised out of
     8-bit steps). Out: unsigned 8-bit PCM; `raw` is what an input too
@@ -837,6 +839,20 @@ def spk_shape_f(x, rate, hp=SPK_HP, drive=SPK_DRIVE, raw=None, clip="soft",
         y = spk_limit(y * (drive / rms), rate)
     else:
         y = np.tanh(y * (drive / rms)) / np.tanh(1.0)
+    if idle:
+        # THE CARRIER PUT AWAY IN THE QUIET (98.2.15.3): a pulse's width
+        # rests where the sound is centred, and at 50% the carrier is at its
+        # LOUDEST - so the centre slides toward the short end as the sound
+        # falls, by the headroom it leaves: e = a moving max of |y| over
+        # +-2W, averaged over +-W, is >= |y| at every sample, so y + e - 1
+        # never passes -1, and silence rests at a count of 1
+        w = max(1, int(rate * idle))
+        sw = np.lib.stride_tricks.sliding_window_view
+        e = sw(np.pad(np.abs(y), (2 * w, 2 * w), mode="edge"),
+               4 * w + 1).max(axis=1)
+        e = np.convolve(np.pad(e, (w, w), mode="edge"),
+                        np.ones(2 * w + 1) / (2 * w + 1), mode="valid")
+        y = np.clip(y + np.minimum(e, 1.0) - 1.0, -1.0, 1.0)
     y = np.clip(np.round(y * 127.0), -127, 127) + 128
     return y.astype(np.uint8).tobytes()
 RUNS_MAX = 32                   # ...at most this many a record
@@ -2531,7 +2547,7 @@ def write_spk_preview(path, counts, rate, pulses=1, fs=44100):
 
 
 def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE, lows=SPK_LOWS,
-                rng=SPK_RANGE, ratio=SPK_RATIO):
+                rng=SPK_RANGE, ratio=SPK_RATIO, idle=SPK_IDLE):
     """A SPEAKER FILE'S SOUND SHAPED AFTER THE FACT (98.2.15.1): every
     rendition's counts read back to samples, spk_shape'd and written as
     counts again, in the same bytes - each frame record's last `abytes`
@@ -2564,7 +2580,7 @@ def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE, lows=SPK_LOWS,
         old = b"".join(bytes(d[w:w + ab]) for w in where)
         new = spk_counts(spk_shape(spk_samples(old, r.rate, r.spkp), r.rate,
                                    hp, drive, lows=lows, rng=rng,
-                                   ratio=ratio), r.rate,
+                                   ratio=ratio, idle=idle), r.rate,
                          r.spkp)
         for f, w in enumerate(where):
             d[w:w + ab] = new[f * ab:(f + 1) * ab]
@@ -3275,7 +3291,7 @@ def cmd_spkwav(a):
 
 def cmd_speaker(a):
     n = spk_reshape(a.file, a.out, a.highpass, a.drive, a.lows, a.range,
-                    a.ratio)
+                    a.ratio, a.idle)
     print("os88vid: %s: %d rendition%s' sound shaped for the speaker "
           "(high-pass %d Hz, drive %.2f)" % (a.out, n, "" if n == 1 else "s",
                                              a.highpass, a.drive))
@@ -3970,6 +3986,9 @@ def main():
                    help="the band under %d Hz against the one over it, "
                         "each levelled apart (1: one band; default "
                         "%%(default)s)" % SPK_SPLIT)
+    s.add_argument("--idle", type=float, default=SPK_IDLE,
+                   help="s: the resting width's slide in the quiet (default "
+                        "%(default)s; 0 off)")
     s.add_argument("--ratio", type=float, default=SPK_RATIO,
                    help="the leveller's ratio (default %(default)s:1)")
     s.add_argument("--range", type=float, default=SPK_RANGE,

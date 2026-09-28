@@ -2252,6 +2252,30 @@ it). **The 5150's answer is one pulse at 8,000 Hz: an 8 kHz carrier for
 22,050 Hz at one pulse - no audible carrier - if the door's 74-count floor
 is lowered for `CPU_286` (kernel work, not done).
 
+**8 kHz IS THE 5150's SPEAKER RATE** (the owner, fourth listen: *"8Khz
+has almost no audible whine - the whine only shows up at silent parts. It
+is perfectly listenable"*; the machine agreed with the previews "almost
+perfectly"). BADCARJ (ratio 6) was *"too loud, it runs together"*; the
+pick is between W and I, so the next file (BADCARK) is the midpoint -
+ratio 3, range 30, cut at 200 - at 8 kHz, with `--spk-idle` (98.2.15.3)
+putting the carrier away in the quiet. What 8 kHz costs the picture, Bad
+Carrot on profile `5150-st225` (98.2.15.4):
+
+| box, fps | 5,512 Hz | 8,000 Hz |
+|---|---|---|
+| 496 x 181, 25 (02-PCSPK's) | 0.39% wrong | 3.15% |
+| 496 x 181, 20 | | 2.63% |
+| 496 x 181, 15 | | 2.03% |
+| 400 x 146, 25 | | 1.64% |
+| 400 x 146, 15 | | 0.64% |
+
+`CYC_SPK_PULSE` is 449 now (the iret counted). The late plays first
+blamed on it were MartyPC's XT-IDE - the only hard disk it has; the
+owner's ST11M is DMA - and the owner's 02 runs on schedule on the 5150.
+**What is open**: whether the defaults move to 8 kHz and the midpoint
+shaping (the owner's listen to BADCARK), and the shipping demo's
+geometry at 8 kHz.
+
 **22 kHz on a 286 is BUILT** (the owner: *"a 286 with no sound card is a
 legitimate period possibility; one of my childhood systems was exactly
 this"*): SPEC.md 34.11.8 - the door's floor 48 on `CPU_286` and up (+15

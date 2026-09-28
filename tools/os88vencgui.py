@@ -126,7 +126,7 @@ TAB_OF = {
     "audio": "Sound", "rate": "Sound", "adpcm": "Sound", "jobs": "Sound",
     "volume": "Sound", "spk_shape": "Sound", "spk_highpass": "Sound",
     "spk_drive": "Sound", "spk_lows": "Sound", "spk_pulses": "Sound",
-    "spk_range": "Sound", "spk_ratio": "Sound",
+    "spk_range": "Sound", "spk_ratio": "Sound", "spk_idle": "Sound",
     "spk_preview": "Sound",
     "disk": "Budget", "avg": "Budget", "peak": "Budget", "owe": "Budget",
     "lookahead": "Budget", "error": "Budget", "reserve": "Budget",

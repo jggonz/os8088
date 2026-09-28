@@ -422,17 +422,20 @@ LIVE_AVG = 0.60         # a LIVE file's share of the machine (98.2.7): its
 CYC_AUDIO = 13.0        # the interrupt's copy of a PCM8 byte into the
                         # card's buffer (rep movsw, ~25 cycles a word)
 # THE SPEAKER (SPEC.md 34.11, 98.2.15): no card, so every sample is an
-# interrupt. os88spk_isr measured 343 cycles entry to iret on MartyPC's 5150,
-# and the 8088 takes ~60 more to acknowledge one: ~400 a pulse, in 8088
-# cycles. A file made for the speaker carries the COUNTS (98.1.1.3), so the
-# player copies them into its ring as it would for a card; translating
-# samples there was ~50 a byte. At 5,512 Hz that is ~48% of a 4.77 MHz
-# machine - which is the whole reason a clip is made FOR the speaker rather
-# than merely played through it
-CYC_SPK_PULSE = 400.0
+# interrupt. os88spk_isr measured 389 cycles from its first instruction to
+# the first one back in the code it interrupted on MartyPC's 5150 - its
+# `iret` included, which the first figure (343, entry TO the iret) left out
+# - and the 8088 takes ~60 more to acknowledge one: 449 a pulse, in 8088
+# cycles (34.11.7.1). A file made for the speaker carries the COUNTS
+# (98.1.1.3), so the player copies them into its ring as it would for a
+# card; translating samples there was ~50 a byte. At 5,512 Hz that is ~52%
+# of a 4.77 MHz machine and at 8,000 ~78% - which is the whole reason a clip
+# is made FOR the speaker rather than merely played through it. It was 400,
+# which left the iret out: ~4 points low at 5,512 Hz and ~8 at 8,000
+CYC_SPK_PULSE = 449.0
 CYC_SPK_BYTE = 15.0     # a plain copy: the file carries the counts
-CYC_SPK_WHOLE2 = 476.0  # --spk-pulses 2: the whole pulse, and the half one,
-CYC_SPK_HALF = 262.0    # measured the same way as CYC_SPK_PULSE (34.11.7.1)
+CYC_SPK_WHOLE2 = 522.0  # --spk-pulses 2: the whole pulse, and the half one,
+CYC_SPK_HALF = 308.0    # measured the same way as CYC_SPK_PULSE (34.11.7.1)
                         # (98.1.1.3), so the table is the encoder's, not the
                         # player's. MEASURED: vp_aput 27.7 cycles a byte of
                         # wall time on MartyPC's 5150, ~15 its own once the
@@ -2959,7 +2962,7 @@ def _encode(a, keep, tick, readers):
         pcm = vid.spk_shape_f(np.frombuffer(ffmpeg_audio(
             a.src, rate, a.start, a.end, a.volume, "f32le"), dtype="<f4"),
             rate, a.spk_highpass, a.spk_drive, lows=a.spk_lows,
-            rng=a.spk_range, ratio=a.spk_ratio)
+            rng=a.spk_range, ratio=a.spk_ratio, idle=a.spk_idle)
         say("   speaker: shaped - nothing under %d Hz, the level evened out "
             "and driven to %.0f%% RMS (--spk-shape off to take the sound "
             "as it is)" % (a.spk_highpass, 100 * a.spk_drive))
@@ -3300,6 +3303,11 @@ def parser():
                     help="with --audio speaker: also write what the speaker "
                          "line will carry - the pulses, carrier and all - as "
                          "a WAV to listen to here (SPEC.md 98.2.15.2)")
+    ap.add_argument("--spk-idle", type=float, default=vid.SPK_IDLE,
+                    metavar="S", help="with --spk-shape: in the quiet, slide "
+                    "the pulses' resting width to the short end over this "
+                    "many seconds, so the whine goes where there is nothing "
+                    "to cover it (default %(default)s; 0 off)")
     ap.add_argument("--spk-ratio", type=float, default=vid.SPK_RATIO,
                     help="with --spk-shape: the leveller's ratio - higher "
                          "lifts quiet passages more (default %(default)s:1)")

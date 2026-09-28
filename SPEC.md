@@ -152434,8 +152434,15 @@ leave**:
     share = rate x (CYC_SPK_PULSE + CYC_SPK_BYTE) / (8088 Hz x the profile's speed)
     avg, peak, owe = avg x (1 - share), peak x (1 - share), owe x (1 - share)
 
-- **`CYC_SPK_PULSE` = 400** is the measured ISR (343 cycles, §34.11.4) plus
-  the 8088's interrupt acknowledge.
+- **`CYC_SPK_PULSE` = 449** is the measured ISR, from its first instruction
+  to the first one back in the code it interrupted (389 cycles, §34.11.7.1),
+  plus the 8088's interrupt acknowledge. **It was 400** - entry to the
+  `iret`, which left the `iret` out - so the speaker's share was ~4 points
+  low at 5,512 Hz and ~8 at 8,000. *The late plays first blamed on it were
+  not the ISR's*: MartyPC's only hard disk is an XT-IDE, whose transfers
+  the CPU makes byte by byte, and the owner's ST11M makes them by DMA; the
+  owner's `02-PCSPK` demo, 1,161 frames late there, runs on schedule on the
+  5150 (98.2.15.4).
 - **`CYC_SPK_BYTE` = 15** is the player's copy of the counts, measured
   (98.1.1.3). It was 65, a guess at the translation the counts removed.
 - **`speed`** is the profile's machine in 4.77 MHz 8088s (98.2.1.1): 1 for
@@ -152443,8 +152450,8 @@ leave**:
 - **`owe`**, owed time's periods (98.2.1.1), shrinks with the rest: a period
   the pulses take a share of is a shorter period to run on into.
 
-On the owner's 5150 that is **48%**, which leaves decode 26% of a period on
-average and 44% at most, against the card's 50% and 85%. The encoder prints
+On the owner's 5150 that is **52%** (48% with the old 400), which leaves
+decode 23% of a period on average and 39% at most, against the card's 50% and 85%. The encoder prints
 both figures, and its CPU line carries `+ the speaker's 48%`. The disk rate
 is not scaled: the transfer is DMA, and the sound is fewer bytes than a
 card's 11,025 Hz anyway.
@@ -152566,6 +152573,38 @@ spkwav FILE.V88 OUT.WAV` writes it for a file already made, either pulse
 count. Measured on the file the owner picked, the preview's bands agree
 with the analysis above to ~1 dB: the carrier −3.6 dB, the voice band's
 four octaves −12 to −14.
+
+##### 98.2.15.3 The carrier put away in the quiet: `--spk-idle`
+
+The owner, at 8 kHz on the 5150: *"almost no audible whine - the whine only
+shows up at silent parts. It is perfectly listenable."* A pulse's width rests
+where the sound is centred, and at 50% the carrier is at its LOUDEST. So the
+centre slides toward the short end as the sound falls, by the headroom it
+leaves: `e`, a moving maximum of |y| over ±2W averaged over ±W, is ≥ |y| at
+every sample, so `y + e − 1` never passes −1 and silence rests at a count
+of 1. **W = `--spk-idle`, 0.02 s** (0 off): the centre moves at under ~25
+Hz, far below what the cone reproduces. Measured on *Bad Carrot*: the
+carrier in the song's real silence (its last ten seconds) falls from 0 to
+**−26.7 dB**; in the gaps between the intro's beats, which the leveller has
+already lifted up to 30 dB, only 1-4 dB - they are not silent by then.
+
+##### 98.2.15.4 What 8 kHz leaves for the picture
+
+At 8,000 Hz the speaker is ~78% of a 5150 and decode gets 11% of a period
+on average (23% at 5,512). Bad Carrot re-encoded at the owner's `02-PCSPK`
+geometry (496 × 181, 25 fps, the window), profile `5150-st225`:
+
+| | frames cut to the budget | picture wrong |
+|---|---|---|
+| 5,512 Hz | 422 of 5,661 | 0.39% |
+| 8,000 Hz | 3,391 of 5,649 | 3.15% |
+
+Both played on MartyPC's Hercules 5150 with 0 late - on its XT-IDE, whose
+CPU-driven transfers the ST11M profile does not budget for, so on the
+owner's DMA disk there is margin beyond that. At 8 kHz the price is the
+picture's, not the clock's. **MartyPC has no DMA hard disk** (the Xebec's
+ROM cannot ship here), so whether a clip keeps time on the ST11M is the
+owner's 5150 to say; the trades (frame rate, box) are VIDEO-PLAN 15.10's.
 
 #### 98.2.16 Text video: `--pixfmt text`, and what CLARITY costs
 
