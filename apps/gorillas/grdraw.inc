@@ -51,6 +51,8 @@ gr_frontsprites:
     mov di, [gr_lightruns+bx+2]
     mov ax, 248
     call gr_lightside
+    cmp byte [gr_state], 8
+    je .restoreclip
     mov ax, 80
     xor bx, bx
     mov bl, [gr_pose]
@@ -58,6 +60,7 @@ gr_frontsprites:
     mov ax, 160
     xor bx, 1
     call gr_frontape
+.restoreclip:
     cmp byte [gr_fs], 0
     jne .out
     mov bx, [gr_win]
@@ -108,7 +111,24 @@ gr_lightblit:
     sub ax, gr_front_lights
     mul word [gr_cacheratio]
     add ax, gr_lightcache
-    mov [gr_frontsource], ax
+    ; Cached masks contain one copy of each logical row. Expand only the
+    ; strip being drawn into the common band (at most 768 bytes).
+    mov si, ax
+    mov di, gr_band
+    mov bp, [gr_rh]
+.expandrow:
+    mov dx, [gr_sy]
+.expandcopy:
+    push si
+    mov cx, [gr_stride]
+    rep movsb
+    pop si
+    dec dx
+    jnz .expandcopy
+    add si, [gr_stride]
+    dec bp
+    jnz .expandrow
+    mov word [gr_frontsource], gr_band
     cmp byte [gr_depth], 4
     jne .coords
     cmp byte [gr_vga], 0
@@ -173,24 +193,12 @@ gr_lightcompose:
 .next:
     loop .byte
     pop bx
-    push si
-    mov dx, [gr_sy]
-    dec dx
-    jz .nextrow
-.repeat:
-    mov si, bx
-    mov cx, [gr_stride]
-    rep movsb
-    dec dx
-    jnz .repeat
-.nextrow:
-    pop si
     dec bp
     jnz .row
     ret
 
 ; Prepare scaled masks once per surface geometry, before music/animation.
-; The 15 KB cache replaces repeated expansion and scanline duplication.
+; The 6,400-byte cache holds horizontal masks and repeated sprite planes.
 gr_frontprepare:
     mov ax, [gr_sx]
     mov ah, [gr_sy]
@@ -211,7 +219,6 @@ gr_frontprepare:
     mov ax, 2
 .ratio:
     mov [gr_cellbytes], ax
-    mul word [gr_sy]
     mov [gr_cacheratio], ax
     mov si, gr_front_lights
     mov di, gr_lightcache

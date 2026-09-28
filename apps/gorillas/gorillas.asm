@@ -195,65 +195,7 @@ gr_key:
     jne .out
     cmp al, 9
     je .tab
-    xor bx, bx
-    mov bl, [gr_field]
-    shl bx, 1
-    cmp al, 8
-    je .back
-    cmp ah, 48h
-    je .up
-    cmp ah, 4dh
-    je .up
-    cmp ah, 50h
-    je .down
-    cmp ah, 4bh
-    je .down
-    cmp al, '0'
-    jb .out
-    cmp al, '9'
-    ja .out
-    sub al, '0'
-    xor ah, ah
-    mov cx, ax
-    mov ax, [gr_angle+bx]
-    cmp byte [gr_edit], 0
-    jne .append
-    xor ax, ax
-.append:
-    mov dx, 10
-    mul dx
-    add ax, cx
-    jmp short .limit
-.back:
-    mov ax, [gr_angle+bx]
-    xor dx, dx
-    mov cx, 10
-    div cx
-    jmp short .store
-.up:
-    mov ax, [gr_angle+bx]
-    inc ax
-    jmp short .limit
-.down:
-    mov ax, [gr_angle+bx]
-    sub ax, 1
-    jnc .store
-    xor ax, ax
-    jmp short .store
-.limit:
-    mov dx, 180
-    or bx, bx
-    jz .bound
-    mov dx, 150
-.bound:
-    cmp ax, dx
-    ja .out
-.store:
-    mov byte [gr_edit], 1
-    cmp [gr_angle+bx], ax
-    je .out
-    mov [gr_angle+bx], ax
-    jmp gr_inputpaint
+    jmp gr_aimkey
 .tab:
     xor byte [gr_field], 1
     mov byte [gr_edit], 0
@@ -263,16 +205,18 @@ gr_key:
 .enter:
     cmp byte [gr_paused], 0
     jne .pause
+    cmp byte [gr_dancing], 0
+    jne .out
+    cmp byte [gr_blast], 0
+    jne .out
     cmp byte [gr_state], 1
     je .out
     cmp byte [gr_state], 2
     je .round
     cmp byte [gr_state], 3
-    je .new
+    je gr_results
     cmp byte [gr_field], 0
     je .tab
-    cmp word [gr_power], 0
-    je .out
     call gr_fire
     jmp gr_hudpaint
 .round:
@@ -298,15 +242,26 @@ gr_key:
 gr_worker:
     mov bx, [gr_win]
     call OSAPI_TASK_ALIVE
+    cmp byte [gr_dancing], 0
+    jne .active
     cmp word [gr_musicptr], 0
     jne .active
-    cmp byte [gr_state], 1
+    mov al, [gr_state]
+    cmp al, 1
     je .active
-    cmp byte [gr_state], 4
+    cmp al, 4
     je .active
-    cmp byte [gr_state], 7
+    cmp al, 5
     je .active
-    cmp byte [gr_state], 0
+    cmp al, 7
+    je .active
+    cmp al, 8
+    je .active
+    cmp al, 2
+    je .active
+    cmp al, 3
+    je .active
+    or al, al
     jne .sleep
     cmp byte [gr_players], 1
     jne .sleep
@@ -680,7 +635,22 @@ gr_new:
     mov word [gr_scores], 0
     mov byte [gr_turn], 0
     mov byte [gr_paused], 0
+    mov word [gr_angles], 45
+    mov word [gr_angles+2], 45
+    mov word [gr_powers], 70
+    mov word [gr_powers+2], 70
     jmp gr_city
+
+; Restore the active player's last throw (AX/BX clobbered).
+gr_recallaim:
+    xor bx, bx
+    mov bl, [gr_turn]
+    shl bx, 1
+    mov ax, [gr_angles+bx]
+    mov [gr_angle], ax
+    mov ax, [gr_powers+bx]
+    mov [gr_power], ax
+    ret
 
 gr_city:
     push ds
@@ -696,36 +666,97 @@ gr_city:
     mov word [gr_aipower], 0
     mov byte [gr_state], 0
     mov byte [gr_saved], 0
+    mov byte [gr_sunhit], 0
+    mov byte [gr_insun], 0
+    mov byte [gr_dancing], 0
+    mov byte [gr_blast], 0
+    mov byte [gr_throwticks], 0
+    mov byte [gr_roundwait], 0
     mov byte [gr_field], 0
     mov byte [gr_edit], 0
-    mov word [gr_angle], 45
-    mov word [gr_power], 70
+    call gr_recallaim
     call gr_rand
     xor dx, dx
-    mov bx, 21
-    div bx
-    sub dx, 10
-    mov [gr_wind], dx
-    ; Eight buildings; varying roof heights, facades and lit windows.
+    mov ax, 10
+    call gr_random
+    sub ax, 4
+    mov [gr_wind], ax
+    mov ax, 3
+    call gr_random
+    or ax, ax
+    jnz .winddone
+    mov ax, 10
+    call gr_random
+    inc ax
+    cmp word [gr_wind], 0
+    jg .gust
+    neg ax
+.gust:
+    add [gr_wind], ax
+.winddone:
+    mov ax, 5
+    call gr_random
+    add ax, 8
+    mov [gr_buildings], ax
+    mov ax, 6
+    call gr_random
+    mov [gr_profile], al
+    ; Eight to twelve lots, each 18..36 pixels including two gutters.
     xor bp, bp
+    xor cx, cx
 .building:
-    call gr_rand
-    and ax, 31
-    add ax, 63
+    mov bx, bp
+    mov [gr_lots+bx], cl
+    call gr_lotwidth
+    mov [gr_widths+bx], al
+    mov si, cx
+    add si, ax
+    dec si
+    dec si
+    inc cx
+    ; Broad random variation around an overall skyline trend.
+    push cx
+    mov ax, bp
+    mov bx, 4
+    mul bx
+    mov bx, ax
+    mov ax, [gr_buildings]
+    shl ax, 1
+    cmp byte [gr_profile], 0
+    je .rising
+    cmp byte [gr_profile], 1
+    je .falling
+    sub bx, ax
+    jns .distance
+    neg bx
+.distance:
+    cmp byte [gr_profile], 5
+    jne .falling
+    sub ax, bx
+    mov bx, ax
+    jmp short .falling
+.rising:
+    shl ax, 1
+    sub ax, bx
+    mov bx, ax
+.falling:
+    mov ax, 30
+    call gr_random
+    add ax, bx
+    add ax, 48
+    cmp ax, 103
+    jbe .roof
+    mov ax, 103
+.roof:
     mov bx, bp
     mov [gr_roofs+bx], al
     mov dx, ax
-    mov cx, bp
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1
-    inc cx
-    mov si, cx
-    add si, 29
-    mov di, 127
-    mov al, [gr_facades+bx]
+    mov di, 115
+    mov ax, 3
+    call gr_random
+    add al, 5
+    mov [gr_colors+bx], al
+    pop cx
     call gr_rect
     mov di, dx
     mov al, 12                 ; one-pixel rooftop coping
@@ -757,27 +788,90 @@ gr_city:
     jb .window
     pop cx
     add dx, 6
-    cmp dx, 126
+    cmp dx, 114
     jb .windows
+    mov cx, si
+    add cx, 2
     inc bp
-    cmp bp, 8
+    cmp bp, [gr_buildings]
     jb .building
-    ; The players stand on the second and seventh roofs.
-    mov word [gr_gx], 40
-    mov word [gr_gx+2], 200
-    xor ax, ax
-    mov al, [gr_roofs+1]
-    sub ax, 20
-    mov [gr_gy], ax
-    mov al, [gr_roofs+6]
-    sub ax, 20
-    mov [gr_gy+2], ax
+    ; Reference placement: second or third roof from either edge.
+    mov ax, 2
+    call gr_random
+    inc ax
+    mov si, ax
+    mov ax, 2
+    call gr_random
+    add ax, 2
+    mov di, [gr_buildings]
+    sub di, ax
+    mov bx, si
+    xor bp, bp
+    call gr_place
+    mov bx, di
+    mov bp, 2
+    call gr_place
     xor bp, bp
     call gr_gorilla
     mov bp, 2
     call gr_gorilla
     call gr_sun
+    call gr_windarrow
     call gr_hud
+    ret
+
+; CX=lot start, BP=lot index. Return AX=width, preserving other registers.
+; Clamp width so all remaining lots can still fit in 18..36 pixels.
+gr_lotwidth:
+    push bx
+    push dx
+    push si
+    push di
+    mov bx, [gr_buildings]
+    dec bx
+    sub bx, bp
+    mov ax, 18
+    mul bx
+    mov di, 256
+    sub di, cx
+    sub di, ax                 ; maximum width leaving 18 for each later lot
+    mov ax, 36
+    mul bx
+    mov si, 256
+    sub si, cx
+    sub si, ax                 ; minimum width leaving at most 36 for each
+    call gr_rand
+    xor dx, dx
+    mov bx, 19
+    div bx
+    mov ax, dx
+    add ax, 18
+    cmp ax, di
+    jbe .minimum
+    mov ax, di
+.minimum:
+    cmp ax, si
+    jge .done                  ; minimum may be negative for early lots
+    mov ax, si
+.done:
+    pop di
+    pop si
+    pop dx
+    pop bx
+    ret
+
+; Center a 16-pixel gorilla on lot BX; BP selects the player (0 or 2).
+gr_place:
+    xor ax, ax
+    mov al, [gr_widths+bx]
+    sub ax, 16
+    shr ax, 1
+    add al, [gr_lots+bx]
+    mov [ds:gr_gx+bp], ax
+    xor ax, ax
+    mov al, [gr_roofs+bx]
+    sub ax, 20
+    mov [ds:gr_gy+bp], ax
     ret
 
 ; Packed 16x20 art. Zero is transparent sky; 1/10/11 are the orange
@@ -839,6 +933,72 @@ gr_sun:
     inc dx
     dec bp
     jnz .row
+    ret
+
+; Only the mouth changes. Keep nearby gorillas and the ray tips intact.
+gr_sunface:
+    mov si, gr_sunart + 11*25 + 8
+    mov dx, 36
+    mov bp, 6
+.row:
+    mov cx, 124
+    mov di, 9
+.pixel:
+    lodsb
+    or al, al
+    jz .put
+    mov al, 3
+.put:
+    call gr_put
+    inc cx
+    dec di
+    jnz .pixel
+    add si, 16
+    inc dx
+    dec bp
+    jnz .row
+    cmp byte [gr_sunhit], 0
+    je .out
+    ; Fill the smile, then cut an oval mouth out of the yellow face.
+    mov cx, 124
+    mov dx, 37
+    mov si, 132
+    mov di, 39
+    mov al, 3
+    call gr_rect
+    mov cx, 127
+    mov dx, 36
+    mov si, 129
+    mov di, 40
+    xor al, al
+    call gr_rect
+    mov cx, 126
+    mov dx, 37
+    mov si, 130
+    mov di, 39
+    call gr_rect
+.out:
+    ret
+
+; The banana has already been restored before changing the sun's face.
+; Preserve the swept collision coordinates and remaining substeps.
+gr_sunpaint:
+    SAVE
+    call gr_sunface
+    mov ax, 120
+    mov bx, 36
+    mov cx, 16
+    mov dx, 6
+    call gr_blit
+    RESTORE
+    ret
+
+gr_sunreset:
+    cmp byte [gr_sunhit], 0
+    je .out
+    mov byte [gr_sunhit], 0
+    call gr_sunpaint
+.out:
     ret
 
 ; Opaque HUD cells, still mirrored into the scene for exposure/full paints.
@@ -1005,67 +1165,44 @@ gr_hud:
     call gr_text
     ret
 .visible:
-    ; Two ten-character names and two two-digit scores fit on one line.
-    mov si, gr_name1
-    mov di, gr_status
-    call gr_namecopy
-    mov si, gr_name2
-    mov di, gr_status+18
-    call gr_namecopy
-    xor ax, ax
-    mov al, [gr_scores]
-    mov di, gr_digits
-    call gr_number
-    mov ax, [gr_digits+1]
-    mov [gr_status+11], ax
-    xor ax, ax
-    mov al, [gr_scores+1]
-    call gr_number
-    mov ax, [gr_digits+1]
-    mov [gr_status+14], ax
-    mov si, gr_name1
-    cmp byte [gr_turn], 0
-    je .name
-    mov si, gr_name2
-.name:
-    mov di, gr_help
-    call gr_namecopy
-    mov ax, [gr_wind]
-    mov byte [gr_help+16], '+'
-    or ax, ax
-    jns .wind
-    neg ax
-    mov byte [gr_help+16], '-'
-.wind:
-    mov di, gr_help+17
-    call gr_number
+    call gr_scoreheader
     mov si, gr_status
     mov al, 15
     call gr_text
-    mov si, gr_prompt
+    mov ax, [gr_wind]
+    mov byte [gr_prompt+28], '+'
+    or ax, ax
+    jns .wind
+    neg ax
+    mov byte [gr_prompt+28], '-'
+.wind:
+    mov di, gr_prompt+29
+    call gr_number
     cmp byte [gr_state], 0
     jne .state
     mov ax, [gr_angle]
-    mov di, gr_prompt+3
-    call gr_number
-    mov ax, [gr_power]
-    mov di, gr_prompt+10
-    call gr_number
-    mov byte [gr_prompt], ' '
-    mov byte [gr_prompt+7], ' '
+    mov di, gr_prompt+8
     xor bx, bx
-    mov bl, [gr_field]
-    mov al, 7
-    mul bl
-    mov bx, ax
-    mov byte [gr_prompt+bx], '>'
+    call gr_shotnumber
+    mov ax, [gr_power]
+    mov di, gr_velocity+11
+    mov bx, 2
+    call gr_shotnumber
+    mov byte [gr_prompt], ' '
+    mov byte [gr_velocity], ' '
+    mov si, gr_prompt
+    cmp byte [gr_field], 0
+    je .selected
+    mov si, gr_velocity
+.selected:
+    mov byte [si], '>'
+    mov si, gr_prompt
     jmp short .line
 .state:
     mov si, gr_roundmsg
     cmp byte [gr_state], 2
-    je .winner
+    je .line
     mov si, gr_matchmsg
-.winner:
 .line:
     cmp byte [gr_paused], 0
     je .write
@@ -1075,50 +1212,56 @@ gr_hud:
     mov dx, 8
     mov al, 9
     call gr_text
-    mov si, gr_help
+    mov si, gr_blank
+    cmp byte [gr_state], 0
+    jne .last
+    cmp byte [gr_paused], 0
+    jne .last
+    mov si, gr_velocity
+.last:
     mov dx, 16
-    mov al, 15
     call gr_text
     ret
 
-; Numeric edits format and compare only the active three-cell field.
+; Numeric edits format and compare only the active seven-cell field.
 ; Paused input still changes the model; resume rebuilds the visible prompt.
 ; AX=new value, BX=word offset (0 angle, 2 velocity).
 gr_inputpaint:
-    mov si, gr_prompt+3
-    mov cx, 24
+    mov si, gr_prompt+8
+    mov cx, 64
+    mov dx, 8
     or bx, bx
     jz .number
-    add si, 7
-    mov cx, 80
+    mov si, gr_velocity+11
+    mov cx, 88
+    mov dx, 16
 .number:
     mov di, si
-    call gr_number
+    call gr_shotnumber
     cmp byte [gr_paused], 0
     jne .done
     call gr_dirtyclear
-    mov dx, 8
     mov al, 9
-    mov bp, 3
+    mov bp, 7
     call gr_textspan
-    mov si, 35
+    mov si, 40
     cmp byte [gr_field], 0
     je .flush
-    add si, 7
+    mov si, 75
 .flush:
     mov di, si
-    add di, 3
+    add di, 7
     jmp gr_hudflushspan
 .done:
     ret
 
 gr_selectpaint:
     mov byte [gr_prompt], ' '
-    mov byte [gr_prompt+7], ' '
+    mov byte [gr_velocity], ' '
     mov si, gr_prompt
     cmp byte [gr_field], 0
     je .selected
-    add si, 7
+    mov si, gr_velocity
 .selected:
     mov byte [si], '>'
     cmp byte [gr_paused], 0
@@ -1130,11 +1273,11 @@ gr_selectpaint:
     mov al, 9
     mov bp, 1
     call gr_textspan
-    add si, 7
-    mov cx, 56
+    mov si, gr_velocity
+    mov dx, 16
     call gr_textspan
     mov si, 32
-    mov di, 40
+    mov di, 65
     jmp gr_hudflushspan
 .done:
     ret
@@ -1341,7 +1484,12 @@ gr_vgatext:
     mov es, ax
     mov ax, 0f02h
     cmp word [gr_ry], 8
+    je .inputink
+    cmp word [gr_ry], 16
     jne .ink
+    cmp byte [gr_state], 4
+    jae .ink                 ; startup titles on this row stay white
+.inputink:
     mov ah, 9
 .ink:
     mov dx, 03c4h
@@ -1370,57 +1518,23 @@ gr_vgatext:
 .done:
     ret
 
-; Q6 coordinates. One rendered step has four swept substeps. Trig table
-; Q8; velocity * sin / 80 gives pixels per step in Q6. Gravity increments
-; velocity by 4/1/10 (Earth/Moon/Jupiter); wind uses a signed remainder.
+ ; Reference equations in a Q6 scene, shared with computer prediction.
 gr_fire:
     mov byte [gr_state], 1
     mov byte [gr_saved], 0
     mov word [gr_age], 0
-    mov word [gr_wrem], 0
-    mov word [gr_grem], 0
+    mov ax, [gr_power]
+    mov di, ax
     xor bx, bx
     mov bl, [gr_turn]
     shl bx, 1
-    mov ax, [gr_gx+bx]
-    add ax, 8
-    mov cl, 6
-    shl ax, cl
-    mov [gr_px], ax
-    mov ax, [gr_gy+bx]
-    sub ax, 3
-    shl ax, cl
-    mov [gr_py], ax
-    mov word [gr_pyhi], 0
-    mov bx, [gr_angle]
-    shl bx, 1
-    mov ax, [gr_sin+bx]
-    imul word [gr_power]
-    mov cx, 80
-    idiv cx
-    neg ax
-    mov [gr_vy], ax
-    mov bx, 90
-    sub bx, [gr_angle]
-    mov si, 1
-    jns .cos
-    neg bx
-.cos:
-    ; cosine(a) = sin(90-a), with negative sign above 90.
-    cmp word [gr_angle], 90
-    jbe .lookup
-    mov si, -1
-.lookup:
-    shl bx, 1
-    mov ax, [gr_sin+bx]
-    imul word [gr_power]
-    idiv cx
-    imul si
-    cmp byte [gr_turn], 0
-    je .vx
-    neg ax
-.vx:
-    mov [gr_vx], ax
+    mov bp, bx
+    mov si, gr_px
+    mov [gr_powers+bx], ax
+    mov ax, [gr_angle]
+    mov [gr_angles+bx], ax
+    call gr_initmotion
+    call gr_throwpose
     mov si, gr_musicthrow
     jmp gr_musicstart
 
@@ -1430,27 +1544,26 @@ gr_tick:
     cmp byte [gr_paused], 0
     jne .out
     call gr_musictick
+    cmp byte [gr_blast], 0
+    jne gr_blasttick
+    cmp byte [gr_throwticks], 0
+    jne gr_throwtick
+    cmp byte [gr_dancing], 0
+    jne gr_victorytick
     cmp byte [gr_state], 4
     jae gr_fronttick
     cmp byte [gr_state], 0
     je gr_aitick
     cmp byte [gr_state], 1
-    jne .out
+    jne gr_roundtick
     call gr_unbanana
     inc word [gr_age]
-    cmp word [gr_age], 1200
-    ja .miss
-    mov bp, 4
+    mov si, gr_px
+    call gr_framebegin
+    mov bp, [gr_steps]
 .step:
-    mov ax, [gr_vx]
-    mov cl, 2
-    sar ax, cl
-    add [gr_px], ax
-    mov ax, [gr_vy]
-    sar ax, cl
-    cwd
-    add [gr_py], ax
-    adc [gr_pyhi], dx
+    mov si, gr_px
+    call gr_motionstep
     mov cl, 6                   ; shift through AX; CX is coordinate below
     mov ax, [gr_px]
     sar ax, cl
@@ -1463,11 +1576,11 @@ gr_tick:
     cmp word [gr_pyhi], 0
     jl .next                    ; signed 32-bit height: high lunar arcs
     jg .miss
-    cmp dx, 128
+    cmp dx, 116
     jge .miss
     cmp dx, 24
     jl .next                    ; flight above scene is legal
-    ; Gorilla hit boxes, including a return onto the thrower.
+    ; Bound the lookup, then test actual gorilla ink, including self-hits.
     xor si, si
 .ape:
     mov ax, cx
@@ -1477,115 +1590,118 @@ gr_tick:
     mov ax, dx
     sub ax, [gr_gy+si]
     cmp ax, 20
-    jb .hitape
+    jae .other
+    call gr_get
+    cmp al, 1
+    je .hitape
+    cmp al, 10
+    je .hitape
+    cmp al, 11
+    je .hitape
+    ; Sky between arms/legs is passable, as in POINT-based BASIC.
+    jmp short .next
 .other:
     add si, 2
     cmp si, 4
     jb .ape
-    ; Sun is decorative and may be crossed without impact.
-    cmp dx, 42
-    jb .next
+    ; Sun ink triggers surprise, but never stops the projectile.
     call gr_get
-    cmp al, 3                  ; sun rays are not terrain
-    je .next
+    cmp al, 3
+    jne .solid
+    mov byte [gr_insun], 1
+    cmp byte [gr_sunhit], 0
+    jne .next
+    mov byte [gr_sunhit], 1
+    call gr_sunpaint
+    jmp short .next
+.solid:
     or al, al
     jnz .terrain
 .next:
     dec bp
     jnz .step
-    ; Fractional gravity: 9.8 maps to the original four velocity units/tick.
-    mov ax, [gr_grav10]
-    shl ax, 1
-    shl ax, 1
-    add ax, [gr_grem]
-    xor dx, dx
-    mov bx, 98
-    div bx
-    mov [gr_grem], dx
-    add [gr_vy], ax
-    mov ax, [gr_wind]
-    add ax, [gr_wrem]
-    cwd
-    mov bx, 4
-    idiv bx
-    mov [gr_wrem], dx
-    add [gr_vx], ax
+    mov si, gr_px
+    xor bx, bx
+    call gr_accelerate
     call gr_banana
 .out:
     ret
 .miss:
+    call gr_sunreset
     xor byte [gr_turn], 1
+    call gr_recallaim
     mov word [gr_aipower], 0
     mov byte [gr_state], 0
     mov byte [gr_field], 0
     mov byte [gr_edit], 0
     jmp gr_hudpaint
 .terrain:
-    call gr_crater
+    mov al, 7
+    call gr_blaststart
     mov si, gr_musicimpact
-    call gr_musicstart
-    jmp .miss
+    jmp gr_musicstart
 .hitape:
+    mov cx, [gr_gx+si]
+    add cx, 8
+    mov dx, [gr_gy+si]
+    add dx, 10
     shr si, 1
     xor si, 1                  ; opponent scores even on a self-hit
     mov ax, si
     mov [gr_winner], al
-    mov [gr_turn], al
+    xor byte [gr_turn], 1
     inc byte [gr_scores+si]
     mov byte [gr_state], 2
-    mov al, [gr_scores]
-    add al, [gr_scores+1]
+    mov al, [gr_scores+si]
     cmp al, [gr_target]
     jb .explode
     mov byte [gr_state], 3
 .explode:
-    call gr_crater
+    mov al, 18
+    call gr_blaststart
     mov si, gr_musichit
-    call gr_musicstart
-    jmp gr_hudpaint
+    jmp gr_musicstart
 
-; A persistent circular crater: collision and all later repaints see the hole.
-gr_crater:
-    mov [gr_hitx], cx
-    mov [gr_hity], dx
-    mov bp, -7
-.row:
-    mov si, -7
-.pixel:
-    mov ax, bp
-    imul bp
-    mov bx, ax
-    mov ax, si
-    imul si
-    add ax, bx
-    cmp ax, 49
-    ja .next
-    mov cx, [gr_hitx]
-    add cx, si
-    mov dx, [gr_hity]
-    add dx, bp
-    cmp dx, 24
-    jl .next
+; VictoryDance: four left/right pairs, each with PLAY EFGEFDC and Rest .2.
+; Each phrase includes its rest; pose changes wait for the sequencer, so
+; rendering, pause and focus changes cannot run the dance ahead of the tune.
+gr_victorytick:
+    cmp word [gr_musicptr], 0
+    jne .out
+    dec byte [gr_dancing]
+    jnz .pose
+    mov byte [gr_roundwait], 18
+    ret
+.pose:
+    xor bx, bx
+    mov bl, [gr_winner]
+    shl bx, 1
+    mov bp, bx
+    mov cx, [gr_gx+bx]
+    mov dx, [gr_gy+bx]
+    mov si, cx
+    add si, 15
+    mov di, dx
+    add di, 19
     xor al, al
-    call gr_put
-.next:
-    inc si
-    cmp si, 7
-    jle .pixel
-    inc bp
-    cmp bp, 7
-    jle .row
-    mov ax, [gr_hitx]
-    sub ax, 8
+    call gr_rect
+    mov si, gr_apeleft
+    test byte [gr_dancing], 1
+    jz .draw
+    mov si, gr_aperight
+.draw:
+    call gr_gorillapose
+    ; Gorillas need not start on an eight-pixel blit boundary.
+    mov ax, [ds:gr_gx+bp]
     and ax, 0fff8h
-    jns .xok
-    xor ax, ax
-.xok:
-    mov bx, [gr_hity]
-    sub bx, 8
+    mov bx, [ds:gr_gy+bp]
     mov cx, 24
-    mov dx, 17
-    jmp gr_blit
+    mov dx, 20
+    call gr_blit
+    mov si, gr_musicvictory
+    call gr_musicstart
+.out:
+    ret
 
 ; Save/restore an aligned 16x8 scene patch. The extra byte column lets a
 ; banana cross a byte boundary without snapping its visible x coordinate.
@@ -1633,12 +1749,23 @@ gr_banana:
     sar ax, cl
     mov dx, [gr_py]
     sar dx, cl
-    cmp ax, 252
+    cmp ax, 249
     ja .out
     cmp dx, 0
     jl .out
     cmp dx, 120
     ja .out
+    cmp byte [gr_insun], 0
+    je .visible
+    cmp ax, 113
+    jb .leavesun
+    cmp ax, 141
+    ja .leavesun
+    cmp dx, 46
+    jb .out
+.leavesun:
+    mov byte [gr_insun], 0
+.visible:
     and ax, 0fff8h
     cmp ax, 240
     jbe .patch
@@ -1665,21 +1792,33 @@ gr_banana:
     shr ax, cl
     mov cx, ax
     mov dx, [gr_by]
-    mov al, 1
+    mov bx, [gr_age]
+    and bx, 3
+    mov si, bx
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    sub bx, si
+    add bx, gr_bananas
+    mov bp, 7
+.banrow:
+    mov ah, [bx]
+    inc bx
+    mov si, 7
+    push cx
+.banpixel:
+    shl ah, 1
+    jnc .skip
+    mov al, 14
     call gr_put
+.skip:
     inc cx
-    call gr_put
+    dec si
+    jnz .banpixel
+    pop cx
     inc dx
-    call gr_put
-    inc dx
-    test byte [gr_age], 2
-    jz .left
-    inc cx
-    jmp short .tip
-.left:
-    dec cx
-.tip:
-    call gr_put
+    dec bp
+    jnz .banrow
     mov ax, [gr_bx]
     mov bx, [gr_by]
     mov cx, 16
@@ -1698,11 +1837,30 @@ gr_fullpaint:
     jne .scene
     call gr_margins
 .scene:
+    ; Between shots the three HUD rows are opaque font bands. Reuse the
+    ; incremental text path instead of converting them through four planes.
+    ; During flight the banana can occupy these rows, so use the scene.
+    cmp byte [gr_state], 1
+    je .city
+    xor ax, ax
+    xor bx, bx
+    mov cx, 256
+.hudrow:
+    call gr_hudblit
+    add bx, 8
+    cmp bx, 24
+    jb .hudrow
+.city:
     xor ax, ax
 .strip:
     xor bx, bx
     mov cx, 32
     mov dx, 128
+    cmp byte [gr_state], 1
+    je .draw
+    mov bx, 24
+    mov dx, 104
+.draw:
     call gr_blit
     add ax, 32
     cmp ax, 256
@@ -1785,7 +1943,8 @@ gr_background:
 ; Render AX=x (8-aligned), BX=y, CX=width (8-aligned), DX=height.
 ; Native ink-pair tables combine palette mapping, scaling and bit packing.
 ; Convert logical rows once, then duplicate native bytes vertically.
-; Up to 32 rows for narrow strips; wide bands retain the 6144-byte bound.
+; Up to 32 rows for strips <=56 pixels wide, or 7 rows for wider bands.
+; At sx=2, sy=3, either path needs at most 5376 scratch bytes.
 gr_blit:
     SAVE
     push ds
@@ -1881,8 +2040,8 @@ gr_blit:
 .bands:
     mov ax, [gr_endy]
     sub ax, [gr_ry]
-    mov bx, 8
-    cmp word [gr_rw], 64
+    mov bx, 7
+    cmp word [gr_rw], 56
     ja .limit
     mov bx, 32
 .limit:
@@ -2242,13 +2401,13 @@ gr_ablines: dw gr_title, gr_credit, gr_credit2, gr_credit3, 0
 gr_credit: db 'After QBasic Gorillas (1990)',0
 gr_credit2: db 'Original: Microsoft Corporation',0
 gr_credit3: db '8086 port for os8088',0
-gr_status: db '           00:00            ',0
-gr_prompt: db ' A:045  V:070',0
+gr_status: db '               Score 000 - 000  ',0
+gr_prompt: db ' Angle: 45             Wind +000',0
+gr_velocity: db ' Velocity: 70     ',0
 gr_blank: db 0
-gr_roundmsg: db 'Point! Enter: next skyline',0
-gr_matchmsg: db 'Match over! Enter: setup',0
+gr_roundmsg: db 'Point! Next skyline shortly',0
+gr_matchmsg: db 'Match over! Final scores soon',0
 gr_pausemsg: db 'Paused. P or Enter to resume',0
-gr_help: db 'Player 1   Wind  +000',0
 ; Four font bits -> four opaque scene pixels, little-endian byte order.
 gr_textnibbles:
 %assign gr_n 0
@@ -2269,28 +2428,44 @@ gr_textdouble:
     dw ((gr_bits >> 8) | ((gr_bits & 255) << 8))
 %assign gr_n gr_n+1
 %endrep
-gr_facades: db 5,6,7,5,7,6,5,7
 %include "grart.inc"
 
-; sin(degrees)*256, rounded; cosine uses symmetry.
+; Q14 sine, full circle plus the interpolation endpoint.
 gr_sin:
-    dw 0, 4, 9, 13, 18, 22, 27, 31, 36, 40, 44, 49
-    dw 53, 58, 62, 66, 71, 75, 79, 83, 88, 92, 96, 100
-    dw 104, 108, 112, 116, 120, 124, 128, 132, 136, 139, 143, 147
-    dw 150, 154, 158, 161, 165, 168, 171, 175, 178, 181, 184, 187
-    dw 190, 193, 196, 199, 202, 204, 207, 210, 212, 215, 217, 219
-    dw 222, 224, 226, 228, 230, 232, 234, 236, 237, 239, 241, 242
-    dw 243, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 254
-    dw 255, 255, 255, 256, 256, 256, 256, 256, 256, 256, 255, 255
-    dw 255, 254, 254, 253, 252, 251, 250, 249, 248, 247, 246, 245
-    dw 243, 242, 241, 239, 237, 236, 234, 232, 230, 228, 226, 224
-    dw 222, 219, 217, 215, 212, 210, 207, 204, 202, 199, 196, 193
-    dw 190, 187, 184, 181, 178, 175, 171, 168, 165, 161, 158, 154
-    dw 150, 147, 143, 139, 136, 132, 128, 124, 120, 116, 112, 108
-    dw 104, 100, 96, 92, 88, 83, 79, 75, 71, 66, 62, 58
-    dw 53, 49, 44, 40, 36, 31, 27, 22, 18, 13, 9, 4
-    dw 0
+    dw 0,286,572,857,1143,1428,1713,1997,2280,2563,2845,3126
+    dw 3406,3686,3964,4240,4516,4790,5063,5334,5604,5872,6138,6402
+    dw 6664,6924,7182,7438,7692,7943,8192,8438,8682,8923,9162,9397
+    dw 9630,9860,10087,10311,10531,10749,10963,11174,11381,11585,11786,11982
+    dw 12176,12365,12551,12733,12911,13085,13255,13421,13583,13741,13894,14044
+    dw 14189,14330,14466,14598,14726,14849,14968,15082,15191,15296,15396,15491
+    dw 15582,15668,15749,15826,15897,15964,16026,16083,16135,16182,16225,16262
+    dw 16294,16322,16344,16362,16374,16382,16384,16382,16374,16362,16344,16322
+    dw 16294,16262,16225,16182,16135,16083,16026,15964,15897,15826,15749,15668
+    dw 15582,15491,15396,15296,15191,15082,14968,14849,14726,14598,14466,14330
+    dw 14189,14044,13894,13741,13583,13421,13255,13085,12911,12733,12551,12365
+    dw 12176,11982,11786,11585,11381,11174,10963,10749,10531,10311,10087,9860
+    dw 9630,9397,9162,8923,8682,8438,8192,7943,7692,7438,7182,6924
+    dw 6664,6402,6138,5872,5604,5334,5063,4790,4516,4240,3964,3686
+    dw 3406,3126,2845,2563,2280,1997,1713,1428,1143,857,572,286
+    dw 0,-286,-572,-857,-1143,-1428,-1713,-1997,-2280,-2563,-2845,-3126
+    dw -3406,-3686,-3964,-4240,-4516,-4790,-5063,-5334,-5604,-5872,-6138,-6402
+    dw -6664,-6924,-7182,-7438,-7692,-7943,-8192,-8438,-8682,-8923,-9162,-9397
+    dw -9630,-9860,-10087,-10311,-10531,-10749,-10963,-11174,-11381,-11585,-11786,-11982
+    dw -12176,-12365,-12551,-12733,-12911,-13085,-13255,-13421,-13583,-13741,-13894,-14044
+    dw -14189,-14330,-14466,-14598,-14726,-14849,-14968,-15082,-15191,-15296,-15396,-15491
+    dw -15582,-15668,-15749,-15826,-15897,-15964,-16026,-16083,-16135,-16182,-16225,-16262
+    dw -16294,-16322,-16344,-16362,-16374,-16382,-16384,-16382,-16374,-16362,-16344,-16322
+    dw -16294,-16262,-16225,-16182,-16135,-16083,-16026,-15964,-15897,-15826,-15749,-15668
+    dw -15582,-15491,-15396,-15296,-15191,-15082,-14968,-14849,-14726,-14598,-14466,-14330
+    dw -14189,-14044,-13894,-13741,-13583,-13421,-13255,-13085,-12911,-12733,-12551,-12365
+    dw -12176,-11982,-11786,-11585,-11381,-11174,-10963,-10749,-10531,-10311,-10087,-9860
+    dw -9630,-9397,-9162,-8923,-8682,-8438,-8192,-7943,-7692,-7438,-7182,-6924
+    dw -6664,-6402,-6138,-5872,-5604,-5334,-5063,-4790,-4516,-4240,-3964,-3686
+    dw -3406,-3126,-2845,-2563,-2280,-1997,-1713,-1428,-1143,-857,-572,-286
+    dw 0,286
 
+%include "grphysics.inc"
+%include "grplay.inc"
 %include "grai.inc"
 %include "grfront.inc"
 %include "grmusic.inc"
@@ -2317,9 +2492,10 @@ VAR gr_state, 1
 VAR gr_paused, 1
 VAR gr_turn, 1
 VAR gr_winner, 1
+VAR gr_dancing, 1
+VAR gr_sunhit, 1
+VAR gr_insun, 1
 VAR gr_scores, 2
-VAR gr_grav10, 2
-VAR gr_grem, 2
 VAR gr_target, 1
 VAR gr_players, 1
 VAR gr_aipower, 2
@@ -2327,17 +2503,19 @@ VAR gr_aierror, 2
 VAR gr_aibest, 2
 VAR gr_aix, 2
 VAR gr_aiy, 2
-VAR gr_aivy, 2
-VAR gr_aivx, 2
 VAR gr_aiyhi, 2
-VAR gr_aiwrem, 2
+VAR gr_aivx, 2
+VAR gr_aivy, 2
 VAR gr_aigrem, 2
+VAR gr_aiwrem, 2
+VAR gr_aixrem, 2
+VAR gr_aiyrem, 2
+VAR gr_aitarget, 2
 VAR gr_name1, 11
 VAR gr_name2, 11
 VAR gr_setupfield, 1
 VAR gr_inputlen, 1
 VAR gr_input, 11
-VAR gr_digits, 3
 VAR gr_musicptr, 2
 VAR gr_musicdue, 2
 VAR gr_introseq, 1
@@ -2346,7 +2524,7 @@ VAR gr_frontplane, 1
 VAR gr_frontsource, 2
 VAR gr_cachekey, 2
 VAR gr_cacheratio, 2
-VAR gr_lightcache, 13440
+VAR gr_lightcache, 4480
 VAR gr_apecache, 1920
 VAR gr_animdue, 2
 VAR gr_animphase, 1
@@ -2355,8 +2533,23 @@ VAR gr_field, 1
 VAR gr_edit, 1
 VAR gr_angle, 2
 VAR gr_power, 2
+VAR gr_angles, 4
+VAR gr_powers, 4
 VAR gr_wind, 2
-VAR gr_roofs, 8
+VAR gr_gwhole, 2
+VAR gr_gfrac, 2
+VAR gr_grava, 4
+VAR gr_roofs, 12
+VAR gr_lots, 12
+VAR gr_widths, 12
+VAR gr_colors, 12
+VAR gr_buildings, 2
+VAR gr_profile, 1
+VAR gr_blast, 1
+VAR gr_discink, 1
+VAR gr_blastmax, 1
+VAR gr_throwticks, 1
+VAR gr_roundwait, 1
 VAR gr_gx, 4
 VAR gr_gy, 4
 VAR gr_fs, 1
@@ -2388,8 +2581,12 @@ VAR gr_py, 2
 VAR gr_pyhi, 2
 VAR gr_vx, 2
 VAR gr_vy, 2
-VAR gr_age, 2
+VAR gr_grem, 2
 VAR gr_wrem, 2
+VAR gr_xrem, 2
+VAR gr_yrem, 2
+VAR gr_steps, 2
+VAR gr_age, 2
 VAR gr_saved, 1
 VAR gr_bx, 2
 VAR gr_by, 2
@@ -2416,7 +2613,7 @@ VAR gr_planestep, 2
 VAR gr_vgdest, 2
 VAR gr_vgheight, 2
 VAR gr_scene, 16384
-VAR gr_band, 6144
+VAR gr_band, 5376
 
 OS88_BSS GR_BSS
 OS88_IMAGE_END

@@ -1,6 +1,7 @@
 ; Solo opponent: try one candidate throw per worker tick, keeping input,
 ; menus and pause responsive. Predict the same wind/gravity substeps as the
-; live shot, aiming at the human's center. Buildings may intercept a throw;
+; live shot, aiming at the human's center with an imperfect release power.
+; Buildings may intercept a throw;
 ; these misses make real craters. No scores, terrain or live shot are poked.
 gr_aitick:
     cmp byte [gr_players], 1
@@ -12,61 +13,56 @@ gr_aitick:
     mov word [gr_aipower], 1
     mov word [gr_aierror], 0ffffh
     mov word [gr_aibest], 70
+    mov ax, [gr_gx]
+    add ax, 8
+    mov cl, 6
+    shl ax, cl
+    mov [gr_aitarget], ax
 .batch:
     call gr_aipredict
     add word [gr_aipower], 2
-    cmp word [gr_aipower], 150
+    cmp word [gr_aipower], 360
     ja .fire
 .out:
     ret
 .fire:
     mov word [gr_angle], 55
+    ; A fresh -8..+8 velocity error makes even a clear shot fallible.
+    call gr_rand
+    xor dx, dx
+    mov bx, 17
+    div bx
     mov ax, [gr_aibest]
+    add ax, dx
+    sub ax, 8
+    cmp ax, 1
+    jge .upper
+    mov ax, 1
+.upper:
+    cmp ax, 360
+    jle .power
+    mov ax, 360
+.power:
     mov [gr_power], ax
     mov word [gr_aipower], 0
     call gr_fire
     jmp gr_hudpaint
 
 gr_aipredict:
-    mov ax, [gr_gx+2]
-    add ax, 8
-    mov cl, 6
-    shl ax, cl
-    mov [gr_aix], ax
-    mov ax, [gr_gy+2]
-    sub ax, 3
-    shl ax, cl
-    mov [gr_aiy], ax
-    mov word [gr_aiyhi], 0
-    mov ax, [gr_sin+55*2]
-    mul word [gr_aipower]
-    mov cx, 80
-    div cx
-    neg ax
-    mov [gr_aivy], ax
-    mov ax, [gr_sin+35*2]
-    mul word [gr_aipower]
-    div cx
-    neg ax
-    mov [gr_aivx], ax
-    mov word [gr_aiwrem], 0
-    mov word [gr_aigrem], 0
-    mov bp, 512
+    mov si, gr_aix
+    mov bp, 2
+    mov ax, 55
+    xor dx, dx
+    mov di, [gr_aipower]
+    call gr_initmotion
+    mov di, 512
 .frame:
-    mov si, 4
+    call gr_framebegin
+    mov bp, [gr_steps]
 .step:
-    mov ax, [gr_aivx]
-    sar ax, 1
-    sar ax, 1
-    add [gr_aix], ax
-    mov ax, [gr_aivy]
-    sar ax, 1
-    sar ax, 1
-    cwd
-    add [gr_aiy], ax
-    adc [gr_aiyhi], dx
-    ; The human's center is 48 pixels from the left edge.
-    cmp word [gr_aix], 48*64
+    call gr_motionstep
+    mov ax, [gr_aitarget]
+    cmp [gr_aix], ax
     jbe .crossed
     cmp word [gr_aix], 256*64
     jae .out
@@ -76,25 +72,11 @@ gr_aipredict:
     cmp word [gr_aiy], 128*64
     jae .out
 .next:
-    dec si
-    jnz .step
-    mov ax, [gr_grav10]
-    shl ax, 1
-    shl ax, 1
-    add ax, [gr_aigrem]
-    xor dx, dx
-    mov bx, 98
-    div bx
-    mov [gr_aigrem], dx
-    add [gr_aivy], ax
-    mov ax, [gr_wind]
-    add ax, [gr_aiwrem]
-    cwd
-    mov bx, 4
-    idiv bx
-    mov [gr_aiwrem], dx
-    add [gr_aivx], ax
     dec bp
+    jnz .step
+    xor bx, bx
+    call gr_accelerate
+    dec di
     jnz .frame
 .out:
     ret

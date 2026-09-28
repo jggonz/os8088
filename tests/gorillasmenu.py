@@ -52,9 +52,9 @@ def animation(m, p, code, tag):
     # The gameplay renderer may borrow the inactive intro cache. This
     # debugger-only reference paint must not force the next timed animation
     # to rebuild it (real gameplay -> intro transitions do rebuild it).
-    cache, cachekey = p.data('lightcache', 15360), p.data('cachekey', 2)
+    cache, cachekey = p.data('lightcache', 6400), p.data('cachekey', 2)
     m.write(p.base + p.offsets['gr_scene'], reference)
-    m.write(p.base + p.offsets['gr_state'], b'\0')
+    m.write(p.base + p.offsets['gr_state'], b'\x01')
     m.write(p.base + p.offsets['gr_musicptr'], b'\0\0')
     I.check_repaint(m, p, code, tag)
     m.write(p.base + p.offsets['gr_lightcache'], cache)
@@ -67,19 +67,15 @@ def animation(m, p, code, tag):
     return ms
 
 
-def measure(m, p, code, key, tag):
-    m.pause()
-    m.bp_exec(p.base + code['gr_key'])
-    m.key(key)
-    m.run()
-    assert m.wait_stop(30) == 'breakpoint'
-    r = m.regs()
-    ret = struct.unpack('<H', m.readseg(r['ss'], r['sp'], 2))[0]
-    start = m.status()['cycles']
-    m.bp_exec((r['cs'] << 4) + ret)
-    m.run()
-    assert m.wait_stop(30) == 'breakpoint'
-    ms = (m.status()['cycles'] - start) / G.M.GUEST_HZ * 1000
+def check_text(m, p):
+    if p.b('state') == 5:
+        answer = p.data('input', 11).split(b'\0')[0]
+        line = p.data('hudchars', 512)[320:352]
+        assert line[:len(answer)] == answer
+        assert line[len(answer)] in b'_ ', 'missing insertion cursor'
+        assert line[len(answer)+1:] == b' ' * (31-len(answer)), 'stale cursor'
+    elif p.b('state') == 6:
+        assert p.data('hudchars', 512)[320:352] == b' ' * 32
     # All setup pixels must match the cached glyphs, including erased errors.
     first = p.b('fontfirst')
     font = m.read((p.w('fontseg') << 4) + p.w('fontoff'), (127-first)*8)
@@ -93,6 +89,56 @@ def measure(m, p, code, key, tag):
                     at = (cell//32*8+y)*128 + cell%32*4 + x//2
                     expected[at] |= 15 << (0 if x & 1 else 4)
     assert p.data('scene', 16384) == expected, 'setup differs from font'
+
+
+def blink(m, p, code, tag):
+    """Observe two natural blink edges, with no forced timer or guest calls."""
+    m.pause()
+    for _ in range(2):
+        before = p.data('hudchars', 512)
+        answer = p.data('input', 11)
+        due = p.w('animdue')
+        # This routine is entered only when the real worker/exclusive tick
+        # reaches a blink deadline. Stop after it updates and flushes the cell.
+        m.bp_exec(p.base + code['gr_cursortext'])
+        m.run()
+        assert m.wait_stop(30) == 'breakpoint', 'setup cursor never blinked'
+        r = m.regs()
+        ret = struct.unpack('<H', m.readseg(r['ss'], r['sp']+2, 2))[0]
+        m.bp_exec((r['cs'] << 4) + ret)
+        m.run()
+        assert m.wait_stop(30) == 'breakpoint', 'blink never returned'
+        after = p.data('hudchars', 512)
+        at = 320+p.b('inputlen')
+        assert [i for i in range(512) if before[i] != after[i]] == [at]
+        assert {before[at], after[at]} == {ord('_'), ord(' ')}
+        assert p.data('input', 11) == answer, 'cursor entered the answer'
+        assert 9 <= (p.w('animdue')-due) & 65535 < 18, 'incorrect blink period'
+        check_text(m, p)
+        I.check_repaint(m, p, code, tag)
+    m.bp_exec()
+    m.run()
+
+
+def measure(m, p, code, key, tag):
+    m.pause()
+    m.bp_exec(p.base + code['gr_key'])
+    m.key(key)
+    m.run()
+    assert m.wait_stop(30) == 'breakpoint'
+    old_answer = p.data('input', 11)
+    old_field = p.b('setupfield')
+    r = m.regs()
+    ret = struct.unpack('<H', m.readseg(r['ss'], r['sp'], 2))[0]
+    start = m.status()['cycles']
+    m.bp_exec((r['cs'] << 4) + ret)
+    m.run()
+    assert m.wait_stop(30) == 'breakpoint'
+    ms = (m.status()['cycles'] - start) / G.M.GUEST_HZ * 1000
+    check_text(m, p)
+    if p.b('state') == 5 and (p.data('input', 11) != old_answer
+                              or p.b('setupfield') != old_field):
+        assert p.data('hudchars', 512)[320+p.b('inputlen')] == ord('_')
     I.check_repaint(m, p, code, tag)
     m.bp_exec()
     m.run()
@@ -108,7 +154,7 @@ def main():
     ap.add_argument('--output', type=Path)
     ap.add_argument('--max-transition-ms', type=float, default=150)
     args = ap.parse_args()
-    off, code, report = G.offsets(), I.code_offsets(), {}
+    off, code, report = G.offsets(), I.code_offsets(('gr_cursortext',)), {}
     with tempfile.TemporaryDirectory() as td:
         disk = Path(td) / 'gorillas.img'
         subprocess.run(['python3', 'tools/os88disk.py', '-o', str(disk),
@@ -141,11 +187,22 @@ def main():
                         G.key(m, 'KeyN')
                         m.alt('Enter')
                         G.wait(m, lambda: p.b('fsready'), 'fullscreen setup')
+                    blink(m, p, code, tag)
                     keys = ('Digit0', 'Enter', 'Backspace', 'Enter',
                             'KeyA', 'Backspace', 'Enter', 'Enter',
                             'Enter', 'Enter')
-                    values = [measure(m, p, code, key, tag) for key in keys]
-                    assert p.b('state') == 6 and p.w('grav10') == 98
+                    values = []
+                    for i, key in enumerate(keys):
+                        values.append(measure(m, p, code, key, tag))
+                        if i == 4:
+                            for _ in range(9):
+                                measure(m, p, code, 'KeyA', tag)
+                            measure(m, p, code, 'KeyB', tag)
+                            assert p.b('inputlen') == 10
+                            assert p.data('input', 11) == b'a' * 10 + b'\0'
+                        if i in (1, 3, 4, 5, 6, 7, 8):
+                            blink(m, p, code, tag)
+                    assert p.b('state') == 6 and (p.w('gwhole')*10 + p.w('gfrac')//100) == 98
                     label = tag + '-' + mode
                     report[label] = list(zip(keys, values))
                     print(label, ' '.join('%s=%.2fms' % pair
@@ -153,6 +210,20 @@ def main():
                     if args.max_transition_ms:
                         assert max(values) < args.max_transition_ms, (label, values)
                         assert max(values[i] for i in (0, 4, 5)) < 20, (label, values)
+                    # The optional intro must keep even maximum-length names
+                    # intact through every border phase, in both display modes.
+                    m.pause()
+                    for name, value in (('name1', b'abcdefghij'), ('name2', b'klmnopqrst')):
+                        m.write(p.base+p.offsets['gr_'+name], value+b'\0')
+                    m.run()
+                    G.key(m, 'KeyV')
+                    assert p.b('state') == 7
+                    assert p.data('hudchars', 512)[192:224] == b'   abcdefghij AND klmnopqrst    '
+                    frames = [animation(m, p, code, tag) for _ in range(5)]
+                    assert max(frames) < 75, frames
+                    print(label, 'PASS optional intro names inside animated border', flush=True)
+                    G.key(m, 'Space')
+                    G.wait(m, lambda: p.b('state') == 0, 'skip optional intro')
                 G.key(m, 'Escape')
                 G.wait(m, lambda: not p.b('fs'), 'fullscreen exit')
                 ui.close(ui.window('Gorillas'))

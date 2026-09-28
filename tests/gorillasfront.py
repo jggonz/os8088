@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Guest gate for the splash, setup, dance, sound scheduling and solo opponent."""
 import argparse
+import struct
 from pathlib import Path
 import subprocess
 import tempfile
@@ -76,7 +77,7 @@ def arm(tag, off, disk, out):
         G.key(m, 'Escape')
         G.wait(m, lambda: not p.b('fs'), 'windowed setup')
         G.key(m, 'Enter')
-        assert p.b('state') == 6 and p.w('grav10') == 162
+        assert p.b('state') == 6 and (p.w('gwhole')*10 + p.w('gfrac')//100) == 162
         assert p.b('players') == 1 and p.b('target') == 1
         G.key(m, 'KeyV')
         G.wait(m, lambda: p.b('state') == 7, 'intro dance')
@@ -103,6 +104,8 @@ def arm(tag, off, disk, out):
         assert p.b('turn') == 1 and p.w('angle') == 55
         G.wait(m, lambda: p.b('state') != 1, 'computer throw lands')
         assert p.b('turn') == 0 or p.b('state') == 3
+        if p.b('state') == 0:
+            assert (p.w('angle'), p.w('power')) == (0, 30), 'computer overwrote human input'
         if p.b('fs'):
             G.key(m, 'Escape')
             G.wait(m, lambda: not p.b('fs'), 'solo fullscreen exit')
@@ -112,15 +115,16 @@ def arm(tag, off, disk, out):
             G.key(m, 'Enter')
         type_text(m, '.1'); G.key(m, 'Enter')
         assert p.b('players') == 2 and p.b('target') == 3
-        assert p.w('grav10') == 1
+        assert (p.w('gwhole')*10 + p.w('gfrac')//100) == 1
         G.key(m, 'KeyV')
         G.wait(m, lambda: p.b('state') == 0, 'dance completes automatically')
-        assert p.w('grav10') == 1, 'new skyline reset chosen gravity'
+        assert (p.w('gwhole')*10 + p.w('gfrac')//100) == 1, 'new skyline reset chosen gravity'
         G.key(m, 'Digit9'); G.key(m, 'Digit0'); G.key(m, 'Enter'); G.key(m, 'Enter')
         G.wait(m, lambda: p.w('age') >= 30, 'fractional-gravity flight')
         G.key(m, 'KeyP')
         assert p.b('state') == 1 and p.b('paused')
-        assert p.w('vy') == (-224 + p.w('age')*4//98) & 65535
+        expected = -int(70 * 64 * .1 * 128/350) + int((p.w('age')+.5)*.1*64*.01*128/350)
+        assert abs(struct.unpack('<h', p.data('vy', 2))[0] - expected) <= 1
         ui.close(ui.window('Gorillas'))
         print('PASS', tag, 'splash, setup validation, names, music, dance, solo, fullscreen', flush=True)
 

@@ -8,6 +8,7 @@ Use --output to retain a before/after JSON report. No guest instrumentation.
 import argparse
 import json
 from pathlib import Path
+import re
 import struct
 import subprocess
 import tempfile
@@ -18,10 +19,11 @@ import gorillas as G
 
 def code_offsets(extra=()):
     source = (G.ROOT / 'apps/gorillas/gorillas.asm').read_text()
-    names = ('gr_key', 'gr_tick', 'gr_fullpaint', 'gr_status', 'gr_prompt', 'gr_help',
+    names = ('gr_key', 'gr_tick', 'gr_fullpaint', 'gr_status', 'gr_prompt', 'gr_velocity',
              'gr_pausemsg', 'gr_roundmsg', 'gr_matchmsg', 'gr_animate',
              'gr_apeleft', 'gr_aperight') + tuple(extra)
-    source = source.replace('OS88_IMAGE_END', '')
+    # Symbol-only probe: its appended table is not part of the shipped image.
+    source = source.replace('OS88_IMAGE_END', '').replace('OS88_BSS GR_BSS', 'OS88_BSS 0')
     source += '\n' + '\n'.join('dw ' + n for n in names) + '\nOS88_IMAGE_END\n'
     with tempfile.TemporaryDirectory() as td:
         asm, binary = Path(td) / 'probe.asm', Path(td) / 'probe.bin'
@@ -38,10 +40,15 @@ def check_hud(m, p, code):
         expected = bytearray(24*128)
         if p.b('saved'):
             x, y = p.w('px') >> 6, p.w('by')
-            tip = x + 2 if p.w('age') & 2 else x
-            for px, py in ((x, y), (x+1, y), (x+1, y+1), (tip, y+2)):
-                if py < 24:
-                    expected[py*128 + px//2] |= 1 << (0 if px & 1 else 4)
+            rows = ['0000000', '0011000', '0110000', '0110000',
+                    '0110000', '0011000', '0001100']
+            for _ in range(p.w('age') & 3):
+                rows = [''.join(row[c] for row in rows[::-1]) for c in range(7)]
+            for dy, row in enumerate(rows):
+                for dx, bit in enumerate(row):
+                    px, py = x+dx, y+dy
+                    if bit == '1' and py < 24:
+                        expected[py*128 + px//2] |= 14 << (0 if px & 1 else 4)
         assert p.data('scene', len(expected)) == expected, \
             'flight sky contains text or an incorrect banana'
         return
@@ -50,9 +57,24 @@ def check_hud(m, p, code):
     expected = bytearray(24*128)
     prompt = ('gr_pausemsg' if p.b('paused') else
               {0: 'gr_prompt', 2: 'gr_roundmsg', 3: 'gr_matchmsg'}[p.b('state')])
-    for row, name in enumerate(('gr_status', prompt, 'gr_help')):
-        line = m.read(p.base + code[name], 32).split(b'\0')[0]
-        ink = 9 if row == 1 else 15
+    wind = struct.unpack('<h', p.data('wind', 2))[0]
+    names = [p.data(n, 11).split(b'\0')[0] for n in ('name1', 'name2')]
+    scores = p.data('scores', 2)
+    header = bytearray(b' '*15 + b'Score 000 - 000  ')
+    header[1:11] = names[p.b('turn')].ljust(10)
+    header[21:24], header[27:30] = [('%03d' % n).encode() for n in scores]
+    assert m.read(p.base + code['gr_status'], 33) == header + b'\0'
+    velocity = 'gr_velocity' if p.b('state') == 0 and not p.b('paused') else None
+    for row, name in enumerate(('gr_status', prompt, velocity)):
+        line = m.read(p.base + code[name], 33).split(b'\0')[0] if name else b''
+        if name in ('gr_prompt', 'gr_velocity'):
+            selected = p.b('field') == row - 1
+            label, value = ('Angle', p.w('angle')) if row == 1 else ('Velocity', p.w('power'))
+            text = ('>' if selected else ' ') + '%s: %-7d' % (label, value)
+            if row == 1:
+                text = text.ljust(23) + 'Wind %+04d' % wind
+            assert line == text.encode(), (line, text)
+        ink = 15 if row == 0 else 9
         for col, ch in enumerate(line):
             for y, bits in enumerate(font[(ch-first)*8:(ch-first+1)*8]):
                 for x in range(8):
@@ -71,9 +93,11 @@ def video_bytes(m, tag):
     # registers/scratch bytes. The caller is paused under the graphics lock.
     p = m.gorillas_probe
     stub, scratch = p.offsets['gr_under'], p.offsets['gr_band']
+    source = (G.ROOT / 'apps/gorillas/gorillas.asm').read_text()
+    scratch_size = int(re.search(r'^VAR gr_band, (\d+)$', source, re.M)[1])
     saved = m.regs()
     original_stub = m.read(p.base + stub, 9)
-    original_scratch = m.read(p.base + scratch, 6144)
+    original_scratch = m.read(p.base + scratch, scratch_size)
     m.write(p.base + stub, bytes.fromhex('fa b8 00 a0 8e d8 f3 a4 90'))
     index = m.inb(0x3ce)
     m.outb(0x3ce, 5)
@@ -84,8 +108,8 @@ def video_bytes(m, tag):
     planes = []
     for plane in range(4):
         m.outb(0x3cf, plane)
-        for offset in range(0, 38400, 6144):
-            count = min(6144, 38400-offset)
+        for offset in range(0, 38400, scratch_size):
+            count = min(scratch_size, 38400-offset)
             m.cmd(cmd='park', cs=p.base >> 4, ip=stub)
             for reg, value in (('es', p.base >> 4), ('si', offset),
                                ('di', scratch), ('cx', count),
@@ -188,7 +212,7 @@ def flight_hud(m, p, code, tag, repaint):
     measure(m, p, code, 'KeyP', tag, repaint)
     assert p.b('paused') == 1
     measure(m, p, code, 'KeyP', tag, repaint)
-    G.wait(m, lambda: p.b('state') != 1, 'shot ends and text returns')
+    G.wait(m, lambda: p.b('state') != 1 and not p.b('blast'), 'shot and explosion end; text returns')
     G.M.pace(m, .3)
     m.pause()
     check_hud(m, p, code)
@@ -235,12 +259,10 @@ def main():
     started = time.monotonic()
     off, code, report = G.offsets(), code_offsets(), {}
     keys = ('Digit9', 'Digit0', 'Digit9', 'Backspace', 'Enter',
-            'Digit1', 'Digit5', 'Digit0', 'ArrowDown', 'ArrowUp',
-            'Tab', 'KeyG', 'KeyP', 'KeyP',
-            # Hidden edits must survive resume; zero velocity cannot launch.
-            'KeyP', 'Digit1', 'Backspace', 'Tab', 'Digit0', 'Enter',
-            'Enter', 'Backspace', 'ArrowDown', 'ArrowUp', 'Tab',
-            'Digit1', 'Digit8', 'Digit0', 'Digit1', 'ArrowUp')
+            'Digit1', 'Digit5', 'Digit0', 'Period', 'ArrowDown', 'ArrowUp',
+            'Tab', 'Period', 'Digit1', 'Digit2', 'Digit5', 'Backspace',
+            'Tab', 'KeyP', 'Digit1', 'KeyP', 'Tab',
+            'Digit3', 'Digit6', 'Digit0', 'Digit1', 'ArrowUp')
     with tempfile.TemporaryDirectory() as td:
         disk = Path(td) / 'gorillas.img'
         subprocess.run(['python3', 'tools/os88disk.py', '-o', str(disk),
@@ -265,9 +287,9 @@ def main():
                     values = [measure(m, p, code, name, tag, args.check_repaint)
                               for name in keys]
                     assert p.data('scene', 16384)[24*128:] == terrain
-                    assert p.w('angle') == 180 and p.w('power') == 1
+                    assert p.w('angle') == 360 and p.w('power') == 1
                     assert p.b('state') == 0 and p.b('paused') == 0
-                    assert p.b('field') == 0 and p.w('grav10') == 98
+                    assert p.b('field') == 0 and (p.w('gwhole')*10 + p.w('gfrac')//100) == 98
                     label = tag + '-' + mode
                     report[label] = list(zip(keys, values))
                     print(label, ' '.join('%s=%.2fms' % (k, c/G.M.GUEST_HZ*1000)
