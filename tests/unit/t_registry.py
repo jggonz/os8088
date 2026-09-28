@@ -51,6 +51,9 @@ BUILDS_WITHOUT_MAKE = {
 
 # Not registered, and why. Keep the reason specific and true.
 UNREGISTERED = {
+    "n1942.py": "opt-in native game gate: make 1942test requires the user-owned "
+                "1942.nes cartridge to generate private assets; no ROM is fetched "
+                "or included in the repository",
     # --- the rows of a RETIRED package (SPEC.md 20.16, apps/RETIRED.txt) ---
     # These two drive PACMAN.O88, which `all` no longer builds (SPEC.md
     # 89.12), so a registered row would need `wants=("build/pacman.o88",)`

@@ -307,6 +307,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 
 | package | source | SPEC | ships |
 |---|---|---|---|
+| 1942 | `apps/1942/1942.asm` | §99 | no |
 | APPLE2 | `apps/apple2/apple2.asm` | `docs/APPLE2-SPEC.md` | yes |
 | ARKANOID | `apps/arkanoid/arkanoid.asm` | §44 | yes |
 | AUDIO PLAYER | `apps/audio/audio.asm` | §86 | yes |
@@ -461,6 +462,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 96 | DOS — running `.COM` and `.EXE` programs (`apps/dos/`) |
 | 97 | PIXELSTEIN 3D — a raycast shooter in a foreign mode (`apps/pixelstein/`) |
 | 98 | Gorillas (`apps/gorillas/gorillas.asm`) |
+| 99 | 1942 — native vertical shooter (`apps/1942/`) |
 
 ## docs/
 

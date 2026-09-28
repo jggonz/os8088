@@ -148961,3 +148961,60 @@ for CGA/Hercules redraw. `--max-paint-ms 0` permits baseline measurements.
 The existing gameplay, frontend, input and animation gates cover throws,
 craters, fullscreen restoration, borrowed-cache transitions and incremental
 text. These are emulator cycle measurements, not hardware measurements.
+
+## 99. 1942 — native vertical shooter (`apps/1942/`)
+
+A native remake, not NES emulation. `make 1942disk NESROM=/path/1942.nes`
+uses the user's NROM-256 cartridge as a build input; the ROM and extracted
+assets are not committed. `tools/1942assets.py` validates the cartridge and
+extracts the character font and terrain/explosion textures. Aircraft layouts,
+gameplay, formations, collision, sound effects and stage progression are native.
+This does not reproduce the NES game instruction for instruction.
+
+The launcher owns a standard window with an About handler. Enter/F starts or
+resumes an `OSAPI_FSX_RUN` bracket on that window's display. VGA selects
+`FSXM_MODEX` (320x240); CGA selects `FSXM_CGA320` (320x200); unsupported
+adapters remain in the launcher with an explanation. Escape/F returns to the
+launcher; the bracket restores the desktop. No drawing slots run in a foreign
+mode. The playfield is 256x240, centered at x=32 on VGA with black side borders.
+CGA expands horizontally 5:4 and samples 240 source rows into 200 rows. VGA programs 16
+DAC colors; CGA uses legal 3D9h palettes and a 16-to-4 ink map. C cycles the
+three CGA profiles. `apps/1942/palette.json` is the editable build-time RGB,
+CGA background/group/intensity and ink-map contract; invalid values fail the
+asset build.
+
+The package claims 64KB for a 61,440-byte canvas: four contiguous 64x240
+planes on VGA, byte-per-pixel on CGA. VGA presents contiguous spans with
+word copies rather than gathering one pixel at a time. The loader
+owns its lifetime. Per-row dirty masks limit transfers to changed 32-pixel blocks;
+there is no second full framebuffer and no per-pixel OS drawing call. Assembly
+is restricted to the 8086. Gameplay advances once per presented frame, paced
+by two `FSXW_FRAME` waits with `FSXF_FASTTICK`; slower machines slow the
+simulation instead of accumulating unbounded work. No real-time XT claim is
+made without measurement.
+
+Arrows move, Space/Z fires, X performs an invulnerable roll (three per stage),
+P pauses, M toggles speaker effects, N starts a new game. Three lives; contact
+or enemy bullets cost one life and grant a respawn grace period. Orange
+aircraft award a weapon pickup. A stage contains 24 enemies, followed every
+fourth stage by a large aircraft; 32 cleared stages win. Scoring uses two
+16-bit words for a six-digit decimal score. Gameplay state survives leaving
+fullscreen. The title/game-over/victory screens and palette changes use the
+same renderer as play.
+
+The private-cartridge gate is `make 1942test NESROM=...` (`tests/n1942.py`).
+It boots both adapters, independently checks all VGA plane bytes and both
+CGA banks, compares incremental composition with full refresh, and drives
+held movement/fire, pause, rolls, pickups, collisions, grace, bosses,
+completion, palette changes and desktop restoration. A near-miss fixture
+is the collision negative control. Asset validation has malformed-ROM and
+palette rejection controls and runs without a cartridge. It is exempted
+from the default test registry because the build needs a user-owned ROM.
+
+On the pinned MartyPC 4.77MHz models, the firing-heavy 90-frame sequence
+measured 3.48 fps VGA and 3.93 fps CGA. Quiet-scene measurements must not be
+used as the busy-scene rate. This is not a real-time XT port; faster hardware
+is recommended. No physical-hardware performance claim is made. The pinned
+emulator's cropped VGA aperture retains a 400-line height after the Mode X
+switch; the test captures all 480 raster lines from its debug aperture and
+checks the actual 320x240 plane data, including the bottom 40 logical rows.

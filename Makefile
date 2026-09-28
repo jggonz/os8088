@@ -13310,3 +13310,23 @@ clean-nasm3:
 	rm -rf $(BUILD)/nasm3
 
 distclean: clean clean-marty clean-cc clean-nasm3
+
+# Native 1942 remake. The cartridge is a private build input, never fetched.
+NESROM ?= 1942.nes
+.PHONY: 1942 1942disk 1942-assets-force
+1942-assets-force:
+1942: $(BUILD)/1942.o88
+$(BUILD)/1942art.inc: 1942-assets-force $(NESROM) apps/1942/palette.json tools/1942assets.py | $(BUILD)
+	python3 tools/1942assets.py "$(NESROM)" -o $@
+$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/game.inc apps/1942/video.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc
+	$(NASM) -f bin -w+error -I apps/ -I apps/1942/ -I $(BUILD)/ -l $(BUILD)/1942.lst -o $@ $<
+$(BUILD)/1942.o88: $(BUILD)/1942.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+1942disk: $(BUILD)/1942.img $(BUILD)/1942-360.img
+$(BUILD)/1942.img: $(BUILD)/1942.o88 apps/1942/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/1942.o88 apps/1942/README.TXT
+$(BUILD)/1942-360.img: $(BUILD)/1942.o88 apps/1942/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/1942.o88 apps/1942/README.TXT
+.PHONY: 1942test
+1942test: 1942disk $(BUILD)/os8088-360.img
+	python3 tests/n1942.py
