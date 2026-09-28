@@ -26,7 +26,8 @@ press any key to skip directly to setup:
 5. Press **V** to view the musical gorilla dance, or **P / Enter** to play.
    Any key skips the dance; it also ends automatically.
 
-Blank entries accept defaults; Backspace edits. Alt+Enter and Escape work
+Blank entries accept defaults; Backspace edits. A blinking underscore marks
+where the next character will appear. Alt+Enter and Escape work
 throughout setup. The Game menu can restart setup or change fullscreen mode.
 
 - Type an **angle**, press **Enter**, type a **velocity**, then press
@@ -34,8 +35,10 @@ throughout setup. The Game menu can restart setup or change fullscreen mode.
   horizontal toward the opponent; velocity runs from 1 to 150.
 - **Tab** switches fields; the first digit replaces the previous value.
   **Backspace** deletes a digit; **arrow keys** adjust the selected value.
-- The compact HUD shows names, scores, the active player and wind. Positive
-  wind blows right. Gravity is fixed by setup for the entire match.
+- The HUD shows only the active player’s name at the top left, with **Angle**
+  and **Velocity** on separate rows below it. Wind sits at the top right;
+  positive wind blows right. The name updates each turn. Gravity is fixed
+  by setup for the entire match.
 - **P** pauses/resumes. **N** returns to match setup. **Enter** continues after
   a hit or starts another match after a win.
 - **F** or **Alt+Enter** enters/leaves fullscreen; **Escape** returns to

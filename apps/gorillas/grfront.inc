@@ -96,12 +96,7 @@ gr_frontflush:
 
 gr_editline:
     ; Reuse the fast glyph path for startup typing, including error erasure.
-    push ds
-    pop es
-    mov di, gr_huddirty+320
-    xor ax, ax
-    mov cx, 96/2
-    rep stosw
+    call gr_frontdirtyclear
     call gr_inputtext
     mov si, 320
     mov di, 416
@@ -113,7 +108,41 @@ gr_inputtext:
     call gr_fronttext
     mov si, gr_input
     mov dx, 80
-    jmp gr_fronttext
+    call gr_fronttext
+    ; An edit or new question immediately shows the insertion position.
+gr_cursorreset:
+    ; Setup and the intro animations never run together; share their timer.
+    call OSAPI_GET_TICKS
+    add ax, 9
+    mov [gr_animdue], ax
+    mov byte [gr_cursor], '_'
+gr_cursortext:
+    ; Draw a separate glyph, keeping the answer and its terminator intact.
+    xor cx, cx
+    mov cl, [gr_inputlen]
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    mov dx, 80
+    mov bp, 1
+    mov al, 15
+    mov si, gr_cursor
+    jmp gr_textspan
+
+gr_cursortick:
+    call OSAPI_GET_TICKS
+    mov dx, ax
+    sub ax, [gr_animdue]
+    js .out
+    add dx, 9
+    mov [gr_animdue], dx
+    xor byte [gr_cursor], '_' ^ ' '
+    call gr_cursortext
+    mov si, 320
+    mov di, 352
+    jmp gr_hudflushspan
+.out:
+    ret
 
 gr_fronttext:
     xor cx, cx
@@ -355,9 +384,12 @@ gr_frontapes:
     ret
 
 gr_fronttick:
-    cmp byte [gr_state], 4
+    mov al, [gr_state]
+    cmp al, 5
+    je gr_cursortick
+    cmp al, 4
     je .intro
-    cmp byte [gr_state], 7
+    cmp al, 7
     jne .out
     cmp word [gr_musicptr], 0
     jne gr_animate
@@ -549,3 +581,4 @@ gr_skip: db '     Press any key to play',0
 gr_qplayers: db 'Number of players (1 or 2)',0
 gr_defplayers: db 'Default: 2 (1 plays computer)',0
 gr_computer: db 'Computer',0
+gr_cursor: db '_',0

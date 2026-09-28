@@ -18,10 +18,11 @@ import gorillas as G
 
 def code_offsets(extra=()):
     source = (G.ROOT / 'apps/gorillas/gorillas.asm').read_text()
-    names = ('gr_key', 'gr_tick', 'gr_fullpaint', 'gr_status', 'gr_prompt', 'gr_help',
+    names = ('gr_key', 'gr_tick', 'gr_fullpaint', 'gr_status', 'gr_prompt', 'gr_velocity',
              'gr_pausemsg', 'gr_roundmsg', 'gr_matchmsg', 'gr_animate',
              'gr_apeleft', 'gr_aperight') + tuple(extra)
-    source = source.replace('OS88_IMAGE_END', '')
+    # Symbol-only probe: its appended table is not part of the shipped image.
+    source = source.replace('OS88_IMAGE_END', '').replace('OS88_BSS GR_BSS', 'OS88_BSS 0')
     source += '\n' + '\n'.join('dw ' + n for n in names) + '\nOS88_IMAGE_END\n'
     with tempfile.TemporaryDirectory() as td:
         asm, binary = Path(td) / 'probe.asm', Path(td) / 'probe.bin'
@@ -50,9 +51,18 @@ def check_hud(m, p, code):
     expected = bytearray(24*128)
     prompt = ('gr_pausemsg' if p.b('paused') else
               {0: 'gr_prompt', 2: 'gr_roundmsg', 3: 'gr_matchmsg'}[p.b('state')])
-    for row, name in enumerate(('gr_status', prompt, 'gr_help')):
-        line = m.read(p.base + code[name], 32).split(b'\0')[0]
-        ink = 9 if row == 1 else 15
+    wind = struct.unpack('<h', p.data('wind', 2))[0]
+    active = p.data('name2' if p.b('turn') else 'name1', 11).split(b'\0')[0]
+    header = active.ljust(23) + ('Wind %+04d' % wind).encode()
+    assert m.read(p.base + code['gr_status'], 33) == header + b'\0'
+    velocity = 'gr_velocity' if p.b('state') == 0 and not p.b('paused') else None
+    for row, name in enumerate(('gr_status', prompt, velocity)):
+        line = m.read(p.base + code[name], 33).split(b'\0')[0] if name else b''
+        if name in ('gr_prompt', 'gr_velocity'):
+            selected = p.b('field') == row - 1
+            label, value = ('Angle', p.w('angle')) if row == 1 else ('Velocity', p.w('power'))
+            assert line == (('>' if selected else ' ') + '%s: %03d' % (label, value)).encode()
+        ink = 15 if row == 0 else 9
         for col, ch in enumerate(line):
             for y, bits in enumerate(font[(ch-first)*8:(ch-first+1)*8]):
                 for x in range(8):

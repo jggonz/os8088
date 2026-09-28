@@ -148807,8 +148807,9 @@ previous four fixed-point velocity units per frame. The solo opponent in
 and gravity substeps at a 55-degree angle. It chooses the closest crossing of
 the human's center and launches an ordinary shot; terrain can intercept it.
 Pause, focus and About suspend aiming. Humans cannot edit a pending computer
-shot. Player names and two-digit scores appear above the minimal angle and
-velocity fields; active player and wind replace the old shortcut banner.
+shot. Only the active player’s name appears at the top left, with Angle and
+Velocity inputs on separate rows below it. Signed wind is right-aligned on
+the top row. The name changes with the turn; scores stay out of the play HUD.
 
 `tests/gorillasfront.py` exercises animation, name/number validation, chosen
 gravity, optional and completed dance, sound progression, setup across
@@ -148895,6 +148896,14 @@ blank display spans use a zero-filled band. Full frontend paints clear the
 background and draw occupied text cells directly, avoiding a full scene
 conversion. Buffered fullscreen setup input drains without per-key tick waits.
 
+Each setup answer has a blinking underscore at the next character position,
+including empty and ten-character entries. It starts visible on each question
+and accepted edit, toggles every nine BIOS ticks (about half a second), and
+never becomes part of the answer. The existing worker/exclusive loop advances
+it only in setup; window focus, coverage and About suspend its animation.
+Blinking updates one cached glyph cell and its scene pixels, preserving the
+current phase across exposure and fullscreen changes. Leaving setup clears it.
+
 The five marquee phases are generated 1bpp masks. The two gorilla poses have
 native monochrome, CGA, packed desktop VGA and planar VGA forms, with horizontal
 scaling and palette conversion performed by `tools/gorillas_art.py`. Runtime
@@ -148911,7 +148920,8 @@ limit. Exposure redraws the current phase without advancing animation.
 
 `tests/gorillasmenu.py` times actual menu handlers and animation ticks at
 4,772,727 Hz, including interrupts and drawing. It checks text against the OS
-font, compares incremental menu VRAM to full repaint, and compares all five
+font, checks natural setup cursor blink edges and empty/full-length answers,
+compares incremental menu VRAM to full repaint, and compares all five
 marquee phases/both poses to independently assembled scene pixels rendered
 through the original generic path. All three adapters run windowed/fullscreen.
 Budgets are 150 ms per transition, 20 ms per ordinary character edit, and

@@ -300,13 +300,16 @@ gr_worker:
     call OSAPI_TASK_ALIVE
     cmp word [gr_musicptr], 0
     jne .active
-    cmp byte [gr_state], 1
+    mov al, [gr_state]
+    cmp al, 1
     je .active
-    cmp byte [gr_state], 4
+    cmp al, 4
     je .active
-    cmp byte [gr_state], 7
+    cmp al, 5
     je .active
-    cmp byte [gr_state], 0
+    cmp al, 7
+    je .active
+    or al, al
     jne .sleep
     cmp byte [gr_players], 1
     jne .sleep
@@ -1005,67 +1008,49 @@ gr_hud:
     call gr_text
     ret
 .visible:
-    ; Two ten-character names and two two-digit scores fit on one line.
-    mov si, gr_name1
-    mov di, gr_status
-    call gr_namecopy
-    mov si, gr_name2
-    mov di, gr_status+18
-    call gr_namecopy
-    xor ax, ax
-    mov al, [gr_scores]
-    mov di, gr_digits
-    call gr_number
-    mov ax, [gr_digits+1]
-    mov [gr_status+11], ax
-    xor ax, ax
-    mov al, [gr_scores+1]
-    call gr_number
-    mov ax, [gr_digits+1]
-    mov [gr_status+14], ax
+    ; Active name at the left; signed wind right-aligned on the same row.
     mov si, gr_name1
     cmp byte [gr_turn], 0
     je .name
     mov si, gr_name2
 .name:
-    mov di, gr_help
+    mov di, gr_status
     call gr_namecopy
     mov ax, [gr_wind]
-    mov byte [gr_help+16], '+'
+    mov byte [gr_status+28], '+'
     or ax, ax
     jns .wind
     neg ax
-    mov byte [gr_help+16], '-'
+    mov byte [gr_status+28], '-'
 .wind:
-    mov di, gr_help+17
+    mov di, gr_status+29
     call gr_number
     mov si, gr_status
     mov al, 15
     call gr_text
-    mov si, gr_prompt
     cmp byte [gr_state], 0
     jne .state
     mov ax, [gr_angle]
-    mov di, gr_prompt+3
+    mov di, gr_prompt+8
     call gr_number
     mov ax, [gr_power]
-    mov di, gr_prompt+10
+    mov di, gr_velocity+11
     call gr_number
     mov byte [gr_prompt], ' '
-    mov byte [gr_prompt+7], ' '
-    xor bx, bx
-    mov bl, [gr_field]
-    mov al, 7
-    mul bl
-    mov bx, ax
-    mov byte [gr_prompt+bx], '>'
+    mov byte [gr_velocity], ' '
+    mov si, gr_prompt
+    cmp byte [gr_field], 0
+    je .selected
+    mov si, gr_velocity
+.selected:
+    mov byte [si], '>'
+    mov si, gr_prompt
     jmp short .line
 .state:
     mov si, gr_roundmsg
     cmp byte [gr_state], 2
-    je .winner
+    je .line
     mov si, gr_matchmsg
-.winner:
 .line:
     cmp byte [gr_paused], 0
     je .write
@@ -1075,9 +1060,14 @@ gr_hud:
     mov dx, 8
     mov al, 9
     call gr_text
-    mov si, gr_help
+    mov si, gr_blank
+    cmp byte [gr_state], 0
+    jne .last
+    cmp byte [gr_paused], 0
+    jne .last
+    mov si, gr_velocity
+.last:
     mov dx, 16
-    mov al, 15
     call gr_text
     ret
 
@@ -1085,26 +1075,27 @@ gr_hud:
 ; Paused input still changes the model; resume rebuilds the visible prompt.
 ; AX=new value, BX=word offset (0 angle, 2 velocity).
 gr_inputpaint:
-    mov si, gr_prompt+3
-    mov cx, 24
+    mov si, gr_prompt+8
+    mov cx, 64
+    mov dx, 8
     or bx, bx
     jz .number
-    add si, 7
-    mov cx, 80
+    mov si, gr_velocity+11
+    mov cx, 88
+    mov dx, 16
 .number:
     mov di, si
     call gr_number
     cmp byte [gr_paused], 0
     jne .done
     call gr_dirtyclear
-    mov dx, 8
     mov al, 9
     mov bp, 3
     call gr_textspan
-    mov si, 35
+    mov si, 40
     cmp byte [gr_field], 0
     je .flush
-    add si, 7
+    mov si, 75
 .flush:
     mov di, si
     add di, 3
@@ -1114,11 +1105,11 @@ gr_inputpaint:
 
 gr_selectpaint:
     mov byte [gr_prompt], ' '
-    mov byte [gr_prompt+7], ' '
+    mov byte [gr_velocity], ' '
     mov si, gr_prompt
     cmp byte [gr_field], 0
     je .selected
-    add si, 7
+    mov si, gr_velocity
 .selected:
     mov byte [si], '>'
     cmp byte [gr_paused], 0
@@ -1130,11 +1121,11 @@ gr_selectpaint:
     mov al, 9
     mov bp, 1
     call gr_textspan
-    add si, 7
-    mov cx, 56
+    mov si, gr_velocity
+    mov dx, 16
     call gr_textspan
     mov si, 32
-    mov di, 40
+    mov di, 65
     jmp gr_hudflushspan
 .done:
     ret
@@ -1341,7 +1332,12 @@ gr_vgatext:
     mov es, ax
     mov ax, 0f02h
     cmp word [gr_ry], 8
+    je .inputink
+    cmp word [gr_ry], 16
     jne .ink
+    cmp byte [gr_state], 4
+    jae .ink                 ; startup titles on this row stay white
+.inputink:
     mov ah, 9
 .ink:
     mov dx, 03c4h
@@ -2242,13 +2238,13 @@ gr_ablines: dw gr_title, gr_credit, gr_credit2, gr_credit3, 0
 gr_credit: db 'After QBasic Gorillas (1990)',0
 gr_credit2: db 'Original: Microsoft Corporation',0
 gr_credit3: db '8086 port for os8088',0
-gr_status: db '           00:00            ',0
-gr_prompt: db ' A:045  V:070',0
+gr_status: db '                       Wind +000',0
+gr_prompt: db ' Angle: 045',0
+gr_velocity: db ' Velocity: 070',0
 gr_blank: db 0
 gr_roundmsg: db 'Point! Enter: next skyline',0
 gr_matchmsg: db 'Match over! Enter: setup',0
 gr_pausemsg: db 'Paused. P or Enter to resume',0
-gr_help: db 'Player 1   Wind  +000',0
 ; Four font bits -> four opaque scene pixels, little-endian byte order.
 gr_textnibbles:
 %assign gr_n 0
