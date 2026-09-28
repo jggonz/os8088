@@ -57598,6 +57598,24 @@ owner's ear (98.1.1.1).
 **Cost: 194 bytes** (6,371 → 6,565), inside the driver's 7KB claim, so no
 heap at all. `tests/vidsound.py` is the gate.
 
+**An external ring may ask for a SMALLER BLOCK** (`SND_OPENF_BLKSH`): the
+half is 2,048 bytes shifted right by the code in AH bits 6-7 - 1,024, 512
+or 256 - and the driver says it takes the bits with **`SND_CAP_EXTBLK`**
+(80h). A block is 2,048 BYTES at every rate, so at 5,512 Hz ADPCM4 (2,756
+bytes a second) it was 0.74 s of sound, and the ISR halts at a boundary
+whose next block is not all queued: the producer had to keep 0.74 s
+queued, which for the Video Player is the reader 20 frames ahead of the
+picture (98.2.1.3). Shifted to 512 it is 0.19 s, 11 kHz PCM8's own.
+Nothing else in the driver changes: the ISR's underrun question, verb 1's
+resume bound, verb 9 and the DSP's 48h block length all read `[sbl_half]`
+already. The shift is applied after the ADPCM4 test and the watchdog, which
+read the full half - so the watchdog stays sized for 2,048, as long as it
+was. A driver without the bit ignores AH bits 6-7 and plays 2,048, so a
+package asks only where the cap says; one that never sets them - every
+package but the Video Player - is unchanged. **26 bytes** (6,660 →
+6,686), inside the same 7KB claim. `vidsndad55` is the gate: without the
+cap it FAILS on the block, with it the capture is whole.
+
 #### 34.5.3.1 A DSP 4.xx: refused unless the caller asks, and said so
 
 **The refusal above was right about Creative's cards and wrong about the
@@ -151479,10 +151497,12 @@ is what the reserve is for.
 `Encoder.disk_floor`). The card halts at a block boundary unless the whole
 next block is queued (34.5.2's ISR question), and the player queues a
 frame's sound only once its record is in the ring (98.3.1) - so the reader
-must stay a BLOCK of sound ahead of the frame playing. A block is 2,048
+must stay a BLOCK of sound ahead of the frame playing. The block was 2,048
 bytes whatever the rate (4,096 above 22,222 Hz), so the slower the sound
-the more frames it spans: 6 at 11,025 Hz PCM8 and 25 fps, **20 at 5,512 Hz
-ADPCM4**, which in a burst is most of the ring. The bucket may therefore not
+the more frames it spanned: **20 at 5,512 Hz ADPCM4** and 25 fps, which in a
+burst is most of the ring. The player now asks for a smaller one where the
+sound is slow (98.3.1, `audio_block` here), so the lead is 4 to 7 frames
+at every rate - 6 at 5,512 Hz ADPCM4. The bucket may therefore not
 be spent below the 32 KB floor PLUS what the disk refilled over the last
 lead's frames: by the time the card reaches the frame being encoded, that
 much more has to have been read. A resident file has no disk and no lead.
@@ -151500,10 +151520,15 @@ card (`os8088_5150_herc_hdd_sb_gla`), encoded for its disk
 | | card underruns | late periods | error as seen |
 |---|---|---|---|
 | before | 2 | 0 | 1.21% |
-| **the sound's lead** | **0** | **0** | 1.76% |
+| the sound's lead, 2,048-byte blocks | 0 | 0 | 1.76% |
+| **...and 512-byte blocks** | **0** | **0** | **1.38%** |
 
 The picture pays for it in the burst and nowhere else: over the whole
-38 s clip for the ST-225, 0.78% -> 0.90%.
+38 s clip for the ST-225, 0.78% before, 0.90% with the lead in 2,048-byte
+blocks, **0.82%** in 512. The ORIGINAL file, unchanged, on the new player
+and driver: the card still runs dry twice on MartyPC's slower disk, but
+for a block of 512 and not 2,048 - the picture never stops (4 late
+periods against 13 and a second's freeze).
 
 ##### 98.2.1.4 `--aim`: what a budget the video does not use is for
 
@@ -152562,8 +152587,17 @@ never overtake the audio cursor**: a frame whose audio is not queued is not
 drawn, which is also what keeps the chunks under the audio cursor from being
 reused.
 
+**The card's block** (`vp_sblk`) is 2,048 bytes, halved - up to three
+times, `SND_OPENF_BLKSH` (34.5.3) - while the sound is under 11,000 bytes a
+second, on a driver with `SND_CAP_EXTBLK`: 1,024 at 5.5 kHz PCM8 and 11 kHz
+ADPCM4, **512 at 5.5 kHz ADPCM4**, so no block is much longer than 11 kHz
+PCM8's 0.19 s. It is what the card must have queued at each boundary, so
+it is the reader's lead over the picture, a burst's cost (98.2.1.3), the
+resume threshold and the clock's report interval at once. The fill before
+the open is still 2,048, which verb 0 checks against the full half.
+
 **The clock.** The card reports only at its block interrupts (2,048 bytes:
-93 ms of 22 kHz PCM8, 186 ms of ADPCM4), so the hook:
+93 ms of 22 kHz PCM8, 186 ms of ADPCM4 at 22 kHz), so the hook:
 - reads the consumed count; when it has moved, the frames due are the frames
   wholly played (bytes past the reference byte, over the audio bytes a
   frame), plus one, and the period count is noted;

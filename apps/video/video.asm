@@ -73,6 +73,8 @@ VP_CHUNK    equ 32768               ; a ring slot, and a READ_SEQ call
 VP_RL       equ 16384               ; the audio ring (SPEC.md 98.3.1)...
 VP_RLCODE   equ 2                   ; ...4096 << 2
 VP_BLOCK    equ 2048                ; the card's block: one interrupt each
+VP_BLKBPS   equ 11000               ; ...halved while the sound is slower
+                                    ; than this many bytes a second (vp_sblk)
 VP_SPK      equ 2                   ; [vp_snd]: the SPEAKER plays it (98.3.15)
 VP_SPKMAX   equ 8000                ; the fastest PCM an 8088 plays through
                                     ; the speaker (SPEC.md 34.11.4)
@@ -7747,7 +7749,8 @@ vp_sopen:
     mov ax, [vp_afr0]
     mov [vp_afr], ax
     mov byte [vp_afn], 0x80         ; PCM8's silence
-    mov ax, VP_BLOCK                ; frames the clock may run on past the
+    call vp_sblk                    ; the card's block, [vp_blk]
+    mov ax, [vp_blk]                ; frames the clock may run on past the
     xor dx, dx                      ; card's last word: one block's worth,
     div word [vp_abytes]            ; and two more
     add ax, 2
@@ -7757,6 +7760,7 @@ vp_sopen:
     mov [es:VP_RL+SND_EXT_TOTAL], ax
     mov [es:VP_RL+SND_EXT_CONS], ax
     mov bl, SND_OPENF_RING + SND_OPENF_EXT + (VP_RLCODE << SND_OPENF_RLSH)
+    or bl, [vp_bflg]                ; ...and its block (34.5.3)
     cmp byte [vp_audio], 2
     jne .pf
     or bl, SND_OPENF_ADPCM4 + SND_OPENF_FORCE   ; ADPCM4 (FORCE: on a DSP
@@ -8094,6 +8098,45 @@ vp_acur:
     pop cx
     ret
 
+; vp_sblk - THE CARD'S BLOCK (SPEC.md 98.3.1, 34.5.3): 2,048 bytes, or on a
+; driver that takes SND_OPENF_BLKSH the largest that is still at most a
+; block of 11 kHz PCM8 (~0.19 s) - so 5.5 kHz ADPCM4 plays in 512-byte
+; blocks and the reader keeps 6 frames of stream ahead of the picture, not
+; 20. [vp_blk] the bytes, [vp_bflg] the open flag's bits. Clobbers AX, CX
+vp_sblk:
+    mov word [vp_blk], VP_BLOCK
+    mov byte [vp_bflg], 0
+    cmp byte [vp_snd], 1            ; the card's only
+    jne .r
+    push bx
+    push dx
+    call OSAPI_SND_CAPS
+    pop dx
+    pop bx
+    test al, SND_CAP_EXTBLK
+    jz .r                           ; an older driver: 2,048, and no bits
+    mov ax, [vp_rate]               ; AX = the bytes a second
+    cmp byte [vp_audio], 2
+    jne .b
+    shr ax, 1                       ; (ADPCM4: two samples a byte)
+.b:
+    xor cx, cx
+.l:
+    cmp ax, VP_BLKBPS
+    jae .d
+    cmp cl, 3
+    je .d
+    inc cx
+    shl ax, 1
+    jmp short .l
+.d:
+    shr word [vp_blk], cl
+    ror cl, 1                       ; the code into bits 6-7
+    ror cl, 1
+    mov [vp_bflg], cl
+.r:
+    ret
+
 vp_skeep:
     cmp byte [vp_snd], 1            ; the card's alone: the speaker takes more
     jne .out                        ; the moment it is queued, and never ends
@@ -8113,7 +8156,7 @@ vp_skeep:
     jne .out
     mov ax, [vp_atot]
     sub ax, dx
-    cmp ax, VP_BLOCK
+    cmp ax, [vp_blk]
     jb .out
     mov al, 1
     mov ah, [vp_hand]
@@ -9534,8 +9577,12 @@ vp_afill:
     jne .pw                         ; the last byte, once
     mov ax, [vp_atot]
     mov [vp_afinal], ax
-    add ax, 2 * VP_BLOCK - 1
-    and ax, -VP_BLOCK
+    mov cx, [vp_blk]                ; (the card's block: vp_sblk)
+    add ax, cx
+    add ax, cx
+    dec ax
+    neg cx
+    and ax, cx
     mov [vp_apend], ax
 .pw:
     mov cx, [vp_apend]
@@ -11506,6 +11553,8 @@ vp_syncp:     dw 0                  ; [vp_pers] then
 vp_pers:      dw 0                  ; periods, free-running
 vp_a0:        dw 0                  ; stream bytes before frame 0's
 vp_pause:     dw 0                  ; times the card ran dry
+vp_blk:       dw VP_BLOCK           ; the card's block (vp_sblk)
+vp_bflg:      db 0                  ; ...as verb 0's flag bits
 vp_skmax:     dw 0                  ; most frames the picture trailed
 vp_gap:       dw 0                  ; most periods between two hook calls
 vp_aend:      db 0                  ; 1 the end's silence queued, 2 stopped

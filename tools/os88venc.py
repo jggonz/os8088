@@ -449,21 +449,36 @@ SND_HALF = 2048         # SOUND.DRV's block on an external ring: the card
 SND_HALF_HI = 4096      # interrupts once a block, and at each it HALTS
 SND_HALF_RATE = 22222   # unless the whole next block is queued (SPEC.md
                         # 34.5.2's ISR question) - 4096 above 22,222 Hz
+VP_BLKBPS = 11000       # apps/video/video.asm's: the player HALVES the block
+                        # (up to three times, SND_OPENF_BLKSH) while the
+                        # sound is slower than this many bytes a second
+
+
+def audio_block(afmt, rate):
+    """The card's block the player asks for (vp_sblk, SPEC.md 98.3.1):
+    2,048 bytes (4,096 above 22,222 Hz), halved while the sound's bytes a
+    second are under VP_BLKBPS - so no block is much longer than 11 kHz
+    PCM8's 0.19 s. 5,512 Hz ADPCM4 is 512"""
+    if afmt == vid.AUD_PCM8 and rate > SND_HALF_RATE:
+        return SND_HALF_HI
+    bps = rate // 2 if afmt == vid.AUD_ADPCM4 else rate
+    half, n = SND_HALF, 0
+    while bps < VP_BLKBPS and n < 3:
+        bps, half, n = bps * 2, half // 2, n + 1
+    return half
 
 
 def audio_lead(afmt, rate, abytes):
     """THE SOUND'S LEAD (98.2.1.3): the frames the reader must have loaded
     PAST the one playing, because the audio cursor queues a frame's sound
     only once its record is in the ring and the card halts at a block
-    boundary whose next block is not all queued. A block is 2,048 bytes
-    whatever the rate, so the slower the sound the more frames it spans:
-    5 at 11,025 Hz PCM8, 19 at 5,512 Hz ADPCM4 - which in a burst is most
-    of the ring. One more for the frame the block ends inside"""
+    boundary whose next block is not all queued. So a block of sound, in
+    frames, and one more for the frame the block ends inside: 6 at 11,025
+    Hz PCM8 and 25 fps, 6 at 5,512 Hz ADPCM4 (512-byte blocks) - which was
+    20 while every block was 2,048"""
     if not afmt or not abytes:
         return 0
-    half = SND_HALF_HI if afmt == vid.AUD_PCM8 and rate > SND_HALF_RATE \
-        else SND_HALF
-    return -(-half // abytes) + 1
+    return -(-audio_block(afmt, rate) // abytes) + 1
 
 
 def key_limit(clb):
@@ -1837,8 +1852,8 @@ class Encoder:
         frame now being encoded that is the lead's frames later, so the
         bucket must still hold what the disk refilled over the last
         `alead` frames. Without it a burst spends the ring down to one
-        slot while the card wants 19 frames of it queued, and at 5.5 kHz
-        ADPCM4 the card halts mid-burst (the owner's 5150, 98.2.1.3).
+        slot while the card wants a block of it queued, and at 5.5 kHz
+        ADPCM4 the card halted mid-burst (the owner's 5150, 98.2.1.3).
         The level CAN now be under it - the lead rises with the refill,
         and a small reserve starts below it - so a caller clamps the room
         at 0: negative, the retry's `eb *= room / len` flipped its sign

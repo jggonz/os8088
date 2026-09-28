@@ -79,6 +79,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E402
 import sndcheck                                               # noqa: E402
+import os88venc as venc                                       # noqa: E402
 from cycweb import pkg_syms                                   # noqa: E402
 
 FPS = 30.0
@@ -462,6 +463,7 @@ def main():
                 "vp_afr", "vp_atot", "vp_alast", "vp_afinal", "vp_dt",
                 "vp_base", "vp_ptk")}
             st["vp_vseq"] = rw("vp_vseq")
+            st["vp_blk"] = rw("vp_blk")
             st["vp_aseq"] = rw("vp_aseq")
             st["vp_snd"] = rb("vp_snd")
             st["vp_err"] = rb("vp_err")
@@ -495,7 +497,7 @@ def main():
         real = 1000000.0 / (256 - (256 - 1000000 // RATE))   # the card's rate
         bps = r.abytes / float(r.spf)                   # bytes a sample
         nplay = nf - base0 + laps * (nf - (a.loop or 0))   # every lap's
-        want_s = (r.spf * nplay) / real + 2048 / bps / real  # ...and the
+        want_s = (r.spf * nplay) / real + st["vp_blk"] / bps / real  # ...and the
                                                         # drain, to a block's end
         print("\n   %d frames, %d bytes of %s sound a frame at %d Hz (the "
               "card plays %.0f)" % (nf, r.abytes, a.audio.upper(), RATE, real))
@@ -523,6 +525,11 @@ def main():
                 bad.append("only %d ticks counted as paused" % st["vp_ptk"])
         if not st["vp_snd"]:
             bad.append("the play was SILENT: the card was not opened")
+        blk = venc.audio_block(afmt, RATE)  # THE CARD'S BLOCK (98.3.1,
+        print("   the card's block: %d bytes (want %d)" % (st["vp_blk"], blk))
+        if st["vp_blk"] != blk:             # 34.5.3): the rate's, which the
+            bad.append("the card's block was %d bytes, not %d"  # driver
+                       % (st["vp_blk"], blk))   # must have said it takes
         if st["vp_err"]:
             bad.append("the play stopped on an error")
         if st["vp_done"] != nf:

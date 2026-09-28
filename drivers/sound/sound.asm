@@ -143,7 +143,7 @@ snd_entry:
                                 ; now the one entry that releases BOTH - a
                                 ; card with no OPL still has grants and a
                                 ; staging pool to give back
-    or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN
+    or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_EXTBLK
     call snd_hicap              ; ...and above 22,222 Hz if the DSP can
     or word [snd_services+DSV_TIERS], 1 << SND_RT_SB
                                 ; ...and THIS is the only place that bit is
@@ -249,7 +249,7 @@ snd_tier:
     je .table                   ; already off
     call sbl_detach             ; cannot fail (SPEC.md 51.2)
     mov word [snd_services+DSV_STREAM], 0
-    and word [snd_services+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_PCM_HI | SND_CAP_ADPCM4Q)
+    and word [snd_services+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_PCM_HI | SND_CAP_ADPCM4Q | SND_CAP_EXTBLK)
     cmp word [snd_services+DSV_TONE], 0
     je .table                   ; no OPL2 either: the name stays as it was
     mov word [snd_services+DSV_NAME], snd_s_opl   ; the card is an AdLib now
@@ -261,7 +261,7 @@ snd_tier:
     jc .no                      ; DRVE_* saying which of the two failed
     mov word [snd_services+DSV_STREAM], sbl_stream_op
     mov word [snd_services+DSV_TICK], sbl_tick
-    or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN
+    or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_EXTBLK
     call snd_hicap
     mov word [snd_services+DSV_NAME], snd_s_sb
 .table:
