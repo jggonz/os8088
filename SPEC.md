@@ -150293,7 +150293,7 @@ stream behind them is read sequentially.
 |---|---|---|
 | 0 | 4 | `'V88'`, 1Ah |
 | 4 | 2 | version, **1** |
-| 6 | 2 | flags: 1 RESIDENT (98.1.7), 2 LOOPREC and 4 REPEAT (98.1.1.2), 8 LIVE (98.3.10), 16 RUNS (98.1.3.4), 32 SPKPWM (98.1.1.3). A reader refuses any bit it does not know |
+| 6 | 2 | flags: 1 RESIDENT (98.1.7), 2 LOOPREC and 4 REPEAT (98.1.1.2), 8 LIVE (98.3.10; resident, or a one-bit or VGA4 stream played Live from XMS, 98.3.18.1), 16 RUNS (98.1.3.4), 32 SPKPWM (98.1.1.3). A reader refuses any bit it does not know |
 | 8 | 4 | frames, ≥ 1 |
 | 12 | 2 | rate: the audio sample rate in Hz; for a silent file, the nominal rate the frame rate derives from |
 | 14 | 2 | samples per frame, ≥ 1. **fps = rate / samples per frame**, XDC's rule |
@@ -150681,8 +150681,9 @@ sixteen are `STD16`, the colours every CGA, EGA and VGA gives them.
 #### 98.1.3.4 A Live file's blit runs
 
 **Flag 16, RUNS: every FRAME record carries the rectangles it writes**, after
-its ten lists (and before any audio, which a resident file keeps in its
-block, so there is none):
+its ten lists and before its audio - which a resident file keeps in its
+block, so there is none there, and which a STREAMED Live file (98.3.18.1)
+keeps where every stream does, as the record's last bytes:
 
 ```
 runs    = count(8) run * count        count 0..32
@@ -151721,7 +151722,10 @@ LIN80 at the named screen's own pixel shape - its box, with no `--box`,
 the logo's (320 x 112 on a CGA, 360 x 144 on a Hercules, 320 x 200 on a VGA)
 - and the target byte naming that screen, so the file plays on its desktop.
 `--live vga --pixfmt vga4` makes it sixteen colours instead (98.3.10.4), the
-Live blit priced at four planes a byte. One rendition: a file for every screen is `tools/os88logovid.py`'s shape,
+Live blit priced at four planes a byte. `--live ... --xms` makes it a STREAM
+instead of resident (98.3.18.1): any length, sound in its records, played
+Live once the player holds it in XMS and in the window elsewhere - one bit,
+or VGA4 with `--live vga`. One rendition: a file for every screen is `tools/os88logovid.py`'s shape,
 several encodes made into one, and the encoder does not make it.
 
 **A Live file's CPU budget counts its BLIT** (the owner, 2026-09-27: *"option
@@ -152976,6 +152980,16 @@ on, twice, byte for byte, and the play takes all of it), `vidmodexrk` and
 its seam). Broken on purpose - the seam decoded as a plain frame, never
 armed, its audio silence, the join's clear skipped - each FAILS.
 
+**R redraws the Repeat button and nothing else** (`vp_reptog`, `[vp_bone]`
+naming one button to `vp_buttons`), and **Space on a LIVE play redraws
+Play/Pause alone** (`vp_lplay`'s toggle). Both redrew all seven, framed
+pictures each, with the gfx lock held - on an 8088 that held a LIVE pass
+(98.3.10) off about two ticks, so `vidlivesndl`'s R and `vidlivesndp`'s
+Space put the picture 3 to 5 frames late, past their bound of 2. They had
+failed 0 times in 22 at one package size and 1 to 3 in 10 at any other,
+which is what a margin that thin looks like; with the one button each is
+0 in 10 or more.
+
 #### 98.3.10 Live: a play ON the desktop (wave 9)
 
 **A file flagged LIVE (8) plays on the live desktop** - the pointer, the
@@ -152984,7 +152998,8 @@ where every other play takes the screen in a bracket. The owner's rule
 (VIDEO-PLAN 14.7, V1): **a file that can play Live is not offered the
 in-window play**; everything else keeps it.
 - **What may be LIVE**: a RESIDENT file (98.1.7) - no disk is read while
-  it plays, which is what lets a worker play it at all (20.6 rule 7) -
+  it plays, which is what lets a worker play it at all (20.6 rule 7) - or a
+  STREAM held whole in XMS (98.3.18.1), for the same reason -
   whose renditions are one-bit **LIN80** canvases, because the shadow the
   worker decodes into is then exactly the band `OSAPI_GFX_BLIT1` takes: row
   *y* at *y* x 80. So every screen's rendition is LIN80 and names the
@@ -153014,7 +153029,7 @@ in-window play**; everything else keeps it.
 - **Live in COLOUR** is 98.3.10.4.
 - **Not built**: **Live fed from the disk**, which the owner's rule drops
   (14.7, V2): a read holds the picture ~100 ms, so it could never look
-  smooth.
+  smooth. Live fed from XMS is not the disk, and is built (98.3.18.1).
 
 The gates: `vidlive` (Hercules), `vidlivecga`, `vidlivevga` - a LIVE file of
 three renditions, each for its screen: the screen's own taken; Play a live
@@ -153028,7 +153043,7 @@ ways; Esc. Broken on purpose (the blit skipped, or Live refused) they FAIL.
 **A Live file with sound plays it** (VIDEO-PLAN 15.1), on a Sound Blaster,
 the card the clock as it is in a bracket (98.3.1). Nothing new is asked of
 the kernel or the driver:
-- **The worker feeds the card.** A Live file is resident, so a frame's sound
+- **The worker feeds the card.** A resident Live file's frame sound
   is already in the audio block (98.1.7) and `vp_afill` copies it into the
   ring as it does for a bracket - no disk. A worker may call `SOUND.DRV`
   (Tracker's does); it may not touch a file, and it touches none.
@@ -153622,6 +153637,134 @@ the key with the card open), `vidsndad4` (an ADPCM4 file on a card answering 4.x
 plays whole and silent), `vidsndad4on` (M, and the sound plays whole - red
 without the FORCE), `vidspkfast`, `vidspkunmute`, `vidspkfson` and
 `vidspksilent` (§98.3.15).
+
+#### 98.3.18 The file held in XMS
+
+**A streamed file that fits the extended-memory pool (§41) is held there
+whole, and every read the pool can answer is a copy instead of a disk
+read** - the stream's chunks, a key, a seam, a seek. What that buys is the
+disk out of the play: on a 286 or better with XMS, a clip plays from memory
+at any length, and a seek is a copy rather than a chain walk and an
+`int 13h`. A machine with no pool - every 8088 - is unchanged to the
+instruction: the hold is never taken and every read is the disk's.
+
+**The hold** (`vp_xopen`, when a file opens and will play here, RESIDENT
+files aside - they are read whole into their blocks, §98.1.7): the file's
+size from the directory, as the KB `OSAPI_FILE_READ` answers `FERR_BIG` with
+when handed no buffer (§20.14.6.3 - one directory lookup, no data I/O), a
+KB over it; `OSAPI_XMEM_CAPS` must cover that, and one `OSAPI_XMEM_ALLOC`
+block is taken. Freed when another file opens; the kernel frees it with the
+instance.
+
+**It fills from the front**, and `[vp_xhave]` is the bytes that have
+arrived:
+- **on the window's timer while nothing plays** (`vp_ontimer`,
+  `vp_xstep`): a 32 KB chunk a step, `OSAPI_FILE_READ_SEQ` on a cursor of
+  its own into a claim made for the step and copied up. The next step is
+  armed as many ticks off as this one took, so the loading has half the
+  machine and the desktop the other half - a step holds the gfx lock for
+  its read, as any file operation does (§7);
+- **behind the stream while it plays** (`vp_xput`): a chunk the stream
+  reads from the disk that starts at or before the hold's end and runs past
+  it goes up behind it, so a play's second pass - a Repeat's lap, a seek
+  back, the next play - is out of memory even where the loader never ran.
+  (The timer does not fire inside a bracket, whose main loop is one
+  callback.)
+
+A short read is the file's end, and sets `[vp_xfull]`: only then is a range
+that runs past `[vp_xhave]` the file's end rather than the disk's business.
+
+**The reads** (`vp_xfill` in `vp_fill`, `vp_xrdat` in `vp_rdat`): a range
+wholly inside `[vp_xhave]` is copied, 32 KB a call (§41.8's bound), to
+exactly where the disk would have put it. The stream's cursor is then
+zeroed but for `FSEQ_OFF` and moved past the bytes - the SDK's own seek - so
+a disk read after it seeds again from the name (§18.4.8): once a play
+reaches the part not yet held, and never again that play, because
+`vp_xput` then keeps the hold's end at the stream's.
+
+**A refused copy drops the hold** (`vp_xcopy`), and a chunk that would not
+fit the block - the file grew since it was sized - drops it too
+(`vp_xend`): from then on the disk serves, as without a pool. A file
+changed on the disk while it is held is NOT noticed; the hold is the file
+as it was read.
+
+**The card's line 6**, until a play's figures take it: `Into XMS: 384 of
+2345 KB` while loading, `Held in XMS: 2344 KB` when it is all there.
+
+**All of it is on the UI task** - the timer, the bracket's main loop, a
+callback - which is where §41.8 allows the copy. On a 286 the copy is
+`int 15h AH=87h` with interrupts off for its 32 KB; the rate hook and the
+speaker's ISR wait that long, a card's DMA does not.
+
+**+955 bytes of the package** (32,612 -> 33,567); no kernel byte, and on a
+machine with no pool the whole of it is one `OSAPI_XMEM_CAPS` at open and a
+compare in each read.
+
+##### 98.3.18.1 Live from the hold
+
+**A streamed LIVE file plays on the desktop once it is held whole** - the
+one thing 98.3.10 kept Live off a stream for was the disk, and a copy out
+of the hold is milliseconds where a read held the picture ~100 ms (15.5 of
+docs/plans/VIDEO-PLAN.md). What changes:
+- **The file** (98.1.1, 98.1.3.4): LIVE and RUNS on a stream - its frame
+  records and its seam carry their blit runs between the lists and the
+  audio, its keyframes none, the target byte naming its screen. LIN80, one
+  bit - or VGA4 for the VGA (98.3.10.4). `tools/os88venc.py --live <screen>
+  --xms` makes one, with `--pixfmt vga4` for colour.
+- **When** (`vp_canlive`): as for a resident Live file, and the whole file
+  in the hold (`[vp_xon]` and `[vp_xfull]`). Not held (every 8088, or a
+  hold still filling): Play is the in-window play, which fills the hold
+  behind it, so the NEXT Play is Live.
+- **A VGA4 stream's keeper is plane 3's base + 64 KB** (`vp_sstart`'s
+  `.kps`, the keyframe claim's rule, `VP_MXSHD`), where a resident VGA4
+  Live file's is the four planes exactly. A resident block's writes are all
+  checked against the canvas once, at load (98.1.7.3); a stream's records
+  arrive during the play and nothing checks them ahead, so the CLAIM is the
+  bound - every write is a 16-bit offset from one plane's base, and none can
+  leave a claim that runs 64 KB past the last one. A 160 x 120 canvas: 93 KB
+  against 38. A one-bit stream's keeper was 64 KB already.
+- **The worker reads, the UI task fills.** The session is a stream's, ring
+  and all; `vp_lsetup` fills the ring (`vp_lprime`: `vp_fill` until it is
+  full, out of the hold, then the records before the key's frame stepped
+  over) and starts the worker. After each pass the worker looks: a slot the
+  play has left, or at the file's end with Repeat the seam to read, and it
+  posts ONE `OSAPI_WM_WAKE` (`vp_lask`, `[vp_lwant]`); the wake runs
+  `vp_fill` until the ring is full (`vp_lfeed`) BEFORE it takes the gfx
+  lock, so the worker draws on through it. It is the bracket's hook-and-
+  reader protocol with the worker as the hook: `vp_fill` publishes
+  `[vp_lc]` last, and a record not in yet is a stall, not a wait.
+- **F and back**: the bracket's reader takes over and hands back; `vp_lback`
+  tops the ring up.
+- **Sound** is the resident Live file's arrangement (98.3.10.1) with the
+  audio read out of the ring's records, as a bracket reads it - the same
+  code. NOT YET RUN WITH A CARD: no row drives it.
+
++189 bytes of the package for one bit, +23 more for VGA4; the encoder's
+`Writer(live=)` and `--xms`.
+
+The gates, on QEMU: `vidxmslive` - a 1.2 MB streamed Live file for the VGA
+desktop, four times the biggest ring, held, B: changed to a BLANK floppy,
+Play: a live session and not a bracket, the worker's shadow the decode to
+the byte at four moments (the VM stopped with the gfx lock free), all 450
+frames, 0 stalls, the ring refilled from chunk 8 to 37. `vidxmsliverep`,
+the same file repeating from frame 10: over a lap and a half, the shadow
+right in the second lap. `vidxmslivevga4`: a 1.2 MB VGA4 stream Live, the
+four planes the decode's sixteen colours at four moments, 110 of 110.
+`vidxmslivenox` (`-m 1`): Play is NOT Live. Broken
+on purpose - `vp_lask` out of the worker - the play stalls at frame 96 with
+the ring empty, and `vidxmslive` FAILS.
+
+The gates of the hold itself, on QEMU (docs/TESTING.md's list, entry 1 - an 8088 has no
+memory above 1MB): `vidxms`, a ~950 KB clip played the moment the loader's
+first chunk has landed, the hold whole as the play returns and
+byte-for-byte the file (QEMU's `pmemsave`); then drive B: changed to a
+BLANK floppy under the running player, and the next key and a whole play
+from it must still work. `vidxmsidle` is the same with the timer alone
+loading the file to its end, the card's line drawn from the timer.
+`vidxmsnox` (`-m 1`) is the NEGATIVE CONTROL: no hold, the play off the
+disk, and after the same swap the same key REFUSED. Broken on purpose -
+`vp_xput` out of `vp_fill`, the hold short at the play's end (163,840 of
+973,312); `vp_xrdat` out of `vp_rdat`, the key refused - `vidxms` FAILS.
 
 ### 98.4 The window: the Preview (wave 6)
 

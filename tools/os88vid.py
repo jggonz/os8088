@@ -1320,7 +1320,18 @@ class Writer:
     def __init__(self, g, rate, spf, audio_fmt, abytes, pixfmt, title="",
                  credits="", aspect=None, keysecs=KEY_SECS, palette=None,
                  rowscale=1, flip=False, loop=None, repeat=False,
-                 cgapal=None, spk=False):
+                 cgapal=None, spk=False, live=None):
+        # `live` (a TARGETS value): a STREAMED Live file (98.3.18.1) - its
+        # frame records and seam carry blit runs between lists and audio
+        if live is not None and (pixfmt not in (PF_MONO1, PF_VGA4)
+                                 or g.layout != LAY_LIN80
+                                 or (pixfmt == PF_VGA4 and live !=
+                                     TARGETS["vga"])
+                                 or g.h > 255 or g.wb > 255):
+            raise V88Error("a streamed live file is a MONO1 LIN80 canvas, or "
+                           "a VGA4 one for the VGA, of at most 255 rows and "
+                           "bytes")
+        self.live = live
         if spk and audio_fmt != AUD_PCM8:
             raise V88Error("speaker counts are PCM8's (98.1.1.3)")
         if spk:
@@ -1403,7 +1414,7 @@ class Writer:
             raise V88Error("frame %d has %d audio bytes, not %d"
                            % (len(self.recs), len(audio), self.abytes))
         k = len(self.recs)
-        self.recs.append(record(ops, self.g, audio))
+        self.recs.append(self.with_runs(record(ops, self.g), audio))
         self.last = surf
         if k == self.loop:
             self.loop_surf, self.loop_audio = bytes(surf), audio
@@ -1422,6 +1433,19 @@ class Writer:
                 # 240 MODEX one can be) has no keyframe here: the file
                 # still plays from the start, and seeks to the ones it has
                 self.skipped = getattr(self, "skipped", 0) + 1
+
+    def with_runs(self, rec, audio=b"", limit=SP_MAX * SECTOR - 4):
+        """A record made without its audio: its runs after the lists if the
+        file is live, then the audio"""
+        if self.live is not None:
+            rec = with_runs(rec, self.g)
+        n = len(rec) + len(audio)
+        if n > limit:
+            raise V88Error("a record of %d bytes cannot fit %s" % (
+                n, "a super-packet" if limit < 65534 else "its length word"))
+        out = bytearray(rec + audio)
+        struct.pack_into("<H", out, 0, n)
+        return bytes(out)
 
     def write(self, path, poster=None):
         g = self.g
@@ -1470,8 +1494,9 @@ class Writer:
                 raise V88Error("a loop from frame %d: it must start before "
                                "the last of %d frames"
                                % (self.loop, len(self.recs)))
-            seam = record(seam_ops(self.last, self.loop_surf, g), g,
-                          self.loop_audio, limit=65535)
+            seam = self.with_runs(record(seam_ops(self.last, self.loop_surf,
+                                                  g), g, limit=65535),
+                                  self.loop_audio, limit=65535)
             if self.flip and len(seam) > PREV_MAX:
                 raise V88Error("the seam is %d bytes, past a flipped play's "
                                "%d" % (len(seam), PREV_MAX))
@@ -1522,7 +1547,8 @@ class Writer:
         hdr = bytearray(SECTOR)
         hdr[0:4] = V88_SIG
         flags = (F_LOOPREC if seam else 0) | (F_REPEAT if self.repeat else 0) \
-            | (F_SPKPWM if self.spk else 0)
+            | (F_SPKPWM if self.spk else 0) \
+            | (F_LIVE | F_RUNS if self.live is not None else 0)
         struct.pack_into("<HHIHHBBH", hdr, 4, 1, flags, len(self.recs),
                          self.rate,
                          self.spf, self.audio_fmt, 1, self.abytes)
@@ -1542,6 +1568,8 @@ class Writer:
                          2 if self.flip else 0)
         if self.cgapal is not None:
             hdr[192 + R_CGAPAL] = self.cgapal
+        if self.live is not None:
+            hdr[192 + R_TARGET] = self.live
         hdr[LOOP_AT:LOOP_AT + len(loopblk)] = loopblk
         front = bytes(hdr)
         if self.palette:
@@ -1939,9 +1967,10 @@ class Reader:
         if self.runs and not self.live:
             raise V88Error("blit runs in a file that is not LIVE (98.1.3.4)")
         self.target = d[self.slot + R_TARGET]
-        if self.live and not self.resident:
-            raise V88Error("a LIVE file is RESIDENT (98.3.10)")
-        if self.target > 3 or (self.target and not self.resident):
+        # a LIVE file is RESIDENT, or a stream played Live once it is held
+        # in XMS (98.3.18.1)
+        if self.target > 3 or (self.target and not self.resident
+                               and not self.live):
             raise V88Error("a target of %d" % self.target)
         if self.pixfmt not in PF_NAMES:
             raise V88Error("pixel format %d" % self.pixfmt)
@@ -2846,8 +2875,9 @@ def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
                   spk=False):
     """SPEC.md 98.2's minimal encoder: every changed byte, losslessly.
     `spk` stores PCM8 as the speaker's counts (98.1.1.3)
-    `live` (cga, herc, vga) makes the resident file LIVE for that screen
-    (98.3.10) - the layout must be lin80"""
+    `live` (cga, herc, vga) makes the file LIVE for that screen (98.3.10) -
+    the layout must be lin80. Resident, or a stream played Live once it is
+    held in XMS (98.3.18.1)"""
     lay = LAYOUT_BY_NAME[layout]
     w0, h0, _ = read_frame(paths[0])
     if w0 % 8:
@@ -2877,7 +2907,8 @@ def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
         rab = 0                         # one block beside them
     wr = Writer(g, rate, spf, afmt if rab else AUD_NONE, rab, PF_MONO1,
                 title=title, keysecs=keysecs, loop=loop, repeat=repeat,
-                spk=spk and bool(rab))
+                spk=spk and bool(rab),
+                live=TARGETS[live] if live and resident is None else None)
     surf = bytearray(65536)
     for f, path in enumerate(paths):
         w, h, cv = read_frame(path)

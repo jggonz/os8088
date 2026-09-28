@@ -8913,6 +8913,73 @@ SOAK = [
         wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
                "build/mbr.bin", "build/hdd.drv", "build/hiber.drv",
                "build/ctrl.drv", "build/sound.drv")),
+    Row("vidxms", "soak", py("tests/vidxms.py"), 45.0,
+        "SPEC.md 98.3.18: a streamed .V88 HELD IN XMS and played from there. "
+        "WHY QEMU: docs/TESTING.md's closed list, entry 1 - every MartyPC "
+        "machine is an 8088 with nothing above 1MB. The clip (~950 KB, made "
+        "by the row) opens with a hold its size; the moment the loader's "
+        "first chunk lands, Play - and the stream fills the rest behind "
+        "itself, so the hold is WHOLE as the play returns and byte-for-byte "
+        "the file (pmemsave). Then drive B: is changed to a BLANK floppy "
+        "under the player, so the disk has nothing left to answer with: the "
+        "next key and a whole play from it must still work. Broken on "
+        "purpose - vp_xput out of vp_fill - the hold is short at the play's "
+        "end (163,840 of 973,312); vp_xrdat out of vp_rdat, the key is "
+        "refused",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
+    Row("vidxmsidle", "soak", py("tests/vidxms.py", "--arm", "idle"), 45.0,
+        "SPEC.md 98.3.18: vidxms with no play at the start - the window's "
+        "timer alone loads the file to its end (a short last chunk is what "
+        "says so), with the info card out so its line 6 is drawn from the "
+        "timer; then the same blank-disk key and play",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
+    Row("vidxmsnox", "soak", py("tests/vidxms.py", "--arm", "nox"), 45.0,
+        "SPEC.md 98.3.18's NEGATIVE CONTROL, and the fallback: QEMU with -m 1, "
+        "so no pool. No hold is taken and the play runs off the disk to the "
+        "last frame - and after the same swap to a blank B: the same next "
+        "key is REFUSED. Without this, vidxms passing would not say the swap "
+        "bites",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
+    Row("vidxmslive", "soak", py("tests/vidxms.py", "--arm", "live"), 60.0,
+        "SPEC.md 98.3.18.1: a STREAMED Live file played LIVE from the hold. "
+        "A 1.2 MB one-bit stream for the VGA desktop, four times the biggest "
+        "ring, is held whole; B: is changed to a BLANK floppy; Play must be "
+        "a live session and not a bracket, and the worker's shadow must be "
+        "the reference decode to the byte at four moments (the VM stopped "
+        "with the gfx lock free) and all 450 frames drawn - the ring "
+        "refilled by the UI task out of the hold on the worker's asks. "
+        "Broken on purpose - vp_lask out of the worker - the play stalls at "
+        "frame 96 with the ring empty and the row FAILS",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
+    Row("vidxmsliverep", "soak", py("tests/vidxms.py", "--arm", "liverep"),
+        60.0,
+        "SPEC.md 98.3.18.1 with REPEAT: the same streamed Live file looping "
+        "from frame 10 - the file's end asks for the seam and the next lap's "
+        "start, and the play goes round: over a lap and a half drawn, the "
+        "shadow the decode in the second lap too, then Esc",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
+    Row("vidxmslivevga4", "soak", py("tests/vidxms.py", "--arm", "livevga4"),
+        50.0,
+        "SPEC.md 98.3.18.1 IN COLOUR: a 1.2 MB VGA4 stream for the VGA "
+        "desktop, held, B: blank, Play LIVE - the keeper sized to plane 3's "
+        "base + 64 KB, because nothing checks a stream's writes ahead of the "
+        "play - and the four planes the decode's sixteen colours at four "
+        "moments, all 110 frames. Broken on purpose - vp_canlive one-bit "
+        "only for a stream again - Play is not Live and the row FAILS",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
+    Row("vidxmslivenox", "soak", py("tests/vidxms.py", "--arm", "livenox"),
+        45.0,
+        "SPEC.md 98.3.18.1's other half: on -m 1 (no pool) the streamed Live "
+        "file is NOT played Live - a worker cannot read a file, so with "
+        "nothing held Play is the in-window play",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
     Row("vidwin", "soak", py("tests/vidwin.py"), 56.0,
         "SPEC.md 98.3.7: VIDEO.O88 PLAYS IN ITS WINDOW - a same-mode "
         "bracket, the decoder writing the desktop's own framebuffer at the "

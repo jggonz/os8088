@@ -2166,10 +2166,33 @@ and not a transcript. Each line names where the detail is.
   when its save-under had been shed. Recorded, not diagnosed.
 - **ADPCM4 on the speaker** (15.9): set aside, likely permanently - it
   leaves no room for video.
-- **Live fed from the disk** (15.5): DROPPED by the owner's rule.
+- **Live fed from the disk** (15.5): DROPPED by the owner's rule. Live fed
+  from XMS is not the disk and is what is next, below.
 
 **Next, and in this order:**
-- Nothing picked. **Live in colour** (15.2) is BUILT (2026-09-27).
+- **XMS, phase 1 is BUILT** (2026-09-27, SPEC.md 98.3.18): a streamed file
+  that fits the pool is held in one block its size, filled from the front -
+  on the window's timer at half duty while nothing plays, and behind the
+  stream while it plays - and every read the hold can answer (a chunk, a
+  key, a seam, a seek) is a copy instead of a disk read. No pool, no change:
+  not even the directory is asked. Gates on QEMU: `vidxms`, `vidxmsidle`,
+  `vidxmsnox` - the instrument is a BLANK floppy swapped under the player
+  once the file is held. The owner's scope: *"That, plus Live from XMS"*.
+- **XMS, phase 2 - Live from the hold is BUILT** (2026-09-27, SPEC.md
+  98.3.18.1; 15.5 revived without its objection): a STREAMED one-bit Live
+  file (`tools/os88venc.py --live <screen> --xms`) plays on the desktop once
+  the hold is whole - the worker asks after a pass, one `OSAPI_WM_WAKE`, and
+  the UI task copies the next chunks out of the hold into the ring before it
+  takes the gfx lock. Gates `vidxmslive` (1.2 MB, B: blank, 450 of 450,
+  0 stalls, the shadow exact), `vidxmsliverep`, `vidxmslivenox`.
+  **Open from it**: Live with SOUND from a stream is the bracket's reader
+  code and has never been run with a card - it wants a row (QEMU `-device
+  sb16` and SOUND.DRV on a hard-disk template, `tests/vidsound.py`'s
+  shape) or a 286 in the field. **VGA4 streams play Live too** (2026-09-28),
+  their keeper plane 3's base + 64 KB since a stream's writes are not
+  checked ahead (`vidxmslivevga4`). The encoder GUI's `--xms` box sits beside
+  "live" on Loop and keys.
+- **Live in colour** (15.2) is BUILT (2026-09-27).
 - **MUTE** is BUILT (2026-09-27, SPEC.md 98.3.17, 34.5.3.1): the owner's ask
   after elendilon's "no ADPCM4 on an SB16" fix - *"I have some knockoff
   cards that are getting identified as an sb16 that play ADPCM4 just fine"*,
@@ -2184,7 +2207,8 @@ and not a transcript. Each line names where the detail is.
   About box resident or in a module?
 - **Sound Blaster 1.0 and 1.5** (15.6): SOUND.DRV work, wants an SB 1.x
   86Box machine.
-- **XMS** (15.6, V4): 286 and up; the 5150 cannot use it.
+- **XMS** (15.6, V4): both phases BUILT - above. More Live WINDOWS in XMS
+  (V4's other half) is not asked for.
 - **The keeper relocatable** (15.4 D): the blocks move, the keeper stays
   pinned until its use across window calls is proven safe.
 
@@ -2203,7 +2227,10 @@ layout (no shadow copy); `font_run_cell`'s masked row loop (~20 kernel
 bytes, ~210 cycles a clipped cell).
 
 **Recorded, not player defects** (15.7): `vidlivesndl`, `vidfskeysflip` and
-(once) `vidplay` fail now and then under parallel load and pass alone;
+`vidwinshd` (its hold at frame 100, once, 2026-09-27) fail now and then
+under parallel load and pass alone. `vidplay` WAS on this list and was the
+harness's: its first hold was polled every 0.3 host s, which could read the
+1.5 s "Low memory" toast after it had gone - polled at 0.02 now (ab2aed4d);
 MartyPC loses a key press under the same load; MartyPC's VGA draws text
 attribute 6 red (MARTYPC-PLAN 1).
 
