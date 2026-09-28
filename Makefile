@@ -9917,16 +9917,77 @@ videnchd: $(VIDENC_BASE) $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 \
 	fi
 	@ls -l $(BUILD)/VIDENC-*.VHD
 
+# THE DEMO VIDEO DISKS (SPEC.md 98.5): a whole os8088 install on a hard disk
+# with the demo videos in MEDIA/ beside a 00-VIDS.TXT that describes them -
+# what to put in a machine to show the player off. The videos are COMMITTED,
+# under apps/video/demo/<adapter>/, one directory an adapter; this makes a
+# disk of each directory that exists.
+#
+# THE INSTALL IS DERIVED, not listed: the 1.44MB system disk's payload and
+# the 1.44MB apps disk's, with the packages both carry once ($(sort) - their
+# spellings are identical), so a package added to either is on these disks
+# with nobody remembering it here. The apps list's --folder pair comes out
+# of the sort and goes ahead of the files, where argparse wants an option.
+# NO SYSTEM.CFG: the disk boots on the defaults, the sound card mounted when
+# there is one, and a machine's settings are its owner's (the owner's rule).
+#
+# THE DISK is an ST-238R on a Seagate ST11R (615/4/26, 31 MB) for 86Box's
+# 8088s: os88disk.py builds the volume for the 613 cylinders the card hands
+# the BIOS - the partition os8088's own installer makes, from LBA 26 for
+# 63,726 sectors - and os88hdd.py --wrap puts it under the card's hidden
+# cylinder and a VHD footer. On demand: 31 MB of video is no part of `all`.
+VIDDEMO_ADAPTERS := $(notdir $(patsubst %/,%,$(sort $(dir $(wildcard apps/video/demo/*/00-VIDS.TXT)))))
+VIDDEMO_IMGS := $(foreach a,$(VIDDEMO_ADAPTERS),$(BUILD)/VIDDEMO-$(shell echo $(a) | tr a-z A-Z)-ST11R.VHD)
+# (= and $$(APPS) below, not :=: the apps disk's lists are defined further
+# down this file, and an immediate expansion here took them as EMPTY)
+VIDDEMO_INSTALL = $(DRIVERS) $(SYSDOC) \
+	$(sort $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSLOGOARG) \
+	       $(FACESARG) $(SYSVIDARGS) \
+	       $(filter-out --folder SYSTEM/APPDATA,$(APPSARGS)))
+.PHONY: viddemo
+viddemo: $(VIDDEMO_IMGS)
+	@ls -l $(VIDDEMO_IMGS)
+
+# the text, held to Note Pad's rules and given CRLF, as README.TXT is
+.PRECIOUS: $(BUILD)/viddemo/%/00-VIDS.TXT
+$(BUILD)/viddemo/%/00-VIDS.TXT: apps/video/demo/%/00-VIDS.TXT tools/checkreadme.py
+	@mkdir -p $(dir $@)
+	python3 tools/checkreadme.py $<
+	python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); \
+		open(sys.argv[2], 'wb').write(d.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))" \
+		$< $@
+
+.SECONDEXPANSION:
+$(BUILD)/VIDDEMO-%-ST11R.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
+	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
+	$(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 $$(APPS) \
+	$$(BUILD)/viddemo/$$(shell echo $$* | tr A-Z a-z)/00-VIDS.TXT \
+	$$(wildcard apps/video/demo/$$(shell echo $$* | tr A-Z a-z)/*.V88) \
+	tools/os88disk.py tools/os88hdd.py
+	python3 tools/os88disk.py -o $(BUILD)/viddemo/$*.img --hdd \
+		--geometry 613/4/26 --mbr $(BUILD)/mbr.bin \
+		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
+		$(VIDDEMO_INSTALL) \
+		$(addprefix MEDIA:,$(filter %/00-VIDS.TXT %.V88,$^))
+	python3 tools/os88disk.py --verify-hdd $(BUILD)/viddemo/$*.img
+	python3 tools/os88hdd.py --wrap $(BUILD)/viddemo/$*.img --st11 \
+		--cyls 615 --heads 4 --spt 26 --out $@
+	rm -f $(BUILD)/viddemo/$*.img
+
 # THE ENCODER FOR PEOPLE WITH NO os8088 TREE (SPEC.md 98.2.13): the window,
 # every tools/ module it imports or runs (tools/os88vbundle.py COMPUTES the
 # list, so it cannot go stale), VIDEO.O88 and a README, in one folder of one
 # deterministic zip. On demand; unpacked anywhere it encodes and makes disks,
-# its hard disks formatted and not bootable (98.2.12.1).
+# its hard disks BOOTING off the kernel and drivers it carries in boot/.
 # `soak -k vencbundle` unpacks it outside the tree and uses it there.
 .PHONY: vencbundle
 vencbundle: $(BUILD)/os8088-encoder.zip
-$(BUILD)/os8088-encoder.zip: $(BUILD)/video.o88 tools/os88vbundle.py $(wildcard tools/os88*.py)
-	python3 tools/os88vbundle.py $@ --player $(BUILD)/video.o88
+# ...and the hard disk's BOOT files, so the bundle's hard disks boot: the
+# window's HD_BOOT and HD_WANT, which os88vbundle.py reads out of it
+VENCBOOT := $(addprefix $(BUILD)/,kernel.sys boothd.bin mbr.bin hdd.drv \
+                                  ctrl.drv sound.drv hiber.drv)
+$(BUILD)/os8088-encoder.zip: $(BUILD)/video.o88 $(VENCBOOT) tools/os88vbundle.py $(wildcard tools/os88*.py)
+	python3 tools/os88vbundle.py $@ --player $(BUILD)/video.o88 --boot $(BUILD)
 
 # ...and the one that shows a FACE rather than timing one: it draws the same
 # sentence through the kernel, through face 0, and through both of the

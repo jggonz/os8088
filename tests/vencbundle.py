@@ -16,9 +16,10 @@ only place Python may find an os88 module.
    ffmpeg's test pattern into a .V88 that os88vid verifies.
 3. IT MAKES A FLOPPY: the window's disk_argv makes a 360 KB floppy holding
    the video under its 8.3 name and the VIDEO.O88 from beside the tool.
-4. IT MAKES A HARD DISK: with no tree to boot from, the ST11M disk is
-   formatted and not bootable (--noboot), passes os88disk --verify-hdd, and
-   holds the video and VIDEO.O88.
+4. IT MAKES A HARD DISK THAT BOOTS: with no tree, off the kernel, boot
+   records and drivers the bundle carries in boot/ - the ST11M disk passes
+   os88disk --verify-hdd and holds KERNEL.SYS, HDD.DRV, the video and
+   VIDEO.O88. Built without --boot it FAILS here (formatted, not bootable).
 5. NOTHING CAME FROM THE TREE: every os88 module the steps loaded was the
    bundle's.
 
@@ -40,7 +41,8 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88build                                              # noqa: E402
 
 NEED = ("os88vencgui.py", "os88venc.py", "os88vid.py", "os88disk.py",
-        "os88hdd.py", "VIDEO.O88", "README.TXT")
+        "os88hdd.py", "VIDEO.O88", "README.TXT", "boot/kernel.sys",
+        "boot/boothd.bin", "boot/mbr.bin", "boot/hdd.drv")
 
 # run INSIDE the unpacked folder: make a floppy and a hard disk the way the
 # window does, and say where every os88 module came from
@@ -93,7 +95,8 @@ def main():
         z1, z2 = os.path.join(tmp, "a.zip"), os.path.join(tmp, "b.zip")
         for z in (z1, z2):
             subprocess.run([sys.executable, "tools/os88vbundle.py", z,
-                            "--player", player], check=True,
+                            "--player", player, "--boot",
+                            os.path.dirname(player)], check=True,
                            capture_output=True)
         names = zipfile.ZipFile(z1).namelist()
         miss = [n for n in NEED if "os8088-encoder/" + n not in names]
@@ -147,11 +150,12 @@ def main():
                             "--verify-hdd", img], capture_output=True,
                            text=True)
         hd = names83(img, True, 17, 4) if not rc else []
-        hm = [n for n in ("MYHOLIDA.V88", "VIDEO.O88") if n not in hd]
+        hm = [n for n in ("MYHOLIDA.V88", "VIDEO.O88", "KERNEL.SYS",
+                          "HDD.DRV") if n not in hd]
         print("   4: the ST11M disk: %s, %s, root %s" % (
             "not bootable" if noboot else "BOOTABLE",
             "verified" if not (rc or v.returncode) else "FAILED", hd))
-        if rc or v.returncode or hm or not noboot or "KERNEL.SYS" in hd:
+        if rc or v.returncode or hm or noboot:
             bad.append("4: the hard disk: %s" % (err or v.stderr.strip() or
                                                  "root %s" % hd))
         mods = out["mods"]

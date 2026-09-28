@@ -218,6 +218,49 @@ def vhd_footer(footer, total, cyls, heads, spt):
     return bytes(f)
 
 
+def st11_vhd(a, disk, footer, pcyls):
+    """The last of the build, shared with --wrap: the card's layout when
+    --st11 (its hidden cylinder and parameter record), and the footer"""
+    ptotal = a.spt * a.heads * a.cyls
+    if a.st11:
+        cyl = a.spt * a.heads * SECTOR
+        ptotal = pcyls * a.heads * a.spt
+        phys = bytearray(ptotal * SECTOR)
+        phys[cyl:cyl + len(disk)] = disk
+        rec = st11_record(pcyls, a.heads, a.spt)
+        for lba in (0, 1, a.spt, a.spt + 1):    # head 0 and head 1, S1 and S2
+            phys[lba * SECTOR:lba * SECTOR + len(rec)] = rec
+        disk = phys
+    if not a.raw:
+        disk += vhd_footer(footer, ptotal, pcyls, a.heads, a.spt)
+    return disk
+
+
+def wrap(a):
+    """--wrap: a disk os88disk.py built - folders and all - under the card's
+    layout and a footer. Its size must be the BIOS's view of this geometry
+    exactly, which is what makes the card's hidden cylinder land right"""
+    pcyls = a.cyls
+    if a.st11:
+        a.cyls -= 2
+    disk = bytearray(open(a.wrap, "rb").read())
+    want = a.spt * a.heads * a.cyls * SECTOR
+    if len(disk) != want:
+        fail("%s is %d bytes; %d/%d/%d is %d - build it with os88disk.py "
+             "--hdd --geometry %d/%d/%d" % (a.wrap, len(disk), a.cyls,
+                                             a.heads, a.spt, want, a.cyls,
+                                             a.heads, a.spt))
+    if disk[510:512] != b"\x55\xAA":
+        fail("%s has no MBR" % a.wrap)
+    footer = vhd_new(("%d/%d/%d%s" % (pcyls, a.heads, a.spt, " st11" if
+                                      a.st11 else "")).encode())
+    open(a.out, "wb").write(bytes(st11_vhd(a, disk, footer, pcyls)))
+    print("os88hdd: %s  %s wrapped, %d/%d/%d%s%s" % (
+        a.out, a.wrap, pcyls, a.heads, a.spt, ", ST11" if a.st11 else "",
+        "" if a.raw else ", VHD"))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--template", help="a VHD to take the footer (and the "
@@ -240,10 +283,19 @@ def main():
                     help="a Seagate ST11 card's layout: its parameter record "
                     "in cylinder 0, the volume from cylinder 1, two "
                     "cylinders fewer for the BIOS")
+    ap.add_argument("--wrap", metavar="IMG",
+                    help="no volume of our own: IMG is a whole partitioned "
+                    "disk as the BIOS sees it (os88disk.py --hdd --geometry, "
+                    "which lays out FOLDERS) - put it under the card's "
+                    "layout (--st11) and a VHD footer, and nothing else")
     ap.add_argument("--file", action="append", default=[], metavar="NAME=PATH",
                     help="another file for the volume's root, e.g. "
                          "HDD.DRV=build/hdd.drv (repeatable)")
     a = ap.parse_args()
+    if a.wrap:
+        if a.noboot or a.kernel or a.vbr or a.mbr or a.file or a.template:
+            fail("--wrap takes only the geometry, --st11, --raw and --out")
+        return wrap(a)
     if a.noboot:
         if a.kernel or a.vbr or a.mbr:
             fail("--noboot takes no --kernel, --vbr or --mbr")
@@ -425,18 +477,7 @@ def main():
     sec0[510:512] = b"\x55\xAA"
     disk[0:SECTOR] = sec0
 
-    ptotal = total
-    if a.st11:
-        cyl = a.spt * a.heads * SECTOR
-        ptotal = pcyls * a.heads * a.spt
-        phys = bytearray(ptotal * SECTOR)
-        phys[cyl:cyl + len(disk)] = disk
-        rec = st11_record(pcyls, a.heads, a.spt)
-        for lba in (0, 1, a.spt, a.spt + 1):    # head 0 and head 1, S1 and S2
-            phys[lba * SECTOR:lba * SECTOR + len(rec)] = rec
-        disk = phys
-    if not a.raw:
-        disk += vhd_footer(footer, ptotal, pcyls, a.heads, a.spt)
+    disk = st11_vhd(a, disk, footer, pcyls)
     open(a.out, "wb").write(bytes(disk))
     print("os88hdd: %s  %d/%d/%d, partition at LBA %d for %d sectors (%dMB), "
           "%s, %d-sector clusters, %s"
