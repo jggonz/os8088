@@ -554,6 +554,17 @@ hd_blk:
     jc .bad
     mov di, bx
 
+    mov ax, si                  ; the transfer's END, volume-relative, against
+    mov dx, bp                  ; the partition's length: past 32MB the kernel
+    add ax, cx                  ; was told 'unknown' and its rule 13 bounds
+    adc dx, 0                   ; nothing, so a BPB that overstates its size
+    jc .bad                     ; would reach the NEXT partition - this is the
+    cmp dx, [di+HDV_LEN+2]      ; one party that knows where it ends
+    ja .bad                     ; (SPEC.md 18.7.5)
+    jb .inlen
+    cmp ax, [di+HDV_LEN]
+    ja .bad
+.inlen:
     mov ax, si                  ; the 32-bit LBA: base + volume-relative, whose
     mov dx, bp                  ; HIGH word the kernel hands in DI (SPEC.md
     add ax, [di+HDV_BASE]       ; 18.7.5) - banked in BP at the top
@@ -576,7 +587,8 @@ hd_blk:
     jmp short .out
 .bad:
     mov al, 0x04                ; "sector not found": the honest answer for a
-.fail:                          ; handle that names no volume
+.fail:                          ; handle that names no volume, and for a
+                                ; sector past the partition's end
     stc
 .out:
     pop es

@@ -30743,7 +30743,12 @@ DECLARED a length cannot carry one, and CountOfClusters is a 24-over-8 divide
 with the quotient-overflow refused before it can fault with `[sch_lock]` held.
 A driver serving a volume past 32MB registers it with `OSAPI_VOL_ADD`'s CX = 0,
 *unknown*, because the length does not fit the register — rule 13 already
-accepted that.
+accepted that. **So the driver is the fence there**: `HDD.DRV` keeps the
+partition's whole 32-bit length in its own volume row (`HDV_LEN`) and `hd_blk`
+refuses, with status 04h, any transfer whose volume-relative end passes it —
+otherwise a BPB that overstates its TotSec32 (a partition shrunk without a
+reformat, or a hostile disk) sets `dsk_maxclus` past the partition and the
+allocator's clusters land in the next one.
 
 **What it costs**, measured against the tree before it: **`kern_big` 259
 bytes** (`.text` +2, `.bss` +10, `.cold` +247), which crosses one cold rung;
@@ -83412,17 +83417,26 @@ next-fit from `[dsk_rover]`, and `disk_mount` puts the rover back at cluster 2
 on every mount — so after a fresh mount the allocator's order is the FAT's
 order, and a file of N clusters takes the lowest N free ones. `hd_inst_keep`:
 
-1. **cuts the old `KERNEL.SYS` to nothing** — a zero-length replace through
-   `OSAPI_FILE_WRITE_SYS`, the one verb that may touch a hidden + system file
-   (§19.6) — so its clusters are free;
-2. **plans** (`hd_kplan`): reads the BPB and walks the FAT raw, three sectors
+1. **plans** (`hd_kplan`): reads the BPB and walks the FAT raw, three sectors
    at a time through the copy buffer (1,536 bytes is exactly 1,024 FAT12
    entries or 768 FAT16 ones, so no entry is ever split), and finds the
    **first** run of free clusters long enough for the new kernel, counting the
    free clusters below it. First fit, because the pad costs a write of every
-   cluster it covers;
+   cluster it covers. **Nothing has been written yet**, so a refusal — no run
+   long enough, a BPB it cannot read — leaves the old kernel booting. The old
+   `KERNEL.SYS`'s clusters count as free when `hd_kold` finds them ONE run
+   that ends its chain, because step 2 frees exactly those; a kernel in pieces
+   counts as used, and is planned for again once step 2 has freed it. On a
+   volume this driver mounted (not the one the machine booted from) the plan
+   also refuses a BPB whose sectors per track or heads differ from the device
+   row's — `HDD.DRV` writes the kernel at the row's geometry and `boothd`
+   reads it back at the BPB's — with `Formatted for another geometry`;
+2. **cuts the old `KERNEL.SYS` to nothing** — a zero-length replace through
+   `OSAPI_FILE_WRITE_SYS`, the one verb that may touch a hidden + system file
+   (§19.6) — so its clusters are free;
 3. writes **`KPAD.TMP`** of exactly that many clusters, after a remount, so it
-   takes precisely the holes below the run;
+   takes precisely the holes below the run (and deletes it again if a write
+   fails part-way);
 4. **copies the kernel** — every cluster it is handed is the next one in the
    run, whether the rover survived a chunk or a remount put it back at 2,
    because the pad has taken everything underneath;
@@ -83432,14 +83446,16 @@ order, and a file of N clusters takes the lowest N free ones. `hd_inst_keep`:
    OWN BPB, the template's code laid over everything but the first 62 bytes,
    `BPB_HiddSec` taken from the partition table — and that is the commit.
 
-The partition does not boot between steps 3 and 5, which is seconds; the
+The partition does not boot between steps 2 and 5, which is seconds; the
 format path's window is its whole system phase. A check that fails at step 5
 commits nothing: the VBR and MBR are what they were, and on the fixture the
 partition still boots DOS.
 
 **The rest of the tree is the ordinary copy**, which already replaces a file
 that exists and already treats `FERR_EXIST` from `MKDIR` as the second time
-(§52.10.13). `hd_ikeepit` is the one addition: on a kept volume a root
+(§52.10.13) — except that a kept volume can hold a FILE with a folder's name,
+which answers `FERR_EXIST` as well, so `hd_idst_child` takes only a folder and
+the walk stops at a file rather than writing directory entries into it. `hd_ikeepit` is the one addition: on a kept volume a root
 `SYSTEM.CFG`, and any file inside a folder named `APPDATA` (inherited down the
 walk's level stack), is copied **only where the destination has none**. The
 install disks ship no `SYSTEM.CFG` and an empty `APPDATA` today, so this is

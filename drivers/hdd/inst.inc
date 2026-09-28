@@ -3333,7 +3333,8 @@ hd_idst_here:
 ; hd_idst_child - the cluster of the folder named in hd_iname2 (internal)
 ; in:  the DESTINATION's parent folder is current
 ; out: CF=0 and AX = its first cluster; CF=1 = it is not there, and that is a
-;      real failure - it was made a moment ago or found to exist already
+;      real failure - it was made a moment ago or found to exist already - or
+;      what is there is a FILE of that name, which a kept volume can hold
 ;
 ; The destination folder's cluster is not known until it has been made, and a
 ; re-install finds one that already exists - so it is LOOKED UP by name rather
@@ -3360,6 +3361,11 @@ hd_idst_child:
     mov di, hd_ifind
     call hd_iname_same
     jnc .next
+    cmp word [hd_ifind+14], OSAPI_FT_DIR    ; a FILE by that name answered
+    je .dir                     ; MKDIR's FERR_EXIST too, and its cluster is
+    stc                         ; its data: the walk stops rather than write
+    jmp short .out              ; entries into it
+.dir:
     mov ax, [hd_ifind+16]
     clc
 .out:
@@ -3629,9 +3635,13 @@ hd_inst_mount:
 ; has to be arranged is that the kernel's own allocator puts it in ONE run,
 ; and it does that with nothing but the file API:
 ;
-;   1. the old KERNEL.SYS is cut to nothing, so its clusters are free;
-;   2. hd_kplan reads the FAT and finds the FIRST run of free clusters long
-;      enough for the new one, and counts the free clusters below that run;
+;   1. hd_kplan reads the FAT and finds the FIRST run of free clusters long
+;      enough for the new one, and counts the free clusters below that run -
+;      the old kernel's among them when it is one run, because step 2 frees
+;      exactly those. A refusal here has written nothing;
+;   2. the old KERNEL.SYS is cut to nothing, so its clusters are free (and a
+;      kernel that was in pieces is planned for again, from the FAT as it is
+;      now);
 ;   3. a PAD file of exactly that many clusters is written after a fresh mount
 ;      - disk_mount resets the allocator's rover to cluster 2, and dskw_alloc
 ;      is next-fit from the rover, so the pad takes precisely the holes below
@@ -3642,8 +3652,8 @@ hd_inst_mount:
 ;   5. the pad is deleted, the kernel's chain is CHECKED against the plan, and
 ;      the VBR is written at once with the run's offset: that is the commit.
 ;
-; The window in which the partition does not boot is steps 3-5, and it is
-; seconds: the old kernel's clusters were freed in step 1, and the pad or the
+; The window in which the partition does not boot is steps 2-5, and it is
+; seconds: the old kernel's clusters were freed in step 2, and the pad or the
 ; new kernel may be written over them before the VBR points somewhere new. The
 ; wipe path's window is the whole system phase.
 ; =============================================================================
@@ -3723,18 +3733,35 @@ hd_inst_keep:
     call hd_kvol                ; the kernel's and cannot be remounted by us -
     jc .drv                     ; nor needs to be: its files are replaced
     mov [hd_idrv], al           ; through the same API as anybody's
-    jmp short .mounted
+    mov byte [hd_kgeo], 0       ; ...and at the BPB's own geometry, which is
+    jmp short .mounted          ; the one the running kernel reads it by
 .drv:
     call hd_inst_mount          ; ...otherwise ours, as after a format
-    jc .out
+    jc .nomnt
+    mov byte [hd_kgeo], 1       ; ...which HDD.DRV writes at the ROW's
 .mounted:
     call hd_ilvl_root
+    call hd_idst                ; the OLD kernel first: where it starts and
+    jc .io                      ; how long it is, so that the plan can count
+    mov word [hd_koc], 0        ; its clusters as the free ones the cut will
+    mov si, hd_s_kernel         ; make them - nothing is written until the
+    call hd_istat               ; plan has found room
+    jc .noold
+    mov ax, [hd_iclus]
+    mov [hd_koc], ax
+    mov ax, [hd_isize]
+    mov [hd_kosz], ax
+    mov ax, [hd_isize+2]
+    mov [hd_kosz+2], ax
+.noold:
     call hd_isrc                ; how big is the NEW one?
     jc .io
     mov si, hd_s_kernel
     call hd_istat
     jc .io
-    call hd_idst                ; 1. the old one lets go of its clusters. A
+    call hd_kplan               ; 1. where it goes, and what is below it
+    jc .out
+    call hd_idst                ; 2. the old one lets go of its clusters. A
     jc .io                      ; zero-length replace through the _SYS verb,
     push es                     ; because it is hidden + system and nothing
     xor bx, bx                  ; else may touch it (SPEC.md 19.6)
@@ -3744,15 +3771,21 @@ hd_inst_keep:
     call OSAPI_FILE_WRITE_SYS
     pop es
     jc .io
-    call hd_kplan               ; 2. where it goes, and what is below it
+    cmp word [hd_kon], 0        ; the plan counted the old kernel free only
+    jne .planned                ; when it was ONE run (hd_kold): otherwise
+    cmp word [hd_koc], 2        ; the cut freed clusters it counted as used,
+    jb .planned                 ; and the pad is sized from the FAT as it is
+    mov word [hd_koc], 0        ; now - which can only have more room
+    call hd_kplan
     jc .out
+.planned:
     cmp word [hd_kf], 0
     je .kern
     call hd_isrc                ; 3. the pad, after a FRESH mount: the rover
     call hd_idst                ; is back at cluster 2
     jc .io
     call hd_kpad
-    jc .io
+    jc .padio
 .kern:
     mov si, hd_s_kernel         ; 4. the kernel
     call hd_icopy_one
@@ -3762,7 +3795,13 @@ hd_inst_keep:
     call OSAPI_FILE_DELETE
     call hd_kverify             ; ...the chain is what was planned...
     jc .out
+    mov al, [hd_ivdrv]          ; hd_iksecs banks the volume it stands on,
+    push ax                     ; which is the DESTINATION here: the user's
+    push word [hd_ivcwd]        ; own goes back round it
     call hd_inst_vbr            ; ...and THE COMMIT
+    pop word [hd_ivcwd]
+    pop ax
+    mov [hd_ivdrv], al
     jc .nboot
     clc
     jmp short .out
@@ -3770,6 +3809,15 @@ hd_inst_keep:
     mov word [hd_imsg], hd_s_inboot
     stc
     jmp short .out
+.nomnt:
+    mov word [hd_imsg], hd_s_ikbpb  ; nothing was formatted, whatever
+    stc                             ; hd_inst_mount's own caption says
+    jmp short .out
+.padio:
+    call hd_idst                ; a pad that stopped part-way is not left in
+    jc .io                      ; the user's root
+    mov si, hd_s_kpad
+    call OSAPI_FILE_DELETE
 .io:
     mov word [hd_imsg], hd_s_ierr
     stc
@@ -3814,6 +3862,15 @@ hd_kplan:
     jc .io
     cmp word [hd_sec0+HF_B_BPS], 512
     jne .bad
+    cmp byte [hd_kgeo], 0       ; HDD.DRV writes the kernel at the ROW's
+    je .geo                     ; geometry and boothd reads it back at the
+    mov ax, [hd_sec0+HF_B_SPT]  ; BPB's, which a kept volume keeps: two
+    cmp ax, [di+HDD_SPT]        ; geometries would put it at two places
+    jne .geom                   ; (SPEC.md 52.10.15)
+    mov ax, [hd_sec0+HF_B_HEADS]
+    cmp ax, [di+HDD_HEADS]
+    jne .geom
+.geo:
     mov al, [hd_sec0+HF_B_SPC]
     xor ah, ah
     or ax, ax
@@ -3862,22 +3919,13 @@ hd_kplan:
 
     mov ax, [hd_isize]          ; clusters the kernel needs: its sectors,
     mov dx, [hd_isize+2]        ; then clusters, both rounded up
-    add ax, 511
-    adc dx, 0
-    mov cx, 9
-.sh:
-    shr dx, 1
-    rcr ax, 1
-    loop .sh
-    add ax, [hd_kspc]
-    dec ax
-    xor dx, dx
-    div word [hd_kspc]
-    or ax, ax
-    jz .bad
+    call hd_kclus
+    jc .bad
     mov [hd_kn], ax
 
     mov word [hd_kchunk], 0xFFFF
+    call hd_kold                ; [hd_kon]: the old kernel, if it is one run
+    jc .io
     xor si, si                  ; SI = free clusters before the run
     xor di, di                  ; DI = the run's length so far
     mov cx, 2                   ; CX = the cluster
@@ -3888,7 +3936,12 @@ hd_kplan:
     call hd_kfat_get
     jc .io
     or ax, ax
-    jnz .used
+    jz .free
+    mov ax, cx                  ; the OLD kernel's run is free too: the cut
+    sub ax, [hd_koc]            ; frees exactly it, and nothing is cut until
+    cmp ax, [hd_kon]            ; this has found room
+    jae .used
+.free:
     or di, di
     jnz .grow
     mov [hd_kr], cx             ; a run starts here
@@ -3920,6 +3973,10 @@ hd_kplan:
     mov word [hd_imsg], hd_s_ikbpb
     stc
     jmp short .out
+.geom:
+    mov word [hd_imsg], hd_s_ikgeom
+    stc
+    jmp short .out
 .io:
     mov word [hd_imsg], hd_s_ierr
     stc
@@ -3927,6 +3984,102 @@ hd_kplan:
     pop es
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_kclus - the clusters a file of DX:AX bytes takes, rounded up (internal)
+; in:  DX:AX = its size; [hd_kspc] from hd_kplan
+; out: CF=0 and AX = the clusters, never 0; CF=1 = none, or past a word
+; clobbers: AX (the output), DX, flags
+; -----------------------------------------------------------------------------
+hd_kclus:
+    push cx
+    add ax, 511                 ; its sectors...
+    adc dx, 0
+    jc .no
+    mov cx, 9
+.sh:
+    shr dx, 1
+    rcr ax, 1
+    loop .sh
+    add ax, [hd_kspc]           ; ...then its clusters, both rounded up
+    adc dx, 0
+    sub ax, 1
+    sbb dx, 0
+    cmp dx, [hd_kspc]           ; the quotient must fit a word
+    jae .no
+    div word [hd_kspc]
+    or ax, ax
+    jz .no
+    clc
+    pop cx
+    ret
+.no:
+    stc
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_kold - may the plan count the OLD kernel's clusters as free? (internal)
+; in:  [hd_koc]/[hd_kosz] = its first cluster and size (a cluster under 2 =
+;      there is none); hd_kplan's [hd_kspc]/[hd_kmax]/[hd_kf12]
+; out: CF=0 and [hd_kon] = its clusters when they are [hd_koc] onwards in ONE
+;      run that ends the chain, else 0; CF=1 = a FAT read failed
+; clobbers: flags
+;
+; Checked link by link, not trusted from the size: what frees them is the cut,
+; which frees the CHAIN, so a cluster counted free here has to be one the
+; chain really holds. A kernel in pieces counts as used, and hd_inst_keep
+; plans again once the cut has freed them.
+; -----------------------------------------------------------------------------
+hd_kold:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov word [hd_kon], 0
+    mov bx, [hd_koc]
+    cmp bx, 2
+    jb .ok
+    mov ax, [hd_kosz]
+    mov dx, [hd_kosz+2]
+    call hd_kclus
+    jc .ok
+    mov dx, ax                  ; DX = the run it would be
+    mov cx, ax
+    add ax, bx                  ; ...which has to end inside the volume
+    jc .ok
+    dec ax
+    cmp ax, [hd_kmax]
+    ja .ok
+.link:
+    mov ax, bx
+    call hd_kfat_get
+    jc .out
+    dec cx
+    jz .last
+    inc bx
+    cmp ax, bx
+    je .link
+    jmp short .ok               ; in pieces
+.last:
+    cmp byte [hd_kf12], 0
+    jne .eoc12
+    cmp ax, 0xFFF8
+    jb .ok
+    jmp short .run
+.eoc12:
+    cmp ax, 0x0FF8
+    jb .ok
+.run:
+    mov [hd_kon], dx
+.ok:
+    clc
+.out:
     pop dx
     pop cx
     pop bx
@@ -4498,6 +4651,7 @@ hd_s_phid:    db 'Hidden FAT', 0    ; a FAT type with the hide bit (10h) set
     HIMSG hd_s_ideep, 'Folders nested too deep to copy'
     HIMSG hd_s_ikroom, 'No room for the kernel in one piece'
     HIMSG hd_s_ikbpb, 'That volume is not one we can keep'
+    HIMSG hd_s_ikgeom, 'Formatted for another geometry'
     HIMSG hd_s_iksplit, 'The kernel did not land in one piece'
     HIMSG hd_s_iarmk, 'Keeps its files: Install again to confirm'
     HIMSG hd_s_ilbwipe, 'Boot from a floppy to erase it'
@@ -4584,6 +4738,11 @@ hd_kf12:      db 0              ; ...1 = FAT12
 hd_kn:        dw 0              ; ...clusters the new kernel needs
 hd_kr:        dw 0              ; ...the first cluster of the run it goes in
 hd_kf:        dw 0              ; ...free clusters below that run: the pad
+hd_koc:       dw 0              ; ...the OLD kernel's first cluster, 0 = none
+hd_kosz:      dd 0              ; ...its size
+hd_kon:       dw 0              ; ...its clusters when ONE run, else 0
+hd_kgeo:      db 0              ; 1 = HDD.DRV writes it: the BPB's geometry
+                                ; must be the row's (SPEC.md 52.10.15)
 hd_kchunk:    dw 0xFFFF         ; hd_kfat_get's cached 3-sector chunk
 hd_iname:     times 14 db 0
 hd_iname2:    times 14 db 0

@@ -77,7 +77,11 @@ HDV_SECS     equ 8              ; dw: its length, 0 = past 32MB (SPEC.md 18.7.5)
                                 ; with the donation itself (SPEC.md 22.6)
 HDV_VOLH     equ 10             ; db: OUR handle for it - the row's own index,
                                 ; which is what comes back in DSV_BLK's AH
-HDV_SIZE     equ 12             ; ...and the stride follows it down: hd_vol_row
+HDV_LEN      equ 12             ; dd: its WHOLE length, which hd_blk bounds
+                                ; every transfer by: past 32MB HDV_SECS says
+                                ; 'unknown' and rule 13 checks nothing, so
+                                ; this is the one fence (SPEC.md 18.7.5)
+HDV_SIZE     equ 16             ; ...and the stride follows it down: hd_vol_row
                                 ; reaches a row with `mul ah`, so this has
                                 ; never had to be a power of two
 
@@ -109,9 +113,9 @@ HPT_FAT16L   equ 0x0E           ; ...the LBA-addressed flavour of it, which is
 HP_MAXHI     equ 0x003F         ; the volume ceiling since SPEC.md 18.7.5 (it
                                 ; was 65,535 sectors while an LBA was a word),
                                 ; the
-HP_MAXLO     equ 0xFE50         ; largest FAT16 there is: 65,524 clusters of
+HP_MAXLO     equ 0xFED0         ; largest FAT16 there is: 65,524 clusters of
                                 ; 32KB plus the metadata is 4,194,081 sectors,
-                                ; and 4,194,000 (3FFE50h, 2,047.9MB) is that
+                                ; and 4,194,000 (3FFED0h, 2,047.9MB) is that
                                 ; with room for the root and a cylinder trim.
                                 ; hd_part_big asks it of an entry
 

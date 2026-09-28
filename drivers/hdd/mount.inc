@@ -123,7 +123,10 @@ hd_mount_one:
     mov [bx+HDV_BASE], ax
     mov ax, [si+HP_LBA+2]
     mov [bx+HDV_BASE+2], ax
+    mov ax, [si+HP_SECS+2]
+    mov [bx+HDV_LEN+2], ax      ; the whole length, for hd_blk's bound
     mov ax, [si+HP_SECS]
+    mov [bx+HDV_LEN], ax
     cmp word [si+HP_SECS+2], 0
     je .secs
     xor ax, ax                  ; past 32MB the length does not fit
