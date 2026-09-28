@@ -41738,7 +41738,7 @@ that describes the folder.
 Whichever wins is truncated to (cw−12)/8 chars
 through the same scratch-buffer idiom as the header ("Out of memory" is
 104px and a legal resize can leave cw = 94). In list view the name is
-truncated to the room left of the size column ((cw − 88)/8 chars); every
+truncated to the room left of the size column ((cw − 96)/8 chars, (cw − 124)/8 on kern_big per §22.7.1); every
 string the window draws is bounded by the live cw one way or another.
 
 **The row area** spans x 0..cw−16, y 22..list_bot−1 (a 2px gutter before
@@ -43948,7 +43948,7 @@ entries that are not in it) and to `[dsk_maxclus]` (or it counts past the end
 of the volume). Clamping to one and not the other is the bug that reads as a
 free-space figure which is merely plausible.
 
-#### 22.7.1 K past 10KB, M past 10MB — sizes in the unit a person reads
+#### 22.7.1 K past 10KB, M past 10MB, two decimals — sizes in the unit a person reads
 
 §22.7's two figures were KB in a word and the size column was **bytes**, which
 was the era's right answer on a floppy and stopped being one when a volume
@@ -43962,30 +43962,38 @@ size column, its status line, and the Standard File dialog's size column
 
 | the size | drawn as |
 |---|---|
-| under 10,240 bytes | the bytes, as before: `1234` |
-| 10KB to under 10MB | whole KB and a `K`: `113K` |
-| 10MB and up | whole MB and an `M`: `321M` |
+| under 10,240 bytes | the bytes, as before: `1234` (the columns only) |
+| 10KB to under 10MB | whole KB, two decimals and a `K`: `113.37K` |
+| 10MB and up | whole MB, two decimals and an `M`: `40.00M` |
 
-Both steps are at **ten** of the smaller unit, so a figure never shows fewer
-than two significant digits, and every one is **truncated**, which is what
-the status line already did. The status line's figures had only the K arm, so
-for them the table is K below 10MB and M from there.
+Both steps are at **ten** of the smaller unit, and the decimals are
+hundredths of the unit — `(remainder × 100) >> 10` — **truncated** like the
+whole part, so no figure ever claims more than is there. The status line
+never drops below `K` (`fm_szfig_k`, the second entry of `fm_szfig_x`): a
+free-space figure with no unit is a number to wonder about, so an empty
+folder reads `Size 0.00K`.
 
-**`FS_FREE` and `FS_USED` stay one word each**, and the unit rides in bit 15
-(`fm_kbenc`): clear is KB below 10,240, set is `8000h | MB`. That is the whole
-reason no per-window byte moved — 4GB of bytes is `0x8FFF`, so the encoding
-can never produce the `0xFFFF` not-known sentinel, and the "a hostile listing
-could sum past the sentinel" test `FS_USED` carried is unnecessary on this
-arm. `fm_kbfig` draws either half, `fm_szfig_x` takes a dword of bytes for the
-two columns.
+**`FS_FREE` and `FS_USED` are BYTES in a dword on this build**, their high
+halves `FS_FREEH`/`FS_USEDH` appended after the path block — two decimals of
+a K need what a KB word threw away, and a word of KB had already stopped
+holding the free figure past 64MB. It is 4 bytes a window, **16 of `.bss`**
+for the pool's four. The not-known sentinel moves to the high half: `0xFFFF`
+there is 4GB, which no FAT volume reaches, and draws `?` as before.
+
+**The column is up to nine cells** (`10239.99K`) where it was six, so on
+kern_big the list view's name budget is `(cw − 124)/8` rather than
+`(cw − 96)/8`: a name stops at cw−92, where the widest figure starts, and
+only a window under 220px of content loses a character of an 8.3 name to
+it. The Standard File dialog's fixed geometry already fits it — its name
+column ends at 124 and the figure is right-aligned at 196.
 
 **kern_big only** (and kern_emu with it). `kern_small` is on a diet (§39.27.4)
-and draws what it always did — bytes, and `K` on the status line: it mounts no
-volume past 32MB, so its KB figure fits the word it is in, and the display
-alone is not a case for spending there. It is `%ifdef OS88_BIGVOL`, the
-switch §18.7.5 already put on every site that differs, and `kern_small`
-assembles byte for byte the kernel it was. The cost on `kern_big` is **73
-bytes of `.cold`**, resident.
+and on XT-era rules — bytes in the column, whole `K` on the status line: it
+mounts no volume past 32MB, so its KB figure fits the word it is in, and the
+display alone is not a case for spending there. It is `%ifdef OS88_BIGVOL`,
+the switch §18.7.5 already put on every site that differs, and `kern_small`
+assembles byte for byte the kernel it was. The cost on `kern_big` is **96
+bytes of `.cold` and 16 of `.bss`**, both resident.
 
 ### 22.8 A write marks the folder; the focus spends the mark
 

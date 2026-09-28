@@ -161,7 +161,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
         rows, line = None, str(e).split("\n")[0]   # what a bad template looks
                                                 # like from out here: no
                                                 # window, no listing, no fault
-    ok = rows == [] and re.match(r"^Size 0K\s+Free \d+K$", line)
+    ok = rows == [] and re.match(r"^Size 0(\.00)?K\s+Free \d+(\.\d\d)?K$", line)
     check(ok, "...and the volume it wrote MOUNTS and reads empty",
           "the geometry is not pinned - what is asserted is that a BPB "
           "written out of the image parses at all, and that the first byte "

@@ -27,9 +27,9 @@ code was right. So this row makes the high word UNAVOIDABLE:
     through a Disk window, from a folder past 32MB.
 
   * and the Disk window on C:'s root is READ (SPEC.md 22.7.1): FILLER.BIN is
-    `40M` in the size column, USER.TXT `3700`, the status line `Size 40M`
-    and `Free <n>M` - n the host's own count of free clusters - and the
-    encoded FS_USED/FS_FREE words behind them are checked too. Broken on
+    `40.00M` in the size column, USER.TXT `3700`, the status line
+    `Size <n>M` and `Free <n>M` with two decimals, and the byte counts
+    behind them against the host's own FAT. Broken on
     purpose (the column back on fm_ultoa_x) it reads bytes and goes red.
 
 ASSERTED ON THE HOST, with instdeep's FAT reader: FILLER.BIN and USER.TXT
@@ -159,32 +159,52 @@ def check(vhd, fsha):
     return bad
 
 
+def fig(n, mink=False):
+    """kernel/files.inc's fm_szfig_x / fm_szfig_k, restated: bytes under
+    10KB (the columns only), else whole K or M and two TRUNCATED decimals."""
+    if n < 10240 and not mink:
+        return str(n)
+    kb, rem = n >> 10, n & 1023
+    unit = "K"
+    if kb >= 10240:
+        kb, rem, unit = kb >> 10, kb & 1023, "M"
+    return "%d.%02d%s" % (kb, rem * 100 >> 10, unit)
+
+
 def units(m, ui, vhd):
     """SPEC.md 22.7.1, on the one volume in the suite that needs M: the Disk
-    window's root lists FILLER.BIN as `40M` and USER.TXT as `3700`, and its
-    status line reads `Size 40M   Free <n>M` - with FS_USED/FS_FREE, the
-    encoded words, read out of the window's own block. Before 22.7.1 the
-    free figure was the low 16 bits of 328,000-odd KB."""
+    window's root lists FILLER.BIN as `40.00M` and USER.TXT as `3700`, and
+    its status line reads `Size <n>M   Free <n>M` - with FS_USED/FS_FREE
+    read out of the window's own block as the BYTES they are, the used figure
+    against the host's sum of the listed files and the free one against the
+    host's own count of free clusters. Before 22.7.1 the free figure was the
+    low 16 bits of 328,000-odd KB."""
     w = ui.open_drive("C")
     M.settle(m)
     base = ui._fsblk(w)
-    free_w, used_w = struct.unpack("<HH", m.read(base + 20, 4))
+    free_l, used_l = struct.unpack("<HH", m.read(base + 20, 4))
+    # the high halves sit after kern_big's path block: FS_PATH (24) + its
+    # PTH_SIZE (33) - kernel/files.inc's FS_FREEH/FS_USEDH
+    free_h, used_h = struct.unpack("<HH", m.read(base + 24 + 33, 4))
+    free_b, used_b = free_h << 16 | free_l, used_h << 16 | used_l
     v = ID.partition(vhd)
     n = (v.tot32 - v.data_lba) // v.spc + 2     # one past the last cluster
-    fc = sum(1 for c in range(2, n) if v.fat(c) == 0)
-    free_mb = fc * v.spc // 2048
+    host_free = sum(1 for c in range(2, n) if v.fat(c) == 0) * v.spc * 512
+    listed = sum(sz for nm, at, c, sz in v.entries(0)
+                 if not at & 0x16)             # not a folder, hidden, system
     bad = []
-    if used_w != 0x8000 | FILLER_MB:
-        bad.append("FS_USED is %04X, not 8000h|%d" % (used_w, FILLER_MB))
-    if not (free_w & 0x8000 and free_mb <= (free_w & 0x7FFF) <= free_mb + 1):
-        bad.append("FS_FREE is %04X against %dMB free on the host"
-                   % (free_w, free_mb))
+    if used_b != listed:
+        bad.append("FS_USED says %d bytes, the listed files are %d"
+                   % (used_b, listed))
+    if not 0 <= free_b - host_free < 1 << 20:
+        bad.append("FS_FREE says %d bytes, the host counts %d free"
+                   % (free_b, host_free))
     tab = IR.glyph_table(m)
 
     def reads(text, name=None):
         """A COLUMN figure is looked for above the status line, with its
-        file scrolled on screen first - `40M` is also inside `Size 40M`, and
-        the root lists four folders ahead of the files."""
+        file scrolled on screen first - the root lists four folders ahead of
+        the files."""
         h = w.h
         if name is not None:
             ui.scroll_to(ui.entry(name, w)[0], win=w)
@@ -195,16 +215,16 @@ def units(m, ui, vhd):
         ink = IR.render(text, tab)
         return any(IR.find(rows, w.x, w.y, w.w, h, k)
                    for k in (ink, [[1 - p for p in r] for r in ink]))
-    for text, name in (("40M", "FILLER.BIN"), ("3700", "USER.TXT"),
-                       ("Size 40M", None),
-                       ("Free %dM" % (free_w & 0x7FFF), None)):
+    want = [("40.00M", "FILLER.BIN"), ("3700", "USER.TXT"),
+            ("Size " + fig(used_b, True), None),
+            ("Free " + fig(free_b, True), None)]
+    for text, name in want:
         if not reads(text, name):
             bad.append("the Disk window does not read %r%s"
                        % (text, " beside " + name if name else ""))
-    print("  C:\\ reads FILLER.BIN 40M, USER.TXT 3700, Size 40M, Free %dM "
-          "(FS_USED %04X, FS_FREE %04X; host %dMB free)"
-          % (free_w & 0x7FFF, used_w, free_w, free_mb) if not bad else
-          "  units: %s" % bad)
+    print("  C:\\ reads %s (FS_USED %d, FS_FREE %d bytes; host %d free)"
+          % (", ".join(t for t, _ in want), used_b, free_b, host_free)
+          if not bad else "  units: %s" % bad)
     return bad
 
 
