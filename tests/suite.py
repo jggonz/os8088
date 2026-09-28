@@ -2438,6 +2438,57 @@ SOAK = [
         "it. In soak and not fast for docs/WRITING-TESTS.md 2.1's reason: it "
         "is about one package",
         needs=("nasm",)),
+    Row("gorillas", "soak", py("tests/gorillas.py"), 100.0,
+        "Native Gorillas (SPEC.md 99), measured 97.3s on three adapters: "
+        "keyboard angle/velocity editing, persistent terrain damage, pause, "
+        "five self-hit rounds to a total-points match, actual fullscreen "
+        "throws, repeated mode restoration and close. Checks VGA's original "
+        "palette, CGA's blue/green/red/yellow and readable monochrome HUD. "
+        "Alt+Enter must release Alt before the BIOS mode switch. The input assertion caught a "
+        "layout call destroying AX before key dispatch; no scores or game "
+        "states are injected by the test. Saves screenshots of each adapter",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("gorillasreactions", "soak", py("tests/gorillasreactions.py"), 300.0,
+        "Gorillas feature parity (SPEC.md 99.0): reference trajectory samples, "
+        "numeric bounds, silhouette collision, throw/banana/blast animations, "
+        "sun occlusion, all victory poses, automatic rounds, final scores and "
+        "ties. Checks native pixels and repaint consistency on three adapters",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("gorillascity", "soak", py("tests/gorillascity.py"), 100.0,
+        "Gorillas skyline redraw (SPEC.md 99.4): seed-stable city construction "
+        "under 400 ms; complete VGA paints under 1800 ms and mono/CGA under "
+        "600 ms at 4.77 MHz. Independent native VRAM decoding checks all ink "
+        "pairs, both horizontal scales, partial terrain updates and exact "
+        "window clipping. A negative pixel control must fail. VGA planes are "
+        "read by guest MOVSB, not the debugger's plane-zero-only peek",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("gorillasfront", "soak", py("tests/gorillasfront.py"), 90.0,
+        "Gorillas frontend (SPEC.md 99): setup validation, player names, "
+        "gravity, music, dance, solo play and fullscreen transitions on all "
+        "three adapters; 88s measured",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("gorillasmenu", "soak", py("tests/gorillasmenu.py"), 160.0,
+        "Gorillas menu and animation budgets (SPEC.md 99.3): character edits "
+        "under 20 ms, transitions under 150 ms and complete animation frames "
+        "under 75 ms. Checks all marquee phases/poses against scene pixels "
+        "and reads all VGA planes; the oracle restores the borrowed intro "
+        "cache before measuring the next frame",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("gorillasinput", "soak",
+        py("tests/gorillasinput.py", "--check-repaint"), 300.0,
+        "Gorillas XT input (SPEC.md 99.2): three-adapter input/repaint checks "
+        "with actual guest reads of all VGA planes and buffered keys. Real keyboard "
+        "handlers must stay under 20 ms; six buffered fullscreen aiming keys "
+        "must complete within one BIOS tick. Compares the scene to OS glyphs "
+        "and incremental VRAM to a full repaint after each edit, including "
+        "all four VGA planes, numeric bounds, erased digits and paused edits",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
     Row("dotdel", "soak", py("tests/dotdel.py"), 150.0,
         "DOT DELIRIUM on the glass, on all three adapters (SPEC.md 93): the "
         "title screen's four compositors, the blink, Enter starting a game "
