@@ -3,9 +3,11 @@
 A native 8086 adaptation of the supplied Microsoft QBasic `gorilla.bas`
 (1990). One player faces the computer, or two people share the keyboard, throwing
 exploding bananas across a random city skyline. Wind bends the trajectory,
-buildings retain craters, and a banana can hit its thrower. Each skyline has ten
-buildings with varied widths. Gorillas choose among the four rooftops at their
-respective ends, always leaving at least three buildings between them.
+buildings retain craters, and a banana can hit its thrower. Skylines contain 8–12
+buildings with varied widths, random facade colors and rising, falling, valley
+or hill profiles. Gorillas occupy the second or third rooftop from either end.
+Wind normally ranges from −4 to +5; one skyline in three gets a stronger gust,
+extending the range to −14 through +15.
 
 Build with `make gorillas`. Open `GAMES/GORILLAS.O88` on the applications
 disk, or `GORILLAS.O88` at the root of the games disk. `make build/games360.img` builds the 360 KB games disk.
@@ -23,7 +25,7 @@ press any key to skip directly to setup:
 3. Choose **total points**, from 1 to 99 (default 3). As in the BASIC source,
    this counts points scored by both players together; the higher score at
    the end wins. An even total can produce a tie.
-4. Enter **gravity**, from 0.1 to 99.9 m/s², with at most one decimal place
+4. Enter **gravity**, from 0.001 to 9999.999 m/s², with up to three decimal places
    (default 9.8). Smaller values give longer, higher arcs.
 5. Press **V** to view the musical gorilla dance, or **P / Enter** to play.
    Any key skips the dance; it also ends automatically.
@@ -33,16 +35,21 @@ where the next character will appear. Alt+Enter and Escape work
 throughout setup. The Game menu can restart setup or change fullscreen mode.
 
 - Type an **angle**, press **Enter**, type a **velocity**, then press
-  **Enter** to throw. Angles run from 0 to 180 degrees, measured from the
-  horizontal toward the opponent; velocity runs from 1 to 150.
+  **Enter** to throw. Angles run from 0 to 360 degrees, measured from the
+  horizontal toward the opponent. Velocity runs from 0 to 360. Both fields
+  accept whole numbers only and display without zero padding.
+  Zero and one cause a self-hit. Angles above 180 aim downward.
 - **Tab** switches fields; the first digit replaces the previous value.
   **Backspace** deletes a digit; **arrow keys** adjust the selected value.
-- The HUD shows only the active player’s name at the top left, with **Angle**
-  and **Velocity** on separate rows below it. Wind sits at the top right;
-  positive wind blows right. The name updates each turn. Gravity is fixed
-  by setup for the entire match.
-- **P** pauses/resumes. **N** returns to match setup. **Enter** continues after
-  a hit or starts another match after a win.
+- The HUD shows **only the active player's name and both running scores**. **Angle** and **Velocity** appear below. Signed wind
+  appears beside the angle; the arrow below the city points with the wind
+  and grows with its strength. The arrow remains visible during throws.
+  Gravity is fixed by setup for the entire match.
+- **P** pauses/resumes. **N** returns to match setup. After a hit, the next
+  skyline starts automatically following the celebration and a short pause;
+  **Enter** can skip that pause. Throwers alternate across skylines.
+- A sparkling **final scorecard** lists both scores and declares the overall
+  winner or tie. Press any key to set up another match.
 - **F** or **Alt+Enter** enters/leaves fullscreen; **Escape** returns to
   the window. The Game menu also offers fullscreen, pause and new match.
 - The system **About** card supplies credits. Dismiss it with a click or
@@ -72,7 +79,10 @@ All game text hides during a throw so the banana remains visible through
 the top of the sky, and returns when the shot ends. Pausing a shot keeps
 the text hidden; **P** or **Enter** still resumes it.
 
-A banana crossing the sun opens its mouth in shock until the throw ends.
+A raised arm accompanies each release. The banana rotates through four
+orientations, disappears behind the sun and opens its mouth in shock until the
+throw ends. Terrain impacts expand and contract into permanent craters; direct
+hits produce a larger, alternating-color blast that removes the gorilla.
 After every point, the scoring gorilla performs the original four left/right
 arm pairs, each accompanied by `VictoryDance`'s seven-note tune and short rest.
 This includes self-hits and the final point. **Enter** continues once the dance
@@ -90,12 +100,18 @@ Menu exposure and mode changes clear the background and draw font bands
 directly. The intro uses precomputed light masks and native sprite pixels,
 including VGA planes, instead of plotting and converting each pixel every
 frame. Animation is a separate layer from the text scene. Scaled masks and
-VGA planes are cached once per surface (15 KB per instance); side strips
+VGA planes are cached once per surface (6,400 bytes per instance); side strips
 repaint only rows touched by old or new lights. Fullscreen setup also drains
 buffered typing without a tick wait per character.
 
 The original game's floating-point simulation is adapted to swept integer
-fixed-point physics, including a fractional gravity accumulator. The solo
+fixed-point physics using the reference trajectory equations scaled from
+640×350 to the native scene. Midpoint velocities retain the half-acceleration
+term; remainder accumulators preserve fractional acceleration from gravity and wind. Adaptive
+substeps move at most one logical pixel along either axis, and gorilla
+collisions test the drawn silhouette. Angles use Q14 sine values.
+The logical scene, integer angles and velocity, bounded decimal gravity and BIOS-tick
+animation timing remain native adaptations rather than bit-exact BASIC emulation. The solo
 opponent predicts candidate trajectories using the same wind and gravity,
 then adds a random velocity error of up to eight points in either direction
 before throwing. This makes it more forgiving; buildings can also intercept
@@ -142,7 +158,7 @@ the original scene renderer on each adapter. It includes windowed and
 fullscreen modes, with a 150 ms menu-transition budget and a 75 ms animation
 frame budget at 4.77 MHz.
 
-Measured setup transition from player count to the first name, and the worst
+Historical measurements before the feature-parity update: setup transition from player count to the first name, and the worst
 of five complete marquee/gorilla frames (milliseconds, emulated XT):
 
 | Adapter / mode | Setup before | Setup after | Animation frame |
@@ -154,7 +170,7 @@ of five complete marquee/gorilla frames (milliseconds, emulated XT):
 | Hercules window | 3141.71 | 73.90 | 35.20 |
 | Hercules fullscreen | 3136.17 | 71.40 | 32.65 |
 
-Measured initial angle replacement (`45` → `9`), milliseconds per handler:
+Historical measurements before the feature-parity update: initial angle replacement (`45` → `9`), milliseconds per handler:
 
 | Adapter | Window before | Window after | Fullscreen before | Fullscreen after |
 |---|---:|---:|---:|---:|
@@ -194,6 +210,13 @@ variable widths, computer aiming error, reproducible cities across adapters,
 every ink pair, scaling, partial terrain updates and clipping. VGA checks read
 all four planes with guest memory copies; debugger peeks alone return only plane zero.
 
-The variable skyline and softer computer fit within the existing 60 KB instance
+The expanded gameplay and final scorecard fit within the existing 60 KB instance
 limit. Rendering uses a 5,376-byte scratch buffer, with up to 32 rows for strips
 no wider than 56 pixels and seven rows for wider updates.
+
+The feature-parity revision is recorded in
+[the implementation plan](../../docs/plans/GORILLAS-PARITY-PLAN.md), including
+current guest measurements. The package uses 24,774 image bytes and 29,545
+BSS bytes (54,319 total), below the unchanged 60 KB instance ceiling. The
+reactions gate now also checks final winners/ties, numeric limits, silhouette
+collision, blast repaint bounds and reference-equation trajectory samples.

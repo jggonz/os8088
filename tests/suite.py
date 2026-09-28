@@ -2409,12 +2409,19 @@ SOAK = [
     Row("gorillas", "soak", py("tests/gorillas.py"), 100.0,
         "Native Gorillas (SPEC.md 98), measured 97.3s on three adapters: "
         "keyboard angle/velocity editing, persistent terrain damage, pause, "
-        "five self-hit rounds to a first-to-three match, actual fullscreen "
+        "five self-hit rounds to a total-points match, actual fullscreen "
         "throws, repeated mode restoration and close. Checks VGA's original "
         "palette, CGA's blue/green/red/yellow and readable monochrome HUD. "
         "Alt+Enter must release Alt before the BIOS mode switch. The input assertion caught a "
         "layout call destroying AX before key dispatch; no scores or game "
         "states are injected by the test. Saves screenshots of each adapter",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("gorillasreactions", "soak", py("tests/gorillasreactions.py"), 300.0,
+        "Gorillas feature parity (SPEC.md 98.0): reference trajectory samples, "
+        "numeric bounds, silhouette collision, throw/banana/blast animations, "
+        "sun occlusion, all victory poses, automatic rounds, final scores and "
+        "ties. Checks native pixels and repaint consistency on three adapters",
         needs=("marty", "nasm"), serial=True,
         wants=("build/gorillas.o88", "build/os8088-360.img")),
     Row("gorillascity", "soak", py("tests/gorillascity.py"), 100.0,

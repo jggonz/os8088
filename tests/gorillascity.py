@@ -111,36 +111,47 @@ def clipped(m, p, code, tag):
 
 
 def check_city(p):
-    starts, widths, roofs = (p.data(n, 10) for n in ('lots', 'widths', 'roofs'))
+    starts, widths, roofs = (p.data(n, p.w('buildings')) for n in ('lots', 'widths', 'roofs'))
     assert starts[0] == 0 and sum(widths) == 256
-    assert all(20 <= w <= 32 for w in widths), widths
+    assert all(18 <= w <= 36 for w in widths), widths
     assert len(set(widths)) > 1, 'uniform building widths'
-    assert list(starts[1:]) == [sum(widths[:i]) for i in range(1, 10)]
+    assert list(starts[1:]) == [sum(widths[:i]) for i in range(1, len(widths))]
     xs, ys = (struct.unpack('<2H', p.data(n, 4)) for n in ('gx', 'gy'))
     lots = [next(i for i, (s, w) in enumerate(zip(starts, widths))
                  if s < x and x+15 < s+w-1) for x in xs]
-    assert lots[0] < 4 and lots[1] >= 6, lots
-    assert lots[1] - lots[0] - 1 >= 3, ('too few buildings between players', lots)
+    assert lots[0] in (1, 2) and lots[1] in (len(widths)-2, len(widths)-3), lots
+    assert lots[1] - lots[0] - 1 >= 2, ('too few buildings between players', lots)
     assert all(y+20 == roofs[i] for y, i in zip(ys, lots)), 'gorilla off roof'
     scene = p.data('scene', 16384)
     def ink(x, y):
         return (scene[y*128+x//2] >> (0 if x & 1 else 4)) & 15
     for s, w, roof in zip(starts, widths, roofs):
-        assert 63 <= roof <= 94
+        assert 48 <= roof <= 103
         assert all(ink(x, roof) == 12 for x in range(s+1, s+w-1)), 'broken roof'
         assert all(ink(x, y) == 0 for x in (s, s+w-1)
-                   for y in range(63, 128)), 'windows spill into gutter'
+                   for y in range(48, 116)), 'windows spill into gutter'
     return lots
 
 
 def check_variety(m, p, code):
     positions = [set(), set()]
+    counts, colors, profiles, winds, pairs = set(), set(), set(), set(), set()
     for seed in range(32):
         m.write(p.base + p.offsets['gr_seed'], struct.pack('<H', seed))
         call(m, code, 'gr_city')
-        for seen, lot in zip(positions, check_city(p)):
+        counts.add(p.w("buildings"))
+        colors.add(p.data("colors", p.w("buildings")))
+        profiles.add(p.b("profile"))
+        winds.add(struct.unpack("<h", p.data("wind", 2))[0])
+        lots = check_city(p)
+        pairs.add((lots[0], p.w("buildings")-lots[1]))
+        for seen, lot in zip(positions, lots):
             seen.add(lot)
-    assert positions == [set(range(4)), set(range(6, 10))], positions
+    assert positions[0] == {1, 2}, positions
+    assert len(pairs) == 4, pairs
+    assert counts == set(range(8, 13)), counts
+    assert len(colors) > 20 and profiles == set(range(6))
+    assert min(winds) < -10 and max(winds) > 10, winds
     # A new aiming pass follows the actual human, including positions far
     # from the old hard-coded x=48 target. Release errors vary both ways and
     # remain legal even when the best candidate is at a velocity limit.
@@ -148,14 +159,14 @@ def check_variety(m, p, code):
     m.write(p.base + p.offsets['gr_turn'], b'\x01')
     call(m, code, 'gr_aitick')
     assert p.w('aitarget') == (p.w('gx')+8)*64
-    for best in (1, 70, 149):
+    for best in (1, 70, 359):
         powers = set()
         for seed in range(32):
             m.write(p.base + p.offsets['gr_seed'], struct.pack('<H', seed))
             m.write(p.base + p.offsets['gr_aibest'], struct.pack('<H', best))
             call(m, code, 'gr_aitick.fire')
             powers.add(p.w('power'))
-        assert all(1 <= power <= 150 and abs(power-best) <= 8 for power in powers)
+        assert all(1 <= power <= 360 and abs(power-best) <= 8 for power in powers)
         assert len(powers) >= 8, ('computer release lacks variety', powers)
         if best == 70:
             assert min(powers) < best < max(powers)
@@ -222,6 +233,8 @@ def main():
                     m.write(p.base + off['gr_scene'], scene[:1])
                     # Exercise all 256 packed ink pairs, both scales, without
                     # assuming the skyline happens to contain every palette entry.
+                    # Flight's full-scene path permits pixels in the HUD rows.
+                    m.write(p.base + off['gr_state'], b'\x01')
                     m.write(p.base + off['gr_scene'], bytes(range(256))*64)
                     call(m, code, 'gr_fullpaint')
                     check_pixels(m, p, tag)
@@ -242,6 +255,7 @@ def main():
                     if mode == 'window':
                         clipped(m, p, code, tag)
                     m.write(p.base + off['gr_scene'], scene)
+                    m.write(p.base + off['gr_state'], b'\x00')
                     call(m, code, 'gr_fullpaint')
                     m.bp_exec()
                     m.run()

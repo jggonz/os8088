@@ -133,13 +133,15 @@ def capture(m, p, path):
             assert not any(r > 200 and g < 120 and b > 200 for r, g, b in colors), \
                 'CGA still uses the old magenta palette'
         else:
-            for name, predicate in (
-                ('gray building', lambda r,g,b: 130 < r < 200 and r == g == b),
-                ('red building', lambda r,g,b: r > 120 and g < 20 and b < 20),
-                ('cyan building', lambda r,g,b: r < 20 and g > 120 and b > 120),
-                ('yellow windows', lambda r,g,b: r > 200 and g > 200 and b < 120),
+            present = {ink for b in p.data("scene", 16384) for ink in (b >> 4, b & 15)}
+            for ink, name, predicate in (
+                (5, 'gray building', lambda r,g,b: 130 < r < 200 and r == g == b),
+                (6, 'red building', lambda r,g,b: r > 120 and g < 20 and b < 20),
+                (7, 'cyan building', lambda r,g,b: r < 20 and g > 120 and b > 120),
+                (14, 'yellow windows', lambda r,g,b: r > 200 and g > 200 and b < 120),
             ):
-                assert any(predicate(*rgb) for rgb in colors), (name, colors)
+                if ink in present:
+                    assert any(predicate(*rgb) for rgb in colors), (name, colors)
             if p.b('vga'):
                 assert any(r > 200 and 120 < g < 210 and 25 < b < 110
                            for r,g,b in colors), ('original orange is missing', colors)
@@ -187,9 +189,9 @@ def arm(tag, off, disk, out):
         key(m, 'Digit1')                 # 1501 rejected
         assert p.w('power') == 150
         key(m, 'KeyG')
-        assert p.w('grav10') == 98
+        assert (p.w('gwhole')*10 + p.w('gfrac')//100) == 98
         new_match(m)
-        assert p.w('grav10') == 98 and p.b('turn') == 0
+        assert (p.w('gwhole')*10 + p.w('gfrac')//100) == 98 and p.b('turn') == 0
 
         # Near-horizontal throw into terrain: persistent hole, turn changes.
         key(m, 'Digit0'); key(m, 'Enter')
@@ -221,18 +223,20 @@ def arm(tag, off, disk, out):
         for round_no in range(5):
             thrower = p.b('turn')
             scores = list(p.data('scores', 2))
-            key(m, 'Enter'); key(m, 'Digit1'); key(m, 'Enter')
+            key(m, 'Enter'); key(m, 'Digit' + str(round_no % 2)); key(m, 'Enter')
             wait(m, lambda: p.b('state') in (2, 3), 'self-hit and score')
             scores[thrower ^ 1] += 1
             assert list(p.data('scores', 2)) == scores
             assert p.b('winner') == thrower ^ 1
             assert p.b('state') == (3 if sum(scores) == 5 else 2)
-            wait(m, lambda: p.b('dancing') == 0, 'scoring gorilla finishes musical dance')
+            wait(m, lambda: p.b('roundwait') != 0, 'scoring gorilla finishes musical dance')
             if round_no < 4:
-                key(m, 'Enter')
-                assert p.b('state') == 0
-        ui.settle()
-        capture(m, p, out / (tag + '-match.png'))
+                wait(m, lambda: p.b('state') == 0, 'automatic next skyline')
+        wait(m, lambda: p.b('state') == 8, 'final scorecard')
+        M.ui_done(m)  # The sparkle border intentionally never becomes still.
+        # The scorecard has text and sparkles, not building palette colors.
+        from gorillasfront import screenshot
+        screenshot(m, p, out / (tag + '-match.png'))
         key(m, 'Enter')
         setup(m)
         assert p.data('scores', 2) == b'\0\0'
@@ -252,7 +256,9 @@ def arm(tag, off, disk, out):
             # Play inside the bracket too: its own loop must advance a shot.
             key(m, 'Enter'); key(m, 'Digit1'); key(m, 'Enter')
             wait(m, lambda: p.b('state') == 2, 'fullscreen hit')
-            wait(m, lambda: p.b('dancing') == 0, 'fullscreen victory dance')
+            # Freeze the hit animation before checking exact mode restoration.
+            key(m, 'KeyP')
+            assert p.b('paused')
             M.pace(m, .3)
             capture(m, p, out / (tag + '-full.png'))
             scene = p.data('scene', 16384)
@@ -264,7 +270,9 @@ def arm(tag, off, disk, out):
             ui.settle()
             assert p.b('cga') == 0
             assert p.data('scene', 16384) == scene
-            key(m, 'Enter')
+            key(m, 'KeyP')
+            wait(m, lambda: p.b('state') == 0, 'automatic round after fullscreen hit')
+            assert p.b('field') == 0
         capture(m, p, out / (tag + '-restored.png'))
         ui.close(ui.window('Gorillas'))
         print('PASS', tag, 'input, terrain, pause, five rounds, fullscreen/restore, close', flush=True)

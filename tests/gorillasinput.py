@@ -40,10 +40,15 @@ def check_hud(m, p, code):
         expected = bytearray(24*128)
         if p.b('saved'):
             x, y = p.w('px') >> 6, p.w('by')
-            tip = x + 2 if p.w('age') & 2 else x
-            for px, py in ((x, y), (x+1, y), (x+1, y+1), (tip, y+2)):
-                if py < 24:
-                    expected[py*128 + px//2] |= 1 << (0 if px & 1 else 4)
+            rows = ['0000000', '0011000', '0110000', '0110000',
+                    '0110000', '0011000', '0001100']
+            for _ in range(p.w('age') & 3):
+                rows = [''.join(row[c] for row in rows[::-1]) for c in range(7)]
+            for dy, row in enumerate(rows):
+                for dx, bit in enumerate(row):
+                    px, py = x+dx, y+dy
+                    if bit == '1' and py < 24:
+                        expected[py*128 + px//2] |= 14 << (0 if px & 1 else 4)
         assert p.data('scene', len(expected)) == expected, \
             'flight sky contains text or an incorrect banana'
         return
@@ -53,8 +58,11 @@ def check_hud(m, p, code):
     prompt = ('gr_pausemsg' if p.b('paused') else
               {0: 'gr_prompt', 2: 'gr_roundmsg', 3: 'gr_matchmsg'}[p.b('state')])
     wind = struct.unpack('<h', p.data('wind', 2))[0]
-    active = p.data('name2' if p.b('turn') else 'name1', 11).split(b'\0')[0]
-    header = active.ljust(23) + ('Wind %+04d' % wind).encode()
+    names = [p.data(n, 11).split(b'\0')[0] for n in ('name1', 'name2')]
+    scores = p.data('scores', 2)
+    header = bytearray(b' '*15 + b'Score 000 - 000  ')
+    header[1:11] = names[p.b('turn')].ljust(10)
+    header[21:24], header[27:30] = [('%03d' % n).encode() for n in scores]
     assert m.read(p.base + code['gr_status'], 33) == header + b'\0'
     velocity = 'gr_velocity' if p.b('state') == 0 and not p.b('paused') else None
     for row, name in enumerate(('gr_status', prompt, velocity)):
@@ -62,7 +70,10 @@ def check_hud(m, p, code):
         if name in ('gr_prompt', 'gr_velocity'):
             selected = p.b('field') == row - 1
             label, value = ('Angle', p.w('angle')) if row == 1 else ('Velocity', p.w('power'))
-            assert line == (('>' if selected else ' ') + '%s: %03d' % (label, value)).encode()
+            text = ('>' if selected else ' ') + '%s: %-7d' % (label, value)
+            if row == 1:
+                text = text.ljust(23) + 'Wind %+04d' % wind
+            assert line == text.encode(), (line, text)
         ink = 15 if row == 0 else 9
         for col, ch in enumerate(line):
             for y, bits in enumerate(font[(ch-first)*8:(ch-first+1)*8]):
@@ -201,7 +212,7 @@ def flight_hud(m, p, code, tag, repaint):
     measure(m, p, code, 'KeyP', tag, repaint)
     assert p.b('paused') == 1
     measure(m, p, code, 'KeyP', tag, repaint)
-    G.wait(m, lambda: p.b('state') != 1, 'shot ends and text returns')
+    G.wait(m, lambda: p.b('state') != 1 and not p.b('blast'), 'shot and explosion end; text returns')
     G.M.pace(m, .3)
     m.pause()
     check_hud(m, p, code)
@@ -248,12 +259,10 @@ def main():
     started = time.monotonic()
     off, code, report = G.offsets(), code_offsets(), {}
     keys = ('Digit9', 'Digit0', 'Digit9', 'Backspace', 'Enter',
-            'Digit1', 'Digit5', 'Digit0', 'ArrowDown', 'ArrowUp',
-            'Tab', 'KeyG', 'KeyP', 'KeyP',
-            # Hidden edits must survive resume; zero velocity cannot launch.
-            'KeyP', 'Digit1', 'Backspace', 'Tab', 'Digit0', 'Enter',
-            'Enter', 'Backspace', 'ArrowDown', 'ArrowUp', 'Tab',
-            'Digit1', 'Digit8', 'Digit0', 'Digit1', 'ArrowUp')
+            'Digit1', 'Digit5', 'Digit0', 'Period', 'ArrowDown', 'ArrowUp',
+            'Tab', 'Period', 'Digit1', 'Digit2', 'Digit5', 'Backspace',
+            'Tab', 'KeyP', 'Digit1', 'KeyP', 'Tab',
+            'Digit3', 'Digit6', 'Digit0', 'Digit1', 'ArrowUp')
     with tempfile.TemporaryDirectory() as td:
         disk = Path(td) / 'gorillas.img'
         subprocess.run(['python3', 'tools/os88disk.py', '-o', str(disk),
@@ -278,9 +287,9 @@ def main():
                     values = [measure(m, p, code, name, tag, args.check_repaint)
                               for name in keys]
                     assert p.data('scene', 16384)[24*128:] == terrain
-                    assert p.w('angle') == 180 and p.w('power') == 1
+                    assert p.w('angle') == 360 and p.w('power') == 1
                     assert p.b('state') == 0 and p.b('paused') == 0
-                    assert p.b('field') == 0 and p.w('grav10') == 98
+                    assert p.b('field') == 0 and (p.w('gwhole')*10 + p.w('gfrac')//100) == 98
                     label = tag + '-' + mode
                     report[label] = list(zip(keys, values))
                     print(label, ' '.join('%s=%.2fms' % (k, c/G.M.GUEST_HZ*1000)

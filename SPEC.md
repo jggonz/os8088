@@ -148742,19 +148742,20 @@ disks. The kernel is unchanged.
 A native 8086 adaptation of the supplied Microsoft QBasic `gorilla.bas`
 (1990), packaged as `GORILLAS.O88`. One player faces a computer opponent,
 or two local players alternate angle and velocity entries, throwing bananas
-over a generated, destructible skyline. Ten building lots fill the 256-pixel
-width, each 20..32 pixels wide with one-pixel gutters on both sides. Each
-gorilla is centered on a randomly selected roof among the four at its end;
-pairs with fewer than three intervening buildings are rejected.
-Angles are 0..180 degrees measured inward from each player's horizontal;
-velocity is 1..150. Wind accelerates the projectile horizontally, gravity
+over a generated, destructible skyline. Eight to twelve building lots fill the 256-pixel
+width, each 18..36 pixels wide with one-pixel gutters on both sides. Each
+gorilla occupies the second or third rooftop from its edge. Random colors
+and heights follow rising, falling, valley or hill trends. Angles are 0..360
+whole degrees, measured inward from each player's
+horizontal; velocity is a whole number from 0..360. Wind accelerates the projectile horizontally, gravity
 vertically. Collision is swept in substeps against the persistent terrain
 and both gorillas, including the thrower. Setup selects 1..99 total points
 (default 3), counted across both players as in the BASIC source.
 Enter advances angle to velocity, then throws; Tab selects the other field;
 digits replace a field, Backspace edits it, arrows adjust it. N opens match
 setup, P pauses, F or Alt+Enter toggles full
-screen, and Escape returns to the desktop. Enter continues after a round.
+screen, and Escape returns to the desktop. After the celebration and an eighteen-tick pause, the next skyline starts
+automatically. Enter can skip the pause. Throwers alternate across rounds.
 
 The instance owns a 256x128 packed 4bpp scene and a bounded scratch band.
 The first 24 rows show the HUD between shots; during flight all three text
@@ -148787,13 +148788,13 @@ gorilla dance score, with a circulating sparkle border and alternating raised-ar
 gorillas. Music starts on the first worker frame after the initial paint. The
 completed score or any key opens setup: one/two players (default two), two names (ten
 characters each, default Player 1/Player 2 or Computer), total points, and
-positive decimal gravity (0.1..99.9 m/s², default 9.8). Enter accepts defaults;
+positive decimal gravity (0.001..9999.999 m/s², default 9.8). Enter accepts defaults;
 Backspace edits. Invalid numeric entries remain on the current question. Name
 entry consumes printable keys before gameplay shortcuts. Alt+Enter/Escape and
 the Game menu remain available. V selects the optional musical dance; P/Enter
 starts play immediately. Any key skips the dance, which also ends naturally.
 
-Frontend states 4/5/6/7 are splash/setup/choice/dance. `grfront.inc` uses the
+Frontend states 4/5/6/7/8 are splash/setup/choice/dance/final scorecard. `grfront.inc` uses the
 same packed text scene and font as gameplay; the character cache covers all
 16 logical text rows. `grdraw.inc` draws animation as a separate layer from
 generated masks and native sprite pixels. `grmusic.inc`, generated from the reference PLAY strings by
@@ -148804,7 +148805,8 @@ durations round to 18.2 Hz ticks, minimum one tick. Timed tones expire even
 while covered; score progression resumes with the worker. No direct speaker
 port writes or blocking waits run under the graphics lock.
 
-During flight, crossing sun ink opens an oval mouth without stopping the shot.
+During flight, crossing sun ink opens an oval mouth without stopping the shot;
+the banana remains hidden until it leaves the sun.
 The expression stays shocked until impact or a miss, then returns to a smile.
 Sun changes update only its rectangle after restoring the previous banana patch.
 Every scored point (including self-hits and the match's final point) queues the
@@ -148815,20 +148817,50 @@ About, focus handling and fullscreen transitions retain their usual behavior.
 `tests/gorillasreactions.py` checks the swept sun reaction, patch restoration,
 scorer selection, all eight poses, music and incremental pixels on each adapter.
 
-Gravity uses tenths of m/s² with a remainder accumulator: 9.8 produces the
-previous four fixed-point velocity units per frame. The solo opponent in
-`grai.inc` evaluates one candidate power per worker tick, predicting wind
-and gravity substeps at a 55-degree angle. It chooses the closest crossing of
-the human's current center, then adds a fresh -8..+8 velocity error,
-clamped to 1..150, before launching an ordinary shot. Terrain can intercept it.
+`grphysics.inc` scales the reference equations to the native scene: Q6
+coordinates, a signed 32-bit height, Q14 sine lookup, midpoint velocities
+and fractional acceleration accumulators. One frame represents .1 simulated
+seconds; adaptive substeps move at most one logical pixel per axis and test
+actual gorilla ink. The minimum gravity and maximum velocity keep peak height
+within the signed 32-bit range. The solo opponent in `grai.inc` evaluates one
+candidate power per worker tick using the same motion routines at 55 degrees,
+then adds -8..+8 velocity error, clamped to 1..360. Candidate searches stop after
+512 frames; difficult extreme-gravity shots may miss. Terrain can intercept it.
 Pause, focus and About suspend aiming. Humans cannot edit a pending computer
-shot. Only the active player’s name appears at the top left, with Angle and
-Velocity inputs on separate rows below it. Signed wind is right-aligned on
-the top row. The name changes with the turn; scores stay out of the play HUD.
+shot. Only the active player's name and both scores appear in the first HUD row, with Angle and
+Velocity below. Wind appears beside Angle and as a proportional arrow in the
+reserved rows below the buildings. The arrow remains visible during flight.
 
 `tests/gorillasfront.py` exercises animation, name/number validation, chosen
 gravity, optional and completed dance, sound progression, setup across
 fullscreen transitions, and real solo turns on VGA, CGA and Hercules.
+
+### 98.0. Feature parity revision
+
+The implementation tracked in `docs/plans/GORILLAS-PARITY-PLAN.md` supersedes
+98's earlier gameplay limits and HUD description. Only the active player's name and both scores are
+visible between throws; a proportional wind arrow remains during flight. A
+separate sparkling final scorecard displays both totals and the overall winner
+or tie, independently of the last point's scorer. Any key returns to setup.
+Throws alternate across cities; after the explosion, musical victory dance and
+a short pause, the next city starts automatically. Enter can advance the pause.
+
+The skyline varies in count, facade colors and overall height trend. Wind uses
+the reference distribution: -4..5 initially, with a one-in-three chance of adding
+1..10 in its existing direction (zero gusts left), yielding -14..15. Gorillas
+occupy the second or third building from either edge. Shots accept 0..360,
+including zero velocity. Angle and velocity accept whole numbers only and
+display without zero padding. Gravity accepts positive decimal values from
+0.001 through 9999.999, with at most three fractional digits (default 9.8).
+The optional intro centers both names inside the animated border. Trajectories use the
+reference equations scaled to the native scene; collision tests gorilla ink,
+not empty pixels in its enclosing rectangle. Throwing arms, four banana
+orientations, sun occlusion and distinct animated terrain/gorilla blasts precede
+the existing victory dance. All animation remains nonblocking and repaintable.
+
+Sparkle caches store horizontal expansion only; each drawn strip duplicates its
+rows into the existing scratch band. This recovers 8,960 bytes of per-instance
+memory while preserving all five cached phases. No kernel budget changes.
 
 ### 98.1. Adapter palettes and artwork
 
@@ -148866,7 +148898,7 @@ then enter and fire another numeric shot after the second fullscreen entry.
 
 The gameplay HUD uses three rows of the 16-row, 32-column character cache.
 A numeric edit formats and
-compares only the selected three-digit field; field selection compares only
+compares only the selected seven-cell numeric field; field selection compares only
 the two markers. Unchanged cells do no drawing. Other HUD transitions compare
 the complete lines, padding shorter messages with spaces. Adjacent changed
 cells share a band, without spanning unchanged labels or crossing text rows.
@@ -148929,7 +148961,8 @@ uses the clipped packed renderer; the window clip is restored afterward.
 Foreign VGA copies selected planes directly. CGA alternates video banks and
 advances by 80 bytes after odd scanlines instead of multiplying per row.
 Scaled light masks and VGA sprite planes are cached once per surface
-geometry, using 15 KB of per-instance RAM. Side strips repaint only rows
+geometry, using 6,400 bytes of per-instance RAM. Light masks cache horizontal
+expansion only; vertical repetition occurs for the strips actually drawn. Side strips repaint only rows
 touched by old or new crosses; the short bands also stay below the OS height
 limit. Exposure redraws the current phase without advancing animation.
 
@@ -148946,7 +148979,9 @@ to finish and reach setup.
 
 ### 98.4. Skyline redraws on an XT
 
-Full gameplay paints complete eight 32-pixel logical strips from left to right,
+Between shots full paints draw the three HUD rows through the font-band path;
+during flight they use the scene because the banana may cover the HUD rows.
+The remaining gameplay paint completes eight 32-pixel strips from left to right,
 revealing successive sections of the skyline. Opaque scene bands replace the
 previous pixels directly; only the surrounding margins are cleared. This also
 preserves the scene's craters and any visible projectile on exposure or mode
@@ -148976,8 +149011,9 @@ per instance.
 `tests/gorillascity.py` measures seeded city construction and complete redraws
 in MartyPC at 4,772,727 Hz, with interrupts enabled under the graphics lock.
 The fixed-seed scene must match across modes and adapters. Across 32 seeds,
-checks enforce width limits, roof support, intact gutters, all four rooftop
-choices at each end, and at least three intervening buildings. Computer checks
+checks enforce width limits, roof support, intact gutters, both rooftop
+choices at each end, variable building counts/colors, all six profile selectors,
+and gusts exceeding ten units in both directions. Computer checks
 cover the moving target, varied release power, and velocity bounds. A separate
 host pixel decoder checks all palette pairs, both horizontal scales, small terrain
 patches and an odd-edged clipped region, including unchanged VRAM outside it.

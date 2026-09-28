@@ -52,9 +52,9 @@ def animation(m, p, code, tag):
     # The gameplay renderer may borrow the inactive intro cache. This
     # debugger-only reference paint must not force the next timed animation
     # to rebuild it (real gameplay -> intro transitions do rebuild it).
-    cache, cachekey = p.data('lightcache', 15360), p.data('cachekey', 2)
+    cache, cachekey = p.data('lightcache', 6400), p.data('cachekey', 2)
     m.write(p.base + p.offsets['gr_scene'], reference)
-    m.write(p.base + p.offsets['gr_state'], b'\0')
+    m.write(p.base + p.offsets['gr_state'], b'\x01')
     m.write(p.base + p.offsets['gr_musicptr'], b'\0\0')
     I.check_repaint(m, p, code, tag)
     m.write(p.base + p.offsets['gr_lightcache'], cache)
@@ -202,7 +202,7 @@ def main():
                             assert p.data('input', 11) == b'a' * 10 + b'\0'
                         if i in (1, 3, 4, 5, 6, 7, 8):
                             blink(m, p, code, tag)
-                    assert p.b('state') == 6 and p.w('grav10') == 98
+                    assert p.b('state') == 6 and (p.w('gwhole')*10 + p.w('gfrac')//100) == 98
                     label = tag + '-' + mode
                     report[label] = list(zip(keys, values))
                     print(label, ' '.join('%s=%.2fms' % pair
@@ -210,6 +210,20 @@ def main():
                     if args.max_transition_ms:
                         assert max(values) < args.max_transition_ms, (label, values)
                         assert max(values[i] for i in (0, 4, 5)) < 20, (label, values)
+                    # The optional intro must keep even maximum-length names
+                    # intact through every border phase, in both display modes.
+                    m.pause()
+                    for name, value in (('name1', b'abcdefghij'), ('name2', b'klmnopqrst')):
+                        m.write(p.base+p.offsets['gr_'+name], value+b'\0')
+                    m.run()
+                    G.key(m, 'KeyV')
+                    assert p.b('state') == 7
+                    assert p.data('hudchars', 512)[192:224] == b'   abcdefghij AND klmnopqrst    '
+                    frames = [animation(m, p, code, tag) for _ in range(5)]
+                    assert max(frames) < 75, frames
+                    print(label, 'PASS optional intro names inside animated border', flush=True)
+                    G.key(m, 'Space')
+                    G.wait(m, lambda: p.b('state') == 0, 'skip optional intro')
                 G.key(m, 'Escape')
                 G.wait(m, lambda: not p.b('fs'), 'fullscreen exit')
                 ui.close(ui.window('Gorillas'))

@@ -26,6 +26,18 @@ gr_intro:
     mov si, gr_mission
     mov dx, 48
     call gr_fronttext
+    mov si, gr_help1
+    mov dx, 56
+    call gr_fronttext
+    mov si, gr_help2
+    mov dx, 64
+    call gr_fronttext
+    mov si, gr_help3
+    mov dx, 72
+    call gr_fronttext
+    mov si, gr_help4
+    mov dx, 104
+    call gr_fronttext
     mov si, gr_continue
     mov dx, 112
     call gr_fronttext
@@ -35,13 +47,18 @@ gr_intro:
 gr_setup:
     call gr_musicstop
     mov byte [gr_dancing], 0
+    mov byte [gr_throwticks], 0
+    mov byte [gr_blast], 0
+    mov byte [gr_roundwait], 0
     push ds
     pop es
     mov byte [gr_state], 5
     mov byte [gr_paused], 0
     mov byte [gr_saved], 0
     mov byte [gr_setupfield], 0
-    mov word [gr_grav10], 98
+    mov word [gr_gwhole], 9
+    mov word [gr_gfrac], 800
+    call gr_gravity
     mov byte [gr_target], 3
     mov byte [gr_players], 2
     mov si, gr_default1
@@ -153,6 +170,8 @@ gr_fronttext:
 ; Name entry must receive letters such as F, N and P before game shortcuts.
 ; Alt+Enter and Escape are handled by gr_key before this dispatcher.
 gr_frontkey:
+    cmp byte [gr_state], 8
+    je .setup
     cmp byte [gr_state], 4
     je .setup
     cmp byte [gr_state], 7
@@ -259,66 +278,26 @@ gr_frontkey:
 .numeric:
     cmp byte [gr_inputlen], 0
     je .next
-    ; Strict positive decimal, at most 99 points or 99.9 m/s^2.
-    ; DI counts fractional digits; BP records the decimal separator.
     mov si, gr_input
-    xor bx, bx
-    xor bp, bp
-    xor di, di
-.parse:
-    lodsb
-    or al, al
-    jz .parsed
-    cmp al, '.'
-    jne .digit
-    cmp byte [gr_setupfield], 4
-    jne .invalid
-    or bp, bp
-    jnz .invalid
-    inc bp
-    jmp short .parse
-.digit:
-    sub al, '0'
-    xor ah, ah
-    push ax
-    mov ax, bx
-    mov cx, 10
-    mul cx
-    mov bx, ax
-    pop ax
-    add bx, ax
-    cmp bx, 999
-    ja .invalid
-    or bp, bp
-    jz .parse
-    inc di
-    cmp di, 1
-    ja .invalid
-    jmp short .parse
-.parsed:
-    or bx, bx
-    jz .invalid
+    call gr_decimalparse
+    jc .invalid
     cmp byte [gr_setupfield], 4
     je .gravity
-    cmp bx, 99
+    or dx, dx
+    jnz .invalid
+    cmp ax, 99
     ja .invalid
-    mov [gr_target], bl
+    or ax, ax
+    jz .invalid
+    mov [gr_target], al
     jmp .next
 .gravity:
-    or bp, bp
-    jz .whole
-    or di, di
-    jnz .gravitystore
-    jmp short .invalid
-.whole:
-    cmp bx, 99
-    ja .invalid
-    mov ax, bx
-    mov cx, 10
-    mul cx
     mov bx, ax
-.gravitystore:
-    mov [gr_grav10], bx
+    or bx, dx
+    jz .invalid
+    mov [gr_gwhole], ax
+    mov [gr_gfrac], dx
+    call gr_gravity
 .next:
     inc byte [gr_setupfield]
     cmp byte [gr_setupfield], 5
@@ -356,10 +335,10 @@ gr_dance:
     mov dx, 32
     call gr_fronttext
     mov si, gr_name1
-    mov di, gr_cast
+    mov di, gr_cast+3
     call gr_namecopy
     mov si, gr_name2
-    mov di, gr_cast+15
+    mov di, gr_cast+18
     call gr_namecopy
     mov si, gr_cast
     mov dx, 48
@@ -386,6 +365,8 @@ gr_frontapes:
 
 gr_fronttick:
     mov al, [gr_state]
+    cmp al, 8
+    je gr_animate
     cmp al, 5
     je gr_cursortick
     cmp al, 4
@@ -479,6 +460,8 @@ gr_frontpaint:
     je gr_frontsprites
     cmp byte [gr_state], 7
     je gr_frontsprites
+    cmp byte [gr_state], 8
+    je gr_frontsprites
     ret
 
 gr_namecopy:
@@ -556,7 +539,11 @@ gr_musictick:
 
 gr_splashtitle: db '      G O R I L L A S',0
 gr_portcredit: db '   After Microsoft QBasic 1990',0
-gr_mission: db '  Lob bananas over the skyline!',0
+gr_mission: db ' Hit your rival with a banana.',0
+gr_help1: db ' Aim with angle and velocity.',0
+gr_help2: db ' Mind gravity and the rooftops.',0
+gr_help3: db ' Arrow direction = wind flow.',0
+gr_help4: db ' Arrow length = wind strength.',0
 gr_continue: db '   Press any key for setup',0
 gr_setuptitle: db '         GAME SETUP',0
 gr_questions: dw gr_qplayers, gr_qname1, gr_qname2, gr_qpoints, gr_qgravity
@@ -564,7 +551,7 @@ gr_defaults: dw gr_defplayers, gr_defname1, gr_defname2, gr_defpoints, gr_defgra
 gr_qname1: db 'Name of Player 1 (10 characters)',0
 gr_qname2: db 'Name of Player 2 (10 characters)',0
 gr_qpoints: db 'Play how many total points? 1-99',0
-gr_qgravity: db 'Gravity in m/s^2 (0.1 to 99.9)',0
+gr_qgravity: db 'Gravity: 0.001 to 9999.999',0
 gr_defname1: db 'Default: Player 1',0
 gr_defname2: db 'Default: Player 2 / Computer',0
 gr_defpoints: db 'Default: 3',0
@@ -576,7 +563,7 @@ gr_default2: db 'Player 2',0,0,0
 gr_choice: db '       V = View intro',0
 gr_choice2: db '       P = Play game',0
 gr_starring: db '           STARRING',0
-gr_cast: db '           AND           ',0
+gr_cast: db '              AND               ',0
 gr_skip: db '     Press any key to play',0
 
 gr_qplayers: db 'Number of players (1 or 2)',0
