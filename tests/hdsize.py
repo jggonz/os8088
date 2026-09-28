@@ -9,15 +9,18 @@ The fixture is a BLANK 321MB drive on MartyPC's XT-IDE - a 654/16/63 VHD
 the whole disk is one free hole and slot 1's extent is all of it:
 659,232 - 63 = 659,169 sectors, 321 MB.
 
-  1. The tool opens on slot 1 and the line reads `Size: all 321M`.
+  1. The tool opens on slot 1 and the line reads `Size [321] MB of 321 -
+     type a number`, the 321 in the box INVERTED (nothing typed: the whole
+     extent, which the first digit replaces).
   2. The keys `0 1 0 0 5 Backspace 0` are typed. A leading 0 is refused, 1005
      passes the extent and is refused, Backspace takes 100 to 10, and the last
-     0 makes it 100 again - so the line reads `Size: 100M of 321M`, and it
+     0 makes it 100 again - so the box reads `100_` in plain ink, and it
      would read something else if any one of those four rules were missing.
   3. Format, twice (the confirm). Slot 1 must come out at LBA 63 for 205,569
      sectors: 100 x 2,048 from LBA 63 ends at 204,863, which is rounded UP to
      the cylinder boundary 205,632 (204 x 1,008).
-  4. Slot 2 is picked, and the line must say `Size: all 221M` - the number was
+  4. Slot 2 is picked, and the box must read an inverted `221` beside `MB of
+     221` - the number was
      reset to 'all' and re-measured against the hole that is left. Format it:
      LBA 205,632 for the remaining 453,600 sectors.
 
@@ -26,8 +29,10 @@ sector: FAT16, and the BPB's sector count is the entry's.
 
 BREAK IT ON PURPOSE: with hd_tw_cap's call taken out of hd_tw_format, slot 1
 is the whole 659,169 sectors and slot 2 finds no room; with the leading-zero
-or the extent refusal taken out of hd_tw_key, step 2's line reads `0M`/`1005M`
-rather than `100M`.
+or the extent refusal taken out of hd_tw_key, step 2's box reads `0`/`1005`
+rather than `100`.
+
+OS88_SHOT=<dir> writes the tool window as a PNG at each of the three reads.
 """
 import hashlib
 import os
@@ -48,7 +53,7 @@ CYL = H * S
 
 # tool.inc's geometry, content-relative
 HTW_LX, HTW_R0Y, HTW_ROWH = 4, 22, 12
-HTW_SZY, HTW_SZN = 78, 35
+HTW_SZY, HTW_SZBX, HTW_SZBW = 78, 38, 46
 HTW_BY, HTW_BH, HTW_B0X, HTW_BW0 = 96, 16, 4, 64
 HDP_B0X, HDP_BW0 = 2, 64            # cppage.inc: the page's Format button
 
@@ -94,14 +99,29 @@ def open_tool(m):
     return mo, tx, ty
 
 
-def line_says(m, mo, tx, ty, tab, want):
+def line_says(m, mo, tx, ty, tab, box, typed, total, shot=None):
+    """The size line: the box holds `box` - inverted when nothing is typed,
+    plain with a caret when something is - and the hint names the extent."""
     IR.park(mo)
     M.settle(m)
     rows = IR.screen(m)[2]
-    return IR.find(rows, tx + HTW_LX - 1, ty + HTW_SZY - 1, 8 * HTW_SZN + 2,
-                   10, IR.render(want, tab)) or \
-        IR.find(rows, tx + HTW_LX - 1, ty + HTW_SZY - 1, 8 * HTW_SZN + 2, 10,
-                [[1 - p for p in r] for r in IR.render(want, tab)])
+    if shot and os.environ.get("OS88_SHOT"):
+        from PIL import Image
+        img = Image.new("L", (320, 150))
+        img.putdata([255 * rows[ty - 14 + y][tx - 2 + x]
+                     for y in range(150) for x in range(320)])
+        img.resize((960, 450)).save(os.path.join(os.environ["OS88_SHOT"],
+                                                 shot + ".png"))
+    ink = IR.render(box + ("_" if typed else ""), tab)
+    if not typed:
+        ink = [[1 - p for p in r] for r in IR.render(box, tab)]
+    y0 = ty + HTW_SZY - 1
+    inbox = IR.find(rows, tx + HTW_SZBX, y0, HTW_SZBW, 10, ink)
+    hint = IR.find(rows, tx + HTW_SZBX + HTW_SZBW, y0, 300 - HTW_SZBX
+                   - HTW_SZBW - 4, 10,
+                   IR.render("MB of %d - type a number" % total, tab))
+    label = IR.find(rows, tx, y0, HTW_SZBX, 10, IR.render("Size", tab))
+    return inbox and hint and label
 
 
 def format_slot(m, mo, tx, ty, vhd, slot):
@@ -138,17 +158,18 @@ def main():
         M.settle(m)
         tab = IR.glyph_table(m)
         mo, tx, ty = open_tool(m)
-        if not line_says(m, mo, tx, ty, tab, "Size: all 321M"):
-            bad.append("the tool did not open on `Size: all 321M`")
+        if not line_says(m, mo, tx, ty, tab, "321", False, 321, "open"):
+            bad.append("the tool did not open on `Size [321] MB of 321`, "
+                       "the 321 inverted")
         for k in ("Digit0", "Digit1", "Digit0", "Digit0", "Digit5",
                   "Backspace", "Digit0"):
             m.key(k)
             m.advance(frames=6)
         m.run()                                 # advance() left it paused
-        if not line_says(m, mo, tx, ty, tab, "Size: 100M of 321M"):
-            bad.append("`0 1 0 0 5 Bksp 0` did not leave `Size: 100M of 321M`")
+        if not line_says(m, mo, tx, ty, tab, "100", True, 321, "typed"):
+            bad.append("`0 1 0 0 5 Bksp 0` did not leave `100_` in the box")
         else:
-            print("  typed: Size: 100M of 321M")
+            print("  typed: Size [100_] MB of 321")
 
         t, lba, n, tot, fs = format_slot(m, mo, tx, ty, vhd, 0)
         print("  slot 1: type %02Xh, LBA %d, %d sectors, BPB %d, %r"
@@ -164,8 +185,10 @@ def main():
 
         mo.click(tx + 40, ty + HTW_R0Y + HTW_ROWH + 4, settle=2.0)  # slot 2
         rest = C * CYL - (63 + want)
-        if not line_says(m, mo, tx, ty, tab, "Size: all %dM" % (rest >> 11)):
-            bad.append("slot 2 did not read `Size: all %dM`" % (rest >> 11))
+        if not line_says(m, mo, tx, ty, tab, str(rest >> 11), False,
+                         rest >> 11, "slot2"):
+            bad.append("slot 2 did not read `Size [%d] MB of %d`"
+                       % (rest >> 11, rest >> 11))
         t, lba, n, tot, fs = format_slot(m, mo, tx, ty, vhd, 1)
         print("  slot 2: type %02Xh, LBA %d, %d sectors, BPB %d, %r"
               % (t, lba, n, tot, fs))

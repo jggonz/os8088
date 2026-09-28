@@ -81404,19 +81404,31 @@ hole, or the slot's own entry — up to FAT16's ceiling (§18.7.5), and there wa
 no way to ask for less. On a 40MB XT disk that is what anybody wants; once
 volumes reached 2GB it made a 500MB drive one volume where the user wanted two.
 
-So a line sits between the slot rows and the buttons:
+So a line sits between the slot rows and the buttons, with a BOX holding the
+number:
 
 ```
-Size: all 321M - type MB to change        <- nothing typed: the whole extent
-Size: 100M of 321M                        <- typed
+Size [ 321 ] MB of 321 - type a number    <- nothing typed: the whole extent,
+                                             the 321 drawn INVERTED
+Size [ 100_] MB of 321 - type a number    <- typed: plain ink and a caret
 ```
+
+**It is a box and not a sentence** because the sentence failed a tester: the
+first version read `Size: all 321M - type MB to change`, and they typed M and
+B. An instruction inside a line of prose reads as the text to type; a box with
+the number in it is the control everybody already knows, and the words after
+it only have to name the unit and the limit. Before anything is typed the
+box shows the extent's own MB **inverted** — the look of selected text, which
+is what the first digit then replaces — and once something is typed it is
+plain ink with a `_` caret after it. Under a megabyte of extent the box is
+empty and the line says `all of it - under 1 MB`.
 
 **It is typed, not picked.** The digits and Backspace go to the tool while it
 is in front (`W_ONKEY`, `hd_tw_key`), and they edit one word, `[hd_tsize]`, in
 MB. `0` is *all*, which is the old behaviour to the byte, so a user who never
-types gets exactly what Format always did. The line is redrawn ALONE and
-opaquely, padded to a fixed width, so a keystroke costs one text run rather
-than a window.
+types gets exactly what Format always did. A keystroke redraws the box's five
+cells ALONE (`hd_tw_szbox`, two opaque runs) — never the window — and the
+frame, the label and the hint are drawn only with the window.
 
 **The figure on the line is always one Format will honour.** A digit that would
 take it past the extent (`[hd_tsmax]`, the extent in whole MB) is refused
@@ -81440,7 +81452,8 @@ less on a slot that already holds a volume makes the new one smaller and gives
 the rest back as free space, which the next slot's scan will find. The
 installer does not read it — an install puts the system on a slot as it
 stands (§52.10), and `[hd_tsize]` is the disk tool's alone. All of it is in
-`HDDTOOL.DRV`, so it costs no resident byte.
+`HDDTOOL.DRV`, so it costs no resident byte - 512 bytes of that image, the box's share
+142 of them, and the tool's 19KB claim did not move.
 
 ### 52.3 The formatter
 

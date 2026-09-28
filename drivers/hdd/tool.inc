@@ -69,8 +69,9 @@ HTW_BH       equ 16
 HTW_CAPY     equ 120
 HTW_SZY      equ 78             ; the size line (SPEC.md 52.2.7), between the
                                 ; last slot row and the buttons
-HTW_SZN      equ 35             ; ...padded to this many cells, so the opaque
-                                ; run covers whatever the last one said
+HTW_SZBX     equ 38             ; ...its BOX: the frame's left edge,
+HTW_SZBW     equ 46             ; its width - five cells and a 3px margin
+                                ; each side (four digits and the caret)
 HTW_CFORMAT  equ 1              ; control ids (SPEC.md 13.8.4), 1-based so 0
 HTW_CDELETE  equ 2              ; can mean "nothing is down"
 HTW_CCLOSE   equ 3
@@ -1317,62 +1318,134 @@ hd_tw_cap:
     pop ax
     ret
 
-; --- hd_tw_szdraw - the size line, padded and opaque ------------------------
-; in: DI = content left, BP = content top; the lock is held
+; --- hd_tw_szdraw - the size line: label, box, and what to do ---------------
+; in: DI = content left, BP = content top; the lock is held, the content is
+;     white under the line (a full paint)
 ; out: nothing (all registers preserved)
+;
+; `Size [ 321 ] MB of 321 - type a number`. It was one sentence, `Size: all
+; 321M - type MB to change`, and a tester typed M and B: an instruction
+; inside a sentence reads as the thing to type. A BOX with the number in it
+; is the control everybody already knows, and the sentence after it only has
+; to name the unit and the limit.
 hd_tw_szdraw:
     push ax
+    push bx
     push cx
     push dx
     push si
-    push di
-    mov di, hd_line             ; the row painter's buffer, and free: every
-    mov si, hd_s_tsz0           ; row has been drawn by the time this runs
-    call hd_scat
-    mov ax, [hd_tsize]
-    or ax, ax
-    jz .all
-    call hd_utoa                ; 'Size: 100M of 321M'
-    mov si, hd_s_tszof
-    call hd_scat
-    mov ax, [hd_tsmax]
-    call hd_utoa
-    mov si, hd_s_mb
-    jmp short .tail
-.all:
-    mov si, hd_s_tszall         ; 'Size: all 321M - type MB to change'
-    call hd_scat
-    mov ax, [hd_tsmax]
-    or ax, ax
-    jz .pad                     ; under a megabyte: 'all' is all there is
-    call hd_utoa
-    mov si, hd_s_tszty
-.tail:
-    call hd_scat
-.pad:
-    mov cx, hd_line + HTW_SZN
-    sub cx, di
-    jbe .end
-    mov al, ' '
-.sp:
-    mov [di], al
-    inc di
-    loop .sp
-.end:
-    mov byte [di], 0
-    pop di
-    push di
-    mov si, hd_line
+    mov si, hd_s_tsz0           ; 'Size'
     mov cx, di
     add cx, HTW_LX
     mov dx, bp
     add dx, HTW_SZY
-    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the padding is the erase
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    mov al, CBLACK              ; the box
+    call OSAPI_SET_COLOR
+    mov ax, di
+    add ax, HTW_SZBX
+    mov bx, bp
+    add bx, HTW_SZY - 3
+    mov cx, ax
+    add cx, HTW_SZBW - 1
+    mov dx, bx
+    add dx, 13
+    call OSAPI_GFX_FRAME
+    call hd_tw_szbox            ; what is in it
+    push di
+    mov di, hd_line             ; the row painter's buffer, and free: every
+    mov ax, [hd_tsmax]          ; row has been drawn by the time this runs
+    mov si, hd_s_tszall         ; under a megabyte: nothing to type
+    or ax, ax
+    jz .hint
+    mov si, hd_s_tszof          ; 'MB of 321 - type a number'
+    call hd_scat
+    call hd_utoa
+    mov si, hd_s_tszty
+.hint:
+    call hd_scat
+    mov byte [di], 0
+    pop di
+    mov si, hd_line
+    mov cx, di
+    add cx, HTW_SZBX + HTW_SZBW + 4
+    mov dx, bp
+    add dx, HTW_SZY
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- hd_tw_szbox - the number inside the box, and nothing else --------------
+; in: DI = content left, BP = content top; the lock is held
+; out: nothing (all registers preserved)
+;
+; Nothing typed: the extent's own MB, INVERTED - the look of selected text,
+; which is what the first digit replaces. Typed: the figure in plain ink and
+; a caret after it. Two opaque runs covering the box's five cells, so a
+; keystroke redraws this and not the window (PERFORMANCE.md rule 2).
+hd_tw_szbox:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov cx, di
+    add cx, HTW_SZBX + 3        ; CX = the pen, DX = the line
+    mov dx, bp
+    add dx, HTW_SZY
+    mov di, hd_line
+    mov bx, (CWHITE << 8) | CBLACK
+    mov ax, [hd_tsize]
+    or ax, ax
+    jnz .num
+    mov bx, (CBLACK << 8) | CWHITE  ; 'all': white on black, as selected
+    mov ax, [hd_tsmax]
+    or ax, ax
+    jz .none                    ; under a megabyte: an empty box
+.num:
+    call hd_utoa
+.none:
+    mov byte [di], 0
+    mov si, hd_line
+    mov ax, bx
+    call OSAPI_FONT_RUN
+    mov ax, di                  ; AX = the digits drawn,
+    sub ax, hd_line
+    mov bx, ax
+    shl bx, 1                   ; ...and the pen past them
+    shl bx, 1
+    shl bx, 1
+    add cx, bx
+    mov di, hd_line + 8         ; the tail, behind the digits' NUL
+    cmp word [hd_tsize], 0
+    je .pad
+    mov byte [di], '_'          ; typed: the caret
+    inc di
+    inc ax
+.pad:
+    cmp ax, 5
+    jae .run
+    mov byte [di], ' '
+    inc di
+    inc ax
+    jmp short .pad
+.run:
+    mov byte [di], 0
+    mov si, hd_line + 8
+    mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
     pop di
     pop si
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -1421,7 +1494,7 @@ hd_tw_key:
     call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
     mov di, ax
     mov bp, dx
-    call hd_tw_szdraw           ; ONE line, not the window (PERFORMANCE.md)
+    call hd_tw_szbox            ; the BOX, not the window (PERFORMANCE.md)
 .out:
     pop bp
     pop di
@@ -1460,10 +1533,10 @@ hd_tw_repaint:
     ret
 
 hd_s_kb:      db 'K', 0
-hd_s_tsz0:    db 'Size: ', 0
-hd_s_tszof:   db 'M of ', 0
-hd_s_tszall:  db 'all ', 0
-hd_s_tszty:   db 'M - type MB to change', 0
+hd_s_tsz0:    db 'Size', 0
+hd_s_tszof:   db 'MB of ', 0
+hd_s_tszall:  db 'all of it - under 1 MB', 0
+hd_s_tszty:   db ' - type a number', 0
 hd_s_thdr:    db 'Slot  Size   State', 0
 hd_s_four:    db '     ', 0     ; slot digit -> size column
 hd_s_nosize:  db '     ', 0     ; ...and the size column when nothing claims it
