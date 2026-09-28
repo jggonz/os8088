@@ -8391,6 +8391,50 @@ SOAK = [
         needs=("marty", "nasm"),
         wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
                "build/mbr.bin", "build/ctrl.drv")),
+    Row("vidspkshape", "soak", py("tests/vidspkshape.py"), 2.0,
+        "SPEC.md 98.2.15.1: a speaker clip's sound SHAPED for the speaker, on "
+        "the host - a loud 60 Hz bass and a quiet 880 Hz line through "
+        "os88venc --audio speaker with --spk-shape on and off: the line at "
+        "least 25 dB up and the bass 25 dB down, read off the counts in the "
+        "file; and os88vid speaker doing the same to the unshaped file after "
+        "the fact, no byte outside the frame records' sound changed, the "
+        "result verifying. Broken on purpose (the filter, the compressor and "
+        "the drive taken out of spk_shape_f) - red at both",
+        needs=("ffmpeg",)),
+    Row("vidspk2", "soak", py("tests/vidspk.py", "--pulses", "2"), 32.0,
+        "SPEC.md 34.11.7, 98.1.1.3.1: vidspk on a clip made for TWO PULSES "
+        "A SAMPLE (SPKMUL) - an 11 kHz carrier from 5,512 Hz sound. An 8088 "
+        "opens it muted (vp_mwhy 2) and M plays it; the 800 writes to 42h "
+        "are each count TWICE, the whole path's and the half path's, in "
+        "order; at most 4% of the half-period PIT periods without a pulse "
+        "(3.5% measured); the play takes the sound's time. Broken on purpose "
+        "(os88spk_isrm's half path without its out 0x42) - red at 2 and 3",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv")),
+    Row("vidspkat", "soak", py("tests/vidspkat.py"), 40.0,
+        "SPEC.md 34.11.8: 22,050 Hz through the PC speaker on a 286 or "
+        "better - QEMU's 386, closed list entry 1. A pulse of N = 54 PIT "
+        "counts, which only a 286-or-better's door takes: the clip opens "
+        "unmuted, its sound goes to the speaker, the door is open to the "
+        "player with a rate divisor of whole 54-count pulses, the ring's "
+        "CONS moves, every frame is drawn and the kernel is left clean. "
+        "Nothing timed; QEMU's speaker cannot sound a pulse width. Broken on "
+        "purpose (SPK_NMIN_AT back to 74) - red at 1 and 2",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
+    Row("vidspk22", "soak", py("tests/vidspk.py", "--rate", "22050",
+                                "--unmute"), 30.0,
+        "SPEC.md 34.11.8: the 8088's half of vidspkat - a 22,050 Hz clip, a "
+        "pulse of 54 counts, which only a 286-or-better's door takes. On "
+        "MartyPC's 5150 it opens MUTED (past VP_SPKMAX), and after M the "
+        "play is SILENT - os88spk_init and the door both refuse a pulse "
+        "under 74 on an 8086 - every frame drawn, the capture flat and the "
+        "kernel clean. Broken on purpose (the tier test out of the door and "
+        "the library): the pulses play and the capture moves - red at 2",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv")),
     Row("vidspkcounts", "soak", py("tests/vidspk.py", "--counts"), 30.0,
         "SPEC.md 98.1.1.3: vidspk on a clip MADE for the speaker - its PCM8 "
         "stored as the counts (SPKPWM), which the player copies rather than "

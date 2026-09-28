@@ -58146,6 +58146,105 @@ The experiment's code is not in the tree; the three ICW values above are all
 of it.
 
 
+#### 34.11.7 Pulses a sample: the carrier above the rate
+
+**The whine a speaker clip plays over is the CARRIER** - one pulse a
+sample, so a 5,512 Hz clip whines at 5,524 Hz, where the ear and a 2¼-inch
+cone are both at their most sensitive (98.2.15.1 measures it off the
+owner's 5150). The owner heard the carrier doubled - an 11 kHz whine - as
+*"much better, the ringing whine is higher pitched but less annoying"*.
+
+So `os88spk_init` takes **CL = pulses a sample, P** (0 or 1 is one; the
+library plays 1 and 2, and refuses more). It builds the table for a
+pulse's period, N / P, and `os88spk_go` opens the door at that period, so
+channel 0 interrupts P times a sample and the carrier is the rate × P. The
+door is unchanged: it sees a shorter N.
+- **P = 1 is the ISR it always was**, byte for byte: a file that asks for
+  nothing pays nothing.
+- **P = 2 enters `os88spk_isrm`**, which starts with a `jmp short` whose
+  displacement is the toggle. The WHOLE path points it at the half path,
+  puts its count out and writes it into the half path's own `mov al, imm8`;
+  the **half path** points it back, puts that immediate out, sends the EOI
+  and returns - nothing read from the ring, nothing counted.
+- **The door's K is ENTRIES**, so a period's samples are K / P, divided
+  once a period at the chain. K must be a multiple of P or the period would
+  end on a half entry, so the Video Player rounds its speaker bracket's
+  period to whole SAMPLES (N counts) when P > 1 - within a sample of the
+  file's, as the door's own rounding already is.
+- **Auto-EOI stays refused** (34.11.6): the half path keeps its EOI.
+- **The player mutes a P = 2 file by default on an 8086-class CPU**
+  (98.3.17's `vp_mwhy` 2, as for PCM past `VP_SPKMAX`); M plays it anyway.
+
+##### 34.11.7.1 What pulses cost, measured
+
+On MartyPC's 4.77 MHz Hercules 5150 with a fixed disk, the Video Player
+full screen, *Bad Carrot* at 160 × 58, 5 fps. Each pulse is timed from the
+ISR's first instruction to the first instruction back in the code it
+interrupted (so its `iret` is in), plus ~60 cycles for the acknowledge:
+
+| | whole / half path, cycles | the pulses' share | lost | 300 frames |
+|---|---|---|---|---|
+| 5,512 Hz, one pulse (5.5 kHz carrier) | 389 / - | ~52% | 2.5% | 0 late |
+| 8,000 Hz, one pulse (8 kHz) | 390 / - | ~75% | 2.5% | 0 late |
+| 5,512 Hz, two, a counter byte (11 kHz) | 497 / 246 | ~100% | 3.5% | 0 late |
+| 5,512 Hz, two, the jump toggle (11 kHz) | 462 / 248 | ~96% | 2.4% | 0 late |
+
+The toggle bought 35 cycles a whole pulse over a counter byte; the half
+path is at its floor, where an 8088 is fetch-bound and every entry still
+pays the acknowledge, the EOI and the `iret`. **So two pulses a sample are
+~96% of a 5150**: a clip as still as Bad Carrot plays, and a 400 × 145
+30 fps one budgeted for one pulse took 845 s to play 30 (VIDEO-PLAN 15.10).
+The encoder's model is `CYC_SPK_WHOLE2` 476 and `CYC_SPK_HALF` 262, the
+same convention as `CYC_SPK_PULSE` (entry to `iret` plus the acknowledge),
+so on a `speed` 1 profile `--spk-pulses 2` is ~87% and refused by 98.2.15's
+80% rule, with the advice to take `--rate 8000` instead: **the 8 kHz
+carrier is the 5150's**, at ~75%, and needs nothing new in the file.
+
+A faster machine is where two pulses belong, and none of these is
+measured: MartyPC's only faster machine is a 7.16 MHz turbo XT, and there
+is no 286 in any emulator here that can be timed. Scaled from the cycles
+above:
+- **a 10 MHz 8088** takes two pulses at 5,512 Hz for ~40% (D);
+- **a 12 MHz 286**, whose interrupt and `iret` are a fraction of an
+  8088's, is estimated at ~15-20% for the same, and could take one pulse
+  at 22,050 Hz - no audible carrier at all - for ~25% (D). That needs the
+  door's 74-count floor lowered on `CPU_286` and up (a pulse of 54 counts),
+  which is kernel work not done.
+
+#### 34.11.8 A shorter pulse on a 286: 22 kHz with no audible carrier
+
+**A 286 with no sound card is a period machine**, and on one the carrier
+can simply go above hearing: 22,050 Hz at one pulse a sample is a pulse of
+N = 54 PIT counts. The door's floor was 74 for the 8088's sake - its ISR is
+~400 cycles, near a whole 5,512 Hz period - and a 286's is a fraction of
+that. So **the floor is 48 on `CPU_286` and up** (`SPK_NMIN_AT`, 24,858
+Hz), and stays 74 on an 8086:
+- **the door** (`osapi_fsx_spk`): a DX of 48..73 is refused unless
+  `[cpu_tier]` is past `CPU_8086`. **+15 bytes of `kern_big` `.text`**, no
+  rung crossed; `kern_small`'s door refuses everything anyway;
+- **the library** (`os88spk_init`): the same test through
+  `OSAPI_CPU_INFO`, so a table is not built for a door that will say no;
+- **the file**: a pulse of 48..255 counts is VALID (`os88vid.spk_table`),
+  and which machine may play it is the player's question;
+- **the player**: `VP_SPKMAX` already binds an 8086-class CPU alone, so a
+  22 kHz file opens MUTED on an 8088 (M then finds the door shut, and the
+  play is silent) and plays on anything else;
+- **the encoder**: `--rate` up to 24,858 on a 286 profile. Its cost is not
+  the 8088's cycles divided by the profile's speed - an interrupt, a
+  `push` and an `iret` are a fraction of an 8088's on a 286 - so a 286
+  profile carries its own time a pulse, `spk_us`: 23 us whole and 13 us
+  half on `286` (6 MHz), 11.5 and 6.5 on `286-vga` (12-16 MHz), from a
+  count of `os88spk_isr`'s instructions at 286 timings with a wait state a
+  memory access and ~1 us an ISA `out`. **Predicted, not measured**: 22,050
+  Hz is ~51% of a 6 MHz 286 and ~25% of a 12 MHz one. No emulator here
+  can time a 286 (MartyPC is an 8088; QEMU counts work and not time).
+
+`tests/vidspkat.py` (QEMU's 386) is the function gate: the clip opens
+unmuted, its sound goes to the speaker, the door is open to the player
+with a rate divisor of whole 54-count pulses, the ring is played from and
+every frame drawn; `vidspk --rate 22050 --unmute` (MartyPC's 8088) is the
+refusal. How it SOUNDS on a 286's speaker is the owner's to hear.
+
 ## 35. Recorder — the sound layer's recording client
 
 `apps/recorder` needs `SND_CAP_PCM_IN` (a Sound Blaster) to record and
@@ -150514,6 +150613,23 @@ The rules:
   on a card as for any PCM8 file.
 - `--audio speaker` (98.2.15) is what writes it.
 
+##### 98.1.1.3.1 SPKMUL: pulses a sample
+
+**Flag 64 says the speaker plays P pulses a sample**, and header byte 24
+says P, 2..4 (§34.11.7). The counts are then made for a pulse's period,
+N / P, rather than for N: t[s] = 1 + s·(N/P − 2)/255. P must divide N
+exactly and N / P must be 74..255, so at 5,512 Hz (N = 216) P = 2 is the
+one that fits.
+- **Only with SPKPWM**: SPKMUL alone is a bad file, and so is byte 24
+  outside 2..4 with the flag, or anything but 0 without it.
+- **A player that knows neither refuses the file**, by the header's own
+  rule for an unknown flag, rather than playing counts made for half the
+  period as if they were whole ones.
+- **A card plays it as it plays any SPKPWM file** - the counts are the
+  samples, scaled by (N/P − 2)/255 and so quieter again.
+- `--spk-pulses P` (98.2.15) is what writes it; a resident file is refused
+  it for now.
+
 #### 98.1.2 Layouts: the file is laid out for its surface on the host
 
 **Every address in a file is the target surface's own memory image**, with
@@ -151309,6 +151425,7 @@ without them (`ffmpeg` capability).
 | `vga` / `vga-mid` / `vga-full` | LIN80 | 320 x 240 / 400 x 300 / 640 x 480 |
 | `live-cga` / `live-herc` / `live-vga` | CGA / HERC / LIN80 | 320 x 100 / 240 x 116 / 160 x 120, VIDEO-PLAN 3.4's |
 | `text` / `text-mono` | TEXT | 80 x 25 CELLS, in colour / in 07h, 0Fh and 70h (98.2.16) |
+| `herc-spk` / `cga-spk` | HERC / CGA | 360 x 160, at 23 fps with the sound on the SPEAKER at 8,000 Hz (98.2.15.5) |
 
 - **The frame rate is one the audio divides**: samples per frame is the
   rate over the fps, rounded, and ffmpeg resamples the picture to *rate /
@@ -152318,8 +152435,15 @@ leave**:
     share = rate x (CYC_SPK_PULSE + CYC_SPK_BYTE) / (8088 Hz x the profile's speed)
     avg, peak, owe = avg x (1 - share), peak x (1 - share), owe x (1 - share)
 
-- **`CYC_SPK_PULSE` = 400** is the measured ISR (343 cycles, §34.11.4) plus
-  the 8088's interrupt acknowledge.
+- **`CYC_SPK_PULSE` = 449** is the measured ISR, from its first instruction
+  to the first one back in the code it interrupted (389 cycles, §34.11.7.1),
+  plus the 8088's interrupt acknowledge. **It was 400** - entry to the
+  `iret`, which left the `iret` out - so the speaker's share was ~4 points
+  low at 5,512 Hz and ~8 at 8,000. *The late plays first blamed on it were
+  not the ISR's*: MartyPC's only hard disk is an XT-IDE, whose transfers
+  the CPU makes byte by byte, and the owner's ST11M makes them by DMA; the
+  owner's first `02-PCSPK` demo (5.5 kHz; 98.5 carries its 8 kHz successor), 1,161 frames late there, runs on schedule on the
+  5150 (98.2.15.4).
 - **`CYC_SPK_BYTE` = 15** is the player's copy of the counts, measured
   (98.1.1.3). It was 65, a guess at the translation the counts removed.
 - **`speed`** is the profile's machine in 4.77 MHz 8088s (98.2.1.1): 1 for
@@ -152327,8 +152451,8 @@ leave**:
 - **`owe`**, owed time's periods (98.2.1.1), shrinks with the rest: a period
   the pulses take a share of is a shorter period to run on into.
 
-On the owner's 5150 that is **48%**, which leaves decode 26% of a period on
-average and 44% at most, against the card's 50% and 85%. The encoder prints
+On the owner's 5150 that is **52%** (48% with the old 400), which leaves
+decode 23% of a period on average and 39% at most, against the card's 50% and 85%. The encoder prints
 both figures, and its CPU line carries `+ the speaker's 48%`. The disk rate
 is not scaled: the transfer is DMA, and the sound is fewer bytes than a
 card's 11,025 Hz anyway.
@@ -152337,6 +152461,191 @@ card's 11,025 Hz anyway.
 a rate above `VP_SPKMAX` (8,000 Hz) on a profile whose `speed` is 1, since the
 player would mute it (§98.3.15), and a share of 80% or more. The GUI offers
 it on the Sound tab, because its choices are the parser's.
+
+##### 98.2.15.1 Sound shaped for the speaker: `--spk-shape`
+
+**On the owner's 5150 a speaker clip was the carrier and nothing else**
+(2026-09-28): a loud 5,524 Hz whine, no music, where every emulator played
+the song. The pulses were right - the carrier's harmonics follow the file's
+samples at exactly 1.0x speed (r 0.39 over 20 ms windows, at the one offset
+the recording was taken from) - and the song was simply not there to hear.
+An emulator filters the speaker to its host's rate, which takes the carrier
+away and hands the bass to a PC's speakers; the 5150 does neither. The
+pulse train the file drove, rebuilt at the PIT's resolution, is the reason:
+
+| band | the file as encoded | shaped |
+|---|---|---|
+| under 150 Hz | −9.4 dB | −37.9 dB |
+| 150–400 Hz | −16.9 dB | −13.2 dB |
+| 400–800 Hz | −25.4 dB | −13.7 dB |
+| 800–1,600 Hz | −27.8 dB | −13.1 dB |
+| 1,600–2,700 Hz | −30.7 dB | −13.6 dB |
+| the carrier, 5,524 Hz | −2.5 dB | −3.3 dB |
+
+(shares of the 20 Hz – 20 kHz power, ten seconds of *Bad Carrot*). A pulse
+width is all the speaker has, and a straight encode spends it on bass a
+2¼-inch cone cannot move, leaving what it CAN play 23–28 dB under the
+whine. XDC's speaker path (Scalibq/XDC, `PCSPKR.PAS`, `XDC_PLAY.PAS`) is the
+same mechanism to the formula - mode 0, lobyte, one count an IRQ0, t[s] =
+1 + s(N−2)/255 - and its compiler takes the WAV as it is, so there is no
+playback difference to copy: what the pulses carry is the whole question.
+
+**So `--audio speaker` shapes the sound by default** (`os88vid.spk_shape_f`,
+from ffmpeg's floats, not 8-bit steps):
+0. **a STYLE** (`--spk-style`) sets three of what follows - `lifted`, the
+   default, is the owner's "K": a cut at 200 Hz, ratio 3, range 30; and
+   `natural` is "W": 250 Hz, ratio 2, range 24, more of the song's own rise
+   and fall. Given, `--spk-highpass`, `--spk-ratio` and `--spk-range` win;
+1. **nothing under `--spk-highpass`** (the style's; 0 keeps the bass), a brick
+   wall with a squared one-octave ramp, and the top **tilted up +9 dB from
+   400 Hz to 2.4 kHz**, where the cone and the ear are both at their best;
+2. **the level evened out** over a centred 30 ms RMS held over the window
+   either side - a `--spk-ratio`:1 compressor, its gain growing no
+   further below `--spk-range` dB under the loudest 0.5%, and
+   **silence left silent** below −48 dB - in TWO BANDS, under 700 Hz and
+   over it, each levelled against the whole signal's loudest so that a
+   band with nothing in it stays empty, and the lower one scaled by
+   `--spk-lows` (0.5);
+3. **driven to an RMS of `--spk-drive`** (0.5 of full scale) through a
+   `tanh` soft clip, which rounds off ~6% of samples. Loudness is what a
+   pulse width buys, and on this speaker clipping is the cheap end of it.
+
+Those defaults are the owner's pick of four listens, below.
+
+**The owner's listens** (2026-09-28, on the 5150): at 0.45 *"clearly
+audible, even good - except the coil whine still dominates"*; at 0.6 *"the
+voice is much better, almost louder and clearer than the whine. But the
+lower tones are more fuzzed out - louder, but less distinct"*. The two
+differ only in the drive, so the fuzz is the soft clip: 4.0% of samples
+pass full scale at 0.45 and 10.3% at 0.6, and the loud lower tones are
+what they are. A peak limiter in its place (`spk_limit`, kept for the
+record) cuts a steady low tone's harmonics from −26 to −59 dB but caps
+this song at 0.38 RMS, quieter than 0.45 - its peaks sit too far above
+its average. **`--spk-lows L`** is the other way: the band under 700 Hz
+and the band over it levelled apart, brought to one level and the lows
+scaled by L, so the voice keeps its drive and the lower tones get less.
+At L 0.35 and drive 0.55 the voice band is as loud as at 0.6 (−4.2 dB
+under the carrier), the lows 4 dB quieter and 8.0% clipped; at L 0.5 and
+drive 0.5, 5.9%.
+
+The third listen, the song in three parts - a soft intro that is a beat,
+music before the singing, and the singing on: L 0.35 at 0.55 *"better than
+0.6? the intro still mostly inaudible, the music almost audible"*, and L 0.5
+at 0.5 **"the best so far"** - the intro *"for the first time barely
+audible"*, the music *"clearly audible"*, and under the singing still fuzz
+between the voice and the whine. So the defaults are L 0.5 at 0.5. The
+first build levelled each band against its OWN loudest and then matched
+their levels, which raised an empty band's noise to the voice's: it is
+the shared reference now, and measures within 0.3 dB of the file heard
+on the voice band and 2 dB lower on the lows.
+
+What is left is the intro, and a gentler leveller was the limit there,
+not its range: at ratio 2 the intro is 24 counts RMS against the singing's
+46.5, and a 36 dB range moves it to 25. **Ratio 4, range 36 and a cut at
+150 Hz** - the beat's own punch is under 250 - takes it to 33 against
+52.5, the voice to −3.6 dB under the carrier, clipping unchanged (6.6%).
+That is the next listen, with ratio 6 beside it.
+
+The fourth: ratio 6 *"too loud, it runs together"*, and the pick between
+the two; ratio 3, range 30, a cut at 200 - **"pretty good"**. The owner
+asked for both to be offered: that is `lifted` and `natural` above, the
+first the default.
+
+A synthetic clip of a loud 60 Hz bass and a quiet 880 Hz line measures it
+the other way round: the line −43.0 dB → −5.4 dB of full scale, the bass
+−21.9 → −65.8. `--spk-shape off` takes the sound as it is, which is what every
+speaker file before this was.
+
+**A file already made is shaped after the fact** by `os88vid.py speaker IN
+OUT [--highpass HZ] [--drive D] [--lows L] [--ratio R] [--range DB]`: each
+rendition's counts read back to
+samples (`spk_samples`), shaped, and written as counts into the same bytes -
+each frame record's last `abytes` and the seam's - so nothing else in the
+file moves, and it is re-read whole. A resident file's sound is a packed
+block and is refused: encode it again.
+
+##### 98.2.15.2 Hearing it here: `--spk-preview` and `os88vid spkwav`
+
+**An emulator plays a speaker clip better than the 5150 does**, because it
+filters the carrier away (98.2.15.1), so it is no place to judge one. The
+preview is what the SPEAKER LINE carries: `os88vid.spk_preview` builds the
+pulses at the PIT's own 1,193,182 Hz - low for a count's ticks from each
+write, high for the rest - integrates them into 4 × 44,100 Hz bins, and
+takes them to 44,100 Hz through a brick wall at 20 kHz, so the carrier and
+its harmonics are there as they are and none folds into a false tone.
+reenigne's `mod_convert` does the same for 8088 MPH (*"a little emulator of
+the PC speaker circuit"*). It is the electrical line - no cone, no room, no
+case - so it tells drive, clipping and balance apart, and the carrier's
+share, and not how loud the machine is.
+
+`os88venc --spk-preview OUT.WAV` writes it with the encode; `os88vid.py
+spkwav FILE.V88 OUT.WAV` writes it for a file already made, either pulse
+count. Measured on the file the owner picked, the preview's bands agree
+with the analysis above to ~1 dB: the carrier −3.6 dB, the voice band's
+four octaves −12 to −14.
+
+##### 98.2.15.3 The carrier put away in the quiet: `--spk-idle`
+
+The owner, at 8 kHz on the 5150: *"almost no audible whine - the whine only
+shows up at silent parts. It is perfectly listenable."* A pulse's width rests
+where the sound is centred, and at 50% the carrier is at its LOUDEST. So the
+centre slides toward the short end as the sound falls, by the headroom it
+leaves: `e`, a moving maximum of |y| over ±2W averaged over ±W, is ≥ |y| at
+every sample, so `y + e − 1` never passes −1 and silence rests at a count
+of 1. **W = `--spk-idle`, 0.02 s** (0 off): the centre moves at under ~25
+Hz, far below what the cone reproduces. Measured on *Bad Carrot*: the
+carrier in the song's real silence (its last ten seconds) falls from 0 to
+**−26.7 dB**; in the gaps between the intro's beats, which the leveller has
+already lifted up to 30 dB, only 1-4 dB - they are not silent by then.
+
+##### 98.2.15.4 What 8 kHz leaves for the picture
+
+At 8,000 Hz the speaker is ~78% of a 5150 and decode gets 11% of a period
+on average (23% at 5,512). Bad Carrot re-encoded at the first `02-PCSPK`'s
+geometry (496 × 181, 25 fps, the window), profile `5150-st225`:
+
+| | frames cut to the budget | picture wrong |
+|---|---|---|
+| 5,512 Hz | 422 of 5,661 | 0.39% |
+| 8,000 Hz | 3,391 of 5,649 | 3.15% |
+
+Both played on MartyPC's Hercules 5150 with 0 late - on its XT-IDE, whose
+CPU-driven transfers the ST11M profile does not budget for, so on the
+owner's DMA disk there is margin beyond that. At 8 kHz the price is the
+picture's, not the clock's. **MartyPC has no DMA hard disk** (the Xebec's
+ROM cannot ship here), so whether a clip keeps time on the ST11M is the
+owner's 5150 to say; the trades (frame rate, box) are VIDEO-PLAN 15.10's.
+
+##### 98.2.15.5 The speaker presets, and a disk the CPU copies for
+
+**`--preset herc-spk`** and **`--preset cga-spk`** are the owner's settings
+for a 5150 with no card, found by those listens and by encodes timed on
+86Box: a 360 x 160 box, **23 fps** (15 was jerky and is not offered; 25
+is the floor for a clip that lives on smoothness and 18 for a rare few),
+and the sound on the speaker at **8,000 Hz**. They are the only presets
+that carry their SOUND (`PRESET_DEFAULTS`' `audio` and `rate`), because a
+profile's card sound would otherwise take it back the moment the profile
+changed - so moving to `5150-xtide`, or from `herc-spk` to `cga-spk`,
+keeps the speaker. The window's *Made for* list names the Hercules one and
+says the CGA twin is a preset away, rather than growing a line; its rate
+list offers 8000 always. `--aim quality` does not try 22 kHz on either:
+for the speaker a richer rate is more of the MACHINE, and past what an
+8088 plays at all.
+
+**A disk the CPU copies for costs the picture**. An ST11M or ST11R moves
+its sectors by DMA while the decode runs; an XT-IDE (or a PicoMEM) has the
+8088 copy every byte, so what the speaker and the decode leave is all the
+disk gets. Profile `5150-xtide` charges it through its measured `disk_at`
+curve (98.2.1.3): the rate falls to 49 KB/s at 75% of the machine and to
+nothing at 100%, so under the speaker's 78% the disk, not the CPU, cuts.
+The same 40 s of Bad Carrot at `herc-spk`:
+
+| profile | frames cut, by the disk | picture wrong as seen |
+|---|---|---|
+| `5150-st225` (DMA) | 0 of 920 | 1.19% |
+| `5150-xtide` (the CPU copies) | 417 of 920 | 2.51% |
+
+The window's Budget tab says so under its fields.
 
 #### 98.2.16 Text video: `--pixfmt text`, and what CLARITY costs
 
@@ -154258,6 +154567,16 @@ to come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
   byte for byte the owner's hand-made disk's entry - and `os88hdd.py
   --wrap` puts it under the card's hidden cylinder, its parameter record
   and a VHD footer. `--verify-hdd` passes the volume before it is wrapped.
+- **The Hercules set was re-cut on 2026-09-28**: `02-PCSPK` became a
+  56 s excerpt of Bad Carrot on the speaker at 8 kHz (98.2.15.5's
+  `herc-spk`, 360 x 131 at 23 fps) and `03-PCM11` the whole song full
+  screen at 11 kHz PCM, where it had been the other way round; the old
+  `08-PCM11` (K Project) was dropped and its room spent on 03's sound
+  rather than on another video, and `09-LIVE` is `08-LIVE`.
+- **The CGA set's `02-BWPCS` was re-encoded the same day** at `cga-spk`
+  (360 x 84 at 23 fps, the speaker at 8 kHz), still the whole of Bad
+  Carrot: that disk has less room to trade. Its text had named 02 and
+  03 "Bad Apple"; 02 is Bad Carrot and 03, by its frames, Trackmania.
 - **`00-VIDS.TXT` is written for Note Pad** and held to `checkreadme.py`'s
   rules as `README.TXT` is: prose one line a paragraph, the per-video
   blocks indented and 28 columns at most, plain ASCII, CRLF on the disk.
@@ -154265,9 +154584,10 @@ to come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
 Each disk booted on MartyPC's 5150 of its adapter (the same volume at
 615/4/26 on its XT-IDE, which has no ST11R): the desktop from C:, the text
 in Note Pad and a video in the window at its own size - `05-ADPCM.V88` on
-the Hercules (75 files, 15,599 of 15,891 clusters), `02-BWPCS.V88` on the
-CGA (77 files, 14,687). **The titles inside the files are what each video
-SHOWS OFF** - "Composite 512 Color 160*100 OldStyle", "PC Speaker Audio" -
+the Hercules (75 files, 15,599 of 15,891 clusters then; 74 and 15,470 for
+the 2026-09-28 set), `02-BWPCS.V88` on the CGA (77 files, 14,687). **The
+titles inside the files are what each video SHOWS OFF** - "Composite 512
+Color 160*100 OldStyle", "PC Speaker (Set it in Ctrl Panel)" -
 and not what it is of: this is a disk of the player, not of the films (the
 owner's rule). The text names both.
 

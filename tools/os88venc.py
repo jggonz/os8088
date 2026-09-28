@@ -107,11 +107,11 @@ PROFILES = {
                    what="a 360 KB floppy, a cylinder a call (predicted)"),
     "286": dict(disk=150000, avg=1.50, peak=2.50, owe=1.6, speed=3,
                 ring=8,
-                rate=22050, audio="pcm8",
+                rate=22050, audio="pcm8", spk_us=(23.0, 13.0),
                 what="a 6 MHz 286: ~3x the 8088's cycles (predicted)"),
     "286-vga": dict(disk=400000, avg=3.00, peak=5.00, owe=1.6, speed=6,
                     ring=8,
-                    rate=22050, audio="pcm8",
+                    rate=22050, audio="pcm8", spk_us=(11.5, 6.5),
                     what="a 12-16 MHz 286 with a VGA, for VGA8: the VGA's "
                          "bus binds, and it stores ~4.5x as fast as the "
                          "5150's CGA; its IDE disk 627 KB/s with half the "
@@ -129,6 +129,11 @@ PRESETS = {
     "herc": ("herc", 400, 200),
     "herc-mid": ("herc", 480, 232),
     "herc-full": ("herc", 720, 348),
+    # THE PC SPEAKER on a 5150 (98.2.15.4): the owner's settings off the
+    # listens and the 86Box encodes - 8 kHz, which the speaker takes ~78% of
+    # the machine to play, leaves the picture this box at 23 fps
+    "herc-spk": ("herc", 360, 160),
+    "cga-spk": ("cga", 360, 160),
     "vga": ("lin80", 320, 240),
     "vga-mid": ("lin80", 400, 300),
     "vga-full": ("lin80", 640, 480),
@@ -178,7 +183,11 @@ PRESET_DEFAULTS = {"vga8": dict(fps=25.0, detail="2x1"),
                    # TEXT at 30: a whole picture is 4,000 bytes, so a
                    # full frame rate costs a text clip little (98.2.16)
                    "text": dict(fps=30.0, text_colour="colour"),
-                   "text-mono": dict(fps=30.0, text_colour="mono")}
+                   "text-mono": dict(fps=30.0, text_colour="mono"),
+                   # the speaker's two: the SOUND is the preset's too, or
+                   # a profile's card sound would take it back (98.2.15.4)
+                   "herc-spk": dict(fps=23.0, audio="speaker", rate=8000),
+                   "cga-spk": dict(fps=23.0, audio="speaker", rate=8000)}
 
 
 # WHAT EACH CHOICE IS (98.2.8): a line per value of every option that takes
@@ -207,6 +216,11 @@ CHOICE_HELP = {
         "herc": "Hercules, black and white: 400 x 200 of its 720 x 348. "
                 "In the window on a Hercules desktop",
         "herc-mid": "Hercules, black and white, bigger: 480 x 232",
+        "herc-spk": "Hercules, black and white, with the sound on the PC "
+                    "SPEAKER: 360 x 160 at 23 fps, 8 kHz - what a 5150 "
+                    "with no card has left once the speaker has its ~78%",
+        "cga-spk": "CGA, black and white, with the sound on the PC SPEAKER: "
+                   "360 x 160 at 23 fps, 8 kHz (herc-spk's, on a CGA)",
         "herc-full": "Hercules, black and white, the whole screen: "
                      "720 x 348",
         "vga": "VGA, black and white: 320 x 240 in mode 12h. In the window "
@@ -291,7 +305,10 @@ CHOICE_HELP = {
     "profile": {
         "5150-st225": "IBM 5150/XT with a Seagate ST-225 hard disk: "
                       "96 KB/s, half the CPU on average (the default)",
-        "5150-xtide": "IBM 5150/XT with an XT-IDE: 91 KB/s",
+        "5150-xtide": "IBM 5150/XT with an XT-IDE, or any disk the CPU "
+                      "copies for: 91 KB/s at half the machine, and less "
+                      "as the picture and the speaker take more of it - "
+                      "the copy is charged",
         "5150-picomem2": "IBM 5150/XT with a PicoMEM 2: 150 KB/s, 22 kHz "
                          "sound (predicted)",
         "floppy": "Played off a floppy: 15 KB/s, 5.5 kHz sound - small and "
@@ -323,6 +340,24 @@ CHOICE_HELP = {
     "adpcm": {
         "search": "Search for the best ADPCM stream (~7 dB better, slower)",
         "greedy": "A nibble at a time: fast",
+    },
+    "spk_shape": {
+        "on": "Shape the sound for the PC speaker: what its cone cannot "
+              "play cut, the level evened out and driven loud enough to "
+              "be heard over its whine",
+        "off": "The sound as it is: most of it lands under the whine on a "
+               "real 5150",
+    },
+    "spk_style": {
+        "lifted": "Quiet passages raised, so a soft intro is heard; the "
+                  "owner's pick of the listens on the 5150",
+        "natural": "More of the song's own rise and fall: a soft passage "
+                   "stays soft",
+    },
+    "spk_pulses": {
+        "1": "One pulse a sample: the whine is at the sound's rate",
+        "2": "Two a sample: the whine at twice the rate, much quieter to "
+             "the ear - ~96% of a 4.77 MHz 8088, so for a 286 or better",
     },
     "dither": {
         "bayer": "An ordered 8 x 8 pattern: steady, compresses best",
@@ -407,8 +442,8 @@ def implied(preset=None, pixfmt=None, profile="5150-st225", live=None,
                owe=num(None if live else prof["owe"]),
                reserve="" if live or prof["disk"] is None else
                num(reserve_bytes(prof) // 1024),
-               rate=num(prof["rate"]),
-               audio=prof["audio"])
+               rate=num(d.get("rate", prof["rate"])),
+               audio=d.get("audio", prof["audio"]))
     return out
 
 HOOK_CYC = 3040.0        # the hook's own cycles a frame, outside the decode
@@ -422,21 +457,27 @@ LIVE_AVG = 0.60         # a LIVE file's share of the machine (98.2.7): its
 CYC_AUDIO = 13.0        # the interrupt's copy of a PCM8 byte into the
                         # card's buffer (rep movsw, ~25 cycles a word)
 # THE SPEAKER (SPEC.md 34.11, 98.2.15): no card, so every sample is an
-# interrupt. os88spk_isr measured 343 cycles entry to iret on MartyPC's 5150,
-# and the 8088 takes ~60 more to acknowledge one: ~400 a pulse, in 8088
-# cycles. A file made for the speaker carries the COUNTS (98.1.1.3), so the
-# player copies them into its ring as it would for a card; translating
-# samples there was ~50 a byte. At 5,512 Hz that is ~48% of a 4.77 MHz
-# machine - which is the whole reason a clip is made FOR the speaker rather
-# than merely played through it
-CYC_SPK_PULSE = 400.0
+# interrupt. os88spk_isr measured 389 cycles from its first instruction to
+# the first one back in the code it interrupted on MartyPC's 5150 - its
+# `iret` included, which the first figure (343, entry TO the iret) left out
+# - and the 8088 takes ~60 more to acknowledge one: 449 a pulse, in 8088
+# cycles (34.11.7.1). A file made for the speaker carries the COUNTS
+# (98.1.1.3), so the player copies them into its ring as it would for a
+# card; translating samples there was ~50 a byte. At 5,512 Hz that is ~52%
+# of a 4.77 MHz machine and at 8,000 ~78% - which is the whole reason a clip
+# is made FOR the speaker rather than merely played through it. It was 400,
+# which left the iret out: ~4 points low at 5,512 Hz and ~8 at 8,000
+CYC_SPK_PULSE = 449.0
 CYC_SPK_BYTE = 15.0     # a plain copy: the file carries the counts
+CYC_SPK_WHOLE2 = 522.0  # --spk-pulses 2: the whole pulse, and the half one,
+CYC_SPK_HALF = 308.0    # measured the same way as CYC_SPK_PULSE (34.11.7.1)
                         # (98.1.1.3), so the table is the encoder's, not the
                         # player's. MEASURED: vp_aput 27.7 cycles a byte of
                         # wall time on MartyPC's 5150, ~15 its own once the
                         # pulses' ~46% is taken out; translating was 92.8/~50
 SPK_RATE = 5512         # the speaker target's default rate
 SPK_MIN = 4679          # N = 1,193,182 / rate is a lobyte count of 74..255
+SPK_MAX_AT = 24858      # ...or 48..255 on a 286 profile (SPEC.md 34.11.8)
 SPK_MAX_8088 = 8000     # VIDEO.O88's VP_SPKMAX: past it an 8088 is SILENT
 REC_OVER = 6 + 10       # a record's header and its ten list terminators
 REC_MAX = 30 * 1024     # a frame record rides in a super-packet of 32 KB
@@ -2471,7 +2512,9 @@ def ffmpeg_video(src, w, h, crop_dar, fps_expr, start, end, eq, pix="gray"):
         p.wait()
 
 
-def ffmpeg_audio(src, rate, start, end, volume):
+def ffmpeg_audio(src, rate, start, end, volume, fmt="u8"):
+    """The sound, mono at `rate`: unsigned 8-bit, or with fmt="f32le" the
+    floats the speaker's shaping starts from (98.2.15.1)"""
     cmd = ["ffmpeg", "-v", "error", "-nostdin"]
     if start:
         cmd += ["-ss", "%.3f" % start]
@@ -2481,8 +2524,8 @@ def ffmpeg_audio(src, rate, start, end, volume):
     af = ["aresample=%d" % rate]
     if volume:
         af.append("volume=%s" % volume)
-    cmd += ["-vn", "-ac", "1", "-af", ",".join(af), "-f", "u8", "-acodec",
-            "pcm_u8", "-"]
+    cmd += ["-vn", "-ac", "1", "-af", ",".join(af), "-f", fmt, "-acodec",
+            "pcm_" + fmt, "-"]
     return subprocess.run(cmd, capture_output=True, check=True).stdout
 
 
@@ -2585,8 +2628,12 @@ def aim_quality(a, tick, say):
             if not ok:
                 break
             best = b
-    rate = a.rate or PROFILES[a.profile]["rate"]
-    if a.audio != "none" and rate < AIM_SOUND and not a.live:
+    pd = PRESET_DEFAULTS.get(None if a.live else a.preset, {})
+    rate = a.rate or pd.get("rate") or PROFILES[a.profile]["rate"]
+    # (not the SPEAKER's: a richer rate is more of the machine, not more
+    # of the file, and 22 kHz is past what an 8088 plays at all)
+    if (a.audio or pd.get("audio") or PROFILES[a.profile]["audio"]) \
+            not in ("none", "speaker") and rate < AIM_SOUND and not a.live:
         b = copy.copy(best)
         b.rate = AIM_SOUND
         q = trial(b)
@@ -2708,21 +2755,30 @@ def _encode(a, keep, tick, readers):
     fps = a.fps or min(PRESET_DEFAULTS.get(
         None if a.live else a.preset, {}).get(
         "fps", 15.0 if vga8 else 30.0), sfps)
-    audio = a.audio or prof["audio"]
+    pd = PRESET_DEFAULTS.get(None if a.live else a.preset, {})
+    audio = a.audio or pd.get("audio") or prof["audio"]
     spk = audio == "speaker"
     if spk:                             # PCM8, at a rate the speaker plays
         audio = "pcm8"
-        r = a.rate or SPK_RATE
-        if not SPK_MIN <= r <= 16124:
+        r = a.rate or pd.get("rate") or SPK_RATE
+        top = SPK_MAX_AT if prof.get("spk_us") else 16124
+        if not SPK_MIN <= r <= top:
             raise vid.V88Error("--audio speaker: %d Hz is not a rate the PWM "
-                               "plays (%d..16124)" % (r, SPK_MIN))
+                               "plays on this profile (%d..%d%s)" % (
+                                   r, SPK_MIN, top, "" if top > 16124 else
+                                   "; a 286 profile goes to %d" % SPK_MAX_AT))
         if prof["avg"] is not None and prof.get("speed") == 1 \
                 and r > SPK_MAX_8088:
             raise vid.V88Error("--audio speaker: an 8088 plays at most %d Hz "
                                "through the speaker - VIDEO.O88 mutes %d "
                                "(SPEC.md 98.3.15)" % (SPK_MAX_8088, r))
         a.rate = r
-    if audio == "none" or not has_audio:
+        if a.spk_pulses > 1 and a.resident:
+            raise vid.V88Error("--spk-pulses: a streamed file's, not a "
+                               "resident one's (34.11.7)")
+        vid.spk_table(r, a.spk_pulses,  # (the pulses divide N, and a
+                      fast=bool(prof.get("spk_us")))  # pulse is 74..255
+    if audio == "none" or not has_audio:  # counts, 48..255 on a 286)
         afmt, rate, spf, abytes = vid.AUD_NONE, round(fps * 100), 100, 0
     else:
         afmt = vid.AUD_BY_NAME[audio]
@@ -2742,12 +2798,22 @@ def _encode(a, keep, tick, readers):
         # THE SPEAKER TAKES ITS SHARE OF EVERYTHING (98.2.15): the pulses are
         # interrupts on top of the whole machine - decode, the disk's calls,
         # the loop - so the profile's shares are of what is LEFT
-        spk_share = rate * (CYC_SPK_PULSE + CYC_SPK_BYTE) / (
-            vid.HZ * (prof.get("speed") or 1))
+        if prof.get("spk_us"):          # A 286 PROFILE: its own time a
+            w_us, h_us = prof["spk_us"]     # pulse (34.11.8, predicted) -
+            spk_share = rate * (w_us + (a.spk_pulses - 1) * h_us) / 1e6
+        else:                           # an interrupt is not 3x an 8088's
+            spk_share = rate * ((CYC_SPK_PULSE if a.spk_pulses == 1 else
+                                 CYC_SPK_WHOLE2 + CYC_SPK_HALF) +
+                                CYC_SPK_BYTE) / (
+                vid.HZ * (prof.get("speed") or 1))
         if spk_share >= 0.8:
-            raise vid.V88Error("--audio speaker: %d Hz takes %.0f%% of this "
-                               "machine and leaves too little to draw with"
-                               % (rate, 100 * spk_share))
+            raise vid.V88Error("--audio speaker: %d Hz%s takes %.0f%% of this "
+                               "machine and leaves too little to draw with%s"
+                               % (rate, " x %d pulses" % a.spk_pulses
+                                  if a.spk_pulses > 1 else "",
+                                  100 * spk_share,
+                                  " - --rate 8000 raises the whine to 8 kHz "
+                                  "for ~70%" if a.spk_pulses > 1 else ""))
         prof["avg"] *= 1 - spk_share
         prof["peak"] *= 1 - spk_share
         if prof.get("owe"):             # ...and of an owed frame's periods
@@ -2920,6 +2986,7 @@ def _encode(a, keep, tick, readers):
                     loop=None if a.loop_from is None else
                     max(0, round(a.loop_from * fps)),
                     repeat=a.repeat, spk=spk and bool(afmt),
+                    spkp=a.spk_pulses if spk and afmt else 1,
                     live=vid.TARGETS[a.live] if a.live and not a.resident
                     else None)
     if not a.resident and enc.disk.per is not None:
@@ -2929,7 +2996,26 @@ def _encode(a, keep, tick, readers):
                 "--reserve %d KB: the player's ring banks %d KB at most"
                 % (enc.reserve // 1024,
                    (vid.RING_SLOTS[-1] - 1) * vid.SLOT // 1024))
-    pcm = ffmpeg_audio(a.src, rate, a.start, a.end, a.volume) if afmt else b""
+    if spk and afmt and a.spk_shape == "on":
+        st = vid.SPK_STYLES[getattr(a, "spk_style", None) or vid.SPK_STYLE]
+        for k, v in (("spk_highpass", "hp"), ("spk_ratio", "ratio"),
+                     ("spk_range", "rng")):
+            if getattr(a, k, None) is None:
+                setattr(a, k, st[v])
+        # SHAPED FOR THE SPEAKER (98.2.15.1): what a 5150's cone can play
+        # would otherwise sit 25-30 dB under the pulses' own carrier
+        pcm = vid.spk_shape_f(np.frombuffer(ffmpeg_audio(
+            a.src, rate, a.start, a.end, a.volume, "f32le"), dtype="<f4"),
+            rate, a.spk_highpass, a.spk_drive, lows=a.spk_lows,
+            rng=a.spk_range, ratio=a.spk_ratio, idle=a.spk_idle)
+        say("   speaker: shaped %s - nothing under %d Hz, the level evened "
+            "out %g:1 and driven to %.0f%% RMS (--spk-shape off to take the "
+            "sound as it is)" % (getattr(a, "spk_style", None)
+                                 or vid.SPK_STYLE, a.spk_highpass,
+                                 a.spk_ratio, 100 * a.spk_drive))
+    else:
+        pcm = ffmpeg_audio(a.src, rate, a.start, a.end, a.volume) \
+            if afmt else b""
     cyc, recs, n = [], [], 0
     pend = []
     if isinstance(dith, CompDiffuser) and (a.jobs or os.cpu_count() or 1) > 1:
@@ -2974,7 +3060,8 @@ def _encode(a, keep, tick, readers):
         nf, wr.keyint, wr.key0), search=jobs if a.adpcm == "search" else 0,
         join=join) if afmt else None
     if spk and chunks:                  # THE SPEAKER'S COUNTS, not samples
-        chunks = [vid.spk_counts(c, rate) for c in chunks]  # (98.1.1.3)
+        chunks = [vid.spk_counts(c, rate, a.spk_pulses)     # (98.1.1.3)
+                  for c in chunks]
     sound = []
     for f, target in enumerate(pend):
         tick("encode", f, nf)
@@ -3140,6 +3227,13 @@ def _encode(a, keep, tick, readers):
     say("   %d keyframes = %d bytes (%.1f%% of the file), poster %d"
         % (res["keys"], res["keybytes"],
            100.0 * res["keybytes"] / res["bytes"], res["poster"]))
+    if getattr(a, "spk_preview", None) and spk and afmt:
+        rp = vid.Reader(a.out)          # WHAT THE 5150's SPEAKER LINE WILL
+        secs = vid.write_spk_preview(   # CARRY (98.2.15.2), carrier and all
+            a.spk_preview, b"".join(rec[-rp.abytes:]
+                                    for rec, at, i in rp.records()),
+            rp.rate, rp.spkp)
+        say("   speaker preview: %s, %.1f s" % (a.spk_preview, secs))
     return res
 
 
@@ -3236,6 +3330,54 @@ def parser():
     ap.add_argument("--jobs", type=int, help="cores for the search "
                     "(default: all)")
     ap.add_argument("--volume", help="ffmpeg's volume= (e.g. 1.5, 3dB)")
+    ap.add_argument("--spk-shape", choices=("on", "off"), default="on",
+                    help="with --audio speaker: cut what the speaker cannot "
+                         "play, even the level out and drive it loud, so the "
+                         "sound is heard over the pulses' whine (SPEC.md "
+                         "98.2.15.1). off takes the sound as it is")
+    ap.add_argument("--spk-style", choices=sorted(vid.SPK_STYLES),
+                    default=vid.SPK_STYLE,
+                    help="with --spk-shape: LIFTED levels harder so quiet "
+                         "passages are heard; NATURAL keeps more of the "
+                         "song's own rise and fall (default %(default)s). "
+                         "--spk-highpass, --spk-ratio and --spk-range "
+                         "override it (SPEC.md 98.2.15.1)")
+    ap.add_argument("--spk-highpass", type=int, default=None,
+                    metavar="HZ", help="with --spk-shape: nothing under this "
+                    "(the style's; 0 keeps the bass)")
+    ap.add_argument("--spk-pulses", type=int, choices=(1, 2),
+                    default=1,
+                    help="with --audio speaker: pulses a sample, so the "
+                         "speaker's whine is the rate times this - 2 at "
+                         "5512 Hz is an 11 kHz carrier, much quieter to the "
+                         "ear, at the price of the machine the extra pulses "
+                         "take (SPEC.md 34.11.7, 98.1.1.3.1). Older players refuse the "
+                         "file")
+    ap.add_argument("--spk-preview", metavar="WAV",
+                    help="with --audio speaker: also write what the speaker "
+                         "line will carry - the pulses, carrier and all - as "
+                         "a WAV to listen to here (SPEC.md 98.2.15.2)")
+    ap.add_argument("--spk-idle", type=float, default=vid.SPK_IDLE,
+                    metavar="S", help="with --spk-shape: in the quiet, slide "
+                    "the pulses' resting width to the short end over this "
+                    "many seconds, so the whine goes where there is nothing "
+                    "to cover it (default %(default)s; 0 off)")
+    ap.add_argument("--spk-ratio", type=float, default=None,
+                    help="with --spk-shape: the leveller's ratio - higher "
+                         "lifts quiet passages more (the style's)")
+    ap.add_argument("--spk-range", type=float, default=None,
+                    metavar="DB", help="with --spk-shape: the most a quiet "
+                    "passage is raised (the style's)")
+    ap.add_argument("--spk-lows", type=float, default=vid.SPK_LOWS,
+                    help="with --spk-shape: the band under %d Hz levelled "
+                         "apart from the one over it and scaled by this, so "
+                         "the voice keeps its drive while the lower tones - "
+                         "what the clip bends first - get less (1: one band; "
+                         "default %s)" % (vid.SPK_SPLIT, vid.SPK_LOWS))
+    ap.add_argument("--spk-drive", type=float, default=vid.SPK_DRIVE,
+                    help="with --spk-shape: the level, an RMS of full scale "
+                         "(default %(default)s; higher is louder and clips "
+                         "more)")
     ap.add_argument("--dither", choices=("bayer", "bluenoise", "threshold"),
                     default="bayer",
                     help="one bit: an ordered 8 x 8 pattern, a noise pattern, "

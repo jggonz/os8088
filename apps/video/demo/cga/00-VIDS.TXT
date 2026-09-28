@@ -15,16 +15,16 @@ Sound wants a Sound Blaster, except 02, which is made for the PC speaker (see be
   30 fps, 0:34, 1.5 MB
 
 02-BWPCS.V88
-  Bad Apple
-  400 x 94, black and white
+  Bad Carrot
+  360 x 84, black and white
   In the window
-  PC speaker, 5.5 kHz
-  25 fps, 3:46, 4.7 MB
+  PC speaker, 8 kHz
+  23 fps, 3:46, 4.5 MB
 
 02 is encoded and timed for the PC speaker. To hear it there, choose PC Speaker on the Control Panel's Sound page first; with a Sound Blaster chosen it plays through the card instead.
 
 03-CGA4.V88
-  Bad Apple
+  Trackmania: A01
   320 x 150, 4 colours
   Full screen
   PCM 5.5 kHz sound

@@ -66,7 +66,7 @@ def u16(b, i=0):
     return struct.unpack_from("<H", b, i)[0]
 
 
-def clip(tmp, secs, rate, spk=False):
+def clip(tmp, secs, rate, spk=False, spkp=1):
     """a 40 x 100 Hercules canvas moving a block, and a sine sweep"""
     nf = int(secs * FPS)
     wb, h = 40, 100
@@ -90,7 +90,7 @@ def clip(tmp, secs, rate, spk=False):
     vid._write_wav(wav, rate, bytes(audio))
     out = os.path.join(tmp, "CLIP.V88")
     vid.encode_frames(paths, out, FPS, wav, "herc", "vidspk clip",
-                      audio_fmt=vid.AUD_PCM8, spk=spk)
+                      audio_fmt=vid.AUD_PCM8, spk=spk, spkp=spkp)
     vid.verify_v88(out)
     return out
 
@@ -152,19 +152,29 @@ def main():
     ap.add_argument("--fs-on", action="store_true",
                     help="M before the play, F, Space, then M part way "
                     "through: the speaker on from the key at or before it")
+    ap.add_argument("--pulses", type=int, default=1,
+                    help="a clip made for this many pulses a sample (SPEC.md "
+                         "34.11.7): muted by default on an 8088, so M; its "
+                         "writes to 42h are each count twice")
     ap.add_argument("--keep", help="copy the capture here")
     a = ap.parse_args()
     a.full = a.full or a.fs_off or a.fs_on
+    if a.pulses > 1:                    # (an 8088 mutes it by default, and
+        a.counts, a.unmute = True, True     # only a speaker file has it)
     c_s = 0
     os.chdir(ROOT)
-    spk = not a.silent and (a.rate <= 8000 or a.unmute)
+    # ...and a pulse shorter than 74 counts is a 286's (SPEC.md 34.11.8):
+    # on this 8088 even M finds the door shut, and the play is SILENT
+    shut = (1193182 // a.rate) // a.pulses < 74
+    spk = not a.silent and not shut and (a.rate <= 8000 or a.unmute)
     # past VP_SPKMAX an 8088 defaults to MUTED (SPEC.md 34.11.4, 98.3.17),
     # and M is how the user says play it anyway
     fast = a.rate > 8000
+    many = a.pulses > 1                 # ...and so does two pulses a sample
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
-        v88 = clip(tmp, a.secs, a.rate, a.counts)
+        v88 = clip(tmp, a.secs, a.rate, a.counts, a.pulses)
         r = vid.Reader(v88)
         audio = b"".join(rec[-r.abytes:] for rec, _, _ in r.records())
         n = 1193182 // a.rate
@@ -220,7 +230,7 @@ def main():
             mw = (rb("vp_mute"), rb("vp_mwhy"))
             print("   0: opened muted %d, why %d (2 = too fast for this "
                   "speaker)" % mw)
-            if mw != ((1, 2) if fast else (0, 0)):
+            if mw != ((1, 2) if fast or many else (0, 0)):
                 bad.append("0: muted %d why %d at the open" % mw)
             if a.silent or a.fs_on:
                 m.type_text("s")
@@ -401,11 +411,14 @@ def main():
             if span > 0.05 or ev["w"]:
                 bad.append("2: the silent play made a sound")
         else:
-            tab = [1 + s_ * (n - 2) // 255 for s_ in range(256)]
+            np_ = n // a.pulses             # a PULSE's counts (34.11.7)
+            tab = [1 + s_ * (np_ - 2) // 255 for s_ in range(256)]
             want_c = audio if r.spk else bytes(tab[x] for x in audio)
             if a.counts and not r.spk:
                 bad.append("the clip was not made as speaker counts")
             got = bytes(c for _, c in ev["w"])
+            if many:                        # each count twice: whole, half
+                want_c = bytes(x for x in want_c for _ in range(a.pulses))
             at, lead = -1, 0
             if len(got) == PULSES:          # (the first pulse is a dry one,
                 for lead in range(9):       # the table's middle: os88spk_go
@@ -425,7 +438,7 @@ def main():
                            % span)
             if len(ev["w"]) > 1:
                 cy = ev["w"][-1][0] - ev["w"][0][0]
-                edges = cy / (4.0 * n)
+                edges = cy / (4.0 * (n // a.pulses))
                 lost = edges - (len(ev["w"]) - 1)
                 print("   3: in them, %.0f of %.0f PIT periods had no pulse "
                       "(%.1f%%)" % (lost, edges, 100.0 * lost / edges))

@@ -82,6 +82,10 @@ TARGETS = [
      "screen", "text-mono", "text", "5150-st225"),
     ("IBM 5150/XT, Hercules - black and white", "herc", "mono",
      "5150-st225"),
+    # no sound card: the preset carries the speaker's 8 kHz and 23 fps, and
+    # a CGA is its twin, cga-spk, a preset away rather than a longer list
+    ("IBM 5150/XT, PC speaker - Hercules (preset cga-spk: CGA)",
+     "herc-spk", "mono", "5150-st225"),
     ("IBM 5150/XT, a floppy - small and slow", "cga-small", "mono",
      "floppy"),
     ("286, VGA - 16 colours in the window", "vga4", "vga4", "286-vga"),
@@ -124,7 +128,11 @@ TAB_OF = {
     "text_ocr_conf": "Picture", "text_ocr_every": "Picture",
     "levels_mix": "Colour", "flip": "Colour",
     "audio": "Sound", "rate": "Sound", "adpcm": "Sound", "jobs": "Sound",
-    "volume": "Sound",
+    "volume": "Sound", "spk_shape": "Sound", "spk_highpass": "Sound",
+    "spk_drive": "Sound", "spk_lows": "Sound", "spk_pulses": "Sound",
+    "spk_range": "Sound", "spk_ratio": "Sound", "spk_idle": "Sound",
+    "spk_style": "Sound",
+    "spk_preview": "Sound",
     "disk": "Budget", "avg": "Budget", "peak": "Budget", "owe": "Budget",
     "lookahead": "Budget", "error": "Budget", "reserve": "Budget",
     "aim": "Basic", "worth": "Budget",
@@ -139,8 +147,21 @@ IMPLYING = ("preset", "pixfmt", "profile", "live")
 # rate's 5,512 Hz halves the sound's bytes, which is half a Live clip's
 # memory (98.1.7.2) - any other rate can still be typed. Owed time's 0 is
 # OFF, the fixed per-frame ceiling (98.2.1.1)
-SUGGEST = {"rate": ["", "22050", "11025", "5512"],
+SUGGEST = {"rate": ["", "22050", "11025", "8000", "5512"],
            "owe": ["", "0", "1.6"]}
+# a free-text option that NAMES A FILE the encode writes: a Browse... beside
+# it, a Save dialog of that type, started beside the .V88 under its name
+SAVE_FILE = {"spk_preview": ("The speaker preview", ".wav",
+                             [("WAV sound", "*.wav")])}
+# a line under a tab's fields: what no one field says
+TAB_NOTES = {
+    "Budget": "XT-IDE and other disk controllers the CPU copies for "
+              "cost CPU the picture would have had: every byte read is "
+              "the 8088's work, where an ST11M or ST11R's DMA is not. The "
+              "profile says which (Basic): 5150-st225 is DMA, 5150-xtide "
+              "charges the copy - its disk slows as the decode and the "
+              "speaker take the machine, so fewer bytes a frame are "
+              "planned."}
 # what the window runs itself, and so does not offer
 HIDDEN = {"help", "src", "out", "preview_png", "quiet", "profiles",
           "progress"}
@@ -867,16 +888,19 @@ class App(object):
                 p.columnconfigure(c0 - 1, minsize=16)
             lab = ttk.Label(p, text=f["label"])
             lab.grid(row=r, column=c0, sticky="w", pady=1)
+            # a TWO-COLUMN tab's fields are narrower, or the right-hand
+            # column's "?" and Browse... fall off the pane's edge
+            fw = 22 if half[f["tab"]] == per[f["tab"]] else 13
             if f["kind"] == "bool":
                 v = tk.StringVar(value="")
                 w = ttk.Checkbutton(p, variable=v, onvalue="1", offvalue="")
             elif f["kind"] == "choice" or f["choices"]:
                 v = tk.StringVar(value=f["default"])
                 w = ttk.Combobox(p, textvariable=v, values=f["choices"],
-                                 width=22)
+                                 width=fw)
             else:
                 v = tk.StringVar(value=f["default"])
-                w = ttk.Entry(p, textvariable=v, width=24)
+                w = ttk.Entry(p, textvariable=v, width=fw + 2)
             w.grid(row=r, column=c0 + 1, sticky="w", padx=4, pady=1)
             if f["dest"] in IMPLYING:
                 w.bind("<<ComboboxSelected>>",
@@ -886,6 +910,13 @@ class App(object):
                        lambda e: self.apply_audio())
             Tip(lab, f["tip"])
             Tip(w, f["tip"])
+            if f["dest"] in SAVE_FILE:  # A FILE IT WRITES: chosen, not typed
+                bb = ttk.Button(p, text="Browse...",
+                                command=lambda f=f, v=v:
+                                self.browse_save(f, v))
+                bb.grid(row=r, column=c0 + 2, sticky="w", pady=1)
+                Tip(bb, "Choose where %s is written"
+                    % SAVE_FILE[f["dest"]][0].lower())
             if f["help"]:               # WHAT EACH CHOICE IS, a click away
                 hb = ttk.Button(p, text="?", width=2,
                                 command=lambda f=f, v=v:
@@ -894,6 +925,11 @@ class App(object):
                 Tip(hb, "What each choice of %s is - click one to take it"
                     % f["label"])
             self.vars[f["dest"]] = v
+        for t, text in TAB_NOTES.items():   # a word the fields cannot say
+            n = max(half[t], 1)
+            ttk.Label(pages[t], text=text, foreground="#555",
+                      wraplength=600, justify="left").grid(
+                row=n, column=0, columnspan=8, sticky="w", pady=(10, 0))
         # --- make a disk, and go: the buttons packed FIRST, so a narrow
         # row squeezes the disk list rather than cutting Encode off
         self.stopbtn = ttk.Button(go, text="Cancel", command=self.stop,
@@ -1030,6 +1066,21 @@ class App(object):
             self.sfps = None
         if cur.get("fps", "") in ("", was):     # ...unless it was edited
             self.vars["fps"].set(implied_values(cur, self.sfps)["fps"])
+
+    def browse_save(self, f, v):
+        """A SAVE_FILE option's Browse...: its type, beside the .V88 and
+        under the .V88's name unless it already names a file of its own"""
+        what, ext, types = SAVE_FILE[f["dest"]]
+        cur = v.get().strip() or os.path.splitext(self.out.get().strip())[0]
+        kw = {}
+        if cur:
+            d, n = os.path.split(cur)
+            kw = dict(initialdir=d or None,
+                      initialfile=os.path.splitext(n)[0] + ext)
+        p = filedialog.asksaveasfilename(title=what, defaultextension=ext,
+                                         filetypes=types, **kw)
+        if p:
+            v.set(p)
 
     def browse_out(self):
         p = filedialog.asksaveasfilename(defaultextension=".V88",

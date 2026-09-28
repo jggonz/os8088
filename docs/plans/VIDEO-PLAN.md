@@ -2212,6 +2212,101 @@ and not a transcript. Each line names where the detail is.
 - **The keeper relocatable** (15.4 D): the blocks move, the keeper stays
   pinned until its use across window calls is proven safe.
 
+**The speaker on the 5150** (2026-09-28): the owner's first listen was a
+loud 5,524 Hz whine and no music, where every emulator played the song.
+The pulses were right (the carrier's harmonics follow the file at 1.0x);
+a straight encode put what a 2¼-inch cone can play 23-28 dB under the
+carrier. SPEC.md 98.2.15.1 shapes the sound for the speaker - on by
+default, and `os88vid speaker` for a file already made - which takes that
+band to ~10 dB under it. **The owner's second listen: "clearly audible,
+even good - except the coil whine still dominates."**
+
+**Two pulses a sample, MEASURED** (2026-09-28, `SPK2X` in
+apps/os88spk.inc, a prototype: not a Makefile knob, and the shipped
+player is byte-identical without it). Channel 0 at N/2, an 11,047 Hz
+carrier; every other entry re-writes the held count and nothing else; the
+whole path halves the file's counts. On MartyPC's Hercules 5150, full
+screen, `spk2x.py`'s shape (the session's scratch instrument):
+
+| | ISR whole / half, cycles | lost | a 160x58 5 fps clip | a 400x145 30 fps clip |
+|---|---|---|---|---|
+| one pulse a sample | 346-352 / - | 1.9-2.2% | 300 of 300, 0 late, +2.1% | 900 of 900, 0 late, +1.5% |
+| two (SPK2X) | 441 / 220 | 2.9-3.4% | 300 of 300, 0 late, +3.0% | 900, **24,165 late, 845 s for 30** |
+
+With the ~60-cycle acknowledge each, two pulses are ~781 of a sample's
+864 cycles - **~90% of the machine against 48%**. A clip as light as Bad
+Carrot's (decode 1.2% on average) plays; a clip budgeted for one pulse
+does not play at all. The owner's listen to the prototype: *"much better,
+the ringing whine is higher pitched but less annoying"*.
+
+**BUILT as a per-file choice** (SPEC.md 34.11.7, 98.1.1.3.1): flag 64
+SPKMUL and header byte 24 = pulses a sample, the counts made for N / P,
+`--spk-pulses 2`, the library's `os88spk_isrm` with a self-modifying jump
+for the toggle (whole 462, half 248 cycles to resume - the floor on an
+8088). It is **~96% of a 5150**, so the encoder refuses it on a `speed` 1
+profile (the 80% rule) and the player mutes it there by default (M plays
+it). **The 5150's answer is one pulse at 8,000 Hz: an 8 kHz carrier for
+~75%**, which leaves ~25% for the picture and needs nothing new
+(34.11.7.1). Two pulses belong to a faster machine: ~40% on a 10 MHz 8088,
+~15-20% on a 12 MHz 286 (D, neither measurable here), and a 286 could take
+22,050 Hz at one pulse - no audible carrier - if the door's 74-count floor
+is lowered for `CPU_286` (kernel work, not done).
+
+**8 kHz IS THE 5150's SPEAKER RATE** (the owner, fourth listen: *"8Khz
+has almost no audible whine - the whine only shows up at silent parts. It
+is perfectly listenable"*; the machine agreed with the previews "almost
+perfectly"). BADCARJ (ratio 6) was *"too loud, it runs together"*; the
+pick is between W and I, so the next file (BADCARK) is the midpoint -
+ratio 3, range 30, cut at 200 - at 8 kHz, with `--spk-idle` (98.2.15.3)
+putting the carrier away in the quiet. What 8 kHz costs the picture, Bad
+Carrot on profile `5150-st225` (98.2.15.4):
+
+| box, fps | 5,512 Hz | 8,000 Hz |
+|---|---|---|
+| 496 x 181, 25 (the first 02-PCSPK's) | 0.39% wrong | 3.15% |
+| 496 x 181, 20 | | 2.63% |
+| 496 x 181, 15 | | 2.03% |
+| 400 x 146, 25 | | 1.64% |
+| 400 x 146, 15 | | 0.64% |
+
+`CYC_SPK_PULSE` is 449 now (the iret counted). The late plays first
+blamed on it were MartyPC's XT-IDE - the only hard disk it has; the
+owner's ST11M is DMA - and the owner's 02 runs on schedule on the 5150.
+BADCARK was *"pretty good"*: it is `--spk-style lifted`, the default,
+with W as `natural` beside it (98.2.15.1). **The frame rate has a floor**
+(the owner): *"15 fps is jerky and not viable. 25 is about the lowest for
+Bad Carrot as it depends on smoothness - some other videos can afford as
+low as 18, but they are rare. Smoothness matters more than some amount of
+motion blur."* So 8 kHz is bought with the box or with error, not with
+frames. **What is open**: the owner's encodes in 86Box, which is
+speed-accurate where MartyPC's only hard disk is an XT-IDE - which box at
+25 fps and 8 kHz keeps time on the ST11M, and whether the default speaker
+rate moves to 8,000.
+
+**22 kHz on a 286 is BUILT** (the owner: *"a 286 with no sound card is a
+legitimate period possibility; one of my childhood systems was exactly
+this"*): SPEC.md 34.11.8 - the door's floor 48 on `CPU_286` and up (+15
+bytes of kern_big `.text`), the library's the same, `--rate` to 24,858 on a
+286 profile with its own predicted cost a pulse (~25% at 22,050 Hz on
+12 MHz, ~51% on 6 MHz). `vidspkat` (QEMU) is the function gate and
+`vidspk22` (MartyPC) the 8088's refusal. How it SOUNDS is a field listen
+on a 286; nothing here times one.
+
+**The preview is not the cone** (the owner, on the WAVs): the pitch of the
+5.5 kHz whine is right, but the real speaker's is *"choppy and ringing"*
+where the WAV's is a constant whine. The preview has no lost pulses and
+no interrupt jitter; the machine loses ~1 pulse a rate period at the
+chain (34.11.3) and its writes land a variable latency after each IRQ0.
+Modelling both in `spk_preview` is the obvious next step for it.
+
+**The owner's third listen** picked `--spk-lows 0.5 --spk-drive 0.5`,
+the defaults now (98.2.15.1); the soft intro is the part still lost.
+**Next listen** (`badcar4-ST11M.VHD`, this player): ratio 4 / range 36 /
+cut 150 (BADCARI), ratio 6 (BADCARJ), BADCARI at 8,000 Hz (BADCAR8I) and
+at two pulses (BADCAR2I, muted by default - M), BADCARW for reference.
+Each has its `--spk-preview` WAV (98.2.15.2), reenigne's mod_convert's
+idea, so the next choice can start at the desk.
+
 **PC speaker follow-ons** (15.9):
 - **Tracker's full screen and Audio**: a HANDOFF to another session,
   docs/plans/SPEAKER-PCM-HANDOFF.md. Audio needs a full-screen play first.
@@ -2221,6 +2316,11 @@ and not a transcript. Each line names where the detail is.
 - **The last ~one pulse a period** (1.8% lost): the period's own entry.
   Listen on the 5150 before building anything.
 - **A field listen on the 5150**: every speaker figure is MartyPC's.
+- **The speaker presets are in** (SPEC.md 98.2.15.5, 2026-09-28):
+  `herc-spk`/`cga-spk`, 360 x 160 at 23 fps and 8 kHz, and a *Made for*
+  line. Pending the owner: the demo disks swap which Bad Carrot is short
+  and which full length on Hercules and CGA, the speaker one becoming the
+  short demo.
 
 **Optimisation, not taken** (15.8.1): decoding straight onto another
 layout (no shadow copy); `font_run_cell`'s masked row loop (~20 kernel
