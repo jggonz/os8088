@@ -152521,6 +152521,16 @@ on, twice, byte for byte, and the play takes all of it), `vidmodexrk` and
 its seam). Broken on purpose - the seam decoded as a plain frame, never
 armed, its audio silence, the join's clear skipped - each FAILS.
 
+**R redraws the Repeat button and nothing else** (`vp_reptog`, `[vp_bone]`
+naming one button to `vp_buttons`), and **Space on a LIVE play redraws
+Play/Pause alone** (`vp_lplay`'s toggle). Both redrew all seven, framed
+pictures each, with the gfx lock held - on an 8088 that held a LIVE pass
+(98.3.10) off about two ticks, so `vidlivesndl`'s R and `vidlivesndp`'s
+Space put the picture 3 to 5 frames late, past their bound of 2. They had
+failed 0 times in 22 at one package size and 1 to 3 in 10 at any other,
+which is what a margin that thin looks like; with the one button each is
+0 in 10 or more.
+
 #### 98.3.10 Live: a play ON the desktop (wave 9)
 
 **A file flagged LIVE (8) plays on the live desktop** - the pointer, the

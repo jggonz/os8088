@@ -565,7 +565,9 @@ vp_reptog:
     xor byte [vp_rep], 1
     call vp_track
     call vp_clip
-    jmp vp_buttons
+    mov byte [vp_bone], 5           ; ITS button, not all seven: on an 8088
+    jmp vp_buttons                  ; a row of framed pictures held a LIVE
+                                    ; pass off two ticks (vidlivesndl)
 
 ; vp_cardtog - the info card out or in: a new layout, and the window resized
 ; to it, from the wake - OSAPI_WM_RESIZE may not be called under the lock
@@ -3989,7 +3991,8 @@ vp_lplay:
     call vp_lsetup
     jmp short .out
 .toggle:
-    cmp byte [vp_upause], 0
+    mov byte [vp_bone], 3           ; (Play/Pause's button alone: the rest
+    cmp byte [vp_upause], 0         ; hold the worker off for nothing)
     jne .res
     call vp_upaus                   ; PAUSE: the worker stops where it is,
     mov byte [vp_lrun], 0           ; and the card, if any, where it is
@@ -9908,14 +9911,20 @@ vp_buttons:
     or byte [vp_bflags+6], OS88UI_DIS
 .p3:
     mov bx, vp_btns
-    mov al, 1
+    mov al, [vp_bone]               ; one button, if a caller named it
+    or al, al
+    jnz .b
+    inc ax
 .b:
     cmp al, [vp_btns + OS88UI_BT_N]
     ja .out
     call os88ui_btn
+    cmp byte [vp_bone], 0
+    jne .out
     inc al
     jmp short .b
 .out:
+    mov byte [vp_bone], 0
     pop bx
     pop ax
     ret
@@ -11640,6 +11649,7 @@ vp_xcap:      dd 0                  ; its bytes (a KB over the file),
 vp_xhave:     dd 0                  ; the bytes that have arrived,
 vp_xon:       db 0                  ; there is one,
 vp_lwant:     db 0                  ; a live stream's worker wants a feed
+vp_bone:      db 0                  ; vp_buttons: this one only (0 all)
 vp_xfull:     db 0                  ; ...and all of the file is in it
 
 %include "os88alt.inc"              ; Alt+Enter in the bracket (SPEC.md 11.2.1.1)
