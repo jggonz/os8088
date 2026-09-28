@@ -219,6 +219,10 @@ entry:
     adc si, 0
     add bx, [bpb_hidd]          ; ...and the partition base
     adc si, [bpb_hidd+2]
+    add bx, [kofs]              ; ...and WHERE IN THE DATA AREA the kernel
+    adc si, [kofs+2]            ; starts, which is 0 after a format and the
+                                ; run a non-destructive install found free
+                                ; otherwise (SPEC.md 52.10.15)
     mov [lba], bx               ; ...the FIRST sector of KERNEL.SYS, which is
                                 ; the blob's, not `.text`'s: the two passes
                                 ; below read the file straight through and
@@ -440,15 +444,25 @@ fail:
     jmp short .halt             ; halted machine into a spinning one
 
 boot_drive:  db 0x80
-dest_seg:    dw KERNEL_SEG
-lba:         dd 0
-left:        dw 0
-run:         dw 0
-spt:         dw 0
-spt_heads:   dw 0
-cyllo:       db 0
-cylhi:       db 0
-head:        db 0
+
+; THE WORKING VARIABLES ARE NOT IN THE SECTOR (SPEC.md 52.10.15). Every one is
+; written before it is read, so none needs an initialiser, and the seventeen
+; bytes they took are what paid for [kofs]. They live 0600h into the segment
+; the sector relocated to: .nomem above proves the kernel's own read ends
+; BOOT_STACK below that segment's base, the stack is at 7C00h and grows down
+; into a few hundred bytes at most, and the blob is at the heap floor, below
+; both. boot_drive stays in the sector: it is read AFTER the blob has run.
+absolute 0x0600
+dest_seg:    resw 1
+lba:         resd 1
+left:        resw 1
+run:         resw 1
+spt:         resw 1
+spt_heads:   resw 1
+cyllo:       resb 1
+cylhi:       resb 1
+head:        resb 1
+section .text
 
 ; --- the one word the INSTALLER patches, at a FIXED offset ---------------------
 ; The floppy sector takes KERNEL_SECTORS as a -D at build time, because the
@@ -464,10 +478,16 @@ head:        db 0
 ; this file is edited, and four separate immediates - which is what the count
 ; used to be - could not have been patched at all.
 BOOTHD_KSECS equ 508
+; ...and the second patch site, the dword below it: the kernel's first sector
+; as an offset into the DATA AREA. A format puts KERNEL.SYS at cluster 2 and
+; leaves this 0; an install that keeps the volume's files puts it in the first
+; free run long enough and writes (cluster - 2) * spc here (SPEC.md 52.10.15).
+BOOTHD_KOFS  equ 504
 
-%if $ - $$ > BOOTHD_KSECS
+%if $ - $$ > BOOTHD_KOFS
 %error "the hard disk boot sector does not fit 512 bytes"
 %endif
-    times BOOTHD_KSECS - ($ - $$) db 0
+    times BOOTHD_KOFS - ($ - $$) db 0
+kofs:        dd 0
 ksecs:       dw 0
     dw 0xAA55

@@ -248,6 +248,11 @@ def capabilities():
     if shutil.which("ffmpeg") and shutil.which("ffprobe") and \
             os88build.have_numpy():
         caps.add("ffmpeg")
+    # mtools, which tests/instkeep.py plants a user's files with on a copy of
+    # the fixture partition (SPEC.md 52.10.15) - a HOST-side FAT writer that
+    # is not os88disk.py, so the fixture is not built by the tree under test.
+    if shutil.which("mcopy") and shutil.which("mattrib"):
+        caps.add("mtools")
     # WIREFRAME is an instrument and does not ship (SPEC.md 78.9), so `all`
     # builds wire.o88 and NO shipped floppy carries it - the disk comes from
     # `make wiredisk` and nothing in the suite runs that. Without this, the

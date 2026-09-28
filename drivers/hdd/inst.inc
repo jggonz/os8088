@@ -4,13 +4,18 @@
 ; Install (SPEC.md 52.10.4): make a partition into a system volume the machine
 ; can boot from, by putting both floppies onto it and marking it bootable.
 ;
-;   Install to        Size   State
-;   Slot 1            31M    Ready          <- big enough, and formattable
-;   Slot 2             -     Too Small
-;   Slot 3            50M    Unusable       <- foreign, or over the ceiling
-;   Slot 4             -     No Room
+;   Install to  Size  State
+;   Slot 1      31M   C: FAT16            <- mounted: its letter, then what
+;   Slot 2      20M   Linux                  is on it (SPEC.md 52.10.4.2)
+;   Slot 3      1M    FAT12, Too Small    <- the reason, when it is a no
+;   Slot 4      -     Empty, No Room
 ;   [Install] [Close]      <- the first one says 'Copy Apps', then 'Restart'
 ;   Insert the APPS disk in A:, then Install
+;
+; **UNLESS IT KEEPS THE TARGET'S FILES** - the default over a volume, the
+; Erase box clear (SPEC.md 52.10.15): then nothing is formatted, the kernel
+; goes in the first free run long enough for it, and the VBR carries its
+; offset. hd_inst_keep is that path; everything below is the other one.
 ;
 ; **IT FORMATS THE TARGET, AND THAT IS NOT A CONVENIENCE.** boot/boothd.asm
 ; reads KERNEL.SYS as a flat run from the start of the data area rather than
@@ -51,7 +56,7 @@
 ; the user to A:.
 ; =============================================================================
 
-HIW_W        equ 300
+HIW_W        equ 356
 HIW_H        equ 150
 HIW_LX       equ 8              ; a MULTIPLE OF 8, with OSAPI_WM_SNAP on the
                                 ; window, so every OSAPI_FONT_RUN in here takes
@@ -61,6 +66,9 @@ HIW_LX       equ 8              ; a MULTIPLE OF 8, with OSAPI_WM_SNAP on the
 HIW_HY       equ 6
 HIW_R0Y      equ 24
 HIW_ROWH     equ 12
+HIW_CKY      equ 78             ; the Erase box (SPEC.md 52.10.15), between
+HIW_CKH      equ 12             ; the last row and the buttons
+HIW_CKW      equ 12 + 6 + 25*8  ; box, gap, 'Erase the partition first'
 HIW_BY       equ 96
 HIW_BH       equ 16
 HIW_CAPY     equ 120
@@ -87,11 +95,20 @@ HIW_BW1      equ 56             ; caption is nine characters, 72px, and the
                                 ; as well as the drawing (hd_ibhit reads the
                                 ; same pairs), so there is one place to change
                                 ; and not two
-HIW_CELLS    equ 35             ; characters across the text band: HIW_W - 12
-                                ; less HIW_LX, in 8px cells. Every run in this
+HIW_CELLS    equ 42             ; characters across the text band: HIW_W - 12
+                                ; less HIW_LX, in 8px cells. 42 and not 35
+                                ; since the State column says what a slot IS
+                                ; (SPEC.md 52.10.4.2): its longest row is 24
+                                ; cells from HIW_STATEC. Every run in this
                                 ; window is padded to it, which is what makes
                                 ; the run OPAQUE over the whole band and so
                                 ; what removes the blank-then-letter flash
+
+HIW_SIZEC    equ 12             ; the Size and State columns, in cells -
+HIW_STATEC   equ 18             ; under hd_s_ihead's two headings
+%if HIW_STATEC + 24 > HIW_CELLS
+  %error "the State column's longest row does not fit HIW_CELLS"
+%endif
 
 ; What a slot is as an install TARGET, which is not tool.inc's HTS_* question.
 ; That one asks what is there; this asks whether an install would work, and
@@ -166,14 +183,13 @@ hd_iw_open:
                                 ; hd_istate/hd_isecs below describe THIS device
     call hd_iw_scan             ; a fresh table every time, tool.inc's reason:
                                 ; the disk can be swapped between two clicks
-    mov bl, [hd_isel]           ; ...and if what it landed on is the volume we
-    xor bh, bh                  ; are RUNNING FROM, say so here rather than
-    cmp byte [bx+hd_istate], HIS_LIVE   ; leaving 'Pick a partition' up over a
-    jne .win                            ; list with nothing pickable in it. The
-    mov word [hd_imsg], hd_s_ilboot     ; scan does not set captions - the
-                                        ; stage machine owns [hd_imsg] and a
-                                        ; side effect in there would fight it
-                                        ; (SPEC.md 52.10.4.1)
+    call hd_idefwipe            ; ...and the Erase box follows the selection:
+                                ; clear over a volume, which is then KEPT,
+                                ; set and greyed over anything else. The
+                                ; volume we are RUNNING FROM is a volume too,
+                                ; so it is offered - to keep, never to erase
+                                ; (SPEC.md 52.10.15, which is where 52.10.4.1's
+                                ; 'Boot from a floppy to replace it' went)
 .win:
     cmp word [hd_iwin], 0
     jne .show
@@ -226,8 +242,16 @@ hd_iw_shut:
 ; repaint of this window any more except W_PAINT itself.
 
 ; -----------------------------------------------------------------------------
-; hd_iw_scan - what each slot would be as a target (module internal)
-; out: hd_istate[0..3] = HIS_*, hd_isecs[0..3] = its extent in sectors
+; hd_iw_scan - what each slot IS, and what it would be as a target
+; out: per slot, hd_istate = HIS_* (the verdict: may Install take it) and the
+;      State column's facts - hd_ilet, hd_ibody, hd_irsn, hd_itype, hd_isecs
+;
+; TWO QUESTIONS, and the column used to answer only the second (SPEC.md
+; 52.10.4.2). `Ready` said an install would work and nothing about what the
+; install would be working ON - which of four slots is the user's C:, which
+; is a FAT volume nobody has mounted, which is somebody else's Linux. The
+; column says what is THERE now, the letter first when it is on the desktop,
+; and the reason after a comma only when the verdict is no.
 ; -----------------------------------------------------------------------------
 hd_iw_scan:
     push ax
@@ -241,64 +265,9 @@ hd_iw_scan:
     call hd_part_load           ; the table, or a blank one if unreadable
     xor cl, cl
 .slot:
-    mov bl, cl
-    xor bh, bh
-    mov byte [bx+hd_istate], HIS_NONE
-    shl bx, 1
-    mov word [bx+hd_isecs], 0
-
     mov al, cl
     call hd_part_ent            ; SI -> the entry
-    mov al, [si+HP_TYPE]
-    or al, al
-    jz .extent                  ; empty: is there room to make one?
-    call hd_fmt_isfat           ; a type this kernel could mount
-    jc .alien
-    mov ax, [si+HP_SECS+2]
-    or ax, ax
-    jnz .alien                  ; past 65,535 sectors: the volume ceiling
-    mov ax, [si+HP_SECS]
-    jmp short .sized
-.extent:
-    push cx
-    mov al, [hd_idev]
-    call hd_dev_row
-    mov al, cl
-    call hd_slot_extent         ; -> [hd_fbase]/[hd_fsecs] (SPEC.md 52.2.1)
-    pop cx
-    jc .next                    ; no room on the disk for a new one
-    mov ax, [hd_fsecs]
-.sized:
-    mov bl, cl
-    xor bh, bh
-    shl bx, 1
-    mov [bx+hd_isecs], ax
-    mov bl, cl
-    xor bh, bh
-    cmp ax, HIW_MINSEC
-    jb .small
-    mov byte [bx+hd_istate], HIS_OK
-    call hd_part_used           ; ...UNLESS IT IS THE ONE WE ARE RUNNING FROM
-    jc .next                    ; (SPEC.md 52.10.4.1). A slot with no ENTRY is
-                                ; asked nothing: what SI points at is zeroed,
-                                ; the extent above came from hd_slot_extent
-                                ; instead, and a base of 0 is not this slot's
-                                ; to be compared
-    push ax                     ; Last of the tests, because it is the only one
-    mov al, [hd_idev]           ; that costs a call out of the image, and every
-    call hd_kvol                ; earlier verdict already refuses the slot
-    pop ax
-    jc .next
-    mov byte [bx+hd_istate], HIS_LIVE
-    jmp short .next
-.small:
-    mov byte [bx+hd_istate], HIS_SMALL
-    jmp short .next
-.alien:
-    mov bl, cl
-    xor bh, bh
-    mov byte [bx+hd_istate], HIS_ALIEN
-.next:
+    call hd_iw_slot
     inc cl
     cmp cl, 4
     jb .slot
@@ -331,6 +300,179 @@ hd_iw_scan:
     ret
 
 ; -----------------------------------------------------------------------------
+; hd_iw_slot - one slot's verdict and State facts (module internal)
+; in:  CL = the slot, SI = its entry, DI = the device row
+; out: hd_istate/hd_ilet/hd_ibody/hd_irsn/hd_itype/hd_isecs for slot CL
+; clobbers: flags
+;
+; The order is the order of the certainties, tool.inc's: the TABLE first
+; (free, foreign, over the ceiling, laid out at another geometry), which costs
+; no read, then the one sector a formatted volume has.
+; -----------------------------------------------------------------------------
+hd_iw_slot:
+    push ax
+    push bx
+    push dx
+    mov word [hd_iscur], 0
+    mov word [hd_iscur+2], 0
+    mov byte [hd_ilcur], 0
+    mov byte [hd_ivcur], 0
+    xor bx, bx                  ; BX = the reason, 0 = none to give
+    mov al, HIS_ALIEN
+    mov dx, hd_s_iunread        ; the read of the table FAILED: every slot
+    cmp byte [hd_mbrok], HMB_BAD    ; below would read free, which is a
+    je .put                         ; fabrication (tool.inc's hd_s_tnomb)
+    call hd_part_used
+    jnc .used
+    push cx                     ; FREE: is there room to make one?
+    mov al, cl
+    call hd_slot_extent         ; -> [hd_fbase]/[hd_fsecs] (SPEC.md 52.2.1)
+    pop cx
+    mov al, HIS_NONE
+    mov dx, hd_s_iempty
+    mov bx, hd_s_inone
+    jc .put                     ; no room on the disk for a new one
+    xor bx, bx
+    mov dx, hd_s_iunpart
+    mov ax, [hd_fsecs]
+    mov [hd_iscur], ax
+    mov ax, [hd_fsecs+2]
+    mov [hd_iscur+2], ax
+    jmp short .sized
+.used:
+    mov ax, [si+HP_SECS]
+    mov [hd_iscur], ax
+    mov ax, [si+HP_SECS+2]
+    mov [hd_iscur+2], ax
+    call hd_part_isfat
+    jnc .fat
+    mov al, [si+HP_TYPE]        ; SOMEBODY ELSE'S, and its name is the reason
+    call hd_ptype_name          ; DX = the name, 0 = 'Type nnh' at draw time
+    mov al, HIS_ALIEN
+    jmp short .put
+.fat:
+    mov dx, hd_s_f16name        ; the TYPE byte's name, as the Format window
+    cmp byte [si+HP_TYPE], HPT_FAT12    ; reads it: what the table says
+    jne .fname
+    mov dx, hd_s_f12name
+.fname:
+    call hd_iw_letter           ; the letter, and CF = 0 = the KERNEL's own
+    pushf                       ; ...which is decided below, after the facts
+    mov al, HIS_ALIEN
+    mov bx, hd_s_ibig
+    call hd_part_big
+    jc .popput                  ; past FAT16's ceiling (SPEC.md 18.7.5)
+    mov bx, hd_s_tgeom
+    call hd_tw_geomok           ; before the read, which a geometry fault
+    jc .popput                  ; points at the wrong sector (SPEC.md 52.2.6)
+    xor bx, bx
+    call hd_fmt_isfat
+    jc .unfmt
+    mov byte [hd_ivcur], 1      ; a volume: an install may KEEP it (52.10.15)
+    jmp short .fmted
+.unfmt:
+    mov dx, hd_s_traw           ; FAT-typed, nothing in it: Install formats
+.fmted:                         ; either way, so this is a fine target
+    popf
+    jc .sized
+    mov al, HIS_LIVE            ; ...UNLESS WE ARE RUNNING FROM IT (SPEC.md
+    mov bx, hd_s_tlive          ; 52.10.4.1)
+    jmp short .put
+.popput:
+    popf
+    jmp short .put
+.sized:
+    mov al, HIS_OK
+    cmp word [hd_iscur+2], 0
+    jne .put
+    cmp word [hd_iscur], HIW_MINSEC
+    jae .put
+    mov al, HIS_SMALL
+    mov bx, hd_s_ismall
+.put:
+    push bx
+    mov bl, cl
+    xor bh, bh
+    mov [bx+hd_istate], al
+    mov al, [hd_ilcur]
+    mov [bx+hd_ilet], al
+    mov al, [hd_ivcur]
+    mov [bx+hd_ivol], al
+    mov al, [si+HP_TYPE]
+    mov [bx+hd_itype], al
+    shl bx, 1
+    mov [bx+hd_ibody], dx
+    pop word [bx+hd_irsn]
+    shl bx, 1
+    mov ax, [hd_iscur]
+    mov [bx+hd_isecs], ax
+    mov ax, [hd_iscur+2]
+    mov [bx+hd_isecs+2], ax
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_iw_letter - the drive letter a FAT slot is on the desktop as
+; in:  CL = the slot, SI = its entry
+; out: [hd_ilcur] = 'A'+volume, or 0 if nothing has it mounted;
+;      CF = 0 = it is the volume the machine BOOTED from, CF = 1 = it is not
+; clobbers: flags
+;
+; Two tables, because two owners: the kernel's adoption of the boot partition
+; is asked through OSAPI_VOL_AT (hd_kvol), and a mount THIS driver made is
+; asked across the seam (hd_vol_ask), hd_vols being the resident's.
+; -----------------------------------------------------------------------------
+hd_iw_letter:
+    push ax
+    mov al, [hd_idev]
+    call hd_kvol                ; AL = the volume, CF = 0 = the kernel's
+    jnc .kern
+    mov al, [hd_idev]
+    mov ah, cl
+    call hd_vol_ask             ; AL = the volume, 0FFh = none
+    cmp al, 0xFF
+    je .none
+    add al, 'A'
+    mov [hd_ilcur], al
+.none:
+    pop ax
+    stc
+    ret
+.kern:
+    add al, 'A'
+    mov [hd_ilcur], al
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ptype_name - a FOREIGN partition type's name, for the State column
+; in:  AL = the table's type byte
+; out: DX = its name, or 0 if it is not one we know (drawn as 'Type nnh')
+; clobbers: DX (the output), flags
+;
+; A partition we will not touch still deserves to be recognised: 'Unusable'
+; over the user's Linux root says less than 'Linux' does, and says it about
+; the one slot they most need to be sure of.
+; -----------------------------------------------------------------------------
+hd_ptype_name:
+    push si
+    mov si, hd_ptypes
+.next:
+    mov dx, [si+1]
+    or dx, dx
+    jz .out                     ; the terminator: 0 = not one we know
+    cmp al, [si]
+    je .out
+    add si, 3
+    jmp short .next
+.out:
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_iw_paint - W_PAINT.  in: BX = the window, ES = KERNEL_SEG (SPEC.md 20.3)
 ; -----------------------------------------------------------------------------
 hd_iw_paint:
@@ -358,6 +500,7 @@ hd_iw_paint:
     call OSAPI_FONT_RUN             ; (SPEC.md 52.12)
 
     call hd_irows_emit
+    call hd_ick_emit
 
     call hd_ibtns_emit
     call hd_imsg_emit
@@ -623,6 +766,7 @@ hd_iw_up:
                                     ; here, and hd_ibhit cannot tell which verb
                                     ; it is wearing
     call hd_inst_step
+    call hd_ick_draw            ; the box is greyed once anything is written
     call hd_ibtns_draw          ; the stage moved, so hd_iact_ok and the
     call hd_imsg_draw           ; caption may both have flipped - and the
     jmp short .done             ; message always did. The ROWS did not:
@@ -984,6 +1128,112 @@ hd_ibtns_draw:
     ret
 
 ; -----------------------------------------------------------------------------
+; THE ERASE BOX (SPEC.md 52.10.15) - 'Erase the partition first'
+;
+; One check box and not a second button, because it is not a second verb: the
+; one action button installs either way, and what the box changes is whether
+; the volume's own files survive it. CLEAR is the default over a volume, which
+; is then KEPT; over anything else - a free slot, a FAT entry with nothing in
+; it - there is nothing to keep, so the box is SET AND GREYED (SPEC.md 47: a
+; fact, not a choice). It is greyed too once the install has written anything.
+; -----------------------------------------------------------------------------
+hd_idefwipe:
+    push bx
+    mov bl, [hd_isel]
+    xor bh, bh
+    mov bl, [bx+hd_ivol]
+    xor bl, 1                   ; a volume: keep it (0); nothing: erase (1)
+    mov [hd_iwipe], bl
+    pop bx
+    ret
+
+; hd_ick_ok - may the box be clicked? CF = 0 yes. The ONE predicate for the
+; greying and the refusal (SPEC.md 47 rule 2)
+hd_ick_ok:
+    push bx
+    cmp byte [hd_iw_st], HII_SYSDONE
+    jae .no                     ; the install has written: nothing to choose
+    mov bl, [hd_isel]
+    xor bh, bh
+    cmp byte [bx+hd_ivol], 0
+    je .no                      ; nothing to keep
+    pop bx
+    clc
+    ret
+.no:
+    pop bx
+    stc
+    ret
+
+; hd_ickmsg - the caption for the box's current state: the booted-from volume
+; says why Install greyed when it is ticked, everything else the neutral line
+hd_ickmsg:
+    push bx
+    mov word [hd_imsg], hd_s_ipick
+    mov bl, [hd_isel]
+    xor bh, bh
+    cmp byte [bx+hd_istate], HIS_LIVE
+    jne .out
+    cmp byte [hd_iwipe], 0
+    je .out
+    mov word [hd_imsg], hd_s_ilbwipe
+.out:
+    pop bx
+    ret
+
+; hd_ick_rect - the box's rect into its record, SCREEN coordinates
+; in:  DI/BP = the content origin; out: nothing (all registers preserved)
+hd_ick_rect:
+    push ax
+    mov ax, di
+    add ax, HIW_LX
+    mov [hd_ickrec+0], ax
+    add ax, HIW_CKW - 1
+    mov [hd_ickrec+4], ax
+    mov ax, bp
+    add ax, HIW_CKY
+    mov [hd_ickrec+2], ax
+    add ax, HIW_CKH - 1
+    mov [hd_ickrec+6], ax
+    pop ax
+    ret
+
+; hd_ick_emit / hd_ick_draw - the box, greyed or live. The label is an opaque
+; run and the box is cleared by the glyph, so there is no ground to lay first
+; (SPEC.md 13.15.2)
+hd_ick_emit:
+    push bx
+    push di
+    call hd_ick_rect
+    call hd_ick_ok
+    mov di, 0
+    jnc .draw
+    mov di, OS88UI_DIS
+.draw:
+    mov bx, hd_ickrec
+    call os88ui_chk
+    pop di
+    pop bx
+    ret
+
+hd_ick_draw:
+    push di
+    push bp
+    call hd_iorg
+    jc .out
+    call hd_ick_emit
+.out:
+    pop bp
+    pop di
+    ret
+
+hd_ickrec:  dw 0, 0, 0, 0       ; OS88UI_CK_RECT, screen coordinates
+            dw hd_s_ickl        ; OS88UI_CK_LABEL
+hd_iwipe:   db 1                ; OS88UI_CK_ON: 1 = format first, 0 = KEEP the
+            db 0                ; volume's files (SPEC.md 52.10.15)
+hd_s_ickl:  db 'Erase the partition first', 0
+
+; -----------------------------------------------------------------------------
 ; hd_iact_ok - may the ACTION button be clicked? (module internal)
 ; out: CF = 0 yes / 1 no.  SPEC.md 47 rule 2's single predicate for it.
 ;
@@ -1004,8 +1254,12 @@ hd_iact_ok:
     mov bl, [hd_isel]
     xor bh, bh
     cmp byte [bx+hd_istate], HIS_OK
-    jne .no
-.yes:
+    je .yes
+    cmp byte [bx+hd_istate], HIS_LIVE   ; the volume we are running from may
+    jne .no                             ; be KEPT and never erased (SPEC.md
+    cmp byte [hd_iwipe], 0              ; 52.10.15): its kernel is in RAM,
+    jne .no                             ; its files are replaced through the
+.yes:                                   ; same API as anybody's
     pop bx
     clc
     ret
@@ -1032,43 +1286,62 @@ hd_iw_rowtext:
 .slots:
 %endif
     mov di, hd_line
-    mov [hd_lineptr], di
     mov si, hd_s_islot
     call hd_scat
-    mov di, [hd_lineptr]
     mov al, [hd_irow]
     xor ah, ah
     inc ax
     call hd_utoa
-    mov [hd_lineptr], di
-    mov si, hd_s_igap
-    call hd_scat
+    mov al, HIW_SIZEC           ; the Size column, under its heading
+    call hd_itab_to
 
     mov bl, [hd_irow]
     xor bh, bh
     shl bx, 1
+    shl bx, 1
     mov ax, [bx+hd_isecs]
-    or ax, ax
+    mov dx, [bx+hd_isecs+2]
+    mov cx, ax
+    or cx, dx
     jz .nosize
     call hd_iw_size
     jmp short .state
 .nosize:
-    mov di, [hd_lineptr]
     mov si, hd_s_idash
     call hd_scat
 .state:
-    mov di, [hd_lineptr]
-    mov si, hd_s_igap
-    call hd_scat
+    mov al, HIW_STATEC          ; ...and the State column, under its own
+    call hd_itab_to
     mov bl, [hd_irow]
     xor bh, bh
-    mov bl, [bx+hd_istate]
-    xor bh, bh
-    shl bx, 1
-    mov si, [bx+hd_itab]
-    mov di, [hd_lineptr]
+    mov al, [bx+hd_ilet]        ; 'C: ' when it is on the desktop
+    or al, al
+    jz .body
+    mov [di], al
+    inc di
+    mov si, hd_s_icolon
     call hd_scat
-    mov di, [hd_lineptr]
+.body:
+    mov al, [bx+hd_itype]
+    shl bx, 1
+    mov si, [bx+hd_ibody]
+    or si, si
+    jnz .named
+    mov si, hd_s_itype          ; a foreign type with no name: 'Type 2Bh'
+    call hd_scat
+    call hd_hex2
+    mov si, hd_s_ih
+.named:
+    call hd_scat
+    mov si, [bx+hd_irsn]        ; ...and why not, when the answer is no
+    or si, si
+    jz .done
+    push si
+    mov si, hd_s_icomma
+    call hd_scat
+    pop si
+    call hd_scat
+.done:
     mov byte [di], 0
 %ifdef INSTBENCH
 .rtout:
@@ -1079,6 +1352,54 @@ hd_iw_rowtext:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_itab_to - space-pad hd_line from DI out to column AL
+; in:  DI = the write position in hd_line, AL = the column
+; out: DI at that column (or where it was, if already past it: a wide field
+;      prints wide, hd_utoa's own rule)
+; clobbers: DI (the output), flags
+; -----------------------------------------------------------------------------
+hd_itab_to:
+    push ax
+    xor ah, ah
+    add ax, hd_line
+.pad:
+    cmp di, ax
+    jae .out
+    mov byte [di], ' '
+    inc di
+    jmp short .pad
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_hex2 - AL as two hex digits at DI, DI advanced
+; clobbers: DI (the output), flags
+; -----------------------------------------------------------------------------
+hd_hex2:
+    push ax
+    push cx
+    mov ah, al
+    mov cl, 4
+    shr al, cl
+    call .dig
+    mov al, ah
+    and al, 0x0F
+    call .dig
+    pop cx
+    pop ax
+    ret
+.dig:
+    add al, '0'
+    cmp al, '9'
+    jbe .put
+    add al, 'A' - '9' - 1
+.put:
+    mov [di], al
+    inc di
     ret
 
 %ifdef INSTBENCH
@@ -1448,7 +1769,7 @@ hd_bn_rowtext:
 %endif
 
 ; -----------------------------------------------------------------------------
-; hd_iw_size - AX sectors as '31M' or '970K' at [hd_lineptr] (module internal)
+; hd_iw_size - DX:AX sectors as '31M', '970K' or '12G' at DI, DI advanced
 ;
 ; KB as well as MB, because SPEC.md 52.2.1's alignment gaps are real
 ; partitions: a disk repartitioned by a modern tool leaves ~1,985 sectors at
@@ -1458,28 +1779,42 @@ hd_bn_rowtext:
 hd_iw_size:
     push ax
     push bx
+    push cx
     push dx
     push si
-    mov di, [hd_lineptr]
+    or dx, dx
+    jnz .mb
     cmp ax, 2048
     jae .mb
     shr ax, 1                   ; sectors / 2 = KB
     call hd_utoa
-    mov [hd_lineptr], di
     mov si, hd_s_ik
-    call hd_scat
-    jmp short .out
+    jmp short .unit
 .mb:
-    xor dx, dx
-    mov bx, 2048
-    div bx
-    call hd_utoa
-    mov [hd_lineptr], di
+    mov cx, 11                  ; sectors / 2048 = MB, a 32-bit shift: a
+.shift:                         ; partition is not bounded by a word of
+    shr dx, 1                   ; sectors (SPEC.md 18.7.5)
+    rcr ax, 1
+    loop .shift
     mov si, hd_s_mb
+    or dx, dx                   ; past 65,535MB, say it in GB
+    jnz .gb
+    cmp ax, 10000
+    jb .num
+.gb:
+    mov cx, 10
+.gshift:
+    shr dx, 1
+    rcr ax, 1
+    loop .gshift
+    mov si, hd_s_ig
+.num:
+    call hd_utoa
+.unit:
     call hd_scat
-.out:
     pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -1507,7 +1842,7 @@ hd_iw_click:
     mov [hd_icly], dx
 
     cmp dx, HIW_BY - 2
-    jl .rows
+    jl .notbtn
     ; SPEC.md 13.6/13.8.4: the action button writes a disk or reboots the
     ; machine and Close ends the window - neither has a safe prefix action,
     ; so the press only ARMS and DRAWS and hd_iw_up acts.
@@ -1517,6 +1852,27 @@ hd_iw_click:
     xor ah, ah
     call os88ui_arm
     call hd_isetdown
+    jmp short .done
+.notbtn:
+    cmp dx, HIW_CKY
+    jl .rows
+    cmp dx, HIW_CKY + HIW_CKH
+    jge .done
+    call hd_ick_ok              ; greyed: the box is a fact, not a choice
+    jc .done
+    call hd_ick_rect            ; screen coordinates, as the control wants
+    add cx, di
+    add dx, bp
+    mov bx, hd_ickrec
+    call os88ui_chkhit          ; toggled and its mark redrawn, or missed
+    jc .done
+    cmp byte [hd_iw_st], HII_ARMED  ; an armed Install was armed for the OTHER
+    jne .ckmsg                      ; answer: disarm, tool.inc's rule
+    mov byte [hd_iw_st], HII_IDLE
+.ckmsg:
+    call hd_ickmsg
+    call hd_ibtns_draw          ; the greying may have flipped (the booted-from
+    call hd_imsg_draw           ; volume may be kept, never erased)
     jmp short .done
 .rows:
     mov ax, [hd_icly]
@@ -1530,7 +1886,9 @@ hd_iw_click:
     je .done
     mov [hd_isel], al
     mov byte [hd_iw_st], HII_IDLE   ; picking another row disarms, tool.inc's
-    mov word [hd_imsg], hd_s_ipick  ; rule: anything but the same button again
+    call hd_idefwipe                ; rule: anything but the same button again
+    call hd_ickmsg
+    call hd_ick_draw            ; ...and the box is this slot's default now
     call hd_irows_draw          ; the bar moved, the message changed, and the
     call hd_ibtns_draw          ; disarm may have re-greyed Install. The header
     call hd_imsg_draw           ; did not change and is not redrawn
@@ -1560,6 +1918,9 @@ hd_inst_step:
     je .apps
     mov byte [hd_iw_st], HII_ARMED  ; ask. There is no dialog to ask in, and a
     mov word [hd_imsg], hd_s_iarm   ; second click on the same button is the
+    cmp byte [hd_iwipe], 0          ; (...and what it asks says which install
+    jne .out                        ; this is: SPEC.md 52.10.15)
+    mov word [hd_imsg], hd_s_iarmk
     jmp short .out                  ; cheapest confirm that cannot be mistaken
                                     ; for the first (SPEC.md 52.2.3)
 .go:
@@ -1664,6 +2025,15 @@ hd_inst_sys:
 %ifdef INSTBENCH
     call hd_bn_bank             ; SPEC.md 52.10.9: the format on its own, which
 %endif                          ; is the phase with no file in it at all
+    xor ax, ax                  ; the kernel's start in the data area: 0,
+    mov [hd_kofs], ax           ; cluster 2, unless a kept volume moves it
+    mov [hd_kofs+2], ax
+    cmp byte [hd_iwipe], 0      ; KEEP THE VOLUME'S FILES (SPEC.md 52.10.15):
+    jne .wipe                   ; no format, and the kernel goes wherever
+    call hd_inst_keep           ; there is a free run for it - which commits
+    jc .failed                  ; the VBR the moment it lands
+    jmp .tree
+.wipe:
     call hd_inst_fmt
     jc .failed
 %ifdef INSTBENCH
@@ -1679,11 +2049,15 @@ hd_inst_sys:
     mov si, hd_s_kernel         ; KERNEL.SYS FIRST and alone, before the walk:
     call hd_icopy_one           ; SPEC.md 52.10.2 needs it at cluster 2
     jc .failed
+.tree:
     call hd_icopy_tree
     jc .failed
     call hd_ivol_back
+    cmp byte [hd_iwipe], 0      ; a kept volume's VBR went down with its
+    je .mbr                     ; kernel, in hd_inst_keep
     call hd_inst_vbr            ; THE COMMIT LIVES HERE, at the end of the
     jc .nboot                   ; SYSTEM phase, because this is the point at
+.mbr:
     call hd_inst_mbr            ; which the disk is a working os8088: KERNEL.SYS
     jc .nboot                   ; is at cluster 2 and every driver is written,
                                 ; and the apps disk is ADDITIONS. It used to be
@@ -1786,6 +2160,11 @@ hd_inst_apps:
     jc .src                     ; NOT FOUND: the banked volume stands, exactly
     mov [hd_isrcdrv], al        ; as it did before any of this existed. The
 .src:                           ; three tests define OUR apps disk, and a
+    mov al, [hd_isrcdrv]        ; ...UNLESS it is the destination, which a
+    cmp al, [hd_idrv]           ; kept install to the booted-from volume
+    jne .notdst                 ; makes possible (SPEC.md 52.10.15): the
+    mov byte [hd_isrcdrv], 0    ; floppy in A: then
+.notdst:
                                 ; hand-made floppy carrying only GAMES fails
                                 ; all three while being precisely what the user
                                 ; meant to copy - so a miss may not become a
@@ -2390,6 +2769,8 @@ hd_icopy_tree:
                                 ; the destination ran only on the half that
                                 ; was never going to bring it
 .file:
+    call hd_ikeepit             ; a KEPT volume keeps the user's settings
+    jnc .entry                  ; (SPEC.md 52.10.15)
     mov si, hd_ient
     call hd_icopy_one
     jc .failm                   ; it named the FILE; do not talk over it
@@ -2416,6 +2797,20 @@ hd_icopy_tree:
                                 ; that already exists - and looked up once per
                                 ; FOLDER now, where hd_idst_findsub paid for
                                 ; the same scan once per FILE
+    push ax                     ; is the folder we go down into one whose
+    call hd_ilvl_bx             ; files are SETTINGS? Inherited from the
+    shr bx, 1                   ; parent, or named APPDATA (SPEC.md 19.9)
+    mov al, [hd_ikeepl+bx]
+    push si
+    push di
+    mov si, hd_iname2
+    mov di, hd_s_appdata
+    call hd_iname_same
+    pop di
+    pop si
+    adc al, 0
+    mov [hd_ikeepl+bx+1], al
+    pop ax
     inc byte [hd_ilvl]          ; ...and down
     push ax
     call hd_ilvl_bx
@@ -2484,6 +2879,7 @@ hd_ilvl_root:
     push ax
     xor ax, ax
     mov [hd_ilvl], al
+    mov [hd_ikeepl], al
     mov [hd_isrcc], ax
     mov [hd_idstc], ax
     mov [hd_iordv], ax
@@ -2684,6 +3080,8 @@ hd_istat:
     mov [hd_isize], ax
     mov ax, [hd_ifind+20]
     mov [hd_isize+2], ax
+    mov ax, [hd_ifind+16]
+    mov [hd_iclus], ax          ; ...and where it starts (SPEC.md 52.10.15)
     mov al, [hd_ifind+13]
     and al, 0x06                ; hidden|system: SPEC.md 19.6's species
     mov [hd_isys], al
@@ -2824,32 +3222,58 @@ hd_iwrite_chunk:
 ; so there is one answer in this system to "which disk is that" rather than
 ; three that can drift.
 ;
-; **A: is the fallback and it is not a guess either**: the machine booted off
-; a floppy (§52.10.4.1 refuses the other case outright), `drv_boot` mounts A:
-; to read this very driver, and §51.5.1 already treats A: as where the system
-; disk is. Falling back is silent because the user asked to install os8088 and
-; not to install whatever they were last looking at - the volume they were on
-; is put back afterwards either way ([hd_ivdrv] is untouched here).
+; **The fallback is every FLOPPY, lowest first** (§52.10.15). It was A:
+; alone, on the reasoning that the machine booted off a floppy - which stopped
+; being true when a kept install made the booted-from volume a target: that
+; machine has a blank or nothing in A: and the new system disk wherever the
+; user put it. Falling back is silent because the user asked to install os8088
+; and not to install whatever they were last looking at - the volume they were
+; on is put back afterwards either way ([hd_ivdrv] is untouched here). And the
+; DESTINATION is never the source: on the booted-from volume the bank names a
+; disk with KERNEL.SYS on it, and it is the one being written.
 ; -----------------------------------------------------------------------------
 hd_isrc_ck:
     push ax
     push si
+    mov al, [hd_idev]           ; NEVER THE DESTINATION (SPEC.md 52.10.15): a
+    call hd_dev_row             ; kept install may go to the volume the
+    call hd_part_load           ; machine booted from, which carries a
+    mov al, [hd_isel]           ; KERNEL.SYS and is where a user booted from it
+    call hd_part_ent            ; is standing - and a copy of a volume onto
+    mov al, [hd_idev]           ; itself replaces each file with the first
+    call hd_kvol                ; chunk of itself
+    jc .src
+    cmp al, [hd_isrcdrv]
+    jne .src
+    mov byte [hd_isrcdrv], 0
+.src:
     call hd_isrc_ck_one         ; where the bank left us...
     jnc .ok
-    cmp byte [hd_isrcdrv], 0
-    je .no                      ; ...which WAS A:, so there is nowhere else
-    mov byte [hd_isrcdrv], 0
-    call hd_isrc_ck_one
-    jc .no
-.ok:
-    pop si
-    pop ax
-    clc
-    ret
+    push bx                     ; ...and then EVERY FLOPPY, lowest first
+    mov bh, [hd_isrcdrv]        ; (SPEC.md 52.10.15). It was A: alone, which
+    xor bl, bl                  ; is right on the machine this was written
+.next:                          ; for and wrong on the one a kept install
+    call hd_iapps_cand          ; makes ordinary: booted from its hard disk,
+    jc .step                    ; with the new system disk in whichever drive
+    mov [hd_isrcdrv], bl        ; is not the one the BIOS wanted a blank in.
+    call hd_isrc_ck_one         ; hd_iapps_cand is the apps probe's own filter
+    jnc .found                  ; - removable, present, B: only on a two-drive
+.step:                          ; machine - so the two searches cannot
+    inc bl                      ; disagree about what a floppy is
+    cmp bl, HIA_VMAX
+    jb .next
+    pop bx
 .no:
     pop si
     pop ax
     stc
+    ret
+.found:
+    pop bx
+.ok:
+    pop si
+    pop ax
+    clc
     ret
 
 ; hd_isrc_ck_one - KERNEL.SYS in [hd_isrcdrv]'s root? (module internal)
@@ -3045,19 +3469,7 @@ hd_inst_fmt:
     jc .fail
     mov al, [hd_isel]
     call hd_part_ent
-    mov ax, [hd_fbase]
-    mov [si+HP_LBA], ax
-    mov ax, [hd_fbase+2]
-    mov [si+HP_LBA+2], ax
-    mov ax, [hd_fsecs]
-    mov [si+HP_SECS], ax
-    mov word [si+HP_SECS+2], 0
-    mov byte [si+HP_TYPE], HPT_FAT16S
-    cmp byte [hd_ftype], 0
-    jne .type
-    mov byte [si+HP_TYPE], HPT_FAT12
-.type:
-    mov byte [si+HP_STATUS], 0  ; NOT active yet: the MBR is the commit and it
+    call hd_ent_fill            ; NOT active yet: the MBR is the commit and it
                                 ; is written at the very end (SPEC.md 52.10.4)
     mov al, [hd_idev]
     call hd_dev_row
@@ -3201,6 +3613,527 @@ hd_inst_mount:
     pop ax
     ret
 
+; =============================================================================
+; KEEPING THE VOLUME'S FILES (SPEC.md 52.10.15)
+;
+; An install that does not format. Everything the install disks carry is
+; written over what is there - the kernel, every driver, every package and
+; document - and everything else is left alone: the user's own files, their
+; SYSTEM.CFG, and whatever an application keeps in an APPDATA folder.
+;
+; THE KERNEL IS THE HARD PART, because boot/boothd.asm reads it as a flat run
+; rather than walking its chain (SPEC.md 52.10.2), so it must land CONTIGUOUS -
+; and on a volume with files on it the clusters after the old kernel are
+; somebody's. It does not have to land at cluster 2 any more: the sector adds
+; BOOTHD_KOFS, the run's offset into the data area, which this writes. What
+; has to be arranged is that the kernel's own allocator puts it in ONE run,
+; and it does that with nothing but the file API:
+;
+;   1. the old KERNEL.SYS is cut to nothing, so its clusters are free;
+;   2. hd_kplan reads the FAT and finds the FIRST run of free clusters long
+;      enough for the new one, and counts the free clusters below that run;
+;   3. a PAD file of exactly that many clusters is written after a fresh mount
+;      - disk_mount resets the allocator's rover to cluster 2, and dskw_alloc
+;      is next-fit from the rover, so the pad takes precisely the holes below
+;      the run and nothing else;
+;   4. the kernel is copied, and every cluster it is given is the next one in
+;      the run - whether the rover survived a chunk or a remount put it back
+;      at 2, the pad has taken everything under it;
+;   5. the pad is deleted, the kernel's chain is CHECKED against the plan, and
+;      the VBR is written at once with the run's offset: that is the commit.
+;
+; The window in which the partition does not boot is steps 3-5, and it is
+; seconds: the old kernel's clusters were freed in step 1, and the pad or the
+; new kernel may be written over them before the VBR points somewhere new. The
+; wipe path's window is the whole system phase.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; hd_ikeepit - does a KEPT volume keep ITS copy of this file?
+; in:  hd_ient = the source entry; the walk's level stack says where we are
+; out: CF = 0 = keep the destination's, do not copy; CF = 1 = copy
+; clobbers: flags
+;
+; SYSTEM.CFG in the root and anything inside an APPDATA are the user's
+; SETTINGS, and the install disks carry defaults for both - so on a kept
+; volume the destination's copy wins WHERE THERE IS ONE, and the default goes
+; down only where there is not.
+; -----------------------------------------------------------------------------
+hd_ikeepit:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    cmp byte [hd_iwipe], 0
+    jne .copy                   ; a formatted volume has nothing to keep
+    call hd_ilvl_bx
+    shr bx, 1
+    cmp byte [hd_ikeepl+bx], 0
+    jne .ask                    ; inside an APPDATA: every file is a setting
+    or bx, bx
+    jnz .copy
+    mov si, hd_ient
+    mov di, hd_s_cfg
+    call hd_iname_same
+    jnc .copy
+.ask:
+    mov si, hd_ient             ; the name, banked: hd_istat rewrites hd_ifind
+    mov di, hd_iname            ; and the destination walk is its own
+    mov cx, 13
+    call hd_iname_copy
+    call hd_idst_here           ; is there one on the DESTINATION?
+    jc .copy
+    mov si, hd_iname
+    call hd_istat
+    jc .copy                    ; no: the default goes down
+    clc                         ; yes: it is the user's and it stays
+    jmp short .out
+.copy:
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_inst_keep - the kept volume's system phase, up to and including its VBR
+; out: CF=1 with [hd_imsg] set; CF=0 = the partition boots the new kernel
+; -----------------------------------------------------------------------------
+hd_inst_keep:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov al, [hd_idev]           ; the partition's base, from the TABLE: the
+    call hd_dev_row             ; VBR's HiddSec and every raw read below
+    call hd_part_load
+    mov al, [hd_isel]
+    call hd_part_ent
+    mov ax, [si+HP_LBA]
+    mov [hd_fbase], ax
+    mov ax, [si+HP_LBA+2]
+    mov [hd_fbase+2], ax
+    mov al, [hd_idev]           ; THE VOLUME THE MACHINE BOOTED FROM is already
+    call hd_kvol                ; the kernel's and cannot be remounted by us -
+    jc .drv                     ; nor needs to be: its files are replaced
+    mov [hd_idrv], al           ; through the same API as anybody's
+    jmp short .mounted
+.drv:
+    call hd_inst_mount          ; ...otherwise ours, as after a format
+    jc .out
+.mounted:
+    call hd_ilvl_root
+    call hd_isrc                ; how big is the NEW one?
+    jc .io
+    mov si, hd_s_kernel
+    call hd_istat
+    jc .io
+    call hd_idst                ; 1. the old one lets go of its clusters. A
+    jc .io                      ; zero-length replace through the _SYS verb,
+    push es                     ; because it is hidden + system and nothing
+    xor bx, bx                  ; else may touch it (SPEC.md 19.6)
+    xor cx, cx
+    xor dx, dx
+    mov si, hd_s_kernel
+    call OSAPI_FILE_WRITE_SYS
+    pop es
+    jc .io
+    call hd_kplan               ; 2. where it goes, and what is below it
+    jc .out
+    cmp word [hd_kf], 0
+    je .kern
+    call hd_isrc                ; 3. the pad, after a FRESH mount: the rover
+    call hd_idst                ; is back at cluster 2
+    jc .io
+    call hd_kpad
+    jc .io
+.kern:
+    mov si, hd_s_kernel         ; 4. the kernel
+    call hd_icopy_one
+    jc .out                     ; it named the file
+    call hd_idst                ; 5. the pad goes, whether or not there was
+    mov si, hd_s_kpad           ; one - FERR_NOENT is the answer then
+    call OSAPI_FILE_DELETE
+    call hd_kverify             ; ...the chain is what was planned...
+    jc .out
+    call hd_inst_vbr            ; ...and THE COMMIT
+    jc .nboot
+    clc
+    jmp short .out
+.nboot:
+    mov word [hd_imsg], hd_s_inboot
+    stc
+    jmp short .out
+.io:
+    mov word [hd_imsg], hd_s_ierr
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_kplan - find the new kernel a run (module internal)
+; in:  [hd_isize] = its size; [hd_fbase] = the partition's base; the volume
+;      has just been committed (every write flushes its FAT, SPEC.md 18.4)
+; out: CF=0 with [hd_kr] = the run's first cluster, [hd_kf] = free clusters
+;      below it, [hd_kofs] = (run - 2) * spc; CF=1 with [hd_imsg] set
+; clobbers: flags
+;
+; FIRST FIT, because the pad costs a write of every cluster it covers: the
+; lowest run long enough has the fewest free holes under it.
+; -----------------------------------------------------------------------------
+hd_kplan:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov al, [hd_idev]
+    call hd_dev_row
+    mov byte [hd_rawop], 0      ; the volume's BPB
+    mov ax, [hd_fbase]
+    mov dx, [hd_fbase+2]
+    mov bx, hd_sec0
+    mov cx, 1
+    push ds
+    pop es
+    call hd_raw
+    jc .io
+    cmp word [hd_sec0+HF_B_BPS], 512
+    jne .bad
+    mov al, [hd_sec0+HF_B_SPC]
+    xor ah, ah
+    or ax, ax
+    jz .bad
+    mov [hd_kspc], ax
+    mov ax, [hd_sec0+HF_B_RSVD]
+    mov bx, ax                  ; BX = rsvd, and the FAT's absolute start
+    add ax, [hd_fbase]
+    mov [hd_kfat], ax
+    mov ax, [hd_fbase+2]
+    adc ax, 0
+    mov [hd_kfat+2], ax
+    mov al, [hd_sec0+HF_B_NFATS]
+    xor ah, ah
+    mul word [hd_sec0+HF_B_FATSZ]   ; DX:AX = both FATs
+    or dx, dx
+    jnz .bad
+    add bx, ax
+    jc .bad
+    mov ax, [hd_sec0+HF_B_ROOTN]
+    add ax, 15
+    mov cl, 4
+    shr ax, cl                  ; the root's sectors
+    add bx, ax                  ; BX = the data area's first sector
+    jc .bad
+    mov ax, [hd_sec0+HF_B_TOT16]
+    xor dx, dx
+    or ax, ax
+    jnz .tot
+    mov ax, [hd_sec0+HF_B_TOT32]
+    mov dx, [hd_sec0+HF_B_TOT32+2]
+.tot:
+    sub ax, bx
+    sbb dx, 0
+    jc .bad
+    cmp dx, [hd_kspc]           ; the quotient must fit a word
+    jae .bad
+    div word [hd_kspc]          ; AX = clusters
+    mov byte [hd_kf12], 1
+    cmp ax, 4085
+    jb .f12
+    mov byte [hd_kf12], 0
+.f12:
+    inc ax                      ; the highest cluster number
+    mov [hd_kmax], ax
+
+    mov ax, [hd_isize]          ; clusters the kernel needs: its sectors,
+    mov dx, [hd_isize+2]        ; then clusters, both rounded up
+    add ax, 511
+    adc dx, 0
+    mov cx, 9
+.sh:
+    shr dx, 1
+    rcr ax, 1
+    loop .sh
+    add ax, [hd_kspc]
+    dec ax
+    xor dx, dx
+    div word [hd_kspc]
+    or ax, ax
+    jz .bad
+    mov [hd_kn], ax
+
+    mov word [hd_kchunk], 0xFFFF
+    xor si, si                  ; SI = free clusters before the run
+    xor di, di                  ; DI = the run's length so far
+    mov cx, 2                   ; CX = the cluster
+.scan:
+    cmp cx, [hd_kmax]
+    ja .noroom
+    mov ax, cx
+    call hd_kfat_get
+    jc .io
+    or ax, ax
+    jnz .used
+    or di, di
+    jnz .grow
+    mov [hd_kr], cx             ; a run starts here
+.grow:
+    inc di
+    cmp di, [hd_kn]
+    je .found
+    jmp short .next
+.used:
+    add si, di                  ; the run was too short: its clusters are
+    xor di, di                  ; free ones BELOW whatever run we find
+.next:
+    inc cx
+    jnz .scan
+.noroom:
+    mov word [hd_imsg], hd_s_ikroom
+    stc
+    jmp short .out
+.found:
+    mov [hd_kf], si
+    mov ax, [hd_kr]             ; the offset the VBR adds: (run - 2) * spc
+    sub ax, 2
+    mul word [hd_kspc]
+    mov [hd_kofs], ax
+    mov [hd_kofs+2], dx
+    clc
+    jmp short .out
+.bad:
+    mov word [hd_imsg], hd_s_ikbpb
+    stc
+    jmp short .out
+.io:
+    mov word [hd_imsg], hd_s_ierr
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_kfat_get - one FAT entry, read raw (module internal)
+; in:  AX = the cluster; [hd_kfat]/[hd_kf12] from hd_kplan
+; out: CF=0 and AX = the entry (12 or 16 bits); CF=1 = the read failed
+; clobbers: AX (the output), flags
+;
+; Three sectors at a time into the copy buffer, cached: 1,536 bytes is exactly
+; 1,024 FAT12 entries or 768 FAT16 ones, so a chunk never splits an entry and
+; the scan reads each FAT sector once.
+; -----------------------------------------------------------------------------
+hd_kfat_get:
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    mov cx, 768                 ; entries per chunk
+    cmp byte [hd_kf12], 0
+    je .per
+    mov cx, 1024
+.per:
+    xor dx, dx
+    div cx                      ; AX = the chunk, DX = the entry in it
+    push dx
+    cmp ax, [hd_kchunk]
+    je .have
+    mov [hd_kchunk], ax
+    mov cx, 3
+    mul cx                      ; DX:AX = the chunk's first sector, FAT-relative
+    add ax, [hd_kfat]
+    adc dx, [hd_kfat+2]
+    push ax
+    mov al, [hd_idev]
+    call hd_dev_row
+    pop ax
+    mov es, [hd_ibufseg]
+    xor bx, bx
+    mov byte [hd_rawop], 0
+    call hd_raw
+    jnc .have
+    mov word [hd_kchunk], 0xFFFF
+    pop dx
+    stc
+    jmp short .out
+.have:
+    pop bx                      ; BX = the entry's index in the chunk
+    mov es, [hd_ibufseg]
+    cmp byte [hd_kf12], 0
+    jne .f12
+    shl bx, 1
+    mov ax, [es:bx]
+    jmp short .ok
+.f12:
+    mov ax, bx
+    shr ax, 1                   ; CF = the index is ODD
+    pushf
+    add bx, ax                  ; index * 3/2
+    mov ax, [es:bx]
+    popf
+    jc .odd
+    and ax, 0x0FFF
+    jmp short .ok
+.odd:
+    mov cl, 4
+    shr ax, cl
+.ok:
+    clc
+.out:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_kpad - [hd_kf] clusters of pad, as KPAD.TMP in the destination's root
+; in:  the destination's root is current, JUST MOUNTED (the rover is at 2)
+; out: CF per the file calls
+;
+; The bytes are whatever the buffer holds: nothing reads them, and the file is
+; deleted the moment the kernel is down.
+; -----------------------------------------------------------------------------
+hd_kpad:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, [hd_kf]             ; DI:SI = the bytes still to write
+    mul word [hd_kspc]
+    mov cx, 9
+.sh:
+    shl ax, 1
+    rcl dx, 1
+    loop .sh
+    mov si, ax
+    mov di, dx
+    mov es, [hd_ibufseg]
+    xor bx, bx
+    xor ax, ax                  ; AX = 0: the first write creates
+.more:
+    push ax
+    call hd_ichunk              ; AX = a take, a cluster multiple
+    mov cx, ax
+    pop ax
+    or di, di
+    jnz .take
+    cmp si, cx
+    jae .take
+    mov cx, si                  ; the last, short one
+.take:
+    push ax
+    push si
+    mov si, hd_s_kpad
+    or ax, ax
+    jnz .app
+    xor dx, dx
+    call OSAPI_FILE_WRITE
+    jmp short .did
+.app:
+    call OSAPI_FILE_APPEND
+.did:
+    pop si
+    pop ax
+    jc .out
+    mov ax, 1
+    sub si, cx
+    sbb di, 0
+    mov dx, si
+    or dx, di
+    jnz .more
+    clc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_kverify - did the kernel land where hd_kplan said, in ONE run?
+; out: CF=0 yes; CF=1 with [hd_imsg] set - and the VBR has NOT been written
+;
+; Asked of the DISK, because the whole placement rests on an allocator this
+; driver does not own: the directory for where the chain starts, the FAT for
+; whether each cluster is followed by the next.
+; -----------------------------------------------------------------------------
+hd_kverify:
+    push ax
+    push bx
+    push cx
+    push si
+    call hd_idst
+    jc .bad
+    mov si, hd_s_kernel
+    call hd_istat
+    jc .bad
+    mov ax, [hd_iclus]
+    cmp ax, [hd_kr]
+    jne .bad
+    mov word [hd_kchunk], 0xFFFF    ; the FAT has been written since the scan
+    mov bx, ax
+    mov cx, [hd_kn]
+.link:
+    mov ax, bx
+    call hd_kfat_get
+    jc .bad
+    dec cx
+    jz .last
+    inc bx
+    cmp ax, bx
+    je .link
+    jmp short .bad
+.last:
+    cmp byte [hd_kf12], 0
+    jne .eoc12
+    cmp ax, 0xFFF8
+    jb .bad
+    jmp short .ok
+.eoc12:
+    cmp ax, 0x0FF8
+    jb .bad
+.ok:
+    clc
+    jmp short .out
+.bad:
+    mov word [hd_imsg], hd_s_iksplit
+    stc
+.out:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; hd_inst_vbr - the volume boot record (SPEC.md 52.10.2)
 ;
@@ -3221,12 +4154,38 @@ hd_inst_vbr:
     push di
     push es
 
-    mov si, hd_bootvbr          ; our template -> the sector buffer
-    mov di, hd_sec0
-    mov cx, 512
     push ds
     pop es
     cld
+    cmp byte [hd_iwipe], 0      ; A VOLUME WE KEPT KEEPS ITS OWN BPB (SPEC.md
+    jne .fresh                  ; 52.10.15): nothing was formatted, so there
+    mov al, [hd_idev]           ; is no plan to write one from - the one on
+    call hd_dev_row             ; the disk describes the FAT the files are in
+    mov byte [hd_rawop], 0
+    mov ax, [hd_fbase]
+    mov dx, [hd_fbase+2]
+    mov bx, hd_sec0
+    mov cx, 1
+    call hd_raw
+    jc .fail
+    mov si, hd_bootvbr          ; ...and OUR code over everything but it: the
+    mov di, hd_sec0             ; jump, and bytes 62..511
+    mov cx, 3
+    rep movsb
+    mov si, hd_bootvbr + 62
+    mov di, hd_sec0 + 62
+    mov cx, 512 - 62
+    rep movsb
+    mov ax, [hd_fbase]              ; the base as the TABLE says it, whatever
+    mov [hd_sec0+HF_B_HIDD], ax     ; wrote the volume: it is what the sector
+    mov ax, [hd_fbase+2]            ; adds to every LBA
+    mov [hd_sec0+HF_B_HIDD+2], ax
+    mov byte [hd_sec0+HF_B_DRVNUM], 0x80
+    jmp short .kpatch
+.fresh:
+    mov si, hd_bootvbr          ; our template -> the sector buffer
+    mov di, hd_sec0
+    mov cx, 512
     rep movsb
 
     ; --- the BPB, from the volume we just formatted -------------------------
@@ -3236,8 +4195,7 @@ hd_inst_vbr:
     mov word [hd_sec0+HF_B_RSVD], HF_RSVD
     mov byte [hd_sec0+HF_B_NFATS], HF_NFATS
     mov word [hd_sec0+HF_B_ROOTN], HF_ROOTENT
-    mov ax, [hd_fsecs]
-    mov [hd_sec0+HF_B_TOT16], ax
+    call hd_fmt_tot             ; TotSec16, or TotSec32 past a word
     mov byte [hd_sec0+HF_B_MEDIA], HF_MEDIA
     mov ax, [hd_ffatsz]
     mov [hd_sec0+HF_B_FATSZ], ax
@@ -3254,10 +4212,15 @@ hd_inst_vbr:
     mov byte [hd_sec0+HF_B_DRVNUM], 0x80
     mov byte [hd_sec0+HF_B_BOOTSIG], 0x29
 
-    ; --- and the kernel's length, at the pinned patch site -------------------
+    ; --- and the kernel's length and start, at the pinned patch sites --------
+.kpatch:
     call hd_iksecs                  ; AX = sectors of KERNEL.SYS
     jc .fail
     mov [hd_sec0+BOOTHD_KSECS], ax
+    mov ax, [hd_kofs]               ; 0 after a format: the kernel is at
+    mov [hd_sec0+BOOTHD_KOFS], ax   ; cluster 2. A kept volume's is wherever
+    mov ax, [hd_kofs+2]             ; hd_kplan found it room (52.10.15)
+    mov [hd_sec0+BOOTHD_KOFS+2], ax
 
     mov al, [hd_idev]
     call hd_dev_row
@@ -3403,29 +4366,109 @@ hd_inst_mbr:
 ; one paints over the border and out the other side.
 ; =============================================================================
 hd_s_ititle:  db 'Install', 0
-hd_s_ihead:   db 'Install to        Size   State', 0
+hd_s_ihead:   db 'Install to  Size  State', 0   ; HIW_SIZEC, HIW_STATEC
 hd_s_iinst:   db 'Install', 0
 hd_s_icopy:   db 'Copy Apps', 0
 hd_s_irest:   db 'Restart', 0
 hd_s_islot:   db 'Slot ', 0
-hd_s_igap:    db '    ', 0
-hd_s_idash:   db '   -', 0
+hd_s_idash:   db '-', 0
 hd_s_ik:      db 'K', 0
 hd_s_kernel:  db 'KERNEL.SYS', 0
+hd_s_cfg:     db 'SYSTEM.CFG', 0    ; ...and the two a KEPT volume keeps
+hd_s_appdata: db 'APPDATA', 0       ; (SPEC.md 52.10.15)
+hd_s_kpad:    db 'KPAD.TMP', 0      ; the allocator's pad, for one moment
 hd_s_assoc:   db 'ASSOC.DAT', 0 ; ...the OTHER file the copy may not carry
                                 ; (SPEC.md 52.10.14)
 hd_s_iapps:   db 'APPS', 0      ; what makes a disk THE APPS DISK (52.10.5)
 hd_s_o88:     db '.O88', 0      ; ...and what has to be INSIDE it
 
-hd_s_iready:  db 'Ready', 0
+; THE STATE COLUMN (SPEC.md 52.10.4.2): [letter ': '] body [', ' reason].
+; What is THERE, and why not only when the answer is no - so the longest row
+; is `C: FAT16, Wrong Geometry`, 24 cells from HIW_STATEC, which is what
+; HIW_CELLS is sized for. The FAT names and three of the reasons are the
+; Format window's own strings, so two windows use one word for one fact.
+hd_s_iunpart: db 'Unpartitioned', 0 ; a free slot the disk has room behind
+hd_s_iempty:  db 'Empty', 0         ; ...and one it has none behind
+hd_s_iunread: db 'Unreadable', 0    ; the table itself would not read
 hd_s_ismall:  db 'Too Small', 0
-hd_s_ialien:  db 'Unusable', 0
 hd_s_inone:   db 'No Room', 0
-hd_s_ilive:   db 'Booted From', 0   ; SPEC.md 52.10.4.1, and it SAYS WHY NOT
-                                    ; rather than whether (SPEC.md 47 rule 7):
-                                    ; the slot is fine, the machine is standing
-                                    ; on it
-hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone, hd_s_ilive
+hd_s_ibig:    db 'Too Big', 0       ; FAT, past FAT16's ceiling (18.7.5)
+hd_s_icolon:  db ': ', 0
+hd_s_icomma:  db ', ', 0
+hd_s_itype:   db 'Type ', 0
+hd_s_ih:      db 'h', 0
+hd_s_ig:      db 'G', 0
+
+; The foreign types worth a NAME: type byte, then the string. Anything else
+; reads 'Type nnh', which is still more than 'Unusable' said.
+hd_ptypes:
+    db 0x05
+    dw hd_s_pext
+    db 0x0F
+    dw hd_s_pext
+    db 0x85
+    dw hd_s_pext
+    db 0x07
+    dw hd_s_pntfs
+    db 0x0B
+    dw hd_s_pfat32
+    db 0x0C
+    dw hd_s_pfat32
+    db 0x82
+    dw hd_s_pswap
+    db 0x83
+    dw hd_s_plinux
+    db 0x8E
+    dw hd_s_plvm
+    db 0xA5
+    dw hd_s_pbsd
+    db 0xA6
+    dw hd_s_pbsd
+    db 0xA9
+    dw hd_s_pbsd
+    db 0x02
+    dw hd_s_pxenix
+    db 0x03
+    dw hd_s_pxenix
+    db 0x63
+    dw hd_s_punix
+    db 0x0A
+    dw hd_s_pos2
+    db 0xDB
+    dw hd_s_pcpm
+    db 0x64
+    dw hd_s_pnw
+    db 0x65
+    dw hd_s_pnw
+    db 0xEE
+    dw hd_s_pgpt
+    db 0xEF
+    dw hd_s_pefi
+    db 0x11
+    dw hd_s_phid
+    db 0x14
+    dw hd_s_phid
+    db 0x16
+    dw hd_s_phid
+    db 0x1E
+    dw hd_s_phid
+    db 0
+    dw 0                        ; the terminator: its WORD is the test
+hd_s_pext:    db 'Extended', 0
+hd_s_pntfs:   db 'NTFS/HPFS', 0
+hd_s_pfat32:  db 'FAT32', 0
+hd_s_pswap:   db 'Linux Swap', 0
+hd_s_plinux:  db 'Linux', 0
+hd_s_plvm:    db 'Linux LVM', 0
+hd_s_pbsd:    db 'BSD', 0
+hd_s_pxenix:  db 'XENIX', 0
+hd_s_punix:   db 'Unix', 0
+hd_s_pos2:    db 'OS/2 Boot', 0
+hd_s_pcpm:    db 'CP/M-86', 0
+hd_s_pnw:     db 'NetWare', 0
+hd_s_pgpt:    db 'GPT Disk', 0
+hd_s_pefi:    db 'EFI System', 0
+hd_s_phid:    db 'Hidden FAT', 0    ; a FAT type with the hide bit (10h) set
 
 ; Every line below is one CAPTION, and the macro is what stops one growing
 ; past the band: HIW_CELLS is the run's width and a longer string is silently
@@ -3445,15 +4488,19 @@ hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone, hd_s_ilive
     HIMSG hd_s_iswap, 'Insert the APPS disk, then Install'
     HIMSG hd_s_idone, 'Done - remove the floppy, Restart'
     HIMSG hd_s_ibad, 'That partition cannot be used'
-    HIMSG hd_s_ilboot, 'Boot from a floppy to replace it'
     HIMSG hd_s_inomem, 'Not enough memory to copy'
     HIMSG hd_s_inomb, 'Cannot read the partition table'
-    HIMSG hd_s_inosys, 'No system disk in A: - nothing done'
+    HIMSG hd_s_inosys, 'No system disk found - nothing done'
     HIMSG hd_s_ifmt, 'Could not format that partition'
     HIMSG hd_s_imnt, 'Formatted, but it would not mount'
     HIMSG hd_s_ierr, 'Disk error - the install stopped'
     HIMSG hd_s_inboot, 'Copied, but it will not boot'
     HIMSG hd_s_ideep, 'Folders nested too deep to copy'
+    HIMSG hd_s_ikroom, 'No room for the kernel in one piece'
+    HIMSG hd_s_ikbpb, 'That volume is not one we can keep'
+    HIMSG hd_s_iksplit, 'The kernel did not land in one piece'
+    HIMSG hd_s_iarmk, 'Keeps its files: Install again to confirm'
+    HIMSG hd_s_ilbwipe, 'Boot from a floppy to erase it'
 %ifdef INSTBENCH
     HIMSG hd_s_bdone, '     fC   fS   dC   dS   tk  done'
 %endif
@@ -3464,8 +4511,16 @@ hd_iwin:      dw 0              ; .text with a real initialiser: -f bin zeroes
 hd_iw_st:     db 0
 hd_isel:      db 0
 hd_imsg:      dw hd_s_ipick
-hd_istate:    times 4 db 0
-hd_isecs:     times 4 dw 0
+hd_istate:    times 4 db 0      ; HIS_*: the verdict
+hd_isecs:     times 4 dd 0      ; ...the extent, 32 bits: a PARTITION is not
+                                ; bounded by a word of sectors
+hd_ilet:      times 4 db 0      ; the State column (SPEC.md 52.10.4.2): the
+hd_itype:     times 4 db 0      ; drive letter or 0, the table's type byte,
+hd_ibody:     times 4 dw 0      ; what is there (0 = 'Type nnh'),
+hd_irsn:      times 4 dw 0      ; and why not, 0 = no reason to give
+hd_iscur:     dd 0              ; hd_iw_slot's working extent...
+hd_ilcur:     db 0              ; ...and letter
+hd_ivcur:     db 0              ; ...and whether it found a volume to keep
 hd_irow:      db 0
 hd_iclx:      dw 0
 hd_icly:      dw 0
@@ -3516,6 +4571,20 @@ hd_iphase:    db 0              ; 0 = the SYSTEM phase, 1 = the APPS phase.
                                 ; system phase on the wrong side of that test
 hd_ient:      times OSAPI_FIND_SZ db 0
 hd_ifind:     times OSAPI_FIND_SZ db 0
+hd_ikeepl:    times HIW_DEPTH db 0    ; per level: its files are SETTINGS
+                                ; (an APPDATA, SPEC.md 19.9) and a kept volume
+                                ; keeps the user's copy (SPEC.md 52.10.15)
+hd_ivol:      times 4 db 0      ; per slot: a FAT volume is there to keep
+hd_iclus:     dw 0              ; hd_istat's answer: the file's first cluster
+hd_kofs:      dd 0              ; the kernel's start in the data area, sectors
+hd_kfat:      dd 0              ; hd_kplan: the FAT's first sector, absolute
+hd_kspc:      dw 0              ; ...sectors per cluster
+hd_kmax:      dw 0              ; ...the highest cluster number
+hd_kf12:      db 0              ; ...1 = FAT12
+hd_kn:        dw 0              ; ...clusters the new kernel needs
+hd_kr:        dw 0              ; ...the first cluster of the run it goes in
+hd_kf:        dw 0              ; ...free clusters below that run: the pad
+hd_kchunk:    dw 0xFFFF         ; hd_kfat_get's cached 3-sector chunk
 hd_iname:     times 14 db 0
 hd_iname2:    times 14 db 0
 hd_iwant:     dw 0

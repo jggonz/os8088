@@ -7251,6 +7251,34 @@ SOAK = [
         "restarts the machine. The caption is read out of the framebuffer "
         "against the kernel's own glyph table. It ERASES the VHD.",
         needs=("marty",), serial=True, timeout=1200),
+    Row("inststate", "soak", py("tests/inststate.py"), 135.0,
+        "SPEC.md 52.10.4.2: the installer's State column says what each slot "
+        "IS - `C: FAT16` for a mounted volume, a foreign type by name, "
+        "`Not Formatted`, `Unpartitioned`, and the reason after a comma when "
+        "the verdict is no. Three VHDs with slots 2-4 rewritten before boot, "
+        "every row read out of the framebuffer against the kernel's glyph "
+        "table (instrest's apparatus). Opens the installer and writes "
+        "nothing. Measured 132s for the three boots, serially.",
+        needs=("marty",), serial=True, timeout=900),
+    Row("instkeep", "soak", py("tests/instkeep.py"), 200.0,
+        "SPEC.md 52.10.15: an install that KEEPS the volume's files. The "
+        "fixture is MartyPC's DOS 3.3 partition with two holes punched and a "
+        "user's USER.TXT, SYSTEM.CFG and SYSTEM/APPDATA/NOTE.CFG planted by "
+        "mtools, so cluster 2 is IO.SYS's and the kernel MUST go elsewhere: "
+        "the row asserts the user's files byte for byte, the kernel ONE RUN, "
+        "and the VBR's BOOTHD_KOFS/KSECS naming it - then boots C:, upgrades "
+        "the booted-from volume IN PLACE with the system disk in B:, and "
+        "boots it again.",
+        needs=("marty", "mtools"), serial=True, timeout=1500),
+    Row("bigvol", "soak", py("tests/bigvol.py"), 110.0,
+        "SPEC.md 18.7.5: a 321MB FAT16 volume (654/16/63, TotSec32, 8KB "
+        "clusters) formatted on the HOST by mtools with a 40MB file at the "
+        "front, so everything the install writes lands PAST 32MB and the "
+        "LBA's high word is unavoidable. The installer keeps the volume, the "
+        "row checks the user's files and the kernel's one run past sector "
+        "65,536 on the host, boots C: and launches CALC.O88 out of C:/APPS. "
+        "Broken on purpose - [dsk_c2arm_x] arming 0 - it never commits.",
+        needs=("marty", "mtools"), serial=True, timeout=1500),
     Row("hddcp", "soak",
         py("tests/hddcp.py", "build/os8088-360.img", "build/hddcp-out.bin"),
         90.0,

@@ -331,5 +331,28 @@ hd_mnt_do:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; hd_vol_ask - which kernel volume THIS DRIVER mounted on one partition
+; in:  AL = the device index, AH = the slot
+; out: AL = the kernel's volume index, 0FFh = none (or a resident too old to
+;      know the verb, which refuses it and leaves the 0FFh standing)
+; clobbers: AX (the output), flags
+;
+; The installer's State column wants a drive LETTER (SPEC.md 52.10.4.2), and
+; the table that knows is hd_vols, which stays the resident's. The kernel's
+; own adoption of the boot partition is NOT in there - hd_kvol asks that half.
+; -----------------------------------------------------------------------------
+hd_vol_ask:
+    push si
+    mov [hd_req+HRQ_DEV], al
+    mov [hd_req+HRQ_SLOT], ah
+    mov byte [hd_req+HRQ_RES], 0xFF
+    mov si, hd_req
+    mov al, HSV_VOLOF
+    call hd_svc_call
+    mov al, [hd_req+HRQ_RES]
+    pop si
+    ret
+
 hd_pslot:    db 0               ; the partition hd_mount_one is to mount
 hd_mvol:     db 0               ; ...and the kernel volume index it became

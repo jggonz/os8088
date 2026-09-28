@@ -30488,8 +30488,10 @@ goes out to its driver's `DSV_BLK` (§51.8) with **the same volume-relative
 16-bit LBA**. `[sch_lock]` is raised around both, so a driver inherits the
 no-switching rule without knowing the scheduler exists.
 
-**LBAs stay 16-bit and volume-relative, and the driver adds its own 32-bit
-partition base.** That is the whole of what "partitions" means to os8088:
+**LBAs stay volume-relative, and the driver adds its own 32-bit partition
+base.** They were 16-bit, which is what the rest of this paragraph is about;
+§18.7.5 carries a high word beside them on `kern_big` and moves the ceiling
+to FAT16's own, just under 2GB. That is the whole of what "partitions" means to os8088:
 `dsk_clus2lba`, `dsk_read_chain`'s run coalescer, `dsk_dirw_next` and
 `dskw_flush` are the floppy's code and are untouched by capacity. It caps a
 volume at 65,535 sectors — 31.99MB — which is exactly what BPB rule 8 already
@@ -30691,6 +30693,78 @@ volumes (`desk_ord`), not by its table index, so a reserved C: leaves no hole
 in the grid — the RAM disk is the third icon and is called D:. Everything else
 that derives from the index — the drive letter, `FS_DRV`, `osapi_file_here` —
 wants exactly this answer.
+
+#### 18.7.5 A volume past 32MB: the LBA's high word
+
+**The ceiling above was the width of a register, and FAT16's own is 64 times
+higher.** A volume-relative LBA was a word, so a volume was 65,535 sectors;
+FAT16 itself stops at 65,524 clusters of at most 32KB — just under **2GB** —
+and that is the ceiling on `kern_big` and `kern_dos` now. Every cluster and
+FAT sector number already fit a word (§18.8's window was built for 65,524
+clusters), so what widened is only the **data area's** sector numbers, and it
+widened by carrying their high word **beside** them rather than by making the
+file system 32-bit.
+
+**`[dsk_lbahi]` is the whole transport change.** It is the high word of the
+NEXT transfer's LBA, one-shot: a data caller arms it immediately before its
+`dsk_xfer`, and `dsk_xfer` zeroes it on every path out. So every metadata
+transfer — the boot sector, a FAT window fault, a root-directory sector — reads
+it as 0 **without saying anything**, which is what keeps the change off the
+dozens of call sites that never leave the first 32MB. Inside the transfer it
+rides the run loop's advance (`adc`), goes into the CHS divide on a BIOS volume
+(DX was a constant 0 there), and into **DI** on a driver volume, whose
+`DSV_BLK` has always taken the low word in SI (§51.8). The read-ahead cache
+(§18.95) keys its chunks on 16-bit LBAs and simply stands aside when the high
+word is non-zero; it clamps its fills at 65,535 on a big volume.
+
+**`[dsk_c2hi]` is where the high word comes FROM.** `dsk_clus2lba_x` computes
+`FirstDataSec + (cluster − 2) × spc` in 32 bits and leaves the high half there
+— an *answer*, not the transfer's register — because between asking and moving
+a caller may fault a FAT window in, and that transfer must see 0.
+`dsk_c2arm_x` copies it across at the moment of the transfer. The directory
+walker sets it too (0 for the root). What holds an LBA for longer holds all 32
+bits of it: the found and free directory slots (`dskw_dsec`, `dskw_fsec` —
+whose "none" sentinel moved to the HIGH word, FFFFh being an ordinary low word
+past 32MB — and `dskw_cursec`), and the data walk's cursor and pending run
+(`dskw_clba`, `dskw_rlba`); `dsk_rd1p_x`/`dsk_wr1p_x` take a pointer to such a
+dword and cost a call site nothing over the word they replace.
+**`dsk_read_chain` coalesces runs by CLUSTER now**, not by LBA: every cluster
+but the last is taken whole, so a run is contiguous exactly when each cluster is
+the one after the last, and a cluster is a word on any volume. It asks for the
+LBA once, at the flush. That shape is the same size as the one it replaced.
+
+**The mount folds TotSec32 into the count it already had.** The staged BPB
+(§18.9.2) ends with a pad byte that held HiddSec's low byte, which nothing reads;
+when TotSec16 is 0 the staging puts TotSec32's low word in TotSec16's place and
+its bits 16–23 in that pad (`DSK_B_TOTHI`). One byte names 8GB, so the bank
+grows by nothing, and every rule below reads one place: rule 8 is "the 24-bit
+count is not 0", a floppy with a 24-bit count is refused, a driver that
+DECLARED a length cannot carry one, and CountOfClusters is a 24-over-8 divide
+with the quotient-overflow refused before it can fault with `[sch_lock]` held.
+A driver serving a volume past 32MB registers it with `OSAPI_VOL_ADD`'s CX = 0,
+*unknown*, because the length does not fit the register — rule 13 already
+accepted that.
+
+**What it costs**, measured against the tree before it: **`kern_big` 259
+bytes** (`.text` +2, `.bss` +10, `.cold` +247), which crosses one cold rung;
+**`kern_dos` +237**; and **`kern_small` −3** — it takes none of it. SPEC.md
+39.27.4 puts `kern_small` on a diet where nothing may be spent, and its disks
+ship no `HDD.DRV` to reach a big volume with, so every site is `%ifdef
+OS88_BIGVOL` (defined wherever `KERN_SMALL` is not) or one of two macros that
+read a dword on the build that has one and a word on the build that does not.
+The three bytes it lost are `.drv`'s DI no longer being banked across a lookup
+that clobbers it (the LBA is dead on that path) and a `.bss` word the mkdir
+path stopped needing. `HDD.DRV` +26 (`hd_part_big`, DI into the LBA, the
+unknown length); `HDDTOOL.DRV` +64 (§52.3.1).
+
+**`tests/bigvol.py` is the gate and it makes the high word unavoidable**: a
+321MB FAT16 (654/16/63, one of the geometries MartyPC's XT-IDE accepts) formatted
+on the host by mtools with a 40MB file at the front, so everything an install
+writes lands past sector 65,536. The installer keeps the volume, the kernel
+lands at cluster 5,123 — 81,936 sectors in, so `BOOTHD_KOFS` needs its high
+word as well (§52.10.15) — and the host finds the user's files and the kernel's
+one run intact; then the partition boots, and `CALC.O88` launches out of
+`C:/APPS`. With `dsk_c2arm_x` arming 0 instead, the install never commits.
 
 ### 18.8 The FAT is a window, not a snapshot
 
@@ -81293,7 +81367,8 @@ legal range — true about SPACE and expensive about everything else. It gave a
 available: 65,000 clusters, a **254-sector FAT** that the nine-sector window
 (§18.8) covers 3% of, and one FAT entry to walk per 512 bytes of every file.
 `hd_fmt_spc0` is Microsoft's `DskTableFAT16`, trimmed to the two rows a
-65,535-sector ceiling (§18.7) can reach — 1KB clusters to 16MB, 2KB above —
+65,535-sector ceiling (§18.7) could reach — 1KB clusters to 16MB, 2KB above
+(§52.3.1 is what reaches the rest) —
 and the walk still counts upward from there, so a size the table gets wrong
 is corrected exactly as before. A 31MB partition's FAT went from 254 sectors
 to 64. The cost is at most one cluster of slack per file.
@@ -81314,6 +81389,46 @@ makes a 32MB format about 550 sector writes instead of 65,000.
 `BS_jmpBoot` matters: os8088's own BPB rule 2 (§18.2) rejects a volume whose
 first byte is not EB or E9, so a formatter that left it blank would write a
 volume its own kernel refuses to mount.
+
+#### 52.3.1 …to 2GB, and the partition says which FAT16 it is
+
+§18.7.5 moved the ceiling to FAT16's own, and the formatter and the partition
+writer follow it; neither is resident, so none of this is kernel bytes.
+
+- **An extent is 32 bits.** `[hd_fsecs]` was a word, and `hd_slot_extent`
+  capped a free hole or a reused slot at 65,535 sectors — "take the first 32MB
+  and free the rest". The cap is `HP_MAXHI:HP_MAXLO` now, **4,194,000 sectors
+  (2,047.9MB)**: the largest FAT16 there is, 65,524 clusters of 32KB plus its
+  metadata, less a margin for the root and the cylinder trim (§52.2.5), which
+  is 32-bit as well. `hd_part_big` is the one test of it, where five sites
+  asked `HP_SECS+2 != 0` separately.
+- **The cluster size walks on up from 2KB by doubling**, and that lands on
+  `DskTableFAT16`'s own row for every size to 2GB — 2KB to 128MB, 4KB to 256,
+  8KB to 512, 16KB to 1GB, 32KB to 2GB — so `hd_fmt_spc0` needed no new rows,
+  only the observation that past a word the answer is at least 2KB. The
+  layout's `TmpVal1` and the cluster count are 32-bit, and a count past a word
+  sends the walk to a bigger cluster rather than dividing into a fault.
+- **The BPB carries TotSec16 while it fits a word and TotSec32 when it does
+  not** (`hd_fmt_tot`, shared by the formatter and the installer's VBR).
+- **The partition type follows the size** (`hd_ent_fill`, which replaces the
+  same eight stores the Format window and the installer each carried): `01h`
+  FAT12, `04h` FAT16 under 32MB — what DOS 3.3 wrote — and **`06h`** past it,
+  what DOS 4 and every later FDISK write. Both windows wrote `04h` and
+  `HP_SECS+2 = 0` unconditionally, which was true only while a partition could
+  not be bigger than a word.
+
+A 32KB cluster is the price of the top of the range, and §18.4.4's chunk rule
+is where a package meets it: a chunk is a whole number of clusters, so a
+package appending in 4KB chunks to a 2GB volume loses the tail of each one —
+the same rule, at a size nothing had reached. The installer's own chunk is
+32KB, a multiple of every cluster size there is.
+
+**Verified by `tests/bigvol.py`**, whose fixture the host formats (the kernel
+must read a TotSec32 volume it did not write) and whose install then writes one
+of its own shape — and by an install to an empty 321MB disk in development:
+one type-06 slot at LBA 63, 659,169 sectors, TotSec32, 8KB clusters, a
+161-sector FAT, `KERNEL.SYS` one run at cluster 2 and `README.TXT` byte for
+byte.
 
 ### 52.4 The page, and mounting
 
@@ -81616,7 +81731,9 @@ computed from `BPB_RsvdSecCnt`, `BPB_NumFATs`, `BPB_FATSz16` and
 `BPB_RootEntCnt` rather than from a format. A FAT16 partition needs no new
 code in it at all.
 
-**`KERNEL.SYS` must be first and contiguous**, exactly as on a floppy: the
+**`KERNEL.SYS` must be contiguous**, and after a format it is first — §52.10.15
+added `BOOTHD_KOFS` so a kept volume's kernel may start anywhere in the data
+area. It must be contiguous exactly as on a floppy: the
 sector reads it as a flat run rather than walking a cluster chain, which is
 what makes it fit in 512 bytes (§19.3). `os88disk.py` guarantees that at
 image-build time by allocating it from cluster 2; the installer guarantees it
@@ -81874,6 +81991,11 @@ what matters about that slot is not which FAT it holds. **Three windows now
 say the same word for the same fact**, which is the point of putting it in
 the state rather than beside it.
 
+**§52.10.15 narrows everything below to ERASING.** An install that keeps the
+volume's files may take the booted-from volume, and does, with the Erase box
+clear; the `Booted From` refusal and its caption now belong to the box being
+ticked.
+
 **Which leaves the machine no way to replace its own system volume from
 inside itself, and that is correct.** The install set is two floppies and
 they are bootable; booting them is the supported path, and it is what the
@@ -81889,6 +82011,69 @@ way — `Slot 1  31M  Booted From` with Format and Delete both greyed. The
 floppy-booted machine is unchanged, and that is the A/B that matters: the
 same disk on the same machine, one boot source apart, still reads `Ready`,
 still formats and still installs.
+
+#### 52.10.4.2 The State column says what a slot IS, not only whether it will do
+
+The column answered one question — *would an install work?* — with `Ready`,
+`Too Small`, `Unusable`, `No Room` and `Booted From`. That is the verdict and
+it is still kept (`hd_istate`, what `hd_iact_ok` greys Install on), but it is
+not what a person choosing a partition to overwrite needs to read first. They
+need to know **which slot is their C:**, which is a FAT volume nobody has
+mounted, and which is somebody else's Linux — and `Ready` over all of the
+first two and `Unusable` over the third said none of it.
+
+So the column is now `[letter ': '] body [', ' reason]`:
+
+| what is in the slot | it reads | verdict |
+|---|---|---|
+| a volume on the desktop | `C: FAT16` (the letter it is mounted as) | fine |
+| the volume the machine booted from | `C: FAT16, Booted From` | refused (52.10.4.1) |
+| a FAT volume nobody mounted | `FAT16` / `FAT12` (the TYPE byte's name, as the Format window reads it) | fine |
+| a FAT-typed extent with no volume in it | `Not Formatted` | **fine** — the install formats it |
+| a FAT extent past FAT16's own ceiling, just under 2GB (§18.7.5) | `FAT16, Too Big` | refused |
+| a FAT extent laid out at another geometry | `FAT16, Wrong Geometry` (§52.2.6) | refused |
+| anything FAT under `HIW_MINSEC` | `…, Too Small` | refused |
+| a free slot with room behind it | `Unpartitioned` | fine — the install makes the entry |
+| a free slot with none | `Empty, No Room` | refused |
+| a foreign type | its name — `Extended`, `NTFS/HPFS`, `FAT32`, `Linux`, `Linux Swap`, `Linux LVM`, `BSD`, `XENIX`, `Unix`, `OS/2 Boot`, `CP/M-86`, `NetWare`, `GPT Disk`, `EFI System`, `Hidden FAT` — or `Type nnh` | refused |
+| a table that would not read | `Unreadable` | refused, where it used to read free and offer Install |
+
+**The letter comes from two owners and is asked of both.** The kernel's
+adoption of the boot partition is `OSAPI_VOL_AT` (`hd_kvol`, §52.10.3.1); a
+mount this driver made is in `hd_vols`, which is the resident's and crosses
+nothing — so the tool asks it with a new seam verb, **`HSV_VOLOF`** (13),
+which is `hd_vol_of` behind four instructions. `HD_ABI_VER` is 4 for it: a
+tool that asks a resident too old to know the verb is refused and reads no
+letter, which is the right degradation, but a version check is cheaper than
+reasoning about which pairings are safe.
+
+**Two behaviour changes ride with it, and both are the column being honest.**
+A FAT-typed slot with no volume in it read `Unusable` — `hd_iw_scan` called
+`hd_fmt_isfat` where `hd_part_isfat` was meant, so the verdict asked whether
+there was a volume *to lose* rather than whether the slot was one we could
+make one in — and it is a target now, as it is for the Format window. And
+`hd_tw_geomok`, which the installer never asked, is asked: a slot laid out at
+another geometry was `Ready`, and the format would have landed on sectors
+nobody meant. It takes the device row in `DI` now rather than reading
+`[hd_tdev]`, which was right for one of its two callers.
+
+The window is **356px** wide rather than 300, `HIW_CELLS` 42 rather than 35,
+because the longest row is `C: FAT16, Wrong Geometry` — 24 cells from
+`HIW_STATEC` — and an assembly-time check says so. The Size column is 32 bits
+wide now and prints `G` past 9,999MB: a PARTITION is not bounded by a word of
+sectors, only a volume is.
+
+**What it cost, measured on the span and not the file** (both images are
+quantised - `hdd.bin` reads 5,120 either way): **no kernel byte**; the
+resident `HDD.DRV` **+25** (`hd_vols` moves `0FD5h` → `0FEEh`), which is the
+verb and its dispatch; and `HDDTOOL.DRV` **+528** (`hd_tentry` `35FFh` →
+`380Fh`), most of it the foreign-type names and the scan's second question.
+That moves **`HDTOOL_KB` 16 → 17**, `HDD.DRV`'s transient claim for the tool
+image while the Drives page is open (§52.10.14's reason for naming it).
+
+`tests/inststate.py` is the gate: three VHDs whose slots 2-4 are rewritten
+before boot, every row read out of the framebuffer against the kernel's glyph
+table. The driver before this reads `MISSING` on all four rows of the first.
 
 ### 52.10.5 A disk already in the machine is not asked for
 
@@ -82956,6 +83141,128 @@ cannot: that every app row's cluster names a folder that is really on the
 installed volume, that the packages the volume carries are the ones the file
 describes, and that `BROWSER.HTM`'s program is reachable from its row. The
 installer says `Done` either way.
+
+### 52.10.15 Install without erasing: the volume's files are kept
+
+**An install that does not format is the default over any slot that holds a
+volume.** Everything the install disks carry is written over what is there —
+`KERNEL.SYS`, every driver, every package, font and document — and nothing
+else is touched: the user's own files, their `SYSTEM.CFG`, and whatever an
+application keeps in an `APPDATA` folder (§19.9). `ASSOC.DAT` is rebuilt from
+what is on the volume afterwards exactly as §52.10.14 already does, so it
+describes the user's packages as well as ours.
+
+The installer carries one new control, a check box reading **`Erase the
+partition first`**, between the slot list and the buttons. It is not a second
+button because it is not a second verb: the action button installs either way
+and the box decides whether the volume survives it.
+
+| the selected slot | the box | the arm caption |
+|---|---|---|
+| a FAT volume (`C: FAT16`, `FAT12`, …) | **clear** — its files are kept; tick it to format | `Keeps its files: Install again to confirm` |
+| the volume the machine **booted from** | clear; ticking it greys Install and the caption says `Boot from a floppy to erase it` | as above |
+| anything else — `Unpartitioned`, `Not Formatted` | **set and greyed**: there is nothing to keep (§47, a fact and not a choice) | `Erases it: Install again to confirm` |
+
+It greys once the install has written anything, and picking another row puts
+it back to that row's default.
+
+#### The kernel no longer has to be at cluster 2
+
+`boot/boothd.asm` reads `KERNEL.SYS` as a flat run from the start of the data
+area (§52.10.2), and a format guarantees that start is free. A kept volume
+guarantees nothing — the MartyPC fixture disk has DOS 3.3's `IO.SYS` there —
+so the sector now adds **`BOOTHD_KOFS`**, a dword at offset **504**, directly
+below `BOOTHD_KSECS`: the kernel's first sector as an offset into the data
+area. A format leaves it 0 and the sector reads cluster 2 exactly as before.
+The eight bytes of code and four of data were paid for by moving the loader's
+working variables **out of the sector**: every one is written before it is
+read, so none needed an initialiser, and they live at `0600h` in the segment
+the sector relocated to — which `.nomem` already proves is clear of the
+kernel's read, with the stack at `7C00h` and the blob at the heap floor below
+both. `boot_drive` stays in the sector, being read after the blob has run.
+Seven bytes are still spare.
+
+**The run is arranged with nothing but the file API.** `dskw_alloc` is
+next-fit from `[dsk_rover]`, and `disk_mount` puts the rover back at cluster 2
+on every mount — so after a fresh mount the allocator's order is the FAT's
+order, and a file of N clusters takes the lowest N free ones. `hd_inst_keep`:
+
+1. **cuts the old `KERNEL.SYS` to nothing** — a zero-length replace through
+   `OSAPI_FILE_WRITE_SYS`, the one verb that may touch a hidden + system file
+   (§19.6) — so its clusters are free;
+2. **plans** (`hd_kplan`): reads the BPB and walks the FAT raw, three sectors
+   at a time through the copy buffer (1,536 bytes is exactly 1,024 FAT12
+   entries or 768 FAT16 ones, so no entry is ever split), and finds the
+   **first** run of free clusters long enough for the new kernel, counting the
+   free clusters below it. First fit, because the pad costs a write of every
+   cluster it covers;
+3. writes **`KPAD.TMP`** of exactly that many clusters, after a remount, so it
+   takes precisely the holes below the run;
+4. **copies the kernel** — every cluster it is handed is the next one in the
+   run, whether the rover survived a chunk or a remount put it back at 2,
+   because the pad has taken everything underneath;
+5. deletes the pad, **checks the chain on the disk** (`hd_kverify`: the
+   directory says where it starts, the FAT says whether each cluster is
+   followed by the next), and only then writes the VBR — with this volume's
+   OWN BPB, the template's code laid over everything but the first 62 bytes,
+   `BPB_HiddSec` taken from the partition table — and that is the commit.
+
+The partition does not boot between steps 3 and 5, which is seconds; the
+format path's window is its whole system phase. A check that fails at step 5
+commits nothing: the VBR and MBR are what they were, and on the fixture the
+partition still boots DOS.
+
+**The rest of the tree is the ordinary copy**, which already replaces a file
+that exists and already treats `FERR_EXIST` from `MKDIR` as the second time
+(§52.10.13). `hd_ikeepit` is the one addition: on a kept volume a root
+`SYSTEM.CFG`, and any file inside a folder named `APPDATA` (inherited down the
+walk's level stack), is copied **only where the destination has none**. The
+install disks ship no `SYSTEM.CFG` and an empty `APPDATA` today, so this is
+what keeps a future default from overwriting a user's setting rather than a
+rule that fires on the current disks.
+
+#### The booted-from volume can be upgraded in place
+
+§52.10.4.1 refused the volume the machine is running from, and that stands
+for **erasing** it. Keeping it is different in kind — the running kernel is in
+RAM, its drivers are loaded images, and every file is replaced through the
+same API as on any other volume — so `HIS_LIVE` is installable with the box
+clear. `hd_inst_keep` adopts the kernel's own volume (`hd_kvol`) rather than
+mounting it, and two guards make the source honest where it now could not be:
+**the destination is never the source** (a user booted from C: is standing on
+a volume with `KERNEL.SYS` on it, and a copy of a volume onto itself replaces
+each file with its own first chunk), and **the system disk is looked for in
+every floppy drive**, lowest first, where it was A: alone — a machine that
+boots its hard disk has a blank in A: or nothing, and the new system disk in
+whichever drive the BIOS was not reading. The apps phase takes the same
+destination guard. The caption for a disk it cannot find reads `No system
+disk found - nothing done`.
+
+What this does **not** do is make a running machine consistent with what it
+just installed: the new kernel and drivers are on the disk and the old ones
+are in memory until the Restart the action button offers.
+
+#### What it cost, and what gates it
+
+**No kernel byte.** `boothd.bin` is still 512 bytes with seven spare.
+`HDDTOOL.DRV` **+1,619** (`hd_tentry` `380Fh` → `3E62h`), of which the check
+box is `os88ui.inc`'s shared control, opted into with `OS88UI_CHK`; that moves
+**`HDTOOL_KB` 17 → 19**, the transient claim while the Drives page is open.
+`HDD.DRV` is unchanged.
+
+**`tests/instkeep.py`** is the gate. Its fixture is MartyPC's DOS partition
+with two holes punched and a user's `USER.TXT`, `SYSTEM.CFG` and
+`SYSTEM/APPDATA/NOTE.CFG` planted on the host with mtools, so the kernel
+**must** go past cluster 2 (it lands at 77, `BOOTHD_KOFS` 300): it asserts the
+user's files byte for byte, DOS intact, the kernel one run with the VBR naming
+it, and the pad gone; boots C:; upgrades the booted-from volume in place with
+the system disk in B:; asserts it all again and boots once more. Broken on
+purpose both ways: `BOOTHD_KOFS` written as 0 fails the host check and the
+boot, and the pad skipped leaves the kernel in the holes (38–41, 56–57, 61–63,
+67, …) with nothing committed. **`tests/instdeep.py` ticks the box**, so it
+and the rows built on it (`hdboot`, `instassoc`) still test the erasing
+install they were written for, and it now refuses a volume on which the
+fixture's DOS survived.
 
 ## 52.11 Two images: the transport, and the tool
 

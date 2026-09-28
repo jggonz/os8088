@@ -519,14 +519,17 @@ hd_geom_store:
 
 ; -----------------------------------------------------------------------------
 ; hd_blk - DSV_BLK
-; in:  AL = 0 read / 1 write, AH = our volume handle, SI = the VOLUME-RELATIVE
-;      LBA, CX = sectors, DX:BX = the buffer
+; in:  AL = 0 read / 1 write, AH = our volume handle, DI:SI = the
+;      VOLUME-RELATIVE LBA (DI the high word, SPEC.md 18.7.5), CX = sectors,
+;      DX:BX = the buffer
 ; out: CF = 0 done; CF = 1 and AL = an int 13h status byte
 ; clobbers: AX (the output), flags
 ;
 ; The whole of what "partitions" means to os8088 is the addition below: the
-; kernel hands a 16-bit volume-relative LBA and this adds the partition's
-; 32-bit base. Everything above it - the FAT, the directory, the write path -
+; kernel hands a volume-relative LBA and this adds the partition's 32-bit
+; base. The LBA was 16 bits until SPEC.md 18.7.5, and a kernel that predates
+; it leaves DI = the low word - which this must never meet, the two shipping
+; together. Everything above it - the FAT, the directory, the write path -
 ; is the floppy's code, unchanged.
 ; -----------------------------------------------------------------------------
 hd_blk:
@@ -539,7 +542,8 @@ hd_blk:
     push di
     push bp
     push es
-
+    mov bp, di                  ; the LBA's high word (SPEC.md 18.7.5), before
+                                ; DI becomes the volume row below
     mov [hd_bseg], dx
     mov [hd_bofs], bx
     mov [hd_bcnt], cx
@@ -550,9 +554,9 @@ hd_blk:
     jc .bad
     mov di, bx
 
-    mov ax, si                  ; the 32-bit LBA: base + volume-relative
-    xor dx, dx
-    add ax, [di+HDV_BASE]
+    mov ax, si                  ; the 32-bit LBA: base + volume-relative, whose
+    mov dx, bp                  ; HIGH word the kernel hands in DI (SPEC.md
+    add ax, [di+HDV_BASE]       ; 18.7.5) - banked in BP at the top
     adc dx, [di+HDV_BASE+2]
     mov [hd_lba], ax
     mov [hd_lba+2], dx

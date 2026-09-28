@@ -461,8 +461,9 @@ FSV_SIZE     equ 30
 ; --- DSV_BLK: one driver-backed volume's sectors (SPEC.md 51.8) -------------
 ;   in   AL = 0 read / 1 write
 ;        AH = YOUR volume handle, the one you passed to OSAPI_VOL_ADD
-;        SI = the VOLUME-RELATIVE LBA, 16-bit - the kernel knows nothing
-;             about partitions, so you add your own 32-bit base
+;        SI = the VOLUME-RELATIVE LBA's low word and DI its HIGH word
+;             (SPEC.md 18.7.5) - the kernel knows nothing about partitions,
+;             so you add your own 32-bit base
 ;        CX = sector count
 ;        DX:BX = the buffer. DX and NOT ES, because the buffer is in the
 ;             kernel's low segment, its FAT window or a heap claim and never
@@ -471,9 +472,10 @@ FSV_SIZE     equ 30
 ;   out  CF = 0 done; CF = 1 and AL = an int 13h status byte (03h = write
 ;             protected, anything else = a hard error)
 ;
-; A volume is capped at 65,535 sectors (31.99MB) by the kernel's own BPB
-; rule 8, which is also the DOS 3.3 partition limit these machines ran. More
-; capacity is more partitions, each its own volume and its own drive letter.
+; A volume is capped by FAT16 itself - 65,524 clusters of at most 32KB, just
+; under 2GB (SPEC.md 18.7.5). It was 65,535 sectors (31.99MB) while an LBA was
+; a word. A volume past 32MB is registered with OSAPI_VOL_ADD's CX = 0,
+; 'unknown', because its length does not fit the register.
 
 ; --- the Control Panel page you own (SPEC.md 31.9) --------------------------
 ; Publish DSV_CPNAME and your page appears in the panel's list - and only

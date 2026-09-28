@@ -224,6 +224,12 @@ def requirements():
                 "apt-get install -y ffmpeg python3-numpy   (and where python3 "
                 "is not the system one: python3 -m pip install numpy)"))
 
+    req.append(("mtools", bool(shutil.which("mcopy"))
+                and bool(shutil.which("mattrib")),
+                "instkeep, which plants a user's files on the fixture "
+                "partition before a kept install (SPEC.md 52.10.15).",
+                "apt-get install -y mtools"))
+
     # THE FOUR DISKS `all` DELIBERATELY DOES NOT BUILD.  This is the item the
     # pass-3 soak found by hand after fifteen runs had skipped on it, and the
     # reason each is absent is a different deliberate decision (SPEC.md 78.9
