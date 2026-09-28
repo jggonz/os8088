@@ -149894,7 +149894,7 @@ stream behind them is read sequentially.
 |---|---|---|
 | 0 | 4 | `'V88'`, 1Ah |
 | 4 | 2 | version, **1** |
-| 6 | 2 | flags: 1 RESIDENT (98.1.7), 2 LOOPREC and 4 REPEAT (98.1.1.2), 8 LIVE (98.3.10; resident, or a one-bit stream played Live from XMS, 98.3.18.1), 16 RUNS (98.1.3.4), 32 SPKPWM (98.1.1.3). A reader refuses any bit it does not know |
+| 6 | 2 | flags: 1 RESIDENT (98.1.7), 2 LOOPREC and 4 REPEAT (98.1.1.2), 8 LIVE (98.3.10; resident, or a one-bit or VGA4 stream played Live from XMS, 98.3.18.1), 16 RUNS (98.1.3.4), 32 SPKPWM (98.1.1.3). A reader refuses any bit it does not know |
 | 8 | 4 | frames, ≥ 1 |
 | 12 | 2 | rate: the audio sample rate in Hz; for a silent file, the nominal rate the frame rate derives from |
 | 14 | 2 | samples per frame, ≥ 1. **fps = rate / samples per frame**, XDC's rule |
