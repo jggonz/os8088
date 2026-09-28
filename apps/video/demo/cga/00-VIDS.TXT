@@ -1,0 +1,96 @@
+CGA DEMO VIDEOS
+===============
+
+Eleven short videos made for the Video Player on a CGA card, to show what it does on a 4.77 MHz IBM PC and a hard disk: black and white, CGA's own four colours, sixteen colours on an RGB monitor, and hundreds on a composite one.
+
+Double-click one to open it, then press Space or click Play. Space pauses, Esc stops, and F moves a play between the window and the full screen. A video too big for the window, or in colour, plays full screen.
+
+Sound wants a Sound Blaster, except 02, which is made for the PC speaker (see below). 08, 09 and 10 are for a COMPOSITE monitor; on an RGB one they show as stripes.
+
+01-COTXT.V88
+  Sonic 2: Emerald Hill
+  80 x 25 text, 16 colours
+  Full screen
+  PCM 11 kHz sound
+  30 fps, 0:34, 1.5 MB
+
+02-BWPCS.V88
+  Bad Apple
+  400 x 94, black and white
+  In the window
+  PC speaker, 5.5 kHz
+  25 fps, 3:46, 4.7 MB
+
+02 is encoded and timed for the PC speaker. To hear it there, choose PC Speaker on the Control Panel's Sound page first; with a Sound Blaster chosen it plays through the card instead.
+
+03-CGA4.V88
+  Bad Apple
+  320 x 150, 4 colours
+  Full screen
+  PCM 5.5 kHz sound
+  25 fps, 0:25, 2.0 MB
+
+04-640FS.V88
+  Star Wars
+  640 x 114, black and white
+  Full screen
+  PCM 11 kHz sound
+  30 fps, 0:38, 3.1 MB
+
+05-640FS.V88
+  Take On Me
+  640 x 200, black and white
+  Full screen
+  PCM 11 kHz sound
+  24 fps, 0:40, 3.6 MB
+
+06-640FS.V88
+  K Project
+  640 x 150, black and white
+  Full screen
+  ADPCM 5.5 kHz sound
+  24 fps, 1:11, 5.4 MB
+
+07-CGA16.V88
+  Trackmania: A01
+  160 x 75, 16 colours (RGB)
+  Full screen
+  PCM 5.5 kHz sound
+  25 fps, 0:25, 1.5 MB
+
+08-CGACP.V88
+  Trackmania: A01
+  160 x 150, 16 composite
+  Full screen
+  PCM 5.5 kHz sound
+  25 fps, 0:25, 2.0 MB
+
+09-CMP5O.V88
+  Trackmania: A01
+  80 x 75, 512 composite
+  Full screen, OLD CGA
+  PCM 5.5 kHz sound
+  30 fps, 0:25, 1.8 MB
+
+10-CMP5N.V88
+  Trackmania: A01
+  80 x 75, 512 composite
+  Full screen, NEW CGA
+  PCM 5.5 kHz sound
+  30 fps, 0:25, 1.8 MB
+
+07 is the text-mode trick that gives a CGA sixteen colours at 160 x 100. 09 and 10 are the same trick on a composite monitor, about 450 colours: IBM changed the card's composite output in 1985, so 09 is made for a CGA from before then and 10 for one from after.
+
+11-LIVE.V88
+  Steamboat Willie
+  320 x 100, black and white
+  Live, on the desktop
+  ADPCM 5.5 kHz sound
+  20 fps, 0:15, 392 KB
+
+11 plays LIVE: on the desktop itself, so the machine stays usable while it plays - open a window, drag it, type. It is loaded into memory whole before it starts.
+
+ALSO IN THIS FOLDER
+===================
+
+OS8088.V88 is the os8088 logo, which plays live and loops. BEVERLY.MOD is a music module for Tracker.

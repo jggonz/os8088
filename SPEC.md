@@ -154238,8 +154238,8 @@ Hercules row caught it.
 **A hard disk that shows the player off**: a whole os8088 install with a set
 of demo videos in `MEDIA/` beside a `00-VIDS.TXT` that says what each is.
 `make viddemo` makes one disk for each directory of `apps/video/demo/`
-that holds a `00-VIDS.TXT` - `herc/` today, the owner's (cga/ and vga/ to
-come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
+that holds a `00-VIDS.TXT` - `herc/` and `cga/` today, the owner's (`vga/`
+to come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
 
 - **The videos are COMMITTED**, one directory an adapter: they are the
   owner's encodes from their own sources and cannot be remade by `make`,
@@ -154262,7 +154262,11 @@ come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
   rules as `README.TXT` is: prose one line a paragraph, the per-video
   blocks indented and 28 columns at most, plain ASCII, CRLF on the disk.
 
-The Hercules disk, booted on MartyPC's Hercules 5150 (the same volume at
+Each disk booted on MartyPC's 5150 of its adapter (the same volume at
 615/4/26 on its XT-IDE, which has no ST11R): the desktop from C:, the text
-in Note Pad and `05-ADPCM.V88` in the window at its own size. 75 files,
-15,599 of 15,891 clusters.
+in Note Pad and a video in the window at its own size - `05-ADPCM.V88` on
+the Hercules (75 files, 15,599 of 15,891 clusters), `02-BWPCS.V88` on the
+CGA (77 files, 14,687). **The titles inside the files are what each video
+SHOWS OFF** - "Composite 512 Color 160*100 OldStyle", "PC Speaker Audio" -
+and not what it is of: this is a disk of the player, not of the films (the
+owner's rule). The text names both.

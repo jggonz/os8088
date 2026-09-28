@@ -3,7 +3,7 @@ HERCULES DEMO VIDEOS
 
 Nine short videos made for the Video Player on a Hercules card, to show what it does on a 4.77 MHz IBM PC and a hard disk. They are black and white: a Hercules card is monochrome.
 
-Double-click one to open it, then press Space or click Play. Space pauses, Esc stops, and F moves a play between the window and the full screen. A video wider or taller than the window leaves room for plays full screen.
+Double-click one to open it, then press Space or click Play. Space pauses, Esc stops, and F moves a play between the window and the full screen. A video too big for the window plays full screen.
 
 Sound wants a Sound Blaster, except 02, which is made for the PC speaker (see below).
 
