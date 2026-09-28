@@ -151010,6 +151010,10 @@ super-packet = frames(16) next(16) frame record × frames, zero-padded to a sect
   is copied into `vp_ke` to be checked, so `[vp_kload]` is 0xFFFF from the
   copy until the checks pass, and an entry that fails leaves NO key in hand
   rather than the last one's name over this one's bytes;
+- a rendition's slot the same way: `vp_parse` zeroes the key count before
+  its first check, so a rendition it refuses - the file's last parse, when
+  none plays here - leaves no key in hand rather than a later rendition's
+  table under this one's format and geometry;
 - a block's read against its claim (98.1.7).
 
 A failure refuses the file, or ends playback at that super-packet.
@@ -151029,7 +151033,9 @@ segments, not by trust:
 - **An absolute segment of count 0** (`80h`, outside the grammar's 1..127)
   is an empty segment to every decoder, `vdec.inc`'s and `vosd.inc`'s: the
   count is not trusted into a `loop`, which would take 0 as 65,536 rounds -
-  half a million writes, seconds of an 8088 stalled on one record.
+  half a million writes, seconds of an 8088 stalled on one record. **A C160
+  SLICE of length 0** (outside 7..255, `vd_c_mov`'s `loop`) is empty the
+  same way.
 
 #### 98.1.7 RESIDENT files: one rendition per screen, in memory (wave 10)
 
@@ -153062,7 +153068,9 @@ claims the shadow before the ring now, so the ring takes what is left.
   5150 copying a Hercules file onto a CGA, more than the stores it placed;
   the play went 84% -> 74% of the machine (VIDEO-PLAN 15.8).
 - **So the DISPLAY rate drops, never the play's.** A hook call may decode 8
-  frames, not 2; frames past that stay owed rather than being forgiven; and
+  frames, not 2; frames past that stay owed rather than being forgiven -
+  up to 8 calls' worth, past which they are counted late as a native play's
+  are, so the debt of a machine that can never catch up is bounded; and
   while the play is behind, the copy WAITS and the call's time goes to the
   decode - but never more than 8 calls running, so a machine that can never
   catch up still sees its picture move. With sound, the same, against the
@@ -153819,7 +153827,9 @@ again keeps the text for good.
 - **Paused, the hook decodes nothing**, and the box simply stays.
 
 **The main loop changes the text only with IRQ0 held off** (`vo_show`), so
-the hook never meets a box half changed. **`vp_cclear` forgets the saves**:
+the hook never meets a box half changed - and through the shadow the copy
+it makes there is the box's rows alone, the rest of the band left to the
+hook's next. **`vp_cclear` forgets the saves**:
 a canvas cleared under the box is not what they hold. The text is off
 (`vo_off`) before a bracket reads the canvas back (98.3.7), so the window's
 picture never carries it. The hook's deepest chain is **42 bytes** of its

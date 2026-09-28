@@ -400,17 +400,15 @@ vo_post:
     cmp byte [vo_drawn], 0
     je .sc
     mov byte [vo_drawn], 0          ; (so the copy takes the box's bytes too)
-    mov ax, [vo_yoff]
-    cmp [vp_dy0], ax
-    jbe .y0
-    mov [vp_dy0], ax
-.y0:
+    push word [vp_dy0]              ; ...and ONLY the box's rows: vo_show is
+    push word [vp_dy1]              ; at IF=0, and the rest of the band is the
+    mov ax, [vo_yoff]               ; hook's next copy, which goes round the
+    mov [vp_dy0], ax                ; box if it is up again by then
     add ax, [vo_rows]
-    cmp [vp_dy1], ax
-    jae .y1
     mov [vp_dy1], ax
-.y1:
     call vp_blit
+    pop word [vp_dy1]
+    pop word [vp_dy0]
 .sc:
     mov byte [vo_chg], 0
     cmp byte [vo_on], 0

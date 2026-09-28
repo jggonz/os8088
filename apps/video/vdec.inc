@@ -415,9 +415,11 @@ vd_c160:
     VD_NSPAN vd_c_slice, VD_CSLICE, 1, vd_c_run
     VD_NSPAN vd_c_run, VD_CRUN, 1, vd_c_slicel
 
-; vd_c_mov - CX (>= 1) bytes from DS:SI, each to an odd address from ES:DI:
-; eight to a round, entered Duff-style. Out: CX = 0, BX clobbered
+; vd_c_mov - CX bytes from DS:SI, each to an odd address from ES:DI:
+; eight to a round, entered Duff-style. Out: CX = 0, BX clobbered. A
+; file's 0 is none, not 65,536 rounds of a `loop` (98.1.6)
 vd_c_mov:
+    jcxz .z
     mov bx, cx
     and bx, 7
     shr cx, 1
@@ -445,6 +447,7 @@ vd_c_mov:
 .r1:
     VD_CST1
     loop .r8
+.z:
     ret
 .tab:
     dw 0, .r1, .r2, .r3, .r4, .r5, .r6, .r7

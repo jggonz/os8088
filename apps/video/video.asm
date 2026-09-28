@@ -963,12 +963,15 @@ vp_open:
     mov [vp_rend], al
     mov byte [vp_ok], 0
     call vp_parse
-    jc .free
+    jc .nk
     call vp_rdpal                   ; VGA8's palette, and its luma
-    jc .free
+    jc .nk
     mov byte [vp_loaded], 1
     call vp_canplay
     call vp_xopen                   ; a streamed file into XMS, if it fits
+    jmp short .free
+.nk:
+    mov word [vp_nkeys], 0          ; not loaded: no key to seek or show
 .free:
     mov dx, [vp_tmp]
     call OSAPI_MEM_FREE
@@ -1011,7 +1014,8 @@ vp_open:
 
 ; vp_parse - ES:0 = the header. CF=1 with [vp_msg] set when it refuses
 vp_parse:
-    mov word [vp_msg], vp_s_notv88
+    mov word [vp_nkeys], 0          ; no key in hand until the keyframes
+    mov word [vp_msg], vp_s_notv88  ; pass: a refusal anywhere leaves none
     cmp word [es:0], 'V8'
     jne .bad
     cmp word [es:2], '8' + (0x1A << 8)
@@ -1320,8 +1324,7 @@ vp_parse:
     ; --- THE KEYFRAMES (98.1.3): a table on a sector, 16,383 at most, a
     ;     poster inside it. A record too big for one read turns the Preview
     ;     and the seek off, and the file still plays from the start
-    mov word [vp_nkeys], 0          ; (a rendition before this one's count
-    mov ax, [es:di+R_NKEYS]         ; is not this one's)
+    mov ax, [es:di+R_NKEYS]         ; (vp_nkeys is 0 since the entry)
     cmp ax, 16383
     ja .bad
     mov bx, [es:di+R_POSTER]
@@ -8777,6 +8780,7 @@ vp_rsay:
 ; picture too. Then the ring is topped up from the audio cursor.
 ; =============================================================================
 vp_hook:
+    cld                             ; DF is the interrupted code's (vp_nextw)
     cmp byte [vp_ready], 0
     je .ret
     cmp byte [vp_upause], 0         ; paused (98.3.4): the periods are not
@@ -8791,14 +8795,11 @@ vp_hook:
     add [vp_owed], ax
     mov bl, [vp_pitper]
     xor bh, bh
-    xor cx, cx
-.due:
-    cmp [vp_owed], bx
-    jb .go
-    sub [vp_owed], bx
-    inc cx
-    jmp short .due
-.go:
+    mov ax, [vp_owed]               ; CX = the frames due, in ONE divide: a
+    xor dx, dx                      ; subtraction loop is a turn a frame owed,
+    div bx                          ; at IF=0
+    mov [vp_owed], dx
+    mov cx, ax
     jcxz .ret
     cmp cx, [vp_fcap]
     jbe .n
@@ -8809,10 +8810,18 @@ vp_hook:
     mov cx, [vp_fcap]
     jmp short .n
 .keep:
-    mov ax, cx                      ; SHADOW: the rest stays owed. The copy is
-    mul bx                          ; what costs, once a call however many
-    add [vp_owed], ax               ; frames it covers, so the decode catches
-    mov cx, [vp_fcap]               ; up and the DISPLAY rate is what drops
+    mov al, VP_SKIPMAX              ; SHADOW: the rest stays owed - up to
+    mul byte [vp_fcap]              ; VP_SKIPMAX calls' worth, past which it
+    cmp cx, ax                      ; is late as a native play's is, so a
+    jbe .kp                         ; machine that never catches up does not
+    sub cx, ax                      ; owe without end
+    add [vp_late], cx
+    mov cx, ax
+.kp:
+    mov ax, cx                      ; The copy is what costs, once a call
+    mul bx                          ; however many frames it covers, so the
+    add [vp_owed], ax               ; decode catches up and the DISPLAY rate
+    mov cx, [vp_fcap]               ; is what drops
 .n:
     sti                             ; a disk's completion is not held behind a
     push cx                         ; frame (SPEC.md 53.2.2 allows it)
@@ -11065,6 +11074,10 @@ vp_thumbx:
     or ax, ax
     jz .at
     dec ax
+    cmp ax, [vp_frames]             ; a silent stream longer than its header
+    jb .at                          ; says ends on the chain's 0: the thumb
+    mov ax, [vp_frames]             ; stops at the bar's end
+    dec ax
     jmp short .at
 .key:
     xor ax, ax
@@ -11215,8 +11228,8 @@ vp_fmt:
     mov ax, [vp_rate]               ; fps to two places: rate x 100 / spf
     mov cx, 100
     mul cx
-    div word [vp_spf]
-    xor dx, dx
+    mov cx, [vp_spf]                ; (32 bits: a rate the parse takes can
+    call vp_div32                   ; be 655 fps and more)
     mov bl, 2
     call vp_putn
     mov si, vp_s_fps
