@@ -1183,7 +1183,8 @@ SPK_NMAX        equ 255         ; ...and mode 0 is programmed lobyte-only
 ; -----------------------------------------------------------------------------
 ; osapi_fsx_spk - slot 0x045B (SPEC.md 34.11)
 ; in:  AL = 0 OPEN: DX = N, the PIT counts a sample (74..255: 4,679..16,124
-;           Hz), SI = your sample ISR, a near offset in your own image, DI =
+;           Hz; 48..255 on a 286 or better, 34.11.8), SI = your sample ISR,
+;           a near offset in your own image, DI =
 ;           a 6-byte block in your image the kernel fills BEFORE IRQ0 is the
 ;           ISR's: K, the samples in one rate period - which becomes K x N PIT
 ;           counts exactly, within a sample of your divisor, so [ticks] stays
