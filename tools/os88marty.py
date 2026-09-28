@@ -1488,6 +1488,38 @@ def _killable(d):
             and _is_marty(d.get("pid", -1), d.get("pid_start")))
 
 
+def _kill_wait(pid, start, secs=10.0):
+    """SIGKILL one emulator and return once it is GONE, not once it is told.
+
+    A signal is asynchronous: `os.kill` returns the moment the kernel has
+    queued it, and a process with a framebuffer, a VHD mapping and a
+    listening socket takes measurable time to finish dying - longer on a
+    loaded box. Returning early is how `reap()` came to report "killed 1"
+    while the emulator was still in /proc and still holding its port, which
+    `tests/martyconc.py` caught with four other emulators running. So this
+    polls `_is_marty(pid, start)` - the same identity test the kill was gated
+    on, so a PID recycled in the meantime reads as gone rather than as a
+    survivor - under a deadline. A zombie reads as gone (its cmdline is
+    empty), which is right: it holds no socket and nothing of ours reaps it.
+
+    Returns True once it is gone, False if it outlived the deadline, and None
+    if the signal was never delivered (it had already exited). HOST
+    time, necessarily: this is waiting on the host's process table, and
+    there is no guest in it.
+    """
+    import time
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        return None                     # not delivered: it was already gone
+    end = time.monotonic() + secs
+    while _is_marty(pid, start):
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.02)
+    return True
+
+
 def _write_record(d):
     """Publish an instance's record. **A VANISHED DIRECTORY IS NOT AN ERROR.**
 
@@ -1593,15 +1625,14 @@ def reap(kill_orphans=True, verbose=False):
                           "identity (`kill-all --yes` is the hammer)"
                           % (d.get("pid"), d.get("port")))
                 continue
-            try:
-                os.kill(d["pid"], 9)
+            gone = _kill_wait(d["pid"], d.get("pid_start"))
+            if gone is not None:
                 killed += 1
-                if verbose:
-                    print("reap: killed orphan pid %d on port %s (owner %s "
-                          "is gone)" % (d["pid"], d.get("port"),
-                                        d.get("owner_pid")))
-            except OSError:
-                pass
+            if verbose and gone is not None:
+                print("reap: killed orphan pid %d on port %s (owner %s "
+                      "is gone)%s" % (d["pid"], d.get("port"),
+                                      d.get("owner_pid"),
+                                      "" if gone else " - STILL EXITING"))
             d["ended"] = True
             d["ended_reason"] = "reaped: the owning script was gone"
             _write_record(d)
@@ -1639,11 +1670,8 @@ def kill_one(which):
     n = 0
     for d in rows:
         if _killable(d):                 # never a recycled PID: _proc_start
-            try:
-                os.kill(d["pid"], 9)
+            if _kill_wait(d["pid"], d.get("pid_start")) is not None:
                 n += 1
-            except OSError:
-                pass
         d["ended"] = True
         d["ended_reason"] = "killed by hand"
         _write_record(d)
