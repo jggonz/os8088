@@ -51,6 +51,7 @@ BUILDS_WITHOUT_MAKE = {
 
 # Not registered, and why. Keep the reason specific and true.
 UNREGISTERED = {
+    "drmario.py": "opt-in native game gate: requires the user-supplied local NES disassembly/CHR assets; run make drmariodisk first",
     # --- the rows of a RETIRED package (SPEC.md 20.16, apps/RETIRED.txt) ---
     # These two drive PACMAN.O88, which `all` no longer builds (SPEC.md
     # 89.12), so a registered row would need `wants=("build/pacman.o88",)`

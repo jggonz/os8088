@@ -40313,12 +40313,13 @@ the case that matters is the one no diff shows.
 
 `apps/RETIRED.txt` is the registry — `tests/movable.txt`'s shape, one line per
 package, `<kind> <package>  # <reason>` — and `tests/unit/t_retired.py` is the
-gate, a `fast` row. **Two kinds, and they are checked differently:**
+gate, a `fast` row. The kinds are checked differently:
 
 | kind | what it means | what the gate demands |
 |---|---|---|
 | `retired` | a **failure**. Not worth shipping | on no shipped image, not in the live payload, and **not built by `all` at all** |
 | `instrument` | **not a product** — a bench or a gate that happens to be a package | on no shipped image. `all` MAY build it: keeping a bench assembling is usually the point of having one |
+| `local` | an application requiring user-supplied assets, such as Dr. Mario (§99) | standalone build/disk targets only; no standard image, live payload or `all` dependency |
 
 **A `retired` package keeps its source and its SPEC.md section.** Deleting
 them would leave no account of what was tried, and this tree already keeps
@@ -149030,3 +149031,49 @@ for CGA/Hercules redraw. `--max-paint-ms 0` permits baseline measurements.
 The existing gameplay, frontend, input and animation gates cover throws,
 craters, fullscreen restoration, borrowed-cache transitions and incremental
 text. These are emulator cycle measurements, not hardware measurements.
+
+## 99. Dr. Mario (`apps/drmario/drmario.asm`)
+
+Native 8086 single-player adaptation of the supplied NES Dr. Mario disassembly.
+The reference is external: `NES-Games-Disassembly/Dr. Mario/bank_FF.asm` and
+`CHR_ROM.chr`. `make drmario` imports selected graphics and speed/color tables
+into the build directory, then builds `DRMARIO.O88`; `make drmariodisk` creates
+four standalone application floppy geometries. `DRMARIO_SOURCE` overrides the
+reference directory. No NES interpreter, ROM redistribution in source control,
+new API slots, heap claim, worker or kernel change is required.
+
+A desktop launcher supplies controls and settings. Enter/Alt+Enter opens the
+exclusive bracket; Escape/Alt+Enter restores the desktop with the game paused.
+VGA selects FSXM_MODEX (320x240); CGA selects FSXM_CGA320 (320x200), black
+background and bright green/red/yellow palette 0 (3D9h=10h). VGA retains
+blue/red/yellow. Unsupported adapters refuse fullscreen with an explanation.
+Original artwork uses offline converted native pixels: 16x12 VGA cells and
+16x10 CGA cells. VGA batches dirty cells by plane (four map-mask selections),
+CGA copies packed rows with bank alternation. A 128-byte displayed-cell shadow
+includes the active capsule. Ordinary movement visits only its two old and
+two new cells; locks, clears and gravity compare the complete 128-cell board.
+No pixel framebuffer is scanned or copied during ordinary play. Unchanged
+ticks perform no video writes. Text has a character shadow and cached native glyphs. Initial paint and mode reentry invalidate the
+shadows. Board address tables eliminate per-cell coordinate multiplication.
+
+The bottle is 8x16. Cell low bits are color (1..3); high nibble distinguishes
+single, left, right, top, bottom and virus. Four-or-longer horizontal and
+vertical matches are marked together, flashed, removed together, and surviving
+partners detached. Gravity moves a linked pair only if both destinations are
+free; viruses never fall. Cascades finish before the next capsule spawns.
+A blocked spawn ends the game; clearing all viruses advances a level. Setup
+supports levels 0..20 and LOW/MED/HI. There are four viruses per level plus
+four, capped at 84. Capsule colors use the reference 128-entry sequence
+algorithm and feedback shift register. Fall intervals use the reference
+A795 table, converted from 60Hz to the OS's 54.6Hz fullscreen frame clock.
+Movement uses held scan codes and explicit repeat delays rather than BIOS
+keyboard typematic. BIOS-buffered action makes preserve taps shorter than
+one frame; repeats of held action keys are ignored. Timing is bounded and
+does not replay missed frames.
+
+The adaptation does not include NES music, endings, attract sequences or
+competitive two-player mode. Speaker cues are nonblocking OS sound requests.
+Guest tests must cover matches, links, gravity, rotation, game over, progression,
+input, mode restoration, incremental/full repaint equivalence and actual 8088
+cycle costs on VGA and CGA. Timing claims must distinguish emulator results
+from physical XT measurements.

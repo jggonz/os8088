@@ -21,6 +21,10 @@
 #               package. `all` may build it - keeping it assembling is
 #               usually the point - but no shipped image carries it.
 #
+#   local       An application requiring user-supplied assets. Its standalone
+#               target and disks work; standard builds and release images do
+#               not require or redistribute those assets. This is not retirement.
+#
 # tests/unit/t_retired.py is the gate. A `retired` line is checked HARDER
 # than an `instrument` one: `all` may not build it at all, where an
 # instrument may.
@@ -57,3 +61,7 @@ instrument imgtest     # SPEC.md 94. The picture decoders' capability gate,
                        # driven by tests/img*.py off its own disk.
 instrument fptest      # SPEC.md 64. The floating-point gate. Not even built
                        # by `all` - its own target only.
+
+local      drmario     # SPEC.md 99. Original NES graphics come from the user
+                       # supplied disassembly. make drmario / drmariodisk build
+                       # the game and four standalone disks in the local tree.
