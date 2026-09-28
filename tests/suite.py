@@ -7279,6 +7279,16 @@ SOAK = [
         "65,536 on the host, boots C: and launches CALC.O88 out of C:/APPS. "
         "Broken on purpose - [dsk_c2arm_x] arming 0 - it never commits.",
         needs=("marty", "mtools"), serial=True, timeout=1500),
+    Row("hdsize", "soak", py("tests/hdsize.py"), 60.0,
+        "SPEC.md 52.2.7: the disk tool's size line. A blank 321MB XT-IDE "
+        "drive; the line must open on `Size: all 321M`, the keys `0 1 0 0 5 "
+        "Bksp 0` must leave `Size: 100M of 321M` (leading zero and past-the-"
+        "extent both refused), Format must write slot 1 at LBA 63 for "
+        "205,569 sectors - 100MB rounded UP to a cylinder - and slot 2 must "
+        "then read `Size: all 221M` and take the remaining 453,600. Both "
+        "volumes checked on the host. Broken on purpose - hd_tw_cap's call "
+        "removed - slot 1 is the whole drive.",
+        needs=("marty",), serial=True, timeout=900),
     Row("hddcp", "soak",
         py("tests/hddcp.py", "build/os8088-360.img", "build/hddcp-out.bin"),
         90.0,

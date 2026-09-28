@@ -81350,6 +81350,51 @@ geometry to the BPB and the probe now wins over the saved row, so a disk
 installed before that change presents exactly this state — the platter at
 17×4, the row at whatever the drive reports.
 
+#### 52.2.7 The size line — Format takes as much as the user types
+
+Format took **the whole extent** `hd_slot_extent` found — the largest free
+hole, or the slot's own entry — up to FAT16's ceiling (§18.7.5), and there was
+no way to ask for less. On a 40MB XT disk that is what anybody wants; once
+volumes reached 2GB it made a 500MB drive one volume where the user wanted two.
+
+So a line sits between the slot rows and the buttons:
+
+```
+Size: all 321M - type MB to change        <- nothing typed: the whole extent
+Size: 100M of 321M                        <- typed
+```
+
+**It is typed, not picked.** The digits and Backspace go to the tool while it
+is in front (`W_ONKEY`, `hd_tw_key`), and they edit one word, `[hd_tsize]`, in
+MB. `0` is *all*, which is the old behaviour to the byte, so a user who never
+types gets exactly what Format always did. The line is redrawn ALONE and
+opaquely, padded to a fixed width, so a keystroke costs one text run rather
+than a window.
+
+**The figure on the line is always one Format will honour.** A digit that would
+take it past the extent (`[hd_tsmax]`, the extent in whole MB) is refused
+rather than clamped, and a leading `0` is refused because it says nothing.
+Whatever the number was typed against is re-measured — and the number reset to
+*all* — whenever it changes: another row, a Format, a Delete
+(`hd_tw_szmax`, which reads only the table in RAM). A keystroke also disarms a
+Format that was one click from firing, because the question it asked was
+about the old size (§52.2.3).
+
+**The number is rounded UP to a cylinder, and then capped by the extent**
+(`hd_tw_cap`). §52.2.5's rule still holds — every extent ends on a boundary —
+but rounding DOWN would turn `1` on a 255-head drive, whose cylinder is ~8MB,
+into nothing at all. The extent is already cylinder-trimmed, so the smaller of
+two boundaries is still a boundary. What the user gets is therefore at least
+what they typed and never more than a cylinder over it — 504KB on a 16-head,
+63-sector drive — and the row reads the MB it came out at.
+
+It applies to all three of §52.2.1's cases, reuse in place included: typing
+less on a slot that already holds a volume makes the new one smaller and gives
+the rest back as free space, which the next slot's scan will find. The
+installer does not read it — an install puts the system on a slot as it
+stands (§52.10), and `[hd_tsize]` is the disk tool's alone. All of it is in
+`HDDTOOL.DRV`, so it costs no resident byte.
+
 ### 52.3 The formatter
 
 A **FAT format, not a surface format**. Its window is §52.2's, along with the
