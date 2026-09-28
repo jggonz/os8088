@@ -2094,7 +2094,11 @@ fdlg_draw_rows:
     mov dx, [fdlg_sizeh]
     push di
     mov di, fdlg_num
+%ifdef OS88_BIGVOL
+    FDX fm_szfig_x             ; bytes, K or M, as the Disk window (22.7.1)
+%else
     FDX fm_ultoa_x             ; the full dword (SPEC.md 19)
+%endif
     pop di
     mov si, fdlg_num
 .right:

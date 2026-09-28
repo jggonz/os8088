@@ -7277,7 +7277,9 @@ SOAK = [
         "LBA's high word is unavoidable. The installer keeps the volume, the "
         "row checks the user's files and the kernel's one run past sector "
         "65,536 on the host, boots C: and launches CALC.O88 out of C:/APPS. "
-        "Broken on purpose - [dsk_c2arm_x] arming 0 - it never commits.",
+        "Broken on purpose - [dsk_c2arm_x] arming 0 - it never commits. "
+        "It also reads C:'s Disk window for SPEC.md 22.7.1's units: "
+        "FILLER.BIN `40M`, USER.TXT `3700`, `Size 40M`, `Free <n>M`.",
         needs=("marty", "mtools"), serial=True, timeout=1500),
     Row("hdsize", "soak", py("tests/hdsize.py"), 60.0,
         "SPEC.md 52.2.7: the disk tool's size line. A blank 321MB XT-IDE "

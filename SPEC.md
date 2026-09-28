@@ -35341,7 +35341,7 @@ at a stride of 24. `kernel/dskwin.inc` carries the `%error` for each.
 | 0   | 16   | display name, NUL-padded: raw name[0..7] with trailing spaces trimmed, then '.', then ext[0..2] trimmed (dot omitted when the ext is blank); **every byte outside 0x21..0x7E replaced with '_'** (OEM-codepage bytes never reach the font renderer). Max 12 chars — fits every §22 truncation budget |
 | 16  | 2    | type: 1 = loadable package, 2 = subdirectory, 3 = the parent link (§19.5), else 0 (rules below) |
 | 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1, and `dsk_chdir` only behind type==2). FstClusHI (@20) is FAT32-only per spec — ignored |
-| 20  | 4    | size in bytes = raw size dword @28, verbatim (lo word @20, hi @22 — drawn whole by `fm_ultoa`); forced to 0 for type 2 |
+| 20  | 4    | size in bytes = raw size dword @28, verbatim (lo word @20, hi @22 — drawn whole by `fm_ultoa`, or in K/M by `fm_szfig_x` per §22.7.1); forced to 0 for type 2 |
 | 24  | 8    | zero — and **not stored in a staged listing**: `DSK_DE_STRIDE` stops at 24, `dsk_ent` is still 32 wide, and no consumer in the tree reads these eight bytes |
 
 **The type word** (binding — defense in depth with §21 step 1), tested in
@@ -41707,7 +41707,7 @@ or any §18.2 BPB rule failed. N is the accepted-entry count (≤ 32, §19's
 cap — the header count always equals the listed count), read from this
 window's `FS_N`, not from the global `[disk_nfiles]`. File names are
 the synthesized 8.3 display names of §19 (e.g. `"MINES.O88"`, ≤ 12
-chars); sizes are the §19 staged size dword, drawn in full (`fm_ultoa`). Folders count and list exactly like files — a type-2 entry (§19)
+chars); sizes are the §19 staged size dword, drawn in the unit §22.7.1 picks (`fm_szfig_x`: bytes, then `K` from 10KB and `M` from 10MB; bytes in full on `kern_small`). Folders count and list exactly like files — a type-2 entry (§19)
 shows the built-in folder icon and a blank size column. Two buttons at the top right,
 1px black frames, labels centered: **Refresh** from (cw−68, 2) to
 (cw−6, 15) — remounts the current drive so a swapped disk shows its real
@@ -43947,6 +43947,45 @@ end of the current FAT sector (or the next window validation is skipped for
 entries that are not in it) and to `[dsk_maxclus]` (or it counts past the end
 of the volume). Clamping to one and not the other is the bug that reads as a
 free-space figure which is merely plausible.
+
+#### 22.7.1 K past 10KB, M past 10MB — sizes in the unit a person reads
+
+§22.7's two figures were KB in a word and the size column was **bytes**, which
+was the era's right answer on a floppy and stopped being one when a volume
+passed 32MB (§18.7.5). A 321MB partition is 328,704 KB free — **more than a
+word**, so the figure was silently the low 16 bits of the truth — and a 40MB
+file in the column is `41943040`, a number to count the digits of.
+
+**One rule, used by all three places a size is drawn** — the Disk window's
+size column, its status line, and the Standard File dialog's size column
+(§38):
+
+| the size | drawn as |
+|---|---|
+| under 10,240 bytes | the bytes, as before: `1234` |
+| 10KB to under 10MB | whole KB and a `K`: `113K` |
+| 10MB and up | whole MB and an `M`: `321M` |
+
+Both steps are at **ten** of the smaller unit, so a figure never shows fewer
+than two significant digits, and every one is **truncated**, which is what
+the status line already did. The status line's figures had only the K arm, so
+for them the table is K below 10MB and M from there.
+
+**`FS_FREE` and `FS_USED` stay one word each**, and the unit rides in bit 15
+(`fm_kbenc`): clear is KB below 10,240, set is `8000h | MB`. That is the whole
+reason no per-window byte moved — 4GB of bytes is `0x8FFF`, so the encoding
+can never produce the `0xFFFF` not-known sentinel, and the "a hostile listing
+could sum past the sentinel" test `FS_USED` carried is unnecessary on this
+arm. `fm_kbfig` draws either half, `fm_szfig_x` takes a dword of bytes for the
+two columns.
+
+**kern_big only** (and kern_emu with it). `kern_small` is on a diet (§39.27.4)
+and draws what it always did — bytes, and `K` on the status line: it mounts no
+volume past 32MB, so its KB figure fits the word it is in, and the display
+alone is not a case for spending there. It is `%ifdef OS88_BIGVOL`, the
+switch §18.7.5 already put on every site that differs, and `kern_small`
+assembles byte for byte the kernel it was. The cost on `kern_big` is **73
+bytes of `.cold`**, resident.
 
 ### 22.8 A write marks the folder; the focus spends the mark
 
