@@ -893,7 +893,16 @@ n_flightphaseupdate:
 .takeoffroute:
     mov byte [n_rebuild],1
 %endif
-    mov ax,14
+    mov ax,[n_stage]               ; stages 1-10, 11-21, 22-32: three scores
+    mov bx,14
+    cmp ax,11
+    jb .score
+    mov bx,23
+    cmp ax,22
+    jb .score
+    inc bx
+.score:
+    mov ax,bx
     call n_music
     jmp .out
 .landing:

@@ -131,14 +131,16 @@ def assets():
         print('cartridge: all 32 schedules, 49 waves, 39 paths and motion tables checked',flush=True)
         assert campaign['bonuses'][50]==500 and campaign['bonuses'][100]==100000
         audio=json.loads((ROOT/os88build.at('build/1942-audio.json')).read_text())
-        assert len(audio)==23 and audio[14]['loop'] and not audio[21]['loop']
+        assert len(audio)==25 and audio[14]['loop'] and not audio[21]['loop']
         # Game Over stays the cartridge cue; gameplay varies its melody.
         spec=importlib.util.spec_from_file_location('data1942',ROOT/'tools/1942data.py')
         data=importlib.util.module_from_spec(spec);spec.loader.exec_module(data)
         original=data.sounds(nes.Cartridge(rom_build()))
         assert audio[7]==original[7] and not audio[7]['loop']
-        melody=[(hz,t) for hz,t in original[7]['notes'] if hz<12000]
-        assert audio[14]['notes']==[[(hz+1)//2,max(1,(min(t,56)*3+2)//4)] for hz,t in melody]+[[0,14]]
+        for slot in (14,23,24):   # long multi-section scores, loop point inside the stream
+            tr=audio[slot];total=sum(t for _,t in tr['notes'])
+            assert tr['loop'] and 0<tr['loop_at']<len(tr['notes']) and total>=1000,slot
+            assert all(t>=1 for _,t in tr['notes']) and max(hz for hz,_ in tr['notes'])<6208
         for tag in ('V','C'):
             world=(ROOT / os88build.at('build/WORLD.'+tag+'42')).read_bytes()
             assert world[:4]==b'N42W' and struct.unpack_from('<H',world,4)[0]==len(world)<=32768

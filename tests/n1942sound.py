@@ -102,14 +102,16 @@ def guest(backend,off,code):
                 else:raise AssertionError(('effect did not end',sid,start))
             # The actual gameplay variation repeats twice; Game Over ends.
             songs=json.loads((N.ROOT/N.os88build.at('build/1942-audio.json')).read_text())
-            for sid,repeats in ((14,2),(7,1)):
+            for sid in (14,23,24,7):
                 call('music',ax=sid)
-                for _ in range(repeats):
-                    for hz,ticks in songs[sid]['notes']:
+                notes=songs[sid]['notes']
+                laps=[notes,notes[songs[sid].get('loop_at',0):]] if sid!=7 else [notes]
+                for lap in laps:
+                    for hz,ticks in lap:
                         g.put('musicwait',0);call('audio')
                         assert g.get('musicfreq')==hz,(sid,hz,g.get('musicfreq'))
                 g.put('musicwait',0);call('audio')
-                assert bool(g.get('musicptr'))==(sid==14)
+                assert bool(g.get('musicptr'))==(sid!=7)
             # Equal adjacent notes retrigger on FM.
             ptr=stream('music',440)
             m.write(g.base+ptr,struct.pack('<6H',440,10,65535,ptr,0,0))

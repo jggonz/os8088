@@ -104,21 +104,84 @@ def fallback():
     stages=[[[96+i*96,(i+s)%8] for i in range(17)] for s in range(32)]
     paths=[[[32,24],[192,64],[192,176],[32,208],[32,248]]] * 39
     notes=[dict(notes=[[440,6],[660,6],[880,12]],loop=False) for _ in range(23)]
-    notes[14]=dict(notes=[[440,12],[0,6],[660,12],[440,12],[880,24]],loop=True)
     bonus=[0 if p<50 else 100000 if p==100 else (500,1000,1500,2000,2500,3000,5000,8000,10000,20000)[(p-50)//5] for p in range(101)]
     starts=[[[32+i*24,-16] for i in range(8)] for _ in range(3)]
     return dict(aim=aim,fire=[[1,5,0],[1,5,0],[1,5,0]],starts=starts,bonuses=bonus,stages=stages,waves=waves,paths=paths,bosses=[7,15,23,31]),notes
 
-def gameplay_music(game_over):
-    """A quieter-register, flowing loop of the Game Over melody (NES frames).
-
-    Keep the source cue intact. Shorten its held cadences for a repeatable
-    phrase and discard the decoder's clipped one-frame tail, which would
-    otherwise become a shrill chirp on every lap.
-    """
-    notes=[[(hz+1)//2,max(1,(min(t,56)*3+2)//4)]
-           for hz,t in game_over['notes'] if not (hz==12000 and t==1)]
-    return dict(notes=notes+[[0,14]],loop=True)
+# ---- Gameplay score -------------------------------------------------------
+# Three long looping tracks, chosen by stage tier. Every one is built from the
+# Game Over hook (its chromatic A-C#-C-B-Bb turn) plus motifs from the stage
+# and fanfare cues, laid out as an intro and then a multi-section form that
+# loops from its first main section. One FM voice carries everything, so a
+# held note is "arpeggiated" (lead / fifth / third / fifth) to imply harmony.
+_NOTE={'C':0,'D':2,'E':4,'F':5,'G':7,'A':9,'B':11}
+def _midi(name):
+    m=_NOTE[name[0]];i=1
+    if name[i:i+1]=='#':m+=1;i+=1
+    elif name[i:i+1]=='b':m-=1;i+=1
+    return 12*(int(name[i:])+1)+m
+def _hz(m):return round(440*2**((m-69)/12))
+def _chord(name,shift):
+    minor=name.endswith('m');base=name[:-1] if minor else name
+    root=_midi(base+'3')+shift
+    return root,root+(3 if minor else 4),root+7
+def _bar(chord,text,shift):
+    """[(midi or None, units, arp_tones or None)] for one bar of 16 units."""
+    r,t,f=_chord(chord,shift);out=[]
+    for tok in text.split():
+        name,units=tok.split(':');arp=units.endswith('+');units=int(units.rstrip('+'))
+        out.append((None if name=='R' else _midi(name)+shift,units,(t,f) if arp else None))
+    assert sum(u for _,u,_ in out)==16,(chord,text)
+    return out
+def _events(bars,shift):
+    ev=[]
+    for chord,text in bars:
+        for m,u,arp in _bar(chord,text,shift):
+            if arp is None or m is None:ev.append((m,u));continue
+            t,f=arp;steps=max(1,u//2);cyc=[m,f,t,f]
+            for i in range(steps):ev.append((cyc[i%4],2 if i<steps-1 else u-2*(steps-1)))
+    return ev
+def _ticks(ev,q):
+    out=[];cum=0;done=0
+    for m,u in ev:
+        cum+=u*q/4;end=int(cum+0.5);t=max(1,end-done);done+=t
+        out.append([0 if m is None else _hz(m),t])
+    return out
+_THEME_LO=[('A','A4:3 A4:1 C#5:4 C#5:2 C5:2 B4:2 Bb4:2'),('A','A4:3 A4:1 C#5:4 E5:4 D5:2 C#5:2'),
+           ('F#m','C#5:2 D5:2 F5:2 F#5:2 A5:8+'),('D','F#5:4 D5:2 E5:2 E5:8+')]
+_THEME_HI=[('A','A5:3 A5:1 C#6:4 C#6:2 C6:2 B5:2 Bb5:2'),('A','A5:3 A5:1 C#6:4 E6:4 D6:2 C#6:2'),
+           ('D','F#5:2 A5:2 D6:4 C#6:4 B5:2 A5:2'),('E','G#5:4 B5:4 E6:8+')]
+_THEME_LOW=[('A','A4:3 A4:1 C#5:4 C#5:2 C5:2 B4:2 Bb4:2'),('A','A4:3 A4:1 C#5:4 E5:4 D5:2 C#5:2'),
+            ('D','F#5:2 A5:2 D6:4 C#6:4 B5:2 A5:2'),('E','G#5:4 B5:4 E5:8+')]
+_MARCH=[('Am','A4:2 G#4:2 G4:2 F#4:2 F4:2 G4:2 A4:2 B4:2'),
+        ('Am','E5:2 D5:2 C#5:2 B4:2 A4:2 B4:2 E5:2 F5:2'),
+        ('F','A4:2 C5:2 F5:2 C5:2 A4:2 C5:2 F5:2 A5:2'),
+        ('E','G#4:2 B4:2 E5:2 B4:2 G#4:2 B4:2 E5:2 G#5:2'),
+        ('Am','A5:2 G#5:2 G5:2 F#5:2 F5:2 G5:2 A5:2 B5:2'),
+        ('Dm','D5:2 F5:2 A5:2 F5:2 D5:2 F5:2 A5:2 D6:2'),
+        ('E','E5:2 G#5:2 B5:2 G#5:2 E5:2 D5:2 B4:2 G#4:2'),
+        ('Am','A4:4 R:2 A4:2 C5:2 E5:2 A5:4+')]
+_BRIDGE=[('D','F#5:8+ A5:8+'),('E','G#5:8+ B5:8+'),('C#m','E5:8+ G#5:4 E5:4'),
+         ('F#m','C#6:8+ A5:4 F#5:4'),('D','D6:8+ A5:8+'),('E','B5:4 G#5:4 E5:4 B4:4'),
+         ('A','C#6:8+ E6:8+'),('E','E5:2 F#5:2 G#5:2 A5:2 B5:8+')]
+_FANFARE=[('A','E5:2 F#5:2 E5:4 A5:8+'),('D','A5:2 B5:2 C#6:2 D6:2 E6:8+'),
+          ('F#m','C#6:4 A5:4 F#5:4 A5:4'),('E','B5:8+ G#5:4 B5:4'),
+          ('A','E6:2 F#6:2 E6:4 A6:8+'),('D','D6:4 A5:4 F#5:4 D5:4'),
+          ('E','E5:2 G#5:2 B5:2 E6:2 G#6:8+'),('A','A5:16+')]
+_INTRO=[('A','A4:16+'),('E','E5:8+ B4:8+')]
+def _track(q,shift,plan,loop):
+    ev=[];mark=0
+    for i,(sect) in enumerate(plan):
+        if i==loop:mark=len(ev)
+        ev+=_events(sect,shift)
+    notes=_ticks(ev,q);idx=sum(1 for _ in _events([x for s in plan[:loop] for x in s],shift))
+    return dict(notes=notes+[[0,max(2,q)]],loop=True,loop_at=idx)
+def gameplay_tracks():
+    """Three loops, ~75-100 s each, for stage tiers 1-10, 11-21 and 22-32."""
+    a=_track(8,0,[_INTRO,_THEME_LO+_THEME_HI,_THEME_HI+_THEME_LOW,_BRIDGE,_MARCH,_FANFARE,_THEME_HI+_THEME_LO],1)
+    b=_track(7,3,[_INTRO,_FANFARE,_MARCH,_THEME_LO+_THEME_HI,_BRIDGE,_FANFARE],1)
+    c=_track(6,-3,[_INTRO,_MARCH,_THEME_LOW+_THEME_HI,_MARCH,_BRIDGE,_FANFARE,_THEME_HI+_THEME_LO],1)
+    return [a,b,c]
 
 def assembly(data,audio):
     out=['; Build-time cartridge/native gameplay tables.']
@@ -152,6 +215,12 @@ def assembly(data,audio):
     out.append('n_soundtab: dw '+','.join('n_sound%d'%i for i in range(len(audio))))
     for i,s in enumerate(audio):
         out.append('n_sound%d:'%i)
+        if 'loop_at' in s:                     # gameplay tracks: ticks, interior loop
+            for j,(hz,t) in enumerate(s['notes']):
+                if j==s['loop_at']:out.append('n_sound%d_loop:'%i)
+                out.append('    dw %d,%d'%(hz,t))
+            out.append('    dw 65535,n_sound%d_loop'%i)
+            continue
         out.extend('    dw %d,%d'%(hz,max(1,(t*182+300)//600)) for hz,t in s['notes'])
         out.append('    dw 65535,%s'%('n_sound%d'%i if s['loop'] else '0'))
     return out
