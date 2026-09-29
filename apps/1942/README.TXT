@@ -27,8 +27,19 @@ and unused-roll bonuses. Extra lives arrive at 20,000, 80,000 and every further
 
 Two players alternate after a death, retaining separate scores, lives,
 weapons and stages; a returning player restarts their current stage.
-High scores last until the application closes. Music and effects use native
-speaker note streams, with effects taking priority over music.
+High scores last until the application closes. AdLib plays FM music and
+short percussive effects. Sound Blaster DSP 2+ adds recorded gunfire and
+explosions when 1942.SFX is alongside the game and card sound is enabled.
+Effects use 8kHz mono samples and DMA, with no software mixer or refill task;
+explosions take priority over shots. Missing samples or an unsupported card
+fall back to FM; speaker tones remain available. M mutes everything and P
+pauses music and cancels effects. Sound stops on returning to the desktop.
+Gameplay loops a lower, quicker variation of the Game Over melody.
+Music uses note data from 1942.nes in cartridge builds. Richer sound does not
+imply faster XT gameplay. The optional sample bank is omitted from the 360KB
+original-art disk for space, but included on the other game disks.
+Samples: kurt (Gunshots) and Spring Spring (Mechanical Explosion), CC0 1.0,
+from OpenGameArt.org. Source links and edits: apps/1942/sfx/CREDITS.md.
 
 BUILD (NASM and Python 3; no emulator or C compiler):
   make 1942disk
@@ -72,6 +83,7 @@ and timing, rather than an emulator or cycle-faithful NES conversion.
 
 TEST
   make 1942test
+  make 1942soundtest
 Checks splash pixels and input on VGA/CGA/Hercules, plus VGA/CGA gameplay
 pixels, loading, scrolling, aircraft, formation rewards, POWs, results,
 two-player turns, combat, pause/resume, sound controls, file validation and

@@ -201,6 +201,7 @@ def build(out,rom=None):
         nes=importlib.util.module_from_spec(spec);spec.loader.exec_module(nes)
         cart=nes.Cartridge(rom);campaign,audio=data.campaign(cart),data.sounds(cart)
     else:campaign,audio=data.fallback()
+    audio[14]=data.gameplay_music(audio[7])
     inc+=data.assembly(campaign,audio)
     write(out/'1942-campaign.json',(json.dumps(campaign)+'\n').encode())
     write(out/'1942-audio.json',(json.dumps(audio)+'\n').encode())

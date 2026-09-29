@@ -86,6 +86,17 @@ def fallback():
     starts=[[[32+i*24,-16] for i in range(8)] for _ in range(3)]
     return dict(starts=starts,bonuses=bonus,stages=stages,waves=waves,paths=paths,bosses=[7,15,23,31]),notes
 
+def gameplay_music(game_over):
+    """A quieter-register, flowing loop of the Game Over melody (NES frames).
+
+    Keep the source cue intact. Shorten its held cadences for a repeatable
+    phrase and discard the decoder's clipped one-frame tail, which would
+    otherwise become a shrill chirp on every lap.
+    """
+    notes=[[(hz+1)//2,max(1,(min(t,56)*3+2)//4)]
+           for hz,t in game_over['notes'] if not (hz==12000 and t==1)]
+    return dict(notes=notes+[[0,14]],loop=True)
+
 def assembly(data,audio):
     out=['; Build-time cartridge/native gameplay tables.']
     out.append('n_smallstarts: dw n_starts0,n_starts1,n_starts2')

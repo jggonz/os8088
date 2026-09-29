@@ -1002,77 +1002,7 @@ n_dirs28: dw n_dir28_0art,n_dir28_1art,n_dir28_2art,n_dir28_3art,n_dir28_4art,n_
 n_dirs40: dw n_dir40_0art,n_dir40_1art,n_dir40_2art,n_dir40_3art,n_dir40_4art,n_dir40_5art,n_dir40_6art,n_dir40_7art,n_dir40_8art,n_dir40_9art,n_dir40_10art,n_dir40_11art,n_dir40_12art,n_dir40_13art,n_dir40_14art,n_dir40_15art
 n_dirs60: dw n_dir60_0art,n_dir60_1art,n_dir60_2art,n_dir60_3art,n_dir60_4art,n_dir60_5art,n_dir60_6art,n_dir60_7art
 
-; Single-speaker reduction: effects temporarily preempt the music stream.
-n_music:
-    SAVE
-    shl ax,1
-    mov bx,ax
-    mov ax,[n_soundtab+bx]
-    mov [n_musicptr],ax
-    mov word [n_musicwait],0
-    RESTORE
-    ret
-n_effect:
-    SAVE
-    shl ax,1
-    mov bx,ax
-    mov ax,[n_soundtab+bx]
-    mov [n_effectptr],ax
-    mov word [n_effectwait],0
-    RESTORE
-    ret
-n_audio:
-    SAVE
-    call OSAPI_GET_TICKS
-    mov dx,ax
-    sub ax,[n_audiotick]
-    mov [n_audiotick],dx
-    mov [n_audioelapsed],ax
-    cmp byte [n_sound],0
-    je .off
-    cmp byte [n_paused],0
-    jne .off
-    mov bx,n_effectptr
-    cmp word [bx],0
-    jne .stream
-    mov bx,n_musicptr
-.stream:
-    cmp word [bx],0
-    je .out
-    cmp word [bx+2],0
-    je .note
-    mov ax,[n_audioelapsed]
-    sub [bx+2],ax
-    jg .out
-.note:
-    mov si,[bx]
-    lodsw
-    cmp ax,65535
-    jne .play
-    lodsw
-    ; Sound effects play once even when their NES stream is a loop.
-    cmp bx,n_effectptr
-    jne .repeat
-    xor ax,ax
-.repeat:
-    mov [bx],ax
-    or ax,ax
-    jnz .note
-    jmp .off
-.play:
-    mov cx,[si]
-    inc si
-    inc si
-    mov [bx],si
-    mov [bx+2],cx
-    call n_tone
-    jmp .out
-.off:
-    xor ax,ax
-    call n_tone
-.out:
-    RESTORE
-    ret
+%include "audio.inc"
 
 n_hightext:
     SAVE

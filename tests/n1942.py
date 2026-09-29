@@ -15,6 +15,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import wave
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
@@ -32,6 +33,15 @@ def rom_build():
 
 
 def assets():
+    bank=(ROOT/os88build.at('build/1942.SFX')).read_bytes()
+    assert struct.unpack('<4s6H',bank[:16])==(b'N42S',8208,sum(bank[16:])&65535,1024,3072,4096,8000)
+    samples=[]
+    for name in ('shot','explosion','loss'):
+        with wave.open(str(ROOT/'apps/1942/sfx'/ (name+'.wav'))) as w:
+            assert (w.getnchannels(),w.getsampwidth(),w.getframerate())==(1,1,8000)
+            data=w.readframes(w.getnframes());samples.append(data)
+            assert data[0]==data[-1]==128 and len(set(data))>32 and max(data)-min(data)>100
+    assert bank[16:]==b''.join(samples) and len(bank)==8208
     spec = importlib.util.spec_from_file_location('assets1942', ROOT/'tools/1942assets.py')
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
     pal=json.loads((ROOT / os88build.at('build/1942-palette.json')).read_text())
@@ -100,7 +110,13 @@ def assets():
         assert campaign['bonuses'][50]==500 and campaign['bonuses'][100]==100000
         audio=json.loads((ROOT/os88build.at('build/1942-audio.json')).read_text())
         assert len(audio)==23 and audio[14]['loop'] and not audio[21]['loop']
-        assert len(audio[14]['notes'])==92
+        # Game Over stays the cartridge cue; gameplay varies its melody.
+        spec=importlib.util.spec_from_file_location('data1942',ROOT/'tools/1942data.py')
+        data=importlib.util.module_from_spec(spec);spec.loader.exec_module(data)
+        original=data.sounds(nes.Cartridge(rom_build()))
+        assert audio[7]==original[7] and not audio[7]['loop']
+        melody=[(hz,t) for hz,t in original[7]['notes'] if hz<12000]
+        assert audio[14]['notes']==[[(hz+1)//2,max(1,(min(t,56)*3+2)//4)] for hz,t in melody]+[[0,14]]
         for tag in ('V','C'):
             world=(ROOT / os88build.at('build/WORLD.'+tag+'42')).read_bytes()
             assert world[:4]==b'N42W' and struct.unpack_from('<H',world,4)[0]==len(world)<=32768
@@ -116,7 +132,7 @@ def assets():
 def symbols():
     source = (ROOT/'apps/1942/1942.asm').read_text()
     names = re.findall(r'^VAR (n_\w+),', source, re.M)
-    code = ['n_about','n_frontprepare','n_paint','n_key','n_click','n_frontpaint','n_fronttimer','n_frontload','n_vfile','n_cfile','n_scenesums','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw','n_loading','n_readbank','n_spawn','n_stageinit','n_scripts','n_awardpow','n_results','n_kill','n_addscore','n_depart','n_flightphaseupdate','n_campaignnew','n_turn','n_audio','n_soundtab','n_event','n_highmsg','n_freeslot','n_hitplayer','n_move_bullets','n_stageevents','n_move_enemies','n_move_shots']
+    code = ['n_about','n_frontprepare','n_paint','n_key','n_click','n_frontpaint','n_fronttimer','n_frontload','n_vfile','n_cfile','n_scenesums','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw','n_loading','n_readbank','n_spawn','n_stageinit','n_scripts','n_awardpow','n_results','n_kill','n_addscore','n_depart','n_flightphaseupdate','n_campaignnew','n_turn','n_audio','n_audio_open','n_audio_close','n_pcm_open','n_pcm_close','n_pcm_halt','n_pcmfile','n_audio_quiet','n_audio_step','n_audio_fmnote','n_music','n_effect','n_tone','n_soundtab','n_event','n_highmsg','n_freeslot','n_hitplayer','n_move_bullets','n_stageevents','n_move_enemies','n_move_shots']
     source = source.replace('OS88_IMAGE_END','')
     source += '\n'+'\n'.join('dw '+n+'-os88_image_end' for n in names)
     source += '\n'+'\n'.join('dw '+n for n in code)+'\nOS88_IMAGE_END\n'

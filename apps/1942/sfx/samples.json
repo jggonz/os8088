@@ -1,0 +1,29 @@
+[
+  {
+    "file": "shot.wav",
+    "sha256": "9fa04cbc3599d98df37cad7945782e9934ae44083dd36a8c3a328256341a478b",
+    "source": "gun",
+    "start_frame": 22623,
+    "frames": 1024,
+    "speed": 1,
+    "gain": 0.65
+  },
+  {
+    "file": "explosion.wav",
+    "sha256": "eb29c4bbab01d3e7e470ca1685098c8f9ce0fe4aba1934d59cdcb7a4c95c3b47",
+    "source": "boom",
+    "start_frame": 0,
+    "frames": 3072,
+    "speed": 1,
+    "gain": 0.85
+  },
+  {
+    "file": "loss.wav",
+    "sha256": "03680e51b51b1a3569f5431d973b09d88c97dbe2296ce0e8b8ef321d7c93297d",
+    "source": "boom",
+    "start_frame": 0,
+    "frames": 4096,
+    "speed": 0.75,
+    "gain": 0.95
+  }
+]

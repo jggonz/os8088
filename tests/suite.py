@@ -2442,6 +2442,11 @@ SOAK = [
         "1942 desktop splash: native color/contour pixels, XT paint timing, "
         "player selection, help, dragging, direct launch and resume on three adapters",
         needs=("marty", "nasm", "pil"), wants=("build/1942-360.img", "build/os8088-360.img")),
+    Row("1942sound", "soak", py("tests/n1942sound.py"), 65.2,
+        "XT speaker, AdLib-only and Sound Blaster FM/PCM: overlapping music/effects, "
+        "all cartridge cues, rests/loops, pause/mute/resume, route preference, "
+        "claim refusal, DMA sample bytes/priority, missing-bank fallback, exit/error cleanup, WAV output and guest cycle costs",
+        needs=("marty", "nasm"), wants=("build/1942-360.img", "build/os8088-360.img")),
     Row("1942", "soak", py("tests/n1942.py"), 216.1,
         "Native VGA/CGA graphics, pre-I/O loading, scrolling/ring wrap, aircraft "
         "variety, formations, POWs, results, two-player turns, sound controls, combat, "

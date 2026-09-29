@@ -125,11 +125,15 @@ n_exclusive:
     jc n_failed
     call n_palette
     call n_loading
+    call n_audio_open
     call n_loadgfx
     jc n_assetfailed
     mov word [n_scene], 0ffffh
     call n_scenecheck
     jc n_assetfailed
+    ; Graphics I/O and time on the desktop are not sequencer time.
+    call OSAPI_GET_TICKS
+    mov [n_audiotick],ax
 n_loop:
     call OSAPI_GET_TICKS
     mov [n_frametick],ax
@@ -146,8 +150,7 @@ n_loop:
     cmp al, 'm'
     jne .notmute
     xor byte [n_sound], 1
-    xor ax, ax
-    call n_tone
+    call n_audio_quiet
 .notmute:
     cmp al, 'c'
     jne .notpal
@@ -163,6 +166,7 @@ n_loop:
     cmp byte [n_state], 1
     jne .notpause
     xor byte [n_paused], 1
+    call n_audio_quiet
     call n_refresh
 .notpause:
     cmp byte [n_state],0
@@ -228,23 +232,8 @@ n_failed:
 n_assetfailed:
     mov byte [n_error], 2
 n_exit:
-    xor ax, ax
-    call n_tone
+    call n_audio_close
     mov byte [n_infs], 0
-    ret
-
-n_tone:
-    SAVE
-    or ax, ax
-    jz .play
-    cmp byte [n_sound], 0
-    je .out
-.play:
-    mov cx,0
-    mov dl,40h
-    call OSAPI_SND_TONE
-.out:
-    RESTORE
     ret
 
 n_tpl: dw 52,32,452,284,n_title,n_paint,n_key,n_click
@@ -404,8 +393,21 @@ VAR n_bosslive,1
 VAR n_rebuild,1
 VAR n_musicptr,2
 VAR n_musicwait,2
+VAR n_musicfreq,2
+VAR n_musicsent,2
 VAR n_effectptr,2
 VAR n_effectwait,2
+VAR n_effectfreq,2
+VAR n_effectsent,2
+VAR n_audiofm,1
+VAR n_pcmseg,2
+VAR n_pcmactive,1
+VAR n_pcmhandle,1
+VAR n_pcmflags,1
+VAR n_pcmlen,2
+VAR n_pcmpri,1
+VAR n_pcmpending,1
+VAR n_tonesent,2
 VAR n_audiotick,2
 VAR n_frametick,2
 VAR n_audioelapsed,2

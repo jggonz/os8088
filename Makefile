@@ -12200,7 +12200,7 @@ ALLAPPSIMG120 := $(BUILD)/apps-all-120.img
 # A local cartridge is optional; extracted files stay in the build directory.
 N1942_ROM ?= $(wildcard 1942.nes)
 N1942SCENES = $(if $(strip $(N1942_ROM)),WORLD.V42 WORLD.C42,SEA.V42 REEF.V42 PORT.V42 SEA.C42 REEF.C42 PORT.C42)
-N1942LIVE := $(BUILD)/1942.o88 $(addprefix $(BUILD)/,1942V.GFX 1942C.GFX 1942VX.GFX 1942CX.GFX 1942L.GFX $(N1942SCENES))
+N1942LIVE := $(BUILD)/1942.o88 $(addprefix $(BUILD)/,1942V.GFX 1942C.GFX 1942VX.GFX 1942CX.GFX 1942L.GFX $(N1942SCENES) 1942.SFX)
 ALLAPPSFILES := $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
@@ -13673,9 +13673,11 @@ distclean: clean clean-marty clean-cc clean-nasm3
 
 # Standalone 1942: committed artwork, compiled into adapter-native banks.
 N1942ART = apps/1942/art/sprites.json apps/1942/art/sea.idx apps/1942/art/reef.idx apps/1942/art/port.idx apps/1942/palette.json
-N1942BANKS = $(filter-out $(BUILD)/1942.o88,$(N1942LIVE))
-N1942DISK = $(BUILD)/1942.o88 $(N1942BANKS)
-.PHONY: 1942 1942disk 1942test 1942fronttest n1942-config
+N1942BANKS = $(filter-out $(BUILD)/1942.o88 $(BUILD)/1942.SFX,$(N1942LIVE))
+N1942DISK = $(N1942LIVE)
+$(BUILD)/1942.SFX: tools/1942sfx.py $(wildcard apps/1942/sfx/*) | $(BUILD)
+	python3 tools/1942sfx.py -o $@
+.PHONY: 1942 1942disk 1942test 1942fronttest 1942soundtest n1942-config
 1942: $(N1942DISK)
 # Track source selection as well as its mtime: switching back to original art
 # must invalidate a previous cartridge build in the same output directory.
@@ -13689,7 +13691,7 @@ $(BUILD)/1942art.inc $(N1942BANKS): $(BUILD)/.1942assets
 	@test -f $@ || python3 tools/1942assets.py -o $(BUILD) $(if $(N1942_ROM),--rom "$(N1942_ROM)")
 $(BUILD)/1942front.inc: tools/1942front.py tools/os88lz.py apps/1942/art/splash.json apps/1942/art/sprites.json | $(BUILD)
 	python3 tools/1942front.py -o $(BUILD)
-$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/front.inc $(BUILD)/1942front.inc apps/1942/game.inc apps/1942/campaign.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc
+$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/front.inc $(BUILD)/1942front.inc apps/1942/game.inc apps/1942/campaign.inc apps/1942/audio.inc apps/1942/pcm.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/1942/ -I $(BUILD)/ -l $(BUILD)/1942.lst -o $@ $<
 $(BUILD)/1942.o88: $(BUILD)/1942.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@
@@ -13697,12 +13699,14 @@ $(BUILD)/1942.o88: $(BUILD)/1942.bin tools/os88pkg.py $(PKGZSTAMP)
 $(BUILD)/1942.img: $(N1942DISK) apps/1942/README.TXT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(N1942DISK) apps/1942/README.TXT
 $(BUILD)/1942-360.img: $(N1942DISK) apps/1942/README.TXT tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(N1942DISK) apps/1942/README.TXT
+	python3 tools/os88disk.py -o $@ --size 360 $(if $(strip $(N1942_ROM)),$(N1942DISK),$(filter-out $(BUILD)/1942.SFX,$(N1942DISK))) apps/1942/README.TXT
 1942test: 1942disk $(BUILD)/os8088-360.img
 	python3 tests/n1942front.py
 	python3 tests/n1942.py
 1942fronttest: 1942disk $(BUILD)/os8088-360.img
 	python3 tests/n1942front.py
+1942soundtest: 1942disk $(BUILD)/os8088-360.img
+	python3 tests/n1942sound.py
 all: $(N1942DISK)
 
 # Native DrMarco. NES cell tiles remain local; original surround is committed.

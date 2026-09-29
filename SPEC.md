@@ -155291,8 +155291,41 @@ paths; uncommon animation frames use bounded sprite streams. Rebase copies
 exclude the static VGA gutters; the HUD and playfield are restored separately.
 The frame loop yields to FSXW_FRAME only when the BIOS tick has not changed
 during the iteration, so a busy frame does not incur another pacing delay.
-Music/effect note streams are decoded at build time from $A413 and reduced to the speaker
-through SND_TONE. NES multichannel timbre cannot be reproduced by one speaker.
+Music/effect note streams are decoded at build time from $A413. Gameplay cue
+14 is a looping variation of Game Over cue 7: an octave lower, durations at
+three quarters of the original, long cadences capped at 56 NES frames before
+that scaling, and a 14-frame rest between repeats. The decoder's clipped
+12000 Hz one-frame tail is omitted from the variation. Game Over keeps its
+original one-shot sequence. The arrangement is generated at build time and
+works with either cartridge or original fallback data. On fullscreen
+entry, SND_CAPS selects FM when SND_CAP_FM and the enabled card route are both
+present. AdLib and Sound Blaster use their FM hardware through SND_FM: channel
+0 carries music and channel 1 carries effects, with patches loaded once per
+entry. Failed claims release partial ownership and fall back to SND_TONE.
+Speaker playback gives effects priority; FM advances both streams together.
+The bounded sequencer emits at most one new note per voice per frame, caches
+held output, and freezes both streams while muted or paused. Resume restores
+held notes; exit releases FM claims, including failed graphics-load exits.
+FM pitches fold by octaves into the driver's 19..6208 Hz range. These are
+native FM arrangements of cartridge note data, not sampled NES APU playback.
+Combat FM effects use short, low percussive envelopes instead of the melody
+patch. Sound Blaster DSP 2+ can additionally play recorded gunfire, destruction
+and player-loss effects from the optional `1942.SFX` bank (CC0 sources and
+edits in `apps/1942/sfx/CREDITS.md`). Music stays on FM. The bank contains a
+16-byte N42S header and 1024/3072/4096 bytes of unsigned 8-bit mono PCM at
+8000 Hz; its length, header and checksum are checked before use.
+A page-safe 13KB DMA claim holds three prepared 4096-byte rings and their
+control words at offsets 0, 4112 and 8224. The bank is read and validated at
+offset zero, then expanded in place, last sample first. Each one-shot is
+padded with silence and played directly through SND_STREAM's external-ring
+interface. Starting an effect copies no samples. No mixer or refill worker
+is needed.
+At most one pending sample starts per game frame; louder events take priority
+over shots. Mute/pause cancels effects; exit closes the stream before freeing
+the claim. Missing samples, memory or unsupported DSP fall back to FM.
+The 360KB original-art disk omits the optional bank for space; the cartridge
+360KB disk and 1.44MB disk include it. The old tone path already used hardware
+tones, so richer sound does not promise an XT speedup.
 Both palette sets at $A770/$A790 are available for the cartridge's final area.
 Original-art builds implement the same game rules using original fallback
 assets and native schedules. No extracted cartridge content is committed.
