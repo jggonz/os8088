@@ -70,8 +70,10 @@ Additional findings now implemented in the native engine:
 - `$DDA4` starts the giant encounter at page 2, Y<$90, after clearing waves.
   `$DC86/$DCB3` clear final-page actors at Y<=$80, then land at Y<$61.
 
-The game remains a native adaptation: simulation updates run at the guest's
-frame rate rather than real-time 60 Hz NES frames. Takeoff, landing visuals,
+The game remains a native adaptation: simulation updates are capped at the
+18.2 Hz system clock rather than real-time 60 Hz NES frames. Slower machines
+can fall below that rate under load; missed updates are not replayed.
+Takeoff, landing visuals,
 collision boxes, hit points, integer bullets and the giant bomber's single
 muzzle remain native. Waypoint steering performs one movement update per
 native frame instead of reproducing the cartridge's cooperative coroutine

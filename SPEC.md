@@ -155322,8 +155322,13 @@ Cartridge sprites include loop frames, directional aircraft, wingmen, POWs,
 projectiles and NES glyphs. Common sprites retain the compiled/latch fast
 paths; uncommon animation frames use bounded sprite streams. Rebase copies
 exclude the static VGA gutters; the HUD and playfield are restored separately.
-The frame loop yields to FSXW_FRAME only when the BIOS tick has not changed
-during the iteration, so a busy frame does not incur another pacing delay.
+The frame loop caps simulation at the 18.2065 Hz system clock. While the
+BIOS tick equals the iteration's start tick, it yields to FSXW_FRAME and
+rechecks: FASTTICK wakes at 54.6 Hz, so a single yield is insufficient on
+faster CPUs. A busy frame that already crossed a tick incurs no additional
+delay or catch-up updates. Equality remains valid across tick wrap. The
+regression bypasses rendering to exercise consecutive fast frames, verifies
+the 18.2 Hz cap and tick wrap, and checks overdue frames return immediately.
 Music/effect note streams are decoded at build time from $A413. Gameplay cue
 14 is a looping variation of Game Over cue 7: an octave lower, durations at
 three quarters of the original, long cadences capped at 56 NES frames before

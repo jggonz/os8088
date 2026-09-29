@@ -218,14 +218,21 @@ n_loop:
     call n_audio
     call n_present
 n_frame_end:
-    ; Rendering already paces a busy XT. Only yield to the frame clock when
-    ; this iteration has not consumed a full BIOS tick (also covers pause).
+    call n_waitframe
+    jmp n_loop
+n_waitframe:
+    ; Cap simulation at the 18.2 Hz system clock, even under FASTTICK's
+    ; 54.6 Hz IRQ0. Recheck after every yield; one sub-tick is not a frame.
+    ; A busy XT that already crossed a tick proceeds without extra delay
+    ; or catch-up updates. Equality also handles the 16-bit tick wrap.
     call OSAPI_GET_TICKS
     cmp ax,[n_frametick]
-    jne n_loop
+    jne .out
     mov al, FSXW_FRAME
     call OSAPI_FSX_WAIT
-    jmp n_loop
+    jmp n_waitframe
+.out:
+    ret
 n_failed:
     mov byte [n_error], 1
     jmp n_exit

@@ -26,6 +26,9 @@ Fighters use its shared firing counter and only shoot when nearby and aimed
 toward you; orange formations stay unarmed. Eight enemy bullet slots and
 timed bomber bursts keep the scene from filling with simultaneous volleys.
 The giant background bomber appears on played stages 7, 15, 23 and 31.
+Gameplay is capped at 18.2 updates per second by the system clock, so faster
+CPUs do not accelerate it. Busy frames on slower machines can still slow
+play; missed updates are not replayed in a burst.
 
 Destroy a complete orange formation (including its staggered groups) to
 earn a POW: stronger guns, a screen

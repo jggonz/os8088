@@ -155,7 +155,7 @@ def symbols():
     source = (ROOT/'apps/1942/1942.asm').read_text()
     names = re.findall(r'^VAR (n_\w+),', source, re.M)
     code = ['n_about','n_frontprepare','n_paint','n_key','n_click','n_frontpaint','n_fronttimer','n_frontload','n_vfile','n_cfile','n_scenesums','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw','n_loading','n_readbank','n_spawn','n_stageinit','n_scripts','n_awardpow','n_results','n_kill','n_addscore','n_depart','n_flightphaseupdate','n_campaignnew','n_turn','n_audio','n_audio_open','n_audio_close','n_pcm_open','n_pcm_close','n_pcm_halt','n_pcmfile','n_audio_quiet','n_audio_step','n_audio_fmnote','n_music','n_effect','n_tone','n_soundtab','n_event','n_highmsg','n_freeslot','n_hitplayer','n_move_bullets','n_stageevents','n_move_enemies','n_move_shots','n_enemyfire','n_fireangle','n_firerank']
-    code += ['n_scriptspawn','n_scrollstep','n_nextstage']
+    code += ['n_scriptspawn','n_scrollstep','n_nextstage','n_loop']
     if rom_build():code += ['n_motioninit','n_cartmove']
     source = source.replace('OS88_IMAGE_END','')
     source += '\n'+'\n'.join('dw '+n+'-os88_image_end' for n in names)
@@ -650,6 +650,48 @@ def rules(g,tag):
     print(tag+': formations, POWs, wing loss, score brackets, extends and two-player turns passed',flush=True)
 
 
+def clock_pacing(g,tag):
+    """Exercise the real frame limiter with rendering taking zero guest time.
+
+    This covers the fast-CPU path even on the XT: consecutive cheap frames
+    must each cross a system tick, not merely one FASTTICK interrupt.
+    """
+    m=g.m;g.frame();saved=m.regs()
+    ticks=m.sym('ticks')
+    tick=lambda:int.from_bytes(m.read(ticks,2),'little')
+    def park():
+        m.cmd(cmd='park',cs=g.base>>4,ip=g.code['n_frame_end'])
+        for reg in REGS:m.setreg(reg,saved[reg])
+    def finish(start):
+        g.put('frametick',start)
+        park()
+        before=m.status()['cycles']
+        m.bp_exec(g.base+g.code['n_loop']);m.run()
+        assert m.wait_stop(30)=='breakpoint','frame limiter did not return'
+        return m.status()['cycles']-before
+    durations=[]
+    for _ in range(8):
+        start=tick();durations.append(finish(start))
+        assert (tick()-start)&65535==1,'fast frame escaped before a system tick'
+    # After the first partial tick, each cheap frame should occupy ~54.9ms.
+    fps=7*M.GUEST_HZ/sum(durations[1:])
+    assert 18.0<fps<18.4,(tag,'fast-frame cap',fps)
+    before=tick()
+    m.write(ticks,b'\xff\xff')
+    try:
+        finish(65535)
+        assert tick()==0,'frame limiter hung or skipped at tick wrap'
+    finally:
+        m.write(ticks,struct.pack('<H',(before+1)&65535))
+    # Slow rendering has already spent its frame budget; never add a wait
+    # or replay missed simulation steps, including across tick wrap.
+    for age in (1,4):
+        start=tick();cycles=finish((start-age)&65535)
+        assert cycles<M.GUEST_HZ/100,'overdue frame incurred another wait'
+    park()
+    print('%s: fast frames capped at %.2f Hz; tick wrap and overdue frames passed'%(tag,fps),flush=True)
+
+
 def combat_bench(g,tag):
     """Hold a crowded formation on screen; no quiet-scene FPS substitution."""
     g.fixture();g.put('grace',60000);g.put('weapon',3)
@@ -706,6 +748,7 @@ def run(tag,off,code):
         assert g.get('state',1)==1
         assert g.get('flightphase')==1
         g.frame(34);assert g.get('flightphase')==0
+        clock_pacing(g,tag)
         m.key('ArrowLeft',up=False);g.frame();m.key('Space',up=False);g.frame(8)
         m.key('ArrowLeft',down=False);g.frame();m.key('Space',down=False);g.frame(2)
         assert g.get('px')<116 and any(struct.unpack_from('<H',g.data('shots',64),i+2)[0]!=65535 for i in range(0,64,4)),'held movement/fire failed'
