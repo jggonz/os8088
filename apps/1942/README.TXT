@@ -14,11 +14,21 @@ CGA: 320x200 color, 5:4 horizontal and 5:6 vertical scaling.
 C cycles three hardware palette profiles: Ocean, Jungle and Night.
 
 The cartridge build imports all 32 encounter schedules, formation paths and
-small-plane entry positions. Aircraft dive, reverse, sweep and cross the
-screen; bombers follow waypoint routes and fire aimed shots. The giant
-background bomber appears on played stages 7, 15, 23 and 31.
+small-plane entry positions. A shared entry sequence, cartridge direction
+vectors and per-aircraft speeds reproduce dives, reversals, circular sweeps
+and diagonal attacks. Orange formations follow their turning routes;
+bombers enter on your side of the screen and follow their waypoint routes.
+Offscreen aircraft continue out instead of turning back along unused data.
+Terrain and encounters advance together at the cartridge's 3/4-pixel rate
+per simulation update, on VGA and CGA. Wave timers
+use the cartridge periods and batch sizes, with eight regular enemy slots.
+Fighters use its shared firing counter and only shoot when nearby and aimed
+toward you; orange formations stay unarmed. Eight enemy bullet slots and
+timed bomber bursts keep the scene from filling with simultaneous volleys.
+The giant background bomber appears on played stages 7, 15, 23 and 31.
 
-Destroy a complete orange formation to earn a POW: stronger guns, a screen
+Destroy a complete orange formation (including its staggered groups) to
+earn a POW: stronger guns, a screen
 clear, two armed wingmen, an extra roll or an extra life. Wingmen can be lost
 to enemy fire or contact. A secret bonus plane appears after enough kills.
 Takeoff and landing bracket each mission. Results award shooting-percentage
@@ -61,16 +71,11 @@ The desktop splash uses a native-resolution green and white vector logo on
 VGA, with contour line art on Hercules and monochrome CGA. Hercules can
 display the splash and help; gameplay requires VGA or color CGA hardware.
 The embedded title is independent of cartridge assets and reuses the canvas
-claim outside fullscreen. The title reveals in six-row timer steps, leaving
-time for input between bands on a 4.77MHz XT. Selection redraws only the
-aircraft pointer; help redraws the menu region. Completed art stays cached.
+claim outside fullscreen. The title reveals gradually to stay responsive
+on a 4.77MHz XT, caching completed art. Selection redraws only the pointer.
 A loading message appears before graphics I/O. Terrain uses a circular
-cache: only incoming rows are decoded, with no full-buffer memory shift.
-VGA scrolls and flips two hidden pages with hardware start addresses and
-latch copies. CGA scrolls its video banks in hardware, merging old/new actor
-rectangles before copying packed pixels. Neither shifts the full terrain
-buffer every frame. Aircraft use cached/compiled sprite drawing. The HUD
-stays fixed. Pause freezes the route, and resume retains its position.
+cache, hardware scrolling and cached sprites to reduce drawing work.
+The HUD stays fixed. Pause freezes the route; resume retains its position.
 Three 64KB claims hold graphics/canvas storage; the XT target is 640KB RAM.
 
 ARTWORK
@@ -84,8 +89,7 @@ and timing, rather than an emulator or cycle-faithful NES conversion.
 TEST
   make 1942test
   make 1942soundtest
-Checks splash pixels and input on VGA/CGA/Hercules, plus VGA/CGA gameplay
-pixels, loading, scrolling, aircraft, formation rewards, POWs, results,
-two-player turns, combat, pause/resume, sound controls, file validation and
-desktop restoration on 4.77MHz MartyPC. Guest-cycle performance includes
-rendering and presentation; disk loading is separate.
+Checks desktop artwork, VGA/CGA gameplay, cartridge pacing, combat,
+rewards, stage/player transitions, file validation and desktop restoration
+on 4.77MHz MartyPC. Guest-cycle timing includes drawing and presentation;
+disk loading is separate.

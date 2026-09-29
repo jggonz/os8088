@@ -14,6 +14,12 @@ EAUX equ 20
 EDY equ 22
 ESIZE equ 24
 
+; Cartridge limits: $DAC2 aircraft slots, $FABF enemy projectile slots.
+N_ENEMY_LIMIT equ 8
+N_BULLET_LIMIT equ 8
+N_FIRE_NEAR equ 32
+N_FIRE_FAR equ 112
+
 n_rand:
     push bx
     push dx
@@ -292,6 +298,18 @@ n_move_enemies:
     cmp word [si+EON], 0
     je .next
     inc word [si+EAGE]
+%if N_ROM
+    cmp word [si+EKIND],2
+    je .native
+    cmp word [si+ETYPE],49
+    jae .native
+    call n_cartmove
+    jc .escaped
+    mov bx,[si+EKIND]
+    shl bx,1
+    jmp .attack
+.native:
+%endif
     cmp word [si+EKIND],2
     je .waypoint
     cmp word [si+EKIND],6
@@ -373,17 +391,7 @@ n_move_enemies:
     call n_depart
     jmp .next
 .attack:
-    mov ax, [si+EAGE]
-    and ax, 31
-    jnz .contact
     call n_enemyfire
-    cmp word [si+EKIND],2
-    jne .contact
-    add word [si+EX],24
-    call n_enemyfire
-    sub word [si+EX],48
-    call n_enemyfire
-    add word [si+EX],24
 .contact:
     cmp word [n_wings],0
     je .playercontact
@@ -432,75 +440,247 @@ n_move_enemies:
     ret
 n_enemyfire:
     SAVE
+    cmp word [si+EKIND],8          ; secret bonus aircraft
+    je .out
     cmp word [si+EX],232
     ja .out
     cmp word [si+EY],216
     ja .out
-    mov di, n_bullets
-.find:
-    cmp word [di+2], 0ffffh
-    je .slot
-    add di, 8
-    cmp di, n_bullets+16*8
-    jb .find
-    jmp .out
-.slot:
-    mov ax, [si+EX]
-    add ax,12
+    cmp word [si+EKIND],2
+    je .position
+    cmp word [si+ETYPE],48
+    je .position
+    ; $EF49/$EF6E set the no-fire flag on formations and entry aircraft.
+    cmp word [si+ETYPE],9
+    jb .fighter
+    cmp word [si+ETYPE],33
+    jbe .out
+.fighter:
+    ; $FA43: one shared opportunity counter, not a volley per aircraft age.
+    call n_firerank
+    shr ax,1
+    shr ax,1
+    inc word [n_enemyfirecount]
+    cmp [n_enemyfirecount],ax
+    jbe .out
+    mov word [n_enemyfirecount],0ffffh
+.position:
+    mov bp,[si+EX]
+    add bp,12
+    mov dx,[si+EY]
+    add dx,12
 %if N_ROM
     cmp word [si+EKIND],2
     jne .muzzle
-    add ax,60
+    add bp,60
+    add dx,64
 .muzzle:
 %endif
-    mov [di], ax
-    mov ax,[si+EY]
-    add ax,12
-%if N_ROM
-    cmp word [si+EKIND],2
-    jne .muzzley
-    add ax,64
-.muzzley:
-%endif
-    mov [di+2],ax
     mov ax,[n_px]
     add ax,12
-    sub ax,[di]
-    mov bp,ax
+    sub ax,bp
     mov bx,[n_py]
     add bx,12
-    sub bx,[di+2]
+    sub bx,dx
+    ; $FA55..$FA88: inside the 112px box, outside the 32px box.
+    ; Apply the same proximity rule to bombers so distant aircraft stay quiet.
+    mov cx,ax
+    add cx,N_FIRE_FAR
+    cmp cx,N_FIRE_FAR*2
+    jae .out
     mov cx,bx
-    or cx,cx
-    jns .absy
-    neg cx
-.absy:
-    mov dx,ax
-    or dx,dx
-    jns .absx
-    neg dx
-.absx:
-    cmp cx,dx
-    jae .norm
-    mov cx,dx
-.norm:
-    or cx,cx
-    jnz .velocity
-    inc cx
-.velocity:
-    mov ax,bp
-    mov dx,3
-    imul dx
-    idiv cx
+    add cx,N_FIRE_FAR
+    cmp cx,N_FIRE_FAR*2
+    jae .out
+    mov cx,ax
+    add cx,N_FIRE_NEAR
+    cmp cx,N_FIRE_NEAR*2
+    jae .range
+    mov cx,bx
+    add cx,N_FIRE_NEAR
+    cmp cx,N_FIRE_NEAR*2
+    jb .out
+.range:
+    call n_fireangle
+    mov cx,ax
+    cmp word [si+EKIND],2
+    je .bomber
+    cmp word [si+ETYPE],48
+    je .bomber
+    ; $FA89..$FABE: downward aim sectors 6..10 and current heading gate.
+    cmp cx,6
+    jb .out
+    cmp cx,10
+    ja .out
+    mov ax,[si+EVX]
+    mov bx,[si+EDY]
+    call n_fireangle
+    cmp word [si+ETYPE],0
+    jne .heading
+    mov bx,ax
+    sub bx,3
+    and bx,15
+    cmp bx,cx
+    ja .out
+.heading:
+    add ax,2
+    cmp ax,cx
+    jb .out
+    jmp .allocate
+.bomber:
+    ; $FB00/$FD2F: shared sequenced bursts, not three simultaneous shots.
+    cmp word [n_burstleft],0
+    jne .burst
+    call n_firerank
+    shr ax,1
+    shr ax,1
+    shr ax,1
+    shr ax,1
+    inc word [n_bigfirecount]
+    cmp [n_bigfirecount],ax
+    jbe .out
+    mov word [n_bigfirecount],0
+    call n_firerank
+    neg al
+    test al,40h
+    mov bx,0
+    jz .pattern
+    mov bx,2
+.pattern:
+    cmp word [si+EKIND],2
+    jne .patternptr
+    mov bx,4
+.patternptr:
+    mov bx,[n_firepatterns+bx]
+    xor ax,ax
+    mov al,[bx]
+    mov [n_burstleft],ax
+    mov al,[bx+1]
+    mov [n_burstperiod],ax
+    mov [n_burstwait],ax
+    add bx,2
+    mov [n_burstptr],bx
+    mov [n_burstangle],cx
+    jmp .out
+.burst:
+    dec word [n_burstwait]
+    jnz .out
+    mov ax,[n_burstperiod]
+    mov [n_burstwait],ax
+    mov bx,[n_burstptr]
+    mov al,[bx]
+    ; Pattern bytes are signed offsets, including $FF = aim minus one.
+    cbw
+    add ax,[n_burstangle]
+    and ax,15
+    mov cx,ax
+.allocate:
+    mov di,n_bullets
+.find:
+    cmp word [di+2],0ffffh
+    je .slot
+    add di,8
+    cmp di,n_bullets+N_BULLET_LIMIT*8
+    jb .find
+    jmp .out
+.slot:
+    mov [di],bp
+    mov [di+2],dx
+    mov bx,cx
+    shl bx,1
+    mov ax,[n_firevx+bx]
     mov [di+4],ax
-    mov ax,bx
-    mov dx,3
-    imul dx
-    idiv cx
+    mov ax,[n_firevy+bx]
     mov [di+6],ax
+    cmp word [si+EKIND],2
+    je .consumed
+    cmp word [si+ETYPE],48
+    jne .out
+.consumed:
+    inc word [n_burstptr]
+    dec word [n_burstleft]
 .out:
     RESTORE
     ret
+
+; NES $03A1 counts down through eight route pages per played stage.
+n_firerank:
+    push bx
+    push dx
+    mov ax,[n_distance]
+.page:
+    xor dx,dx
+    mov bx,240
+    div bx
+    cmp ax,7
+    jbe .rank
+    mov ax,7
+.rank:
+    mov bx,ax
+    mov ax,32
+    sub ax,[n_stage]
+    shl ax,1
+    shl ax,1
+    shl ax,1
+    add ax,7
+    sub ax,bx
+    pop dx
+    pop bx
+    ret
+
+; $ADC9 quadrant/quantization algorithm. AX=dx, BX=dy; AX=0..15 heading.
+n_fireangle:
+    push bx
+    push cx
+    push dx
+    xor cx,cx
+    test ax,ax
+    js .left
+    test bx,bx
+    js .upright
+    mov cx,4
+    jmp .absolute
+.upright:
+    xchg ax,bx
+    jmp .absolute
+.left:
+    mov cx,12
+    test bx,bx
+    js .absolute
+    mov cx,8
+    xchg ax,bx
+.absolute:
+    test ax,ax
+    jns .y
+    neg ax
+.y:
+    test bx,bx
+    jns .scale
+    neg bx
+.scale:
+    mov dx,ax
+    or dx,bx
+    cmp dx,16
+    jb .lookup
+    shr ax,1
+    shr bx,1
+    jmp .scale
+.lookup:
+    shl bx,1
+    shl bx,1
+    shl bx,1
+    shl bx,1
+    add bx,ax
+    xor ax,ax
+    mov al,[n_aimtable+bx]
+    add ax,cx
+    and ax,15
+    pop dx
+    pop cx
+    pop bx
+    ret
+n_firevx: dw 0,1,2,3,3,3,2,1,0,-1,-2,-3,-3,-3,-2,-1
+n_firevy: dw -3,-3,-2,-1,0,1,2,3,3,3,2,1,0,-1,-2,-3
 n_move_shots:
     mov di, n_shots
 .loop:
@@ -723,7 +903,7 @@ n_nextstage:
     jne .out
     cmp word [n_flightphase],0
     jne .out
-    cmp word [n_distance],1824
+    cmp word [n_distance],1824      ; $DCB3: last page, Y < $61
     jb .out
     cmp byte [n_bosslive],0
     jne .out

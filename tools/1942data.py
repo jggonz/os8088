@@ -5,6 +5,17 @@ terminators are checked even though the payload is digest-pinned. Extracted
 records live only in the build directory. Native fallback tables are original.
 """
 
+def position(cart, address):
+    # Actor coordinates have a one-bit page, with a 240-line Y page. $B1D7
+    # subtracts the screen origin ($80,$70), not ($80,$80).
+    return [(cart.read(address)&1)*256+cart.read(address+1)-128,
+            (cart.read(address+2)&1)*240+cart.read(address+3)-112]
+
+def vectors(cart, address):
+    def signed(word):return word if word<32768 else word-65536
+    return [[signed(cart.word(address+i*4)),signed(cart.word(address+i*4+2))]
+            for i in range(16)]
+
 def campaign(cart):
     stages=[]
     for stage in range(1,33):
@@ -14,7 +25,9 @@ def campaign(cart):
             page,y,kind=(cart.read(p+i) for i in range(3));p+=3
             if (page,y,kind)==(0,0,0):break
             if page>7 or y>240 or kind>48:raise ValueError('invalid cartridge encounter')
-            rows.append([16+(7-page)*240+240-y,kind])
+            # $D9CF compares the scroll register, not the first row below
+            # the HUD. Adding the HUD height delays every encounter.
+            rows.append([(8-page)*240-y,kind])
         else:raise ValueError('unterminated cartridge stage')
         if rows!=sorted(rows,key=lambda r:r[0]):raise ValueError('unordered cartridge stage')
         stages.append(rows)
@@ -24,15 +37,14 @@ def campaign(cart):
         p=cart.word(0xfd4a+(kind-10)*2);points=[]
         for _ in range(128):
             if cart.read(p)==255:break
-            x=cart.read(p)*256+cart.read(p+1)-128
-            y=cart.read(p+2)*240+cart.read(p+3)-128
-            points.append([x,y]);p+=4
+            points.append(position(cart,p));p+=4
         else:raise ValueError('unterminated cartridge path')
         paths.append(points)
     starts=[]
-    for address,count in ((0xf3ec,16),(0xf12e,7),(0xf550,8)):
-        starts.append([[cart.read(address+i*4)*256+cart.read(address+i*4+1)-128,
-                        cart.read(address+i*4+2)*240+cart.read(address+i*4+3)-128] for i in range(count)])
+    # $F054 masks with 7, including the unusual eighth entry overlapping the
+    # reversal table. Preserve the ROM's masked page bits for that entry.
+    for address,count in ((0xf3ec,16),(0xf12e,8),(0xf550,8)):
+        starts.append([position(cart,address+i*4) for i in range(count)])
     bonus=[]
     for percent in range(101):
         if percent<50:value=0
@@ -41,7 +53,16 @@ def campaign(cart):
             address=(0xdfbe if percent%10>=5 else 0xdf58)+(percent//10-5)*8
             value=sum(cart.read(address+i)*factor for i,factor in enumerate((10000,1000,100,10)))
         bonus.append(value)
-    return dict(starts=starts,bonuses=bonus,stages=stages,waves=waves,paths=paths,
+    # $ADC9 uses a quantized quadrant lookup; $FB00 sequences bomber shots.
+    aim=[cart.read(0xb1fb+i) for i in range(256)]
+    fire=[]
+    for i in range(3):
+        p=cart.word(0xfd2f+i*2)
+        fire.append([cart.read(p+j) for j in range(cart.read(p)+2)])
+    return dict(velocity=vectors(cart,0xb2fb),circle=vectors(cart,0xb33b),
+                centers=[position(cart,0xfc53+i*4) for i in range(32)],
+                reverse=[cart.read(0xf14a+i) for i in range(16)],
+                aim=aim,fire=fire,starts=starts,bonuses=bonus,stages=stages,waves=waves,paths=paths,
                 bosses=[(256-cart.read(0xde58+i))//8+1 for i in range(4)])
 
 def sounds(cart):
@@ -76,6 +97,8 @@ not represented as PCM. Returned durations are NES frames.
     return out
 
 def fallback():
+    import math
+    aim=[round(math.atan2(y,x)*8/math.pi) for y in range(16) for x in range(16)]
     waves=[[kind,24,1,8] for kind in (3,4,6,0)]
     waves += [[10,6,1,5],[11,6,1,5],[32,1,1,1],[48,1,1,1]]
     stages=[[[96+i*96,(i+s)%8] for i in range(17)] for s in range(32)]
@@ -84,7 +107,7 @@ def fallback():
     notes[14]=dict(notes=[[440,12],[0,6],[660,12],[440,12],[880,24]],loop=True)
     bonus=[0 if p<50 else 100000 if p==100 else (500,1000,1500,2000,2500,3000,5000,8000,10000,20000)[(p-50)//5] for p in range(101)]
     starts=[[[32+i*24,-16] for i in range(8)] for _ in range(3)]
-    return dict(starts=starts,bonuses=bonus,stages=stages,waves=waves,paths=paths,bosses=[7,15,23,31]),notes
+    return dict(aim=aim,fire=[[1,5,0],[1,5,0],[1,5,0]],starts=starts,bonuses=bonus,stages=stages,waves=waves,paths=paths,bosses=[7,15,23,31]),notes
 
 def gameplay_music(game_over):
     """A quieter-register, flowing loop of the Game Over melody (NES frames).
@@ -99,6 +122,15 @@ def gameplay_music(game_over):
 
 def assembly(data,audio):
     out=['; Build-time cartridge/native gameplay tables.']
+    for name in ('velocity','circle','centers','reverse'):
+        if name in data:
+            out.append('n_'+name+':')
+            for row in data[name]:
+                out.append('    dw '+','.join(map(str,row if isinstance(row,list) else [row])))
+    out.append('n_aimtable: db '+','.join(map(str,data['aim'])))
+    out.append('n_firepatterns: dw n_firepattern0,n_firepattern1,n_firepattern2')
+    for i,pattern in enumerate(data['fire']):
+        out.append('n_firepattern%d: db '%i+','.join(map(str,pattern)))
     out.append('n_smallstarts: dw n_starts0,n_starts1,n_starts2')
     out.append('n_startcounts: dw '+','.join(str(len(x)) for x in data['starts']))
     for i,positions in enumerate(data['starts']):

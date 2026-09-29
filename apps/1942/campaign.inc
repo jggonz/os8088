@@ -15,7 +15,7 @@ n_stageinit:
     pop es
     xor ax,ax
     mov di,n_waveslive
-    mov cx,12*WSIZE/2
+    mov cx,13*WSIZE/2
     rep stosw
     mov di,n_enemies
     mov cx,12*ESIZE/2
@@ -30,9 +30,19 @@ n_stageinit:
     mov [n_picky],ax
     mov word [n_picktype],0
     mov word [n_spawned],0
+    mov word [n_enemyfirecount],0
+    mov word [n_bigfirecount],0
+    mov word [n_burstleft],0
     mov word [n_kills],0
     mov word [n_distance],0
     mov word [n_routefrac],0
+    mov word [n_scrollfrac],0
+    mov word [n_scrollrows],0
+    mov word [n_endclear],0
+    mov di,n_motion
+    mov cx,12*24/2
+    xor ax,ax
+    rep stosw
     mov word [n_rolls],3
     mov word [n_roll],0
     mov word [n_grace],60
@@ -59,6 +69,7 @@ n_stageinit:
 
 n_campaignnew:
     SAVE
+    mov word [n_entryseq],0
     mov word [n_activeplayer],0
     mov word [n_wings],0
     mov word [n_nextlife],400
@@ -92,20 +103,55 @@ n_scripts:
     ; A boss encounter holds the scroll and all scheduled reinforcements.
     cmp byte [n_bosslive],0
     jne .out
-    add word [n_distance],2
-    cmp byte [n_cga],0
-    je .events
-    add word [n_routefrac],2
-    cmp word [n_routefrac],5
+    ; $DE42 adds -$00C0 to the scroll: 3/4 pixel per enemy update.
+    add word [n_routefrac],3
+    cmp word [n_routefrac],4
     jb .events
-    sub word [n_routefrac],5
+    sub word [n_routefrac],4
     inc word [n_distance]
 .events:
+    cmp word [n_distance],1792      ; $DC86: last page, Y <= $80
+    jb .event
+    cmp word [n_endclear],0
+    jne .out
+    mov word [n_endclear],1
+    call n_clearencounters
+    push es
+    push ds
+    pop es
+    mov di,n_bullets
+    mov ax,0ffffh
+    mov cx,16*4
+    rep stosw
+    pop es
+    jmp .out
+.event:
     mov si,[n_event]
     mov ax,[si]
     cmp ax,[n_distance]
     ja .queues
+    ; $D9C5 skips events whose route page has already passed. A saturated
+    ; pool must not replay stale reinforcements on a later stretch of sea.
+    push ax
+    xor dx,dx
+    mov bx,240
+    div bx
+    inc ax
+    mul bx
+    cmp [n_distance],ax
+    pop ax
+    jb .currentpage
+    add word [n_event],4
+    jmp .events
+.currentpage:
     mov bx,[si+2]
+%if !N_ROM
+    ; Original-art schedules use compact wave IDs for their orange groups.
+    cmp bx,4
+    je .flush
+    cmp bx,5
+    je .flush
+%endif
     cmp bx,16
     je .flush
     cmp bx,17
@@ -117,6 +163,27 @@ n_scripts:
     cmp bx,28
     jne .descriptor
 .flush:
+    ; One orange formation can occupy five separate wave records ($12..$16,
+    ; $17..$1B, $1C..$20). Keep a shared reward group across those records.
+    mov si,n_enemies
+.detach:
+    cmp word [si+EGROUP],n_orangewave
+    jne .detachnext
+    mov word [si+EGROUP],0
+.detachnext:
+    add si,ESIZE
+    cmp si,n_enemies+12*ESIZE
+    jb .detach
+    push bx
+    push es
+    push ds
+    pop es
+    xor ax,ax
+    mov di,n_orangewave
+    mov cx,WSIZE/2
+    rep stosw
+    pop es
+    pop bx
     mov di,n_waveslive
 .flushloop:
     mov word [di+WR],0
@@ -160,6 +227,7 @@ n_scripts:
     jb .period
     mov word [di+WPOW],3
 .period:
+    ; NES $DA81 ticks each wave once; $EB19 supplies period and batch size.
     mov ax,[bx+2]
     mov [di+WT],ax
     mov [di+WP],ax
@@ -167,6 +235,12 @@ n_scripts:
     mov [di+WB],ax
     mov ax,[bx+6]
     mov [di+WR],ax
+    cmp word [di+WPOW],0ffffh
+    je .queued
+    add [n_orangewave+WR],ax
+    mov ax,[di+WPOW]
+    mov [n_orangewave+WPOW],ax
+.queued:
     mov word [di+WF],0
     add word [n_event],4
     jmp .events
@@ -175,16 +249,26 @@ n_scripts:
 .qloop:
     cmp word [di+WR],0
     je .qnext
-    sub word [di+WT],3
-    jg .qnext
+    cmp word [di+WT],0
+    je .ready
+    dec word [di+WT]
+    jnz .qnext
+.ready:
     mov ax,[di+WP]
-    add [di+WT],ax
+    mov [di+WT],ax              ; retry after the period, with no timer debt
     mov bp,[di+WB]
 .batch:
     call n_scriptspawn
     jc .qnext
     dec word [di+WR]
-    inc word [di+WA]
+    mov bx,[si+EGROUP]
+    or bx,bx
+    jz .counted
+    inc word [bx+WA]
+    cmp bx,di
+    je .counted
+    dec word [bx+WR]
+.counted:
     cmp word [di+WR],0
     je .qnext
     dec bp
@@ -196,8 +280,10 @@ n_scripts:
     mov ax,[n_secretkills]
     cmp ax,[n_secretlimit]
     jb .bosstest
-    call n_freeslot
-    jc .bosstest
+    ; NES secret aircraft uses its own actor ($18), outside the regular pool.
+    mov si,n_enemies+N_ENEMY_LIMIT*ESIZE
+    cmp word [si+EON],0
+    jne .bosstest
     mov word [n_secretkills],0
     mov word [n_secretlimit],150
     mov word [si+EON],1
@@ -218,10 +304,11 @@ n_scripts:
     and ax,7
     cmp ax,7
     jne .out
-    cmp word [n_distance],1400
+    cmp word [n_distance],1297      ; $DDA4: boss page 2, Y < $90
     jb .out
     cmp byte [n_bossmade],0
     jne .out
+    call n_clearencounters
     call n_freeslot
     jc .out
     mov word [si+EON],1
@@ -260,12 +347,13 @@ n_scripts:
     ret
 
 n_freeslot:
+    ; NES $DAC2 allocates eight regular aircraft ($0E..$15).
     mov si,n_enemies
 .loop:
     cmp word [si+EON],0
     je .yes
     add si,ESIZE
-    cmp si,n_enemies+12*ESIZE
+    cmp si,n_enemies+N_ENEMY_LIMIT*ESIZE
     jb .loop
     stc
     ret
@@ -278,7 +366,14 @@ n_scriptspawn:                       ; DI=wave, preserves DI/BP
     jc .out
     mov ax,[di+WK]
     mov [si+ETYPE],ax
-    mov [si+EGROUP],di
+    ; Ordinary actors do not keep their spawning queue alive. $DB18 frees
+    ; a queue as soon as its remaining count reaches zero, even if its
+    ; aircraft are still on screen. Only orange actors need a reward group.
+    mov word [si+EGROUP],0
+    cmp word [di+WPOW],0ffffh
+    je .grouped
+    mov word [si+EGROUP],n_orangewave
+.grouped:
     mov word [si+EAGE],0
     mov word [si+EON],1
     mov word [si+EHP],1
@@ -317,6 +412,9 @@ n_scriptspawn:                       ; DI=wave, preserves DI/BP
     mov [si+EPATH],bx
     jmp .spawned
 .small:
+%if N_ROM
+    jmp .spawned                   ; $071F sequence handled by n_motioninit
+%endif
     and ax,3
     cmp ax,0
     je .position
@@ -349,6 +447,9 @@ n_scriptspawn:                       ; DI=wave, preserves DI/BP
     jl .spawned
     mov word [si+EVX],-1
 .spawned:
+%if N_ROM
+    call n_motioninit
+%endif
     inc word [n_spawned]
     clc
 .out:
@@ -418,6 +519,25 @@ n_pathmove:                          ; SI=actor; CF set when path ends
     ret
 .end:
     stc
+    ret
+
+n_clearencounters:
+    mov word [n_orangewave+WR],0
+    mov word [n_orangewave+WF],1
+    mov di,n_waveslive
+.waves:
+    mov word [di+WR],0
+    mov word [di+WF],1
+    add di,WSIZE
+    cmp di,n_waveslive+12*WSIZE
+    jb .waves
+    mov si,n_enemies
+.actors:
+    xor ax,ax
+    call n_depart
+    add si,ESIZE
+    cmp si,n_enemies+12*ESIZE
+    jb .actors
     ret
 
 ; Procedural small-plane maneuvers, with cartridge entry positions. The NES
@@ -761,6 +881,18 @@ n_flightphaseupdate:
     dec word [n_flightphasetime]
     jnz .out
     mov word [n_flightphase],0
+%if N_ROM
+    ; $D901/$D90E scroll 60 * 3/4 pixels during takeoff. Our takeoff
+    ; animation is shorter, but combat starts at the same route position.
+    mov word [n_distance],45
+    mov word [n_worldpage],1
+    mov word [n_worldy],211         ; 240 - 45 + 16-row HUD
+    cmp byte [n_cga],0
+    je .takeoffroute
+    mov word [n_worldy],176         ; scaled route + 14-row HUD
+.takeoffroute:
+    mov byte [n_rebuild],1
+%endif
     mov ax,14
     call n_music
     jmp .out

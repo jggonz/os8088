@@ -155155,7 +155155,8 @@ uses opaque runs per plane. No per-pixel conversion runs in combat.
 
 CGA uses FSXM_CGA320, 320x200. Logical coordinates scale 5:4 horizontally
 and 5:6 vertically. The MC6845 display start address advances by one pair of
-native scanlines per simulation frame, modulo 8192 bytes per video bank.
+native scanlines when the scroll accumulator reaches a pair, modulo 8192
+bytes per video bank.
 Presentation splits copies crossing a physical bank boundary. The fixed HUD
 and two incoming terrain rows are redrawn at the top; old actor footprints
 move down two rows. Old/new actor damage and the HUD are merged into scanline
@@ -155258,10 +155259,11 @@ and pacing; loading is outside combat timing. Emulator results do not imply
 physical-hardware rates.
 
 The crowded-combat regression retains a 5fps minimum, including the slowest
-measured frame. The expanded cartridge build measured 6.66fps average /
-5.97fps slowest on VGA and 5.64 / 5.40 on CGA with twelve planes, sixteen
+measured frame. The cartridge pacing build measured 6.52fps average /
+5.43fps slowest on VGA and 5.56 / 5.31 on CGA with twelve planes, sixteen
 enemy bullets, sixteen player shots and four explosions. These are emulator
-guest-cycle measurements. Re-run the emulator gate after renderer changes; host asset
+guest-cycle measurements using injected actors above the gameplay limits.
+Re-run the emulator gate after renderer changes; host asset
 checks alone do not establish frame rate or correct hardware scanout.
 
 ### 101.4 Cartridge gameplay expansion
@@ -155275,9 +155277,40 @@ with dive/reversal, sweep and crossing maneuvers and aimed firing implemented
 in 8086. No 6502 interpreter is shipped. Timing is adapted to the host frame
 rate and is not a claim of cycle-level NES equivalence.
 
+Wave periods now decrement once per native update ($DA81), preserving the
+cartridge batch sizes instead of accelerating them threefold. Allocation
+uses eight regular aircraft slots ($DAC2), with a separate secret-plane
+slot, and eight enemy bullets ($FABF). A full aircraft pool retries after
+the wave period without accumulating overdue timer debt. Fighter firing
+uses the shared stage/page counter, 112-pixel range box, 32-pixel exclusion
+box, downward aiming sectors and heading checks from $FA32. Types 9..33
+retain their cartridge no-fire behavior. The $ADC9 aiming lookup and $FD2F
+bomber burst records are imported at build time. Bomber shots are sequenced
+at their cartridge intervals; the proximity gate also applies to bombers.
+See `reference/1942/README.md` for the local cartridge investigation and
+remaining native movement/timing adaptations.
+
+Campaign motion uses the cartridge's 16-direction fixed-point velocity and
+circle tables, per-type speeds, shared entry-position sequence, and waypoint
+steering. Aircraft outside the visible area continue their current heading
+until they leave the actor bounds; they cannot follow adjoining path records
+back onto the screen. Large bomber entry selects the player's horizontal
+half, as $F6E8 does. Route progress is three quarters of a logical pixel per
+simulation update ($DE42), on both adapters. VGA accumulates single rows;
+CGA accumulates paired scanlines to preserve the MC6845 bank alignment.
+Wave timers run even on updates without a terrain-row change. The native
+takeoff/results presentation and wall-clock frame rate remain adaptations.
+Orange formations split across several wave records share one reward group;
+an escape invalidates the whole formation. Boss handoff clears outstanding
+waves at logical distance 1297; final-page aircraft clear at 1792, followed
+by landing at 1824. Combat starts 45 pixels into the route after takeoff,
+and event distances exclude the HUD offset. The shared entry counter
+persists across stages.
+
 Stage flow includes takeoff, combat, landing, percentage/roll results and
 completion. The large boss encounters occur on played stages 7,15,23,31.
-Their aircraft is terrain page 2, with a 144x96 collision body and three firing positions.
+Their aircraft is terrain page 2, with a 144x96 collision body and the
+cartridge's sequenced seven-shot burst from its native muzzle.
 Scrolling holds during the encounter; destruction rebuilds the cache using
 sea in place of the boss page.
 Two-player games alternate on death, retaining each player's score, lives,

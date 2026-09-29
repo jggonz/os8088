@@ -624,6 +624,7 @@ n_clear:
     ret
 n_erase:
     SAVE
+    mov word [n_scrollrows],0
     cmp word [n_flightphase],0
     jne .noscroll
     cmp byte [n_bosslive],0
@@ -679,10 +680,8 @@ n_erase:
     ; MC6845 start address scrolls both 8KB banks by one pair of scanlines.
     ; This moves every visible terrain pixel without copying the playfield.
     mov word [n_shift],0
-    cmp word [n_flightphase],0
-    jne .list
-    cmp byte [n_bosslive],0
-    jne .list
+    cmp word [n_scrollrows],0
+    je .list
     sub word [n_cgastart],80
     and word [n_cgastart],1fffh
     mov word [n_shift],160

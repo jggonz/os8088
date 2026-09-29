@@ -259,6 +259,7 @@ n_msgresume: db 'P TO RESUME',0
 %include "video.inc"
 %include "game.inc"
 %include "campaign.inc"
+%include "motion.inc"
 %include "scroll.inc"
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
@@ -303,6 +304,13 @@ VAR n_scorehi,2
 VAR n_stage,2
 VAR n_spawned,2
 VAR n_spawnwait,2
+VAR n_enemyfirecount,2
+VAR n_bigfirecount,2
+VAR n_burstleft,2
+VAR n_burstwait,2
+VAR n_burstptr,2
+VAR n_burstangle,2
+VAR n_burstperiod,2
 VAR n_frames,2
 VAR n_bossmade,1
 VAR n_huddirty,1
@@ -375,8 +383,14 @@ VAR n_flightphase,2
 VAR n_flightphasetime,2
 VAR n_distance,2
 VAR n_routefrac,2
+VAR n_scrollfrac,2
+VAR n_scrollrows,2
+VAR n_endclear,2
+VAR n_entryseq,2
+VAR n_motion,12*24
 VAR n_event,2
 VAR n_waveslive,192
+VAR n_orangewave,16
 VAR n_kills,2
 VAR n_picktype,2
 VAR n_wings,2

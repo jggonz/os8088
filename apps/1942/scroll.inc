@@ -1,4 +1,4 @@
-; Circular scanline cache. A frame replaces two incoming rows; the remaining
+; Circular scanline cache. Scrolling replaces only incoming rows; the remaining
 ; terrain never shifts in RAM/VRAM. Presentation copies native packed pixels.
 ; The 16/14-line HUD is outside the ring and never scrolls.
 n_scrollsetup:
@@ -15,7 +15,22 @@ n_scrollsetup:
 .out:
     ret
 n_scrollstep:
-    mov word [n_rowrepeat],2
+    ; Same logical speed on both adapters. CGA must scroll pairs of rows.
+    mov ax,3
+    mov bx,4
+    mov cx,1
+    cmp byte [n_cga],0
+    je .fraction
+    mov ax,5
+    mov bx,16
+    mov cx,2
+.fraction:
+    add [n_scrollfrac],ax
+    cmp [n_scrollfrac],bx
+    jb .out
+    sub [n_scrollfrac],bx
+    mov [n_scrollrows],cx
+    mov [n_rowrepeat],cx
 .row:
     sub word [n_scroll],80
     jnc .head
@@ -40,6 +55,7 @@ n_scrollstep:
 %endif
     dec word [n_rowrepeat]
     jnz .row
+.out:
     ret
 
 %if N_ROM

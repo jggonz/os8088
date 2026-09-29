@@ -105,8 +105,30 @@ def assets():
             p=pointer(0xe26f+((256-stage*8)&255)//4)
             expected=[]
             while any(byte(p+i) for i in range(3)):
-                expected.append([1936-byte(p)*240-byte(p+1),byte(p+2)]);p+=3
+                expected.append([1920-byte(p)*240-byte(p+1),byte(p+2)]);p+=3
             assert events==expected
+        assert campaign['aim']==[byte(0xb1fb+i) for i in range(256)]
+        for i,pattern in enumerate(campaign['fire']):
+            p=pointer(0xfd2f+i*2)
+            assert pattern==[byte(p+j) for j in range(byte(p)+2)]
+        # Independently read every path, including aliases in later stages.
+        def position(p):
+            return [(byte(p)&1)*256+byte(p+1)-128,
+                    (byte(p+2)&1)*240+byte(p+3)-112]
+        assert campaign['waves']==[[byte(0xeb19+4*i+j) for j in range(4)] for i in range(49)]
+        for kind,points in enumerate(campaign['paths'],10):
+            p=pointer(0xfd4a+(kind-10)*2);expected=[]
+            while byte(p)!=255:
+                expected.append(position(p));p+=4
+            assert points==expected,('path',kind)
+        for entries,(address,count) in zip(campaign['starts'],((0xf3ec,16),(0xf12e,8),(0xf550,8))):
+            assert entries==[position(address+4*i) for i in range(count)]
+        for name,address in (('velocity',0xb2fb),('circle',0xb33b)):
+            expected=[list(struct.unpack_from('<hh',rom,16+address-0x8000+4*i)) for i in range(16)]
+            assert campaign[name]==expected,name
+        assert campaign['centers']==[position(0xfc53+4*i) for i in range(32)]
+        assert campaign['reverse']==[byte(0xf14a+i) for i in range(16)]
+        print('cartridge: all 32 schedules, 49 waves, 39 paths and motion tables checked',flush=True)
         assert campaign['bonuses'][50]==500 and campaign['bonuses'][100]==100000
         audio=json.loads((ROOT/os88build.at('build/1942-audio.json')).read_text())
         assert len(audio)==23 and audio[14]['loop'] and not audio[21]['loop']
@@ -132,7 +154,9 @@ def assets():
 def symbols():
     source = (ROOT/'apps/1942/1942.asm').read_text()
     names = re.findall(r'^VAR (n_\w+),', source, re.M)
-    code = ['n_about','n_frontprepare','n_paint','n_key','n_click','n_frontpaint','n_fronttimer','n_frontload','n_vfile','n_cfile','n_scenesums','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw','n_loading','n_readbank','n_spawn','n_stageinit','n_scripts','n_awardpow','n_results','n_kill','n_addscore','n_depart','n_flightphaseupdate','n_campaignnew','n_turn','n_audio','n_audio_open','n_audio_close','n_pcm_open','n_pcm_close','n_pcm_halt','n_pcmfile','n_audio_quiet','n_audio_step','n_audio_fmnote','n_music','n_effect','n_tone','n_soundtab','n_event','n_highmsg','n_freeslot','n_hitplayer','n_move_bullets','n_stageevents','n_move_enemies','n_move_shots']
+    code = ['n_about','n_frontprepare','n_paint','n_key','n_click','n_frontpaint','n_fronttimer','n_frontload','n_vfile','n_cfile','n_scenesums','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw','n_loading','n_readbank','n_spawn','n_stageinit','n_scripts','n_awardpow','n_results','n_kill','n_addscore','n_depart','n_flightphaseupdate','n_campaignnew','n_turn','n_audio','n_audio_open','n_audio_close','n_pcm_open','n_pcm_close','n_pcm_halt','n_pcmfile','n_audio_quiet','n_audio_step','n_audio_fmnote','n_music','n_effect','n_tone','n_soundtab','n_event','n_highmsg','n_freeslot','n_hitplayer','n_move_bullets','n_stageevents','n_move_enemies','n_move_shots','n_enemyfire','n_fireangle','n_firerank']
+    code += ['n_scriptspawn','n_scrollstep','n_nextstage']
+    if rom_build():code += ['n_motioninit','n_cartmove']
     source = source.replace('OS88_IMAGE_END','')
     source += '\n'+'\n'.join('dw '+n+'-os88_image_end' for n in names)
     source += '\n'+'\n'.join('dw '+n for n in code)+'\nOS88_IMAGE_END\n'
@@ -171,10 +195,13 @@ class Game:
         m.setreg('sp',sp)
         m.bp_exec((saved['cs']<<4)+saved['ip']);m.run()
         assert m.wait_stop(30)=='breakpoint',k+' did not return'
+        result=m.regs()
         m.write((saved['ss']<<4)+sp,old)
         for r,v in saved.items():
             if r in REGS:m.setreg(r,v)
+        return result
     def fixture(self):
+        self.put('stage',1)
         self.call('n_stageinit')
         for k,size in [('enemies',12*24),('blasts',8*6)]:
             self.m.write(self.base+self.off['n_'+k],bytes(size))
@@ -363,6 +390,187 @@ def capture(g,tag,name):
         w,h,rgb=m.fbuf();M.write_png_rgb(str(ROOT/'build'/('1942-'+tag+'-'+name+'.png')),w,h,rgb)
 
 
+def pacing(g,tag):
+    """Cartridge cadence, bounded pools and firing gates on the real 8088."""
+    m=g.m
+    def bullets():
+        raw=g.data('bullets',128)
+        return sum(struct.unpack_from('<H',raw,i+2)[0]!=65535 for i in range(0,128,8))
+    def fire(x=120,y=140,kind=0,etype=3,vy=2,prime=True):
+        g.enemy(x=x,y=y,kind=kind)
+        m.write(g.base+g.off['n_enemies']+16,struct.pack('<H',etype))
+        m.write(g.base+g.off['n_enemies']+22,struct.pack('<H',vy&65535))
+        if prime:g.put('enemyfirecount',63)
+        m.setreg('si',g.off['n_enemies']);g.call('n_enemyfire')
+    for args in ({'y':32},{'y':190},{'x':8},{'kind':1,'etype':10},
+                 {'kind':6,'etype':32},{'vy':-2},{'kind':8,'etype':49}):
+        g.fixture();fire(**args);assert bullets()==0,('forbidden enemy shot',args)
+    g.fixture();g.put('py',100);fire(y=180);assert bullets()==0,'rearward shot'
+    g.fixture();fire();assert bullets()==1,'nearby incoming fighter stayed silent'
+    for _ in range(64):fire(prime=False)
+    assert bullets()==1,'shared cartridge firing counter ran too quickly'
+    fire(prime=False);assert bullets()==2
+    for _ in range(12):fire()
+    assert bullets()==8,'enemy projectile pool must be eight slots'
+    before=g.data('bullets',128);fire();assert g.data('bullets',128)==before
+    # Full 16-sector aiming uses the cartridge's quadrant table, including
+    # the down-facing cone and the opposite heading used by reversing planes.
+    for dx,dy,expected in ((0,80,8),(80,0,4),(-80,0,12),(0,-80,0),(80,80,6),(-80,80,10)):
+        m.setreg('ax',dx&65535);m.setreg('bx',dy&65535)
+        assert g.call('n_fireangle')['ax']==expected,('aim quadrant',dx,dy)
+    if rom_build():
+        g.fixture();g.put('bigfirecount',15)
+        fire(kind=7,etype=48);assert bullets()==0 and g.get('burstleft')==3
+        for _ in range(4):fire(kind=7,etype=48)
+        assert bullets()==0,'bomber fired before its cartridge interval'
+        fire(kind=7,etype=48);assert bullets()==1
+        for _ in range(5):fire(kind=7,etype=48)
+        assert bullets()==2 and g.get('burstleft')==1,'bomber sequence'
+        for _ in range(5):fire(kind=7,etype=48)
+        assert bullets()==3 and g.get('burstleft')==0,'bomber burst completion'
+        assert struct.unpack_from('<hh',g.data('bullets',24),4)==(1,3),'signed bomber aim offset'
+    # First-stage cartridge opening: two simultaneous 50-tick waves with
+    # batches of two and one. Do not accelerate them to ~17 native frames.
+    g.fixture()
+    wave=g.off['n_waveslive']
+    for i,batch in enumerate((2,1)):
+        m.write(g.base+wave+i*16,struct.pack('<8H',50,50,3,50,batch,0,0,65535))
+    for tick in range(1,201):
+        g.put('distance',0);g.call('n_scripts')
+        expected=min(8,(tick//50)*3)
+        assert g.get('spawned')==expected,('wave timing/budget',tick,g.get('spawned'))
+    pending=struct.unpack('<16H',g.data('waveslive',32))
+    assert pending[3]+pending[11]==92,'full scene lost pending aircraft'
+    for i in range(3):
+        m.setreg('si',g.off['n_enemies']+i*24);m.setreg('ax',0);g.call('n_depart')
+    for tick in range(1,51):
+        g.put('distance',0);g.call('n_scripts')
+        assert g.get('spawned')==(11 if tick==50 else 8),'full pool accumulated timer debt'
+    g.fixture();g.put('enemyfirecount',42);g.put('burstleft',5);g.call('n_stageinit')
+    assert g.get('enemyfirecount')==g.get('burstleft')==0,'new stage retained firing state'
+    print(tag+': cartridge wave cadence, eight-plane/bullet pools, proximity, heading and firing counters passed',flush=True)
+
+
+
+def campaign_flow(g,tag):
+    """Run all stages and motion families in the assembled guest, without I/O."""
+    m=g.m
+    def guest(body):
+        # Bounded scratch code; no renderer runs during these calls.
+        origin=g.off['n_rects']
+        with tempfile.TemporaryDirectory() as td:
+            asm,out=Path(td)/'step.asm',Path(td)/'step.bin'
+            asm.write_text('bits 16\norg %d\n'%origin+body+'\nret\n')
+            subprocess.run(['nasm','-f','bin','-o',str(out),str(asm)],check=True)
+            payload=out.read_bytes();assert len(payload)<256
+        old=m.read(g.base+origin,len(payload));m.write(g.base+origin,payload)
+        g.code['campaign_test']=origin
+        try:return g.call('campaign_test')
+        finally:m.write(g.base+origin,old)
+    # Route time is independent of the display adapter and its row rounding.
+    g.fixture()
+    guest('mov cx, 400\n.loop: push cx\ncall %d\npop cx\nloop .loop'%g.code['n_scripts'])
+    assert g.get('distance')==300 and g.get('routefrac')==0
+    g.fixture();g.enemy();g.bullet();g.put('distance',1791);g.put('routefrac',3)
+    g.call('n_scripts')
+    assert g.get('endclear')==1 and g.data('bullets',128)==b'\xff'*128
+    assert not any(g.data('enemies',12*24)[12::24]),'final page retained aircraft'
+    g.put('rebuild',0,1);g.call('n_scripts')
+    assert g.get('rebuild',1)==0,'final-page cleanup repeated'
+    if not rom_build():return
+    data=json.loads((ROOT/os88build.at('build/1942-campaign.json')).read_text())
+    # ROM opening after takeoff: 90 updates to the first event, then its
+    # 50-update timer (including the enqueue update). All three are divers.
+    g.fixture();g.put('distance',45);g.put('entryseq',0)
+    guest('mov cx,139\n.loop: push cx\ncall %d\npop cx\nloop .loop'%g.code['n_scripts'])
+    assert g.get('spawned')==3,'opening wave timing'
+    opening=[struct.unpack_from('<12H',g.data('enemies',72),i*24) for i in range(3)]
+    assert [a[0] for a in opening]==[16,32,192]
+    assert all(a[1]==65536-48 and a[8]==3 for a in opening),'opening must enter from above'
+    def spawn(kind,seq=0):
+        g.fixture();g.put('entryseq',seq)
+        wave=g.off['n_waveslive']
+        m.write(g.base+wave,struct.pack('<8H',1,1,kind,1,1,0,0,65535))
+        m.setreg('di',wave);g.call('n_scriptspawn')
+    def move(n):
+        return guest('mov cx,%d\n.loop: push cx\nmov si,%d\ncall %d\npop cx\njc .end\nloop .loop\n.end:'%
+                     (n,g.off['n_enemies'],g.code['n_cartmove']))
+    def xy():return struct.unpack('<hh',g.data('enemies',4))
+    # Straight portions independently traced through the original 6502 ROM.
+    # Coordinate checkpoints are before any player collision or firing.
+    for kind,expected in ((3,(34,-8)),(6,(96,-4)),(34,(32,273)),(40,(224,273)),(48,(64,261))):
+        spawn(kind);move(11)
+        assert xy()==expected,('ROM trajectory',kind,xy(),expected)
+    spawn(48);g.put('px',200);m.setreg('si',g.off['n_enemies']);g.call('n_motioninit')
+    assert xy()==(192,288),'bomber must enter on player half'
+    # Shared sequential entries, not a new random choice for each airplane.
+    for seq in range(16):
+        spawn(3,seq)
+        assert list(xy())==data['starts'][1][seq&7]
+        assert g.get('entryseq')==seq+1
+    # Full reversals take eight updates, then reflect the original heading.
+    spawn(3);move(64)
+    assert struct.unpack_from('<H',g.data('motion',24),8)[0]>0,'missing fighter reversal'
+    move(12);assert struct.unpack_from('<h',g.data('enemies',24),22)[0]<0
+    # Every scheduled family must leave instead of following adjacent records
+    # back into view. Offscreen departure also releases the formation slot.
+    for kind in sorted({w[0] for w in data['waves']}):
+        spawn(kind)
+        result=move(1400)
+        assert result['flags']&1,('aircraft never departed',kind,xy())
+    # Stage 3's five staggered orange rows are one formation, not five POWs.
+    for escaped in (False,True):
+        g.fixture();g.put('stage',3);g.call('n_stageinit')
+        g.put('event',g.get('event')+6*4);g.put('distance',591);g.put('routefrac',3)
+        guest('mov cx,25\n.loop: push cx\ncall %d\npop cx\nloop .loop'%g.code['n_scripts'])
+        assert g.get('spawned')==5
+        for i in range(5):
+            m.setreg('si',g.off['n_enemies']+i*24)
+            if escaped and i==0:
+                m.setreg('ax',0);g.call('n_depart')
+            else:g.call('n_kill')
+            if i<4:assert g.get('picky')==65535,'partial staggered formation rewarded'
+        assert (g.get('picky')!=65535)==(not escaped)
+    body="""mov cx,2500
+.loop:
+    push cx
+    call {scripts}
+    mov si,{enemies}
+.actor:
+    cmp word [si+12],0
+    je .next
+    inc word [si+10]
+    cmp word [si+16],255
+    je .depart
+    push si
+    call {move}
+    pop si
+    jnc .next
+.depart:
+    xor ax,ax
+    call {depart}
+.next:
+    add si,24
+    cmp si,{end}
+    jb .actor
+    pop cx
+    loop .loop
+""".format(scripts=g.code['n_scripts'],enemies=g.off['n_enemies'],move=g.code['n_cartmove'],
+             depart=g.code['n_depart'],end=g.off['n_enemies']+12*24)
+    for stage,events in enumerate(data['stages'],1):
+        g.put('stage',stage);g.call('n_stageinit');start=g.get('event')
+        guest(body)
+        assert g.get('event')==start+4*len(events),('unconsumed stage event',stage,(g.get('event')-start)//4,len(events),g.get('distance'))
+        assert g.get('distance')==1875,('stage route stalled',stage)
+        assert bool(g.get('bossmade',1))==(stage in data['bosses']),('boss stage',stage)
+        assert not any(g.data('enemies',12*24)[12::24]),('landing aircraft',stage)
+        assert g.get('endclear')==1 and g.data('bullets',128)==b'\xff'*128
+        g.put('flightphase',0);g.call('n_nextstage')
+        assert g.get('flightphase')==2,('stage did not land',stage)
+        if stage%8==0:print(tag+': campaign stages 1..%d passed'%stage,flush=True)
+    g.fixture();g.call('n_refresh')
+    print(tag+': all 32 stages completed; sequential entries, ROM trajectory checkpoints and all scheduled motion families passed',flush=True)
+
 def rules(g,tag):
     """Exercise native game rules through the assembled 8086 entry points."""
     m=g.m
@@ -400,20 +608,23 @@ def rules(g,tag):
     g.fixture();g.put('secretkills',199);g.call('n_scripts')
     assert not any(g.data('enemies',12*24)[12::24])
     g.put('secretkills',200);g.call('n_scripts')
-    assert struct.unpack_from('<H',g.data('enemies',24),8)[0]==8
+    assert struct.unpack_from('<H',g.data('enemies',9*24),8*24+8)[0]==8
     assert g.get('secretkills')==0 and g.get('secretlimit')==150
-    m.setreg('si',g.off['n_enemies']);g.call('n_kill')
+    m.setreg('si',g.off['n_enemies']+8*24);g.call('n_kill')
     assert g.get('picktype')==5 and g.get('picky')!=65535
-    # Dive reversal and cross-screen pass preserve their direction after turn.
+    # Fallback retains its native maneuvers; cartridge motion has its own
+    # fixed-point trajectory and campaign checks below.
     g.fixture();g.put('grace',100)
     actor=struct.pack('<12H',60,210,1,1,3,1,1,0,3,0,0,2)
     m.write(g.base+g.off['n_enemies'],actor);g.call('n_move_enemies')
-    raw=struct.unpack('<12H',g.data('enemies',24));assert raw[7]==1 and raw[11]==65533
+    raw=struct.unpack('<12H',g.data('enemies',24))
+    if not rom_build():assert raw[7]==1 and raw[11]==65533
     actor=struct.pack('<12H',60,180,1,1,4,1,1,0,6,0,0,2)
     m.write(g.base+g.off['n_enemies'],actor);g.call('n_move_enemies')
-    raw=struct.unpack('<12H',g.data('enemies',24));assert raw[7]==1 and raw[2]==3 and raw[11]==0
+    raw=struct.unpack('<12H',g.data('enemies',24))
+    if not rom_build():assert raw[7]==1 and raw[2]==3 and raw[11]==0
     g.put('px',0);g.call('n_move_enemies')
-    assert struct.unpack_from('<H',g.data('enemies',24),4)[0]==3
+    if not rom_build():assert struct.unpack_from('<H',g.data('enemies',24),4)[0]==3
     # Boundary checks on percentage brackets and the 100% award (>16 bits).
     for kills,expected in ((49,0),(50,500),(55,1000),(80,5000),(85,8000),(99,20000),(100,100000)):
         g.fixture();g.put('spawned',100);g.put('kills',kills);g.put('rolls',2)
@@ -527,6 +738,8 @@ def run(tag,off,code):
         # Let a complete video raster scan out without moving the simulation.
         g.put('paused',1,1);g.frame(2);capture(g,tag,'gameplay');g.put('paused',0,1)
         combat_bench(g,tag)
+        pacing(g,tag)
+        campaign_flow(g,tag)
         rules(g,tag)
         g.fixture();g.call('n_scenecheck')
         for i,kind in enumerate((0,1,2,3,4,5,6,7)):
@@ -537,7 +750,7 @@ def run(tag,off,code):
         if rom_build():
             g.put('stage',9);g.call('n_scenecheck')
             g.put('worldpage',4);g.put('worldy',1);g.put('scene',65535)
-            g.call('n_scenecheck');g.frame();check_video(g,tag)
+            g.call('n_scenecheck');g.frame(4);check_video(g,tag)
             assert g.get('worldpage')==5,'route page did not advance'
             g.put('grace',1000);g.frame(125);check_video(g,tag)
             g.put('paused',1,1);before=(g.get('scroll'),g.get('worldy'),g.get('worldpage'))
@@ -569,7 +782,7 @@ def run(tag,off,code):
         # Cartridge boss stage, results and explicit stage advancement.
         g.fixture();g.put('stage',7);g.call('n_scenecheck')
         g.put('worldpage',6);g.put('worldy',46 if tag=='cga' else 56)
-        g.put('distance',1398);g.put('rebuild',1,1);g.frame(2)
+        g.put('distance',1296);g.put('rebuild',1,1);g.frame(3)
         assert g.get('bosslive',1)==1
         check_video(g,tag);capture(g,tag,'boss')
         for i in range(12):
