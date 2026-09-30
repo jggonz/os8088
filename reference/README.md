@@ -15,6 +15,9 @@ Copyright and attribution remain with the original authors/publishers.
 
 The saved HTML has its embedded page token removed before check-in.
 
+- [drmario/](drmario/README.md) — Nintendo's Dr. Mario (1990) `CHR_ROM.chr` and `bank_FF.asm`, byte-for-byte from NES-Games-Disassembly `df2c8e5`. Unlike the rest of this directory these ARE build inputs: `tools/drmario_assets.py` and `tools/drmario_audio.py` read them for DrMarco (SPEC.md §100) and refuse any other bytes.
+  SHA-256: `853123999e15a05723cfaa1f928980d294d985dfcea5da2ad407afd56d0586a3` (`CHR_ROM.chr`), `90466e12c051d210054b3d85f314988a61aa7ca1068774400af7ba213400accb` (`bank_FF.asm`)
+
 ## Gorillas palette notes
 
 The supplied BASIC's `SetScreen` remaps its EGA ink indices: 0 → 1 (blue

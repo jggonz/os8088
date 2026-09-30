@@ -1327,6 +1327,13 @@ FULL = [
         ". SOAK and not full: it gates tools/kernsize.py's reporting pass, "
         "which is an instrument and not the OS",
         needs=("nasm",), serial=False),
+    Row("drmarcoart", "full", py("tests/unit/t_drmarcoart.py"), 1.5,
+        "SPEC.md 100: DrMarco's COMMITTED art (apps/drmario/art/native/) is "
+        "byte for byte what tools/drmario_assets.py --art writes today. That "
+        "half needs Pillow, so `make` does not run it and could not notice a "
+        "PNG edited or a compiler changed without `make drmarco-art` - the "
+        "package would go on shipping the old art. Measured 0.9s",
+        needs=("pil",)),
     Row("ctoolchain", "full", py("tests/unit/t_ctoolchain.py"), 8.0,
         "the C toolchain still produces a package - the OTHER thing `all` "
         "does not build, and the one that had a `cc` capability with no row "
@@ -2453,6 +2460,25 @@ SOAK = [
         "XT frame rate, missing/damaged banks and desktop restore; "
         "uses a local cartridge when the package was built with one",
         needs=("marty", "nasm"), wants=("build/1942-360.img", "build/os8088-360.img")),
+    Row("drmario", "soak", py("tests/drmario.py"), 110.0,
+        "DrMarco (SPEC.md 100) on MartyPC, VGA and CGA: gameplay, animation "
+        "and input off its own 360KB disk, every bottle cell checked against "
+        "an independent decode of the committed CHR_ROM.chr and the surround "
+        "against the compiler's preview oracle. Measured 72s CPU, 4 min wall",
+        needs=("marty", "pil"), serial=True,
+        wants=("build/drmario360.img", "build/os8088-360.img")),
+    Row("drmariofront", "soak", py("tests/drmario_front.py"), 110.0,
+        "DrMarco's splash and help (SPEC.md 100) on VGA, CGA and Hercules: "
+        "the DRMARCO.* front screens from the committed art, navigation, "
+        "title music and restoration, with XT paint timings. Measured 75s CPU",
+        needs=("marty", "pil"), serial=True,
+        wants=("build/drmario360.img", "build/os8088-360.img")),
+    Row("drmarioaudio", "soak", py("tests/drmario_audio.py"), 90.0,
+        "DrMarco's music and effects (SPEC.md 100) on the speaker, AdLib and "
+        "Sound Blaster, compiled from the committed bank_FF.asm: per-voice "
+        "service cost and a captured peak. Measured 60s CPU, 4.5 min wall",
+        needs=("marty", "pil"), serial=True,
+        wants=("build/drmario360.img", "build/os8088-360.img")),
     Row("gorillas", "soak", py("tests/gorillas.py"), 100.0,
         "Native Gorillas (SPEC.md 99), measured 97.3s on three adapters: "
         "keyboard angle/velocity editing, persistent terrain damage, pause, "

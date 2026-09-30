@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile local NES note data to bounded native phrase lists (no ROM shipped).
+"""Compile DrMarco's committed NES note data to bounded native phrase lists.
 
 Decode $DC83/$DDAE/$DE30, including repeats and global tempo/transposition.
 Envelopes, vibrato, noise and DPCM are deliberately arranged as OPL patches /
@@ -142,7 +142,7 @@ def build(source,out):
             lists += [f'    dw 0,{loop}']
             report[name].append(dict(notes=sum(len(b) for b in v['blocks']),
                                      frames=sum(d for b in v['blocks'] for d,h in b),loop=v['loop']))
-    text=['; Generated locally from NES bank_FF.asm; do not commit.', 'dm_song_table:']
+    text=['; Generated from reference/drmario/bank_FF.asm. Do not edit.', 'dm_song_table:']
     for name,_ in SONGS: text.append('    dw '+','.join(f'dm_song_{name}_{ch}' for ch in range(3)))
     text += ['dm_note_hz:', '    dw '+','.join(map(str,hz))]+lists
     for data,p in phrases.items():

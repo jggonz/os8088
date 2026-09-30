@@ -40904,7 +40904,7 @@ gate, a `fast` row. The kinds are checked differently:
 |---|---|---|
 | `retired` | a **failure**. Not worth shipping | on no shipped image, not in the live payload, and **not built by `all` at all** |
 | `instrument` | **not a product** — a bench or a gate that happens to be a package | on no shipped image. `all` MAY build it: keeping a bench assembling is usually the point of having one |
-| `local` | an application requiring user-supplied assets, such as DrMarco (§100) | standalone build/disk targets only; no standard image, live payload or `all` dependency |
+| `local` | an application requiring user-supplied assets (DrMarco, §100, was the one until its reference was committed) | standalone build/disk targets only; no standard image, live payload or `all` dependency |
 
 **A `retired` package keeps its source and its SPEC.md section.** Deleting
 them would leave no account of what was tried, and this tree already keeps
@@ -154983,14 +154983,30 @@ text. These are emulator cycle measurements, not hardware measurements.
 
 ## 100. DrMarco (`apps/drmario/drmario.asm`)
 
-Native 8086 single-player adaptation of the supplied NES Dr. Mario disassembly.
-The reference is external: `NES-Games-Disassembly/Dr. Mario/bank_FF.asm` and
-`CHR_ROM.chr`. `make drmario` imports selected graphics and speed/color tables
-into the build directory, then builds `DRMARCO.O88`; `make drmarcodisk` creates
-four standalone application floppy geometries. `DRMARIO_SOURCE` overrides the
-reference directory. No NES interpreter, ROM redistribution in source control,
-new API slots, worker or kernel change is required. The desktop artwork uses
-one movable memory claim; fullscreen rendering adds no allocation.
+Native 8086 single-player adaptation of the NES Dr. Mario disassembly. The
+reference is COMMITTED: `reference/drmario/bank_FF.asm` and `CHR_ROM.chr`,
+copied byte for byte from NES-Games-Disassembly at `df2c8e5` and pinned by
+SHA-256 in `tools/drmario_assets.py`, which refuses any other bytes. Their
+`README.md` is the provenance and the owner's decision to commit them, the
+same kind of departure as `apps/c64/rom/`. So `make` builds `DRMARCO.O88` on
+any clone and it ships like every other game: `GAMES/` on the 1.44MB, 1.2MB
+and 720KB apps disks, `games360.img`, the everything floppy and the live
+media, with `DRMARCO.VGA/.HRC/.CGA` beside it. It is NOT on `apps360.img`
+(full, 24.6.1), the 360KB combo, or the kern_small disks, where image + bss
+is 56,333 bytes in one claim against a 53,760-byte arena. `make drmarcodisk`
+still builds four standalone floppies. No NES interpreter, new API slots,
+worker or kernel change is required. The desktop artwork uses one movable
+memory claim; fullscreen rendering adds no allocation.
+
+The build is two halves, and only the first is on `make`'s path.
+`tools/drmario_assets.py` (stdlib) decodes the capsule and virus cells and the
+speed/colour tables into `build/drmario-art/`, and `tools/drmario_audio.py`
+(stdlib) compiles the music there. Composing the two committed PNGs into the
+playfield screens, the animation patches and the three front screens needs
+Pillow, so that half's OUTPUT is committed in `apps/drmario/art/native/`, as
+1942's and the logo video's are, and `make drmarco-art` re-runs it by hand.
+`test-full`'s `drmarcoart` row checks that the committed bytes still match a
+fresh run.
 
 DrMarco is the displayed name and package identity. `make drmarco` and
 `make drmarcodisk` are the public targets; `drmario` and `drmariodisk` remain
@@ -155013,7 +155029,7 @@ Each VGA stream expands to 19,200 bytes; each CGA bank to 8,000 bytes. Only
 fullscreen entry/reentry decodes this trusted embedded art directly to VRAM.
 There is no new framebuffer. The right HUD reserves the doctor portrait;
 the game draws its own title, bottle boundary, score and state text over the
-surround. Capsule and bottle-virus tiles still require the local NES reference.
+surround. Capsule and bottle-virus tiles come from the committed NES reference.
 
 A desktop splash supplies controls and settings. `front.inc` draws a generated
 capsule-logo/checkerboard scene with DrMarco and virus sprites; H opens a help
@@ -155102,7 +155118,7 @@ keyboard typematic. BIOS-buffered action makes preserve taps shorter than
 one frame; repeats of held action keys are ignored. Timing is bounded and
 does not replay missed frames.
 
-Audio uses local-reference note arrangements compiled offline from the NES
+Audio uses note arrangements compiled at build time from the committed NES
 music sequencer ($DDEF–$E017); generated music stays in build/drmario-art.
 M selects FEVER / CHILL / OFF in the launcher or fullscreen; the HUD shows
 the selection. Initial launcher title/options audio uses WM_ONTIMER, suspends

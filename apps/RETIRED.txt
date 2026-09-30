@@ -61,7 +61,3 @@ instrument imgtest     # SPEC.md 94. The picture decoders' capability gate,
                        # driven by tests/img*.py off its own disk.
 instrument fptest      # SPEC.md 64. The floating-point gate. Not even built
                        # by `all` - its own target only.
-
-local      drmario     # SPEC.md 99. DrMarco retains user-supplied NES cell tiles.
-                       # make drmarco / drmarcodisk build DRMARCO.O88 and four
-                       # standalone disks; the source directory stays drmario.

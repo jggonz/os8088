@@ -10399,7 +10399,7 @@ SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
 # its widest. Hercules is the bigger board and was measured too - 8KB windowed,
 # 19KB fullscreen - so 19 is the deepest kern_small can ever be asked for.
 # `soak -k 'ddsmall'` is that measurement kept runnable (SPEC.md 24.5.5).
-SMALLOMIT_GAMES := $(BUILD)/skies.o88 $(BUILD)/pxstein.o88
+SMALLOMIT_GAMES := $(BUILD)/skies.o88 $(BUILD)/pxstein.o88 $(DM_SHIP)
 #   pxstein                 PIXELSTEIN 3D (SPEC.md 97.9, 24.5): a REQUIREMENT
 #                           the arena cannot meet. Its program part is a
 #                           ~33KB image with two 4KB map layouts and two
@@ -10413,6 +10413,13 @@ SMALLOMIT_GAMES := $(BUILD)/skies.o88 $(BUILD)/pxstein.o88
 #                           The door stays open: a 32x32-level, 48x64 arm
 #                           measured on os8088_5150_cga_128k would be a
 #                           SUBSTITUTION, and nobody has measured one
+#   drmarco (+ DRMARCO.*)   DrMarco (SPEC.md 100): the loader cannot place
+#                           it at all. Image 49,685 + bss 6,648 is 56,333
+#                           bytes in ONE claim, against a 52.5KB (53,760)
+#                           arena - `Load failed` before a byte of the
+#                           package runs, so it could not refuse in its own
+#                           words. Its three front screens go with it: they
+#                           are read by nothing else
 
 # --- ...AND THE READERS LEFT WITH NOTHING TO READ (SPEC.md 24.5.3) -----------
 #
@@ -11470,10 +11477,19 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
 # disk had eight spare clusters, 89's package is six of them and 93's twelve,
 # so the two could not both sit here - that is what started this, even though
 # it is no longer the reason.
+# DRMARCO IS THREE FILES AND A PACKAGE (SPEC.md 100): its splash and help
+# screens are DRMARCO.VGA/.HRC/.CGA, read at launch from the folder the
+# package was launched from, so they ride GAMES/ beside it on every disk that
+# carries it. They are committed build output (apps/drmario/art/native/, and
+# the rules at DrMarco's own block near the end of this file).
+DM_NATIVE := apps/drmario/art/native
+DM_SHIP := $(BUILD)/drmarco.o88 \
+           $(addprefix $(DM_NATIVE)/,DRMARCO.VGA DRMARCO.HRC DRMARCO.CGA)
 APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
               $(BUILD)/mines.o88 $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88 \
-              $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88
+              $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
+              $(DM_SHIP)
 
 # PIXELSTEIN 3D IS NOT ON apps360.img (SPEC.md 97.9, 24.6.1's dated
 # decision, taken 2026-09-13): that geometry sat at 313 of 354 clusters and
@@ -11485,7 +11501,12 @@ APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
 # ModPlug was RETIRED (SPEC.md 56.15). THE 360KB COMBO IS A FOURTH SITE and
 # does not take this list: it filters APPS_GAMES through COMBO_DROP, which
 # names the package there with its own ground (below, beside ETHER.DRV's).
-APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88,$(APPS_GAMES))
+#
+# DRMARCO IS NOT ON apps360.img EITHER, on the same rule and its own date
+# (2026-09-30): that disk was 354 of 354 clusters when DrMarco stopped being a
+# `local` package, and DrMarco is ~68 of them with its three front screens.
+# games360.img carries it, which is where a 360KB machine finds every game.
+APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88 $(DM_SHIP),$(APPS_GAMES))
 
 # The CORE PACKAGES (SPEC.md 24.3) are a SECOND copy on the system disk and
 # never a move, so the two lists above are unchanged and still carry every
@@ -12643,10 +12664,14 @@ imager:
 # drop is a statement about what the disk would carry, not the fix for the
 # overflow - that is a decision for whoever owns the field disk, and
 # tests/pxsdisk.py asserts the omission only when the image exists.
+#
+# DRMARCO (SPEC.md 100) goes on PIXELSTEIN's ground, with its three front
+# screens: ~68 clusters at 360 KB, a game and not a calibration instrument,
+# added 2026-09-30 when it stopped being a `local` package.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
               $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
-              $(BUILD)/pxstein.o88
+              $(BUILD)/pxstein.o88 $(DM_SHIP)
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 
@@ -13709,26 +13734,44 @@ $(BUILD)/1942-360.img: $(N1942DISK) apps/1942/README.TXT tools/os88disk.py
 	python3 tests/n1942sound.py
 all: $(N1942DISK)
 
-# Native DrMarco. NES cell tiles remain local; original surround is committed.
-DRMARIO_SOURCE ?= ../NES-Games-Disassembly/Dr. Mario
-.PHONY: drmarco drmarcodisk drmario drmariodisk drmario-assets drmario-source-check
-drmario-source-check:
-drmario-assets: | $(BUILD)
-	python3 tools/drmario_assets.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
-	python3 tools/drmario_audio.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
+# Native DrMarco (SPEC.md 100). EVERYTHING IT IS BUILT FROM IS COMMITTED:
+# the NES reference in reference/drmario/ (two files, pinned - its README.md is
+# the provenance and the decision) and the composed art in
+# apps/drmario/art/native/. So a plain `make` builds it on any clone, and it
+# ships in $(APPS_GAMES) like every other game.
+#
+# The art is committed as OUTPUT, not regenerated here, because composing it
+# needs Pillow and `make` is stdlib-only - 1942's and the logo video's
+# arrangement. `make drmarco-art` re-runs that half by hand after an edit to
+# either PNG, and test-full's `drmarcoart` row says whether the committed bytes still
+# match a fresh run. What IS run here is the stdlib half: the tile caches and
+# tables out of CHR_ROM.chr and bank_FF.asm, and the music.
+DM_NES := reference/drmario/CHR_ROM.chr reference/drmario/bank_FF.asm
+DM_ART := $(BUILD)/drmario-art
+DM_ARTSRC := apps/drmario/art/drmarco-screen.png apps/drmario/art/drmarco-splash.png
+DM_NATIVE_INC := $(addprefix $(DM_NATIVE)/,dm-anim-vga.inc dm-anim-cga.inc \
+                   dm-anim-vga.bin dm-anim-cga.bin dm-screen-vga.bin \
+                   dm-screen-cga.bin dm-front.inc)
+.PHONY: drmarco drmarcodisk drmario drmariodisk drmarco-art
 
-$(BUILD)/drmario-art/dm-tables.inc: tools/drmario_assets.py apps/drmario/art/drmarco-screen.png apps/drmario/art/drmarco-splash.png drmario-source-check | $(BUILD)
-	python3 tools/drmario_assets.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
+# One stamp for the three outputs of one run; macOS make is 3.81, which has
+# no grouped targets. The `test -f` is 1942's: a deleted side output re-runs
+# the importer rather than leaving the assembly to fail on a missing file.
+$(DM_ART)/.stamp: tools/drmario_assets.py $(DM_NES) | $(BUILD)
+	python3 tools/drmario_assets.py reference/drmario $(DM_ART)
+	@touch $@
+$(DM_ART)/dm-tables.inc $(DM_ART)/dm-vga.bin $(DM_ART)/dm-cga.bin: $(DM_ART)/.stamp
+	@test -f $@ || python3 tools/drmario_assets.py reference/drmario $(DM_ART)
 
-$(BUILD)/drmario-art/dm-music.inc: tools/drmario_audio.py drmario-source-check | $(BUILD)
-	python3 tools/drmario_audio.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
+$(DM_ART)/dm-music.inc: tools/drmario_audio.py reference/drmario/bank_FF.asm | $(BUILD)
+	python3 tools/drmario_audio.py reference/drmario $(DM_ART)
 
-# The graphics compiler emits these alongside dm-tables.inc; the phony source
-# check above refreshes the complete set, including a deleted side output.
-$(BUILD)/drmario-art/dm-anim-vga.inc $(BUILD)/drmario-art/dm-anim-cga.inc: $(BUILD)/drmario-art/dm-tables.inc
+# Needs Pillow; writes the COMMITTED art, and the preview PNGs into $(DM_ART).
+drmarco-art: | $(BUILD)
+	python3 tools/drmario_assets.py reference/drmario $(DM_ART) --art $(DM_NATIVE)
 
-$(BUILD)/drmario.bin: apps/drmario/drmario.asm apps/drmario/front.inc apps/drmario/audio.inc $(BUILD)/drmario-art/dm-music.inc $(BUILD)/drmario-art/dm-anim-vga.inc $(BUILD)/drmario-art/dm-anim-cga.inc apps/drmario/game.inc apps/drmario/video.inc apps/drmario/anim.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc $(BUILD)/drmario-art/dm-tables.inc
-	$(NASM) -f bin -w+error -I apps/ -I apps/drmario/ -I $(BUILD)/drmario-art/ -l $(BUILD)/drmario.lst -o $@ $<
+$(BUILD)/drmario.bin: apps/drmario/drmario.asm apps/drmario/front.inc apps/drmario/audio.inc apps/drmario/game.inc apps/drmario/video.inc apps/drmario/anim.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc $(DM_ART)/dm-tables.inc $(DM_ART)/dm-vga.bin $(DM_ART)/dm-cga.bin $(DM_ART)/dm-music.inc $(DM_NATIVE_INC)
+	$(NASM) -f bin -w+error -I apps/ -I apps/drmario/ -I $(DM_ART)/ -I $(DM_NATIVE)/ -l $(BUILD)/drmario.lst -o $@ $<
 
 $(BUILD)/drmarco.o88: $(BUILD)/drmario.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@
@@ -13736,19 +13779,16 @@ $(BUILD)/drmarco.o88: $(BUILD)/drmario.bin tools/os88pkg.py $(PKGZSTAMP)
 drmarco: $(BUILD)/drmarco.o88
 drmario: drmarco
 
-DM_FRONT_FILES := $(BUILD)/drmario-art/DRMARCO.VGA $(BUILD)/drmario-art/DRMARCO.CGA $(BUILD)/drmario-art/DRMARCO.HRC
-$(DM_FRONT_FILES): $(BUILD)/drmario-art/dm-tables.inc
-
-$(BUILD)/drmario.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_FILES)
+$(BUILD)/drmario.img: $(DM_SHIP) apps/drmario/README.md
 	python3 tools/os88disk.py -o $@ --size 1440 $^
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/drmario720.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_FILES)
+$(BUILD)/drmario720.img: $(DM_SHIP) apps/drmario/README.md
 	python3 tools/os88disk.py -o $@ --size 720 $^
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/drmario120.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_FILES)
+$(BUILD)/drmario120.img: $(DM_SHIP) apps/drmario/README.md
 	python3 tools/os88disk.py -o $@ --size 1200 $^
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/drmario360.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_FILES)
+$(BUILD)/drmario360.img: $(DM_SHIP) apps/drmario/README.md
 	python3 tools/os88disk.py -o $@ --size 360 $^
 	python3 tools/os88disk.py --verify $@
 drmariodisk: drmarcodisk
