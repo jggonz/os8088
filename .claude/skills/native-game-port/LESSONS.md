@@ -4,10 +4,10 @@ Ordered the way a run meets them. Numbers are from the run that made PR #206.
 
 ## Process
 
-1. **Ask the art policy before scouting.** The scouts recommended a CHR
+1. **Ask the art/match policy before scouting** (section 0 of SKILL.md; the user later also asked that levels and look MATCH the cartridge, which is why the policy now separates *matching* from *depending*). The scouts recommended a CHR
    importer; the architect planned it; the user vetoed it after launch. Stopping
    cost nothing only because the scout reports were reusable - relaunch with a
-   binding `ART AND AUDIO POLICY` paragraph in the shared brief that says it
+   binding `ART AND ASSET POLICY` paragraph in the shared brief that says it
    *overrides scout reports and earlier plan drafts*, skip the scout phase
    (`[].map`), and tell the architect to REVISE the existing plan, not restart.
    Changing the brief text invalidates Workflow's prompt cache for every agent
