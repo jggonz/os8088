@@ -28,7 +28,8 @@ what they draw, simulate and play.
 2. **Nintendo's marks are replaced with generated art.** The replacements are made with the
    codex CLI's image generation, the way DrMarco's splash and screen surround were made. The
    marks are the EXCITEBIKE logo, the NINTENDO banner plate on the track, and the
-   "(c)1984 NINTENDO" line. Everything else the cartridge draws is kept.
+   "(c)1984 NINTENDO" line, which is removed and not replaced: 8BitBike shows no copyright
+   line at all. Everything else the cartridge draws is kept.
 
 This plan supersedes **§0 (the ART AND AUDIO POLICY) of `docs/plans/EXCITEBIKE-PLAN.md`**, which
 required all-original art and sound. That file stays the design record of the engine: its §4
@@ -206,7 +207,7 @@ line, and nothing traced from the cartridge.
 |---|---|---|---|
 | G1 | the **EXCITEBIKE title logo**, tiles `$98-$AF` at title rows 8-9, columns 7-24 | 144x16, within those 24 tile ids plus any the import proves unused | an **8BITBIKE** wordmark in the title palette (`_off_000_D450_18`, 3 colours + ground), dynamic and italic like a motocross decal. It is generated large, then reduced |
 | G2 | the **NINTENDO plate** on the track banner, NT0 rows 5-7, columns 11-20 | 80x24, the plate end caps `$96`/`$97` kept | an **8BITBIKE** plate in the style of the cartridge's own BEST plate (`$93-$95`), so the banner alternates 8BITBIKE / BEST every 256px as it alternated NINTENDO / BEST |
-| G3 | **"(c)1984 NINTENDO"**, title row 24 | one text row | **"(c)2026 OS8088"** in the cartridge's own font (`$3A` is ©). No generation needed |
+| G3 | **"(c)1984 NINTENDO"**, title row 24 | one text row | **nothing**: the row is left blank (`$FC`). The game shows no copyright line anywhere, and neither does G5 (owner, 2026-09-30) |
 | G4 | the name in the text screens: "EXCITEBIKE" in states `07` and `09` | text rows | **8BITBIKE** in the cartridge font |
 | G5 | the **desktop splash** `8BITBIKE.VGA`/`.CGA`/`.HRC`, which replaces `EXBSPL.*` | 320x200 native | a generated illustrated title in DrMarco's SPLASH shape. The composition reference is our own render of the in-game title with G1; the character reference is the imported rider pose sheet. It keeps a pure-black area for the runtime ENTER/H lettering |
 | G6 | the **Wire catalog picture**, at release time | the catalog's format | from G5 |
@@ -616,8 +617,6 @@ cartridge: the stepping, the 4-frame cadence, heat, lanes and gravity. Every tab
 2. **PR shape.** Merge #206 now as the engine baseline (it is `local` and ships nowhere) and
    bring each wave as its own PR, or hold #206 for all nine waves. The recommendation is the
    first: nine waves on 30,000 lines is not reviewable.
-3. **The copyright line (G3).** "(c)2026 OS8088" is the placeholder. Say if you want other
-   wording.
 
 ## Wave summary
 
@@ -640,4 +639,5 @@ cartridge: the stepping, the 4-frame cadence, heat, lanes and gravity. Every tab
   (`d9313c10`, `reference/1942/README.md`, `tests/n1942.py`) and DrMarco's art pipeline (#204,
   #207). Main (#207, #208) merged into the branch at `7ba6b6ca`; `make` green, fast tier 52/52.
   Codex image generation verified with a throwaway prompt (1254x1254 PNG). Owner decisions: the
-  marks replaced by generated art; the name 8BitBike; ship on the standard disks where it fits.
+  marks replaced by generated art; the name 8BitBike; ship on the standard disks where it fits;
+  no copyright line on any screen.
