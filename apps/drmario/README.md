@@ -1,35 +1,45 @@
 # DrMarco for os8088
 
 A native 8086 single-player adaptation of Nintendo's Dr. Mario (1990), using
-the supplied NES disassembly as the gameplay reference and its capsule/virus
+the NES disassembly as the gameplay reference and its capsule/virus
 tiles, with original generated DrMarco screen artwork. No NES CPU or PPU is
 emulated. The feature roadmap is [DRMARCO_PLAN.MD](../../DRMARCO_PLAN.MD).
 
-Build in this worktree:
+Build it from any clone. Everything it needs is committed:
 
 ```
-make drmarco
-make drmarcodisk
+make drmarco        # build/drmarco.o88 (a plain `make` builds it too)
+make drmarcodisk    # four standalone floppies, build/drmario*.img
+make drmarco-art    # re-compose the committed art after a PNG edit (Pillow)
 ```
 
-The standalone disks are 360 KB, 720 KB, 1.2 MB and 1.44 MB. This application
-is registered as `local`: standard os8088 builds and release images do not
-require or redistribute the user-supplied NES assets.
-The previous `drmario` and `drmariodisk` commands remain aliases. Source folders,
-`DRMARIO_SOURCE`, and `build/drmario*.img` disk paths remain stable; the package
-is now `build/drmarco.o88` and appears on disk as `DRMARCO.O88`.
+DrMarco ships like every other game: `DRMARCO.O88` in `GAMES/` on the
+1.44 MB, 1.2 MB and 720 KB apps disks, on `games360.img`, on the
+everything floppy and on the live media. It is not on `apps360.img` (full),
+the 360 KB combo, or the kern_small disks, where it cannot be loaded
+(SPEC.md §100). The standalone disks are 360 KB, 720 KB, 1.2 MB and 1.44 MB.
+The previous `drmario` and `drmariodisk` commands remain aliases. Source
+folders and `build/drmario*.img` disk paths remain stable; the package is
+`build/drmarco.o88` and appears on disk as `DRMARCO.O88`.
 
-The default reference directory is `../NES-Games-Disassembly/Dr. Mario`.
-Override it with `make drmarco DRMARIO_SOURCE='/path/to/Dr. Mario'`.
-The supplied reference is revision `df2c8e5`; the importer records SHA-256
-hashes of both inputs in `build/drmario-art/dm-source.txt`.
-NES graphics and music are imported into `build/drmario-art/`, never committed.
-`tools/drmario_audio.py` compiles the music; `dm-music.json` records its source
-hash and phrase counts.
-`make drmario-assets` refreshes the import. Open `DRMARCO.O88` from the generated
-application disk. Keep `DRMARCO.VGA`, `DRMARCO.CGA`, and `DRMARCO.HRC` beside it
-when copying the game: these supporting files contain the splash/help artwork.
-All four disk images include them. Gameplay assets and music remain embedded.
+The NES reference is committed in
+[`reference/drmario/`](../../reference/drmario/README.md): `CHR_ROM.chr` and
+`bank_FF.asm` from NES-Games-Disassembly revision `df2c8e5`, pinned by
+SHA-256. `tools/drmario_assets.py` refuses any other bytes, and records the
+hashes it read in `build/drmario-art/dm-source.txt`. It decodes the capsule
+and virus tiles and the gameplay tables into `build/drmario-art/`, and
+`tools/drmario_audio.py` compiles the music there (`dm-music.json` records its
+source hash and phrase counts). Both are stdlib Python.
+
+Composing the artwork needs Pillow, so that half's output is committed in
+[`art/native/`](art/native/) instead of being built by `make`:
+the playfield screens, the animation patches and the splash/help files
+`DRMARCO.VGA`, `DRMARCO.CGA` and `DRMARCO.HRC`. Run `make drmarco-art` after
+changing either PNG and commit the result; the `drmarcoart` row of `make
+test-full` fails if the committed bytes no longer match a fresh run. Keep
+the three `DRMARCO.*` files beside `DRMARCO.O88` when copying the game: they
+hold the splash/help artwork. Every disk that carries the game carries them.
+Gameplay assets and music remain embedded.
 
 The original doctor and laboratory surround are committed in
 [`art/drmarco-screen.png`](art/drmarco-screen.png), with the built-in imagegen

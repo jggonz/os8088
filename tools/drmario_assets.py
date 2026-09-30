@@ -1,14 +1,48 @@
 #!/usr/bin/env python3
-"""Import Dr. Mario's local reference into native XT caches (no ROM committed)."""
+"""Import DrMarco's committed NES reference into native XT caches (SPEC.md 100).
+
+Two halves, and only the first is on `make`'s path (SPEC.md 100):
+
+  drmario_assets.py SOURCE OUT
+      STDLIB ONLY. Checks SOURCE's two files against their SHA-256 pins and
+      writes the capsule/virus tile caches and the speed/colour tables to OUT.
+
+  drmario_assets.py SOURCE OUT --art NATIVE
+      ...and the PILLOW half as well: the two committed PNGs composed into
+      the playfield screens, the animation patches and the DRMARCO.VGA/.CGA/
+      .HRC front screens, written to NATIVE (apps/drmario/art/native/, which
+      is COMMITTED - `make drmarco-art` is the command), with the preview PNGs
+      in OUT. It is run by hand when the art changes, the way tools/1942art.py
+      and tools/os88logovid.py are, so a plain `make` needs no Pillow.
+"""
 import argparse
 import hashlib
 from pathlib import Path
 import re
 import struct
-from PIL import Image, ImageDraw
+
+Image = ImageDraw = None          # Pillow, loaded by the --art half alone
 
 
-ART = Path(__file__).resolve().parents[1] / 'apps/drmario/art/drmarco-screen.png'
+def load_pil():
+    global Image, ImageDraw
+    from PIL import Image, ImageDraw
+
+
+ROOT = Path(__file__).resolve().parents[1]
+ART = ROOT / 'apps/drmario/art/drmarco-screen.png'
+# reference/drmario/README.md is the provenance; these are the bytes it names.
+PINS = {'CHR_ROM.chr': '853123999e15a05723cfaa1f928980d294d985dfcea5da2ad407afd56d0586a3',
+        'bank_FF.asm': '90466e12c051d210054b3d85f314988a61aa7ca1068774400af7ba213400accb'}
+
+
+def check_source(source):
+    """Refuse any input that is not the pinned reference, named by file."""
+    for name, want in PINS.items():
+        got = hashlib.sha256((source / name).read_bytes()).hexdigest()
+        if got != want:
+            raise SystemExit(f'drmario: {source / name} is SHA-256 {got}, '
+                             f'not the pinned {want} (reference/drmario/README.md)')
 VGA_PALETTE = [(0,0,0),(48,96,252),(252,48,64),(252,224,32),
                (20,40,120),(120,16,20),(120,96,8),(252,252,252)]
 CGA_PALETTE = [(0,0,0),(85,255,85),(255,85,85),(255,255,85)]
@@ -71,7 +105,7 @@ def screen_runs(data, vga=False):
     return out
 
 
-def screen_art(out):
+def screen_art(out, native):
     """Compile generated art into native video layouts; no runtime conversion."""
     source = Image.open(ART).convert('RGB')
     palette = Image.new('P', (1,1))
@@ -88,7 +122,7 @@ def screen_art(out):
         preview.putpalette(sum((list(c) for c in colors), []) + [0]*(768-len(colors)*3))
         preview.putdata(pixels)
         screen_surround(preview, tag)
-        animation_art(out, tag, preview)
+        animation_art(out, native, tag, preview)
         # Mascots replace the small decorations; the doctor stays in the background.
         preview.paste(0,(240,174 if tag=='vga' else 144,312,200 if tag=='vga' else 170))
         pixels = bytes(preview.getdata())
@@ -98,11 +132,11 @@ def screen_art(out):
                      for bank in range(2)]
         else:
             banks = [pixels[plane::4] for plane in range(4)]
-        (out/f'dm-screen-{tag}.bin').write_bytes(b''.join(screen_runs(b, tag=='vga') for b in banks))
+        (native/f'dm-screen-{tag}.bin').write_bytes(b''.join(screen_runs(b, tag=='vga') for b in banks))
         preview.save(out/f'drmarco-{tag}-art.png')
 
 
-def front_art(out):
+def front_art(out, native):
     """Disk-resident splash/help: indexed game artwork, one bounded row at a time."""
     ega=[(0,0,0),(0,0,170),(0,170,0),(0,170,170),(170,0,0),(170,0,170),
          (170,85,0),(170,170,170),(85,85,85),(85,85,255),(85,255,85),
@@ -162,9 +196,9 @@ def front_art(out):
             directory.extend(struct.pack('<H',shared[row]))
         blob=header+directory+payload
         if len(blob)>65535:raise ValueError('frontend graphics exceed one segment')
-        (out/f'DRMARCO.{tag}').write_bytes(blob)
+        (native/f'DRMARCO.{tag}').write_bytes(blob)
         sizes.append(f'DM_FRONT_{tag}_SIZE equ {len(blob)}')
-    (out/'dm-front.inc').write_text('\n'.join(sizes)+'\n')
+    (native/'dm-front.inc').write_text('\n'.join(sizes)+'\n')
 
 
 def screen_surround(screen, tag):
@@ -215,7 +249,7 @@ def screen_surround(screen, tag):
     panel((28,height-12,315,height-1))     # controls
 
 
-def animation_art(out, tag, background):
+def animation_art(out, native, tag, background):
     """Original code-drawn germs and poses of the existing DrMarco portrait.
 
     Each actor owns a fixed rectangle. Compile the union of changed native
@@ -225,14 +259,14 @@ def animation_art(out, tag, background):
     The doctor patches only the lens interiors, with no clear-before-draw pass.
     """
     vga = tag == 'vga'
-    def native(im):
+    def to_native(im):
         p = bytes(im.getdata())
         if vga:
             return [p[i::4] for i in range(4)]
         return [bytes(sum(p[y*320+x+j] << (6-2*j) for j in range(4))
                       for y in range(bank,200,2) for x in range(0,320,4))
                 for bank in range(2)]
-    base = native(background)
+    base = to_native(background)
     actors = []
     # Keep the glasses, head and body completely stationary. Close the eyes
     # inside the lenses, then restore the original pixels on reopening.
@@ -285,7 +319,7 @@ def animation_art(out, tag, background):
     pointers = []
     stored = {}
     for actor, poses in enumerate(actors):
-        frames = [native(im) for im in poses]
+        frames = [to_native(im) for im in poses]
         reference = base
         changed_planes = [[i for i,v in enumerate(reference[plane])
                            if any(f[plane][i] != v for f in frames)]
@@ -314,13 +348,14 @@ def animation_art(out, tag, background):
             pointers.append(stored[encoded])
         for pose, im in enumerate(poses):
             im.save(out/f'dm-{tag}-actor{actor}-{pose}.png')
-    (out/f'dm-anim-{tag}.bin').write_bytes(blob)
-    (out/f'dm-anim-{tag}.inc').write_text(
+    (native/f'dm-anim-{tag}.bin').write_bytes(blob)
+    (native/f'dm-anim-{tag}.inc').write_text(
         f'dm_animptrs_{tag}: dw '+','.join(f'dm_animdata_{tag}+{p}' for p in pointers)+'\n'+
         f'dm_animdata_{tag}: incbin "dm-anim-{tag}.bin"\n')
 
 
-def build(source, out):
+def build(source, out, native=None):
+    check_source(source)
     chrdata = (source / 'CHR_ROM.chr').read_bytes()
     bank = (source / 'bank_FF.asm').read_text()
     if len(chrdata) != 32768:
@@ -362,11 +397,15 @@ def build(source, out):
         return bytes(sum(row[x+j] << (6-2*j) for j in range(4)) for row in pix for x in range(0,16,4))
     # Font is the OS font at runtime; these caches are exclusively game art.
     out.mkdir(parents=True, exist_ok=True)
-    screen_art(out)
     (out/'dm-vga.bin').write_bytes(b''.join(map(vgacell,cells)))
     (out/'dm-cga.bin').write_bytes(b''.join(map(cgacell,cells)))
-    front_art(out)
-    text = ['; Generated from local Dr. Mario bank_FF.asm. Do not edit.']
+    if native is not None:
+        # front_art reads the dm-vga.bin just written for its help panel.
+        load_pil()
+        native.mkdir(parents=True, exist_ok=True)
+        screen_art(out, native)
+        front_art(out, native)
+    text = ['; Generated from reference/drmario/bank_FF.asm. Do not edit.']
     for name, addr, n in [('dm_speeds',0xa795,81), ('dm_pair_a',0xa7fd,9),
                            ('dm_viruscolors',0xa7ed,16), ('dm_pair_b',0xa806,9), ('dm_heights',0xa3de,21)]:
         data = table(addr,n)
@@ -380,4 +419,6 @@ def build(source, out):
 if __name__ == '__main__':
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('source',type=Path);p.add_argument('output',type=Path)
-    a=p.parse_args();build(a.source,a.output)
+    p.add_argument('--art',type=Path,metavar='NATIVE',
+                   help='also run the Pillow half, writing the committed art to NATIVE')
+    a=p.parse_args();build(a.source,a.output,a.art)

@@ -25,7 +25,7 @@ SPEC.md 19's 1.2MB disk, plus the 360KB-only media disk and the three
 360KB-only category disks of SPEC.md 24.6 -- office, network and games, which
 at that geometry are the ONLY published home of the spreadsheet and the chart
 viewer), and
-`apps-all`/`word`/`cword`/`scribe`/`runcpm`/`c64`/`apple2`/`paccman`/`weave`/`loom`
+the `apps-all` sets/`word`/`cword`/`scribe`/`runcpm`/`c64`/`apple2`/`paccman`/`weave`/`loom`
 and the live media
 (`make live`, SPEC.md 80) are on-demand targets that a tree without the C
 toolchain cannot build at all.
@@ -79,13 +79,20 @@ MANIFEST = [
                               "burning to a disc or booting in an emulator. A CD is "
                               "read-only, so settings and saved files last until "
                               "power-off; the USB image keeps them."),
-    ("apps-all.img",   False, "Every program on one 1.44MB software disk, including both "
-                              "word processors, the story reader, the CP/M emulator, the "
-                              "Commodore 64, the Apple II Plus and the Weave programs and "
-                              "their editor. Use this instead of apps.img if you would "
-                              "rather swap one disk than nine."),
-    ("apps-all-120.img", False, "The same everything-disk at 1.2MB. There is no 720KB or "
-                              "360KB version -- the programs do not fit at those sizes."),
+    # THE EVERYTHING SETS (SPEC.md 19.10): as many disks as the payload needs,
+    # so they are named by the LIST FILE the build writes, not here. An "@"
+    # row expands to the images that list names; each must match the set's
+    # own pattern or the zip refuses, so the allowlist stays an allowlist.
+    ("@apps-all.list", False, "Every program, on a set of 1.44MB software disks, "
+                              "including both word processors, the story reader, "
+                              "the CP/M emulator, the Commodore 64, the Apple II "
+                              "Plus and the Weave programs and their editor. "
+                              "CONTENTS.TXT on each disk says which programs are "
+                              "on which. Use these instead of apps.img if you "
+                              "would rather have every program than the "
+                              "selection."),
+    ("@apps-all-120.list", False, "The same everything set on 1.2MB disks. There "
+                              "is no 720KB or 360KB set."),
     ("word.img",       False, "Word processor disk, 1.44MB."),
     ("word720.img",    False, "Word processor disk, 720KB."),
     ("word120.img",    False, "Word processor disk, 1.2MB."),
@@ -319,6 +326,25 @@ def main():
 
     picked, missing, skipped = [], [], []
     for name, required, desc in MANIFEST:
+        if name.startswith("@"):
+            lst = os.path.join(bd, name[1:])
+            if not os.path.isfile(lst):
+                skipped.append(name[1:])
+                continue
+            stem = re.escape(name[1:-len(".list")])
+            with open(lst) as f:
+                imgs = [os.path.basename(l.strip()) for l in f if l.strip()]
+            for i, img in enumerate(imgs):
+                if not re.fullmatch(stem + r"-\d+\.img", img) or \
+                        not os.path.isfile(os.path.join(bd, img)):
+                    print("mkzip: %s names %r, which is not a disk of that set "
+                          "in %s -- refusing." % (lst, img, bd), file=sys.stderr)
+                    return 1
+                picked.append((img, os.path.join(bd, img),
+                               "Disk %d of %d. %s" % (i + 1, len(imgs), desc)
+                               if i == 0 else "Disk %d of %d of the same set."
+                               % (i + 1, len(imgs))))
+            continue
         p = os.path.join(bd, name)
         if os.path.isfile(p):
             picked.append((name, p, desc))

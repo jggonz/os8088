@@ -78,11 +78,11 @@ def help_reveal(ui,p):
     if p.b('frontcolor'):
         # The clipped fallback converts native planes to packed pixels. Check
         # that conversion against the uncompressed indexed image as well.
-        resource=(D.ROOT/'build/drmario-art/DRMARCO.VGA').read_bytes()
+        resource=(D.ROOT/'apps/drmario/art/native/DRMARCO.VGA').read_bytes()
         offset=struct.unpack_from('<H',resource,10+60*2)[0]
         p.call('frontunpack',si=offset,es=int.from_bytes(p.data('artseg',2),'little'))
         p.call('frontpacked',es=p.base>>4)
-        row=list(Image.open(D.ROOT/'build/drmario-art/drmarco-vga-splash.png').getdata())[60*432:61*432]
+        row=list(Image.open(D.preview('drmarco-vga-splash.png')).getdata())[60*432:61*432]
         expected=bytes((row[x]<<4)|row[x+1] for x in range(0,432,2))
         assert m.read(p.addr('queue')+216,216)==expected, 'packed clipped fallback'
     p.put('help',1);p.call('frontpaint')
@@ -112,7 +112,7 @@ def arm(tag, sym):
         art=splash.crop((x+24,y+14*scale,x+420,y+70*scale))
         colors=art.getcolors(100000)
         assert len(colors)>5 if tag=='vga' else len(colors)==2
-        preview=Image.open(D.ROOT/f'build/drmario-art/drmarco-{"hrc" if tag=="herc" else tag}-splash.png').convert('RGB')
+        preview=Image.open(D.preview(f'drmarco-{"hrc" if tag=="herc" else tag}-splash.png')).convert('RGB')
         # Compare all static pixels, including the final short batch. Only the
         # runtime menu lettering is excluded from the uncompressed art oracle.
         expected=preview.copy()
@@ -139,7 +139,7 @@ def arm(tag, sym):
         assert settings==p.data('level',2) and board==p.data('board',128)
         help_image=shot(ui,tag,'help')
         assert splash.tobytes()!=help_image.tobytes()
-        expected=Image.open(D.ROOT/f'build/drmario-art/drmarco-{"hrc" if tag=="herc" else tag}-help.png').convert('RGB')
+        expected=Image.open(D.preview(f'drmarco-{"hrc" if tag=="herc" else tag}-help.png')).convert('RGB')
         actual=help_image.crop((x+8,y,x+440,y+132*scale))
         writing=(16,12*scale,312,126*scale)
         expected.paste(0,writing);actual.paste(0,writing)
@@ -177,6 +177,7 @@ if __name__=='__main__':
     ap=argparse.ArgumentParser()
     ap.add_argument('--arm',choices=('vga','cga','herc','all'),default='all')
     a=ap.parse_args()
+    (D.ROOT/'build/drmario-proof').mkdir(parents=True,exist_ok=True)
     sym=D.symbols()
     for tag in (('vga','cga','herc') if a.arm=='all' else (a.arm,)):
         arm(tag,sym)

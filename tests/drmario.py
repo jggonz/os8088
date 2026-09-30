@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Native guest gameplay, pixel equivalence and XT cycle measurements.
 
-Standalone opt-in gate: requires the user's local Dr. Mario reference assets.
+Reads the committed NES reference (reference/drmario/) and the compiler's
+preview PNGs, which `make` does not write - the art half needs Pillow and its
+output is committed (SPEC.md 100) - so preview() re-runs it into build/.
 """
 import argparse
 import json
@@ -14,7 +16,16 @@ import sys
 import tempfile
 from PIL import Image
 ROOT=Path(__file__).resolve().parents[1]
-SOURCE=Path(os.environ.get('DRMARIO_SOURCE','../NES-Games-Disassembly/Dr. Mario'))
+SOURCE=Path(os.environ.get('DRMARIO_SOURCE',ROOT/'reference/drmario'))
+PREVIEW=ROOT/'build/drmario-art/preview'
+
+
+def preview(name):
+    """The compiler's uncompressed oracle image `name`, generated on first use."""
+    if not (PREVIEW/'native').is_dir():
+        subprocess.run([sys.executable,'tools/drmario_assets.py',str(SOURCE),str(PREVIEW),
+                        '--art',str(PREVIEW/'native')],cwd=ROOT,check=True)
+    return PREVIEW/name
 sys.path.insert(0,str(ROOT/'tools'))
 import os88marty as M
 import os88ui
@@ -30,7 +41,8 @@ def symbols():
         p=Path(td)/'probe.asm';b=Path(td)/'probe.bin'
         p.write_text(source+'\n'+'\n'.join('dw '+n for n in names))
         subprocess.run(['nasm','-f','bin','-I','apps/','-I','apps/drmario/',
-            '-I','build/drmario-art/','-o',str(b),str(p)],cwd=ROOT,check=True)
+            '-I','build/drmario-art/','-I','apps/drmario/art/native/',
+            '-o',str(b),str(p)],cwd=ROOT,check=True)
         return dict(zip(names,struct.unpack('<%dH'%len(names),b.read_bytes()[-2*len(names):])))
 
 
@@ -119,7 +131,7 @@ def check_pixels(p,tag,raw):
     # Compare every actor to the compiler's uncompressed pose oracle, including
     # black restoration pixels. The guest uses compact native span streams.
     for actor,pose in enumerate(p.data('actorpose',4)):
-        art=Image.open(ROOT/f'build/drmario-art/dm-{tag}-actor{actor}-{pose}.png')
+        art=Image.open(preview(f'dm-{tag}-actor{actor}-{pose}.png'))
         if actor==0:
             x0,x1,y0,y1=240,320,64 if tag=='vga' else 52,172 if tag=='vga' else 144
         else:
@@ -149,7 +161,7 @@ def check_pixels(p,tag,raw):
     # Opaque glyphs may update only their writing surfaces. Check the whole
     # static surround after moves, clears, pause, animation and mode reentry,
     # including clipboard edges that blank HUD rows used to overwrite.
-    art=Image.open(ROOT/f'build/drmario-art/drmarco-{tag}-art.png')
+    art=Image.open(preview(f'drmarco-{tag}-art.png'))
     mutable=[(92,28 if tag=='vga' else 20,228,228 if tag=='vga' else 188),
              (132,8,188,16),(32,230 if tag=='vga' else 190,32+8*len(footer),238 if tag=='vga' else 198),
              (8,32,72,180),(240,32,304,40),
@@ -194,7 +206,7 @@ def gameplay(p,tag):
     # Compare the actual 8088 RLE decoder against an uncompressed image.
     result['background_ms']=p.call('background')
     raw=video(p,tag)
-    art=Image.open(ROOT/f'build/drmario-art/drmarco-{tag}-art.png')
+    art=Image.open(preview(f'drmarco-{tag}-art.png'))
     assert bytes(v for row in pixels(p,tag,raw) for v in row)==bytes(art.getdata())
     p.call('invalidate');p.call('framepaint')
     # All levels, bounded construction, exact counts and no pre-cleared runs.

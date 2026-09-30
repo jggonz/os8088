@@ -13,15 +13,17 @@ animation are implemented incrementally; the complete roadmap remains open.
 - Implementation: `apps/drmario/{drmario.asm,game.inc,video.inc}`.
 - Asset compiler: `tools/drmario_assets.py`; guest gate: `tests/drmario.py`.
 - Contract: `SPEC.md` section 99; build: `make drmarco drmarcodisk`.
-- Reference: `../NES-Games-Disassembly/Dr. Mario/bank_FF.asm`,
-  `bank_ram.inc`, `CHR_ROM.chr`, and annotated disassemblies in `_misc/`.
+- Reference: `reference/drmario/bank_FF.asm` and `CHR_ROM.chr`, committed
+  and pinned (2026-09-30). `bank_ram.inc` and the annotated disassemblies in
+  `_misc/` stay in NES-Games-Disassembly `df2c8e5`; the build reads neither.
 - Already implemented: 8x16 bottle, three colors, matches of four or more,
   connected halves, detachment, gravity, cascades, rotation and left kick,
   next capsule, level/speed selection, periodic speed increases, scoring,
   pause, blocked-spawn game over, and progression through level 20.
-- Original screen art does not remove the current dependency on NES capsule
-  and bottle-virus tiles or gameplay tables. Keep the application `local`
-  until those assets have their own replacement and distribution review.
+- The NES capsule and bottle-virus tiles and gameplay tables are still taken
+  from the NES reference, now COMMITTED in `reference/drmario/` by the
+  owner's decision (2026-09-30), so the application is no longer `local`: a
+  plain `make` builds it and it ships in `GAMES/` (SPEC.md section 100).
 
 ## Delivery order
 
@@ -89,7 +91,7 @@ animation are implemented incrementally; the complete roadmap remains open.
 ### 5. Audio
 
 - [x] Implement FEVER / CHILL / OFF selection and gameplay arrangements through
-  the OS sound service. Music is compiled from the local NES reference into
+  the OS sound service. Music is compiled from the committed NES reference into
   build-only assets; OPL patches and speaker tones are native arrangements.
 - [x] Add title/options, stage-clear and game-over music for existing scenes.
 - [ ] Add versus and ending music alongside those future game modes/scenes.
@@ -204,7 +206,7 @@ separate from user-supplied reference assets.
 
 - 2026-09-28: Audio implemented for current single-player scenes. M selects
   FEVER/CHILL/OFF in either view; the fullscreen HUD shows the selection.
-  Local NES note data is compiled offline with source hashes, repeats, shared
+  NES note data is compiled at build time with source hashes, repeats, shared
   tempo/transposition and phrase deduplication. Three OPL music voices plus an
   effect voice serve AdLib and Sound Blaster; the speaker uses the lead voice
   with effect priority. Title/options, clear and loss music and eight gameplay

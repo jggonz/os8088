@@ -13,7 +13,7 @@ walker - never out of the Makefile's variables, which is the trap SPEC.md
     disks' games (24.5's omission, with 97.9's ground - ASSERTED, since the
     registry's wants= builds build/smallapps360.img for this row), nor on
     combo.img (COMBO_DROP: the 360KB field disk, wants= as well); and
-    apps-all.img, which needs the C toolchain, is checked when it exists;
+    the everything set, which needs the C toolchain, is checked when it exists;
   * the packed file is <= 56KB, the ceiling the Makefile asserts where the
     file is made, read back here off the disk it landed on;
   * its parts run is under SPEC.md 20.12.7's 128 sectors, decoded out of
@@ -85,14 +85,18 @@ def main():
     else:
         print("   (%s not built: `make combo` overflows 354 clusters on main "
               "already, this package dropped; COMBO_DROP names it)" % combo)
-    allimg = "build/apps-all.img"
-    if os.path.exists(allimg):
-        on = has(vol(allimg))
-        check(on and "GAMES" in on[0][0].upper(),
-              "apps-all.img carries %s in GAMES/ (%s)" % (FILE, on))
+    # the everything SET (SPEC.md 19.10): the game is on exactly one disk
+    # of it, in GAMES/, and build/apps-all.list names the disks
+    alllist = "build/apps-all.list"
+    if os.path.exists(alllist):
+        imgs = [l.strip() for l in open(alllist) if l.strip()]
+        ons = [(i, has(vol(i))) for i in imgs]
+        ons = [(i, on) for i, on in ons if on]
+        check(len(ons) == 1 and "GAMES" in ons[0][1][0][0].upper(),
+              "the everything set carries %s in GAMES/ on one disk (%s)"
+              % (FILE, ons))
     else:
-        print("   (%s not built: `make allapps` needs the C toolchain; PLAN 4.4's "
-              "arithmetic: 2,720 + 31 clusters of 2,847)" % allimg)
+        print("   (%s not built: `make allapps` needs the C toolchain)" % alllist)
     # the file itself, and its parts run. THE FILE IS NOT THE IMAGE
     # (CLAUDE.md's PKGZ rule): the 56KB ceiling is about the FILE on the
     # floppy, so `raw` is what it reads; the parts table is decoded out of

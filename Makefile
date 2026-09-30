@@ -10399,7 +10399,7 @@ SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
 # its widest. Hercules is the bigger board and was measured too - 8KB windowed,
 # 19KB fullscreen - so 19 is the deepest kern_small can ever be asked for.
 # `soak -k 'ddsmall'` is that measurement kept runnable (SPEC.md 24.5.5).
-SMALLOMIT_GAMES := $(BUILD)/skies.o88 $(BUILD)/pxstein.o88
+SMALLOMIT_GAMES := $(BUILD)/skies.o88 $(BUILD)/pxstein.o88 $(DM_SHIP)
 #   pxstein                 PIXELSTEIN 3D (SPEC.md 97.9, 24.5): a REQUIREMENT
 #                           the arena cannot meet. Its program part is a
 #                           ~33KB image with two 4KB map layouts and two
@@ -10413,6 +10413,13 @@ SMALLOMIT_GAMES := $(BUILD)/skies.o88 $(BUILD)/pxstein.o88
 #                           The door stays open: a 32x32-level, 48x64 arm
 #                           measured on os8088_5150_cga_128k would be a
 #                           SUBSTITUTION, and nobody has measured one
+#   drmarco (+ DRMARCO.*)   DrMarco (SPEC.md 100): the loader cannot place
+#                           it at all. Image 49,685 + bss 6,648 is 56,333
+#                           bytes in ONE claim, against a 52.5KB (53,760)
+#                           arena - `Load failed` before a byte of the
+#                           package runs, so it could not refuse in its own
+#                           words. Its three front screens go with it: they
+#                           are read by nothing else
 
 # --- ...AND THE READERS LEFT WITH NOTHING TO READ (SPEC.md 24.5.3) -----------
 #
@@ -11470,10 +11477,19 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
 # disk had eight spare clusters, 89's package is six of them and 93's twelve,
 # so the two could not both sit here - that is what started this, even though
 # it is no longer the reason.
+# DRMARCO IS THREE FILES AND A PACKAGE (SPEC.md 100): its splash and help
+# screens are DRMARCO.VGA/.HRC/.CGA, read at launch from the folder the
+# package was launched from, so they ride GAMES/ beside it on every disk that
+# carries it. They are committed build output (apps/drmario/art/native/, and
+# the rules at DrMarco's own block near the end of this file).
+DM_NATIVE := apps/drmario/art/native
+DM_SHIP := $(BUILD)/drmarco.o88 \
+           $(addprefix $(DM_NATIVE)/,DRMARCO.VGA DRMARCO.HRC DRMARCO.CGA)
 APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
               $(BUILD)/mines.o88 $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88 \
-              $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88
+              $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
+              $(DM_SHIP)
 
 # PIXELSTEIN 3D IS NOT ON apps360.img (SPEC.md 97.9, 24.6.1's dated
 # decision, taken 2026-09-13): that geometry sat at 313 of 354 clusters and
@@ -11485,7 +11501,12 @@ APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
 # ModPlug was RETIRED (SPEC.md 56.15). THE 360KB COMBO IS A FOURTH SITE and
 # does not take this list: it filters APPS_GAMES through COMBO_DROP, which
 # names the package there with its own ground (below, beside ETHER.DRV's).
-APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88,$(APPS_GAMES))
+#
+# DRMARCO IS NOT ON apps360.img EITHER, on the same rule and its own date
+# (2026-09-30): that disk was 354 of 354 clusters when DrMarco stopped being a
+# `local` package, and DrMarco is ~68 of them with its three front screens.
+# games360.img carries it, which is where a 360KB machine finds every game.
+APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88 $(DM_SHIP),$(APPS_GAMES))
 
 # The CORE PACKAGES (SPEC.md 24.3) are a SECOND copy on the system disk and
 # never a move, so the two lists above are unchanged and still carry every
@@ -12059,45 +12080,41 @@ zset:
 # =============================================================================
 # THE EVERYTHING DISK (ON DEMAND: `make allapps`) - SPEC.md 19.10
 # =============================================================================
-# build/apps-all.img: ONE 1.44MB floppy with every application this project
-# ships on it, including the nine that have their own disks and therefore
-# never appear on the shipped apps disk - FROTZ (SPEC.md 61), WORD (SPEC.md
-# 65), CWORD (SPEC.md 73.12), PACCMAN (SPEC.md 91), RUNCPM (SPEC.md 74), C64
-# (docs/C64-SPEC.md), APPLE2 (docs/APPLE2-SPEC.md) and the Weave family's two,
-# WEAVE and LOOM (WEAVE-SPEC 1.2). SCRIBE has its own disk and is deliberately
-# NOT here - it is a FORK of WORD (SPEC.md 67) and the two would collide.
+# build/apps-all-N.img: EVERY application this project ships, on as many
+# 1.44MB floppies as it takes - and the same set at 1.2MB as
+# build/apps-all-120-N.img. It includes the nine that have their own disks
+# and therefore never appear on the shipped apps disk - FROTZ (SPEC.md 61),
+# WORD (SPEC.md 65), CWORD (SPEC.md 73.12), PACCMAN (SPEC.md 91), RUNCPM
+# (SPEC.md 74), C64 (docs/C64-SPEC.md), APPLE2 (docs/APPLE2-SPEC.md) and the
+# Weave family's two, WEAVE and LOOM (WEAVE-SPEC 1.2) - and 1942.
 #
-# NINE, AND APPLE2 IS THE ONE THAT JOINED LAST: it was deliberately kept off
-# this disk while it was being built a wave at a time - a package with no 6502
-# in it on the disk a release page offers as "every application" is a claim
-# nobody made - and it lands here in WAVE 7 with the folder shape section 16.2
-# pins, all five files of it: the package (with the ROM inside it), the
-# overlay, README.TXT, COPYING and WELCOME.BAS.
-# It is a CONVENIENCE, offered beside the
-# shipped images on a release page for somebody who wants one disk rather
-# than four, and nothing in the tree boots it by default.
+# IT WAS ONE FLOPPY UNTIL IT DID NOT FIT (2026-09-30). 1942's folder alone is
+# 709 of the 1.44MB disk's 2,847 clusters, and `make allapps` stopped at
+# "packages need 3123 clusters; disk holds 2847". tools/os88allapps.py packs
+# the payload onto a SET instead, adding a disk whenever the payload needs
+# one, so a new program never needs a disk list edited. It packs FIRST FIT IN
+# PAYLOAD ORDER, and a TOP-LEVEL FOLDER IS NEVER SPLIT while it fits on one
+# disk - WORD\, CWORD\, RUNCPM\ and the rest are each a whole program with
+# its overlay and documents beside it (the tree note below). APPS\, GAMES\
+# and MEDIA\ are sets of independent programs and are split only when one
+# outgrows a whole floppy, between same-stem groups. Each disk carries DOCS\,
+# SYSTEM\APPDATA\ and a CONTENTS.TXT that maps the whole set.
+# $(ALLAPPSLIST) names the images, one a line: make, the release zip and the
+# 86Box machines read it rather than a name.
+#
+# It is a CONVENIENCE, offered beside the shipped images on a release page
+# for somebody who wants every program without curating a shelf of disks,
+# and nothing in the tree boots it by default.
 #
 # It is NOT in `all`, and the reason is CWORD: a C package needs SmallerC,
 # which tools/setup-cc.sh fetches and which is deliberately not in this tree
 # (SPEC.md 73.1). A clone with nasm and python3 builds every SHIPPED floppy;
-# this one target is the exception, so it is on demand exactly like cworddisk.
+# this target is the exception, so it is on demand exactly like cworddisk.
 #
-# TWO GEOMETRIES, 1.44MB AND 1.2MB. The contents are ~1,050KB with RUNCPM's
-# drive on it (~430KB before). That is not a geometry choice made to be
-# generous - a 720KB or 360KB build of this list simply does not fit, and the
-# shipped disks already cover those machines. The 1.2MB 5.25" HD disk
-# (SPEC.md 19) does: its clusters are 512 bytes like the 1.44MB disk's rather
-# than 1,024 like the two DD disks', so it holds 2,371 of them - 1,185KB -
-# against 1,423KB, and the payload has room to spare.
-#
-# The two builds share ONE payload list (ALLAPPSARGS) and differ in the
-# --size and in the RunCPM drive-A --select that is priced against it, which
-# is the only part of this disk that re-shapes itself per geometry: it fills
-# the master disk until the clusters run out, so the 1.2MB disk's A\0 is the
-# 1.44MB one minus whatever the ranked fill reached last, and its own
-# LEFT-OFF.TXT names it. Nothing else here is a per-size list to keep in
-# step - which is the point, because two hand-maintained everything-lists is
-# exactly how they drift.
+# TWO GEOMETRIES, 1.44MB AND 1.2MB, from ONE payload list (ALLAPPSARGS) - two
+# hand-maintained everything-lists is exactly how they drift. There is no
+# 720KB or 360KB set: the shipped disks and the category disks already cover
+# those machines.
 #
 # THE TREE: each Word gets a FOLDER OF ITS OWN rather than a place in APPS/,
 # and that is a correctness requirement and not tidiness. Both carry an
@@ -12105,50 +12122,28 @@ zset:
 # 65.10, 67.14, 19.2.1), and a double-click on a document leaves that
 # directory on the DOCUMENT's (SPEC.md 54.9) - so package, overlay and welcome
 # document have to be three files in one folder or the document opens a
-# program whose every menu then refuses.
+# program whose every menu then refuses. That is why the set splits between
+# folders and never inside one.
 #
 # FROTZ ships without a story. The stories are fetched by tools/getstories.py
 # and are never committed (SPEC.md 61), so what rides here is the interpreter;
 # `make zdisk` is still where a story disk comes from.
 #
-# SYSTEM/APPDATA IS BUILT HERE TOO (SPEC.md 19.9), and wave 7 added it with
-# WEAVE: 19.9 says the folder is BUILT and never created on demand, and
-# WEAVE-SPEC 8.3's saveState() writes an app's .SAV into SYSTEM/APPDATA on the
-# LAUNCH volume - so without this line every bundle on this disk would refuse
-# to save its state, politely and inexplicably, exactly as they did on the
-# Weave floppies for the whole of waves 3, 4 and 5 (the note above
-# build/weave.img). The live media already passed it; this disk did not, and
-# nothing on it had wanted one before. It is counted in ALLAPPSDIRS below so
-# that RunCPM's drive-A selection is priced against the right number of
-# folders.
+# SYSTEM/APPDATA IS BUILT ON EVERY DISK OF THE SET (SPEC.md 19.9): WEAVE-SPEC
+# 8.3's saveState() writes an app's .SAV into SYSTEM/APPDATA on the LAUNCH
+# volume, and any disk of the set can be one.
 #
-# RUNCPM (SPEC.md 74.5) rides the same way the Words do - a folder of its own,
-# RUNCPM\, because it too has an .OVL resolved in the launching instance's
-# folder, and the CCP it loads and the CP/M drive A\0 below it are found the
-# same way - and, unlike FROTZ, WITH its disk: the master disk is fetched by
-# tools/getruncpm.py (out of the committed CP/M cache zip) and this
-# target acquires the fetch as a prerequisite, which it can because it already
-# needs the C toolchain. The A\0 selection is the 1.44MB one - the whole
-# master disk minus the three files above 65,535 bytes, its LEFT-OFF.TXT
-# saying so - chosen at recipe time exactly as build/runcpm.img's is
-# (RUNCPMIMG's shell substitution and its empty-selection guard), and A\0
-# is a deep folder with the same 128 directory slots. --select is told what
-# it chooses beside: --reserve names EVERY FILE ON THIS DISK (ALLAPPSFILES,
-# the files behind ALLAPPSARGS - not the prerequisite list, which carries
-# tools and a stamp that never ride), and --folders the folder directories
-# the tree above has besides RUNCPM\A\0, one cluster each at 1.44MB's 16
-# entries a cluster - DERIVED from ALLAPPSARGS below (ALLAPPSDIRS: every
-# DIR: prefix, each one's parent, --folder DOCS, and RUNCPM\A, the
-# selection's own parent; fifteen today: APPS, GAMES, MEDIA, WORD,
-# CWORD, PACCMAN, RUNCPM, RUNCPM\A, C64, APPLE2, WEAVE, LOOM, SYSTEM,
-# SYSTEM\DOS, DOCS), so
-# the budget is derived
-# here as it is for build/runcpm.img, and a folder added to the tree above
-# is priced without anyone remembering a constant. One parent level is
-# taken (the tree nests one deep); a DIR/SUB/SUB2: entry would need its
-# grandparent added by hand.
-ALLAPPSIMG := $(BUILD)/apps-all.img
-ALLAPPSIMG120 := $(BUILD)/apps-all-120.img
+# RUNCPM (SPEC.md 74.5) rides in RUNCPM\ WITH its CP/M drive A\0, fetched by
+# tools/getruncpm.py out of the committed CP/M cache zip. On the single floppy
+# A\0 absorbed whatever was left and shrank to one file (SPEC.md 19.10.1);
+# in the set, RUNCPM\ is priced with the WHOLE fill an otherwise empty disk
+# of the geometry holds, and os88allapps.py refuses if the disk it lands on
+# gives it less.
+ALLAPPSLIST := $(BUILD)/apps-all.list
+ALLAPPSLIST120 := $(BUILD)/apps-all-120.list
+# Disk 1 of each set - what an 86Box machine or `make run-120` puts in B:.
+ALLAPPSIMG := $(BUILD)/apps-all-1.img
+ALLAPPSIMG120 := $(BUILD)/apps-all-120-1.img
 
 #
 # $(CORE_SYSONLY) IS NAMED HERE AND IT IS NOT REDUNDANT. It is exactly the
@@ -12164,6 +12159,12 @@ ALLAPPSIMG120 := $(BUILD)/apps-all-120.img
 # indistinguishable from broken" exactly. The apps floppies are the case that
 # does NOT need it, because a machine reading one has the system disk in the
 # other drive.
+#
+# THE FOUR PACKAGES THAT RIDE NO FLOPPY DO NOT RIDE THE SET EITHER - AND THE
+# ARITHMETIC BELOW THAT PUT THEM THERE IS WITHDRAWN (SPEC.md 19.10.1): it is
+# about ONE 1.2MB floppy whose RunCPM drive absorbed the remainder, and the
+# set prices that drive whole and adds a disk instead. They stay live-only
+# because the lists say so; whether they join is the owner's call. The record:
 #
 # THE FOUR PACKAGES THAT RIDE NO FLOPPY DO NOT RIDE THIS ONE EITHER, AND THAT
 # IS ARITHMETIC RATHER THAN TASTE (SPEC.md 19.10.1). RECORDER (SPEC.md 35.1),
@@ -12216,21 +12217,11 @@ ALLAPPSFILES := $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
 # software collection used by runcpmdisk. Do not fetch that unused payload.
 ALLAPPS := $(ALLAPPSFILES) $(BUILD)/runcpm-src.stamp tools/getruncpm.py
 
-# LOOMRUN IS NAMED TWICE ON THIS DISK AND MUST BE PRICED TWICE. ALLAPPSARGS
-# below places the runtime's three files under WEAVE\ and again under LOOM\,
-# because WEAVE-SPEC 11.2 makes each folder a WHOLE program - a bundle Pack
-# writes beside the sources opens only beside a runtime that is there. The
-# --reserve list is what --select prices the disk against, so listing
-# $(WEAVEDISK) alone under-priced it by the second copy - 152 clusters at
-# 1.44MB - and getruncpm.py handed back an A\0 selection that os88disk.py
-# then refused as 27 clusters over. Duplicates in --reserve are summed,
-# which is the arithmetic wanted here.
-#
-# ...and one cluster more, which --folders cannot see. It prices every folder
-# directory at one cluster; LOOM asks os88disk.py for 32 directory slots
-# (ALLAPPSARGS), and 32 entries x 32 bytes is 1,024 - two clusters at
-# 1.44MB's 512. The second is the difference.
-ALLAPPSEXTRA := 1
+# LOOMRUN IS NAMED TWICE: WEAVE\ and LOOM\ each carry the runtime's three
+# files, because WEAVE-SPEC 11.2 makes each folder a WHOLE program - a bundle
+# Pack writes beside the sources opens only beside a runtime that is there.
+# os88allapps.py prices every entry it is handed, so the second copy is
+# priced with it; the LOOM=32 directory slots below are priced too.
 
 ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                                  $(BUILD)/frotz.o88) \
@@ -12252,37 +12243,35 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                $(addprefix LOOM:,$(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS)) \
                $(APPSYSARGS) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS))
-ALLAPPSDIRS := $(sort $(foreach a,$(ALLAPPSARGS),$(firstword $(subst :, ,$a))) \
-                      DOCS RUNCPM/A SYSTEM/APPDATA)
-ALLAPPSDIRS := $(sort $(ALLAPPSDIRS) \
-                      $(patsubst %/,%,$(filter-out ./,$(dir $(ALLAPPSDIRS)))))
-ALLAPPSFOLDERS := $(words $(ALLAPPSDIRS))
 
-allapps: $(ALLAPPSIMG) $(ALLAPPSIMG120)
+allapps: $(ALLAPPSLIST) $(ALLAPPSLIST120)
 
-# One recipe body for both, because the two disks differ in a --size and in
-# the geometry the RunCPM selection is priced in, and nothing else. $(1) is
-# the image, $(2) the geometry. The empty-selection guard is RUNCPMIMG's and
-# is here for its reason: a --select that fails prints nothing on stdout, and
-# without this the disk would build with an empty A\0 and verify clean -
-# which reads exactly like a working disk.
-define ALLAPPSIMGRULE
-sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select $(2) --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve-clusters $(ALLAPPSEXTRA) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
-[ -n "$$sel" ] || { echo "allapps: getruncpm.py --select $(2) chose nothing"; exit 1; }; \
-python3 tools/os88disk.py -o $(1) --size $(2) --deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) --dir-slots LOOM=32 --folder DOCS $(APPDATAFOLDER) $(ALLAPPSARGS) $$sel
+# One recipe for both sets: they differ in the --size, which is also the
+# geometry RUNCPM\A\0's fill is priced in, and nothing else. $(1) is the
+# image prefix, $(2) the geometry. The list is the target and the images are
+# its side outputs; a disk the set stops needing is deleted by the tool,
+# because a stale apps-all-3.img beside a two-disk set reads as current.
+define ALLAPPSSETRULE
+python3 tools/os88allapps.py --size $(2) --prefix $(1) --list $@ \
+    --runcpm $(RUNCPMDIR) --runcpm-slots $(RUNCPMSLOTS) --dir-slots LOOM=32 \
+    --folder DOCS $(APPDATAFOLDER) \
+    --collection APPS --collection GAMES --collection MEDIA \
+    $(ALLAPPSARGS)
 endef
 
-$(ALLAPPSIMG): $(ALLAPPS) tools/os88disk.py
-	$(call ALLAPPSIMGRULE,$@,1440)
-	@python3 tools/os88disk.py --verify $@
-	@echo "allapps: $@ - every app on one 1.44MB floppy; boot the system"
-	@echo "         disk with it in B: (make run RUNAPPS=$@)"
+$(ALLAPPSLIST): $(ALLAPPS) tools/os88disk.py tools/os88allapps.py
+	$(call ALLAPPSSETRULE,$(BUILD)/apps-all,1440)
+	@echo "allapps: every app on the 1.44MB set in $@; boot the system disk"
+	@echo "         with a disk of it in B: (make run RUNAPPS=$(ALLAPPSIMG))"
 
-$(ALLAPPSIMG120): $(ALLAPPS) tools/os88disk.py
-	$(call ALLAPPSIMGRULE,$@,1200)
-	@python3 tools/os88disk.py --verify $@
-	@echo 'allapps: $@ - the same disk at 1.2MB, for the 5.25" HD machine'
-	@echo "         (make run-120 RUNAPPS120=$@)"
+$(ALLAPPSLIST120): $(ALLAPPS) tools/os88disk.py tools/os88allapps.py
+	$(call ALLAPPSSETRULE,$(BUILD)/apps-all-120,1200)
+	@echo 'allapps: the same set at 1.2MB in $@, for the 5.25" HD machine'
+	@echo "         (make run-120 RUNAPPS120=$(ALLAPPSIMG120))"
+
+# Disk 1 of each set, for the targets that mount one image by name.
+$(ALLAPPSIMG): $(ALLAPPSLIST) ; @test -f $@
+$(ALLAPPSIMG120): $(ALLAPPSLIST120) ; @test -f $@
 
 # =============================================================================
 # THE LIVE MEDIA (ON DEMAND: `make usb` / `make iso` / `make live`) - SPEC.md 80
@@ -12409,12 +12398,12 @@ $(BUILD)/zcat/live/CATALOG.TXT: tools/getstories.py
 LIVEARGS := $(DRIVERS) $(SYSDOC) $(SYSLOGOARG) $(LOGOVIDARG) $(FACESARG) $(ALLAPPSARGS) \
             $(LIVESYSARGS) $(LIVEPKGARGS) $(LIVESTORYARGS) $(SYSROOTARG)
 
-# ...and the live volume's own FOLDER COUNT, which is NOT $(ALLAPPSFOLDERS).
+# ...and the live volume's own FOLDER COUNT.
 # getruncpm.py --folders prices every folder directory at a cluster, and the
 # live tree has folders the everything-floppy does not: SCRIBE/, STORIES/ and
 # its four, and getcpmsw.py's nine areas under RUNCPM/A instead of none. At
 # 26MB free the under-pricing changes nothing today, which is exactly why it
-# would sit there being wrong - so it is DERIVED the way $(ALLAPPSDIRS) is,
+# would sit there being wrong - so it is DERIVED from the arguments,
 # off $(LIVEARGS) itself plus the --folder flags the recipe passes, and one
 # parent level (the tree nests one deep; RUNCPM/A/0 is why STORIES/ART needs
 # no third).
@@ -12643,10 +12632,14 @@ imager:
 # drop is a statement about what the disk would carry, not the fix for the
 # overflow - that is a decision for whoever owns the field disk, and
 # tests/pxsdisk.py asserts the omission only when the image exists.
+#
+# DRMARCO (SPEC.md 100) goes on PIXELSTEIN's ground, with its three front
+# screens: ~68 clusters at 360 KB, a game and not a calibration instrument,
+# added 2026-09-30 when it stopped being a `local` package.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
               $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
-              $(BUILD)/pxstein.o88
+              $(BUILD)/pxstein.o88 $(DM_SHIP)
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 
@@ -12869,7 +12862,7 @@ run-640: $(IMG) $(APPSIMG)
 # is the 5.25" HD one, so a 1.2MB disk built on demand can be LOOKED at
 # rather than only listed.
 #   make zdisk && make run-120 RUNAPPS120=build/zork120.img
-#   make allapps && make run-120 RUNAPPS120=build/apps-all-120.img
+#   make allapps && make run-120 RUNAPPS120=build/apps-all-120-1.img
 RUNAPPS120 ?= $(APPSIMG120)
 
 run-120: $(IMG120) $(RUNAPPS120)
@@ -13234,9 +13227,10 @@ xt-multimon: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT) $(VM286525LOOM)/86box.cfg
 	$(BOX) -P $(VM286525LOOM) -N
 
-# The everything disk on period hardware. `xt-sound-1.44` is the only other
+# The everything set on period hardware. `xt-sound-1.44` is the only other
 # machine in the tree that boots one, and it is a 3.5" XT - so this is where
-# a 5.25" machine sees every program at once.
+# a 5.25" machine sees the set. Disk 1 is in B:; the rest of the set is
+# $(ALLAPPSLIST120), swapped in through 86Box's floppy menu.
 286-525-all: $(IMG120) $(ALLAPPSIMG120)
 	@$(UNPROTECT) $(VM286525ALL)/86box.cfg
 	$(BOX) -P $(VM286525ALL) -N
@@ -13285,7 +13279,8 @@ xt-sound: $(IMG360) $(APPSIMG360)
 	$(BOX) -P $(VMXTSND) -N
 
 # Keep the period-correct 360KB system disk in A:, but expose every application
-# through the only geometry large enough for $(ALLAPPSIMG). The 1986 XT board
+# through the 1.44MB everything set: disk 1, $(ALLAPPSIMG), is in B: and the
+# others ($(ALLAPPSLIST)) swap in through 86Box's floppy menu. The 1986 XT board
 # supplies the full 640KB needed by the larger applications.
 xt-sound-1.44: $(IMG360) $(ALLAPPSIMG)
 	@$(UNPROTECT) $(VMXTSND144)/86box.cfg
@@ -13709,26 +13704,44 @@ $(BUILD)/1942-360.img: $(N1942DISK) apps/1942/README.TXT tools/os88disk.py
 	python3 tests/n1942sound.py
 all: $(N1942DISK)
 
-# Native DrMarco. NES cell tiles remain local; original surround is committed.
-DRMARIO_SOURCE ?= ../NES-Games-Disassembly/Dr. Mario
-.PHONY: drmarco drmarcodisk drmario drmariodisk drmario-assets drmario-source-check
-drmario-source-check:
-drmario-assets: | $(BUILD)
-	python3 tools/drmario_assets.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
-	python3 tools/drmario_audio.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
+# Native DrMarco (SPEC.md 100). EVERYTHING IT IS BUILT FROM IS COMMITTED:
+# the NES reference in reference/drmario/ (two files, pinned - its README.md is
+# the provenance and the decision) and the composed art in
+# apps/drmario/art/native/. So a plain `make` builds it on any clone, and it
+# ships in $(APPS_GAMES) like every other game.
+#
+# The art is committed as OUTPUT, not regenerated here, because composing it
+# needs Pillow and `make` is stdlib-only - 1942's and the logo video's
+# arrangement. `make drmarco-art` re-runs that half by hand after an edit to
+# either PNG, and test-full's `drmarcoart` row says whether the committed bytes still
+# match a fresh run. What IS run here is the stdlib half: the tile caches and
+# tables out of CHR_ROM.chr and bank_FF.asm, and the music.
+DM_NES := reference/drmario/CHR_ROM.chr reference/drmario/bank_FF.asm
+DM_ART := $(BUILD)/drmario-art
+DM_ARTSRC := apps/drmario/art/drmarco-screen.png apps/drmario/art/drmarco-splash.png
+DM_NATIVE_INC := $(addprefix $(DM_NATIVE)/,dm-anim-vga.inc dm-anim-cga.inc \
+                   dm-anim-vga.bin dm-anim-cga.bin dm-screen-vga.bin \
+                   dm-screen-cga.bin dm-front.inc)
+.PHONY: drmarco drmarcodisk drmario drmariodisk drmarco-art
 
-$(BUILD)/drmario-art/dm-tables.inc: tools/drmario_assets.py apps/drmario/art/drmarco-screen.png apps/drmario/art/drmarco-splash.png drmario-source-check | $(BUILD)
-	python3 tools/drmario_assets.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
+# One stamp for the three outputs of one run; macOS make is 3.81, which has
+# no grouped targets. The `test -f` is 1942's: a deleted side output re-runs
+# the importer rather than leaving the assembly to fail on a missing file.
+$(DM_ART)/.stamp: tools/drmario_assets.py $(DM_NES) | $(BUILD)
+	python3 tools/drmario_assets.py reference/drmario $(DM_ART)
+	@touch $@
+$(DM_ART)/dm-tables.inc $(DM_ART)/dm-vga.bin $(DM_ART)/dm-cga.bin: $(DM_ART)/.stamp
+	@test -f $@ || python3 tools/drmario_assets.py reference/drmario $(DM_ART)
 
-$(BUILD)/drmario-art/dm-music.inc: tools/drmario_audio.py drmario-source-check | $(BUILD)
-	python3 tools/drmario_audio.py "$(DRMARIO_SOURCE)" $(BUILD)/drmario-art
+$(DM_ART)/dm-music.inc: tools/drmario_audio.py reference/drmario/bank_FF.asm | $(BUILD)
+	python3 tools/drmario_audio.py reference/drmario $(DM_ART)
 
-# The graphics compiler emits these alongside dm-tables.inc; the phony source
-# check above refreshes the complete set, including a deleted side output.
-$(BUILD)/drmario-art/dm-anim-vga.inc $(BUILD)/drmario-art/dm-anim-cga.inc: $(BUILD)/drmario-art/dm-tables.inc
+# Needs Pillow; writes the COMMITTED art, and the preview PNGs into $(DM_ART).
+drmarco-art: | $(BUILD)
+	python3 tools/drmario_assets.py reference/drmario $(DM_ART) --art $(DM_NATIVE)
 
-$(BUILD)/drmario.bin: apps/drmario/drmario.asm apps/drmario/front.inc apps/drmario/audio.inc $(BUILD)/drmario-art/dm-music.inc $(BUILD)/drmario-art/dm-anim-vga.inc $(BUILD)/drmario-art/dm-anim-cga.inc apps/drmario/game.inc apps/drmario/video.inc apps/drmario/anim.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc $(BUILD)/drmario-art/dm-tables.inc
-	$(NASM) -f bin -w+error -I apps/ -I apps/drmario/ -I $(BUILD)/drmario-art/ -l $(BUILD)/drmario.lst -o $@ $<
+$(BUILD)/drmario.bin: apps/drmario/drmario.asm apps/drmario/front.inc apps/drmario/audio.inc apps/drmario/game.inc apps/drmario/video.inc apps/drmario/anim.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc $(DM_ART)/dm-tables.inc $(DM_ART)/dm-vga.bin $(DM_ART)/dm-cga.bin $(DM_ART)/dm-music.inc $(DM_NATIVE_INC)
+	$(NASM) -f bin -w+error -I apps/ -I apps/drmario/ -I $(DM_ART)/ -I $(DM_NATIVE)/ -l $(BUILD)/drmario.lst -o $@ $<
 
 $(BUILD)/drmarco.o88: $(BUILD)/drmario.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@
@@ -13736,19 +13749,16 @@ $(BUILD)/drmarco.o88: $(BUILD)/drmario.bin tools/os88pkg.py $(PKGZSTAMP)
 drmarco: $(BUILD)/drmarco.o88
 drmario: drmarco
 
-DM_FRONT_FILES := $(BUILD)/drmario-art/DRMARCO.VGA $(BUILD)/drmario-art/DRMARCO.CGA $(BUILD)/drmario-art/DRMARCO.HRC
-$(DM_FRONT_FILES): $(BUILD)/drmario-art/dm-tables.inc
-
-$(BUILD)/drmario.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_FILES)
+$(BUILD)/drmario.img: $(DM_SHIP) apps/drmario/README.md
 	python3 tools/os88disk.py -o $@ --size 1440 $^
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/drmario720.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_FILES)
+$(BUILD)/drmario720.img: $(DM_SHIP) apps/drmario/README.md
 	python3 tools/os88disk.py -o $@ --size 720 $^
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/drmario120.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_FILES)
+$(BUILD)/drmario120.img: $(DM_SHIP) apps/drmario/README.md
 	python3 tools/os88disk.py -o $@ --size 1200 $^
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/drmario360.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_FILES)
+$(BUILD)/drmario360.img: $(DM_SHIP) apps/drmario/README.md
 	python3 tools/os88disk.py -o $@ --size 360 $^
 	python3 tools/os88disk.py --verify $@
 drmariodisk: drmarcodisk

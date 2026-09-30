@@ -94,8 +94,8 @@ make runcpmdisk # build the RunCPM floppies - the CP/M 2.2 emulator, its
 make xt-runcpm  # 86Box: the 4.77MHz XT with the 360KB RunCPM disk in B:
 make 286-runcpm # 86Box: the 12.5MHz 286 with the 720KB one - arcade games
 make 386-runcpm # 86Box: the 386DX with the 1.44MB one - everything
-make drmarcodisk # native XT DrMarco: 320x240 VGA / color CGA;
-                 # requires the local NES reference, see apps/drmario/README.md
+make drmarcodisk # native XT DrMarco on its own floppies: 320x240 VGA /
+                 # color CGA. It is on the apps disks too; apps/drmario/README.md
 make excitebikedisk # native XT motocross racer (VGA, CGA and Hercules;
                  # five courses, opponents, sound), four floppy geometries:
                  # original art and sound, nothing external -
@@ -159,10 +159,11 @@ make 286-525-z    # 86Box: the 1.2MB 5.25" 286 with a 1.2MB app disk in B:
 make 286-525-word #   instead of the apps floppy - one per application disk:
 make 286-525-cword#   -z -word -cword -runcpm -c64 -weave -loom -all. The
 make 286-525-all  #   ONLY machines that read a 1.2MB disk (an XT cannot)
-make allapps  # one floppy with every program on it - both word processors,
+make allapps  # every program on a set of floppies - both word processors,
               # Frotz, RunCPM, the Commodore 64, PaccMan and the Weave
-              # family included. 1.44MB and 1.2MB; the two DD geometries cannot
-              # hold the payload at all
+              # family included - apps-all-1.img, -2.img, ... at 1.44MB and
+              # apps-all-120-N.img at 1.2MB. A disk is added when the
+              # programs need one; CONTENTS.TXT on each says what is where
 make live     # the live media (docs/LIVE-MEDIA.md): os8088-usb.img, a
               # bootable hard-disk image for a USB stick, and os8088.iso,
               # the same image as a live CD - the whole OS and every app
@@ -385,8 +386,9 @@ Digital Research's own command processor at the `A>` prompt, its drives kept
 as folders on the floppy, and RunCPM's master disk in drive A so MBASIC, PIP,
 SUBMIT, TE and Z80ASM run — with **CP/M games and applications beside it**:
 LADDER, CATCHUM and PM, Nemesis and Dungeon Master, GAINA, WordStar 3.30 and
-Turbo Pascal 3.01A, as much of it as each geometry holds. `make allapps` puts
-every one of these on one 1.44MB floppy.
+Turbo Pascal 3.01A, as much of it as each geometry holds. The everything set
+(`make allapps`) carries RunCPM with its whole master disk as drive A, and the
+live media (`make live`) carries the games and applications too.
 
 **Hardware**
 
@@ -758,8 +760,8 @@ cleanly and runs wrong when C meets this machine.
 | `build/apple2*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Apple II Plus, package + `APPLE2.OVL` + `WELCOME.BAS` + `README.TXT` + `COPYING` in one `APPLE2/` folder (`make apple2disk`). The Apple II+ ROMs are inside the package as a part and are fetched at a pin, never committed |
 | `build/weave*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Weave: the runtime and its two modules, the demo bundles, LOOM, the demo sources and `CATALOG.TXT` (`make weavedisk`) |
 | `build/loom*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | the Weave IDE's own disk, with the demo sources flat (`make loomdisk`) |
-| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy — every on-demand disk above except Scribe's (`make allapps`) |
-| `build/apps-all-120.img` | 1.2MB FAT12            | the same disk for the 5.25" HD machine. There is no 720KB or 360KB build: the payload does not fit either |
+| `build/apps-all-N.img`   | 1.44MB FAT12, a set    | every program, on as many floppies as it takes — every on-demand disk above except Scribe's (`make allapps`). `build/apps-all.list` names them; `CONTENTS.TXT` on each disk maps the set |
+| `build/apps-all-120-N.img` | 1.2MB FAT12, a set   | the same set for the 5.25" HD machine. There is no 720KB or 360KB set |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.
@@ -873,8 +875,9 @@ CMOS — on the first launch the BIOS stops at its setup screen, and picking
 `make xt-sound`, `make xt-sound-1.44`, `make 286-sound` and `make 386-sound`
 add a sound card to four of the machines above. The first XT has a Sound
 Blaster 2.0 (`vm/xt-sound`); the 1.44MB variant has a Sound Blaster 1.0 and
-mounts `build/apps-all.img` in B: (`vm/xt-sound-1.44`), putting every
-application on the same 4.77MHz machine. The 286 and 386 use an SB16
+mounts disk 1 of the everything set, `build/apps-all-1.img`, in B:
+(`vm/xt-sound-1.44`; the other disks swap in from 86Box's floppy menu),
+putting every application on the same 4.77MHz machine. The 286 and 386 use an SB16
 (`vm/286-sound`, `vm/386-sound`). `make test ADLIB=1` and `SB16=1` give the
 driver a card to attach to under QEMU, but only these give it one on a
 machine whose bus and clock are period-correct — and pacing a stream is the
