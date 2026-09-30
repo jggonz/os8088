@@ -21,13 +21,14 @@ assembler can see it, and its cost is only real against the heap a 128KB
 machine actually has.  docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.1 found one by
 accident - the association cache held 3,072 bytes before the user had done
 anything - and SPEC.md 54.0 has since gated it out.  This walks `mem_tab` on
-the machine itself and says whether any others are left.
+the machine itself and rejects unexplained pins. SPEC 26.8 now retains
+DESKTOP.DRV explicitly: it is bounded to 4KB and its exact claim is audited.
 
 Four assertions, and the third is the one with teeth:
 
   1. int 12h really reports 128KB - the machine is the machine
   2. a DESKTOP: the drive zones are laid out and the screen has ink on it
-  3. NO pinned claim stands on a bare desktop
+  3. only DESKTOP.DRV is pinned, within its explicit 4KB runtime budget
   4. the free heap agrees with `kernsize`'s ladder to the byte
 """
 import os
@@ -117,9 +118,11 @@ with M.launch(_T.img("small360.img"), apps=_T.img("apps360.img"),
 
     # 3. THE AUDIT. A purgeable claim is given back to whoever asks (SPEC.md
     #    50.6) and is not a cost; a pinned one is heap the machine never sees
-    #    again.
+    #    again. DESKTOP.DRV is an explicit exception (SPEC 26.8): at most
+    #    4KB is retained so a first shortcut works from a swapped floppy.
     tab = m.read(m.sym("mem_tab", DEFS), eq["MEM_MAX"] * MC_SIZE)
-    pin = pur = 0
+    pin = pur = desktop = 0
+    desktop_seg = u16(m.read(m.sym('mod_r_desk', DEFS), 2))
     for i in range(eq["MEM_MAX"]):
         r = tab[i * MC_SIZE:(i + 1) * MC_SIZE]
         seg, para, own = u16(r, MC_SEG), u16(r, MC_PARA), u16(r, MC_OWN)
@@ -130,9 +133,12 @@ with M.launch(_T.img("small360.img"), apps=_T.img("apps360.img"),
             pur += para * 16
         else:
             pin += para * 16
+            if own == eq['MEM_K_MOD'] and seg == desktop_seg:
+                desktop += para * 16
         print("    %04X %5d para = %6d bytes  owner %04X  %s"
               % (seg, para, para * 16, own, "purgeable" if purge else "PINNED"))
-    check("no PINNED claim stands on a bare desktop", pin == 0,
+    check("only the bounded desktop module is pinned",
+          pin == desktop and 0 < desktop <= eq['DL_MOD_KB'] * 1024,
           "(%d bytes pinned, %d purgeable)" % (pin, pur))
 
     # 4. ...and the heap the machine has is the heap the ladder promised.

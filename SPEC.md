@@ -1591,7 +1591,10 @@ sector nothing: unset, the `%ifdef` is not assembled.
 **A module is `.cold` code that ships as a file instead of as part of the
 kernel image.** It is read into a heap claim when its feature is asked for,
 far-called through a table of entry pointers, and freed when the feature is
-finished. Both builds carry `CTRL.DRV`, the Control Panel (§31),
+finished. `DESKTOP.DRV` (§26.8) is retained at boot on both builds because
+painting and the first drop from a swapped-in floppy require it. It claims
+bottom-up after stage 2 is released; other modules continue to claim top-down.
+Both builds carry `CTRL.DRV`, the Control Panel (§31),
 `FORMAT.DRV`, the floppy formatter (§18.96), and `CLONE.DRV`, the disk cloner
 (§18.99). `kern_big` also carries `HIBER.DRV` (§87), the optional
 `DOCK.DRV`, advanced Dock behavior (§30.5), and `EXTD.DRV`, the extended
@@ -3200,6 +3203,8 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/fdlg.inc`   | the Standard File dialog (§38): the kernel's Open/Save chooser, its modality gate and the completion callback — prefix `fdlg_`. **`.cold`** (§2.6) |
 | `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
 | `kernel/desk.inc`   | desktop drive icons: detect, paint, click/open (§26)    |
+| `kernel/links.inc` | desktop shortcut state, dispatch and DESKTOP.DRV behavior (§26.8) |
+| `kernel/linkcfg.inc` | DESKTOP.DRV configuration validation and persistence (§26.8) |
 | `kernel/dock.inc`   | basic bottom Dock, shared state, advanced-module dispatch and lifetime (§30) |
 | `kernel/dockmod.inc` | optional DOCK.DRV: placement, auto-hide, advanced painting and input (§30.5–30.6) |
 | `kernel/extmod.inc` | EXTD.DRV, `kern_big` only: the extended desktop's placement policy — bringing display 1 up, landing and the straddle fit, which display a window is on, the fsx bracket's collapse, and the second display's arms that run on a user's action (its ground, the zoom and fullscreen boxes, a drag's floor, fsx caps) — prefix `ext_`/`exk_`; the resident half is `exf_sync` in **`.cold`** and the `EXTCALL` sites (§39.19.6) |
@@ -47773,6 +47778,108 @@ than a redraw — the absorbed rows go with it — so `ico_need` clears
 one three-sector re-read at the next mount rather than a sector per package.
 The rank stays `MEM_PG_TRIV` regardless: what is lost is still recoverable
 without asking the user for anything.
+
+### 26.8 Desktop shortcuts — DESKTOP.CFG
+
+Desktop links are Locator shortcuts: a drive, an absolute 8.3 path and a
+cached 16x16 picture. They never create FAT symlink entries and never copy,
+move or delete their targets. A bare-desktop drop creates a link; a drop on a
+Disk window keeps §22.4's move semantics. The file clipboard is armed only
+when the destination is a Disk window, so creating a link or cancelling a
+drag leaves it untouched. The source row and source window are banked by the
+existing drag tracker; `..` is not draggable.
+
+`DESKTOP.CFG` lives in `[dsk_bootvol]`'s root. Like SYSTEM.CFG it is hidden +
+system, kernel-writable, and its writer checks `KERNEL.SYS` before writing.
+Shortcut behavior ships in `DESKTOP.DRV` on both kernels. Its nine entries
+are load, save, paint, damage, paint damage, click, drop, command and drain.
+After releasing stage 2 and before the first paint, the boot thunk prepares
+and retains the module while the system disk is available, so a first drop
+from a swapped-in apps floppy works. The module
+uses a bottom-up `MEM_K_MOD` claim (rounded to KB), keeping boot residency
+within §2's 128KB rule by shedding the boot directory read-ahead before
+pinning its code; an empty desktop claims no record storage and skips paint dispatch. A missing module leaves the
+desktop usable; dropping a file retries loading and requests the system disk
+if it is still unavailable. Saving is posted to the UI drain with the gfx lock free. A failure keeps dirty state
+and says what went wrong; File > Save Desktop retries. Pending state is
+included in hibernation by the ordinary non-purgeable claim rules.
+
+Generation 1 is little-endian, with a 512-byte header followed by up to 16
+256-byte records. The header starts `O88DESK\0`, then words generation (1),
+record size (256), count (0..16); remaining header bytes are zero. Loading
+requires the exact file length and validates every record before publishing
+any: valid volume/type, an absolute terminated path, nonempty 8.3 components,
+and no dot links or wildcard/illegal FAT characters. Invalid files produce an
+empty desktop and release the record claim. Each record:
+
+| offset | size | meaning |
+|---|---|---|
+| 0 | 2 | x position, pixels |
+| 2 | 2 | y position, pixels |
+| 4 | 1 | volume index (A: = 0) |
+| 5 | 1 | target type (0 data / 1 package / 2 folder) |
+| 6 | 2 | FAT media signature, 0 for a redirected volume |
+| 8 | 128 | NUL absolute path, beginning with `\`, including the leaf |
+| 136 | 64 | mask rows then data rows, §25's 16x16 body; zero = generic |
+| 200 | 56 | reserved, zero |
+
+No cluster number is durable identity. Creation uses `dsk_path_x`, including
+on kern_small, and appends the source name after checking the buffer bound.
+Opening walks the full path anew and verifies the medium where a FAT signature
+was recorded. A replaced disk or missing target leaves the shortcut visible
+and reports the failure. A redirector cannot supply the FAT identity check.
+Renaming or moving a target breaks the link until it is recreated.
+
+`dl_seg` names a lazily allocated 5KB `MEM_K_DESK` claim. Records begin at 512;
+its last 512 bytes are working storage. An empty configuration and a
+successful save after removing the last link release the record claim. `dl_count`, `dl_sel` (FF = none),
+`dl_dirty`, `dl_save` and `dl_open` are resident UI state. `dl_stage` is the
+resident 136-byte position/path staging record; names and cached pictures
+reuse the existing UI-only `dsk_ent` and `dsk_ico` buffers. Module data is
+addressed through CS, and record storage through ES. Opening snapshots the
+locator into the record claim's UI scratch under a brief gfx lock, then
+releases the lock before I/O; path components reuse the UI loader's
+`ld_lname`, so painting in another task cannot overwrite an active resolver. All paint paths read
+cached records only. `dlf_dl_paint_x` paints all links under the gfx lock;
+`dlf_dl_damage_x` grows a damage rectangle to include whole touched link cells,
+and `dlf_dl_paint_damage_x` paints those cells before windows. The damage closure also includes §26.7's drive/service zones before painting;
+the caller still obtains their separate bitmask. Selection/reposition/removal damage only
+the affected cells. Runtime geometry clamps cells inside the desktop band and
+away from the rightmost drive column; CGA uses a shorter picture/caption cell.
+
+File > Open Shortcut and Remove Shortcut are enabled only for a selected
+link. Double-click and Enter also open it; Delete removes the link. Dragging
+an existing link repositions it. Dropping the same drive/path again moves its
+existing link. The maximum is 16 links and 127 path bytes excluding NUL;
+refusals are reported, never truncated. Folder opening uses `fm_choose`;
+program opening uses `ld_pkg_start_x`; document opening uses §54's existing
+association dispatch when built in. kern_small preserves §54.0's existing
+load refusal for unassociated data files (the UI says Load failed). File windows and their directories are restored after
+configuration I/O.
+
+#### 26.8.1 Kernel size optimization passes
+
+Measured against build 175 before this feature, with unchanged size budgets:
+
+| pass (big kernel) | added section bytes | added static RAM |
+|---|---:|---:|
+| initial behavior resident, only configuration I/O in module | 3,149 | 3,072 |
+| move behavior into DESKTOP.DRV | 1,186 | 1,536 |
+| move constants/scratch into module and share UI staging | 714 | 1,024 |
+| compact dispatch/boot glue and keep cold code in its existing rung | 644 | 512 |
+
+The final big kernel is 107,520 bytes of static RAM (+0.48%); kern_emu also
+adds 512 bytes against the parent commit (its older blessed baseline had
+already drifted). The small
+kernel is 72,192 (+1,024, or 1.44%). Small also gains the path-building body
+it formerly omitted. Section growth is 644 bytes big and 768 bytes small;
+allocation rounds to 512-byte steps. This is separate from runtime storage:
+DESKTOP.DRV occupies 4KB while retained (an assembly guard forbids growth
+beyond that runtime budget); the 5KB record store is claimed only
+for links/a nonempty configuration and released after the last link is saved
+away. A bare desktop still satisfies the 128KB residency gate. The 360KB
+system disk has limited free space; save failures preserve in-memory links
+and dirty state until File > Save Desktop succeeds.
 
 ## 27. HELLO and NOTEPAD — the second and third packages
 

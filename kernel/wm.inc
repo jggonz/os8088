@@ -5130,6 +5130,7 @@ wm_paint_dmg:
 
     cmp byte [wm_dmg_fs], 0
     jne .wins                   ; fullscreen: no zones to grow the rect to
+    call KERNEL_SEG:dlf_dl_damage_x
     call COLD_SEG:desk_dmg_zones_x ; AX = the zone mask; the rect grows to cover
     mov [wm_dmg_zn], ax         ; every zone it touched. A WORD since SPEC.md
                                 ; 26.7: the Wire zone's index is one past the
@@ -5151,6 +5152,7 @@ wm_paint_dmg:
     mov dx, [wm_dmg_y2]         ; be worked out here, from this rect's top-left
     call wm_dmg_gray            ; corner alone - see wm_dmg_bands
 .zones:
+    call KERNEL_SEG:dlf_dl_paint_damage_x
     mov ax, [wm_dmg_zn]
     call COLD_SEG:desk_paint_mask_x ; the touched drive zones, whole
 %ifdef DOCK_OPT

@@ -2679,6 +2679,7 @@ section .modk    start=MODK_START vstart=0
 %ifdef KERN_BIG
 section .modx    start=MODX_START vstart=0
 %endif
+section .modt    start=MODT_START vstart=0
 section .modmap  start=MODMAP_START vstart=0
 section .text
 
@@ -5887,6 +5888,7 @@ kmain:
     ; putting it back, not inventing a sentinel.
     mov word [spl_fseg], COLD_SEG
     call COLD_SEG:mem_unblob_x
+    call KERNEL_SEG:dlf_dl_boot_x ; retained links use the reclaimed heap floor
     MARK 32
     BPMARK 8                    ; ...the store above 1MB, the palette, the bar
 
@@ -6540,6 +6542,8 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
 %include "fdlg.inc"             ; the Standard File dialog (SPEC.md 38)
 %include "icons.inc"
 %include "desk.inc"
+%include "links.inc"
+%include "linkcfg.inc"
 %include "dock.inc"
 %include "dockmod.inc"            ; empty unless DOCK_OPT (kern_big)
 %include "extmod.inc"             ; EXTD.DRV, the extended desktop
@@ -6591,6 +6595,7 @@ mod_fpt:
 %ifdef KERN_BIG
     MODFP EXFP, MOD_EXT, EXT_NENT
 %endif
+    MODFP DLFP, MOD_DESK, DL_NENT
 %if MODFP_I != MOD_MAX
   %error "MODFP: MODFP_I blocks against MOD_MAX rows"
 %endif
@@ -7141,6 +7146,8 @@ cw_gfx_rowbase:         call gfx_rowbase
                     retf
 cw_gfx_unlock:          call gfx_unlock
                     retf
+dlf_icon_draw_x:        call icon_draw_x
+                       retf
 cw_gfx_xor_fill:        call gfx_xor_fill
                     retf
 cw_icon_draw:           call icon_draw
@@ -7955,7 +7962,7 @@ MODK_START   equ MODH_START + MODH_SIZE
 %else
 MODP_START   equ MODL_START + MODL_SIZE   ; Cut/Copy/Paste, kern_small's alone
 MODD_START   equ MODP_START + MODP_SIZE   ; ...and the file dialog after it
-MODMAP_START equ MODD_START + MODD_SIZE   ; no Dock module (SPEC.md 30.5)
+MODT_START   equ MODD_START + MODD_SIZE   ; no Dock module (SPEC.md 30.5)
 %endif                                    ; The
                                           ; compressor has no image of its
                                           ; own: it rides in the cloner's
@@ -7963,7 +7970,7 @@ MODMAP_START equ MODD_START + MODD_SIZE   ; no Dock module (SPEC.md 30.5)
 
 %ifdef DOCK_OPT                           ; DOCK_OPT is KERN_BIG, so
 MODX_START   equ MODK_START + MODK_SIZE   ; EXTD.DRV (SPEC.md 39.19.6) is
-MODMAP_START equ MODX_START + MODX_SIZE   ; always the last image there
+MODT_START   equ MODX_START + MODX_SIZE   ; always the last image there
 %endif
 
 %ifdef KERN_BIG
@@ -7978,6 +7985,14 @@ MODK_SIZE equ modk_end - $$
 %if MODK_SIZE > MOD_MAX_KB*1024
   %error "Dock module exceeds its maximum claim"
 %endif
+%endif
+
+MODMAP_START equ MODT_START + MODT_SIZE
+section .modt
+modt_end:
+MODT_SIZE equ modt_end - $$
+%if MODT_SIZE > DL_MOD_KB*1024
+  %error "desktop module exceeds its 4KB runtime budget"
 %endif
 
 section .modc
@@ -8097,6 +8112,8 @@ mod_map:
     dd MODX_START, MODX_SIZE    ; the extended desktop (SPEC.md 39.19.6)
     dw EXT_NENT
 %endif
+    dd MODT_START, MODT_SIZE
+    dw DL_NENT
     dd MODMAP_START             ; ...where the table began, and
     dw 0x384F                   ; the last two bytes of the file
 modmap_end:

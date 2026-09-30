@@ -174,6 +174,22 @@ ui_task:
                                 ; judge: a BIOS reports an Alt+numpad character
                                 ; with AH = 0, which equals an empty latch
 .notae:
+    cmp word [menu_win], 0
+    jne .desktop_key_done
+    cmp byte [dl_sel], 0xFF
+    je .desktop_key_done
+    cmp al, 13
+    je .desktop_open
+    cmp ah, 0x53
+    jne .desktop_key_done
+    mov al, 2
+    jmp short .desktop_command
+.desktop_open:
+    mov al, 1
+.desktop_command:
+    call KERNEL_SEG:dlf_dl_command_x
+    jmp .events
+.desktop_key_done:
     call kbm_key                ; with no mouse on the machine, the arrows ARE
     jc .events                  ; the mouse (SPEC.md 9.6) and this key is not
                                 ; the application's. One compare per keystroke
@@ -657,6 +673,7 @@ ui_task:
                                 ; did nothing and said nothing - exactly the
                                 ; symptom 29.4.1 exists to remove
 .chk_ld:
+    call KERNEL_SEG:dlf_dl_drain_x
     xor ax, ax                  ; set by files.inc's click handler, stored as
     xchg al, [ld_pending]       ; directory index + 1, consumed before running
     or al, al                   ; - a BYTE now, and the xor above leaves AH 0
@@ -2157,7 +2174,16 @@ ui_loc_gate:
     jnz .set
     mov ax, menu_s_closex       ; ...or its MENU_DIS twin
 .set:
-    mov [menu_items_file], ax   ; Close Window is item 0 now: Locator's File
+    mov [menu_items_file], ax
+    mov ax, menu_s_linkopen
+    mov bx, menu_s_linkremove
+    cmp byte [dl_sel], 0xFF
+    jne .links
+    mov ax, menu_s_linkopenx
+    mov bx, menu_s_linkremovex
+.links:
+    mov [menu_items_file+2], ax
+    mov [menu_items_file+4], bx   ; Close Window is item 0 now: Locator's File
                                 ; menu is that item and nothing else, the
                                 ; builtins having moved to Builtins (12.3.1)
 %ifdef KERN_BIG
@@ -2206,6 +2232,13 @@ ui_dispatch:
     pop es
     jne .app
 .kernel:
+    cmp ah, 1
+    jne .ordinary
+    or al, al
+    jz .ordinary
+    call KERNEL_SEG:dlf_dl_command_x
+    ret
+.ordinary:
     mov bl, ah                  ; cmd = the cell's base + the item index
     xor bh, bh
     cmp bx, UI_LOC_N            ; ui_loc_base's own length (two cells on

@@ -2651,8 +2651,13 @@ MENU_LOGO_N equ 5               ; ...and menu_relayout stamps this into cell
 %endif
                                 ; 0's MB_NITEM. It was a literal 3 there, in
                                 ; a different file from the list it counts
+menu_s_linkopenx: db MENU_DIS
+menu_s_linkopen: db 'Open Shortcut', 0
+menu_s_linkremovex: db MENU_DIS
+menu_s_linkremove: db 'Remove Shortcut', 0
+menu_s_linksave: db 'Save Desktop', 0
 menu_items_file:
-    dw menu_s_close
+    dw menu_s_close, menu_s_linkopen, menu_s_linkremove, menu_s_linksave
 %ifdef KERN_BIG
 menu_items_builtin:
     dw menu_s_timer
@@ -2671,11 +2676,11 @@ menu_loc_set:
     dw 0                        ; AM_ONCMD: kernel-dispatched
 %ifdef KERN_BIG
     dw 2                        ; AM_COUNT
-    dw menu_s_file,    menu_items_file,    1
+    dw menu_s_file,    menu_items_file,    4
     dw menu_s_builtin, menu_items_builtin, 3
 %else
     dw 1                        ; AM_COUNT: File alone (SPEC.md 14.6). The
-    dw menu_s_file,    menu_items_file,    1
+    dw menu_s_file,    menu_items_file,    4
                                 ; Builtins menu held Timer, Bounce and Disk,
                                 ; and on this build the first two do not exist
                                 ; while the third is reachable from the

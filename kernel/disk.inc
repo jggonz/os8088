@@ -6594,11 +6594,6 @@ dsk_dest_x:
 ; overriding movsb's source - see the shuffle for why that is not a style
 ; choice on this CPU.
 ; -----------------------------------------------------------------------------
-%ifndef KERN_SMALL              ; NO CALLER ON THE SMALL DISKS (SPEC.md 24.5):
-                                ; the DOS box is the slot's consumer and
-                                ; DOS.O88 ships on kern_big's system disk
-                                ; alone, so kern_small carries the cell and
-                                ; no body - gfx_spans' precedent
 dsk_path_x:
     push bx
     push dx
@@ -6679,7 +6674,7 @@ dsk_path_x:
 .fail:
     stc
     jmp short .out
-%endif                          ; KERN_SMALL
+
 
 ; -----------------------------------------------------------------------------
 ; dsk_byclus - the subdirectory of directory AX whose first cluster is DX

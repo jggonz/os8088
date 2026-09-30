@@ -125,6 +125,7 @@ MC_DMA_HEAD equ 0x7FFF          ; ...and the mask every reader of the head takes
                                 ; kernel tags (SPEC.md 50.2). 0xFF01 was the
                                 ; menu save-under's until SPEC.md 12.4.2 made
                                 ; it MEM_P_MSAVE below, and is not reused
+MEM_K_DESK equ 0xFF10           ; lazy desktop shortcut records (26.8)
 MEM_K_DRV  equ 0xFF03           ; a loaded driver's image (SPEC.md 51.3)
 MEM_K_COPY equ 0xFF04           ; the file manager's copy buffer (22.3): held
                                 ; for exactly one Cut/Copy/Paste operation,

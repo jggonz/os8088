@@ -40,9 +40,12 @@ binding one; `kernsize` prints both lines now.
 left to decide. Raising it means changing the rule. The assembler sees only
 the static half of rule 3; a claim made at boot and never given back is the
 other half, and `tests/kernresident.py` boots a bare VGA desktop under MartyPC
-and walks `mem_tab` for it. As blessed it reads: kernel span ends 114,176,
-last non-purgeable byte 114,176, limit 131,072 — 16,896 spare, with the
-directory read-ahead (63KB, purgeable) the only claim on the heap.
+and walks `mem_tab` for it. With desktop shortcuts (§26.8), it reads:
+kernel span ends 109,056, last non-purgeable byte 113,152, limit 131,072 —
+17,920 spare. DESKTOP.DRV is retained in a bottom-up 4KB claim after shedding
+the boot read-ahead cache. Its assembly guard limits it to 4KB; shortcut
+records claim another 5KB only when needed. `tests/small128.py` audits this
+exact module claim and rejects other pins on its bare 128KB desktop.
 
 **`kern_small`'s `KERN_BUDGET` is a literal** — 107,520, in the `%else` arm —
 mirrored as `KERN_SMALL_BUDGET` beside big's so that a big build can report
@@ -238,69 +241,69 @@ had added.
   "big": {
     "boot2": 2249,
     "bootmax": 192000,
-    "bss": 5545,
+    "bss": 5717,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 40847,
+    "cold": 40957,
     "coldpara": 2560,
     "fatpara": 288,
-    "imgpara": 3360,
-    "kend": 6784,
+    "imgpara": 3392,
+    "kend": 6816,
     "kseg": 96,
-    "ksize": 107008,
+    "ksize": 107520,
     "lowbss": 6366,
     "lowpara": 448,
     "minramkb": 196,
     "ovl": 1837,
     "ovlw": 5105,
     "stk0": 512,
-    "text": 47820,
+    "text": 48182,
     "vgabuf": 336,
     "vgabufpara": 32
   },
   "emu": {
     "boot2": 2249,
     "bootmax": 192000,
-    "bss": 5525,
+    "bss": 5717,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 40556,
-    "coldpara": 2560,
+    "cold": 41081,
+    "coldpara": 2592,
     "fatpara": 288,
-    "imgpara": 3328,
-    "kend": 6752,
+    "imgpara": 3392,
+    "kend": 6848,
     "kseg": 96,
-    "ksize": 106496,
+    "ksize": 108032,
     "lowbss": 6366,
     "lowpara": 448,
     "minramkb": 196,
     "ovl": 1843,
-    "ovlw": 5104,
+    "ovlw": 5105,
     "stk0": 512,
-    "text": 47598,
+    "text": 48447,
     "vgabuf": 336,
     "vgabufpara": 32
   },
   "small": {
     "boot2": 2249,
     "bootmax": 122368,
-    "bss": 3481,
+    "bss": 3653,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 25911,
-    "coldpara": 1632,
+    "cold": 26145,
+    "coldpara": 1664,
     "fatpara": 64,
-    "imgpara": 2464,
-    "kend": 4544,
+    "imgpara": 2496,
+    "kend": 4608,
     "kseg": 96,
-    "ksize": 71168,
+    "ksize": 72192,
     "lowbss": 3636,
     "lowpara": 288,
     "minramkb": 128,
     "ovl": 1942,
     "ovlw": 1502,
     "stk0": 512,
-    "text": 35574,
+    "text": 35936,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -671,29 +674,29 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 32,877 | 37.1% |
-| the window system and its furniture | 23,048 | 26.0% |
-| drawing: adapters, primitives, glyphs, icons | 13,632 | 15.4% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,333 | 10.5% |
-| the kernel proper: API table, heap, scheduler, events | 7,749 | 8.7% |
+| the file system, end to end | 32,922 | 36.9% |
+| the window system and its furniture | 23,435 | 26.3% |
+| drawing: adapters, primitives, glyphs, icons | 13,632 | 15.3% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,335 | 10.5% |
+| the kernel proper: API table, heap, scheduler, events | 7,787 | 8.7% |
 | the three built-in kinds | 1,482 | 1.7% |
 | the Control Panel | 546 | 0.6% |
-| **total** | **88,667** | |
+| **total** | **89,139** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |
 |---|---:|---:|---:|---:|---:|---:|
-| `wm.inc` — the window manager (§11) | 10,408 | 142 | **10,550** | 1,140 | — | — |
-| `files.inc` — the Disk window (§22) | 1,066 | 8,318 | **9,384** | 481 | — | — |
+| `wm.inc` — the window manager (§11) | 10,418 | 142 | **10,560** | 1,140 | — | — |
+| `files.inc` — the Disk window (§22) | 1,066 | 8,363 | **9,429** | 481 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,859 | 1,077 | **6,936** | 109 | 526 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 395 | 6,530 | **6,925** | 420 | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 101 | 5,031 | **5,132** | 188 | — | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 82 | 4,963 | **5,045** | 158 | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 4,201 | — | **4,201** | 151 | 128 | — |
 | `memory.inc` — the claim heap (§50) | 217 | 2,951 | **3,168** | 26 | 324 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 3,027 | — | **3,027** | 58 | — | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,749 | 177 | **2,926** | 197 | 84 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 3,109 | — | **3,109** | 58 | — | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,800 | 177 | **2,977** | 197 | 84 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 563 | 2,004 | **2,567** | 301 | — | — |
 | `assoc.inc` — file type associations (§54) | 419 | 2,042 | **2,461** | 31 | — | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,248 | **2,248** | 160 | — | — |
@@ -704,7 +707,7 @@ there and nowhere else.
 | `snd.inc` — the sound layer (§34) | 1,344 | — | **1,344** | 293 | — | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,297 | — | **1,297** | 20 | — | — |
 | `loader.inc` — the package loader (§21) | 4 | 1,231 | **1,235** | 46 | — | — |
-| `desk.inc` — the desktop and volume zones (§14/§26.1) | 21 | 1,048 | **1,069** | 53 | — | — |
+| `desk.inc` — the desktop and volume zones (§14/§26.1) | 21 | 1,064 | **1,085** | 53 | — | — |
 | `icons.inc` — the icon renderer (§10) | 1,045 | — | **1,045** | 281 | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 1,014 | — | **1,014** | 9 | — | — |
 | `dock.inc` — the dock strip (§30) | 939 | 45 | **984** | 59 | — | — |
@@ -715,10 +718,11 @@ there and nowhere else.
 | `ctrl.inc` — the Control Panel (§31) | 351 | 195 | **546** | 28 | — | — |
 | `toast.inc` — the menu bar's transient message (§59) | 433 | — | **433** | 25 | — | — |
 | `blank.inc` — the idle screen blanker (§64) | 200 | 228 | **428** | — | — | — |
+| `mod.inc` — on-demand kernel modules (§2.8) | 98 | 317 | **415** | — | — | — |
 | `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 405 | **405** | — | — | — |
-| `mod.inc` — on-demand kernel modules (§2.8) | 82 | 304 | **386** | — | — | — |
-| `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 59 | 312 | **371** | 178 | — | — |
+| `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 61 | 312 | **373** | 214 | — | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 242 | — | **242** | 22 | — | — |
+| `links.inc` — shortcut dispatch and shared UI staging (§26.8) | 192 | 36 | **228** | 136 | — | — |
 | `clip.inc` — the system clipboard (§55) | 179 | — | **179** | 5 | — | — |
 | `events.inc` — the event ring (§10) | 154 | — | **154** | 3 | 128 | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | 46 | **46** | — | — | — |
@@ -733,9 +737,10 @@ there and nowhere else.
 | `stkdiag.inc` — what an interrupt costs a task stack (STACK-SLOTS-PLAN §10), `STKDIAG=1` | — | — | **0** | — | — | — |
 | `moudiag.inc` — what the identify window saw (§9.4.6), `MOUDIAG=1` | — | — | **0** | — | — | — |
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
+| `linkcfg.inc` — DESKTOP.DRV persistence, no static kernel bytes (§26.8) | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,349 | 163 | **2,512** | — | — | 421 |
-| **total** | **47,820** | **40,847** | **88,667** | **5,545** | **6,366** | **2,249** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,358 | 163 | **2,521** | — | — | 421 |
+| **total** | **48,182** | **40,957** | **89,139** | **5,717** | **6,366** | **2,249** |
 <!-- END generated table -->
 
 ### Reading it

@@ -485,7 +485,7 @@ def sys_attr(name11: bytes, boot: bool) -> int:
     boot disk's root into SYSTEM/ (SPEC.md 28.3) and is the same file it was,
     so the stamp follows it rather than staying behind with the folder it
     left."""
-    if name11 == ASC_NAME:
+    if name11 in (ASC_NAME, b"SYSTEM  CFG", b"DESKTOP CFG"):
         return A_HIDDEN | A_SYS     # the kernel rewrites it, so not read-only
     if not boot:
         return A_ARCH

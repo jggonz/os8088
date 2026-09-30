@@ -1927,7 +1927,7 @@ $(shell mkdir -p $(BUILD); \
                                       $(BUILD)/boothd.bin \
                                       $(BUILD)/ctrl.drv $(BUILD)/format.drv \
                                       $(BUILD)/clone.drv $(BUILD)/hiber.drv \
-                                      $(BUILD)/dock.drv $(BUILD)/extd.drv \
+                                      $(BUILD)/dock.drv $(BUILD)/extd.drv $(BUILD)/desktop.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
                                       $(BUILD)/boot120.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
@@ -2277,7 +2277,7 @@ $(FONTINC): $(FONTSRC) tools/os88font.py | $(BUILD)
 # (SPEC.md 2.8.2), so shipping the wrong one is refused rather than executed;
 # this is what stops it happening in the first place.
 KMODDIR = $(BUILD)
-KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/clone.drv
+KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/clone.drv $(KMODDIR)/desktop.drv
 # ...and kern_big's FOURTH, hibernate (SPEC.md 87, MOD_HIBER). It is NOT in
 # $(KMODS) because $(SMALLDRIVERS) is $(KMODS) and kern_small has no hibernate
 # at all now - no mod_tab row, no name and no module - so a small floppy that
@@ -2327,6 +2327,12 @@ endif
 # is what the machine gets back. Size-passed code packs poorly - 82-90% - and
 # the four modules still give the 360KB disk five clusters; every fetch
 # decodes ~6KB, ~50 ms on the 8088, against the sectors it no longer reads.
+ifneq ($(KERN_SMALL),)
+KMODARGS += -m 5=$(BUILD)/desktop.drv
+else
+KMODARGS += -m 6=$(BUILD)/desktop.drv
+endif
+
 ifneq ($(PKGZ),)
 KMODARGS += --wrap $(PKGZ)
 endif
