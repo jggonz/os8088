@@ -1,3 +1,4 @@
+%ifdef KERN_BIG
 ; =============================================================================
 ; Desktop shortcuts (SPEC.md 26.8). Paint and open work without the system
 ; disk. Behavior lives in DESKTOP.DRV; resident code only dispatches.
@@ -18,9 +19,14 @@ DL_PATH     equ 8
 DL_PATHMAX  equ 128
 DL_ICON     equ 136
 DL_W        equ 112
-DL_H        equ 64
-DL_HCGA     equ 48
-DL_NENT     equ 9
+DL_H        equ 44
+DL_HCGA     equ 28
+DL_NENT     equ 11
+%ifdef KERN_EMU
+DL_GLUE_SEG equ COLD_SEG
+%else
+DL_GLUE_SEG equ KERNEL_SEG
+%endif
 
 section .text
 ; Pending state is initialized, not dependent on uninitialized bss.
@@ -30,12 +36,14 @@ dl_sel:     db 0xFF
 dl_dirty:   db 0
 dl_save:    db 0
 dl_open:    db 0
-dl_clock:   dw 0
 dl_cfgname: db 'DESKTOP.CFG',0
-dl_sysname: db 'KERNEL.SYS',0
+dl_sysname equ drv_sysname
 dl_sysmissing: db 'Insert the system disk',0
 
 section .text
+%ifdef KERN_EMU
+section .cold                   ; emu reuses its existing cold-rung slack
+%endif
 dlf_dl_damage_x:
     cmp byte [dl_count], 0
     je .done
@@ -50,29 +58,29 @@ dlf_dl_paint_damage_x:
     retf
 
 section .text
+%ifdef KERN_EMU
+section .cold                   ; emu reuses its existing cold-rung slack
+%endif
 dlf_dl_drain_x:
-    push ax
-    mov al, [dl_open]
-    or al, [dl_save]
+    cmp word [dl_save], 0        ; save/open are adjacent bytes
     jz .done
     call far [DLFP+8*4]
 .done:
-    pop ax
     retf
 
 
-section .bss
-dl_stage:   resb DL_ICON
 ; UI-only consumers already share dsk_ent/dsk_ico for names and pictures.
 dl_name     equ dsk_ent
-dl_caption  equ dsk_ent+16
 ; Opening yields during I/O: use the UI loader's name, never paint staging.
 dl_openname equ ld_lname
 section .cold
-; The image is prepared while the boot disk is in its drive and retained.
+; The UI prepares the image after the first frame while the boot disk is present.
 ; This lets first links from a swapped-in apps floppy work without a swap.
 ; An empty desktop skips every paint/click dispatch and claims no records.
 section .text
+%ifdef KERN_EMU
+section .cold                   ; emu reuses its existing cold-rung slack
+%endif
 dlf_dl_paint_x:
     cmp byte [dl_count], 0
     je .done
@@ -88,6 +96,9 @@ dlf_dl_click_x:
     clc
     retf
 section .text
+%ifdef KERN_EMU
+section .cold                   ; emu reuses its existing cold-rung slack
+%endif
 dlf_dl_drop_x:
     push ax
     mov al, MOD_DESK
@@ -97,42 +108,25 @@ dlf_dl_drop_x:
     call far [DLFP+6*4]
     retf
 .missing:
-    call KERNEL_SEG:dlf_dl_missing_x
+    call DL_GLUE_SEG:dlf_dl_missing_x
     retf
 section .text
+%ifdef KERN_EMU
+section .cold                   ; emu reuses its existing cold-rung slack
+%endif
 dlf_dl_command_x:
-    cmp word [mod_r_desk], 0
-    je .done
-    call far [DLFP+7*4]
-.done:
-    retf
+    jmp far [DLFP+7*4]           ; unloaded slots already point at mod_gone
 
 section .text
+%ifdef KERN_EMU
+section .cold                   ; emu reuses its existing cold-rung slack
+%endif
 dlf_dl_missing_x:
-    push si
-    push cx
-    push es
     push ds
-    pop es
+    pop es                      ; only the drop path calls this; all registers dead
     mov si, dl_sysmissing
     xor cx, cx
     call KERNEL_SEG:cw_toast_show
-    pop es
-    pop cx
-    pop si
-    retf
-
-section .text
-dlf_dl_boot_x:
-    push ax
-    push es
-    mov al, MOD_DESK
-    call COLD_SEG:dlf_mod_need
-    jc .done
-    call far [DLFP]
-.done:
-    pop es
-    pop ax
     retf
 
 section .cold
@@ -141,19 +135,9 @@ dlf_%1:
     call %1
     retf
 %endmacro
-%ifdef KERN_SMALL
-; The big kernel already exports these for hibernation.
-drvf_drv_vol_bank: call drv_vol_bank
-                   retf
-drvf_drv_mounted:  call drv_mounted
-                   retf
-drvf_drv_vol_back: call drv_vol_back
-                   retf
-%endif
 DLSHIM mod_need
 DLSHIM desk_zone_redraw
 DLSHIM fm_choose
-DLSHIM fm_icon_blank
 DLSHIM fm_stage_name
 DLSHIM fmv_get_icon
 DLSHIM ld_pkg_start_x
@@ -161,6 +145,15 @@ DLSHIM ld_say_status
 %ifdef OS88_ASSOC
 DLSHIM assoc_post_x
 %endif
+
+; The title shares the menu string; only the window template is resident.
+section .text
+dl_info_title equ menu_s_linkinfo
+dl_info_tpl: dw 120, 60, 400, 108, dl_info_title, dlf_dl_info_paint, 0, 0
+section .cold
+dlf_dl_info_paint:
+    call far [DLFP+9*4]
+    ret
 
 section .modt
 dlt_header:
@@ -171,6 +164,9 @@ dlt_header:
     dw dlt_load, dlt_save
     dw dlt_entry_dlt_paint, dlt_entry_dlt_damage, dlt_entry_dlt_paint_damage
     dw dlt_entry_dlt_click, dlt_entry_dlt_drop, dlt_entry_dlt_command, dlt_entry_dlt_drain
+    dw dlt_entry_dl_info_paint, dlt_entry_dl_key
+
+dl_stage: times DL_ICON db 0
 
 dl_msgfull: db 'Desktop is full',0
 dl_msgpath: db 'Shortcut path too long',0
@@ -197,8 +193,8 @@ dl_badge:
     times 8 dw 0xFF00
     dw 0xFF00,0x8100,0xBD00,0x8D00,0x9500,0xA100,0x8100,0xFF00
 
-dl_leaf:    dw 0
 dl_index:   db 0
+dl_clock:   dw 0
 dl_height:  dw 0
 dl_pic:     dw 0
 dl_right:   dw 0
@@ -275,7 +271,7 @@ dl_read:
     mov cx, DL_ICON/2
 .copy:
     mov ax, [es:si]
-    mov [di], ax
+    mov [cs:di], ax
     add si, 2
     add di, 2
     loop .copy
@@ -310,7 +306,11 @@ dl_write:
     mov si, dl_stage
     mov cx, DL_ICON/2
     cld
+    push ds
+    push cs
+    pop ds
     rep movsw
+    pop ds
     mov si, dsk_ico
     mov cx, 32
     rep movsw
@@ -348,7 +348,7 @@ dl_rect:
     sub bx, ax
     sub bx, DL_W+8
     mov [cs:dl_right], bx
-    mov ax, [dl_stage+DL_X]
+    mov ax, [cs:dl_stage+DL_X]
     or ax, ax
     jns .xpos
     xor ax, ax
@@ -357,7 +357,7 @@ dl_rect:
     jle .xok
     mov ax, bx
 .xok:
-    mov bx, [dl_stage+DL_Y]
+    mov bx, [cs:dl_stage+DL_Y]
     cmp bx, MBAR_H+4
     jge .ypos
     mov bx, MBAR_H+4
@@ -366,8 +366,8 @@ dl_rect:
     jle .yok
     mov bx, [cs:dl_bottom]
 .yok:
-    mov [dl_stage+DL_X], ax
-    mov [dl_stage+DL_Y], bx
+    mov [cs:dl_stage+DL_X], ax
+    mov [cs:dl_stage+DL_Y], bx
     mov cx, ax
     add cx, DL_W-1
     mov dx, bx
@@ -376,12 +376,12 @@ dl_rect:
     ret
 
 ; This is only caption derivation: the full persisted path stays untouched.
-; Out SI = leaf; dl_name = NUL-padded 8.3 name. Clobbers AX/CX/DI.
+; Out SI = NUL-terminated basename without extension. Clobbers AX/DI.
 dl_names:
     mov si, dl_stage+DL_PATH
     mov di, si
 .scan:
-    mov al, [si]
+    mov al, [cs:si]
     inc si
     cmp al, '\'
     jne .next
@@ -389,24 +389,21 @@ dl_names:
 .next:
     or al, al
     jnz .scan
-    mov [cs:dl_leaf], di
     mov si, di
     mov di, dl_name
-    mov cx, 16
-    xor ax, ax
-.zero:
-    mov [di], al
-    inc di
-    loop .zero
-    mov di, dl_name
 .copy:
-    mov al, [si]
+    mov al, [cs:si]
     inc si
+    cmp al, '.'
+    je .end
+    or al, al
+    jz .end
     mov [di], al
     inc di
-    or al, al
-    jnz .copy
-    mov si, [cs:dl_leaf]
+    jmp short .copy
+.end:
+    mov byte [di], 0
+    mov si, dl_name
     ret
 
 ; Gfx lock held. No erase: wm composition has already drawn the desktop.
@@ -444,15 +441,15 @@ dl_draw:
     add dx, 8
 .body:
     mov si, dsk_ico
-    call COLD_SEG:dlf_fm_icon_blank
+    call dl_icon_blank
     jz .generic
     call KERNEL_SEG:cw_icon_draw16
     jmp short .badge
 .generic:
     mov si, dl_document
-    cmp byte [dl_stage+DL_TYPE], 2
+    cmp byte [cs:dl_stage+DL_TYPE], 2
     je .folder
-    cmp byte [dl_stage+DL_TYPE], 1
+    cmp byte [cs:dl_stage+DL_TYPE], 1
     jne .glyph
     mov si, ico_app16
     call KERNEL_SEG:cw_icon_draw
@@ -474,51 +471,9 @@ dl_draw:
     pop es
     call KERNEL_SEG:dlf_icon_draw_x
     call dl_names
-    ; The first caption is the stem, the last is the full leaf name.
-    mov si, dl_name
-    mov di, dl_caption
-.stem:
-    mov al, [si]
-    inc si
-    cmp al, '.'
-    je .stemend
-    or al, al
-    jz .stemend
-    mov [di], al
-    inc di
-    jmp short .stem
-.stemend:
-    mov byte [di], 0
-    mov si, dl_caption
     mov dx, [cs:dl_py]
     add dx, [cs:dl_pic]
     add dx, 2
-    call dl_label
-    mov al, [dl_stage+DL_DRV]
-    add al, 'A'
-    mov [dl_caption], al
-    mov byte [dl_caption+1], ':'
-    mov si, dl_stage+DL_PATH
-    mov di, dl_caption+2
-    mov cx, 11
-.parent:
-    cmp si, [cs:dl_leaf]
-    jae .parentend
-    mov al, [si]
-    inc si
-    mov [di], al
-    inc di
-    loop .parent
-    cmp si, [cs:dl_leaf]
-    jae .parentend
-    mov byte [di-1], '~'
-.parentend:
-    mov byte [di], 0
-    mov si, dl_caption
-    add dx, 10
-    call dl_label
-    mov si, dl_name
-    add dx, 10
     call dl_label
     mov al, [cs:dl_index]
     cmp al, [dl_sel]
@@ -748,7 +703,7 @@ dlt_click:
     cmp al, [dl_sel]
     jne .single
     mov bx, [ui_click_t]
-    sub bx, [dl_clock]
+    sub bx, [cs:dl_clock]
     cmp bx, DESK_DBLT
     jae .single
     inc al
@@ -759,7 +714,7 @@ dlt_click:
     jmp short .out
 .single:
     mov bx, [ui_click_t]
-    mov [dl_clock], bx
+    mov [cs:dl_clock], bx
     call dl_select
     call KERNEL_SEG:cw_gfx_unlock
     call dl_drag
@@ -835,8 +790,8 @@ dl_drag:
     call KERNEL_SEG:cw_wm_hit
     or bx, bx
     jnz .cancel
-    mov ax, [dl_stage+DL_X]
-    mov bx, [dl_stage+DL_Y]
+    mov ax, [cs:dl_stage+DL_X]
+    mov bx, [cs:dl_stage+DL_Y]
     mov [cs:dl_px], ax
     mov [cs:dl_py], bx
     mov al, [dl_sel]
@@ -863,11 +818,11 @@ dl_move:
     mov ax, [mouse_x]
     sub ax, [cs:dl_pressx]
     add ax, [cs:dl_oldx]
-    mov [dl_stage+DL_X], ax
+    mov [cs:dl_stage+DL_X], ax
     mov ax, [mouse_y]
     sub ax, [cs:dl_pressy]
     add ax, [cs:dl_oldy]
-    mov [dl_stage+DL_Y], ax
+    mov [cs:dl_stage+DL_Y], ax
     call dl_rect
     ret
 
@@ -894,10 +849,10 @@ dlt_drop:
     call COLD_SEG:dlf_fm_stage_name
     call COLD_SEG:dlf_fmv_get_icon
     mov ax, [fm_ftype]
-    mov [dl_stage+DL_TYPE], al
+    mov [cs:dl_stage+DL_TYPE], al
     mov di, [fm_vp]
     mov dl, [di+FS_DRV]
-    mov [dl_stage+DL_DRV], dl
+    mov [cs:dl_stage+DL_DRV], dl
     mov ax, [di+FS_CWD]
     call COLD_SEG:dkf_dsk_chdir_q
     pop ax
@@ -907,8 +862,8 @@ dlt_drop:
     jne .sig
     xor ax, ax
 .sig:
-    mov [dl_stage+DL_SIG], ax
-    push ds
+    mov [cs:dl_stage+DL_SIG], ax
+    push cs
     pop es
     mov di, dl_stage+DL_PATH
     mov cx, DL_PATHMAX-13
@@ -917,16 +872,16 @@ dlt_drop:
     pop bp
     jc .path
     add di, cx
-    cmp byte [di-1], '\'
+    cmp byte [es:di-1], '\'
     je .append
-    mov byte [di], '\'
+    mov byte [es:di], '\'
     inc di
 .append:
     mov si, fm_name
 .name:
     mov al, [si]
     inc si
-    mov [di], al
+    mov [es:di], al
     inc di
     or al, al
     jnz .name
@@ -942,17 +897,17 @@ dlt_drop:
     mov cl, 8
     shl di, cl
     add di, DL_HDR
-    mov al, [dl_stage+DL_DRV]
+    mov al, [cs:dl_stage+DL_DRV]
     cmp al, [es:di+DL_DRV]
     jne .next
-    mov ax, [dl_stage+DL_SIG]
+    mov ax, [cs:dl_stage+DL_SIG]
     cmp ax, [es:di+DL_SIG]
     jne .next
     add di, DL_PATH
     mov si, dl_stage+DL_PATH
     mov cx, DL_PATHMAX
 .compare:
-    mov al, [si]
+    mov al, [cs:si]
     inc si
     cmp al, [es:di]
     jne .next
@@ -976,7 +931,11 @@ dlt_drop:
     mov si, dl_stage
     mov cx, DL_ICON/2
     cld
+    push ds
+    push cs
+    pop ds
     rep movsw
+    pop ds
     mov si, dsk_ico
     mov cx, 32
     rep movsw
@@ -993,7 +952,7 @@ dlt_drop:
     mov cx, DL_ICON/2
 .restore:
     mov ax, [es:si]
-    mov [di], ax
+    mov [cs:di], ax
     add si, 2
     add di, 2
     loop .restore
@@ -1008,10 +967,10 @@ dlt_drop:
 .place:
     mov ax, [cs:dl_pressx]
     sub ax, DL_W/2
-    mov [dl_stage+DL_X], ax
+    mov [cs:dl_stage+DL_X], ax
     mov ax, [cs:dl_pressy]
     sub ax, 8
-    mov [dl_stage+DL_Y], ax
+    mov [cs:dl_stage+DL_Y], ax
     push bx
     call dl_rect
     pop bx
@@ -1068,6 +1027,8 @@ dlt_command:
 .selected:
     cmp byte [dl_sel], 0xFF
     je .done
+    cmp al, 4
+    je dl_info_open
     cmp al, 1
     jne .remove
     mov al, [dl_sel]
@@ -1161,13 +1122,17 @@ dlt_drain:
     mov di, DL_CAP
     mov cx, DL_ICON/2
     cld
+    push ds
+    push cs
+    pop ds
     rep movsw
+    pop ds
     call KERNEL_SEG:cw_gfx_unlock
     call dl_activate
 .save:
     xor al, al
     xchg al, [dl_save]
-    or al, al
+    test al, 1                   ; bit 1 watches the Get Info window, not a save
     jz .done
     cmp byte [dl_dirty], 0
     je .done
@@ -1191,6 +1156,7 @@ dlt_drain:
 .clean:
     mov byte [dl_dirty], 0
 .done:
+    call dl_info_reap
     pop es
     jmp dl_return
 
@@ -1293,6 +1259,167 @@ dl_activate:
     call COLD_SEG:dlf_fm_choose
     ret
 
+dl_info_win: dw 0
+dl_info_type: db 0
+dl_info_target: times DL_PATHMAX+2 db 0
+dl_info_kinds: dw dl_info_doc, dl_info_app, dl_info_folder
+dl_info_doc: db 'Document shortcut',0
+dl_info_app: db 'Application shortcut',0
+dl_info_folder: db 'Folder shortcut',0
+
+; Called by Locator with the gfx lock free. Snapshot once; no disk access.
+dl_info_open:
+    call dl_enter
+    push es
+    call KERNEL_SEG:cw_gfx_lock
+    mov al, [dl_sel]
+    call dl_read
+    mov al, [cs:dl_stage+DL_TYPE]
+    mov [cs:dl_info_type], al
+    cld
+    push cs
+    pop es
+    mov al, [cs:dl_stage+DL_DRV]
+    add al, 'A'
+    mov di, dl_info_target
+    stosb
+    mov al, ':'
+    stosb
+    mov si, dl_stage+DL_PATH
+    mov cx, DL_PATHMAX
+    push ds
+    push cs
+    pop ds
+    rep movsb
+    pop ds
+    mov bx, [cs:dl_info_win]
+    or bx, bx
+    jz .create
+    test byte [bx+W_FLAGS], 1
+    jz .create
+    cmp word [bx+W_PAINT], dlf_dl_info_paint
+    je .show
+.create:
+    mov si, dl_info_tpl
+    call KERNEL_SEG:apic_wm_create ; DS/ES kernel template -> kernel window
+    jc .full
+    mov [cs:dl_info_win], bx
+.show:
+    or byte [dl_save], 2          ; reuse the drain gate until the window closes
+    call KERNEL_SEG:cw_wm_show
+    jmp short .out
+.full:
+    call KERNEL_SEG:cw_snd_beep
+.out:
+    call KERNEL_SEG:cw_gfx_unlock
+    pop es
+    jmp dl_return
+
+; Unowned kernel windows close by hiding. Reclaim the slot in the next UI
+; drain, like the file dialog, after its callback stack has unwound.
+dl_info_reap:
+    mov bx, [cs:dl_info_win]
+    or bx, bx
+    jz .done
+    call KERNEL_SEG:cw_gfx_lock
+    test byte [bx+W_FLAGS], 2
+    jnz .watch
+    call KERNEL_SEG:apic_wm_destroy
+    mov word [cs:dl_info_win], 0
+    jmp short .unlock
+.watch:
+    or byte [dl_save], 2
+.unlock:
+    call KERNEL_SEG:cw_gfx_unlock
+.done:
+    ret
+
+; W_PAINT: cached snapshot only, all registers preserved. Three path rows
+; fit even on CGA; the fixed 8px font puts 48 characters in 384 pixels.
+dl_info_paint:
+    call dl_enter
+    push es
+    mov cx, [si+W_X]
+    add cx, 8
+    mov dx, [si+W_Y]
+    add dx, TITLE_H+8
+    xor bx, bx
+    mov bl, [cs:dl_info_type]
+    shl bx, 1
+    mov si, [cs:dl_info_kinds+bx]
+    call .line
+    add dx, 16
+    mov si, dl_info_target
+.row:
+    mov di, si
+    mov bx, 48
+.scan:
+    cmp byte [cs:di], 0
+    je .chunk
+    inc di
+    dec bx
+    jnz .scan
+.chunk:
+    xor al, al
+    xchg al, [cs:di]
+    push ax
+    call .line
+    pop ax
+    mov [cs:di], al
+    or al, al
+    jz .done
+    mov si, di
+    add dx, 12
+    jmp short .row
+.done:
+    pop es
+    jmp dl_return
+.line:
+    push ds
+    push cs
+    pop ds                      ; the public X cell reads module text
+    mov ax, (CWHITE << 8) | CBLACK
+    call KERNEL_SEG:apic_font_run
+    pop ds
+    ret
+
+dl_key:
+    cmp word [menu_win], 0
+    jne .miss
+    cmp al, 13
+    je .open
+    cmp ah, 0x53
+    jne .miss
+    mov al, 2
+    jmp short .command
+.open:
+    mov al, 1
+.command:
+    call dlt_command
+    stc
+    ret
+.miss:
+    clc
+    ret
+
+; A small local scan saves a permanent cold-side trampoline.
+dl_icon_blank:
+    push ax
+    push cx
+    push si
+    xor ax, ax
+    mov cx, 32
+.orw:
+    or ax, [si]
+    inc si
+    inc si
+    loop .orw
+    or ax, ax
+    pop si
+    pop cx
+    pop ax
+    ret
+
 ; Module-local register ladders: same layout as kentc_di/kretc_di.
 dl_enter:
     ; STKBALANCE-NET: +6 - banks AX..DI on the caller's stack
@@ -1327,5 +1454,8 @@ DLENTRY dlt_click
 DLENTRY dlt_drop
 DLENTRY dlt_command
 DLENTRY dlt_drain
+DLENTRY dl_info_paint
+DLENTRY dl_key
 
 section .text
+%endif

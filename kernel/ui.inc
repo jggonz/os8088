@@ -38,6 +38,45 @@
 ; already holds (it is non-reentrant, SPEC 7).
 ; =============================================================================
 
+; Emu places menu dispatch in cold slack; big keeps its far entry in text,
+; and small keeps its original near calls and returns byte for byte.
+%macro UID_CALL 1
+%ifdef KERN_EMU
+    call KERNEL_SEG:uidf_ %+ %1
+%else
+    call %1
+%endif
+%endmacro
+%macro UID_JUMP 1
+%ifdef KERN_EMU
+    jmp KERNEL_SEG:uidf_ %+ %1
+%elifdef KERN_SMALL
+    jmp %1
+%else
+    call %1
+    retf
+%endif
+%endmacro
+%macro UID_RETURN 0
+%ifdef KERN_SMALL
+    ret
+%else
+    retf
+%endif
+%endmacro
+%macro UID_DISPATCH 1
+%ifdef KERN_SMALL
+    call %1
+%else
+    call UI_DISPATCH_SEG:%1
+%endif
+%endmacro
+%ifdef KERN_EMU
+UI_DISPATCH_SEG equ COLD_SEG
+%else
+UI_DISPATCH_SEG equ KERNEL_SEG
+%endif
+
 ; What a posted restart ASKED FOR (SPEC.md 20.10). Two values rather than a
 ; bare flag, because the two doors labelled Restart know different things: the
 ; System menu's is the user quitting the GUI with the Control Panel possibly
@@ -72,6 +111,19 @@ UI_TDBLT    equ 9               ; title-bar double-click window, ticks - the
 ; clobbers: everything (it is a task entry, not a callable routine)
 ; -----------------------------------------------------------------------------
 ui_task:
+%ifdef KERN_BIG
+    ; The first frame, boot timer and cursor are complete. Load shortcuts
+    ; once on the UI task, with the gfx lock free, then repaint loaded links.
+.desktop_init:
+    mov al, MOD_DESK
+    call COLD_SEG:dlf_mod_need
+    jc .desktop_ready
+    call far [DLFP]
+    cmp byte [dl_count], 0
+    je .desktop_ready
+    mov byte [cp_dirty], 1
+.desktop_ready:
+%endif
 .loop:
 %ifdef KFZTRACE
     inc word [khb_uipass]       ; ONE PASS OF THE UI TASK. The watchdog keyed
@@ -174,22 +226,13 @@ ui_task:
                                 ; judge: a BIOS reports an Alt+numpad character
                                 ; with AH = 0, which equals an empty latch
 .notae:
-    cmp word [menu_win], 0
-    jne .desktop_key_done
+%ifdef KERN_BIG
     cmp byte [dl_sel], 0xFF
     je .desktop_key_done
-    cmp al, 13
-    je .desktop_open
-    cmp ah, 0x53
-    jne .desktop_key_done
-    mov al, 2
-    jmp short .desktop_command
-.desktop_open:
-    mov al, 1
-.desktop_command:
-    call KERNEL_SEG:dlf_dl_command_x
-    jmp .events
+    call far [DLFP+10*4]
+    jc .events
 .desktop_key_done:
+%endif
     call kbm_key                ; with no mouse on the machine, the arrows ARE
     jc .events                  ; the mouse (SPEC.md 9.6) and this key is not
                                 ; the application's. One compare per keystroke
@@ -319,7 +362,7 @@ ui_task:
     call gfx_lock               ; before it can draw them (SPEC.md 47 rule 5)
     call menu_track             ; live mouse x; out: AX = CMD_* or 0
     call gfx_unlock
-    call ui_dispatch
+    UID_DISPATCH ui_dispatch
     jmp .yj1
 
 .clock_cell:                    ; open the Control Panel on its Date/Time
@@ -673,7 +716,9 @@ ui_task:
                                 ; did nothing and said nothing - exactly the
                                 ; symptom 29.4.1 exists to remove
 .chk_ld:
-    call KERNEL_SEG:dlf_dl_drain_x
+%ifdef KERN_BIG
+    call DL_GLUE_SEG:dlf_dl_drain_x
+%endif
     xor ax, ax                  ; set by files.inc's click handler, stored as
     xchg al, [ld_pending]       ; directory index + 1, consumed before running
     or al, al                   ; - a BYTE now, and the xor above leaves AH 0
@@ -2168,6 +2213,9 @@ ui_grow:
 ui_loc_gate:
     push ax
     push bx
+%ifdef KERN_BIG
+    push cx
+%endif
     mov ax, menu_s_close        ; live: the plain string
     call wm_top                 ; BX = frontmost visible, 0 = nothing to close
     or bx, bx
@@ -2175,29 +2223,34 @@ ui_loc_gate:
     mov ax, menu_s_closex       ; ...or its MENU_DIS twin
 .set:
     mov [menu_items_file], ax
+%ifdef KERN_BIG
     mov ax, menu_s_linkopen
     mov bx, menu_s_linkremove
+    mov cx, menu_s_linkinfo
     cmp byte [dl_sel], 0xFF
     jne .links
-    mov ax, menu_s_linkopenx
-    mov bx, menu_s_linkremovex
+    dec ax                      ; each disabled prefix is one byte before its name
+    dec bx
+    dec cx
 .links:
     mov [menu_items_file+2], ax
-    mov [menu_items_file+4], bx   ; Close Window is item 0 now: Locator's File
-                                ; menu is that item and nothing else, the
-                                ; builtins having moved to Builtins (12.3.1)
-%ifdef KERN_BIG
+    mov [menu_items_file+4], bx
+    mov [menu_items_file+8], cx
     call COLD_SEG:hb_ok_x       ; ...and Hibernate greys with its reason
                                 ; (SPEC.md 87.2): no fixed disk, or extended
                                 ; memory held that the image would not carry.
                                 ; The CHOICE is hb_ok_x's own tail now - it is
                                 ; the only reader its answer ever had, and the
                                 ; three movs are .cold bytes there
+    pop cx
 %endif
     pop bx
     pop ax
     ret
 
+%ifdef KERN_EMU
+section .cold                   ; keep emu's image and cold rungs unchanged
+%endif
 ui_dispatch:
     cmp ax, 0xFFFF
     je .ret
@@ -2221,24 +2274,26 @@ ui_dispatch:
     or bx, bx
     jz .ret                     ; a window with no menus cannot be here
     push es                     ; the set is the OWNER's data (SPEC.md 12.2):
-    push cs                     ; Locator's lives in kernel .text, a
+    push ds                     ; Locator's lives in kernel .text, a
     pop es                      ; package's in its own segment - so this
     mov di, [menu_win]          ; read must go through the owner's segment,
     or di, di                   ; like every other read of the set. Through
     jz .ownset                  ; DS it tested a random word of kernel .text
-    call wm_strseg              ; at the package set's offset, and dispatched
+    UID_CALL wm_strseg              ; at the package set's offset, and dispatched
 .ownset:                        ; app menus as Locator commands whenever that
     cmp word [es:bx + AM_ONCMD], 0  ; word happened to be zero
     pop es
     jne .app
 .kernel:
+%ifdef KERN_BIG
     cmp ah, 1
     jne .ordinary
     or al, al
     jz .ordinary
-    call KERNEL_SEG:dlf_dl_command_x
-    ret
+    call DL_GLUE_SEG:dlf_dl_command_x
+    UID_RETURN
 .ordinary:
+%endif
     mov bl, ah                  ; cmd = the cell's base + the item index
     xor bh, bh
     cmp bx, UI_LOC_N            ; ui_loc_base's own length (two cells on
@@ -2247,9 +2302,9 @@ ui_dispatch:
     shl bx, 1
     xor ah, ah
     add ax, [ui_loc_base + bx]
-    jmp ui_cmd
+    UID_JUMP ui_cmd
 .ret:
-    ret
+    UID_RETURN
 
 .appclose:
     ; 'Close' from the app-name menu (SPEC.md 12.7): the close box of
@@ -2257,18 +2312,18 @@ ui_dispatch:
     ; It runs inline rather than through ui_post_cmd because ui_dispatch is
     ; reached with NO lock held - menu_track's was released before the call -
     ; which is exactly why .close_box can take its own lock too.
-    call gfx_lock
+    UID_CALL gfx_lock
     mov bx, [menu_win]          ; the lock dropped between menu_track and
     or bx, bx                   ; here, so the window that owned the bar may
     jz .apc_done                ; be gone: the same re-check .app makes below,
     test byte [bx + W_FLAGS], 2 ; and for the same reasons
     jz .apc_done
-    call app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4).
+    UID_CALL app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4).
                                 ; Unbilled, like the close box - and here it
                                 ; could not be billed anyway: the record the
                                 ; cycles would go to is the one being freed
 .apc_done:
-    jmp gfx_unlock
+    UID_JUMP gfx_unlock
 
 .app:
     ; The menu handler is a window callback reached through the bar, so it
@@ -2279,7 +2334,7 @@ ui_dispatch:
     ; the UI task is the only thing that can ever be in here.
     dec ah                      ; cell -> the app's own 0-based menu index
     mov [ui_menusel], ax
-    call gfx_lock
+    UID_CALL gfx_lock
     mov bx, [menu_win]          ; the lock dropped between menu_track and
     or bx, bx                   ; here, so re-check the owner before calling
     jz .app_done                ; into it. This guard used to be unreachable
@@ -2304,12 +2359,12 @@ ui_dispatch:
     push es                     ; the set is the OWNER's data (SPEC.md 12.2),
     push di                     ; so AM_ONCMD is read through its segment
     mov di, si
-    call wm_strseg              ; ES = the window's string/data segment
+    UID_CALL wm_strseg              ; ES = the window's string/data segment
     cmp word [ui_about], 0      ; the name cell dispatches the About handler
     je .oncmd                   ; wm_about_set registered, not AM_ONCMD -
     push bx                     ; and BX may be 0 here (no menu set), so the
     mov bx, si                  ; read below must not happen at all
-    call wm_about_get           ; AX = the handler's offset in the owner's seg
+    UID_CALL wm_about_get           ; AX = the handler's offset in the owner's seg
     mov cx, ax
     pop bx
     jmp short .cbok
@@ -2321,12 +2376,29 @@ ui_dispatch:
     jcxz .app_done              ; a handler withdrawn while the lock was down
     mov ax, [ui_menusel]        ; (wm_about_set 0 / MENU_SET in the gap) must
     mov bp, cx                  ; not be called at offset 0 (SPEC.md 12.2).
-    call ui_bill                ; The resolution above is OUTSIDE the billing
+    UID_CALL ui_bill                ; The resolution above is OUTSIDE the billing
                                 ; bracket now, so a withdrawn handler is
                                 ; charged nothing at all instead of ~0, and
                                 ; wm_strseg's microseconds go unbilled. A wash
 .app_done:
-    jmp gfx_unlock
+    UID_JUMP gfx_unlock
+
+section .text
+%ifdef KERN_EMU
+%macro UID_SHIM 1
+uidf_ %+ %1:
+    call %1
+    retf
+%endmacro
+UID_SHIM wm_strseg
+UID_SHIM wm_about_get
+UID_SHIM app_close_win
+UID_SHIM ui_bill
+UID_SHIM ui_cmd
+; gfx helpers already have resident far shims.
+uidf_gfx_lock equ cw_gfx_lock
+uidf_gfx_unlock equ cw_gfx_unlock
+%endif
 
 ; the base CMD_* of each kernel-dispatched bar cell (SPEC.md 12.3): the
 ; System menu, then Locator's File and Builtins (SPEC.md 12.3.1)

@@ -6484,10 +6484,17 @@ fm_drag:
     jmp short .wait
 
 .begin:
+%ifdef KERN_BIG
     mov ax, [fm_dgidx]
     call fmv_get_dir
     cmp word [si+16], 3         ; '..' cannot be dragged
     je .click                  ; clipboard is armed only on a Disk-window drop
+%else
+    mov bx, [fm_dgidx]          ; the drag IS a Cut, armed here rather than
+    mov al, FCP_CUT             ; at the press, so an ordinary click never
+    call fcp_arm                ; disturbs a clipboard the user filled
+    jc .click                   ; '..' (SPEC.md 19.5) is not draggable
+%endif
     mov byte [fm_dgon], 1
     call fm_dgmove
     call fm_dgxor               ; the outline is up from here on
@@ -6587,14 +6594,18 @@ fm_dgdrop:
     mov dx, [mouse_y]
     call KERNEL_SEG:cw_wm_hit   ; BX = the window under the point, 0 = none
     or bx, bx
+%ifdef KERN_BIG
     jnz .window
     mov bx, [fm_dgwin]
     call fm_vp_set
     mov ax, [fm_dgidx]
     mov di, [fm_vp]
-    call KERNEL_SEG:dlf_dl_drop_x             ; bare desktop creates a shortcut, never a Cut
+    call DL_GLUE_SEG:dlf_dl_drop_x             ; bare desktop creates a shortcut, never a Cut
     ret
 .window:
+%else
+    jz .out
+%endif
     push cx                     ; is it a DISK window? fmv_winof goes the
     push dx                     ; other way (block -> window), so the test is
     call ct_cw_inst_win_owner         ; the instance that owns it
@@ -6604,6 +6615,7 @@ fm_dgdrop:
     jz .out
     cmp byte [di+I_KIND], KIND_FILES
     jne .out
+%ifdef KERN_BIG
     push bx
     push cx
     push dx
@@ -6616,6 +6628,7 @@ fm_dgdrop:
     pop cx
     pop bx
     jc .out
+%endif
     call fm_relayout            ; content-relative, for fm_hit - and BX is
                                 ; still the window, so fm_layout's own first
                                 ; act (fm_vp_set) publishes THAT window's

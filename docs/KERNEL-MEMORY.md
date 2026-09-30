@@ -41,11 +41,13 @@ left to decide. Raising it means changing the rule. The assembler sees only
 the static half of rule 3; a claim made at boot and never given back is the
 other half, and `tests/kernresident.py` boots a bare VGA desktop under MartyPC
 and walks `mem_tab` for it. With desktop shortcuts (§26.8), it reads:
-kernel span ends 109,056, last non-purgeable byte 113,152, limit 131,072 —
-17,920 spare. DESKTOP.DRV is retained in a bottom-up 4KB claim after shedding
-the boot read-ahead cache. Its assembly guard limits it to 4KB; shortcut
-records claim another 5KB only when needed. `tests/small128.py` audits this
-exact module claim and rejects other pins on its bare 128KB desktop.
+kernel span ends 108,544, last non-purgeable byte 112,640, limit 131,072 —
+18,432 spare. DESKTOP.DRV is retained by the UI after the first frame in a
+bottom-up 4KB claim after shedding the boot read-ahead cache. Its assembly
+guard limits it to 4KB; shortcut records claim another 5KB only when needed.
+kern_small excludes this feature
+entirely; `tests/small128.py` requires zero pinned claims on its bare 128KB
+desktop.
 
 **`kern_small`'s `KERN_BUDGET` is a literal** — 107,520, in the `%else` arm —
 mirrored as `KERN_SMALL_BUDGET` beside big's so that a big build can report
@@ -241,69 +243,69 @@ had added.
   "big": {
     "boot2": 2249,
     "bootmax": 192000,
-    "bss": 5717,
+    "bss": 5589,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 40957,
+    "cold": 40958,
     "coldpara": 2560,
     "fatpara": 288,
-    "imgpara": 3392,
-    "kend": 6816,
+    "imgpara": 3360,
+    "kend": 6784,
     "kseg": 96,
-    "ksize": 107520,
+    "ksize": 107008,
     "lowbss": 6366,
     "lowpara": 448,
     "minramkb": 196,
     "ovl": 1837,
     "ovlw": 5105,
     "stk0": 512,
-    "text": 48182,
+    "text": 48169,
     "vgabuf": 336,
     "vgabufpara": 32
   },
   "emu": {
     "boot2": 2249,
     "bootmax": 192000,
-    "bss": 5717,
+    "bss": 5589,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 41081,
+    "cold": 41403,
     "coldpara": 2592,
     "fatpara": 288,
-    "imgpara": 3392,
-    "kend": 6848,
+    "imgpara": 3360,
+    "kend": 6816,
     "kseg": 96,
-    "ksize": 108032,
+    "ksize": 107520,
     "lowbss": 6366,
     "lowpara": 448,
     "minramkb": 196,
     "ovl": 1843,
     "ovlw": 5105,
     "stk0": 512,
-    "text": 48447,
+    "text": 48150,
     "vgabuf": 336,
     "vgabufpara": 32
   },
   "small": {
     "boot2": 2249,
     "bootmax": 122368,
-    "bss": 3653,
+    "bss": 3481,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 26145,
-    "coldpara": 1664,
+    "cold": 25911,
+    "coldpara": 1632,
     "fatpara": 64,
-    "imgpara": 2496,
-    "kend": 4608,
+    "imgpara": 2464,
+    "kend": 4544,
     "kseg": 96,
-    "ksize": 72192,
+    "ksize": 71168,
     "lowbss": 3636,
     "lowpara": 288,
     "minramkb": 128,
     "ovl": 1942,
     "ovlw": 1502,
     "stk0": 512,
-    "text": 35936,
+    "text": 35574,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -675,13 +677,13 @@ there and nowhere else.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 32,922 | 36.9% |
-| the window system and its furniture | 23,435 | 26.3% |
+| the window system and its furniture | 23,428 | 26.3% |
 | drawing: adapters, primitives, glyphs, icons | 13,632 | 15.3% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,335 | 10.5% |
-| the kernel proper: API table, heap, scheduler, events | 7,787 | 8.7% |
+| the kernel proper: API table, heap, scheduler, events | 7,782 | 8.7% |
 | the three built-in kinds | 1,482 | 1.7% |
 | the Control Panel | 546 | 0.6% |
-| **total** | **89,139** | |
+| **total** | **89,127** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -695,8 +697,8 @@ there and nowhere else.
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 82 | 4,963 | **5,045** | 158 | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 4,201 | — | **4,201** | 151 | 128 | — |
 | `memory.inc` — the claim heap (§50) | 217 | 2,951 | **3,168** | 26 | 324 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 3,109 | — | **3,109** | 58 | — | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,800 | 177 | **2,977** | 197 | 84 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 3,122 | — | **3,122** | 58 | — | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,812 | 177 | **2,989** | 197 | 84 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 563 | 2,004 | **2,567** | 301 | — | — |
 | `assoc.inc` — file type associations (§54) | 419 | 2,042 | **2,461** | 31 | — | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,248 | **2,248** | 160 | — | — |
@@ -720,9 +722,9 @@ there and nowhere else.
 | `blank.inc` — the idle screen blanker (§64) | 200 | 228 | **428** | — | — | — |
 | `mod.inc` — on-demand kernel modules (§2.8) | 98 | 317 | **415** | — | — | — |
 | `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 405 | **405** | — | — | — |
-| `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 61 | 312 | **373** | 214 | — | — |
+| `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 61 | 312 | **373** | 222 | — | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 242 | — | **242** | 22 | — | — |
-| `links.inc` — shortcut dispatch and shared UI staging (§26.8) | 192 | 36 | **228** | 136 | — | — |
+| `links.inc` — shortcut dispatch and shared UI staging (§26.8) | 159 | 37 | **196** | — | — | — |
 | `clip.inc` — the system clipboard (§55) | 179 | — | **179** | 5 | — | — |
 | `events.inc` — the event ring (§10) | 154 | — | **154** | 3 | 128 | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | 46 | **46** | — | — | — |
@@ -739,8 +741,8 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `linkcfg.inc` — DESKTOP.DRV persistence, no static kernel bytes (§26.8) | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,358 | 163 | **2,521** | — | — | 421 |
-| **total** | **48,182** | **40,957** | **89,139** | **5,717** | **6,366** | **2,249** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,353 | 163 | **2,516** | — | — | 421 |
+| **total** | **48,169** | **40,958** | **89,127** | **5,589** | **6,366** | **2,249** |
 <!-- END generated table -->
 
 ### Reading it

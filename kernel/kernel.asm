@@ -2679,7 +2679,9 @@ section .modk    start=MODK_START vstart=0
 %ifdef KERN_BIG
 section .modx    start=MODX_START vstart=0
 %endif
+%ifdef KERN_BIG
 section .modt    start=MODT_START vstart=0
+%endif
 section .modmap  start=MODMAP_START vstart=0
 section .text
 
@@ -3172,6 +3174,7 @@ apic_osapi_mem_avail:
                                   ;          mem_claim, because every existing
                                   ;          caller passes garbage there and
                                   ;          the failure would be silent
+apic_font_run:
     OSAPI_XCELL font_run_x      ; 0x01E5 - one OPAQUE text run (SPEC.md 6.1):
                                   ;          CX = x, DX = y, SI = ASCIIZ,
                                   ;          AL = ink, AH = background. Draws
@@ -5888,7 +5891,6 @@ kmain:
     ; putting it back, not inventing a sentinel.
     mov word [spl_fseg], COLD_SEG
     call COLD_SEG:mem_unblob_x
-    call KERNEL_SEG:dlf_dl_boot_x ; retained links use the reclaimed heap floor
     MARK 32
     BPMARK 8                    ; ...the store above 1MB, the palette, the bar
 
@@ -6595,7 +6597,9 @@ mod_fpt:
 %ifdef KERN_BIG
     MODFP EXFP, MOD_EXT, EXT_NENT
 %endif
+%ifdef KERN_BIG
     MODFP DLFP, MOD_DESK, DL_NENT
+%endif
 %if MODFP_I != MOD_MAX
   %error "MODFP: MODFP_I blocks against MOD_MAX rows"
 %endif
@@ -7146,8 +7150,10 @@ cw_gfx_rowbase:         call gfx_rowbase
                     retf
 cw_gfx_unlock:          call gfx_unlock
                     retf
+%ifdef KERN_BIG
 dlf_icon_draw_x:        call icon_draw_x
                        retf
+%endif
 cw_gfx_xor_fill:        call gfx_xor_fill
                     retf
 cw_icon_draw:           call icon_draw
@@ -7962,7 +7968,7 @@ MODK_START   equ MODH_START + MODH_SIZE
 %else
 MODP_START   equ MODL_START + MODL_SIZE   ; Cut/Copy/Paste, kern_small's alone
 MODD_START   equ MODP_START + MODP_SIZE   ; ...and the file dialog after it
-MODT_START   equ MODD_START + MODD_SIZE   ; no Dock module (SPEC.md 30.5)
+MODMAP_START equ MODD_START + MODD_SIZE   ; no big-only modules (26.8, 30.5)
 %endif                                    ; The
                                           ; compressor has no image of its
                                           ; own: it rides in the cloner's
@@ -7987,12 +7993,14 @@ MODK_SIZE equ modk_end - $$
 %endif
 %endif
 
+%ifdef KERN_BIG
 MODMAP_START equ MODT_START + MODT_SIZE
 section .modt
 modt_end:
 MODT_SIZE equ modt_end - $$
 %if MODT_SIZE > DL_MOD_KB*1024
   %error "desktop module exceeds its 4KB runtime budget"
+%endif
 %endif
 
 section .modc
@@ -8112,8 +8120,10 @@ mod_map:
     dd MODX_START, MODX_SIZE    ; the extended desktop (SPEC.md 39.19.6)
     dw EXT_NENT
 %endif
+%ifdef KERN_BIG
     dd MODT_START, MODT_SIZE
     dw DL_NENT
+%endif
     dd MODMAP_START             ; ...where the table began, and
     dw 0x384F                   ; the last two bytes of the file
 modmap_end:

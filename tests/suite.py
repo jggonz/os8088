@@ -10197,18 +10197,12 @@ SOAK = [
         "SPEC.md 13.8: the Timer's three buttons fire on the RELEASE.",
         needs=("marty",), serial=True),
     Row("desktop", "soak", py("tests/desktop.py"), 200.0,
-        "SPEC.md 26.8: desktop links persist, resolve full paths, leave source "
-        "and clipboard intact, and repaint correctly on Hercules.",
+        "SPEC.md 26.8: delayed desktop links, name captions, Get Info, persistence, "
+        "source/clipboard integrity and repainting on Hercules.",
         needs=("marty",), serial=True),
     Row("desktopcga", "soak", py("tests/desktop.py", "--machine", "os8088_5150_cga_gla"), 200.0,
-        "SPEC.md 26.8: desktop shortcut drag/open/persistence on compact CGA.",
+        "SPEC.md 26.8: delayed desktop links, Get Info, removal and repainting on CGA.",
         needs=("marty",), serial=True),
-    Row("desktopsmall", "soak",
-        ["env", "OS88_DEFINES=KERN_SMALL", "OS88_BUILD=build/smallk",
-         "OS88_SYSIMG=build/small360.img"] + py("tests/desktop.py"), 200.0,
-        "SPEC.md 26.8: desktop shortcut persistence and target resolution "
-        "through kern_small's module exports and path builder.",
-        needs=("marty",), serial=True, wants=("build/small360.img",)),
     Row("kernresident", "full", py("tests/kernresident.py"), 20.0,
         "kernel.asm rule 3: kern_big fully RESIDES in KERN_RESIDENT_KB at a "
         "bare desktop - the half of the rule an assembler cannot see, which "

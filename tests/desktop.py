@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import os88flush
 import os88marty
 import os88ui
+import os88sym
 import dispapps
 
 args = argparse.ArgumentParser()
@@ -28,7 +29,7 @@ def wait(ui, predicate, what):
 
 
 def saved(ui):
-    wait(ui, lambda: not ui._byte('dl_dirty') and not ui._byte('dl_save'),
+    wait(ui, lambda: not ui._byte('dl_dirty') and not (ui._byte('dl_save') & 1),
          'desktop configuration committed')
     ui.settle()
 
@@ -65,6 +66,27 @@ def repaint_check(ui):
     assert before[24:-20] == after[24:-20], 'partial paint differs from full paint'
 
 
+def info_pixels(ui, w, text):
+    ui.mo.to(620, 22)
+    ui.settle()
+    card = 'cga' if 'cga' in a.machine else 'herc'
+    _, _, rows = ui.m.vram(card)
+    eq = os88sym.equates()
+    first = eq['FONT_FIRST']
+    glyphs = ui.m.read(ui._S('font_glyphs'), (eq['FONT_LAST'] - first + 1) * 8)
+    x = w.x + 8
+    y = w.y + eq['TITLE_H'] + 24
+    for start in range(0, len(text), 48):
+        chunk = text[start:start+48]
+        for scan in range(8):
+            want = []
+            for char in chunk:
+                bits = glyphs[(char-first)*8+scan]
+                want.extend(0 if bits & (0x80 >> bit) else 1 for bit in range(8))
+            assert list(rows[y+scan][x:x+len(want)]) == want, 'Get Info target pixels'
+        y += 12
+
+
 with tempfile.TemporaryDirectory(prefix='os88-desktop-') as tmp:
     tmp = Path(tmp)
     note = tmp / 'NOTE.TXT'
@@ -76,8 +98,23 @@ with tempfile.TemporaryDirectory(prefix='os88-desktop-') as tmp:
     height = 200 if 'cga' in a.machine else 348
     y = height - 86
     persisted = tmp / 'persisted.img'
-    with os88ui.boot(boot, apps=apps, machine=a.machine) as ui:
+    with os88marty.launch(boot, apps=apps, machine=os88marty.machine(a.machine),
+                         boot=False) as m:
+        m.bp_exec('ui_task.desktop_init')
+        m.run()
+        assert m.wait_stop(60) == 'breakpoint', 'UI startup not reached'
+        ui = os88ui.UI(m)
+        assert ui._word('boot_ticks') != 0xFFFF, 'shortcut load preceded first frame'
+        assert ui._word('desk_rows') and not ui._byte('spl_live')
+        assert ui._word('mod_r_desk') == 0, 'module loaded during boot'
+        m.bp_exec()
+        m.run()
+        ui.ready()
+        wait(ui, lambda: ui._word('mod_r_desk') != 0, 'desktop module loaded by UI')
         assert ui._byte('dl_count') == 0 and ui._word('dl_seg') == 0
+        ui.clear_desktop()       # emu may show an unsupported VMMOUSE notice on an XT
+        card = 'cga' if 'cga' in a.machine else 'herc'
+        _, _, bare = ui.m.vram(card)
         # An existing file clipboard must survive shortcut creation/cancellation.
         clipboard = b'\x01\x01\x00\x00\x01\x00' + b'NOTEPAD.O88\0\0'
         assert len(clipboard) == 19
@@ -94,11 +131,43 @@ with tempfile.TemporaryDirectory(prefix='os88-desktop-') as tmp:
         repaint_check(ui)
         r = record(ui)
         x0, y0 = struct.unpack_from('<HH', r)
+        picture = 16 if card == 'cga' else 32
+        _, _, painted = ui.m.vram(card)
+        # The old path/filename rows must be untouched desktop dither.
+        for yy in range(y0 + picture + 12, y0 + picture + 30):
+            assert painted[yy][x0:x0+112] == bare[yy][x0:x0+112], 'extra shortcut caption'
         ui.mo.drag(x0 + 56, y0 + 8, x0 + 56, y + 8)
         # UART mouse positioning has a two-pixel tolerance at each endpoint.
         wait(ui, lambda: abs(struct.unpack_from('<H', record(ui), 2)[0] - y) <= 4, 'shortcut moved')
         saved(ui)
         assert abs(struct.unpack_from('<H', record(ui), 2)[0] - y) <= 4
+        repaint_check(ui)
+        # Get Info snapshots the full target without changing source or config.
+        ui.menu_pick('File', 'Get Info')
+        wait(ui, lambda: 'Get Info' in ui.titles(), 'shortcut information opens')
+        seg = ui._word('mod_r_desk') << 4
+        offset = os88sym.syms()['dl_info_target']
+        assert ui.m.read(seg + offset, 130).split(b'\0')[0] == b'B:\\APPS\\NOTEPAD.O88'
+        assert ui.m.read(seg + os88sym.syms()['dl_info_type'], 1) == b'\x01'
+        info = ui.front()
+        info_pixels(ui, info, b'B:\\APPS\\NOTEPAD.O88')
+        info = ui.move_window(info, 150, 40)
+        info_pixels(ui, info, b'B:\\APPS\\NOTEPAD.O88')
+        ui.close(info)
+        # Get Info must display a missing target and wrap its entire path.
+        # Patch only the guest record; no filesystem access is needed to inspect it.
+        full = ('\\' + '\\'.join(['ABCDEFGH.XYZ'] * 8) + '\\NOTEPAD.O88').encode()
+        loc = (ui._word('dl_seg') << 4) + 512 + 8
+        old = ui.m.read(loc, 128)
+        ui.m.write(loc, full + b'\0' * (128-len(full)))
+        ui.mo.click(x0 + 20, y + 8)
+        ui.menu_pick('File', 'Get Info')
+        wait(ui, lambda: 'Get Info' in ui.titles(), 'long target information opens')
+        info = ui.front()
+        assert ui.m.read(seg + offset, 130).split(b'\0')[0] == b'B:' + full
+        info_pixels(ui, info, b'B:' + full)
+        ui.m.write(loc, old)
+        ui.close(info)
         repaint_check(ui)
         # Open the package through the File menu after selecting its tile.
         ui.menu_pick('File', 'Open Shortcut')
@@ -121,30 +190,24 @@ with tempfile.TemporaryDirectory(prefix='os88-desktop-') as tmp:
         assert fl.volume(0).find('DESKTOP.CFG')[0].attr & 7 == 6
         assert fl.volume(1).img == Path(apps).read_bytes(), 'source disk changed'
         fl.save(0, str(persisted))
-        print('PASS drop, clipboard, duplicate, move, package, FAT and repaint', flush=True)
+        print('PASS deferred load, single caption, Get Info, drop, clipboard, duplicate, move, package, FAT and repaint', flush=True)
 
     with os88ui.boot(str(persisted), apps=apps, machine=a.machine) as ui:
-        assert ui._byte('dl_count') == 3
+        wait(ui, lambda: ui._byte('dl_count') == 3, 'desktop configuration loaded by UI')
         assert target(record(ui, 2)) == b'\\DOCS\\DEEP\\NOTE.TXT'
         # A nested document uses the association and full path after reboot.
         x, yy = struct.unpack_from('<HH', record(ui, 2))
         ui.mo.dblclick(x + 56, yy + 8)
-        if 'KERN_SMALL' in os.environ.get('OS88_DEFINES', ''):
-            # kern_small omits associations (SPEC 54.0); this is the Disk
-            # window's existing refusal for a document, with no extra subsystem.
-            assert ui.toast()[0] == 'Load failed'
-            assert not ui.titles()
-        else:
-            wait(ui, lambda: any('Note' in s for s in ui.titles()), 'shortcut document opens')
-            _, pseg = dispapps.pkg_seg(ui.m, 0)
-            plen = dispapps.sym('notepad', 'np_len')
-            want = note.read_bytes().replace(b'\r\n', b'\r')
-            wait(ui, lambda: struct.unpack('<H', ui.m.read((pseg << 4) + plen, 2))[0]
-                 == len(want), 'document contents loaded')
-            dseg = struct.unpack('<H', ui.m.read((pseg << 4)
-                                 + dispapps.sym('notepad', 'np_dseg'), 2))[0]
-            assert ui.m.read(dseg << 4, len(want)) == want
-            ui.close(ui.front())
+        wait(ui, lambda: any('Note' in s for s in ui.titles()), 'shortcut document opens')
+        _, pseg = dispapps.pkg_seg(ui.m, 0)
+        plen = dispapps.sym('notepad', 'np_len')
+        want = note.read_bytes().replace(b'\r\n', b'\r')
+        wait(ui, lambda: struct.unpack('<H', ui.m.read((pseg << 4) + plen, 2))[0]
+             == len(want), 'document contents loaded')
+        dseg = struct.unpack('<H', ui.m.read((pseg << 4)
+                             + dispapps.sym('notepad', 'np_dseg'), 2))[0]
+        assert ui.m.read(dseg << 4, len(want)) == want
+        ui.close(ui.front())
         x, yy = struct.unpack_from('<HH', record(ui, 1))
         ui.mo.dblclick(x + 20, yy + 8)
         wait(ui, lambda: bool(ui.titles()), 'shortcut folder opens')
@@ -163,10 +226,18 @@ with tempfile.TemporaryDirectory(prefix='os88-desktop-') as tmp:
         for left in (1, 0):
             x, yy = struct.unpack_from('<HH', record(ui, left))
             ui.mo.click(x + 20, yy + 8)
+            if left == 0:
+                ui.menu_pick('File', 'Get Info')
+                wait(ui, lambda: 'Get Info' in ui.titles(), 'last shortcut information opens')
+                info = ui.front()
+                ui.mo.click(x + 20, yy + 8)
             ui.m.key('Delete')
             wait(ui, lambda: ui._byte('dl_count') == left, 'Delete removes shortcut')
             saved(ui)
         assert ui._word('dl_seg') == 0, 'empty desktop retained its record claim'
+        repaint_check(ui)
+        info_pixels(ui, info, b'B:\\APPS\\NOTEPAD.O88')
+        ui.close(info)
         assert struct.unpack_from('<H', fl.volume(0).read('DESKTOP.CFG'), 12)[0] == 0
         print('PASS reboot, document behavior, folder, removal, compaction and release', flush=True)
         # The delayed clipboard arm must still preserve Disk-window moves.

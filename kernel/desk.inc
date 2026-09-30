@@ -626,7 +626,9 @@ desk_zone_label:
 ; outs: none (all registers preserved)
 ; -----------------------------------------------------------------------------
 desk_paint_x:
-    call KERNEL_SEG:dlf_dl_paint_x
+%ifdef KERN_BIG
+    call DL_GLUE_SEG:dlf_dl_paint_x
+%endif
     push ax
     mov ax, (1 << DESK_NZ) - 1  ; every zone, the Wire's included (SPEC.md
     jmp short desk_pm_body      ; 26.7) - the push is FIRST, so the caller's
@@ -1037,8 +1039,10 @@ desk_zones_paint_x:
 ; outs: none (all registers preserved)
 ; -----------------------------------------------------------------------------
 desk_click_x:
-    call KERNEL_SEG:dlf_dl_click_x
+%ifdef KERN_BIG
+    call DL_GLUE_SEG:dlf_dl_click_x
     jc .link
+%endif
     call kentc_di               ; KENT: push ax..di
 
 
@@ -1141,8 +1145,10 @@ desk_click_x:
 
 .out:
     jmp kretfc_di
+%ifdef KERN_BIG
 .link:
     retf
+%endif
 
 ; -----------------------------------------------------------------------------
 ; desk_zone_redraw - flip one zone's SELECTION outside wm_paint_all

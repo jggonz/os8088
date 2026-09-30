@@ -1,6 +1,7 @@
+%ifdef KERN_BIG
 ; =============================================================================
-; DESKTOP.DRV: bounded DESKTOP.CFG I/O (SPEC.md 26.8). On demand on both
-; kernels. DS remains the kernel; module constants are reached through CS.
+; DESKTOP.DRV: bounded DESKTOP.CFG I/O (SPEC.md 26.8). Big/emu only.
+; Loaded after the desktop is ready. DS remains the kernel; module constants are reached through CS.
 ; =============================================================================
 section .modt
 dl_badchars: db '"*+,/:;<=>?[|]',0
@@ -219,3 +220,4 @@ dlt_save_near:
     ret
 
 section .text
+%endif
