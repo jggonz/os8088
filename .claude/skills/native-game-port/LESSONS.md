@@ -12,6 +12,12 @@ Ordered the way a run meets them. Numbers are from the run that made PR #206.
    (`[].map`), and tell the architect to REVISE the existing plan, not restart.
    Changing the brief text invalidates Workflow's prompt cache for every agent
    after it - edit only what you must.
+   **And "match" meant the cartridge's own pixels.** The run shipped
+   all-original art (PR #206); the user then asked for the original graphics,
+   levels and sound, no dependency on the source, the marks replaced with
+   generated art, no copyright line and a new name (8BitBike). That is why
+   `extract` is now the default: ask the question with that as the
+   recommended answer, and ask for the display name at the same time.
 2. **Reports go to files.** Every agent writes its full report under
    `<reports>/` and returns a short summary. Messages truncate; a "verify" that
    only lives in a message is lost.
