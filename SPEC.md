@@ -29297,7 +29297,8 @@ suspect. The cell rides in **BP** now, across both the fetch and the eight rows.
   5170 planar stops at 512KB), and an empty CMOS makes the BIOS stop at its
   setup screen once, until `vm/<machine>/nvr/` exists.
 - Complete-app XT sound target: `xt-sound-1.44` (`vm/xt-sound-1.44`) keeps
-  the 360KB system disk in A:, mounts §19.10's `apps-all.img` in a 1.44MB B:
+  the 360KB system disk in A:, mounts disk 1 of §19.10's everything set
+  (`apps-all-1.img`, the rest swapped in from 86Box's menu) in a 1.44MB B:
   drive, and runs the full 640KB 1986 XT board at 4.77MHz with a Sound Blaster
   1.0 at 220h, IRQ 5, DMA 1. It is separate from `xt-sound`, whose Sound
   Blaster 2.0 and 360KB apps disk remain the ordinary period baseline.
@@ -36692,7 +36693,7 @@ folder rule with nothing to tolerate: the default is the shipping
 configuration, and the file exists so that a gate can point one machine at a
 host server (`make thewiretest`) and a user can point theirs at a mirror.
 Nothing on the machine writes it.
-### 19.10 `apps-all.img` — one floppy with everything, and why it is on demand
+### 19.10 The everything set — `apps-all-N.img`, every program on as many floppies as it takes
 
 The shipped apps floppy is built in four geometries (§19) and carries the
 nineteen packages that fit the smallest of them. Seven applications are deliberately not
@@ -36703,26 +36704,52 @@ two, **WEAVE** and **LOOM** (`WEAVE-SPEC 1.2`). That is right for
 the machines this runs on and awkward for a person downloading it, who wants to
 try the software rather than curate a shelf of floppies.
 
-`make allapps` builds **`build/apps-all.img`** and **`build/apps-all-120.img`**:
-one volume with every application on it, at 1.44MB and at 1.2MB, offered beside
-the shipped images on a release page. It is a convenience and nothing in the
-tree boots it by default.
+`make allapps` builds **the everything set**: `build/apps-all-1.img`,
+`build/apps-all-2.img`, … at 1.44MB and `build/apps-all-120-1.img`, … at 1.2MB,
+every application across as many floppies as the payload needs, offered beside
+the shipped images on a release page. `build/apps-all.list` and
+`build/apps-all-120.list` name each set's images one a line; make, the release
+zip and the 86Box machines read the list rather than a name. It is a
+convenience and nothing in the tree boots it by default.
 
-**Two geometries, and the two DD ones are a refusal rather than an omission.**
-The fixed payload is ~950KB before RUNCPM's drive A, so a 720KB or 360KB build
-of this list does not exist — and the machines those geometries are for are
-already served by the shipped disks. 1.2MB holds it: its clusters are 512 bytes
-like the 1.44MB disk's rather than 1,024 like the two DD disks', so it has
-2,371 of them — 1,185KB — against 1,423KB.
+**It was one floppy until the payload outgrew it** (2026-09-30): 1942's folder
+alone is 709 of the 1.44MB disk's 2,847 clusters, and the build stopped at
+*"packages need 3123 clusters; disk holds 2847"*. `tools/os88allapps.py` packs
+the payload onto a set and adds a disk when the payload needs one, so a new
+program never needs a disk list edited:
 
-**The two builds share one payload list and differ in two things**: the
-`--size`, and the RUNCPM drive-A `--select` that is priced against it. That
-selection is the only part of this disk that re-shapes itself per geometry
-(§74.5): it fills the master disk until the clusters run out, so the 1.2MB
-disk's `A\0` is 33 files where the 1.44MB one's is 66, and each names what it
-left off in its own `LEFT-OFF.TXT`. Nothing else here is a per-size list to
-keep in step, which is the point — two hand-maintained everything-lists is how
-they drift.
+- **The unit is a top-level folder, and it is never split** while it fits on
+  one disk: the tree below is a correctness requirement, and a program's
+  folder holds its overlay and its documents. `APPS\`, `GAMES\` and `MEDIA\`
+  are *collections* of independent programs and are split only when one
+  outgrows a whole floppy, between same-stem groups (`GAMES\DRMARCO.O88`
+  keeps `DRMARCO.VGA` beside it). Any other folder bigger than a floppy is
+  refused by name: it needs a decision, not a bigger set.
+- **Placement is first fit in payload order**, so the set is a function of the
+  payload alone. It is not stable against growth — a folder early in the order
+  that grows can push a later one to another disk — and **`CONTENTS.TXT` on
+  every disk** maps the whole set, marking the disk it is on.
+- **Every disk carries `DOCS\` and `SYSTEM\APPDATA\`**, because any disk of
+  the set can be the launch volume (§19.9).
+- **RUNCPM's drive `A\0` is priced whole.** On one floppy it absorbed whatever
+  was left and shrank to a single file (§19.10.1). In the set, `RUNCPM\` costs
+  its package plus the fill an otherwise empty disk of the geometry holds
+  (`tools/getruncpm.py`'s `select()`, the same ranking and save room), and the
+  tool refuses if the disk it lands on gives it less. Both sets carry all 77
+  master-disk files.
+- **The costs are `os88disk.py`'s own arithmetic**, and `os88disk.py` still
+  builds and verifies each disk, so a pricing mistake fails the build rather
+  than shipping. `tests/unit/t_allapps.py` (fast tier) drives the tool over a
+  synthetic three-disk payload and reads the images back with an independent
+  FAT reader.
+
+As built on 2026-09-30, both sets are two disks: 2,690 and 1,656 of 2,847
+clusters at 1.44MB, and 2,290 and 2,055 of 2,371 at 1.2MB.
+
+**Two geometries, 1.44MB and 1.2MB, from one payload list** — two
+hand-maintained everything-lists is how they drift. There is no 720KB or 360KB
+set: the machines those geometries are for are served by the shipped disks and
+the category disks (§24.6).
 
 **It is not in `all`, because `cword` needs a compiler this tree does not
 contain** (§70.1). A clone with `nasm` and `python3` builds every *shipped*
@@ -36763,6 +36790,15 @@ is still where a story disk comes from. **The live media does carry them**
 is a floppy the library alone would not fit on.
 
 ### 19.10.1 The four packages that ride no floppy do not ride this one either — the 1.2MB disk decides it
+
+**THE GROUND BELOW IS WITHDRAWN, AND THE DECISION IS NOT RETAKEN HERE.** This
+section argues from one 1.2MB floppy whose RunCPM drive absorbed the
+remainder. The everything SET (§19.10) prices that drive whole and adds a disk
+when it needs one, so thirteen kilobytes no longer cost anybody CP/M. The four
+stay live-only because that is what the lists say, not because the arithmetic
+does. `PACMAN.O88` is RETIRED (§89.12) and ships nowhere anyway; whether
+`RECORDER`, `HELLO` and `SCRIBE` join the set is an owner's call. The record of
+the old arithmetic follows.
 
 `RECORDER.O88` (§35.1), `HELLO.O88` (§27.0), `PACMAN.O88` (§89) and
 `SCRIBE.O88` (§95) are each built by `all` and carried by no shipped floppy,
@@ -46082,9 +46118,9 @@ machine's boot floppy to give a viewer something to view is §24.5's size
 argument run in reverse, and the package is 3,277 bytes on top of it.
 
 **Neither package loses anything anywhere else.** `CHART.O88` is on the apps
-disk at every geometry but 360KB, on `office360.img`, on `apps-all.img` and on
+disk at every geometry but 360KB, on `office360.img`, on the everything set and on
 the live media; `FONTVIEW.O88` is on all four shipped system disks, on
-`office360.img`, on `apps-all.img` and on the live media (§90.3). This section
+`office360.img`, on the everything set and on the live media (§90.3). This section
 reaches `make small` and `make smallapps` and nothing else.
 
 #### 24.5.4 …and `OS88NET.COM`, which is the same rule across a cable
@@ -105784,7 +105820,7 @@ rules that turn `apps/<dir>/<name>.c` plus `apps/<dir>/<name>.asm` into
 | `cword` | `build/cword.o88` + `build/CWORD.OVL` (§73.12) |
 | `cworddisk` | `build/cword.img`, `cword720.img`, `cword360.img`, each carrying both files plus `WELCOME.RTF` and an empty `DOCS/` (§73.12.3), and each `os88disk.py --verify`ed |
 | `386-c-word` | boots `$(IMG)` in A: and `build/cword.img` in B: on `vm/386-c-word` |
-| `allapps` | `build/apps-all.img` — one 1.44MB floppy with every application on it (§19.10). Outside this section, only it and the live media (§80) — whose payload is this disk's — need the compiler, which is why all of them are on demand |
+| `allapps` | the everything set, `build/apps-all-N.img` and `build/apps-all-120-N.img` — every application on as many floppies as it takes (§19.10). Outside this section, only it and the live media (§80) — whose payload is this set's — need the compiler, which is why all of them are on demand |
 | `clean-cc` | removes `build/cc`, which plain `clean` spares |
 
 **Nothing in `all` depends on the compiler, and that is the requirement rather
@@ -107038,14 +107074,15 @@ its own `LEFT-OFF.TXT` — with 3 clusters free for the session's saves and
 with the 39,412-byte package and its 7,389-byte module; wave 4's 360KB disk carried 55 files at 354/354 — three sources
 and libraries filled it to the last cluster and no session could save —
 and wave 2's 24,848-byte package left it 62 files: `--reserve` re-shaped
-the selection by itself each time). **`apps-all.img` (§19.10) carries the
+the selection by itself each time). **The everything set (§19.10) carries the
 same package as a folder of its own, `RUNCPM\`** — the package, the
-`.OVL`, the CCP, LICENSE, 1STREAD.ME and `A\0` below it, the geometry's own
-selection chosen at recipe time exactly as `build/runcpm.img`'s is. That
-folder carries no games, so what it holds is whatever the rest of the disk
-leaves: **66 files at 1.44MB and 33 at 1.2MB** (re-measured against the
-current payload; the figure below it was taken when this disk was smaller and
-`A\0` took all 77) — `--reserve` names every file on the disk (`ALLAPPSFILES`, the files
+`.OVL`, the CCP, LICENSE, 1STREAD.ME and `A\0` below it. That folder carries
+no games. Since the set replaced the single floppy (2026-09-30) its `A\0` is
+priced WHOLE by `tools/os88allapps.py` — the fill an otherwise empty disk of
+the geometry holds, which is **all 77 files at 1.44MB and at 1.2MB** — where
+the single floppy's was whatever the rest of the disk left: 66 and 33 when
+last measured, and one file on the 1.2MB disk by the end. The record of how
+that single floppy priced it follows — `--reserve` names every file on the disk (`ALLAPPSFILES`, the files
 behind the disk's arguments, not the prerequisite list) and `--folders`
 the folder directories the tree has besides `RUNCPM\A\0`, a cluster each
 — `ALLAPPSFOLDERS`, counted by make from the disk's arguments (every `DIR:`
@@ -127950,11 +127987,11 @@ paragraph here makes to keep the package **on** the live media. The two disks
 differ in the one way that decides it: the live volume carries the ten faces
 and the small one does not.
 
-**It is NOT off `build/apps-all.img` (§19.10) or the live media (§80), and
+**It is NOT off the everything set (§19.10) or the live media (§80), and
 that is the part that is not automatic.** `$(CORE_SYSONLY)` is named again in
 `$(ALLAPPSFILES)`/`$(ALLAPPSARGS)`, because taking a package out of
 `$(APPS_TOOLS)` reaches those two as well and they are the wrong customers for
-it. `apps-all.img` is *every application on one floppy* for a release page —
+it. The everything set (§19.10) is *every application* for a release page —
 completeness is its premise, so a program missing from it is missing from the
 release rather than left off a disk. And the live USB and CD are **one
 volume**: `$(LIVEARGS)` is that same payload plus the system's own files, so

@@ -174,7 +174,7 @@ when they exist:
 
 ```bash
 tools/setup-cc.sh                     # SmallerC; needed by cword and allapps
-make allapps                          # apps-all.img -- every program, one disk
+make allapps                          # apps-all-N.img -- every program, a set of disks
 make worddisk cworddisk               # word*.img, cword*.img
 make c64disk                          # c64*.img
 make weavedisk                        # weave*.img -- the Weave family's disk

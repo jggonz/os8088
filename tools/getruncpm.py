@@ -8,7 +8,7 @@
                              --reserve build/runcpm.o88 ...   # the A/0 files
                              # a 360/720/1200/1440KB disk carries beside
                              # the root files named (--folders N: how many
-                             # other folders the disk has; apps-all's ten)
+                             # other folders the disk has)
     python3 tools/getruncpm.py -o build/runcpm-disk --from DIR # take the files
                              # from a local checkout of RunCPM at the pin
 
@@ -498,7 +498,7 @@ def main():
     ap.add_argument("--folders", type=int, default=1, metavar="N",
                     help="with --select: how many OTHER folder directories the disk "
                          "has, priced a cluster each (default 1: the folder A "
-                         "above A/0; apps-all has ten)")
+                         "above A/0)")
     ap.add_argument("--from", dest="src", metavar="DIR",
                     help="a local checkout of RunCPM at the pinned commit to take the files from")
     args = ap.parse_args()

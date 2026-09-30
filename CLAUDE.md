@@ -372,8 +372,12 @@ make emu      # THE THIRD KERNEL (§9.11.7): kern_emu, into build/emuk/, plus
               #   the one feature it was built for has been given nothing.
               #   Pair it with the SHIPPED build/apps.img: same API table, same
               #   offsets, so there is no emu apps disk and must not be
-make allapps  # build/apps-all.img (§19.10): ONE 1.44MB floppy with every app
-              #   on it, Frotz, both Words, RunCPM (with its drive A), the
+make allapps  # THE EVERYTHING SET (§19.10): build/apps-all-1.img, -2.img, ...
+              #   (and apps-all-120-N.img at 1.2MB), every app on as many
+              #   floppies as it takes - tools/os88allapps.py adds a disk when
+              #   the payload needs one, never splits a program's folder, and
+              #   build/apps-all.list names the images. Frotz, both Words,
+              #   RunCPM (with ALL of its drive A), the
               #   C64 and the Weave family's two — one folder each, so
               #   `WEAVE/` carries the package, both modules and the bundles
               #   and `LOOM/` the IDE and its own — for a release page. The
@@ -417,11 +421,11 @@ make live     #   plus the allapps payload on one FAT16 partition that the
               #   package directory FAILS `make` until it is on the live
               #   media or written into that file's EXEMPT_DIRS with a
               #   reason.** PART B walks the built image when there is one.
-              #   The four packages are LIVE-ONLY and deliberately not on
-              #   build/apps-all.img: §19.10.1 is the arithmetic - that
-              #   disk's 1.2MB geometry pays for a package out of RunCPM's
-              #   drive A, and thirteen kilobytes took A\0 from 21 files to
-              #   one
+              #   The four packages are LIVE-ONLY and not in the
+              #   everything set. §19.10.1's arithmetic for that (one 1.2MB
+              #   floppy paying for a package out of RunCPM's drive A) is
+              #   WITHDRAWN by the set; the lists stand until the owner
+              #   decides
 make burn     # the macOS guide onto REAL media (§80.4, tools/os88burn.py):
               #   lists the attached USB flash drives (USB + external +
               #   never the boot disk), typed-identifier confirmation,
@@ -588,7 +592,7 @@ ROM first, once), and `make weavedisk` / `make loomdisk` the Weave family's two.
 DOES NOT SHIP: WIREFRAME is an instrument rather than an application (§78.9),
 so `all` builds `wire.o88` and no shipped floppy carries it, and the two
 tests that drive it — `wireflick` and `uilat` — default to that disk.
-`make allapps` collapses all of them onto one 1.44MB floppy (§19.10), and
+`make allapps` puts all of them on the everything set (§19.10), and
 `make live` puts that same payload plus the system on the bootable live
 USB image and live CD (§80).
 

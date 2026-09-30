@@ -792,6 +792,14 @@ FAST = [
         "back to the network for a file the zip lacks, so a pin moved without "
         "a repack is a clean `make live` downloading from Google Drive a file "
         "at a time again with nothing saying why"),
+    Row("allapps", "fast", py("tests/unit/t_allapps.py"), 0.7,
+        "SPEC.md 19.10: the everything SET grows a disk when the payload "
+        "needs one. `make allapps` needs the C toolchain, so this drives "
+        "tools/os88allapps.py over a synthetic three-disk payload and reads "
+        "the images back with t_image's reader: every file once, a folder "
+        "that fits never split, a collection split only between stem groups, "
+        "first fit in order, DOCS/APPDATA/CONTENTS.TXT on every disk, a "
+        "no-longer-needed disk deleted, an oversized program refused"),
     Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
         "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
         "completeness, and until this row nothing in the tree had ever read "
