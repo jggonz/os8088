@@ -1,0 +1,224 @@
+track Night Circuit
+theme 4
+laps 2
+par 1:10.08 the turbo time 1:04.89 + 8% (tools/exbsim.py --run-track t5)
+par2 1:13.27 the turbo time 1:07.84 + 8% (tools/exbsim.py --run-track t5)
+
+# pass 1: one piece (or `piece xN`) a line
+
+plain_c x2
+plain_a x2
+plain_a x1
+plain_c x2
+plain_a x2
+hill_b
+plain_a x1
+plain_b x7
+plain_c x1
+plain_b x2
+rough_b
+plain_c x1
+plain_c x1
+plain_b x7
+plain_b x1
+hurdle_hi_b
+plain_c x7
+plain_a x4
+plain_b x1
+hill_e
+plain_c x5
+plain_b x3
+rough_a
+plain_c x3
+plain_a x2
+plain_c x2
+plain_c x2
+hill_e
+plain_a x4
+plain_c x5
+mud_b
+plain_a x2
+plain_a x1
+plain_b x2
+plain_c x6
+plain_a x1
+hurdle_hi_b
+plain_c x6
+plain_c x3
+hill_f
+plain_b x6
+plain_a x3
+plain_b x1
+mud_c
+plain_b x4
+plain_b x4
+ramp_c
+plain_c x4
+plain_a x4
+hill_a
+plain_a x4
+plain_c x5
+hurdle_hi_b
+plain_b x1
+plain_b x2
+plain_a x2
+plain_a x3
+ramp_h
+plain_b x3
+plain_b x4
+plain_c x4
+plain_b x1
+mud_a
+plain_c x6
+plain_b x6
+hill_e
+plain_a x3
+plain_b x7
+rough_c
+plain_a x1
+plain_b x3
+plain_b x3
+plain_a x2
+hill_c
+plain_a x3
+plain_c x3
+plain_b x3
+hurdle_hi_b
+plain_a x4
+plain_b x3
+plain_c x5
+hill_b
+plain_a x6
+plain_b x6
+kicker_b
+plain_c x1
+plain_c x3
+plain_a x7
+plain_b x1
+hill_d
+plain_c x6
+plain_a x3
+hill_e
+plain_c x7
+plain_a x3
+ramp_e
+plain_a x6
+plain_b x3
+plain_b x2
+rough_b
+plain_b x1
+plain_b x4
+plain_c x4
+plain_c x1
+ramp_h
+plain_c x3
+plain_b x3
+plain_c x3
+ramp_d
+plain_b x4
+plain_b x2
+plain_c x3
+kicker_b
+plain_b x2
+plain_a x5
+plain_c x3
+hurdle_lo_b
+plain_b x4
+plain_a x4
+hill_a
+plain_a x4
+plain_b x4
+rough_a
+plain_c x6
+plain_c x4
+plain_c x1
+ramp_d
+plain_b x2
+plain_b x5
+plain_b x1
+plain_b x1
+hill_c
+plain_a x3
+plain_c x5
+hill_f
+plain_a x6
+plain_c x2
+kicker_a
+plain_b x7
+plain_c x1
+mud_c
+plain_c x1
+plain_c x4
+plain_b x3
+kicker_b
+plain_c x4
+plain_b x6
+plain_b x1
+hurdle_lo_b
+plain_b x5
+plain_a x2
+plain_a x3
+plain_b x1
+plain_a x1
+arrow_c
+plain_c x3
+plain_a x4
+plain_b x1
+plain_b x2
+hill_c
+plain_c x3
+plain_a x6
+rough_b
+plain_a x4
+plain_c x7
+hill_e
+plain_b x1
+plain_b x2
+plain_c x2
+plain_a x2
+plain_c x3
+hill_d
+plain_c x6
+plain_a x2
+rough_a
+plain_b x6
+plain_c x5
+mud_c
+plain_b x5
+plain_c x4
+plain_a x1
+kicker_a
+plain_b x2
+plain_a x2
+plain_b x6
+kicker_b
+plain_c x2
+plain_b x3
+plain_a x3
+plain_b x1
+plain_a x1
+mud_a
+plain_b x6
+plain_c x3
+hurdle_hi_a
+plain_b x2
+plain_b x3
+plain_a x5
+hurdle_lo_c
+plain_a x3
+plain_c x2
+plain_b x4
+plain_b x2
+finish
+
+pass2
+# every occurrence of the left piece becomes the right one in BOTH laps of the second pass round
+swap hurdle_lo_b hurdle_hi_b
+swap hurdle_lo_c hurdle_hi_c
+swap mud_a mud_b
+swap rough_a mud_a
+swap ramp_b ramp_e
+swap ramp_f ramp_g
+swap hill_d hill_f
+swap hill_a hill_e
+swap kicker_a kicker_b

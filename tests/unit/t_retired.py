@@ -60,7 +60,7 @@ from t_image import Vol, read                             # noqa: E402
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "..", ".."))
 REGISTRY = os.path.join(ROOT, "apps", "RETIRED.txt")
-PKG_STEM = {"pixelstein": "pxstein", "drmario": "drmarco"}  # apps/<dir> -> build/<stem>.o88
+PKG_STEM = {"pixelstein": "pxstein", "drmario": "drmarco", "excitebike": "excbike"}  # apps/<dir> -> build/<stem>.o88
 BUILD = os.path.join(ROOT, "build")
 MAKEFILE = os.path.join(ROOT, "Makefile")
 LIVEPAYLOAD = os.path.join(BUILD, "livepayload.txt")

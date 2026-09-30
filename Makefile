@@ -13753,3 +13753,115 @@ $(BUILD)/drmario360.img: $(BUILD)/drmarco.o88 apps/drmario/README.md $(DM_FRONT_
 	python3 tools/os88disk.py --verify $@
 drmariodisk: drmarcodisk
 drmarcodisk: $(BUILD)/drmario.img $(BUILD)/drmario720.img $(BUILD)/drmario120.img $(BUILD)/drmario360.img
+
+# Native Excitebike (SPEC.md 102). ORIGINAL art, tracks and sound are committed
+# under apps/excitebike/ and compiled by tools/excitebike_assets.py: nothing is
+# read from a NES ROM, a CHR file or a disassembly, at build time or at run time
+# (tests/unit/t_excitebike_clean.py holds the tree to that), so a plain make of
+# this block needs only NASM and Python's standard library. The package is
+# `local` in apps/RETIRED.txt: it builds standalone disks and is not yet on the
+# standard images, the allapps floppy or the live media.
+EXB_ART := $(BUILD)/excitebike-art
+EXB_INPUTS := $(wildcard apps/excitebike/art/* apps/excitebike/tracks/* apps/excitebike/audio/*)
+EXB_GEN := $(addprefix $(EXB_ART)/,exbtables.inc exbtracks.inc exbscripts.inc exbsnd.inc EXBV.GFX EXBC.GFX EXBH.GFX EXBSPL.VGA EXBSPL.CGA EXBSPL.HRC EXB.SND)
+.PHONY: excitebikeref excitebikelap excitebikeload excitebikeaudio excitebike excitebikedisk excitebiketest excitebikevideo excitebikeperf excitebikeflow excitebikeselfb excitebikeaudio excitebike-art excitebike-check excitebikegeom xt-excitebike
+# One compile emits every generated file. The stamp is written first and holds
+# a hash of every input, so an edited grid, track or score rebuilds the package
+# and the disks; a generated file that is missing removes the stamp and asks
+# for it again (a deleted output must not be silently skipped).
+$(EXB_ART)/.exb-art: tools/excitebike_assets.py tools/excitebike_audio.py $(EXB_INPUTS) | $(BUILD)
+	python3 tools/excitebike_assets.py -o $(EXB_ART)
+$(EXB_GEN): $(EXB_ART)/.exb-art
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
+excitebike-art: $(EXB_GEN)
+# The host-side gates (budgets, determinism, negative controls) and the
+# provenance check; both are also in the test suite.
+excitebike-check:
+	python3 tools/excitebike_assets.py --selfcheck
+	python3 tests/unit/t_excitebike_clean.py
+
+$(BUILD)/excitebike.bin: apps/excitebike/excitebike.asm apps/excitebike/front.inc apps/excitebike/video.inc apps/excitebike/world.inc apps/excitebike/game.inc apps/excitebike/vga.inc apps/excitebike/cga.inc apps/excitebike/herc.inc apps/excitebike/sprite.inc apps/excitebike/sim.inc apps/excitebike/input.inc apps/excitebike/hud.inc apps/excitebike/ai.inc apps/excitebike/flow.inc apps/excitebike/audio.inc apps/excitebike/const.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc $(EXB_ART)/exbtables.inc $(EXB_ART)/exbtracks.inc $(EXB_ART)/exbscripts.inc $(EXB_ART)/exbsnd.inc $(EXB_ART)/EXB.SND
+	$(NASM) -f bin -w+error -I apps/ -I apps/excitebike/ -I $(EXB_ART)/ -l $(BUILD)/excitebike.lst -o $@ $<
+
+# EXCITEBIKE.O88 is not a legal 8.3 name (a stem is at most 8 characters), so
+# the file is EXCBIKE.O88 and the header name stays EXCITEBIKE.
+$(BUILD)/excbike.o88: $(BUILD)/excitebike.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+
+excitebike: $(BUILD)/excbike.o88
+
+EXB_DISKFILES := $(BUILD)/excbike.o88 apps/excitebike/README.md $(EXB_ART)/EXBV.GFX $(EXB_ART)/EXBC.GFX $(EXB_ART)/EXBH.GFX $(EXB_ART)/EXBSPL.VGA $(EXB_ART)/EXBSPL.CGA $(EXB_ART)/EXBSPL.HRC
+$(BUILD)/excitebike.img: $(EXB_DISKFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(EXB_DISKFILES)
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/excitebike720.img: $(EXB_DISKFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(EXB_DISKFILES)
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/excitebike120.img: $(EXB_DISKFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(EXB_DISKFILES)
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/excitebike360.img: $(EXB_DISKFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(EXB_DISKFILES)
+	python3 tools/os88disk.py --verify $@
+excitebikedisk: $(BUILD)/excitebike.img $(BUILD)/excitebike720.img $(BUILD)/excitebike120.img $(BUILD)/excitebike360.img
+# The front-end gate (splash, loading screen, placeholder, Esc, refusals)
+excitebiketest: excitebikedisk $(BUILD)/os8088-360.img
+	python3 tests/excitebike_front.py
+# The scroll engine against tools/exbsim.py, the reference renderer, pixel for
+# pixel on MartyPC (VGA 0Dh, CGA 320x200x4) and on QEMU's VGA (gate G1: the
+# emulator that implements the real line compare), then the frame-rate gates
+# (SPEC.md 102.6). Both are soak rows; these are the by-hand forms.
+excitebikevideo: excitebikedisk $(BUILD)/os8088-360.img
+	python3 tests/excitebike_video.py --adapter vga
+	python3 tests/excitebike_video.py --adapter cga
+	python3 tests/excitebike_video.py --adapter herc
+	python3 tests/excitebike_video.py --qemu
+excitebikeperf: excitebikedisk $(BUILD)/os8088-360.img
+	python3 tests/excitebike_perf.py --scroll --governor
+	python3 tests/excitebike_perf.py --herc --scroll --governor
+# Wave 3: the rider simulation against tools/exbsim.py step for step on MartyPC
+# (the test's own environment variable adds an optional table check against the
+# study material; without it that part prints its SKIP), and a whole course at turbo
+# on both adapters
+excitebikeref: excitebikedisk $(BUILD)/os8088-360.img
+	python3 tests/excitebike_ref.py
+excitebikelap: excitebikedisk $(BUILD)/os8088-360.img
+	python3 tests/excitebike_perf.py --lap
+	python3 tests/excitebike_perf.py --herc --lap
+excitebikeflow: excitebikedisk $(BUILD)/os8088-360.img
+	python3 tests/excitebike_flow.py --flow
+	python3 tests/excitebike_flow.py --custom --adapter vga
+	python3 tests/excitebike_flow.py --ai --collide
+	python3 tests/excitebike_flow.py --flow --adapter herc
+	python3 tests/excitebike_flow.py --custom --adapter herc
+	python3 tests/excitebike_flow.py --ai --collide --adapter herc
+excitebikeselfb: excitebikedisk $(BUILD)/os8088-360.img
+	python3 tests/excitebike_perf.py --selfb
+	python3 tests/excitebike_perf.py --herc --selfb
+# the sound (SPEC.md 102.5): the blob and score on the host, the speaker path and the FM path on MartyPC,
+# and the speaker's own capture read with tools/sndcheck.py's parts
+excitebikeaudio: excitebikedisk $(BUILD)/os8088-360.img
+	python3 tools/excitebike_audio.py --selfcheck
+	python3 tests/excitebike_audio.py --host
+	python3 tests/excitebike_audio.py --speaker
+	python3 tests/excitebike_audio.py --fm
+	python3 tests/excitebike_audio.py --capture
+	python3 tests/excitebike_perf.py --lap --audio-ab
+# the four floppy geometries and a machine with too little memory (SPEC.md 102.8): the host walks all four
+# images with an independent FAT12 reader, MartyPC boots-and-launches on 360KB (VGA XT), 720KB (Hercules XT,
+# the only machine with 720KB drives) and 1.44MB (VGA XT with 1.44MB drives), and a 256KB XT is refused the
+# second window's game with NOT ENOUGH MEMORY. The 1.2MB floppy needs a 5.25" HD drive no MartyPC machine has
+excitebikegeom: excitebikedisk $(IMG360) $(IMG720) $(IMG)
+	python3 tests/excitebike_geom.py
+
+# EXCITEBIKE on period hardware (SPEC.md 102.8.6): a copy of vm/xt640 - a 4.77MHz IBM XT, 640KB, an OTI-067 VGA -
+# with the 360KB system floppy in A: and build/excitebike360.img in B:, and the uuid and fdd_02_fn changed and
+# NOTHING else, for the reason vm/386-c-word records (86Box rewrites an unrecognised key). 86Box cannot ASSERT
+# anything (docs/TESTING.md): this is where a human LOOKS - the scroll, the banner flash, the palette (C) - and
+# double-clicks EXCBIKE.O88 in drive B:. $(UNPROTECT) because 86Box re-adds wp:// on the way out.
+VMXTEXCITEBIKE := $(CURDIR)/vm/xt-excitebike
+xt-excitebike: $(IMG360) $(BUILD)/excitebike360.img
+	@$(UNPROTECT) $(VMXTEXCITEBIKE)/86box.cfg
+	$(BOX) -P $(VMXTEXCITEBIKE) -N
+excitebikeload: excitebikedisk $(BUILD)/os8088-360.img
+	python3 tests/excitebike_load.py

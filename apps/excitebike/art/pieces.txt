@@ -1,0 +1,125 @@
+# EXCITEBIKE pieces: dictionary COLUMNS (14 tile names for tile rows
+# 8..21, plus a hedge pair for rows 22-23), the PIECES built from
+# columns, and the element SCRIPTS (x = column offset in the piece;
+# ANGn pitch target, DEFERn wait n columns, Hn ground height).
+
+col plain_a hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top dirt_a dirt_line_a dirt_b dirt_line_b dirt_a bank_bot
+col plain_b hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b bank_top dirt_a dirt_line_a dirt_b dirt_line_b dirt_a bank_bot
+col plain_c hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top dirt_a dirt_line_a dirt_b dirt_line_b dirt_a bank_bot
+col rough_1 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top rough_a rough_a rough_a rough_a rough_a rough_a
+col rough_2 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b bank_top rough_b rough_b rough_b rough_b rough_b rough_b
+col rough_3 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b bank_top rough_a rough_b rough_a dirt_line_b dirt_a bank_bot
+col rough_4 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top dirt_a dirt_line_a dirt_b rough_b rough_a rough_b
+col mud_1 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top mud_a mud_a mud_a mud_a mud_a mud_a
+col mud_2 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b bank_top mud_b mud_b mud_b mud_b mud_b mud_b
+col mud_3 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top dirt_a mud_a mud_b mud_a dirt_a bank_bot
+col mud_4 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b bank_top dirt_a dirt_line_a dirt_b mud_b mud_a bank_bot
+col hlo_1 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top hurdle_lo_a hurdle_lo_b dirt_b dirt_line_b dirt_a bank_bot
+col hlo_2 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b bank_top dirt_a dirt_line_a dirt_b dirt_line_b hurdle_lo_a hurdle_lo_b
+col hlo_3 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top dirt_a dirt_line_a hurdle_lo_b hurdle_lo_a dirt_a bank_bot
+col hhi_1 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top hurdle_hi_a hurdle_hi_a hurdle_hi_a dirt_line_b dirt_a bank_bot
+col hhi_2 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b bank_top dirt_a dirt_line_a dirt_b hurdle_hi_b hurdle_hi_b hurdle_hi_b
+col hhi_3 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top hurdle_hi_b hurdle_hi_a hurdle_hi_b hurdle_hi_a hurdle_hi_b hurdle_hi_a
+col arr_1 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top dirt_a arrow_a arrow_a arrow_a arrow_a bank_bot
+col arr_2 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b bank_top dirt_a arrow_b arrow_b arrow_b arrow_b bank_bot
+col arr_3 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b bank_top arrow_a arrow_a dirt_b dirt_line_b arrow_a arrow_a
+col kick_1 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top kicker_a kicker_a kicker_a kicker_a kicker_a kicker_a
+col kick_2 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b bank_top kicker_b kicker_b kicker_b kicker_b kicker_b kicker_b
+col kick_3 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top kicker_c kicker_c kicker_c kicker_c kicker_c kicker_c
+col r1_us hedge=cd  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b rp_up_s rbody_b rbody_a rbody_b rbody_a rbody_b rbody_a
+col r1_ga hedge=cd  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b rp_up_ga rbody_b rbody_a rbody_b rbody_a rbody_b rbody_a
+col r1_gb hedge=cd  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b rp_up_gb rbody_b rbody_a rbody_b rbody_a rbody_b rbody_a
+col r1_tp hedge=cd  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b rp_top rbody_b rbody_a rbody_b rbody_a rbody_b rbody_a
+col r1_ds hedge=cd  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b rp_dn_s rbody_b rbody_a rbody_b rbody_a rbody_b rbody_a
+col r1_da hedge=cd  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b rp_dn_ga rbody_b rbody_a rbody_b rbody_a rbody_b rbody_a
+col r1_db hedge=cd  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b rp_dn_gb rbody_b rbody_a rbody_b rbody_a rbody_b rbody_a
+col r2_us hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a rp_up_s rp_fill rbody_a rbody_b rbody_a rbody_b rbody_a rbody_b
+col r2_ga hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a rp_up_ga rp_fill rbody_a rbody_b rbody_a rbody_b rbody_a rbody_b
+col r2_gb hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a rp_up_gb rp_fill rbody_a rbody_b rbody_a rbody_b rbody_a rbody_b
+col r2_tp hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a rp_top rp_fill rbody_a rbody_b rbody_a rbody_b rbody_a rbody_b
+col r2_ds hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a rp_dn_s rp_fill rbody_a rbody_b rbody_a rbody_b rbody_a rbody_b
+col r2_da hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a rp_dn_ga rp_fill rbody_a rbody_b rbody_a rbody_b rbody_a rbody_b
+col r2_db hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a rp_dn_gb rp_fill rbody_a rbody_b rbody_a rbody_b rbody_a rbody_b
+col h2_us hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a hp_up_s hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col h2_ga hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a hp_up_ga hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col h2_gb hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a hp_up_gb hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col h2_tp hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a hp_top hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col h2_da hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a hp_dn_ga hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col h2_db hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a hp_dn_gb hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col h3_us hedge=cd  grass_far grass_a grass_b grass_a grass_b hp_up_s hp_fill hp_fill hbody_b hbody_a hbody_b hbody_a hbody_b hbody_a
+col h3_ga hedge=cd  grass_far grass_a grass_b grass_a grass_b hp_up_ga hp_fill hp_fill hbody_b hbody_a hbody_b hbody_a hbody_b hbody_a
+col h3_gb hedge=cd  grass_far grass_a grass_b grass_a grass_b hp_up_gb hp_fill hp_fill hbody_b hbody_a hbody_b hbody_a hbody_b hbody_a
+col h3_tp hedge=cd  grass_far grass_a grass_b grass_a grass_b hp_top hp_fill hp_fill hbody_b hbody_a hbody_b hbody_a hbody_b hbody_a
+col h3_ds hedge=cd  grass_far grass_a grass_b grass_a grass_b hp_dn_s hp_fill hp_fill hbody_b hbody_a hbody_b hbody_a hbody_b hbody_a
+col h3_da hedge=cd  grass_far grass_a grass_b grass_a grass_b hp_dn_ga hp_fill hp_fill hbody_b hbody_a hbody_b hbody_a hbody_b hbody_a
+col h3_db hedge=cd  grass_far grass_a grass_b grass_a grass_b hp_dn_gb hp_fill hp_fill hbody_b hbody_a hbody_b hbody_a hbody_b hbody_a
+col h4_us hedge=ab  grass_far grass_a grass_b grass_a hp_up_s hp_fill hp_fill hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col h4_ga hedge=ab  grass_far grass_a grass_b grass_a hp_up_ga hp_fill hp_fill hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col h4_gb hedge=ab  grass_far grass_a grass_b grass_a hp_up_gb hp_fill hp_fill hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col h4_tp hedge=ab  grass_far grass_a grass_b grass_a hp_top hp_fill hp_fill hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col h4_ds hedge=ab  grass_far grass_a grass_b grass_a hp_dn_s hp_fill hp_fill hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col h4_da hedge=ab  grass_far grass_a grass_b grass_a hp_dn_ga hp_fill hp_fill hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col h4_db hedge=ab  grass_far grass_a grass_b grass_a hp_dn_gb hp_fill hp_fill hp_fill hbody_a hbody_b hbody_a hbody_b hbody_a hbody_b
+col fin_1 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top chequer_b chequer_a chequer_b chequer_a chequer_b chequer_a
+col fin_2 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b bank_top finish_post dirt_line_a dirt_b dirt_line_b dirt_a finish_post
+col gate_1 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_a bank_top gate_post dirt_line_a dirt_b dirt_line_b dirt_a gate_post
+col gate_2 hedge=ab  grass_far grass_a grass_b grass_a grass_b grass_a tuft_b bank_top gate_bar gate_shadow dirt_b dirt_line_b dirt_a bank_bot
+
+piece plain_a class=plain script=- cols=plain_a
+piece plain_b class=plain script=- cols=plain_b
+piece plain_c class=plain script=- cols=plain_c
+piece rough_a class=rough script=rough cols=rough_1,rough_2
+piece rough_b class=rough script=rough cols=rough_1,rough_2,rough_1
+piece rough_c class=rough script=rough cols=rough_3,rough_4
+piece mud_a class=mud script=mud cols=mud_1,mud_2
+piece mud_b class=mud script=mud cols=mud_1,mud_2,mud_1
+piece mud_c class=mud script=mud cols=mud_3,mud_4
+piece hurdle_lo_a class=hurdle_lo script=hurdle_lo cols=hlo_1
+piece hurdle_lo_b class=hurdle_lo script=hurdle_lo cols=hlo_2
+piece hurdle_lo_c class=hurdle_lo script=hurdle_lo cols=hlo_3
+piece hurdle_hi_a class=hurdle_hi script=hurdle_hi cols=hhi_1
+piece hurdle_hi_b class=hurdle_hi script=hurdle_hi cols=hhi_2
+piece hurdle_hi_c class=hurdle_hi script=hurdle_hi cols=hhi_3
+piece arrow_a class=arrow script=arrow cols=arr_1,arr_2
+piece arrow_b class=arrow script=arrow cols=arr_1,arr_2,arr_1
+piece arrow_c class=arrow script=arrow cols=arr_3,arr_2
+piece kicker_a class=kicker script=kicker cols=kick_1,kick_2,kick_3
+piece kicker_b class=kicker script=kicker cols=kick_1,kick_2,kick_2,kick_3
+piece ramp_a class=ramp script=ramp_a cols=r1_us,r1_tp,r1_ds
+piece ramp_b class=ramp script=ramp_b cols=r1_ga,r1_gb,r1_tp,r1_da,r1_db
+piece ramp_c class=ramp script=ramp_c cols=r1_us,r1_tp,r1_tp,r1_ds
+piece ramp_d class=ramp script=ramp_d cols=r2_us,r2_tp,r2_ds
+piece ramp_e class=ramp script=ramp_e cols=r2_ga,r2_gb,r2_tp,r2_da,r2_db
+piece ramp_f class=ramp script=ramp_f cols=r1_ga,r1_gb,r1_tp,r1_ds
+piece ramp_g class=ramp script=ramp_g cols=r2_us,r2_tp,r2_tp,r2_da,r2_db
+piece ramp_h class=ramp script=ramp_h cols=r1_us,r1_tp,r1_da,r1_db
+piece hill_a class=hill script=hill_a cols=h2_ga,h2_gb,h2_tp,h2_tp,h2_da,h2_db
+piece hill_b class=hill script=hill_b cols=h3_ga,h3_gb,h3_tp,h3_tp,h3_ds
+piece hill_c class=hill script=hill_c cols=h2_us,h2_tp,h2_tp,h2_tp,h2_da,h2_db
+piece hill_d class=hill script=hill_d cols=h3_us,h3_tp,h3_tp,h3_da,h3_db
+piece hill_e class=hill script=hill_e cols=h4_ga,h4_gb,h4_tp,h4_tp,h4_tp,h4_ds
+piece hill_f class=hill script=hill_f cols=h4_us,h4_tp,h4_da,h4_db
+piece finish class=finish script=finish cols=fin_1,fin_2
+piece start_gate class=gate script=- cols=gate_1,gate_2
+
+script rough: 0 ANG0  0 H0
+script mud: 0 ANG0  0 H0
+script hurdle_lo: 0 H1
+script hurdle_hi: 0 H3
+script arrow: 0 H0
+script kicker: 0 ANG1  0 H1  1 H2  2 ANG2  2 H3
+script ramp_a: 0 ANG2  0 H4  1 H4  2 ANG5  2 H0
+script ramp_b: 0 ANG1  0 H2  1 H4  2 ANG0  2 H4  3 ANG4  3 H2  4 H0
+script ramp_c: 0 ANG2  0 H4  1 DEFER1  3 ANG5  3 H0
+script ramp_d: 0 ANG3  0 H8  1 H8  2 ANG6  2 H0
+script ramp_e: 0 ANG2  0 H4  1 H8  2 ANG0  2 H8  3 ANG5  3 H4  4 H0
+script ramp_f: 0 ANG1  0 H2  1 H4  2 ANG0  3 ANG5  3 H0
+script ramp_g: 0 ANG3  0 H8  1 DEFER1  3 ANG4  3 H4  4 H0
+script ramp_h: 0 ANG2  0 H4  1 H4  2 ANG4  2 H2  3 H0
+script hill_a: 0 ANG1  0 H4  1 H8  2 ANG0  2 H8  4 ANG4  4 H4  5 H0
+script hill_b: 0 ANG1  0 H6  1 H12  2 ANG0  2 H12  4 ANG6  4 H0
+script hill_c: 0 ANG3  0 H8  1 ANG0  1 H8  1 DEFER2  4 ANG4  4 H4  5 H0
+script hill_d: 0 ANG3  0 H12  1 ANG0  1 DEFER1  3 ANG4  3 H6  4 H0
+script hill_e: 0 ANG1  0 H8  1 H16  2 ANG0  2 H16  3 DEFER1  5 ANG6  5 H0
+script hill_f: 0 ANG3  0 H16  1 ANG0  2 ANG4  2 H8  3 H0
+script finish: 0 H0

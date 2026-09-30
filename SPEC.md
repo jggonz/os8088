@@ -40904,7 +40904,7 @@ gate, a `fast` row. The kinds are checked differently:
 |---|---|---|
 | `retired` | a **failure**. Not worth shipping | on no shipped image, not in the live payload, and **not built by `all` at all** |
 | `instrument` | **not a product** — a bench or a gate that happens to be a package | on no shipped image. `all` MAY build it: keeping a bench assembling is usually the point of having one |
-| `local` | an application requiring user-supplied assets, such as DrMarco (§100) | standalone build/disk targets only; no standard image, live payload or `all` dependency |
+| `local` | an application requiring user-supplied assets, such as DrMarco (§100), or one held off the standard images pending a decision, such as Excitebike (§102, whose art is committed and original) | standalone build/disk targets only; no standard image, live payload or `all` dependency |
 
 **A `retired` package keeps its source and its SPEC.md section.** Deleting
 them would leave no account of what was tried, and this tree already keeps
@@ -155394,3 +155394,1384 @@ redraws only the menu area; player selection redraws only the pointer.
 The reveal pauses while About is visible. No new memory claim or worker is
 required. Kernels without window timers decode the cache during entry and
 show the static splash.
+
+## 102. Excitebike — native motocross racer (`apps/excitebike/excitebike.asm`)
+
+A standalone native game in the shape of DrMarco (§100) and 1942 (§101): a
+side-scrolling dirt-bike racer with four lanes, ramps, hurdles, mud, an engine
+temperature bar and two laps against the clock. It is a **native remake, not an
+emulator**: the simulation, the renderer, the sound driver, the art, the courses
+and the songs are all this project's own. The design record is
+`docs/plans/EXCITEBIKE-PLAN.md`; this section is the contract, and where the two
+disagree this section wins.
+
+**THE ART AND AUDIO POLICY (binding, a maintainer decision).** The package, the
+build and every shipped disk depend on **no NES ROM, no CHR data and no file of
+any disassembly, at build time or at run time**. Every sprite, tile, font,
+splash, palette and sound is original work committed under `apps/excitebike/`
+as plain text and compiled by committed host tools; a plain
+`make excitebikedisk` on a machine that has never seen a reference directory
+builds the whole game. There is no source-directory knob and no fallback arm.
+Gameplay *rules* (the kinds of track piece, ramp and hurdle behaviour, heat,
+lap timing) are not expression and are re-implemented in this project's own
+code; anything that compares against a reference is a **test** that reads it
+only through the `EXCITEBIKE_REF` environment variable, never writes into the
+repo, and skips with a printed reason when it is absent. No such test is a
+build input. `tests/unit/t_excitebike_clean.py` (fast tier) holds the tree to
+this: it fails on any file that names the ROM, its CHR data, its
+disassembly's files, a replay format or a path into the reference tree, on a
+build tool that imports anything outside the standard library, and on a binary
+blob under `apps/excitebike/`.
+
+`make excitebike` builds `build/excbike.o88` (header name `EXCITEBIKE`; the
+file is `EXCBIKE.O88` because an 8.3 stem is at most 8 characters);
+`make excitebikedisk` builds four standalone floppies (1.44MB, 720KB, 1.2MB,
+360KB, each `os88disk.py --verify`'d in the recipe) carrying the package,
+`README.md`, `EXBV.GFX`, `EXBC.GFX`, `EXBH.GFX` and the three `EXBSPL.*` files; `make
+excitebiketest` runs the front-end gate. The package is `local` in
+`apps/RETIRED.txt` (§20.16): it is not in `all`, on the standard images, the
+allapps floppy or the live media. Its art is committed, so it needs no
+user-supplied asset; whether it should ship is the maintainer's decision.
+Nothing here spends a kernel byte: no new `OSAPI_*` slot, no driver, no kernel
+change. The package's image is 34,883 bytes and its bss 18,707 (wave 7: 53,590; wave 6: 53,366), against the
+loader's 61,440.
+
+**Waves.** This is wave 7 of 7 (plan section 16): the compilers, the
+skeleton, the build plumbing and the desktop front end (wave 1), the video
+and horizontal scroll engine (wave 2, 102.1), the rider: physics, controls,
+obstacles, ramps, crashes, the HUD (wave 3, 102.3), and the game around it:
+the title, the menus, the countdown, the lap flash and the finish, the rank and
+the campaign (a second pass, a repeating last course, game over), the best
+times, the opponents, the attract demo, five courses and an optional designed
+sixth (wave 4, 102.4), the sound: songs, engine and effects (wave 5, 102.5), and the Hercules
+(the go/no-go answered GO), the compiled hot poses, the edge riders and the VGA pan's measured
+refusal (wave 6, 102.7), and the polish: the lane dash on the two flat-ground adapters, the four
+floppy geometries booted, the low-memory refusal, the banner flash, the EGA decision and an 86Box
+machine (wave 7, 102.8).
+
+### 102.1 Video and memory
+
+**One layout on every adapter.** 320 x 200 pixels as 40 x 25 tiles of 8 x 8:
+tile rows 0-4 crowd, 5-7 banner, 8-23 the track band (grass 8-13, tuft 14,
+lanes 15-21 - the six rows 16-21 are the collision rows (COLL) and row 15 is the lane's far edge, drawn only - hedge 22-23), row 24 the HUD line. A bike lives in tile rows 6-22;
+the compiler asserts every pose fits its 24 x 24 box. A world column is
+therefore 16 tile ids (14 track rows, 2 hedge rows) named by a **band
+dictionary** entry, at most 72 entries; the crowd and banner are a **top
+picture** of 64 x 8 tile ids that repeats every 512 pixels. A **column** is 8
+pixels wide: the window is 40 of them and the unit of scroll is one (8 pixels a
+step on every adapter; plan D6).
+
+**Modes.** VGA runs `FSXM_VGA0D` (§53.4): 320 x 200 x 16 planar, 8 pixels a byte
+a plane, stride 40, `FSI_SEG` = A000. CGA runs `FSXM_CGA320`: 320 x 200 x 4,
+stride 80, two banks 2000h apart. The mode is chosen from `OSAPI_FSX_CAPS`
+(§53.4), not guessed: the game is **playable** iff DL = `VID_VGA` and bit
+`FSXM_VGA0D` is set, or DL = `VID_CGA` and bit `FSXM_CGA320` is set, or (wave 6, 102.7)
+DL = `VID_HERC` and bit `FSXM_HERC` is set. **EGA is
+refused** although §53.4 gives it the CGA modes: nothing here has
+proved the CGA path on an EGA card, and a guessed answer is not a fact (§47);
+wave 7 decided it and the refusal stays (102.8.5). A refused adapter still gets the whole splash
+and help, and the START label reads `VGA, CGA OR HERC ONLY`; Enter does
+nothing.
+
+**The bracket.** `OSAPI_FSX_RUN` with `FSXF_FASTTICK` (§53.2.1). Entry waits for
+the activating Enter to release (the BIOS mode call would mask its break),
+picks the mode, sets it, and clears the screen. **The loading screen is
+resident**: two centred lines, `EXCITEBIKE` and `LOADING GRAPHICS`, drawn from
+glyph rows compiled into the package image (`exb_ld_v` 8 bytes a glyph, `exb_ld_c`
+16) *before the first disk read*, so it needs no file and no claim; the VGA
+screen uses the BIOS default palette (index 15 is white), CGA ink 3. The
+adapter's art file is then read into one heap claim and verified (below), the
+back end builds its dictionaries and sprite claim (`xb_race_open`), and the race
+loop runs (below). The loop polls `os88alt_edge` (Alt+Enter leaves), then
+`int 16h`: Esc leaves, `C` cycles the palette, `P` holds the scroll
+(`xb_tpause`), everything else is ignored. On leaving, the sprite claim, the CGA
+dictionary claim and the art claim are freed.
+
+**Palette.** VGA: the attribute palette is reset to the identity (pixel value
+*n* is DAC *n*) and the 16 DAC entries are loaded from the current course
+theme (five themes, each 16 x 3 six-bit values, in the GFX palette record).
+Pixel values are palette *slots*; a theme is a set of slot overrides, so one art
+set serves every course. `C` on VGA steps the theme. CGA: register 3D9h takes
+`0x10` (palette 0, high intensity) or `0x00` (low); the slot-to-ink map is
+hand authored per slot (a nearest-colour map loses the ramps and is forbidden)
+and `C` toggles the register.
+
+**The world is stored SHEARED (both adapters).** Hardware scroll moves the CRTC
+start address; if row r of the window is stored at `base + P*r + x` for world
+column x (P = the row pitch), a step of one column needs exactly ONE new cell a
+row - the entering column - and it lands in the cell the row below just scrolled
+out of. There is no ring on VGA, no mirror and no rebase: the address of a
+(line, column) does not depend on the scroll at all, a page holds a 40-column
+window at start address `page + S`, and the invariant is only that a cell is
+shared by (line l, column x) and (line l + 1, column x - 40) - the window holds
+one of the two. **VGA**: P = 40 bytes, S counts bytes = columns; a race of up to
+1,637 columns needs 9,317 bytes a page (9,472 reserved), so nothing wraps.
+**CGA**: a line is `(l & 1) * 2000h + (80 * (l >> 1) + 2x) mod 8192`, the cell is
+shared with (l + 2, x - 40) - the same bank, the next character row - the 6845
+start address counts words = columns, and the card decodes 12 bits of it plus the
+scan line's low bit as A13, so the ring is 8,192 bytes, a 100-row window is 8,000
+of them and nothing inside a window aliases; the entering column's destination
+splits where the ring wraps (once a column at most).
+
+**VGA memory map** (bytes, the same offsets in each of the four planes):
+`0000` the HUD (line 0 blank, glyph rows on lines 1-7; 320 bytes), `0200`
+`2700` `4C00` the three pages (9,472 bytes each), `7100` the band dictionary (128
+bytes a column, 72 columns), `9500` the top dictionary (64 bytes a column, 64
+columns), `A500` one byte of 0 (the source of page line 192, below): 42,241 of
+65,536. Both dictionaries are built once by `xv_dicts` from the art file's tiles,
+a plane at a time (the map mask set once a plane): a strip is its tiles' 8 lines
+each, and an entering column is then a **latch copy** - write mode 1, `movsb`
+from the strip, `add di,39` - one read and one write moving 8 pixels of all four
+planes. Measured on MartyPC: 37 clocks a line.
+
+**Three pages, not two - and the reason is a proof** (plan 4.3 asked for two). A
+start-address write takes effect at the NEXT vertical retrace, up to one CRT frame
+(14 ms) later, and the page it replaces stays on the glass until then. With two
+pages the frame after a flip writes the page that may still be displayed unless it
+first waits out the retrace - a spin, and on a 18.3 ms sub-tick that spends most
+of the frame. With three, the page frame f+1 writes is neither the one f requested
+nor the one f-1 requested, so it is never on the glass, whatever the retrace
+phase: a frame's period is at least one sub-tick (18.3 ms) and every flip is
+requested inside its own period, so the page requested two frames ago has been
+switched away from before the frame after next begins. The cost is one more page of
+columns to bring up to date (~1.5x the column work; a page is brought up to date
+from the S it was last current at, the columns since). The two OUTs of a flip
+(hi, lo) are 32 clocks apart, ~6 microseconds against a 14 ms CRT frame: a retrace
+latch falling between them would show one frame from the wrong page, and that is the
+price of not spinning.
+
+**Columns and the skip lists.** `xv_col` writes the entering column as two strips
+(the top picture's 64 lines, the band's 128), each as a list of RUNS
+`(dest offset = 40 * first line, first line, count)` ending in `0FFFFh`, executed
+by `xv_runs` through a chain of 128 `movsb / add di,39` entered part way (a run of n
+lines is entered at `end - 4n`; ~155 clocks to start a run, 37 a line). A full
+column is two runs. The other lists exist because the sheared memory already holds
+the right pixels in many cells: the entering line l overwrites the cell that held
+line l + 1 of column x - 40, so if `W(x, l) = W(x - 40, l + 1)` the write can be
+skipped. The compiler (`tools/excitebike_assets.py`, `skip_runs`) lists, for every
+top column x mod 64 and every (entering, leaving) pair of the three plain band
+columns, the lines that DIFFER - merged into runs whenever the lines a gap would
+rewrite cost less than starting another (`RUN_SETUP` 155, `LINE_CLK` 37, both measured) - and
+always the last line of a strip (its neighbour is in the other strip or off the
+page). The band lists are legal only for a plain pair; any other pair writes a full
+band. **They are legal only when the cell is clean**: sprites are erased before
+columns are written (page order below), and the lists are not used at all when a
+page is brought up from nothing or by a jump of a window or more. **The art is
+part of the contract**: a line equals the next only when the pixel rows have
+vertical runs, and the shipped art was redrawn for it (lawn as vertical blades,
+flat track surface, the three plain columns identical but for the tuft row; see
+`apps/excitebike/art/README.md`): a plain band pair writes **33 of 128 lines in 7
+runs**, the top strip **55.5 of 64 in 1.9** (the crowd is the picture and stays as
+drawn). Two selfchecks hold it: every list covers every line that differs, and a
+list missing a line is REFUSED (`--selfcheck`); and `tests/excitebike_video.py`
+empties every band list in the guest and requires the picture to be wrong.
+
+**Page order, and the invariant that makes the lists safe.** Each frame, on the
+next of the three pages: (1) erase this page's previous sprite footprints (latch
+copies of the world under each); (2) write the entering columns since this page was
+last current; (3) draw the sprites, recording their footprints; (4) the HUD; (5)
+flip. A page is therefore sprite-clean when columns are written, which is what the
+skip test assumes.
+
+**Sprites (VGA).** The compiler stores a pose once as four 1-bit layer masks (opaque,
+ink 1, 2, 3); `xb_spr_load` expands them, at load and into one heap claim, to the
+four even phases (x mod 8 in 0, 2, 4, 6): a blob is four layers - 0 the outline
+(opaque pixels no ink layer claims), then the inks - each a word count then
+`(word offset from the box's first byte, byte mask)` records for the non-empty
+bytes; the colour of a layer is not stored (the rider's is `xb_bikes` byte 6). The
+claim is **28,527 bytes of the 44 KB budget** and the loader takes ~0.5 s once. A
+layer is drawn in **write mode 2** (the byte written is the colour, the bit mask
+register the layer's pixels of it): one OUT of the mask, then one XCHG whose read
+loads the latches and whose write puts the colour under the mask. **Write mode 3
+(set/reset, no OUT a record: the plan's ~73 clocks a pair) is NOT used**:
+MartyPC's VGA implements modes 0-2 and logs mode 3 as `Invalid`, so a pixel gate on
+the one emulator that counts cycles could not pass; mode 2 is standard on every
+VGA and measures ~130 clocks a (byte, layer) pair, ~100 pairs a pose (plan: 94.6).
+A bike whose 3-4 bytes are not wholly inside the 40 columns, or whose 24 lines
+would reach line 192, is not drawn (a clipping blitter is wave 6).
+
+**The HUD.** The compact 20-cell HUD (`TIME 0:00.00 LAP 1/2`: tile columns 10-29)
+is the bottom row. **VGA: line compare** - CRTC 18h = 80h, bit 8 (07h bit 4) = 1,
+bit 9 (09h bit 6) = 0 after clearing the protect bit of 11h: 384 = 2 x 192 scan
+lines - restarts the address at 0 where the HUD's 8 lines sit for every page, so
+the HUD is drawn once a change and never scrolls. **MartyPC and QEMU disagree by
+one scan line about where the split starts** (MartyPC ON scan line 384, QEMU on
+385 with the double-scan phase carrying on). **A real VGA splits on the line AFTER
+the match, which is QEMU's behaviour, so a field run is to be judged against QEMU
+and not MartyPC**; the blank first HUD row and the black page line 192 are what
+make either split draw the same picture. And the picture the game draws is
+identical on both because the design does not depend on it: the HUD's first pixel
+row is blank (glyph row 0 is on the second; row 7 is blank in every glyph), and page
+line 192 - the one scan line the card can show before the split - is kept black
+(`XV_BLACK`, written with every entering column; its cell is a cell of a column that
+has left). **Gate G1 passes**: `tests/excitebike_video.py --qemu` compares QEMU's own
+picture with the reference renderer pixel for pixel, so the in-stream fallback
+(the CGA's, on the VGA) was not needed and is not built. **CGA: in stream** - the
+HUD image is 8 lines of 22 words (2 words of black pad) painted at the cells (row 96
++ line/2, world column S + 10 + i); when the window moves by k columns the old copy
+sits k cells left and the pad wipes it in the same pass; when it did not, only the
+cells whose character changed are written.
+
+**CGA: touch the card as little as possible.** A CGA VRAM word costs ~86 clocks
+(`rep movsw` from RAM, MartyPC's 8-bit bus and wait states) against ~17 for a RAM
+word, so the plan's model, which priced a VRAM byte at 18 clocks, was 2.3x light
+(measured, PERFORMANCE.md Set 148) and the CGA design follows the measurement:
+(a) everything that touches the card happens AFTER the retrace starts, in raster
+order (the beam is 2.4 ms from the retrace to line 0 - 38 lines of the 62-line blank -
+and 63.5 us a line, so the entering column, the HUD and the boxes finish ~5.8 ms in,
+when the beam is at about line 54: a second entering column or a bike at y 64-90
+can be caught by it, UNMEASURED - no test reads the beam - and left as a field
+question. A frame that ends its work with the beam past the retrace WAITS for the
+next one - `xc_vr` spins at most two sub-ticks from its entry, and the retrace comes
+every 0.91 of one, so it always finds it - and the frame is then late by that wait
+and the simulation is fed the time actually taken; it is never thrown away. (The
+first design skipped a frame whose retrace missed the frame's own boundary and let
+the next one catch up: a skipped frame wasted all of its work and a heavy one - three
+bikes rewriting and two columns - skipped again and again, which starved the picture
+and made the CGA pixel gate's "let the last frame land" loop intermittent. The skip
+path, `xc_to`, is kept for a card that shows no retrace at all.) The wait is counted
+as idle (`xb_spinl`), not as work; (b)
+**at most two columns a frame** (`XC_MAXK`): the writer stays ahead of the beam, and a
+window that is asked to move further catches up over the next frames (a jump of 32
+columns or more, or backwards, rewrites the whole window); (c) **a sprite is composed
+in a RAM box** (the plan's design): the union of the bike's old and new footprints
+(clipped to the window: what scrolled out belongs to the entering columns), at most
+8 words x 32 lines, filled from a LINE-ORDERED copy of the strips (`xc_fill`: a
+`movsw / add di,2W-2` chain a column), the pose's `(AND, OR)` byte pairs over it in
+RAM (`xc_draw`; a pose row is trimmed to the bytes that hold an opaque pixel, ~92
+bytes a pose rather than 168), and the box written to the card once, a line at a
+time (`rep movsw` a line and one ADD to the next line's cell). The old sprite is
+erased by the box that covers it, so no erased state is ever visible and nothing is
+written twice; a bike that did not move under a window that did not scroll is
+skipped whole. The dictionary claim is 48 KB (the strips split by scan-line parity,
+for the column writer's bank-at-a-time chain, and again in line order for the boxes)
+and the sprite claim **10,006 bytes** of 17 KB (48 blobs: a table, then per row a
+first byte, a count and the pairs), built ~0.3 s by 256-word expansion table.
+
+**The frame clock and the governor** (`game.inc`). No API returns the sub-tick
+counter, so it is made: PIT channel 0 counts down from 21,845 once a FASTTICK
+sub-tick, and a sample that reads a LARGER count than the last one has seen exactly
+one reload (`xb_clk_sample`, ~140 clocks) - exact while no two samples are a
+sub-tick apart, which every routine of the frame keeps (the governor test's busy
+loop samples inside itself). A frame's period is a whole number n (1..4) of
+sub-ticks: the frame starts at an edge, works, then waits for `f0 + n` with
+`FSXW_FRAME` and starts the next from the sub-tick it woke in (no catch-up: below
+~7 fps the game slows). The governor takes the frame's WORK in PIT counts (the span
+from its start, less the retrace wait) rounded up to sub-ticks: `n := work` at once
+when larger, and `n - 1` only after **64 consecutive frames whose work, rounded up, fits
+n - 1 whole sub-ticks** (17,476 counts each; the 64 frames are the hysteresis - an
+earlier 0.8 margin left the CGA, whose steady work is 0.83-0.93 of a sub-tick,
+unable ever to come down from 2); frames that rewrote a whole window (the first
+three, a jump) are not steady state and are ignored, and a frame that follows a
+skipped one may raise n but not judge the quiet count. The simulation is fed by
+a 16.16 accumulator of 1.10033 game steps a sub-tick (60.0988 / 54.6205), at most 8
+a frame; the game clock runs 1.664 cs a step (real time at 60.1 steps/s).
+
+**The scripted test course.** Wave 2 has no simulation: the first course's
+compiled column ids scroll at `xb_tspeed` (8.8 pixels a step, default 3.4 = `0366h`)
+under one stationary bike (pose 0, x = 88, y = 100) and a ticking `TIME` clock. The
+harness's controls are guest bytes, written and read by
+`tests/excitebike_video.py` and `tests/excitebike_perf.py`: `xb_tpause` (1 = hold:
+nothing is simulated or drawn), `xb_tframes` (render exactly N frames then hold),
+`xb_tset` + `xb_tcol` (jump the window to a column), `xb_tspeed`, `xb_tburst` (N
+x 17.4k clocks of extra work in the next frame: the governor test) and `xb_bikes`
+(4 records of 8 bytes: active, pose, x word, y word, rider colour slot, pad).
+`xb_S` is the target column and `xb_shownS` the one on the glass (the CGA's may lag
+it by the two-column rule). Breakpoint labels `xv_t0..xv_t4`, `xc_t0..xc_t5` mark
+the components a frame is measured in; `xb_presented` marks the frame.
+
+**Memory.** Claims, all `OSAPI_MEM_CLAIM`: the desktop splash art (movable, §66;
+12,457 bytes on VGA) which persists while the window is open; inside the bracket
+the adapter art file (12,224 bytes VGA, 11,410 CGA), the sprite claim (28,527 VGA,
+10,006 CGA) and on CGA the 48 KB dictionary claim. **Leaving fullscreen restores
+the claim map exactly** and closing the window returns the heap to what the desktop
+had before the package opened - both asserted by `tests/excitebike_front.py`. There
+is no RAM framebuffer. The package is 14,050 bytes of image and 12,517 of bss
+(26,567 of the loader's 61,440): the bss is 3,456 for sixteen decoded splash rows,
+432 for the clipped fallback, 1,024 font copy, 4,096 for the CGA's boxes, 1,637 for
+the column-id array (`43 + 2 x 797`, the largest race the compiler accepts) and
+the rest state.
+
+**Measured, MartyPC 4.77 MHz** (`tests/excitebike_perf.py --scroll`, one bike, 3.4
+px/step; PERFORMANCE.md Set 148): the governor settles at **n = 1, 54.6 Hz, on both
+adapters** with about two thirds of every sub-tick idle. VGA a frame: erase 5.1k, columns 9.1k,
+sprites 13.5k, HUD 1.5k, flip 0.4k clocks (29.5k of the 87.4k a sub-tick). CGA a frame: scroll and HUD image 2.1k,
+sprite boxes in RAM 9.9k a frame (19.1k for a rewrite), columns 7.6k, HUD 5.3k (line 0 of the image is black over black and is not written, and the
+changed cells are kept as a list, not found by scanning 20 flags),
+box write 3.1k a frame (5.9k a rewrite), retrace wait 35k (idle). Engine start (dictionaries,
+sprite claim, course, palette) is 1.9 s VGA and 1.5 s CGA on top of the art load.
+These are emulator results and say nothing about a real card's wait states or a
+floppy (docs/FIELD-MACHINES.md).
+
+### 102.2 Asset files
+
+All sources are text under `apps/excitebike/`; `tools/excitebike_assets.py` (Python
+standard library only, deterministic: no timestamps, no host font, sorted
+iteration) compiles them; `tools/excitebike_art.py` is the *offline* authoring
+tool that wrote the first version of the art text from drawing procedures
+(nothing reads it at build time; after generation the text is authoritative).
+`apps/excitebike/art/README.md` records how each asset class was made.
+
+| source | contents |
+|---|---|
+| `art/palette.json` | 16 slots, five themes, the CGA ink maps and 3D9h values, Hercules levels |
+| `art/tiles.txt` | 70 named 8 x 8 tiles (`.` = slot 0, `0-9a-f` = slot) with a `class` |
+| `art/pieces.txt` | dictionary columns, pieces, element scripts |
+| `art/top.txt` | the 64 x 8 crowd-and-banner picture as tile names |
+| `art/poses.txt` | 24 bike poses of 24 x 24 and 4 small sprites |
+| `art/font.txt` | 64 glyphs = ASCII 32..95 |
+| `art/splash.json` | the splash and help layers (vector, re-rendered per desktop) |
+| `tracks/*.trk` | courses in the piece grammar |
+| `audio/sfx.txt` | sound effects |
+
+**Budgets (plan 12.5), enforced by `--selfcheck` and the compiler itself;
+exceeding one fails the build with the name and the number:**
+
+| artefact | budget | now |
+|---|---|---|
+| tiles | 80 | 70 |
+| `EXBV.GFX` | 20,480 | 13,376 |
+| `EXBC.GFX` | 16,384 | 12,562 |
+| `EXBH.GFX` | 16,384 | (wave 6) |
+| each `EXBSPL.*` | 24,000 | 12,457 / 3,498 / 4,866 |
+| `EXB.SND` | 3,072 | 297 |
+| package image + bss | 61,440 | 46,413 (image 28,063 + bss 18,350) |
+| whole game on a 360KB disk | 130 KB | 73 KB (74 of 354 clusters) |
+| sprite claim (VGA / CGA) | 44 / 17 KB | 28.4 / 10.3 KB (29,113 / 10,578 bytes, 28 poses) |
+| band dictionary | 72 columns | 61 |
+
+**`EXBV.GFX` / `EXBC.GFX` / `EXBH.GFX`** (the last is wave 6's, 102.7.1). `+0` magic `EXBV`, `EXBC` or
+`EXBH`; `+4` word total
+length; `+6` word checksum; `+8` byte format 1, byte adapter (0 VGA, 1 CGA, 2 Hercules);
+`+10` word record count (10); `+12` a directory of (word offset, word length).
+The checksum is the 16-bit sum of every byte of the file with the checksum word
+taken as zero; the guest verifies magic, length, the compiled-in checksum
+(`EXB_GFX_*_SUM`, an `equ` the compiler writes into `exbtables.inc`) and the sum
+itself before following any offset in the file. Records, by id (`EXBR_*`):
+0 TILES (VGA 32 bytes a tile, plane-major, 8 rows a plane; CGA 16 bytes, two a
+line, 2 bits a pixel through the ink map; Hercules the same 16 bytes with a PAIR of card pixels a
+game pixel, 102.7.1); 1 BAND (16 tile ids a column: rows
+8-21 then the hedge pair); 2 COLL (6 tile ids a column, tile rows 21 to 16,
+bottom-up: the terrain under a bike is `coll[cid[x]][row]`); 3 CLASS (256
+bytes, tile id to `EXBC_*` class); 4 TOP (512); 5 POSES (count, then per pose
+four 72-byte layer masks: opaque, ink 1, 2, 3); 6 SPRITES (count, then width,
+height and four masks each); 7 FONT (VGA 64 x 8 bytes 1-bit; CGA and Hercules 64 x 16, ink
+3 / the pair `11`); 8 PAL (VGA five themes x 48 six-bit DAC bytes then the four pose ink slots
+`0,10,11,14`; CGA the two ink maps, the two 3D9h values, the ink slots; Hercules the same 38 bytes
+with the pair each slot's level is in both maps and no 3D9h value); 9 INFO.
+Pose inks: 0 outline (opaque, no layer), 1 rider colour (a per-rider variable),
+2 bike body, 3 skin/highlight.
+
+**`EXBSPL.VGA`, `.HRC`, `.CGA`** (the desktop splash, EXF1): `+0` `EXF1`; `+4`
+word width 432, word height (264, 264, 132), word depth (4 planes or 1); `+10`
+a directory of one word a row (the splash rows then the help rows), identical
+rows sharing one packet string; row packets 1..127 repeat the next byte,
+128..255 copy the next n-127 literals, 0 ends the row. A four-plane row is 216
+bytes plane-major (54 a plane), a 1-bit row 54. The grammar is DrMarco's DMF1
+restated, so the compiler needs no Pillow. The splash art is rendered from
+`splash.json`'s layers at 432 x 264 (VGA in the desktop's own 16 colours;
+Hercules and the 264-row 1-bit desktop with a checker for the mid level) and at
+432 x 132 for the compact CGA desktop from the *same vector layers*, so
+thin strokes stay crisp. The menu box (`reserve`) is left black for
+`font_run`.
+
+**Generated NASM** (in `build/excitebike-art/`, `-I` for the package):
+`exbtables.inc` (GFX and front sizes, checksums, `EXBR_*` record ids, `EXBC_*`
+classes, `EXBCOL_*` column ids, the resident loading glyphs, and the scroll
+engine's skip lists `exb_skip_top` / `exb_skip_band` / `exb_full_*`, 102.1); `exbtracks.inc`
+(the course streams, 102.3); `exbscripts.inc` (element scripts, included from
+wave 3); `exbsnd.inc`. A stamp `.exb-art` holds a hash of every input, so an
+edited grid, course or score rebuilds the package and the disks.
+
+### 102.3 Simulation and courses
+
+**Known non-goal: physics fidelity to the study game.** The rules that differ (`MUD`, `LAND_WINDOW`, `TAKEOFF`, `PITCH_SCALE`, listed with reasons in `tests/excitebike_ref_deviations.txt`) are deliberate simplifications for speed; there is no oracle comparison of jump and landing feel against the disassembly, and none is claimed. `tests/excitebike_ref.py` checks the rest of the tables and skips cleanly when the study source is absent.
+
+**A course** is a text file in the piece grammar: `track <title>`, `theme n`,
+`laps 2`, `par m:ss.cc`, `par2 m:ss.cc`, then one piece per line (`piece [xN]`), then
+`pass2` and `swap old new` lines (the second lap swaps some pieces for harder ones;
+**the second PASS round the five courses (102.4) rides that harder set on both laps**,
+which is what `par2` is the par of). There are
+36 pieces — plain, rough, mud, low and high hurdles, arrows, kickers, eight ramps,
+six hills, the finish and the start gate — built from 61 shared columns, with 21
+element scripts of keyframes `(x, ANGn | DEFERn | Hn)`: slope code, wait n
+columns, ground height. **The compiler asserts what a hand edit must not break:** a
+lap is at most 797 columns in both passes; at least 70% of a lap's columns
+are plain (the scroll engine's skip lists, plan 4.3, depend on it); no two
+obstacles are closer than 8 plain columns (a rider must be able to land); a
+lap ends with the finish piece; a script's keyframes are in order, inside its
+piece and use in-range codes. Five courses ship, in this order: `t1.trk` Meadow Sprint, `t2.trk` Dusty Rise,
+`t3.trk` Dusk Canyon, `t4.trk` Frost Ridge and `t5.trk` Night Circuit (themes 0, 2, 1,
+3, 4; 28, 36, 34, 42 and 50 obstacles a lap, 514-675 columns; t3 to t5 were laid out
+by `tools/excitebike_tracks.py`, a seeded walk over the piece catalogue under the
+compiler's rules with a difficulty ramp, and edited as source since). **A par is a result,
+not a guess:** `python3 tools/exbsim.py --run-track t1 ... --run-track t5` drives each
+course to the finish at turbo with the reference rider (`exbsim.bot_input`) on BOTH passes
+(`Sim(art, course, flag)`; the second pass is `pass2` on both laps) and asserts that
+each committed par is that time + 8%:
+
+| course | first pass: turbo -> par | second pass: turbo -> par2 |
+|---|---|---|
+| t1 | 0:45.02 -> 0:48.62 | 0:45.09 -> 0:48.70 |
+| t2 | 1:02.63 -> 1:07.64 | 1:05.89 -> 1:11.16 |
+| t3 | 0:50.00 -> 0:54.00 | 0:51.40 -> 0:55.51 |
+| t4 | 1:00.60 -> 1:05.45 | 0:58.50 -> 1:03.18 |
+| t5 | 1:04.89 -> 1:10.08 | 1:07.84 -> 1:13.27 |
+
+`--selfcheck` runs all ten (`tools/excitebike_tracks.py --pars` writes them).
+
+**Streams.** A course is `EXB_RUNWAY` (43) alternating plain columns, then lap 1
+then lap 2. Each lap is a stream of (column id, run length) byte pairs ending in
+a zero run, expanded by `xb_track_load` into `xb_cid[]` (one byte a column, at
+most `43 + 2 x 797`); an overrun sets carry and writes nothing past the array.
+Per course, `exbtracks.inc` also carries the header (`+0` theme, `+1` laps, `+2`
+par in hundredths, `+4` and `+6` the two laps' lengths, `+8..+14` the two stream
+and the two trigger-list pointers, `+16` the name, `+18` the second pass's par;
+`xb_header` answers it for `xb_track`, and for the custom course 6 the copy in `xb_chdr`) and, per lap, a list of element
+triggers (word column, word script id; the list ends at `0FFFFh`). **A trigger's
+column is LAP-RELATIVE**: column 0 is the first column after the runway for lap
+1 (`xb_cid` index = 43 + column) and, for lap 2, the first column after lap 1
+(`xb_cid` index = 43 + lap-1 length + column). `EXB_LAP_MAX` (797) is emitted
+with `EXB_RUNWAY`, and the package refuses to assemble if `XB_CID_MAX` is not
+`EXB_RUNWAY + 2 x EXB_LAP_MAX`. `xb_track` (0-based) picks the course and `xb_flag` the pass (1 = the second pass:
+`xb_track_load` expands lap 2's stream on both laps and `xm_reset` takes lap 2's length and
+trigger list for lap 1, so a trigger's column stays lap-relative).
+`exbscripts.inc` holds the scripts (`exb_scripts`, ids 1-based, keyframes `byte
+x, byte code` with bits 7-6 the kind and 5-0 n, ending `0FFh`) and `exbtables.inc`
+`exb_ccls`: **the class of the tile under each collision row of every dictionary
+column**, six bytes a column, row 0 nearest the camera (the terrain under a bike is
+`exb_ccls[cid[col] x 6 + row]`; the class is the tile's, `EXBC_*`).
+
+**The simulation is this project's own rule set** (plan section 0: rules are not
+expression). One STEP is one tick of a 60.1 Hz game; `sim.inc` is
+`tools/exbsim.py`'s `Sim` written in 8086, operation for operation, in 16-bit
+integers with a 32-bit position, so the two can be compared step for step
+(102.6). Every number is in `exbsim.PHYS` and mirrored in `const.inc` as
+`XP_<name>`; `tests/excitebike_ref.py` fails when the two disagree. Units:
+positions, speeds and heights are 8.8 fixed point in PIXELS; the engine
+temperature is in 1/256 of a unit. **Input** (`INP_*`): Up and Down change lane,
+Left lifts the nose, Right drops it, Z is the throttle (A), X the turbo (B).
+
+*The step*, in order (`xm_step`):
+
+1. **Clock** (not once finished): 1.664 hundredths a step (thousandths counted), so
+   60.1 steps read one real second; it stops at 9:59.99 and at the finish.
+2. **Lane** (riding or stalled): 1 unit a step within 7..$39; Up and Down set the
+   direction; after release the bike carries on to the next centre ($0E, $1A, $26,
+   $32) and stops there. The lane's **collision row** is 5 below 16 else
+   `5 - (lane - 8) / 8`, clamped at 0 (`xm_lrow`); the class under the bike is
+   looked up once a step (`xm_cls`).
+3. **Heat**: turbo (B, riding or in the air) +$0F a step; throttle only, toward 17
+   units (+7 below it, -$0B above); nothing, cool to 8 (-$0B); mud +$0F more while
+   riding through it. At 32 units a riding bike **overheats**: mode STALL for 258
+   steps (no throttle, the speed decays, the temperature falls at $0B a step, the HUD
+   says BURNING), then the temperature is reset to 8.
+4. **Speed**, every fourth step (`n & 3 = 0`): riding, toward the cap of the held
+   buttons (turbo $0340, throttle $0320, none 0) by $3F / $18 up, $0E down;
+   in **mud** the cap is $00C0 and the fall $40, in **rough** $0180 and $20; a
+   crashed bike sheds $30, a stalled or finished one $20; in the air Right holds the
+   speed, Left sheds $3C, neither $1C.
+5. **Pitch** (riding or in the air), one step every 6 steps on the ground and every
+   4 in the air: on the ground Left raises it (at most 4 above the slope), otherwise it
+   settles on the terrain's slope pitch; in the air Left/Right move it within -3..4
+   (a pitch already past the stop stays). A pitch of 4 above the slope held for **13
+   steps** flips the bike over: a crash.
+6. **World**: `pos += speed` (32 bit); past `8 x ncols - 112` pixels the world ends
+   (the bike's box must stay on the 320-pixel screen) and the speed is cleared. The
+   bike's column is `(pos >> 11) + 12` (its centre; the window's column `S = pos >> 11`,
+   clamped at `Smax`, and the bike walks the rest of the way across the screen).
+7. **A new column** (`xm_column`): a lap change (lap 2 begins at column 43 + lap 1's
+   length); the **script triggers** of the column start their element script; then the
+   **hazards** of the class in the bike's lane row:
+   *low hurdle* halves the speed unless the bike is 3 pixels up or in a wheelie of
+   2 above the slope; *high hurdle* crashes it unless it is 12 pixels up or in a
+   wheelie of 3 above the slope; *arrow* cools the engine to 8; *kicker* adds $80 to
+   the speed (at most $0466); rough and mud act through the speed rule above.
+   Then the running script's keyframes with `x + defer <= offset` fire, in order:
+   `ANGn` sets the **slope code** (0 flat, 1-3 climbing, 4-6 descending: the slope
+   pitch is n, or 3 - n above 3), `Hn` the **target ground height** (n x 2 pixels),
+   `DEFERn` delays the rest by n columns (and ends this column's keyframes). The
+   script's end resets the ground (`H0`, `ANG0`) one column after its last keyframe
+   fired and ends the script.
+8. **Vertical, riding**: the ground height climbs to the target at `speed x 1/4, 1/2,
+   3/4` for slope codes 1..3 (a sloped rise remembers its rate, `xm_vg`), at $0400
+   for a step in the ground; it falls at the same rates for slope codes 4..6, at
+   $0400 otherwise. **A drop of the ground after a sloped rise is a take-off**: the
+   bike keeps 1.5 x the rate it was climbing at as its vertical velocity and is in the
+   air; the ground under it is the target height at once.
+9. **Vertical, in the air**: height += velocity, velocity -= gravity ($34, $18 while
+   Left is held), at most 96 pixels up; a descent to the ground is a **landing**:
+   pitch within 1 of the slope pitch is clean (4 steps of `land_squash` and a dust
+   puff), 2 bounces once (half the impact, an eighth of the speed lost), 3 or more
+   crashes.
+10. **Crash**: the bike drops to the ground and slides (speed shed at $30 every 4th
+    step) through 72 steps — tumble, slide, walk, by eighths of 8 steps — then
+    stands, stopped, pitch level, in the same lane.
+11. **Finish**: in lap 2 at column `ncols - 3` the clock stops and the rider is
+    finished (input ignored, the speed decays).
+
+*Modes* (`XM_*`): RIDE 0, AIR 1, CRASH 2, STALL 3. *Events* (`XEV_*`, OR-ed into
+`xm_ev` and cleared by the frame loop; wave 5's sound reads them): crash, land,
+take-off, bump, lap, finish, overheat, bounce.
+
+**The 24 poses** (ids 0-23, `art/poses.txt`) are chosen by `xm_pose`: crash by
+eighths of its 72 steps `tumble_1..3` (19-21), `slide_1..2` (17-18), `walk_1..2`
+(22-23); stall `level_a`; air with pitch 2 or more `air_nose_up` (13), -2 or less
+`air_nose_dn` (14), falling within 10 pixels of the ground `brace` (15), else
+`air_level` (12); riding after a landing `land_squash` (16), above the slope by 1..4
+`pitch_up_1..4` (2-5), climbing `climb_1..3` (9-11), descending `pitch_dn_1..3`
+(6-8), else `level_a`/`level_b` (0, 1) alternating every 4 steps. **Four EFFECT poses**
+follow them (ids 24-27, `EXB_POSE_SHADOW`, `EXB_POSE_DUST`): the compiler builds
+them from the small sprites of `poses.txt` placed in 24 x 24 boxes (the shadow in the
+bottom rows, the dust behind the rear wheel), so the machinery that draws a bike
+draws them (sprite claim VGA 29,113 bytes, CGA 10,578, for 28 poses). The bike records the
+frame loop writes (`xm_bikes`): **record 0 the rider, 1 the shadow** (only when the
+bike is 24 pixels or more above the ground under it, the height at which the two
+24 x 24 boxes cannot overlap), **2 the dust puff** (a landing's squash, the first 40
+steps of a crash; the record is a whole box, 24 pixels, behind the rider, so the
+puff trails the rear wheel and again the boxes cannot overlap). **The CGA back end used to
+compose each bike's box from the world alone, so records whose boxes overlap lost the earlier
+one's pixels; wave 4's opponents pass each other and it now draws into every box every bike it
+meets, in record order (`xc_comp`, 102.4)**, and `tests/excitebike_video.py --adapter cga`
+compares overlapping bikes with the reference renderer. `XB_MAXBIKES` is **6** (rider, shadow,
+dust, three opponents - the opponents' records are 3..5, 102.4). The rider's box top is
+`94 + lane - height / 256`; its x is 88 until the window stops, then walks on to at
+most 296.
+
+**HUD** (20 cells, columns 10-29 of the bottom row): `TIME m:ss.cc` (cells 0-11),
+the lap number (13), and the engine gauge, five cells of full (`\`, glyph 92) or
+empty (`]`, glyph 93) blocks, `(units above 8 + 4) / 5` full (15-19); while the
+engine is stalled cells 13-19 read `BURNING`. `xb_hud_sim` fills the string; the
+back ends draw only the cells that changed.
+
+**Frame loop and pacing.** Steps a frame come from the frame's exact length in PIT
+counts: a 32-bit accumulator in 2^-24 of a step to which `XB_STEPK` (845) is added a
+count (1.10033 / 21,845), whole steps the top byte, at most `XB_STEPS_MAX` (8) - the
+lengths are measured from one frame's start sample to the next's, so nothing is lost
+between frames and **game speed is right whatever the frame rate is** (measured 60.1
+steps a second on both adapters). **The VGA** still waits `n` sub-ticks with
+`FSXW_FRAME` (102.1, plan 8); the wait counts the sub-tick boundary the call itself
+proves (`FSXW_FRAME` returns only after a new IRQ0): a PIT comparison cannot see it
+when the task resumed later in this sub-tick than in the last, and a wait of `n >= 2`
+took an extra sub-tick for it (wave 2's clock; 3.6 and 4.5 sub-tick frames at
+`n = 2`). **The CGA is paced by its retrace**: `xc_vr` already waits for it, so the
+loop no longer waits `n` sub-ticks on top: a frame ends when its card writes do,
+one CRT frame (79.6k clocks) when the work fits, two when it does not, and `n` remains
+the governor's report of the work. Measured, a whole course with the sprite,
+shadow, dust and the changing HUD: see 102.6.
+
+**Harness hooks** (102.6 lists what reads them): `xb_simon` 0 turns the
+simulation off (the wave-2 video and scroll gates own the bike records and the
+scroll); `xb_track` picks the course; `xb_treset` = 1 gives the next frame a fresh
+rider and clock; `xb_tmode` = 1 feeds `xb_tscript[tsi mod 256]` to the steps, writes
+the 16-byte record of every step (`pos` u32, `speed` u16, `A` s16, `vy` s16, `temp`
+u16, `mode`, `pitch` s8, `lane`, `pose`) to `xb_ttrace[tsi mod 256]`, and pauses
+(`xb_tpause`) when `xb_tsi` reaches `xb_tsn`. The script and the trace are rings of
+`XB_TSTEPS` (256) entries, so a harness that stays ahead of the game feeds an endless
+run. Cost: 4,352 bytes of `.bss` that a game does not need and a test does (the package is image 28,063 + bss 18,350 = 46,413 of the loader's 61,440 at wave 4).
+`xm_s0` / `xm_s1` are the labels the perf gate reads the step's price from.
+
+### 102.4 Front end, flow and opponents
+
+**Deviations from the study game** (recorded, wave 4 fix): the race clock saturates at 9:59.99 and there is no 9:00.00 time-up, so an idle rider can still finish; the Selection B finishing position is latched on the first frame the rider is seen finished (an opponent already finished counts as ahead); a finished opponent is never respawned, and the results line reads `OF n` with n the field size.
+
+**The desktop window** is 452 x 284 (`OS88_PREFER` gives 452 x 154 on the compact
+CGA desktop) titled `Excitebike`, with the standard About box. It paints a
+disk-resident picture (`EXBSPL.*`) in the desktop's own pixels: an original
+scene — a striped sunset sky, a launch ramp and a rider in the air over it,
+the wordmark, a chequered border — decoded a bounded 16-row batch at a time
+and drawn with `OSAPI_GFX_BLITP` (colour) or `OSAPI_GFX_BLIT1`. The window
+timer reveals it a band a tick, so the first paint never waits on the disk;
+each step measured on MartyPC below one 55 ms XT tick (worst **43.2 ms** VGA,
+**27.9 ms** compact CGA, **23.1 ms** Hercules). All text is `OSAPI_FONT_RUN`
+over the reserved box; nothing is baked into the art and nothing transparent
+is drawn (the textsites ratchet, §6.6). Keys: Enter or Alt+Enter starts (a
+click on the START line does too), `H` shows the help page and Esc or `H`
+closes it; the help and splash rows are one file, so `H` never reads the disk.
+The label rows sit at 85, 99, 113 and 121 (rows of the 132-row art, doubled on
+tall desktops) so the last cell stays inside the black box on the compact
+desktop. A failed mode set (`XB_ERR_MODE`) or a missing or damaged art file
+(`XB_ERR_FILES`) is shown on the splash's last line; nothing else changes.
+
+**The game, inside the bracket** (`flow.inc`, wave 4). Enter goes full screen and the
+bracket opens on a TITLE, not on a race: `xb_game` is the state machine and
+`xb_state` (`XS_*`) says where it is - 0 title, 1 mode, 2 course, 3 race, 4
+results, 5 game over, 6 best times, 7 attract. Every screen is drawn as TILES
+(`xb_puts`: the compiled font, a run of byte moves a glyph; on the VGA the ink is
+the map mask of a palette slot, on the CGA there is one ink) over a black screen and
+every one begins with `xb_flush`, which empties the typed keys and waits (bounded, 40
+frames) for the Enter that brought it there to be let go of, BEFORE it draws, so a key
+typed while a screen is being drawn is kept. A screen waits with `xb_getkey`: one
+`FSXW_FRAME` (an 18 ms sleep, not a spin) and the typed key, `CF` = Alt+Enter.
+`xb_menu_begin` hands the card back from a race (VGA: the line-compare split off,
+the start address home, write mode 0 with every plane and the bit mask open, two
+frames for the start address to latch; CGA: the start address home) and paints the
+meadow palette. **`xv_init`/`xc_init` build what OUTLIVES a race (the dictionaries,
+the sprite claim; once, in the loading screen) and `xv_start`/`xc_start` what a
+race owns (the split, the pages, the HUD row, the footprints)**: the menus draw at
+address 0, which the off-screen dictionaries are clear of.
+
+| key | title | mode | course | race | results |
+|---|---|---|---|---|---|
+| Enter | start | choose | choose | pause / resume | next course, or game over |
+| Up/Down | | A / B | the list | | |
+| A, B | | pick | | | |
+| B | best times | | | | |
+| Esc | leave | title | mode | title | title |
+| Alt+Enter | leave | leave | leave | leave | leave |
+
+`P` is a second key for the pause and `C` cycles the palette in a race. **Modes.**
+A is Selection A, alone against the clock; B is Selection B with CPU riders:
+**three on the VGA, two on the CGA** (`XB_NAI_MAX`, `XB_NAI_CGA`; 102.6 says why).
+**Courses:** the five, and a sixth when `EXBTRACK.DAT` is found; each row shows its
+par and the best time of the session.
+
+**THE RACE.** A race starts with **READY 3, 2, 1**: 180 steps (3 s at 60.1 Hz) in which
+nobody moves, the clock is 0 and the HUD (cells 13..19) says `READY n`, then `  GO!  `
+for 45 steps. The HUD's message wins over the gauge in this order: `PAUSED `, `FINISH!`
+(the rider crossed the line), `READY n`, the flash (`  GO!  ` or `LAP n  `, 150 steps
+after a lap), `  DEMO ` in the attract, `BURNING` while stalled, else the lap and gauge.
+The pause (Enter or `P`, `xb_paused`) makes no steps, owes none (the step accumulator
+is zeroed while it lasts, so resuming does not burst) and still renders. **When the
+rider crosses the line the game coasts XB_FIN_STEPS (200 steps) and ends the race**
+(`xb_end`, `xb_result` = `XR_FINISH`; Esc is `XR_ESC`, Alt+Enter `XR_ALT`, a key or the
+end of the demo `XR_KEY` / `XR_DONE`) with the clock the rider stopped on in `xb_ftime`.
+
+**RANK AND THE CAMPAIGN** (`xb_rank_calc`, `xb_advance`). The time is judged against
+the course's par (102.3) - `diff = time - par`, in hundredths:
+
+| diff | rank | qualified |
+|---|---|---|
+| <= 0 | 1st | yes |
+| < 400 (`XB_WIN2`) | 2nd | yes |
+| < 800 (`XB_WIN3`) | 3rd | yes |
+| otherwise | not qualified | no: GAME OVER, then the title |
+
+A qualified ride goes on to the next course of the pass. **The fifth course's
+qualification starts the SECOND PASS** (`xb_flag` = 1): course 1 again with the
+harder obstacle set on BOTH laps (`xb_track_load` expands lap 2's stream twice,
+`xm_reset` takes lap 2's length and trigger list for lap 1) and the course's own
+`par2`. **The fifth course of the second pass repeats the fifth** and each repeat
+(`xb_rep`, 1 after the first) takes `XB_WSHRINK2` (50) off the 2nd-place window and
+`XB_WSHRINK3` (100) off the 3rd's, to zero at the eighth repeat, where only a time at
+par or better qualifies: at the first repeat 2nd is under +3.50 s and 3rd under +7.00 s.
+Esc in a race or on the results abandons the campaign. Choosing a course from the menu begins a campaign at that course on the first pass. **Best times**
+(`xb_best`: a word per course and pass, six courses by two passes, 0 = none) are kept for
+the life of the window - a package may not write a file from here - and a faster time
+sets `xb_newbest` and shows NEW BEST TIME!. **Selection B's finishing position**
+(`xb_posn`) is 1 + the opponents ahead of the rider at the finish; it is shown, and the
+rank is by time in both modes.
+
+**THE OPPONENTS** (`ai.inc`). An opponent is **not a second simulation**: it is the same
+rider (`xm_step`, every rule of 102.3) run on a state block of its own. The live `xm_`
+block always holds the player between frames; for each opponent the frame's `xb_ksteps`
+steps are made by swapping its block in (`XM_STATE_SZ` bytes, one `rep movsw`, ~600
+clocks each way), feeding `xm_step` an input byte from `xa_input`, and swapping it out,
+so an opponent cannot ride through a hurdle, take a ramp the player would not or cheat
+the heat, and the guest == model gate of the player (102.6) is untouched: with
+`xb_nai` = 0 (the default) none of this runs. The game clock `xb_cs`/`xb_ct10` and
+`xm_trig1` are IN the block. **The brain** is `exbsim.bot_input`, the reference rider
+that finishes every course at turbo, with three changes: a SKILL (1..3; the turbo
+three steps in four, one in four, always) - a decision about the throttle and turbo
+is taken every 4th step and remembered in the opponent's record (`xa_recs`, 16 bytes),
+the lane every step; a RUBBER BAND (more than `XA_RUBBER` = 110 pixels ahead of the
+player: no turbo; more than `XA_CATCHUP` = 20 behind: turbo whatever the skill);
+and a look-ahead lane choice every 12 steps, `xa_lane`: the trouble (1 for rough,
+mud and a low hurdle, 2 for a high one, doubled) in the next `XA_LOOK` = 10 columns of the four
+lane centres' collision rows, from four 61-byte tables built once (`xa_tables`) so all four
+lanes are summed in one pass over the columns, plus a point for each lane's width away
+and one for a lane it does not prefer (each has a home lane, so three riders with one
+brain do not all pick the same best lane and ride into each other). In the air it
+levels the bike. **RESPAWN** (`xa_respawn`, once a frame, not while the player is
+finished, not twice within `XA_SPAWNCOOL` = 90 steps): more than `XA_FAR` = 260
+pixels ahead it reappears `XA_BEHIND` = 110 behind the player (just off the left
+edge), more than `XA_LOST` = 100 behind it reappears `XA_AHEAD` = 215 ahead (just off
+the right), in a random lane (a 16-bit LFSR, `xb_rng`), at the player's speed (at least
+0x200), on a plain column (`xa_place` moves it on up to 24 columns), with a fresh engine,
+no script running and the trigger list re-found from its column. **COLLISIONS**
+(`xa_collide`, once a frame, over the player and every opponent; `xa_pair` per pair):
+within `XA_HITX` = 14 pixels along, `XA_HITL` = 5 lanes across and `XA_HITH` = 0x1000 of
+height, neither crashed nor finished: the rear rider (the smaller position; a tie: the
+first) loses a quarter of its speed, the front one gains 16 (at most `XP_SPD_MAX`), and
+a closing speed over `XA_HARD` = 0x140 crashes the rear one (mode CRASH, the wave-3
+72 steps; `XEV_CRASH`). Positions are never touched - moving a rider back would repeat
+a column's hazard and script triggers. **RECORDS**: the rider's are 0 (bike), 1
+(shadow), 2 (dust); the opponents' are 3, 4, 5 (`XB_REC_AI`), bike only, in palette
+slots 13, 12 and 11 (blue, orange, yellow: the rider is 10); an opponent's screen x is
+the rider's plus the difference of their pixel positions, and it is not drawn (record
+absent) unless its 24-pixel box is wholly on the screen, x 0..296 - **so an opponent
+pops in and out at the edges; a clipping blitter is wave 6's** (102.1). `XB_MAXBIKES`
+is 6 and the VGA's footprint list is 8 entries a page.
+
+**COMPOSITING ON THE CGA** (`xc_comp`). A box is composed from the world alone and
+written whole, so an overlapping bike lost its pixels to the other's box. Every box
+now draws in every bike whose footprint meets it, in RECORD order: its own, at the fast
+path (`xc_draw`), and any other clipped to the box (`xc_drawc`: rows above and below
+are stepped over, and of a span only the bytes inside the box are drawn; ~120 clocks a
+row and ~40 a byte, the first checked-every-byte version was 50k a box with three
+riders bunched). Whichever order the boxes are written in each shows the true picture of
+its own region. `tests/excitebike_video.py --adapter cga` compares overlapping bikes
+with the reference renderer.
+
+**THE ATTRACT DEMO.** After `XB_IDLE_ATTRACT` = 560 idle frames on the title the game
+runs a race - the courses in turn, first pass, Selection B - in which the AI drives the
+RIDER too (`xa_recs` record 3 = 2; `xa_input` on the live block, no band). Any key ends
+it (`XR_KEY`), as does its finish or `XB_ATTRACT_MAX` = 2600 steps, and the title returns.
+It is the normal race and costs no game code of its own; `tests/excitebike_perf.py --selfb`
+measures Selection B through it because a closed loop is deterministic.
+
+**EXBTRACK.DAT** beside the package (`xb_custom_load`, the design mode's data path)
+is an optional sixth course, at most 224 bytes:
+
+| offset | size | |
+|---|---|---|
+| 0 | 4 | `EXBT` |
+| 4 | 2 | par, hundredths |
+| 6 | 2 | S, the stream's bytes (even) |
+| 8 | S | (column id, run) pairs ending 0, 0 |
+| 8 + S | 2 | N, at most 15 |
+| | 4 N | (lap-relative column, script id 1..`EXB_NSCRIPTS`) |
+
+Both laps are the stream; the file is refused, silently (it is optional), on: a size
+under 12 or over 224, the magic, an odd or unterminated stream, a column id outside the
+dictionary, a lap under 24 or over `EXB_LAP_MAX` columns, a trigger outside the lap or
+naming no script. The header is built in `xb_chdr` in exbtracks.inc's layout (theme 0,
+name `CUSTOM COURSE`, `par2` = par) and `xb_header` answers it for course
+`EXB_NTRACKS`. A custom course has no next: a qualified ride goes to the title.
+
+**Harness hooks of wave 4**: `xb_noflow` = 1 (set BEFORE Enter; every wave-2 and wave-3
+gate does) is the raw loop of 102.3, with no title, countdown, results or flash;
+`xb_nai` (0..3) and `xb_attract` make the raw loop a Selection B or a demo; `xb_flag`
+picks the pass; `xb_cd`, `xb_fint`, `xm_fin` and `xb_cs` let a test put the rider across
+the line at a chosen time and read the rank (`xb_rank`, `xb_qual`, `xb_diff`, `xb_ftime`,
+`xb_par`, `xb_newbest`, `xb_posn`).
+
+Controls (help page): arrows are the D-pad (up/down lane, left/right pitch), Z throttle,
+X turbo (heats the engine), Enter pause, C colours, Esc leave, Alt+Enter full screen;
+`M` is sound on / off (102.5).
+
+### 102.5 Audio
+
+Wave 5. **Everything that sounds is this project's own**: five songs and nine effects
+composed as committed text (`apps/excitebike/audio/*.mml`, `sfx.txt`), an engine pitch table
+and a note table computed by the compiler, and one sequencer, `apps/excitebike/audio.inc`,
+that speaks `OSAPI_SND_FM` on an AdLib / Sound Blaster and `OSAPI_SND_TONE` on the speaker
+every XT has. No PCM, no IRQ hook, no worker task, no mixer, no kernel byte and no new
+`OSAPI_*` slot: the sequencer runs on the game's own task inside the frame.
+
+**Scores.** A song is a file `name.mml`: `title` (documentation), `tempo` (quarter notes
+a minute, 40..240), `loop` (a bar number, or `once`) and three voices `v1` lead, `v2`
+harmony, `v3` bass, each a line (or several: a voice continues on later lines) of a plain
+notation: `a`-`g` with `+`/`#`/`-`, a length (a divisor of a whole note: `4` quarter, `8`
+eighth) and dots, `r` a rest, `oN` the octave (`o4 c` is middle C), `<` `>` an octave
+down / up, `lN` the default length, `&` a tie between notes of one pitch, `|` a bar line.
+The compiler refuses, with the line, a bar line that is not on a multiple of four beats, a
+voice whose length differs from voice 1's, a tempo or note out of range (C2..B7), a tie
+across two pitches, a loop bar outside the song or one on which no note begins, a note
+under one or over 255 steps, and an `EXB.SND` over 3,072 bytes. **Time is in game steps**
+(60.0988 Hz): an event's duration is the difference of two `round(beats x 60 / tempo x
+60.0988)`, so rounding never drifts and every voice of a song lands on one grid.
+
+| song | tempo | bars | length | loop | plays |
+|---|---|---|---|---|---|
+| `title` (Kick Start) | 138 | 16 | 27.8 s | bar 0 | the title, the best times |
+| `select` (Warm Up) | 116 | 8 | 16.6 s | bar 0 | the mode and course menus |
+| `results` (Podium) | 104 | 8 | 18.5 s | bar 0 | the results |
+| `finish` (Chequered) | 145 | 2 | 3.3 s | once | the finish coast: the ride's 200 steps |
+| `gameover` (Flat Tyre) | 92 | 2 | 5.2 s | once | game over |
+
+The attract demo is silent. The effects file is `name priority (frames hz)...`, priority
+1..15, frames in game steps (1..255), `hz` 0 a rest, 19..6208. Nine effects: `crash` 9,
+`start_light` 8, `land_hard` 7, `land_soft` 6, `overheat` 5, `lap` 5, `takeoff` 4, `bump`
+3, `pause` 2.
+
+**`EXB.SND`** (little endian; **1,508 bytes** of a 3,072 budget), `incbin`'d into the
+package image, not a disk file: `EXBS`, format byte 2, effect count, song count, note count
+(72), total length, then the offsets of the engine table (64 words, `round(175 x
+2^(k/24))`) and the note table (72 words, `round(440 x 2^((m - 69)/12))` from C2), one
+word offset per effect, one 12-byte record per song (three stream offsets, three loop
+offsets, 0 = plays once), then the effect records (`priority`, note count, `(frames, hz
+word)` each) and the voice streams (`(pitch, steps)` byte pairs: 0 a rest, 1..72 a note,
+255 the end); the engine table, the note table and, straight after the notes, the **speed
+table** (76 bytes: the steps of pitch a rider's speed / 16 adds to idle,
+`((16 i + 8) x 51) >> 10`) close the file. `exbsnd.inc` gives the guest `EXBFX_*`,
+`EXBFXP_*`, `EXBSONG_*` and the table offsets, so the guest never parses a header.
+
+**Claim and refusal.** `xu_open`, once at the top of the bracket: FM only when
+`OSAPI_SND_CAPS` says `SND_CAP_FM` **and** the route byte BL says the driver (the user's
+speaker choice is honoured: BL = 0 is the speaker), and then all four channels or none - a
+patch-load (verb 2) per channel, the first refusal releasing everything (verb 3) and
+leaving the speaker to play. Channel 0 carries the lead (music) or the engine's growl,
+1 the harmony or the engine a fifth below, 2 the bass, 3 the effects. The patches for
+0 and 1 are re-loaded when a race begins and when a song does. Leaving the bracket
+releases every channel (`xu_close`); a speaker tone has a lease and needs none. **`M`**
+toggles the sound at any screen and in a race (`xu_toggle`: release, or claim again and
+re-key), and the setting outlasts the bracket.
+
+**Where it runs.** `xu_menu_tick` once a frame from `xb_getkey` (every menu screen waits
+there, one FASTTICK sub-tick a call), and `xu_race_frame` once a frame from the frame loop
+**after `xb_gov` and before the idle wait** - the governor has measured the frame's work
+without it, and the sound, decisions and driver call alike, runs where the machine would
+otherwise be idle. The frame's events are captured into `xu_ev` at the end of
+`xb_sim_frame` (which clears `xm_ev`) and consumed there. The time a tick advances is
+`sub-ticks x 282 / 256` game steps (8.8, 0.1% off), so a slow RACE frame skips the tune forward (a menu frame is always one sub-tick)
+in time rather than slowing it and a paused game does not run it. **Music plays only
+outside a race**; the one song a race frame runs is the `finish` fanfare.
+
+**The songs' sequencer** (`xu_music_tick`): a record a voice (next event, loop event, steps
+left, Hz); an event that fell inside the tick is skipped, at most four a voice a tick (a
+stalled frame never spirals); a note boundary raises `xu_pend`. Menus flush every pending
+voice as key-off, key-on; the speaker plays voice 1 alone, folded up an octave at a time
+to at least `XU_SPK_FLOOR` = 130 Hz, and - because it asks for a new tone only when the
+frequency differs - two equal notes in a row are one long note on it (a rest is the gap).
+A `once` song ends by zeroing its voices and falling silent.
+
+**The engine** (`xu_engine`): the pitch is a table step `k` (0..63, 24 to the octave);
+its **target** is `8 + KTAB[min(speed / 16, 75)]` (KTAB is `EXB.SND`'s speed table,
+0..60: about one step of `k` for every 20 of speed, and **no multiply in the frame**), `+ 6`
+airborne (a wheel spins free), `+ 2` with Z or X held, capped at 63; the sounding `k` **chases** it, up 2 a
+game step and down 1, never past it, so a change in speed is a slide and not a click. Its
+Hz is `EXB.SND`'s engine table, and the FM adds a second voice a fifth below (`k - 14`,
+24 x log2(3/2) = 14.04). The speaker plays the table **an octave up** (`XU_SPK_SHIFT` =
+1: a real PC speaker rolls off below about 100 Hz), and asks for a moving pitch **at most
+once in three frames** (`XU_HOLD` = 2), at once when the engine starts or stops. A crashed or stalled bike, a pause,
+the countdown and a finished ride are **silent**, and a fresh start climbs from idle
+(`XU_IDLE_K` = 8). The plan's vibrato is **not built**: it would change the pitch every
+frame and break the "only when the step changed" rule that keeps the frame cheap.
+
+**Effects** (`xu_fx`, `xu_fx_step`, `xu_events`): the frame's events choose **at most one**
+cue, highest first - `XEV_CRASH` crash, `XEV_BOUNCE` land_hard, `XEV_LAND` land_soft,
+`XEV_OVERHEAT` overheat, `XEV_LAP` lap, `XEV_TAKEOFF` takeoff, `XEV_BUMP` bump - and
+`XEV_FINISH` stops the engine and starts the fanfare. A lower priority never interrupts a
+higher; an equal one restarts; the first note sounds the moment the effect starts, and an
+effect lasts exactly the sum of its frames. The start lights are one effect of 204 steps
+(a 10-step beep on each of READY 3, 2, 1, then 24 steps of GO! at 880 Hz), begun with
+the race. **A pause freezes every effect's clock but its own blip.** On the speaker an
+active effect owns it (its rests are silence, so a landing's gap is heard); on FM the
+effect has channel 3 and the engine plays on.
+
+**The cost rule.** The speaker gets **one tone call a frame at most**: the frame decides
+ONE frequency - effect, else engine, else the lead voice - and calls `OSAPI_SND_TONE` only
+if it differs from the last or the lease (20 ticks, asked again every 48 sub-ticks) is
+due; unchanged, a frame pays a handful of compares and the engine's table read. FM pays two
+note calls when the engine's step changes and key-off + key-on at an effect or music
+boundary. `xu_ntone` counts driver calls for the harness (all told); the per-frame count is
+the harness's own, from breakpoints on the marks `xu_tonecall` and `xu_fmcall` between two
+entries of `xu_race_frame`, so the shipped frame pays for no per-frame bookkeeping. A
+refused tone (a higher owner) is asked for again next frame. **Measured** (MartyPC 5150
+model, the wave-3 lap, PERFORMANCE.md Set 151, frames a tick landed in dropped): the sound
+costs mean ~1.6k clocks a frame (p50 1.2k, p95 3.7k, p99 4.4-4.5k, max 6.3k), **all after the
+governor**; ~2.1k of it is the kernel's tone call on the 13% of frames that make one; the lap's
+period is the same with the sound muted and on (VGA 87,378 / 87,379, CGA 80,028 / 80,144).
+**The plan's "audio adds <= 4,000 clk a frame at peak" is NOT met as a p99 of the whole**
+(the far call is the difference); it is met for the frame's *work* - which the governor
+measures and which is where a slow frame would show - because none of it is in it.
+**Selection B on the VGA is not clean**: the sound perturbs a bistable race (n = 2 or the
+n = 3 plateau) and the wave-4 mean gate moved 262,144 -> 263,000 (Set 151 has the runs).
+
+**Package and memory.** The image is 31,733 bytes (the sound's code ~2.0 KB, `EXB.SND`
+1,508) and the bss 18,411 (the sound's 64), of the loader's 61,440; the bracket runs on
+task 0's stack, the same as everything else here.
+
+### 102.6 Validation and performance
+
+**The CGA's 15,000-clock sprite gate is MISSED by a racing bike**: a rewrite is
+~26.5k clocks (the per-frame mean is lower only because a stationary bike is
+skipped whole), so four racing bikes cost ~106k against an 87.4k sub-tick and a
+full CGA field runs at n = 2. `tests/excitebike_perf.py` fences the rewrite at 28,000
+and reports both figures. The CGA dictionary layout is derived from `EXB_NCOLS`
+(`XC2_BAND`, `XC_DICT_KB`) and refused by `%error` past 64KB.
+
+Numbers here are **MartyPC's 4.77 MHz XT model** and say nothing about a real
+card's wait states or a real floppy; a field run (docs/FIELD-MACHINES.md) is
+asked for separately once the race exists.
+
+* `python3 tests/excitebike_ref.py` (soak row `excitebikeref`, wave 3): the rider
+  simulation. **Constants**: `const.inc`'s 46 `XP_` names equal `exbsim.PHYS` and the
+  mode and input codes agree. **Guest == exbsim, step for step**: the harness feeds the
+  guest a script (`xb_tmode`) and reads 16 bytes after EVERY step (`xb_ttrace`);
+  `exbsim.Sim` runs the same script; every record must be identical - 29,465 steps
+  over both courses: the reference rider through both laps to the finish, four seeded
+  random hold-scripts, a flat-out run that overheats and stalls, a wheelie held to the
+  flip - and at each 256-step chunk the HUD string, the bike records, the window column,
+  the clock, the lap and the finish flag. **Coverage is counted**: every mode, every
+  hazard class, every event and 22 of the 24 poses must have been exercised or the row
+  fails, so a rule no script reaches cannot pass by silence. **Keys**: real key events
+  through the emulated 8255 (Z accelerates, X heats, Up/Down change lane, Left lifts the
+  nose, an untouched bike does not move). **Table check**: only when the environment
+  variable the test documents names the study disassembly, otherwise `SKIP` and exit 0:
+  a stdlib reader of its `.byte` tables compares 21 rules with ours, 17 identical and 4
+  named and explained in `tests/excitebike_ref_deviations.txt` (a listed name that
+  stops differing fails too). The step-for-step oracle diff of plan section 15 is not
+  part of wave 3: it would need the study game assembled and run under a 6502 harness,
+  and the test prints that instead of skipping silently.
+* `python3 tools/exbsim.py --run-track t1 --run-track t2` (also in `--selfcheck`, soak
+  row `excitebikesim`): the reference rider finishes both courses at turbo and each
+  committed par is that time + 8%.
+* `tests/excitebike_perf.py --lap` (soak row `excitebikelap`, wave 3): a whole course at
+  turbo, rendering on, the reference rider feeding the steps through the guest's script
+  ring while a breakpoint on `xb_presented` keeps it ahead: mean period <= 174,763,
+  p99 <= 262,144 on VGA and CGA, the simulation <= 4,500 clocks a step (mean, by
+  `xm_s0` / `xm_s1`), and the rider reaches the finish. Numbers below.
+* `tests/excitebike_video.py` has a **race arm** (in rows `excitebikevideo` and
+  `excitebikevideocga`, wave 3): the reference rider drives course 1 through the guest and
+  a second script rides straight into the hurdles for a crash; at a flat run, the middle
+  of a jump, the crash and one every ~150 steps, the card's picture is compared pixel for
+  pixel with the reference renderer drawing the MODEL's bike records and HUD, three
+  frames of each state (the three VGA pages), and the guest's records must equal the
+  model's. Three named states per adapter are kept as PNGs in
+  `build/excitebike-proof/`.
+* `python3 tools/excitebike_assets.py --selfcheck` (soak row `excitebikeselfcheck`):
+  every budget above with its number, two compiles byte-identical, and a
+  negative control for each guard that must be refused.
+* `tests/excitebike_assets.py` (soak): two full compiles equal file for file,
+  then an independent reader of both GFX files (every tile, band column,
+  collision row, class, top cell, pose mask, glyph and palette), the three
+  EXF1 files packet by packet, and the generated NASM.
+* `tests/unit/t_excitebike_clean.py` (fast): the provenance gate of the policy
+  above.
+* `tests/excitebike_audio.py` (wave 5; fast row `excitebikeaudiohost`, soak rows
+  `excitebikeaudio`, `excitebikeaudiofm`, `excitebikeaudiocap`, `excitebikeaudiolap`):
+  **--host** reads `EXB.SND` with a decoder written in the test from 102.5's layout
+  (not the compiler's): <= 3,072 bytes, each song's three voices summing to the steps its
+  bars x tempo give, loop points on event boundaries at the loop bar, <= 40 s before a
+  loop, the engine and note tables exact, and two negative controls (a voice one step
+  short; a loop into the middle of an event) that must fail. **--speaker** (MartyPC, VGA, no
+  card) stops the game at one of its own routines and asks it, by calling them, what it
+  does: every song at random step sizes against the score, the lead folded over 130 Hz and
+  at most one tone call a tick; the engine's step for 120 mode x speed x input cases, the
+  glide, the silences; every effect's length, priority and pause freeze, the events -> cue
+  mapping; then a real race (the start lights on READY 3, 2, 1 and GO, the pitch following
+  a held throttle with at most one tone call a frame, Enter silencing the engine, M
+  stopping every call). **--fm** (the Sound Blaster XT): the four channels claimed, the
+  songs, the engine on 0 and 1, an effect on 3, a pause / M / leaving releasing them, and a
+  channel owned by another (the sound driver's own `opl_own` poked) making the open
+  refuse and fall back to the speaker with nothing of ours left claimed. **--capture**
+  reads MartyPC's speaker capture (`MARTYPC_WAV`, tools/sndcheck.py's loader) with a
+  square-wave frequency reader: the engine held at four speeds is heard at the table's Hz
+  an octave up, and the title lead's first twelve notes are heard in order at the score's
+  pitch and length. `tests/excitebike_perf.py --lap --audio-ab` runs the wave-3 lap muted
+  and then on: the sound (`xu_race_frame` entry to `xb_flushed`, all of it after the
+  governor; a frame the kernel's IRQ0 tick landed in is dropped, the tick's phase being a
+  least-squares line through 300 stops at `sch_isr`) has a p99 <= 5,000 clk (measured ~4.5k;
+  the plan's 4,000 is **not** met as a p99 of the whole, 102.5 says why) and never two
+  driver calls in one frame, and the period grows by <= 1,000. `--selfb --mute` is the same
+  A/B for Selection B. The plan's `make test-snd` (QEMU's speaker capture) cannot reach into a game's
+  fullscreen bracket from a script; MartyPC's capture is used instead, as
+  `tests/vidspk.py` does.
+* `tests/excitebike_front.py` (soak rows `excitebikefront`, `excitebikeega`):
+  per adapter, against pixels the compiler renders from the committed sources
+  — the splash and help (all but the menu box), the reveal, the loading screen
+  (a breakpoint on the art load: plane 0 of A000 on VGA, the whole B800 bank
+  pair on CGA, then the card's own rendering), the first race frames (against
+  the reference renderer), `C`, Esc, Alt+Enter, a click, the claim map,
+  closing; an EGA desktop (a private `VIDEO=ega` tree) refuses (the Hercules plays since
+  wave 6: the same items as the CGA, 102.7.6).
+* `tools/exbsim.py` (soak row `excitebikesim`, `--selfcheck`): the REFERENCE
+  RENDERER, written from the source text (`tools/excitebike_assets.py`'s parse
+  of the tiles, pieces, top picture, poses and font - never the compiled GFX
+  files, never the guest's memory) with the plan's world function
+  `W(x, l) = l < 64 ? top[x mod 64][l] : band[cid[x]][l - 64]`, the pose art,
+  the HUD, and the two blob models (`vga_blob_bytes`, `cga_blob_bytes`) the
+  guest's loaders must reproduce byte for byte.
+* `tests/excitebike_video.py --adapter vga|cga` (soak rows `excitebikevideo`,
+  `excitebikevideocga`): the scroll engine against the reference renderer, pixel
+  for pixel against the card's own rendering (`m.fbuf` on VGA - line compare and
+  palette included; CGA memory decoded the way the 6845 scans it): the sprite claim
+  equals the model; **twenty random positions** (a jump - a full-window write on
+  every page - then 1-3 bikes at random poses and even x, y and a few frames of
+  scrolling at a random speed through the incremental path); two NEGATIVE CONTROLS
+  (forget a page's footprints and move the bike: the residue must show; and on VGA
+  empty every band skip list: the picture must be wrong); the whole first course
+  and a **synthetic 1,637-column course** (every dictionary column in random order:
+  the largest race the compiler accepts) compared every ~90 frames at 1 to 3 columns
+  a frame, which on CGA passes the ring wrap (every row wraps once S passes ~136).
+* `tests/excitebike_video.py --qemu` (soak row `excitebikeg1`): **gate G1** on
+  QEMU's VGA - the same picture, pixel for pixel, from the emulator that implements
+  the real line compare (102.1: the two emulators start the split one scan line
+  apart).
+* `tests/excitebike_perf.py --scroll --governor` (soak row `excitebikeperf`): the
+  cycle counter between successive frame marks and per component, the hard gates
+  below, and the governor test (a busy loop injected into one frame raises n within
+  that frame, and n comes back after exactly 64 quiet frames).
+
+**Results, MartyPC 4.77 MHz (PERFORMANCE.md Set 148).** The scripted scroll holds
+**n = 1 (54.6 Hz) on both adapters**: mean period VGA 87,381 clocks, CGA 87,819 (the
+hard gate is 174,763 = 27.3 Hz). Sprite draw + erase a bike: **VGA 18.7k clocks
+(gate 20,000: met)**; **CGA 13.0k a frame under the scripted scroll (gate 15,000:
+met as a per-frame mean) and 26.5k a REWRITE (missed)**: an unchanged bike under a
+window that did not scroll is skipped, so the scripted scroll (the window moves on
+about half the frames) averages half a rewrite, and a racing bike, which changes
+every frame, pays the whole. The cause is the plan's model, not the code: a card
+word costs ~86 clocks here, the plan priced 36, and the composition in RAM (fill 4.9k,
+draw 10k) is 1.5x its 3.4k + 7.7k; `tests/excitebike_perf.py` fences the rewrite at
+28,000 and prints both figures. `tests/excitebike_perf.py` ASSERTS the plan's section 9 components
+at +25% on the slow side (faster is the point) and prints every deviation: VGA erase
++22% of 4.2k, HUD +23% of 1.2k, sprites -15% of 16k, a column write +23% of 5.18k
+(the plan's measured FULL column write); CGA HUD (2k + 6k a column) +10%. Two plan
+figures are NOT met and are not asserted: the plan halved a VGA column to 2.65k for
+its skip lists, and the crowd is 55 changing lines of 64 with a run costing 155
+clocks to start, so a column is ~6.4k; and the CGA's card-bound figures (a rewrite
+26.5k against 15k) assume a 36-clock card word where MartyPC's CGA charges ~86.
+The governor test raises n from 1 to 3 in the burst's own frame and returns to 2
+after exactly 64 quiet frames, on both adapters.
+
+**Wave 3, a whole course (PERFORMANCE.md Set 149).** With the rider, its shadow and dust,
+the gauge and everything that changes on a real lap, at turbo on both courses (`--lap`):
+VGA holds **n = 1 (54.62 Hz) for every frame**, p99 101k clocks; the CGA, paced by its
+retrace (102.3), averages **58-59 frames a second**, p99 115k on course 1 and 150k on course
+2 (frames of one CRT frame, 79.6k, or two); game speed is **60.1 steps a second on both**;
+the simulation costs **~3.0k clocks a step** (plan 4.5k). Sprite draw + erase a moving bike
+is unchanged from wave 2. The scripted scroll's CGA rewrite fence is now 30,000 (it measured
+26.5k in wave 2 and 27.8k-28.1k under the retrace-paced loop, which scrolls a column on more
+frames). What wave 3 could not do and says so: nothing here is a field number; the CGA
+back end does not composite overlapping bikes (102.3), and **draws the rider only: the
+shadow and dust records are omitted on the CGA** (a 27-29k clock box each would push frames
+off the CRT frame), which `exbsim.bikes(cga=True)` models so the guest and the model agree; and the oracle diff of plan
+section 15 (guest against the study game under a 6502 harness) is not implemented.
+
+**Wave 4 (PERFORMANCE.md Set 150).** New validation, all soak rows on MartyPC (nothing external is read):
+
+* `python3 tests/excitebike_flow.py` (rows `excitebikeflow`, VGA and CGA; `excitebikecustom`;
+  `excitebikeai`): **flow** - the title (idle frames, B = best times, no demo at 500 idle frames and the
+  demo at 560 with the AI driving Selection B, a key ends it), the menus' keys and Esc back one screen at a
+  time, the countdown (READY 3, 2, 1 with the rider and the clock still, GO!), the pause, the lap flash, FINISH!
+  and the coast to the results, **the rank at every boundary** (par - 100 and par 1st, +1 and +399 2nd, +400 and
+  +799 3rd, +800 and +2500 not qualified, then game over and the title) and at the first repeat of the last course
+  (+349 2nd, +350 3rd, +699 3rd, +700 not), the campaign (1st goes on; the fifth course's 1st begins the second pass
+  at course 1, whose column array is compared with the model's and whose par is `par2`; a faster time is a best time
+  and a slower one is not), Alt+Enter from the title, a menu and a race and Esc from the title, and the claim map
+  EXACTLY as it was before the window opened. The rider is put across the line by the game's own code on a clock the
+  test chooses. **custom** - `EXBTRACK.DAT` on scratch disks the test builds (a designed course; a bad magic; a
+  truncated file): course 6, its column array, its par, no next course; five courses when damaged. **AI** - the
+  collision rule by the guest's own `xa_pair` on blocks the test writes, then **5,000 steps** of Selection B under a
+  seeded pseudo-random pad script the test generates (no recording) on the fourth course's second pass, VGA (three
+  opponents) then CGA (two): every 2nd frame each opponent is checked (mode, lane, column, temperature in range; the
+  speed never over the kicker's ceiling 0x466 and not over the turbo cap for more than ~90 steps on the ground;
+  position never backwards except across a respawn; a respawn lands at the screen's edge; nobody without progress for
+  ~880 steps), and at least one respawn happens.
+* `python3 tests/excitebike_perf.py --selfb` (row `excitebikeselfb`): Selection B over a whole course, the
+  rider and the opponents all driven by the game's own AI. Gates: mean <= 263,000 clk (18.2 Hz is 262,144, the VGA's n = 3 plateau to the clock; wave 5 moved it 0.33%, PERFORMANCE.md Set 151), p99 <= 349,525, the
+  rider finishes, the opponents on the screen on at least half the frames. **Measured: VGA (three opponents) mean
+  246,959 (19.3 Hz), p99 297,518, all three on screen 79%; CGA (two opponents) mean 248.5-249.2k (19.2 Hz), p99
+  338.8-340.1k, both on screen 93%; game speed 60.0-60.1 steps a second on both.** **The CGA races TWO opponents,
+  the plan's recorded fallback** (G4): three measure 363,930 mean and 488,001 p99 (four to five CRT frames), the
+  boxes being composed in RAM and written to a card whose word costs ~86 clocks. `XB_NAI_CGA` is the one constant
+  that would change it.
+* `tests/excitebike_video.py` gains an **overlap arm**: two and three bikes on top of each other on a fresh window and
+  then sliding across each other frame by frame with the window scrolling, compared pixel for pixel with the
+  reference renderer (record order), on both adapters - the CGA's `xc_comp` compositing and the VGA's draw order.
+* `tools/exbsim.py --run-track t1 ... t5` (row `excitebikesim`, `--selfcheck`): the ten pars of 102.3;
+  `tests/excitebike_assets.py` reads the header's second-pass par.
+
+**Fixed by wave 4's measurements** (PERFORMANCE.md Set 150 has the arithmetic): **the sub-tick clock lost sub-ticks in
+any frame with more than one sub-tick between samples** - four bikes made the game run at half speed (30 steps a
+second) until `xb_clk_sample` (now CS-relative) was called at the seams of the back ends and the opponents' loop; **the
+governor now predicts the work one sub-tick shorter** (`work - simulation / n`, +6%) so it can come down from n = 3;
+the opponents' lane look-ahead went from 26k to ~2k clocks a frame (four trouble tables, one pass); the CGA's
+clipped neighbour draw steps over the bytes outside a box (50k -> ~10k a box with three bunched riders).
+
+**What wave 4 could not do, and says so.** No field number (a real card's wait states, a real floppy: every figure
+here is an emulator's). **The CGA races two opponents, not three.** An opponent pops in and out at the screen's edges
+(a bike is drawn only when its 24-pixel box is wholly on the screen; wave 6's clipping blitters draw the part that
+shows, 102.7.4), and the respawn from the edge is a pop as well. The fallen-rider set-piece and the marker rider of plan section 3 are not
+built. `tests/excitebike_ref.py` compares the rider only: an opponent is checked by invariants, not against a model
+(the brain is a heuristic, and the rider it rides is the model's). The CGA rewrite fence moved 30,000 -> 31,000
+(29.5-30.1k measured; wave 3 was 28.1k). Sound is wave 5, `M` and the engine note arrive with it.
+
+### 102.7 Hercules, compiled poses and edge riders (wave 6)
+
+Wave 6 is the Hercules go/no-go, the performance tuning it forced, and two things wave 4 left as
+deliberate simplifications. **The answer to the go/no-go is GO** (102.7.3), so the Hercules
+plays and `OSAPI_FSX_CAPS` bit `FSXM_HERC` is a playable adapter alongside `FSXM_VGA0D` and
+`FSXM_CGA320`; an EGA desktop still refuses (102.1).
+
+**102.7.1 The Hercules is the CGA engine with another card side.** `xb_herc` = 1 (and
+`xb_cga` = 1: the RAM side - the boxes, the poses, the footprints, the frame, the text grid
+- is shared whole). What is the Hercules's own is a card ADDRESS, in `herc.inc`:
+
+| | CGA (`cga.inc`) | Hercules (`herc.inc`) |
+|---|---|---|
+| mode | `FSXM_CGA320` 320x200x4 | `FSXM_HERC` 720x348 mono, `FSI_SEG` = `[vid_seg]` |
+| a game pixel | 2 bits | **2 card pixels** (a PAIR: `00` black, `11` white, `10` / `01` the mid grey) |
+| row | 80 bytes = 40 tile columns | **90 bytes = 45 tile columns**: a 360-pixel picture, and the sheared window's pitch |
+| banks | 2, 2000h apart, rows of 2 lines | **4**, 2000h apart, rows of 4 lines |
+| byte of (line l, column x) | `(l&1)*2000h + (80*(l>>1) + 2x) mod 8192` | `(l&3)*2000h + (90*(l>>2) + 2x) mod 8192` |
+| the field | 100 rows x 2 banks | **50 rows x 4 banks**: `xh_crtc` programs 6845 R6 = 50 rows displayed and R7 = 68 (vertical sync moved to match) |
+| retrace | 3DAh bit 3 high | 3BAh bit 7 **low**; 6845 at 3B4h |
+| dictionary strips | split by scan-line parity | split by scan line mod 4 (same sizes) |
+| HUD | rows 96-99 | rows 48-49 of every bank, cells `XH_HUDCOL` = 12.. (centred) |
+
+A tile (8 game pixels) is 16 card pixels = **2 bytes**, exactly the CGA's, so a tile, a pose
+and a glyph are as many bytes as on the CGA and `EXBH.GFX` (12,562 bytes) has `EXBC.GFX`'s
+layout with a pair where the CGA has a 2-bit ink: tile byte-pairs, the band and top records,
+the poses, the font (a lit pixel is `11`, the CGA's ink 3) and a palette record whose "ink
+maps" are the pair each slot's Hercules level is (`palette.json`'s `herc`, levels 0/1/2). A
+tile's mid level alternates `10` / `01` with (row + column), a checkerboard of pairs; a
+pose's and a glyph's is always `10`, because a pose lands on any row and a tile on a fixed
+one. **The sprite loader (`xs_load_cga`) is shared unchanged**: it reads the ink map out of
+the palette record, and `ink x 55h` is `AAh` for a pair `10` and `FFh` for `11`. The reference
+renderer's `frame_herc` (`tools/exbsim.py`) is written from the source text with the same
+rule and the pixel gate compares the card's memory to it pair for pair.
+
+`xh_crtc` is the one place the desktop mode's 6845 is touched (R6 87 -> 50, R7 87 -> 68; R4/R5 -
+the frame - are not, so the field rate is the monitor's own ~50.4 Hz): without it the 37
+rows below the field would show the sheared ring's other rows (world columns 45 to 2,200 to the
+right, stale wherever the ring has been written). It also lengthens the blank the card writes
+hide in from the desktop mode's 16 scan lines to **~98 (5.3 ms, ~25k clocks) from the retrace start** against the CGA's 62; a column (19.2k) plus a rewrite (24k) exceeds it, so writes past ~25k clocks trail the beam - a field-run item. The
+leaving mode set restores the desktop's registers (asserted by the front gate: the splash after Esc is
+pixel-identical, read from the card's own rendering, and the claim map is exactly as it was). The ring is 8,192 bytes; a course of the compiler's largest size (1,637
+columns) needs 90 x 49 + 2 x 1,682 = 7,774 of them, so the Hercules never wraps and the wrap code
+(`xh_run`, `xc_putw`) is there for a longer track, exercised by no gate.
+
+The 40-cell text grid of the menus sits 4 bytes (two cells) in from the left (`xb_xoff`); the
+game is `XH_COLS` = 45 columns wide, so `xb_wcols` = 45 and `xb_Smax` = ncols - 45 (the sim's
+`xm_posmax` is unchanged: the rider's box ends at 8 x wcols - 24 = 336). An opponent
+respawns ahead by `xa_ahead` = 215 + 40 (the same distance beyond the wider picture's edge).
+The opponents are two, the CGA's (`XB_NAI_CGA`, 102.4; three are over the gates on both, 102.7.3).
+
+**102.7.2 Compiled hot poses** (`sprite.inc`, `xs_compile`, `xs_compile_v`). The pose draw was
+the biggest RAM cost of a frame (a rider's ~90 bytes at ~85 clocks each through the `(AND, OR)`
+loop; ~85 clocks a (byte, layer) pair on the VGA), and a pose's bytes are known at load. Poses
+0, 1 and 12 are 80% of a lap's frames and nine (0 1 12 15 16 9 2 11 10) are 94%
+(`tools/exbsim.py`-measured over the five courses with the reference rider), so the
+loader **emits them as straight-line code** after the blobs in the same claim.
+
+* **CGA / Hercules**, nine poses x two phases = 18 blocks, 10,299 bytes (claim 28 KB, was 17: when
+  the bigger claim is refused the small one is taken and nothing is compiled - `xs_ctab` is
+  all zero and the interpreter draws). A fully opaque byte (AND 0) is `mov byte [es:di+d],imm`
+  (~24 clocks), two of them side by side `mov word [es:di+d],imm16`, anything else
+  `mov al,[es:di+d] / and al,imm / or al,imm / mov [es:di+d],al` (words on AX), a byte that
+  changes nothing (AND FFh, OR 0) is dropped and a row is `add di,dx` (DX = the box's stride);
+  45% of a pose's bytes are opaque. Called by `call far [xs_cfar]` with ES = the package
+  (the box buffer), DI = the pose's first row pointer and DX = the stride; nothing is pushed.
+* **VGA**, poses 0, 1 and 12 x four phases = 12 blocks, 12,276 bytes (the claim stays inside the
+  plan's 44 KB: 41,389). Each record is `mov al,MASK / out dx,al` (skipped when the mask is the
+  one last written: the port keeps it), `mov al,COLOUR` (an immediate, or `mov al,bl` for layer 1:
+  the rider's colour is a per-bike variable and arrives in BL) and `xchg al,[es:di+off]`, DX =
+  3CFh with GC index 8 selected.
+
+**The 8088 is fetch-bound** (4 clocks a code byte), so the emitted forms are priced by their
+length: ~85 -> ~45 clocks a VGA pair and ~85 -> ~37 a CGA byte. The emitters' output is compared
+with an independent model (`exbsim.compiled_poses`, `exbsim.vga_compiled`) byte for byte by
+the video gate, and every picture the video gate then draws goes through them (poses 0, 1, 12 ... at
+random, the reference rider's whole lap): the compiled forms are pixel-identical by the gate that
+was pixel-identical before. **A pose that is not compiled, an edge rider, and a neighbour that
+hangs outside the box being drawn still take the interpreter.** A neighbour wholly inside a
+box now takes the compiled draw too (`xc_draw` reads the record from `[xc_cj]` and the placement from
+`[xc_dy]`, `[xc_db]`, `[xc_dp]`, so the box's own bike and a neighbour share it).
+
+**102.7.3 The gate, and the answer.** `tests/excitebike_perf.py --herc --lap` (soak row
+`excitebikelapherc`), MartyPC's Hercules XT (`os8088_5150_herc_gla`), Selection A at turbo over
+a whole course with the sound on: **mean period 94,871 clocks = 50.31 Hz (the plan's gate is
+18.2 Hz = 262,144: met 2.76x), p99 148,846, one CRT frame a game frame** (1.6% of the frames take
+two), game speed 60.1 steps a second, the simulation 3.2k clocks a step. Course 2: 94,615 (50.44
+Hz), p99 132,156. The card side that decides it: the field's 200 lines are 50 rows of four banks
+and an entering column writes 200 words, a box a line at a time; the scroll test measures a
+rewrite of one racing bike at 24.1k clocks (the CGA's 24.4k), a column ~19.2k (the CGA's 16.1k:
+twelve runs over four banks against four). The rewrite fences of `tests/excitebike_perf.py` (CGA and
+Hercules) moved 31,000 -> 26,000 with the compiled poses.
+**Selection B** (`--herc --selfb`, the game's own AI on the rider and the opponents, two of
+them): mean **220,829 clocks = 21.61 Hz**, p99 308,297 (the fence is the VGA and CGA's: 263,000 and
+p99 <= 349,525), both opponents on the screen on every sampled frame; other seeds read 222.9k and
+222.3k. One opponent is 176,092 (27.1 Hz); three are 321,923 / p99 403,104, over both gates (the CGA's three:
+318,651 / 407,304), so `XB_NAI_CGA` = 2 serves both. **The number came in two steps and the first was
+not enough.** A frame here is a whole number of CRT frames (the card writes wait for the retrace,
+94.7k clocks against the CGA's 79.6k), and a two-opponent frame of ~200k of work sits between two and
+three of them: with the compiled poses (102.7.2) alone the mean fell 275,279 -> 252.8-259.7k on three
+builds and a run of the soak runner then read 263,286 and failed. **The neighbour rule** finished it:
+a box used to draw every OTHER present bike that met it, clipped, so two bikes within a word of each
+other drew each other twice; a bike later in record order lies on top and its own box is written
+after this one, so it carries this bike itself. `xc_comp` leaves a later record out of an earlier
+record's box whenever the window moved (`xc_prep` then gives every present bike a box: an unchanged
+bike has none only when nothing scrolled, and is drawn into its neighbours as before). Pixel-identical
+(the overlap arm of the video gate, moving and still), and the negative control - leaving the later
+bikes out ALWAYS - fails that arm at once. It took the Hercules's mean to 220.8k and the CGA's
+240,786 -> 235,659.
+The scroll gate (`--herc --scroll --governor`, row `excitebikeperfherc`): period 94,895 (50.29
+Hz), sprite draw + erase 13.4k a frame (the gate is 15,000: met), 24.1k a rewrite, the
+governor raising n in the burst's own frame and returning after exactly 64 quiet frames.
+**Emulator numbers only**: a real Hercules card's wait states (MartyPC charges its bus the
+CGA's ~86 clocks a word) and a real monitor's tolerance of a 50-row field (R6/R7 are the 6845's
+own registers and the frame length R4/R5 is untouched, but no monitor has been asked) are
+docs/FIELD-MACHINES.md's to measure. Against a card twice as slow the lap would still be two CRT
+frames (25 Hz), over the gate.
+
+**102.7.4 Edge riders** (`xc_place`, `xc_drawc`; `xv_bike`'s record-skipping loop). A bike now
+shows from `XB_EDGE` = 22 pixels off the left edge to 22 off the right, on all three adapters
+(wave 4 drew a bike only when its 24-pixel box was wholly on the picture, so an opponent popped in and
+out). `xa_record` keeps a record for x in [-22, 8 x wcols - 2] (`xb_xlo`, `xb_xspan`) and x is read
+signed. **CGA / Hercules**: `xc_place` computes the first byte (negative: off the left), the
+phase, the width and the word columns CLIPPED to the picture, plus an edge flag; the box is the
+clipped footprint and the bike is drawn by the clipping blitter `xc_drawc` (a row's bytes outside
+the box are stepped over with one ADD), never by the compiled draw. **VGA**: `xv_bike` records the
+clipped footprint (the erase then never touches a cell that belongs to another line: the sheared
+page's cell at column -1 is line l-1's column 39) and an edge rider takes a record loop that
+skips a record whose byte (`offset & 3` - an offset is 40 x row + byte, and 40 is a multiple of
+four) lies off the page. The gate: `tests/excitebike_video.py`'s edge arm - one to three bikes at
+random poses hanging off either edge on a fresh window, and a bike sliding across the whole 24
+pixels that show at each edge with the window scrolling, pixel for pixel against the reference
+renderer (which clips at the pixel: the edges are byte boundaries) - on all three adapters, and 25%
+of the random-position arm's bikes are placed anywhere in [-22, width - 2].
+
+**102.7.5 The VGA 1-pixel pan: measured, and it stays OFF.** The plan's gate was "only if
+eight phases fit". They do fit a segment - the eight-phase VGA blob set is **58,259 bytes**
+(29,113 for four) - but not the plan's 44 KB claim, so the claim would be ~61 KB, and that is not
+the only price: the CRTC offset register counts words, so a 41-column window is an odd pitch the
+card cannot scan and the sheared window would have to be 42 columns wide (every `40` and the
+page size of `vga.inc`, the erase, the three pages), and the compiled forms of 102.7.2 would
+need 8 x 3 blocks (~24 KB of code, beyond the claim). MartyPC does model the ATC pel-pan register
+in 0Dh (writing 4 shifts the picture 4 game pixels, measured), so the option is testable when
+somebody builds it; nothing in this wave does. The scroll stays at 8 pixels (one byte) on every
+adapter, the sprites at even x.
+
+**102.7.6 Validation** (all soak rows; nothing external is read).
+* `tests/excitebike_video.py --adapter herc` (row `excitebikevideoherc`): the whole pixel gate of
+  102.6 with `Game.screen_herc` decoding the card's memory through the ring and banks the way the
+  6845 scans them (a pair per game pixel) against `frame_herc`: the sprite claim's blobs AND its
+  compiled code equal the model, twenty random positions, overlap and edge scenes (an edge scene
+  is checked not to be vacuous: the reference picture with the bikes differs from the one without),
+  the reference rider's lap and a crash, the first course and the 1,637-column synthetic one.
+  **Three negative controls that must fail**: forgotten footprints (193 wrong pixels), one wrong
+  byte in the compiled code of pose 0 (wrong pixels, and none once it is put back), and the desktop
+  mode's 6845 R6/R7 written back through the ports - **the card's own picture** (the framebuffer,
+  not the memory every other check decodes) is then lines 3-349 instead of 79-277, which is what
+  proves the field is 50 rows and nothing else is lit. The CGA and VGA arms run the edge arm and
+  the compiled-code control too.
+* `tests/excitebike_front.py --arm herc`: the splash and help on the 1-bit desktop, the loading
+  screen (the two resident lines, 16 game pixels in from the left of the 360-wide picture), the first
+  race frames, `C`, Esc, Alt+Enter, a click, the claim map and closing. `--arm ega` (row
+  `excitebikeega`) is the refusal now: `VGA, CGA OR HERC ONLY`.
+* `tests/excitebike_flow.py --adapter herc`: the flow items (title, menus, race start, rank,
+  campaign, second pass, leaving), `--custom` and `--ai --collide` on the Hercules.
+* `tests/excitebike_perf.py --herc --scroll --governor | --lap | --selfb` (rows
+  `excitebikeperfherc`, `excitebikelapherc`, `excitebikeselfbherc`) - the gates of 102.7.3.
+* `tests/excitebike_assets.py` reads `EXBH.GFX` back from its bytes: every tile as pairs by the
+  (row + column) rule, the band, collision, class, top, pose and sprite records, the font, the
+  palette record, and the size and checksum constants. `tools/excitebike_assets.py --selfcheck`
+  gains the two claim budgets with the compiled poses (VGA 41,389 of 45,056; CGA/Hercules 20,877 of
+  28,672).
+
+**What wave 6 could not do, and says so.** No field number: a real Hercules's wait states, its
+monitor's tolerance of R6/R7, its second page and a machine with a Hercules AND a colour card
+(where `xb_palette` never touches 3D9h on a Hercules but `FSXM_HERC`'s own mode set is the
+kernel's) are docs/FIELD-MACHINES.md's. The Hercules races two opponents. The VGA pan is off (102.7.5). The compiled poses cover
+the nine (CGA/Hercules) and three (VGA) commonest poses; the rest, a neighbour partly outside a box
+and an edge rider are interpreted. The Hercules's skip lists are not built: an entering column
+writes all 200 lines (~19.2k clocks; 18.9k a two-opponent frame, 9% of it), because the shear's pitch is 45
+columns and its row step 4 lines, so the plan's precomputed "plain over plain" lists (pitch 40, step 1
+line) do not apply and would have to be compiled for the (45, 4) pair.
+
+### 102.8 Polish, the four geometries, the low-memory refusal (wave 7)
+
+**102.8.1 The lane dash, on the two adapters that could not show it.** The art pass looked at every
+contact sheet on the three adapters (`make excitebike-art`) and found one defect that only two of
+them have. The lane dividers of the track are drawn `99996666` (palette slot 9, white, and slot 6,
+the light dirt) on a ground of slot 5. On the VGA those are three colours. On the CGA the ink map
+sends 9, 6 and 5 all to ink 3, and on the Hercules 9 and 5 both to the mid level: **the four lanes
+had no visible boundary at all**, on the adapters whose ground is the flattest. The fix is a tile
+attribute, `mono=9>8` in `apps/excitebike/art/tiles.txt` (on `dirt_line_a` and `dirt_line_b`): on the
+CGA and the Hercules that tile's slot 9 is drawn as slot 8 (the shade, ink 0 and level 0, black), so
+the dash is black on the yellow ground and on the Hercules's grey; the VGA is untouched (still white).
+`Art.rows(i, kind)` in `tools/excitebike_assets.py` is the ONE place that says what a tile looks like
+on an adapter - the compiler (`gfx_cga`, `gfx_herc`), the reference renderer (`exbsim.Ref.band_lines`,
+`top_lines`, `world_px` take the adapter) and the contact sheets all ask it - so the guest, the
+model and the pictures cannot disagree, and `tests/excitebike_assets.py` decodes both GFX files
+back against `Art.rows`. It costs no byte in the package (the tile record is the same size) and
+no cycle. The band skip lists (102.1) compare palette slots, and the only rows that differ between
+a tile and its mono form are the dash row, which no other tile shares; `excitebikevideocga` and
+`excitebikevideoherc` compare every pixel against the model and pass. The five themes (`C` on the VGA)
+were looked at on all five - meadow, dusk, desert, frost, night: every course has its sky, grass
+and track told apart and the rider readable - and are unchanged.
+
+**102.8.2 The four geometries.** `make excitebikedisk` builds the game floppy in 1.44MB, 720KB, 1.2MB
+and 360KB, each `os88disk.py --verify`'d in the recipe. `tests/excitebike_geom.py` (`make
+excitebikegeom`) holds them to more. `--host` (row `excitebikegeomhost`, no emulator) walks each of
+the four with `tests/unit/t_image.py`'s FAT12 reader - deliberately not os88disk's - and requires
+the geometry the name says (sectors per track 18, 9, 15, 9), exactly the eight files
+(`EXCBIKE.O88`, `README.MD`, `EXBV.GFX`, `EXBC.GFX`, `EXBH.GFX`, `EXBSPL.VGA`, `.CGA`, `.HRC`) in the
+root with every chain whole and of the right length for its size, the same bytes in all four
+geometries and `EXCBIKE.O88` equal to `build/excbike.o88`; its negative control damages one FAT
+entry in the package's chain and the same walk must fail. `--boot G` (rows `excitebikeboot360`,
+`excitebikeboot720`, `excitebikeboot1440`) is boot-and-launch on MartyPC with that geometry's
+own system floppy and game floppy: **360KB on the VGA XT, 720KB on the Hercules XT with 720KB drives
+(`os8088_5150_herc_sb_720_gla`, the only machine in the tree that has them - so the 720KB floppy also
+runs the Hercules race), 1.44MB on the VGA XT with 1.44MB drives (`os8088_xt_vga_144`)**: open B:,
+open the package, the splash art loads, Enter runs the race loop, the frame counter moves, Esc
+leaves and closing the window returns the heap to what the desktop had. **The 1.2MB floppy is
+walked and not booted**: it needs a 5.25" HD drive and no MartyPC machine has one; it is booted by
+hand on 86Box's `286-525` by pointing that profile's `fdd_02_fn` at `build/excitebike120.img`, which
+nothing here can drive.
+
+**102.8.3 The low-memory refusal, and the bug it found.** Before wave 7 every refused claim of the
+bracket ended as `EXB?.GFX MISSING`, a sentence about files. `XB_ERR_MEM` = 3 is the new answer
+(`const.inc`): `xb_nomem` is set by each of the three `OSAPI_MEM_CLAIM` sites of the bracket (the art
+claim in `xb_gfx_load`, the sprite claim in `xb_spr_load`, the 48KB dictionary claim in `xc_init`) and
+`xb_fsassetfail` turns it into `xb_error` = XB_ERR_MEM, which the splash prints on its last line as
+**`NOT ENOUGH MEMORY`**. Everything the attempt claimed is freed (the leave path is the one every
+refusal already took). Writing the test found a real defect underneath: **`xb_spr_load` treated the
+borrow of its own `cmp` as an error**. When the sprite loader's first (28KB) claim is refused it takes
+the 17KB claim and loads the 28 poses without compiled code (102.7.2); the `cmp word [xb_sprkb],
+XS_CLAIM_CC / jne .done` that decides not to compile left CF set, and `.done: jc .free` freed the
+claim and reported a failed load. **Every machine that refused the big claim therefore refused the
+game**, with a sentence about missing files, and the fallback had never run. The branch now clears CF
+itself. Two rows hold it. `excitebikelowmem` (`--lowmem`): on a 256KB XT (`os8088_5150_cga_gla_256k`,
+the floor machine, which holds ONE Excitebike) a SECOND window opens (the code is shared; the splash
+and bss are ~10KB) and Enter on it must be refused with `xb_error` 3 and `xb_nomem` 1, the sentence
+in the package's image and lit on the glass, no claim of the attempt left (the program's own claims
+equal what they were; a purgeable cache - owner high byte 0xFB..0xFE, `MEM_PG_*` - is the desktop's
+and is not compared), and the window still answering `H`. Before the fix the same run ended
+`xb_error` 2. `excitebikesmallclaim` (`excitebike_video.py --adapter cga --smallclaim --quick`)
+stops the CGA sprite loader right after its first claim and makes the answer CF = 1, so the 17KB
+fallback runs for real: 28 poses loaded, none compiled, `xb_error` 0, and the whole CGA pixel gate
+(the twenty positions, the overlap and edge scenes, the rider's lap and crash, the synthetic course)
+identical to the model on the interpreted draw.
+
+**102.8.4 The banner flash.** The plan (4.4) called the themes and the banner flash DAC rewrites, not
+new art. The themes are 102.1's `xb_palette`; the flash is `xb_banner` (`video.inc`), called once a
+frame after `xb_flow_frame`: while `xb_flash` runs - the lap flash (150 steps) and GO! (45) - DAC 13,
+the blue of the banner plates and pennants (and of the arrows and the cool end of the gauge, which
+share the slot), alternates with the theme's own slot 12 (orange) every 8 steps and is the theme's
+again when the flash ends; `xb_palette` puts it back too. **VGA only**: the CGA and the Hercules have
+no palette to rewrite and a 3D9h flip would repaint the whole screen. Priced (counted from the code, not measured): the quiet frame is
+~80-100 clocks (three memory operands, no `jcxz`); a change is a few hundred clocks (six push/pop pairs,
+a `mul`, three `lodsb`, four `out`), some nineteen times in a 2.5 second flash. The DAC write waits, bounded
+at 400 reads of 3DAh, for a blanking interval (bit 0) so a clone VGA is not written mid-scan-out; nothing
+else in the VGA path waits for a retrace, so a change lands
+from the beam's line down and the plates above it show the old colour for one 18 ms frame: a strobe,
+which is the effect. `excitebikeflow` (VGA) reads it back from the card's framebuffer: the pixels that
+showed slot 13 before the flash (in the top 64 lines, more than fifty of them) turn to the theme's
+orange in more than 80% of them in some sample and are blue again in more than 80% in another, the state
+byte ends 0 and the pixels return to blue; on the CGA and the Hercules the state byte never leaves 0.
+
+**102.8.5 EGA: decided, and the refusal stays.** The plan asked wave 7 to decide whether an EGA machine
+plays through the CGA path (`FSXM_CGA320` is on the EGA's mode list, §53.4). It does not, for two
+reasons that are facts and not guesses. **An EGA has no port 3D9h**: the CGA colour-select register
+does not exist on the card, only the BIOS's `int 10h` AH = 0Bh emulates it, and `xb_palette` writes the
+port directly (as does every CGA engine here), so the palette of an EGA game would be whatever the mode
+set left. And **nothing here can host a real EGA**: the `VIDEO=ega` kernel of `excitebikeega` is a
+VGA card that the kernel believes is an EGA (§39.24) - it accepts 3D9h and would say the path works
+when it proves nothing about the card - and MartyPC has no EGA machine in `tools/martypc/configs`. A
+refusal that greys itself with its reason is the project's rule (§47). The row `excitebikeega` keeps
+holding it: the whole splash and help, `VGA, CGA OR HERC ONLY` on the START line, Enter refused,
+the heap back. Reopening it needs a machine that has an EGA and a decision to spend an `int 10h`
+call in the bracket.
+
+**102.8.6 The 86Box machine.** `vm/xt-excitebike/86box.cfg` is `vm/xt640` (a 4.77MHz IBM XT, 640KB, an
+OTI-067 VGA) with `fdd_02_fn = ../../build/excitebike360.img` and a fresh uuid and NOTHING else, the
+copy rule `vm/386-c-word` records; `make xt-excitebike` runs it with the 360KB system floppy in A:.
+86Box cannot assert anything (docs/TESTING.md): it is where a human looks at the scroll, the banner
+flash and the palette (`C`) and double-clicks `EXCBIKE.O88` in drive B:. No 86Box run was made in the
+environment that wrote this.
+
+**102.8.7 Validation and what wave 7 could not do.**
+* `python3 tools/os88test.py soak -k 'excitebike*'` is every row of 102.6, 102.7 and this section:
+  the new ones are `excitebikegeomhost`, `excitebikeboot360`, `excitebikeboot720`,
+  `excitebikeboot1440`, `excitebikelowmem` and `excitebikesmallclaim`; `excitebikeflow` gained the
+  banner-flash check. `t_excitebike_clean` (fast, in every `make`) still holds the tree to the
+  policy at the top of this section.
+* Not done: **no real EGA, no real 5.25" HD drive, no field run** on any machine. The Hercules and
+  the CGA and VGA numbers of 102.6 and 102.7 are MartyPC's. The 86Box machine is unexercised.
+  The banner flash's beam position, the Hercules's monitor and the sound on a real card are what
+  docs/FIELD-MACHINES.md would be asked. The fullscreen title and results screens stay the
+  text-mode menus of wave 4: this wave gave them no art.

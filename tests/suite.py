@@ -259,6 +259,26 @@ FAST = [
         "for WIRE.O88 matched THEWIRE.O88. FAST for t_movable's argument - it "
         "is a rule about what apps/ means, so it belongs in front of the next "
         "make rather than the next soak run"),
+    Row("excitebikeclean", "fast", py("tests/unit/t_excitebike_clean.py"), 0.2,
+        "EXCITEBIKE carries nothing from a NES ROM or its disassembly "
+        "(SPEC.md 102.2, docs/plans/EXCITEBIKE-PLAN.md section 0). The art and "
+        "audio policy is a statement about PROVENANCE, and provenance erodes "
+        "one convenient import at a time - a CHR file read 'just for the "
+        "placeholder', an absolute path into ../NES-Games-Disassembly left in "
+        "a tool. This walks every file the game owns for the reference's "
+        "names (CHR_ROM, bank_FF, .fm2, the source knobs; the optional oracle "
+        "test alone may name EXCITEBIKE_REF), holds the build tools to the "
+        "standard library, keeps apps/excitebike text-only, and checks the "
+        "Makefile block reads no reference directory. FAST because a "
+        "provenance rule belongs in front of the next make, and it costs a "
+        "directory walk"),
+    Row("excitebikeaudiohost", "fast", py("tests/excitebike_audio.py", "--host"), 1.0,
+        "EXCITEBIKE EXB.SND (SPEC.md 102.5) read back by a decoder that shares nothing with "
+        "tools/excitebike_audio.py: <= 3,072 bytes, every voice of every song summing to the steps "
+        "its bars x tempo give, loops on event boundaries at the loop bar, <= 40 s before a loop, "
+        "the engine and note tables exact, and two negative controls (a voice one step short, a loop "
+        "into an event) that must fail. FAST because a score that drifts by a step is a tune that "
+        "loops out of time and nothing else notices; it costs no emulator"),
     Row("trkface", "soak", ["python3", "tools/trkface.py"], 1.5,
         "Tracker's windowed face and PlayList editor draw no pixel twice "
         "(SPEC.md 45.21): the body is a table of tiles that must cover "
@@ -2453,6 +2473,328 @@ SOAK = [
         "XT frame rate, missing/damaged banks and desktop restore; "
         "uses a local cartridge when the package was built with one",
         needs=("marty", "nasm"), wants=("build/1942-360.img", "build/os8088-360.img")),
+    Row("excitebikeassets", "soak", py("tests/excitebike_assets.py"), 9.0,
+        "EXCITEBIKE asset compiler (SPEC.md 102.2): two compiles of the "
+        "committed sources are byte-identical file for file, contact sheets "
+        "included, and an independent reader decodes every byte back - both "
+        "GFX files (magic, length, checksum, record directory, every tile, "
+        "band column, collision row, class, top picture, pose mask, font "
+        "glyph, palette), the three EXF1 splash files packet by packet and "
+        "the generated NASM. The budgets and negative controls are the "
+        "excitebikeselfcheck row's. No emulator, nothing external",
+        needs=("nasm",), wants=("build/excitebike360.img",)),
+    Row("excitebikeselfcheck", "soak", ["python3", "tools/excitebike_assets.py", "--selfcheck"], 2.0,
+        "the compiler's own gate: every hard budget of plan 12.5 printed with "
+        "its actual number, two compiles byte-identical, and a negative "
+        "control for each guard (a 73rd dictionary column, a pose over 260 "
+        "opaque pixels, a lap over 797 columns, two obstacles closer than 8 "
+        "columns, under 70% plain, a GFX over one segment, a zero-frame "
+        "effect) that must be REFUSED - a guard nobody has seen fire is a "
+        "guard nobody knows is alive",
+        needs=("nasm",)),
+    Row("excitebikefront", "soak", py("tests/excitebike_front.py", "--arm", "all"), 90.0,
+        "EXCITEBIKE front end on MartyPC (SPEC.md 102.6), VGA, CGA and Hercules: "
+        "the desktop splash and help pixel for pixel against the compiler's "
+        "own render, the window-shade reveal under one XT tick a band, the "
+        "loading screen drawn before the first disk read (a breakpoint on the "
+        "art load), the adapter art loaded and checksummed, the first "
+        "race frames pixel for pixel against the reference renderer, C cycling "
+        "the palette, Esc back to a pixel-identical splash with the claim map "
+        "unchanged, Alt+Enter and a click both entering, and the window "
+        "closing back to the desktop's own heap; the Hercules plays since wave 6 "
+        "(its loading screen is read from B000, 16 game pixels in from the left)",
+        needs=("marty", "nasm"), wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeega", "soak", py("tests/excitebike_front.py", "--arm", "ega"), 30.0,
+        "EXCITEBIKE on an EGA desktop (SPEC.md 39.24, 102.6): a private VIDEO=ega "
+        "tree, so the kernel believes it is an EGA - OSAPI_FSX_CAPS answers "
+        "VID_EGA and the game refuses with its sentence rather than entering "
+        "a mode it has not been proven on (EGA offers the CGA modes, so this is "
+        "a decision and is recorded in SPEC.md 102.1; wave 7 revisits it; the "
+        "sentence is VGA, CGA OR HERC ONLY since wave 6). "
+        "Splash and help pixel-identical, Enter refused, heap back",
+        needs=("marty", "nasm"), wants=("build/excitebike360.img",)),
+    Row("excitebikesim", "soak", py("tools/exbsim.py", "--selfcheck"), 3.0,
+        "the reference model's own gate (tools/exbsim.py, SPEC.md 102.3, 102.6): "
+        "the reference rider finishes both courses at turbo and each committed par "
+        "is that time + 8% (--run-track), and the renderer's: "
+        "deterministic, 320x200, shear-free (moving the window one column moves "
+        "every world pixel left by exactly 8), the pose opaque-pixel counts equal "
+        "the compiler's, the HUD glyphs on the second pixel row. It is the "
+        "oracle of excitebikevideo/excitebikevideocga/excitebikeg1, so it is "
+        "held before they are believed. No emulator",
+        needs=("nasm",)),
+    Row("excitebikevideo", "soak", py("tests/excitebike_video.py", "--adapter", "vga"), 170.0,
+        "EXCITEBIKE wave 2, VGA 0Dh on MartyPC (SPEC.md 102.1, 102.6): the "
+        "scroll engine against tools/exbsim.py, the reference renderer written "
+        "from the SOURCE text with none of the guest's tricks. Twenty random "
+        "positions (a full-window write on every one of the three pages, then "
+        "1-3 bikes and a few frames of scrolling at a random speed through the "
+        "incremental path, the erase of the previous footprints and the skip "
+        "lists), a NEGATIVE CONTROL (forget a page's footprints and the residue "
+        "must show: a gate that cannot fail proves nothing), the whole first "
+        "course and then a synthetic 1,637-column course - the largest race "
+        "the compiler accepts - compared every ~90 frames. Wave 3's RACE ARM: "
+        "the reference rider drives both laps through the guest's simulation and "
+        "a second script rides into the hurdles for a crash; at a flat run, "
+        "mid-jump, the crash and every 250 steps the card equals the reference "
+        "renderer drawing the model's rider/shadow/dust records, three frames "
+        "each (the three pages), and three PNGs are kept in build/excitebike-proof. "
+        "Pixel-exact against "
+        "the card's own rendering, the line compare and the palette included",
+        needs=("marty", "nasm"), wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikevideocga", "soak", py("tests/excitebike_video.py", "--adapter", "cga"), 150.0,
+        "EXCITEBIKE wave 2, CGA 320x200x4 on MartyPC: the same gate as "
+        "excitebikevideo through the 8,192-byte ring - twenty random positions, "
+        "the erase negative control, the first course and the 1,637-column "
+        "synthetic one, so the start address passes the ring and every row "
+        "wraps at least once. Compared from CGA memory decoded the way the "
+        "6845 scans it (S, ring, banks) against the reference renderer",
+        needs=("marty", "nasm"), wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeg1", "soak", py("tests/excitebike_video.py", "--qemu"), 35.0,
+        "EXCITEBIKE GATE G1 (docs/plans/EXCITEBIKE-PLAN.md 15) on QEMU's VGA, "
+        "the emulator that implements the real one: MartyPC and QEMU DISAGREE "
+        "by one scan line about where line compare starts the split, so the "
+        "row is the proof that the HUD design (a blank first pixel row, page "
+        "line 192 kept black) draws the identical picture on both - the line "
+        "compare, the start-address flip, the palette and the write-mode-2 "
+        "sprites, pixel for pixel against the reference renderer. Shells out "
+        "to `make test`, so it cannot share the tree",
+        needs=("qemu", "nasm"), serial=True, builds=True, timeout=300,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeperf", "soak", py("tests/excitebike_perf.py", "--scroll", "--governor"), 90.0,
+        "EXCITEBIKE wave 2 frame rate on MartyPC's 4.77 MHz XT (SPEC.md 102.6, "
+        "PERFORMANCE.md Set 148): a scripted 3.4 px/step scroll under one bike, "
+        "the cycle counter between successive frame marks and per component "
+        "(erase, columns, sprites, HUD, flip; on CGA also the retrace wait), "
+        "against the hard gates - mean period <= 174,763 clk (27.3 Hz) and "
+        "sprite draw + erase <= 20,000 clk (VGA) / 15,000 (CGA) - and the "
+        "governor test: a busy loop injected into one frame raises n within "
+        "that frame and n comes back after exactly 64 quiet frames. A RATE, so "
+        "it wants the machine to itself",
+        needs=("marty", "nasm"), alone=True, timeout=600,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeref", "soak", py("tests/excitebike_ref.py"), 170.0,
+        "EXCITEBIKE wave 3, the rider simulation on MartyPC (SPEC.md 102.3, 102.6): "
+        "sim.inc against tools/exbsim.py STEP FOR STEP - the harness feeds the "
+        "guest a script (xb_tmode) and reads back 16 bytes of state after every "
+        "step (position, speed, height, vertical velocity, temperature, mode, "
+        "pitch, lane, pose), 29,465 steps over both courses: the reference "
+        "rider through both laps to the finish, four seeded random scripts, a "
+        "flat-out run that stalls the engine, a wheelie held to the flip. Every "
+        "record equal, plus the HUD, the bike records and the window at each "
+        "256-step chunk; coverage is COUNTED (every mode, hazard, event and "
+        "22 of 24 poses must have been exercised or the row fails). Also the "
+        "constants (const.inc XP_ == exbsim.PHYS, 46 names) and, when "
+        "EXCITEBIKE_REF names the study disassembly, the table check with "
+        "every difference named in tests/excitebike_ref_deviations.txt "
+        "(otherwise 'SKIP: EXCITEBIKE_REF not found', exit 0). Budget is "
+        "wall-heavy: 2.6 minutes, all of it guest steps",
+        needs=("marty", "nasm"), timeout=600,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikelap", "soak", py("tests/excitebike_perf.py", "--lap"), 150.0,
+        "EXCITEBIKE wave 3 frame rate over a WHOLE COURSE (SPEC.md 102.6, PERFORMANCE.md "
+        "Set 149): Selection A at turbo, the reference rider feeding the "
+        "steps (both laps, the lap change, ramps, hurdles, crashes, the finish), "
+        "rendering on, VGA then CGA. Hard gates: mean period <= 174,763 clk "
+        "(27.3 Hz), p99 <= 262,144, the simulation <= 4,500 clk a step by the "
+        "xm_s0/xm_s1 counter, and the rider reaches the finish. A RATE, so it "
+        "wants the machine to itself",
+        needs=("marty", "nasm"), alone=True, timeout=900,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeflow", "soak", py("tests/excitebike_flow.py", "--flow"), 120.0,
+        "EXCITEBIKE wave 4, the game around the race (SPEC.md 102.4, 102.6) on VGA and CGA, "
+        "driven with the keys a player uses: the title (idle frames counted, B = best times, NO demo at "
+        "500 idle frames and the demo at 560: Selection B with the AI driving the rider, a key ends "
+        "it), the mode and course menus, the countdown (READY 3/2/1, the rider and clock still, GO!), "
+        "the pause (Enter), the lap flash, FINISH! and the coast to the results, RANK AT EVERY BOUNDARY "
+        "(par-100 and par 1st, +1 and +399 2nd, +400 and +799 3rd, +800 not qualified) and on the "
+        "repeat of the last course where the windows shrink, the campaign (1st goes to the next "
+        "course, the fifth to course 1 on the SECOND PASS with the harder set on both laps - the column "
+        "array is compared with the model's - and its own par, then the last course repeats), best "
+        "times, game over, Alt+Enter from the title/a menu/a race and Esc, and the claim map EXACTLY as it "
+        "was. The finish is made by the game's own code (the rider is put across the line on a clock "
+        "the test chooses). Measured 113 s for the two adapters",
+        needs=("marty", "nasm"), timeout=900,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikecustom", "soak", py("tests/excitebike_flow.py", "--custom", "--adapter", "vga"), 70.0,
+        "EXCITEBIKE optional EXBTRACK.DAT (SPEC.md 102.4): a scratch disk carries a designed course "
+        "(a lap of plain columns, a ramp with its script trigger, a hurdle; par 32.10) and it is course 6: "
+        "the column array is 43 + 2 laps of the stream, the finish ranks against its par and a custom "
+        "course has no next; two more disks carry a file with a bad magic and a truncated one and "
+        "the game has its five courses. Every disk is built by the test with tools/os88disk.py "
+        "--verify'd",
+        needs=("marty", "nasm"), timeout=600,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeai", "soak", py("tests/excitebike_flow.py", "--ai", "--collide"), 180.0,
+        "EXCITEBIKE wave 4, the opponents (SPEC.md 102.4, ai.inc): the collision rule by the guest's "
+        "own xa_pair on blocks the test writes (the rear loses a quarter of its speed, a closing "
+        "speed over 0x140 crashes it, nothing at 14 pixels / 5 lanes / 0x1000 of height / a crashed "
+        "or finished rider), then 5,000 STEPS of Selection B under a seeded pseudo-random pad "
+        "script the test generates (no recording) on the fourth course's harder set, VGA (three "
+        "opponents) then CGA (two): every 2nd frame each opponent's state is checked - mode, lane, "
+        "column, temperature, the speed never over the kicker's ceiling and not over the turbo cap for "
+        "more than a kicker's decay, position never backwards except across a respawn, a respawn "
+        "lands at the screen's edge, nobody standing still - and at least one respawn happens",
+        needs=("marty", "nasm"), timeout=1500,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeselfb", "soak", py("tests/excitebike_perf.py", "--selfb"), 120.0,
+        "EXCITEBIKE wave 4 Selection B frame rate (SPEC.md 102.6, PERFORMANCE.md Set 150, plan gate "
+        "G4): the rider (driven by the game's own AI, the attract demo's brain: closed loop) and the "
+        "opponents over a whole first course with rendering on - three on the VGA, two on the CGA (the "
+        "plan's recorded fallback: three cost the CGA's 60-clock-a-word card 324k clocks a frame). "
+        "Hard gates: mean period <= 263,000 clk (plan G4 says 262,144 = 18.2 Hz, which is the VGA's "
+        "n = 3 plateau, 3 x 87,381 = 262,143, to the clock: wave 5's sound perturbs the race into "
+        "the trajectories that sit on it and measure 262.1-262.6k, so the fence moved 0.33% - see "
+        "PERFORMANCE.md Set 151) and p99 <= 349,525, the rider finishes (read halted at the frame's "
+        "end: xm_fin is in the block xa_frame swaps), game speed 60.1 steps a second (the sub-tick "
+        "clock is sampled at the seams of the back ends: a frame over one sub-tick between samples "
+        "lost a sub-tick and the game ran at half speed). --mute is the A/B. A "
+        "RATE, so it wants the machine to itself",
+        needs=("marty", "nasm"), alone=True, timeout=1200,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikevideoherc", "soak", py("tests/excitebike_video.py", "--adapter", "herc"), 245.0,
+        "EXCITEBIKE wave 6, the HERCULES on MartyPC's 5150 with the card (SPEC.md 102.7): the whole pixel gate "
+        "of excitebikevideocga through the Hercules's four 2000h banks and 90-byte rows, compared pair for "
+        "pair (a game pixel is two card pixels; a tile's mid grey alternates 10/01) with the reference "
+        "renderer's frame_herc: the sprite claim's blobs AND their compiled code equal the models byte for "
+        "byte, twenty random positions, overlap and EDGE scenes (bikes hanging 22 pixels off either edge, "
+        "and one sliding across), the reference rider's lap and a crash, the first course and the 1,637-"
+        "column synthetic one. Three negative controls that must fail: forgotten footprints, one wrong byte "
+        "in the compiled code of pose 0, and the desktop mode's 6845 R6/R7 put back - the card's own picture "
+        "(the framebuffer, not the memory) is then 347 lines instead of 199, which is what proves the field "
+        "is 50 rows and nothing else is lit",
+        needs=("marty", "nasm"), wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeflowherc", "soak", py("tests/excitebike_flow.py", "--flow", "--adapter", "herc"), 60.0,
+        "EXCITEBIKE wave 6, excitebikeflow on the Hercules: the title, the menus (the 40-cell text grid two "
+        "cells in from the left of the 45-cell row), the countdown, pause, lap flash, finish, rank at every "
+        "boundary, the campaign and the second pass, Alt+Enter/Esc leaving with the claim map as it was",
+        needs=("marty", "nasm"), timeout=600,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikecustomherc", "soak", py("tests/excitebike_flow.py", "--custom", "--adapter", "herc"), 55.0,
+        "EXCITEBIKE wave 6, excitebikecustom on the Hercules (the scratch disks carry EXBH.GFX too)",
+        needs=("marty", "nasm"), timeout=600,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeaiherc", "soak", py("tests/excitebike_flow.py", "--ai", "--collide", "--adapter", "herc"), 90.0,
+        "EXCITEBIKE wave 6, excitebikeai on the Hercules: the collision rule by the guest's own xa_pair and "
+        "5,000 steps of Selection B with two opponents",
+        needs=("marty", "nasm"), timeout=1500,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeperfherc", "soak", py("tests/excitebike_perf.py", "--herc", "--scroll", "--governor"), 40.0,
+        "EXCITEBIKE wave 6 (PERFORMANCE.md Set 148, wave 6 block) on the Hercules: the scripted scroll - "
+        "mean period <= 174,763 (measured 94,895 = 50.3 Hz: one CRT frame of 94.7k), sprite draw + erase "
+        "<= 15,000 a frame (13.4k; a rewrite 24.1k, fenced at 26,000) - and the governor test. A RATE, so "
+        "it wants the machine to itself",
+        needs=("marty", "nasm"), alone=True, timeout=600,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikelapherc", "soak", py("tests/excitebike_perf.py", "--herc", "--lap"), 120.0,
+        "EXCITEBIKE wave 6 ACCEPTANCE (plan gate G6, PERFORMANCE.md Set 152): Selection A at turbo over a "
+        "whole course on the Hercules, the reference rider feeding the steps, sound on. Hard gates: mean "
+        "period <= 262,144 clk (18.2 Hz; measured 94,871 = 50.3 Hz), p99 <= 349,525, the simulation <= 4,500 "
+        "a step, the rider reaches the finish. A RATE, so it wants the machine to itself",
+        needs=("marty", "nasm"), alone=True, timeout=900,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeselfbherc", "soak", py("tests/excitebike_perf.py", "--herc", "--selfb"), 50.0,
+        "EXCITEBIKE wave 6 Selection B on the Hercules (PERFORMANCE.md Set 152): the rider and TWO "
+        "opponents, all driven by the game's own AI, over a whole course. Hard gates: mean <= 263,000 clk "
+        "(measured 220,829 = 21.6 Hz; a frame is a whole number of 94.7k CRT frames, so it was 275,279 before "
+        "the compiled poses and 252.8-263.3k with them alone - the runner once read 263,286 and failed it - "
+        "until the neighbour rule of SPEC.md 102.7.3) and p99 <= 349,525. A RATE, so it wants the machine "
+        "to itself",
+        needs=("marty", "nasm"), alone=True, timeout=1200,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeaudio", "soak", py("tests/excitebike_audio.py", "--speaker"), 300.0,
+        "EXCITEBIKE wave 5, the sound on the machine every XT is (SPEC.md 102.5): MartyPC, VGA, no card. "
+        "The guest is stopped at one of its own routines and asked what it does by calling them: every "
+        "song's three voices at random step sizes against the score (loops wrap, `once` songs fall "
+        "silent), <= 1 tone call a tick, the lead folded over 130 Hz; the engine's pitch step for 120 "
+        "mode x speed x input cases, the glide, the once-in-three-frames tone rate, the silences; the "
+        "nine effects' durations, priorities, pause freeze and the event -> cue mapping; then a real race: "
+        "the start lights beep on READY 3, 2, 1 and GO, a held throttle moves the pitch with <= 1 tone "
+        "call in each of 120 breakpoint-traced frames, Enter silences the engine, M stops every call and "
+        "restores it. Broken on purpose, each failing the check it names: the engine's idle step moved "
+        "8 -> 9 (`engine`: k 9, wanted 8), the speaker's octave taken out (the capture row's guest-state "
+        "check: 220 Hz, wanted 440), and the frozen-effect gate taken out of the speaker path (`pause`: a "
+        "frozen effect left a tone sounding). ~150 s because each guest call is one emulator round trip",
+        needs=("marty", "nasm"), timeout=1200,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeaudiofm", "soak", py("tests/excitebike_audio.py", "--fm"), 300.0,
+        "EXCITEBIKE wave 5, the FM path (SPEC.md 102.5) on MartyPC's Sound Blaster XT: four channels "
+        "claimed at the top of the bracket, the title song keys 0-2, throttle keys the engine's two "
+        "channels, a pause keys them off, M releases all four and claims them again, a crash keys "
+        "channel 3, leaving releases every channel - and a channel OWNED BY ANOTHER makes the open "
+        "refuse: nothing of ours is left claimed, the other's claim is intact, and the speaker plays. "
+        "Reads the sound driver's own opl_own / opl_b0",
+        needs=("marty", "nasm"), timeout=1200,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeaudiocap", "soak", py("tests/excitebike_audio.py", "--capture"), 150.0,
+        "EXCITEBIKE wave 5, what reaches the SPEAKER: MartyPC's capture (MARTYPC_WAV, the vidspk "
+        "precedent) read with tools/sndcheck.py's loader and a square-wave period reader. The engine "
+        "held at four speeds by the guest's own routines is heard at the table's Hz an octave up "
+        "(within 3%), in order; the title song's lead is heard note for note, folded up, in order. "
+        "The plan's `make test-snd` (QEMU's speaker capture) has no way into a game's fullscreen "
+        "bracket from a script, so the capture is MartyPC's. serial=True, alone=True (wave 7): it heard 3 of the engine's "
+        "4 tones (the first, 440 Hz, missing) in BOTH parallel soak runs and passed alone every time and beside two other "
+        "emulators; `alone` alone does not leave the parallel lane (tools/os88test.py: only `serial` does), so it is both, "
+        "and runs in the one-at-a-time lane after the rest",
+        needs=("marty", "nasm"), serial=True, alone=True, timeout=900,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikegeomhost", "soak", py("tests/excitebike_geom.py", "--host"), 4.0,
+        "EXCITEBIKE wave 7 (SPEC.md 102.8.2), no emulator: all four standalone floppies (1.44MB, 720KB, "
+        "1.2MB, 360KB) walked by tests/unit/t_image.py's FAT12 reader - deliberately not os88disk's - and "
+        "each must be the geometry its name says, carry exactly the eight files of the package in the root "
+        "with every chain whole and the right length, and the same bytes in all four; EXCBIKE.O88 is the "
+        "built package. Negative control: a FAT entry damaged in EXCBIKE.O88's chain fails the same walk. "
+        "The 1.2MB floppy is only walked: no MartyPC machine has a 5.25 inch HD drive",
+        wants=("build/excitebike360.img", "build/excitebike.img", "build/excitebike720.img",
+               "build/excitebike120.img")),
+    Row("excitebikeboot360", "soak", py("tests/excitebike_geom.py", "--boot", "360"), 60.0,
+        "EXCITEBIKE wave 7 (SPEC.md 102.8.2), boot-and-launch from the 360KB floppy on the VGA XT: open B:, "
+        "open the package, the splash art loads, Enter runs the race loop, the frame counter moves, Esc "
+        "leaves and closing the window returns the heap to what the desktop had",
+        needs=("marty", "nasm"), wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeboot720", "soak", py("tests/excitebike_geom.py", "--boot", "720"), 70.0,
+        "EXCITEBIKE wave 7 (SPEC.md 102.8.2), the same from the 720KB floppy on the Hercules XT with 720KB "
+        "drives (os8088_5150_herc_sb_720_gla, the only machine here that has them): the Hercules race runs "
+        "from a 1,024-byte-cluster disk",
+        needs=("marty", "nasm"), wants=("build/excitebike720.img", "build/os8088-720.img")),
+    Row("excitebikeboot1440", "soak", py("tests/excitebike_geom.py", "--boot", "1440"), 70.0,
+        "EXCITEBIKE wave 7 (SPEC.md 102.8.2), the same from the 1.44MB floppy on the VGA XT with 1.44MB "
+        "drives (os8088_xt_vga_144)",
+        needs=("marty", "nasm"), wants=("build/excitebike.img", "build/os8088.img")),
+    Row("excitebikelowmem", "soak", py("tests/excitebike_geom.py", "--lowmem"), 70.0,
+        "EXCITEBIKE wave 7 (SPEC.md 102.8.3): a 256KB XT (os8088_5150_cga_gla_256k) holds one Excitebike; "
+        "a SECOND window opens (the code is shared) and Enter on it is REFUSED with `NOT ENOUGH MEMORY` "
+        "on the glass - xb_error 3 and xb_nomem 1, not the `EXB?.GFX MISSING` an unrelated refusal "
+        "printed - with every claim the attempt made freed (the program's claims are what they were; a "
+        "purgeable cache is the desktop's own) and the window still answering H. Guards the bug it found: "
+        "the small 17KB sprite claim, taken when the big one is refused, was reported as a failed load "
+        "because a `cmp`'s borrow was read as an error",
+        needs=("marty", "nasm"), wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikesmallclaim", "soak", py("tests/excitebike_video.py", "--adapter", "cga", "--smallclaim", "--quick"), 110.0,
+        "EXCITEBIKE wave 7 (SPEC.md 102.8.3): the CGA sprite loader's FIRST claim (28KB) is refused - the "
+        "harness stops the guest right after that call and sets CF - so the 17KB fallback runs for real: 28 "
+        "poses loaded, none compiled (xs_ctab all zero), xb_error 0, and the whole quick CGA pixel gate "
+        "(random positions, overlap and edge scenes, the rider's lap and a crash, the synthetic course) "
+        "identical to the reference renderer on the interpreted draw. The fallback had never run: it was "
+        "reported as a failed load because a cmp's borrow was read as an error",
+        needs=("marty", "nasm"), wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeaudiolap", "soak", py("tests/excitebike_perf.py", "--lap", "--audio-ab"), 400.0,
+        "EXCITEBIKE wave 5 sound cost (PERFORMANCE.md Set 151): the wave-3 lap, sound muted and then "
+        "on, on both adapters. The wave-3 hard gates hold with the sound on; the sound - which runs "
+        "AFTER the governor has measured the frame's work, before the idle wait - is read off "
+        "breakpoints (xu_race_frame entry to xb_flushed, a frame the kernel's tick landed in dropped by "
+        "the tick's fitted phase): mean ~1.3k, p99 ~4.6k (fence 5,000: one OSAPI_SND_TONE is 2.1k, on 16% "
+        "of the frames, and the plan's 4,000 is NOT met as a p99 of the whole), never two driver calls in "
+        "one frame, and the period is the same muted and on (fence +1,000). A RATE, so it wants the "
+        "machine to itself",
+        needs=("marty", "nasm"), alone=True, timeout=2400,
+        wants=("build/excitebike360.img", "build/os8088-360.img")),
+    Row("excitebikeload", "soak", py("tests/excitebike_load.py"), 120.0,
+        "EXCITEBIKE launch-to-title load time on MartyPC's 4.77 MHz XT (PERFORMANCE.md Set 153): "
+        "the loader's entry for EXCBIKE.O88 to the splash reveal finishing, on VGA, CGA and Hercules, "
+        "read in emulated cycles. A measurement that asserts the title comes up at all on each adapter; "
+        "the figures are the record",
+        needs=("marty", "nasm"), wants=("build/excitebike360.img", "build/os8088-360.img")),
     Row("gorillas", "soak", py("tests/gorillas.py"), 100.0,
         "Native Gorillas (SPEC.md 99), measured 97.3s on three adapters: "
         "keyboard angle/velocity editing, persistent terrain damage, pause, "

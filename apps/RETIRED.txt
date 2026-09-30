@@ -65,3 +65,8 @@ instrument fptest      # SPEC.md 64. The floating-point gate. Not even built
 local      drmario     # SPEC.md 99. DrMarco retains user-supplied NES cell tiles.
                        # make drmarco / drmarcodisk build DRMARCO.O88 and four
                        # standalone disks; the source directory stays drmario.
+local      excitebike  # SPEC.md 102. A standalone game disk (make excitebikedisk builds
+                       # EXCBIKE.O88 and four floppies); its art and audio are ORIGINAL
+                       # and committed, so it needs no user-supplied asset, but it is not
+                       # on the standard images, the allapps floppy or the live media
+                       # until the maintainer decides it should be (the game is complete).

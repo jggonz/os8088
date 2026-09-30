@@ -96,6 +96,14 @@ make 286-runcpm # 86Box: the 12.5MHz 286 with the 720KB one - arcade games
 make 386-runcpm # 86Box: the 386DX with the 1.44MB one - everything
 make drmarcodisk # native XT DrMarco: 320x240 VGA / color CGA;
                  # requires the local NES reference, see apps/drmario/README.md
+make excitebikedisk # native XT motocross racer (VGA, CGA and Hercules;
+                 # five courses, opponents, sound), four floppy geometries:
+                 # original art and sound, nothing external -
+                 # see apps/excitebike/README.md, SPEC.md 102;
+                 # `make excitebikegeom` boots each geometry, `excitebikevideo`
+                 # / `excitebikeperf` are its gates
+make xt-excitebike # 86Box: the 4.77MHz VGA XT with the 360KB Excitebike disk
+                 # in B: (double-click EXCBIKE.O88)
 make paccmandisk # build the PaccMan floppy - a second Pac-Man, in C: the
               # Namco arcade layout from Andre Weissflog's pacman.c, in all
               # four geometries (paccman.img, paccman720/120/360.img)

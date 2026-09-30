@@ -325,6 +325,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | DOS | `apps/dos/dosload.asm` | §96 | no |
 | DOTDEL | `apps/dotdel/dotdel.asm` | §93 | yes |
 | DRMARCO | `apps/drmario/drmario.asm` | §100 | no |
+| EXCITEBIKE | `apps/excitebike/excitebike.asm` | §102 | no |
 | FONT VIEWER | `apps/fontview/fontview.asm` | §90 | yes |
 | FPTEST | `apps/fptest/fptest.asm` |  | no |
 | FRACTAL | `apps/fractal/fractal.asm` | §40 | yes |
@@ -470,6 +471,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 99 | Gorillas (`apps/gorillas/gorillas.asm`) |
 | 100 | DrMarco (`apps/drmario/drmario.asm`) |
 | 101 | 1942 — native vertical shooter (`apps/1942/`) |
+| 102 | Excitebike — native motocross racer (`apps/excitebike/excitebike.asm`) |
 
 ## docs/
 
