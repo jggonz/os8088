@@ -5,6 +5,10 @@ six worlds introduce brick steps, pits, question blocks, one-way ledges,
 spring pads, spikes, and walking, hopping and flying enemies. Every course has
 a midway checkpoint and an exit flag. Courses grow from 1,024 to 2,560 pixels.
 
+The [Super Mario Bros inspired feature gap analysis and development plan](../../docs/plans/STICKIO-SMB-PLAN.md)
+describes proposed gameplay and course improvements; it is separate from the
+current behavior documented here.
+
 Build and launch:
 
 ```
