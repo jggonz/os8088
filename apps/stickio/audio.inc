@@ -110,11 +110,8 @@ st_audio_tick:
  jnz .effect
 .note:
  mov byte [st_musicwait],3
- mov bx,[st_level]
- xor dx,dx
- mov ax,bx
- mov bx,5
- div bx
+ xor ax,ax
+ mov al,[st_world]
  shl ax,1
  mov bx,ax
  mov si,[st_tunes+bx]

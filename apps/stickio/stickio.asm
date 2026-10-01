@@ -1,5 +1,6 @@
 ; Stickio: original XT platformer. SPEC.md 103. No 80186 instructions.
 %include "os88api.inc"
+%include "const.inc"
 OS88_HEADER 'Stickio', st_entry, 1, OS88_STACK_DEFAULT
 OS88_ICON16
  dw 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
@@ -103,7 +104,7 @@ st_key:
 .right:
  cmp ah,KSC_RIGHT
  jne .out
- cmp word [st_level],29
+ cmp word [st_level],ST_LEVEL_COUNT-1
  jae .out
  inc word [st_level]
 .paint:
@@ -163,7 +164,11 @@ st_main:
  call st_video_init
  mov word [st_score],0
  mov word [st_coins],0
- mov word [st_checkpoint],32
+ mov word [st_steps],0
+ mov word [st_truncated],0
+ mov word [st_dropped],0
+ mov word [st_actor_overflow],0
+ call st_newcourse
  mov byte [st_lives],5
  mov byte [st_state],0
  mov byte [st_pause],0
@@ -182,9 +187,12 @@ st_main:
  sub ax,[st_clocklast]
  jz .wait
  mov [st_clocklast],bx
- cmp ax,4
+ cmp ax,ST_CATCHUP
  jbe .steps
- mov ax,4
+ inc word [st_truncated]
+ sub ax,ST_CATCHUP
+ add [st_dropped],ax
+ mov ax,ST_CATCHUP
 .steps:
  mov cx,ax
 .step:
@@ -194,6 +202,7 @@ st_main:
  cmp byte [st_state],0
  jne .nostep
  call st_step
+ inc word [st_steps]
 .nostep:
  call st_audio_tick
  pop cx
@@ -279,10 +288,10 @@ st_input:
  je .esc
  cmp byte [st_state],1
  jne .new
- cmp word [st_level],29
+ cmp word [st_level],ST_LEVEL_COUNT-1
  jae .new
  inc word [st_level]
- mov word [st_checkpoint],32
+ call st_newcourse
  call st_load
  jmp .esc
 .new:
@@ -290,7 +299,7 @@ st_input:
  mov byte [st_lives],5
  mov word [st_score],0
  mov word [st_coins],0
- mov word [st_checkpoint],32
+ call st_newcourse
  call st_load
 .esc:
  mov al,KSC_ESC
@@ -345,7 +354,7 @@ st_buffered:
 .jumpkey:
  test byte [st_keys],4
  jnz .poll
- mov byte [st_jumpbuf],5
+ mov byte [st_jumpbuf],ST_ASSIST
  jmp .poll
 .command:
  test [st_keysold],bl
@@ -371,7 +380,7 @@ st_tpl: dw 48,32,340,166,st_title,st_paint,st_key,st_click
 OS88_PREFER st_pref,340,166,340,166,340,166
 st_title: db 'Stickio',0
 st_hint1: db 'A BLACK AND WHITE PLATFORM ADVENTURE',0
-st_hint2: db '30 COURSES - SIX WORLDS',0
+st_hint2: db '0'+ST_LEVEL_COUNT/10,'0'+ST_LEVEL_COUNT % 10,' COURSES - SIX WORLDS',0
 st_hint3: db 'LEFT / RIGHT SELECT   ENTER TO PLAY',0
 st_select: db 'LEVEL 01',0
 st_hint4: db 'ARROWS MOVE  Z JUMP  X RUN  P PAUSE',0
@@ -402,6 +411,9 @@ VAR st_subs,2
 VAR st_last,2
 VAR st_clocklast,2
 VAR st_frames,2
+VAR st_steps,2
+VAR st_truncated,2
+VAR st_dropped,2
 VAR st_quit,1
 VAR st_keys,1
 VAR st_keysold,1
@@ -419,6 +431,12 @@ VAR st_lives,1
 VAR st_score,2
 VAR st_coins,2
 VAR st_checkpoint,2
+VAR st_checkpoint_y,2
+VAR st_ledger_level,2
+VAR st_rewards,ST_MAX_WIDTH*ST_MAP_ROWS/8
+VAR st_actor_rewards,3
+VAR st_actor_overflow,2
+VAR st_contact_count,1
 VAR st_width,2
 VAR st_name,2
 VAR st_world,1
@@ -435,9 +453,10 @@ VAR st_cam,2
 VAR st_drawcam,2
 VAR st_mapdirty,1
 VAR st_huddirty,1
-VAR st_map,160*8
-VAR st_enemies,20*10
+VAR st_map,ST_MAX_WIDTH*ST_MAP_ROWS
+VAR st_enemies,ST_MAX_ENEMIES*ST_ENEMY_SIZE
 VAR st_ne,2
+VAR st_enemy_end,2
 VAR st_ephase,1
 VAR st_cur,2
 VAR st_bg,80*128
@@ -482,5 +501,8 @@ VAR st_fx,1
 VAR st_fxwait,1
 VAR st_fxpos,1
 VAR st_audio_last,2
+%if ($-$$)+ST_BSS > ST_MEMORY_LIMIT-ST_MEMORY_RESERVE
+ %error "Stickio exceeds package memory reserve"
+%endif
 OS88_BSS ST_BSS
 OS88_IMAGE_END

@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "id": "p0-first-room",
+  "name": "FOUNDATION FIELD",
+  "world": 0,
+  "environment": "surface",
+  "music": 0,
+  "checkpoint_policy": "safe-retry-consumed-rewards",
+  "rooms": [
+    {
+      "id": "main",
+      "width": 48,
+      "height": 8,
+      "spawn": [
+        32,
+        72
+      ],
+      "checkpoint": [
+        384,
+        72
+      ],
+      "exit": {
+        "kind": "flag",
+        "tile": [
+          44,
+          5
+        ]
+      },
+      "links": [],
+      "sections": [
+        {
+          "name": "arrival",
+          "start": 0,
+          "end": 8
+        },
+        {
+          "name": "support",
+          "start": 8,
+          "end": 20
+        },
+        {
+          "name": "recovery",
+          "start": 20,
+          "end": 29
+        },
+        {
+          "name": "lower-route",
+          "start": 29,
+          "end": 41
+        },
+        {
+          "name": "finish",
+          "start": 41,
+          "end": 48
+        }
+      ],
+      "terrain": [
+        {
+          "x": 0,
+          "y": 6,
+          "width": 48,
+          "height": 2,
+          "tile": 1
+        },
+        {
+          "x": 9,
+          "y": 5,
+          "width": 5,
+          "height": 1,
+          "tile": 2
+        },
+        {
+          "x": 24,
+          "y": 5,
+          "width": 1,
+          "height": 1,
+          "tile": 8
+        },
+        {
+          "x": 44,
+          "y": 5,
+          "width": 1,
+          "height": 1,
+          "tile": 7
+        },
+        {
+          "x": 31,
+          "y": 6,
+          "width": 5,
+          "height": 1,
+          "tile": 0
+        },
+        {
+          "x": 18,
+          "y": 3,
+          "width": 1,
+          "height": 1,
+          "tile": 3
+        },
+        {
+          "x": 17,
+          "y": 4,
+          "width": 1,
+          "height": 1,
+          "tile": 4
+        }
+      ],
+      "objects": [
+        {
+          "id": "raised-walker",
+          "kind": "walker",
+          "x": 176,
+          "y": 56,
+          "direction": 1
+        },
+        {
+          "id": "lower-hopper",
+          "kind": "hopper",
+          "x": 528,
+          "y": 88,
+          "direction": 1
+        }
+      ]
+    }
+  ]
+}

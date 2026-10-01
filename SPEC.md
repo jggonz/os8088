@@ -156971,6 +156971,44 @@ with progressively introduced pits, bricks, question blocks, one-way ledges,
 springs, spikes, walking, hopping and flying enemies, a checkpoint and an exit.
 A course is deterministic, RLE compressed at build time and unpacked on entry.
 
+P0 foundation contract: `apps/stickio/const.inc` defines local physics in pixels,
+signed 8.8 velocity per simulation step, and step counts. Walk/run caps remain
+448/768, acceleration/friction 48/64, jump/release -1664/-640, gravity/fall cap
+96/1536, stomp/spring -1152/-2176, buffer/coyote five and retry protection ninety.
+`tools/stickio_sim.py` independently models the player step order and integer
+rounding; guest traces compare every step, including terrain contacts.
+
+Version-one authored JSON under `apps/stickio/levels/` declares course/world,
+environment/music, one room, dimensions, tile rectangles, stable object IDs,
+spawn/checkpoint x/y and a flag exit. P0 supports one room with no links; the
+compiler refuses unsupported features. The existing thirty-course motif campaign
+is retained until P1 authoring. A separate authored fixture exercises the schema.
+Both paths validate tiles, full RLE coverage, protected supported arrivals, exit,
+unique reward/object IDs, twenty actor records and at most six actors in any
+368-pixel activation interval. The compiled manifest includes tile materials;
+decoration cannot override collision. The package retains at least 2 KiB below
+the 61,440-byte image+BSS boundary. Compilation is deterministic and ROM-free.
+
+Enemy records are sixteen bytes: integer x/y, type/direction bytes, age, signed
+8.8 vertical velocity, vertical fraction, previous y, and authored patrol y.
+Walkers fall at edges; hoppers turn at unsupported edges and launch from their
+actual support. Both resolve walls, ceilings and crossed solid/one-way support
+at the authored height. Flyers oscillate relative to their authored y. All nearby
+actors advance; compiler density limits bound the scan and drawing budget.
+Until horizontal sprite clipping lands, contact damage is confined to the
+renderer’s 0–304 horizontal origin interval. Stomps compare previous player feet
+with previous enemy body top. Pit actors retire rather than wrapping coordinates.
+
+A checkpoint records explicit supported x/y, spends a life on retry, resets
+motion/enemies and grants ninety steps of protection. Score/coins remain. A
+160-byte tile-index reward ledger reapplies consumed coins, question blocks and
+checkpoint triggers after RLE reconstruction. Three additional bytes remember
+enemy score payouts; reconstructed enemies remain interactive but pay once.
+Changing course or starting a new fullscreen adventure clears that ledger.
+Room transitions and enhanced player forms are later-wave work. Host and guest
+checks cover raised/lowered support, edge policies, retries and reward persistence;
+metrics report package bytes, frame work, live periods and catch-up truncations.
+
 The fullscreen bracket (§53) uses CGA 320x200 on CGA/VGA and a doubled-width
 320x128 game area on Hercules. Only black and white are used. The simulation
 uses a 54.62 Hz rate hook (§53.2.2), with bounded catch-up; the small kernel
@@ -157007,6 +157045,7 @@ band; sprite footprints expand the row spans and transfer bounds. Buffered input
 rejects BIOS extended-key character bytes 00h/E0h before letter normalization:
 ORing 00h with 20h formerly misread arrow events as the Space jump binding.
 The launcher selects levels with left/right. Completion and game-over require
-Enter; completing course 30 shows the ending. It ships on games360 and the larger
-apps disks; apps360 has no room for it. `make stickio`, `stickiodisk`, `stickio-art`
+Enter; completing course 30 shows the ending. It ships on the dedicated
+stickio360 disk, games360 and larger apps disks; general apps360 omits it.
+`make stickio`, `stickiodisk`, `stickio-art`
 and `stickiocheck` build, package and validate the game.

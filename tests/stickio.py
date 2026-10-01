@@ -4,7 +4,7 @@ Run make stickiocheck (host) or python3 tests/stickio.py --adapter cga|herc|vga.
 """
 from pathlib import Path
 import os, array
-import argparse, json, re, struct, subprocess, sys, tempfile
+import argparse, json, math, re, struct, subprocess, sys, tempfile
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'tests'),str(ROOT/'tools')]
 import os88build as B
@@ -13,7 +13,7 @@ def at(p): return Path(B.at(p))
 def symbols():
     src=(ROOT/'apps/stickio/stickio.asm').read_text()
     names=re.findall(r'^VAR (st_\w+),',src,re.M)
-    for file in ('stickio.asm','game.inc','video.inc','audio.inc'):
+    for file in ('stickio.asm','game.inc','actors.inc','video.inc','audio.inc'):
         names+=re.findall(r'^(st_\w+)(?::| equ \$)',(ROOT/'apps/stickio'/file).read_text(),re.M)
     names+=re.findall(r'^(st_\w+):',at('build/stickio-art/assets.inc').read_text(),re.M)
     names=sorted(set(names))
@@ -28,7 +28,9 @@ def symbols():
 def host():
     sym=symbols(); raw=at('build/stickio.bin').read_bytes()
     image,bss=struct.unpack_from('<HH',raw,8)
-    assert image==len(raw) and image+bss<61440
+    assert image==len(raw) and image+bss<=61440-2048
+    from stickio_p0 import host as p0_host
+    p0_host(raw, sym)
     levels=json.loads(at('build/stickio-art/levels.json').read_text())
     assert len(levels)==30 and len(set(l['name'] for l in levels))==30
     previous=0
@@ -112,7 +114,7 @@ def pixelcheck(p,tag):
         objects.append((p.w('x')-cam,py,pose+12*p.b('facing')))
     nearby=0
     for n in range(p.w('ne')):
-        x,y,t,d,age,_=struct.unpack_from('<HHBbHH',p.data('enemies',p.w('ne')*10),n*10)
+        x,y,t,d,age,*_=struct.unpack_from('<HHBbHHHHH',p.data('enemies',p.w('ne')*16),n*16)
         if t and 0<=x-cam<=304 and nearby<6:
             objects.append((x-cam,y,24+2*(t-1)+bool(age&8)));nearby+=1
     for x,y,pose in objects:
@@ -176,11 +178,16 @@ def guest(tag):
         assert p.b('fs')==1
         # Keep the live loop parked at input while executing guest routines.
         levels=json.loads(at('build/stickio-art/levels.json').read_text())
+        from stickio_p0 import guest as p0_guest
+        p0_guest(p)
         costs=[]
         for i,l in enumerate(levels):
             p.put('level',i,2);p.put('checkpoint',32,2);p.call('load')
             assert p.data('map',l['width']*8)==bytes(v for c in l['map'] for v in c)
             assert p.w('ne')==len(l['enemies']) and p.w('x')==32 and p.w('y')==72*256
+            assert p.data('enemies',p.w('ne')*16)==b''.join(
+                struct.pack('<HHBbHHHHH',x,y,kind,direction,0,0,0,y,y)
+                for x,y,kind,direction in l['enemies']), 'authored actor reconstruction'
             p.put('invuln',0);p.call('render');pixelcheck(p,tag)
             # Camera phases and tile changes exercise the incremental path.
             for cam in (4,12,32,(l['width']-20)*16):
@@ -198,7 +205,7 @@ def guest(tag):
         p.call('load');p.put('invuln',0);p.put('ne',6,2)
         for x,y in ((32,72),(36,72),(0,-12),(304,120)):
             p.put('x',x,2);p.put('y',y*256,2)
-            m.write(p.a('enemies'),b''.join(struct.pack('<HHBbHH',ex,ey,t,1,age,0)
+            m.write(p.a('enemies'),b''.join(struct.pack('<HHBbHHHHH',ex,ey,t,1,age,0,0,ey,ey)
                     for ex,ey,t,age in ((32,72,1,0),(36,76,2,8),(40,72,3,0),
                                        (0,0,1,8),(304,126,2,0),(160,60,3,8))))
             p.call('render');pixelcheck(p,tag)
@@ -248,12 +255,12 @@ def guest(tag):
         # Stomp and side contact exercise enemy collision rather than the reset helper.
         p.call('load');p.put('ne',1,2);p.put('x',64,2);p.put('y',55*256,2);p.put('vy',1024,2)
         p.put('ground',0);p.put('keys',0);p.put('invuln',0)
-        m.write(p.a('enemies'),struct.pack('<HHBbHH',64,72,1,1,0,0));p.call('step')
+        m.write(p.a('enemies'),struct.pack('<HHBbHHHHH',64,72,1,1,0,0,0,72,72));p.call('step')
         assert p.data('enemies',5)[4]==0 and p.w('vy')==65536-1152,'enemy stomp'
         p.call('load');p.put('ne',1,2);p.put('x',64,2);p.put('lives',3);p.put('invuln',0)
-        m.write(p.a('enemies'),struct.pack('<HHBbHH',64,72,1,1,0,0));p.call('step')
+        m.write(p.a('enemies'),struct.pack('<HHBbHHHHH',64,72,1,1,0,0,0,72,72));p.call('step')
         assert p.b('lives')==2 and p.b('invuln')>0,'enemy side contact'
-        p.call('load');p.put('lives',3);p.put('x',32,2)
+        p.call('newcourse');p.call('load');p.put('lives',3);p.put('x',32,2)
         m.write(p.a('map')+2*8+5,b'\x05');p.call('step');assert p.b('lives')==2,'spike contact'
         p.call('load');p.put('lives',3);p.put('y',122*256,2);p.put('vy',1024,2);p.put('ground',0)
         for _ in range(2):p.call('step')
@@ -321,7 +328,10 @@ def guest(tag):
         p.put('x',160,2);p.put('keys',10);p.call('camera');p.call('render')
         m.key('ArrowRight',down=True,up=False);m.key('KeyX',down=True,up=False)
         scrollframe=[0]
+        simulation_marks=[]
         def advance_camera(_,record):
+            simulation_marks.append((p.w('steps'),p.w('truncated'),p.w('dropped'),
+                                     p.w('actor_overflow'),p.w('clocklast')))
             scrollframe[0]+=1
             p.put('x',120+scrollframe[0]*4,2);p.put('invuln',90)
         with M.bp_trace(m,p.a('presented'),cap=81,on_hit=advance_camera) as tr:
@@ -329,6 +339,18 @@ def guest(tag):
         clocks=[v['cycles'] for v in tr.hits]
         periods=[b-a for a,b in zip(clocks,clocks[1:])]
         result['live_scroll_fps']=round(M.GUEST_HZ/(sum(periods)/len(periods)),1)
+        result['live_mean_period_clocks']=round(sum(periods)/len(periods))
+        result['live_p99_period_clocks']=sorted(periods)[math.ceil(len(periods)*.99)-1]
+        result['retained_presentations']=len(clocks)
+        # The pump can observe extra hits while until() exits; its capped trace
+        # retains fewer records than the callback. Pair counters with the last
+        # retained cycle sample, rather than with a later unrecorded frame.
+        first,last=simulation_marks[0],simulation_marks[len(clocks)-1]
+        result['catchup_truncations']=(last[1]-first[1])&65535
+        result['dropped_steps']=(last[2]-first[2])&65535
+        result['simulated_time_ratio']=round(((last[0]-first[0])&65535)*87380/(clocks[-1]-clocks[0]),4)
+        result['actor_overflow_events']=(last[3]-first[3])&65535
+        assert (((last[0]-first[0])&65535)+result['dropped_steps'])&65535 == ((last[4]-first[4])&65535), 'simulation step accounting'
         m.key('ArrowRight',down=False,up=True);m.key('KeyX',down=False,up=True)
         assert max(framecycles)<M.GUEST_HZ/12,'XT minimum 12 Hz work budget exceeded'
         m.bp_exec();m.key('Escape');m.run();M.until(m,lambda _:p.b('fs')==0,'desktop restore',guest=30)
@@ -355,7 +377,7 @@ def sound(backend):
         if backend!='speaker':assert all(v!=255 for v in m.read(seg+ds['opl_own'],4))
         # Every theme sends pitches; every effect goes through the actual backend.
         for world in range(6):
-            p.put('level',world*5,2);p.put('musicwait',0);p.put('musicpos',0,2)
+            p.put('level',world*5,2);p.call('load');p.put('musicwait',0);p.put('musicpos',0,2)
             m.bp_exec();m.run();M.pace(m,0.6);m.pause()
             m.bp_exec(p.a('input'));m.step();m.run();assert m.wait_stop(30)=='breakpoint'
             for effect in range(1,6):

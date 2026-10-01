@@ -320,7 +320,7 @@ st_render_begin equ $
 .enemy:
  cmp byte [si+4],0
  je .enext
- cmp di,6
+ cmp di,ST_NEAR_ENEMIES
  jae .hud
  mov ax,[si]
  sub ax,[st_cam]
@@ -347,7 +347,7 @@ st_render_begin equ $
  pop bp
  pop si
 .enext:
- add si,10
+ add si,ST_ENEMY_SIZE
  dec bp
  jnz .enemy
 .hud:
@@ -512,20 +512,23 @@ st_transfer:
  mov di,[ds:st_rows+bp]
  add di,ax
  cmp byte [st_herc],0
- je .copy
+ je .cga
  push si
  push cx
-.copy:
  shr cx,1
  rep movsw
  adc cx,cx
  rep movsb
- cmp byte [st_herc],0
- je .next
  pop cx
  pop si
  mov di,[ds:st_screenrows+400+64+bp]
  add di,ax
+ shr cx,1
+ rep movsw
+ adc cx,cx
+ rep movsb
+ jmp .next
+.cga:
  shr cx,1
  rep movsw
  adc cx,cx

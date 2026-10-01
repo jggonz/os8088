@@ -1,5 +1,30 @@
 ; RLE level unpack, platform physics, tile interactions and bounded enemy AI.
+; New adventure/course: reset consumed tiles and select authored safe arrival.
+st_newcourse:
+ push ds
+ pop es
+ mov di,st_rewards
+ xor ax,ax
+ mov cx,ST_MAX_WIDTH*ST_MAP_ROWS/16
+ rep stosw
+ mov word [st_actor_rewards],0
+ mov byte [st_actor_rewards+2],0
+ mov ax,[st_level]
+ mov [st_ledger_level],ax
+ mov bx,ax
+ shl bx,1
+ mov si,[st_levels+bx]
+ mov ax,[si+10]
+ mov [st_checkpoint],ax
+ mov ax,[si+12]
+ mov [st_checkpoint_y],ax
+ ret
 st_load:
+ mov ax,[st_level]
+ cmp ax,[st_ledger_level]
+ je .samecourse
+ call st_newcourse
+.samecourse:
  push ds
  pop es
  mov bx,[st_level]
@@ -30,6 +55,9 @@ st_load:
  rep stosb
  or dx,dx
  jnz .rle
+ push bp
+ call st_restore_rewards
+ pop bp
  mov cx,[st_ne]
  mov di,st_enemies
  mov si,bp
@@ -42,20 +70,27 @@ st_load:
  xor ax,ax
  stosw
  stosw
+ stosw
+ mov ax,[di-10]
+ stosw
+ stosw
  loop .enemy
 .spawn:
  mov ax,[st_checkpoint]
  mov [st_x],ax
- mov word [st_y],72*256
+ mov ax,[st_checkpoint_y]
+ mov cl,8
+ shl ax,cl
+ mov [st_y],ax
  mov word [st_vx],0
  mov word [st_vy],0
  mov word [st_frac],0
  mov word [st_gait],0
  mov byte [st_ground],1
- mov byte [st_coyote],5
+ mov byte [st_coyote],ST_ASSIST
  mov byte [st_jumpbuf],0
  mov byte [st_land],0
- mov byte [st_invuln],90
+ mov byte [st_invuln],ST_PROTECTION
  mov byte [st_facing],0
  mov byte [st_state],0
  mov byte [st_quit],0
@@ -136,18 +171,18 @@ st_step:
  jz .release
  cmp byte [st_jumpheld],0
  jne .coyote
- mov byte [st_jumpbuf],5
+ mov byte [st_jumpbuf],ST_ASSIST
  mov byte [st_jumpheld],1
  jmp .coyote
 .release:
  mov byte [st_jumpheld],0
- cmp word [st_vy],-640
+ cmp word [st_vy],ST_RELEASE
  jge .coyote
- mov word [st_vy],-640
+ mov word [st_vy],ST_RELEASE
 .coyote:
  cmp byte [st_ground],0
  je .air
- mov byte [st_coyote],5
+ mov byte [st_coyote],ST_ASSIST
  jmp .jump
 .air:
  cmp byte [st_coyote],0
@@ -158,7 +193,7 @@ st_step:
  je .accel
  cmp byte [st_coyote],0
  je .accel
- mov word [st_vy],-1664
+ mov word [st_vy],ST_JUMP
  mov byte [st_ground],0
  mov byte [st_coyote],0
  mov byte [st_jumpbuf],0
@@ -166,10 +201,10 @@ st_step:
  call st_effect
 .accel:
  mov ax,[st_vx]
- mov dx,448
+ mov dx,ST_WALK
  test byte [st_keys],8
  jz .lr
- mov dx,768
+ mov dx,ST_RUN
 .lr:
  mov bl,[st_keys]
  and bl,3
@@ -181,18 +216,18 @@ st_step:
  cmp ax,0
  je .velocity
  jl .frneg
- sub ax,64
+ sub ax,ST_FRICTION
  jns .velocity
  xor ax,ax
  jmp .velocity
 .frneg:
- add ax,64
+ add ax,ST_FRICTION
  js .velocity
  xor ax,ax
  jmp .velocity
 .left:
  mov byte [st_facing],1
- sub ax,48
+ sub ax,ST_ACCEL
  neg dx
  cmp ax,dx
  jge .velocity
@@ -200,7 +235,7 @@ st_step:
  jmp .velocity
 .right:
  mov byte [st_facing],0
- add ax,48
+ add ax,ST_ACCEL
  cmp ax,dx
  jle .velocity
  mov ax,dx
@@ -229,17 +264,17 @@ st_step:
  mov dx,[st_y]
  mov cl,8
  sar dx,cl
- add dx,3
+ add dx,ST_PLAYER_TOP
  cmp word [st_vx],0
  jl .edge
- add ax,13
+ add ax,ST_PLAYER_RIGHT+1
 .edge:
  push ax
  call st_tile
  call st_solid
  pop ax
  jc .wall
- add dx,19
+ add dx,ST_PLAYER_BOTTOM-ST_PLAYER_TOP
  call st_tile
  call st_solid
  jc .wall
@@ -259,10 +294,10 @@ st_step:
  mov ax,[st_y]
  mov [st_oldy],ax
  mov bx,[st_vy]
- add bx,96
- cmp bx,1536
+ add bx,ST_GRAVITY
+ cmp bx,ST_FALL
  jle .fallcap
- mov bx,1536
+ mov bx,ST_FALL
 .fallcap:
  mov [st_vy],bx
  add ax,bx
@@ -274,20 +309,20 @@ st_step:
  sar dx,cl
  cmp bx,0
  jl .head
- add dx,24
+ add dx,ST_PLAYER_FEET
  mov ax,[st_x]
- add ax,3
+ add ax,ST_PLAYER_LEFT
  call st_feet
  jc .floor
  mov ax,[st_x]
- add ax,12
+ add ax,ST_PLAYER_RIGHT
  call st_feet
  jnc .touch
 .floor:
  push ax
  mov ax,dx
  and ax,0fff0h
- sub ax,24
+ sub ax,ST_PLAYER_FEET
  mov cl,8
  shl ax,cl
  mov [st_y],ax
@@ -296,7 +331,7 @@ st_step:
  pop ax
  cmp al,6
  jne .impact
- mov word [st_vy],-2176
+ mov word [st_vy],ST_SPRING
  mov byte [st_ground],0
  mov byte [st_coyote],0
  mov al,1
@@ -307,22 +342,23 @@ st_step:
  sub ax,[st_y]
  cmp ax,-256
  jge .touch
- mov byte [st_land],5
+ mov byte [st_land],ST_ASSIST
  jmp .touch
 .head:
  mov ax,[st_x]
- add ax,3
+ add ax,ST_PLAYER_LEFT
  call st_tile
  call st_solid
  jc .bonk
  mov ax,[st_x]
- add ax,12
+ add ax,ST_PLAYER_RIGHT
  call st_tile
  call st_solid
  jnc .touch
 .bonk:
  cmp al,3
  jne .ceiling
+ call st_consume
  mov byte [bx],2
  mov byte [st_mapdirty],1
  call st_coin
@@ -344,6 +380,7 @@ st_step:
  call st_tile
  cmp al,4
  jne .spike
+ call st_consume
  mov byte [bx],0
  mov byte [st_mapdirty],1
  call st_coin
@@ -355,7 +392,7 @@ st_step:
  jne .flag
  cmp word [st_vy],0
  jl .enemies
- mov word [st_vy],-2176
+ mov word [st_vy],ST_SPRING
  mov byte [st_ground],0
  mov byte [st_coyote],0
  mov al,1
@@ -364,9 +401,16 @@ st_step:
 .flag:
  cmp al,8
  jne .exit
- mov ax,[st_x]
- and ax,0fff0h
+ push bx
+ mov bx,[st_level]
+ shl bx,1
+ mov bx,[st_levels+bx]
+ mov ax,[bx+14]
  mov [st_checkpoint],ax
+ mov ax,[bx+16]
+ mov [st_checkpoint_y],ax
+ pop bx
+ call st_consume
  mov byte [bx],0
  mov byte [st_mapdirty],1
  mov al,5
@@ -376,7 +420,7 @@ st_step:
  cmp al,7
  jne .enemies
  mov byte [st_state],1
- cmp word [st_level],29
+ cmp word [st_level],ST_LEVEL_COUNT-1
  jne .won
  mov byte [st_state],3
 .won:
@@ -410,7 +454,7 @@ st_feet:
  mov ax,[st_oldy]
  mov cl,8
  sar ax,cl
- add ax,24
+ add ax,ST_PLAYER_FEET
  mov bx,dx
  and bx,0fff0h
  cmp ax,bx
@@ -456,134 +500,51 @@ st_camera:
  and ax,0fffch
  mov [st_cam],ax
  ret
-; Enemy record: x word, y word, type byte (0 dead), direction signed byte,
-; age word, reserved word. At most six nearby enemies step/draw in a frame.
-st_enemy_step:
- mov si,st_enemies
- mov cx,[st_ne]
- xor bp,bp
- or cx,cx
- jz .out
-.next:
- cmp byte [si+4],0
- je .skip
- mov ax,[si]
- sub ax,[st_cam]
- cmp ax,-32
- jl .skip
- cmp ax,336
- jg .skip
- cmp bp,6
- jae .skip
- inc bp
- inc word [si+6]
- mov al,[si+5]
- cbw
- add [si],ax
- cmp byte [si+4],3
- je .fly
- ; Walking/hopping: turn at walls and at the edge of support.
- mov ax,[si]
- add ax,8
- cmp byte [si+5],0
- jl .edge
- add ax,8
-.edge:
- mov dx,95
- call st_tile
- call st_solid
- jc .turn
- mov ax,[si]
- add ax,8
- cmp byte [si+5],0
- jl .support
- add ax,8
-.support:
- mov dx,97
- call st_tile
- call st_solid
- jc .height
-.turn:
- neg byte [si+5]
-.height:
- mov word [si+2],72
- cmp byte [si+4],2
- jne .hit
- ; Triangular, bounded hop, six-step warning crouch between jumps.
- mov ax,[si+6]
- and ax,63
- cmp ax,32
- jae .hit
- cmp ax,16
- jbe .hop
- mov bx,32
- sub bx,ax
+%include "actors.inc"
+
+; BX=consumed tile address. One bit per map tile, stable across RLE reloads.
+st_consume:
+ SAVE
  mov ax,bx
-.hop:
- shl ax,1
- sub [si+2],ax
- jmp .hit
-.fly:
- mov ax,[si+6]
- and ax,63
- cmp ax,32
- jbe .wave
- mov bx,64
- sub bx,ax
- mov ax,bx
-.wave:
- add ax,28
- mov [si+2],ax
- ; Flyers patrol a 64-pixel span instead of drifting through the level.
- mov ax,[si+6]
- and ax,63
- jnz .hit
- neg byte [si+5]
-.hit:
- mov ax,[st_x]
- sub ax,[si]
- cmp ax,-12
- jl .skip
- cmp ax,12
- jg .skip
- mov dx,[st_y]
- mov cl,8
- sar dx,cl
- sub dx,[si+2]
- cmp dx,-22
- jl .skip
- cmp dx,18
- jg .skip
- cmp word [st_vy],0
- jle .hurt
- mov ax,[st_oldy]
- mov cl,8
- sar ax,cl
- add ax,24
- mov dx,[si+2]
- add dx,12
- cmp ax,dx
- ja .hurt
- mov byte [si+4],0
- mov word [st_vy],-1152
- add word [st_score],25
- mov byte [st_huddirty],1
- mov al,4
- call st_effect
- jmp .skip
-.hurt:
- cmp byte [st_invuln],0
- jne .skip
- call st_respawn
+ sub ax,st_map
+ mov cx,ax
+ and cx,7
+ shr ax,1
+ shr ax,1
+ shr ax,1
+ mov bx,ax
+ mov al,1
+ shl al,cl
+ or [st_rewards+bx],al
+ RESTORE
  ret
+st_restore_rewards:
+ mov di,st_map
+ xor bp,bp
+ mov dx,[st_width]
+ shl dx,1
+ shl dx,1
+ shl dx,1
+.next:
+ mov bx,bp
+ shr bx,1
+ shr bx,1
+ shr bx,1
+ mov cx,bp
+ and cx,7
+ mov al,1
+ shl al,cl
+ test [st_rewards+bx],al
+ jz .skip
+ cmp byte [di],3
+ jne .empty
+ mov byte [di],2
+ jmp .skip
+.empty:
+ mov byte [di],0
 .skip:
- add si,10
- ; The tile/hit work uses CL. Bound the loop by the end address instead.
- mov ax,si
- sub ax,st_enemies
- xor dx,dx
- mov bx,10
- div bx
- cmp ax,[st_ne]
+ inc di
+ inc bp
+ cmp bp,dx
  jb .next
-.out: ret
+ ret

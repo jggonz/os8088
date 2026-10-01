@@ -14358,3 +14358,64 @@ The package is 38,696 bytes of image plus 14,911 bytes of BSS = 53,607 bytes,
 packed to 17,470 bytes. Results and CGA/VGA raster captures are in
 `build/stickio-proof/`. These are emulator measurements; real XT video bus wait
 states and monitor behavior require a hardware run.
+
+
+### Set 157 — Stickio: P0 foundations and catch-up accounting (§103)
+
+P0 names the unchanged player physics constants, validates version-one authored
+course data, and adds terrain support/falling for ground actors. Retry state now
+records supported checkpoint x/y and preserves consumed tile and enemy rewards.
+Legacy flyers explicitly declare their original 28–60 pixel flight band. The
+six-actor drawing budget is retained; all nearby records simulate and overflow
+origins cannot damage the player. Splitting CGA/Hercules transfer branches removes
+a static stack-checker ambiguity and the second adapter test on each copied row.
+
+The package is **39,479 image + 15,209 BSS = 54,688 bytes**, packed to **18,009
+bytes**. Compared with Set 156 this adds 783 image and 298 BSS bytes. Headroom
+below the checked 61,440-byte boundary is **6,752 bytes**, exceeding the new
+2 KiB reserve. `p0-size-ledger.json` records these counts under
+`build/stickio-proof/`; the dedicated 360 KiB disk uses 19/354 clusters and the
+aggregate games360 uses 275/354. The 720 KiB, 1.2 MiB and 1.44 MiB application
+images build and pass structural verification with the package.
+
+Fresh 4.772727 MHz MartyPC results from `tests/stickio.py --adapter cga|herc|vga`:
+
+| adapter | mean scrolling render across 30 courses, clocks excluding retrace wait | live scripted scroll, presentations/s | sample p99 period, ms | truncated updates / dropped steps | simulation time / guest interval |
+|---|---:|---:|---:|---:|---:|
+| CGA | 209,685 | 22.0 | 69.7 | 0 / 0 | 99.99% |
+| Hercules | 240,126 | 16.4 | 80.6 | 9 / 9 | 96.21% |
+| VGA, CGA mode | 203,139 | 20.4 | 59.0 | 0 / 0 | 99.69% |
+
+The live workload is the same first-course four-pixel camera script as Set 156,
+with ordinary input, physics, sound and retrace waiting active. It targets eighty
+presentations; this run retained 81, spanning eighty periods. The sample p99 is
+the nearest-rank order statistic. Counters are paired with the corresponding
+retained cycle markers, including when the breakpoint callback sees extra hits
+beyond the trace cap. An assertion verifies that processed plus dropped steps
+exactly accounts for the simulation clock consumed over that interval. These
+short scripted samples establish a baseline, not a full-campaign frame rate or
+a claim about the busiest future encounter.
+
+The existing 12 Hz work-cost check passes on all adapters. The proposed later
+release gate is stricter: Hercules lost nine steps, ran simulation 3.79% behind
+guest time, and its sample p99 exceeded the four-step 73.2 ms target. P0 records
+this limitation without changing the four-step catch-up policy. The first-world
+release must address its workload and repeat the sustained-time measurements.
+CGA and VGA lost no steps in this sample; all adapters reported zero actor
+budget overflow during the live trace.
+
+Validation includes 365 per-step host/guest player comparisons per adapter,
+raised/lowered support, wall/edge policies, one-way passage and ceilings, hopper
+launch, authored flyer center, pit retirement, invisible edge/overflow contacts,
+reward retries and explicit checkpoint coordinates. All thirty courses unpack
+with exact sixteen-byte actor reconstruction, and the framebuffer/overlap/old
+frame-before-transfer checks pass. The authored fixture assembles deterministically
+and invalid schema, RLE, arrival, ID and pool cases are rejected. QEMU display and
+speaker/AdLib/Sound Blaster checks also pass. The repository full tier passed
+57 checks with one unavailable C-toolchain check skipped; package/image, registry
+and stack checks were rerun after the final data migration.
+
+These are emulator measurements. Human campaign completion, real XT timing,
+monitor readability and listening remain separate acceptance work. The host
+oracle verifies player step order and rounding; it does not search or certify
+whole-course reachability.

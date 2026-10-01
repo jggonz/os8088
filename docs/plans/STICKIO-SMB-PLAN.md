@@ -1,6 +1,17 @@
 # Stickio feature gaps and Super Mario Bros inspired development plan
 
-Status: proposed work. Reviewed on 2026-09-30 against commit `b83c1dc4` and the supplied `smb.nes`. No gameplay changes are implemented by this document.
+Status: P0 foundations implemented; P1–P3 remain proposed. Original review on 2026-09-30 used commit `b83c1dc4` and the supplied `smb.nes`. The baseline and reference analysis below describe that review; current P0 behavior is documented in SPEC.md section 103 and the Stickio README.
+
+P0 delivers named local constants, an independent integer player model with 365
+per-step guest comparisons, versioned single-room course authoring with a
+deterministic assembly fixture, compiler limits/manifests/previews, terrain-aware
+walkers and hoppers, authored flyer height, explicit checkpoint x/y, and consumed
+tile/enemy-reward ledgers. Existing thirty-course layouts and movement tuning
+remain. Compiler and runtime checks cover support heights, wall/edge policies,
+one-way support, pit retirement, actor overflow and retry payouts. Byte and live
+timing ledgers are generated under `build/stickio-proof/`. Linked rooms, enhanced
+forms, speed-sensitive jumps, shells and first-world redesign remain later waves;
+the foundation traces do not certify course completion or human playability.
 
 Stickio has a useful platforming foundation. Its next improvement should make movement, enemies, rewards, and terrain interact: a stomp creates a shell, the shell clears a dangerous passage, a block grants a new ability, and a secret leads to a different route. Adding those decisions to deliberately composed courses will do more for engagement than increasing course length or enemy counts.
 
@@ -378,7 +389,13 @@ python3 tools/os88index.py --check
 python3 tools/os88test.py full
 ```
 
-Add focused scenarios to the test registry as the corresponding behavior lands. The current standalone Stickio disk target is 360 KiB; validate that image and every larger shipping image containing the package. The code/Makefile inspection excludes Stickio from the aggregate games360 list even though README/SPEC prose currently says it ships there. Resolve that documentation discrepancy during implementation; do not treat a dedicated `stickio360.img` as proof it fits the aggregate disk.
+Add focused scenarios to the test registry as the corresponding behavior lands. The standalone Stickio disk target is 360 KiB; validate that image and every
+larger shipping image containing the package. P0 rechecked the original media
+finding: `APPS_GAMES_360` filters the general **apps360** payload, whereas
+`GAMES360` takes the full `APPS_GAMES` list. Stickio does ship on games360. The
+rebuilt games360 image uses 275/354 clusters; the dedicated stickio360 uses
+19/354. The 720 KiB, 1.2 MiB and 1.44 MiB application images also build with
+Stickio. A dedicated disk alone would not establish aggregate-disk capacity.
 
 ### Human acceptance
 

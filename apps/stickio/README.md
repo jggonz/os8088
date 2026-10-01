@@ -6,8 +6,8 @@ spring pads, spikes, and walking, hopping and flying enemies. Every course has
 a midway checkpoint and an exit flag. Courses grow from 1,024 to 2,560 pixels.
 
 The [Super Mario Bros inspired feature gap analysis and development plan](../../docs/plans/STICKIO-SMB-PLAN.md)
-describes proposed gameplay and course improvements; it is separate from the
-current behavior documented here.
+records the implemented P0 foundations and the remaining gameplay and course
+improvements.
 
 Build and launch:
 
@@ -39,6 +39,14 @@ lives start a session. The flag halfway through a course becomes the respawn
 point. Progress lasts for the current fullscreen session; starting from the
 launcher starts a fresh session at the selected course.
 
+Retries keep score and coins, restore the checkpoint's explicit safe x/y, reset
+enemies, and give ninety simulation steps of protection. Collected coins and
+question-block rewards stay consumed; each enemy's score pays once per course,
+even when the enemy returns on retry. A new course or fullscreen session resets
+the reward ledger. Walkers follow terrain and fall from edges; hoppers turn at
+unsupported edges and jump from the height they stand on. Flyers patrol relative
+to their authored height.
+
 All art, level layouts and music are original. The figure has eight running
 poses with articulated elbows and knees, a weight-bearing idle, ascent, descent
 and a bent-knee landing recoil. Left-facing poses are compiled mirrors. A support foot moves backward through stance while the opposite knee swings
@@ -47,6 +55,16 @@ phase follows distance traveled; runtime code only composites 16x24 bitmaps.
 `make stickio-art` produces a pose sheet, animated gait preview and WAV auditions
 of the six world themes in `build/stickio-art/`. Pillow is needed only for previews.
 The normal build uses Python's standard library and NASM.
+
+P0 authoring keeps the thirty-course campaign and adds a version-one JSON fixture
+at `levels/p0-first-room.json`. It demonstrates a raised walker, lower hopper,
+supported arrivals and named sections. `tools/stickio_courses.py` checks tile
+materials, RLE coverage, stable object/reward IDs, supported protected arrivals,
+and the twenty-record/six-nearby-actor budget. Unsupported room links and later
+mechanics are rejected. The compiler writes `manifest.json`, validated fixture
+data and a collision-layout SVG into `build/stickio-art/`. `const.inc` names the
+unchanged player physics in 8.8 units and simulation steps. This fixture is a
+foundation example; the first-world course redesign remains later work.
 
 The XT path uses CGA 320x200 with only black and white. VGA uses the same CGA
 mode. Hercules doubles both axes to a 640x256 viewport within 720x348. A tile
@@ -92,3 +110,12 @@ five effects on the actual emulated devices and check mute/pause/release. These
 are emulator results; real XT wait states, monitor behavior and listening on real
 sound cards still need a hardware run. The levels use authored obstacle motifs;
 a full human playthrough of all thirty courses remains useful for difficulty tuning.
+
+P0 checks also compare 365 steps against an independent integer player model,
+including reversal, tap/held jumps, buffering/coyote departure, walls, ceilings,
+one-way ledges and springs. The actor/retry matrix checks different terrain
+heights, wall/edge policies, one-way passage, pit retirement, invisible boundary
+contacts, runtime overflow and one-time payouts. Compiler checks include invalid
+content and a deterministic authored-fixture assembly. Size, live frame periods,
+simulation-time ratio and catch-up loss are recorded in `build/stickio-proof/`;
+these traces do not establish whole-course reachability or human playability.
