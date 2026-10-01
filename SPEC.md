@@ -156982,9 +156982,12 @@ friction, running and a post-contact invulnerability interval are local code.
 
 The tile engine caches the identity of each four-pixel column of each visible
 tile. Identical columns survive scrolling, including the whole continuous floor.
-Only changed columns are rebuilt in the background and transferred to the card;
-sprite footprints are restored from that background, then transparent prebuilt
-16x24 poses are composited. No per-pixel runtime drawing, float, guest asset
+Only changed columns are rebuilt in RAM. The existing background buffer also
+holds the finished frame: saved 16x24 footprints undo old sprite masks in reverse
+order, restoring terrain even beneath overlapping sprites. Transparent prebuilt
+poses are then composited in RAM and dirty row spans transferred at vertical
+retrace. Video memory retains the complete old frame during preparation, with
+no visible sprite erase pass. No per-pixel runtime drawing, float, guest asset
 rasterization or full-frame video copies. Art includes eight articulated running
 poses, idle, ascent, descent and landing recoil, mirrored at build time.
 
@@ -156995,12 +156998,14 @@ background stream, with a reusable staging grant. PCM is optional and failed
 claims fall back to the tonal effect. Pause and mute silence owned voices and
 close active PCM streams; bracket exit also releases claims. Never use blocking PCM_EXCL during gameplay.
 
-Enter/F/Alt+Enter opens play; arrows or A/D move, Shift/X runs, Space/Z jumps,
+Enter/F/Alt+Enter opens play; arrows or A/D move, Shift/X runs, Z jumps,
 P pauses, M mutes, R retries at the checkpoint, Esc/Alt+Enter returns to desktop.
 The BIOS queue retains brief command/jump taps between frames; movement reads
 held keys. A 160-word tile-pair cache precedes the byte-column cache, so uniform
-16x16 areas reject together. Sprite erase follows terrain updates to shorten
-the interval before the new pose is written.
+16x16 areas reject together. Terrain dirty spans accumulate once per sixteen-row
+band; sprite footprints expand the row spans and transfer bounds. Buffered input
+rejects BIOS extended-key character bytes 00h/E0h before letter normalization:
+ORing 00h with 20h formerly misread arrow events as the Space jump binding.
 The launcher selects levels with left/right. Completion and game-over require
 Enter; completing course 30 shows the ending. It ships on games360 and the larger
 apps disks; apps360 has no room for it. `make stickio`, `stickiodisk`, `stickio-art`

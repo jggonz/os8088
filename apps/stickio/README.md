@@ -19,7 +19,7 @@ standard games disk and larger application disks.
 | Key | Action |
 |---|---|
 | Left/right or A/D | Move, with acceleration and friction |
-| Space or Z | Jump; release early for a shorter jump |
+| Z | Jump; release early for a shorter jump |
 | Shift or X | Run |
 | P | Pause/resume |
 | M | Toggle sound |
@@ -46,13 +46,14 @@ The normal build uses Python's standard library and NASM.
 
 The XT path uses CGA 320x200 with only black and white. VGA uses the same CGA
 mode. Hercules doubles both axes to a 640x256 viewport within 720x348. A tile
-column cache retains identical ground and sky while scrolling; changed columns
-and sprite footprints are the only video transfers. There is no heap claim for
-graphics, full-frame copy, floating point or runtime pixel rasterizer. The
+column cache retains identical ground and sky while scrolling. Terrain and
+sprites are composed in RAM; saved sprite footprints restore the terrain in
+reverse order, including overlaps. Changed row spans are transferred at vertical
+retrace, so the display never sees a separate sprite erase pass. There is no heap
+claim for graphics, full-frame copy, floating point or runtime pixel rasterizer. The
 54.62 Hz simulation clock is separate from rendering, with at most four owed
 steps per frame. The small kernel uses three simulation steps per ordinary tick.
-Measured live scripted scrolling on the 4.77 MHz emulator is 28.5 fps on CGA/VGA
-and 23.8 fps on Hercules; see PERFORMANCE.md Set 155 for the measurement scope.
+See PERFORMANCE.md Set 156 for measured scrolling rates on the 4.77 MHz emulator.
 Rendering quantizes horizontal positions to four pixels; collisions retain
 fractional movement and the camera can scroll both directions.
 
@@ -79,8 +80,10 @@ python3 tests/stickio.py --sound sb
 
 The guest checks unpack all 30 courses, compare terrain pixels and incremental
 scrolling with a separate renderer, exercise real physics/state transitions and
-keyboard delivery, and record 4.77 MHz frame work costs. Captures and measured
-results go into `build/stickio-proof/`. Sound checks exercise all six themes and
+keyboard delivery (arrows never jump; held and tapped Z do), and record 4.77 MHz
+frame work costs. They also check CGA/VGA's rendered framebuffer and verify that
+video memory retains the old frame until RAM composition is complete. Captures
+and measured results go into `build/stickio-proof/`. Sound checks exercise all six themes and
 five effects on the actual emulated devices and check mute/pause/release. These
 are emulator results; real XT wait states, monitor behavior and listening on real
 sound cards still need a hardware run. The levels use authored obstacle motifs;

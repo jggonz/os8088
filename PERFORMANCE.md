@@ -14311,3 +14311,50 @@ performance, CGA monitor behavior, and subjective difficulty and audio tuning
 still need a hardware run and a human playthrough. Raw results, full game images,
 gait previews and audio captures are generated under `build/stickio-proof/` and
 `build/stickio-art/`.
+
+### Set 156 — Stickio: Z-only input and RAM composition before retrace (§103)
+
+Buffered BIOS arrow events return AL=00h. Letter normalization previously ORed
+that byte with 20h and treated it as the Space jump binding. Extended character
+bytes 00h/E0h are now discarded before normalization, and Z is the sole jump
+binding in both held-key and buffered input.
+
+The former background buffer now holds the complete composited frame. Each
+sprite saves its underlying 96 bytes; restoring those footprints in reverse
+order recovers terrain even where sprites overlap. Terrain updates and the next
+poses are prepared entirely in RAM. Dirty terrain spans accumulate per 16-row
+band, merge with old/new sprite footprints, and transfer as finished row spans
+beginning at vertical retrace. No separate sprite erase reaches VRAM. The
+transfer loop visits only the bounded range of dirty rows. Additional BSS is
+950 bytes; no second framebuffer or graphics heap claim is needed.
+
+`make stickiocheck` and `tests/stickio.py --adapter cga|herc|vga` passed on the
+4.772727 MHz MartyPC machines. Checks cover all thirty courses, incremental
+scrolling, all character poses, six enemies overlapping each other and the
+player, top/bottom clipping, terrain changes beneath saved footprints, physics,
+and desktop restoration. Actual keyboard delivery checks all four arrows and
+repeated make events, Space remaining inert, held/tapped Z jumping, held Z not
+retriggering on landing, and pause/mute edges. Breakpoints before the retrace
+wait and before transfer verify that VRAM still holds the old complete frame.
+CGA/VGA rendered framebuffers also match the RAM pixel oracle. Hercules is
+checked against both duplicated VRAM scanlines; MartyPC's MDA screenshot buffer
+does not rasterize Hercules graphics correctly.
+
+| adapter | mean scroll render across 30 courses (clocks, excluding retrace wait) | live scripted scroll (fps, including wait) |
+|---|---:|---:|
+| CGA | 212,883 | 20.9 |
+| Hercules | 240,491 | 16.8 |
+| VGA, CGA mode | 205,110 | 19.8 |
+
+The live trace still spans eighty presentations with the player advanced four
+pixels at each breakpoint and ordinary input, simulation and sound running.
+Retrace synchronization reduces presentation rates from Set 155's unsynchronized
+loop while removing the visible erase interval. Work measurements subtract the
+measured retrace wait; they are not visible frame rates. Maximum measured
+simulation-plus-render work remains below the 12 Hz budget on all three adapters.
+The 54.62 Hz simulation and bounded catch-up are unchanged.
+
+The package is 38,696 bytes of image plus 14,911 bytes of BSS = 53,607 bytes,
+packed to 17,470 bytes. Results and CGA/VGA raster captures are in
+`build/stickio-proof/`. These are emulator measurements; real XT video bus wait
+states and monitor behavior require a hardware run.

@@ -239,7 +239,6 @@ st_input:
  KEY 1eh,1
  KEY KSC_RIGHT,2
  KEY 20h,2
- KEY KSC_SPACE,4
  KEY 2ch,4
  KEY 2ah,8
  KEY 36h,8
@@ -320,6 +319,11 @@ st_buffered:
  mov bl,128
  jmp .command
 .letter:
+ ; Extended BIOS keys have AL=0 (or E0h), not a printable character.
+ or al,al
+ jz .poll
+ cmp al,0e0h
+ je .poll
  or al,20h
  cmp al,'p'
  jne .mute
@@ -337,8 +341,6 @@ st_buffered:
  jmp .command
 .jump:
  cmp al,'z'
- je .jumpkey
- cmp al,' '
  jne .poll
 .jumpkey:
  test byte [st_keys],4
@@ -446,6 +448,12 @@ VAR st_part,2
 VAR st_rows,128*2
 VAR st_screenrows,200*4
 VAR st_oldboxes,7*4
+VAR st_saved,7*96
+VAR st_savedptr,2
+VAR st_dirty,128*2
+VAR st_dirtytiles,8*2
+VAR st_dirtytop,2
+VAR st_dirtybottom,2
 VAR st_nboxes,2
 VAR st_screenx,2
 VAR st_screeny,2

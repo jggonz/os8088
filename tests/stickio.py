@@ -70,16 +70,25 @@ class Probe:
     def b(self,n):return self.data(n)[0]
     def w(self,n):return struct.unpack('<H',self.data(n,2))[0]
     def put(self,n,value,size=1):self.m.write(self.a(n),int(value).to_bytes(size,'little',signed=value<0))
-    def call(self,n,**args):
+    def call(self,n,observe=None,**args):
         import os88marty as M
         m=self.m;saved=m.regs();regs=('ax','bx','cx','dx','si','di','bp','sp','ss','ds','es','flags')
         m.cmd(cmd='park',cs=self.base>>4,ip=self.sym['st_'+n])
         for r in regs:m.setreg(r,args.get(r,saved[r]))
         sp=(saved['sp']-2)&65535;m.setreg('sp',sp)
         m.write((saved['ss']<<4)+sp,struct.pack('<H',saved['ip']))
-        start=m.status()['cycles'];m.bp_exec((saved['cs']<<4)+saved['ip']);m.run()
-        assert m.wait_stop(30)=='breakpoint',n+' failed to return'
+        start=m.status()['cycles'];ret=(saved['cs']<<4)+saved['ip']
+        marks={self.a(v):v for v in ('present','transfer')} if n=='render' else {}
+        m.bp_exec(ret,*marks);m.run();times={}
+        while True:
+            assert m.wait_stop(30)=='breakpoint',n+' failed to return'
+            st=m.status();addr=(st['cs']<<4)+st['ip']
+            if addr==ret:break
+            mark=marks[addr];times[mark]=st['cycles']
+            if observe:observe(mark)
+            m.run()
         elapsed=m.status()['cycles']-start
+        if times:elapsed-=times['transfer']-times['present']
         for r in regs:m.setreg(r,saved[r])
         return elapsed
 
@@ -93,7 +102,6 @@ def pixelcheck(p,tag):
     for y in range(128):
         row=[ts[mp[((x+cam)//16)*8+y//16]][y%16][(x+cam)%16] for x in range(320)]
         expected.extend(A.pack([row]))
-    assert p.data('bg',80*128)==expected,'terrain background mismatch'
     final=bytearray(expected)
     art=p.data('sprites',30*96)
     objects=[]
@@ -113,15 +121,49 @@ def pixelcheck(p,tag):
         for row in range(24):
             if not 0<=y+row<128:continue
             for col in range(4):final[(y+row)*80+xb+col]&=art[pose*96+row*4+col]
-    if tag=='vga':return  # VGA's debug peek is planar; the QEMU raster gate checks the glass.
+    assert p.data('bg',80*128)==final,'RAM composition mismatch'
+    # Saved footprints must recover pristine terrain even where sprites overlap.
+    restored=bytearray(final)
+    boxes=p.data('oldboxes',p.w('nboxes')*4)
+    saved=p.data('saved',p.w('nboxes')*96)
+    for n in reversed(range(p.w('nboxes'))):
+        x,y=struct.unpack_from('<Hh',boxes,n*4)
+        for row in range(24):
+            if 0<=y+row<128:
+                off=(y+row)*80+x//4
+                restored[off:off+4]=saved[n*96+row*4:n*96+row*4+4]
+    assert restored==expected,'saved terrain restoration mismatch'
+    if tag=='vga':return  # VGA's planar debug peek is covered by rastercheck below.
     vram=p.m.read(0xb0000 if tag=='herc' else 0xb8000,32768 if tag=='herc' else 16384)
     for y in range(128):
         sy=y+32
         off=((sy*2)%4)*8192+((sy*2)//4)*90+5 if tag=='herc' else (sy%2)*8192+(sy//2)*80
-        assert vram[off:off+80]==final[y*80:y*80+80],('composited pixels',tag,p.w('level'),cam,y,vram[off:off+8].hex(),final[y*80:y*80+8].hex())
+        assert vram[off:off+80]==final[y*80:y*80+80],('composited pixels',tag,p.w('level'),cam,y,p.data('dirty',256)[y*2:y*2+2].hex(),vram[off:off+8].hex(),final[y*80:y*80+8].hex(),[(i,a,b) for i,(a,b) in enumerate(zip(vram[off:off+80],final[y*80:y*80+80])) if a!=b])
         if tag=='herc':
             off=((sy*2+1)%4)*8192+((sy*2+1)//4)*90+5
             assert vram[off:off+80]==final[y*80:y*80+80],('second Hercules row',y)
+
+def rastercheck(p,tag,proof):
+    """Check the card's actual display, including VGA's planar CGA emulation."""
+    # MartyPC's MDA framebuffer does not rasterize Hercules graphics; the
+    # independent VRAM oracle above checks both physical Hercules scanlines.
+    if tag=='herc':return
+    import os88marty as M
+    m=p.m;p.put('pause',1);p.put('huddirty',1)
+    m.bp_exec();m.advance(frames=4)
+    w,h,rgb=m.fbuf(0)
+    assert (w,h) in ((640,200),(640,400)),(tag,w,h)
+    bg=p.data('bg',80*128)
+    xscale=2;yscale=h//200
+    for y in range(128):
+        row=bytes(v for b in bg[y*80:y*80+80] for k in (6,4,2,0)
+                  for v in ([255]*6 if (b>>k)&3 else [0]*6))
+        for sy in range((y+32)*yscale,(y+33)*yscale):
+            off=sy*w*3
+            assert rgb[off:off+320*xscale*3]==row,(tag,'display raster',y,sy)
+    M.write_png_rgb(str(proof/(tag+'-raster.png')),w,h,rgb)
+    m.bp_exec(p.a('input'));m.run();assert m.wait_stop(30)=='breakpoint'
+    p.put('pause',0);p.put('huddirty',1)
 
 def guest(tag):
     import os88marty as M,os88ui
@@ -152,6 +194,30 @@ def guest(tag):
                 p.put('land',5 if pose==11 else 0);p.put('vx',448 if pose<8 else 0,2)
                 p.put('gait',pose*3,2);p.put('vy',-100 if pose==9 else 100 if pose==10 else 0,2)
                 p.call('render');pixelcheck(p,tag)
+        # Overlap, clipping, changed tiles beneath old masks, and scroll restoration.
+        p.call('load');p.put('invuln',0);p.put('ne',6,2)
+        for x,y in ((32,72),(36,72),(0,-12),(304,120)):
+            p.put('x',x,2);p.put('y',y*256,2)
+            m.write(p.a('enemies'),b''.join(struct.pack('<HHBbHH',ex,ey,t,1,age,0)
+                    for ex,ey,t,age in ((32,72,1,0),(36,76,2,8),(40,72,3,0),
+                                       (0,0,1,8),(304,126,2,0),(160,60,3,8))))
+            p.call('render');pixelcheck(p,tag)
+        m.write(p.a('map')+2*8+4,b'\x02');p.put('mapdirty',1)
+        p.put('cam',4,2);p.call('render');pixelcheck(p,tag)
+        # The old video frame must survive RAM restoration and composition.
+        p.call('load');p.put('invuln',0);p.put('ne',0,2);p.call('render')
+        video=0xb0000 if tag=='herc' else 0xb8000
+        videosize=32768 if tag=='herc' else 16384
+        before=m.read(video,videosize);p.put('x',36,2)
+        marks=[]
+        def before_transfer(mark):
+            marks.append(mark)
+            assert m.read(video,videosize)==before,'visible erase during RAM composition'
+        p.call('render',observe=before_transfer)
+        assert marks==['present','transfer']
+        assert m.read(video,videosize)!=before,'new pose was not transferred'
+        pixelcheck(p,tag)
+        rastercheck(p,tag,proof)
         p.call('load')
         p.put('invuln',0);p.put('keys',2)
         x0=p.w('x')
@@ -199,10 +265,39 @@ def guest(tag):
         p.put('x',(p.w('width')-4)*16,2);p.call('step');assert p.b('state')==1
         p.put('level',29,2);p.call('load');p.put('x',(p.w('width')-4)*16,2);p.call('step');assert p.b('state')==3
         p.put('level',0,2);p.put('checkpoint',32,2);p.call('load');p.put('invuln',0);p.call('render')
-        # Actual key delivery and a live timed frame stream.
-        m.bp_exec(p.a('input'));m.key('ArrowRight',down=True,up=False);m.run();assert m.wait_stop(30)=='breakpoint'
-        p.call('input');assert p.b('keys')&2
-        m.key('ArrowRight',down=False,up=True)
+        # Actual BIOS key delivery: arrows (AL=0), space, and Z held/tapped.
+        def sample_key(key,down=True,up=True):
+            m.bp_exec(p.a('input'));m.key(key,down=down,up=up);m.run()
+            assert m.wait_stop(30)=='breakpoint'
+            p.call('input')
+        for key,held in (('ArrowRight',2),('ArrowLeft',1),('ArrowUp',0),('ArrowDown',0),('Space',0)):
+            p.call('load');p.put('jumpheld',0)
+            sample_key(key,up=False)
+            assert p.b('keys')&3==held,(key,'movement')
+            assert not p.b('keys')&4 and p.b('jumpbuf')==0,(key,'unexpected jump input')
+            p.call('step')
+            assert p.w('y')==72*256 and p.w('vy')==0,(key,'unexpected jump')
+            # Repeated make events model typematic while movement stays held.
+            sample_key(key,up=False)
+            assert p.b('jumpbuf')==0,(key,'typematic jump')
+            sample_key(key,down=False)
+        for tapped in (False,True):
+            p.call('load');p.put('jumpheld',0)
+            sample_key('KeyZ',up=tapped)
+            assert p.b('keys')&4 or p.b('jumpbuf')>0,'Z press lost'
+            p.call('step')
+            assert p.w('y')<72*256 and p.w('vy')>32768,'Z did not jump'
+            if not tapped:
+                p.put('y',72*256,2);p.put('vy',0,2);p.put('ground',1)
+                p.call('step')
+                assert p.w('y')==72*256,'held Z retriggered on landing'
+                sample_key('KeyZ',down=False)
+        for key,field in (('KeyP','pause'),('KeyM','mute')):
+            sample_key(key,up=False);assert p.b(field)==1,(key,'command edge lost')
+            sample_key(key,down=False)
+            sample_key(key,up=False);assert p.b(field)==0,(key,'command did not toggle back')
+            sample_key(key,down=False)
+        p.call('load');p.put('invuln',0);p.call('render')
         m.bp_exec(p.a('presented'));m.run();assert m.wait_stop(30)=='breakpoint'
         # Capture a complete stable card image, independent of the beam's position.
         vram=m.read(0xb0000 if tag=='herc' else 0xb8000,32768 if tag=='herc' else 16384)

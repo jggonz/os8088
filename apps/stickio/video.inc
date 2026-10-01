@@ -1,4 +1,4 @@
-; Byte-column cache and transparent 16x24 sprites, shared CGA/Hercules raster.
+; Cached terrain and RAM-composited 16x24 sprites, shared CGA/Hercules raster.
 ; CGA: 00 black, 11 white. Hercules: the same bits double logical x;
 ; each logical scanline is duplicated to maintain the character proportions.
 st_video_init:
@@ -85,7 +85,41 @@ st_hercrow:
  ret
 st_render:
 st_render_begin equ $
- ; Build changed terrain before erasing sprites to shorten their invisible time.
+ ; Undo last frame's masks in RAM, in reverse order for overlapping sprites.
+ ; VRAM keeps the complete old frame throughout terrain and pose preparation.
+ push ds
+ pop es
+ mov di,st_dirty
+ mov ax,80
+ mov cx,128
+ rep stosw
+ mov di,st_dirtytiles
+ mov cx,8
+ rep stosw
+ mov word [st_dirtytop],128
+ mov word [st_dirtybottom],0
+ mov cx,[st_nboxes]
+ jcxz .background
+.restore:
+ dec cx
+ mov ax,cx
+ mov bx,96
+ mul bx
+ add ax,st_saved
+ mov [st_savedptr],ax
+ mov si,cx
+ shl si,1
+ shl si,1
+ mov ax,[st_oldboxes+si]
+ mov dx,[st_oldboxes+si+2]
+ mov word [st_sprite],0
+ push cx
+ call st_box
+ pop cx
+ or cx,cx
+ jnz .restore
+.background:
+ mov word [st_nboxes],0
  mov ax,[st_cam]
  cmp ax,[st_drawcam]
  jne .tiles
@@ -139,6 +173,20 @@ st_render_begin equ $
  cmp [st_groupcache+bx],ax
  je .groupskip
  mov [st_groupcache+bx],ax
+ ; Accumulate terrain spans once per 16-row band, rather than marking all
+ ; sixteen scanlines again for every changed tile group.
+ mov bx,[st_crow]
+ shl bx,1
+ mov ax,[st_groupcol]
+ cmp [st_dirtytiles+bx],al
+ jbe .dirtyright
+ mov [st_dirtytiles+bx],al
+.dirtyright:
+ add al,4
+ cmp [st_dirtytiles+bx+1],al
+ jae .dirtydone
+ mov [st_dirtytiles+bx+1],al
+.dirtydone:
  mov ax,[st_groupcol]
  mov [st_col],ax
  mov word [st_part],0
@@ -186,19 +234,9 @@ st_render_begin equ $
  mov di,ax
  shl bp,1
  mov cx,16
- mov es,[st_fsi+FSI_SEG]
 .line:
  lodsb
  mov [di],al
- mov bx,[ds:st_rows+bp]
- add bx,[st_col]
- mov [es:bx],al
- cmp byte [st_herc],0
- je .single
- mov bx,[ds:st_screenrows+400+64+bp]
- add bx,[st_col]
- mov [es:bx],al
-.single:
  add di,80
  add bp,2
  loop .line
@@ -216,23 +254,24 @@ st_render_begin equ $
  cmp word [st_groupcol],80
  jb .group
 .sprites:
- ; Restore footprints from the updated background immediately before drawing.
- mov si,st_oldboxes
- mov cx,[st_nboxes]
- jcxz .restored
-.restore:
- push cx
- push si
- mov ax,[si]
- mov dx,[si+2]
- mov word [st_sprite],0
- call st_box
- pop si
- pop cx
- add si,4
- loop .restore
-.restored:
- mov word [st_nboxes],0
+ xor di,di
+.terrainmarks:
+ xor ax,ax
+ mov al,[st_dirtytiles+di]
+ xor cx,cx
+ mov cl,[st_dirtytiles+di+1]
+ sub cx,ax
+ jbe .bandnext
+ mov dx,di
+ shl dx,1
+ shl dx,1
+ shl dx,1
+ mov bp,16
+ call st_mark
+.bandnext:
+ add di,2
+ cmp di,16
+ jb .terrainmarks
  ; Gait cadence follows actual travel speed, and has an explicit impact pose.
  mov bx,8
  cmp byte [st_ground],0
@@ -312,6 +351,7 @@ st_render_begin equ $
  dec bp
  jnz .enemy
 .hud:
+ call st_present
  cmp byte [st_huddirty],0
  je .out
  call st_hudpaint
@@ -335,6 +375,15 @@ st_drawsprite:
  mov [st_sprite],ax
  pop dx
  pop ax
+ push ax
+ push dx
+ mov ax,[st_nboxes]
+ mov bx,96
+ mul bx
+ add ax,st_saved
+ mov [st_savedptr],ax
+ pop dx
+ pop ax
  mov bx,[st_nboxes]
  shl bx,1
  shl bx,1
@@ -343,16 +392,18 @@ st_drawsprite:
  inc word [st_nboxes]
  call st_box
 .out: ret
-; AX=aligned x, DX=logical y, sprite=0 restore, otherwise AND mask.
+; AX=aligned x, DX=logical y, sprite=0 RAM restore, otherwise save + AND.
 st_box:
- mov [st_screenx],ax
  mov [st_screeny],dx
  shr ax,1
  shr ax,1
  mov [st_col],ax
+ mov cx,4
+ mov bp,24
+ call st_mark
  mov si,[st_sprite]
+ mov bx,[st_savedptr]
  mov cx,24
- mov es,[st_fsi+FSI_SEG]
 .row:
  push cx
  mov ax,[st_screeny]
@@ -365,34 +416,128 @@ st_box:
  add ax,[st_col]
  add ax,st_bg
  mov di,ax
- mov bx,[st_screeny]
- shl bx,1
- mov bp,bx
- mov bx,[st_rows+bx]
- add bx,[st_col]
- mov ax,[di]
- mov dx,[di+2]
- or si,si
- jz .write
- and ax,[si]
- and dx,[si+2]
-.write:
- mov [es:bx],ax
- mov [es:bx+2],dx
- cmp byte [st_herc],0
- je .off
- mov bx,[ds:st_screenrows+400+64+bp]
- add bx,[st_col]
- mov [es:bx],ax
- mov [es:bx+2],dx
-.off:
  or si,si
  jz .restore
- add si,4
+ mov ax,[di]
+ mov dx,[di+2]
+ mov [bx],ax
+ mov [bx+2],dx
+ and ax,[si]
+ and dx,[si+2]
+ jmp .write
 .restore:
+ mov ax,[bx]
+ mov dx,[bx+2]
+.write:
+ mov [di],ax
+ mov [di+2],dx
+.off:
+ add bx,4
+ or si,si
+ jz .next
+ add si,4
+.next:
  inc word [st_screeny]
  pop cx
  loop .row
+ ret
+; Mark a RAM rectangle: AX=byte x, DX=y, CX=byte width, BP=height.
+; One min/max span per row combines terrain and both sprite footprints.
+st_mark:
+ SAVE
+ ; Clip once and bound the transfer loop to rows that actually changed.
+ add bp,dx
+ cmp dx,0
+ jge .bottom
+ xor dx,dx
+.bottom:
+ cmp bp,128
+ jle .height
+ mov bp,128
+.height:
+ cmp dx,bp
+ jge .out
+ cmp dx,[st_dirtytop]
+ jae .max
+ mov [st_dirtytop],dx
+.max:
+ cmp bp,[st_dirtybottom]
+ jbe .span
+ mov [st_dirtybottom],bp
+.span:
+ sub bp,dx
+ add cx,ax
+ mov bx,dx
+ shl bx,1
+.row:
+ cmp [st_dirty+bx],al
+ jbe .right
+ mov [st_dirty+bx],al
+.right:
+ cmp [st_dirty+bx+1],cl
+ jae .next
+ mov [st_dirty+bx+1],cl
+.next:
+ add bx,2
+ dec bp
+ jnz .row
+.out:
+ RESTORE
+ ret
+; Transfer only finished row spans, beginning at retrace. There is no visible
+; erase pass, no extra framebuffer, and no graphics heap allocation.
+st_present:
+ mov al,FSXW_VSYNC
+ call OSAPI_FSX_WAIT
+st_transfer:
+ mov es,[st_fsi+FSI_SEG]
+ mov ax,[st_dirtytop]
+ cmp ax,[st_dirtybottom]
+ jae .out
+ mov bp,ax
+ shl bp,1
+ mov dx,80
+ mul dx
+ add ax,st_bg
+ mov dx,ax
+.row:
+ xor ax,ax
+ mov al,[ds:st_dirty+bp]
+ xor cx,cx
+ mov cl,[ds:st_dirty+bp+1]
+ sub cx,ax
+ jbe .next
+ mov si,dx
+ add si,ax
+ mov di,[ds:st_rows+bp]
+ add di,ax
+ cmp byte [st_herc],0
+ je .copy
+ push si
+ push cx
+.copy:
+ shr cx,1
+ rep movsw
+ adc cx,cx
+ rep movsb
+ cmp byte [st_herc],0
+ je .next
+ pop cx
+ pop si
+ mov di,[ds:st_screenrows+400+64+bp]
+ add di,ax
+ shr cx,1
+ rep movsw
+ adc cx,cx
+ rep movsb
+.next:
+ add dx,80
+ add bp,2
+ mov ax,bp
+ shr ax,1
+ cmp ax,[st_dirtybottom]
+ jb .row
+.out:
  ret
 ; SI=NUL upper-case string, AX=logical x/4, DX=logical screen y.
 st_text:
