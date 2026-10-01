@@ -11490,7 +11490,7 @@ DM_SHIP := $(BUILD)/drmarco.o88 \
 APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
               $(BUILD)/mines.o88 $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88 \
-              $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
+              $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 $(BUILD)/stickio.o88 \
               $(DM_SHIP)
 
 # PIXELSTEIN 3D IS NOT ON apps360.img (SPEC.md 97.9, 24.6.1's dated
@@ -11508,7 +11508,9 @@ APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
 # (2026-09-30): that disk was 354 of 354 clusters when DrMarco stopped being a
 # `local` package, and DrMarco is ~68 of them with its three front screens.
 # games360.img carries it, which is where a 360KB machine finds every game.
-APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88 $(DM_SHIP),$(APPS_GAMES))
+# Stickio (103) adds 18 clusters: apps360 would need 371/354. It ships on
+# games360 and its own disk; larger apps geometries include it.
+APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88 $(BUILD)/stickio.o88 $(DM_SHIP),$(APPS_GAMES))
 
 # The CORE PACKAGES (SPEC.md 24.3) are a SECOND copy on the system disk and
 # never a move, so the two lists above are unchanged and still carry every
@@ -13877,3 +13879,21 @@ xt-excitebike: $(IMG360) $(BUILD)/excitebike360.img
 	$(BOX) -P $(VMXTEXCITEBIKE) -N
 excitebikeload: excitebikedisk $(BUILD)/os8088-360.img
 	python3 tests/excitebike_load.py
+
+# Stickio: original native monochrome XT platformer (SPEC.md 103).
+.PHONY: stickio stickiodisk stickio-art stickiocheck
+$(BUILD)/stickio-art/assets.inc: tools/stickio_assets.py | $(BUILD)
+	python3 tools/stickio_assets.py $(BUILD)/stickio-art
+$(BUILD)/stickio.bin: apps/stickio/stickio.asm apps/stickio/game.inc apps/stickio/video.inc apps/stickio/audio.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc $(BUILD)/stickio-art/assets.inc
+	$(NASM) -f bin -w+error -I apps/ -I apps/stickio/ -I $(BUILD)/stickio-art/ -l $(BUILD)/stickio.lst -o $@ $<
+$(BUILD)/stickio.o88: $(BUILD)/stickio.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+stickio: $(BUILD)/stickio.o88
+$(BUILD)/stickio360.img: $(BUILD)/stickio.o88
+	python3 tools/os88disk.py -o $@ --size 360 $<
+	python3 tools/os88disk.py --verify $@
+stickiodisk: $(BUILD)/stickio360.img
+stickio-art:
+	python3 tools/stickio_assets.py $(BUILD)/stickio-art --preview
+stickiocheck: stickiodisk
+	python3 tests/stickio.py --host

@@ -156961,3 +156961,47 @@ environment that wrote this.
   The banner flash's beam position, the Hercules's monitor and the sound on a real card are what
   docs/FIELD-MACHINES.md would be asked. The fullscreen title and results screens stay the
   text-mode menus of wave 4: this wave gave them no art.
+
+## 103. Stickio — native monochrome platform game
+
+`apps/stickio/`, prefix `st_`, `STICKIO.O88`, one movable package, no kernel
+changes or worker. Original art, courses, melodies and sound effects are compiled
+by `tools/stickio_assets.py`. Thirty finite courses in six five-course worlds,
+with progressively introduced pits, bricks, question blocks, one-way ledges,
+springs, spikes, walking, hopping and flying enemies, a checkpoint and an exit.
+A course is deterministic, RLE compressed at build time and unpacked on entry.
+
+The fullscreen bracket (§53) uses CGA 320x200 on CGA/VGA and a doubled-width
+320x128 game area on Hercules. Only black and white are used. The simulation
+uses a 54.62 Hz rate hook (§53.2.2), with bounded catch-up; the small kernel
+fallback steps three times per ordinary tick under FASTTICK (§53.2.1). Horizontal
+world coordinates are integer pixels plus an 8-bit fraction; vertical position
+and velocity use signed 8.8 fixed point. Axis-separated collisions, swept feet,
+variable jump height, five-step jump buffering and coyote time, acceleration,
+friction, running and a post-contact invulnerability interval are local code.
+
+The tile engine caches the identity of each four-pixel column of each visible
+tile. Identical columns survive scrolling, including the whole continuous floor.
+Only changed columns are rebuilt in the background and transferred to the card;
+sprite footprints are restored from that background, then transparent prebuilt
+16x24 poses are composited. No per-pixel runtime drawing, float, guest asset
+rasterization or full-frame video copies. Art includes eight articulated running
+poses, idle, ascent, descent and landing recoil, mirrored at build time.
+
+Sound uses only §34 APIs: duration-leased PC speaker melody and priority effects;
+OPL2 melody, bass, harmony and a separate effect voice on AdLib/Sound Blaster;
+Sound Blaster additionally plays precomputed 8 kHz PCM effects via a short linear
+background stream, with a reusable staging grant. PCM is optional and failed
+claims fall back to the tonal effect. Pause and mute silence owned voices and
+close active PCM streams; bracket exit also releases claims. Never use blocking PCM_EXCL during gameplay.
+
+Enter/F/Alt+Enter opens play; arrows or A/D move, Shift/X runs, Space/Z jumps,
+P pauses, M mutes, R retries at the checkpoint, Esc/Alt+Enter returns to desktop.
+The BIOS queue retains brief command/jump taps between frames; movement reads
+held keys. A 160-word tile-pair cache precedes the byte-column cache, so uniform
+16x16 areas reject together. Sprite erase follows terrain updates to shorten
+the interval before the new pose is written.
+The launcher selects levels with left/right. Completion and game-over require
+Enter; completing course 30 shows the ending. It ships on games360 and the larger
+apps disks; apps360 has no room for it. `make stickio`, `stickiodisk`, `stickio-art`
+and `stickiocheck` build, package and validate the game.

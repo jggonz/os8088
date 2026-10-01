@@ -352,6 +352,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | SKIES | `apps/skies/csload.asm` | §88 | no |
 | SKIES | `apps/skies/skies.asm` | §88 | yes |
 | SOLITAIRE | `apps/solitaire/solitaire.asm` | §43 | yes |
+| Stickio | `apps/stickio/stickio.asm` | §103 | yes |
 | TAMEGRAM | `apps/tamegram/tamegram.asm` | §49 | yes |
 | TANK | `apps/tank/tank.asm` | §85 | yes |
 | TELNET | `apps/telnet/telnet.asm` | §70 | yes |
@@ -472,6 +473,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 100 | DrMarco (`apps/drmario/drmario.asm`) |
 | 101 | 1942 — native vertical shooter (`apps/1942/`) |
 | 102 | Excitebike — native motocross racer (`apps/excitebike/excitebike.asm`) |
+| 103 | Stickio — native monochrome platform game |
 
 ## docs/
 

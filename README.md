@@ -104,6 +104,9 @@ make excitebikedisk # native XT motocross racer (VGA, CGA and Hercules;
                  # / `excitebikeperf` are its gates
 make xt-excitebike # 86Box: the 4.77MHz VGA XT with the 360KB Excitebike disk
                  # in B: (double-click EXCBIKE.O88)
+make stickiodisk # Stickio: original black and white platform adventure, 30
+                 # courses, articulated stick figure, PC speaker/AdLib/SB sound
+                 # see apps/stickio/README.md
 make paccmandisk # build the PaccMan floppy - a second Pac-Man, in C: the
               # Namco arcade layout from Andre Weissflog's pacman.c, in all
               # four geometries (paccman.img, paccman720/120/360.img)

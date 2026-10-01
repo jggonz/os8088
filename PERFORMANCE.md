@@ -14265,3 +14265,49 @@ different governor history), and the Hercules is 2.5% under it.
 frame), whose remaining ideas are its "what was not done" list (merged boxes, a register-only `xc_drawc`, skip lists) - each a
 rewrite of a pixel-verified path, not a cheap change. No code changed in this audit; the audit added `tests/excitebike_load.py`'s
 timeline.
+
+### Set 155 — Stickio: two terrain caches and a motion-driven human gait (§103)
+
+Stickio uses the CGA 320x200 black/white path on CGA and VGA. Hercules shares
+its two-bit byte patterns, doubling horizontal pixels and duplicating scanlines.
+The viewport is 320x128. A full frame is never copied. The first cache rejects
+an unchanged 16x16 tile pair and phase; the second rejects individual four-pixel
+columns. Uniform sky and soil retain the same keys during a scroll. Moving the
+old sprite restoration after terrain work also shortens the interval in which
+an old figure has been erased and its new pose is not yet drawn.
+
+`tests/stickio.py` runs the actual package on MartyPC's 4.772727 MHz 8088,
+unpacks all thirty courses, checks five camera positions per course and all
+24 human poses, and compares CGA/Hercules card bytes against a separately
+composited source renderer. The VGA debug aperture is planar, so its independent
+card-rendering check is `tests/stickio_display.py` on QEMU: two colours, terrain
+pixels, pause by a brief tap, and desktop restoration. QEMU is not a clock.
+
+Measured after the two-cache change and the queued-command input fix:
+
+| adapter | mean scroll render across 30 courses (clocks) | live scripted scroll (fps) |
+|---|---:|---:|
+| CGA | 187,707 | 28.5 |
+| Hercules | 213,100 | 23.8 |
+| VGA, CGA mode | 184,672 | 28.5 |
+
+The live trace spans eighty presentations with the player advanced four pixels
+at each breakpoint, so a collision cannot turn the measurement into a stationary
+scene. The ordinary simulation, input, sound and drawing loop remains active.
+The render measurement jumps between camera phases on each course; the live
+trace scrolls the first course. Neither is a full human playthrough of thirty
+levels. The fixed simulation clock is 54.62 Hz, with at most four owed steps;
+the smaller kernel fallback is three steps per 18.2 Hz tick. Work-only frame
+numbers exclude waits and must not be presented as visible frame rates.
+
+The single package is 38,403 bytes of image plus 13,961 bytes of BSS = 52,364
+bytes (51.1 KiB), packed to 17,179 bytes. No graphics heap claim, guest rasterizer,
+float, audio mixer or blocking PCM. The SB effects are precomputed 2,048-byte,
+8 kHz samples on a reusable staging grant. Speaker, AdLib and SB tests captured
+all six themes and five effects and checked pause, mute and ownership cleanup.
+
+These are emulator measurements, without real video wait states. Physical XT
+performance, CGA monitor behavior, and subjective difficulty and audio tuning
+still need a hardware run and a human playthrough. Raw results, full game images,
+gait previews and audio captures are generated under `build/stickio-proof/` and
+`build/stickio-art/`.
