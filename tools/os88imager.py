@@ -16,6 +16,7 @@ import stat
 import struct
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import os88disk  # noqa: E402  the --hdd image's own builder: hdd_retarget
@@ -316,7 +317,152 @@ def retargeted(path, geometry):
     return io.BytesIO(data), len(data), hashlib.sha256(data).hexdigest()
 
 
-def write_disk(path, expected, expected_hash, geometry=None):
+class SettingsVolume:
+    """Bounded FAT16 root access; raw-device reads stay sector aligned.
+
+    Use the builder's layout/FAT definitions, but read only metadata and the
+    settings chain, never an entire multi-gigabyte CompactFlash card.
+    """
+    name = b'SYSTEM  CFG'
+
+    def __init__(self, stream, size):
+        self.stream, self.size = stream, size
+        mbr = self.read(0, 512)
+        entries = [mbr[o:o + 16] for o in range(446, 510, 16)
+                   if mbr[o] == 0x80]
+        if mbr[510:] != b'\x55\xaa' or len(entries) != 1 or entries[0][4] != 4:
+            raise ImagerError('Settings require one active type-04 FAT16 partition.')
+        start, count = struct.unpack_from('<II', entries[0], 8)
+        if not start or not count or (start + count) * 512 > size:
+            raise ImagerError('Settings partition is outside the medium.')
+        self.base = start * 512
+        boot = self.read(self.base, 512)
+        bps, spc, rsv, nfats, roots, total = struct.unpack_from('<HBHBHH', boot, 11)
+        fatsz = struct.unpack_from('<H', boot, 22)[0]
+        total = total or struct.unpack_from('<I', boot, 32)[0]
+        if (boot[510:] != b'\x55\xaa' or bps != 512 or
+                spc not in (1, 2, 4, 8, 16, 32, 64, 128) or not rsv or
+                nfats != 2 or not roots or not fatsz or not 0 < total <= count):
+            raise ImagerError('Invalid FAT16 settings volume.')
+        self.lay = lay = os88disk.Layout(spc, rsv, nfats, roots, total, fatsz)
+        if not 4085 <= lay.nclus < 65525 or (lay.nclus + 2) * 2 > fatsz * 512:
+            raise ImagerError('Invalid FAT16 cluster bounds.')
+        self.fat = bytearray(self.read(self.base + lay.fat_lba * 512, fatsz * 512))
+        if self.fat != self.read(self.base + (lay.fat_lba + fatsz) * 512, fatsz * 512):
+            raise ImagerError('Settings volume FAT copies disagree.')
+        self.root = bytearray(self.read(self.base + lay.root_lba * 512, lay.root_secs * 512))
+        self.slot = self.free_slot = None
+        for offset in range(0, roots * 32, 32):
+            entry = self.root[offset:offset + 32]
+            if entry[0] in (0, 0xe5):
+                if self.free_slot is None:
+                    self.free_slot = offset
+                if entry[0] == 0:
+                    break
+            elif entry[:11] == self.name:
+                if entry[11] & 0x18 or self.slot is not None:
+                    raise ImagerError('SYSTEM.CFG is not a unique regular file.')
+                self.slot = offset
+
+    def read(self, offset, size):
+        if offset < 0 or offset + size > self.size:
+            raise ImagerError('Settings read exceeds the medium.')
+        self.stream.seek(offset)
+        data = self.stream.read(size)
+        if len(data) != size:
+            raise ImagerError('Short read while saving settings.')
+        return data
+
+    def chain(self):
+        if self.slot is None:
+            return []
+        cluster = struct.unpack_from('<H', self.root, self.slot + 26)[0]
+        size = struct.unpack_from('<I', self.root, self.slot + 28)[0]
+        need = (size + self.lay.cluster_bytes - 1) // self.lay.cluster_bytes
+        chain, seen = [], set()
+        while cluster and cluster < 0xfff8:
+            if (not 2 <= cluster <= min(self.lay.maxclus, 0xffef) or
+                    cluster in seen or len(chain) >= need):
+                raise ImagerError('Broken SYSTEM.CFG cluster chain.')
+            seen.add(cluster)
+            chain.append(cluster)
+            cluster = os88disk.fat_get(self.fat, False, cluster)
+        if len(chain) != need or (need and cluster < 0xfff8):
+            raise ImagerError('Incomplete SYSTEM.CFG cluster chain.')
+        return chain
+
+    def cluster_offset(self, cluster):
+        return self.base + self.lay.data_lba * 512 + (cluster - 2) * self.lay.cluster_bytes
+
+    def settings(self):
+        if self.slot is None:
+            raise ImagerError('No SYSTEM.CFG found. Choose no to image with default settings.')
+        size = struct.unpack_from('<I', self.root, self.slot + 28)[0]
+        return b''.join(self.read(self.cluster_offset(c), self.lay.cluster_bytes)
+                        for c in self.chain())[:size]
+
+    def restore(self, data):
+        """Only called on the in-memory NEW image, before any device writes."""
+        slot = self.slot if self.slot is not None else self.free_slot
+        if slot is None:
+            raise ImagerError('New image has no root directory slot for SYSTEM.CFG.')
+        for c in self.chain():
+            struct.pack_into('<H', self.fat, c * 2, 0)
+        need = (len(data) + self.lay.cluster_bytes - 1) // self.lay.cluster_bytes
+        free = [c for c in range(2, min(self.lay.maxclus, 0xffef) + 1)
+                if os88disk.fat_get(self.fat, False, c) == 0][:need]
+        if len(free) != need:
+            raise ImagerError('New image has no space for SYSTEM.CFG.')
+        for i, c in enumerate(free):
+            struct.pack_into('<H', self.fat, c * 2, free[i + 1] if i + 1 < need else 0xffff)
+            self.stream.seek(self.cluster_offset(c))
+            chunk = data[i * self.lay.cluster_bytes:(i + 1) * self.lay.cluster_bytes]
+            self.stream.write(chunk.ljust(self.lay.cluster_bytes, b'\0'))
+        was_end = self.root[slot] == 0
+        self.root[slot:slot + 32] = os88disk.dirent(self.name, 0x06, free[0] if free else 0, len(data))
+        # A reused end marker must still terminate the directory after the file.
+        if was_end and slot + 32 < len(self.root):
+            self.root[slot + 32] = 0
+        for i in range(self.lay.nfats):
+            self.stream.seek(self.base + (self.lay.fat_lba + i * self.lay.fatsz) * 512)
+            self.stream.write(self.fat)
+        self.stream.seek(self.base + self.lay.root_lba * 512)
+        self.stream.write(self.root)
+
+
+def preserve_settings(target, target_size, src, size):
+    data = SettingsVolume(target, target_size).settings()
+    # Keep a recovery copy even on a failed write; do not rely on process memory.
+    with tempfile.NamedTemporaryFile(prefix='os8088-SYSTEM-', suffix='.CFG',
+                                     dir='/var/tmp', delete=False) as backup:
+        backup.write(data)
+        backup.flush()
+        os.fsync(backup.fileno())
+        if os.geteuid() == 0 and os.environ.get('SUDO_UID'):
+            os.fchown(backup.fileno(), int(os.environ['SUDO_UID']), -1)
+        print('Settings recovery copy: %s' % backup.name, flush=True)
+    SettingsVolume(src, size).restore(data)
+    src.seek(0)
+    digest = hashlib.sha256(src.getbuffer()).hexdigest()
+    print('Preserving SYSTEM.CFG (%d bytes); SHA-256 as written: %s' % (len(data), digest))
+    return digest
+
+
+def ask_preserve_settings(device):
+    if device['kind'] != 'usb':
+        return False
+    while True:
+        answer = input('Save and restore SYSTEM.CFG settings? [Y/n/q]: ').strip().lower()
+        if answer in ('', 'y', 'yes'):
+            return True
+        if answer in ('n', 'no'):
+            return False
+        if answer == 'q':
+            return 'q'
+        print('Choose yes, no (fresh/default settings), or q to cancel.')
+
+
+def write_disk(path, expected, expected_hash, geometry=None, preserve=False):
     revalidate(expected)
     image = {'kind': image_kind(path), 'size': path.stat().st_size}
     if not compatible(expected, image) or digest_file(path) != expected_hash:
@@ -336,6 +482,9 @@ def write_disk(path, expected, expected_hash, geometry=None):
     with os.fdopen(fd, 'r+b', buffering=0) as target:
         if not stat.S_ISCHR(os.fstat(target.fileno()).st_mode):
             raise ImagerError('Target is not a raw disk device.')
+        if preserve:
+            write_hash = preserve_settings(target, expected['size'], src, size)
+        target.seek(0)
         stream_and_verify(src, target, size, write_hash)
     command(['diskutil', 'eject', '/dev/' + expected['id']])
     print('Ejected. The medium is ready to remove.')
@@ -371,7 +520,14 @@ def perform(device, image):
         _, _, write_hash = retargeted(path, geometry)
         print('Written as %d heads x %d sectors per track (the file is unchanged).\n'
               'SHA-256 as written: %s' % (geometry[0], geometry[1], write_hash))
-    print('This writes the selected medium and destroys its existing contents.')
+    preserve = ask_preserve_settings(device)
+    if preserve == 'q':
+        print('Cancelled. Nothing was written.')
+        return
+    if preserve:
+        print('This replaces the selected medium, preserving only SYSTEM.CFG.')
+    else:
+        print('This writes the selected medium and destroys its existing contents.')
     if device['kind'] == 'cd':
         print('Insert a blank writable CD.')
     if input('Type %s to write, anything else cancels: ' % device['id']).strip() != device['id']:
@@ -386,6 +542,8 @@ def perform(device, image):
         args = ['sudo', sys.executable, str(Path(__file__).resolve()),
                 '--_write', str(path), json.dumps(device), expected_hash,
                 '%d/%d' % geometry if geometry else '-']
+        if preserve:
+            args.append('--_preserve-settings')
     if subprocess.call(args):
         raise ImagerError('Write or verification failed. The medium may be incomplete; rescan to retry.')
     print('Media creation completed.')
@@ -397,6 +555,7 @@ def main(argv=None):
     parser.add_argument('--images', type=Path, default=ROOT / 'build',
                         help='search this directory recursively (default: build/)')
     parser.add_argument('--_write', nargs=4, help=argparse.SUPPRESS)
+    parser.add_argument('--_preserve-settings', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if sys.platform != 'darwin':
         raise ImagerError('Device detection and writing currently require macOS.')
@@ -407,7 +566,7 @@ def main(argv=None):
         else:
             _, heads, spt = os88disk.parse_geometry(geometry)
             geometry = (heads, spt)
-        write_disk(Path(path), json.loads(device), digest, geometry)
+        write_disk(Path(path), json.loads(device), digest, geometry, args._preserve_settings)
         return 0
     print('os8088 imager')
     while True:
