@@ -233,7 +233,7 @@ ITEMS = [
     ("all", "Everything set, 1.44MB", False,
      "Both word processors, the story reader, the CP/M emulator, the "
      "Commodore 64, the Apple II Plus, the Weave programs and their editor, "
-     "and everything on the software disk.",
+     "the 1942 air-combat game, and everything on the software disk.",
      [("@apps-all.list", "1.44MB", "")]),
     ("all", "Everything set, 1.2MB", False,
      "The same set on 1.2MB disks.",
@@ -280,6 +280,13 @@ ITEMS = [
      "to play at full speed.",
      [("paccman.img", "1.44MB", ""), ("paccman120.img", "1.2MB", ""),
       ("paccman720.img", "720KB", ""), ("paccman360.img", "360KB", "")]),
+    ("progs", "1942", False,
+     "An air-combat game after the 1942 arcade game, written in assembly "
+     "with original artwork: 32 stages, one or two players, and music on an "
+     "AdLib or Sound Blaster. It needs a VGA or CGA card. The "
+     "1.44MB disk also carries sampled gunfire and explosions for a Sound "
+     "Blaster; the 360KB disk leaves them out for room.",
+     [("1942.img", "1.44MB", ""), ("1942-360.img", "360KB", "")]),
     ("progs", "Weave", False,
      "Web-style programs -- markup, script and formulas -- compiled into one "
      "bundle file and run natively. Carries the runtime, three demo "
