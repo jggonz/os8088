@@ -196,8 +196,10 @@ the shipped probe code under QEMU BIOS for guarded
 286-class/486 paths, Pentium/Pentium III, E820 RAM and TSC measurement. Cyrix
 and Transmeta cases use CPUID vendor overrides, not those physical processors.
 
-`--nec` executes the shipped early CPU probe twice on MartyPC's V20 with a
-minimal real PIT/IRQ0 harness. The pinned emulator's V20 configuration stalls
-in BIOS POST before the os8088 desktop; this isolated test validates NEC
-identity and restoration of self-modified code, not a native V20 OS run or
-NEC cycle timing. The V20 profile is for probe testing, never calibration.
+`--nec` executes the shipped early CPU probe twice on MartyPC's V20 with an
+independent real PIT/IRQ0 harness. The native V20 row also boots the desktop,
+runs and saves REDLINE, repeats the CPU probe and exercises every view and
+button gesture. Main's MartyPC mode-flag protection patch makes that boot
+possible. These checks validate NEC identity and restoration of self-modified
+code; MartyPC's V20 timings are not a cycle-accurate NEC reference. The V20
+profile is for validation, never calibration.

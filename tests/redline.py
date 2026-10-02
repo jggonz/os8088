@@ -65,7 +65,12 @@ def invoke(p, name, **args):
     sentinel = p.base + p.sym['rl_key']
     m.cmd(cmd='park', cs=p.base >> 4, ip=p.sym[name])
     for r in regs:
-        m.setreg(r, args.get(r, (p.base >> 4) if r == 'ds' else old[r]))
+        value = args.get(r, (p.base >> 4) if r == 'ds' else old[r])
+        if r == 'flags':
+            # Debugger writes bypass POPF's V20 native-mode protection.
+            # Preserve MD when requesting interrupt flags for a probe.
+            value = (value & 0x7FFF) | (old[r] & 0x8000)
+        m.setreg(r, value)
     sp = (old['sp'] - 2) & 0xFFFF
     m.setreg('sp', sp)
     m.write((old['ss'] << 4) + sp, struct.pack('<H', p.sym['rl_key']))
@@ -324,9 +329,8 @@ fail:
 
 
 def nec():
-    """Exercise the shipped early probe without depending on NEC BIOS POST.
+    """Exercise the shipped early probe with an independent IRQ0 harness.
 
-    The pinned Marty V20 machine stalls in POST, before os8088 is loaded.
     Install a minimal IRQ0 handler, a real PIT/PIC and the CPU_INFO tier cell.
     Both calls execute the same instructions as the package, with timer IRQs.
     """

@@ -2546,8 +2546,13 @@ SOAK = [
         needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
     Row("redlinev20", "soak", py("tests/redline.py", "--nec"), 10.0,
         "REDLINE V20 shipped detection with real PIT IRQ0 and repeated queue probe; "
-        "isolated from the pinned emulator's stalled V20 BIOS POST (SPEC.md 103.2)",
+        "independent IRQ harness (SPEC.md 103.2)",
         needs=("marty", "nasm"), wants=("build/os8088-360.img",)),
+    Row("redlinev20native", "soak", py("tests/redline.py", "--machine", "os8088_redline_v20_gla"), 60.0,
+        "REDLINE V20 desktop: NEC identity, timings, repeated probe, all views, "
+        "release/cancel buttons, report save and Quit; never reference calibration "
+        "(SPEC.md 103)",
+        needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
     Row("excitebikefront", "soak", py("tests/excitebike_front.py", "--arm", "all"), 90.0,
         "EXCITEBIKE front end on MartyPC (SPEC.md 102.6), VGA, CGA and Hercules: "
         "the desktop splash and help pixel for pixel against the compiler's "
