@@ -166,9 +166,13 @@ FIXTURE = {
         {"stem": "MINES", "title": "Minesweeper", "kind": "game", "tier": 0,
          "files": ["mines.o88"],
          "description": "The 1990 game, in assembly."},
+        # ELEVEN SIDECARS, which is more than the eight WIRE_SCMAX was until
+        # v1.0.20261002.1 (SPEC.md 92.2) - so the Add chain is walked past the
+        # old bound on the machine and not only in the host's packer.
         {"stem": "BIGONE", "title": "Needs a disk", "kind": 0, "tier": 3,
-         "files": ["hello.o88", "mines.o88"],
-         "description": "Two files, so Load Program refuses it."},
+         "files": ["hello.o88", "mines.o88"] + ["wsc%02d.dat" % j
+                                               for j in range(1, 11)],
+         "description": "Twelve files, so Load Program refuses it."},
         # THE ARCHIVE (SPEC.md 92.13). Tier 0 so the 8088/8086 filter keeps
         # it: assertion 4 counts what that filter shows, and a tier-3 archive
         # would leave the two assertions reading each other's fixture.
@@ -186,6 +190,8 @@ ARC_PROG = "MSEG.O88"                   # ...and the entry that carries
                                         # about (see fixture_tree)
 SIDECAR = "MINES.O88"                   # what BIGONE's second file is called
                                         # in /wire/pkg/ and on the disk
+XSIDE = {"WSC%02d.DAT" % j: (b"sidecar %02d " % j) * (20 + 7 * j)
+         for j in range(1, 11)}         # BIGONE's other ten, distinct bytes
 PICX, PICY = 208, 21                    # WR_PICX and the picture's y in the
                                         # detail pane, both content-relative
 
@@ -773,6 +779,8 @@ def main():
                  "- without that the dword Content-Length and the 32-bit "
                  "byte count are never read with a high word in them"
                  % len(wpk))
+    for name, data in XSIDE.items():    # the packer sizes them out of build/
+        open(os.path.join("build", name.lower()), "wb").write(data)
     try:
         cat = os88wire.pack(json.load(open(man)), "build", pics)
     except os88wire.Refused as e:
@@ -783,6 +791,7 @@ def main():
               "/wire/pkg/HELLO.O88": hello,
               "/wire/pkg/MINES.O88": mines,
               "/wire/pkg/BIGONE.O88": hello,
+              **{"/wire/pkg/" + n: d for n, d in XSIDE.items()},
               "/wire/pkg/%s.WPK" % ARC_STEM: wpk,
               "/wire/pic/HELLO.PIC": pic}
     srv = Server(served)
@@ -1492,7 +1501,8 @@ def main():
     # Wire owes is that both files went to the SAME folder under the right
     # names with the right bytes.
     where = None
-    for name, want in (("BIGONE.O88", hello), (SIDECAR, mines)):
+    for name, want in [("BIGONE.O88", hello), (SIDECAR, mines)] + \
+            sorted(XSIDE.items()):
         hit = [k for k in got if k.split("/")[-1] == name]
         if not hit:
             no("%s is nowhere on B: - Add to Disk did not write it" % name)

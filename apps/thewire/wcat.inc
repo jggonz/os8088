@@ -104,7 +104,8 @@ WIRE_NMAX   equ 255             ; the format's ceiling. WIRE_CATMAX is the
                                 ; with no sidecar table at all - and it is
                                 ; what keeps WIRE_HDR + WIRE_REC*i inside 16
                                 ; bits, which the reader's addressing needs
-WIRE_SCMAX  equ 8               ; sidecars per record
+WIRE_SCMAX  equ 32              ; sidecars per record (8 before SPEC.md 92.2's
+                                ; v1.0.20261002.1 note; nothing is sized by it)
 
 ; --- the picture (SPEC.md 92.3) ----------------------------------------------
 WIRE_PICW   equ 128

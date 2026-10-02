@@ -73,6 +73,7 @@ S_MAGIC = b"WIRE"
 S_VER = 1
 S_CATMAX = 16384
 S_FILEMAX = 64512
+S_SCMAX = 32                            # sidecars a record (8 before v1.0.20261002.1)
 S_DESCN, S_DESCW = 5, 28
 S_WF_DISK, S_WF_PIC, S_WF_NEW, S_WF_FLOPPY, S_WF_ARC = 1, 2, 4, 8, 16
 S_ARCMAX = 0x100000                 # WIRE_ARCMAX, the archive's own ceiling
@@ -256,7 +257,7 @@ def read_catalog(blob):
                 "that is not an archive" % r["stem"]
         assert blob[o + 252:o + 256] == b"\0" * 4, "%s: +252" % r["stem"]
         assert r["tier"] <= 3, "%s: tier %d" % (r["stem"], r["tier"])
-        assert r["nside"] <= 8, "%s: %d sidecars" % (r["stem"], r["nside"])
+        assert r["nside"] <= S_SCMAX, "%s: %d sidecars" % (r["stem"], r["nside"])
         assert r["side0"] + r["nside"] <= scn, "%s: sidecar range" % r["stem"]
         # An ARCHIVE is the exception: WC_SIZE is the .WPK on the wire and
         # WC_TOTAL what it unpacks to, and a tree of small files carries 96
@@ -477,6 +478,44 @@ def refusals(tmp):
     check(r.returncode != 0, "--pack refuses a file that is not an .o88",
           "the icon and the header flags are read out of it, and OSAPI_PKG_START "
           "would answer LD_EBAD after a whole transfer had been spent",
+          got=(r.stdout + r.stderr).strip() or "exit 0")
+
+    # WIRE_SCMAX: the limit is accepted AT the limit and refused one past it.
+    # It was 8 until 1942's twelve sidecars moved it (SPEC.md 92.2), and a
+    # limit tested only by a record well under it is a limit nobody has seen.
+    open(os.path.join(tmp, "many.o88"), "wb").write(
+        open(os.path.join(BUILD, "hello.o88"), "rb").read())
+    def many(n):
+        names = []
+        for j in range(n):
+            nm = "side%02d.dat" % j
+            open(os.path.join(tmp, nm), "wb").write(b"x" * (j + 1))
+            names.append(nm)
+        m = json.loads(json.dumps(FIXTURE))
+        m["entries"] = [{"stem": "MANY", "title": "Many", "tier": 0,
+                         "files": ["many.o88"] + names,
+                         "description": "Sidecars."}]
+        man = os.path.join(tmp, "many.json")
+        cat = os.path.join(tmp, "many.bin")
+        json.dump(m, open(man, "w"))
+        return run("--pack", man, "--pkgdir", tmp, "--out", cat), cat
+    r, cat = many(S_SCMAX)
+    check(r.returncode == 0, "--pack accepts WIRE_SCMAX (%d) sidecars" % S_SCMAX,
+          "the limit is inclusive, and a record at it is what the site may "
+          "publish", got=(r.stdout + r.stderr).strip(), want="exit 0")
+    if r.returncode == 0:
+        rec = read_catalog(open(cat, "rb").read())[1][0]
+        check(rec["nside"] == S_SCMAX, "...and the record says so",
+              "WC_NSIDE is the count the machine's Add chain walks",
+              got=rec["nside"], want=S_SCMAX)
+        v = run("--verify", cat, "--pkgdir", tmp)
+        check(v.returncode == 0, "...and --verify accepts it",
+              "the reader's bound is the writer's",
+              got=(v.stdout + v.stderr).strip(), want="exit 0")
+    r, _ = many(S_SCMAX + 1)
+    check(r.returncode != 0, "--pack refuses WIRE_SCMAX + 1 sidecars",
+          "wr_catck refuses the whole catalog over one such record, so the "
+          "writer has to refuse it first, naming the entry",
           got=(r.stdout + r.stderr).strip() or "exit 0")
 
 

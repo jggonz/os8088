@@ -133333,7 +133333,7 @@ RECORD i, 256 bytes at 32 + 256*i
                             reads the same catalog, greys both buttons with
                             the floppy reason, and never fetches a .O88 that
                             is not there
- +35  1   sidecar count n, 0..8
+ +35  1   sidecar count n, 0..WIRE_SCMAX = 32
  +36  2   first sidecar index into the table (meaningless when n = 0)
  +38  4   size of <STEM>.O88 in bytes - or of <STEM>.WPK, the bytes the
           transfer will carry (wr_hdrdone checks Content-Length against it).
@@ -133396,7 +133396,15 @@ three packages that have no icon of their own.
 known); the magic, the version and the two size fields exactly as above;
 `N >= 1`; the record array and the sidecar table both inside the file; every
 sidecar index in range; every file size `<= WIRE_FILEMAX` = 64,512 (63 KB —
-one claim, one `OSAPI_FILE_WRITE`). A larger file gets `WF_FLOPPY` from the
+one claim, one `OSAPI_FILE_WRITE`). At most `WIRE_SCMAX` = **32** sidecars a record.
+It was **8** until v1.0.20261002.1, and nothing on the machine was sized by it:
+the Add chain fetches one file at a time into one claim, and the only use is
+the compare in `wr_catck`, so raising it cost no byte. 1942 (SPEC.md 101) is
+twelve sidecars, which is what moved it. **A reader from before that release
+refuses the WHOLE catalog** once one record carries more than eight, because
+the compare sits in the catalog check rather than the Add — acceptable at that
+release only because SPEC.md 20's package format 8 had already left those
+machines unable to load anything the catalog serves. A larger file gets `WF_FLOPPY` from the
 writer, which is the site's job and the verifier's check.
 
 **A `WF_ARC` RECORD IS CHECKED BY DIFFERENT RULES AND THEY ARE NOT A

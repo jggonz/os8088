@@ -102,7 +102,7 @@ WIRE_VER = 1
 WIRE_CATMAX = 16384
 WIRE_FILEMAX = 64512
 WIRE_NMAX = 255
-WIRE_SCMAX = 8
+WIRE_SCMAX = 32
 # 0x100000, one megabyte: the reader's sanity bound on an ARCHIVE record's
 # WC_SIZE. WIRE_FILEMAX is the wrong bound there and refusing on it is what
 # the machine did to the site's real RUNCPM record at 231,463 bytes - an
