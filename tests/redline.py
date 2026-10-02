@@ -44,13 +44,27 @@ def host():
     ref = json.loads((ROOT / 'apps/redline/reference.json').read_text())
     inc = (ROOT / 'apps/redline/baseline.inc').read_text()
     counts = [int(x) for x in re.findall(r'^\s+dd (\d+)', inc, re.M)]
-    assert len(counts) == 12 and counts == ref['workload_counts']
+    assert len(counts) == R.ROWS and counts == ref['workload_counts']
     assert all(0 < c < 0xFFFFFFFF for c in counts)
     sym = R.symbols()
     import hashlib
     image = Path(at(str(ROOT / 'build/redline.bin'))).read_bytes()
     assert hashlib.sha256(image[sym['rl_alu']:sym['rl_detect']]).hexdigest() == ref['workload_code_sha256'], 'baseline does not match workload code; recalibrate'
     assert len(ref['trials']) == 3
+    for adapter in ('cga', 'herc', 'vga'):
+        suffix = '' if adapter == 'cga' else '-' + adapter
+        record = json.loads((ROOT / ('apps/redline/reference%s.json' % suffix)).read_text())
+        table = (ROOT / ('apps/redline/baseline%s.inc' % suffix)).read_text()
+        expected = record['workload_counts'] if adapter == 'cga' else record['workload_counts'][6:]
+        assert [int(x) for x in re.findall(r'^\s+dd (\d+)', table, re.M)] == expected
+        assert all(0 < n <= 0xFFFFFFFF for n in record['workload_counts'])
+        assert record['workload_code_sha256'] == ref['workload_code_sha256']
+        assert record['adapter'] == adapter and record['runs_per_trial'] == R.RUNS
+        assert len(record['sample_flags']) == 3
+        assert all(len(x) == R.ROWS*R.RUNS and set(x) <= set('PTw!') for x in record['sample_flags'])
+        for mean, samples in zip(record['trials'], record['sample_runs']):
+            assert mean == [sum(values)//R.RUNS for values in zip(*samples)]
+        assert record['workload_counts'] == [sorted(x)[1] for x in zip(*record['trials'])]
     assert ref['cpu'] == 'Intel8088' and not ref['turbo']
     assert abs(ref['clock_hz'] - 4772727.272727273) < .01
     print('REDLINE four media geometries and measured reference: OK', flush=True)
@@ -96,21 +110,36 @@ def native(machine):
                      apps=str(ROOT / 'build/redline360.img'), machine=machine) as ui:
         ui.open_drive('B')
         ui.open('REDLINE.O88')
+        original_frame = (ui.window('REDLINE').w, ui.window('REDLINE').h)
         p = R.Probe(ui, sym)
         R.key(ui, 'KeyR')
+        R.wait(ui, lambda:p.data('rl_busy') == b'\1', 'run has no visible progress state')
+        R.wait(ui, lambda:any(w.title == 'REDLINE Graphics Lab' for w in ui.windows()),
+               'graphics lab did not open')
         R.wait(ui, lambda: p.word('rl_runs') == 1, 'native run did not finish')
         counts = p.counts()
         assert all(0 < n < 0xFFFFFFFF for n in counts), counts
         assert p.data('bl_full') == b'\0'
         assert p.word('rl_convkb') == 640
         assert p.data('ru_view') == b'\0'
-        measured_indices = struct.unpack('<12I', p.data('ru_scores', 48))
+        assert list(counts) == [sum(x)//R.RUNS for x in zip(*p.samples())]
+        assert p.word('rl_pass') == R.RUNS and p.data('rl_busy') == b'\0'
+        assert (ui.window('REDLINE').w, ui.window('REDLINE').h) == original_frame
+        assert p.word('rl_labwin') == 0
+        assert not any(w.title == 'REDLINE Graphics Lab' for w in ui.windows())
+        measured_indices = struct.unpack('<%dI' % R.ROWS, p.data('ru_scores', R.ROWS*4))
         reference = json.loads((ROOT/'apps/redline/reference.json').read_text())
-        expected_indices = tuple(min(b*1000//n, 0xFFFFFFFF) for b,n in
-                                 zip(reference['workload_counts'], counts))
-        assert measured_indices == expected_indices
+        adapter = {0:'vga', 1:'herc', 2:'cga'}[p.word('rl_video') & 255]
+        gfx_suffix = '' if adapter == 'cga' else '-' + adapter
+        graphics_reference = json.loads((ROOT/('apps/redline/reference%s.json' % gfx_suffix)).read_text())
+        bases = reference['workload_counts'][:6] + graphics_reference['workload_counts'][6:]
+        expected_indices = tuple(min(b*1000//n, 0xFFFFFFFF) for b,n in zip(bases, counts))
+        assert measured_indices == expected_indices, (measured_indices, expected_indices, bases, counts)
         overall = struct.unpack('<I', p.data('ru_overall', 4))[0]
         assert overall == sum(expected_indices[:6])//6
+        scale = struct.unpack('<I', p.data('ru_scale', 4))[0]
+        assert scale >= 100000 and scale > max(expected_indices)
+        R.wait(ui, lambda:p.word('ru_anim') == 12, 'completion animation did not finish')
         ptr = p.word('rl_cpuname')
         cpu = ui.m.read(p.base + ptr, 32).split(b'\0')[0].decode('ascii')
         if 'v20' in machine:
@@ -133,9 +162,35 @@ def native(machine):
             got = (ans['dx'] << 16) | ans['ax']
             expect = min(num // den, 0xFFFFFFFF) if den else 0xFFFFFFFF
             assert got == expect, (num, den, got, expect)
+        # Exercise real 8088 scale/format code with faster machines and 32-bit
+        # boundaries. Restore measured scores before normal UI checks.
+        original_scores = p.data('ru_scores', R.ROWS*4)
+        for value, ceiling in [(0,100000), (99999,100000), (100000,200000),
+                               (250000,400000), (123456700,204800000),
+                               (0xFFFFFFFF,0xFFFFFFFF)]:
+            ui.m.write(p.addr('ru_scores'), struct.pack('<%dI' % R.ROWS, *([value]*R.ROWS)))
+            invoke(p, 'ru_scale_compute')
+            assert struct.unpack('<I', p.data('ru_scale',4))[0] == ceiling
+        for value, text in [(0,'n/a'), (999,'0.99x'), (1007,'1.00x'), (1317,'1.31x'),
+                            (1000,'1.00x'), (100000,'100.00x'),
+                            (123456780,'123456.78x'), (0xFFFFFFFF,'4294967.29x')]:
+            regs = invoke(p,'ru_ratio',ax=value&65535,dx=value>>16)
+            got = ui.m.read(p.base+regs['si'],16).split(b'\0')[0].decode('ascii')
+            assert got == text, (value, text, got, regs['si'])
+        ui.m.write(p.addr('ru_scores'), original_scores)
+        invoke(p,'ru_scale_compute')
+        # Unknown geometry never borrows a VGA graphics reference.
+        old_h = p.word('rl_vh')
+        ui.m.write(p.addr('rl_vh'), struct.pack('<H',123))
+        invoke(p,'rl_select_reference')
+        assert p.word('rl_gfxbase') == 0
+        ui.m.write(p.addr('rl_vh'),struct.pack('<H',old_h))
+        invoke(p,'rl_select_reference')
+        assert p.word('rl_gfxbase') != 0
         generation = p.word('rl_runs')
         R.key(ui, 'KeyR')
         R.wait(ui, lambda: p.word('rl_runs') != generation, 'rerun did not finish')
+        R.wait(ui, lambda:p.word('ru_anim') == 12, 'rerun animation did not finish')
         R.key(ui, 'KeyS')
         R.wait(ui, lambda: p.data('bl_saved') == b'\1', 'save did not finish')
         ui.m.advance(frames=60)
@@ -144,15 +199,20 @@ def native(machine):
         assert cpu in report and 'BIOS conventional KB           640' in report
         assert 'MUL 64 fixed operands' in report and 'Packed 4bpp blit 64x32' in report
         assert 'REPORT TRUNCATED' not in report
-        if p.word('rl_video') & 255 == 2:
-            assert 'Graphics index unavailable' not in report
-            indices = [int(x) for x in re.findall(r'^.*?\s+(\d+)\r?$',
-                       report.split('PC index:')[1], re.M)]
-            assert len(indices) == 12, indices
-            if 'v20' not in machine:
-                assert all(900 < n < 1100 for n in indices), indices
-        else:
-            assert 'Graphics index unavailable' in report
+        assert 'Graphics index unavailable' not in report
+        assert 'Graphics reference' in report
+        assert 'Arithmetic mean of 3 complete runs' in report
+        assert 'L3 Projected wireframe cube' in report and 'L3 Projected shaded cube' in report
+        assert 'L3 Window resize/repaint' in report
+        assert list(p.counts()) == [sum(x)//R.RUNS for x in zip(*p.samples())]
+        flags = p.data('rl_sampleflags', R.ROWS*R.RUNS).decode('ascii')
+        assert all(flags[i*R.ROWS+23] == 'T' for i in range(R.RUNS)), flags
+        indices = [int(x) for x in re.findall(r'^.*?\s+(\d+)\r?$',
+                   report.split('Bar scale maximum (x)')[1], re.M)][1:]
+        assert len(indices) == R.ROWS, indices
+        assert indices == list(struct.unpack('<%dI' % R.ROWS, p.data('ru_scores', R.ROWS*4)))
+        if machine in ('os8088_redline_pc_gla','os8088_redline_herc_gla','os8088_redline_vga_gla'):
+            assert all(800 < n < 1200 for n in indices), indices
         def screenshot(name):
             ui.m.advance(frames=60)
             if p.word('rl_video') & 255 == 0:
@@ -164,6 +224,17 @@ def native(machine):
                 M.write_png(str(out/name), w, h, rows)
 
         screenshot('summary.png')
+        if adapter == 'vga':
+            assert p.word('ru_rows') == R.ROWS, 'VGA Summary must fit every workload'
+            # Inspect actual bar pixels, not the palette chosen in source.
+            w,h,pixels = ui.m.fbuf()
+            x = p.word('ru_x')+153
+            y = p.word('ru_y')+p.word('ru_lower')+p.word('ru_offset')+1
+            def rgb(px,py): return tuple(pixels[(py*w+px)*3:(py*w+px)*3+3])
+            colors = [rgb(x,y+i*p.word('ru_pitch')) for i in range(7)]
+            assert colors[0][2] > colors[0][0] and colors[0][2] > colors[0][1], colors
+            assert colors[4][1] > colors[4][0] and colors[4][1] > colors[4][2], colors
+            assert colors[6][0] > colors[6][1] and colors[6][0] > colors[6][2], colors
         # Detail acts on release. A held press cannot change views, and
         # dragging off it must cancel rather than leave an inverted button.
         rects = struct.unpack('<24H', p.data('ru_rects', 48))
@@ -193,7 +264,7 @@ def native(machine):
         R.key(ui, 'KeyU')
         R.wait(ui, lambda:p.data('ru_view') == b'\0', 'Summary key did not switch view')
         R.key(ui, 'PageDown')
-        if p.word('ru_rows') < 12:
+        if p.word('ru_rows') < R.ROWS:
             R.wait(ui, lambda:p.word('ru_page') > 0, 'compact results did not paginate')
         R.key(ui, 'Home')
         R.key(ui, 'F1')
@@ -208,6 +279,66 @@ def native(machine):
                 'Quit closes REDLINE', limit=20)
         print('REDLINE %s: %s, timings, Summary/Detailed/Compare, gestures and Quit OK' %
               (machine, cpu), flush=True)
+
+
+def scene():
+    import os88ui
+    import os88marty as M
+    sym = R.symbols()
+    out = ROOT/'build/redline-scene'
+    out.mkdir(exist_ok=True)
+    with os88ui.boot(str(ROOT/'build/os8088-360.img'),
+                     apps=str(ROOT/'build/redline360.img'), machine='os8088_redline_vga_gla') as ui:
+        ui.open_drive('B')
+        ui.open('REDLINE.O88')
+        p = R.Probe(ui,sym)
+        def settled_pixels():
+            # VGA scanout can lag VRAM at a breakpoint. Park for two frames
+            # at the BIOS scratch end; these display-only runs never calibrate.
+            old = ui.m.regs()
+            scratch = ui.m.read(0x500,2)
+            ui.m.write(0x500,b'\xEB\xFE')
+            ui.m.cmd(cmd='park',cs=0,ip=0x500)
+            ui.m.advance(frames=2)
+            pixels = ui.m.fbuf()
+            ui.m.write(0x500,scratch)
+            ui.m.cmd(cmd='park',cs=old['cs'],ip=old['ip'])
+            for reg in ('ax','bx','cx','dx','si','di','bp','sp','ss','ds','es','flags'):
+                ui.m.setreg(reg,old[reg])
+            return pixels
+        ui.m.bp_exec(p.addr('rl_shaded'))
+        R.key(ui,'KeyR')
+        ui.m.run()
+        assert ui.m.wait_stop(60) == 'breakpoint', 'wireframe did not render'
+        assert p.data('rl_busy') == b'\1' and p.word('rl_pass') == 0
+        assert any(w.title == 'REDLINE Graphics Lab' for w in ui.windows())
+        w,h,pixels = settled_pixels()
+        M.write_png_rgb(str(out/'wireframe.png'),w,h,pixels)
+        ui.m.bp_exec(p.addr('rl_patternblit'))
+        ui.m.run()
+        assert ui.m.wait_stop(60) == 'breakpoint', 'shaded cube did not render'
+        w,h,shaded = settled_pixels()
+        M.write_png_rgb(str(out/'shaded.png'),w,h,shaded)
+        assert shaded != pixels, 'wireframe and shaded output are identical'
+        lab = ui.window('REDLINE Graphics Lab')
+        print('Live lab frame:',lab.x,lab.y,lab.w,lab.h,'; parent:',ui.window('REDLINE').x,ui.window('REDLINE').y,ui.window('REDLINE').w,ui.window('REDLINE').h,flush=True)
+        crop = [tuple(shaded[(y*w+x)*3:(y*w+x)*3+3])
+                for y in range(lab.y+20,lab.y+lab.h-2)
+                for x in range(lab.x+2,lab.x+lab.w-2)]
+        colored = set(crop)-{(0,0,0),(255,255,255)}
+        assert len(colored) >= 3, colored
+        ui.m.bp_exec(p.addr('rl_resize'))
+        ui.m.run()
+        assert ui.m.wait_stop(60) == 'breakpoint', 'nested moving windows did not render'
+        positions = struct.unpack('<10H',p.data('rl_object_xy',20))
+        assert positions[2] == positions[0]+14
+        assert positions[4] == positions[2]+5
+        assert positions[6] == positions[4]+5
+        assert struct.unpack('<H',p.data('rl_objects',20)[18:20])[0] == 6
+        w,h,pixels = settled_pixels()
+        M.write_png_rgb(str(out/'nested-windows.png'),w,h,pixels)
+        ui.m.bp_exec()
+    print('REDLINE live lab: progress, integer wireframe/shaded 3D, nested moving objects OK',flush=True)
 
 
 def modern():
@@ -281,9 +412,15 @@ org 0x7C00
     int 0x13
     jc fail
     mov bx, 0x2200
-    mov ax, 0x0211
+    mov ax, 0x0212
     mov cx, 1
     mov dh, 1
+    int 0x13
+    jc fail
+    mov bx, 0x4600
+    mov ax, 0x0212
+    mov cx, 0x0101
+    xor dh, dh
     int 0x13
     jc fail
     jmp 0x1000:ENTRY
@@ -297,7 +434,7 @@ fail:
             bootbin = td / 'boot.bin'
             subprocess.run(['nasm', '-f', 'bin', '-o', str(bootbin), str(boot)], check=True)
             disk, dump = td / 'probe.img', td / 'probe.dump'
-            assert len(blob) <= 34*512
+            assert len(blob) <= 53*512
             disk.write_bytes((bootbin.read_bytes()+blob).ljust(1440*1024, b'\0'))
             run = subprocess.run(['qemu-system-i386', '-machine', 'pc', '-cpu', cpu, '-m', str(ram),
                                   '-drive', 'file=%s,format=raw,if=floppy' % disk,
@@ -417,13 +554,15 @@ def main():
     ap.add_argument('--host', action='store_true')
     ap.add_argument('--modern', action='store_true')
     ap.add_argument('--nec', action='store_true')
+    ap.add_argument('--scene', action='store_true')
     ap.add_argument('--machine')
     args = ap.parse_args()
     if args.host: host()
     if args.modern: modern()
     if args.nec: nec()
+    if args.scene: scene()
     if args.machine: native(args.machine)
-    assert args.host or args.modern or args.nec or args.machine
+    assert args.host or args.modern or args.nec or args.machine or args.scene
 
 
 if __name__ == '__main__':

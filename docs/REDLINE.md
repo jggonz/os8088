@@ -8,11 +8,15 @@ pagination and shared benchmark timing machinery. It costs no resident kernel
 memory. The dedicated floppies carry the same executable in all four sizes.
 
 Summary is the default dashboard: framed performance, system snapshot, results
-and hardware-details panels, large bitmap digits, dithered comparison bars and
+and hardware-details panels, large bitmap digits, colored VGA bars (blue CPU, green RAM, red graphics),
+monochrome dithered bars and
 bottom controls. Detailed retains the complete original report, including every
 inventory field, both clock estimates, raw timing counts, method flags and
 numeric indices. Compare gives the bars the window's full width. Saving from
-any view always writes the complete report.
+any view always writes the complete report. The report window fits the viewport;
+the temporary Graphics Lab owns resize and scene stress, and is destroyed after
+each benchmark. Completion animates bar growth with the UI timer; the numeric
+results are final throughout, and no animation runs inside a timing bracket.
 
 Use the buttons or **U / D / C** to select Summary / Detailed / Compare; **Tab**
 cycles the views. **R / S / Q** run, save and quit. **F1** opens Detailed at the
@@ -26,6 +30,10 @@ paged results; all facts remain available in Detailed.
 ![REDLINE compact Summary on the 4.77 MHz CGA reference](redline-cga.png)
 
 ![REDLINE Detailed report on CGA, showing its last page](redline-scores.png)
+
+![Live Graphics Lab rendering a projected flat-shaded cube](redline-shaded.png)
+
+![Graphics Lab with nested windows, button and 3D viewport objects](redline-lab.png)
 
 ## What the period software looked like
 
@@ -69,8 +77,9 @@ outside this package's CPU/graphics scope; FPU *presence* is still reported.
 
 ## What REDLINE tests
 
-Every machine runs identical work and iteration counts. The count column is
-net PIT counts; `us/op` is per complete body, **not per instruction or pixel**.
+Every machine runs identical work and iteration counts. The count column uses
+PIT-count equivalents: net counts for method P, gross tick counts for method T.
+`us/op` is per complete body, **not per instruction or pixel**.
 
 | Workload | Work per body | Bodies per row |
 |---|---|---:|
@@ -87,27 +96,59 @@ net PIT counts; `us/op` is per complete body, **not per instruction or pixel**.
 | Monochrome blit | 64x32, alternating bit pattern | 32 |
 | Packed-color blit | 64x32, uniform color 1 | 16 |
 
-Graphics include the renderer, API arrival and video bus. They operate only
-inside the benchmark window; no raw VRAM writes escape into neighboring windows.
-RAM buffers are package-owned. Register-heavy rows still include instruction
-fetch and setup. The comparison is per workload: `1000 = baseline`, larger is
-faster, and 20 `#` marks represent the reference PC. Bars cap at 50 blocks;
-the numeric result retains its range. VGA/Hercules still produce timings;
-CGA reference graphics indices are withheld on those adapters.
+A benchmark runs the full 24-workload suite **three times**. Scores divide the
+reference by the arithmetic mean of each workload's three raw measurements,
+rounded down in PIT-count units. Progress identifies the current run and row;
+the native Graphics Lab makes the drawing visible. Detailed and saved reports
+retain all three samples, means and sample timing flags, plus sample 3's complete
+original per-body timing/method table.
 
-The Summary headline is the arithmetic mean of the six CPU/RAM indices, each
-equally weighted, labelled **CPU + RAM Performance**. It is a convenience for
-this fixed mix, not a universal score, and never incorporates graphics from
-another adapter. Graphical bars reach full width at 4x; numeric ratios retain
-their values up to 99.99x, above which they show `>99.9x`. Detailed and saved
-reports retain full numeric indices. Unresolved timings have no invented score.
+The graphics tiers add these fixed bodies:
+
+| Tier | Workload | Work per body | Bodies per run |
+|---|---|---|---:|
+| 2 | Fill | 256x64 pixels | 8 |
+| 2 | Line field | 16 horizontal 256-pixel lines | 8 |
+| 2 | Nested frames | Eight inset frames inside 256x64 | 8 |
+| 2 | Text grid | Eight 31-cell opaque lines | 8 |
+| 2 | Mono blit | 128x64, alternating bits | 8 |
+| 2 | Packed blit | 128x32, uniform color 1 | 8 |
+| 3 | Wireframe cube | Eight integer rotation/perspective projections, 12 Bresenham edges | 8 |
+| 3 | Flat-shaded cube | Eight projected vertices, six scan-converted triangles; three face shades | 8 |
+| 3 | Patterned blit | Generate, blit and restore a 128x32 packed pattern | 4 |
+| 3 | Scroll | Byte-aligned 256x64 rectangle up/down four rows | 8 |
+| 3 | Nested moving windows | Three scene renders with a child sliding; window/button/3D objects inherit parent coordinates | 4 |
+| 3 | Lab resize/repaint | Shrink the native lab by eight pixels and restore it; method T | 4 |
+
+Graphics include integer CPU work, renderer, API arrival and video bus. They
+operate in the lab's clipped 256x64 canvas, using OS slots rather than raw VRAM.
+The native window resize also measures the OS's damage repair and repaint.
+The scene's child windows are app-rendered objects: os8088 provides top-level
+native windows, and the lab owns their logical nesting. RAM buffers are package
+owned. Register-heavy rows still include instruction fetch and setup.
+
+`1000 = baseline`, larger is faster. CPU/RAM use the common 4.77 MHz PC
+reference; graphics use the mode-matched CGA, Hercules or VGA reference. Other
+modes keep their raw timings and withhold graphics indices. The Summary headline
+averages only the six CPU/RAM indices with equal weight.
+
+All bars share a ceiling of **at least 100x**, doubling until it exceeds the
+largest available score (saturating at the index type's maximum). Axis labels
+follow that ceiling. Positive subpixel bars get one pixel at completion. The
+text report uses the same scale, capped at 50 character blocks. Numeric ratios
+retain the full 32-bit index range, including values above 99.99x. Unresolved
+timings have no invented score. Animation changes painted widths only.
 
 `tests/benchlib.inc` is the single shared timer/report implementation, also used
 by GFXBENCH/SYSBENCH. It latches PIT channel 0 without changing its programming,
 subtracts the empty-body measurement, accumulates in 32 bits and services IRQs
-between bodies. A flagged `t`/`w` row used coarse ticks because a body outgrew
-the PIT interval; such a run should not be treated as a high-resolution score.
-The screenshot/report formatting and disk saving happen outside measured spans.
+between bodies. Method `T` samples (original-table flag `t`), including `w`
+fallbacks when a body outgrew the PIT interval, use coarse ticks; such a run
+should not be treated as a high-resolution score.
+A mean can contain both net-PIT and gross-tick samples; every sample's flag
+remains visible. Calibration checks the noise bound only for rows whose samples
+all used PIT, and records the relative spread for every row. The screenshot/report
+formatting and disk saving happen outside measured spans.
 
 ## CPU identity, MHz and RAM: what can be known
 
@@ -145,10 +186,13 @@ FPU presence and the window's actual adapter/geometry round out the inventory.
 
 `os8088_redline_pc` is an IBM 5150 with a user-supplied IBM ROM.
 `os8088_redline_pc_gla` uses bundled GLaBIOS and is runnable from a clean checkout.
-Both have the machine type's Intel 8088 at `(315/22)/3 = 4.772727… MHz`, 640KB
-conventional RAM, zero RAM wait states, dynamic CGA, two 360KB drives and a
+The CGA profiles and `os8088_redline_herc_gla` / `os8088_redline_vga_gla`
+share the machine type's Intel 8088 at `(315/22)/3 = 4.772727… MHz`, 640KB
+conventional RAM, zero RAM wait states, two 360KB drives and a
 serial mouse. The launcher configuration has **turbo=false**. No sound card,
-CPU upgrade, RAM upgrade overlay or disk accelerator is present.
+CPU upgrade, RAM upgrade overlay or disk accelerator is present. The graphics
+profiles differ by adapter: dynamic CGA 640x200x1, dynamic Hercules 720x348x1,
+or VGA 640x480x4 with MartyPC's bundled video BIOS.
 
 MartyPC's CPU models prefetch, bus activity and instruction timing and is
 validated against physical 8088 instruction tests. That supports an accurate
@@ -165,15 +209,22 @@ python3 tools/redline_profile.py --machine os8088_redline_pc
 # deliberately regenerate the shipped reference:
 python3 tools/redline_profile.py --calibrate
 make redlinedisk
+python3 tools/redline_profile.py --machine os8088_redline_herc_gla --out build/redline-profile-herc --calibrate
+make redlinedisk
+python3 tools/redline_profile.py --machine os8088_redline_vga_gla --out build/redline-profile-vga --calibrate
+make redlinedisk
 ```
 
-The runner drives genuine UI commands, executes three complete runs, checks the
+The runner drives genuine UI commands, executes three trials of three complete runs, checks the
 CPU/RAM and timing results, saves the guest file and extracts it through the
-independent FAT reader. Reference counts are each workload's median; retained
+independent FAT reader. Each trial averages three runs; reference counts are each workload's median
+across the three trial means. Retained
 trials expose variation from refresh, beam phase and timer quantization.
-`apps/redline/reference.json` records the measured package/kernel/emulator/BIOS
-hashes, machine/config and emulator pin. `baseline.inc` contains those actual
-counts. Calibration changes the package's embedded reference; the measured
+`apps/redline/reference.json`, `reference-herc.json` and `reference-vga.json`
+record measured package/kernel/emulator/BIOS hashes, machine/config, emulator
+pin, individual samples, method flags and trial means. VGA also records its
+video ROM hash. The corresponding `baseline*.inc` files contain the actual
+counts; Hercules/VGA embed only their graphics rows, keeping a common CPU base. Calibration changes the package's embedded reference; the measured
 image hash therefore describes the calibration input, not the rebuilt output.
 Keep the two distinct when auditing provenance.
 
@@ -188,8 +239,9 @@ than claiming untested exact model identification.
 package and checks reference counts against the assembled workload hash.
 `--machine os8088_redline_pc_gla` runs and saves the native report twice, checks
 reference indices and executes large-denominator arithmetic on the 8088.
-The Hercules and VGA machines exercise the same UI and withhold CGA graphics
-indices. Native checks also verify the six-row headline calculation, view
+The Hercules and VGA machines exercise the same UI and check their matching
+graphics indices, actual VGA bar colors, and unchanged report-window geometry. Native checks also verify averaging, scale/decimal boundaries, unsupported-mode
+fencing, timer completion, lab cleanup, the six-row headline calculation, view
 switching, held-button behavior, slide-off cancellation, Detailed End/F1
 navigation, compact result pagination and the Quit button. `--modern` boots
 the shipped probe code under QEMU BIOS for guarded
@@ -203,3 +255,7 @@ button gesture. Main's MartyPC mode-flag protection patch makes that boot
 possible. These checks validate NEC identity and restoration of self-modified
 code; MartyPC's V20 timings are not a cycle-accurate NEC reference. The V20
 profile is for validation, never calibration.
+
+`--scene` captures the live VGA lab at real workload boundaries and verifies
+wireframe versus shaded output, multiple face colors, nested parent-coordinate
+inheritance and a child window's measured movement.

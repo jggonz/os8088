@@ -2321,3 +2321,36 @@ overlays = ["cpu_v20", "pcxt_2_360k_floppies", "pcxt_2_serial_ports",
     bus_type = "ISA"
     type = "CGA"
     clock_mode = "Dynamic"
+
+# REDLINE herc reference: same normal 4.772727 MHz 5150 and zero-wait RAM.
+[[machine]]
+name = "os8088_redline_herc_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = ["pcxt_2_360k_floppies", "pcxt_2_serial_ports",
+            "us_modelf_keyboard", "microsoft_serial_mouse_com1"]
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+# REDLINE vga reference: same normal 4.772727 MHz 5150 and zero-wait RAM.
+[[machine]]
+name = "os8088_redline_vga_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = ["pcxt_2_360k_floppies", "pcxt_2_serial_ports",
+            "us_modelf_keyboard", "microsoft_serial_mouse_com1"]
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"

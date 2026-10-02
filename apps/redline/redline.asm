@@ -1,7 +1,9 @@
 ; REDLINE — native CPU, memory and graphics benchmark (SPEC.md 103).
 %include "os88api.inc"
+RL_ROWS equ 24
+RL_RUNS equ 3
     OS88_HEADER 'REDLINE', rl_entry
-%define BL_ARENA_BYTES 6000
+%define BL_ARENA_BYTES 10000
 %define BL_BOTTOM_ROWS 3            ; leave 24 pixels for view/action buttons
 
 rl_entry:
@@ -10,6 +12,8 @@ rl_entry:
     jc .out
     mov [rl_win], bx
     OS88_REGION_MOVABLE
+    mov ax, ru_timer
+    call OSAPI_WM_ONTIMER
     mov al, 1
     call OSAPI_WM_SNAP
     mov si, rl_menus
@@ -47,6 +51,8 @@ rl_key:
     push bp
     push es
     mov [rl_win], si
+    cmp byte [rl_busy], 0
+    jne .out
     cmp al, 'r'
     je .run
     cmp al, 'R'
@@ -141,7 +147,15 @@ rl_about:
     ret
 
 rl_run:
+    mov byte [rl_busy], 1
+    mov word [rl_pass], 0
+    mov word [rl_active_row], 0
+    mov word [rl_active_label], rl_running
     mov byte [rl_ran], 0
+    mov bx, [rl_win]
+    xor ax, ax
+    call OSAPI_WM_TIMER
+
     mov word [bl_nrow], 0
     mov word [bl_used], 0
     mov word [bl_top], 0
@@ -160,13 +174,14 @@ rl_run:
     call bl_progress
     call OSAPI_CUR_BUSY
     call rl_inventory
+    call rl_select_reference
     call rl_facts
     mov bx, [rl_win]
     call OSAPI_WM_CONTENT
     mov [rl_x], ax
     mov [rl_y], dx
-    add word [rl_x], 8
-    add word [rl_y], 8
+    add word [rl_x], 16
+    add word [rl_y], 60
     ; Known source contents make both repeat runs and adapters comparable.
     push ds
     pop es
@@ -178,41 +193,134 @@ rl_run:
     mov ax, 0x1111
     mov cx, 1024
     rep stosw
+    call rl_repaint
+    call rl_lab_open
+    jnc .labready
+    mov byte [rl_busy], 0
+    mov si, rl_laberror
+    call bl_sline
+    ret
+.labready:
     call bl_baseline
+    mov si, rl_lastpass
+    call bl_sline
     mov si, rl_method
     call bl_sline
     call bl_head
+    mov ax, [bl_nrow]
+    mov [rl_reportrow], ax
+    mov ax, [bl_used]
+    mov [rl_reportused], ax
+.pass:
     xor bx, bx
 .next:
+    mov [rl_tableoff], bx
+    mov ax, bx
+    mov cx, 8
+    xor dx, dx
+    div cx
+    mov [rl_active_row], ax
+    mov si, [rl_table+bx]
+    mov [rl_active_label], si
+    call ru_progress_update
+    mov bx, [rl_labwin]
+    call OSAPI_WM_CLIP_SET
+    mov bx, [rl_tableoff]
     mov si, [rl_table+bx]
     mov ax, [rl_table+bx+2]
-    mov word [bl_body], ax
+    mov [bl_body], ax
     mov ax, [rl_table+bx+4]
     mov [bl_n], ax
-    xor al, al
+    mov byte [bl_lapped], 0        ; explicit T rows must not inherit a P lap
+    mov ax, [rl_table+bx+6]          ; slow compositor work uses tick timing
     call bl_run
-    ; Same iteration counts everywhere: indices = reference / measured.
+    push bx
+    mov bx, [rl_win]
+    call OSAPI_WM_CLIP_SET
+    pop bx
     mov di, bx
     shr di, 1
+    mov ax, [rl_pass]
+    mov cx, RL_ROWS*4
+    mul cx
+    add di, ax
     mov ax, [bl_last]
     mov dx, [bl_last+2]
+    mov [rl_samples+di], ax
+    mov [rl_samples+di+2], dx
+    push bx
+    mov bx, di
+    shr bx, 1
+    shr bx, 1
+    mov al, 'P'
+    cmp byte [bl_meth], 0
+    je .pitflag
+    mov al, 'T'
+.pitflag:
+    cmp word [bl_max], BL_SUSPECT
+    jb .lapflag
+    mov al, '!'
+.lapflag:
+    cmp byte [bl_lapped], 0
+    je .flag
+    mov al, 'w'
+.flag:
+    mov [rl_sampleflags+bx], al
+    pop bx
+    add bx, 8
+    cmp bx, RL_ROWS*8
+    jb .next
+    inc word [rl_pass]
+    cmp word [rl_pass], RL_RUNS
+    jae .mean
+    mov ax, [rl_reportrow]
+    mov [bl_nrow], ax
+    mov ax, [rl_reportused]
+    mov [bl_used], ax
+    jmp .pass
+.mean:
+    xor di, di
+.average:
+    mov word [bl_m], 0
+    mov word [bl_m+2], 0
+    mov word [bl_m+4], 0
+    mov si, di
+    mov cx, RL_RUNS
+.sum:
+    mov ax, [rl_samples+si]
+    add [bl_m], ax
+    mov ax, [rl_samples+si+2]
+    adc [bl_m+2], ax
+    adc word [bl_m+4], 0
+    add si, RL_ROWS*4
+    loop .sum
+    mov cx, RL_RUNS
+    call bl_div48
+    mov ax, [bl_m]
+    mov dx, [bl_m+2]
     mov [rl_results+di], ax
     mov [rl_results+di+2], dx
-    add bx, 8
-    cmp bx, RL_ROWS * 8
-    jb .next
+    add di, 4
+    cmp di, RL_ROWS*4
+    jb .average
+    call rl_sample_report
     call bl_blank
     mov ax, [bl_nrow]
     mov [rl_clockrow], ax
     call rl_clockreport
     call rl_frontclock
-    call rl_comparisons
     call ru_indices
+    call rl_comparisons
     mov si, rl_footer
     call bl_sline
-    inc word [rl_runs]
     mov byte [rl_ran], 1
     call ru_clock
+    mov byte [rl_busy], 0
+    mov bx, [rl_labwin]
+    call OSAPI_WM_DESTROY          ; secondary record only; retain the package
+    mov word [rl_labwin], 0
+    call ru_start_animation
+    inc word [rl_runs]
     mov word [bl_top], 0
     ret
 
@@ -520,23 +628,91 @@ rl_frontclock:
     loop .restore
     ret
 
+ ; Select by the actual OS mode; EGA or altered geometry is not VGA 12h.
+rl_select_reference:
+    mov word [rl_gfxbase], 0
+    mov word [rl_gfxname], rl_refunknown
+    cmp word [rl_video], 0x0102
+    jne .herc
+    cmp word [rl_vw], 640
+    jne .out
+    cmp word [rl_vh], 200
+    jne .out
+    mov word [rl_gfxbase], rl_baseline+24
+    mov word [rl_gfxname], rl_refcga
+    ret
+.herc:
+    cmp word [rl_video], 0x0101
+    jne .vga
+    cmp word [rl_vw], 720
+    jne .out
+    cmp word [rl_vh], 348
+    jne .out
+    mov word [rl_gfxbase], rl_baseline_herc
+    mov word [rl_gfxname], rl_refherc
+    ret
+.vga:
+    cmp word [rl_video], 0x0400
+    jne .out
+    cmp word [rl_vw], 640
+    jne .out
+    cmp word [rl_vh], 480
+    jne .out
+    mov word [rl_gfxbase], rl_baseline_vga
+    mov word [rl_gfxname], rl_refvga
+.out:
+    ret
+
+; DI = workload byte offset; DX:AX = measured reference, CF = unavailable.
+; CPU/RAM use the common PC reference; graphics use the selected mode.
+rl_reference:
+    push bx
+    push di
+    mov bx, rl_baseline
+    cmp di, 24
+    jb .read
+    mov bx, [rl_gfxbase]
+    or bx, bx
+    jz .missing
+    sub di, 24
+.read:
+    mov ax, [bx+di]
+    mov dx, [bx+di+2]
+    clc
+    jmp .out
+.missing:
+    xor ax, ax
+    xor dx, dx
+    stc
+.out:
+    pop di
+    pop bx
+    ret
+
 rl_comparisons:
     mov si, rl_indexintro
     call bl_sline
+    mov si, rl_gfxlabel
+    mov di, [rl_gfxname]
+    call bl_kvs
+    mov si, rl_scalelabel
+    mov ax, [ru_scale]
+    mov dx, [ru_scale+2]
+    mov cx, 1000
+    call bl_div32
+    mov cx, 10
+    call bl_kv
     xor bx, bx
 .row:
     mov [rl_row], bx
-    cmp bx, 6 * 8                  ; RAM indices comparable across adapters
-    jb .have
-    mov al, [rl_video]
-    cmp al, RL_BASE_ADAPTER
-    je .have
+    mov di, bx
+    shr di, 1
+    call rl_reference
+    jnc .have
     mov si, rl_gfxskip
     call bl_sline
     ret
 .have:
-    mov di, bx
-    shr di, 1
     mov ax, [rl_results+di]
     or ax, [rl_results+di+2]
     jnz .resolved
@@ -545,8 +721,7 @@ rl_comparisons:
     call bl_kvs
     jmp .next
 .resolved:
-    mov ax, [rl_baseline+di]
-    mov dx, [rl_baseline+di+2]
+    call rl_reference
     mov cx, 1000
     call bl_mul48
     mov bx, [rl_results+di]
@@ -558,10 +733,12 @@ rl_comparisons:
     push bx
     mov cx, 10
     call bl_kv
-    ; A compact period-style bar, 20 blocks == the reference PC.
-    ; Bars cap at 50 blocks, numerical indices retain the full result.
+    ; The text report shares the dashboard's at-least-100x scale.
     mov cx, 50
-    call bl_div32
+    call bl_mul48
+    mov bx, [ru_scale]
+    mov cx, [ru_scale+2]
+    call rl_div48by32
     or dx, dx
     jnz .cap
     cmp ax, 50
@@ -569,6 +746,10 @@ rl_comparisons:
 .cap:
     mov ax, 50
 .length:
+    or ax, ax
+    jnz .nonzero
+    inc ax
+.nonzero:
     mov cx, ax
     call bl_lclr
     mov byte [bl_lscr], '['
@@ -732,15 +913,17 @@ rl_blit4:
     call OSAPI_GFX_BLIT4
     ret
 
+%include "redline/workloads.inc"
 %include "redline/detect.inc"
 %include "redline/baseline.inc"
+%include "redline/baseline-herc.inc"
+%include "redline/baseline-vga.inc"
 ; Share the proven timing/report machinery with the developer harnesses.
 %include "benchlib.inc"
 %include "redline/ui.inc"
 %define OS88UI_NOGLYPH
 %include "os88ui.inc"
 
-RL_ROWS equ 12
 rl_tpl: dw 7, 22, 632, 448, rl_title, rl_paint, rl_key, rl_click
 rl_title: db 'REDLINE', 0
 rl_menu: db 'Bench', 0
@@ -753,7 +936,7 @@ OS88_MENUSET rl_menus, rl_title, rl_cmd
 OS88_MENUSET_END rl_menus
 rl_intro: db 'REDLINE 1.0  //  CPU + GRAPHICS PERFORMANCE LAB', 0
 rl_hint: db 'U Summary  D Detailed  C Compare  R Run  S Save  Q Quit', 0
-rl_hint2: db 'PgUp/PgDn page; arrows/Home/End in Detailed. F1: report help.', 0
+rl_hint2: db '3 runs averaged; 3 graphics tiers. F1: report help.', 0
 rl_running: db 'REDLINE: probing hardware and measuring fixed workloads...', 0
 rl_method: db 'PIT 1.193182 MHz; net counts, IRQs between bodies; fixed work.', 0
 rl_footer: db 'S saves REDLINE.TXT here. R repeats. Home shows system facts.', 0
@@ -798,10 +981,18 @@ rl_unitmhz: db 'MHz', 0
 rl_tsclimit: db 'TSC frequency may differ from core MHz (turbo/scaling/translation).', 0
 rl_clocklimit: db 'Book timing estimates: clones/wait states/prefetch can affect MHz.', 0
 rl_clockunknown: db 'CPU clock MHz unavailable for this family; timings remain valid.', 0
-rl_indexintro: db 'PC index: 1000 = 4.77 MHz MartyPC 5150; 20 blocks = baseline.', 0
+rl_indexintro: db 'PC index: 1000 = 4.77 MHz MartyPC 5150; mode-matched graphics.', 0
 rl_unresolved: db 'below timer resolution', 0
-rl_gfxskip: db 'Graphics index unavailable: reference is CGA. Compare same adapter.', 0
-rl_textsample: db 'Redline 0123456789 AaBb !? CPU/GFX', 0
+rl_gfxskip: db 'Graphics index unavailable: no reference for this mode.', 0
+rl_gfxlabel: db 'Graphics reference', 0
+rl_scalelabel: db 'Bar scale maximum (x)', 0
+rl_refcga: db 'CGA 640x200x1, 4.77 MHz PC', 0
+rl_refherc: db 'Hercules 720x348x1, 4.77 MHz PC', 0
+rl_refvga: db 'VGA 640x480x4, 4.77 MHz PC', 0
+rl_refunknown: db 'unavailable for this mode', 0
+rl_gfxbase: dw 0
+rl_gfxname: dw rl_refunknown
+rl_textsample: db 'Redline 0123456789 AaBb CPU/GFX', 0
 rl_mulbook: dw 129, 23, 24
 rl_divbook: dw 160, 26, 26
 rl_table:
@@ -817,6 +1008,18 @@ rl_table:
     dw rl_label_text, rl_text, 16, 0
     dw rl_label_blit1, rl_blit1, 32, 0
     dw rl_label_blit4, rl_blit4, 16, 0
+    dw rl_label_fill_large, rl_fill_large, 8, 0
+    dw rl_label_lines_many, rl_lines_many, 8, 0
+    dw rl_label_frames_many, rl_frames_many, 8, 0
+    dw rl_label_text_grid, rl_text_grid, 8, 0
+    dw rl_label_blit1_large, rl_blit1_large, 8, 0
+    dw rl_label_blit4_large, rl_blit4_large, 8, 0
+    dw rl_label_wire, rl_wire, 8, 0
+    dw rl_label_shaded, rl_shaded, 8, 0
+    dw rl_label_patternblit, rl_patternblit, 4, 0
+    dw rl_label_scroll, rl_scroll, 8, 0
+    dw rl_label_composition, rl_windows_move, 4, 0
+    dw rl_label_resize, rl_resize, 4, 1
 rl_label_alu: db 'ALU 256 instructions', 0
 rl_label_shift: db 'Rotate 128 x 4 bits', 0
 rl_label_mul: db 'MUL 64 fixed operands', 0
@@ -832,6 +1035,25 @@ rl_label_blit4: db 'Packed 4bpp blit 64x32', 0
 rl_win: dw 0
 rl_ran: db 0
 rl_runs: dw 0
+rl_label_fill_large: db 'L2 Fill 256x64', 0
+rl_label_lines_many: db 'L2 Line field 16x256', 0
+rl_label_frames_many: db 'L2 Nested frames x8', 0
+rl_label_text_grid: db 'L2 Opaque text grid x8', 0
+rl_label_blit1_large: db 'L2 Mono blit 128x64', 0
+rl_label_blit4_large: db 'L2 Packed blit 128x32', 0
+rl_label_wire: db 'L3 Projected wireframe cube', 0
+rl_label_shaded: db 'L3 Projected shaded cube', 0
+rl_label_patternblit: db 'L3 Patterned packed 128x32', 0
+rl_label_scroll: db 'L3 Scroll 256x64 up/down', 0
+rl_label_composition: db 'L3 Nested moving windows', 0
+rl_label_resize: db 'L3 Window resize/repaint', 0
+rl_busy: db 0
+rl_pass: dw 0
+rl_active_row: dw 0
+rl_active_label: dw rl_running
+rl_tableoff: dw 0
+rl_reportrow: dw 0
+rl_reportused: dw 0
 rl_x: dw 0
 rl_y: dw 0
 rl_book: dw 0
@@ -874,6 +1096,8 @@ rl_vw: dw 0
 rl_vh: dw 0
 rl_equipment: dw 0
 rl_results: times RL_ROWS dd 0
+rl_samples: times RL_ROWS*RL_RUNS dd 0
+rl_sampleflags: times RL_ROWS*RL_RUNS db 0
 rl_facts_end:
     align 512
     OS88_BSS 6144 + BL_BSS_SIZE

@@ -12,8 +12,8 @@ ru_indices:
     mov ax, [rl_results+di]
     or ax, [rl_results+di+2]
     jz .zero
-    mov ax, [rl_baseline+di]
-    mov dx, [rl_baseline+di+2]
+    call rl_reference
+    jc .zeroval
     mov cx, 1000
     call bl_mul48
     mov bx, [rl_results+di]
@@ -38,7 +38,7 @@ ru_indices:
     adc word [ru_sum+4], 0
 .next:
     add di, 4
-    cmp di, 48
+    cmp di, RL_ROWS*4
     jb .row
     mov ax, [ru_sum]
     mov [bl_m], ax
@@ -52,6 +52,35 @@ ru_indices:
     mov dx, [bl_m+2]
     mov [ru_overall], ax
     mov [ru_overall+2], dx
+    call ru_scale_compute
+    ret
+
+ ; One common scale for all available workloads, with room above the maximum.
+; Double from 100x until every result fits; unsigned overflow saturates.
+ru_scale_compute:
+    mov word [ru_scale], 0x86A0     ; 100000 thousandths = 100x
+    mov word [ru_scale+2], 1
+    xor di, di
+.row:
+    mov dx, [ru_scores+di+2]
+    mov ax, [ru_scores+di]
+.again:
+    cmp dx, [ru_scale+2]
+    jb .next
+    ja .grow
+    cmp ax, [ru_scale]
+    jb .next
+.grow:
+    shl word [ru_scale], 1
+    rcl word [ru_scale+2], 1
+    jnc .again
+    mov word [ru_scale], 0xFFFF
+    mov word [ru_scale+2], 0xFFFF
+    ret
+.next:
+    add di, 4
+    cmp di, RL_ROWS*4
+    jb .row
     ret
 
 ru_clock:
@@ -135,11 +164,11 @@ ru_geometry:
     sub ax, [ru_offset]
     sub ax, 4
     xor dx, dx
-    mov cx, 12
+    mov cx, RL_ROWS
     div cx
-    cmp ax, 10
+    cmp ax, 9                    ; 8px text/bars plus one clear scanline
     jae .spacing
-    mov ax, 10
+    mov ax, 9
 .spacing:
     cmp ax, 18
     jbe .pitch
@@ -152,9 +181,9 @@ ru_geometry:
     sub ax, 4
     xor dx, dx
     div word [ru_pitch]
-    cmp ax, 12
+    cmp ax, RL_ROWS
     jbe .rows
-    mov ax, 12
+    mov ax, RL_ROWS
 .rows:
     or ax, ax
     jnz .count
@@ -226,6 +255,8 @@ ru_paint:
     push es
     mov [rl_win], si
     call ru_geometry
+    cmp byte [rl_busy], 0
+    jne .running
     cmp byte [ru_view], 1
     jne .dashboard
     call bl_paint
@@ -242,8 +273,15 @@ ru_paint:
     call ru_hardware
 .compare:
     call ru_results
+    jmp .buttons
+.running:
+    cmp byte [rl_busy], 0
+    je .buttons
+    call ru_running_paint
+    jmp .out
 .buttons:
     call ru_buttons_paint
+.out:
     pop es
     pop bp
     pop di
@@ -282,6 +320,8 @@ ru_buttons_paint:
     inc ax
     cmp ax, 7
     jb .button
+    cmp word [ru_w], 600
+    jb .nohint
     mov cx, 448
     mov dx, [ru_foot]
     add dx, 8
@@ -291,6 +331,7 @@ ru_buttons_paint:
     mov si, ru_saved
 .status:
     call ru_text
+.nohint:
     pop di
     pop si
     pop dx
@@ -352,6 +393,7 @@ ru_headline:
     mov bp, 12
     mov ax, [ru_overall]
     mov dx, [ru_overall+2]
+    mov byte [ru_ink], CRED
     call ru_bar
     xor di, di
 .tick:
@@ -369,16 +411,52 @@ ru_headline:
     call OSAPI_GFX_VLINE
     sub ax, [ru_x]
     mov cx, ax
-    or di, di
-    jz .label
-    sub cx, 8
-    cmp di, 4
-    jne .label
-    sub cx, 8
+    push cx
+    push di
+    mov ax, [ru_scale]
+    mov dx, [ru_scale+2]
+    mov cx, 1000
+    call bl_div32
+    mov cx, di
+    call bl_mul48
+    mov cx, 4
+    call bl_div48
+    mov ax, [bl_m]
+    mov dx, [bl_m+2]
+    call bl_lclr
+    xor di, di
+    mov cx, 7
+    call bl_dec
+    mov byte [bl_lscr+7], 'x'
+    mov byte [bl_lscr+8], 0
+    mov si, bl_lscr
+.trim:
+    cmp byte [si], ' '
+    jne .length
+    inc si
+    jmp .trim
+.length:
+    mov bx, si
+    xor cx, cx
+.count:
+    cmp byte [bx], 0
+    je .label
+    inc bx
+    add cx, 8
+    jmp .count
 .label:
-    mov bx, di
-    shl bx, 1
-    mov si, [ru_ticklabels+bx]
+    pop di
+    mov bx, cx
+    shr bx, 1
+    cmp di, 4
+    jne .middle
+    mov bx, cx
+.middle:
+    pop cx
+    or di, di
+    jz .text
+    sub cx, bx
+.text:
     mov dx, 113
     call ru_text
     inc di
@@ -387,57 +465,58 @@ ru_headline:
 .out:
     ret
 
-; DX:AX index/1000 -> bounded printable xx.xx x. Preserve the original index.
+; DX:AX index/1000 -> full-range decimal ratio, preserving the index.
 ru_ratio:
     push ax
     push dx
     call bl_lclr
-    cmp dx, 1
-    ja .overflow
-    cmp dx, 0
-    jne .format
-    cmp ax, 0
-    jne .format
+    mov cx, ax
+    or cx, dx
+    jnz .format
     mov si, ru_na
-    mov di, 0
+    xor di, di
     call bl_lput
+    mov byte [bl_lscr+3], 0
     jmp .done
 .format:
     mov cx, 1000
     call bl_div32
-    cmp ax, 99
-    ja .overflow
     push bx
-    xor dx, dx
-    mov di, 0
-    mov cx, 2
+    xor di, di
+    mov cx, 7
     call bl_dec
-    mov byte [bl_lscr+2], '.'
+    mov si, bl_lscr
+.trim:
+    cmp byte [si], ' '
+    jne .decimal
+    inc si
+    jmp .trim
+.decimal:
+    mov byte [bl_lscr+7], '.'
     pop ax
     xor dx, dx
     mov cx, 10
     div cx
-    mov di, 3
+    xor dx, dx
+    mov di, 8
     mov cx, 2
     call bl_dec
-    cmp byte [bl_lscr+3], ' '
+    cmp byte [bl_lscr+8], ' '
     jne .suffix
-    mov byte [bl_lscr+3], '0'
+    mov byte [bl_lscr+8], '0'
 .suffix:
-    mov byte [bl_lscr+5], 'x'
-    jmp .done
-.overflow:
-    mov si, ru_overflow
-    xor di, di
-    call bl_lput
+    mov byte [bl_lscr+10], 'x'
+    mov byte [bl_lscr+11], 0
+    jmp .out
 .done:
-    mov byte [bl_lscr+6], 0
     mov si, bl_lscr
+.out:
     pop dx
     pop ax
     ret
 
-; One-store dithered/white bar segments. 4x fills the bar, values stay numeric.
+; Solid category colors on VGA; dither on monochrome adapters.
+; The common scale is at least 100x; positive subpixel values get one pixel.
 ; DX:AX=index, CX=left, BX=top, DI=width, BP=height; relative coordinates.
 ru_bar:
     push ax
@@ -450,20 +529,26 @@ ru_bar:
     mov [ru_barx], cx
     mov [ru_bary], bx
     mov [ru_barw], di
-    or dx, dx
-    jnz .cap
-    cmp ax, 4000
-    jbe .scale
-.cap:
-    mov ax, 4000
-.scale:
-    mul di
-    mov cx, 4000
-    div cx
+    mov [ru_barvalue], ax
+    or [ru_barvalue], dx
+    mov cx, di
+    call bl_mul48
+    mov bx, [ru_scale]
+    mov cx, [ru_scale+2]
+    call rl_div48by32
     cmp ax, di
     jb .width
-    dec ax                          ; the right frame pixel stays solid black
+    dec ax                          ; the right frame stays solid black
 .width:
+    or ax, ax
+    jnz .filled
+    cmp word [ru_barvalue], 0
+    je .filled
+    mov ax, 1
+.filled:
+    mul word [ru_anim]
+    mov cx, RU_ANIM_STEPS
+    div cx
     mov [ru_fillw], ax
     mov ax, [ru_barx]
     mov bx, [ru_bary]
@@ -486,6 +571,19 @@ ru_bar:
     mov dx, bx
     add dx, bp
     sub dx, 2
+    cmp byte [rl_video], VID_VGA
+    jne .mono
+    push ax
+    mov al, [ru_ink]
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+    push ax
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    pop ax
+    jmp .out
+.mono:
     mov si, ru_pattern
     call OSAPI_GFX_FILL_PAT
 .out:
@@ -504,7 +602,9 @@ ru_big:
     mov [ru_bigx], cx
     mov [ru_bigy], dx
     mov bp, si
-    mov di, 6
+    mov al, [ds:bp]
+    or al, al
+    jz .out
 .char:
     mov al, [ds:bp]
     inc bp
@@ -568,8 +668,9 @@ ru_big:
     cmp word [ru_gy], 21
     jb .row
     add word [ru_bigx], 18
-    dec di
-    jnz .char
+    cmp byte [ds:bp], 0
+    jne .char
+.out:
     ret
 
 ; Small right-hand facts: ten label cells plus a bounded printable value.
@@ -883,7 +984,7 @@ ru_results:
     add ax, [ru_offset]
     mov [ru_resulty], ax
 .row:
-    cmp word [ru_row], 12
+    cmp word [ru_row], RL_ROWS
     jae .out
     cmp word [ru_visrows], 0
     je .out
@@ -895,8 +996,8 @@ ru_results:
     call ru_text
     cmp word [ru_row], 6
     jb .value
-    cmp byte [rl_video], VID_CGA
-    je .value
+    cmp word [rl_gfxbase], 0
+    jne .value
     mov si, ru_sameadapter
     mov cx, 160
     call ru_text
@@ -911,7 +1012,7 @@ ru_results:
     push ax
     push dx
     mov cx, [ru_resw]
-    sub cx, 56
+    sub cx, 96
     mov dx, [ru_resulty]
     call ru_text
     pop dx
@@ -919,8 +1020,16 @@ ru_results:
     mov cx, 152
     mov bx, [ru_resulty]
     mov di, [ru_resw]
-    sub di, 216
+    sub di, 256
     mov bp, 8
+    mov byte [ru_ink], CBLUE
+    cmp word [ru_row], 4
+    jb .bar
+    mov byte [ru_ink], CGREEN
+    cmp word [ru_row], 6
+    jb .bar
+    mov byte [ru_ink], CRED
+.bar:
     call ru_bar
 .next:
     mov ax, [ru_pitch]
@@ -930,6 +1039,156 @@ ru_results:
     jmp .row
 .out:
     ret
+
+ ; Completion animation runs on the UI timer, outside every timed span.
+ru_start_animation:
+    mov word [ru_anim], 0
+    mov bx, [rl_win]
+    mov ax, 1
+    call OSAPI_WM_TIMER
+    jnc .out
+    mov word [ru_anim], RU_ANIM_STEPS ; kern_small has no UI timers
+.out:
+    ret
+ru_timer:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    cmp byte [rl_busy], 0
+    jne .out
+    cmp word [ru_anim], RU_ANIM_STEPS
+    jae .out
+    inc word [ru_anim]
+    call ru_geometry
+    cmp byte [ru_view], 1
+    je .schedule
+    cmp byte [ru_view], 2
+    je .results
+    cmp byte [ru_small], 0
+    jne .results
+    mov cx, 24
+    mov bx, 96
+    mov di, [ru_split]
+    sub di, 40
+    mov bp, 12
+    mov ax, [ru_overall]
+    mov dx, [ru_overall+2]
+    mov byte [ru_ink], CRED
+    call ru_bar
+.results:
+    call ru_results
+.schedule:
+    cmp word [ru_anim], RU_ANIM_STEPS
+    jae .out
+    mov bx, [rl_win]
+    mov ax, 1
+    call OSAPI_WM_TIMER
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Progress is drawn between rows, never inside a timing bracket.
+ru_progress_update:
+    call ru_geometry
+    mov ax, [ru_x]
+    add ax, 304
+    mov bx, [ru_y]
+    add bx, 18
+    mov cx, [ru_x]
+    add cx, [ru_w]
+    sub cx, 8
+    mov dx, [ru_y]
+    add dx, 124
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+    call ru_running_paint
+    ret
+ru_running_paint:
+    mov cx, 16
+    mov dx, 8
+    mov si, ru_runningtitle
+    call ru_text
+    call bl_lclr
+    mov si, ru_runlabel
+    xor di, di
+    call bl_lput
+    mov ax, [rl_pass]
+    inc ax
+    xor dx, dx
+    mov cx, 1
+    mov di, 4
+    call bl_dec
+    mov si, ru_runsuffix
+    mov di, 5
+    call bl_lput
+    mov byte [bl_lscr+30], 0
+    mov si, bl_lscr
+    mov cx, 316
+    mov dx, 24
+    call ru_text
+    mov si, [rl_active_label]
+    mov cx, 316
+    mov dx, 40
+    call ru_text
+    cmp word [rl_labwin], 0
+    jne .labshown
+    mov ax, 12
+    mov bx, 56
+    mov cx, 276
+    mov dx, 124
+    call ru_frame
+.labshown:
+    mov cx, 316
+    mov dx, 64
+    mov si, ru_livepreview
+    call ru_text
+    mov cx, 316
+    mov dx, 80
+    mov si, ru_progresshint
+    call ru_text
+    mov ax, [rl_pass]
+    mov cx, RL_ROWS
+    mul cx
+    add ax, [rl_active_row]
+    inc ax
+    xor dx, dx
+    mov cx, 1000
+    call bl_mul48
+    mov cx, RL_ROWS*RL_RUNS
+    call bl_div48
+    mov ax, [bl_m]
+    mov dx, [bl_m+2]
+    mov word [ru_scale], 1000
+    mov word [ru_scale+2], 0
+    mov word [ru_anim], RU_ANIM_STEPS
+    mov byte [ru_ink], CBLUE
+    mov cx, 316
+    mov bx, 104
+    mov di, [ru_w]
+    sub di, 332
+    mov bp, 12
+    call ru_bar
+    ret
+ru_runningtitle: db 'Benchmark in progress - 3 runs averaged', 0
+ru_runlabel: db 'Run ', 0
+ru_runsuffix: db '/3  // fixed workloads', 0
+ru_livepreview: db 'Live graphics preview', 0
+ru_progresshint: db 'Please keep mouse still', 0
 
 ru_navigation:
     push ax
@@ -977,7 +1236,7 @@ ru_navigation:
 .down:
     mov ax, [ru_page]
     add ax, [ru_rows]
-    cmp ax, 12
+    cmp ax, RL_ROWS
     jae .out
     mov [ru_page], ax
     jmp .draw
@@ -990,7 +1249,7 @@ ru_navigation:
     mov [ru_page], ax
     jmp .draw
 .end:
-    mov ax, 12
+    mov ax, RL_ROWS
     sub ax, [ru_rows]
     mov [ru_page], ax
 .draw:
@@ -1059,6 +1318,11 @@ ru_barx: dw 0
 ru_bary: dw 0
 ru_barw: dw 0
 ru_fillw: dw 0
+ru_barvalue: dw 0
+RU_ANIM_STEPS equ 12
+ru_anim: dw RU_ANIM_STEPS
+ru_ink: db CRED
+ru_scale: dd 100000
 ru_bigx: dw 0
 ru_bigy: dw 0
 ru_gx: dw 0
@@ -1068,7 +1332,7 @@ ru_sum: times 3 dw 0
 ru_overall: dd 0
 ru_clockvalue: dd 0
 ru_clocklabel: dw ru_mhzest
-ru_scores: times 12 dd 0
+ru_scores: times RL_ROWS dd 0
 ru_rects: times 24 dw 0
 ru_buttonflags: times 6 dw 0
 OS88UI_BTNREC ru_buttons, ru_rects, ru_buttonlabels, ru_buttonflags, 6
@@ -1082,12 +1346,6 @@ ru_quit: db 'Quit', 0
 ru_heading: db 'PC Performance Benchmark                       REDLINE 1.0', 0
 ru_headtitle: db 'CPU + RAM Performance', 0
 ru_relative: db '(relative to the 4.77 MHz PC)', 0
-ru_ticklabels: dw ru_tick0, ru_tick1, ru_tick2, ru_tick3, ru_tick4
-ru_tick0: db '0', 0
-ru_tick1: db '1x', 0
-ru_tick2: db '2x', 0
-ru_tick3: db '3x', 0
-ru_tick4: db '4x', 0
 ru_system: db 'System Snapshot', 0
 ru_details: db 'Details', 0
 ru_resulttitle: db 'Benchmark Results (4.77 MHz PC)', 0
@@ -1095,11 +1353,10 @@ ru_ready: db 'Press R / Run to benchmark', 0
 ru_unresolved: db 'Timing below resolution', 0
 ru_query: db 'Run to query the system', 0
 ru_na: db 'n/a', 0
-ru_overflow: db '>99.9x', 0
 ru_seedetailed: db 'See Detailed', 0
 ru_keys: db 'PgUp/PgDn  F1 Help', 0
 ru_saved: db 'REDLINE.TXT saved  ', 0
-ru_sameadapter: db 'same adapter only', 0
+ru_sameadapter: db 'no mode reference', 0
 ru_cpu: db 'CPU', 0
 ru_mhzest: db 'MHz est', 0
 ru_mhznom: db 'MHz nom', 0
@@ -1130,6 +1387,8 @@ ru_herc: db 'Hercules', 0
 ru_cga: db 'CGA', 0
 ru_labels: dw ru_alu, ru_rotate, ru_mul, ru_div, ru_copy, ru_fill
            dw ru_gfill, ru_line, ru_frame_label, ru_text_label, ru_mono, ru_packed
+    dw ru_fill_large, ru_lines_many, ru_frames_many, ru_text_grid, ru_blit1_large, ru_blit4_large
+    dw ru_wire, ru_shaded, ru_patternblit, ru_scroll, ru_composition, ru_resize
 ru_alu: db 'CPU - ALU', 0
 ru_rotate: db 'Rotate', 0
 ru_mul: db 'MUL', 0
@@ -1142,6 +1401,18 @@ ru_frame_label: db 'Graphics Frame', 0
 ru_text_label: db 'Opaque Text', 0
 ru_mono: db 'Mono Blit', 0
 ru_packed: db 'Packed Blit', 0
+ru_fill_large: db '2 Fill 256x64', 0
+ru_lines_many: db '2 Line field', 0
+ru_frames_many: db '2 Nested frames', 0
+ru_text_grid: db '2 Text grid', 0
+ru_blit1_large: db '2 Mono 128x64', 0
+ru_blit4_large: db '2 Packed 128x32', 0
+ru_wire: db '3 Wireframe cube', 0
+ru_shaded: db '3 Shaded cube', 0
+ru_patternblit: db '3 Patterned blit', 0
+ru_scroll: db '3 Scroll 256x64', 0
+ru_composition: db '3 Moving windows', 0
+ru_resize: db '3 Window resize', 0
 ru_pattern: db 0xAA,0x55,0xAA,0x55,0xAA,0x55,0xAA,0x55
 ru_digits:
     db 14,17,19,21,25,17,14         ; 0

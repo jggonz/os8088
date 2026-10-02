@@ -2529,18 +2529,18 @@ SOAK = [
         "REDLINE shipped CPU probes under QEMU BIOS: opcode gates, CPUID vendor "
         "overrides for Cyrix/Transmeta, E820 and TSC. These are emulated vendors, "
         "not physical hardware identification (SPEC.md 103.2)", needs=("nasm", "qemu")),
-    Row("redlinecga", "soak", py("tests/redline.py", "--machine", "os8088_redline_pc_gla"), 45.0,
-        "REDLINE cga: CPU identity, twelve timings, repeated probe, large-denominator "
+    Row("redlinecga", "soak", py("tests/redline.py", "--machine", "os8088_redline_pc_gla"), 90.0,
+        "REDLINE cga: CPU identity, 24 averaged timings, repeated probe, large-denominator "
         "arithmetic, report save, Summary/Detailed/Compare, release/cancel buttons "
         "and Quit (SPEC.md 103)",
         needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
-    Row("redlineherc", "soak", py("tests/redline.py", "--machine", "os8088_5150_herc_gla"), 45.0,
-        "REDLINE herc: CPU identity, twelve timings, repeated probe, large-denominator "
+    Row("redlineherc", "soak", py("tests/redline.py", "--machine", "os8088_redline_herc_gla"), 90.0,
+        "REDLINE herc: CPU identity, 24 averaged timings, repeated probe, large-denominator "
         "arithmetic, report save, Summary/Detailed/Compare, release/cancel buttons "
         "and Quit (SPEC.md 103)",
         needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
-    Row("redlinevga", "soak", py("tests/redline.py", "--machine", "os8088_xt_vga"), 60.0,
-        "REDLINE vga: CPU identity, twelve timings, repeated probe, large-denominator "
+    Row("redlinevga", "soak", py("tests/redline.py", "--machine", "os8088_redline_vga_gla"), 90.0,
+        "REDLINE vga: CPU identity, 24 averaged timings, repeated probe, large-denominator "
         "arithmetic, report save, Summary/Detailed/Compare, release/cancel buttons "
         "and Quit (SPEC.md 103)",
         needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
@@ -2548,11 +2548,16 @@ SOAK = [
         "REDLINE V20 shipped detection with real PIT IRQ0 and repeated queue probe; "
         "independent IRQ harness (SPEC.md 103.2)",
         needs=("marty", "nasm"), wants=("build/os8088-360.img",)),
-    Row("redlinev20native", "soak", py("tests/redline.py", "--machine", "os8088_redline_v20_gla"), 60.0,
+    Row("redlinev20native", "soak", py("tests/redline.py", "--machine", "os8088_redline_v20_gla"), 90.0,
         "REDLINE V20 desktop: NEC identity, timings, repeated probe, all views, "
         "release/cancel buttons, report save and Quit; never reference calibration "
         "(SPEC.md 103)",
         needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
+    Row("redlinescene", "soak", py("tests/redline.py", "--scene"), 90.0,
+        "REDLINE live VGA lab: running indicator, integer projected wireframe "
+        "and shaded cube pixels, nested window/object inheritance and movement "
+        "(SPEC.md 103.5)", needs=("marty", "nasm"),
+        wants=("build/redline360.img", "build/os8088-360.img")),
     Row("excitebikefront", "soak", py("tests/excitebike_front.py", "--arm", "all"), 90.0,
         "EXCITEBIKE front end on MartyPC (SPEC.md 102.6), VGA, CGA and Hercules: "
         "the desktop splash and help pixel for pixel against the compiler's "

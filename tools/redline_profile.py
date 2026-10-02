@@ -26,12 +26,22 @@ import os88marty as M
 import os88ui
 from os88build import at
 
+ROWS, RUNS = 24, 3
+ADAPTERS = {"cga": (0x0102, "CGA 640x200x1 Dynamic"),
+            "herc": (0x0101, "Hercules 720x348x1 Dynamic"),
+            "vga": (0x0400, "VGA 640x480x4 Default")}
+
 NAMES = ("rl_ran", "rl_runs", "bl_saved", "rl_results", "rl_convkb", "rl_cpuname", "rl_early", "rl_video",
          "rl_key", "rl_alu", "rl_facts_start", "rl_facts_end", "bl_nrow", "bl_used", "bl_full",
          "rl_div48by32", "bl_m", "rl_detect", "rl_e820", "rl_mapok", "rl_ramkb",
          "rl_nominal", "rl_tscmhz", "rl_signature", "rl_family", "rl_model", "rl_cpuid",
          "ru_view", "ru_scores", "ru_overall", "ru_rects", "ru_page", "ru_rows",
-         "ru_h", "ru_foot", "ru_clockvalue", "ru_buttons", "bl_top")
+         "ru_h", "ru_foot", "ru_clockvalue", "ru_buttons", "bl_top",
+         "ru_scale", "ru_anim", "ru_scale_compute", "ru_bar", "ru_fillw",
+         "ru_x", "ru_y", "ru_pitch", "ru_resw", "ru_lower", "ru_offset", "rl_samples", "rl_busy", "rl_pass", "rl_labwin", "rl_active_row",
+         "rl_sampleflags", "rl_gfxbase", "rl_reference", "rl_select_reference", "rl_vw", "rl_vh",
+         "ru_ratio", "bl_lscr", "rl_wire", "rl_shaded", "rl_resize",
+         "rl_patternblit", "rl_windows_move", "rl_object_xy", "rl_objects")
 
 
 def symbols():
@@ -66,7 +76,11 @@ class Probe:
         return struct.unpack("<H", self.data(name, 2))[0]
 
     def counts(self):
-        return struct.unpack("<12I", self.data("rl_results", 48))
+        return struct.unpack("<%dI" % ROWS, self.data("rl_results", ROWS*4))
+
+    def samples(self):
+        values = struct.unpack("<%dI" % (ROWS*RUNS), self.data("rl_samples", ROWS*RUNS*4))
+        return [list(values[i*ROWS:(i+1)*ROWS]) for i in range(RUNS)]
 
 
 def key(ui, name):
@@ -90,7 +104,9 @@ def sha(path):
 
 
 def run(machine, out, repeat=True, calibrate=False):
+    adapter = "herc" if "_herc_" in machine else "vga" if "_vga_" in machine else "cga"
     sym = symbols()
+    measured_image = Path(at(str(ROOT / "build/redline.bin"))).read_bytes()
     out.mkdir(parents=True, exist_ok=True)
     with os88ui.boot(str(ROOT / "build/os8088-360.img"),
                      apps=str(ROOT / "build/redline360.img"), machine=machine, why_ibm=("explicit IBM-ROM reference requested"
@@ -104,50 +120,70 @@ def run(machine, out, repeat=True, calibrate=False):
         ui.m.pause()
         start = ui.m.status()["cycles"]
         key(ui, "KeyR")
-        wait(ui, lambda: p.data("rl_ran") == b"\1", "REDLINE run did not complete")
+        wait(ui, lambda: p.word("rl_runs") == 1 and p.data("rl_busy") == b"\0", "REDLINE run did not complete")
         counts = p.counts()
         assert all(c > 0 for c in counts), ("zero/overflow timing", counts)
         assert p.word("rl_convkb") == 640, "reference must have 640KB BIOS RAM"
-        assert p.word("rl_video") == 0x0102, "reference must have CGA at 1bpp"
+        assert p.word("rl_video") == ADAPTERS[adapter][0], "reference adapter/mode mismatch"
         assert p.data("rl_early") == b"\0", "reference must identify an 8088"
         assert p.data("bl_full") == b"\0", "report was truncated"
         end = ui.m.status()["cycles"]
+        wait(ui, lambda:p.word("ru_anim") == 12, "completion animation did not finish")
         trials = [list(counts)]
+        samples = [p.samples()]
+        flags = [p.data("rl_sampleflags", ROWS*RUNS).decode("ascii")]
+        spread = [0.0]*ROWS
         if repeat:
             for _ in range(2):
                 generation = p.word("rl_runs")
                 key(ui, "KeyR")
                 wait(ui, lambda: p.word("rl_runs") != generation,
                      "repeated REDLINE run did not complete")
+                wait(ui, lambda:p.word("ru_anim") == 12, "repeat animation did not finish")
                 again = p.counts()
-                assert all(c > 0 for c in again)
+                assert all(c > 0 for c in again), (again, generation, p.word("rl_runs"), p.data("rl_busy"), hex(p.base), hex(Probe(ui,sym).base))
                 trials.append(list(again))
+                samples.append(p.samples())
+                flags.append(p.data("rl_sampleflags", ROWS*RUNS).decode("ascii"))
+            assert all(f[r*ROWS+23] == 'T' for f in flags for r in range(RUNS)), "explicit resize timing lost its T method"
             spread = [max(t[i] for t in trials) / min(t[i] for t in trials) - 1
-                      for i in range(12)]
-            assert max(spread) < .05, ("repeat spread over 5%", trials, spread)
-            counts = tuple(int(statistics.median(t[i] for t in trials)) for i in range(12))
+                      for i in range(ROWS)]
+            # Only compare fine-resolution net PIT trials against that noise
+            # bound. Tick fallback includes IRQ time and coarse quantization;
+            # its spread and individual methods remain in the evidence.
+            pure_p = [i for i in range(ROWS)
+                      if all(f[r*ROWS+i] == 'P' for f in flags for r in range(RUNS))]
+            assert all(spread[i] < .05 for i in pure_p), ("PIT repeat spread over 5%", trials, spread, pure_p)
+            counts = tuple(int(statistics.median(t[i] for t in trials)) for i in range(ROWS))
+        wait(ui, lambda:p.word("ru_anim") == 12, "completion animation did not finish")
         key(ui, "KeyS")
         wait(ui, lambda: p.data("bl_saved") == b"\1", "report was not saved", 30)
         ui.m.advance(frames=60)  # finish the save callback and its visible repaint
         report = F.Flush(marty=ui.m).volume(1).read("REDLINE.TXT")
         (out / "REDLINE.TXT").write_bytes(report)
-        w, h, rows = ui.m.vram("cga")
-        M.write_png(str(out / "redline-cga.png"), w, h, rows)
+        if adapter == "vga":
+            w, h, pixels = ui.m.fbuf()
+            M.write_png_rgb(str(out / "redline-vga.png"), w, h, pixels)
+        else:
+            w, h, rows = ui.m.vram(adapter)
+            M.write_png(str(out / ("redline-" + adapter + ".png")), w, h, rows)
         bios = ui.m.read(0xFFFF5, 8).decode("ascii", errors="replace")
         image = Path(at(str(ROOT / "build/redline.bin"))).read_bytes()
+        assert image == measured_image, "package rebuilt during calibration"
         # Assert the source table still describes exactly these measured rows.
         table = (ROOT / "apps/redline/redline.asm").read_text().split("rl_table:")[1]
-        entries = re.findall(r"^    dw (rl_label_\w+), (rl_\w+), (\d+), 0", table, re.M)
-        assert len(entries) == 12
-        workloads = [{"label": label, "body": body, "iterations": int(n)}
-                     for label, body, n in entries]
+        entries = re.findall(r"^    dw (rl_label_\w+), (rl_\w+), (\d+), ([01])", table, re.M)
+        assert len(entries) == ROWS
+        workloads = [{"label": label, "body": body, "iterations": int(n), "method": "T" if int(method) else "P with lap fallback"}
+                     for label, body, n, method in entries]
         metadata = {
-            "schema": 1, "suite": "REDLINE 1.0", "machine": machine,
+            "schema": 2, "suite": "REDLINE 1.0", "machine": machine,
             "marty_upstream": (ROOT / "tools/martypc/UPSTREAM").read_text().strip(),
             "clock_hz": 315_000_000 / 22 / 3, "turbo": False,
             "cpu": "Intel8088", "conventional_kb": 640, "wait_states": 0,
-            "graphics": "CGA 640x200x1 Dynamic", "bios_date": bios,
+            "adapter": adapter, "graphics": ADAPTERS[adapter][1], "bios_date": bios,
             "bios_sha256": hashlib.sha256(ui.m.read(0xFE000, 8192)).hexdigest(),
+            "video_bios_sha256": hashlib.sha256(ui.m.read(0xC0000, 32768)).hexdigest() if adapter == "vga" else None,
             "emulator_sha256": sha(ROOT / "build/martypc/run/martypc_headless"),
             "kernel_sha256": sha(ROOT / "build/kernel.bin"),
             "measured_image_sha256": sha(ROOT / "build/redline.bin"),
@@ -158,26 +194,32 @@ def run(machine, out, repeat=True, calibrate=False):
             "workload_code_sha256": hashlib.sha256(image[sym["rl_alu"]:sym["rl_detect"]]).hexdigest(),
             "workloads": workloads,
             "workload_counts": list(counts), "trials": trials,
-            "reference_statistic": "median of three complete runs",
-            "units": "net PIT counts at 315000000/22/12 Hz; fixed N per workload",
+            "trial_relative_spread": spread,
+            "sample_runs": samples, "sample_flags": flags, "runs_per_trial": RUNS,
+            "sample_statistic": "arithmetic mean of three complete runs, floored",
+            "reference_statistic": "median of three trials, each averaging three complete runs",
+            "units": "PIT-count equivalents at 315000000/22/12 Hz; P net, T gross ticks; fixed N per workload",
             "limitations": "Emulator reference; no physical hardware run. GLaBIOS if _gla."
         }
         (out / "reference.json").write_text(json.dumps(metadata, indent=2) + "\n")
         if calibrate:
             ref = ROOT / "apps/redline"
-            (ref / "reference.json").write_text(json.dumps(metadata, indent=2) + "\n")
-            (ref / "baseline.inc").write_text(
+            suffix = "" if adapter == "cga" else "-" + adapter
+            (ref / ("reference" + suffix + ".json")).write_text(json.dumps(metadata, indent=2) + "\n")
+            label = "rl_baseline" if adapter == "cga" else "rl_baseline_" + adapter
+            values = counts if adapter == "cga" else counts[6:]
+            (ref / ("baseline" + suffix + ".inc")).write_text(
                 "; Generated from actual MartyPC measurements; SPEC.md 103.3.\n"
-                "; Provenance and trials: apps/redline/reference.json.\n"
-                "RL_BASE_ADAPTER equ VID_CGA\nrl_baseline:\n" +
-                "".join("    dd %d\n" % c for c in counts))
+                "; Provenance and trials: apps/redline/reference" + suffix + ".json.\n" +
+                label + ":\n" + "".join("    dd %d\n" % c for c in values))
         print(json.dumps(metadata, indent=2), flush=True)
     return metadata
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--machine", choices=("os8088_redline_pc_gla", "os8088_redline_pc"),
+    ap.add_argument("--machine", choices=("os8088_redline_pc_gla", "os8088_redline_pc",
+                             "os8088_redline_herc_gla", "os8088_redline_vga_gla"),
                     default="os8088_redline_pc_gla")
     ap.add_argument("--out", type=Path, default=ROOT / "build/redline-profile")
     ap.add_argument("--calibrate", action="store_true")
