@@ -10,7 +10,8 @@
 ;                               disk with CLIP.002" - so a set can be joined
 ;                               straight off a pile of floppies onto a hard
 ;                               disk, which the os8088 verb cannot do yet
-;                               (SPEC.md 22.23.5)
+;                               (SPEC.md 22.23.5). Never on the drive the
+;                               result is going to: that disk cannot go out
 ;   OS88CZ S FILE [SIZE] [DEST] [/S] [/P]
 ;                               split FILE into NAME.001 ... of SIZE (360,
 ;                               720, 1200, 1440 - a fresh disk of that size -
@@ -63,6 +64,7 @@ HT          equ 0x9000          ; the encoder's hash table, in buffer B
 MINLEN      equ 12              ; LZ4: no match starts in the last 12...
 LASTLITS    equ 5               ; ...and the last 5 are literals
 PSP_TOP     equ 2               ; the PSP's top-of-memory segment
+MAXARG      equ 64              ; an argument's characters, at most
 
 section .text
 
@@ -158,7 +160,11 @@ parse:
     shl bx, 1
     mov [args+bx], di
     inc bp
-.copy:
+    xor cx, cx                  ; its length: 64, DOS's own path limit, is
+.copy:                          ; what every path buffer below is sized from
+    inc cx
+    cmp cx, MAXARG
+    ja .bad
     cmp al, 'a'                 ; upper-case: DOS names are
     jb .st
     cmp al, 'z'
@@ -227,6 +233,22 @@ do_join:
     mov ax, 0x3D00
     int 0x21
     jnc .opened
+    cmp word [hout], 0          ; **NOT ON THE RESULT'S DRIVE** once it is
+    je .ask                     ; open: os8088 disks share one serial and one
+    mov si, ppath               ; label, and a drive with no change line
+    call drvof                  ; cannot see a swap at all, so DOS would put
+    mov bl, al                  ; the first disk's FAT and the growing entry
+    mov si, dpath               ; on the parts disk. The window's join
+    call drvof                  ; refuses the same case (cmz_jfloppy)
+    cmp al, bl
+    jne .ask
+    mov dx, s_missing
+    call puts
+    mov dx, ppath
+    call putz
+    mov dx, s_onout
+    jmp jfail
+.ask:
     mov dx, s_insert            ; not there: ask for the disk it is on
     call puts
     mov dx, ppath
@@ -487,12 +509,9 @@ jfail:
 ; jcreate - fpath = DEST + the set's name, which must not exist; tpath =
 ;           DEST + OS88CZ.$$$, created and open as [hout]
 jcreate:
-    mov si, dpath
-    mov di, fpath
-    call strcpy
-    dec di
-    mov si, hdr+20
-    mov cx, 12
+    mov si, hdr+20              ; the name came off a floppy: an 8.3 NAME and
+    mov di, sname               ; nothing else, or "\CONFIG.SYS" and
+    mov cx, 12                  ; "..\X.BAT" land outside DEST
 .n:
     lodsb
     or al, al
@@ -501,6 +520,18 @@ jcreate:
     loop .n
 .nd:
     mov byte [di], 0
+    mov si, sname
+    call check83
+    jnc .ok83
+    mov dx, s_notpart
+    jmp jfail
+.ok83:
+    mov si, dpath
+    mov di, fpath
+    call strcpy
+    dec di
+    mov si, sname
+    call strcpy
     mov dx, fpath
     mov ax, 0x3D00
     int 0x21
@@ -615,6 +646,18 @@ do_split:
     mov di, dpath
     call dirof
     mov [dend], di
+    cmp byte [fpause], 0        ; /P swaps DEST's disk, so FILE must not be
+    je .np                      ; on it: its open handle would go on reading
+    mov si, [args]              ; whatever disk went in next
+    call drvof
+    mov bl, al
+    mov si, dpath
+    call drvof
+    cmp al, bl
+    jne .np
+    mov dx, s_samedrv
+    jmp fatal
+.np:
     mov si, dpath               ; the part names: DEST + BASE + .NNN
     mov di, ppath
     call strcpy
@@ -1254,6 +1297,7 @@ do_unpack:
     mov ax, [p32]               ; memory: P then U, paragraph-rounded
     mov dx, [p32+2]
     call paras
+    jc .mem
     add ax, [bufa]
     jc .mem
     mov [dseg], ax              ; the output's segment
@@ -1261,6 +1305,7 @@ do_unpack:
     mov ax, [hdr+4]
     mov dx, [hdr+6]
     call paras
+    jc .mem
     add ax, bx
     jc .mem
     cmp ax, [PSP_TOP]
@@ -1377,15 +1422,24 @@ do_unpack:
 ; small things
 ; -----------------------------------------------------------------------------
 ; paras - DX:AX bytes -> AX paragraphs, rounded up, plus one
+;         CF=1 = more than a 16-bit count: no 8086 holds it, so refuse
 paras:
     add ax, 15
     adc dx, 0
+    jc .big
     mov cx, 4
 .s:
     shr dx, 1
     rcr ax, 1
     loop .s
+    or dx, dx                   ; 1MB and more: the high word is NOT zero,
+    jnz .big                    ; and dropping it wrapped the memory check
     inc ax
+    jz .big
+    clc
+    ret
+.big:
+    stc
     ret
 
 ; fatal - say DX and stop with errorlevel 1
@@ -1603,6 +1657,21 @@ dirof:
     mov byte [di], 0
     ret
 
+; drvof - the drive DS:SI names: its "X:", or the current one. AL = 0 for A:
+;         clobbers: AH
+drvof:
+    cmp byte [si], 0
+    je .cur
+    cmp byte [si+1], ':'
+    jne .cur
+    mov al, [si]                ; parse upper-cased it
+    sub al, 'A'
+    ret
+.cur:
+    mov ah, 0x19
+    int 0x21
+    ret
+
 ; check83 - DS:SI an 8.3 name that is not itself a part's: CF = it is not
 check83:
     xor cx, cx                  ; CL = the base's length, CH = the ext's
@@ -1623,6 +1692,12 @@ check83:
     cmp al, '*'
     je .no
     cmp al, '?'
+    je .no
+    cmp al, '\'                 ; ...and no path: a join reads this name
+    je .no                      ; off the part's header, and a separator in
+    cmp al, '/'                 ; it is a file outside DEST
+    je .no
+    cmp al, ':'
     je .no
     or bl, bl
     jnz .ext
@@ -1668,6 +1743,9 @@ s_wrerr:    db 13, 10, 'Cannot write', 13, 10, 0
 s_full:     db 13, 10, 'Disk full', 13, 10, 0
 s_exists:   db ' already exists', 13, 10, 0
 s_insert:   db 'Insert the disk with ', 0
+s_missing:  db 13, 10, 'Missing ', 0
+s_onout:    db ' - the result is on that drive, so its disk cannot be swapped', 13, 10, 0
+s_samedrv:  db '/P swaps the disk in DEST, so FILE must be on another drive', 13, 10, 0
 s_ready:    db 'Ready for ', 0
 s_presskey: db ' and press a key (Esc stops) ', 0
 s_stopped:  db 'Stopped', 13, 10, 0

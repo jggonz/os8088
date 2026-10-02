@@ -42294,7 +42294,7 @@ the same arithmetic, and a size in bytes is taken as given.
 |---|---|---|
 | `tools/os88cz.py` | any Python 3, no pip | `split`, `join`, `pack`, `unpack`, `info`; `split --images` also writes each part to its own FAT12 floppy image of that size (`NAME-001.IMG`), through `tools/os88disk.py`, ready to write to a disk |
 | `tools/os88czgui.py` | the same, with Tk | the same four verbs on three tabs, and the one thing a person wants before anything is written: how many disks a file will take. A file dropped on the window goes to its tab, below |
-| `OS88CZ.COM` | MS-DOS 2 or later, an 8088 up | `J` joins a set, and **ASKS FOR THE DISK** when a part is not where the last one was, so a set is joined straight off a pile of floppies onto another drive - which the os8088 side does too, as `Uncompress To...` (§22.23.6), and plain `Uncompress` does not (§22.23.5). `S` splits, pausing for a fresh disk before each part with `/P`. `U` expands a `'CZ'` file, LZ4 or LZB |
+| `OS88CZ.COM` | MS-DOS 2 or later, an 8088 up | `J` joins a set, and **ASKS FOR THE DISK** when a part is not where the last one was, so a set is joined straight off a pile of floppies onto another drive - which the os8088 side does too, as `Uncompress To...` (§22.23.6), and plain `Uncompress` does not (§22.23.5). It never asks in the drive the result is being written to - that disk cannot go out, and os8088 disks share one serial and label, so DOS could not tell the swap - and says `Missing` instead, as `cmz_jfloppy` does; the name a part's header gives the result must be an 8.3 name with no path in it. `S` splits, pausing for a fresh disk before each part with `/P`, which refuses a FILE on DEST's drive. `U` expands a `'CZ'` file, LZ4 or LZB. An argument is 64 characters at most |
 
 **`pack` refuses a file over 449KB, and `--lzb` uses the machine's parse.**
 A `'CZ'` file is expanded whole into a claim of its unpacked size
@@ -150106,6 +150106,10 @@ refill, the flush, the shrink and the close's zero-length create. It never
 moves the PROGRAM's drive - which `dos_vol_to` did, only to stand in that
 drive's current folder - so nothing walks home afterwards, and the three
 bytes that banked where to walk home to (`FVVOL`, `FVSV`, `WVSV`) are gone.
+The one call that READS where the machine stands, `AH=47h` (it asks
+`dos_be_path`), stands at the program's drive and folder first
+(`dos_fh_stand`, two compares when it is already there) - without it, a read
+of `SUB\X.DAT` from the root left the next `AH=47h` answering `SUB`.
 
 **A terminating program's files stayed open.** DOS closes every handle of a
 process that terminates. The box closed none: `dos_prog_done` never flushed,
@@ -150171,7 +150175,9 @@ later one is `DBE_WSEQ` with `WSEQF_HELD`, so the data goes down every window
 and the FAT, the link and the entry once, at the commit - which is when DOS
 writes them too. The commit is `DBE_WSEQ` with `CX = 0`, made at:
 
-- `AH=3Eh`, and so at a program's exit (§96.52's sweep);
+- `AH=3Eh`, and so at a program's exit (§96.52's sweep) - **even when the
+  close's own last flush fails**, whose error is still the answer: the record
+  is freed either way, so nothing could reach its token again;
 - `AH=0Dh`, and `AH=68h`/`6Ah` (COMMIT FILE, which answered *invalid
   function* before and is `AH=0Dh`'s body now: one window and one held stream,
   so committing one handle and committing all are the same two steps);

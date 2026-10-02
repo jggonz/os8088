@@ -3993,6 +3993,14 @@ dos_int21:
                                     ; length of our path buffer back. IBM DOS
                                     ; 3.30, asked the same question by the same
                                     ; binary, gives CX back
+    mov dl, [dos_vol]               ; **STAND WHERE THE PROGRAM IS FIRST**
+    call dos_fh_stand               ; (SPEC.md 96.52): a refill or a flush
+    jc .cw_bad                      ; leaves the machine in the HANDLE's folder
+                                    ; and nothing walks it home, so asking the
+                                    ; machine without this answers SUB for a
+                                    ; program in the root that read SUB\X.DAT.
+                                    ; Two compares when it is already there;
+                                    ; DX goes back from the frame at .ok
     push ds
     pop es
     mov di, dos_pbuf
@@ -16020,7 +16028,13 @@ dos_fh_close:
     cmp bl, [dos_wown]
     jne .clnw
     call dos_fh_flush
-    jc .out
+    jnc .clnw
+    push ax                         ; **AND THE HOLD STILL ENDS** (SPEC.md
+    call dos_fh_commit              ; 96.53): this record is freed below, so
+    pop ax                          ; nothing - not even dos_fh_sweep - could
+    stc                             ; reach its token again, and every window
+    jmp short .out                  ; before the failed one stays pending. The
+                                    ; flush's AL is the answer
 .clnw:
     test byte [si+FH_FLAGS], FHF_WRITE
     jz .done
@@ -17264,20 +17278,12 @@ dos_fh_stand:
 .go:
     mov bl, dl
     mov dx, ax
-    call dos_be_goto
-    jc .no
-.ok:
-    pop dx
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    pop dx
-    pop bx
-    pop ax
-    stc
-    ret
+    call dos_be_goto                ; CF is the answer...
+.ok:                                ; ...and a compare that matched left CF=0,
+    pop dx                          ; so neither path needs its own tail: the
+    pop bx                          ; DOS core's budget (CORE_MAX) is what
+    pop ax                          ; paid for AH=47h's stand and the close's
+    ret                             ; commit (SPEC.md 96.52, 96.53)
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -17443,11 +17449,8 @@ dos_fh_at:
     cmp dx, [dos_pdir]
     je .ok
 .go:
-    call dos_be_goto
-    jc .no
-.ok:
-    clc
-.no:
+    call dos_be_goto                ; CF is the answer, and the matched compare
+.ok:                                ; left CF=0 (dos_fh_stand's shape)
     pop dx
     pop bx
     pop ax

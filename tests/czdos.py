@@ -17,9 +17,11 @@ batch file, and each leg's output goes to a .LOG the host reads back:
                 several parts - into OUT\\, byte for byte.
   CZ            U expands a 'CZ' file in each format.
   refusals      a set with a damaged STORED byte (only the check can see it),
-                a part from another set, and a missing part, answered with
-                Esc through redirected stdin: each must say so and leave no
-                result and no OS88CZ.$$$ behind.
+                a part from another set, and a missing part on the drive the
+                result is going to - which is NOT asked for, because that disk
+                cannot go out (SPEC.md 20.17.4), so the Esc on redirected
+                stdin is never read: each must say so and leave no result and
+                no OS88CZ.$$$ behind.
 
 `--break` is the negative control (docs/WRITING-TESTS.md 1): it hands J the
 damaged set as if it were a good one, and the row must go red.
@@ -211,7 +213,7 @@ def main():
         out = set(os.listdir(os.path.join(d, "OUT")))
         for lg, says, gone in (("RDMG.LOG", "Cannot expand", "DMG.BIN"),
                                ("RWRG.LOG", "Wrong part", "WRG.BIN"),
-                               ("RMISS.LOG", "Stopped", "MISS.BIN")):
+                               ("RMISS.LOG", "Missing", "MISS.BIN")):
             t = log(d, lg)
             check(says in t and gone not in out and "OS88CZ.$$$" not in out,
                   "%s says %r, and left nothing: %r"

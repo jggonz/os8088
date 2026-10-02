@@ -64,6 +64,10 @@ def main():
             bad.append("a handle opened as SUB\\X.DAT refilled from the WRONG "
                        "FOLDER: %r (DOS-STREAM-PLAN 3.1)"
                        % [r for r in text if r.startswith("FDIR")])
+        if not any(r.startswith("CWD ok") for r in text):
+            bad.append("AH=47h after a refill of SUB\\X.DAT answered the "
+                       "HANDLE's folder, not the program's: %r (SPEC.md "
+                       "96.52)" % [r for r in text if r.startswith("CWD")])
         if not any(r.startswith("ILV ok") for r in text):
             bad.append("two created files written in turn, 700 bytes a go, "
                        "failed: %r - a window flushed PARTIAL by the other "

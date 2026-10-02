@@ -4774,7 +4774,9 @@ SOAK = [
         "name in the drive's current folder reads 0xEE and says FDIR BAD at "
         "its offset; then it writes 3,000 bytes and exits without AH=3Eh, and "
         "the host reads NOCLOSE.DAT off the floppy. VERIFIED TO FAIL on both "
-        "against the build before 96.52: FDIR BAD at 0, and no NOCLOSE.DAT.",
+        "against the build before 96.52: FDIR BAD at 0, and no NOCLOSE.DAT. "
+        "AH=47h straight after the refill must still answer the root (CWD "
+        "ok): VERIFIED TO FAIL as CWD BAD with AH=47h's stand taken out.",
         needs=("marty",),
         wants=("build/os8088-360.img", "build/dosfix360.img")),
     Row("dosfull", "soak", py("tests/dosfull.py"), 120.0,

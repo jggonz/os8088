@@ -12,6 +12,10 @@
 ; 3. NOCLOSE: create NOCLOSE.DAT, write 3,000 bytes of 'N' and EXIT without
 ;    AH=3Eh. DOS closes every handle of a process that terminates; the host
 ;    reads the file off the floppy afterwards and wants all 3,000.
+; 4. CWD: AH=47h straight after 1, whose refill stood the MACHINE in SUB.
+;    The program never left the root, so DOS answers "" - and a box that
+;    asks the machine where it stands without standing it where the
+;    program is first answers "SUB" (CWD ok / CWD BAD).
 ;
 ; Runs under a real DOS unchanged. It waits for a key after READY, so the
 ; host can read the screen; the exit that follows is still without AH=3Eh.
@@ -77,6 +81,18 @@ start:
     mov bx, [fh]
     int 0x21
 .nc:
+    ; --- 4. CWD: the program is still in the root, whatever 1 refilled ---
+    mov ah, 0x47
+    xor dl, dl
+    mov si, cwd
+    int 0x21
+    mov dx, s_cbad
+    jc .cw
+    cmp byte [cwd], 0
+    jne .cw
+    mov dx, s_cok
+.cw:
+    call puts
     ; --- 2. INTERLEAVE: two CREATED files written in turn, 700 bytes a go --
     ; Each switch takes the box's one window from the other file, so each
     ; file's window is flushed PARTIAL, at a size that is not a cluster
@@ -213,6 +229,8 @@ n_ib:    db 'ILVB.DAT', 0
 s_iok:   db 'ILV ok', 13, 10, '$'
 s_ibad:  db 'ILV BAD, rounds left $'
 s_fok:   db 'FDIR ok', 13, 10, '$'
+s_cok:   db 'CWD ok', 13, 10, '$'
+s_cbad:  db 'CWD BAD', 13, 10, '$'
 s_fbad:  db 'FDIR BAD at $'
 s_got:   db ' got $'
 s_ready: db 'READY', 13, 10, '$'
@@ -223,4 +241,5 @@ fha:     dw 0
 fhb:     dw 0
 nil:     dw 0
 stage:   db 0
+cwd:     times 64 db 0
 buf:
