@@ -276,6 +276,23 @@ st_render_begin equ $
  mov bx,8
  cmp byte [st_ground],0
  je .air
+ ; A skid exists only while input opposes the remaining ground momentum.
+ mov al,[st_keys]
+ and al,3
+ cmp al,1
+ jne .skidright
+ cmp word [st_vx],0
+ jle .groundpose
+ mov bx,ST_SKID_LEFT
+ jmp .player
+.skidright:
+ cmp al,2
+ jne .groundpose
+ cmp word [st_vx],0
+ jge .groundpose
+ mov bx,ST_SKID_RIGHT
+ jmp .player
+.groundpose:
  cmp byte [st_land],0
  jne .landing
  cmp word [st_vx],0

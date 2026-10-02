@@ -89,6 +89,7 @@ st_load:
  mov byte [st_ground],1
  mov byte [st_coyote],ST_ASSIST
  mov byte [st_jumpbuf],0
+ mov byte [st_jump_tier],0
  mov byte [st_land],0
  mov byte [st_invuln],ST_PROTECTION
  mov byte [st_facing],0
@@ -99,7 +100,7 @@ st_load:
  mov word [st_drawcam],0ffffh
  mov byte [st_ephase],0
  mov byte [st_fx],0
- call st_camera
+ call st_camera_reset
  ret
 st_respawn:
  cmp byte [st_lives],1
@@ -154,6 +155,10 @@ st_solid:
  ret
 .no: clc
  ret
+; Word tables indexed by twice the latched tier. Keep enemy gravity separate.
+st_jump_launch: dw ST_JUMP,ST_JUMP_WALK,ST_JUMP_RUN
+st_jump_ascent: dw ST_JUMP_ASCENT_SLOW,ST_JUMP_ASCENT_WALK,ST_JUMP_ASCENT_RUN
+st_jump_descent: dw ST_JUMP_DESCENT_SLOW,ST_JUMP_DESCENT_WALK,ST_JUMP_DESCENT_RUN
 st_step:
  cmp byte [st_invuln],0
  je .land
@@ -193,7 +198,23 @@ st_step:
  je .accel
  cmp byte [st_coyote],0
  je .accel
- mov word [st_vy],ST_JUMP
+ mov ax,[st_vx]
+ or ax,ax
+ jns .speed
+ neg ax
+.speed:
+ xor bx,bx
+ cmp ax,ST_JUMP_WALK_SPEED
+ jb .profile
+ inc bx
+ cmp ax,ST_JUMP_RUN_SPEED
+ jb .profile
+ inc bx
+.profile:
+ mov [st_jump_tier],bl
+ shl bx,1
+ mov ax,[st_jump_launch+bx]
+ mov [st_vy],ax
  mov byte [st_ground],0
  mov byte [st_coyote],0
  mov byte [st_jumpbuf],0
@@ -227,7 +248,20 @@ st_step:
  jmp .velocity
 .left:
  mov byte [st_facing],1
+ cmp byte [st_ground],0
+ je .airleft
+ cmp ax,0
+ jle .groundleft
+ sub ax,ST_BRAKE
+ jns .velocity
+ xor ax,ax
+ jmp .velocity
+.groundleft:
  sub ax,ST_ACCEL
+ jmp .leftcap
+.airleft:
+ sub ax,ST_AIR_ACCEL
+.leftcap:
  neg dx
  cmp ax,dx
  jge .velocity
@@ -235,7 +269,20 @@ st_step:
  jmp .velocity
 .right:
  mov byte [st_facing],0
+ cmp byte [st_ground],0
+ je .airright
+ cmp ax,0
+ jge .groundright
+ add ax,ST_BRAKE
+ js .velocity
+ xor ax,ax
+ jmp .velocity
+.groundright:
  add ax,ST_ACCEL
+ jmp .rightcap
+.airright:
+ add ax,ST_AIR_ACCEL
+.rightcap:
  cmp ax,dx
  jle .velocity
  mov ax,dx
@@ -293,8 +340,16 @@ st_step:
 .vertical:
  mov ax,[st_y]
  mov [st_oldy],ax
+ xor bx,bx
+ mov bl,[st_jump_tier]
+ shl bx,1
+ mov dx,[st_jump_ascent+bx]
+ cmp word [st_vy],0
+ jl .gravity
+ mov dx,[st_jump_descent+bx]
+.gravity:
  mov bx,[st_vy]
- add bx,ST_GRAVITY
+ add bx,dx
  cmp bx,ST_FALL
  jle .fallcap
  mov bx,ST_FALL
@@ -328,10 +383,12 @@ st_step:
  mov [st_y],ax
  mov word [st_vy],0
  mov byte [st_ground],1
+ mov byte [st_jump_tier],0
  pop ax
  cmp al,6
  jne .impact
  mov word [st_vy],ST_SPRING
+ mov byte [st_jump_tier],0
  mov byte [st_ground],0
  mov byte [st_coyote],0
  mov al,1
@@ -393,6 +450,7 @@ st_step:
  cmp word [st_vy],0
  jl .enemies
  mov word [st_vy],ST_SPRING
+ mov byte [st_jump_tier],0
  mov byte [st_ground],0
  mov byte [st_coyote],0
  mov al,1
@@ -483,9 +541,31 @@ st_coin:
  call st_effect
  RESTORE
  ret
+; Fresh course/retry placement must not depend on the previous viewport.
+st_camera_reset:
+ mov ax,[st_x]
+ sub ax,ST_CAMERA_START
+ jmp st_camera.clamp
+; Keep the viewport still inside the dead zone; follow either crossed edge.
 st_camera:
  mov ax,[st_x]
- sub ax,120
+ sub ax,[st_cam]
+ cmp ax,ST_CAMERA_LEFT
+ jge .right
+ mov ax,[st_x]
+ sub ax,ST_CAMERA_LEFT
+ jmp .clamp
+.right:
+ cmp ax,ST_CAMERA_RIGHT
+ jle .hold
+ mov ax,[st_x]
+ sub ax,ST_CAMERA_RIGHT
+ add ax,3                         ; round up so screen x never exceeds RIGHT
+ jmp .clamp
+.hold:
+ mov ax,[st_cam]
+.clamp:
+ or ax,ax
  jns .max
  xor ax,ax
 .max:

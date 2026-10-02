@@ -44,9 +44,12 @@ def pose(i):
     elif i==10: # falling, arms balance, feet prepare for contact
         k1,f1,k2,f2=(5,18),(4,22),(11,18),(12,22)
         arms=[((4,9),(2,7)),((12,9),(14,7))]
-    else: # landing recoil: bent knees absorb the impact
+    elif i==11: # landing recoil: bent knees absorb the impact
         hip=(8,15); neck=(8,9); k1,f1,k2,f2=(4,18),(5,22),(12,18),(11,22)
         arms=[((4,12),(3,15)),((12,12),(13,15))]
+    else: # skid facing right: lean back and brace the leading foot
+        hip=(9,14); neck=(6,7); k1,f1,k2,f2=(12,18),(14,22),(5,18),(3,22)
+        arms=[((3,10),(1,8)),((10,9),(13,7))]
     line(p,neck,hip)
     for elbow,hand in arms: line(p,neck,elbow); line(p,elbow,hand)
     for knee,foot in [(k1,f1),(k2,f2)]:
@@ -166,7 +169,9 @@ def generate(out,preview=False,course=None):
                 for a,b in [((6,10),(10,10)),((10,10),(12,14)),((12,14),(8,18)),((8,18),(4,14)),((4,14),(6,10)),((5,13),(0,7+frame*12)),((11,13),(15,7+frame*12))]: line(p,a,b)
                 p[12][7]=p[12][9]=0
             enemy.append(p)
-    data('st_sprites',b''.join(pack(p) for p in sprites+[[row[::-1] for row in p] for p in sprites]+enemy))
+    skid=pose(12)
+    data('st_sprites',b''.join(pack(p) for p in sprites+[[row[::-1] for row in p] for p in sprites]+enemy+
+                             [skid,[row[::-1] for row in skid]]))
     # Deduplicate each tile's four byte-columns. Empty and soil are phase invariant.
     cols=[]; keys=[]
     for p in tiles():
@@ -218,8 +223,8 @@ def generate(out,preview=False,course=None):
                  for l in levels]),indent=2)+'\n')
     if preview:
         from PIL import Image, ImageDraw
-        im=Image.new('RGB',(12*80,240),'white'); dr=ImageDraw.Draw(im)
-        for i,p in enumerate(sprites):
+        im=Image.new('RGB',(13*80,240),'white'); dr=ImageDraw.Draw(im)
+        for i,p in enumerate(sprites+[skid]):
             for y,row in enumerate(p):
                 for x,v in enumerate(row):
                     if not v: dr.rectangle((i*80+x*4,20+y*4,i*80+x*4+3,20+y*4+3),fill='black')
@@ -241,7 +246,7 @@ def generate(out,preview=False,course=None):
                     f=hz(n); bass=hz([0,-5,-3,-5][(j//8)%4],131)
                     samples=[int(7000*(1-0.4*x/4096)*((1 if math.sin(2*math.pi*f*x/22050)>0 else -1) if f else 0)+2500*math.sin(2*math.pi*bass*x/22050)) for x in range(4096)]
                     w.writeframes(struct.pack('<%dh'%len(samples),*samples))
-    print('Stickio: %d levels, 24 articulated poses, %d cached tile columns, 6 themes'%(len(levels),len(cols)))
+    print('Stickio: %d levels, 26 articulated poses, %d cached tile columns, 6 themes'%(len(levels),len(cols)))
 if __name__=='__main__':
     a=argparse.ArgumentParser(); a.add_argument('out',type=Path); a.add_argument('--preview',action='store_true'); a.add_argument('--course',type=Path)
     ns=a.parse_args(); generate(ns.out,ns.preview,ns.course)

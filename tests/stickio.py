@@ -31,6 +31,9 @@ def host():
     assert image==len(raw) and image+bss<=61440-2048
     from stickio_p0 import host as p0_host
     p0_host(raw, sym)
+    from stickio_p1 import host as p1_host
+    p1_host(raw, sym)
+    camera_host()
     levels=json.loads(at('build/stickio-art/levels.json').read_text())
     assert len(levels)==30 and len(set(l['name'] for l in levels))==30
     previous=0
@@ -51,15 +54,60 @@ def host():
             gaps=gaps+1 if not col[6] else 0
             assert gaps<=3
         assert len(l['enemies'])<=20
-    sprite=raw[sym['st_sprites']:sym['st_sprites']+30*96]
+    sprite=raw[sym['st_sprites']:sym['st_sprites']+32*96]
     assert len({sprite[i*96:(i+1)*96] for i in range(12)})==12
     def pixels(b): return [(x>>k)&3 for x in b for k in (6,4,2,0)]
     for i in range(12):
         right=pixels(sprite[i*96:(i+1)*96]); left=pixels(sprite[(i+12)*96:(i+13)*96])
         assert all(v in (0,3) for v in right)
         assert left==[v for y in range(24) for v in right[y*16:y*16+16][::-1]]
+    skid=pixels(sprite[30*96:31*96]);mirror=pixels(sprite[31*96:32*96])
+    assert len(sprite)==32*96 and all(v in (0,3) for v in skid)
+    assert sprite[30*96:31*96] not in [sprite[i*96:(i+1)*96] for i in range(30)]
+    assert mirror==[v for y in range(24) for v in skid[y*16:y*16+16][::-1]]
     assert len(set(struct.unpack_from('<32H',raw,sym['st_tune%d'%i]) for i in range(6)))==6
-    print('host: 30 RLE courses, bounded gaps/enemies, 24 distinct mirrored human poses, 6 themes;',image,'image +',bss,'BSS')
+    print('host: 30 RLE courses, bounded gaps/enemies, 26 distinct mirrored human poses, 6 themes;',image,'image +',bss,'BSS')
+
+def camera_cases():
+    # Explicit contract outcomes, including every fractional rendering phase
+    # at both thresholds, teleports and rooms barely wider than the viewport.
+    cases=[(64,x,200,200) for x in range(304,337)]
+    cases += [(64,x,200,196) for x in range(300,304)]
+    cases += [(64,x,200,204) for x in range(337,341)]
+    cases += [(64,32,704,0),(64,1008,0,704),(64,0,704,0),
+              (20,304,0,0),(21,152,0,16),(21,0,16,0),
+              (160,2544,0,2240),(160,0,2240,0)]
+    return cases
+
+def camera_host():
+    from stickio_sim import Simulation, Player
+    constants=dict((n,int(v)) for n,v in re.findall(r'^%define (ST_CAMERA_\w+) (\d+)$',
+        (ROOT/'apps/stickio/const.inc').read_text(),re.M))
+    assert constants==dict(ST_CAMERA_LEFT=104,ST_CAMERA_RIGHT=136,ST_CAMERA_START=120)
+    for width,x,cam,expected in camera_cases():
+        model=Simulation([[0]*8 for _ in range(width)],Player(x=x,cam=cam))
+        model.camera()
+        assert model.player.cam==expected,(width,x,cam,expected,model.player.cam)
+    positions=0
+    for width in range(20,161):
+        model=Simulation([[0]*8 for _ in range(width)])
+        p=model.player;end=width*16-320
+        for direction,path in ((1,range(width*16-15)),(-1,range(width*16-16,-1,-1))):
+            for x in path:
+                previous=p.cam;p.x=x;model.camera()
+                assert 0<=p.cam<=end and p.cam%4==0
+                assert direction*(p.cam-previous)>=0,'camera reversed during monotone travel'
+                assert (104<=x-p.cam<=136 or p.cam==0 and x<104 or
+                        p.cam==end and x-p.cam>136),(width,x,p.cam)
+                if 104<=x-previous<=136:
+                    assert p.cam==previous,'camera moved inside the dead zone'
+                current=p.cam;model.camera()
+                assert p.cam==current,'stationary camera moved'
+                positions+=1
+        for x in (0,32,120,121,122,123,512,width*16-16):
+            p.x=x;p.cam=end;model.camera(reset=True)
+            assert p.cam==min(max(x-120,0),end)&~3
+    print('P1 camera host:',positions,'positions across every legal width; thresholds, reversal, bounds and reset')
 
 class Probe:
     def __init__(self,ui,sym):
@@ -105,13 +153,18 @@ def pixelcheck(p,tag):
         row=[ts[mp[((x+cam)//16)*8+y//16]][y%16][(x+cam)%16] for x in range(320)]
         expected.extend(A.pack([row]))
     final=bytearray(expected)
-    art=p.data('sprites',30*96)
+    art=p.data('sprites',32*96)
     objects=[]
     py=p.w('y');py=(py-65536 if py&32768 else py)//256
     vy=p.w('vy');vy=vy-65536 if vy&32768 else vy
     if not p.b('invuln') or not p.b('anim')&4:
         pose=(11 if p.b('land') else (p.w('gait')//3)&7 if p.w('vx') else 8) if p.b('ground') else 9 if vy<0 else 10
-        objects.append((p.w('x')-cam,py,pose+12*p.b('facing')))
+        pose+=12*p.b('facing')
+        vx=p.w('vx');vx=vx-65536 if vx&32768 else vx
+        direction=p.b('keys')&3
+        if p.b('ground') and (direction==1 and vx>0 or direction==2 and vx<0):
+            pose=31 if direction==1 else 30
+        objects.append((p.w('x')-cam,py,pose))
     nearby=0
     for n in range(p.w('ne')):
         x,y,t,d,age,*_=struct.unpack_from('<HHBbHHHHH',p.data('enemies',p.w('ne')*16),n*16)
@@ -167,6 +220,45 @@ def rastercheck(p,tag,proof):
     m.bp_exec(p.a('input'));m.run();assert m.wait_stop(30)=='breakpoint'
     p.put('pause',0);p.put('huddirty',1)
 
+def camera_guest(p,tag):
+    from stickio_sim import Simulation, Player, FIELDS
+    from stickio_p0 import snapshot
+    costs=[]
+    for width,x,cam,expected in camera_cases():
+        p.put('width',width,2);p.put('x',x,2);p.put('cam',cam,2)
+        costs.append(p.call('camera'))
+        assert p.w('cam')==expected,('camera threshold',width,x,cam,expected,p.w('cam'))
+        p.call('camera')
+        assert p.w('cam')==expected,'stationary camera moved'
+    # Exercise the real load/retry path with a viewport from another course.
+    for level,checkpoint,expected in ((29,2400,2240),(0,512,392),(0,32,0)):
+        for previous in (0,2240):
+            p.put('level',level,2);p.call('newcourse')
+            p.put('checkpoint',checkpoint,2);p.put('cam',previous,2);p.call('load')
+            assert p.w('cam')==expected,('camera load',level,checkpoint,previous,p.w('cam'))
+            p.put('lives',3);p.put('cam',previous,2);p.call('respawn')
+            assert p.w('cam')==expected and p.w('x')==checkpoint,'camera retry retained old viewport'
+    p.put('level',0,2);p.call('newcourse');p.call('load');p.put('ne',0,2)
+    flat=[[0]*6+[1,1] for _ in range(64)]
+    p.m.write(p.a('map'),bytes(v for col in flat for v in col))
+    p.put('x',200,2);p.put('jumpheld',0);p.call('camera_reset')
+    model=Simulation(flat,Player(**snapshot(p)))
+    keys=[10]*30+[1]*55+[0]*12
+    for i,key in enumerate(keys):
+        p.put('keys',key);p.call('step');model.step(key)
+        assert snapshot(p)=={f:getattr(model.player,f) for f in FIELDS},('camera movement trace',i,key)
+    # Let the camera drive the renderer through both thresholds, reversals,
+    # room-end clamps and a jump back to the start. Compare every output pixel.
+    p.put('invuln',0);p.put('x',32,2);p.call('camera_reset');model.player.x=32;model.camera(reset=True)
+    path=[32,104,136,137,138,139,140,141,180,179,148,147,146,140,120,100,0,1008,1008,32]
+    for x in path:
+        p.put('x',x,2);p.call('camera');model.player.x=x;model.camera()
+        assert p.w('cam')==model.player.cam,('camera scroll',x,p.w('cam'),model.player.cam)
+        p.call('render');pixelcheck(p,tag)
+    p.call('newcourse');p.call('load')
+    print('P1 camera guest:',len(camera_cases()),'threshold cases,',len(keys),'per-step matches,',len(path),'pixel comparisons; load/retry resets',flush=True)
+    return dict(camera_max_clocks=max(costs),camera_trace_steps=len(keys),camera_pixel_checks=len(path))
+
 def guest(tag):
     import os88marty as M,os88ui
     sym=symbols();proof=at('build/stickio-proof');proof.mkdir(exist_ok=True)
@@ -180,6 +272,9 @@ def guest(tag):
         levels=json.loads(at('build/stickio-art/levels.json').read_text())
         from stickio_p0 import guest as p0_guest
         p0_guest(p)
+        from stickio_p1 import guest as p1_guest
+        p1_guest(p,tag)
+        camera_metrics=camera_guest(p,tag)
         costs=[]
         for i,l in enumerate(levels):
             p.put('level',i,2);p.put('checkpoint',32,2);p.call('load')
@@ -195,6 +290,7 @@ def guest(tag):
             p.put('cam',0,2);p.call('render')
             p.put('cam',4,2);costs.append(p.call('render'))
         p.put('level',0,2);p.put('checkpoint',32,2);p.call('load')
+        p.put('keys',0)
         for facing in (0,1):
             for pose in range(12):
                 p.put('invuln',0);p.put('facing',facing);p.put('ground',pose not in (9,10))
@@ -325,6 +421,7 @@ def guest(tag):
         result={'render_scroll_mean_clocks':round(sum(costs)/len(costs)),
                 'work_mean_clocks':round(sum(framecycles)/len(framecycles)),
                 'work_max_clocks':max(framecycles),'work_fps':round(M.GUEST_HZ/(sum(framecycles)/len(framecycles)),1)}
+        result.update(camera_metrics)
         p.put('x',160,2);p.put('keys',10);p.call('camera');p.call('render')
         m.key('ArrowRight',down=True,up=False);m.key('KeyX',down=True,up=False)
         scrollframe=[0]

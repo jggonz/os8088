@@ -89,6 +89,7 @@ st_enemy_step:
  ja .hurt
  mov byte [si+4],0
  mov word [st_vy],ST_STOMP
+ mov byte [st_jump_tier],0
  call st_actor_reward
  mov al,4
  call st_effect

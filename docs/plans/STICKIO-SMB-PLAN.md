@@ -1,17 +1,48 @@
 # Stickio feature gaps and Super Mario Bros inspired development plan
 
-Status: P0 foundations implemented; P1–P3 remain proposed. Original review on 2026-09-30 used commit `b83c1dc4` and the supplied `smb.nes`. The baseline and reference analysis below describe that review; current P0 behavior is documented in SPEC.md section 103 and the Stickio README.
+Status: P0 foundations, the P1 camera dead zone, speed-sensitive jumps and braking/skid implemented; other P1–P3 features remain proposed. Original review on 2026-09-30 used commit `b83c1dc4` and the supplied `smb.nes`. The baseline and reference analysis below describe that review; current behavior is documented in SPEC.md section 103 and the Stickio README.
+
+P1 camera increment: the viewport holds while the player origin stays at screen
+x=104–136, follows either crossed edge with directional four-pixel rounding,
+and clamps to course bounds. Course entry/retry resets around the safe arrival,
+independent of the old viewport. The host sweeps all legal widths; guest checks
+cover exact thresholds, running/reversal traces, load/retry placement, and
+camera-driven framebuffer comparisons on CGA/Hercules/VGA. Authored encounters
+and human tuning remain pending; this does not complete Wave 1.
+
+P1 jump increment: launch-speed magnitudes below 256, 256–639 and at least 640
+select launch velocities −1664/−1728/−1792 in Stickio's 8.8 units. All profiles
+use ascent gravity 96; descent gravity is 96/112/128. Selection happens before
+horizontal acceleration when the queued jump launches and remains fixed during
+air steering, reversal and ceiling contact. Landing, retry, stomps and springs
+restore the base profile. Full flat-ground rises are 53.125/57.375/61.875 pixels;
+early-release, five-step assists and existing stomp/spring impulses remain.
+Independent host envelopes and guest traces cover thresholds in both directions,
+held/tap jumps, buffered landing speed, coyote time, gravity phases, terrain and
+reset paths. New encounter layouts and human tuning remain pending.
+
+P1 braking/skid increment: opposing ground input brakes at 96 in 8.8 units,
+clamps at zero, then accelerates in the requested direction on the next step.
+Air steering remains 48 and passive friction 64. Walk/run reversals stop in
+five/eight steps. A queued jump uses air steering immediately; landing and edge
+departure change the following step's response. Two original mirrored braced
+poses show opposing input while ground momentum remains, ahead of landing
+recoil. No skid timer or BSS is added. Signed host/guest traces cover stopping
+thresholds, neutral input, walls, jumps, landing and edge departure; framebuffer
+checks cover skid priority, cancellation and restoration on all three adapters.
+Movement tuning in authored courses and human review remain pending.
 
 P0 delivers named local constants, an independent integer player model with 365
 per-step guest comparisons, versioned single-room course authoring with a
 deterministic assembly fixture, compiler limits/manifests/previews, terrain-aware
 walkers and hoppers, authored flyer height, explicit checkpoint x/y, and consumed
-tile/enemy-reward ledgers. Existing thirty-course layouts and movement tuning
-remain. Compiler and runtime checks cover support heights, wall/edge policies,
-one-way support, pit retirement, actor overflow and retry payouts. Byte and live
+tile/enemy-reward ledgers. Existing thirty-course layouts remain; P1 now extends
+the jump profiles and ground reversal. Compiler and runtime checks cover support
+heights, wall/edge policies, one-way support, pit retirement, actor overflow and
+retry payouts. Byte and live
 timing ledgers are generated under `build/stickio-proof/`. Linked rooms, enhanced
-forms, speed-sensitive jumps, shells and first-world redesign remain later waves;
-the foundation traces do not certify course completion or human playability.
+forms, shells and first-world redesign remain later waves; the foundation traces
+do not certify course completion or human playability.
 
 Stickio has a useful platforming foundation. Its next improvement should make movement, enemies, rewards, and terrain interact: a stomp creates a shell, the shell clears a dangerous passage, a block grants a new ability, and a secret leads to a different route. Adding those decisions to deliberately composed courses will do more for engagement than increasing course length or enemy counts.
 
@@ -76,10 +107,10 @@ SMB comparison entries describe behaviors established by the inspected ROM, its 
 
 | Feature | SMB reference behavior | Stickio gap | Proposed adaptation | Priority |
 |---|---|---|---|---|
-| Acceleration and braking | Momentum and direction-dependent friction | Partial: one acceleration law on ground and in air; no skid pose | Separate ground braking and air steering; add skid feedback | P1 |
-| Jump profile | Speed selects jump and fall parameters | Partial: one launch/gravity profile at all speeds | Tune speed-tiered ascent and descent in Stickio units | P1 |
+| Acceleration and braking | Momentum and direction-dependent friction | P1 implemented: ground reversal brakes faster than air steering, with a mirrored skid pose | Evaluate stopping distance and feedback in authored encounters | P1 (implemented) |
+| Jump profile | Speed selects jump and fall parameters | P1 implemented: three speed-selected profiles with held/tap and contact checks | Evaluate in authored encounters and human tuning | P1 (implemented) |
 | Jump release and input | Button state affects jump duration | Present, with extra buffering/coyote assistance | Preserve assists; verify short taps and running jumps | P1 |
-| Camera | Forward progression and constrained backward travel | Different: camera follows both directions | Keep exploration; add dead zone and forward visibility | P1 |
+| Camera | Forward progression and constrained backward travel | P1 implemented: bidirectional 104–136 dead zone, bounded aligned scroll and load/retry reset | Keep exploration and evaluate forward visibility in new encounters | P1 (implemented) |
 | Enemy support physics | Ground actors move over terrain with species differences | Partial: fixed-height patrols | Terrain-aware support and falling; distinct edge policies | P0 |
 | Shell combat | Stomp, stationary shell, kick, moving shell, recovery | Missing | Original armored enemy and reusable shell state machine | P1 |
 | Enemy defenses | Species differ in stomp and projectile vulnerability | Missing: uniform stomp result | Traits for stompability, armor, spikes, and projectile resistance | P1/P2 |
@@ -118,7 +149,8 @@ Course composition is equally important. A safe first encounter teaches a mechan
 
 ### Baseline and tuning targets
 
-Current source values at approximately 54.62 steps per second:
+Original-review source values at approximately 54.62 steps per second (P1 jump
+values are documented above and in SPEC.md section 103):
 
 | Parameter | Current value |
 |---|---|
@@ -144,7 +176,12 @@ Proposed tuning procedure:
 4. Keep buffering and coyote time. Preserve held-Z behavior and support taps between presentations. Give airborne reversal a deliberate, testable response.
 5. Add skid and block-bump feedback, then test a small set of jump courses before fixing gap lengths across the campaign.
 
-Adopt a bounded camera dead zone, initially keeping the player approximately 104–136 pixels from the left edge during forward travel. These are proposed starting values. Evaluate visibility with the fastest shell and projectile, clamp to room bounds, and allow backward exploration without rapid oscillation. Retain four-pixel rendering alignment initially.
+The implemented camera dead zone keeps the player origin at 104–136 pixels from
+the left edge except at course boundaries. It follows left with downward and
+right with upward four-pixel rounding, holds through short reversals, and resets
+around x=120 on load/retry. Evaluate these initial values with the fastest shell
+and projectile when those actors land; retain backward exploration and bounded
+four-pixel rendering alignment.
 
 ### Collision foundations
 

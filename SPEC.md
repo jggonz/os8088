@@ -156978,6 +156978,53 @@ signed 8.8 velocity per simulation step, and step counts. Walk/run caps remain
 `tools/stickio_sim.py` independently models the player step order and integer
 rounding; guest traces compare every step, including terrain contacts.
 
+P1 braking/skid contract: ground acceleration remains 48; opposing held input
+brakes at 96 (`ST_BRAKE`) while airborne steering uses 48 (`ST_AIR_ACCEL`).
+Ground braking clamps to zero without changing sign that step; the next step
+accelerates in the requested direction. Releasing input or holding both directions
+uses the existing 64 passive friction in either phase. A queued jump clears ground
+before horizontal input, so its launch step uses air steering. Landing and edge
+departure affect the following step's acceleration law. Facing follows the single
+held direction immediately. While grounded with opposing input and nonzero
+remaining velocity, render a braced skid pose facing the requested direction,
+ahead of landing recoil; walls, stopping, jumping and input release end the pose.
+Two mirrored 16x24 skid masks occupy sprite indices 30/31 after the existing
+24 player and six enemy masks. No skid timer or additional BSS is needed.
+
+P1 speed-sensitive jump contract: a buffered/coyote launch selects a profile
+from the absolute horizontal 8.8 velocity **before that step's acceleration**.
+The run key alone does not select a higher jump. The profile stays fixed through
+air steering, reversal, release and ceiling contact until landing or another
+launch. Velocities and gravity below are signed 8.8 units per simulation step:
+
+| Launch speed magnitude | Launch velocity | Ascent gravity | Descent gravity |
+|---|---:|---:|---:|
+| 0–255 | −1664 | 96 | 96 |
+| 256–639 | −1728 | 96 | 112 |
+| 640 and above | −1792 | 96 | 128 |
+
+`st_jump_tier` is a byte index 0/1/2. Gravity uses the velocity sign before its
+addition (negative selects ascent), then applies the existing 1536 fall cap.
+Landing, load/retry, stomp bounce and spring launch reset the tier to zero;
+stomp/spring impulses and enemy gravity retain their P0 values. Early release
+still caps upward speed at −640 before a queued launch, and the five-step input
+buffer/coyote window and held-Z edge rule remain. Host envelopes and per-step
+guest comparisons cover both signs, exact speed thresholds, short/full jumps,
+air reversal, assists and terrain contacts. These are movement checks; course
+redesign and human movement tuning remain pending.
+
+P1 camera contract: `st_cam` is the left edge of the 320-pixel viewport.
+During play the player origin can move freely between screen x=104 and x=136
+(`ST_CAMERA_LEFT/RIGHT`). Crossing either edge moves the camera just enough to
+return inside that interval: round down to four pixels when following left,
+round up when following right. Clamp to 0 through `width*16-320`; room ends
+override the dead zone. Stationary play and reversal within the interval retain
+the camera position. `st_camera_reset` on every course load/retry instead starts
+from `max(x-120,0)` (`ST_CAMERA_START`), rounded down and clamped, independent
+of the previous course/life. `tools/stickio_sim.py` models both paths; host/guest
+checks cover threshold rounding, bidirectional travel, bounds and retry resets,
+with framebuffer comparisons during camera-driven scroll and reversal.
+
 Version-one authored JSON under `apps/stickio/levels/` declares course/world,
 environment/music, one room, dimensions, tile rectangles, stable object IDs,
 spawn/checkpoint x/y and a flag exit. P0 supports one room with no links; the
@@ -157027,7 +157074,7 @@ poses are then composited in RAM and dirty row spans transferred at vertical
 retrace. Video memory retains the complete old frame during preparation, with
 no visible sprite erase pass. No per-pixel runtime drawing, float, guest asset
 rasterization or full-frame video copies. Art includes eight articulated running
-poses, idle, ascent, descent and landing recoil, mirrored at build time.
+poses, idle, ascent, descent, landing recoil and skid, mirrored at build time.
 
 Sound uses only §34 APIs: duration-leased PC speaker melody and priority effects;
 OPL2 melody, bass, harmony and a separate effect voice on AdLib/Sound Blaster;

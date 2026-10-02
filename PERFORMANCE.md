@@ -14419,3 +14419,128 @@ These are emulator measurements. Human campaign completion, real XT timing,
 monitor readability and listening remain separate acceptance work. The host
 oracle verifies player step order and rounding; it does not search or certify
 whole-course reachability.
+
+### Set 158 — Stickio: P1 bounded camera dead zone (§103)
+
+The viewport holds the player origin at screen x=104–136, follows either crossed
+edge with directional four-pixel rounding, and clamps to the course. Course
+entry and retry reset the viewport around the safe arrival independently of the
+old camera. Player movement, actor budgets and the four-step catch-up policy
+remain unchanged. The package is **39,522 image + 15,209 BSS = 54,731 bytes**,
+packed to **18,045 bytes**: 43 image bytes and no BSS beyond Set 157. Headroom
+below 61,440 is **6,709 bytes**; the 2 KiB reserve still passes.
+
+`make stickiocheck` checks 401,850 camera positions across widths 20–160.
+Each MartyPC adapter passes 49 explicit threshold/boundary cases, stationary
+repeat checks, course/retry placement, 97 per-step running/reversal comparisons
+with the independent player oracle, and 20 camera-driven framebuffer checks.
+The existing 365 P0 comparisons, thirty-course terrain and sprite oracles,
+old-frame-before-transfer checks, input and desktop return also pass.
+
+Fresh 4.772727 MHz results from the existing scripted workload:
+
+| adapter | mean scrolling render across 30 courses, clocks excluding wait | live scripted scroll, presentations/s | sample p99 period, ms | truncated updates / dropped steps | simulation time / guest interval |
+|---|---:|---:|---:|---:|---:|
+| CGA | 210,359 | 20.4 | 70.0 | 0 / 0 | 99.17% |
+| Hercules | 239,560 | 17.9 | 80.3 | 5 / 5 | 97.80% |
+| VGA, CGA mode | 203,211 | 20.7 | 76.8 | 0 / 0 | 99.65% |
+
+Results, including camera checks, are in `build/stickio-proof/*-results.json`;
+the size ledger is `p0-size-ledger.json`. The live script retains 81 CGA/VGA
+presentations and 80 Hercules presentations, with ordinary input, physics,
+sound and retrace waiting active. Its prescribed player positions now pass
+through the dead zone, so camera motion differs from Set 157. These are short
+emulator samples, not hardware rates or a busiest-encounter release gate. The
+existing work-cost assertions pass; Hercules catch-up loss and the later-wave
+sustained-time/tail-period targets remain unresolved.
+
+The repository full tier passes 57 checks with the unavailable C-toolchain
+check skipped. The dedicated 360 KiB image and rebuilt aggregate games360,
+720 KiB, 1.2 MiB and 1.44 MiB apps images pass structural verification; games360
+still uses 275/354 clusters and stickio360 19/354.
+
+### Set 159 — Stickio: P1 speed-sensitive jumps (§103)
+
+Buffered/coyote jump launches now latch one of three speed profiles before
+horizontal acceleration. Slow/walk/run launches rise 53.125/57.375/61.875 pixels
+on flat ground and land after 34/34/35 held-input steps; immediate release gives
+13.25/13.5/13.75-pixel rises. Walking/running held-jump travel at constant cap is
+59.5/105 pixels. These are independent integer-model envelopes, saved in
+`build/stickio-proof/p1-jump-envelopes.json`, rather than course completion or
+human tuning results. Air reversal retains the selected profile; ground contact,
+load/retry, springs and stomps restore the base gravity profile.
+
+The package is **39,657 image + 15,210 BSS = 54,867 bytes**, packed to **18,151
+bytes**. This adds 135 image bytes (including the launcher hint) and one BSS byte
+beyond Set 158. Headroom below 61,440 is **6,573 bytes**, retaining the 2 KiB
+reserve. The dedicated 360 KiB disk still uses 19/354 clusters.
+
+Each adapter checks 837 additional per-step host/guest comparisons, including
+signed speed thresholds, run-key-at-rest behavior, full/tap jumps, air reversal,
+buffered landing speed, coyote expiration, ascent/descent gravity and fall cap,
+walls, ceilings, one-way landings and springs. Separate guest checks exercise
+stomp bounce and load/retry resets. Existing P0, camera, thirty-course rendering,
+input and desktop return checks remain in the same registered rows. The QEMU
+monochrome terrain/display-restoration check also passes.
+
+Fresh 4.772727 MHz MartyPC results from the existing live scrolling script:
+
+| adapter | mean scrolling render across 30 courses, clocks excluding wait | live presentations/s | sample p99 period, ms | truncated updates / dropped steps | simulation time / guest interval |
+|---|---:|---:|---:|---:|---:|
+| CGA | 209,674 | 22.4 | 95.6 | 1 / 1 | 99.13% |
+| Hercules | 240,604 | 17.1 | 80.3 | 4 / 4 | 97.93% |
+| VGA, CGA mode | 203,064 | 23.8 | 100.4 | 1 / 1 | 99.23% |
+
+The final CGA sample retains 80 presentations; Hercules/VGA retain 81. All
+report zero actor overflow. These are short emulator samples of the existing
+scrolling workload, not new encounter or hardware frame-rate claims. The existing
+work-cost assertions pass. Catch-up loss and the proposed first-world tail-period
+and simulation-time targets remain unresolved; the four-step catch-up cap is
+unchanged. Results are in `build/stickio-proof/*-results.json`.
+
+The rebuilt games360, 720 KiB, 1.2 MiB and 1.44 MiB apps disks pass structural
+verification. Games360 remains at 275/354 clusters, 720 KiB at 680/713, and the
+larger geometries at 1,338/2,371 and 1,338/2,847 respectively.
+The repository full tier passes 57 checks with the unavailable C-toolchain
+check skipped.
+
+### Set 160 — Stickio: P1 ground braking and skid feedback (§103)
+
+Opposing ground input brakes at 96 in 8.8 units per step and clamps at zero;
+the next step accelerates in the requested direction. Air steering remains 48
+and neutral input retains friction 64. Flat-ground walk/run reversals stop in
+five/eight steps over 3.25/10.5 pixels. A queued jump uses air steering on its
+launch step; landing and edge departure affect the following step. Two original
+mirrored 16x24 skid masks are appended after the existing enemy masks, and
+grounded opposing input selects them ahead of landing recoil. There is no skid
+timer, extra actor, footprint or BSS allocation.
+
+The package is **39,938 image + 15,210 BSS = 55,148 bytes**, packed to **18,306
+bytes**: 281 image bytes and no BSS beyond Set 159. Headroom below 61,440 is
+**6,292 bytes**, retaining the 2 KiB reserve. Dedicated stickio360 and aggregate
+games360 still use 19/354 and 275/354 clusters. The 720 KiB, 1.2 MiB and 1.44 MiB
+apps disks rebuild and pass structural verification at 680/713, 1,338/2,371 and
+1,338/2,847 clusters respectively.
+
+`make stickiocheck` passes explicit signed braking thresholds, zero clamping,
+stopping times/distances, neutral input and jump/landing/edge step order. Each
+MartyPC adapter passes 392 additional per-step braking comparisons (1,229 with
+the P1 jump traces), plus 28 skid framebuffer checks covering mirrored stops,
+pose priority, cancellation and incremental restoration. Existing P0, camera,
+thirty-course terrain/sprite, input, old-frame-before-transfer and desktop-return
+checks pass, as does the QEMU monochrome display check. The repository full
+tier passes 57 checks with the unavailable C-toolchain check skipped.
+
+Fresh 4.772727 MHz MartyPC measurements from the existing scrolling script:
+
+| adapter | mean scrolling render across 30 courses, clocks excluding wait | live presentations/s | sample p99 period, ms | truncated updates / dropped steps | simulation time / guest interval |
+|---|---:|---:|---:|---:|---:|
+| CGA | 209,892 | 19.9 | 68.2 | 0 / 0 | 99.92% |
+| Hercules | 240,059 | 18.5 | 123.1 | 3 / 4 | 97.87% |
+| VGA, CGA mode | 202,405 | 21.5 | 99.9 | 1 / 1 | 99.19% |
+
+All retain 81 presentations with zero actor overflow; results and size ledgers
+are under `build/stickio-proof/`. Existing work-cost assertions pass. These are
+short emulator samples rather than busiest-encounter or hardware measurements.
+Catch-up loss and the proposed first-world tail-period/simulation-time targets
+remain unresolved. Course redesign and human movement tuning remain pending.

@@ -76,6 +76,9 @@ st_paint:
  add dx,16
  mov si,st_hint4
  call OSAPI_FONT_RUN
+ add dx,12
+ mov si,st_hint5
+ call OSAPI_FONT_RUN
  RESTORE
  ret
 st_about:
@@ -384,6 +387,7 @@ st_hint2: db '0'+ST_LEVEL_COUNT/10,'0'+ST_LEVEL_COUNT % 10,' COURSES - SIX WORLD
 st_hint3: db 'LEFT / RIGHT SELECT   ENTER TO PLAY',0
 st_select: db 'LEVEL 01',0
 st_hint4: db 'ARROWS MOVE  Z JUMP  X RUN  P PAUSE',0
+st_hint5: db 'BUILD SPEED TO JUMP HIGHER',0
 st_credits: dw st_title,st_credit1,st_credit2,st_credit3,0
 st_credit1: db 'Original Stickio art, levels and score',0
 st_credit2: db 'Articulated animation; native 8086 engine',0
@@ -420,6 +424,7 @@ VAR st_keysold,1
 VAR st_edges,1
 VAR st_jumpheld,1
 VAR st_jumpbuf,1
+VAR st_jump_tier,1
 VAR st_coyote,1
 VAR st_ground,1
 VAR st_land,1
