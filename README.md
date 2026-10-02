@@ -159,6 +159,8 @@ make 286-525-z    # 86Box: the 1.2MB 5.25" 286 with a 1.2MB app disk in B:
 make 286-525-word #   instead of the apps floppy - one per application disk:
 make 286-525-cword#   -z -word -cword -runcpm -c64 -weave -loom -all. The
 make 286-525-all  #   ONLY machines that read a 1.2MB disk (an XT cannot)
+make redlinedisk # REDLINE CPU/graphics lab, four disk sizes; R runs, S saves
+make redline-profile # record the cycle-accurate 4.77 MHz MartyPC reference
 make allapps  # every program on a set of floppies - both word processors,
               # Frotz, RunCPM, the Commodore 64, PaccMan and the Weave
               # family included - apps-all-1.img, -2.img, ... at 1.44MB and
@@ -514,6 +516,12 @@ tools/mouse.py       absolute mouse positioning over the QMP socket
 ```
 
 ## Software packages
+
+**REDLINE** is the CPU and graphics performance lab: period-style hardware
+facts, twelve fixed workloads, timing tables and comparison bars against a
+measured 4.77 MHz MartyPC PC. `make redlinedisk` builds all four disk sizes;
+R runs and S saves `REDLINE.TXT`. See [the research, CPU/MHz detection limits
+and reproducible baseline](docs/REDLINE.md).
 
 Programs live on a **FAT12** software floppy (drive B:) — and, once os8088 is
 installed on one, on a hard-disk partition. Either way it is an ordinary

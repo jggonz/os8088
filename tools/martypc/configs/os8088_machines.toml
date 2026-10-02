@@ -2195,3 +2195,51 @@ overlays = [
     [[machine.sound]]
     type = "AdLib"
     io_base = 0x388
+
+# REDLINE reference, SPEC.md 103: 315/22 MHz master /3, turbo=false.
+[[machine]]
+name = "os8088_redline_pc"
+type = "Ibm5150v256K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = ["pcxt_2_360k_floppies", "pcxt_2_serial_ports",
+            "us_modelf_keyboard", "microsoft_serial_mouse_com1"]
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# REDLINE reference, SPEC.md 103: 315/22 MHz master /3, turbo=false.
+[[machine]]
+name = "os8088_redline_pc_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = ["pcxt_2_360k_floppies", "pcxt_2_serial_ports",
+            "us_modelf_keyboard", "microsoft_serial_mouse_com1"]
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# NEC identity validation only: MartyPC V20 timings are not cycle accurate.
+[[machine]]
+name = "os8088_redline_v20_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = ["cpu_v20", "pcxt_2_360k_floppies", "pcxt_2_serial_ports",
+            "us_modelf_keyboard", "microsoft_serial_mouse_com1"]
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"

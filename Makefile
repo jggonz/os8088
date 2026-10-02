@@ -12204,7 +12204,7 @@ ALLAPPSIMG120 := $(BUILD)/apps-all-120-1.img
 N1942_ROM ?= $(wildcard 1942.nes)
 N1942SCENES = $(if $(strip $(N1942_ROM)),WORLD.V42 WORLD.C42,SEA.V42 REEF.V42 PORT.V42 SEA.C42 REEF.C42 PORT.C42)
 N1942LIVE := $(BUILD)/1942.o88 $(addprefix $(BUILD)/,1942V.GFX 1942C.GFX 1942VX.GFX 1942CX.GFX 1942L.GFX $(N1942SCENES) 1942.SFX)
-ALLAPPSFILES := $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
+ALLAPPSFILES := $(BUILD)/redline.o88 $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
                 $(PACCMANDISK) \
@@ -12225,7 +12225,7 @@ ALLAPPS := $(ALLAPPSFILES) $(BUILD)/runcpm-src.stamp tools/getruncpm.py
 # os88allapps.py prices every entry it is handed, so the second copy is
 # priced with it; the LOOM=32 directory slots below are priced too.
 
-ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
+ALLAPPSARGS := APPS:$(BUILD)/redline.o88 $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                                  $(BUILD)/frotz.o88) \
                $(addprefix GAMES:,$(APPS_GAMES)) \
                $(addprefix MEDIA:,$(APPS_DATA)) \
@@ -13877,3 +13877,23 @@ xt-excitebike: $(IMG360) $(BUILD)/excitebike360.img
 	$(BOX) -P $(VMXTEXCITEBIKE) -N
 excitebikeload: excitebikedisk $(BUILD)/os8088-360.img
 	python3 tests/excitebike_load.py
+
+# REDLINE native CPU/graphics performance lab (SPEC.md 103).
+.PHONY: redline redlinedisk redline-profile
+redline: $(BUILD)/redline.o88
+$(BUILD)/redline.bin: apps/redline/redline.asm apps/redline/detect.inc apps/redline/baseline.inc apps/os88api.inc tests/benchlib.inc | $(BUILD)
+	python3 tools/benchlint.py apps/redline/redline.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -l $(BUILD)/redline.lst -o $@ apps/redline/redline.asm
+$(BUILD)/redline.o88: $(BUILD)/redline.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+redlinedisk: $(BUILD)/redline.img $(BUILD)/redline720.img $(BUILD)/redline120.img $(BUILD)/redline360.img
+$(BUILD)/redline.img: $(BUILD)/redline.o88 apps/redline/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $< apps/redline/README.TXT
+$(BUILD)/redline720.img: $(BUILD)/redline.o88 apps/redline/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 720 -o $@ $< apps/redline/README.TXT
+$(BUILD)/redline120.img: $(BUILD)/redline.o88 apps/redline/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ $< apps/redline/README.TXT
+$(BUILD)/redline360.img: $(BUILD)/redline.o88 apps/redline/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $< apps/redline/README.TXT
+redline-profile: redlinedisk $(IMG360)
+	python3 tools/redline_profile.py

@@ -2507,6 +2507,30 @@ SOAK = [
         "effect) that must be REFUSED - a guard nobody has seen fire is a "
         "guard nobody knows is alive",
         needs=("nasm",)),
+    Row("redlinehost", "soak", py("tests/redline.py", "--host"), 1.0,
+        "REDLINE four FAT12 geometries and actual recorded reference (SPEC.md 103)",
+        needs=("nasm",), wants=("build/redline.img", "build/redline720.img",
+                               "build/redline120.img", "build/redline360.img")),
+    Row("redlinemodern", "soak", py("tests/redline.py", "--modern"), 15.0,
+        "REDLINE shipped CPU probes under QEMU BIOS: opcode gates, CPUID vendor "
+        "overrides for Cyrix/Transmeta, E820 and TSC. These are emulated vendors, "
+        "not physical hardware identification (SPEC.md 103.2)", needs=("nasm", "qemu")),
+    Row("redlinecga", "soak", py("tests/redline.py", "--machine", "os8088_redline_pc_gla"), 45.0,
+        "REDLINE cga: CPU identity, twelve timings, repeated probe, large-denominator "
+        "arithmetic, report save, adapter comparisons and close (SPEC.md 103)",
+        needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
+    Row("redlineherc", "soak", py("tests/redline.py", "--machine", "os8088_5150_herc_gla"), 45.0,
+        "REDLINE herc: CPU identity, twelve timings, repeated probe, large-denominator "
+        "arithmetic, report save, adapter comparisons and close (SPEC.md 103)",
+        needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
+    Row("redlinevga", "soak", py("tests/redline.py", "--machine", "os8088_xt_vga"), 60.0,
+        "REDLINE vga: CPU identity, twelve timings, repeated probe, large-denominator "
+        "arithmetic, report save, adapter comparisons and close (SPEC.md 103)",
+        needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
+    Row("redlinev20", "soak", py("tests/redline.py", "--nec"), 10.0,
+        "REDLINE V20 shipped detection with real PIT IRQ0 and repeated queue probe; "
+        "isolated from the pinned emulator's stalled V20 BIOS POST (SPEC.md 103.2)",
+        needs=("marty", "nasm"), wants=("build/os8088-360.img",)),
     Row("excitebikefront", "soak", py("tests/excitebike_front.py", "--arm", "all"), 90.0,
         "EXCITEBIKE front end on MartyPC (SPEC.md 102.6), VGA, CGA and Hercules: "
         "the desktop splash and help pixel for pixel against the compiler's "

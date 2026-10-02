@@ -156961,3 +156961,58 @@ environment that wrote this.
   The banner flash's beam position, the Hercules's monitor and the sound on a real card are what
   docs/FIELD-MACHINES.md would be asked. The fullscreen title and results screens stay the
   text-mode menus of wave 4: this wave gave them no art.
+
+
+## 103 REDLINE — CPU and graphics benchmarks (`apps/redline/`)
+
+REDLINE.O88 is an on-demand native benchmark and inventory package. `make redline`
+builds it; `make redlinedisk` builds dedicated FAT12 media in all four geometries.
+The everything application set carries it in APPS/. No resident kernel bytes.
+
+### 103.1 Measurements and interface
+
+R / Bench > Run executes fixed-work CPU ALU, shifts, multiply, divide, RAM copy
+and fill, then graphics fill, horizontal line, frame, opaque text, 1bpp and 4bpp
+blits. S / Save Report writes REDLINE.TXT in the instance's current directory;
+Home, End, Up, Down and PgUp/PgDn browse the report. The About handler returns
+to the provenance. The existing benchlib source is shared, including PIT latch,
+32-bit accumulation, empty-body subtraction, overflow flags, pagination and save.
+Each body is bounded below a PIT wrap on a stock XT. All graphics use OS slots
+and a fixed 256x64 sandbox inside the window on VGA, Hercules and CGA. The report
+states adapter/geometry and timing method. Comparisons are per workload; graphics
+indices are available only for the baseline adapter. No combined universal score.
+
+### 103.2 Inventory and frequency
+
+The kernel CPU tier gates every newer instruction. Early processors use shift
+masking, interrupted repeated-string restart and prefetch-queue behavior, with
+FLAGS restored and self-modified bytes restored on every invocation. A NEC verdict
+requires evidence that IRQ0 occurred during the test; inconclusive results stay
+unknown. 286/386/486 are generation classes, not claims about manufacturer or bus
+width. AC/ID flag tests gate CPUID; vendor, signature, family/model/stepping, brand
+and feature bits are reported when provided. Cyrix without CPUID uses its historic
+DIV-flags fingerprint and is labelled a Cyrix-compatible signature rather than
+a guessed part number. No writes to CPU configuration ports, cache controls or MSRs.
+
+CPU MHz uses CPUID leaf 16 nominal MHz when available and timed TSC when supported,
+explicitly labelled TSC MHz (may differ from core frequency). Pre-TSC CPU
+clock estimates use separate MUL/DIV book timings only for 8088/8086, 286 and 386
+classes. NEC, 186 and unknown clones report clock unavailable rather than applying
+Intel timing tables. Estimates are shown independently, including disagreement.
+BIOS conventional KB is distinct from OS free KB, largest run and free extended
+KB. BIOS extended-memory reports are queried only on AT-class processors and are
+labelled BIOS-reported, not destructive RAM sizing. FPU presence comes from the
+OS's existing probe. Equipment, serial/parallel port bases, BIOS date and model
+byte are read-only inventory. No claim to detect every board/card or all installed
+RAM when firmware supplies no trustworthy size.
+
+### 103.3 Reproducible reference
+
+`os8088_redline_pc` and its redistributable GLaBIOS twin select IBM 5150, Intel
+8088, normal master-crystal/3 clock (14.31818/3 = 4.772727… MHz), no turbo, 640KB
+zero-wait RAM, dynamic CGA, 360KB floppies and serial mouse. MartyPC is pinned by
+`tools/martypc/UPSTREAM`; its validated cycle-accurate model is an emulator
+reference, not a claim of perfect physical hardware equivalence. IBM ROM is
+user-supplied. `tools/redline_profile.py` boots, launches, runs, saves and extracts
+the report and records configuration, binary hashes and measured workload counts.
+The committed reference is generated from an actual run, never invented.

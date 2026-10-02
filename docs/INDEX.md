@@ -346,6 +346,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | Pixelstein 3D | `apps/pixelstein/pxgame.asm` | §97 | no |
 | Pixelstein 3D | `apps/pixelstein/pxstein.asm` | §97 | yes |
 | RECORDER | `apps/recorder/recorder.asm` | §35 | no |
+| REDLINE | `apps/redline/redline.asm` | §103 | yes |
 | RUNCPM | `apps/runcpm/runcpm.asm` | §74 | yes |
 | SCRIBE | `apps/scribe/scribe.asm` | §95 | no |
 | SHEET | `apps/sheet/sheet.asm` | §81 | yes |
@@ -472,6 +473,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 100 | DrMarco (`apps/drmario/drmario.asm`) |
 | 101 | 1942 — native vertical shooter (`apps/1942/`) |
 | 102 | Excitebike — native motocross racer (`apps/excitebike/excitebike.asm`) |
+| 103 | REDLINE — CPU and graphics benchmarks (`apps/redline/`) |
 
 ## docs/
 
