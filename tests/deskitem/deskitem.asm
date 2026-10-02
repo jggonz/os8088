@@ -52,8 +52,9 @@ di_oncmd:
     mov byte [di_res], 'A'
     jmp short .out
 .remove:
-    mov ah, [di_zone]
-    xor al, al                      ; remove the zone AH
+    mov si, di_rec                  ; the LINK, not only its zone: a zone is
+    mov ah, [di_zone]               ; reused, so the kernel removes it only
+    xor al, al                      ; while it still holds this record
     call OSAPI_DESK_ITEM
     mov byte [di_res], 'r'
     jc .out

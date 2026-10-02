@@ -17,12 +17,17 @@ GUEST'S OWN STATE:
      there. SYSTEM.CFG on A: carries the trailer.
   B  a double-click on the link launches the package it points at - a second
      DeskItem window.
-  C  Remove takes it off: the cell is nothing, the claim is gone, and
+  C  a Remove whose zone no longer holds THIS link is refused: the row's path
+     is changed under the package - a zone is reused, so that is what the
+     user's own shortcut in it looks like - and Remove must answer CF = 1
+     (`di_res` 'r') and leave the row where it is.
+  D  Remove takes it off: the cell is nothing, the claim is gone, and
      SYSTEM.CFG has no trailer again.
 
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1): take the header stamp out
 of sc_m_add and A fails on `1, 16`; take the wish out (store `DSL_PIN | cell`
-without DSL_GONE, so the reflow never places it) and A fails on cell 5.
+without DSL_GONE, so the reflow never places it) and A fails on cell 5; make
+sc_m_pdel jump straight into sc_m_del and C fails on the row going.
 
 The floppies are COPIED to a scratch directory first: the guest writes
 SYSTEM.CFG, and the shipped images must not be the ones it writes to.
@@ -70,6 +75,22 @@ def live_cfg(m, tmp):
         return bytes(os88fat.Fat12(out).read("SYSTEM.CFG"))
     except KeyError:
         return b""
+
+
+def _u16le(b):
+    return b[0] | (b[1] << 8)
+
+
+def res_off():
+    """di_res's offset in DESKITEM's image: the byte before its link
+    record, whose first sixteen bytes are fixed (tests/deskitem/deskitem.asm).
+    """
+    bdir = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
+    img = open(os.path.join(bdir, "deskitem.bin"), "rb").read()
+    i = img.find(b"\x01\x05\x01\x00DESKITEM.O88")
+    if i < 1:
+        raise SystemExit("deskitem: no link record in deskitem.bin")
+    return i - 1
 
 
 def has_trailer(data):
@@ -141,8 +162,27 @@ def main():
             if w.title == "DeskItem" and w.i not in first:  # holds the zone
                 ui.close(w)
 
-        print("C: File > Remove")
+        print("C: File > Remove, the zone holding somebody else's link")
         w = [w for w in ui.windows() if w.i in first][0]
+        wseg = _u16le(m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE
+                             + geom.W_SEG, 2))
+        res = (wseg << 4) + res_off()
+
+        def path0():
+            return m.read((ui._word("sc_seg") << 4) + 4, 1)[0]
+        m.write((ui._word("sc_seg") << 4) + 4, b"X")    # XESKITEM.O88
+        ui.raise_window(w)
+        ui.menu_pick("File", "Remove")
+        ui._wait(lambda: m.read(res, 1)[0] in b"rR", "Remove's answer", 90,
+                 snapshot=lambda: chr(m.read(res, 1)[0]))
+        check(m.read(res, 1)[0] == ord("r"),
+              "Remove REFUSED a zone that no longer holds the link (%r)"
+              % chr(m.read(res, 1)[0]))
+        check(zbyte(DESK_SC0) == DSL_PIN | 5 and path0() == ord("X"),
+              "...and the row in it is still there (%#x)" % zbyte(DESK_SC0))
+        m.write((ui._word("sc_seg") << 4) + 4, b"D")
+
+        print("D: File > Remove")
         ui.raise_window(w)
         fresh()
         ui.menu_pick("File", "Remove")

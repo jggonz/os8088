@@ -797,7 +797,14 @@ desk_reflow:
     jz .rel                     ; flowing: let go, keep the cell for the paint
     mov bx, di
     call desk_live
-    jnz .an                     ; placed and live: it stays
+    jz .pgone
+    mov al, ah                  ; placed and live: it stays - unless an
+    call desk_owner             ; EARLIER item is in that cell, which only a
+    mov bx, di                  ; damaged SYSTEM.CFG can say: then it is a
+    cmp ah, bl                  ; wish again, placed in pass 2 (desk_owner
+    je .an                      ; answers the lowest zone, so never a later)
+    jmp short .rel
+.pgone:
     mov al, ah                  ; placed and gone: its cell goes bare and the
     call desk_cmark             ; item REMEMBERS it, to have back (pass 2)
 .rel:
@@ -898,14 +905,14 @@ desk_zones_paint_x:
     and [bx+desk_cdirty], ah
     mov ax, si
     call desk_cell_rect
-%ifdef KERN_BIG
     mov word [wm_dmg_stwin], 1  ; NOTHING WAS UNCOVERED - no window moved
     mov word [wm_dmg_st1+4], 8000h ; (SPEC.md 11.91.6): 11.91.2's vacated
                                 ; rect, armed EMPTY (x2 = -32768 meets no rect)
                                 ; for a "moved window" at 1, which is none.
                                 ; Every window over the cell is then owed only
                                 ; what the clipped cell and the dither reached
-%endif
+                                ; - on BOTH kernels: where kern_small draws a
+                                ; zone whole, [wm_dmg_zb] owes those windows
     mov byte [wm_dmg_npro], 1   ; ...and so nothing was PROMOTED: the front
                                 ; window is the one it was. Both kernels
     call KERNEL_SEG:cw_wm_paint_dmg
@@ -1643,7 +1650,8 @@ desk_learn_x:
 ;                           26.7), whose +39 is the cell it would like
 ;      add, from a PACKAGE: ES:SI -> an SC_REC link record (SPEC.md 26.8.1),
 ;                           whose +1 is the cell it would like
-;      remove: a driver its own service item; a package the link in zone AH
+;      remove: a driver its own service item; a package the link in zone AH,
+;               ES:SI -> the record it added, which the row must still match
 ;      0xFF as the cell is "the first free one". A package calls this from a
 ;      window callback - the UI task, the gfx lock held - and never from a
 ;      worker: a link is PERSISTED, which writes SYSTEM.CFG (SPEC.md 20.6 r7)
@@ -1730,9 +1738,13 @@ osapi_desk_item_x:
     je .no
     jmp short .ok
 .pdel:
-    mov al, ah                  ; the zone; CTRL.DRV refuses anything that is
-    mov ah, SC_OP_DEL           ; not a live link, as it does for Delete
-    call sc_modcall
+    cmp ah, DESK_SC0            ; a link's zone or nothing: and never 0,
+    jb .no                      ; which is the module's "removed"
+    mov al, ah                  ; the zone AND the record, DX:CX: CTRL.DRV
+    mov ah, SC_OP_PDEL          ; removes the row only if it is still THIS
+    call sc_modcall             ; link - a zone is reused, and renumbered at
+    or al, al                   ; boot. AL = 0 removed; the zone back is a
+    jnz .no                     ; refusal, or no disk to read the module from
 .ok:
     clc
     jmp short .out

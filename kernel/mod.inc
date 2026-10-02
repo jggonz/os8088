@@ -331,6 +331,9 @@ mod_need:
 
     push es
 
+%ifdef OS88_SHORTCUTS
+    cbw                         ; AH is the CALLER'S (sc_modcall's SC_OP_*),
+%endif                          ; and DI is compared whole against MOD_SETS
     mov di, ax                  ; THE ID, FOR THE WHOLE ROUTINE, and in a
                                 ; register rather than on the stack: it used
                                 ; to be pushed here and popped by both exit
@@ -443,6 +446,9 @@ mod_need:
 .freefail:
     call mod_free_row           ; the claim goes back; nothing was armed
 .fail:
+%ifdef OS88_SHORTCUTS
+    mov byte [dskw_trunc], 0    ; a claim that failed never reached the read
+%endif                          ; that clears it, and every read after would cut
     call drv_vol_back           ; ...and this one no longer has to preserve
     stc                         ; CF, which is weaker than what the old shape
                                 ; leaned on rather than stronger

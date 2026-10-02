@@ -2007,7 +2007,7 @@ first.**
 
 | section | what | size |
 |---|---|---:|
-| `.modc` | the header and the SETTINGS CORE: `modc_e_sc` and the `sc_m_*` gestures (§26.8.7), the SYSTEM.CFG writer (`CFG_DATA`/`CFG_SAVE cpc`, `cpc_buf`, `cp_cfg_save`), `cp_flush_x`, `cp_flush_cfg`, and the image's epilogue ladder | `MODS_SIZE` = 2,134 bytes, 5 sectors |
+| `.modc` | the header and the SETTINGS CORE: `modc_e_sc` and the `sc_m_*` gestures (§26.8.7), the SYSTEM.CFG writer (`CFG_DATA`/`CFG_SAVE cpc`, `cpc_buf`, `cp_cfg_save`), `cp_flush_x`, `cp_flush_cfg`, and the image's epilogue ladder | `MODS_SIZE` = 2,206 bytes, 5 sectors |
 | `.modu` | the panel: every page, `cp_flush_close_x`'s RTC half and `clockw.inc` | the rest, 10,394 in all |
 
 `.modu` is `follows=.modc vfollows=.modc align=1`, so the two halves are
@@ -49720,9 +49720,11 @@ then dispatch.
   greyed twin, one `MENU_DIS` byte in front of the string (the Close Window
   idiom), unless the selection is a shortcut.
 
-The routes do not check the zone. `CTRL.DRV` refuses anything that is not a
-live shortcut, so a drive's zone or "none" arriving by Delete or the menu is
-a no-op. The claim gives back a KB once the rows above the highest one in
+The routes check only that the zone is a shortcut's, `DESK_SC0` and above:
+Delete on a drive or the service item passes the key on, because refusing it
+in `CTRL.DRV` would be a floppy load of the core - and `Needs Sys Disk A:`
+without the system disk - for a key that could never do anything. `CTRL.DRV`
+refuses anything else that is not a live shortcut. The claim gives back a KB once the rows above the highest one in
 use fill it, and goes with the last shortcut.
 
 #### 26.8.6 SYSTEM.CFG: a trailer after the terminator
@@ -49775,8 +49777,8 @@ read: it went to nobody.
 Creating, moving and removing an item and a package's `OSAPI_DESK_ITEM` each
 END in a SYSTEM.CFG write, and the writer is `CTRL.DRV`'s (§51.5.3). So all
 of them are that image's, through one entry, `CPE_SC`, with the operation in
-AH (`SC_OP_NEW`, `_MOVE`, `_DEL`, `_ADD`). It lives in the image's SETTINGS
-CORE, its first 2,134 bytes (§2.8.7), so `sc_modcall` reads only those. It
+AH (`SC_OP_NEW`, `_MOVE`, `_DEL`, `_ADD`, `_PDEL`). It lives in the image's
+SETTINGS CORE, its first 2,206 bytes (§2.8.7), so `sc_modcall` reads only those. It
 uses the whole image instead when a Control Panel already has it loaded,
 and otherwise loads the core, calls it and drops it. Each gesture saves at
 once, through `cp_flush_cfg` (the core's half of the panel's own
@@ -50000,8 +50002,8 @@ SERVICE item, and anything else is a PACKAGE and adds a LINK.
 
 ```
   in   AL    = 1 add / 0 remove
-       ES:SI = (add) the record, in YOUR segment - copied, so it may be
-               anything of yours:
+       ES:SI = the record, in YOUR segment - copied, so it may be
+               anything of yours (a driver's remove takes none):
                  a driver's   40 bytes (§26.7): +39 the cell it would like
                  a package's 128 bytes, §26.8.1's row (OSAPI_DI_*):
                    +0   1  the volume, 0 = A:
@@ -50011,12 +50013,23 @@ SERVICE item, and anything else is a PACKAGE and adds a LINK.
                    +49 13  the caption, NUL
                    +62  2  the kernel's - whatever is there is overwritten
                    +64 64  the 16x16 picture (§25's body form)
-       AH    = (a package's remove) the zone its add returned
-  out  CF = 0 AL = the item's ZONE
+       AH    = (a package's remove) the zone its add returned, and ES:SI
+               the record it added: the row goes only while its volume
+               and path are still that record's
+  out  CF = 0 AL = the item's ZONE (an add)
        CF = 1 refused: a second service item, a withdraw of somebody
-              else's, a full desktop or table, no system disk, or a link
-              whose kind or volume nobody can have
+              else's, a full desktop or table, no system disk, a link
+              whose kind or volume nobody can have, or a remove whose
+              zone no longer holds that link
 ```
+
+**A zone is not an identity.** The row a user's Delete frees is the next one
+a drag-out takes, and the boot reader compacts the rows, so the zone an add
+answered may hold somebody else's shortcut by the time the package removes
+it. A package's remove therefore names the LINK as well as the zone
+(`SC_OP_PDEL`), and a row that is no longer it is refused, never deleted.
+The boot reader holds a row from SYSTEM.CFG to the same bounds as an add: a
+kind above 2 or a volume past `DVOL_MAX` comes in as a free row.
 
 **A package's link IS a shortcut**: it is copied into the shortcut claim
 whole, so it draws, opens, moves, persists and is removed by every route

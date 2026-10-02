@@ -63,11 +63,15 @@ SC_VER      equ 2               ; the trailer's own version (SPEC.md 26.8.6):
 %if SC_R_BODY - SC_R_HDR != 2 || SC_R_CAP + SC_CAPMAX != SC_R_HDR || SC_R_PATH + SC_PATHMAX != SC_R_CAP || SC_R_BODY + 64 != SC_REC
   %error "desksc: the record's fields must tile it - header against body"
 %endif
+%if SC_R_KIND != SC_R_SLOT + 1
+  %error "desksc: ovl_sc_load reads SC_R_SLOT and SC_R_KIND as one word"
+%endif
 
 SC_OP_NEW   equ 0               ; CTRL.DRV's door - CPE_SC, the settings
 SC_OP_MOVE  equ 1               ; core's one entry (SPEC.md 2.8.7) - takes
 SC_OP_DEL   equ 2               ; these in AH (SPEC.md 26.8.7)
 SC_OP_ADD   equ 3               ; a package's link, OSAPI_DESK_ITEM (26.9)
+SC_OP_PDEL  equ 4               ; ...and its remove, named by the record
 
 ; =============================================================================
 section .cold
@@ -244,6 +248,8 @@ desk_key_x:
     je .pass
     cmp bl, 13
     je .enter
+    cmp al, DESK_SC0            ; Delete has nothing to remove on a drive or
+    jb .pass                    ; the service item: no module load to refuse
     cmp bh, 0x53
     jne .pass
     call ct_cw_gfx_lock
@@ -338,7 +344,12 @@ modc_e_sc:                      ; CPE_SC (SPEC.md 2.8.7): AH = the operation
     jz .move
     dec ah
     jz .del
+    dec ah
+    jnz .pdel
     call sc_m_add
+    jmp short .out
+.pdel:
+    call sc_m_pdel
     jmp short .out
 .del:
     call sc_m_del
@@ -868,9 +879,49 @@ sc_m_move:
     ret
 
 ; -----------------------------------------------------------------------------
+; sc_m_pdel - SC_OP_PDEL: a PACKAGE's OSAPI_DESK_ITEM remove (SPEC.md 26.9.6)
+; in:  AL = the zone its add answered; DX:CX = the caller's SC_REC record
+; out: AL = 0 removed, 0xFF refused
+;
+; A ZONE IS NOT AN IDENTITY: the row a user's Delete frees is the next one a
+; drag-out gets, and the boot reader compacts them. So the remove names the
+; LINK - the row goes only while its volume and path are still the record's,
+; and a shortcut the user made in that zone since is nobody's to take.
+; -----------------------------------------------------------------------------
+sc_m_pdel:
+    mov ah, al
+    sub ah, DESK_SC0
+    cmp ah, [sc_nrows]
+    jae .no
+    call sc_m_off               ; ES:DI = the row; AL is kept
+    push ds
+    mov ds, dx
+    mov si, cx                  ; DS:SI = the caller's record
+    mov ah, [si+SC_R_VOL]
+    cmp ah, [es:di+SC_R_VOL]
+    jne .ne
+    mov cx, SC_PATHMAX - 1      ; the row's own path ends by here
+.c:
+    mov ah, [si+SC_R_PATH]
+    cmp ah, [es:di+SC_R_PATH]
+    jne .ne
+    inc si
+    inc di
+    or ah, ah
+    loopnz .c                   ; to the NUL, or the last byte a row keeps
+    xor cx, cx                  ; ZF = 1: either way, the same path
+.ne:
+    pop ds
+    je sc_m_del
+.no:
+    mov al, 0xFF
+    ret
+
+; -----------------------------------------------------------------------------
 ; sc_m_del - SC_OP_DEL: Remove Shortcut from any of its three routes, and a
-;            package's OSAPI_DESK_ITEM remove
+;            package's OSAPI_DESK_ITEM remove (sc_m_pdel's, once it matched)
 ; in:  AL = its zone
+; out: AL = 0 removed, 0xFF there was no link in it (only sc_m_pdel reads it)
 ;
 ; The claim gives back a KB once the rows above the highest one in use fill
 ; it, and goes altogether with the last - so a machine whose user removed
@@ -888,6 +939,7 @@ sc_m_del:
     cmp al, [desk_sel]
     jne .ns
     mov byte [desk_sel], 0xFF
+    mov word [menu_items_file+2], sc_s_remx ; ...and Remove Shortcut greys
 .ns:
     mov bl, al                  ; its cell goes, and is posted bare (SPEC.md
     xor bh, bh                  ; 26.9)
@@ -921,8 +973,11 @@ sc_m_del:
     mov al, ah
     call sc_m_kb
 .save:
-    jmp sc_m_save
+    call sc_m_save
+    xor al, al                  ; removed, whatever the write said: the
+    ret                         ; desktop has it no more (SPEC.md 59.6)
 .ret:
+    mov al, 0xFF
     ret
 .kb8:                           ; AL rows -> AL KB
     add al, SC_PERKB - 1
@@ -1245,7 +1300,15 @@ ovl_sc_load:
 .san:
     mov byte [es:di+SC_R_PATH+SC_PATHMAX-1], 0
     mov byte [es:di+SC_R_CAP+SC_CAPMAX-1], 0
-    mov al, [es:di+SC_R_SLOT]
+    mov ax, [es:di+SC_R_SLOT]   ; AL = the cell, AH = SC_R_KIND, the next
+    cmp ah, 2                   ; byte - and a row sc_m_add would refuse is
+    ja .kill                    ; a FREE row: a kind or a volume no open can
+    cmp byte [es:di+SC_R_VOL], DVOL_MAX ; follow (SPEC.md 26.9.6)
+    jb .keep
+.kill:
+    mov al, 0xFF
+    mov [es:di+SC_R_VOL], al
+.keep:
     mov [bx], al
     inc bx
     add di, SC_REC

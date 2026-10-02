@@ -1194,8 +1194,11 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
                                  ; with a kind or a volume nobody can have.
                                  ; remove: a driver its own service item
                                  ; (withdraw at detach); a package the link
-                                 ; in zone AH. Both strings are terminated by
-                                 ; the kernel whatever you put in them.
+                                 ; in zone AH, ES:SI = the record it added -
+                                 ; CF=1 if that zone no longer holds it (a
+                                 ; zone is reused). Both strings are
+                                 ; terminated by the kernel whatever you put
+                                 ; in them.
 OSAPI_DI_VOL    equ 0           ; a package's link record, field by field
 OSAPI_DI_CELL   equ 1
 OSAPI_DI_KIND   equ 2

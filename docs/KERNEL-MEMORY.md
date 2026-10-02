@@ -241,7 +241,7 @@ had added.
     "bss": 5297,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 41353,
+    "cold": 41385,
     "coldpara": 2592,
     "fatpara": 288,
     "imgpara": 3232,
@@ -251,7 +251,7 @@ had added.
     "lowbss": 5598,
     "lowpara": 384,
     "minramkb": 196,
-    "ovl": 2473,
+    "ovl": 2489,
     "ovlw": 4985,
     "stk0": 512,
     "text": 46173,
@@ -287,7 +287,7 @@ had added.
     "bss": 3218,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 25419,
+    "cold": 25431,
     "coldpara": 1600,
     "fatpara": 64,
     "imgpara": 2336,
@@ -672,13 +672,13 @@ there and nowhere else.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 32,713 | 37.4% |
-| the window system and its furniture | 23,282 | 26.6% |
+| the window system and its furniture | 23,308 | 26.6% |
 | drawing: adapters, primitives, glyphs, icons | 13,579 | 15.5% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 8,477 | 9.7% |
-| the kernel proper: API table, heap, scheduler, events | 7,618 | 8.7% |
+| the kernel proper: API table, heap, scheduler, events | 7,624 | 8.7% |
 | the three built-in kinds | 1,487 | 1.7% |
 | the Control Panel | 370 | 0.4% |
-| **total** | **87,526** | |
+| **total** | **87,558** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -699,7 +699,7 @@ there and nowhere else.
 | `font.inc` — the 8×8 glyph renderer (§6) | 2,278 | — | **2,278** | 22 | 16 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,255 | **2,255** | 160 | — | — |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,977 | 160 | **2,137** | 724 | — | — |
-| `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 1,521 | **1,544** | 91 | — | — |
+| `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 1,543 | **1,566** | 91 | — | — |
 | `apps.inc` — the three built-in kinds (§14) | 282 | 1,205 | **1,487** | 11 | 240 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,452 | — | **1,452** | 212 | 2,944 | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,284 | — | **1,284** | 20 | — | — |
@@ -712,11 +712,11 @@ there and nowhere else.
 | `viddet.inc` — adapter detection and geometry (§39) | 799 | — | **799** | — | 696 | 3 |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 642 | — | **642** | — | — | — |
 | `clock.inc` — the clock ladder (§37) | 601 | — | **601** | 59 | — | — |
+| `mod.inc` — on-demand kernel modules (§2.8) | 86 | 348 | **434** | — | — | — |
 | `toast.inc` — the menu bar's transient message (§59) | 433 | — | **433** | 25 | — | — |
-| `mod.inc` — on-demand kernel modules (§2.8) | 86 | 342 | **428** | — | — | — |
 | `blank.inc` — the idle screen blanker (§64) | 200 | 226 | **426** | — | — | — |
 | `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 405 | **405** | — | — | — |
-| `desksc.inc` — desktop shortcuts: the record table, the open by name, the keys and the popup (§26.8), `kern_big` only | 88 | 305 | **393** | 4 | — | — |
+| `desksc.inc` — desktop shortcuts: the record table, the open by name, the keys and the popup (§26.8), `kern_big` only | 88 | 309 | **397** | 4 | — | — |
 | `ctrl.inc` — the Control Panel (§31) | 176 | 194 | **370** | 28 | — | — |
 | `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 61 | 305 | **366** | 185 | — | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 242 | — | **242** | 22 | — | — |
@@ -736,7 +736,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,319 | 163 | **2,482** | — | — | 421 |
-| **total** | **46,173** | **41,353** | **87,526** | **5,297** | **5,598** | **2,252** |
+| **total** | **46,173** | **41,385** | **87,558** | **5,297** | **5,598** | **2,252** |
 <!-- END generated table -->
 
 ### Reading it

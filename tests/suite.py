@@ -8065,8 +8065,9 @@ SOAK = [
         "DESKITEM.O88 hands the kernel a link to itself through its File "
         "menu: the link lands in the cell it ASKED for, its hostile record "
         "comes back terminated and stamped, SYSTEM.CFG carries it, a "
-        "double-click launches the package, and Remove takes the cell, the "
-        "claim and the trailer away again.",
+        "double-click launches the package, a Remove whose zone no longer "
+        "holds that link is REFUSED and the row stays, and Remove takes the "
+        "cell, the claim and the trailer away again.",
         needs=("marty",), timeout=600, wants=("build/deskitem360.img",)),
     Row("curdisk", "soak", py("tests/curdisk.py"), 240.0,
         "SPEC.md 7.4: the arrow TRACKS the hand through a disk transfer. It "
