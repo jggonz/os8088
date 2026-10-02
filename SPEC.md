@@ -161244,12 +161244,39 @@ at the index type's maximum. Fractional axis labels follow the shared scale;
 full-range numerical ratios remain visible. A UI timer animates widths after completion, outside timed work.
 Detailed preserves the entire original paginated report and saved text file.
 Compare expands the workload bars. U/D/C select views; R/S/Q run/save/quit;
-Tab cycles views and F1 opens Detailed at the report's provenance. PgUp/PgDn
-page compact workload panels or the Detailed report. Home/End/arrows in
-Detailed retain their existing behavior. Buttons arm on press and act only
-on release over the same control. Layout follows the live content geometry;
-short CGA screens use smaller panels and paginate the results. Painting and
-view changes are outside benchmark timing spans and add no resident bytes.
+Tab cycles views and F1 opens Detailed at the report's provenance. Buttons arm
+on press and act only on release over the same control. Painting and view
+changes are outside benchmark timing spans and add no resident bytes.
+
+#### 103.4.1 Buckets
+
+The 25 workloads fall into three labelled buckets - CPU (ALU, rotate, MUL,
+DIV), RAM (copy, fill) and Graphics (the nineteen graphics rows) - and each
+bucket's header line carries the arithmetic mean of its own indices: how much
+faster than the reference that subsystem is. A bucket with any unresolved
+row, or Graphics on a mode with no matched reference, has no mean (n/a)
+rather than a mean of the rows that happened to resolve. The Results list is
+therefore 28 lines, headers solid and workloads indented beneath them
+(dithered on monochrome); the Summary headline box lists the three means
+beside the CPU + RAM figure, and the text report writes them ahead of the
+per-workload indices (`CPU mean index (4)`, `RAM mean index (2)`, `Graphics
+mean index (19)`), before the bar-scale line the profile tools read after.
+Still no universal score: the buckets are not averaged together.
+
+#### 103.4.2 Overflow scrolls
+
+Layout follows the live content geometry; short CGA screens use smaller
+panels. Results, System Snapshot and Details are each a scroll PANE: when its
+lines do not fit its frame, the shared os88ui scroll bar (13.10) appears at
+the frame's right edge - arrows step one line, the track pages, the thumb
+takes no gesture (fdlg's precedent) - and a pane that fits draws no bar and
+looks as before. PgUp/PgDn/Space, Up/Down and Home/End scroll Results in
+Summary and Compare; Detailed keeps the report's own paging. A scroll repaints
+only that pane's lines and moves the thumb (`os88ui_sbmove`), never the
+window: every line is opaque across its span (padded label and ratio, bar
+with its unfilled interior painted white in the same pass), so there is no
+erase pass. Each fact pane drops two text cells for its bar only while it has
+one.
 
 ### 103.5 Averaged runs and live graphics lab
 

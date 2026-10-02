@@ -700,6 +700,35 @@ rl_comparisons:
     mov si, rl_gfxlabel
     mov di, [rl_gfxname]
     call bl_kvs
+    ; Each bucket's mean, ahead of the per-workload rows (and of the scale
+    ; line the profile tools read those rows after).
+    xor bx, bx
+.group:
+    mov di, bx
+    shl di, 1
+    mov si, [rl_glabels+di]
+    shl di, 1
+    mov ax, [ru_gscores+di]
+    mov dx, [ru_gscores+di+2]
+    mov cx, ax
+    or cx, dx
+    jz .gna
+    mov cx, 10
+    call bl_kv
+    jmp .gnext
+.gna:
+    mov di, rl_unresolved
+    cmp bx, 2
+    jne .gput
+    cmp word [rl_gfxbase], 0
+    jne .gput
+    mov di, rl_refunknown
+.gput:
+    call bl_kvs
+.gnext:
+    inc bx
+    cmp bx, 3
+    jb .group
     mov si, rl_scalelabel
     mov ax, [ru_scale]
     mov dx, [ru_scale+2]
@@ -927,6 +956,7 @@ rl_blit4:
 %include "benchlib.inc"
 %include "redline/ui.inc"
 %define OS88UI_NOGLYPH
+%define OS88UI_SCROLL               ; the results and fact panes' bars
 %include "os88ui.inc"
 
 rl_tpl: dw 7, 22, 632, 448, rl_title, rl_paint, rl_key, rl_click
@@ -991,6 +1021,10 @@ rl_unresolved: db 'below timer resolution', 0
 rl_gfxskip: db 'Graphics index unavailable: no reference for this mode.', 0
 rl_gfxlabel: db 'Graphics reference', 0
 rl_scalelabel: db 'Bar scale maximum (x)', 0
+rl_glabels: dw rl_gcpu, rl_gram, rl_ggfx
+rl_gcpu: db 'CPU mean index (4)', 0
+rl_gram: db 'RAM mean index (2)', 0
+rl_ggfx: db 'Graphics mean index (19)', 0
 rl_refcga: db 'CGA 640x200x1, 4.77 MHz PC', 0
 rl_refherc: db 'Hercules 720x348x1, 4.77 MHz PC', 0
 rl_refvga: db 'VGA 640x480x4, 4.77 MHz PC', 0

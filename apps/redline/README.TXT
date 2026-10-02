@@ -5,7 +5,9 @@ graphical comparison bars. Detailed keeps every inventory field, raw timing,
 method flag and comparison from the complete report. Compare expands the bars.
 Use the bottom buttons or U/D/C to select views; Tab cycles them. Press R or
 Run to benchmark. S/Save writes REDLINE.TXT in the package's current folder.
-PgUp/PgDn page short screens. Detailed also supports arrows and Home/End.
+Results group CPU, RAM and Graphics, each headed by its own mean. A panel
+too short for its lines gets a scroll bar; PgUp/PgDn, arrows and Home/End
+scroll Results. Detailed keeps its own paging.
 F1 opens Detailed at the report's provenance. Q/Quit closes the package.
 Close other apps and keep the pointer still when comparing runs.
 

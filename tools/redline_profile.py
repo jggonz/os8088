@@ -36,6 +36,7 @@ NAMES = ("rl_ran", "rl_runs", "bl_saved", "rl_results", "rl_convkb", "rl_cpuname
          "rl_div48by32", "bl_m", "rl_detect", "rl_e820", "rl_mapok", "rl_ramkb",
          "rl_nominal", "rl_tscmhz", "rl_signature", "rl_family", "rl_model", "rl_cpuid",
          "ru_view", "ru_scores", "ru_overall", "ru_rects", "ru_page", "ru_rows",
+         "ru_gscores", "ru_pres", "ru_psnap", "ru_pdet", "ru_restop",
          "ru_h", "ru_foot", "ru_clockvalue", "ru_buttons", "bl_top",
          "ru_scale", "ru_anim", "ru_scale_compute", "ru_bar", "ru_fillw",
          "ru_x", "ru_y", "ru_pitch", "ru_resw", "ru_lower", "ru_offset", "rl_samples", "rl_busy", "rl_pass", "rl_labwin", "rl_active_row",

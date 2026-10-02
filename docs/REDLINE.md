@@ -20,14 +20,24 @@ results are final throughout, and no animation runs inside a timing bracket.
 
 Use the buttons or **U / D / C** to select Summary / Detailed / Compare; **Tab**
 cycles the views. **R / S / Q** run, save and quit. **F1** opens Detailed at the
-report's provenance. PgUp/PgDn page compact dashboard results or the Detailed
-report; arrows and Home/End retain their report behavior in Detailed. The layout
-uses the live content dimensions. CGA's short screen shows compact panels and
-paged results; all facts remain available in Detailed.
+report's provenance. Results are grouped into three labelled buckets - CPU,
+RAM and Graphics - each headed by its own mean index (SPEC.md 103.4.1); the
+Summary headline box lists the three means beside the CPU + RAM figure. The
+layout uses the live content dimensions. Wherever Results, System Snapshot or
+Details holds more lines than its frame - CGA's short screen above all - that
+pane grows a scroll bar (SPEC.md 103.4.2): arrows step a line, the track
+pages. PgUp/PgDn, Up/Down and Home/End scroll Results from the keyboard;
+Detailed keeps its own paging, and every fact remains in it.
 
 ![REDLINE Summary dashboard on VGA](redline-summary.png)
 
 ![REDLINE compact Summary on the 4.77 MHz CGA reference](redline-cga.png)
+
+![CGA Summary scrolled: Results stepped to MUL, System Snapshot paged](redline-cga-scrolled.png)
+
+![CGA Compare: bucket headers solid, workloads dithered beneath them](redline-cga-compare.png)
+
+![Hercules Summary: Results and Details both scroll](redline-herc.png)
 
 ![REDLINE Detailed report on CGA, showing its last page](redline-scores.png)
 
@@ -139,7 +149,9 @@ owned. Register-heavy rows still include instruction fetch and setup.
 `1000 = baseline`, larger is faster. CPU/RAM use the common 4.77 MHz PC
 reference; graphics use the mode-matched CGA, Hercules or VGA reference. Other
 modes keep their raw timings and withhold graphics indices. The Summary headline
-averages only the six CPU/RAM indices with equal weight.
+averages only the six CPU/RAM indices with equal weight. Each bucket's mean
+averages its own rows with equal weight, and is n/a when any of them is
+unresolved or has no reference.
 
 All bars share a ceiling of **the highest available score rounded up to a whole
 multiplier, plus 5x**: a 69x result gives every graph a 74x ceiling. With no

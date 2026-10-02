@@ -156,6 +156,10 @@ def native(machine):
         assert measured_indices == expected_indices, (measured_indices, expected_indices, bases, counts)
         overall = struct.unpack('<I', p.data('ru_overall', 4))[0]
         assert overall == sum(expected_indices[:6])//6
+        # Each bucket's mean: CPU rows 0-3, RAM 4-5, graphics 6-24 (103.4.1).
+        groups = struct.unpack('<3I', p.data('ru_gscores', 12))
+        assert groups == (sum(expected_indices[:4])//4, sum(expected_indices[4:6])//2,
+                          sum(expected_indices[6:])//19), (groups, expected_indices)
         scale = struct.unpack('<I', p.data('ru_scale', 4))[0]
         assert scale == min(((max(expected_indices)+999)//1000+5)*1000, 0xFFFFFFFF)
         R.wait(ui, lambda:p.word('ru_anim') == 12, 'completion animation did not finish')
@@ -227,6 +231,10 @@ def native(machine):
         assert 'REPORT TRUNCATED' not in report
         assert 'Graphics index unavailable' not in report
         assert 'Graphics reference' in report
+        for label, value in zip(('CPU mean index (4)', 'RAM mean index (2)',
+                                 'Graphics mean index (19)'),
+                                struct.unpack('<3I', p.data('ru_gscores', 12))):
+            assert re.search(r'(?m)^%s\s+%d\r?$' % (re.escape(label), value), report), label
         assert 'Arithmetic mean of 3 complete runs' in report
         assert 'L3 Projected wireframe cube' in report and 'L3 Projected shaded cube' in report
         assert 'L3 Window resize/repaint' in report
@@ -252,16 +260,21 @@ def native(machine):
 
         screenshot('summary.png')
         if adapter == 'vga':
-            assert p.word('ru_rows') == R.ROWS, 'VGA Summary must fit every workload'
             # Inspect actual bar pixels, not the palette chosen in source.
+            # Lines: 0 CPU average, 1-4 CPU rows, 5 RAM average, 6-7 RAM rows,
+            # 8 Graphics average, 9.. graphics rows.
             w,h,pixels = ui.m.fbuf()
             x = p.word('ru_x')+153
             y = p.word('ru_y')+p.word('ru_lower')+p.word('ru_offset')+1
             def rgb(px,py): return tuple(pixels[(py*w+px)*3:(py*w+px)*3+3])
-            colors = [rgb(x,y+i*p.word('ru_pitch')) for i in range(7)]
-            assert colors[0][2] > colors[0][0] and colors[0][2] > colors[0][1], colors
-            assert colors[4][1] > colors[4][0] and colors[4][1] > colors[4][2], colors
-            assert colors[6][0] > colors[6][1] and colors[6][0] > colors[6][2], colors
+            colors = [rgb(x,y+i*p.word('ru_pitch')) for i in range(10)]
+            for line in (0, 1):
+                assert colors[line][2] > colors[line][0] and colors[line][2] > colors[line][1], colors
+            for line in (5, 6):
+                assert colors[line][1] > colors[line][0] and colors[line][1] > colors[line][2], colors
+            for line in (8, 9):
+                assert colors[line][0] > colors[line][1] and colors[line][0] > colors[line][2], colors
+        scrollpanes(ui, p)
         # Detail acts on release. A held press cannot change views, and
         # dragging off it must cancel rather than leave an inverted button.
         rects = struct.unpack('<24H', p.data('ru_rects', 48))
@@ -291,9 +304,14 @@ def native(machine):
         R.key(ui, 'KeyU')
         R.wait(ui, lambda:p.data('ru_view') == b'\0', 'Summary key did not switch view')
         R.key(ui, 'PageDown')
-        if p.word('ru_rows') < R.ROWS:
+        if p.word('ru_rows') < LINES:
             R.wait(ui, lambda:p.word('ru_page') > 0, 'compact results did not paginate')
+            R.key(ui, 'ArrowDown')
+            R.wait(ui, lambda:p.word('ru_page') == min(p.word('ru_rows') + 1, LINES - p.word('ru_rows')),
+                   'Down did not step the results one line')
+            screenshot('paged.png')
         R.key(ui, 'Home')
+        R.wait(ui, lambda:p.word('ru_page') == 0, 'Home did not return to the first line')
         R.key(ui, 'F1')
         R.wait(ui, lambda:p.data('ru_view') == b'\1' and p.word('bl_top') == 0,
                'F1 did not open Detailed at provenance')
@@ -306,6 +324,41 @@ def native(machine):
                 'Quit closes REDLINE', limit=20)
         print('REDLINE %s: %s, timings, Summary/Detailed/Compare, gestures and Quit OK' %
               (machine, cpu), flush=True)
+
+
+LINES = 28                          # RL_ROWS + three bucket headers (103.4.1)
+
+
+def pane(p, name):
+    """A scroll pane record: top, visible, count, and its bar's x1 y1 x2 y2."""
+    w = struct.unpack('<11H', p.data(name, 22))
+    return dict(top=w[0], vis=w[1], cnt=w[2], bar=w[4:8])
+
+
+def scrollpanes(ui, p):
+    """Every pane that overflows has a working bar; every pane that fits has
+    none to hit (103.4.2). Clicks go through the real press path."""
+    for name in ('ru_pres', 'ru_psnap', 'ru_pdet'):
+        pn = pane(p, name)
+        x1, y1, x2, y2 = pn['bar']
+        if pn['vis'] >= pn['cnt']:
+            continue
+        assert pn['top'] == 0, (name, pn)
+        ui.m.run()
+        ui.mo.click((x1+x2)//2, y2-4, settle=0)        # the down arrow
+        R.wait(ui, lambda: pane(p, name)['top'] == 1, '%s down arrow did not scroll' % name)
+        ui.m.run()
+        ui.mo.click((x1+x2)//2, y1+4, settle=0)        # the up arrow
+        R.wait(ui, lambda: pane(p, name)['top'] == 0, '%s up arrow did not scroll' % name)
+        if y2 - y1 > 40:                               # a track to page in
+            ui.m.run()
+            ui.mo.click((x1+x2)//2, y2-14, settle=0)
+            R.wait(ui, lambda: pane(p, name)['top'] == min(pn['vis'], pn['cnt']-pn['vis']),
+                   '%s track did not page' % name)
+            if name == 'ru_pres':
+                R.key(ui, 'Home')
+        print('  %s scrolls: %d of %d lines visible' % (name, pn['vis'], pn['cnt']), flush=True)
+    assert p.data('ru_view') == b'\0', 'a scroll-bar press reached a view button'
 
 
 def scene():
