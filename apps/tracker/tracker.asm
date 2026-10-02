@@ -2655,10 +2655,21 @@ trk_ukey:
     ret
 
 trk_play_stop:
-    call tsp_halt                   ; the speaker's door, if it is its play
+    call tsp_leave                  ; the speaker's door shut, CONS exact...
+    cmp byte [tsp_run], 0
+    je .park
+    push es                         ; ...and the stream's counters the ring's,
+    mov es, [tsp_rseg]              ; so the speaker's play is asked like a
+    mov ax, [es:TSP_RL]             ; card's: tsp_run still says it is one
+    mov [trk_total], ax             ; (45.25), or tui_sync quotes the MIXER
+    mov ax, [es:TSP_RL+2]
+    mov [trk_consumed], ax
+    pop es
+.park:
     mov byte [trk_pause], 1         ; a stop PARKS (SPEC.md 45.17): Play resumes
     call tui_sync                   ; where the LISTENER is, asked while the
                                     ; stream can still answer (SPEC.md 45.15)
+    call tsp_halt                   ; ...and only then the speaker's play over
     call trk_stream_close
     call mp_stop
     mov al, [tui_apos]              ; ...and park the replayer there rather

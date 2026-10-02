@@ -430,6 +430,7 @@ aps_main:
 aps_prefill:
     push ax
     push bx
+    push cx
     mov bx, APS_RL
     or al, al
     jz .pre
@@ -444,14 +445,22 @@ aps_prefill:
     jae .out
     call aps_fill
     jnc .pre
-    call ap_la_avail
-    or ax, ax
-    jnz .out                        ; (the ring is full)
+    cmp byte [aps_eot], 0
+    jne .out                        ; (the track is all made)
     cmp byte [ap_src_done], 0
     jne .out                        ; (the file is all in)
-    call ap_refill_chunk
-    jmp short .pre
+    sub ax, APS_RL                  ; the RING decides full, not the look-
+    neg ax                          ; ahead: aps_get also refuses one holding
+    cmp ax, [aps_span]              ; less than a span's inputs, which a step
+    jb .out                         ; at 44.1 kHz is ~1.4 KB (the ring is full)
+    call ap_la_avail
+    mov cx, ax
+    call ap_refill_chunk            ; ...and a look-ahead short of a span has
+    call ap_la_avail                ; room for a cluster, so a read that
+    cmp ax, cx                      ; brought nothing is the disk's: out,
+    jne .pre                        ; rather than spin on it
 .out:
+    pop cx
     pop bx
     pop ax
     ret
