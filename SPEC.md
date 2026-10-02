@@ -59236,8 +59236,8 @@ withdrawal is evidence about this routine.
 ### 31.14 Floppy page — the drive detection, overridden
 
 Five drop-downs. One per floppy unit a machine can claim (§18.98) — **Auto,
-None, 5.25, 3.5** — and one for the read bound (§18.91.1) — **Auto, Track,
-Cylinder**. `kern_big` only (`OS88_DRIVERS`): the page is a `SYSTEM.CFG`
+None, 5.25, 3.5** — and one for the read bound (§18.91.1) — **Auto,
+Track**. `kern_big` only (`OS88_DRIVERS`): the page is a `SYSTEM.CFG`
 record, and `kern_small` reads no settings file (§51.0).
 
 | setting | what the next boot does |
@@ -59246,7 +59246,7 @@ record, and `kern_small` reads no settings file (§51.0).
 | a unit, **None** | no desktop zone. The ROW stays, so the drive keeps its letter and its volume — the state an unclaimed B: has always been in (`desk_init`'s `.zloop`) |
 | a unit, **5.25** / **3.5** | a zone, with that picture before the first read and after it: `DVF_GUESS` is cleared, so `desk_learn_x` does not take it back. A unit with no row — unclaimed, or retired by §18.97's probe — is given one on `dsk_flop_add_x`'s rules |
 | reads, **Auto** | the boot sector's canary decides (§18.93.1) |
-| reads, **Track** / **Cylinder** | the canary's finding is overwritten either way |
+| reads, **Track** | track runs, whatever the canary found. There is no **Cylinder**: see below |
 
 **It takes effect at the next restart, and the caption says so.** The
 detection it overrides runs once, in `desk_init`, at MARK 20 — before
@@ -59258,14 +59258,23 @@ row it makes lands exactly where `desk_init` would have put it, ahead of any
 partition `HDD.DRV` then adds. Every answer `desk_init` reaches is a byte in a
 `dsk_vtab` row, and a byte is as easy to overwrite as to write.
 
-**The read bound overrides the FINDING rather than adding a test.** Its byte
+**The read bound overrides the FINDING rather than adding a test.** Track's 0
 goes into `boot_cylrun`'s low byte (the loader stores a run bound there, at
 most 36, so the high byte is always 0) and into `dsk_cylrun`. Every later mount
 re-derives `dsk_cylrun` from that word (`dsk_bpb_check`) and `hiber.inc`
 carries it to `kern_dos` (§96.44.14), so both honour the setting with no code
-changed at either. **Cylinder on a ROM that cannot cross a head is the user's
-to choose**: a read then fails and `dsk_xfer`'s retry shortens it, which is
-§18.91.3's grind and not corruption.
+changed at either. **Only Track overrides the finding, and there is no
+Cylinder**: the setting may lower the bound and never raise it. On the ROM
+class whose canary fails, a READ that crosses a head is not refused — it
+returns the other head's sectors with CF = 0 and the full count (§18.93.1),
+silently. §18.91.3's fail-and-shorten is the WRITE path's, and `dsk_xfer`
+keeps writes off cylinder runs anyway. So forcing Cylinder over a failed
+canary would turn silent wrong-head reads back on, and the setting would
+persist across boots. `CFG_FDR` = 2 is RESERVED — it was Cylinder — and
+`ovl_fdd_apply` and the page both read it as Auto. A forced cylinder bound
+could only mean something where the canary never ran (a hard-disk boot), and
+the loader writes the same 0 for "fell back" and "never looked", so offering
+one needs a loader value of its own first.
 
 **Nothing resident reads the record.** `CFG_FDD` (two bits per unit, unit *n*
 at bits 2*n*..2*n*+1, value = the menu index) and `CFG_FDR` live in `drv_cfg`
@@ -59289,7 +59298,7 @@ tracker and bank that `menu_drop` already is. What that took was one byte of
 `menu_popup` reads its items through `DS` and an image's strings are
 `CS`-relative (§2.8.6), so each menu is laid out in the image **exactly as it
 lands** — pointers already naming `cp_sbuf` — and copied down whole by
-`cp_fdstg`: the drives' menu is 27 bytes and the reads' 26, against
+`cp_fdstg`: the drives' menu is 27 bytes and the reads' 15, against
 `CP_SBUF` = 28, and an `%error` says so if either grows. The box's caption is
 drawn out of the same copy, and a changed pick letters it as one opaque run
 and fills only what a longer old caption left to its right.
@@ -158545,7 +158554,9 @@ again for each bracket, whose hook reads them at interrupt time, which no
 relocation can reach (66.3); RESIDENT blocks already worked this way
 (`vp_rmov`, 98.1.7.4). Every word naming one of them holds its base and
 every other segment is derived at its use, so the proc moves a word equal
-to the old base and nothing else. **The poster is movable** once it is made
+to the old base and nothing else - `vp_kshd` among them, which names the
+keeper while the poster is remade from it and the remake makes claims of its
+own (`vp_tmono`'s scratch). **The poster is movable** once it is made
 (`vp_pmov`) - not at its claim, which the decode's own claims follow. What
 stays pinned: the sound's ring (`MC_DMA`, which the kernel never moves -
 66.3), a LIVE session's claims (its worker decodes out of them on the

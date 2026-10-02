@@ -672,7 +672,7 @@ CFG_FDD     equ CFG_RBLOB + DRV_RBLOB_SZ    ; db: the Floppy page's four
                                 ; the overlay applies it once at boot and the
                                 ; panel's module edits it here
 CFG_FDR     equ CFG_FDD + 1     ; db: ...and the READ bound, 0 Auto, 1 Track,
-                                ; 2 Cylinder (SPEC.md 31.14, 18.91.1)
+                                ; 2 reserved: read as Auto (SPEC.md 31.14)
 CFG_NB      equ CFG_FDR + 1     ; ...the struct's size
 %else
 CFG_NB      equ CFG_DBLOB + DRV_BLOB_SZ     ; no RAM disk here, so no second
@@ -4160,14 +4160,17 @@ ovl_cfg_load:
 ; mount re-reads (dsk_bpb_check) and the one hiber.inc carries to kern_dos:
 ; overriding the finding, rather than adding a test beside it, is what makes
 ; this free at every reader. The loader stores the RUN BOUND there, at most 36,
-; so the high byte is always 0 and the byte decides the word.
+; so the high byte is always 0 and the byte decides the word. ONLY TRACK
+; writes it: a failed canary's ROM returns the other head's sectors with CF=0
+; for a crossing READ (SPEC.md 18.93.1), so nothing may turn cylinder runs
+; back on over it, and 2 - once Cylinder - reads as Auto (SPEC.md 31.14).
 ; -----------------------------------------------------------------------------
 ovl_fdd_apply:
     mov dx, [drv_cfg+CFG_FDD]   ; DL = the four drives, DH = the read bound
     mov al, dh
-    dec ax                      ; 1 Track -> 0, 2 Cylinder -> 1, 0 Auto -> FF
+    dec ax                      ; 1 Track -> 0, 0 Auto -> FF
     cmp al, 1
-    ja .drives                  ; Auto, or a byte from a future version
+    jae .drives                 ; Auto, 2 (was Cylinder) or a future byte
     mov [boot_cylrun], al       ; ...for every mount after this one
     mov [dsk_cylrun], al        ; ...and the one drv_boot is standing on
 .drives:

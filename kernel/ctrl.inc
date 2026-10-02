@@ -483,7 +483,7 @@ CPF_ROWH  equ 18                ; ...and the pitch
 CPF_BH    equ 14                ; box height: an 8px caption, 3px each side
 CPF_LX    equ CP_PMX + 2        ; label x
 CPF_BX1   equ 76                ; box left: 'Drive A:' is 64px from 4
-CPF_BX2   equ CPF_BX1 + 87      ; ...and right. 'Cylinder' plus the arrow
+CPF_BX2   equ CPF_BX1 + 87      ; ...and right. 8 characters plus the arrow
 CPF_CAPY  equ CPF_R0Y + 5*CPF_ROWH + 4  ; 114: the caption
 %endif
 %ifdef DOCK_OPT
@@ -3337,11 +3337,12 @@ cp_dock_fail: db 'Dock Module Unavailable', 0
 ; The Floppy page (SPEC.md 31.14)
 ;
 ; Five drop-downs over SYSTEM.CFG's 'FD' record: one per unit a machine can
-; claim, Auto / None / 5.25 / 3.5, and the read bound, Auto / Track /
-; Cylinder. The page EDITS THE RECORD AND NOTHING ELSE - the bytes live in
-; drv_cfg alone, nothing resident reads them, and ovl_fdd_apply applies them
-; at the next boot, which is when the detection they override runs. So the
-; caption says restart, and a pick costs no kernel code at all.
+; claim, Auto / None / 5.25 / 3.5, and the read bound, Auto / Track - no
+; Cylinder, which would override a failed canary (SPEC.md 31.14). The page
+; EDITS THE RECORD AND NOTHING ELSE - the bytes live in drv_cfg alone, nothing
+; resident reads them, and ovl_fdd_apply applies them at the next boot, which
+; is when the detection they override runs. So the caption says restart, and
+; a pick costs no kernel code at all.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -3526,7 +3527,7 @@ cp_fdy:
     pop ax
     ret
 
-; cp_fdval - row BL's setting: AL = 0..3 for a unit, 0..2 for the reads
+; cp_fdval - row BL's setting: AL = 0..3 for a unit, 0..1 for the reads
 cp_fdval:
     mov al, [drv_cfg+CFG_FDR]
     cmp bl, 4
@@ -3540,9 +3541,9 @@ cp_fdval:
     and al, 3
     ret
 .rd:
-    cmp al, 3
+    cmp al, 2
     jb .ok
-    xor al, al                  ; a byte from a future version reads Auto,
+    xor al, al                  ; 2 (once Cylinder) or a future byte: Auto,
 .ok:                            ; which is what ovl_fdd_apply does with it
     ret
 
@@ -3606,7 +3607,7 @@ cp_fdstg:
     jb .c
     mov si, CPF_MRO
     mov cx, CPF_MRN
-    mov bh, 3
+    mov bh, 2
 .c:
     mov al, [cs:si + cp_fdmd]
     mov [di], al
@@ -3631,10 +3632,8 @@ cp_fdm2: db '5.25', 0
 cp_fdm3: db '3.5', 0
 cp_fdmr:
     dw cp_sbuf + (cp_fdr0 - cp_fdmr), cp_sbuf + (cp_fdr1 - cp_fdmr)
-    dw cp_sbuf + (cp_fdr2 - cp_fdmr)
 cp_fdr0: db 'Auto', 0
 cp_fdr1: db 'Track', 0
-cp_fdr2: db 'Cylinder', 0
 cp_fdend:
 CPF_MDN   equ cp_fdmr - cp_fdmd
 CPF_MRO   equ cp_fdmr - cp_fdmd

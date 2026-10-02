@@ -913,6 +913,7 @@ vp_open:
     call vp_xfree                   ; ...and its hold in XMS (98.3.18)
     xor ax, ax
     mov [vp_nkeys], ax
+    mov [vp_kekb], ax               ; a keyless file reserves no entry read
     mov [vp_nrend], al
     mov [vp_sel], ax
     dec ax
@@ -6608,7 +6609,7 @@ vp_smove:
 .out:
     ret
 
-vp_smtab:     dw vp_ring, vp_keep, vp_prevseg, vp_shseg, vp_pseg, 0
+vp_smtab:     dw vp_ring, vp_keep, vp_prevseg, vp_shseg, vp_pseg, vp_kshd, 0
 
 ; -----------------------------------------------------------------------------
 ; vp_spos - DX = the ring (or, resident, the key's claim, or 0): the session

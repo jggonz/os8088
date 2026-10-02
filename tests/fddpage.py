@@ -16,8 +16,10 @@ reads what `ovl_fdd_apply` did to `dsk_vtab` and the read bound:
     goes;
   * the third unit forced to 3.5 on a machine that claims two - a row it did
     not have, at D: because C: is the hard disk's, zone on, not 5.25;
-  * the read bound forced AGAINST whatever the canary found on boot 1, so the
-    leg cannot pass by agreeing with the machine.
+  * the read bound forced to Track AGAINST a canary that found cylinder runs
+    on boot 1, so the leg cannot pass by agreeing with the machine. Track is
+    the only bound that overrides the canary (SPEC.md 31.14): there is no
+    Cylinder to force over a failed one.
 
 Take the `call ovl_fdd_apply` out of drv_boot_x and every boot-2 leg fails;
 put `[menu_btn]` back to 2 and the first pick fails, because the popup then
@@ -94,8 +96,11 @@ def main(argv=None):
         if row_of(m, 2)[0] is not None:
             sys.exit("fddpage: this machine already has a third drive, so "
                      "forcing one proves nothing")
+        if not cyl0:
+            sys.exit("fddpage: the canary found track runs, so forcing Track "
+                     "proves nothing")
         # the read bound is forced to the OPPOSITE of what the canary found
-        rd, want_cyl = (1, 0) if cyl0 else (2, 1)
+        rd, want_cyl = 1, 0
 
         # the page's RECORD. cp_items is in CTRL.DRV's image now (kernel
         # size pass 8), so it is the kernel's own equate rather than a walk of
