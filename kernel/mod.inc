@@ -88,8 +88,8 @@ MOD_FDLG    equ 4               ; ...and the Standard File dialog (SPEC.md 38,
 ; never through DS by the module - so SPEC.md 2.6's "cold code carries no
 ; data" survives intact.
 MOD_H_MAGIC equ 0               ; word: 0x384F ('O','8')
-MOD_H_VER   equ 2               ; byte: 5 = kernel module (a package is 6, a
-                                ; driver 7), so ld_check_hdr and drv_check
+MOD_H_VER   equ 2               ; byte: 5 = kernel module (a package is 8, a
+                                ; driver 9), so ld_check_hdr and drv_check
                                 ; both refuse it - two independent gates, the
                                 ; discipline SPEC.md 51.1 already uses
 MOD_H_ID    equ 3               ; byte: which MOD_* row this image is

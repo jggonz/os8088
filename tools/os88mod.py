@@ -96,8 +96,8 @@ def check_image(name, img, ident, build, knent):
     if magic != MAGIC:
         fail("%s: bad magic %#06x" % (name, magic))
     if img[MOD_H_VER] != MOD_VER:
-        fail("%s: header version %d, expected %d - a package is 3 and a "
-             "driver is 4, and all three must stay distinct"
+        fail("%s: header version %d, expected %d - a package is 8 and a "
+             "driver is 9, and all three must stay distinct"
              % (name, img[MOD_H_VER], MOD_VER))
     if img[MOD_H_ID] != ident:
         fail("%s: header says module id %d, map row is %d"

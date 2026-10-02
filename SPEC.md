@@ -1711,7 +1711,7 @@ A module carries no dispatcher — the kernel knows its entry offsets, because
 it built them — and that is both cheaper than `call bp / retf` and the one
 hazard the design has: a module file beside a kernel it was not built with
 would be far-called at offsets that have moved. Header version is **5**, so
-`ld_check_hdr` (6) and `drv_check` (7) refuse it as well — two independent
+`ld_check_hdr` (8) and `drv_check` (9) refuse it as well — two independent
 gates, §51.1's discipline — and the header carries **two** words that
 `mod_check` tests:
 
@@ -37506,7 +37506,7 @@ honour system:
 - `drv_tab` is a **fixed kernel-side table** of known driver files, so the
   set of things that can ever be a driver is decided when the kernel is
   built and a user cannot add to it;
-- a `.DRV` carries **header version 7** (`DRV_VER`; 4 before §20.2.0), which `ld_check_hdr` refuses for an
+- a `.DRV` carries **header version 9** (`DRV_VER`; 4, then 7, before §20.2.0), which `ld_check_hdr` refuses for an
   application, and `disk_mount` types only `*.O88` as launchable — two
   independent gates, so a driver can never be double-clicked into existence;
 - and the driver files themselves are hidden + system + read-only on the
@@ -38119,7 +38119,7 @@ each needed a mechanism**:
 | off | size | contents                                                  |
 |-----|------|------------------------------------------------------------|
 | 0   | 2    | magic: bytes `'O','8'` (word 0x384F)                      |
-| 2   | 1    | format version = **6** (`PKG_FMT`): the segment-per-package layout, built against the API table as §20.3 lays it out now. Anything else — 1 to 5 included — is refused (§20.2.0) |
+| 2   | 1    | format version = **8** (`PKG_FMT`): the segment-per-package layout, built against the API table as §20.3 lays it out now. Anything else — 1 to 7 included — is refused (§20.2.0) |
 | 3   | 1    | flags: bit 0 = embedded icon follows the header; bit 1 = an association block follows it (§54.6); **bit 2 = the FILE is longer than the image and the rest is the package's own (§20.12)**; **bit 3 = the image is COMPRESSED and the file is SHORTER than it, bit 4 = which format (0 = LZ4, 1 = LZB)** — docs/plans/O88-COMPRESSION-PLAN.md; **bit 5 = a 16-byte DOCUMENT-GLYPH block follows the association block (§54.3.2)**; bits 6–7 zero |
 | 4   | 2    | link base — must be **0**: a v3 package links at org 0     |
 | 6   | 2    | entry offset (≥ 0x20; ≥ 0x60 with icon; < image size)      |
@@ -38132,7 +38132,7 @@ each needed a mechanism**:
 #### 20.2.0 The format number is the TABLE'S, and moving the table moves it
 
 The layout this section describes has not changed since v3 — the name the rest
-of this document still uses for it — and the byte at +2 is 6 all the same,
+of this document still uses for it — and the byte at +2 went to 6 all the same,
 because the byte is the only thing a kernel reads before it far-calls a
 package's cells, and kernel size pass 4 moved 158 of them (§20.3). A package
 built for the old table and loaded by a kernel with the new one does not
@@ -38148,6 +38148,20 @@ the next free number is 6, and a driver moved with it for the same reason
 (`DRV_VER` = 7). `PKG_FMT` is defined in `kernel/loader.inc` and
 `apps/os88api.inc` and `tests/unit/t_mirror.py` holds the two together, with
 `tools/os88pkg.py`'s copy beside them.
+
+**6 became 8 and 7 became 9** when two cells changed meaning at the SAME
+number, which is the worse case than a renumbering: `OSAPI_FSX_SPK` stopped
+hooking IRQ0 and writing K and the chain into the caller's block (the caller
+holds IF = 0, passes BX = CS and hooks the vector itself, §34.11), and
+`OSAPI_SND_PLAY` stopped being a blocking clip and became AL = 0 GRANT / AL =
+1, 2 RELEASE (§34.4) — and a driver's `OSAPI_DESK_ITEM` record grew from 39
+bytes to 40 (§26.7). A new package on a released kernel would have had its
+own ISR banked as the chain and stopped the tick; an old one on this kernel
+would have taken the grant and never released it. **Why not 7**: 7 is what
+every driver released before this carries, so a format-7 package would be a
+driver to every kernel that shipped — the equality test fences the kinds only
+while no number is ever reused for another kind, so a package skips the
+driver's old number and the driver takes the next one past it.
 
 **The dispatcher at +12 is the header's one piece of executable code**, and
 it is what makes a package's callbacks ordinary near procs. Every
@@ -38905,7 +38919,7 @@ emits the §20.2 header (image size via a forward-referenced
 end-of-file macro — exact macro design is the implementer's, but a package
 source must be able to consist of just `%include "os88api.inc"`, the header
 macro, code/data, and an end macro). `OS88_HEADER` opens with `org 0`,
-emits **version 6** (`PKG_FMT`, §20.2.0), a zero link base, the entry offset, and the four
+emits **version 8** (`PKG_FMT`, §20.2.0), a zero link base, the entry offset, and the four
 **dispatcher bytes at +12** (§20.2) — which is the one part a package author
 must not hand-roll and, because the macro emits it, cannot get wrong.
 Every `OSAPI_*` is a `%define` of `KERNEL_SEG:offset`, so `call OSAPI_X` is
@@ -42404,7 +42418,7 @@ kernel-segment buffer first and validate the copy, and nothing ever compared
 the two — each call simply re-ran the same tests. The buffer and the copying
 are gone; the disk-swap guard step 6 exists for is untouched, because what
 catches a swap is re-running this routine on what the *full read* delivered,
-not the staged copy. Checks: magic; **version = 6** (`PKG_FMT` - a file
+not the staged copy. Checks: magic; **version = 8** (`PKG_FMT` - a file
 built for another API table, or a v1 or v2 file → "Bad package", §20.2.0); link base = 0; image ≥ 0x20; entry in [0x20, image) (the icon
 rule is enforced by os88pkg, not re-checked); **image+bss ≤ APP_MAX_SIZE,
 fenced on the CARRY**, because both operands are separately bounded at
@@ -83010,9 +83024,9 @@ does. Four things differ, and each is doing work:
 - **It is a `.DRV` file.** The mount types a directory entry as an
   application only when its extension is `O88` (§19), so a driver is *data*
   to the file manager and can never be double-clicked into the loader.
-- **Its header version is 7** (`DRV_VER`, §20.2.0; it was 4 until the API
-  table moved). A package is 6, so if one ever did reach
-  `ld_check_hdr` it would be refused there too. Two independent gates,
+- **Its header version is 9** (`DRV_VER`, §20.2.0; it was 4 until the API
+  table moved, and 7 until two cells were re-contracted). A package is 8,
+  so if one ever did reach `ld_check_hdr` it would be refused there too. Two independent gates,
   because "the kernel ran a driver as an application" is not a failure mode
   worth one gate.
 - **It has no instance record**: no dock tile, no Task Manager row, no
@@ -86576,7 +86590,7 @@ Per type-1 entry (§19.1 — a PACKAGE, not "a file"):
 - **one `OSAPI_FILE_READ_AT` of the first cluster**, whose capacity must be a
   whole number of clusters (§18.4.4) — `OSAPI_FILE_DFREE` answers the sectors
   per cluster, which is what sizes the claim below.
-- the header is checked as `build_assoc` checks it — `'O8'`, version 6 (`PKG_FMT`) — and
+- the header is checked as `build_assoc` checks it — `'O8'`, version 8 (`PKG_FMT`) — and
   the icon is the 64 bytes at +32 when flags bit 0 is set, the declaration
   block at +96 (or +32 with no icon) when bit 1 is.
 
@@ -107996,7 +108010,7 @@ Three things follow, and each is why a directive is written the way it is:
 The 32-byte header itself is emitted by the C runtime include and not by
 `OS88_HEADER`: that macro emits `org 0` of its own and closes with the `$$`
 arithmetic above, so a C package uses a sibling pair of macros with the same
-field layout, the same magic, the same version (`PKG_FMT`, 6) and the same `FF D5 CB 00`
+field layout, the same magic, the same version (`PKG_FMT`, 8) and the same `FF D5 CB 00`
 dispatcher bytes at +12. **The header a C package emits is byte-identical in
 shape to an assembly package's** — that is the requirement, and `os88pkg.py`
 plus `ld_check_hdr` (§21) are the two things that prove it on every build.

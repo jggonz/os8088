@@ -64,8 +64,9 @@ LD_DE_SIZE  equ 20              ; the LOW word of a DWORD size (SPEC.md 19.1
 ; --- .o88 v3 header field offsets (SPEC.md 20.2) ------------------------------
 LD_H_MAGIC  equ 0               ; word: 0x384F ('O','8')
 LD_H_VER    equ 2               ; byte: format version = PKG_FMT
-PKG_FMT     equ 6               ; the package format, and it is the API
-                                ; TABLE'S: a renumbering bumps it (SPEC.md
+PKG_FMT     equ 8               ; the package format, and it is the API
+                                ; TABLE'S: a renumbering bumps it, and so
+                                ; does a cell re-contracted (SPEC.md
                                 ; 20.2.0, 20.8 rule 4). Mirrored in
                                 ; apps/os88api.inc and tools/os88pkg.py,
                                 ; and tests/unit/t_mirror.py holds them together

@@ -285,7 +285,8 @@ DRV_H_BSSP  equ 31              ; byte: THE BSS SIZE IN PARAGRAPHS
                                 ; cover the bss, which for the shipped set is
                                 ; four drivers and none of them at boot
 DRV_HDR_SZ  equ 0x20
-DRV_VER     equ 7               ; 4 until the API table moved (SPEC.md
+DRV_VER     equ 9               ; 4 until the API table moved, 7 until two
+                                ; cells were re-contracted (SPEC.md
                                 ; 20.2.0): a driver far-calls the table too.
                                 ; Mirrored in drivers/os88drv.inc and
                                 ; tools/os88drv.py

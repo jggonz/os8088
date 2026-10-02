@@ -2269,7 +2269,7 @@ SOAK = [
         "size pass 4 moved 158 cells and left the byte at 3, so a package "
         "built for one table loaded under the other and far-called the wrong "
         "cells - the Wire serving a new package to an old kernel. PKG_FMT is "
-        "6 now and the loader's test is EQUALITY, so OLDCALC.O88 (the "
+        "8 now and the loader's test is EQUALITY, so OLDCALC.O88 (the "
         "Calculator with its byte put back to 3) must be LD_EBAD with no "
         "window, and CALC.O88 opened AFTER it must load, which is what says "
         "the refusal left the machine whole. Broken on purpose (loader.inc's "

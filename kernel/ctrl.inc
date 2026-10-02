@@ -847,8 +847,8 @@ section .modc                   ; the on-demand image starts HERE, at its own
                                 ; thing in the file
 modc_hdr:
     dw 0x384F                   ; MOD_H_MAGIC
-    db MOD_VER                  ; MOD_H_VER - 5, so ld_check_hdr (6) and
-                                ; drv_check (7) both refuse this file
+    db MOD_VER                  ; MOD_H_VER - 5, so ld_check_hdr (8) and
+                                ; drv_check (9) both refuse this file
     db MOD_CTRL                 ; MOD_H_ID
     dw BUILD_NUM                ; MOD_H_BUILD (SPEC.md 2.8.2): refuses a
                                 ; CTRL.DRV from another COMMIT...

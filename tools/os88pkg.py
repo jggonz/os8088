@@ -33,7 +33,7 @@ import sys
 
 HEADER_SIZE = 32
 MAGIC = 0x384F            # 'O','8' little-endian
-PKG_FMT = 6               # the format byte, and it is the API TABLE'S
+PKG_FMT = 8               # the format byte, and it is the API TABLE'S
                           # (SPEC.md 20.2.0): mirrors kernel/loader.inc and
                           # apps/os88api.inc, held by tests/unit/t_mirror.py
 VERSION = PKG_FMT
