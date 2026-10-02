@@ -69,6 +69,10 @@
 VK_NRES     equ 20
 VK_BUFKB    equ 40                  ; 32 KB chunks, and a whole track
 VK_CHUNK    equ 32768
+%ifndef VK_WSUB
+VK_WSUB     equ VK_CHUNK            ; W hands each 32 KB chunk to the kernel
+%endif                              ; in calls of this many bytes: 8192 is
+                                    ; FTPD's STOR (SPEC.md 77.49)
 VK_DIV      equ 39773               ; 30.0 Hz
 VK_CEILT    equ 91                  ; ticks a ceiling row streams: 5 s
 VK_MB12     equ 12 * 16             ; 12 MB, as a high word
@@ -107,8 +111,27 @@ vk_onkey:
     or bl, 0x20
     cmp bl, 'r'
     je .run
+    mov byte [vk_wmode], 0
     cmp bl, 'w'
     je .write
+    inc byte [vk_wmode]             ; 'p': OSAPI_FILE_WRITE_SEQ, plain
+    cmp bl, 'p'
+    je .write
+    inc byte [vk_wmode]             ; 'h': ...HELD (SPEC.md 18.4.9)
+    cmp bl, 'h'
+    je .write
+    inc byte [vk_wmode]             ; 'u': held and never CLOSED - the unlock
+    cmp bl, 'u'                     ; at the end of this callback commits it
+    je .write
+    inc byte [vk_wmode]             ; 'i': held, with ANOTHER file written
+    cmp bl, 'i'                     ; every 64 chunks, whose gate commits it
+    je .write
+    inc byte [vk_wmode]             ; 'k': held, and at chunk 64 the stream is
+    cmp bl, 'k'                     ; DELETED and another file made in its
+    je .write                       ; place - the gate must commit it first
+    inc byte [vk_wmode]             ; 'f': held, with NO room check - the
+    cmp bl, 'f'                     ; volume fills mid-stream and the failed
+    je .write                       ; call must abandon the hold, not keep it
     cmp bl, 'd'
     je .del
     call bl_key
@@ -1063,12 +1086,21 @@ vk_wrun:
     jnz .write                      ; 64 MB free or more
     cmp ax, cx
     jae .write
+    cmp byte [vk_wmode], 6          ; 'f' writes into too little ON PURPOSE
+    je .write
     mov si, vk_s_wroom
     call bl_sline
     jmp .home
 
     ; --- the chunks: a WRITE makes the file, APPENDs grow it ---
 .write:
+    xor ax, ax                      ; the WRITE_SEQ token, none yet, and
+    mov [vk_wtok], ax               ; HELD from mode 2 up
+    cmp byte [vk_wmode], 2
+    jb .nohold
+    mov al, WSEQF_HELD
+.nohold:
+    mov [vk_wflg], al
     call OSAPI_GET_TICKS
     mov [vk_ct0], ax
 .chunk:
@@ -1081,23 +1113,57 @@ vk_wrun:
 .fill:
     mov ax, bx
     call vk_fill
-    mov es, [vk_buf]
     mov si, vk_f_names
-    mov cx, VK_CHUNK
+    xor bx, bx                      ; ES:BX = the next VK_WSUB of the chunk
+.sub:
+    mov es, [vk_buf]
+    mov cx, VK_WSUB
+    cmp word [vk_wk], 0
+    jne .app
     or bx, bx
-    mov bx, 0                       ; ES:BX = the chunk (flags kept)
     jnz .app
-    xor dx, dx                      ; DX:CX = the whole of it
+    xor dx, dx                      ; DX:CX = the first call's whole count
     call OSAPI_FILE_WRITE
     jmp short .wrote
 .app:
+    cmp byte [vk_wmode], 0
+    jne .seq
     call OSAPI_FILE_APPEND
+    jmp short .wrote
+.seq:
+    mov di, [vk_wtok]               ; ES:BX = the bytes, DI = the token
+    mov al, [vk_wflg]
+    call OSAPI_FILE_WRITE_SEQ
+    mov [vk_wtok], di
 .wrote:
     push ds
     pop es
     jc .werr
+    add bx, VK_WSUB
+    cmp bx, VK_CHUNK
+    jb .sub
     inc word [vk_wk]
-    jmp short .chunk
+    cmp byte [vk_wmode], 4
+    jb .chunk
+    cmp byte [vk_wmode], 5          ; 'i' and 'k' only
+    ja .chunk
+    test word [vk_wk], 63
+    jnz .chunk
+    cmp byte [vk_wmode], 5
+    jne .side
+    mov si, vk_f_names              ; 'k': the stream itself goes...
+    call OSAPI_FILE_DELETE
+    jnc .side
+    inc word [vk_err]
+.side:
+    mov si, vk_f_side               ; another file, mid-stream (18.4.9)
+    mov bx, vk_s_wtitle
+    mov cx, 16
+    xor dx, dx
+    call OSAPI_FILE_WRITE
+    jnc .chunk
+    inc word [vk_err]
+    jmp .chunk
 .werr:
     xor dx, dx                      ; AX = FERR_*
     mov si, vk_r_werr
@@ -1111,6 +1177,18 @@ vk_wrun:
     call bl_kv
     inc word [vk_err]
 .done:
+    cmp byte [vk_wmode], 2          ; a HELD stream is committed by its close
+    je .close                       ; ('u' leaves it to the unlock)
+    cmp byte [vk_wmode], 4
+    je .close
+    cmp byte [vk_wmode], 6
+    jne .closed
+.close:
+    xor cx, cx
+    call OSAPI_FILE_WRITE_SEQ
+    jnc .closed
+    inc word [vk_err]
+.closed:
     call OSAPI_GET_TICKS
     sub ax, [vk_ct0]
     mov [vk_cticks], ax
@@ -1156,8 +1234,10 @@ vk_wrun:
     mov si, vk_s_whave
     call bl_sline
 .home:
-    call vk_back
-    mov si, vk_f_wtxt               ; the report, beside the bench
+    cmp byte [vk_wmode], 3          ; 'u' touches NO file and mounts NOTHING
+    je .out                         ; after W, not even the way home: the
+    call vk_back                    ; unlock ending this callback is the only
+    mov si, vk_f_wtxt               ; commit there is (SPEC.md 18.4.9)               ; the report, beside the bench
     call bl_save
     jmp short .out
 .fail:
@@ -1313,6 +1393,12 @@ vk_dchk:      db 0
               db 0
 vk_hdir:      dw 0
 vk_wk:        dw 0
+vk_wmode:     db 0              ; 0 APPEND, 1 WRITE_SEQ, 2 WRITE_SEQ HELD,
+                                ; 3 held unclosed, 4 held interleaved,
+                                ; 5 held, the stream deleted mid-way
+vk_f_side:    db 'VKSIDE.TXT', 0
+vk_wtok:      dw 0              ; ...its token
+vk_wflg:      db 0              ; ...and its flags
 vk_wdone:     dw 0
 vk_ddone:     dw 0
 vk_wfrom:     dw 0

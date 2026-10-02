@@ -2,7 +2,7 @@
 ; Confirmed shutdown (SPEC.md 12.3.2), inside CTRL.DRV.
 ; DS stays KERNEL_SEG; all private state is CS-relative. No resident buffers.
 ; =============================================================================
-section .modc
+section .modu
 modc_e_shutdown:
     call sd_confirm
     or al, al
@@ -29,7 +29,8 @@ modc_e_shutdown:
     mov al, 0x0C               ; FDC enabled, both floppy motors off
     out dx, al
     sti
-    call KERNEL_SEG:spw_vid_setmode ; clear the display and reset planar state
+    mov bp, vid_setmode
+    call KERNEL_SEG:cw_mem_disp ; clear the display and reset planar state
     mov ax, [vid_cw]
     shr ax, 1
     mov [cs:sd_l_cx], ax
@@ -256,16 +257,18 @@ sd_hit:
     ret
 
 sd_text:
-    push ds
+    push es
     push cs
-    pop ds
-    call KERNEL_SEG:apic_font_run
-    pop ds
+    pop es
+    mov bp, font_run_x         ; ES:SI is the module string; DS stays KERNEL_SEG
+    call KERNEL_SEG:cw_mem_disp
+    pop es
     ret
 
 sd_spinadr:
     mov ax, [cs:sd_l_spn]
-    call KERNEL_SEG:spw_gfx_rowbase
+    mov bp, gfx_rowbase
+    call KERNEL_SEG:cw_mem_disp
     add ax, [cs:sd_l_spx]
     mov di, ax
     mov es, [vid_seg]

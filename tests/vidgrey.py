@@ -42,6 +42,8 @@ NBTN = 7                        # VP_NBTN: the four, Repeat, Mute (SPEC.md
                                 # 98.3.17) and the info card's
 VP_BOXX, VP_BOXY, VP_BARH = 8, 6, 10
 VP_TXTY, VP_LPITCH, VP_LINES, VP_CARDW = 6, 11, 8, 280
+VP_LINESB = 8                   # ...with the buttons in the card (VPDIAG=1
+                                # makes VP_LINES 12: SPEC.md 98.3)
 VP_CARDH = VP_TXTY + VP_LINES * VP_LPITCH + 4
 VP_CARDHB = 96 + 20 + 4
 
@@ -158,7 +160,8 @@ def main():
                 cwrong = cn = 0
                 if card:
                     lines = [(cx0 + rw("vp_lcardx"), cy0 + VP_TXTY + i *
-                              VP_LPITCH) for i in range(VP_LINES)]
+                              VP_LPITCH) for i in range(
+                                  VP_LINESB if rb("vp_lbin") else VP_LINES)]
                     for y in range(card[1], card[3] + 1):
                         for x in range(card[0], card[2] + 1):
                             if any(lx <= x < lx + VP_CARDW and ly <= y <

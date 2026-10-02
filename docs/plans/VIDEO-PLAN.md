@@ -2140,7 +2140,7 @@ reprogrammed for everyone.
 - **Audio** plays on the desktop, where channel 0 is not its (34.1), so it
   would need a full-screen play first. (ModPlug was in this line once; it is
   RETIRED, SPEC.md 56.15, and needs nothing.) **Tracker and Audio are a
-  handoff to another session: docs/plans/SPEAKER-PCM-HANDOFF.md.**
+  handoff to another session: docs/plans/completed/SPEAKER-PCM-HANDOFF.md.**
 - **No C binding**: a C package would need an assembly module for the ISR.
 - ~~**ADPCM4 on the speaker**~~ - SET ASIDE, LIKELY PERMANENTLY (the
   owner, 2026-09-27: *"That would leave almost no room at all for video"*):
@@ -2209,8 +2209,9 @@ and not a transcript. Each line names where the detail is.
   86Box machine.
 - **XMS** (15.6, V4): both phases BUILT - above. More Live WINDOWS in XMS
   (V4's other half) is not asked for.
-- **The keeper relocatable** (15.4 D): the blocks move, the keeper stays
-  pinned until its use across window calls is proven safe.
+- **The keeper relocatable** (15.4 D): DONE 2026-09-30 (15.11) - the ring,
+  the keeper, the page copy and the poster are movable between brackets
+  and pinned for one, and at the video's own size there is no keeper.
 
 **The speaker on the 5150** (2026-09-28): the owner's first listen was a
 loud 5,524 Hz whine and no music, where every emulator played the song.
@@ -2309,7 +2310,7 @@ idea, so the next choice can start at the desk.
 
 **PC speaker follow-ons** (15.9):
 - **Tracker's full screen and Audio**: a HANDOFF to another session,
-  docs/plans/SPEAKER-PCM-HANDOFF.md. Audio needs a full-screen play first.
+  docs/plans/completed/SPEAKER-PCM-HANDOFF.md. Audio needs a full-screen play first.
 - **A C binding**: none; a C package would need an assembly module.
 - **Live without a card stays silent**: the desktop cannot give up
   channel 0.
@@ -2326,8 +2327,9 @@ idea, so the next choice can start at the desk.
 layout (no shadow copy); `font_run_cell`'s masked row loop (~20 kernel
 bytes, ~210 cycles a clipped cell).
 
-**Recorded, not player defects** (15.7): `vidlivesndl`, `vidfskeysflip` and
-`vidwinshd` (its hold at frame 100, once, 2026-09-27) fail now and then
+**Recorded, not player defects** (15.7): `vidlivesndl`, `vidfskeysflip`,
+`vidmodex` (a timeout after the clip's Map Masks, once, 2026-09-30) and
+`vidwinshd` (its hold at frame 100, 2026-09-27 and 2026-10-01) fail now and then
 under parallel load and pass alone. `vidplay` WAS on this list and was the
 harness's: its first hold was polled every 0.3 host s, which could read the
 1.5 s "Low memory" toast after it had gone - polled at 0.02 now (ab2aed4d);
@@ -2341,3 +2343,74 @@ before the player was opened, SOUND.DRV and HDD.DRV loaded. Rows
 `vidspkroute` and `vidspkcp` cover both ways of choosing the route. Set
 aside unless it happens again - the info line's third row (`, speaker` or
 not) is the first thing to ask for.
+
+### 15.11 Memory under pressure (2026-09-30)
+
+The owner's report: `LXVGA256.V88` - Last Exile, 320 x 240 Mode X VGA8,
+11 kHz PCM8, 358 KB/s, encoded `286-vga` with a ring of 8 - toasted *Low
+memory* on an 86Box mr286 with a 5400 rpm IDE drive and its sound
+"blipped". The blips were the card running dry because the STREAM ring
+did - the sound's 16 KB ring is 1.5 s at 11 kHz and is filled only from
+what the reader has loaded, so it is never the one that empties first.
+SPEC.md 98.3 and 98.3.19 carry what was built; in order:
+
+- **The seek's hold is an ENTRY read** (792b36e): the ring kept back a
+  keyframe record's claim, 48 KB here, for a seek whose claims read
+  16-byte table entries - 4 KB. 7 slots -> 8 on MartyPC's VGA + SB + HDD.
+- **The keeper from the top** (899c382): claimed bottom-up and pinned, it
+  walled the kernel's caches (directory read-ahead 32 KB, a raise cache
+  30 KB, the icon store 4 KB) off from the ring. 8 -> 10. The card's two
+  heap lines, a play's own pause count, `Drew N/M`, and a muted play's
+  ring kept free for M.
+- **Waves 1 and 2** (cb46da3): the keeper given up under pressure in the
+  full screen (a swap then stops at the key at or before), and before
+  that the player moving ITSELF with a posted compaction when it is
+  stranded under a hole. The session's claims and the poster are movable
+  between brackets.
+- **The poster is the keeper** (00a9447): at the video's own size the
+  poster is the canvas - one-bit, or VGA4 - so those plays claim none,
+  in the window and in the full screen alike.
+
+**Set aside: the sound's ring on a desktop pause.** A session paused back
+on the desktop keeps its 17 KB DMA ring (`MC_DMA`, never moved), where
+Tracker gives its pool back at a stop (45.17). The owner's call
+(2026-10-01): *"a nice to have, I don't think it currently blocks anything
+in video player itself"* - documented, not built. It was built once and
+taken out, because **today's pause is SAMPLE-EXACT** (the card halted
+mid-block with verb 10 and resumed in place - `vidsndpause` asserts every
+sample of the file is captured in order) and a release cannot keep that
+for free: the card's consumed count advances one 2 KB block per block
+interrupt (0.19 s of 11 kHz), and the card plays whole blocks, so it can
+neither report nor stop on the byte a frame ends. Two ways, if it is
+wanted:
+
+1. **Release, and accept a seam.** Close the card at the desktop pause,
+   aim the audio cursor at the next frame to draw (`vp_acur`), free the
+   ring; at the next bracket claim it again (`vp_sndprep`) and open the
+   card on the resume as a play entered paused does (`[vp_sdefer]`,
+   98.3.6). Built and measured once: 128 bytes, and `vidsndpause`
+   departs at the resume - up to a frame or two of sound (~40-80 ms)
+   skipped or replayed, with picture and sound in step after it. The row
+   would be relaxed for the desktop pause. ADPCM4 cannot take it at all:
+   its decoder's reference and scale cannot be rebuilt mid-stream (they
+   are reset only at keyframes, 98.1.1.1), so ADPCM4 keeps the halt.
+2. **Release, and stay exact.** Three parts. (a) SOUND.DRV's verb 9
+   (exact bytes played, off the 8237's count, 34.5.1) answers verb 3's
+   block count once paused; it would answer the frozen count while
+   `[sbl_paused]` holds - small, in the driver. (b) The byte the card
+   stopped on is in the frame ON THE GLASS or the one before it (the clock
+   draws a frame when the last one's sound has played), which is behind
+   the video cursor, and the audio cursor only walks forward - so the hook
+   keeps the cursor of the frame on the glass, and the resume starts
+   there, its first `vp_aput` skipping the bytes already played. (c) That
+   frame's record must still be in the ring: a slot is refilled the moment
+   its last frame is drawn (98.3), so the reader would hold back the slot
+   under the frame on the glass while a session can pause. Player work,
+   the cursor's copy a frame on the hook's time, not estimated; ADPCM4 as
+   in 1.
+
+Either way the release is for the desktop pause only (the owner: *"only
+when exiting fullscreen, of either type"*): a Space pause inside a bracket
+keeps the card halted, nothing else can run then, and its resume stays
+instant.
+

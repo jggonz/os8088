@@ -3,7 +3,7 @@
 ;
 ; THE WIRE'S DESKTOP ICON, and every byte of it is the driver's (SPEC.md 26.7,
 ; docs/WIRE-PLAN.md §2). The kernel has a generic desktop SERVICE zone a
-; driver registers through OSAPI_DESK_SVC and knows nothing else: not the
+; driver registers through OSAPI_DESK_ITEM and knows nothing else: not the
 ; picture, not the caption, not the file it launches, not the word Wire. Most
 ; XTs have no network card, and a machine without one must not carry a glyph
 ; it can never draw - so the glyph lives here, in RAM only while a driver that
@@ -58,11 +58,14 @@ wz_rec:
     times 39 - ($ - wz_rec) db 0    ; what apps/thewire's OS88_HEADER says:
 %if ($ - wz_rec) != 39              ; it is what makes the zone a SINGLETON,
   %error "wirezone: the header-name field is 12 bytes (11 characters and a NUL)"
-%endif                              ; matched against the instance table.
-                                    ; 39 is the WHOLE record (DSV_R_SIZE): the
-                                    ; failure notice's lead line it once ended
-                                    ; with went when a failed launch became a
-                                    ; toast (kernel size pass 4)
+%endif                              ; matched against the instance table
+    db 0xFF                     ; +39 THE CELL: 0xFF is the next free one
+                                ; after the drives, which is where the Wire
+                                ; always went (OSAPI_DESK_ITEM, SPEC.md 26.9).
+                                ; 40 is the WHOLE record (DSV_R_SIZE)
+%if ($ - wz_rec) != 40
+  %error "wirezone: the record is 40 bytes - the kernel copies DSV_R_SIZE"
+%endif
 
 wz_x:       dw 0                ; the icon's top-left, banked across
 wz_y:       dw 0                ; OSAPI_VIDEO, which answers in CX and DX
@@ -77,7 +80,7 @@ wz_register:
     push si
     mov si, wz_rec              ; ES is the slot's X stub's business: it puts
     mov al, 1                   ; our own DS there, which is where the record
-    call OSAPI_DESK_SVC         ; is
+    call OSAPI_DESK_ITEM         ; is
     pop si
     pop ax
     ret
@@ -85,7 +88,7 @@ wz_register:
 wz_withdraw:
     push ax
     xor al, al
-    call OSAPI_DESK_SVC
+    call OSAPI_DESK_ITEM
     pop ax
     ret
 

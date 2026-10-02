@@ -296,8 +296,8 @@ def main():
                 bad.append("a colour play from the start used key %d's "
                            "entry, not key 0's" % rw("vp_kload"))
             print("   the ring: %d slots" % rw("vp_k"))
-            if rw("vp_k") != 8:
-                bad.append("the ring has %d slots, not 8: something the "
+            if rw("vp_k") < 8:              # (SPEC.md 98.3: as many as fit
+                bad.append("the ring has %d slots, under 8: something the "
                            "session claims is too big" % rw("vp_k"))
             for si, n in enumerate(stops):
                 until(lambda mm: rb("vp_held") == 1 and rw("vp_done") == n,

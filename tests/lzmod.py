@@ -72,6 +72,7 @@ import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 import os88build                                       # noqa: E402
+import os88spkfx                                        # noqa: E402
 import os88lz                                          # noqa: E402
 import dispcp                                          # noqa: E402
 import os88geom                                        # noqa: E402
@@ -354,7 +355,17 @@ def run(a, apps, plain, P, fails):
                             poll=0.2, guest=60.0)
         except os88marty.MartyError:
             pass
-        os88marty.settle(m)
+        # ...and THE LOAD DONE, read rather than settled on: with no card
+        # Tracker PLAYS what it loaded, through the speaker in its window
+        # (SPEC.md 45.25), so the screen never stops changing and a settle
+        # there waits out its whole budget
+        try:
+            os88marty.until(
+                m, lambda mm: int.from_bytes(
+                    mm.readseg(pseg, P["mp_loaded"], 2), "little"),
+                "Tracker to finish the load", poll=0.2, guest=60.0)
+        except os88marty.MartyError:
+            pass
         modseg = claimed(m)
         if not modseg:
             msg = int.from_bytes(m.readseg(pseg, P["tui_msgp"], 2), "little")
@@ -373,14 +384,41 @@ def run(a, apps, plain, P, fails):
             return report(fails)
         say("  module     claimed at %04X" % modseg)
 
+        # NO CARD: Tracker pre-emphasises the samples IN PLACE once the load
+        # is done (SPEC.md 45.25) - the speaker's filter paid once rather
+        # than per output sample - so the bytes in memory are the file's with
+        # each sample's play length through that filter. The ranges are read
+        # out of Tracker's own sample table rather than re-derived, and the
+        # filter applied to the file's bytes here: the header and patterns
+        # must still match to the byte, and the samples to the filter.
+        want = plain
+        if "tsp_pre" in P:
+            try:
+                os88marty.until(
+                    m, lambda mm: mm.readseg(pseg, P["tsp_pre"], 1)[0],
+                    "the samples filtered", poll=0.2, guest=20.0)
+            except os88marty.MartyError:
+                pass
+            if m.readseg(pseg, P["tsp_pre"], 1)[0]:
+                want = bytearray(plain)
+                tab = m.readseg(pseg, P["mp_smptab"], 31 * 12)
+                for i in range(31):
+                    sg, of, pl = (int.from_bytes(tab[i * 12 + k:i * 12 + k + 2],
+                                                 "little") for k in (0, 2, 4))
+                    at = (sg << 4) + of - (modseg << 4)
+                    want[at:at + pl] = os88spkfx.tracker_natural(bytes(want[at:at + pl]))
+                want = bytes(want)
+                say("  samples    high-passed in place, a bass or a drum "
+                    "squared up (no card, SPEC.md 45.25.4): compared "
+                    "through tools/os88spkfx.py's tracker_natural")
         got = b""
         while len(got) < len(plain):        # 116KB, in segment-sized reads
             k = min(0x8000, len(plain) - len(got))
             got += m.readseg(modseg + (len(got) >> 4), 0, k)
-        if got == plain:
+        if got == want:
             say("  bytes      ok  (all %d, byte for byte)" % len(plain))
         else:
-            bad = [i for i in range(len(plain)) if got[i] != plain[i]]
+            bad = [i for i in range(len(plain)) if got[i] != want[i]]
             fails.append("%d of %d bytes differ, first at %d (0x%X) - which "
                          "is %s the 64KB boundary"
                          % (len(bad), len(plain), bad[0], bad[0],

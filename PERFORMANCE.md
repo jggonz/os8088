@@ -1547,6 +1547,49 @@ row and `shl clk/bit book` at 0.
 
 ---
 
+## Part 8.2 — `sysbench` by memory REGION: ANSWERED by SPKBENCH
+
+**Status: answered 2026-09-29, and the answer is no wait states.** SPKBENCH
+(`tests/spkbench/`, SPEC.md 45.25.1) carries the per-bank row this proposed -
+4 KB of `rep lodsw` in each 64 KB bank, 0 to 9 - and the owner's 5150 reads
+all ten within 0.02% (74,021-74,032 PIT counts), the SixPakPlus banks
+included; so do the T1100 Plus, the 286 and 86Box. The difference below was
+the speaker ISR's own cost (~395 cycles a sample on iron against the 325 the
+predictor assumed), not the memory. The rest of this section is the proposal
+as it was written, kept for why the question came up; a `sysbench` section
+remains unbuilt and is not needed for this.
+
+**The proposal, as written (2026-09-29):** `sysbench`'s
+RAM rows time ONE buffer wherever the package happens to land. The owner's
+5150 (docs/FIELD-MACHINES.md) is 256 KB on the planar and 384 KB on a
+SixPakPlus, and a question came up that the one buffer cannot answer:
+**does the machine run the same code at the same speed in every part of its
+RAM?** Every MartyPC profile here says yes by construction
+(`conventional.wait_states = 0` for the whole 640 KB).
+
+Why it came up (SPEC.md 45.25): Tracker on the PC speaker benches a 5150 at
+95% of the machine on MartyPC for both BEVERLY.MOD and ELYSIUM.MOD and holds
+both - and the owner's 5150 benched ELYSIUM at 101%, and BEVERLY starved
+briefly in its heavy passages (a recording of the speaker line shows the
+carrier exact at 5,524 Hz and the ring running dry for 2-3 ms at a time),
+where MartyPC's never runs dry. A module of 100-130 KB and the speaker's
+17 KB ring are claimed high in the arena, which on that machine is SixPak
+RAM. The SixPakPlus is documented as adding NO wait states, so the
+expectation is that this finds nothing - which is itself the useful answer,
+because it moves the search to the interrupt's own cost on iron.
+
+What the profile would be:
+- the same RAM-bandwidth rows (a `rep movsw`, a `lodsb/stosb` loop, an
+  `xlat` loop - the speaker ISR's and the shaper's shapes) run with the
+  buffer placed at **each 64 KB bank** in turn, 0 to 9, by a claim sized to
+  land there (or a far pointer the package walks);
+- the speaker ISR's cost per pulse (§34.11.7.1's `CYC_SPK_PULSE`) timed
+  with its RING in the low 256 KB and again above it;
+- printed per bank, so a card's wait states show as a step at its base.
+
+It is a `sysbench` section rather than a new package, and a MartyPC run is
+its control: flat across the banks there, by the configuration above.
+
 ## Part 9 — The field reports
 
 Part 2's calibration table has fifteen rows and **two of them were ever

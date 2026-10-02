@@ -59,7 +59,7 @@ own figure; this file's job is that the cache EXISTS and that it puts back the
 right pixels. PERFORMANCE.md Part 3.1's flicker instrument is what would
 measure the visible redraw, and it wants its own session.
 
-Every coordinate is derived from wm_wins / wm_zord / desk_ord_xy, so this runs
+Every coordinate is derived from wm_wins / wm_zord / desk_zslot, so this runs
 on all three adapters; subcheck.py's masks (the menu bar, the mouse cell) and
 its proven-edge click and drag are reused rather than re-rolled.
 """

@@ -28,6 +28,7 @@ sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")             # dispcp - the by-name Disk navigation
 import os88marty as M
 from os88mouse import Mouse
+import os88geom                                              # noqa: E402
 from os88geom import WIN_SIZE, MAX_WIN
 from os88fixture import need                             # noqa: E402
 import dispcp                                            # noqa: E402
@@ -116,10 +117,7 @@ def front(m, after):
 def dialog(m, mo):
     """muptest's second window puts a Standard File dialog up (fdlgup.py's
     route) - the only way to get one on screen."""
-    step = int.from_bytes(m.read(m.sym("desk_zstep"), 2), "little")
-    h1 = int.from_bytes(m.read(m.sym("desk_zh1"), 2), "little")
-    vw = int.from_bytes(m.read(m.sym("vid_w"), 2), "little")
-    mo.dblclick(vw - 40, 32 + step + h1 // 2)
+    mo.dblclick(*os88geom.drive_pt(m, "B"))  # the zone BY LETTER, off desk_zslot (SPEC.md 26.9)
     M.settle(m)
     d = front(m, "the second muptest window was double-clicked open")
     mo.click(d[0] + d[2] // 2, d[1] + 9)

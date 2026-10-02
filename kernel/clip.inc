@@ -153,9 +153,8 @@ clip_put:
     mov [clip_bytes], cx        ; while DS is still ours
     mov es, [clip_seg]
     mov ds, bp                  ; DS:SI = the caller's text, ES:DI = the claim
-    xor di, di
-    cld                         ; SPEC.md 1: every string op sets it
-    rep movsb                   ; DS is the caller's for four more instructions
+    xor di, di                  ; (DF = 0 is the contract on entry, SPEC.md 1
+    rep movsb                   ; rule 3 - no `cld`)                   ; DS is the caller's for four more instructions
                                 ; - .out's own `pop ds` restores the entry bank
                                 ; and nothing between reads it, the two pops
                                 ; addressing SS and kret_bp being a run of pops
@@ -205,7 +204,6 @@ clip_get:
     push cx
     mov ds, [clip_seg]          ; DS:SI = the clipboard, ES:DI the caller's
     xor si, si
-    cld
     rep movsb                   ; AX is untouched from clip_size to the ret,
                                 ; so the whole length rides out unbanked; and
                                 ; DS stays the clipboard's for three more
@@ -213,9 +211,8 @@ clip_get:
                                 ; writes a flag, and .out's own `pop ds` is
                                 ; two lines down. A `push cs / pop ds` here
                                 ; wrote a register nobody read
-    pop cx
-    clc
-    jmp short .out
+    pop cx                      ; CF = 0 from the `xor si, si` above: neither
+    jmp short .out              ; `rep movsb` nor a pop writes a flag
 .empty:
     xor cx, cx
     stc

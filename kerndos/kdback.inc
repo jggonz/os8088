@@ -71,6 +71,34 @@ dos_k_wrat:
     call dskw_write_at_x
     ret
 
+; in: dos_k_rdat's + DI = the READ_SEQ cursor in DS (SPEC.md 96.53.1). The
+; box's os88_rseq with no small kernel to fall back to: the offset stays the
+; core's, and a cursor standing anywhere else is re-seeded there - generation
+; 0 being "not seeded", which is the layer's own rule and this is its source
+dos_k_rseq:
+    cmp ax, [di+FSEQ_OFF]
+    jne .seed
+    cmp dx, [di+FSEQ_OFF+2]
+    je .go
+.seed:
+    mov word [di+RSQ_GEN], 0
+    mov [di+FSEQ_OFF], ax
+    mov [di+FSEQ_OFF+2], dx
+.go:
+    push es
+    mov dx, es                  ; DX:BX = the buffer
+    push ds
+    pop es                      ; ES:DI = the cursor
+    call COLD_SEG:dwf_dskw_read_seq
+    pop es
+    ret
+
+; in: dos_k_append's + AL = WSEQF_*, DI = the token in and out; CX = 0 is the
+; commit (SPEC.md 18.4.9)
+dos_k_wseq:
+    call COLD_SEG:dwf_dskw_write_seq
+    ret
+
 dos_k_delete:
     call dskw_delete_x
     ret
@@ -281,4 +309,4 @@ kdb_betab:
     dw dos_k_append, dos_k_delete, dos_k_dfree, dos_k_mkdir, dos_k_rmdir
     dw dos_k_xcaps, dos_k_xalloc, dos_k_xfree, dos_k_xcopy, dos_k_rename
     dw dos_k_copy, dos_k_move, dos_k_path, dos_k_vstat, dos_k_wrat
-    dw dos_k_here, dos_k_vkind
+    dw dos_k_here, dos_k_vkind, dos_k_rseq, dos_k_wseq

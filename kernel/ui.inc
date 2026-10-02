@@ -38,45 +38,6 @@
 ; already holds (it is non-reentrant, SPEC 7).
 ; =============================================================================
 
-; Emu places menu dispatch in cold slack; big keeps its far entry in text,
-; and small keeps its original near calls and returns byte for byte.
-%macro UID_CALL 1
-%ifdef KERN_EMU
-    call KERNEL_SEG:uidf_ %+ %1
-%else
-    call %1
-%endif
-%endmacro
-%macro UID_JUMP 1
-%ifdef KERN_EMU
-    jmp KERNEL_SEG:uidf_ %+ %1
-%elifdef KERN_SMALL
-    jmp %1
-%else
-    call %1
-    retf
-%endif
-%endmacro
-%macro UID_RETURN 0
-%ifdef KERN_SMALL
-    ret
-%else
-    retf
-%endif
-%endmacro
-%macro UID_DISPATCH 1
-%ifdef KERN_SMALL
-    call %1
-%else
-    call UI_DISPATCH_SEG:%1
-%endif
-%endmacro
-%ifdef KERN_EMU
-UI_DISPATCH_SEG equ COLD_SEG
-%else
-UI_DISPATCH_SEG equ KERNEL_SEG
-%endif
-
 ; What a posted restart ASKED FOR (SPEC.md 20.10). Two values rather than a
 ; bare flag, because the two doors labelled Restart know different things: the
 ; System menu's is the user quitting the GUI with the Control Panel possibly
@@ -111,19 +72,6 @@ UI_TDBLT    equ 9               ; title-bar double-click window, ticks - the
 ; clobbers: everything (it is a task entry, not a callable routine)
 ; -----------------------------------------------------------------------------
 ui_task:
-%ifdef KERN_BIG
-    ; The first frame, boot timer and cursor are complete. Load shortcuts
-    ; once on the UI task, with the gfx lock free, then repaint loaded links.
-.desktop_init:
-    mov al, MOD_DESK
-    call COLD_SEG:dlf_mod_need
-    jc .desktop_ready
-    call far [DLFP]
-    cmp byte [dl_count], 0
-    je .desktop_ready
-    mov byte [cp_dirty], 1
-.desktop_ready:
-%endif
 .loop:
 %ifdef KFZTRACE
     inc word [khb_uipass]       ; ONE PASS OF THE UI TASK. The watchdog keyed
@@ -226,13 +174,6 @@ ui_task:
                                 ; judge: a BIOS reports an Alt+numpad character
                                 ; with AH = 0, which equals an empty latch
 .notae:
-%ifdef KERN_BIG
-    cmp byte [dl_sel], 0xFF
-    je .desktop_key_done
-    call far [DLFP+10*4]
-    jc .events
-.desktop_key_done:
-%endif
     call kbm_key                ; with no mouse on the machine, the arrows ARE
     jc .events                  ; the mouse (SPEC.md 9.6) and this key is not
                                 ; the application's. One compare per keystroke
@@ -240,6 +181,10 @@ ui_task:
                                 ; kbm_tab and AL = 0 is not Space, so the
                                 ; synthesised key passes through untouched
     KFZ 4                       ; 4: kbm_key passed it through (SPEC.md 9.6)
+%ifdef OS88_SHORTCUTS
+    call COLD_SEG:desk_key_x    ; Enter / Delete on the DESKTOP's selection,
+    jc .events                  ; while Locator owns the bar (SPEC.md 26.8.5).
+%endif                          ; With the lock FREE: an open locks itself
     call gfx_lock               ; handler draws; it runs under the lock
     KFZ 5                       ; 5: WE HAVE THE GFX LOCK. A bar that stops at
                                 ;    4 is a mutex nobody released
@@ -359,10 +304,9 @@ ui_task:
                                 ; identical one. kern_big only - kern_small
                                 ; has no Format item to point anywhere
 %endif
-    call gfx_lock               ; before it can draw them (SPEC.md 47 rule 5)
-    call menu_track             ; live mouse x; out: AX = CMD_* or 0
-    call gfx_unlock
-    UID_DISPATCH ui_dispatch
+    mov bp, menu_track          ; before it can draw them (SPEC.md 47 rule 5)
+    call ui_lcall               ; live mouse x; out: AX = CMD_* or 0
+    call ui_dispatch
     jmp .yj1
 
 .clock_cell:                    ; open the Control Panel on its Date/Time
@@ -388,9 +332,9 @@ ui_task:
 
     call menu_activate          ; clicking a window hands it the menu bar
     jnc .region                 ; (SPEC.md 12), CF=1 = the owner changed.
-    call gfx_lock               ; The raise paths below repaint anyway, but
-    call menu_draw_bar          ; a click on the window that is ALREADY
-    call gfx_unlock             ; frontmost never reaches wm_front, and the
+    mov bp, menu_draw_bar       ; The raise paths below repaint anyway, but
+    call ui_lcall               ; a click on the window that is ALREADY
+                                ; frontmost never reaches wm_front, and the
 .region:                        ; bar still has to follow. AL/BX/CX/DX all
                                 ; survive: every callee preserves them.
     cmp al, 2
@@ -410,14 +354,17 @@ ui_task:
     cmp bx, si
     je .content_front           ; already frontmost: feed the click handler
     mov bx, si
-    call gfx_lock
-    call wm_front               ; raise + repaint
-    call gfx_unlock
+    mov bp, wm_front
+    call ui_lcall               ; raise + repaint
 .yj1:                           ; A TRAMPOLINE, and nothing else: the 8086
     jmp .yield                  ; has no near conditional jump, so a `jc`
                                 ; out of short range is a five-byte
                                 ; inverted pair. Every branch below that
                                 ; reaches HERE reaches .yield one hop on
+.grow_box:                      ; (HERE, behind .yj1's jump and in short
+    call ui_grow                ; reach of the region dispatch, so its `je`
+    jmp short .yj1              ; is two bytes and not five) in: BX = window,
+                                ; CX/DX = mousedown x/y
 
 .content_front:
     mov bp, [si + W_ONCLICK]
@@ -434,8 +381,9 @@ ui_task:
     call gfx_lock               ; W_ONCLICK contract: CX=x, DX=y, SI=win
     call ui_bill              ; (CX/DX survived wm_hit/wm_top/gfx_lock)
     mov [ui_armw], si           ; ...and the RELEASE is owed to this window
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
-    mov byte [ui_armr], 0       ; (SPEC.md 13.7): region 0, armed only because
+    mov word [ui_post], 0x0001  ; ...SAY SO once (SPEC.md 13.13), and [ui_armr]
+                                ; = 0, the byte after it (the %if under the
+                                ; .bss) - (SPEC.md 13.7): region 0, armed only because
                                 ; W_ONCLICK actually ran. A press that merely
                                 ; raised a window, or that this window refused
                                 ; above, arms nothing
@@ -449,9 +397,9 @@ ui_task:
     xor bx, bx                  ; the bare desktop: clicking it switches back
     call menu_activate          ; to Locator (SPEC.md 12), CF=1 = it changed
     jnc .desk_go                ; - so the bar is only repainted when the
-    call gfx_lock               ; owner really moved, and before desk_click,
-    call menu_draw_bar          ; whose double-click-open may front a window
-    call gfx_unlock             ; and activate it in turn
+    mov bp, menu_draw_bar       ; owner really moved, and before desk_click,
+    call ui_lcall               ; whose double-click-open may front a window
+                                ; and activate it in turn
 .desk_go:
     call COLD_SEG:desk_click_x  ; CX/DX = click point, no lock held; select /
     jmp .yj1                    ; double-click-open is desk.inc's business
@@ -472,7 +420,7 @@ ui_task:
 .close_box:                     ; wm_hit only reports AL=2 on the front window
 .min_box:                       ; ...and AL=3, likewise
     mov [ui_armw], bx           ; BX = the window, AL = wm_hit's region
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
     mov [ui_armr], al
 %ifdef KERN_BIG
     call ui_lit_on              ; ...and the arm and the picture are set in the
@@ -554,9 +502,6 @@ ui_task:
     call gfx_unlock
     jmp .yj2
 
-.grow_box:
-    call ui_grow                ; in: BX = window, CX/DX = mousedown x/y
-    jmp .yj2
 
 .title_bar:
     mov si, bx                  ; keep the hit window; wm_top returns in BX
@@ -567,9 +512,9 @@ ui_task:
                                 ; has nothing to zoom into, so the press stays
                                 ; an ordinary one and drags as before
     mov bx, si
-    call gfx_lock
-    call wm_zoom                ; out to the desktop band, or back to wherever
-    call gfx_unlock             ; it was when it left
+    mov bp, wm_zoom
+    call ui_lcall               ; out to the desktop band, or back to wherever
+                                ; it was when it left
     jmp short .yield            ; and no drag: the button is still down, but
                                 ; the EVT_MUP behind it is ignored by the
                                 ; loop above, which acts on EVT_MDOWN alone
@@ -578,9 +523,8 @@ ui_task:
     cmp bx, si
     mov bx, si                  ; restore hit window (flags survive the mov)
     je .drag
-    call gfx_lock
-    call wm_front               ; raise first, then drag
-    call gfx_unlock
+    mov bp, wm_front
+    call ui_lcall               ; raise first, then drag
 .drag:
     call ui_drag                ; in: BX = window, CX/DX = mousedown x/y
     jmp short .yield
@@ -588,7 +532,14 @@ ui_task:
 .wake:
     mov si, [ui_ev + EV_A]      ; the window that asked; NO lock is taken -
     call wm_wake_disp           ; the handler takes it itself for a stated
-    jmp .yield                  ; burst, and may call the file slots (74.1)
+                                ; burst, and may call the file slots (74.1)
+%ifdef KERN_BIG
+    cmp byte [dws_hold], 0      ; ...so a HELD stream it made ends with it
+    je .yield                   ; (SPEC.md 18.4.9): the lock taken and given
+    call gfx_lock               ; back, and the unlock's commit runs where
+    call gfx_unlock             ; every other callback's does
+%endif
+    jmp .yield
 
 .rdown:
     mov cx, [ui_ev + EV_A]      ; the right button is swallowed by a modal
@@ -716,9 +667,6 @@ ui_task:
                                 ; did nothing and said nothing - exactly the
                                 ; symptom 29.4.1 exists to remove
 .chk_ld:
-%ifdef KERN_BIG
-    call DL_GLUE_SEG:dlf_dl_drain_x
-%endif
     xor ax, ax                  ; set by files.inc's click handler, stored as
     xchg al, [ld_pending]       ; directory index + 1, consumed before running
     or al, al                   ; - a BYTE now, and the xor above leaves AH 0
@@ -761,9 +709,8 @@ ui_task:
     xchg al, [cp_dirty]         ; Panel (SPEC.md 31.2): windows that quote
     or al, al                   ; the mode - the About box's third line -
     jz .chk_zones               ; are already painted, so repaint them here,
-    call gfx_lock
-    call wm_paint_all           ; outside cp_onclick's held lock
-    call gfx_unlock
+    mov bp, wm_paint_all
+    call ui_lcall               ; outside cp_onclick's held lock
 .chk_zones:
     xor al, al                  ; a volume was mounted or unmounted (26.2),
     xchg al, [desk_zdirty]      ; posted for the same reason and drained in
@@ -812,7 +759,7 @@ ui_task:
     cmp ax, [ui_lastt]
     je .idle                    ; no tick since the last pass: nothing below
     mov [ui_lastt], ax          ; can have become true
-    mov byte [ui_post], 1       ; ...and SWEEP the posted flags on the tick, so
+    inc byte [ui_post]          ; ...and SWEEP the posted flags on the tick, so
                                 ; a setter that forgets to say so is 55 ms late
                                 ; rather than never seen (SPEC.md 13.13)
 
@@ -1086,7 +1033,7 @@ ui_timer_pass:
     jmp short .step
 .armed:
     mov byte [wm_tarm], 1
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
 .step:
     add si, WIN_SIZE
     loop .next
@@ -1211,7 +1158,8 @@ ui_arm_trk:
 ; glass and the byte cannot part and the XOR here is always the difference
 ; between two states that are both really on screen.
 ;
-; The lock is taken HERE rather than by the callers because all four are in
+; BP is spent (ui_lcall's). The lock is taken HERE rather than by the callers
+; because all four are in
 ; the UI task's lock-free stretches - the press before it dispatches, the
 ; deferred ladder, ui_arm_chk - and one of them (the release) runs a few
 ; instructions before taking the lock for the action itself.
@@ -1240,15 +1188,29 @@ ui_lit_go:
     mov [ui_armlit], al
     mov ah, [ui_armr]
     call COLD_SEG:wmz_wm_chrome_rect ; AX,BX,CX,DX = the box interior
-    call gfx_lock
-    call gfx_xor_fill
-    call gfx_unlock
+    mov bp, gfx_xor_fill
+    call ui_lcall
     jmp short .out
 .none:
     mov byte [ui_armlit], 0     ; nothing is lit and nothing can be, so the
 .out:                           ; byte must say so - it is what the next XOR
     jmp kret_si
 %endif                          ; KERN_BIG - SPEC.md 13.8.1/13.8.2/13.9
+
+; -----------------------------------------------------------------------------
+; ui_lcall - call the near routine at BP with the gfx lock held around it:
+; `call gfx_lock / call X / call gfx_unlock` in six bytes a site where it was
+; nine (kernel size pass 8). Tail-jump it for the `jmp gfx_unlock` shape.
+; in:  BP = the routine, which may take no input in BP; every other register
+;      as the routine takes them
+; out: the routine's register outputs (gfx_lock and gfx_unlock preserve every
+;      register and spend the flags, exactly as at every site this replaced);
+;      BP is the routine's address
+; -----------------------------------------------------------------------------
+ui_lcall:
+    call gfx_lock
+    call bp
+    jmp gfx_unlock
 
 ; -----------------------------------------------------------------------------
 ; ui_rdown - act on one EVT_RDOWN: the context-menu path (SPEC.md 12.4/13)
@@ -1289,14 +1251,12 @@ ui_rdown:
     call wm_fs_vis              ; a fullscreen window (SPEC.md 11.2) owns the
     jc .hit                     ; bar's rows like any other point (39.17.1)
     cmp dx, MBAR_H
-    jb .rbar                    ; the menu bar has no right-button behaviour
-    jmp short .hit
-.rbar:
+    jae .hit                    ; the menu bar has no right-button behaviour
 %ifdef KERN_BIG
     cmp cx, [vid_pw]            ; ...but only where there IS a bar (39.16.2)
     jae .hit
 %endif
-    jmp .ret
+    ret
 .hit:
 %ifdef DOCK_OPT
     cmp byte [dock_up], 0       ; an OPEN hidden dock answers first, over the
@@ -1315,9 +1275,8 @@ ui_rdown:
     cmp bx, si
     je .front
     mov bx, si                  ; a background window: raise it and stop
-    call gfx_lock
-    call wm_front               ; activates it too, so the bar follows
-    jmp gfx_unlock
+    mov bp, wm_front
+    jmp ui_lcall                ; activates it too, so the bar follows
 
 .front:
     or al, al
@@ -1369,14 +1328,21 @@ ui_rdown:
     jz .ctx_done
     call inst_charge
 .ctx_done:
-    call gfx_unlock
+    jmp gfx_unlock
 .ret:
     ret
 
 .strip:
+%ifdef OS88_SHORTCUTS
+    call dock_rclick            ; the dock first, as before...
+    jc .ret
+    call COLD_SEG:sc_rclick_x   ; ...and a SHORTCUT's menu (SPEC.md 26.8.5)
+    ret
+%else
     jmp dock_rclick             ; CX/DX; CF = 1 = consumed (locks internally,
                                 ; SPEC.md 30.2). CF is nobody's answer here -
                                 ; the desktop's case IS "do nothing"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; ui_tdbl - was this title-bar press the second half of a double-click?
@@ -1406,7 +1372,6 @@ ui_tdbl:
     cmp ax, UI_TDBLT
     jae .first                  ; too slow: it restarts the pair below
     mov word [ui_tclkw], 0
-    stc
     ret
 .first:
     mov ax, [ui_click_t]
@@ -1799,10 +1764,7 @@ ui_drag_phase:
 %endif
 .out:
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_cx
 
 ; ui_drag_ph8 - AX = a signed delta -> AX truncated TOWARD ZERO to a multiple
 ;               of 8; clobbers nothing else (flags)
@@ -2031,9 +1993,7 @@ ui_grow:
     ; below has to reach it whichever way the origin went.
     mov ax, [bx + W_Y]
     add ax, [ui_origy]          ; the old rect's last row, origin unmoved
-    push ax
-    call wm_dock_snap
-    pop ax
+    call wm_dock_snap           ; (all registers preserved)
     call wm_usr_mark            ; A USER SIZED IT, so no preference may put a
                                 ; different size back (SPEC.md 11.100.5) - and
                                 ; BEFORE the fit below, not after it: a grow
@@ -2213,44 +2173,29 @@ ui_grow:
 ui_loc_gate:
     push ax
     push bx
-%ifdef KERN_BIG
-    push cx
-%endif
     mov ax, menu_s_close        ; live: the plain string
     call wm_top                 ; BX = frontmost visible, 0 = nothing to close
     or bx, bx
     jnz .set
     mov ax, menu_s_closex       ; ...or its MENU_DIS twin
 .set:
-    mov [menu_items_file], ax
+    mov [menu_items_file], ax   ; Close Window is item 0 now: Locator's File
+                                ; menu is that item and nothing else, the
+                                ; builtins having moved to Builtins (12.3.1)
+                                ; (item 1, Remove Shortcut, is desk_select's:
+                                ; it changes when the selection does)
 %ifdef KERN_BIG
-    mov ax, menu_s_linkopen
-    mov bx, menu_s_linkremove
-    mov cx, menu_s_linkinfo
-    cmp byte [dl_sel], 0xFF
-    jne .links
-    dec ax                      ; each disabled prefix is one byte before its name
-    dec bx
-    dec cx
-.links:
-    mov [menu_items_file+2], ax
-    mov [menu_items_file+4], bx
-    mov [menu_items_file+8], cx
     call COLD_SEG:hb_ok_x       ; ...and Hibernate greys with its reason
                                 ; (SPEC.md 87.2): no fixed disk, or extended
                                 ; memory held that the image would not carry.
                                 ; The CHOICE is hb_ok_x's own tail now - it is
                                 ; the only reader its answer ever had, and the
                                 ; three movs are .cold bytes there
-    pop cx
 %endif
     pop bx
     pop ax
     ret
 
-%ifdef KERN_EMU
-section .cold                   ; keep emu's image and cold rungs unchanged
-%endif
 ui_dispatch:
     cmp ax, 0xFFFF
     je .ret
@@ -2274,26 +2219,17 @@ ui_dispatch:
     or bx, bx
     jz .ret                     ; a window with no menus cannot be here
     push es                     ; the set is the OWNER's data (SPEC.md 12.2):
-    push ds                     ; Locator's lives in kernel .text, a
+    push cs                     ; Locator's lives in kernel .text, a
     pop es                      ; package's in its own segment - so this
     mov di, [menu_win]          ; read must go through the owner's segment,
     or di, di                   ; like every other read of the set. Through
     jz .ownset                  ; DS it tested a random word of kernel .text
-    UID_CALL wm_strseg              ; at the package set's offset, and dispatched
+    call wm_strseg              ; at the package set's offset, and dispatched
 .ownset:                        ; app menus as Locator commands whenever that
     cmp word [es:bx + AM_ONCMD], 0  ; word happened to be zero
     pop es
     jne .app
 .kernel:
-%ifdef KERN_BIG
-    cmp ah, 1
-    jne .ordinary
-    or al, al
-    jz .ordinary
-    call DL_GLUE_SEG:dlf_dl_command_x
-    UID_RETURN
-.ordinary:
-%endif
     mov bl, ah                  ; cmd = the cell's base + the item index
     xor bh, bh
     cmp bx, UI_LOC_N            ; ui_loc_base's own length (two cells on
@@ -2302,9 +2238,9 @@ ui_dispatch:
     shl bx, 1
     xor ah, ah
     add ax, [ui_loc_base + bx]
-    UID_JUMP ui_cmd
+    jmp ui_cmd
 .ret:
-    UID_RETURN
+    ret
 
 .appclose:
     ; 'Close' from the app-name menu (SPEC.md 12.7): the close box of
@@ -2312,18 +2248,18 @@ ui_dispatch:
     ; It runs inline rather than through ui_post_cmd because ui_dispatch is
     ; reached with NO lock held - menu_track's was released before the call -
     ; which is exactly why .close_box can take its own lock too.
-    UID_CALL gfx_lock
+    call gfx_lock
     mov bx, [menu_win]          ; the lock dropped between menu_track and
     or bx, bx                   ; here, so the window that owned the bar may
     jz .apc_done                ; be gone: the same re-check .app makes below,
     test byte [bx + W_FLAGS], 2 ; and for the same reasons
     jz .apc_done
-    UID_CALL app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4).
+    call app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4).
                                 ; Unbilled, like the close box - and here it
                                 ; could not be billed anyway: the record the
                                 ; cycles would go to is the one being freed
 .apc_done:
-    UID_JUMP gfx_unlock
+    jmp gfx_unlock
 
 .app:
     ; The menu handler is a window callback reached through the bar, so it
@@ -2334,7 +2270,7 @@ ui_dispatch:
     ; the UI task is the only thing that can ever be in here.
     dec ah                      ; cell -> the app's own 0-based menu index
     mov [ui_menusel], ax
-    UID_CALL gfx_lock
+    call gfx_lock
     mov bx, [menu_win]          ; the lock dropped between menu_track and
     or bx, bx                   ; here, so re-check the owner before calling
     jz .app_done                ; into it. This guard used to be unreachable
@@ -2359,12 +2295,12 @@ ui_dispatch:
     push es                     ; the set is the OWNER's data (SPEC.md 12.2),
     push di                     ; so AM_ONCMD is read through its segment
     mov di, si
-    UID_CALL wm_strseg              ; ES = the window's string/data segment
+    call wm_strseg              ; ES = the window's string/data segment
     cmp word [ui_about], 0      ; the name cell dispatches the About handler
     je .oncmd                   ; wm_about_set registered, not AM_ONCMD -
     push bx                     ; and BX may be 0 here (no menu set), so the
     mov bx, si                  ; read below must not happen at all
-    UID_CALL wm_about_get           ; AX = the handler's offset in the owner's seg
+    call wm_about_get           ; AX = the handler's offset in the owner's seg
     mov cx, ax
     pop bx
     jmp short .cbok
@@ -2376,29 +2312,12 @@ ui_dispatch:
     jcxz .app_done              ; a handler withdrawn while the lock was down
     mov ax, [ui_menusel]        ; (wm_about_set 0 / MENU_SET in the gap) must
     mov bp, cx                  ; not be called at offset 0 (SPEC.md 12.2).
-    UID_CALL ui_bill                ; The resolution above is OUTSIDE the billing
+    call ui_bill                ; The resolution above is OUTSIDE the billing
                                 ; bracket now, so a withdrawn handler is
                                 ; charged nothing at all instead of ~0, and
                                 ; wm_strseg's microseconds go unbilled. A wash
 .app_done:
-    UID_JUMP gfx_unlock
-
-section .text
-%ifdef KERN_EMU
-%macro UID_SHIM 1
-uidf_ %+ %1:
-    call %1
-    retf
-%endmacro
-UID_SHIM wm_strseg
-UID_SHIM wm_about_get
-UID_SHIM app_close_win
-UID_SHIM ui_bill
-UID_SHIM ui_cmd
-; gfx helpers already have resident far shims.
-uidf_gfx_lock equ cw_gfx_lock
-uidf_gfx_unlock equ cw_gfx_unlock
-%endif
+    jmp gfx_unlock
 
 ; the base CMD_* of each kernel-dispatched bar cell (SPEC.md 12.3): the
 ; System menu, then Locator's File and Builtins (SPEC.md 12.3.1)
@@ -2435,7 +2354,7 @@ UI_LOC_N equ 2
 ; -----------------------------------------------------------------------------
 ui_post_cmd:
     mov [ui_pcmd], ax
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
     retf
 
 ui_pcmd:    dw 0                ; posted CMD_*, 0 = none (see above)
@@ -2563,10 +2482,9 @@ ui_sys_open:
 
     call ui_sys_find            ; already running? front it and stop
     jc .load
-    call gfx_lock
-    call inst_restore           ; un-minimize and show - the app_launch cap
-                                ; path's rule, and now literally its code
-    call gfx_unlock
+    mov bp, inst_restore        ; un-minimize and show - the app_launch cap
+    call ui_lcall               ; path's rule, and now literally its code (BP
+                                ; is on the stack above and comes back at .out)
     jmp short .out
 
 .load:
@@ -2637,9 +2555,8 @@ ui_sys_open:
     shl bx, 1
     mov si, [bx+fm_stattab]     ; the Disk window's verdicts (SPEC.md 21)
 .fail:
-    push si                     ; the volume FIRST, then the toast: putting
-    call ui_tm_back             ; it back touches the floppy
-    pop si
+                                ; the volume FIRST, then the toast: putting
+    call ui_tm_back             ; it back touches the floppy (SI is kept)
     push ds
     pop es                      ; toast_show reads ES:SI; kret_es restores ES
     xor cx, cx                  ; TOAST_TICKS
@@ -2775,7 +2692,6 @@ ui_sys_find:
     or al, al
     jnz .cmp
     pop di
-    clc
     jmp short .out
 .nomatch:
     pop di
@@ -2785,10 +2701,7 @@ ui_sys_find:
     stc
 .out:
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_cx
 
 
 ; -----------------------------------------------------------------------------
@@ -2803,8 +2716,8 @@ ui_sys_find:
 ; which quits the frontmost instance - with nothing to close.
 ; -----------------------------------------------------------------------------
 ui_cmd:
-    dec ax                      ; CMD_ABOUT = 1 .. CMD_FILES (8, or 11 on
-    cmp ax, CMD_FILES           ; kern_big) are CONTIGUOUS
+    dec ax                      ; CMD_ABOUT = 1 .. CMD_FILES (8 on small;
+    cmp ax, CMD_FILES           ; 11 or 12 on big with shortcuts) are CONTIGUOUS
     jae .done                   ; (SPEC.md 13, menu.inc), so an eight-deep
     mov bx, ax                  ; compare ladder is a table walk. AX = 0 wraps
     shl bx, 1                   ; to 0xFFFF and the same unsigned compare
@@ -2819,7 +2732,9 @@ ui_cmd:
                                 ; fm_jmp's. os88ovlchk cannot see an indirect
                                 ; transfer, so EVERY ENTRY HERE MUST BE .text
                                 ; and is
-%ifdef KERN_BIG
+%ifdef OS88_SHORTCUTS
+    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .scdel, .timer, .bounce, .files
+%elifdef KERN_BIG
     dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .timer, .bounce, .files
 %else
     dw .about, .ctrl, .tasks, .done, .reboot, .shutdown, .close, .files
@@ -2829,6 +2744,12 @@ ui_cmd:
 .hiber:
     call COLD_SEG:hbf_open      ; the module first, then the window (SPEC.md
     ret                         ; 87.1) - cp_open's shape, and its refusal
+%endif
+%ifdef OS88_SHORTCUTS
+.scdel:
+    mov ax, 0x5300              ; Remove Shortcut (SPEC.md 26.8.5) is the
+    call COLD_SEG:desk_key_x    ; Delete key on the selection: CTRL.DRV does
+    ret                         ; it and writes SYSTEM.CFG
 %endif
 
 .about:
@@ -3019,7 +2940,20 @@ ui_post:    resb 1              ; SPEC.md 13.13: HAS ANYTHING BEEN POSTED? The
                                 ; OR of the fifteen deferred-work flags, set
                                 ; beside each of them and cleared before the
                                 ; walk. -f bin zeroes no .bss and it does not
-                                ; matter: garbage here costs one walk
+                                ; matter: garbage here costs one walk. A
+                                ; setter may `inc` it (four bytes against the
+                                ; store's five): only NON-ZERO is read, and the
+                                ; one way inc misses - exactly 256 posts
+                                ; between two walks wrapping it to 0 - costs
+                                ; what any forgotten post costs, the tick's
+                                ; sweep below, 55 ms
+ui_armr:    resb 1              ; which box [ui_armw] is armed on: wm_hit's AL, 2 = close,
+                                ; 3 = minimize. Both halves are compared at the
+                                ; release, because the two boxes share a title
+                                ; bar and two windows' boxes can share a point
+%if ui_armr - ui_post != 1
+  %error "ui_armr must follow ui_post: ui_task's content press arms both with one word store"
+%endif
 ui_lastt:   resw 1              ; SPEC.md 13.12: the [ticks] value the last pass
                                 ; ran the time-driven steps at. -f bin zeroes
                                 ; no .bss, but garbage here costs one extra
@@ -3033,10 +2967,6 @@ ui_armw:    resw 1              ; SPEC.md 13.5: the window a chrome press is
                                 ; arrives zeroed (kernel.asm) - ui_tclkw's
                                 ; convention exactly
 ui_drain:   resw 1              ; SPEC.md 10.2: dispatches left in this pass
-ui_armr:    resb 1              ; ...and which box: wm_hit's AL, 2 = close,
-                                ; 3 = minimize. Both halves are compared at the
-                                ; release, because the two boxes share a title
-                                ; bar and two windows' boxes can share a point
 %ifdef KERN_BIG
 ui_dragx:   resw 1              ; SPEC.md 13.8.2: the point W_ONDRAG was last
 ui_dragy:   resw 1              ; delivered at, seeded at the press with the

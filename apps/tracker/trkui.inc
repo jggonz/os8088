@@ -1750,7 +1750,10 @@ tui_sync:
     push dx
     push si
     cmp byte [trk_sopen], 0
-    je .live
+    jne .heard
+    cmp byte [tsp_run], 0           ; the speaker's play is heard the same
+    je .live                        ; way, off the ring's CONS (45.25)
+.heard:
     cmp byte [mp_playing], 0
     je .live
 %ifdef TRKLOG

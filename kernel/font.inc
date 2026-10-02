@@ -3,9 +3,14 @@
 ;
 ; No font bytes are hard-coded unless the BUILD asks for some: font_init asks
 ; the VGA BIOS for its ROM 8x8 character set (int 10h AX=1130h BH=03h) and
-; copies the printable range, glyphs 32..126, into a kernel buffer -- and
-; `make FONT=<name>` replaces that whole path with a typeface carried in the
-; boot overlay instead (SPEC.md 6.2, ovl_font_init at the foot of this file).
+; REMEMBERS WHERE IT IS - [font_seg]:[font_base], glyph 32 - and every
+; renderer reads the ROM's own rows through it (SPEC.md 6). There is no RAM
+; copy: the 768 bytes of .lowbss the table and its blank cell were are not
+; resident on any machine. The ROM's SPACE (glyph 32) is the blank cell an
+; unprintable character draws. `make FONT=<name>` replaces the probe with a
+; typeface carried in the boot overlay and copied into .lowbss after all
+; (SPEC.md 6.2, ovl_font_init at the foot of this file) - the pointer then
+; names that copy, and nothing downstream can tell the difference.
 ;
 ; Drawing uses Set/Reset with the Bit
 ; Mask so the background stays untouched (transparent): the glyph row is
@@ -25,13 +30,20 @@ FONT_BYTES  equ (FONT_LAST - FONT_FIRST + 1) * 8    ; 95 glyphs x 8 rows = 760
 %ifdef SEAMCUT
 FONT_SEAM_A equ FONT_LAST + 2   ; SPEC.md 39.14.11: the two codes that address
 FONT_SEAM_B equ FONT_LAST + 3   ; font_seam_a/font_seam_b through the glyph
-                                ; arithmetic already in font_char's body -
-                                ; FONT_LAST+1 is font_zero's own slot. Private
-                                ; to font_ch_cut, which is what [font_ch_on]
-                                ; is for; nothing else may pass them
-FONT_ZWORDS equ 12              ; ...and the words font_init clears by hand:
-%else                           ; font_zero and both seam cells
-FONT_ZWORDS equ 4
+                                ; arithmetic already in font_char's body,
+                                ; with [font_base] pointed at them for the one
+                                ; draw (font_ch_seam). Private to font_ch_cut,
+                                ; which is what [font_ch_on] is for; nothing
+                                ; else may pass them
+%endif
+%ifdef BAKED_FONT
+ %macro FONT_BLANK 1            ; the blank cell an unprintable character
+    mov %1, font_zero           ; draws: the copy's own, beside it in LOW_SEG
+ %endmacro
+%else
+ %macro FONT_BLANK 1            ; ...and on the ROM's table its SPACE, which
+    mov %1, [font_base]         ; is glyph FONT_FIRST and eight zero rows on
+ %endmacro                      ; every set the probe can find (SPEC.md 6)
 %endif
 
 ; SPEC.md 6.1.7: the widest run any adapter can show, in cells. A run stops at
@@ -140,9 +152,146 @@ SNAP_NCALL   equ 24             ; SPEC.md 11.94.2: off-grid callers logged per
 
 %ifndef BAKED_FONT
 ; -----------------------------------------------------------------------------
-; font_init - copy the ROM 8x8 font's printable range into RAM
+; FONT_PICK - which ROM 8x8 table to read, TIMED (SPEC.md 6.0.1)
 ;
-; in:       nothing (must run after vid_init; uses int 10h)
+; in:       %1 = the label prefix of a FONT_TIMERS expansion in reach
+; out:      DX:BP = glyph FONT_FIRST of the ROM table to read - the planar
+;           one unless the BIOS's answer is an eighth faster -
+;           BX = its PIT count, CX = RAM's for the same read; the three
+;           counts are also left in the BDA's intra-application area at
+;           0040:00F8 behind the word 'FP' (FONT_ICA), for tests/romfont
+;           and tests/fontpick to read - the kernel keeps none of them
+; clobbers: AX, SI, DI, ES, flags. DS = KERNEL_SEG untouched
+;
+; A MACRO because its two callers can reach no common copy: font_init runs
+; from the boot overlay, which is gone by the desktop, and hbm_wake runs from
+; HIBER.DRV, which is not there at boot. One body assembled into each, so a
+; resume asks the reading machine exactly what a fresh boot of it would.
+;
+; THE CANDIDATES. int 10h AX=1130h BH=3 names the table the adapter's BIOS
+; uses - on an EGA or VGA the card's OPTION ROM, which on an 8-bit ISA card is
+; read through the card's own bus cycle (an IBM 5150 with a PVGA1A is the
+; case this was written for). F000:FA6E is the IBM PC's fixed address for the
+; same set, and every PC-compatible BIOS keeps it there because the CGA
+; graphics modes draw from it - but it is a candidate only when its 95 glyphs
+; are BYTE-IDENTICAL to the answer, so the choice never changes what text
+; looks like. A BIOS that answers nothing (pre-EGA) makes the planar table
+; the only candidate: it is compared with itself and timed twice, 2 ms of a
+; boot on a 5150, which is cheaper in bytes than a branch around it.
+;
+; THE CLOCK. PIT channel 0 latched, before and after a `rep lodsb` over the
+; 760 bytes with IF clear. Whichever mode the channel is in - the ROM's mode
+; 3 counts by two, the kernel's mode 2 by one (SPEC.md 8.1) - all three
+; readings are taken in it, so the comparison is a RATIO and the unit
+; cancels; the down-count's modular difference is right across a reload.
+; -----------------------------------------------------------------------------
+FONT_PLANAR equ 0xFA6E + FONT_FIRST * 8    ; F000:FB6E, the planar glyph 32
+FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
+                                            ; kern_dos's mailbox is F0..F7
+                                            ; (KDB_OFF), so the two halves of
+                                            ; the 16 bytes never meet
+
+%macro FONT_TIMERS 1
+; %1_time - AX:SI = a table; out AX = PIT counts to read FONT_BYTES of it.
+; Clobbers CX, DX, SI and the flags.
+%1_time:
+    push ds
+    mov ds, ax
+    pushf
+    cli                         ; nothing may land inside the measurement
+    call %1_pit
+    xchg dx, ax
+    mov cx, FONT_BYTES
+    rep lodsb
+    call %1_pit
+    popf
+    pop ds
+    sub dx, ax                  ; a DOWN-count: start - end, modular
+    xchg ax, dx
+    ret
+; %1_pit - AX = channel 0's count, latched. Clobbers nothing else.
+%1_pit:
+    xor al, al
+    out 0x43, al
+    in al, 0x40
+    mov ah, al
+    in al, 0x40
+    xchg al, ah
+    ret
+%endmacro
+
+%macro FONT_PICK 1
+    xor ax, ax                  ; zero the answer first: on a pre-EGA BIOS
+    mov es, ax                  ; AH=11h is not implemented and returns with
+    xor bp, bp                  ; ES:BP untouched
+    mov ax, 0x1130              ; get font information
+    mov bh, 0x03                ; pointer wanted: ROM 8x8 character set
+    int 0x10                    ; -> ES:BP = font table
+    mov dx, es
+    add bp, FONT_FIRST * 8
+    or dx, dx                   ; a table is never in segment 0: no answer
+    jnz %%timea
+    mov dx, 0xF000              ; no answer: the planar ROM's own set
+    mov bp, FONT_PLANAR
+%%timea:
+    mov ax, dx                  ; BX = the answer's count
+    mov si, bp
+    push dx
+    call %1_time
+    pop dx
+    xchg bx, ax
+    push bx                     ; ...kept for the ICA
+    push ds                     ; is the planar set the SAME glyphs?
+    mov ds, dx
+    mov si, bp
+    mov ax, 0xF000
+    mov es, ax
+    mov di, FONT_PLANAR
+    mov cx, FONT_BYTES
+    repe cmpsb
+    pop ds
+    jne %%ram                   ; a different face: the card's, the only one
+    push dx
+    mov ax, es                  ; AX = 0xF000
+    mov si, FONT_PLANAR
+    call %1_time
+    pop dx
+    mov si, bx                  ; the planar ROM unless the answer beats it
+    shr si, 1                   ; by an EIGHTH: a tie goes to the system
+    shr si, 1                   ; board, which is zero-wait on every PC, and a
+    shr si, 1                   ; margin is what keeps two boots of one
+    add si, bx                  ; machine from picking two tables on noise
+    cmp ax, si
+    ja %%ram
+    xchg bx, ax                 ; take the planar ROM
+    mov dx, 0xF000
+    mov bp, FONT_PLANAR
+%%ram:
+    push dx
+    mov ax, ds                  ; ...and RAM: the kernel's own first bytes
+    xor si, si
+    call %1_time
+    pop dx
+    xchg cx, ax                 ; CX = RAM
+    mov ax, 0x0040
+    mov es, ax
+    mov di, FONT_ICA
+    mov ax, 'FP'
+    stosw
+    xchg ax, bx
+    stosw                       ; best
+    xchg ax, bx
+    xchg ax, cx
+    stosw                       ; RAM
+    xchg ax, cx
+    pop ax
+    stosw                       ; the BIOS answer's own
+%endmacro
+
+; -----------------------------------------------------------------------------
+; font_init - pick the ROM 8x8 table and point [font_seg]:[font_base] at it
+;
+; in:       nothing (must run after vid_init and mem_init; uses int 10h)
 ; out:      nothing
 ; clobbers: nothing
 ;
@@ -152,35 +301,29 @@ SNAP_NCALL   equ 24             ; SPEC.md 11.94.2: off-grid callers logged per
 ; baked table would be dead code on every machine that ever runs it, and a
 ; baked table kept behind a probe would never be the thing being tested.
 ;
-; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/plans/LAST-DROP-BYTES.md row 7), where it
-; sits beside ovl_font_init - the twin it is the alternative to, which has been
-; there since SPEC.md 6.2. One caller, kmain:4287, and zero outbound. What it
-; reads is the ROM through ES:BP and what it writes is font_glyphs through
-; LOW_SEG, so DS never names the blob and the `rep movsw` wears no prefix - the
-; 8086 loses one when a string op restarts after an interrupt, and this runs
-; with interrupts on.
+; IN THE BLOB HALF OF THE BOOT OVERLAY (`.ovl`) ON BOTH KERNELS, reached by
+; BLOBCALL: SPEC.md 6.0.1 grew the blob to ten sectors for exactly this body,
+; so it costs no resident byte and no window byte. One caller, kmain.
+;
+; THE TABLE IS READ IN PLACE (SPEC.md 6) - unless even the fastest candidate
+; FONT_PICK timed is slower than RAM by more than a quarter. Then the 760
+; bytes go into a 1KB heap claim, MEM_K_FONT, and the renderers read that:
+; what the 768 resident bytes used to buy, paid only by the machine that
+; measured the need and billed to the arena rather than to every kernel. It
+; is claimed TOP-DOWN and PINNED, before any driver, module or region
+; exists, so it takes the arena's ceiling and everything later stacks under
+; it - never a barrier to either compaction pass. A refused claim keeps the
+; ROM pointer: slower is not wrong.
+;
+; WHY A QUARTER: a glyph byte is one read in a cell writer that makes two or
+; more framebuffer accesses per row, so a table 25% slower than RAM is under
+; ~10% of a cell - the most a copy could buy back for its kilobyte - and the
+; 8088's own jitter between two passes of the same loop is under 1%
+; (tests/romfont). A machine that crosses it, an unshadowed 8-bit option ROM
+; on an AT bus, crosses it by multiples. `make FONTSLOW=1` takes the copy on
+; any machine, so the copy path has a row.
 ; -----------------------------------------------------------------------------
-%ifndef KERN_SMALL
-section .ovlw                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
-                                ; whose window has room to spare
-%else
-section .ovl                    ; ...and kern_small: the BLOB half instead
-                                ; (SPEC.md 2.5.3.2, mouse_init's shape). The
-                                ; deadline is the same either way - kmain runs
-                                ; this long before drv_boot - so the choice is
-                                ; only about WHOSE bytes. On that kernel
-                                ; `.ovlw` is read onto the FAT window and the
-                                ; mount buffers, and SPEC.md 22.6.3 has just
-                                ; taken the LISTING out of that region: the
-                                ; 800 bytes it gave back are only 288 of heap
-                                ; while the overlay still needs the rest, so
-                                ; every body moved here turns one more of them
-                                ; into heap. `.ovl` is written LAST on
-                                ; purpose: tools/os88ovlchk.py reads SOURCE
-                                ; and cannot evaluate the %ifdef, so it files
-                                ; this block by the arm below - which is the
-                                ; build the check exists to protect
-%endif
+section .ovl
 font_init:
     push ax
     push bx
@@ -189,43 +332,42 @@ font_init:
     push si
     push di
     push bp
-    push ds
     push es
-
-    xor ax, ax                  ; zero the answer first: on a pre-EGA BIOS
-    mov es, ax                  ; AH=11h is not implemented and returns with
-    xor bp, bp                  ; ES:BP untouched
-    mov ax, 0x1130              ; get font information
-    mov bh, 0x03                ; pointer wanted: ROM 8x8 character set
-    int 0x10                    ; -> ES:BP = font table
-    mov ax, es
-    or ax, bp
-    jnz .have
-    mov ax, 0xF000              ; the IBM PC/XT ROM's own 8x8 set, which is
-    mov es, ax                  ; where a CGA or Hercules machine gets it
-    mov bp, 0xFA6E
-.have:
-
+    FONT_PICK fi                ; DX:BP = the table, BX = its count, CX = RAM's
+%ifndef FONTSLOW
+    mov ax, cx
+    shr ax, 1
+    shr ax, 1
+    add ax, cx                  ; RAM x 1.25
+    cmp bx, ax
+    jbe .point                  ; within a quarter of RAM: read in place
+%endif
+    mov si, dx                  ; slower than that (or FONTSLOW): copy it
+    push bp
+    mov ax, 1                   ; 1KB, the claim granule
+    mov bx, MEM_K_FONT
+    mov bp, mem_claim_hi_x      ; TOP-DOWN, pinned (see above)
+    call COLD_SEG:wm_cbd        ; DX = the block; clobbers nothing else
+    pop bp
+    jc .refused
+    push ds
+    mov es, dx
+    mov ds, si
     mov si, bp
-    add si, FONT_FIRST * 8      ; skip the control-character glyphs
-    mov di, font_glyphs
+    xor di, di
     mov cx, FONT_BYTES / 2
-    mov dx, es                  ; ROM segment becomes the source
-    mov ax, LOW_SEG             ; destination: the table is in LOW_SEG now
-    mov es, ax                  ; (SPEC.md 2.1), so the copy goes through SS's
-    mov ds, dx                  ; segment rather than the kernel's own
-    cld
     rep movsw
-
-    mov cx, FONT_ZWORDS         ; ...and the blank cell, which nothing else
-    mov di, font_zero           ; zeroes: .lowbss is nobits and the loader
-    xor ax, ax                  ; never writes it. ES is still LOW_SEG from
-    rep stosw                   ; the copy above, which is what stosw needs.
-                                ; The count carries 39.14.11's two seam cells,
-                                ; which sit immediately after it
-
-    pop es
     pop ds
+    xor bp, bp                  ; the copy's glyph FONT_FIRST is its byte 0
+    jmp short .point
+.refused:
+    mov dx, si                  ; no room: the ROM, where it is
+.point:
+    mov [font_base], bp         ; glyph FONT_FIRST, a SPACE, is where the table
+    mov [font_seg], dx          ; starts and what an unprintable one draws.
+                                ; (39.14.11's seam cells need no clearing:
+                                ; font_ch_cut writes all eight rows of each)
+    pop es
     pop bp
     pop di
     pop si
@@ -233,7 +375,8 @@ font_init:
     pop cx
     pop bx
     pop ax
-    retf                        ; FAR: kmain reaches this through OVLGATE1
+    retf                        ; FAR: kmain reaches this through BLOBCALL
+    FONT_TIMERS fi
 section .text
 %endif
 
@@ -251,14 +394,40 @@ font_ch_hi:                     ; AL is past FONT_LAST - normally nothing to
     ja font_ch_drop             ; draws what it has always drawn
     cmp byte [font_ch_on], 0
     je font_ch_drop
-    jmp font_char.chok
+    cmp al, FONT_SEAM_A         ; the part that IS here, masked in both axes -
+    je font_char.edgeok         ; so the edge tests have nothing left to say
+    jmp font_char.chok          ; and are stepped over; the spill is tested
 
 font_ch_spill:                  ; the cell runs off this display's edge
     call font_ch_cut
     jc font_ch_drop             ; refused: 39.14.2's whole-cell drop stands
     mov al, FONT_SEAM_A         ; ...and what is left is the part that IS here,
-    jmp font_char.edgeok        ; masked in both axes - so the edge tests have
-%endif                          ; nothing left to say and are stepped over
+    call font_ch_seam           ; drawn by a font_char of its own at the same
+    jmp short font_ch_drop      ; pen, NESTED on this display (no second
+                                ; translation), and then this cell is done
+
+; -----------------------------------------------------------------------------
+; font_ch_seam - draw 39.14.11's half-cell AL (FONT_SEAM_A or _B) at CX, DX
+;
+; The seam cells are RAM - font_ch_cut composes them - and the glyph table is
+; the ROM's (SPEC.md 6), so the draw points the table at the cells for the
+; one call: [font_seg] = LOW_SEG and [font_base] biased so that font_char's
+; own `(al - FONT_FIRST) * 8 + [font_base]` lands on font_seam_a/_b. Nothing
+; in any glyph's path tests for the seam; the two words are simply what the
+; renderers already read.
+; -----------------------------------------------------------------------------
+font_ch_seam:
+    push word [font_seg]
+    push word [font_base]
+    mov [font_seg], ss
+    mov word [font_base], font_seam_a - (FONT_SEAM_A - FONT_FIRST) * 8
+    inc byte [font_ch_on]       ; the two codes are private to the cut
+    call font_char
+    dec byte [font_ch_on]
+    pop word [font_base]
+    pop word [font_seg]
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; font_ch_drop - the one `jmp font_char.done` that six refusals share.
@@ -390,8 +559,10 @@ font_char:
     shl ax, 1                   ; ax,imm16` is the 3-byte accumulator form
     shl ax, 1                   ; where `add si,imm16` is 4, and `xchg ax,si`
     shl ax, 1                   ; is 1 where `mov si,ax` is 2. AL is 0..94
-    add ax, font_glyphs         ; here - the two range tests above proved it -
-    xchg ax, si                 ; so `cbw` lands AH = 0 in one byte
+    add ax, [font_base]         ; here - the two range tests above proved it -
+    xchg ax, si                 ; so `cbw` lands AH = 0 in one byte. The
+                                ; table is at [font_seg]:[font_base] - the
+                                ; ROM's own (SPEC.md 6)
     mov al, [wm_clip_r0]        ; AL is spent (SI carries the glyph now, and
     cbw                         ; AX holds SI's old junk), so the row bias
     add si, ax                  ; costs no register: start at the glyph's row
@@ -404,9 +575,11 @@ font_char:
     je .vram                    ; path there (SPEC.md 39.5). Without a VGA in
 %endif                          ; the build there is nothing to ask: the call
     call font_char_bb           ; below is the only cell writer, and `.done`
-    jmp .done                   ; still owns the frame this pushed
-%ifdef GFX_VGA
-.vram:
+    push cs                     ; still owns the frame this pushed - with DS
+    pop ds                      ; the kernel's again: font_char_bb leaves it
+%ifdef GFX_VGA                  ; on the framebuffer. With no VGA in the build
+    jmp .done                   ; `.done` is the NEXT instruction, and nasm
+.vram:                          ; spends two bytes on `jmp short $+2`
     mov di, cx                  ; x/8 goes STRAIGHT into DI and x&7 stays in
     shr di, 1                   ; CL: the old spelling hopped x through BX and
     shr di, 1                   ; back (`mov bx,cx` ... `mov ax,bx` ...
@@ -420,8 +593,7 @@ font_char:
                                 ; here and is loaded with [wm_clip_rn] three
                                 ; instructions down, before anything reads it
 
-    mov ax, VGA_SEG
-    mov es, ax
+    mov es, [font_seg]          ; ES = the glyph table's segment (SPEC.md 6)
 
     mov dx, 0x3CE               ; GC index port
     mov ah, [gfx_color]
@@ -431,10 +603,15 @@ font_char:
     out dx, ax                  ; GC1 enable Set/Reset on all planes
 
     mov ch, [wm_clip_rn]        ; row counter: the rows the region allows,
-.row:                           ; 8 whenever it is not cutting this cell
-    mov ah, [ss:si]             ; glyph row in the high byte of the window
+                                ; 8 whenever it is not cutting this cell
+    mov ax, VGA_SEG             ; ...and DS = the FRAMEBUFFER for the loop, so
+    mov ds, ax                  ; its four latch accesses carry no override:
+                                ; nothing below reads a kernel word but the
+                                ; column mask, through CS
+.row:
+    mov ah, [es:si]             ; glyph row in the high byte of the window
 %ifdef KERN_BIG
-    and ah, [wm_clip_cm]        ; the region's column mask (SPEC.md 11.3.4) -
+    and ah, [cs:wm_clip_cm]     ; the region's column mask (SPEC.md 11.3.4) -
 %endif                          ; KERN_BIG only, so the floor machine's glyph
                                 ; loops are byte-identical (11.3.4.1)
     inc si
@@ -447,16 +624,21 @@ font_char:
     mov al, 8
     mov ah, bh
     out dx, ax                  ; GC8 Bit Mask = first-byte glyph bits
-    mov al, [es:di]             ; load latches
-    mov [es:di], al             ; masked pixels <- Set/Reset color
+    xchg [di], al               ; load the latches and write back in ONE
+                                ; instruction: an 8088's xchg reads the byte
+                                ; and then writes it, which is the latch
+                                ; load and the masked write in that order -
+                                ; and the value written is don't-care, every
+                                ; plane taking Set/Reset (GC1 = 0Fh above).
+                                ; 2 bytes and 22 clocks against the mov
+                                ; pair's 4 and 27
 .no_first:
     or bl, bl                   ; spill into the second byte?
     jz .no_second
     mov al, 8
     mov ah, bl
     out dx, ax                  ; GC8 Bit Mask = second-byte glyph bits
-    mov al, [es:di+1]           ; load latches
-    mov [es:di+1], al
+    xchg [di+1], al             ; load latches and write, as above
 .no_second:
     add di, ROW_BYTES
     dec ch
@@ -466,6 +648,8 @@ font_char:
     out dx, ax                  ; GC1 enable Set/Reset = 0 (default, SPEC 1.7)
     mov ax, 0xFF08
     out dx, ax                  ; GC8 Bit Mask = FF (default)
+    push cs                     ; ...and DS the kernel's, for `.done`
+    pop ds
 %endif                          ; ...end of font_char's VGA cell writer
 .done:
     GFXDLEAVEI
@@ -533,13 +717,14 @@ font_ch_cut:
     push di
     push bp
 
-    sub al, FONT_FIRST          ; SI -> the source rows, read through LOW_SEG
-    cbw                         ; like every glyph in this file - and this is
-    shl ax, 1                   ; the same arithmetic that will address the
-    shl ax, 1                   ; scratch cell on the way back in. `cbw` AFTER
-    shl ax, 1                   ; the subtract, and this is the ONE site with
-    add ax, font_glyphs         ; no range test above it: AL can also be
-    xchg ax, si                 ; FONT_SEAM_A/_B (96/97), and 97-32 = 65, still
+    mov es, [font_seg]          ; ES:SI -> the source rows, wherever the table
+    sub al, FONT_FIRST          ; is (SPEC.md 6) - and this is the same
+    cbw                         ; arithmetic that will address the scratch
+    shl ax, 1                   ; cell on the way back in. `cbw` AFTER the
+    shl ax, 1                   ; subtract, and this is the ONE site with no
+    shl ax, 1                   ; range test above it: AL can also be
+    add ax, [font_base]         ; FONT_SEAM_A/_B (96/97), and 97-32 = 65, still
+    xchg ax, si                 ; (ES is font_char's to clobber: it banked it)
                                 ; positive. AX carries SI's old value out of
                                 ; the xchg and is spent below - `mov al,1`
                                 ; then vid_ctx_ptr, which takes its index in
@@ -573,7 +758,7 @@ font_ch_cut:
     mov cx, bx                  ; seam, lifted to the far display's first. All
     mov ch, 8                   ; eight ROWS go: it runs its own y test, and
 .bxr:                           ; its height is its own
-    mov al, [ss:si]
+    mov al, [es:si]
     shl al, cl
     mov [ss:di], al
     inc si
@@ -596,7 +781,7 @@ font_ch_cut:
     mov cx, 8                   ; COLUMNS go: it runs its own x test
     sub cx, bp
 .byr:
-    mov al, [ss:si]
+    mov al, [es:si]
     mov [ss:di], al
     inc si
     inc di
@@ -619,12 +804,10 @@ font_ch_cut:
 .spill:
     mov al, [vid_cur]           ; 39.14.3 leaves the LAST display drawn on
     push ax                     ; current, so ours has to be named to come back
-    inc byte [font_ch_on]       ; the two codes are private to this routine,
-    dec byte [gfx_dnest]        ; and the spill takes its own enter
+    dec byte [gfx_dnest]        ; the spill takes its own enter
     mov al, FONT_SEAM_B
-    call font_char
+    call font_ch_seam           ; (the two codes are private to this routine)
     inc byte [gfx_dnest]
-    dec byte [font_ch_on]
     pop ax
     call vid_ctx_act            ; ...and this display is live again, which is
                                 ; what the caller's fall-through rests on
@@ -638,7 +821,7 @@ font_ch_cut:
     mov ah, al                  ; shift - which their `or al, al / jz` skips
     mov cx, bp                  ; already. k = 8 shifts the byte away and `not`
 .par:                           ; brings back FF, so no mask is no work
-    mov al, [ss:si]
+    mov al, [es:si]
     and al, ah
     mov [ss:di], al
     inc si
@@ -708,8 +891,11 @@ font_char_bb:
                                 ; x's high byte and is overwritten by
                                 ; `mov ch,[gfx_color]` below before any read
 
-    mov es, [vid_rseg]          ; THE framebuffer segment - not a plane base
-                                ; (SPEC.md 39.3, 39.26).  There was a plane
+    mov es, [font_seg]          ; ES = the glyph table (SPEC.md 6); DS becomes
+                                ; the framebuffer below, once the last kernel
+                                ; word has been read.
+                                ; [vid_rseg] is THE framebuffer segment - not
+                                ; a plane base (SPEC.md 39.3, 39.26).  There was a plane
                                 ; LOOP here, walking [vid_planes] passes and
                                 ; stepping [vid_rpara] between them, with SI
                                 ; and DI parked in two .bss cells so each pass
@@ -724,17 +910,23 @@ font_char_bb:
     mov ch, [gfx_color]
     call font_ink               ; CH = colour bits; on mono, 00 or FF so
                                 ; `test ch,1` still works
-    mov bh, [wm_clip_rn]        ; row counter - see font_char's .rows.  BL is
-                                ; free now: it was the plane counter
+    mov bh, [wm_clip_rn]        ; row counter - see font_char's .rows
+%ifdef KERN_BIG
+    mov bl, [wm_clip_cm]        ; ...and BL, the plane counter it once was, is
+%endif                          ; the region's column mask (SPEC.md 11.3.4), a
+                                ; register where the rows read a memory word
+    mov ds, [vid_rseg]          ; DS = THE framebuffer to font_char's restore:
+                                ; the row loops' writes carry no override, and
+                                ; the two kernel words left are read through CS
     test ch, 1                  ; this plane's ink, decided ONCE rather than
     jnz .srow                   ; once per row - and so is the disabled
-    cmp byte [font_dith], 0     ; dither, which is mono-only and therefore
+    cmp byte [cs:font_dith], 0  ; dither, which is mono-only and therefore
     jne .dstart                 ; always on the clear-bits side
     jmp .crow
 .srow:
-    mov ah, [ss:si]             ; glyph row in the window's high byte
+    mov ah, [es:si]             ; glyph row in the window's high byte
 %ifdef KERN_BIG
-    and ah, [wm_clip_cm]        ; the region's column mask (SPEC.md 11.3.4) -
+    and ah, bl                  ; the region's column mask (SPEC.md 11.3.4) -
 %endif                          ; KERN_BIG only, so the floor machine's glyph
                                 ; loops are byte-identical (11.3.4.1)
     inc si
@@ -742,10 +934,10 @@ font_char_bb:
     jz .snext                   ; shift does to it
     xor al, al
     shr ax, cl                  ; AH = first-byte mask, AL = second-byte mask
-    or [es:di], ah
+    or [di], ah
     or al, al                   ; ...and nothing spilled into the second byte
     jz .snext                   ; at all when x is byte-aligned
-    or [es:di+1], al
+    or [di+1], al
 .snext:
     add di, [cs:vid_rowadd]     ; gfx_nextrow, inlined (see the note above)
     test di, [cs:vid_wrapbit]
@@ -756,9 +948,9 @@ font_char_bb:
     jnz .srow
     ret                         ; one plane, so the cell is finished
 .crow:
-    mov ah, [ss:si]
+    mov ah, [es:si]
 %ifdef KERN_BIG
-    and ah, [wm_clip_cm]        ; the region's column mask (SPEC.md 11.3.4) -
+    and ah, bl                  ; the region's column mask (SPEC.md 11.3.4) -
 %endif                          ; KERN_BIG only, so the floor machine's glyph
                                 ; loops are byte-identical (11.3.4.1)
     inc si
@@ -767,11 +959,11 @@ font_char_bb:
     xor al, al
     shr ax, cl
     not ah
-    and [es:di], ah
+    and [di], ah
     or al, al
     jz .cnext
     not al
-    and [es:di+1], al
+    and [di+1], al
 .cnext:
     add di, [cs:vid_rowadd]
     test di, [cs:vid_wrapbit]
@@ -794,16 +986,14 @@ font_char_bb:
 ; both the glyph pointer and the screen row, and an unbiased seed would flip
 ; the checkerboard's phase against the rows drawn either side of it.
 .dstart:
-    mov al, 0xAA                ; AL is free here - SI carries the glyph, and
-    test byte [wm_clip_r0], 1   ; the row loop reloads AX every pass
-    jz .dset
-    mov al, 0x55
-.dset:
-    mov [font_dmask], al
+    mov dl, 0xAA                ; DL is the checkerboard: DX is dead here (the
+    test byte [cs:wm_clip_r0], 1 ; row base went through AX), so the mask
+    jz .drow                    ; a .bss byte used to carry is a register
+    mov dl, 0x55
 .drow:
-    mov ah, [ss:si]
+    mov ah, [es:si]
 %ifdef KERN_BIG
-    and ah, [wm_clip_cm]        ; the region's column mask (SPEC.md 11.3.4) -
+    and ah, bl                  ; the region's column mask (SPEC.md 11.3.4) -
 %endif                          ; KERN_BIG only, so the floor machine's glyph
                                 ; loops are byte-identical (11.3.4.1)
     inc si
@@ -811,19 +1001,19 @@ font_char_bb:
     jz .dnext
     xor al, al
     shr ax, cl
-    and ah, [font_dmask]        ; ...and half of what is left goes too
-    and al, [font_dmask]
+    and ah, dl                  ; ...and half of what is left goes too
+    and al, dl
     or ah, ah
     jz .dsecond                 ; the mask can empty a byte the glyph filled
     not ah
-    and [es:di], ah
+    and [di], ah
 .dsecond:
     or al, al
     jz .dnext
     not al
-    and [es:di+1], al
+    and [di+1], al
 .dnext:
-    xor byte [font_dmask], 0xFF ; every row, blank ones included, or the
+    not dl                      ; every row, blank ones included, or the
                                 ; checkerboard turns into stripes
     add di, [cs:vid_rowadd]
     test di, [cs:vid_wrapbit]
@@ -960,7 +1150,6 @@ font_str_x:
     push ax
     push cx
     push si
-    cld
 .next:
     mov al, [es:si]
     inc si
@@ -1044,10 +1233,11 @@ font_run:
 ; because the padded and unpadded row loops differ only in the tail, and two
 ; copies of a five-instruction body that must agree is how they stop agreeing.
 %macro FONT_RN_PX 0
-    lodsw                       ; AX = this cell's glyph base (DS:SI, the table)
+    cs lodsw                    ; AX = this cell's glyph base (CS:SI, the table:
+                                ; DS is the glyph table's through the pass)
     xchg ax, bx                 ; BX = it, in one byte
     add bx, bp                  ; ...+ the row this pass is on
-    mov al, [ss:bx]             ; the glyph row byte (font_glyphs is LOW_SEG)
+    mov al, [bx]                ; the glyph row byte (SPEC.md 6: DS = its segment)
     and al, dl
     xor al, dh
     stosb
@@ -1060,7 +1250,7 @@ font_run:
 ; DL as a BIT MASK and share that macro.
 %macro FONT_RN_ROWEND 0
     FONT_RN_NEXTROW
-    xor dl, [font_rn_dt]
+    xor dl, [cs:font_rn_dt]     ; CS: DS is the glyph table's in every pass
 %endmacro
 
 %macro FONT_RN_NEXTROW 0
@@ -1158,7 +1348,7 @@ font_run_x:
 %endif                          ; through the kernel that has no 6.1.11
 %else
     test cx, 7                  ; kern_small keeps the pair for an unaligned
-    jnz .slow                   ; run, exactly as it keeps it for a PLANAR one
+    jnz .slq                    ; run, exactly as it keeps it for a PLANAR one
                                 ; (6.1.10): the 128-256KB machine's budget is
                                 ; the tighter of the two by design, and 6.1.11
                                 ; is +262 bytes of .text
@@ -1167,13 +1357,12 @@ font_run_x:
 %ifdef KERN_BIG
     je .planar                  ; SPEC.md 6.1.10: mode 12h has a single-store
 %else                           ; prologue of its own. kern_small does not
-    je .slow                    ; carry it - gfx_blit1's precedent (5.4.2)
+    je .slq                     ; carry it - gfx_blit1's precedent (5.4.2)
 %endif
     ; SPEC.md 6.1.12: a DISABLED control's glyph is checkerboarded, and this
     ; path used to hand it to .slow for that reason. It does not any more -
     ; the mask FOLDS INTO the run's own, below, and costs the row loop one
     ; memory XOR a row rather than one of anything a cell.
-    cld
 
     ; --- what belongs to the RUN, done once (SPEC.md 6.1.6) ------------------
     ; A run is ONE y, ONE pair of colours and a column that advances by one
@@ -1181,10 +1370,16 @@ font_run_x:
     ; gfx_rowbase, whose 16-bit MUL an 8088 charges ~120 clocks for, and
     ; font_ink TWICE - for answers that cannot change until the run ends.
     cmp dx, [vid_chm8]          ; the run's y is every cell's y, so the
-    ja .out                     ; vertical edge test is the run's too
+    ja .outq                    ; vertical edge test is the run's too
     cmp cx, [vid_cwm8]          ; ...but x is per cell, and DI only tracks it
     jbe .xok                    ; by `inc di`. That lockstep is exact for a run
     jmp .cells                  ; that STARTS on screen - x then cannot reach
+.outq:                          ; (the door's far exits, below the one jump
+    jmp .out                    ; in short reach of them: a two-byte `jcc`
+%ifndef KERN_BIG                ; with a 4-clock not-taken where the five-byte
+.slq:                           ; ones cost 16 on every run)
+    jmp .slow
+%endif
 .xok:                           ; 0x10000 in 80 cells - and it breaks on the
                                 ; one run that can wrap: a NEGATIVE x, which
                                 ; this unsigned test catches. Two cells later x
@@ -1192,6 +1387,7 @@ font_run_x:
                                 ; so that run goes per cell (SPEC.md 6.1.2's
                                 ; path), which recomputes both and is the
                                 ; documented same-pixels fallback
+    push si                     ; (the string: .p1's frame, see .p1pre)
     push cx                     ; font_ink returns in CH and gfx_rowbase
     push dx                     ; clobbers CL and DX - between them that is
                                 ; both of the coordinates
@@ -1240,13 +1436,16 @@ font_run_x:
                                 ; the renderer (SPEC.md 6.1.6), so the planar
                                 ; prologue jumps here instead of carrying its
                                 ; own copy of these nine instructions. Both
-                                ; arrive the same way: DX = y, and the stack
-                                ; holding cx then dx so gfx_rowbase may clobber
-                                ; both. `cld` is set on either arm above.
-    mov ax, dx                  ; DX is still y - font_ink does not touch it
+                                ; arrive the same way: the stack holding si,
+                                ; cx then dx - .p1's frame - so gfx_rowbase
+                                ; may clobber any of them, and the coordinates
+                                ; are READ off it rather than popped and
+                                ; pushed back. (DF = 0 is the system contract,
+                                ; SPEC.md 1 rule 3: no `cld` on either arm.)
+    mov bp, sp
+    mov ax, [bp]                ; y (BP addresses SS, which holds the frame)
     call gfx_rowbase            ; AX = rowbase(y), once for the whole run
-    pop dx
-    pop cx
+    mov cx, [bp+2]              ; ...and x
     mov di, cx
     shr di, 1                   ; three single shifts rather than one by CL:
     shr di, 1                   ; 6 clocks against 20, and CL stays the x it
@@ -1258,8 +1457,12 @@ font_run_x:
     ; SPEC.md 6.1.7. The string is walked ONCE into a table of glyph pointers,
     ; which is what frees ES - it holds the caller's string right up to here -
     ; so the drawing pass can point it at the framebuffer for the whole run.
-    push si                     ; both wanted again if this falls back to the
-    push cx                     ; per-cell path below
+    ; SI, CX and DX are on the stack (.xok and .planar push them), wanted
+    ; again if this falls back to the per-cell path below
+    mov dx, [font_base]         ; DX, the y, carries the table's
+                                ; base through the walk: one register `add` a
+                                ; cell where a memory operand would be twelve
+                                ; clocks more (SPEC.md 6)
     mov bx, font_rn_tab
     xor bp, bp                  ; BP = cells that will actually be drawn
 .p1:
@@ -1281,10 +1484,14 @@ font_run_x:
     shl ax, 1
     shl ax, 1
     shl ax, 1
-    add ax, font_glyphs
+    add ax, dx
     jmp short .p1put
 .p1blank:
-    mov ax, font_zero           ; an unprintable cell is still PAINTED
+%ifdef BAKED_FONT
+    FONT_BLANK ax               ; an unprintable cell is still PAINTED
+%else
+    mov ax, dx                  ; an unprintable cell is still PAINTED: the
+%endif                          ; ROM's SPACE, glyph FONT_FIRST
 .p1put:
     mov [bx], ax
     inc bx                      ; 2 bytes to `add bx,2`'s 3 and the same 4
@@ -1295,8 +1502,9 @@ font_run_x:
     inc bp
     jmp short .p1
 .p1full:                        ; unreachable while the table covers the widest
-    pop cx                      ; screen, and a fallback rather than a truncation
-    pop si                      ; if that ever stops being true
+    pop dx                      ; screen, and a fallback rather than a truncation
+    pop cx                      ; if that ever stops being true
+    pop si
 %ifdef KERN_BIG
 .escape:                        ; WHICH PER-CELL PATH, said once. It is a
     mov al, [font_rn_pl]        ; property of the RUN - planar (SPEC.md 6.1.10)
@@ -1311,6 +1519,7 @@ font_run_x:
                                 ; both - .cell and .cells each reload AL from
                                 ; [es:si]
 %endif
+.jcell:                         ; (kern_small's clipped-run `jc` rides this)
     jmp .cell                   ; NOT `jmp short`: it reaches by 12 bytes today
                                 ; and this is the cold path of the pair
 .p1end:
@@ -1351,6 +1560,7 @@ font_run_x:
     sub ax, cx
     mov [font_rn_n2], ax        ; ...and the ones drawn singly before it
 .p1none:
+    pop dx
     pop cx
     pop si
     or bp, bp
@@ -1386,7 +1596,7 @@ font_run_x:
                                 ; planar or off-grid spelling of it - a cut run
                                 ; that is either goes to font_run_scell, which
 %else                           ; is gfx_fill + font_char and blind to both
-    jc .cell                    ; the adapter and the phase
+    jc .jcell                   ; the adapter and the phase
 %endif
 
     ; --- PASS 2: one ROW of the whole run at a time --------------------------
@@ -1400,13 +1610,17 @@ font_run_x:
                                 ; adjacent by %if below, xm first
     mov es, [vid_tseg]          ; ES:DI is the framebuffer from here on - the
     xor bp, bp                  ; string has been read and will not be touched
+    mov ds, [font_seg]          ; ...and DS:BX the glyph rows (SPEC.md 6), to
+                                ; the `push cs / pop ds` each pass ends with:
+                                ; every kernel word a pass reads goes through
+                                ; CS, the table's `lodsw` included
 %ifdef KERN_BIG
-    cmp byte [font_rn_k7], 0
+    cmp byte [cs:font_rn_k7], 0
     jne .rmu                    ; SPEC.md 6.1.11: off the byte grid, so a cell
                                 ; does not own a byte - but the RUN still owns
                                 ; all but two of them
 %endif
-    cmp word [font_rn_k], FONT_RN_KMIN
+    cmp word [cs:font_rn_k], FONT_RN_KMIN
     jb .rmp                     ; no span worth a `rep`: take the plain walk,
                                 ; and take it at the RUN level. The span is a
                                 ; property of the run, so a per-ROW test would
@@ -1415,18 +1629,18 @@ font_run_x:
                                 ; at +3.06% before this branch existed
 .rmrow:
     mov si, font_rn_tab
-    mov cx, [font_rn_n2]        ; the cells before the trailing span
+    mov cx, [cs:font_rn_n2]     ; the cells before the trailing span
     push di                     ; this row's first byte
     jcxz .rmtail                ; ...of which there may be none at all
 .rmpx:
     FONT_RN_PX
     loop .rmpx
 .rmtail:
-    mov cx, [font_rn_k]         ; the repeated tail: one compose, then the
-    lodsw                       ; string instruction writes every byte of it.
+    mov cx, [cs:font_rn_k]      ; the repeated tail: one compose, then the
+    cs lodsw                    ; string instruction writes every byte of it.
     xchg ax, bx                 ; SI already points at the first tail entry,
     add bx, bp                  ; and they all carry the same glyph
-    mov al, [ss:bx]
+    mov al, [bx]
     and al, dl
     xor al, dh
     rep stosb
@@ -1435,10 +1649,12 @@ font_run_x:
     inc bp
     cmp bp, 8
     jb .rmrow
+    push cs                     ; DS the kernel's again (and not through
+    pop ds                      ; .rmout: one jump, not two)
     jmp .out
 .rmp:                           ; ...and the same rows with no tail at all
     mov si, font_rn_tab
-    mov cx, [font_rn_n]
+    mov cx, [cs:font_rn_n]
     push di
 .rmppx:
     FONT_RN_PX
@@ -1448,6 +1664,9 @@ font_run_x:
     inc bp
     cmp bp, 8
     jb .rmp
+.rmout:
+    push cs                     ; DS the kernel's again
+    pop ds
     jmp .out
 
 %ifdef KERN_BIG
@@ -1477,10 +1696,10 @@ font_run_x:
 ; no register left for a cell counter - the walk ends on SI reaching the glyph
 ; table's end instead. That is why [font_rn_send] exists.
 %macro FONT_RN_UPX 0
-    lodsw                       ; AX = this cell's glyph base (DS:SI, the table)
+    cs lodsw                    ; AX = this cell's glyph base (CS:SI, the table)
     add ax, bp                  ; ...+ the row this pass is on
     xchg ax, bx                 ; BX = it, and the old BX is spent
-    mov al, [ss:bx]             ; the glyph row byte (font_glyphs is LOW_SEG)
+    mov al, [bx]                ; the glyph row byte (DS = its segment)
     and al, dl
     xor al, dh                  ; AL = this cell, composed
     mov ah, ch                  ; AH = the cell BEFORE it...
@@ -1489,21 +1708,22 @@ font_run_x:
 %endmacro
 
 .rmu:
-    mov ax, [font_rn_n]         ; where the cell walk ends (see above)
+    mov ax, [cs:font_rn_n]      ; where the cell walk ends (see above)
     shl ax, 1
     add ax, font_rn_tab
-    mov [font_rn_send], ax
-    mov cl, [font_rn_k7]
+    mov [cs:font_rn_send], ax
+    mov cl, [cs:font_rn_k7]
     push di                     ; the run's first byte, for the column passes
 .rmurow:
     mov si, font_rn_tab
     xor ch, ch                  ; no cell before the first: its bits fall off
     push di                     ; the top of the shift and are masked away
     FONT_RN_UPX                 ; ...so this is the LEFT edge byte
-    mov [ds:bp + font_rn_le], al ; **THE `ds:` IS LOAD-BEARING.** SS != DS, so
+    mov [cs:bp + font_rn_le], al ; **THE `cs:` IS LOAD-BEARING.** SS != DS, so
                                 ; a [bp+disp] operand addresses SS by default
                                 ; (SPEC.md 1 rule 2) and font_rn_le is .bss,
-                                ; i.e. DS. Without the override this store
+                                ; i.e. KERNEL_SEG - which is CS here, DS being
+                                ; the glyph table's. Without the override this store
                                 ; lands at a .bss offset inside LOW_SEG -
                                 ; ~42 KB past the top of task 0's stack, past
                                 ; VGABUF_SEG and INTO THE CLAIM HEAP, which
@@ -1515,18 +1735,18 @@ font_run_x:
                                 ; BP is the row index, 0..7 against `resb 8`,
                                 ; bounded six lines from here
     inc di                      ; it is written by the column pass, not here
-    cmp si, [font_rn_send]
+    cmp si, [cs:font_rn_send]
     jae .rmuend                 ; a one-cell run: no interior at all
 .rmumid:
     FONT_RN_UPX
     stosb                       ; the interior: bytes the run owns whole
-    cmp si, [font_rn_send]
+    cmp si, [cs:font_rn_send]
     jb .rmumid
 .rmuend:
     mov ah, ch                  ; the RIGHT edge: the last cell's tail, with
     xor al, al                  ; nothing after it
     shr ax, cl
-    mov [ds:bp + font_rn_re], al ; ...and the same override, for the same
+    mov [cs:bp + font_rn_re], al ; ...and the same override, for the same
                                 ; reason - see the left edge above
     pop di
     FONT_RN_ROWEND
@@ -1535,6 +1755,8 @@ font_run_x:
     jb .rmurow
 
     ; --- the two edge columns, each with its mask set ONCE ------------------
+    push cs                     ; DS the kernel's again: the columns read the
+    pop ds                      ; edge bytes out of .bss
     pop di                      ; back to the run's first byte
     mov al, 0xFF
     shr al, cl                  ; AL = the LEFT byte's mask: our (8-k) low bits
@@ -1562,7 +1784,11 @@ font_run_x:
 .cell:                          ; the per-cell path: a clip-cut run, and the
     mov al, [es:si]             ; overflow that cannot happen
     or al, al
+%ifdef KERN_BIG
+    jz .jout                    ; (the `jmp .out` just above: two bytes, not
+%else                           ; five, and 4 clocks a cell not-taken)
     jz .out
+%endif
     inc si
     call font_run_cell          ; CX/DX/DI = this cell; preserves all three
     add cx, 8
@@ -1608,8 +1834,9 @@ font_run_x:
     ja .jout                    ; path (SPEC.md 6.1.6)
     cmp cx, [vid_cwm8]          ; ...and a negative x goes per cell, same rule
     ja .cells
-    push cx                     ; the grouping spends AX and BX only, but
-    push dx                     ; gfx_rowbase below spends CX and DX
+    push si                     ; .p1's frame (see .p1pre): the grouping spends
+    push cx                     ; AX and BX only, but gfx_rowbase below spends
+    push dx                     ; CX and DX
     mov al, [font_rn_fg]
     mov ah, [font_rn_bg]
     and ax, 0x0F0F              ; a colour is four planes and nothing else
@@ -1671,16 +1898,12 @@ font_run_x:
     mov ah, bl
     mov al, 1
     out dx, ax                  ; GC1 Enable Set/Reset = C
-    cld
-    pop dx
-    pop cx
-    push cx
-    push dx
     jmp .rowb                   ; ...and the row base is the mono prologue's,
-                                ; the same nine instructions on the same state
+                                ; the same instructions on the same frame
 .plno:                          ; the pair shares no plane in either direction
     pop dx                      ; and needs two passes: .slow draws it
     pop cx
+    pop si
 %endif
 
 .slow:
@@ -1805,8 +2028,10 @@ fnt_rn_edge:
 .vrow:                          ; clocks where `inc bp / cmp bp,8 / jb` is 6
     mov al, [si]                ; and ~22, and FONT_RN_NEXTROW touches only DI
     inc si                      ; and the flags
-    mov ah, [es:di]             ; the latches; the masked-out bits come back
-    mov [es:di], al             ; from them untouched
+    xchg [es:di], al            ; the latches (the read), then AL (the write):
+                                ; the masked-out bits come back from them
+                                ; untouched. xchg is that read and that write
+                                ; in one instruction - font_char's latch idiom
     FONT_RN_NEXTROW
     loop .vrow
     mov ax, 0xFF08              ; ...and the Bit Mask back to its resting FF
@@ -1866,7 +2091,7 @@ font_run_cell:
     push es
 
     cmp cx, [vid_cwm8]          ; x only: the run's y was tested once, by the
-    ja .out                     ; caller (SPEC.md 6.1.6)
+    ja .outq                    ; caller (SPEC.md 6.1.6)
     CLIPQ                        ; the cell against the region in ROWS, exactly
     je .noclip                  ; as its glyphs are, background with them
     push ax                     ; (SPEC.md 11.3.2)
@@ -1876,14 +2101,16 @@ font_run_cell:
     add dx, 7
     call wm_clip_rows           ; CX and DX are spent here and NOT put back:
     pop ax                      ; nothing below reads them, the masks arriving
-    jc .out                     ; in CX from memory instead
+    jc .outq                    ; in CX from memory instead
 %ifdef KERN_BIG
     mov dl, [wm_clip_cm]        ; SPEC.md 11.3.4: the COLUMNS too. DX is free
                                 ; from here to the epilogue, which puts the
                                 ; caller's back
 %endif
     jmp short .have_rows
-.noclip:
+.outq:                          ; (the two exits, in short reach below the
+    jmp .out                    ; one jump there is: `jcc` two bytes and not
+.noclip:                        ; five, 4 clocks a cell not-taken where 16)
     mov word [wm_clip_r0], (8 << 8) | 0     ; the whole cell, in ONE store -
                                 ; font_char's own spelling eight lines from
                                 ; here, and the pair is adjacent by assertion
@@ -1901,14 +2128,16 @@ font_run_cell:
     shl ax, 1                   ; accumulator form of the `add` - see font_char
     shl ax, 1
     shl ax, 1
-    add ax, font_glyphs
+    add ax, [font_base]
     xchg ax, si
     jmp short .have
 .blank:
-    mov si, font_zero           ; an unprintable character is a blank cell -
+    FONT_BLANK si               ; an unprintable character is a blank cell -
 .have:                          ; which still has to be PAINTED here
 
-    mov es, [vid_rseg]          ; the framebuffer (SPEC.md 39.3); DI arrived
+    mov es, [font_seg]          ; ES:SI = the glyph (SPEC.md 6); DS becomes the
+                                ; framebuffer (SPEC.md 39.3) below, once the
+                                ; last kernel word is read. DI arrived
     mov cx, [font_rn_xm]        ; pointing at this cell's first byte.
                                 ; CL = ink XOR background, CH = background,
                                 ; one word (the %if below pins the order)
@@ -1922,6 +2151,7 @@ font_run_cell:
     jz .r0even                  ; for the run's y, and a clipped cell starts
     xor cl, [font_rn_dt]        ; r0 rows below it - odd means the other phase
 .r0even:
+    mov ds, [vid_rseg]          ; DS = the framebuffer, to the `pop ds` below
     or al, al
     jz .row                     ; the whole cell: the common case skips this
     add si, ax                  ; the glyph's first drawable row...
@@ -1935,7 +2165,7 @@ font_run_cell:
     dec bl
     jnz .skip
 .row:
-    mov al, [ss:si]             ; AL = the glyph row
+    mov al, [es:si]             ; AL = the glyph row
     inc si
     and al, cl                  ; a set bit picks ink, a clear bit background
     xor al, ch                  ; - the same byte, three instructions fewer
@@ -1944,8 +2174,8 @@ font_run_cell:
     jne .merge                  ; overlaps the cell now rather than containing
 .store:                         ; it, so a window over part of the byte is
 %endif                          ; NOT ours to store over
-    mov [es:di], al             ; the cell owns the byte: store, never merge
-    xor cl, [font_rn_dt]        ; SPEC.md 6.1.12: 0 unless this is disabled
+    mov [di], al                ; the cell owns the byte: store, never merge
+    xor cl, [cs:font_rn_dt]     ; SPEC.md 6.1.12: 0 unless this is disabled
     add di, [cs:vid_rowadd]     ; (gfx_nextrow inlined - see font_char_bb)
     test di, [cs:vid_wrapbit]
     jz .nw
@@ -1953,6 +2183,8 @@ font_run_cell:
 .nw:
     dec bh
     jnz .row
+    push cs                     ; DS the kernel's again
+    pop ds
 .out:
     pop es
     pop di
@@ -1964,7 +2196,7 @@ font_run_cell:
     ret
 %ifdef KERN_BIG
 .merge:                         ; ...so only the mask's bits change: old ^
-    mov ah, [es:di]             ; ((old ^ new) & mask). Out of line, because a
+    mov ah, [di]                ; ((old ^ new) & mask). Out of line, because a
     xor al, ah                  ; cut cell is at most the two at a run's ends
     and al, dl                  ; and the whole one is every other
     xor al, ah
@@ -2081,31 +2313,31 @@ font_width_x:
     ret
 
 ; -----------------------------------------------------------------------------
-section .lowbss                 ; LOW_SEG (SPEC.md 2.1): 760 bytes is the
-                                ; largest single object the kernel's own 64KB
-                                ; segment was carrying, against five reads -
-                                ; the glyph-row loops - so it costs five ss:
-                                ; prefixes and buys the whole table back for
-                                ; KERN_CODE_MAX. font_init fills both from the ROM.
+%ifdef BAKED_FONT
+section .lowbss                 ; LOW_SEG (SPEC.md 2.1): a BAKED face (SPEC.md
+                                ; 6.2) is overlay bytes and has to be copied
+                                ; somewhere that stays - and only then. The
+                                ; ROM's face is read where it is
 font_glyphs:    resb 760        ; glyphs 32..126, 8 bytes per row (FONT_BYTES)
 font_zero:      resb 8          ; the blank cell an unprintable character
-                                ; draws. It has to live BESIDE the table: the
-                                ; row loops take either in SI and read it with
-                                ; one segment, and .lowbss is not zeroed by
-                                ; anything, so font_init clears it by hand
+                                ; draws, in the table's own segment: .lowbss
+                                ; is not zeroed by anything, so ovl_font_init
+                                ; clears it by hand
+%endif
 %ifdef SEAMCUT
+section .lowbss
 font_seam_a:    resb 8          ; SPEC.md 39.14.11: the two halves of the one
 font_seam_b:    resb 8          ; cell a display seam crosses - the part on
                                 ; this display and the part that spills onto
-                                ; the next. They are BESIDE font_zero for the
-                                ; reason font_zero is beside the table, and one
-                                ; further: `font_glyphs + (al-FONT_FIRST)*8` is
-                                ; the arithmetic already in font_char's body,
-                                ; so codes FONT_SEAM_A/B address them with
-                                ; nothing added to it. font_init clears these
-                                ; by hand too - .lowbss is nobits
-%if font_seam_a - font_zero != 8 || font_seam_b - font_seam_a != 8
-  %error "font_seam_a/b are not the two cells after font_zero - see 39.14.11"
+                                ; the next. RAM, being composed per cut, and
+                                ; reached by the glyph arithmetic already in
+                                ; font_char's body with [font_seg] = LOW_SEG
+                                ; and [font_base] pointed so FONT_SEAM_A lands
+                                ; on font_seam_a (font_ch_seam). font_ch_cut
+                                ; writes all eight rows of each, so nothing
+                                ; clears them
+%if font_seam_b - font_seam_a != 8 || FONT_SEAM_B - FONT_SEAM_A != 1
+  %error "font_seam_b must be the cell after font_seam_a, as FONT_SEAM_B is the code after FONT_SEAM_A - see 39.14.11"
 %endif
 %endif
 section .bss
@@ -2118,6 +2350,12 @@ font_ch_on:     resb 1          ; SPEC.md 39.14.11: non-zero while font_ch_cut
                                 ; piece of the cut's state that outlives a
                                 ; recursive call
 %endif
+font_seg:       resw 1          ; THE GLYPH TABLE (SPEC.md 6): its segment - the
+font_base:      resw 1          ; ROM's - and the offset of glyph FONT_FIRST in
+                                ; it. font_init writes both at boot; every
+                                ; renderer reads the rows through DS or ES
+                                ; loaded from here, and OSAPI_FONT_GLYPHS
+                                ; hands the pair out as DX:SI
 font_rn_fg:     resb 1          ; font_run: the run's two colours as the
 font_rn_bg:     resb 1          ; caller gave them, for the .slow path
 font_rn_dt:     resb 1          ; SPEC.md 6.1.12: what FONT_RN_ROWEND XORs
@@ -2179,7 +2417,8 @@ font_rn_tab     equ ico_ibuf    ; a glyph pointer for each. 180 bytes, taken
 font_dith:      resb 1          ; 1 = this glyph is disabled text on a mono
                                 ; adapter (SPEC.md 47); font_ink decides it
                                 ; per glyph and writes it on every path
-font_dmask:     resb 1          ; ...and the row's half of the checkerboard
+                                ; (font_dmask, the row's half of the
+                                ; checkerboard, is DL in font_char_bb now)
 
 %if (font_rn_bm - font_rn_xm) != 1
   %error "font_run_x's .rm and font_run_cell both read the run's masks as ONE word (`mov dx,[font_rn_xm]`, `mov cx,[font_rn_xm]` -> low = xm, high = bm): they must stay adjacent, xm first (SPEC.md 6.1.5)"
@@ -2202,7 +2441,15 @@ font_dmask:     resb 1          ; ...and the row's half of the checkerboard
 ; data reference across that boundary, only a call, so the rule is worth
 ; keeping to rather than working around.
 ; =============================================================================
+%ifndef KERN_SMALL
 section .ovlw
+%else
+section .ovl                    ; kern_small: the BLOB half, font_init's own
+                                ; placement and for its reason - that kernel's
+                                ; `.ovlw` sits on the FAT window and the mount
+                                ; buffers, and 760 more bytes overran it, so
+                                ; FONT= did not build on kern_small at all
+%endif
 ; -----------------------------------------------------------------------------
 ; ovl_font_init - copy the baked typeface into font_glyphs
 ;
@@ -2229,20 +2476,23 @@ ovl_font_init:
     cld
     rep movsw
 
-    mov cx, FONT_ZWORDS         ; ...and the blank cell beside it, which
-    mov di, font_zero           ; nothing else zeroes: .lowbss is nobits. ES is
-    xor ax, ax                  ; still LOW_SEG from the copy above, which is
-    rep stosw                   ; what stosw needs. The count carries
-                                ; 39.14.11's two seam cells with it
-
+    mov cx, 4                   ; ...and the blank cell beside it, which
+    xor ax, ax                  ; nothing else zeroes: .lowbss is nobits. ES is
+    rep stosw                   ; still LOW_SEG and DI is font_zero, font_glyphs'
+                                ; end, from the copy above
     pop es
     pop ds
+    mov word [font_seg], LOW_SEG    ; ...and the table is the copy (SPEC.md 6):
+    mov word [font_base], font_glyphs ; DS is KERNEL_SEG again for the stores
     pop di
     pop si
     pop cx
     pop ax
     retf                        ; FAR: kmain reaches this through OVLCALL
 
+%if font_zero != font_glyphs + FONT_BYTES
+  %error "ovl_font_init clears font_zero straight off the end of its copy"
+%endif
 ovl_font_bits:
 %include "font8x8.inc"          ; GENERATED by tools/os88font.py from the
                                 ; fonts/*.f8 that FONT= named (-I build/)

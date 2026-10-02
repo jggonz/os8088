@@ -58,28 +58,21 @@ The toast is read out of `toast_buf` and not off the glass: it expires on a
 tick count (SPEC.md 59), so a settle long enough to be sure a load finished
 is long enough to lose it.
 
-WHY `nomem` EMPTIES THE FIRST NOTE FIRST, because it looks like a detour and
-is the only way the leg can be staged at all. Two 14,336-byte INSTANCES and
-one 16,384-byte document is 45,056 bytes of a 53,760-byte heap and fits; two
-instances with the document ALREADY GROWN does not leave a 14,336-byte RUN
-for the second region, whatever sheds, so the second Note Pad cannot be
-LAUNCHED and the row dies in ui.path with LD_ENOMEM before it reads a toast.
-That is the loader refusing on a full machine, which is honest and is
-tests/small128.py's subject rather than this row's. So File > New gives the
-manual back the way a person would - np_new resizes to NP_KB0 and a shrink
-cannot fail (SPEC.md 50.3.1) - and the 15,360 bytes that returns fund the
-second instance. The refusal then happens where it always did, in np_load's
-grow, against a largest run of about 11KB.
-
-It used to work without that, on 1,024 bytes of address arithmetic: the
-manual's claim landed HIGH (mem_regrow path 3, mem_hifit's highest fitting
-run) and left the low arena contiguous for the second region. It lands LOW
-now - path 2, an extend in place after a shed - because MEM_P_ICO's 2,048
-bytes sit below it and shedding them is what makes the in-place extension
-fit. Both placements are correct; which one happens is arithmetic, and the
-second instance was 1,024 bytes short of funding either way. Measured at
-0286f13b and at the icon store's landing, both maps in
-docs/plans/ICON-IDENTITY-PLAN.md.
+BOTH NOTE PADS ARE OPENED BEFORE ANYTHING IS LOADED, and that is what makes
+the first two legs and the last one about the mechanism rather than about
+this kernel's free-heap figure. A Note Pad INSTANCE is 14,336 bytes of
+region, the manual's claim is 16,384, FDLG.DRV takes 4KB for as long as the
+dialog is up (SPEC.md 38.0), and the 128KB machine's heap is 60.5KB: one
+instance and the dialog leave a 22KB run, so a lone Note Pad's grow FITS and
+sheds nothing - the row read `caches 24576 -> 24576` that way, its nomem leg
+funded the second document and printed a NOTE, and both legs had lost their
+subject the cycle kern_small's heap grew past the 53,760 bytes they were
+staged on. With the second instance standing the largest run is ~1KB, so the
+first grow can be funded only by a shed, and once it has been the second
+instance's grow cannot be funded at all - two regions, one 16KB document and
+the dialog are 49KB of 60.5 before the 16KB the second read wants. The old
+sequence emptied the first note with File > New to make room to LAUNCH the
+second; standing both up first needs no such step.
 
 **How to make it go red** (WRITING-TESTS 1, both re-run at the re-derivation):
 take the `call mem_shed_one` out of `mem_regrow.shed` and `loaded`, `shed`,
@@ -283,7 +276,11 @@ with os88ui.boot(_T.img("small360.img"), machine=MACHINE, limit=180) as ui:
     # no shed to make. Navigating A: is what claims MEM_P_VIEW and the
     # directory read-ahead, and it is also how a person gets to Note Pad.
     first = ui.path("A:/APPS/NOTEPAD.O88")
-    run, purge = heap("one Note Pad, caches warm")
+    second = ui.path("A:/APPS/NOTEPAD.O88")     # see the docstring: BOTH, first
+    if second.i == first.i:
+        sys.exit("regrowshed: the second launch fronted the first Note Pad "
+                 "instead of starting another - two regions is the staging")
+    run, purge = heap("two Note Pads, caches warm")
     st = npstate(first)
     print("    claim starts at %d bytes (np_capkb=%d)"
           % (st["np_cap"], st["np_capkb"]))
@@ -352,50 +349,21 @@ with os88ui.boot(_T.img("small360.img"), machine=MACHINE, limit=180) as ui:
 
     # 3. A REAL refusal, and what it is allowed to say. Two Note Pads cannot
     #    fund two 16KB documents on a 128KB machine, so the second's grow is
-    #    refused with every cache already shed.
-    #
-    #    FILE > NEW FIRST, AND IT IS NOT A CONVENIENCE - it is what makes this
-    #    leg stageable at all, and the arithmetic is worth writing down because
-    #    it moved under this row once already (the note below is the same
-    #    finding one leg up). A Note Pad INSTANCE is 14,336 bytes of region;
-    #    the manual's claim is another 16,384; and this machine's heap is
-    #    53,760 with ~11KB of it in caches that shed. Two regions and one
-    #    16KB document is 45,056 of it, which fits - two regions and the
-    #    document already grown does not leave a 14,336-byte RUN for the
-    #    second region, whatever sheds. So the second instance cannot be
-    #    launched at all while the first is holding the manual, and the row
-    #    would die in `ui.path` with LD_ENOMEM before it ever read a toast.
-    #
-    #    That is not this row's subject: the LOADER refusing a launch on a
-    #    full machine is honest and is tests/small128.py's ground. So the
-    #    first instance gives the manual back the way a person would - File >
-    #    New, which np_new answers with `np_resize(NP_KB0)` and a shrink that
-    #    cannot fail (SPEC.md 50.3.1) - and the 15,360 bytes that returns are
-    #    what funds the second instance. The refusal this leg is about then
-    #    happens where it always did, in np_load's grow, with the two regions
-    #    standing: the largest run is ~11KB against the 16,384 the read wants,
-    #    which is 5KB of margin rather than the 1KB of address arithmetic the
-    #    old sequence was riding on.
-    ui.raise_window(first)
-    ui.menu_pick("File", "New")
-    M.settle(m, limit=120)
-    st = npstate(first)
-    if st["np_capkb"] != 1:
-        sys.exit("regrowshed: File > New left the first note's claim at %d KB "
-                 "rather than NP_KB0 - the heap this leg needs was never "
-                 "given back (SPEC.md 27.15)" % st["np_capkb"])
-    heap("...the first note emptied")
-    second = ui.path("A:/APPS/NOTEPAD.O88")
-    run, purge = heap("a SECOND Note Pad")
+    #    refused with every cache already shed - which is why both instances
+    #    were opened before the first load (the docstring), and why there is
+    #    nothing to stage here.
+    run, purge = heap("before the second's load")
     t = open_file(second, "README.TXT", "nomem")
     st = npstate(second)
     if st["np_capkb"] >= 16:
-        check("nomem", t != "Too big",
-              "(the claim reached the ceiling after all, so this machine "
-              "COULD fund it - toast %r; the leg asserted only that the "
-              "sentence is not about the file)" % t)
-        print("    NOTE: the second instance was funded, so the refusal "
-              "this leg is about did not happen - largest run %d" % run)
+        # A LEG THAT HAS LOST ITS SUBJECT FAILS (WRITING-TESTS 1), as `toobig`
+        # does. This was a NOTE and a pass, and it stood green for the whole
+        # time the refusal was not happening.
+        check("nomem", False,
+              "(the second document was FUNDED - toast %r, largest run %d "
+              "before it - so no refusal happened for this leg to read; the "
+              "staging in the docstring no longer fills this machine)"
+              % (t, run))
     else:
         check("nomem", t == "No memory",
               "(toast %r with np_capkb=%d short of %d - a refused CLAIM must "

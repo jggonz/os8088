@@ -319,9 +319,9 @@ ico_core:
     mov [ico_x], cx
     mov [ico_y], dx
 
-    CLIPQ                        ; whole-icon against a background task's clip
-    je .noclip                  ; region, the font_char rule (SPEC.md 11.3):
-    mov ax, cx                  ; an icon is one shape or none
+    CLIPQ                        ; against an armed clip region (SPEC.md 11.3):
+    je .noclip                  ; whole-icon on kern_small, the font_char
+    mov ax, cx                  ; rule; one fragment's part on kern_big
     mov bx, dx
     mov cx, [ico_ww]            ; CX = 16 * wwords = the body's pixel width
     shl cx, 1                   ; (a "word" of an icon row is 16 pixels, not
@@ -333,9 +333,13 @@ ico_core:
     add dx, [ico_h]             ; DX is STILL y - nothing between the bank at
     dec dx                      ; `mov bx,dx` and here writes it - so y2 is
                                 ; one add rather than a load and an add
+%ifdef KERN_BIG
+    call ico_clip               ; ...and on kern_big its ROWS and COLUMNS
+%else                           ; inside one fragment (SPEC.md 11.3.5)
     call wm_clip_test
+%endif
     mov cx, [ico_x]
-    mov dx, [ico_y]
+    mov dx, [ico_y]             ; (ico_clip may have moved it)
     jc .none
 .noclip:
 
@@ -446,6 +450,132 @@ ico_core:
 .none:
     ret
 
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; ico_clip - which part of an icon may be drawn under the armed region?
+;            (SPEC.md 11.3.5)
+; in:  AX..DX = the icon's rect; SI -> its body; [ico_ww]/[ico_h]/[ico_x]/
+;      [ico_y] set; a region armed
+; out: CF = 1 draw nothing. CF = 0 draw from SI - which, whenever ONE
+;      fragment does not hold the whole icon, is ico_ibuf holding only the rows
+;      it does hold ([ico_h] and [ico_y] moved to say so), with every column
+;      outside it cleared from both tables
+; clobbers: AX, BX, CX, DX, DI, BP, ES (ico_core sets all of them afresh)
+;
+; 11.3.2's rows and 11.3.4's columns, for a 16- or 32-wide shape. Both passes
+; write only SET bits, so a column is clipped by clearing it from the mask
+; word and the data word alike - done once, into the stage, so the unclipped
+; path (`CLIPQ` / `je .noclip` above) pays nothing and the passes are
+; unchanged. Under the cull (11.3.3) the answer is wm_clip_rows' own, whole.
+;
+; THE STAGE IS ico_ibuf, and that is bounded by construction rather than by a
+; test: every record the kernel draws is at most ICO_IBUF_WW words by
+; ICO_IBUF_H rows - icon_draw_x refuses wider than one word and taller than
+; ICO_STAGE_H, the indexed kind is 32x32, icon_draw16 is 16x16 and the
+; kernel's own plain records are one word wide - so 2 x rows x 2 x words
+; is at most ICO_IBUF_SZ. The copy runs forward and never passes its source:
+; an indexed body IS ico_ibuf and a staged one starts two bytes into it.
+; -----------------------------------------------------------------------------
+ico_clip:
+    call wm_clip_rows           ; CF, [wm_clip_r0]/[wm_clip_rn], the winner
+    jc .ret
+    cmp byte [wm_dmg_cull], 0
+    jne .ret                    ; the cull draws a shape whole (CF = 0 here)
+    push si
+    mov bx, [wm_clip_wf]        ; the winning fragment, VIRTUAL coordinates
+    mov ax, [ico_x]
+    cmp byte [gfx_dnest], 0
+    je .v
+    add ax, [vid_ox]            ; (39.14.4, as wm_clip_rows itself translates)
+.v:
+    mov di, ico_cmw
+    mov bp, [ico_ww]
+    mov si, 0FFFFh              ; SI = the AND of every mask
+.m:
+    mov cx, [bx+WCR_X1]         ; d0: columns cut off this word's LEFT...
+    sub cx, ax
+    call .clamp
+    mov dx, 0FFFFh
+    shr dx, cl
+    mov cx, ax
+    add cx, 15
+    sub cx, [bx+WCR_X2]         ; ...d1 off its RIGHT
+    call .clamp
+    push ax
+    mov ax, 0FFFFh
+    shl ax, cl
+    and dx, ax                  ; (0FFFFh >> d0) & (0FFFFh << d1)
+    pop ax
+    mov [di], dx
+    and si, dx
+    inc di
+    inc di
+    add ax, 16
+    dec bp
+    jnz .m
+    inc si                      ; ZF = 1: no column is cut
+    pop si                      ; (`pop` writes no flag)
+    jnz .stage
+    cmp byte [wm_clip_r0], 0
+    jne .stage
+    mov al, [wm_clip_rn]
+    cmp al, [ico_h]
+    jne .stage                  ; equal leaves CF = 0: draw it as it is
+.ret:
+    ret
+.stage:
+    push ds
+    pop es
+    mov bx, [ico_ww]
+    shl bx, 1                   ; BX = bytes a row
+    mov ax, bx
+    mul word [ico_h]
+    xchg ax, bp                 ; BP = the mask table's size: data table's offset
+    mov al, [wm_clip_r0]
+    mul bl                      ; AX = the first drawn row's offset
+    add si, ax
+    mov di, ico_ibuf
+    mov dl, [wm_clip_rn]
+    push si
+    call .tab                   ; the drawn rows of the mask table...
+    pop si
+    add si, bp
+    call .tab                   ; ...and the same rows of the data table
+    mov al, [wm_clip_r0]
+    cbw                         ; (r0 and rn are under 128: ICO_IBUF_H)
+    add [ico_y], ax
+    mov al, dl
+    cbw
+    mov [ico_h], ax
+    mov si, ico_ibuf
+    clc
+    ret
+.tab:                           ; DL rows of [ico_ww] words, DS:SI -> ES:DI,
+    mov dh, dl                  ; each word ANDed with its column's mask
+.tr:
+    mov bx, ico_cmw
+    mov cx, [ico_ww]
+.tw:
+    lodsw
+    and ax, [bx]
+    stosw
+    inc bx
+    inc bx
+    loop .tw
+    dec dh
+    jnz .tr
+    ret
+.clamp:                         ; CX = a distance -> 0..16 in CL. 16 and not
+    jns .c0                     ; "16 or more": a 286 masks a shift count to
+    xor cx, cx                  ; five bits, so 256 would shift by 0 there
+.c0:
+    cmp cx, 16
+    jbe .c1
+    mov cl, 16
+.c1:
+    ret
+%endif
+
 %ifdef GFX_VGA
 ; -----------------------------------------------------------------------------
 ; ico_pass - one masked pass over [ico_rows] rows of [ico_ww] words each.
@@ -488,8 +618,10 @@ ico_pass:
     cmp word [ico_col], ROW_BYTES
     jae .b1
     out dx, al
-    mov al, [es:di]             ; load latches
-    mov [es:di], al
+    xchg [es:di], al            ; load latches and write back in ONE: xchg
+                                ; reads then writes, and every plane takes
+                                ; Set/Reset (GC1 = 0Fh) so the byte written
+                                ; is don't-care - font_char's latch idiom
 .b1:
     mov al, bl                  ; --- byte 1, column +1 ---
     or  al, al
@@ -497,8 +629,7 @@ ico_pass:
     cmp word [ico_col], ROW_BYTES-1
     jae .b2
     out dx, al
-    mov al, [es:di+1]
-    mov [es:di+1], al
+    xchg [es:di+1], al
 .b2:
     mov al, ah                  ; --- byte 2, column +2 ---
     or  al, al
@@ -506,8 +637,7 @@ ico_pass:
     cmp word [ico_col], ROW_BYTES-2
     jae .wnext
     out dx, al
-    mov al, [es:di+2]
-    mov [es:di+2], al
+    xchg [es:di+2], al
 .wnext:
     inc di                      ; next word of this row
     inc di
@@ -548,7 +678,7 @@ ico_core_bb:
     call ico_bbop_of            ; nowhere to put a grey)
     mov [ico_bbop], al
     mov si, [ico_datap]
-    call ico_pass_bb
+    jmp ico_pass_bb
 .none:
     ret
 
@@ -1163,4 +1293,7 @@ ico_wleft   resw 1              ; words left in the current row
 ico_x       resw 1              ; requested x
 ico_y       resw 1              ; requested y, clamped to 0 after top clip
 ico_bbop    resb 1              ; bb pass: 0 = or (white), 1 = and-not (black)
+%ifdef KERN_BIG
+ico_cmw     resw ICO_IBUF_WW    ; ico_clip: each icon word's column mask
+%endif
 section .text

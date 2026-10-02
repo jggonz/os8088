@@ -189,12 +189,9 @@ splf_anim:      call spl_anim
                                 ; screen's life, so the animation reaches the
                                 ; blob the same way every other kernel caller
                                 ; does
-splf_fill:      call spl_fill
-                retf            ; ...and SPEC.md 15.5's BOOTMARK beacon, which
-                                ; borrows the splash's byte-granular fill and
-                                ; is `.text`. os88ovlchk found this one: two
-                                ; near calls that were right for as long as
-                                ; both ends were in the same segment
+; (splf_fill, SPEC.md 15.5's BOOTMARK beacon's door into spl_fill, is gone:
+; the marker carries its own mark_fill since it stopped borrowing the blob -
+; kernel.asm says why - and the shim had no caller left)
 
 ; -----------------------------------------------------------------------------
 ; spl_tick - stage 2 calls this after every run it reads (SPEC.md 15).
@@ -521,9 +518,10 @@ spl_reset:
 ; -----------------------------------------------------------------------------
 spl_chrome:
     BLOBCALL vid_detect         ; the adapter probe happens HERE, before any
-    call KERNEL_SEG:spw_vid_apply ; other kernel module is even resident: the
-    call KERNEL_SEG:spw_vid_setmode; splash owns the first mode set, and kmain's
-                                ; vid_init later re-runs all three (SPEC 39.1)
+    mov bp, vid_apply           ; other kernel module is even resident: the
+    call KERNEL_SEG:spw_near    ; splash owns the first mode set, and kmain's
+    mov bp, vid_setmode         ; vid_init later re-runs all three (SPEC 39.1).
+    call KERNEL_SEG:spw_near    ; BP names the routine (viddet.inc's door)
 
 ; ...and the same chrome onto a mode SOMEBODY ELSE has just set. TWO callers
 ; enter here, and neither may re-run the three calls above:
@@ -587,7 +585,7 @@ spl_rechrome:
     loop .lrow
 
     mov ax, bx                  ; AX = the bar row again, for the row base
-    call KERNEL_SEG:spw_gfx_rowbase
+    call spl_rbase
     mov bx, [vid_cw]            ; x = (width - bar) / 2, in whole bytes: 22 at
     sub bx, SPL_BAR_PX          ; 640 (which is what SPL_BAR_ADR always was),
     mov cl, 4                   ; 27 at Hercules' 720
@@ -629,11 +627,25 @@ spl_rechrome:
     jmp spl_text                ; tail call
 
 ; -----------------------------------------------------------------------------
+; spl_rbase - gfx_rowbase from the blob: AX = row in, AX = its framebuffer
+;             offset out; CX and DX clobbered (gfx_rowbase's own contract), BP
+;             preserved. The kernel's one far door (viddet.inc's spw_near)
+;             takes the routine in BP, so the loader wraps it once here
+;             rather than loading BP at six call sites
+; -----------------------------------------------------------------------------
+spl_rbase:
+    push bp
+    mov bp, gfx_rowbase
+    call KERNEL_SEG:spw_near
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
 ; spl_cell - ES:DI = the first byte of a field BX cells wide, centred on the
 ;            screen, with its top on row AX.  clobbers: ax, bx, cx, es
 ; -----------------------------------------------------------------------------
 spl_cell:
-    call KERNEL_SEG:spw_gfx_rowbase
+    call spl_rbase
     push ax
     mov ax, [cs:spl_l_cx]
     mov cl, 2
@@ -653,7 +665,7 @@ spl_setdi:                      ; ...and the tail spl_spinadr shares: AX is a
 ; -----------------------------------------------------------------------------
 spl_spinadr:
     mov ax, [cs:spl_l_spn]
-    call KERNEL_SEG:spw_gfx_rowbase
+    call spl_rbase
     add ax, [cs:spl_l_spx]
     jmp short spl_setdi
 
@@ -1030,7 +1042,7 @@ spl_stars:
 ;               in: DS = KERNEL_SEG (it reads [vid_seg])
 ;               clobbers: ax, bx, cx, dx, di, es - and PRESERVES SI
 ;
-; Through spw_gfx_rowbase like every other row in this module, so CGA's bank
+; Through spl_rbase like every other row in this module, so CGA's bank
 ; interleave and Hercules' four are handled where they already are.
 ; -----------------------------------------------------------------------------
 spl_staradr:
@@ -1038,7 +1050,7 @@ spl_staradr:
     cbw                         ; SIGNED: two of the six sit ABOVE the logo box
     add ax, [cs:spl_l_spn]
     sub ax, SPL_STARCY          ; ...and a box starts five rows above centre
-    call KERNEL_SEG:spw_gfx_rowbase
+    call spl_rbase
     mov bx, ax
     mov al, [cs:spl_stdx]
     cbw                         ; ...signed too: four of the six are LEFT of it
@@ -1281,7 +1293,7 @@ spl_hline:
     mov si, dx                  ; SI = x2 (gfx_rowbase eats CX and DX)
     mov ax, bx                  ; AX = y
     mov bx, cx                  ; BX = x1 - gfx_rowbase preserves it
-    call KERNEL_SEG:spw_gfx_rowbase
+    call spl_rbase
     mov bp, ax                  ; BP = row base
 
     mov ax, bx
@@ -1336,7 +1348,7 @@ spl_hline:
 ;
 ; The same census as spl_hline's, one routine along: spl_rect calls this twice
 ; and needs y1 and y2 to survive between them (BX, and DX which
-; spw_gfx_rowbase eats).  x it reloads from SI, and SI this routine never
+; spl_rbase eats).  x it reloads from SI, and SI this routine never
 ; touches.
 ; -----------------------------------------------------------------------------
 spl_vline:
@@ -1348,7 +1360,7 @@ spl_vline:
     inc di                      ; DI = row count
     push cx                     ; CX = x, and gfx_rowbase eats CX
     mov ax, bx
-    call KERNEL_SEG:spw_gfx_rowbase
+    call spl_rbase
     mov bx, di                  ; BX = row count
     mov di, ax                  ; DI = row base
     pop cx

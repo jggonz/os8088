@@ -44,7 +44,11 @@ def run(card, machine, image):
             M.until(m, lambda _: active(), "shutdown confirmation", limit=60)
 
         def cancelled(retained=False):
-            M.until(m, lambda _: not active(), "shutdown cancellation", limit=10)
+            # The prompt closes before a confirmed shutdown flushes settings.
+            # Wait for the returning thunk to finish releasing its module too.
+            M.until(m, lambda _: not active() and
+                    bool(word(m, "mod_tab")) == retained,
+                    "shutdown cancellation and module lifetime", limit=30)
             before = word(m, "ticks")
             M.guest_sleep(m, .5)
             assert word(m, "ticks") != before, "Cancel stopped the scheduler"
@@ -80,17 +84,20 @@ def run(card, machine, image):
         ui.close(panel)
         M.until(m, lambda _: word(m, "mod_tab") == 0, "panel module release", limit=30)
 
-        # Inject a write-protected settings writer inside this private guest.
-        # Shutdown must return to the live desktop with the dirty flag intact.
-        m.write(S.linear("cp_wdirty"), b"\x01")
-        prompt()
-        error = eq["FERR_WPROT"]
-        m.write(seg() * 16 + offsets["cp_cfg_save"],
-                bytes((0xB8, error & 255, error >> 8, 0xF9, 0xC3)))
-        m.key("Enter")
-        cancelled()
-        assert m.read(S.linear("cp_wdirty"), 1) == b"\x01", "Failed save was forgotten"
-        assert m.read(S.linear("cp_dsave"), 1) != b"\x00", "Failed save was not reported"
+        if not SMALL:
+            # Only the big kernel persists SYSTEM.CFG (SPEC.md 51.5.3). The
+            # small writer is a one-byte RET beside the UI tail, not a file writer.
+            # Inject a write-protected settings writer inside this private guest.
+            # Shutdown must return to the live desktop with the dirty flag intact.
+            m.write(S.linear("cp_wdirty"), b"\x01")
+            prompt()
+            error = eq["FERR_WPROT"]
+            m.write(seg() * 16 + offsets["cp_cfg_save"],
+                    bytes((0xB8, error & 255, error >> 8, 0xF9, 0xC3)))
+            m.key("Enter")
+            cancelled()
+            assert m.read(S.linear("cp_wdirty"), 1) == b"\x01", "Failed save was forgotten"
+            assert m.read(S.linear("cp_dsave"), 1) != b"\x00", "Failed save was not reported"
 
         # Pending settings must be written before stopping the OS.
         m.write(S.linear("cp_wdirty"), b"\x01")

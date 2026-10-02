@@ -579,6 +579,13 @@ def item_leave(fl, c0, c_pre, close=True):
         assert not (m.read(0x417, 1)[0] & 8), "Alt release lost across the mode switch"
         # and back in: the title, records kept
         fl.put("xb_noflow", 0)
+        # xb_idle and xb_state both still hold the title we LEFT, so without
+        # this the wait below is true before the new title exists - and on
+        # the custom arm the re-entry reads EXBTRACK.DAT first (xb_game's
+        # xb_custom_load), the title flushes type-ahead before it draws, and
+        # the next Enter is typed into that load and thrown away. The title
+        # zeroes it itself and counts it only in its own key loop.
+        fl.put("xb_idle", 0, 2)
         m.key("Enter", up=False)
         M.pace(m, .05)
         m.key("Enter", down=False)
@@ -739,6 +746,9 @@ def pad_script(seed, steps):
 
 AI_STEPS = 5000
 RING = 256
+XA_BEHIND = 110                 # apps/excitebike/const.inc: a respawn behind the rider
+XA_SNAP = 24                    # xa_place's walk to plain ground, in columns at most
+PLAIN_LAST = X.PLAIN_IDS - 1    # EXBCOL_PLAIN_C: the last plain column id
 
 
 def ai_arm(tag, steps=AI_STEPS, course=3, flag=1):
@@ -792,8 +802,43 @@ def ai_arm(tag, steps=AI_STEPS, course=3, flag=1):
         samples = [0]
         viol = []
         seen_resp = [0]
+        cid = list(g.rd("xb_cid", ncols))
+        placed = {}                 # opponent -> where xa_place put it
+
+        def on_place(mm):
+            """A RESPAWN, caught at xa_place's entry with AX = the target pixel.
+
+            The target is checked against xa_respawn's rule exactly - the
+            player's pixel plus [xa_ahead] (which is 215 on VGA and CGA and
+            255 on Hercules, SPEC.md 102.7) or less XA_BEHIND, clamped at the
+            course's start - and where xa_place WILL put the rider is derived
+            by its own rule: on to the first plain column at or after the
+            target, at most XA_SNAP columns on. A fixed window round the
+            screen's edge was the earlier form, and it was a function of the
+            game's SEED: a snap of more than a few columns, or any snap on the
+            Hercules, fell outside it."""
+            ax = mm.regs()["ax"]
+            ppx = g.w("xa_ppx")
+            ahead = g.w("xa_ahead")
+            i = (g.w("xa_cur") - sym["xa_recs"]) // 16
+            d = ((ax - ppx + 32768) & 0xFFFF) - 32768
+            if not (d == ahead or d == -XA_BEHIND or (ax == 0 and ppx < XA_BEHIND)):
+                viol.append("frame %d opponent %d: respawn target %d pixels from the player "
+                            "(the rule is +%d or -%d)" % (frames[0], i, d, ahead, XA_BEHIND))
+            pmax = struct.unpack("<H", mm.read(g.a("xm_posmax") + 1, 2))[0]
+            ax = min(ax, pmax)
+            col = (ax >> 3) + P["COL_AHEAD"]
+            for _ in range(XA_SNAP):
+                if col >= ncols or cid[col] <= PLAIN_LAST:
+                    break
+                col += 1
+            placed[i] = (min((col - P["COL_AHEAD"]) << 3, pmax),
+                         struct.unpack("<H", mm.read(g.a("xb_tsi"), 2))[0])
 
         def on_hit(mm, rec):
+            if rec["addr"] == place_at:
+                on_place(mm)
+                return None
             feed(mm)
             frames[0] += 1
             if frames[0] % 2:
@@ -838,14 +883,15 @@ def ai_arm(tag, steps=AI_STEPS, course=3, flag=1):
                 else:
                     d["hi"] = 0
                 if resp != d["resp"]:
-                    ppx = struct.unpack("<H", mm.read(g.a("xm_pos") + 1, 2))[0]
-                    dx = ((px - ppx + 32768) & 0xFFFF) - 32768
-                    # a respawn puts the opponent at the screen's edge: 110 behind the player or 215
-                    # ahead (a column snaps it on to plain ground: up to 24 columns = 192 pixels on)
-                    # and a couple of frames of riding since
-                    if not (-150 <= dx <= -60 or 200 <= dx <= 260 or px >= (8 * ncols - 112) - 4
-                            or px <= 8):                  # (the course's start is as far back as it goes)
-                        bad("respawned %d pixels from the player" % dx)
+                    # ...and here, a sample on, it is where on_place said it would be plus the
+                    # riding of the steps since, at SPD_MAX (8.8 pixels a step) at the most
+                    want, tsi0 = placed.pop(i, (None, 0))
+                    ride = (steps_now - tsi0 + 1) * ((P["SPD_MAX"] + 255) >> 8)
+                    if want is None:
+                        bad("respawned with no xa_place seen")
+                    elif not 0 <= px - want <= ride:
+                        bad("respawned at %d, %+d from where xa_place puts it (%d)"
+                            % (px, px - want, want))
                     seen_resp[0] += resp - d["resp"]
                     d["resp"] = resp
                     d["px"] = None
@@ -866,7 +912,8 @@ def ai_arm(tag, steps=AI_STEPS, course=3, flag=1):
                 else:
                     d["px"] = px
             return None
-        with M.bp_trace(m, g.a("xb_presented"), on_hit=on_hit, cap=steps + 1200) as tr:
+        place_at = g.a("xa_place") & 0xFFFFF
+        with M.bp_trace(m, g.a("xb_presented"), place_at, on_hit=on_hit, cap=steps + 1200) as tr:
             tr.until(lambda: g.b("xb_tpause") == 1 or tr.overflowed, "%d steps" % steps, limit=1500)
         assert not tr.overflowed, "the trace buffer overflowed"
         assert g.b("xb_error") == 0

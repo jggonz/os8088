@@ -100,6 +100,8 @@ hd_dev_row:
 ; stays unchecked because hd_dev_new must reach the row AT [hd_ndev] to fill
 ; it before the count is raised.
 ; -----------------------------------------------------------------------------
+%ifndef HD_TOOL                 ; the resident's service handlers are its
+                                ; only callers
 hd_dev_row_ck:
     cmp al, [hd_ndev]
     jae .no
@@ -109,6 +111,7 @@ hd_dev_row_ck:
 .no:
     stc
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; hd_chs - a 32-bit LBA as CHS, for the geometry in DI (module internal)

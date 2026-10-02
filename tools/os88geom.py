@@ -152,6 +152,9 @@ _MIRROR = {
     # gate blob at it, and tests/unit/t_kdapi.py scans the assembled images
     # for far calls carrying it as a segment (SPEC.md 96.44.6).
     "KD_SEG": ("kernel/hiber.inc", 0x0060),
+    # kernel/diskw.inc - the copy engine's "it will not fit" (SPEC.md 22.5.2),
+    # read back out of [fcp_err] by tests/fcpcopy.py and tests/fcproom.py.
+    "FERR_FULL": ("kernel/diskw.inc", 6),
     "DRVR_SEG": ("kernel/driver.inc", 2),
     "W_FLAGS": ("kernel/wm.inc", 0),
     "W_X": ("kernel/wm.inc", 2),
@@ -206,6 +209,15 @@ _MIRROR = {
     "DESK_ZW": ("kernel/desk.inc", 32),
     "DESK_COLW": ("kernel/desk.inc", 44),
     "DESK_ZOVER": ("kernel/desk.inc", 2),
+    # ...and the ONE CELL every desktop item sits in (SPEC.md 26.9), per arm:
+    # kern_small's is the drive zone it always was, kern_big's a shortcut's
+    # twelve-glyph caption wide
+    "DESK_CW": ("kernel/desk.inc", {"big": 96, "small": 32}),
+    "DESK_PX": ("kernel/desk.inc", {"big": 102, "small": 44}),
+    "DSL_SLOT": ("kernel/desk.inc", 0x3F),
+    "DSL_GONE": ("kernel/desk.inc", 0x80),
+    # kernel/desksc.inc - one LINK row, which is OSAPI_DESK_ITEM's record too
+    "SC_REC": ("kernel/desksc.inc", {"big": 128}),   # OS88_SHORTCUTS: big only
     # kernel/disk.inc - the volume table (SPEC.md 18.7)
     # PER ARM (SPEC.md 51.0): kern_small can load no driver, so it can have no
     # DVK_DRV volume, so every volume it will ever have is one of the four
@@ -914,42 +926,38 @@ def tile_xy(m, win, sym=None):
 
 
 def drive_ordinal(m, letter="B", sym=None):
-    """Which desktop ZONE does drive `letter` own? None if it has none.
+    """Which desktop CELL is drive `letter` shown in? None if it is not shown.
 
-    NOT the drive number. A zone exists per volume with DV_FLAGS bit 0 set and
-    the ordinal is that volume's POSITION among the shown ones - so a machine
-    whose B: was retired by SPEC.md 18.97's probe, or which mounts a hard
-    disk, numbers them differently. Walking dsk_vtab is the only way to be
-    right, and it turns "no window opened" into "B: has no zone", which is the
-    difference between a test that fails and a test that says why.
+    NOT the drive number, and since SPEC.md 26.9 not a position you can count
+    either: every desktop item - volume, service item, shortcut - is a zone
+    with one byte of `desk_zslot` naming its cell, and a drive packs round
+    whatever is placed in the grid. So the table is read, which also turns
+    "no window opened" into "B: has no cell", the difference between a test
+    that fails and a test that says why. The name stays for its callers.
     """
     want = ord(letter.upper()) - ord("A") if isinstance(letter, str) else letter
-    t = m.read(_sym(m, sym)("dsk_vtab"), DVOL_MAX * DV_SIZE)
-    n = 0
-    for v in range(DVOL_MAX):
-        r = t[v * DV_SIZE:(v + 1) * DV_SIZE]
-        if r[DV_KIND] == DVK_FREE or not (r[DV_FLAGS] & 1):
-            continue
-        if v == want:
-            return n
-        n += 1
-    return None
+    if not 0 <= want < DVOL_MAX:        # a letter no volume row can have: the
+        return None                     # byte past the volumes is the Wire's
+    v = m.read(_sym(m, sym)("desk_zslot") + want, 1)[0]
+    if v >= DSL_GONE:
+        return None
+    return v & DSL_SLOT
 
 
 def drive_xy(m, ordinal, sym=None):
-    """The centre of zone `ordinal`, in virtual screen coordinates.
+    """The centre of cell `ordinal`'s PICTURE, in virtual screen coordinates.
 
-    desk_ord_xy's arithmetic (SPEC.md 26.1): zones fill a column downwards and
-    wrap to a NEW COLUMN ON THE LEFT, and how many fit is [desk_rows] - 2 on a
-    CGA with the tall icon, 4 with SPEC.md 26.4's square one, 4 on Hercules,
-    7 on VGA. The pitch and the zone's height are live words for that reason.
+    desk_cell_xy's arithmetic (SPEC.md 26.9): cell 0 is the top of the
+    rightmost column, [vid_desk_zx]; cells fill a column downwards and then
+    the next column to the LEFT, DESK_PX apart, [desk_rows] to a column. The
+    picture is the 32-wide column in the middle of a DESK_CW cell.
     """
     rows = word(m, "desk_rows", sym)
     step = word(m, "desk_zstep", sym)
     zh1 = word(m, "desk_zh1", sym)
     zx = word(m, "vid_desk_zx", sym)
     col, row = divmod(ordinal, rows)
-    return (zx - col * DESK_COLW + DESK_ZW // 2,
+    return (zx - col * DESK_PX + (DESK_CW - DESK_ZW) // 2 + DESK_ZW // 2,
             DESK_ZY0 + row * step + zh1 // 2)
 
 

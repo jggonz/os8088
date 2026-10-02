@@ -27,8 +27,9 @@ twenty:
 
   4. **`Write Img...`** as far as this machine can take it (SPEC.md 18.99.8).
      The round trip is NOT here: a 360KB disk's image is 720 sectors and a
-     360KB volume's data area is 708, so on the only floppy geometry MartyPC's
-     os8088 machines have there is nowhere to put one.  Everything up to the
+     360KB volume's data area is 708, so on this machine's two 360KB drives
+     there is nowhere to put one. `tests/wimgtrip.py` is the round trip, on
+     a machine with a 720KB B:.  Everything up to the
      transfer is here - the item, the dialog, and that a CANCEL puts the
      machine back exactly as it found it, which is the half SPEC.md 22.21.5
      says the command is built around.
@@ -287,10 +288,10 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
           "...and the machine is still answering afterwards", "")
 
     # --- 5. Write Img..., and what it refuses (SPEC.md 18.99.8) -------------
-    # THE ROUND TRIP IS NOT TESTED HERE AND CANNOT BE: an image of a 360KB
-    # disk is 720 sectors and a 360KB volume's data area is 708, so on the
-    # only floppy geometry MartyPC's machines have (`pcxt_2_360k_floppies`,
-    # every os8088 config in ibm5150.toml) there is nowhere to put one. What
+    # THE ROUND TRIP IS NOT TESTED HERE: an image of a 360KB disk is 720
+    # sectors and a 360KB volume's data area is 708, so on this machine's
+    # `pcxt_2_360k_floppies` there is nowhere to put one. tests/wimgtrip.py
+    # is the round trip, on os8088_5150_cga_720b_gla's 720KB B:. What
     # IS on this machine is every part of the command up to the transfer -
     # the menu item, the resident thunk, fdlg_open's fence, the completion
     # proc, the module load and the geometry table - and the refusal exercises

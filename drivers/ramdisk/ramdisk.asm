@@ -217,6 +217,7 @@ rd_detach:
 %include "rdfsv.inc"
 %include "rdimg.inc"
 %include "rdpage.inc"
+%include "os88rseq.inc"         ; os88_rseq: READ_AT's registers, READ_SEQ's walk
 
 ; =============================================================================
 ; THE SEED TREE - `make ramseed` only (SPEC.md 62.9.5.1)
@@ -595,6 +596,9 @@ rd_io_n:    dw 0                ; ...and how much of it this piece moves
 rd_pos:     dw 0, 0             ; how far a preserve or a load has got
 rd_ilen:    dw 0                ; ...and one chunk's length, banked across a
                                 ; file slot whose CX is an argument
+rd_itok:    dw 0                ; the image's WRITE_SEQ token (SPEC.md 18.4.9)
+rd_rcur:    times FSEQ_SIZE db 0 ; ...and the Load's READ_SEQ cursor (SPEC.md
+                                ; 18.4.8.1), zeroed at every Load
 rd_wseg:    dw 0                ; the metadata block's buffer...
 rd_wown:    db 0                ; ...and whether it is ours to free
 rd_badcode: db 0                ; rd_meta_check's verdict

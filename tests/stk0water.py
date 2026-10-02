@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88marty as M                                        # noqa: E402
 import os88sym                                               # noqa: E402
 from os88mouse import Mouse                                  # noqa: E402
+import os88geom                                              # noqa: E402
 from os88geom import WIN_SIZE, MAX_WIN                        # noqa: E402
 import struct                                                # noqa: E402
 
@@ -115,11 +116,7 @@ with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
 
     # --- drive it as hard as this harness can ------------------------------
     mo = Mouse(marty=m)
-    vw = int.from_bytes(m.read(S("vid_w"), 2), "little")
-    step = int.from_bytes(m.read(S("desk_zstep"), 2), "little")
-    h1 = int.from_bytes(m.read(S("desk_zh1"), 2), "little")
-    dy = 32 + step + h1 // 2
-    mo.dblclick(vw - 40, dy); M.settle(m)                     # a Disk window
+    mo.dblclick(*os88geom.drive_pt(m, "B", S)); M.settle(m)   # a Disk window
     w = wins(m, S)
     if w:
         x, y = w[-1][0] + w[-1][2] // 2, w[-1][1] + 9

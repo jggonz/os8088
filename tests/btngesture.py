@@ -53,7 +53,7 @@ syms = pkg_syms()
 with os88ui.boot(ROOT + "/build/os8088-360.img",
                  apps=ROOT + "/build/apps360.img") as ui:
     m, mo = ui.m, ui.mo
-    w = ui.path("A:/APPS/TELNET.O88")
+    w = ui.path("B:/APPS/TELNET.O88")
     seg = u16(m.read(os88geom.winptr(m, w.i, ui.sym) + os88geom.W_SEG, 2))
     ui.settle()
 

@@ -212,8 +212,10 @@ scales: `ETHER.DRV` is bigger.
 
 ## 6. The WRITE side: an append walks the whole chain, every call
 
-**Status: OPEN, not started - written down 2026-09-27 at the owner's
-request, from the VIDDISK work that found it.** §3.1 is about READS looking
+**Status: BUILT as SPEC.md 18.4.9 (`OSAPI_FILE_WRITE_SEQ`), and every
+chunked writer in the tree but the DOS box moved onto it; the box is
+docs/plans/completed/DOS-STREAM-PLAN.md.** Written down 2026-09-27 at the owner's
+request, from the VIDDISK work that found it. §3.1 is about READS looking
 a name up again. This is the same shape on the way OUT, and on a large file
 it is the bigger of the two, because it grows with the file.
 
@@ -252,6 +254,7 @@ disk - before any file was large enough for step 2 to matter.
 | FTPD `STOR` (`fd_do_write`, `apps/ftpd/ftpd.asm`) | `OSAPI_FILE_WRITE` then `OSAPI_FILE_APPEND` per 8 KB stage (`FD_STGSZ`) | a 5 MB upload is 640 appends averaging 2.5 MB of walk: **~230 s of walking**, against ~340 s to receive 5 MB at FTP-PERF's ~15 KB/s. By the end each 8 KB commit carries ~0.7 s of walk against ~0.5 s to receive it - which is the "horribly slow on a large file" the owner reports |
 | FTPD `RETR` (`fd_do_read`) | `OSAPI_FILE_READ_AT` per chunk | the READ side of the same thing, and it needs NO kernel change: `OSAPI_FILE_READ_SEQ` already exists (kern_big, which is the only kernel FTPD ships for - there is no NIC on kern_small) |
 | VIDDISK `W` (`tests/vidbench/viddisk.asm`) | 400 x 32 KB appends, 12.5 MB | ~355 s of walking in all, most of it at the end |
+| Tracker's render to disk (docs/plans/completed/SPEAKER-PCM-PLAN.md §9, W5 - NOT BUILT, waiting on this) | a song's speaker counts, one byte a sample: BEVERLY.MOD is 2.6 MB at 5,512 Hz and 3.8 MB at 8,000 | in 16 KB appends ~30 s and ~65 s of walking against a 4-6 minute render on a 5150, growing with the song's length. The owner put THIS fix first: the render is built on `WRITE_SEQ`, not on `APPEND` |
 | the file manager's copy (SPEC.md 22.5), the installer's big files (52.10.11), any package saving more than its buffer | chunked write | as above, per its chunk; the copy's inner path is kernel-side and should be checked rather than assumed |
 
 **VIDDISK's W row is MEASURED now** (docs/reports/VIDDISK-ST225-2026-09-27.md):

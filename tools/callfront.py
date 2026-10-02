@@ -25,7 +25,7 @@ content - the partial restore is very nearly a whole one and the bank comes out
 nearly clean. It takes a third window, overlapping both partially, to leave a large
 region of a covered window's content untouched.
 
-Every step is derived from the guest (wm_wins / wm_zord / desk_ord_xy), so it runs
+Every step is derived from the guest (wm_wins / wm_zord / desk_zslot), so it runs
 on any adapter; the report is Hercules, which is the default here. It captures
 after EVERY step, so `rawdiff show` names the step that broke rather than only the
 end state, and prints the z-order and the rects beside each - because the first

@@ -170,6 +170,8 @@ hd_slot_extent:
     xor ax, ax                  ; no hole found yet
     mov [hd_xblen], ax
     mov [hd_xblen+2], ax
+    mov [hd_xsum], ax
+    mov [hd_xsum+2], ax
     mov [hd_xbest], ax
     mov [hd_xbest+2], ax
     mov ax, [di+HDD_SPT]        ; the floor: one track in, which is where
@@ -191,6 +193,8 @@ hd_slot_extent:
     sub ax, [hd_xstart]
     sbb dx, [hd_xstart+2]
     jc .step                    ; the candidate is past the limit: nothing here
+    add [hd_xsum], ax           ; every hole, for the drive map (52.2.8)
+    adc [hd_xsum+2], dx
     cmp dx, [hd_xblen+2]        ; bigger than the best so far? A tie keeps the
     ja .take                    ; EARLIER hole, which is the one that leaves
     jb .step                    ; the later space contiguous
@@ -250,6 +254,25 @@ hd_slot_extent:
     pop ax
     stc
     ret
+
+; -----------------------------------------------------------------------------
+; hd_slot_hole - the free-slot walk with NO slot excused (SPEC.md 52.2.8)
+; in:  DI = the device row
+; out: as hd_slot_extent for a free slot - CF = 0 and [hd_fbase]/[hd_fsecs] =
+;      the largest hole a Format would take, CF = 1 = none; and [hd_xsum] =
+;      every hole's sectors either way
+; clobbers: flags
+;
+; hd_xslot = FFh matches no slot, so every used entry is a wall: this is the
+; answer for "a new partition", whichever slot is selected.
+; -----------------------------------------------------------------------------
+hd_slot_hole:
+    push ax                     ; hd_slot_extent's own four, which its exits
+    push cx                     ; pop
+    push dx
+    push si
+    mov byte [hd_xslot], 0xFF
+    jmp hd_slot_extent.fresh
 
 ; -----------------------------------------------------------------------------
 ; hd_fsecs_min - [hd_fsecs] becomes the smaller of itself and DX:AX
@@ -719,6 +742,7 @@ hd_xlimit:   dd 0               ; how far it may run,
 hd_xend:     dd 0               ; one entry's end,
 hd_xbest:    dd 0               ; and the largest hole the walk has seen
 hd_xblen:    dd 0               ; (52.2.1)
+hd_xsum:     dd 0               ; ...and every hole it saw, summed (52.2.8)
 hd_fbase:    dd 0               ; the extent a format will write: its first LBA
 hd_fsecs:    dd 0               ; ...and its length, in 32 bits since SPEC.md
                                 ; 18.7.5

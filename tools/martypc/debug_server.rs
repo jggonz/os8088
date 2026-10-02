@@ -220,6 +220,27 @@ fn disks(machine: &mut Machine) -> Value {
     json!({"ok": true, "drives": out})
 }
 
+/// Put another image in a floppy drive while the machine RUNS - a disk swap.
+///
+/// `mount_floppy` was only ever called at startup, so a scripted session
+/// could not change a floppy under a running guest, and every test of a
+/// feature that asks for the next disk had to fake it (SPEC.md 22.23.6's
+/// Uncompress To... is the first that cannot be faked: it asks). The drive
+/// has no change line on an XT, so the guest learns of the swap the way a
+/// real one does - the motor has stopped (SPEC.md 18.9.1) - and the caller
+/// must let it stop before answering the prompt.
+fn mount_cmd(machine: &mut Machine, req: &Value) -> Value {
+    let drive = req.get("drive").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let path = match req.get("path").and_then(Value::as_str) {
+        Some(p) => PathBuf::from(p),
+        None => return err("mount wants a path"),
+    };
+    match mount_floppy(machine, drive, &path) {
+        Ok(()) => json!({"ok": true, "drive": drive, "path": path.display().to_string()}),
+        Err(e) => err(&e),
+    }
+}
+
 /// Write a drive's live image out to a file on the host.
 ///
 /// This is the eframe frontend's `GuiEvent::SaveFloppyAs` - the same
@@ -759,6 +780,7 @@ impl DebugServer {
             "key" => key(machine, &req),
             "mouse" => mouse(machine, &req),
             "disks" => disks(machine),
+            "mount" => mount_cmd(machine, &req),
             "flush" => flush(machine, &req),
             "history" => json!({"ok": true, "history": machine.cpu().dump_instruction_history_string()}),
             "callstack" => json!({"ok": true, "callstack": machine.cpu().dump_call_stack()}),

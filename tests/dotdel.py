@@ -72,7 +72,9 @@ import os88geom as G                                        # noqa: E402
 import os88marty                                            # noqa: E402
 import os88ui                                               # noqa: E402
 
-PKG = "B:/GAMES/DOTDEL.O88"
+# games360.img, where a package sits at the ROOT (SPEC.md 24.6): the 360KB
+# apps disk no longer carries it (93.13).
+PKG = "B:/DOTDEL.O88"
 
 # The three adapters, with the tile SPEC.md 93.3's table says each should get
 # in a window on a 360KB machine. VGA is an XT with a VGA card; the two 1bpp
@@ -195,6 +197,24 @@ def screen(m):
 
 TT_WALL, TT_DOT, TT_PILL, TT_DOOR = 0, 2, 3, 4
 G_COLS, G_ROWS = 28, 31          # DD_COLS x DD_ROWS, the classic grid
+
+# THE POINTER IS PARKED BEFORE THE GLASS IS READ AGAINST THE BOARD. The arrow
+# is drawn by the mouse ISR over whatever is under it, and `ui.path` leaves it
+# where it double-clicked DOTDEL.O88 - which on the 360KB disk is (164,129),
+# INSIDE the board the window opens over. Its black outline then reads as
+# wall ink gone (leg G: 10 pixels in tiles (3,9) and (4,9)) and its white fill
+# as a wall in an actor's pen (tests/ddcorner.py: (30..35, 81..84)), which is
+# the cursor and not the maze. The desktop's top-left under the menu bar is
+# outside every window this row opens, on all three adapters
+# (tests/dispcorner.py's own parking space). Parking AFTER the board has been
+# drawn under the arrow keeps the one real question the arrow raises: a stale
+# save-under would leave the maze broken where it stood, and that still reads.
+PARK = (4, 24)
+
+
+def park(ui):
+    ui.mo.to(*PARK)
+    os88marty.pace(ui.m, 0.4)       # the ISR's restore lands on the glass
 
 
 def _lit(d, w, h, per, x0, y0, x1, y1):
@@ -364,17 +384,15 @@ def leg_g(tag, ui, p, say):
     """
     m = ui.m
     fail = []
-    m.pause()
-    m.write((p.seg << 4) + p.names["dd_lives"], bytes([99]))
-    st = p.b("dd_state")
-    m.go()
-    if st == 0:                         # a game that ended: start another
-        m.key("Enter")
-        try:
-            os88marty.until(m, lambda _: p.b("dd_state") != 0,
-                            "a new game to start", poll=0.2, limit=20)
-        except os88marty.MartyError:
-            pass
+    # PLAYING FIRST, by settle_playing's loop and not by one Enter. A single
+    # Enter typed while the title is between its own key reads is lost, the
+    # wait that followed it was swallowed, and the leg then compared the
+    # board PICTURE against the TITLE on the glass: 973 of 2,698 "missing"
+    # on a Hercules, which is the game's input timing and not its maze.
+    if not settle_playing(m, p):
+        return ["%s: the game never reached PLAYING (dd_state %d), so there "
+                "is no board on the glass to read" % (tag, p.b("dd_state"))]
+    park(ui)                        # legs H and I read with it parked too
     # ...and let the cast cross some corners, over the GAME'S OWN CLOCK. A
     # host sleep here hands a loaded lane a third less play (incident 54), and
     # what this leg wants is TURNS TAKEN - the corner tile only enters a band
@@ -879,7 +897,7 @@ def run_arm(tag, machine, want_tile, a, say, floor=FPS_FLOOR):
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--apps", default="build/games360.img")
     ap.add_argument("--arm", default=None,
                     help="one of vga, cga, herc (default: all three)")
     a = ap.parse_args(argv)

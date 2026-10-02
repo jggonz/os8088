@@ -13,15 +13,16 @@ so what is asserted is the machine's own state, read off the guest:
   1. the clip - 22,050 Hz PCM8 as speaker counts, N = 54 - opens UNMUTED
      (only an 8086-class CPU mutes past VP_SPKMAX) and its sound goes to
      the SPEAKER ([vp_snd] = 2, no card here);
-  2. mid-play, the door is OPEN (the kernel's spk_isr names the player's
+  2. mid-play, the door is OPEN (the kernel's spk_seg names the player's
      segment) and the rate divisor it set is a whole number of 54-count
      pulses - the door took N = 54;
   3. the ring is played from: its CONS word moves while the play runs;
   4. every frame is drawn, and the kernel is left as it was (channel 2
      nobody's, no sample ISR).
 
-Broken on purpose - SPK_NMIN_AT back to 74 in kernel/snd.inc - the door
-refuses N = 54 and step 1's [vp_snd] is not 2.
+Broken on purpose - os88spk_init's `cmp al, 48` back to 74 in apps/os88spk.inc
+(the door no longer checks N: SPEC.md 34.11.1) - the library refuses N = 54
+and step 1's [vp_snd] is not 2.
 """
 import atexit
 import math
@@ -200,7 +201,7 @@ def main():
         wait(lambda: rb("vp_ready") == 1, "the play to start", 30)
         wait(lambda: rw("vp_done") >= 10, "ten frames", 60)
         snd = rb("vp_snd")
-        isrseg = u16(q.read(S("spk_isr") + 2, 2))
+        isrseg = u16(q.read(S("spk_seg"), 2))
         rdiv = u16(q.read(S("sch_rdiv"), 2))
         aseg = rw("vp_aseg")
         c0 = u16(q.read((aseg << 4) + VP_RL + 2, 2)) if aseg else 0
@@ -210,7 +211,7 @@ def main():
               % ({2: "THE SPEAKER", 0: "nothing"}.get(snd, "?"), snd))
         if snd != 2:
             bad.append("1: the sound is not the speaker's ([vp_snd] %d)" % snd)
-        print("   2: the door %s (spk_isr's segment %04x, the player's %04x);"
+        print("   2: the door %s (spk_seg %04x, the player's %04x);"
               " the rate divisor %d = %d pulses of %d%s"
               % ("OPEN" if isrseg == seg else "not the player's", isrseg,
                  seg, rdiv, rdiv // n, n,
@@ -229,7 +230,7 @@ def main():
              "the play to end", 120)
         st = (rw("vp_done"), rw("vp_stall"), rb("vp_err"))
         ch2 = q.read(S("snd_ch2mode"), 1)[0]
-        isr = u16(q.read(S("spk_isr") + 2, 2))
+        isr = u16(q.read(S("spk_seg"), 2))
         print("   4: drew %d of %d, stalls %d, error %d; after it channel 2's "
               "owner mode %d, the sample ISR's segment %04x"
               % (st[0], r.frames, st[1], st[2], ch2, isr))

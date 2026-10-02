@@ -232,14 +232,10 @@ def herc(a):
         os88marty.no_saver(m)
         check(word(m, "mod_r_dock") == 0, "basic Dock boots without a module")
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_panel(m, mo, S, os88marty.settle, page=None)
+        dispcp.open_panel(m, mo, S, os88marty.settle, page=dispcp.CP_IDOCK)
         wx, wy = dispcp._cp_win(m, S)
-        row = byte(m, "cp_nst") - 1     # Dock is the LAST static record and
-                                        # is never hidden (SPEC.md 31.13)
-        mo.click(wx + 1 + 6 + 30, wy + TITLE_H + 1 + 6 + row * 14 + 7,
-                 settle=0)
         os88marty.settle(m)
-        print("   panel at (%d,%d), Dock is row %d" % (wx, wy, row))
+        print("   panel at (%d,%d), on the Dock page" % (wx, wy))
 
         for cfg in (P_LEFT, P_RIGHT, P_BOTTOM, P_LEFT | F_AUTO,
                     P_BOTTOM | F_AUTO, P_RIGHT | F_AUTO):
@@ -331,11 +327,8 @@ def cga(a):
         os88marty.no_saver(m)
         check(word(m, "mod_r_dock") == 0, "basic Dock boots without a module")
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_panel(m, mo, S, os88marty.settle, page=None)
+        dispcp.open_panel(m, mo, S, os88marty.settle, page=dispcp.CP_IDOCK)
         wx, wy = dispcp._cp_win(m, S)
-        row = byte(m, "cp_nst") - 1
-        mo.click(wx + 1 + 6 + 30, wy + TITLE_H + 1 + 6 + row * 14 + 7,
-                 settle=0)
         os88marty.settle(m)
         click_row(m, mo, CPK_R0Y + CPK_ROWH)            # Left
         check(byte(m, "dock_cfg") == P_LEFT, "CGA: Left is accepted")

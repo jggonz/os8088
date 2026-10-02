@@ -53,8 +53,8 @@ CYL = H * S
 
 # tool.inc's geometry, content-relative
 HTW_LX, HTW_R0Y, HTW_ROWH = 4, 22, 12
-HTW_SZY, HTW_SZBX, HTW_SZBW = 78, 38, 46
-HTW_BY, HTW_BH, HTW_B0X, HTW_BW0 = 96, 16, 4, 64
+HTW_SZY, HTW_SZBX, HTW_SZBW = 106, 38, 46
+HTW_BY, HTW_BH, HTW_B0X, HTW_BW0 = 124, 16, 4, 64
 HDP_B0X, HDP_BW0 = 2, 64            # cppage.inc: the page's Format button
 
 
@@ -107,10 +107,11 @@ def line_says(m, mo, tx, ty, tab, box, typed, total, shot=None):
     rows = IR.screen(m)[2]
     if shot and os.environ.get("OS88_SHOT"):
         from PIL import Image
-        img = Image.new("L", (320, 150))
+        h = min(180, len(rows) - (ty - 14))     # CGA: the screen ends first
+        img = Image.new("L", (320, h))
         img.putdata([255 * rows[ty - 14 + y][tx - 2 + x]
-                     for y in range(150) for x in range(320)])
-        img.resize((960, 450)).save(os.path.join(os.environ["OS88_SHOT"],
+                     for y in range(h) for x in range(320)])
+        img.resize((960, 3 * h)).save(os.path.join(os.environ["OS88_SHOT"],
                                                  shot + ".png"))
     ink = IR.render(box + ("_" if typed else ""), tab)
     if not typed:

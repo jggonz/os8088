@@ -119,18 +119,19 @@ def main(argv):
     a = ap.parse_args(argv)
     os.chdir(ROOT)
     sym = os88sym.syms()
-    at = sym["snd_xlat"]                # 256 idle .bss bytes inside KERNEL_SEG,
-                                        # rebuilt per clip and so idle on a
-                                        # desktop nothing is playing on. Bytes
-                                        # 0..7 are ALSO snd_evtmp (SPEC.md
-                                        # 34.4), the click-abort drain's
-                                        # scratch - idle for the same reason,
-                                        # and this test plays no clip. NOT
-                                        # gfx_pairtab0 any more: that pair went
-                                        # to .lowbss (SPEC.md 5.4.1.1), and an
-                                        # offset in LOW_SEG poked at KERNEL_SEG
-                                        # lands in the middle of the kernel
-    rec = at + 64
+    at = sym["fcp_stack"]               # 36 idle .bss bytes inside KERNEL_SEG
+                                        # on kern_big: Paste's walk stack,
+                                        # live only while a paste runs, and
+                                        # this test pastes nothing. It was
+                                        # snd_xlat, the PWM clip's table,
+                                        # until kernel size pass 8 moved the
+                                        # clip into apps/os88pcm.inc (SPEC.md
+                                        # 34.4). NOT gfx_pairtab0 either: that
+                                        # pair went to .lowbss (SPEC.md
+                                        # 5.4.1.1), and an offset in LOW_SEG
+                                        # poked at KERNEL_SEG lands in the
+                                        # middle of the kernel
+    rec = at + 20                       # the 16-byte stub, then the record
     bad = 0
 
     with os88marty.launch(a.image, machine=a.machine) as m:

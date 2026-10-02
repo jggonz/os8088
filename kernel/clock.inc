@@ -980,7 +980,6 @@ clk_ns_probe:
     jnz .no
     mov byte [clk_dbg_step], 0xFF   ; every gate passed
     pop ax
-    clc
     ret
 .no:
     pop ax
@@ -1364,7 +1363,6 @@ clk_rp_digits:
     mov [clk_tb_y], ax
     pop bx
     pop ax
-    clc
     ret
 .no:
     pop bx
@@ -1748,16 +1746,15 @@ clk_inc_sec:
                                 ; the file already has rather than a new one.
                                 ; `[bx]` addresses DS, which IS KERNEL_SEG
                                 ; here - this is .text and not a BP form.
+    mov ax, 0x0200 + 60         ; the SECONDS and the MINUTES are one loop:
+.sm:                            ; AL = their bound, AH = how many of them
     inc byte [bx]
-    cmp byte [bx], 60
+    cmp [bx], al
     jb .out
     mov byte [bx], 0
     inc bx
-    inc byte [bx]
-    cmp byte [bx], 60
-    jb .out
-    mov byte [bx], 0
-    inc bx
+    dec ah
+    jnz .sm                     ; ...and BX = clk_hour after both
     inc byte [bx]
     cmp byte [bx], 24
     jb .out
@@ -2195,6 +2192,9 @@ clk_min:    resb 1              ; 0..59       | task writes any of it
 clk_hour:   resb 1              ; 0..23       |
 clk_day:    resb 1              ; 1..31       |
 clk_mon:    resb 1              ; 1..12       |
+%if clk_min - clk_sec != 1 || clk_hour - clk_sec != 2 || clk_day - clk_sec != 3 || clk_mon - clk_sec != 4
+%error "clock: ctrl.inc's clk_fld_adj finds field f at (4 or 5) - f past clk_sec"
+%endif
 clk_rtc:    resb 1              ; 1 = a usable hardware RTC was found
 clk_dirty:  resb 1              ; 1 = the clock was set; write the RTC
 clk_year:   resw 1              ; CLK_YMIN..CLK_YMAX. NO PAD ABOVE IT: the one
@@ -2241,6 +2241,9 @@ clk_sn_hour: resb 1             ; as the live fields above: the snapshot
 clk_sn_day:  resb 1             ; copies sec+min and hour+day as words
 clk_sn_mon:  resb 1
 clk_sn_year: resw 1             ; ...and no pad above this one either
+%if clk_sn_min - clk_sn_sec != 1 || clk_sn_hour - clk_sn_sec != 2 || clk_sn_day - clk_sn_sec != 3 || clk_sn_mon - clk_sn_sec != 4
+%error "clock: ctrl.inc's clk_fld_str finds field f at (4 or 5) - f past clk_sn_sec"
+%endif
 
 ; --- the RTC ladder (SPEC.md 37.90) ------------------------------------------
 clk_tier:   resb 1              ; CLK_T_*: which rung answered. [clk_rtc] is

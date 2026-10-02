@@ -42,8 +42,9 @@ Nine assertions. Check 7 is the one no memory dump can make:
      since SPEC.md 34.5.2 the card PLAYS out of it, so check 8's direct arm
      asserts it held still under the compaction rather than that it moved.
      SAID PLAINLY: nothing reaches that arm today. The registered machine has
-     no card, and on one that has, Tracker plays and its face animates, so
-     this script's settles never end. The pin itself is one MC_RLOC word the
+     no card, so Tracker plays on the speaker, inside a bracket the script
+     has to STOP before the desktop answers (SPEC.md 45.25) - and with no
+     stream there is no pool. The pin itself is one MC_RLOC word the
      compactor refuses on sight (mem_can_move's first test).
 """
 import sys, os, hashlib, argparse, subprocess, tempfile
@@ -175,7 +176,12 @@ def main():
             if pt is None:
                 raise RuntimeError("the Disk window is wholly covered")
             mo.click(*pt)
-            os88marty.settle(m)
+            # NOT A SETTLE: the raise is confirmed by the window manager, which
+            # is the thing that changed - and a screen settle cannot be the
+            # wait once Tracker has a module, its face being a clock
+            os88marty.until(m, lambda _: os88geom.top(m, S)
+                            == os88geom.winptr(m, dslot, S),
+                            "the Disk window to come to the front", limit=20)
 
         def heap_quiet():
             # the drive AND the arena still: a load is reads, a compaction
@@ -204,7 +210,8 @@ def main():
                             poll=0.5, limit=60)
         except os88marty.MartyError:
             pass                             # ...and the next lines say so
-        os88marty.settle(m)
+        # NO SETTLE FROM HERE ON. Every wait below is on the state the step
+        # produces, not on a screen that has stopped changing.
         tk_seg, tk_win = find_win(m, S, "Tracker")
         if tk_seg is None:
             print("FAIL: Tracker never opened a window")
@@ -212,6 +219,32 @@ def main():
 
         def tword(name):
             return u16(m.read(tk_seg * 16 + P[name], 2))
+
+        def tbyte(name):
+            return m.read(tk_seg * 16 + P[name], 1)[0]
+
+        # --- STOP THE PLAY, which is what gives the desktop back ------------
+        #
+        # Tracker PLAYS what it opens, and with no card - this machine - it
+        # plays on the PC speaker INSIDE AN FSXF_RATE BRACKET (SPEC.md 45.25's
+        # imposter window): the UI task is in Tracker's own loop holding the
+        # gfx lock for as long as the play lasts, and the rest of the desktop
+        # WAITS. A click there is not a click on what is under the pointer -
+        # it is the bracket's "pause", and only if a once-a-frame poll of the
+        # buttons happens to see the press - so the dock tile, the close box
+        # and the Disk window below answer nothing at all until it ends. No
+        # compaction can be asked for from inside it either. S is the
+        # bracket's own stop and comes off the BIOS keyboard buffer, so it
+        # cannot be missed; and loaded-and-stopped is the state this row was
+        # written against, a machine with no card having loaded the module
+        # and not played it before 45.25.
+        os88marty.until(m, lambda _: tbyte("tsp_run"),
+                        "Tracker's speaker play to start", limit=60)
+        m.type_text("s")
+        os88marty.until(m, lambda _: not tbyte("tsp_run")
+                        and not tbyte("mp_playing"),
+                        "S to stop the play and give the desktop back",
+                        limit=20)
 
         base = tword("trk_modseg")
         if not base:
@@ -262,17 +295,30 @@ def main():
         # --- close heapfrag: the floor under the module opens up -------------
         #
         # THROUGH THE DOCK, because Tracker's window covers heapfrag entirely
-        # and no pixel of it is clickable. A tile TOGGLES minimize (SPEC.md
-        # 30), so two clicks hide it and bring it back FRONTMOST - which is
-        # the one way to raise a wholly-covered window that needs no geometry
-        # at all, and the dock is the one strip nothing can cover.
-        tile = os88geom.tile_xy(m, hf_win, S)
-        mo.click(*tile)                                  # minimize
-        os88marty.settle(m)
-        mo.click(*tile)                                  # ...and back, on top
-        os88marty.settle(m)
+        # and no pixel of it is clickable. The tile does whatever its own
+        # mark says is not true (SPEC.md 30.4): heapfrag is neither minimized
+        # nor the active instance, so ONE click fronts it - which is the one
+        # way to raise a wholly-covered window that needs no geometry at all,
+        # and the dock is the one strip nothing can cover. (Two clicks, as
+        # this used to make, is front-then-MINIMIZE: the second click is on
+        # the active tile, and the close box below then hits Tracker.)
+        def hf_state():
+            w = [o for o in os88geom.windows(m, S) if o.i == hf_win.i]
+            return (w[0].visible, os88geom.top(m, S)
+                    == os88geom.winptr(m, hf_win.i, S)) if w else (False, False)
+        if hf_state() != (True, False):
+            print("FAIL: heapfrag is %s before the dock click, where it should "
+                  "be shown and covered" % (hf_state(),))
+            return 1
+        mo.click(*os88geom.tile_xy(m, hf_win, S))        # fronted
+        os88marty.until(m, lambda _: hf_state() == (True, True),
+                        "heapfrag fronted by its dock tile", limit=20)
         mo.click(hf_win.x + 8, hf_win.y + 9)             # now its close box
-        os88marty.settle(m)
+        try:
+            os88marty.until(m, lambda _: not hf_state()[0], "heapfrag closed",
+                            limit=20)
+        except os88marty.MartyError:
+            pass                             # ...and the next line says so
         if any(w.i == hf_win.i and w.visible for w in os88geom.windows(m, S)):
             print("FAIL: heapfrag did not close, so no hole opened")
             return 1
@@ -281,7 +327,6 @@ def main():
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_HEAPFRAG)
         heap_quiet()
-        os88marty.settle(m)
 
         # heapfrag's OWN verdict, so a module that did not move can be told
         # apart from a compaction that never ran

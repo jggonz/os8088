@@ -459,7 +459,7 @@ Linear 0x30000–0x3FFFF was claimed whole by the sound layer: a 4KB SB DMA
 double buffer, an 8KB record ring and a ~52KB staging pool granted to
 instances. All three belonged to hardware this OS no longer drives (§34),
 and the segment is **gone** — 64KB back on every machine, a quarter of the
-256KB floor. The speaker tiers need no buffer: `osapi_snd_play` paces the
+256KB floor. The speaker tiers need no buffer: `os88pcm_play` paces the
 caller's own `ES:SI`.
 
 Nothing may quietly re-claim 0x30000 by name. The block is part of the
@@ -953,20 +953,34 @@ KNOB build already has and a shipped build does not use:
   a knob build `.ovl` starts `OVL_KNOBGIVE` = **96** bytes lower, at
   `OVL_BASE` = 2,528. `SPLSTARS=1` is the one knob whose `.boot2` is above
   that (2,562 with `NOKZIP=1`) — it is what sets `OVL_AT`'s floor — so it
-  keeps the shipped split. `OVL_AT` stays the one literal, which is what
+  keeps the shipped split. **Every other knob but `BOOTDIAG=1` gives 144**
+  (`OVL_BASE` = 2,480): its `.boot2` is the shipped loader's, 2,470 at the
+  most (`MOUDIAG=1`), and §31.14's `ovl_fdd_apply` took the shipped blob from
+  147 spare to 20, which `BOOTMARK=1` needed. `OVL_AT` stays the one literal, which is what
   `tools/os88ladder.py` reads and what describes every kernel a disk carries.
+  §26.8.6's `ovl_sc_load` first left kern_big's own `.ovl` at **2,495 of
+  2,496** - kern_emu six past the line and `BOOTMARK=1` two past even with
+  the give - because its six early refusals were 5-byte `jcc`/`jmp near`
+  pairs to an exit 250 bytes away. Its exits sit AHEAD of its entry now and
+  every one is short: kern_big **2,473**, kern_emu 2,479, `BOOTMARK=1`
+  2,620 and `BOOTHALT=20` 2,624 of a knob's 2,640.
 
 Both are compiled out of every shipped kernel, so `make`, `make small` and
 `make emu` are exactly what they would be without them. Measured (blob `.ovl`
-of 1,984 shipped / 2,080 knob; `.ovlw` region 2,560 on a kern_small knob):
+of 1,984 shipped / 2,128 knob; `.ovlw` region 2,560 on a kern_small knob), and
+the kern_big column re-measured after §31.14:
 
 | arm | kern_big `.ovl` | kern_small `.ovl` | kern_small `.ovlw` |
 |---|---:|---:|---:|
-| `BOOTMARK=1` | 1,979 (101 free) | 1,442 | 2,258 |
-| `BOOTMARK=1 BOOTHALT=20` | 1,983 (97 free) | 1,446 | 2,258 |
-| `BOOTPROF=1` | 1,888 | 1,351 | 2,150 |
-| `MOUDIAG=1` | 1,850 | 1,313 | 2,175 |
-| `BOOTMARK` + `BOOTPROF` + `MOUDIAG` | 2,053 (27 free) | 1,516 | 2,283 |
+| `BOOTMARK=1` | 2,111 (17 free) | 1,442 | 2,258 |
+| `BOOTMARK=1 BOOTHALT=20` | 2,115 (13 free) | 1,446 | 2,258 |
+| `BOOTPROF=1` | 2,020 | 1,351 | 2,150 |
+| `MOUDIAG=1` | 1,982 | 1,313 | 2,175 |
+| `BOOTMARK` + `BOOTPROF` + `MOUDIAG` | 2,185 — **57 over on kern_big** since §31.14 | 1,516 | 2,283 |
+
+The triple was never a `buildmatrix` row and does not fit kern_big's blob any
+more; each of the three alone does, and so does `BOOTMARK` with `DRVDIAG`
+(2,125).
 
 **A knob build is a different blob layout from the kernel it diagnoses**, and
 that is the price: the probe runs from the window on a kern_small `BOOTMARK=1`
@@ -1591,11 +1605,7 @@ sector nothing: unset, the `%ifdef` is not assembled.
 **A module is `.cold` code that ships as a file instead of as part of the
 kernel image.** It is read into a heap claim when its feature is asked for,
 far-called through a table of entry pointers, and freed when the feature is
-finished. `DESKTOP.DRV` (§26.8) is retained when the UI starts on big/emu
-builds because painting and the first drop from a swapped-in floppy require
-it. It claims
-bottom-up after stage 2 is released; other modules continue to claim top-down.
-Both builds carry `CTRL.DRV`, the Control Panel (§31),
+finished. Both builds carry `CTRL.DRV`, the Control Panel (§31),
 `FORMAT.DRV`, the floppy formatter (§18.96), and `CLONE.DRV`, the disk cloner
 (§18.99). `kern_big` also carries `HIBER.DRV` (§87), the optional
 `DOCK.DRV`, advanced Dock behavior (§30.5), and `EXTD.DRV`, the extended
@@ -1659,7 +1669,7 @@ in the tree.
 - **There is no `MOD_NENT`: each module's slot block is exactly its own
   entry count long.** Each module declares `X_NENT` beside its header
   (`CP_NENT` 8 on `kern_big` and 6 on `kern_small`, plus one with
-  `DOCK_OPT`; `FM_NENT` 4, `CLO_NENT` 2,
+  `DOCK_OPT` and one with `OS88_SHORTCUTS`; `FM_NENT` 4, `CLO_NENT` 2,
   `HB_NENT` 7, `DK_NENT` 2, `EXT_NENT` 7, `FCP_NENT` 4, `FD_NENT` 7), and
   kernel.asm's `MODFP` macro, below every module's `%include`, emits that
   module's `.bss` block and its word in `mod_fpt` together. `mod_fpt` has one
@@ -1702,7 +1712,7 @@ A module carries no dispatcher — the kernel knows its entry offsets, because
 it built them — and that is both cheaper than `call bp / retf` and the one
 hazard the design has: a module file beside a kernel it was not built with
 would be far-called at offsets that have moved. Header version is **5**, so
-`ld_check_hdr` (6) and `drv_check` (7) refuse it as well — two independent
+`ld_check_hdr` (8) and `drv_check` (9) refuse it as well — two independent
 gates, §51.1's discipline — and the header carries **two** words that
 `mod_check` tests:
 
@@ -1933,11 +1943,26 @@ reached exactly.
 The Control Panel's page strings followed, and are the largest single body of
 them: **443 bytes of `.text` out, 28 of `.bss` back, −415 resident**, with
 `MODC_SIZE` 6,944 → 7,502 of `MOD_MAX_KB`'s 16,384 (kern_small 5,433 → 5,858).
-The whole of what stayed is §31.9's line and it is the same line the trap is
-on: **all six list names are resident**, because a list name may equally be a
-driver's staged one and `cp_list` draws it through DS. Each of those six is
-also its page's heading, which is why they read as page strings and are not.
-What moved is page *body* text, whose only readers are the `cp_*_paint` bodies
+The whole of what stayed was §31.9's line and it is the same line the trap is
+on: **all six list names stayed resident**, because a list name may equally be
+a driver's staged one and `cp_list` draws it through DS. **Kernel size pass 8
+moved them too**, with the item table: a static name is STAGED per draw
+exactly as a driver's is, `cp_item_name` being the one place both are asked
+for, and the page heading - which is the same string - is drawn once by
+`cp_item_paint` rather than by each page. `kern_big` −119 `.text`, `kern_small`
+−75, for +6 of `CTRL.DRV` net of the eight heading blocks it deleted;
+`'Sound'` alone is resident still, as `drv_t_sound`, because `drv_tab` names
+the class by it. The same pass moved the rest of what only the image reads:
+the loader's `DRVE_*` sentences and `drv_errstr` (−173 on `kern_big`, −27 on
+`kern_small`, staged by `drv_errstg` with `DRVE_DISK`'s drive letter copied
+out of the resident, boot-stamped `cp_s_nodrv`), the Date/Time field table
+`cp_tflds` and the Sound page's two tier tables (read `[cs:]`), the Drivers
+page's figure buffer and three scratch bytes (folded into `cp_sbuf`, whose
+one-user argument they already shared), the arrow triangles' half-width
+tables (computed now: row r's width is r, or 3 − r), and `CTRL.DRV`'s own
+`SYSTEM.CFG` file buffer, which is the image's `.modcb` BSS rather than
+`times` bytes (MODULE-SELFCONTAIN-PLAN 3; it fits the claim's KB rounding and
+kernel.asm asserts so). What moved is page *body* text, whose only readers are the `cp_*_paint` bodies
 and their click ladders — every one inside the image, entered only through
 `call far [CPFP+…]` after `mod_need` succeeded. **The module-cannot-load path
 reads none of them**: `cp_open_x` is `.cold` and letters `cp_s_noload` /
@@ -1955,14 +1980,84 @@ the pane's 27-character limit, and both ends are guarded — `CPS` refuses a
 longer string at **assembly** time and `cp_stage` bounds the copy at **run**
 time, so a bypass truncates a caption instead of writing past the buffer.
 
-What did **not** move, and is the honest limit: `dskw_fmt_tab`, the four
-standard geometries. It is `.text` and stays there, because `dskw_fmt_row_x`
-hands callers an `SI` into it and every one of them dereferences `[si+DFMT_*]`
-through `DS` — so moving the table means changing each of those to `[cs:si+…]`
-inside the formatter's write path, which is 56 bytes bought against the one
-piece of this code that erases disks. A string has one reader; a table has
-several, and each is a place to get the segment wrong.
+What did not move at the time, and has since: `dskw_fmt_tab`, the four
+standard geometries. It stayed `.text` for two reasons — every `[si+DFMT_*]`
+in the formatter would have to become `[cs:si+…]`, and `CLONE.DRV` sized a
+disk image against the same rows through `DS`. Kernel size pass 8 moved it
+into `FORMAT.DRV` anyway: the formatter's write path was being rewritten
+under §18.96.3 regardless, so the prefixes cost no second pass over the code
+that erases disks, and `CLONE.DRV` carries its own four (size, spt) pairs in
+sixteen bytes (§18.99.8). **56 resident bytes on both kernels**, and a row
+became the BPB itself (§18.96), which is what paid for the prefixes. The
+segment risk the refusal named is held by `tools/os88ovlchk.py`'s module-data
+rule, which refuses a module reference that does not name `CS`.
 
+
+#### 2.8.7 A module may be loaded in PART: CTRL.DRV's settings core
+
+A desktop gesture (§26.9.5) ends in a SYSTEM.CFG write, and the writer is
+`CTRL.DRV`'s (§51.5.3). Loading the whole Control Panel for that was most of
+the wait. On a 4.77 MHz XT, from the 360KB disk, a shortcut drag-out spent
+**~1.9 s reading a 19-sector image** before the gesture ran, and 1.35 s of
+that was the two data reads. Disk placement made no difference: the same
+file at cylinder 28 instead of 35 measured within noise. Rotation and
+transfer cost the time, so the lever is how many sectors are read.
+
+**So CTRL.DRV is two halves in one file, and kern_big can read just the
+first.**
+
+| section | what | size |
+|---|---|---:|
+| `.modc` | the header and the SETTINGS CORE: `modc_e_sc` and the `sc_m_*` gestures (§26.8.7), the SYSTEM.CFG writer (`CFG_DATA`/`CFG_SAVE cpc`, `cpc_buf`, `cp_cfg_save`), `cp_flush_x`, `cp_flush_cfg`, and the image's epilogue ladder | `MODS_SIZE` = 2,208 bytes, 5 sectors |
+| `.modu` | the panel: every page, `cp_flush_close_x`'s RTC half, `clockw.inc` and shutdown (§12.3.2) | the rest, 11,687 in all |
+
+`.modu` is `follows=.modc vfollows=.modc align=1`, so the two halves are
+one image at one set of offsets, and the panel reaches the core with a near
+call. The reverse is refused at build time. `tools/os88ovlchk.py` fails
+if any identifier in `.modc` names a `.modu` label, because on a core-only
+load that label is not in memory and the call runs off the end of the claim
+without faulting. The one exemption is `modc_hdr`'s entry table.
+
+**`MOD_SETS` is a row with no image of its own.** It names the same file
+as `MOD_CTRL` and comes last, after every real module, so `MOD_NIMG` (the
+images `os88mod.py` cuts) is one less than `MOD_MAX` (the rows). Its slot
+block has one entry, `CPE_SC`, which is header entry 0 on this build. For
+that row:
+
+- `mod_need` sizes the claim and the read from `MODS_SIZE`, an assembly
+  constant like every offset the module is called at, and sets
+  `[dskw_trunc]` for one read;
+- `dskw_rbody` then reads a PLAIN file's first `[dskw_cap]` bytes instead of
+  refusing it as too big (a packed file is still refused, since a
+  compressed stream's prefix decodes to nothing);
+- `mod_check` accepts the header's id `MOD_CTRL`, an image longer than what
+  arrived, and a slot count below the header's. It still bounds the one entry
+  it arms against the bytes that arrived.
+
+**`sc_modcall` picks the copy.** If a Control Panel is open (`mod_live`),
+the whole image is already in memory and the gesture runs in it, at the same
+offset, and leaves it loaded. Otherwise the core is loaded, run and dropped.
+
+**CTRL.DRV ships PLAIN on kern_big** (`os88mod.py --plain 0`). It packed to
+90%, so it costs two sectors of disk, about what the decode it no longer
+pays (~85 ms) would buy. kern_small has no shortcuts, so it has no core row,
+and its CTRL.DRV is still packed.
+
+**Measured** on a 4.77 MHz 8088 (MartyPC, `os8088_xt_vga`), 360KB disks,
+against the commit before (`8d4381f`):
+
+| | before | after |
+|---|---:|---:|
+| shortcut drag-out: module in | 1,847–1,992 ms, 5 reads, 29 sectors | **1,123–1,156 ms**, 4 reads, 11 sectors |
+| shortcut drag-out: whole gesture | 4,264–4,410 ms | **3,741–3,773 ms** |
+| Control Panel open: `mod_need` to `mod_check` | 1,437–1,538 ms (median ~1,450), 3 reads | 1,441–1,570 ms (median ~1,520), 4 reads |
+
+The panel opens about 70 ms slower, which is within run-to-run noise. The
+plain file is the same 24 sectors in one more read, and that read is nearly
+paid for by the decode it skips. kern_big resident: `.text` +6 (the row and
+its `mod_fpt` word), `.bss` +9 (the slot block and `[dskw_trunc]`), `.cold`
++88 (`mod_need`, `mod_check`, `dskw_rbody` and `sc_modcall`), **+103 bytes
+in all**.
 
 ### 2.9 Stage 2 — the loader is not in the boot sector any more
 
@@ -2048,7 +2143,9 @@ splash needed to be aboard in, and it was raised three times, never once by
 anything in `splash.inc` — *"the assertion fires on whatever crosses the line,
 not on whatever is to blame."* The first tick probes the adapter, so what the
 gate actually waits for is `vid_detect`, `vid_apply`, `vid_setmode` and
-`gfx_rowbase`. Their far shims sit at the end of `viddet.inc` — deliberately,
+`gfx_rowbase`. Their far door sits at the end of `viddet.inc` — one
+`call bp` / `retf`, `spw_near`, with BP naming the routine (it was a shim per
+routine until kernel size pass 8) — deliberately,
 because `kernel.asm`'s `cw_` block is at the end of `.text` and a gate on
 *that* would be the last sector of the image — and the assertion is on
 `spw_resident_end`.
@@ -3205,8 +3302,6 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/fdlg.inc`   | the Standard File dialog (§38): the kernel's Open/Save chooser, its modality gate and the completion callback — prefix `fdlg_`. **`.cold`** (§2.6) |
 | `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
 | `kernel/desk.inc`   | desktop drive icons: detect, paint, click/open (§26)    |
-| `kernel/links.inc` | desktop shortcut state, dispatch and DESKTOP.DRV behavior (§26.8) |
-| `kernel/linkcfg.inc` | DESKTOP.DRV configuration validation and persistence (§26.8) |
 | `kernel/dock.inc`   | basic bottom Dock, shared state, advanced-module dispatch and lifetime (§30) |
 | `kernel/dockmod.inc` | optional DOCK.DRV: placement, auto-hide, advanced painting and input (§30.5–30.6) |
 | `kernel/extmod.inc` | EXTD.DRV, `kern_big` only: the extended desktop's placement policy — bringing display 1 up, landing and the straddle fit, which display a window is on, the fsx bracket's collapse, and the second display's arms that run on a user's action (its ground, the zoom and fullscreen boxes, a drag's floor, fsx caps) — prefix `ext_`/`exk_`; the resident half is `exf_sync` in **`.cold`** and the `EXTCALL` sites (§39.19.6) |
@@ -3423,7 +3518,7 @@ identical masked-byte shape — left edge, `rep stosb`, right edge — and the
 interior can be a `rep stosb` of a byte whose *value* is irrelevant, exactly as
 `gfx_fill`'s own interior is. **Enable Set/Reset (GC1) is armed once a CALL**
 (`vga_sr_on`) and cleared at the end with `vga_gc_reset`, because it is the half
-that does not change between runs; `vga_set_color` writes both halves together,
+that does not change between runs; the fill's GC arm writes both halves together,
 which is right for a primitive that arrives once and a wasted `out` per run
 here. It is a little behind the 1bpp figure for the obvious reason: a run costs
 two to four `out`s here against none there.
@@ -4836,9 +4931,11 @@ time while a window sat over a playing video.
 **`DI` bit 14 asks for the region to be walked**, and then `gfx_blitp` does
 what §5.4.2.7 does for a band: every fragment of the region (at most
 `WM_CLIP_MAX`), each intersection with the block drawn with the region
-disarmed. **It is 5.4.2.7's own walk** (`gfx_blit1_x.frags`), told by
-`[gfx_bpw]` that it is walking planes, and it differs in one thing: **a
-piece is cut EXACTLY, not trimmed inward to whole bytes.** A band cannot
+disarmed. **It is 5.4.2.7's own walk** (`gfx_blit1_x.frags`), told that
+it is walking planes by the CARRY it is entered with (1 from a band's
+`gfx_blit1_x`, 0 from `gfx_bpwalk`) and handed its piece routine in
+`[gfx_bpfn]`, and it differs in one thing: **a piece is cut EXACTLY, not
+trimmed inward to whole bytes.** A band cannot
 mask its left edge and so leaves up to seven columns at a fragment edge
 off the grid; planes can - `vga_prow_emit` already masked a right edge, and
 `[vga_pr_lm]`, which had only ever held `FFh`, now holds `FFh >> (x AND 7)`
@@ -4862,13 +4959,42 @@ caller but the walk.
   falls back to `gfx_blit4` through the clip - keep that behaviour until
   they ask.
 
-**127 resident bytes on `kern_big`** - `.text` +49 (the request, the left
-mask and one more test on 5.4.3.5's fast path, which a masked left edge must
-not take, and `cw_gfx_blitp`), `.bss` +2, `.cold` +76 (`gfx_bpwalk`, the
-walk's two exact-cut tests, its planar callee and a `loop` its growth put
-out of reach) - against the 211 a second copy of the walk measured before
-it was shared. `kern_small` is byte-identical: `gfx_blitp` is `stc`/`ret`
-there (`GFX_PLANE`). The gate is `vidlivevga4` (§98.3.10.4).
+**127 resident bytes on `kern_big`** as it landed - `.text` +49 (the
+request, the left mask and one more test on 5.4.3.5's fast path, which a
+masked left edge must not take, and `cw_gfx_blitp`), `.bss` +2, `.cold` +76
+(`gfx_bpwalk`, the walk's two exact-cut tests, its planar callee and a
+`loop` its growth put out of reach) - against the 211 a second copy of the
+walk measured before it was shared. `kern_small` is byte-identical:
+`gfx_blitp` is `stc`/`ret` there (`GFX_PLANE`). The gate is `vidlivevga4`
+(§98.3.10.4).
+
+**Kernel size pass 6 took the band's side of it back below nothing**,
+because the two tests sat in the walk EVERY covered 1bpp blit runs: +0.34%
+a covered Hercules Live pass and +0.40% a VGA one, against the walk with
+neither (MartyPC, `vp_lblit` to `.th`, each pass's blit geometry matched
+across builds). The walk's kind is now a MASK and not a test - CH holds a
+piece's left rounding for the whole walk (7 a band, 0 planes, off the entry
+carry), `dec ax / or al, ch / inc ax` rounds a band's edge up and leaves a
+plane's where it is, and the loop counts in CL - and the piece is one
+`call word [gfx_bpfn]`, 0 being `gfx_blit1_x` (`.cold`'s first byte, by
+assertion). `gfx_blitp` probes the rect itself, by a near recursive call,
+before the far call to `gfx_bpwalk`; `gfx_bppiece` reads the plane step back
+out of the frame the walk banked it in and reaches `gfx_blitp` through its
+own API cell, so `cw_gfx_blitp` is gone. The same pass moved the far exits
+of `gfx_blitp`, `gfx_blit1_x`, `gfx_scroll`, `gfx_spans` and `font_run` into
+short reach of their guards, so a covered Hercules pass is now -0.13% and a
+VGA one -0.12% against the walk with no planar feature at all, and against
+the walk as it landed -0.47% and -0.52%, with a Live in colour pass -0.51%
+uncovered and -1.14% under a window. `kern_big` resident is 100,860 ->
+100,732 across the pass's work here.
+
+**The walking call's own exit was a defect, and it only showed on an
+extended desktop**: it took no display hook, and the probe and every piece
+take one there and leave `[gfx_bp_hk]` = 1 behind them, so the walker's
+teardown brought down a nest nobody had put up - `[gfx_dnest]` 0 -> 255 on
+the first Live pass, every primitive after it believing it was nested and
+`gfx_blitp` refusing every block. It leaves past the teardown now;
+`vidlivext` is the gate (every sample 255 before, none above 1 after).
 
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 
@@ -5646,7 +5772,7 @@ So what changed is instruction COUNT, four ways, none of them data-dependent:
   The loop loads no segment register at all where it loaded two a point. Every
   kernel word is reached `cs:` — `.bss` and `.text` share the kernel's segment,
   which is what `KERN_CODE_MAX` says — and `vid_rowtab` stays `ss:`.
-- **The bit comes from a table**, `gfx_bitset` / `gfx_bitclr`, because
+- **The bit comes from a table**, `gfx_bitset`, because
   `shr bl, cl` is 8+4n clocks and wants CL, which is the loop counter's.
 - **The ink class is three loops rather than one loop with two tests in it.**
   `gfx_ls_ink` resolves a colour to three 1bpp classes, and specialising the
@@ -6230,7 +6356,8 @@ nesting, the planar prologue (§6.1.10), the unaligned phase (§6.1.11) and the
 clip machinery, and threading a RAM destination through all of that puts the
 hottest primitive in the system at risk to save the small half of the work. A
 band is always 1bpp, so only the MONO composition is needed. What is shared is
-the thing worth sharing: `font_glyphs` itself.
+the thing worth sharing: the glyph table itself (`[font_seg]:[font_base]`,
+§6).
 
 **The bodies are `.cold` and every crossing into `.text` is in the caller's
 prologue.** A `.cold` body near-calling a resident routine is §5.4.2.1's defect
@@ -6704,7 +6831,8 @@ interval genuinely is per row. It fills the same `vga_*` scratch
 `vga_rect_setup` fills, so both renderers' bodies are the ones already there:
 1bpp goes through `sw_rect_pl` — `sw_rect`'s plane loop, split out at this
 change and otherwise untouched — and VGA through a copy of `gfx_fill_raw`'s
-row body with **`vga_set_color` and `vga_gc_reset` hoisted out of the loop**,
+row body with **the GC arm (it was `vga_set_color`, inlined since) and
+`vga_gc_reset` hoisted out of the loop**,
 which on that adapter is four `out`s and a three-`out` reset saved per span
 rather than per call.
 
@@ -7180,29 +7308,165 @@ property of the file rather than of the loop.
 ## 6. font.inc
 
 `font_init` runs **after** `vid_setmode` (§39.6): zero ES:BP, then int 10h
-AX=1130h BH=03h returns ES:BP → the ROM 8x8 font; copy glyphs 32..126
-(95 glyphs × 8 bytes) into a kernel buffer. A pre-EGA BIOS does not
+AX=1130h BH=03h returns ES:BP → the ROM 8x8 font. A pre-EGA BIOS does not
 implement AH=11h and leaves the pair as we set it, which is why it is zeroed
 first — that case falls back to the IBM ROM 8x8 set at F000:FA6E. No font
 bytes are hard-coded — **unless the build asks for some: §6.2.**
 
+**The table is READ IN THE ROM, not copied** (kernel size pass 8).
+`font_init` stores where glyph 32 is — `[font_seg]:[font_base]`, two words
+of `.bss` — and every renderer reads the glyph rows through DS or ES loaded
+from `[font_seg]`: `font_char`'s VGA writer and `font_char_bb` put the
+FRAMEBUFFER in DS for their row loops (the latch and read-modify-write
+accesses then carry no override, and the VGA latch pair became one `xchg`)
+and the glyph table in ES; `font_run_x`'s row passes and `font_run_cell`
+the same way round or the other, each restoring DS with `push cs / pop ds`
+before anything reads a kernel word through it. It used to copy the 95
+glyphs into `font_glyphs` in `.lowbss` and keep an 8-byte blank cell
+`font_zero` beside it: **768 resident bytes on both kernels, gone.** The
+blank cell an unprintable character draws is the ROM's own SPACE, glyph 32,
+which is eight zero rows on every set the probe can reach. The price is one
+segment load per glyph or per run and three `cs:` prefixes a row in
+`font_run_x`'s row passes, measured on MartyPC over a desktop workload:
+`font_char` −0.9% on CGA and +0.7% on VGA, `font_run_x` +1.0% (CGA), +1.2%
+(Hercules) and +0.04% (VGA), `font_run_cell` +0.1%. A hibernated image
+carries the pointer and resumes only on the machine that wrote it, whose ROM
+the image's own IVT already names (§87.3). §39.14.11's two seam cells are
+the one glyph pair that has to be RAM: `font_ch_seam` points the pair at
+them for the one draw, so nothing in any other glyph's path tests for a
+seam.
+
+**What a ROM read costs, and what can say so.** On the IBM 5150 the planar
+ROM and RAM are both zero-wait-state and DMA channel 0's refresh takes the
+BUS, not a memory, so a glyph byte costs the same wherever it is. MartyPC
+models exactly that and nothing else: `bus/memory.rs` answers **0 wait
+states** for any address that is not a device window, and every ROM - the
+system BIOS and a VGA's option ROM alike - is installed through the same
+copy with no wait cost, so **the emulator prices a ROM read as a RAM read by
+construction and cannot be the evidence for this change.** Re-taken on the
+genuine 27 OCT 82 BIOS (`os8088_5150_cga` / `_herc`, not the GLaBIOS twins),
+the change measures `font_char` −0.9% (CGA) / −1.1% (Hercules),
+`font_run_x` +0.8% / +1.0%, `font_run_cell` +0.1%, and a whole 40-cell
+`FONT_RUN` −0.02% / +0.01% - the `font_run_x` cost is the segment load and
+the `cs:` prefixes above, not the ROM. Where a ROM read CAN differ is
+off the target: an 8-bit ISA VGA's option ROM on an AT-class bus, or an
+unshadowed system ROM on a 286/386, is a slower cycle than cached or
+planar RAM. **`tests/romfont` (`make romfont`) is the instrument for that**:
+the same inner loop against the ROM table and against a RAM copy,
+PIT-timed on whatever machine boots it, with the table's seg:off on the
+glass. Under MartyPC it reads ROM/RAM = 1000 x1000 on both adapters, which
+is the prediction a field photograph is checked against.
+
+The table's LOCATION is not new: the plain build's probe is the one the copy
+was always taken from (int 10h AX=1130h BH=3, else F000:FA6E), and every
+BIOS image in reach answers it with a table whose glyph 32 is eight zero
+rows - the IBM 27 OCT 82 ROM, every GLaBIOS in MartyPC's set (the `T`
+variants carry a different face at the same address), SeaBIOS (`bios.bin`,
+F000:FA6E) and every QEMU and Bochs VGA BIOS (their own table, at C000).
+What is new is only that the pointer has to stay good for the session,
+which a ROM does - and across a hibernate, which §6.0.1's resume half is for.
+
+#### 6.0.1 Which ROM table, and when it is copied - MEASURED at boot
+
+The field case is an IBM 5150 with a Paradise PVGA1A: int 10h AX=1130h names
+the table in the card's OPTION ROM at C000, which an 8-bit ISA card serves
+through its own bus cycle - the one kind of ROM read that can carry a wait
+state the system board's does not. So `font_init` does not simply take the
+BIOS's answer. It TIMES the candidates, with the macro `FONT_PICK`:
+
+1. **The candidates.** The BIOS's answer, and F000:FA6E - the IBM PC's fixed
+   address for the 8x8 set, which every PC-compatible BIOS keeps because the
+   CGA graphics modes draw from it - but the planar table only when its 95
+   glyphs (760 bytes, one `repe cmpsb`) are BYTE-IDENTICAL to the answer, so
+   the choice never changes what text looks like. A BIOS that answers
+   nothing (pre-EGA) leaves the planar table the only one.
+2. **The clock.** PIT channel 0 latched either side of a `rep lodsb` over
+   the 760 bytes, IF clear, for each candidate and for RAM (the kernel's
+   own first bytes). All three readings are taken in whatever mode the
+   channel is in, so the comparison is a RATIO and the count-by-two of the
+   ROM's mode 3 cancels; the down-count's modular difference is right across
+   a reload. The **planar table is taken unless the answer beats it by an
+   eighth**: a tie goes to the system board, which is zero-wait on every PC,
+   and the margin is what keeps two boots of one machine from picking two
+   tables on noise.
+3. **The verdict.** When even the chosen table is within a QUARTER of RAM it
+   is read in place. Past that - an unshadowed 8-bit option ROM on an AT bus
+   crosses it by multiples - its 760 bytes go into a 1KB heap claim
+   `MEM_K_FONT` and `[font_seg]:[font_base]` points there: what the 768
+   resident bytes used to buy, paid only by the machine that measured the
+   need and billed to the arena instead of to every kernel. A quarter
+   because a glyph byte is one read in a cell writer that makes two or more
+   framebuffer accesses per row, so a table 25% slower is under ~10% of a
+   cell - the most a copy could buy back for its kilobyte - while the 8088's
+   jitter between two passes of one loop is under 1% (tests/romfont). The
+   claim is TOP-DOWN and PINNED at boot, before any driver, module or
+   package region exists, so it takes the arena's ceiling and everything
+   later stacks under it: never a barrier to either compaction pass (§66),
+   and a relocation proc would be resident bytes buying nothing. A refused
+   claim keeps the ROM pointer.
+4. **The record.** The three counts - chosen, RAM, the BIOS's answer - are
+   left at **0040:00F8** behind the word `'FP'`, the upper half of the BDA's
+   intra-application area. The kernel keeps none of them (no resident byte);
+   `tests/romfont` prints them and the ratio the kernel decided on, and
+   `tests/fontpick.py` asserts it. kern_dos's mailbox is the LOWER half,
+   0040:00F0..00F7 (§96.41), which `hbm_ask` reads after `font_init` runs, so
+   the two never meet.
+
+**What it costs.** **Zero resident bytes** on both kernels (kern_big 97,384,
+kern_small 65,398, both unchanged). `font_init`, the timers and the claim
+are in the BLOB half of the boot overlay on BOTH kernels now, reached by
+`BLOBCALL`, and the blob grew one sector to hold them: **`BOOT2_SECS` 9 ->
+10**, `.ovl` 1,953 -> 2,178 of 2,496 on kern_big (and `.ovlw` 5,092 -> 4,968,
+the body having left it) and 1,969 -> 2,071 of 2,496 on kern_small.
+`KSIG_OFF` moved one memory sector down with it (6144 -> 5632) so the canary
+is still FILE sector 21 (§18.93.1, `tests/unit/t_canary.py`), and the extra
+sector sits inside the same `int 13h` run on all four geometries
+(`tests/unit/t_blobruns.py`: still 2/2/2/2). The overlay could not supply
+the room itself: kern_small's blob had 15 bytes, and the one relaxed
+conditional jump in any overlay body buys 3. **Boot time, MartyPC,
+`tools/os88boot.py`, against the tree before:** `font_init` +49,868 cycles
+(+10.4 ms: three timed reads and the compare) on a CGA 5150 and +31,476
+(+6.6 ms) on the VGA XT over the untimed pick; to a settled desktop the
+5150 CGA is **+72 cycles** (the serial mouse's fixed identify window absorbs
+it), the VGA XT +10.9 ms, and kern_small's 360KB boot **-166 ms** - the
+tenth sector moves where the image's runs split, and that boot's `int 13h`
+lost a revolution.
+
+**The resume re-asks** (`hbm_wake` step 4a, HIBER.DRV - no resident byte).
+The image carries the pointer the writing machine's boot chose; the reading
+machine runs the same timed `FONT_PICK`, refills a heap copy in place (its
+claim came back with the image) or replaces a ROM pointer. It makes no
+claim there, so a table found slow only at a resume is read in place. This
+is the one routine both routes home share - a hibernate resume and
+`kern_dos`'s live return (§96.49) both enter `hbm_wake` - and nothing else
+restores a kernel image. It is belt and braces rather than a fix for a
+crash: the image's own IVT names the writing machine's BIOS too (§87.3),
+and `hb_ask` refuses a different adapter kind or memory size.
+
+**`make FONTSLOW=1`** skips the verdict and copies on any machine: MartyPC
+prices every ROM read as a RAM read (the clock reads 1000 x1000 there), so
+without the knob the copy path would never run where a row can see it.
+`tests/fontpick.py` is the A/B, and its first leg asserts the kernel's own
+recorded ratio.
+
 | symbol       | in                       | effect                              |
 |--------------|--------------------------|--------------------------------------|
-| `font_init`  | —                        | copy ROM font to RAM (`ovl_font_init` under `BAKED_FONT`, §6.2) |
+| `font_init`  | —                        | pick the ROM table by the PIT (§6.0.1: the planar set when it is the same glyphs and no slower), copy it into a `MEM_K_FONT` claim when even that is a quarter slower than RAM, and point `[font_seg]:[font_base]` at its glyph 32 (`ovl_font_init` under `BAKED_FONT` copies the baked face to `.lowbss` and points the pair there, §6.2) |
 | `font_char`  | CX=x, DX=y, AL=char      | draw 8x8 glyph, color `[gfx_color]`, transparent background |
 | `font_str`   | CX=x, DX=y, SI=NUL str   | draw string left→right               |
 | `font_width` | SI=NUL str               | out AX = pixel width (8 × length)    |
 | `font_str_x` / `font_width_x` | ES:SI = NUL str | the same two, reading the string through **ES** — what the `X` stubs of §20.3 call so a package's string can live in its own segment |
 | `font_run` / `font_run_x` | CX=x, DX=y, SI (ES:SI) = NUL str, AL=ink, AH=background | one **opaque** run: the cells' background AND their glyphs, in a single pass (§6.1). API slot 0x01E5 |
-| `osapi_font_glyphs` | — | out **DX:SI** = the `font_glyphs` table (DX = LOW_SEG — the table left the kernel's own segment when it moved to `.lowbss`), AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x01B6, amended from SI-only as a recorded one-time exception to §20.8 rule 4 |
+| `osapi_font_glyphs` | — | out **DX:SI** = the glyph table, `[font_seg]:[font_base]` — the ROM's own on a plain build (or its `MEM_K_FONT` heap copy, §6.0.1), a `.lowbss` copy under `BAKED_FONT` (it was LOW_SEG:`font_glyphs` until kernel size pass 8, and before that an offset in KERNEL_SEG) — AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x01B6, amended from SI-only as a recorded one-time exception to §20.8 rule 4. **Read the table; never write it** - it is ROM |
 
 **Handing out the bitmaps** (`osapi_font_glyphs`) is for an app that draws
 text into its OWN pixels rather than onto the screen — apps/paint's text tool
 stamps glyphs into the canvas, so `font_char` is no use to it. The table is
 95 glyphs of 8 rows, row 0 first, bit 7 leftmost, and it is read through the
-**DX the cell answers** — the table lives in `.lowbss` (LOW_SEG), NOT in
-KERNEL_SEG, so the ES a callback arrives with is the wrong segment for it;
-load ES (or any segment register) from DX first. Before the slot existed the
+**DX the cell answers** — the table is the ROM's (F000 on a CGA or Hercules
+machine, the card's BIOS on an EGA or VGA), NOT in KERNEL_SEG, so the ES a
+callback arrives with is the wrong segment for it; load ES (or any segment
+register) from DX first. Before the slot existed the
 package re-ran `font_init`'s probe — int 10h AX=1130h BH=03h with the
 kernel's own F000:FA6E fallback behind it — to arrive at a table the kernel
 had already built, and got whatever typeface the BIOS happened to hold rather
@@ -8123,6 +8387,16 @@ buys is not a fix for a bug in the field but the removal of a dependency
 nobody can check from inside the kernel — and a typeface this project
 chooses, on a machine whose UI is otherwise entirely its own.
 
+**Since kernel size pass 8 this is the arm that pays the 768 resident
+bytes**, and only it: a plain build reads the ROM's table in place (§6), and
+a baked one still copies its face into `font_glyphs`/`font_zero` in
+`.lowbss`, measured +768 of `.lowbss` against the same knob build unbaked on
+both kernels (plus the face in the overlay, which is not resident). On
+**kern_small** the face and `ovl_font_init` are in the BLOB half (`.ovl`,
+§2.5.3.2), `font_init`'s own placement, reached through `OVBCALL`: in the
+window half they overran kern_small's `.ovlw` guard, so until kernel size
+pass 8 `FONT=` did not build on kern_small at all.
+
 **The bytes ride in the boot overlay (§2.5), which is why this is nearly
 free.** `ovl_font_bits` is 760 bytes of `.ovl`, and `ovl_font_init` — an
 overlay entry like `ovl_clk_init`, reached by `kmain` as
@@ -8290,7 +8564,9 @@ staying the machine's own ROM set. Verified both ways on a cycle-accurate
 with the 760 bytes of `fonts/tallx.f8` **byte-identical in guest RAM**, the
 desktop comes up at the CGA's usual 60.1% lit and a Disk window lists and
 letters correctly; the shipped `os8088-360.img` boots with `font_glyphs`
-byte-identical to the ROM at `F000:FA6E` instead. The seven shipped images are
+byte-identical to the ROM at `F000:FA6E` instead (as it was then: a plain
+build has not copied the table since kernel size pass 8, §6, and the baked
+face is the only one that still lands in `.lowbss`). The seven shipped images are
 md5-identical before and after — checked by stashing the change and
 rebuilding, not by reasoning about it.
 
@@ -8984,8 +9260,9 @@ lines are mixed, and both say which halves are cases and which are the pair.
   internals, exactly **two** routines raise it, both with the same meaning
   — the tick still runs, the BIOS chain feeds the floppy motor,
   `sch_account` runs and sleepers mark ready; only involuntary switching
-  pauses: `disk_read` across its int 13h window (§18), and `spk_pcm_run`
-  for the duration of an exclusive speaker clip (§34.4, Phase 2). The clip
+  pauses: `disk_read` across its int 13h window (§18), and the clip door
+  `OSAPI_SND_PLAY` from its grant to its release, for the duration of an
+  exclusive speaker clip (§34.4, Phase 2). The clip
   case adds nothing new for the cursor either: the mouse ISR keeps
   `mouse_x/y/btn` fresh throughout, and when the clip was started from a
   window callback — which holds the gfx lock, the normal trigger — the
@@ -10425,8 +10702,11 @@ and it has three arms:
   for an arrow the bar cannot reach; the DOWN arm's re-arm is an `or` of a
   register that is 1 on that arm and 0 on this one.
 
-The two arms share one tail — bank `[cur_shape]` into `[cur_shprev]`, set the
-clock, `cursor_show` — and the refusals below the first arm are each somebody
+The two arms share one tail — set the clock, `cursor_show` — and the bank of
+`[cur_shape]` into `[cur_shprev]` is made at the door, before any refusal: a
+refusal leaves the shape alone and `[cur_shprev]` is read only while the clock
+is the shape, so a bank nothing follows is never seen (kernel size pass 8). The
+refusals below the first arm are each somebody
 else's rule rather than this one's: an **fsx bracket** (§53.6, `fpg_arm`'s own
 first test), a **saver session** (§79.6.1, `wm_clip_set`'s test and
 `kern_big`'s alone — the overlay owns the glass and its hide is the
@@ -10452,6 +10732,34 @@ one failure a knob exists to make impossible.
 `OSAPI_CUR_BUSY` is **not** gated with it, and the slot could not be: the API
 table is ABI and every cell is in every build (§20.8 rule 4). The knob is about
 the disk freeze, not about a package that says it is busy.
+
+##### 7.5.3.2 A clock taken DOWN after the arm comes back at the next transfer
+
+§7.5.3's DOWN arm ran once per hold, when `fpg_arm` put the chrome up. A
+handler that painted AFTER that, in the same hold, spent `gfx_lock`'s promise
+again and took the clock off the glass. Every transfer after it then ran with
+`[cur_level]` at -1, so the ISR kept away and the pointer stayed where it was
+for as long as the disk took. The field met it at its worst. Uncompress To...
+had armed the chrome for its own reads, and once it said `Disk error` the
+Disk window repainted over the prompt and re-read the same marginal floppy.
+Those reads failed slowly, the pointer did not move, and keys waited behind
+them. Measured on MartyPC, nudging the mouse at every failed attempt: the
+join's own retries track (the drawn position follows each nudge) and the
+re-read after the verdict does not (`[cur_level]` = -1, the drawn position
+fixed).
+
+So `fpg_busy`, when the chrome is already up, asks `cur_busy` again at the top
+of every transfer. `cur_busy` checks the lock is this task's. `cur_busy_on`
+no longer stops at "already wearing the clock" when the clock is also DOWN:
+it takes every test the DOWN arm takes (a fullscreen owner, a saver session,
+an armed clip region, the menu bar's rows, a refcount it did not take, a free
+lock) and then shows it with the promise put back, as §7.4.3.1 does. It does
+not re-bank the shape, so what `gfx_unlock` restores is still the arrow and
+never the clock. When there is nothing to do it costs six instructions.
+Inside `%ifndef NOCURDISK`, like the rest of §7.5.3. 14 bytes of `.text` on
+each kernel. `tests/czto.py`'s `alive` leg is the gate: after the verdict,
+with the disk still failing, the pointer reads `cur_level` 0 and moves 4
+pixels with each nudge. Without the `fpg_busy` call it reads -1 at a fixed x.
 
 #### 7.5.4 …and the window half is one slot with no argument
 
@@ -11480,7 +11788,7 @@ A driver and the two kernel-side spawners have no header to declare in, so
 | | bytes | why |
 |---|---|---|
 | `SCH_IDLE_STK` | 128 | the idle task's own footprint is ≤ 4 bytes (§8.1.2), so what it needs *is* the interrupt floor — 32 on QEMU, 40–64 on real iron |
-| `SCH_BUILTIN_STK` | 128 | Timer and Bounce are the built-in kinds that take a task; six Bounces at once measured +10…24 over the floor |
+| `SCH_BUILTIN_STK` | 128 | Bounce is the built-in kind that takes a task; six at once measured +10…24 over the floor. The Timer was the other until §14.7, sized from Bounce and never measured — it read 112 of 128 half covered, on a floor of 32 |
 | `SCH_DRV_STK` | 192 | the sound driver's stream task, the only driver worker in the tree, walks 28 bytes statically — 64 + 28 = 92, so 2.1× |
 
 `OSAPI_DRV_TASK` is called from one driver in the whole tree — the sound
@@ -12593,7 +12901,10 @@ rather than a detail:
 
 Twenty-two outbound calls widen to the far form through five `ovw_` shims. The
 whole move is `.text` **−1,006** for `.ovl` **+1,110**, and the `.ovl` bytes are
-not footprint.
+not footprint. (Kernel size pass 8 took the five shims out of `.text` too: the
+probe's calls are near calls to overlay-side stubs, `mou_ov_*`, that share one
+far call through §2.9.4's `spw_near` with BP naming the routine — 20 resident
+bytes on kern_big and 8 on kern_small, for 11 fewer bytes of overlay.)
 
 #### 9.4.8 The first offer is timed from the desktop, and the drain ends on quiet
 
@@ -15171,6 +15482,17 @@ a rare cell is six bytes (§20.3).*
   **docs/plans/LAST-DROP-BYTES.md §7.7.8**, gate first and size change second,
   because the same walk covers `drv_cls_fp_x`'s identical refusal and is worth
   more than the 38 bytes that motivated it.
+  **BUILT, kernel size pass 8**: the gate is `tests/unit/t_clscf.py` (fast
+  tier, row `clscf`) - a `jc`/`jnc` within four CF-neutral instructions of
+  every call, or a `; CLSCF: <why>` naming why that site's class has a slot
+  (three sites: a block volume's class, and a loaded row's for the two
+  `drv_cls_fp` stores). Then `drv_cls_svc_x` refuses `DRVC_POINT` (`cmp` /
+  `cmc` / `jc`, the class being `DRVC_MAX` and asserted so), `drv_svc` is
+  `DSV_SIZE * (DRVC_MAX - 2)`, `drv_publish` still writes the class's owner
+  and far pointer on that refusal, and `drv_svc_clear` gained the one `jc` the
+  walk found missing. **`.bss` −36, `.cold` +7**: the `drv_owner` word stays,
+  because `drv_release` finds a class's row by it. DI is no longer defined
+  on a refusal.
 - **`kern_small`'s two-byte refusal** could be a second label on
   `drv_pkg_call_x`'s existing `stc`/`ret`, for **−2**. It would put a
   `mouse.inc` symbol in `driver.inc` against §4's ownership table, for two
@@ -16196,7 +16518,7 @@ rectangle vocabulary is one choke point. The clipped set is seven:
 | `gfx_xor_fill` | per fragment |
 | `gfx_xor_rect` | **decomposed first**: an outline is not the intersection of its bounding rect with anything, so it becomes four `gfx_xor_fill` strips (each pixel touched once, still self-inverting). `gfx_xor_strips` is that decomposition, written ONCE and given the fill to draw a strip with in `BP` — `gfx_frame` is the same four strips with `gfx_fill`, and the software renderer reaches it through `gfx_xor_fill`'s own `[vid_mono]` dispatch rather than through a twin of its own |
 | `font_char` | whole-cell; covers `font_str` |
-| `icon_draw16` | whole-icon; covers `icon_draw` and `ico_core` |
+| `icon_draw16` | whole-icon on `kern_small`; on `kern_big` the rows AND columns of the one fragment holding most of it (§11.3.5); covers `icon_draw` and `ico_core` |
 
 `gfx_fill_pat` was missing from this list for as long as the list existed,
 and the Task Manager's memory map is drawn almost entirely out of it — every
@@ -16697,6 +17019,45 @@ columns. So a cell whose visible part is two side-by-side fragments is erased
 across both and lettered in one, until the next repaint. It never draws outside
 the region.
 
+#### 11.3.5 An icon draws the part of it ONE fragment holds
+
+§11.3.2 gave a glyph whole rows and §11.3.4 whole columns; an icon stayed
+whole-or-nothing, which was harmless while nothing armed a region over the
+desktop and is the thing §11.91.6 could not be built without: a cell cut by a
+window's edge would have kept its ground and lost its picture. So on
+`kern_big` `ico_core` asks `ico_clip` where it asked `wm_clip_test`.
+
+`ico_clip` takes `wm_clip_rows`'s answer - the row range and the winning
+fragment, the one offering the most rows - works out one 16-bit column mask
+per icon word from that fragment's x1/x2 (`(0FFFFh >> d0) & (0FFFFh << d1)`,
+§11.3.4's two distances with 16 bits for 8), and when the fragment does not
+hold the whole icon **restages the body into `ico_ibuf`**: only the drawable
+rows of the mask table, then the same rows of the data table, every word
+ANDed with its mask, `[ico_h]` and `[ico_y]` moved to match. Both passes
+write only SET bits, so a cleared column is a clipped column, and the passes
+are untouched. Four things are load-bearing.
+
+- **The unclipped path pays nothing.** The call is behind `CLIPQ`'s `je
+  .noclip`, and an icon one fragment holds whole is drawn from its own body,
+  unstaged.
+- **The stage is bounded by construction, not by a test.** `icon_draw_x`
+  refuses wider than a word and taller than `ICO_STAGE_H`, the indexed kind
+  is 32x32, `icon_draw16` is 16x16 and the kernel's plain records are a word
+  wide, so the two tables never exceed `ICO_IBUF_SZ`. The copy runs forward
+  and never passes its source - an indexed body IS `ico_ibuf` and an
+  `icon_draw_x` body starts two bytes into it.
+- **A shift count is clamped to 16, not to "16 or more".** A 286 masks the
+  count to five bits, so a distance of 256 would shift by nothing there.
+- **The cull (§11.3.3) is unchanged**: under it `wm_clip_rows` answers every
+  row, and the icon is drawn whole as before.
+
+It is §11.3.2's direction for every caller, a background painter's included:
+ONE fragment's part, never a pixel outside the region, fewer than are
+visible when the visible part spans fragments - which is why §11.91.6 hands
+it one fragment at a time. `kern_small` keeps the whole-icon answer: its
+desktop never arms a region (§11.91.6's half there is a question, not a
+clip). 198 bytes of `.text` and 4 of `.bss` (`ico_cmw`), `kern_big` only.
+
 ### 11.90 Showing a window costs one window, not one screen
 
 `wm_show` does **not** call `wm_paint_all`. Showing a window is the one
@@ -17001,7 +17362,8 @@ What it draws, in `wm_paint_all`'s order so the layering is identical:
 1. the desktop dither, **clipped to the damage rect** and to the band below
    the menu bar;
 2. every drive zone the rect touches (`desk_dmg_zones` / `desk_paint_mask`,
-   §26), drawn whole;
+   §26) - on `kern_big` only where the pass REVEALS it, on `kern_small`
+   whole unless nothing of it is revealed (§11.91.6);
 3. the dock and the menu bar, **always** — both carry state that a hide or a
    destroy has just changed (a tile leaves, the focus cue moves, the bar
    may lose its owner);
@@ -17015,10 +17377,32 @@ runs bottom-to-top over `wm_zord`, so one pass reaches the whole transitive
 closure. Nothing in that pass may keep a loop counter in a general
 register: `wm_win_rect` writes all four.
 
-**A touched drive zone is folded into the damage rect** before the marking
-pass rather than special-cased inside it: the zone is drawn whole — gray
-fill, icon, label — so a window sitting over it has to be redrawn, and
-growing the rect is what makes the marking notice.
+**A touched drive zone is a per-window test, like the dock below.** The
+zone is drawn whole — gray fill, icon, label — so a window sitting over it
+has to be redrawn. It used to be *folded into the damage rect* to make the
+marking notice, and that over-reached exactly the way the dock's fold did:
+the rect is one box, so a zone grew it for **every** window the box reached,
+over a zone or not. `tmgraph`'s BAR leg is the case — a cover dragged
+sideways below the Task Manager's graph clipped the corner of a desktop cell
+at x 618..717, y 92..137, the damage's top went 94 → 92, and the Task
+Manager, nowhere near the cell, was owed two rows of its graph and redrew 16
+columns of it (§28.10.3). So `desk_dmg_zones` grows its own box,
+`[wm_dmg_zb]`, and leaves the damage alone; `wm_dmg_wins` marks a window
+whose rect overlaps that box, and `wm_su_owed` widens **that window's** owed
+rect by it — the dock strip's two tests, asked of the zones, through one
+`wm_rgrow` the dock's widening now shares. The box is a one-shot argument
+emptied on the way out (x1 > x2 signed, which nothing overlaps). Every pixel
+drawn is drawn as before; what changed is only which windows are told so. `tmgraph` gates the over-reach; `zonedmg` gates the other half — a window
+over a cell that a CLOSED window's frame reached, but which that frame never
+touched, must still come back over the cell (348 of 840 pixels are the cell's
+with the per-window test taken out). **Since §11.91.6 that is the
+fallback on `kern_big`**: a zone is drawn there only where the pass reveals
+it, so it reaches no window and the box is grown only when the region
+overflows; on `kern_small` it is still every partly visible zone's answer.
+kern_big **+27** bytes resident (`.text` +34, `.cold` −7), kern_small **+58**
+(`.text` +65, `.cold` −7): the dock's widening going through `wm_rgrow` pays
+for the helper on kern_big, and kern_small has no `DOCK_OPT` widening to
+share it with.
 
 **The dock is not folded in, and that asymmetry is load-bearing.** The strip
 runs the full width of the screen, so a rect grown to reach it is a rect
@@ -17161,11 +17545,11 @@ Four things are load-bearing.
   long enough to land clear of where it started does not overlap its own
   vacated rect, and the mechanism would otherwise decline to draw the one
   window that certainly changed.
-- **A touched drive zone disarms it.** `desk_dmg_zones` grows the damage to
-  every zone it reached and `desk_paint_mask` redraws those zones *whole*, so
-  a window over one is damaged by something that is not the move — at which
-  point the vacated rect no longer describes everything that can have gone
-  stale, and it is dropped rather than reasoned about.
+- **A touched drive zone no longer disarms it.** It did while the zones were
+  folded into the damage, because a window over one was then damaged by
+  something that is not the move. A zone is a per-window test now (§11.91),
+  reached by a skipped window through `.mnodmg` like the dock's, so the
+  vacated rect still describes everything the move itself can have staled.
 - **A skipped window still falls through to the other two tests.** The dock is
   drawn *under* windows, and a marked window *below* is redrawn whole and
   reaches wherever its own rect reaches; this answers only "was anything of
@@ -17353,6 +17737,106 @@ swallows the old *and* the window is frontmost → one `wm_draw_win`) that the
 identical-rect case already reaches whenever the window is in front. The
 remaining case — a by-name no-op resize on a window that is *not* frontmost —
 is worth a look and is not this change.
+
+#### 11.91.6 A desktop zone is drawn only where the pass reveals it
+
+A zone used to be drawn WHOLE wherever the damage touched it, so it was
+drawn over every window lying on it, so each of those windows was owed a
+repaint (§11.91's per-window `[wm_dmg_zb]` test), so every window above one
+of THEM was marked transitively (§11.91.3's rule). The dither had stopped
+doing this at §11.91.1; the zones were the last layer of the desktop that
+still damaged windows it did not need to. Measured on a 4.77 MHz 8088 before
+this section: a Task Manager lying on a cell repainted itself for 296 ms
+behind a drag that never touched it, and on VGA an in-place cell repaint
+cost a 164.5 ms W_PAINT of the window ABOVE the one on the cell.
+
+**THE REGION is `wm_zone_r`'s: zone AND damage, minus every visible window's
+FRAME** (and an open hidden dock, §30.6.1) - `wm_dmg_gray`'s own region
+intersected with the zone. AND damage, because outside it the zone is
+already right on the glass, and redrawing it flashed the picture's black
+pixels white for a mask pass. FRAMES and not occupied boxes, because a box
+holds the two shadow corners no window draws and the dither does: a zone
+clipped by boxes would leave a dithered pixel where its picture should be.
+The region keeps the shadow L lines, and the zone draws over them - inside
+the damage, where `wm_dmg_shadowed` (§11.91.4) already owes every L the
+damage reaches, so nothing new is needed for them. (A separate "zones'
+shadow box" was built for it, broken on purpose, read 0 pixels, and came
+out.)
+
+**`kern_big` draws each zone into that region, ONE FRAGMENT AT A TIME**
+(`desk_zone_clip`): each fragment is copied into slot 0 of `wm_clip_tab`
+with `[wm_clip_n]` at 1 and `desk_draw_zone` runs unchanged, because
+`font_char` (§11.3.4) and `ico_clip` (§11.3.5) are exact against one
+fragment and under-draw against several. The fragments are disjoint, so no
+pixel is drawn twice, and overwriting slot 0 loses nothing - it was drawn
+first. `wm_paint_all`'s pass still draws every zone whole (`desk_paint_x`
+hands the walk `desk_draw_zone` where the damage pass hands it
+`desk_zone_clip`): there the windows are drawn over it after. **Overflow is
+the old answer** - the zone whole, its box grown into `[wm_dmg_zb]` - so
+§11.91's per-window zone test is the fallback rather than the rule. A zone
+nothing of which is revealed is not drawn at all.
+
+**`kern_small` takes the cheap half.** Its cell is 32 wide and 56 px in from
+the band's edge, so windows cover one routinely; `desk_dmg_zones` asks
+`wm_zone_r` - which on that kernel always leaves the list disarmed, a
+question and not a clip - and a zone nothing of which is revealed is left
+out of the mask and out of the box. Any other zone is drawn whole and marks
+the windows over it, as before. On `kern_big` the same verdict alone would
+buy nothing for the drive column: a cell's caption overhang reaches x 717 /
+637 and §11.94 stops a window's shadow at 713 / 633, so that column is never
+covered.
+
+**A cell repainted IN PLACE uncovered nothing** - a mount, a medium change,
+an item moving between cells (§26.9.4) - and `desk_zones_paint` says so.
+On `kern_big` it arms §11.91.2's vacated rect EMPTY (`[wm_dmg_stwin]` = 1,
+which is no window, and the rect's x2 = -32768, which meets no rect), so a
+window over the cell is not marked by the cell's own damage: with the cell
+clipped it owes only the L the dither ate. Without it the clipped cell is
+dearer and every window over it still repaints (measured: 145 ms against
+131 on Hercules). On BOTH kernels it sets `[wm_dmg_npro]`, a one-shot
+`.promote` spends with one `shr`: **the promotion asked only whether the
+front window was redrawn in this pass, not whether it changed**, so every
+in-place cell repaint redrew the front window's title bar and grow box -
+38 calls, 37.6 ms on Hercules - for pixels that were already right.
+`kern_small` takes only that half: without the clip its windows over a
+partly visible cell are marked by the zones' box whatever the vacated rect
+says, so the empty rect would change nothing there.
+
+The cell's rect is never empty after the clamp - cells are inside the
+desktop band by construction - so these one-shots always reach
+`wm_dmg_wins`, which spends `[wm_dmg_stwin]`, and `.promote`, which spends
+`[wm_dmg_npro]`.
+
+Measured with `tools/deskclip.py` (guest cycles on `os8088_5150_herc_gla`
+and `os8088_xt_vga`, one reveal pass, docs/plans/completed/DESK-CLIP-PLAN.md
+§2.2's layouts):
+
+| gesture | Hercules before -> after | VGA before -> after |
+|---|---|---|
+| a window dragged over the cell column, a window parked over a cell | 233.3 -> **151.1** ms | 195.1 -> **139.2** |
+| ...the parked window the Task Manager (its worker runs inside the span: about +-20 ms) | 779.7 / 761.3 -> **444.5** | 630.7 / 633.7 -> **332.2** |
+| a window closed whose frame reaches a cell another window covers | 156.9 -> **115.6** | 120.5 -> **86.8** |
+| a cell repainted in place under a window | 131.0 -> **72.7** | 238.3 -> **59.3** |
+| a window moved over plain desktop, no cell touched | 202.1 -> 202.2 | 221.0 -> 221.0 |
+
+and `kern_small` on Hercules: the drag **214.9 -> 118.6** (both cells
+covered, the parked window untouched), the in-place repaint **118.3 ->
+83.2** (the promotion), the close 146.8 -> 147.2 (the cell partly visible:
+drawn whole, plus a region build). What it costs: a zone split into two
+fragments pays `desk_draw_zone`'s fixed calls twice, and the in-place row's
+cells phase is 34.9 -> 49.8 ms on Hercules - paid for many times over by
+the window it no longer marks, and dearer only where no window would have
+been spared.
+
+**Bytes, resident.** `kern_big` **+322** (`.text` +233, `.bss` +4, `.cold`
++85: `ico_clip` 198, `wm_zone_r` 24, `desk_zone_clip` 72, the C2 stores and
+the one-shot the rest); `kern_small` **+58** (`.text` +36, `.cold` +22). No
+rung crossed on either, which per §1 is not the point.
+`tests/deskclip.py` (`deskclip`, `deskclipsmall`) is the gate and goes red
+without the frame subtraction (495 pixels), without `ico_clip`'s columns (32
+pixels), without the nothing-uncovered stores (the window redrawn, a title
+promoted), and on `kern_small` without the skip (both cells drawn).
+
 
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
@@ -19116,7 +19600,7 @@ sites that already exist:
 | `menu_draw_bar` | draw the bar: `menu_check`, white field + black rule, every `menu_bar` cell's title (cell 0 = the logo glyph), then `menu_draw_clock`. Gfx lock held by caller. The app name is one of those cell titles whenever an application owns the bar (§12.7); the standalone label draw is Locator's alone, and is skipped when `[menu_abcell]` is non-zero so the name is never double-struck. |
 | `menu_track`    | in: CX = mousedown x. Runs the whole interaction while the button is held (caller holds gfx lock): highlight title (xor), drop the menu (gfx_save under it to the save-under claim, `[menu_sseg]:0`), track item highlight following `mouse_y`, on release restore save-under + unhighlight; **out AX = 0xFFFF if nothing was selected, else AH = bar cell index (0 = System), AL = item index within that cell**. Item cells are 16px tall, menu width = widest item + 16px padding. Only the bar-specific half is its own: the cell find, `menu_title_xor` and the (cell, item) pack. The drop itself is `menu_drop` (§12.4). |
 | `menu_drop`     | the tracker, anchored by variables so it serves both the bar and a context menu (§12.4). |
-| `menu_popup`    | drop a menu anywhere on screen under the right button (§12.4). |
+| `menu_popup`    | drop a menu anywhere on screen, open while a button is held (§12.4). |
 | `menu_widest`   | in: BX = array of near item-string ptrs, CX = count. Out: AX = the widest `font_width` over them, 0 when CX = 0. Parameterized by array rather than by bar cell precisely so `menu_popup` can size a menu that has no bar cell. |
 
 `menu_track` polls `mouse_btn`/`mouse_x`/`mouse_y` directly (the ISR keeps
@@ -22709,8 +23193,8 @@ confirmation offers Shut Down and Cancel; Enter confirms, Escape cancels,
 and a mouse button must be pressed and released inside the same control.
 The prompt reminds the user to save their work. Cancel restores the desktop
 and preserves queued package wakes. The confirmation and terminal screen
-live in CTRL.DRV, loaded before the desktop is disturbed; a missing module
-uses the Control Panel's existing system-disk refusal.
+live in CTRL.DRV's `.modu` UI tail, loaded before the desktop is disturbed;
+a missing module uses the Control Panel's existing system-disk refusal.
 
 After confirmation, pending Control Panel/RTC settings are flushed while
 the module stays resident. If settings remain dirty, shutdown is cancelled
@@ -22723,7 +23207,10 @@ The primary display shows the startup splash's spinning 8088 and
 BIOS clock and halts between ticks; it never invokes INT 19h or powers off
 the machine. The spinner composer is shared source between the boot blob
 and CTRL.DRV; it adds no resident animation code or buffer. CTRL.DRV gains
-one final entry, CPE_SHUTDOWN, and one far-pointer slot in CPFP.
+one final entry, CPE_SHUTDOWN, and one far-pointer slot in CPFP. The entry
+remains in the `.modc` header, after the optional settings-core entry and
+panel entries, but its body and private state stay in `.modu`; MOD_SETS
+therefore loads no shutdown code or buffers.
 
 ### 12.4 Context menus — `menu_drop` and `menu_popup`
 
@@ -22778,7 +23265,11 @@ up (floor `MBAR_H`). Clipping would cut items in half and leave the ones
 below unreachable; shifting is what a Mac does, and it is the reason a
 right-click in the bottom-right corner is as usable as one in the middle.
 A popup MAY sit over the dock strip (§30) — the save-under puts it back.
-`[menu_btn]` = 2, so it lives exactly as long as the right button is held.
+`[menu_btn]` = **3**, so it lives exactly as long as **either** button is
+held. It was 2, the right, while every popup was a right-click's; §31.14's
+drop-downs open one on a LEFT press held the way a bar menu's is, and 3 serves
+both for the same five bytes. A right-click menu behaves as it always did
+unless the left button is also down, when it stays up until both are let go.
 
 Only one menu can be open at a time — both trackers run on the UI task
 under the gfx lock and both are driven by a held button — so both use
@@ -22788,7 +23279,8 @@ width — `menu_widest` is taken as-is — so the honest budget is stated over
 the descriptors that actually exist rather than as a general guarantee.
 All of them (`fm_ctx_file` / `fm_ctx_fold` / `fm_ctx_dir` / `fm_ctx_up`,
 and the dock's one-item `dock_ctx_items`, §30.2) are immutable
-`.text`, ≤ 8 items of ≤ 18 chars, worst case 4 planes × 130 rows × ~21
+`.text` — and §31.14's two, staged into `cp_sbuf` from `CTRL.DRV`'s image,
+four items of ≤ 8 chars — ≤ 8 items of ≤ 18 chars, worst case 4 planes × 130 rows × ~21
 bytes against the `MENU_SAVE_KB` claim, and there is no API
 slot through which a package could supply another. **A width clamp in
 `menu_popup` is the fix the day that stops being true** — a 16-item popup
@@ -23324,8 +23816,8 @@ sectors inside a freeze that is already seconds. And `[fpg_warm]` no longer
 saturates: only sub-threshold calls feed it, so ~85 consecutive refused ones
 would wrap it, costing one further sector of delay, once.
 
-`drv_fs_call` goes through `fpg_now`, which is `fpg_busy` with the threshold
-already met: there is nothing to warm up to when the first verb is already the
+`drv_fs_call` calls `fpg_busy` with `CX` = `FPG_WARM`, the threshold already
+met: there is nothing to warm up to when the first verb is already the
 slowest thing in the machine.
 
 ##### A phase with no scale shows the 50% hatch, and does not animate
@@ -23485,6 +23977,43 @@ after it. The test is §18.9.1's own: the BIOS's motor-off countdown at
 wait for a spin-up on a READ, which is why no MartyPC profile shows the dark
 second. It changes when the widget appears and nothing about what it
 reports. It is left out of `kern_dos`, whose `fpg_busy` is a stub.
+
+#### 12.8.3.2 A failing read counts as warm too
+
+`FPG_WARM` counts sectors MOVED, and a retry moves none. `dsk_xfer` tries a
+failing transfer three times at its run length and three times a sector at a
+time, with a controller reset between tries (§18.91). So a one-sector read
+on marginal media could grind for as long as those six tries took with
+nothing on the glass: no widget, no busy pointer, the prompt it was answering
+still painted, and keys waiting behind it. On the 5150 a marginal floppy did
+that for 30 seconds after Uncompress To... had already said `Disk error`
+(§22.23.6.1): the Disk window re-read the same bad disk before it repainted.
+The motor stayed on and the head never moved, because a 360KB disk's first
+data cluster and all of its FAT and directory are on cylinder 0. The owner
+took it for a hang, reasonably: **anything that takes more than two or three
+seconds has to say that it is working.**
+
+So the FIRST failed attempt of a transfer arms the chrome, as a stopped motor
+does (§12.8.3.1). The retry path drops `[sch_lock]` and calls `fpg_busy` with
+`CX` = `FPG_WARM`, then takes the lock back and retries. It does that at
+every failed attempt and not only while `[fpg_on]` is clear: armed,
+`fpg_busy` is the same `cur_busy` and compare the top of `dsk_xfer` makes for
+every transfer anyway, so the test that skipped it saved nothing but cost 7
+bytes (kernel size pass 8). The widget and the clock are up one failed attempt
+in, a fraction of a second to a couple of seconds, instead of never. The lock
+is dropped because §12.8.3's rule is that the first draw must not happen with
+switching off, and between two attempts is between two transfers as far as
+the rest of the machine is concerned. The `[mem_pinseg]` pin stays: the only
+thing it can do to a draw is make a compaction refuse to move the
+destination, which fails safe (§66.3 rule 5). `fpg_arm`'s own refusals (the
+splash, a foreign mode, another task's lock, a fullscreen window) apply
+unchanged, and so does `kern_dos`'s stub.
+
+It costs 18 bytes of `.cold` on each kernel, resident (25 as it shipped), and it
+changes nothing on a disk that reads. `tests/czto.py`'s `arm` leg is the gate: a one-sector folder
+opened with the motor running and every read failing reads `[fpg_on]` 0 at
+the first failed attempt and 1 from the second. With this block taken out it
+reads 0 at every one.
 
 #### 12.8.4 An unlocked painter and the mouse ISR are TWO PAINTERS
 
@@ -23777,6 +24306,18 @@ volume is mounted, and the splash refuses the widget before that.
 armed by a read earlier in the same lock hold would otherwise stay on the
 bar, and go on being stepped, for the bracket's whole life. It is the ONE
 payoff now — being at the door, it covers `fsx_mode` too.
+
+**The payoff draws under whatever clip region the caller left armed.**
+`OSAPI_WM_CLIP_SET` lasts until the next `gfx_unlock` (§11.3), and a bracket
+entered from the same hold has not had one, so a package that repaints its
+window through a region and then calls `OSAPI_FSX_RUN` clips the teardown to
+its own window: `[fpg_on]` goes to 0 and the bar stays on the glass for good.
+Audio did exactly that (§86.21.2). The rule for a package is the one Tracker
+and the Video Player already keep: **disarm with `OSAPI_WM_CLIP_CLEAR` when
+the window is drawn**. The kernel does not do it for the caller - clearing a
+region the app armed at the door would change what a same-mode bracket's
+first frame is clipped to, for every bracket in the tree, to cover one
+package's omission.
 
 ### 12.9 The bar is three segments, and each answers for itself
 
@@ -24594,7 +25135,8 @@ and such a page acts on the press exactly as before.
 (it ends at `W_SIDE` = 28, which includes it) and `W_ONDRAG` is not (§13.8.2), so `cp_kinit`,
 `cp_onup`, `cpf_cp_onup`, `CPE_ONUP`, `cp_pt` and `cp_drv_ev` are unconditional
 and `CP_NENT` is **6** there against 8, including §12.3.2's shutdown
-entry; §30.5's optional layout entry adds one to either count.
+entry; §30.5's optional layout entry adds one to either count, and
+§26.8.7's settings-core entry adds one when `OS88_SHORTCUTS` is enabled.
 On `kern_small` `cp_onup_x` reduces to
 `cp_pt` + `DSV_CPUP` through `cp_drv_ev` and stops: the static pages there
 still act on the press, and none of the kernel's own arm, probe or pressed
@@ -26978,18 +27520,20 @@ the gfx lock) may stay shared. Kind behavior:
   position keeps the whole +16·9 cascade on-screen and above the dock —
   330 + 144 + 160 = 634 on a 640px screen; on a
   shorter screen `wm_fit` clamps its tail back onto it, §39.7).
-  Per-instance
-  task (`app_tmr_task`; entry receives DX = instance index, caches the
-  record and state ptrs): loop { task_sleep 9; **if I_STATE = 2 →
-  teardown via `inst_task_die`** (§29); AX = [ticks]; delta = AX −
+  **No task** (§14.7): the clock is the window's one-shot timer (§13.9),
+  installed and armed for `APP_TMR_TICKS` = 9 by `app_tmr_kinit`, and
+  `app_tmr_tick` is its `W_ONTIMER` — the UI task, gfx lock held. Each
+  firing: re-arm 9; AX = [ticks]; delta = AX −
   TMR_LAST (subtraction idiom, safe across wrap); **TMR_LAST = AX
   unconditionally**; if TMR_RUN = 0 the delta is discarded here; else TMR_ACC
   += delta*10, and while TMR_ACC >= 182: TMR_ACC −= 182 and advance seconds
   with carries (s 60→0/m+1, m 60→0/h+1, h 24→0). This sampling runs
-  every iteration; only drawing is conditional: gfx_lock; **re-check
-  under the lock** that the window (I_WIN) is visible, then `wm_clip_set`
-  (§11.3) — if either fails, gfx_unlock and skip; else draw HH:MM:SS from
-  the instance's TMR_HRS/MIN/SEC; gfx_unlock }. A half-covered
+  every firing, and a timer fires whether or not its window shows (§13.9),
+  so a minimized Timer keeps time; only drawing is conditional: `wm_clip_set`
+  (§11.3), which answers CF = 1 for a hidden window as well — if it does,
+  skip; else draw HH:MM:SS from the instance's TMR_HRS/MIN/SEC. The clip dies
+  at `ui_timer_pass`'s `gfx_unlock`. A task-less kind closes at once, and
+  `wm_destroy` zeroing `W_FLAGS` is what stops a dead Timer firing. A half-covered
   Timer therefore redraws the half that shows, whole glyphs only, instead of
   stopping. Paint proc forgets TMR_SHOWN (§14.1 — `wm_draw_win` has just
   white-filled the content) and renders the same string from the state block,
@@ -27216,7 +27760,8 @@ digits **stop moving** — reading `00:00:04` while the timer on top of it read
 clipped, so the window says "running" and "00:00:04" at the same moment.
 
 **Nothing in `apps.inc` was wrong**, and that is the part worth keeping.
-`app_tmr_task` re-checks visibility under the lock, arms `wm_clip_set`, and
+`app_tmr_task` (the Timer's task until §14.7, whose `app_tmr_tick` does the
+same from the UI task) re-checks visibility under the lock, arms `wm_clip_set`, and
 takes CF = 1 as "not one visible pixel" exactly as §11.3 asks; `app_tmr_render`
 asks `wm_clip_test` about the whole line and, when an edge cuts it, forgets
 `TMR_SHOWN` and draws the line whole so that a cell the region refuses can
@@ -27327,9 +27872,10 @@ kind-table rows and the whole **Builtins** menu are behind `%ifdef KERN_BIG`.
 -1,030, `.lowbss` -240. `kern_big` is byte-identical.
 
 **What goes with them.** The two kinds are not only their own bodies: they are
-the only users of `apps.inc`'s task scaffolding, so `app_state_of`,
-`app_kind_open`, `app_kind_wait` and `app_kind_arm` leave with them - About is
-`KD_TASK` = 0 and never calls one. `app_tmr_pool` (160 bytes) and
+the only users of `apps.inc`'s scaffolding, so `app_state_of` leaves with them -
+About is `KD_TASK` = 0 and never calls it. (`app_kind_open`, `app_kind_wait`
+and `app_kind_arm` left with them too when this was written; §14.7 took the
+Timer's task away and Bounce, their last caller, carries the three inline.) `app_tmr_pool` (160 bytes) and
 `app_ball_pool` (80) are the `.lowbss` half, and the two 64-byte icon bodies
 `inst_ico_timer` and `inst_ico_bounce` the `.text` one.
 
@@ -27398,6 +27944,68 @@ both worth recording so the next reader does not re-derive them:
   `filecp.inc` as well. Gating the block gates the include, and five modules
   stop assembling; the include has to be lifted out first.
 
+
+### 14.7 The Timer has no task
+
+Reported off `vm/pc5150` with a photograph: `STACK OVERFLOW  TASK 02  SP 0BAC
+Timer`, an FTP upload running beside it. Slot 2 is the first 128-byte sleeper
+slice after the idle task's, and the Timer's task asked for it through
+`SCH_BUILTIN_STK` (§8.7.3).
+
+**128 was never a measurement of the Timer.** STACK-SLOTS-PLAN measured
+*Bounce* — six at once, +10…24 over the floor — and put the Timer in the same
+class beside it. Bounce draws two 8×8 fills; the Timer draws TEXT, and the
+moment another window cuts its digit line `font_run` takes the per-cell path
+§14.4 depends on. Read live off the slice under MartyPC (a breakpoint on each
+routine, the stack dumped where the Timer's own task stood at it):
+
+| depth at entry | |
+|---|---|
+| 4 | `app_tmr_task` → far into `.cold` |
+| 28 | `font_run`, through `app_tmr_digits` / `app_tmr_render` and the `.cold` trampoline |
+| 48 | `font_run_cell`, from `font_run_x`'s escape |
+| 66 | `wm_clip_rows`, seven registers later |
+| ~90 | the bottom of `wm_clip_test`'s walk |
+
+and an IRQ0 on top of that is `sch_isr`'s 24-byte frame and its calls. The
+slice's 0xCC fill read **112 of 128** after a covered Timer ran for a few
+seconds, on a MartyPC 5150 whose idle floor is **32**. `vm/pc5150`'s floor is
+**52** with `SOUND.DRV` resident (docs/reports/STKDIAG-PC5150-2026-09-10.md)
+and the iron's 64, so the same path is ~132 there and ~144 on the machine —
+through the canary on both. Uncovered, the Timer reads 60 here (80 and 92).
+**The photograph's Timer is the FRONT window at the halt**, so the exact field
+excursion is not reproduced here; what is measured is that one ordinary path
+does not fit the slice on that machine by 6 bytes and on the iron by 18, where
+the class rule (STACK-SLOTS-PLAN §7.2) asks for 1.25× headroom.
+
+**Trimming does not reach it.** Everything above `font_run` is 28 bytes, and
+the cheap cuts in it — a `jmp` rather than a `call` into `.cold`, the three
+registers `app_tmr_digits` saves for callers that do not need them, the
+trampoline — are about 14. The other ~62 are the kernel's shared text path,
+which every window draws through.
+
+**So the Timer does not hold a stack at all.** §13.9's window timer is the
+facility that section names as the replacement for *"a worker task … for a
+165 ms flash"*: it runs in `W_ONCLICK`'s environment, on the UI task, whose
+stack is `STK0_TOP` and not a slice. `app_tmr_tick` is the old task's body
+with its three spine calls removed — the sleep is the re-arm, the die check
+is `wm_destroy`, and the lock is `ui_timer_pass`'s — and the Timer's kind row
+is `KD_TASK` = 0. What does not change: the accumulator, TMR_SHOWN's
+incremental redraw (§14.1), §14.4's cut line, and a minimized Timer keeping
+time. What does: the digits move when the UI task passes rather than when a
+task is scheduled, which is a difference only while the UI task is busy — and
+the task was blocked on the gfx lock through every one of those anyway.
+
+**Bytes.** `kern_big` `.text` **−6** (the `.text` thunk into the task), `.cold`
+**+5**: the handler and its install/arm in `app_tmr_kinit` against the old
+loop, paid for by carrying `app_kind_open` / `app_kind_wait` / `app_kind_arm`
+inline in Bounce, their one remaining caller — one resident byte fewer in all. `cw_wm_timer` was already
+resident on every shipping `kern_big` (under `OS88UI_SBDRAG`) and is now
+under `KERN_BIG` so `SBDRAGOFF=1` keeps it. `kern_small` has no Timer (§14.6)
+and is byte-identical. The 128 slot a Timer held is free for a Bounce or
+anything else that fits there, and ten Timers no longer take ten task slots. `tests/tmrnotask.py` is the row: no task
+spawned, guest time kept to the second, and §14.4's cut line drawing above
+the edge and not below it.
 
 ## 15. kernel.asm — boot sequence
 
@@ -29196,7 +29804,7 @@ reads as a hang — but nothing says what is being read.
 `font_run` into the framebuffer (§15.6.3) and `font_run` lives in `.text` —
 which is precisely what stage 2 is reading. `spl_mdraw`'s far call to
 `ovw_font_run_x` is the whole of the dependency, and there is no font either:
-`font_glyphs` is `LOW_SEG` and `font_init` does not run until `kmain`.
+`[font_seg]:[font_base]` is not set until `font_init` runs, in `kmain`.
 
 ##### 15.6.5.1 NOT BIOS teletype, and that is the measurement worth keeping
 
@@ -29536,12 +30144,13 @@ including `dsk_cherr`, `dsk_read_chain`'s failure-code byte carried across
 its register-restore epilogue.
 
 ```nasm
-dsk_bpb:      resb 64  ; staged boot-sector head (mount scratch, §18.2)
+dsk_bpbh:     resb 18  ; staged BPB fields 11..28 (mount scratch, §18.2),
+dsk_bpb equ dsk_bpbh - 11 ; addressed as boot-sector offsets
+dsk_spc    equ dsk_bpb + 13  ; BPB_SecPerClus (validated power of two)
+dsk_fatlba equ dsk_bpb + 14  ; = RsvdSecCnt (FAT1 start LBA)
+dsk_nfats  equ dsk_bpb + 16  ; 1 or 2
+dsk_fatsz  equ dsk_bpb + 22  ; = FATSz16 (<= DSK_FAT_SECS on a floppy)
 dsk_fattype:  resb 1   ; 0 = FAT12, 1 = FAT16 (§19 detection)
-dsk_spc:      resb 1   ; BPB_SecPerClus (validated power of two)
-dsk_fatlba:   resw 1   ; = RsvdSecCnt (FAT1 start LBA)
-dsk_fatsz:    resw 1   ; = FATSz16 (<= DSK_FAT_SECS)
-dsk_nfats:    resb 1   ; 1 or 2
 dsk_rootlba:  resw 1   ; first root-dir LBA
 dsk_rootsecs: resw 1   ; root-dir sector count (<= 32)
 dsk_datalba:  resw 1   ; FirstDataSec
@@ -29561,6 +30170,14 @@ dsk_fatd0:    resw 1   ; dirty FAT sector range, [lo, hi] inclusive, sector
 dsk_fatd1:    resw 1   ; indices within one FAT; lo = 0FFFFh = clean
 ```
 
+**Four of these ARE the staged BPB** — `dsk_spc`, `dsk_fatlba`, `dsk_nfats`
+and `dsk_fatsz` are `equ`s into `dsk_bpbh`, not copies of it (kernel size
+pass 8: 24 bytes of `.cold` and 6 of `.bss`). `dsk_bpbh` is written by
+nothing but `disk_mount` — the boot sector's read, the §18.8.2 bank and rule
+14's TotSec32 fold — so it holds the mounted volume's fields exactly as long
+as the copies did. A redirected mount's `[dsk_spc]` = 1 (§62.9.1) is a store
+into that scratch, which the next FAT mount refills before it reads it.
+
 ### 18.2 BPB validation (`dsk_bpb_check`, in check order)
 
 The BPB is **hostile** — the data disk is written by foreign machines
@@ -29579,13 +30196,13 @@ held, and a read landing outside its destination buffer.
 | 5 | BPB_RsvdSecCnt | ≥ 1 | FAT LBA math (FAT starts at RsvdSecCnt) |
 | 6 | BPB_NumFATs | ∈ {1,2} | FAT2-fallback logic; layout math |
 | 7 | BPB_RootEntCnt | ≥ 1, ≤ 512, (RootEntCnt×32) mod 512 == 0 | FAT12/16 must have a root dir (spec); ≤512 bounds the mount stall (≤32 root sectors); whole-sector count is a spec MUST |
-| 8 | BPB_TotSec16 | ≠ 0 | 16-bit LBA bound: TotSec16==0 ⇒ the count lives in TotSec32 ⇒ ≥65,536 sectors ⇒ unaddressable by the AX=LBA `disk_read` contract. **Documented rejection.** TotSec32 otherwise ignored (some formatters set both; harmless) |
+| 8 | the sector count | ≠ 0 — **asked by rule 14**, which refuses it for nothing: FirstDataSec is at least 3, so a count of 0 borrows there, and no rule in between divides by the count or bounds a loop with it | a zero-length volume. On `kern_small` a TotSec16 of 0 means the count lives in TotSec32 (≥65,536 sectors), which that build does not read, so it arrives here as 0 and is refused; `kern_big` folds TotSec32 in at the staging (§18.7.5). TotSec32 is otherwise ignored (some formatters set both; harmless) |
 | 9 | BPB_Media | ∈ {0xF0, 0xF8..0xFF} | spec-legal set; cheap garbage gate. FAT[0]'s media echo is NOT checked (spec says don't rely on it) |
-| 10 | BPB_FATSz16 | ≥ 1, and on a **BIOS floppy** ≤ `DSK_FAT_SECS` (9) | ≥1: layout math. The floppy cap covers every real floppy FAT this OS boots or builds: 360K=2, 720K=3, 1.2M=7, 1.44M=9. **On a driver-backed volume (§18.7) there is no cap**: the FAT is a window (§18.8), and rule 16 below proves the declared FAT covers its own cluster count — which is the check this cap stood in for |
+| 10 | BPB_FATSz16 | ≥ 1, and on a **BIOS floppy** ≤ `DSK_FAT_SECS` (9) | ≥1: layout math. The floppy cap covers every real floppy FAT this OS boots or builds: 360K=2, 720K=3, 1.2M=7, 1.44M=9. **On a driver-backed volume (§18.7) there is no cap**: the FAT is a window (§18.8), and rule 16 below proves the declared FAT covers its own cluster count — which is the check this cap stood in for. With no cap, `NumFATs × FATSz16` can pass 16 bits, and the multiply is overflow-checked like every sum in the derived layout (a product past a word is refused, not wrapped into a root inside the FAT) |
 | 11 | BPB_SecPerTrk | floppy: ∈ {8, 9, 15, 18, 21, 36}; driver-backed: 1..63 | the floppy whitelist exists because a hostile spt×heads product past 16 bits would zero `disk_read`'s CHS divisor → divide fault with `sch_lock` held. A driver-backed volume never reaches that divisor — its driver owns the addressing — so the bound is only that the product cannot overflow, and 63 is what the CHS sector field can carry |
 | 12 | BPB_NumHeads | floppy: ∈ {1, 2}; driver-backed: 1..255 | same divisor protection; 255 is what the CHS head field can carry |
 | 13 | TotSec16 coherence | floppy: ≤ SecPerTrk × NumHeads × 80; driver-backed: ≤ the sector count its DRIVER declared | on a floppy, every in-volume LBA stays CHS-reachable under `disk_read`'s cyl<80 guard. On a driver-backed volume the driver stated the partition's length when it registered the volume, so the question stops being "is this geometry plausible" and becomes the sharper **"does this volume claim to be bigger than the partition it lives in"** |
-| 14 | FirstDataSec | FirstDataSec + SecPerClus ≤ TotSec16 | at least one cluster exists; DataSec underflow guard |
+| 14 | FirstDataSec | FirstDataSec ≤ TotSec, as a borrow out of `TotSec − FirstDataSec` | DataSec underflow guard. "At least one cluster exists" — FirstDataSec + SecPerClus ≤ TotSec — is the same comparison as rule 15's CountOfClusters ≥ 1 and is asked there, once |
 | 15 | CountOfClusters | ≥ 1 and < 65,525 | empty-data-area rejection; FAT32 insurance (§19) |
 | 16 | FAT capacity | the FAT sectors the cluster count NEEDS ≤ FATSz16 | a FAT too small for its own cluster count would send `dsk_next_clus` past the end of it. **Compared in sectors, not bytes**: a FAT16 volume with 65,000 clusters needs 130,004 FAT bytes and declares 254 FAT sectors, and both `entries×2` and `FATSz16×512` are past 16 bits. Neither product is needed — every term of a sector-against-sector comparison fits |
 | 17 | BPB_HiddSec | ignored | floppies are unpartitioned; accepting nonzero keeps odd-but-readable disks mountable |
@@ -30748,19 +31365,28 @@ rides the run loop's advance (`adc`), goes into the CHS divide on a BIOS volume
 (DX was a constant 0 there), and into **DI** on a driver volume, whose
 `DSV_BLK` has always taken the low word in SI (§51.8). The read-ahead cache
 (§18.95) keys its chunks on 16-bit LBAs and simply stands aside when the high
-word is non-zero; it clamps its fills at 65,535 on a big volume.
+word is non-zero; it clamps its fills at 65,535 on a big volume. That test
+costs nothing: `[dsk_lbahi]` sits directly behind `[dsk_rah_busy]`, so the
+gate that already asked "is a fill in flight?" reads the pair as one word, and
+a volume-relative LBA is under 2^24 (a 24-bit TotSec), so the high word's low
+byte is zero exactly when the word is.
 
 **`[dsk_c2hi]` is where the high word comes FROM.** `dsk_clus2lba_x` computes
 `FirstDataSec + (cluster − 2) × spc` in 32 bits and leaves the high half there
 — an *answer*, not the transfer's register — because between asking and moving
 a caller may fault a FAT window in, and that transfer must see 0.
-`dsk_c2arm_x` copies it across at the moment of the transfer. The directory
-walker sets it too (0 for the root). What holds an LBA for longer holds all 32
-bits of it: the found and free directory slots (`dskw_dsec`, `dskw_fsec` —
-whose "none" sentinel moved to the HIGH word, FFFFh being an ordinary low word
-past 32MB — and `dskw_cursec`), and the data walk's cursor and pending run
-(`dskw_clba`, `dskw_rlba`); `dsk_rd1p_x`/`dsk_wr1p_x` take a pointer to such a
-dword and cost a call site nothing over the word they replace.
+`dsk_c2arm_x` copies it across at the moment of the transfer, and
+`dsk_c2lba_arm_x` is the pair — ask, and on success arm — for the three callers
+that move the cluster's first sector next. The directory walker sets it too (0
+for the root). What holds an LBA for longer holds all 32 bits of it: the found
+and free directory slots (`dskw_dsec`, `dskw_fsec` — whose "none" sentinel
+moved to the HIGH word, FFFFh being an ordinary low word past 32MB, so every
+reader tests `DSKW_FNONE` and never the word itself), and the data walk's
+cursor and pending run (`dskw_clba`, `dskw_rlba`); `dsk_rd1p_x`/`dsk_wr1p_x`
+take a pointer to such a dword and cost a call site nothing over the word they
+replace. The directory scan's own cursor, `dskw_cursec`, stays a word: its high
+half IS the walker's `[dsk_c2hi]`, which nothing moves between a sector's read
+and the scan of its sixteen entries.
 **`dsk_read_chain` coalesces runs by CLUSTER now**, not by LBA: every cluster
 but the last is taken whole, so a run is contiguous exactly when each cluster is
 the one after the last, and a cluster is a word on any volume. It asks for the
@@ -30770,10 +31396,13 @@ LBA once, at the flush. That shape is the same size as the one it replaced.
 (§18.9.2) ends with a pad byte that held HiddSec's low byte, which nothing reads;
 when TotSec16 is 0 the staging puts TotSec32's low word in TotSec16's place and
 its bits 16–23 in that pad (`DSK_B_TOTHI`). One byte names 8GB, so the bank
-grows by nothing, and every rule below reads one place: rule 8 is "the 24-bit
-count is not 0", a floppy with a 24-bit count is refused, a driver that
-DECLARED a length cannot carry one, and CountOfClusters is a 24-over-8 divide
-with the quotient-overflow refused before it can fault with `[sch_lock]` held.
+grows by nothing, and every rule below reads one place: rule 14 is "the 24-bit
+count is at least FirstDataSec" (and so not 0 — rule 8 is folded into it, §18.2),
+a floppy with a 24-bit count is refused, a driver that DECLARED a length cannot
+carry one (both at rule 13's one compare), and CountOfClusters is a 24-over-8
+divide with the quotient-overflow refused before it can fault with `[sch_lock]`
+held. `[dsk_totsec]` is the count's word CLAMP, FFFFh past 64K sectors, because
+its one reader is the sector cache and the cache never serves past 32MB.
 A driver serving a volume past 32MB registers it with `OSAPI_VOL_ADD`'s CX = 0,
 *unknown*, because the length does not fit the register — rule 13 already
 accepted that. **So the driver is the fence there**: `HDD.DRV` keeps the
@@ -31209,6 +31838,89 @@ the claim, keeping `mem_avail_lvl`'s bottom-rank test so the window is still
 only taken out of memory that is free without shedding anybody. What the
 number was defending is now defended by the tag: a machine that needs the room
 back takes it.
+
+### 18.8.5 A held stream's dirty FAT stays with its window across a hop (`kern_big`)
+
+The windows are per volume and the DIRTY RANGE is not: `[dsk_fatd0,
+dsk_fatd1]` is one pair, and `dskw_flush_x` writes it with the CURRENT
+volume's geometry. So `dsk_fatw_park`, at the top of every mount, WRITES the
+outgoing volume's dirt to FAT1 and FAT2: a seek to the FAT and back. Its own
+comment called that free, because every commit point flushes before it
+returns. A HELD stream (§18.4.9) is the one writer that does not, and a join
+hops its target every block (§22.23.5), so it paid two FAT writes a block at
+the hop instead of at the append.
+
+**One bank is enough.** Only a held stream leaves dirt for a park to meet, and
+there is one hold at a time. So the dirt is banked beside it (`dws_hd0`/
+`dws_hd1`, `.text`, empty = `0xFFFF`), and the window that holds it stays
+where it is. `dsk_fatw_pick` gives both back when it reuses that window. The
+commit, or a window slide, writes them as it always did. Banking and
+restoring are one exchange (`dws_hswap`): the live pair after a park is
+empty, and so is the bank after a restore.
+
+**It banks only where the hop cannot take the window away.** A mounted
+volume always has a window (§18.8.3's "no third state"). When that window is
+the PIN, though, the incoming volume may evict it. On a machine whose heap
+refused the windows (`FATWNONE=1` is that machine), two volumes do so at
+EVERY hop. So `dws_hpark` banks when the incoming volume (DL at the park)
+already has a claim of its own, which cannot take anybody's window.
+Otherwise the flush is today's: slower, and never lost. (A held volume with
+a claim of its own would be safe to bank whatever the incoming one has; the
+size pass stopped asking, one test cheaper, because the join's target in the
+case that matters is the system disk, which holds the pin.)
+
+What must not happen is a window going while its dirt is banked, and there
+are four ways. **Three of them end at ONE place**, which is why there is one
+hook for them and not three:
+- **a shed** takes the claim (`dsk_fatw_demote`), or **the pin is evicted**
+  from the held volume by a third, homeless volume (`dsk_fatw_evict`). Both
+  leave the volume's banked sector `0xFFFF`, so the way back to it is a
+  LOAD;
+- **the volume is re-read**: a full mount, or a signature that no longer
+  matches. Inside the batch a held stream lives in, every hop is a quiet
+  reuse, so a re-read can vouch for nothing;
+- so `dsk_fatw_pick`, about to LOAD the held volume's window with dirt
+  banked for it, loses the hold (`dws_hload`) - before anything can link into
+  it, because the one routine that links, `dws_commit`, goes back to the
+  volume first and reads the poison after the hop. A shed is no longer
+  refused for it: `mem_fatw_dirty` guards the live window only, and a held
+  stream whose banked window was taken by memory pressure fails `FERR_IO`
+  instead of pinning the heap;
+- **a hibernate** zeroes the pair. It is started from a menu, and
+  `gfx_unlock` has committed every hold before any menu can be reached.
+
+**A LOST hold is POISONED rather than dropped** (`dws_hlose`). Its dirt goes
+with the window, the bank is emptied - both halves, or a stale top would be
+swapped back into the live range at the next park and widen it past the
+window - every token goes stale (`[dsk_mgen]`), and the hold stays pending
+with `dws_hlink` = `0xFFFF`, which no cluster is. The first commit to meet it
+answers `FERR_IO` and clears it, writing nothing. None of its allocations
+reached the disk, so nothing there links to them. That commit is the
+stream's own cold call, a close, another write's gate or the unlock. So the
+stream's next call fails instead of re-seeding from the committed entry and
+appending past a hole.
+
+**Measured** on the join of a 640 KB set, B: to A: on two 1.44 MB floppies
+(`tests/czseq.py`, 20 blocks):
+
+| writer | guest s | target FAT writes |
+|---|---|---|
+| `OSAPI_FILE_APPEND` | 127.7 | 48 |
+| `WRITE_SEQ`, HELD | 134.6 | 42 |
+| HELD, dirt banked | **116.8** | **6** |
+
+HELD alone was SLOWER. The ROM runs one floppy motor at a time and waits
+out the spin-up before a WRITE, and APPEND's per-block lookup was a READ
+that spun A: up for free. Banking takes the per-hop FAT flush off instead,
+and the join is 8.7% faster than it was. From a floppy to a fixed disk
+(`--hdd`), the target's metadata falls from 4 calls a block to 0.6. MartyPC's
+XT-IDE has no seek time, so what that saves on an ST-225 is a prediction:
+two long seeks a block.
+
+Costs: `kern_big` +198 bytes as first built (`.cold` +194, `.text` +4), and
+about half that since the size pass (docs/reports/STREAM-WRITER-SIZE-2026-09-30.md).
+Gated by `czseqlose` (the poison) and `czseqnone` (`FATWNONE=1`, where the
+flush has to stay).
 
 ### 18.9 A volume switch is not a mount
 
@@ -32125,12 +32837,19 @@ stats the name and walks once to the offset (one `READ_AT`'s worth of
 walking), then reads. Every later call walks ONE FAT link from `+6`, the
 last cluster the call before it read, however far into the file that is.
 
-**The mount generation is the whole validity rule.** `disk_mount_x` bumps
-`[dsk_mgen]` (never to 0) every time it runs, and every volume snapshot the
-kernel builds goes through it: navigation (§19.2), a media change (§18.9.1),
-the remount after a write (§18.4), another instance's file call moving the
-volume (§19.2.1). A cursor whose generation or volume disagrees is
-**re-seeded from the name, silently**, at the offset it holds. So:
+**The media generation is the whole validity rule.** `[dsk_mgen]` moves
+(by 2, never to 0) on every write `dskw_sync` closes and every mount that
+READS a boot sector: navigation and a media change on a floppy (§19.2,
+§18.9.1) both do. A mount that trusts a banked boot sector - a quiet hop a
+batch vouches for (§18.9.3), or a fixed disk, whose bytes nothing but a write
+can change - does not, and neither does another instance's file call moving
+the volume (§19.2.1): the volume is checked beside the generation. It moved
+on EVERY mount until the stream writer's size pass, which made it the one
+generation WRITE_SEQ's tokens use as well (§18.4.9) - the join hops its
+source and target every block, and a generation that moved on a hop would
+have made both kinds of stream cold every block. A cursor whose generation or
+volume disagrees is **re-seeded from the name, silently**, at the offset it
+holds. So:
 - a caller never sees a stale cursor as an error;
 - a write to the file, anywhere, invalidates it, and the next call reads the
   file as it now is;
@@ -32194,6 +32913,287 @@ clusters), 32 KB a call (`tests/vidkern.py`):
 
 At 12 MB, none of its 28 `int 13h` calls went below cylinder 16: the chain
 is followed from the resident FAT window and never re-read.
+
+#### 18.4.8.1 Every chunked reader is a stream: `os88_rseq` and `CLO_RSEQ`
+
+The slot shipped for the Video Player (§98), and for a cycle it had one
+customer while seven other loops read a file a chunk at a time through
+`READ_AT` and paid its walk from the front on every chunk. They are streams
+now, and none of them changed shape to become one, because the offset
+**stays the caller's**: a helper takes `READ_AT`'s own registers plus a
+cursor, compares the cursor's `+12` with the offset asked for, and re-seeds
+the cursor there when they differ. A seek, a restart, a rewind and a retry
+after an error therefore need nothing at the call site - the conversion is
+the call and a 16-byte cursor.
+
+| helper | for | where | out of READ_SEQ's reach |
+|---|---|---|---|
+| `os88_rseq` (`apps/os88rseq.inc`) | packages and drivers | cursor at `DS:DI` | `FERR_NAME` from the door - the small kernel, or a refusal `READ_AT` would repeat - is retried as `READ_AT` at the same offset |
+| `CLO_RSEQ seg, off` (`kernel/clone.inc`) | `CLONE.DRV`, the module | cursor at any `seg:off`, through `BP:DI` | assembles as the plain `READ_AT` call on `kern_small` |
+
+**Moving to another file zeroes the cursor**, and that is the one rule the
+helper cannot keep for its caller: the cursor names no file, and a valid one
+is trusted for whatever name the call carries, so a cursor left at the offset
+a second file starts at would read the FIRST file's clusters under the second
+one's name. `os88_rseq_new` zeroes one; kernel code writes `0` to its
+generation word (`RSQ_GEN`), which is all "unseeded" means.
+
+| reader | § | cursor | zeroed |
+|---|---|---|---|
+| Audio's refill, 16 KB a gulp | 86.5 | `ap_rd_cur`, bss | at every track |
+| FTPD's `RETR` | 77.3 | `fd_rcur`, bss | at every `RETR` |
+| RAM disk **Load**: both metadata blocks, then the arena | 62.9.12 | `rd_rcur`, the image | at every Load |
+| the installer's copy, 32 KB a take | 52.10.13.1 | `hd_ircur`, the image | at every file |
+| the parts standard's carve and XMS stage (`op_read`, `op_xload`) | 20.12 | `op_rcur`, `OP_BSS` (now 102) | never: the file is always the package's own, and a lazy fetch finds the cursor where the carve left it |
+| Clone's image-file read (`clo_fget`) | 18.99.8 | `CL_FCUR`, the claim's header | by `clo_zerohdr`, per job |
+| the join's parts (`cmz_jneed`) | 22.23.5 | `cmz_jcur`, the image | by `cmz_jrst`, per part |
+| the compressor's streamed source (`cmz_sfetch`) | 22.22.5 | `cmz_scur`, the image | at the streamed pass's start |
+
+**What each one buys is set by what WRITES between two of its reads**, because
+a write `dskw_sync` closes moves `[dsk_mgen]` and the next call re-seeds -
+one `READ_AT`'s walk, which is what every call paid before, so no reader is
+slower for the change:
+- Audio, FTPD, a RAM disk Load, the parts loader: nothing writes between the
+  reads, so every call after the first is one FAT link.
+- The installer, Clone to a file and the join write between their reads, but
+  as a HELD stream (§18.4.9): only its first chunk (a new hold) and its
+  close move the generation, so the source stays hot for the whole file.
+- The compressor's second pass writes a PLAIN stream, which syncs every
+  chunk, so a source fetch that follows an output flush is cold. It is hot
+  across the fetches no flush separates - the more the file compresses, the
+  more of them.
+
+**The resident cost is none**: the kernel's half is `CLONE.DRV`'s image, and
+`kernsize` reads `kern_big` byte for byte as before. What it costs is 16
+bytes of cursor per reader and 76 bytes of helper (`os88_rseq`, measured) per
+package or driver that carries one, `OP_BSS` included in every package with
+parts.
+
+### 18.4.9 `OSAPI_FILE_WRITE_SEQ` — a streaming append, whose place the KERNEL keeps (`kern_big`)
+
+`OSAPI_FILE_APPEND` is a complete operation every call (18.4.4): it looks the
+name up, walks the file's chain from the front to its last cluster, writes,
+and commits the FAT and the entry. The walk makes a chunked write QUADRATIC
+in its length, and the commit is a FAT write and a directory write, and on a
+fixed disk three long seeks, for every chunk
+(docs/plans/STREAM-WRITER-PLAN.md §1 measured all of it). This slot is
+stages 2 and 3 of that plan.
+
+| in | |
+|---|---|
+| `SI` | a NUL 8.3 name in the current directory, **on every call** |
+| `ES:BX` | the bytes - APPEND's registers |
+| `CX` | the count: a whole number of clusters, but the last, as APPEND's. **0 closes** |
+| `AL` | flags: bit 0 = `WSEQF_HELD`, the same on every call of a stream; bit 1 = `WSEQF_SYS`; every other bit is ignored. A close reads none |
+| `DI` | the TOKEN the stream's last call handed back; 0 (or anything stale) = none |
+
+Out `CF=0`, `AX = 0`, `DI` = the token for the next call; `CF=1` with
+`AX = FERR_*` and `DI` as it was. A close touches nothing but `AX`.
+**The file must exist**: WRITE_SEQ grows a file, it never creates one, so
+the first chunk is an `OSAPI_FILE_WRITE` (or the file is written empty).
+
+**The place is the kernel's, and there is ONE.** `dws_rec` is the stream
+record: the entry's head and size, the sector and offset the entry lives at,
+the file's last cluster and the head of a held chain - sixteen bytes that are
+`dskw_raw`'s tail, `dskw_dsec`, `dskw_doff`, `dskw_prev` and `dskw_first`,
+declared adjacent so that saving and restoring them is one `rep movsw` - and
+its volume. Every successful call writes it (`.stamp`, after the sync). The
+caller keeps only a WORD, the token, which is the `[dsk_mgen]` that call left
+(18.4.8): a generation that moves on every write, every mount that reads a
+boot sector, and the first call of a new hold, the one call that writes
+nothing the disk shows. So a token equal to it names the stream the record
+describes and no other, and the volume is checked beside it because a banked
+hop moves nothing. Two streams at once are both CORRECT, each call that finds
+the record another's being cold: one lookup and one walk, APPEND's cost.
+It was a 16-byte caller cursor copied in and out of a kernel copy first
+(`dsq_door`), and the record plus the token is what took its door, its stamp
+and the held stream's second copy of the same fields out.
+
+**It has no body of its own: it IS the append.** The door decides HOT or
+COLD, commits any hold a cold call must not look past, and calls
+`dskw_append_x`; `dskw_wabody`, the one body `OSAPI_FILE_APPEND`,
+`APPEND_SYS` and `WRITE_AT` already share (18.4.7.3), reads `[dws_flg]`. A
+hot call loads the record in place of the lookup and starts the grow at the
+record's last cluster instead of walking. So every argument an append
+refuses, WRITE_SEQ refuses the same way.
+
+**`WSEQF_SYS` is `OSAPI_FILE_APPEND_SYS`'s permission** (§19.6.1): the
+file may be hidden + system, and the stream may still grow it. The door sets
+`[dskw_syswr]` from the bit on EVERY call - 0 as often as 1 - and
+`dskw_wrp` clears it on the way out as it always has, so a close or a refused
+call that never reaches the body cannot leave it set for the next write. It
+is what lets the installer copy KERNEL.SYS and the drivers as streams
+(§52.10.13.2). Drivers only, as APPEND_SYS is, and FENCED as it is: the
+cell's way in, `dwsf_dskw_write_seq`, runs `drv_owns_seg` on the caller's
+`DS` (19.6.1's identity test) whenever the bit is set on a call that writes,
+so a package that sets it is answered `CF=1`, `AX = FERR_PROT` with `DI` as
+it was. The caller's `DS` is the one `api_rn` banks under the far call; the
+kernel's own writers call the door behind the fence. 32 bytes of `.cold`,
+resident.
+
+**The writers on it**, and what each holds:
+
+| writer | § | stream |
+|---|---|---|
+| the file manager's copy | 22.5.3 | HELD, one per file |
+| the split-set join | 22.23.5 | HELD |
+| Compress's second pass | 22.22.5.1 | PLAIN: it reads its own output back |
+| a disk image, `Clone Disk...` to `IMG` | 18.99.8.1 | HELD |
+| the installer, every file and `KPAD.TMP` | 52.10.13.2 | HELD, `WSEQF_SYS` for a system file |
+| a RAM disk's Preserve | 62.9.12.1 | HELD |
+| Telnet's Zmodem receive | 70.11.7 | PLAIN, FTPD's shape |
+| FTPD's `STOR` | 77.49 | PLAIN |
+| VIDDISK's W | - | the bench: either |
+
+**A grow stores the entry's TAIL** (`dskw_ent_tail`): its head and size, the
+two fields a grow changes and the two the record keeps, read-modify-write of
+the entry's sector as ever. That is every grow's entry store on `kern_big`,
+cursor or none, and it never re-zeroes the slot after the entry, which only
+a create can owe (`[dskw_zapnext]`).
+
+**`WSEQF_HELD` commits once.** A held call writes the data and grows an
+UNREACHABLE chain: the new clusters are allocated and linked to each other,
+never to the file. So a FAT flush at any moment, when the window moves or a
+hop parks it, puts nothing on the disk that a crash could make wrong: at
+worst the clusters are lost, the failure 18.4's order prefers. The link from
+the file's committed last cluster (or the entry's head), and the entry's
+size, are written by `dws_commit`, which loads the record and enters the
+append body at `.seal` - the SAME chain flush, link, flush and entry store an
+append makes once its data is down, once per stream instead of once per call.
+It runs:
+- at the **close**, a call with `CX` = 0, and at any COLD call;
+- **before any other write on that volume**: `dskw_mounted`, the gate every
+  write body passes, commits first, so a delete, a rename or another stream
+  finds the FAT and the entry the disk will hold. Not WRITE_SEQ's own call;
+- **at `gfx_unlock`**, the UI task's. That is every way the user can reach
+  the drive: a return, a failure, a question, a swap prompt (18.9.3). A
+  commit there hops to the held volume's ROOT if the machine is standing on
+  another (the entry is reached by its sector, so any folder will do), and
+  back; inside the batch that is ending, the hop is banked.
+
+- **after an `OSAPI_WM_ONWAKE` handler returns**. A wake handler runs
+  without the lock and may call the file slots (74.1), so when it leaves a
+  hold pending the UI task takes the lock and gives it back, and the
+  unlock's commit runs where every other callback's does.
+
+So a held stream never outlives the callback that made it, and a swapped
+floppy can never receive another disk's FAT. A mount that leaves the volume
+mid-hold outside a batch no longer commits it: nothing between that mount and
+the unlock can reach the drive, and if the way back RE-READS the volume the
+bank is lost and POISONED (18.8.5) rather than trusted.
+
+**A held call that FAILS loses itself and nothing else**, as a failed APPEND
+does: the stream keeps every chunk before it, and the next commit writes
+them. The trap is the rollback. APPEND's is `dskw_refat`, which DROPS the
+FAT window, and a held chain's allocations are in that window wherever no
+slide has flushed them yet. The first build did exactly that and kept the
+hold, and the commit then linked the file into clusters the disk still
+called free: MEASURED, a dying disk at chunk 100 left an entry of 3,276,800
+bytes over a 17-cluster chain. So a held call's rollback FLUSHES instead.
+The held chain is unreachable until the commit, and the failed call's own
+half-built sub-chain was never linked to it, so it becomes lost clusters,
+18.4's preferred failure. Only a flush that ALSO fails loses the stream, and
+it is POISONED as a lost bank is (18.8.5), so the next call answers `FERR_IO`
+rather than appending past chunks that never reached the disk.
+
+**Every commit stales every token, whatever it answers.** `dws_commit` moves
+`[dsk_mgen]` as it clears the hold, as `dws_hlose` does. A commit that FAILS
+at the chain flush, the link or the entry store leaves the record's size
+counting chunks no link reached and its last cluster the held tail, and a
+caller that kept its token (the DOS box's failed close does) would otherwise
+grow the file from that tail on its next call. The bump makes that call
+COLD: it finds the entry on the disk and grows from the last cluster the
+disk links. A commit that succeeds is bumped again by its sync, which costs
+nothing.
+
+Gated by two rows, and they are both needed. `wseqioerr` fails every data
+write from chunk 100 on, which leaves held allocations dirty in the window;
+it is red on the first build. `wseqfull` fills the volume instead, and is
+green on either build: a full disk has walked the whole FAT for a free
+cluster, flushing every window slide on the way, so its chain is already
+down. It guards the other half, that the refusal keeps the 128 chunks
+before it rather than abandoning them. A crash while held loses the
+bytes written since the stream began and nothing else. That is the right
+trade for a file that is useless until it is finished (the owner's case: a
+joined split set). A file that grows over a long time and must survive each
+chunk is written PLAIN, where every call is committed as APPEND's is and
+only the lookup and the walk are gone.
+
+It is not in `kern_small`: the cell is in both kernels (20.8 rule 4) and
+the small door answers `CF=1`, `FERR_NAME` with `DI` untouched, as READ_SEQ's
+does. A redirected volume (62.9) takes it as the append it is: `FSV_APPEND`
+every call, HELD ignored, there being no clusters to keep a place in.
+
+**Measured** on MartyPC (`os8088_5150_herc_hdd_sb_gla`, XT-IDE), VIDDISK's
+W: 12.5 MB in 400 appends of 32 KB, read back off the VHD on the host dword
+for dword every time (`tests/viddisk.py --floppy --wmode`):
+
+| writer | W, guest s | one-sector writes an append | reads an append |
+|---|---|---|---|
+| `OSAPI_FILE_APPEND` | 570 | 3.2 | 1.0 |
+| `WRITE_SEQ`, plain | **204** | 3.2 | 1.0 |
+| `WRITE_SEQ`, HELD | **191** | **0.2** | **0.1** |
+
+The walk was most of APPEND's time, so plain is 2.8x. HELD removes nearly
+all of the per-append metadata. That is worth only 6% more on an XT-IDE,
+whose small writes are cheap, but on the ST-225 it is the three long seeks
+per chunk (docs/plans/STREAM-WRITER-PLAN.md §1).
+
+**Gated** by six soak rows, each red with what it guards taken out where
+that could be arranged:
+- `wseq` and `wseqheld` are the table above;
+- `wsequnclosed`: HELD and never closed, the bench mounting nothing after it
+  and the machine killed a guest second later. The disk must hold all
+  12.5 MB. With `gfx_unlock`'s commit taken out it holds 32 KB;
+- `wseqinter`: another file written every 64 chunks;
+- `wseqdeleted`: the stream deleted mid-hold and a file made in its
+  directory slot. Its own 16 bytes and a clean disk; with `dskw_mounted`'s
+  commit taken out that file's entry was patched to 2,048 bytes and the
+  disk check failed;
+- `wseqcut`: a POWER CUT, the emulator killed 150 chunks into a held
+  stream. The file is its committed 32 KB and the disk checks clean;
+- `wseqioerr` and `wseqfull`: a held call refused part-way, by a dying disk
+  and by a full one. The file keeps every chunk before the refusal and the
+  disk checks clean (above).
+
+Costs: the whole stream writer - this slot, the bank (18.8.5), the copy's
+room check (22.5.2.1) and the converted writers - is **+555 bytes** on
+`kern_big` (`.cold` +490, `.bss` +21, `.text` +44: the cell's 6, the
+`gfx_unlock` test, the wake arm's commit, `[dsk_fcgoal]` and the bank). As first built it was
+**+1,077**; docs/reports/STREAM-WRITER-SIZE-2026-09-30.md is where the 574
+went, stage 1 (18.4.7.6) included; `WSEQF_SYS` and its fence are the last 32, and the 20 after them are the review's: the door's flag mask, the commit's token bump and the wake arm's commit. `kern_small` +6, the cell.
+
+#### 18.4.9.1 A held call that runs out of room frees what it took
+
+A HELD call that fails must not drop the FAT window, because the held
+chain's allocations are in it unflushed, so its rollback FLUSHES instead
+(above). The first version flushed the failed call's own half-built
+sub-chain with it, as lost clusters - which is 18.4's preferred failure for
+one sector's worth and a disaster for the failure that actually happens:
+**on a DISK FULL the half-built sub-chain is every free cluster the volume
+had left**, so the stream's file could be deleted afterwards and the disk
+stayed full until a host fsck. The DOS box found it (`tests/dosshell.py`'s
+out-of-space COPY, SPEC.md 96.53): the copy was undone and the probe's next
+file could not be created.
+
+The sub-chain is `[dskw_first]`'s - `dskw_wdata` links it as it allocates,
+each cluster marked EOC, and a HELD call links it to the held tail only once
+it has SUCCEEDED (`.hmore`) - so it is this call's alone, and `dskw_free_chain`
+zeroes it in the window before the flush. **6 bytes.**
+
+#### 18.4.9.2 …and DELETE, MKDIR and RMDIR commit it too
+
+*Any other write on the volume commits the hold first* was true of every
+write that opens with `dskw_mounted` and FALSE of the three that open with
+`dskw_gate` - DELETE, MKDIR and RMDIR - because the gate's FAT arm parses the
+name and returns through `dskw_mounted`'s `ret` without running its body.
+A delete of the held file therefore marked the entry deleted, freed the chain
+the entry named - the COMMITTED part - and left the hold pending: the held
+chain stayed allocated and unreachable (345 lost clusters, measured, after a
+DOS program filled a floppy and deleted its file), and the hold's own commit
+would later link a cluster the delete had FREED and store the dead entry
+back. The hold test is one routine now, `dws_gate`, and both gates call it:
+**+7 bytes**. The same DOS probe verifies clean after it.
 
 ### 18.4.7 `OSAPI_FILE_WRITE_AT` — the same offset, going the other way
 
@@ -32395,6 +33395,64 @@ appends the rest back. Before it, a count of 0 was `FERR_NAME` — *"the caller
 has miscomputed"* — and nothing in the tree passed one: the DOS box's flush
 returns on an empty window before it gets here.
 
+#### 18.4.7.6 One FAT flush when one sector is the whole update
+
+An append at the end commits in SPEC.md 18.4's order, refined for the FAT
+itself: write the data, flush the new sub-chain (allocated, terminated,
+unreachable), THEN set the link from the file's old last cluster and flush
+again, then store the entry. The two flushes are there for a power cut in
+the middle of a MULTI-sector flush: one writes the dirty range in a single
+transfer, and a cut part-way can land some sectors and not others. If the
+link's sector landed and the new chain's did not, the file's last cluster
+would point into clusters the disk still shows free, and the next allocation
+would hand them to another file.
+
+**When the link and every new entry share ONE FAT sector, the second flush
+is the whole update**: a sector lands whole or not at all, so there is no
+partial state for the first flush to guard. That is the common case by a
+wide margin. A 32 KB append on a 2 KB-cluster volume is 16 FAT16 entries,
+32 bytes, and the new chain continues from the link. A trace of Uncompress
+To... onto the fixed disk showed every append writing the same FAT1 and FAT2
+sectors twice in a row (docs/plans/STREAM-WRITER-PLAN.md §1).
+
+**How it knows, with no arithmetic.** At `.seal`, before anything is
+flushed, the last cluster's own end mark is stored back UNCHANGED
+(`mov dx, DSKW_EOC16 / call dskw_setfat`). That puts its sector - both, for a
+FAT12 straddle - in the dirty range without changing a byte, and for an empty
+file's 0 it is no store at all (`dskw_clok` refuses it with CF = 0). If
+`[dsk_fatd0]` still equals `[dsk_fatd1]`, the link and every new entry share
+ONE sector: the link is set and one flush writes it all. Otherwise the chain
+is flushed alone first, then the link, as 18.4 has it. If that store had to
+MOVE the window, the move flushed the chain before it slid, and the range is
+the link's sector alone - the one-sector case again, and correct. It has no
+CF test of its own: it fails only when the window will not load, and the
+link's store is the same load and fails the same way. A held stream's
+commit enters the same `.seal` (18.4.9), so it gets the single flush too,
+once per file.
+
+It was first built as `dskw_onesec`, 56 bytes of arithmetic over the link
+entry's sector (81 with its branches), and withdrawn once in the stream
+writer's size pass; the store-it-back form is **16 bytes of `.cold`**,
+resident, on each kernel (docs/reports/STREAM-WRITER-SIZE-2026-09-30.md).
+Re-measured on it with `VD_TRACE=12 tests/viddisk.py --floppy`: **3.2
+one-sector writes an append**, data writes 3.3 and the directory read 1.0,
+W 572 guest seconds and the 12.5 MB file exact - the figures below, to the
+decimal.
+
+**Measured** with `tests/viddisk.py --floppy` and `VD_TRACE=12`, which
+counts the fixed disk's transfers per 32 KB append over eleven appends of
+VIDDISK's W: **one-sector writes 5.2 -> 3.2 an append** (FAT1, FAT2 and the
+entry, where it was FAT1 and FAT2 twice), with the data writes (3.3) and the
+directory read (1.0) unchanged. The ~0.2 left over is an append whose new
+chain crossed into the next FAT sector and took the two-flush path. The
+12.5 MB STREAM.DAT reads back on the host byte for byte either way. On
+MartyPC's XT-IDE, which moves bytes with the CPU, W's time barely moves (575
+-> 570 guest seconds: the walk dominates there). On the ST-225 each saved
+write is a revolution at least. `fcpapi`, `fcpcopy`, `fcpsmall`, `dosfile`
+and `bigvol` are green on it. 81 bytes of `.cold` on each kernel, resident, as `dskw_onesec`.
+
+It is stage 1 of docs/plans/STREAM-WRITER-PLAN.md.
+
 #### 18.4.7.1 What it cost, and where
 
 At its first commit the write-at was **14 bytes of `.text`, 1 of `.bss` and
@@ -32556,7 +33614,9 @@ The change is §15.3.8.5.1: the knob arm's blob was brought under 4,096, so
 **there is one blob length**, the band is the seven-sector single-length one,
 and `KSIG_OFF` became **6,656 — memory sector 13, file sector 21.**
 §30.5's layout setup later raises the blob to nine sectors, so the offset is
-now **6,144 — memory sector 12, still file sector 21**.
+now **6,144 — memory sector 12, still file sector 21** — and §6.0.1's timed
+font pick raises it to ten, so it is **5,632 — memory sector 11, still file
+sector 21**, and the floor under `.text` is 5,634.
 
 It is a *lone* sector where 106 sat in a run of five, and that trade is
 deliberate: margin against a BPB that moves is worth less than margin against
@@ -33741,17 +34801,17 @@ FILL, against a ~400 ms `int 13h`.
 A disk that reads perfectly and is not a FAT12 volume had exactly one thing
 the OS could say about it: `No os8088 disk (A:)`, in the Disk window's header,
 for ever. Every other operating system these machines ever ran could make one.
-`dskw_format` is that, and it is a **high-level format only** — the same line
-§52.3's hard-disk formatter draws, and for a sharper reason here: writing
-sector ID fields is `int 13h AH=05h`, one call per track with a four-byte
-descriptor per sector, and it is the operation that turns a disk this OS
-merely cannot read into one *nothing* can read. What is written is the boot
-sector, both FATs and the root directory: **12 sectors on a 360KB disk and 33
-on a 1.44MB one**, all of them metadata, and the data area is not touched.
+`dskw_format` is that, and since §18.96.3 it is a **full format, as DOS's
+FORMAT is**: every track laid down fresh with `int 13h AH=05h`, then the boot
+sector, both FATs and the root directory — **12 sectors of metadata on a 360KB
+disk and 33 on a 1.44MB one**. It was a high-level format only, the line
+§52.3's hard-disk formatter draws, on the argument that writing ID fields
+turns a disk this OS merely cannot read into one *nothing* can read; §18.96.3
+is why that argument had it backwards for a floppy.
 
 | routine | contract |
 |---------|----------|
-| `dskw_fmt_probe` | in: `[disk_drive]` = the volume. Out: CF=0 with AL = a row of `dskw_fmt_tab`; CF=1 with AX = `FERR_*` — the medium could not be read at all (`FERR_IO`), or the volume is not a floppy (`FERR_PROT`). Clobbers AX, flags. **Reads only**, so it is safe to call before the user has agreed to anything, and that is the point: the confirmation names the size it is about to make. |
+| `dskw_fmt_probe` | in: `[disk_drive]` = the volume. Out: CF=0 with AL = a row of `dskw_fmt_tab`; CF=1 with AX = `FERR_*` — the volume is not a floppy (`FERR_PROT`), or `FORMAT.DRV` could not be read (`FERR_NODISK`). A medium nothing can read is **not** a refusal (§18.96.3). Clobbers AX, flags. **Reads only**, so it is safe to call before the user has agreed to anything, and that is the point: the confirmation names the size it is about to make. |
 | `dskw_format` | in: AL = a `dskw_fmt_tab` row, `[disk_drive]` = the volume. Out: CF=0; CF=1 with AX = `FERR_IO` / `FERR_WPROT` / `FERR_PROT`. Clobbers flags. Writes the boot sector **first** and the root directory last. |
 | `dskw_fmt_reach` | in: AL = the row just written, `[disk_drive]` = the volume, `[disk_spt]`/`[disk_heads]` still the format's. Out: CF=0 — the volume's **last** sector was written and read back intact; CF=1 — it was not. Clobbers AX, flags. Destroys that sector's contents, so it is callable only on a disk the user has already agreed to erase (§18.96.2). |
 
@@ -33791,6 +34851,14 @@ key that would do nothing (§47).
 This is an **assertion about hardware**, not a probe, and it is the same
 assertion DOS took at face value from `DRIVER.SYS /d:2 /t:80 /s:9`. The
 difference is what §18.96.2 does with it.
+
+**A `dskw_fmt_tab` row is the BPB itself**, bytes 13–25 of the boot sector
+(`SecPerClus` to `SecPerTrk`) in the boot sector's own order, plus the
+cylinder count the BPB does not carry — so the boot sector is three copies out
+of the image (a template, the row, a template running on into the
+not-bootable stub) and not a load and a store per field, and the confirmation's
+size is `TotSec16 / 2`. The table is in `FORMAT.DRV` and read through `CS`
+(§2.8.6.1); nothing outside the image reads a row.
 
 #### 18.96.1 Reading cylinder 40 to settle it is WRONG — the negative result
 
@@ -33941,6 +35009,57 @@ that sector back and compares. Four things about it:
 
 The cost on the honest path is **two `int 13h` calls**, once per 720KB
 format, against a format that is already 7 writes and a remount.
+
+#### 18.96.3 Every format lays the tracks down — and an unreadable disk is the case it is for
+
+The high-level-only formatter could not reclaim a single disk anybody
+actually brought to it, and the owner's 5150 is the list: **a 1.44MB disk
+with its HD hole taped** for a 720KB drive (the HD recording is 500 kbps and a
+250 kbps controller reads none of it), **a disk a failed write had damaged**
+(docs/FIELD-NOTES.md 32 — only a low-level format recovers an ID field), and
+**a Minix disk**, most likely on HD media for the same reason. Every one needed
+DOS's FORMAT. They failed in two places, both by design: the probe had to
+*read* track 0 before it would name a size, and refused with `FERR_IO` when no
+read succeeded; and when it did read, rewriting 12 sectors of metadata over
+damaged tracks rewrote nothing that was broken.
+
+So both halves changed:
+
+- **The probe no longer refuses a medium it cannot read.** It picks the row
+  the DRIVE makes — its own sectors per track off `AH=08h`, and for the
+  9-sector pair its cylinders, resolved exactly as a readable 9-sector disk's
+  are (a ROM that answers nothing is a 360KB machine, and §18.96.2's Space
+  still offers 720KB on the external units). That is DOS's FORMAT's answer
+  too: absent `/F`, it formats what the drive is. An empty drive now reaches
+  the confirmation and fails at the first track instead of at the probe.
+- **`dskw_format` lays every track first** (`dskw_fmt_low`): one `AH=05h` per
+  track with a (C, H, R, N=2) field per sector, three attempts with a reset
+  between, then the metadata as before. The track's sector count reaches the
+  controller through the DPT — the IBM ROM takes the FORMAT command's SC from
+  byte 4 and the gap and fill from bytes 7 and 8 — so byte 4 is set for the
+  row first. An AT-class BIOS is asked `AH=18h` (set media type for format)
+  first, because that is the call that picks the **data rate**, and its table
+  is copied over int 1Eh's (§18.92's, ours); an XT ROM answers it with `CF=1`
+  and the kernel's table stands. The table in force before is put back after.
+  §12.8's bar is scaled to the whole disk and stepped a track at a time.
+
+**What it costs**: time, and it is DOS's time — one revolution a track plus a
+step, ~40 s for 360KB and ~80 s for 720KB on the field machine, against a few
+seconds for the metadata alone. No resident byte: all of it is in
+`FORMAT.DRV`.
+
+**No per-track verify.** DOS's FORMAT reads each track back with `AH=04h`; the
+IBM ROM checks a verify's whole DMA extent against a 64KB page though it moves
+nothing, and the one buffer the formatter owns is the 512-byte `dsk_secbuf`.
+The metadata writes, the remount and §18.96.2's last-sector write-and-read are
+what check the result. A surface verify wants a buffer claim of its own and is
+left for when a disk that formats and then fails turns up.
+
+**§18.96.2 composes with it unchanged, and gets better.** A 720KB pick on a
+40-cylinder drive now steps the head against its stop for cylinders 40–79 and
+lays those tracks over the last one it can reach; the reach test fails, and
+the fallback re-formats as 360KB — fully, so the track the stop overwrote is
+laid down again correctly.
 
 ### 18.97 The equipment word is a CLAIM; the FDC is the fact
 
@@ -34775,14 +35894,37 @@ the geometry.
 
 **`clo_call` answers in two alphabets on one register, and `CF` says which.**
 On success `AL` is a `CLA_*`; when `mod_need` cannot produce the image it is
-`CF=1` with `AX = CERR_NODISK`, which is the nearest true thing — there is no
-cloner, so there is no disk it can reach. **Every call site tests `CF` first.**
+`CF=1` with `AX = CERR_NOMOD`, said as **"No system disk in A:"** — the Task
+Manager's own resident string, its letter the boot drive's, stamped at boot.
+It was `CERR_NODISK` ("No disk", "the nearest true thing — there is no
+cloner, so there is no disk it can reach"), and off the 5150 that was read
+exactly the wrong way: booted from A:, the boot floppy swapped for the
+target, the image in B:, and *No disk* with a disk in both drives reads as
+"I cannot find a disk to image". The refusal is right — `mod_need` reads
+only the boot volume (§2.8) — and only the words were wrong. **Every call
+site tests `CF` first.**
 The two enumerations are also disjoint by construction — `CERR_*` from 1 and
 `CLA_*` from `0x80` — so a site that forgets reads a wrong answer instead of a
 plausible one. They used to overlap exactly, and `CERR_NODISK` = `CLA_SAVE` = 4
 meant "the cloner could not be loaded" was acted on as "the user asked for an
 image target": a Save box, on a half-written disk, for an operation nobody
-chose.
+chose. (`CLA_SAVE` itself is gone since the image opens that box itself - see
+*The dialog is opened through the far door* below - and its value, `0x84`, is
+not reused.)
+
+**…and the VERB must answer `CF=0`, which is the half nobody enforced.** The
+test above is only as good as the carry the image hands back, and
+`clo_key`/`clo_saved` returned `CLA_ERR` with the carry still set: their
+`.err` tails are reached by `jc` and `mov` writes no flag. The resident
+caller did exactly what this section tells it to — read `CF=1` as the
+other alphabet — and repacked the answer, so the code became `CLA_ERR`
+itself (83h), `toast_say` refused it as past the end of its table, and
+**every clone and Write Img that failed on a disk error ended its mode in
+silence**: no toast, no status line, the prompt simply gone. That is the
+report off the 5150 in docs/FIELD-NOTES.md 32, where a failed write left
+nothing on the screen to photograph. Both verbs `clc` at their one exit
+now. It could fire on an ordinary key too — `.line` is reached through
+`jne` after `cmp al, 13`, so a keystroke below 13 left the carry set.
 
 
 #### 18.99.8 One end may be a FILE — `IMG` and `Write Img...`
@@ -34795,7 +35937,8 @@ ordinary file on an ordinary volume:
   the file that names.
 * **`Write Img...`** is the same machinery with the ends the other way round:
   the Open dialog picks an image, and its bytes are written onto the disk in
-  the window's drive.
+  the window's drive. The image is read as a stream on `kern_big`
+  (`clo_fget`, cursor `CL_FCUR` in the job header, §18.4.8.1).
 
 **Nothing about the middle changed.** The buffer, the chunk loop, the geometry,
 §12.8's progress bar and the refusal paths are the same code; `CL_END` says
@@ -34897,13 +36040,16 @@ to be something it is not.
 
 The disk `Write Img...` writes to may be blank, so there is nothing to probe —
 and what a raw write needs is a sectors-per-track and a head count. The only
-honest source for them is the image itself. `dskw_fmt_tab` already pins the four
-standard layouts (§18.96), so **a file whose length is one of those four is a
+honest source for them is the image itself. The four standard layouts
+(§18.96) are pinned, so **a file whose length is one of those four is a
 disk image and a file whose length is not is `CERR_NOTIMG`** — which also
 refuses, for free, every ordinary document somebody picks by mistake.
 
-That table is read through `DS` and stays in `.text` (§2.8.6.1). Two on-demand
-modules may not far-call each other: only one of them need be loaded.
+`CLONE.DRV` carries those four as its own (sectors, sectors-per-track) pairs,
+`clo_imgtab`, read through `CS`. It read `dskw_fmt_tab`'s rows through `DS`
+out of `.text` until that table moved into `FORMAT.DRV` (§2.8.6.1) — two
+on-demand modules may not far-call each other, only one of them need be
+loaded, and sixteen bytes in this image were cheaper than 56 resident.
 
 ##### The name is the one resident byte the feature added
 
@@ -34934,6 +36080,18 @@ it**: all three present a floppy as an array of sectors, so a write with the
 wrong gap length or track width lands in the right slot and the image is
 correct afterwards. A green run says nothing about this. Until the note closes,
 `Write Img...` is unsafe on media anyone minds losing.
+
+##### 18.99.8.1 …and the image file is one HELD stream (`kern_big`)
+
+`clo_fput`'s first chunk is a `dwf_dskw_write` and every one after it was a
+`dwf_dskw_append`: a lookup of the image's name, a walk of its chain from the
+front, and a FAT and a directory write, per chunk of up to 127 sectors. On
+`kern_big` every later chunk is a `WRITE_SEQ` call with `WSEQF_HELD`
+(§18.4.9), its token in the claim's header at `CL_FTOK`, and `clo_imgrun`
+closes the stream once the last chunk is down, a failure to commit being the
+file's (`clo_ferr`). Nothing between two chunks MOUNTS anything - the disk
+end is a bank of three geometry words, not a mount - so the held chain's FAT
+dirt simply stays in the live window. `kern_small` keeps its appends.
 
 #### 18.99.9 The window is whole CYLINDERS, and why the DMA page is not
 
@@ -34983,6 +36141,35 @@ The cloner's buffer deliberately is not. Rounding its base up to a page would
 cost up to 64KB of the very claim whose **size is the trip count** (§18.99.4),
 so on a one-floppy machine the trade is *a disk swap to save half a second*.
 The alignment is refused for the same reason the buffer exists.
+
+#### 18.99.10 A field kernel's failure says WHICH transfer failed
+
+On a `DISKCNT=1` kernel — `$(FIELDKNOBS)`, so every field kernel — the cloner's
+`CERR_IO` toast is not the words *Disk error* but the last `int 13h` that
+failed, recorded by `dsk_flrec` on every failed attempt inside `dsk_xfer`:
+
+```
+S80 14/1/07 W0 n09 01FE
+ |  |  | |  || |   | +- 0040:0040, the ROM's motor-off count
+ |  |  | |  || |   +--- 0040:003F, the ROM's motor bits (bit n = drive n on)
+ |  |  | |  || +------- n: the sectors that call carried
+ |  |  | |  |+--------- the int 13h unit (80h prints as 0)
+ |  |  | |  +---------- R read / W write
+ |  +--+-+------------- cylinder / head / sector, as issued
+ +--------------------- the BIOS status in AH
+```
+
+Every field is hex. It is 23 characters because a toast holds 24 (§59.8); the
+first version of this, written against a longer toast, was 35 and would have
+been cut at the motor byte — the one field it exists for. The template starts
+as **dashes**: a `CERR_IO` with no failed `int 13h` behind it (a file-layer
+error, a driver-backed volume) shows dashes instead of an old transfer.
+
+It is here because docs/FIELD-NOTES.md 32 is reported off a machine with no
+debugger, and every question that note asks — the status, the sector, whether
+it recurs at the same place, what the ROM believed about the spindle — is a
+fact this line photographs. A shipped kernel carries none of it and still
+says *Disk error*.
 
 ### 18.100 …and the restart PARKS the heads, because the next boot inherits them
 
@@ -35324,6 +36511,11 @@ FAT-spec species it handles):
 - attr & 0x08 → volume label; skip.
 - attr & 0x06 (HIDDEN or SYSTEM) → skip (DOS convention; protects the
   32-slot listing budget from foreign housekeeping files).
+- ...and those three are ONE test in the code, `attr & 0x0E`: an LFN
+  entry's 0x0F carries the label, hidden and system bits all at once, so the
+  mask-then-compare selects nothing the other two do not already skip.
+  `fcp_scan` uses the same test, and `dsk_find_x` (which keeps hidden and
+  system entries for a driver) folds its LFN test into its label test.
 - name[0] == 0x20 → invalid per spec (a name may not start with a
   space); skip defensively.
 - name[0] == '.' → a subdirectory's own `.` and `..` links; skip. The `..`
@@ -35929,8 +37121,8 @@ is why there is no path string anywhere in os8088."*
 **True of the kernel, and of nothing else.** `dsk_find` filters the raw
 directory sectors and four lines into its entry loop has `cmp al, '.'` / `je
 .skip`, so **neither `.` nor `..` is ever reported to a package** — on either
-cell, since `api_file_find` and `api_file_find_raw` join at `api_ff_fence` and
-differ in the size field alone. `OSAPI_FT_UP` exists because `dsk_synth_up`
+cell, since `api_file_find` and `api_file_find_raw` join at `api_ff_go` and
+differ in the size field alone. `OSAPI_FT_UP` exists because `dsk_up_open`
 builds an up-entry for `disk_mount`'s **listing** (§19.5), a different
 structure a package cannot reach. `OSAPI_FILE_HERE` answers a cluster, and a
 cluster is not a path.
@@ -36205,7 +37397,7 @@ size column, first in both the list and the icon grid, and above the sort
 because it is placed before the scan runs (§19.4). Double-clicking it goes
 up, exactly like double-clicking any folder.
 
-**It is synthesized in the mount** (`dsk_synth_up`), for the same reason the
+**It is synthesized in the mount** (`dsk_up_open`), for the same reason the
 sort lives there: the Disk window, the Standard File dialog and every view
 cache read one snapshot, so putting the row in that snapshot gives all of
 them the same row from the same place. The dialog used to synthesize its own
@@ -36263,16 +37455,22 @@ place — `sys_attr` in `tools/os88disk.py` — for everything the build ships:
 | `KERNEL.SYS` | read-only + hidden + system | deleting it unboots the disk, and it is not a document |
 | `*.DRV` | read-only + hidden + system | the same, per driver (§51) |
 | `SYSTEM.CFG` | hidden + system | written by the kernel, so **not** read-only |
-| `TASKMGR.O88` | read-only + archive | **visible**: it is an application, and the chip menu loads it by name (§28). Read-only so it cannot be deleted out from under that menu |
-| `README.TXT` | read-only + archive | **visible**: it is the manual and it is meant to be opened (§19.7). Read-only for `TASKMGR.O88`'s reason — it is the machine's copy, not a scratch file |
-| everything on a data disk | archive | ordinary — **including the apps disk's own copy of `TASKMGR.O88`** (§28.3): the rule is the DISK, not the name, because that disk is the user's |
+| everything else, on either disk | archive | ordinary and **visible** — `TASKMGR.O88` (the chip menu loads it by name, §28), `README.TXT` (the manual, meant to be opened, §19.7), every package in `APPS/` and `GAMES/`, `SYSTEM/DOS/`'s tools and the faces |
 
-The last three rows are **one rule and not three**: `sys_attr` stamps
-read-only + archive on anything on the boot disk that is not a `.DRV`,
-wherever on it the file sits, so a file added to the system disk is protected
-by default and a row here is a description rather than a registration. That is
-also why `TASKMGR.O88` keeps its stamp on the way into `SYSTEM/` and
-`README.TXT` gets the same one staying in the root.
+**Only what would unboot the disk is locked.** The last row used to be split
+in two: anything on the boot disk that was not a `.DRV` was stamped
+read-only + archive, on the reasoning that *"the boot disk holds nothing a
+user should be deleting by accident"*. That named the wrong owner. A system
+disk is also the disk a user reworks — taking games off it to make room,
+dropping `SYSTEM/DOS/` on a machine with no DOS — and a lock on every
+package made that impossible from inside os8088 without a host tool. It also
+made the files impossible to UPGRADE: a hard disk built with the same stamp
+could not be keep-installed over, because the kernel's replace refuses a
+read-only entry (§52.10.15.1). So `sys_attr` now stamps read-only on
+`KERNEL.SYS` and the `.DRV`s alone, and everything else is archive wherever
+it sits. If the user deletes `SYSTEM/TASKMGR.O88`, the chip menu says so the
+next time, which is the failure it already has words for (§28.3). A hard disk
+goes one step further and locks nothing (§52.10.15.1).
 
 The hiding itself costs nothing new. `disk_mount`'s species filter (§19) has
 always dropped hidden and system entries from the listing — the DOS
@@ -36338,7 +37536,7 @@ honour system:
 - `drv_tab` is a **fixed kernel-side table** of known driver files, so the
   set of things that can ever be a driver is decided when the kernel is
   built and a user cannot add to it;
-- a `.DRV` carries **header version 7** (`DRV_VER`; 4 before §20.2.0), which `ld_check_hdr` refuses for an
+- a `.DRV` carries **header version 9** (`DRV_VER`; 4, then 7, before §20.2.0), which `ld_check_hdr` refuses for an
   application, and `disk_mount` types only `*.O88` as launchable — two
   independent gates, so a driver can never be double-clicked into existence;
 - and the driver files themselves are hidden + system + read-only on the
@@ -36951,7 +38149,7 @@ each needed a mechanism**:
 | off | size | contents                                                  |
 |-----|------|------------------------------------------------------------|
 | 0   | 2    | magic: bytes `'O','8'` (word 0x384F)                      |
-| 2   | 1    | format version = **6** (`PKG_FMT`): the segment-per-package layout, built against the API table as §20.3 lays it out now. Anything else — 1 to 5 included — is refused (§20.2.0) |
+| 2   | 1    | format version = **8** (`PKG_FMT`): the segment-per-package layout, built against the API table as §20.3 lays it out now. Anything else — 1 to 7 included — is refused (§20.2.0) |
 | 3   | 1    | flags: bit 0 = embedded icon follows the header; bit 1 = an association block follows it (§54.6); **bit 2 = the FILE is longer than the image and the rest is the package's own (§20.12)**; **bit 3 = the image is COMPRESSED and the file is SHORTER than it, bit 4 = which format (0 = LZ4, 1 = LZB)** — docs/plans/O88-COMPRESSION-PLAN.md; **bit 5 = a 16-byte DOCUMENT-GLYPH block follows the association block (§54.3.2)**; bits 6–7 zero |
 | 4   | 2    | link base — must be **0**: a v3 package links at org 0     |
 | 6   | 2    | entry offset (≥ 0x20; ≥ 0x60 with icon; < image size)      |
@@ -36964,7 +38162,7 @@ each needed a mechanism**:
 #### 20.2.0 The format number is the TABLE'S, and moving the table moves it
 
 The layout this section describes has not changed since v3 — the name the rest
-of this document still uses for it — and the byte at +2 is 6 all the same,
+of this document still uses for it — and the byte at +2 went to 6 all the same,
 because the byte is the only thing a kernel reads before it far-calls a
 package's cells, and kernel size pass 4 moved 158 of them (§20.3). A package
 built for the old table and loaded by a kernel with the new one does not
@@ -36980,6 +38178,20 @@ the next free number is 6, and a driver moved with it for the same reason
 (`DRV_VER` = 7). `PKG_FMT` is defined in `kernel/loader.inc` and
 `apps/os88api.inc` and `tests/unit/t_mirror.py` holds the two together, with
 `tools/os88pkg.py`'s copy beside them.
+
+**6 became 8 and 7 became 9** when two cells changed meaning at the SAME
+number, which is the worse case than a renumbering: `OSAPI_FSX_SPK` stopped
+hooking IRQ0 and writing K and the chain into the caller's block (the caller
+holds IF = 0, passes BX = CS and hooks the vector itself, §34.11), and
+`OSAPI_SND_PLAY` stopped being a blocking clip and became AL = 0 GRANT / AL =
+1, 2 RELEASE (§34.4) — and a driver's `OSAPI_DESK_ITEM` record grew from 39
+bytes to 40 (§26.7). A new package on a released kernel would have had its
+own ISR banked as the chain and stopped the tick; an old one on this kernel
+would have taken the grant and never released it. **Why not 7**: 7 is what
+every driver released before this carries, so a format-7 package would be a
+driver to every kernel that shipped — the equality test fences the kinds only
+while no number is ever reused for another kind, so a package skips the
+driver's old number and the driver takes the next one past it.
 
 **The dispatcher at +12 is the header's one piece of executable code**, and
 it is what makes a package's callbacks ordinary near procs. Every
@@ -37655,7 +38867,7 @@ A caller inside a window callback holds the gfx lock and stalls painters for
 the write's duration (§18.4) — a save is not a free operation and must never
 sit in a paint path.
 
-The file buffer is **ES:BX** (not DS:BX), like `osapi_snd_play`, so a caller
+The file buffer is **ES:BX** (not DS:BX), like `os88pcm_play`, so a caller
 can write out of its own image without a copy; a package that keeps data in
 its own bss just sets ES = DS. ES is restored per §1.
 
@@ -37737,7 +38949,7 @@ emits the §20.2 header (image size via a forward-referenced
 end-of-file macro — exact macro design is the implementer's, but a package
 source must be able to consist of just `%include "os88api.inc"`, the header
 macro, code/data, and an end macro). `OS88_HEADER` opens with `org 0`,
-emits **version 6** (`PKG_FMT`, §20.2.0), a zero link base, the entry offset, and the four
+emits **version 8** (`PKG_FMT`, §20.2.0), a zero link base, the entry offset, and the four
 **dispatcher bytes at +12** (§20.2) — which is the one part a package author
 must not hand-roll and, because the macro emits it, cannot get wrong.
 Every `OSAPI_*` is a `%define` of `KERNEL_SEG:offset`, so `call OSAPI_X` is
@@ -38362,13 +39574,12 @@ Two teardown corollaries, both about not trading a crash for a leak:
    covered pixel, which for a worker that spends minutes on a frame is the
    wrong trade. This is the §14 Bounce idiom, and `app_bounce_task` in
    `kernel/apps.inc` is the reference implementation for everything a
-   worker does — with one indirection to see through: Timer and Bounce
-   ran the identical open / sleep-and-die / lock-check-clip spine, so
-   those three steps live in `app_kind_open`, `app_kind_wait` and
-   `app_kind_arm` beside them rather than twice over. Those three are
-   **kernel-private**; a package writes their bodies inline, and
-   `app_kind_arm` is exactly this rule's `gfx_lock` → `test W_FLAGS, 2`
-   → `OSAPI_WM_CLIP_SET` sequence, with the lock held on both exits.
+   worker does, written inline as a package writes it: open, then
+   sleep / die-check / `gfx_lock` → `test W_FLAGS, 2` →
+   `OSAPI_WM_CLIP_SET` → draw → unlock. (It called three shared steps,
+   `app_kind_open`, `app_kind_wait` and `app_kind_arm`, while the Timer ran
+   the same spine; §14.7 took the Timer's task away and the indirection
+   went with it.)
 6. **The worker's stack is the CLASS the package's header declares** (§8.7.2,
    byte +15), resolved through `sch_clsbytes`: 128, 192, 256 or `SCH_STACK`
    (**384**). A header that declares nothing gets `SCH_STACK`, which is what
@@ -38400,7 +39611,7 @@ Two teardown corollaries, both about not trading a crash for a leak:
    inside an exclusive bracket as well — §53.1's last bullet contemplates
    sound grants taken there and §53.2 keeps `snd_tick` running — which is
    what makes it right for Telnet's full-screen renderer too. It is
-   `osapi_snd_play` that is out, and the paragraph below already says why.
+   `os88pcm_play` that is out, and the paragraph below already says why.
    **`OSAPI_WM_WAKE` was missing from this list and is not new** — its
    own cell has said "any context — ISR-safe and worker-safe, no lock
    needed" since it was written (§74.1), and it is the carrier of the
@@ -38423,7 +39634,7 @@ Two teardown corollaries, both about not trading a crash for a leak:
    marks *UI-task/window-callback context only* is forbidden to it: the
    file slots, `OSAPI_FILE_*` (§18.4 — shared `dsk_secbuf`, FAT snapshot and
    `sch_lock`), the file dialog `OSAPI_FILE_DLG` (§38.6), and every verb of
-   `osapi_snd_play` blocks with `sch_lock` raised and is likewise out.
+   `os88pcm_play` blocks with `sch_lock` raised and is likewise out.
    `OSAPI_DRV_CALL` (§20.11) is on the list, and it is the one entry whose
    safety is only half the kernel's: the **cell** takes no lock, raises no
    `sch_lock` and touches no disk, so reaching a driver is legal from a
@@ -39023,7 +40234,8 @@ version number would advertise a kernel capability that does not exist.
 
 That is the whole of it. Everything else a package needs was already
 published, and the table in docs/plans/completed/O88-MULTISEG-PLAN.md §4.1 is the mapping,
-row by row: `OSAPI_FILE_READ_AT` for the bytes, `OSAPI_FILE_DFREE` for the
+row by row: `OSAPI_FILE_READ_AT` for the bytes (read as `OSAPI_FILE_READ_SEQ`
+through `os88_rseq` since §18.4.8.1, with `READ_AT` the small kernel's answer), `OSAPI_FILE_DFREE` for the
 cluster size the alignment needs, `OSAPI_MEM_AVAIL` to size, `OSAPI_MEM_CLAIM`
 and `_HI` to claim (both legal from the entry proc), `OSAPI_XMEM_ALLOC` and
 `_COPY` for a part above 1MB, `OSAPI_TOAST` to refuse in the package's own
@@ -39505,7 +40717,8 @@ lazy row. They were also the last thing in the tree referencing `op_fetch`,
 `op_drop` and `op_lazyok`, so without moving them nothing else would have
 been gated at all.
 
-`OP_BSS` stays at 86 whatever the table says, and 42 of those bytes are the
+`OP_BSS` stays at 102 whatever the table says (86 until §18.4.8.1's
+cursor), and 42 of those bytes are the
 XMS and compression words. That is a deliberate non-take: `apps/cc/crt0.asm`
 reserves `OP_BSS` bytes inside the span the loader zeroes, and it does so
 **before** the package's table has been written — so gating the chain would
@@ -41014,6 +42227,181 @@ rather than being quietly accepted, so the file cannot rot into a list of
 things that used to be true — and a line naming a directory that no longer
 exists fails too.
 
+### 20.17 A SPLIT SET — `NAME.001`, `NAME.002`… and the `'CS'` part
+
+**A file too big for one floppy travels as parts, and the file manager's
+`Uncompress` puts them back together** (§22.23.5). It exists because the field
+machine is an IBM 5150 whose only other way in is a parallel cable (§62), and
+walking 720KB disks over is faster than that cable — up to the first file that
+does not fit on one. The Video Player's `.V88` files (§98) are 1.5 to 4.7 MB,
+but nothing here knows what is inside a part: the container carries any file.
+
+**It is a CONTAINER OF ITS OWN and not a `'CZ'` file cut into pieces**, for
+three reasons, each enough on its own. A `'CZ'` file is expanded WHOLE, in
+place, into a claim of its unpacked size (§20.14.2), so one bigger than the
+heap can never be opened. Its hint holds 24 bits (§20.14.1). And an LZ4
+`'CZ'` stream is one segment of input (§20.13.3). A split set needs none of
+that. It is a sequence of **independent blocks of at most 32KB**, each small
+enough to expand in a fixed claim, so a set of any size is joined by
+streaming through 82KB of heap (§22.23.5).
+
+**The reference implementation is `tools/os88cz.py`** (`split`, `join`,
+`pack`, `unpack`, `--selfcheck`). `tools/os88czgui.py` is its window and
+`OS88CZ.COM` (`dostools/os88cz.asm`) its DOS twin. `tests/unit/t_cz.py`
+keeps the three and this section agreeing.
+
+#### 20.17.1 The part header — 32 bytes, at the front of every part
+
+```
+    +0   'C' 'S'        the magic, the word 5343h. NOT 'CZ': a part must
+                        never earn §20.14.1's hint, or the transparent read
+                        would try to expand one
+    +2   byte           version, 1
+    +3   byte           reserved, MUST be zero
+    +4   word           this part's index, 1-based
+    +6   word           how many parts the set has, 1..999
+    +8   dword          the ORIGINAL file's size, 1..0xFFFFFFFF
+    +12  dword          where this part's first block lands in the original -
+                        a multiple of 32,768, and exactly the sum of every
+                        earlier part's output
+    +16  dword          the SET ID: any value, the same in every part of one
+                        set. os88cz.py uses the CRC-32 of the original, so a
+                        set is reproducible byte for byte
+    +20  12 bytes       the original's 8.3 name, `NAME.EXT`, upper case,
+                        NUL-padded
+    +32                 the blocks, to the end of the file
+```
+
+**The parts are named after the original**: its base name, a dot and a
+three-digit index — `FILEA.V88` travels as `FILEA.001`, `FILEA.002`… That is
+what lets the joiner find part *k* from part 1 without a directory search, and
+it is why a set is at most 999 parts.
+
+#### 20.17.2 The block — a 10-byte header, then its payload
+
+```
+    +0   word   S, the stored payload's length, 1..32,768
+    +2   word   N, what the block expands to, 1..32,768
+    +4   byte   M: 0 = stored (S must equal N), 1 = an LZ4 stream,
+                2 = an LZB stream - a §20.13.7 stream either way, T word and
+                raw tail included. So M is the LZ_* id plus one
+    +5   byte   reserved, MUST be zero
+    +6   word   A \  the check over the N output bytes, as little-endian
+    +8   word   B /  words (an odd last byte zero-extended):
+                     A = B = 0;  per word w:  A += w;  B += A   (mod 65,536)
+    +10         S payload bytes
+```
+
+**Every block but the LAST OF THE SET expands to exactly 32,768 bytes**, and
+a part holds whole blocks. That one rule is what lets the joiner write the
+result in whole clusters: `OSAPI_FILE_APPEND` requires the file to be a whole
+number of clusters before it grows (§18.4.4), and 32KB is a multiple of every
+cluster this machine formats or mounts at the size a join allows (§22.23.5).
+A block that is stored rather than compressed costs ten bytes and nothing
+else, so a set never grows by more than 0.03% over the original. That matters
+here, because video that is already packed barely compresses.
+
+**The check is not a luxury.** A set exists to cross on floppies, and a disk
+copy that goes wrong without an `int 13h` error is exactly what nothing else on
+the path would notice. The two sums cost ~10 cycles a byte on an 8088 against
+the LZ4 decode's ~50. A single sum would miss two swapped words; B does not.
+
+#### 20.17.3 What it costs and what it saves, measured
+
+32KB blocks against LZ4 over the first 512KB of three shipped demo videos
+(`apps/video/demo/cga/`), `os88cz.py`'s encoder:
+
+| file | 16KB blocks | **32KB blocks** |
+|---|---:|---:|
+| `01-COTXT.V88` | 77.3% | **75.1%** |
+| `03-CGA4.V88` | 91.9% | **90.5%** |
+| `04-640FS.V88` | 93.2% | **91.1%** |
+
+So compression is worth one 720KB disk in four to ten on video, which is
+already packed, and far more on text or a program. The split is the feature;
+compression is what the ten-byte block header lets it take for free where it
+helps. **LZ4 is the default** for §20.13.5's reason: the 5150 pays the decode
+on every block. `--lzb` encodes through the MACHINE's LZB parse
+(`os88lz.lzb_compress_machine`, `cmz_pack`'s mirror), because the host's
+shortest-path LZB parse takes forty seconds on one 32KB block of anything
+repetitive. That parse has a 16KB window and depth 16, and on video it loses
+to LZ4: `02-BWPCS.V88` is 92.0% LZB against 90.5% LZ4. It wins on text.
+
+**A part fits a FRESH disk of its geometry**: `os88cz.py --size 720k` cuts
+parts of at most 730,112 bytes, which is 713 clusters of 1,024 — a 720KB
+floppy's whole data area with one file on it. `360k`, `1.2m` and `1.44m` are
+the same arithmetic, and a size in bytes is taken as given.
+
+#### 20.17.4 Three tools, one format: the host, a window, and DOS
+
+| | where it runs | what it does |
+|---|---|---|
+| `tools/os88cz.py` | any Python 3, no pip | `split`, `join`, `pack`, `unpack`, `info`; `split --images` also writes each part to its own FAT12 floppy image of that size (`NAME-001.IMG`), through `tools/os88disk.py`, ready to write to a disk |
+| `tools/os88czgui.py` | the same, with Tk | the same four verbs on three tabs, and the one thing a person wants before anything is written: how many disks a file will take. A file dropped on the window goes to its tab, below |
+| `OS88CZ.COM` | MS-DOS 2 or later, an 8088 up | `J` joins a set, and **ASKS FOR THE DISK** when a part is not where the last one was, so a set is joined straight off a pile of floppies onto another drive - which the os8088 side does too, as `Uncompress To...` (§22.23.6), and plain `Uncompress` does not (§22.23.5). It never asks in the drive the result is being written to - that disk cannot go out, and os8088 disks share one serial and label, so DOS could not tell the swap - and says `Missing` instead, as `cmz_jfloppy` does; the name a part's header gives the result must be an 8.3 name with no path in it. `S` splits, pausing for a fresh disk before each part with `/P`, which refuses a FILE on DEST's drive. `U` expands a `'CZ'` file, LZ4 or LZB. An argument is 64 characters at most |
+
+**`pack` refuses a file over 449KB, and `--lzb` uses the machine's parse.**
+A `'CZ'` file is expanded whole into a claim of its unpacked size
+(§22.23.4). The most heap any machine gives a program is the 449KB a 640KB
+machine's arena measures (docs/plans/KERN-DOS-PLAN.md), so a bigger file
+packs perfectly well and is `Not enough memory` everywhere. `pack` says so
+before encoding anything and points at Split, whose sets join in 82KB
+whatever their size (`CZ_OPENMAX`). `pack --lzb` compresses with
+`os88lz.lzb_compress_machine`, the parse `cmz_pack` writes on the machine and
+the one a split's blocks already used, handed to `os88lz.cz_wrap` as
+`packed=`. `os88lz`'s own LZB parse is exact and is the build's. On a
+zero-heavy file it is effectively endless: the owner left it packing a 720KB
+os8088 disk image for 15 minutes on a 9800X3D, and it did not finish in five
+here. The machine's parse does 400KB of that image in 2 seconds. The build's
+path is unchanged and every shipped image is byte-identical.
+`tests/unit/t_cz.py` part 6 is the gate: the refusal names Split, 256KB of
+zero runs packs in under 20 seconds (0.3 here, against more than two
+minutes by the old path), and the stream is `lzb_compress_machine`'s byte
+for byte.
+
+**Drop a file on the window and it goes to the tab it belongs to**
+(`drop_tab`): any part of a set to Join, whichever part it is, with the set
+described and the result's folder filled in; a `'CZ'` file to Pack / Unpack;
+anything else to Split, unless Pack / Unpack is the tab showing, which takes a
+plain file as well, if it is small enough to pack; a bigger one goes to Split. Of several files the first is taken, a folder is refused,
+and nothing is taken while a job runs, because its fields are what that job is
+working from. The folder a result goes to follows each file dropped, until the
+user browses or types one. What a file is, is read off its first 64 bytes
+(`file_kind`): the window's first version read two, which is enough for a
+part's `'CS'` and not for a `'CZ'` header, so every `'CZ'` file handed to it
+opened on Split.
+
+The drop itself is the video encoder's (§98.2.12), moved into
+`tools/os88drop.py` so both windows share one copy: `tkinterdnd2` where it is
+installed, the shell's own `WM_DROPFILES` on Windows without it, and no offer
+of a drop anywhere else. `tests/unit/t_cz.py` part 5 is the gate for the tab
+rule and `file_kind`, and goes red with the two-byte read put back. The
+`tkinterdnd2` path was driven in the real window under Xvfb, through tkdnd's
+own XDND handlers with an in-app drag source owning `XdndSelection`: a part in
+a folder whose name has a space, a `'CZ'` file, two files at once, a folder
+and a drop while busy. The same drive with the registration taken out is
+refused by tkdnd.
+
+**The DOS tool carries the kernel's decoder, not a copy of it.**
+`kernel/lz.inc` touches no kernel data, so `dostools/os88cz.asm` `%include`s
+it as it is, the way kern_dos does. Its encoder is its own: a greedy LZ4
+parse over one block with one candidate per position, which only has to be
+VALID. What it must get exactly right is §20.13.7's cut. A stream cut
+anywhere but the first peak still decodes on the host, and would overrun an
+in-place expansion on the machine. `tests/czdos.py` checks every block it
+writes with `os88lz.in_place_margin`.
+
+**A DOS split is TWO passes**, because every part's header carries the part
+count (§20.17.1) and the parts may be on floppies that have left the drive
+before the count is known. Pass one encodes and measures, pass two encodes
+again and writes, and the two must agree block for block. It costs the parse
+twice. The alternative, patching part 1's header at the end, needs part 1's
+disk back in the drive.
+
+**`OS88CZ.COM` ships in `SYSTEM/DOS/` beside `OS88NET.COM`** on the 720KB,
+1.2MB and 1.44MB apps disks and the everything disk (§19.10). The 360KB apps
+disk is at 352 of 354 clusters and this program is five.
+
 ## 21. loader.inc
 
 State (.bss, **zero at boot** — §2.5, and there is no `loader_init`: all
@@ -41060,7 +42448,7 @@ kernel-segment buffer first and validate the copy, and nothing ever compared
 the two — each call simply re-ran the same tests. The buffer and the copying
 are gone; the disk-swap guard step 6 exists for is untouched, because what
 catches a swap is re-running this routine on what the *full read* delivered,
-not the staged copy. Checks: magic; **version = 6** (`PKG_FMT` - a file
+not the staged copy. Checks: magic; **version = 8** (`PKG_FMT` - a file
 built for another API table, or a v1 or v2 file → "Bad package", §20.2.0); link base = 0; image ≥ 0x20; entry in [0x20, image) (the icon
 rule is enforced by os88pkg, not re-checked); **image+bss ≤ APP_MAX_SIZE,
 fenced on the CARRY**, because both operands are separately bounded at
@@ -42036,7 +43424,7 @@ to call `dsk_dotdot`.** That routine reads the directory's first **sector**
 to find the `..` entry, and a `DRVC_FILE` volume (§62.9) has no sectors — so
 it answered CF=1 and Up One Folder, and the Backspace bound to it, were
 **silently dead on the RAM disk and the network volume**. The `..` *row*
-directly above them worked the whole time, because `dsk_synth_up` fills it
+directly above them worked the whole time, because `dsk_up_open` fills it
 from `[dsk_fsup]` for a redirected volume and from the disk for a FAT one
 (§19.5), and `fm_open_sel` takes the handle straight out of it — which is
 also `fdlg_dive`'s route, and why the file dialog never had this. Reading
@@ -42231,7 +43619,7 @@ performance input, not a precondition.
 
 | symbol | contract |
 |--------|----------|
-| `fm_vp_set` | in BX = window ptr. Publishes the three module words every routine below reads: `[fm_vp]` = that window's state block, `[fm_vseg]` = its cache segment, `[fm_vinst]` = its instance record (0 = unowned). Preserves all registers. Called at the head of `fm_layout` and of every window callback. |
+| `fm_vp_set` | in BX = window ptr. Publishes the three module words every routine below reads: `[fm_vp]` = that window's state block, `[fm_vseg]` = its cache segment, `[fm_vinst]` = its instance record (0 = unowned). Out DI = `[fm_vp]` (size pass 8: six of its ten callers loaded it straight back); every other register preserved. Called at the head of `fm_layout` and of every window callback. |
 | `fmv_get_dir` | in AX = entry index (< `FS_N`); out SI → `dsk_ent` — the **existing** buffer, so every consumer keeps the plain `SI ->` pointer it has today. Reads `[fm_vseg]`. |
 | `fmv_get_icon` | in AX = entry index; out SI → `dsk_ico`. Same. |
 | `fmv_load` | in AL = drive, DX = cwd cluster, DI = state block; **no gfx lock requirement, but real floppy I/O**. `dsk_chdir` (DL = AL, AX = DX), then copy the fresh global snapshot into the block's slot and write back `FS_DRV`/`FS_CWD`/`FS_MOK`/`FS_N` from what the mount actually produced (a failed mount lands at the root with `FS_MOK` = 0 — §19.2). Clears `FS_SEL`/`FS_SCRL`/`FS_FERR`: every index into the old listing is meaningless. Preserves all registers. |
@@ -43621,6 +45009,65 @@ and the choice is between a missing file and a corrupt one wearing its name.
 the easiest volume to fill: `dskw_append` grows a file incrementally by design
 and the copy engine chunks, so a floppy filling mid-copy did the same thing.
 
+#### 22.5.2.1 …and on a hard disk it stops counting once the file fits
+
+**§22.5.2's "no disk I/O" is true of a floppy and was never true of a hard
+disk.** A floppy's FAT is resident whole (§18.8), but a FAT16 partition's is
+paged through a nine-sector window, so `dskw_dfree`'s count reads the WHOLE FAT
+— on a 31MB partition four window loads and ~350 ms of 8088 before a 100KB file
+may start, and the last load leaves the window at the END of the FAT, so the
+create that follows reads the start of it back in. The field ST-225 measured
+`FILE_DFREE` at **315,823 µs** (PERFORMANCE.md Set 24).
+
+`fcp_room` wants a yes or a no about ONE file, not the count. So it sets
+`[dsk_fcgoal]` to the file's whole SECTORS (`[fcp_need]` shifted down 9 - a
+count of clusters can only need fewer), calls `dskw_dfree` as ever and puts
+the goal back, and `dsk_free_clus_x`'s FAT16 walk stops after the first FAT
+sector that brings the count PAST it. The answer is
+then a **lower bound that already covers the request**; short of it the count
+is exact, as before. Three things hold it up:
+
+- **The bytes compare after the count is untouched**, and it is what makes a
+  short count safe: a count that stopped early is at least the request, and one
+  that did not stop is the whole truth. A goal set too low can therefore only
+  ever refuse a file that fits — the direction a room check may err, by
+  §22.5.2's own rule.
+- **`dsk_fcgoal` rests at 0FFFFh**, "count them all" (no count can pass it),
+  and `fcp_room` puts it back with a `mov`, which keeps the answer's carry.
+  `OSAPI_FILE_DFREE`, `dskw_vstat` and the status line's figure (§22.7) never
+  see anything else. A file of 32MB or more wraps the goal, which can only
+  stop the count early and answer "no room" - and no FAT16 volume here has
+  room for it.
+- **FAT12 is not touched.** Its FAT is resident on every geometry that ships, so
+  the count there is CPU alone, and its fast path reads the whole FAT with no
+  window to page.
+
+Measured on `os8088_xt_hdd`, the same 100KB paste: the check went from four
+hard-disk reads to **one**, the create's FAT re-read went with them, and the
+paste 9.4 s → **9.0 s**. `kern_big` +57 bytes as first built, with a
+`dskw_dfree_to` of its own that divided by the cluster size; the size pass
+moved the goal into `fcp_room` and made it sectors, **+28** (docs/reports/
+STREAM-WRITER-SIZE-2026-09-30.md). **`kern_small` +0**: it has no hard disk, a
+floppy's FAT is resident whole and there is no window to stop loading, so
+`dsk_fcgoal`, the early-out and `fcp_room`'s goal are all `OS88_BIGVOL`'s. `tests/fcproom.py` is the gate: an empty partition, one whose
+only room is at the far end of the FAT, and one without room.
+
+#### 22.5.3 …and each file is written as one HELD stream (`kern_big`)
+
+Every chunk after the first used to be an `OSAPI_FILE_APPEND`: a lookup of
+the destination's name, a walk of its chain from the front, and a FAT and a
+directory write, per chunk. On `kern_big` each is a `WRITE_SEQ` call with
+`WSEQF_HELD` (§18.4.9), its token carried in `DI` from the create to the
+close - nothing else in the loop touches that register - and the file's close
+is made at `fcp_xfer`'s `.fin`. So a file costs one lookup, one walk and one
+commit, and between two volumes the FAT stays banked across the hops
+(§18.8.5).
+
+HELD's one loss is nothing here. A copy that stops part-way is deleted by
+`fcp_undo` (§22.5.2), whose own write gate commits the hold before it
+deletes. A close that fails is the disk's, and goes the same way.
+`kern_small` has no `WRITE_SEQ` and keeps its appends.
+
 ### 22.19 A move inside one volume is three sector writes
 
 A same-volume Cut needs no data I/O at all: the cluster chain is already
@@ -44069,8 +45516,12 @@ and on XT-era rules — bytes in the column, whole `K` on the status line: it
 mounts no volume past 32MB, so its KB figure fits the word it is in, and the
 display alone is not a case for spending there. It is `%ifdef OS88_BIGVOL`,
 the switch §18.7.5 already put on every site that differs, and `kern_small`
-assembles byte for byte the kernel it was. The cost on `kern_big` is **96
-bytes of `.cold` and 16 of `.bss`**, both resident.
+assembles byte for byte the kernel it was. The cost on `kern_big` is **60
+bytes of `.cold` and 16 of `.bss`**, both resident - it was 96 of `.cold` as
+first built, and kernel size pass 6 took 36 back: one `>> 10` step run once
+for K and again for M, the hundredths as `(remainder × 25) >> 8` with `aam`
+splitting the digits, and the free figure multiplied by `spc × 256` so the
+product needs one shift rather than a byte shuffle.
 
 ### 22.8 A write marks the folder; the focus spends the mark
 
@@ -44782,19 +46233,28 @@ test and the three items can never disagree about one disk. Its confirmation is
 That one *does* say ERASE, because it does, and §22.12's rule is that the line
 between a command and an unrecoverable act names the act.
 
-##### The dialog is opened by the resident half, always
+##### The dialog is opened through the far door, with a resident completion proc
 
 `fdlg_open` fences on a **live owned window** and dispatches a kernel window's
 completion proc as a **near call in the kernel's cold segment** (§38.6,
-§2.6.3). An on-demand module is neither of those things, so `CLV_KEY` answers
-**`CLA_SAVE`** — "ask for a name" — and `fm_editkey` opens the dialog.
-`drv_dlg_done_x` is armed the same way for the same reason (§51.10), and
-`fm_img_done_x` is this feature's copy of that shape: a `.cold` body, named
-directly.
+§2.6.3). An on-demand module cannot be that proc, so the proc is resident:
+`fm_img_done_x`, a `.cold` body named directly, the shape `drv_dlg_done_x` has
+for the same reason (§51.10). **Opening** the dialog is another matter: the
+image does it itself, through `fdf_fdlg_open` - the far door `OSAPI_FILE_DLG`
+already reaches `fdlg_open` by - with `BX` = the window its keystroke arrived
+for, the default name staged in `fm_hdrbuf` (the box copies it before anything
+can stage there again) and `DI` = `fm_img_done_x`. `CLV_KEY` then answers
+`CLA_LINE`, and the prompt stands under the box. It was `CLA_SAVE`, "ask for a
+name", answered by `fm_editkey` opening the box: 24 resident bytes that are 12
+of the image's now, and `DISK.IMG` moved into the image with them (§2.8.6).
 
-**One completion proc serves both commands**, because the dialog's own mode
-tells them apart — Save is the clone's, Open is `Write Img`'s — and only one
-dialog can ever be up (§38.2).
+**One completion proc serves all three questions**, because the dialog's own
+mode tells two of them apart — Save is the clone's, Open is `Write Img`'s —
+and the image tells the third, Uncompress To...'s Save box (§22.23.6), from
+the clone's by the claim: a clone asks with its claim live and the join has
+none yet. Only one dialog can ever be up (§38.2). **The name is copied into
+`clo_fnbuf` by the image** (`clo_fnget`, at `CLV_SAVED` and `CLV_WIMG`),
+not by the proc, which used to spend 18 bytes on it for all three.
 
 ##### A cancelled dialog calls nothing back, and both halves are built for it
 
@@ -45141,7 +46601,8 @@ does not and every one of these holds:
   cheaper claim);
 - the volume's cluster is **16KB or less**, because the refills are 16KB and
   32KB at offsets that are multiples of 16KB, and `OSAPI_FILE_READ_AT` takes
-  whole clusters on both (§18.4.4);
+  whole clusters on both (§18.4.4) - `READ_SEQ`'s rule too, which is what the
+  refill (`cmz_sfetch`) reads through on `kern_big` (§18.4.8.1);
 - the heap holds the windows at the smallest dial;
 - the heap holds **`U` too**, as the one claim every reader of a `'CZ'` file
   and Uncompress make (§22.23.4) — a streamed result past it would be a file
@@ -45209,6 +46670,18 @@ there, as it was before streaming. The bar is scaled
 to both passes, and since every `dskw_*` call arms the widget to its own
 length and ends it (§12.8), `cmz_rearm` puts the verb's scale back after each
 read and write.
+
+##### 22.22.5.1 …and pass 2 writes one PLAIN stream (`kern_big`)
+
+Pass 2's output went out as a WRITE and then 16KB APPENDs, each a lookup and
+a walk of the chain from its first cluster - at ~142 ms a MB of offset
+(§18.4.8), a 5MB result spends on the order of 100 seconds walking. On
+`kern_big` every later chunk is a PLAIN `WRITE_SEQ` (§18.4.9), its token in
+the module's image (`cmz_otok`). **Not HELD**: the cut-out path reads its own
+output back (`cmz_tio`'s `READ_AT`) before it rewrites it, and a read commits
+no hold, so a held stream would be read past the size the disk shows. The
+`WRITE_AT` that path makes is a write, so the token goes stale and the next
+chunk is simply cold.
 
 #### 22.22.6 The pointer tracks and the bar says `Compressing...`
 
@@ -45319,6 +46792,247 @@ file expands if the heap holds `U`. A package is under 64KB by construction,
 and one longer than that on the disk is not a compressed package and is
 `Not compressed` without being read.
 
+
+#### 22.23.5 A PART of a split set: `Uncompress` JOINS it (§20.17)
+
+**Select `FILEA.001` and pick `Uncompress`, and `FILEA.V88` appears beside
+it.** A third arm, reached where the other two leave off: the file carries no
+`'CZ'` mark and is not a compressed package, and its extension is three
+digits. Anything else is still `Not compressed` without a sector read, so the
+new arm costs a plain file nothing. Any part may be selected. Its own first 32 bytes are read
+before anything else, so a plain `NOTES.123` still says `Not compressed`
+rather than asking for a `NOTES.001` it never had. The join then starts at
+`.001` and reads the set in order, so the selection says only which set -
+each part as a stream on `kern_big`, one FAT link a 16KB chunk (`cmz_jneed`,
+§18.4.8.1), its cursor zeroed per part by `cmz_jrst`.
+
+**EVERY PART IS IN THE SAME FOLDER, AND THE RESULT LANDS THERE TOO.** On the
+5150 that is the hard disk: copy the parts across from their floppies, then
+join. What it costs is the parts and the result on one volume at once, and
+the parts can be deleted once the result is there. Reading the parts straight
+off a changing floppy into another volume is `Uncompress To...` (§22.23.6),
+which asks where the result goes and asks for each disk as it needs it.
+
+**IT STREAMS, so the size of the set is bounded by the DISK and not by the
+heap**, which is the whole difference from the other two arms (§22.23.4).
+One claim of 82KB, whatever the file. That is more than the 128KB machine's
+~50KB of heap, so on `kern_small` the join is `Not enough memory`; the
+module's image grows there by the same ~1,500 bytes at the build that landed
+it, and 118 more for §22.23.6's alignment below (9,413 -> 9,531), and nothing
+resident moves:
+
+| | |
+|---|---|
+| `[cmz_b]` | a 512-byte header (§22.23.6's saved state), then the INPUT window, 49KB, rounded up to a 512-byte boundary. Parts are read into it in 16KB chunks with `OSAPI_FILE_READ_AT`, at offsets that are multiples of 16KB, which that door requires to be whole clusters (§18.4.4). Before a block is parsed the window is topped up until the whole block is in it: the bytes left are moved down to the 512-byte boundary nearest the floor that leaves room for them, and chunks are read behind them, so **every read lands on a sector boundary of the claim**. A block is at most 32,778 bytes with its header, so the window never holds more than 32,777 + 16,384 + 511 |
+| `[cmz_o]` | the OUTPUT block, 32KB, where `lz_decomp_x` expands a compressed block at `ES:0`. A STORED block is copied here too before it is written, rather than written straight out of the window |
+
+**Every buffer the join hands the file layer starts on a 512-byte boundary**,
+and the claim is laid out so it does: header 512, window rounded up, output
+block after it. A transfer at an arbitrary offset is a sector that can
+straddle a 64KB physical page, which `int 13h` answers with error 09h and the
+file layer reports as `Disk error` (§1's alignment rule): `dsk_runcap` splits a
+multi-sector run at the page but cannot split one sector. The first build of
+this section read at `window + bytes left` and wrote stored blocks straight
+from the window, and came out `Disk error` on the third refill of a set - which
+§22.23.6's test found and the in-place join had simply not happened to reach
+at the heap depths its own row runs at. The copy of a stored block costs
+~13 cycles a byte (`rep movsw`) against a disk write it is beside.
+
+**The result is written under `CMPRESS~.TMP` and renamed at the end**, the
+streamed `Compress`'s own temporary name (§22.22.5), for the same reason: a
+join that fails half-way leaves the parts untouched and no half-file under
+the real name. The first block is a `WRITE` and every later one an `APPEND`.
+Every block but the last expands to exactly 32KB (§20.17.2), so the file is a
+whole number of clusters before each append, which is the rule that door
+enforces. **A volume whose cluster is over 16KB is refused before anything is
+claimed**, for both halves of that arithmetic. That is a FAT16 volume past
+1GB (§52.10), and not the 5150's ST-225.
+
+**Every part is checked against part 1 before a byte of it is written**: the
+magic and version, its own index, the same count, total and set ID, and an
+offset equal to what has been written so far. So a stale `.003` from another
+set, a part copied twice under two names or a set with one missing all stop
+at the first wrong part. Every block's two sums are checked against what it
+expanded to (§20.17.2). The final length must be the header's total, and the
+last block of the last part must end the file.
+
+| refusal | said as |
+|---|---|
+| the selected file's first 32 bytes are not a part (a plain `NOTES.123`) | `Not compressed` |
+| no part 1 in the folder | `Missing FILEA.001` |
+| a later part is not in the folder | `Missing FILEA.002` |
+| a part from another set, or out of order | `Wrong part FILEA.002` |
+| a block that will not expand, a check that fails, a short or overlong set | `Cannot expand this one` |
+| the result's name already exists in the folder | `fm_errtab`'s `FERR_EXIST` word, before anything is written |
+| a cluster over 16KB | `Clusters too big` |
+| the claim | `Not enough memory` |
+| a `FERR_*` from a read or a write | `fm_errtab`'s own word, and `CMPRESS~.TMP` is deleted |
+| success | `Uncompressed` |
+
+**The progress bar is scaled to the ORIGINAL's size**, and each block's
+expanded length is stepped onto it. Every `dskw_*` call arms the widget to
+its own length and ends it (§12.8), so `cmz_rearm` puts the verb's scale back
+after each one, which is the streamed `Compress`'s idiom (§22.22.5).
+
+`fm_onam` is the part name the join reads: its three digits are rewritten for
+each part and put back when the verb returns. The result's name, which is in
+part 1's header, is carried in the module and copied into `fm_onam` only for
+the final rename. The file layer takes names from `DS`, and the module's
+image is not `DS`.
+
+#### 22.23.6 `Uncompress To...` — the result goes where the user says, and the parts may be on floppies
+
+**Select any part, pick `Uncompress To...`, and the Save box opens on the
+original's name.** Wherever it is saved, the set is joined there, reading the
+parts from the folder they were selected in. When a part is not there and that
+drive is a floppy, the Disk window asks for it:
+
+```
+    Put FILEA.002 in A:
+    Enter=ready  Esc=stop
+```
+
+and Enter goes on from that part, looking for it in the ROOT of the disk now in
+the drive, because a folder is a cluster number and the old disk's clusters
+mean nothing on a new one. `os88cz.py split --images` puts every part in the
+root, which is what this is written against. Esc stops, and deletes what was
+written. A part that is not on the disk that was put in asks again, with
+`Missing FILEA.002` as a toast.
+
+**It is `kern_big`'s alone.** The join's 81KB claim is more than the whole of
+the 128KB machine's heap (§22.23.5), so on `kern_small` the item is not in
+either menu and none of its code is assembled: no resident byte and no image
+byte there. The ids after it are numbered by `FM_NUT`, which is 1 or 0.
+
+**It is the SAME join as §22.23.5**, with three things added. Everything
+else - the window, the checks, the `CMPRESS~.TMP` and the rename, every
+refusal - is that section's.
+
+1. **Two volumes.** The source is `(drive, folder)` as the verb found it and
+   the target is what the dialog left current. Every read goes to the source
+   and every write to the target through `fcpf_fcp_goto`, the far door
+   `CLONE.DRV` already uses between a floppy and an image file (§18.99.8). What
+   keeps a hop free is §18.9.3's batch bracket, opened once per run: inside
+   it a floppy's banked boot sector is trusted and its FAT window reused, so
+   going back to A: after writing C: is **no I/O at all**. The bracket ends at
+   the prompt, because the prompt unlocks, and that is exactly when the disk
+   is allowed to have changed. So the §22.23.5 window stays 49KB and is not
+   made bigger to amortise switches that cost nothing.
+2. **A prompt in the middle.** A part never spans two disks, so the join only
+   ever stops BETWEEN parts, and what it has to remember is small: the next
+   part's number, how much is written, the set's count, total and ID, both
+   places and both names. That is the 512-byte header at the front of the
+   claim (§22.23.5's table; 512 so the window behind it is sector-aligned),
+   written when the join starts and again at every prompt, not image scratch, because anything that drops and reloads
+   `CLONE.DRV` while the prompt is up - a Compress in another Disk window -
+   would lose image scratch and keeps the claim.
+3. **The claim IS `[clo_seg]`**, with `CLS_JOIN` where a clone keeps its
+   step. That buys the whole prompt for nothing: mode 7 (§22.21.1) already
+   routes every key to `CLV_KEY`, asks `CLV_LINE` for both lines and frees
+   through `CLV_FREE` when a click abandons it, and `clo_disp_x` sends all
+   three to the join when that marker is there. It also makes a clone and a
+   join mutually exclusive, which they must be - one `[clo_seg]` - and the
+   refusal is the one a second clone already gets.
+
+**What the resident half is**: the menu row and its string, a third label on
+the `Compress`/`Uncompress` body, and two more answers from `CLV_SAVED` and
+mode 7 (`CLA_LINE` to arm the prompt, `CLA_JDONE`, *the join has said its
+verdict and freed its claim*). **It holds no state and no dialog code of its
+own.** The image opens the Save box itself, through `fdf_fdlg_open` with the
+window `[fm_cmdwin]` names, and hands it the cloner's completion proc,
+`fm_img_done_x` (§18.99.8): with no claim live, `CLV_SAVED` is the join's. The
+source is the Disk window the verb was picked in - its `FS_DRV`/`FS_CWD`, read
+by the image through `[fm_vp]`, which the proc re-aims and the dialog does not
+move - and the part's name rides in `clo_fnbuf`, the cloner's resident 13-byte
+name, which is free because a clone and a join cannot both be running and the
+image, not the proc, copies the box's answer into it. A cancelled dialog calls
+nothing back (§38.2), so nothing is left to clean up. **Size pass 8 moved the
+dialog into the image** for this and for the Clone's image target together:
+`kern_big` resident -125 (`.cold` -116, `.text` -9 for `DISK.IMG`) and
+`kern_small` -57, for +37 bytes of `CLONE.DRV`. The proc this feature had of
+its own, 55 bytes, is gone.
+
+**Measured, `kern_big`** against the build before it: **+124 resident bytes**,
+`.text` +26 and `.cold` +98, `.bss` +0. That crossed the cold rung, 79 -> 80
+steps of 512: `KERN_SIZE` 105,984 -> 106,496, 23,040 spare of `KERN_BUDGET`
+(45 steps). The rung is the 512 billed to whoever was standing there (§1's
+banner); the bytes are 124, and 98 of them are `.cold`, which is resident.
+`CLONE.DRV`'s image went 9,411 -> 10,538 bytes (+1,127) and its file on the
+floppy 7,769 -> 8,702, and the claim 81 -> 82KB for the header. **`kern_small`:
++0 everywhere**, the whole feature being inside `%ifdef KERN_BIG`.
+
+`tests/czto.py` is the row, and it needed the emulator to change a floppy
+under a running guest: MartyPC's debug server gained a `mount` command
+(`Marty.mount(drive, path)`, the path absolute because the emulator's working
+directory is its own run folder). A swap is noticed the way a real one is,
+once the drive motor has stopped (§18.9.1), so the test waits for that before
+it mounts.
+
+| refusal | said as |
+|---|---|
+| the selection is not a part | `Not compressed` |
+| a clone or another join is already running | `A disk job is running` |
+| the result's name is taken in the target folder | `fm_errtab`'s `FERR_EXIST` word, before anything is written |
+| a part missing from a drive that is NOT a floppy, or from the drive the result is being written to | `Missing FILEA.002`, and the join stops |
+| a part missing from a floppy that is not the target's drive | the prompt |
+| the disk put in does not have it either | `Missing FILEA.002` as a toast, and the prompt stays |
+| everything else | §22.23.5's own words |
+
+##### 22.23.6.1 A disk error, and the hop that must not fail back into it
+
+**A read error on a part is the end of the join**, said in the error's own
+word (`Disk error`, `No disk`) with everything released: the claim, the
+prompt, the batch bracket and `CMPRESS~.TMP` on the target. The prompt is not
+offered again for it. A part half-joined cannot resume from the start of its
+part, because what it already wrote is in the result.
+
+**Before this fix the error path could loop for ever.** `cmz_jerr` deletes the
+half-written result, and that needs a hop to the target. The hop went through
+`CMZ_GO dst`, whose failure path IS `cmz_jerr`. So a target that could not be
+reached at that moment sent the join back into its own error path, with
+`[cmz_jwrote]` still set, to try the same hop again, for ever. It ran on the
+UI task, so the arrow stopped, a posted Ctrl-Alt-Del was never serviced, and
+no Disk window ever answered again. The hop in `cmz_jrmtmp` is now a plain
+`fcpf_fcp_goto` whose failure only skips the delete. The target keeps its
+`CMPRESS~.TMP`, as it does after a failed rename (§22.22.5). A later join into
+that folder then says `Name exists` until the file is deleted.
+
+**The field report that led here was not that loop.** On the 5150 a
+marginal second disk failed as soon as it went in. `Disk error` was said,
+and then for 30 seconds the prompt stayed painted, keys did nothing, the
+pointer did not move and the motor ran with the head still. The join had
+finished. The Disk window was re-reading the same bad disk before it
+repainted, and a failing read there took its time with nothing on the glass
+to show it. Two things made that look like a hang, and both are fixed in the
+progress layer rather than here. The pointer had been taken down by the
+repaint, and nothing brought it back while the reads went on (§7.5.3.2). A
+retry moves no sectors, so a failing read that had not already armed the
+chrome never would (§12.8.3.2). The owner's rule is the one both follow:
+anything that takes more than two or three seconds has to say that it is
+working. MartyPC answers a failed read in one revolution, so the same
+sequence there is under a second; on the iron each of those retries was
+slower, the head never moved because a 360KB disk's first data cluster is on
+cylinder 0, and 30 seconds of it is consistent with the report.
+
+`tests/czto.py` fails B:'s reads just after the kernel's own `int 13h`
+(AH = 10h, CRC), so the retries and everything above them are real. Four of
+its legs are this section's. Each was checked red against the build without
+its fix:
+- `ioerr` fails a marginal second disk after the prompt; the join must say
+  `Disk error` and leave A: clean.
+- `alive` keeps the disk failing after the verdict. At every failed attempt
+  the mouse is nudged, and the pointer must be up and following it. Without
+  §7.5.3.2 it reads `cur_level` -1 at a fixed x, exactly the field's picture.
+- `hopfail` points the error path's hop at a drive that is not there. With
+  the old hop it fails 50 hops in a row and never ends; now it fails one and
+  says `Disk error`.
+- `arm` opens a one-sector folder with the motor running and every read
+  failing. The chrome must be up from the second failed attempt; without
+  §12.8.3.2 it never comes up.
+
+The loop's fix is in `CLONE.DRV`'s image and moves no resident byte. The two
+progress-layer fixes are 39 resident bytes on each kernel: 14 of `.text`
+(§7.5.3.2) and 25 of `.cold` (§12.8.3.2). They cross no rung.
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
@@ -45886,6 +47600,43 @@ and the reason is worth keeping: a removal list argued from *"nothing names
 it"* removes the things nobody will miss until they do, where one argued from
 *"the Wire has it"* removes the things anybody can put back.
 
+#### 24.3.1.2 Browser and Telnet leave the 360KB system disk
+
+**`SYS360OMIT` is `BROWSER.O88` and `TELNET.O88`**, on 24.3.1.1's test taken
+one step further, and by the owner's decision. On this branch the list had
+gone EMPTY - lz4 packing (§20.13) and the packed kernel (§2.9.13) gave the
+disk back enough room that `PAINT.O88` came home - and the disk then grew to
+**350 of 354, four clusters free**, which is the state 24.3.1 calls the
+dangerous one.
+
+The argument that put Browser and Telnet on this disk (24.3) was that a
+network machine's system disk should carry the programs that use its driver.
+**The Wire answers that argument rather than overriding it**: a machine that
+can use either program has a link up, a machine with a link up has The Wire
+(§92), which stays in `SYSTEM/` on this disk, and the Wire's catalog carries
+both. So the one network program this geometry needs to carry is the one
+that fetches the others - and the two together are the largest pair of core
+packages that are recoverable that way.
+
+| the 360KB system disk | clusters |
+|---|---|
+| before, with every core package on | 350 of 354, 4 free |
+| `BROWSER.O88` (13,495 bytes) and `TELNET.O88` (13,162) off | **323 of 354, 31 free** (measured) |
+
+Nothing else moves. Both packages stay on the 720KB, 1.44MB and 1.2MB system
+disks and on every apps disk, `build/apps360.img` included, and **`BROWSER.HTM`
+was never on this disk**: it rides `MEDIA/` on the apps disk beside the
+browser that opens it (§71.12, §24.6.2), so the 360KB apps disk is
+byte-identical across the change. What the system disk loses with Browser is
+its `ASSOC.DAT` row binding `.HTM`, which is correct rather than a casualty -
+with no browser on the volume there is nothing for the row to name, and
+mounting the apps disk teaches the machine the extension as it always has.
+
+The 360KB gate disks (`ether360.img`, `thewire360.img`, the `usbm` pair)
+take the same list, as they took 24.3.1.1's; every network row opens the
+browser off `B:`. `tests/btnall.py` and `tests/btngesture.py`, which launched
+both off `A:`, now launch them off the apps disk they already boot with.
+
 ### 24.4 The MEDIA DISK — a third shipped disk, at 360KB alone
 
 `build/media360.img` is a data floppy carrying `MEDIA/BEVERLY.MOD` and
@@ -46374,7 +48125,12 @@ Audio and the games, none of which has a disk of its own.
 **Being curated onto it is not a property of a package, it is a decision with
 a date on it.** ArtfulType and TeXPad are on both disks today because a
 general disk with no writer on it is a poor general disk; that is the
-owner's call and it gets remade the next time this geometry runs out. The
+owner's call and it gets remade the next time this geometry runs out. It ran
+out on 2026-09-28, when the PC speaker's path grew Audio by 3.3 KB of disk
+(§86.21) with Tracker (§45.25) and the Video Player to follow: Gorillas came
+off, being the newest game and on `games360.img` whatever this disk carries -
+provisional that day, CONFIRMED by the owner on 2026-09-29 (*"fine for
+now"*), and so remade like every other row here the next time it runs out. The
 row to read is the Makefile's `APPS_TOOLS_360`, not a list here — a package
 list in prose goes stale the next time anything ships, and the enforcement is
 `os88disk.py` refusing an image that does not fit.
@@ -46794,8 +48550,9 @@ level on the diskettes, and every other picture got faster.
 this machinery (190 of them past `ico_stage`, §25.7.2), and the only way to
 spend less is to expand into scratch that is idle during an icon draw — the
 argument that already lets it share `ico_stage`. No DS-addressable `.bss`
-buffer that large qualifies: `cur_save` is the mouse ISR's, `snd_xlat` is live
-sound state, `fm_pool` the file manager's. A share that is not provably idle
+buffer that large qualifies: `cur_save` is the mouse ISR's, `fm_pool` the
+file manager's (and `snd_xlat`, the clip's table, left the kernel for the
+clip library in kernel size pass 8, §34.4). A share that is not provably idle
 is a corruption bug, so none is taken.
 
 ### 25.8 `kern_small`'s harvested icons are a POOL, because a listing repeats itself
@@ -47021,6 +48778,12 @@ inline `DV_LBL` ('HDD C') or is derived as `Disk X` from the index, and a
 driver-backed volume gets `ico_hdd32` instead of `ico_disk32` because a hard
 disk should not read as a floppy that will not eject.
 
+> **§26.9 has replaced the arithmetic below with a table**: every item is
+> given a CELL by `desk_reflow` and `[desk_zslot]` says which, so nothing
+> computes a position from an ordinal any more. The cell order is the one this
+> section describes — down a column, then a new column to the left — and the
+> CGA argument for it is unchanged; the pitch is §26.9.1's.
+
 **Zones fill a column downwards and then start a new one to the LEFT**, and
 that is CGA's doing. Zone *n* is at `y = 32 + 60 × (n mod rows)` and
 `x = [vid_desk_zx] - 56 × (n / rows)`, where `[desk_rows]` is computed at boot
@@ -47105,6 +48868,13 @@ that overlap. On the measured case — a Disk window open, the Control Panel
 up, two partitions mounted — 371 glyphs became 182, and the 182 is almost
 entirely the Control Panel redrawing its own page after the click. No
 `wm_paint_all` runs at all.
+
+> **§26.9.4 has replaced the rest of this section.** The grid rect and its
+> high-water mark (`[desk_zhw]`, `desk_zmark`, `desk_zones_dmg`) are gone:
+> `desk_reflow` knows exactly which CELLS changed, so it posts those and
+> `desk_zones_paint` repaints each one, which is never more than the strip the
+> mark below was computing and usually much less. What follows is the record
+> of why the strip had to be what it was.
 
 **The rect covers ordinals 0..n-1, and n is a HIGH-WATER MARK.** The subtle
 part is that adding or removing a volume moves the zones *after* it — a
@@ -47294,7 +49064,7 @@ drive where the medium CAN —
 | 720 sectors or fewer (160–360KB, all 40-track) | 5.25" |
 | anything larger (720KB, 1.44MB, 2.88MB) | 3.5" |
 
-— and a changed bit posts the zone repaint through `desk_zmark_x` (§26.3),
+— and a changed bit posts the zone's CELL through `desk_cmark` (§26.9.4),
 the same mark a mount or an unmount of a volume already uses. An unmarked row
 is **never** touched: a drive whose ROM answered is not second-guessed by what
 happens to be in it. The boot drive's first mount is `drv_boot`'s, which runs
@@ -47399,27 +49169,34 @@ register the Wire's out of the shared `drivers/wirezone.inc`. No driver, no
 zone, and the only thing a cardless machine pays at runtime is one compare in
 `desk_svflag`.
 
-#### `OSAPI_DESK_SVC` — slot `KERNEL_SEG:0x03F8`
+#### `OSAPI_DESK_ITEM` — slot `KERNEL_SEG:0x03F8`, a driver's half
+
+This slot was `OSAPI_DESK_SVC`, a driver's door only. §26.9.6 made it the one
+door ANY item comes through. A package's half is there; this is a driver's.
 
 ```
   in   AL    = 1 add / 0 withdraw
-       ES:SI = (add) a 39-byte record in the DRIVER's own segment:
+       ES:SI = (add) a 40-byte record in the DRIVER's own segment:
                +0  12  caption, NUL (<= 11 chars; 'Wire')
-               +12 13  the 8.3 file the zone launches, from the BOOT
+               +12 13  the 8.3 file the item launches, from the BOOT
                        volume's SYSTEM/ ('THEWIRE.O88')
                +25  1  the driver's DRVC_* class
                +26  1  the verb the kernel calls to PAINT the icon
                +27 12  the package's HEADER name, NUL ('The Wire')
-  out  CF = 1 refused: not a published driver, a SECOND registration, or a
-              withdraw of somebody else's zone
+               +39  1  the CELL it would like, 0xFF = the first free one
+                       after the volumes (§26.9.3)
+  out  CF = 0 AL = DESK_SVZ, its zone
+       CF = 1 refused: a SECOND registration, or a withdraw of somebody
+              else's item
 ```
 
 An **X cell**, so the caller's segment arrives in ES — which is both where
-the record is and what the fence tests. **The fence is `osapi_vol_fence`,
-unchanged and shared** (§51.8): the caller's segment must be the segment of a
-driver whose services are published. A package gets CF=1 and nothing else,
-for `OSAPI_VOL_ADD`'s reason — the kernel is about to far-call this segment
-on every desktop repaint.
+the record is and what tells the two halves apart. **The test is
+`osapi_vol_fence`, unchanged and shared** (§51.8): a segment that is a
+published driver's takes this half; anything else is a package and takes
+§26.9.6's. The kernel far-calls a driver's segment on every desktop repaint,
+which is `OSAPI_VOL_ADD`'s reason for the fence and the reason a package can
+never register a service item.
 
 **ONE record, stated as the limit.** A second registration is refused; whoever
 attaches first has the zone, and on a machine with both network drivers loaded
@@ -47438,6 +49215,13 @@ ever. The other three are used once each and the driver is trusted about them
 exactly as it is about the offsets in its own DSV table, which the kernel
 far-calls without looking.
 
+**The cell is a WISH, and the user's placement beats it.** It is written as
+§26.9.2's remembered cell — `DSL_PIN | DSL_GONE | cell` — only when the
+table has nothing for the item, so a Wire the user dragged elsewhere, whose
+cell SYSTEM.CFG brought back before the driver attached, stays where the
+user put it. `drivers/wirezone.inc` asks for 0xFF and flows after the drives,
+as it always did.
+
 **There is no lead line any more** (kernel size pass 4). The record ended
 with `+39 26`, the driver's own `Cannot open Wire:` for the failure notice,
 because a kernel that composed it would have carried the words and the
@@ -47448,22 +49232,19 @@ driver's string went with the notice.
 
 #### The zone itself
 
-`DESK_SVZ` = `DVOL_MAX`, one past the last volume row, so `desk_ord` answers
-"the number of volume zones shown" for it and it lands at the end of §26.1's
-column flow. Every other routine in `desk.inc` is asked about an INDEX and
-never about a drive, so the zone selects, highlights, repaints under a dragged
-window and wraps into the next column exactly as a disk does. Five routines
-carry a one-compare arm — `desk_zflag` (→ `desk_svflag`), `desk_ord`,
-`desk_zone_label`, `desk_draw_zone`, `desk_click` — and `desk_zones_dmg` gains
-one `inc`, because the zone sits one ordinal past the last volume and
-therefore MOVES whenever one is mounted.
+`DESK_SVZ` = `DVOL_MAX`, one past the last volume row. It is an ITEM in
+§26.9's grid like any other: `desk_reflow` gives it a cell after the volumes,
+and every routine in `desk.inc` is asked about a zone INDEX and never about a
+drive, so it selects, highlights, repaints under a dragged window, moves when
+dragged and packs into the next free cell exactly as a disk does. What is its
+own is three arms: `desk_live` (`[desk_svc_seg]` non-zero), `desk_zone_label`
+and `desk_draw_zone`.
 
-**Two conditions make it visible**: a driver has registered one
-(`[desk_svc_seg]` is its segment, and 0 is the whole of what a machine without
-such a driver tests), and fewer than `DVOL_MAX` volumes have zones. It is not
-shown when eight volumes are — a fact rather than a crash: it is a desktop
-SERVICE and a machine with `DVOL_MAX` mounted volumes has said what it wants
-the right-hand edge for.
+**It is visible when a driver has registered one** (`[desk_svc_seg]` is its
+segment, and 0 is the whole of what a machine without such a driver tests)
+and the grid has a free cell for it. It used to vanish when eight volumes
+were mounted, because it sat at the ordinal past the last one; on §26.9's
+grid it simply takes another cell.
 
 **Painting calls the driver back.** `desk_draw_zone` reaches `drv_pkg_call`
 with `BH` = the record's class, `BL` = its verb and `CX,DX` = the icon's
@@ -47490,11 +49271,10 @@ and `ui_sys_open` is not, so it goes out through `cw_ui_svc_open` — with **no
 gfx lock held**, which is that routine's contract and why the deselect and its
 redraw happen inside their own lock hold first.
 
-**The repaint on both edges is `desk_zmark`'s** (§26.3), and the withdraw's is
-the interesting one: it marks while the zone is still counted and then adds one
-more to `[desk_zhw]`, because `desk_zones_dmg`'s own `+1` for this zone is
-gated on the segment the withdraw has just cleared and the stale pixels are at
-the ordinal past the last volume.
+**The repaint on both edges is `desk_reflow`'s** (§26.9.4): an add or a
+withdraw changes whether the item is live and nothing else, and the reflow
+posts every cell that changed as a result, including the cells of whatever
+packed up behind it.
 
 **The damage mask is a WORD.** It was one byte and `DVOL_MAX` = 8 sat exactly
 at that limit, so zone index 8 had **no bit under any volume count** — the
@@ -47503,7 +49283,9 @@ their own indices whatever their number. A bit that does not fit is a zone
 `desk_paint_x` still draws and every damage-driven path silently stops
 repainting. `[wm_dmg_zn]` is a `dw`, `desk_dmg_zones` answers in AX and
 `desk_paint_mask` shifts DX: **two bytes**, because `mov [mem],ax` and
-`mov ax,[mem]` are the same length as their byte forms.
+`mov ax,[mem]` are the same length as their byte forms. **§26.9.4 has since
+made it a DWORD** of its own, `[desk_dmgm]`, because 24 items do not fit a
+word either, and §11.91 retired `[wm_dmg_zn]` for the zones' box.
 
 **`kern_small` leaves the species out** (`%ifndef KERN_SMALL`) — it has no
 driver that would register one. **The CELL is in both kernels** and refuses in
@@ -47535,7 +49317,8 @@ the price of the strings being the driver's: the kernel holds a copy because
 nothing it hands them to can read the driver's segment.
 
 **What a machine with no such driver pays**: those 243 + 67 bytes, and at
-runtime one `cmp word [desk_svc_seg], 0` per zone test. It carries no glyph,
+runtime one `cmp word [desk_svc_seg], 0` per zone test. These are the slot's
+figures as it shipped; §26.9.8 is what the unified grid made of them. It carries no glyph,
 no caption, no file name and no lead line.
 
 ### 26.7.1 The picture is the driver's: `drivers/wirezone.inc`
@@ -47806,132 +49589,550 @@ one three-sector re-read at the next mount rather than a sector per package.
 The rank stays `MEM_PG_TRIV` regardless: what is lost is still recoverable
 without asking the user for anything.
 
-### 26.8 Desktop shortcuts — DESKTOP.CFG
+### 26.8 Desktop shortcuts
 
-Desktop links are available on kern_big and kern_emu only. kern_small excludes
-the module, resident state, dispatch hooks, shortcut menus and record storage;
-it ignores DESKTOP.CFG and retains its existing Disk-window drag behavior.
+`kernel/desksc.inc`, kern_big only (`OS88_SHORTCUTS`), and
+docs/plans/completed/DESKTOP-SHORTCUTS-PLAN.md is the design record behind it.
 
-Desktop links are Locator shortcuts: a drive, an absolute 8.3 path and a
-cached 16x16 picture. They never create FAT symlink entries and never copy,
-move or delete their targets. A bare-desktop drop creates a link; a drop on a
-Disk window keeps §22.4's move semantics. The file clipboard is armed only
-when the destination is a Disk window, so creating a link or cancelling a drag
-leaves it untouched. The source row and source window are banked by the
-existing drag tracker; `..` is not draggable.
+**A file or folder dragged out of a Disk window and dropped on the bare
+desktop becomes a SHORTCUT.** It has the entry's picture with a small badge
+and a caption, and it sits on a grid cell. It behaves like a drive zone:
 
-`DESKTOP.CFG` lives in `[dsk_bootvol]`'s root. Like SYSTEM.CFG it is hidden +
-system, kernel-writable, and its writer checks `KERNEL.SYS` before writing.
-Shortcut behavior ships in `DESKTOP.DRV` on kern_big and kern_emu. Its eleven
-entries are load, save, paint, damage, paint damage, click, drop, command,
-drain, Get Info paint and desktop key handling. After the first desktop frame,
-boot timing, cursor and driver notices are finished, task 0 becomes the UI
-task. Its one-time entry prepares and retains the module and reads DESKTOP.CFG
-without the gfx lock while the system disk is available. Loaded links post a
-normal full repaint; a missing or invalid configuration leaves the already
-painted desktop usable. This keeps shortcut I/O out of the first-frame boot
-path and lets a first drop from a swapped-in apps floppy work. The module uses
-a bottom-up `MEM_K_MOD` claim (rounded to KB), keeping boot residency within
-§2's 128KB rule by shedding the boot directory read-ahead before pinning its
-code; an empty desktop claims no record storage and skips paint dispatch. A
-missing module leaves the desktop usable; dropping a file retries loading and
-requests the system disk if it is still unavailable. Saving is posted to the
-UI drain with the gfx lock free. A failure keeps dirty state and says what
-went wrong; File > Save Desktop retries. Pending state is included in
-hibernation by the ordinary non-purgeable claim rules.
+- a click selects it by inversion;
+- a double-click, or Enter, does what a double-click on that entry in its
+  Disk window would do;
+- a drag moves it to another cell;
+- Delete, a right-click's `Remove Shortcut` or Locator's `File > Remove
+  Shortcut` takes it away.
 
-Generation 1 is little-endian, with a 512-byte header followed by up to 16
-256-byte records. The header starts `O88DESK\0`, then words generation (1),
-record size (256), count (0..16); remaining header bytes are zero. Loading
-requires the exact file length and validates every record before publishing
-any: valid volume/type, an absolute terminated path, nonempty 8.3 components,
-and no dot links or wildcard/illegal FAT characters. Invalid files produce an
-empty desktop and release the record claim. Each record:
+It is kept in SYSTEM.CFG, so it is still there after a reboot or a power
+cycle. A machine with no shortcuts writes the same SYSTEM.CFG it always did.
 
-| offset | size | meaning |
+**A shortcut is an ITEM in §26.9's grid**, zone index `DESK_SC0` + its row
+(9..23 on kern_big), so `desk_sel`, `desk_zone_redraw`, §26.2's
+flip-not-repaint, the drag and the damage pass serve it with the drives. What
+is a shortcut's own is the record, its picture and badge, the open by name,
+the remove, and the SYSTEM.CFG trailer. §26.8.1 to §26.8.7 are those.
+
+`kern_small` has no shortcuts; it reads no SYSTEM.CFG at all (§51.5), so
+there would be nothing to keep one in.
+
+#### 26.8.1 The record and the claim
+
+| off | len | field |
 |---|---|---|
-| 0 | 2 | x position, pixels |
-| 2 | 2 | y position, pixels |
-| 4 | 1 | volume index (A: = 0) |
-| 5 | 1 | target type (0 data / 1 package / 2 folder) |
-| 6 | 2 | FAT media signature, 0 for a redirected volume |
-| 8 | 128 | NUL absolute path, beginning with `\`, including the leaf |
-| 136 | 64 | mask rows then data rows, §25's 16x16 body; zero = generic |
-| 200 | 56 | reserved, zero |
+| 0 | 1 | the volume index (0 = A:), `0xFF` = a free row |
+| 1 | 1 | its byte of `[desk_zslot]` — in the FILE only: CTRL.DRV writes it from the table and the boot reader puts it back (§26.8.6) |
+| 2 | 1 | the kind: 0 document, 1 package, 2 folder (§19.1's type word) |
+| 3 | 1 | spare |
+| 4 | 45 | the entry's path BELOW THE ROOT, `APPS\CALC.O88`, NUL: `dsk_path`'s 32-byte folder path less its leading `\`, a `\` and an 8.3 name |
+| 49 | 13 | the caption, NUL |
+| 62 | 2 | `db 1, 16`: an icon record's header, so header and body ARE a record and the picture draws straight out of the claim |
+| 64 | 64 | the 16×16 picture, §25's body form, as the Disk window had it |
 
-No cluster number is durable identity. Creation uses `dsk_path_x` and appends
-the source name after checking the buffer bound. Opening walks the full path
-anew and verifies the medium where a FAT signature was recorded. A replaced
-disk or missing target leaves the shortcut visible and reports the failure. A
-redirector cannot supply the FAT identity check. Renaming or moving a target
-breaks the link until it is recreated.
+`SC_REC` is **128 bytes**, so a KB holds exactly eight records. It is also a
+PACKAGE's `OSAPI_DESK_ITEM` record, byte for byte (§26.9.6): the row a
+package hands over is copied in whole and two bytes of it fixed up.
 
-`dl_seg` names a lazily allocated 5KB `MEM_K_DESK` claim. Records begin at
-512; its last 512 bytes are working storage. An empty configuration and a
-successful save after removing the last link release the record claim.
-`dl_count`, `dl_sel` (FF = none), `dl_dirty`, `dl_save` and `dl_open` are
-resident UI state. `dl_save` bit 0 requests a save; bit 1 keeps the UI drain
-watching the Get Info window until its Close hide is reaped into a destroy,
-without another resident flag. `dl_stage` is the module-local 136-byte
-position/path staging record; names and cached pictures reuse the existing
-UI-only `dsk_ent` and `dsk_ico` buffers. Module data is addressed through CS,
-and record storage through ES. Opening snapshots the locator into the record
-claim's UI scratch under a brief gfx lock, then releases the lock before I/O;
-path components reuse the UI loader's `ld_lname`, so painting in another task
-cannot overwrite an active resolver. All paint paths read cached records only.
-`dlf_dl_paint_x` paints all links under the gfx lock; `dlf_dl_damage_x` grows
-a damage rectangle to include whole touched link cells, and
-`dlf_dl_paint_damage_x` paints those cells before windows. The damage closure
-also includes §26.7's drive/service zones before painting; the caller still
-obtains their separate bitmask. Selection/reposition/removal damage only the
-affected cells. Runtime geometry clamps cells inside the desktop band and away
-from the rightmost drive column; CGA uses a shorter picture/caption cell. Each
-icon has one centered caption: the target basename without its extension.
-Drive letters, parent paths and a second filename line are never painted; the
-full path remains in the configuration for resolution.
+**The table is one heap claim** (`MEM_K_SC`), never `.bss`:
 
-File > Open Shortcut, Remove Shortcut and Get Info are enabled only for a
-selected link. Get Info opens a single reusable, closable read-only window
-with the recorded target type and drive-qualified full path, wrapped to 48
-characters per row without truncation. It snapshots the locator into module
-storage under the gfx lock; later removal or painting cannot change its
-contents. It performs no disk I/O and remains useful for missing targets.
+- It is grown a KB at a time and shrunk the same way, so 1 KB holds one to
+  eight shortcuts and 2 KB holds nine to fifteen.
+- It is freed when the last shortcut goes.
+- It is MOVABLE, with `sc_reloc` as its relocation proc, because a claim made
+  at boot is otherwise a wall low in the arena for the whole session
+  (docs/plans/HEAP-UNPIN-PLAN.md 2.0).
+- `SC_MAX` is 15: with eight volumes and the service item that is 24 items,
+  the cell count of the smallest screens (§26.9.1).
 
-Double-click and Enter also open the shortcut; Delete removes the link.
-Dragging an existing link repositions it. Dropping the same drive/path again
-moves its existing link. The maximum is 16 links and 127 path bytes excluding
-NUL; refusals are reported, never truncated. Folder opening uses `fm_choose`;
-program opening uses `ld_pkg_start_x`; document opening uses §54's existing
-association dispatch. File windows and their directories are restored after
-configuration I/O.
+**THE PATH, NOT A CLUSTER.** This system has no volume identity: every disk
+carries one serial. A `(volume, cluster)` pair would mean only *this copy of
+this disk*, and the shipped apps disks all carry `APPS\` at different
+clusters. So a shortcut to `B:\APPS\CALC.O88` is a path, and it opens on any
+disk in B: that has that file. At the drop the path comes from `dsk_path`
+(§19.2.4) and not from the window's `FS_PATH`, because `FS_PATH` records
+navigation: a window opened part-way down a disk knows only the last folder
+of its path. The leading `\` is not stored, because the open walks from the
+root anyway; that byte and the old pen-offset byte are what bought the header
+at +62.
 
-#### 26.8.1 Kernel size optimization passes
+#### 26.8.2 What a shortcut draws
 
-Measured against build 175 before this feature, with unchanged size budgets:
+A shortcut sits in one of §26.9.1's cells like any item, and draws:
 
-| pass (big kernel) | added section bytes | added static RAM |
+- the 16×16 picture in the RIGHT half of the cell's 32-wide picture column
+  (`SC_PICX`), straight out of the claim through `icon_draw_x`;
+- the badge (§26.8.3) one clear column to its left;
+- the caption, black on a white rect that HUGS it (§26.4), as one opaque run
+  (§26.6). The rect is measured with `font_width` at paint and not stored.
+
+The selection is §26.9.5's: the picture column down to the label band, and
+the caption's rect — two XORs, both self-inverse. Inverting the whole cell
+would read as a hole in the desktop. The picture is 16×16, as in the Disk
+window's icon view, and not doubled to a drive's 32×32 (§26.8.3).
+
+#### 26.8.3 The badge
+
+Every shortcut carries the BADGE: a 10×10 box with an arrow curving up and
+to the right. It is drawn BESIDE the picture and not over it, so the stored
+picture is the Disk window's own and nothing is written into it. It is its
+own icon record, `sc_bdg` in `.text`. A body that arrived all zero (a
+package with no icon) leaves the badge alone, which is the "tiny shortcut
+icon" the request asked for when no icon is available. The selection's
+picture column covers the badge, because it is part of the picture.
+
+It was first stamped INTO the picture's lower left by `CTRL.DRV` at the drop,
+which cost nothing resident and covered a quarter of the icon. A 32×32
+picture, the stored 16×16 doubled at draw time, was built as a knob and
+looked at, and REMOVED: doubling suits some icons and not others, and a cell
+46 rows tall has no room on CGA's 34-row pitch.
+
+#### 26.8.4 Creating, and the caption
+
+**A drop on the bare desktop creates one.** `fm_dgdrop`, finding no window
+under the release, used to return having done nothing. Now it disarms the
+clipboard — the drag armed a CUT when it began (§22.4), so a drop here would
+otherwise leave a Paste somewhere else ready to MOVE the original out from
+under the shortcut — and hands the gesture to `CTRL.DRV` (`SC_OP_NEW`).
+
+The drop point goes WITH the gesture, in CX,DX: `fm_dgdrop` read it at the
+release, and the module is read off a floppy after that. For one build
+`CTRL.DRV` read the pointer itself once it had loaded, so a hand that moved
+on during the load put the shortcut under wherever it had gone instead of
+under the drop (`desksc`'s step A moves away at once to catch it).
+
+There, a drop on the menu bar, on the dock or on another display does
+nothing. Anywhere else the shortcut is PLACED on the **NEAREST FREE CELL**:
+by the cell's centre, in city-block pixels, so nobody has to aim at a cell
+edge and a drop on a taken cell lands beside it. The picture is staged out of
+the window the drag began in.
+
+**THE CAPTION is decided once, at the drop, and stored**:
+
+| kind | caption |
+|---|---|
+| package | its HEADER name (§20.2, header +16) when that is 12 characters or fewer, the cell's width; otherwise the 8.3 stem without `.O88` |
+| document, folder | the full 8.3 name |
+
+The header name costs one `dsk_peek` of the package's first sector, inside a
+gesture that is about to spend several on the write. Deciding it at the drop
+keeps the measuring out of the paint path.
+
+Moving a shortcut is moving any item, and is §26.9.5's.
+
+#### 26.8.5 Opening, and removing
+
+**A double-click, or Enter on a selected zone, is `desk_open`**: deselect,
+then dispatch.
+
+- **Enter opens ANY zone**, drives included, since it is the double-click.
+  It reaches the desktop only while LOCATOR owns the bar
+  (`[menu_win]` = 0). A click on the bare desktop is what hands Locator the
+  bar (§12), so a window the user went back to keeps its keys even with a
+  zone still lit.
+- **A shortcut opens by name, through the doors the Disk window's double-click
+  already has.** `sc_open` banks the user's volume, goes to the shortcut's
+  volume root, and walks the path a component at a time (`dskw_stat`, then
+  `fcp_goto`). Then, on the entry:
+
+  | the entry is | `sc_open` does |
+  |---|---|
+  | a folder | `fm_choose`: fronts a Disk window already showing it, opens one, or moves the frontmost one at `FM_MAXWIN` |
+  | a package | `OSAPI_PKG_START`'s by-name arm |
+  | a document | that slot's document arm (§21.5.3): the association route, `Needs X.O88` and all |
+
+  What the entry IS NOW decides, not what it was when the shortcut was made.
+
+- **A target that is not there says `Shortcut not found (B:)`**, naming
+  the drive the shortcut points at. That covers a volume that would not
+  mount, a component or entry that is gone, and a component that is a file
+  where a folder was: to whoever double-clicked, all three are the same
+  thing. The letter is patched into the string before each toast,
+  `desk_lbl_gen`'s way, and the 23 characters are exactly a toast's room. A
+  package that will not load gets `ld_say_status`'s verdict.
+
+**Remove** has three routes and one door, `SC_OP_DEL`:
+
+- **Delete** with a shortcut selected, while Locator owns the bar.
+- A **right-click** on a shortcut, which selects it through `desk_select`
+  and pops a one-item menu. It stamps nothing into `[ui_click_t]`, which is
+  `ui_rdown`'s own binding rule. **The popup is RESIDENT** (`sc_rclick_x`,
+  `.cold`) and only the pick goes to `CTRL.DRV`: for one cycle the whole
+  popup was the module's, and on an XT that is 2–3 seconds of image load
+  between the click and a menu, which is a menu that does not come up.
+- **Locator's File > Remove Shortcut.** `desk_select` points the item at its
+  greyed twin, one `MENU_DIS` byte in front of the string (the Close Window
+  idiom), unless the selection is a shortcut.
+
+The routes check only that the zone is a shortcut's, `DESK_SC0` and above:
+Delete on a drive or the service item passes the key on, because refusing it
+in `CTRL.DRV` would be a floppy load of the core - and `Needs Sys Disk A:`
+without the system disk - for a key that could never do anything. `CTRL.DRV`
+refuses anything else that is not a live shortcut. The claim gives back a KB once the rows above the highest one in
+use fill it, and goes with the last shortcut.
+
+#### 26.8.6 SYSTEM.CFG: a trailer after the terminator
+
+§51.5's records are FIXED-length and its writer rewrites every key from
+resident state, so a setting at its default still costs its record. That is
+not the "costs nothing when absent" this feature was asked for. The desktop
+goes AFTER the `dw 0` terminator, and only when there is something to keep —
+a shortcut, or an item the user PLACED (§26.9.5):
+
+```
++0     'O88CFG',0,0  dw 3            ; unchanged
++10    records ... dw 0              ; unchanged - every reader stops here
++T     count * SC_REC                ; the live rows, verbatim and compacted,
+                                     ;   each row's +1 its table byte
++T'    DESK_SC0 bytes                ; zones 0..8's table bytes: a PLACED
+                                     ;   one's, 0xFF for everything else
++end-4 dw 'SC'  db SC_VER  db count  ; SC_VER = 2
+```
+
+The footer is read from the END, so the reader never walks the records to
+find it. With nothing placed the file is byte for byte what it was before.
+Version 1 (no pins block, a two-byte column/row cell) is refused rather than
+read: it went to nobody.
+
+- **The writer is `CTRL.DRV`'s.** `sc_m_ser` composes settings, rows, pins
+  and footer in a claim of its own, PINNED, for the length of the write.
+  `CTRL.DRV`'s bss is only the slack in its own KB rounding (kernel.asm's
+  `MODC_BSS` assertion), and a buffer the write is reading must not be moved
+  by a compaction the write itself triggers. With no room to compose them,
+  the write is REFUSED rather than made without them, because a file without
+  the trailer deletes every shortcut at the next boot. `[cp_wdirty]` keeps
+  the save owed.
+- **The reader is in `.ovl`**, so it costs no resident byte and no disk read.
+  `ovl_sc_load` runs before `ovc_load`'s own read and passes it through
+  untouched for a file of `CFG_FBUF` or less, which is every file with no
+  trailer. A bigger file is read whole into the shortcut claim; a valid
+  trailer's rows move down to the claim's base with every string
+  force-terminated, and the pins block and each row's table byte go into
+  `[desk_zslot]` VERBATIM, because the file is untrusted only in what it can
+  break and §26.9.3's first reflow drops any cell this screen has not got.
+- **An OLDER kernel refuses a file that carries a trailer, and loses every
+  setting.** Its `ovc_load` reads with `CX = CFG_FBUF` and `dskw_read`
+  answers a larger file with `FERR_BIG` before any I/O. It cannot be fixed
+  from this side, and it bites only on a downgrade, since the file sits
+  beside `KERNEL.SYS` on the one boot volume.
+
+#### 26.8.7 What is resident, and what is CTRL.DRV's
+
+Creating, moving and removing an item and a package's `OSAPI_DESK_ITEM` each
+END in a SYSTEM.CFG write, and the writer is `CTRL.DRV`'s (§51.5.3). So all
+of them are that image's, through one entry, `CPE_SC`, with the operation in
+AH (`SC_OP_NEW`, `_MOVE`, `_DEL`, `_ADD`, `_PDEL`). It lives in the image's
+SETTINGS CORE, its first 2,206 bytes (§2.8.7), so `sc_modcall` reads only those. It
+uses the whole image instead when a Control Panel already has it loaded,
+and otherwise loads the core, calls it and drops it. Each gesture saves at
+once, through `cp_flush_cfg` (the core's half of the panel's own
+`cp_flush_close`), because a placement is meant to survive a power-off
+rather than wait for the panel to close.
+
+**What that costs on a one-drive machine is stated rather than discovered.**
+A create, move or remove needs the SYSTEM disk in the drive at that moment.
+With a data disk there it refuses with the panel's own `Needs Sys Disk A:`,
+and nothing changes. Moving an icon is a setting like any other, and a
+setting is not kept without the disk it is kept on. Opening a shortcut needs
+no module and works with any disk in the drive.
+
+What every kern_big machine carries resident is drawing, hit-testing,
+selection, the open, the keys, the right-click's popup and the drag's
+threshold. §26.9.8 is what it costs.
+
+### 26.9 One desktop: every item in one grid of cells
+
+`kernel/desk.inc`, both kernels, and
+docs/plans/completed/UNIFIED-DESKTOP-PLAN.md is the design record behind it.
+The volumes (§26.1), the service item a driver registers (§26.7) and the
+shortcuts (§26.8) used to be three species placed three ways: volumes by
+their ordinal down the right-hand column, the Wire one ordinal past them,
+and shortcuts on a grid of their own that stopped short of every column the
+volumes could reach. Now they are all ITEMS in one grid of CELLS, placed by
+one routine and drawn, hit, selected, highlighted, damaged, moved and opened
+by one set. A user can drag a drive where they want it and the rest flow
+round it; a package can put an item on the desktop.
+
+#### 26.9.1 The grid
+
+A CELL is `DESK_CW` wide and `[desk_zstep]` tall (§26.4: 60 rows, 34 on the
+CGA). Cell 0 is the top of the rightmost column, whose left edge is
+`[vid_desk_zx]` = the band's right edge − `DESK_ZXOFF`; cells run DOWN a
+column of `[desk_rows]` and then to the next column on the LEFT, `DESK_PX`
+along — §26.1's order, kept because it is CGA's. `desk_cell_xy` is that
+arithmetic, and nothing else computes a position.
+
+| | `DESK_CW` | `DESK_PX` | `DESK_ZXOFF` | why |
+|---|---:|---:|---:|---|
+| kern_big | 96 | 102 | 100 | a shortcut's twelve-glyph caption wide |
+| kern_small | 32 | 44 | 56 | the drive zone it always was: it has drives and nothing else |
+
+**ONE cell size, and a drive's picture centres in it** (`DESK_PICX`). On
+kern_big that moved the drives 12 pixels left of where they were and widened
+the column pitch, which was looked at and accepted (the plan's D1): the
+fallback was shorter shortcut captions, and nothing needed it.
+
+**The grid uses every slot the screen has, on every adapter, with no table
+of adapters.** Two rules make that true, and both were wrong once:
+
+- **Rows: the first, then every whole pitch below it.** `[desk_rows]` =
+  (`[vid_dock_y0]` − 32 − `[desk_zh1]` − 1) / pitch + 1, because the LAST row
+  needs its own 46 rows (27 on the CGA) and not a whole pitch. It was
+  (`[vid_dock_y0]` − 32) / pitch, and on Hercules that is 4 where 5 fit:
+  the fifth row ends at y = 317 against a dock at 324, a whole row of desktop
+  left bare. VGA and the CGA come out the same either way.
+- **Columns: a 102 pitch, not 104.** At 104, Hercules's 720 pixels gave six
+  columns with the leftmost at x = 100, a whole column's width empty at the
+  edge the user reaches first. At 102 the seventh lands at x = 8. A widest
+  caption's white rect is 96 + 2 × 2 = 100, so neighbours still clear by
+  2 pixels. 640-wide screens stay at six columns, because no pitch fits
+  seven 96-wide cells in 640.
+
+| adapter | rows | columns | cells |
+|---|---:|---:|---:|
+| VGA 640×480 | 7 | 6 | 42 |
+| Hercules 720×348 | 5 | 7 | 35 |
+| EGA geometry 640×350 | 5 | 6 | 30 |
+| CGA 640×200 | 4 | 6 | 24 |
+
+`[desk_ncell]` (kern_big) is how many cells this screen has: the columns from
+cell 0's left to the band's left edge, a left dock included, times
+`[desk_rows]`, capped at 63. `desk_rowcalc` computes it with the rows, so a
+display switch (§39.11.2) or a dock move re-shapes the grid and reflows it in
+the same call. The ITEM count does not follow the cell count: it stays at
+24 (§26.8.1's `SC_MAX` is 15), the CGA's cells. More cells means more places
+to put the same items.
+
+#### 26.9.2 The table
+
+`[desk_zslot]` holds ONE BYTE PER ZONE, and that byte is the whole answer to
+"where is it, and is it shown":
+
+| bits | | |
+|---|---|---|
+| 0..5 | `DSL_SLOT` | the cell, 0..`[desk_ncell]`−1 |
+| 6 | `DSL_PIN` | PLACED: the user put it there. A shortcut always is |
+| 7 | `DSL_GONE` | not shown. On a placed item it is a REMEMBERED cell — an unmounted drive's, or the cell an `OSAPI_DESK_ITEM` caller asked for — which it gets back when it is live and the cell is free |
+| `0xFF` | | nothing: no item, or a flowing one that is not live |
+
+The ZONE INDEX says what the item is: 0..`DVOL_MAX`−1 the volumes, `DESK_SVZ`
+= 8 the service item, `DESK_SC0` = 9 .. `DESK_NZ`−1 = 23 the shortcuts.
+kern_small has only the volumes, so its `DESK_NZ` is `DVOL_MAX`. "Is it
+live" is `desk_live`: a volume's `DV_FLAGS` bit 0, the service item's
+`[desk_svc_seg]`, a shortcut's row. `desk_owner` answers the inverse, which
+zone a cell is showing.
+
+**A cell no screen has is DSL_SLOT itself**, 63, which `[desk_ncell]` is
+capped below — so "nothing" needs no test of its own in the reflow's compares.
+
+#### 26.9.3 The placement rule: `desk_reflow`
+
+Placed items stay; everything else packs into the first free cells. The
+routine knows NOTHING about what was added or removed — only which zones are
+live — so it is the whole of "a volume came", "a volume went", "the Wire
+came", "an item was moved or removed" and "the screen changed shape". Two
+passes, and their order is the design:
+
+1. **Let go.** Every FLOWING item releases its cell (kept under `DSL_GONE`
+   for the repaint). A PLACED item that is no longer live goes from the
+   screen but REMEMBERS its cell. Any item in a cell this screen has not got
+   is forgotten.
+2. **Take.** Every live item without a cell, IN INDEX ORDER, takes one: a
+   placed one its remembered cell if that is free, otherwise — and every
+   flowing one — the first free cell. Index order is volumes, then the
+   service item, then shortcuts, so the Wire follows the drives whichever
+   driver loaded first, exactly as it did.
+
+So the plan's D2 — *gapless, by re-adding every unplaced drive on any
+change* — costs no knowledge of what changed: an unplaced item is a "drive"
+to the reflow whatever it is. **A WISH IS A REMEMBERED CELL**: `OSAPI_DESK_ITEM`
+writes the asked-for cell as `DSL_PIN | DSL_GONE | cell` and pass 2 grants it
+if it can — "the slot you ask for, or the first available" is this routine
+and nothing new.
+
+**NOTHING HAPPENS UNTIL `[desk_ready]`.** The boot reads SYSTEM.CFG — the
+placed cells — and then the drivers add their volumes one at a time; a pass
+run between the two would forget a placed hard disk because its volume had
+not arrived yet. kmain sets the byte once `drv_boot` is done and runs the
+first pass itself.
+
+**kern_small's reflow is ONE loop**: with nothing placed, every live volume
+in index order gets the next cell. That is §26.1's ordinal flow with the
+answer written down, and it needs neither `desk_owner` nor `[desk_ready]`.
+
+#### 26.9.4 What a change repaints
+
+`desk_reflow` posts every cell it CHANGED — the one an item left and the one
+it took — through `desk_cmark`, which sets the cell's bit in the 64-bit
+`[desk_cdirty]` and `[desk_zdirty]`, and posts `ui_task`. Nothing else is
+needed to repaint a mount, an unmount, a driver attaching, a drag or a
+remove. `desk_zones_paint` runs `wm_paint_dmg` (§11.91) once per dirty cell:
+the desktop dither under it, any item now in it, and only the windows that
+overlap it — the CELL, and any neighbouring zone the cell's rect reaches,
+each as its own per-window test and never as a grown damage rect, so a
+window beside the cell is not owed rows of it (§11.91). The pass is told it
+uncovered nothing and promotes nobody, and on `kern_big` each zone is drawn
+only where it shows, so a window lying on the cell is not owed it at all
+(§11.91.6). §26.3's strip — the high-water mark over every zone that might
+have moved — is gone, because the reflow knows exactly which moved.
+
+**The damage mask is a DWORD**, `[desk_dmgm]`, zone *z* at bit 31 − *z*:
+24 items fit neither §26.7's word nor the `[wm_dmg_zn]` it replaced. `desk_dmg_zones`
+rotates each zone's answer in and `desk_paint_mask` spends it, so `wm.inc`
+still sees only the zones' box, `[wm_dmg_zb]` - grown, since §11.91.6, only
+for a zone drawn whole.
+
+#### 26.9.5 One set of gestures, for every item
+
+| gesture | any item | |
+|---|---|---|
+| click | selects it | §26.2's flip |
+| double-click, Enter | opens it | a drive's Disk window, the service item's package, a shortcut's target |
+| drag past `FM_DRAGMIN` | MOVES it to the nearest free cell under the drop, and PLACES it there | `SC_OP_MOVE`, `CTRL.DRV`'s |
+| Delete, right-click, File > Remove Shortcut | removes a SHORTCUT | anything else is a no-op (§26.8.5) |
+
+**The selection** is the picture column down to the label band and the
+caption's own rect, for every item. A drive's 32×32 picture fills the column
+and a shortcut's 16×16 sits in its right half with the badge left of it, so
+one rule covers both.
+
+**The selection belongs to the desktop's FOCUS.** When a window takes the
+menu bar, whether by a click, a raise, a window opening or the window under
+a closed one being promoted, nothing on the desktop stays selected.
+`menu_activate` is the one place every one of those passes, so it calls
+`desk_unsel_x` whenever the bar goes to a window. Like `menu_activate`, that
+routine draws nothing and takes no lock: it forgets `[desk_sel]`, greys
+Remove Shortcut, and posts the item's cell for §26.9.4's repaint, which
+redraws it unlit. 38 resident bytes on kern_big and 27 on kern_small.
+`desksc`'s step K2 selects B:, clicks a window's title bar, and requires the
+cell back pixel for pixel.
+
+**A drag needs the system disk** (the plan's D4): the move ends in a
+SYSTEM.CFG write. A press that never travels `FM_DRAGMIN` pixels — every
+ordinary click — never loads anything; `fm_dgwait` is `fm_drag`'s threshold
+made a routine and the desktop shares it. Past it the tracking loop and the
+outline (`fm_dgxor`, the Disk window's own) are `CTRL.DRV`'s. The item's own
+cell counts as free, so a short drag stays where it was and writes nothing.
+
+**The drop is where the button was RELEASED, and that is an event.** The
+module is read off the floppy while the hand is still dragging, and on an XT
+the hand has usually let go before the tracking loop's first pass. So the
+loop drains the queue for `EVT_MUP` as `fm_drag`'s does (`evq_mup`), and drops
+at that event's own x,y, which the mouse ISR recorded at the release. Only a
+release whose event was lost falls back to the pointer as it is now. The
+first build read `[mouse_x]`/`[mouse_y]` at the drop, so an item landed under
+wherever the pointer had wandered during the load. `desksc`'s step D moves
+away at once after the release to catch that. A NEW shortcut's drop
+(§26.8.4) is the same rule one step earlier: `fm_dgdrop` reads the point
+before the module is asked for, and hands it over in CX,DX.
+
+**The CGA's picture box is `DESK_IH_S` = 16 on kern_big**, a link's own
+height, so a link's picture sits at the top of the cell above its caption and
+a drive's 14-row diskette sits top-aligned beside it. On the 32-row box a
+link is bottom-aligned instead (`[desk_lky]` = 16). `desk_rowcalc` sets both
+with the adapter. For one build the link was 16 rows down on the CGA too,
+under its own caption, and `desksc --machine os8088_5150_cga_gla` is the
+gate that caught it.
+
+**A dragged drive is placed, and remembers its cell** — across an unmount
+and across a reboot, through the trailer's pins block (§26.8.6). There is no
+"unplace": the cell was the user's choice and it stays theirs.
+
+#### 26.9.6 `OSAPI_DESK_ITEM` — slot `KERNEL_SEG:0x03F8`
+
+One slot puts any item on the desktop and takes it off. It tells the two
+callers apart by `osapi_vol_fence` (§51.8): a published driver adds §26.7's
+SERVICE item, and anything else is a PACKAGE and adds a LINK.
+
+```
+  in   AL    = 1 add / 0 remove
+       ES:SI = the record, in YOUR segment - copied, so it may be
+               anything of yours (a driver's remove takes none):
+                 a driver's   40 bytes (§26.7): +39 the cell it would like
+                 a package's 128 bytes, §26.8.1's row (OSAPI_DI_*):
+                   +0   1  the volume, 0 = A:
+                   +1   1  the cell it would like, 0xFF = the first free
+                   +2   1  0 document, 1 package, 2 folder
+                   +4  45  the path BELOW THE ROOT, NUL
+                   +49 13  the caption, NUL
+                   +62  2  the kernel's - whatever is there is overwritten
+                   +64 64  the 16x16 picture (§25's body form)
+       AH    = (a package's remove) the zone its add returned, and ES:SI
+               the record it added: the row goes only while its volume
+               and path are still that record's
+  out  CF = 0 AL = the item's ZONE (an add)
+       CF = 1 refused: a second service item, a withdraw of somebody
+              else's, a full desktop or table, no system disk, a link
+              whose kind or volume nobody can have, or a remove whose
+              zone no longer holds that link
+```
+
+**A zone is not an identity.** The row a user's Delete frees is the next one
+a drag-out takes, and the boot reader compacts the rows, so the zone an add
+answered may hold somebody else's shortcut by the time the package removes
+it. A package's remove therefore names the LINK as well as the zone
+(`SC_OP_PDEL`), and a row that is no longer it is refused, never deleted.
+The boot reader holds a row from SYSTEM.CFG to the same bounds as an add: a
+kind above 2 or a volume past `DVOL_MAX` comes in as a free row.
+
+**A package's link IS a shortcut**: it is copied into the shortcut claim
+whole, so it draws, opens, moves, persists and is removed by every route
+§26.8 has. What the kernel does NOT take on trust is fixed rather than
+validated: both strings are force-terminated and the picture's header is
+stamped `1, 16`, so a hostile record can mislead nobody but its own user.
+A kind above 2 or a volume past `DVOL_MAX` is refused, because those would
+send the open somewhere no code path goes.
+
+**From a WINDOW CALLBACK only**, never a worker: the add loads `CTRL.DRV` and
+writes SYSTEM.CFG, and a worker may not touch a file (§20.6 rule 7).
+`tests/deskitem/deskitem.asm` is the worked example: a package whose File
+menu adds a link to itself at cell 5 and removes it again.
+
+**kern_small's body is the refusal**, two instructions. The cell is in both
+kernels because a slot that exists in one build and not another is an ABI
+that depends on a knob (§20.8 rule 4).
+
+#### 26.9.7 What is not done
+
+- **The C SDK has no binding.** A C package would hand the record across the
+  DS boundary like any other far buffer; nothing has asked yet, and the
+  thunk is the place it goes.
+- **A package cannot name its own short caption** for a shortcut a USER
+  makes by dragging it out (§26.8.4 takes the header name or the 8.3 stem).
+  The plan offered it as D1's fallback and the 96-wide cell made it
+  unnecessary.
+
+#### 26.9.8 What it cost, measured
+
+`tools/kernsize.py` against `9a760ab`, the tree this work was cut from, at
+one commit each:
+
+| | kern_big | kern_small |
 |---|---:|---:|
-| initial behavior resident, only configuration I/O in module | 3,149 | 3,072 |
-| move behavior into DESKTOP.DRV | 1,186 | 1,536 |
-| move constants/scratch into module and share UI staging | 714 | 1,024 |
-| compact dispatch/boot glue and keep cold code in its existing rung | 644 | 512 |
-| module-local staging/key handling, shared strings and compact dispatch | 497 | 0 |
-| Get Info lifecycle and emu dispatch placement, finalized | 504 | 0 |
+| `.text` | **−16** | 0 |
+| `.bss` | **+28** | +15 |
+| `.cold` | **−300** | −5 |
+| **resident** | **−288** | **+10** |
+| `.ovl` / `.ovlw` (not resident) | +14 / +17 | +5 / +17 |
+| `CTRL.DRV` (on demand) | +103 | — |
 
-The final big kernel remains 107,008 bytes of static RAM. kern_emu places
-shortcut thunks and menu dispatch in the existing cold rung (DS stays the
-kernel, all segment crossings are far). This reuses its cold slack to keep its
-image rung unchanged. Both variants add zero static RAM against the parent
-commit; an older blessed emu baseline had already drifted. The small kernel
-remains 71,168 bytes: zero added section bytes, static RAM or runtime claims.
-It omits the path-building body as before. Section growth is 504 bytes big,
-541 bytes emu and zero bytes small; allocation rounds to 512-byte steps. This
-is separate from runtime storage: DESKTOP.DRV occupies 4KB while retained (an
-assembly guard forbids growth beyond that runtime budget); the 5KB record
-store is claimed only for links/a nonempty configuration and released after
-the last link is saved away. A bare desktop still satisfies the 128KB
-residency gate. The 360KB system disk has limited free space; save failures
-preserve in-memory links and dirty state until File > Save Desktop succeeds.
+**kern_big is 288 bytes SMALLER and does more**: every item moves, drives
+remember where they were put, a package can place one, and the Wire no
+longer vanishes at eight volumes. The ask was ~400 — the overrun is named
+rather than absorbed, and it is the new slot's package half and the
+remembered cell, both of which were added after the target was set. Most of
+the saving is DELETED code: the ordinal walk and its three callers, §26.3's
+high-water mark and grid rect, the shortcut grid and its reserved-column
+arithmetic, `sc_dmgm` and its bit-15 bridge, the shortcut-only draw, hit,
+highlight and damage arms, and the per-gesture shims into `CTRL.DRV`.
+Ideas from the `desktop-shortcuts-optimization` branch carried a share of it:
+one record that IS the icon record, the path below the root, `sc_open` as
+one body with the volume and kind in BP, the caption rect off `font_width`,
+and a per-cell repaint.
+
+**kern_small takes it** (+10, the plan's D5 set ~100 as the line): its
+table and one-loop reflow replace the ordinal arithmetic nearly byte for
+byte.
 
 ## 27. HELLO and NOTEPAD — the second and third packages
 
@@ -52607,16 +54808,14 @@ floppy drive was the ordinary machine, and swapping disks is what you do on
 one.
 
 So the file ships on both disks, in a folder of the same name on each,
-because the menu cannot know which one is in the drive. The two copies differ
-in exactly one way:
+because the menu cannot know which one is in the drive. The two copies are
+the same file:
 
-- on the system disk it is **read-only** (§19.6), because the chip menu
-  loads it by name and deleting it would break a menu item with no other
-  way back;
-- on the apps disk it is an **ordinary file** — archive, nothing else —
-  because that disk is the user's. It can be renamed, deleted or replaced
-  like anything else on it, and if it is, the chip menu simply says so the
-  next time, which is the failure it already has words for.
+- on both it is an **ordinary file** — archive, nothing else — because
+  both disks are the user's (§19.6). It was read-only on the system disk,
+  on the reasoning that deleting it breaks a menu item; that reasoning was
+  never strong enough to forbid it, because if it goes the chip menu simply
+  says so the next time, which is the failure it already has words for.
 
 Four things about the placement:
 
@@ -55374,34 +57573,43 @@ CP_IBX1  equ 2       ; sel bar left           CP_IBX2 equ CP_DIVX-3  ; 85
 - **Right pane**, x CP_RX..CP_CW−1, top = the content top: the selected
   item's page, drawn by its own proc in **pane-relative** coordinates.
 
-**Item table (binding).** One 8-byte record per item, stride a power of two
-so index → record is three `shl`-by-1s (no CL, no 8086-illegal immediate
-shift). `CP_ITEMS` is computed from the table's own extent, so adding an
-item is one row plus a paint/click pair — the pane machinery does not
-change.
+**Item table (binding).** One 6-byte record per item — ×2, +×1, ×2, no CL
+and no multiply — and **the table is in `CTRL.DRV`'s image**, read `[cs:]`,
+with its list names beside it (§2.8.6.1, kernel size pass 8): every reader of
+either is a module body. `CP_ITEMS` is computed from the table's own extent,
+so adding an item is one row plus a paint/click pair — the pane machinery
+does not change. It was 8 bytes, the fourth word a reserved dispatch class
+that was 0 in every row for the table's whole life.
 
 ```nasm
 CP_I_NAME  equ 0   ; -> list name, ASCIIZ
 CP_I_PAINT equ 2   ; -> page paint proc   (in DI = pane left, BP = pane top)
 CP_I_CLICK equ 4   ; -> page click proc   (in DI/BP, CX/DX = pane-relative)
-CP_ISTRIDE equ 8   ; 4th word = the dispatch class (§31.9): 0 = a kernel proc
-cp_items:  dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
-           dw cp_s_time,  cp_time_paint,  cp_time_click,  0   ; §31.5
-           dw cp_s_drv,   cp_drv_paint,   cp_drv_click,   0   ; §31.6
-           dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0   ; §31.7
-           dw cp_s_vid,   cp_vid_paint,   cp_vid_click,   0   ; §31.10
-           dw cp_s_thm,   cp_thm_paint,   cp_thm_click,   0   ; §76.4
-           dw cp_s_dock,  cp_dock_paint,  cp_dock_click,  0   ; §31.13
+CP_ISTRIDE equ 6
+cp_items:  dw cp_s_sched, cp_sched_paint, cp_sched_click       ; in the image
+           dw cp_s_time,  cp_time_paint,  cp_time_click        ; §31.5
+           dw cp_s_drv,   cp_drv_paint,   cp_drv_click         ; §31.6
+           dw cp_s_vid,   cp_vid_paint,   cp_vid_click         ; §31.10
+           dw cp_s_snd,   cp_snd_paint,   cp_snd_click         ; §31.7
+           dw cp_s_thm,   cp_thm_paint,   cp_thm_click         ; §76.4
+           dw cp_s_dock,  cp_dock_paint,  cp_dock_click        ; §31.13
+           dw cp_s_fdd,   cp_fdd_paint,   cp_fdd_click         ; §31.14
 cp_items_end:
 CP_ITEMS   equ (cp_items_end - cp_items) / CP_ISTRIDE
 CP_ITIME   equ 1     ; the Date/Time item's index: §12.1 selects it by name
 CP_IDRV    equ 2     ; ...the Drivers item (§51.3's drv_notice opens it)
-CP_ISND    equ 3     ; ...and Sound (§34.8)
-CP_IVID    equ 4     ; ...and Display, the one row that is HIDDEN on a
+CP_IVID    equ 3     ; ...and Display, the one row that is HIDDEN on a
                      ; single-adapter machine (§39.11.1). It is named here
                      ; rather than found as "the last one", which is what
                      ; frees the order above (§31.10.1)
+CP_ISND    equ 4     ; ...and Sound (§34.8)
+CP_ITHM    equ 5     ; ...Theme (§76.4)
+CP_IDOCK   equ 6     ; ...and Dock (§31.13)
 ```
+
+That is kern_big's table, grouped by §31.14.2. kern_small has no Drivers,
+Theme, Dock or Floppy row, so it reads Scheduler, Date/Time, Display, Sound,
+with `CP_IVID` = 2 and `CP_ISND` = 3.
 
 **List names are at most 9 characters** (72px): the selection bar runs from
 CP_IBX1 to CP_IBX2 = 85 and the name starts at CP_IX = 6, so a tenth glyph
@@ -55669,7 +57877,8 @@ this lands in `ctrl.drv` — an on-demand module (§2.8), so **the kernel's own
 rungs do not move**: `.text` +1, `.bss` +0, `.cold` +0, footprint +0, and the
 one byte is `[cp_darr_dn]`, which is `.text` for §2.8's rule (a module's data
 has to survive the module being dropped, and `tools/os88ovlchk.py` refuses it
-anywhere else). The module itself is **4,092 → 4,197 bytes on `kern_big` and
+anywhere else). Kernel size pass 8 made it a byte of `cp_sbuf`'s tail: it lives
+across `cp_drv_arrow1` alone, and that routine stages nothing (§2.8.6.1). The module itself is **4,092 → 4,197 bytes on `kern_big` and
 3,261 → 3,298 on `kern_small`**, and the first of those **crosses a sector**,
 8 → 9 — a sector inside the run the panel's open already issues, and the honest
 place to record it rather than to call the change free.
@@ -55723,11 +57932,11 @@ every setting-change redraw leave it at — so `cp_radios`, `cp_snd_radios`,
 |--------|-----------|
 | `cp_paint` | W_PAINT (§11): in SI = window ptr; the gfx lock is **already held** by the caller and wm has already white-filled the content. Preserves all registers. Derives DI/BP from `wm_content`, then `cp_list` → `cp_divider` → `cp_page`. Must not lock, block, spawn, or call BIOS. |
 | `cp_onclick` | W_ONCLICK (§11): in CX = x, DX = y (**absolute screen coords** — convert with `wm_content` before hit-testing), SI = window ptr. The gfx lock is already held and the call is already billed to the instance by ui.inc (§8.1/§13). Preserves all registers. Content-relative x < CP_DIVX → `cp_pick`: a hit on a different item stores it in `cp_sel` and redraws both panes (`cp_list` + `cp_page`); a hit on the live item, or a miss below the last row, does nothing. Otherwise the click is handed to the selected item's `CP_I_CLICK` proc with DI advanced to the pane left and CX made pane-relative. |
-| `cp_entry` | module-internal: in AL = item index, out SI = record ptr (`cp_items + 8*AL`). Preserves everything else. |
+| `cp_entry` | module-internal: in AL = item index, out SI = the record's OFFSET, `6*AL`, so a field is `[cs:si + cp_items + CP_I_*]` (the table is in the image, and naming it in the operand is what lets `os88ovlchk` see the `cs:`). Preserves everything else. |
 | `cp_pick` | module-internal hit test of the item list: in DX = content-relative y, out CF=0 and AL = item index on a row, CF=1 above the first row or below the last. Rows are contiguous — row *i* owns `CP_IROWH` rows from `CP_I0Y + i*CP_IROWH`, so the bar and the 2px gap under it both select. x is not tested: the whole pane width selects. |
 | `cp_list` | module-internal, in DI/BP = content origin, lock held. Preserves all registers. White-fills the whole left pane, then draws every item name with the `cp_sel` row barred — so it doubles as the redraw path when the selection moves. |
 | `cp_divider` | module-internal, in DI/BP, lock held: the 1px black rule at content x = CP_DIVX. Preserves all registers. |
-| `cp_page` | module-internal, in DI/BP, lock held. Preserves all registers. White-fills the right pane (divider column excluded), then calls the selected record's `CP_I_PAINT` with DI advanced by CP_RX — the redraw path when the selection moves. |
+| `cp_page` | module-internal, in DI/BP, lock held. Preserves all registers. White-fills the right pane (divider column excluded), then — for a static page — draws the page's HEADING, which is its list name, black at (CP_PMX, CP_PHY), and calls the record's `CP_I_PAINT` with DI advanced by CP_RX and `[gfx_color]` = CBLACK — the redraw path when the selection moves. A static page body draws no heading of its own (kernel size pass 8); a driver's page still does. |
 | `cp_sched_paint` | Scheduler page paint (page contract above): heading, both radio rows (glyph + label, filled glyph per `sched_mode_get`) and the caption. |
 | `cp_sched_click` | Scheduler page click (page contract above). x is ignored — the two hit bands span the whole pane. A hit on the row whose mode is already live does nothing; a hit that changes the mode calls `sched_mode_set` with AL = the row index (0 = pre-emptive, 1 = cooperative), sets `[cp_dirty]` = 1, then redraws **only the two radio glyphs**. A click outside both bands does nothing. |
 | `os88ui_glyph` | **the shared control's** (§20.5.1) 12×12 check or radio: in CX = x, DX = y, AL = `OS88UI_G*`, AH non-zero = disabled. Preserves all registers, white-fills its own box, and leaves the pen live. It was `cp_glyph`, module-internal and taking a bitmap POINTER in SI — which no package could name, and which is why the widget stayed the Control Panel's for as long as it did. |
@@ -55955,7 +58164,9 @@ needed no padding at all.
 
 **The `(ink, paper)` pair is decided where the selection is known and read where
 the run is drawn** — `[cp_tpair]`, a word, because `cp_time_fld` has already
-spent `AL` on the field index and `AH` on the field count. `[cp_tfull]` is the
+spent `AL` on the field index and `AH` on the field count. (Kernel size pass 8:
+the pair is decided in `BX` at the draw now, by the same `[cp_tsel]` compare,
+and the resident word is gone.) `[cp_tfull]` is the
 flag for the same reason.
 
 **What it costs on the tick**, counted in primitive calls, which is how a
@@ -56072,7 +58283,9 @@ Third item, index `CP_IDRV` = 2, list name and heading `'Drivers'`. One row
 per `drv_tab` row (§51): a checkbox, the driver's name, roughly what that
 driver costs to run (§31.6.2), and under it the
 sentence `drv_status` derives from the row's live state — `'Loaded'`,
-`'Not loaded'`, or why the last attempt failed.
+`'Not loaded'`, or why the last attempt failed. `drv_status` answers it STAGED
+in `cp_sbuf` (`drv_errstg`): the sentences are `CTRL.DRV`'s since kernel size
+pass 8 (§2.8.6.1), and every reader of them is a page.
 
 **The checkbox tracks what is LOADED, not what the settings file wants.** A
 driver enabled on a machine with no card is unchecked, with `'No hardware
@@ -56511,15 +58724,20 @@ because the kernel does not repaint after it returns.
 
 Three things hold it up:
 
-- **The list name is STAGED into the kernel**, 12 bytes per class, at publish
-  time. `cp_list` draws it with `font_str` and `font_str` reads through DS; a
-  pointer into the driver's segment would render the driver's own image. It is
-  the `dsk_get_dir` idiom, in the place `drv_publish`'s retired `DSV_NAME`
-  staging always belonged. **It is also the line the panel's own strings are
-  drawn on** (§2.8.6): one reader, two possible segments, so all six *static*
-  list names stay in `.text` while the page BODY text lives in `CTRL.DRV`'s
-  image and is staged per draw. Each of the six is its page's heading as well,
-  which is the only reason they look movable.
+- **The list name is STAGED into the kernel segment**, at most 12 bytes
+  (`DRV_CPNSZ`), each time it is drawn. `cp_list` draws it with `font_run`,
+  which reads through DS; a pointer into the driver's segment would render the
+  driver's own image. It is the `dsk_get_dir` idiom. The stager is
+  `CTRL.DRV`'s `cp_drv_name` and the landing ground is the panel's own
+  `cp_sbuf`, since kernel size pass 8 - it was `driver.inc`'s resident
+  `drv_cp_name` with a 12-byte `.bss` buffer of its own, for a name only the
+  panel ever draws (−62 resident). **It is also the line the panel's own strings are
+  drawn on** (§2.8.6): one reader, two possible segments. The *static* list
+  names stayed in `.text` on that argument until kernel size pass 8, which
+  staged them as well (§2.8.6.1): the reader is `cp_item_name`, it is in the
+  image, and staging a static name into `cp_sbuf` is the same one step as
+  staging a driver's. Each is its page's heading too, drawn by
+  `cp_item_paint` before the page body.
 - **`[cp_sel]` is clamped when a driver detaches** (`cp_drv_gone`, called from
   `drv_release`). The selection persists across opens by design, so a
   `[cp_sel]` naming a page that no longer exists would dispatch through a
@@ -56959,7 +59177,8 @@ case at all — §6.1.12 folds the checkerboard into the run's own mask.
 **It is smaller, too.** `cp_run` is a near call inside `ctrl.inc`'s segment
 where `cw_font_str` was a far call to the shim, so twenty-six sites lost two
 bytes each and the helper cost twelve back — `.text` +1 for the whole
-conversion, the byte being `cp_ipap`.
+conversion, the byte being `cp_ipap` (deleted by kernel size pass 8: the
+row's paper moved onto the stack and the byte had had no reader since).
 
 **`cp_run` is defined outside every `%ifdef`, and it was not at first.** It
 landed next to `cp_thm_lbl`, which is inside `OS88_THEME` — on in the default
@@ -57057,6 +59276,123 @@ of `CTRL.DRV`, which is module space and outside `KERN_BUDGET` (§51).
 bites**: with `cp_promise` removed the panel simply never promises, so the
 promise and the caching legs pass on a kernel that does nothing. Only the
 withdrawal is evidence about this routine.
+
+### 31.14 Floppy page — the drive detection, overridden
+
+Five drop-downs. One per floppy unit a machine can claim (§18.98) — **Auto,
+None, 5.25, 3.5** — and one for the read bound (§18.91.1) — **Auto,
+Track**. `kern_big` only (`OS88_DRIVERS`): the page is a `SYSTEM.CFG`
+record, and `kern_small` reads no settings file (§51.0).
+
+| setting | what the next boot does |
+|---|---|
+| a unit, **Auto** | what §18.97/§18.98/§26.4.1 detected, untouched |
+| a unit, **None** | no desktop zone. The ROW stays, so the drive keeps its letter and its volume — the state an unclaimed B: has always been in (`desk_init`'s `.zloop`) |
+| a unit, **5.25** / **3.5** | a zone, with that picture before the first read and after it: `DVF_GUESS` is cleared, so `desk_learn_x` does not take it back. A unit with no row — unclaimed, or retired by §18.97's probe — is given one on `dsk_flop_add_x`'s rules |
+| reads, **Auto** | the boot sector's canary decides (§18.93.1) |
+| reads, **Track** | track runs, whatever the canary found. There is no **Cylinder**: see below |
+
+**It takes effect at the next restart, and the caption says so.** The
+detection it overrides runs once, in `desk_init`, at MARK 20 — before
+`SYSTEM.CFG` can be read. `desk_init` is `.ovlw`, and the file is read by NAME,
+so it needs the mount that takes the FAT window `.ovlw` lives in. So the
+detection runs first and `ovl_fdd_apply` corrects it, from `drv_boot_x`,
+immediately after `ovl_cfg_load` and **before the driver loop** — so a floppy
+row it makes lands exactly where `desk_init` would have put it, ahead of any
+partition `HDD.DRV` then adds. Every answer `desk_init` reaches is a byte in a
+`dsk_vtab` row, and a byte is as easy to overwrite as to write.
+
+**The read bound overrides the FINDING rather than adding a test.** Track's 0
+goes into `boot_cylrun`'s low byte (the loader stores a run bound there, at
+most 36, so the high byte is always 0) and into `dsk_cylrun`. Every later mount
+re-derives `dsk_cylrun` from that word (`dsk_bpb_check`) and `hiber.inc`
+carries it to `kern_dos` (§96.44.14), so both honour the setting with no code
+changed at either. **Only Track overrides the finding, and there is no
+Cylinder**: the setting may lower the bound and never raise it. On the ROM
+class whose canary fails, a READ that crosses a head is not refused — it
+returns the other head's sectors with CF = 0 and the full count (§18.93.1),
+silently. §18.91.3's fail-and-shorten is the WRITE path's, and `dsk_xfer`
+keeps writes off cylinder runs anyway. So forcing Cylinder over a failed
+canary would turn silent wrong-head reads back on, and the setting would
+persist across boots. `CFG_FDR` = 2 is RESERVED — it was Cylinder — and
+`ovl_fdd_apply` and the page both read it as Auto. A forced cylinder bound
+could only mean something where the canary never ran (a hard-disk boot), and
+the loader writes the same 0 for "fell back" and "never looked", so offering
+one needs a loader value of its own first.
+
+**Nothing resident reads the record.** `CFG_FDD` (two bits per unit, unit *n*
+at bits 2*n*..2*n*+1, value = the menu index) and `CFG_FDR` live in `drv_cfg`
+and nowhere else — not in `_map`, not in a variable of their own — the way the
+driver blobs do (§51.9). `_pack` does not touch them, so the page edits the
+struct in place, sets `[cp_wdirty]`, and §31.8's close writes it as key `FD`,
+ver 1, two bytes.
+
+**The drop-down is the kernel's own popup menu.** A box is a frame, the
+Drivers page's down arrow (`cp_drv_tri`, already there - its half-widths are
+computed since kernel size pass 8, where they were the `cp_drv_trid` table) and the pick's caption; a press on it calls `cw_menu_popup` anchored
+under the box, and `menu_drop` follows the held button and returns at the
+release. That is the bar menu's gesture — press, drag, release — and it is why
+a box is a **selecting** site (`cp_ctl` id 0, §13.8.3): it acts on the press,
+the popup IS the rest of the gesture, and the drag and the release find nothing
+armed. §13.14's `OS88UI_DROP` is not reachable from a kernel image (it is the
+include's `%ifndef OS88UI_KERNEL` half) and would be ~470 bytes of list,
+tracker and bank that `menu_drop` already is. What that took was one byte of
+`menu_popup`: `[menu_btn]` = 3 (§12.4).
+
+`menu_popup` reads its items through `DS` and an image's strings are
+`CS`-relative (§2.8.6), so each menu is laid out in the image **exactly as it
+lands** — pointers already naming `cp_sbuf` — and copied down whole by
+`cp_fdstg`: the drives' menu is 27 bytes and the reads' 15, against
+`CP_SBUF` = 28, and an `%error` says so if either grows. The box's caption is
+drawn out of the same copy, and a changed pick letters it as one opaque run
+and fills only what a longer old caption left to its right.
+
+**The labels are letters, and a letter is not a unit.** A unit's row is
+lettered by where it landed (§18.98: C: is the hard disk's, and a retired B:
+hands its row to unit 2), so `cp_fdltr` reads the letter off the unit's row
+when it has one and otherwise names the one `dsk_flop_add_x`'s order would give
+it — A:, B:, D:, E: on a machine that has not put something there first.
+
+#### 31.14.2 Where the row sits: last, so the hard disk's page is under it
+
+The static list is grouped rather than appended: Scheduler, Date/Time,
+Drivers, Display, then **Sound, Theme and Dock** together — how the machine
+sounds and looks — and **Floppy last**. Driver pages follow the static rows in
+class order (§31.9), and `DRVC_DISK` is the lowest class that publishes one
+(`DRVC_SOUND` publishes none), so when `HDD.DRV` is loaded its page is the row
+directly under Floppy and the two disk pages read as a pair. Without it,
+Floppy is simply the last row.
+
+Nothing keys on the order but the record constants, which moved with it:
+`CP_IVID` 4 → 3 and `CP_ISND` 3 → 4 (and 3 ↔ 2 on kern_small), and
+`CP_IDOCK` is a literal 6 now rather than `CP_ITEMS - 1`, Dock no longer being
+last. `[cp_sel]` is not saved, so no settings file changes meaning. The gates
+that found Dock as `[cp_nst] - 1` (`dockpos`, `dockmodule`, `fsxdisp`) open it
+by record instead, through `dispcp.open_panel(page=CP_IDOCK)`.
+
+#### 31.14.1 What it cost, measured
+
+Against the tree immediately before it, `kern_big`:
+
+| | bytes | what they are |
+|---|---:|---|
+| `.text` | **+15** | the `cp_items` record (8) and `'Floppy'` (7) — the list name is read by the list painter through `DS`, so it is resident like every other page's. **Kernel size pass 8 took both back**, with every other page's: the table and its names are in the image now (§2.8.6.1) |
+| `.bss` | **+2** | `drv_cfg`'s two bytes — the whole of the setting's resident state |
+| `menu_popup` | **+0** | `[menu_btn]`'s immediate, 2 → 3 |
+| **resident** | **+17** | no rung crossed — and per §1's banner that is not the point: seventeen bytes is the price |
+| `.ovl` | +127 | `ovl_fdd_apply` (113), its call (3), the `FD` key row (5), the file buffer (6). **`.ovl` is now 1,964 of the blob's 1,984**: 20 bytes left (39 since kernel size pass 8 took `ovl_fdd_apply` to 94: one word compare for DV_KIND:DV_UNIT, one word store for a new row, the zone bits as `3 - 2*CF`, and the unit loop ending when the settings byte runs out), and the next boot-overlay body raises `BOOT2_SECS` (§2.9.6). The knob builds lost the same room, and §2.5.3.3.1's give went 96 → 144 to hand `BOOTMARK=1` it back |
+| `CTRL.DRV` | +615 image, +505 on disk | the page (507 of code, 97 of menus and strings) plus the writer's key row and buffer; loaded only while the panel is open |
+
+`kern_small` is **byte-identical in size** (`kernsize[small]` +0 on every
+section): it has no settings file and so no page, and the one shared edit is
+an immediate.
+
+`tests/fddpage.py` (soak) is the gate: four picks by a real left-press
+gesture, the close that writes `FD`, and a second boot of the written disk
+reading `dsk_vtab` and the read bound. With `call ovl_fdd_apply` taken out
+every boot-2 leg fails while the record still round-trips; with `[menu_btn]`
+back at 2 no pick reaches `drv_cfg` at all, because the popup closes the
+instant it opens under a held left button.
 
 ### 32.1 What the renderer does
 
@@ -57156,7 +59492,7 @@ changelog: `SND_SEG` — 64KB of conventional memory at linear
 ring and a staging pool — is **gone**, and with it the largest single
 reservation in the memory map (§2). On the 256KB floor machine that is a
 quarter of the RAM handed back. The speaker tiers need no kernel buffer at
-all: a tone is two `out`s, and `osapi_snd_play` paces samples out of the
+all: a tone is two `out`s, and `os88pcm_play` paces samples out of the
 **caller's** `ES:SI`. A future package that plays a WAV over the speaker
 therefore needs nothing new from the kernel — it holds its own samples,
 claims its own memory (§50) and calls slot 0x00DB.
@@ -57303,9 +59639,9 @@ and a driverless machine that answered 0 once handed Recorder a phantom
 grant whose buffer did not exist. `snd_str_busy` answers a constant "not
 busy", which is what no streaming sink means.
 
-**`osapi_snd_caps` keeps its shape and loses its variables**: `SND_CAP_TONE |
-SND_CAP_PCM_EXCL`, BL = 0 (a tone goes to the speaker), DX = 1 (the speaker
-is present, no driver is). A package reads the same three registers and
+**`osapi_snd_caps` keeps its shape and loses its variables**: `SND_CAP_TONE`
+(and no `SND_CAP_PCM_EXCL` since kernel size pass 8, §34.4.1), BL = 0 (a
+tone goes to the speaker), DX = 1 (the speaker is present, no driver is). A package reads the same three registers and
 tests them the same way.
 
 **What is left behind, deliberately.** `drv_svc` survives as 36 bytes of
@@ -57396,7 +59732,7 @@ There is no driver table any more — a table with one row is a lie about
 how much choice there is. `osapi_snd_caps` answers a **constant**:
 
 ```
-AX = SND_CAP_TONE | SND_CAP_PCM_EXCL   (01h | 08h)
+AX = SND_CAP_TONE | SND_CAP_PCM_EXCL   (01h | 08h; kern_small: 01h, §34.4.1)
 BL = 0        ; the tone sink is the speaker, and only the speaker
 DX = 1        ; bit 0: the speaker is present. It always is.
 ```
@@ -57414,11 +59750,9 @@ stays a superset of what the old ABI returned — a package that read
   CF = 1 on a bad voice or frequency. On: divisor = 1193182/AX, then the
   mode-3 quad (0B6h → 43h, divisor lo/hi → 42h, 61h |= 03h) under one
   `pushf`/`cli` … `popf`. Off: 61h &= 0FCh in the same kind of window.
-- `spk_pcm_run` — the PCM_EXCL clip engine of §34.4, entered directly.
-  It used to sit behind a three-verb `spk_pcm_op` (0 start, 1 stop, 2
-  status); the router only ever asked for verb 0, so verbs 1 and 2 — and
-  with them the `snd_stop` door verb 1 called — were deleted as
-  unreachable. `snd_release_inst` is the sole writer of `snd_abort` now.
+- `spk_pcm_run` — the PCM_EXCL clip engine of §34.4 — is GONE: kernel
+  size pass 8 made the clip `apps/os88pcm.inc`'s and `OSAPI_SND_PLAY` its
+  door (grant and release), and `snd_abort` with it.
 
 Both are called directly by the router. There is no indirection to
 dispatch through, no presence flag to consult and no probe at boot: the
@@ -57528,6 +59862,33 @@ stamp; it is a geometry negotiator and has no business granting sound.
 
 ### 34.4 Speaker PWM — exclusive clips (Phase 2)
 
+**The player is a LIBRARY and the slot is its DOOR** (kernel size pass 8).
+`apps/os88pcm.inc`'s `os88pcm_play` plays a clip with exactly the contract
+`OSAPI_SND_PLAY` used to have - ES:SI samples, CX count, DX rate, AX = 0 or
+error 1..5, CF mirroring it - and everything below that is about the clip
+(the rate check, the rescale table, the pacer, the resync rule, the click's
+fold) is the library's. The kernel keeps what only the kernel can do, as the
+door `OSAPI_SND_PLAY` (slot `0x00DB`):
+- **AL = 0 GRANT**: the refusals (1 busy - a clip, or a PCM_BG stream by
+  §34.9 - 3 disabled by the user, 4 nothing can sound), the grant window of
+  §34.3 (a lower tone stolen, the generation, `snd_ch2mode` = 2 and
+  `snd_pcm_busy`), **`sch_lock` raised**, the fsx sub-tick parked, and
+  channel 2 put in PWM mode. It answers BX = the offset in `KERNEL_SEG` of
+  the mouse button byte the click-abort reads.
+- **AL = 1 RELEASE** after a clip that played out, **AL = 2** after a click:
+  the event ring drained first (AL = 2 only), then channel 2 back to tone
+  idle, the sub-tick handed back and the lock dropped.
+
+The lock is ONE raise from the grant to the release and across the drain, so
+the structural guarantee below is unchanged. What moved: ~630 resident bytes
+on **both** kernels - the player, the per-clip table's 256 bytes of `.bss`
+and the clip's state - for a slot whose only caller is Recorder, which ships
+on the live media alone; the door is ~90 bytes, and the library costs the
+including package ~180 bytes of code and a 256-byte table in its image.
+**`snd_abort` is gone with it**: a clip holds the lock on its owner's own UI
+callback from grant to release, so nothing can release the owning instance
+while one plays, and the flag `snd_release_inst` raised could not be read.
+
 **Modulator**: ch2 in **mode 0, lobyte-only** (90h → 43h once at clip
 start), 61h bits 0–1 held high. One `out 42h, AL` per sample emits a low
 pulse of AL PIT-cycles; the speaker cone integrates the pulse train; the
@@ -57547,8 +59908,8 @@ end.
   a third of the sample period, so quality is jitter-dominated below the
   nominal depth. The documented audible truth at the default: an 8 kHz
   carrier whine + telephone-grade audio — that *is* speaker PCM.
-- **Rescale**: far code builds a 256-byte xlat table per clip —
-  t[s] = 1 + s·(N−2)/255, ~8 ms — in `.bss` (DS-addressable for `xlat`).
+- **Rescale**: the library builds a 256-byte xlat table per clip —
+  t[s] = 1 + s·(N−2)/255, ~8 ms — in the package's own image (`cs xlatb`).
   Non-destructive: the caller's clip buffer is never modified, so replay
   and re-rate work. (Rejected: per-sample `mul` scaling — the table saves
   ~70 cycles/sample.)
@@ -57583,20 +59944,18 @@ end.
   handlers — dispatched on EVT_MDOWN with the button *still held* — so the
   baseline starts with bit 0 set; the release retires it and the next
   press differs from the baseline and aborts. (Without the fold, no left
-  click could ever abort a click-launched clip.) `snd_abort` — whose sole
-  writer is `snd_release_inst` — is checked in the same window. On
-  click-abort the kernel **drains the aborting EVT_MDOWN (and its EVT_MUP)
-  from the event queue** before returning, so the skip gesture cannot fire
-  a menu, close box or icon under the cursor. The guarantee is structural,
-  not a property of the caller's identity: `osapi_snd_play` holds its own
-  raise of `sch_lock` from before the driver op runs until the drain
-  completes, so a tick landing between the op's internal release and the
-  drain can never switch to a task that would pop the aborting click
+  click could ever abort a click-launched clip.) On click-abort the kernel
+  **drains the aborting EVT_MDOWN (and its EVT_MUP) from the event queue**
+  (the door's AL = 2 release) before the lock drops, so the skip gesture
+  cannot fire a menu, close box or icon under the cursor. The guarantee is
+  structural, not a property of the caller's identity: the door's grant
+  raises `sch_lock` and only its release drops it, after the drain, so no
+  tick in between can switch to a task that would pop the aborting click
   first. No code is added to `mou_isr` — the checks are byte loads on the
   emit path; the mouse module stays sound-free.
-- **Scheduling contract**: `spk_pcm_run` executes on the **caller's task**
-  with IF=1 throughout, wrapped in `inc byte [sch_lock]` …
-  `dec byte [sch_lock]` — the second sanctioned raiser (§7), with exactly
+- **Scheduling contract**: the clip runs on the **caller's task**
+  with IF=1 throughout, between the door's grant (`inc byte [sch_lock]`)
+  and its release (`dec byte [sch_lock]`) — the second sanctioned raiser (§7), with exactly
   `disk_read`'s meaning (§18) and not a new one: ticks advance, the BIOS
   chain feeds the floppy motor, `sch_account` runs, sleepers mark ready;
   only involuntary switching pauses. The mouse ISR keeps `mouse_x/y/btn`
@@ -57608,10 +59967,25 @@ end.
   bounds the user's worst case regardless. The desktop freezes for the
   clip; that is disclosed in the API (`PCM_EXCL`) and gated by the user
   policy byte `snd_excl_ok` (default on, CP-flippable) —
-  `osapi_snd_play` returns err 3 while it is off. (It used to say "and in
+  the door's grant returns err 3 while it is off. (It used to say "and in
   the §31.4 caption"; §31.4 is *Sound page — retired* and there is no
   caption to read it on. `checkdocs.py` cannot catch this: it checks that
   a cited heading EXISTS, not that it still describes anything.)
+
+#### 34.4.1 `kern_small` plays no clip
+
+**The clip door is `kern_big`'s** (kernel size pass 8). On `kern_small`
+`OSAPI_SND_PLAY` answers AX = 4, CF = 1 - the grant's own "nothing can
+sound" - with `osapi_snd_stream`'s refusing body, `osapi_snd_caps` answers
+`SND_CAP_TONE` without `SND_CAP_PCM_EXCL`, and `spk_pwm_on`, `spk_pcm_idle`
+and the door's nine bytes of state are not built: **173 resident bytes**.
+No shipped configuration loses anything. The one package that plays clips is
+Recorder, which ships on the live media alone - a `kern_big` image - and
+whose clips are read back out of a sound DRIVER's grant, which `kern_small`
+cannot load at all (§34.0). A `kern_big`-built package that calls
+`os88pcm_play` on the small kernel is told 4 in its own vocabulary and plays
+nothing, which is §20.8 rule 4's refusal. Tones and beeps are untouched: the
+tone path enters `spk_gate_on` below the PWM half.
 
 ### 34.5 Sound Blaster — back, as a driver
 
@@ -58020,14 +60394,15 @@ again.
   either initialised `.text` data, or behind the `snd_live` gate.
 - **Initialised `.text` data**: `snd_live`, `snd_excl_ok` (default 1) and
   the speaker's name string. That is the whole of it.
-- **`.bss`** (~20 bytes of state + the 256-byte xlat table): the tone
-  owner record, generations, the expiry deadline, `snd_ch2mode`, the saved
-  61h boot bits, `snd_btn0`/`snd_abort`, and the clip's owner and divisor.
+- **`.bss`** (~20 bytes of state): the tone owner record, generations,
+  the expiry deadline, `snd_ch2mode`, the saved 61h boot bits, and the
+  clip's parked sub-tick and drain scratch (its table is the library's
+  since kernel size pass 8, §34.4).
   All stored explicitly by `snd_init` (§8's rule) and unreadable by the
   tick until `snd_live` publishes. (It also held two debug counters no
   reader ever existed for; §34.4 says where they went.)
 - **Buffers: none.** The layer owns no memory outside its own `.bss` —
-  `osapi_snd_play` reads the caller's `ES:SI` in place. This is the whole
+  `os88pcm_play` reads the caller's `ES:SI` in place. This is the whole
   reason `SND_SEG` could be deleted from §2 rather than merely shrunk.
 - **Boot**: `snd_init` joins kmain's §15 sequence **after `drv_init`**:
   save the 61h boot bits, store the `.bss` state, set `snd_live` last.
@@ -58038,9 +60413,8 @@ again.
   speaker owns no vector, no IRQ and no DMA channel, so that is all of it.
 - **Sections** (§33): everything `snd_tick` can reach stays in `.text` —
   the owner record, the tone core, `snd_beep`, `snd_tick`, the router, the
-  three API slot targets, `snd_release_inst`, `snd_unhook` and
-  `spk_pcm_run`. Cold, but near like everything else (§33): the PWM builder
-  alone. Far code keeps DS = KERNEL_SEG, so it reads its data from `.text`
+  three API slot targets, `snd_release_inst` and `snd_unhook`. (The PWM
+  builder and the clip engine are the clip library's now, §34.4.) Far code keeps DS = KERNEL_SEG, so it reads its data from `.text`
   (§33 rule 2).
 
 ### 34.10 The PicoMEM tier — `make PICOMEM=1`
@@ -58166,8 +60540,11 @@ its own `FSXF_RATE` bracket (§53.2.2).
 kernel, make it a library, used per app like the UI libraries.* The whole
 player written into the kernel measured **554 resident bytes**, so it is two
 halves:
-- **the door**, `OSAPI_FSX_SPK` (slot `0x045B`), in the kernel: the PIT and
-  the vector, which are the kernel's to give out and to take back;
+- **the door**, `OSAPI_FSX_SPK` (slot `0x045B`), in the kernel: channel 2's
+  arbitration, the rate period trimmed to whole samples, and the TEARDOWN -
+  the vector, channel 0 and channel 2 put back on every way out of the
+  bracket, which is the kernel's because it must happen whatever the
+  package does;
 - **the player**, `apps/os88spk.inc`, in the package that plays: the ISR, the
   count table, and the ring it reads.
 
@@ -58175,30 +60552,51 @@ halves:
 crosses one 512-byte footprint rung, and 38 of it is §34.11.1's SI and DI
 fence), `kern_small` **+11** (the API cell and a
 stub that refuses). The library is ~480 bytes of the including package.
+**Kernel size pass 6** took the door (`osapi_fsx_spk` + `spk_off`, with
+34.11.8's floor) from 280 bytes to 178 - 208 with §34.11.1's SI and DI
+fence, which landed beside the pass at 38 bytes and was ported onto its
+door at 30 - and its `.bss` from 6 to 4, and the
+IRQ0 arms from 24 to 15: `spk_off` is the close's own tail (AL = 1 jumps
+into it), K x N is the divisor less `div`'s remainder, the
+open flag is `[spk_seg]` alone (the ISR's offset was never read back),
+"taken" is `[snd_pcm_busy]` alone (the door sets it), and the `sti` arm is
+`sch_rhook`'s first test rather than a copy at each call. `kern_small`'s
+cell names `xm_copy`'s refusing body, which is the same three instructions,
+so it costs the cell's 6 bytes and nothing else. **Kernel size pass 8 made
+it a THIN door** (§34.11.1), on the owner's ruling that packages are
+trusted: the open is ~50 bytes and the whole of it **-108 bytes of
+`kern_big` `.text`**, the IRQ0 vector and channel 0's count having moved
+into `os88spk.inc` (+~40 bytes of each playing package, resident only
+while it runs).
 
 #### 34.11.1 The door
 
-`OSAPI_FSX_SPK` works only **inside the caller's own `FSXF_RATE` bracket**
-(`fsx_mine`, and `[sch_fast]` = `SCH_RATE`). Its contract is in
-`apps/os88api.inc`. In short:
-- **AL = 0 opens.** DX = N, the PIT counts a sample. It must be 74..255,
-  which is 16,124..4,679 Hz: 255 is mode 0's lobyte, and 74 is the shortest
-  period a pulse still ends inside - on an 8088; past `CPU_8086` it may be
-  48..255 (§34.11.8). SI = the package's sample ISR (a near
-  offset in its image). DI = a 6-byte block in its image. **Both are
-  fenced** against the bracket owner's `I_SIZE`, as `fsx_run` fences the
-  hook: SI below it and DI + 6 no further, because IRQ0 jumps to SI on
-  every sample and the kernel writes the block before the vector is set.
-- **The kernel then**:
-  1. works out K = the caller's divisor / N, the samples in one rate period,
-     and sets the divisor to exactly K × N (within a sample of what was asked
-     for), banking the old one;
-  2. writes **K and the chain** (`KERNEL_SEG:sch_isr`) into the block
-     *before* it touches the vector, so the first sample cannot find them
-     unset;
-  3. takes channel 2 for the PWM (tone off, `snd_ch2mode` = 2,
-     `snd_pcm_busy`), programs channel 0 at N, and points **IRQ0's vector
-     at the package's ISR**.
+`OSAPI_FSX_SPK` works only **inside a `FSXF_RATE` bracket** (`[sch_fast]` =
+`SCH_RATE`, §53.2.2). Its contract is in `apps/os88api.inc`. It is a **thin
+door** (kernel size pass 8): the kernel does only what is the kernel's, and
+the package does the rest inside the same IF = 0 window. In short:
+- **The caller holds IF = 0** from before the call until its own half below
+  is done, so no IRQ0 can land between the two halves.
+- **AL = 0 opens.** DX = N, the PIT counts a sample, and BX = the caller's
+  CS. N must be 74..255, which is 16,124..4,679 Hz: 255 is mode 0's lobyte,
+  and 74 is the shortest period a pulse still ends inside - on an 8088; past
+  `CPU_8086` it may be 48..255 (§34.11.8). **The range is the caller's to
+  hold to** - `os88spk_init` refuses a table for anything else - and the
+  door does not re-check it: packages are trusted (the owner's ruling,
+  docs/plans/LAST-DROP-BYTES.md §7.11), and a door that fenced its caller's
+  N, ISR and block cost 55 bytes of every `kern_big` for a package that
+  could take the machine down anyway.
+- **The kernel's half**: it takes channel 2 for the PWM (tone off,
+  `snd_ch2mode` = 2, `snd_pcm_busy`, gate and speaker on), records BX as
+  the open flag `[spk_seg]`, and works out K = the bracket's divisor / N,
+  the samples in one rate period, setting the divisor to exactly K × N
+  (within a sample of what was asked for) and banking the old one. It
+  answers AX = K.
+- **The caller's half**, still at IF = 0: it points **IRQ0's vector at its
+  ISR**, keeping what the vector held (the kernel's own IRQ0, `sch_isr`) as
+  the CHAIN, and programs **channel 0 at exactly N** (43h = 34h, then N's
+  two bytes to 40h). Anything but N makes `[ticks]` drift, which is why the
+  door answers K rather than taking it.
 - **The ISR** is entered with the interrupt frame alone, IF = 0, on whatever
   stack it hit. On every entry but the K-th it `out 0x42`s a count, sends the
   EOI and `iret`s. On the K-th it restores everything and **jumps far to the
@@ -58206,12 +60604,16 @@ stub that refuses). The library is ~480 bytes of the including package.
   the EOI and the package's hook exactly as §53.2.2 describes. So `[ticks]`,
   the BIOS clock and the hook's period count stay exact.
 - **AL = 1 closes**: the vector, the divisor and channel 0 go back, and channel
-  2 goes idle. **`fsx_restore` closes it too**, on every bracket exit, so a
-  package that leaves its bracket by any path leaves nothing behind.
-- **Refusals** (CF = 1, AX = `SPK_E_*`): not in the caller's own rate bracket
-  (always, on `kern_small`); N out of range; the speaker already taken by a
-  clip or another door; close with nothing open; and `SPK_E_ADDR` = 5, SI or
-  DI's block outside the caller's image+bss.
+  2 goes idle; harmless with nothing open, and it answers nothing. **`fsx_restore` closes it too**, on every bracket exit, so a
+  package that leaves its bracket by any path leaves nothing behind. The
+  teardown stays the kernel's for exactly that reason.
+- **Refusals** (CF = 1, AX = `SPK_E_*`): not in a rate bracket
+  (`SPK_E_NOTRATE`, always on `kern_small`), and the speaker already taken
+  by a clip or another door (`SPK_E_BUSY`). Codes 2 (N out of range), 4
+  (close with nothing open) and 5 (`SPK_E_ADDR`, SI or DI's block outside
+  the caller's image+bss) are retired with the checks that gave them. The
+  door no longer writes a block into the caller either, and no longer asks
+  whether the bracket is the CALLER's own (`fsx_mine`).
 
 #### 34.11.2 The library
 
@@ -58242,7 +60644,13 @@ next one.
 when the counter runs out. A grant runs to the soonest of three things: the
 period's end, the queued data's end, or the ring's end. That keeps CONS exact
 at every period, never a period ahead of the pulse. With nothing queued, a
-grant is one sample of the table's middle (silence), not counted as played.
+grant is a run of `OS88SPK_DRYN` = 16 samples of silence (or the period's
+rest), not counted as played. It was ONE sample until Audio (§86.21): then a
+producer the ring had outrun made every pulse a grant event, ~400 cycles
+more each, and the pulses starved the very producer that was behind - a
+5-second clip played for 9.5. Sixteen is 2 ms at 8 kHz of a gap that was
+going to be heard anyway. The silence is the table's middle, or a count of 1
+where §34.11.9's shaper puts the carrier away.
 
 #### 34.11.3 What the kernel does differently under a sample ISR
 
@@ -58303,11 +60711,13 @@ is PCM8 at 5,512 Hz, with every frame budgeted around what the pulses leave.
   refuses beside `FSXF_FASTTICK` (one channel 0). A speaker play would be
   `FSXF_KEEPWORKER | FSXF_RATE` with a hook, its mixer writing counts, at a
   rate row below its lowest today (11,000 Hz is past the 8088's ceiling).
-- **Audio cannot, as it stands**: it plays on the desktop, and channel 0 is
-  not the desktop's to give (§34.1), so it would need a full-screen play of
-  its own - against its premise of music behind other windows. (ModPlug is
-  retired, §56.15.)
-- docs/plans/SPEAKER-PCM-HANDOFF.md is the brief for both.
+- **Audio** (§86.21), with no card, automatically: its window plays as an
+  imposter in its own `FSXF_RATE` bracket - the desktop given up for it,
+  against its premise of music behind other windows, because sound and
+  nothing else is better than no sound - through §34.11.9's shaper, with a
+  live ladder of rates that finds what the machine can keep up with. (ModPlug
+  is retired, §56.15.)
+- docs/plans/completed/SPEAKER-PCM-PLAN.md is the plan for all three consumers.
 - **No C package**: `apps/cc/os88.h` has no binding for a sample ISR, and
   §73's rules forbid most of what one needs. A C package that wants one gets
   an assembly module.
@@ -58430,11 +60840,10 @@ N = 54 PIT counts. The door's floor was 74 for the 8088's sake - its ISR is
 ~400 cycles, near a whole 5,512 Hz period - and a 286's is a fraction of
 that. So **the floor is 48 on `CPU_286` and up** (`SPK_NMIN_AT`, 24,858
 Hz), and stays 74 on an 8086:
-- **the door** (`osapi_fsx_spk`): a DX of 48..73 is refused unless
-  `[cpu_tier]` is past `CPU_8086`. **+15 bytes of `kern_big` `.text`**, no
-  rung crossed; `kern_small`'s door refuses everything anyway;
-- **the library** (`os88spk_init`): the same test through
-  `OSAPI_CPU_INFO`, so a table is not built for a door that will say no;
+- **the library** (`os88spk_init`): a pulse of 48..73 counts is refused
+  unless `OSAPI_CPU_INFO` answers past `CPU_8086`, so no table is built for
+  it. It is the ONLY check since kernel size pass 8 made the door thin
+  (§34.11.1); the door's own copy was +15 bytes of `kern_big` `.text`;
 - **the file**: a pulse of 48..255 counts is VALID (`os88vid.spk_table`),
   and which machine may play it is the player's question;
 - **the player**: `VP_SPKMAX` already binds an 8086-class CPU alone, so a
@@ -58455,6 +60864,197 @@ unmuted, its sound goes to the speaker, the door is open to the player
 with a rate divisor of whole 54-count pulses, the ring is played from and
 every frame drawn; `vidspk --rate 22050 --unmute` (MartyPC's 8088) is the
 refusal. How it SOUNDS on a 286's speaker is the owner's to hear.
+
+#### 34.11.9 The speaker shaper: `apps/os88spkfx.inc`
+
+**A straight wave through the pulse width is the carrier and nothing else on
+a 5150** (98.2.15.1): the width goes to bass the cone cannot move. The Video
+Player's encoder shapes its sound on the host; a package handed a WAV or a
+module cannot, so the shaping moves onto the machine, in the form an 8088
+can afford beside a pulse every ~600 cycles
+(docs/plans/completed/SPEAKER-PCM-PLAN.md). `tools/os88spkfx.py` is its reference, to
+the byte, and `tests/spkfx.py` holds the two equal.
+
+**Per sample**, x unsigned 8-bit at the speaker's rate:
+1. **Pre-emphasis** (`SPKFX_PRE_DIFF`): the first difference, i = (prev −
+   x + 256) >> 1 - the high-pass and the tilt in one, +6 dB an octave. The
+   wave comes out upside down, which no ear hears, and that is what keeps
+   the previous sample in AH for nothing: `xchg`, `sub`, `rcr`. The `rcr`
+   leaves the index's top bit flipped (no `cmc`), so a PRE_DIFF family is
+   stored at i ^ 80h. `SPKFX_PRE_NONE` takes x as it is - Tracker filters
+   its instrument samples at load instead, a linear filter commuting with
+   the mix.
+2. **One `xlatb`** through a row of the **level family**: gain 2^(l/3) in
+   2 dB steps (0..20 dB, `SPKFX_NLEV` = 11 rows of 256), a soft clip
+   (tanh to z = 1 and flat beyond, the encoder's own clip), and
+   os88spk.inc's count table, composed at init.
+3. **The carrier put away in the quiet** (98.2.15.3): a shift d subtracted,
+   saturating at a count of 1, moved once a sub-block of 16 samples toward
+   the span's target - 1 count up, 8 down.
+
+**Per span** (~32 ms - 256 samples up to 11,025 Hz, 512 above), before a
+sample of it is emitted: its peak, read one sample in 32; the level that
+peak asks for (ratio 3, one step up a span at most, any number down, so an
+onset is never driven into the clip); and the carrier's target from the
+headroom the level leaves - all the way down, every count 1, for a span
+under the gate.
+
+**A span after a silent one takes its own level at once.** A span under the
+gate asks for level 0, which is right for the silence (it keeps a noise floor
+of a count or two from being lifted 20 dB), and the one-step rise then held
+the music that came back after it up to 20 dB down for ~7 spans - a
+quarter-second dip after every gap in the song. Elysium on the 8,000 Hz rung
+fell to level 0 or 1 about once in six seconds, seven times in ten straight
+after a gated span, and the owner heard it on a Toshiba T1100 Plus as "one
+volume, then super soft, then back a third of a second later". The rise limit
+exists to keep steps out of CONTINUOUS music; after silence there is nothing
+to step from, and the attack is already the span's own peak, so the jump
+cannot clip. `os88spkfx_gate` is the byte (the last span was under the gate,
+and a play starts as if it were), and `tools/os88spkfx.py` carries the same
+rule, so `tests/spkfx.py` stays EXACT; with the jump taken out of the asm
+alone all five of its legs fail.
+
+**A span's level is asked by the largest peak of it and the two spans before
+it** - a peak HOLD of ~64 ms at 8,000 Hz. Deciding a level once a span from
+that span's own peak ducked the WHOLE span for a hit anywhere in it, notes
+before the hit included, and then climbed back a step a span, so a busy song
+pumped between its beats: the owner heard it on the T1100 Plus, after the
+silence fix, as ~50 ms "microdropouts" that a Sound Blaster does not have.
+Measured by capturing every span Tracker mixed on MartyPC's 8,000 Hz XT (40
+s each, zero dry grants, so not the ring) and running `tools/os88spkfx.py`
+over them, which reproduces the machine's output exactly:
+
+| song | | level travel | dips of 4 dB+ below both sides | mean level | at the curve's end |
+|---|---|---|---|---|---|
+| ELYSIUM.MOD | without the hold | 62.0 dB/s | 97 | 6.12 | 6.3% |
+| | with it | 31.4 dB/s | 9 | 5.37 | 3.6% |
+| BEVERLY.MOD | without | 87.7 dB/s | 162 | 5.38 | 4.6% |
+| | with | 55.2 dB/s | 38 | 4.57 | 2.9% |
+
+What it costs is ~1.5 dB of average loudness (a loud hit keeps the level down
+two spans longer) and ~40 bytes and a dozen instructions a span in each
+package that carries the shaper; nothing resident. Faster release and a
+tolerance before falling were both measured and both WORSE on every column.
+The carrier's target is still set by the span's own peak. `os88spkfx_pk1` and
+`os88spkfx_pk2` are the two held peaks; with the hold taken out of the asm
+alone `tests/spkfx.py` fails on all five legs.
+
+**A slower leveller was built and REVERTED, on the ear.** A held peak that
+decays (re-armed within ~2.5 dB, held 16 spans, then 1/16 a span), a table row
+that glides a 2 dB step every 16 samples and `ZT` 2.5 took the level's spread
+within each second from 1.87 to 0.65 dB on ELYSIUM.MOD and from 2.21 to 0.84 dB
+on BEVERLY.MOD, at the same clipping, and the owner preferred it on the T1100
+Plus side by side. A second listener disliked it: its fades out and back in
+around a loud part were MORE obvious for being slower, where the three-span
+hold's are short enough to pass. So the three-span hold ships, and what is
+wrong with both is the same thing - the level moves at all, and parts that
+should not change fade with it. docs/plans/SPEAKER-LEVELLER-NEXT.md carries
+the measurements, the instrument, and the next idea, which attacks exactly
+that: ONE level for a whole song, chosen at load.
+
+**What it costs, measured** on MartyPC's 4.77 MHz 5150 (`tests/spkfx.py`,
+emit plus the span's level, interrupts included): **~104 cycles a sample**
+with the pre-emphasis and the carrier moving, **~84** while the carrier sits
+still, **~72** without the pre-emphasis. The plain translation it replaces
+was ~50 (34.11.4). **What it buys**, 40 s of *Bad Carrot* at 8,000 Hz, each
+band's share of the speaker line in dB (98.2.15.1's table):
+
+| | < 150 Hz | 150-400 | 400-800 | 800-1,600 | 1,600-2,700 | carrier |
+|---|---|---|---|---|---|---|
+| straight | −9.1 | −17.8 | −21.1 | −20.6 | −23.2 | −2.6 |
+| the encoder's shaping | −31.8 | −16.0 | −14.8 | −10.7 | −10.4 | −4.7 |
+| **the machine's** | −20.2 | −19.1 | −16.0 | −11.3 | −9.6 | −5.2 |
+
+The voice bands land within a dB of the encoder's. What the encoder does
+better is the soft passages - its leveller is an RMS over 30 ms in two
+bands, where this one is a peak a span - which come out 3-4 dB quieter here.
+
+`os88spkfx_init` (after `os88spk_init`) takes DI = the family's place in
+the package's OWN segment - `cs xlatb`, DS being the source and ES the ring -
+AL = the pre-emphasis and AH = 1 for the carrier's slide, which also makes
+a dry ring's silence a count of 1. `os88spkfx_level` decides a span;
+`os88spkfx_emit` translates it in any number of pieces, as a ring's wrap
+splits one. `apps/os88spkfx_t.inc` is generated (`tools/os88spkfx.py gen`)
+and `t_spkfx` holds it to the model. The library is 1,745 bytes of the package
+(four unrolled bodies, the entry tables and the generated tables) and 2,816
+bytes of its bss.
+
+**A WAV shaped on the host** - the encoder's full shaping, for whoever
+prepares a file - is the encoder's `.WAV` target, `os88venc.py IN OUT.WAV`
+(§86.21.1): the speaker's counts in an `o8sp` WAV, which a player copies.
+
+**IT IS THE LIFTED STYLE, NOT THE NATURAL ONE** (§98.2.15.1's two), and the
+owner heard it on the 5150: the lows *"very low and almost inaudible"*. The
+model was fitted to the encoder the day before natural became its default -
+`RATIO` 3 is lifted's - and its high-pass is the first difference, which is
+not a corner at all but a tilt of 6 dB an octave down the whole band: at
+either rate, 125 Hz is -18 dB against 1 kHz, 250 Hz -12, 400 Hz -8 and 630 Hz
+-4, where natural is a 250 Hz high-pass and flat above it (a one-pole there
+reads -7, -3, -1, 0). The fit was checked in the voice bands, which is how
+the lows went unseen. The natural answer - a one-pole high-pass near 250 Hz,
+ratio 2, 24 dB of range - is priced in `tools/os88spkfx.py` before any
+assembly, and what it may cost is MEASURED:
+
+**What a heavier shaper can afford at 8,000 Hz on a 4.77 MHz 8088**: Audio
+playing an 8 kHz PCM8 WAV off MartyPC's XT-IDE (which the CPU copies) waits
+15-26% of the time, the sample ISR taking about half of that, so ~7-12% of
+the machine is spare - and `-DSPKFX_PAD=4`, a measuring knob that adds a
+`loop` of four `nop`s (~33 cycles) a sample to `os88spkfx_emit`, is already
+too much: the ring's lead FALLS 135 samples a second and the ladder would
+take the play a rung down (at 8 `nop`s it had). A one-pole is ~40-60 cycles,
+so it does not fit Audio's live 8 kHz; an encoder-made WAV (§86.21.1) is how
+Audio gets natural shaping at no cost to the machine, and Tracker, which
+filters its SAMPLES once at load, takes it for nothing at play (§45.25:
+BUILT). **If Audio or the Video Player ever take it live**, it must be
+something the play can SHED: the ladder's first step down would be the
+filter - natural back to this tilt - before the rate, so a machine that
+cannot hold it loses the lows it gained and not the sound (the owner, on
+reading these numbers).
+
+#### 34.11.9.1 The ratchet: one level for the piece
+
+`os88spkfx_ratchet` (AL = a level, after `os88spkfx_init`) turns the per-span
+leveller off and plays the piece at ONE level. The level only ever steps DOWN,
+one level a span, and only for a span whose peak asks for a level more than
+`SPKFX_RTOL` = 3 below it (6 dB past the soft clip's knee), so it settles on
+the piece's loud parts in its first seconds and then does not move at all.
+Silence changes nothing; the carrier's target is still set per span from the
+span's own peak. `os88spkfx_init` turns it off, so Audio and the Video Player,
+which never call it, level as before. `tools/os88spkfx.py`'s `Shaper.ratchet`
+is its reference.
+
+It exists because every leveller that MOVES was heard moving: the shipped
+three-span hold dips around a loud part, and the slower one built after it
+was heard by one listener as steadier and by another as longer, more obvious
+fades (34.11.9). What both disliked was parts that should not change,
+changing. docs/plans/SPEAKER-LEVELLER-NEXT.md is the record.
+
+Tracker is its one caller (`TSP_RATCHET`, default 1; 0 builds the leveller
+back, which is the A/B). A song starts at `TSP_LSTART` = 8 and keeps what it
+settles on across a pause, a resume and a rung down (`tsp_slev`, read back
+from `os88spkfx_lev` at each re-init); a new module starts again. Modelled on
+40 s captures of Tracker's mix at 8,000 Hz: ELYSIUM.MOD settles on level 6
+within 1.6 s and BEVERLY.MOD on level 5 within 2.4 s, with 6.4% and 3.5% of
+samples at the curve's end (the per-span leveller's 3.6% and 2.9%), and
+nothing moves after that. On MartyPC's 8,000 Hz XT, Tracker playing ELYSIUM.MOD
+steps 8 -> 7 -> 6 in its first 1.5 s and reads 6 for the rest of a minute.
+
+It costs less than the leveller it stands in for: `os88spkfx_level` is 6.2
+cycles a sample against 6.9. `tests/spkfx.py`'s sixth leg (PRE_NONE, the
+ratchet from 10) is EXACT against the model and FAILS with `SPKFX_RTOL` off by
+one in the asm alone; `tests/trkspk.py --leg play` requires the song's level to
+survive a pause and resume, and reads 5 then 8 with the carry taken out.
+
+**The hand on the level ships** (45.25.3). It began as a listening build,
+`-DTSP_LEVKEYS`, and the owner's ear on it is why the knob is gone: level 5 is
+the clearest on the T1100, up to 7 is only louder, 10 blurs - and on the 5150
+7 to 10 weakens the carrier's whine. So the release keeps the ratchet's choice
+as the default and lets the user move it: `+`/`-` or the volume bar set
+`os88spkfx_rat` = 2, which the shaper reads as "step no more", and the level
+is the user's until they move it again. The freeze is unconditional now, the
+`SPKFX_FREEZE` arm having been folded in: `os88spkfx_rat` is never 2 in a
+package that does not set it, so Audio and the Video Player assemble to the
+same behaviour.
 
 ## 35. Recorder — the sound layer's recording client
 
@@ -59453,7 +62053,7 @@ click back to `fdlg_draw_both`. A **click** can never trigger it — the hit
 test is bounded by what is drawn — but the keyboard shares `fdlg_setsel`,
 and comparing one word is cheaper than proving that.
 
-`fdlg_sel_bar` asks `fdlg_rows` for the total instead of reading
+`fdlg_sel_bar` reads `[disk_nfiles]` for the total instead of reading
 `[fdlg_shown]`, which is painter scratch and means nothing on a click.
 
 **The button column** carries Open/Save, Cancel, Drive and — in **save mode
@@ -59483,8 +62083,9 @@ The dialog lists **the mounted volume's current directory** — `disk_dir` /
 through `dsk_get_dir`. It never touches `VIEW_SEG` and never copies the
 listing anywhere (§38.2).
 
-**A display row IS a directory index**, and `fdlg_rows` is just
-`disk_nfiles`. It used not to be: this module synthesized its own `..` row
+**A display row IS a directory index**, and the row count is just
+`[disk_nfiles]`, read in place (`fdlg_rows` was that one load, and went in
+kernel size pass 8). It used not to be: this module synthesized its own `..` row
 and carried the resulting +1 offset through every row ↔ index conversion in
 it. The mount puts the parent link in the listing now (§19.5), as a type-3
 entry carrying the parent's first cluster, so the dialog, the Disk window
@@ -59734,6 +62335,31 @@ driver and never writes `dskw_raw`.
 **42 bytes of `.cold`**, no rung crossed, `KERN_CODE_MAX` untouched; on
 `kern_small` the module is `FDLG.DRV` and it costs nothing resident.
 
+#### 38.6.2 The size is taken BEFORE the teardown
+
+`fdlg_commit` asks `fdlg_sizeof` for `DX:CX` **before** `fdlg_close`, and the
+order is binding. The close frees the dialog's own listing store
+(`fdlg_vfree`: the listing is transient, which is why it costs no resident
+byte) and aims `[dsk_dseg]` at 0 — while `[disk_nfiles]` still counts the
+entries the dialog was showing. A lookup after the close therefore walks the
+right number of rows out of **segment 0**, compares the chosen name against
+the interrupt vector table, finds nothing, and answers the not-found `0:0`.
+
+**It did exactly that from the day the listing became transient until this
+section was written**: every Open reported a size of 0. Most consumers treat
+0 as "no size" and fall back to asking for the largest run, so they degraded
+quietly; **Write Img** (§18.99.8) sizes the geometry off this figure alone,
+so it refused every image — a 368,640-byte image of a 360KB floppy, picked
+off a 720KB disk or a hard disk alike — as **"Not a disk image"**, on real
+hardware and in every emulator. It is reported off the 5150.
+
+Nothing between the two points touches `CX` or `DX`: `fdlg_close`,
+`fdlg_home_save` and `snd_disp_set` preserve both, and the staleness triple
+spends `AX` and `DI`. The callback pointer is carried in `AX` for that reason.
+The cost is that the one directory walk of §38.6.1 now happens on a commit
+whose callback the staleness triple then skips — a commit from an app whose
+window has since closed, which is rare and pays one cached walk.
+
 ### 38.7 Lifecycle
 
 1. **Ask.** The application calls slot 0x0124 from a menu command or a key
@@ -59836,7 +62462,6 @@ no longer always reaches it.
 | `fdlg_paint` / `fdlg_onkey` / `fdlg_onclick` | The window procs; all three assume the held lock and never take it. |
 | `fdlg_draw_name` / `fdlg_draw_list` / `fdlg_draw_both` | §38.8. Erase one rectangle and redraw it. All assume the held lock and a valid `[fdlg_cx]`/`[fdlg_cy]`; all preserve every register. |
 | `fdlg_name_body` / `fdlg_list_body` | The same drawing without the erase, for `fdlg_paint`, which is handed a white content. |
-| `fdlg_rows` | Out: AX = `disk_nfiles`. There is no offset any more — §19.5 put the `..` row in the listing, so a display row is a directory index. |
 | `fdlg_stage` | In: AX = display row, which IS a directory index (§19.5 put the `..` row in the listing, so this module no longer synthesizes one or carries an offset). Out: `fdlg_row` = its name, `fdlg_type` / `fdlg_size`+`fdlg_sizeh` its §19 type word and size dword. |
 | `fdlg_go` | In: AX = first cluster. `dsk_chdir` + reset selection and scroll. |
 | `fdlg_hidx` | Internal. Out: CF=0 with BX = this instance's file-home slot **and SI → that slot's `inst_fname` row**; CF=1 = no live requester. The SI half is why `fdlg_home_name` and `fdlg_home_save` are nine and twenty-six bytes: `slot * INST_FNSZ` is a `mul` (13 is not a shift) and it was written at both. The two index-only callers bank SI already. |
@@ -60403,7 +63028,8 @@ cost no budget. 256 bytes into the image rung crosses a 512-byte step and puts
 `KERN_SIZE` over `KERN_BUDGET`; the low rung had 362 bytes free. It costs
 nothing to reach — **SS is `LOW_SEG` for all kernel code (§1)**, so
 `[ss:bx + vid_rowtab]` is the same one override byte `[cs:…]` would have been.
-`font_glyphs` is read exactly this way, for exactly this reason.
+`font_glyphs` was read exactly this way, for exactly this reason, until kernel
+size pass 8 stopped copying it and read the ROM's own table instead (§6).
 
 **348 rows on `kern_big`, which is every row of a Hercules** and therefore of
 both 1bpp adapters — a CGA is 200. On the target machine the table never
@@ -62314,12 +64940,19 @@ edge test on the way back in.
   the difference between a straddle and a cell that is simply not here — and
   without it the spill would resolve back to the primary at the same coordinates
   and the cut would call itself for ever.
-- **A cut cell is re-entered by CHARACTER CODE.** The two scratch cells sit
-  immediately after `font_zero`, so `font_glyphs + (al - FONT_FIRST) * 8` — the
-  arithmetic already in the body — addresses them from codes 128 and 129 with
-  nothing added anywhere. They are private: a counter guards the one branch that
-  lets a code above `FONT_LAST` through, so `OSAPI_FONT_CHAR` with 128 draws
-  what it has always drawn, which is nothing.
+- **A cut cell is re-entered by CHARACTER CODE.** The glyph table is the ROM's
+  (§6) and the two scratch cells are RAM in `.lowbss`, so `font_ch_seam` points
+  `[font_seg]:[font_base]` at them for the one draw - LOW_SEG, and a base
+  biased so that `(al - FONT_FIRST) * 8 + [font_base]`, the arithmetic already
+  in the body, lands on them from codes 128 and 129 - and puts the pair back
+  after. Nothing in any other glyph's path tests for a seam. They are private:
+  a counter guards the one branch that lets a code above `FONT_LAST` through,
+  so `OSAPI_FONT_CHAR` with 128 draws what it has always drawn, which is
+  nothing. **Both halves are drawn by a font_char of their own**: the spill on
+  the far display as always, and the part in place NESTED on this display
+  (`font_ch_hi` sends code 128 straight to `.edgeok`, its edges being proven)
+  so that the pair is restored when it returns rather than at an exit every
+  glyph shares.
 - **The spill is issued BEFORE the part in place, and the display is put back.**
   §39.14.3 leaves the last display drawn on current, so the recursion returns
   with the *other* card's geometry live; `vid_ctx_act` on the banked `[vid_cur]`
@@ -62411,9 +65044,10 @@ card it subtracts zero.
 
 #### 39.15.2 `[cur_disp]`, and the bracket that makes it true
 
-The arrow is on one display, named by `[cur_disp]`, and `cur_put`, `cur_get`
-and `cur_move` each make it current before touching a framebuffer and put the
-previous one back. They have to own that themselves: `cur_get` is reached from
+The arrow is on one display, named by `[cur_disp]`, and the show/hide body
+(`cur_vis`, behind `cursor_show` and `cursor_hide`) and `cur_move` each make it
+current before touching a framebuffer and put the previous one back. They have
+to own that themselves: a hide is reached from
 `gfx_lock`'s deferred hide and from the **mouse ISR**, neither of which is
 inside a §39.14 drawing hook, and the display live at either moment is
 whatever the last primitive left.
@@ -71283,7 +73917,7 @@ and with the **running task's own `T_INST`** when one is not — which is
 exactly the worker's case — so the tone is attributed to this instance and
 `snd_release_inst` releases it at teardown like any other. A duration-limited
 tone self-expires through `snd_tick`, so the worker never has to come back and
-turn it off. `osapi_snd_play` stays UI-task-only for a different reason: it
+turn it off. `os88pcm_play` stays UI-task-only for a different reason: it
 runs the clip with the scheduler locked, so a worker calling it freezes the
 desktop rather than merely misattributing a grant.
 
@@ -72152,6 +74786,12 @@ its one question. `trk_fdone` clears it at its single exit and the posted
 path jumps past that clear (`.outq`), so a load posts **once**: a second
 post because the first did not give the what-if's number is how a program
 spins, and the wake's own `OSAPI_MEM_AVAIL` is the number to decide on.
+The load that SUCCEEDS clears it too, just before `trk_play`: with no card a
+windowed play is the speaker's loop (45.25), which returns only when the song
+stops, so a clear at the exit alone held the byte up for the whole song and
+refused the next load its compaction. `soak -k trkcompact` reads the byte
+after the load and caught it the day the filler's layout left room for the
+speaker's ring.
 
 **It cost the region two declarations, and the second is what makes the
 first mean anything.** `OS88_REGION_MOVABLE` sits at the end of `trk_entry`
@@ -72437,11 +75077,12 @@ edge-triggered, so no deadline machinery is needed.
 
 ### 45.8 The honest degradations
 
-- **No Sound Blaster: a viewer, not a player.** `osapi_snd_caps` without
-  `PCM_BG` refuses Play with a status-line message; loading, the pattern
-  view, scrolling and the whole fullscreen surface still work. No silent
-  tick-driven fake playback is attempted, and no FM fallback in v1 (FM is
-  now worker-whitelisted — that is future work, not a promise).
+- **No Sound Blaster: the PC speaker (§45.25).** `osapi_snd_caps` without
+  `PCM_BG` plays through the speaker instead, from Tracker's own bracket,
+  after timing the machine once - and refuses with the figure where even
+  its lowest rung would not fit. This line used to read *"a viewer, not a
+  player"*; that is still what a kernel with no `FSXF_RATE` gets. No FM
+  fallback (FM is worker-whitelisted - future work, not a promise).
 - **512KB machine: big modules play.** A fixed ~107KB package arena could
   not hold a 116KB blob at all, and that limit is gone. The claim heap is not
   a fixed arena — it is everything above the kernel — so a 640KB machine
@@ -75030,6 +77671,23 @@ whole-pane redraw.
 package image across the 5.5 → 11 → 5.5 round trip, which must come back
 byte for byte. With the defect in, it names the four stray bytes.
 
+#### 45.21.11 A paused seek says where it went
+
+**A click on the scrubber while PAUSED moved the song, showed the thumb at the
+click and then snapped it back** to where the pause left it (reported on the
+5150 with the speaker; the card did the same). The drag draws the thumb at
+the hand (`[tw_dx]`); the release seeks and redraws it at `[tui_apos]`, the
+position the face is drawn FROM. Only a frame's `tui_sync` writes that - and a
+paused player draws no frames (`tw_want`, so the pointer is not lifted
+eighteen times a second for nothing). So `tw_seek`'s stopped branch moved
+`[mp_songpos]` and nothing published it. It now calls `tui_sync` itself, and
+parks the stopped view's row (`[tui_vrow]`) on the new pattern's first row.
+The rewind and fast-forward buttons take the same branch and had the same
+defect. `tests/trkspk.py --leg scrub` (`soak -k trkscrub`) pauses, clicks
+three quarters along and reads the thumb two seconds later, then plays on:
+position 1 -> 62 and resumed at 62, on the speaker and on the Sound Blaster
+5150. The build before it reads 1.
+
 ### 45.22 The PlayList (`trklist.inc`)
 
 ModPlug Player's list and its editor (§56.8), moved to the player that
@@ -75276,6 +77934,361 @@ then checks the 286 face's markers against a held bar (point 4). That
 15.0 is itself news, since the same spectrum drew 7.7 before this section and
 45.21.8: the LCD, the hold and the clock took half its cost away too. `TW_XTNB` and `TW_BHOLD` are `%ifndef`-overridable, so the table's
 arms can be rebuilt.
+
+### 45.25 No card: the PC speaker
+
+With no Sound Blaster, **Play plays through the PC speaker**, on its own and
+with nothing to switch on (the owner: *sound and nothing else is better than
+no sound*). It is §34.11's ring and door and §34.11.9's shaper, fed by the
+same mixer the card's worker feeds (`apps/tracker/trkspk.inc`,
+docs/plans/completed/SPEAKER-PCM-PLAN.md).
+
+**The bracket is the producer.** The speaker needs channel 0, so the play runs
+inside an `FSXF_RATE` bracket (§53.2.2), and under a sample ISR a task switch
+rides the 18.2 Hz tick - so it is not the worker that mixes but the bracket's
+own loop, `tsp_poll`: a span of the mixer, its level, its counts, into the
+ring. Windowed, the bracket is a same-mode one - the **imposter window**, the
+Video Player's in-window play (§98.3.7): the Tracker window stays live and
+the rest of the desktop waits; a click anywhere or Space pauses and gives the
+desktop back, Esc or S stops, F swaps to the full screen. The full screen's
+bracket takes `FSXF_RATE` in place of `FSXF_KEEPWORKER | FSXF_FASTTICK` when
+there is no card, at 54.6 Hz (`TSP_FSDIV`), its two loops calling `tsp_poll`
+once a frame, and falls back to the viewer's bracket where a kernel refuses
+the flag. `[trk_total]`/`[trk_consumed]` ARE the ring's TOTAL and CONS, so
+everything that shows what the listener hears (§45.15) - the rows, the clock,
+the needles - reads the speaker the way it read the card; the display's gates
+that asked *"is a card stream open"* (`tw_want`, `tw_tick`, `tui_sync`, the
+scope, `tw_rate_now`) ask *"or a speaker play"* too.
+
+**The filter is paid once, and it is the NATURAL style's.** A high-pass
+per output sample would be ~20-60 cycles; a linear filter commutes with the
+mix, so `tsp_natural` runs it over the module's SAMPLES in place when a
+module loads on a machine with no card, and the shaper is initialised
+`SPKFX_PRE_NONE`. It is a one-pole DC blocker, `y = (x - x_prev) + 7/8
+y_prev`, with `Y = 128 y` held in a word so the output `y / 2` is its high
+byte (for bytes in, |y| is at most 255: no clamp and no output shift) -
+`tools/os88spkfx.py`'s `tracker_hp` is it exactly and `tests/lzmod.py`
+compares every byte through it. In the sample's own time base its corner is
+~190 Hz for a sample played at C-2 (8,363 Hz) and moves with the note, flat
+above - 125 Hz -5 dB, 250 Hz -2, 400 Hz -1 against 1 kHz. It replaced the
+first difference, which is §34.11.9's lifted tilt (-18, -12 and -8 dB at the
+same three) and which took the lows the owner could not hear on the 5150.
+It costs **166 cycles a sample, MEASURED**: 2.8 s for BEVERLY.MOD's 81,200
+sample bytes and 3.6 s for ELYSIUM.MOD's 104,794 on a 4.77 MHz 5150, where
+the first difference was ~1 s (the first build of this was 303 cycles, its
+output shifted and clamped). So an 8088 loading more than `TSP_NSAY` =
+28,672 sample bytes - a second of it - is told first: `Filtering the
+samples for the speaker...` on the status line. `[tsp_pre]` says the
+filter ran, and a card mounted later in the session hears that module
+thinner until it is loaded again. Tracker never writes a module, so nothing
+filtered reaches a disk.
+
+**The first Play CALIBRATES** (the owner's question 5), inside the bracket
+where the worker is parked - outside one the worker draws a frame a tick
+beside the bench. `tsp_calib` times two things:
+- the shaper: spans of 256 emitted for `TSP_BTICKS` = 4 ticks (Ne);
+- the mixer: `TSP_MTICKS` = 8 ticks of FOUR channels, all audible, each the
+  module's longest sample looped whole, in chunks of a tick's length at 125
+  BPM (rate / 50) with no tick falling due, so the replayer never moves (Nm).
+  Its channel records are put aside and back. The first build benched the
+  song's own opening and read BEVERLY.MOD's sparse intro - a third of the
+  mixer's cost in a full passage - and one that mixed 512-sample chunks
+  missed the per-chunk set-up a real tick's chunk pays.
+
+and predicts each rung's load as `R x 44 / Nm + R x TSP_CS / Ne + 5` percent.
+`TSP_CS` = 104 is MEASURED on the owner's 5150 by SPKBENCH (45.25.1): the
+sample ISR's ~395 cycles a sample against the ~106 this bench's shaper takes,
+`(395 / 106 + 1) x 400 / 18.2`. It was 89, built on a sampled ~325 off
+MartyPC, and that put BEVERLY.MOD at "95%" on a 5150 that could not hold it. The rungs are an 8088's 8,000 and
+5,512 Hz and a 286's 22,050 / 16,000 / 11,025 / 8,000 (§34.11.8). The highest
+at `TSP_PCTMAX` = 100 or under is played: **the sound must fit and the picture
+has what is left**, because the imposter draws a frame only while the ring is
+at least half full (the worker's `trk_deep` rule, audio first) and books the
+clock without drawing otherwise, and the visualiser is forced off during a
+speaker play on any machine whose visualiser is already the XT meter
+(`tw_vizxhi`, the 11 kHz rule). None fitting, Play is **refused with the
+figure** - `Speaker: needs 107% of this PC - Play again to try` - and the next
+Play plays anyway at the last rung (question 2). A play that falls behind
+all the same (a lead under a quarter of the ring) drains, drops a rung and
+goes on, as Audio's does (§86.21); past the last rung it plays on behind.
+The rung down recomputes the samples a replayer tick takes at the new rate
+(`mp_calc_spt`) and rescales the elapsed clock's bytes to it (`tsp_elscale`,
+a 32 x 16 multiply and a 48 / 16 divide) - the first build did neither, so a
+drop to 4,800 played at 87% and the clock jumped - and it reopens the door on
+HALF a ring rather than a full one, which is the gap the listener sits
+through.
+
+**The rungs on an 8088 are 8,000, 5,512 and 4,800 Hz.** 4,800 came from the
+owner's 5150, which took 5,512 for BEVERLY.MOD and starved in its heavy
+passages, and benched ELYSIUM.MOD (a 4-channel `FLT4` module) at 101%, just
+over the line. **The status line says what was chosen** as a play starts and
+again at a rung down - `Spk 5512 Hz, 95% cpu (CARRIER WHINES!)`, the warning
+under 8 kHz, where the carrier sits in the ear's best band and the owner
+would rather say so than have it taken for a fault; short, because the
+compact face's strip holds the transport legend's 38 cells and no more - so
+a field run reports the machine's own figures module by module. It STAYS
+up: a frame that saw the play start put the transport legend over it within
+a second, so `tsp_start` records the transition (`[tui_lplay]`) as the
+legend it has just said. Anything later may replace it; the play's own
+start does not. The visualiser's pane
+says `No meters: speaker` while the speaker plays, where it used to borrow
+XT mode's `No meters at 11 kHz`.
+
+**What the owner's 5150 did, read off a recording of its speaker** (a phone
+at the cone, 48 kHz): the carrier stays at 5,522-5,525 Hz throughout - the
+5,512 rung's PIT period (divisor 216 is 5,524 Hz) - so the sample ISR runs at
+its full rate on iron; the ring running dry shows as the carrier dropping out
+for a dry grant's 2.9 ms, which BEVERLY did 24 times in its first seven
+seconds and then not at all. ELYSIUM, forced, dropped out twice in fifteen
+seconds and played at its own tempo (the music's strongest period 0.120 s,
+one row at speed 6 and 125 BPM) - it "felt slow" at the proper tempo. So the
+iron and MartyPC agree, though a first reading here said otherwise: MartyPC's
+5150, on GLaBIOS or on the 27 OCT 82 IBM ROM, also holds 5,512 Hz at "95%"
+for 14 to 64 seconds and then drops to 4,800. The prediction is optimistic,
+and 45.25.1 is the bench that says by how much.
+
+Measured on MartyPC:
+
+| machine | Ne | Nm | rung | predicted | held |
+|---|---|---|---|---|---|
+| 5150, 4.77 MHz, Hercules | 9,728 | 5,920 | 4,800 Hz | 91% | 4,725 pulses/s, ring never dry, window and full screen |
+| XT `--turbo`, VGA | 29,440 | 17,760 | 8,000 Hz | 52% | ring never dry |
+
+(with `TSP_CS` = 104; at 89 the 5150 took 5,512 at "95%" and fell behind
+within a minute, 45.25.1). 8,000 Hz on the 5150 predicts ~150%. With the
+visualiser off, the audio-first frame gate is not reached on the 5150 with
+BEVERLY.MOD - removing
+it leaves the ring still never dry - so it is a net for a heavier face and not
+something this machine exercises. `tools/mkmod.py`'s test song, whose 416
+sample bytes loop all four channels every few hundred samples, predicts 107%
+and is refused on the 5150: the bench is the module's own mixer, and a module
+of tiny loops really does cost more.
+
+It costs Tracker 4,189 bytes of image (27,927 -> 32,116), 3,070 of bss (2,816
+of them the shaper's level family) and 2,929 bytes of the packed file, and
+a 17 KB ring claimed the first time the speaker plays; no kernel byte.
+
+`tests/trkspk.py` is the gate: `trkspk` (the 5150 plays by itself, the rate,
+the status line, the dry ring, the visualiser, the clock, pause, resume, the
+full screen and back, stop), `trkspkref` (a build with a 50% ceiling: the
+refusal and its figure, and the override at 4,800), `trkspkdrop` (a build
+told the speaker is cheap starts at 5,512, falls behind and comes down to
+4,800 live - the ticks and the clock right after it), `trkspkturbo` (the
+8,000 Hz rung) and `trkspkend` (a song to its end, then a card machine where
+the speaker is never touched).
+
+#### 45.25.1 SPKBENCH: the ISR's share, measured
+
+`TSP_CS` is the one term of the prediction Tracker cannot time on the
+machine, because timing it needs the speaker playing. `tests/spkbench/`
+(`make spkbench` -> `build/spkbench360.img`, `spkbench720.img`,
+`spkbench144.img`; one package,
+press R, ~12 s hands off, SPKBENCH.TXT saved beside it) times it the way that
+works on any machine: a fixed workload (the shaper over 256-sample spans)
+counted for 32 ticks with the speaker SHUT, then again with it PLAYING a
+ring of silence at 4,800, 5,512 and 8,000 Hz inside the same `FSXF_RATE`
+bracket Tracker uses. The workload gets what the ISR leaves, so
+`1 - open/shut` is the ISR's share of the machine at that rate, with
+everything the machine takes beside it (the ROM's tick, refresh, whatever a
+memory card adds) included. Each row prints beside the share Tracker assumes
+(325 cycles a sample, the figure `TSP_CS` = 89 was built on; it is 104
+now). It also times
+the load-time filter and a 4 KB `rep lodsw` in each 64 KB bank, which is
+PERFORMANCE.md Part 8.2's memory-card question.
+
+On MartyPC:
+
+| machine | 4,800 Hz | 5,512 Hz | 8,000 Hz | cycles a sample |
+|---|---|---|---|---|
+| Tracker assumes | 32.6% | 37.5% | 54.4% | 325 |
+| 5150 Hercules, GLaBIOS | 39.0% | 44.8% | 66.4% | 387-396 |
+| 5150 Hercules, IBM 27 OCT 82 | 39.5% | 45.6% | 66.4% | ~395 |
+| 5150 Hercules, V20, GLaBIOS | 39.4% | 45.0% | 66.4% | ~390 |
+
+So the ISR costs a fifth more than `TSP_CS` = 89 said, and at 5,512 Hz the
+prediction was 7-8 points low: BEVERLY's "95%" is ~103% of a 5150, which is
+why both machines fell behind within a minute. MartyPC's V20 keeps the 8088's
+cycle timings (tools/martypc/configs/os8088_machines.toml), so its row is not
+a V20 measurement.
+
+**The field run** (the owner, 2026-09-29; the V20 is 86Box on the 5150
+profile with the CPU swapped, the others are iron):
+
+| machine | 4,800 Hz | 5,512 Hz | 8,000 Hz | ISR cycles a sample | shaper cycles a sample | ratio |
+|---|---|---|---|---|---|---|
+| IBM 5150, 4.77 MHz, SixPakPlus | 39.5% | 45.7% | 66.6% | 392-397 | 85 | 4.65 |
+| Toshiba T1100 Plus, 7.16 MHz 80C86 | 20.8% | 23.3% | 34.5% | 201-206 | 46 | 4.43 |
+| 86Box 5150, NEC V20 7.16 MHz | 24.2% | 27.7% | 40.3% | 239-240 | 49 | 4.90 |
+| Packard Bell 286, 16 MHz | 7.1% | 8.3% | 11.8% | 70-71 | 12 | ~5.9 |
+
+(cycles in 4.77 MHz units, so a faster machine reads fewer). The 5150 agrees
+with MartyPC's IBM-ROM row to a tenth of a point, so the emulator was right
+and the constant was wrong: `TSP_CS` is **104** now, `(395 / 106 + 1) x 400 /
+18.2` with the shaper at the ~106 cycles Tracker's own bench of it reads, and
+a 5150 predicts ~103% at 5,512 and OPENS at 4,800 (91% for BEVERLY.MOD) -
+the start the owner asked for, with `TSP_PCTMAX` left at 100. The prediction
+rests on the ISR costing the same multiple of the shaper on every machine,
+and the last column is that assumption measured: within 6% across the three
+8088-class machines, so a V20 and a T1100 are predicted as well as a 5150 is.
+The 286 is the exception - its ISR is a quarter dearer against its shaper,
+the port writes running at the bus's pace and not the CPU's - so at 22,050 Hz
+it is predicted ~7 points low; it held that rate with the spectrum at full
+speed, so the margin covers it, but a slower 286 would be the one to watch.
+The T1100 held 8,000 Hz (it predicts ~84% there with 104).
+
+Every machine's ten RAM banks read within 0.03% of each other, the 5150's
+SixPakPlus banks included: PERFORMANCE.md Part 8.2's memory-card question is
+answered, and the answer is no wait states.
+
+Still unexplained, and measured rather than argued: the bench's shaper runs
+at ~86 cycles a sample on a 5150 where Tracker's calibration of the same call
+reads ~108 (Ne = 9,728 in four ticks), and neither the source data nor the
+pre-emphasis accounts for it. `TSP_CS` is expressed against Tracker's figure,
+so it does not move the constant.
+
+`tests/spkbench.py` (`soak -k spkbench`) runs it on MartyPC and checks only
+that it RAN: every share between 5% and 90% and rising with the rate, and
+all ten bank rows. With `os88spk_go` taken out every share reads 0 and it
+FAILS.
+
+#### 45.25.2 No card: what the controls say
+
+With no card a paused face used to say `5.5 kHz  8 bit mono`, the card rate
+the mode would have taken and the speaker never plays at, and the Rate
+controls looked live and set nothing. `trk_spkq` (CF = 1: no
+`SND_CAP_PCM_BG`, asked live like `trk_hirate`) is the one predicate for all
+of the no-card face, and `tw_spkq` answers the same without the caps call
+while a speaker play is under way, since the face asks every frame of one.
+The LCD's format line reads `4.8 kHz  PC speaker  Level 5` - the rate the
+speaker last played at, or `PC speaker, auto rate` before its first play has
+benched one - and 45.25.3 is what the controls do.
+
+#### 45.25.3 No card: the volume bar is the level, and the rate is a choice
+
+**The volume bar is the speaker's LEVEL** (34.11.9.1), 0 to 10, 2 dB a step,
+where with a card it is the mixer's master volume. The ratchet picks it -
+5 on BEVERLY.MOD and ELYSIUM.MOD, which the owner found the clearest - and
+the bar shows what it picked. The first move of the bar, or of `+` / `-`
+(the same keys as a card's master volume, `trk_ukey`), makes the level the
+USER'S: `tsp_ulev` holds it (level + 1, 0 = auto), `tsp_lvset` applies it
+live and freezes it (`os88spkfx_rat` = 2, which the shaper reads as "step no
+more"), and it is kept for the session - across a pause, a resume, a rung
+down and the next module - as a volume is. The status line says
+`Spk level N of 10 (+/-)` - the level the BAR shows (`tsp_lvnow`), not the
+shaper's own `[os88spkfx_lev]`, which paused is the last play's and once made
+a paused drag say the old number. During a play `+` and `-` are the way to it: the
+face is the imposter inside a fullscreen bracket, which takes the arrow off
+the screen (67.17), so a drag there would be blind and a press anywhere
+pauses - after which the arrow is back and the bar is a slider again. On
+the owner's machines: level 5 is the clearest on the T1100 Plus and up to 7
+is only louder; 10 blurs the loud parts together but stays listenable; and
+on the 5150 the carrier's whine falls from 7 up - the louder the level, the
+more of the time the pulse sits near an extreme, where the carrier is weak.
+
+**The Rate menu is Auto and the machine's rungs** - an 8088's 8,000, 5,512
+and 4,800 Hz, a 286's 22,050, 16,000, 11,025 and 8,000 - each with its
+predicted load once Tracker has benched the machine (the first play; the
+menu is rebuilt after it): `* 5512 Hz  103%`. The rate button names the pick
+(`Auto`, `5512 Hz`) and R and the button step through them, as with a card
+- and, as with a card, **R during a play pauses it first** (`trk_rstop`, the
+one stop both branches of `trk_rate_set` take), so the face says what the key
+did rather than seeming to ignore it. The speaker's play loop is its own key
+reader, so it takes R as an exit of its own (`TSPX_RATE`) and leaves the
+bracket through `trk_rcyc`, the routine the windowed and fullscreen keys
+already call.
+
+**The clock carries on across the new rate.** The elapsed time is the bytes
+heard this song over the rate they play at (`tw_el` / `[mp_mixrate]`), and a
+Play after R RESUMES - the song's clock is kept (`tw_newstream`) - at another
+rate. Both starts stored the new rate over the old bytes, so the clock read
+the old rate's bytes at the new rate and jumped: forward by over a minute on
+the owner's 286, where R took 22,050 Hz to a slower rung, and backward with a
+card (5.5 to 11 kHz halved it). `tw_elscale`, which the speaker's rung drop
+already called, rescales the bytes wherever a rate is stored - `tsp_start`
+and `trk_play` - and moved to `trkwin.inc`, the clock's own file.
+`tests/trkspk.py --leg rate` plays ~50 s, presses R, resumes, and reads the
+clock both sides; with the rescale taken out it reads 50 then 45 s on the
+speaker and 53 then 26 with a card, and FAILS.
+`tsp_rsel` holds it (rung + 1, 0 = auto). Auto is 45.25's ladder; a picked
+rung is played from its start with no refusal, and the live drop still
+guards the tempo - a machine that cannot hold the pick comes down a rung
+rather than playing at the wrong speed. The pick takes effect at the next
+play (`Rate: 5512 Hz at the next Play`). On the owner's 286 (16 MHz) Auto
+opens at 22,050 Hz predicting 93% and holds it with the spectrum at full
+speed - the same across two reboots and a dozen opens of both modules. One
+earlier session opened at 16,000 predicting 75%, which is 22,050 at 101.5%,
+just over `TSP_PCTMAX` (the prediction is `R x (44/Nm + TSP_CS/Ne) + 5`,
+both benches taken once a session, in the first play's first ~0.7 s). Why
+that session's bench read 9% slow is not known and has not recurred; a
+machine this close to the line opens a rung apart on a small difference.
+
+`tests/trkspk.py --leg rate` (`soak -k trkspkrate`) and `--leg level`
+(`soak -k trkspklevel`) are the gates.
+
+#### 45.25.4 No card: the missing bass, squared up
+
+A PC speaker plays almost nothing under ~400 Hz, and a tracker bass is a slow,
+nearly pure wave under it - BEVERLY.MOD's `digdug` sits at ~50-160 Hz - so
+`tsp_natural`'s load filter (45.25) takes 5.4 dB of it and the speaker the
+rest: its part at 400 Hz and up was 15 dB under the melody's, and the owner
+heard the bass line as missing, and 1:20-1:29, where the bass IS the melody,
+as a drum tick. The ear hears a note's pitch from its harmonics when the
+fundamental is gone, which is how a small speaker plays bass at all - so a
+bass sample is SQUARED UP at load, and its harmonics land where the speaker
+plays.
+
+**Which samples**: one the load filter took three quarters of - `sum |x| >
+4 sum |y|`, one signed dword summed inside `tsp_natural`'s own pass (`BX`
+and `[tsp_bhi]`), in BEVERLY.MOD `digdug` (0.236) and `bassdrum2` (0.185)
+against 0.31 for the next and ~0.45 for the melody. **Which kind**: a picked
+sample's zero crossings after the filter - under one in sixteen samples is a
+slow wave, a BASS (`digdug` ~24 in 1,000), more a noisy thud, a DRUM
+(`bassdrum2` ~250).
+
+- **A bass** is squared into the WHOLE stored range, `y << 4` clamped at
+  +-127 - the load filter stores every sample at half scale, and those 6 dB
+  are what a bass may use - and then through TWO passes of a steeper
+  high-pass, `y = y - y/4 + (x - x_prev)` out clamped to +-127, which take
+  the fundamental the squaring grew and keep the harmonics.
+- **A drum** is squared gently, `y << 2` clamped at twice its own filtered
+  peak, and through the load filter again: at the bass's strength the kick
+  drowned the high notes on the owner's 286.
+
+Measured on the card-less 5150 at 4,800 Hz, 95 s of BEVERLY.MOD, the energy
+at 400 Hz and up at the level played:
+
+| | level | clip | 0:30-0:35 | 1:20-1:29 |
+|---|---|---|---|---|
+| without it | 5 | 2.9% | 27.5 dB | 25.8 dB |
+| with it | 5 | 5.4% | 29.8 dB | 29.0 dB |
+
+The owner: *"It's audible! The speaker is still terrible at this, but this is
+good enough to show off."* What did NOT work is in
+docs/plans/SPEAKER-LEVELLER-NEXT.md: a plain square (the shape keeps ~80% of
+its energy under 400 Hz at these notes, so x16 bought the bass section
+0.8 dB), a narrow pulse (too little energy under an 8-bit peak), and the whole
+stored range with no second filter (38% of the song clipped, the level down
+to 4: the square's fundamental took the headroom).
+
+**Which samples** is decided on ONE BYTE IN EIGHT (`tsp_bsum`, a sparse pass
+before the filter and one after), and that is a measured decision: the first
+version summed every byte inside the filter's own loop, and on an 8088 that
+is ~170 cycles a byte of instruction fetch - BEVERLY.MOD's load went from
+2.86 s to 6.16 s. Sparse, the cut moved to the middle of the gap - 7 sum |y|
+under 2 sum |x|, a filter that took more than ~5/7 - because one in eight
+reads `digdug` at 0.239 and `bassdrum2` at 0.172 against `dxtom`'s 0.307
+(one in sixteen read `digdug` at 0.256, over the old 1/4 cut). The load is
+now **4.01 s against 2.86** on a 4.77 MHz 8088, MEASURED as `tsp_natural`'s
+cycles on MartyPC; most of the difference is the squaring and the passes over
+the two samples it picks, which a module with no bass does not pay.
+`soak -k trkload` holds it under 4.4 s.
+
+`tools/os88spkfx.py`'s `tracker_natural` is it exactly, and `soak -k lzmod`
+compares every byte of a module Tracker has loaded against it - 116,085 of
+BEVERLY.MOD, the squared samples included - so a wrong route, sum or clamp
+fails there (5,283 bytes differ with `tsp_bass` not called). `-DTSP_NOBASS`
+assembles the Tracker before it, byte for byte - the A/B. It costs 373 bytes
+of `TRACKER.O88`'s image and no kernel byte.
 
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
@@ -80041,9 +83054,9 @@ does. Four things differ, and each is doing work:
 - **It is a `.DRV` file.** The mount types a directory entry as an
   application only when its extension is `O88` (§19), so a driver is *data*
   to the file manager and can never be double-clicked into the loader.
-- **Its header version is 7** (`DRV_VER`, §20.2.0; it was 4 until the API
-  table moved). A package is 6, so if one ever did reach
-  `ld_check_hdr` it would be refused there too. Two independent gates,
+- **Its header version is 9** (`DRV_VER`, §20.2.0; it was 4 until the API
+  table moved, and 7 until two cells were re-contracted). A package is 8,
+  so if one ever did reach `ld_check_hdr` it would be refused there too. Two independent gates,
   because "the kernel ran a driver as an application" is not a failure mode
   worth one gate.
 - **It has no instance record**: no dock tile, no Task Manager row, no
@@ -80689,7 +83702,9 @@ the wrong settings. Every value now travels with a key that says what it is.
         db  data[len]
 ```
 
-`DK` is the dock's one byte (§30.5), a key of its own at ver 1, on `kern_big`
+`FD` is §31.14's Floppy page, two bytes at ver 1 on `kern_big` — the four
+drives' overrides and the read bound, one record so the page costs one key
+entry and one header. `DK` is the dock's one byte (§30.5), a key of its own at ver 1, on `kern_big`
 only. Seven keys at the time this paragraph was written, 81 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
 clock 12/24, `CS` clock seconds, `SM` scheduler mode, and
 `HD` — a **driver's** own settings, whose contents the kernel does not know
@@ -81328,6 +84343,19 @@ int 13h for that drive on that card's jumpers, and re-deriving it from the
 6-byte DCB interface at 320h would buy nothing a user can see while costing an
 8237 path, an IRQ 5 hook and a per-card jumper matrix nobody can test.
 
+**Rung 0 asks 81h only when 80h counted two.** `AH=08h` returns the number of
+fixed disks the BIOS knows in `DL`, and that is the bound — it was named as
+the bound in the driver's own comment and never read, so 81h was asked
+whatever 80h had said. An AT BIOS answers `AH=08h` for a drive it does not
+have with **CF clear** and CMOS drive type 1's geometry, 305 × 4 × 17: a
+phantom 10MB `BIOS1` under the real disk, reported off a 286 on MR BIOS 1.65
+with one IDE drive and `Fixed Disk 81: None` in its own setup. `hd_bios_geom`
+banks `DL` in `[hd_pcnt]` and `hd_probe` asks 81h only when 80h answered with
+a count of two or more; a BIOS that does not answer for 80h has no fixed disk
+to number from, and rung 1 still finds an IDE one. Two drives behind XT-IDE
+count 2 and list both. The resident grows +56 bytes with this and §52.13.5's
+key thunk together, and stays 5,120.
+
 **Rung 1 is gated on `OSAPI_CPU_INFO` ≥ `CPU_286`, and that is arithmetic, not
 caution.** An 8088's `in ax, dx` is two 8-bit bus cycles at the same port, so
 on an 8-bit slot the drive's high byte is simply lost — which is exactly what
@@ -81782,6 +84810,88 @@ installer does not read it — an install puts the system on a slot as it
 stands (§52.10), and `[hd_tsize]` is the disk tool's alone. All of it is in
 `HDDTOOL.DRV`, so it costs no resident byte - 512 bytes of that image, the box's share
 142 of them, and the tool's 19KB claim did not move.
+
+#### 52.2.8 The drive map — where on the drive each slot is
+
+The rows say what a slot holds and how big it is, and nothing said **where**.
+That is the one question a table cannot answer from its rows, and it was asked
+off a real drive: a 128MB disk with two 32MB partitions an old tool had put in
+the MIDDLE, 63MB free, and every empty slot offering `31`. The tool was right
+— the free space is two holes and §52.2.1 takes the larger — and nothing on
+the screen said so.
+
+So between the slot rows and the size line is a bar, the whole drive to
+scale, an underline beneath it, and one line of text:
+
+```
+[1####|2@@@@                ]   a slot is its DIGIT (one cell, white on black)
+      ======                    and a fill: SOLID black for a volume (Formatted
+Free 63M, largest 31M           or Booted From), 50% GREY for anything else the
+                                table holds; white is free space
+```
+
+- **The underline is the selected slot's extent**, exactly as Format would
+  take it (`hd_slot_extent`). For a slot in use that is its own entry; for a
+  FREE slot it is the **hole** — which is the whole point: pick the empty slot
+  and the underline lands on the larger gap, with the other one plainly beside
+  it. With no room anywhere there is no underline.
+- **The line is every hole's sectors and the largest a Format would make of
+  one** — `hd_slot_hole`, §52.2.1's walk with NO slot excused (`[hd_xslot]` =
+  FFh matches none), which sums each hole into `[hd_xsum]` as it passes. The
+  largest is cylinder-trimmed and under the ceiling, so it is the number a
+  free slot's size line offers. Whole MB, rounded down, like the rows.
+- **A click on the bar picks the slot under it** (`hd_map_hit`), or on white
+  the first FREE slot — not "that hole": Format still takes the largest one,
+  and the underline says so the moment the click lands. Choosing the hole is
+  §52.2.1's behaviour to change, and it is deliberately not done here.
+
+**Measured where the tool already measured, never in the painter.** Both
+figures come out of `hd_slot_extent`, which writes `[hd_fbase]`/`[hd_fsecs]` —
+and a paint can arrive at any moment, including while the installer's copy
+holds those two words as the partition it is writing. So `hd_tw_szmax` — the
+tool's own open, row click, Format and Delete, which is where it always wrote
+them — stores the columns and the two totals (`[hd_mux]`, `[hd_mfree]`,
+`[hd_mlarge]`, and the scale in `[hd_mtot]`/`[hd_mt16]`/`[hd_mk]`), and
+`hd_tw_map` only reads them.
+
+**A column is `x * 280 / total`, in one multiply and one divide** (`hd_map_x`):
+the total is shifted right until it fits a word (`[hd_mk]`), the extent by the
+same, so the product fits a dword and the quotient — never past 280, because
+an extent past the end of the drive is clamped to it first — fits a word and
+cannot fault on a hostile table. A segment ends one column early
+(`hd_map_span`), so neighbours read as two.
+
+**Every pixel is written once** (PERFORMANCE.md rule 2): the content is white
+on a full paint, the bar's inner height is ONE glyph cell (8px), the digit is
+that cell at the segment's left, and the fill starts after it. A segment
+narrower than nine columns is a fill with no digit. At most ten calls — the
+frame, four cells, four fills, the underline — and the line is one run.
+PREDICTED from PERFORMANCE.md's table rather than measured: ~15ms of bar and
+~20ms of line on a 4.77MHz 8088, against a full repaint of ~230ms that every
+row click already pays.
+
+**What it cost, measured, and what paid for it.** The map is 564 bytes of
+`HDDTOOL.DRV` and the `WF_KEEPH` call nine more, none resident — and as first
+built that crossed the image's sector buffers' 512 alignment (`hdsec.inc`), so
+the tool's claim went 20KB to 21KB while open and the packed file 14,157 to
+14,653 bytes: one more 360KB cluster (15 against 14) of a system disk with
+eight to spare. Three things already in the image took it back, and none of
+them is a feature:
+
+| | raw | packed |
+|---|---|---|
+| ONE button tail, `hd_btn_draw` (`tool.inc`), where the Format window, the installer and the page (twice, for its +/- pair) each carried one with a record, a rect and two staging words of its own | −239 | −112 |
+| `OS88UI_NOGEST`: all three windows drive their buttons through `os88ui_arm`/`fire`/`armed`, so the record-based gesture half (§20.5.1.3.4) was compiled in and never called | −226 | −195 |
+| `hd_dev_row_ck` is the resident's alone (`%ifndef HD_TOOL`), and `hd_map_x` clamps after its shift and keeps no dword total | −30 | −29 |
+
+The near-duplicates were the cheap half on DISK — LZ4 had already matched most
+of one button tail against another — and code nothing calls was the dear
+half. Net: the image 19,581 → **19,867** bytes, still a 20KB claim, and the
+packed file 14,157 → **14,317**, 14 clusters with 19 bytes left before a 15th.
+`HDD.DRV` is byte-identical. The window grew 28px (`HTW_H` 150 to 178), past
+CGA's 156-row desktop band, so it sets `WF_KEEPH` (§11.93) and hangs over the
+dock whole rather than being cut at it with its buttons drawn through the cut.
+`tests/hdmap.py` is the gate.
 
 ### 52.3 The formatter
 
@@ -82507,6 +85617,16 @@ image while the Drives page is open (§52.10.14's reason for naming it).
 `tests/inststate.py` is the gate: three VHDs whose slots 2-4 are rewritten
 before boot, every row read out of the framebuffer against the kernel's glyph
 table. The driver before this reads `MISSING` on all four rows of the first.
+
+#### 52.10.4.3 CLOSED: the slot carried over from the last open
+
+`hd_tw_open` sets the Format window's slot to 0 on every open; `hd_iw_open`
+never touched `[hd_isel]`, so the installer opened on whatever slot it had
+last shown for as long as `HDDTOOL.DRV` stayed loaded — a slot picked on
+another drive, or on this one before it was repartitioned. `hd_iw_scan` keeps
+the carried slot whenever it is usable, and on a blank disk every slot is, so
+a fresh drive could open on Slot 4 and be installed there. It starts at 0 now
+and the scan moves it to the first usable slot, exactly as before.
 
 ### 52.10.5 A disk already in the machine is not asked for
 
@@ -83342,7 +86462,9 @@ copier can use. That is also the rule the small shape got wrong by having no
 loop at all.
 
 **A package needs no new slot for any of this.** `OSAPI_FILE_READ_AT` is
-already raw and already answers the bytes delivered; a raw copy is
+already raw and already answers the bytes delivered (the take is
+`OSAPI_FILE_READ_SEQ` through `os88_rseq` since §18.4.8.1, which IS
+`READ_AT` without the walk, raw alike); a raw copy is
 `READ_AT` → `WRITE` for the first chunk, `READ_AT` → `APPEND` after, and stop
 on a short take. Bit 0 of `OSAPI_FILE_FIND`'s +22 is how a caller knows the
 question even arises.
@@ -83380,6 +86502,20 @@ second copy is a replace that moves it); with one loop walking every level it
 has to say `[hd_ilvl] == 0`, or a user's own file of that name in a folder of
 their own would be skipped for sharing a name with the kernel.
 
+
+#### 52.10.13.2 …and each file is one HELD stream, system files included
+
+Every chunk after a file's first was an `OSAPI_FILE_APPEND` (or
+`APPEND_SYS`), and on the ST-225 each of those was three long seeks - the
+directory, the FAT and back (docs/plans/STREAM-WRITER-PLAN.md §1). Each file
+is one `OSAPI_FILE_WRITE_SEQ` stream with `WSEQF_HELD` now, `WSEQF_SYS` for a
+hidden + system one (§18.4.9), its token in `hd_itok`, and `hd_icopy_one`
+closes it at `.ok` - from the source side too, the commit hopping to the file
+and back. `KPAD.TMP` (§52.10.15's pad) is one held stream as well: the
+kernel's own WRITE is the next write on that volume and commits the pad
+first, so its clusters are taken before the kernel's are placed, which is
+all the pad is for. An install that stops part-way is an install that has
+failed, so HELD's one loss is nothing here.
 
 ### 52.10.14 …and it builds the volume's OWN `ASSOC.DAT`, because a copied one is a lie
 
@@ -83484,7 +86620,7 @@ Per type-1 entry (§19.1 — a PACKAGE, not "a file"):
 - **one `OSAPI_FILE_READ_AT` of the first cluster**, whose capacity must be a
   whole number of clusters (§18.4.4) — `OSAPI_FILE_DFREE` answers the sectors
   per cluster, which is what sizes the claim below.
-- the header is checked as `build_assoc` checks it — `'O8'`, version 6 (`PKG_FMT`) — and
+- the header is checked as `build_assoc` checks it — `'O8'`, version 8 (`PKG_FMT`) — and
   the icon is the 64 bytes at +32 when flags bit 0 is set, the declaration
   block at +96 (or +32 with no icon) when bit 1 is.
 
@@ -83707,6 +86843,48 @@ boot, and the pad skipped leaves the kernel in the holes (38–41, 56–57, 61�
 and the rows built on it (`hdboot`, `instassoc`) still test the erasing
 install they were written for, and it now refuses a volume on which the
 fixture's DOS survived.
+
+#### 52.10.15.1 CLOSED: a hard disk the HOST built could not be upgraded
+
+**Field report**: a keep-install from current system disks onto a
+`make viddemo` disk (§98.5, ST-238R on an ST11R) paused for a long time and
+stopped with the caption reading `ARCHIVO.F88`. That caption is
+`hd_icopy_one` naming the file it stopped on, and the file is the first
+ORDINARY file the walk reaches — root, `SYSTEM/`, the empty `APPDATA/`, then
+`FONTS/`.
+
+**The installer was right and the volume was wrong.** `os88disk.py --hdd`
+stamped a hard disk with a FLOPPY's attributes (§19.6): read-only + hidden +
+system on `KERNEL.SYS` and every `.DRV`, and read-only on everything else.
+A keep-install replaces each file the install disks carry, and
+`dskw_pmask` refuses to replace a read-only entry — forgiving it only on a
+file already wearing hidden + system (§19.6.2's `DSKW_KPROT`). So the kernel
+and the drivers went down and committed, and the first font answered
+`FERR_PROT`. Every package, face and document on the volume was the same
+`0x21`, so it was the whole of the copy that could not proceed, not one file.
+Measured on MartyPC's XT-IDE (the same 615/4/26 geometry, the ST11's hidden
+cylinder dropped) with the field VHD transplanted: `ARCHIVO.F88` exactly, and
+with the read-only bits cleared on the host the same install runs to `Done`.
+
+**The fix is the generator, and it costs no kernel byte.** Under `--hdd`,
+`os88disk.py` now stamps what the installer itself writes: `KERNEL.SYS` and
+every `.DRV` `0x26` (hidden + system + archive — `OSAPI_FILE_WRITE_SYS`'s
+create plus the commit's archive), every other file `0x20`, `ASSOC.DAT`
+`0x06` as before. A host-built hard disk and an installed one are then the
+same volume. It reaches every `--hdd` image — the demo video disks and the
+live USB/CD (§80) alike. The floppies went the same way in the same change
+(§19.6): only `KERNEL.SYS` and the `.DRV`s are read-only there now, and
+everything a user might take off a system disk is theirs to take.
+
+What it does not do is change the kernel's rule: a driver still cannot
+replace an ordinary read-only file (§19.6.2), so a volume carrying the OLD
+stamp — any `VIDDEMO-*.VHD` or live image built before this — still stops
+the same way. Rebuild it, or clear the bit on the host
+(`mattrib -i <partition> -r -/ ::/*`) and install again.
+
+`tests/unit/t_hddgeom.py` is the gate: it builds a small `--hdd` volume from
+`make`'s own artefacts and reads every class's attributes with a walker of
+its own. With the old stamp it fails on all four classes.
 
 ## 52.11 Two images: the transport, and the tool
 
@@ -84188,6 +87366,30 @@ the machine genuinely holds. The next kilobyte therefore needs the image under
 code out — the probe, the IDE rung, the partition-table read and the
 config load are ~1.7KB between them, and 1,025 of that is the threshold.
 
+#### 52.13.5 CLOSED: a click on a drive row selected nothing, and the arrows
+
+§52.13's table sends a selection back through `HSV_SEL`, and `hd_sel_set` was
+written to do it — and nothing called it. The row click stored `[hd_sel]` and
+`[hd_msgc]` in the **tool's** copies and repainted, and the repaint's first
+act is `hd_sync`, which copies the **resident's** over them. So the click
+flashed the pane and left the highlight where it was, on every machine with
+two devices. The row click and the three other captions the page set locally
+(`HDM_TYPED` and the two refusals) go through `hd_sel_set` / `hd_say` now,
+which write both sides.
+
+**The page takes keys** (§31.9.2): `DSV_CPKEY` is `hd_cp_key`, a thunk that
+forwards `HDT_KEY` and does not load the image — a key reaches this page only
+after a paint, and a paint is what loads it. Up and Down move the drive
+highlight and Left and Right the C/H/S field, the two selections a click
+makes. Nothing a key does writes: the geometry is still changed with `-` and
+`+`. `HDT_KEY` carries no pane origin, so the page draws at the one its last
+paint banked, `rp_key`'s arrangement (the panel does not move its pane under
+a key). A tool image older than the resident refuses the verb and the key is
+dropped, which is what it was before. +136 bytes of `HDDTOOL.DRV`, absorbed
+by `hdsec.inc`'s `align 512`, so `HDTOOL_KB` is unchanged; the thunk is in
+§52.1's +56. `kern_small` has no panel key handler (§62.9.15), so there the
+page is mouse-only as before.
+
 ## 53. fsx.inc — fullscreen exclusive
 
 §11.2's fullscreen surface is a real window: the desktop's mode, the
@@ -84238,7 +87440,7 @@ invariant in §12/§13 needs an fsx gate — the clock cell, `fdlg_reap`, the
 ladder's branches, the cursor. The bracket makes the only rule that matters
 — **the kernel never runs while the mode is foreign** — true by
 construction, because the kernel is parked on the stack underneath the app.
-`osapi_snd_play` blocks and the §38 dialog is modal for the same reason.
+`os88pcm_play` blocks and the §38 dialog is modal for the same reason.
 
 What falls out, all of it free:
 
@@ -84407,9 +87609,8 @@ each need their own code:
 - `sch_account`'s pause (§53.2.1);
 - `fsx_restore`'s unconditional `sch_fast_off`, which is therefore also the
   rate's teardown on every way out of the bracket;
-- `spk_pcm_run`'s park and re-arm (§34.4), which sets its own pace on
-  channel 0 for a clip and puts `[sch_fast]` back after it, and so puts the
-  rate back too.
+- the clip door's park and re-arm (§34.4), which parks `[sch_fast]` at its
+  grant and puts it back at its release, and so puts the rate back too.
 
 **The hook** is called on **every** IRQ0, after the EOI (from the ROM, on a
 tick), as `wm_pkgcall` would call it: through the package's dispatcher, with
@@ -85035,6 +88236,37 @@ Rule 3 is what costs `kern_big` its 7 bytes.
 
 ---
 
+### 22.3.1 …and a paste re-lists only the windows it could have changed
+
+`fm_paste_res` ends every paste with `fmv_reload_all` and `fmv_repaint_all`,
+the coherence pass §22.3 says a multi-file operation owes — and it re-listed
+and repainted **every** Disk window on the screen. A Copy writes nothing on its
+source volume, so the window the file was copied FROM paid a full mount for a
+listing that could not have changed: on a floppy that is the FAT and the root
+read again after a seek back to cylinder 0, plus an icon harvest. Measured on a
+floppy-to-C: paste, it was the two slowest `int 13h` after the data itself,
+~0.5 s of a 9.9 s paste on `os8088_xt_hdd`.
+
+A window is now re-listed when either:
+
+- **it is DIRTY.** `fmv_mark` marks every window on a folder any write of the
+  operation touched — `dskw_sync` calls it ahead of the batch test, so a tree
+  walk marks every folder it made or wrote into — and it is also how any write
+  BEFORE the paste that nothing has collected yet is recorded, so a debt the
+  old pass paid by accident is still paid; or
+- **it shows a volume the operation WROTE**: `[fcp_ddrv]`, and `[fcp_drv]` too
+  when it was a Cut. The volume and not the folder, because the status line's
+  Free figure (§22.7) belongs to the volume, and a window on another folder of
+  it would otherwise go on quoting the space the paste just took.
+
+A window neither describes keeps its cache and its pixels. **The repaint union
+is the reload's now** — the reload folds each visible window it re-lists into
+`fmv_ux1`… as it goes, and `fmv_repaint_all` only commits the union. It walked
+`wm_zord` for every visible Disk window, and once the reload is selective a
+separate walk would have to re-derive the predicate after the reload had
+already cleared its `FS_DIRTY` half. `kern_big` **−5 bytes**: the walk it
+deletes is bigger than the predicate.
+
 ### 38.0 ON `kern_small` THIS IS AN ON-DEMAND MODULE (§2.8)
 
 `kern_big` keeps every body in §38 resident in `.cold`, unchanged to the
@@ -85529,7 +88761,9 @@ claiming again, sticky or not, is still no news.
 harvest, and pass 4b decides the listing's document icons after it, so that
 window is already right. Marking it cost a repair and a second paint of the
 same pixels straight after the first, on every navigation that taught the
-machine an extension. The shed still marks every window.
+machine an extension. The shed still marks every window. `kern_small` has no
+associations (§54.0), so it assembles neither the entry nor its compare: its
+walk marks every window, which is all the shed ever asks of it.
 
 **The repair's second half is the picture.** After a shed the references
 dangle but the pixels are right, so the repair never touched the raise cache
@@ -90007,7 +93241,7 @@ is. It is answered by `FSV_CHDIR` rather than by a verb of its own because
 **`dsk_chdir` is the only thing that ever moves `[dsk_cwd]`** — the driver is
 being told where to go at the exact moment it could say what is above it, so
 a verb of its own would ask a question `FSV_CHDIR` has just answered.
-`disk_mount` banks it in `[dsk_fsup]` and `dsk_synth_up` spends it, which is
+`disk_mount` banks it in `[dsk_fsup]` and `dsk_up_open` spends it, which is
 one word of `.bss` against a whole round trip per listing.
 
 **A DRIVER CANNOT WRITE THE LISTING AND MUST NOT LEARN HOW.** `FSV_LIST`
@@ -90317,7 +93551,7 @@ the `Size … Free …` line are right, `..` is synthesized, and every icon is
 
 What the kernel gained: `drv_fs_call`; `disk_mount`'s `DVK_FILE` branch;
 `dsk_xfer`'s refusal; `dsk_free_clus` → `FSV_DFREE`; `OSAPI_FS_ENT`;
-`dsk_synth_up`'s banked parent handle; and `DVK_FILE` awareness in
+`dsk_up_open`'s banked parent handle; and `DVK_FILE` awareness in
 `dsk_vol_fixed`, `dsk_vol_del`, `dsk_vol_drop_drv`, `dsk_vol_add` and
 `dsk_here_ok`. **Measured: `.text` +341, `.bss` +5, `.cold` +0 — one image
 rung, `KERN_SIZE` 99,840 → 100,352, spare 2,560 → 2,048 (four steps).** That
@@ -91250,7 +94484,9 @@ whole 8KB, so what is left over at the end of a 32,768-byte run of chunks is
 still a multiple of 4,096. Lose that and the final append of a 40KB store is
 fine while a 216KB one is `FERR_NAME` — a size-dependent failure with nothing
 on screen to connect it to the size. `OSAPI_FILE_READ_AT`'s two alignment
-preconditions are satisfied by the same constants on the way back.
+preconditions are satisfied by the same constants on the way back - and the
+Load reads through `os88_rseq` (§18.4.8.1), so its arena costs one FAT link a
+chunk rather than a walk from the front of the image.
 
 **Preserve As opens where the PANEL stands, and after working on the RAM disk
 that is the RAM disk** — §38.10's instance folder doing exactly what it says.
@@ -91295,6 +94531,17 @@ the file alone. The failure is quiet by design: the disk the image was on may
 simply not be in the drive, and a machine that boots to a notice because a RAM
 disk could not be restored is worse than one that boots to an empty one — the
 page says so when it is next opened.
+
+##### 62.9.12.1 …and the arena is one HELD stream
+
+The chain table and every arena chunk after the metadata block's WRITE were
+`OSAPI_FILE_APPEND`s - through the XMS bounce, **4,096 bytes at a time**, so a
+multi-megabyte RAM disk was about a thousand lookups and a thousand walks of
+a chain that grew each time. They are one `OSAPI_FILE_WRITE_SEQ` stream with
+`WSEQF_HELD` now (§18.4.9), token in `rd_itok`, closed once the arena is
+down. An image is useless until it is whole and Load refuses a short one
+(above), so HELD's one loss is nothing. `RAMDISK.DRV` does not ship on
+`kern_small` (§62.9.15), so it needs no fallback.
 
 #### 62.9.13 Ticking the row no longer mounts anything
 
@@ -100256,6 +103503,19 @@ inside it. That is the standing hazard in this package and the reason §69.7's
 ceilings are written as constants next to the copies that use them rather than
 inferred at the call site.
 
+**While the parser walks a document ES IS THE SOURCE CLAIM, so a `stos` into
+one of the package's own variables writes OUTSIDE IT.** Every bss field is an
+offset past the ~22KB image and the claim is 8KB, so the store lands in
+whatever heap block follows the claim. Two routines did exactly that from the
+package's first commit. `tp_tab_body` cleared `tp_colw` (12 bytes) on every
+`\begin{tabular}`, and on a VGA machine that was a Disk window's raise cache
+(§11.96): closing TeXPad over it put back a cyan line through a row of the
+listing. `tp_c_bslash` copied a `\textbackslash` command's name the same
+way, so `Type \textbackslash section` printed `Type \ype`, a leftover of the
+previous word. Both now write with ES = DS or through `[di]`, and
+`tests/tpstore.py` (soak) is the gate on each. The rule is SPEC.md 20's for
+every package: ES is never your segment unless you just made it so.
+
 ### 69.5 Export: PDF 1.4 and PostScript Level 1
 
 Both writers build the whole file in the export claim and hand it to
@@ -102929,6 +106189,18 @@ floppy has two clusters left (§24.3.1). Scaffolding earns its keep while the
 scaffold is up; what survives is the byte no other observer can replace and
 the account of what the counters said.
 
+#### 70.11.7 A received file is one streaming append
+
+`tz_commit`'s chunks after the first were `OSAPI_FILE_APPEND`s, 4,096 bytes
+each, so a download was QUADRATIC in its length the way FTPD's upload was
+(§77.49): a 1MB file is ~256 appends and ~18 seconds of chain walking alone.
+They are PLAIN `OSAPI_FILE_WRITE_SEQ` calls now (§18.4.9), token in
+`tz_wtok`, which each file's create zeroes: a token is a 16-bit generation,
+so one kept from the last file could equal `[dsk_mgen]` again after 32,768
+writes and name that file's record. PLAIN because every chunk the sender is told was received must be
+on the disk, which is §70.11.3's promise. A `FERR_NAME` - `kern_small`'s cell
+- is asked of APPEND instead, which answers it exactly.
+
 ### 70.12 The gates
 
 The transport is proved by `tests/socktest` and `tests/brfetch` and is not
@@ -104768,7 +108040,7 @@ Three things follow, and each is why a directive is written the way it is:
 The 32-byte header itself is emitted by the C runtime include and not by
 `OS88_HEADER`: that macro emits `org 0` of its own and closes with the `$$`
 arithmetic above, so a C package uses a sibling pair of macros with the same
-field layout, the same magic, the same version (`PKG_FMT`, 6) and the same `FF D5 CB 00`
+field layout, the same magic, the same version (`PKG_FMT`, 8) and the same `FF D5 CB 00`
 dispatcher bytes at +12. **The header a C package emits is byte-identical in
 shape to an assembly package's** — that is the requirement, and `os88pkg.py`
 plus `ld_check_hdr` (§21) are the two things that prove it on every build.
@@ -108450,7 +111722,12 @@ writes nothing, so the failure is a refused transfer rather than a wrong file.
 **`OSAPI_FILE_READ_AT` being stateless is what makes the download half work.**
 The offset is the whole argument — there is no handle and no cursor — and
 between two of these the worker has been out on the wire, where anything at
-all may have walked a directory.
+all may have walked a directory. The read is `OSAPI_FILE_READ_SEQ` now,
+through `os88_rseq` (§18.4.8.1), and nothing in that changes: the offset is
+still the argument and the name still goes in on every call, and the cursor
+only caches the walk, which a mount or a write in between makes the kernel
+rebuild from the name. What it takes away is `READ_AT`'s walk from the front
+on every chunk, which made a `RETR`'s CPU grow with the square of the file.
 
 ### 77.4 Four handles is the floor, and this is what spends them
 
@@ -111640,6 +114917,26 @@ thirteen-assertion gate had been silently unrunnable since that snap shipped.
 
 
 ---
+
+### 77.49 A STOR is one streaming append
+
+Every chunk of a STOR after the first used to be an `OSAPI_FILE_APPEND`.
+That meant a lookup of the name and a walk of the file's chain from its
+first cluster to its last, per chunk, so an upload was QUADRATIC in its
+length (docs/plans/DISK-CPU-PLAN.md 6). It is `OSAPI_FILE_WRITE_SEQ` now
+(§18.4.9), through one token, `fd_wtok`: a lookup and a walk per FILE.
+The create zeroes it, so no earlier STOR's token can be hot (§70.11.7).
+
+**PLAIN, not HELD.** Each chunk is committed by the wake that stages it
+(§77.1), and the `gfx_unlock` after that wake would commit a hold anyway.
+So HELD would buy nothing but a commit in a different place, while PLAIN
+keeps §77's own promise that every chunk that has been acknowledged is on the
+disk.
+
+**On `kern_small` the cell refuses** with `FERR_NAME`, and FTPD falls back to
+`OSAPI_FILE_APPEND` for the rest of its run (`fd_noseq`). That is exact, not
+a guess: on `kern_big`, `FERR_NAME` is the answer APPEND would give for the
+same arguments.
 
 ## 78. WIREFRAME — a rotating solid, drawn only with lines (`apps/wire/wire.asm`)
 
@@ -117604,13 +120901,14 @@ pauses both the kernel refill task and the package worker (§34.5's pinned "a
 stream fed live from disk *will* underrun" rule):
 
 ```
-disk --OSAPI_FILE_READ_AT--> 32 KB look-ahead ring (heap claim) --decoder-->
+disk --OSAPI_FILE_READ_SEQ--> 32 KB look-ahead ring (heap claim) --decoder-->
     2048-byte halves --verb 6/1--> 16 KB SND ring --> SB DMA
 ```
 
 - **The UI task does every disk read**, because the file slots are UI-task
   context only (§20.6 rule 7). `ap_refill_chunk` reads a **`AP_RD_CHUNK`
-  (16 KB) gulp** — clamped to the free room in the ring and floored to a whole
+  (16 KB) gulp** through `os88_rseq` (§18.4.8.1), one FAT link a gulp —
+  clamped to the free room in the ring and floored to a whole
   number of clusters — from the data chunk, head-skipping the first read's
   pre-data bytes and tail-clamping the last read at the data end, and
   `ap_ring_put`s the usable bytes into the look-ahead ring. The gulp size is a
@@ -117765,9 +121063,12 @@ sample handed on is
 which needs no clamp of its own — `predictor >> 8` is [−128, 127], `+ 128` is
 [0, 255]. **There is no intermediate 16-bit PCM buffer.**
 
-Measured decode cost is well inside the background budget: at 11,025 Hz the
-inner loop is an estimated ~10–15 % of a 4.77 MHz 8088, against Tracker's
-44–165 % mixer (`PERFORMANCE.md` Sets 20/68) — a streamer does no mixing. The
+The decode cost was ESTIMATED here as ~10–15 % of a 4.77 MHz 8088 at 11,025
+Hz, and §86.21 measured otherwise: beside the speaker's pulses an 8088 cannot
+keep an 11,025 Hz IMA file fed at 5,512 Hz and can at 4,800, which puts the
+decode at most of what the pulses leave rather than a tenth of the machine.
+(Against Tracker's 44–165 % mixer, `PERFORMANCE.md` Sets 20/68, a streamer
+still does no mixing.) The
 decoder stays in assembly (it *is* the shim), not because C would be too slow
 but because the SDK does not expose the stream verbs to C at all.
 
@@ -118034,6 +121335,184 @@ the procedure); QEMU is functional verification only, where 28 s of PCM8 @
 22 kHz streams gap-free (0 quiet windows in the capture) with 14 s of it while
 another window holds the focus, and where the `AP_RD_CHUNK` change (§86.5.2)
 cut streaming reads from ~5/s to ~0.6/s with no underruns for either codec.
+### 86.21 No card: the PC speaker, and the desktop given up for it
+
+**With no Sound Blaster the player plays through the PC speaker, on its
+own** (docs/plans/completed/SPEAKER-PCM-PLAN.md; the owner: *"sound and nothing else is
+better than no sound"*). `ap_open_track` prepares a track the same way for
+either (`ap_prep_track`: the file parsed, the look-ahead claimed and primed)
+and then goes to the card (`ap_open_card`) or to `aps_open`
+(`apps/audio/apspk.inc`). The test is `SND_CAP_PCM_BG`, so the Control
+Panel's route to PC Speaker (§34.11's lesson 5) sends a machine WITH a card
+here too.
+
+**It inverts §86's premise, and says so.** The pulses need IRQ0 at the
+sample rate, which only a package's own `FSXF_RATE` bracket may have (§53.2.2,
+§34.11), so a speaker play is a BRACKET: the desktop frozen, every other
+program stopped, the pointer gone, for as long as it plays. It is the Video
+Player's in-window play (§98.3.7) - the **imposter window**: this window's
+clock and progress bar are the only pixels that move (`aps_draw`, through its
+own clip, only when either changed, at most every `AP_DRAW_TICKS`), and the
+status line says `PC speaker - click or Space to pause`. A click anywhere or
+Space takes it back to the desktop PAUSED - the session kept, the ring and
+CONS exact - and Play, Space or Enter resume it from the very sample it
+stopped on (`os88spk_go` plays from CONS); Esc or S stops; N/Right and
+P/Left change track inside it. The playlist plays on inside the bracket,
+track after track, each opened by the bracket's own body (the file slots are
+the UI task's, and this IS the UI task).
+
+**The bracket's body is the producer.** No worker: under a sample ISR a task
+switch rides the 18.2 Hz tick and a yield is ~2,200 cycles at IF = 0
+(§34.11.3), so `aps_main` reads the disk, decodes, resamples, shapes and fills
+the ring itself, and waits in `FSXW_FRAME` when it is full. The rate hook only
+counts periods, and the period is a whole tick (divisor 65,535), since every
+period's entry costs about a pulse. **The ring is 16 KB (2 s at 8 kHz) and is
+filled FULL before the door opens**, and **a dry ring plays a run of
+`OS88SPK_DRYN` samples of silence a grant** (§34.11.2): the first build
+granted one, a starving producer then made every pulse a grant event, the
+pulses took the machine the producer needed to catch up, and a 5-second clip
+played for 9.5.
+
+**The plan** (`aps_plan`) is the file's rate S to the speaker's R. A file
+of COUNTS (§34.11.9's `o8sp` kind 2) plays 1:1 and is copied; everything else
+goes through §34.11.9's shaper - with its pre-emphasis, or without for a file
+already shaped on the host (kind 1). R is S when S is at most the rung's TOP;
+else S / k averaged over k samples when k divides S, is 3 or less and leaves R
+at 4,679 Hz or more (the box - a cheap anti-alias; more than three samples
+cost more than the step they save); else a 16.16 step through the source to
+TOP, its whole part patched into the loop's `adc bx, imm16`. A 1:1 span is
+emitted straight out of the look-ahead ring whenever it does not cross that
+ring's seam, so a plain 8 kHz file is never copied at all.
+
+**The ladder is the calibration** (the owner's question 5), and it is live:
+TOP is a rung - an 8088's 8,000 / 5,512 / 4,800 Hz, a 286's 24,858 (a pulse
+of 48 counts, §34.11.8) / 16,000 / 11,025 / 8,000 / 5,512 - and an 8088
+starts IMA ADPCM a rung down, its decode being paid at the SOURCE rate. A
+play whose ring lead falls under a quarter (`APS_LOW`) while the file is
+still coming is BEHIND - this file, this rate, this CPU and this disk
+together - and `aps_behind` lets the ring play out, shuts the door, comes a
+rung down, rebuilds the tables, fills half the ring and opens it again: a gap
+of about a second, once, and a play that keeps time after it. The session
+keeps the rung - it has learned the machine - so the next track starts
+there. **Past the last rung**, IMA ADPCM stops and says `Too slow for this
+file on the speaker` (the owner: 5.5 kHz ADPCM *"only if it turns out
+viable"*), and PCM plays on behind the pulses, gaps and all.
+
+**Measured** on MartyPC's card-less Hercules 5150 with a fixed disk
+(`tests/apspk.py`: 800 port-42h writes against `tools/os88spkfx.py`'s plan,
+resampler and shaper - every leg EXACT from its first pulse):
+
+| the file | plays at | lost pulses | its time |
+|---|---|---|---|
+| PCM8, 8,000 Hz | 8,000 | 2.0% | 5.16 s for 5.00 |
+| PCM8, 11,025 | 8,000 stepped, then a rung down | 2.0% | kept, after one fall |
+| PCM8, 22,050 | 7,350 (a box of 3), then down to 4,800 | 1.7% | behind at every rung: 22 KB/s off MartyPC's XT-IDE, whose every byte the CPU copies (§98.2.15.5), and it plays on |
+| IMA ADPCM, 11,025 | 5,512 stepped, then 4,800 | 1.5% | kept at 4,800 |
+| shaped / counts (§86.21.1) | 8,000 | 2.0% | 5.16 s |
+
+What the 4.77 MHz 8088 has left beside 8 kHz of pulses is ~25% of itself,
+and those rows are what it buys. **The owner's 5150 moves its sectors by DMA**
+(an ST11M) where MartyPC's only hard disk is an XT-IDE, so the 22 kHz row is
+this emulator's answer and not that machine's - the ladder will find the
+rung there itself. `tests/apspk.py --card` holds the Sound Blaster path to
+the stream it always opened (one open, the door never touched); `--pause`
+holds Space, the resume from the sample it stopped on, and Esc.
+
+**The cost**: `AUDIO.O88` 7,502 -> 10,821 bytes of disk (the image 9,216 ->
+13,824 - os88spk.inc, os88spkfx.inc and apspk.inc) and 7 KB more bss, with a
+17 KB ring claimed at the first speaker play and kept for the instance. That
+took the 360 KB apps disk past its last cluster; §24.6.1's decision made for
+it is in the Makefile's `APPS_GAMES_360`.
+
+### 86.21.1 A WAV made for the speaker: the encoder's `.WAV` target
+
+A WAV can carry one more chunk, `o8sp` = `<u8 kind><u8 pulses><u16 N>`,
+which every other player skips as RIFF allows:
+- **kind 2, COUNTS**: the data are the speaker's counts themselves (§34.11.2's
+  table already applied). On the speaker Audio COPIES them into the ring - no
+  resampling, no decode, no shaper - so the per-sample cost is the pulse and
+  a byte's copy. They play 1:1 or not at all: the file's rate must be at or
+  under the rung Audio starts on (8,000 Hz on an 8088).
+- **kind 1, SHAPED**: PCM8 already shaped on the host; Audio runs §34.11.9's
+  shaper without its pre-emphasis. Nothing in the tree writes one now; Audio
+  keeps reading it, and `tests/apspk.py` keeps it working.
+
+**THE ENCODER MAKES THEM** - `os88venc.py IN OUT.WAV`, an output named
+`.WAV`, or the window's Save as a speaker WAV (§98.2.8). It is the sound of
+any source ffmpeg reads, alone, through the SAME body a speaker `.V88`'s
+sound goes through (`speaker_pcm`: the style, the high-pass, the leveller's
+ratio and range, the drive, the lows, the idle slide - §98.2.15.1), stored as
+kind 2. The rate is 8,000 Hz unless asked, 4,679 to 8,000 on an 8088 profile
+and to 24,858 on a 286 one; `--spk-pulses` and every picture, colour and
+budget option are the video's and are ignored or refused. There was briefly
+a second tool for this (`os88spkfx.py shape`); it called the encoder's
+shaping with its defaults, could not take a style, and is gone.
+
+**`--spk-shape` says WHERE the sound is shaped**, and for a `.WAV` its three
+values are three different files:
+- **`encoder`** (the default): shaped here, stored as kind 2 - the file above.
+- **`machine`**: a PLAIN 8-bit mono WAV at the rate, with NO `o8sp` chunk -
+  the encoder does the resample and the bit depth (a 16-bit 44.1 kHz source
+  becomes 8-bit 8 kHz) and nothing else, so Audio shapes it on the machine
+  as it would any WAV (§86.21, §34.11.9). `--spk-preview` on this mode is
+  `os88spkfx.Shaper`, the machine's shaper to the byte, so what it previews
+  is what Audio will play.
+- **`none`**: the wave as it is, still stored as kind 2. Audio COPIES counts,
+  so nothing shapes it anywhere and it plays under the carrier's whine
+  (§98.2.15.1's 25-30 dB) - the A/B for the shaping, and not a file to
+  listen to.
+
+`machine` is a WAV's alone: a `.V88` given it is refused, pointing at
+`--audio pcm8`, which the Video Player shapes for the speaker itself. The
+values were `on` and `off` until options version 2 (§98.2.17), whose
+migration reads a version-1 record's `on` as `encoder` and `off` as `none`.
+
+**Kind 1 has no writer and no mode**: `machine` hands Audio the whole of the
+shaping and `encoder` the whole of it to the host, and a file shaped here and
+levelled there buys nothing either does not - kind 2 already plays on a card
+as the samples it came from. Audio still reads kind 1 for the files and the
+gate that have it.
+
+**On a CARD a counts file plays as the samples it came from.** Audio notices
+the chunk on the card path too, builds `ap_cinv` - the inverse of the count
+table at the file's rate, `s = ((c - 1) x 255 + (N - 2) / 2) / (N - 2)` - when
+the stream opens, and turns each decoded half back before the end's pad of
+silence (which is a sample already). Without it a counts file on a Sound
+Blaster was a quiet wave sitting off the centre. It is 60 bytes of code and
+256 of bss.
+
+**What it earns**, the file being made on a machine with the time for it:
+- **the machine's shaper and resampler are skipped**: ~104 cycles a sample
+  (§34.11.9) and the box or step (§86.21) - at 8,000 Hz on a 4.77 MHz 8088
+  about 17 points of the machine, plus the resampling;
+- **sources that fall behind live play at 8,000 Hz**: a 22,050 Hz file came
+  down to 4,800 Hz on MartyPC's XT-IDE and IMA ADPCM starts an 8088 at 5,512,
+  where their counts are 8 KB a second read and copied;
+- **the encoder's shaping**: floating point, a look-ahead limiter and the
+  owner's styles, where the machine has an integer approximation.
+
+What it costs is the disk: a byte a sample, 8 KB a second, so a 360 KB
+floppy holds ~45 s.
+
+`tests/apspk.py` is the gate: its `counts` leg plays an encoder-made file on
+the speaker exact against the file (row `apspk`), and `--cardcounts` (row
+`apspkcardc`) checks the first half staged to a Sound Blaster is the file's
+counts mapped back, byte for byte.
+
+### 86.21.2 The bracket takes the bar clean
+
+`aps_bracket` repaints the window (`apu_repaint`, through
+`OSAPI_WM_CLIP_SET`) and enters `OSAPI_FSX_RUN` in the same lock hold. The
+file's first read has put §12.8's progress widget on the menu bar by then,
+and the kernel pays it off at the bracket's door (§12.8.5.2) - but it drew
+that teardown under Audio's region, so it was clipped to the window and the
+bar stayed on the menu bar through the play and after it. Reported off the
+owner's machines. `apu_repaint` now ends with `OSAPI_WM_CLIP_CLEAR`, as
+Tracker's and the Video Player's painters do: 5 bytes of `AUDIO.O88` and no
+kernel byte. `tests/apspk.py --pause` reads the widget's span of the menu
+bar once the bracket is up and FAILS on any black pixel there, with the
+clear taken out.
+
 ## 87. Hibernate — the machine to a file on the hard disk, and back (`kernel/hiber.inc`, `HIBER.DRV`)
 
 **What it is.** `Hibernate...` is the System menu's item above `Restart`
@@ -118351,7 +121830,8 @@ still up from step 3 of §87.4 and the gfx lock still held:
    empty, the read-ahead flushed, the write gate shut, the batch depths
    zeroed, `mem_pinseg` cleared and the progress widget given back with
    `fpg_end` — every one of them a word the write was in the middle of.
-4. `vid_setmode`, then `[hb_mode]` = `HB_M_GONE` and the Hibernate window
+4. `vid_setmode`, then the glyph table re-asked (`FONT_PICK`, §6.0.1: a
+   heap copy refilled, a ROM pointer replaced), then `[hb_mode]` = `HB_M_GONE` and the Hibernate window
    closed with `app_close_win` — GONE first, so §87.1's hook leaves this
    image, which is the code running, to the thunk — then
    `menu_force`, `dock_force`, `wm_paint_all` — `fsx_restore`'s return from a
@@ -133378,14 +136858,20 @@ The honest degrade for a moving sprite is to leave the frame alone, which is a
 black window, so the package is in `SMALLOMIT_GAMES` and the 128 KB machine's
 floppies do not carry it. That is §24.5's rule and not a new one: a package
 that cannot reach the surface it needs is left off rather than shipped broken.
+**Withdrawn**: §5.4.2.5.1 gave `kern_small` a `gfx_blit1` body, and §24.5.5
+put the package back on the small floppies on a measurement taken on the floor
+machine — the paragraph stands as the record of why it was ever off.
 
-At **360 KB** it rides the ordinary apps disk like every other geometry, at
-352 of that disk's 354 clusters. It did not fit when it arrived — eight spare
-clusters against a package of eleven — and it rode `build/media360.img`, the
-second 360 KB disk §24.4 already exists for, until the earlier Pac-Man port
-came off the apps disk to make room. That is a **development** arrangement the
-owner asked for and not a shipping decision: a release that wants both puts
-this one back on the media disk, which is one line of the Makefile.
+At **360 KB** it rides `games360.img` (§24.6) and **not** the apps disk —
+§24.6.1's dated decision, taken by the owner on 2026-09-29 alongside
+Gorillas'. Every other geometry's apps disk carries it in `GAMES/`, and
+`smallapps360.img` too (`SMALLGAMES` is a list of its own). It did not fit
+`apps360.img` when it arrived — eight spare clusters against a package of
+eleven — and it rode `build/media360.img` until the earlier Pac-Man port came
+off the apps disk to make room; that was always a **development** arrangement
+and not a shipping decision, and the Makefile's `APPS_GAMES_360` is where it
+ended. Its rows (`tests/dotdel.py` and the four that import its `PKG`) boot
+`games360.img`, where the package sits at the root.
 
 ### 93.14 Acceptance
 
@@ -143936,7 +147422,9 @@ Five things the round trip needs, each the cheapest answer to its own question:
   `'KDX1'` and the exit code. It does not have to survive the restore — it has
   to survive `int 19h` and a boot, which is a much weaker requirement: the BIOS
   sets that area up at POST and never touches it again, `int 19h` is the
-  bootstrap and not POST, and os8088's own boot writes nothing below `0x0600`.
+  bootstrap and not POST, and os8088's own boot writes nothing below `0x0600`
+  but the area's UPPER half, 0040:00F8..00FF, which is `font_init`'s timing
+  record (§6.0.1) and never meets these eight bytes.
   **Measured on the machine**, byte for byte at a settled desktop. `hbm_res`
   reads it once, as it stages the code, and clears the magic, so a second
   reader gets nothing rather than a code from a session two boots ago.
@@ -144351,7 +147839,7 @@ see — §96.44.2.1, which is what to read before trusting any of them.
 - **A PADDING row belongs to the block it pads**, and nothing NAMES one — so a
   classifier that asks *"does the core read this cell?"* puts all nine of them
   on the host's side and quietly un-aligns the core's table. They are `DBSS`.
-- **The parts standard's own 86 bytes are the HOST's.** `%assign DB OP_BSS`
+- **The parts standard's own `OP_BSS` bytes are the HOST's.** `%assign DB OP_BSS`
   put them at the head of the CORE's block, which made `CORE_BSS_SIZE` a figure
   that depended on whether this was a `DOSTRACE` build — so the diagnostic
   build and the shipped one disagreed about where every core cell was, and
@@ -144880,7 +148368,7 @@ machine on which no such volume can be mounted.
 
 **The `DVK_FILE` branches inside the read paths are deliberately LEFT.**
 `dsk_find_x`, `dsk_free_clus_x`, `dsk_read_chain_x`, `dskw_rbody`,
-`dskw_stat_x`, `dskw_read_at_x` and `dsk_synth_up` each carry a
+`dskw_stat_x`, `dskw_read_at_x` and `dsk_up_open` each carry a
 `cmp byte [dsk_vkind], DVK_FILE` and an arm. They are unreachable for the same
 reason, and gating them means threading a conditional through seven live read
 paths for a few hundred bytes — a worse trade than the bytes are worth, and
@@ -146650,6 +150138,168 @@ at, so the key that dismisses it must not also take the machine full screen.
 It repaints by calling `dos_paint` rather than repairing the card's rect,
 because what the card covered is a console band or a setup page and
 `dos_paint` is the only thing that knows how to put either back.
+
+### 96.52 A handle keeps its folder, and a terminating program's files are closed
+
+Two defects in the handle layer (§96.11), found planning the box's move onto
+the stream slots (docs/plans/completed/DOS-STREAM-PLAN.md 3) and fixed before it,
+because both would have changed character under a stream. `tests/dosfix.py`
+is the row, and it failed on both before this section.
+
+**A handle forgot its folder.** `AH=3Dh` and `AH=3Ch` walk a name's folder
+part (§96.12.3) and walk back, and the record kept the bare name and the
+volume - so every refill and every flush re-resolved the bare name in that
+drive's CURRENT folder. `SUB\X.DAT` opened from the root read the root's
+`X.DAT`, from its first byte (the probe's decoy answered `FDIR BAD at 0`), or
+nothing at all where there was no decoy; and a file CREATED as `SUB\NEW.DAT`
+landed in the current folder at its first flush. The record carries the
+folder now (`FH_DIR`, a word: `[dos_pdir]` when the name resolved), and
+`dos_fh_at` stands the machine at the record's volume and folder before the
+refill, the flush, the shrink and the close's zero-length create. It never
+moves the PROGRAM's drive - which `dos_vol_to` did, only to stand in that
+drive's current folder - so nothing walks home afterwards, and the three
+bytes that banked where to walk home to (`FVVOL`, `FVSV`, `WVSV`) are gone.
+The one call that READS where the machine stands, `AH=47h` (it asks
+`dos_be_path`), stands at the program's drive and folder first
+(`dos_fh_stand`, two compares when it is already there) - without it, a read
+of `SUB\X.DAT` from the root left the next `AH=47h` answering `SUB`.
+
+**A terminating program's files stayed open.** DOS closes every handle of a
+process that terminates. The box closed none: `dos_prog_done` never flushed,
+and the next launch's `dos_fh_setup` threw the window away, so a program
+that wrote and exited without `AH=3Eh` lost up to 8 KB - all of it, for a
+file that never filled a window (the probe's 3,000-byte `NOCLOSE.DAT` was not
+on the disk at all). `AH=3Eh`'s body is `dos_fh_close` now, and
+`dos_fh_sweep` runs it over every open handle at the top of `dos_prog_done`.
+A child's exit (§96.14) does not sweep: the table is the parent's too, and
+the parent's own exit closes what is left.
+
+**Two created files written in turn were refused at the second round.**
+One window serves every handle, so a program writing an output while it
+writes (or reads) another file takes the window away from the output mid-way,
+and `dos_fh_take` flushes it PARTIAL: the file then ends off a cluster
+boundary, and the accumulator's next flush - an append - is refused, because
+an append may only extend a file that is a whole number of clusters. The
+program got `access denied` on its second round (the probe's 700-byte
+interleave answered `ILV BAD, rounds left 19`). A partial flush now makes the
+handle a VIEW (`FHF_INPLC`) - `.ihstep`'s move for the gap - so its next
+write fills the last cluster's slack in place and hands back to the
+accumulator at the boundary, which is the path `dosfile`'s CROSS step
+already covers.
+
+The record is 25 bytes where it was 23, and the core's bss **+13**
+(`CORE_BSS_SIZE` 3,328 -> 3,341, which had no slack left); the core's code
++24 (the folder +10, the interleave +14).
+
+### 96.53 A DOS program's file I/O is a stream (`READ_SEQ`, `WRITE_SEQ`)
+
+Every byte a DOS program reads or writes goes through the box's one window
+(§96.11). It was refilled with `READ_AT` and drained with one `WRITE` and then
+one `APPEND` a window - and both re-walk the file's cluster chain from the
+front on every call (§18.4.8, §18.4.9), so the OS's cost of a chunk grew with
+its offset and a file's cost with the square of its length. The window, every
+`int 21h` handler and the handle's life are unchanged; what changed is the
+window's two edges (docs/plans/completed/DOS-STREAM-PLAN.md is the design record).
+
+**The state is in the handle record**: `FH_CUR`, a 16-byte `READ_SEQ` cursor,
+and `FH_TOK`, the `WRITE_SEQ` token the last flush got back - 43 bytes a
+record where §96.52 left 25. In the record because `dos_fh_new` already
+zeroes it, which is §18.4.8.1's one rule (*zero the cursor when the file
+changes*) kept by code that exists; and per handle because the window
+THRASHES by design - a copy loop alternates two handles and `dos_fh_take`
+resets the window at every switch, so a cursor beside the window would be
+cold at every refill of the loop it exists for.
+
+**Two doors, 22 -> 24** (§96.44.1), each with two bodies:
+
+| door | registers | the box | `kern_dos` |
+|---|---|---|---|
+| `DBE_RSEQ` | `DBE_RDAT`'s + `DI` = the cursor, in the core's `DS` | `os88_rseq` (§18.4.8.1), which is `READ_AT` on the small kernel | `READ_AT`, until §96.53.1 |
+| `DBE_WSEQ` | `SI`, `ES:BX`, `CX` (0 = commit), `AL` = `WSEQF_*`, `DI` = the token in and out | `OSAPI_FILE_WRITE_SEQ`; `APPEND` on the small kernel | `APPEND`, until §96.53.1 |
+
+**Reads**: a refill is `DBE_RSEQ` through the owner's `FH_CUR`, with the
+offset still the core's own (`[dos_wbase]`) - so a seek, a re-read and a retry
+need nothing, the helper re-seeding a cursor whose offset is not the one
+asked for.
+
+**Writes are ONE HELD STREAM a file** (§18.4.9): the first flush is still
+the `WRITE` that creates the file (a stream wants one that exists) and every
+later one is `DBE_WSEQ` with `WSEQF_HELD`, so the data goes down every window
+and the FAT, the link and the entry once, at the commit - which is when DOS
+writes them too. The commit is `DBE_WSEQ` with `CX = 0`, made at:
+
+- `AH=3Eh`, and so at a program's exit (§96.52's sweep) - **even when the
+  close's own last flush fails**, whose error is still the answer: the record
+  is freed either way, so nothing could reach its token again;
+- `AH=0Dh`, and `AH=68h`/`6Ah` (COMMIT FILE, which answered *invalid
+  function* before and is `AH=0Dh`'s body now: one window and one held stream,
+  so committing one handle and committing all are the same two steps);
+- a refill by a handle that has streamed - **the entry keeps its last
+  committed size until the commit, and a read by name stops at the entry's
+  size**, which is the trap §22.22.5.1 chose `PLAIN` to avoid; here the
+  handle that reads its own tail back commits first, once;
+- a shrink (`AH=40h`, `CX=0`), which reads its own prefix by name.
+
+**Only the streaming handle's own close commits**, because the hold is the
+machine's, one at a time: a program that opens and closes read files while it
+writes one output would otherwise end its output's hold at every close, and
+every flush after it would be a cold one. Any other WRITE, `WRITE_AT`,
+`DELETE` or `RENAME` on the volume commits the hold first anyway (§18.4.9's
+gate), so an in-place write, a shrink's rewrite and the gap's laying all mix
+with it correctly and merely leave the next flush cold. A second handle on the
+file reads the size the directory held when it opened, which is DOS's answer
+too.
+
+**The shell's COPY** (`dsh_stream`) is the same pair with its own cursor and
+token, the commit at its end and the undo's `DELETE` committing first.
+
+**Measured** on MartyPC, `tests/dosseq.py` (a 4.77 MHz XT; BIOS ticks, 55
+ms): SEQCOST.COM writes a file in 8 KB chunks, reads it back and seeks
+between its ends, timing each block.
+
+| | write | read | the last block against the first |
+|---|---|---|---|
+| 1 MB, XT-IDE C:, 2 KB clusters, before | 29.9 s | 19.8 s | write 49 -> 85, read 28 -> 62 ticks a 128 KB |
+| ...after | **16.4 s** | **10.5 s** | write 37 -> 37, read 24 -> 24 |
+| ...under `kern_dos`, before | 29.3 s | 19.1 s | the same climb |
+| ...under `kern_dos`, after (96.53.1) | **16.4 s** | **9.9 s** | flat |
+| 256 KB, 360 KB floppy, before | 51.4 s | 24.1 s | write 179 -> 262, read 102 -> 113 a 64 KB |
+| ...after | **28.2 s** | 23.0 s | flat |
+
+The fixed disk's READ half is the walk (0.27 ms a FAT link, the rate
+§18.4.8 measured, times the links a refill used to walk); a floppy's read is
+the drive's and moves little. The WRITE half is the walk AND the commits:
+HELD writes the FAT and the entry once where every 8 KB window used to, and
+on the floppy that is most of the saving. `tests/dosseq.py --hdd --kd` is the
+row, and it asserts the SHAPE - the last block within 1.5x of the first -
+which the walk cannot pass.
+
+What it costs: the core's bss **+166** (`CORE_BSS_SIZE` 3,341 -> 3,507: 18
+bytes a handle, the shell's 18, 4 of padding) and the core's code +99 - it
+fits `CORE_MAX` with 8 bytes left, so neither host's program pays a code rung;
+the box's own image `os88_rseq` (76) and `dos_k_wseq`. `kern_big` resident:
+**+13**, both of them the two stream-writer defects this work found
+(§18.4.9.1, §18.4.9.2), which are fixes whoever streams.
+
+#### 96.53.1 …and under `kern_dos`
+
+`kern_dos`'s disk layer is the kernel's own source, and the stream slots'
+machinery was `KERN_BIG`'s: READ_SEQ's cursor and body behind `%ifdef
+KERN_BIG`, WRITE_SEQ's record behind an explicit `%ifndef KD_BUILD`. One
+define decides it now, `DSK_STREAM` (kern_big's and kern_dos's), and the two
+bodies are the slots' own far entries - `dos_k_rseq` the box's `os88_rseq`
+without the small kernel's fallback, `dos_k_wseq` a straight call.
+
+**The FAT bank comes with it, and has to** (§18.8.5): `kern_dos` hops A:, B:
+and C: as the box does, and it is the bank that POISONS a hold whose floppy
+was swapped under it. Without it a commit after a swap would link the held
+chain into the NEW disk's FAT. The gfx unlock's commit stays out:
+`kern_dos`'s unlock is a no-op and the exit sweep (§96.52) closes every stream
+first.
+
+It costs **823 bytes** of `kern_dos`'s image (34,780 -> 35,603) and fits
+`KD_IMG_KB`'s existing 35 KB with 237 to spare, so the program under
+`kern_dos` loses no memory to it. The numbers are in the table above.
 
 ## 97. PIXELSTEIN 3D — a raycast shooter in a foreign mode (`apps/pixelstein/`)
 
@@ -150639,6 +154289,7 @@ file.
 sector 0          the header (98.1.1)
 sector 1..        the keyframe table (98.1.3), on a sector
                   the keyframe records, back to back, padded to a sector
+                  the options block (98.1.1.4), padded to a sector, if any
                   the stream: super-packets (98.1.4), each on a sector
 ```
 
@@ -150663,7 +154314,10 @@ stream behind them is read sequentially.
 | 20 | 2 | **the PIT divisor** for a timer-paced play (§53.2.2), `FSX_RATE_MIN`..65,535 |
 | 22 | 1 | **periods a frame** at that divisor, ≥ 1: 2 for a 15 fps file, whose own period is past 65,535 |
 | 23 | 1 | **the ring the stream assumes**, in 32 KB slots: 0 (nothing said), or 2, 4 or 8 - what its disk reserve banks bursts in (98.2.1.3). 0 in a RESIDENT file. A player with fewer plays it, and says so (98.3) |
-| 24 | 8 | 0 |
+| 24 | 1 | with SPKMUL, pulses a sample (98.1.1.3.1); else 0 |
+| 25 | 1 | 0 |
+| 26 | 4 | the OPTIONS block's offset (98.1.1.4), 0 for none |
+| 30 | 2 | its length in bytes, 0 for none |
 | 32 | 48 | title, ASCII, NUL-terminated within the field |
 | 80 | 96 | credits, the same |
 | 176 | 16 | the AUDIO block of a RESIDENT file (98.1.7); else 0 |
@@ -150859,6 +154513,54 @@ one that fits.
   samples, scaled by (N/P − 2)/255 and so quieter again.
 - `--spk-pulses P` (98.2.15) is what writes it; a resident file is refused
   it for now.
+
+#### 98.1.1.4 The options block: how the file was made
+
+**Header bytes 26 and 30 point at a block the ENCODER wrote**: every
+option it made the file with (98.2.17), so the encoder's window can load
+the file and show how it was made. It is the one part of a `.V88` no
+player reads, and where it sits is chosen so that no read of the player's
+can reach it:
+- **in a streamed file, in sectors of its own between the keyframe records
+  and the stream** - behind every table the player reads by offset, and in
+  front of the stream it reads in sequence from `R_SP0`. It is NOT a
+  trailer: the player finds the stream's end by a short read, and bytes
+  after the last super-packet could carry that short read a chunk further,
+  which with Repeat on a two-slot ring stalls the play at its last frame
+  for good (the seam waits on ring room that never comes);
+- **in a resident file, after the last block** - every block is read by
+  its offset and size, and a resident file is never read in sequence.
+
+A streamed file held in XMS (98.3.18) is held whole, block included: 1 KB
+more of the hold, and the "Held in XMS" line counts it.
+
+| off | size | field |
+|---|---|---|
+| 0 | 4 | `'V88O'` |
+| 4 | 1 | the CONTAINER: 1 is zlib with `os88vid.OPTS_ZDICT[1]` |
+| 5 | n | the record, canonical JSON (sorted keys, no spaces, ASCII), deflated |
+
+**The dictionary is what makes it small.** A record is mostly option names
+and their values, and zlib's preset dictionary is exactly that: version 1's
+options at their defaults, 1,280 bytes. Deflated against it a record of all
+79 options is **143 to 161 bytes** (every "Made for" target, measured);
+without it, 576 to 592. **The dictionary is FROZEN**: zlib names it by its
+checksum in the stream, so a changed one is refused rather than misread,
+and `tests/vencguitest.py` pins its SHA-256. A better dictionary later is
+container 2 beside it, never an edit to 1. The record inflates to at most
+64 KB or is refused.
+
+**A reader that cannot read the block still plays the file.**
+`os88vid.Reader` notes where the block is and reads it only when asked
+(`Reader.options()`), so a damaged block costs the window its options and
+nothing else; `verify_v88` does read it, because a block the encoder wrote
+must read. Bytes 25 to 31 were zero in every file made before and nothing -
+the player, `os88vid`, the tests - ever read them, so a file with no block
+reads as one made before the block existed, and an older reader sees a
+file with one as it always did. `set_poster` and `set_title` write only the
+header's sector and leave the block as it is; `os88vid speaker` (98.2.15.1)
+rewrites the record's shaping options in the block's own sectors, or clears
+the block if the new record no longer fits them.
 
 #### 98.1.2 Layouts: the file is laid out for its surface on the host
 
@@ -151726,13 +155428,44 @@ without them (`ffmpeg` capability).
   to 0 at every keyframe's frame *k*+1 as the greedy encoder holds it. A
   decision is committed once every live state's survivor agrees, so the
   memory is a window. On `--jobs` cores (default all) the sound is cut into
-  segments, each searched from 4,096 samples BEFORE its cut starting from
+  segments - a core's share of it, 16,384 to 88,200 samples, so a clip
+  whose sound is under two of the long ones is not searched on one core -
+  each searched from 4,096 samples BEFORE its cut starting from
   any state, and stitched at the latest sample where the two paths' STATES
   agree - the best way into that state and the best way on from it, which
   is the whole search's path. `videnc` asserts the stitched result is
-  BYTE-IDENTICAL to one whole search. About real time on four cores. A step
+  BYTE-IDENTICAL to one whole search. A step
   that would clamp at 0 or 255 is not taken, so every stream decodes by the
   card's own arithmetic.
+- **Every core, and the same file** (`--jobs N`, default all). What a core
+  count can change is WHEN the work is done, never what comes out: every
+  format writes the file the one-process encoder wrote, byte for byte (the
+  stored options aside, which record `--jobs`) - measured at 1 and 4 jobs
+  over every format and at 3 and 8 on the ADPCM search - but `cgacomp`'s
+  diffusion, whose chunks (below) have been the one exception since they
+  were written.
+  THE DITHER IS STAGED: each ditherer's frame is its own choice, which
+  reads no state and is nearly all of the work - on `jobs` processes, a few
+  frames each in flight - and then last frame's taken into account (the
+  dead band; a text cell's glyph, repriced only in the cells where it was
+  not among the candidates), in order, here. Where cutting the clip into
+  chunks restarts every chunk's dead band, this does not. THE FRAMES ARE
+  STREAMED: each goes to the encoder as it is dithered, so the dither's
+  cores work beside the encoder's one and the decode beside both (ffmpeg's
+  frames read ahead on a thread, 256 MB at most) - unless the sound needs
+  the frame count first (ADPCM4, whose search runs to the last keyframe) or
+  the dither comes in `cgacomp`'s chunks, which dither every frame and then
+  encode as before. Streamed, the window's bar is ONE count spread over its
+  read, sound and encode steps - the frames encoded against the clip's
+  length - since all three go on at once. THE PASS BEFORE THE FRAMES - the
+  levels', or the palette's - reads the clip beside the frames' own decode,
+  read ahead the same way. `--aim quality`'s trials run at once
+  (98.2.1.4). What stays on
+  one core is THE ENCODER ITSELF - each frame's budgets are what the last
+  left, so frames cannot be encoded side by side - ffmpeg's `palettegen`,
+  whose time grows with the colours the clip holds, and `cgacomp`'s
+  diffusion, which spreads over the cores in its 5-second chunks
+  (98.2.2) and so only on a clip longer than one.
 
 ##### 98.2.1.1 Owed time: a scene cut may run past its period
 
@@ -151833,9 +155566,16 @@ It costs the encoder about twice its time (Sonic 2's 10 s: 5.3 s -> 9.8 s).
 and wanes could bank a calm stretch's bytes for its next burst. The default
 is the profile's ring less two slots - 192 KB with 8 - and **the header
 says which ring that needs** (98.1.1's byte 23: the smallest power of two
-whose slots less one hold the reserve). A player that gets fewer slots
-plays it, a burst may pause it, and in the full screen it says `Low memory`
-before the first frame (98.3.13's toast).
+whose slots less TWO hold the reserve - the default's own rule, a slot for
+the one being decoded and one for a super-packet straddling into the next).
+A player that gets fewer slots plays it, a burst may pause it, and in the
+full screen it says `Low memory` before the first frame (98.3.13's toast).
+
+**A reserve past the largest ring less two is REFUSED**, `--reserve 224`
+and up on today's 8-slot player. It was "less one" until 2026-09-30, which
+let the encoder bank a slot the player never has: StarClip's two white
+flashes (below), re-encoded at 224 KB for MartyPC's disk, paused the card
+once at 4.5 s where 192 and 128 KB played the same 12 s with no pause.
 
 **A disk slows when the decode takes the CPU, and the reserve is spent in
 exactly the bursts that take it** - so the budget refills from each frame's
@@ -151911,7 +155651,13 @@ the owner's "maximize quality, minimize size":
   -> `vga-full`, `cga-small` -> `cga`, and the colour presets' own), then
   22,050 Hz sound. The report says what it tried and why it stopped. Bad
   Apple at `--preset herc`: `herc-mid` taken (0.03% seen, 0% cut),
-  `herc-full` not (0.55%, 4%), 22 kHz sound taken.
+  `herc-full` not (0.55%, 4%), 22 kHz sound taken. **The trials run at
+  once**, a process each and one core each: every window of a trial
+  together, and when the cores hold every window of every step, the whole
+  ladder beside the asked settings - taken or not in order as before, so a
+  step past one not taken is work spent on cores that were idle. Each
+  trial's numbers are one encode's, whichever process made them, so what
+  is taken is what the trials one by one took.
 - **`size` leaves off changes not worth their bytes**, even in a frame the
   budget would take whole: a span is sent only if what it fixes - value
   over the look-ahead as 98.2.1.2 prices it, weighted by how long its
@@ -152208,11 +155954,123 @@ it names, every preview at its screen's shape, and the disk.
 **It fits its own default size** (1080 x 760). The log, the progress bar
 and the Encode row are packed from the BOTTOM and before the tabs, so a
 short window takes its height from the tabs; and a tab of more than ten
-options is laid out in two columns, down the first and then the second.
+options is laid out in two columns, down the first and then the second
+(a group at a time since 98.2.8.2, split where the taller is shortest).
 The Picture tab's 21 in one column were taller than the window, and the log
 - packed last - got nothing at all, with Encode cut off the end of its row
 by the disk list (the owner's report; both seen on the glass under Xvfb).
 The gate has no display, so this is looked at, not asserted.
+
+##### 98.2.8.1 The palette, seen while it is picked
+
+**The Colour tab carries a Palette panel**: the colours the form's choices
+give, as swatches, redrawn whenever the pixel format, the preset, the
+profile, Live, `--cga-palette`, `--cga-bright`, `--cga-bg`,
+`--text-colour` or `--cga-card` changes (`palette_view`, no Tk). Hovering a
+swatch names it - its index, its colour and its RGB.
+- **CGA4** is the one with a choice to make, and the panel shows what is
+  left of it. With the set, the intensity and the background all fixed it
+  is ONE row, the file's four; any left blank is picked from the clip
+  (98.2.6), so the panel shows every row that pick can still land on, the
+  dim sets over the bright, and a dashed "?" where the background is still
+  the clip's.
+- **The fixed palettes are shown too**, so the tab says what there is to
+  choose: the sixteen for VGA4 and C160, text's sixteen on sixteen or its
+  three monochrome attributes, one bit's two, a composite nibble's sixteen
+  through `os88cgacomp`'s model, and C512's 512 codes per card, darkest
+  first. VGA8's 256 come from the clip, so its panel says so.
+- **The "?" lists of the three CGA4 fields** have swatches beside each
+  value: the set at the intensity chosen, the intensity on the set chosen,
+  and each background alone.
+- **The open file's own palette** is in the file panel under the preview,
+  for a CGA4 or VGA8 file (`file_palette`): what the clip's pick actually
+  chose.
+
+The panel is DERIVED from the encoder and not from a second table: a row is
+`os88vid.cga4_colours` of the byte the panel builds (`cga4_sel`), and
+`tests/vencguitest.py` leg 13 checks it against `os88venc.cga4_pick`. With
+all three fixed it must show the byte `cga4_pick` returns for the same
+overrides, and with none fixed its six rows must be the six `cga4_pick`
+returns for each set and intensity. The leg FAILS naming the row if the set
+bits are swapped. The layout fits the default window's Colour tab (1080 x
+760); that was looked at under Xvfb, not asserted.
+
+##### 98.2.8.2 Groups, greyed when they cannot apply
+
+**Each tab's options are in GROUPS**: an outline with a header round the
+options that go together - *Made for* and *The clip* on Basic; *Canvas*,
+*Tone*, *One bit* and *Text mode* on Picture; a group per format on Colour
+(*CGA, 4 colours*, *CGA composite*, *CGA composite, 512 colours*, *VGA,
+256 colours* and the rest); *Sound*, *ADPCM*, *PC speaker* and *PC
+speaker: the sound shaped* on Sound; and so on. `GROUPS` in the window is
+the table, and the tab an option is on is its group's (`TAB_OF` is derived
+from it). An option no group names - one added to the encoder tomorrow -
+still appears, in an *Other* group on Advanced, so the form stays complete
+with no work.
+
+**A group that cannot apply to the file the form makes is GREYED**, its
+header and every field in it (the owner's ask, 2026-09-28: *"cga group on
+colour disabled when not targeting a cga type, pc speaker disabled when not
+targeting a pc speaker"*). Each group carries a rule, read off what the form
+makes (`form_context`: the pixel format and layout the preset, format,
+layout and Live choice come to, and the sound): the CGA 4-colour group is
+CGA4's, the speaker's two need `--audio speaker` (and the shaping one
+`--spk-shape encoder`), *Aim: size* needs `--aim size`. The rules are the
+ENCODER's own reading of each option, which is not always its tab: `--stable`
+is read by the one-bit dither AND the composite pattern dither, and
+`--vga4-stable` by every 4- and 16-colour format, so each is a group of its
+own with that rule. A few options are narrower than their group
+(`FIELD_WHEN`) and grey alone: `--flip` is Mode X's inside the 256-colour
+group, `--xms` needs Live, the composite's diffusion and pattern options
+follow `--comp-dither`, and the rate and volume grey with no sound.
+
+**Hovering a greyed group says why**, and what to change: over its header
+or its outline, *"Not used for this file. These are for CGA 4 colours, and
+this file is one bit, black and white. Choose a target that makes CGA 4
+colours under Made for, or its pixel format on Basic."*. Its fields keep
+their own help and do not repeat the reason (the owner's report: it read
+twice, once for the group and again for every field in it). A field greyed
+ALONE in a group that applies (`FIELD_WHEN`: `--flip` off Mode X, `--xms`
+without Live) says its own reason above its help, having no header to say
+it for it. A group that applies has no tip of its own. The outline's tip is on `<Motion>` and not
+`<Enter>`: Tk gives an Enter to the outline when the pointer crosses into
+a field from outside it, and its tip then stood beside the field's and
+stayed up after the pointer left - seen under Xvfb. A motion goes to the
+deepest window under the pointer, so the outline hears one only over its
+own bare parts, and a Leave always follows.
+
+**A greyed option is left off the command line**, whatever its field says:
+it cannot apply, and some would be refused - a `--detail 2x1` or a
+`--flip` left over from a 256-colour target, on a one-bit file.
+
+The groups cost the tabs height - a header and an outline each - so the
+"?" and Browse... buttons are drawn as tall as the field beside them
+rather than a row and a half, the labels are lined up by their measured
+widths, and the log is six lines rather than nine. With that the default
+window (1080 x 760) still shows every group and the Colour tab's palette;
+looked at under Xvfb, every tab and a speaker, CGA4, VGA8 and text
+target, not asserted. `tests/vencguitest.py` leg 14 asserts the rest:
+every option in one group at most and every group naming real options;
+for each of the sixteen targets, the group of the format it makes applies
+and every other format's is greyed with a reason, and the speaker's two
+apply to the speaker target alone; and a greyed option stays off the
+command line (`--cga-palette` on the speaker target, `--flip` on 13h,
+`--spk-pulses` on CGA4) while the same option on its own target is on
+it. With every group answering "applies" the leg FAILS on all sixteen.
+
+**Save as has a second type, a speaker WAV for Audio** (§86.21.1). An output
+named `.WAV` is the sound alone, so every group but Made for, The clip,
+Sound and the two PC speaker groups is greyed with that reason, `--audio` is
+left off (the sound IS the speaker's), and a finished WAV skips the frame
+preview and the disk. Leg 14 holds it: every target's form saved as a
+`.WAV` has exactly those five groups applying and no `--audio` on its
+command line. **The type is a box on the Save as line**, to the right of its
+Browse... (`.V88` by default, the line above it being **Input**, whose
+Browse... has **Load .V88** beside it in the same column): Browse...
+offers the chosen type first, a name already on the line and a source's
+default name both take its extension, and a name typed or browsed to with
+the other extension moves the box to match - so a speaker WAV is a choice
+the window shows and not a file type buried in a Save dialog.
 
 
 #### 98.2.9 The pre-roll: the first picture is whole before the keyframes start
@@ -152352,8 +156210,10 @@ canvas, frames, rate, sound, keys, the poster, size and repeat. Beside that
 is **the keyframe a play from the scrubbed frame starts at**
 (`os88vid.key_at`: the last key at or before it, or key 0 before them all),
 drawn from that key's record alone, with its number. That number is what
-`--poster` takes. `Open a .V88...` puts any file in the preview, not only
-the one just made.
+`--poster` takes. **Load .V88** (beside *Input*'s Browse..., 98.2.17) puts any
+file in the preview, not only the one just made - and the POSTER itself is
+drawn beside that keyframe, so what the player shows before a play and
+what Set as poster would make it are seen together.
 
 **Set as poster** makes that keyframe the poster WITHOUT re-encoding.
 `os88vid.set_poster(path, frame)` writes each rendition's poster word
@@ -152431,7 +156291,8 @@ two processes of the group are left and the leg FAILS.
 **A video dropped on the encoder's window is the source to encode, and a
 dropped `.V88` goes to the preview** (`drop_target`); of several, the first
 is taken. Tk has no file drop of its own, so `enable_drop` uses the best
-this machine has:
+this machine has. It lives in `tools/os88drop.py`, which the split tool's
+window shares (§20.17.4):
 - `tkinterdnd2`, where it is installed (any platform);
 - on Windows without it, the shell's own `WM_DROPFILES` through `ctypes`,
   standard library only: the window's procedure is subclassed so the
@@ -152728,9 +156589,9 @@ playback difference to copy: what the pulses carry is the whole question.
 
 **So `--audio speaker` shapes the sound by default** (`os88vid.spk_shape_f`,
 from ffmpeg's floats, not 8-bit steps):
-0. **a STYLE** (`--spk-style`) sets three of what follows - `lifted`, the
-   default, is the owner's "K": a cut at 200 Hz, ratio 3, range 30; and
-   `natural` is "W": 250 Hz, ratio 2, range 24, more of the song's own rise
+0. **a STYLE** (`--spk-style`) sets three of what follows - `lifted` is
+   the owner's "K": a cut at 200 Hz, ratio 3, range 30; and `natural`, the
+   default, is "W": 250 Hz, ratio 2, range 24, more of the song's own rise
    and fall. Given, `--spk-highpass`, `--spk-ratio` and `--spk-range` win;
 1. **nothing under `--spk-highpass`** (the style's; 0 keeps the bass), a brick
    wall with a squared one-octave ramp, and the top **tilted up +9 dB from
@@ -152785,12 +156646,26 @@ That is the next listen, with ratio 6 beside it.
 The fourth: ratio 6 *"too loud, it runs together"*, and the pick between
 the two; ratio 3, range 30, a cut at 200 - **"pretty good"**. The owner
 asked for both to be offered: that is `lifted` and `natural` above, the
-first the default.
+first the default until the paragraph below.
+
+**`natural` is the default** (2026-09-28, the owner's choice: first for
+the encoder's window, then for the command line and `os88vid speaker`
+too). `lifted` was the default until then, and a file made before it
+sounds as `--spk-style lifted` makes one now. The window SHOWS the style's
+three numbers in their fields - 250, 2 and 24, or 200, 3 and 30 when the
+style is changed to `lifted` - the way 98.2.10 shows what a preset
+implies. `argv_from` leaves them off while they are still the style's, so
+the command line stays the one that says the same thing and a number
+typed over one is on it. `tests/vencguitest.py` leg 2 is the gate, and
+goes red with them put on the command line.
 
 A synthetic clip of a loud 60 Hz bass and a quiet 880 Hz line measures it
 the other way round: the line −43.0 dB → −5.4 dB of full scale, the bass
-−21.9 → −65.8. `--spk-shape off` takes the sound as it is, which is what every
-speaker file before this was.
+−21.9 → −65.8 under `lifted`, and −4.6 and −63.2 under `natural`
+(`tests/vidspkshape.py`). `--spk-shape none` (`off` before options
+version 2) takes the sound as it is, which is what every speaker file
+before this was. (A third value, `machine`, is a speaker WAV's alone and a
+`.V88` refuses it - §86.21.1.)
 
 **A file already made is shaped after the fact** by `os88vid.py speaker IN
 OUT [--highpass HZ] [--drive D] [--lows L] [--ratio R] [--range DB]`: each
@@ -153020,6 +156895,85 @@ draw the cells in the model face (98.1.3.6), each dot made square. The
 window offers both as targets: "Any PC - text mode, 16 colours" and "Any
 PC, Hercules and MDA too - text mode, black and white".
 
+#### 98.2.17 How a file was made: stored in it, and loaded back
+
+**Every `.V88` the encoder makes carries the options it was made with**
+(98.1.1.4), and **Load .V88** in the encoder's window sets every
+field to them: the target it was made for, the preset, format and profile,
+every picture, colour, sound, budget and keyframe option. The owner's ask,
+2026-09-28: *"store the options used ... inside the .v88. Then when loading
+one in the interface have the interface reflect all the options used."*
+
+**EVERY option, not only the ones that differ from a default.** A record of
+the differences is 22 to 46 bytes deflated against 143 to 161 for all 79
+(both measured over every target), but it means *"the default, as it was
+that day"*, and a default moves: this very session moved `--spk-style`'s.
+A file that stored nothing for it would have loaded as `natural` whatever
+it was made with. So the record is the options as the encode USED them
+(`os88venc.options_record`): the command line's, else what the preset,
+format, profile and Live choice imply (`implied()`, 98.2.10) - the canvas,
+the frame rate after the source's cap, the budget, the sound - else the
+speaker style's own three numbers, else the parser's default. The frozen
+dictionary is what made all of it cost about what the differences alone
+cost without one. The record also carries the source's NAME, never its
+path: a file handed on should not carry the folders it was made in.
+
+**A version mapper, because the options will change.** A record carries its
+schema version (`OPTS_VERSION`, 1). `MIGRATIONS[n]` is how a version-n
+record reads as n+1, a list of steps in order:
+- `("rename", old, new)` - an option took a new name;
+- `("revalue", dest, {old: new})` - a choice was renamed, or a value's
+  meaning moved (a function in place of the dict for arithmetic);
+- `("added", dest, legacy)` - an option arrived, and a file made before it
+  was made AS IF it were `legacy`, which need not be the new default;
+- `("removed", dest, why)` - an option went, and the load says why.
+
+`opts_migrate` applies them from the record's version to today's, then
+drops what this encoder does not know, drops a value that is not plain or
+not one of an option's choices (a record came off a file, and a file is
+hostile until read), and names what the record does not hold - each a line
+in the window's log. A record from a NEWER encoder is read for what this
+one knows, and says so. **What keeps the mapper honest is a fingerprint**:
+`opts_schema()` is every option's name, kind and choices (not its
+default), and `tests/vencguitest.py` fails when it no longer hashes to
+`OPTS_FINGERPRINT[OPTS_VERSION]` - an option added, renamed, removed or
+given other choices cannot land without the version going up and a
+migration saying how the older records read. What a fingerprint cannot
+see is a value whose MEANING moved under the same name; that is a
+`revalue` step somebody has to write, and the section says so here so it
+is not forgotten.
+
+**Loading** (`form_from_file`, no Tk): the record migrated, each value put
+in its field the way the form spells it - the parser's own spelling of a
+default, the implied table's of what a choice implies - so a loaded form
+leaves the same short command line a form filled by hand would; the target
+it was made for picked again (`target_for`), or none named when no target
+matches. **The title and credits are the header's**, because Set title
+(98.2.11) changes them in place after the encode and a new encode should
+keep what the file says now. The Video field is left alone: the log names
+the source to choose to make the file again. A file made before options
+were stored leaves the form as it was and says so; a damaged block does
+the same, naming the damage, and the file still previews. A load of the
+file an encode has just made does not refill the form - it already is
+that form.
+
+`tests/vencguitest.py` leg 15 is the gate: every target's file carries its
+record, and LOADING it gives a form whose command line resolves to the
+very record stored, for the same target, with nothing noted as lost - red
+on every target with `form_value` answering nothing. It drives the mapper
+through a made-up history (a rename, a renamed choice, an option added
+with its legacy value, one removed, a newer encoder's record, a value no
+longer a choice), pins the dictionary and the fingerprint, and checks that
+a damaged block leaves the file opening and `verify_v88` refusing it.
+`tests/vidspkshape.py` checks that `os88vid speaker` leaves the record
+saying the new shaping.
+
+**The poster beside the keyframe.** The file panel shows **the poster** -
+what the player shows before a play - beside **the keyframe a play from
+the scrubbed frame starts at**, with Set as poster on that one's header.
+Before, the poster was a number in the file's facts and seen only by
+scrubbing to it.
+
 ### 98.3 The player — `VIDEO.O88`, fullscreen (waves 3 to 6)
 
 Package **`VIDEO.O88`**, header name `'Video Player'`, label prefix `vp_`
@@ -153091,9 +157045,47 @@ on time however long the disk takes:
 
 **The reader is the foreground**, the bracket's own loop, through
 `OSAPI_FILE_READ_SEQ` in 32 KB chunks:
-- **A ring of *K* 32 KB slots, *K* a power of two up to 8**, sized from
-  `OSAPI_MEM_AVAIL`. A stream that fits is read whole before the first
-  frame. **A *K* short of the header's ring** (98.1.1 byte 23, what the
+- **A ring of *K* 32 KB slots, as many as the machine has, up to 15**
+  (`VP_KBIG`), sized from `OSAPI_MEM_AVAIL` less the mirror and less the
+  claim a seek in the full screen reads its key's table ENTRY into
+  (`[vp_kekb]`) after the ring is up (98.3.14), which would otherwise
+  quietly refuse. **The entry, not the record**: a seek's claims
+  (`vp_keyat`, `vp_fseek`'s) read 16-byte entries and nothing else - the
+  key's record is read into the ring (`vp_spos`) - so they are two
+  clusters (4 KB on a 2 KB volume), where the ring once kept back a whole
+  record's read, `[vp_kbkb]`, 48 KB for a 256-colour clip whose keys are
+  45 KB. On a 640 KB VGA machine with a Sound Blaster and a fixed disk
+  that one slot was the difference: a 24 fps 320x240 VGA8 clip encoded
+  for `286-vga` (a ring of 8) got **7 slots and `Low memory`**, and gets
+  8 (VIDEO.O88 +13 bytes). **And the keeper is claimed from the TOP**
+  (`OSAPI_MEM_CLAIM_HI`, as a RESIDENT file's always was, 98.1.7.4), with
+  the page-flip copy (98.3.8). Claimed from the bottom it is pinned right
+  on top of the kernel's caches - the directory read-ahead (32 KB), a
+  window's raise cache (30 KB) and the icon store (4 KB) - and walls them
+  off from the ring, which `OSAPI_MEM_AVAIL` counts as free because a
+  claim sheds them (50.6.3). None of them is a stream buffer: a 32 KB
+  `READ_SEQ` chunk bypasses the read-ahead entirely (18.95.1). Measured
+  with the same clip on the same machine: the ring's run 313 KB -> 379 KB
+  and the ring 8 slots -> 10, one 352 KB block from the heap's floor; the
+  caches are rebuilt at their next use. A
+  stream that fits is read whole before the first frame, so every slot
+  past the header's ring is headroom the encode never counted on: an
+  early burst is read before the picture starts, and a later one spends
+  what a calm stretch banked. **A LIVE play keeps the old rule** - *K* a
+  power of two up to 8 (`VP_KMAX`) - because it runs on the desktop, where
+  the rest of the machine wants the memory; everything else is inside the
+  fsx bracket, the window play included, and nothing can be launched
+  beside it. A chunk's slot is its number mod *K* (`vp_slot`, one `div`),
+  and the mirror is copied once a lap, so a bigger ring copies less often.
+  **Measured on MartyPC's Hercules 5150 + SB off its XT-IDE**, StarClip's
+  ST-225 encode (two white flashes 2 s in, 258 KB of stream in 1.6 s):
+  8 slots ran the card dry twice in 9 s, and the 10 this machine has room
+  for none; F to the play ready 2.00 -> 2.27 s, the extra slots' pre-fill;
+  `vp_slot` 213 cycles entry to `ret` (209-217), 2.6 calls a frame, ~0.33%
+  of a 25 fps period against the mask it replaced - and back about as much
+  in the mirror copy (1.2% at 8 slots, a fifth fewer laps at 10).
+  `VIDEO.O88` +48 bytes, no kernel byte. `tests/vidplay.py --k1 3`
+  (`vidplay3`) wraps an odd ring frame-exact. **A *K* short of the header's ring** (98.1.1 byte 23, what the
   encoder's disk reserve banked for, 98.2.1.3) is played, not refused - a
   burst may pause it - and the full screen says `Low memory` once, before
   the first frame (`vp_rsay`, a toast of 98.3.13's box). `tests/vidplay.py`
@@ -153134,7 +157126,36 @@ A bad one ends the play with the reason in the window. The lists are not
 checked, and cannot reach past the adapter's own segment (98.1.6).
 
 **The window after a play shows**: frames drawn of the file's, stalls, late
-periods, and the play's length in ticks against the file's own.
+periods, and the play's length in ticks against the file's own - and, in a
+player built with **`VPDIAG=1`** (a field diagnostic: the shipped player
+carries none of this, its card stays at eight lines), once a play has
+started, **the heap**, two lines for anyone doing this section's arithmetic
+by hand: the largest claim and all that was free when Play was
+pressed (`[vp_mrun0]`, `[vp_mfre0]`), then the ring's slots against the
+header's, the run it was sized from (`[vp_mrun]`, after the keeper and the
+card's ring) and those two claims' KB - `Heap 474K run, 474K free at Play`,
+`Ring 10/8 of 379K; keep 75 snd 17`. They are drawn where the card holds
+its text alone; with the buttons in the card (`VP_LINESB`) its text stops
+at eight lines, above them. A play's **pauses are its own**, as its stalls
+are: `[vp_pause]` counted every play since the window opened.
+
+**And two lines for the reader, after a play** - `VPDIAG=1` too, for
+telling a stream that ran dry from a card that did: `Lead 1 at f470; hook
+gap 3` is the fewest chunks the reader was ever loaded past the hook's
+super-packet (`[vp_lmin]`, sampled every foreground pass until the stream
+is read to its end) and the frame it was at, and the most hook periods
+between two hook calls (`[vp_gap]`); `Dry 9/11 stream; most 6t f480` is
+how many of the card's pauses had its sound waiting on an UNREAD record
+(`vp_afill` stopped at one: `[vp_astv]`, seen on any pass while the pause
+lasted) out of all of them, and the longest pause in ticks with the frame
+it ended at. **With a card, a stream that runs dry is a PAUSE and not a
+stall**: the card is the clock, and the sound - filled ahead of the
+picture - runs out first, so the clock stops before the picture reaches
+the frame it has no record for; muted, the same starvation is a stall.
+So a lead near 0 and dry pauses that are the stream's say the reader did
+not keep up; a lead that held and pauses that are not say the card did.
+Measured on MartyPC's 8088 with the owner's 358 KB/s VGA8 clip, which it
+cannot read fast enough: lead 1 at frame 25, 14 of 14 the stream's.
 
 **Measured** (`tests/vidplay.py`, a 150-frame 30 fps clip the row makes,
 opened by double-clicking it):
@@ -153379,7 +157400,7 @@ when that is key 0. The entry's four facts are all it needs (98.1.3):
   from the video's after that, so both start at frame *k*+1.
 - **`[vp_base]` = *k*+1 is the frame count's zero**: `[vp_done]` starts
   there, the gate's holds are absolute frames, the card's clock adds it to
-  the frames it has played, and the window's *Drew N of M* and *T ticks of W*
+  the frames it has played, and the window's *Drew N/M* and *T ticks of W*
   count from it. **The clock is SEEDED there too**: until the card's first
   block interrupt the extrapolation runs from `[vp_syncf]`, and a `[vp_syncf]`
   left at 0 held the first three frames back and then made them all due at
@@ -153745,6 +157766,17 @@ the kernel or the driver:
   those periods; a Live pass turns the ticks since the last one into them
   (a tick is 65,536 PIT counts, a period the file's divisor, the remainder
   kept). Up to `VP_LCAP` frames a pass, as a silent Live play draws.
+- **The card starts LAST.** `vp_lsetup` draws the buttons (Play turned to
+  Pause, 111 ms on a 5150) and hires the worker first, then opens the card
+  on the key's frame, then takes the clock - `vp_lback`'s rule below, at the
+  start. It opened the card first, so the card played on through that draw
+  while the worker waited on the lock, and the worker's first pass landed
+  ~130 or ~185 ms after the card started - before or after its first block
+  interrupt (2,048 bytes is 184 ms at 11,111 Hz) - by WHERE IN A TICK the
+  key arrived. After it, the clock jumped to the block and the pass owed 5
+  to 7 frames against `VP_LCAP`'s 4: 0 to 3 forgiven at the start, the same
+  file, the same machine, decided by the keystroke's phase. Six bytes of
+  `video.o88`'s image (36,900 -> 36,906), no kernel byte.
 - **Pause, F and back go through `vp_upaus`**, the bracket's own pause: Space
   halts the card where it is (verb 10) and resumes it (verb 1); F pauses it
   as the worker stops and the bracket resumes it on its first frame; F back
@@ -154199,10 +158231,16 @@ it** (§98.3.17) - and mute is the one choice for every kind of sound:
   play goes on silent on the PIT, and a toast says `Sound off`.
 
 The ring is the card's layout (§34.5.3), claimed as `VP_RL` + 272 bytes, with
-the count table after the control words. `vp_aput` puts each byte through
-the table as it queues it, and the drain's silence fill is translated too -
-or, for a file of counts (98.1.1.3), copies them and fills with the table's
-middle.
+the count table after the control words. **A clip made for a card goes
+through §34.11.9's shaper**, as the encoder shapes one made for the speaker
+(98.2.15.1): a straight wave on a 5150 is the carrier and little else.
+`vp_aput` takes each queued piece - a frame's audio - to `os88spkfx_level`
+for its level and `os88spkfx_emit` for its counts, with the first-difference
+pre-emphasis on; the family is `vp_fam`, 11 x 256 bytes of bss. The drain's
+silence fill is `os88spk_sil`, a count of 1 once the shaper has the carrier
+away. A file of counts (98.1.1.3) is still a copy, filled with the table's
+middle. `tests/vidspk.py` reads its pulses back against `tools/os88spkfx.py`'s
+`Shaper` fed the same pieces, and they are EXACT.
 Everything that stops or restarts the card does the same to the speaker, by
 `vp_sclose`, `os88spk_stop` and `os88spk_go`:
 - a **pause** stops it where it is, CONS exact, and the resume goes on from
@@ -154477,6 +158515,135 @@ loading the file to its end, the card's line drawn from the timer.
 disk, and after the same swap the same key REFUSED. Broken on purpose -
 `vp_xput` out of `vp_fill`, the hold short at the play's end (163,840 of
 973,312); `vp_xrdat` out of `vp_rdat`, the key refused - `vidxms` FAILS.
+
+#### 98.3.19 Under memory pressure: the keeper given up, and the player moved
+
+**The keeper is the one claim a play can do without**, and only in the full
+screen. It is how a canvas crosses brackets (98.3.7): put onto the surface
+as a bracket starts, taken back as it ends, and the box's picture on the
+desktop. A full-screen play of a native file reads it back only on a SWAP -
+F or Alt+Enter out - so where memory is short it is the claim to give up,
+and 75 KB of Mode X keeper is two ring slots (the owner's arithmetic: two
+slots for the least-used thing the player does).
+
+**The plan** (`vp_sstart`, after the sound's ring):
+1. The keeper is **claimed and measured**: `OSAPI_MEM_AVAIL` beside it, less
+   what the ring keeps back (`vp_kres`), must hold the header's slots and the
+   mirror (`vp_kroom`; 2 slots where the header says nothing, `vp_kwant`).
+   Claiming it first is the exact form of the question - a keeper may fit a
+   hole the ring's run does not include.
+2. **If not**, it is given back, and the what-if is asked: would moving the
+   player's OWN region make room for the keeper and the ring together
+   (98.3.19.1)? If so, the play posts that and returns.
+3. **Else the play goes on without it** (`[vp_nokeep]`) and the ring takes
+   everything, `VP_KBIG` at most. `VPDIAG=1`'s card says `keep 0`.
+
+**Eligible** (`vp_kelig`): the keeper is only the canvas's image - not a
+decode target (`[vp_kneed]`), not a RESIDENT or LIVE play's, not the shadow
+a full-screen copy decodes into (`[vp_fsshd]`), no page flipping - and the
+play is in the full screen: F, or Play where `vp_canwin` refuses. Everywhere
+else the keeper is claimed as before and a refusal is `Out of memory`.
+
+**Without it**, its three readers:
+- a PUT - the black a session starts on, a seek's or a Repeat's clear
+  (`vp_cclear`) - writes black straight onto the screen's canvas rows,
+  all four planes at once for Mode X (`vp_kmove`);
+- a GET, as a bracket ends, has nowhere to go and is skipped;
+- **a SWAP to the desktop STOPS the session** at the keyframe at or before
+  the frame on the glass, its picture in the box, exactly as Esc does
+  (98.3.6) - and plays on from that key in the window if it was playing and
+  the window can host it. F again enters the full screen paused at that key;
+  Space plays from it. What is lost is up to one key's spacing of replay
+  (2 s on the owner's clip), never a wrong picture.
+
+A stop re-plans: the next session asks for the keeper again, so a play that
+lost it to pressure gets it back when the memory is there.
+
+**Measured** on MartyPC's `os8088_xt_vga_hdd_sb`, 640 KB, the owner's
+`LXVGA256.V88` (Mode X VGA8, header ring 8), the heap arranged
+by writing pinned records into `mem_tab`: with 100 KB pinned under the
+player the keeper is given up and the ring is **10 slots of 356 KB** where
+the keeper would have left it 7; F out at frame 132 stops at key 3
+(frame 96) with its picture in the box, F in is paused at frame 97. Fresh,
+the keeper is kept and the ring is 10 slots as before.
+
+##### 98.3.19.1 The player moves itself
+
+A heap that has been used is not a fresh one: open programs, then the
+player, then close the programs, and the player's region is **stranded**
+under the hole they left - the one barrier between two runs that together
+hold the play. A claim cannot move the claimant's own region (66.4.3), so
+before giving the keeper up the play asks `OSAPI_MEM_COMPACT`'s what-if
+(`vp_cptry`): the largest run there would be if the player moved too,
+against the ring and mirror, the keeper and the ring's reserves. Where it
+fits, the play **frees what it holds and POSTS** the compaction
+(`MEMC_POST` at an ordinary claim's rank, so every cache counts), says
+`Making room for the play...`, and returns; the wake (`vp_onwake`,
+`[vp_cpgo]`) starts it again from Play or F as it was pressed. **One post a
+press** (`[vp_cpq]`): the play the wake starts cannot post again, and if the
+room is still not there it goes on without the keeper. A gate or a caller
+other than Play and F never posts (`[vp_cpent]`).
+
+**Measured**: a 60 KB hole above the player's region and 340 KB below it -
+the keeper would have cost the ring its eighth slot. The play posted, the
+region moved up into the hole (8400 -> 9300) with the poster, and the play
+that started on the wake kept its keeper with a ring of 8. A gate reading
+the player's bss after this must re-read the region's segment: it moves.
+
+##### 98.3.19.2 Nothing pinned between brackets
+
+**The session's claims are movable on the desktop** - the ring, the keeper
+and the page-flip copy (`vp_smov`, relocation proc `vp_smove`) - and pinned
+again for each bracket, whose hook reads them at interrupt time, which no
+relocation can reach (66.3); RESIDENT blocks already worked this way
+(`vp_rmov`, 98.1.7.4). Every word naming one of them holds its base and
+every other segment is derived at its use, so the proc moves a word equal
+to the old base and nothing else - `vp_kshd` among them, which names the
+keeper while the poster is remade from it and the remake makes claims of its
+own (`vp_tmono`'s scratch). **The poster is movable** once it is made
+(`vp_pmov`) - not at its claim, which the decode's own claims follow. What
+stays pinned: the sound's ring (`MC_DMA`, which the kernel never moves -
+66.3), a LIVE session's claims (its worker decodes out of them on the
+desktop), and a claim for the length of a read into it (66.3 rule 5).
+
+##### 98.3.19.3 The poster IS the keeper, at the video's own size
+
+**A play drawn onto the screen at its own size claims no keeper at all**
+(`[vp_nokeep]` = 2, `vp_pcanv`). The poster the box shows is the canvas
+already: one-bit, its rows dense out of the file's layout (`vp_linear`);
+VGA4, packed two pixels a byte (`vp_v4pack`) - every pixel at scale 1. So
+the keeper's three jobs move onto it:
+- **a GET** as a bracket ends (`vp_pcget`) takes the canvas off the screen
+  into the poster - one-bit a row at a time, VGA4 four planes' byte into
+  four packed bytes through the Read Map - and the box shows that frame
+  after the desktop's repaint, `[vp_dkey]` = FFFEh as `vp_sesspic` made it
+  from the keeper;
+- **a PUT** as a bracket starts (`vp_pcput`) lays it back onto the screen,
+  the window's place or the full screen's centre alike, VGA4 through the
+  Map Mask - or black, until the session has put a frame there
+  (`[vp_pcv]`): a play from frame 0 still starts on black, and the poster
+  stays up until it does (98.3.7.1);
+- **a clear** (a seek, a Repeat through key 0) is black on the screen, and
+  the poster's frame stops being the canvas.
+
+Eligible (`vp_pcanv`): the poster held at scale 1, a one-bit file in the
+desktop's own layout or a VGA4 one, drawn onto the screen (no shadow, no
+decode into a keeper, not RESIDENT, LIVE or flipped). That is **every play
+the window can host** - one-bit files, and VGA4 on a VGA desktop, whose
+mode 12h is the file's own - and the same files in the full screen, where
+F swaps between the two with the frame intact and no stop. A relayout that
+changes the poster's scale mid-session stops it at the key at or before,
+as a keeperless full screen does; a get that finds the poster gone or
+rescaled drops the session to 98.3.19's rule, which a desk pause then
+honours the same way. What it saves is the whole keeper: 16-38 KB for a
+one-bit layout, and for VGA4 the four planes at mode 12h's 80-byte rows -
+75 KB for 320 x 240 - against a poster of 38.
+
+`vidwin`, `vidvga4`, `vidpreview` and
+the `vidfskeys*` rows cover it (`vidwinshd` is the keeper it still needs,
+the shadow): frame-exact at every hold, a click's pause
+with the stopped frame in the box byte for byte, and F out and back.
+VIDEO.O88 +735 bytes.
 
 ### 98.4 The window: the Preview (wave 6)
 
@@ -154860,7 +159027,10 @@ owner's rule). The text names both.
 ## 99. Gorillas (`apps/gorillas/gorillas.asm`)
 
 A native 8086 adaptation of the supplied Microsoft QBasic `gorilla.bas`
-(1990), packaged as `GORILLAS.O88`. One player faces a computer opponent,
+(1990), packaged as `GORILLAS.O88` and shipped in `GAMES/` on every apps
+disk but the 360KB one, and on `games360.img` — off `apps360.img` by
+§24.6.1's dated decision, the Makefile's `APPS_GAMES_360` carrying the
+arithmetic. One player faces a computer opponent,
 or two local players alternate angle and velocity entries, throwing bananas
 over a generated, destructible skyline. Eight to twelve building lots fill the 256-pixel
 width, each 18..36 pixels wide with one-pixel gutters on both sides. Each
@@ -155574,8 +159744,12 @@ At most one pending sample starts per game frame; louder events take priority
 over shots. Mute/pause cancels effects; exit closes the stream before freeing
 the claim. Missing samples, memory or unsupported DSP fall back to FM.
 The 360KB original-art disk omits the optional bank for space; the cartridge
-360KB disk and 1.44MB disk include it. The old tone path already used hardware
-tones, so richer sound does not promise an XT speedup.
+360KB disk and 1.44MB disk include it. **The 360KB disk carries every bank
+lz4-packed** (§20.14): raw, the original-art set is 355 data clusters of 354
+and never fitted, and every bank is read with `OSAPI_FILE_READ`, the
+transparent read, so the package's size and checksum tests see the same bytes
+(230 of 354 packed). The 1.44MB disk keeps them raw. The old tone path already
+used hardware tones, so richer sound does not promise an XT speedup.
 Both palette sets at $A770/$A790 are available for the cartridge's final area.
 Original-art builds implement the same game rules using original fallback
 assets and native schedules. No extracted cartridge content is committed.

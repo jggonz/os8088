@@ -626,10 +626,7 @@ assoc_compose:
     pop es
     pop di
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_cx
 
 ; -----------------------------------------------------------------------------
 ; assoc_docicon - compose a document icon for one directory entry
@@ -669,9 +666,7 @@ assoc_docicon_x:
                                 ; this proc's contract preserves every
                                 ; register and four callers rely on it
     clc
-    jmp short .out
 .no:
-    stc
 .out:
     pop di
     pop si
@@ -832,7 +827,7 @@ assoc_post_x:
     mov al, ASSOC_FIND          ; is not
 .known:
     mov [assoc_dapp], al
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
     mov [assoc_pwin], dx        ; ONLY on this arm: a nameless entry must not
                                 ; repoint a post still waiting for assoc_run
     mov di, assoc_doc           ; stage the document's own name - files.inc's
@@ -1077,7 +1072,7 @@ assoc_tryext:
     jc .out
     call asc_use_x
     mov si, assoc_doc
-    call assoc_slot_of
+    jmp assoc_slot_of
 .out:
     ret
 
@@ -1530,30 +1525,22 @@ osapi_assoc_set_x:
     mov dl, al                  ; DL = the app slot from here down
     mov si, assoc_extb
     call assoc_find             ; already claimed by someone?  BX = that row
-    jc .fresh
-    mov al, [bx+3]              ; the same program again - declared, cached
-    xor al, dl                  ; or claimed before - is no news, whatever
-    and al, ~ASSOC_STICKY & 0xFF    ; its sticky bit said: AL = 0
-    jmp short .point
-.fresh:
+    jnc .point                  ; and AL = the slot it names, sticky or not
     call assoc_ext_new          ; BX = a free row, with the extension in it
     jc .full
-    mov al, 1                   ; ...and a new extension is news
-.point:
-    push ax                     ; AL != 0 = the extension's answer changed
-    mov al, dl
-    or al, ASSOC_STICKY         ; a runtime claim outranks a declaration
-    mov [bx+3], al
+    mov al, 0xFF                ; ...which names no slot: a new extension is
+.point:                         ; news, whatever DL is
+    mov [bx+3], dl              ; a runtime claim outranks a declaration
+    or byte [bx+3], ASSOC_STICKY
+    cmp al, dl                  ; ZF = the same program again - declared,
+    pushf                       ; cached or claimed before - which is no news
     call assoc_self_glyph       ; DL = slot; take the caller's own icon
-    pop ax                      ; ...and if the answer CHANGED, every Disk
-    or al, al                   ; window's document icons are stale (SPEC.md
-    jz .same                    ; 54.3.3) - assoc_point's rule, which this
-    call fmv_icostale           ; claim does not go through. No mount is
-.same:                          ; running here, so none is left out
-    clc
-    jmp short .out
+    popf                        ; ...and if the answer CHANGED, every Disk
+    je .same                    ; window's document icons are stale (SPEC.md
+    call fmv_icostale           ; 54.3.3) - assoc_point's rule, which this
+.same:                          ; claim does not go through. No mount is
+    clc                         ; running here, so none is left out
 .full:
-    stc
 .out:
     jmp kretfc_di
 
@@ -1692,7 +1679,7 @@ assoc_app_new:
 assoc_app_get:
     call assoc_app_of
     jnc .out
-    call assoc_app_new
+    jmp assoc_app_new
 .out:
     ret
 
@@ -1922,13 +1909,7 @@ asc_use_x:
 .out:
     call asc_drop               ; THE CLAIM IS A FILE BUFFER (SPEC.md 54.7.4)
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_di
 
 ; -----------------------------------------------------------------------------
 ; asc_seed - teach the hints where this whole DISK's programs are, what they
@@ -2165,7 +2146,6 @@ asc_root_find:
     shr dx, cl
     or dx, dx
     jz .no
-    clc
     jmp short .out
 .next:
     add di, 32
@@ -2377,10 +2357,7 @@ asc_take_x:
     pop es
     pop di
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_cx
 
 ; =============================================================================
 ; Far entries (SPEC.md 2.6): the resident thunks in kernel.asm far-call these,

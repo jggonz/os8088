@@ -274,23 +274,27 @@ GAPOK = re.compile(r"^\s+(clc|stc|cmc|cld|std|sti|cli|nop)\s*(;.*)?$", re.I)
 # swap two rung labels and this goes from 0 findings to 2.  On a tree with no
 # ladder the table is empty, RUNGJMP never matches, and every line below is an
 # exact no-op.
-RUNGDEF = re.compile(r"^(kretf?c?_[a-z]{2}):\s*(?:pop\s+(\w+))?\s*(;.*)?$", re.I)
+RUNGDEF = re.compile(r"^(kret(?:f?c?|m)_[a-z]{2}):\s*(?:pop\s+(\w+))?\s*(;.*)?$", re.I)
 RUNGPOP = re.compile(r"^\s*pop\s+(\w+)\s*(;.*)?$", re.I)
 RUNGEND = re.compile(r"^\s*retf?\s*(;.*)?$", re.I)
-RUNGJMP = re.compile(r"^\s*jmp\s+(kretf?c?_[a-z]{2})\s*(;.*)?$", re.I)
+RUNGJMP = re.compile(r"^\s*jmp\s+(kret(?:f?c?|m)_[a-z]{2})\s*(;.*)?$", re.I)
 _RUNGS = None
 
 
 def rungs():
-    """{rung label: [registers it pops, in order]}, read from kernel.asm."""
+    """{rung label: [registers it pops, in order]}, read from kernel.asm -
+    and from ctrl.inc, whose CTRL.DRV image carries a ladder of its own
+    (kretm_*, a CS away from the kernel's)."""
     global _RUNGS
     if _RUNGS is None:
         _RUNGS = {}
-        path = os.path.join(ROOT, "kernel", "kernel.asm")
-        try:
-            lines = open(path, errors="replace").read().split("\n")
-        except OSError:
-            return _RUNGS
+        lines = []
+        for rel in ("kernel.asm", "ctrl.inc"):
+            path = os.path.join(ROOT, "kernel", rel)
+            try:
+                lines += open(path, errors="replace").read().split("\n")
+            except OSError:
+                pass
         for i, ln in enumerate(lines):
             m = RUNGDEF.match(ln)
             if not m:

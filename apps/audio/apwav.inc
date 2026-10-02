@@ -53,6 +53,7 @@ apw_s_riff:   db 'RIFF'
 apw_s_wave:   db 'WAVE'
 apw_s_fmt:    db 'fmt '
 apw_s_data:   db 'data'
+apw_s_spk:    db 'o8sp'
 
 apw_rates:    dw 8000, 11025, 16000, 22050, 24000, 32000, 44100, 0
 
@@ -71,6 +72,7 @@ apw_parse:
     mov [apw_flen+2], dx
     mov byte [apw_ok], 0
     mov byte [apw_gotfmt], 0
+    mov byte [apw_spk], 0
 
     ; --- cluster size in bytes -> apw_clu, read cap -> apw_rdcap ------------
     call OSAPI_FILE_DFREE           ; BX = sectors/cluster, no disk I/O
@@ -132,6 +134,17 @@ apw_parse:
     mov di, apw_s_data
     call apw_cmp4
     je .isdata
+    mov si, [apw_ckid]
+    mov di, apw_s_spk
+    call apw_cmp4
+    jne .skip
+    cmp word [apw_cksz], 4          ; 'o8sp' (SPEC.md 86.21): shaped for the
+    jb .skip                        ; speaker on the host - kind 1 samples,
+    mov bx, [apw_ckid]              ; kind 2 the counts themselves. A chunk
+    mov al, [bx+8]                  ; cut short is ignored, not trusted
+    cmp al, 2
+    ja .skip
+    mov [apw_spk], al
     jmp .skip
 
 ; --- fmt ------------------------------------------------------------------

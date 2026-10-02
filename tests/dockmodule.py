@@ -81,10 +81,8 @@ def run(fault, saved):
             check_basic(m, 0)
             assert word(m, "mod_tab") == 0, "boot loaded Control Panel"
             mo = os88mouse.Mouse(marty=m)
-            dispcp.open_panel(m, mo, S, os88marty.settle, page=None)
-            wx, wy = dispcp._cp_win(m, S)
-            row = m.read(S("cp_nst"), 1)[0] - 1
-            mo.click(wx + 37, wy + 19 + 6 + row * 14 + 7, settle=0)
+            dispcp.open_panel(m, mo, S, os88marty.settle,
+                              page=dispcp.CP_IDOCK)
             os88marty.settle(m)
             for _ in range(2):
                 dockpos.click_row(m, mo, dockpos.CPK_R0Y + dockpos.CPK_ROWH)

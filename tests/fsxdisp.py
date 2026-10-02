@@ -231,9 +231,8 @@ def main(argv):
         dispcp.set_mode(m, mo0, S, os88marty.settle, "right", card=gate_card)
         if a.dock:
             import dockpos
-            wx, wy = dispcp._cp_win(m, S)
-            row = m.read(S("cp_nst"), 1)[0] - 1
-            mo0.click(wx + 37, wy + 19 + 6 + row * 14 + 7, settle=0)
+            dispcp.open_panel(m, mo0, S, os88marty.settle, card=gate_card,
+                              page=dispcp.CP_IDOCK)
             os88marty.settle(m, card=gate_card)
             dockpos.click_row(m, mo0, dockpos.CPK_R0Y + 2 * dockpos.CPK_ROWH)
             dockpos.click_row(m, mo0, dockpos.CPK_AY)

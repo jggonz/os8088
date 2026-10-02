@@ -11,13 +11,14 @@ captured (MARTYPC_WAV). What must hold:
 
   1. every frame drawn, no stall, no error - and the speaker, not silence,
      was the clock: [vp_snd] = 2 as the play ran;
-  2. THE SOUND IS THE FILE'S: the capture's level, averaged over each PWM
-     period and taken at the speaker's rate, follows the clip's samples -
-     correlation 0.9 or better at the best alignment;
+  2. THE SOUND IS THE FILE'S: 800 writes to port 42h mid-play are the clip's
+     samples through the speaker shaper (SPEC.md 34.11.9, tools/os88spkfx.py
+     deciding each frame's audio as vp_aput does), IN ORDER - or, for a clip
+     of counts, the file's bytes as they are - and the capture moves;
   3. the play took the SOUND's time: the clip's samples at the rate the
      speaker really runs (1,193,182 / N) within 2%;
   4. the kernel is left as it was: channel 2 back to tone-idle and nobody's
-     (snd_ch2mode 0), no sample ISR (spk_isr's segment 0).
+     (snd_ch2mode 0), no sample ISR (spk_seg 0).
 
 --silent plays the same clip with S pressed first, in the window: the play
 must be SILENT ([vp_snd] = 0) and its capture flat. --counts makes the clip
@@ -35,7 +36,7 @@ VIDSPK_ATTR=1 the lost pulses over ~3,000, each named by the code the late
 one interrupted (SPEC.md 34.11.3 and 34.11.6 came off it).
 
 Broken on purpose - os88spk_isr's `out 0x42, al` taken out - 2 FAILS (the
-capture is flat); vp_aput's table translation taken out (raw samples in the
+capture is flat); vp_aput's shaper taken out (raw samples in the
 ring) - 2 FAILS (the pulses no longer follow the samples' order).
 """
 import argparse
@@ -52,11 +53,23 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E402
 import sndcheck                                               # noqa: E402
+import os88spkfx as fx                                        # noqa: E402
 from cycweb import pkg_syms                                   # noqa: E402
 
 FPS = 15.0
-PULSES = 800        # port writes traced, mid-play
+PULSES = 800        # port writes held to the clip's samples, mid-play...
+LOSSN = 3000        # ...and traced for the lost share: the first 800 alone
+                    # swung with where a disk read fell in them - the SAME
+                    # machine lost 3.6% and 4.9% of them with one package
+                    # shifted a few hundred bytes, and exactly 121 of ~3,140
+                    # periods (3.85%) both times
 LOSS = 0.04         # the pulses a play may lose to IF = 0 (SPEC.md 34.11)
+LOSS2 = 0.05        # ...at TWO pulses a sample, whose periods are half as
+                    # long, so the same stretches at IF = 0 cost a larger
+                    # share: one pulse measures 2.3-3.0% and two 3.7-4.2%
+                    # across kernel layouts (2026-09-29), the stretches being
+                    # the kernel's (74 of 117 lost right after dskw_nbody's
+                    # read, 20 after the keyboard's) and not the player's
 MACHINE = "os8088_5150_herc_hdd_gla"
 MACHINE_SB = "os8088_5150_herc_hdd_sb_gla"     # the owner's 5150's shape
 TEMPLATE = "build/martypc/run/media/hdds/default_xtide.vhd"
@@ -96,7 +109,7 @@ def clip(tmp, secs, rate, spk=False, spkp=1):
 
 
 CP_I0Y, CP_IROWH, CP_RX, CP_PGX, CP_PR0Y = 6, 14, 96, 4, 26  # kernel/ctrl.inc
-CP_SOUND = 3                    # cp_items' record: sched, time, drivers, SOUND
+CP_SOUND = 4                    # cp_items' record: sched, time, drivers, display, SOUND
 
 
 def cp_speaker(m, ui, bad):
@@ -261,8 +274,8 @@ def main():
                     mm.breakpoints([])
                 elif ev["open"] is not None and ev["close"] is None:
                     ev["w"].append((rec["cycles"], r_["ax"] & 0xFF))
-                    if len(ev["w"]) >= PULSES:
-                        mm.bp_exec(k_off)
+                    if len(ev["w"]) >= (PULSES if a.fs_off else LOSSN):
+                        mm.bp_exec(k_off)   # (S at PULSES wants the close)
             arm = [k_open] if spk else []
             if os.environ.get("VIDSPK_ATTR"):     # what the late pulses hit
                 import time as _t, collections, bisect as _b
@@ -275,7 +288,8 @@ def main():
                 kkv = [v for v, k in ksy]
                 pks = sorted((v, k) for k, v in syms.items())
                 pkv = [v for v, k in pks]
-                isr_ = base + syms["os88spk_isr"]
+                isr_ = base + syms["os88spk_isrm" if a.pulses > 1   # (two
+                                   else "os88spk_isr"]        # pulses: the toggle)
 
                 def hit(mm, rec):
                     r_ = mm.regs()
@@ -289,7 +303,7 @@ def main():
                 late = collections.Counter()
                 for g_, h in zip([b - a for a, b in zip(cy, cy[1:])],
                                  tr.hits[1:]):
-                    lost = int(round(g_ / (4.0 * n))) - 1
+                    lost = int(round(g_ / (4.0 * n / a.pulses))) - 1
                     if lost <= 0:
                         continue
                     cs, ip = h["hit"]
@@ -301,8 +315,9 @@ def main():
                         nm = "%04x:%04x" % (cs, ip)
                     late[nm] += lost
                 span = cy[-1] - cy[0]
+                per = 4 * n // a.pulses
                 print("   attr: %d lost of %d periods; after: %s" % (
-                    span // (4 * n) - len(cy) + 1, span // (4 * n),
+                    span // per - len(cy) + 1, span // per,
                     late.most_common(12)))
                 return 0
             if os.environ.get("VIDSPK_ISR"):      # the fast path, cycles
@@ -379,7 +394,7 @@ def main():
             st = {k: rw(k) for k in ("vp_done", "vp_stall", "vp_late")}
             snd = 2 if ev["open"] else 0
             ch2 = m.read(m.sym("snd_ch2mode"), 1)[0]
-            isr = u16(m.read(m.sym("spk_isr") + 2, 2))
+            isr = u16(m.read(m.sym("spk_seg"), 2))
         finally:
             m.close()
         want = 2 if spk else 0
@@ -413,10 +428,17 @@ def main():
         else:
             np_ = n // a.pulses             # a PULSE's counts (34.11.7)
             tab = [1 + s_ * (np_ - 2) // 255 for s_ in range(256)]
-            want_c = audio if r.spk else bytes(tab[x] for x in audio)
+            if r.spk:                       # counts: copied as they are
+                want_c = audio
+            else:                           # a card's samples: SHAPED, the
+                sh = fx.Shaper(a.rate)      # shaper deciding each frame's
+                want_c = b""                # audio before emitting it
+                for j in range(0, len(audio), r.abytes):   # (SPEC.md 34.11.9,
+                    sh.level(audio[j:j + r.abytes])         # 98.3.15)
+                    want_c += sh.emit(audio[j:j + r.abytes])
             if a.counts and not r.spk:
                 bad.append("the clip was not made as speaker counts")
-            got = bytes(c for _, c in ev["w"])
+            got = bytes(c for _, c in ev["w"][:PULSES])
             if many:                        # each count twice: whole, half
                 want_c = bytes(x for x in want_c for _ in range(a.pulses))
             at, lead = -1, 0
@@ -425,10 +447,10 @@ def main():
                     at = want_c.find(got[lead:])    # starts on silence)
                     if at >= 0:
                         break
-            print("   2: %d pulses traced; after %d silent, as counts they are"
+            print("   2: %d pulses held; after %d silent, as counts they are"
                   " the clip's samples %s; the capture's level spans %.2f"
                   % (len(got), lead, ("%d.., as the file stores them" if r.spk
-                                      else "%d.. through the table") % at
+                                      else "%d.. through the shaper (34.11.9)") % at
                      if at >= 0
                      else "NOWHERE", span))
             if at < 0:
@@ -445,7 +467,8 @@ def main():
                 # (not after M in the full screen: its 800 pulses are the
                 # first after a seek, the ring being read again from the
                 # disk while they play - 15.4% measured, SPEC.md 98.3.17)
-                if lost > LOSS * edges and not fast and not a.fs_on:
+                if lost > (LOSS2 if a.pulses > 1 else LOSS) * edges \
+                        and not fast and not a.fs_on:
                     bad.append("3: %.1f%% of the pulses were lost"
                                % (100.0 * lost / edges))
             if a.fs_on:                     # M: OPENED THERE, in step

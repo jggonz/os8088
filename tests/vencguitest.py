@@ -14,7 +14,11 @@ so it is checked here with no Tk at all:
    the window's "?" beside the field, and no line names a value that is not
    one - so a preset or layout added tomorrow cannot arrive unexplained.
 2. THE DEFAULTS ARE THE ENCODER'S: the form left alone makes a command line
-   that parses to the parser's own defaults, option for option.
+   that parses to the parser's own defaults, option for option. The
+   speaker style's high-pass, ratio and range are SHOWN filled and stay
+   off the command line while they are the style's, for either style -
+   and one changed by hand is on it, the sound being the speaker's (with
+   any other sound the group is greyed, 14).
 3. EVERY TARGET ENCODES: each "made for" choice, on a second of ffmpeg's
    testsrc2, is a file os88vid verifies, of the format and layout it says -
    and a Live one a live file naming its screen.
@@ -59,6 +63,36 @@ so it is checked here with no Tk at all:
    nothing of its process group left (its ffmpeg included), the older file
    byte for byte as it was, and no .part. The owner's Cancel on Windows
    left the encode running to its end, because it only asked.
+13. THE PALETTE PANEL SHOWS WHAT THE ENCODER WILL USE: every target's
+   Colour tab has a palette to show; a CGA4 form with the set, intensity
+   and background all fixed shows ONE row, the four colours of the byte
+   os88venc.cga4_pick returns for those same overrides - and with none
+   fixed, one row per set and intensity, each the byte cga4_pick returns
+   when just those two are fixed. Each background's "?" swatch is its
+   colour, and a CGA4 file's own palette under the preview is the one in
+   its header. A panel that drew mode 5 where the file will be mode 4 -
+   the set bits swapped - FAILS here, naming the row.
+14. A GROUP IS GREYED WHEN IT CANNOT APPLY (SPEC.md 98.2.8.2): every option
+   is in one group at most, every group names options that exist, and for
+   each target the group of the pixel format it makes applies and every
+   other format's is greyed WITH A REASON - the speaker's two apply to
+   the speaker target and to no other. What a greyed group holds stays
+   off the command line: --cga-palette on the speaker target, --flip on
+   13h. With group_state answering "applies" for everything, 14 FAILS on
+   every target.
+15. A FILE SAYS HOW IT WAS MADE (SPEC.md 98.1.1.4, 98.2.17): every target's
+   file carries its options, and LOADING it gives a form whose command line
+   resolves to the very record stored - every option, the target it was
+   made for picked again, nothing noted as lost. The frozen deflate
+   dictionary is pinned by SHA-256, the parser's schema by its fingerprint
+   (an option added, renamed or given other choices FAILS here until
+   OPTS_VERSION goes up with a MIGRATIONS entry), and the version mapper
+   is driven through a made-up history - a rename, a renamed choice, an
+   option added with its legacy value, one removed, a record from a newer
+   encoder, a value no longer a choice. A damaged block leaves the file
+   opening and playing (Reader) but refused by verify_v88; a file made
+   before options were stored loads as None. With form_value answering ""
+   the round trip FAILS on every target.
 
 Broken on purpose - an option dropped from the table, or a help string
 emptied - 1 FAILS naming it. Needs ffmpeg for 3 to 5 and SKIPS without it.
@@ -78,6 +112,205 @@ import os88vencgui as G                                      # noqa: E402
 import os88vid as vid                                        # noqa: E402
 
 SKIP = 77
+
+
+# the group each pixel format's own options are in - spelled here rather
+# than read off the window's table, so a table that greys the wrong one
+# cannot agree with itself
+FORMAT_GROUP = {"mono": "One bit", "cgacomp": "CGA composite",
+                "cga4": "CGA, 4 colours", "c512": "CGA composite, 512 colours",
+                "vga8": "VGA, 256 colours", "text": "Text mode"}
+SPEAKER_GROUPS = ("PC speaker", "PC speaker: the sound shaped")
+
+
+def groups_leg():
+    """14: the groups against the targets"""
+    bad = []
+    grouped = [d for g in G.GROUPS for d in g[2]]
+    opts = {f["dest"] for f in G.fields()}
+    twice = sorted({d for d in grouped if grouped.count(d) > 1})
+    stale = sorted(set(grouped) - opts)
+    loose = sorted(opts - set(grouped))
+    if twice or stale:
+        bad.append("14: options in two groups %s, groups naming no option %s"
+                   % (twice, stale))
+    heads = {g[1] for g in G.GROUPS}
+    missing = [h for h in list(FORMAT_GROUP.values()) + list(SPEAKER_GROUPS)
+               if h not in heads]
+    if missing:
+        bad.append("14: no group %s" % missing)
+    wrong = []
+    for i, t in enumerate(G.TARGETS):
+        v = G.form_start()
+        v.update(G.target_fill(i, 30.0))
+        gs, fs = G.group_state(v)
+        pf = G.form_context(v)["pixfmt"]
+        for f, h in FORMAT_GROUP.items():
+            if (gs.get(h) is None) != (f == pf):
+                wrong.append("%s: %s %s" % (t[0], h, "greyed" if gs.get(h)
+                                            else "applies"))
+        spk = v.get("audio") == "speaker"
+        for h in SPEAKER_GROUPS:
+            if (gs.get(h) is None) != spk:
+                wrong.append("%s: %s %s" % (t[0], h, "greyed" if gs.get(h)
+                                            else "applies"))
+        noreason = [h for h, why in gs.items() if why is not None
+                    and not why.strip()]
+        if noreason:
+            wrong.append("%s: %s greyed saying nothing" % (t[0], noreason))
+    # what a greyed group holds is left off the command line
+    tgt = lambda pre: [i for i, t in enumerate(G.TARGETS) if t[1] == pre][0]
+    offs = []
+    for pre, dest, val, flag, on in (("herc-spk", "cga_palette", "1",
+                                      "--cga-palette", False),
+                                     ("cga4", "cga_palette", "1",
+                                      "--cga-palette", True),
+                                     ("vga8", "flip", "1", "--flip", False),
+                                     ("modex", "flip", "1", "--flip", True),
+                                     ("cga4", "spk_pulses", "2",
+                                      "--spk-pulses", False),
+                                     ("herc-spk", "spk_pulses", "2",
+                                      "--spk-pulses", True)):
+        v = G.form_start()
+        v.update(G.target_fill(tgt(pre), 30.0))
+        v[dest] = val
+        if (flag in G.argv_from("in.mp4", "o.V88", v, 30.0)) != on:
+            offs.append("%s %s on %s" % (flag, "missing" if on else
+                                         "left on", pre))
+    # A SPEAKER WAV (86.21.1): every target's form, saved as a .WAV, has
+    # only the sound's groups left and no --audio on its command line
+    for i, t in enumerate(G.TARGETS):
+        v = G.form_start()
+        v.update(G.target_fill(i, 30.0))
+        gs, fs = G.group_state(dict(v, _out="o.WAV"))
+        on = sorted(h for h, why in gs.items() if why is None)
+        if on != sorted(G.WAV_KEEP):
+            wrong.append("%s as a WAV: %s apply" % (t[0], on))
+        if "--audio" in G.argv_from("in.mp4", "o.WAV", v, 30.0):
+            offs.append("--audio on a WAV from %s" % t[0])
+    print("   14: %d groups, %d options in none (on Advanced), %d targets: "
+          "%d wrong, %d command lines wrong"
+          % (len(G.GROUPS), len(loose), len(G.TARGETS), len(wrong),
+             len(offs)))
+    if wrong:
+        bad.append("14: %s" % "; ".join(wrong))
+    if offs:
+        bad.append("14: %s" % "; ".join(offs))
+    return bad
+
+
+ZDICT_SHA256 = ("2f1a524ffb7c1ca2ff54102a28e41201"
+                "077dc25be32e295f46270508b9bbccd0")
+
+
+def options_leg():
+    """15, the half with no encode: the container, the schema, the mapper"""
+    import hashlib
+    bad = []
+    got = hashlib.sha256(vid.OPTS_ZDICT[1]).hexdigest()
+    if got != ZDICT_SHA256:
+        bad.append("15: os88vid.OPTS_ZDICT[1] is not the frozen dictionary "
+                   "(sha256 %s): every file made with it would stop reading "
+                   "- a new dictionary is a new container version" % got)
+    fp = V.opts_fingerprint()
+    if fp != V.OPTS_FINGERPRINT.get(V.OPTS_VERSION):
+        bad.append("15: the encoder's options are not version %d's any more "
+                   "(fingerprint %s, pinned %s): an option was added, "
+                   "renamed, removed or given other choices. Raise "
+                   "os88venc.OPTS_VERSION, add MIGRATIONS[%d] saying how a "
+                   "version-%d record reads now, and pin the new "
+                   "fingerprint (SPEC.md 98.2.17)"
+                   % (V.OPTS_VERSION, fp,
+                      V.OPTS_FINGERPRINT.get(V.OPTS_VERSION),
+                      V.OPTS_VERSION, V.OPTS_VERSION))
+    # the MAPPER through a made-up history: version 1 called --keysecs
+    # --key-secs and --dither's bayer "ordered", had no --flip (and made
+    # every file as if it were on), and had an --old-thing since removed
+    keep = V.OPTS_VERSION, V.MIGRATIONS
+    try:
+        V.OPTS_VERSION = 2
+        V.MIGRATIONS = {1: [("rename", "key_secs", "keysecs"),
+                            ("revalue", "dither", {"ordered": "bayer"}),
+                            ("added", "flip", True),
+                            ("removed", "old_thing", "folded into --stable")]}
+        base = {d: V.parser().get_default(d) for d in V.opts_actions()}
+        o1 = dict(base, key_secs=1.5, dither="ordered", old_thing=3)
+        del o1["keysecs"], o1["flip"]
+        o, notes = V.opts_migrate({"v": 1, "o": o1})
+        want = dict(base, keysecs=1.5, dither="bayer", flip=True)
+        if o != want or not any("old-thing" in n for n in notes):
+            bad.append("15: the version mapper made %s, noting %s"
+                       % ({k: o.get(k) for k in ("keysecs", "dither",
+                                                  "flip", "old_thing")},
+                          notes))
+        o, notes = V.opts_migrate({"v": 3, "o": dict(base, novel=1,
+                                                     dither="sierra")})
+        if "novel" in o or "dither" in o or len(notes) < 3:
+            bad.append("15: a newer encoder's record read as %s, noting %s"
+                       % ({k: o.get(k) for k in ("novel", "dither")}, notes))
+    finally:
+        V.OPTS_VERSION, V.MIGRATIONS = keep
+    # the container: a round trip, and damage refused where it is read
+    doc = {"v": 1, "src": "x.mp4", "o": {"fps": 23.0}}
+    if vid.unpack_options(vid.pack_options(doc)) != doc:
+        bad.append("15: pack_options does not round-trip")
+    old = os.path.join(ROOT, "apps", "video", "os8088.v88")
+    with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as t:
+        if G.form_from_file(vid.Reader(old)) is not None:
+            bad.append("15: a file with no options loaded as if it had some")
+        d = bytearray(open(old, "rb").read())
+        blob = vid.pack_options(doc)
+        struct.pack_into("<IH", d, vid.H_OPTS, len(d), len(blob))
+        good, hurt = os.path.join(t, "G.V88"), os.path.join(t, "H.V88")
+        open(good, "wb").write(bytes(d + blob))
+        blob = bytearray(blob)
+        blob[len(blob) // 2] ^= 0x55
+        open(hurt, "wb").write(bytes(d + blob))
+        try:
+            vid.verify_v88(good)
+            if vid.Reader(good).options() != doc:
+                bad.append("15: a stored record reads back differently")
+        except vid.V88Error as e:
+            bad.append("15: a good options block is refused: %s" % e)
+        try:
+            vid.Reader(hurt)            # it OPENS: the player never reads it
+        except vid.V88Error as e:
+            bad.append("15: a damaged options block stops the file "
+                       "opening: %s" % e)
+        try:
+            vid.verify_v88(hurt)
+            bad.append("15: verify_v88 passed a damaged options block")
+        except vid.V88Error:
+            pass
+    print("   15: dictionary %s, schema %s (version %d), the mapper and the "
+          "container checked" % (got[:12], fp, V.OPTS_VERSION))
+    return bad
+
+
+def roundtrip(i, label, src, out):
+    """15: the file made for target `i` loads into a form whose command
+    line resolves to the record it carries, for the same target"""
+    r = vid.Reader(out)
+    try:
+        got = G.form_from_file(r)
+    except vid.V88Error as e:
+        return ["15: %s: its options do not read: %s" % (label, e)]
+    if got is None:
+        return ["15: %s: the file carries no options" % label]
+    vals, ti, notes, name = got
+    stored = r.options()["o"]
+    a2 = V.parser().parse_args(G.argv_from(src, out + ".2", vals))
+    again = V.options_record(a2, 15.0)
+    diff = ["%s %r -> %r" % (k, stored[k], again.get(k)) for k in stored
+            if k not in ("title", "credits") and stored[k] != again.get(k)]
+    bad = []
+    if diff or ti != i or notes or name != os.path.basename(src):
+        bad.append("15: %s: loaded as target %s from %r, noting %s; the "
+                   "form's command line differs in %s"
+                   % (label, ti, name, notes, "; ".join(diff) or "nothing"))
+    print("   15: %-56s %d-byte record, loads as itself"
+          % (label[:56], r.optslen))
+    return bad
 
 
 def main():
@@ -110,7 +343,7 @@ def main():
         if lst:
             bad.append("options %s: %s" % (what, " ".join(lst)))
     # --- 2
-    vals = {f["dest"]: f["default"] for f in fl}
+    vals = G.form_start()
     a = V.parser().parse_args(G.argv_from("in.mp4", "out.V88", vals))
     d = V.parser().parse_args(["in.mp4", "out.V88"])
     diff = [k for k in vars(d) if getattr(a, k) != getattr(d, k)]
@@ -118,6 +351,23 @@ def main():
           "defaults" % len(diff))
     if diff:
         bad.append("the untouched form changes %s" % " ".join(diff))
+    for style in sorted(vid.SPK_STYLES):
+        sv = G.style_values(style)
+        st = vid.SPK_STYLES[style]
+        shown = dict(vals, audio="speaker", spk_style=style, **sv)
+        a = V.parser().parse_args(G.argv_from("in.mp4", "o.V88", shown))
+        on = [dst for dst, _ in G.STYLE_FIELDS
+              if getattr(a, dst) is not None]
+        wrong = [dst for dst, k in G.STYLE_FIELDS
+                 if float(sv[dst]) != st[k]]
+        a = V.parser().parse_args(G.argv_from(
+            "in.mp4", "o.V88", dict(shown, spk_highpass="333")))
+        print("   style %s shows %s" % (style, " ".join(
+            "%s %s" % (dst, sv[dst]) for dst, _ in G.STYLE_FIELDS)))
+        if on or wrong or a.spk_highpass != 333:
+            bad.append("style %s: %s on the command line, %s shown wrong, "
+                       "a changed high-pass read as %s"
+                       % (style, on, wrong, a.spk_highpass))
     # --- 6: a target shows what it is, and says it briefly
     for i, t in enumerate(G.TARGETS):
         full = G.target_fill(i, 30.0)
@@ -151,6 +401,9 @@ def main():
     print("   11: %d drop cases, %d wrong" % (len(cases), len(wrong)))
     if wrong:
         bad.append("11: drops taken wrongly: %s" % wrong)
+    leg13(bad)
+    bad += groups_leg()
+    bad += options_leg()
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         for b in bad:
             print("   FAIL: %s" % b)
@@ -181,6 +434,7 @@ def main():
             except Exception as e:
                 bad.append("%s: %s" % (label, e))
                 continue
+            bad += roundtrip(i, label, src, out)
             r, frames = G.preview_frames(out)
             w, h = frames[0][1].size
             an, ad = r.aspect
@@ -206,6 +460,10 @@ def main():
                     {"mono": "mono1"}.get(pixfmt, pixfmt):
                 bad.append("%s: made %s" % (label, vid.PF_NAMES[r.pixfmt]))
             if r.pixfmt == vid.PF_CGA4:
+                fp = [h for h, _ in G.file_palette(r)[0][1]]
+                if fp != [h for h, _ in G._c16(vid.cga4_colours(r.cgapal))]:
+                    bad.append("13: the file's palette panel shows %s, not "
+                               "its header's %02Xh" % (fp, r.cgapal))
                 import numpy as np
                 cols = {tuple(c) for c in np.asarray(
                     frames[-1][1]).reshape(-1, 3).tolist()}
@@ -243,6 +501,60 @@ def main():
     if not bad:
         print("   ok")
     return 1 if bad else 0
+
+
+def leg13(bad):
+    """13: the Colour tab's palette panel against the encoder's own pick"""
+    empty = [t[0] for i, t in enumerate(G.TARGETS)
+             if not all(h and n for h, _, n in
+                        G.palette_view(G.target_fill(i, 30.0)))]
+    if empty:
+        bad.append("13: no palette shown for %s" % "; ".join(empty))
+    cga4 = [i for i, t in enumerate(G.TARGETS) if t[2] == "cga4"][0]
+    base = G.target_fill(cga4, 30.0)
+    hexes = lambda sw: [x[0] if x else None for x in sw]
+    swat = [c for c in range(16)
+            if hexes(G.choice_swatches("cga_bg", str(c), {})) !=
+            hexes(G._c16((c,)))]
+    if swat:
+        bad.append("13: background choices shown in the wrong colour: %s"
+                   % swat)
+    try:
+        import numpy as np
+    except ImportError:
+        print("   13: %d targets show a palette; no numpy, so not checked "
+              "against cga4_pick" % len(G.TARGETS))
+        return
+    rng = np.random.RandomState(88)
+    frames = [rng.randint(0, 256, (40, 64, 3)).astype(np.uint8)]
+    checked = 0
+    for pal in (0, 1, 2):
+        for br in (0, 1):
+            for bg in (0, 1, 9, 14):
+                v = dict(base, cga_palette=str(pal), cga_bright=str(br),
+                         cga_bg=str(bg))
+                (h, rows, n), = G.palette_view(v)
+                want = G._c16(vid.cga4_colours(V.cga4_pick(frames, bg, pal,
+                                                            br)))
+                if len(rows) != 1 or hexes(rows[0][1]) != hexes(want):
+                    bad.append("13: set %d, bright %d, background %d shows "
+                               "%s, the encoder makes %s" % (
+                                   pal, br, bg, rows and rows[0], want))
+                checked += 1
+    (h, rows, n), = G.palette_view(dict(base, cga_palette="", cga_bright="",
+                                        cga_bg=""))
+    want = []
+    for br in (0, 1):
+        for pal in (0, 1, 2):
+            sel = V.cga4_pick(frames, 0, pal, br)
+            want.append([None] + hexes(G._c16(vid.cga4_colours(sel)))[1:])
+    got = [hexes(sw) for _, sw in rows]
+    if got != want:
+        bad.append("13: nothing fixed shows %s, the encoder's candidates "
+                   "are %s" % (got, want))
+    print("   13: %d targets show a palette; %d fixed CGA4 palettes and "
+          "the %d candidates match cga4_pick" % (len(G.TARGETS), checked,
+                                                 len(want)))
 
 
 def root_names(img, st11, spt, heads):

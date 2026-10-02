@@ -622,8 +622,12 @@ class Mouse:
         _wait(self.m, settle, "dblclick", 2.0)
         return span
 
-    def menu(self, x0, y0, x1, y1, settle=None):
+    def menu(self, x0, y0, x1, y1, settle=None, aim=None):
         """Press on the bar, drag to the item, release (SPEC.md 12).
+
+        `aim` is `rmenu`'s, for a LEFT-button popup: SPEC.md 31.14's
+        drop-downs are menu_popup opened on a left press, anchored under a box
+        and shifted like any popup, so the item comes off the guest's rect.
 
         A menu cannot be opened with a click: menu_track draws the pull-down
         and then polls a level, so a press-and-release in place opens it and
@@ -638,7 +642,10 @@ class Mouse:
         window as unchanged. It cost half a dozen runs of a diagnosis that was
         chasing a kernel bug at the time.
         """
-        self._press_drag_release(x0, y0, x1, y1, settle)
+        if aim is None:
+            self._press_drag_release(x0, y0, x1, y1, settle)
+            return
+        self._press_aim_release(x0, y0, aim, settle, btn=1)
 
     def rmenu(self, x0, y0, x1, y1, settle=None, aim=None):
         """The same for the RIGHT button: the context menu (SPEC.md 12.4).
@@ -659,13 +666,18 @@ class Mouse:
         if aim is None:
             self._press_drag_release(x0, y0, x1, y1, settle, btn=2)
             return
+        self._press_aim_release(x0, y0, aim, settle, btn=2)
+
+    def _press_aim_release(self, x0, y0, aim, settle, btn):
         self.to(x0, y0)
-        if self.where()[2] & 2:
-            self._edge(False, btn=2)
-        self._edge(True, btn=2)
+        if self.where()[2] & btn:
+            self._edge(False, btn=btn)
+        if btn == 1:
+            self._sep()                 # _press_drag_release's reason
+        self._edge(True, btn=btn)
         x1, y1 = aim(self)
-        self.to(x1, y1, r=True)
-        self._edge(False, btn=2)
+        self.to(x1, y1, l=btn == 1, r=btn == 2)
+        self._edge(False, btn=btn)
         _wait(self.m, settle, "drag/menu", 2.0)
 
     def drag(self, x0, y0, x1, y1, settle=None):

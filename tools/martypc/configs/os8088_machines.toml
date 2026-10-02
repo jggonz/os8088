@@ -763,6 +763,47 @@ overlays = [
     subtype = "Hercules"
     clock_mode = "Dynamic"
 
+# ...and the same machine with a NEC V20 in the socket - the XT upgrade the
+# Video Player's heavier speaker paths are aimed at (SPEC.md 34.11.9): the
+# same 4.77 MHz clock and bus, the V20's faster microcode. It boots and runs
+# (tests/v20boot.py) since patches/07: upstream let POPF and IRET write FLAGS
+# bit 15, the V20's MD, which the chip write-protects outside BRKEM - so
+# cpu_detect's FLAGS probe called it a 386, the kernel ran its AT probes on an
+# XT, and the machine stopped in .bss with MD clear. That was MartyPC's, not
+# os8088's: docs/plans/completed/HANDOFF-V20-FREEZE.md is the account.
+[[machine]]
+name = "os8088_5150_herc_hdd_v20_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.cpu]
+    upgrade_type = "NecV20"
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
 # ...and the same machine on the period ROM, for a box that has it staged.
 [[machine]]
 name = "os8088_5150_herc_hdd"
@@ -1478,6 +1519,43 @@ overlays = [
 name = "os8088_5150_cga_720b"
 type = "Ibm5150v256K"
 rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+
+        [[machine.fdc.drive]]
+        type = "360k"
+
+        [[machine.fdc.drive]]
+        type = "720k"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# ...and its GLaBIOS twin, which is the one a row can actually run: the IBM
+# ROM is not in this tree. Written for Write Img... (SPEC.md 18.99.8), whose
+# round trip no other machine here can host - the image of a 360KB disk is
+# 720 sectors and a 360KB volume's data area is 708, so the FILE has to live
+# on a bigger disk than the one it is a picture of. A 720KB B: holds it, and
+# the 360KB A: is the target. That is also the reporter's own arrangement
+# (docs/FIELD-NOTES.md 32): a 5150 whose second drive is 80-cylinder.
+[[machine]]
+name = "os8088_5150_cga_720b_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
 speaker = true
 overlays = [
     "pcxt_2_serial_ports",

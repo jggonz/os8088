@@ -181,6 +181,15 @@ hd_iw_open:
     mov [hd_idev], al           ; BOUND here, tool.inc's hd_tdev reason: the
                                 ; Control Panel underneath stays clickable, and
                                 ; hd_istate/hd_isecs below describe THIS device
+    mov byte [hd_isel], 0       ; ...and the SLOT starts at 1 every time, as
+                                ; hd_tw_open's hd_tsel does. It used to carry
+                                ; over from the last open for as long as this
+                                ; image stayed loaded - a slot picked on
+                                ; ANOTHER drive, or on this one before it was
+                                ; repartitioned - and hd_iw_scan keeps a
+                                ; carried slot whenever it is usable, which on
+                                ; a blank disk is every slot. So a fresh drive
+                                ; could open on Slot 4 and install there
     call hd_iw_scan             ; a fresh table every time, tool.inc's reason:
                                 ; the disk can be swapped between two clicks
     call hd_idefwipe            ; ...and the Erase box follows the selection:
@@ -530,79 +539,32 @@ hd_iw_paint:
 ; its three captions is on it (SPEC.md 52.10.6.1).
 ; -----------------------------------------------------------------------------
 
-; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
-; A Control Panel page draws its buttons one at a time, so the record is
-; pointed at whichever rect the caller staged. The GESTURE here is the
-; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
-; release-fired; what changed is that the DRAW goes through the control.
-hdi_btlbl: dw 0
-hdi_btflg: dw 0
-    OS88UI_BTNREC hdi_btrec, 0, hdi_btlbl, hdi_btflg, 1
-
 hd_iw_button:
     push ax
-    push bx
     push cx
     push dx
-    push si
-    push di
-    mov [hd_ibx], ax
-    mov [hd_ibw], bx            ; latched across the predicate call; SI is not
-                                ; any more - os88ui_btn takes the label there,
-                                ; so hd_ibl went with the drawing
-    mov al, cl                  ; ...and PRESSED if it is the one being held.
-    inc al                      ; ASKED FIRST, because CL is the predicate
-    cmp al, [hd_idown]          ; selector on the way in and the DIS flag on
-    mov dx, 0                   ; the way out - two meanings, one register
+    mov dl, cl                  ; PRESSED if it is the one being held. ASKED
+    inc dl                      ; FIRST, because CL is the predicate selector
+    cmp dl, [hd_idown]          ; on the way in and the DIS flag on the way
+    mov dx, 0                   ; out - two meanings, one register
     jne .nodn
     mov dx, OS88UI_DOWN
 .nodn:
     cmp cl, 1
-    je .live
+    je .live                    ; equal: CF = 0, live
     call hd_iact_ok             ; the ONE predicate, shared by the greying,
-    jmp short .pen              ; the refusal and the explanation (47 rule 2)
-.live:
-    clc
-.pen:
+.live:                          ; the refusal and the explanation (47 rule 2)
     mov cx, 0                   ; CF -> the shared control's DIS flag. `mov`
-    adc cx, 0                   ; does not touch flags, so the carry the
-                                ; predicate answered in survives into the adc
-    mov ax, di                  ; ...and the rect, in screen coordinates
-    add ax, [hd_ibx]
-    mov [hd_ibrect+0], ax
-    add ax, [hd_ibw]
-    dec ax
-    mov [hd_ibrect+4], ax
-    mov ax, bp
-    add ax, HIW_BY
-    mov [hd_ibrect+2], ax
-    add ax, HIW_BH - 1
-    mov [hd_ibrect+6], ax
-    mov di, cx
-    or di, dx                   ; DIS | DOWN, and DIS outranks it inside the
-                                ; control, so a greyed button never says it
-                                ; will fire (SPEC.md 13.8)
-    mov bx, hd_ibrect           ; OS88UI_FILL because a RELEASE redraws this
-    or di, OS88UI_FILL          ; button over a pressed one; on a full pass
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [hdi_btlbl], si          ; label and DI its flags, so the record takes
-    mov [hdi_btflg], di          ; all three and the picture is identical
-    mov [hdi_btrec+OS88UI_BT_RECTS], bx
-    mov bx, hdi_btrec
-    mov al, 1
-    call os88ui_btn
-    pop bx
-    pop ax
-    pop di
-    pop si
+    adc cx, 0                   ; does not touch flags
+    or cx, dx
+    add ax, di                  ; ...and the rect, in screen coordinates
+    lea dx, [bp+HIW_BY]
+    call hd_btn_draw16          ; tool.inc: one tail for the image's four
     pop dx
     pop cx
-    pop bx
     pop ax
     ret
 
-hd_ibrect:  dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
 hd_idown:   db 0                ; which button is DRAWN pressed, 0 = none
                                 ; (SPEC.md 13.8.4). hd_isetdown is its one
                                 ; writer and hd_iw_button its one reader
@@ -2944,6 +2906,10 @@ hd_icopy_one:
     mov [hd_ioff], ax
     mov [hd_ioff+2], ax
     mov [hd_isys], al
+    push di
+    mov di, hd_ircur            ; a new file: the cursor names none
+    call os88_rseq_new
+    pop di
 
     mov si, hd_iname            ; how big is it, and is it a system file?
     HDBSTEP 2
@@ -3021,8 +2987,11 @@ hd_icopy_one:
                                 ; terminator a RAW copier can use and the rule
                                 ; the whole-file shape got wrong by not having
                                 ; a loop at all
-.notmine:                       ; SPEC.md 52.10.12: not the apps phase's
 .ok:
+    xor cx, cx                  ; THE CLOSE: the file's link, FAT and size,
+    call OSAPI_FILE_WRITE_SEQ   ; once - from the source too, the commit
+    jc .fail                    ; hopping to the file and back
+.notmine:                       ; SPEC.md 52.10.12: not the apps phase's
     clc
     jmp short .out
 .fail:
@@ -3106,6 +3075,7 @@ hd_iread_chunk:
     push cx
     push dx
     push si
+    push di
     push es
     mov es, [hd_ibufseg]
     xor bx, bx
@@ -3114,8 +3084,11 @@ hd_iread_chunk:
     mov cx, ax
     mov ax, [hd_ioff]
     mov dx, [hd_ioff+2]
-    call OSAPI_FILE_READ_AT     ; out DX:AX = the bytes, 0 at the end
+    mov di, hd_ircur            ; one FAT link a take, not a walk from the
+    call os88_rseq              ; front (SPEC.md 18.4.8.1): out DX:AX = the
+                                ; bytes, 0 at the end
     pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -3186,12 +3159,16 @@ hd_iwrite_chunk:
     call OSAPI_FILE_WRITE_SYS   ; ...hidden + system, as it is on the floppy
     jmp short .out
 .append:
-    cmp byte [hd_isys], 0
-    jne .appsys
-    call OSAPI_FILE_APPEND      ; every later chunk, SPEC.md 18.4.4
-    jmp short .out
-.appsys:
-    call OSAPI_FILE_APPEND_SYS  ; ...past the two bits the create stamped
+    mov al, WSEQF_HELD          ; every later chunk: ONE HELD STREAM per file
+    cmp byte [hd_isys], 0       ; (SPEC.md 18.4.9, 52.10.13) - no lookup and
+    je .appu                    ; no walk per chunk, and no FAT or directory
+    or al, WSEQF_SYS            ; write until hd_icopy_one's close, which on
+.appu:                          ; the ST-225 is three long seeks a chunk. A
+    push di                     ; SYSTEM file is extended past the two bits
+    mov di, [hd_itok]           ; the create stamped (APPEND_SYS's rule,
+    call OSAPI_FILE_WRITE_SEQ   ; WSEQF_SYS). A copy that stops leaves an
+    mov [hd_itok], di           ; install that has failed anyway
+    pop di
 .out:
     pop es
     pop si
@@ -4209,7 +4186,12 @@ hd_kpad:
     call OSAPI_FILE_WRITE
     jmp short .did
 .app:
-    call OSAPI_FILE_APPEND
+    push di                     ; the pad is ONE HELD STREAM too: the
+    mov di, [hd_itok]           ; kernel's own WRITE is the next write on this
+    mov al, WSEQF_HELD          ; volume and commits it first (18.4.9), so its
+    call OSAPI_FILE_WRITE_SEQ   ; clusters are taken before the kernel's are
+    mov [hd_itok], di           ; placed
+    pop di
 .did:
     pop si
     pop ax
@@ -4220,7 +4202,8 @@ hd_kpad:
     mov dx, si
     or dx, di
     jnz .more
-    clc
+    xor cx, cx                  ; ...and closed here, so a failure to commit
+    call OSAPI_FILE_WRITE_SEQ   ; it is this routine's to report
 .out:
     pop es
     pop di
@@ -4678,8 +4661,6 @@ hd_ivcur:     db 0              ; ...and whether it found a volume to keep
 hd_irow:      db 0
 hd_iclx:      dw 0
 hd_icly:      dw 0
-hd_ibx:       dw 0
-hd_ibw:       dw 0
 hd_ibufseg:   dw 0
 hd_ibufkb:    dw 0
 hd_idrv:      db 0              ; the destination's kernel volume index
@@ -4751,6 +4732,9 @@ hd_isize:     dd 0
 hd_isys:      db 0
 hd_ioff:      dd 0
 hd_itake:     dw 0
+hd_itok:      dw 0              ; the file's WRITE_SEQ token (SPEC.md 18.4.9)
+hd_ircur:     times FSEQ_SIZE db 0 ; ...and its READ_SEQ cursor (SPEC.md
+                                ; 18.4.8.1), zeroed with [hd_ioff] per file
 
 ; --- state this module owns (moved out of hdd.asm's data block) ---
 hd_idev:     db 0               ; ...and the installer's, for the same reason

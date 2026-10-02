@@ -380,7 +380,8 @@ ap_refill_chunk:
     mov cx, [ap_rd_len]
     mov ax, [ap_rd_pos]
     mov dx, [ap_rd_pos+2]
-    call OSAPI_FILE_READ_AT        ; out CF, DX:AX = bytes delivered
+    mov di, ap_rd_cur              ; one FAT link a gulp, not a walk from the
+    call os88_rseq                 ; front (SPEC.md 18.4.8.1); out CF, DX:AX
     APCNT apc_readat
     APCNT apc_refill
     jc .ioerr                     ; an I/O error ends the data - and says why
@@ -494,11 +495,6 @@ ap_prime:
 ; =============================================================================
 ap_open_track:
     APCNT apc_opentk
-    cmp byte [ap_have_sb], 0
-    jne .havesb
-    mov word [ap_msg], ap_s_nosb
-    jmp .refuse
-.havesb:
     call apl_count
     or ax, ax
     jnz .havetrk
@@ -508,7 +504,23 @@ ap_open_track:
     mov word [ap_msg], ap_s_opening
 
     call ap_stream_close          ; a clean slate (drains the worker)
+    call ap_prep_track            ; the file parsed and the look-ahead primed
+    jc .refuse                    ; (ap_msg says why)
+    cmp byte [ap_have_sb], 0      ; NO CARD: THE SPEAKER (SPEC.md 86.21) -
+    jne .card                     ; sound and nothing else is better than
+    jmp aps_open                  ; no sound. It returns CF itself
+.card:
+    jmp ap_open_card
+.refuse:
+    stc
+    ret
 
+; =============================================================================
+; ap_prep_track - the current entry opened, parsed and adopted, the look-ahead
+;                 claimed and primed: everything a play needs before the card
+;                 or the speaker. out: CF = 1 refused (ap_msg says why)
+; =============================================================================
+ap_prep_track:
     call apl_goto_cur             ; move into the track's directory
     jc .badfile                   ; could not reach the folder - say so
     call OSAPI_FILE_HERE          ; ...and bank it: the refill reads BY NAME,
@@ -554,6 +566,8 @@ ap_open_track:
     and ax, bx
     mov [ap_rd_pos], ax
     mov [ap_rd_pos+2], dx
+    mov di, ap_rd_cur              ; a new track: the cursor names no file
+    call os88_rseq_new
 
     mov word [ap_got], 0
     mov word [ap_got+2], 0
@@ -577,11 +591,32 @@ ap_open_track:
 
     call ap_ensure_bufs
     jc .nomem
+    call ap_prime                 ; fill the look-ahead ring
+    clc
+    ret
+.badfile:
+    mov word [ap_msg], ap_s_loaderr
+    stc
+    ret
+.parseerr:
+    mov ax, [apw_err]
+    mov [ap_msg], ax
+    stc
+    ret
+.nomem:
+    mov word [ap_msg], ap_s_nomem
+    stc
+    ret
+
+; ap_open_card - the prepared track onto the Sound Blaster: the grant, the
+; pre-roll, the stream and the worker
+ap_open_card:
     call ap_grant_ring
     jc .nomem
-
-    call ap_prime                 ; fill the look-ahead ring
-
+    cmp byte [apw_spk], 2           ; A FILE OF SPEAKER COUNTS on a card:
+    jne .samples                    ; played as the samples they came from
+    call ap_cinv_build              ; (SPEC.md 86.21.1)
+.samples:
     ; --- pre-roll [ap_preroll] halves straight into the grant ------------
     mov cx, [ap_preroll]
 .pre:
@@ -624,13 +659,6 @@ ap_open_track:
     clc
     ret
 
-.badfile:
-    mov word [ap_msg], ap_s_loaderr
-    jmp .refuse
-.parseerr:
-    mov ax, [apw_err]
-    mov [ap_msg], ax
-    jmp .refuse
 .nomem:
     mov word [ap_msg], ap_s_nomem
     jmp .refuse
@@ -649,6 +677,57 @@ ap_open_track:
     call ap_stream_close
 .refuse:
     stc
+    ret
+
+; =============================================================================
+; ap_cinv_build - ap_cinv[c] = the sample a speaker count c came from: the
+; inverse of 34.11.2's t[s] = 1 + s(N-2)/255 at this file's rate, N =
+; 1,193,182 / rate - s = ((c - 1) x 255 + (N - 2) / 2) / (N - 2), clamped.
+; A counts file (86.21.1) on a CARD is then the shaped sound it was made
+; from, rather than a quiet wave sitting off the centre. preserves all
+; =============================================================================
+ap_cinv_build:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, 0x34DE                  ; 1,193,182
+    mov dx, 0x0012
+    div word [ap_rate]              ; AX = N (a rate of 4,679 or more: a word)
+    sub ax, 2
+    mov bx, ax                      ; BX = N - 2
+    mov si, ax
+    shr si, 1                       ; SI = (N - 2) / 2, the rounding
+    mov di, ap_cinv
+    xor cx, cx
+.c:
+    mov ax, cx
+    dec ax                          ; c - 1 (count 0 is below the table)
+    jns .p
+    xor ax, ax
+.p:
+    mov dx, 255
+    mul dx
+    add ax, si
+    adc dx, 0
+    div bx
+    or ah, ah
+    jz .s
+    mov al, 255
+.s:
+    mov [di], al
+    inc di
+    inc cx
+    cmp cx, 256
+    jb .c
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; =============================================================================
@@ -680,6 +759,26 @@ ap_stage_half:
     mov cx, AP_HALF
     call apd_pull                 ; AX = PCM8 bytes produced into apd_out
     mov bx, ax
+    cmp byte [apw_spk], 2         ; speaker COUNTS: back to samples, before
+    jne .pcm                      ; the end's pad of silence, which is one
+    push ax                       ; (SPEC.md 86.21.1)
+    push bx
+    push si
+    mov cx, ax
+    mov si, apd_out
+    mov bx, ap_cinv
+    jcxz .cvd
+.cv:
+    mov al, [si]
+    xlatb
+    mov [si], al
+    inc si
+    loop .cv
+.cvd:
+    pop si
+    pop bx
+    pop ax
+.pcm:
     xor dl, dl                    ; DL = "last half" flag
     cmp bx, AP_HALF
     jae .full
@@ -802,6 +901,7 @@ ap_calc_duration:
 ; =============================================================================
 ap_stream_close:
     push ax
+    call aps_close                 ; a speaker session ends with it
     cmp byte [ap_sopen], 0
     je .drain
     mov al, 2
@@ -851,6 +951,10 @@ ap_autoadvance:
 ap_cmd_play:
     cmp byte [ap_state], AP_ST_PAUSE
     jne .fresh
+    cmp byte [aps_on], 0           ; a speaker session, paused on the
+    je .card                       ; desktop: its bracket again
+    jmp aps_resume
+.card:
     mov byte [ap_paused], 0
     mov byte [ap_state], AP_ST_PLAY
     mov word [ap_msg], ap_s_playing

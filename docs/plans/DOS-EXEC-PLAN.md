@@ -1428,7 +1428,7 @@ links (SPEC.md 19)"*. Both cells go through it: `api_file_find` and
 `api_file_find_raw` join at `api_ff_fence` and differ in **the size field and
 nothing else**, so the RAW cell is not a way round it either.
 
-`OSAPI_FT_UP` is in the SDK's type list because `dsk_synth_up` builds an
+`OSAPI_FT_UP` is in the SDK's type list because `dsk_up_open` builds an
 up-entry for `disk_mount`'s **LISTING** (SPEC.md §19.5) - a different structure
 a package cannot reach. Nor is there another way in: `OSAPI_ARG_FILE` hands
 over a name, a **cluster** and a volume, and a cluster is not a path.

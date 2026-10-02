@@ -399,5 +399,10 @@ op_bend     equ OP_BSS_AT + 84      ; the run's EXACT byte end, where op_bytes
                                     ; op_want is cut from this one, because the
                                     ; last part's padding is the end of the
                                     ; FILE and asking for it is a short read
-OP_BSS      equ 86
+op_rcur     equ OP_BSS_AT + 86      ; FSEQ_SIZE: the READ_SEQ cursor both
+                                    ; reads keep (SPEC.md 18.4.8.1) - the file
+                                    ; is always op_name, so it is never zeroed
+                                    ; and a lazy fetch finds it where the carve
+                                    ; left it, re-seeded if the offset differs
+OP_BSS      equ 102
 

@@ -304,6 +304,17 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
   %define OS88_ASSOC 1
 %endif
 
+; SPEC.md 26.8's desktop SHORTCUTS - an entry dragged out of a Disk window
+; onto the desktop, kept in SYSTEM.CFG across a reboot - are kern_big's alone.
+; kern_small reads no SYSTEM.CFG at all (SPEC.md 51.5), so there is nothing to
+; keep one in, and every site the feature touches is `%ifdef` over the new code
+; so the 128KB floor assembles byte for byte what it did before. It leans on
+; OS88_ASSOC (a document opens through the association route) and on DOCK_OPT
+; (the grid starts at the band's left edge), both kern_big's already.
+%ifdef KERN_BIG
+  %define OS88_SHORTCUTS 1
+%endif
+
 ; SPEC.md 51's LOADABLE DRIVERS are kern_big's too (SPEC.md 51.0). It is the
 ; largest single item in docs/plans/KERN-SMALL-CUT-PLAN.md's hardware group and the
 ; only one there that is not a device - it is the ABILITY to load one - so it
@@ -327,8 +338,10 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; made unreachable rather than merely unwanted: every route to an OPL2 or a
 ; Sound Blaster is a `[drv_svc + DSV_*]` read, and on a build that can load no
 ; driver that table is zero for the life of the machine. The PC SPEAKER is
-; untouched and stays on both kernels - tones, beeps and PCM clips all still
-; play - because it is resident code that needs no driver at all.
+; untouched and stays on both kernels - tones and beeps still play - because
+; it is resident code that needs no driver at all. (PCM CLIPS are kern_big's
+; since kernel size pass 8: their one caller reads its clip out of a driver's
+; grant, SPEC.md 34.4.1.)
 ;
 ; A SEPARATE symbol from OS88_DRIVERS, and not `%ifdef OS88_DRIVERS` reused,
 ; because the two are different claims: this one says "there is no card to
@@ -2498,7 +2511,11 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; The whole blob is freed before the desktop; KERN_BUDGET is unchanged. It is
 ; nine on kern_small too, which has no such copy: KSIG_OFF (the Makefile) is
 ; one constant for every kernel, and it names file sector 21 only at nine.
-BOOT2_SECS  equ 9               ; sectors stage 1 reads before it jumps - the
+; TEN since SPEC.md 6.0.1: the tenth sector is `.ovl`'s, for the timed font
+; pick (font_init in the blob on both kernels), and KSIG_OFF moved one memory
+; sector down with it (6144 -> 5632) so the FILE sector is still 21. It sits
+; inside the same int 13h run on all four geometries (tests/unit/t_blobruns.py).
+BOOT2_SECS  equ 10              ; sectors stage 1 reads before it jumps - the
                                 ; loader and its screen up to OVL_AT, then the
                                 ; boot overlay from there to BOOT2_PAD. THE
                                 ; SPLIT IS OVL_AT AND THE TOTAL IS THIS, so
@@ -2598,10 +2615,23 @@ OVL_AT      equ 2624            ; ...and it is ONE value for every build now.
 ; OVL_AT's floor, above - so it keeps the shipped split. OVL_AT stays the one
 ; literal: it is what tools/os88ladder.py reads, and it describes every
 ; kernel a disk carries.
+; ...and 144 on a knob build whose `.boot2` is the shipped loader's, which is
+; every one but BOOTDIAG=1's (2,470 at the most, MOUDIAG=1's): SPEC.md 31.14's
+; ovl_fdd_apply took the shipped blob from 147 bytes spare to 20 (kernel size
+; pass 8 cut it 113 -> 94, spent it again on SPEC.md 6.0.1's FONT_PICK, and
+; then took BOOT2_SECS 9 -> 10 for the timed pick: 308 spare on kern_big and
+; 415 on kern_small at that pass's close), and
+; BOOTMARK=1's MARKW sites need 127 of a knob's give (BOOTHALT=20 131,
+; DRVDIAG=1 with it 141). BOOTDIAG=1 keeps the 96 its own loader leaves room
+; for (2,507 with MOUDIAG=1).
 %define OVL_KNOBGIVE 0
 %ifdef KERN_KNOB
 %ifndef SPLSTARS
+%ifdef BOOT_DIAG
   %define OVL_KNOBGIVE 96
+%else
+  %define OVL_KNOBGIVE 144
+%endif
 %endif
 %endif
 OVL_BASE    equ OVL_AT - OVL_KNOBGIVE
@@ -2645,6 +2675,24 @@ section .ovlw    start=OVLW_START vstart=0
 ; They are LAST in the file and unpadded, so truncating at MODC_START yields
 ; byte for byte the kernel.bin that would have been emitted without them.
 section .modc    start=MODC_START vstart=0
+section .modu    follows=.modc vfollows=.modc align=1 valign=1
+                                ; ...CTRL.DRV's SECOND half, the panel's UI,
+                                ; straight after the first in the file and in
+                                ; the address space (SPEC.md 2.8.7). `.modc`
+                                ; is the header and the SETTINGS CORE - what a
+                                ; desktop gesture needs to write SYSTEM.CFG -
+                                ; so MOD_SETS reads the file's first MODS_SIZE
+                                ; bytes and stops. `.modu` may name anything
+                                ; in `.modc`; `.modc` may name NOTHING in
+                                ; `.modu` (tools/os88ovlchk.py), because on a
+                                ; core-only load it is not there
+%ifdef OS88_DRIVERS
+section .modcb   nobits vfollows=.modu ; CTRL.DRV's own scratch: the SYSTEM.CFG
+                                ; writer's file buffer (driver.inc, CFG_DATA
+                                ; cpc). NOT zeroed - MOD_BSS stays kern_small's
+                                ; FCP_MOD alone - because its one user fills it
+                                ; before it reads it (kernel size pass 8)
+%endif
 section .modf    start=MODF_START vstart=0
 section .modl    start=MODL_START vstart=0
 %ifdef KERN_BIG
@@ -2678,9 +2726,6 @@ section .modk    start=MODK_START vstart=0
 %endif
 %ifdef KERN_BIG
 section .modx    start=MODX_START vstart=0
-%endif
-%ifdef KERN_BIG
-section .modt    start=MODT_START vstart=0
 %endif
 section .modmap  start=MODMAP_START vstart=0
 section .text
@@ -3174,7 +3219,6 @@ apic_osapi_mem_avail:
                                   ;          mem_claim, because every existing
                                   ;          caller passes garbage there and
                                   ;          the failure would be silent
-apic_font_run:
     OSAPI_XCELL font_run_x      ; 0x01E5 - one OPAQUE text run (SPEC.md 6.1):
                                   ;          CX = x, DX = y, SI = ASCIIZ,
                                   ;          AL = ink, AH = background. Draws
@@ -4027,6 +4071,7 @@ apic_wm_wake:                     ; mem_cpq_run_x's door to the wake (SPEC.md
                                   ;          refused: it stages one word a row
                                   ;          and sixteen rows at the outside
                                   ;          (SPEC.md 25.6.1)
+api_gfx_blitp:                    ; (named: SPEC.md 5.4.3.6's walk far-calls it)
     OSAPI_SLOT gfx_blitp          ; 0x03A4 - ES:SI = plane 0's first row of a
                                   ;          block that is ALREADY FRAMEBUFFER
                                   ;          BYTES, DI = the step to the next
@@ -4192,32 +4237,20 @@ apic_wm_wake:                     ; mem_cpq_run_x's door to the wake (SPEC.md
                                   ;         image arm, where it is true: with
                                   ;         no file there is nothing for
                                   ;         op_load to read a part out of
-    OSAPI_RCXCELL osapi_desk_svc_x   ; 0x03F8 - X: a DRIVER registers the
-                                  ;          desktop SERVICE zone (SPEC.md
-                                  ;          26.7). in AL = 1 add / 0
-                                  ;          withdraw, ES:SI = a 39-byte
-                                  ;          record in the driver's own
-                                  ;          segment: a caption, the 8.3 file
-                                  ;          the zone launches out of SYSTEM/,
-                                  ;          its DRVC_* class, the verb the
-                                  ;          kernel calls to PAINT its icon,
-                                  ;          and the package's header name.
-                                  ;          out CF=1 refused - not a
-                                  ;          published driver (osapi_vol_add's
-                                  ;          own fence), a second registration
-                                  ;          (there is ONE zone), or a
-                                  ;          withdraw of somebody else's.
-                                  ;          The kernel keeps no glyph: a
-                                  ;          desktop icon whose picture lived
-                                  ;          in here would be carried by every
-                                  ;          machine, and most of them have no
-                                  ;          card to use it with.
-                                  ;          THE CELL IS IN BOTH KERNELS
-                                  ;          (SPEC.md 20.8 rule 4) and on
-                                  ;          kern_small the body is two
-                                  ;          instructions that refuse: there is
-                                  ;          no driver there that would
-                                  ;          register one
+    OSAPI_RCXCELL osapi_desk_item_x  ; 0x03F8 - X: put an ITEM on the
+                                  ;          desktop, or take one off
+                                  ;          (SPEC.md 26.9). in AL = 1 add /
+                                  ;          0 remove, ES:SI = a record in
+                                  ;          the caller's own segment: a
+                                  ;          DRIVER's is the 40-byte service
+                                  ;          record (26.7), a PACKAGE's a
+                                  ;          128-byte link (26.8.1), and each
+                                  ;          names the cell it would like.
+                                  ;          out CF=0 AL = the zone. It was
+                                  ;          OSAPI_DESK_SVC, a driver's door
+                                  ;          only. kern_small's body refuses
+                                  ;          (SPEC.md 20.8 rule 4: the cell
+                                  ;          is in both kernels)
     OSAPI_RCXCELL osapi_pkg_rehome_x ; 0x03FE - X: a LOADER hands its identity to
                                   ;          one of its own parts (SPEC.md
                                   ;          20.12.10). in DX = the segment the
@@ -4448,7 +4481,17 @@ apic_wm_wake:                     ; mem_cpq_run_x's door to the wake (SPEC.md
                                   ;          out AX = K, DX:BX = the chain;
                                   ;          AL = 1 close. kern_big; the
                                   ;          small body refuses AX = 1
-osapi_table_end:                  ; 0x0461 today (0x05A8 before pass 4's
+    OSAPI_RNCELL dwsf_dskw_write_seq ; 0x0461 N: A STREAMING APPEND (SPEC.md
+                                  ;          18.4.9): SI = name, DX:BX = the
+                                  ;          bytes, CX = the count (0 closes),
+                                  ;          ES:DI = the caller's 16-byte
+                                  ;          cursor, +3 bit 0 = HELD. APPEND
+                                  ;          without the lookup and the walk;
+                                  ;          HELD commits the FAT and the
+                                  ;          size once, at the close or when
+                                  ;          the UI unlocks. kern_big; the
+                                  ;          small door refuses
+osapi_table_end:                  ; 0x0467 today (0x05A8 before pass 4's
                                   ; renumber). TWO cells came off the tail in
                                   ; the size pass: OSAPI_MEM_COMPACT_WAKE
                                   ; (0x0598) is 0x0590's MEMC_POST verb
@@ -4466,8 +4509,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 97*6 + 6*3 + 6 + 12*5 + 3*6
-%error "os8088 API jump table must be exactly 0x0451 bytes: 43 SLOT (8), 11 XCELL (7), 97 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
+%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 98*6 + 6*3 + 6 + 12*5 + 3*6
+%error "os8088 API jump table must be exactly 0x0457 bytes: 43 SLOT (8), 11 XCELL (7), 98 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
 %endif
 
 ; =============================================================================
@@ -4649,6 +4692,8 @@ api_coldseg: dw COLD_SEG
 ; api_fdlg_open is NOT one of these cells - see the stub below it, and the
 ; reason there is why this body cannot serve it: every one of these names is
 ; MANDATORY, so the stage is unconditional too.
+; The caller's DS and SI stay banked across the far call, IN THAT ORDER:
+; dwsf_dskw_write_seq reads the DS there for WSEQF_SYS's fence (18.4.9).
 api_rn:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
     pop bp
     mov bp, [cs:bp]
@@ -4746,12 +4791,8 @@ api_gfx_save:
 %endif                          ; guard because the extended desktop is, so on
     call gfx_save               ; the small kernel the question cannot arise
     clc                         ; and the cell is five bytes lighter
-    ret
-%ifdef KERN_BIG
-.no:
-    stc
-    ret
-%endif
+.no:                            ; (vid_span_one's CF = 1 is the refusal as it
+    ret                         ; stands: no `stc` of its own)
 
 api_gfx_rest:
 %ifdef KERN_BIG
@@ -4760,12 +4801,8 @@ api_gfx_rest:
 %endif                          ; the other is the kind that costs somebody a
     call gfx_restore            ; day
     clc
-    ret
-%ifdef KERN_BIG
 .no:
-    stc
     ret
-%endif
 
 ; -----------------------------------------------------------------------------
 ; api_file_find - slot 0x0283 (X). in CX = ordinal, ES:DI = a DSK_FIND_SZ
@@ -4807,24 +4844,20 @@ api_gfx_rest:
 ; a package, on this cell exactly as on the other one (SPEC.md 19.6.1).
 ; -----------------------------------------------------------------------------
 api_file_find_raw:
-    push ds
-    push si
-    push bx
-    mov bx, ds
-    push cs
-    pop ds
-    mov byte [dsk_fdraw], 1
-    jmp short api_ff_fence
+    mov al, 1                   ; AL is not an input here (CX and ES:DI are)
+    jmp short api_ff_go         ; and the fence below spends it anyway, so it
+                                ; carries the raw flag across the one prologue
 
 api_file_find:
+    xor al, al
+api_ff_go:
     push ds
     push si
     push bx
     mov bx, ds                  ; the caller's segment, for the fence
     push cs
     pop ds                      ; DS = KERNEL
-    mov byte [dsk_fdraw], 0
-api_ff_fence:
+    mov [dsk_fdraw], al
     call inst_vol_enter         ; this instance's own folder; preserves
                                 ; everything including the flags
     call COLD_SEG:dvf_drv_owns_seg ; CF = 0: a loaded driver, so it may see the
@@ -5047,15 +5080,12 @@ ovw_band_init:      call band_init
 ovw_dock_geom:      call dock_geom
                     retf
 %endif
-; ...and the MOUSE's five (SPEC.md 9.4.7). mouse_init's boot half is in the
+; ...and the MOUSE's (SPEC.md 9.4.7). mouse_init's boot half is in the
 ; overlay and everything mou_hotplug or mouse_unhook can reach stayed resident,
-; so these are the five edges that now cross: the port writers the probe uses
-; and the round counter it resets. Four bytes each, and the 22 sites that call
-; them pay two apiece for the far form.
-ovw_mou_pall:       call mou_pall
-                    retf
-ovw_mou_newround:   call mou_newround
-                    retf
+; so the port writers the probe uses and the round counter it resets are edges
+; that cross. They had five shims here; they go through viddet.inc's spw_near
+; now, from overlay-side stubs in mouse.inc (kernel size pass 8), and what is
+; left is the two knob builds' own.
 %ifdef MOU_DIAG
 ovw_mdb_rxb:        call mdb_rxb        ; SPEC.md 9.4.6.5's wire counter, which
                     retf                ; mou_idbyte reaches from the overlay.
@@ -5063,19 +5093,13 @@ ovw_mdb_rxb:        call mdb_rxb        ; SPEC.md 9.4.6.5's wire counter, which
                                         ; kernel nothing at all
 %endif
 %ifdef KERN_BIG                 ; the PS/2 half is kern_small's absent one
-ovw_mou_p2cw:       call mou_p2cw
-                    retf
-ovw_mou_p2dw:       call mou_p2dw
-                    retf
-ovw_mou_p2wcmd:     call mou_p2wcmd
-                    retf
 %ifdef KERN_EMU
-ovw_mou_lockon:     call mou_lockon     ; ...and a sixth, for SPEC.md 9.11:
+ovw_mou_lockon:     call mou_lockon     ; ...and one for SPEC.md 9.11:
                     retf                ; vmm_boot_x settles the contest on the
                                         ; backdoor and has to retire the UARTs
                                         ; from `.ovl`, where mouse_init already
-                                        ; is. The five above were mouse_init's
-                                        ; own and are kern_big's; THIS ONE IS
+                                        ; is. The five that stood above were
+                                        ; mouse_init's; THIS ONE IS
                                         ; kern_emu's, because vmm_boot_x is its
                                         ; only caller and that routine does not
                                         ; exist on the other builds (SPEC.md
@@ -5651,12 +5675,13 @@ kmain_o:
     MARKW 13
     BPMARKW 2                    ; ...the claim heap and the module table
 %ifdef BAKED_FONT
-    OVWCALL  ovl_font_init  ; the typeface this BUILD carries (SPEC.md
+    OVBCALL  ovl_font_init  ; the typeface this BUILD carries (SPEC.md
                                 ; 6.2), out of the overlay - so it needs no
                                 ; int 10h and no F000:FA6E, and the machine's
                                 ; own ROM font is not consulted at all
 %else
-    OVBCALL   font_init          ; needs int 10h, so after the mode is set
+    BLOBCALL  font_init          ; needs int 10h, so after the mode is set;
+                                ; in the blob on BOTH kernels (SPEC.md 6.0.1)
 %endif
     MARKW 14
     BPMARKW 3                    ; ...the typeface
@@ -5765,6 +5790,16 @@ kmain_o:
                                 ; because settling the contest a second time
                                 ; is what winning it looks like from here
 %endif
+%ifndef KERN_SMALL
+    mov byte [desk_ready], 1    ; from here on the desktop places things...
+%endif
+    call COLD_SEG:desk_rowcalc_x    ; every volume the boot added and every
+                                ; shortcut and placed drive SYSTEM.CFG put
+                                ; back, into their cells in one pass - and
+                                ; rowcalc, not the bare reflow, because the
+                                ; file is HOSTILE: a cell this screen does not
+                                ; have is dropped before the reflow places it
+                                ; anew (SPEC.md 26.9)
                                 ; (SPEC.md 51.3). Before the first paint, so
                                 ; a machine whose sound driver loads has
                                 ; sound from the first frame; nothing here
@@ -5894,9 +5929,8 @@ kmain:
     MARK 32
     BPMARK 8                    ; ...the store above 1MB, the palette, the bar
 
-    call gfx_lock
-    call wm_paint_all
-    call gfx_unlock
+    mov bp, wm_paint_all
+    call ui_lcall
     BPMARK 9                    ; ...and the first desktop frame
 
     ; --- stop the boot timer (SPEC.md 15.4) ----------------------------------
@@ -6002,8 +6036,8 @@ osapi_rand:
 ; int 10h and carried the kernel's F000:FA6E fallback - 40 lines to arrive
 ; at a table the kernel already had.
 osapi_font_glyphs:
-    mov si, font_glyphs
-    mov dx, LOW_SEG
+    mov si, [font_base]         ; wherever font_init found it: the ROM's own
+    mov dx, [font_seg]          ; table, or a baked face's copy in LOW_SEG
     mov ax, FONT_FIRST | (FONT_LAST << 8)   ; AL and AH in one instruction
     mov cx, 8
     ret
@@ -6032,9 +6066,10 @@ osapi_vol_stat:
     call COLD_SEG:dwf_dskw_vstat    ; AX/BX/CX/DX and CF are ours
     ret
 %else
-osapi_vol_stat:                     ; DOS-only, and the DOS box is not on the
-    stc                             ; small disks (SPEC.md 18.4.7.4): the cell
-    ret                             ; refuses in two bytes
+osapi_vol_stat equ osapi_snd_fm     ; DOS-only, and the DOS box is not on the
+                                    ; small disks (SPEC.md 18.4.7.4): the cell
+                                    ; refuses with snd.inc's kern_small FM
+                                    ; body, the same `stc` / `ret`
 %endif
 
 ; ---- osapi_file_here / osapi_file_goto - the volume's location (SPEC.md 19.2)
@@ -6194,7 +6229,7 @@ osapi_file_goto_q:
 osapi_file_goto_qm:
     call osapi_file_goto_q
     jc .out
-    call inst_vol_mark
+    jmp inst_vol_mark
 .out:
     ret
 
@@ -6544,13 +6579,15 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
 %include "fdlg.inc"             ; the Standard File dialog (SPEC.md 38)
 %include "icons.inc"
 %include "desk.inc"
-%include "links.inc"
-%include "linkcfg.inc"
 %include "dock.inc"
 %include "dockmod.inc"            ; empty unless DOCK_OPT (kern_big)
 %include "extmod.inc"             ; EXTD.DRV, the extended desktop
                                   ; (SPEC.md 39.19.6) - kern_big only
 %include "ctrl.inc"
+%include "desksc.inc"           ; desktop shortcuts (SPEC.md 26.8): empty
+                                ; unless OS88_SHORTCUTS (kern_big). AFTER
+                                ; ctrl.inc, because it emits into CTRL.DRV's
+                                ; .modc and that image's HEADER must be first
 %include "hiber.inc"            ; hibernate and resume (SPEC.md 87): the
                                 ; resident thunks, the probe, and HIBER.DRV.
                                 ; After mod.inc for MOD_*, a size here
@@ -6597,8 +6634,8 @@ mod_fpt:
 %ifdef KERN_BIG
     MODFP EXFP, MOD_EXT, EXT_NENT
 %endif
-%ifdef KERN_BIG
-    MODFP DLFP, MOD_DESK, DL_NENT
+%ifdef OS88_SHORTCUTS
+    MODFP SETFP, MOD_SETS, 1    ; the settings core's ONE slot, CPE_SC (2.8.7)
 %endif
 %if MODFP_I != MOD_MAX
   %error "MODFP: MODFP_I blocks against MOD_MAX rows"
@@ -7150,10 +7187,6 @@ cw_gfx_rowbase:         call gfx_rowbase
                     retf
 cw_gfx_unlock:          call gfx_unlock
                     retf
-%ifdef KERN_BIG
-dlf_icon_draw_x:        call icon_draw_x
-                       retf
-%endif
 cw_gfx_xor_fill:        call gfx_xor_fill
                     retf
 cw_icon_draw:           call icon_draw
@@ -7217,8 +7250,8 @@ cw_task_exit:            call task_exit
 cw_task_spawn:           call task_spawn
                      retf
 %ifdef KERN_BIG                 ; its callers are kern_big only
-cw_task_sleep:           call task_sleep     ; the Timer's 9 ticks and Bounce's
-                     retf                    ; 2 (SPEC.md 14), from .cold
+cw_task_sleep:           call task_sleep     ; Bounce's 2 ticks (SPEC.md 14),
+                     retf                    ; from .cold
 %endif
 cw_task_yield:          call task_yield
                     retf
@@ -7264,10 +7297,6 @@ cw_wm_clip_clear:        call wm_clip_clear
                      retf
 cw_wm_clip_rows:        call wm_clip_rows
                     retf
-%ifdef GFX_PLANE                ; SPEC.md 5.4.3.6's walk calls back per piece
-cw_gfx_blitp:           call gfx_blitp
-                    retf
-%endif
 %ifdef KERN_BIG                 ; its callers are kern_big only
 cw_wm_clip_set:         call wm_clip_set
                     retf
@@ -7287,22 +7316,28 @@ cw_wm_onmouseup:        call wm_onmouseup
                     retf
 cw_wm_ondrag:           call wm_ondrag
                     retf
-%ifdef OS88UI_SBDRAG
 cw_wm_timer:            call wm_timer       ; SPEC.md 13.10.5.4.2's PAUSE
-                    retf                    ; commit: the kernel's two bars ARM
-                                            ; the same one-shot a package does.
-                                            ; Only the arm needs a wrapper -
-                                            ; it sets [wm_tarm] and [ui_post] -
-                                            ; where the install (wm_ontimer)
-                                            ; and the cancel are each one
-                                            ; store, made in place
-%endif                                      ; OS88UI_SBDRAG
+                    retf                    ; commit and the Timer's clock
+                                            ; (14.7): the kernel ARMS the same
+                                            ; one-shot a package does. Only the
+                                            ; arm needs a wrapper - it sets
+                                            ; [wm_tarm] and [ui_post] - where
+                                            ; the install (wm_ontimer) and the
+                                            ; cancel are each one store, made
+                                            ; in place. KERN_BIG and not
+                                            ; OS88UI_SBDRAG: the Timer needs it
+                                            ; under SBDRAGOFF=1 as well
 ; ...and HIBER.DRV's seven needs go through cw_mem_disp (`call bp / retf`)
 %endif
-cw_wm_dmg_add:           call wm_dmg_add
-                     retf
+cw_wm_dmg_zadd:          push si             ; desk_dmg_zones grows the
+                         mov si, wm_dmg_zb   ; ZONES' box, not the damage
+                         call wm_runion      ; (SPEC.md 11.91)
+                         pop si
+                         retf
 cw_wm_dmg_hit:           call wm_dmg_hit
                      retf
+cw_wm_zone_r:            call wm_zone_r      ; a zone's revealed region
+                     retf                    ; (SPEC.md 11.91.6)
 cw_wm_dmg_wins:         call wm_dmg_wins
                     retf
 cw_wm_grow_paint:       call wm_grow_paint
@@ -7517,10 +7552,6 @@ app_tmr_kinit:        call COLD_SEG:app_tmr_kinit_x
 %ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
 app_bounce_kinit:     call COLD_SEG:app_bounce_kinit_x
                     ret
-%endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
-%ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
-app_tmr_task:         call COLD_SEG:app_tmr_task_x
-                    ret                     ; never reached (inst_task_die)
 %endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
 %ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
 app_bounce_task:      call COLD_SEG:app_bounce_task_x
@@ -7938,14 +7969,17 @@ OVL_SIZE equ ovl_end - $$       ; `$$` is the SECTION's base, which is OVL_BASE
 ; Since LISTING-HOME-PLAN 13 took the listing out of the region it is the
 ; FAT window plus dsk_secbuf, and both builds are measured (kernel size pass 4):
 ;
-;   kern_big    region 5,120 (4,608 + 512), `.ovlw` 5,104 -> 5,120 rounded.
-;               16 bytes of payload spare, NO whole sector.
-;   kern_small  region 1,536 (1,024 + 512), `.ovlw` 1,502 -> 1,536 rounded.
-;               34 bytes of payload spare.
+;   kern_big    region 5,120 (4,608 + 512), `.ovlw` 4,968 -> 5,120 rounded.
+;               152 bytes of payload spare, NO whole sector (kernel size
+;               pass 8's close, after font_init moved into the blob).
+;   kern_small  region 1,536 (1,024 + 512), `.ovlw` 1,497 -> 1,536 rounded.
+;               39 bytes of payload spare.
 ;
 ; So KERN_BIG binds this guard. The blob is the other home for a boot body:
-; since SPEC.md 2.5.3.3 put kmain's boot half in it, `.ovl` leaves 147 bytes
-; of it on kern_big and 42 on kern_small, so kern_small binds the blob. A KNOB
+; since SPEC.md 2.5.3.3 put kmain's boot half in it, `.ovl` leaves 308 bytes
+; of it on kern_big and 415 on kern_small at ten sectors (kernel size pass 8
+; grew it from nine for SPEC.md 6.0.1's timed font pick), so the window half
+; binds kern_big again. A KNOB
 ; build has DSK_OVLPAD's 1,024 more here, and 2.5.3.3.1 is what spends it.
 %if ((OVLW_SIZE + 511) / 512) * 512 > FAT_PARA * 16 + DSK_WIN_BYTES
 %error "the boot overlay's window half has outgrown the FAT window plus dsk_secbuf - see SPEC.md 2.1.2 and 2.5.3. Move a body to the blob (`.ovl`, SPEC.md 2.5.3.2) or out of the boot path"
@@ -7968,7 +8002,7 @@ MODK_START   equ MODH_START + MODH_SIZE
 %else
 MODP_START   equ MODL_START + MODL_SIZE   ; Cut/Copy/Paste, kern_small's alone
 MODD_START   equ MODP_START + MODP_SIZE   ; ...and the file dialog after it
-MODMAP_START equ MODD_START + MODD_SIZE   ; no big-only modules (26.8, 30.5)
+MODMAP_START equ MODD_START + MODD_SIZE   ; no Dock module (SPEC.md 30.5)
 %endif                                    ; The
                                           ; compressor has no image of its
                                           ; own: it rides in the cloner's
@@ -7976,7 +8010,7 @@ MODMAP_START equ MODD_START + MODD_SIZE   ; no big-only modules (26.8, 30.5)
 
 %ifdef DOCK_OPT                           ; DOCK_OPT is KERN_BIG, so
 MODX_START   equ MODK_START + MODK_SIZE   ; EXTD.DRV (SPEC.md 39.19.6) is
-MODT_START   equ MODX_START + MODX_SIZE   ; always the last image there
+MODMAP_START equ MODX_START + MODX_SIZE   ; always the last image there
 %endif
 
 %ifdef KERN_BIG
@@ -7993,19 +8027,14 @@ MODK_SIZE equ modk_end - $$
 %endif
 %endif
 
-%ifdef KERN_BIG
-MODMAP_START equ MODT_START + MODT_SIZE
-section .modt
-modt_end:
-MODT_SIZE equ modt_end - $$
-%if MODT_SIZE > DL_MOD_KB*1024
-  %error "desktop module exceeds its 4KB runtime budget"
-%endif
-%endif
-
 section .modc
+mods_end:
+MODS_SIZE equ mods_end - $$     ; the settings core: CTRL.DRV's first bytes
+section .modu
 modc_end:
-MODC_SIZE equ modc_end - $$
+MODU_SIZE equ modc_end - $$     ; ...the panel behind it...
+MODC_SIZE equ MODS_SIZE + MODU_SIZE ; ...and the WHOLE image: align=1 on both
+                                ; ends of `.modu`, so there is no pad between
 
 section .modf
 modf_end:
@@ -8019,6 +8048,12 @@ MODL_SIZE equ modl_end - $$
 section .modh
 modh_end:
 MODH_SIZE equ modh_end - $$
+%endif
+
+%ifdef OS88_DRIVERS
+section .modcb
+modcb_end:
+MODC_BSS equ modcb_end - $$
 %endif
 
 %ifdef FCP_MOD
@@ -8043,6 +8078,11 @@ MODD_SIZE equ modd_end - $$
 ; This is where that gets said, while the number is still a constant.
 %if MODC_SIZE > MOD_MAX_KB*1024
 %error "the ctrl module is over MOD_MAX_KB - mod_need would refuse it at run time"
+%endif
+%ifdef OS88_DRIVERS
+ %if MODC_SIZE + MODC_BSS > ((MODC_SIZE + 1023) / 1024) * 1024
+%error "CTRL.DRV's bss (the SYSTEM.CFG writer's buffer) does not fit its claim's KB rounding - see MODULE-SELFCONTAIN-PLAN 3.2"
+ %endif
 %endif
 %if MODF_SIZE > MOD_MAX_KB*1024
 %error "the format module is over MOD_MAX_KB - mod_need would refuse it at run time"
@@ -8090,7 +8130,8 @@ MODD_SIZE equ modd_end - $$
 section .modmap
 mod_map:
     db 'O8MM'
-    db MOD_MAX                  ; rows below
+    db MOD_NIMG                 ; rows below - IMAGES, so MOD_SETS (CTRL.DRV's
+                                ; own first bytes, SPEC.md 2.8.7) is not one
     db 0
     dd MODC_START, MODC_SIZE
     dw CP_NENT                  ; ...and each row the KERNEL's entry count
@@ -8119,10 +8160,6 @@ mod_map:
 %ifdef KERN_BIG
     dd MODX_START, MODX_SIZE    ; the extended desktop (SPEC.md 39.19.6)
     dw EXT_NENT
-%endif
-%ifdef KERN_BIG
-    dd MODT_START, MODT_SIZE
-    dw DL_NENT
 %endif
     dd MODMAP_START             ; ...where the table began, and
     dw 0x384F                   ; the last two bytes of the file
@@ -8651,8 +8688,12 @@ section .ovlw
   %error "something landed in .ovlw below ovlw_end - OVLW_SIZE under-reports it and MODC_START with it"
 %endif
 section .modc
-%if ($ - $$) != MODC_SIZE
-  %error "something landed in .modc below modc_end - os88mod.py would CUT CTRL.DRV short of it and a call into it lands in unclaimed heap"
+%if ($ - $$) != MODS_SIZE
+  %error "something landed in .modc below mods_end - MOD_SETS would read the settings core short of it and a call into it lands in unclaimed heap"
+%endif
+section .modu
+%if ($ - $$) != MODU_SIZE
+  %error "something landed in .modu below modc_end - os88mod.py would CUT CTRL.DRV short of it and a call into it lands in unclaimed heap"
 %endif
 section .modf
 %if ($ - $$) != MODF_SIZE

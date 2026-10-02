@@ -546,10 +546,12 @@ def main():
         def aim(_mo):           # ...and the item comes off the popup's OWN
             try:                # rect, because menu_popup SHIFTS rather than
                 os88marty.until(m,      # clips near an edge - and menu_btn
-                                lambda mm: mm.read(S("menu_btn"), 1)[0] == 2,
+                                lambda mm: mm.read(S("menu_btn"), 1)[0] == 3,
                                 "the context menu to be up", poll=0.05,
-                                guest=10.0)     # saying 2 is that rect being
-            except os88marty.MartyError:        # written (SPEC.md 12.4)
+                                guest=10.0)     # saying 3 is that rect being
+            except os88marty.MartyError:        # written (SPEC.md 12.4: it
+                                                # was 2 until 31.14 made
+                                                # either button hold it)
                 pass
             x = u16(m.read(S("menu_x1"), 2))
             y = u16(m.read(S("menu_y1"), 2))

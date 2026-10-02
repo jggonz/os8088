@@ -1,6 +1,6 @@
 # SPEAKER-PCM-HANDOFF - PC speaker PCM for Tracker and Audio
 
-**Status: HANDOFF, nothing built for either package.** Written 2026-09-27 at
+**Status: COMPLETED - superseded as the brief by docs/plans/completed/SPEAKER-PCM-PLAN.md (2026-09-28), which answers its section 6 and was built (its §9); its section 3 is the lessons record.** Originally: Written 2026-09-27 at
 the end of the wave that built the mechanism for the Video Player
 (`video-player` branch, commit 63c9018c). Everything this document calls
 BUILT is in that tree; everything it calls a question is the next

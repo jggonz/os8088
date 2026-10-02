@@ -703,9 +703,10 @@ ss_stop_x:
     call ss_call
     call ct_cw_gfx_lock
     call KERNEL_SEG:cw_blk_relit
-    call ct_cw_gfx_unlock
-    jmp short ss_reap_x         ; ...and the image goes back, if nothing else
-                                ; has a use for it (SPEC.md 79.8)
+    call ct_cw_gfx_unlock       ; ...and FALLS INTO ss_reap_x: the image goes
+                                ; back, if nothing else has a use for it
+                                ; (SPEC.md 79.8)
+.fall:
 
 ; -----------------------------------------------------------------------------
 ; ss_reap_x - give the image back if nothing is using it (SPEC.md 79.8)
@@ -733,6 +734,9 @@ ss_stop_x:
 ; outside one.
 ; -----------------------------------------------------------------------------
 ss_reap_x:
+%if ss_reap_x - ss_stop_x.fall != 0
+%error "blank: ss_stop_x falls into ss_reap_x, so nothing may sit between them"
+%endif
     push ax
     push bx
     cmp word [ss_row+DRVR_SEG], 0

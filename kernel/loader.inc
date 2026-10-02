@@ -64,8 +64,9 @@ LD_DE_SIZE  equ 20              ; the LOW word of a DWORD size (SPEC.md 19.1
 ; --- .o88 v3 header field offsets (SPEC.md 20.2) ------------------------------
 LD_H_MAGIC  equ 0               ; word: 0x384F ('O','8')
 LD_H_VER    equ 2               ; byte: format version = PKG_FMT
-PKG_FMT     equ 6               ; the package format, and it is the API
-                                ; TABLE'S: a renumbering bumps it (SPEC.md
+PKG_FMT     equ 8               ; the package format, and it is the API
+                                ; TABLE'S: a renumbering bumps it, and so
+                                ; does a cell re-contracted (SPEC.md
                                 ; 20.2.0, 20.8 rule 4). Mirrored in
                                 ; apps/os88api.inc and tools/os88pkg.py,
                                 ; and tests/unit/t_mirror.py holds them together
@@ -510,7 +511,6 @@ ld_check_hdr:
                                             ; the plain bytes it is then given,
                                             ; which is a refusal by the right
                                             ; route
-    clc
 .out:
     ret
 
@@ -568,9 +568,7 @@ ld_owed:
     jne .no
     cmp al, LD_EABORT
     jne .no
-    push ax
-    call files_refresh_x
-    pop ax
+    call files_refresh_x        ; (clobbers nothing but the flags)
 .no:
     ret
 
@@ -1867,7 +1865,6 @@ osapi_pkg_rehome_x:
     mov [ld_rehome], dx
     mov [ld_rehsz], ax
     pop bx
-    clc
     retf
 .no:
     pop bx                      ; `pop` writes no flag, so the refusal survives
@@ -1881,9 +1878,8 @@ osapi_pkg_rehome_x:
 ; so ld_start's step 8a never fires without this, and CF=1 is the refusal the
 ; body itself gives when it declines. Cell-only, so a bare retf is the whole of
 ; it (SPEC.md 20.3.2).
-osapi_pkg_rehome_x:
-    stc
-    retf
+osapi_pkg_rehome_x equ mod_gone ; mod.inc's `stc` / `retf`, the same two
+                                ; bytes in the same section
 %endif
 
 section .text

@@ -127,7 +127,7 @@ dkxf_drop:      DKXPAD dkx_drop
 dkxf_pass:      DKXPAD dkx_pass
 dkxf_hole_arm:  DKXPAD dkx_gfx_hole_arm
 dkxf_hole_sub:  DKXPAD dkx_hole_sub
-dkxf_hole_win:  DKXPAD dkx_hole_win
+dkxf_hole_win:  call dkx_hole_win  ; the LAST pad falls into dkxf_home
 dkxf_home:
     jmp KERNEL_SEG:dkb_ret
 dkx_force:
@@ -213,15 +213,6 @@ dkx_live_rect:
     mov cx, [dock_lx2]
     mov dx, [dock_ly2]
     ret
-
-; dkx_px_rect - AX,BX,CX,DX = the part of the live strip the last dkx_paint
-; PAINTED (SPEC.md 30.3.3), as a rect. Clobbers the four.
-dkx_px_rect:
-    mov ax, [dock_px1]
-    mov cx, [dock_px2]
-    mov bx, [dock_lc1]
-    mov dx, [dock_lc2]
-    jmp short dkx_swap_side
 
 ; dkx_span_fill - fill ALONG AX..CX, ACROSS BX..DX in the current pen
 ; in:  AX = a1, CX = a2, BX = c1, DX = c2; gfx lock held
@@ -400,7 +391,7 @@ dkx_band:
 .done:
     mov [vid_band_xe], bx
     mov [vid_dock_y0], dx
-    sub bx, 56
+    sub bx, DESK_ZXOFF          ; cell 0 (SPEC.md 26.9)
     mov [vid_desk_zx], bx
     pop dx
     pop bx
@@ -909,9 +900,8 @@ dkx_tile_xy:
     mul word [cs:dock_astep]       ; index <= 11 and a step <= 28: no DX
     add ax, [cs:dock_a0]
     mov bx, [dock_c0]
-    pop dx
-    jmp dkx_tile_swap          ; bottom: AX along = x. A side: exchange
-
+    pop dx                      ; ...and FALLS INTO dkx_tile_swap - bottom:
+                                ; AX along = x. A side: exchange
 dkx_tile_swap:
     cmp byte [dock_side], DOCK_P_BOTTOM
     je .out
@@ -1123,10 +1113,7 @@ dkx_hit:
     xor di, di                  ; empty or dying: no tile here
 .in:
     clc
-    pop bx
-    ret
-.miss:
-    stc
+.miss:                          ; (`jc` arrives with CF = 1)
     pop bx
     ret
 
@@ -1450,7 +1437,10 @@ dkx_slot_rect:
 ; -----------------------------------------------------------------------------
 dkx_pass:
     cmp byte [cs:dock_auto], 0
-    je .ret
+    jne .go                     ; (a `je` to a `ret` at the far end was a
+    ret                         ; relaxed five bytes and the `ret`: this is
+                                ; three)
+.go:
     push ax
     push bx
     push cx
@@ -1513,8 +1503,6 @@ dkx_pass:
     call KERNEL_SEG:cw_gfx_unlock
 .out:
     jmp dkx_ret_di
-.ret:
-    ret
 
 ; Open over windows without holding the lock between UI passes. All registers
 ; preserved. Closing repaints, so neither a save-under nor stale flag is needed.
@@ -1598,16 +1586,10 @@ dkx_hole_sub:
     ret
 
 ; -----------------------------------------------------------------------------
-; dkx_hole_win - is window DI (or BX, for dkx_hole_winb) under the open strip?
+; dkx_hole_win - is window DI under the open strip?
 ; out: CF = 1 yes - its pixels there are the strip's, so no cache may be taken
 ;      from or restored to them; every register preserved
 ; -----------------------------------------------------------------------------
-dkx_hole_winb:
-    push di
-    mov di, bx
-    call dkx_hole_win
-    pop di
-    ret
 dkx_hole_win:
     cmp word [gfx_hole], 0
     je .no

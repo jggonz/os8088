@@ -1400,12 +1400,6 @@ class UI:
             raise UIError("no single item %r in the %s menu. It holds %r"
                           % (item, title, [t for t, _ in items]))
         k = idx[0]
-        if not items[k][1]:
-            raise UIError(
-                "%s -> %r is DISABLED (SPEC.md 12's MENU_DIS prefix), so "
-                "menu_hover will not stop on it and a drag would release over "
-                "a neighbour. The menu is %r"
-                % (title, item, [(t, e) for t, e in items]))
 
         bx, by = (x0 + x1) // 2, geom.MBAR_H // 2
         self.mo.to(bx, by)
@@ -1436,6 +1430,21 @@ class UI:
                 % (title, bx, cell, got,
                    ", %r" % (cells[got][0],) if got < len(cells) else "",
                    [(c[0], c[1], c[2]) for c in cells]))
+
+        # **DISABLED is read NOW, with the menu down, and not before the
+        # press.** Locator's items are swapped between a live string and its
+        # MENU_DIS twin by ui_loc_gate ON THE PRESS THAT OPENS THE BAR
+        # (kernel/ui.inc) - Close Window and SPEC.md 26.8.5's Remove Shortcut
+        # both - so the array read above still holds whatever the LAST drop
+        # left in it, and refusing on that refused a live item.
+        items = self.menus()[cell][3]
+        if not items[k][1]:
+            self.mo._edge(False)
+            raise UIError(
+                "%s -> %r is DISABLED (SPEC.md 12's MENU_DIS prefix), so "
+                "menu_hover will not stop on it and a drag would release over "
+                "a neighbour. The menu is %r"
+                % (title, item, [(t, e) for t, e in items]))
 
         y1 = self._word("menu_y1")
         ix = self._word("menu_x1") + 8

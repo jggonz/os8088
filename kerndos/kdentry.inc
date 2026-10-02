@@ -749,7 +749,8 @@ kd_leave:
 ; cheapest answer to the plan's own open question 3
 ; (docs/plans/KERN-DOS-PLAN.md 8.2). `0040:00F0` is sixteen bytes the BIOS sets
 ; up at POST and never touches again, `int 19h` is the BOOTSTRAP and not POST,
-; and os8088's own boot writes nothing below 0x0600 - measured on the machine,
+; and os8088's own boot writes nothing below 0x0600 but 0040:00F8..00FF (the
+; font clock's record, SPEC.md 6.0.1 - the other half) - measured on the machine,
 ; byte for byte, at a settled desktop.
 ;
 ; Only when the kernel said it wrote an image (`KDLF_HIBER`). A record left by
