@@ -532,7 +532,14 @@ ui_task:
 .wake:
     mov si, [ui_ev + EV_A]      ; the window that asked; NO lock is taken -
     call wm_wake_disp           ; the handler takes it itself for a stated
-    jmp .yield                  ; burst, and may call the file slots (74.1)
+                                ; burst, and may call the file slots (74.1)
+%ifdef KERN_BIG
+    cmp byte [dws_hold], 0      ; ...so a HELD stream it made ends with it
+    je .yield                   ; (SPEC.md 18.4.9): the lock taken and given
+    call gfx_lock               ; back, and the unlock's commit runs where
+    call gfx_unlock             ; every other callback's does
+%endif
+    jmp .yield
 
 .rdown:
     mov cx, [ui_ev + EV_A]      ; the right button is swallowed by a modal

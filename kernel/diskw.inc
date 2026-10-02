@@ -2996,7 +2996,29 @@ DWS_RECW    equ 8               ; and size, dskw_dsec, dskw_doff, dskw_prev,
                                 ; dskw_first - ADJACENT for it, and asserted
                                 ; where declared
 
+%ifndef KD_BUILD
+; dwsf_dskw_write_seq - THE CELL's way in (slot 0x0461), and the kernel's
+; writers call the door below it. WSEQF_SYS is APPEND_SYS's permission, so it
+; takes APPEND_SYS's FENCE (api_file_sysc, SPEC.md 19.6.1): drv_owns_seg on
+; the caller's DS, which api_rn banked under the far return api_far built -
+; BP, BX, IP, CS, the caller's SI, the caller's DS. A close reads no flag
+dwsf_dskw_write_seq:
+    jcxz dwf_dskw_write_seq
+    test al, WSQF_SYS
+    jz dwf_dskw_write_seq
+    push bx
+    push bp
+    mov bp, sp
+    mov bx, [bp+10]             ; the caller's DS (SS: the stack's own)
+    call drv_owns_seg_x         ; CF = 0: a loaded driver's segment
+    pop bp
+    pop bx
+    jnc dwf_dskw_write_seq
+    mov ax, FERR_PROT           ; a package: protected, DI as it was
+    retf
+%endif
 dwf_dskw_write_seq:
+    and al, WSQF_HELD | WSQF_SYS    ; the CALLER's bits: WSQF_HOT is the door's
     or al, WSQF_IN
     mov [dws_flg], al
     jcxz .cold                  ; a CLOSE: the commit, and nothing more
@@ -3055,6 +3077,9 @@ dws_commit:
     xchg al, [dws_hold]
     or al, al
     jz .none                    ; nothing held: AX = 0, CF = 0
+    add word [dsk_mgen], 2      ; ANY end of a hold stales every token
+                                ; (dws_hlose's rule): a FAILED commit leaves
+                                ; the record's size past the linked chain
     push bx
     push cx
     push dx
@@ -6075,6 +6100,7 @@ dwsf_commit:            push ax         ; gfx_unlock's (SPEC.md 18.4.9): every
 %endif
 %endif
 %else                           ; (kern_big's READ_SEQ door is its body)
+dwsf_dskw_write_seq:            ; ...and the cell's fenced way in to it
 dwf_dskw_write_seq:             ; SPEC.md 18.4.9: kern_big's alone too
 dwf_dskw_read_seq:  mov ax, FERR_NAME   ; SPEC.md 18.4.8: kern_big's alone, and
                                         ; the cell is in both kernels (20.8

@@ -6043,6 +6043,7 @@ fd_do_write:
     call OSAPI_FILE_WRITE           ; creates or REPLACES, which is what STOR
     jc .no                          ; means
     mov byte [fd_created], 1
+    mov word [fd_wtok], 0           ; a NEW file: no older token may be hot
     jmp short .ok
 .append:
     jcxz .ok                        ; an empty tail needs no append at all -

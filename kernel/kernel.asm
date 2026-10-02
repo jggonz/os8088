@@ -4481,7 +4481,7 @@ api_gfx_blitp:                    ; (named: SPEC.md 5.4.3.6's walk far-calls it)
                                   ;          out AX = K, DX:BX = the chain;
                                   ;          AL = 1 close. kern_big; the
                                   ;          small body refuses AX = 1
-    OSAPI_RNCELL dwf_dskw_write_seq ; 0x0461 N: A STREAMING APPEND (SPEC.md
+    OSAPI_RNCELL dwsf_dskw_write_seq ; 0x0461 N: A STREAMING APPEND (SPEC.md
                                   ;          18.4.9): SI = name, DX:BX = the
                                   ;          bytes, CX = the count (0 closes),
                                   ;          ES:DI = the caller's 16-byte
@@ -4692,6 +4692,8 @@ api_coldseg: dw COLD_SEG
 ; api_fdlg_open is NOT one of these cells - see the stub below it, and the
 ; reason there is why this body cannot serve it: every one of these names is
 ; MANDATORY, so the stage is unconditional too.
+; The caller's DS and SI stay banked across the far call, IN THAT ORDER:
+; dwsf_dskw_write_seq reads the DS there for WSEQF_SYS's fence (18.4.9).
 api_rn:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
     pop bp
     mov bp, [cs:bp]

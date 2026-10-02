@@ -241,7 +241,7 @@ had added.
     "bss": 5297,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 41322,
+    "cold": 41353,
     "coldpara": 2592,
     "fatpara": 288,
     "imgpara": 3232,
@@ -254,7 +254,7 @@ had added.
     "ovl": 2473,
     "ovlw": 4985,
     "stk0": 512,
-    "text": 46160,
+    "text": 46173,
     "vgabuf": 336,
     "vgabufpara": 32
   },
@@ -671,14 +671,14 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 32,682 | 37.4% |
-| the window system and its furniture | 23,269 | 26.6% |
+| the file system, end to end | 32,713 | 37.4% |
+| the window system and its furniture | 23,282 | 26.6% |
 | drawing: adapters, primitives, glyphs, icons | 13,579 | 15.5% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 8,477 | 9.7% |
 | the kernel proper: API table, heap, scheduler, events | 7,618 | 8.7% |
 | the three built-in kinds | 1,487 | 1.7% |
 | the Control Panel | 370 | 0.4% |
-| **total** | **87,482** | |
+| **total** | **87,526** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -688,11 +688,11 @@ there and nowhere else.
 | `files.inc` — the Disk window (§22) | 1,085 | 8,107 | **9,192** | 477 | — | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 397 | 6,354 | **6,751** | 414 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,662 | 1,021 | **6,683** | 109 | 526 | — |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 5,234 | **5,258** | 178 | — | — |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 5,265 | **5,289** | 178 | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 101 | 5,010 | **5,111** | 188 | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 4,081 | — | **4,081** | 151 | 128 | — |
 | `memory.inc` — the claim heap (§50) | 217 | 2,885 | **3,102** | 26 | 324 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 3,005 | — | **3,005** | 58 | — | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 3,018 | — | **3,018** | 58 | — | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,754 | 176 | **2,930** | 197 | 84 | — |
 | `assoc.inc` — file type associations (§54) | 419 | 2,018 | **2,437** | 31 | — | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 396 | 1,949 | **2,345** | 255 | — | — |
@@ -736,7 +736,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,319 | 163 | **2,482** | — | — | 421 |
-| **total** | **46,160** | **41,322** | **87,482** | **5,297** | **5,598** | **2,252** |
+| **total** | **46,173** | **41,353** | **87,526** | **5,297** | **5,598** | **2,252** |
 <!-- END generated table -->
 
 ### Reading it

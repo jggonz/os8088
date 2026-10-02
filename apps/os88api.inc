@@ -4323,7 +4323,8 @@ FSEQ_SIZE   equ 16              ; ...and the cursor's size
                                  ; long time and must survive each chunk
 WSEQF_HELD  equ 1               ; AL bit 0: commit once, not every call
 WSEQF_SYS   equ 2               ; AL bit 1: OSAPI_FILE_APPEND_SYS's rule - the
-                                ; file may be hidden + system. DRIVERS ONLY
+                                ; file may be hidden + system. DRIVERS ONLY,
+                                ; FENCED as APPEND_SYS is: FERR_PROT otherwise
 %define OSAPI_FILE_FIND_RAW KERNEL_SEG:0x03D9   ; OSAPI_FILE_FIND, with +18 the
                                  ; size the file OCCUPIES rather than the one
                                  ; it expands to (SPEC.md 20.14.3). THE CELL A

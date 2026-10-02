@@ -32954,7 +32954,7 @@ stages 2 and 3 of that plan.
 | `SI` | a NUL 8.3 name in the current directory, **on every call** |
 | `ES:BX` | the bytes - APPEND's registers |
 | `CX` | the count: a whole number of clusters, but the last, as APPEND's. **0 closes** |
-| `AL` | flags: bit 0 = `WSEQF_HELD`, the same on every call of a stream; bit 1 = `WSEQF_SYS`. A close reads none |
+| `AL` | flags: bit 0 = `WSEQF_HELD`, the same on every call of a stream; bit 1 = `WSEQF_SYS`; every other bit is ignored. A close reads none |
 | `DI` | the TOKEN the stream's last call handed back; 0 (or anything stale) = none |
 
 Out `CF=0`, `AX = 0`, `DI` = the token for the next call; `CF=1` with
@@ -32993,7 +32993,13 @@ file may be hidden + system, and the stream may still grow it. The door sets
 `dskw_wrp` clears it on the way out as it always has, so a close or a refused
 call that never reaches the body cannot leave it set for the next write. It
 is what lets the installer copy KERNEL.SYS and the drivers as streams
-(§52.10.13.2). 8 bytes of `.cold`, resident. Drivers only, as APPEND_SYS is.
+(§52.10.13.2). Drivers only, as APPEND_SYS is, and FENCED as it is: the
+cell's way in, `dwsf_dskw_write_seq`, runs `drv_owns_seg` on the caller's
+`DS` (19.6.1's identity test) whenever the bit is set on a call that writes,
+so a package that sets it is answered `CF=1`, `AX = FERR_PROT` with `DI` as
+it was. The caller's `DS` is the one `api_rn` banks under the far call; the
+kernel's own writers call the door behind the fence. 32 bytes of `.cold`,
+resident.
 
 **The writers on it**, and what each holds:
 
@@ -33035,6 +33041,11 @@ It runs:
   another (the entry is reached by its sector, so any folder will do), and
   back; inside the batch that is ending, the hop is banked.
 
+- **after an `OSAPI_WM_ONWAKE` handler returns**. A wake handler runs
+  without the lock and may call the file slots (74.1), so when it leaves a
+  hold pending the UI task takes the lock and gives it back, and the
+  unlock's commit runs where every other callback's does.
+
 So a held stream never outlives the callback that made it, and a swapped
 floppy can never receive another disk's FAT. A mount that leaves the volume
 mid-hold outside a batch no longer commits it: nothing between that mount and
@@ -33054,6 +33065,16 @@ half-built sub-chain was never linked to it, so it becomes lost clusters,
 18.4's preferred failure. Only a flush that ALSO fails loses the stream, and
 it is POISONED as a lost bank is (18.8.5), so the next call answers `FERR_IO`
 rather than appending past chunks that never reached the disk.
+
+**Every commit stales every token, whatever it answers.** `dws_commit` moves
+`[dsk_mgen]` as it clears the hold, as `dws_hlose` does. A commit that FAILS
+at the chain flush, the link or the entry store leaves the record's size
+counting chunks no link reached and its last cluster the held tail, and a
+caller that kept its token (the DOS box's failed close does) would otherwise
+grow the file from that tail on its next call. The bump makes that call
+COLD: it finds the entry on the disk and grows from the last cluster the
+disk links. A commit that succeeds is bumped again by its sync, which costs
+nothing.
 
 Gated by two rows, and they are both needed. `wseqioerr` fails every data
 write from chunk 100 on, which leaves held allocations dirty in the window;
@@ -33106,11 +33127,11 @@ that could be arranged:
   disk checks clean (above).
 
 Costs: the whole stream writer - this slot, the bank (18.8.5), the copy's
-room check (22.5.2.1) and the converted writers - is **+511 bytes** on
-`kern_big` (`.cold` +459, `.bss` +21, `.text` +31: the cell's 6, the
-`gfx_unlock` test, `[dsk_fcgoal]` and the bank). As first built it was
+room check (22.5.2.1) and the converted writers - is **+555 bytes** on
+`kern_big` (`.cold` +490, `.bss` +21, `.text` +44: the cell's 6, the
+`gfx_unlock` test, the wake arm's commit, `[dsk_fcgoal]` and the bank). As first built it was
 **+1,077**; docs/reports/STREAM-WRITER-SIZE-2026-09-30.md is where the 574
-went, stage 1 (18.4.7.6) included; `WSEQF_SYS` is the last 8. `kern_small` +6, the cell.
+went, stage 1 (18.4.7.6) included; `WSEQF_SYS` and its fence are the last 32, and the 20 after them are the review's: the door's flag mask, the commit's token bump and the wake arm's commit. `kern_small` +6, the cell.
 
 #### 18.4.9.1 A held call that runs out of room frees what it took
 
@@ -106108,7 +106129,9 @@ the account of what the counters said.
 each, so a download was QUADRATIC in its length the way FTPD's upload was
 (§77.49): a 1MB file is ~256 appends and ~18 seconds of chain walking alone.
 They are PLAIN `OSAPI_FILE_WRITE_SEQ` calls now (§18.4.9), token in
-`tz_wtok`. PLAIN because every chunk the sender is told was received must be
+`tz_wtok`, which each file's create zeroes: a token is a 16-bit generation,
+so one kept from the last file could equal `[dsk_mgen]` again after 32,768
+writes and name that file's record. PLAIN because every chunk the sender is told was received must be
 on the disk, which is §70.11.3's promise. A `FERR_NAME` - `kern_small`'s cell
 - is asked of APPEND instead, which answers it exactly.
 
@@ -114836,6 +114859,7 @@ That meant a lookup of the name and a walk of the file's chain from its
 first cluster to its last, per chunk, so an upload was QUADRATIC in its
 length (docs/plans/DISK-CPU-PLAN.md 6). It is `OSAPI_FILE_WRITE_SEQ` now
 (§18.4.9), through one token, `fd_wtok`: a lookup and a walk per FILE.
+The create zeroes it, so no earlier STOR's token can be hot (§70.11.7).
 
 **PLAIN, not HELD.** Each chunk is committed by the wake that stages it
 (§77.1), and the `gfx_unlock` after that wake would commit a hold anyway.

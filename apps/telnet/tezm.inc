@@ -2436,6 +2436,7 @@ tz_commit:
     call OSAPI_FILE_WRITE           ; DX:CX = the count, and it CREATES or
     jc .err                         ; REPLACES, which is what a Save dialog
     mov byte [tz_made], 1           ; means everywhere else on this system
+    mov word [tz_wtok], 0           ; ...and a NEW file: no older token is hot
     jmp short .ok
 .append:
     push di                         ; A STREAMING APPEND (SPEC.md 70.11.7), FTPD's
