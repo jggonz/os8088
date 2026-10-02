@@ -3078,6 +3078,11 @@ SOAK = [
         "at a time - a bar that parked at 44% for the whole load passed every "
         "other row in this file and was found by somebody watching it",
         needs=("marty",), serial=True),
+    Row("shutdown", "soak", py("tests/shutdown.py"), 120.0,
+        "Shut Down confirms, Escape and Cancel preserve the desktop, sliding "
+        "off cancels a press, settings flush, and OS ticks stop while the "
+        "BIOS clock and splash pixels animate on VGA, CGA and Hercules",
+        needs=("marty",), serial=True),
     Row("splashspin", "soak", py("tests/splashspin.py"), 20.0,
         "Does the logo turn on the WALL CLOCK? (SPEC.md 15.3.6) The composed "
         "angle checked against the guest's own BIOS tick on every frame it "

@@ -1658,7 +1658,8 @@ in the tree.
   refuses — never at zero, which is a far call to the divide-by-zero vector.
 - **There is no `MOD_NENT`: each module's slot block is exactly its own
   entry count long.** Each module declares `X_NENT` beside its header
-  (`CP_NENT` 7 on `kern_big` and 5 on `kern_small`, `FM_NENT` 4, `CLO_NENT` 2,
+  (`CP_NENT` 8 on `kern_big` and 6 on `kern_small`, plus one with
+  `DOCK_OPT`; `FM_NENT` 4, `CLO_NENT` 2,
   `HB_NENT` 7, `DK_NENT` 2, `EXT_NENT` 7, `FCP_NENT` 4, `FD_NENT` 7), and
   kernel.asm's `MODFP` macro, below every module's `%include`, emits that
   module's `.bss` block and its word in `mod_fpt` together. `mod_fpt` has one
@@ -22592,7 +22593,8 @@ Window" (CMD_CLOSE); and **Builtins**: "Timer" (CMD_TIMER), "Bounce"
 started. The System menu is cell 0 for every application: "About os8088..."
 (CMD_ABOUT), "Control Panel" (CMD_CTRL, §31), "Task Manager" (CMD_TASKS,
 §28), a rule, "Hibernate..." (CMD_HIBER, §87 — kern_big only, so the ids
-below it are one lower in kern_small), and "Restart" (CMD_REBOOT).
+below it are one lower in kern_small), "Restart" (CMD_REBOOT), and
+"Shut Down..." (CMD_SHUTDOWN).
 
 **"Close Window" greys when there is nothing to close.** `ui_loc_gate` points
 that item at its `MENU_DIS` twin from `wm_top`, on the press that opens the
@@ -22699,6 +22701,29 @@ Two things follow that are easy to miss. `menu_relayout` stamps cell 0's
 `MB_NITEM` from **`MENU_LOGO_N`** rather than the literal `3` it used to —
 the count lived in a different file from the list it counted. And
 `ui_loc_gate` writes `menu_items_file` at **index 0**, not 3.
+
+#### 12.3.2 Confirmed shutdown
+
+Shut Down... sits immediately below Restart in both kernels. Its modal
+confirmation offers Shut Down and Cancel; Enter confirms, Escape cancels,
+and a mouse button must be pressed and released inside the same control.
+The prompt reminds the user to save their work. Cancel restores the desktop
+and preserves queued package wakes. The confirmation and terminal screen
+live in CTRL.DRV, loaded before the desktop is disturbed; a missing module
+uses the Control Panel's existing system-disk refusal.
+
+After confirmation, pending Control Panel/RTC settings are flushed while
+the module stays resident. If settings remain dirty, shutdown is cancelled
+with a toast. Drivers detach with the scheduler alive, then the graphics
+lock is acquired and `sched_stop` restores the BIOS timer, mouse and speaker
+state without entering the reboot path. Interrupts other than IRQ0 are
+masked, the floppy motor is stopped, and no tasks or disk I/O run again.
+The primary display shows the startup splash's spinning 8088 and
+"You can now turn off your computer." indefinitely. The animation uses the
+BIOS clock and halts between ticks; it never invokes INT 19h or powers off
+the machine. The spinner composer is shared source between the boot blob
+and CTRL.DRV; it adds no resident animation code or buffer. CTRL.DRV gains
+one final entry, CPE_SHUTDOWN, and one far-pointer slot in CPFP.
 
 ### 12.4 Context menus — `menu_drop` and `menu_popup`
 
@@ -24568,7 +24593,8 @@ and such a page acts on the press exactly as before.
 `kern_big`'s.** `W_ONMOUSEUP` is in `kern_small`'s window record too
 (it ends at `W_SIDE` = 28, which includes it) and `W_ONDRAG` is not (§13.8.2), so `cp_kinit`,
 `cp_onup`, `cpf_cp_onup`, `CPE_ONUP`, `cp_pt` and `cp_drv_ev` are unconditional
-and `CP_NENT` is **6** there against 7 (including §30.5's layout entry).
+and `CP_NENT` is **6** there against 8, including §12.3.2's shutdown
+entry; §30.5's optional layout entry adds one to either count.
 On `kern_small` `cp_onup_x` reduces to
 `cp_pt` + `DSV_CPUP` through `cp_drv_ev` and stops: the static pages there
 still act on the press, and none of the kernel's own arm, probe or pressed

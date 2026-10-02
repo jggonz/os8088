@@ -2803,8 +2803,8 @@ ui_sys_find:
 ; which quits the frontmost instance - with nothing to close.
 ; -----------------------------------------------------------------------------
 ui_cmd:
-    dec ax                      ; CMD_ABOUT = 1 .. CMD_FILES (9, or 10 with
-    cmp ax, CMD_FILES           ; Hibernate on kern_big) are CONTIGUOUS
+    dec ax                      ; CMD_ABOUT = 1 .. CMD_FILES (8, or 11 on
+    cmp ax, CMD_FILES           ; kern_big) are CONTIGUOUS
     jae .done                   ; (SPEC.md 13, menu.inc), so an eight-deep
     mov bx, ax                  ; compare ladder is a table walk. AX = 0 wraps
     shl bx, 1                   ; to 0xFFFF and the same unsigned compare
@@ -2820,9 +2820,9 @@ ui_cmd:
                                 ; transfer, so EVERY ENTRY HERE MUST BE .text
                                 ; and is
 %ifdef KERN_BIG
-    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .close, .timer, .bounce, .files
+    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .timer, .bounce, .files
 %else
-    dw .about, .ctrl, .tasks, .done, .reboot, .close, .files
+    dw .about, .ctrl, .tasks, .done, .reboot, .shutdown, .close, .files
 %endif
 
 %ifdef KERN_BIG
@@ -2874,6 +2874,10 @@ ui_cmd:
     call snd_beep               ; nothing to close: audible refusal (34.3)
 .close_out:
     jmp gfx_unlock
+
+.shutdown:
+    call COLD_SEG:cpf_shutdown
+    ret
 
 .reboot:
     xor al, al                  ; the System menu's Restart FLUSHES: the user

@@ -72,20 +72,22 @@ CMD_SEP     equ 4               ; the RULE above Hibernate. It is a MENU_DIS
                                 ; the items below it still equal base+item
 %ifdef KERN_BIG
 CMD_HIBER   equ 5               ; Hibernate... (SPEC.md 87), kern_big only:
-CMD_REBOOT  equ 6               ; kern_small's menu has no such item and its
-CMD_CLOSE   equ 7               ; ids stay one lower
-CMD_TIMER   equ 8               ; --- Locator: Builtins (SPEC.md 12.3.1) ---
-CMD_BOUNCE  equ 9
-CMD_FILES   equ 10
+CMD_REBOOT  equ 6
+CMD_SHUTDOWN equ 7
+CMD_CLOSE   equ 8               ; kern_small omits Hibernate: ids one lower
+CMD_TIMER   equ 9               ; --- Locator: Builtins (SPEC.md 12.3.1) ---
+CMD_BOUNCE  equ 10
+CMD_FILES   equ 11
 %else
 CMD_REBOOT  equ 5
-CMD_CLOSE   equ 6               ; --- Locator: File ---
+CMD_SHUTDOWN equ 6
+CMD_CLOSE   equ 7               ; --- Locator: File ---
                                 ; SPEC.md 14.6: no Builtins menu here, so no
                                 ; CMD_TIMER and no CMD_BOUNCE - and CMD_FILES
                                 ; survives only because ui_cmd still needs the
                                 ; id: a Disk window is opened from the desktop
                                 ; zone (SPEC.md 26.1), which posts it
-CMD_FILES   equ 7
+CMD_FILES   equ 8
 %endif
 
 ; --- app menu set layout (SPEC.md 12.2; mirrored in apps/os88api.inc) --------
@@ -2608,6 +2610,7 @@ menu_s_close    db 'Close Window', 0    ; the item at one or the other before
                                 ; one
 menu_s_tasks    equ ui_s_tmttl          ; the Task Manager's window title
 menu_s_restart  db 'Restart', 0
+menu_s_shutdown db 'Shut Down...', 0
 %ifdef KERN_BIG
 menu_s_hiber    db 'Hibernate...', 0        ; SPEC.md 87.2: ui_loc_gate points
 menu_s_hibernh  db MENU_DIS, 'Hibernate (No HD)', 0  ; item 4 at one of the
@@ -2644,10 +2647,12 @@ menu_items_logo:
 %ifdef KERN_BIG
     dw menu_s_hiber             ; item 4, swapped by ui_loc_gate (SPEC.md 87.2)
     dw menu_s_restart
-MENU_LOGO_N equ 6               ; ...and menu_relayout stamps this into cell
+    dw menu_s_shutdown
+MENU_LOGO_N equ 7               ; ...and menu_relayout stamps this into cell
 %else
     dw menu_s_restart
-MENU_LOGO_N equ 5               ; ...and menu_relayout stamps this into cell
+    dw menu_s_shutdown
+MENU_LOGO_N equ 6               ; ...and menu_relayout stamps this into cell
 %endif
                                 ; 0's MB_NITEM. It was a literal 3 there, in
                                 ; a different file from the list it counts

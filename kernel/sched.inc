@@ -606,19 +606,17 @@ sch_rhook:
 %endif
 
 ; -----------------------------------------------------------------------------
-; sched_unhook - restore the BIOS int 08h vector, then unhook mouse + sound
-;
-; Used before reboot so the ROM owns the machine again.
+; sched_stop - restore BIOS IRQ0/PIT, then unhook mouse + sound; returns.
+; sched_unhook calls it and continues to floppy parking and reboot.
+; Shutdown calls sched_stop alone so the BIOS clock can drive its animation.
 ;
 ; in:       nothing
 ; out:      nothing
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
-sched_unhook:
-%ifdef NO_FDDPARK
+sched_stop:
     push ax
     push es
-%endif
 
     xor ax, ax
     mov es, ax
@@ -648,9 +646,13 @@ sched_unhook:
     out 0x40, al
     popf
 
-%ifdef NO_FDDPARK
     pop es
     pop ax
+    ret
+
+sched_unhook:
+    call sched_stop
+%ifdef NO_FDDPARK
     ret
 %else
     jmp COLD_SEG:dsk_fdd_park_x ; ...and straight on into SPEC.md 18.100's park

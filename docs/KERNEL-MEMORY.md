@@ -41,8 +41,8 @@ left to decide. Raising it means changing the rule. The assembler sees only
 the static half of rule 3; a claim made at boot and never given back is the
 other half, and `tests/kernresident.py` boots a bare VGA desktop under MartyPC
 and walks `mem_tab` for it. With desktop shortcuts (§26.8), it reads:
-kernel span ends 108,544, last non-purgeable byte 112,640, limit 131,072 —
-18,432 spare. DESKTOP.DRV is retained by the UI after the first frame in a
+kernel span ends 109,568, last non-purgeable byte 113,664, limit 131,072 —
+17,408 spare. DESKTOP.DRV is retained by the UI after the first frame in a
 bottom-up 4KB claim after shedding the boot read-ahead cache. Its assembly
 guard limits it to 4KB; shortcut records claim another 5KB only when needed.
 kern_small excludes this feature
@@ -67,6 +67,16 @@ five diagnostics were exempted one afternoon each, and the sixth case was a
 `BOOTMARK=1` would not assemble with it — a knob build setting the ceiling
 for the product. `make test-full`'s build matrix is the only thing that
 builds the knob kernels, so a `.text` budget is really spent there.
+
+Confirmed shutdown (§12.3.2) keeps its confirmation, terminal screen and
+shared startup spinner in CTRL.DRV. The resident change is **71 bytes**:
+31 in `.text`, 36 in `.cold`, and one 4-byte module entry pointer. Both
+existing code allocations had only two bytes of slack, so the rounded big
+kernel footprint grows **1,024 bytes**, from 107,008 to 108,032; no budget or
+minimum-RAM limit changes. The small kernel spends the same 71 bytes of
+slack and crosses no allocation boundary, so its footprint stays 71,168 bytes.
+Cancelling releases CTRL.DRV when no Control Panel owns it. The shutdown
+screen retains the module only after the OS stops.
 
 ### The three guards
 
@@ -243,23 +253,23 @@ had added.
   "big": {
     "boot2": 2249,
     "bootmax": 192000,
-    "bss": 5589,
+    "bss": 5593,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 40958,
-    "coldpara": 2560,
+    "cold": 40994,
+    "coldpara": 2592,
     "fatpara": 288,
-    "imgpara": 3360,
-    "kend": 6784,
+    "imgpara": 3392,
+    "kend": 6848,
     "kseg": 96,
-    "ksize": 107008,
+    "ksize": 108032,
     "lowbss": 6366,
     "lowpara": 448,
     "minramkb": 196,
     "ovl": 1837,
     "ovlw": 5105,
     "stk0": 512,
-    "text": 48169,
+    "text": 48200,
     "vgabuf": 336,
     "vgabufpara": 32
   },
@@ -289,10 +299,10 @@ had added.
   "small": {
     "boot2": 2249,
     "bootmax": 122368,
-    "bss": 3481,
+    "bss": 3485,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 25911,
+    "cold": 25947,
     "coldpara": 1632,
     "fatpara": 64,
     "imgpara": 2464,
@@ -305,7 +315,7 @@ had added.
     "ovl": 1942,
     "ovlw": 1502,
     "stk0": 512,
-    "text": 35574,
+    "text": 35605,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -677,13 +687,13 @@ there and nowhere else.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 32,922 | 36.9% |
-| the window system and its furniture | 23,428 | 26.3% |
+| the window system and its furniture | 23,451 | 26.3% |
 | drawing: adapters, primitives, glyphs, icons | 13,632 | 15.3% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,335 | 10.5% |
-| the kernel proper: API table, heap, scheduler, events | 7,782 | 8.7% |
+| the kernel proper: API table, heap, scheduler, events | 7,790 | 8.7% |
 | the three built-in kinds | 1,482 | 1.7% |
-| the Control Panel | 546 | 0.6% |
-| **total** | **89,127** | |
+| the Control Panel | 582 | 0.7% |
+| **total** | **89,194** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -697,14 +707,14 @@ there and nowhere else.
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 82 | 4,963 | **5,045** | 158 | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 4,201 | — | **4,201** | 151 | 128 | — |
 | `memory.inc` — the claim heap (§50) | 217 | 2,951 | **3,168** | 26 | 324 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 3,122 | — | **3,122** | 58 | — | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,812 | 177 | **2,989** | 197 | 84 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 3,130 | — | **3,130** | 58 | — | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,827 | 177 | **3,004** | 197 | 84 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 563 | 2,004 | **2,567** | 301 | — | — |
 | `assoc.inc` — file type associations (§54) | 419 | 2,042 | **2,461** | 31 | — | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,248 | **2,248** | 160 | — | — |
 | `font.inc` — the 8×8 glyph renderer (§6) | 2,224 | — | **2,224** | 19 | 784 | — |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,984 | 160 | **2,144** | 724 | — | — |
-| `sched.inc` — pre-emptive scheduling (§7–8) | 1,529 | — | **1,529** | 216 | 2,944 | — |
+| `sched.inc` — pre-emptive scheduling (§7–8) | 1,537 | — | **1,537** | 216 | 2,944 | — |
 | `apps.inc` — the three built-in kinds (§14) | 282 | 1,200 | **1,482** | 11 | 240 | — |
 | `snd.inc` — the sound layer (§34) | 1,344 | — | **1,344** | 293 | — | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,297 | — | **1,297** | 20 | — | — |
@@ -717,12 +727,12 @@ there and nowhere else.
 | `viddet.inc` — adapter detection and geometry (§39) | 808 | — | **808** | — | 696 | 3 |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 676 | — | **676** | — | — | — |
 | `clock.inc` — the clock ladder (§37) | 606 | — | **606** | 59 | — | — |
-| `ctrl.inc` — the Control Panel (§31) | 351 | 195 | **546** | 28 | — | — |
+| `ctrl.inc` — the Control Panel (§31) | 351 | 231 | **582** | 28 | — | — |
 | `toast.inc` — the menu bar's transient message (§59) | 433 | — | **433** | 25 | — | — |
 | `blank.inc` — the idle screen blanker (§64) | 200 | 228 | **428** | — | — | — |
 | `mod.inc` — on-demand kernel modules (§2.8) | 98 | 317 | **415** | — | — | — |
 | `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 405 | **405** | — | — | — |
-| `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 61 | 312 | **373** | 222 | — | — |
+| `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 61 | 312 | **373** | 226 | — | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 242 | — | **242** | 22 | — | — |
 | `links.inc` — shortcut dispatch and shared UI staging (§26.8) | 159 | 37 | **196** | — | — | — |
 | `clip.inc` — the system clipboard (§55) | 179 | — | **179** | 5 | — | — |
@@ -742,7 +752,7 @@ there and nowhere else.
 | `linkcfg.inc` — DESKTOP.DRV persistence, no static kernel bytes (§26.8) | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,353 | 163 | **2,516** | — | — | 421 |
-| **total** | **48,169** | **40,958** | **89,127** | **5,589** | **6,366** | **2,249** |
+| **total** | **48,200** | **40,994** | **89,194** | **5,593** | **6,366** | **2,249** |
 <!-- END generated table -->
 
 ### Reading it
