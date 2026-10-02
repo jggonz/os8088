@@ -1,0 +1,56 @@
+; Local contract: SPEC.md 103. Pixels, 8.8 pixels/step, or simulation steps.
+%define ST_WALK 448
+%define ST_RUN 768
+%define ST_ACCEL 48
+%define ST_AIR_ACCEL 48
+%define ST_BRAKE 96
+%define ST_FRICTION 64
+; Skid masks follow the original 24 player and six enemy masks.
+%define ST_SKID_RIGHT 30
+%define ST_SKID_LEFT 31
+%define ST_SPRITE_COUNT 32
+%define ST_JUMP -1664
+; Launch-speed bands, sampled before horizontal acceleration; SPEC.md 103.
+%define ST_JUMP_WALK_SPEED 256
+%define ST_JUMP_RUN_SPEED 640
+%define ST_JUMP_WALK -1728
+%define ST_JUMP_RUN -1792
+%define ST_JUMP_ASCENT_SLOW 96
+%define ST_JUMP_ASCENT_WALK 96
+%define ST_JUMP_ASCENT_RUN 96
+%define ST_JUMP_DESCENT_SLOW 96
+%define ST_JUMP_DESCENT_WALK 112
+%define ST_JUMP_DESCENT_RUN 128
+%define ST_RELEASE -640
+%define ST_GRAVITY 96
+%define ST_FALL 1536
+%define ST_STOMP -1152
+%define ST_SPRING -2176
+%define ST_ASSIST 5
+%define ST_PROTECTION 90
+%define ST_HOP -1152
+%define ST_HOP_PERIOD 64
+%define ST_PLAYER_LEFT 3
+%define ST_PLAYER_RIGHT 12
+%define ST_PLAYER_TOP 3
+%define ST_PLAYER_BOTTOM 22
+%define ST_PLAYER_FEET 24
+%define ST_ENEMY_LEFT 2
+%define ST_ENEMY_RIGHT 13
+%define ST_ENEMY_TOP 10
+%define ST_ENEMY_FEET 24
+%define ST_MAX_WIDTH 160
+%define ST_MAP_ROWS 8
+%define ST_MAX_ENEMIES 20
+%define ST_NEAR_ENEMIES 6
+%define ST_ENEMY_SIZE 16
+%define ST_ACTIVE_LEFT -32
+%define ST_ACTIVE_RIGHT 336
+%define ST_DRAW_RIGHT 304
+; Player origin within the 320-pixel view; camera positions align to four pixels.
+%define ST_CAMERA_LEFT 104
+%define ST_CAMERA_RIGHT 136
+%define ST_CAMERA_START 120
+%define ST_CATCHUP 4
+%define ST_MEMORY_LIMIT 61440
+%define ST_MEMORY_RESERVE 2048

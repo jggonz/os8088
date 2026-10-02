@@ -156961,3 +156961,138 @@ environment that wrote this.
   The banner flash's beam position, the Hercules's monitor and the sound on a real card are what
   docs/FIELD-MACHINES.md would be asked. The fullscreen title and results screens stay the
   text-mode menus of wave 4: this wave gave them no art.
+
+## 103. Stickio — native monochrome platform game
+
+`apps/stickio/`, prefix `st_`, `STICKIO.O88`, one movable package, no kernel
+changes or worker. Original art, courses, melodies and sound effects are compiled
+by `tools/stickio_assets.py`. Thirty finite courses in six five-course worlds,
+with progressively introduced pits, bricks, question blocks, one-way ledges,
+springs, spikes, walking, hopping and flying enemies, a checkpoint and an exit.
+A course is deterministic, RLE compressed at build time and unpacked on entry.
+
+P0 foundation contract: `apps/stickio/const.inc` defines local physics in pixels,
+signed 8.8 velocity per simulation step, and step counts. Walk/run caps remain
+448/768, acceleration/friction 48/64, jump/release -1664/-640, gravity/fall cap
+96/1536, stomp/spring -1152/-2176, buffer/coyote five and retry protection ninety.
+`tools/stickio_sim.py` independently models the player step order and integer
+rounding; guest traces compare every step, including terrain contacts.
+
+P1 braking/skid contract: ground acceleration remains 48; opposing held input
+brakes at 96 (`ST_BRAKE`) while airborne steering uses 48 (`ST_AIR_ACCEL`).
+Ground braking clamps to zero without changing sign that step; the next step
+accelerates in the requested direction. Releasing input or holding both directions
+uses the existing 64 passive friction in either phase. A queued jump clears ground
+before horizontal input, so its launch step uses air steering. Landing and edge
+departure affect the following step's acceleration law. Facing follows the single
+held direction immediately. While grounded with opposing input and nonzero
+remaining velocity, render a braced skid pose facing the requested direction,
+ahead of landing recoil; walls, stopping, jumping and input release end the pose.
+Two mirrored 16x24 skid masks occupy sprite indices 30/31 after the existing
+24 player and six enemy masks. No skid timer or additional BSS is needed.
+
+P1 speed-sensitive jump contract: a buffered/coyote launch selects a profile
+from the absolute horizontal 8.8 velocity **before that step's acceleration**.
+The run key alone does not select a higher jump. The profile stays fixed through
+air steering, reversal, release and ceiling contact until landing or another
+launch. Velocities and gravity below are signed 8.8 units per simulation step:
+
+| Launch speed magnitude | Launch velocity | Ascent gravity | Descent gravity |
+|---|---:|---:|---:|
+| 0–255 | −1664 | 96 | 96 |
+| 256–639 | −1728 | 96 | 112 |
+| 640 and above | −1792 | 96 | 128 |
+
+`st_jump_tier` is a byte index 0/1/2. Gravity uses the velocity sign before its
+addition (negative selects ascent), then applies the existing 1536 fall cap.
+Landing, load/retry, stomp bounce and spring launch reset the tier to zero;
+stomp/spring impulses and enemy gravity retain their P0 values. Early release
+still caps upward speed at −640 before a queued launch, and the five-step input
+buffer/coyote window and held-Z edge rule remain. Host envelopes and per-step
+guest comparisons cover both signs, exact speed thresholds, short/full jumps,
+air reversal, assists and terrain contacts. These are movement checks; course
+redesign and human movement tuning remain pending.
+
+P1 camera contract: `st_cam` is the left edge of the 320-pixel viewport.
+During play the player origin can move freely between screen x=104 and x=136
+(`ST_CAMERA_LEFT/RIGHT`). Crossing either edge moves the camera just enough to
+return inside that interval: round down to four pixels when following left,
+round up when following right. Clamp to 0 through `width*16-320`; room ends
+override the dead zone. Stationary play and reversal within the interval retain
+the camera position. `st_camera_reset` on every course load/retry instead starts
+from `max(x-120,0)` (`ST_CAMERA_START`), rounded down and clamped, independent
+of the previous course/life. `tools/stickio_sim.py` models both paths; host/guest
+checks cover threshold rounding, bidirectional travel, bounds and retry resets,
+with framebuffer comparisons during camera-driven scroll and reversal.
+
+Version-one authored JSON under `apps/stickio/levels/` declares course/world,
+environment/music, one room, dimensions, tile rectangles, stable object IDs,
+spawn/checkpoint x/y and a flag exit. P0 supports one room with no links; the
+compiler refuses unsupported features. The existing thirty-course motif campaign
+is retained until P1 authoring. A separate authored fixture exercises the schema.
+Both paths validate tiles, full RLE coverage, protected supported arrivals, exit,
+unique reward/object IDs, twenty actor records and at most six actors in any
+368-pixel activation interval. The compiled manifest includes tile materials;
+decoration cannot override collision. The package retains at least 2 KiB below
+the 61,440-byte image+BSS boundary. Compilation is deterministic and ROM-free.
+
+Enemy records are sixteen bytes: integer x/y, type/direction bytes, age, signed
+8.8 vertical velocity, vertical fraction, previous y, and authored patrol y.
+Walkers fall at edges; hoppers turn at unsupported edges and launch from their
+actual support. Both resolve walls, ceilings and crossed solid/one-way support
+at the authored height. Flyers oscillate relative to their authored y. All nearby
+actors advance; compiler density limits bound the scan and drawing budget.
+Until horizontal sprite clipping lands, contact damage is confined to the
+renderer’s 0–304 horizontal origin interval. Stomps compare previous player feet
+with previous enemy body top. Pit actors retire rather than wrapping coordinates.
+
+A checkpoint records explicit supported x/y, spends a life on retry, resets
+motion/enemies and grants ninety steps of protection. Score/coins remain. A
+160-byte tile-index reward ledger reapplies consumed coins, question blocks and
+checkpoint triggers after RLE reconstruction. Three additional bytes remember
+enemy score payouts; reconstructed enemies remain interactive but pay once.
+Changing course or starting a new fullscreen adventure clears that ledger.
+Room transitions and enhanced player forms are later-wave work. Host and guest
+checks cover raised/lowered support, edge policies, retries and reward persistence;
+metrics report package bytes, frame work, live periods and catch-up truncations.
+
+The fullscreen bracket (§53) uses CGA 320x200 on CGA/VGA and a doubled-width
+320x128 game area on Hercules. Only black and white are used. The simulation
+uses a 54.62 Hz rate hook (§53.2.2), with bounded catch-up; the small kernel
+fallback steps three times per ordinary tick under FASTTICK (§53.2.1). Horizontal
+world coordinates are integer pixels plus an 8-bit fraction; vertical position
+and velocity use signed 8.8 fixed point. Axis-separated collisions, swept feet,
+variable jump height, five-step jump buffering and coyote time, acceleration,
+friction, running and a post-contact invulnerability interval are local code.
+
+The tile engine caches the identity of each four-pixel column of each visible
+tile. Identical columns survive scrolling, including the whole continuous floor.
+Only changed columns are rebuilt in RAM. The existing background buffer also
+holds the finished frame: saved 16x24 footprints undo old sprite masks in reverse
+order, restoring terrain even beneath overlapping sprites. Transparent prebuilt
+poses are then composited in RAM and dirty row spans transferred at vertical
+retrace. Video memory retains the complete old frame during preparation, with
+no visible sprite erase pass. No per-pixel runtime drawing, float, guest asset
+rasterization or full-frame video copies. Art includes eight articulated running
+poses, idle, ascent, descent, landing recoil and skid, mirrored at build time.
+
+Sound uses only §34 APIs: duration-leased PC speaker melody and priority effects;
+OPL2 melody, bass, harmony and a separate effect voice on AdLib/Sound Blaster;
+Sound Blaster additionally plays precomputed 8 kHz PCM effects via a short linear
+background stream, with a reusable staging grant. PCM is optional and failed
+claims fall back to the tonal effect. Pause and mute silence owned voices and
+close active PCM streams; bracket exit also releases claims. Never use blocking PCM_EXCL during gameplay.
+
+Enter/F/Alt+Enter opens play; arrows or A/D move, Shift/X runs, Z jumps,
+P pauses, M mutes, R retries at the checkpoint, Esc/Alt+Enter returns to desktop.
+The BIOS queue retains brief command/jump taps between frames; movement reads
+held keys. A 160-word tile-pair cache precedes the byte-column cache, so uniform
+16x16 areas reject together. Terrain dirty spans accumulate once per sixteen-row
+band; sprite footprints expand the row spans and transfer bounds. Buffered input
+rejects BIOS extended-key character bytes 00h/E0h before letter normalization:
+ORing 00h with 20h formerly misread arrow events as the Space jump binding.
+The launcher selects levels with left/right. Completion and game-over require
+Enter; completing course 30 shows the ending. It ships on the dedicated
+stickio360 disk, games360 and larger apps disks; general apps360 omits it.
+`make stickio`, `stickiodisk`, `stickio-art`
+and `stickiocheck` build, package and validate the game.

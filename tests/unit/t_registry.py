@@ -72,6 +72,11 @@ UNREGISTERED = {
                    "(docs/WRITING-TESTS.md 2.1)",
 
     # --- library and support code, not tests ---
+    "stickio_p1.py": "imported P1 jump/braking/skid check bodies; tests/stickio.py invokes host() "
+                      "and guest() through stickiohost/stickiocga/stickioherc/stickiovga",
+    "stickio_p0.py": "imported P0 check bodies; tests/stickio.py invokes host() "
+                     "and guest() from the registered stickiohost and "
+                     "stickiocga/stickioherc/stickiovga rows. No standalone entry point",
     "dispcells.py": "the CELLS-not-calls counter two gates share (SPEC.md "
                     "11.3.3), not a test",
     "pxslib.py": "PIXELSTEIN 3D's guest reader (SPEC.md 97.12) - the "
