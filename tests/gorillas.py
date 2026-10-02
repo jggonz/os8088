@@ -85,7 +85,15 @@ def key(m, name):
     computer = (p.b('state') == 0 and p.b('players') == 1
                 and p.b('turn') == 1 and not p.b('paused'))
     if not p.b('fs') and p.b('state') not in (1, 4, 7) and not computer:
-        M.ui_done(m)
+        # BOUNDED IN GUEST TIME. Every screen of this package draws on the
+        # tick - setup's included, ~5 ms under the lock each one - so
+        # ui_done's "idle for 60 ms AND a whole tick" is never true of the
+        # guest and ended only when the host's polls happened to miss the
+        # blips: 0.1 to 67 guest seconds a key, by luck, and the row 534 s
+        # against the 88 it was measured at. A keystroke is handled inside
+        # one pass, so half a guest second covers it on any host, and an
+        # earlier idle still ends it sooner.
+        M.ui_done(m, cap=.5)
 
 
 def setup(m, points=5, music=''):

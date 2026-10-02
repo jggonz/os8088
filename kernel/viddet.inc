@@ -282,7 +282,7 @@ vid_popmax  dw MENU_POPMAX      ; pull-down items that fit under the bar, and
                                 ; because vid_apply overwrote it on the
                                 ; splash's first tick, long before a menu.
                                 ; The %error beside MENU_POPMAX is the guard
-vid_desk_zx dw SCREEN_W-56      ; desktop drive column: the hit zone's left
+vid_desk_zx dw SCREEN_W-DESK_ZXOFF ; the desktop grid's cell 0: its left
                                 ; edge, and the ONLY word of it that is
                                 ; published. The drawn rect either side of it
                                 ; is desk_zone_rect's arithmetic over
@@ -568,11 +568,12 @@ vid_depth_set:
                                 ; the tight one). Two bytes could be had by
                                 ; dropping this pair; they are a contract
                                 ; change and are not taken.
-    cmp al, VID_VGA
-    je .colour                  ; **ZF IS THE ANSWER AND IT SURVIVES TO THE
+    cmp al, VID_VGA             ; **ZF IS THE ANSWER AND IT SURVIVES TO THE
 %ifdef GFX_VGA                  ; `jne` BELOW**, and without a VGA renderer
-    cmp al, VID_EGA             ; the first compare is the whole answer.
-%endif                          ; EGA is the same four-plane
+    je .colour                  ; the first compare is the whole answer - so
+    cmp al, VID_EGA             ; the `je` is inside the %ifdef too, or it is
+%endif                          ; a jump onto the next instruction. EGA is the
+                                ; same four-plane
 .colour:                        ; 16-colour depth as VGA - mode 10h, just
                                 ; shorter (SPEC.md 39.24) - so `colour` is
                                 ; `al == VID_VGA || al == VID_EGA`, and the
@@ -720,7 +721,7 @@ vid_apply:
     mov [vid_bankmask], ax      ; which is what makes prevrow a bare subtract
 
     mov ax, [vid_w]             ; --- the desktop's drive column, right-hung.
-    sub ax, 56                  ; ONE word: desk_zone_rect derives the drawn
+    sub ax, DESK_ZXOFF          ; ONE word: desk_zone_rect derives the drawn
     mov [vid_desk_zx], ax       ; rect from it (SPEC.md 26.4). dock_geom moves
                                 ; it in off a right-hand strip (30.5)
 
@@ -1284,9 +1285,11 @@ vid_cga_equip:
 ; and that paint reads [vid_w]/[vid_h]/[vid_stride] out of them.
 ; -----------------------------------------------------------------------------
 section .ovl                    ; kmain_o's alone (SPEC.md 2.5.3.3), out through
-vid_init:                       ; the spw_ shims the splash already needs
+vid_init:                       ; the spw_near door the splash already needs
     BLOBCALL vid_detect
-    call KERNEL_SEG:spw_vid_apply
+    push bp                     ; BP names the routine to spw_near, and this
+    mov bp, vid_apply           ; routine clobbers only flags
+    call KERNEL_SEG:spw_near
 %ifdef DOCK_OPT
     call KERNEL_SEG:ovw_dock_geom ; ...and the strip where the user put it
                                 ; (SPEC.md 30.5). HERE and never from
@@ -1295,8 +1298,10 @@ vid_init:                       ; the spw_ shims the splash already needs
 %endif
     cmp byte [spl_live], 0      ; the splash set THIS mode on its first tick
     jne .keep                   ; and is still drawing on it
-    call KERNEL_SEG:spw_vid_setmode
+    mov bp, vid_setmode
+    call KERNEL_SEG:spw_near
 .keep:
+    pop bp
     retf
 section .text
 
@@ -1541,21 +1546,21 @@ section .text                   ; ...and back, so the next include lands right
 ; WHAT THE SPLASH LEFT BEHIND (SPEC.md 2.9.4)
 ;
 ; The loading screen is stage 2's now, so every call it makes into the kernel
-; is across a segment. These three are that, four bytes each (spw_vid_detect
-; was a fourth until SPEC.md 2.5.3.3 put vid_detect in the blob with its
-; callers) - and they are
+; is across a segment. This is that: ONE far door, `call bp` / `retf`, three
+; bytes, with BP naming the near `.text` routine - vid_apply, vid_setmode or
+; gfx_rowbase. It was three shims of four bytes, one per routine (and
+; spw_vid_detect a fourth until SPEC.md 2.5.3.3 put vid_detect in the blob
+; with its callers); the loader's side pays the BP load, in `.boot2` and
+; `.ovl`, which the machine gives back once it is up. `call`/`retf` touch no
+; flag. It is
 ; HERE, at the end of viddet.inc, rather than in kernel.asm's cw_ block for one
 ; reason: SPL_RESIDENT. The bar cannot move until the routines the first tick
 ; calls are ABOARD, and the cw_ block is at the end of `.text` - the last
-; sector of the image. Here they land in sector 7, which is what SPL_RESIDENT
+; sector of the image. Here it lands in sector 7, which is what SPL_RESIDENT
 ; now measures and why it fell from 9 to that.
 ; =============================================================================
-spw_vid_apply:    call vid_apply
-                  retf
-spw_vid_setmode:  call vid_setmode
-                  retf
-spw_gfx_rowbase:  call gfx_rowbase
-                  retf
+spw_near:   call bp
+            retf
 spw_resident_end:
 
 ; ...and the THREE BYTES of splash.inc that could not go with it. viddet's mode

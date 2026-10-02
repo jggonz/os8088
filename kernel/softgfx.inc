@@ -145,10 +145,11 @@ gfx_rect_setup:
 .offs:
     mov ax, [gfx_ry1]            ; this one call re-bases every rect primitive
     call gfx_rowbase            ; in BOTH renderers - on VGA it is still just
-    add ax, bx                   ; y1 * 80 (SPEC.md 39.3)
-    mov [gfx_roff], ax
-    clc
-    ret
+    add ax, bx                   ; y1 * 80 (SPEC.md 39.3) - AND CF = 0: a
+    mov [gfx_roff], ax           ; row base plus a byte column is inside one
+    ret                          ; framebuffer (under 0x9660 on every adapter
+                                 ; there is), so the ADD cannot carry and the
+                                 ; clc that followed it restated its answer
 .empty:
     stc
     ret
@@ -478,7 +479,7 @@ sw_plane_op:
     xor ah, [sw_altm]           ; gray alternates, solid stays
     dec si
     jnz .irow
-    jmp .out
+    ret
 .xrow:
     mov cx, bp
 .xbyte:
@@ -668,17 +669,15 @@ sw_pairbuild:
     inc bx
     cmp bx, 256
     jb .byte
-    mov byte [gfx_pairbuilt], 1
 %ifdef GFX_PLANE
-    mov byte [vga_p4built], 0   ; UNION: the pair tables overwrote it
+    mov word [gfx_pairbuilt], 0x0001 ; built - and vga_p4built = 0, UNION: the
+                                ; pair tables overwrote it (one word store,
+                                ; the pair adjacent under vga12.inc's %error)
+%else
+    mov byte [gfx_pairbuilt], 1
 %endif
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_di                 ; once a boot: the shared epilogue, not six
+                                ; pops of its own
 
 ; -----------------------------------------------------------------------------
 ; sw_blit_row - ONE ROW of packed 4bpp into the 1bpp framebuffer (SPEC.md 5.4.1)
@@ -1166,12 +1165,7 @@ sw_xfer:
                                 ; gfx_save between the arm and the restore
                                 ; would disarm it - and wm_su_edge is exactly
                                 ; that, twice
-    pop bp
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp gfx_xor_rect_d.pops     ; the same five pops (bp dx cx bx ax) and ret
 
 ; -----------------------------------------------------------------------------
 section .bss

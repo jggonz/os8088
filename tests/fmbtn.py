@@ -29,6 +29,7 @@ import sys
 sys.path.insert(0, "tools")
 import os88marty as M
 from os88mouse import Mouse
+import os88geom                                              # noqa: E402
 from os88geom import WIN_SIZE, MAX_WIN
 
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
@@ -120,8 +121,8 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     FS_VIEW_OFS, FS_SEL_OFS, FS_SCRL_OFS = (equ("FS_VIEW"), equ("FS_SEL"),
                                             equ("FS_SCRL"))
 
-    vw = int.from_bytes(m.read(m.sym("vid_w"), 2), "little")
-    mo.dblclick(vw - 40, 46)                # a drive zone opens a Disk window
+    mo.dblclick(*os88geom.drive_pt(m, "A"))     # a drive zone opens a Disk window,
+                                                # BY LETTER (SPEC.md 26.9)
     M.settle(m)
     slot, w = disk_win(m)
     check("a Disk window opened", w is not None, f"{w}")

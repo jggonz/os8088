@@ -51,7 +51,6 @@ xm_sniff            kmain_o only (kernel.asm) - the XMS probe, SPEC.md 41.12.1
 #                     (41.4 is unreal mode, and why it is FS and GS)
 clk_init            kmain_o only (kernel.asm) - the clock ladder's boot rung, SPEC.md 37
 desk_init           kmain_o only (kernel.asm) - first desktop paint, SPEC.md 14
-ovl_font_init       kmain_o only (kernel.asm) - the BAKED_FONT typeface, SPEC.md 6.2. It keeps its name and its retf: it is a BODY, not a shim
 drv_snd_sniff       kmain_o only (kernel.asm) - what card is at 388h, SPEC.md 51.3.1
 
 # --- the boot-only bodies of docs/plans/LAST-DROP-BYTES.md -----------------------
@@ -85,6 +84,7 @@ ovl_spl_redraw      spl_reset only (splash.inc:488) - repaint after a mode set
 # --- the settings parser, SPEC.md 51.5 / docs/plans/completed/SETTINGS-COST.md -------------
 # ovl_cfg_load was here for the same reason and has left for the same one: its
 # only caller moved into the section with it.
+ovl_sc_load         ovc_load only (CFG_BOOT's expansion, which IS `.ovl` - the macro is merely DEFINED under `.modc`, where the reader cannot tell a definition from an emission). ovc_load's one caller is ovl_cfg_load, drv_boot_x's, inside kmain_o: the desktop shortcuts' boot read, SPEC.md 26.8.6
 
 # --- not a call at all ------------------------------------------------------
 # kernel.asm:6008 `kbld_ovl: dw ovl_end` is the overlay's LENGTH, resolved by

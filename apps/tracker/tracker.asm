@@ -1412,6 +1412,11 @@ trk_fdone:
                                 ; reason (66.3 rule 5) - this ordering does not
                                 ; NEED that guard, and having both is how a
                                 ; rule survives the next author
+    call OSAPI_SND_CAPS             ; NO CARD: the samples filtered for the
+    test ax, SND_CAP_PCM_BG         ; speaker now, once, rather than per
+    jnz .card                       ; output sample (SPEC.md 45.25)
+    call tsp_natural
+.card:
     mov byte [ttx_shok], 0          ; a NEW module can name the same pattern
                                     ; NUMBER with different rows in it, and
                                     ; that is the one thing SPEC.md 45.13.6's
@@ -1421,8 +1426,13 @@ trk_fdone:
     call tui_msg
     mov byte [trk_pause], 0         ; a NEW module is not paused in the old
     call tpl_note                   ; one's place - and it is on the list now
+    mov byte [trk_cpq], 0           ; THE ATTEMPT IS OVER BEFORE THE PLAY: a
+                                    ; windowed speaker play is a loop that
+                                    ; returns only when the song stops, and a
+                                    ; posted load's flag held up across it
+                                    ; refuses the next load its compaction
     mov al, 0
-    call trk_play                   ; caps-gated: no SB machine stays a viewer
+    call trk_play                   ; a card, or the speaker (SPEC.md 45.25)
     call trk_repaint_done           ; the mandatory completion repaint - two
     jmp .out                        ; LINES when windowed, not the whole card
 
@@ -1577,6 +1587,7 @@ trk_fs_enter:
     push bx
     push cx
     push dx
+    push di                         ; (the speaker's bracket takes a hook)
     cmp byte [trk_fs], 0
     jne .out                        ; the bracket blocks, so this is belt-only
 %ifdef TTXFSANY
@@ -1648,6 +1659,17 @@ trk_fs_enter:
     mov [ttx_shseg], dx             ; [ttx_shseg] is that fall-back - the
     mov byte [ttx_shok], 0          ; graphics bracket. A NEW claim holds
 .noshadow:                          ; nothing, so the shadow is rebuilt
+    call OSAPI_SND_CAPS             ; NO CARD: a RATE bracket, whose door the
+    test ax, SND_CAP_PCM_BG         ; speaker's play opens (SPEC.md 45.25) -
+    jnz .cardfs                     ; its period the text screen's 54.6 Hz
+    mov ax, trk_fsx_main            ; frame clock, which FSXW_FRAME then is,
+    mov bx, [trk_win]               ; and no worker kept: this bracket's own
+    mov cx, FSXF_RATE               ; loop mixes (tsp_poll). The caps are
+    mov dx, TSP_FSDIV               ; asked FIRST: the call is free to spend
+    mov di, tsp_hook                ; BX, and the fence reads it
+    call OSAPI_FSX_RUN
+    jnc .ran                        ; (refused - a kernel with no FSXF_RATE:
+.cardfs:                            ; the viewer's bracket, as it always was)
     mov ax, trk_fsx_main
     mov bx, [trk_win]
 %ifdef TTXNOFAST
@@ -1661,6 +1683,8 @@ trk_fs_enter:
                                     ; rather than a whole one (SPEC.md 53.2.1)
     call OSAPI_FSX_RUN              ; blocks until trk_fsx_main returns; the
                                     ; kernel then repaints the desktop whole
+.ran:
+    call tsp_leave                  ; (the bracket's end shut the door)
     mov byte [trk_fs], 0            ; back to the windowed splash
     mov dx, [ttx_shseg]             ; ...and the shadow goes back to the heap:
     or dx, dx                       ; nothing outside a text bracket reads it
@@ -1668,6 +1692,7 @@ trk_fs_enter:
     call OSAPI_MEM_FREE
     mov word [ttx_shseg], 0
 .out:
+    pop di
     pop dx
     pop cx
     pop bx
@@ -1710,6 +1735,7 @@ trk_fsx_main:
     call ttx_draw_all
     call ttx_clkpick                ; the frame clock (SPEC.md 45.16/53.5.1)
 .txloop:
+    call tsp_poll                   ; no card: the speaker's producer (45.25)
     call trk_sover_ck               ; F00 / song end: close, walk the list
     call os88alt_edge               ; ...and Alt+Enter, which int 16h below
     jc .txdone                      ; cannot carry: no XT BIOS enqueues the
@@ -1748,6 +1774,7 @@ trk_fsx_main:
 .gfx:
     call tui_draw_all               ; the whole FT2 screen
 .loop:
+    call tsp_poll                   ; no card: the speaker's producer (45.25)
     call trk_sover_ck               ; F00 / song end: close, walk the list
     call os88alt_edge               ; ...and Alt+Enter, for .txloop's reason
     jc .done                        ; one screen along (SPEC.md 11.2.1.1)
@@ -2175,7 +2202,7 @@ trk_play:
     je .noload
     call OSAPI_SND_CAPS             ; AX = merged caps word
     test ax, SND_CAP_PCM_BG
-    jz .nosb
+    jz .spk                         ; no card: the SPEAKER (SPEC.md 45.25)
     call trk_stream_close           ; restart = close + reopen; the close's
                                     ; drain parks the worker, which is what
                                     ; makes the mp_start reset and the two
@@ -2208,7 +2235,8 @@ trk_play:
     mov byte [trk_ghave], 1
 .granted:
     call trk_rate_pick              ; AX = the rate this mode asks for
-    mov [mp_mixrate], ax
+    call tw_elscale                 ; a resume at another rate keeps its
+    mov [mp_mixrate], ax            ; clock, in the new rate's bytes
     mov al, [trk_pmode]
     call tw_newstream               ; the face's clock: restarted with a song,
     call mp_start                   ; kept across a resume
@@ -2272,9 +2300,8 @@ trk_play:
     mov si, trk_s_noload
     call tui_msg
     jmp .out
-.nosb:
-    mov si, trk_s_nosb
-    call tui_msg
+.spk:
+    call tsp_play
     jmp .out
 .nogrant:
     mov si, trk_s_nomem
@@ -2596,6 +2623,12 @@ trk_ukey:
     xor byte [trk_shuf], 1
     jmp short .done
 .up:
+    call trk_spkq                   ; no card: the speaker's level a step
+    jnc .upc                        ; (45.25.3)
+    mov al, 1
+    call tsp_lvstep
+    jmp short .done
+.upc:
     mov al, [mp_master]
     add al, 4
     cmp al, 64
@@ -2603,6 +2636,12 @@ trk_ukey:
     mov al, 64
     jmp short .vol
 .down:
+    call trk_spkq
+    jnc .dnc
+    mov al, -1
+    call tsp_lvstep
+    jmp short .done
+.dnc:
     mov al, [mp_master]
     sub al, 4
     jnc .vol
@@ -2616,9 +2655,21 @@ trk_ukey:
     ret
 
 trk_play_stop:
+    call tsp_leave                  ; the speaker's door shut, CONS exact...
+    cmp byte [tsp_run], 0
+    je .park
+    push es                         ; ...and the stream's counters the ring's,
+    mov es, [tsp_rseg]              ; so the speaker's play is asked like a
+    mov ax, [es:TSP_RL]             ; card's: tsp_run still says it is one
+    mov [trk_total], ax             ; (45.25), or tui_sync quotes the MIXER
+    mov ax, [es:TSP_RL+2]
+    mov [trk_consumed], ax
+    pop es
+.park:
     mov byte [trk_pause], 1         ; a stop PARKS (SPEC.md 45.17): Play resumes
     call tui_sync                   ; where the LISTENER is, asked while the
                                     ; stream can still answer (SPEC.md 45.15)
+    call tsp_halt                   ; ...and only then the speaker's play over
     call trk_stream_close
     call mp_stop
     mov al, [tui_apos]              ; ...and park the replayer there rather
@@ -2809,6 +2860,14 @@ trk_menus_build:
 .tterm:
     mov byte [di], 0
 
+    ; --- Rate: NO CARD, the speaker's (SPEC.md 45.25.3): Auto, then every
+    ; rung it will step to on this machine, each with its predicted load
+    ; once the bench has run ---
+    call trk_spkq
+    jnc .rcard
+    call trk_spkrate_menu
+    jmp .rdone
+.rcard:
     ; --- Rate: XT mode's TWO, or the other mode's FOUR - or TWO -----------
     call trk_rcount                 ; CL = the rows this mode AND this card
     xor ch, ch                      ; can play: a card without SND_CAP_PCM_HI
@@ -2860,6 +2919,7 @@ trk_menus_build:
     cmp bx, cx
     jb .item
 
+.rdone:
     mov bx, [trk_win]               ; ONE MENU_SET for the whole set, which is
     mov si, trk_menus               ; why this is one routine: two that each
     call OSAPI_MENU_SET             ; ended in it meant the last one called
@@ -2961,6 +3021,11 @@ trk_txt_toggle:
 ; 5.5/11. out AH = the pick; put takes it in AL.
 ; -----------------------------------------------------------------------------
 trk_rsel_get:
+    call trk_spkq                   ; no card: the speaker's pick (45.25.3)
+    jnc .card
+    mov ah, [tsp_rsel]
+    ret
+.card:
     mov ah, [trk_rsel]
     cmp byte [mp_xt], 0
     je .out
@@ -2969,6 +3034,11 @@ trk_rsel_get:
     ret
 
 trk_rsel_put:
+    call trk_spkq
+    jnc .card
+    mov [tsp_rsel], al
+    ret
+.card:
     cmp byte [mp_xt], 0
     je .plain
     mov [trk_xhi], al
@@ -2986,6 +3056,21 @@ trk_rsel_put:
 ; bound are all this one answer (SPEC.md 47 rule 5).
 ; -----------------------------------------------------------------------------
 trk_rcount:
+    call trk_spkq                   ; no card: Auto and the machine's rungs
+    jnc .card
+    push si
+    call tsp_rates
+    mov cl, 1
+.sr:
+    cmp word [si], 0
+    je .sre
+    inc cx
+    add si, 2
+    jmp short .sr
+.sre:
+    pop si
+    ret
+.card:
     mov cl, 2
     cmp byte [mp_xt], 0
     jne .out
@@ -3014,6 +3099,152 @@ trk_hirate:
     clc
     ret
 
+; trk_spkq - CF = 1 when there is NO CARD: Tracker plays through the PC speaker
+; and picks the speaker's rate itself (SPEC.md 45.25), so the Rate menu, the
+; rate button and R have nothing to set. Asked LIVE, as trk_hirate is.
+; Preserves every register.
+trk_spkq:
+    push ax
+    push bx
+    push dx
+    call OSAPI_SND_CAPS
+    test ax, SND_CAP_PCM_BG
+    pop dx
+    pop bx
+    pop ax
+    jnz .card
+    stc
+    ret
+.card:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_rstop - a rate change's stop, the card's and the speaker's: a playing
+; song paused where the listener is, with the renderer told the stop has
+; been SEEN - or its next frame notices it and repaints `Paused` over the
+; rate's message (SPEC.md 45.10.1). Nothing when stopped. Clobbers AL
+; (trk_play_stop), which neither caller reads after it
+; -----------------------------------------------------------------------------
+trk_rstop:
+    cmp byte [mp_playing], 0
+    je .idle
+    call trk_play_stop              ; drains the worker (SPEC.md 45.2)
+    call trk_transport              ; ...and the stop's legend and parked row
+    cmp byte [trk_fs], 0            ; NOW, with the renderer told it has been
+    je .seen                        ; seen - or its next frame notices the stop
+    cmp byte [trk_cpu0], 0          ; and repaints `Paused` over the rate
+    jne .idle                       ; message below, which is where 44 kHz's
+.seen:                              ; note lives (SPEC.md 45.10.1). A tier-0
+    mov byte [tui_lplay], 0         ; FULLSCREEN stop also reshapes the pattern
+.idle:                              ; view, so there the renderer keeps it
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_spkrate_menu - the Rate menu with NO CARD (SPEC.md 45.25.3): Auto, then
+; each rung the speaker will step to on this machine, '*' on the pick and,
+; once the bench has run, each rung's predicted load - so the user picks a
+; rate knowing what it asks of the machine. Called by trk_menus_build.
+; Preserves all.
+; -----------------------------------------------------------------------------
+trk_spkrate_menu:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es                          ; tsp_mnum writes at ES:DI
+    cld
+    call trk_rcount                 ; CL = Auto + the rungs
+    xor ch, ch
+    mov [trk_e_rate + AMENU_NITEM], cx
+    xor bx, bx
+.item:
+    mov di, bx
+%rep TRK_RITEM_SH
+    shl di, 1
+%endrep
+    add di, trk_ritem0
+    mov al, ' '
+    cmp bl, [tsp_rsel]
+    jne .p
+    mov al, '*'
+.p:
+    stosb
+    mov al, ' '
+    stosb
+    mov si, tsp_s_rauto
+    or bx, bx
+    jz .name
+    call tsp_rates                  ; SI -> the rungs
+    push bx
+    dec bx
+    shl bx, 1
+    mov ax, [si+bx]
+    pop bx
+    call tsp_rstr                   ; SI = its name
+    call trk_scpy
+    cmp byte [tsp_cal], 0           ; benched: the load it would put on the
+    je .term                        ; machine
+    call tsp_predict                ; AX = %
+    push ax
+    mov al, ' '
+    stosb
+    stosb
+    pop ax
+    call tsp_mnum
+    mov al, '%'
+    stosb
+    jmp short .term
+.name:
+    call trk_scpy
+.term:
+    mov byte [di], 0
+    inc bx
+    cmp bx, cx
+    jb .item
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; trk_spkrate_say - `Rate: 5512 Hz at the next Play` (or Auto). Preserves all
+trk_spkrate_say:
+    push ax
+    push bx
+    push si
+    push di
+    push es
+    call tsp_mbeg
+    mov si, trk_s_rspkm
+    call tsp_mcat
+    mov si, tsp_s_rauto
+    mov bl, [tsp_rsel]
+    or bl, bl
+    jz .n
+    call tsp_rates
+    dec bl
+    xor bh, bh
+    shl bx, 1
+    mov ax, [si+bx]
+    call tsp_rstr
+.n:
+    call tsp_mcat
+    mov si, trk_s_rspkp
+    call tsp_mcat
+    call tsp_mend
+    pop es
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
 ; DS:SI (asciiz, terminator dropped) -> [DI], DI left past it. AL, SI spent.
 trk_scpy:
     mov al, [si]
@@ -3032,6 +3263,22 @@ trk_rate_set:
     push cx
     push si
     push di
+    call trk_spkq                   ; NO CARD: the speaker's rate (45.25.3):
+    jnc .card                       ; Auto or a rung, taken at the next play
+    call trk_rcount
+    cmp al, cl
+    jae .done
+    mov [tsp_rsel], al
+    call trk_rstop                  ; PLAYING: paused first, as a card's
+                                    ; change is, so the face says what R did
+                                    ; and Play takes the new rate from where
+                                    ; the listener is
+    mov byte [tsp_rung], 0          ; Auto starts from the top again
+    mov byte [tsp_force], 0
+    call trk_menus_build
+    call trk_spkrate_say
+    jmp .done
+.card:
     call trk_rcount                 ; CL = rows in THIS mode: 3 outside XT
     cmp al, cl                      ; mode, 2 inside it. A pick past the end
     jae .done                       ; cannot happen from the menu and can from
@@ -3057,17 +3304,7 @@ trk_rate_set:
                                     ; the one thing a bench build may not do.
                                     ; It lived in trk_xrate_tog until that
                                     ; routine folded into this one
-    cmp byte [mp_playing], 0
-    je .idle
-    call trk_play_stop              ; drains the worker (SPEC.md 45.2)
-    call trk_transport              ; ...and the stop's legend and parked row
-    cmp byte [trk_fs], 0            ; NOW, with the renderer told it has been
-    je .seen                        ; seen - or its next frame notices the stop
-    cmp byte [trk_cpu0], 0          ; and repaints `Paused` over the rate
-    jne .idle                       ; message below, which is where 44 kHz's
-.seen:                              ; note lives (SPEC.md 45.10.1). A tier-0
-    mov byte [tui_lplay], 0         ; FULLSCREEN stop also reshapes the pattern
-.idle:                              ; view, so there the renderer keeps it
+    call trk_rstop
     cmp byte [trk_sopen], 0         ; a drained ring left open by F00/stop
     je .menu                        ; paths closes before the rate changes
     call trk_stream_close
@@ -3559,7 +3796,7 @@ trk_e_view:
                                         ; rows exist in every mode and it is
                                         ; the GREYING that moves
 trk_e_rate:                             ; ...labelled because its AMENU_NITEM
-        OS88_MENU trk_m_rate, trk_mi_rate, 4    ; is written at RUN TIME: the
+        OS88_MENU trk_m_rate, trk_mi_rate, 5    ; is written at RUN TIME: the
                                         ; Rate menu is TWO items in XT mode
                                         ; and four outside it (SPEC.md
                                         ; 45.9.3). The set is the package's
@@ -3607,7 +3844,8 @@ trk_s_fswin: db ' (5.5 kHz)', 0         ; SPEC.md 47 rule 7: the greyed row
                                         ; says what would bring it back, which
                                         ; is the OTHER control's setting
 trk_m_rate:  db 'Rate', 0
-trk_mi_rate: dw trk_ritem0, trk_ritem1, trk_ritem2, trk_ritem3  ; COMPOSED, by
+trk_mi_rate: dw trk_ritem0, trk_ritem1, trk_ritem2, trk_ritem3, trk_ritem4
+                                        ; COMPOSED, by
                                         ; trk_rate_menu (SPEC.md 45.17.1)
 trk_s_r11:   db '11 kHz', 0
 trk_s_r22:   db '22 kHz', 0
@@ -3635,6 +3873,8 @@ trk_xrname:  dw trk_s_x55, trk_s_x11
 trk_xrmsg:   dw trk_s_xm55, trk_s_xm11
 trk_s_xm55:  db 'Rate: 5.5 kHz - Enter plays', 0
 trk_s_xm11:  db 'Rate: 11 kHz - windowed only', 0
+trk_s_rspkm: db 'Rate: ', 0             ; ...and the speaker's, 45.25.3
+trk_s_rspkp: db ' at the next Play', 0
 
 %if TRK_VSH == 1
 trk_ttl:     db 'Tracker 33', 0     ; the listening builds say which they are
@@ -3660,6 +3900,17 @@ trk_s_nofit:  db 'Too big for free memory', 0
 trk_s_cpq:    db 'Making room...', 0
 trk_s_noload: db 'No module loaded - L loads one', 0
 trk_s_nosb:   db 'No Sound Blaster: viewer only', 0
+trk_s_spk1:   db 'Speaker: needs ', 0
+trk_s_spk2:   db '% of this PC - Play again to try', 0
+trk_s_spk3:   db 'Spk ', 0         ; (short: the compact face's strip holds
+                                   ; the legend's 38 and no more)
+trk_s_spkflt: db 'Filtering the samples for the speaker...', 0
+trk_s_spk4:   db ' Hz, ', 0
+trk_s_spk5:   db '% cpu', 0
+trk_s_lev1:  db 'Spk level ', 0
+trk_s_lev2:  db ' of 10 (+/-)', 0
+trk_s_spk6:   db ' (CARRIER WHINES!)', 0
+trk_s_spkbusy: db 'The PC speaker is busy', 0
 trk_s_nomem:  db 'Out of memory', 0
 trk_s_toobig: db 'File too big', 0
 trk_s_noent:  db 'File not found', 0
@@ -3766,6 +4017,9 @@ trk_reloc:
 %include "trktxt.inc"
 %include "trkwin.inc"
 %include "trklist.inc"
+%include "os88spk.inc"              ; the speaker's ring player (SPEC.md 34.11)
+%include "os88spkfx.inc"            ; ...and its shaper (34.11.9)
+%include "trkspk.inc"               ; ...played with no card (45.25)
 %ifdef TRKLOG
 %include "trklog.inc"               ; tests/ - the bench build only, and the
 %endif                              ; only thing -DTRKLOG adds beyond hooks
@@ -3828,6 +4082,8 @@ trk_reloc:
     TRKBUF trk_ritem1, TRK_RITEM      ; (SPEC.md 45.17.1) - in the PACKAGE's own
     TRKBUF trk_ritem2, TRK_RITEM      ; segment, which is where a menu string
     TRKBUF trk_ritem3, TRK_RITEM      ; (33 kHz made it four, SPEC.md 45.10.1)
+    TRKBUF trk_ritem4, TRK_RITEM      ; (the speaker's Auto and a 286's four
+                                      ; rungs made it five, 45.25.3)
                                     ; has to live (SPEC.md 12.2's MB_SEG)
     TRKB trk_cpu0                   ; the MACHINE is a tier-0 8086/8088
                                     ; (SPEC.md 41.8), latched at entry. NOT

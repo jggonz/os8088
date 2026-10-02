@@ -75,7 +75,7 @@ KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc", "stkdiag.inc",
 # row) and so measures somewhere; compress.inc is the first that is PURELY
 # the image, and its resident half lives on mod.inc's and files.inc's rows.
 # A file joining this list is saying "nothing of this is in KERNEL.SYS".
-IMAGE_ONLY = ("compress.inc", "dockmod.inc", "linkcfg.inc")
+IMAGE_ONLY = ("compress.inc", "dockmod.inc")
 
 # ...and a THIRD reason for a zero row, which is neither a knob nor an image:
 # a file whose whole contribution is a MACRO.  `mouproto.inc` (SPEC.md 9.5) is

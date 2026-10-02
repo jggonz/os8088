@@ -441,6 +441,42 @@ hd_cp_drag:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; hd_cp_key - DSV_CPKEY (SPEC.md 31.9.2)
+; in:  BL = ASCII, BH = the scan code; the gfx lock is HELD
+; out: CF = 0 the page took it; CF = 1 it did not, and the panel drops it
+;
+; It does NOT load the image, rd_page_key's reasoning: a key reaches this page
+; only after it has been painted, and a paint is what brought the image in -
+; so an image that is not here is a page showing the one-line apology, which
+; has nothing to move a selection in.
+; -----------------------------------------------------------------------------
+hd_cp_key:
+    cmp word [hd_tseg], 0
+    je .no
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov al, HDT_KEY
+    call hd_tool_call
+    pop es                      ; `pop` leaves the page's CF alone
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.no:
+    stc
+    ret
+
 hd_s_nosys:  db 'Need the system disk', 0   ; THE ONE STRING THE RESIDENT
                                 ; KEEPS, and hd_cp_paint above is why: a
                                 ; refused paint has to say so in the pane the

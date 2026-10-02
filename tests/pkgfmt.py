@@ -7,7 +7,7 @@ Kernel size pass 4 moved 158 of the API table's cells (SPEC.md 20.3) and left
 the header's format byte at 3, so a package built for the old table and loaded
 by the new kernel - or the other way round - did not fault. It loaded, and
 its first `call OSAPI_*` landed in the middle of some other cell. The format
-byte is the TABLE'S now (PKG_FMT = 6), and the loader's test was always
+byte is the TABLE'S now (PKG_FMT = 8), and the loader's test was always
 EQUALITY, so the fix is the number and not the check: a kernel handed a
 package of any other format answers LD_EBAD before a byte of it runs.
 
@@ -63,7 +63,7 @@ def name_of(v):
 
 # (file, verdict wanted, what it means). The refusal goes FIRST, see above.
 if SWAP:
-    plan = [("CALC.O88", LD_EBAD, "a format-6 package on the #197 kernel"),
+    plan = [("CALC.O88", LD_EBAD, "a format-8 package on the #197 kernel"),
             ("OLDCALC.O88", LD_OK, "that kernel's own format-3 Calculator")]
 else:
     plan = [("OLDCALC.O88", LD_EBAD, "a format-3 package on this kernel"),

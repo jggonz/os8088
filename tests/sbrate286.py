@@ -191,8 +191,7 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=MACHINE) as ui:
     check("this machine detects as an 8086/8088", tier(m) == CPU_8086,
           f"(cpu_tier {tier(m)})")
 
-    vw = int.from_bytes(m.read(m.sym("vid_w"), 2), "little")
-    mo.dblclick(vw - 40, 80)                     # zone 1 = B:, the 30 files
+    mo.dblclick(*geom.drive_pt(m, "B"))          # B:, the 30 files, by letter
     M.settle(m)
     slot, w = disk_win(m)
     if not w:

@@ -627,7 +627,7 @@ def leg_h(ui, p, say, want=4):
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--img", default=os88build.at("build/os8088-360.img"))
-    ap.add_argument("--apps", default=os88build.at("build/apps360.img"))
+    ap.add_argument("--apps", default=os88build.at("build/games360.img"))
     ap.add_argument("--machine", default=MACHINE)
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)

@@ -46,6 +46,7 @@
 %include "fmt.inc"
 %include "tool.inc"
 %include "inst.inc"
+%include "os88rseq.inc"         ; os88_rseq: READ_AT's registers, READ_SEQ's walk
 %include "cppage.inc"
 %include "iassoc.inc"
 
@@ -78,6 +79,8 @@ hd_tentry:
     je hd_page_up               ; out, with a verb in front of them
     cmp al, HDT_DRAG
     je hd_page_drag
+    cmp al, HDT_KEY
+    je hd_page_key
     stc                         ; a verb from a newer resident than this image
     ret                         ; - refuse it rather than run another one
 
@@ -222,6 +225,11 @@ hd_win_live:
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_CHK              ; the installer's Erase box (SPEC.md 52.10.15)
+%define OS88UI_ARM              ; os88ui_arm/fire/armed: the press/release
+%define OS88UI_NOGEST           ; ...and all three windows drive their own buttons
+                                ; through arm/fire/armed - the record-based
+                                ; gesture half is ~226 bytes nothing here
+                                ; calls (SPEC.md 20.5.1.3.4)
 %include "os88ui.inc"
 
     OS88_DRV_END

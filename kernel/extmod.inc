@@ -678,7 +678,6 @@ wm_strads:
     jc .no
     pop di
     pop ax
-    clc
     ret
 .no:
     pop di

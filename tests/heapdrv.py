@@ -210,13 +210,15 @@ def guest_font(m):
     """The kernel's LIVE glyph table, read out of the machine (font.inc).
 
     NOT a host-side .f8. A plain build bakes no typeface at all - `font_init`
-    asks the VGA BIOS for its ROM 8x8 set and copies glyphs 32..126 into
-    `font_glyphs` - so the only thing that knows what this machine letters
+    asks the VGA BIOS for its ROM 8x8 set and points `[font_seg]:[font_base]`
+    at glyph 32 of it (SPEC.md 6) - so the only thing that knows what this machine letters
     with is this machine. A test that rendered fonts/tallx.f8 here would be
     asserting against a typeface `make FONT=<name>` has to be asked for, and
     would find nothing on any ordinary build.
     """
-    raw = m.read(S("font_glyphs"), FONT_BYTES)
+    seg = int.from_bytes(m.read(S("font_seg"), 2), "little")
+    off = int.from_bytes(m.read(S("font_base"), 2), "little")
+    raw = m.read(seg * 16 + off, FONT_BYTES)
     return {FONT_FIRST + i: list(raw[i * 8:i * 8 + 8])
             for i in range(FONT_BYTES // 8)}
 

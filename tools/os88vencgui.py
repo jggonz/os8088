@@ -22,7 +22,10 @@ What the window adds is ASSISTANCE, in the order a person needs it:
     3. What will it look like?    - a scrubber over the ENCODED frames as
                                      the adapter shows them: CGA's colours,
                                      a VGA's palette, composite through the
-                                     monitor model, one bit as one bit
+                                     monitor model, one bit as one bit -
+                                     and, on the Colour tab, the palette
+                                     the choices give, as swatches
+                                     (SPEC.md 98.2.8.1)
     4. How do I get it onto the machine? - Save writes the .V88; "...and
                                      make a disk of it" puts it and
                                      VIDEO.O88 on a floppy image of any of
@@ -49,9 +52,10 @@ import traceback
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
+    from tkinter import font as tkfont
 except Exception:                                            # pragma: no cover
     tk = None
-    filedialog = messagebox = ttk = None
+    filedialog = messagebox = ttk = tkfont = None
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
@@ -59,6 +63,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 import os88venc as V                                          # noqa: E402
 import os88vid as vid                                         # noqa: E402
+from os88drop import enable_drop, make_root                   # noqa: E402,F401
 
 APPNAME = "os8088 video encoder"
 
@@ -101,46 +106,172 @@ TARGETS = [
 ]
 TARGETS = [t + ({},) if len(t) == 4 else t for t in TARGETS]
 
-# the tabs, and which options go on which - an option named nowhere here
-# still appears, on Advanced
+# the tabs, and the GROUPS on each (98.2.8.2): an outline with a header
+# round the options that go together, and the whole group greyed out when
+# the file the form makes cannot use it - the CGA 4-colour group on
+# anything but CGA 4 colours, the PC speaker's on any other sound. An
+# option named in no group still appears, on Advanced, in "Other"
 TAB_ROWS = 10    # more options than this and a tab takes two columns
 TABS = ("Basic", "Picture", "Colour", "Sound", "Budget", "Loop and keys",
         "Advanced")
-TAB_OF = {
-    "preset": "Basic", "pixfmt": "Basic", "profile": "Basic",
-    "title": "Basic", "credits": "Basic", "start": "Basic", "end": "Basic",
-    "fps": "Basic",
-    "layout": "Picture", "box": "Picture", "fit": "Picture",
-    "dither": "Picture", "stable": "Picture", "levels": "Picture",
-    "clip": "Picture", "gamma": "Picture", "contrast": "Picture",
-    "brightness": "Picture", "invert": "Picture", "detail": "Picture",
-    "cga_palette": "Colour", "cga_bright": "Colour", "cga_bg": "Colour",
-    "vga8_dither": "Colour", "vga8_stable": "Colour",
-    "vga4_stable": "Colour", "comp_dither": "Colour",
-    "comp_stable": "Colour", "comp_quick": "Colour", "mix": "Colour",
-    "cga_card": "Colour", "c512_dither": "Colour", "c512_stable": "Colour",
-    "c512_mix": "Colour",
-    "text_colour": "Colour", "text_glyphs": "Picture",
-    "text_detail": "Picture", "text_sharpen": "Picture",
-    "text_busy": "Picture", "text_stable": "Picture",
-    "text_prefer_colour": "Colour",
-    "text_ocr": "Picture", "text_ocr_large": "Picture",
-    "text_ocr_conf": "Picture", "text_ocr_every": "Picture",
-    "levels_mix": "Colour", "flip": "Colour",
-    "audio": "Sound", "rate": "Sound", "adpcm": "Sound", "jobs": "Sound",
-    "volume": "Sound", "spk_shape": "Sound", "spk_highpass": "Sound",
-    "spk_drive": "Sound", "spk_lows": "Sound", "spk_pulses": "Sound",
-    "spk_range": "Sound", "spk_ratio": "Sound", "spk_idle": "Sound",
-    "spk_style": "Sound",
-    "spk_preview": "Sound",
-    "disk": "Budget", "avg": "Budget", "peak": "Budget", "owe": "Budget",
-    "lookahead": "Budget", "error": "Budget", "reserve": "Budget",
-    "aim": "Basic", "worth": "Budget",
-    "loop_from": "Loop and keys", "repeat": "Loop and keys",
-    "keysecs": "Loop and keys", "poster": "Loop and keys",
-    "poster_at": "Loop and keys", "resident": "Loop and keys",
-    "live": "Loop and keys", "xms": "Loop and keys",
+# what the form makes, in the words a reason uses
+PF_WORDS = {"mono": "one bit, black and white",
+            "cgacomp": "CGA composite colour",
+            "vga8": "256 colours on a VGA", "vga4": "16 colours on a VGA",
+            "cga4": "CGA 4 colours", "c160": "CGA 16 colours at 160 x 100",
+            "c512": "CGA composite, 512 colours", "text": "text mode"}
+AUDIO_WORDS = {"pcm8": "8-bit sound for a Sound Blaster",
+               "adpcm4": "ADPCM for a Sound Blaster",
+               "speaker": "the PC speaker", "none": "no sound"}
+
+
+def _for(pfs, what):
+    """A group's rule: it applies to the pixel formats `pfs`, and says so"""
+    def when(c):
+        if c["pixfmt"] in pfs:
+            return None
+        return ("These are for %s, and this file is %s. Choose a target "
+                "that makes %s under Made for, or its pixel format on "
+                "Basic." % (what, PF_WORDS[c["pixfmt"]], what))
+    return when
+
+
+def _sound(kind, what):
+    def when(c):
+        if c["audio"] == kind:
+            return None
+        return ("These are for %s, and this file's sound is %s. Choose %s "
+                "as the Audio above, or a target that uses it under Made "
+                "for." % (what, AUDIO_WORDS.get(c["audio"], c["audio"]),
+                          kind))
+    return when
+
+
+def _shaping(c):
+    return _sound("speaker", "the PC speaker")(c) or (
+        None if c["spk_shape"] == V.SPK_ENC else
+        "These shape the sound for the speaker in the encoder, and Spk "
+        "shape is machine: the file is a plain 8-bit WAV at the rate, and "
+        "Audio shapes it itself as it plays. Set Spk shape to encoder to "
+        "use them."
+        if c["spk_shape"] == V.SPK_MACH else
+        "These shape the sound for the speaker, and Spk shape is none: the "
+        "sound goes on the speaker as it is. Set Spk shape to encoder to "
+        "use them.")
+
+
+def _pixel_kept(c):
+    if c["pixfmt"] == "mono" or (c["pixfmt"] == "cgacomp"
+                                 and c["comp_dither"] == "pattern"):
+        return None
+    return ("This holds a pixel for the one-bit dither and the composite "
+            "PATTERN dither, and this file is %s%s."
+            % (PF_WORDS[c["pixfmt"]], " made by diffusion (Comp dither)"
+               if c["pixfmt"] == "cgacomp" else ""))
+
+
+def _greys(c):
+    if c["pixfmt"] in ("mono", "cgacomp") or (
+            c["pixfmt"] == "text" and c["text_colour"] == "mono"):
+        return None
+    return ("The stretch is for a picture made of greys, and this file is "
+            "%s, whose colours are chosen from the clip as they are."
+            % (PF_WORDS[c["pixfmt"]] + (" in colour" if c["pixfmt"] ==
+                                        "text" else "")))
+
+
+ALWAYS = lambda c: None
+# A SPEAKER WAV (SPEC.md 86.21.1) is the sound alone: of the groups only
+# these apply to it, and the rest say so
+WAV_KEEP = ("Made for", "The clip", "Sound", "PC speaker",
+            "PC speaker: the sound shaped")
+WAV_WHY = ("This file is a speaker WAV for Audio - the sound alone, shaped "
+           "for the PC speaker (SPEC.md 86.21.1) - so it has no picture. "
+           "Save as a .V88 to use these.")
+# (tab, header, options, rule): a rule is None where the group applies,
+# else the reason it does not - the group's tooltip while it is greyed
+GROUPS = [
+    ("Basic", "Made for", ("preset", "pixfmt", "profile", "aim"), ALWAYS),
+    ("Basic", "The clip", ("title", "credits", "start", "end", "fps"),
+     ALWAYS),
+    ("Picture", "Canvas", ("layout", "box", "fit"), ALWAYS),
+    ("Picture", "Tone", ("gamma", "contrast", "brightness"), ALWAYS),
+    ("Picture", "Grey levels", ("levels",), _greys),
+    ("Picture", "One bit", ("dither", "invert", "clip"),
+     _for(("mono",), PF_WORDS["mono"])),
+    ("Picture", "A pixel held", ("stable",), _pixel_kept),
+    ("Picture", "Text mode", ("text_glyphs", "text_detail", "text_sharpen",
+                              "text_busy", "text_stable"),
+     _for(("text",), PF_WORDS["text"])),
+    ("Picture", "Text mode: words read (OCR)",
+     ("text_ocr", "text_ocr_large", "text_ocr_conf", "text_ocr_every"),
+     _for(("text",), PF_WORDS["text"])),
+    ("Colour", "Text mode colours", ("text_colour", "text_prefer_colour"),
+     _for(("text",), PF_WORDS["text"])),
+    ("Colour", "CGA, 4 colours", ("cga_palette", "cga_bright", "cga_bg"),
+     _for(("cga4",), PF_WORDS["cga4"])),
+    ("Colour", "CGA composite", ("comp_dither", "comp_stable", "comp_quick",
+                                 "mix", "levels_mix"),
+     _for(("cgacomp",), PF_WORDS["cgacomp"])),
+    ("Colour", "CGA composite, 512 colours",
+     ("cga_card", "c512_dither", "c512_stable", "c512_mix"),
+     _for(("c512",), PF_WORDS["c512"])),
+    ("Colour", "4 and 16 colours", ("vga4_stable",),
+     _for(("cga4", "c160", "c512", "vga4"),
+          "CGA 4 colours, CGA 16 colours at 160 x 100, CGA composite 512 "
+          "colours or 16 colours on a VGA")),
+    ("Colour", "VGA, 256 colours", ("detail", "vga8_dither", "vga8_stable",
+                                    "flip"),
+     _for(("vga8",), PF_WORDS["vga8"])),
+    ("Sound", "Sound", ("audio", "rate", "volume"), ALWAYS),
+    ("Sound", "ADPCM", ("adpcm",), _sound("adpcm4", "ADPCM")),
+    ("Sound", "PC speaker", ("spk_shape", "spk_pulses", "spk_preview"),
+     _sound("speaker", "the PC speaker")),
+    ("Sound", "PC speaker: the sound shaped",
+     ("spk_style", "spk_highpass", "spk_ratio", "spk_range", "spk_lows",
+      "spk_drive", "spk_idle"), _shaping),
+    ("Budget", "The machine's budget", ("disk", "avg", "peak", "owe",
+                                        "reserve"), ALWAYS),
+    ("Budget", "When a frame is cut", ("lookahead", "error"), ALWAYS),
+    ("Budget", "Aim: size", ("worth",),
+     lambda c: None if c["aim"] == "size" else
+     "This is --aim size's floor, and the aim is %s. Choose size as the Aim "
+     "on Basic to use it." % c["aim"]),
+    ("Loop and keys", "Loop", ("loop_from", "repeat"), ALWAYS),
+    ("Loop and keys", "Held in memory", ("resident", "live", "xms"),
+     ALWAYS),
+    ("Loop and keys", "Keyframes and the poster", ("keysecs", "poster",
+                                                   "poster_at"), ALWAYS),
+    ("Advanced", "This computer", ("jobs",), ALWAYS),
+]
+# ...and inside a group that applies, the few options narrower than it
+FIELD_WHEN = {
+    "text_prefer_colour": lambda c: None if c["text_colour"] == "colour"
+    else "This keeps a cell's hue, and the text is mono: it has none.",
+    "flip": lambda c: None if c["layout"] == "modex" else
+    "Two pages are Mode X's, and this file is laid out as %s: mode 13h "
+    "has one page." % (c["layout"] or "lin320"),
+    "comp_stable": lambda c: None if c["comp_dither"] == "diffuse" else
+    "This is the diffusion's, and Comp dither is pattern.",
+    "comp_quick": lambda c: None if c["comp_dither"] == "diffuse" else
+    "This is the diffusion's, and Comp dither is pattern.",
+    "mix": lambda c: None if c["comp_dither"] == "pattern" else
+    "This is the pattern dither's, and Comp dither is diffuse.",
+    "levels_mix": lambda c: None if c["comp_dither"] == "pattern" else
+    "This is the pattern dither's, and Comp dither is diffuse.",
+    "xms": lambda c: None if c["live"] else
+    "This makes a LIVE file streamed from XMS, and Live is not chosen.",
+    "rate": lambda c: None if c["audio"] != "none" else
+    "The file has no sound.",
+    "volume": lambda c: None if c["audio"] != "none" else
+    "The file has no sound.",
 }
+assert len({g[1] for g in GROUPS}) == len(GROUPS), "a header names a group"
+GROUP_OF = {d: g for g in GROUPS for d in g[2]}
+TAB_OF = {d: g[0] for d, g in GROUP_OF.items()}
+# the fields a group's rule reads: a change to one re-judges every group
+CONTEXT_FIELDS = ("preset", "pixfmt", "profile", "live", "layout", "audio",
+                  "text_colour", "comp_dither", "spk_shape", "aim")
 # the choices that IMPLY others (os88venc.implied): changing one refills them
 IMPLYING = ("preset", "pixfmt", "profile", "live")
 # a free-text option's COMMON values, offered in an editable list: the sound
@@ -162,6 +293,10 @@ TAB_NOTES = {
               "charges the copy - its disk slows as the decode and the "
               "speaker take the machine, so fewer bytes a frame are "
               "planned."}
+# the speaker style's three numbers (os88vid.SPK_STYLES): the parser's
+# default is None, "the style's", so the window shows the style's own
+STYLE_FIELDS = (("spk_highpass", "hp"), ("spk_ratio", "ratio"),
+                ("spk_range", "rng"))
 # what the window runs itself, and so does not offer
 HIDDEN = {"help", "src", "out", "preview_png", "quiet", "profiles",
           "progress"}
@@ -193,6 +328,22 @@ def fields():
     return out
 
 
+def style_values(style=None):
+    """What a speaker STYLE sets (98.2.15.1): its high-pass, ratio and
+    range as the window shows them - dest -> string"""
+    st = vid.SPK_STYLES.get(str(style or "").strip() or vid.SPK_STYLE,
+                            vid.SPK_STYLES[vid.SPK_STYLE])
+    return {d: "%g" % st[k] for d, k in STYLE_FIELDS}
+
+
+def form_start():
+    """The form as the window opens it: every field's default, and the
+    speaker style's numbers filled in - dest -> string"""
+    vals = {f["dest"]: f["default"] for f in fields()}
+    vals.update(style_values(vals.get("spk_style")))
+    return vals
+
+
 def choice_lines(f, current=""):
     """(value, what it is, is it the one chosen) for a choice field, in
     the field's own order: what its "?" shows (os88venc.CHOICE_HELP)"""
@@ -216,12 +367,22 @@ def argv_from(src, out, values, sfps=None):
     profile imply - the window SHOWS those (98.2.10), and the command line
     stays the short one that says the same thing"""
     argv = [src, out]
+    values = dict(values, _out=out)     # (a .WAV greys the picture's groups)
     imp = implied_values(values, sfps)
     # ...but a choice that IMPLIES is compared with what the rest imply
     # without it - or a --pixfmt cgacomp would echo back as its own
     # implication and be left off, and the file come out one-bit
     imp["pixfmt"] = implied_values(dict(values, pixfmt=""), sfps)["pixfmt"]
+    # ...and the speaker style's numbers, which the window shows filled
+    imp.update(style_values(values.get("spk_style")))
+    # an option that CANNOT APPLY to the file is left off: its group is
+    # greyed (98.2.8.2), and a --detail or a --flip left over from another
+    # format would only be refused
+    off = group_state(values)[1]
+    wav = out.lower().endswith(".wav")
     for f in fields():
+        if off.get(f["dest"]) or (wav and f["dest"] == "audio"):
+            continue                    # (a WAV's sound IS the speaker's)
         v = str(values.get(f["dest"], "")).strip()
         if f["kind"] == "bool":
             if v in ("1", "True", "true") and imp.get(f["dest"]) != "1":
@@ -231,6 +392,55 @@ def argv_from(src, out, values, sfps=None):
             continue
         argv += [f["flag"], v]
     return argv
+
+
+def form_context(values):
+    """What the form MAKES, as the groups' rules ask it (98.2.8.2): the
+    pixel format and layout the preset, format, layout and Live choice come
+    to, and the sound and the few choices a group depends on"""
+    g = lambda k: str(values.get(k, "") or "").strip()
+    try:
+        imp = implied_values(values)
+    except Exception:
+        imp = {}
+    lay = g("layout") or imp.get("layout", "")
+    pf = g("pixfmt")
+    if g("live"):
+        pf = "vga4" if g("live") == "vga" and pf == "vga4" else "mono"
+    elif not pf and g("layout"):        # a layout typed by hand IS a format
+        pf = "vga8" if lay in ("lin320", "modex") else \
+            {"c160": "c160", "text-80x100": "c512",
+             "text-80x25": "text"}.get(lay, "mono")
+    pf = pf or imp.get("pixfmt") or "mono"
+    wav = g("_out").lower().endswith(".wav")
+    return dict(pixfmt=pf if pf in PF_WORDS else "mono", layout=lay,
+                wav=wav, audio="speaker" if wav else
+                g("audio") or imp.get("audio") or "pcm8",
+                text_colour=g("text_colour") or imp.get("text_colour") or
+                "colour",
+                comp_dither=g("comp_dither") or "diffuse",
+                spk_shape=g("spk_shape") or V.SPK_ENC, aim=g("aim") or "asked",
+                live=g("live"))
+
+
+def group_state(values):
+    """({group header: why it cannot apply, or None}, {option: why it
+    cannot apply, or None}) for the form's values - an option's is its
+    group's, else its own (FIELD_WHEN). No Tk: the gate reads it"""
+    c = form_context(values)
+    groups = {g[1]: g[3](c) for g in GROUPS}
+    if c["wav"]:                        # the sound alone (86.21.1)
+        for g in GROUPS:
+            if g[1] not in WAV_KEEP:
+                groups[g[1]] = WAV_WHY
+    opts = {}
+    for f in fields():
+        g = GROUP_OF.get(f["dest"])
+        why = groups.get(g[1]) if g else None
+        if why is None and f["dest"] in FIELD_WHEN:
+            why = FIELD_WHEN[f["dest"]](c)
+        opts[f["dest"]] = why
+    return groups, opts
 
 
 def target_values(i):
@@ -249,6 +459,65 @@ PIXFMT_LAYOUTS = {"vga8": ("lin320", "modex"), "vga4": ("lin80",),
                   "text": ("text-80x25",),
                   "cgacomp": ("cga",),
                   "mono": ("cga", "herc", "lin80")}
+
+
+def form_value(f, v, imp=None):
+    """A stored option's value (98.2.17) as the form's field holds it: the
+    parser's own spelling of its default, or the implied table's, where it
+    is that number - so a loaded form leaves the same short command line
+    a form filled by hand would"""
+    if v is None:
+        return ""
+    if isinstance(v, bool) or f["kind"] == "bool":
+        return "1" if v else ""
+    for ref in (f["default"], (imp or {}).get(f["dest"], "")):
+        if ref == "":
+            continue
+        try:
+            if isinstance(v, (int, float)) and float(ref) == float(v):
+                return ref
+        except ValueError:
+            pass
+        if str(v) == ref:
+            return ref
+    if isinstance(v, float):
+        return "%d" % v if v.is_integer() else repr(v)
+    return str(v)
+
+
+def target_for(values):
+    """The "made for" target a form is, or None: the one whose preset,
+    profile and Live choice it has, making the same pixel format"""
+    g = lambda k: str(values.get(k, "") or "").strip()
+    pf = form_context(values)["pixfmt"]
+    for i in range(len(TARGETS)):
+        tv, tf = target_values(i), target_fill(i)
+        if (g("preset"), g("profile"), g("live")) == (
+                tv["preset"], tv["profile"], tv["live"]) and \
+                form_context(tf)["pixfmt"] == pf:
+            return i
+    return None
+
+
+def form_from_file(r):
+    """A .V88 made with its options stored (98.2.17) -> (the form's
+    values, the target it was made for or None, notes, the source's
+    name); None for a file made before they were stored. The TITLE and
+    CREDITS are the header's, which can be changed in place after the
+    encode (98.2.11) and are what a new encode should keep. No Tk"""
+    doc = r.options()
+    if doc is None:
+        return None
+    o, notes = V.opts_migrate(doc)
+    vals = form_start()
+    g = lambda k: o.get(k) if o.get(k) is not None else None
+    imp = implied_values({k: "" if g(k) is None else str(g(k))
+                          for k in ("preset", "pixfmt", "profile", "live")})
+    for f in fields():
+        if f["dest"] in o:
+            vals[f["dest"]] = form_value(f, o[f["dest"]], imp)
+    vals["title"], vals["credits"] = r.title, r.credits
+    return vals, target_for(vals), notes, str(doc.get("src") or "")
 
 
 def fitting_pixfmt(values):
@@ -334,6 +603,207 @@ def render(r, surf):
     an, ad = r.aspect
     w, h = img.size
     return img.resize((max(1, round(w * an / ad)), h), Image.NEAREST)
+
+
+# --------------------------------------------------------------------------
+# the palette: what colours the Colour tab's choices give, as swatches
+# --------------------------------------------------------------------------
+# the sixteen by name, the cga_bg "?" list's own words
+C16_NAMES = [V.CHOICE_HELP["cga_bg"][str(i)] for i in range(16)]
+# the fields whose change redraws the panel: the ones that pick a palette,
+# and the ones that pick which KIND of palette there is
+PAL_FIELDS = ("preset", "pixfmt", "profile", "live", "cga_palette",
+              "cga_bright", "cga_bg", "text_colour", "cga_card")
+
+
+def _hex(rgb):
+    return "#%02x%02x%02x" % tuple(int(round(float(c))) for c in rgb)
+
+
+def _c16(idxs):
+    """[(#rrggbb, what it is)] for indexes of the sixteen"""
+    std = [tuple(vid.STD16[i * 3:i * 3 + 3]) for i in range(16)]
+    return [(_hex(c * 255 // 63 for c in std[i]),
+             "%d: %s" % (i, C16_NAMES[i])) for i in idxs]
+
+
+def _int_or_none(v):
+    v = str(v if v is not None else "").strip()
+    try:
+        return int(v)
+    except ValueError:
+        return None
+
+
+def cga4_sel(pal, bright, bg):
+    """CGA4's palette byte (98.1.3.3) for a set, an intensity and a
+    background - the byte os88venc.cga4_pick returns for those overrides"""
+    return (bg & 15) | (16 if bright else 0) | \
+        (0x40 if pal == 2 else 0x20 if pal == 1 else 0)
+
+
+def cga4_row(sel):
+    """(a line naming palette byte `sel`, its four swatches)"""
+    p = 2 if sel & 0x40 else (sel >> 5) & 1
+    return ("set %d %s on %s" % (p, "bright" if sel & 16 else "dim",
+                                 C16_NAMES[sel & 15].lower()),
+            _c16(vid.cga4_colours(sel)))
+
+
+_PALCACHE = {}
+
+
+def _cached(key, make):
+    if key not in _PALCACHE:
+        _PALCACHE[key] = make()
+    return _PALCACHE[key]
+
+
+def _comp16():
+    import os88cgacomp
+    return [(_hex(c), "nibble %X" % n)
+            for n, c in enumerate(os88cgacomp.palette())]
+
+
+def _c512(new):
+    """The 512 codes' flat colours, darkest first (what order they are in
+    means nothing to the eye), each named by its code"""
+    import os88cgacomp
+    rgb = os88cgacomp.c512_palette(new=new)
+    order = sorted(range(512), key=lambda k: float(
+        rgb[k] @ (0.299, 0.587, 0.114)))
+    return [(_hex(rgb[k]), "code %d" % k) for k in order]
+
+
+def palette_view(values):
+    """WHAT THE COLOUR TAB'S CHOICES GIVE, as swatches: [(heading, [(line,
+    [(#rrggbb, what it is) or None for chosen-from-the-clip])], note)] -
+    for the pixel format the form makes, the colours it can have. No Tk:
+    the gate reads it as data"""
+    vals = dict(values)
+    try:
+        vals["pixfmt"] = str(vals.get("pixfmt", "")).strip() or \
+            implied_values(vals).get("pixfmt") or "mono"
+        imp = implied_values(vals)
+    except Exception:
+        imp = {}
+    pf = vals["pixfmt"]
+    g = lambda k: str(vals.get(k, "") or imp.get(k, "") or "").strip()
+    out = []
+    if pf == "cga4":
+        pal, bright = _int_or_none(g("cga_palette")), \
+            _int_or_none(g("cga_bright"))
+        bg = _int_or_none(g("cga_bg"))
+        rows = []
+        for b in ((bright,) if bright in (0, 1) else (0, 1)):
+            for p in ((pal,) if pal in (0, 1, 2) else (0, 1, 2)):
+                sel = cga4_sel(p, b, bg or 0)
+                line, sw = cga4_row(sel)
+                if pal is None or bright is None:
+                    line = line.rsplit(" on ", 1)[0]    # (the swatch says)
+                sw = [None if bg is None or not 0 <= bg < 16 else
+                      (sw[0][0], "the background, " + sw[0][1])] + sw[1:]
+                rows.append((line, sw))
+        auto = [n for n, v in (("the set", pal), ("its intensity", bright),
+                               ("the background", bg)) if v is None]
+        auto = [", ".join(auto[:-1]), auto[-1]] if len(auto) > 2 else auto
+        note = ("%s: chosen from the clip when it is encoded, nearest "
+                "its colours - one of these. The first swatch is the "
+                "background." % " and ".join(auto).capitalize()
+                if auto else "All three fixed: this is the file's palette, "
+                "the background first.")
+        out.append(("CGA, 4 colours (mode 4)", rows, note))
+    elif pf in ("vga4", "c160"):
+        out.append(("The sixteen", [("every pixel one of", _c16(range(16)))],
+                    "Fixed: %s. No choice to make here." % (
+                        "mode 12h's own, which no theme changes"
+                        if pf == "vga4" else "CGA's, two a text cell")))
+    elif pf == "text":
+        if g("text_colour") == "mono":
+            out.append(("Text, black and white", [
+                ("07h, 0Fh, 70h", _c16((0, 7, 15)))],
+                "Grey on black, white on black, black on grey: what an "
+                "MDA and a Hercules draw as a colour card does."))
+        else:
+            out.append(("Text, 16 on 16", [("fore- and background",
+                                            _c16(range(16)))],
+                        "Any of the sixteen on any of the sixteen, blink "
+                        "off: a CGA, an EGA or a VGA."))
+    elif pf == "cgacomp":
+        try:
+            sw = _cached("comp", _comp16)
+        except Exception:
+            sw = []
+        out.append(("Composite colour on a CGA", [("a nibble a colour", sw)],
+                    "What each of the sixteen nibbles shows on a composite "
+                    "monitor (the model the preview uses); patterns mix "
+                    "them further."))
+    elif pf == "c512":
+        card = g("cga_card") or "both"
+        rows = []
+        for name, new in (("old", False), ("new", True)):
+            if card in (name, "both"):
+                try:
+                    sw = _cached(("c512", new), lambda: _c512(new))
+                except Exception:
+                    sw = []
+                rows.append(("the %s CGA" % name.upper(), sw))
+        out.append(("512 codes on the composite output", rows,
+                    "Every code's flat colour, darkest first; about 450 "
+                    "differ. Hover for the code."))
+    elif pf in ("vga8", "modex"):
+        out.append(("256 colours", [], "Chosen from the clip itself when "
+                    "it is encoded: its palette shows below once the file "
+                    "is made, or a .V88 is opened."))
+    else:
+        out.append(("Black and white", [("one bit", _c16((0, 15)))],
+                    "One bit a pixel: no palette to choose."))
+    return out
+
+
+def file_palette(r):
+    """The palette a .V88 was ENCODED with, where it was chosen from its
+    clip - CGA4's four, VGA8's 256 - as palette_view's rows: what "the
+    nearest" turned out to be. [] for a file whose colours are fixed"""
+    if r is None:
+        return []
+    if r.pixfmt == vid.PF_CGA4:
+        line, sw = cga4_row(r.cgapal)
+        return [(line, [(sw[0][0], "the background, " + sw[0][1])] +
+                 sw[1:])]
+    if r.pixfmt == vid.PF_VGA8 and r.palette:
+        p = r.palette
+        return [("its 256", [(_hex(c * 255 // 63 for c in p[i * 3:i * 3 + 3]),
+                              "%d" % i) for i in range(len(p) // 3)])]
+    return []
+
+
+def choice_swatches(dest, choice, values):
+    """The colours one choice of a palette field gives, for its "?" list:
+    the set at the intensity chosen (dim when blank), the intensity on the
+    set chosen (1 when blank), the background by itself. [] for any other"""
+    c = _int_or_none(choice)
+    if c is None:
+        return []
+    pal = _int_or_none(values.get("cga_palette"))
+    bright = _int_or_none(values.get("cga_bright"))
+    if dest == "cga_bg" and 0 <= c < 16:
+        return _c16((c,))
+    if dest == "cga_palette" and c in (0, 1, 2):
+        return cga4_row(cga4_sel(c, bright or 0, 0))[1][1:]
+    if dest == "cga_bright" and c in (0, 1):
+        return cga4_row(cga4_sel(pal if pal in (0, 1, 2) else 1, c,
+                                 0))[1][1:]
+    return []
+
+
+def grid_of(n):
+    """(columns, swatch width, height, gap) for a row of n swatches"""
+    if n <= 16:
+        return n, 22, 16, 2
+    if n <= 256:
+        return 32, 8, 8, 0
+    return 32, 4, 4, 0
 
 
 def preview_frames(path, most=2000, tick=None):
@@ -425,10 +895,33 @@ def key_view(r, f):
     i = vid.key_at(r, f)
     if i is None:
         return None
+    return (i,) + key_picture(r, i)
+
+
+def key_picture(r, i):
+    """(its frame, its picture): keyframe `i` drawn from itself alone"""
     k, rec, spo, spn, idx = r.key(i)
     surf = r.g.surface()
     r.apply(surf, rec, key=True)
-    return i, k, render(r, surf)
+    return k, render(r, surf)
+
+
+def poster_view(r):
+    """(key index, its frame, its picture) of the file's POSTER - what the
+    player shows before a play - or None when it has none"""
+    if not r.nkeys or r.poster == 0xFFFF:
+        return None
+    return (r.poster,) + key_picture(r, r.poster)
+
+
+def thumb(img, w=160, h=120):
+    """A PIL picture as a Tk one, fitted into w x h"""
+    z = min(float(w) / img.size[0], float(h) / img.size[1])
+    img = img.resize((max(1, int(img.size[0] * z)),
+                      max(1, int(img.size[1] * z))))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return tk.PhotoImage(data=base64.b64encode(buf.getvalue()))
 
 
 # ...AND MAKE A DISK OF IT (SPEC.md 98.2.12.1): the four floppies os88disk
@@ -559,12 +1052,19 @@ def disk_argv(v88, disk, out=None, build=None, stage=None):
     return argv + ["--file", "%s=%s" % (name, v88)], img
 
 
-def out_for(src):
-    """The .V88 a source is saved as by default: beside it, its own name
+def out_for(src, ext=".V88"):
+    """The file a source is saved as by default: beside it, its own name
     cut to 40 characters - the NAME, where the whole path used to be cut,
-    which put a long folder's file in its grandparent under half a name"""
+    which put a long folder's file in its grandparent under half a name -
+    as the Save as type (`ext`, a .V88 unless a speaker WAV was chosen)"""
     d, n = os.path.split(src)
-    return os.path.join(d, os.path.splitext(n)[0][:40] + ".V88")
+    return os.path.join(d, os.path.splitext(n)[0][:40] + ext)
+
+
+# the Save as line's types: what Browse... offers first, and the extension
+# a default name takes. A .WAV is a speaker WAV for Audio (86.21.1)
+OUT_TYPES = [(".V88", "os8088 video", "*.V88"),
+             (".WAV", "Speaker sound for Audio", "*.WAV")]
 
 
 def drop_target(paths):
@@ -580,105 +1080,96 @@ def drop_target(paths):
     return "source", p
 
 
-def hook_win_drop(root, got):
-    """DRAG AND DROP ON WINDOWS with nothing installed: the shell's own
-    WM_DROPFILES, through ctypes - the window's procedure subclassed so the
-    message reaches us, every other message passed to the one Tk set.
-    `got(paths)` is called ON TK'S THREAD, inside the message; the App only
-    queues it. True when the hook is in"""
-    import ctypes
-    from ctypes import wintypes
-    user32, shell32 = ctypes.windll.user32, ctypes.windll.shell32
-    LRESULT = ctypes.c_ssize_t
-    WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT,
-                                 wintypes.WPARAM, wintypes.LPARAM)
-    GWLP_WNDPROC, WM_DROPFILES = -4, 0x0233
-    setlong = user32.SetWindowLongPtrW if ctypes.sizeof(
-        ctypes.c_void_p) == 8 else user32.SetWindowLongW
-    setlong.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
-    setlong.restype = ctypes.c_void_p
-    user32.CallWindowProcW.argtypes = [ctypes.c_void_p, wintypes.HWND,
-                                       wintypes.UINT, wintypes.WPARAM,
-                                       wintypes.LPARAM]
-    user32.CallWindowProcW.restype = LRESULT
-    shell32.DragAcceptFiles.argtypes = [wintypes.HWND, wintypes.BOOL]
-    shell32.DragQueryFileW.argtypes = [ctypes.c_void_p, wintypes.UINT,
-                                       ctypes.c_wchar_p, wintypes.UINT]
-    shell32.DragQueryFileW.restype = wintypes.UINT
-    shell32.DragFinish.argtypes = [ctypes.c_void_p]
-    root.update_idletasks()
-    # the frame Windows draws round Tk's window: a drop anywhere in it is
-    # found by walking up from the child under the pointer
-    hwnd = int(root.wm_frame(), 16)
-    old = []
-
-    def proc(h, msg, wp, lp):
-        if msg == WM_DROPFILES:
-            try:
-                n = shell32.DragQueryFileW(wp, 0xFFFFFFFF, None, 0)
-                paths = []
-                for i in range(n):
-                    size = shell32.DragQueryFileW(wp, i, None, 0) + 1
-                    buf = ctypes.create_unicode_buffer(size)
-                    shell32.DragQueryFileW(wp, i, buf, size)
-                    paths.append(buf.value)
-                got(paths)
-            except Exception:
-                pass
-            finally:
-                shell32.DragFinish(wp)
-            return 0
-        return user32.CallWindowProcW(old[0], h, msg, wp, lp)
-    cb = WNDPROC(proc)
-    old.append(setlong(hwnd, GWLP_WNDPROC, ctypes.cast(cb, ctypes.c_void_p)))
-    if not old[0]:
-        return False
-    shell32.DragAcceptFiles(hwnd, True)
-    root._os88_drop = cb                # ctypes frees a callback nobody holds
-    return True
-
-
-def enable_drop(root, got):
-    """Drag and drop, the best way this machine has: tkinterdnd2 where it is
-    installed (any platform - `root` must then be its TkinterDnD.Tk), else
-    the shell's own on Windows. Returns how, or None"""
-    try:
-        from tkinterdnd2 import DND_FILES
-        root.drop_target_register(DND_FILES)
-        root.dnd_bind("<<Drop>>", lambda e: got(
-            list(root.tk.splitlist(e.data))))
-        return "tkinterdnd2"
-    except Exception:
-        pass
-    if sys.platform == "win32":
-        try:
-            if hook_win_drop(root, got):
-                return "windows"
-        except Exception:
-            pass
-    return None
-
-
 # --------------------------------------------------------------------------
 # the window
 # --------------------------------------------------------------------------
-class Tip(object):
-    """A tooltip: the option's help, shown while the pointer rests on it"""
+def swatch_draw(c, secs, tips, width=None):
+    """Sections of palette_view's shape drawn on canvas `c`, which is then
+    as tall as they are: a heading (None: none), each row its caption and
+    its swatches - beside it when they are one short row, in columns, and
+    under it when a grid - flowed across with as many to a line as fit and
+    the lines made even (six CGA sets are two lines of three, dim over
+    bright), and the note (None: none). tips[(c, item)] = what a swatch is"""
+    import tkinter.font as tkfont
+    c.delete("all")
+    for k in [k for k in tips if k[0] is c]:
+        del tips[k]
+    fg = ttk.Style().lookup("TLabel", "foreground") or "black"
+    font = tkfont.nametofont("TkDefaultFont")
+    th = font.metrics("linespace")
+    width = width or max(c.winfo_width(), 620)
+    y = 2
+    for head, rows, note in secs:
+        if head:
+            c.create_text(4, y, text=head, anchor="nw", fill=fg,
+                          font=("TkDefaultFont", 9, "bold"))
+            y += th + 2
+        lay = []                        # (caption w, beside?, row's width)
+        for line, sw in rows:
+            cols, w, h, gap = grid_of(len(sw))
+            gw = cols * (w + gap) if sw else 0
+            tw = font.measure(line) + 6
+            side = len(sw) <= cols
+            lay.append((tw, side, tw + gw if side else max(tw, gw)))
+        if lay and all(side for _, side, _ in lay):     # in columns
+            tw = max(L[0] for L in lay)
+            cw = max(L[2] - L[0] for L in lay) + tw
+            lay = [(tw, True, cw)] * len(lay)
+        fit = max(1, (width - 4) // (max([L[2] for L in lay] + [1]) + 16))
+        per = -(-len(rows) // -(-len(rows) // fit)) if rows else 1
+        x, lineh = 4, 0
+        for n, ((line, sw), (tw, side, cw)) in enumerate(zip(rows, lay)):
+            cols, w, h, gap = grid_of(len(sw))
+            if n and n % per == 0:
+                x, y, lineh = 4, y + lineh, 0
+            c.create_text(x, y + (max(h - th, 0) // 2 if side else 0),
+                          text=line, anchor="nw", fill=fg)
+            sx, sy = (x + tw, y) if side else (x, y + th + 2)
+            for i, sv in enumerate(sw):
+                x0 = sx + (i % cols) * (w + gap)
+                y0 = sy + (i // cols) * (h + gap)
+                if sv is None:          # chosen from the clip
+                    it = c.create_rectangle(x0, y0, x0 + w - 1, y0 + h - 1,
+                                            outline="#888", dash=(2, 2))
+                    c.create_text(x0 + w // 2, y0 + h // 2, text="?",
+                                  fill="#888")
+                    tips[(c, it)] = "the background, chosen from the clip"
+                    continue
+                it = c.create_rectangle(x0, y0, x0 + w - 1, y0 + h - 1,
+                                        fill=sv[0], outline="#666" if gap
+                                        else sv[0])
+                tips[(c, it)] = "%s  %s" % (sv[1], sv[0])
+            rowsn = -(-len(sw) // cols) if sw else 0
+            lineh = max(lineh, (sy - y) + rowsn * (h + gap) + 6, th + 6)
+            x += cw + 16
+        y += lineh
+        if note:
+            it = c.create_text(4, y, text=note, anchor="nw", fill="#555",
+                               width=width - 8)
+            y = c.bbox(it)[3] + 6
+    c.config(height=y)
 
-    def __init__(self, widget, text):
+
+class Tip(object):
+    """A tooltip: the option's help, shown while the pointer rests on it.
+    `text` may be a function, asked each time - a greyed group's says why,
+    and says nothing once the group applies"""
+
+    def __init__(self, widget, text, on="<Enter>"):
         self.w, self.text, self.top = widget, text, None
-        widget.bind("<Enter>", self.show)
+        widget.bind(on, self.show)
         widget.bind("<Leave>", self.hide)
 
     def show(self, _e=None):
-        if not self.text or self.top:
+        text = self.text() if callable(self.text) else self.text
+        if not text or self.top:
             return
         x = self.w.winfo_rootx() + 16
         y = self.w.winfo_rooty() + self.w.winfo_height() + 4
         self.top = tk.Toplevel(self.w)
         self.top.wm_overrideredirect(True)
         self.top.wm_geometry("+%d+%d" % (x, y))
-        tk.Label(self.top, text=self.text, justify="left", wraplength=420,
+        tk.Label(self.top, text=text, justify="left", wraplength=420,
                  background="#ffffe0", relief="solid", borderwidth=1,
                  padx=6, pady=4).pack()
 
@@ -770,8 +1261,9 @@ class App(object):
         fr = ttk.Frame(top, padding=10)
         fr.pack(fill="both", expand=True)
         ttk.Label(fr, text=f["tip"], wraplength=520, justify="left",
-                  foreground="#555").grid(row=0, column=0, columnspan=2,
+                  foreground="#555").grid(row=0, column=0, columnspan=3,
                                           sticky="w", pady=(0, 8))
+        vals = {k: x.get() for k, x in self.vars.items()}
         bold = ("TkDefaultFont", 10, "bold")
 
         def take(c):
@@ -780,17 +1272,27 @@ class App(object):
                 self.apply_implied()
             elif f["dest"] == "audio":
                 self.apply_audio()
+            elif f["dest"] == "spk_style":
+                self.apply_style()
             top.destroy()
         for i, (c, what, on) in enumerate(choice_lines(f, v.get()), 1):
             b = ttk.Button(fr, text=c, width=14,
                            command=lambda c=c: take(c))
             b.grid(row=i, column=0, sticky="nw", pady=1)
+            sw = choice_swatches(f["dest"], c, vals)
+            if sw:                      # A PALETTE'S CHOICE: its colours
+                cv = tk.Canvas(fr, width=24 * len(sw), height=18,
+                               highlightthickness=0)
+                for j, (rgb, _n) in enumerate(sw):
+                    cv.create_rectangle(24 * j + 1, 1, 24 * j + 22, 17,
+                                        fill=rgb, outline="#666")
+                cv.grid(row=i, column=1, sticky="w", padx=(8, 0), pady=1)
             lab = ttk.Label(fr, text=what, wraplength=420, justify="left")
             if on:
                 lab.configure(font=bold)
-            lab.grid(row=i, column=1, sticky="w", padx=8, pady=1)
+            lab.grid(row=i, column=2, sticky="w", padx=8, pady=1)
         ttk.Button(fr, text="Close", command=top.destroy).grid(
-            row=i + 1, column=1, sticky="e", pady=(8, 0))
+            row=i + 1, column=2, sticky="e", pady=(8, 0))
         top.bind("<Escape>", lambda e: top.destroy())
 
     def __init__(self, root):
@@ -811,6 +1313,7 @@ class App(object):
         root.geometry("1080x760")
         self.src = tk.StringVar()
         self.out = tk.StringVar()
+        self.outtype = tk.StringVar(value=OUT_TYPES[0][0])
         self.target = tk.StringVar(value=TARGETS[0][0])
         self.info = tk.StringVar(value="Choose a video.")
         self.mkdisk = tk.BooleanVar(value=False)
@@ -818,9 +1321,11 @@ class App(object):
         self.diskpicked = False         # ...a person's choice, kept
         self._build()
         self.apply_target()
+        self.update_groups()
         root.after(100, self._pump)
 
     def _build(self):
+        start = form_start()            # the form as it opens
         top = ttk.Frame(self.root, padding=8)
         top.pack(fill="both", expand=True)
         # the preview's column is packed FIRST, so a narrow window squeezes
@@ -833,17 +1338,36 @@ class App(object):
         ess = ttk.Frame(left)
         ess.pack(fill="x")
         for row, (label, var, cmd) in enumerate((
-                ("Video", self.src, self.browse_src),
+                ("Input", self.src, self.browse_src),
                 ("Save as", self.out, self.browse_out))):
             ttk.Label(ess, text=label).grid(row=row, column=0, sticky="w")
-            ttk.Entry(ess, textvariable=var, width=60).grid(
+            ttk.Entry(ess, textvariable=var, width=52).grid(
                 row=row, column=1, sticky="we", padx=4)
             ttk.Button(ess, text="Browse...", command=cmd).grid(
                 row=row, column=2)
+        # WHAT is saved: a .V88, or the sound alone as a speaker WAV for
+        # Audio - Browse...'s type first, and a default name's extension
+        ot = ttk.Combobox(ess, textvariable=self.outtype, state="readonly",
+                          values=[t[0] for t in OUT_TYPES], width=6)
+        ot.grid(row=1, column=3, sticky="we", padx=(4, 0))
+        ot.bind("<<ComboboxSelected>>", lambda e: self.pick_outtype())
+        Tip(ot, "What to save: a .V88 video, or a .WAV - the sound alone, "
+                "shaped for the PC speaker, for Audio to play (SPEC.md "
+                "86.21.1). Browse... offers this type first, and the name "
+                "above takes its extension.")
         ttk.Label(ess, text="Made for").grid(row=2, column=0, sticky="w")
         tg = ttk.Combobox(ess, textvariable=self.target, state="readonly",
                           values=[t[0] for t in TARGETS], width=58)
         tg.grid(row=2, column=1, columnspan=2, sticky="we", padx=4)
+        # A .V88 MADE BEFORE: previewed, and the form set to the options it
+        # was made with when it carries them (98.2.17) - beside the Input's
+        # Browse..., being the other way to fill that line's role
+        ob = ttk.Button(ess, text="Load .V88", command=self.browse_v88)
+        ob.grid(row=0, column=3, sticky="we", padx=(4, 0))
+        Tip(ob, "Open a .V88 made before: scrub it, change its poster or "
+                "its title - and, when it carries the options it was made "
+                "with, set every field below to them, so it can be made "
+                "again or changed.")
         tg.bind("<<ComboboxSelected>>", lambda e: self.apply_target())
         Tip(tg, "The machine and screen it will play on. This sets the "
                 "preset, the pixel format and the storage profile below, "
@@ -852,13 +1376,13 @@ class App(object):
                 "encoder will use them. Change any of them afterwards on "
                 "their tabs.")
         ttk.Label(ess, textvariable=self.info, foreground="#555").grid(
-            row=3, column=1, columnspan=2, sticky="w", padx=4)
+            row=3, column=1, columnspan=3, sticky="w", padx=4)
         ess.columnconfigure(1, weight=1)
         # --- make a disk, go, the progress and the log: packed from the
         # BOTTOM and before the tabs, so it is the tabs that give way in a
         # short window and not the log (which the default size cut off
         # entirely - and the Encode button with it, off the row's end)
-        self.log = tk.Text(left, height=9, wrap="word")
+        self.log = tk.Text(left, height=6, wrap="word")
         self.log.pack(side="bottom", fill="x", pady=(6, 0))
         pr = ttk.Frame(left)
         pr.pack(side="bottom", fill="x", pady=(6, 0))
@@ -871,65 +1395,77 @@ class App(object):
         for t in TABS:
             pages[t] = ttk.Frame(nb, padding=6)
             nb.add(pages[t], text=t)
-        rows = {t: 0 for t in TABS}
-        # a tab of more than TAB_ROWS options is laid out in TWO columns,
-        # down the first and then down the second: the Picture tab's 21
-        # in one were taller than the window
-        per = {t: 0 for t in TABS}
-        for f in fields():
-            per[f["tab"]] += 1
-        half = {t: n if n <= TAB_ROWS else -(-n // 2)
-                for t, n in per.items()}
-        for f in fields():
-            p, i = pages[f["tab"]], rows[f["tab"]]
-            rows[f["tab"]] += 1
-            r, c0 = i % half[f["tab"]], 4 * (i // half[f["tab"]])
-            if c0:
-                p.columnconfigure(c0 - 1, minsize=16)
-            lab = ttk.Label(p, text=f["label"])
-            lab.grid(row=r, column=c0, sticky="w", pady=1)
+        # --- the GROUPS (98.2.8.2): an outline with a header round the
+        # options that go together, down one column - or, on a tab of more
+        # than TAB_ROWS options, two, split in the table's order where the
+        # taller is shortest (the Picture tab's 21 in one were taller than
+        # the window)
+        fl = {f["dest"]: f for f in fields()}
+        tabgroups = {t: [] for t in TABS}
+        for tab, name, dests, _ in GROUPS:
+            tabgroups[tab].append((name, [fl[d] for d in dests if d in fl]))
+        other = [f for d, f in fl.items() if d not in GROUP_OF]
+        if other:                       # an option no group names yet
+            tabgroups["Advanced"].append(("Other", other))
+        st = ttk.Style(self.root)
+        bold = tkfont.nametofont("TkDefaultFont").copy()
+        bold.configure(weight="bold")
+        st.configure("Group.TLabel", font=bold)
+        self.groupfont = bold
+        # a "?" or a Browse... as tall as the field beside it, not a row
+        # and a half: a tab of groups has no height to spare
+        st.configure("Tool.TButton", padding=(4, 0))
+        norm = tkfont.nametofont("TkDefaultFont")
+        self.gheads = {}                # header -> its label
+        self.fwidgets = {}              # option -> its label and widgets
+        self.gwhy, self.why = {}, {}    # why a group, an option, is off
+        self.grppend = False
+        for t in TABS:
+            gs = [g for g in tabgroups[t] if g[1]]
+            cols = [gs]
+            if sum(len(g[1]) for g in gs) > TAB_ROWS and len(gs) > 1:
+                hs = [len(g[1]) + 1.5 for g in gs]
+                k = min(range(1, len(gs)), key=lambda k: max(
+                    sum(hs[:k]), sum(hs[k:])))
+                cols = [gs[:k], gs[k:]]
             # a TWO-COLUMN tab's fields are narrower, or the right-hand
             # column's "?" and Browse... fall off the pane's edge
-            fw = 22 if half[f["tab"]] == per[f["tab"]] else 13
-            if f["kind"] == "bool":
-                v = tk.StringVar(value="")
-                w = ttk.Checkbutton(p, variable=v, onvalue="1", offvalue="")
-            elif f["kind"] == "choice" or f["choices"]:
-                v = tk.StringVar(value=f["default"])
-                w = ttk.Combobox(p, textvariable=v, values=f["choices"],
-                                 width=fw)
-            else:
-                v = tk.StringVar(value=f["default"])
-                w = ttk.Entry(p, textvariable=v, width=fw + 2)
-            w.grid(row=r, column=c0 + 1, sticky="w", padx=4, pady=1)
-            if f["dest"] in IMPLYING:
-                w.bind("<<ComboboxSelected>>",
-                       lambda e: self.apply_implied())
-            elif f["dest"] == "audio":
-                w.bind("<<ComboboxSelected>>",
-                       lambda e: self.apply_audio())
-            Tip(lab, f["tip"])
-            Tip(w, f["tip"])
-            if f["dest"] in SAVE_FILE:  # A FILE IT WRITES: chosen, not typed
-                bb = ttk.Button(p, text="Browse...",
-                                command=lambda f=f, v=v:
-                                self.browse_save(f, v))
-                bb.grid(row=r, column=c0 + 2, sticky="w", pady=1)
-                Tip(bb, "Choose where %s is written"
-                    % SAVE_FILE[f["dest"]][0].lower())
-            if f["help"]:               # WHAT EACH CHOICE IS, a click away
-                hb = ttk.Button(p, text="?", width=2,
-                                command=lambda f=f, v=v:
-                                self.choices_help(f, v))
-                hb.grid(row=r, column=c0 + 2, sticky="w", pady=1)
-                Tip(hb, "What each choice of %s is - click one to take it"
-                    % f["label"])
-            self.vars[f["dest"]] = v
+            fw = 22 if len(cols) == 1 else 12
+            for ci, col in enumerate(cols):
+                cf = ttk.Frame(pages[t])
+                cf.grid(row=0, column=ci, sticky="nwe",
+                        padx=(0 if ci == 0 else 10, 0))
+                # every group in a column lines its fields up, by the
+                # labels' own widths rather than a count of characters
+                lw = max(norm.measure(f["label"]) for g in col
+                         for f in g[1]) + 6
+                for name, fs in col:
+                    self.group_box(cf, name, fs, fw, lw, start)
         for t, text in TAB_NOTES.items():   # a word the fields cannot say
-            n = max(half[t], 1)
             ttk.Label(pages[t], text=text, foreground="#555",
                       wraplength=600, justify="left").grid(
-                row=n, column=0, columnspan=8, sticky="w", pady=(10, 0))
+                row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        for d in CONTEXT_FIELDS:        # a change re-judges every group
+            if d in self.vars:
+                self.vars[d].trace_add("write",
+                                       lambda *a: self.groups_dirty())
+        self.out.trace_add("write", lambda *a: self.groups_dirty())
+        self.out.trace_add("write", lambda *a: self.sync_outtype())
+        # --- the palette the Colour tab's choices give, redrawn as they
+        # change: under the tab's fields, whatever the tab's note
+        self.palframe = ttk.LabelFrame(pages["Colour"], text="Palette",
+                                       padding=(6, 2, 6, 4))
+        self.palframe.grid(row=2, column=0, columnspan=2, sticky="we",
+                           pady=(8, 0))
+        self.palcanvas = tk.Canvas(self.palframe, width=620, height=60,
+                                   highlightthickness=0)
+        self.palcanvas.pack(anchor="w", fill="x")
+        self.paltips = {}
+        self.paltip = None
+        self.palpend = False
+        for d in PAL_FIELDS:
+            if d in self.vars:
+                self.vars[d].trace_add("write", lambda *a: self.pal_dirty())
         # --- make a disk, and go: the buttons packed FIRST, so a narrow
         # row squeezes the disk list rather than cutting Encode off
         self.stopbtn = ttk.Button(go, text="Cancel", command=self.stop,
@@ -968,10 +1504,6 @@ class App(object):
         hd = ttk.Frame(right)
         hd.pack(fill="x")
         ttk.Label(hd, text="What the screen will show").pack(side="left")
-        ob = ttk.Button(hd, text="Open a .V88...", command=self.browse_v88)
-        ob.pack(side="right")
-        Tip(ob, "Look at a .V88 made before - to scrub it, or to change its "
-                "poster or its title.")
         self.canvas = tk.Canvas(right, width=400, height=300,
                                 background="black", highlightthickness=0)
         self.canvas.pack()
@@ -990,8 +1522,16 @@ class App(object):
         fl.pack(anchor="w", fill="x")
         fi.bind("<Configure>", lambda e: fl.config(
             wraplength=max(120, e.width - 16)))
+        # the palette the file was encoded with, where its clip chose it:
+        # packed here by draw_palette when there is one
+        self.fpal = tk.Canvas(fi, width=360, height=24,
+                              highlightthickness=0)
         tf = ttk.Frame(fi)              # the title, changed in place
         tf.pack(fill="x", pady=(6, 0))
+        self.titlef = tf
+        for c in (self.palcanvas, self.fpal):
+            c.bind("<Motion>", self.pal_motion)
+            c.bind("<Leave>", self.pal_leave)
         ttk.Label(tf, text="Title").pack(side="left")
         self.titlev = tk.StringVar(value="")
         self.titlee = ttk.Entry(tf, textvariable=self.titlev, width=30,
@@ -1006,23 +1546,96 @@ class App(object):
                    "changes: the file is not encoded again. Up to %d "
                    "characters; the player's panel shows the first 35."
                 % (vid.TITLE_LEN - 1))
+        # THE POSTER, and the keyframe a play from the scrubbed frame starts
+        # at, side by side: what the player shows now, and what Set as
+        # poster would make it
         kf = ttk.Frame(fi)
         kf.pack(fill="x", pady=(6, 0))
-        self.kcanvas = tk.Canvas(kf, width=160, height=120,
+        pl = ttk.Frame(kf)
+        pl.pack(side="left", anchor="n")
+        ttk.Label(pl, text="The poster", style="Group.TLabel").pack(
+            anchor="w", pady=(2, 1))
+        self.pcanvas = tk.Canvas(pl, width=160, height=120,
                                  background="black", highlightthickness=0)
-        self.kcanvas.pack(side="left")
-        kr = ttk.Frame(kf, padding=(8, 0, 0, 0))
-        kr.pack(side="left", fill="both", expand=True)
+        self.pcanvas.pack(anchor="w")
+        self.ptext = tk.StringVar(value="")
+        ttk.Label(pl, textvariable=self.ptext, justify="left",
+                  wraplength=160).pack(anchor="w")
+        Tip(self.pcanvas, "The picture the player shows before a play: "
+                          "the file's poster keyframe.")
+        kr = ttk.Frame(kf, padding=(10, 0, 0, 0))
+        kr.pack(side="left", anchor="n", fill="both", expand=True)
+        # its header carries Set as poster, a row a file with a palette
+        # line has no height for under the picture
+        kh = ttk.Frame(kr)
+        kh.pack(fill="x")
+        ttk.Label(kh, text="Here", style="Group.TLabel").pack(side="left")
+        self.kcanvas = tk.Canvas(kr, width=160, height=120,
+                                 background="black", highlightthickness=0)
+        self.kcanvas.pack(anchor="w")
+        Tip(self.kcanvas, "The keyframe a play from the scrubbed frame "
+                          "starts at - the one Set as poster makes the "
+                          "poster.")
         self.ktext = tk.StringVar(value="")
         ttk.Label(kr, textvariable=self.ktext, justify="left",
-                  wraplength=220).pack(anchor="w")
-        self.posterbtn = ttk.Button(kr, text="Set as poster",
+                  wraplength=200).pack(anchor="w")
+        self.posterbtn = ttk.Button(kh, text="Set as poster",
                                     command=self.set_poster,
-                                    state="disabled")
-        self.posterbtn.pack(anchor="w", pady=(6, 0))
+                                    state="disabled", style="Tool.TButton")
+        self.posterbtn.pack(side="right")
         Tip(self.posterbtn, "Make this keyframe the picture the player "
                             "shows before a play. Only the poster changes: "
                             "the file is not encoded again.")
+
+    # --- the palette panel
+    def pal_dirty(self):
+        """A palette field changed: redraw once, when Tk is idle - a target
+        sets a dozen fields at a time"""
+        if not self.palpend:
+            self.palpend = True
+            self.root.after_idle(self.draw_palette)
+
+    def draw_palette(self):
+        """The Colour tab's Palette panel, and the open file's under its
+        facts. The tab's first heading is its frame's label"""
+        self.palpend = False
+        vals = {k: v.get() for k, v in self.vars.items()}
+        secs = palette_view(vals)
+        self.palframe.config(text="Palette: " + secs[0][0])
+        swatch_draw(self.palcanvas, [(None,) + secs[0][1:]] + secs[1:],
+                    self.paltips)
+        rows = file_palette(self.reader)
+        if rows:
+            swatch_draw(self.fpal, [(None, [("Palette: " + ln, sw)
+                                            for ln, sw in rows], None)],
+                        self.paltips, width=360)
+            if not self.fpal.winfo_ismapped():
+                self.fpal.pack(anchor="w", fill="x", pady=(6, 0),
+                               before=self.titlef)
+        else:
+            self.fpal.pack_forget()
+
+    def pal_motion(self, e):
+        """What the swatch under the pointer is, in a tip beside it"""
+        c = e.widget
+        hit = c.find_overlapping(e.x, e.y, e.x, e.y)
+        tips = [self.paltips[(c, i)] for i in hit if (c, i) in self.paltips]
+        if not tips:
+            return self.pal_leave()
+        if self.paltip is None:
+            self.paltip = tk.Toplevel(c)
+            self.paltip.wm_overrideredirect(True)
+            self.paltipv = tk.StringVar()
+            tk.Label(self.paltip, textvariable=self.paltipv,
+                     background="#ffffe0", relief="solid", borderwidth=1,
+                     padx=4, pady=1).pack()
+        self.paltipv.set(tips[-1])
+        self.paltip.wm_geometry("+%d+%d" % (e.x_root + 14, e.y_root + 12))
+
+    def pal_leave(self, _e=None):
+        if self.paltip is not None:
+            self.paltip.destroy()
+            self.paltip = None
 
     # --- the essentials
     def browse_src(self):
@@ -1048,7 +1661,7 @@ class App(object):
         # video dropped takes a name of its own
         if not self.out.get() or self.out.get() == getattr(self, "autoout",
                                                            None):
-            self.autoout = out_for(p)
+            self.autoout = out_for(p, self.outtype.get())
             self.out.set(self.autoout)
         try:
             text, vals = suggest(p)
@@ -1083,11 +1696,31 @@ class App(object):
             v.set(p)
 
     def browse_out(self):
-        p = filedialog.asksaveasfilename(defaultextension=".V88",
-                                         filetypes=[("os8088 video",
-                                                     "*.V88")])
+        ext = self.outtype.get()
+        types = sorted(OUT_TYPES, key=lambda t: t[0] != ext)
+        p = filedialog.asksaveasfilename(
+            defaultextension=ext, filetypes=[(w, g) for _, w, g in types])
         if p:
             self.out.set(p)
+
+    def pick_outtype(self):
+        """The Save as type chosen: a name already there takes its
+        extension, so what the line says is what will be written"""
+        cur = self.out.get().strip()
+        base, e = os.path.splitext(cur)
+        ext = self.outtype.get()
+        if cur and e.upper() != ext:
+            auto = cur == getattr(self, "autoout", None)
+            self.out.set((base if e.upper() in [t[0] for t in OUT_TYPES]
+                          else cur) + ext)
+            if auto:
+                self.autoout = self.out.get()
+
+    def sync_outtype(self):
+        """A name typed or browsed to: the type box follows its extension"""
+        e = os.path.splitext(self.out.get().strip())[1].upper()
+        if e in [t[0] for t in OUT_TYPES] and e != self.outtype.get():
+            self.outtype.set(e)
 
     def apply_target(self):
         i = [t[0] for t in TARGETS].index(self.target.get())
@@ -1121,6 +1754,104 @@ class App(object):
             vals = {k: v.get() for k, v in self.vars.items()}
             rate.set(implied_values(vals, self.sfps)["rate"])
 
+    # --- the groups
+    def group_box(self, parent, name, fs, fw, lw, start):
+        """One GROUP (98.2.8.2): its outline and header, and its options a
+        row each - label, field, and a "?" or a Browse... beside it"""
+        fr = ttk.LabelFrame(parent, padding=(6, 0, 6, 3))
+        hdr = ttk.Label(fr, text=name, style="Group.TLabel")
+        fr.configure(labelwidget=hdr)
+        fr.pack(fill="x", anchor="n", pady=(0, 3))
+        fr.columnconfigure(0, minsize=lw)
+        fr.columnconfigure(3, weight=1)
+        self.gheads[name] = hdr
+        # while greyed, the outline and its header say why - the outline on
+        # a MOTION, which Tk gives the deepest window under the pointer and
+        # so only the outline's own bare parts: an Enter reaches it from a
+        # field too, and its tip then stood beside the field's
+        gtip = lambda n=name: self.gwhy.get(n) and \
+            "Not used for this file. " + self.gwhy[n]
+        Tip(fr, gtip, on="<Motion>")
+        Tip(hdr, gtip)
+        for r, f in enumerate(fs):
+            p = fr
+            lab = ttk.Label(p, text=f["label"])
+            lab.grid(row=r, column=0, sticky="w")
+            if f["kind"] == "bool":
+                v = tk.StringVar(value="")
+                w = ttk.Checkbutton(p, variable=v, onvalue="1", offvalue="")
+            elif f["kind"] == "choice" or f["choices"]:
+                v = tk.StringVar(value=start[f["dest"]])
+                w = ttk.Combobox(p, textvariable=v, values=f["choices"],
+                                 width=fw)
+            else:
+                v = tk.StringVar(value=start[f["dest"]])
+                w = ttk.Entry(p, textvariable=v, width=fw + 2)
+            w.grid(row=r, column=1, sticky="w", padx=4, pady=(0, 1))
+            if f["dest"] in IMPLYING:
+                w.bind("<<ComboboxSelected>>",
+                       lambda e: self.apply_implied())
+            elif f["dest"] == "audio":
+                w.bind("<<ComboboxSelected>>",
+                       lambda e: self.apply_audio())
+            elif f["dest"] == "spk_style":
+                w.bind("<<ComboboxSelected>>",
+                       lambda e: self.apply_style())
+            # a field says why it is greyed only when it is greyed ALONE,
+            # in a group that applies (FIELD_WHEN): a greyed group says it
+            # once, on its header and outline, and its fields keep their
+            # own help
+            ftip = lambda d=f["dest"], t=f["tip"], n=name: \
+                "Not used for this file. %s\n\n%s" % (self.why[d], t) \
+                if self.why.get(d) and not self.gwhy.get(n) else t
+            Tip(lab, ftip)
+            Tip(w, ftip)
+            ws = [lab, w]
+            if f["dest"] in SAVE_FILE:  # A FILE IT WRITES: chosen, not typed
+                bb = ttk.Button(p, text="Browse...", style="Tool.TButton",
+                                command=lambda f=f, v=v:
+                                self.browse_save(f, v))
+                bb.grid(row=r, column=2, sticky="w")
+                Tip(bb, "Choose where %s is written"
+                    % SAVE_FILE[f["dest"]][0].lower())
+                ws.append(bb)
+            if f["help"]:               # WHAT EACH CHOICE IS, a click away
+                hb = ttk.Button(p, text="?", width=2, style="Tool.TButton",
+                                command=lambda f=f, v=v:
+                                self.choices_help(f, v))
+                hb.grid(row=r, column=2, sticky="w")
+                Tip(hb, "What each choice of %s is - click one to take it"
+                    % f["label"])
+                ws.append(hb)
+            self.vars[f["dest"]] = v
+            self.fwidgets[f["dest"]] = ws
+
+    def groups_dirty(self):
+        """A field a group's rule reads changed: judge them again once,
+        when Tk is idle - a target sets a dozen fields at a time"""
+        if not self.grppend:
+            self.grppend = True
+            self.root.after_idle(self.update_groups)
+
+    def update_groups(self):
+        """Every group greyed that cannot apply to the file the form makes,
+        and every option in it, and the rest put back (98.2.8.2)"""
+        self.grppend = False
+        vals = {k: v.get() for k, v in self.vars.items()}
+        vals["_out"] = self.out.get()   # (a .WAV: 86.21.1)
+        self.gwhy, self.why = group_state(vals)
+        for name, hdr in self.gheads.items():
+            hdr.state(["disabled" if self.gwhy.get(name) else "!disabled"])
+        for d, ws in self.fwidgets.items():
+            for w in ws:
+                w.state(["disabled" if self.why.get(d) else "!disabled"])
+
+    def apply_style(self):
+        """The speaker's style changed by hand: its high-pass, ratio and
+        range are shown as the encode will use them (98.2.15.1)"""
+        for k, v in style_values(self.vars["spk_style"].get()).items():
+            self.vars[k].set(v)
+
     def browse_v88(self):
         if self.busy:
             return
@@ -1132,6 +1863,7 @@ class App(object):
 
     def load_v88(self, p):
         job = self.begin()
+        self.formload = p       # ...and the form set to how it was made
         self.write("Loading %s...\n" % p)
         threading.Thread(target=self._load, args=(p, job, self.cancel),
                          daemon=True).start()
@@ -1235,6 +1967,7 @@ class App(object):
         cancelled and still winding down keeps ITS flag set"""
         self.job += 1
         self.busy = True
+        self.formload = None            # (load_v88 sets it after this)
         self.cancel = threading.Event()
         self.prog = ("prepare", 0, 0)
         self.gobtn.config(state="disabled")
@@ -1275,6 +2008,9 @@ class App(object):
                 self.put(job, "fail", "".join(tail).strip() or
                          "the encoder stopped with %d" % rc)
                 return
+            if out.lower().endswith(".wav"):  # the sound alone (86.21.1):
+                self.put(job, "wavdone", out)   # no frames to preview and
+                return                          # no video for a disk
             if disk is not None:
                 if job == self.job:
                     self.prog = ("disk", 0, 0)
@@ -1325,6 +2061,12 @@ class App(object):
                 elif kind == "drop":
                     self.dropped(val)
                     continue
+                elif kind == "wavdone":
+                    self.finish("Done.", 1)
+                    self.write("\n%s: the sound for Audio on the PC "
+                               "speaker (SPEC.md 86.21.1). Copy it to the "
+                               "machine and open it; on a Sound Blaster it "
+                               "plays too.\n" % os.path.basename(val))
                 elif kind == "fail":
                     cancelled = val.startswith("Cancelled")
                     self.write("\n%s\n" % (val if cancelled else
@@ -1335,14 +2077,18 @@ class App(object):
                 else:
                     self.cur, self.reader, self.frames = val
                     self.titlev.set(self.reader.title)
-                    self.kshown = None
+                    self.kshown = self.pshown = None
                     self.scrub.config(to=max(0, len(self.frames) - 1))
                     self.scrub.set(0)
                     self.finish("Done.", 1)
                     self.show_frame(0)
+                    self.pal_dirty()    # ...and its palette, if chosen
                     self.write("\n%s. Drag the slider to see every frame as "
                                "the screen will.\n" % os.path.basename(
                                    self.cur))
+                    if getattr(self, "formload", None) == self.cur:
+                        self.apply_file_options()
+                    self.formload = None
         except queue.Empty:
             pass
         self.root.after(100, self._pump)
@@ -1374,43 +2120,85 @@ class App(object):
             self.kcanvas.delete("all")
             self.ktext.set("No keyframes.")
             self.posterbtn.config(state="disabled")
+            self.show_poster()
             return
         k = r.keys[i][0]
         if (self.cur, i) != getattr(self, "kshown", None):
             # a keyframe is decoded once as the scrubber crosses into it,
             # not on every step of the drag
-            img = key_view(r, f)[2]
-            w, h = img.size
-            z = min(160.0 / w, 120.0 / h)
-            img = img.resize((max(1, int(w * z)), max(1, int(h * z))))
-            buf = io.BytesIO()
-            img.save(buf, "PNG")
-            self.kphoto = tk.PhotoImage(data=base64.b64encode(
-                buf.getvalue()))
+            self.kphoto = thumb(key_view(r, f)[2])
             self.kcanvas.delete("all")
             self.kcanvas.create_image(80, 60, image=self.kphoto)
             self.kshown = (self.cur, i)
         self.key = i
+        self.show_poster()
         n = len(r.key(i)[1])
         self.ktext.set(
             "Keyframe %d (of 0 to %d)\nframe %d (%.2f s)%s%s" % (
                 i, r.nkeys - 1, k, k / r.fps,
-                "\nthe poster" if i == r.poster else "",
+                "\n= the poster" if i == r.poster else "",
                 "\n%d bytes: past the %d the player reads, so it would "
                 "show no poster" % (n, V.KEY_PLAYER)
                 if n > V.KEY_PLAYER else ""))
         self.posterbtn.config(state="disabled" if self.busy or
                               i == r.poster else "normal")
 
+    def apply_file_options(self):
+        """A .V88 LOADED (98.2.17): every field set to the option it was
+        made with, the target it was made for, and what could not be
+        carried over said in the log - or, for a file made before the
+        options were stored, the form left as it was, and that said"""
+        name = os.path.basename(self.cur)
+        try:
+            got = form_from_file(self.reader)
+        except vid.V88Error as e:
+            self.write("\nIts options block does not read (%s): the form is "
+                       "as it was.\n" % e)
+            return
+        if got is None:
+            self.write("\n%s was made before the encoder stored its "
+                       "options in the file: the form is as it was.\n"
+                       % name)
+            return
+        vals, ti, notes, src = got
+        for k, v in vals.items():
+            if k in self.vars:
+                self.vars[k].set(v)
+        self.target.set(TARGETS[ti][0] if ti is not None else "")
+        self.update_groups()
+        self.info.set("How %s was made%s%s" % (
+            name, ", from %s" % src if src else "",
+            "" if ti is not None else " - none of the Made for targets"))
+        self.write("\nThe form is set to the options %s was made with%s. "
+                   "Choose %s as the Video to make it again.\n"
+                   % (name, " (from %s)" % src if src else "",
+                      src or "its source"))
+        for n in notes:
+            self.write("   %s\n" % n)
+
+    def show_poster(self):
+        """The poster panel: the file's poster keyframe, drawn once per
+        file and poster - a scrub does not redraw it"""
+        r = self.reader
+        mark = (self.cur, r.poster)
+        if mark == getattr(self, "pshown", None):
+            return
+        self.pshown = mark
+        self.pcanvas.delete("all")
+        pv = poster_view(r)
+        if pv is None:
+            self.ptext.set("None: the player shows its panel alone.")
+            return
+        i, k, img = pv
+        self.pphoto = thumb(img)
+        self.pcanvas.create_image(80, 60, image=self.pphoto)
+        self.ptext.set("Keyframe %d\nframe %d (%.2f s)" % (i, k, k / r.fps))
+
 
 def main():
     if tk is None:
         sys.exit("os88vencgui: this Python has no tkinter")
-    try:                                # drag and drop, where installed
-        from tkinterdnd2 import TkinterDnD
-        root = TkinterDnD.Tk()
-    except Exception:
-        root = tk.Tk()
+    root = make_root()                  # drag and drop, where installed
     app = App(root)
     # the drop only QUEUES: the pump takes it, as it takes the encode's log
     how = enable_drop(root, lambda paths: app.q.put(("drop", paths, None)))

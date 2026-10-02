@@ -51,7 +51,8 @@ INST_MAX = 12
 # high byte is a PURGEABLE tag carrying its priority (50.6.4).
 KTAG = {0xFF01: "SAVE",  0xFF03: "DRV",   0xFF04: "COPY",
         0xFF06: "ASC",   0xFF07: "CLIP",  0xFF08: "MOD",  0xFF09: "CLONE",
-        0xFF0A: "BAND",  0xFF0B: "OVL",   0xFF0C: "HIB",  0xFF0D: "CMPR"}
+        0xFF0A: "BAND",  0xFF0B: "OVL",   0xFF0C: "HIB",  0xFF0D: "CMPR",
+        0xFF0F: "FDLG",  0xFF10: "FONT",  0xFF11: "SCUT"}
 # Purgeable RANGES: base -> (name, count). The consumer adds an ordinal to the
 # base, so these are decoded before the exact-match table (SPEC.md 50.6).
 # 0xFF05 was MEM_K_FATW until the FAT window became a cache (SPEC.md 18.8.4).

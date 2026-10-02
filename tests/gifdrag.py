@@ -153,7 +153,7 @@ with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
         mo.click(vw // 2 - 60, vh - 60); tick(m, 60)
     step("heap page")
 
-    mo.dblclick(vw - 30, 45); tick(m, 240)                   # drive A
+    mo.dblclick(*os88geom.drive_pt(m, "A")); tick(m, 240)    # drive A, by letter
     step("disk window")
     # **BY NAME, NOT BY ROW** (docs/WRITING-TESTS.md 6). These were
     # `mo.dblclick(140, 178)` and `mo.dblclick(160, 146)` - the pixel a row

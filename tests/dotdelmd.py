@@ -62,7 +62,7 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_both_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--apps", default="build/games360.img")
     a = ap.parse_args(argv)
     say = lambda s: print("  " + s)
     fail = []

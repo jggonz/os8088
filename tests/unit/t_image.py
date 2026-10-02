@@ -219,7 +219,8 @@ def check_kernel(v, kernel):
 
 
 def check_attrs(v, is_system):
-    """SPEC.md 19.6, plus the two files the KERNEL owns.
+    """SPEC.md 19.6, plus the two files the KERNEL owns. Only KERNEL.SYS and
+    the drivers are read-only; everything else on any disk is writable.
 
     `SYSTEM.CFG` (SPEC.md 51.5) and `ASSOC.DAT` (SPEC.md 54.7) are one class
     and not two: both are written by the kernel, so both are hidden + system
@@ -246,8 +247,11 @@ def check_attrs(v, is_system):
             eq(attr & (hs | A_RDONLY), hs | A_RDONLY,
                "%s: %s is hidden+system+read-only" % (v.name, nm))
         else:
-            check(attr & A_RDONLY, "%s: %s is read-only on the system disk" % (v.name, nm),
-                  "the boot disk holds nothing a user should delete by accident")
+            check(not (attr & A_RDONLY), "%s: %s is WRITABLE on the system disk" % (v.name, nm),
+                  "only what would unboot the disk is locked: the packages, tools, "
+                  "faces and manual are the user's to delete when they rework their "
+                  "system disk, and a read-only file is one a keep-install cannot "
+                  "replace (SPEC.md 19.6, 52.10.15.1)")
             check(not (attr & hs), "%s: %s stays VISIBLE" % (v.name, nm),
                   "TASKMGR.O88 is loaded by name from the chip menu and README.TXT is "
                   "meant to be opened - hiding either makes it unreachable")

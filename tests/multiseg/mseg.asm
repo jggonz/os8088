@@ -551,15 +551,16 @@ ms_r_seg:  db '0000', 0
 ; began at 1,024: aligned on BOTH geometries, so the arithmetic the 360KB row
 ; exists for never ran and the row passed without testing it.
 ;
-; SEVEN sectors puts the first part at 3,584, which is 512 past a 1KB cluster
-; (as five and three were: the rule is an ODD number of sectors).
+; NINE sectors puts the first part at 4,608, which is 512 past a 1KB cluster
+; (as seven, five and three were: the rule is an ODD number of sectors). Seven
+; ran out when the parts body took os88_rseq (SPEC.md 18.4.8.1).
 ; tests/multiseg.py asserts the slack is non-zero at 360 and zero at 1440, so
 ; this cannot quietly stop being true.
 ;
 ; If the code ever outgrows it, `times` goes negative and NASM says so - which
 ; is the right failure: somebody has to pick the next odd multiple and check
 ; the row still means something.
-    times 3584 - ($ - $$) db 0
+    times 4608 - ($ - $$) db 0
 
     OS88_BSS OP_BSS + MS_BSS
     OS88_IMAGE_END

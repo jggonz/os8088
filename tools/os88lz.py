@@ -649,7 +649,7 @@ CZ_SRCMAX = 0xFFFF             # LZ4's own ceiling: its literal runs are the
                                 # SPEC.md 20.14.5.1, so LZB has none
 
 
-def cz_wrap(data, fmt=LZ4):
+def cz_wrap(data, fmt=LZ4, packed=None):
     """compress `data` into a 'CZ' file, or return it unchanged if that would
     not be smaller - a file that grew is a file the reader pays to expand for
     nothing.
@@ -660,9 +660,14 @@ def cz_wrap(data, fmt=LZ4):
     lands one byte under a kilobyte boundary compresses like any other, and
     the reader that was told U needs U. The old margin rule refused one size
     in sixteen and had the manual EDITED to fit.
+
+    `packed` is `data` already compressed some other way - the MACHINE's
+    parse (`lzb_compress_machine`), which tools/os88cz.py hands in because
+    this module's own LZB parse is exact and takes minutes on anything big
+    and repetitive. None: compress here, as the build does.
     """
     try:
-        z = compress(data, fmt)
+        z = compress(data, fmt) if packed is None else packed
     except ValueError:          # a tail T cannot count: over 64KB packed
         return data, False
     if CZ_HDR + len(z) >= len(data):

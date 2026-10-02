@@ -242,13 +242,7 @@ Boots straight into the GUI, and boots *clean* — nothing is running, and
 everything is launched from the menus. The classic Mac interactions are all
 here: windows you drag, raise, close and minimize; pull-down menus that
 belong to whichever application is in front; desktop drive icons; a dock; and
-a Standard File dialog for opening and saving. Drag files or folders from a
-Disk window onto the desktop to create shortcuts, saved in `DESKTOP.CFG`
-(big/emu kernels only; kern_small omits desktop shortcuts).
-Shortcut icons show the item name; the desktop appears before links load.
-File > Get Info shows a shortcut's target type, drive and full path.
-Double-click a shortcut to open it, drag it to reposition it, or use Locator's
-File menu to remove it. The target stays on its source disk.
+a Standard File dialog for opening and saving.
 
 **System**
 

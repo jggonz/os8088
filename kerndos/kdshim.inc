@@ -148,7 +148,6 @@ fpg_step:
 ct_fpg_begin:
 ct_fpg_end:
 ct_cw_mem_disp:
-desk_zmark_x:
 desk_learn_x:                   ; ...and which diskette to draw (SPEC.md 26.4.1)
 fmv_gneed:
 fmv_mark:

@@ -74,7 +74,7 @@ CC_SCINC    := $(CC_SC)/v0100/include
 # files since SPEC.md 20.12.9, the parts standard's code having moved into
 # apps/os88partsbody.inc so it can be emitted after the package's table.
 CC_RUNTIME  := $(CC_DIR)/os88.h $(CC_DIR)/crt0.asm $(CC_DIR)/os88thunk.asm \
-               apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc
+               apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc
 
 # CC_MAXFRAME is tools/cc8086.py's --max-frame (SPEC.md 73.8). 96 is the
 # tool's own default and it is a SMELL THRESHOLD, not a budget: a 96-byte

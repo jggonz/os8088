@@ -264,13 +264,18 @@ def main():
         except os88marty.MartyError:
             pass                        # ...judged below
         posted, said = seen["posted"], seen["said"]
-        os88marty.settle(m, limit=180)
-        try:                            # belt only: the settle above already
-            os88marty.until(            # covers the pass and the 114KB read,
+        # NOT a screen settle: on this card-less machine a load that leaves
+        # room for the speaker's ring PLAYS it (SPEC.md 45.25), and a playing
+        # face never stops changing - which one layout does and the next does
+        # not, by the few hundred bytes the filler's regions differ. The flag
+        # is the load's own word that it finished
+        try:
+            os88marty.until(
                 m, lambda _: m.read(wseg() * 16 + P["mp_loaded"], 1)[0],
-                "[mp_loaded]", poll=0.5, limit=10.0)   # both of which repaint
+                "[mp_loaded]", poll=0.5, limit=180.0)
         except os88marty.MartyError:
-            pass
+            pass                        # ...judged below
+        os88marty.pace(m, 1.0)
         layout("after the load")
 
         seg2 = wseg()                   # ...and every read below is through

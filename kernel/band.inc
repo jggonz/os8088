@@ -184,14 +184,13 @@ band_open_x:
     cld
     rep stosb
     mov al, 1                   ; ...and the first op draws in INK, which is
-    xor al, [bnd_pol]           ; the other one
-    mov [bnd_ink], al
+    xor al, [bnd_pol]           ; the other one - and `xor` is CF = 0, the
+    mov [bnd_ink], al           ; answer (mov and pop touch no flag)
     pop es
     pop di
     pop dx
     pop cx
     pop ax
-    clc
     ret
 .no:
     stc
@@ -230,9 +229,8 @@ bnd_clip:
     pop bx
     cmp ax, cx
     jg .no
-    or cx, cx
+    or cx, cx                   ; (`or` is CF = 0, the answer)
     js .no
-    clc
     ret
 .no:
     stc
@@ -565,12 +563,27 @@ bnd_cell:
     shl ax, 1
     shl ax, 1
     shl ax, 1
-    add ax, font_glyphs         ; .lowbss, so the rows are read through SS
-    jmp short .have
-.blank:
-    mov ax, font_zero           ; an unprintable cell is still PAINTED
-.have:
-    mov si, ax                  ; SI = the glyph's 8 rows
+    add ax, [font_base]         ; the glyph table is wherever font_init found
+    jmp short .have             ; it - the ROM's, SPEC.md 6 - so its 8 rows
+.blank:                         ; are copied to bnd_glyph below and read
+    FONT_BLANK ax               ; through SS as they always were. An
+.have:                          ; unprintable cell is still PAINTED
+    push ds
+    push es
+    push cx
+    push di
+    mov si, ax
+    mov di, bnd_glyph
+    push ss
+    pop es
+    mov ds, [font_seg]          ; (read through the kernel's DS, then loaded)
+    mov cx, 4
+    rep movsw
+    pop di
+    pop cx
+    pop es
+    pop ds
+    mov si, bnd_glyph           ; SI = the glyph's 8 rows, in LOW_SEG
 
     ; --- the VERTICAL clip, once: BX = first visible glyph row, BP = count --
     xor bx, bx
@@ -631,7 +644,7 @@ bnd_cell:
                                 ; which likewise makes the first the last one
 
 .lalign:
-    mov al, [ss:si]             ; the glyph row (font_glyphs is LOW_SEG)
+    mov al, [ss:si]             ; the glyph row (bnd_glyph is LOW_SEG)
     inc si
     xor al, bh                  ; the mask is FFh, so the polarity is a plain
     mov [es:di], al             ; complement and the cell IS the byte
@@ -788,6 +801,11 @@ bnd_seg     resw 1              ; THE BAND ITSELF - the base segment of
                                 ; here; this word is KERNEL_SEG's .bss like the
                                 ; rest, because these bodies run with DS still
                                 ; ours (SPEC.md 5.4.2.1)
+section .lowbss
+bnd_glyph   resb 8              ; bnd_cell's copy of the cell's glyph rows: the
+                                ; table is the ROM's (SPEC.md 6), read through
+                                ; DS, and this composer's row loops read SS
+section .bss
 
 ; -----------------------------------------------------------------------------
 section .text

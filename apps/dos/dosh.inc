@@ -1042,9 +1042,13 @@ dsh_bufput:
 ; a DOS program inside an fsx bracket has.
 ; -----------------------------------------------------------------------------
 dsh_stream:
-    mov word [dsh_off], 0
-    mov word [dsh_off+2], 0
-    mov byte [dsh_made], 0
+    xor ax, ax
+    mov [dsh_off], ax
+    mov [dsh_off+2], ax
+    mov [dsh_rcur], ax              ; a new file: the cursor's generation 0 is
+                                    ; "not seeded" (SPEC.md 18.4.8) - the core
+                                    ; is the kernel's own code and knows it
+    mov byte [dsh_made], al
 .chunk:
     mov dx, [dsh_sclus]             ; the SOURCE, every pass: the write below
     mov bl, [dsh_sdrv]              ; stands in the destination folder
@@ -1061,7 +1065,8 @@ dsh_stream:
     mov cx, ax                      ; that this cannot reach 64KB
     mov dx, [dsh_off+2]
     mov ax, [dsh_off]
-    call dos_be_rdat                ; out DX:AX = what it delivered
+    mov di, dsh_rcur                ; one FAT link a chunk (SPEC.md 96.53)
+    call dos_be_rseq                ; out DX:AX = what it delivered
     jc .ioerr
     mov cx, ax
     or cx, cx
@@ -1089,7 +1094,10 @@ dsh_stream:
     mov byte [dsh_made], 1
     jmp short .step
 .app:
-    call dos_be_append              ; ...and every one after it extends
+    mov al, WSEQF_HELD              ; ...and every one after it extends, as
+    mov di, [dsh_wtok]              ; ONE held stream: its FAT and entry once,
+    call dos_be_wseq                ; at .done (SPEC.md 96.53)
+    mov [dsh_wtok], di
     jc .ioerr
 .step:
     mov cx, [dsh_got]
@@ -1098,7 +1106,8 @@ dsh_stream:
     or cx, cx
     jnz .chunk
 .done:
-    clc
+    call dos_fh_cmall               ; the held stream's commit
+    jc .ioerr
     ret
 .ioerr:
     push ax                         ; THE UNDO: a destination that exists and

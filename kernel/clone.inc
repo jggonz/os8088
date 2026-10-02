@@ -39,7 +39,12 @@ CERR_FULL    equ 6              ; the volume the image would go on is too full
 CERR_NOTIMG  equ 7              ; that file is not a whole floppy (SPEC.md 18.99.8)
 CERR_SAME    equ 8              ; ...and it may not live on the disk itself
 CERR_BUSY    equ 9              ; a clone is ALREADY running (SPEC.md 22.21.2)
-CLO_NERR     equ 10
+CERR_NOMOD   equ 10             ; CLONE.DRV itself could not be read: the
+                                ; system disk is not in the boot drive
+                                ; (SPEC.md 18.99.7). NOT CERR_NODISK, whose
+                                ; 'No disk' read as "no disk to image" off
+                                ; the 5150 with a disk in both drives
+CLO_NERR     equ 11
 
 ; --- which prompt is up (SPEC.md 22.21.1) ------------------------------------
 CLS_PICK     equ 0              ; 'Clone A: to B:, ERASING it'
@@ -62,12 +67,16 @@ CLA_LINE     equ 0x80           ; the prompt changed and nothing else did
 CLA_DONE     equ 0x81           ; finished; BL/BH name the two volumes
 CLA_STOP     equ 0x82           ; Esc - the user said it, so nothing is said
 CLA_ERR      equ 0x83           ; AH = CERR_*
-CLA_SAVE     equ 0x84           ; ask for a file name, and come back through
-                                ; CLV_SAVED. The dialog is opened by the
-                                ; RESIDENT half (SPEC.md 18.99.8): fdlg_open
-                                ; wants a live owned window and a near
-                                ; completion proc in KERNEL_SEG, neither of
-                                ; which an image can be
+CLA_JDONE    equ 0x85           ; Uncompress To... ended: it has said its
+                                ; verdict and freed its claim (SPEC.md 22.23.6)
+CLS_JOIN     equ 0x80           ; CL_STEP of a claim that is the JOIN's, not a
+                                ; clone's: clo_disp_x sends mode 7 to it
+                                ; 0x84 was CLA_SAVE, "ask for a file name":
+                                ; the image opens that Save box itself now,
+                                ; through fdf_fdlg_open with the RESIDENT
+                                ; fm_img_done_x as its completion proc - the
+                                ; one thing fdlg_open needs that an image
+                                ; cannot be (SPEC.md 18.99.8)
 
 ; --- the verbs (SPEC.md 18.99.7), in DL ---------------------------------------
 CLV_START    equ 0
@@ -75,7 +84,9 @@ CLV_KEY      equ 1
 CLV_LINE     equ 2
 CLV_FREE     equ 3
 CLV_SAVED    equ 4              ; the Save dialog answered: do the whole
-                                ; disk -> file operation (SPEC.md 18.99.8)
+                                ; disk -> file operation (SPEC.md 18.99.8) -
+                                ; or, with NO claim live, start Uncompress
+                                ; To...'s join there (SPEC.md 22.23.6)
 CLV_WIMG     equ 5              ; the Open dialog answered: size it, claim,
                                 ; and arm the confirmation
 
@@ -113,6 +124,8 @@ CL_FOFF      equ 42             ; dd: the byte offset reached in the file
 CL_FSPT      equ 46             ; dw \ the FILE volume's live geometry, banked
 CL_FHDS      equ 48             ; dw  | so a raw transfer on the DISK end can
 CL_FTOT      equ 50             ; dw /  borrow those words and give them back
+CL_FTOK      equ 54             ; dw: the image file's WRITE_SEQ token (18.4.9)
+CL_FCUR      equ 56             ; 16: ...and its READ_SEQ cursor (18.4.8.1)
 CL_FCLUS     equ 52             ; dw: the FOLDER the image file is in - the
                                 ; volume alone is not enough, because the
                                 ; current directory is GLOBAL and the UI runs
@@ -180,6 +193,25 @@ CLO_XALLOC   equ apic_xm_alloc         ; in DX:AX = bytes; out CF, DX:AX = the b
 CLO_XFREE    equ apic_xm_free          ; in DX:AX = a base this caller owns
 CLO_XCOPY    equ apic_xm_copy          ; in ES:SI / DX:AX / CX / DI = direction
 
+; CLO_RSEQ seg, off - dwf_dskw_read_at, served by READ_SEQ from the 16-byte
+; cursor at seg:off (SPEC.md 18.4.8.1): READ_AT's registers in and out, every
+; other register kept. The image's three chunked readers - clo_fget, the
+; join's cmz_jneed and the compressor's cmz_sfetch - each walked the chain
+; from the front on every chunk. kern_small has no READ_SEQ and gets READ_AT.
+%macro CLO_RSEQ 2
+%ifdef KERN_BIG
+    push bp
+    push di
+    mov bp, %1
+    mov di, %2
+    call clo_rseq
+    pop di
+    pop bp
+%else
+    call COLD_SEG:dwf_dskw_read_at
+%endif
+%endmacro
+
 section .modl                   ; the on-demand image (SPEC.md 2.8)
 modl_hdr:
     dw 0x384F                   ; MOD_H_MAGIC
@@ -208,6 +240,25 @@ modl_e_cmz:     call cmz_verb   ; CF and AX are the answer, and `retf` leaves
 ; that has to be checked when a fifth one is added, not assumed.
 ; -----------------------------------------------------------------------------
 clo_disp_x:
+%ifdef KERN_BIG
+    cmp word [clo_seg], 0       ; Uncompress To... (SPEC.md 22.23.6) rides the
+    jne .claimed                ; cloner's claim word and its mode 7. With NO
+    cmp dl, CLV_SAVED           ; claim, the Save box's answer is the join's:
+    jne .ladder                 ; a clone's is asked with its claim live
+    jmp cmz_jgo
+.claimed:                       ; ...and a claim marked CLS_JOIN is the join's,
+    cmp dl, CLV_KEY             ; so its keys, lines and teardown go to
+    jb .ladder                  ; compress.inc. CLV_START is never the join's:
+    cmp dl, CLV_FREE            ; clo_start refuses a busy [clo_seg] as it
+    ja .ladder                  ; always has
+    push es
+    mov es, [clo_seg]
+    cmp byte [es:CL_STEP], CLS_JOIN
+    pop es
+    jne .ladder
+    jmp cmz_jdisp
+.ladder:
+%endif
     cmp dl, CLV_START
     je clo_start                ; adjacent, so a short Jcc reaches it; the
     cmp dl, CLV_KEY             ; three below are hundreds of bytes away and
@@ -284,20 +335,12 @@ clo_start:
     mov ax, CERR_BUSY
     jmp short .fail
 .freefail:
-    push ax
     call clo_free               ; the claim goes back; nothing was armed
-    pop ax
 .fail:
     pop bx                      ; the banked AX, discarded: AX is the code
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp clo_x6                 ; (the shared epilogue, below clo_cat)
 
 ; -----------------------------------------------------------------------------
 ; clo_fits - can the TARGET DRIVE hold what the source is? (SPEC.md 18.99.6)
@@ -488,35 +531,28 @@ clo_geom:
     push si
     push di
 
-    mov ax, [disk_spt]          ; bank the caller's live geometry before
-    mov [es:CL_BSPT], ax        ; anything is aimed anywhere: a refusal below
-    mov ax, [disk_heads]        ; must leave the machine as it found it, and
-    mov [es:CL_BHDS], ax        ; a raw transfer between here and the next
-    mov ax, [dsk_totsec]        ; mount would otherwise use a TRIAL value
-    mov [es:CL_BTOT], ax
+    mov bx, CL_BSPT             ; bank the caller's live geometry before
+    call clo_gget               ; anything is aimed anywhere: a refusal below
+                                ; must leave the machine as it found it, and
+                                ; a raw transfer between here and the next
+                                ; mount would otherwise use a TRIAL value
 
-    mov bl, [es:CL_SRC]         ; is it a floppy at all? (SPEC.md 18.7:
-    call COLD_SEG:dskf_dsk_vol_row  ; DV_KIND is the TRANSPORT and a BIOS unit
-    jc .nodisk                  ; below 80h is the MEDIUM - disk_mount's own
-    cmp byte [bx+DV_KIND], DVK_BIOS ; test, and fm_fmt_ok's)
-    jne .nodisk
-    mov dl, [bx+DV_UNIT]        ; DL = the int 13h drive, for AH=08h below
-    test dl, 0x80
-    jnz .nodisk
+    mov bl, [es:CL_SRC]         ; is it a floppy at all? DL = the int 13h
+    call clo_flop               ; drive, for AH=08h below
+    jc .nodisk
     mov al, [es:CL_SRC]
     mov [disk_drive], al
 
     cmp byte [es:CL_MOK], 0
     je .probe
-    mov ax, [disk_spt]          ; it mounted: the BPB has answered, through
-    mov [es:CL_SPT], ax         ; SPEC.md 18.2's one hostile pipeline
-    mov ax, [disk_heads]
-    mov [es:CL_HDS], ax
-    mov ax, [dsk_totsec]
-    mov [es:CL_TOT], ax
-    or ax, ax
+    mov bx, CL_SPT              ; it mounted: the BPB has answered, through
+    call clo_gget               ; SPEC.md 18.2's one hostile pipeline
+    or ax, ax                   ; (AX = the total, clo_gget's last word)
     jz .jio                     ; a mounted volume of no sectors is not one
     jmp .ok
+.nodisk:                        ; (here, in the floppy test's jcc reach)
+    mov ax, CERR_NODISK
+    jmp .bad
 
     ; --- sectors per track, off the MEDIUM ---------------------------------
     ; One disk_read of CHS (0,0,N) for N in 18, 15, 9, first success wins:
@@ -617,27 +653,38 @@ clo_geom:
     call clo_live               ; the live geometry IS the clone's from here
     clc                         ; to the re-mount the caller owes
     jmp short .out
-.nodisk:
-    mov ax, CERR_NODISK
-    jmp short .bad
 .io:
     mov ax, CERR_IO
 .bad:
-    push ax
-    mov ax, [es:CL_BSPT]        ; put the caller's geometry back - dskw_fmt_
-    mov [disk_spt], ax          ; probe_x's .undo, and for its reason: a
-    mov ax, [es:CL_BHDS]        ; refusal must not leave a trial value where
-    mov [disk_heads], ax        ; a raw transfer would read it
-    mov ax, [es:CL_BTOT]
-    mov [dsk_totsec], ax
-    pop ax
+    mov bx, CL_BSPT             ; put the caller's geometry back - dskw_fmt_
+    call clo_gput               ; probe_x's .undo, and for its reason: a
+                                ; refusal must not leave a trial value where
+                                ; a raw transfer would read it
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
+    jmp clo_x5                 ; (the shared epilogue, below clo_cat)
+
+; -----------------------------------------------------------------------------
+; clo_flop - is volume BL a BIOS FLOPPY? (SPEC.md 18.7: DV_KIND is the
+;            TRANSPORT and a BIOS unit below 80h is the MEDIUM - disk_mount's
+;            own test, and fm_fmt_ok's)
+; out: CF=0 it is, with BX = its row and DL = its int 13h unit; CF=1 it is not
+; clobbers: BX DL, flags
+;
+; The cloner's own question and Uncompress To's (cmz_jfloppy, "may a missing
+; part be ASKED for?"), which were two copies of it.
+; -----------------------------------------------------------------------------
+clo_flop:
+    call COLD_SEG:dskf_dsk_vol_row
+    jc .r
+    cmp byte [bx+DV_KIND], DVK_BIOS
+    jne .no
+    mov dl, [bx+DV_UNIT]
+    test dl, 0x80
+    jz .r                       ; (`test` leaves CF = 0)
+.no:
+    stc
+.r:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -661,7 +708,6 @@ clo_extent:
     call clo_read1
     jc .no
     pop dx
-    clc
     ret
 .no:
     pop dx
@@ -671,23 +717,58 @@ clo_extent:
 ; -----------------------------------------------------------------------------
 ; clo_live - make the machine's live geometry the clone's (module internal)
 ; in:  ES = the claim
-; out: nothing (all registers preserved)
+; out: nothing (all registers preserved) - and clo_asrc / clo_atgt / clo_aim
+;      point [disk_drive] at the source, the target or AL first, clobbering AL
 ;
 ; Both ends of the copy are addressed with the SOURCE's geometry, because an
 ; exact clone writes the source's LBAs under the source's CHS mapping. The
 ; caller owes a re-mount afterwards, which re-derives everything off whatever
 ; BPB is now on the platter (SPEC.md 22.21.3).
 ; -----------------------------------------------------------------------------
+clo_asrc:                       ; ...aimed at the SOURCE's drive first,
+    mov al, [es:CL_SRC]         ; or the TARGET's, or AL's (clobbers AL): the
+    jmp short clo_aim           ; three shapes every transfer starts with
+clo_atgt:
+    mov al, [es:CL_TGT]
+clo_aim:
+    mov [disk_drive], al
 clo_live:
+    push bx
+    mov bx, CL_SPT
+    call clo_gput
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; clo_gget - the live geometry - [disk_spt], [disk_heads], [dsk_totsec] - into
+;            three claim words at ES:BX. out: AX = the total. clobbers: AX
+; clo_gput - ...and back, from ES:BX. Every register preserved
+;
+; SIX copies of this triple, both ways, for the source, the caller's bank and
+; the image file's volume: CL_SPT, CL_BSPT and CL_FSPT each lead three words
+; in this order (asserted below).
+; -----------------------------------------------------------------------------
+clo_gget:
+    mov ax, [disk_spt]
+    mov [es:bx], ax
+    mov ax, [disk_heads]
+    mov [es:bx+2], ax
+    mov ax, [dsk_totsec]
+    mov [es:bx+4], ax
+    ret
+clo_gput:
     push ax
-    mov ax, [es:CL_SPT]
+    mov ax, [es:bx]
     mov [disk_spt], ax
-    mov ax, [es:CL_HDS]
+    mov ax, [es:bx+2]
     mov [disk_heads], ax
-    mov ax, [es:CL_TOT]
+    mov ax, [es:bx+4]
     mov [dsk_totsec], ax
     pop ax
     ret
+%if CL_HDS - CL_SPT != 2 || CL_TOT - CL_SPT != 4 || CL_BHDS - CL_BSPT != 2 || CL_BTOT - CL_BSPT != 4 || CL_FHDS - CL_FSPT != 2 || CL_FTOT - CL_FSPT != 4
+    %error "CL_SPT, CL_BSPT and CL_FSPT must each lead spt, heads, total in three words: clo_gget/clo_gput copy them as a block"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; clo_read1 - read LBA AX into dsk_secbuf (module internal)
@@ -767,12 +848,7 @@ clo_size:
     mov ax, CERR_MEM
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp clo_x5                 ; (the shared epilogue, below clo_cat)
 
 ; -----------------------------------------------------------------------------
 ; clo_xmsup - one trip instead of many, if the store can pay for it (18.99.4)
@@ -893,18 +969,13 @@ clo_fbank:
                                 ; FERR_NOENT, which reaches the user as
                                 ; 'Disk error' two seconds in. Measured,
                                 ; exactly that way round
-    mov ax, [disk_spt]
-    mov [es:CL_FSPT], ax
-    mov ax, [disk_heads]
-    mov [es:CL_FHDS], ax
-    mov ax, [dsk_totsec]
-    mov [es:CL_FTOT], ax
+    mov bx, CL_FSPT
+    call clo_gget
     call COLD_SEG:dwf_dskw_dfree    ; DX:AX = free bytes, BX = SECTORS per
     jc .bad                         ; cluster (SPEC.md 18.4)
     or bx, bx
     jz .bad
     mov [es:CL_SPC], bx
-    clc
     jmp short .out
 .bad:
     mov ax, CERR_NODISK
@@ -935,13 +1006,11 @@ clo_fend:
     mov [dsk_cwd], ax           ; the disk end does not touch but which one
                                 ; word is cheaper to restore than to reason
                                 ; about (clo_imgrun's own note)
-    mov ax, [es:CL_FSPT]
-    mov [disk_spt], ax
-    mov ax, [es:CL_FHDS]
-    mov [disk_heads], ax
-    mov ax, [es:CL_FTOT]
-    mov [dsk_totsec], ax
     pop ax
+    push bx
+    mov bx, CL_FSPT
+    call clo_gput
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -979,19 +1048,33 @@ clo_fput:
 .isapp:
     mov cx, di                  ; CX = the count, DX:CX for the write
     xor dx, dx
-    mov di, [es:CL_BUFSG]
     mov si, clo_fnbuf
     xor bx, bx                  ; ES:BX = the buffer at offset 0
     push es
-    mov es, di
+%ifdef KERN_BIG
+    mov di, [es:CL_FTOK]
+%endif
+    mov es, [es:CL_BUFSG]
     or ah, ah
     jnz .append
     call COLD_SEG:dwf_dskw_write
     jmp short .did
 .append:
+%ifdef KERN_BIG
+    mov al, WSQF_HELD           ; ONE HELD STREAM (SPEC.md 18.4.9, 18.99.8):
+    call COLD_SEG:dwf_dskw_write_seq    ; no lookup and no walk a chunk, no
+                                ; FAT or directory write until clo_imgrun's
+                                ; close. Nothing between two chunks mounts
+                                ; anything - the disk end is a bank - so the
+                                ; FAT dirt simply stays in the window
+%else
     call COLD_SEG:dwf_dskw_append
+%endif
 .did:
     pop es
+%ifdef KERN_BIG
+    mov [es:CL_FTOK], di        ; (`mov`: CF stays the answer)
+%endif
     jc .bad
     call clo_fadv
     clc
@@ -1000,12 +1083,7 @@ clo_fput:
     call clo_ferr               ; AL = CERR_*, out of the FERR_* the file API
     stc                         ; answered
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp clo_x5                 ; (the shared epilogue, below clo_cat)
 
 ; -----------------------------------------------------------------------------
 ; clo_fadv - CL_FOFF += CL_HELD sectors (module internal)
@@ -1034,10 +1112,12 @@ clo_fadv:
 ;      CF=1 with AL = CERR_*
 ; clobbers: AX, flags
 ;
-; `dskw_read_at` is stateless and takes the offset outright (SPEC.md 18.4.4),
-; which is exactly what this loop needs: the WRITE half between two reads
-; walks directories and the FAT, so a resume token living in the kernel would
-; be destroyed by the very work it is feeding.
+; The offset is still the whole argument (SPEC.md 18.4.4): the WRITE half
+; between two reads walks directories and the FAT, so a resume token living in
+; the kernel would be destroyed by the very work it is feeding. The cursor is
+; the CALLER's, in the claim's header, and only caches the walk - READ_SEQ
+; re-seeds it from the name whenever the media generation moved (SPEC.md
+; 18.4.8.1).
 ; -----------------------------------------------------------------------------
 clo_fget:
     push bx
@@ -1045,6 +1125,7 @@ clo_fget:
     push dx
     push si
     push di
+    push bp
     call clo_fend
     mov ax, [es:CL_CHUNK]
     mov cl, 9
@@ -1055,9 +1136,10 @@ clo_fget:
     mov di, [es:CL_BUFSG]
     mov si, clo_fnbuf
     push es
-    mov es, di
+    mov bp, es                  ; BP = the claim, whose header holds the
+    mov es, di                  ; cursor: clo_zerohdr blanks it per job
     xor bx, bx                  ; ES:BX = the buffer
-    call COLD_SEG:dwf_dskw_read_at  ; DX:AX = the bytes delivered
+    CLO_RSEQ bp, CL_FCUR        ; DX:AX = the bytes delivered
     pop es
     jc .bad
     add [es:CL_FOFF], ax
@@ -1071,12 +1153,40 @@ clo_fget:
     call clo_ferr
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
+    pop bp                      ; the stream reader's cursor segment (18.4.8.1)
+    jmp clo_x5                  ; ...then the shared epilogue, below clo_cat
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; clo_rseq - CLO_RSEQ's body (module internal; SPEC.md 18.4.8.1)
+; in:  DS:SI -> the name, ES:BX -> the buffer, CX = the capacity, DX:AX = the
+;      offset (dwf_dskw_read_at's), BP:DI -> the 16-byte cursor
+; out: dwf_dskw_read_at's: CF=0 DX:AX = the bytes; CF=1 AX = FERR_*
+; preserves: BX, CX, SI, DI, BP, DS, ES
+;
+; THE OFFSET STAYS THE CALLER'S. A cursor whose offset is not DX:AX is
+; re-seeded there, so a seek, a cut-out's rewind, a new part at 0 and a retry
+; need nothing from the caller. It names no file, so a caller moving to a new
+; one zeroes it (cmz_jrst, the compressor's streamed start, clo_zerohdr).
+; -----------------------------------------------------------------------------
+clo_rseq:
+    push es
+    mov es, bp                  ; ES:DI = the cursor
+    cmp ax, [es:di+FSEQ_OFF]
+    jne .seed
+    cmp dx, [es:di+FSEQ_OFF+2]
+    je .go
+.seed:
+    mov word [es:di+RSQ_GEN], 0 ; not seeded: the next call stats the name
+    mov [es:di+FSEQ_OFF], ax    ; and walks once, to here
+    mov [es:di+FSEQ_OFF+2], dx
+.go:
+    pop dx                      ; DX:BX = the buffer (the caller's ES)
+    push dx
+    call COLD_SEG:dwf_dskw_read_seq
+    pop es
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; clo_ferr - a FERR_* from the file API, as a CERR_* (module internal)
@@ -1147,7 +1257,7 @@ clo_nextvol:
 ; clo_key - one keystroke, and the disk work it asks for (SPEC.md 22.21.2)
 ; in:  AL = ascii, AH = scan; ES free; gfx lock held, UI task
 ; out: AL = CLA_*, AH = CERR_* when AL is CLA_ERR, BL/BH = the two volumes
-;      when it is CLA_DONE
+;      when it is CLA_DONE; CF = 0 ALWAYS (SPEC.md 18.99.7)
 ; clobbers: AX, BX, flags
 ;
 ; **The transfer happens HERE**, inside the keystroke, and that is not a
@@ -1190,43 +1300,14 @@ clo_key:
     cmp al, 'Y'
     je .force
     cmp al, 13
-    jne .linej
+    jne .linej2
     mov byte [es:CL_STEP], CLS_TGT
 .jtgt:
     jmp .tgt                    ; NEAR: CLS_NOSRC's answers sit between here
                                 ; and it now (SPEC.md 18.99.3)
-
-.pick:
-    cmp al, ' '
-    jne .pickgo
-    mov al, [es:CL_TGT]
-    call clo_nextvol            ; ...which walks THROUGH the image file
-    mov [es:CL_TGT], al         ; (SPEC.md 18.99.8), so IMG is one more stop
-.linej:                         ; ...and the two `jne` around it: NASM spelt each
-    jmp .line                   ; as a five-byte inverted pair (an 8086 has no
-                                ; near `jcc`) and from here they are two, with
-                                ; nothing added at all - this jump was here
-                                ; already.  -6 on CLONE.DRV
-.pickgo:
-    cmp al, 13
-    jne .linej
-    cmp byte [es:CL_TGT], CLE_IMG
-    jne .picdisk
-    mov al, CLA_SAVE            ; the resident half owns the dialog: fdlg_open
-    jmp .out                    ; wants a live owned window and a KERNEL_SEG
-.picdisk:                       ; completion proc (SPEC.md 18.99.8)
-    call clo_fits               ; SPEC.md 18.99.6, asked HERE and not at
-    jc .err                     ; CLV_START: the target is not chosen until
-    call clo_xmsup              ; this key, and neither is the trip count
-    mov al, [es:CL_SRC]
-    cmp al, [es:CL_TGT]
-    je .samedrv
-    call clo_both               ; two drives: the WHOLE operation, here, with
-    jc .err                     ; no prompt between the halves - no disk has
-    jmp short .done             ; to move, so there is nothing to ask
-.samedrv:
-    mov byte [es:CL_STEP], CLS_SRC
-    jmp short .line
+.stop:                          ; Esc, HERE: the top's `je` is short
+    mov al, CLA_STOP
+    jmp .out
 
     ; `Write Img...`'s confirmation (SPEC.md 18.99.8): Enter runs the whole
     ; operation here and now - the file and the disk are both in the machine,
@@ -1262,6 +1343,7 @@ clo_key:
     jmp short .line
 .srcwarn:
     mov byte [es:CL_STEP], CLS_NOSRC
+.linej2:                        ; (a free trampoline for CLS_SAME's `jne`)
     jmp short .line
 
     ; CLS_NOSRC: CLS_SAME's three answers on the other prompt (SPEC.md
@@ -1302,13 +1384,23 @@ clo_key:
 .line:
     mov al, CLA_LINE
     jmp short .out
-.stop:
-    mov al, CLA_STOP
-    jmp short .out
 .err:
     mov ah, al                  ; AL = CERR_* on the way out of every refusal
     mov al, CLA_ERR             ; and every pass
 .out:
+    clc                         ; **EVERY EXIT IS AN ANSWER, SO CF IS CLEAR**
+                                ; (SPEC.md 18.99.7). The resident caller reads
+                                ; CF=1 as the OTHER alphabet - CLONE.DRV could
+                                ; not be re-read, AX = a bare CERR_* - and
+                                ; repacks it. `.err` arrives from a `jc` and a
+                                ; `mov` writes no flag, so CLA_ERR went back
+                                ; with CF still set and was repacked as error
+                                ; 83h, which toast_say refuses as out of its
+                                ; table: every failed clone and Write Img
+                                ; ended its mode in SILENCE (SPEC.md 18.99.10).
+                                ; `.line` is reached through a `jne` after a
+                                ; `cmp al, 13`, so a key below 13 leaked the
+                                ; same carry out of an ordinary prompt
     pop es
     pop di
     pop si
@@ -1316,12 +1408,64 @@ clo_key:
     pop cx
     ret
 
+    ; CLS_PICK's answers, AFTER the exit: the ladder's other five targets
+    ; are then in a short jcc's reach (size pass 8)
+.pick:
+    cmp al, ' '
+    jne .pickgo
+    mov al, [es:CL_TGT]
+    call clo_nextvol            ; ...which walks THROUGH the image file
+    mov [es:CL_TGT], al         ; (SPEC.md 18.99.8), so IMG is one more stop
+.linej:                         ; ...and the two `jne` around it: NASM spelt each
+    jmp .line                   ; as a five-byte inverted pair (an 8086 has no
+                                ; near `jcc`) and from here they are two, with
+                                ; nothing added at all - this jump was here
+                                ; already.  -6 on CLONE.DRV
+.pickgo:
+    cmp al, 13
+    jne .linej
+    cmp byte [es:CL_TGT], CLE_IMG
+    jne .picdisk
+    ; The image target wants a NAME (SPEC.md 18.99.8): the Save box, opened
+    ; from here through the far door, with the RESIDENT fm_img_done_x as its
+    ; completion proc - fdlg_open dispatches a kernel window's proc as a near
+    ; call into `.cold`, which an image cannot be. SI is the window: fm_onkey_x
+    ; was handed it and nothing on the way here moves it. The mode stays armed
+    ; across the box; a cancelled one calls nothing back (SPEC.md 38.2), so the
+    ; user comes back to the pick prompt they left. CF=1 (refused - one is up
+    ; already) cannot happen from a keystroke this window owns, and the prompt
+    ; stands either way.
+    mov bx, si
+    mov si, clo_s_defimg        ; the default, staged where the box reads it
+    mov di, fm_hdrbuf           ; (DS); fdlg_setname copies it before anything
+    call cmz_cs13               ; else can stage into fm_hdrbuf
+    mov si, fm_hdrbuf
+    mov di, fm_img_done_x
+    mov al, 1                   ; the SAVE form
+    call COLD_SEG:fdf_fdlg_open
+    jmp .line
+.picdisk:
+    call clo_fits               ; SPEC.md 18.99.6, asked HERE and not at
+    jc .err                     ; CLV_START: the target is not chosen until
+    call clo_xmsup              ; this key, and neither is the trip count
+    mov al, [es:CL_SRC]
+    cmp al, [es:CL_TGT]
+    je .samedrv
+    call clo_both               ; two drives: the WHOLE operation, here, with
+    jc .err                     ; no prompt between the halves - no disk has
+    jmp short .done             ; to move, so there is nothing to ask
+.samedrv:
+    mov byte [es:CL_STEP], CLS_SRC
+    jmp short .line
+
+
 ; -----------------------------------------------------------------------------
 ; clo_saved - the Save dialog answered: image this disk into that file
 ; in:  ES free; [clo_seg] live with CL_STEP = CLS_PICK and CL_TGT = CLE_IMG,
-;      clo_fnbuf staged, the FILE's volume mounted and current; gfx lock held
+;      [fdlg_name] the box's answer, the FILE's volume mounted and current;
+;      gfx lock held
 ; out: AL = CLA_*, AH = CERR_* when it is CLA_ERR (clo_key's answers exactly,
-;      because the caller hands them to the same place)
+;      because the caller hands them to the same place); CF = 0 always
 ; clobbers: AX, BX, flags
 ;
 ; The whole operation, in one call, for the cross-drive clone's reason: both
@@ -1334,6 +1478,7 @@ clo_saved:
     push si
     push di
     push es
+    call clo_fnget              ; the box's answer, where the file API reads it
     mov es, [clo_seg]
     mov byte [es:CL_END], 1     ; the TARGET is a file
     mov word [es:CL_FOFF], 0
@@ -1356,8 +1501,9 @@ clo_saved:
     mov ah, al
     mov al, CLA_ERR
 .out:
-    pop es
-    pop di
+    clc                         ; an ANSWER, never the other alphabet - see
+    pop es                      ; clo_key's own exit, and the resident .save
+    pop di                      ; half that repacks a CF=1
     pop si
     pop dx
     pop cx
@@ -1366,8 +1512,8 @@ clo_saved:
 ; -----------------------------------------------------------------------------
 ; clo_wimg - the Open dialog answered: size that file and ask (SPEC.md 18.99.8)
 ; in:  AL = the target volume (the acting window's), **BX:CX** = the file's
-;      size as the dialog reported it, clo_fnbuf staged, the FILE's volume
-;      mounted and current; gfx lock held
+;      size as the dialog reported it, [fdlg_name] the box's answer, the
+;      FILE's volume mounted and current; gfx lock held
 ;
 ; BX:CX and not DX:CX, which is what the dialog hands its callback and what
 ; every other 32-bit count in this tree uses (SPEC.md 18.4.1): **DL is the
@@ -1381,7 +1527,7 @@ clo_saved:
 ; **The GEOMETRY comes from the SIZE, and that is the whole validation.** The
 ; disk in the drive may be blank, so there is nothing to probe; what a raw
 ; write needs is a sectors-per-track and a head count, and the only honest
-; source for them is the image itself. dskw_fmt_tab already pins the four
+; source for them is the image itself. clo_imgtab pins the four
 ; standard layouts (SPEC.md 18.96), so a file whose length is one of those
 ; four is a disk image and a file whose length is not is CERR_NOTIMG - which
 ; also refuses, for free, every ordinary document somebody picks by mistake.
@@ -1393,6 +1539,8 @@ clo_wimg:
     push si
     push di
     push es
+    call clo_fnget              ; the box's answer, where the file API reads
+                                ; it - CX is the size and comes back intact
     mov dx, bx                  ; ...and DX:CX from here on, which is what
                                 ; clo_geom_img reads and what the rest of the
                                 ; tree means by a 32-bit count
@@ -1428,26 +1576,17 @@ clo_wimg:
     call clo_imgsize
     jc .freefail
     pop ax
-    clc
     jmp short .out
 .busy:
     mov ax, CERR_BUSY           ; ...said as itself and not as 'Out of
     jmp short .fail             ; memory' (SPEC.md 22.21.2)
 .freefail:
-    push ax
-    call clo_free
-    pop ax
+    call clo_free               ; (every register preserved)
 .fail:
     pop bx                      ; the banked volume, discarded
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp clo_x6                 ; (the shared epilogue, below clo_cat)
 
 ; -----------------------------------------------------------------------------
 ; clo_geom_img - which standard floppy is a file of DX:CX bytes? (18.99.8)
@@ -1456,9 +1595,11 @@ clo_wimg:
 ;      exactly as it was, which is the file volume's; CF=1 with AX =
 ;      CERR_NOTIMG. Clobbers AX, flags.
 ;
-; dskw_fmt_tab is READ THROUGH DS and stays in `.text` (SPEC.md 2.8.6.1): it
-; is the formatter's table and this is the cloner's image, and two modules may
-; not far-call each other - only one of them need be loaded.
+; The four layouts are THIS IMAGE's own (size, spt) pairs, read through CS.
+; They were dskw_fmt_tab's rows, read through DS from `.text` - 56 resident
+; bytes kept there for this one reader, since two modules may not far-call
+; each other (only one of them need be loaded). The formatter's table is in
+; FORMAT.DRV now, and these sixteen bytes are the whole of what this needed.
 ; -----------------------------------------------------------------------------
 clo_geom_img:
     push bx
@@ -1466,10 +1607,10 @@ clo_geom_img:
     push dx
     push si
     push di
-    mov di, DFMT_ROWS
-    mov si, dskw_fmt_tab
+    mov di, 4
+    mov si, clo_imgtab
 .row:
-    mov ax, [si+DFMT_TOT]       ; sectors -> bytes, as DX:AX
+    mov ax, [cs:si]             ; sectors -> bytes, as DX:AX
     push dx
     push cx
     mov bx, dx
@@ -1481,10 +1622,10 @@ clo_geom_img:
     cmp dx, bx
     jne .next
     pop dx
-    mov ax, [si+DFMT_SPT]
+    mov ax, [cs:si+2]
     mov [es:CL_SPT], ax
     mov word [es:CL_HDS], 2     ; every row in the table is double-sided, and
-    mov ax, [si+DFMT_TOT]       ; dskw_format_x hard-codes the same 2
+    mov ax, [cs:si]             ; dskw_format_x hard-codes the same 2
     mov [es:CL_TOT], ax
     clc                         ; ...and THE LIVE WORDS ARE NOT TOUCHED, which
                                 ; cost a debugging session: this runs while the
@@ -1503,18 +1644,19 @@ clo_geom_img:
     jmp short .out
 .next:
     pop dx
-    add si, DFMT_SIZE
+    add si, 4
     dec di
     jnz .row
     mov ax, CERR_NOTIMG
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp clo_x5                 ; (the shared epilogue, below clo_cat)
+
+clo_imgtab:                     ; (sectors, sectors per track), SPEC.md 18.96
+    dw 2880, 18                 ; 1.44MB
+    dw 2400, 15                 ; 1.2MB
+    dw 1440, 9                  ; 720KB
+    dw 720, 9                   ; 360KB
 
 ; -----------------------------------------------------------------------------
 ; clo_fsame - is the image on the very disk it is about to be written to?
@@ -1671,7 +1813,13 @@ clo_imgrun:
     mov cx, [es:CL_NEXT]
     cmp cx, [es:CL_TOT]
     jb .image
-    clc
+%ifdef KERN_BIG
+    xor cx, cx                  ; THE CLOSE: the image's link, FAT and size,
+    call COLD_SEG:dwf_dskw_write_seq    ; once - the last clo_fput left the
+    jnc .out                    ; file end standing
+    call clo_ferr
+    stc
+%endif
     jmp short .out
 .write:                         ; file -> disk
     call clo_fget
@@ -1781,9 +1929,7 @@ clo_rd:
     push dx
     push si
     push di
-    mov al, [es:CL_SRC]
-    mov [disk_drive], al
-    call clo_live
+    call clo_asrc
     call clo_want               ; CX = sectors this run, SI = its first LBA
     mov [es:CL_HLBA], si
     mov [es:CL_HELD], cx
@@ -1793,15 +1939,11 @@ clo_rd:
     xor bl, bl                  ; read...
     xor dx, dx                  ; ...from the buffer's own origin. The keep of
     call clo_move               ; sector 0 happens INSIDE, per transfer: on
-    jc .out                     ; the XMS path the buffer holds the LAST
-    clc                         ; staging load by the time this returns, not
-.out:                           ; the first (SPEC.md 18.99.2)
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+                                ; the XMS path the buffer holds the LAST
+                                ; staging load by the time this returns, not
+                                ; the first (SPEC.md 18.99.2). Its CF is ours
+.out:
+    jmp clo_x5                 ; (the shared epilogue, below clo_cat)
 
 ; -----------------------------------------------------------------------------
 ; clo_wr - write the run in hand to the TARGET (module internal)
@@ -1820,9 +1962,7 @@ clo_wr:
     push dx
     push si
     push di
-    mov al, [es:CL_TGT]
-    mov [disk_drive], al
-    call clo_live
+    call clo_atgt
     mov si, [es:CL_HLBA]
     mov cx, [es:CL_HELD]
     xor dx, dx
@@ -1839,12 +1979,7 @@ clo_wr:
 .none:
     clc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp clo_x5                 ; (the shared epilogue, below clo_cat)
 
 ; -----------------------------------------------------------------------------
 ; clo_fin - put the source's sector 0 down, last (SPEC.md 18.99.2)
@@ -1859,9 +1994,7 @@ clo_fin:
     push di
     push ds
     push es
-    mov al, [es:CL_TGT]
-    mov [disk_drive], al
-    call clo_live
+    call clo_atgt
 
     ; **Out of the STAGING BUFFER and not out of CL_BOOT**, because SPEC.md
     ; 2.4 wants every disk-visible base 512-byte aligned: the buffer's is, by
@@ -1886,7 +2019,6 @@ clo_fin:
     mov cx, 1
     call COLD_SEG:dskf_disk_write
     jc .bad
-    clc
     jmp short .out
 .bad:
     call clo_ioerr              ; AL = CERR_IO / CERR_WPROT
@@ -2002,17 +2134,11 @@ clo_move:
 .sok:
     clc
 .done:
-    pushf                       ; fpg_end preserves the flags anyway; this
-    call KERNEL_SEG:fpg_end     ; says that CF is the answer in flight
-    popf
+    call KERNEL_SEG:fpg_end     ; ...which writes no flag (a `mov` and a
+                                ; `retf`): CF is still the answer
     pop es
     pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp clo_x5                 ; (the shared epilogue, below clo_cat)
 
 ; -----------------------------------------------------------------------------
 ; clo_span - CX sectors from LBA AX, between the drive and ES:0
@@ -2134,12 +2260,7 @@ clo_span:
 .out:
     pop es
     pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp clo_x5                 ; (the shared epilogue, below clo_cat)
 
 ; -----------------------------------------------------------------------------
 ; clo_xms - move one staging load between the buffer and the store
@@ -2188,14 +2309,7 @@ clo_xms:
 .go:
     call KERNEL_SEG:CLO_XCOPY
     jc .bad
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
+    jmp clo_x6                 ; (the shared epilogue, below clo_cat)
 .bad:
     pop es
     pop di
@@ -2223,7 +2337,7 @@ clo_boot0:
     jnz .out                    ; a write: the keep is a READ's business
     or ax, ax
     jnz .out
-    call clo_keepboot
+    jmp clo_keepboot
 .out:
     ret
 
@@ -2285,8 +2399,7 @@ clo_issrc:
     mov al, [es:CL_SRC]
     cmp al, [es:CL_TGT]
     jne .no                     ; one disk cannot be in two drives
-    mov [disk_drive], al
-    call clo_live
+    call clo_aim
     inc byte [dsk_rah_busy]
     xor ax, ax
     call clo_read1              ; LBA 0 of whatever is in the drive
@@ -2367,7 +2480,75 @@ clo_line:
     cmp al, 2                   ; and this is what makes that a fact rather
     je .verdict                 ; than a segment register pointed at 0000
     or al, al
-    jnz .keys
+    jz .line0                   ; line 0: the prompt itself, after the
+                                ; exit - so all three tests here are
+                                ; short jccs (size pass 8)
+.keys:
+    mov si, clo_s_key           ; 'Spc=drive  Enter=yes  Esc=no'
+    cmp bl, CLS_PICK
+    je .tail
+    mov si, clo_s_samek         ; 'Enter=re-check  Y=go  Esc=no'
+    cmp bl, CLS_SAME
+    je .tail
+    cmp bl, CLS_NOSRC           ; ...the same three answers, on the other
+    je .tail                    ; prompt (SPEC.md 18.99.3)
+    mov si, clo_s_yn            ; 'Enter=yes  Esc=no'
+    cmp bl, CLS_WIMG
+    je .tail
+    mov si, clo_s_rdy           ; 'Enter=ready  Esc=no'
+.tail:
+    call clo_cat
+.none:
+    mov byte [di], 0
+    pop es
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.swap:                          ; ...and step 1 of mode 6 is the SAME line
+    mov bl, CLS_SRC             ; as CLS_SRC's, out of the same three strings:
+    jmp short .ins              ; the disk it wants is this operation's source
+
+    ; 'Cloned A: to B:' (SPEC.md 22.21.3) - not a prompt line at all, but the
+    ; toast, composed here because the image is what knows the two volumes and
+    ; because the alternative was thirty bytes of `.cold` in files.inc making
+    ; the same five calls. The caller asks for it while the image is still
+    ; loaded, which is before fm_edit_end and therefore before the drop.
+.verdict:
+    cmp byte [es:CL_END], 0
+    jne .vimg
+    mov si, clo_s_ok
+    call clo_cat
+    mov al, [es:CL_SRC]
+    call clo_drv
+    mov si, clo_s_to
+    call clo_cat
+    mov al, [es:CL_TGT]
+    call clo_drv
+    mov si, clo_s_colon
+    jmp .tail
+                                ; ...and the image end's two, which name the
+                                ; DISK and not the file: the file is the one
+                                ; the user just chose in a dialog and the disk
+                                ; is the thing that changed
+.vimg:
+    mov si, clo_s_imgok         ; 'Imaged A:'
+    mov al, [es:CL_SRC]
+    cmp byte [es:CL_END], 1
+    je .vsay
+    mov si, clo_s_wrok          ; 'Wrote A:'
+    mov al, [es:CL_TGT]
+.vsay:
+    push ax
+    call clo_cat
+    pop ax
+    call clo_drv
+    mov si, clo_s_colon
+    jmp .tail
+
+.line0:
 
     cmp bl, CLS_PICK
     je .pick
@@ -2377,6 +2558,7 @@ clo_line:
     je .wimg
     cmp bl, CLS_NOSRC
     je .nosrc
+.ins:
     mov si, clo_s_ins           ; 'Insert the ' + SOURCE/TARGET + ' disk, ...'
     call clo_cat
     mov si, clo_s_src
@@ -2384,13 +2566,6 @@ clo_line:
     je .which
     mov si, clo_s_tgt
 .which:
-    call clo_cat
-    mov si, clo_s_disk
-    jmp .tail
-.swap:
-    mov si, clo_s_ins           ; ...and step 1 of mode 6 is the SAME line out
-    call clo_cat                ; of the same three strings: the disk it wants
-    mov si, clo_s_src           ; is this operation's source
     call clo_cat
     mov si, clo_s_disk
     jmp .tail
@@ -2431,68 +2606,8 @@ clo_line:
     mov si, clo_fnbuf           ; the name is RESIDENT (it has to be - the
     call clo_dscat              ; file API reads it through DS), so this one
     mov si, clo_s_q             ; string is lettered the kernel's way
-    jmp short .tail
+    jmp .tail
 
-    ; 'Cloned A: to B:' (SPEC.md 22.21.3) - not a prompt line at all, but the
-    ; toast, composed here because the image is what knows the two volumes and
-    ; because the alternative was thirty bytes of `.cold` in files.inc making
-    ; the same five calls. The caller asks for it while the image is still
-    ; loaded, which is before fm_edit_end and therefore before the drop.
-.verdict:
-    cmp byte [es:CL_END], 0
-    jne .vimg
-    mov si, clo_s_ok
-    call clo_cat
-    mov al, [es:CL_SRC]
-    call clo_drv
-    mov si, clo_s_to
-    call clo_cat
-    mov al, [es:CL_TGT]
-    call clo_drv
-    mov si, clo_s_colon
-    jmp short .tail
-                                ; ...and the image end's two, which name the
-                                ; DISK and not the file: the file is the one
-                                ; the user just chose in a dialog and the disk
-                                ; is the thing that changed
-.vimg:
-    mov si, clo_s_imgok         ; 'Imaged A:'
-    mov al, [es:CL_SRC]
-    cmp byte [es:CL_END], 1
-    je .vsay
-    mov si, clo_s_wrok          ; 'Wrote A:'
-    mov al, [es:CL_TGT]
-.vsay:
-    push ax
-    call clo_cat
-    pop ax
-    call clo_drv
-    mov si, clo_s_colon
-    jmp short .tail
-
-.keys:
-    mov si, clo_s_key           ; 'Spc=drive  Enter=yes  Esc=no'
-    cmp bl, CLS_PICK
-    je .tail
-    mov si, clo_s_samek         ; 'Enter=re-check  Y=go  Esc=no'
-    cmp bl, CLS_SAME
-    je .tail
-    cmp bl, CLS_NOSRC           ; ...the same three answers, on the other
-    je .tail                    ; prompt (SPEC.md 18.99.3)
-    mov si, clo_s_yn            ; 'Enter=yes  Esc=no'
-    cmp bl, CLS_WIMG
-    je .tail
-    mov si, clo_s_rdy           ; 'Enter=ready  Esc=no'
-.tail:
-    call clo_cat
-.none:
-    mov byte [di], 0
-    pop es
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; clo_cat - fm_scat, in the image, over the image's OWN strings (SPEC.md 2.8.6)
@@ -2514,6 +2629,21 @@ clo_line:
 ; segment override on a string instruction is legal but says the opposite of
 ; what is meant here.
 ; -----------------------------------------------------------------------------
+; clo_x6 / clo_x5 - the epilogue thirteen of this image's routines share,
+; fcp_x6's shape exactly: they bank bx, cx, dx, si, di (and es), and reach
+; this by `jmp`, never `call`, so the `ret` finds the routine's own caller.
+; Every site's flags are set above its jump, and a `pop` touches none.
+; The order ENDS at bx, so it is no suffix of the kernel's kret ladders.
+clo_x6:
+    pop es
+clo_x5:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
 clo_cat:
     mov al, [cs:si]
     inc si
@@ -2572,9 +2702,34 @@ clo_s_img:   db 'an image file', 0  ; ...and the IMAGE end (SPEC.md 18.99.8)
 clo_s_wr1:   db 'ERASE ', 0         ; 'ERASE A: and write DISK.IMG?'
 clo_s_wr2:   db ': and write ', 0
 clo_s_q:     db '?', 0
+clo_s_defimg: db 'DISK.IMG', 0     ; the Save box's default (SPEC.md 18.99.8)
 clo_s_yn:    db 'Enter=yes  Esc=no', 0
 clo_s_wrok:  db 'Wrote ', 0         ; ...and the two verdicts the image end
 clo_s_imgok: db 'Imaged ', 0        ; earns
+
+; -----------------------------------------------------------------------------
+; clo_fnget - the file dialog's answer into clo_fnbuf (SPEC.md 18.99.8)
+; clo_ds13  - ...and the copy under it: 13 bytes DS:SI -> DS:DI
+; clobbers: SI DI, flags - CX and ES preserved, because clo_wimg's size is in CX
+;
+; [fdlg_name] is the dialog's own buffer and the next dialog reuses it, while a
+; Write Img waits for its Enter with the name still wanted - so it is copied,
+; and HERE rather than in the resident completion proc, which used to spend
+; eighteen bytes doing it for all three of its answers.
+; -----------------------------------------------------------------------------
+clo_fnget:
+    mov si, fdlg_name
+    mov di, clo_fnbuf
+clo_ds13:
+    push cx
+    push es
+    push ds
+    pop es
+    mov cx, 13
+    rep movsb                   ; DF=0 (SPEC.md 1), no segment override
+    pop es
+    pop cx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; clo_dscat - clo_cat over a KERNEL string (module internal)
@@ -2692,7 +2847,7 @@ clo_need:
 ; -----------------------------------------------------------------------------
 ; clo_call - the whole resident dispatch (SPEC.md 18.99.7)
 ; in:  DL = CLV_*, everything else the verb's own
-; out: the verb's; CF=1 with AX = CERR_NODISK if the image cannot be had
+; out: the verb's; CF=1 with AX = CERR_NOMOD if the image cannot be had
 ;
 ; ONE thunk, because the image dispatches on DL itself - four of the
 ; formatter's shape would have been eighty bytes of `.cold` for four verbs.
@@ -2706,12 +2861,16 @@ clo_call:
     call far [CLFP + CLE_DISP*4]
     ret
 .no:
-    mov ax, CERR_NODISK         ; the nearest true thing: there is no cloner,
-    ret                         ; so there is no disk it can reach - and CF IS
+    mov ax, CERR_NOMOD          ; the cloner is on the system disk and the
+    ret                         ; system disk is not in the boot drive - said
+                                ; as 'No system disk in A:', the Task
+                                ; Manager's own string. It was CERR_NODISK
+                                ; ('No disk'), and on a two-drive machine with
+                                ; a disk in each that reads as "no disk to
+                                ; image" (docs/FIELD-NOTES.md 32). CF IS
                                 ; ALREADY SET: `.no` is reachable only through
-                                ; the `jc` above, and `mov r16, imm16` (B8 iw)
-                                ; writes no flag, which this file already
-                                ; states two headers up for `pop ax` and `ret`
+                                ; the `jc` above, and `mov r16, imm16` writes
+                                ; no flag
 
 ; -----------------------------------------------------------------------------
 ; clo_drop - the cloner is finished with (SPEC.md 2.8.3)

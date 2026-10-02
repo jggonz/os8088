@@ -42,6 +42,7 @@ os88build.use_build("build/smallk")
 import os88marty as M                                      # noqa: E402
 from os88mouse import Mouse                                # noqa: E402
 from os88fixture import need                               # noqa: E402
+import os88geom                                              # noqa: E402
 from os88geom import (WIN_SIZE, MAX_WIN, FD_BX1, FD_BX2,   # noqa: E402
                       FD_BY0, FD_BY1, FD_BY2, FD_BH,
                       FD_LX1, FD_LX2, FD_ROW0, FD_ROWH)
@@ -122,10 +123,7 @@ with M.launch("build/small360.img", apps="build/muptest.img",
     check("nothing held at the desktop", held() == 0, f"(seg={held():04X})")
 
     # --- put muptest up; its second window is what opens a dialog --------
-    vw = int.from_bytes(m.read(S("vid_w"), 2), "little")
-    step = int.from_bytes(m.read(S("desk_zstep"), 2), "little")
-    h1 = int.from_bytes(m.read(S("desk_zh1"), 2), "little")
-    mo.dblclick(vw - 40, 32 + step + h1 // 2)
+    mo.dblclick(*os88geom.drive_pt(m, "B", S))  # the zone BY LETTER, off desk_zslot (SPEC.md 26.9)
     M.settle(m)
     d = wins()[-1]
     mo.click(d[0] + d[2] // 2, d[1] + 9)        # raise the Disk window

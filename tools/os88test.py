@@ -253,6 +253,12 @@ def capabilities():
     # is not os88disk.py, so the fixture is not built by the tree under test.
     if shutil.which("mcopy") and shutil.which("mattrib"):
         caps.add("mtools")
+    # DOSBox, which carries a DOS of its own and runs headless: OS88CZ.COM's
+    # row (tests/czdos.py, SPEC.md 20.17.4) runs the program under it. No DOS
+    # is in this repository and none can be, so a DOS program's own gate
+    # needs one from somewhere, and this is the one apt has.
+    if shutil.which("dosbox"):
+        caps.add("dosbox")
     # WIREFRAME is an instrument and does not ship (SPEC.md 78.9), so `all`
     # builds wire.o88 and NO shipped floppy carries it - the disk comes from
     # `make wiredisk` and nothing in the suite runs that. Without this, the

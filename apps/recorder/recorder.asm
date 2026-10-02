@@ -35,7 +35,7 @@
 ;     so a recording always lands on the watchdog path ("ended") - shown
 ;     honestly as REC STOPPED (WATCHDOG).
 ;   - PLAY prefers PCM_BG (verb 0 on the staged grant - background, the GUI
-;     keeps running) and falls back to OSAPI_SND_PLAY chunks read back via
+;     keeps running) and falls back to os88pcm_play chunks read back via
 ;     verb 5 (PCM_EXCL: blocking, click-aborts) - the status line says
 ;     which device played.
 ;   - DEMO stages a built-in 1 s sine sweep (400 Hz -> 800 Hz -> 400 Hz
@@ -740,7 +740,7 @@ rc_do_play:
     pop es
     mov si, rc_pbuf
     mov dx, RC_RATE
-    call OSAPI_SND_PLAY             ; BLOCKS; out AX = 0 ok / 1..5 err
+    call os88pcm_play               ; BLOCKS; out AX = 0 ok / 1..5 err
     pop cx
     pop es
     or ax, ax
@@ -1381,6 +1381,7 @@ rc_sine:
 ; --- the shared controls (SPEC.md 47 rule 1 in one place) -------------------
 %define OS88UI_ABOUT            ; ...and the standard About card beside the
 %include "os88ui.inc"           ; buttons this already drew
+%include "os88pcm.inc"          ; the PWM clip player (SPEC.md 34.4)
 
     OS88_BSS 4023
     OS88_IMAGE_END

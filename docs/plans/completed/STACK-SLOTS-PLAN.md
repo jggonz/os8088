@@ -1,6 +1,7 @@
 # Task stack slots — where the bytes actually go, and what a class scheme buys
 
-**Design record — BUILT in four waves (SPEC.md §8.5, §8.6, §8.7, §9.10).** It
+**Design record — BUILT in four waves (SPEC.md §8.5, §8.6, §8.7, §9.10);
+§13 is one further partition change, costed and deliberately NOT taken.** It
 exists because a session was
 asked why a fresh boot with the sound driver off opens only **six** programs
 that want a worker when `MAX_TASKS` is 8, and the answer — the idle task takes
@@ -1340,3 +1341,61 @@ Three things came out of it, and only the first is the Task Manager's:
 `tests/gifdrag.py` is the recipe driven end to end. It asserts the **margin**
 and not the survival, because "it did not freeze" is what every run before the
 report also said.
+
+## 13. The Timer left the 128 class — and the option that opens, NOT TAKEN
+
+**The Timer has no task any more** (SPEC.md 14.7). It sat in the 128 class
+beside Bounce on §1.1's Bounce reading alone and was never measured itself;
+half covered, its digit line takes `font_run`'s per-cell path and the slice
+read **112 of 128** on MartyPC's floor of 32 — ~132 on `vm/pc5150`, ~144 on
+the iron — which is the `STACK OVERFLOW TASK 02 Timer` the field photographed.
+It now keeps time from its window's one-shot timer (SPEC.md 13.9) on the UI
+task, so it holds no slice at all.
+
+**That leaves the 128 class with ONE customer.** On `kern_big`, 2026-09-30:
+
+| class | slices | who asks for it |
+|---|---|---|
+| 128 | 3 | the idle task (one, for life) and Bounce (`SCH_BUILTIN_STK`) |
+| 192 | 6 | 7 packages, and `SCH_DRV_STK` (the sound driver's stream tasks) |
+| 256 | 2 | 17 packages |
+| 384 | 2 | Browser, FTPD, Frotz, Skies, and every header that declares nothing |
+
+No package declares `OS88_STACK_128`, the C SDK asks for the largest class,
+and the sound driver asks for 192 — so the two usable 128 slices are 256 bytes
+of `.lowbss` that nothing but Bounce can ever land in (first fit never puts a
+bigger request in a smaller slice).
+
+### 13.1 The option: two 128s become one 256
+
+`SCH_PARTITION` becomes **1×128 (the idle task's), 6×192, 3×256, 2×384** —
+the same 256 bytes of `.lowbss`, twelve slices instead of thirteen, **11
+usable instead of 12**.
+
+- **Buys:** five slices at 256-or-larger for the seventeen 256 programs where
+  there are four today; `MAX_TASKS` 14 → 13, about 16 resident bytes (a task
+  record, a `sch_cycles` dword, two table words) and one slot fewer in
+  `sch_switch`'s scan on every switch.
+- **Costs:** `MAX_TASKS` is mirrored in `apps/os88api.inc` (`t_mirror`), so
+  the two move together and every `.o88` rebuilds — which `make` does; the
+  snapshot layout is pinned at `SS_TMAX` = 16, so a stale package sees the
+  smaller count rather than overrunning. The Task Manager bounds its loops on
+  it. And it walks back §7's aim of twelve usable slots.
+- **Bounce still fits its cap.** A Bounce that finds no free 128 takes the
+  next class up, so ten Bounces (`KD_CAP` 10) occupy ten of the eleven.
+- The alternative that keeps twelve is one 256 **plus** a 192: +192 bytes of
+  `.lowbss`.
+
+### 13.2 Why it is not taken
+
+Twelve usable today is **ten Bounces and two Fractals at once**, and eleven is
+ten and one. That is not a workload anybody runs — it is the thing somebody
+does once or twice to show the machine off — but nothing real is asking for
+the extra 256 either, so the owner's call (2026-09-30) is to leave the
+partition as it is.
+
+**Take it when a legitimate workload wants more heavy programs open at once**
+— a third 256-class program regularly spilling into a 384, or a 384 program
+refused because 256 programs are sitting in both big slices. At that point
+§13.1 is the whole change: one `SCH_PARTITION` edit, `MAX_TASKS` and its SDK
+mirror, SPEC.md 8.7's tables, and `soak -k 'stk*' -k 'tm*'`.

@@ -32,6 +32,7 @@ sys.path.insert(0, "tools")
 import os88build as _B
 import os88marty as M
 from os88mouse import Mouse
+import os88geom                                              # noqa: E402
 from os88geom import WIN_SIZE, MAX_WIN
 
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -175,8 +176,7 @@ with M.launch("build/os8088-360.img", apps=DISK,
     mono = m.video()["type"] in ("cga", "mda", "herc")
     print(f"== {MACHINE} : the thumb drag (SPEC.md 13.10.5) ==")
 
-    vw = int.from_bytes(m.read(m.sym("vid_w"), 2), "little")
-    mo.dblclick(vw - 40, 80)                # zone 1 = B:, the 30-file disk
+    mo.dblclick(*os88geom.drive_pt(m, "B"))     # B:, the 30-file disk
                                             # above (zone 0 is A:, whose root
                                             # lists six things and cannot make
                                             # a thumb worth dragging)

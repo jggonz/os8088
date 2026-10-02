@@ -61,6 +61,10 @@ def owned_files():
         top = os.path.join(ROOT, base)
         for dp, dns, fns in os.walk(top):
             rel = os.path.relpath(dp, ROOT)
+            # Python's own bytecode cache is a by-product of running the
+            # game's tools (excitebikeaudiohost imports excitebike_audio),
+            # not an asset - without this, every second `make` fails here.
+            dns[:] = [d for d in dns if d != "__pycache__"]
             if base != "apps/excitebike" and "excitebike" not in rel and dp != top:
                 dns[:] = [d for d in dns if "excitebike" in d or "exb" in d]
             for fn in fns:

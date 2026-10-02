@@ -146,6 +146,10 @@ def main():
                     help="play on this layout's machine: the shadow path")
     ap.add_argument("--machine")
     ap.add_argument("--stops", help="comma-separated holds (a diagnosis)")
+    ap.add_argument("--k1", type=int, default=2,
+                    help="the first play's ring, in slots (default 2, the "
+                    "tightest; 3 wraps a ring that is NOT a power of two, "
+                    "SPEC.md 98.3's chunk mod K)")
     a = ap.parse_args()
     global STOPS
     if a.stops:
@@ -213,14 +217,14 @@ def main():
                               screen, "the shadow" if shadow else "native"))
             # a hold straight after every frame that runs into the mirror, or
             # the row would pass with the mirror copy deleted
-            mf = mirror_frames(r, rw("vp_clsec") * 512)
+            mf = mirror_frames(r, rw("vp_clsec") * 512, a.k1)
             stops = tuple(sorted(set(STOPS) | {f + 1 for f in mf}))
             print("   frames whose video runs into the mirror slot: %s" % mf)
             if not mf and not a.stops and a.layout in VSEG:
                 bad.append("the clip never runs a frame into the mirror, so "
                            "the ring's wrap is untested")
             # --- 1: every frame right, the ring held to two slots
-            ww("vp_kmax", 2)
+            ww("vp_kmax", a.k1)
             ww("vp_stopat", stops[0])
             m.write(base + syms["vp_played"], b"\0")
             m.type_text("p")
@@ -306,8 +310,8 @@ def main():
     print("   second play K=%d: drew %d, stalls %d, late %d, %d ticks "
           "(want %.1f); the guest's clock %.2f s (want %.2f)"
           % (k2, done2, stall, late, dt, want_t, secs, NF / FPS))
-    if k1 != 2:
-        bad.append("the first play's ring was %d slots, not 2" % k1)
+    if k1 != a.k1:
+        bad.append("the first play's ring was %d slots, not %d" % (k1, a.k1))
     # 7 = VOK_LOWMEM: the ring short of the 8 slots the stream assumes
     print("   the toast at the first play's first hold: %d, at the second "
           "play's start: %d (want 7, then not 7)" % (toast1, toast2))

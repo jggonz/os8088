@@ -582,9 +582,10 @@ FSV_SIZE     equ 30
 ; block that failed - that pattern can hold four buffers to find one, and
 ; refuse on a machine that had the room all along.
 ; A DRIVER FAR-CALLS THE API TABLE TOO, so its format byte moves with it
-; (SPEC.md 20.2.0): 4 until pass 4 renumbered the cells, 7 now. Mirrored in
-; kernel/driver.inc and tools/os88drv.py.
-DRV_VER equ 7
+; (SPEC.md 20.2.0): 4 until pass 4 renumbered the cells, 7 until two were
+; re-contracted in place, 9 now. Mirrored in kernel/driver.inc and
+; tools/os88drv.py.
+DRV_VER equ 9
 
 ; -----------------------------------------------------------------------------
 ; OS88_DRIVER 'NAME', class, entry - open the driver and emit its 32-byte

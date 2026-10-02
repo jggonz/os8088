@@ -103,6 +103,7 @@ def main():
                     m.read((kseg << 4) + vp + V("FS_VSEG"), 2), "little")
             if vseg:
                 return list(m.read((vseg << 4) + n * V("DSK_DE_STRIDE"), n))
+
             # **AND THERE IS NO FLOOR TO FALL BACK TO** (SPEC.md 22.6.3).
             # This arm read `LOW_SEG:dsk_icoix`, and that symbol no longer
             # exists - so the line it was meant to make readable raises
@@ -115,6 +116,19 @@ def main():
                  "window with no store gets a QUIET mount and harvests no "
                  "icons at all (SPEC.md 22.6)")
 
+        def keys():
+            # (name, size) per entry, beside refs() - the store's own key
+            # (SPEC.md 25.9), read out of the same claim: names at +0, the
+            # size's low word at LD_DE_SIZE
+            n = int.from_bytes(m.read((kseg << 4) + V("dsk_nmax"), 2), "little")
+            vp = int.from_bytes(m.read((kseg << 4) + V("fm_vp"), 2), "little")
+            vseg = int.from_bytes(m.read((kseg << 4) + vp + V("FS_VSEG"), 2), "little")
+            st = V("DSK_DE_STRIDE")
+            raw = m.read(vseg << 4, n * st)
+            return [(raw[i * st:i * st + 16].split(b"\0")[0],
+                     int.from_bytes(raw[i * st + V("LD_DE_SIZE"):i * st + V("LD_DE_SIZE") + 2], "little"))
+                    for i in range(n)]
+
         if rows() != 0:
             fail("the store already holds %d row(s) before any listing - it is "
                  "claimed LAZILY (SPEC.md 25.9), so a fresh desktop must have "
@@ -123,6 +137,8 @@ def main():
         ui.path("B:/APPS")
         os88marty.settle(m)
         b_rows, b_refs = rows(), refs()
+        b_key = {k: r for k, r in zip(keys(), b_refs)
+                 if r not in (ICO_R_FOLDER, ICO_R_NONE)}
         used = [r for r in b_refs if r not in (ICO_R_FOLDER, ICO_R_NONE)]
         folders = [r for r in b_refs if r == ICO_R_FOLDER]
         print("icostore: B:/APPS  rows=%d  refs %s"
@@ -172,6 +188,7 @@ def main():
         ui.path("A:/APPS")
         os88marty.settle(m)
         a_rows, a_refs = rows(), refs()
+        a_keys = keys()
         a_used = [r for r in a_refs if r not in (ICO_R_FOLDER, ICO_R_NONE)]
         shared = [r for r in a_used if r < b_rows]
         print("icostore: A:/APPS  rows=%d  refs %s"
@@ -187,10 +204,27 @@ def main():
                  "ships the core packages on both disks. The (name, size) key "
                  "is what collapses them, so this is that key failing to "
                  "match across volumes" % b_rows)
-        if a_rows - b_rows >= len(a_used):
-            fail("the second volume stored %d new row(s) for %d body/ies - it "
-                 "reused nothing, so every listing is paying for its own copy "
-                 "again" % (a_rows - b_rows, len(a_used)))
+        # PER ENTRY, BY THE KEY. A package on both disks with the same
+        # (name, size) must resolve to the row B: stored, and one only on A:
+        # to a row B: did not. This replaced a COUNT - "fewer new rows than
+        # bodies used" - which was never the claim: SPEC.md 54.7.4's absorb
+        # adds A:'s whole ASSOC.DAT at the mount, SYSTEM/'s packages
+        # included, so the store grows by rows this listing never names. It
+        # held only while A:/APPS carried enough packages B: also had to
+        # outnumber them, and failed the day SPEC.md 24.3.1.2 took Browser
+        # and Telnet off the system disk with the store behaving exactly.
+        for k, r in zip(a_keys, a_refs):
+            if r in (ICO_R_FOLDER, ICO_R_NONE):
+                continue
+            name = k[0].decode("latin-1")
+            if k in b_key and r != b_key[k]:
+                fail("A:/APPS/%s is the same (name, size) as B:'s and resolved "
+                     "to row %02X, not B:'s %02X - a second copy of one body"
+                     % (name, r, b_key[k]))
+            if k not in b_key and r < b_rows:
+                fail("A:/APPS/%s is on no listing B: made and resolved to "
+                     "B:'s row %02X - two different bodies merged"
+                     % (name, r))
 
         # --- 4: A SHED, and what a listing staged before it then draws ----
         # SPEC.md 50.6's shed zeroes the holder's word and frees the block;

@@ -223,7 +223,7 @@ THEMES = (
     # row is not zero - exf_sync, the load/drop reconciler, is 35 bytes of
     # `.cold` - so it is not IMAGE_ONLY in tests/unit/t_kernmods.py either.
     ("the window system and its furniture",
-     ("wm.inc", "ui.inc", "menu.inc", "instance.inc", "desk.inc", "links.inc", "linkcfg.inc", "dock.inc", "dockmod.inc",
+     ("wm.inc", "ui.inc", "menu.inc", "instance.inc", "desk.inc", "desksc.inc", "dock.inc", "dockmod.inc",
       "extmod.inc", "fsx.inc", "clip.inc", "fprog.inc", "toast.inc")),
     # moudiag.inc (SPEC.md 9.4.4) goes with the mouse and NOT with
     # bootprof.inc below, although both are knob-only: what it records is what

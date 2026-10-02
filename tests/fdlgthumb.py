@@ -33,6 +33,7 @@ sys.path.insert(0, "tools")
 import os88build as _B
 import os88marty as M
 from os88mouse import Mouse
+import os88geom                                              # noqa: E402
 from os88geom import WIN_SIZE, MAX_WIN
 
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -94,16 +95,9 @@ def dlg(m):
     return titled(m, "fdlg_s_topen") or titled(m, "fdlg_s_tsave")
 
 
-def drive_y(m, n=1):
-    step = _u16(m.read(m.sym("desk_zstep"), 2))
-    h1 = _u16(m.read(m.sym("desk_zh1"), 2))
-    return 32 + n * step + h1 // 2
-
-
 def open_dialog(m, mo):
     """muptest's window two puts one up (tests/fdlgup.py's route)."""
-    vw = _u16(m.read(m.sym("vid_w"), 2))
-    mo.dblclick(vw - 40, drive_y(m))
+    mo.dblclick(*os88geom.drive_pt(m, "B"))  # the zone BY LETTER, off desk_zslot (SPEC.md 26.9)
     M.settle(m)
     d = wins(m)[-1]
     mo.click(d[0] + d[2] // 2, d[1] + 9)

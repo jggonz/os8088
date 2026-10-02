@@ -349,7 +349,12 @@ A_HIDDEN = 0x02
 A_SYS    = 0x04
 A_ARCH   = 0x20
 A_SYSTEM = A_RDONLY | A_HIDDEN | A_SYS      # KERNEL.SYS and every *.DRV
-A_LOCKED = A_RDONLY | A_ARCH                # visible, but not yours to delete
+# ...and what the same two classes are on a HARD DISK (--hdd), which is what
+# os8088's own installer writes them as (SPEC.md 52.10.15): OSAPI_FILE_WRITE_SYS
+# creates hidden + system and the commit ORs archive, OSAPI_FILE_WRITE creates
+# archive and nothing else. NEITHER is read-only, and that is not a nicety -
+# see sys_attr.
+A_HDDSYS = A_HIDDEN | A_SYS | A_ARCH
 
 
 ASC_NAME  = b"ASSOC   DAT"   # SPEC.md 54.7: the volume's icon + assoc cache
@@ -471,25 +476,38 @@ def build_assoc(groups):
     return buf, rowdirs
 
 
-def sys_attr(name11: bytes, boot: bool) -> int:
+def sys_attr(name11: bytes, boot: bool, hdd: bool = False) -> int:
     """An entry's attributes. Only a SYSTEM disk locks anything down: a
     data disk is the user's and everything on it is an ordinary file.
 
     The rule is by EXTENSION so it needs no maintenance as drivers are added:
-    a `.DRV` on the boot disk is kernel machinery and disappears, anything
-    else is visible but read-only, because the boot disk holds nothing a user
-    should be deleting by accident. SYSTEM.CFG is not here - the kernel
-    creates that one itself, and stamps it the same way (SPEC.md 51.5).
+    a `.DRV` on the boot disk is kernel machinery and disappears, and so does
+    KERNEL.SYS (build() stamps that one itself). SYSTEM.CFG is not here - the
+    kernel creates that one itself, and stamps it the same way (SPEC.md 51.5).
 
-    It is by DISK and by name, never by directory: TASKMGR.O88 moved from the
-    boot disk's root into SYSTEM/ (SPEC.md 28.3) and is the same file it was,
-    so the stamp follows it rather than staying behind with the folder it
-    left."""
-    if name11 in (ASC_NAME, b"SYSTEM  CFG", b"DESKTOP CFG"):
+    **EVERYTHING ELSE IS AN ORDINARY FILE, on the boot disk too** (SPEC.md
+    19.6). It used to be read-only + archive - "the boot disk holds nothing a
+    user should be deleting by accident" - and that was the wrong owner: the
+    packages in APPS/ and GAMES/, SYSTEM/DOS/'s tools, the faces and the
+    manual are the user's to delete when they rework their own system disk,
+    and a lock on them stopped a hard-disk upgrade dead (SPEC.md 52.10.15.1).
+    Only what would unboot the disk is locked.
+
+    **A HARD DISK's system files are not read-only either** (`hdd`, SPEC.md
+    52.10.15.1): it is stamped exactly as os8088's own installer would have
+    written it, so a host-built volume and an installed one cannot be told
+    apart. The read-only stamp is what stopped a keep-install there - the
+    kernel's replace refuses a read-only entry (`dskw_pmask`) and forgives it
+    only on a file already wearing hidden + system (19.6.2), so the first
+    ordinary file the walk reached answered FERR_PROT: a VIDDEMO disk stopped
+    on `ARCHIVO.F88` with the new kernel already committed."""
+    if name11 == ASC_NAME:
         return A_HIDDEN | A_SYS     # the kernel rewrites it, so not read-only
     if not boot:
         return A_ARCH
-    return A_SYSTEM if name11.endswith(b"DRV") else A_LOCKED
+    if not name11.endswith(b"DRV"):
+        return A_ARCH
+    return A_HDDSYS if hdd else A_SYSTEM
 
 
 # THE COMPRESSION HINT (docs/plans/O88-COMPRESSION-PLAN.md 15). A FAT12/16 entry is
@@ -1007,7 +1025,7 @@ def build(args) -> int:
     for key in dirs:
         shown = len(kids[key]) + sum(
             1 for n, _, _ in groups[key]
-            if not sys_attr(n, bool(boot)) & A_HIDDEN)
+            if not sys_attr(n, bool(boot), args.hdd) & A_HIDDEN)
         if shown > cap and not args.deep_folders:
             fail(f"{shown} listed entries in folder {key}; the kernel "
                  f"lists at most {cap} per directory (--deep-folders "
@@ -1017,7 +1035,7 @@ def build(args) -> int:
     # against it: a hidden system file (SPEC.md 19.6) never takes a listing
     # slot. It still takes a directory slot, which is the second check.
     shown = len(root_dirs) + sum(1 for n, _, _ in root_files
-                                 if not sys_attr(n, bool(boot)) & A_HIDDEN)
+                                 if not sys_attr(n, bool(boot), args.hdd) & A_HIDDEN)
     if shown > cap:
         fail(f"{shown} listed root entries; the kernel lists "
              f"at most {cap} per directory")
@@ -1165,7 +1183,7 @@ def build(args) -> int:
             slot += 1
         for i, (name11, body, _) in enumerate(groups[k]):
             off = (slot + i) * 32
-            raw[off:off + 32] = dirent(name11, sys_attr(name11, boot),
+            raw[off:off + 32] = dirent(name11, sys_attr(name11, boot, args.hdd),
                                        chains[at + i][0], len(body), body)
         at += len(groups[k])
         put(dir_chains[k], bytes(raw))
@@ -1175,7 +1193,8 @@ def build(args) -> int:
     slot = 1                                     # kernel filters it, so the
     if boot:                                     # first listed entry is 0
         root[slot * 32:(slot + 1) * 32] = dirent(
-            KERNEL_NAME, A_SYSTEM, kchain[0], len(kern))
+            KERNEL_NAME, A_HDDSYS if args.hdd else A_SYSTEM, kchain[0],
+            len(kern))
         slot += 1
     for k in root_dirs:
         root[slot * 32:(slot + 1) * 32] = dirent(
@@ -1184,7 +1203,7 @@ def build(args) -> int:
     for i, (name11, body, _) in enumerate(root_files):
         chain = chains[len(files) - len(root_files) + i]
         root[slot * 32:(slot + 1) * 32] = dirent(
-            name11, sys_attr(name11, boot), chain[0], len(body), body)
+            name11, sys_attr(name11, boot, args.hdd), chain[0], len(body), body)
         slot += 1
 
     # THE SERIAL IS DERIVED FROM WHAT IS ON THE VOLUME (vol_id): it is the

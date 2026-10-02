@@ -741,9 +741,8 @@ xm_alloc:
 ; out:      CF = 1 - not a base. DX:AX preserved, per the contract
 ; clobbers: nothing (flags)
 ; -----------------------------------------------------------------------------
-xm_free:
-    stc
-    ret
+xm_free         equ osapi_snd_fm    ; `stc` / `ret` - snd.inc's kern_small
+                                ; FM refusal, the same two bytes, named once
 
 ; -----------------------------------------------------------------------------
 ; xm_copy - move bytes to or from the store (slot 0x016C). There is nowhere.

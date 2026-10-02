@@ -346,23 +346,17 @@ def bss_offsets():
 
 
 # =============================================================================
-# THE DESKTOP SERVICE ZONE (SPEC.md 26.7)
+# THE DESKTOP SERVICE ITEM (SPEC.md 26.7, 26.9)
 #
-# Its ordinal is one past the last VOLUME zone - `DESK_SVZ` is `DVOL_MAX` and
-# `desk_ord` hands it the count the volume walk just finished - so it is the
-# same walk `dispcp.drive_ordinal` does, without stopping at a letter.
-# dispcp.drive_xy then turns an ordinal into a point, which is the one place
-# the column-and-wrap arithmetic lives.
+# Its CELL is its byte of `desk_zslot` - the service item is zone DVOL_MAX -
+# which the kernel wrote when it placed it after the volumes. Read, not
+# re-derived: dispcp.drive_xy then turns the cell into a point.
 # =============================================================================
 def svc_ordinal(m):
-    t = m.read(S("dsk_vtab"), dispcp.DVOL_MAX * dispcp.DV_SIZE)
-    n = 0
-    for v in range(dispcp.DVOL_MAX):
-        r = t[v * dispcp.DV_SIZE:(v + 1) * dispcp.DV_SIZE]
-        if r[dispcp.DV_KIND] == dispcp.DVK_FREE or not (r[dispcp.DV_FLAGS] & 1):
-            continue
-        n += 1
-    return n
+    v = m.read(S("desk_zslot") + dispcp.DVOL_MAX, 1)[0]
+    if v >= 0x80:
+        raise RuntimeError("the Wire's service item has no cell (%#x)" % v)
+    return v & 0x3F
 
 
 def live_vols(m):

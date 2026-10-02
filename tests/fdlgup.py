@@ -30,6 +30,7 @@ sys.path.insert(0, "tools")
 import os88marty as M
 from os88mouse import Mouse
 from os88fixture import need
+import os88geom                                              # noqa: E402
 from os88geom import WIN_SIZE, MAX_WIN
 
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
@@ -73,12 +74,6 @@ def titled(m, sym):
     return None
 
 
-def drive_y(m, n=1):
-    step = int.from_bytes(m.read(m.sym("desk_zstep"), 2), "little")
-    h1 = int.from_bytes(m.read(m.sym("desk_zh1"), 2), "little")
-    return 32 + n * step + h1 // 2
-
-
 def dlg(m):
     return titled(m, "fdlg_s_topen") or titled(m, "fdlg_s_tsave")
 
@@ -107,8 +102,7 @@ def lit(m, mono, rect):
 
 def open_dialog(m, mo):
     """muptest's window two puts one up (tests/fdlggrey.py's route)."""
-    vw = int.from_bytes(m.read(m.sym("vid_w"), 2), "little")
-    mo.dblclick(vw - 40, drive_y(m))
+    mo.dblclick(*os88geom.drive_pt(m, "B"))  # the zone BY LETTER, off desk_zslot (SPEC.md 26.9)
     M.settle(m)
     d = [w for w in wins(m)][-1]
     mo.click(d[0] + d[2] // 2, d[1] + 9)

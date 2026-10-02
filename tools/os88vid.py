@@ -37,6 +37,7 @@ Change one and the other must change with it.
 """
 import argparse
 import os
+import re
 import struct
 import sys
 
@@ -268,26 +269,32 @@ def hidden_runs(ops, rmin=RUN_MIN):
     ~7 cycles a byte where a copy is ~13 (wave 0). Pieces keep their order
     and their addresses; nothing written changes."""
     out = []
+    # (the runs found by a regular expression, in C, where a byte at a
+    # time in Python was a third of the encoder: a run can only start
+    # where the value changes, and one starting inside a shorter group of
+    # its value is shorter still, so it finds exactly what that walk found)
+    find = _RUNS.get(rmin)
+    if find is None:
+        find = _RUNS[rmin] = re.compile(
+            b"(.)\\1{%d,}" % (rmin - 1), re.S).finditer
     for a, bs, run in ops:
         if run or len(bs) < rmin:
             out.append((a, bs, run))
             continue
-        i = 0
         start = 0
         n = len(bs)
-        while i < n:
-            j = i
-            while j < n and bs[j] == bs[i]:
-                j += 1
-            if j - i >= rmin:
-                if i > start:
-                    out.append((a + start, bs[start:i], False))
-                out.append((a + i, bs[i:j], True))
-                start = j
-            i = j
+        for m in find(bs):
+            i, j = m.span()
+            if i > start:
+                out.append((a + start, bs[start:i], False))
+            out.append((a + i, bs[i:j], True))
+            start = j
         if start < n:
             out.append((a + start, bs[start:], False))
     return out
+
+
+_RUNS = {}
 
 
 ABS_BELOW = 4                   # a cluster of fewer entries than this goes
@@ -689,6 +696,89 @@ H_SPKP = 24                     # header byte says how many (98.1.1.3.1)
 F_KNOWN = F_RESIDENT | F_LOOPREC | F_REPEAT | F_LIVE | F_RUNS | F_SPKPWM \
     | F_SPKMUL
 
+# THE OPTIONS A FILE WAS MADE WITH (98.1.1.4): the header's bytes 26-31
+# point at a block the ENCODER wrote - every option it used, deflated - so
+# the encoder's window can load a .V88 and show how it was made. No player
+# reads it: it sits before the stream in a streamed file and after the
+# blocks in a resident one, where nothing the player reads by offset or
+# by sequence reaches. Byte 25 is 0, reserved
+H_OPTS = 26                     # u32: the block's offset, 0 for none
+H_OPTSN = 30                    # u16: its length
+OPTS_MAGIC = b"V88O"
+OPTS_UNPACKED_MAX = 65536       # a block inflating past this is refused
+# ...deflated with a PRESET DICTIONARY, which is what makes storing EVERY
+# option cost ~160 bytes rather than ~590: a record is mostly the names of
+# the options and their values, and the dictionary is exactly that - the
+# encoder's version 1 options at their defaults. IT IS FROZEN: a byte of
+# it changed and every file made with it is unreadable (zlib names the
+# dictionary's checksum, so that is refused, not misread). A different
+# dictionary is a new container version beside this one, never an edit;
+# tests/vencguitest.py pins its SHA-256
+OPTS_ZDICT = {1: (
+    b'{"o":{"adpcm":"search","aim":"asked","audio":null,"avg":null,"box":n'
+    b'ull,"brightness":0.0,"c512_dither":6.0,"c512_mix":0,"c512_stable":3.'
+    b'0,"cga_bg":null,"cga_bright":null,"cga_card":"both","cga_palette":nu'
+    b'll,"clip":16.0,"comp_dither":"diffuse","comp_quick":false,"comp_stab'
+    b'le":50000.0,"contrast":1.0,"credits":null,"detail":null,"disk":null,'
+    b'"dither":"bayer","end":null,"error":"visible","fit":"fit","flip":fal'
+    b'se,"fps":null,"gamma":1.0,"invert":false,"jobs":null,"keysecs":2.0,"'
+    b'layout":null,"levels":"auto","levels_mix":4,"live":null,"lookahead":'
+    b'2,"loop_from":null,"mix":0.5,"owe":null,"peak":null,"pixfmt":null,"p'
+    b'oster":null,"poster_at":null,"preset":null,"profile":"5150-st225","r'
+    b'ate":null,"repeat":false,"reserve":null,"resident":false,"spk_drive"'
+    b':0.5,"spk_highpass":null,"spk_idle":0.02,"spk_lows":0.5,"spk_preview'
+    b'":null,"spk_pulses":1,"spk_range":null,"spk_ratio":null,"spk_shape":'
+    b'"on","spk_style":"natural","stable":6.0,"start":0.0,"text_busy":null'
+    b',"text_colour":null,"text_detail":0.5,"text_glyphs":"blocks","text_o'
+    b'cr":false,"text_ocr_conf":80.0,"text_ocr_every":5,"text_ocr_large":f'
+    b'alse,"text_prefer_colour":1.0,"text_sharpen":0.6,"text_stable":6.0,"'
+    b'title":null,"vga4_stable":24.0,"vga8_dither":24.0,"vga8_stable":18.0'
+    b',"volume":null,"worth":null,"xms":false},"src":"","v":1}'
+)}
+
+
+def pack_options(doc):
+    """A record (a dict the encoder built, 98.2.17) -> the block: magic,
+    the container version, and the canonical JSON deflated with that
+    version's dictionary"""
+    import json
+    import zlib
+    raw = json.dumps(doc, separators=(",", ":"), sort_keys=True,
+                     ensure_ascii=True).encode("ascii")
+    if len(raw) > OPTS_UNPACKED_MAX:
+        raise V88Error("an options record of %d bytes: %d at most"
+                       % (len(raw), OPTS_UNPACKED_MAX))
+    c = zlib.compressobj(9, zlib.DEFLATED, 15, 9, zlib.Z_DEFAULT_STRATEGY,
+                         OPTS_ZDICT[1])
+    blob = OPTS_MAGIC + bytes([1]) + c.compress(raw) + c.flush()
+    if len(blob) > 0xFFFF:
+        raise V88Error("an options block of %d bytes" % len(blob))
+    return blob
+
+
+def unpack_options(blob):
+    """The block -> the record, or V88Error: a wrong magic, an unknown
+    container, a checksum or dictionary zlib refuses, a record inflating
+    past OPTS_UNPACKED_MAX or one that is not a JSON object"""
+    import json
+    import zlib
+    if blob[:4] != OPTS_MAGIC or len(blob) < 5:
+        raise V88Error("the options block has no signature")
+    if blob[4] not in OPTS_ZDICT:
+        raise V88Error("options container %d: this reader knows %s"
+                       % (blob[4], sorted(OPTS_ZDICT)))
+    try:
+        d = zlib.decompressobj(15, zdict=OPTS_ZDICT[blob[4]])
+        raw = d.decompress(blob[5:], OPTS_UNPACKED_MAX)
+        if d.unconsumed_tail or not d.eof:
+            raise V88Error("the options block is cut short or too large")
+        doc = json.loads(raw.decode("ascii"))
+    except (zlib.error, ValueError, UnicodeDecodeError) as e:
+        raise V88Error("the options block does not read: %s" % e)
+    if not isinstance(doc, dict):
+        raise V88Error("the options record is not an object")
+    return doc
+
 PIT_HZ = 1193182
 
 
@@ -718,6 +808,29 @@ def spk_counts(samples, rate, pulses=1):
     return bytes(samples).translate(spk_table(rate, pulses))
 
 
+# A SPEAKER WAV FOR AUDIO (SPEC.md 86.21.1): an ordinary 8-bit mono WAV
+# with one more chunk, 'o8sp' = <u8 kind><u8 pulses><u16 N>. Kind 1 is PCM8
+# already shaped for the speaker (Audio skips the pre-emphasis); kind 2 is
+# the speaker's COUNTS themselves, which Audio copies straight into the ring
+# on the speaker and turns back into samples on a card. Any other player
+# skips the chunk as RIFF says it may.
+SPK_WAV_CHUNK = b"o8sp"
+SPK_WAV_SHAPED, SPK_WAV_COUNTS = 1, 2
+
+
+def write_spk_wav(path, rate, data, kind=SPK_WAV_COUNTS, pulses=1):
+    """`data` as a speaker WAV of `kind` at `rate` (0 writes a plain WAV)"""
+    extra = b""
+    if kind:
+        extra = SPK_WAV_CHUNK + struct.pack("<IBBH", 4, kind, pulses,
+                                            PIT_HZ // rate // pulses)
+    body = (b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate, 1, 8)
+            + extra + b"data" + struct.pack("<I", len(data)) + bytes(data)
+            + (b"\0" if len(data) & 1 else b""))
+    with open(path, "wb") as f:
+        f.write(b"RIFF" + struct.pack("<I", len(body)) + body)
+
+
 def spk_samples(counts, rate, pulses=1):
     """spk_counts undone: each count back to the lowest sample that makes
     it (the table is monotonic, and several samples share a count)"""
@@ -730,16 +843,17 @@ def spk_samples(counts, rate, pulses=1):
 
 # THE TWO STYLES (98.2.15.1), both the owner's picks off the 5150: LIFTED
 # levels harder and cuts lower, so a quiet passage is heard ("K"); NATURAL
-# keeps more of the song's own rise and fall ("W"). The defaults below are
-# LIFTED's; a style fills in whatever of hp, ratio and range was not given
+# keeps more of the song's own rise and fall ("W"), and is the default
+# (the owner, 2026-09-28). A style fills in whatever of hp, ratio and range
+# was not given, and the three defaults below are the default style's
 SPK_STYLES = {"lifted": dict(hp=200, ratio=3.0, rng=30.0),
               "natural": dict(hp=250, ratio=2.0, rng=24.0)}
-SPK_STYLE = "lifted"
-SPK_HP = 200                    # the speaker's high-pass, Hz (98.2.15.1)
+SPK_STYLE = "natural"
+SPK_HP = SPK_STYLES[SPK_STYLE]["hp"]        # the high-pass, Hz (98.2.15.1)
 SPK_DRIVE = 0.5                 # ...and its level, an RMS of full scale
 SPK_LOWS = 0.5                  # ...the band under SPK_SPLIT, against it
-SPK_RANGE = 30                  # ...and the most a quiet passage is raised
-SPK_RATIO = 3.0                 # ...the leveller's ratio, 3:1
+SPK_RANGE = SPK_STYLES[SPK_STYLE]["rng"]    # the most a quiet passage rises
+SPK_RATIO = SPK_STYLES[SPK_STYLE]["ratio"]  # ...the leveller's ratio
 SPK_IDLE = 0.02                 # ...and the carrier's slide in the quiet, s
 SPK_SPLIT = 700                 # ...and where --spk-lows starts, Hz
 
@@ -1468,10 +1582,12 @@ SLOT = 32768
 
 def ring_for(reserve):
     """The ring slots a disk reserve of `reserve` bytes needs: what it
-    banks is read ahead of the slot being decoded, so the reserve and one
-    slot more, as a power of two - None if no ring holds it"""
+    banks is read ahead of the slot being decoded AND of a super-packet
+    straddling into the next, so the reserve and two slots more, as a power
+    of two - None if no ring holds it (SPEC.md 98.2.1.3). It was one slot
+    more, which let --reserve 224 bank a slot an 8-slot player never has"""
     for k in RING_SLOTS[1:]:
-        if (k - 1) * SLOT >= reserve:
+        if (k - 2) * SLOT >= reserve:
             return k
     return None
 
@@ -1494,6 +1610,7 @@ class Writer:
                            "a VGA4 one for the VGA, of at most 255 rows and "
                            "bytes")
         self.live = live
+        self.opts = None                # the options block, 98.1.1.4
         if spk and audio_fmt != AUD_PCM8:
             raise V88Error("speaker counts are PCM8's (98.1.1.3)")
         if spkp > 1 and not spk:
@@ -1679,7 +1796,13 @@ class Writer:
         pal = SECTOR if self.palette else 0     # the palette: sector 1
         kbase = SECTOR + (2 * SECTOR if self.palette else 0) + ktab
         ktoff = SECTOR + (2 * SECTOR if self.palette else 0)
-        s0 = kbase + -(-krec // SECTOR) * SECTOR
+        # the OPTIONS block (98.1.1.4) in sectors of its own between the
+        # keyframe records and the stream: behind every offset the player
+        # reads and in front of the stream it reads in sequence, so no read
+        # of the player's ever reaches it
+        opts = self.opts or b""
+        oat = kbase + -(-krec // SECTOR) * SECTOR
+        s0 = oat + -(-len(opts) // SECTOR) * SECTOR
         spoff, o = [], s0
         for n in secs:
             spoff.append(o)
@@ -1747,11 +1870,14 @@ class Writer:
         if self.live is not None:
             hdr[192 + R_TARGET] = self.live
         hdr[LOOP_AT:LOOP_AT + len(loopblk)] = loopblk
+        if opts:
+            struct.pack_into("<IH", hdr, H_OPTS, oat, len(opts))
         front = bytes(hdr)
         if self.palette:
             front += self.palette + bytes(2 * SECTOR - PAL_BYTES)
         out = front + kt + bytes(ktab - len(kt)) + kr + \
-            bytes(s0 - kbase - len(kr)) + stream
+            bytes(oat - kbase - len(kr)) + opts + \
+            bytes(s0 - oat - len(opts)) + stream
         write_whole(path, out)
         return dict(bytes=len(out), keys=nk, keybytes=ktab + len(kr),
                     stream=len(stream), sps=len(sps), poster=poster,
@@ -1857,7 +1983,8 @@ def runs_of(rec, end, g):
 
 def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
                    title="", credits="", repeat=False, pack=PK_LZB,
-                   posters=None, live=None, targets=None, spk=False):
+                   posters=None, live=None, targets=None, spk=False,
+                   opts=None):
     """A RESIDENT file (98.1.7): one rendition per Writer - each made SILENT
     at the file's rate, with the file's loop if it has one - its records one
     block, packed on its own; the sound one audio block for them all. The
@@ -2018,7 +2145,10 @@ def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
             hdr[so + R_TARGET] = (live or targets)[ri]
     if loop is not None:
         struct.pack_into("<I", hdr, LOOP_AT, loop)
-    out = bytes(hdr) + bytes(body)
+    if opts:                    # the OPTIONS block (98.1.1.4), last: every
+        struct.pack_into("<IH", hdr, H_OPTS,    # block before it is read by
+                         SECTOR + len(body), len(opts))   # offset and size
+    out = bytes(hdr) + bytes(body) + (opts or b"")
     write_whole(path, out)
     return dict(bytes=len(out), blocks=sizes,
                 audio=(len(audio), len(apk) if audio else 0))
@@ -2128,6 +2258,9 @@ class Reader:
                                         pit_rate(self.rate, self.spf)))
         self.title = d[32:80].split(b"\0")[0].decode("ascii", "replace")
         self.credits = d[80:176].split(b"\0")[0].decode("ascii", "replace")
+        # where the options block is (98.1.1.4): read only by options(), so
+        # a file whose block is damaged still opens, plays and previews
+        self.optsat, self.optslen = struct.unpack_from("<IH", d, H_OPTS)
         (self.pixfmt, layout, wb, h, an, ad, self.ktab, self.nkeys,
          self.poster, self.sp0, self.sp0n, self.spmax, self.slen, self.rmax,
          self.kmax) = struct.unpack_from("<BBHHBBIHHIHHIHH", d, 192 + 64 * rend)
@@ -2439,6 +2572,18 @@ class Reader:
             return self._seam + self._audio(L)
         return self.d[off:off + n]
 
+    def options(self):
+        """The record the encoder stored (98.1.1.4, 98.2.17), or None for a
+        file made before it stored one - V88Error for a block that points
+        outside the file or does not read"""
+        if not self.optsat and not self.optslen:
+            return None
+        if self.optsat < SECTOR or not self.optslen or \
+                self.optsat + self.optslen > len(self.d):
+            raise V88Error("an options block of %d bytes at %d, in a file "
+                           "of %d" % (self.optslen, self.optsat, len(self.d)))
+        return unpack_options(self.d[self.optsat:self.optsat + self.optslen])
+
     def key(self, i):
         k, off, n, spo, spn, idx = self.keys[i]
         rec = self.d[off:off + n]
@@ -2570,13 +2715,16 @@ def write_spk_preview(path, counts, rate, pulses=1, fs=44100):
 
 
 def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE, lows=SPK_LOWS,
-                rng=SPK_RANGE, ratio=SPK_RATIO, idle=SPK_IDLE):
+                rng=SPK_RANGE, ratio=SPK_RATIO, idle=SPK_IDLE, style=None):
     """A SPEAKER FILE'S SOUND SHAPED AFTER THE FACT (98.2.15.1): every
     rendition's counts read back to samples, spk_shape'd and written as
     counts again, in the same bytes - each frame record's last `abytes`
     and the seam's - so nothing else in the file moves. A resident file's
-    sound is a packed block, so it is refused: encode it again. Returns
-    the renditions done"""
+    sound is a packed block, so it is refused: encode it again. The file's
+    stored options (98.2.17), when it has them, are brought up to date with
+    the new shaping - in the sectors they already had, or, should they no
+    longer fit there, taken out rather than left saying what is no longer
+    true. Returns the renditions done"""
     d = bytearray(open(src, "rb").read())
     n = Reader(src).nrend
     for ri in range(n):
@@ -2610,6 +2758,10 @@ def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE, lows=SPK_LOWS,
         if r.loop is not None:
             L, off, m = r.loop[:3]
             d[off + m - ab:off + m] = new[L * ab:(L + 1) * ab]
+    _reshape_options(d, Reader(src), dict(
+        spk_shape="encoder", spk_style=style or SPK_STYLE, spk_highpass=hp,
+        spk_drive=drive, spk_lows=lows, spk_range=rng, spk_ratio=ratio,
+        spk_idle=idle))
     with open(dst, "wb") as f:
         f.write(d)
     for ri in range(n):
@@ -2618,36 +2770,110 @@ def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE, lows=SPK_LOWS,
     return n
 
 
+def _reshape_options(d, r, changed):
+    """A streamed file's stored options (98.1.1.4) with `changed` put in,
+    written into the sectors the block has before the stream (bytes `d`,
+    patched in place); the block and its pointer cleared when the new one
+    does not fit, or the old one does not read"""
+    if not r.optsat:
+        return
+    import os88venc                     # (the schema is the encoder's)
+    room = r.sp0 - r.optsat
+    try:
+        o = os88venc.opts_migrate(r.options())[0]
+        doc = r.options()
+        o.update(changed)
+        blob = pack_options({"v": os88venc.OPTS_VERSION,
+                             "src": doc.get("src", ""), "o": o})
+    except V88Error:
+        blob = b""
+    if not 0 < len(blob) <= room:
+        blob = b""
+    d[r.optsat:r.optsat + room] = blob + bytes(room - len(blob))
+    struct.pack_into("<IH", d, H_OPTS, r.optsat if blob else 0, len(blob))
+
+
 def cycles_of(rec, planar=False, layout=None):
     """The wave 0 model's cycles for one record, writing CGA's screen: the
     frame's fixed cost, a set-up per skip segment, each entry by its list,
     and an absolute entry's extra address. A MODEX record's sub-records
     are decoded once each whatever their mask, and pay an OUT. `layout`
     picks another decoder's constants (CYC_LAYOUT)"""
-    fr, sg, ab, cp, csl, crn = cyc_table(layout)
-    c = [fr]
-
-    def write(k, di, m):
-        c[0] += ab if mode[0] else 0
-        if k <= L_P6:
-            c[0] += cp[k]
-        elif k in (L_SLICE, L_SLICEL):
-            c[0] += csl[0] + csl[1] * m
-        else:
-            c[0] += crn[0] + crn[1] * m
-
-    def seg(absolute):
-        c[0] += 0 if absolute else sg
-        mode[0] = absolute
-    mode = [False]
+    t = cyc_table(layout)
     if not planar:
-        walk_lists(bytearray(65536), rec, REC_HDR, write, seg)
-        return c[0]
-    si = REC_HDR
+        return _cycles_lists(rec, REC_HDR, t[0], t)[1]
+    c, si = t[0], REC_HDR
     while rec[si]:
-        c[0] += CYC_SUB
-        si = walk_lists(bytearray(65536), rec, si + 1, write, seg)
-    return c[0]
+        c += CYC_SUB
+        si, c = _cycles_lists(rec, si + 1, c, t)
+    return c
+
+
+def _cycles_lists(data, si, c, t):
+    """cycles_of's walk: walk_lists' over the ten lists at data[si:] -
+    the same entries, the same checks and the same sums in the same order
+    - with nothing written, where the encoder had a fresh 64 KB surface
+    written for every record it priced. -> (the index past them, c plus
+    their cycles)"""
+    fr, sg, ab, cp, csl, crn = t
+    nd = len(data)
+    mode = False
+    try:
+        for k in range(NLISTS):
+            short = k <= L_P6
+            slice_ = k in (L_SLICE, L_SLICEL)
+            len8 = k in (L_SLICE, L_RUN)
+            while True:
+                n = data[si]
+                si += 1
+                if n == 0:
+                    break
+                if n & 0x80:
+                    todo, absolute = n & 0x7F, True
+                else:
+                    todo, absolute = n, False
+                    di = data[si] | data[si + 1] << 8
+                    si += 2
+                c += 0 if absolute else sg
+                mode = absolute
+                for _ in range(todo):
+                    if absolute:
+                        di = data[si] | data[si + 1] << 8
+                        si += 2
+                    else:
+                        di += data[si]
+                        si += 1
+                    if short:
+                        m = k - L_P1 + 1
+                        si += m
+                    else:
+                        if len8:
+                            m = data[si]
+                            si += 1
+                        else:
+                            m = data[si] | data[si + 1] << 8
+                            si += 2
+                        if slice_:
+                            si += m
+                        else:
+                            data[si]        # (the value: there, or short)
+                            si += 1
+                    if si > nd:
+                        raise IndexError
+                    c += ab if mode else 0
+                    if short:
+                        c += cp[k]
+                    elif slice_:
+                        c += csl[0] + csl[1] * m
+                    else:
+                        c += crn[0] + crn[1] * m
+                    if di + m > 65536:
+                        raise V88Error("a write at %04x+%d wraps the segment"
+                                       % (di, m))
+                    di += m
+    except IndexError:
+        raise V88Error("the lists run off the end of their record")
+    return si, c
 
 
 # --------------------------------------------------------------------------
@@ -2927,6 +3153,9 @@ def _adpcm4_tables():
             nibt[q, j] = nib
     _A4.update(idx=idx, nibt=nibt,
                gidx=np.ascontiguousarray(idx.transpose(0, 2, 1)),
+               # (the same, arriving groups second: a step's cheapest way
+               # in is then an elementwise minimum across rows)
+               gidxt=np.ascontiguousarray(idx),
                sq=((r[None, :] - r[:, None]) ** 2).astype(np.int32))
     return _A4
 
@@ -2940,7 +3169,7 @@ def _adpcm4_viterbi(pcm, start, zeros, chunk=2048, end=None):
     survivor agrees, so the memory is a window and not the stream."""
     import numpy as np
     T = _adpcm4_tables()
-    idx, nibt, gidx, sq = T["idx"], T["nibt"], T["gidx"], T["sq"]
+    idx, nibt, gidxt, sq = T["idx"], T["nibt"], T["gidxt"], T["sq"]
     x = np.frombuffer(bytes(pcm), np.uint8).astype(np.int64)
     n = len(x)
     cap = np.full(n, 3, np.int64)
@@ -2975,9 +3204,11 @@ def _adpcm4_viterbi(pcm, start, zeros, chunk=2048, end=None):
         return path
 
     for t in range(n):
-        cand = cost[gidx]                           # (4, 256, G)
-        j = cand.argmin(axis=2)
-        best = cand.min(axis=2)
+        cand = cost[gidxt]                          # (4, G, 256)
+        best = cand.min(axis=1)
+        # the FIRST way in at that cost, as argmin's: about twice as fast
+        # as argmin over a short last axis, and the same choice
+        j = (cand == best[:, None, :]).argmax(axis=1)
         best += sq[x[t]]
         if cap[t] < 3:
             best[cap[t] + 1:, :] = INF
@@ -3006,8 +3237,13 @@ def _adpcm4_seg(args):
     return _adpcm4_viterbi(*args)
 
 
+ADPCM4_SEG = 88200         # adpcm4_search's segment, at most (8 s at 11 kHz)
+ADPCM4_SEG_MIN = 16384     # ...and at least, where there are more cores:
+                           # its lead is a quarter of that again
+
+
 def adpcm4_search(pcm, ref=ADPCM4_REF, scale=0, zeros=(), jobs=1,
-                  seg=88200, lead=4096):
+                  seg=None, lead=4096):
     """PCM8 -> ADPCM4 by EXACT SEARCH (Viterbi): the nibble sequence whose
     decode has the least total squared error, where adpcm4_encode picks
     each nibble for its own sample alone. The decoder has 1,024 states - a
@@ -3015,7 +3251,8 @@ def adpcm4_search(pcm, ref=ADPCM4_REF, scale=0, zeros=(), jobs=1,
     a sample. MEASURED on 12 s of Bad Apple's sound: 27.3 dB against the
     greedy encoder's 19.9. `zeros` as adpcm4_encode's.
 
-    ON `jobs` CORES the stream is cut into segments, and each is searched
+    ON `jobs` CORES the stream is cut into segments - a core's share of it,
+    from ADPCM4_SEG_MIN samples up to ADPCM4_SEG - and each is searched
     from `lead` samples BEFORE its cut, starting from any state: survivors
     merge within tens of samples, so over the lead its path becomes the one
     the whole search would have taken. The two are stitched at the latest
@@ -3030,6 +3267,9 @@ def adpcm4_search(pcm, ref=ADPCM4_REF, scale=0, zeros=(), jobs=1,
                        % len(pcm))
     n = len(pcm)
     s0 = (scale // 16) * 256 + ref
+    if seg is None:     # A SEGMENT A CORE: a clip whose sound is under two
+        seg = min(ADPCM4_SEG,   # of the long ones was searched on one
+                  max(ADPCM4_SEG_MIN, -(-n // max(1, jobs))))
     if jobs <= 1 or n <= 2 * seg:
         nibs, _ = _adpcm4_viterbi(pcm, s0, zeros)
     else:
@@ -3318,7 +3558,7 @@ def cmd_speaker(a):
         if getattr(a, k) is None:
             setattr(a, k, st[v])
     n = spk_reshape(a.file, a.out, a.highpass, a.drive, a.lows, a.range,
-                    a.ratio, a.idle)
+                    a.ratio, a.idle, a.style)
     print("os88vid: %s: %d rendition%s' sound shaped for the speaker "
           "(high-pass %d Hz, drive %.2f)" % (a.out, n, "" if n == 1 else "s",
                                              a.highpass, a.drive))
@@ -3461,6 +3701,7 @@ def verify_v88(path, against=None, rend=None):
             verify_v88(path, against, i)
         rend = 0
     r = Reader(path, rend)
+    r.options()                     # a block this writer wrote must READ
     g = r.g
     ref = None
     if against:

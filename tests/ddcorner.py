@@ -61,6 +61,8 @@ def census(tag, ui, p, say, samples, nopok=False):
     fail = []
     if not D.settle_playing(m, p):
         return ["%s: never reached a playing state" % tag]
+    if "windowed" in tag:
+        D.park(ui)                  # the arrow is not the maze: dotdel.PARK
     m.pause()
     tw, th = p.w("dd_tw"), p.w("dd_th")
     bdx, bdy = p.w("dd_bdx"), p.w("dd_bdy")
@@ -194,7 +196,7 @@ def census(tag, ui, p, say, samples, nopok=False):
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--apps", default="build/games360.img")
     ap.add_argument("--samples", type=int, default=240)
     ap.add_argument("--nopok", action="store_true",
                     help="hold dd_pok at 0: the one-pen build, for the A/B")

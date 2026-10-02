@@ -702,7 +702,10 @@ op_read:
     mov si, op_name
     mov ax, [op_off]
     mov dx, [op_off+2]
-    call OSAPI_FILE_READ_AT     ; out DX:AX = the bytes delivered
+    push di
+    mov di, op_rcur             ; one FAT link a chunk, not a walk from the
+    call os88_rseq              ; front (SPEC.md 18.4.8.1): out DX:AX = the
+    pop di                      ; bytes delivered
     pop cx
     jc .fail
     mov bx, ax
@@ -988,7 +991,8 @@ op_xload:
     mov si, op_name
     mov ax, [op_xrd]
     mov dx, [op_xrd+2]
-    call OSAPI_FILE_READ_AT
+    mov di, op_rcur
+    call os88_rseq
     jc .drop
     mov bx, ax
     or bx, dx
@@ -1839,3 +1843,6 @@ op_s_spent: db 'That part was dropped', 0   ; ...and cannot come back: a
 %endif                                      ; compressed lazy row's packed
                                             ; length is where the segment went
                                             ; (SPEC.md 20.12.7.4)
+
+%include "os88rseq.inc"         ; os88_rseq: op_read's and op_xload's READ_AT,
+                                ; on READ_SEQ's walk (SPEC.md 18.4.8.1)

@@ -1,0 +1,29 @@
+diff --git a/crates/marty_core/src/cpu_808x/step.rs b/crates/marty_core/src/cpu_808x/step.rs
+--- a/crates/marty_core/src/cpu_808x/step.rs
++++ b/crates/marty_core/src/cpu_808x/step.rs
+@@ -389,8 +389,23 @@
+             step_result = StepResult::Call(CpuAddress::Segmented(self.cs, self.ip()));
+         }
+         else if !self.halted {
+-            // We didn't have NMI, INTR, or TRAP condition. Fetch the next instruction if not halted.
+-            self.biu_fetch_next();
++            if matches!(self.fetch_state, FetchState::Halted) {
++                // A HLT that found INTR active took mc_nop's "halt overridden"
++                // path - the PREFETCHER halted and the CPU not - on the promise
++                // that the interrupt is taken right here. But INTR was sampled
++                // BEFORE the HLT's devices ran and is gone by now (os8088: the
++                // speaker's 11 kHz IRQ0 does it), so nothing restarts the
++                // prefetcher and the next queue read spins in biu_queue_read
++                // for ever, inside ONE step() - the debug server never polls its
++                // socket again. The 8088 halts, so halt: the next interrupt
++                // resumes it as from any other HLT.
++                self.halted = true;
++                self.instruction_reentrant = true;
++            }
++            else {
++                // We didn't have NMI, INTR, or TRAP condition. Fetch the next instruction if not halted.
++                self.biu_fetch_next();
++            }
+         }
+ 
+         // If a CPU validator is enabled, validate the executed instruction.

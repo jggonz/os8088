@@ -14,7 +14,7 @@ half of the design:
             drv_boot's mount of A: reads an 18-sector BPB and desk_learn_x
             corrects A: to 3.5" BEFORE THE FIRST PAINT. B: stays the guess
             until a disk is read in it; the row opens B: and requires the zone
-            to be REPAINTED as a 3.5" (desk_zmark_x), then closes the window
+            to be REPAINTED as a 3.5" (desk_learn_x posts its cell), then closes the window
             so the zone is on the glass again.
 
 For every zone it asserts the row's DV_FLAGS bits (guest state, exact) AND the
@@ -96,7 +96,9 @@ def check_zone(ui, letter, want_525, want_guess, fails):
     ordinal = geom.drive_ordinal(m, letter)
     rows_per = word(m, "desk_rows")
     col, r = divmod(ordinal, rows_per)
-    x0 = word(m, "vid_desk_zx") - col * DESK_COLW
+    x0 = (word(m, "vid_desk_zx") - col * geom.DESK_PX     # its cell, and the
+          + (geom.DESK_CW - geom.DESK_ZW) // 2)            # picture column in
+                                                           # it (SPEC.md 26.9)
     y0 = DESK_ZY0 + r * word(m, "desk_zstep")
     sel = m.read(os88sym.linear("desk_sel"), 1)[0] == v
     w, h, fb = m.vram()

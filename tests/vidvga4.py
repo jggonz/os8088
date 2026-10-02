@@ -204,8 +204,8 @@ def main():
             until(lambda mm: rb("vp_ready") == 1 or rb("vp_played") == 1,
                   "the play to start")
             print("   the ring: %d slots" % rw("vp_k"))
-            if rw("vp_k") != 8:
-                bad.append("the ring has %d slots, not 8: something the "
+            if rw("vp_k") < 8:              # (SPEC.md 98.3: as many as fit
+                bad.append("the ring has %d slots, under 8: something the "
                            "session claims is too big" % rw("vp_k"))
             for n in STOPS:
                 until(lambda mm: rb("vp_held") == 1 and rw("vp_done") == n,

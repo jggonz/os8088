@@ -154,6 +154,11 @@ HDT_PAINT    equ 5              ; DSV_CPPAINT
 HDT_CLICK    equ 6              ; DSV_CPCLICK, the press
 HDT_UP       equ 7              ; DSV_CPUP, the release
 HDT_DRAG     equ 8              ; DSV_CPDRAG
+HDT_KEY      equ 9              ; DSV_CPKEY: BL = ASCII, BH = scan code (AL
+                                ; being the verb), CF = 0 taken. It carries NO
+                                ; pane origin - the panel's W_ONKEY has a key
+                                ; and nothing else - so the page draws at the
+                                ; origin its last PAINT banked
 HDT_BUSY     equ 4              ; out: CF = 1 = a window of mine is still
                                 ; VISIBLE, so do not unload me. Visible and not
                                 ; merely allocated: closing one of these is a

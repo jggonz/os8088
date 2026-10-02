@@ -27,6 +27,7 @@ differs by 25 pixels in a gate whose standard is zero (SPEC.md 11.96.15.2).
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
 import os88marty
+import os88geom
 from os88mouse import Mouse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -56,9 +57,8 @@ def zorder(m):
     return list(m.read(sym(m, "wm_zord"), max(n, 1)))[:n]
 
 def zone(m, vol):
-    zx, step, rows = w(m, "vid_desk_zx"), w(m, "desk_zstep"), w(m, "desk_rows")
-    col, row = divmod(vol, rows)
-    return zx - col * 44 + 16, DESK_ZY0 + row * step + 16
+    """Volume `vol`'s picture centre: its CELL off desk_zslot (SPEC.md 26.9)."""
+    return os88geom.drive_xy(m, os88geom.drive_ordinal(m, "ABCDEFGH"[vol]))
 def row(e, n):
     return e["x"] + 48, e["y"] + TITLE_H + FM_ROW_Y0 + n * FM_ROW_H + 8
 

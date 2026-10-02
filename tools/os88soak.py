@@ -230,6 +230,11 @@ def requirements():
                 "partition before a kept install (SPEC.md 52.10.15).",
                 "apt-get install -y mtools"))
 
+    req.append(("dosbox", bool(shutil.which("dosbox")),
+                "czdos, which runs OS88CZ.COM under a real DOS (SPEC.md "
+                "20.17.4).",
+                "apt-get install -y dosbox"))
+
     # THE FOUR DISKS `all` DELIBERATELY DOES NOT BUILD.  This is the item the
     # pass-3 soak found by hand after fifteen runs had skipped on it, and the
     # reason each is absent is a different deliberate decision (SPEC.md 78.9

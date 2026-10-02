@@ -1066,11 +1066,11 @@ tp_c_bslash:
     push si
     push di
     push es
-    mov di, tp_wbuf
-    mov al, '\'
-    stosb
-    mov es, [tp_srcseg]
-    mov si, [tp_si]
+    mov di, tp_wbuf             ; tp_wbuf is OURS and ES is the SOURCE's
+    mov byte [di], '\'          ; below, so every store here is DS-relative:
+    inc di                      ; a stosb wrote the name into the source
+    mov es, [tp_srcseg]         ; segment at tp_wbuf's offset - past the end
+    mov si, [tp_si]             ; of a small claim, into the next heap block
     xor cx, cx
 .gl:
     cmp si, [tp_se]
@@ -1087,7 +1087,8 @@ tp_c_bslash:
 .let:
     cmp cx, 24
     jae .ge
-    stosb
+    mov [di], al
+    inc di
     inc si
     inc cx
     jmp .gl
@@ -2697,9 +2698,13 @@ tp_tab_body:
     xor ax, ax
     push cx
     push di
-    xor ax, ax
-    mov cx, TP_COL_MAX
-    rep stosw
+    push es
+    push ds                     ; tp_colw is OURS: with ES still the SOURCE's
+    pop es                      ; segment this cleared 12 bytes there at
+    xor ax, ax                  ; tp_colw's offset - past the end of an 8KB
+    mov cx, TP_COL_MAX          ; source claim, into whatever block came next
+    rep stosw                   ; (a Disk window's raise cache, which put the
+    pop es                      ; zeroed plane back on the glass as cyan)
     pop di
     pop cx
     mov word [tp_tmp2], 0       ; nrows

@@ -39,16 +39,23 @@
 ; =============================================================================
 
 %ifdef FCP_MOD
-MOD_MAX     equ 5               ; SMALL: file operations, no hibernate, and
+MOD_NIMG    equ 5               ; SMALL: file operations, no hibernate, and
                                 ; no Dock module (SPEC.md 30.5)
 %else
 MOD_DOCK    equ 4
 MOD_EXT     equ 5               ; ...and the extended desktop (SPEC.md 39.19.6)
-MOD_MAX     equ 7               ; BIG: hibernate, resident file operations,
+MOD_NIMG    equ 6               ; BIG: hibernate, resident file operations,
                                 ; the optional Dock and EXTD.DRV
 %endif
-%ifdef KERN_BIG
-MOD_DESK    equ MOD_MAX-1       ; desktop shortcuts, big/emu only (26.8)
+; MOD_NIMG is the IMAGES os88mod.py cuts out; MOD_MAX the ROWS. They differ by
+; one row that is not an image of its own: MOD_SETS, CTRL.DRV's first
+; MODS_SIZE bytes - the settings core a desktop gesture loads instead of the
+; whole panel (SPEC.md 2.8.7). LAST, so every image keeps its id.
+%ifdef OS88_SHORTCUTS
+MOD_SETS    equ MOD_NIMG
+MOD_MAX     equ MOD_NIMG + 1
+%else
+MOD_MAX     equ MOD_NIMG
 %endif
 MOD_CTRL    equ 0               ; the Control Panel (SPEC.md 31)
 MOD_FMT     equ 1               ; the floppy formatter (SPEC.md 18.96)
@@ -81,8 +88,8 @@ MOD_FDLG    equ 4               ; ...and the Standard File dialog (SPEC.md 38,
 ; never through DS by the module - so SPEC.md 2.6's "cold code carries no
 ; data" survives intact.
 MOD_H_MAGIC equ 0               ; word: 0x384F ('O','8')
-MOD_H_VER   equ 2               ; byte: 5 = kernel module (a package is 6, a
-                                ; driver 7), so ld_check_hdr and drv_check
+MOD_H_VER   equ 2               ; byte: 5 = kernel module (a package is 8, a
+                                ; driver 9), so ld_check_hdr and drv_check
                                 ; both refuse it - two independent gates, the
                                 ; discipline SPEC.md 51.1 already uses
 MOD_H_ID    equ 3               ; byte: which MOD_* row this image is
@@ -149,9 +156,6 @@ mod_f_dock: db 'DOCK.DRV', 0
 %ifdef KERN_BIG
 mod_f_ext:  db 'EXTD.DRV', 0
 %endif
-%ifdef KERN_BIG
-mod_f_desk: db 'DESKTOP.DRV', 0
-%endif
 mod_f_ctrl: db 'CTRL.DRV', 0    ; .DRV for the attributes and nothing else
 mod_f_fmt:  db 'FORMAT.DRV', 0  ; (SPEC.md 19.6): os88disk.py stamps anything
 mod_f_clon: db 'CLONE.DRV', 0   ; ...and a third of them (SPEC.md 18.99)
@@ -201,10 +205,8 @@ mod_r_dock:
 %ifdef KERN_BIG
     dw 0, mod_f_ext             ; MOD_EXT, kern_big's alone (SPEC.md 39.19.6)
 %endif
-
-%ifdef KERN_BIG
-mod_r_desk:
-    dw 0, mod_f_desk            ; MOD_DESK
+%ifdef OS88_SHORTCUTS
+    dw 0, mod_f_ctrl            ; MOD_SETS: the SAME file, cut short (2.8.7)
 %endif
 
 ; mod_fpt - each module's slot block by id, and one word more: where the LAST
@@ -329,9 +331,9 @@ mod_need:
 
     push es
 
-%ifdef KERN_BIG
-    call mod_row                ; canonicalize AL before keeping the id
-%endif
+%ifdef OS88_SHORTCUTS
+    cbw                         ; AH is the CALLER'S (sc_modcall's SC_OP_*),
+%endif                          ; and DI is compared whole against MOD_SETS
     mov di, ax                  ; THE ID, FOR THE WHOLE ROUTINE, and in a
                                 ; register rather than on the stack: it used
                                 ; to be pushed here and popped by both exit
@@ -346,9 +348,7 @@ mod_need:
                                 ; preserved" - and dskw_read_x banks BP/DI
                                 ; itself), and mod_check reads it instead of
                                 ; deriving the id back out of the row pointer
-%ifndef KERN_BIG
-    call mod_row                ; retain the original small-kernel sequence
-%endif
+    call mod_row
     cmp word [bx+MODR_SEG], 0
     jne .already
 
@@ -367,25 +367,22 @@ mod_need:
                                 ; it was a .bss word read five times, four of
                                 ; them through a disp16 operand. mod_check
                                 ; takes it as an input
+%ifdef OS88_SHORTCUTS
+    cmp di, MOD_SETS            ; ...or the SETTINGS CORE's, which is only the
+    jne .whole                  ; file's first MODS_SIZE bytes (SPEC.md 2.8.7):
+    mov ax, MODS_SIZE           ; the claim is sized for those and the read
+    mov bp, ax
+    mov byte [dskw_trunc], 1    ; stops there. MODS_SIZE is this assembly's,
+.whole:                         ; like every offset the module is called at
+%endif
 
     call mem_bytes_kb_x         ; -> whole KB. The size is well under 64KB,
     cmp ax, MOD_MAX_KB          ; so this cannot carry out
     ja .fail
     push bx
     mov bx, MEM_K_MOD
-%ifdef KERN_BIG
-    cmp di, MOD_DESK
-    je .desktop_claim           ; UI-retained code must reside below 128KB
-    call mem_claim_hi_x         ; other modules remain top-down
-    jmp short .claimed
-.desktop_claim:
-    call mem_shed_one            ; release boot read-ahead before pinning code
-    call mem_claim_x
-.claimed:
-%else
-    call mem_claim_hi_x
-%endif
-    pop bx
+    call mem_claim_hi_x                   ; a module's base IS its CS, so it can never
+    pop bx                      ; move: top down, like a package's region
     jc .fail
     mov [bx+MODR_SEG], dx
 
@@ -396,6 +393,9 @@ mod_need:
                                 ; including the compaction (memory.inc:520)
     xor dx, dx                  ; DX:CX = the capacity, DX:AX the answer
     call dskw_read_x                         ; the whole file, by name, on the system disk
+%ifdef OS88_SHORTCUTS
+    mov byte [dskw_trunc], 0    ; ...ONE read's worth, and spent whatever it
+%endif                          ; answered
     pop bx
     jc .freefail
     cmp ax, bp                  ; DX is 0 or the read would have refused
@@ -446,6 +446,9 @@ mod_need:
 .freefail:
     call mod_free_row           ; the claim goes back; nothing was armed
 .fail:
+%ifdef OS88_SHORTCUTS
+    mov byte [dskw_trunc], 0    ; a claim that failed never reached the read
+%endif                          ; that clears it, and every read after would cut
     call drv_vol_back           ; ...and this one no longer has to preserve
     stc                         ; CF, which is weaker than what the old shape
                                 ; leaned on rather than stronger
@@ -477,6 +480,12 @@ mod_check:
     cmp byte [es:MOD_H_VER], MOD_VER
     jne .bad
     mov ax, di                  ; the id mod_need was CALLED with - nine
+%ifdef OS88_SHORTCUTS
+    cmp al, MOD_SETS            ; ...whose image is CTRL.DRV's, cut short
+    jne .id
+    mov al, MOD_CTRL
+.id:
+%endif
     cmp [es:MOD_H_ID], al       ; bytes of arithmetic recovered a number the
     jne .bad                    ; caller was holding. If DI were ever
                                 ; clobbered on the way here the failure is a
@@ -484,11 +493,26 @@ mod_check:
                                 ; the safe direction
     cmp word [es:MOD_H_BUILD], BUILD_NUM
     jne .bad
-    cmp word [es:MOD_H_STAMP], MOD_STAMP
+    cmp word [es:MOD_H_STAMP], strict word MOD_STAMP
+                                ; STRICT, because MOD_STAMP is the sum of the
+                                ; section sizes THIS instruction is in: a
+                                ; stamp of 0xFF80..0xFFFF fits a sign-extended
+                                ; byte, the byte shortens .cold, the stamp
+                                ; leaves that range, and nasm never settles
+                                ; ("stalled for 1001 passes"). kern_small hit
+                                ; it on a one-byte saving in desk_rowcalc
     jne .bad
     mov ax, [es:MOD_H_IMG]
     cmp ax, bp                  ; the image IS the file
+%ifdef OS88_SHORTCUTS
+    je .img
+    jb .bad                     ; ...or, for the settings core alone, the
+    cmp di, MOD_SETS            ; file is LONGER than what was read
     jne .bad
+.img:
+%else
+    jne .bad
+%endif
 
     ; --- arm the slots. Every entry offset is checked against the image the
     ; --- way ld_check_hdr checks a package's: inside the bytes that arrived,
@@ -496,7 +520,15 @@ mod_check:
     ; --- the header's own bytes or off the end of the claim.
     call mod_fpr                ; DI = the block, CX = the KERNEL's count
     cmp cx, [es:MOD_H_NENT]     ; ...which the header must equal exactly
+%ifdef OS88_SHORTCUTS
+    je .nent
+    ja .bad                     ; ...or, for the settings core alone, be its
+    cmp di, SETFP               ; FIRST PART: CPE_SC is entry 0, so the one
+    jne .bad                    ; slot arms from the header's first word
+.nent:
+%else
     jne .bad
+%endif
     mov dx, cx
     shl dx, 1
     add dx, MOD_H_ENT           ; DX = the header's own end
@@ -523,11 +555,8 @@ mod_check:
     ret
 .badarm:
     call mod_disarm             ; a half-armed block is the one state nothing
-    pop bx                      ; downstream could survive
-    stc
-    ret
-.bad:
-    pop bx
+.bad:                           ; downstream could survive - and it falls
+    pop bx                      ; into the refusal every other check takes
     stc
     ret
 

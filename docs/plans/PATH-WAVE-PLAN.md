@@ -24,7 +24,7 @@ directory sectors and four lines into its entry loop has
 
 so **neither `.` nor `..` is ever reported**. Both cells go through it -
 `api_file_find` and `api_file_find_raw` join at `api_ff_fence` and differ in
-the size field and nothing else. `OSAPI_FT_UP` exists because `dsk_synth_up`
+the size field and nothing else. `OSAPI_FT_UP` exists because `dsk_up_open`
 builds an up-entry for `disk_mount`'s **LISTING** (§19.5), a different
 structure a package cannot reach.
 

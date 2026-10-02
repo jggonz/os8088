@@ -73,19 +73,28 @@ CMD_SEP     equ 4               ; the RULE above Hibernate. It is a MENU_DIS
 %ifdef KERN_BIG
 CMD_HIBER   equ 5               ; Hibernate... (SPEC.md 87), kern_big only:
 CMD_REBOOT  equ 6               ; kern_small's menu has no such item and its
-CMD_CLOSE   equ 7               ; ids stay one lower
-CMD_TIMER   equ 8               ; --- Locator: Builtins (SPEC.md 12.3.1) ---
-CMD_BOUNCE  equ 9
-CMD_FILES   equ 10
+CMD_SHUTDOWN equ 7
+CMD_CLOSE   equ 8               ; ids stay one lower
+%ifdef OS88_SHORTCUTS
+CMD_SCDEL   equ 9               ; Locator: File > Remove Shortcut (SPEC.md 26.8.5)
+CMD_TIMER   equ 10              ; --- Locator: Builtins (SPEC.md 12.3.1) ---
+CMD_BOUNCE  equ 11
+CMD_FILES   equ 12
+%else
+CMD_TIMER   equ 9               ; --- Locator: Builtins (SPEC.md 12.3.1) ---
+CMD_BOUNCE  equ 10
+CMD_FILES   equ 11
+%endif
 %else
 CMD_REBOOT  equ 5
-CMD_CLOSE   equ 6               ; --- Locator: File ---
+CMD_SHUTDOWN equ 6
+CMD_CLOSE   equ 7               ; --- Locator: File ---
                                 ; SPEC.md 14.6: no Builtins menu here, so no
                                 ; CMD_TIMER and no CMD_BOUNCE - and CMD_FILES
                                 ; survives only because ui_cmd still needs the
                                 ; id: a Disk window is opened from the desktop
                                 ; zone (SPEC.md 26.1), which posts it
-CMD_FILES   equ 7
+CMD_FILES   equ 8
 %endif
 
 ; --- app menu set layout (SPEC.md 12.2; mirrored in apps/os88api.inc) --------
@@ -293,8 +302,9 @@ menu_init:
     push ax
     push bx
     push dx
-    mov byte [menu_bovr], 1     ; .bss is not zeroed at boot (-f bin), and the
-    mov byte [menu_bdirty], 1   ; furniture has never been drawn: menu_force's
+    mov word [menu_bdirty], 0x0101 ; [menu_bovr] too. .bss is not zeroed at
+                                ; boot (-f bin), and the
+                                ; furniture has never been drawn: menu_force's
                                 ; whole body, and the second store is the one
                                 ; this routine used to make before calling it
     xor bx, bx
@@ -325,8 +335,7 @@ section .text
 ; time it finished.
 ; -----------------------------------------------------------------------------
 menu_force:
-    mov byte [menu_bovr], 1
-    mov byte [menu_bdirty], 1
+    mov word [menu_bdirty], 0x0101  ; [menu_bovr] too: adjacent, asserted
     ret
 
 ; -----------------------------------------------------------------------------
@@ -392,7 +401,9 @@ menu_activate:
     je .same
     mov [menu_win], bx
     mov byte [fm_fchk], 1       ; the active application changed, so a Disk
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13): tested
+                                ; zero/non-zero and swept every tick, so a
+                                ; count is as good as a 1
                                 ; window may have just gained the focus with
                                 ; a refresh owing (SPEC.md 22.8). This is the
                                 ; catch-all rather than the main path -
@@ -401,6 +412,10 @@ menu_activate:
                                 ; focus change passes, including the one no
                                 ; raise reaches: losing the front window
                                 ; promotes the window under it (menu_check)
+    or bx, bx                   ; ...and for the same reason the DESKTOP'S
+    jz .loc                     ; selection is let go here when a window
+    call COLD_SEG:desk_unsel_x  ; takes the bar (SPEC.md 26.9.5)
+.loc:
     call menu_relayout
     stc
     ret
@@ -733,10 +748,7 @@ menu_ab_cell:
     pop es
     pop di
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_cx
 
 ; -----------------------------------------------------------------------------
 ; menu_ab_cat - append a NUL string to a buffer (internal to menu_ab_cell)
@@ -1742,8 +1754,8 @@ menu_track:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_popup - drop a menu anywhere on screen and track it under the right
-;              button (SPEC.md 12.4)
+; menu_popup - drop a menu anywhere on screen and track it while a button
+;              is held (SPEC.md 12.4)
 ; in:  CX = anchor x, DX = anchor y (absolute screen), BX = array of near
 ;      pointers to NUL item strings, AX = item count. Caller holds the gfx
 ;      lock.
@@ -1822,7 +1834,14 @@ menu_popup:
     dec bx
     mov [menu_y2], bx
 
-    mov byte [menu_btn], 2      ; the RIGHT button keeps a popup open
+    mov byte [menu_btn], 3      ; EITHER button keeps a popup open. It was
+                                ; 2, the right, when every popup was a
+                                ; right-click's; the Floppy page's drop-downs
+                                ; (SPEC.md 31.14) open on a LEFT press held
+                                ; exactly as a bar menu's is, and 3 serves
+                                ; both for the same five bytes. A right-click
+                                ; menu is unchanged unless the left is ALSO
+                                ; held, when it stays up until both are let go
     call menu_drop              ; AX = item index, or 0xFFFF
     cmp ax, 0xFFFF
     je .none
@@ -2296,7 +2315,7 @@ menu_kbnav:
     mov [mouse_x], ax           ; two-display seam is honoured by construction
     mov [mouse_y], bx           ; rather than by a rectangle known here
     mov byte [cur_shchk], 1     ; ...and the pointer MOVED (SPEC.md 7.2.1.1)
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
     pop di
     pop si
     pop dx
@@ -2608,6 +2627,7 @@ menu_s_close    db 'Close Window', 0    ; the item at one or the other before
                                 ; one
 menu_s_tasks    equ ui_s_tmttl          ; the Task Manager's window title
 menu_s_restart  db 'Restart', 0
+menu_s_shutdown db 'Shut Down...', 0
 %ifdef KERN_BIG
 menu_s_hiber    db 'Hibernate...', 0        ; SPEC.md 87.2: ui_loc_gate points
 menu_s_hibernh  db MENU_DIS, 'Hibernate (No HD)', 0  ; item 4 at one of the
@@ -2644,26 +2664,22 @@ menu_items_logo:
 %ifdef KERN_BIG
     dw menu_s_hiber             ; item 4, swapped by ui_loc_gate (SPEC.md 87.2)
     dw menu_s_restart
-MENU_LOGO_N equ 6               ; ...and menu_relayout stamps this into cell
+    dw menu_s_shutdown
+MENU_LOGO_N equ 7               ; ...and menu_relayout stamps this into cell
 %else
     dw menu_s_restart
-MENU_LOGO_N equ 5               ; ...and menu_relayout stamps this into cell
+    dw menu_s_shutdown
+MENU_LOGO_N equ 6               ; ...and menu_relayout stamps this into cell
 %endif
                                 ; 0's MB_NITEM. It was a literal 3 there, in
                                 ; a different file from the list it counts
-%ifdef KERN_BIG
-menu_s_linkopenx: db MENU_DIS
-menu_s_linkopen: db 'Open Shortcut', 0
-menu_s_linkremovex: db MENU_DIS
-menu_s_linkremove: db 'Remove Shortcut', 0
-menu_s_linksave: db 'Save Desktop', 0
-menu_s_linkinfox: db MENU_DIS
-menu_s_linkinfo: db 'Get Info', 0
-%endif
 menu_items_file:
     dw menu_s_close
-%ifdef KERN_BIG
-    dw menu_s_linkopen, menu_s_linkremove, menu_s_linksave, menu_s_linkinfo
+%ifdef OS88_SHORTCUTS
+    dw sc_s_remx                ; item 1, swapped by ui_loc_gate (SPEC.md 26.8.5)
+MENU_FILE_N equ 2
+%else
+MENU_FILE_N equ 1
 %endif
 %ifdef KERN_BIG
 menu_items_builtin:
@@ -2683,7 +2699,7 @@ menu_loc_set:
     dw 0                        ; AM_ONCMD: kernel-dispatched
 %ifdef KERN_BIG
     dw 2                        ; AM_COUNT
-    dw menu_s_file,    menu_items_file,    5
+    dw menu_s_file,    menu_items_file,    MENU_FILE_N
     dw menu_s_builtin, menu_items_builtin, 3
 %else
     dw 1                        ; AM_COUNT: File alone (SPEC.md 14.6). The
@@ -2752,6 +2768,9 @@ menu_bovr:  resb 1              ; ...and somebody painted OVER the bar, so the
                                 ; A different question from the one above and
                                 ; a far rarer one: this is the only flag that
                                 ; erases anything (SPEC.md 12.9)
+%if menu_bovr - menu_bdirty != 1  ; ADJACENT: menu_force and menu_init
+%error "menu_bovr must follow menu_bdirty - menu_force sets both with one word store"
+%endif
 menu_bcell: resb MENU_BCMAX + 1 ; the menus segment as it is ON THE GLASS, one
                                 ; byte per 8px cell - composed into, diffed
                                 ; against and emitted from. The spare cell is

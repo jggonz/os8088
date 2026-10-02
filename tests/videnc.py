@@ -361,13 +361,14 @@ def main():
             bad.append("the look-ahead flickered %.1f against %.1f, error "
                        "%.4f against %.4f" % (q1["q_flick"], q0["q_flick"],
                                               q1["q_vis"], q0["q_vis"]))
-        # ...and the ring the stream assumes, in its header (98.1.1): a
-        # 16 KB reserve banks in 2 slots, the default 192 KB in 8
+        # ...and the ring the stream assumes, in its header (98.1.1): the
+        # slots less TWO hold the reserve (98.2.1.3), so a 16 KB reserve
+        # wants 4 - a 2-slot ring banks nothing - and the default 192 KB 8
         q2, r2, k2 = picq("asked")
         print("   the ring the header asks: %d slots at 16 KB, %d at the "
               "default reserve" % (r1.ring, r2.ring))
-        if (r1.ring, r2.ring) != (2, 8):
-            bad.append("rings of %d and %d slots, not 2 and 8"
+        if (r1.ring, r2.ring) != (4, 8):
+            bad.append("rings of %d and %d slots, not 4 and 8"
                        % (r1.ring, r2.ring))
         # --- 3d: --aim size (98.2.1.4): smaller than asked where the budget
         # is not what binds, and the still after the motion still converges

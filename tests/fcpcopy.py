@@ -51,6 +51,7 @@ import os88mouse
 import os88sym
 import dispcp
 import os88disk
+from os88geom import FERR_FULL                           # noqa: E402
 
 S = os88sym.linear
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_herc_gla_144"
@@ -74,7 +75,6 @@ MB_ENTSZ, MB_SEG, MB_XL, MB_XR = 12, 10, 6, 8
 BAR_Y = 8
 ITEM0_Y, ITEM_H = 28, 16        # SPEC.md 12: MENU_ITEM_H = 16 in a 19px bar
 I_CUT, I_COPY, I_PASTE = 0, 1, 2
-FERR_FULL = 6
 fails = []
 
 

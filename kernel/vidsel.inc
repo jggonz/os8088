@@ -488,7 +488,7 @@ vid_mono_text:
                                 ; unreachable, and this IS the answer it gives.
     test byte [vid_avail], VID_A_VGA
     jnz .mine
-    clc                         ; the ROM's mode 7 is this card: let it
+                                ; the ROM's mode 7 is this card: let it
     ret
 .mine:
     push ax
@@ -1101,9 +1101,7 @@ vid_switch:
                                 ; nothing IN wm_paint_all destroys them
 .already:
     clc
-    retf
-.refuse:
-    stc
+.refuse:                        ; (`jc` arrives with CF = 1)
     retf
 
 ; =============================================================================
@@ -1269,8 +1267,8 @@ vid_bk:
 .m8:
     mov dx, 0x3B8
     out dx, al
-    jmp short .out
-%ifdef GFX_VGA
+%ifdef GFX_VGA                  ; (without the planar arm .out is the next
+    jmp short .out              ; instruction, and the jump is not assembled)
 .planar:
     mov al, dh                  ; BOTH planar kinds blank the same way - the
     call vid_ac_pal             ; Attribute Controller's Color Plane Enable,
@@ -1415,6 +1413,9 @@ VID_CTX_SZ   equ VID_CTX_W*2+5
 vid_ndisp   db 1                ; displays the kernel has brought up. 1 for
                                 ; ever on a machine with one card
 vid_cur     db 0                ; which display's geometry is in the live block
+%if vid_cur - vid_ndisp != 1
+  %error "vid_ndisp/vid_cur must stay adjacent, ndisp first: vid_disp_init and vid_ctx_init reset the pair to 1 display, display 0 in ONE word store"
+%endif
 vid_ox      dw 0                ; ...and its ORIGIN in the virtual desktop,
 vid_oy      dw 0                ; which is what every 39.14 hook subtracts.
                                 ; OUTSIDE the sixteen-word run on purpose:
@@ -1557,13 +1558,7 @@ vid_ctx_capture:
     mov [di+VID_CTX_KIND], cl   ; rather than in the run, because the run is
                                 ; what the RENDERER reads and a kind is not
                                 ; renderer state (SPEC.md 39.12)
-    pop es
-    pop ds
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
+    jmp short vid_ctx_act.pops  ; the same six pushes, so the same six pops
 
 ; -----------------------------------------------------------------------------
 ; vid_ctx_act - make display AL the one the renderer draws on
@@ -1636,6 +1631,7 @@ vid_ctx_act:
     mov di, VID_ROWTAB
 .norow:
     mov [vid_rowmax], di
+.pops:                          ; (vid_ctx_capture leaves through here too)
     pop es                      ; the pops are HERE, not above the origin
     pop ds                      ; block: DS is KERNEL_SEG either way (every
     pop di                      ; caller of this routine already has it, or
@@ -1679,8 +1675,7 @@ vid_ctx_init:
     push es
     mov cx, KERNEL_SEG
     mov es, cx
-    mov byte [vid_ndisp], 1
-    mov byte [vid_cur], 0
+    mov word [vid_ndisp], 1     ; one display, display 0 current (a pair)
     xor al, al
     call KERNEL_SEG:cw_vid_ctx_ptr
     xor ax, ax                  ; display 0 sits at the virtual origin
@@ -1773,13 +1768,11 @@ vid_disp_find:
     add di, VID_CTX_SZ
     inc cl
     cmp cl, [vid_ndisp]
-    jb .next
-    stc                         ; the MISS pays the jump, and that is the
-    jmp short .out              ; dead zone - which is what mou_clamp exists
-.hit:                           ; to correct, so it is once per ISR pass with
-    mov al, cl                  ; the pointer between monitors: 15 clocks
-    clc                         ; against a ~4,500-clock pass
-.out:
+    jb .next                    ; the MISS falls out with CF = 0 (jb not
+.hit:                           ; taken) and the HIT arrives with CF = 1 (jb
+    mov al, cl                  ; taken), so ONE cmc answers both: 0 on a hit,
+    cmc                         ; 1 on a miss - with AL = the count on a miss,
+                                ; which the header's "clobbers AX" allows
     pop di                      ; pop touches no flag, so the CF set above
     pop dx                      ; survives all four
     pop cx
@@ -1928,7 +1921,6 @@ vid_dual_ok:
     jz .no                      ; nothing to extend ONTO...
     test byte [vid_avail], VID_A_VGA | VID_A_CGA
     jz .no                      ; ...or nothing to extend FROM
-    clc
     ret
 .no:
     stc
@@ -2057,8 +2049,10 @@ vid_disp_init:
     ; --- SINGLE (SPEC.md 39.19) ---------------------------------------------
 .single:
     call vid_blank_kind         ; AL is still the other kind: dark its monitor
-    mov byte [vid_ndisp], 1     ; ...before anything can compute a union over
-    mov byte [vid_cur], 0       ; a display that is no longer there
+    mov word [vid_ndisp], 1     ; ...before anything can compute a union over
+                                ; a display that is no longer there: one
+                                ; display, and display 0 current (vid_cur is
+                                ; the byte after, the %error beside them)
     mov [vid_kind], ah          ; (a no-op unless a caller moved it)
     call vid_apply              ; republishes the chrome extent AND re-homes
     xor al, al                  ; the pointer onto display 0 - which is what

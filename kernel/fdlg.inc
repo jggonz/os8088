@@ -543,8 +543,11 @@ FDBODY fdlg_open_x
                                 ; taken down on every Open and every Save
 %endif
     mov [fdlg_win], bx          ; take the gate LAST: until this store the
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
                                 ; window is an ordinary one
+    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13): only
+                                ; ever tested for non-zero and cleared every
+                                ; pass, so an `inc` is a set - one byte under
+                                ; `mov byte`
     call KERNEL_SEG:cw_wm_show  ; raise + repaint, under the caller's lock
     clc
     jmp short .out
@@ -980,6 +983,26 @@ fdlg_commit:
     push dx
     push si
     push di
+    call fdlg_sizeof            ; DX:CX = what the READ will deliver (SPEC.md
+                                ; 20.14.3: the unpacked size for a compressed
+                                ; file), 0 if this listing has no such file -
+                                ; a typed Save name, a folder. A RAM lookup,
+                                ; plus ONE directory walk when it is really a
+                                ; file, for the hint.
+                                ;
+                                ; **BEFORE fdlg_close, and the order is the
+                                ; whole of it**: the close frees the LISTING
+                                ; STORE (fdlg_vfree - it is transient) and aims
+                                ; [dsk_dseg] at 0, while [disk_nfiles] still
+                                ; counts the entries - so a lookup after it
+                                ; compares the name against the INTERRUPT
+                                ; VECTOR TABLE, finds nothing, and every Open
+                                ; reported a size of 0. Write Img refused
+                                ; every image as 'Not a disk image' that way
+                                ; (SPEC.md 38.6.2). DX:CX survives from here to
+                                ; the callback: fdlg_close, fdlg_home_save and
+                                ; snd_disp_set preserve both, and the tests
+                                ; below spend AX and DI only
     call fdlg_close
 
     mov di, [fdlg_rqrec]        ; the staleness triple (SPEC.md 38.6)
@@ -996,8 +1019,8 @@ fdlg_commit:
     call fdlg_home_save         ; this app's folder and name, for its NEXT
                                 ; dialog (SPEC.md 38.10) - after the staleness
                                 ; triple, so a dead record is never written to
-    mov cx, [fdlg_rqcb]
-    or cx, cx
+    mov ax, [fdlg_rqcb]         ; AX and not CX: CX is the size's low half
+    or ax, ax
     jz .out
     push word [snd_inst]        ; STAMP THE DISPATCHED INSTANCE (SPEC.md
     call KERNEL_SEG:cw_snd_disp_set ; 34.3), exactly as W_ONKEY, W_ONCLICK, the
@@ -1022,13 +1045,7 @@ fdlg_commit:
                                 ; by instance and nothing owns 0xFF.
     push es                     ; the callback owes us nothing (SPEC.md
     push bp                     ; 38.6), and ES is the one register the
-    mov bp, cx                  ; kernel cannot shrug off (SPEC.md 1)
-    call fdlg_sizeof            ; DX:CX = what the READ will deliver (SPEC.md
-                                ; 20.14.3: the unpacked size for a compressed
-                                ; file), 0 if this listing has no such file -
-                                ; a typed Save name, a folder. A RAM lookup,
-                                ; plus ONE directory walk when it is really a
-                                ; file, for the hint
+    mov bp, ax                  ; kernel cannot shrug off (SPEC.md 1)
     mov al, [fdlg_mode]         ; the callback's contract: AL = mode,
     mov ah, 0                   ; SI = its window, ES:DI = the name - ES,
     mov si, [fdlg_rqwin]        ; because for a package DS is its own
@@ -1138,20 +1155,17 @@ fdlg_setname:
     jmp fdk_si
 
 ; -----------------------------------------------------------------------------
-; fdlg_rows - the display row count (SPEC.md 38.4)
-; in:  nothing
-; out: AX = [disk_nfiles]. Preserves everything else.
+; THE DISPLAY ROW COUNT IS [disk_nfiles] (SPEC.md 38.4), read in place.
 ;
 ; A display row IS a directory index. It used not to be: this module
 ; synthesized its own '..' row and carried a +1 offset through every row <->
 ; index conversion in it. The MOUNT puts the parent link in the listing now
 ; (SPEC.md 19.5), so the dialog, the Disk window and every view cache get the
 ; same row from the same place - and the offset, and the one routine that
-; existed to decide it, are gone.
+; existed to decide it, are gone. `fdlg_rows` outlived its reason as a
+; `mov ax, [disk_nfiles]` / `ret`, and three of its six callers banked AX
+; around it to get the count in BX; it is read in place now.
 ; -----------------------------------------------------------------------------
-fdlg_rows:
-    mov ax, [disk_nfiles]
-    ret
 
 ; -----------------------------------------------------------------------------
 ; fdlg_sizeof - how big is the file the box now names? (SPEC.md 38.6)
@@ -1251,7 +1265,7 @@ fdlg_sizeof:
 
 ; -----------------------------------------------------------------------------
 ; fdlg_stage - stage one display row (SPEC.md 38.4)
-; in:  AX = display row = directory index, already checked against fdlg_rows
+; in:  AX = display row = directory index, already checked against [disk_nfiles]
 ; out: fdlg_row = its NUL name, [fdlg_type] / [fdlg_size] = the SPEC.md 19
 ;      type and size words. Preserves all registers.
 ; -----------------------------------------------------------------------------
@@ -1377,10 +1391,7 @@ fdlg_setsel:
     push bx
     push cx
     push dx
-    push ax
-    call fdlg_rows              ; AX = total rows
-    mov bx, ax
-    pop ax
+    mov bx, [disk_nfiles]       ; BX = total rows (a row IS an index)
     or bx, bx
     jz .none
     or ax, ax
@@ -1419,13 +1430,13 @@ fdlg_setsel:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 fdlg_clamp:
-    push ax                     ; NOT CX: fdlg_rows is `mov ax,[disk_nfiles] /
-                                ; ret` and nothing else here names it
+    push ax                     ; NOT CX: the count below is read into AX,
+                                ; and nothing else here names CX
     cmp word [fdlg_scrl], 0x8000    ; a decrement below zero wrapped: the
     jb .top                         ; floor is tested FIRST, or the wrapped
     mov word [fdlg_scrl], 0         ; value would clamp to the ceiling and
 .top:                               ; the up-arrow would jump to the end
-    call fdlg_rows              ; AX = total rows
+    mov ax, [disk_nfiles]       ; AX = total rows
     sub ax, FD_ROWS
     jg .cap
     xor ax, ax
@@ -2049,7 +2060,7 @@ fdlg_draw_rows:
     push di
     push bp
 
-    call fdlg_rows              ; AX = total rows
+    mov ax, [disk_nfiles]       ; AX = total rows
     sub ax, [fdlg_scrl]         ; shown = min(total - scroll, FD_ROWS)
     jg .some
     xor ax, ax
@@ -2130,7 +2141,7 @@ fdlg_draw_rows:
 ; instead of refilling the list. Range-checked here rather than at the call
 ; sites, because one of them hands it a row it has not looked at.
 ;
-; It asks fdlg_rows for the total instead of reading [fdlg_shown], which is
+; It reads [disk_nfiles] for the total instead of reading [fdlg_shown], which is
 ; painter scratch and means nothing on the click path.
 ; -----------------------------------------------------------------------------
 fdlg_sel_bar:
@@ -2138,10 +2149,7 @@ fdlg_sel_bar:
     push bx
     push cx
     push dx
-    push ax
-    call fdlg_rows              ; AX = total display rows
-    mov bx, ax
-    pop ax
+    mov bx, [disk_nfiles]       ; BX = total rows (a row IS an index)
     cmp ax, bx                  ; 0FFFFh (none) also fails this
     jae .out
     sub ax, [fdlg_scrl]
@@ -2183,7 +2191,7 @@ fdlg_sbset:
     mov [os88ui_ksb+2], ax
     add ax, FD_LY2-FD_LY1
     mov [os88ui_ksb+6], ax
-    call fdlg_rows
+    mov ax, [disk_nfiles]       ; AX = total rows
     mov [os88ui_ksb+8], ax      ; total
     mov word [os88ui_ksb+10], FD_ROWS
     mov ax, [fdlg_scrl]
@@ -2399,15 +2407,15 @@ fdlg_findname:
     jc .out                     ; SYSTEM STANDARD, and disk.inc's own header
     FDX dsk_get_dir_x          ; names this caller. fdlg_home_go does exactly
     cmp word [si+16], 2         ; this seventeen hundred lines above; here it
-    jb .no                      ; was a hand-rolled walk that staged the found
+    jb .out                     ; was a hand-rolled walk that staged the found
     mov ax, [si+18]             ; entry a SECOND time to read its cluster
-    clc                         ;
+                                ;
 .out:                           ; The old walk only ever matched a FOLDER and
     pop si                      ; this matches any entry, then rejects a file
     ret                         ; on the `jb` - and a FAT directory cannot
-.no:                            ; hold both names, the caller having just made
-    stc                         ; the folder with dskw_mkdir_x and remounted
-    jmp short .out
+                                ; hold both names, the caller having just made
+                                ; the folder with dskw_mkdir_x and remounted.
+                                ; `jb` arrives with CF=1, which IS the refusal
 
 ; dsk_streq is disk.inc's, and it is the body this used to carry: three
 ; modules compare two NUL strings in the kernel segment and disk.inc is the
@@ -3163,10 +3171,7 @@ FDBODY fdlg_onclick_x
     cmp ax, FD_ROWS
     jae .outj
     add ax, [fdlg_scrl]
-    push ax
-    call fdlg_rows              ; AX = total rows
-    mov bx, ax
-    pop ax
+    mov bx, [disk_nfiles]       ; BX = total rows (a row IS an index)
     cmp ax, bx
     jae .out                    ; past the last row: leave the selection
 
@@ -3211,9 +3216,7 @@ FDBODY fdlg_onclick_x
     call fdlg_sel_bar           ; off (a no-op at 0FFFFh)
     pop ax
     mov bx, [fdlg_scrl]
-    push bx
-    call fdlg_setsel
-    pop bx
+    call fdlg_setsel            ; (all registers preserved)
     mov ax, [ui_click_t]
     mov [fdlg_clkt], ax
     cmp bx, [fdlg_scrl]
@@ -3309,7 +3312,7 @@ fdlg_cy:    resw 1
 fdlg_shown: resw 1              ; rows the painter actually drew: scratch,
                                 ; valid inside one draw and nowhere else -
                                 ; which is why fdlg_sel_bar, reachable from a
-                                ; click, asks fdlg_rows instead
+                                ; click, reads [disk_nfiles] instead
 fdlg_row:   resb 18             ; one staged row's name (16 + NUL, padded)
 fdlg_type:  resw 1              ; and its SPEC.md 19 type...
 fdlg_size:  resw 1              ; ...and size dword, lo...
@@ -3407,11 +3410,9 @@ fdlg_load:
 ; will not load is the same answer.
 fdlg_open_x:
     call fdlg_load
-    jc .no
+    jc .no                      ; CF=1 already: the refusal
     call far [FDFP + FDE_OPEN*4]
-    ret
 .no:
-    stc
     ret
 
 ; --- ...and the other six load NOTHING ---------------------------------------

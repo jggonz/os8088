@@ -594,13 +594,13 @@ fcp_clspan:
     mov al, [fcp_drv]
     xor bx, bx
     FCPX fcp_goto
-    jc .err
+    jc .out
     FCPX dskw_clbytes
     mov cx, ax
     mov al, [fcp_ddrv]
     xor bx, bx
     FCPX fcp_goto
-    jc .err
+    jc .out
     FCPX dskw_clbytes
     cmp ax, cx
     jae .have
@@ -608,10 +608,7 @@ fcp_clspan:
 .have:
     mov [fcp_lclus], ax
     clc
-    jmp short .out
-.err:
-    stc
-.out:
+.out:                           ; (a refusal arrives with its `jc`'s CF = 1)
     jmp fcpk_cx
 
 ; -----------------------------------------------------------------------------
@@ -822,10 +819,12 @@ fcp_step:
     jne .copyit
     call fcp_relink             ; CF=0 done; CF=1 with AX=0 not attempted;
     jnc .finish2                ; CF=1 with AX = FERR_* past the point of
-    or ax, ax                   ; no return
-    jnz .fail
+    or ax, ax                   ; no return - which lands on the `jc .fail`
+    stc                         ; below with CF set: .fail is one byte past a
+    jnz .jcfail                 ; short jnz's reach from here (size pass 8)
 .copyit:
     call fcp_claim              ; THE COPY BUFFER, CLAIMED ONLY NOW - after the
+.jcfail:
     jc .fail                    ; re-link has had its chance, and before the
                                 ; first thing the copy engine creates
                                 ; (fcp_mkroot below), so a heap that cannot
@@ -984,7 +983,7 @@ fcp_relink:
     jnc .no                     ; it does: the copy path knows how to ask
     cmp ax, FERR_NOENT
     jne .no
-    cmp word [DSKW_FNONE], 0xFFFF
+    cmp word [DSKW_FNONE], 0xFFFF   ; (the HIGH word on kern_big, 18.7.5)
     je .no                      ; no reusable slot: FERR_DIRFULL is the copy
                                 ; engine's to report, with its own message
 
@@ -1052,12 +1051,13 @@ fcp_rlup:
     push ss                     ; ES = LOW_SEG (SPEC.md 2.1), which is what SS names
     pop es
     mov ax, [fcp_rlclus]
+%ifdef OS88_BIGVOL
+    FCPX dsk_c2lba_arm_x        ; AX = the folder's first sector, its high
+%else                           ; word armed (SPEC.md 18.7.5)
     FCPX dsk_clus2lba_x ; AX = the folder's first sector
+%endif
     jc .out
     push ax
-%ifdef OS88_BIGVOL
-    FCPX dsk_c2arm_x            ; ...all 32 bits of it (SPEC.md 18.7.5)
-%endif
     FCPX dsk_rd1_x
     pop ax
     jc .out
@@ -1218,8 +1218,8 @@ fcp_scan:
 .readsec:
     FCPX dsk_dirw_get_x ; dsk_secbuf = the sector holding the
     jnc .secok                  ; ordinal (SPEC.md 19.2.3)
-    or ax, ax
-    jz .end
+    jz .end                     ; ZF=1: the chain ended (the thunk's retf
+                                ; keeps the flags dsk_dirw_get_x answered)
     jmp .ioerr
 .secok:
     mov si, dsk_secbuf
@@ -1241,14 +1241,10 @@ fcp_scan:
     cmp al, 0x20
     je .next
     mov ah, [es:si+DSK_R_ATTR]
-    mov al, ah
-    and al, 0x3F
-    cmp al, 0x0F
-    je .next                    ; a long-name fragment
-    test ah, 0x08
-    jnz .next                   ; the volume label
-    test ah, 0x06
-    jnz .next                   ; hidden or system, exactly as the listing
+    test ah, 0x0E               ; the volume label, or hidden or system,
+    jnz .next                   ; exactly as the listing - and a long-name
+                                ; fragment, whose attribute 0x0F carries all
+                                ; three, which is the listing's reason too
     FCPX dsk_synth_x              ; ES:SI -> dsk_ent (SPEC.md 19): the display
                                 ; name, the type word, the cluster, the size
 .stage:                         ; ...and FSV_ENUM's answer arrives here too
@@ -1513,13 +1509,9 @@ fcp_rdopen:
     mov [fcp_rsz], cx           ; dskw_stat answered (SPEC.md 62.9.1)
     mov [fcp_rszh], dx
     mov word [fcp_roff], 0      ; such a read walks an OFFSET, not a chain
-    mov word [fcp_roff+2], 0
-    clc
+    mov word [fcp_roff+2], 0    ; (CF = 0 from the `jc`; mov keeps it)
 .out:
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp fcp_bufget.out          ; the same three pops (a pop writes no flag)
 
 ; -----------------------------------------------------------------------------
 ; fcp_rdnext - read the next chunk of that file into the copy buffer
@@ -1690,9 +1682,11 @@ fcp_chunkset:
 ; throwing it away would merely be wasteful; doing the work and leaving
 ; something that looks like the file is the part that costs the user data.
 ;
-; It is free: dskw_dfree answers from the resident FAT snapshot with no disk
-; I/O at all, and the destination volume is current here anyway because the
-; create is the next thing that happens.
+; It costs no volume switch: the destination is current here anyway, because
+; the create is the next thing that happens. It is NOT free on a hard disk,
+; whose FAT is paged through a nine-sector window - which is why it sets
+; [dsk_fcgoal] to the file's sectors round the count, and a partition with
+; room stops at the first window (SPEC.md 22.5.2.1). On a floppy the FAT is resident and the count is CPU alone.
 ;
 ; **"I DO NOT KNOW" ANSWERS YES.** A volume whose dfree fails - a redirector
 ; that publishes no FSV_DFREE (SPEC.md 62.9.1) is the real case - falls through
@@ -1708,9 +1702,23 @@ fcp_chunkset:
 ; under any rounding.
 ; -----------------------------------------------------------------------------
 fcp_room:                       ; clobbers AX, BX, DX - its ONE caller reloads
-    FCPX dskw_dfree_x           ; all three between here and the create, so
-    jc .yes                     ; saving them would be four bytes spent on
-    add ax, [fcp_ovwsz]         ; nothing. CX is untouched: [fcp_flen] is
+%ifdef OS88_BIGVOL              ; all three between here and the create, so
+    mov ax, [fcp_need+1]        ; saving them would be four bytes spent on
+    mov dl, [fcp_need+3]        ; nothing. THE WANT GOES IN (22.5.2.1): a hard
+    shr dl, 1                   ; disk's count may stop once it has MORE than
+    rcr ax, 1                   ; this many CLUSTERS - the file's whole
+    mov [dsk_fcgoal], ax        ; sectors, which is at least its clusters
+                                ; however big they are. Past 32MB the goal
+                                ; wraps and may stop the count early, which
+                                ; answers "no room" - and no FAT16 volume
+                                ; here has room for such a file
+%endif
+    FCPX dskw_dfree_x
+%ifdef OS88_BIGVOL
+    mov word [dsk_fcgoal], 0xFFFF   ; ...and back to "all" (`mov`: CF stays)
+%endif
+    jc .yes
+    add ax, [fcp_ovwsz]         ; CX is untouched: [fcp_flen] is
     adc dx, [fcp_ovwsz+2]       ; already in it and the create needs it
     jc .yes                     ; the sum wrapped: bigger than any file
     cmp dx, [fcp_need+2]
@@ -1720,9 +1728,7 @@ fcp_room:                       ; clobbers AX, BX, DX - its ONE caller reloads
     jb .no
 .yes:
     clc
-    ret
-.no:
-    stc
+.no:                            ; (CF = 1: both arrive by `jb`)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1843,6 +1849,10 @@ fcp_xfer:
 .jerr:
     jmp short .err              ; check costs no switch of its own - and it is
 .create:                        ; still before anything has been created
+%ifdef KERN_BIG
+    xor di, di                  ; no WRITE_SEQ token yet: the first is COLD.
+%endif                          ; DI carries it from here: nothing in the loop
+                                ; below touches it but WRITE_SEQ itself
     call fcp_wprep
     xor dx, dx                  ; DX:CX = the chunk (SPEC.md 18.4.1) - the one
     FCPX dskw_write_x           ; argument the two sites do not share
@@ -1863,10 +1873,24 @@ fcp_xfer:
     FCPX fcp_gofd
     jc .err
     call fcp_wprep
+%ifdef KERN_BIG
+    mov al, WSQF_HELD           ; ONE HELD STREAM per file (SPEC.md 22.5.3):
+    call COLD_SEG:dwf_dskw_write_seq    ; no lookup and no walk a chunk, and
+                                ; no FAT or directory write until the close
+                                ; below - a partial copy is deleted anyway,
+                                ; so HELD's one loss is nothing
+%else
     FCPX dskw_append_x
+%endif
     jc .err
     jmp .chunk
 .fin:
+%ifdef KERN_BIG
+    xor cx, cx                  ; THE CLOSE: the stream's link, FAT and size.
+    call COLD_SEG:dwf_dskw_write_seq    ; Nothing held (one chunk, a
+    jc .err                     ; redirected copy) answers AX = 0 at once; a
+%endif                          ; failure is the disk's, and the partial copy
+                                ; goes with it
     mov byte [fcp_made], 0      ; whole and committed: nothing to undo
     clc
     jmp short .out
@@ -2344,9 +2368,9 @@ fcp_arm:
     jc .no
     call far [FCPFP + FCPE_ARM*4]
     jmp short fcp_fin           ; CF is fcp_arm's answer and fcp_fin keeps it
-.no:
-    stc                         ; files.inc reaches this one with `jmp`, and a
-    ret                         ; stub is as jumpable as the body it replaces
+.no:                            ; (CF = 1, the `jc`'s) files.inc reaches this one
+    ret                         ; with `jmp`, and a stub is as jumpable as the
+                                ; body it replaces
 
 fcp_paste:
     call fcp_load
@@ -2399,6 +2423,7 @@ fcp_pfail:
     FCPXF dsk_bytes_secs_x
 %ifdef OS88_BIGVOL
     FCPXF dsk_c2arm_x
+    FCPXF dsk_c2lba_arm_x
 %endif
     FCPXF dsk_chdir_q_x
     FCPXF dsk_clus2lba_x

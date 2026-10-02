@@ -53,8 +53,8 @@ CCELL = re.compile(r'^\s*OSAPI_(?:RCSLOT|RCXCELL|RNCELL|FCELL)\s+'
 # targets were not merely untested above - they were not in the label map at
 # all, which is how adding JSLOT alone would have bought nothing.
 CELLDEF = re.compile(r'^\s*OSAPI_(?:NSTUB|XSTUB)\s+([A-Za-z_]\w*)\s*,')
-MODS = ('.modc', '.modf', '.modl', '.modh', '.modp', '.modd', '.modk',
-        '.modx', '.modt')  # module images (2.8).
+MODS = ('.modc', '.modu', '.modf', '.modl', '.modh', '.modp', '.modd',
+        '.modk', '.modx')  # module images (2.8).
 # `.modp` is Cut/Copy/Paste and kern_small's ALONE (SPEC.md 22.3,
 # docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2): filecp.inc emits its bodies there on
 # that build and into `.cold` on kern_big, which is the first conditional
@@ -114,7 +114,7 @@ EXTRA = {'apps/os88ui.inc': '.cold',
          # would be filed as `.text` and every far call out of it reported as
          # a crossing that is not one - and, worse, a NEAR call out of it
          # would not be reported at all.
-         'kernel/clockw.inc': '.modc'}
+         'kernel/clockw.inc': '.modu'}
 
 
 # THE SECTION WALK, DONE ONCE PER FILE AND KEPT.  Every check below wants the
@@ -345,8 +345,49 @@ def main():
                     continue
                 a = sect if sect in FAR else '.text'
                 b = tsect if tsect in FAR else '.text'
+                # `.modu` is CTRL.DRV's second half, the SAME address space
+                # as `.modc` (vfollows, SPEC.md 2.8.7): a near call across is
+                # one image calling itself. Which way it goes is the
+                # one-directional check below, not this one.
+                a = '.modc' if a == '.modu' else a
+                b = '.modc' if b == '.modu' else b
                 if a != b and seg is None:
                     bad.append((f, n, '%s -> %s, near' % (a, b), tgt))
+    # --- ...and the core may not name the panel (SPEC.md 2.8.7) -------------
+    # MOD_SETS loads CTRL.DRV's `.modc` ALONE, so on that load nothing of
+    # `.modu` is in memory: a call, a jump or an address taken from the core
+    # into the panel runs off the end of the claim into whatever the heap put
+    # there, and does not fault. Any identifier at all, not only a call
+    # target, because a string or a table named from the core is the same
+    # read past the end.
+    # ONE EXEMPTION, and it is a table of offsets rather than a reference:
+    # `modc_hdr` lists every entry of the WHOLE image, because MOD_CTRL arms
+    # all of them from it - and MOD_SETS arms only the first, CPE_SC, which
+    # mod_check bounds against the bytes that arrived (mod.inc).
+    WORD = re.compile(r'[A-Za-z_]\w*')
+    for f in files:
+        inmacro = False
+        owner = None                 # the non-local label this line is under
+        for sect, n, line in sections(f):
+            if MACRO_B.match(line):
+                inmacro = True
+                continue
+            if ENDMACRO_B.match(line):
+                inmacro = False
+                continue
+            if inmacro or sect != '.modc':
+                continue
+            code = line.split(';', 1)[0]
+            m = LABEL.match(code)
+            if m:
+                owner = m.group(1)
+                code = code[m.end():]
+            if owner == 'modc_hdr':
+                continue
+            for w in WORD.findall(code):
+                if where.get(w) == '.modu':
+                    bad.append((f, n, 'settings core -> panel (.modc -> '
+                                '.modu)', w))
     for f, n, why, tgt in bad:
         print("%s:%d: %s: %s" % (f, n, why, tgt), file=sys.stderr)
     if bad:

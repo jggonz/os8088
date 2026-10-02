@@ -59,7 +59,7 @@ about a state that never existed. It tests the whole desktop from one frame
 now (os88marty `_desktop_up`), so `boot=True` is the wait again.
 
 EVERY COORDINATE IS DERIVED, so this runs on all three adapters. The drive
-zone is desk_ord_xy's arithmetic (SPEC.md 26.1) over [vid_desk_zx] and
+zone is desk_cell_xy (SPEC.md 26.9) on its [desk_zslot] cell, [vid_desk_zx] and
 [desk_rows] read out of the guest - 2 rows on CGA, 4 on Hercules, 7 on VGA,
 so a written-down zone is a different drive on each; the file rows are
 fm_layout's (FM_ROW_Y0 + i*FM_ROW_H below the content top). The frame itself
@@ -116,8 +116,14 @@ def trivial(m):
 # tile / zone / row are os88geom's, under this module's older names - every
 # coordinate in them is either a live guest word or a checked constant.
 tile = tile_xy
-zone = drive_xy
 row = row_xy
+
+
+def zone(m, vol):
+    """Volume `vol`'s picture centre. drive_xy takes a CELL since SPEC.md 26.9,
+    and a volume's cell is its desk_zslot byte - so B: is cell 1 only while
+    nothing else is placed before it."""
+    return drive_xy(m, drive_ordinal(m, "ABCDEFGH"[vol]))
 
 
 def idle(m, guest=2.0):

@@ -156,13 +156,18 @@ def button(m, ui, base, rw, rb, bad):
     def click():
         ui.mo.click(*at())
 
+    pressed = [0]
+
     def hold(cond, what, guest=20.0):
         """A press IN A BRACKET, held until the player has acted on it: the
         play polls the buttons between frames and a press is an edge
         between two polls, so a click shorter than a poll can fall between
-        them - as it cannot for a hand, whose click is ~100 ms"""
+        them - as it cannot for a hand, whose click is ~100 ms. [pressed]
+        is the frames drawn AT the press: the pointer's trip to the button
+        is guest time the play goes on through"""
         ui.mo.to(*at())
         ui.mo._sep()
+        pressed[0] = rw("vp_done")
         ui.mo._edge(True)
         until(cond, what, guest)
         ui.mo._edge(False)
@@ -187,8 +192,8 @@ def button(m, ui, base, rw, rb, bad):
     fps = (rw("vp_done") - d0) / ((int(m.status()["cycles"]) - c0) /
                                   4772727.0)
     mid = (rb("vp_ready"), rb("vp_winm"))
-    d1 = rw("vp_done")
     hold(lambda mm: rb("vp_mute") == 0, "the click to unmute the play")
+    d1 = pressed[0]
     until(lambda mm: rb("vp_winm") == 1 and rb("vp_ready") == 1 and
           rb("vp_snd") == 1 and rb("vp_sopn") == 1,
           "the play again in the window, with its sound", 60.0)

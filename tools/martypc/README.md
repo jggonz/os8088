@@ -16,7 +16,7 @@ in the guest at all**.
 |---|---|
 | `UPSTREAM` | the pinned commit. Editing it is a deliberate act, not maintenance |
 | `debug_server.rs` | the new module, copied in whole |
-| `patches/` | everything else: the upstream files that had to change, plus `devices/sblaster.rs`, the Sound Blaster upstream does not have, `04-floppy-disk-timing.patch`, the platter, and `05-fdc-recal-one-interrupt.patch`, one IRQ6 a recalibrate rather than upstream's two |
+| `patches/` | everything else: the upstream files that had to change, plus `devices/sblaster.rs`, the Sound Blaster upstream does not have, `04-floppy-disk-timing.patch`, the platter, `05-fdc-recal-one-interrupt.patch`, one IRQ6 a recalibrate rather than upstream's two, and `07-v20-mode-flag-protect.patch`, the V20's MD flag write-protected outside BRKEM as the chip does it (upstream let POPF clear it, so every 8086/286/386 FLAGS probe called a V20 a 386), and `08-hlt-override-lost.patch`, a HLT whose INTR is gone by the end of the instruction HALTING as the 8088 does (upstream halted the prefetcher and not the CPU, so the next queue read spun for ever inside one step and the debug server never answered again - `vidspkunmute`'s *"the debug server is gone (TimeoutError)"*, about one run in two at 11 kHz under load) |
 | `configs/` | the machine configs (docs/MARTYPC-DEBUG.md's *The list*), the first shaped after docs/FIELD-MACHINES.md's 5150 |
 | `roms/` | **gitignored, and you supply it** — see the note at the bottom |
 | `build.sh` | clone at the pin, patch, stage a run tree, build |

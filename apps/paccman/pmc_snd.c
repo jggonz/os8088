@@ -97,9 +97,9 @@ static unsigned char pmc_v_vol[3];
 static unsigned char pmc_wph;
 
 /* Whether Game > Sound is on. It is a plain toggle and is NEVER greyed:
- * kernel/snd.inc's osapi_snd_caps answers the constant SND_CAP_TONE |
- * SND_CAP_PCM_EXCL with no kern_small arm, so every machine this OS boots on
- * has a speaker and the MACHINE is never a reason to refuse (SPEC.md 91). */
+ * kernel/snd.inc's osapi_snd_caps answers SND_CAP_TONE on every kernel
+ * (and PCM_EXCL on kern_big alone, SPEC.md 34.4.1), so every machine this OS
+ * boots on has a speaker and the MACHINE is never a reason to refuse (SPEC.md 91). */
 static int pmc_snd_on = 1;
 
 /* The Hz the speaker was last asked for, so silence is not re-sent every OS

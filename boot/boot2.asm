@@ -51,7 +51,7 @@ DPT_AT      equ 0x0580          ; 0000:0580 - our copy of the diskette
                                 ; KERNEL_SEG, so nothing the kernel or its heap
                                 ; can claim reaches it and it needs no restore
 B2_STACK    equ 0x7C00          ; stage 1's STACK_TOP, which is still ours
-KSIG_OFF    equ 6144            ; SPEC.md 18.93.1's probe, as a MEMORY offset
+KSIG_OFF    equ 5632            ; SPEC.md 18.93.1's probe, as a MEMORY offset
                                 ; from KERNEL_SEG - the Makefile reads the same
                                 ; bytes out of the file at KSIG_OFF + BOOT2_PAD,
                                 ; which is FILE SECTOR 21 and has to be: the
@@ -62,7 +62,8 @@ KSIG_OFF    equ 6144            ; SPEC.md 18.93.1's probe, as a MEMORY offset
                                 ; twice; that row checks they agree.
                                 ;
                                 ; IT MOVES WITH BOOT2_SECS, and has had three
-                                ; values for that reason: 11776 while the
+                                ; values for that reason (6144 -> 5632 when
+                                ; SPEC.md 6.0.1 took the blob 9 -> 10): 11776 while the
                                 ; blob was 13 sectors, 8704 when SPEC.md 2.9.12
                                 ; grew it to 19, and 14336 when 2.5.3's split
                                 ; took it back to 8. The number that has to

@@ -22,8 +22,8 @@
  * stop (wave 1) and Sound while it had no sound code to silence (waves 1-2);
  * each un-greying was the deletion of ONE marker byte and its reason, which is
  * exactly the shape SPEC.md 47 predicts. Neither fact was ever the MACHINE:
- * kernel/snd.inc's osapi_snd_caps answers the constant SND_CAP_TONE |
- * SND_CAP_PCM_EXCL on every kernel this OS boots, so a PaccMan that greyed
+ * kernel/snd.inc's osapi_snd_caps answers SND_CAP_TONE on every kernel this
+ * OS boots, so a PaccMan that greyed
  * Sound because "there is no speaker" would be greying a guess.
  *
  * THE TWO LIVE ITEMS THAT CARRY STATE SAY WHICH STATE THEY ARE IN, and the

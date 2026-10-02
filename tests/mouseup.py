@@ -25,6 +25,7 @@ from os88mouse import Mouse
 from os88fixture import need
 
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
+import os88geom                                              # noqa: E402
 from os88geom import WIN_SIZE, MAX_WIN   # NOT a local copy: this one
                                         # moved 28 -> 30 with SPEC.md
                                         # 13.8.2's W_ONDRAG, and a stale
@@ -63,19 +64,6 @@ def check(name, cond, note=""):
         fails.append(name)
 
 
-def drive_y(m, n=1):
-    """The middle of drive zone n, read from the KERNEL rather than assumed.
-
-    The zone pitch is [desk_zstep] and SPEC.md 26.4 made it adapter-dependent
-    - 60 rows with the 32-row icon, 34 with the CGA's short one - so a
-    hard-coded y that worked on every adapter for months silently started
-    landing one zone out.
-    """
-    step = int.from_bytes(m.read(m.sym("desk_zstep"), 2), "little")
-    h1 = int.from_bytes(m.read(m.sym("desk_zh1"), 2), "little")
-    return 32 + n * step + h1 // 2
-
-
 def wins(m):
     blob = m.read(m.sym("wm_wins"), WIN_SIZE * MAX_WIN)
     out = []
@@ -105,11 +93,10 @@ with M.launch("build/os8088-360.img", apps="build/muptest.img",
               machine=MACHINE) as m:
     M.settle(m)
     mo = Mouse(marty=m)
-    vw = int.from_bytes(m.read(m.sym("vid_w"), 2), "little")
     print(f"== {MACHINE} : SPEC 13.7 + os88ui.inc + MOUSEUP-PLAN 4.2 ==")
 
     if not disk_win(m):
-        mo.dblclick(vw - 40, drive_y(m))
+        mo.dblclick(*os88geom.drive_pt(m, "B"))  # the zone BY LETTER, off desk_zslot (SPEC.md 26.9)
         M.settle(m)
     d = disk_win(m)
     if d is None:
