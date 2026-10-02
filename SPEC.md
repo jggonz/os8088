@@ -161178,7 +161178,7 @@ In Detailed, Home, End, Up, Down and PgUp/PgDn browse the report. The About hand
 to the provenance. The existing benchlib source is shared, including PIT latch,
 32-bit accumulation, empty-body subtraction, overflow flags, pagination and save.
 Slow bodies fall back to ticks; lab resize explicitly uses method T. All
-graphics use OS slots and a clipped 256x64 canvas inside a separate native
+graphics use OS slots and a clipped 256x64 or 256x128 canvas inside a separate native
 Graphics Lab on VGA, Hercules and CGA. The report
 states adapter/geometry and timing method. Comparisons are per workload; graphics
 indices use the matching CGA 640x200x1, Hercules 720x348x1 or VGA 640x480x4
@@ -161220,7 +161220,7 @@ the report and records configuration, binary hashes and measured workload counts
 The CGA profile supplies the common CPU/RAM reference. The same 5150 CPU, clock
 and RAM with Hercules or VGA supplies separate mode-matched graphics references.
 Each reference takes the median of three trials; every trial averages three
-complete runs. All 24 rows, samples, flags, means and hashes are committed in
+complete runs. All 25 rows, samples, flags, means and hashes are committed in
 reference*.json; baseline*.inc embeds the measured counts.
 
 ### 103.4 Dashboard and detailed report
@@ -161230,9 +161230,10 @@ bars and hardware-details panels, with Summary, Detailed, Compare, Run, Save
 and Quit buttons. The large headline is the arithmetic mean of the six CPU/RAM
 workload indices, explicitly labelled CPU + RAM; it is not a universal score.
 VGA bars use blue for CPU, green for RAM and red for graphics; monochrome bars
-use dithering. Their common ceiling starts at 100x and doubles beyond the
-largest score. Axis labels follow the scale; full-range numerical ratios remain
-visible. A UI timer animates widths after completion, outside timed work.
+use dithering. Their common ceiling rounds the largest available score up to a
+whole multiplier and adds 5x (69x becomes 74x; no scores yields 5x), saturating
+at the index type's maximum. Fractional axis labels follow the shared scale;
+full-range numerical ratios remain visible. A UI timer animates widths after completion, outside timed work.
 Detailed preserves the entire original paginated report and saved text file.
 Compare expands the workload bars. U/D/C select views; R/S/Q run/save/quit;
 Tab cycles views and F1 opens Detailed at the report's provenance. PgUp/PgDn
@@ -161244,20 +161245,25 @@ view changes are outside benchmark timing spans and add no resident bytes.
 
 ### 103.5 Averaged runs and live graphics lab
 
-One benchmark performs three complete passes over 24 fixed workloads and uses
+One benchmark performs three complete passes over 25 fixed workloads and uses
 48-bit sums divided by three to obtain each mean count. The first six rows are
 CPU/RAM; six basic graphics rows are followed by six larger primitive workloads
-and six advanced workloads. The report retains each sample, its timing method
+and seven advanced workloads. The report retains each sample, its timing method
 flags and the mean, plus sample 3's original detailed timing table. Progress
 names the run and workload and draws only between timed spans.
 
 The report window fits the available viewport and has no grow box. A separate
 resizable native Graphics Lab owns the drawing canvas and is destroyed with
 OSAPI_WM_DESTROY after each benchmark; only Quit closes the main instance.
-The advanced tier projects a cube with signed integer rotation and perspective
-division, draws its wireframe with Bresenham, scan-converts six flat-shaded
-triangles, generates patterned blits, scrolls the canvas, moves nested scene
-windows, and shrinks/restores the actual lab window through OSAPI_WM_RESIZE.
+The canvas doubles in height when the main window has at least 224 content rows;
+short viewports retain 64 rows. The larger primitive rows, scene and fractal
+fill that mode's canvas; exact mode-matched references record its dimensions.
+The advanced tier projects a cube with signed integer rotation, fixed X tilt
+and perspective division. Both wireframe and shaded rows render 48 frames,
+four complete Y revolutions; shading culls back faces and scan-converts visible
+triangles. A Q8.8 Mandelbrot row computes 64x32 points up to 24 iterations and
+draws 4x2 or 4x4 blocks. The suite also generates patterned blits, scrolls the
+canvas, moves nested scene windows, and shrinks/restores the actual lab window through OSAPI_WM_RESIZE.
 The scene supports window, button and 3D viewport objects with parent-relative
 coordinates. Logical nested windows are drawn inside the lab's clip; the OS
 manages the top-level lab. No resident kernel state or bytes are added.

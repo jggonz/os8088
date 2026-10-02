@@ -33,6 +33,8 @@ paged results; all facts remain available in Detailed.
 
 ![Live Graphics Lab rendering a projected flat-shaded cube](redline-shaded.png)
 
+![Mandelbrot benchmark filling the taller Graphics Lab canvas](redline-fractal.png)
+
 ![Graphics Lab with nested windows, button and 3D viewport objects](redline-lab.png)
 
 ## What the period software looked like
@@ -77,7 +79,8 @@ outside this package's CPU/graphics scope; FPU *presence* is still reported.
 
 ## What REDLINE tests
 
-Every machine runs identical work and iteration counts. The count column uses
+Iteration counts and CPU/RAM work are identical on every machine. Graphics
+use fixed work for the mode's selected canvas height. The count column uses
 PIT-count equivalents: net counts for method P, gross tick counts for method T.
 `us/op` is per complete body, **not per instruction or pixel**.
 
@@ -96,7 +99,7 @@ PIT-count equivalents: net counts for method P, gross tick counts for method T.
 | Monochrome blit | 64x32, alternating bit pattern | 32 |
 | Packed-color blit | 64x32, uniform color 1 | 16 |
 
-A benchmark runs the full 24-workload suite **three times**. Scores divide the
+A benchmark runs the full 25-workload suite **three times**. Scores divide the
 reference by the arithmetic mean of each workload's three raw measurements,
 rounded down in PIT-count units. Progress identifies the current run and row;
 the native Graphics Lab makes the drawing visible. Detailed and saved reports
@@ -107,21 +110,27 @@ The graphics tiers add these fixed bodies:
 
 | Tier | Workload | Work per body | Bodies per run |
 |---|---|---|---:|
-| 2 | Fill | 256x64 pixels | 8 |
-| 2 | Line field | 16 horizontal 256-pixel lines | 8 |
-| 2 | Nested frames | Eight inset frames inside 256x64 | 8 |
-| 2 | Text grid | Eight 31-cell opaque lines | 8 |
-| 2 | Mono blit | 128x64, alternating bits | 8 |
-| 2 | Packed blit | 128x32, uniform color 1 | 8 |
-| 3 | Wireframe cube | Eight integer rotation/perspective projections, 12 Bresenham edges | 8 |
-| 3 | Flat-shaded cube | Eight projected vertices, six scan-converted triangles; three face shades | 8 |
-| 3 | Patterned blit | Generate, blit and restore a 128x32 packed pattern | 4 |
-| 3 | Scroll | Byte-aligned 256x64 rectangle up/down four rows | 8 |
+| 2 | Fill | 256xH pixels | 8 |
+| 2 | Line field | H/4 horizontal 256-pixel lines | 8 |
+| 2 | Nested frames | Eight inset frames inside 256xH | 8 |
+| 2 | Text grid | H/8 31-cell opaque lines | 8 |
+| 2 | Mono blit | 128xH, alternating bits | 8 |
+| 2 | Packed blit | 128xH/2, uniform color 1 | 8 |
+| 3 | Wireframe cube | One of 12 Y poses, fixed X tilt, eight integer projections, 12 Bresenham edges | 48 |
+| 3 | Flat-shaded cube | One rotating pose, eight projected vertices; cull and scan-convert visible triangles of six faces | 48 |
+| 3 | Mandelbrot | 64x32 Q8.8 points, up to 24 iterations each, drawn as 4x(H/32) blocks | 2 |
+| 3 | Patterned blit | Generate/restore a 4KB pattern buffer; blit 128xH/2 | 4 |
+| 3 | Scroll | Byte-aligned 256xH rectangle up/down H/16 rows | 8 |
 | 3 | Nested moving windows | Three scene renders with a child sliding; window/button/3D objects inherit parent coordinates | 4 |
 | 3 | Lab resize/repaint | Shrink the native lab by eight pixels and restore it; method T | 4 |
 
 Graphics include integer CPU work, renderer, API arrival and video bus. They
-operate in the lab's clipped 256x64 canvas, using OS slots rather than raw VRAM.
+operate in the lab's clipped **256xH** canvas, using OS slots rather than raw VRAM.
+H is 128 when the main window has at least 224 content rows, otherwise 64.
+The lab grows from 114 to 178 frame rows to accommodate twice the drawing area;
+CGA retains the compact shape. Both 3D rows render four complete revolutions
+per sample, six times their previous frame count, with larger cubes on the tall
+canvas. Mandelbrot fills the canvas with escape-time colors or monochrome patterns.
 The native window resize also measures the OS's damage repair and repaint.
 The scene's child windows are app-rendered objects: os8088 provides top-level
 native windows, and the lab owns their logical nesting. RAM buffers are package
@@ -132,9 +141,10 @@ reference; graphics use the mode-matched CGA, Hercules or VGA reference. Other
 modes keep their raw timings and withhold graphics indices. The Summary headline
 averages only the six CPU/RAM indices with equal weight.
 
-All bars share a ceiling of **at least 100x**, doubling until it exceeds the
-largest available score (saturating at the index type's maximum). Axis labels
-follow that ceiling. Positive subpixel bars get one pixel at completion. The
+All bars share a ceiling of **the highest available score rounded up to a whole
+multiplier, plus 5x**: a 69x result gives every graph a 74x ceiling. With no
+scores, the ceiling is 5x; overflow saturates at the index type's maximum.
+Fractional axis labels follow that ceiling. Positive subpixel bars get one pixel at completion. The
 text report uses the same scale, capped at 50 character blocks. Numeric ratios
 retain the full 32-bit index range, including values above 99.99x. Unresolved
 timings have no invented score. Animation changes painted widths only.
@@ -223,7 +233,8 @@ trials expose variation from refresh, beam phase and timer quantization.
 `apps/redline/reference.json`, `reference-herc.json` and `reference-vga.json`
 record measured package/kernel/emulator/BIOS hashes, machine/config, emulator
 pin, individual samples, method flags and trial means. VGA also records its
-video ROM hash. The corresponding `baseline*.inc` files contain the actual
+video ROM hash. Each record also retains canvas dimensions, rotation frame count
+and fractal grid/iteration cap. The corresponding `baseline*.inc` files contain the actual
 counts; Hercules/VGA embed only their graphics rows, keeping a common CPU base. Calibration changes the package's embedded reference; the measured
 image hash therefore describes the calibration input, not the rebuilt output.
 Keep the two distinct when auditing provenance.
@@ -240,13 +251,17 @@ package and checks reference counts against the assembled workload hash.
 `--machine os8088_redline_pc_gla` runs and saves the native report twice, checks
 reference indices and executes large-denominator arithmetic on the 8088.
 The Hercules and VGA machines exercise the same UI and check their matching
-graphics indices, actual VGA bar colors, and unchanged report-window geometry. Native checks also verify averaging, scale/decimal boundaries, unsupported-mode
+graphics indices, actual VGA bar colors, doubled canvas height, full 3D revolutions, bounded
+projection, known Mandelbrot points, and unchanged report-window geometry. Native checks also verify averaging, scale/decimal boundaries, unsupported-mode
 fencing, timer completion, lab cleanup, the six-row headline calculation, view
 switching, held-button behavior, slide-off cancellation, Detailed End/F1
 navigation, compact result pagination and the Quit button. `--modern` boots
 the shipped probe code under QEMU BIOS for guarded
 286-class/486 paths, Pentium/Pentium III, E820 RAM and TSC measurement. Cyrix
 and Transmeta cases use CPUID vendor overrides, not those physical processors.
+
+`--scene` captures wireframe, shaded, Mandelbrot and nested-object output from
+the live tall lab; it checks actual colors and the fractal's black interior.
 
 `--nec` executes the shipped early CPU probe twice on MartyPC's V20 with an
 independent real PIT/IRQ0 harness. The native V20 row also boots the desktop,

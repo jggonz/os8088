@@ -60,6 +60,9 @@ def host():
         assert all(0 < n <= 0xFFFFFFFF for n in record['workload_counts'])
         assert record['workload_code_sha256'] == ref['workload_code_sha256']
         assert record['adapter'] == adapter and record['runs_per_trial'] == R.RUNS
+        assert record['canvas_height'] == (64 if adapter == 'cga' else 128)
+        assert record['rotation_frames_per_row'] == 48
+        assert record['fractal_grid'] == [64,32] and record['fractal_iteration_cap'] == 24
         assert len(record['sample_flags']) == 3
         assert all(len(x) == R.ROWS*R.RUNS and set(x) <= set('PTw!') for x in record['sample_flags'])
         for mean, samples in zip(record['trials'], record['sample_runs']):
@@ -126,6 +129,22 @@ def native(machine):
         assert p.word('rl_pass') == R.RUNS and p.data('rl_busy') == b'\0'
         assert (ui.window('REDLINE').w, ui.window('REDLINE').h) == original_frame
         assert p.word('rl_labwin') == 0
+        assert p.word('rl_canvas_h') == (64 if p.word('rl_video') & 255 == 2 else 128)
+        # Execute shipped integer kernels: rotating poses must change the
+        # projection and return to the initial pose after one revolution.
+        ui.m.write(p.addr('rl_angle'), struct.pack('<H',0))
+        poses = []
+        for _ in range(12):
+            invoke(p,'rl_cube_setup')
+            invoke(p,'rl_project')
+            poses.append(p.data('rl_projected',32))
+            points = struct.unpack('<16H',poses[-1])
+            assert all(p.word('rl_x') <= x < p.word('rl_x')+256 for x in points[::2]), points
+            assert all(p.word('rl_y') <= y < p.word('rl_y')+p.word('rl_canvas_h') for y in points[1::2]), points
+        assert len(set(poses)) == 12 and p.word('rl_angle') == 0
+        for real,imag,escape in [(0,0,24),(-256,0,24),(256,0,2),(768,0,1),(0,256,24)]:
+            regs = invoke(p,'rl_fractal_point',ax=real&65535,bx=imag&65535)
+            assert regs['ax'] == escape, (real,imag,regs['ax'],escape)
         assert not any(w.title == 'REDLINE Graphics Lab' for w in ui.windows())
         measured_indices = struct.unpack('<%dI' % R.ROWS, p.data('ru_scores', R.ROWS*4))
         reference = json.loads((ROOT/'apps/redline/reference.json').read_text())
@@ -138,7 +157,7 @@ def native(machine):
         overall = struct.unpack('<I', p.data('ru_overall', 4))[0]
         assert overall == sum(expected_indices[:6])//6
         scale = struct.unpack('<I', p.data('ru_scale', 4))[0]
-        assert scale >= 100000 and scale > max(expected_indices)
+        assert scale == min(((max(expected_indices)+999)//1000+5)*1000, 0xFFFFFFFF)
         R.wait(ui, lambda:p.word('ru_anim') == 12, 'completion animation did not finish')
         ptr = p.word('rl_cpuname')
         cpu = ui.m.read(p.base + ptr, 32).split(b'\0')[0].decode('ascii')
@@ -165,12 +184,19 @@ def native(machine):
         # Exercise real 8088 scale/format code with faster machines and 32-bit
         # boundaries. Restore measured scores before normal UI checks.
         original_scores = p.data('ru_scores', R.ROWS*4)
-        for value, ceiling in [(0,100000), (99999,100000), (100000,200000),
-                               (250000,400000), (123456700,204800000),
+        for value, ceiling in [(0,5000), (999,6000), (1000,6000),
+                               (69000,74000), (69001,75000), (99999,105000),
+                               (100000,105000), (250000,255000), (123456700,123462000),
                                (0xFFFFFFFF,0xFFFFFFFF)]:
-            ui.m.write(p.addr('ru_scores'), struct.pack('<%dI' % R.ROWS, *([value]*R.ROWS)))
+            values = [0]*R.ROWS
+            values[4] = value      # a single RAM result sets every graph's scale
+            ui.m.write(p.addr('ru_scores'), struct.pack('<%dI' % R.ROWS, *values))
             invoke(p, 'ru_scale_compute')
             assert struct.unpack('<I', p.data('ru_scale',4))[0] == ceiling
+        for value, text in [(0,'0x'), (74000,'74x'), (18500,'18.50x'), (1500,'1.50x')]:
+            regs = invoke(p,'ru_axis_label',ax=value&65535,dx=value>>16)
+            got = ui.m.read(p.base+regs['si'],16).split(b'\0')[0].decode('ascii')
+            assert got == text, (value,text,got)
         for value, text in [(0,'n/a'), (999,'0.99x'), (1007,'1.00x'), (1317,'1.31x'),
                             (1000,'1.00x'), (100000,'100.00x'),
                             (123456780,'123456.78x'), (0xFFFFFFFF,'4294967.29x')]:
@@ -206,7 +232,8 @@ def native(machine):
         assert 'L3 Window resize/repaint' in report
         assert list(p.counts()) == [sum(x)//R.RUNS for x in zip(*p.samples())]
         flags = p.data('rl_sampleflags', R.ROWS*R.RUNS).decode('ascii')
-        assert all(flags[i*R.ROWS+23] == 'T' for i in range(R.RUNS)), flags
+        assert all(flags[i*R.ROWS+R.ROWS-1] == 'T' for i in range(R.RUNS)), flags
+        assert 'L3 Mandelbrot 64x32' in report and 'Canvas height pixels' in report
         indices = [int(x) for x in re.findall(r'^.*?\s+(\d+)\r?$',
                    report.split('Bar scale maximum (x)')[1], re.M)][1:]
         assert len(indices) == R.ROWS, indices
@@ -314,19 +341,30 @@ def scene():
         assert any(w.title == 'REDLINE Graphics Lab' for w in ui.windows())
         w,h,pixels = settled_pixels()
         M.write_png_rgb(str(out/'wireframe.png'),w,h,pixels)
-        ui.m.bp_exec(p.addr('rl_patternblit'))
+        ui.m.bp_exec(p.addr('rl_fractal'))
         ui.m.run()
         assert ui.m.wait_stop(60) == 'breakpoint', 'shaded cube did not render'
         w,h,shaded = settled_pixels()
         M.write_png_rgb(str(out/'shaded.png'),w,h,shaded)
         assert shaded != pixels, 'wireframe and shaded output are identical'
         lab = ui.window('REDLINE Graphics Lab')
+        assert lab.h == 178 and p.word('rl_canvas_h') == 128
         print('Live lab frame:',lab.x,lab.y,lab.w,lab.h,'; parent:',ui.window('REDLINE').x,ui.window('REDLINE').y,ui.window('REDLINE').w,ui.window('REDLINE').h,flush=True)
         crop = [tuple(shaded[(y*w+x)*3:(y*w+x)*3+3])
                 for y in range(lab.y+20,lab.y+lab.h-2)
                 for x in range(lab.x+2,lab.x+lab.w-2)]
         colored = set(crop)-{(0,0,0),(255,255,255)}
         assert len(colored) >= 3, colored
+        ui.m.bp_exec(p.addr('rl_patternblit'))
+        ui.m.run()
+        assert ui.m.wait_stop(120) == 'breakpoint', 'fractal did not render'
+        w,h,fractal = settled_pixels()
+        M.write_png_rgb(str(out/'fractal.png'),w,h,fractal)
+        crop = [tuple(fractal[(y*w+x)*3:(y*w+x)*3+3])
+                for y in range(lab.y+25,lab.y+153)
+                for x in range(lab.x+9,lab.x+265)]
+        assert len(set(crop)-{(0,0,0),(255,255,255)}) >= 6
+        assert crop.count((0,0,0)) > len(crop)//10, 'Mandelbrot interior is absent'
         ui.m.bp_exec(p.addr('rl_resize'))
         ui.m.run()
         assert ui.m.wait_stop(60) == 'breakpoint', 'nested moving windows did not render'
@@ -338,7 +376,7 @@ def scene():
         w,h,pixels = settled_pixels()
         M.write_png_rgb(str(out/'nested-windows.png'),w,h,pixels)
         ui.m.bp_exec()
-    print('REDLINE live lab: progress, integer wireframe/shaded 3D, nested moving objects OK',flush=True)
+    print('REDLINE live lab: tall canvas, rotating/shaded 3D, Mandelbrot, nested moving objects OK',flush=True)
 
 
 def modern():

@@ -55,32 +55,48 @@ ru_indices:
     call ru_scale_compute
     ret
 
- ; One common scale for all available workloads, with room above the maximum.
-; Double from 100x until every result fits; unsigned overflow saturates.
+; One common scale: round the highest score up to whole x, then add 5x.
 ru_scale_compute:
-    mov word [ru_scale], 0x86A0     ; 100000 thousandths = 100x
-    mov word [ru_scale+2], 1
+    mov word [ru_scale], 0
+    mov word [ru_scale+2], 0
     xor di, di
 .row:
     mov dx, [ru_scores+di+2]
     mov ax, [ru_scores+di]
-.again:
     cmp dx, [ru_scale+2]
     jb .next
-    ja .grow
+    ja .store
     cmp ax, [ru_scale]
-    jb .next
-.grow:
-    shl word [ru_scale], 1
-    rcl word [ru_scale+2], 1
-    jnc .again
-    mov word [ru_scale], 0xFFFF
-    mov word [ru_scale+2], 0xFFFF
-    ret
+    jbe .next
+.store:
+    mov [ru_scale], ax
+    mov [ru_scale+2], dx
 .next:
     add di, 4
     cmp di, RL_ROWS*4
     jb .row
+    mov ax, [ru_scale]
+    mov dx, [ru_scale+2]
+    mov cx, 1000
+    call bl_div32                 ; BX = fractional remainder
+    or bx, bx
+    jz .margin
+    add ax, 1
+    adc dx, 0
+.margin:
+    add ax, 5
+    adc dx, 0
+    call bl_mul48
+    cmp word [bl_m+4], 0
+    jne .saturate
+    mov ax, [bl_m]
+    mov dx, [bl_m+2]
+    mov [ru_scale], ax
+    mov [ru_scale+2], dx
+    ret
+.saturate:
+    mov word [ru_scale], 0xFFFF
+    mov word [ru_scale+2], 0xFFFF
     ret
 
 ru_clock:
@@ -415,26 +431,13 @@ ru_headline:
     push di
     mov ax, [ru_scale]
     mov dx, [ru_scale+2]
-    mov cx, 1000
-    call bl_div32
     mov cx, di
     call bl_mul48
     mov cx, 4
     call bl_div48
     mov ax, [bl_m]
     mov dx, [bl_m+2]
-    call bl_lclr
-    xor di, di
-    mov cx, 7
-    call bl_dec
-    mov byte [bl_lscr+7], 'x'
-    mov byte [bl_lscr+8], 0
-    mov si, bl_lscr
-.trim:
-    cmp byte [si], ' '
-    jne .length
-    inc si
-    jmp .trim
+    call ru_axis_label
 .length:
     mov bx, si
     xor cx, cx
@@ -462,6 +465,31 @@ ru_headline:
     inc di
     cmp di, 5
     jb .tick
+.out:
+    ret
+
+; DX:AX is an axis value in thousandths. Keep fractional ticks accurate.
+ru_axis_label:
+    mov bx, ax
+    or bx, dx
+    jnz .value
+    mov si, ru_zerotick
+    ret
+.value:
+    call ru_ratio
+    mov bx, si
+.scan:
+    cmp byte [bx], 0
+    je .out
+    cmp byte [bx], '.'
+    je .fraction
+    inc bx
+    jmp .scan
+.fraction:
+    cmp word [bx+1], '00'
+    jne .out
+    mov byte [bx], 'x'
+    mov byte [bx+1], 0
 .out:
     ret
 
@@ -1322,7 +1350,7 @@ ru_barvalue: dw 0
 RU_ANIM_STEPS equ 12
 ru_anim: dw RU_ANIM_STEPS
 ru_ink: db CRED
-ru_scale: dd 100000
+ru_scale: dd 5000
 ru_bigx: dw 0
 ru_bigy: dw 0
 ru_gx: dw 0
@@ -1360,6 +1388,7 @@ ru_sameadapter: db 'no mode reference', 0
 ru_cpu: db 'CPU', 0
 ru_mhzest: db 'MHz est', 0
 ru_mhznom: db 'MHz nom', 0
+ru_zerotick: db '0x', 0
 ru_mhztsc: db 'TSC MHz', 0
 ru_bioskb: db 'BIOS KB', 0
 ru_freekb: db 'Free KB', 0
@@ -1388,7 +1417,7 @@ ru_cga: db 'CGA', 0
 ru_labels: dw ru_alu, ru_rotate, ru_mul, ru_div, ru_copy, ru_fill
            dw ru_gfill, ru_line, ru_frame_label, ru_text_label, ru_mono, ru_packed
     dw ru_fill_large, ru_lines_many, ru_frames_many, ru_text_grid, ru_blit1_large, ru_blit4_large
-    dw ru_wire, ru_shaded, ru_patternblit, ru_scroll, ru_composition, ru_resize
+    dw ru_wire, ru_shaded, ru_fractal, ru_patternblit, ru_scroll, ru_composition, ru_resize
 ru_alu: db 'CPU - ALU', 0
 ru_rotate: db 'Rotate', 0
 ru_mul: db 'MUL', 0
@@ -1401,16 +1430,17 @@ ru_frame_label: db 'Graphics Frame', 0
 ru_text_label: db 'Opaque Text', 0
 ru_mono: db 'Mono Blit', 0
 ru_packed: db 'Packed Blit', 0
-ru_fill_large: db '2 Fill 256x64', 0
+ru_fill_large: db '2 Canvas fill', 0
 ru_lines_many: db '2 Line field', 0
 ru_frames_many: db '2 Nested frames', 0
 ru_text_grid: db '2 Text grid', 0
-ru_blit1_large: db '2 Mono 128x64', 0
-ru_blit4_large: db '2 Packed 128x32', 0
+ru_blit1_large: db '2 Mono 128xH', 0
+ru_blit4_large: db '2 Packed 128xH/2', 0
 ru_wire: db '3 Wireframe cube', 0
 ru_shaded: db '3 Shaded cube', 0
+ru_fractal: db '3 Mandelbrot', 0
 ru_patternblit: db '3 Patterned blit', 0
-ru_scroll: db '3 Scroll 256x64', 0
+ru_scroll: db '3 Canvas scroll', 0
 ru_composition: db '3 Moving windows', 0
 ru_resize: db '3 Window resize', 0
 ru_pattern: db 0xAA,0x55,0xAA,0x55,0xAA,0x55,0xAA,0x55

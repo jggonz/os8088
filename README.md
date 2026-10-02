@@ -512,12 +512,13 @@ tools/mouse.py       absolute mouse positioning over the QMP socket
 ## Software packages
 
 **REDLINE** is the CPU and graphics performance lab: period-style hardware
-facts, 24 fixed workloads, timing tables and comparison bars against a
+facts, 25 fixed workloads, timing tables and comparison bars against a
 measured 4.77 MHz MartyPC PC. `make redlinedisk` builds all four disk sizes;
 Summary has framed panels and graphical bars; Detailed keeps the complete
 inventory and timing report. Three-run averages, live graphics progress,
-wireframe/shaded 3D and nested moving objects exercise three graphics tiers.
-VGA bars use color and start at a 100x scale; CGA/Hercules/VGA have measured
+rotating wireframe/shaded 3D, Mandelbrot and nested moving objects exercise
+three graphics tiers in a canvas that doubles in height when it fits.
+VGA bars use color and share a highest-score-plus-5x scale; CGA/Hercules/VGA have measured
 4.77 MHz references. R runs and S saves `REDLINE.TXT`. See [the research, CPU/MHz detection limits
 and reproducible baseline](docs/REDLINE.md).
 

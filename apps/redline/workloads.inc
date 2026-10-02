@@ -1,6 +1,30 @@
 ; The graphics lab is a separate native window owned by this package.
 ; Its scene includes nested window-like frames and objects; the OS itself
 ; manages top-level windows, so these logical children use container coordinates.
+rl_canvas_select:
+    mov word [rl_canvas_h], 64
+    mov word [rl_labtpl+6], 114
+    mov word [rl_labmin], 106
+    mov bx, [rl_win]
+    call OSAPI_WM_GEOM
+    cmp dx, 224
+    jb .scene
+    mov word [rl_canvas_h], 128
+    mov word [rl_labtpl+6], 178
+    mov word [rl_labmin], 170
+.scene:
+    mov ax, [rl_canvas_h]
+    mov [rl_objects+8], ax         ; root height
+    sub ax, 18
+    mov [rl_objects+16+8], ax      ; child height
+    sub ax, 20
+    mov [rl_objects+32+8], ax      ; nested height
+    sub ax, 14
+    mov [rl_objects+48+4], ax      ; button sits near its parent's bottom
+    mov ax, [rl_canvas_h]
+    sub ax, 10
+    mov [rl_objects+64+8], ax      ; viewport height
+    ret
 rl_lab_open:
     mov bx, [rl_win]
     call OSAPI_WM_CONTENT
@@ -15,7 +39,7 @@ rl_lab_open:
     mov al, 1
     call OSAPI_WM_SIZABLE
     mov cx, 280
-    mov dx, 106
+    mov dx, [rl_labmin]
     call OSAPI_WM_MINSIZE
     call rl_lab_origin
     mov bx, [rl_labwin]
@@ -58,22 +82,27 @@ rl_labtpl: dw 20,80,288,114,rl_labtitle,rl_lab_paint,rl_lab_key,rl_lab_key
 rl_labtitle: db 'REDLINE Graphics Lab', 0
 rl_laberror: db 'No window slot/memory for the graphics lab; close other apps.', 0
 rl_labwin: dw 0
+rl_canvas_h: dw 64
+rl_labmin: dw 106
 
-; Three graphics tiers. All drawing stays in the 256x64 live preview.
+; Three graphics tiers. The canvas is 256x64 or 256x128 for taller viewports.
 rl_large_rect:
     mov ax, [rl_x]
     mov bx, [rl_y]
     mov cx, ax
     add cx, 255
     mov dx, bx
-    add dx, 63
+    add dx, [rl_canvas_h]
+    dec dx
     ret
 rl_fill_large:
     call rl_large_rect
     call OSAPI_GFX_FILL
     ret
 rl_lines_many:
-    mov si, 16
+    mov si, [rl_canvas_h]
+    shr si, 1
+    shr si, 1
     mov dx, [rl_y]
 .row:
     mov ax, [rl_x]
@@ -97,7 +126,9 @@ rl_frames_many:
     jnz .frame
     ret
 rl_text_grid:
-    mov bp, 8
+    mov bp, [rl_canvas_h]
+    mov cl, 3
+    shr bp, cl
     mov cx, [rl_x]
     mov dx, [rl_y]
 .line:
@@ -119,7 +150,7 @@ rl_blit1_large:
     and ax, 0xFFF8
     mov bx, [rl_y]
     mov cx, 128
-    mov dx, 64
+    mov dx, [rl_canvas_h]
     call OSAPI_GFX_BLIT1
     ret
 rl_blit4_large:
@@ -130,7 +161,8 @@ rl_blit4_large:
     mov ax, [rl_x]
     mov bx, [rl_y]
     mov cx, 128
-    mov dx, 32
+    mov dx, [rl_canvas_h]
+    shr dx, 1
     call OSAPI_GFX_BLIT4
     ret
 rl_patternblit:
@@ -138,13 +170,13 @@ rl_patternblit:
     pop es
     mov di, rl_pixels
     mov ax, 0x1E4B
-    mov cx, 1024
+    mov cx, 2048
     cld
     rep stosw
     call rl_blit4_large
     mov di, rl_pixels
     mov ax, 0x1111
-    mov cx, 1024
+    mov cx, 2048
     rep stosw
     ret
 rl_scroll:
@@ -153,10 +185,14 @@ rl_scroll:
     and ax, 0xFFF8
     mov cx, ax
     add cx, 255
-    mov si, 4
+    mov si, [rl_canvas_h]
+    shr si, 1
+    shr si, 1
+    shr si, 1
+    shr si, 1
     call OSAPI_GFX_SCROLL
     jc .fallback
-    mov si, -4
+    neg si
     call OSAPI_GFX_SCROLL
     ret
 .fallback:
@@ -243,6 +279,17 @@ rl_composition:
     mov [rl_y], bx
     mov al, CRED
     call OSAPI_SET_COLOR
+    mov word [rl_cos], 110
+    mov word [rl_sin], 64
+    mov word [rl_project_scale], 112
+    cmp word [rl_canvas_h], 64
+    je .smallview
+    mov word [rl_project_scale], 192
+.smallview:
+    mov word [rl_centerx], 64
+    mov ax, [si+8]
+    shr ax, 1
+    mov [rl_centery], ax
     call rl_project
     call rl_wire_edges
 .next:
@@ -304,44 +351,85 @@ rl_resize:
     ret
 rl_composetitle: db 'REDLINE graphics window', 0
 
-; A real integer 3D pipeline: rotate Y by 30 degrees (Q7), translate in Z,
-; perspective-divide each vertex, then render edges or flat-shaded triangles.
+; Twelve Q7 Y poses, fixed X tilt, perspective projection and back-face culling.
+rl_cube_setup:
+    mov word [rl_project_scale], 112
+    cmp word [rl_canvas_h], 64
+    je .center
+    mov word [rl_project_scale], 224
+.center:
+    mov word [rl_centerx], 128
+    mov ax, [rl_canvas_h]
+    shr ax, 1
+    mov [rl_centery], ax
+    mov bx, [rl_angle]
+    shl bx, 1
+    shl bx, 1
+    mov ax, [rl_poses+bx]
+    mov [rl_cos], ax
+    mov ax, [rl_poses+bx+2]
+    mov [rl_sin], ax
+    inc word [rl_angle]
+    cmp word [rl_angle], 12
+    jb .out
+    mov word [rl_angle], 0
+.out:
+    ret
 rl_project:
     mov si, rl_vertices
     mov di, rl_projected
     mov bp, 8
 .vertex:
     mov ax, [si]
-    mov bx, 110
+    mov bx, [rl_cos]
     imul bx
     mov [rl_rx], ax
     mov ax, [si+4]
-    mov bx, 64
+    mov bx, [rl_sin]
     imul bx
     add [rl_rx], ax
     mov ax, [si+4]
-    mov bx, 110
+    mov bx, [rl_cos]
     imul bx
     mov [rl_rz], ax
     mov ax, [si]
-    mov bx, 64
+    mov bx, [rl_sin]
     imul bx
     sub [rl_rz], ax
     mov cl, 7
     sar word [rl_rx], cl
     sar word [rl_rz], cl
+    mov ax, [si+2]
+    mov bx, 120                   ; fixed 20-degree X tilt, also Q7
+    imul bx
+    mov [rl_ry], ax
+    mov ax, [rl_rz]
+    mov bx, 44
+    imul bx
+    sub [rl_ry], ax
+    mov ax, [rl_rz]
+    mov bx, 120
+    imul bx
+    mov [rl_tz], ax
+    mov ax, [si+2]
+    mov bx, 44
+    imul bx
+    add ax, [rl_tz]
+    sar ax, cl
+    mov [rl_rz], ax
+    sar word [rl_ry], cl
     add word [rl_rz], 128
     mov ax, [rl_rx]
-    mov bx, 128
+    mov bx, [rl_project_scale]
     imul bx
     idiv word [rl_rz]
-    add ax, 64
+    add ax, [rl_centerx]
     add ax, [rl_x]
     mov [di], ax
-    mov ax, [si+2]
+    mov ax, [rl_ry]
     imul bx
     idiv word [rl_rz]
-    add ax, 32
+    add ax, [rl_centery]
     add ax, [rl_y]
     mov [di+2], ax
     add si, 6
@@ -362,6 +450,7 @@ rl_clear_cube:
     pop ax
     ret
 rl_wire:
+    call rl_cube_setup
     call rl_clear_cube
     call rl_project
     call rl_wire_edges
@@ -439,10 +528,11 @@ rl_line:
 .out:
     ret
 rl_shaded:
+    call rl_cube_setup
     call rl_clear_cube
     call rl_project
     mov si, rl_triangles
-    mov bp, 6
+    mov bp, 12
 .triangle:
     push si
     push bp
@@ -461,7 +551,28 @@ rl_shaded:
     mov al, [si]
     mov [rl_facecolor], al
     call OSAPI_SET_COLOR
+    ; Cull away-facing triangles by their signed projected area.
+    mov ax, [rl_triangle+4]
+    sub ax, [rl_triangle]
+    mov bx, [rl_triangle+10]
+    sub bx, [rl_triangle+2]
+    imul bx
+    mov [rl_area], ax
+    mov [rl_area+2], dx
+    mov ax, [rl_triangle+8]
+    sub ax, [rl_triangle]
+    mov bx, [rl_triangle+6]
+    sub bx, [rl_triangle+2]
+    imul bx
+    sub [rl_area], ax
+    sbb [rl_area+2], dx
+    cmp word [rl_area+2], 0
+    jl .culled
+    mov ax, [rl_area]
+    or ax, [rl_area+2]
+    jz .culled
     call rl_triangle_fill
+.culled:
     pop bp
     pop si
     add si, 4
@@ -572,10 +683,24 @@ rl_edges: db 0,4, 4,8, 8,12, 12,0, 16,20, 20,24, 24,28, 28,16
 rl_triangles: db 4,20,24,CRED, 4,24,8,CRED
               db 0,16,20,CLRED, 0,20,4,CLRED
               db 0,4,8,CYELLOW, 0,8,12,CYELLOW
+              db 0,12,28,CRED, 0,28,16,CRED
+              db 12,8,24,CLRED, 12,24,28,CLRED
+              db 16,28,24,CYELLOW, 16,24,20,CYELLOW
+rl_poses: dw 128,0, 110,64, 64,110, 0,128, -64,110, -110,64
+          dw -128,0, -110,-64, -64,-110, 0,-128, 64,-110, 110,-64
+rl_angle: dw 0
+rl_cos: dw 110
+rl_sin: dw 64
+rl_project_scale: dw 112
+rl_centerx: dw 128
+rl_centery: dw 32
 rl_projected: times 8 dd 0
 rl_triangle: times 3 dd 0
 rl_rx: dw 0
+rl_ry: dw 0
+rl_tz: dw 0
 rl_rz: dw 0
+rl_area: dd 0
 rl_lx: dw 0
 rl_ly: dw 0
 rl_lendx: dw 0
@@ -594,6 +719,137 @@ rl_facecolor: db 0
 rl_shade_dark: db 0xEE,0xBB,0xEE,0xBB,0xEE,0xBB,0xEE,0xBB
 rl_shade_mid: db 0xAA,0x55,0xAA,0x55,0xAA,0x55,0xAA,0x55
 rl_shade_light: db 0x11,0x44,0x11,0x44,0x11,0x44,0x11,0x44
+
+; Mandelbrot in signed Q8.8. 64x32 samples, at most 24 iterations per point.
+; Display blocks fill the entire canvas: 4x2 on CGA, 4x4 on taller screens.
+rl_fractal:
+    mov ax, [rl_canvas_h]
+    mov cl, 5
+    shr ax, cl
+    mov [rl_fr_blockh], ax
+    mov word [rl_fr_row], 0
+    mov word [rl_fr_ci], -320
+.row:
+    mov word [rl_fr_col], 0
+    mov word [rl_fr_cr], -576
+.point:
+    mov ax, [rl_fr_cr]
+    mov bx, [rl_fr_ci]
+    call rl_fractal_point
+    mov [rl_fr_escape], ax
+    mov cx, [rl_fr_col]
+    shl cx, 1
+    shl cx, 1
+    add cx, [rl_x]
+    mov [rl_fr_px], cx
+    mov ax, [rl_fr_row]
+    mul word [rl_fr_blockh]
+    add ax, [rl_y]
+    mov [rl_fr_py], ax
+    mov al, CBLACK
+    cmp word [rl_fr_escape], 24
+    je .ink
+    mov ax, [rl_fr_escape]
+    xor dx, dx
+    mov bx, 14
+    div bx
+    mov ax, dx
+    inc ax
+.ink:
+    call OSAPI_SET_COLOR
+    mov ax, [rl_fr_px]
+    mov bx, [rl_fr_py]
+    mov cx, ax
+    add cx, 3
+    mov dx, bx
+    add dx, [rl_fr_blockh]
+    dec dx
+    cmp byte [rl_video], VID_VGA
+    je .solid
+    cmp word [rl_fr_escape], 24
+    je .solid
+    mov si, rl_shade_light
+    test word [rl_fr_escape], 1
+    jz .pattern
+    mov si, rl_shade_mid
+.pattern:
+    call OSAPI_GFX_FILL_PAT
+    jmp .next
+.solid:
+    call OSAPI_GFX_FILL
+.next:
+    add word [rl_fr_cr], 13
+    inc word [rl_fr_col]
+    cmp word [rl_fr_col], 64
+    jb .point
+    add word [rl_fr_ci], 20
+    inc word [rl_fr_row]
+    cmp word [rl_fr_row], 32
+    jb .row
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    ret
+
+; AX/BX = real/imaginary c, Q8.8; AX = escape iteration or 24 (bounded).
+rl_fractal_point:
+    mov [rl_fr_cx], ax
+    mov [rl_fr_cy], bx
+    mov word [rl_fr_zx], 0
+    mov word [rl_fr_zy], 0
+    xor di, di
+.iterate:
+    mov ax, [rl_fr_zx]
+    cmp ax, -512
+    jl .out
+    cmp ax, 512
+    jg .out
+    imul ax
+    mov al, ah                    ; low word of signed product >> 8
+    mov ah, dl
+    mov [rl_fr_x2], ax
+    mov ax, [rl_fr_zy]
+    cmp ax, -512
+    jl .out
+    cmp ax, 512
+    jg .out
+    imul ax
+    mov al, ah
+    mov ah, dl
+    mov [rl_fr_y2], ax
+    add ax, [rl_fr_x2]
+    cmp ax, 1024                  ; |z| squared >= 4
+    jae .out
+    mov ax, [rl_fr_zx]
+    imul word [rl_fr_zy]
+    mov al, ah
+    mov ah, dl
+    shl ax, 1
+    add ax, [rl_fr_cy]
+    mov [rl_fr_zy], ax
+    mov ax, [rl_fr_x2]
+    sub ax, [rl_fr_y2]
+    add ax, [rl_fr_cx]
+    mov [rl_fr_zx], ax
+    inc di
+    cmp di, 24
+    jb .iterate
+.out:
+    mov ax, di
+    ret
+rl_fr_blockh: dw 2
+rl_fr_row: dw 0
+rl_fr_col: dw 0
+rl_fr_cr: dw 0
+rl_fr_ci: dw 0
+rl_fr_escape: dw 0
+rl_fr_px: dw 0
+rl_fr_py: dw 0
+rl_fr_cx: dw 0
+rl_fr_cy: dw 0
+rl_fr_zx: dw 0
+rl_fr_zy: dw 0
+rl_fr_x2: dw 0
+rl_fr_y2: dw 0
 
 ; Keep sample 3's full method/overhead table and add all samples plus means.
 rl_sample_report:
@@ -647,6 +903,6 @@ rl_sample_report:
     jb .row
     ret
 rl_lastpass: db 'Sample 3 raw timings and method flags (see all samples and means below):', 0
-rl_average_intro: db 'Arithmetic mean of 3 complete runs; indices use these mean net counts.', 0
+rl_average_intro: db 'Arithmetic mean of 3 complete runs; indices use these mean timing counts.', 0
 rl_flagkey: db 'Sample flags: P=PIT, T=ticks, w=PIT-lap fallback, !=near wrap.', 0
 rl_sample_columns: db 'Workload                           Run 1      Run 2      Run 3       Mean', 0

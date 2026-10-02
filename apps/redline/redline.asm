@@ -1,6 +1,6 @@
 ; REDLINE — native CPU, memory and graphics benchmark (SPEC.md 103).
 %include "os88api.inc"
-RL_ROWS equ 24
+RL_ROWS equ 25
 RL_RUNS equ 3
     OS88_HEADER 'REDLINE', rl_entry
 %define BL_ARENA_BYTES 10000
@@ -175,6 +175,7 @@ rl_run:
     call OSAPI_CUR_BUSY
     call rl_inventory
     call rl_select_reference
+    call rl_canvas_select
     call rl_facts
     mov bx, [rl_win]
     call OSAPI_WM_CONTENT
@@ -191,7 +192,7 @@ rl_run:
     rep stosw
     mov di, rl_pixels
     mov ax, 0x1111
-    mov cx, 1024
+    mov cx, 2048
     rep stosw
     call rl_repaint
     call rl_lab_open
@@ -231,6 +232,7 @@ rl_run:
     mov [bl_body], ax
     mov ax, [rl_table+bx+4]
     mov [bl_n], ax
+    mov word [rl_angle], 0        ; identical complete revolutions in every row
     mov byte [bl_lapped], 0        ; explicit T rows must not inherit a P lap
     mov ax, [rl_table+bx+6]          ; slow compositor work uses tick timing
     call bl_run
@@ -349,6 +351,9 @@ rl_repaint:
 rl_facts:
     mov si, rl_intro
     call bl_sline
+    mov si, rl_l_canvas
+    mov ax, [rl_canvas_h]
+    call rl_num
     mov si, rl_l_cpu
     mov di, [rl_cpuname]
     call bl_kvs
@@ -733,7 +738,7 @@ rl_comparisons:
     push bx
     mov cx, 10
     call bl_kv
-    ; The text report shares the dashboard's at-least-100x scale.
+    ; The text report shares the dashboard's highest-score-plus-5x scale.
     mov cx, 50
     call bl_mul48
     mov bx, [ru_scale]
@@ -1014,8 +1019,9 @@ rl_table:
     dw rl_label_text_grid, rl_text_grid, 8, 0
     dw rl_label_blit1_large, rl_blit1_large, 8, 0
     dw rl_label_blit4_large, rl_blit4_large, 8, 0
-    dw rl_label_wire, rl_wire, 8, 0
-    dw rl_label_shaded, rl_shaded, 8, 0
+    dw rl_label_wire, rl_wire, 48, 0
+    dw rl_label_shaded, rl_shaded, 48, 0
+    dw rl_label_fractal, rl_fractal, 2, 0
     dw rl_label_patternblit, rl_patternblit, 4, 0
     dw rl_label_scroll, rl_scroll, 8, 0
     dw rl_label_composition, rl_windows_move, 4, 0
@@ -1035,16 +1041,19 @@ rl_label_blit4: db 'Packed 4bpp blit 64x32', 0
 rl_win: dw 0
 rl_ran: db 0
 rl_runs: dw 0
-rl_label_fill_large: db 'L2 Fill 256x64', 0
-rl_label_lines_many: db 'L2 Line field 16x256', 0
+rl_label_fill_large: db 'L2 Full canvas fill', 0
+rl_label_lines_many: db 'L2 Line field 4px', 0
 rl_label_frames_many: db 'L2 Nested frames x8', 0
 rl_label_text_grid: db 'L2 Opaque text grid x8', 0
-rl_label_blit1_large: db 'L2 Mono blit 128x64', 0
-rl_label_blit4_large: db 'L2 Packed blit 128x32', 0
+rl_label_blit1_large: db 'L2 Mono blit 128xH', 0
+rl_label_blit4_large: db 'L2 Packed blit 128xH/2', 0
 rl_label_wire: db 'L3 Projected wireframe cube', 0
 rl_label_shaded: db 'L3 Projected shaded cube', 0
-rl_label_patternblit: db 'L3 Patterned packed 128x32', 0
-rl_label_scroll: db 'L3 Scroll 256x64 up/down', 0
+rl_label_fractal: db 'L3 Mandelbrot 64x32', 0
+rl_l_canvas: db 'Canvas height pixels', 0
+    times 26-($-rl_l_canvas) db 0   ; retain measured workload/data addresses
+rl_label_patternblit: db 'L3 Patterned packed 128xH/2', 0
+rl_label_scroll: db 'L3 Full canvas scroll', 0
 rl_label_composition: db 'L3 Nested moving windows', 0
 rl_label_resize: db 'L3 Window resize/repaint', 0
 rl_busy: db 0
@@ -1100,9 +1109,9 @@ rl_samples: times RL_ROWS*RL_RUNS dd 0
 rl_sampleflags: times RL_ROWS*RL_RUNS db 0
 rl_facts_end:
     align 512
-    OS88_BSS 6144 + BL_BSS_SIZE
+    OS88_BSS 8192 + BL_BSS_SIZE
     OS88_IMAGE_END
 rl_src equ os88_image_end
 rl_dst equ rl_src + 2048
 rl_pixels equ rl_dst + 2048
-    BL_BSS os88_image_end + 6144
+    BL_BSS os88_image_end + 8192

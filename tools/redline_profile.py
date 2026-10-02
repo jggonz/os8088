@@ -26,7 +26,7 @@ import os88marty as M
 import os88ui
 from os88build import at
 
-ROWS, RUNS = 24, 3
+ROWS, RUNS = 25, 3
 ADAPTERS = {"cga": (0x0102, "CGA 640x200x1 Dynamic"),
             "herc": (0x0101, "Hercules 720x348x1 Dynamic"),
             "vga": (0x0400, "VGA 640x480x4 Default")}
@@ -40,8 +40,10 @@ NAMES = ("rl_ran", "rl_runs", "bl_saved", "rl_results", "rl_convkb", "rl_cpuname
          "ru_scale", "ru_anim", "ru_scale_compute", "ru_bar", "ru_fillw",
          "ru_x", "ru_y", "ru_pitch", "ru_resw", "ru_lower", "ru_offset", "rl_samples", "rl_busy", "rl_pass", "rl_labwin", "rl_active_row",
          "rl_sampleflags", "rl_gfxbase", "rl_reference", "rl_select_reference", "rl_vw", "rl_vh",
-         "ru_ratio", "bl_lscr", "rl_wire", "rl_shaded", "rl_resize",
-         "rl_patternblit", "rl_windows_move", "rl_object_xy", "rl_objects")
+         "ru_ratio", "ru_axis_label", "bl_lscr", "rl_wire", "rl_shaded", "rl_resize",
+         "rl_patternblit", "rl_windows_move", "rl_object_xy", "rl_objects",
+         "rl_canvas_h", "rl_x", "rl_y", "rl_angle", "rl_projected", "rl_cube_setup", "rl_project",
+         "rl_fractal", "rl_fractal_point")
 
 
 def symbols():
@@ -89,7 +91,7 @@ def key(ui, name):
     ui.m.advance(frames=4)
 
 
-def wait(ui, predicate, message, seconds=120):
+def wait(ui, predicate, message, seconds=600):
     # Position by guest frames, bounded by guest time; host load cannot change
     # how far the guest runs.  Never sleep to guess when a benchmark is done.
     for _ in range(seconds * 12):
@@ -145,7 +147,7 @@ def run(machine, out, repeat=True, calibrate=False):
                 trials.append(list(again))
                 samples.append(p.samples())
                 flags.append(p.data("rl_sampleflags", ROWS*RUNS).decode("ascii"))
-            assert all(f[r*ROWS+23] == 'T' for f in flags for r in range(RUNS)), "explicit resize timing lost its T method"
+            assert all(f[r*ROWS+ROWS-1] == 'T' for f in flags for r in range(RUNS)), "explicit resize timing lost its T method"
             spread = [max(t[i] for t in trials) / min(t[i] for t in trials) - 1
                       for i in range(ROWS)]
             # Only compare fine-resolution net PIT trials against that noise
@@ -177,11 +179,13 @@ def run(machine, out, repeat=True, calibrate=False):
         workloads = [{"label": label, "body": body, "iterations": int(n), "method": "T" if int(method) else "P with lap fallback"}
                      for label, body, n, method in entries]
         metadata = {
-            "schema": 2, "suite": "REDLINE 1.0", "machine": machine,
+            "schema": 3, "suite": "REDLINE 1.0", "machine": machine,
             "marty_upstream": (ROOT / "tools/martypc/UPSTREAM").read_text().strip(),
             "clock_hz": 315_000_000 / 22 / 3, "turbo": False,
             "cpu": "Intel8088", "conventional_kb": 640, "wait_states": 0,
             "adapter": adapter, "graphics": ADAPTERS[adapter][1], "bios_date": bios,
+            "canvas_width": 256, "canvas_height": p.word("rl_canvas_h"),
+            "rotation_frames_per_row": 48, "fractal_grid": [64,32], "fractal_iteration_cap": 24,
             "bios_sha256": hashlib.sha256(ui.m.read(0xFE000, 8192)).hexdigest(),
             "video_bios_sha256": hashlib.sha256(ui.m.read(0xC0000, 32768)).hexdigest() if adapter == "vga" else None,
             "emulator_sha256": sha(ROOT / "build/martypc/run/martypc_headless"),

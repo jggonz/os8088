@@ -15,15 +15,18 @@ Every test performs identical work on every CPU. CPU instruction mixes,
 Graphics indices use the matching CGA, Hercules or VGA mode reference.
 Other modes retain raw timings without borrowing a different mode baseline.
 The Summary headline averages the six CPU/RAM indices, with equal weight.
-Bars start at a 100x ceiling and double for faster results. VGA uses blue
+All bars use the highest score rounded up plus 5x: 69x gives a 74x ceiling. VGA uses blue
 CPU, green RAM and red graphics bars; monochrome adapters use dithering.
 Bars animate after completion; their final numbers stay exact.
 
 A benchmark averages 3 complete runs. Progress shows the run and workload.
 The separate Graphics Lab contains nested window objects, buttons and a
-3D viewport. Three graphics tiers range from basic primitives through larger
+3D viewport. The drawing area doubles to 256x128 on taller screens; CGA
+keeps 256x64. Three graphics tiers range from basic primitives through larger
 blits/line/text fields to projected wireframe and flat-shaded cubes, patterned
 blits, scrolling, nested moving windows and actual container resize/repaint.
+Each 3D row draws 48 rotating frames (four revolutions); a Mandelbrot row
+computes 64x32 points up to 24 iterations and fills the drawing area.
 The REDLINE report window fits the viewport and is not resizable.
 Detailed and REDLINE.TXT retain individual samples, means and method flags.
 
