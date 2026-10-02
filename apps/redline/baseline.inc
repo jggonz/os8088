@@ -2,15 +2,15 @@
 ; Provenance and trials: apps/redline/reference.json.
 RL_BASE_ADAPTER equ VID_CGA
 rl_baseline:
-    dd 35834
-    dd 49548
-    dd 135442
-    dd 166317
-    dd 215166
-    dd 118684
-    dd 101137
-    dd 60118
-    dd 124727
-    dd 165206
-    dd 92960
+    dd 35832
+    dd 49547
+    dd 135441
+    dd 166314
+    dd 215165
+    dd 118683
+    dd 101132
+    dd 60117
+    dd 124708
+    dd 165205
+    dd 92962
     dd 441851

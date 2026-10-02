@@ -7,9 +7,25 @@ The package uses the existing OS menus, About handler, opaque text, report
 pagination and shared benchmark timing machinery. It costs no resident kernel
 memory. The dedicated floppies carry the same executable in all four sizes.
 
-![REDLINE inventory and CPU MHz on the 4.77 MHz CGA reference](redline-cga.png)
+Summary is the default dashboard: framed performance, system snapshot, results
+and hardware-details panels, large bitmap digits, dithered comparison bars and
+bottom controls. Detailed retains the complete original report, including every
+inventory field, both clock estimates, raw timing counts, method flags and
+numeric indices. Compare gives the bars the window's full width. Saving from
+any view always writes the complete report.
 
-![REDLINE workload comparison bars on CGA](redline-scores.png)
+Use the buttons or **U / D / C** to select Summary / Detailed / Compare; **Tab**
+cycles the views. **R / S / Q** run, save and quit. **F1** opens Detailed at the
+report's provenance. PgUp/PgDn page compact dashboard results or the Detailed
+report; arrows and Home/End retain their report behavior in Detailed. The layout
+uses the live content dimensions. CGA's short screen shows compact panels and
+paged results; all facts remain available in Detailed.
+
+![REDLINE Summary dashboard on VGA](redline-summary.png)
+
+![REDLINE compact Summary on the 4.77 MHz CGA reference](redline-cga.png)
+
+![REDLINE Detailed report on CGA, showing its last page](redline-scores.png)
 
 ## What the period software looked like
 
@@ -78,6 +94,13 @@ fetch and setup. The comparison is per workload: `1000 = baseline`, larger is
 faster, and 20 `#` marks represent the reference PC. Bars cap at 50 blocks;
 the numeric result retains its range. VGA/Hercules still produce timings;
 CGA reference graphics indices are withheld on those adapters.
+
+The Summary headline is the arithmetic mean of the six CPU/RAM indices, each
+equally weighted, labelled **CPU + RAM Performance**. It is a convenience for
+this fixed mix, not a universal score, and never incorporates graphics from
+another adapter. Graphical bars reach full width at 4x; numeric ratios retain
+their values up to 99.99x, above which they show `>99.9x`. Detailed and saved
+reports retain full numeric indices. Unresolved timings have no invented score.
 
 `tests/benchlib.inc` is the single shared timer/report implementation, also used
 by GFXBENCH/SYSBENCH. It latches PIT channel 0 without changing its programming,
@@ -166,7 +189,10 @@ package and checks reference counts against the assembled workload hash.
 `--machine os8088_redline_pc_gla` runs and saves the native report twice, checks
 reference indices and executes large-denominator arithmetic on the 8088.
 The Hercules and VGA machines exercise the same UI and withhold CGA graphics
-indices. `--modern` boots the shipped probe code under QEMU BIOS for guarded
+indices. Native checks also verify the six-row headline calculation, view
+switching, held-button behavior, slide-off cancellation, Detailed End/F1
+navigation, compact result pagination and the Quit button. `--modern` boots
+the shipped probe code under QEMU BIOS for guarded
 286-class/486 paths, Pentium/Pentium III, E820 RAM and TSC measurement. Cyrix
 and Transmeta cases use CPUID vendor overrides, not those physical processors.
 

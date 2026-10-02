@@ -1,8 +1,12 @@
 REDLINE 1.0 - CPU + Graphics Performance Lab for os8088
 
-Open REDLINE.O88. Press R or click to run. Bench menu also offers Run,
-Save Report and Top/About. Press S to save REDLINE.TXT in the package's
-current folder. Arrow keys, Home/End and PgUp/PgDn browse the report.
+Open REDLINE.O88. Summary shows a large CPU/RAM score, system snapshot and
+graphical comparison bars. Detailed keeps every inventory field, raw timing,
+method flag and comparison from the complete report. Compare expands the bars.
+Use the bottom buttons or U/D/C to select views; Tab cycles them. Press R or
+Run to benchmark. S/Save writes REDLINE.TXT in the package's current folder.
+PgUp/PgDn page short screens. Detailed also supports arrows and Home/End.
+F1 opens Detailed at the report's provenance. Q/Quit closes the package.
 Close other apps and keep the pointer still when comparing runs.
 
 Every test performs identical work on every CPU. CPU instruction mixes,
@@ -10,6 +14,8 @@ Every test performs identical work on every CPU. CPU instruction mixes,
 1000 on the PC index is the recorded MartyPC 4.77 MHz IBM 5150 reference.
 Twenty # marks is baseline speed. Graphics indices require CGA, because
 VGA and Hercules run different drivers and modes. Timings still run there.
+The Summary headline averages the six CPU/RAM indices, with equal weight.
+Its graphical bars reach full width at 4x; larger numeric values remain shown.
 
 MHz is labelled by source: CPUID nominal, measured TSC, or two independent
 book-timing CPU estimates. TSC is not always the actual core clock. Unknown

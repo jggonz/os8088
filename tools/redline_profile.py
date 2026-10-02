@@ -29,7 +29,9 @@ from os88build import at
 NAMES = ("rl_ran", "rl_runs", "bl_saved", "rl_results", "rl_convkb", "rl_cpuname", "rl_early", "rl_video",
          "rl_key", "rl_alu", "rl_facts_start", "rl_facts_end", "bl_nrow", "bl_used", "bl_full",
          "rl_div48by32", "bl_m", "rl_detect", "rl_e820", "rl_mapok", "rl_ramkb",
-         "rl_nominal", "rl_tscmhz", "rl_signature", "rl_family", "rl_model", "rl_cpuid")
+         "rl_nominal", "rl_tscmhz", "rl_signature", "rl_family", "rl_model", "rl_cpuid",
+         "ru_view", "ru_scores", "ru_overall", "ru_rects", "ru_page", "ru_rows",
+         "ru_h", "ru_foot", "ru_clockvalue", "ru_buttons", "bl_top")
 
 
 def symbols():

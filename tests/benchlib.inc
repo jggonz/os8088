@@ -1083,6 +1083,14 @@ bl_paint:
     jnz .rows
     inc ax
 .rows:
+%ifdef BL_BOTTOM_ROWS
+    sub ax, BL_BOTTOM_ROWS
+    jbe .one
+    jmp .reserved
+.one:
+    mov ax, 1
+.reserved:
+%endif
     mov [bl_vrows], ax
     dec ax                      ; the last row is the status line
     mov [bl_prows], ax

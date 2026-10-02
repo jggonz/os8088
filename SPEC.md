@@ -156974,7 +156974,7 @@ The everything application set carries it in APPS/. No resident kernel bytes.
 R / Bench > Run executes fixed-work CPU ALU, shifts, multiply, divide, RAM copy
 and fill, then graphics fill, horizontal line, frame, opaque text, 1bpp and 4bpp
 blits. S / Save Report writes REDLINE.TXT in the instance's current directory;
-Home, End, Up, Down and PgUp/PgDn browse the report. The About handler returns
+In Detailed, Home, End, Up, Down and PgUp/PgDn browse the report. The About handler returns
 to the provenance. The existing benchlib source is shared, including PIT latch,
 32-bit accumulation, empty-body subtraction, overflow flags, pagination and save.
 Each body is bounded below a PIT wrap on a stock XT. All graphics use OS slots
@@ -157016,3 +157016,19 @@ reference, not a claim of perfect physical hardware equivalence. IBM ROM is
 user-supplied. `tools/redline_profile.py` boots, launches, runs, saves and extracts
 the report and records configuration, binary hashes and measured workload counts.
 The committed reference is generated from an actual run, never invented.
+
+### 103.4 Dashboard and detailed report
+
+The default Summary view uses framed performance, system snapshot, workload
+bars and hardware-details panels, with Summary, Detailed, Compare, Run, Save
+and Quit buttons. The large headline is the arithmetic mean of the six CPU/RAM
+workload indices, explicitly labelled CPU + RAM; it is not a universal score.
+Bars use real measurements and the existing per-adapter comparison rules.
+Detailed preserves the entire original paginated report and saved text file.
+Compare expands the workload bars. U/D/C select views; R/S/Q run/save/quit;
+Tab cycles views and F1 opens Detailed at the report's provenance. PgUp/PgDn
+page compact workload panels or the Detailed report. Home/End/arrows in
+Detailed retain their existing behavior. Buttons arm on press and act only
+on release over the same control. Layout follows the live content geometry;
+short CGA screens use smaller panels and paginate the results. Painting and
+view changes are outside benchmark timing spans and add no resident bytes.

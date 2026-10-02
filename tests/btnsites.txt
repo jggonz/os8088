@@ -107,3 +107,4 @@
 # live count out of a rectangle's coordinates and Date/Time went white.
 1 kernel/ctrl.inc                  # every Control Panel page's buttons
 1 kernel/hiber.inc                 # the hibernate prompt's
+1 apps/redline/ui.inc              # dashboard/view controls; SDK arm/track/release

@@ -2,6 +2,7 @@
 %include "os88api.inc"
     OS88_HEADER 'REDLINE', rl_entry
 %define BL_ARENA_BYTES 6000
+%define BL_BOTTOM_ROWS 3            ; leave 24 pixels for view/action buttons
 
 rl_entry:
     mov si, rl_tpl
@@ -15,18 +16,27 @@ rl_entry:
     call OSAPI_MENU_SET
     mov si, rl_about
     call OSAPI_ABOUT_SET
+    mov ax, bx
+    mov bx, ru_buttons
+    mov si, ru_mouseup
+    mov di, ru_drag
+    xor dx, dx
+    call os88ui_btninit
+    mov bx, [rl_win]
+    mov ax, ru_press
+    call OSAPI_WM_ONCLICK           ; refresh geometry, then enter SDK dispatch
     mov si, rl_intro
     call bl_sline
     mov si, rl_hint
     call bl_sline
     mov si, rl_hint2
     call bl_sline
+    mov bx, [rl_win]                ; loader publishes the returned window
     clc
 .out:
     ret
 rl_paint:
-    call bl_paint
-    ret
+    jmp ru_paint
 rl_key:
     push ax
     push bx
@@ -45,9 +55,38 @@ rl_key:
     je .save
     cmp al, 'S'
     je .save
-    call bl_key
-    jc .out
-    call bl_paint
+    and al, 0xDF
+    cmp al, 'U'
+    je .summary
+    cmp al, 'D'
+    je .detail
+    cmp al, 'C'
+    je .compare
+    cmp al, 'Q'
+    je .quit
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp ru_navigation
+.summary:
+    mov byte [ru_view], 0
+    jmp .draw
+.detail:
+    mov byte [ru_view], 1
+    jmp .draw
+.compare:
+    mov byte [ru_view], 2
+.draw:
+    call rl_repaint
+    jmp .out
+.quit:
+    mov bx, [rl_win]
+    call OSAPI_WM_CLOSE
     jmp .out
 .run:
     call rl_run
@@ -59,7 +98,7 @@ rl_key:
     mov si, rl_filename
     call bl_save
     mov si, [rl_win]
-    call bl_paint
+    call rl_paint
 .out:
     pop es
     pop bp
@@ -71,20 +110,24 @@ rl_key:
     pop ax
     ret
 rl_click:
-    cmp byte [rl_ran], 0
-    jne .page
-    mov al, 'r'
-    jmp rl_key
-.page:
-    mov al, ' '
-    xor ah, ah
-    jmp rl_key
+    ret                            ; buttons act on release, not body clicks
 rl_cmd:
     cmp al, 0
     je .run
     cmp al, 1
     je .save
-    jmp rl_about
+    cmp al, 2
+    je .summary
+    cmp al, 3
+    je .detail
+    mov al, 'c'
+    jmp rl_key
+.summary:
+    mov al, 'u'
+    jmp rl_key
+.detail:
+    mov al, 'd'
+    jmp rl_key
 .run:
     mov al, 'r'
     jmp rl_key
@@ -92,8 +135,9 @@ rl_cmd:
     mov al, 's'
     jmp rl_key
 rl_about:
+    mov byte [ru_view], 1
     mov word [bl_top], 0
-    call bl_paint
+    call rl_repaint
     ret
 
 rl_run:
@@ -163,10 +207,12 @@ rl_run:
     call rl_clockreport
     call rl_frontclock
     call rl_comparisons
+    call ru_indices
     mov si, rl_footer
     call bl_sline
     inc word [rl_runs]
     mov byte [rl_ran], 1
+    call ru_clock
     mov word [bl_top], 0
     ret
 
@@ -188,7 +234,7 @@ rl_repaint:
     pop ax
     call OSAPI_GFX_FILL
     mov si, [rl_win]
-    call bl_paint
+    call rl_paint
     ret
 
 ; Inventory values are labelled by their sources, rather than "installed" guesses.
@@ -690,21 +736,24 @@ rl_blit4:
 %include "redline/baseline.inc"
 ; Share the proven timing/report machinery with the developer harnesses.
 %include "benchlib.inc"
+%include "redline/ui.inc"
+%define OS88UI_NOGLYPH
+%include "os88ui.inc"
 
 RL_ROWS equ 12
 rl_tpl: dw 7, 22, 632, 448, rl_title, rl_paint, rl_key, rl_click
 rl_title: db 'REDLINE', 0
 rl_menu: db 'Bench', 0
-rl_menuitems: dw rl_runitem, rl_saveitem, rl_topitem
+rl_menuitems: dw rl_runitem, rl_saveitem, ru_summary, ru_detailed, ru_compare
 rl_runitem: db 'Run', 0
 rl_saveitem: db 'Save Report', 0
 rl_topitem: db 'Top / About', 0
 OS88_MENUSET rl_menus, rl_title, rl_cmd
-    OS88_MENU rl_menu, rl_menuitems, 3
+    OS88_MENU rl_menu, rl_menuitems, 5
 OS88_MENUSET_END rl_menus
 rl_intro: db 'REDLINE 1.0  //  CPU + GRAPHICS PERFORMANCE LAB', 0
-rl_hint: db 'R or click: Run   S: Save REDLINE.TXT   Bench menu: commands', 0
-rl_hint2: db 'Arrow keys / PgUp / PgDn browse. Close other apps before comparing.', 0
+rl_hint: db 'U Summary  D Detailed  C Compare  R Run  S Save  Q Quit', 0
+rl_hint2: db 'PgUp/PgDn page; arrows/Home/End in Detailed. F1: report help.', 0
 rl_running: db 'REDLINE: probing hardware and measuring fixed workloads...', 0
 rl_method: db 'PIT 1.193182 MHz; net counts, IRQs between bodies; fixed work.', 0
 rl_footer: db 'S saves REDLINE.TXT here. R repeats. Home shows system facts.', 0

@@ -520,7 +520,8 @@ tools/mouse.py       absolute mouse positioning over the QMP socket
 **REDLINE** is the CPU and graphics performance lab: period-style hardware
 facts, twelve fixed workloads, timing tables and comparison bars against a
 measured 4.77 MHz MartyPC PC. `make redlinedisk` builds all four disk sizes;
-R runs and S saves `REDLINE.TXT`. See [the research, CPU/MHz detection limits
+Summary has framed panels and graphical bars; Detailed keeps the complete
+inventory and timing report. R runs and S saves `REDLINE.TXT`. See [the research, CPU/MHz detection limits
 and reproducible baseline](docs/REDLINE.md).
 
 Programs live on a **FAT12** software floppy (drive B:) — and, once os8088 is

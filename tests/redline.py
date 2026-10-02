@@ -98,6 +98,14 @@ def native(machine):
         assert all(0 < n < 0xFFFFFFFF for n in counts), counts
         assert p.data('bl_full') == b'\0'
         assert p.word('rl_convkb') == 640
+        assert p.data('ru_view') == b'\0'
+        measured_indices = struct.unpack('<12I', p.data('ru_scores', 48))
+        reference = json.loads((ROOT/'apps/redline/reference.json').read_text())
+        expected_indices = tuple(min(b*1000//n, 0xFFFFFFFF) for b,n in
+                                 zip(reference['workload_counts'], counts))
+        assert measured_indices == expected_indices
+        overall = struct.unpack('<I', p.data('ru_overall', 4))[0]
+        assert overall == sum(expected_indices[:6])//6
         ptr = p.word('rl_cpuname')
         cpu = ui.m.read(p.base + ptr, 32).split(b'\0')[0].decode('ascii')
         if 'v20' in machine:
@@ -140,19 +148,60 @@ def native(machine):
                 assert all(900 < n < 1100 for n in indices), indices
         else:
             assert 'Graphics index unavailable' in report
-        R.key(ui, 'End')
-        ui.m.advance(frames=60)
-        if p.word('rl_video') & 255 == 0:
-            w, h, pixels = ui.m.fbuf()
-            M.write_png_rgb(str(out / 'redline.png'), w, h, pixels)
-        else:
-            kind = 'herc' if p.word('rl_video') & 255 == 1 else 'cga'
-            w, h, rows = ui.m.vram(kind)
-            M.write_png(str(out / 'redline.png'), w, h, rows)
-        # Close through the OS menu; a stuck lock would prevent this.
+        def screenshot(name):
+            ui.m.advance(frames=60)
+            if p.word('rl_video') & 255 == 0:
+                w, h, pixels = ui.m.fbuf()
+                M.write_png_rgb(str(out/name), w, h, pixels)
+            else:
+                kind = 'herc' if p.word('rl_video') & 255 == 1 else 'cga'
+                w, h, rows = ui.m.vram(kind)
+                M.write_png(str(out/name), w, h, rows)
+
+        screenshot('summary.png')
+        # Detail acts on release. A held press cannot change views, and
+        # dragging off it must cancel rather than leave an inverted button.
+        rects = struct.unpack('<24H', p.data('ru_rects', 48))
+        x1,y1,x2,y2 = rects[4:8]
         ui.m.run()
-        ui.close(ui.window('REDLINE'))
-        print('REDLINE %s: %s, twelve timings, arithmetic and save/close OK' %
+        ui.mo.to((x1+x2)//2, (y1+y2)//2)
+        ui.mo._sep()
+        ui.mo._edge(True)
+        ui.m.advance(frames=8)
+        assert p.data('ru_view') == b'\0', 'Detailed fired on press'
+        assert struct.unpack('<H', ui.m.read(p.addr('ru_buttons')+10, 2))[0] == 2
+        ui.m.run()
+        ui.mo.to(x1, y1-12)
+        ui.mo._edge(False)
+        ui.m.advance(frames=8)
+        assert p.data('ru_view') == b'\0', 'cancelled press changed view'
+        ui.m.run()
+        ui.mo.click((x1+x2)//2, (y1+y2)//2, settle=0)
+        R.wait(ui, lambda:p.data('ru_view') == b'\1', 'Detailed button did not fire')
+        R.key(ui, 'End')
+        R.wait(ui, lambda:p.word('bl_top') > 0, 'Detailed End did not paginate')
+        screenshot('detailed.png')
+        R.key(ui, 'KeyC')
+        R.wait(ui, lambda:p.data('ru_view') == b'\2', 'Compare key did not switch view')
+        R.key(ui, 'Home')
+        screenshot('compare.png')
+        R.key(ui, 'KeyU')
+        R.wait(ui, lambda:p.data('ru_view') == b'\0', 'Summary key did not switch view')
+        R.key(ui, 'PageDown')
+        if p.word('ru_rows') < 12:
+            R.wait(ui, lambda:p.word('ru_page') > 0, 'compact results did not paginate')
+        R.key(ui, 'Home')
+        R.key(ui, 'F1')
+        R.wait(ui, lambda:p.data('ru_view') == b'\1' and p.word('bl_top') == 0,
+               'F1 did not open Detailed at provenance')
+        screenshot('redline.png')
+        # Quit is a real application button through the deferred close API.
+        x1,y1,x2,y2 = struct.unpack('<24H', p.data('ru_rects', 48))[20:24]
+        ui.m.run()
+        ui.mo.click((x1+x2)//2, (y1+y2)//2, settle=0)
+        M.until(ui.m, lambda _:not any(w.title == 'REDLINE' for w in ui.windows()),
+                'Quit closes REDLINE', limit=20)
+        print('REDLINE %s: %s, timings, Summary/Detailed/Compare, gestures and Quit OK' %
               (machine, cpu), flush=True)
 
 

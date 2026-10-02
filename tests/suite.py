@@ -2517,15 +2517,18 @@ SOAK = [
         "not physical hardware identification (SPEC.md 103.2)", needs=("nasm", "qemu")),
     Row("redlinecga", "soak", py("tests/redline.py", "--machine", "os8088_redline_pc_gla"), 45.0,
         "REDLINE cga: CPU identity, twelve timings, repeated probe, large-denominator "
-        "arithmetic, report save, adapter comparisons and close (SPEC.md 103)",
+        "arithmetic, report save, Summary/Detailed/Compare, release/cancel buttons "
+        "and Quit (SPEC.md 103)",
         needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
     Row("redlineherc", "soak", py("tests/redline.py", "--machine", "os8088_5150_herc_gla"), 45.0,
         "REDLINE herc: CPU identity, twelve timings, repeated probe, large-denominator "
-        "arithmetic, report save, adapter comparisons and close (SPEC.md 103)",
+        "arithmetic, report save, Summary/Detailed/Compare, release/cancel buttons "
+        "and Quit (SPEC.md 103)",
         needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
     Row("redlinevga", "soak", py("tests/redline.py", "--machine", "os8088_xt_vga"), 60.0,
         "REDLINE vga: CPU identity, twelve timings, repeated probe, large-denominator "
-        "arithmetic, report save, adapter comparisons and close (SPEC.md 103)",
+        "arithmetic, report save, Summary/Detailed/Compare, release/cancel buttons "
+        "and Quit (SPEC.md 103)",
         needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
     Row("redlinev20", "soak", py("tests/redline.py", "--nec"), 10.0,
         "REDLINE V20 shipped detection with real PIT IRQ0 and repeated queue probe; "
