@@ -291,7 +291,7 @@ ITEMS = [
     ("progs", "REDLINE", False,
      "A CPU and graphics benchmark. It times 25 fixed workloads -- "
      "instruction mixes, memory copies, drawing, text, a Mandelbrot set and "
-     "spinning 3D cubes -- and scores each against an IBM PC at 4.77 MHz, "
+     X
      "which reads 1000. Save writes the full report to a text file.",
      [("redline.img", "1.44MB", ""), ("redline120.img", "1.2MB", ""),
       ("redline720.img", "720KB", ""), ("redline360.img", "360KB", "")]),
