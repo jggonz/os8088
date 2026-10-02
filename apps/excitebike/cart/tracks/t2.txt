@@ -1,0 +1,124 @@
+# 8BitBike course 2: _off_003_EE59_01 at $EE59
+# Raw stream bytes in cartridge order; consumed by sub_F4FF.
+# A count byte belongs to its preceding repeat opcode; finish 09 restarts the lap.
+02 # 000: lap count
+40 # 001: repeat piece 00
+0F # 002: repeat count 15; high bit ignored
+30 # 003: enable fallen-rider marker before finish
+40 # 004: repeat piece 00
+33 # 005: repeat count 51; high bit ignored
+31 # 006: disable fallen-rider marker
+15 # 007: piece 15
+41 # 008: repeat piece 20
+06 # 009: repeat count 6; high bit ignored
+21 # 010: piece 21
+45 # 011: repeat piece 22
+06 # 012: repeat count 6; high bit ignored
+23 # 013: piece 23
+40 # 014: repeat piece 00
+0A # 015: repeat count 10; high bit ignored
+07 # 016: piece 07
+40 # 017: repeat piece 00
+06 # 018: repeat count 6; high bit ignored
+87 # 019: piece 07; skipped on plain pass
+40 # 020: repeat piece 00
+08 # 021: repeat count 8; high bit ignored
+0C # 022: piece 0C
+40 # 023: repeat piece 00
+0B # 024: repeat count 11; high bit ignored
+15 # 025: piece 15
+41 # 026: repeat piece 20
+06 # 027: repeat count 6; high bit ignored
+21 # 028: piece 21
+45 # 029: repeat piece 22
+06 # 030: repeat count 6; high bit ignored
+23 # 031: piece 23
+40 # 032: repeat piece 00
+03 # 033: repeat count 3; high bit ignored
+87 # 034: piece 07; skipped on plain pass
+40 # 035: repeat piece 00
+0C # 036: repeat count 12; high bit ignored
+0F # 037: piece 0F
+40 # 038: repeat piece 00
+02 # 039: repeat count 2; high bit ignored
+10 # 040: piece 10
+40 # 041: repeat piece 00
+0F # 042: repeat count 15; high bit ignored
+07 # 043: piece 07
+40 # 044: repeat piece 00
+0B # 045: repeat count 11; high bit ignored
+07 # 046: piece 07
+40 # 047: repeat piece 00
+26 # 048: repeat count 38; high bit ignored
+08 # 049: piece 08
+40 # 050: repeat piece 00
+02 # 051: repeat count 2; high bit ignored
+0B # 052: piece 0B
+40 # 053: repeat piece 00
+02 # 054: repeat count 2; high bit ignored
+88 # 055: piece 08; skipped on plain pass
+40 # 056: repeat piece 00
+24 # 057: repeat count 36; high bit ignored
+0E # 058: piece 0E
+40 # 059: repeat piece 00
+02 # 060: repeat count 2; high bit ignored
+08 # 061: piece 08
+40 # 062: repeat piece 00
+02 # 063: repeat count 2; high bit ignored
+11 # 064: piece 11
+46 # 065: repeat piece 16
+0A # 066: repeat count 10; high bit ignored
+17 # 067: piece 17
+40 # 068: repeat piece 00
+02 # 069: repeat count 2; high bit ignored
+0E # 070: piece 0E
+40 # 071: repeat piece 00
+02 # 072: repeat count 2; high bit ignored
+11 # 073: piece 11
+46 # 074: repeat piece 16
+0E # 075: repeat count 14; high bit ignored
+17 # 076: piece 17
+40 # 077: repeat piece 00
+15 # 078: repeat count 21; high bit ignored
+10 # 079: piece 10
+40 # 080: repeat piece 00
+06 # 081: repeat count 6; high bit ignored
+81 # 082: piece 01; skipped on plain pass
+40 # 083: repeat piece 00
+02 # 084: repeat count 2; high bit ignored
+81 # 085: piece 01; skipped on plain pass
+40 # 086: repeat piece 00
+02 # 087: repeat count 2; high bit ignored
+01 # 088: piece 01
+40 # 089: repeat piece 00
+02 # 090: repeat count 2; high bit ignored
+01 # 091: piece 01
+40 # 092: repeat piece 00
+02 # 093: repeat count 2; high bit ignored
+01 # 094: piece 01
+40 # 095: repeat piece 00
+02 # 096: repeat count 2; high bit ignored
+01 # 097: piece 01
+40 # 098: repeat piece 00
+17 # 099: repeat count 23; high bit ignored
+30 # 100: enable fallen-rider marker before finish
+13 # 101: piece 13
+43 # 102: repeat piece 1A
+37 # 103: repeat count 55; high bit ignored
+1B # 104: piece 1B
+40 # 105: repeat piece 00
+1F # 106: repeat count 31; high bit ignored
+0C # 107: piece 0C
+40 # 108: repeat piece 00
+0E # 109: repeat count 14; high bit ignored
+0D # 110: piece 0D
+40 # 111: repeat piece 00
+04 # 112: repeat count 4; high bit ignored
+8D # 113: piece 0D; skipped on plain pass
+40 # 114: repeat piece 00
+05 # 115: repeat count 5; high bit ignored
+0C # 116: piece 0C
+40 # 117: repeat piece 00
+1B # 118: repeat count 27; high bit ignored
+31 # 119: disable fallen-rider marker
+09 # 120: finish gate; restart lap

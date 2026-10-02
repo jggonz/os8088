@@ -1,6 +1,7 @@
 # 8BitBike: the cartridge-faithful rebuild of the native Excitebike
 
-Updated: 2026-09-30. Branch `game/excitebike`, PR #206. Contract: SPEC.md §102.
+Updated: 2026-10-01. Rebuild branch `game/8bitbike-wave0`; engine baseline PR #206
+(merged). Contract: SPEC.md §102.
 Product name: **8BitBike**. The package is `8BITBIKE.O88`. The source directory stays
 `apps/excitebike/`, as DrMarco kept `apps/drmario/`.
 
@@ -220,12 +221,12 @@ The help panel is composed from in-game tiles and the font, as today, with nothi
 
 ### Wave 0. The importer, the fence, the rename, and the oracle
 
-- [ ] **SPEC.md §102 first.**
+- [x] **SPEC.md §102 first.**
   - Retitle it "8BitBike — native motocross racer".
   - Replace the ART AND AUDIO POLICY paragraph with rules 1 and 2 above and P1-P3.
   - Mark `docs/plans/EXCITEBIKE-PLAN.md` §0 superseded.
   - Rewrite `apps/excitebike/README.md`'s opening.
-- [ ] **The rename.**
+- [x] **The rename.**
   - `8BITBIKE.O88`; sidecars `8BITBIKE.VGA`/`.CGA`/`.HRC` (the splash) and `8BBV.GFX`,
     `8BBC.GFX`, `8BBH.GFX`.
   - The window title and About box read 8BitBike.
@@ -233,20 +234,20 @@ The help panel is composed from in-game tiles and the font, as today, with nothi
     as aliases, as `drmario` stayed for DrMarco.
   - `PKG_STEM` in `t_retired.py`, and `PKG_FILE` in `t_livefull.py` in wave 8.
   - `docs/INDEX.md` regenerated.
-- [ ] **`tools/exbref.py`** (the importer's reader).
+- [x] **`tools/exbref.py`** (the importer's reader).
   - `check_source()`: the two pins, raising `SystemExit` that names the file.
   - `rom()`: rebuilds the PRG from the listing. It must read multi-byte `.byte` lines from their
     operands, since the hex column shows only the first byte. It raises on a conflicting byte
     at one address and asserts the SHA-256.
   - `table(label, n)` and `stream(label)`.
   - `--selfcheck`, which also proves the SHA-1.
-- [ ] **`tools/excitebike_import.py`** writes `cart/` (the table above), deterministically: two
+- [x] **`tools/excitebike_import.py`** writes `cart/` (the table above), deterministically: two
   runs are byte-identical. For wave 0, emit `rules.inc`, `tracks/`, `pieces.txt` and
   `PROVENANCE.md`. The later waves add their files.
-- [ ] **The fence.** Rewrite `tests/unit/t_excitebike_clean.py` to P2's rule, with a negative
+- [x] **The fence.** Rewrite `tests/unit/t_excitebike_clean.py` to P2's rule, with a negative
   control: a planted `EXCITEBIKE_REF` read in the compiler must fail it. Add the `excitebikeimport`
   drift row (P3).
-- [ ] **`tools/exbnes/`, the recorder.**
+- [x] **`tools/exbnes/`, the recorder.**
   - Our driver, `oracle.c`, promoted from the scouting build in
     `/tmp/exb-reports/nesoracle/`, plus `getagnes.py`, which fetches agnes at pinned commit
     `0e4220b` with its MIT licence. That is the `getapple2rom.py` shape, since nothing on the
@@ -260,6 +261,17 @@ The help panel is composed from in-game tiles and the font, as today, with nothi
   - `t_excitebike_clean` fails on its planted read.
   - `excitebikeimport` is green with the reference, and SKIPs without it.
   - `8BITBIKE.O88` differs from `excbike.o88` only in its name strings.
+
+  **Wave 0 validation (2026-09-30):** the implementation items above landed in
+  the working tree. The clean-checkout build, fast tier, fence negative controls,
+  pinned import/drift and three disk boots pass (details in the session log).
+  The literal binary-only-name assertion remains unfulfilled: longer sidecar
+  names relocate addresses, and loading/splash lettering is regenerated. Source
+  changes are identity strings and sidecar references; all three gameplay GFX
+  files, the sound blob, course streams and scripts are byte-identical to the
+  captured baseline. The rename changes the splash wordmark pixels. This is
+  recorded here rather than claiming the packed binaries differ only in strings.
+  The gate remains unchecked for that exact assertion; waves 1–8 remain open.
 
 ### Wave 1. The cartridge's graphics, the generated marks, three adapters
 
@@ -641,3 +653,51 @@ cartridge: the stepping, the 4-frame cadence, heat, lanes and gravity. Every tab
   Codex image generation verified with a throwaway prompt (1254x1254 PNG). Owner decisions: the
   marks replaced by generated art; the name 8BitBike; ship on the standard disks where it fits;
   no copyright line on any screen.
+
+- 2026-09-30: Wave 0 implementation, using three agents (importer, recorder,
+  rename) and a parent integration pass. SPEC §102 changed before code; old
+  policy marked superseded. `8BITBIKE.O88` and renamed sidecars build through
+  `make 8bitbike` / `make 8bitbikedisk`; legacy targets remain aliases. The
+  package remains local until wave 8. No commits or PR publication performed.
+  - Reader: both source SHA-256 pins, complete 16KB PRG coverage and SHA-256,
+    1,221 labels, full-cartridge SHA-1 all pass. Importer: two output directories
+    byte-identical; 39 tables, five streams, 36 pieces and provenance. Drift
+    passes with the reference, SKIPs without it, and rejects bad pins, changed
+    output and unexpected files. Independent host reader: 193 checks; the
+    plain/second-pass course counts match wave 2's ten pinned totals.
+  - Fence: 36 checks, including planted executable reads, inline and module-form
+    Make calls, shared variables, local/dynamic imports, package shadows,
+    relative imports, C/H code and included Make fragments. Authoring prose and
+    the separately committed DrMarco inputs are permitted; imported text is
+    source, not a build-time reference read. Fence audit is about 0.13 CPU s.
+  - Recorder: pinned agnes plus MIT licence fetched only on refresh; 2,212
+    frames, eight 256x240 pixel samples, 9,180 APU register writes. Two runs and
+    two complete refreshes match byte for byte. Compressed recordings about
+    129KB. Independent fixture gate rejects a flipped bit and one-frame input
+    offset, with no reference, emulator or cc. All three new full-tier rows
+    pass through the registered runner with the reference present.
+  - Build: separate source checkout, no EXCITEBIKE_REF and no cc/gcc/clang in
+    PATH, builds `all` and all four game disks; fast tier 52/52, 24.3 CPU s of
+    30. Main working tree `make -j4 all 8bitbikedisk` also passes, fast 52/52 at
+    24.1 CPU s. The restricted checkout's first gate run caught a scanner
+    snapshot taken between edits and a missing chmod utility; its corrected
+    final run is green. All sources build from scratch without the reference.
+  - Disks: all four independently FAT12-walked, same eight files and bytes;
+    damaged-chain negative control rejected. MartyPC boots: 360KB VGA (323
+    race frames), 720KB Hercules (304), 1.44MB VGA (329). VGA and CGA front-end
+    gates pass, including splash, help, loading, Esc, Alt+Enter and cleanup.
+    These are emulator results, not physical XT measurements. Initial stale
+    system-image/config failures disappeared after rebuilding images and
+    restaging ignored MartyPC configs. No tracked VM configuration changed.
+  - Rename audit: all three GFX files, audio blob, tracks, scripts and gameplay
+    contact sheets equal the pre-change baseline. Loading/splash lettering and
+    identity strings change, and longer filenames relocate binary addresses;
+    the strict binary-only-name gate remains open. Waves 1–8 remain unimplemented
+    and unchecked. `cart/ADAPTATIONS.md` lists baseline differences and future
+    measurements; imported wave 0 data is not yet read by the running engine.
+
+- 2026-10-01: prepared the Wave 0 changes for a follow-up PR from main
+  `e03a052a`, after the engine baseline PR #206 was squash-merged. The PR scope
+  is the rename, offline importer, build fence and recorder; waves 1–8 and the
+  strict packed-binary-only-name assertion remain open. The existing
+  `vm/xt-sound/86box.cfg` edit is excluded from the commit.

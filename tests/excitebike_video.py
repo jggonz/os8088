@@ -104,7 +104,7 @@ class Game:
 
     def __init__(self, ui, tag, sym, ref):
         self.ui, self.m, self.tag, self.sym, self.ref = ui, ui.m, tag, sym, ref
-        w = ui.window("Excitebike")
+        w = ui.window("8BitBike")
         raw = self.m.read(self.m.sym("wm_wins"), G.MAX_WIN * G.WIN_SIZE)
         self.base = struct.unpack_from("<H", raw, w.i * G.WIN_SIZE + G.W_SEG)[0] << 4
 
@@ -387,7 +387,7 @@ def run(tag, quick, small=False):
         m = ui.m
         ui.open_drive("B")
         ui.settle()
-        ui.open("EXCBIKE.O88")
+        ui.open("8BITBIKE.O88")
         ui.settle()
         g = Game(ui, tag, sym, ref)
         g.cids = ref.course_cids(0)
@@ -822,8 +822,8 @@ def qemu_g1():
         E.settle(m)
         dispcp.open_drive(m, mo, S, E.settle, "B")
         win = next(w for w in G.windows(m, S) if w.visible and w.title == "Disk")
-        dispcp.open_named(m, mo, S, E.settle, win.x, win.y, "EXCBIKE.O88")
-        win = next(w for w in G.windows(m, S) if w.visible and w.title == "Excitebike")
+        dispcp.open_named(m, mo, S, E.settle, win.x, win.y, "8BITBIKE.O88")
+        win = next(w for w in G.windows(m, S) if w.visible and w.title == "8BitBike")
         raw = m.read(S("wm_wins"), G.MAX_WIN * G.WIN_SIZE)
         base = struct.unpack_from("<H", raw, win.i * G.WIN_SIZE + G.W_SEG)[0] << 4
         E.settle(m)

@@ -29,7 +29,7 @@ XB_ART_HC       equ 132                 ; the compact 1-bit desktop's height
 ; error codes shown on the splash
 XB_ERR_NONE     equ 0
 XB_ERR_MODE     equ 1                   ; OSAPI_FSX_MODE refused
-XB_ERR_FILES    equ 2                   ; EXBV.GFX / EXBC.GFX missing or damaged
+XB_ERR_FILES    equ 2                   ; 8BBV.GFX / 8BBC.GFX missing or damaged
 XB_ERR_MEM      equ 3                   ; a heap claim was refused: the machine has too little (SPEC.md 102.8.3)
 
 ; ---- wave 2: the scroll engine (SPEC.md 102.1) ------------------------------

@@ -420,9 +420,9 @@ xb_gfxfiles:
     dw xb_gfxname_v, EXB_GFX_VGA_SIZE, EXB_GFX_VGA_SUM, 'BV'
     dw xb_gfxname_c, EXB_GFX_CGA_SIZE, EXB_GFX_CGA_SUM, 'BC'
     dw xb_gfxname_h, EXB_GFX_HRC_SIZE, EXB_GFX_HRC_SUM, 'BH'
-xb_gfxname_v: db 'EXBV.GFX',0
-xb_gfxname_c: db 'EXBC.GFX',0
-xb_gfxname_h: db 'EXBH.GFX',0
+xb_gfxname_v: db '8BBV.GFX',0
+xb_gfxname_c: db '8BBC.GFX',0
+xb_gfxname_h: db '8BBH.GFX',0
 
 ; the font record -> xb_font: 64 glyphs, one 8-byte 1-bit row set (VGA) or a
 ; 16-byte 2-bit set (CGA), so text is a run of moves with DS = our segment

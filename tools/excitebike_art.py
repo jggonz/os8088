@@ -1095,7 +1095,7 @@ SPLASH = {
         {"t": "ellipse", "c0": [346, 160], "rx": 46, "ry": 5, "c": 0},
         {"t": "pose", "name": "air_nose_up", "x": 300, "y": 56, "s": 4,
          "inks": [0, 12, 14, 15]},
-        {"t": "text", "s": "EXCITEBIKE", "x": 96, "y": 12, "sc": 3, "c": 15, "o": 0,
+        {"t": "text", "s": "8BITBIKE", "x": 108, "y": 12, "sc": 3, "c": 15, "o": 0,
          "shadow": 4},
         {"t": "text", "s": "MOTOCROSS", "x": 144, "y": 42, "sc": 2, "c": 14, "o": 0},
         {"t": "border", "w": 8, "c": [15, 0]},

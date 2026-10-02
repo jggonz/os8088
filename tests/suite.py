@@ -259,19 +259,14 @@ FAST = [
         "for WIRE.O88 matched THEWIRE.O88. FAST for t_movable's argument - it "
         "is a rule about what apps/ means, so it belongs in front of the next "
         "make rather than the next soak run"),
-    Row("excitebikeclean", "fast", py("tests/unit/t_excitebike_clean.py"), 0.2,
-        "EXCITEBIKE carries nothing from a NES ROM or its disassembly "
-        "(SPEC.md 102.2, docs/plans/EXCITEBIKE-PLAN.md section 0). The art and "
-        "audio policy is a statement about PROVENANCE, and provenance erodes "
-        "one convenient import at a time - a CHR file read 'just for the "
-        "placeholder', an absolute path into ../NES-Games-Disassembly left in "
-        "a tool. This walks every file the game owns for the reference's "
-        "names (CHR_ROM, bank_FF, .fm2, the source knobs; the optional oracle "
-        "test alone may name EXCITEBIKE_REF), holds the build tools to the "
-        "standard library, keeps apps/excitebike text-only, and checks the "
-        "Makefile block reads no reference directory. FAST because a "
-        "provenance rule belongs in front of the next make, and it costs a "
-        "directory walk"),
+    Row("excitebikeclean", "fast", py("tests/unit/t_excitebike_clean.py"), 0.5,
+        "8BitBike builds without a cartridge or disassembly (SPEC.md 102). "
+        "Checks application code, all Makefile build recipes and the asset "
+        "compiler's local import closure for executable reference reads; "
+        "comments and committed provenance are permitted. Only explicit "
+        "offline refresh recipes may invoke the reader or recorder. Enforces "
+        "the compiler's standard-library boundary, and plants reference reads, "
+        "offline imports and a refresh prerequisite as negative controls."),
     Row("excitebikeaudiohost", "fast", py("tests/excitebike_audio.py", "--host"), 1.0,
         "EXCITEBIKE EXB.SND (SPEC.md 102.5) read back by a decoder that shares nothing with "
         "tools/excitebike_audio.py: <= 3,072 bytes, every voice of every song summing to the steps "
@@ -1327,6 +1322,21 @@ FAST = [
 # tier`).
 # --------------------------------------------------------------------------
 FULL = [
+    Row("excitebikeimport", "full", py("tools/excitebike_import.py", "--check"), 1.0,
+        "Recompute pinned cartridge tables, pieces and courses without changing the "
+        "tree and require every importer-owned source to be byte-identical "
+        "to apps/excitebike/cart/. Names drift and the refresh command. SKIPs "
+        "when EXCITEBIKE_REF is absent; no emulator or cc is needed."),
+    Row("excitebikeimportreader", "full", py("tests/unit/t_excitebike_import.py"), 1.0,
+        "Reference-free listing parser and importer negative controls, including "
+        "multi-byte .byte operands, conflicting addresses, wrong source pins "
+        "and independently decoded course counts. Synthetic bad-pin checks "
+        "and committed-source decoding run without EXCITEBIKE_REF."),
+    Row("excitebikeoracle", "full", py("tests/excitebike_oracle.py"), 1.0,
+        "Independently decode committed NES oracle traces, check named RAM, "
+        "controller timing, OAM, scroll, palette and APU record structure and "
+        "manifest hashes. Negative controls reject changed data. Uses only "
+        "committed fixtures and stdlib; no cartridge, cc or agnes checkout."),
     Row("buildmatrix", "soak", py("tests/unit/t_buildmatrix.py"), 180.0,
         "the knob kernels and kern_small - every configuration `all` "
         "does not build, and so the only thing that keeps them assembling"
@@ -2686,7 +2696,7 @@ SOAK = [
         needs=("marty", "nasm"), timeout=600,
         wants=("build/excitebike360.img", "build/os8088-360.img")),
     Row("excitebikecustomherc", "soak", py("tests/excitebike_flow.py", "--custom", "--adapter", "herc"), 55.0,
-        "EXCITEBIKE wave 6, excitebikecustom on the Hercules (the scratch disks carry EXBH.GFX too)",
+        "EXCITEBIKE wave 6, excitebikecustom on the Hercules (the scratch disks carry 8BBH.GFX too)",
         needs=("marty", "nasm"), timeout=600,
         wants=("build/excitebike360.img", "build/os8088-360.img")),
     Row("excitebikeaiherc", "soak", py("tests/excitebike_flow.py", "--ai", "--collide", "--adapter", "herc"), 90.0,
@@ -2757,8 +2767,8 @@ SOAK = [
         "EXCITEBIKE wave 7 (SPEC.md 102.8.2), no emulator: all four standalone floppies (1.44MB, 720KB, "
         "1.2MB, 360KB) walked by tests/unit/t_image.py's FAT12 reader - deliberately not os88disk's - and "
         "each must be the geometry its name says, carry exactly the eight files of the package in the root "
-        "with every chain whole and the right length, and the same bytes in all four; EXCBIKE.O88 is the "
-        "built package. Negative control: a FAT entry damaged in EXCBIKE.O88's chain fails the same walk. "
+        "with every chain whole and the right length, and the same bytes in all four; 8BITBIKE.O88 is the "
+        "built package. Negative control: a FAT entry damaged in 8BITBIKE.O88's chain fails the same walk. "
         "The 1.2MB floppy is only walked: no MartyPC machine has a 5.25 inch HD drive",
         wants=("build/excitebike360.img", "build/excitebike.img", "build/excitebike720.img",
                "build/excitebike120.img")),
@@ -2806,7 +2816,7 @@ SOAK = [
         wants=("build/excitebike360.img", "build/os8088-360.img")),
     Row("excitebikeload", "soak", py("tests/excitebike_load.py"), 120.0,
         "EXCITEBIKE launch-to-title load time on MartyPC's 4.77 MHz XT (PERFORMANCE.md Set 153): "
-        "the loader's entry for EXCBIKE.O88 to the splash reveal finishing, on VGA, CGA and Hercules, "
+        "the loader's entry for 8BITBIKE.O88 to the splash reveal finishing, on VGA, CGA and Hercules, "
         "read in emulated cycles. A measurement that asserts the title comes up at all on each adapter; "
         "the figures are the record",
         needs=("marty", "nasm"), wants=("build/excitebike360.img", "build/os8088-360.img")),

@@ -227,7 +227,7 @@ def open_flow(ui, tag, sym, ref, art):
     ui.open_drive("B")
     ui.settle()
     c0 = F.claims(ui.m)
-    ui.open("EXCBIKE.O88")
+    ui.open("8BITBIKE.O88")
     ui.settle()
     fl = Flow(ui, tag, sym, ref, art)
     M.until(ui.m, lambda _: fl.w("xb_reveal") >= fl.w("xb_frontheight") > 0,
@@ -594,7 +594,7 @@ def item_leave(fl, c0, c_pre, close=True):
     print(tag, "leaving: Alt+Enter from the title, a menu and a race, and Esc from the title, each back to the "
           "desktop with the claim map exactly as it was: PASS", flush=True)
     if close:
-        fl.ui.close(fl.ui.window("Excitebike"))
+        fl.ui.close(fl.ui.window("8BitBike"))
         fl.ui.settle()
         c_end = F.claims(m)
         assert F.paras(c_end) == F.paras(c0), ("closing the window left the heap changed",
@@ -649,8 +649,8 @@ def custom_disk(name, data):
     path = V.at("build/%s.img" % name)
     tmp = V.at("build/%s.dat" % name)
     open(tmp, "wb").write(data)
-    files = ["build/excbike.o88", "apps/excitebike/README.md"] + [
-        "build/excitebike-art/" + f for f in ("EXBV.GFX", "EXBC.GFX", "EXBH.GFX", "EXBSPL.VGA", "EXBSPL.CGA", "EXBSPL.HRC")]
+    files = ["build/8bitbike.o88", "apps/excitebike/README.md"] + [
+        "build/excitebike-art/" + f for f in ("8BBV.GFX", "8BBC.GFX", "8BBH.GFX", "8BITBIKE.VGA", "8BITBIKE.CGA", "8BITBIKE.HRC")]
     named = [V.at(f) for f in files]
     # the file must be called EXBTRACK.DAT on the volume: os88disk names a file by its base name
     real = V.at("build/%s/EXBTRACK.DAT" % name)
@@ -754,7 +754,7 @@ def ai_arm(tag, steps=AI_STEPS, course=3, flag=1):
     with boot(tag) as ui:
         ui.open_drive("B")
         ui.settle()
-        ui.open("EXCBIKE.O88")
+        ui.open("8BITBIKE.O88")
         ui.settle()
         g = V.Game(ui, tag, sym, ref)
         M.until(ui.m, lambda _: g.w("xb_reveal") >= g.w("xb_frontheight") > 0, "the reveal", guest=30)
@@ -914,7 +914,7 @@ def collide_arm(tag):
     with boot(tag) as ui:
         ui.open_drive("B")
         ui.settle()
-        ui.open("EXCBIKE.O88")
+        ui.open("8BITBIKE.O88")
         ui.settle()
         g = V.Game(ui, tag, sym, ref)
         M.until(ui.m, lambda _: g.w("xb_reveal") >= g.w("xb_frontheight") > 0, "the reveal", guest=30)

@@ -13766,17 +13766,15 @@ $(BUILD)/drmario360.img: $(DM_SHIP) apps/drmario/README.md
 drmariodisk: drmarcodisk
 drmarcodisk: $(BUILD)/drmario.img $(BUILD)/drmario720.img $(BUILD)/drmario120.img $(BUILD)/drmario360.img
 
-# Native Excitebike (SPEC.md 102). ORIGINAL art, tracks and sound are committed
-# under apps/excitebike/ and compiled by tools/excitebike_assets.py: nothing is
-# read from a NES ROM, a CHR file or a disassembly, at build time or at run time
-# (tests/unit/t_excitebike_clean.py holds the tree to that), so a plain make of
-# this block needs only NASM and Python's standard library. The package is
+# Native 8BitBike (SPEC.md 102). Committed art, tracks and sound are compiled
+# by tools/excitebike_assets.py; this build path needs only NASM and Python's
+# standard library and never reads the optional import reference. The package is
 # `local` in apps/RETIRED.txt: it builds standalone disks and is not yet on the
 # standard images, the allapps floppy or the live media.
 EXB_ART := $(BUILD)/excitebike-art
 EXB_INPUTS := $(wildcard apps/excitebike/art/* apps/excitebike/tracks/* apps/excitebike/audio/*)
-EXB_GEN := $(addprefix $(EXB_ART)/,exbtables.inc exbtracks.inc exbscripts.inc exbsnd.inc EXBV.GFX EXBC.GFX EXBH.GFX EXBSPL.VGA EXBSPL.CGA EXBSPL.HRC EXB.SND)
-.PHONY: excitebikeref excitebikelap excitebikeload excitebikeaudio excitebike excitebikedisk excitebiketest excitebikevideo excitebikeperf excitebikeflow excitebikeselfb excitebikeaudio excitebike-art excitebike-check excitebikegeom xt-excitebike
+EXB_GEN := $(addprefix $(EXB_ART)/,exbtables.inc exbtracks.inc exbscripts.inc exbsnd.inc 8BBV.GFX 8BBC.GFX 8BBH.GFX 8BITBIKE.VGA 8BITBIKE.CGA 8BITBIKE.HRC EXB.SND)
+.PHONY: 8bitbike 8bitbikedisk excitebikeref excitebikelap excitebikeload excitebikeaudio excitebike excitebikedisk excitebiketest excitebikevideo excitebikeperf excitebikeflow excitebikeselfb excitebikeaudio excitebike-art excitebike-check excitebikegeom xt-excitebike
 # One compile emits every generated file. The stamp is written first and holds
 # a hash of every input, so an edited grid, track or score rebuilds the package
 # and the disks; a generated file that is missing removes the stamp and asks
@@ -13795,14 +13793,14 @@ excitebike-check:
 $(BUILD)/excitebike.bin: apps/excitebike/excitebike.asm apps/excitebike/front.inc apps/excitebike/video.inc apps/excitebike/world.inc apps/excitebike/game.inc apps/excitebike/vga.inc apps/excitebike/cga.inc apps/excitebike/herc.inc apps/excitebike/sprite.inc apps/excitebike/sim.inc apps/excitebike/input.inc apps/excitebike/hud.inc apps/excitebike/ai.inc apps/excitebike/flow.inc apps/excitebike/audio.inc apps/excitebike/const.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc $(EXB_ART)/exbtables.inc $(EXB_ART)/exbtracks.inc $(EXB_ART)/exbscripts.inc $(EXB_ART)/exbsnd.inc $(EXB_ART)/EXB.SND
 	$(NASM) -f bin -w+error -I apps/ -I apps/excitebike/ -I $(EXB_ART)/ -l $(BUILD)/excitebike.lst -o $@ $<
 
-# EXCITEBIKE.O88 is not a legal 8.3 name (a stem is at most 8 characters), so
-# the file is EXCBIKE.O88 and the header name stays EXCITEBIKE.
-$(BUILD)/excbike.o88: $(BUILD)/excitebike.bin tools/os88pkg.py $(PKGZSTAMP)
+# 8BITBIKE.O88 fits the filesystem's eight-character stem.
+$(BUILD)/8bitbike.o88: $(BUILD)/excitebike.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@
 
-excitebike: $(BUILD)/excbike.o88
+excitebike: 8bitbike
+8bitbike: $(BUILD)/8bitbike.o88
 
-EXB_DISKFILES := $(BUILD)/excbike.o88 apps/excitebike/README.md $(EXB_ART)/EXBV.GFX $(EXB_ART)/EXBC.GFX $(EXB_ART)/EXBH.GFX $(EXB_ART)/EXBSPL.VGA $(EXB_ART)/EXBSPL.CGA $(EXB_ART)/EXBSPL.HRC
+EXB_DISKFILES := $(BUILD)/8bitbike.o88 apps/excitebike/README.md $(EXB_ART)/8BBV.GFX $(EXB_ART)/8BBC.GFX $(EXB_ART)/8BBH.GFX $(EXB_ART)/8BITBIKE.VGA $(EXB_ART)/8BITBIKE.CGA $(EXB_ART)/8BITBIKE.HRC
 $(BUILD)/excitebike.img: $(EXB_DISKFILES) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(EXB_DISKFILES)
 	python3 tools/os88disk.py --verify $@
@@ -13815,7 +13813,8 @@ $(BUILD)/excitebike120.img: $(EXB_DISKFILES) tools/os88disk.py
 $(BUILD)/excitebike360.img: $(EXB_DISKFILES) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(EXB_DISKFILES)
 	python3 tools/os88disk.py --verify $@
-excitebikedisk: $(BUILD)/excitebike.img $(BUILD)/excitebike720.img $(BUILD)/excitebike120.img $(BUILD)/excitebike360.img
+excitebikedisk: 8bitbikedisk
+8bitbikedisk: $(BUILD)/excitebike.img $(BUILD)/excitebike720.img $(BUILD)/excitebike120.img $(BUILD)/excitebike360.img
 # The front-end gate (splash, loading screen, placeholder, Esc, refusals)
 excitebiketest: excitebikedisk $(BUILD)/os8088-360.img
 	python3 tests/excitebike_front.py
@@ -13870,10 +13869,21 @@ excitebikegeom: excitebikedisk $(IMG360) $(IMG720) $(IMG)
 # with the 360KB system floppy in A: and build/excitebike360.img in B:, and the uuid and fdd_02_fn changed and
 # NOTHING else, for the reason vm/386-c-word records (86Box rewrites an unrecognised key). 86Box cannot ASSERT
 # anything (docs/TESTING.md): this is where a human LOOKS - the scroll, the banner flash, the palette (C) - and
-# double-clicks EXCBIKE.O88 in drive B:. $(UNPROTECT) because 86Box re-adds wp:// on the way out.
+# double-clicks 8BITBIKE.O88 in drive B:. $(UNPROTECT) because 86Box re-adds wp:// on the way out.
 VMXTEXCITEBIKE := $(CURDIR)/vm/xt-excitebike
 xt-excitebike: $(IMG360) $(BUILD)/excitebike360.img
 	@$(UNPROTECT) $(VMXTEXCITEBIKE)/86box.cfg
 	$(BOX) -P $(VMXTEXCITEBIKE) -N
 excitebikeload: excitebikedisk $(BUILD)/os8088-360.img
 	python3 tests/excitebike_load.py
+
+# Offline cartridge refreshes (SPEC.md 102); no build depends on these.
+.PHONY: excitebike-import excitebike-fixtures excitebikeimport excitebike-oracle-check
+excitebike-import:
+	python3 tools/excitebike_import.py
+excitebike-fixtures:
+	python3 tools/exbnes/record.py --refresh
+excitebikeimport:
+	python3 tools/excitebike_import.py --check
+excitebike-oracle-check:
+	python3 tools/exbnes/record.py --selfcheck

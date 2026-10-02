@@ -10,12 +10,12 @@ the format's own description (docs, SPEC.md 102.2):
 
   1. two compiles of the committed sources, contact sheets included, are
      byte-identical file for file (the `diff -r` of the acceptance);
-  2. EXBV.GFX / EXBC.GFX: magic, length, 16-bit checksum, a monotonic record
+  2. 8BBV.GFX / 8BBC.GFX: magic, length, 16-bit checksum, a monotonic record
      directory, then every record decoded back to what the SOURCE text says -
      each tile's 32 (VGA, plane-major) or 16 (CGA, 2bpp) bytes to its 8x8 slot
      grid, the band dictionary, collision rows and class table, the top
      picture, every pose's four layer masks to its 24x24 ink grid, the font;
-  3. EXBSPL.VGA/.HRC/.CGA: the EXF1 rows decoded packet by packet and
+  3. 8BITBIKE.VGA/.HRC/.CGA: the EXF1 rows decoded packet by packet and
      compared with the rows the layer renderer produces;
   4. the generated NASM: every constant equals the file it describes, and each
      track's run-length stream expands to the piece list it came from.
@@ -120,9 +120,9 @@ def main():
         n_out = len(na)
 
         # ---- GFX, VGA
-        rv = records(files["EXBV.GFX"], b"EXBV", 0)
-        rc = records(files["EXBC.GFX"], b"EXBC", 1)
-        rh = records(files["EXBH.GFX"], b"EXBH", 2)
+        rv = records(files["8BBV.GFX"], b"EXBV", 0)
+        rc = records(files["8BBC.GFX"], b"EXBC", 1)
+        rh = records(files["8BBH.GFX"], b"EXBH", 2)
         nt = len(art.tiles)
         check(len(rv[0]) == nt * 32 and len(rc[0]) == nt * 16 and len(rh[0]) == nt * 16, "tile record sizes")
         # Hercules (SPEC.md 102.7.1): a tile row is 16 card pixels, a PAIR to a game pixel - 00 black, 11 white,
@@ -209,7 +209,7 @@ def main():
         # ---- EXF1
         sp = X.Splash(art)
         for tag in ("VGA", "HRC", "CGA"):
-            blob = files["EXBSPL." + tag]
+            blob = files["8BITBIKE." + tag]
             check(blob[:4] == b"EXF1", "EXF1 magic %s" % tag)
             w, h, depth = struct.unpack_from("<HHH", blob, 4)
             check((w, h, depth) == (432, 132 if tag == "CGA" else 264, 4 if tag == "VGA" else 1),
@@ -229,14 +229,14 @@ def main():
         check(re.search(r"^EXB_LAP_MAX equ %d" % X.LAP_MAX, open(os.path.join(a, "exbtracks.inc")).read(), re.M)
               and re.search(r"^EXB_RUNWAY equ %d" % X.RUNWAY, open(os.path.join(a, "exbtracks.inc")).read(), re.M),
               "runway and lap budget constants (XB_CID_MAX's inputs)")
-        check(equ("EXB_GFX_VGA_SIZE") == len(files["EXBV.GFX"]), "VGA size constant")
-        check(equ("EXB_GFX_CGA_SIZE") == len(files["EXBC.GFX"]), "CGA size constant")
-        check(equ("EXB_GFX_HRC_SIZE") == len(files["EXBH.GFX"]), "Hercules size constant")
-        check(equ("EXB_GFX_HRC_SUM") == struct.unpack_from("<H", files["EXBH.GFX"], 6)[0], "Hercules sum constant")
-        check(equ("EXB_GFX_VGA_SUM") == struct.unpack_from("<H", files["EXBV.GFX"], 6)[0], "VGA sum constant")
-        check(equ("EXB_GFX_CGA_SUM") == struct.unpack_from("<H", files["EXBC.GFX"], 6)[0], "CGA sum constant")
+        check(equ("EXB_GFX_VGA_SIZE") == len(files["8BBV.GFX"]), "VGA size constant")
+        check(equ("EXB_GFX_CGA_SIZE") == len(files["8BBC.GFX"]), "CGA size constant")
+        check(equ("EXB_GFX_HRC_SIZE") == len(files["8BBH.GFX"]), "Hercules size constant")
+        check(equ("EXB_GFX_HRC_SUM") == struct.unpack_from("<H", files["8BBH.GFX"], 6)[0], "Hercules sum constant")
+        check(equ("EXB_GFX_VGA_SUM") == struct.unpack_from("<H", files["8BBV.GFX"], 6)[0], "VGA sum constant")
+        check(equ("EXB_GFX_CGA_SUM") == struct.unpack_from("<H", files["8BBC.GFX"], 6)[0], "CGA sum constant")
         for t in ("VGA", "CGA", "HRC"):
-            check(equ("EXB_FRONT_%s_SIZE" % t) == len(files["EXBSPL." + t]), "front %s size" % t)
+            check(equ("EXB_FRONT_%s_SIZE" % t) == len(files["8BITBIKE." + t]), "front %s size" % t)
         for i, cn in enumerate(art.col_order):
             check(equ("EXBCOL_" + cn.upper()) == i, "column id %s" % cn)
         trk = open(os.path.join(a, "exbtracks.inc")).read()

@@ -1,131 +1,361 @@
 #!/usr/bin/env python3
-"""EXCITEBIKE carries NOTHING from a NES ROM or its disassembly (SPEC.md 102.2).
+"""8BitBike's build is independent of its offline reference (SPEC.md §102).
 
-    python3 tests/unit/t_excitebike_clean.py
-
-The art and audio policy (docs/plans/EXCITEBIKE-PLAN.md section 0): every
-sprite, tile, font, splash and sound is original work committed under
-apps/excitebike/, and a plain `make excitebikedisk` on a machine that has never
-seen the reference directory must build the whole game.  That is a statement
-about PROVENANCE, and provenance is exactly the thing that erodes one
-convenient import at a time - a CHR file read "just for the placeholder", an
-absolute path into ../NES-Games-Disassembly left in a tool.  This gate holds it:
-
-  1. no file the game owns names the ROM, its CHR data, its disassembly's
-     files, the replay format, or an absolute path into the reference tree.
-     The ONLY exceptions are tests/excitebike_ref.py and tools/exboracle/
-     (the optional oracle, which reads the reference at TEST time, only through
-     the EXCITEBIKE_REF environment variable, and skips when it is absent);
-  2. the build tools use the standard library only - a Pillow import would
-     make `make` depend on a package the policy says it must not need;
-  3. the Makefile's Excitebike block does not mention the reference either;
-  4. apps/excitebike/ holds text only: no ROM, no CHR, no binary blob.
-
-Broken on purpose - `open("CHR_ROM.chr")` added to tools/excitebike_assets.py -
-check 1 fails naming the file and the word.
+Imported text and generated art are committed inputs. Only offline refresh
+commands may read the reference: neither application code nor the build
+compiler and its imports may do so. Comments and provenance are allowed to
+name source files. This gate checks executable code, not historical wording.
+Its negative controls exercise the same scanner as the real tree.
 """
 import ast
 import os
+from pathlib import Path
+import re
 import sys
+import sysconfig
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import check, done                           # noqa: E402
+from harness import check, done
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-THIS = os.path.abspath(__file__)
-
-# the words a file of ours may not contain (case-sensitive where the source is)
-FORBIDDEN = [
-    ("CHR_ROM", "the ROM's character data"),
-    ("CHR-ROM", "the ROM's character data"),
-    ("bank_FF", "the disassembly's code bank"),
-    ("bank_ram", "the disassembly's RAM map"),
-    ("bank_val", "the disassembly's value tables"),
-    (".fm2", "a replay movie of the reference game"),
-    ("NES-Games-Disassembly", "a path into the reference tree"),
-    ("EXCITEBIKE_SOURCE", "the retired import knob"),
-    ("EXCITEBIKE_REF", "the test-time oracle's variable"),
-]
-# ...which only these may mention (the optional oracle)
-ORACLE_OK = ("tests/excitebike_ref.py", "tools/exboracle/", "tests/excitebike_ref_deviations.txt")
-STDLIB_ONLY = ("argparse", "hashlib", "json", "math", "os", "re", "shutil", "struct",
-               "subprocess", "sys", "tempfile", "zlib", "random", "excitebike_audio",
-               "excitebike_art", "excitebike_assets", "excitebike_tracks", "exbsim", "importlib",
-               "fractions")
-TEXT_EXT = (".asm", ".inc", ".txt", ".json", ".md", ".trk", ".mml", ".py")
+ROOT = Path(__file__).resolve().parents[2]
+REFERENCE = re.compile(r"EXCITEBIKE_(?:REF|SOURCE)|NES-Games-Disassembly|CHR_ROM(?:\.chr)?|bank_FF\.asm")
+OFFLINE_MODULES = {"exbref", "excitebike_import", "exbnes", "excitebike_art"}
+REFRESH_TARGETS = {"excitebike-import", "excitebike-fixtures", "excitebikeimport",
+                   "excitebike-oracle-check"}
+OFFLINE_TOOL = re.compile(r"(?:exbref|excitebike_import|excitebike_art)\.py|tools/exbnes/|"
+                          r"(?:^|\s)-m\s+(?:tools\.)?(?:exbref|excitebike_import|exbnes)(?:\.|\s|$)")
 
 
-def owned_files():
-    out = []
-    for base in ("apps/excitebike", "tools", "tests"):
-        top = os.path.join(ROOT, base)
-        for dp, dns, fns in os.walk(top):
-            rel = os.path.relpath(dp, ROOT)
-            if base != "apps/excitebike" and "excitebike" not in rel and dp != top:
-                dns[:] = [d for d in dns if "excitebike" in d or "exb" in d]
-            for fn in fns:
-                r = os.path.join(rel, fn).replace(os.sep, "/")
-                if base == "apps/excitebike" or "excitebike" in fn or fn.startswith("exb"):
-                    out.append(r)
-    return sorted(set(out))
+def committed_reference_code(source):
+    # Exact, committed DrMarco paths are allowed; suffixes and traversal are not.
+    return re.sub(r'reference/drmario/(?:CHR_ROM\.chr|bank_FF\.asm)(?![\w./-])',
+                  '<committed-drmarco-source>', source)
+
+
+def offline_module(module):
+    return bool(OFFLINE_MODULES.intersection(module.split('.')))
+
+
+def python_violations(source, name):
+    tree = ast.parse(source)
+    errors, imports, prose = [], [], set()
+    import_functions = {'__import__'}
+    # ast.walk visits parents first, so standalone strings can be excluded in
+    # this single traversal rather than walking the compiler three times.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            if isinstance(node.value.value, str):
+                prose.add(id(node.value))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) not in prose:
+                match = REFERENCE.search(committed_reference_code(node.value))
+                if match:
+                    errors.append(f"{name}:{node.lineno}: executable reference {match.group()}")
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            if isinstance(node, ast.Import):
+                names = [(alias.name, 0, True) for alias in node.names]
+            else:
+                base = node.module or ''
+                names = [(base, node.level, True)]
+                names += [((base + '.' if base else '') + alias.name, node.level, False)
+                          for alias in node.names if alias.name != '*']
+                if node.module == 'importlib':
+                    import_functions.update(alias.asname or alias.name for alias in node.names
+                                            if alias.name == 'import_module')
+            for module, level, required in names:
+                imports.append((module, node.lineno, level, required))
+                if offline_module(module):
+                    errors.append(f"{name}:{node.lineno}: offline module {module} on build path")
+        elif isinstance(node, ast.Call) and (
+                isinstance(node.func, ast.Attribute) and node.func.attr == 'import_module' or
+                isinstance(node.func, ast.Name) and node.func.id in import_functions):
+            if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                module = node.args[0].value
+                imports.append((module, node.lineno, 0, True))
+                if offline_module(module):
+                    errors.append(f"{name}:{node.lineno}: offline dynamic import {module}")
+            else:
+                errors.append(f"{name}:{node.lineno}: unresolved dynamic import on build path")
+    return errors, imports
+
+
+def assembly_violations(source, name):
+    errors = []
+    # NASM's semicolon starts a comment outside quoted literals.
+    for lineno, line in enumerate(source.splitlines(), 1):
+        code = re.split(r";(?=(?:[^'\"]|'[^']*'|\"[^\"]*\")*$)", line, maxsplit=1)[0]
+        match = REFERENCE.search(committed_reference_code(code))
+        if match:
+            errors.append(f"{name}:{lineno}: executable reference {match.group()}")
+    return errors
+
+
+def c_violations(source, name):
+    # Preserve literals and line numbers while removing C/C++ comments.
+    tokens = r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|//[^\n]*|/\*.*?\*/'''
+    code = re.sub(tokens, lambda m: '\n' * m.group().count('\n')
+                  if m.group().startswith(('//', '/*')) else m.group(), source, flags=re.S)
+    return [f"{name}:{number}: executable reference {match.group()}"
+            for number, line in enumerate(code.splitlines(), 1)
+            if (match := REFERENCE.search(committed_reference_code(line)))]
+
+
+def make_violations(source, name='Makefile'):
+    """Refresh recipes are explicit exceptions; no build may call them.
+
+    Scan the whole Makefile, including assignments and prerequisites, so a
+    reference hidden in a shared variable cannot escape a game-block check.
+    Logical lines preserve continuation context and their original line number.
+    """
+    errors = []
+    targets = set()
+    pending = ""
+    first = 0
+    recipe = False
+    for lineno, line in enumerate(source.splitlines(), 1):
+        if not pending:
+            first = lineno
+            recipe = line.startswith('\t')
+        pending += line.rstrip('\\') if line.endswith('\\') else line
+        if line.endswith('\\'):
+            pending += ' '
+            continue
+        logical = pending
+        pending = ""
+        code = logical if recipe else logical.split('#', 1)[0]
+        if not code.strip():
+            continue
+        fragments = [(code, recipe)]
+        if not recipe:
+            match = re.match(r"^([^:=]+):(?![=])", code)
+            if match:
+                targets = set(match.group(1).split())
+                if ';' in code:
+                    header, command = code.split(';', 1)
+                    fragments = [(header, False), (command, True)]
+            else:
+                targets = set()
+        for code, is_recipe in fragments:
+            if is_recipe and targets and targets <= REFRESH_TARGETS:
+                continue
+            match = REFERENCE.search(committed_reference_code(code))
+            if match:
+                errors.append(f"{name}:{first}: build reference {match.group()}")
+            # Scan assignments too: a shared tool variable is an indirect call.
+            if OFFLINE_TOOL.search(code):
+                errors.append(f"{name}:{first}: offline tool on build path")
+            if any(target in code and re.search(r"(?<![\w-])" + re.escape(target) + r"(?![\w-])", code)
+                   for target in REFRESH_TARGETS):
+                if not (not is_recipe and targets and targets <= REFRESH_TARGETS):
+                    if not code.startswith('.PHONY:'):
+                        errors.append(f"{name}:{first}: refresh target on build path")
+    return errors
+
+
+def compiler_violations(root):
+    """Follow local imports, enforcing the stdlib boundary transitively."""
+    errors = []
+    pending = [root / 'tools/excitebike_assets.py']
+    visited = set()
+    stdlib = set(getattr(sys, 'stdlib_module_names', ())) | set(sys.builtin_module_names)
+    if not getattr(sys, 'stdlib_module_names', None):  # Python 3.9 on macOS
+        directory = Path(sysconfig.get_path('stdlib'))
+        stdlib.update(p.stem for p in directory.glob('*.py'))
+        stdlib.update(p.name for p in directory.iterdir() if p.is_dir() and
+                      (p / '__init__.py').is_file())
+        dynload = directory / 'lib-dynload'
+        if dynload.is_dir():
+            stdlib.update(p.name.split('.')[0] for p in dynload.iterdir())
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        name = str(path.relative_to(root))
+        found, tree = python_violations(path.read_text(), name)
+        errors.extend(found)
+        for module, lineno, level, required in tree:
+            if level:
+                search_root = root / 'tools' if path.is_relative_to(root / 'tools') else root
+                package = list(path.parent.relative_to(search_root).parts)
+                if level > len(package):
+                    errors.append(f"{name}:{lineno}: relative import outside local package")
+                    continue
+                prefix = package[:len(package) - level + 1]
+                module = '.'.join(prefix + ([module] if module else []))
+            if offline_module(module):
+                continue  # python_violations already names the forbidden import.
+            found = False
+            for directory in (root / 'tools', root):
+                parts = module.split('.')
+                local = directory.joinpath(*parts)
+                file = local.with_suffix('.py')
+                package = local / '__init__.py'
+                if file.is_file() or local.is_dir():
+                    found = True
+                    if file.is_file():
+                        pending.append(file)
+                    elif package.is_file():
+                        pending.append(package)
+                    # Importing pkg.child executes every parent __init__.py.
+                    for i in range(1, len(parts)):
+                        parent = directory.joinpath(*parts[:i]) / '__init__.py'
+                        if parent.is_file():
+                            pending.append(parent)
+                    break
+            # A local package takes precedence even when its name is stdlib.
+            if required and not found and (level or module.split('.')[0] not in stdlib):
+                errors.append(f"{name}:{lineno}: non-stdlib or missing local import {module}")
+    return errors, visited
+
+
+def makefile_violations(root):
+    """Include fragments are build code too, even when stored outside apps/."""
+    errors, visited = [], set()
+    pending = [root / 'Makefile']
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        source = path.read_text()
+        errors.extend(make_violations(source, str(path.relative_to(root))))
+        for match in re.finditer(r'^\s*(-?include|sinclude)\s+([^#\n]+)', source, re.M):
+            for included in match[2].split():
+                if '$' in included:
+                    continue  # Variable-expanded include paths are not statically resolvable.
+                file = root / included
+                if file.is_file():
+                    pending.append(file)
+                elif match[1] == 'include':
+                    errors.append(f'{path.relative_to(root)}: missing build fragment {included}')
+    return errors, visited
+
+
+def audit(root):
+    errors, compiler = compiler_violations(root)
+    make_errors, makefiles = makefile_violations(root)
+    errors.extend(make_errors)
+    count = 0
+    for path in sorted((root / 'apps').rglob('*')):
+        if path.suffix not in ('.asm', '.inc', '.py', '.c', '.h') or not path.is_file():
+            continue
+        count += 1
+        source = path.read_text()
+        if path.name.startswith('Makefile'):
+            if path not in makefiles:
+                errors.extend(make_violations(source, str(path.relative_to(root))))
+            continue
+        # Most applications contain no reference tokens. Avoid parsing them.
+        if any(word in source for word in ('EXCITEBIKE_REF', 'EXCITEBIKE_SOURCE',
+                                          'NES-Games-Disassembly', 'CHR_ROM', 'bank_FF.asm')) or (path.suffix == '.py' and
+                                       any(m in source for m in OFFLINE_MODULES)):
+            name = str(path.relative_to(root))
+            if path.suffix == '.py':
+                errors.extend(python_violations(source, name)[0])
+            elif path.suffix in ('.c', '.h'):
+                errors.extend(c_violations(source, name))
+            else:
+                errors.extend(assembly_violations(source, name))
+    return errors, len(compiler), count
 
 
 def main():
-    files = owned_files()
-    check(len(files) >= 8, "the provenance gate found the game's files",
-          why="a walk that finds nothing passes vacuously", got=len(files), want=">= 8")
-    bins = []
-    for r in files:
-        if os.path.abspath(os.path.join(ROOT, r)) == THIS:
-            continue
-        p = os.path.join(ROOT, r)
-        if not r.endswith(TEXT_EXT):
-            bins.append(r)
-            continue
-        try:
-            text = open(p, encoding="utf-8").read()
-        except UnicodeDecodeError:
-            bins.append(r)
-            continue
-        oracle = any(r == o or r.startswith(o) for o in ORACLE_OK)
-        for word, what in FORBIDDEN:
-            if word in text and not (oracle and word == "EXCITEBIKE_REF"):
-                if oracle:
-                    continue
-                check(False, "%s mentions %s (%s)" % (r, word, what),
-                      why="EXCITEBIKE's art and audio are original and committed; the "
-                          "reference tree may be read only by the optional oracle test")
-        if r.startswith("tools/excitebike_") and r.endswith(".py"):
-            tree = ast.parse(text)
-            for n in ast.walk(tree):
-                mods = []
-                if isinstance(n, ast.Import):
-                    mods = [a.name.split(".")[0] for a in n.names]
-                elif isinstance(n, ast.ImportFrom) and n.module:
-                    mods = [n.module.split(".")[0]]
-                for m in mods:
-                    check(m in STDLIB_ONLY, "%s imports %s" % (r, m),
-                          why="the compilers are standard-library only: `make` must not "
-                              "need Pillow or any other package for this game")
-    check(not bins, "apps/excitebike and the game's tools/tests hold text only",
-          why="a binary blob here is an asset with no source of record", got=bins, want=[])
-    # the art sources, the tracks and the audio are all present as text
-    for need in ("art/palette.json", "art/tiles.txt", "art/pieces.txt", "art/top.txt",
-                 "art/poses.txt", "art/font.txt", "art/splash.json", "art/README.md",
-                 "tracks/t1.trk", "tracks/t2.trk", "audio/sfx.txt"):
-        check(os.path.exists(os.path.join(ROOT, "apps/excitebike", need)),
-              "apps/excitebike/%s is committed" % need,
-              why="the source of record for the art must be in the tree, not fetched")
-    # the Makefile block
-    mk = open(os.path.join(ROOT, "Makefile"), encoding="utf-8").read()
-    i = mk.find("# Native Excitebike")
-    check(i >= 0, "the Makefile has an Excitebike block")
-    block = mk[i:] if i >= 0 else ""
-    for word, what in FORBIDDEN:
-        check(word not in block, "the Makefile's Excitebike block mentions %s" % word,
-              why="a plain `make excitebikedisk` reads no reference directory")
-    done("t_excitebike_clean")
+    errors, compilers, apps = audit(ROOT)
+    check(compilers >= 2 and apps >= 100, 'the fence covers compiler imports and application code',
+          got=(compilers, apps), want='>=2 compiler modules, >=100 application sources')
+    check(not errors, 'the build reads committed inputs without a reference',
+          got='\n'.join(errors), want='', why='refresh with make excitebike-import offline')
+    planted = (ROOT / 'tools/excitebike_assets.py').read_text() + (
+        '\n_reference = os.environ["EXCITEBIKE_REF"]\n'
+        'open(os.path.join(_reference, "bank_FF.asm"))\n')
+    check(bool(python_violations(planted, 'tools/excitebike_assets.py')[0]),
+          'negative control: a planted compiler reference read is rejected')
+    for source in ('import exbref\n', 'from excitebike_import import main\n'):
+        check(bool(python_violations(source, 'compiler.py')[0]),
+              'negative control: an offline reader imported by the compiler is rejected')
+    check(not python_violations('"""EXCITEBIKE_REF bank_FF.asm"""\n# CHR_ROM.chr\nx = 1\n',
+                                'provenance.py')[0],
+          'provenance comments do not become executable reads')
+    check(bool(assembly_violations("file: db 'CHR_ROM.chr',0\n", 'apps/game.asm')),
+          'negative control: an application reference filename is rejected')
+    check(not assembly_violations('; bank_FF.asm\nx: db 0 ; EXCITEBIKE_REF\n', 'game.asm'),
+          'assembly provenance comments are permitted')
+    check(bool(make_violations('all:\n\tpython3 tools/excitebike_import.py\n')),
+          'negative control: a build recipe invoking the importer is rejected')
+    check(bool(make_violations('EXB_DATA := $(EXCITEBIKE_REF)/bank_FF.asm\nall: $(EXB_DATA)\n')),
+          'negative control: a shared Makefile reference variable is rejected')
+    check(bool(make_violations('all: excitebike-import\n')),
+          'negative control: refresh may not become a build prerequisite')
+    check(not make_violations('excitebike-import:\n\tpython3 tools/excitebike_import.py\n'),
+          'explicit offline refresh recipes are permitted')
+    for source in ('all: ; python3 tools/excitebike_import.py\n',
+                   'all:\n\tpython3 -m exbnes.record --refresh\n',
+                   'IMPORTER := tools/excitebike_import.py\nall:\n\tpython3 $(IMPORTER)\n',
+                   'RECORDER := tools/exbnes/record.py\nall:\n\tpython3 $(RECORDER)\n'):
+        check(bool(make_violations(source)),
+              'negative control: inline, module-form and variable-aliased refresh calls are rejected')
+    check(not make_violations('excitebike-fixtures: ; python3 -m exbnes.record --refresh\n'),
+          'an explicit offline target may use an inline module-form recipe')
+    for source in ('import importlib\nimportlib.import_module("exbref")\n',
+                   'from importlib import import_module as load\nload("exbref")\n',
+                   '__import__("exbref")\n', 'from tools.exbref import Reader\n',
+                   'from tools import exbref\n'):
+        check(bool(python_violations(source, 'compiler.py')[0]),
+              'negative control: dynamic and qualified offline imports are rejected')
+    check(bool(c_violations('getenv("EXCITEBIKE_REF");\n', 'apps/game.c')),
+          'negative control: an application C reference read is rejected')
+    check(not c_violations('/* EXCITEBIKE_REF\nbank_FF.asm */\n// CHR_ROM.chr\nchar *s="ok";\n',
+                           'apps/game.c'), 'C provenance comments are permitted')
+    check(bool(c_violations('char *s="http://example/CHR_ROM.chr";\n', 'apps/game.c')),
+          'C comment stripping preserves comment markers inside strings')
+    for scanner in (assembly_violations, c_violations):
+        check(not scanner('data: "reference/drmario/CHR_ROM.chr"\n', 'committed-source'),
+              'DrMarco committed reference inputs remain permitted')
+        check(bool(scanner('data: "reference/excitebike/CHR_ROM.chr"\n', 'reference-source')),
+              'the committed DrMarco exemption does not cover Excitebike')
+    with tempfile.TemporaryDirectory(prefix='exb-fence-') as temporary:
+        root = Path(temporary)
+        tools = root / 'tools'
+        (tools / 'json').mkdir(parents=True)
+        (tools / 'pkg').mkdir()
+        (root / 'apps').mkdir()
+        (root / 'Makefile').write_text('all:\n')
+        compiler = tools / 'excitebike_assets.py'
+        (tools / 'excitebike_audio.py').write_text('x = 1\n')
+        (tools / 'json/__init__.py').write_text('import os\nx=os.environ["EXCITEBIKE_REF"]\n')
+        compiler.write_text('import excitebike_audio\nimport json\n')
+        errors, visited = compiler_violations(root)
+        check(bool(errors) and tools / 'json/__init__.py' in visited,
+              'negative control: a local package shadowing stdlib is audited')
+        (tools / 'pkg/__init__.py').write_text('x = 1\n')
+        (tools / 'pkg/leaf.py').write_text('from . import helper\n')
+        (tools / 'pkg/helper.py').write_text('import os\nx=os.environ["EXCITEBIKE_REF"]\n')
+        for imported in ('import pkg.leaf\n', 'from pkg import leaf\n'):
+            compiler.write_text('import excitebike_audio\n' + imported)
+            errors, visited = compiler_violations(root)
+            check(bool(errors) and tools / 'pkg/helper.py' in visited,
+                  'negative control: dotted and relative package imports retain their closure')
+        (tools / 'pkg/leaf.py').write_text('x = 1\n')
+        (tools / 'pkg/__init__.py').write_text('import os\nx=os.environ["EXCITEBIKE_REF"]\n')
+        compiler.write_text('import excitebike_audio\nimport pkg.leaf\n')
+        check(bool(compiler_violations(root)[0]),
+              'negative control: importing a child audits its package initializer')
+        compiler.write_text('import excitebike_audio\nimport unavailable_dependency\n')
+        check(bool(compiler_violations(root)[0]),
+              'negative control: an unknown static dependency is refused')
+        compiler.write_text('import excitebike_audio\n')
+        (root / 'apps/game.c').write_text('getenv("EXCITEBIKE_REF");\n')
+        check(bool(audit(root)[0]),
+              'negative control: the application walk includes C source files')
+        (root / 'apps/game.c').write_text('/* EXCITEBIKE_REF is provenance only. */\n')
+        (root / 'Makefile').write_text('include tools/fragment.mk\nall:\n')
+        (tools / 'fragment.mk').write_text('all: ; python3 tools/excitebike_import.py\n')
+        check(bool(audit(root)[0]),
+              'negative control: an included Makefile fragment cannot invoke the importer')
+    done('t_excitebike_clean')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

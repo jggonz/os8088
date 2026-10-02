@@ -11,7 +11,13 @@ other this plan says which one won and why (section 2). Their CHR-import,
 `EXCITEBIKE_SOURCE` import and note-stream-import advice is void; only their
 sizes, timings and budgets are used.
 
-## 0. The ART AND AUDIO POLICY (binding, user decision)
+## 0. The ART AND AUDIO POLICY (superseded, 2026-09-30)
+
+**Historical policy.** The owner superseded this section with the cartridge
+import and generated-mark policy in `excitebike_plan.md` and SPEC.md §102.
+The original text below records the baseline decision; it no longer binds the
+rebuild. The video, governor, performance and memory sections remain the engine
+design record.
 
 1. The package, the build, and the shipped disks depend on NO NES ROM, no
    `CHR_ROM.chr`, and no file of the disassembly, at build time or run time.

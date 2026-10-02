@@ -63,7 +63,7 @@ PARTS["herc"] = PARTS["cga"]
 def open_game(ui, tag, sym, ref, sim=False, course=0, mute=False):
     ui.open_drive("B")
     ui.settle()
-    ui.open("EXCBIKE.O88")
+    ui.open("8BITBIKE.O88")
     ui.settle()
     g = V.Game(ui, tag, sym, ref)
     g.cids = ref.course_cids(course)
@@ -387,7 +387,7 @@ def selfb(tag, course=0, nai=None, mute=False, seed=None):
                      machine=V.MACHINE[tag]) as ui:
         ui.open_drive("B")
         ui.settle()
-        ui.open("EXCBIKE.O88")
+        ui.open("8BITBIKE.O88")
         ui.settle()
         g = V.Game(ui, tag, sym, ref)
         if course:

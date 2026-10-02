@@ -311,6 +311,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | package | source | SPEC | ships |
 |---|---|---|---|
 | 1942 | `apps/1942/1942.asm` | §101 | yes |
+| 8BitBike | `apps/excitebike/excitebike.asm` | §102 | no |
 | APPLE2 | `apps/apple2/apple2.asm` | `docs/APPLE2-SPEC.md` | yes |
 | ARKANOID | `apps/arkanoid/arkanoid.asm` | §44 | yes |
 | AUDIO PLAYER | `apps/audio/audio.asm` | §86 | yes |
@@ -325,7 +326,6 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | DOS | `apps/dos/dosload.asm` | §96 | no |
 | DOTDEL | `apps/dotdel/dotdel.asm` | §93 | yes |
 | DRMARCO | `apps/drmario/drmario.asm` | §100 | no |
-| EXCITEBIKE | `apps/excitebike/excitebike.asm` | §102 | no |
 | FONT VIEWER | `apps/fontview/fontview.asm` | §90 | yes |
 | FPTEST | `apps/fptest/fptest.asm` |  | no |
 | FRACTAL | `apps/fractal/fractal.asm` | §40 | yes |
@@ -471,7 +471,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 99 | Gorillas (`apps/gorillas/gorillas.asm`) |
 | 100 | DrMarco (`apps/drmario/drmario.asm`) |
 | 101 | 1942 — native vertical shooter (`apps/1942/`) |
-| 102 | Excitebike — native motocross racer (`apps/excitebike/excitebike.asm`) |
+| 102 | 8BitBike — native motocross racer (`apps/excitebike/excitebike.asm`) |
 
 ## docs/
 

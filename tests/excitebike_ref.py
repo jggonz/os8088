@@ -241,7 +241,7 @@ def run_guest(quick, courses):
                          machine=V.MACHINE["vga"]) as ui:
             ui.open_drive("B")
             ui.settle()
-            ui.open("EXCBIKE.O88")
+            ui.open("8BITBIKE.O88")
             ui.settle()
             g = V.Game(ui, "vga", sym, ref)
             g.put("xb_track", course)

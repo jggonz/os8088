@@ -1,0 +1,126 @@
+{
+  "agnes_commit": "0e4220b084c467e39c04805d955e78c463feadd0",
+  "cartridge_sha1": "2e9897846e54a4a9865e87de7517c6710bdec255",
+  "cpu_timing": "per write: CPU cycles since agnes frame boundary; instruction granularity",
+  "files": {
+    "attract-race.apu.jsonl.gz": {
+      "bytes": 37834,
+      "sha256": "acfa6261db070d94ee45ce54c9a3dc899b49861632475d01f8edbd808d659c26"
+    },
+    "attract-race.jsonl.gz": {
+      "bytes": 91950,
+      "sha256": "b34daba715c7ba59fb78e58600f53c62e1aa1ee3cebf194dcace6ef2866503e8"
+    }
+  },
+  "format": "EXB-NES-1",
+  "frame_boundary": "agnes_next_frame return, before the next frame controller input",
+  "frames": 2212,
+  "pixel_frames": [
+    0,
+    559,
+    900,
+    1199,
+    1200,
+    1261,
+    1812,
+    2211
+  ],
+  "pixels": "256x240, row-major NES palette indices, hex bytes; no CHR or ROM data",
+  "ram": {
+    "air_00b0": {
+      "address": 176,
+      "size": 4
+    },
+    "animation_timer_0036": {
+      "address": 54,
+      "size": 4
+    },
+    "clock_0068": {
+      "address": 104,
+      "size": 4
+    },
+    "crash_phase_009c": {
+      "address": 156,
+      "size": 4
+    },
+    "drawing_order_0088": {
+      "address": 136,
+      "size": 4
+    },
+    "element_0058": {
+      "address": 88,
+      "size": 4
+    },
+    "flow_0041": {
+      "address": 65,
+      "size": 1
+    },
+    "frame_phase_004c": {
+      "address": 76,
+      "size": 1
+    },
+    "heat_03b5": {
+      "address": 949,
+      "size": 1
+    },
+    "height_00bc": {
+      "address": 188,
+      "size": 4
+    },
+    "lane_y_00b8": {
+      "address": 184,
+      "size": 4
+    },
+    "object_active_00a8": {
+      "address": 168,
+      "size": 4
+    },
+    "pitch_00ac": {
+      "address": 172,
+      "size": 4
+    },
+    "race_started_004f": {
+      "address": 79,
+      "size": 1
+    },
+    "rng_0018": {
+      "address": 24,
+      "size": 8
+    },
+    "screen_x_0080": {
+      "address": 128,
+      "size": 4
+    },
+    "screen_y_008c": {
+      "address": 140,
+      "size": 4
+    },
+    "script_cursor_00c4": {
+      "address": 196,
+      "size": 4
+    },
+    "speed_fraction_0090": {
+      "address": 144,
+      "size": 4
+    },
+    "speed_integer_0094": {
+      "address": 148,
+      "size": 4
+    },
+    "start_flags_0024": {
+      "address": 36,
+      "size": 1
+    },
+    "track_0043": {
+      "address": 67,
+      "size": 1
+    },
+    "wheelie_crash_0098": {
+      "address": 152,
+      "size": 4
+    }
+  },
+  "script": "attract-race.pad",
+  "script_sha256": "030e895ec483a8987c1b656ba2ee3fa46dcc7d61657ad7e47ac4b419951b4246",
+  "selfcheck": "two complete frame and APU recordings byte-identical"
+}

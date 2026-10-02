@@ -1,4 +1,4 @@
-; Native XT Excitebike-style racer for os8088.  Contracts: SPEC.md 102.
+; Native XT 8BitBike motocross racer for os8088.  Contracts: SPEC.md 102.
 ; Wave 1: the package skeleton - desktop splash and help, the fullscreen
 ; bracket with its loading screen, the adapter art loaded and checked, a static
 ; placeholder scene built from the compiled dictionaries, Alt+Enter, Esc.  The
@@ -6,7 +6,7 @@
 ; from committed sources by tools/excitebike_assets.py; nothing is read from a
 ; ROM, at build time or at run time (SPEC.md 102, plan section 0).
 %include "os88api.inc"
-OS88_HEADER 'EXCITEBIKE', xb_entry, 1, OS88_STACK_256
+OS88_HEADER '8BitBike', xb_entry, 1, OS88_STACK_256
 OS88_ICON16
     dw 0x01f0,0x01f0,0x03f0,0x03f0,0x03f0,0x07f8,0x07f8,0x7ffe
     dw 0xffff,0xffff,0xffff,0xffff,0xffff,0xffff,0xfe7f,0xfc3f
@@ -188,11 +188,11 @@ xb_onkey:
 
 xb_tpl: dw 52, 32, 452, 284, xb_title, xb_paint, xb_onkey, xb_click
 OS88_PREFER xb_pref, 452,284,452,284,452,154
-xb_title: db 'Excitebike',0
+xb_title: db '8BitBike',0
 xb_credits: dw xb_title,xb_credit1,xb_credit2,xb_credit3,0
 xb_credit1: db 'Native 8086 motocross racer',0
 xb_credit2: db 'Original artwork, sound and code',0
-xb_credit3: db 'Inspired by Excitebike (Nintendo, 1984)',0
+xb_credit3: db '8BitBike for os8088',0
 
 %include "front.inc"
 %include "video.inc"

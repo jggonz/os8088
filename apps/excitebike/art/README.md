@@ -3,7 +3,7 @@
 Everything in this directory, in `../tracks/` and in `../audio/` is **original
 work for this project**, kept as plain text so a diff shows exactly what
 changed. **None of it contains, or was derived from, any NES ROM, CHR data,
-disassembly, screenshot or recording.** The package identity is `EXCITEBIKE`
+disassembly, screenshot or recording.** The package identity is `8BitBike`
 and the game is a motocross racer "in the spirit of" the genre - a side-on
 course with lanes, ramps and hurdles, a rider on a bike, a temperature bar -
 which describes rules and subject matter, not pixels. The wordmark and splash
@@ -88,7 +88,7 @@ and each pixel of it costs a changing line: measure with the selfcheck first.
 mid grey, 2 white) and a game pixel is two card pixels wide, so a level is a PAIR: `00`,
 `11`, and for the mid grey a single lit pixel - a tile's alternating `10` / `01` by
 (row + column), a pose's and a glyph's always `10` (a pose lands on any row, a tile on
-a fixed one, so only the tile can afford a checkerboard).  `EXBH.GFX` is `EXBC.GFX`'s layout
+a fixed one, so only the tile can afford a checkerboard).  `8BBH.GFX` is `8BBC.GFX`'s layout
 with pairs where the CGA has 2-bit inks: same record sizes, same tile bytes a row.  The levels
 were set by looking at `scene-herc-*.png`: the ground is mid grey, so the rider is WHITE (red,
 skin) with black outline and black wheels (yellow), not mid grey on mid grey - the first cut

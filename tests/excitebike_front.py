@@ -81,7 +81,7 @@ def symbols():
 class Probe:
     def __init__(self, ui, sym):
         self.ui, self.m, self.sym = ui, ui.m, sym
-        w = ui.window("Excitebike")
+        w = ui.window("8BitBike")
         raw = self.m.read(self.m.sym("wm_wins"), G.MAX_WIN * G.WIN_SIZE)
         self.base = struct.unpack_from("<H", raw, w.i * G.WIN_SIZE + G.W_SEG)[0] << 4
 
@@ -428,7 +428,7 @@ def arm(tag, sym, art, sp):
         ui.open_drive("B")
         ui.settle()
         c_before = claims(m)
-        ui.open("EXCBIKE.O88")
+        ui.open("8BITBIKE.O88")
         ui.settle()
         p = Probe(ui, sym)
         revealed(ui, p)
@@ -507,7 +507,7 @@ def arm(tag, sym, art, sp):
             last = sum(1 for y in range(y0, y0 + 8 * scale) for x in range(x0 + 136, x0 + 144)
                        if s3[2][y][x] != 0)
             assert last > 0, "the refusal label is the 17-character playable one"
-            ui.close(ui.window("Excitebike"))
+            ui.close(ui.window("8BitBike"))
             ui.settle()
             assert claims(m) == c_before or paras(claims(m)) == paras(c_before), (
                 "the heap after closing is not the heap before opening",
@@ -516,10 +516,10 @@ def arm(tag, sym, art, sp):
             return
 
         # ---- a drag: the click target and the art move together
-        ui.move_window(ui.window("Excitebike"), 127, 21 if tag == "cga" else 28)
+        ui.move_window(ui.window("8BitBike"), 127, 21 if tag == "cga" else 28)
         ui.settle()
         revealed(ui, p)
-        w = ui.window("Excitebike")
+        w = ui.window("8BitBike")
         fx, fy = w.x + 1, w.y + G.TITLE_H
         s5 = shot(ui, tag, "moved")
         compare_front(s5, expected_front(art, sp, tag, scale, False), fx, fy,
@@ -607,7 +607,7 @@ def arm(tag, sym, art, sp):
         c_post = claims(m)
         assert c_post == c_pre, ("the claim map after Esc differs", c_pre, c_post)
         revealed(ui, p)
-        w = ui.window("Excitebike")
+        w = ui.window("8BitBike")
         fx, fy = w.x + 1, w.y + G.TITLE_H
         s6 = shot(ui, tag, "restored")
         compare_front(s6, expected_front(art, sp, tag, scale, False), fx, fy,
@@ -638,7 +638,7 @@ def arm(tag, sym, art, sp):
         M.until(m, lambda _: p.b("fs") == 0, "Esc after a click launch", guest=30)
         ui.settle()
         # close: the heap returns to what the desktop had before the package
-        ui.close(ui.window("Excitebike"))
+        ui.close(ui.window("8BitBike"))
         ui.settle()
         c_end = claims(m)
         assert paras(c_end) == paras(c_before), (

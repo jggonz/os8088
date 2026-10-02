@@ -1,0 +1,226 @@
+# 8BitBike: 36 cartridge track pieces from tbl_F063_lo / tbl_F087_hi.
+# sub_F82E_prepare_pointers selects; sub_F681 expands a column.
+# piece ID address=CPU_ADDRESS columns=N
+# Each column: start-row followed by 15-start-row tile IDs.
+# Rows below start-row begin as FC (sub_F676); final 00 terminates the piece.
+# Tiles are raw pattern-table-1 IDs. Cartridge track rules are applied later.
+
+piece 00 address=F0AB columns=1
+09 3B 3C 3D 3B 3C 3D
+00
+
+piece 01 address=F0B3 columns=9
+08 D7 40 40 40 40 40 41
+08 D6 FE FE FE FE FE D8
+07 D7 FE FE FE FE FE D9 FE
+07 D6 FE FE FE FE FE D8 FE
+07 3B 3C 3D 3B 3C 3D FE FE
+07 DA FF FF FF FF FF DC FE
+07 DB FF FF FF FF FF DD FE
+08 DA FF FF FF FF FF DC
+08 DB FF FF FF FF FF DD
+00
+
+piece 02 address=F101 columns=1
+08 E0 48 49 4A 3B 3C 3D
+00
+
+piece 03 address=F101 columns=1
+08 E0 48 49 4A 3B 3C 3D
+00
+
+piece 04 address=F10A columns=1
+09 3B 3C E1 48 49 4A
+00
+
+piece 05 address=F112 columns=9
+08 C5 50 50 50 50 50 51
+07 C5 FE FE FE FE FE C6 FE
+06 C5 FE FE FE FE FE C6 FE FE
+05 C5 FE FE FE FE FE C6 FE FE FE
+04 2F 2E 2B 2D 2C 2B 2A FE FE FE FE
+05 C7 C8 C9 CA C8 C9 CB FE FE FE
+06 C7 C8 C9 CA C8 C9 CB FE FE
+07 C7 C8 C9 CA C8 C9 CB FE
+08 C7 C8 C9 CA C8 C9 CB
+00
+
+piece 06 address=F16B columns=6
+08 C5 5E 5E 5E 5E 5E 5F
+07 C5 FE FE FE FE FE C6 FE
+06 C5 FE FE FE FE FE C6 FE FE
+05 2F 2E 2B 2D 2C 2B 2A FE FE FE
+06 D1 D2 FF FF FF FF D3 D4 FE
+08 D1 D0 D0 D0 D0 D0 D5
+00
+
+piece 07 address=F1A4 columns=5
+08 C5 56 56 56 56 56 57
+07 C5 FE FE FE FE FE C6 FE
+06 2F 2E 2B 2D 2E 2B 2A FE FE
+07 C7 C8 C9 CA C8 C9 CB FE
+08 C7 C8 C9 CA C8 C9 CB
+00
+
+piece 08 address=F1D1 columns=3
+08 C5 58 58 58 58 58 59
+07 2F 2E 2B 2D 2C 2B 2A FE
+08 C7 C8 C9 CA C8 C9 CB
+00
+
+piece 09 address=F1EB columns=12
+08 C5 4E 4E 4E 4E 4E 4F
+07 C5 FE FE FE FE FE C6 FE
+06 C5 FE FE FE FE FE C6 FE FE
+06 3B 3C 3D 3B 3C 3D FE 0F FE
+06 3B 3C 3D 3B 3C 3D FE 12 FE
+06 3B 3C 3D 3B 3C 3D FE 17 FE
+06 3B 3C 3D 3B 3C 3D FE 12 FE
+06 3B 3C 3D 3B 3C 3D FE 1C FE
+06 3B 3C 3D 3B 3C 3D FE 11 FE
+06 C7 C8 C9 CA C8 C9 CB FE FE
+07 C7 C8 C9 CA C8 C9 CB FE
+08 C7 C8 C9 CA C8 C9 CB
+00
+
+piece 0A address=F25E columns=6
+08 CC 60 60 60 60 60 61
+06 CC CD FE FE FE FE CE CF FE
+05 2F 2E 2B 2D 2C 2B 2A FE FE FE
+06 C7 C8 C9 CA C8 C9 CB FE FE
+07 C7 C8 C9 CA C8 C9 CB FE
+08 C7 C8 C9 CA C8 C9 CB
+00
+
+piece 0B address=F297 columns=5
+07 CC CD 65 65 65 65 66 67
+05 CC CD FE FE FE FE CE CF FE FE
+04 2F 2E 2B 2D 2C 2B 2A FE FE FE FE
+05 D1 D2 FF FF FF FF D3 D4 FE FE
+07 D1 D2 FF FF FF FF D3 D4
+00
+
+piece 0C address=F2E2 columns=3
+09 70 EA 3D 70 EA 3D
+09 B9 EB 3D B9 EB 3D
+09 BC EC 3D BC EC 3D
+00
+
+piece 0D address=F2CC columns=3
+09 3B E7 72 3B E7 72
+09 3B E8 BB 3B E8 BB
+09 3B E9 BE 3B E9 BB
+00
+
+piece 0E address=F4B4 columns=2
+08 E2 8D 8E 8F 90 91 92
+07 E2 DE DF E3 FE 3B 3C 3D
+00
+
+piece 0F address=F496 columns=2
+09 88 3C 3D 3B 3C 3D
+09 89 3C 3D 3B 3C 3D
+00
+
+piece 10 address=F4A5 columns=2
+09 3B 3C 3D 3B 3C 88
+09 3B 3C 3D 3B 3C 89
+00
+
+piece 11 address=F456 columns=1
+09 C0 C0 C0 C0 C0 C0
+00
+
+piece 12 address=F32D columns=1
+09 3B 3C 3D C0 C0 C0
+00
+
+piece 13 address=F335 columns=1
+09 C0 C0 C0 3B 3C 3D
+00
+
+piece 14 address=F35D columns=8
+07 CC CD 75 75 75 75 76 77
+05 CC CD FE FE FE FE CE CF FE FE
+03 CC CD FE FE FE FE CE CF FE FE FE FE
+03 3B 3C 3D 3B 3C 3D FE FE FE FE FE FE
+03 3B 3C 3D 3B 3C 3D FE FE FE FE FE FE
+03 3B 3C 3D E5 D2 FF D3 D4 FE FE FE FE
+03 3B 3C 3D E6 FC D1 D2 FF D3 D4 FE FE
+03 3B 3C 3D E6 FC FC FC D1 D2 FF D3 D4
+00
+
+piece 15 address=F2F8 columns=2
+08 C5 68 68 68 68 68 69
+07 C5 FE FE FE FE FE C6 FE
+00
+
+piece 16 address=F45E columns=1
+09 E4 E4 E4 E4 E4 E4
+00
+
+piece 17 address=F466 columns=1
+09 C3 C3 C3 C3 C3 C3
+00
+
+piece 18 address=F34D columns=1
+09 3B 3C 3D E4 E4 E4
+00
+
+piece 19 address=F33D columns=1
+09 3B 3C 3D C3 C3 C3
+00
+
+piece 1A address=F355 columns=1
+09 E4 E4 E4 3B 3C 3D
+00
+
+piece 1B address=F345 columns=1
+09 C3 C3 C3 3B 3C 3D
+00
+
+piece 1C address=F3C0 columns=1
+03 3B 3C 3D E6 FC FC FC FC FC 3B 3C 3D
+00
+
+piece 1D address=F46E columns=3
+03 3B 3C 3D E6 28 29 73 73 73 70 71 72
+03 3B 3C 3D E6 FC FC FC FC FC B9 BA BB
+03 3B 3C 3D E6 FC FC FC FC FC BC BD BE
+00
+
+piece 1E address=F46E columns=3
+03 3B 3C 3D E6 28 29 73 73 73 70 71 72
+03 3B 3C 3D E6 FC FC FC FC FC B9 BA BB
+03 3B 3C 3D E6 FC FC FC FC FC BC BD BE
+00
+
+piece 1F address=F3CE columns=1
+03 BF 7D 7E 7F FC FC FC FC FC 80 81 82
+00
+
+piece 20 address=F30A columns=1
+07 3B 3C 3D 3B 3C 3D FE FE
+00
+
+piece 21 address=F314 columns=2
+05 CC CD FE FE 6D 6D 6E 6F 6D 6D
+03 CC CD FE FE FE FE CE CF FE FE FE FE
+00
+
+piece 22 address=F3DC columns=1
+03 3B 3C 3D 3B 3C 3D FE FE FE FE FE FE
+00
+
+piece 23 address=F3EA columns=10
+03 3B 3C 3D 3B 3C 3D 78 78 78 78 78 78
+03 3B 3C 3D 3B 3C 3D FE FE FE FE FE FE
+03 C7 C8 C9 CA C8 C9 CB FE FE FE FE FE
+04 C7 C8 C9 CA C8 C9 CB FE FE FE FE
+05 C7 C8 C9 CA C8 C9 CB FE FE FE
+06 C7 C8 C9 CA C8 C9 CB FE FE
+07 3B 3C 3D 3B 3C 3D FE FE
+07 3B 3C 3D 3B 3C 3D FE FE
+07 C7 C8 C9 CA C8 C9 CB FE
+08 C7 C8 C9 CA C8 C9 CB
+00

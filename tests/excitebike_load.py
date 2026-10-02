@@ -4,7 +4,7 @@
     make excitebikedisk
     python3 tests/excitebike_load.py [--adapter vga|cga|herc|both]
 
-From the loader's entry for the double-clicked EXCBIKE.O88 (the kernel's ld_run_body_x) to the splash
+From the loader's entry for the double-clicked 8BITBIKE.O88 (the kernel's ld_run_body_x) to the splash
 reveal finishing (the title is up and takes keys), in emulated cycles / 4,772,727 = seconds on the field machine.
 The package's own sprite-blob build and art reads are inside that span; the double-click's own timing is not.
 """
@@ -30,7 +30,7 @@ def one(tag):
         # the loader's entry, then (with the package's segment known) the package's own milestones,
         # each a breakpoint that costs the guest no cycle
         m.bp_exec("ld_run_body_x")
-        ui.open("EXCBIKE.O88", expect=None)
+        ui.open("8BITBIKE.O88", expect=None)
         assert m.wait_stop(60) == "breakpoint", "the loader was never entered"
         c0 = int(m.status()["cycles"])
         m.disk(reset=True)

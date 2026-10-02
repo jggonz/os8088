@@ -21,7 +21,7 @@
             plays there; a SECOND window opens (the code is shared, ~10KB of splash
             and bss) and leaves too little for the game's own claims, so Enter on it
             must be REFUSED with `NOT ENOUGH MEMORY` on the glass - not the
-            `EXB?.GFX MISSING` an unrelated refusal used to print - with `xb_error` =
+            `8BB?.GFX MISSING` an unrelated refusal used to print - with `xb_error` =
             XB_ERR_MEM and the heap exactly what it was before Enter (every claim the
             attempt made is freed).  This row also stands guard over a bug it found:
             the small (17KB) sprite claim, taken when the big one is refused, was
@@ -44,8 +44,8 @@ IMAGES = (("1440", "build/excitebike.img", 1440 * 1024, 18),
           ("720", "build/excitebike720.img", 720 * 1024, 9),
           ("1200", "build/excitebike120.img", 1200 * 1024, 15),
           ("360", "build/excitebike360.img", 360 * 1024, 9))
-FILES = ("EXCBIKE.O88", "README.MD", "EXBV.GFX", "EXBC.GFX", "EXBH.GFX",
-         "EXBSPL.VGA", "EXBSPL.CGA", "EXBSPL.HRC")
+FILES = ("8BITBIKE.O88", "README.MD", "8BBV.GFX", "8BBC.GFX", "8BBH.GFX",
+         "8BITBIKE.VGA", "8BITBIKE.CGA", "8BITBIKE.HRC")
 
 
 def at(p):
@@ -97,14 +97,14 @@ def host():
             assert files[n] == ref[n], ("the same file differs between geometries", tag, n)
     print("all four geometries carry the same %d files, byte for byte" % len(FILES), flush=True)
     # the executable is the built package, whole (packing changes nothing here: it is the file)
-    built = open(at("build/excbike.o88"), "rb").read()
-    assert ref["EXCBIKE.O88"] == built, "EXCBIKE.O88 on the floppy is not build/excbike.o88"
+    built = open(at("build/8bitbike.o88"), "rb").read()
+    assert ref["8BITBIKE.O88"] == built, "8BITBIKE.O88 on the floppy is not build/8bitbike.o88"
     # negative control: one broken FAT entry must fail the walk
     blob = bytearray(t_image.read(at("build/excitebike360.img")))
     v = t_image.Vol(bytes(blob), "damaged")
     first = None
     for path, name11, attr, clus, size in v.walk():
-        if name11.startswith(b"EXCBIKE"):
+        if name11.startswith(b"8BITBIKE"):
             first = clus
     chain, _ = v.chain(first)
     n = chain[0]
@@ -115,7 +115,7 @@ def host():
     try:
         volume_files(t_image.Vol(bytes(blob), "damaged"))
     except AssertionError:
-        print("negative control: a FAT entry damaged in EXCBIKE.O88's chain fails the walk", flush=True)
+        print("negative control: a FAT entry damaged in 8BITBIKE.O88's chain fails the walk", flush=True)
     else:
         raise AssertionError("the damaged image passed the independent walk")
 
@@ -144,7 +144,7 @@ def boot_geometry(g):
         ui.open_drive("B")
         ui.settle()
         before = F.paras(F.claims(m))
-        ui.open("EXCBIKE.O88")
+        ui.open("8BITBIKE.O88")
         ui.settle()
         p = F.Probe(ui, sym)
         F.revealed(ui, p)
@@ -168,7 +168,7 @@ def boot_geometry(g):
         M.until(m, lambda _: p.b("fs") == 0, "Esc leaves the race", guest=30)
         ui.settle()
         assert not p.b("error") and F.claims(m) == c_pre, "the claim map after Esc differs"
-        ui.close(ui.window("Excitebike"))
+        ui.close(ui.window("8BitBike"))
         ui.settle()
         assert F.paras(F.claims(m)) == before, "closing the window left the heap changed"
         print("boot %s: disk opens, splash art loads, the race runs (%d frames), Esc and close restore the heap: PASS"
@@ -195,13 +195,13 @@ def lowmem():
         # the first window: it plays (the floor machine holds ONE)
         ui.open_drive("B")
         ui.settle()
-        ui.open("EXCBIKE.O88")
+        ui.open("8BITBIKE.O88")
         ui.settle()
         first = F.Probe(ui, sym)
         F.revealed(ui, first)
         ui.open_drive("B")
         ui.settle()
-        ui.open("EXCBIKE.O88")                  # the second window: the code is shared, the bss and art are not
+        ui.open("8BITBIKE.O88")                  # the second window: the code is shared, the bss and art are not
         ui.settle()
 
         class Front(F.Probe):

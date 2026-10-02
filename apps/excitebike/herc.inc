@@ -4,7 +4,7 @@
 ;
 ;   * a game pixel is TWO card pixels wide (a pair: 00 black, 11 white, and 10 or 01 for the mid
 ;     grey), so 8 game pixels = 16 card pixels = 2 bytes - a tile, a pose and a glyph are exactly
-;     as many bytes as on the CGA, and EXBH.GFX has EXBC.GFX's layout with pairs where the CGA has
+;     as many bytes as on the CGA, and 8BBH.GFX has 8BBC.GFX's layout with pairs where the CGA has
 ;     inks (tools/excitebike_assets.py herc_tile);
 ;   * the card is 720 wide, so the row is 90 bytes = 45 tile columns: the picture is 360 game pixels
 ;     wide, and the sheared window's pitch is 45, not 40;

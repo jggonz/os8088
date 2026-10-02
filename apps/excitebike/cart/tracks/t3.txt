@@ -1,0 +1,148 @@
+# 8BitBike course 3: _off_003_EDC8_02 at $EDC8
+# Raw stream bytes in cartridge order; consumed by sub_F4FF.
+# A count byte belongs to its preceding repeat opcode; finish 09 restarts the lap.
+02 # 000: lap count
+40 # 001: repeat piece 00
+0F # 002: repeat count 15; high bit ignored
+30 # 003: enable fallen-rider marker before finish
+40 # 004: repeat piece 00
+34 # 005: repeat count 52; high bit ignored
+03 # 006: piece 03
+40 # 007: repeat piece 00
+07 # 008: repeat count 7; high bit ignored
+04 # 009: piece 04
+40 # 010: repeat piece 00
+0C # 011: repeat count 12; high bit ignored
+03 # 012: piece 03
+40 # 013: repeat piece 00
+0A # 014: repeat count 10; high bit ignored
+04 # 015: piece 04
+40 # 016: repeat piece 00
+0E # 017: repeat count 14; high bit ignored
+03 # 018: piece 03
+40 # 019: repeat piece 00
+06 # 020: repeat count 6; high bit ignored
+83 # 021: piece 03; skipped on plain pass
+40 # 022: repeat piece 00
+09 # 023: repeat count 9; high bit ignored
+04 # 024: piece 04
+40 # 025: repeat piece 00
+06 # 026: repeat count 6; high bit ignored
+84 # 027: piece 04; skipped on plain pass
+40 # 028: repeat piece 00
+0A # 029: repeat count 10; high bit ignored
+31 # 030: disable fallen-rider marker
+07 # 031: piece 07
+40 # 032: repeat piece 00
+04 # 033: repeat count 4; high bit ignored
+07 # 034: piece 07
+40 # 035: repeat piece 00
+05 # 036: repeat count 5; high bit ignored
+8B # 037: piece 0B; skipped on plain pass
+40 # 038: repeat piece 00
+0E # 039: repeat count 14; high bit ignored
+06 # 040: piece 06
+40 # 041: repeat piece 00
+09 # 042: repeat count 9; high bit ignored
+0A # 043: piece 0A
+40 # 044: repeat piece 00
+07 # 045: repeat count 7; high bit ignored
+0F # 046: piece 0F
+40 # 047: repeat piece 00
+02 # 048: repeat count 2; high bit ignored
+10 # 049: piece 10
+40 # 050: repeat piece 00
+07 # 051: repeat count 7; high bit ignored
+06 # 052: piece 06
+40 # 053: repeat piece 00
+02 # 054: repeat count 2; high bit ignored
+0B # 055: piece 0B
+40 # 056: repeat piece 00
+02 # 057: repeat count 2; high bit ignored
+0A # 058: piece 0A
+40 # 059: repeat piece 00
+0B # 060: repeat count 11; high bit ignored
+84 # 061: piece 04; skipped on plain pass
+40 # 062: repeat piece 00
+0B # 063: repeat count 11; high bit ignored
+13 # 064: piece 13
+43 # 065: repeat piece 1A
+37 # 066: repeat count 55; high bit ignored
+1B # 067: piece 1B
+40 # 068: repeat piece 00
+18 # 069: repeat count 24; high bit ignored
+83 # 070: piece 03; skipped on plain pass
+40 # 071: repeat piece 00
+0A # 072: repeat count 10; high bit ignored
+0E # 073: piece 0E
+40 # 074: repeat piece 00
+09 # 075: repeat count 9; high bit ignored
+07 # 076: piece 07
+40 # 077: repeat piece 00
+02 # 078: repeat count 2; high bit ignored
+11 # 079: piece 11
+46 # 080: repeat piece 16
+16 # 081: repeat count 22; high bit ignored
+17 # 082: piece 17
+40 # 083: repeat piece 00
+0F # 084: repeat count 15; high bit ignored
+0E # 085: piece 0E
+40 # 086: repeat piece 00
+0B # 087: repeat count 11; high bit ignored
+05 # 088: piece 05
+40 # 089: repeat piece 00
+05 # 090: repeat count 5; high bit ignored
+87 # 091: piece 07; skipped on plain pass
+40 # 092: repeat piece 00
+09 # 093: repeat count 9; high bit ignored
+03 # 094: piece 03
+40 # 095: repeat piece 00
+0E # 096: repeat count 14; high bit ignored
+05 # 097: piece 05
+40 # 098: repeat piece 00
+06 # 099: repeat count 6; high bit ignored
+0A # 100: piece 0A
+40 # 101: repeat piece 00
+06 # 102: repeat count 6; high bit ignored
+06 # 103: piece 06
+40 # 104: repeat piece 00
+05 # 105: repeat count 5; high bit ignored
+05 # 106: piece 05
+40 # 107: repeat piece 00
+0F # 108: repeat count 15; high bit ignored
+0F # 109: piece 0F
+40 # 110: repeat piece 00
+0B # 111: repeat count 11; high bit ignored
+30 # 112: enable fallen-rider marker before finish
+13 # 113: piece 13
+43 # 114: repeat piece 1A
+37 # 115: repeat count 55; high bit ignored
+1B # 116: piece 1B
+40 # 117: repeat piece 00
+0D # 118: repeat count 13; high bit ignored
+12 # 119: piece 12
+42 # 120: repeat piece 18
+2A # 121: repeat count 42; high bit ignored
+19 # 122: piece 19
+40 # 123: repeat piece 00
+11 # 124: repeat count 17; high bit ignored
+04 # 125: piece 04
+40 # 126: repeat piece 00
+02 # 127: repeat count 2; high bit ignored
+8C # 128: piece 0C; skipped on plain pass
+40 # 129: repeat piece 00
+06 # 130: repeat count 6; high bit ignored
+0D # 131: piece 0D
+40 # 132: repeat piece 00
+05 # 133: repeat count 5; high bit ignored
+0C # 134: piece 0C
+40 # 135: repeat piece 00
+05 # 136: repeat count 5; high bit ignored
+03 # 137: piece 03
+40 # 138: repeat piece 00
+02 # 139: repeat count 2; high bit ignored
+8D # 140: piece 0D; skipped on plain pass
+40 # 141: repeat piece 00
+15 # 142: repeat count 21; high bit ignored
+31 # 143: disable fallen-rider marker
+09 # 144: finish gate; restart lap

@@ -155581,59 +155581,68 @@ The reveal pauses while About is visible. No new memory claim or worker is
 required. Kernels without window timers decode the cache during entry and
 show the static splash.
 
-## 102. Excitebike — native motocross racer (`apps/excitebike/excitebike.asm`)
+## 102. 8BitBike — native motocross racer (`apps/excitebike/excitebike.asm`)
 
-A standalone native game in the shape of DrMarco (§100) and 1942 (§101): a
-side-scrolling dirt-bike racer with four lanes, ramps, hurdles, mud, an engine
-temperature bar and two laps against the clock. It is a **native remake, not an
-emulator**: the simulation, the renderer, the sound driver, the art, the courses
-and the songs are all this project's own. The design record is
-`docs/plans/EXCITEBIKE-PLAN.md`; this section is the contract, and where the two
-disagree this section wins.
+8BitBike is a native 8086 motocross racer built on the existing three-adapter
+scroll engine, sprite loader, simulation clock and audio sequencer. The rebuild
+plan is `excitebike_plan.md`; `docs/plans/EXCITEBIKE-PLAN.md` remains the engine
+design record, with its §0 art and audio policy superseded. This section is the
+contract. The rebuild proceeds in waves 0–8; the existing engine's later
+subsections remain its baseline until the corresponding rebuild wave lands.
 
-**THE ART AND AUDIO POLICY (binding, a maintainer decision).** The package, the
-build and every shipped disk depend on **no NES ROM, no CHR data and no file of
-any disassembly, at build time or at run time**. Every sprite, tile, font,
-splash, palette and sound is original work committed under `apps/excitebike/`
-as plain text and compiled by committed host tools; a plain
-`make excitebikedisk` on a machine that has never seen a reference directory
-builds the whole game. There is no source-directory knob and no fallback arm.
-Gameplay *rules* (the kinds of track piece, ramp and hurdle behaviour, heat,
-lap timing) are not expression and are re-implemented in this project's own
-code; anything that compares against a reference is a **test** that reads it
-only through the `EXCITEBIKE_REF` environment variable, never writes into the
-repo, and skips with a printed reason when it is absent. No such test is a
-build input. `tests/unit/t_excitebike_clean.py` (fast tier) holds the tree to
-this: it fails on any file that names the ROM, its CHR data, its
-disassembly's files, a replay format or a path into the reference tree, on a
-build tool that imports anything outside the standard library, and on a binary
-blob under `apps/excitebike/`.
+**CARTRIDGE IMPORT POLICY (binding, owner decision, 2026-09-30).** Match the
+cartridge, but never depend on it. Graphics, courses, rule tables and sound
+are refreshed once from a local, pinned disassembly by an offline importer,
+then committed as plain, reviewable text under `apps/excitebike/cart/`.
+`make`, shipped disks and required regression gates never read the disassembly
+or execute a host NES emulator. The build compilers use only Python's standard
+library. The optional refresh tools locate the reference through
+`EXCITEBIKE_REF`; a clone without it builds and passes its required gates.
+Nintendo's EXCITEBIKE wordmark and track banner are replaced with generated
+8BITBIKE art; the copyright line is removed without replacement. Generated
+masters and their prompts are committed, with offline authoring kept off the
+build path. Other cartridge graphics are retained as the graphics wave lands.
+There is one asset set: each baseline source is removed when its replacement
+lands. Baseline art and sound still feed the engine until their respective
+rebuild waves, and must not be described as cartridge-faithful yet.
 
-`make excitebike` builds `build/excbike.o88` (header name `EXCITEBIKE`; the
-file is `EXCBIKE.O88` because an 8.3 stem is at most 8 characters);
-`make excitebikedisk` builds four standalone floppies (1.44MB, 720KB, 1.2MB,
-360KB, each `os88disk.py --verify`'d in the recipe) carrying the package,
-`README.md`, `EXBV.GFX`, `EXBC.GFX`, `EXBH.GFX` and the three `EXBSPL.*` files; `make
-excitebiketest` runs the front-end gate. The package is `local` in
-`apps/RETIRED.txt` (§20.16): it is not in `all`, on the standard images, the
-allapps floppy or the live media. Its art is committed, so it needs no
-user-supplied asset; whether it should ship is the maintainer's decision.
-Nothing here spends a kernel byte: no new `OSAPI_*` slot, no driver, no kernel
-change. The package's image is 34,883 bytes and its bss 18,707 (wave 7: 53,590; wave 6: 53,366), against the
-loader's 61,440.
+**Wave 0: importer and verification boundary.** `tools/exbref.py` checks the
+exact byte lengths and SHA-256 pins for `CHR_ROM.chr` and `bank_FF.asm`, rebuilds
+the 16KB PRG from listing operands (including multi-byte `.byte` rows), rejects
+conflicting addresses, checks the PRG digest and verifies the complete iNES
+SHA-1. It exposes label-based tables and streams. `tools/excitebike_import.py`
+uses that reader to emit deterministic `cart/rules.inc`, `cart/pieces.txt`,
+`cart/tracks/t1.txt` through `t5.txt`, and `cart/PROVENANCE.md`. Imported rule
+labels cite the routines that consume them. `reference/excitebike/README.md`
+records pins, labels and meanings, without cartridge payloads.
 
-**Waves.** This is wave 7 of 7 (plan section 16): the compilers, the
-skeleton, the build plumbing and the desktop front end (wave 1), the video
-and horizontal scroll engine (wave 2, 102.1), the rider: physics, controls,
-obstacles, ramps, crashes, the HUD (wave 3, 102.3), and the game around it:
-the title, the menus, the countdown, the lap flash and the finish, the rank and
-the campaign (a second pass, a repeating last course, game over), the best
-times, the opponents, the attract demo, five courses and an optional designed
-sixth (wave 4, 102.4), the sound: songs, engine and effects (wave 5, 102.5), and the Hercules
-(the go/no-go answered GO), the compiled hot poses, the edge riders and the VGA pan's measured
-refusal (wave 6, 102.7), and the polish: the lane dash on the two flat-ground adapters, the four
-floppy geometries booted, the low-memory refusal, the banner flash, the EGA decision and an 86Box
-machine (wave 7, 102.8).
+`tests/unit/t_excitebike_clean.py` (fast tier) fences executable reference
+reads in build rules, the asset compiler and application code; comments and
+provenance may describe the reference. It also verifies the stdlib build
+boundary and proves rejection of a planted reference read. The full-tier
+`excitebikeimport` row reimports into a temporary directory and compares every
+importer-owned file, naming drift and the refresh command. Without
+`EXCITEBIKE_REF` it reports SKIP. Hand-authored adaptations are not importer
+output. `make excitebike-import` refreshes the committed imports.
+
+`tools/exbnes/` is an offline recording tool, never a build prerequisite.
+`getagnes.py` fetches MIT-licensed agnes at pinned revision `0e4220b` with its
+licence; `oracle.c` accepts scripted controller bytes and records named RAM,
+OAM, scroll registers, palette, optional pixels and APU writes. Its selfcheck
+requires two attract-demo-to-race recordings to match. `make
+excitebike-fixtures` refreshes committed test recordings and requires the local
+reference and host `cc`; required regression gates read recordings only.
+
+**Names and packaging.** `make 8bitbike` builds `build/8bitbike.o88`, disk name
+`8BITBIKE.O88`, header and desktop title `8BitBike`. Splash sidecars are
+`8BITBIKE.VGA`, `.CGA`, `.HRC`; graphics sidecars are `8BBV.GFX`, `8BBC.GFX`,
+`8BBH.GFX`. `make 8bitbikedisk` builds four standalone floppy geometries
+(1.44MB, 720KB, 1.2MB, 360KB), verified with `os88disk.py --verify`. The
+`excitebike` and `excitebikedisk` targets remain compatibility aliases. Internal
+GFX magic, record layouts and engine symbols remain unchanged by the rename.
+The package stays `local` in `apps/RETIRED.txt` until wave 8 measures which
+standard disks can carry it; the source directory stays `apps/excitebike/`.
+There are no new kernel bytes, API slots or drivers.
 
 ### 102.1 Video and memory
 
@@ -155662,7 +155671,7 @@ nothing.
 **The bracket.** `OSAPI_FSX_RUN` with `FSXF_FASTTICK` (§53.2.1). Entry waits for
 the activating Enter to release (the BIOS mode call would mask its break),
 picks the mode, sets it, and clears the screen. **The loading screen is
-resident**: two centred lines, `EXCITEBIKE` and `LOADING GRAPHICS`, drawn from
+resident**: two centred lines, `8BITBIKE` and `LOADING GRAPHICS`, drawn from
 glyph rows compiled into the package image (`exb_ld_v` 8 bytes a glyph, `exb_ld_c`
 16) *before the first disk read*, so it needs no file and no claim; the VGA
 screen uses the BIOS default palette (index 15 is white), CGA ink 3. The
@@ -155916,17 +155925,17 @@ exceeding one fails the build with the name and the number:**
 | artefact | budget | now |
 |---|---|---|
 | tiles | 80 | 70 |
-| `EXBV.GFX` | 20,480 | 13,376 |
-| `EXBC.GFX` | 16,384 | 12,562 |
-| `EXBH.GFX` | 16,384 | (wave 6) |
-| each `EXBSPL.*` | 24,000 | 12,457 / 3,498 / 4,866 |
+| `8BBV.GFX` | 20,480 | 13,376 |
+| `8BBC.GFX` | 16,384 | 12,562 |
+| `8BBH.GFX` | 16,384 | (wave 6) |
+| each `8BITBIKE.*` | 24,000 | 12,457 / 3,498 / 4,866 |
 | `EXB.SND` | 3,072 | 297 |
 | package image + bss | 61,440 | 46,413 (image 28,063 + bss 18,350) |
 | whole game on a 360KB disk | 130 KB | 73 KB (74 of 354 clusters) |
 | sprite claim (VGA / CGA) | 44 / 17 KB | 28.4 / 10.3 KB (29,113 / 10,578 bytes, 28 poses) |
 | band dictionary | 72 columns | 61 |
 
-**`EXBV.GFX` / `EXBC.GFX` / `EXBH.GFX`** (the last is wave 6's, 102.7.1). `+0` magic `EXBV`, `EXBC` or
+**`8BBV.GFX` / `8BBC.GFX` / `8BBH.GFX`** (the last is wave 6's, 102.7.1). `+0` magic `EXBV`, `EXBC` or
 `EXBH`; `+4` word total
 length; `+6` word checksum; `+8` byte format 1, byte adapter (0 VGA, 1 CGA, 2 Hercules);
 `+10` word record count (10); `+12` a directory of (word offset, word length).
@@ -155948,7 +155957,7 @@ with the pair each slot's level is in both maps and no 3D9h value); 9 INFO.
 Pose inks: 0 outline (opaque, no layer), 1 rider colour (a per-rider variable),
 2 bike body, 3 skin/highlight.
 
-**`EXBSPL.VGA`, `.HRC`, `.CGA`** (the desktop splash, EXF1): `+0` `EXF1`; `+4`
+**`8BITBIKE.VGA`, `.HRC`, `.CGA`** (the desktop splash, EXF1): `+0` `EXF1`; `+4`
 word width 432, word height (264, 264, 132), word depth (4 planes or 1); `+10`
 a directory of one word a row (the splash rows then the help rows), identical
 rows sharing one packet string; row packets 1..127 repeat the next byte,
@@ -156163,7 +156172,7 @@ run. Cost: 4,352 bytes of `.bss` that a game does not need and a test does (the 
 
 **The desktop window** is 452 x 284 (`OS88_PREFER` gives 452 x 154 on the compact
 CGA desktop) titled `Excitebike`, with the standard About box. It paints a
-disk-resident picture (`EXBSPL.*`) in the desktop's own pixels: an original
+disk-resident picture (`8BITBIKE.*`) in the desktop's own pixels: an original
 scene — a striped sunset sky, a launch ramp and a rider in the air over it,
 the wordmark, a chequered border — decoded a bounded 16-row batch at a time
 and drawn with `OSAPI_GFX_BLITP` (colour) or `OSAPI_GFX_BLIT1`. The window
@@ -156689,7 +156698,7 @@ plays and `OSAPI_FSX_CAPS` bit `FSXM_HERC` is a playable adapter alongside `FSXM
 | HUD | rows 96-99 | rows 48-49 of every bank, cells `XH_HUDCOL` = 12.. (centred) |
 
 A tile (8 game pixels) is 16 card pixels = **2 bytes**, exactly the CGA's, so a tile, a pose
-and a glyph are as many bytes as on the CGA and `EXBH.GFX` (12,562 bytes) has `EXBC.GFX`'s
+and a glyph are as many bytes as on the CGA and `8BBH.GFX` (12,562 bytes) has `8BBC.GFX`'s
 layout with a pair where the CGA has a 2-bit ink: tile byte-pairs, the band and top records,
 the poses, the font (a lit pixel is `11`, the CGA's ink 3) and a palette record whose "ink
 maps" are the pair each slot's Hercules level is (`palette.json`'s `herc`, levels 0/1/2). A
@@ -156832,7 +156841,7 @@ adapter, the sprites at even x.
   campaign, second pass, leaving), `--custom` and `--ai --collide` on the Hercules.
 * `tests/excitebike_perf.py --herc --scroll --governor | --lap | --selfb` (rows
   `excitebikeperfherc`, `excitebikelapherc`, `excitebikeselfbherc`) - the gates of 102.7.3.
-* `tests/excitebike_assets.py` reads `EXBH.GFX` back from its bytes: every tile as pairs by the
+* `tests/excitebike_assets.py` reads `8BBH.GFX` back from its bytes: every tile as pairs by the
   (row + column) rule, the band, collision, class, top, pose and sprite records, the font, the
   palette record, and the size and checksum constants. `tools/excitebike_assets.py --selfcheck`
   gains the two claim budgets with the compiled poses (VGA 41,389 of 45,056; CGA/Hercules 20,877 of
@@ -156875,9 +156884,9 @@ and 360KB, each `os88disk.py --verify`'d in the recipe. `tests/excitebike_geom.p
 excitebikegeom`) holds them to more. `--host` (row `excitebikegeomhost`, no emulator) walks each of
 the four with `tests/unit/t_image.py`'s FAT12 reader - deliberately not os88disk's - and requires
 the geometry the name says (sectors per track 18, 9, 15, 9), exactly the eight files
-(`EXCBIKE.O88`, `README.MD`, `EXBV.GFX`, `EXBC.GFX`, `EXBH.GFX`, `EXBSPL.VGA`, `.CGA`, `.HRC`) in the
+(`8BITBIKE.O88`, `README.MD`, `8BBV.GFX`, `8BBC.GFX`, `8BBH.GFX`, `8BITBIKE.VGA`, `.CGA`, `.HRC`) in the
 root with every chain whole and of the right length for its size, the same bytes in all four
-geometries and `EXCBIKE.O88` equal to `build/excbike.o88`; its negative control damages one FAT
+geometries and `8BITBIKE.O88` equal to `build/8bitbike.o88`; its negative control damages one FAT
 entry in the package's chain and the same walk must fail. `--boot G` (rows `excitebikeboot360`,
 `excitebikeboot720`, `excitebikeboot1440`) is boot-and-launch on MartyPC with that geometry's
 own system floppy and game floppy: **360KB on the VGA XT, 720KB on the Hercules XT with 720KB drives
@@ -156947,7 +156956,7 @@ call in the bracket.
 OTI-067 VGA) with `fdd_02_fn = ../../build/excitebike360.img` and a fresh uuid and NOTHING else, the
 copy rule `vm/386-c-word` records; `make xt-excitebike` runs it with the 360KB system floppy in A:.
 86Box cannot assert anything (docs/TESTING.md): it is where a human looks at the scroll, the banner
-flash and the palette (`C`) and double-clicks `EXCBIKE.O88` in drive B:. No 86Box run was made in the
+flash and the palette (`C`) and double-clicks `8BITBIKE.O88` in drive B:. No 86Box run was made in the
 environment that wrote this.
 
 **102.8.7 Validation and what wave 7 could not do.**

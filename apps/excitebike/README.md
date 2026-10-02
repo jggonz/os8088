@@ -1,15 +1,18 @@
-# Excitebike for os8088
+# 8BitBike for os8088
 
-A native 8086 motocross racer in the spirit of the classic side-scrolling
-dirt-bike game: lanes, ramps, hurdles, mud, a temperature bar, two laps against
-the clock. It is **not** an emulator and it does **not** contain, read or
-derive anything from Nintendo's game: every tile, sprite, banner, letter,
-splash and sound is original work drawn and composed for this project, kept as
-plain-text sources under `art/`, `tracks/` and `audio/` and compiled by
-`tools/excitebike_assets.py`. `art/README.md` records how each asset class was
-made.
+A native 8086 motocross racer being rebuilt to match the 1984 cartridge's
+graphics, courses, rules and sound. Cartridge data is imported once into
+committed, reviewable text sources; ordinary builds use only those sources
+and never need the reference checkout. Nintendo's marks are replaced with
+generated 8BitBike art, and no copyright line is displayed.
 
-**Status: complete (wave 7 of 7).** This build is the whole game around the rider: a title,
+The cartridge-faithful rebuild is tracked in `excitebike_plan.md` and
+SPEC.md §102. Wave 0 renames the package and sets up the import pipeline;
+the current engine still uses the previous original art, tracks and sound
+until their imported replacements land. `docs/plans/EXCITEBIKE-PLAN.md` records
+that engine's design; its original-art policy is superseded.
+
+**Current engine:** This build is the whole game around the rider: a title,
 a mode menu (A: alone against the clock, B: with CPU riders, three on the VGA and
 two on the CGA and the Hercules), five courses of two laps each (a sixth if you put a designed
 `EXBTRACK.DAT` beside the package), READY 3, 2, 1 and GO!, a lap flash, the
@@ -38,8 +41,8 @@ the best times.
 Build:
 
 ```
-make excitebike        # build/excbike.o88
-make excitebikedisk    # four standalone floppies: 1.44MB, 720KB, 1.2MB, 360KB
+make 8bitbike          # build/8bitbike.o88
+make 8bitbikedisk      # four standalone floppies: 1.44MB, 720KB, 1.2MB, 360KB
 make excitebiketest    # the front-end gate (needs MartyPC, see docs/MARTYPC-DEBUG.md)
 make excitebikeaudio   # the sound: score, engine, effects, FM claims, the speaker's own capture
 make excitebikevideo   # the scroll engine, pixel for pixel against tools/exbsim.py
@@ -52,11 +55,25 @@ make excitebikegeom    # the four floppy geometries, booted (360KB, 720KB, 1.44M
 make xt-excitebike     # 86Box: a 4.77 MHz VGA XT with the 360KB game disk in B: (a human looks; it asserts nothing)
 ```
 
-A plain `make excitebikedisk` needs only NASM and Python 3 (standard library):
+The old `excitebike` and `excitebikedisk` target names remain aliases.
+
+Offline refreshes, outside the normal build:
+
+```
+EXCITEBIKE_REF=/path/to/Excitebike make excitebike-import
+EXCITEBIKE_REF=/path/to/Excitebike make excitebike-fixtures  # needs host cc
+make excitebikeimport  # compares imports; SKIPs without the reference
+```
+
+`cart/PROVENANCE.md` records the pins and imported sources; `cart/ADAPTATIONS.md`
+records remaining differences. Committed NES traces are read by
+`python3 tests/excitebike_oracle.py` without the reference or a C compiler.
+
+A plain `make 8bitbikedisk` needs only NASM and Python 3 (standard library):
 there is no source directory to point at and no optional import.
 
-Open `EXCBIKE.O88` from the disk (drive B:) and keep `EXBSPL.VGA`, `EXBSPL.CGA`,
-`EXBSPL.HRC`, `EXBV.GFX`, `EXBC.GFX` and `EXBH.GFX` beside it. Enter or Alt+Enter goes
+Open `8BITBIKE.O88` from the disk (drive B:) and keep `8BITBIKE.VGA`, `8BITBIKE.CGA`,
+`8BITBIKE.HRC`, `8BBV.GFX`, `8BBC.GFX` and `8BBH.GFX` beside it. Enter or Alt+Enter goes
 full screen (VGA, CGA or Hercules; an EGA desktop shows the splash and says so), `C`
 changes the palette, Enter pauses a race and Esc goes back a screen (and, from the
 title, to the desktop).
@@ -71,7 +88,7 @@ lap flash strobes the banner plates on the VGA (a palette rewrite; the other two
 rewrite). On an EGA desktop the splash and help open and START says `VGA, CGA OR HERC ONLY`: an EGA
 has no CGA colour-select port and nothing here can host one (SPEC.md 102.8.5). On a machine with too
 little memory left for the game's own claims Enter is refused with `NOT ENOUGH MEMORY` and the window
-stays as it was; the 256KB floor machine holds one Excitebike.
+stays as it was; the 256KB floor machine holds one 8BitBike.
 
-The floppy is the same eight files in each geometry: `EXCBIKE.O88`, `README.MD`, `EXBV.GFX`,
-`EXBC.GFX`, `EXBH.GFX` and the three `EXBSPL.*`. The 1.2MB one needs a 5.25 inch HD drive.
+The floppy is the same eight files in each geometry: `8BITBIKE.O88`, `README.MD`, `8BBV.GFX`,
+`8BBC.GFX`, `8BBH.GFX` and the three `8BITBIKE.*`. The 1.2MB one needs a 5.25 inch HD drive.

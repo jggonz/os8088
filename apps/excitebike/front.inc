@@ -1,5 +1,5 @@
 ; Desktop splash and help (SPEC.md 102.4).  The window paints a disk-resident
-; picture - EXBSPL.VGA, .HRC or .CGA, EXF1 rows, compiled by
+; picture - 8BITBIKE.VGA, .HRC or .CGA, EXF1 rows, compiled by
 ; tools/excitebike_assets.py - as native desktop pixels, decoded one bounded
 ; 16-row batch at a time and blitted with OSAPI_GFX_BLITP / BLIT1 (no per-pixel
 ; conversion, no text baked into the art: the menu is font_run over a reserved
@@ -536,10 +536,10 @@ xb_fronttext:
     ret
 
 xb_artfiles: dw xb_artvga,EXB_FRONT_VGA_SIZE,xb_artherc,EXB_FRONT_HRC_SIZE,xb_artcga,EXB_FRONT_CGA_SIZE
-xb_artvga: db 'EXBSPL.VGA',0
-xb_artherc: db 'EXBSPL.HRC',0
-xb_artcga: db 'EXBSPL.CGA',0
-xb_artmissing: db 'Graphics unavailable: keep EXBSPL.* together',0
+xb_artvga: db '8BITBIKE.VGA',0
+xb_artherc: db '8BITBIKE.HRC',0
+xb_artcga: db '8BITBIKE.CGA',0
+xb_artmissing: db 'Graphics unavailable: keep 8BITBIKE.* together',0
 xb_artloading: db 'LOADING ARTWORK...',0
 ; label table: x (pixels), y (rows of the 132-row art; doubled on tall
 ; displays), ink, string.  The menu sits in the black box the art reserves.
@@ -567,7 +567,7 @@ xb_frontfs: db 'ALT+ENTER  FULL SCREEN',0
 xb_frontnote: db 'FIVE COURSES, TWO LAPS',0
 xb_frontunsupported: db 'VGA, CGA OR HERC ONLY',0
 xb_errmode: db 'FULL SCREEN REFUSED',0
-xb_errfiles: db 'EXB?.GFX MISSING',0
+xb_errfiles: db '8BB?.GFX MISSING',0
 xb_errmem: db 'NOT ENOUGH MEMORY',0
 xb_helptitle: db 'H O W  T O  R I D E',0
 xb_helpgoal: db 'BEAT THE CLOCK. WATCH THE HEAT.',0

@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""EXCITEBIKE asset compiler (SPEC.md 102.2, docs/plans/EXCITEBIKE-PLAN.md 12).
+"""8BitBike asset compiler (SPEC.md 102.2, docs/plans/EXCITEBIKE-PLAN.md 12).
 
     python3 tools/excitebike_assets.py -o build/excitebike-art     # what `make` runs
     python3 tools/excitebike_assets.py --selfcheck                 # budgets + determinism
 
-Compiles the COMMITTED original art, tracks and sound sources under
+Compiles the COMMITTED art, tracks and sound sources under
 apps/excitebike/ into the files the package and its disk carry.  Python
 standard library only (no Pillow - a plain `make` must not need it) and
 deterministic: the same inputs give byte-identical outputs, no timestamps, no
 host font, sorted iteration.
 
 It reads NOTHING outside apps/excitebike/: no ROM, no CHR file, no
-disassembly, no environment variable (the art and audio policy, plan
-section 0; tests/unit/t_excitebike_clean.py holds the tree to it).
+disassembly, no environment variable (SPEC.md 102.2;
+tests/unit/t_excitebike_clean.py holds the build path to it).
 
 Outputs, in the -o directory:
-    EXBV.GFX  EXBC.GFX          the adapter art (VGA 0Dh planar / CGA 320x200x4)
-    EXBSPL.VGA .CGA .HRC        the desktop splash + help art, EXF1 rows
+    8BBV.GFX  8BBC.GFX          the adapter art (VGA 0Dh planar / CGA 320x200x4)
+    8BITBIKE.VGA .CGA .HRC        the desktop splash + help art, EXF1 rows
     exbtables.inc               NASM: sizes, checksums, record ids, load-screen glyphs
     exbtracks.inc               NASM: the track streams (in the package image)
     exbscripts.inc              NASM: element scripts (Wave 3 includes them)
@@ -35,7 +35,7 @@ Pillow a dependency of `make`):
         n-127 literal bytes; 0 ends the row.  A 4-plane row is 216 bytes,
         plane-major (54 per plane); a 1-bit row is 54 bytes.
 
-EXBV.GFX / EXBC.GFX:
+8BBV.GFX / 8BBC.GFX:
     +0 magic 'EXBV'|'EXBC'  +4 word total length  +6 word checksum
     +8 byte format 1, byte adapter, word record count R
     +12 R x (word offset, word length)
@@ -952,7 +952,7 @@ class Splash:
             directory += struct.pack("<H", shared[r])
         blob = head + bytes(directory) + bytes(payload)
         if len(blob) > 65535:
-            fail("EXBSPL.%s exceeds one segment" % tag)
+            fail("8BITBIKE.%s exceeds one segment" % tag)
         return blob, pages
 
 
@@ -1468,7 +1468,7 @@ def skip_stats(art):
             "band_lines_avg": sum(bl) / 9.0, "band_runs_avg": sum(len(r) for r in band) / 9.0}
 
 
-LOAD_LINES = ["EXCITEBIKE", "LOADING GRAPHICS"]
+LOAD_LINES = ["8BITBIKE", "LOADING GRAPHICS"]
 
 
 def emit_tables(art, gv, gc, gh, spl, snd_size):
@@ -1547,8 +1547,8 @@ def compile_all(out, sheets=True):
     for tag in ("VGA", "CGA", "HRC"):
         spl[tag] = sp.file(tag)[0]
     snd, sndinc, sndrep = AUDIO.compile_audio()
-    files = {"EXBV.GFX": gv[0], "EXBC.GFX": gc[0], "EXBH.GFX": gh[0],
-             "EXBSPL.VGA": spl["VGA"], "EXBSPL.CGA": spl["CGA"], "EXBSPL.HRC": spl["HRC"],
+    files = {"8BBV.GFX": gv[0], "8BBC.GFX": gc[0], "8BBH.GFX": gh[0],
+             "8BITBIKE.VGA": spl["VGA"], "8BITBIKE.CGA": spl["CGA"], "8BITBIKE.HRC": spl["HRC"],
              "EXB.SND": snd}
     texts = {"exbtables.inc": emit_tables(art, gv, gc, gh, spl, len(snd)),
              "exbtracks.inc": emit_tracks(art), "exbscripts.inc": emit_scripts(art),
@@ -1651,10 +1651,10 @@ def selfcheck(keep=None):
                      % (len(a), sum(len(v) for v in a.values())))
         lines.append("budgets (plan 12.5):")
         budget("tiles.txt tiles", len(art.tiles), B_TILES)
-        budget("EXBV.GFX bytes", len(files["EXBV.GFX"]), B_GFX_V)
-        budget("EXBC.GFX bytes", len(files["EXBC.GFX"]), B_GFX_C)
+        budget("8BBV.GFX bytes", len(files["8BBV.GFX"]), B_GFX_V)
+        budget("8BBC.GFX bytes", len(files["8BBC.GFX"]), B_GFX_C)
         for tag in ("VGA", "CGA", "HRC"):
-            budget("EXBSPL.%s bytes" % tag, len(files["EXBSPL." + tag]), B_SPLASH)
+            budget("8BITBIKE.%s bytes" % tag, len(files["8BITBIKE." + tag]), B_SPLASH)
         budget("EXB.SND bytes", len(files["EXB.SND"]), B_SND)
         budget("band dictionary columns", len(art.col_order), B_DICT)
         # sprite claims, plan 6: the pose layers expanded into x phases at load time,
@@ -1686,7 +1686,7 @@ def selfcheck(keep=None):
                      "%.1f of 128 in %.1f runs (a full column is 192 lines in 2 runs)"
                      % (st["top_lines_avg"], st["top_runs_avg"], st["band_lines_avg"],
                         st["band_runs_avg"]))
-        budget("EXBH.GFX bytes", len(files["EXBH.GFX"]), B_GFX_C)
+        budget("8BBH.GFX bytes", len(files["8BBH.GFX"]), B_GFX_C)
         ps = package_sizes(t1)
         if ps is not None:
             image, bss, packed = ps
@@ -1694,8 +1694,8 @@ def selfcheck(keep=None):
                    "(image %d + bss %d, assembled from these sources)" % (image, bss))
             names = [packed if packed is not None else image,
                      os.path.getsize(os.path.join(SRC, "README.md"))]
-            names += [len(files[n]) for n in ("EXBV.GFX", "EXBC.GFX", "EXBH.GFX", "EXBSPL.VGA",
-                                              "EXBSPL.CGA", "EXBSPL.HRC")]
+            names += [len(files[n]) for n in ("8BBV.GFX", "8BBC.GFX", "8BBH.GFX", "8BITBIKE.VGA",
+                                              "8BITBIKE.CGA", "8BITBIKE.HRC")]
             budget("whole game on 360KB (1KB clusters)", clusters_kb(names) * 1024, B_DISK360,
                    "= %d KB of 354" % clusters_kb(names))
         else:
@@ -1724,7 +1724,7 @@ def selfcheck(keep=None):
             lines.append("  %-44s %s" % (what, "refused" if r else "NOT REFUSED"))
             ok = ok and r
         # the checksum the guest verifies
-        for tag, name in (("EXBV", "EXBV.GFX"), ("EXBC", "EXBC.GFX")):
+        for tag, name in (("EXBV", "8BBV.GFX"), ("EXBC", "8BBC.GFX")):
             blob = bytearray(files[name])
             want = struct.unpack_from("<H", blob, 6)[0]
             struct.pack_into("<H", blob, 6, 0)
@@ -1831,10 +1831,10 @@ def main():
     except ArtError as e:
         print("excitebike_assets: %s" % e, file=sys.stderr)
         return 1
-    print("excitebike_assets: %d tiles, %d columns, %d pieces, EXBV.GFX %d, EXBC.GFX %d, "
+    print("excitebike_assets: %d tiles, %d columns, %d pieces, 8BBV.GFX %d, 8BBC.GFX %d, "
           "splash %s, EXB.SND %d" % (len(art.tiles), len(art.col_order), len(art.pieces),
-                                       len(files["EXBV.GFX"]), len(files["EXBC.GFX"]),
-                                       "/".join(str(len(files["EXBSPL." + t])) for t in ("VGA", "CGA", "HRC")),
+                                       len(files["8BBV.GFX"]), len(files["8BBC.GFX"]),
+                                       "/".join(str(len(files["8BITBIKE." + t])) for t in ("VGA", "CGA", "HRC")),
                                        len(files["EXB.SND"])))
     return 0
 
