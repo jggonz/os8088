@@ -508,7 +508,12 @@ exactly like the feature being broken.
 `xt-mfm` (a 20MB ST-225 on a Xebec MFM controller — the machine to install
 and hibernate on; `build/mfm20.img` is created blank and kept),
 `xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-sound`,
-`xt-sound-1.44`, `xt-wire`, `286`, `286-525`,
+`xt-sound-1.44`, `xt-midirack` and `386-midirack` (MIDIRack's, SPEC.md
+§105.11: `xt-sound`'s XT plus a standalone MPU-401, and `386-sound`'s 386
+whose SB16 carries one, each sending MIDI to 86Box's FluidSynth with the
+GeneralUser GS soundfont `make midibank` fetches, and each with `make
+midirackdisk`'s floppy - player, wavetable bank, songs - in B:), `xt-wire`,
+`286`, `286-525`,
 `286-sound`, the eight `286-525-*` application machines (`-z`, `-word`,
 `-cword`, `-runcpm`, `-c64`, `-weave`, `-loom`, `-all` — `vm/286-525` with a
 1.2MB app disk in B: instead of the apps floppy, and the only machines in the
@@ -627,7 +632,11 @@ build in QEMU, drive the UI it claims over QMP, screenshot the evidence per
 claim, then (when asked) merge a stacked series in order — is
 `.claude/skills/functional-check` (`/functional-check [PR#|branch]`), whose
 `LESSONS.md` is what checking and merging the Weave waves (#124–#128)
-learned.
+learned. Giving a package a **colour face on VGA/EGA** — the redraws measured
+and cut through caches first, then a layout on the card's grid, styled panes
+and picture-faced buttons, with the mono faces left as they were — is
+`.claude/skills/vga-face` (`/vga-face <package>`, **manual invocation only**),
+whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
 
 ## Hard rules (§1 — these break silently if violated)
 

@@ -709,6 +709,7 @@ impl DebugServer {
             }),
             "status" => status(machine, exec),
             "disk" => disk_stats(machine, &req),
+            "midi" => midi_log(machine, &req),
             "regs" => regs(machine),
             "setreg" => setreg(machine, &req),
             "read" => read_mem(machine, &req),
@@ -904,6 +905,33 @@ fn state_name(s: ExecutionState) -> &'static str {
         ExecutionState::StepOverHit => "stepover",
         ExecutionState::Running => "running",
         ExecutionState::Halted => "halted",
+    }
+}
+
+/// `midi`: what the recording MPU-401 (devices/mpu401.rs) was sent - every
+/// byte written to its data port, with the emulated microsecond it arrived,
+/// as `bytes` (hex) and `us`. `reset: true` empties the log after answering,
+/// so a test can bracket one region of a session. `uart` says whether the
+/// guest put the card in UART mode, which is the probe's half of the story.
+fn midi_log(machine: &mut Machine, req: &Value) -> Value {
+    let clear = req.get("reset").and_then(Value::as_bool).unwrap_or(false);
+    match machine.bus_mut().mpu401_mut().as_mut() {
+        Some(mpu) => {
+            let bytes: String = mpu.log.iter().map(|(_, b)| format!("{:02x}", b)).collect();
+            let us: Vec<u64> = mpu.log.iter().map(|(t, _)| *t).collect();
+            let v = json!({
+                "ok": true,
+                "uart": mpu.uart(),
+                "bytes": bytes,
+                "us": us,
+                "dropped": mpu.dropped,
+            });
+            if clear {
+                mpu.log.clear();
+            }
+            v
+        }
+        None => err("no MPU-401 in this machine"),
     }
 }
 

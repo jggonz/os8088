@@ -333,6 +333,46 @@ OS88UI_IMG equ 64               ; THE LABEL IS A PICTURE, not a string (SPEC.md
                                 ; os88ui_bdraw1. A package that does not set it
                                 ; assembles byte-identical: the flag is an equ
                                 ; and costs nothing unset.
+OS88UI_OWN equ 128              ; THE PACKAGE PAINTS THIS ONE (SPEC.md 13.8.10).
+                                ; The labels-array entry is a near PROC of
+                                ; yours, called in place of the drawing body
+                                ; with AX = the button's 0-based index, BX =
+                                ; its rect (screen, inclusive, read through
+                                ; ds:), DI = its flags with the pressed look
+                                ; ALREADY RESOLVED - OS88UI_DOWN set for a
+                                ; live press or a latch, OS88UI_DIS for a
+                                ; greyed one - and the gfx lock held. Preserve
+                                ; every register.
+                                ;
+                                ; WHAT IT IS FOR is a face the library cannot
+                                ; draw - MIDIRack's bevelled colour buttons -
+                                ; WITHOUT giving up what the library is: the
+                                ; record, the hit-test, the arm, the track and
+                                ; the fire are all still os88ui's, and every
+                                ; one of them reaches the picture through
+                                ; os88ui_btn, so a press draws the package's
+                                ; pressed face exactly as it would have drawn
+                                ; the standard one. A package that painted its
+                                ; buttons itself and handed the library only
+                                ; the hit-test would have the press overdrawn
+                                ; in the standard look on every edge.
+                                ;
+                                ; The flag is per BUTTON and is the caller's,
+                                ; in its flags array, so a package can mix -
+                                ; and can turn it off on a 1bpp display, where
+                                ; the standard button is the right one.
+                                ;
+                                ; ONLY UNDER `%define OS88UI_BOWN`: unset, it
+                                ; is an equ and costs nothing, and every other
+                                ; package assembles byte-identical.
+%ifdef OS88UI_BOWN
+ %ifdef OS88UI_KERNEL
+  %error "OS88UI_BOWN is a PACKAGE's: the kernel's dialogs draw their own buttons"
+ %endif
+ %ifdef OS88UI_NOBTN
+  %error "OS88UI_BOWN paints buttons, and OS88UI_NOBTN/BARONLY has taken them out"
+ %endif
+%endif
 %ifdef OS88UI_BIMG
  %ifdef OS88UI_KERNEL
   %error "OS88UI_BIMG is a PACKAGE's: the kernel's dialogs draw text buttons"
@@ -535,6 +575,13 @@ os88ui_btn:
                                 ; was converted, and a routine only this one
                                 ; reaches does not need a name. There is one
                                 ; way to draw a button now.
+%ifdef OS88UI_BOWN
+    test di, OS88UI_OWN         ; ...or the PACKAGE's, for a button whose
+    jz .std                     ; flags say so (SPEC.md 13.8.10): AX is still
+    call si                     ; the index, BX the rect and DI the resolved
+    jmp short .out              ; flags, which is the whole of its contract
+.std:
+%endif
 %ifdef OS88UI_BIMG
     call os88ui_bdraw1          ; ...or the one-write body, for a package
 %else                           ; that opted into it (SPEC.md 13.8.9)

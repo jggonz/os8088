@@ -376,6 +376,12 @@ FAST = [
         "table edited by hand or a model nobody regenerated would put the "
         "machine and its reference apart while both still ran. FAST because "
         "three packages include it and it costs 0.04s"),
+    Row("midtab", "fast", py("tests/unit/t_midtab.py"), 0.2,
+        "MIDIRack's GENERATED tables (apps/midirack/mrtab.inc) are "
+        "tools/os88midi.py's, and its ten shipped songs are read by TWO "
+        "readers that share no code - the composer's checker and the "
+        "reference sequencer the player's gates compare against - which must "
+        "agree on every song's length (SPEC.md 105.6.1)"),
     Row("bits", "fast", py("tests/unit/t_bits.py"), 0.5,
         "TWO FLAGS THAT SHARE ONE BYTE MAY NOT SHARE A BIT (SPEC.md 96.11.10). "
         "t_mirror's sibling and the same class of gate: a flag is `NAME equ "
@@ -2929,6 +2935,79 @@ SOAK = [
         "ties. Checks native pixels and repaint consistency on three adapters",
         needs=("marty", "nasm"), serial=True,
         wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("midirackfm", "soak", py("tests/midirack.py", "--arm", "fm"), 60.0,
+        "MIDIRack on the AdLib (SPEC.md 105.6): the autoload finds "
+        "MEDIA\\MIDI and measures BATTLE1, the chip is claimed in OPL2 mode "
+        "and voices key, and the capture's strongest pitch class agrees with "
+        "the reference sequencer half a second at a time; the same capture "
+        "against a tritone-transposed reference must fail",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midiracksb", "soak", py("tests/midirack.py", "--arm", "sb"), 60.0,
+        "MIDIRack's synth on the Sound Blaster (SPEC.md 105.8.4): the grant "
+        "ring this DSP needs, no underrun after the first, the stream at its "
+        "rate by the guest's own clock, and the pitch agreement and its "
+        "negative control",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midiracksbrate", "soak", py("tests/midirack.py", "--arm", "sb",
+                                     "--rate", "2"), 60.0,
+        "MIDIRack's Settings rate reaching the card (SPEC.md 105.7.1, "
+        "105.9.2): 11,025 Hz chosen, the stream opened at it, the card "
+        "consuming it by the guest's clock, the pitch agreement and its "
+        "negative control",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midirackspk", "soak", py("tests/midirack.py", "--arm", "spk"), 60.0,
+        "MIDIRack's synth on the PC speaker, in its bracket (SPEC.md 105.7.1, "
+        "105.8.3): 5.5 kHz on the 8088, the ring never under a quarter, CONS "
+        "at the rate, the pitch agreement on the low-passed capture and its "
+        "negative control",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midiracktone", "soak", py("tests/midirack.py", "--arm", "tone"), 50.0,
+        "MIDIRack's 'Play in Background' on a machine with no card (SPEC.md "
+        "105.8.2): the melody as one square wave on the desktop, moving "
+        "through the song's pitches",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midirackend", "soak", py("tests/midirack.py", "--arm", "end"), 120.0,
+        "MIDIRack's song end (SPEC.md 105.8.1): Loop plays INTRO again from "
+        "its start, and without it the last song's end stops the playlist",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midirackmpu", "soak", py("tests/midirack.py", "--arm", "mpu"), 60.0,
+        "MIDIRack's MIDI out (SPEC.md 105.8.5, SOUND.DRV's MPU-401, 34.13) on "
+        "a 5150 with an MPU-401 and NO other card - so the driver attaches on "
+        "the MPU alone: GM ON first, the reference sequencer's own channel "
+        "messages byte for byte, the note-ons within 0.1 s of the song's "
+        "time, a pause's All Notes Off on all sixteen channels and a resume's "
+        "programs. --break transposes the reference and must fail",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/midisys720.img", "build/apps720.img")),
+    Row("midirackwt", "soak", py("tests/midirack.py", "--arm", "wt"), 70.0,
+        "MIDIRack's Sound Blaster WAVETABLE (SPEC.md 105.8.6) on the 5150, "
+        "with tools/os88midbank.py's synthetic bank beside the package (no "
+        "network): the bank read in 32 KB chunks, three voices at the 8088's "
+        "6 kHz, the card consuming at the rate with no underrun, and the "
+        "capture's pitch classes against the reference sequencer - with the "
+        "tritone-transposed reference as the negative control",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/mrwt720.img")),
+    Row("mrdraw", "soak", py("tests/mrdraw.py"), 200.0,
+        "MIDIRack's redraw, priced in drawing calls (SPEC.md 105.9.4): every "
+        "far call into a drawing cell of the API table, per gesture, told "
+        "apart as the UI task's or the worker's by its stack; each gesture "
+        "under a ceiling a full repaint blows through, and the picture the "
+        "caches drew pixel-identical to a forced full repaint. Hercules",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("mrdrawvga", "soak", py("tests/mrdraw.py", "--vga"), 200.0,
+        "mrdraw on the VGA XT, the colour face (SPEC.md 105.9.5): the same "
+        "ceilings and the same incremental-equals-repaint identity, compared "
+        "as the card rasterised it in colour",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/media360.img")),
     Row("gorillascity", "soak", py("tests/gorillascity.py"), 100.0,
         "Gorillas skyline redraw (SPEC.md 99.4): seed-stable city construction "
         "under 400 ms; complete VGA paints under 1800 ms and mono/CGA under "

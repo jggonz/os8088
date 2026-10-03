@@ -72,6 +72,9 @@ UNREGISTERED = {
                    "(docs/WRITING-TESTS.md 2.1)",
 
     # --- library and support code, not tests ---
+    "mrprobe.py": "MIDIRack's guest reader (SPEC.md 105.11) - the running "
+                  "package's variables by NAME, for tests/midirack.py; "
+                  "library, not a test",
     "dispcells.py": "the CELLS-not-calls counter two gates share (SPEC.md "
                     "11.3.3), not a test",
     "pxsyms.py": "PiXEL's guest reader (SPEC.md 106.13) - the package's "

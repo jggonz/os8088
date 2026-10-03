@@ -288,7 +288,7 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 
 | include | SPEC | what it gives you |
 |---|---|---|
-| `apps/os88ui.inc` | §13, 75 | Buttons, check boxes, radio dots, scroll bars, group boxes, the standard alert, the standard About card and the drop-down. Opt into the alert with `%define OS88UI_ALERT`, the About card with `%define OS88UI_ABOUT`, the scroll bar with `%define OS88UI_SCROLL` and its thumb-drag half with `%define OS88UI_SBDRAG`, and the drop-down - one pick out of a short list, a Macintosh popup's gesture - with `%define OS88UI_DROP` (SPEC.md 13.14). Buttons that carry an ICON_DRAW image in place of a caption, drawn in one write with no ground fill, are `%define OS88UI_BIMG` and the `OS88UI_IMG` flag (SPEC.md 13.8.9); a package with no check box or radio sheds that code with `%define OS88UI_NOGLYPH`. |
+| `apps/os88ui.inc` | §13, 75 | Buttons, check boxes, radio dots, scroll bars, group boxes, the standard alert, the standard About card and the drop-down. Opt into the alert with `%define OS88UI_ALERT`, the About card with `%define OS88UI_ABOUT`, the scroll bar with `%define OS88UI_SCROLL` and its thumb-drag half with `%define OS88UI_SBDRAG`, and the drop-down - one pick out of a short list, a Macintosh popup's gesture - with `%define OS88UI_DROP` (SPEC.md 13.14). Buttons that carry an ICON_DRAW image in place of a caption, drawn in one write with no ground fill, are `%define OS88UI_BIMG` and the `OS88UI_IMG` flag (SPEC.md 13.8.9); a button whose face the PACKAGE paints, keeping the library's press gesture, is `%define OS88UI_BOWN` and the `OS88UI_OWN` flag (SPEC.md 13.8.10); a package with no check box or radio sheds that code with `%define OS88UI_NOGLYPH`. |
 | `apps/os88alt.inc` | §11.2.1.1 | Alt+Enter, the full-screen key, for a package on SPEC.md 53's BRACKET - where no event is dispatched, so the kernel's synthesised keystroke cannot reach you and your own int 16h poll cannot see the key either. `os88alt_edge` asks the key-state map and finds the edge in it. A package on SPEC.md 11.2's LATCH needs none of this file: one `cmp ax, KEY_ALTENTER` in its W_ONKEY is both directions. Both want `OS88_ALTENTER_ARM` (apps/os88api.inc) in the entry proc, without which the chord is silently dead. |
 | `apps/os88line.inc` | §83 | A one-line text field: caret, horizontal scroll, focus, click-to-position and the editing keys. The caller owns a 20-byte block. |
 | `apps/os88text.inc` | §83 | The multi-line sibling of os88line.inc. Enter inserts a newline; no wrap, no selection, no undo. |
@@ -340,6 +340,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | HELLO | `apps/hello/hello.asm` | §27 | no |
 | IMGTEST | `apps/imgtest/imgtest.asm` |  | no |
 | LOOM | `apps/loom/loom.asm` | `docs/WEAVE-SPEC.md` | yes |
+| MIDIRack | `apps/midirack/midirack.asm` | §105 | yes |
 | MINES | `apps/mines/mines.asm` | §23 | yes |
 | MISSILE | `apps/missile/missile.asm` | §48 | yes |
 | MODPLUG | `apps/modplug/modplug.asm` | §56 | **retired** |
@@ -480,6 +481,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 101 | 1942 — native vertical shooter (`apps/1942/`) |
 | 102 | Excitebike — native motocross racer (`apps/excitebike/excitebike.asm`) |
 | 103 | REDLINE — CPU and graphics benchmarks (`apps/redline/`) |
+| 105 | MIDIRack — a MIDI file player (`apps/midirack/`) |
 | 106 | PiXEL — an image viewer and editor (`apps/pixel/`) |
 
 ## docs/
