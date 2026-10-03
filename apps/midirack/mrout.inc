@@ -1138,7 +1138,7 @@ mrk_bracket:
     push di
     mov word [mr_msg], mr_s_spkplay
     mov byte [mr_state], MR_ST_PLAY
-    call mru_repaint
+    call mru_update
     mov byte [mrk_exit], MRX_ERR
     mov word [mr_msg], mr_s_spkbusy
     mov bx, [mr_win]

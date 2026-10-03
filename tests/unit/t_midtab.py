@@ -18,6 +18,13 @@ tracks and MR_FILEMAX (63 KB). A reader that drifted from the other - a
 running-status or tempo-map bug - fails here, on the host, before a guest row
 ever boots.
 
+AND THE COLOUR FACE'S PICTURES (SPEC.md 105.9.5): tools/os88midart.py's own
+selfcheck - deterministic, every label with air in its button, every face's
+gap left paper - and the four numbers midirack.asm states about the file
+(MRA_W, MRA_H, MRA_NB, MRA_NS) held to the generator's, so a package that
+reads MIDIRACK.GFX at a stride the art was not drawn at fails here and not
+as a sheared button on a VGA.
+
 Broken on purpose (a byte changed in mrtab.inc, or a song truncated) it FAILS.
 """
 import glob
@@ -80,6 +87,16 @@ def main():
         elif abs(theirs[name] - secs) > 0.05:
             print("t_midtab: %s: the two readers disagree - %.3f s against "
                   "%.3f s" % (name, secs, theirs[name]))
+            ok = False
+    art = os.path.join(ROOT, "tools", "os88midart.py")
+    for args in (["--selfcheck"],
+                 ["--check-asm", os.path.join(ROOT, "apps", "midirack",
+                                              "midirack.asm")]):
+        r = subprocess.run([sys.executable, art] + args, capture_output=True,
+                           text=True)
+        if r.returncode != 0:
+            print("t_midtab: os88midart.py %s refused:\n%s%s" %
+                  (args[0], r.stdout, r.stderr))
             ok = False
     print("t_midtab: %s (%d songs, both readers)" %
           ("ok" if ok else "FAIL", len(files)))

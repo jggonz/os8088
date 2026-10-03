@@ -6021,6 +6021,15 @@ $(BUILD)/midirack.bin: $(MIDIRACK_SRC) | $(BUILD)
 $(BUILD)/midirack.o88: $(BUILD)/midirack.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/midirack.bin -o $@
 
+# THE COLOUR FACE'S PICTURES (SPEC.md 105.9.5): the transport's fifteen faces,
+# drawn by tools/os88midart.py - which first holds the package's four numbers
+# to its own (--check-asm) - and shipped beside the package as MIDIRACK.GFX,
+# LZ-wrapped like any data file. A sidecar and not a part (SPEC.md 20.12):
+# os88pkg.py refuses to compress an image that has parts, and this one packs
+# 30 KB to 25. MRGFX is what the disk lists name.
+$(BUILD)/MIDIRACK.GFX: tools/os88midart.py tools/os88face.py faces/helv.t88                        apps/midirack/midirack.asm | $(BUILD)
+	python3 tools/os88midart.py --check-asm apps/midirack/midirack.asm -o $@
+
 # ...and the SAME SOURCE with -DAPROF (SPEC.md 86.5.1): the diagnostic-counter
 # build, for the profiling tests in docs/plans/completed/AUDIO-PLAN.md. Every counter is inside
 # %ifdef APROF, so the shipped AUDIO.O88 above carries none of it. Press D in
@@ -11897,6 +11906,15 @@ endif
 MIDISONGS720 := $(filter %/BATTLE1.MID %/INTRO.MID,$(MIDISONGS))
 MIDISONGARGS := $(addprefix MEDIA/MIDI:,$(MIDISONGS))
 MIDISONGARGS720 := $(addprefix MEDIA/MIDI:,$(MIDISONGS720))
+ifneq ($(PKGZ),)
+MRGFX := $(ZDATA)/MIDIRACK.GFX
+else
+MRGFX := $(BUILD)/MIDIRACK.GFX
+endif
+
+$(ZDATA)/MIDIRACK.GFX: $(BUILD)/MIDIRACK.GFX tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
+	@mkdir -p $(ZDATA)
+	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
 
 $(ZDATA)/MIDI/%.MID: apps/midirack/songs/%.MID tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
 	@mkdir -p $(ZDATA)/MIDI
@@ -12016,7 +12034,7 @@ os88cz: $(BUILD)/os88cz.com
 .PHONY: os88cz
 
 APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
-        $(APPS_DOSCZ) $(MIDISONGS)
+        $(APPS_DOSCZ) $(MIDISONGS) $(MRGFX)
 # ...and the 360KB disk's list, which is that one less what the media disk
 # carries. Kept as its own variable rather than reusing $(APPS): a rule whose
 # prerequisites name a file that is not on the disk it builds is a dependency
@@ -12111,7 +12129,7 @@ APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(AP
 # taking a value in the MIDDLE of a positional list stops the list being
 # collected, so os88disk.py answered "unrecognized arguments: SYSTEM/DOS:..."
 # for the packages that followed it.
-APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
+APPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(MRGFX)) \
             $(addprefix GAMES:,$(APPS_GAMES)) \
             $(addprefix MEDIA:,$(APPS_DATA)) $(LOGOVIDARG) \
             $(MIDISONGARGS) \
@@ -12119,7 +12137,10 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
             $(addprefix SYSTEM/DOS:,$(APPS_DOS) $(APPS_DOSCZ)) \
             $(APPDATAFOLDER)
 # ...and the 720KB disk's, which is that list with two songs (MIDISONGS720)
-APPSARGS720 := $(filter-out $(MIDISONGARGS),$(APPSARGS))
+# and WITHOUT MIDIRACK.GFX (SPEC.md 105.10): the pictures are 2 clusters and
+# the disk had 3 - a VGA machine booting it draws the transport's buttons in
+# code, which is a complete face and not a broken one
+APPSARGS720 := $(filter-out $(MIDISONGARGS) APPS:$(MRGFX),$(APPSARGS))
 APPSARGS720 := $(filter-out $(APPDATAFOLDER),$(APPSARGS720)) \
                $(MIDISONGARGS720) $(APPDATAFOLDER)
 
@@ -12150,7 +12171,7 @@ APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
 # is in the folder the Open dialog already opens on whichever disk is in the
 # drive (SPEC.md 38.10) - a user who swaps disks should not have to know that
 # this one keeps its module somewhere else.
-MEDIAARGS360 := $(BUILD)/midirack.o88 \
+MEDIAARGS360 := $(BUILD)/midirack.o88 $(MRGFX) \
                 $(addprefix MEDIA:,$(MEDIA_DISK_DATA)) $(LOGOVIDARG) \
                 $(MIDISONGARGS)
 
@@ -12180,7 +12201,7 @@ $(APPSIMG360): $(APPS360) tools/os88disk.py
 # is the geometry's, not the disk's: a media disk exists exactly where the
 # apps disk had to drop the module, and 1.2MB is not such a geometry.
 $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) $(BUILD)/midirack.o88 \
-                $(MIDISONGS) tools/os88disk.py
+                $(MRGFX) $(MIDISONGS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(MEDIAARGS360) \
 		--folder SYSTEM/APPDATA
 
@@ -12468,7 +12489,7 @@ ALLAPPS := $(ALLAPPSFILES) $(BUILD)/runcpm-src.stamp tools/getruncpm.py
 # priced with it; the LOOM=32 directory slots below are priced too.
 
 ALLAPPSARGS := APPS:$(BUILD)/redline.o88 $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
-                                 $(BUILD)/frotz.o88) \
+                                 $(BUILD)/frotz.o88 $(MRGFX)) \
                $(addprefix GAMES:,$(APPS_GAMES)) \
                $(addprefix MEDIA:,$(APPS_DATA)) \
                $(addprefix WORD:,$(BUILD)/word.o88 $(BUILD)/WELCOME.DOC) \

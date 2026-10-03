@@ -119,6 +119,7 @@ mr_onclick:
     call os88ui_chkhit
     jc .c2
     mov al, [mru_ck1+OS88UI_CK_ON]
+    mov [mru_ckd], al               ; (the library has drawn it)
     mov [mr_levels], al
     mov byte [mr_cfgdirty], 1
     call mr_levels_redraw
@@ -128,9 +129,10 @@ mr_onclick:
     call os88ui_chkhit
     jc .c3
     mov al, [mru_ck2+OS88UI_CK_ON]
+    mov [mru_ckd+1], al
     mov [mr_loop], al
     mov byte [mr_cfgdirty], 1
-    call mru_refresh
+    call mru_update
     jmp .out
 .c3:
     call mr_isspk                   ; greyed unless the speaker plays
@@ -139,9 +141,10 @@ mr_onclick:
     call os88ui_chkhit
     jc .nock
     mov al, [mru_ck3+OS88UI_CK_ON]
+    mov [mru_ckd+2], al
     mov [mr_bg], al
     mov byte [mr_cfgdirty], 1
-    call mru_refresh
+    call mru_update
     jmp .out
 .nock:
     call mr_listhit                 ; the list's rows
@@ -211,8 +214,10 @@ mr_list_redraw:
     mov bx, [mr_win]
     call OSAPI_WM_CLIP_SET
     jc .out
+    call mru_layout
+    call mru_origin
     call mru_aim
-    call mru_draw_list
+    call mru_list_sync
     call OSAPI_WM_CLIP_CLEAR
 .out:
     pop bx
@@ -484,7 +489,7 @@ mr_oncmd:                           ; AL = item, AH = menu
     xor byte [mr_levels], 1
     mov byte [mr_cfgdirty], 1
     call mr_levels_redraw
-    call mru_refresh
+    call mru_update
     jmp .out
 .o3:
     cmp al, MR_CMD_BG
@@ -493,7 +498,7 @@ mr_oncmd:                           ; AL = item, AH = menu
     jnc .out                        ; (only the speaker has a background)
     xor byte [mr_bg], 1
     mov byte [mr_cfgdirty], 1
-    call mru_repaint
+    call mru_update
     jmp .out
 .o4:
     call mr_cmd_about
@@ -514,7 +519,7 @@ mr_play_sel:
     cmp byte [mrl_n], 0
     jne .have
     mov word [mr_msg], mr_s_empty
-    call mru_refresh
+    call mru_update
     jmp short .out
 .have:
     call mro_close                  ; the worker out of the song first
@@ -526,14 +531,14 @@ mr_play_sel:
     je .play
 .load:
     mov word [mr_msg], mr_s_loading
-    call mru_refresh
+    call mru_update
     call mrl_load
     jnc .play
-    call mru_repaint                ; ([mr_msg] says why)
+    call mru_update                 ; ([mr_msg] says why)
     jmp short .out
 .play:
     call mro_play                   ; the speaker: returns from its bracket
-    call mru_repaint
+    call mru_update
 .out:
     pop ax
     ret
@@ -542,7 +547,7 @@ mr_cmd_play:
     cmp byte [mr_state], MR_ST_PAUSE
     jne .fresh
     call mro_resume
-    call mru_refresh
+    call mru_update
     ret
 .fresh:
     cmp byte [mr_state], MR_ST_PLAY
@@ -558,7 +563,7 @@ mr_cmd_pause:
     jmp mr_cmd_play                 ; Pause again resumes
 .p:
     call mro_pause
-    call mru_refresh
+    call mru_update
     ret
 
 mr_cmd_stop:
@@ -566,7 +571,7 @@ mr_cmd_stop:
     mov byte [mr_state], MR_ST_STOP
     mov word [mr_msg], mr_s_stopped
     call mr_chan_rest
-    call mru_repaint
+    call mru_update
     ret
 
 ; mr_chan_rest - a stopped song shows its opening instruments and no level
@@ -613,13 +618,13 @@ mr_cmd_eject:
     mov word [mr_msg], mr_s_ready
     call mr_first_reset             ; the rack: back to nothing
     call mr_chan_reset
-    call mru_repaint
+    call mru_update
     ret
 
 mr_cmd_loop:
     xor byte [mr_loop], 1
     mov byte [mr_cfgdirty], 1
-    call mru_refresh
+    call mru_update
     ret
 
 mr_cmd_remove:
@@ -645,7 +650,7 @@ mr_cmd_remove:
 .keep:
     mov byte [mr_loaded], 1         ; (mrl_remove forgot it; it is still in)
 .rep:
-    call mru_repaint
+    call mru_update
 .out:
     ret
 
@@ -656,7 +661,7 @@ mr_cmd_clear:
     mov word [mr_msg], mr_s_ready
     call mr_first_reset
     call mr_chan_reset
-    call mru_repaint
+    call mru_update
     ret
 
 mr_cmd_add:
@@ -688,9 +693,9 @@ mr_cmd_settings:
     mov [mrs_rate], al
     mov al, [mr_bg]
     mov [mrs_bg], al
+    mov al, MR_CARD_SET
+    call mru_card_up
     pop ax
-    mov byte [mr_card], MR_CARD_SET
-    call mru_repaint
     ret
 
 ; -----------------------------------------------------------------------------
@@ -761,15 +766,13 @@ mr_set_ok:
 .b:
     mov [mr_bg], al
     mov byte [mr_card], 0
+    call mru_repaint                ; the card down
     or bl, bl
-    jz .same
+    jz .out
     call mr_cfg_save
     cmp byte [mr_state], MR_ST_STOP
-    je .same
+    je .out
     call mr_play_sel                ; the song again, on the new choice
-    jmp short .out
-.same:
-    call mru_repaint
 .out:
     pop bx
     pop ax
@@ -944,14 +947,18 @@ mr_cfg_save:
 mr_cmd_info:
     cmp byte [mr_loaded], 0
     je .out
-    mov byte [mr_card], MR_CARD_INFO
-    call mru_repaint
+    push ax
+    mov al, MR_CARD_INFO
+    call mru_card_up
+    pop ax
 .out:
     ret
 
 mr_cmd_about:
-    mov byte [mr_card], MR_CARD_ABOUT
-    call mru_repaint
+    push ax
+    mov al, MR_CARD_ABOUT
+    call mru_card_up
+    pop ax
     ret
 
 mr_cmd_quit:
@@ -990,12 +997,12 @@ mr_onwake:
     call OSAPI_FILE_GOTO_QM         ; its folder: the rest of it too
     call mrl_adddir
     call mr_select_name             ; ...and the one double-clicked, played
-    call mru_repaint
+    call mru_update
     call mr_play_sel
     jmp short .fdone
 .auto:
     mov word [mr_msg], mr_s_loading
-    call mru_repaint
+    call mru_update
     call mrl_autoload
     mov word [mr_msg], mr_s_ready
     cmp byte [mrl_n], 0
@@ -1006,7 +1013,7 @@ mr_onwake:
     xor al, al                      ; the first song, ready to play
     call mrl_load
 .rp:
-    call mru_repaint
+    call mru_update
 .fdone:
     call OSAPI_GFX_UNLOCK
 .nofirst:
@@ -1074,7 +1081,7 @@ mr_songend:
     mov byte [mr_state], MR_ST_STOP
     mov word [mr_msg], mr_s_endlist
     call mr_chan_rest
-    call mru_repaint
+    call mru_update
     jmp short .out
 .skip:
     mov ah, [mrl_sel]
@@ -1107,6 +1114,7 @@ mr_onclose:                         ; SI = the window; gfx lock held
     call mr_cfg_save
 .kept:
     call mro_free
+    call mra_free
     push dx
     mov dx, [mr_fseg]
     or dx, dx
@@ -1180,7 +1188,7 @@ mr_onfile:
 .full:
     mov word [mr_msg], mr_s_full
 .rep:
-    call mru_repaint
+    call mru_update
     pop di
     pop si
     pop dx

@@ -33,7 +33,7 @@
 %include "os88api.inc"
 %include "sndpkg.inc"
 
-    OS88_HEADER 'MIDIRack', mr_entry, 3, OS88_STACK_384
+    OS88_HEADER 'MIDIRack', mr_entry, OS88_F_ICON | OS88_F_ASSOC, OS88_STACK_384
 
 ; --- embedded 16x16 icon (SPEC.md 20.2): a rack unit with a keyboard --------
     OS88_ICON16
@@ -49,6 +49,21 @@
     OS88_ASSOC_EXT 'MID'
     OS88_ASSOC_EXT 'SMF'
     OS88_ASSOC16_END
+
+; --- THE COLOUR FACE'S PICTURES (SPEC.md 105.9.5): MIDIRACK.GFX ------------
+; tools/os88midart.py draws the transport's fifteen faces into a file that
+; ships BESIDE the package and is read only on a colour primary - a Hercules
+; or a CGA machine never spends a byte or a revolution on it, and a disk
+; without it plays exactly the same with code-drawn buttons. It is a sidecar
+; and not a part (SPEC.md 20.12) for one measured reason: os88pkg.py refuses
+; to compress an image that has parts, and this image is 30 KB packed to 25.
+; The four numbers are the generator's, which compares them (--check-asm)
+MRA_W       equ 48                  ; a face: whole bytes, so BLITP takes it
+MRA_H       equ 30
+MRA_NB      equ 5                   ; Prev, Play, Pause, Stop, Next
+MRA_NS      equ 3                   ; up, pressed, greyed
+MRA_FACE    equ 4 * MRA_H * MRA_W / 8
+MRA_SIZE    equ MRA_NB * MRA_NS * MRA_FACE
 
 ; =============================================================================
 ; the package-wide bss accumulator (the Audio Player's %assign pattern)
@@ -152,6 +167,7 @@ mr_entry:
     jc .nofm
     mov [mr_fmkind], al
 .nofm:
+    call mra_load                   ; the colour face's pictures, if colour
     mov byte [mr_levels], 1
     mov byte [mr_want], MR_OUT_AUTO
     call OSAPI_ARG_FILE             ; CF = 1 launched empty
@@ -212,6 +228,7 @@ mr_entry:
     clc
     ret
 .fail:
+    call mra_free                   ; (a claim taken before the window was)
     stc
     ret
 
@@ -306,6 +323,7 @@ mr_s_nomid:     db 'Not a .MID file', 0
 mr_s_nodir:     db 'No .MID files in that folder', 0
 
 %define OS88UI_BIMG
+%define OS88UI_BOWN                 ; the colour face draws its own (13.8.10)
 %define OS88UI_CHK
 %define OS88UI_RAD
 %define OS88UI_SCROLL

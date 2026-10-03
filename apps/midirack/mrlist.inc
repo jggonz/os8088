@@ -31,6 +31,7 @@ MRL_ENT     equ 16
     MRB mrl_tvol
 
 mrl_init:
+    call mru_list_owe               ; the rows show other entries now
     mov byte [mrl_n], 0
     mov byte [mrl_sel], 0
     mov byte [mrl_top], 0
@@ -55,6 +56,7 @@ mrl_ptr:
 ;      CF = 1 the list is full
 ; -----------------------------------------------------------------------------
 mrl_add:
+    call mru_list_owe
     push bx
     push cx
     push si
@@ -123,6 +125,7 @@ mrl_add:
 ; mrl_remove - the highlighted entry out of the list (the song playing from
 ; it is stopped by the caller first)
 mrl_remove:
+    call mru_list_owe
     push ax
     push bx
     push cx

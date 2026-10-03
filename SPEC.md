@@ -25305,6 +25305,31 @@ its two shape routines, ~300 bytes every button user carries, for a package
 that draws neither. It refuses to assemble beside `OS88UI_CHK` or
 `OS88UI_RAD`. Tracker (§45.21) is the first consumer of both.
 
+#### 13.8.10 A button the PACKAGE paints — `OS88UI_BOWN` and `OS88UI_OWN`
+
+The library draws two looks, the plain one and §13.8.9's one-write body, and
+a package that wants a third had one option: draw the button itself and hand
+the library only the hit-test. That loses the press. Every edge of the
+gesture — the arm, the drag on and off, the release — reaches the picture
+through `os88ui_btn`, so a hand-painted face is overdrawn in the standard look
+the moment it is pressed, and put back by nobody.
+
+`%define OS88UI_BOWN` before the include adds **`OS88UI_OWN` (flag 128)**:
+the labels-array entry is a near PROC of the package's, called **in place of
+the drawing body** with AX = the button's 0-based index, BX = its rect
+(screen, inclusive, read through `ds:`), DI = its flags with the pressed look
+**already resolved** (`OS88UI_DOWN` for a live press or an `OS88UI_LATCH`,
+`OS88UI_DIS` for a greyed one) and the gfx lock held; it preserves every
+register. The record, the hit-test, the arm, the track and the fire are all
+still the library's, so the package's pressed face is drawn exactly where the
+standard one would have been.
+
+The flag is per BUTTON and the caller's, in its flags array, so a package can
+mix the two and can turn its own off on a display where the standard button
+is the right one — MIDIRack (§105.9.5) paints every button of its colour face
+and none of its mono one. Six bytes in `os88ui_btn` under the define; a
+package that does not set it assembles **byte-identical**.
+
 ### 13.9 A window's TIMER — `W_ONTIMER` (API 0x0342)
 
 **Call me back in N ticks.** `OSAPI_WM_TIMER` (BX = window, AX = ticks from
@@ -161646,9 +161671,11 @@ the message as one line under the panes.
 **Nothing repaints more than it changed** (PERFORMANCE.md rule 1): the
 worker's redraw (`mru_dyn`, at most every 4 ticks, never while covered) draws
 a field only when its value moved, and a level bar moves by ONE fill - the
-strip between its old length and its new one - so no pixel is written twice.
-The transport buttons are pictures (`OS88UI_IMG`) with their captions under
-them; Loop is latched; what cannot act is greyed.
+strip between its old length and its new one - so no pixel is written twice;
+and a COMMAND draws through the same caches (§105.9.4). On the mono face the
+transport buttons are pictures (`OS88UI_IMG`) with their captions under them;
+Loop is latched; what cannot act is greyed. A 4bpp display gets the colour
+face (§105.9.5).
 
 The buttons carry no ellipsis (Add, Load Directory, Settings, MIDI Info,
 About): in a 23%-wide pane it was what the caption lost first. The menus keep
@@ -161683,16 +161710,119 @@ Read at the first wake; written when OK commits a change and, if a check box
 moved, at the close. A foreign file is ignored and a damaged one clamped, and a
 disk without the folder simply keeps nothing.
 
+#### 105.9.4 A command draws what it changed — the caches
+
+The first build drew a command the expensive way: Play, Pause, Loop and a
+check box ran `mru_refresh` - the whole list, every Now Playing line, all
+fourteen buttons and the status lines - and a song change, Stop, Eject, a
+remove and a song's end ran `mru_repaint`, the content white-filled and drawn
+from nothing. **Measured on the 5150** (`tests/mrdraw.py`, every far call
+into a drawing cell of the API table told apart by the stack it was made on):
+a Pause was **197** drawing calls, of which 152 were the buttons, twice; a
+Next **229**; a Stop **178**, and 178 again when nothing was playing.
+
+`mru_update` replaces both. Every part of the window is walked and every part
+is drawn only through its cache:
+
+- **The field slots** (`mru_field`): every string that can change - the
+  playlist's title, the song's name, Length .. Output, the times under the
+  bar, the three status lines, compact's message, the sixteen programs - is
+  drawn through a slot holding its cells as they are on the glass, and a
+  redraw draws one `font_run` of the run between the first cell that differs
+  and the last: `4` when 01:13 becomes 01:14, nothing when nothing moved.
+- **The list's row keys** (`mru_list_sync`): each row's entry, highlight and
+  playing mark as drawn; a row is drawn when its key moves, and the scroll
+  bar when its three numbers do. An add, a remove and a clear owe every row
+  (`mru_list_owe`, called by `mrl_add`, `mrl_remove` and `mrl_init`).
+- **The buttons' flags** (`mru_btn_sync`): a button is drawn when its flags
+  move - Pause greys one and ungreys none.
+- **The check boxes** (`mru_ck_sync`), told by `mr_onclick` when the library
+  has drawn the one it toggled.
+
+A full paint owes every cache, so `W_PAINT` is unchanged. A card going UP
+draws the card alone over a content that has not changed (`mru_card_up`);
+going down is the one command that still repaints. Measured the same way:
+
+| gesture (5150, Hercules) | before | after |
+|---|---:|---:|
+| Play, from Stop | 154 | 16 |
+| Pause | 197 | 7 |
+| Resume | 128 | 7 |
+| Loop on / off | 129 / 129 | 12 / 12 |
+| the selection down a row | 33 | 6 |
+| Next | 229 | 21 |
+| Stop, already stopped | 178 | 0 |
+| the worker, 5 s of play | 114 | 95 |
+
+**The caches are only sound if drawing through them arrives at the picture a
+paint from nothing does**, and `tests/mrdraw.py` asserts exactly that: after a
+run of gestures it captures the content, forces a full repaint (a card up and
+down) and captures again, and the two must be identical to the pixel - on the
+Hercules face and on the VGA's colour one.
+
+#### 105.9.5 The colour face
+
+On a 4bpp display - the one the window is ON (`OSAPI_WM_DISPLAY`, §39.16.4),
+asked at each full paint - and a content box at least 600 x 270 (a VGA's is
+624 x 311, an EGA's ~624 x 279), the window is drawn as a **colour face**. Content is the application's (§76), so it is
+still white paper; what changes is that colour carries meaning the mono face
+had to carry with black:
+
+- **Panes** are a grey frame with a light grey TITLE STRIP ruled off under
+  it, the title black on the strip.
+- **Now Playing is a display**: a black panel, the song's name yellow, a grey
+  rule under it, the six lines green on black (the labels dark, the values
+  bright), and the progress bar bright green in a grey frame. Its line pitch
+  is what the panel's height leaves after the name, the bar and the times,
+  10 to 14 pixels.
+- **The rack's meters** are lit green, then yellow past 5/8, then red past
+  7/8, over black in a grey frame. Growing, a bar is still one fill per zone
+  it crosses, of the change alone; falling, one fill of black.
+- **The playlist's highlight** is blue with the name white, and the playing
+  song's mark is green.
+- **Every button is painted by the package** (§13.8.10): a black frame, a
+  white top-left and a grey bottom-right bevel, the caption black on light
+  grey - pressed, one grey line in at the top and the left and the caption a
+  pixel down and right; greyed, the caption grey. The caption is opaque on
+  the grey with the grey RINGED round it, so no pixel is written twice.
+
+**The transport's buttons are pictures with the caption inside them** - an
+icon over a label, the mock-up's captions-under-the-buttons folded into the
+button - drawn by `tools/os88midart.py`: the icon a shape (triangle, bar,
+square) given a one-pixel outline and a bevel, the label SET IN THE SYSTEM'S
+OWN HELVETICA (`faces/helv.t88`, §6.4) letter by letter on the ink, not the
+face's even advances, so `Pause` is not `Pa use`. Fifteen faces (five
+buttons, up / pressed / greyed), 48 x 30 each, stored PLANAR - one
+`OSAPI_GFX_BLITP` a face, a `rep movsb` a plane a row and no decode (§5.4.3),
+a few milliseconds on the 8088 where a packed blit would be thirty. That is
+why the colour columns are FIXED where the mono face's are shares: the
+playlist 140 (an 8.3 name whole), Now Playing 248 with its inside at 152 on
+the card's 8-pixel grid, five faces at a pitch of 48, and the rack the rest
+(221 on a VGA, every instrument name whole). The rows are anchored bottom-up
+so the panes' last rows line up across the window: Load Directory with Eject
+and Loop, Add and Remove with the transport's bottom edge.
+
+**The faces are a file beside the package, `MIDIRACK.GFX`** (10,800 bytes,
+LZ-wrapped on the disk), read at entry into a claim of its own **only on a
+colour primary**, so a Hercules or a CGA machine never reads it. It is a
+sidecar and not a part (§20.12) for one measured reason: `os88pkg.py` refuses
+to compress an image that has parts, and this image packs 30 KB to 25. A disk
+without the file, a heap without the room, a block the card refuses (a window
+straddling two displays, §5.4.3) - each is the code-drawn bevelled button
+with the caption, a complete face rather than a broken one.
+
 ### 105.10 Disks and cost
 
-`MIDIRACK.O88` is 29,680 bytes of image and 8,078 of bss (24.4 KB packed).
-It rides `APPS\` on the 1.44 MB, 1.2 MB and 720 KB apps disks with the songs
-LZ-wrapped in `MEDIA\MIDI\` (ten songs, 27 clusters). **The 720 KB disk
-carries two** (BATTLE1 and INTRO, 7 clusters, leaving it 5 - it had 36 spare
-and the player is 24) and **the 360 KB apps disk none**: it is curated
-(§24.6.1) and had 12. At 360 KB the
-player and all ten songs ride the MEDIA disk (`media360.img`), the floppy
-whose subject is music already. Both are decisions with this section's date
+`MIDIRACK.O88` is 32,416 bytes of image and 9,710 of bss (25.8 KB packed):
+§105.9.4's caches are ~2.4 KB of that bss and §105.9.5's colour face ~2.1 KB
+of the image. It rides `APPS\` on the 1.44 MB, 1.2 MB and 720 KB apps disks
+with the songs LZ-wrapped in `MEDIA\MIDI\` (ten songs, 27 clusters) and
+`MIDIRACK.GFX` beside it (2 clusters). **The 720 KB disk carries two songs
+and not the pictures** (BATTLE1 and INTRO, 7 clusters; the player is 26 and
+the disk stands at 710 of 713 - the pictures would have left it ONE) and
+**the 360 KB apps disk none**: it is curated (§24.6.1) and had 12. At 360 KB
+the player, its pictures and all ten songs ride the MEDIA disk
+(`media360.img`, 204 of 354), the floppy whose subject is music already. Both are decisions with this section's date
 on them. The `kern_small` disks leave it off (§24.5's table): its outputs are
 a driver's and a rate bracket's, and the songs go with it. `SOUND.DRV` grew 603 bytes for §34.12; no kernel byte moved.
 
@@ -161703,6 +161833,13 @@ re-assembly. The rows (`tests/midirack.py`, soak) drive MartyPC's 5150s: FM
 claims the chip and keys voices; the SB plays without underrunning; the
 speaker keeps its ring full; the tone mode sounds the melody; a song's end
 loops or advances; and the captures (`MARTYPC_WAV`) carry the song's notes.
+
+**`tests/mrdraw.py`** prices the window (§105.9.4) - rows `mrdraw` (the 5150's
+Hercules) and `mrdrawvga` (the VGA XT, the colour face): every drawing call
+per gesture under a ceiling a repaint blows through, and the picture the
+caches drew identical to a forced repaint's. `tests/unit/t_midtab.py` (fast)
+also holds `tools/os88midart.py`'s selfcheck and the four numbers the package
+states about `MIDIRACK.GFX`.
 
 **`make xt-midirack`** is the period machine to hear it on: 86Box's 1986 XT
 at 4.77 MHz with 640 KB, an OTI-067 VGA and a Sound Blaster 2.0 (220h, IRQ 5,

@@ -24,6 +24,8 @@
 ; =============================================================================
 
 MRU_TALLH   equ 262                 ; content height for the tall layout
+MRU_COLW    equ 600                 ; ...and the box the colour face needs: an
+MRU_COLH    equ 270                 ; EGA's is ~624 x 279, a VGA's 624 x 311
 MRU_NB      equ 14                  ; buttons in the group
 MRU_NBC     equ 10                  ; ...of which compact shows the first
 
@@ -48,6 +50,17 @@ MRB_QUIT    equ 13
     MRW mru_cw                      ; ...and size
     MRW mru_ch
     MRB mru_cmp                     ; 1 = the compact layout
+    MRB mru_col                     ; 1 = the COLOUR face (SPEC.md 105.9.5):
+                                    ; a 4bpp display, decided at each full
+                                    ; paint, and tall
+    MRW mra_seg                     ; MIDIRACK.GFX's claim, or 0
+    MRW mru_hdr                     ; a pane's title strip
+    MRW mru_lbt                     ; the list box's top, under the title
+    MRW mru_nrp                     ; Now Playing's line pitch
+    MRW mru_nmx                     ; ...the name's x, y and cells
+    MRW mru_nmy
+    MRW mru_nmw
+    MRBUF mru_lcd, 8                ; the colour face's display
     MRW mru_rp                      ; the row pitch
     MRW mru_bh                      ; a text button's height
     MRBUF mru_p1, 8                 ; the panes (content-relative x1 y1 x2 y2)
@@ -122,6 +135,21 @@ mru_layout:
     mov word [mru_rp], 8
     mov word [mru_bh], 12
 .tall:
+    cmp byte [mru_cmp], 0           ; the colour face is tall, and wide
+    jne .mono
+    cmp cx, MRU_COLW
+    jb .mono
+    cmp dx, MRU_COLH
+    jb .mono
+    cmp byte [mru_col], 0
+    je .mono0
+    call mru_lay_col
+    jmp .nost
+.mono:
+    mov byte [mru_col], 0
+.mono0:
+    mov word [mru_hdr], 14
+    mov word [mru_lbt], 14
     ; --- the bottom: the button row and the Status pane (tall only) --------
     mov ax, dx                      ; AX = the panes' bottom
     sub ax, 4
@@ -244,7 +272,7 @@ mru_lay_list:
     add ax, 4                       ; buttons (two rows of them)
     mov [mru_lb], ax
     mov ax, [mru_p1+2]
-    add ax, 14
+    add ax, [mru_lbt]
     mov [mru_lb+2], ax
     mov ax, [mru_p1+4]
     sub ax, 4
@@ -289,6 +317,10 @@ mru_lay_list:
     sub ax, 3
     xor dx, dx
     div word [mru_rp]
+    cmp ax, MRU_LMAX
+    jbe .lr
+    mov ax, MRU_LMAX
+.lr:
     mov [mru_lrows], ax
     pop di
     pop dx
@@ -320,6 +352,25 @@ mru_lay_np:
     je .n
     mov word [mru_nplines], 5       ; compact: no Mode line
 .n:
+    mov ax, [mru_rp]
+    mov [mru_nrp], ax
+    mov ax, [mru_p2]                ; the name, in the black bar
+    add ax, 8
+    mov [mru_nmx], ax
+    mov bx, [mru_p2+4]
+    sub bx, 4
+    sub bx, ax
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    mov [mru_nmw], bx
+    mov ax, [mru_p2+2]
+    add ax, 15
+    cmp byte [mru_cmp], 0
+    je .nmy
+    dec ax
+.nmy:
+    mov [mru_nmy], ax
     mov ax, [mru_rp]
     mul word [mru_nplines]
     add ax, [mru_npy]
@@ -434,6 +485,24 @@ mru_lay_rack:
     xor dx, dx
     div word [mru_rkcols]
     mov [mru_rkcw], ax
+    mov ax, [mru_rp]                ; the mono face's rows: the window's
+    mov [mru_rkp], ax               ; pitch, a black bar in a black frame
+    mov word [mru_rbx], 22
+    mov ax, MRU_BARW
+    cmp word [mru_rkcols], 1
+    je .bw
+    mov ax, MRU_BARW2
+.bw:
+    mov [mru_rbw], ax
+    add ax, 26 - 22 + 22
+    mov [mru_rpx], ax
+    mov [mru_rz1], ax               ; (every zone black: past any length)
+    mov [mru_rz2], ax
+    mov byte [mru_rc1], CBLACK
+    mov byte [mru_rc2], CBLACK
+    mov byte [mru_rc3], CBLACK
+    mov byte [mru_rc0], CWHITE
+    mov byte [mru_rcf], CBLACK
     pop dx
     pop bx
     pop ax
@@ -450,8 +519,8 @@ mru_lay_status:
     mov ax, [mru_p4]
     add ax, 8
     mov [mru_stx], ax
-    mov ax, [mru_p4+4]              ; the text runs to the divider, 170 px
-    sub ax, 178                     ; from the right
+    mov ax, [mru_p4+4]              ; the text runs to the divider, 176 px
+    sub ax, 186                     ; from the right
     sub ax, [mru_stx]
     shr ax, 1
     shr ax, 1
@@ -461,6 +530,229 @@ mru_lay_status:
     mov word [mru_ck2+OS88UI_CK_LABEL], mru_l_loop
     mov word [mru_ck3+OS88UI_CK_LABEL], mru_l_bg
     pop si
+    pop bx
+    pop ax
+    ret
+
+;  =============================================================================
+; mru_lay_col - THE COLOUR FACE'S LAYOUT (SPEC.md 105.9.5), from the live box.
+; Fixed columns where the mono face's are shares - the playlist 140 (an 8.3
+; name whole), Now Playing 248, the rack the rest (221 on a VGA: a 16-letter
+; instrument whole) - because the transport's faces are BLITP pictures and
+; sit on the card's 8-pixel grid: Now Playing's inside starts at 152, five
+; faces at a pitch of 48. The rows are anchored BOTTOM-UP so the panes' last
+; rows line up across the window: Load Directory with Eject and Loop, Add and
+; Remove with the transport's bottom edge
+; =============================================================================
+MRU_CP1     equ 4                   ; the playlist: 4..143
+MRU_CP2     equ 148                 ; Now Playing: 148..395 - its inside at
+MRU_CP3     equ 399                 ; 152, on the grid; the rack from 399
+MRU_FACEP   equ 48                  ; the transport's pitch (a face's width)
+
+mru_lay_col:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov word [mru_rp], 11
+    mov word [mru_bh], 18
+    mov word [mru_hdr], 14
+    mov word [mru_lbt], 18
+    mov word [mru_capy], 0          ; the captions are IN the faces
+    mov word [mru_nplines], 6
+    ; --- the bottom row: Settings, MIDI Info, About ... Quit --------------
+    mov dx, [mru_ch]
+    sub dx, 5                       ; DX = its y2
+    mov bx, dx
+    sub bx, 17                      ; BX = its y1
+    mov di, MRB_SET
+    mov ax, 4
+    mov cx, 99
+    call mru_brect
+    mov di, MRB_INFO
+    mov ax, 104
+    mov cx, 199
+    call mru_brect
+    mov di, MRB_ABOUT
+    mov ax, 204
+    mov cx, 299
+    call mru_brect
+    mov di, MRB_QUIT
+    mov cx, [mru_cw]
+    sub cx, 5
+    mov ax, cx
+    sub ax, 95
+    call mru_brect
+    ; --- the Status pane: a title, three lines, three boxes ---------------
+    mov ax, bx
+    sub ax, 5
+    mov [mru_p4+6], ax
+    sub ax, 55
+    mov [mru_p4+2], ax
+    mov word [mru_p4], 4
+    mov cx, [mru_cw]
+    sub cx, 5
+    mov [mru_p4+4], cx
+    mov ax, [mru_p4+2]
+    add ax, 18
+    mov [mru_sty], ax
+    mov word [mru_stx], 4 + 8
+    mov ax, cx                      ; the text runs to the divider
+    sub ax, 186 + 4 + 8
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    mov [mru_stw], ax
+    mov word [mru_ck1+OS88UI_CK_LABEL], mru_l_lev
+    mov word [mru_ck2+OS88UI_CK_LABEL], mru_l_loop
+    mov word [mru_ck3+OS88UI_CK_LABEL], mru_l_bg
+    ; --- the three panes --------------------------------------------------
+    mov ax, [mru_p4+2]
+    sub ax, 4
+    mov [mru_p1+6], ax
+    mov [mru_p2+6], ax
+    mov [mru_p3+6], ax
+    mov word [mru_p1+2], 4
+    mov word [mru_p2+2], 4
+    mov word [mru_p3+2], 4
+    mov word [mru_p1], MRU_CP1
+    mov word [mru_p1+4], MRU_CP2 - 5
+    mov word [mru_p2], MRU_CP2
+    mov word [mru_p2+4], MRU_CP3 - 4
+    mov word [mru_p3], MRU_CP3
+    mov ax, [mru_cw]
+    sub ax, 5
+    mov [mru_p3+4], ax
+    call mru_lay_list               ; the playlist's shape is the mono one's
+    ; --- Now Playing: Eject / Loop at the bottom, the faces above, the
+    ;     display filling the rest ------------------------------------------
+    mov dx, [mru_p2+6]
+    sub dx, 4                       ; DX = Eject's y2
+    mov bx, dx
+    sub bx, 17
+    mov ax, MRU_CP2 + 4
+    mov cx, (MRU_CP2 + MRU_CP3 - 4) / 2 - 2
+    mov di, MRB_EJECT
+    call mru_brect
+    mov ax, cx
+    add ax, 4
+    mov cx, MRU_CP3 - 4 - 4
+    mov di, MRB_LOOP
+    call mru_brect
+    mov dx, bx                      ; the faces: 30 rows, 5 above Eject
+    sub dx, 5
+    mov bx, dx
+    sub bx, 29
+    mov ax, MRU_CP2 + 4
+    mov di, MRB_PREV
+.t:
+    mov cx, ax
+    add cx, 43                      ; the button is 44 of the face's 48
+    call mru_brect
+    add ax, MRU_FACEP
+    inc di
+    cmp di, MRB_NEXT
+    jbe .t
+    mov word [mru_lcd], MRU_CP2 + 4 ; the display
+    mov word [mru_lcd+4], MRU_CP3 - 4 - 4
+    mov ax, [mru_p2+2]
+    add ax, [mru_hdr]
+    add ax, 4
+    mov [mru_lcd+2], ax
+    mov cx, bx
+    sub cx, 6
+    mov [mru_lcd+6], cx
+    sub cx, ax                      ; CX = its height - 1
+    ; the pitch of its six lines: what is left of the height after the
+    ; name, the bar, the times and their gaps (45 + 5 pitches), 10..14
+    mov ax, cx
+    sub ax, 45 + 4
+    jns .p0
+    xor ax, ax
+.p0:
+    mov si, 5
+    xor dx, dx
+    div si
+    cmp ax, 10
+    jae .p1
+    mov ax, 10
+.p1:
+    cmp ax, 14
+    jbe .p2
+    mov ax, 14
+.p2:
+    mov [mru_nrp], ax
+    mov si, ax                      ; ...and the air above and below it
+    mov dx, 5
+    mul dx
+    add ax, 45
+    neg ax
+    add ax, cx
+    sar ax, 1
+    jns .p3
+    xor ax, ax
+.p3:
+    add ax, [mru_lcd+2]             ; AX = the name's y
+    mov [mru_nmy], ax
+    mov word [mru_nmx], MRU_CP2 + 4 + 6
+    mov word [mru_npx], MRU_CP2 + 4 + 6
+    mov word [mru_nmw], (MRU_CP3 - 4 - 4 - 4 - (MRU_CP2 + 4 + 6)) / 8
+    add ax, 8 + 6
+    mov [mru_npy], ax               ; the first line
+    mov dx, si
+    shl dx, 1
+    shl dx, 1
+    add dx, si
+    add ax, dx                      ; + 5 pitches: the last line's y
+    add ax, 8 + 4
+    mov word [mru_bar], MRU_CP2 + 4 + 6
+    mov word [mru_bar+4], MRU_CP3 - 4 - 4 - 6
+    mov [mru_bar+2], ax
+    add ax, 7
+    mov [mru_bar+6], ax
+    add ax, 4
+    mov [mru_tmy], ax
+    ; --- the rack ---------------------------------------------------------
+    mov ax, [mru_p3]
+    add ax, 4
+    mov [mru_rkx], ax
+    mov ax, [mru_p3+2]
+    add ax, [mru_hdr]
+    add ax, 16
+    mov [mru_rky], ax
+    mov bx, [mru_p3+6]              ; sixteen rows, 12 apart if they fit
+    sub bx, 2
+    sub bx, ax
+    mov ax, bx
+    mov cl, 4
+    shr ax, cl
+    cmp ax, 12
+    jbe .rp
+    mov ax, 12
+.rp:
+    mov [mru_rkp], ax
+    mov word [mru_rkcols], 1
+    mov word [mru_rkrows], 16
+    mov ax, [mru_p3+4]
+    sub ax, [mru_p3]
+    sub ax, 8
+    mov [mru_rkcw], ax
+    mov word [mru_rbx], 20
+    mov word [mru_rbw], MRU_CBARW
+    mov word [mru_rpx], 20 + MRU_CBARW + 4
+    mov word [mru_rz1], (MRU_CBARW - 2) * 5 / 8
+    mov word [mru_rz2], (MRU_CBARW - 2) * 7 / 8
+    mov byte [mru_rc1], CLGREEN
+    mov byte [mru_rc2], CYELLOW
+    mov byte [mru_rc3], CLRED
+    mov byte [mru_rc0], CBLACK
+    mov byte [mru_rcf], CDGRAY
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -527,8 +819,8 @@ mru_aim:
     ; --- the check boxes: rows of the Status pane's right side -------------
     cmp byte [mru_cmp], 0
     jne .nock
-    mov ax, [mru_p4+4]
-    sub ax, 160
+    mov ax, [mru_p4+4]              ; (8 clear of the pane's right edge)
+    sub ax, 168
     add ax, [mru_ox]
     mov bx, [mru_sty]
     add bx, [mru_oy]
@@ -580,7 +872,12 @@ mru_aim:
 mru_recmain:
     push ax
     mov word [mru_btrec+OS88UI_BT_RECTS], mru_rect
-    mov word [mru_btrec+OS88UI_BT_LABELS], mru_blabs
+    mov ax, mru_blabs
+    cmp byte [mru_col], 0
+    je .lab
+    mov ax, mru_blabc               ; colour: every one is OUR painter
+.lab:
+    mov [mru_btrec+OS88UI_BT_LABELS], ax
     mov word [mru_btrec+OS88UI_BT_FLAGS], mru_bflg
     mov ax, MRU_NB
     cmp byte [mru_cmp], 0
@@ -610,13 +907,21 @@ mru_ckrect:
 mru_flags:
     push ax
     push bx
+    mov ax, OS88UI_FILL             ; colour: every button the package's own
+    cmp byte [mru_col], 0           ; (SPEC.md 13.8.10)
+    je .base
+    mov ax, OS88UI_FILL | OS88UI_OWN
+.base:
     xor bx, bx
 .z:
-    mov word [mru_bflg+bx], OS88UI_FILL
+    mov [mru_bflg+bx], ax
     add bx, 2
     cmp bx, MRU_NB * 2
     jb .z
+    cmp byte [mru_col], 0           ; mono: the transport's pictures
+    jne .tr
     mov ax, OS88UI_IMG | OS88UI_FILL
+.tr:
     mov [mru_bflg+MRB_PREV*2], ax
     mov [mru_bflg+MRB_PLAY*2], ax
     mov [mru_bflg+MRB_PAUSE*2], ax
@@ -666,6 +971,277 @@ mru_l_info:  db 'MIDI Info', 0
 mru_l_about: db 'About', 0
 mru_l_quit:  db 'Quit', 0
 mru_caps:    dw mru_c_prev, mru_c_play, mru_c_pause, mru_c_stop, mru_c_next
+; the colour face's labels: every entry the painter (OS88UI_OWN), which
+; reads the caption below by the button's index
+mru_blabc:  times MRU_NB dw mru_bpaint
+mru_bcap:   dw mru_l_add, mru_l_rem, mru_l_dir
+            dw mru_c_prev, mru_c_play, mru_c_pause, mru_c_stop, mru_c_next
+            dw mru_l_eject, mru_l_loopb
+            dw mru_l_set, mru_l_info, mru_l_about, mru_l_quit
+
+; -----------------------------------------------------------------------------
+; mru_bpaint - the colour face's button (SPEC.md 105.9.5, os88ui.inc's
+; OS88UI_OWN): AX = the index, BX = the rect (screen), DI = the flags with
+; the pressed look resolved. The transport's five are MIDIRACK.GFX's
+; pictures, one OSAPI_GFX_BLITP each - a plane a row, no decode; every other
+; button, and those five when the file is not here or the card refuses the
+; block (a straddle, an origin off the grid), is a bevelled grey button with
+; its caption. Every register preserved
+; -----------------------------------------------------------------------------
+mru_bpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov [mru_pbx], bx
+    mov [mru_pdi], di
+    mov [mru_pax], ax
+    cmp ax, MRB_PREV
+    jb .bevel
+    cmp ax, MRB_NEXT
+    ja .bevel
+    cmp word [mra_seg], 0
+    je .bevel
+    sub ax, MRB_PREV                ; the face: button x 3 + the state
+    mov cx, ax
+    shl ax, 1
+    add ax, cx
+    test di, OS88UI_DIS
+    jz .nd
+    add ax, 2
+    jmp short .st
+.nd:
+    test di, OS88UI_DOWN
+    jz .st
+    inc ax
+.st:
+    mov cx, MRA_FACE
+    mul cx
+    mov si, ax                      ; ES:SI = its plane 0
+    mov es, [mra_seg]
+    mov ax, [bx]
+    mov bx, [bx+2]
+    mov cx, MRA_W
+    mov dx, MRA_H
+    mov di, (MRA_H * MRA_W / 8) | 0x4000    ; the plane step, walking a clip
+    mov bp, MRA_W / 8
+    call OSAPI_GFX_BLITP
+    jnc .out
+.bevel:
+    mov ax, [mru_pax]
+    mov bx, [mru_pbx]
+    mov di, [mru_pdi]
+    call mru_bevel
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+    MRW mru_pax                     ; mru_bpaint's arguments, for the
+    MRW mru_pbx                     ; bevel a refused blit falls back to
+    MRW mru_pdi
+    MRBUF mru_bv, 8                 ; mru_bevel's rect...
+    MRBUF mru_bf, 8                 ; ...its face...
+    MRW mru_btx                     ; ...and its caption's pen and width
+    MRW mru_bty
+    MRW mru_btw
+
+; mru_bevel - button AX's bevelled face at rect BX, flags DI: a black frame,
+; a light top-left and a grey bottom-right (or one grey line in at the top
+; and the left, pressed, with the caption a pixel down and right), and the
+; caption opaque on the grey with the grey ringed round it - each pixel once
+mru_bevel:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    shl ax, 1
+    mov si, ax
+    mov si, [mru_bcap+si]           ; SI = the caption
+    mov ax, [bx]
+    mov [mru_bv], ax
+    mov ax, [bx+2]
+    mov [mru_bv+2], ax
+    mov ax, [bx+4]
+    mov [mru_bv+4], ax
+    mov ax, [bx+6]
+    mov [mru_bv+6], ax
+    xor al, al                      ; the frame
+    call OSAPI_SET_COLOR
+    mov ax, [mru_bv]
+    mov bx, [mru_bv+2]
+    mov cx, [mru_bv+4]
+    mov dx, [mru_bv+6]
+    call OSAPI_GFX_FRAME
+    inc ax                          ; the face, before the bevel takes its
+    inc bx                          ; lines out of it
+    dec cx
+    dec dx
+    mov [mru_bf], ax
+    mov [mru_bf+2], bx
+    mov [mru_bf+4], cx
+    mov [mru_bf+6], dx
+    xor cx, cx                      ; CX = the caption's shift
+    test di, OS88UI_DIS
+    jnz .up
+    test di, OS88UI_DOWN
+    jz .up
+    mov al, CDGRAY                  ; PRESSED: one grey line in at the top
+    mov ah, CDGRAY                  ; and the left
+    call mru_bvtl
+    inc cx
+    jmp short .face
+.up:
+    mov al, CWHITE                  ; UP: light top-left...
+    mov ah, CWHITE
+    call mru_bvtl
+    mov al, CDGRAY                  ; ...grey bottom-right
+    call mru_bvbr
+.face:
+    push cx
+    push si
+    call OSAPI_FONT_WIDTH           ; AX = the caption's width
+    pop si
+    pop cx
+    mov [mru_btw], ax
+    mov dx, [mru_bv+4]              ; centred in the button, + the shift
+    sub dx, [mru_bv]
+    inc dx
+    sub dx, ax
+    sar dx, 1
+    add dx, [mru_bv]
+    add dx, cx
+    cmp dx, [mru_bf]
+    jge .x1
+    mov dx, [mru_bf]
+.x1:
+    mov [mru_btx], dx
+    mov dx, [mru_bv+6]
+    sub dx, [mru_bv+2]
+    inc dx
+    sub dx, 8
+    sar dx, 1
+    add dx, [mru_bv+2]
+    add dx, cx
+    mov [mru_bty], dx
+    mov byte [mru_ink], CLGRAY      ; the ring: above, below, left, right
+    mov ax, [mru_bf]
+    mov bx, [mru_bf+2]
+    mov cx, [mru_bf+4]
+    mov dx, [mru_bty]
+    dec dx
+    call mru_afill
+    mov bx, [mru_bty]
+    add bx, 8
+    mov dx, [mru_bf+6]
+    call mru_afill
+    mov bx, [mru_bty]
+    mov dx, bx
+    add dx, 7
+    mov cx, [mru_btx]
+    dec cx
+    call mru_afill
+    mov ax, [mru_btx]
+    add ax, [mru_btw]
+    mov cx, [mru_bf+4]
+    call mru_afill
+    mov cx, [mru_btx]               ; the caption
+    mov dx, [mru_bty]
+    mov ax, CBLACK | (CLGRAY << 8)
+    test di, OS88UI_DIS
+    jz .ink
+    mov al, CDGRAY
+.ink:
+    call OSAPI_FONT_RUN
+    xor al, al
+    call OSAPI_SET_COLOR
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; mru_bvtl - the face's top row in AL and its left column in AH, taken out
+; of [mru_bf]
+mru_bvtl:
+    push ax
+    push bx
+    push cx
+    push dx
+    push ax
+    mov [mru_ink], al
+    mov ax, [mru_bf]
+    mov bx, [mru_bf+2]
+    mov cx, [mru_bf+4]
+    mov dx, bx
+    call mru_afill
+    pop ax
+    mov [mru_ink], ah
+    mov ax, [mru_bf]
+    mov bx, [mru_bf+2]
+    inc bx
+    mov cx, ax
+    mov dx, [mru_bf+6]
+    call mru_afill
+    inc word [mru_bf]
+    inc word [mru_bf+2]
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; mru_bvbr - the face's bottom row and right column in AL, taken out of it
+mru_bvbr:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov [mru_ink], al
+    mov ax, [mru_bf]
+    mov bx, [mru_bf+6]
+    mov cx, [mru_bf+4]
+    mov dx, bx
+    call mru_afill
+    mov ax, cx
+    mov bx, [mru_bf+2]
+    mov dx, [mru_bf+6]
+    dec dx
+    call mru_afill
+    dec word [mru_bf+4]
+    dec word [mru_bf+6]
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; mru_afill - AX..DX (SCREEN) in [mru_ink], or nothing when it is empty
+mru_afill:
+    cmp cx, ax
+    jl .r
+    cmp dx, bx
+    jl .r
+    push ax
+    mov al, [mru_ink]
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+.r:
+    ret
+
 mru_c_prev:  db 'Prev', 0
 mru_c_play:  db 'Play', 0
 mru_c_pause: db 'Pause', 0
@@ -744,50 +1320,188 @@ mru_textinv:
 ; (an opaque field: what was longer before is overwritten, once)
 mru_textn:
     push ax
+    push si
+    call mru_pad
+    mov si, mru_s2
+    call mru_text
+    pop si
+    pop ax
+    ret
+
+; mru_pad - SI cut or padded with spaces to AX cells (at most MRU_FMAX) into
+; mru_s2; AX = the cells, clamped
+mru_pad:
     push bx
+    push cx
     push si
     push di
+    cmp ax, MRU_FMAX
+    jbe .w
+    mov ax, MRU_FMAX
+.w:
+    mov cx, ax
     mov di, mru_s2
-    mov bx, ax
-    cmp bx, 46
-    jbe .c
-    mov bx, 46
 .c:
-    or bx, bx
-    jz .end
-    mov al, [si]
-    or al, al
+    jcxz .end
+    mov bl, [si]
+    or bl, bl
     jz .pad
     inc si
-    mov [di], al
+    mov [di], bl
     inc di
-    dec bx
+    dec cx
     jmp short .c
 .pad:
     mov byte [di], ' '
     inc di
-    dec bx
-    jnz .pad
+    loop .pad
 .end:
     mov byte [di], 0
-    mov si, mru_s2
-    call mru_text
     pop di
     pop si
+    pop cx
     pop bx
-    pop ax
     ret
 
-; mru_frame - the rect at SI (relative), black
-mru_frame:
+; -----------------------------------------------------------------------------
+; THE FIELD CACHE (SPEC.md 105.9.4). Every string the window shows that can
+; change - a Now Playing value, a status line, a channel's program - is drawn
+; through a SLOT that holds the cells as they are on the glass, and a redraw
+; draws only the run between the first cell that differs and the last: one
+; font_run, of "4" when 01:13 becomes 01:14, and of nothing at all when the
+; value did not move. A slot is OWED (0xFF) after a full paint, so the first
+; draw is whole. The pair is [mru_pair]: AL ink, AH paper, font_run's own
+; -----------------------------------------------------------------------------
+MRU_FMAX    equ 46                  ; the cells a field may take
+MRU_FW      equ 48                  ; a slot: the cells drawn, then the cells
+MRF_TITLE   equ 0                   ; the playlist's title
+MRF_NAME    equ 1                   ; Now Playing: the name bar
+MRF_LEN     equ 2                   ; ...Length .. Output (0..5 + MRF_LEN)
+MRF_TL      equ 8                   ; ...the times under the bar, left
+MRF_TR      equ 9                   ; ...and right
+MRF_ST1     equ 10                  ; the Status pane's three lines
+MRF_MSG     equ 13                  ; compact's one message line
+MRF_PROG    equ 14                  ; the rack: sixteen programs
+MRU_NF      equ MRF_PROG + MR_NCH
+    MRBUF mru_fc, MRU_NF * MRU_FW
+    MRW mru_pair                    ; the pair a field draws in
+    MRW mru_fn                      ; mru_field's: the field's cells...
+    MRW mru_fi                      ; ...and the first that differs
+
+; mru_fowe - every slot owed (a full paint has white-filled them)
+mru_fowe:
+    push cx
+    push di
+    mov di, mru_fc
+    mov cx, MRU_NF
+.o:
+    mov byte [di], 0xFF
+    add di, MRU_FW
+    loop .o
+    pop di
+    pop cx
+    ret
+
+; mru_field - SI at (CX, DX) in AX cells, through slot BX: only the cells that
+; differ from the slot's, in one run
+mru_field:
     push ax
     push bx
     push cx
     push dx
+    push si
+    push di
+    call mru_pad                    ; mru_s2 = the field, AX = its cells
+    mov [mru_fn], ax
+    mov di, bx                      ; DI = the slot: BX x 48
+    shl di, 1
+    shl di, 1
+    shl di, 1
+    shl di, 1
+    mov bx, di
+    shl di, 1
+    add di, bx
+    add di, mru_fc
+    xor bx, bx                      ; BX = the first cell to draw
+    cmp [di], al
+    jne .all                        ; owed, or another width: all of it
+.f:
+    cmp bx, [mru_fn]
+    jae .done                       ; not one cell moved
+    mov al, [mru_s2+bx]
+    cmp al, [bx+di+1]
+    jne .fd
+    inc bx
+    jmp short .f
+.fd:
+    mov [mru_fi], bx
+    mov bx, [mru_fn]
+.l:
+    dec bx                          ; the last that differs (the first does,
+    mov al, [mru_s2+bx]             ; so this stops by it)
+    cmp al, [bx+di+1]
+    je .l
+    jmp short .draw
+.all:
+    mov word [mru_fi], 0
+    mov bx, [mru_fn]
+    or bx, bx
+    jz .copy
+    dec bx
+.draw:                              ; cells [mru_fi] .. BX
+    mov al, [mru_s2+bx+1]
+    push ax
+    mov byte [mru_s2+bx+1], 0
+    push bx
+    mov bx, [mru_fi]
+    lea si, [mru_s2+bx]
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add cx, bx
+    add cx, [mru_ox]
+    add dx, [mru_oy]
+    mov ax, [mru_pair]
+    call OSAPI_FONT_RUN
+    pop bx
+    pop ax
+    mov [mru_s2+bx+1], al
+.copy:
+    mov bx, [mru_fn]
+    mov [di], bl
+.cp:
+    or bx, bx
+    jz .done
+    dec bx
+    mov al, [mru_s2+bx]
+    mov [bx+di+1], al
+    jmp short .cp
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; mru_frame - the rect at SI (relative), black; mru_framec in colour AL
+mru_frame:
+    push ax
     xor al, al
+    call mru_framec
+    pop ax
+    ret
+mru_framec:
+    push ax
+    push bx
+    push cx
+    push dx
     call OSAPI_SET_COLOR
     call mru_absr
     call OSAPI_GFX_FRAME
+    xor al, al
+    call OSAPI_SET_COLOR
     pop dx
     pop cx
     pop bx
@@ -848,11 +1562,17 @@ mru_fill:
 
     MRB mru_ink
 
-; mru_pane - the pane at SI, framed, its title BX at its top-left
+; mru_pane - the pane at SI, framed, its title BX at its top-left. On the
+; colour face a pane is a grey frame with a title STRIP: a light grey band
+; ruled off under it, the title black on the band
 mru_pane:
+    push ax
+    push bx
     push cx
     push dx
     push si
+    cmp byte [mru_col], 0
+    jne .col
     call mru_frame
     mov cx, [si]
     add cx, 6
@@ -860,9 +1580,48 @@ mru_pane:
     add dx, 3
     mov si, bx
     call mru_text
+    jmp short .out
+.col:
+    push bx
+    mov al, CDGRAY
+    call OSAPI_SET_COLOR
+    call mru_absr
+    call OSAPI_GFX_FRAME            ; the frame...
+    add bx, [mru_hdr]
+    mov dx, bx
+    call OSAPI_GFX_FILL             ; ...the rule under the strip...
+    push ax
+    mov al, CLGRAY
+    call OSAPI_SET_COLOR
+    pop ax
+    inc ax
+    dec cx
+    sub bx, [mru_hdr]
+    inc bx
+    mov dx, bx
+    add dx, [mru_hdr]
+    sub dx, 2
+    call OSAPI_GFX_FILL             ; ...the strip...
+    xor al, al
+    call OSAPI_SET_COLOR
+    pop bx
+    mov cx, [si]                    ; ...and the title
+    add cx, 6
+    mov dx, [si+2]
+    add dx, 4
+    mov si, bx
+    or si, si
+    jz .out                         ; (the playlist's is a field: see below)
+    add cx, [mru_ox]
+    add dx, [mru_oy]
+    mov ax, CBLACK | (CLGRAY << 8)
+    call OSAPI_FONT_RUN
+.out:
     pop si
     pop dx
     pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1029,11 +1788,21 @@ mru_draw:
     push dx
     push si
     push di
+    call mru_mode
     call mru_layout
     call mru_origin
     call mru_aim
+    call mru_fowe                   ; every field, bar and box owed: the
+    mov word [mru_pair], CBLACK | (CWHITE << 8) ; kernel has white-filled them
+    mov byte [mru_ckd], 0xFF
+    mov byte [mru_ckd+1], 0xFF
+    mov byte [mru_ckd+2], 0xFF
     mov si, mru_p1
     mov bx, mru_t_list
+    cmp byte [mru_col], 0
+    je .pt
+    xor bx, bx                      ; colour: the strip alone, the field after
+.pt:
     call mru_pane
     call mru_list_title
     call mru_draw_list
@@ -1065,6 +1834,92 @@ mru_draw:
     pop ax
     ret
 
+; mru_mode - the face this paint draws: colour on a 4bpp display (the one
+; this window is ON, SPEC.md 39.16.4 - which answers the more restrictive of
+; two for a straddle), mono otherwise; the layout takes it back to mono on a
+; box too small for it
+mru_mode:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [mru_col], 0
+    mov bx, [mr_win]
+    call OSAPI_WM_DISPLAY           ; DH = bits per pixel
+    cmp dh, 1
+    jbe .m
+    mov byte [mru_col], 1
+.m:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mra_load - the colour face's pictures, MIDIRACK.GFX beside us, into a claim
+; of their own (SPEC.md 105.9.5). Only on a COLOUR PRIMARY: a Hercules or a
+; CGA machine never reads it. Silent when the file is not there, the heap is
+; short or the file is not exactly the size the four numbers say - the
+; transport is then code-drawn, which is a complete face and not a broken
+; one. UI task, at entry (a read and a claim, SPEC.md 20.6 rule 7)
+; -----------------------------------------------------------------------------
+mra_load:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    call OSAPI_VIDEO                ; DH = the primary's bits per pixel
+    cmp dh, 1
+    jbe .out
+    mov ax, (MRA_SIZE + 1023) / 1024
+    call OSAPI_MEM_CLAIM            ; DX = the segment
+    jc .out
+    push dx
+    mov es, dx
+    xor bx, bx
+    mov cx, ((MRA_SIZE + 1023) / 1024) * 1024
+    xor dx, dx
+    mov si, mra_name
+    call OSAPI_FILE_READ            ; DX:AX = its size (unwrapped, 20.14)
+    pop si
+    jc .free
+    or dx, dx
+    jnz .free
+    cmp ax, MRA_SIZE
+    jne .free
+    mov [mra_seg], si
+    jmp short .out
+.free:
+    mov dx, si
+    call OSAPI_MEM_FREE
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; mra_free - the pictures' claim back (the window is closing)
+mra_free:
+    push dx
+    mov dx, [mra_seg]
+    or dx, dx
+    jz .r
+    call OSAPI_MEM_FREE
+    mov word [mra_seg], 0
+.r:
+    pop dx
+    ret
+
+mra_name:   db 'MIDIRACK.GFX', 0
+
 mru_t_list: db 'Playlist', 0
 mru_t_np:   db 'Now Playing', 0
 mru_t_rack: db 'Channel Rack', 0
@@ -1093,6 +1948,10 @@ mru_list_title:
     add cx, 6
     mov dx, [mru_p1+2]
     add dx, 3
+    cmp byte [mru_col], 0
+    je .ty
+    inc dx                          ; (on the colour face's strip)
+.ty:
     mov ax, [mru_p1+4]
     sub ax, cx
     sub ax, 4
@@ -1128,7 +1987,16 @@ mru_list_title:
     pop ax
 .put:
     mov si, mru_s
-    call mru_textn
+    push bx
+    push word [mru_pair]
+    cmp byte [mru_col], 0
+    je .tp
+    mov word [mru_pair], CBLACK | (CLGRAY << 8)
+.tp:
+    mov bx, MRF_TITLE
+    call mru_field
+    pop word [mru_pair]
+    pop bx
 .out:
     pop di
     pop si
@@ -1142,30 +2010,107 @@ mru_list_title:
 ; -----------------------------------------------------------------------------
 mru_draw_list:
     push ax
+    push si
+    mov si, mru_lb
+    mov al, CBLACK
+    cmp byte [mru_col], 0
+    je .f
+    mov al, CDGRAY
+.f:
+    call mru_framec
+    pop si
+    pop ax
+    call mru_list_owe
+    ; fall through
+
+; mru_list_sync - the rows whose entry, highlight or mark moved since they
+; were drawn, and the bar if its three numbers did
+mru_list_sync:
+    push ax
     push bx
     push cx
-    push dx
-    push si
     push di
-    mov si, mru_lb
-    call mru_frame
     xor di, di                      ; DI = the row
 .r:
     cmp di, [mru_lrows]
     jae .sb
+    mov ax, di                      ; AX = what the row shows: the entry,
+    add al, [mrl_top]               ; with the highlight (bit 8) and the
+    xor ah, ah                      ; loaded mark (bit 9) - or 0xFE, blank
+    cmp al, [mrl_n]
+    jb .ent
+    mov ax, 0x00FE
+    jmp short .key
+.ent:
+    cmp al, [mrl_sel]
+    jne .ns
+    or ah, 1
+.ns:
+    cmp byte [mr_loaded], 0
+    je .key
+    cmp al, [mr_lidx]
+    jne .key
+    or ah, 2
+.key:
+    mov bx, di
+    shl bx, 1
+    cmp ax, [mru_rowk+bx]
+    je .nx
+    mov [mru_rowk+bx], ax
     call mru_draw_row
+.nx:
     inc di
     jmp short .r
 .sb:
+    mov bx, 8                       ; the bar: total, fit, pos
+.sc:
+    mov ax, [mru_sb+bx]
+    cmp ax, [mru_sbk+bx-8]
+    jne .sd
+    add bx, 2
+    cmp bx, 14
+    jb .sc
+    jmp short .out
+.sd:
+    mov ax, [mru_sb+8]
+    mov [mru_sbk], ax
+    mov ax, [mru_sb+10]
+    mov [mru_sbk+2], ax
+    mov ax, [mru_sb+12]
+    mov [mru_sbk+4], ax
     mov bx, mru_sb
     call os88ui_sbar
+.out:
     pop di
-    pop si
-    pop dx
     pop cx
     pop bx
     pop ax
     ret
+
+; mru_list_owe - every row and the bar owed (a full paint, or the list's
+; entries moved under them: an add, a remove, a clear)
+mru_list_owe:
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov di, mru_rowk
+    mov cx, MRU_LMAX
+    mov ax, 0xFFFF
+    cld
+    rep stosw
+    mov [mru_sbk], ax
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+MRU_LMAX    equ 40                  ; the most rows the list box shows
+    MRBUF mru_rowk, MRU_LMAX * 2    ; each row's key as drawn (0xFFFF owed)
+    MRBUF mru_sbk, 6                ; the bar's numbers as drawn
 
 ; mru_draw_row - row DI of the list box: its mark and its name, the
 ; highlighted entry white on black, an empty row blank
@@ -1191,13 +2136,19 @@ mru_draw_row:
     shr cx, 1
     shr cx, 1
     mov [mru_roww], cx
-    ; the row's ground (one fill: the highlight, or white)
+    ; the row's ground (one fill: the highlight, or white) - black in
+    ; mono, the colour face's blue
     mov byte [mru_ink], CWHITE
+    mov byte [mru_rowhl], 0
     cmp al, [mrl_n]
     jae .gr
     cmp al, [mrl_sel]
     jne .gr
+    mov byte [mru_rowhl], 1
     mov byte [mru_ink], CBLACK
+    cmp byte [mru_col], 0
+    je .gr
+    mov byte [mru_ink], CBLUE
 .gr:
     push dx
     mov ax, [mru_lb]
@@ -1223,11 +2174,19 @@ mru_draw_row:
     mov si, mru_i_cur
 .m:
     push ax
-    mov al, CWHITE                  ; ground, ink - inverted on the highlight
-    mov ah, CBLACK
-    cmp byte [mru_ink], CBLACK
-    jne .pen
-    xchg al, ah
+    mov ah, CBLACK                  ; ground, ink - inverted on the highlight
+    cmp byte [mru_col], 0
+    je .ink
+    mov ah, CDGRAY                  ; colour: a grey page, a GREEN mark on the
+    cmp si, mru_i_cur               ; song that is loaded
+    jne .ink
+    mov ah, CGREEN
+.ink:
+    mov al, CWHITE
+    cmp byte [mru_rowhl], 0
+    je .pen
+    mov al, [mru_ink]               ; on the highlight: white on its ground
+    mov ah, CWHITE
 .pen:
     call OSAPI_ICON_PEN
     pop ax
@@ -1245,8 +2204,8 @@ mru_draw_row:
     mov cx, [mru_lb]
     add cx, 16
     mov ax, [mru_roww]
-    cmp byte [mru_ink], CBLACK
-    je .inv
+    cmp byte [mru_rowhl], 0
+    jne .inv
     call mru_textn
     jmp short .out
 .inv:
@@ -1270,7 +2229,17 @@ mru_draw_row:
     pop di
     pop si
     mov si, mru_s
-    call mru_textinv
+    push ax
+    push cx
+    push dx
+    add cx, [mru_ox]
+    add dx, [mru_oy]
+    mov al, CWHITE
+    mov ah, [mru_ink]
+    call OSAPI_FONT_RUN
+    pop dx
+    pop cx
+    pop ax
 .out:
     pop di
     pop si
@@ -1281,6 +2250,7 @@ mru_draw_row:
     ret
 
     MRB mru_rowi
+    MRB mru_rowhl                   ; the row being drawn is the highlight
     MRW mru_roww
 
 ; -----------------------------------------------------------------------------
@@ -1294,6 +2264,9 @@ mru_draw_np:
     push dx
     push si
     push di
+    push word [mru_pair]
+    cmp byte [mru_col], 0
+    jne .lcd
     mov ax, [mru_p2]                ; the name bar: black, the name white
     add ax, 4
     mov bx, [mru_p2+2]
@@ -1308,23 +2281,33 @@ mru_draw_np:
 .nb:
     mov byte [mru_ink], CBLACK
     call mru_fill
-    call mru_name                   ; SI = the song's name
-    mov cx, [mru_p2]
-    add cx, 8
-    mov dx, [mru_p2+2]
-    add dx, 15
-    cmp byte [mru_cmp], 0
-    je .nn
-    dec dx
-.nn:
-    call mru_textinv
+    mov word [mru_pair], CBLACK | (CWHITE << 8)
+    jmp short .named
+.lcd:                               ; THE DISPLAY: black, a grey rule under
+    mov si, mru_lcd                 ; the name, the lines in green
+    mov al, CBLACK
+    call mru_fillr
+    mov al, CDGRAY
+    call mru_framec
+    mov ax, [mru_lcd]
+    add ax, 4
+    mov cx, [mru_lcd+4]
+    sub cx, 4
+    mov bx, [mru_nmy]
+    add bx, 8 + 3
+    mov dx, bx
+    mov byte [mru_ink], CDGRAY
+    call mru_fill
+    mov word [mru_pair], CGREEN | (CBLACK << 8)
+.named:
+    call mru_np_name
     ; the labels
     xor di, di
 .lb:
     cmp di, [mru_nplines]
     jae .lbd
     mov ax, di
-    mul word [mru_rp]
+    mul word [mru_nrp]
     add ax, [mru_npy]
     mov dx, ax
     mov cx, [mru_npx]
@@ -1337,12 +2320,27 @@ mru_draw_np:
 .full:
     shl bx, 1
     mov si, [mru_nplab+bx]
-    call mru_text
+    push ax
+    push cx
+    push dx
+    add cx, [mru_ox]
+    add dx, [mru_oy]
+    mov ax, [mru_pair]
+    call OSAPI_FONT_RUN
+    pop dx
+    pop cx
+    pop ax
     inc di
     jmp short .lb
 .lbd:
+    pop word [mru_pair]
     mov si, mru_bar                 ; the bar's frame
-    call mru_frame
+    mov al, CBLACK
+    cmp byte [mru_col], 0
+    je .bf
+    mov al, CDGRAY
+.bf:
+    call mru_framec
     mov word [mru_lsec], 0xFFFF     ; every field owed
     mov word [mru_lbar], 0xFFFF
     mov word [mru_lmeas], 0xFFFF
@@ -1387,6 +2385,43 @@ mru_draw_np:
     pop ax
     ret
 
+; mru_vpair - [mru_pair] for a Now Playing VALUE: black on white, or the
+; display's bright green on black
+mru_vpair:
+    mov word [mru_pair], CBLACK | (CWHITE << 8)
+    cmp byte [mru_col], 0
+    je .r
+    mov word [mru_pair], CLGREEN | (CBLACK << 8)
+.r:
+    ret
+
+; mru_np_name - the song's name in the bar, white on black, as a field
+mru_np_name:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push word [mru_pair]
+    call mru_name                   ; SI = the song's name
+    mov cx, [mru_nmx]
+    mov dx, [mru_nmy]
+    mov ax, [mru_nmw]
+    mov word [mru_pair], CWHITE | (CBLACK << 8)
+    cmp byte [mru_col], 0
+    je .nn
+    mov word [mru_pair], CYELLOW | (CBLACK << 8)
+.nn:
+    mov bx, MRF_NAME
+    call mru_field
+    pop word [mru_pair]
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 mru_nplab:  dw mru_n_len, mru_n_el, mru_n_meas, mru_n_tempo, mru_n_mode, mru_n_out
 mru_n_len:   db 'Length  :', 0
 mru_n_el:    db 'Elapsed :', 0
@@ -1423,7 +2458,7 @@ mru_vline:
     jb .f
     dec ax                          ; Output is the fifth compact line
 .f:
-    mul word [mru_rp]
+    mul word [mru_nrp]
     add ax, [mru_npy]
     mov dx, ax
     mov cx, [mru_npx]
@@ -1440,6 +2475,10 @@ mru_vline:
 mru_vcells:
     push cx
     mov ax, [mru_p2+4]
+    cmp byte [mru_col], 0
+    je .e
+    mov ax, [mru_lcd+4]
+.e:
     sub ax, [mru_npx]
     sub ax, MRU_VCOL * 8 + 4
     mov cl, 3
@@ -1450,10 +2489,13 @@ mru_vcells:
 ; mru_np_static - Length, Mode and Output
 mru_np_static:
     push ax
+    push bx
     push cx
     push dx
     push si
     push di
+    push word [mru_pair]
+    call mru_vpair
     mov di, mru_s                   ; Length
     mov ax, [mr_lenlo]
     mov dx, [mr_lenhi]
@@ -1474,12 +2516,14 @@ mru_np_static:
     call mru_vline
     mov si, mru_s
     call mru_vcells
-    call mru_textn
+    mov bx, MRF_LEN
+    call mru_field
     mov cx, [mru_bar+4]             ; ...and under the bar's right end
     sub cx, 39
     mov dx, [mru_tmy]
     mov ax, 5
-    call mru_textn
+    mov bx, MRF_TR
+    call mru_field
     mov si, mru_m_norm              ; Mode
     cmp byte [mr_loop], 0
     je .m
@@ -1489,17 +2533,21 @@ mru_np_static:
     call mru_vline
     jc .o
     call mru_vcells
-    call mru_textn
+    mov bx, MRF_LEN + 4
+    call mru_field
 .o:
     call mru_outname                ; Output
     mov ax, 5
     call mru_vline
     call mru_vcells
-    call mru_textn
+    mov bx, MRF_LEN + 5
+    call mru_field
+    pop word [mru_pair]
     pop di
     pop si
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -1558,6 +2606,8 @@ mru_np_dyn:
     push dx
     push si
     push di
+    push word [mru_pair]
+    call mru_vpair
     call mr_elapsed                 ; AX = seconds, DX = thousandths
     push dx
     cmp ax, [mru_lsec]
@@ -1569,11 +2619,13 @@ mru_np_dyn:
     call mru_vline
     mov si, mru_s
     call mru_vcells
-    call mru_textn
+    mov bx, MRF_LEN + 1
+    call mru_field
     mov cx, [mru_bar]               ; and under the bar's left end
     mov dx, [mru_tmy]
     mov ax, 5
-    call mru_textn
+    mov bx, MRF_TL
+    call mru_field
 .nosec:
     pop dx                          ; the bar, in pixels
     mov ax, [mru_bar+4]
@@ -1604,7 +2656,8 @@ mru_np_dyn:
     call mru_vline
     mov si, mru_s
     call mru_vcells
-    call mru_textn
+    mov bx, MRF_LEN + 2
+    call mru_field
 .nomeas:
     call mr_bpm                     ; AX = beats a minute
     cmp ax, [mru_ltempo]
@@ -1618,8 +2671,10 @@ mru_np_dyn:
     call mru_vline
     mov si, mru_s
     call mru_vcells
-    call mru_textn
+    mov bx, MRF_LEN + 3
+    call mru_field
 .notempo:
+    pop word [mru_pair]
     pop di
     pop si
     pop dx
@@ -1629,6 +2684,23 @@ mru_np_dyn:
     ret
 
 mru_sl:     db ' / ', 0
+
+; mru_bar0 / mru_bar1 - [mru_ink] for the progress bar's unlit and lit parts:
+; white and black, or black and the display's green
+mru_bar0:
+    mov byte [mru_ink], CWHITE
+    cmp byte [mru_col], 0
+    je .r
+    mov byte [mru_ink], CBLACK
+.r:
+    ret
+mru_bar1:
+    mov byte [mru_ink], CBLACK
+    cmp byte [mru_col], 0
+    je .r
+    mov byte [mru_ink], CLGREEN
+.r:
+    ret
 mru_bpms:   db ' BPM', 0
 
 ; mru_meas_val - AX = the measure playing, 1-based (0 with nothing loaded)
@@ -1668,7 +2740,7 @@ mru_bar_to:
     jne .delta
     xor bx, bx                      ; a full paint: white past the end too
     push ax
-    mov byte [mru_ink], CWHITE
+    call mru_bar0
     mov cx, [mru_bar+4]
     dec cx
     add ax, [mru_bar]
@@ -1687,11 +2759,11 @@ mru_bar_to:
 .delta:
     cmp ax, bx
     je .out
-    mov byte [mru_ink], CBLACK      ; growing: black from the old end
     jb .shrink
+    call mru_bar1                   ; growing: lit from the old end
     jmp short .go
 .shrink:
-    mov byte [mru_ink], CWHITE      ; shrinking (a new song): white back
+    call mru_bar0                   ; shrinking (a new song): unlit back
     xchg ax, bx
 .go:
     mov cx, ax                      ; CX = the right end, BX = the left
@@ -1738,7 +2810,29 @@ mru_draw_rack:
     shr ax, 1
     shr ax, 1
     shr ax, 1
+    cmp byte [mru_col], 0
+    jne .hc
     call mru_textn
+    jmp short .rows
+.hc:
+    push cx                         ; colour: three headings in grey, each
+    push dx                         ; over its own column
+    add cx, [mru_ox]
+    add dx, [mru_oy]
+    mov ax, CDGRAY | (CWHITE << 8)
+    mov si, mru_rkc1
+    call OSAPI_FONT_RUN
+    push cx
+    add cx, [mru_rbx]
+    mov si, mru_rkc2
+    call OSAPI_FONT_RUN
+    pop cx
+    add cx, [mru_rpx]
+    mov si, mru_rkc3
+    call OSAPI_FONT_RUN
+    pop dx
+    pop cx
+.rows:
     xor bx, bx
 .r:
     mov byte [mru_lw+bx], 0xFF      ; every bar owed
@@ -1755,8 +2849,12 @@ mru_draw_rack:
 
 mru_rkh:    db 'Ch  Lev   Program / Instrument', 0
 mru_rkh2:   db 'Ch Lev  Program', 0
+mru_rkc1:   db 'Ch', 0
+mru_rkc2:   db 'Lev', 0
+mru_rkc3:   db 'Program / Instrument', 0
 MRU_BARW    equ 32                  ; a level bar's width
 MRU_BARW2   equ 20                  ; ...in two columns
+MRU_CBARW   equ 28                  ; ...and on the colour face
 
 ; mru_rkpos - CX, DX = channel BX's row origin
 mru_rkpos:
@@ -1770,12 +2868,25 @@ mru_rkpos:
     add ax, [mru_rkx]
     mov cx, ax
     pop ax
-    mul word [mru_rp]
+    mul word [mru_rkp]
     add ax, [mru_rky]
     mov dx, ax
     pop bx
     pop ax
     ret
+
+; the rack row's geometry and colours, the layout's (mono / colour):
+    MRW mru_rkp                     ; the rows' pitch
+    MRW mru_rbx                     ; the bar's x in the row
+    MRW mru_rbw                     ; ...its width, frame and all
+    MRW mru_rpx                     ; the program's x in the row
+    MRW mru_rz1                     ; the bar's zones: lit pixels below this
+    MRW mru_rz2                     ; are the first colour, below this the
+    MRB mru_rc1                     ; second, and the rest the third
+    MRB mru_rc2
+    MRB mru_rc3
+    MRB mru_rc0                     ; ...and the unlit part
+    MRB mru_rcf                     ; the frame
 
 ; mru_rack_row - channel BX's number, bar and program
 mru_rack_row:
@@ -1796,32 +2907,26 @@ mru_rack_row:
     call mru_dec
     mov si, mru_s
     call mru_text
-    push cx
-    push dx
-    add cx, 22                      ; the bar's frame
-    mov ax, cx
     push bx
+    mov ax, cx                      ; the bar's frame
+    add ax, [mru_rbx]
     mov bx, dx
     mov cx, ax
-    add cx, MRU_BARW - 1
-    cmp word [mru_rkcols], 1
-    je .bw
-    sub cx, MRU_BARW - MRU_BARW2
-.bw:
-    mov dx, bx
+    add cx, [mru_rbw]
+    dec cx
     add dx, 6
     add ax, [mru_ox]
     add bx, [mru_oy]
     add cx, [mru_ox]
     add dx, [mru_oy]
     push ax
-    xor al, al
+    mov al, [mru_rcf]
     call OSAPI_SET_COLOR
     pop ax
     call OSAPI_GFX_FRAME
+    xor al, al
+    call OSAPI_SET_COLOR
     pop bx
-    pop dx
-    pop cx
     call mru_rack_bar               ; the fill, from nothing
     call mru_rack_prog
     pop di
@@ -1831,21 +2936,23 @@ mru_rack_row:
     pop ax
     ret
 
-; mru_rack_bar - channel BX's bar to its level (one fill of the change)
+; mru_rack_bar - channel BX's bar to its level: the CHANGE alone - growing,
+; the lit run from the old end to the new in each zone it crosses (one fill
+; in mono, where every zone is black); shrinking, one fill of the unlit
+; colour back
 mru_rack_bar:
     push ax
     push bx
     push cx
     push dx
     push si
+    push di
     call mru_rkpos
-    add cx, 23                      ; the bar's inside
+    add cx, [mru_rbx]               ; CX = the bar's inside, DX its top row
+    inc cx
     inc dx
-    mov si, MRU_BARW - 2
-    cmp word [mru_rkcols], 1
-    je .w
-    mov si, MRU_BARW2 - 2
-.w:
+    mov si, [mru_rbw]
+    sub si, 2                       ; SI = the inside's width
     xor ax, ax
     cmp byte [mr_levels], 0
     je .lv
@@ -1866,46 +2973,88 @@ mru_rack_bar:
     mov [mru_lw+bx], al
     cmp ah, 0xFF
     jne .delta
-    push ax                         ; a full paint: the white part first
-    mov byte [mru_ink], CWHITE
-    xor ah, ah
-    push cx
-    push dx
-    add ax, cx                      ; x1 = left + length
-    mov bx, dx
-    add cx, si
-    dec cx
-    add dx, 4
-    cmp ax, cx
-    ja .nw
-    call mru_fill
-.nw:
-    pop dx
-    pop cx
+    xor ah, ah                      ; a full paint: the unlit part first,
+    push ax                         ; then grow from nothing
+    mov di, si
+    call mru_rbfill0                ; [AL, SI) unlit
     pop ax
-    xor ah, ah
 .delta:
     cmp al, ah
     je .out
-    mov byte [mru_ink], CBLACK
     ja .grow
-    mov byte [mru_ink], CWHITE
-    xchg al, ah
-.grow:                              ; AH = the shorter, AL = the longer
-    mov bl, ah
-    xor bh, bh
-    xor ah, ah
-    add ax, cx                      ; x2 = left + longer - 1
-    dec ax
-    add bx, cx                      ; x1 = left + shorter
-    push ax
-    mov ax, bx
+    xchg al, ah                     ; shrinking: [new, old) unlit
+    mov di, ax
+    and di, 0x00FF
+    mov al, ah
+    call mru_rbfill0
+    jmp short .out
+.grow:                              ; [AH, AL) lit, zone by zone
+    mov di, ax
+    and di, 0x00FF                  ; DI = the new end
+    mov al, ah
+    xor ah, ah                      ; AX = the old end
+    mov bl, [mru_rc1]
+    mov si, [mru_rz1]
+    call mru_rbzone
+    mov bl, [mru_rc2]
+    mov si, [mru_rz2]
+    call mru_rbzone
+    mov bl, [mru_rc3]
+    mov si, di
+    call mru_rbzone
+.out:
+    pop di
+    pop si
+    pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; mru_rbzone - the lit run from AX to min(DI, SI) in colour BL, AX advanced
+; to its end (CX, DX: the bar's inside)
+mru_rbzone:
+    cmp si, di
+    jbe .e
+    mov si, di
+.e:
+    cmp ax, si
+    jae .r
+    push bx
+    push cx
+    push dx
+    mov [mru_ink], bl
+    mov bx, dx                      ; [AX, SI) at the bar's rows
+    add dx, 4
+    add ax, cx
+    add cx, si
+    dec cx
+    call mru_fill
+    pop dx
+    pop cx
+    pop bx
+    mov ax, si
+.r:
+    ret
+
+; mru_rbfill0 - the unlit run [AL, DI) (CX, DX: the bar's inside)
+mru_rbfill0:
+    push ax
+    push bx
+    push cx
+    push dx
+    xor ah, ah
+    cmp ax, di
+    jae .r
+    mov bl, [mru_rc0]
+    mov [mru_ink], bl
     mov bx, dx
     add dx, 4
+    add ax, cx
+    add cx, di
+    dec cx
     call mru_fill
-.out:
-    pop si
+.r:
     pop dx
     pop cx
     pop bx
@@ -1920,11 +3069,7 @@ mru_rack_prog:
     push si
     push di
     call mru_rkpos
-    add cx, 26 + MRU_BARW
-    cmp word [mru_rkcols], 1
-    je .x
-    sub cx, MRU_BARW - MRU_BARW2
-.x:
+    add cx, [mru_rpx]
     mov di, mru_s
     cmp bx, MR_DRUMCH
     jne .mel
@@ -1967,7 +3112,10 @@ mru_rack_prog:
     shr ax, 1
     shr ax, 1
     mov si, mru_s
-    call mru_textn
+    push bx
+    add bx, MRF_PROG
+    call mru_field
+    pop bx
     pop di
     pop si
     pop dx
@@ -1989,10 +3137,10 @@ mru_draw_status:
     push di
     call mru_st_lines
     mov ax, [mru_p4+4]              ; the divider
-    sub ax, 168
+    sub ax, 176
     add ax, [mru_ox]
     mov bx, [mru_p4+2]
-    add bx, 14
+    add bx, [mru_hdr]
     add bx, [mru_oy]
     mov cx, ax
     mov dx, [mru_p4+6]
@@ -2000,20 +3148,17 @@ mru_draw_status:
     add dx, [mru_oy]
     push ax
     xor al, al
+    cmp byte [mru_col], 0
+    je .dv
+    mov al, CDGRAY
+    inc bx                          ; (clear of the strip's rule)
+.dv:
     call OSAPI_SET_COLOR
     pop ax
     call OSAPI_GFX_FILL
-    xor di, di
-    mov bx, mru_ck1
-    call os88ui_chk
-    mov bx, mru_ck2
-    call os88ui_chk
-    mov bx, mru_ck3                 ; Play in Background means something only
-    call mr_isspk                   ; where the speaker is the output
-    jc .bg
-    mov di, OS88UI_DIS
-.bg:
-    call os88ui_chk
+    xor al, al
+    call OSAPI_SET_COLOR
+    call mru_ck_sync
     pop di
     pop si
     pop dx
@@ -2021,6 +3166,51 @@ mru_draw_status:
     pop bx
     pop ax
     ret
+
+; mru_ck_sync - the three check boxes whose state moved since they were
+; drawn (os88ui_chkhit redraws the one it toggles, and mr_onclick tells
+; mru_ckd so)
+mru_ck_sync:
+    push ax
+    push bx
+    push di
+    cmp byte [mru_cmp], 0
+    jne .out                        ; compact has none
+    mov al, [mru_ck1+OS88UI_CK_ON]
+    cmp al, [mru_ckd]
+    je .k2
+    mov [mru_ckd], al
+    xor di, di
+    mov bx, mru_ck1
+    call os88ui_chk
+.k2:
+    mov al, [mru_ck2+OS88UI_CK_ON]
+    cmp al, [mru_ckd+1]
+    je .k3
+    mov [mru_ckd+1], al
+    xor di, di
+    mov bx, mru_ck2
+    call os88ui_chk
+.k3:
+    xor di, di                      ; Play in Background means something only
+    mov al, [mru_ck3+OS88UI_CK_ON]  ; where the speaker is the output: bit 7
+    call mr_isspk                   ; of what was drawn is its greying
+    jc .bg
+    mov di, OS88UI_DIS
+    or al, 0x80
+.bg:
+    cmp al, [mru_ckd+2]
+    je .out
+    mov [mru_ckd+2], al
+    mov bx, mru_ck3
+    call os88ui_chk
+.out:
+    pop di
+    pop bx
+    pop ax
+    ret
+
+    MRBUF mru_ckd, 3                ; the boxes as drawn (0xFF owed)
 
 ; mru_st_lines - the Status pane's three lines
 mru_st_lines:
@@ -2030,17 +3220,22 @@ mru_st_lines:
     push si
     call mru_mkdev
     call mru_mkfile
+    push bx
     mov cx, [mru_stx]
     mov dx, [mru_sty]
     mov ax, [mru_stw]
     mov si, mru_dev
-    call mru_textn
+    mov bx, MRF_ST1
+    call mru_field
     add dx, [mru_rp]
     mov si, mru_file
-    call mru_textn
+    inc bx
+    call mru_field
     add dx, [mru_rp]
     mov si, [mr_msg]
-    call mru_textn
+    inc bx
+    call mru_field
+    pop bx
     pop si
     pop dx
     pop cx
@@ -2061,29 +3256,10 @@ mru_draw_msg:
     shr ax, 1
     shr ax, 1
     mov si, [mr_msg]
-    call mru_textn
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; mru_status_msg - the message line alone (after a command), clipped by the
-; caller's region
-mru_status_msg:
-    cmp byte [mru_cmp], 0
-    jne mru_draw_msg
-    push ax
-    push cx
-    push dx
-    push si
-    mov cx, [mru_stx]
-    mov dx, [mru_sty]
-    add dx, [mru_rp]
-    add dx, [mru_rp]
-    mov ax, [mru_stw]
-    mov si, [mr_msg]
-    call mru_textn
+    push bx
+    mov bx, MRF_MSG
+    call mru_field
+    pop bx
     pop si
     pop dx
     pop cx
@@ -2195,12 +3371,32 @@ mru_f_op:    db ' (', 0
 mru_f_bytes: db ' bytes) - MIDI type ', 0
 
 ; -----------------------------------------------------------------------------
-; mru_draw_buttons - every live button of the group
+; mru_draw_buttons - every live button of the group (a full paint)
+; mru_btn_sync - ...or only those whose flags moved since they were drawn:
+; Pause greys one button and ungreys none, so it draws ONE, not fourteen
 ; -----------------------------------------------------------------------------
 mru_draw_buttons:
     push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov di, mru_bdr
+    mov cx, MRU_NB
+    mov ax, 0xFFFF                  ; every one owed
+    cld
+    rep stosw
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ; fall through
+mru_btn_sync:
+    push ax
     push bx
     push cx
+    push si
     push word [mru_btrec+OS88UI_BT_RECTS]   ; EVERY button the layout has,
     push word [mru_btrec+OS88UI_BT_LABELS]  ; whatever the record is live
     push word [mru_btrec+OS88UI_BT_FLAGS]   ; on: under a card it is none or
@@ -2208,22 +3404,32 @@ mru_draw_buttons:
     call mru_recmain                ; would go unpainted. Put back after - only
     mov cx, [mru_btrec+OS88UI_BT_N] ; the UI task draws buttons, and nothing
     xor ax, ax                      ; presses in between
+    xor si, si
 .b:
     cmp ax, cx
     jae .out
     inc ax
+    mov bx, [mru_bflg+si]
+    cmp bx, [mru_bdr+si]
+    je .nx
+    mov [mru_bdr+si], bx
     mov bx, mru_btrec
     call os88ui_btn
+.nx:
+    add si, 2
     jmp short .b
 .out:
     pop word [mru_btrec+OS88UI_BT_N]
     pop word [mru_btrec+OS88UI_BT_FLAGS]
     pop word [mru_btrec+OS88UI_BT_LABELS]
     pop word [mru_btrec+OS88UI_BT_RECTS]
+    pop si
     pop cx
     pop bx
     pop ax
     ret
+
+    MRBUF mru_bdr, MRU_NB * 2       ; each button's flags as drawn
 
 ; =============================================================================
 ; mru_changed - CF = 1 when the worker has anything to draw
@@ -2266,7 +3472,18 @@ mru_dyn:
     call mru_origin
     cmp byte [mr_card], 0
     jne .out
+    mov word [mru_pair], CBLACK | (CWHITE << 8)
     call mru_np_dyn
+    call mru_rack_sync
+.out:
+    pop bx
+    pop ax
+    ret
+
+; mru_rack_sync - the rack's rows whose bar or program moved (mrc_dirty)
+mru_rack_sync:
+    push ax
+    push bx
     xor bx, bx
 .c:
     mov al, [mrc_dirty+bx]
@@ -2284,7 +3501,6 @@ mru_dyn:
     inc bx
     cmp bx, MR_NCH
     jb .c
-.out:
     pop bx
     pop ax
     ret
@@ -2326,9 +3542,18 @@ mru_repaint:
     pop ax
     ret
 
-; mru_refresh - the panes that a transport command changes, without the full
-; white: the list, Now Playing's values, the buttons and the message
-mru_refresh:
+; =============================================================================
+; mru_update - WHAT A COMMAND CHANGED, AND NOTHING ELSE (SPEC.md 105.9.4).
+; Every part of the window is walked and every part is drawn only through its
+; cache - the field slots, the list's row keys and bar, the check boxes and
+; the buttons' flags - so a Pause draws one button and one status run, and a
+; Next draws two rows, the name, the values that moved and the programs that
+; changed. A full paint is the kernel's W_PAINT and a card's, nobody else's.
+; Under a card it draws nothing: the card is on top, and its going down is a
+; repaint
+; =============================================================================
+mru_update:
+    push ax
     push bx
     mov bx, [mr_win]
     call OSAPI_WM_CLIP_SET
@@ -2337,29 +3562,56 @@ mru_refresh:
     call mru_origin
     call mru_aim
     cmp byte [mr_card], 0
-    jne .card
-    call mru_draw_list
+    jne .cl
+    mov word [mru_pair], CBLACK | (CWHITE << 8)
+    call mru_list_title
+    call mru_list_sync
+    call mru_np_name
     call mru_np_static
-    mov word [mru_lsec], 0xFFFF
-    mov word [mru_lmeas], 0xFFFF
+    mov word [mru_lsec], 0xFFFF     ; (formatted again; the slots decide what
+    mov word [mru_lmeas], 0xFFFF    ; is drawn)
     mov word [mru_ltempo], 0xFFFF
     call mru_np_dyn
-    call mru_draw_buttons
+    call mru_rack_sync
     cmp byte [mru_cmp], 0
     jne .msg
     call mru_st_lines
-    jmp short .cl
+    call mru_ck_sync
+    jmp short .bt
 .msg:
     call mru_draw_msg
+.bt:
+    call mru_btn_sync
 .cl:
     call OSAPI_WM_CLIP_CLEAR
 .out:
     pop bx
+    pop ax
     ret
-.card:
-    call OSAPI_WM_CLIP_CLEAR
-    pop bx
+
+; mru_card_up - card AL goes up: the card alone, over what is there. The
+; content under it is unchanged and stays drawn; the record goes to the
+; card's controls (mru_aim). A card already up is under it and would show
+; round the edges of a smaller one, so that case is a repaint
+mru_card_up:
+    cmp byte [mr_card], 0
+    je .first
+    mov [mr_card], al
     jmp mru_repaint
+.first:
+    mov [mr_card], al
+    push bx
+    mov bx, [mr_win]
+    call OSAPI_WM_CLIP_SET
+    jc .out
+    call mru_layout
+    call mru_origin
+    call mru_aim
+    call mru_draw_card
+    call OSAPI_WM_CLIP_CLEAR
+.out:
+    pop bx
+    ret
 
 ; =============================================================================
 ; THE CARDS (SPEC.md 105.9.3): About, MIDI Info and Settings, drawn last over

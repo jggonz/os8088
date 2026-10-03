@@ -2954,6 +2954,20 @@ SOAK = [
         "its start, and without it the last song's end stops the playlist",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("mrdraw", "soak", py("tests/mrdraw.py"), 200.0,
+        "MIDIRack's redraw, priced in drawing calls (SPEC.md 105.9.4): every "
+        "far call into a drawing cell of the API table, per gesture, told "
+        "apart as the UI task's or the worker's by its stack; each gesture "
+        "under a ceiling a full repaint blows through, and the picture the "
+        "caches drew pixel-identical to a forced full repaint. Hercules",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("mrdrawvga", "soak", py("tests/mrdraw.py", "--vga"), 200.0,
+        "mrdraw on the VGA XT, the colour face (SPEC.md 105.9.5): the same "
+        "ceilings and the same incremental-equals-repaint identity, compared "
+        "as the card rasterised it in colour",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/media360.img")),
     Row("gorillascity", "soak", py("tests/gorillascity.py"), 100.0,
         "Gorillas skyline redraw (SPEC.md 99.4): seed-stable city construction "
         "under 400 ms; complete VGA paints under 1800 ms and mono/CGA under "
