@@ -61319,7 +61319,8 @@ the gain and the soft clip on the sample itself, and every caller's level
 control keeps working.
 
 **What it costs**: `SOUND.DRV` **+252 bytes** (7,721 → 7,973), the library
-~+70 bytes of each package that plays, the Control Panel module a row and
+**+150 bytes** of each package that plays (Tracker's image 34,030 → 34,180
+on the library alone), the Control Panel module a row and
 three port radios, and **no resident kernel byte** - `tools/kernsize.py`
 reads +0 on every section. The ISR is three instructions dearer than the
 speaker's. The 8088's ceiling stands - `VP_SPKMAX`, MIDIRack's 149-count
@@ -78639,17 +78640,23 @@ imm16` (13, the fetch floor) and a `pop dx` (12), with an `out dx, al` two
 cheaper than `out 42h, al` - ~433 cycles a sample against the ~395 SPKBENCH
 measured, and `(433 / 106 + 1) x 400 / 18.2` = 112. On the 5150 with
 BEVERLY.MOD that moves 4,800 Hz from 91% to ~95% and 5,512 Hz from ~103% to
-~108%, so the rung it opens at is the same. Without it a Covox play would be
-predicted ~4 points light at 4,800 Hz on an 8088 - the direction 45.25.1's
-history says costs a play its tempo. SPKBENCH times the speaker only, so a
+~108% against the speaker's own bench. Without it a Covox play would be
+predicted ~4 points light on an 8088 - the direction 45.25.1's history says
+costs a play its tempo. SPKBENCH times the speaker only, so a
 Covox row there is what would replace the derivation; `-DTSP_CSD=` is the
 knob for it.
 
+**Measured, the Covox opens a rung HIGHER than the speaker**, and the
+reason is the BENCH, not the ISR: `tsp_calib` times `os88spkfx_emit` as it
+will run, and on a Covox that is the leveller with no carrier to subtract,
+so the shaper's share falls by more than `TSP_CSD` adds. On MartyPC's Covox
+5150 (`tests/trkspk.py --leg covox`) BEVERLY.MOD opens at **5,512 Hz,
+predicted 79%**, where the speaker's own leg takes 4,800 at 91% - and holds
+it: 3,000 samples on 378h at 5,427 Hz, the ring never dry, not one write to
+42h, and the DAC's capture sounding while the speaker's is flat.
+
 It costs Tracker **189 bytes of image** (34,180 -> 34,369), 2 of bss and 140
-of the packed file; no kernel byte. No row drives it yet: its shape is
-`tests/trkspk.py`'s `play` leg on MartyPC's Covox 5150
-(`os8088_5150_herc_covox_720_gla`, `make covoxtest`'s system disk), counting
-writes to port 378h where that leg counts 42h's.
+of the packed file; no kernel byte.
 
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
@@ -121936,11 +121943,11 @@ that place: 8 bytes of data where four more sentences were 120.
 less `ap_have_sb`). The `-DAPROF` build crosses its step, 15,872 -> 16,384;
 it ships nowhere. No kernel byte and no library byte.
 
-**Not yet gated.** `tests/covox.py` names `tests/apspk.py --covox` as
-Audio's leg and it is not written: it is §86.21's legs on MartyPC's Covox
-machine (`os8088_5150_herc_covox_720_gla`) with `make covoxtest`'s disk,
-tracing `io` writes to 378h instead of 42h, the model being the samples
-themselves - `fx.resample`'s, no `Shaper` - and `ap_cinv` of a counts file.
+**The gate needs no model**: `tests/apspk.py --covox` plays an 8,000 Hz WAV
+on MartyPC's Covox machine (`os8088_5150_herc_covox_720_gla`, `make
+covoxtest`'s disk, the WAV and AUDIO.O88 on a scratch floppy) and holds the
+bytes on port 378h to the FILE: after the ring's first silence they are the
+WAV's own samples one for one, and nothing reaches 42h.
 
 ## 87. Hibernate — the machine to a file on the hard disk, and back (`kernel/hiber.inc`, `HIBER.DRV`)
 
@@ -158759,6 +158766,13 @@ The info line's third row says `, Covox` where it said `, speaker`, read off
 the same `OSAPI_SND_CAPS` word. The full screen's `Sound off` and `Sound on`
 are about the sound and stay as they are.
 
+`tests/vidspk.py --covox` is the gate, on MartyPC's Covox machine: every
+frame drawn, 800 writes to 378h that FOLLOW the clip's sweep through the
+leveller (the gain moves a frame at a time, so the oracle is the best
+alignment's correlation - 0.966 measured - and not byte equality), the DAC's
+capture sounding and the speaker's flat; `--counts` with it holds a counts
+clip's writes to the file's own bytes.
+
 **+31 bytes of the package** (38,428 -> 38,459): `vp_sndprep`'s two calls
 10, `vp_mdet`'s test 5, the info line 8 and its string 8, and the period's
 rounding 0 (it reads another byte of the same image); no kernel byte, no
@@ -162175,7 +162189,11 @@ Control Panel's and moves while the player is open, and the question is one
 row's greying is the tier as it is when the dialog is drawn (§47: grey a
 fact), and a Covox chosen by name and then withdrawn refuses its Play in
 words - "No Covox: pick it on the Sound page (Control Panel)" - rather than
-falling silently to the speaker. A Covox play names itself: the status line
+falling silently to the speaker. **`[mr_hassb]` and `[mr_sbhi]` are asked
+again with it**, because the same click moves them: the Covox tier turns
+the DSP's streams off and any other tier on a Sound Blaster turns them back
+on, so an entry-time "there is a card" would have Automatic open a stream
+the driver no longer has. A Covox play names itself: the status line
 says `Covox at 378h - 8-bit DAC synth at 5,523 Hz`, the bracket's line
 `Covox - click or Space to pause`, Now Playing's Output `Covox (LPT DAC)`.
 
@@ -162187,10 +162205,19 @@ tier off and keeps FM, so on a machine with an AdLib Automatic still plays
 FM and the Covox is one Settings pick away. **Play in Background turns it
 into the tone**, as it does the speaker: neither can sound on the desktop.
 
-What it cost: **432 bytes of image and 3 of bss** (36,464 → 36,896; the file
-29,586 → 29,914 packed), of which ~200 are strings, and no byte of the
-library, the driver or the kernel - `os88spk_lpt` and `os88spk_lptq` were
-already in every package that plays the speaker.
+What it cost: **464 bytes of image and 19 of bss** (36,464 → 36,928; the
+file 29,586 → 29,922 packed), of which ~200 are strings and 16 are the
+Settings' `Found:` line's scratch going 48 → 64 - that line is 62 bytes on
+an OPL3, an SB16, an MPU-401 and a bank, and ran into `mru_s2` before - and
+no byte of the library, the driver or the kernel: `os88spk_lpt` and
+`os88spk_lptq` were already in every package that plays the speaker.
+
+`tests/midirack.py --arm covox` is the gate, on MartyPC's Covox machine:
+the ring's table the identity, IRQ0 at `os88spk_isrd`, the speaker arm's
+ring checks, and then the oracle the card arms have - the reference
+sequencer's pitch classes in the DAC's OWN capture, 8 of 10 half-seconds
+measured, the tritone-transposed reference 0 - with the PC speaker's
+capture silent.
 
 ### 105.9 The window
 ### 105.9 The window
