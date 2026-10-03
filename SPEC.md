@@ -25305,6 +25305,31 @@ its two shape routines, ~300 bytes every button user carries, for a package
 that draws neither. It refuses to assemble beside `OS88UI_CHK` or
 `OS88UI_RAD`. Tracker (§45.21) is the first consumer of both.
 
+#### 13.8.10 A button the PACKAGE paints — `OS88UI_BOWN` and `OS88UI_OWN`
+
+The library draws two looks, the plain one and §13.8.9's one-write body, and
+a package that wants a third had one option: draw the button itself and hand
+the library only the hit-test. That loses the press. Every edge of the
+gesture — the arm, the drag on and off, the release — reaches the picture
+through `os88ui_btn`, so a hand-painted face is overdrawn in the standard look
+the moment it is pressed, and put back by nobody.
+
+`%define OS88UI_BOWN` before the include adds **`OS88UI_OWN` (flag 128)**:
+the labels-array entry is a near PROC of the package's, called **in place of
+the drawing body** with AX = the button's 0-based index, BX = its rect
+(screen, inclusive, read through `ds:`), DI = its flags with the pressed look
+**already resolved** (`OS88UI_DOWN` for a live press or an `OS88UI_LATCH`,
+`OS88UI_DIS` for a greyed one) and the gfx lock held; it preserves every
+register. The record, the hit-test, the arm, the track and the fire are all
+still the library's, so the package's pressed face is drawn exactly where the
+standard one would have been.
+
+The flag is per BUTTON and the caller's, in its flags array, so a package can
+mix the two and can turn its own off on a display where the standard button
+is the right one — MIDIRack (§105.9.5) paints every button of its colour face
+and none of its mono one. Six bytes in `os88ui_btn` under the define; a
+package that does not set it assembles **byte-identical**.
+
 ### 13.9 A window's TIMER — `W_ONTIMER` (API 0x0342)
 
 **Call me back in N ticks.** `OSAPI_WM_TIMER` (BX = window, AX = ticks from
@@ -47710,13 +47735,14 @@ turned that refusal into the whole point of Paint's small build. A package
 that cannot reach its **driver** can say nothing at all; it is a name in a
 list that does nothing when you double-click it.
 
-Nine packages fail that test (eight, and PIXELSTEIN 3D as of §97; RECORDER
-was a row once and is not, below):
+Ten packages fail that test (eight, PIXELSTEIN 3D as of §97 and MIDIRACK as
+of §105; RECORDER was a row once and is not, below):
 
 | omitted | requirement `kern_small` cannot meet |
 |---|---|
 | `BROWSER`, `FTPD`, `TELNET` | `ETHER.DRV`. The NIC is not in `$(SMALLDRIVERS)`, and §72's whole surface is driver verbs, so there is no socket to refuse on |
 | `MODPLUG`, `TRACKER`, `AUDIO` | `SOUND.DRV`, which a 128–256KB machine has nothing to spare for — the judgement that already took `RAMDISK.DRV` and `RAMPAGE.DRV` out of the small driver set |
+| `MIDIRACK` | `SOUND.DRV` for its FM and Sound Blaster outputs, and an `FSXF_RATE` bracket (kern_big's alone, §34.11) for its speaker synth: what is left is one square wave of melody, and a MIDI player that can only whistle the tune is not the program the disk would be offering (§105.10) |
 | `SKIES` | a **32KB heap claim** for its frame shadow (§88), against the 17.5KB largest run a claimant can have on the floor machine once `mem_claim` has shed the purgeable caches (§50.6.2). Unlike PAINT it cannot refuse in its own words: the claim is made INSIDE the fsx bracket, after the mode is set, so what a player gets is a mode switch, a black screen and a bounce back to the desktop |
 | `SHEET` | **more RAM than the machine has**, which §24.5.2 below argues at length is a requirement and not a size. It is the one row here whose ground was PUBLISHED AND NEVER WIRED: §24.5.2 has said this since the branch that wrote it, `$(SMALLOMIT)` did not carry the name, and 36,696 bytes of spreadsheet shipped on both small apps floppies until §24.5.3's audit went looking |
 | `PXSTEIN` | **one contiguous parts claim of ~56 KB and more** (§97.9: part 0 is 59,378 bytes of image and bss on the shipped build (§97.15) — 57,193 after wave 5, 56,436 after wave 4, 49,006 after wave 3, 32,861 after wave 1 — holding two 4 KB map layouts and two 4 KB `spotvis` arrays, with the scalers' scratch and the byte textures in the SAME carve — plus a ~10 KB level claim the loader fetches (the level part went lazy in wave 4) and a shadow CLAIM of 16 KB, of which the game composes 6.4 KB; the claims are what the arena has to fund) against a 52.5 KB arena whose largest run is 17.5–20 KB. The carve is made by the loader before the program exists, so, like SKIES, it cannot refuse in the program's words; `tests/unit/t_smallreq.py` carries the row and `tests/pxsdisk.py` reads the built floppy |
@@ -61055,6 +61081,104 @@ is the user's until they move it again. The freeze is unconditional now, the
 `SPKFX_FREEZE` arm having been folded in: `os88spkfx_rat` is never 2 in a
 package that does not set it, so Audio and the Video Player assemble to the
 same behaviour.
+
+### 34.12 The FM chip, whole — `SND_FM_INFO`, `SND_FM_CLAIM` and `SNDV_OPLW` (`SOUND.DRV`)
+
+**Verbs 0-3 are a tone keyboard; a MIDI player needs the chip.** Note-on by
+Hz, an 11-byte patch and a key-off cannot say velocity (a carrier level), a
+pan (an OPL3's L/R bits), a pitch bend without a re-key, or an OPL3's second
+bank at all. So `SOUND.DRV` publishes the chip's registers to the one package
+that claims them, and keeps everything it owned before - the tone voice, the
+rhythm mode, the timers - out of reach. **No kernel byte**: both doors already
+existed. `drivers/sound/sndpkg.inc` is the ABI and both ends include it, the
+`netpkg.inc` shape.
+
+| door | verb | what |
+|---|---|---|
+| `OSAPI_SND_FM` | 4 `SND_FM_INFO` | AL = `SND_OPL2` / `SND_OPL3`, AH = what a claim gives (8 / 17). Claims nothing |
+| `OSAPI_SND_FM` | 5 `SND_FM_CLAIM` | CL = 0 OPL2 mode / 1 OPL3 mode. Every melodic channel - 0..7, and 9..17 on an OPL3 - for the caller, or none (CF=1). AL = the mode granted, AH = the channels |
+| `OSAPI_SND_FM` | 3 (all-off) | unchanged, and now also gives the CHIP back: an OPL3 to OPL2 mode, the default patch on 0..7 |
+| `OSAPI_DRV_CALL` `DRVC_SOUND` | 0 `SNDV_IDENT` | AX = `'SD'` (§20.11.1) |
+| `OSAPI_DRV_CALL` `DRVC_SOUND` | 1 `SNDV_OPLW` | ES:SI → CX `{register, value}` pairs through `opl_wr`; register 0 selects the BANK. AX = pairs written; CF=1 `SNDE_NOCLAIM` when nobody holds the chip |
+
+**Two doors, for two reasons.** The claim goes through the FM slot because
+that slot stamps the requester in DH (§34.3), and a claim is only worth
+anything if the teardown can find its owner - `DSV_RELINST` reaches
+`opl_xrelease` with the dying instance. The writes go through
+`OSAPI_DRV_CALL` because that door hands the driver the caller's segment in
+ES (§20.11), so a batch is read out of the package with nothing staged. That
+door carries no instance, so `SNDV_OPLW` is gated on a claim EXISTING rather
+than on whose it is: packages are trusted (docs/plans/LAST-DROP-BYTES.md
+7.11), and what the gate protects is what no claim covers.
+
+**What no claim covers** (`opl_regok`), skipped and not counted - never
+refused, because a batch half-applied over one byte is worse than one that
+drops it: bank 1 on an OPL2; 00h-1Fh (test, timers, CSM, and 104h/105h, the
+OPL3's 4-op and mode registers); BDh and D0h-DFh, the rhythm mode, which would
+take channels 6-8 and the tone voice with them; and in bank 0 channel 8's
+A8h/B8h/C8h and its operator slots 12h and 15h. **Channel 8 is the system
+beep's** (§34.8) and stays so under a package holding the other sixteen.
+
+**OPL3 mode keeps the beep audible.** In NEW mode a channel with neither L
+nor R set in C0h is silent, and the default patch's C0h is 0 - so a claim
+that sets 105h writes C8h ← 30h, and the release puts back 00h. Every
+`B0h` write a batch makes is shadowed into `opl_b0`, so the teardown's
+single-write key-off silences the note the package actually played.
+
+**Which chip: two tests, and an OPL3 must pass both** (`opl_kind_probe`).
+Status bits 1-2 read 1 on an OPL2 and 0 on an OPL3 - every period driver's
+test - but an EMULATED OPL2 may answer 0s there too, and a player that then
+believed in a second bank would send half its voices nowhere. So the second
+test asks the bank: timer 1 programmed through 38Ah runs on an OPL2 whose
+decode aliases 38Ah onto 388h, and never on an OPL3, where those are 102h and
+104h. An OPL3's second bank is zeroed at init as the first always was: a warm
+restart inherits whatever the last program left there.
+
+**Cost: 603 bytes of `SOUND.DRV`** (6,686 → 7,289), no kernel byte. The
+allocator's two tables grew from 9 entries to 18, `opl_wr` became the bank-0
+face of `opl_wrp` (the address port in DX), and the claim, release, gate and
+batch are the rest. MIDIRack (§105) is the consumer.
+
+### 34.13 The MPU-401 — MIDI out, in UART mode (`SOUND.DRV`, `drivers/sound/mpu.inc`)
+
+**The daughterboard's road.** A Roland SC-55 or MT-32 on the connector, a
+Waveblaster or Dreamblaster on a card's header, or an emulator's synthesiser
+behind its MPU (86Box's FluidSynth) holds its own samples and plays them
+itself; the machine sends three bytes a note. That is the one realistic-
+instrument output an 8088 at 4.77 MHz can afford, which is why it is in the
+driver at all.
+
+**UART mode only.** RESET (FFh), its ACK (FEh), then 3Fh - whose ACK is
+drained if it comes and not required, because UART-only clones differ there.
+The intelligent mode's sequencer is not wanted and is not used. **330h, then
+300h.** The probe reads the status port FIRST and gives up on FFh - an empty
+port, DSR and DRR both "not ready" - so a machine with no interface pays two
+port reads and no timeout at boot.
+
+**A third reason to attach.** `snd_entry` attached when an OPL or a DSP
+answered; an MPU-401 alone now does too, and names the Control Panel's row
+`MPU-401` when nothing else has named it - an XT with an MT-32 on a Roland
+card is a real configuration of the period. **The kernel's boot sniff does
+not look for one** (`drv_snd_sniff`, §51.3.1: an OPL2's timer dance, in a
+boot overlay with no room to spare), so on that machine the driver is ticked
+in the Control Panel once, and `make miditest`'s disk is that tick made for
+the gate. Every machine with an FM chip beside its MPU - which is nearly all
+of them - loads the driver as before and finds the MPU at attach.
+
+**Four package verbs**, through `DSV_PKGCALL` (`sndpkg.inc`): `SNDV_MIDINFO`
+(the port, or `SNDE_NOMIDI`), `SNDV_MIDOPEN` (the interface becomes the
+CALLER'S SEGMENT's - ES, which `OSAPI_DRV_CALL` stamps - or `SNDE_BUSY`),
+`SNDV_MIDW` (ES:SI, CX bytes, in order; **worker-safe**: port I/O only) and
+`SNDV_MIDCLOSE` (All Notes Off and Reset All Controllers on all sixteen
+channels, then given back). Detach silences a module that was playing. A
+send waits for DRR with a bounded loop and reads and drops anything waiting
+on the way, because some clones stop taking output while their input - a
+keyboard on MIDI IN, a module's active sensing - is full.
+
+**Cost: 420 bytes of `SOUND.DRV`** (7,289 → 7,709), no kernel byte.
+`tools/martypc/patches/09-mpu401-uart.patch` gives MartyPC a recording
+MPU-401 (it has none) and the debug server a `midi` command, so the gate
+compares the bytes on the wire with the reference sequencer's (§105.11).
 
 ## 35. Recorder — the sound layer's recording client
 
@@ -161303,6 +161427,579 @@ The scene supports window, button and 3D viewport objects with parent-relative
 coordinates. Logical nested windows are drawn inside the lab's clip; the OS
 manages the top-level lab. No resident kernel state or bytes are added.
 
+## 105. MIDIRack — a MIDI file player (`apps/midirack/`)
+
+`MIDIRACK.O88`, "MIDIRack" in the header name field. A **Standard MIDI File**,
+type 0 or 1, played through whatever the machine has, in a window laid out as
+a rack: a **Playlist**, **Now Playing**, a sixteen-row **Channel Rack** of
+levels and instruments, and a **Status** pane. Pure NASM, the Audio Player's
+(§86) shape and much of its machinery, prefixes `mr_` (shell), `mrq_`
+(sequencer), `mrc_`/`mrv_` (channels, voices), `mrf_` (FM), `mrn_` (the
+speaker's tone), `mry_` (synth), `mro_`/`mrw_`/`mrk_`/`mrb_` (outputs, worker,
+speaker bracket, card), `mrl_` (playlist), `mru_` (window).
+
+| output | how | where it runs |
+|---|---|---|
+| **OPL3** (an SB Pro 2 / SB16's chip) | 17 two-operator voices, stereo by pan | the worker, in real time |
+| **OPL2** (an AdLib, any SB's chip) | 8 voices | the worker, in real time |
+| **Sound Blaster** (the DSP) | the synth (§105.7), streamed | the worker, half a second ahead |
+| **PC speaker** | the synth through os88spk.inc's pulse width | the UI task, in an `FSXF_RATE` bracket |
+| **PC speaker tone** ("Play in Background") | the melody, one square wave | the worker, on the desktop |
+
+**Automatic** (the default) picks an FM chip first - it costs the machine
+nothing while it sounds - then the DSP, then the speaker. Settings picks any of
+them by name; what the machine lacks is greyed (§47).
+
+### 105.1 The owner's decisions
+
+Taken at the start (2026-10-02), and binding: the speaker plays the
+**polyphonic synth in a bracket** (the Audio Player's imposter window, §86.21)
+by default, and the **monophonic tone on the desktop** when "Play in
+Background" is ticked; "Sound Blaster support" means a **software synth on the
+DSP** as well as the card's own OPL; and OPL3 and raw registers come from
+**new `SOUND.DRV` verbs** (§34.12), at no kernel byte.
+
+### 105.2 Files
+
+| file | what |
+|---|---|
+| `midirack.asm` | header, icon, the `.MID`/`.SMF` association, the bss accumulator, entry, menus, strings |
+| `mrseq.inc` | the SMF reader and the sequencer (§105.5) |
+| `mrchan.inc` | the sixteen channels and the voice allocator |
+| `mrfm.inc` | the FM chip, and the speaker's tone (§105.6, 105.8.2) |
+| `mrsyn.inc` | the synth (§105.7) |
+| `mrout.inc` | opening, pausing and closing each output; the worker; the card; the speaker's bracket (§105.8) |
+| `mrlist.inc` | the playlist, the loads and the dry run (§105.3) |
+| `mrui.inc` | the window (§105.9) |
+| `mrcb.inc` | the callbacks, the transport, the cards |
+| `mrtab.inc` | **GENERATED** by `tools/os88midi.py` (§105.6.1) |
+| `songs/*.MID` | the ten demo songs, **GENERATED** by `tools/os88midsong.py` and committed |
+
+**The ten songs are four originals and six classics.** INTRO (a title
+fanfare, format 0), SPACEJAM and BATTLE1 (1990s-style game music) and DEMO (the
+feature test: division 480, program changes, pitch bend under an RPN
+range, the modulation wheel, a volume swell and tempo changes) are composed
+in `tools/os88midsong.py` and quote no existing melody. ENTERTNR (Joplin, *The
+Entertainer*), FURELISE (Beethoven, *Für Elise*), MOUNTKNG (Grieg, *In the Hall
+of the Mountain King*, the theme four times under a rising tempo map, 84 to
+168 BPM), KOROBEIN (the Russian
+folk song), CANCAN (Offenbach, *Galop infernal*) and TURKISH (Mozart, *Rondo
+alla Turca*) are **public-domain compositions**, every one published before
+1903; only the melody is taken and the arrangement - voicing, accompaniment,
+drums, form - is written in the tool. Each file's first track says which it
+is in a copyright meta, and the arrangements are CC0 like the originals.
+**A copyrighted song is not a candidate**, however recognisable: a MIDI
+transcription is a copy of the composition, and these files ship on every
+apps disk and the live media. A user plays their own files from any folder
+(§105.3); the demo set is only what the machine arrives with.
+
+### 105.3 The playlist and the loads
+
+The Audio Player's store (§86.10): an entry is a name, a folder and a volume,
+never a path; 64 entries. **A song is read WHOLE** (`mrl_load`) into one claim
+of its own size, up to `MR_FILEMAX` = 63 KB: a sequencer that streamed would
+pay a disk read under the gfx lock in the middle of a phrase, and the shipped
+songs are 1-8 KB. A claim big enough for the last song is reused. The read is
+`OSAPI_FILE_READ` and the size `OSAPI_FILE_FIND`'s expanded one, so a song
+shipped LZ-wrapped (§20.14.3) reads transparently.
+
+**Add...** adds the file the Standard File dialog chose; **Load Directory...**
+adds every `.MID`/`.SMF` in the folder the dialog was left in; a double-click
+on a `.MID` launches the player on it and adds its folder. **A press selects a
+row and a second press within nine ticks plays it.**
+
+#### 105.3.1 Launched with nothing to open
+
+`mrl_autoload` takes the songs that ship from the first place that has any:
+`MIDI\` beside the package, `\MEDIA\MIDI\`, `\MIDI\`, then the folder it was
+launched from. The shipped disks put them in `MEDIA\MIDI\`, so on every apps
+disk the window opens with ten songs listed and the first one loaded and
+measured. The pane's title names the folder - "Playlist (B:\MEDIA\MIDI\)", or
+"(MIDI\)" when the pane is too narrow for the path.
+
+### 105.4 The dry run
+
+A loaded song is walked once end to end with **no output** (`mrl_dry`): the
+null table in `[mrq_vt]`, the clock in milliseconds. That measures its length,
+its measures (through every time signature), each channel's FIRST program, its
+notes and the channels they are on, and its first text meta (MIDI Info's last
+line). It is then rewound and its tick-0 events played dry again
+(`mrl_dryprime`), so a stopped song shows its tempo and its instruments rather
+than sixteen Acoustic Grands. On an 8088 it is a fraction of the disk read.
+
+### 105.5 The sequencer
+
+Every track keeps a cursor, an end and the tick of its next event; `mrq_next`
+picks the soonest, `mrq_step` advances the clock to it and plays **every
+event at that tick, track by track in file order** - so a tempo in track 0 is
+heard before the notes that share its tick.
+
+**Time is the output's** (`[mrq_urate]` units a second): the synth's own
+samples, so an event lands on its sample; FM and tone, PIT counts / 64
+(18,643 a second), so an event lands within 54 us. A tempo becomes units per
+tick (16.16) once, when it changes (`mrq_settempo`: tempo x rate / division x
+4096 / 62,500, chained word divides because the middle value is 39 bits), and
+each event after it is one 32 x 32 multiply-add into a 32.16 clock
+(`mrq_madd`).
+
+#### 105.5.1 What it refuses
+
+Format 2 ("independent songs"), an SMPTE division and a file with no `MTrk`
+are refused at load, each in its own words. **The file is hostile**: every
+byte goes through `mrq_getb`, which refuses past the track's own end; a
+running-status byte with no status, a VLQ over four bytes or a meta event over
+64 KB ENDS the track; a chunk running past the file is clipped. A track is the
+first 24 of the file's.
+
+#### 105.5.2 The channels
+
+`mr_chan_event` keeps each channel's program, volume (7), expression (11), pan
+(10), sustain (64), the RPN 0 bend range (100/101/6, up to 24 semitones) and
+the bend in 1/32 semitones, and answers 120/123-127 (every note off) and 121
+(controllers reset). Aftertouch and pressure are not heard. A level for the
+rack is velocity x volume x expression.
+
+#### 105.5.3 The output's table
+
+The sequencer knows nothing about the output: seven near procs in `[mrq_vt]`
+- on, off, program, controllers, bend, pedal up, all off.
+
+#### 105.5.4 The voices
+
+`mrv_alloc` is one policy for every output: the voice already sounding that
+key; else a free one, **one already carrying the wanted patch first** (an FM
+patch load is eleven register writes); else the oldest released, the oldest
+pedal-held, the oldest sounding. A note-off under the pedal leaves the voice
+HELD until the pedal comes up.
+
+### 105.6 The FM chip
+
+Claimed whole through `SND_FM_CLAIM` (§34.12) from the UI callback that
+pressed Play, so the claim carries the instance's stamp and the teardown frees
+it. Every register an event needs goes into a batch and **one `OSAPI_DRV_CALL`
+(`SNDV_OPLW`) takes the lot** after each pass, so a chord is one far call, not
+forty. Per note: a key-off if the voice was keyed (so the new envelope starts
+from the top), the patch's ten operator registers and C0h if the voice carried
+another, the carrier's level, A0h/B0h keyed on. Velocity, volume and
+expression set the carrier's TL through `mrt_tl`'s 40 log10 curve (and an
+additive patch's modulator too); pan sets an OPL3's L/R bits (hard left
+below 32, hard right from 96); a bend rewrites A0h/B0h with the key as it was.
+The drum channel plays the kit's patch for the key, at its own fixed note.
+
+#### 105.6.1 The tables are made on the host
+
+`tools/os88midi.py gen` writes `mrtab.inc` and `check` (fast tier, `midtab`)
+refuses a stale one: the F-Number of every 1/32 semitone of one octave AT
+BLOCK = OCTAVE - 1 (so one table serves every octave and the block is the
+octave), the same pitches as Hz x 2048 for the synth, the two level curves,
+the General MIDI names, **an original 128-program FM bank and a 47-key kit**
+(built from family templates in the tool - no third-party bank is read,
+fetched or transcribed), the synth's voicing per program and its kit.
+
+#### 105.6.2 OPL3, and an emulator that is half of one
+
+`SND_FM_INFO`'s answer decides the mode: an OPL3 is claimed in OPL3 mode with
+17 voices (0-7 and 9-17; channel 8 is the beep's) unless Settings says OPL2.
+**MartyPC's AdLib is an OPL3 core wired as an AdLib** - it reads 0s in status
+bits 1-2 and decodes only 388h/389h - so it passes both of §34.12's tests and
+its second bank is silent. No register reads back on an OPL, so nothing can
+tell it from a real OPL3; Settings > OPL2 is the user's answer, and the gate
+rows that listen to FM on MartyPC take it.
+
+### 105.7 The synth
+
+**Priced by edges, not by samples x voices.** A voice is a pulse wave - a
+square, a 25% or a 12.5% pulse - or, for a drum, a run of random-length
+pulses (noise); a pulse wave is flat between its edges, so a voice writes
+nothing per sample. At each edge it adds +-2a into a delta buffer at that
+sample (`mry_voice`), and ONE pass over the buffer (`mry_mix`) keeps the
+running level and turns it into the output byte through a 2,048-entry table.
+That table is the outputs' only difference and the mixer's compressor: a soft
+clip `y = 127 x / (|x| + 64)` into an unsigned byte for the card, or straight
+into os88spk_init's PWM table for the speaker.
+
+A span is 128 samples; an edge is kept in 1/128 sample, so pitch is exact to
+a few cents; a half-period is at most 192 samples (an octave up past it) and
+at least ~1.25 (muted past it). **An event lands on its own sample**: the span
+renders the voices up to it, lets the sequencer play it, and goes on. An
+envelope - one of eight classes, attack/decay/sustain/release a step - moves
+every ~16 ms at a span boundary, and its change goes in as a step in delta 0.
+The kit is pitched pulses that fall an eighth a step (kick, toms) and noise of
+three colours (snare, hats, cymbals).
+
+#### 105.7.1 Rates and voices, by machine
+
+**Automatic** (the default) picks the rate by the CPU:
+
+| | 8088 | 286 | 386+ |
+|---|---|---|---|
+| speaker (bracket) | **5,512 Hz** (5,523 played), 4 voices | 16,000 (16,124 played), 6 | the same, 6 |
+| Sound Blaster | 8,000 Hz, 6 voices | 16,000, 8 | 22,050, 8 |
+
+**Settings chooses any of 8,000, 11,025, 16,000, 22,050, 32,000 and 44,100
+Hz instead**, for a faster machine that can afford it. The two past 22,050 are
+greyed unless the DSP answers `SND_CAP_PCM_HI` (an SB Pro or SB16, §34.2.1),
+and the speaker plays the nearest rate its pulses can make (`mrk_real`): N =
+1,193,182 / R held to 48..255 counts past an 8088 - 24,857 Hz at most - and
+to 149..255 on one, **8 kHz**, the Video Player's `VP_SPKMAX` ceiling, past
+which the pulses alone are more than the machine. Voices stay the CPU's.
+**A rate is free of the octave it plays in down to 57 Hz**: a half-period may
+be 383 samples (`MRY_LMAX`, the most an edge one half past a span leaves in a
+word), so at 44.1 kHz a bass note keeps its octave; the period is split into
+halves in 32 bits.
+
+**The speaker's 8088 rate was 8 kHz and is not**: a pulse is ~400 cycles
+(§34.11.4), so 8,000 of them are two thirds of a 4.77 MHz machine, and on
+MartyPC's 5150 the synth fell behind them - CONS advanced at 66% of the rate,
+the rest dry grants of silence. At 5.5 kHz the pulses are 46% and the ring
+stays full with the window's levels animating. The mix loop runs two samples a
+turn and reads its table unmasked (the voices' sum is bounded by
+construction, asserted at assembly).
+
+### 105.8 The outputs
+
+#### 105.8.1 FM: the worker, in real time
+
+The worker reads the clock (`mrw_clock`: pit_now / 64 since the start),
+plays every event the clock has passed, flushes the batch, and then sleeps
+whole ticks while the next event is far or yields while it is near - so an
+event is late by a task switch, not by a tick. **The clock is floored at 0 and
+never goes backwards**: pit_now can read a tick early (the counter reloaded,
+IRQ0 still pending), and right after the start that is a negative span which,
+read unsigned, made every event of the song due at once - the first Play of a
+session ended its song in a frame and skipped to the next (found on QEMU; the
+race is on every machine). A pause keys every voice off and holds the clock;
+the end keys off and rings a second for the releases.
+
+#### 105.8.2 The speaker's tone
+
+`mrn_` tracks the notes held and sounds the highest melodic one through
+`OSAPI_SND_TONE`, following bends: the melody, almost always, on the
+desktop, behind other windows.
+
+#### 105.8.3 The speaker's synth, in a bracket
+
+The Audio Player's imposter (§86.21): the desktop frozen, the window's clock,
+bar, measure and rack the only pixels that move, a click or Space back to the
+desktop paused, Esc a stop, N/P a skip. The bracket's body renders spans into
+os88spk's 4 KB ring until it is full and waits a frame; a skip or a song's end
+leaves the bracket and the UI loads the next song and enters it again.
+
+#### 105.8.4 The Sound Blaster: an external ring, or a grant ring
+
+The worker keeps about half a second queued (`[mrb_lead]`: half the rate, at
+least 4,096 samples and at most the 16 KB ring less a half), and the pre-roll
+is a whole half of the card's regime - 4,096 above 22,222 Hz, which verb 0
+otherwise refuses. **An external ring** (§34.5.3) is
+tried first - spans made straight into it, TOTAL a word the block IRQ reads -
+but it needs an auto-init DSP, and an SB 1.x answers verb 0 with 7. Then **the
+grant ring** every other player uses (§34.5.2): a 2,048-sample half made
+locally, staged with verb 6, published with verb 1. Pause is `SND_V_PAUSE` on
+the external ring; the grant ring pauses by not being fed. On MartyPC's 5150
+(DSP without auto-init) the grant ring plays 8 kHz with six voices and no
+underrun after the first.
+
+#### 105.8.5 MIDI out, through an MPU-401 (`mrmid.inc`)
+
+The song's own events go to the module (§34.13) and the module makes the
+sound. Nothing allocates a voice: `mr_chan_event` FORWARDS each channel
+message as it is played, unchanged, and goes on keeping the channel state the
+rack shows - the levels and the programs - exactly as it does for the FM;
+the voice table is `mrm_vt`, all no-ops but the song's end. **SysEx is
+forwarded too** (`mrm_sysex`): a GM or GS file says GM ON and sets its parts
+up with it, and a module is owed that. The clock is the FM's - the worker, in
+real time, off the PIT - and the bytes are batched a pass at a time into one
+`SNDV_MIDW`. **GM ON first**, so a module left in another mode or holding
+another song's parts starts from the standard; **a pause** sends All Notes
+Off, All Sound Off and the pedal up on all sixteen channels; **a resume**
+sends each channel's program, volume, pan and expression again and centres
+its bend, so a module touched in between plays on as it was. Measured on
+MartyPC's recording MPU (§105.11): the reference sequencer's first 183
+messages of BATTLE1 all sent, and 98 of 98 note-ons within 0.1 s of the
+song's time, the worst 73 ms.
+
+#### 105.8.6 The Sound Blaster wavetable (`mrwt.inc`, `tools/os88midbank.py`)
+
+**A sample player, mixed by the CPU and played by the card** - what a
+daughterboard does in silicon, done in a loop. Every General MIDI program and
+every drum key has ONE 8-bit sample in `MIDIRACK.BNK`, with its loop, its root
+key and a four-stage envelope; a note plays it at the step its pitch asks for
+(nearest sample, no interpolation) through one of 32 volume pages into a
+16-bit sum, which the synth's own soft-clip table turns into the card's bytes.
+It is the synth's place in the machine exactly - the same card, ring and
+worker (`mrb_start` opens whichever, through `[mrb_spanfn]`), the same
+sequencer in sample time and the same voice allocator.
+
+**The pitch** is the sample's rate over the output's (16.16, per voice) times
+2^(n/384), n in 1/32 of a semitone: (key - root) x 32 + the sample's fine
+tune + the channel's bend - whole octaves a shift and the rest a 384-entry
+table (`mrt_pow`, generated). **The envelope** steps once a 128-sample span:
+attack, decay to the sustain level, release; a sustain of nothing ends the
+note, and a drum ignores its note-off and plays out. **The level** is the
+velocity x the channel's volume x expression x the sample's gain, times the
+envelope, as a page 0..31.
+
+**THE LOOP IS EIGHTEEN BYTES** (`mwt_voice`): DS the mix claim (the pages and
+the sum), ES the sample, the step's whole part an immediate patched into the
+`adc` so CX is free for `loop`, and no end test - each run is cut short of the
+sample's end ((end - pos - 1) / (whole + 1) samples are certainly safe) and
+the one sample that may cross is made by a careful path that loops or ends
+the voice. On an 8088 the bytes are the cost: the first cut was 27 and played
+58% of 8 kHz with four voices on the 5150. **Measured on that machine** at
+8,000 Hz: one or two voices hold the rate, three make 94%, four 78%. So an
+8088 opens it at **6,000 Hz with three voices** (99%), a 286 at 11,025 with
+eight, a 386 or better at 11,025 with sixteen - the bank's samples are 11,025
+Hz at most, so Automatic goes no higher; Settings' rate overrides it. That
+cost is why the wavetable is a CHOICE in Settings and never Automatic's.
+
+**The bank is read whole** the first time the wavetable plays, into a claim
+of its own, in 32 KB chunks with `OSAPI_FILE_READ_AT` (a chunk that size is a
+multiple of every legal cluster; `OSAPI_FILE_READ` is not for a file this
+big) - from the folder MIDIRack was LAUNCHED from, recorded at entry, since
+adding songs through the Open dialog moves the instance's folder - and is
+kept until the window closes. Its index stays in it; nothing is copied. Its
+presence and size are read at entry for nothing: a 16-byte `OSAPI_FILE_READ`
+answers `FERR_BIG` with the KB it needs from the directory entry, before a
+byte of data. **It ships UNWRAPPED** - `READ_AT` delivers a file raw.
+
+**The bank is made, never committed** (CONTRIBUTING.md 6, the Apple II ROM's
+rule). `tools/os88midbank.py fetch` downloads **GeneralUser GS v2.0.3** by S.
+Christian Collins from its author's own repository at a pinned commit and
+SHA-256 into `build/midibank-src/` (`make clean` spares it); `build` takes,
+for each program, the zone sounding middle C at a moderate velocity and for
+each drum key its own, resamples to at most 11,025 Hz, and - when a loop
+still does not fit its budget - LOWERS THAT SAMPLE'S RATE rather than cutting
+the loop, since a sustained note that stops is worse than a duller one; a
+one-shot that does not fit is cut with a fade. 128 programs, 61 drum keys,
+160 samples, **210 KB**. Its licence (documentation/LICENSE.txt there):
+*"Please feel free to use it in your software projects, and to modify the
+SoundFont bank or its packaging to suit your needs"*; its one request - not
+to link a website to its download files - is about websites, and a build
+tool fetching from the author's own repository at a pinned commit is not
+one. `synth` writes the same format from computed waveforms - CC0, no
+network - for the gate.
+
+### 105.9 The window
+### 105.9 The window
+
+Laid out from the live content box every paint (§39). **Tall** (content
+>= 262 lines - VGA, EGA, Hercules): the mock-up whole, columns 23% / 36% /
+the rest, row pitch 10, the Status pane's three lines (the device, the file,
+the message) and three check boxes, and Settings / MIDI Info / About / Quit
+along the bottom. **Compact** (a CGA): pitch 8, the rack in two columns of
+eight, no Status pane and no bottom row - all of them are in the menus - and
+the message as one line under the panes.
+
+**Nothing repaints more than it changed** (PERFORMANCE.md rule 1): the
+worker's redraw (`mru_dyn`, at most every 4 ticks, never while covered) draws
+a field only when its value moved, and a level bar moves by ONE fill - the
+strip between its old length and its new one - so no pixel is written twice;
+and a COMMAND draws through the same caches (§105.9.4). On the mono face the
+transport buttons are pictures (`OS88UI_IMG`) with their captions under them;
+Loop is latched; what cannot act is greyed. A 4bpp display gets the colour
+face (§105.9.5).
+
+The buttons carry no ellipsis (Add, Load Directory, Settings, MIDI Info,
+About): in a 23%-wide pane it was what the caption lost first. The menus keep
+theirs, where it is the convention that a dialog follows.
+
+#### 105.9.1 The cards
+
+About (`OSAPI_ABOUT_SET`, os88ui's card) and MIDI Info (format, tracks,
+division, length, measures, notes and channels, the song's first text) are
+drawn last over the content; while one is up the button group has no live
+controls, so a press reaches `mr_onclick` and takes the card down.
+
+#### 105.9.2 The Settings dialog
+
+A **modal dialog** drawn over the content: a "Found:" line naming what the
+machine answered (OPL2/OPL3, the DSP and whether it reaches 44.1 kHz, an
+MPU-401, a wavetable bank, the speaker), the **output** (Automatic, OPL3,
+OPL2, Sound Blaster synth, PC speaker synth, MIDI out (MPU-401), SB
+wavetable - what is missing greyed; the last two are only ever CHOSEN, and
+Automatic picks exactly what it always has), the **synth's sample rate**
+(§105.7.1), **Play in Background**, a note on the rates' limits, and **OK /
+Cancel**. It edits COPIES (`mrs_*`): Cancel, Esc and a press outside it change
+nothing; OK and Enter commit them, and a song that is playing or paused
+**restarts on the new choice** rather than waiting for the next Play. While it
+is up the window's one button record is PAGED onto the dialog's own pair
+(os88ui's documented device for a paged window), so nothing under it can be
+pressed. Both groups are seven rows now, so on a CGA too the pair has a row of
+its own under them, and the dialog is 133 lines: compact drops the background check box, which the Options menu carries anyway.
+
+**The settings are kept** in `MIDIRACK.CFG` in `SYSTEM\APPDATA` on the
+player's own volume (§19.9; `apps/pixelstein/pxset.inc`'s shape): a magic and
+five bytes - the output, the rate, Play in Background, Loop and Show Levels.
+Read at the first wake; written when OK commits a change and, if a check box
+moved, at the close. A foreign file is ignored and a damaged one clamped, and a
+disk without the folder simply keeps nothing.
+
+#### 105.9.4 A command draws what it changed — the caches
+
+The first build drew a command the expensive way: Play, Pause, Loop and a
+check box ran `mru_refresh` - the whole list, every Now Playing line, all
+fourteen buttons and the status lines - and a song change, Stop, Eject, a
+remove and a song's end ran `mru_repaint`, the content white-filled and drawn
+from nothing. **Measured on the 5150** (`tests/mrdraw.py`, every far call
+into a drawing cell of the API table told apart by the stack it was made on):
+a Pause was **197** drawing calls, of which 152 were the buttons, twice; a
+Next **229**; a Stop **178**, and 178 again when nothing was playing.
+
+`mru_update` replaces both. Every part of the window is walked and every part
+is drawn only through its cache:
+
+- **The field slots** (`mru_field`): every string that can change - the
+  playlist's title, the song's name, Length .. Output, the times under the
+  bar, the three status lines, compact's message, the sixteen programs - is
+  drawn through a slot holding its cells as they are on the glass, and a
+  redraw draws one `font_run` of the run between the first cell that differs
+  and the last: `4` when 01:13 becomes 01:14, nothing when nothing moved.
+- **The list's row keys** (`mru_list_sync`): each row's entry, highlight and
+  playing mark as drawn; a row is drawn when its key moves, and the scroll
+  bar when its three numbers do. An add, a remove and a clear owe every row
+  (`mru_list_owe`, called by `mrl_add`, `mrl_remove` and `mrl_init`).
+- **The buttons' flags** (`mru_btn_sync`): a button is drawn when its flags
+  move - Pause greys one and ungreys none.
+- **The check boxes** (`mru_ck_sync`), told by `mr_onclick` when the library
+  has drawn the one it toggled.
+
+A full paint owes every cache, so `W_PAINT` is unchanged. A card going UP
+draws the card alone over a content that has not changed (`mru_card_up`);
+going down is the one command that still repaints. Measured the same way:
+
+| gesture (5150, Hercules) | before | after |
+|---|---:|---:|
+| Play, from Stop | 154 | 16 |
+| Pause | 197 | 7 |
+| Resume | 128 | 7 |
+| Loop on / off | 129 / 129 | 12 / 12 |
+| the selection down a row | 33 | 6 |
+| Next | 229 | 21 |
+| Stop, already stopped | 178 | 0 |
+| the worker, 5 s of play | 114 | 95 |
+
+**The caches are only sound if drawing through them arrives at the picture a
+paint from nothing does**, and `tests/mrdraw.py` asserts exactly that: after a
+run of gestures it captures the content, forces a full repaint (a card up and
+down) and captures again, and the two must be identical to the pixel - on the
+Hercules face and on the VGA's colour one.
+
+#### 105.9.5 The colour face
+
+On a 4bpp display - the one the window is ON (`OSAPI_WM_DISPLAY`, §39.16.4),
+asked at each full paint - and a content box at least 600 x 270 (a VGA's is
+624 x 311, an EGA's ~624 x 279), the window is drawn as a **colour face**. Content is the application's (§76), so it is
+still white paper; what changes is that colour carries meaning the mono face
+had to carry with black:
+
+- **Panes** are a grey frame with a light grey TITLE STRIP ruled off under
+  it, the title black on the strip.
+- **Now Playing is a display**: a black panel, the song's name yellow, a grey
+  rule under it, the six lines green on black (the labels dark, the values
+  bright), and the progress bar bright green in a grey frame. Its line pitch
+  is what the panel's height leaves after the name, the bar and the times,
+  10 to 14 pixels.
+- **The rack's meters** are lit green, then yellow past 5/8, then red past
+  7/8, over black in a grey frame. Growing, a bar is still one fill per zone
+  it crosses, of the change alone; falling, one fill of black.
+- **The playlist's highlight** is blue with the name white, and the playing
+  song's mark is green.
+- **Every button is painted by the package** (§13.8.10): a black frame, a
+  white top-left and a grey bottom-right bevel, the caption black on light
+  grey - pressed, one grey line in at the top and the left and the caption a
+  pixel down and right; greyed, the caption grey. The caption is opaque on
+  the grey with the grey RINGED round it, so no pixel is written twice.
+
+**The transport's buttons are pictures with the caption inside them** - an
+icon over a label, the mock-up's captions-under-the-buttons folded into the
+button - drawn by `tools/os88midart.py`: the icon a shape (triangle, bar,
+square) given a one-pixel outline and a bevel, the label SET IN THE SYSTEM'S
+OWN HELVETICA (`faces/helv.t88`, §6.4) letter by letter on the ink, not the
+face's even advances, so `Pause` is not `Pa use`. Fifteen faces (five
+buttons, up / pressed / greyed), 48 x 30 each, stored PLANAR - one
+`OSAPI_GFX_BLITP` a face, a `rep movsb` a plane a row and no decode (§5.4.3),
+a few milliseconds on the 8088 where a packed blit would be thirty. That is
+why the colour columns are FIXED where the mono face's are shares: the
+playlist 140 (an 8.3 name whole), Now Playing 248 with its inside at 152 on
+the card's 8-pixel grid, five faces at a pitch of 48, and the rack the rest
+(221 on a VGA, every instrument name whole). The rows are anchored bottom-up
+so the panes' last rows line up across the window: Load Directory with Eject
+and Loop, Add and Remove with the transport's bottom edge.
+
+**The faces are a file beside the package, `MIDIRACK.GFX`** (10,800 bytes,
+LZ-wrapped on the disk), read at entry into a claim of its own **only on a
+colour primary**, so a Hercules or a CGA machine never reads it. It is a
+sidecar and not a part (§20.12) for one measured reason: `os88pkg.py` refuses
+to compress an image that has parts, and this image packs 30 KB to 25. A disk
+without the file, a heap without the room, a block the card refuses (a window
+straddling two displays, §5.4.3) - each is the code-drawn bevelled button
+with the caption, a complete face rather than a broken one.
+
+### 105.10 Disks and cost
+
+`MIDIRACK.O88` is 32,416 bytes of image and 9,710 of bss (25.8 KB packed):
+§105.9.4's caches are ~2.4 KB of that bss and §105.9.5's colour face ~2.1 KB
+of the image. It rides `APPS\` on the 1.44 MB, 1.2 MB and 720 KB apps disks
+with the songs LZ-wrapped in `MEDIA\MIDI\` (ten songs, 27 clusters) and
+`MIDIRACK.GFX` beside it (2 clusters). **The 720 KB disk carries two songs
+and not the pictures** (BATTLE1 and INTRO, 7 clusters; the player is 26 and
+the disk stands at 710 of 713 - the pictures would have left it ONE) and
+**the 360 KB apps disk none**: it is curated (§24.6.1) and had 12. At 360 KB
+the player, its pictures and all ten songs ride the MEDIA disk
+(`media360.img`, 204 of 354), the floppy whose subject is music already. Both are decisions with this section's date
+on them.
+
+**`make midirackdisk`** is the player's own floppy in all four geometries:
+`MIDIRACK.O88`, `MIDIRACK.GFX` and `MIDIRACK.BNK` (unwrapped, §105.8.6) at
+the root, the ten songs in `MEDIA\MIDI\` and `SYSTEM\APPDATA\` for its
+settings - 270 of 354 clusters at 360 KB, the bank being 206 of them. It
+needs `make midibank` (the fetch, once). The bank also rides `APPS\` on the
+everything set and the live media (§80), whose premise is completeness; no
+other shipped floppy carries it. The `kern_small` disks leave it off (§24.5's table): its outputs are
+a driver's and a rate bracket's, and the songs go with it. `SOUND.DRV` grew 603 bytes for §34.12; no kernel byte moved.
+
+### 105.11 Tests
+
+`tests/mrprobe.py` reads the running package's variables by name out of a
+re-assembly. The rows (`tests/midirack.py`, soak) drive MartyPC's 5150s: FM
+claims the chip and keys voices; the SB plays without underrunning; the
+speaker keeps its ring full; the tone mode sounds the melody; a song's end
+loops or advances; and the captures (`MARTYPC_WAV`) carry the song's notes.
+
+**`tests/mrdraw.py`** prices the window (§105.9.4) - rows `mrdraw` (the 5150's
+Hercules) and `mrdrawvga` (the VGA XT, the colour face): every drawing call
+per gesture under a ceiling a repaint blows through, and the picture the
+caches drew identical to a forced repaint's. `tests/unit/t_midtab.py` (fast)
+also holds `tools/os88midart.py`'s selfcheck and the four numbers the package
+states about `MIDIRACK.GFX`.
+
+Three more rows: `midirackmpu` (MIDI out, on a 5150 whose ONLY card is
+MartyPC's recording MPU-401 - so `SOUND.DRV` attaches on it alone, booted
+from `make miditest`'s disk: GM ON first, the reference's own channel
+messages byte for byte, the note-ons within 0.1 s, a pause's All Notes Off
+on all sixteen channels and a resume's programs, and `--break` must fail) and
+`midirackwt` (the wavetable with the synthetic bank on `make mrwttest`'s
+disk: three voices at 6 kHz on the 8088, the card consuming at the rate with
+no underrun, and the pitch agreement and its negative control).
+
+**`make xt-midirack`** is the period machine to hear it on: 86Box's 1986 XT
+at 4.77 MHz with 640 KB, an OTI-067 VGA, a Sound Blaster 2.0 (220h, IRQ 5,
+DMA 1 - the OPL2 for FM and a DSP with auto-init for the synth) AND a
+standalone MPU-401 at 330h whose MIDI 86Box plays through its own FluidSynth
+with GeneralUser GS - with `midirack360.img` in B:, so all six outputs are
+one Settings pick away. **`make 386-midirack`** is `vm/386-sound`'s 386DX/25
+with an SB16 (whose own MPU-401 is the one at 330h), the same FluidSynth and
+`midirack.img`: the machine the wavetable is for, sixteen voices. Both need
+`make midibank`, and both name the SoundFont relative to the tree's root,
+because 86Box hands FluidSynth the path unresolved and never changes
+directory - launch them through make.
+
+### 105.12 Deliberately not done
+
+General MIDI level 2, SysEx, aftertouch, the OPL's rhythm mode and four-op
+voices; seeking inside a song (the bar is a display); and a MIDI port - there
+is no MPU-401 in this machine's world yet.
+
 ## 106. PiXEL — an image viewer and editor (`apps/pixel/`)
 
 PiXEL.O88 views and edits pictures on all three adapters. It reads JPEG, PNG,
@@ -161513,8 +162210,8 @@ the bytes read.
 - **Off `apps360.img` and `apps720.img`**, by §24.6.1's dated decision,
   taken 2026-10-02 with the plan: those disks had 25 and 37 clusters free,
   and PiXEL is ~16 KB on arrival and grows by a decoder a wave. The 720KB
-  filter is the first per-geometry list at that size, so its prerequisites
-  (`APPS720`) and its recipe (`APPSARGS720`) are filtered together.
+  filter joins MIDIRack's (§105.10) in `APPSARGS720`, and its prerequisites
+  (`APPS720`) and its recipe are filtered together.
 - **The gallery** (`apps/pixel/samples/`, 729,074 bytes): nine ORIGINAL
   pictures made for this project, reduced and re-encoded once by
   `tools/pixsamples.py` — baseline JPEG at 4:2:0 and 4:4:4, a progressive and

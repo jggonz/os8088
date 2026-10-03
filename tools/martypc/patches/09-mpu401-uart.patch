@@ -1,0 +1,265 @@
+diff --git a/crates/marty_core/src/bus/io.rs b/crates/marty_core/src/bus/io.rs
+index ddcea3fe..7b81180a 100644
+--- a/crates/marty_core/src/bus/io.rs
++++ b/crates/marty_core/src/bus/io.rs
+@@ -159,6 +159,11 @@ impl BusInterface {
+                         byte = Some(sb.read_u8(port, DeviceRunTimeUnit::Microseconds(delta_us)));
+                     }
+                 }
++                IoDeviceType::Mpu401 => {
++                    if let Some(mpu) = &mut self.mpu401 {
++                        byte = Some(mpu.read_u8(port, DeviceRunTimeUnit::Microseconds(delta_us)));
++                    }
++                }
+                 _ => {}
+             }
+         }
+@@ -390,6 +395,20 @@ impl BusInterface {
+                         resolved = true;
+                     }
+                 }
++                IoDeviceType::Mpu401 => {
++                    if let Some(mut mpu) = self.mpu401.take() {
++                        IoDevice::write_u8(
++                            &mut mpu,
++                            port,
++                            data,
++                            None,
++                            DeviceRunTimeUnit::Microseconds(delta_us),
++                            None,
++                        );
++                        self.mpu401 = Some(mpu);
++                        resolved = true;
++                    }
++                }
+                 IoDeviceType::Sn76489 => {
+                     if let Some(sn76489) = &mut self.sn76489 {
+                         sn76489.write_u8(port, data, None, NULL_DELTA_US, analyzer);
+diff --git a/crates/marty_core/src/bus/mod.rs b/crates/marty_core/src/bus/mod.rs
+index 39d5182b..dffde1ce 100644
+--- a/crates/marty_core/src/bus/mod.rs
++++ b/crates/marty_core/src/bus/mod.rs
+@@ -86,6 +86,7 @@ use marty_common::{
+ #[cfg(feature = "opl")]
+ use crate::devices::adlib::AdLibCard;
+ use crate::devices::sblaster::SoundBlasterCard;
++use crate::devices::mpu401::Mpu401;
+ #[cfg(feature = "ega")]
+ use crate::devices::ega::EGACard;
+ #[cfg(feature = "vga")]
+@@ -315,6 +316,7 @@ pub enum IoDeviceType {
+     Video(VideoCardId),
+     Sound,
+     SoundBlaster,
++    Mpu401,
+     Sn76489,
+ }
+ 
+@@ -482,6 +484,7 @@ pub struct BusInterface {
+     #[cfg(feature = "opl")]
+     adlib: Option<AdLibCard>,
+     sblaster: Option<SoundBlasterCard>,
++    mpu401: Option<Mpu401>,
+     sound_source: Option<DSoundSource>,
+     sn76489: Option<Sn76489>,
+ 
+@@ -572,6 +575,7 @@ impl Default for BusInterface {
+             #[cfg(feature = "opl")]
+             adlib: None,
+             sblaster: None,
++            mpu401: None,
+             sound_source: None,
+             sn76489: None,
+             videocards: MartyHashMap::default(),
+@@ -1316,6 +1320,13 @@ impl BusInterface {
+                 add_io_device!(self, sb, IoDeviceType::SoundBlaster);
+                 self.sblaster = Some(sb);
+             }
++            // os8088: the recording MPU-401 (devices/mpu401.rs). No sound
++            // source: nothing it receives is heard, only kept.
++            if let SoundType::Mpu401 = card.sound_type {
++                let mpu = Mpu401::new(card.io_base.unwrap_or(crate::devices::mpu401::DEFAULT_MPU_BASE));
++                add_io_device!(self, mpu, IoDeviceType::Mpu401);
++                self.mpu401 = Some(mpu);
++            }
+             #[cfg(feature = "opl")]
+             {
+                 #[allow(clippy::single_match)]
+@@ -1598,6 +1609,9 @@ impl BusInterface {
+             sb.run(&mut dma1, self, us);
+             self.sblaster = Some(sb);
+         }
++        if let Some(mpu) = &mut self.mpu401 {
++            mpu.run(us);
++        }
+ 
+         // Run the HDC, passing it DMA controller while DMA is still unattached.
+         if let Some(mut hdc) = self.hdc.take() {
+@@ -1865,6 +1879,10 @@ impl BusInterface {
+         &mut self.fdc
+     }
+ 
++    pub fn mpu401_mut(&mut self) -> &mut Option<Mpu401> {
++        &mut self.mpu401
++    }
++
+     pub fn fantasy_ems_mut(&mut self) -> &mut Option<FantasyEmsCard> {
+         &mut self.fantasy_ems
+     }
+diff --git a/crates/marty_core/src/devices/mod.rs b/crates/marty_core/src/devices/mod.rs
+index ebab37a7..e0f27cae 100644
+--- a/crates/marty_core/src/devices/mod.rs
++++ b/crates/marty_core/src/devices/mod.rs
+@@ -60,6 +60,7 @@ pub mod pic;
+ pub mod pit;
+ pub mod ppi;
+ pub mod sblaster;
++pub mod mpu401;
+ pub mod serial;
+ pub mod sn76489;
+ pub mod sound_source;
+diff --git a/crates/marty_core/src/devices/mpu401.rs b/crates/marty_core/src/devices/mpu401.rs
+new file mode 100644
+index 00000000..994d5bb8
+--- /dev/null
++++ b/crates/marty_core/src/devices/mpu401.rs
+@@ -0,0 +1,119 @@
++/*
++    os8088: an MPU-401 in UART mode, which RECORDS what it is sent.
++
++    MartyPC has no MIDI interface, and os8088's MIDI out (SPEC.md 34.13) is
++    otherwise untestable here: there is no synthesiser to hear, and the
++    bytes are the whole of the behaviour anyway. So this card answers the
++    probe the way a real one does - a status port whose DRR is always clear,
++    an ACK (FEh) after RESET (FFh) and after the UART command (3Fh) - and
++    every byte written to its data port is kept with the emulated time it
++    arrived, for the debug server's `midi` command to hand to a test.
++
++    It is not an intelligent-mode MPU and does not pretend to be one: any
++    other command is ACKed and ignored, which is what a UART-only clone does.
++*/
++
++use crate::{
++    bus::{DeviceRunTimeUnit, IoDevice},
++    cpu_common::LogicAnalyzer,
++};
++use std::collections::VecDeque;
++
++pub const DEFAULT_MPU_BASE: u16 = 0x330;
++const LOG_MAX: usize = 1 << 20;
++
++pub struct Mpu401 {
++    io_base: u16,
++    uart: bool,
++    rx: VecDeque<u8>,
++    clock_us: f64,
++    /// (microseconds since the machine started, the byte)
++    pub log: Vec<(u64, u8)>,
++    pub dropped: u64,
++}
++
++impl Mpu401 {
++    pub fn new(io_base: u16) -> Self {
++        Self {
++            io_base,
++            uart: false,
++            rx: VecDeque::new(),
++            clock_us: 0.0,
++            log: Vec::new(),
++            dropped: 0,
++        }
++    }
++
++    pub fn run(&mut self, us: f64) {
++        self.clock_us += us;
++    }
++
++    pub fn uart(&self) -> bool {
++        self.uart
++    }
++}
++
++impl IoDevice for Mpu401 {
++    fn read_u8(&mut self, port: u16, _delta: DeviceRunTimeUnit) -> u8 {
++        match port.wrapping_sub(self.io_base) {
++            0 => self.rx.pop_front().unwrap_or(0xFF),
++            // Status: bit 6 DRR (0 = it takes a byte) is always clear; bit 7
++            // DSR (0 = a byte to read) is clear exactly while an ACK waits.
++            1 => {
++                if self.rx.is_empty() {
++                    0x80
++                }
++                else {
++                    0x00
++                }
++            }
++            _ => 0xFF,
++        }
++    }
++
++    fn write_u8(
++        &mut self,
++        port: u16,
++        data: u8,
++        _bus: Option<&mut crate::bus::BusInterface>,
++        _delta: DeviceRunTimeUnit,
++        _analyzer: Option<&mut LogicAnalyzer>,
++    ) {
++        match port.wrapping_sub(self.io_base) {
++            0 => {
++                if self.log.len() < LOG_MAX {
++                    self.log.push((self.clock_us as u64, data));
++                }
++                else {
++                    self.dropped += 1;
++                }
++            }
++            1 => {
++                match data {
++                    0xFF => {
++                        // RESET leaves UART mode - except that a real MPU in
++                        // UART mode does not ACK it, which is the one wrinkle
++                        // every driver handles; this one ACKs either way.
++                        self.uart = false;
++                        self.rx.clear();
++                        self.rx.push_back(0xFE);
++                    }
++                    0x3F => {
++                        self.uart = true;
++                        self.rx.push_back(0xFE);
++                    }
++                    _ => self.rx.push_back(0xFE),
++                }
++            }
++            _ => {}
++        }
++    }
++
++    #[rustfmt::skip]
++    fn port_list(&self) -> Vec<(String, u16)> {
++        vec![
++            (String::from("MPU-401 Data"),   self.io_base),
++            (String::from("MPU-401 Status"), self.io_base + 1),
++        ]
++    }
++}
+diff --git a/crates/marty_core/src/machine_types.rs b/crates/marty_core/src/machine_types.rs
+index 5143e82e..2e87321e 100644
+--- a/crates/marty_core/src/machine_types.rs
++++ b/crates/marty_core/src/machine_types.rs
+@@ -95,6 +95,7 @@ pub enum SoundType {
+     AdLib,
+     SoundSource,
+     SoundBlaster,
++    Mpu401,
+ }
+ 
+ #[derive(Copy, Clone, Debug, Deserialize, Hash, Eq, PartialEq)]
+@@ -108,6 +109,7 @@ impl From<SoundType> for SoundConnectionType {
+         match val {
+             SoundType::AdLib => SoundConnectionType::Card,
+             SoundType::SoundBlaster => SoundConnectionType::Card,
++            SoundType::Mpu401 => SoundConnectionType::Card,
+             SoundType::SoundSource => SoundConnectionType::Parallel,
+         }
+     }
