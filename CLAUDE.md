@@ -632,7 +632,11 @@ build in QEMU, drive the UI it claims over QMP, screenshot the evidence per
 claim, then (when asked) merge a stacked series in order — is
 `.claude/skills/functional-check` (`/functional-check [PR#|branch]`), whose
 `LESSONS.md` is what checking and merging the Weave waves (#124–#128)
-learned.
+learned. Giving a package a **colour face on VGA/EGA** — the redraws measured
+and cut through caches first, then a layout on the card's grid, styled panes
+and picture-faced buttons, with the mono faces left as they were — is
+`.claude/skills/vga-face` (`/vga-face <package>`, **manual invocation only**),
+whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
 
 ## Hard rules (§1 — these break silently if violated)
 
