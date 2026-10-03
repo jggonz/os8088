@@ -90,9 +90,10 @@ PX_SF_MEM   equ 6
 PX_SF_POS   equ 7
 PX_SVSZ     equ 16                  ; a field's value buffer
 PX_LINEMAX  equ 92                  ; widest run: 720 / 8 and a margin
-PX_ILAB     equ 7                   ; Image Info's label column, in glyphs
+PX_ILAB     equ 8                   ; Image Info's label column, in glyphs
 PX_IVSZ     equ 24                  ; ...and a value's buffer
-PX_HSTW     equ 9                   ; Histogram's statistics column, glyphs
+PX_HSTW     equ 11                  ; Histogram's statistics column, glyphs:
+                                    ; "Std Dev" and three digits
 PXH_SZ      equ 2 + 8 * 4           ; a half-height picture record
 PX_HELPSZ   equ 400                 ; the keyboard card's text, copied in
 PX_HELPMAX  equ 12                  ; ...and its lines
@@ -105,11 +106,16 @@ PX_R_PANELS equ 8
 PX_R_FS     equ 16
 PX_R_STATUS equ 32
 PX_R_SDIRTY equ 64                  ; only the status fields that changed
+PX_R_NFRAME equ 128                 ; the Navigator's frame, where the view
+                                    ; now is
 PX_R_ALL    equ 63
 
 PX_PR_NONE   equ 0                  ; what a press that was no button's hit
 PX_PR_CANVAS equ 1
 PX_PR_STRIP  equ 2
+PX_PR_HAND   equ 3                  ; a Hand drag on the picture
+PX_PR_NAV    equ 4                  ; a press or drag in the Navigator
+PX_NAMES     equ 128                ; the folder's pictures px_walk keeps
 
 ; --- the formats PiXEL names (SPEC.md 106.6) -----------------------------------
 PXF_NONE    equ 0
@@ -157,6 +163,7 @@ px_entry:
     mov [px_homedir], dx            ; PIXEL.O88 is in, which every part fetch
     mov [px_homevol], bl            ; goes back to (px_pfetch)
     call px_halfinit
+    call px_qinit                   ; the cube's level tables (pxmaster.inc)
     call px_initstate
     mov si, px_tpl
     call OSAPI_WM_CREATE
@@ -214,10 +221,12 @@ px_initstate:
     push si
     mov byte [px_tool], 0           ; the Hand
     mov byte [px_c_rule], CBLACK    ; until the first layout picks a palette
+    mov word [px_ncur], 0xFFFF      ; no folder yet
+    mov byte [px_zfit], 1
     xor bx, bx
 .sv:
-    mov si, px_s_dash               ; every field "-" until it knows better
-    call px_sval
+    mov si, px_s_empty0             ; every field blank until it knows
+    call px_sval                    ; (a bar of dashes reads as broken)
     inc bx
     cmp bx, PX_NSF
     jb .sv
@@ -263,7 +272,13 @@ px_paint:
     jc .out
     mov bx, [px_win]
     call OSAPI_WM_DAMAGE            ; CF = 1: all of it; else AX..DX
-    jnc .rect
+    jc .all
+    cmp ax, cx                      ; an empty rect is legal and means draw
+    jg .out                         ; nothing (wave-1 review NIT 6)
+    cmp bx, dx
+    jg .out
+    jmp short .rect
+.all:
     mov ax, [px_cx0]
     mov bx, [px_cy0]
     mov cx, [px_xr]
@@ -362,8 +377,15 @@ px_draw:
     jmp short .out
 .sd:
     cmp byte [px_sdirty], 0         ; a field that changed while this window
-    je .out                         ; could not show it is drawn by whatever
+    je .fr                          ; could not show it is drawn by whatever
     call px_sflush                  ; draws next, whatever it was asked for
+.fr:
+    test byte [px_rmask], PX_R_NFRAME
+    jz .out                         ; the frame follows the view: off where
+    test byte [px_rmask], PX_R_PANELS
+    jnz .out                        ; it was, on where it is (the panels,
+    call px_navframe_off            ; drawn, drew it fresh)
+    call px_navframe_on
 .out:
     pop si
     pop dx
@@ -400,8 +422,13 @@ px_cards:
     call os88ui_about_d
 .h:
     cmp byte [px_helpon], 0
-    je .out
+    je .i
     mov si, px_helptab
+    call os88ui_about_d
+.i:
+    cmp byte [px_infoon], 0
+    je .out
+    mov si, px_infotab
     call os88ui_about_d
 .out:
     pop si
@@ -418,6 +445,8 @@ px_regdraw:
     cmp byte [px_abon], 0
     jne .out
     cmp byte [px_helpon], 0
+    jne .out
+    cmp byte [px_infoon], 0
     jne .out
     mov bx, [px_win]
     call OSAPI_WM_CLIP_SET          ; CF = 1: not a pixel of us is visible
@@ -464,6 +493,8 @@ px_regbtn:
     jne .out
     cmp byte [px_helpon], 0
     jne .out
+    cmp byte [px_infoon], 0
+    jne .out
     mov bx, [px_win]
     call OSAPI_WM_CLIP_SET
     jc .out
@@ -479,15 +510,67 @@ px_regbtn:
 ; --- W_ONCLICK, ours, in front of the library's -------------------------------
 ; A card that is up is taken down by the press, and the press does nothing
 ; else. Otherwise the rects are laid out where the window is NOW (a move does
-; not call W_PAINT) and the library sees the press first (SPEC.md 20.5.1.3.3)
+; not call W_PAINT), the Histogram's drop-down sees the press first, and then
+; the library (SPEC.md 20.5.1.3.3)
 px_clickw:
     mov [px_win], si
     call px_carddown
     jc .out
     call px_layout
     jc .out
+    call px_droppress               ; CF = 1: the drop-down had it
+    jc .out
     jmp os88ui_btnclick
 .out:
+    ret
+
+; px_droppress - CX, DX = a press: the Histogram's drop-down's, if it is on
+; show. CF = 1 it was spent there (a new channel is applied)
+px_droppress:
+    test byte [px_pvis], 2
+    jz .no
+    cmp word [px_pbhw + 2], 0
+    je .no
+    push ax
+    push bx
+    mov bx, px_hdrop
+    call os88ui_drpress             ; AH = 1 spent, AL = a pick, CF = repaint
+    call px_dropdone
+    pop bx
+    pop ax
+    ret
+.no:
+    clc
+    ret
+
+; px_dropdone - after os88ui_drpress / drup: AH = 1 spent, AL = a pick or
+; 0FFh, CF = 1 the list came down without its bank. A pick refolds the
+; Histogram (SPEC.md 106.12). out CF = 1 when the press was the drop's
+px_dropdone:
+    pushf
+    or ah, ah
+    jz .free
+    popf
+    jnc .pick
+    push ax
+    mov al, PX_R_ALL                ; the list came down over the content
+    call px_regdraw
+    pop ax
+.pick:
+    cmp al, 0xFF
+    je .spent
+    mov [px_hchan], al
+    call px_hstats
+    push ax
+    mov al, PX_R_PANELS
+    call px_regdraw
+    pop ax
+.spent:
+    stc
+    ret
+.free:
+    popf
+    clc
     ret
 
 ; px_carddown - if a card is up, take it down and repaint. CF = 1 it was
@@ -496,11 +579,14 @@ px_carddown:
     jne .down
     cmp byte [px_helpon], 0
     jne .down
+    cmp byte [px_infoon], 0
+    jne .down
     clc
     ret
 .down:
     mov byte [px_abon], 0
     mov byte [px_helpon], 0
+    mov byte [px_infoon], 0
     push ax
     mov al, PX_R_ALL
     call px_regdraw
@@ -508,23 +594,57 @@ px_carddown:
     stc
     ret
 
-; a press on no button (the library hands it on): CX, DX screen, SI window
+; a press on no button (the library hands it on): CX, DX screen, SI window.
+; The canvas: with no picture it is a big Open button; with the Hand it
+; starts a pan. The Navigator's picture: a pan to there. A compact panel's
+; strip: the next panel
 px_onclick:
     mov byte [px_press], PX_PR_NONE
     push ax
     push bx
-    mov ax, PX_PR_CANVAS
     cmp cx, [px_cvx1]
-    jl .strip
+    jl .nav
     cmp cx, [px_cvx2]
-    jg .strip
+    jg .nav
     cmp dx, [px_midy1]
-    jl .strip
+    jl .nav
     cmp dx, [px_midy2]
+    jg .nav
+    mov al, PX_PR_CANVAS
+    call px_haspic
+    jc .got
+    cmp byte [px_tool], 0           ; the Hand
+    jne .out
+    mov [px_hx0], cx                ; where the drag starts, and where the
+    mov [px_hy0], dx                ; picture was
+    mov ax, [px_ox]
+    mov [px_hox], ax
+    mov ax, [px_oy]
+    mov [px_hoy], ax
+    call OSAPI_GET_TICKS
+    mov [px_htick], ax
+    mov al, PX_PR_HAND
+    jmp short .got
+.nav:
+    test byte [px_pvis], 1          ; the Navigator's picture
+    jz .strip
+    cmp word [px_pbhw], 0
+    je .strip
+    cmp cx, [px_nwell]
+    jl .strip
+    cmp cx, [px_nwell + 4]
     jg .strip
+    cmp dx, [px_nwell + 2]
+    jl .strip
+    cmp dx, [px_nwell + 6]
+    jg .strip
+    call px_navpan
+    call OSAPI_GET_TICKS
+    mov [px_htick], ax
+    mov al, PX_PR_NAV
     jmp short .got
 .strip:
-    mov ax, PX_PR_STRIP             ; a panel strip on the compact layout:
+    mov al, PX_PR_STRIP             ; a panel strip on the compact layout:
     cmp byte [px_tier], 0           ; the strip itself turns the page too
     je .out
     cmp byte [px_pnon], 0
@@ -548,23 +668,64 @@ px_onclick:
     pop ax
     ret
 
-; W_ONDRAG: the pressed button follows the pointer
+; W_ONDRAG: the pressed button follows the pointer; a Hand drag or a drag in
+; the Navigator pans, at most once a tick (SPEC.md 106.11); an open list
+; follows the pointer
 px_ondrag:
     push ax
     push bx
-    call os88ui_armed
-    or ax, ax
-    jz .out
     call px_layout
     jc .out
+    mov bx, px_hdrop
+    cmp byte [px_hdrop + OS88UI_DR_OPEN], 0
+    je .btn
+    call os88ui_drdrag
+    jmp short .out
+.btn:
+    call os88ui_armed
+    or ax, ax
+    jz .pan
     mov bx, px_btns
     call os88ui_btndrag
+    jmp short .out
+.pan:
+    mov al, [px_press]
+    cmp al, PX_PR_HAND
+    je .tick
+    cmp al, PX_PR_NAV
+    jne .out
+.tick:
+    call OSAPI_GET_TICKS            ; one move a tick at most
+    cmp ax, [px_htick]
+    je .out
+    mov [px_htick], ax
+    call px_dragmove
 .out:
     pop bx
     pop ax
     ret
 
-; W_ONMOUSEUP: a button fires here, or the region pressed acts
+; px_dragmove - CX, DX = the pointer during a Hand or Navigator drag
+px_dragmove:
+    cmp byte [px_press], PX_PR_NAV
+    jne .hand
+    jmp px_navpan
+.hand:
+    push ax
+    push bx
+    mov ax, cx
+    sub ax, [px_hx0]
+    add ax, [px_hox]
+    mov bx, dx
+    sub bx, [px_hy0]
+    add bx, [px_hoy]
+    call px_panto
+    pop bx
+    pop ax
+    ret
+
+; W_ONMOUSEUP: a button fires here, a pick is made, a drag ends where the
+; pointer is, or the region pressed acts
 px_onup:
     push ax
     push bx
@@ -572,7 +733,16 @@ px_onup:
     push dx
     push si
     call px_layout
-    jc .out
+    jnc .lay
+    jmp .out
+.lay:
+    cmp byte [px_hdrop + OS88UI_DR_OPEN], 0
+    je .btn
+    mov bx, px_hdrop
+    call os88ui_drup
+    call px_dropdone
+    jmp .out
+.btn:
     call os88ui_armed
     or ax, ax
     jz .region
@@ -586,6 +756,16 @@ px_onup:
 .region:
     mov al, [px_press]
     mov byte [px_press], PX_PR_NONE
+    cmp al, PX_PR_HAND
+    je .drag
+    cmp al, PX_PR_NAV
+    jne .cv
+.drag:
+    mov [px_press], al              ; (px_dragmove reads it)
+    call px_dragmove
+    mov byte [px_press], PX_PR_NONE
+    jmp short .out
+.cv:
     cmp al, PX_PR_CANVAS
     jne .st
     cmp cx, [px_cvx1]               ; released where it was pressed: the
@@ -611,7 +791,8 @@ px_onup:
     ret
 
 ; px_bfire - AX = a button that fired. A greyed one did NOT: the library arms
-; and fires on geometry alone, so the fact a grey states is checked here
+; and fires on geometry alone - so here the fact a grey states is said in a
+; toast (SPEC.md 106.12), and nothing else happens
 px_bfire:
     push ax
     push bx
@@ -619,10 +800,58 @@ px_bfire:
     mov si, ax
     shl si, 1
     test word [px_bflags + si], OS88UI_DIS
-    jnz .out
+    jz .live
+    test word [px_bkind + si], PX_BK_LATER
+    mov si, px_s_later              ; why it is grey (mov keeps the flags)
+    jnz .why
+    mov si, px_s_nopico
+.why:
+    call px_toast
+    jmp .out
+.live:
     cmp ax, PX_B_OPEN
-    jne .tool
+    jne .z
+    cmp byte [px_busy], 1           ; Stop while a picture decodes
+    jne .op
+    call px_cancel
+    jmp .out
+.op:
     call px_cmd_open
+    jmp .out
+.z:
+    cmp ax, PX_B_ZIN
+    je .zin
+    cmp ax, PX_B_NZIN
+    jne .z1
+.zin:
+    mov al, 1
+    call px_zstep
+    jmp .out
+.z1:
+    cmp ax, PX_B_ZOUT
+    je .zout
+    cmp ax, PX_B_NZOUT
+    jne .z2
+.zout:
+    xor al, al
+    call px_zstep
+    jmp .out
+.z2:
+    cmp ax, PX_B_FIT
+    je .fit
+    cmp ax, PX_B_NFIT
+    jne .z3
+.fit:
+    xor ax, ax
+    xor dx, dx
+    call px_zoomto
+    jmp short .out
+.z3:
+    cmp ax, PX_B_ONE
+    jne .tool
+    xor ax, ax
+    mov dx, 1
+    call px_zoomto
     jmp short .out
 .tool:
     cmp ax, PX_B_T0
@@ -645,8 +874,8 @@ px_bfire:
     jne .out
     xor byte [px_fscol], 1
     call px_flags
-    mov al, PX_R_ALL                ; the canvas grows or shrinks with it
-    call px_regdraw
+    mov al, PX_R_TOOLS | PX_R_CANVAS | PX_R_PANELS | PX_R_FS
+    call px_regdraw                 ; the middle band and the filmstrip move
 .out:
     pop si
     pop bx
@@ -657,29 +886,56 @@ px_bfire:
 px_onkey:
     push ax
     push bx
+    push dx
     mov [px_win], si
+    cmp byte [px_hdrop + OS88UI_DR_OPEN], 0
+    je .nodrop
+    mov bx, px_hdrop                ; an open list: any key takes it down
+    call os88ui_drclose
+    jnc .k0
+    push ax
+    mov al, PX_R_ALL
+    call px_regdraw
+    pop ax
+.k0:
+    jmp .out
+.nodrop:
     call px_carddown                ; any key takes a card down, and does
-    jc .out                         ; nothing else
-    cmp al, 0x0F                    ; Ctrl+O
+    jc .k0                          ; nothing else
+    cmp ah, KSC_ESC                 ; Esc: stop a picture that is opening
     jne .k1
-    call px_cmd_open
-    jmp short .out
+    call px_cancel
+    jmp .out
 .k1:
+    cmp al, 0x0F                    ; Ctrl+O
+    jne .k1r
+    call px_cmd_open
+    jmp .out
+.k1r:
+    cmp al, 0x12                    ; Ctrl+R: Revert
+    jne .k1i
+    call px_revert
+    jmp .out
+.k1i:
     cmp ah, 0x3B                    ; F1
     je .help
     cmp al, '?'
     jne .k2
 .help:
     call px_help
-    jmp short .out
+    jmp .out
 .k2:
     cmp al, 9                       ; Tab: the next panel, one column
     jne .k3
     cmp byte [px_tier], 0
-    je .out
+    jne .k2t
+    jmp .out
+.k2t:
     call px_nextpanel
-    jmp short .out
+    jmp .out
 .k3:
+    call px_navkey                  ; the arrows, PgUp/PgDn, + - 0 1
+    jnc .out
     and al, 0xDF                    ; the tools' letters, either case
     mov bx, px_toolkeys
 .tk:
@@ -694,25 +950,150 @@ px_onkey:
     mov al, bl
     call px_settool
 .out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; px_navkey - AL/AH = a key: the view's own (SPEC.md 106.11). CF = 0 it was
+; one of them and has been done; CF = 1 not ours. Preserves all
+px_navkey:
+    push ax
+    push bx
+    push dx
+    cmp ah, KSC_LEFT
+    jne .r
+    mov ax, 32
+    xor bx, bx
+    jmp short .pan
+.r:
+    cmp ah, KSC_RIGHT
+    jne .u
+    mov ax, -32
+    xor bx, bx
+    jmp short .pan
+.u:
+    cmp ah, KSC_UP
+    jne .d
+    xor ax, ax
+    mov bx, 32
+    jmp short .pan
+.d:
+    cmp ah, KSC_DOWN
+    jne .pu
+    xor ax, ax
+    mov bx, -32
+    jmp short .pan
+.pu:
+    cmp ah, 0x49                    ; PgUp: a canvas, less 16 rows
+    jne .pd
+    xor ax, ax
+    mov bx, [px_ch]
+    sub bx, 16
+    jmp short .pan
+.pd:
+    cmp ah, 0x51                    ; PgDn
+    jne .zi
+    xor ax, ax
+    mov bx, [px_ch]
+    sub bx, 16
+    neg bx
+.pan:
+    call px_panby
+    jmp short .yes
+.zi:
+    cmp al, '+'
+    je .zin
+    cmp al, '='
+    jne .zo
+.zin:
+    mov al, 1
+    call px_zstep
+    jmp short .yes
+.zo:
+    cmp al, '-'
+    jne .zf
+    xor al, al
+    call px_zstep
+    jmp short .yes
+.zf:
+    cmp al, '0'
+    jne .z1
+    xor ax, ax
+    xor dx, dx
+    call px_zoomto
+    jmp short .yes
+.z1:
+    cmp al, '1'
+    jne .no
+    xor ax, ax
+    mov dx, 1
+    call px_zoomto
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop dx
     pop bx
     pop ax
     ret
 
 ; --- the menu handler: AL = item, AH = menu, SI = the window --------------------
-; A greyed item never arrives here. What does: File > Open, and View's four
-; that need no picture.
+; A greyed item never arrives here
 px_cmd:
     push ax
+    push dx
     mov [px_win], si
+    call px_carddown                ; a card is taken down first (106.2): a
+                                    ; command under it would act unseen
     cmp ah, PX_M_FILE
     jne .view
-    cmp al, 0
-    jne .out
+    cmp al, PX_MF_OPEN
+    jne .f1
     call px_cmd_open
-    jmp short .out
+    jmp .out
+.f1:
+    cmp al, PX_MF_REVERT
+    jne .f2
+    call px_revert
+    jmp .out
+.f2:
+    cmp al, PX_MF_INFO
+    jne .out1
+    call px_infocard
+.out1:
+    jmp .out
 .view:
     cmp ah, PX_M_VIEW
-    jne .out
+    jne .out1
+    cmp al, PX_MV_ZIN
+    jne .v0
+    mov al, 1
+    call px_zstep
+    jmp .out
+.v0:
+    cmp al, PX_MV_ZOUT
+    jne .v0b
+    xor al, al
+    call px_zstep
+    jmp .out
+.v0b:
+    cmp al, PX_MV_FIT
+    jne .v0c
+    xor ax, ax
+    xor dx, dx
+    call px_zoomto
+    jmp short .out
+.v0c:
+    cmp al, PX_MV_ACTUAL
+    jne .v0d
+    xor ax, ax
+    mov dx, 1
+    call px_zoomto
+    jmp short .out
+.v0d:
     cmp al, PX_MV_DITHER
     jne .v1
     call px_dithertog
@@ -732,6 +1113,7 @@ px_cmd:
     jne .out
     call px_help
 .out:
+    pop dx
     pop ax
     ret
 
@@ -739,7 +1121,12 @@ px_cmd:
 px_about:
     push bx
     push si
+    cmp byte [px_abon], 0           ; another card up: down first, or its edges
+    jne .up                         ; show round the smaller About card
+    call px_carddown
+.up:
     mov byte [px_helpon], 0
+    mov byte [px_infoon], 0
     mov byte [px_abon], 1
     mov bx, [px_win]
     mov si, px_ablines
@@ -750,6 +1137,7 @@ px_about:
 
 ; --- W_ONRESIZE: the box changed under us. Nothing is kept across a paint, so
 ; there is nothing to re-derive; the full repaint that follows lays out anew
+; (the view too: px_layout recomputes it, and Fit follows the new canvas)
 px_onresize:
     ret
 
@@ -771,8 +1159,9 @@ px_ontimer:
     pop ax
     ret
 
-; --- W_ONWAKE: the launch document's handover (SPEC.md 54.10) ----------------
-; No lock here: the disk work happens first, then the lock for the drawing.
+; --- W_ONWAKE: the launch document's handover (SPEC.md 54.10), and the
+; worker's kicks (SPEC.md 106.9). NO LOCK HERE: the pump reads the disk first,
+; then the lock is taken for the drawing
 px_onwake:
     push ax
     push bx
@@ -781,19 +1170,113 @@ px_onwake:
     push di
     mov [px_win], si
     cmp byte [px_argpend], 0
-    je .out
+    je .pump
     mov byte [px_argpend], 0
     mov dx, [px_argdir]             ; the DOCUMENT's folder, not ours (54.8:
     mov bl, [px_argvol]             ; the kernel stood in the program's)
     call OSAPI_FILE_GOTO
-    jc .out
-    mov si, px_argname
-    mov di, px_fname
-    call px_strcpy
-    call px_examine                 ; reads the disk: no lock yet
-    call OSAPI_GFX_LOCK
-    call px_shown
+    jnc .there
+    call OSAPI_GFX_LOCK             ; gone (a disk swapped): said, from inside
+    mov si, px_s_notfile            ; the lock, where a toast reaches the
+    call px_toast                   ; glass (54.10)
     call OSAPI_GFX_UNLOCK
+    jmp short .pump
+.there:
+    mov si, px_argname
+    mov di, px_oname
+    call px_strcpy
+    call OSAPI_GFX_LOCK
+    call px_open
+    call OSAPI_GFX_UNLOCK
+.pump:
+    cmp byte [px_busy], 0
+    je .out
+    cmp byte [px_busy], 1
+    jne .job
+    call px_pumpfill                ; the disk, with no lock held
+.job:
+    call OSAPI_GFX_LOCK
+    cmp byte [px_job], JOB_NONE
+    jne .prog
+    call px_finish                  ; the worker has answered
+    jmp short .unl
+.prog:
+    cmp byte [px_busy], 1
+    jne .unl
+    call px_progpaint               ; the new rows, the progress
+.unl:
+    call OSAPI_GFX_UNLOCK
+.out:
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; px_progpaint - while a picture decodes: the rows that came, and the
+; name field's percentage when it moved (at most once a tick). Lock held
+px_progpaint:
+    push ax
+    push bx
+    push dx
+    call px_progfield
+    cmp byte [px_abon], 0           ; a card is up: the rows wait for it
+    jne .out
+    cmp byte [px_helpon], 0
+    jne .out
+    cmp byte [px_infoon], 0
+    jne .out
+    mov bx, [px_win]
+    call OSAPI_WM_CLIP_SET
+    jc .out
+    call px_layout                  ; ONE layout for both
+    jc .clr
+    call px_paintrows
+    cmp byte [px_sdirty], 0
+    je .clr
+    call px_sflush
+.clr:
+    call OSAPI_WM_CLIP_CLEAR
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; px_progfield - the name field says "Opening 42%" while a picture decodes:
+; source rows emitted over the source's rows. Preserves all
+px_progfield:
+    cmp byte [px_busy], 1           ; (the end of a decode: the name again,
+    je .on                          ; which px_compose has set)
+    ret
+.on:
+    push ax
+    push bx
+    push dx
+    push si
+    push di
+    mov ax, [px_srcdone]
+    mov bx, 100
+    mul bx
+    mov bx, [px_cur + PXR_SH]
+    or bx, bx
+    jz .out
+    div bx
+    cmp ax, 100
+    jbe .p
+    mov ax, 99
+.p:
+    mov si, px_s_opening
+    mov di, px_cline
+    call px_strcpy
+    xor dx, dx
+    call px_u32n
+    mov si, px_s_pct
+    call px_strcat
+    mov bx, PX_SF_NAME
+    mov si, px_cline
+    call px_sval
 .out:
     pop di
     pop si
@@ -812,11 +1295,18 @@ px_cmd_open:
     push bx
     push si
     push di
+    cmp byte [px_busy], 0
+    je .go
+    mov si, px_s_busy
+    call px_toast
+    jmp short .out
+.go:
     mov al, 0
     mov bx, [px_win]
     mov di, px_dlgdone
     xor si, si
     call OSAPI_FILE_DLG             ; CF = 1: one is up already
+.out:
     pop di
     pop si
     pop bx
@@ -830,7 +1320,7 @@ px_cmd_open:
 px_dlgdone:
     push si
     mov si, di
-    mov di, px_fname                ; the kernel's buffer, copied out FIRST
+    mov di, px_oname                ; the kernel's buffer, copied out FIRST
     mov cx, 12
 .cp:
     mov al, [es:si]
@@ -838,22 +1328,80 @@ px_dlgdone:
     inc si
     inc di
     loop .cp
-    mov byte [px_fname + 12], 0
+    mov byte [px_oname + 12], 0
     pop si
     push ds
     pop es                          ; ES = ours again
-    cmp byte [px_fname], 0
-    je .none
-    call px_examine
-    jc .none
-    call px_shown
-    ret
-.none:
-    mov si, px_s_notfile
-    call px_toast
+    cmp byte [px_oname], 0
+    je .out
+    call px_open                    ; pxpump.inc
+.out:
     ret
 
-; px_shown - after px_examine: the window says what it now knows. Lock held
+; px_revert - File > Revert (Ctrl+R): the shown picture read again from its
+; file, in its folder. Lock held
+px_revert:
+    push bx
+    push dx
+    push si
+    push di
+    cmp byte [px_cur + PXR_FHAVE], 0
+    je .out
+    mov dx, [px_cur + PXR_DIR]
+    mov bl, [px_cur + PXR_VOL]
+    call OSAPI_FILE_GOTO
+    jc .out
+    mov si, px_cur + PXR_NAME
+    mov di, px_oname
+    call px_strcpy
+    call px_open
+.out:
+    pop di
+    pop si
+    pop dx
+    pop bx
+    ret
+
+; px_infocard - File > Image Info...: Image Info's lines as a card, for the
+; compact layout where the panel may not be the one showing
+px_infocard:
+    push bx
+    push si
+    push di
+    push cx
+    xor di, di                      ; the card's lines: each one composed
+    mov bx, px_infotab              ; into its own slot of the help buffer
+.l:
+    call px_infoline                ; px_cline = line DI
+    mov ax, di
+    mov cx, PX_IVSZ + 8
+    mul cx
+    add ax, px_helpbuf
+    mov [bx], ax
+    push di
+    mov di, ax
+    mov si, px_cline
+    call px_strcpy
+    pop di
+    add bx, 2
+    inc di
+    cmp di, PX_INFON
+    jb .l
+    mov word [bx], 0
+    mov byte [px_abon], 0
+    mov byte [px_helpon], 0
+    mov byte [px_infoon], 1
+    mov bx, [px_win]
+    mov si, px_infotab
+    call os88ui_about
+    pop cx
+    pop di
+    pop si
+    pop bx
+    ret
+
+; px_shown - after an open, or a refusal: the window says what it now knows.
+; Lock held
 px_shown:
     push ax
     push bx
@@ -861,8 +1409,8 @@ px_shown:
     mov bx, [px_win]                ; "PiXEL - NAME.EXT" in the title bar: a
     mov ax, px_title                ; strip, not a repaint (SPEC.md 11.92)
     call OSAPI_WM_TITLE
-    mov al, PX_R_CANVAS | PX_R_PANELS | PX_R_FS | PX_R_SDIRTY
-    call px_regdraw
+    mov al, PX_R_TB | PX_R_CANVAS | PX_R_PANELS | PX_R_FS | PX_R_STATUS
+    call px_regdraw                 ; (the tool column is the same column)
     pop bx
     pop ax
     ret
@@ -944,8 +1492,8 @@ px_paneltog:
 .l:
     mov [px_miv + 2 * PX_MV_PANELS], ax
     call px_menuset
-    mov al, PX_R_ALL
-    call px_regdraw
+    mov al, PX_R_CANVAS | PX_R_PANELS
+    call px_regdraw                 ; the canvas takes the column, or gives it
     pop ax
     ret
 
@@ -962,7 +1510,7 @@ px_filmtog:
     mov [px_fsuser], al
     mov byte [px_fscol], 0
     call px_flags
-    mov al, PX_R_ALL
+    mov al, PX_R_TOOLS | PX_R_CANVAS | PX_R_PANELS | PX_R_FS
     call px_regdraw                 ; ...which lays out, and relabels
     pop ax
     ret
@@ -1176,6 +1724,12 @@ px_pfetch:
     mov dx, [px_homedir]
     mov bl, [px_homevol]
     call OSAPI_FILE_GOTO
+    jnc .moved                      ; home is gone (PiXEL's disk swapped
+    mov si, px_s_diskback           ; out): no fetch at all, rather than a
+    call px_toast                   ; part read out of whatever PIXEL.O88
+    stc                             ; stands in this folder (wave-1 review
+    ret                             ; MIN-2)
+.moved:
     mov byte [px_pmoved], 1
 .here:
     mov al, [px_ppart]
@@ -1200,11 +1754,11 @@ px_pdrop:
 ; =============================================================================
 
 ; px_examine - [px_fname], in the folder the instance is standing in: walk
-; the folder (its pictures, where this one sorts among them, its size), read
-; its first cluster for the format and the header's dimensions, and compose
-; everything the window shows about it. CF = 1 it is not a file here
+; the folder (its pictures, sorted, and this one's place and size), read its
+; HEAD (SPEC.md 106.9) - or, packed on the disk, the whole file expanded -
+; and name the format by its bytes. CF = 1 AX = PXD_NOFILE, PXD_READ,
+; PXD_BIG or PXD_MEM; on any of them nothing is held
 px_examine:
-    push ax
     push bx
     push cx
     push dx
@@ -1213,23 +1767,29 @@ px_examine:
     push es
     push ds
     pop es
-    mov word [px_fsize], 0
-    mov word [px_fsize + 2], 0
-    mov byte [px_ffmt], PXF_NONE
-    mov word [px_fw], 0
-    mov word [px_fh], 0
-    mov byte [px_fbits], 0
-    mov byte [px_fprog], 0
+    xor ax, ax
+    mov [px_fsize], ax
+    mov [px_fsize + 2], ax
+    mov [px_fw], ax
+    mov [px_fh], ax
+    mov [px_ffmt], al
+    mov [px_fbits], al
+    mov [px_fprog], al
+    mov [px_cur + PXR_PACK], al
+    mov [px_cur + PXR_SCL], al
     call px_walk                    ; CF = 1: the name is not in this folder
-    jnc .found
-    jmp .out
-.found:
+    mov ax, PXD_NOFILE
+    jc .out
     mov si, px_fname                ; the format by its extension first...
     call px_extfmt
     mov [px_ffmt], al
-    call px_sniff                   ; ...then by its bytes, which win
+    call px_head                    ; CF = 1 AX = why
+    jc .out
+    mov ax, [px_hlen]
+    mov [px_snlen], ax
+    mov es, [px_hseg]
+    call px_sniffbuf                ; ...then by its bytes, which win
     mov byte [px_fhave], 1
-    call px_compose
     clc
 .out:
     pop es
@@ -1238,16 +1798,20 @@ px_examine:
     pop dx
     pop cx
     pop bx
-    pop ax
     ret
 
 ; px_walk - OSAPI_FILE_FIND over the folder: [px_fcount] pictures PiXEL
-; reads, [px_fidx] this one's place among them sorted by name (1-based), and
-; [px_fsize]. CF = 1 when [px_fname] is not one of the files listed
+; reads, [px_fidx] this one's place among them sorted by name (1-based),
+; [px_fsize] and [px_fcomp]; and the first PX_NAMES of them, sorted, in
+; [px_names] with this one at [px_ncur] (the filmstrip's cards). CF = 1 when
+; [px_fname] is not one of the files listed
 px_walk:
     mov word [px_fcount], 0
     mov word [px_fidx], 1
+    mov word [px_nnames], 0
+    mov word [px_ncur], 0xFFFF
     mov byte [px_ffound], 0
+    mov byte [px_fcomp], 0
     xor cx, cx
 .next:
     mov di, px_find
@@ -1255,32 +1819,253 @@ px_walk:
     jc .end
     cmp byte [px_find + 14], OSAPI_FT_DIR
     jae .next                       ; a folder, or '..'
-    mov si, px_find
-    call px_extfmt
-    or al, al
-    jz .next                        ; not a picture PiXEL names
-    inc word [px_fcount]
-    mov si, px_find
-    mov di, px_fname
-    call px_strcmp                  ; CF = 1: listed < ours; ZF = equal
-    je .ours
-    jnc .next
-    inc word [px_fidx]
-    jmp short .next
-.ours:
+    mov si, px_find                 ; OURS, whatever its extension: the bytes
+    mov di, px_fname                ; name the format (106.6), so a misnamed
+    call px_strcmp                  ; picture still opens (wave-1 review
+    jne .pic                        ; MAJ-2)
     mov byte [px_ffound], 1
-    mov ax, [px_find + 18]
+    mov ax, [px_find + 18]          ; the size, expanded
     mov [px_fsize], ax
     mov ax, [px_find + 20]
     mov [px_fsize + 2], ax
+    mov al, [px_find + 22]          ; bit 0: packed on the disk
+    and al, 1
+    mov [px_fcomp], al
+.pic:
+    mov si, px_find
+    call px_extfmt
+    or al, al
+    jz .next                        ; not a picture PiXEL names: not counted
+    inc word [px_fcount]
+    cmp word [px_nnames], PX_NAMES  ; kept for the cards
+    jae .cmp
+    push cx
+    mov ax, [px_nnames]
+    mov di, 13
+    mul di
+    add ax, px_names
+    mov di, ax
+    mov si, px_find
+    mov cx, 13
+    cld
+    rep movsb
+    mov byte [di - 1], 0
+    inc word [px_nnames]
+    pop cx
+.cmp:
+    mov si, px_find
+    mov di, px_fname
+    call px_strcmp                  ; CF = 1: listed < ours
+    jae .next
+    inc word [px_fidx]
     jmp short .next
 .end:
+    call px_sortnames
     cmp byte [px_ffound], 0
     jne .yes
     stc
     ret
 .yes:
     clc
+    ret
+
+; px_sortnames - [px_names] in name order (insertion: there are at most
+; PX_NAMES), and [px_ncur] where [px_fname] is among them. Preserves all
+px_sortnames:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov bx, 1                       ; BX = i
+.i:
+    cmp bx, [px_nnames]
+    jae .find
+    mov cx, bx                      ; CX = j
+.j:
+    jcxz .in
+    mov ax, cx
+    mov di, 13
+    mul di
+    add ax, px_names
+    mov di, ax                      ; DI = names[j]
+    lea si, [di - 13]               ; SI = names[j - 1]
+    call px_strcmp                  ; CF = 1: in order
+    jbe .in
+    push cx                         ; swap the two through px_tbuf
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov cx, 13
+    mov di, px_tbuf
+    cld
+    rep movsb                       ; tbuf = names[j - 1]
+    pop es
+    pop di
+    pop si
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    xchg si, di
+    mov cx, 13
+    rep movsb                       ; names[j - 1] = names[j]
+    pop es
+    pop di
+    pop si
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov si, px_tbuf
+    mov cx, 13
+    rep movsb                       ; names[j] = tbuf
+    pop es
+    pop di
+    pop si
+    pop cx
+    dec cx
+    jmp short .j
+.in:
+    inc bx
+    jmp short .i
+.find:
+    xor bx, bx
+    mov si, px_names
+.f:
+    cmp bx, [px_nnames]
+    jae .out
+    mov di, px_fname
+    call px_strcmp
+    jne .fn
+    mov [px_ncur], bx
+    jmp short .out
+.fn:
+    add si, 13
+    inc bx
+    jmp short .f
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; px_head - THE HEAD (SPEC.md 106.9): the file's first 2 KB or first
+; cluster, whichever is more, by OSAPI_FILE_READ_AT into a DMA-safe claim
+; held until the header is parsed; or, for a file packed on the disk
+; (SPEC.md 20.14), the whole file expanded by OSAPI_FILE_READ into a claim of
+; its own, which is then also the ring. [px_hlen] = what a header may be
+; parsed from (at most PX_HEADMAX). CF = 1 AX = PXD_READ, PXD_BIG or PXD_MEM
+px_head:
+    cmp byte [px_fcomp], 0
+    jne .flat
+    call px_clbytes                 ; AX = the cluster
+    cmp ax, PX_HEADMAX
+    jae .h
+    mov ax, PX_HEADMAX
+.h:
+    mov [px_tcl], ax                ; (the capacity)
+    mov cl, 10
+    shr ax, cl                      ; KB
+    call px_dmaclaim
+    jnc .hc
+    mov ax, PXD_MEM
+    ret
+.hc:
+    mov [px_hraw], bx
+    mov [px_hseg], dx
+    push es
+    mov es, dx
+    xor bx, bx
+    mov cx, [px_tcl]
+    xor ax, ax
+    xor dx, dx
+    mov si, px_fname
+    call OSAPI_FILE_READ_AT         ; DX:AX = bytes delivered
+    pop es
+    jc .rd
+    or dx, dx
+    jnz .full
+    cmp ax, PX_HEADMAX
+    jbe .len
+.full:
+    mov ax, PX_HEADMAX
+.len:
+    mov [px_hlen], ax
+    clc
+    ret
+.rd:
+    call px_headfree
+    mov ax, PXD_READ
+    stc
+    ret
+.flat:                              ; packed: the whole file, expanded
+    mov ax, [px_fsize]
+    mov dx, [px_fsize + 2]
+    add ax, 1023
+    adc dx, 0
+    mov cx, 10
+.kb:
+    shr dx, 1
+    rcr ax, 1
+    loop .kb
+    or dx, dx
+    jnz .big
+    cmp ax, 0xFFFF - 2
+    jae .big
+    push ax
+    add ax, 2                       ; a KB for the alignment, and spare
+    call OSAPI_MEM_CLAIM
+    pop ax
+    jc .big
+    mov [px_flatraw], dx
+    add dx, 31
+    and dx, 0xFFE0
+    mov [px_flatseg], dx
+    push es
+    mov es, dx
+    xor bx, bx
+    mov cx, 10                      ; DX:CX = the capacity in bytes
+    xor dx, dx
+.cap:
+    shl ax, 1
+    rcl dx, 1
+    loop .cap
+    mov cx, ax
+    mov si, px_fname
+    call OSAPI_FILE_READ            ; expands (SPEC.md 20.14.3)
+    pop es
+    jc .frd
+    mov [px_flatlen], ax
+    mov [px_flatlen + 2], dx
+    mov byte [px_rflat], 1
+    mov bx, [px_flatseg]
+    mov [px_hseg], bx
+    mov word [px_hraw], 0
+    or dx, dx
+    jnz .ffull
+    cmp ax, PX_HEADMAX
+    jbe .flen
+.ffull:
+    mov ax, PX_HEADMAX
+.flen:
+    mov [px_hlen], ax
+    clc
+    ret
+.frd:
+    call px_relflat
+    mov ax, PXD_READ
+    stc
+    ret
+.big:
+    mov ax, PXD_BIG
+    stc
     ret
 
 ; px_extfmt - SI = an 8.3 name: AL = the PXF_* its extension names, 0 none.
@@ -1347,48 +2132,6 @@ px_strcmp:
     pop ax
     ret
 
-; px_sniff - read the file's first cluster and name what it is (SPEC.md
-; 106.6). READ_AT's capacity is a whole cluster (SPEC.md 18.4.4), so the
-; buffer is one, in a DMA-safe claim that lives only for this call. Anything
-; that refuses leaves the extension's answer standing
-px_sniff:
-    call OSAPI_VOL_STAT             ; AX = sectors a cluster, CX = bytes each
-    jc .out
-    mul cx                          ; AX = the cluster's bytes (<= 32KB)
-    or dx, dx
-    jnz .out
-    mov [px_clb], ax
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl                      ; AX = its KB
-    mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA        ; all of it DMA-safe: it is a disk buffer
-    jc .out
-    mov [px_sniffseg], dx
-    mov es, dx
-    xor bx, bx
-    mov cx, [px_clb]
-    xor ax, ax
-    xor dx, dx
-    mov si, px_fname
-    call OSAPI_FILE_READ_AT         ; DX:AX = bytes delivered
-    jc .free
-    or dx, dx
-    jz .lenok
-    mov ax, [px_clb]
-.lenok:
-    mov [px_snlen], ax
-    call px_sniffbuf                ; ES:0 = the bytes
-.free:
-    push ds
-    pop es
-    mov dx, [px_sniffseg]
-    call OSAPI_MEM_FREE
-.out:
-    push ds
-    pop es
-    ret
-
 ; px_sniffbuf - ES:0..[px_snlen] = a file's first bytes: the format, and the
 ; header's width, height and bits where it states them. Every offset is
 ; checked against the length first; a header that lies is simply not believed
@@ -1425,7 +2168,11 @@ px_sniffbuf:
     mov ah, 3                       ; 4 grey + alpha, 6 RGBA
     cmp bl, 2
     je .pbits
+    mov ah, 4
     cmp bl, 6
+    je .pbits
+    mov ah, 2
+    cmp bl, 4
     je .pbits
     mov ah, 1
 .pbits:
@@ -1542,18 +2289,19 @@ px_sniffbuf:
 ; length. A JPEG whose frame header is past the first cluster (a large EXIF
 ; thumbnail) is named without dimensions
 px_sniffjpeg:
-    mov si, 2
-.m:
-    mov ax, si
-    add ax, 10
-    cmp ax, cx
-    jae .out
+    sub cx, 10                      ; THE LIMIT, once: a marker and the frame
+    jbe .out                        ; header's fields must start below it, so
+    mov si, 2                       ; no read can pass the bytes read - and
+.m:                                 ; SI is compared, never SI + 10, which a
+    cmp si, cx                      ; lying length could wrap past 64K
+    jae .out                        ; (wave-1 review MAJ-1)
     cmp byte [es:si], 0xFF
     jne .out
     mov al, [es:si + 1]
     cmp al, 0xFF                    ; fill bytes
     jne .mk
     inc si
+    jz .out
     jmp short .m
 .mk:
     cmp al, 0xD0                    ; RSTn, SOI, EOI and TEM have no length
@@ -1598,6 +2346,7 @@ px_sniffjpeg:
     jmp short .m
 .two:
     add si, 2
+    jc .out
     jmp short .m
 .out:
     ret
@@ -1678,6 +2427,16 @@ px_compose:
     mov ax, [px_fh]
     xor dx, dx
     call px_u32n
+    cmp byte [px_cur + PXR_SCL], 0  ; shown smaller: "at 1/4"
+    je .nodim
+    mov si, px_s_at
+    mov di, px_cline
+    call px_strcat
+    mov cl, [px_cur + PXR_SCL]
+    mov ax, 1
+    shl ax, cl
+    xor dx, dx
+    call px_u32n
 .nodim:
     mov bx, 4
     mov si, px_cline
@@ -1726,6 +2485,37 @@ px_compose:
     mov bx, PX_SF_COLS
     mov si, px_cvcols
     call px_sval
+    ; 6: the packing, 7: the palette - what a header parse found
+    mov si, px_s_dash
+    mov di, px_s_dash
+    call px_haspic
+    jc .nopk
+    mov bl, [px_cur + PXR_PACK]
+    xor bh, bh
+    shl bx, 1
+    mov si, [px_packnames + bx]
+    mov al, [px_cur + PXR_PMODE]
+    mov di, px_s_pcube
+    cmp al, PM_CUBE
+    je .nopk
+    mov di, px_s_pgrey
+    cmp al, PM_GREY
+    je .nopk
+    push si                         ; "Own, 256"
+    mov si, px_s_pown
+    mov di, px_cline
+    call px_strcpy
+    mov ax, [px_cur + PXR_NPAL]
+    xor dx, dx
+    call px_u32n
+    pop si
+    mov di, px_cline
+.nopk:
+    mov bx, 6
+    call px_ivset
+    mov si, di
+    mov bx, 7
+    call px_ivset
     ; the status bar's name and place: "NAME.EXT", "6 of 13"
     mov bx, PX_SF_NAME
     mov si, px_fname
@@ -1843,9 +2633,10 @@ px_fmtname:
 ; =============================================================================
 
 ; px_flags - every button's flags and every box's label, from the state:
-; the pictures, greyed while there is no picture (SPEC.md 47: the fact is
-; "No picture", and the status bar's name field says it); the latched tool;
-; each box's -, + or >. Preserves all
+; a control that needs a picture is grey without one, and one a later wave
+; owns is grey always (SPEC.md 106.12 - a press on either says which in a
+; toast); the latched tool; each box's -, + or >; and the menus' items that
+; follow a picture. Preserves all
 px_flags:
     push ax
     push bx
@@ -1856,8 +2647,13 @@ px_flags:
     mov ax, [px_bkind + bx]         ; the button's own bits: IMG, DIS-able
     mov cx, ax
     and ax, OS88UI_IMG
-    test cx, PX_BK_PIC              ; needs a picture: greyed, for now always
+    test cx, PX_BK_LATER
+    jnz .grey
+    test cx, PX_BK_PIC
     jz .nd
+    call px_haspic
+    jnc .nd
+.grey:
     or ax, OS88UI_DIS
 .nd:
     mov [px_bflags + bx], ax
@@ -1871,7 +2667,48 @@ px_flags:
     shl bx, 1
     or word [px_bflags + bx], OS88UI_LATCH
     call px_boxlabels
+    call px_menulive
     pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; px_menulive - the menu items that follow the picture: live (the string
+; past its MENU_DIS) or grey (the string with it). The set is re-registered
+; only when an item changed. Preserves all
+px_menulive:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    xor cx, cx                      ; CX = something changed
+    xor dx, dx                      ; DX = 1: live
+    call px_haspic
+    jc .g
+    inc dx
+.g:
+    mov si, px_mlive
+.l:
+    mov bx, [si]                    ; the item's slot in its menu
+    or bx, bx
+    jz .done
+    mov ax, [si + 2]                ; its string, MENU_DIS first
+    add ax, dx
+    cmp [bx], ax
+    je .n
+    mov [bx], ax
+    inc cx
+.n:
+    add si, 4
+    jmp short .l
+.done:
+    jcxz .out
+    call px_menuset
+.out:
+    pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -2201,6 +3038,53 @@ px_u32:
     ret
 
 %include "pxui.inc"
+%include "pxmaster.inc"             ; the image model (SPEC.md 106.8)
+%include "pxpump.inc"               ; the worker and its file pump (106.9)
+%include "pxsimple.inc"             ; BMP, PCX, TGA, PNM, PIX (106.10)
+%include "pxview.inc"               ; the renderer, Navigator, Histogram (106.11)
+%include "os88rseq.inc"             ; READ_SEQ behind READ_AT's registers
+
+; px_zfield - the status bar's zoom: "100%", or "Fit 47%" (SPEC.md 106.12).
+; Marked for a redraw only when it changed. Preserves all
+px_zfield:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, px_s_dash
+    call px_haspic
+    jc .set
+    mov ax, [px_zcur]               ; (Z x 100 + 1/2) >> 16
+    mov dx, [px_zcur + 2]
+    mov cx, 100
+    call px_mulx
+    add ax, 0x8000
+    adc dx, 0
+    mov di, px_cline
+    mov byte [di], 0
+    cmp byte [px_zfit], 0
+    je .n
+    mov si, px_s_fitsp
+    call px_strcpy
+.n:
+    mov ax, dx
+    xor dx, dx
+    call px_u32n
+    mov si, px_s_pct
+    call px_strcat
+    mov si, px_cline
+.set:
+    mov bx, PX_SF_ZOOM
+    call px_sval
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; =============================================================================
 ; DATA
@@ -2222,7 +3106,9 @@ px_ttl:     db 'PiXEL', 0
 ; --- the palettes, by depth (px_display): chrome, body, strip, strip text,
 ; canvas, canvas text, rule, chrome text ---------------------------------------
 px_pal4:    db CLGRAY, CWHITE, CBLUE, CWHITE, CDGRAY, CWHITE, CDGRAY, CBLACK
+            db CWHITE                   ; a filmstrip card's inside
 px_pal1:    db CWHITE, CWHITE, CBLACK, CWHITE, CWHITE, CBLACK, CBLACK, CBLACK
+            db CWHITE
 
 ; --- per display kind: VGA, Hercules (and EGA), CGA ----------------------------
 px_k_thumb: dw 48, 31, 20           ; a filmstrip thumbnail's rows: 64 wide
@@ -2298,24 +3184,25 @@ px_lab_full:
 
 ; --- each button's kind: OS88UI_IMG for a picture, PX_BK_PIC when it needs a
 ; picture and is greyed without one (px_flags) ---------------------------------
-PX_BK_PIC   equ 0x8000
+PX_BK_PIC   equ 0x8000              ; grey without a picture
+PX_BK_LATER equ 0x4000              ; grey in this build: a later wave's
 px_bkind:
-    dw OS88UI_IMG                               ; Open
-    dw OS88UI_IMG | PX_BK_PIC                   ; Save
-    dw OS88UI_IMG | PX_BK_PIC                   ; Prev
-    dw OS88UI_IMG | PX_BK_PIC                   ; Next
+    dw OS88UI_IMG                               ; Open (Stop while opening)
+    dw OS88UI_IMG | PX_BK_LATER                 ; Save
+    dw OS88UI_IMG | PX_BK_LATER                 ; Prev
+    dw OS88UI_IMG | PX_BK_LATER                 ; Next
     dw OS88UI_IMG | PX_BK_PIC                   ; Zoom In
     dw OS88UI_IMG | PX_BK_PIC                   ; Zoom Out
     dw OS88UI_IMG | PX_BK_PIC                   ; Fit
     dw PX_BK_PIC                                ; 1:1
-    dw OS88UI_IMG | PX_BK_PIC                   ; Rotate
-    dw OS88UI_IMG | PX_BK_PIC                   ; Slideshow
+    dw OS88UI_IMG | PX_BK_LATER                 ; Rotate
+    dw OS88UI_IMG | PX_BK_LATER                 ; Slideshow
     times PX_NTOOL dw OS88UI_IMG                ; the tools
     dw PX_BK_PIC, PX_BK_PIC, PX_BK_PIC          ; Navigator's +, -, Fit
     dw 0, 0, 0                                  ; the panel boxes
     dw 0                                        ; the filmstrip's box
-    dw PX_BK_PIC, PX_BK_PIC                     ; ...its arrows
-    dw PX_BK_PIC, PX_BK_PIC                     ; the status bar's
+    dw PX_BK_LATER, PX_BK_LATER                 ; ...its arrows
+    dw PX_BK_LATER, PX_BK_LATER                 ; the status bar's
 %if ($ - px_bkind) != PX_NB * 2
   %error "px_bkind has a kind per button"
 %endif
@@ -2329,23 +3216,43 @@ px_pbodyp:  dw px_body_nav, px_body_hist, px_body_info
 px_s_pnav:  db 'Navigator', 0
 px_s_phist: db 'Histogram', 0
 px_s_pinfo: db 'Image Info', 0
-px_hlines:  dw px_s_hmean, px_s_hsd, px_s_hmin, px_s_hmax
-px_s_hmean: db 'Mean    -', 0
-px_s_hsd:   db 'Std Dev -', 0
-px_s_hmin:  db 'Min     -', 0
-px_s_hmax:  db 'Max     -', 0
+px_hlabs:   dw px_s_hmean, px_s_hsd, px_s_hmin, px_s_hmax
+px_hvals:   dw px_hmean, px_hsd, px_hmin, px_hmax
+px_s_hmean: db 'Mean    ', 0
+px_s_hsd:   db 'Std Dev ', 0
+px_s_hmin:  db 'Min     ', 0
+px_s_hmax:  db 'Max     ', 0
 px_ilabels: dw px_s_ifile, px_s_ifold, px_s_isize, px_s_ifmt, px_s_ipix
-            dw px_s_idep
+            dw px_s_idep, px_s_ipack, px_s_ipal
 px_s_ifile: db 'File', 0
 px_s_ifold: db 'Folder', 0
 px_s_isize: db 'Size', 0
 px_s_ifmt:  db 'Format', 0
 px_s_ipix:  db 'Pixels', 0
 px_s_idep:  db 'Depth', 0
+px_s_ipack: db 'Packing', 0
+px_s_ipal:  db 'Palette', 0
+
+; the Histogram's channel (OS88UI_DROP, SPEC.md 13.14): the record and its
+; items. The rect is the painter's to fill in
+px_hdrop:   dw 0, 0, 0, 0
+            dw px_hditems
+            dw 4
+            dw 0
+            dw 0
+            db 0, 0xFF
+            dw 0, 0
+            dw 0
+            dw 0
+px_hditems: dw px_s_dluma, px_s_dred, px_s_dgreen, px_s_dblue
+px_s_dluma: db 'Luma', 0
+px_s_dred:  db 'Red', 0
+px_s_dgreen: db 'Green', 0
+px_s_dblue: db 'Blue', 0
 
 ; --- the status fields: widths in glyphs, and the order they leave a narrow
 ; bar in (the name never does) ----------------------------------------------------
-px_sfw:     db 12, 9, 4, 4, 10, 12, 12, 10
+px_sfw:     db 12, 9, 4, 8, 10, 13, 12, 10
 px_sdrop:   db PX_SF_COLS, PX_SF_BYTES, PX_SF_MEM, PX_SF_FMT, PX_SF_ZOOM
             db PX_SF_DIMS, PX_SF_POS
 
@@ -2392,7 +3299,14 @@ px_exts:
 ; --- the menus (SPEC.md 106.2). A greyed item begins MENU_DIS; a separator is
 ; a greyed row of dashes (kernel/menu.inc's own idiom) ------------------------------
 PX_M_FILE   equ 0
+PX_MF_OPEN  equ 0
+PX_MF_REVERT equ 2
+PX_MF_INFO  equ 8
 PX_M_VIEW   equ 4
+PX_MV_ZIN   equ 0
+PX_MV_ZOUT  equ 1
+PX_MV_FIT   equ 2
+PX_MV_ACTUAL equ 3
 PX_MV_DITHER equ 6
 PX_MV_PANELS equ 7
 PX_MV_FILM  equ 8
@@ -2417,7 +3331,7 @@ px_mif: dw px_mi_open, px_mi_saveas, px_mi_revert, px_sep, px_mi_prev
         dw px_mi_next, px_mi_slide, px_sep, px_mi_info
 px_mi_open:   db 'Open...  Ctrl+O', 0
 px_mi_saveas: db MENU_DIS, 'Save As...', 0
-px_mi_revert: db MENU_DIS, 'Revert', 0
+px_mi_revert: db MENU_DIS, 'Revert  Ctrl+R', 0
 px_mi_prev:   db MENU_DIS, 'Previous Image', 0
 px_mi_next:   db MENU_DIS, 'Next Image', 0
 px_mi_slide:  db MENU_DIS, 'Slideshow', 0
@@ -2471,6 +3385,18 @@ px_mi_hidef:  db 'Hide Filmstrip', 0
 px_mi_showf:  db 'Show Filmstrip', 0
 px_mi_help:   db 'Keyboard Help  F1', 0
 
+; the menu items that follow the picture (px_menulive): each one's slot in
+; its menu and its string, which begins MENU_DIS - the slot points at the
+; string to grey it and one past it to make it live
+px_mlive:
+    dw px_mif + 2 * PX_MF_REVERT, px_mi_revert
+    dw px_mif + 2 * PX_MF_INFO, px_mi_info
+    dw px_miv + 2 * PX_MV_ZIN, px_mi_zin
+    dw px_miv + 2 * PX_MV_ZOUT, px_mi_zout
+    dw px_miv + 2 * PX_MV_FIT, px_mi_fit
+    dw px_miv + 2 * PX_MV_ACTUAL, px_mi_actual
+    dw 0
+
 ; --- About (SPEC.md 12.7): the app-name cell's item, not a Help menu -------------
 px_ablines: dw px_ab1, px_ab2, px_ab3, px_ab0, px_ab4, 0
 px_ab1:     db 'PiXEL', 0
@@ -2511,13 +3437,59 @@ px_s_ttl:   db 'PiXEL', 0
 px_s_dashsp: db ' - ', 0
 px_s_notfile: db 'Not a file here', 0       ; toasts: 24 glyphs at most
 px_s_badpart: db 'PiXEL part is damaged', 0 ; (SPEC.md 59.10)
+px_s_busy:  db 'Still opening a picture', 0
+px_s_diskback: db "Put PiXEL's disk back", 0
+px_s_later: db 'Not in this build yet', 0
+px_s_nopico: db 'No picture open', 0
+px_s_opening: db 'Opening ', 0
+px_s_pct:   db '%', 0
+px_s_fitsp: db 'Fit ', 0
+px_s_at:    db ' at 1/', 0
+px_s_colon: db ': ', 0
+px_s_pown:  db 'Own, ', 0
+px_s_pcube: db 'Cube', 0
+px_s_pgrey: db 'Grey', 0
+px_c_stop:  db 'Stop', 0
+px_packnames: dw px_s_pknone, px_s_pkrle, px_s_pkrle8, px_s_pkrle4, px_s_pkbf
+px_s_pknone: db 'None', 0
+px_s_pkrle: db 'RLE', 0
+px_s_pkrle8: db 'RLE8', 0
+px_s_pkrle4: db 'RLE4', 0
+px_s_pkbf:  db 'Bit fields', 0
+
+; the refusals (SPEC.md 106.10), PXD_* order: "FORMAT: reason", at most 24
+px_reasons: dw px_s_empty0, px_s_r1, px_s_r2, px_s_r3, px_s_r4, px_s_r5
+            dw px_s_r6, px_s_r7, px_s_r8, px_s_r9, px_s_r10, px_s_r11
+            dw px_s_notfile, px_s_notpic
+px_s_notpic: db 'Not a picture', 0
+px_s_r1:    db 'bad header', 0
+px_s_r2:    db 'size not valid', 0
+px_s_r3:    db 'depth not read', 0
+px_s_r4:    db 'packing not read', 0
+px_s_r5:    db 'cut short', 0
+px_s_r6:    db 'damaged', 0
+px_s_r7:    db 'not enough memory', 0
+px_s_r8:    db 'disk read failed', 0
+px_s_r9:    db 'right-to-left', 0
+px_s_r10:   db 'not read yet', 0
+px_s_r11:   db 'too big to unpack', 0
+%if PXD_NREASON != 14
+  %error "px_reasons has a line per PXD_*"
+%endif
 
 %include "pxicons.inc"
 
 %define OS88UI_BIMG                 ; the one-write button body, and pictures
 %define OS88UI_ABOUT                ; the About card, and the keyboard card
 %define OS88UI_NOGLYPH              ; no check box, no radio
+%define OS88UI_DROP                 ; the Histogram's channel
 %include "os88ui.inc"
+
+%define GFXE_BAND_W   PX_HBW        ; the Histogram's graph: one band
+%define GFXE_BAND_H   PX_HBH
+%define GFXE_BAND_BUF px_hband
+%define GFXE_BAND
+%include "os88gfx.inc"
 
 ; --- the part table, and the standard's code after it (SPEC.md 20.12.3) -------
     OS88_PARTS_BEGIN PX_NPARTS
@@ -2536,7 +3508,7 @@ px_argdir   equ PXB + 6             ; word
 px_argpend  equ PXB + 8             ; byte
 px_tool     equ PXB + 9             ; byte
 px_argname  equ PXB + 10            ; 13
-px_fname    equ PXB + 23            ; 13
+px_oname    equ PXB + 23            ; 13: the name px_open is to open
 px_cx0      equ PXB + 36            ; word: the content box, absolute
 px_cy0      equ PXB + 38
 px_w        equ PXB + 40
@@ -2581,7 +3553,7 @@ px_pbody    equ PXB + 110           ; 3 words: ...its body's full height
 px_pcurw    equ PXB + 116           ; word: px_pcur, as a word
 px_pc       equ PXB + 118           ; byte: px_fillc's colour
 px_rmask    equ PXB + 119           ; byte
-px_c_chrome equ PXB + 120           ; 8 bytes: the palette, px_pal4's order
+px_c_chrome equ PXB + 120           ; 9 bytes: the palette, px_pal4's order
 px_c_body   equ PXB + 121
 px_c_strip  equ PXB + 122
 px_c_stript equ PXB + 123
@@ -2616,7 +3588,11 @@ px_ry2      equ PXB + 174
 px_scells   equ PXB + 176
 px_skeep    equ PXB + 178           ; byte
 px_sdirty   equ PXB + 179           ; byte
-                                    ; (PXB + 180..187 free)
+px_c_card   equ PXB + 180           ; byte: a filmstrip card's inside
+px_rkind    equ PXB + 181           ; byte: OSAPI_WM_DISPLAY's own kind
+px_hchan    equ PXB + 182           ; byte: the Histogram's channel
+px_zfit     equ PXB + 183           ; byte: the zoom is Fit
+                                    ; (PXB + 184..187 free)
 px_press    equ PXB + 188           ; byte
 px_abon     equ PXB + 189           ; byte
 px_helpon   equ PXB + 190           ; byte
@@ -2625,28 +3601,18 @@ px_pvec     equ PXB + 192           ; byte
 px_pmoved   equ PXB + 193           ; byte
 px_pwas     equ PXB + 194           ; word
 px_pwvol    equ PXB + 196           ; byte
-px_fhave    equ PXB + 197           ; byte: a file has been examined
+px_infoon   equ PXB + 197           ; byte: the Image Info card is up
 px_pfar     equ PXB + 198           ; dword: the far vector being called
 px_pres     equ PXB + 202           ; word: INIT's answer, for the gate
 px_pcalls   equ PXB + 204           ; word: far calls made, for the gate
-px_fsize    equ PXB + 206           ; dword
-px_fw       equ PXB + 210
-px_fh       equ PXB + 212
-px_ffmt     equ PXB + 214           ; byte
-px_fbits    equ PXB + 215           ; byte
-px_fprog    equ PXB + 216           ; byte
-px_ffound   equ PXB + 217           ; byte
-px_fcount   equ PXB + 218
-px_fidx     equ PXB + 220
-px_clb      equ PXB + 222
-px_sniffseg equ PXB + 224
-px_snlen    equ PXB + 226
-px_tyy0     equ PXB + 228           ; the status text's row (px_draw_status)
-px_tbon     equ PXB + 230           ; PX_TBN bytes
-px_tbcap    equ PXB + 244           ; PX_TBN bytes
-px_tbx      equ PXB + 258           ; PX_TBN words
-px_find     equ PXB + 284           ; OSAPI_FIND_SZ
-px_brects   equ PXB + 308           ; PX_NB * 8
+px_clb      equ PXB + 206
+px_snlen    equ PXB + 208
+px_tyy0     equ PXB + 210           ; the status text's row (px_draw_status)
+px_tbon     equ PXB + 212           ; PX_TBN bytes
+px_tbcap    equ PXB + 226           ; PX_TBN bytes
+px_tbx      equ PXB + 240           ; PX_TBN words
+px_find     equ PXB + 266           ; OSAPI_FIND_SZ
+px_brects   equ PXB + 290           ; PX_NB * 8
 px_bflags   equ px_brects + PX_NB * 8           ; PX_NB words
 px_lab_half equ px_bflags + PX_NB * 2           ; PX_NB words
 px_sv       equ px_lab_half + PX_NB * 2         ; PX_NSF * PX_SVSZ
@@ -2664,10 +3630,281 @@ px_helpbuf  equ px_helptab + (PX_HELPMAX + 1) * 2
 px_hicons   equ px_helpbuf + PX_HELPSZ          ; PXI_N * PXH_SZ
 px_sfxw     equ px_hicons + PXI_N * PXH_SZ  ; PX_NSF words: each field's x
 px_digs     equ px_sfxw + PX_NSF * 2            ; 10: px_u32's digits
-PX_BSSEND   equ px_digs + 10
+px_infotab  equ px_digs + 10                    ; (PX_INFON + 1) words: the card
+; --- wave 2: the picture (SPEC.md 106.8) -------------------------------------
+px_cur      equ px_infotab + (PX_INFON + 1) * 2 ; PXR_SZ: the picture shown
+px_prev     equ px_cur + PXR_SZ                 ; PXR_SZ: what a cancel restores
+px_pal      equ px_prev + PXR_SZ                ; 768: its palette
+px_ppal     equ px_pal + 768                    ; 768: the previous one's
+px_spal     equ px_ppal + 768                   ; 768: the file's, as parsed
+px_plan     equ px_spal + 768                   ; 768: a PAL palette's plans
+px_t1       equ px_plan + 768                   ; 256: 1bpp thresholds
+px_hist     equ px_t1 + 256                     ; 1024: counts, dwords
+px_bins     equ px_hist + 1024                  ; 1024: folded, dwords
+px_names    equ px_bins + 1024                  ; PX_NAMES x 13: the folder
+px_q6       equ px_names + PX_NAMES * 13        ; 256: the cube's levels
+px_q7       equ px_q6 + 256                     ; 256
+px_rcur     equ px_q7 + 256                     ; FSEQ_SIZE: READ_SEQ's cursor
+px_tbuf     equ px_rcur + FSEQ_SIZE             ; 769: a PCX's tail
+px_gsum     equ px_tbuf + 770                   ; 4 x PX_HBW: graph columns
+px_hband    equ px_gsum + 4 * PX_HBW            ; PX_HBST x PX_HBH: the graph
+px_w2       equ px_hband + PX_HBST * PX_HBH     ; the words and bytes below
+; the record's fields under their wave-1 names: the shown picture's
+px_fname    equ px_cur + PXR_NAME
+px_fsize    equ px_cur + PXR_FSIZE
+px_fw       equ px_cur + PXR_SW
+px_fh       equ px_cur + PXR_SH
+px_ffmt     equ px_cur + PXR_FMT
+px_fbits    equ px_cur + PXR_BITS
+px_fprog    equ px_cur + PXR_PROG
+px_fhave    equ px_cur + PXR_FHAVE
+px_fcount   equ px_cur + PXR_FCOUNT
+px_fidx     equ px_cur + PXR_FIDX
+%assign PXV 0
+%macro PXVAR 2                      ; name, bytes
+%1 equ px_w2 + PXV
+%assign PXV PXV + %2
+%endmacro
+    PXVAR px_ffound, 1
+    PXVAR px_fcomp, 1               ; the file is packed on the disk
+    PXVAR px_n0, 2                  ; px_div's 48-bit dividend...
+    PXVAR px_n1, 2
+    PXVAR px_n2, 2
+    PXVAR px_dv0, 2                 ; ...and 32-bit divisor
+    PXVAR px_dv1, 2
+    PXVAR px_tmw, 2                 ; a scale's master, tried
+    PXVAR px_tmh, 2
+    PXVAR px_tscl, 1
+    PXVAR px_tquant, 1              ; the emitter quantises into the cube
+    PXVAR px_kscl, 1
+    PXVAR px_avl, 2                 ; OSAPI_MEM_AVAIL's two answers
+    PXVAR px_avt, 2
+    PXVAR px_wrowsz, 2              ; the work claim: the row's bytes
+    PXVAR px_woerr, 2               ; ...the error row's byte offset
+    PXVAR px_wo_acc, 2              ; ...and paragraph offsets
+    PXVAR px_wo_lin, 2
+    PXVAR px_wo_lut, 2
+    PXVAR px_wseg, 2                ; the WORK claim
+    PXVAR px_drawsz, 2              ; the decoder's raw row
+    PXVAR px_dlinsz, 2              ; a PCX line
+    PXVAR px_rcnt, 1                ; rows summed into the block so far
+    PXVAR px_srcdone, 2             ; source rows emitted
+    PXVAR px_rdone, 2               ; master rows complete
+    PXVAR px_wbase, 2               ; the work claim itself (px_wseg is its
+                                    ; row's segment, past the tables)
+    PXVAR px_qerrsz, 2              ; ...an error row's bytes...
+    PXVAR px_qerrc, 2               ; ...the one a pass is on...
+    PXVAR px_qvg, 2                 ; ...G's value, a neutral's to know
+    PXVAR px_vkey, 16               ; what the canvas's view was made from
+    PXVAR px_vkeyn, 16
+    PXVAR px_bgr, 1                 ; the row is B, G, R
+    ; the pump (pxpump.inc)
+    PXVAR px_nslot, 1
+    PXVAR px_chunk, 2
+    PXVAR px_ringraw, 2             ; the ring's claim
+    PXVAR px_sseg, 4                ; its slots' segments
+    PXVAR px_slen, 4                ; ...their bytes
+    PXVAR px_sfull, 2               ; ...whether the pump has filled them
+    PXVAR px_fslot, 1               ; the pump's next slot
+    PXVAR px_wslot, 1               ; the worker's
+    PXVAR px_feof, 1
+    PXVAR px_rerr, 1
+    PXVAR px_rq, 1                  ; the request byte
+    PXVAR px_rhave, 1               ; the worker holds a slot
+    PXVAR px_rpos, 2                ; the worker's window: where...
+    PXVAR px_rend, 2                ; ...its end...
+    PXVAR px_rsegc, 2               ; ...its segment...
+    PXVAR px_rbase, 4               ; ...its first byte's offset in the file
+    PXVAR px_rnxt, 4                ; ...and the next window's
+    PXVAR px_fabs, 4                ; the pump's offset
+    PXVAR px_fk, 2                  ; an in-memory file's window
+    PXVAR px_rflat, 1               ; the file is in memory (a CZ file)
+    PXVAR px_flatseg, 2
+    PXVAR px_flatraw, 2
+    PXVAR px_flatlen, 4
+    PXVAR px_hseg, 2                ; the head
+    PXVAR px_hraw, 2
+    PXVAR px_hlen, 2
+    PXVAR px_job, 1                 ; the worker's job, written LAST
+    PXVAR px_wres, 1                ; ...and its answer
+    PXVAR px_wstage, 1
+    PXVAR px_abort, 1
+    PXVAR px_busy, 1                ; 1 decoding, 2 rebuilding tables
+    PXVAR px_wspawned, 1
+    PXVAR px_onworker, 1
+    PXVAR px_wtick, 2
+    PXVAR px_rfmt, 1                ; the refused file's format
+    PXVAR px_tabdirty, 1
+    PXVAR px_tabok, 1               ; the view claim's tables are good
+    PXVAR px_tdepth, 1              ; ...for this depth
+    PXVAR px_hok, 1                 ; the histogram is counted
+    PXVAR px_pctlast, 2             ; the progress shown
+    PXVAR px_ptick, 2
+    ; the decode's parameters (pxsimple.inc)
+    PXVAR px_dfmt, 1
+    PXVAR px_dtop, 1
+    PXVAR px_dmask, 1
+    PXVAR px_desz, 1
+    PXVAR px_dkind, 1
+    PXVAR px_dpsz, 1
+    PXVAR px_doff, 4
+    PXVAR px_hsz, 2
+    PXVAR px_tw, 4
+    PXVAR px_th, 4
+    PXVAR px_dnpl, 2
+    PXVAR px_dbpp, 2
+    PXVAR px_dcomp, 4
+    PXVAR px_dused, 4
+    PXVAR px_dpalo, 2
+    PXVAR px_dstride, 2
+    PXVAR px_dbpl, 2
+    PXVAR px_dmaxv, 2
+    PXVAR px_mbo, 3
+    PXVAR px_mbs, 3
+    PXVAR px_mmx, 3
+    PXVAR px_ttail, 4
+    PXVAR px_tgot, 2
+    PXVAR px_tcl, 2
+    PXVAR px_tkpos, 2
+    PXVAR px_tokget, 2
+    PXVAR px_tokeof, 2
+    PXVAR px_ri, 2
+    PXVAR px_rx, 2
+    PXVAR px_rnib, 1
+    PXVAR px_rcnt2, 1
+    PXVAR px_rval, 1
+    PXVAR px_rraw, 1
+    PXVAR px_rpix, 4
+    PXVAR px_rtri, 3
+    PXVAR px_rsamp, 2
+    ; the renderer (pxview.inc)
+    PXVAR px_vseg, 2                ; the VIEW claim
+    PXVAR px_vdepth, 1
+    PXVAR px_vo_c2p, 2
+    PXVAR px_vo_row, 2
+    PXVAR px_vo_band, 2
+    PXVAR px_vo_thm, 2
+    PXVAR px_planp, 2
+    PXVAR px_pbest, 4               ; the plan search
+    PXVAR px_pc1, 2
+    PXVAR px_pc2, 2
+    PXVAR px_pt, 2
+    PXVAR px_pch, 2
+    PXVAR px_pdd, 6
+    PXVAR px_pk, 6
+    PXVAR px_pkk, 2
+    PXVAR px_pss, 2
+    PXVAR px_ptt, 2
+    PXVAR px_pee, 4
+    PXVAR px_psq, 24                ; a target's four squares a channel
+    PXVAR px_pddk, 42               ; ...its dd x k, k = -3..3, a channel
+    PXVAR px_pl1, 2                 ; ...c1's levels
+    PXVAR px_pt85, 2
+    PXVAR px_vcan, VW_SZ            ; the canvas's view
+    PXVAR px_vthm, VW_SZ            ; the Navigator's
+    PXVAR px_vtry, VW_SZ            ; a zoom, tried
+    PXVAR px_vw, 2                  ; px_vmake's box and zoom
+    PXVAR px_vh, 2
+    PXVAR px_vz, 4
+    PXVAR px_z, 4                   ; the user's zoom
+    PXVAR px_zcur, 4                ; the zoom shown
+    PXVAR px_ox, 2                  ; the pan
+    PXVAR px_oy, 2
+    PXVAR px_cw, 2                  ; the canvas's size
+    PXVAR px_ch, 2
+    PXVAR px_cbv, 2                 ; the composer's pass
+    PXVAR px_cgrp, 2
+    PXVAR px_cbint, 2
+    PXVAR px_cbfrac, 2
+    PXVAR px_chfrac, 2
+    PXVAR px_chint, 2
+    PXVAR px_crseg, 2
+    PXVAR px_ccnt, 2
+    PXVAR px_cdep, 1
+    PXVAR px_useP, 1
+    PXVAR px_c2pb, 2
+    PXVAR px_c2px, 2
+    PXVAR px_rx0, 2
+    PXVAR px_ry0, 2
+    PXVAR px_ryend, 2
+    PXVAR px_rw, 2
+    PXVAR px_rby, 2
+    PXVAR px_rbn, 2
+    PXVAR px_qx1, 2                 ; px_rcanvas's rect...
+    PXVAR px_qy1, 2
+    PXVAR px_qx2, 2
+    PXVAR px_qy2, 2
+    PXVAR px_ax1, 2                 ; ...and the picture's part of it
+    PXVAR px_ay1, 2
+    PXVAR px_ax2, 2
+    PXVAR px_ay2, 2
+    PXVAR px_px1, 2
+    PXVAR px_px2, 2
+    PXVAR px_ypaint, 2              ; rows painted from the top...
+    PXVAR px_ypbot, 2               ; ...from the bottom
+    PXVAR px_cspan1, 2              ; the complete rows a render used
+    PXVAR px_cspan2, 2
+    PXVAR px_pdx, 2                 ; a pan's move
+    PXVAR px_pdy, 2
+    PXVAR px_pxg, 2
+    PXVAR px_hx0, 2                 ; a Hand drag: where it started
+    PXVAR px_hy0, 2
+    PXVAR px_hox, 2
+    PXVAR px_hoy, 2
+    PXVAR px_htick, 2
+    PXVAR px_nwell, 8               ; the Navigator's well
+    PXVAR px_nw1, 2
+    PXVAR px_nw2, 2
+    PXVAR px_nh1, 2
+    PXVAR px_nh2, 2
+    PXVAR px_ntx, 2
+    PXVAR px_thok, 1                ; the thumbnail's bank: good...
+    PXVAR px_thser, 1               ; ...for this picture...
+    PXVAR px_thdep, 1               ; ...this depth...
+    PXVAR px_thbw, 2                ; ...this box
+    PXVAR px_thbh, 2
+    PXVAR px_nfon, 1                ; the frame is on the glass
+    PXVAR px_nfr, 8                 ; ...there
+    PXVAR px_hn, 4                  ; the statistics
+    PXVAR px_hs1, 4
+    PXVAR px_hmean, 2
+    PXVAR px_hsd, 2
+    PXVAR px_hmin, 2
+    PXVAR px_hmax, 2
+    PXVAR px_gx1, 2                 ; the graph
+    PXVAR px_gy1, 2
+    PXVAR px_gw, 2
+    PXVAR px_gh, 2
+    PXVAR px_gmax, 4
+    PXVAR px_nnames, 2              ; the folder's pictures, sorted
+    PXVAR px_ncur, 2                ; ...and the open one among them
+    PXVAR px_fcx1, 2                ; the filmstrip's cards
+    PXVAR px_fcx2, 2
+    PXVAR px_fcl, 2
+    PXVAR px_fcn, 2
+    PXVAR px_fcs, 2
+    PXVAR px_fct, 2
+    PXVAR px_fcny, 2
+    PXVAR px_fcx, 2
+    PXVAR px_fcb, 2
+    PXVAR px_fccur, 1
+    PXVAR px_fcname, 2
+    PXVAR px_fcix, 2
+    PXVAR px_fciy2, 2
+    PXVAR px_fcpair, 2
+    PXVAR px_fcfmt, 2
+    PXVAR px_fcmid, 2
+    PXVAR px_mcap, 2                ; a test's cap on the largest run, KB
+    PXVAR px_lastref, 1             ; the last refusal's number, for a test
+    PXVAR px_ndone, 2               ; opens ended, for a test
+    PXVAR px_clok, 1                ; the cluster's size, asked this open
+    PXVAR px_clsz, 2
+    PXVAR px_cvmsg, 32              ; the empty canvas's line: a refusal
+PX_BSSEND   equ px_w2 + PXV
 PX_BSS      equ PX_BSSEND - PXB
 
 PXI_PHOTO   equ (pxi_photo - pxi_open) / PXI_SZ
+PXI_STOP    equ (pxi_stop - pxi_open) / PXI_SZ
 
     OS88_BSS OP_BSS + PX_BSS
     OS88_IMAGE_END

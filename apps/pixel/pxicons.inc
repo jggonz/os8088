@@ -316,5 +316,25 @@ pxi_photo:
     dw 0x0000    ; ................
     dw 0x0000    ; ................
 
-PXI_N equ 15                    ; records above, each PXI_SZ bytes
+pxi_stop:
+    db 1, 16
+    times 16 dw 0xFFFF
+    dw 0x0000    ; ................
+    dw 0x1FF8    ; ...##########...
+    dw 0x3FFC    ; ..############..
+    dw 0x7FFE    ; .##############.
+    dw 0x77EE    ; .###.######.###.
+    dw 0x7BDE    ; .####.####.####.
+    dw 0x7DBE    ; .#####.##.#####.
+    dw 0x7E7E    ; .######..######.
+    dw 0x7E7E    ; .######..######.
+    dw 0x7DBE    ; .#####.##.#####.
+    dw 0x7BDE    ; .####.####.####.
+    dw 0x77EE    ; .###.######.###.
+    dw 0x7FFE    ; .##############.
+    dw 0x3FFC    ; ..############..
+    dw 0x1FF8    ; ...##########...
+    dw 0x0000    ; ................
+
+PXI_N equ 16                    ; records above, each PXI_SZ bytes
 PXI_SZ equ 2 + 16 * 4

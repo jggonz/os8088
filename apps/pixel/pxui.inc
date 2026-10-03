@@ -24,7 +24,9 @@
 ; =============================================================================
 
 ; --- metrics (SPEC.md 106.1) ---------------------------------------------------
-PX_TCW      equ 27                  ; tool column: 2 + a 22px button + 2, rule
+PX_TCW      equ 32                  ; tool column: 5 + a 22px button + 4, rule:
+                                    ; 32, so the canvas starts on the byte grid
+PX_TCL      equ 5                   ; ...the margin left of its buttons
 PX_BTNW     equ 22                  ; an icon button: 16 + a 2px ring + frame
 PX_ONEW     equ 30                  ; ...and the "1:1" text button, 3 glyphs
 PX_MINCW    equ 160                 ; narrowest canvas the panel column leaves
@@ -34,10 +36,17 @@ PX_FULLH    equ 240                 ; content height below which the window is
 PX_CAPW     equ 77 * 8              ; content width the captioned toolbar needs
 PX_NAVW     equ 36                  ; the Navigator's three buttons, wide
 PX_SBW      equ 14                  ; a status / filmstrip arrow button
-PX_GROW     equ 16                  ; the grow box's corner (SPEC.md 11.1.1)
+PX_GROW     equ 24                  ; the grow box's corner (SPEC.md 11.1.1):
+                                    ; its 13 columns and air enough that the
+                                    ; status bar's arrows do not read as part
+                                    ; of it
 PX_ARH      equ 16                  ; a filmstrip arrow's rows
-PX_INFON    equ 6                   ; Image Info's lines
-PX_HISTN    equ 4                   ; Histogram's statistics lines
+PX_INFON    equ 8                   ; Image Info's lines
+PX_HISTN    equ 5                   ; Histogram's lines: the drop-down, then
+                                    ; Mean, Std Dev, Min, Max
+PX_DROPH    equ 12                  ; the drop-down's closed box
+PX_CARDW    equ 104                 ; a filmstrip card's cell: 13 glyphs, so
+                                    ; NAME.EXT fits under its box
 
 ; --- px_layout - every rect, from the live window ------------------------------
 ; out: CF = 1 the window is not visible (nothing was computed); else CF = 0
@@ -179,7 +188,8 @@ px_layout:
     jl .nopn
     mov byte [px_pnon], 1
     sub ax, [px_pw]
-.nopn:
+    and ax, 0xFFF8                  ; on the byte grid: the canvas is then a
+.nopn:                              ; whole number of cells wide
     mov [px_pnx1], ax               ; the panel column's rule (or xr + 1)
     dec ax
     mov [px_cvx2], ax
@@ -191,6 +201,7 @@ px_layout:
     call px_lay_buttons
     call px_status_fit
     call px_filmlabel               ; the View menu follows the layout
+    call px_vcalc                   ; the picture's view on this canvas
     clc
     jmp short .out
 .gone:
@@ -234,6 +245,7 @@ px_display:
     mov bx, [px_win]
     call OSAPI_WM_DISPLAY           ; DL = kind, DH = bits per pixel
     mov [px_bpp], dh
+    mov [px_rkind], dl              ; (the pixel's aspect wants EGA's own)
     mov byte [px_half], 0
     cmp dl, VID_CGA
     jne .nh
@@ -259,6 +271,8 @@ px_display:
     mov [px_c_canvas], ax           ; canvas, canvas text
     mov ax, [si+6]
     mov [px_c_rule], ax             ; rule, chrome text
+    mov al, [si+8]
+    mov [px_c_card], al             ; a filmstrip card's inside
     pop si
     pop dx
     pop cx
@@ -291,9 +305,9 @@ px_lay_panels:
     mov ax, [px_navh]               ; the bodies' heights on this display
     mov [px_pbody], ax
     mov ax, [px_lp]
-    mov cx, PX_HISTN
+    mov cx, PX_HISTN - 1
     mul cx
-    add ax, 6
+    add ax, 6 + PX_DROPH + 1
     mov [px_pbody+2], ax
     mov ax, [px_lp]
     mov cx, PX_INFON
@@ -345,6 +359,16 @@ px_lay_panels:
     inc si
     jmp short .next
 .out:
+    cmp byte [px_tier], 0           ; the full tier's column reads as ONE
+    jne .ret                        ; stack: Image Info, when it is the last
+    cmp word [px_pbhw + 4], 0       ; and open, takes the rows left under
+    je .ret                         ; it (wave-1 review MIN-9)
+    mov ax, [px_midy2]
+    sub ax, [px_pyw + 4]
+    sub ax, [px_sh]
+    inc ax
+    mov [px_pbhw + 4], ax
+.ret:
     pop si
     pop dx
     pop cx
@@ -383,7 +407,7 @@ px_lay_buttons:
 
     ; --- the tool column ---------------------------------------------
     mov ax, [px_cx0]
-    add ax, 2
+    add ax, PX_TCL
     mov cx, ax
     add cx, PX_BTNW - 1
     mov bx, [px_midy1]
@@ -931,6 +955,16 @@ px_well:
     pop ax
     ret
 
+; px_wellframe - a well's frame alone, AX/BX/CX/DX: its interior is the
+; caller's (a picture, a graph). Preserves all
+px_wellframe:
+    push ax
+    mov al, [px_c_rule]
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FRAME
+    ret
+
 ; =============================================================================
 ; THE REGIONS. Each draws its own rect whole and nothing outside it, so the
 ; paint proc can skip any region the damage rect misses (SPEC.md 106.4).
@@ -1059,6 +1093,7 @@ px_capline:
     push ax
     push bx
     push cx
+    push dx                         ; (the mul below)
     push si
     push di
     mov di, px_cline
@@ -1102,6 +1137,7 @@ px_capline:
 .out:
     pop di
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -1115,14 +1151,14 @@ px_draw_tools:
     push dx
     push si
     push bp
-    mov ax, [px_cx0]                ; the two columns left of the buttons
+    mov ax, [px_cx0]                ; the columns left of the buttons
     mov bx, [px_midy1]
     mov cx, ax
-    inc cx
+    add cx, PX_TCL - 1
     mov dx, [px_midy2]
     PXFILL [px_c_chrome]
-    mov ax, [px_cx0]                ; ...and the two right of them
-    add ax, 2 + PX_BTNW
+    mov ax, [px_cx0]                ; ...and right of them
+    add ax, PX_TCL + PX_BTNW
     mov cx, [px_tcx2]
     dec cx
     PXFILL [px_c_chrome]
@@ -1147,7 +1183,7 @@ px_draw_tools:
     jb .tl
 .tail:
     mov ax, [px_cx0]                ; ...and under the last one
-    add ax, 2
+    add ax, PX_TCL
     mov cx, ax
     add cx, PX_BTNW - 1
     mov bx, bp
@@ -1161,10 +1197,66 @@ px_draw_tools:
     pop ax
     ret
 
+; --- the canvas ----------------------------------------------------------------
+; With a picture (decoded, or decoding): the part of it the damage rect
+; meets, rendered (pxview.inc's px_rcanvas, SPEC.md 106.11). Without one: the
+; empty state.
+px_draw_canvas:
+    call px_haspic
+    jc px_draw_empty
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [px_cvx1]               ; the canvas, cut to the damage
+    cmp ax, [px_dx1]
+    jge .a
+    mov ax, [px_dx1]
+.a:
+    mov bx, [px_midy1]
+    cmp bx, [px_dy1]
+    jge .b
+    mov bx, [px_dy1]
+.b:
+    mov cx, [px_cvx2]
+    cmp cx, [px_dx2]
+    jle .c
+    mov cx, [px_dx2]
+.c:
+    mov dx, [px_midy2]
+    cmp dx, [px_dy2]
+    jle .d
+    mov dx, [px_dy2]
+.d:
+    cmp ax, cx
+    jg .out
+    cmp bx, dx
+    jg .out
+    cmp byte [px_busy], 0           ; the tables match this display, or are
+    jne .r                          ; made now (106.11)
+    call px_tabsync
+.r:
+    call px_rcanvas
+    cmp ax, [px_cvx1]               ; the painted spans are what a render of
+    jne .out                        ; the WHOLE canvas leaves; a part of it
+    cmp bx, [px_midy1]              ; leaves them as they were, so a decode's
+    jne .out                        ; rows outside the damage are still owed
+    cmp cx, [px_cvx2]
+    jne .out
+    cmp dx, [px_midy2]
+    jne .out
+    call px_rowsall
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; --- the canvas: the empty state (SPEC.md 106.3) -------------------------------
 ; A picture, "Open a picture  (Ctrl+O)", and - once a file has been picked -
 ; what it is. Centred as one block, every row of it drawn once.
-px_draw_canvas:
+px_draw_empty:
     push ax
     push bx
     push cx
@@ -1246,8 +1338,14 @@ px_draw_canvas:
     dec dx
     PXFILL [px_c_canvas]
     add bx, di
-    mov dx, bx                      ; the first line
-    mov si, px_s_empty
+    mov dx, bx                      ; the first line: how to open one - or,
+    mov si, px_s_empty              ; once a file was refused, why it was
+    cmp byte [px_fhave], 0
+    je .l1
+    cmp byte [px_cvmsg], 0
+    je .l1
+    mov si, px_cvmsg
+.l1:
     push bx
     mov bl, [px_c_cvtext]
     mov bh, [px_c_canvas]
@@ -1466,11 +1564,28 @@ px_body_nav:
     mov dx, [px_ry2]
     sub dx, 3
     PXFILL [px_c_body]
-    mov ax, [px_rx1]                ; the well
-    add ax, 4
+    mov ax, [px_rx1]                ; the well: its frame, and the picture in
+    add ax, 4                       ; it (pxview.inc)
     mov cx, [px_bx1]
     sub cx, 6
-    call px_well
+    call px_wellframe
+    push ax
+    push bx
+    push cx
+    push dx
+    inc ax
+    inc bx
+    dec cx
+    dec dx
+    mov [px_nwell], ax              ; (a press in it pans: px_onclick)
+    mov [px_nwell + 2], bx
+    mov [px_nwell + 4], cx
+    mov [px_nwell + 6], dx
+    call px_navthumb
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     mov ax, cx                      ; the gap between it and the buttons
     inc ax
     mov cx, [px_bx1]
@@ -1508,7 +1623,8 @@ px_body_nav:
     pop ax
     ret
 
-; Histogram: a graph well and four statistics beside it
+; Histogram: a graph well, and beside it the channel's drop-down and four
+; statistics (SPEC.md 106.12)
 px_body_hist:
     push ax
     push bx
@@ -1536,31 +1652,86 @@ px_body_hist:
     mov dx, [px_ry2]
     sub dx, 3
     PXFILL [px_c_body]
-    mov ax, [px_rx2]                ; the statistics take their width of
-    sub ax, PX_HSTW * 8 + 2         ; whole cells at the right
+    mov ax, [px_rx2]                ; the column: whole cells at the right
+    sub ax, PX_HSTW * 8 + 2
     mov [px_bx1], ax
     mov cx, ax
     sub cx, 4
     mov ax, [px_rx1]
     add ax, 4
-    call px_well
-    mov bp, bx                      ; BP = the next row of the statistics
+    call px_wellframe               ; the well: its frame, the graph in it
+    push ax
+    push bx
+    push cx
+    push dx
+    inc ax
+    inc bx
+    dec cx
+    dec dx
+    call px_hgraph
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    mov ax, cx                      ; the gap between it and the column
+    inc ax
+    mov cx, [px_bx1]
+    dec cx
+    PXFILL [px_c_body]
+    ; --- the drop-down: the channel (OS88UI_DROP, 13.14) --------------------
+    mov ax, [px_bx1]
+    mov bx, [px_ry1]
+    add bx, 3
+    mov cx, [px_rx2]
+    sub cx, 2
+    mov dx, bx
+    add dx, PX_DROPH - 1
+    mov [px_hdrop + OS88UI_DR_RECT], ax
+    mov [px_hdrop + OS88UI_DR_RECT + 2], bx
+    mov [px_hdrop + OS88UI_DR_RECT + 4], cx
+    mov [px_hdrop + OS88UI_DR_RECT + 6], dx
+    push ax
+    mov ax, [px_win]
+    mov [px_hdrop + OS88UI_DR_WIN], ax
+    pop ax
+    push ax
+    push bx
+    mov ax, cx                      ; the two columns right of it
+    inc ax
+    mov cx, [px_rx2]
+    PXFILL [px_c_body]
+    pop bx
+    pop ax
+    push bx
+    mov bx, px_hdrop
     xor di, di
+    cmp byte [px_hok], 0            ; nothing to show: greyed, and its press
+    jne .live                       ; refused (13.14.5)
+    mov di, OS88UI_DIS
+.live:
+    call os88ui_drop
+    pop bx
+    mov bp, bx                      ; BP = the next row of the column
+    add bp, PX_DROPH + 1
+    mov ax, [px_bx1]                ; the row of air under the box
+    mov bx, bp
+    dec bx
+    mov cx, [px_rx2]
+    mov dx, bx
+    PXFILL [px_c_body]
+    xor di, di                      ; DI = the statistic
 .l:
-    cmp di, PX_HISTN
+    cmp di, PX_HISTN - 1
     jae .ld
     mov dx, bp
     add dx, 7
     cmp dx, [px_ry2]
     jg .ld
-    mov ax, cx                      ; the line, from the well's edge
-    inc ax
-    push cx
+    call px_statline                ; px_cline = statistic DI
+    mov ax, [px_bx1]
     mov cx, [px_rx2]
     mov dx, bp
-    mov si, di
-    shl si, 1
-    mov si, [px_hlines + si]
+    mov si, px_cline
     push bx
     mov bl, [px_c_text]
     mov bh, [px_c_body]
@@ -1569,8 +1740,10 @@ px_body_hist:
     call px_tband
     pop di
     pop bx
+    mov ax, [px_bx1]
     mov bx, bp                      ; the air under it
     add bx, 8
+    mov cx, [px_rx2]
     mov dx, bp
     add dx, [px_lp]
     dec dx
@@ -1579,13 +1752,11 @@ px_body_hist:
     mov dx, [px_ry2]
 .air:
     PXFILL [px_c_body]
-    pop cx
     add bp, [px_lp]
     inc di
     jmp short .l
 .ld:
-    mov ax, cx
-    inc ax
+    mov ax, [px_bx1]
     mov cx, [px_rx2]
     mov bx, bp
     mov dx, [px_ry2]
@@ -1596,6 +1767,39 @@ px_body_hist:
     pop si
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; px_statline - the Histogram's statistic DI (Mean, Std Dev, Min, Max) as
+; one line into px_cline: its label padded to 8, then its value or "-".
+; Preserves all
+px_statline:
+    push ax
+    push bx
+    push si
+    push di
+    push dx
+    mov bx, di
+    shl bx, 1
+    mov si, [px_hlabs + bx]
+    mov ax, [px_hvals + bx]         ; the value's word
+    mov di, px_cline
+    call px_strcpy
+    cmp byte [px_hok], 0
+    je .dash
+    mov bx, ax
+    mov ax, [bx]
+    xor dx, dx
+    call px_u32n
+    jmp short .out
+.dash:
+    mov si, px_s_dash
+    call px_strcat
+.out:
+    pop dx
+    pop di
+    pop si
     pop bx
     pop ax
     ret
@@ -1738,63 +1942,359 @@ px_draw_fs:
     je .body
     jmp .out
 .body:
-    mov si, PX_B_FSL
-    call px_getrect                 ; the left arrow's rows are the band's
-    mov [px_ry1], bx
-    mov [px_ry2], dx
-    mov [px_bx1], cx                ; ...and its right edge
-    mov ax, [px_cx0]                ; the air above the band
-    mov bx, [px_fsy1]
-    add bx, [px_sh]
-    mov cx, [px_xr]
-    mov dx, [px_ry1]
-    dec dx
-    PXFILL [px_c_body]
-    mov bx, [px_ry2]                ; ...and below it
-    inc bx
-    mov dx, [px_sty1]
-    dec dx
-    PXFILL [px_c_body]
-    mov bx, [px_ry1]                ; the margin left of the arrow
-    mov dx, [px_ry2]
-    mov cx, [px_cx0]
-    add cx, 2
-    PXFILL [px_c_body]
-    call px_btn
-    mov si, PX_B_FSR
-    call px_btn
+    mov ax, [px_fsy1]               ; the body: under the strip, over the bar
+    add ax, [px_sh]
+    mov [px_ry1], ax
+    mov ax, [px_sty1]
+    dec ax
+    mov [px_ry2], ax
+    mov si, PX_B_FSL                ; the left arrow, and its margin round it
     call px_getrect
-    mov [px_bx2], ax                ; the right arrow's left edge
-    inc cx                          ; the margin right of it
-    mov ax, cx
+    mov [px_bx1], cx
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [px_cx0]
+    mov bx, [px_ry1]
+    mov dx, [px_ry2]
+    call px_aroundbtn
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    call px_btn
+    mov si, PX_B_FSR                ; the right one
+    call px_getrect
+    mov [px_bx2], ax
+    push ax
+    push bx
+    push cx
+    push dx
     mov cx, [px_xr]
     mov bx, [px_ry1]
-    PXFILL [px_c_body]
-    mov ax, [px_ry2]                ; the line, centred in the band
-    sub ax, [px_ry1]
-    sub ax, 7
-    sar ax, 1
-    add ax, [px_ry1]
-    mov [px_tyy], ax
-    mov ax, [px_bx1]
+    mov dx, [px_ry2]
+    call px_aroundbtn
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    call px_btn
+    mov ax, [px_bx1]                ; the cards between them
     inc ax
     mov cx, [px_bx2]
     dec cx
-    mov bx, [px_ry1]
-    mov dx, [px_tyy]
+    call px_fscards
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; px_aroundbtn - the ground round button SI's rect inside the column AX..CX,
+; rows BX..DX (the band), in the filmstrip's ground. Preserves all
+px_aroundbtn:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov [px_rx1], ax
+    mov [px_rx2], cx
+    mov [px_tyy], dx
+    push si
+    call px_getrect                 ; AX..CX, BX..DX = the button
+    pop si
+    mov di, [px_tyy]
+    push ax
+    push cx
+    push dx
+    mov ax, [px_rx1]                ; above it
+    mov cx, [px_rx2]
+    mov dx, bx
     dec dx
-    PXFILL [px_c_body]
-    mov bx, [px_tyy]
-    add bx, 8
+    mov bx, [px_ry1]
+    PXFILL [px_c_chrome]
+    pop dx
+    pop cx
+    pop ax
+    push ax
+    push bx
+    push cx
+    mov ax, [px_rx1]                ; below it
+    mov cx, [px_rx2]
+    mov bx, dx
+    inc bx
+    mov dx, di
+    PXFILL [px_c_chrome]
+    pop cx
+    pop bx
+    pop ax
+    push cx
+    mov cx, ax                      ; left of it
+    dec cx
+    mov ax, [px_rx1]
+    PXFILL [px_c_chrome]
+    pop cx
+    mov ax, cx                      ; right of it
+    inc ax
+    mov cx, [px_rx2]
+    PXFILL [px_c_chrome]
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; px_fscards - THE FILMSTRIP'S CARDS (SPEC.md 106.12) in columns AX..CX of
+; the body [px_ry1]..[px_ry2]: the folder's pictures around the open one, a
+; framed card each with its format's name, the file's name under it, the
+; open one's card in the strip's colours. With no folder yet the cards are
+; blank and one line says how to fill them. The thumbnails are wave 5's.
+px_fscards:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov [px_fcx1], ax
+    mov [px_fcx2], cx
+    add ax, 4 + 7                   ; the first cell, on the grid
+    and ax, 0xFFF8
+    mov [px_fcl], ax
+    mov dx, cx                      ; cells that fit
+    sub dx, 4
+    sub dx, ax
+    inc dx
+    xor bx, bx
+    or dx, dx
+    jle .nc
+    mov ax, dx
+    xor dx, dx
+    mov cx, PX_CARDW
+    div cx
+    mov bx, ax
+.nc:
+    mov [px_fcn], bx
+    mov ax, [px_fcx1]               ; the ground left of the cells...
+    mov bx, [px_ry1]
+    mov cx, [px_fcl]
+    dec cx
     mov dx, [px_ry2]
-    PXFILL [px_c_body]
-    mov dx, [px_tyy]
+    PXFILL [px_c_chrome]
+    mov ax, [px_fcn]                ; ...and right of them
+    mov cx, PX_CARDW
+    mul cx
+    add ax, [px_fcl]
+    mov cx, [px_fcx2]
+    mov bx, [px_ry1]
+    mov dx, [px_ry2]
+    PXFILL [px_c_chrome]
+    ; the window of names: the open one in the middle where it can be
+    mov ax, [px_ncur]
+    mov bx, [px_fcn]
+    shr bx, 1
+    sub ax, bx
+    jns .s1
+    xor ax, ax
+.s1:
+    mov bx, [px_nnames]
+    sub bx, [px_fcn]
+    jns .s2
+    xor bx, bx
+.s2:
+    cmp ax, bx
+    jbe .s3
+    mov ax, bx
+.s3:
+    mov [px_fcs], ax
+    ; the rows: the card's box, then the name's line
+    mov ax, [px_ry1]
+    add ax, 2
+    mov [px_fct], ax                ; the box's top
+    add ax, [px_thh]
+    add ax, 2
+    mov [px_fcny], ax               ; the name's row
+    xor bp, bp                      ; BP = the cell
+.cell:
+    cmp bp, [px_fcn]
+    jb .c1
+    jmp .msg
+.c1:
+    call px_card
+    inc bp
+    jmp short .cell
+.msg:
+    cmp word [px_nnames], 0         ; no folder: one line over the blank names
+    jne .out
+    cmp word [px_fcn], 0
+    je .out
+    mov ax, [px_fcl]
+    mov cx, [px_fcn]
+    mov bx, PX_CARDW
+    xchg ax, cx
+    mul bx
+    add ax, cx
+    dec ax
+    xchg ax, cx                     ; AX = the first cell, CX = the last column
+    mov dx, [px_fcny]
     mov si, px_fsline
     mov bl, [px_c_text]
-    mov bh, [px_c_body]
+    mov bh, [px_c_chrome]
     mov di, 1
     call px_tband
 .out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; px_card - card BP: its cell, its box, the format in it, the name under it.
+; Every pixel of the cell once. Preserves all
+px_card:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov ax, bp
+    mov cx, PX_CARDW
+    mul cx
+    add ax, [px_fcl]
+    mov [px_fcx], ax                ; the cell's left
+    add ax, (PX_CARDW - 64) / 2
+    mov [px_fcb], ax                ; the box's left
+    ; which name, and is it the open picture?
+    mov byte [px_fccur], 0
+    mov word [px_fcname], px_s_empty0
+    mov ax, bp
+    add ax, [px_fcs]
+    cmp ax, [px_nnames]
+    jb .some
+    cmp word [px_nnames], 0         ; past a folder's last picture: no card,
+    je .named                       ; just the ground (blank cards are for the
+    mov ax, [px_fcx]                ; folder not yet known)
+    mov bx, [px_ry1]
+    mov cx, ax
+    add cx, PX_CARDW - 1
+    mov dx, [px_ry2]
+    PXFILL [px_c_chrome]
+    jmp .done
+.some:
+    cmp ax, [px_ncur]
+    jne .nc
+    mov byte [px_fccur], 1
+.nc:
+    mov cx, 13
+    mul cx
+    add ax, px_names
+    mov [px_fcname], ax
+.named:
+    ; --- above the name: ground, the box, ground --------------------------
+    mov ax, [px_fcx]                ; left of the box
+    mov bx, [px_ry1]
+    mov cx, [px_fcb]
+    dec cx
+    mov dx, [px_fcny]
+    dec dx
+    PXFILL [px_c_chrome]
+    mov ax, [px_fcb]                ; right of it
+    add ax, 64
+    mov cx, [px_fcx]
+    add cx, PX_CARDW - 1
+    PXFILL [px_c_chrome]
+    mov ax, [px_fcb]                ; over it
+    mov cx, ax
+    add cx, 63
+    mov dx, [px_fct]
+    dec dx
+    PXFILL [px_c_chrome]
+    mov bx, [px_fct]                ; under it, to the name
+    add bx, [px_thh]
+    mov dx, [px_fcny]
+    dec dx
+    PXFILL [px_c_chrome]
+    mov bx, [px_fct]                ; the box
+    mov dx, bx
+    add dx, [px_thh]
+    dec dx
+    call px_wellframe
+    inc ax
+    inc bx
+    dec cx
+    dec dx
+    mov [px_fcix], ax
+    mov [px_fciy2], dx
+    mov al, [px_c_card]             ; its inside: the open one's in the
+    mov ah, [px_c_text]             ; strip's colours
+    cmp byte [px_fccur], 0
+    je .col
+    mov al, [px_c_strip]
+    mov ah, [px_c_stript]
+.col:
+    mov [px_fcpair], ax
+    mov si, [px_fcname]
+    cmp byte [si], 0
+    jne .fmt
+    mov ax, [px_fcix]               ; a blank card: one fill
+    PXFILL [px_fcpair]
+    jmp short .name
+.fmt:
+    push si                         ; the format's name, by the extension
+    call px_extfmt                  ; AL = its PXF_*
+    call px_fmtname                 ; SI = the name
+    mov [px_fcfmt], si
+    pop si
+    mov ax, [px_fct]                ; the text's row: the box's middle
+    mov dx, [px_thh]
+    sub dx, 8
+    sar dx, 1
+    add ax, dx
+    mov [px_fcmid], ax
+    mov ax, [px_fcix]               ; above the text
+    mov dx, [px_fcmid]
+    dec dx
+    PXFILL [px_fcpair]
+    mov bx, [px_fcmid]              ; below it
+    add bx, 8
+    mov dx, [px_fciy2]
+    PXFILL [px_fcpair]
+    mov ax, [px_fcix]               ; the text: one run, centred
+    mov dx, [px_fcmid]
+    mov si, [px_fcfmt]
+    mov bl, [px_fcpair + 1]
+    mov bh, [px_fcpair]
+    mov di, 1
+    call px_tband
+.name:
+    ; --- the name's line, and the ground under it ---------------------------
+    mov ax, [px_fcx]
+    mov cx, ax
+    add cx, PX_CARDW - 1
+    mov dx, [px_fcny]
+    mov si, [px_fcname]
+    mov bl, [px_c_text]
+    mov bh, [px_c_chrome]
+    mov di, 1
+    call px_tband
+    mov bx, [px_fcny]
+    add bx, 8
+    mov dx, [px_ry2]
+    PXFILL [px_c_chrome]
+.done:
     pop bp
     pop di
     pop si

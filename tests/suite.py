@@ -1211,6 +1211,22 @@ FAST = [
         "stray file there, and the Makefile's three gallery lists "
         "(PX_SAMPLES, _720, _360) the same as the tool's - a list edited in "
         "one place and not the other would ship a disk short of a picture"),
+    Row("pixelsim", "fast", py("tools/pixelsim.py", "--selfcheck"), 0.2,
+        "PiXEL's reference (SPEC.md 106.13) holds to its own invariants - the "
+        "cube's levels invert, each desktop colour is its own plan, every "
+        "plan's t in 0..64, a view's DDA never leaves the master, the "
+        "statistics of a two-bin histogram - and apps/pixel/pxplans.inc, the "
+        "CUBE's and GREY's shipped plans, is exactly what its search answers "
+        "today: a plan search changed in one place and not the other fails "
+        "the build rather than putting a different picture on the glass"),
+    Row("pixcorpus", "fast", py("tools/pixcorpus.py", "--check"), 0.3,
+        "PiXEL's fixtures (SPEC.md 106.13) - every depth, type, orientation "
+        "and packing of BMP, PCX, TGA, PNM and PIX, and a hostile half - each "
+        "get the verdict SPEC.md 106.10 promises from tools/pixelsim.py, and "
+        "the same picture through five different readers is ONE master "
+        "(the agreement groups): the reference and the corpus are two "
+        "readings of one section, and tests/pxdecode.py then holds the "
+        "guest to the reference"),
     Row("checkreadme", "fast", py("tools/checkreadme.py", "readme.txt"), 0.1,
         "README.TXT's width and size rules - Note Pad refuses a file one byte "
         "too long and shows nothing at all"),
@@ -7703,6 +7719,45 @@ SOAK = [
         "FETCHES AGAIN, which an OP_COMP|OP_LAZY row could not (20.12.7.4); E, "
         "the negative control: the row aimed at sector 0, the package's own "
         "header, is REFUSED on the signature and its claim still given back",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxdecode", "soak", py("tests/pxdecode.py"), 120.0,
+        "SPEC.md 106.13: every fixture tools/pixcorpus.py makes, decoded by "
+        "PIXEL.O88 itself through File > Revert, against tools/pixelsim.py "
+        "BYTE FOR BYTE - the master and the palette of each good one (BMP "
+        "1/4/8/16/24/32, bit fields, RLE8/RLE4, OS/2 and v4 headers; PCX "
+        "1x1, 1x4, 8x1 with and without a palette, 8x3; TGA 1/2/3/9/10/11; "
+        "PNM P1-P6 with 16-bit samples; PIX; a neutral-grey ramp through the "
+        "cube's four greys), each hostile one refused with SPEC.md 106.10's "
+        "number with the shown picture still shown and PiXEL's claims "
+        "exactly as before, and two pictures at 1/2 when memory is capped "
+        "(the box filter, and an 8-bit source averaged into the cube)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxopen", "soak", py("tests/pxopen.py"), 90.0,
+        "SPEC.md 106.11/106.13 on a VGA: a picture opened by its association "
+        "is drawn as tools/pixelsim.py renders it - the zoom is pixelsim's "
+        "Fit and the steps its View's; every canvas pixel at Fit, after two "
+        "zoom steps, after a vertical OSAPI_GFX_SCROLL and its strip, and "
+        "after a horizontal SAVE/REST shift and its strip is pixelsim's; and "
+        "a bottom-up 24-bit BMP painted AS IT DECODED, with no render after, "
+        "is pixelsim's too",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxopencga", "soak", py("tests/pxopen.py", "--machine",
+                                "os8088_5150_cga_gla"), 90.0,
+        "pxopen on a 1bpp display (SPEC.md 106.11): the CGA's 5/12 pixel "
+        "aspect in the Fit and the steps, the luma thresholds and the Bayer "
+        "bit tables, BLIT1 - the same six legs, every bit against pixelsim",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxpaint", "soak", py("tests/pxpaint.py"), 90.0,
+        "SPEC.md 106.14's budget: the primitive calls of an open, a zoom "
+        "step (the canvas and the Navigator's frame, not the panels), a pan "
+        "down (ONE scroll and the strip), a pan across (SAVE/REST and the "
+        "columns), a panel collapse and a status field (one run) - counted "
+        "at the API cells; a change that repaints more than it changed "
+        "fails with the counts beside the budget",
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/os8088-360.img")),
     Row("wdpen", "soak", py("tests/wdpen.py"), 60.0,
