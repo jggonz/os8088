@@ -237,6 +237,11 @@ def arm_spk(ui, p):
         seg = p.w("mrk_seg")
         b = ui.m.readseg(seg, 4096, 4)
         return b[0] | b[1] << 8, b[2] | b[3] << 8
+    # THE BRACKET MUST BE PLAYING FIRST: Play repaints and enters it, and
+    # until the pre-fill is in, TOTAL and CONS are both 0 - a "ring at 0" that
+    # is the start, not a starvation (it failed one run in three on that)
+    M.until(ui.m, lambda _: p.w("mrk_seg") and ring()[1] > 0,
+            "the first pulses", poll=.05, limit=10)
     M.guest_sleep(ui.m, 1.0)
     low, c0, k0 = 4096, ring()[1], bios(ui.m)
     for _ in range(8):

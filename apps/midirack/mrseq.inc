@@ -685,6 +685,7 @@ mrq_event:
     jc .dead
     jmp short .next
 .meta:
+    mov byte [mrq_rs+bx], 0         ; a meta event cancels running status too
     call mrq_getb                   ; the type
     jc .dead
     mov cl, al

@@ -610,13 +610,15 @@ def read_smf(data):
             else:
                 st = rs
             if st == 0xFF:
-                mt = body[p]
+                rs = 0                      # meta and SysEx cancel running
+                mt = body[p]                # status (the SMF spec; mrq_event)
                 ln, p = _vlq(body, p + 1)
                 ev.append((tick, 'meta', (mt, bytes(body[p:p + ln]))))
                 p += ln
                 if mt == 0x2F:
                     break
             elif st in (0xF0, 0xF7):
+                rs = 0
                 ln, p = _vlq(body, p)
                 p += ln
             else:

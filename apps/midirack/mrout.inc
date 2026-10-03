@@ -430,6 +430,7 @@ mrw_rt:
     push bx
     push cx
     push dx
+    push bp                         ; (mr_vt_call's selector, at the end)
     call mrw_clock
     mov [mr_nowlo], ax
     mov [mr_nowhi], dx
@@ -487,6 +488,7 @@ mrw_rt:
 .zz:
     mov ax, 2
 .ret:
+    pop bp
     pop dx
     pop cx
     pop bx
