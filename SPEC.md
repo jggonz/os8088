@@ -162529,9 +162529,12 @@ about 1.4 times its bus-byte count. The plan's 25 a pixel is not reachable
 for planar 4bpp from an indexed master on this CPU.
 
 **The VIEW claim** holds the 16 KB of tables, the 256-byte unspread table
-(4bpp), a row of lanes, the band and the Navigator's banked thumbnail: 28 KB
-on a colour display (it was 32, with a 4 KB plane table), 19 KB on a 1bpp
-one.
+(4bpp), a row of lanes, the band and the Navigator's banked thumbnail,
+which is LAST in the claim and `PX_THMW / 2 x PX_THMH` bytes on a colour
+display, `PX_THMW / 8 x PX_THMH` on a 1bpp one: 30 KB and 20 KB since
+106.15 gave the Navigator the rows its title strip had (`PX_THMH` 96,
+where it was 64: 28 KB and 19 KB; 32 KB before 106.17 retired the 4 KB
+plane table).
 
 **Pixel aspect and zoom.** A zoom is a 16.16 factor `Z` of screen pixels per
 SOURCE pixel across; down the screen it is `Z * a`, with `a` = 1 on VGA,

@@ -760,15 +760,16 @@ px_viewclaim:
     cmp al, 1
     je .one
     mov word [px_vo_c2p], PX_VOC2P  ; 4bpp: tables, the unspread table, a row
-    mov word [px_vo_row], 0x4100    ; of lanes, a band, the thumbnail (30 KB:
-    mov word [px_vo_band], 0x4300   ; the 4 KB plane table it had is the
-    mov word [px_vo_thm], 0x5A00    ; butterfly's registers now; + PX_THMW / 2
-    mov ax, 30                      ; x PX_THMH = 0x7800)
+    mov word [px_vo_row], 0x4100    ; of lanes, a band, the thumbnail (the 4 KB
+    mov word [px_vo_band], 0x4300   ; plane table it had is the butterfly's
+    mov word [px_vo_thm], 0x5A00    ; registers now); the thumbnail is LAST in
+    mov ax, (0x5A00 + PX_THMW / 2 * PX_THMH + 1023) / 1024    ; the claim: its
+                                    ; area is PX_THMW / 2 x PX_THMH at 4bpp
     jmp short .claim
 .one:
     mov word [px_vo_band], 0x4000   ; 1bpp: tables, a band, the thumbnail
-    mov word [px_vo_thm], 0x4600    ; (+ PX_THMW / 8 x PX_THMH = 0x4D80)
-    mov ax, 20
+    mov word [px_vo_thm], 0x4600    ; ...and PX_THMW / 8 x PX_THMH at 1bpp
+    mov ax, (0x4600 + PX_THMW / 8 * PX_THMH + 1023) / 1024
 .claim:
     call OSAPI_MEM_CLAIM
     jc .out
