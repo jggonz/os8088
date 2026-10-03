@@ -209,6 +209,7 @@ VM386PS2 := $(CURDIR)/vm/386-ps2
 VMXTSND := $(CURDIR)/vm/xt-sound
 VMXTSND144 := $(CURDIR)/vm/xt-sound-1.44
 VMXTMIDI := $(CURDIR)/vm/xt-midirack
+VMXTCOVOX := $(CURDIR)/vm/xt-covox
 VMXTWIRE := $(CURDIR)/vm/xt-wire
 VM286SND := $(CURDIR)/vm/286-sound
 VM286VID := $(CURDIR)/vm/286-video
@@ -2027,7 +2028,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
 .PHONY: stkdiag small emu kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 pc5150 xt-mfm xt-cga \
-        xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-wire \
+        xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-covox xt-wire \
         286-525-z 286-525-word 286-525-cword 286-525-runcpm 286-525-c64 \
         286-525-weave 286-525-loom 286-525-all \
         286-sound 286-video 386-sound 486 pentium \
@@ -13632,6 +13633,18 @@ xt-multimon: $(IMG360) $(APPSIMG360)
 xt-sound: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT) $(VMXTSND)/86box.cfg
 	$(BOX) -P $(VMXTSND) -N
+
+# THE COVOX MACHINE (SPEC.md 34.14): xt-sound's XT with NO card and 86Box's
+# own `lpt_dac` - the LPT DAC / Covox Speech Thing - on LPT1 at 378h, booting
+# `make covoxtest`'s 360KB disk, whose SYSTEM.CFG asks for SOUND.DRV and sets
+# the sound tier to a Covox on LPT1. B: is `make midirackdisk`'s 360KB disk, so
+# MIDIRack's Covox synth is one click away; the apps disk is in B:'s history
+# for Tracker (BEVERLY.MOD rides media360.img), Audio and the Video Player.
+# A machine to LISTEN to: the gates are MartyPC's (tests/covox.py and each
+# package's --covox leg), whose own Covox is patches/10-covox-lpt-dac.patch.
+xt-covox: $(BUILD)/covoxsys360.img $(BUILD)/midirack360.img $(APPSIMG360)
+	@$(UNPROTECT) $(VMXTCOVOX)/86box.cfg
+	$(BOX) -P $(VMXTCOVOX) -N
 
 # Keep the period-correct 360KB system disk in A:, but expose every application
 # through the 1.44MB everything set: disk 1, $(ALLAPPSIMG), is in B: and the
