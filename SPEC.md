@@ -161302,3 +161302,22 @@ canvas, moves nested scene windows, and shrinks/restores the actual lab window t
 The scene supports window, button and 3D viewport objects with parent-relative
 coordinates. Logical nested windows are drawn inside the lab's clip; the OS
 manages the top-level lab. No resident kernel state or bytes are added.
+
+## 106. PiXEL — an image viewer and editor (`apps/pixel/`)
+
+PiXEL.O88 views and edits pictures on all three adapters. It reads JPEG, PNG,
+GIF, BMP, PCX, TIFF, TGA, PIX, PNM, ICO, IFF/ILBM and MacPaint files into one
+8-bit indexed MASTER (a source palette, a 6x7x6 colour cube plus four greys
+for truecolour, or 256 greys). It dithers that master to the desktop's sixteen
+colours or to 1bpp, and offers a full-screen view in the richest mode the
+display has. The design record is `docs/plans/PIXEL-PLAN.md`. This section is
+the contract, and it is written wave by wave, each subsection landing BEFORE
+the code it describes. Until a subsection exists, nothing it would describe is
+built.
+
+**PiXEL departs from §94.1 for itself only.** §94.1 says 8-bit pictures are
+refused and that quantising belongs on the host. PiXEL quantises and dithers
+on the machine, because a viewer whose formats are JPEG and PNG has no host to
+defer to. `apps/os88img.inc` and its consumers keep §94.1 unchanged, and PiXEL
+does not grow that include (§94's contract is a whole file under 64KB in and
+one 4bpp segment out; PiXEL's is a stream in and rows out).

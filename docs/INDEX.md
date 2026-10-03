@@ -479,6 +479,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 101 | 1942 — native vertical shooter (`apps/1942/`) |
 | 102 | Excitebike — native motocross racer (`apps/excitebike/excitebike.asm`) |
 | 103 | REDLINE — CPU and graphics benchmarks (`apps/redline/`) |
+| 106 | PiXEL — an image viewer and editor (`apps/pixel/`) |
 
 ## docs/
 
