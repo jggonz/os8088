@@ -5628,11 +5628,16 @@ cp_snd_click:
 .done:
     jmp kretm_dx
 .lpt:                           ; --- the Covox row (SPEC.md 34.14) ---------
-    mov ax, cx                  ; on a PORT radio: that port, if it answered.
-    sub ax, CPS_LX0 - 2         ; On the label: the port already chosen, or
-    jb .lab                     ; the first that answered - a Covox tier is
-    mov dl, CPS_LDX             ; SND_RT_LPT + n, LPTn+1, and the byte that
-    div dl                      ; holds it is the one SYSTEM.CFG already keeps
+    cmp cx, CPS_LX0 - 2         ; on a PORT radio: that port, if it answered.
+    jl .lab                     ; On the label: the port already chosen, or
+    mov ax, cx                  ; the first that answered - a Covox tier is
+    sub ax, CPS_LX0 - 2         ; SND_RT_LPT + n, LPTn+1, and the byte that
+    mov dl, CPS_LDX             ; holds it is the one SYSTEM.CFG already keeps.
+    div dl                      ; SIGNED first: CX is pane-relative and the
+                                ; gutter left of the pane is -8..-1, which an
+                                ; unsigned test passed on to a `div` whose
+                                ; quotient then overflowed - INT 0, and no
+                                ; handler for it
     cmp al, 3
     jae .done
     mov bl, al
@@ -5654,7 +5659,10 @@ cp_snd_click:
 %endif
     mov ah, [snd_route]
     cmp ah, SND_RT_LPT
-    jae .ask                    ; already a Covox: re-asking is harmless
+    jb .fst                     ; already a Covox that SOUNDS: re-asking is
+    test word [drv_svc+DSV_CAPS], SND_CAP_LPTDAC    ; harmless. One whose
+    jnz .ask                    ; port did not answer here falls to the first
+.fst:                           ; that did, as a setting from another machine
     xor bl, bl
 .first:
     mov al, bl
@@ -5667,7 +5675,7 @@ cp_snd_click:
 .got:
     mov ah, bl
     add ah, SND_RT_LPT
-    jmp short .ask
+    jmp .ask
 
 ; =============================================================================
 ; The Drivers page (SPEC.md 31.6/51)

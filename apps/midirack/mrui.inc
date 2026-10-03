@@ -3354,8 +3354,10 @@ mru_mkdev:
     je .sp
     mov si, mru_d_lpt
     call mru_cat
-    mov ax, [mr_lptport]
+    push ax                         ; (AL = the output shown, for .kc's
+    mov ax, [mr_lptport]            ; compare - the port is not it)
     call mru_hex3
+    pop ax
     mov si, mru_d_lpt2
     jmp short .kc
 .n3:

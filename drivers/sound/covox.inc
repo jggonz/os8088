@@ -147,14 +147,16 @@ cvx_latch:
 ; port that did not answer, withdraws both. Cannot fail: a Covox tier whose
 ; port has gone is the AdLib tier, which is what the page's dot then shows
 ; (ctrl.inc's cp_snd_row).
-; in:  AH = SND_RT_*
+; in:  [cvx_ask] = the SND_RT_* snd_tier was handed - banked there because
+;      the DSP leg between spends AH, and this runs only once that leg has
+;      SUCCEEDED (a refusal changes nothing, DRVV_TIER's own contract)
 ; out: nothing; clobbers nothing (flags)
 ; -----------------------------------------------------------------------------
 cvx_tier:
     push bx
     and word [snd_services+DSV_CAPS], ~SND_CAP_LPTDAC
     mov word [cvx_port], 0
-    mov bl, ah
+    mov bl, [cvx_ask]
     sub bl, SND_RT_LPT
     cmp bl, 2
     ja .out                         ; not a Covox tier (below wraps to big)
@@ -187,3 +189,4 @@ cvx_v_info:
 cvx_ports:  dw 0, 0, 0              ; LPT1..LPT3's data ports, 0 = did not
                                     ; answer the latch test
 cvx_port:   dw 0                    ; the DAC's, while a Covox tier is live
+cvx_ask:    db 0                    ; the tier DRVV_TIER asked for (cvx_tier)

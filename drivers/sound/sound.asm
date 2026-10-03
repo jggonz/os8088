@@ -265,11 +265,15 @@ snd_hicap:
 snd_tier:
     cmp byte [drv_up], 0
     je .nohw                    ; nothing attached: no tier to move
-    call cvx_tier               ; the Covox's cap, for this tier (SPEC.md
-    cmp ah, SND_RT_LPT          ; 34.14) - and a Covox tier is the AdLib's as
-    jae .off                    ; far as the DSP goes: SND_RT_LPT + n is 4..6,
-    cmp ah, SND_RT_SB           ; numerically ABOVE the Sound Blaster and not a
-    jae .want                   ; rung over it, so it is caught first
+    mov [cvx_ask], ah           ; the Covox's cap is settled at .table, ONCE
+                                ; the DSP leg has answered: a refused Sound
+                                ; Blaster (its claim failed) must leave the
+                                ; Covox exactly as it was, since the kernel
+                                ; does not re-publish a refusal (SPEC.md 34.14)
+    cmp ah, SND_RT_LPT          ; A Covox tier is the AdLib's as far as the DSP
+    jae .off                    ; goes: SND_RT_LPT + n is 4..6, numerically
+    cmp ah, SND_RT_SB           ; ABOVE the Sound Blaster and not a rung over
+    jae .want                   ; it, so it is caught first
 .off:
                                 ; --- off ----------------------------------
     cmp word [snd_services+DSV_STREAM], 0
@@ -292,6 +296,7 @@ snd_tier:
     call snd_hicap
     mov word [snd_services+DSV_NAME], snd_s_sb
 .table:
+    call cvx_tier               ; ...the Covox's half, on the tier taken
     mov si, snd_services
     clc
     ret
