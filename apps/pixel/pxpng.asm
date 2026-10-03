@@ -20,12 +20,15 @@
 ; =============================================================================
 
 %include "pxpart.inc"
+%include "pxrec.inc"
+%include "pxlink.inc"                ; LINKED: the package's variables (106.20)
+%include "os88api.inc"               ; (OSAPI_TASK_ALIVE, for the plans)
 
     cpu 8086
     bits 16
     org 0
 
-    PXPART_HEAD pz_init, pz_decode, pz_info, pz_head
+    PXPART_HEAD pz_init, pz_decode, pz_info, pz_head, pz_plans
 
 ; --- the scratch (PXK_DSEG): the WINDOW and the Huffman tables, then the two
 ; scanline buffers in a segment of their own --------------------------------
@@ -41,7 +44,9 @@ PZ_LNSUB    equ 64
 PZ_LCNT     equ 0xA400              ; 16 words: codes of each length
 PZ_LSYM     equ 0xA420              ; 288 words: symbols by (length, value)
 PZ_DPRIM    equ 0xA660              ; the distance code's
-PZ_DSUB     equ 0xAA60              ; 16 sub-tables
+PZ_DSUB     equ 0xAA60              ; 16 sub-tables - which can never run
+                                    ; out: a prefix with long codes holds two
+                                    ; at least, and 30 symbols make 15
 PZ_DNSUB    equ 16
 PZ_DCNT     equ 0xB260
 PZ_DSYM     equ 0xB280              ; 32 words
@@ -64,6 +69,13 @@ pz_info:
     mov ax, PXE_NOTSUP
     stc
     retf
+
+; PXV_PLANS - [px_plan] for the picture's palette (SPEC.md 106.20): the
+; shared source's, apps/pixel/pxplan.inc
+pz_plans:
+    call pl_plans
+    retf
+
 
 ; =============================================================================
 ; PXV_HEAD - the UI task: DS = the package, DI = the context. IHDR, the first
@@ -749,10 +761,10 @@ pz_pstart:
     mov [cs:pz_prev], ax
     mov es, [cs:pz_xseg]
     xor di, di
-    mov cx, ax
-    add cx, [cs:pz_rowb]            ; both rows and both guards
-    xor al, al
-    rep stosb
+    mov cx, [cs:pz_rowb]            ; both rows and both guards: 2 x rowb
+    add cx, 8                       ; + 16 bytes, as WORDS - at PZ_ROWMAX
+    xor ax, ax                      ; that is 65,536 bytes, which a byte
+    rep stosw                       ; count wraps to 0 (wave-3 review F1)
     clc
     jmp short .out
 .none:
@@ -1368,6 +1380,7 @@ pz_fixed:
 ; pz_dynhdr - a dynamic block's header: HLIT, HDIST, HCLEN, the code-length
 ; code, the lengths, and the two tables
 pz_dynhdr:
+    call pz_dtick
     mov cl, 5
     call pz_bits
     add ax, 257
@@ -2053,6 +2066,40 @@ pz_out:
 .ab:
     jmp pz_fail
 
+; pz_dtick - K_TICK once a dynamic block (wave-3 review F8): a stream of
+; empty dynamic blocks is ~41,000 instructions a block and emits no row, so
+; without it Stop and the close box waited a whole ring slot - tens of
+; seconds on the 8088. AX = the rows done so far, scaled as pz_prog's.
+; Clobbers AX; out through pz_fail when the service says stop
+pz_dtick:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+    xor ax, ax
+    mov cx, [cs:pz_ptot]
+    jcxz .t
+    mov ax, [cs:pz_rdone]
+    mul word [cs:pz_h]
+    div cx
+.t:
+    mov si, PXS_TICK * 4
+    call far [cs:pz_svc + si]
+    pop bp
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    jc .ab
+    ret
+.ab:
+    jmp pz_fail
+
 ; pz_prog - DX = the progress in source rows: the rows done of all the
 ; passes' rows, scaled to the picture's height. Preserves all but DX
 pz_prog:
@@ -2462,3 +2509,5 @@ pz_tmp:     dw 0
 pz_gs:      db 0
 pz_cb:      db 0
 pz_al:      db 0
+
+%include "pxplan.inc"                ; the plans: shared source (106.20)

@@ -26,6 +26,7 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLANS_INC = os.path.join(HERE, "..", "apps", "pixel", "pxplans.inc")
+QTAB_INC = os.path.join(HERE, "..", "apps", "pixel", "pxqtab.inc")
 
 # --- the answers (apps/pixel/pxsimple.inc's PXD_*) ---------------------------
 PXD_OK, PXD_HEAD, PXD_DIMS, PXD_DEPTH, PXD_PACK, PXD_TRUNC, PXD_DATA, \
@@ -855,7 +856,8 @@ def gif_rows(p, rd):
     pal += [(0, 0, 0)] * (256 - n)
     if trans is not None:
         pal[trans] = (BG, BG, BG)
-    p.pal = pal
+        p.npal = max(n, trans + 1)      # a key past the table is still a
+    p.pal = pal                         # colour the plans must cover
     bgi = trans if trans is not None else hdr[11]
     ilace = bool(fpk & 0x40)
     if ilace:
@@ -1304,9 +1306,852 @@ def png_rows(p, rd):
 
 
 # =============================================================================
+# JPEG (SPEC.md 106.19): baseline and progressive Huffman, 8-bit, one or
+# three components, decoded STRAIGHT TO A SCALE - the IDCT itself is reduced
+# (8x8 at 1/1, 4x4 at 1/2, 2x2 at 1/4, the DC alone at 1/8) - and turned
+# upright by its EXIF orientation. Every operation is the guest's 16-bit
+# two's-complement arithmetic (s16), so a hostile stream's wraparound is the
+# guest's wraparound too. apps/pixel/pxjpeg.asm is this section in assembly,
+# check for check and in the same order.
+# =============================================================================
+JZZ = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33,
+       40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50,
+       43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46,
+       53, 60, 61, 54, 47, 55, 62, 63]     # zigzag k -> natural 8 v + u
+
+# THE PRESCALE a coefficient is dequantised with, natural order: the
+# multiplier is M = min((q P + 2048) >> 12, 32767), i.e. M = 32 q p(u) p(v)
+# with every scale's normalisation folded in, and a pixel is the
+# butterflies' sum >> 5.
+#   1/1  jidctfst.c's aanscales (AAN's own prescale)
+#   1/2  the 8-point basis averaged over PAIRS of pixels, coefficients u < 4:
+#        p(u) = C(u)/2 cos(u pi/16) x (1, cos pi/8, 1/sqrt 2, cos pi/8)
+#   1/4  ...over FOURS, u < 2: p(u) = C(u)/2 x (1, 0.640729)
+#   1/8  the DC alone: p = 1 / (2 sqrt 2)
+JP_P0 = [16384, 22725, 21407, 19266, 16384, 12873, 8867, 4520,
+         22725, 31521, 29692, 26722, 22725, 17855, 12299, 6270,
+         21407, 29692, 27969, 25172, 21407, 16819, 11585, 5906,
+         19266, 26722, 25172, 22654, 19266, 15137, 10426, 5315,
+         16384, 22725, 21407, 19266, 16384, 12873, 8867, 4520,
+         12873, 17855, 16819, 15137, 12873, 10114, 6967, 3552,
+         8867, 12299, 11585, 10426, 8867, 6967, 4799, 2446,
+         4520, 6270, 5906, 5315, 4520, 3552, 2446, 1247]
+JP_P1 = [16384, 20995, 15137, 17799, 20995, 26905, 19397, 22809,
+         15137, 19397, 13985, 16444, 17799, 22809, 16444, 19336]   # 4 x 4
+JP_P2 = [16384, 14846, 14846, 13452]                               # 2 x 2
+JP_K1414, JP_K1847, JP_K1082, JP_K2613, JP_KT8 = 362, 473, 277, 669, 106
+JP_BIAS = (128 << 5) + 16       # the level shift and the rounding, on the DC
+JP_HEADS = 16                   # heads a header walk may read (SPEC 106.19)
+# the sampling a three-component frame may have: Y's (H, V), Cb and Cr 1 x 1
+JP_SAMP = ((1, 1), (1, 2), (2, 1), (2, 2), (4, 1))
+# the coefficients a scale keeps: a natural index is kept when idx & mask is 0
+JP_KEEP = (0x00, 0x24, 0x36, 0x3F)
+JP_ZKEPT = (0, 1, 2, 4)         # 1/4's four, in zigzag order (the store's)
+PK_JPEG, PK_JPEGP = 9, 10       # the Info panel's Packing
+
+
+def s16(v):
+    v &= 0xFFFF
+    return v - 0x10000 if v & 0x8000 else v
+
+
+def jmul(x, k):
+    """(x k) >> 8, floor, its low sixteen bits: `imul`, then DL:AH."""
+    return s16((x * k) >> 8)
+
+
+def jp_mults(q, s):
+    """The multipliers for quant table q (natural order) at scale s."""
+    P = (JP_P0, JP_P1, JP_P2, [16384])[s]
+    n = 8 >> s
+    out = [0] * 64
+    for v in range(n):
+        for u in range(n):
+            out[v * 8 + u] = min((q[v * 8 + u] * P[v * n + u] + 2048) >> 12,
+                                 32767)
+    return out
+
+
+def aan8(d):
+    """jidctfst.c's 1-D pass in 16 bits: d[0..7] by frequency -> 8 values."""
+    t0, t1, t2, t3 = d[0], d[2], d[4], d[6]
+    t10 = s16(t0 + t2)
+    t11 = s16(t0 - t2)
+    t13 = s16(t1 + t3)
+    t12 = s16(jmul(s16(t1 - t3), JP_K1414) - t13)
+    t0 = s16(t10 + t13)
+    t3 = s16(t10 - t13)
+    t1 = s16(t11 + t12)
+    t2 = s16(t11 - t12)
+    t4, t5, t6, t7 = d[1], d[3], d[5], d[7]
+    z13 = s16(t6 + t5)
+    z10 = s16(t6 - t5)
+    z11 = s16(t4 + t7)
+    z12 = s16(t4 - t7)
+    t7 = s16(z11 + z13)
+    t11 = jmul(s16(z11 - z13), JP_K1414)
+    z5 = jmul(s16(z10 + z12), JP_K1847)
+    t10 = s16(jmul(z12, JP_K1082) - z5)
+    t12 = s16(jmul(z10, -JP_K2613) + z5)
+    t6 = s16(t12 - t7)
+    t5 = s16(t11 - t6)
+    t4 = s16(t10 + t5)
+    return [s16(t0 + t7), s16(t1 + t6), s16(t2 + t5), s16(t3 - t4),
+            s16(t3 + t4), s16(t2 - t5), s16(t1 - t6), s16(t0 - t7)]
+
+
+def red4(d):
+    """The 4-point pass (1/2): two multiplies by tan(pi/8)."""
+    ea, eb = s16(d[0] + d[2]), s16(d[0] - d[2])
+    oa = s16(d[1] + jmul(d[3], JP_KT8))
+    ob = s16(jmul(d[1], JP_KT8) - d[3])
+    return [s16(ea + oa), s16(eb + ob), s16(eb - ob), s16(ea - oa)]
+
+
+def red2(d):
+    return [s16(d[0] + d[1]), s16(d[0] - d[1])]
+
+
+def jclamp(v):
+    v >>= 5
+    return 0 if v < 0 else 255 if v > 255 else v
+
+
+def jp_idct(blk, s):
+    """blk: 64 dequantised values, natural order, JP_BIAS already on the
+    DC. The block's (8 >> s)^2 pixels, row by row. Columns first."""
+    if s == 3:
+        return [jclamp(blk[0])]
+    n = 8 >> s
+    f = (aan8, red4, red2)[s]
+    ws = [0] * (n * n)
+    for u in range(n):
+        col = f([blk[v * 8 + u] for v in range(n)])
+        for y in range(n):
+            ws[y * n + u] = col[y]
+    out = []
+    for y in range(n):
+        out += [jclamp(v) for v in f(ws[y * n:y * n + n])]
+    return out
+
+
+# the colour tables: jdcolor.c's ycc_rgb_convert, exactly (SCALEBITS 16)
+JC_RCR = [(91881 * (i - 128) + 32768) >> 16 for i in range(256)]
+JC_BCB = [(116130 * (i - 128) + 32768) >> 16 for i in range(256)]
+JC_GCB = [-22554 * (i - 128) for i in range(256)]
+JC_GCR = [-46802 * (i - 128) + 32768 for i in range(256)]
+
+
+def jp_c8(v):
+    return 0 if v < 0 else 255 if v > 255 else v
+
+
+class JBits:
+    """THE ENTROPY-CODED SEGMENT, a bit at a time (SPEC.md 106.19). FF 00 is
+    a data FF and FF FF is fill; FF and anything else is a MARKER, which
+    ends the segment, and so does the file's end - past the end the bits
+    are zeros, and a bit TAKEN from them makes the decode `cut short` at its
+    next check (each MCU's end, an interval's, and before any refusal)."""
+
+    def __init__(self, rd):
+        self.rd = rd
+        self.reset()
+
+    def reset(self):
+        self.acc = self.n = 0
+        self.curfill = False
+        self.ended = False
+        self.marker = None          # what ended it; None is the file's end
+        self.over = False
+
+    def _load(self):
+        if self.ended:
+            return 0, True
+        b = self.rd.byte_or_end()
+        if b < 0:
+            self.ended = True
+            return 0, True
+        if b != 0xFF:
+            return b, False
+        while True:
+            c = self.rd.byte_or_end()
+            if c < 0:
+                self.ended = True
+                return 0, True
+            if c == 0:
+                return 0xFF, False
+            if c != 0xFF:
+                self.ended = True
+                self.marker = c
+                return 0, True
+
+    def bit(self):
+        if self.n == 0:
+            self.acc, self.curfill = self._load()
+            self.n = 8
+        self.n -= 1
+        if self.curfill:
+            self.over = True
+        return (self.acc >> self.n) & 1
+
+    def bits(self, k):
+        v = 0
+        for _ in range(k):
+            v = (v << 1) | self.bit()
+        return v
+
+    def check(self):
+        if self.over:
+            raise Refused(PXD_TRUNC)
+
+    def bad(self):
+        """A refusal inside the data: `cut short` if the zeros were used."""
+        self.check()
+        raise Refused(PXD_DATA)
+
+    def to_marker(self, skip_rst=False):
+        """Discard to the marker that ends the segment (with skip_rst, the
+        first that is not RSTn): its code, or None at the file's end."""
+        while True:
+            while not self.ended:
+                self._load()
+            m = self.marker
+            if skip_rst and m is not None and 0xD0 <= m <= 0xD7:
+                self.reset()
+                continue
+            return m
+
+
+def jp_extend(v, s):
+    return v - (1 << s) + 1 if s and v < (1 << (s - 1)) else v
+
+
+class JHuff:
+    """A Huffman table (JPEG Annex C), checked as jdhuff.c checks it."""
+
+    def __init__(self, counts, vals, dc):
+        if sum(counts) > 256:
+            raise Refused(PXD_DATA)
+        code = 0
+        self.maxc = [-1] * 17
+        self.off = [0] * 17
+        p = 0
+        for l in range(1, 17):
+            self.off[l] = p - code          # vals[off + code] for code at l
+            code += counts[l - 1]
+            p += counts[l - 1]
+            if code >= (1 << l):
+                raise Refused(PXD_DATA)
+            self.maxc[l] = code - 1 if counts[l - 1] else -1
+            code <<= 1
+        if dc and any(v > 15 for v in vals):
+            raise Refused(PXD_DATA)
+        self.vals = list(vals)
+
+    def decode(self, br):
+        code = 0
+        for l in range(1, 17):
+            code = (code << 1) | br.bit()
+            if code <= self.maxc[l]:
+                return self.vals[self.off[l] + code]
+        br.bad()
+
+
+class JFrame:
+    pass
+
+
+def jp_sof(seg, prog, code):
+    """The frame header's fields (seg: the segment after its length). A
+    refusal is `code` where SPEC.md 106.19 says `bad header`."""
+    if len(seg) < 6:
+        raise Refused(code)
+    if seg[0] != 8:
+        raise Refused(PXD_DEPTH)
+    f = JFrame()
+    f.h, f.w, f.nf = (seg[1] << 8) | seg[2], (seg[3] << 8) | seg[4], seg[5]
+    if not (1 <= f.w <= DIM_MAX and 1 <= f.h <= DIM_MAX):
+        raise Refused(PXD_DIMS)
+    if f.nf not in (1, 3):
+        raise Refused(PXD_DEPTH)
+    if len(seg) != 6 + 3 * f.nf:
+        raise Refused(code)
+    f.comps = []
+    for i in range(f.nf):
+        cid, hv, tq = seg[6 + 3 * i], seg[7 + 3 * i], seg[8 + 3 * i]
+        h, v = hv >> 4, hv & 15
+        if not (1 <= h <= 4 and 1 <= v <= 4) or tq > 3 or \
+                any(c[0] == cid for c in f.comps):
+            raise Refused(code)
+        f.comps.append([cid, h, v, tq])
+    if f.nf == 1:
+        f.comps[0][1] = f.comps[0][2] = 1   # one component: an MCU is a block
+    elif (f.comps[0][1], f.comps[0][2]) not in JP_SAMP or \
+            any((c[1], c[2]) != (1, 1) for c in f.comps[1:]):
+        raise Refused(PXD_PACK)
+    f.hmax, f.vmax = f.comps[0][1], f.comps[0][2]
+    f.mcux = (f.w + 8 * f.hmax - 1) // (8 * f.hmax)
+    f.mcuy = (f.h + 8 * f.vmax - 1) // (8 * f.vmax)
+    f.prog = prog
+    return f
+
+
+def jp_exif(seg):
+    """An APP1's bytes (those the head holds): its orientation, or 0."""
+    if bytes(seg[:6]) != b"Exif\0\0" or len(seg) < 14:
+        return 0
+    t = seg[6:]
+    if bytes(t[:4]) == b"II*\0":
+        g16 = lambda o: t[o] | (t[o + 1] << 8)
+        g32 = lambda o: g16(o) | (g16(o + 2) << 16)
+    elif bytes(t[:4]) == b"MM\0*":
+        g16 = lambda o: (t[o] << 8) | t[o + 1]
+        g32 = lambda o: (g16(o) << 16) | g16(o + 2)
+    else:
+        return 0
+    ifd = g32(4)
+    if ifd + 2 > len(t):
+        return 0
+    for i in range(g16(ifd)):
+        e = ifd + 2 + 12 * i
+        if e + 12 > len(t):
+            return 0
+        if g16(e) == 0x0112:
+            v = g16(e + 8)
+            if g16(e + 2) == 3 and g32(e + 4) == 1 and 1 <= v <= 8:
+                return v
+            return 0
+    return 0
+
+
+def jpeg_header(data, fsz):
+    """THE HEADER, as the guest's HEAD walks it: the first 2,048 bytes, and
+    when a marker is not whole in them, the 2,048 at that marker - at most
+    JP_HEADS heads - to the first frame header. A marker is read as four
+    bytes (FF, its code, a length); the file ending inside them is `cut
+    short`."""
+    base, pos, heads, orient, exif = 0, 2, 1, 0, False
+    jfif, adobe = False, None
+    head = data[:HEAD_MAX]
+    if len(head) < 4 or head[0] != 0xFF or head[1] != 0xD8:
+        raise Refused(PXD_HEAD)
+    while True:
+        need = 4
+        if pos + 4 <= len(head) and head[pos] == 0xFF and \
+                head[pos + 1] in (0xC0, 0xC1, 0xC2):
+            ln = (head[pos + 2] << 8) | head[pos + 3]
+            if ln > HEAD_MAX - 2:
+                raise Refused(PXD_HEAD)
+            need = max(4, 2 + ln)           # a frame header, whole
+        if pos + need > len(head):
+            if base + pos + need > fsz:
+                raise Refused(PXD_TRUNC)
+            heads += 1
+            if heads > JP_HEADS:
+                raise Refused(PXD_HEAD)
+            base += pos
+            pos = 0
+            head = data[base:base + HEAD_MAX]
+            continue
+        if head[pos] != 0xFF:
+            raise Refused(PXD_HEAD)
+        m = head[pos + 1]
+        if m == 0xFF:
+            pos += 1
+            continue
+        if m == 0x01 or 0xD0 <= m <= 0xD7:
+            pos += 2
+            continue
+        if m in (0xD8, 0xD9):
+            raise Refused(PXD_HEAD)
+        ln = (head[pos + 2] << 8) | head[pos + 3]
+        if ln < 2:
+            raise Refused(PXD_HEAD)
+        if m in (0xC0, 0xC1, 0xC2):
+            f = jp_sof(head[pos + 4:pos + 2 + ln], m == 0xC2, PXD_HEAD)
+            break
+        if 0xC3 <= m <= 0xCF and m not in (0xC4, 0xC8, 0xCC):
+            raise Refused(PXD_PACK)         # lossless, hierarchical, arithmetic
+        seg = head[pos + 4:min(pos + 2 + ln, len(head))]
+        if m == 0xE0 and ln - 2 >= 14 and bytes(seg[:5]) == b"JFIF\0":
+            jfif = True
+        if m == 0xEE and ln - 2 >= 12 and len(seg) >= 12 and \
+                bytes(seg[:5]) == b"Adobe":
+            adobe = seg[11]
+        if m == 0xE1 and not exif:
+            seg = head[pos + 4:min(pos + 2 + ln, len(head))]
+            if bytes(seg[:6]) == b"Exif\0\0":
+                exif = True
+                orient = jp_exif(seg)
+        pos += 2 + ln
+    p = Pic()
+    p.fmt = "JPEG"
+    p.frame = f
+    p.orient = orient or 1
+    p.w, p.h = (f.h, f.w) if p.orient >= 5 else (f.w, f.h)
+    p.rf = RF_GREY if f.nf == 1 else RF_RGB
+    p.bits = 8 * f.nf
+    p.pack = PK_JPEGP if f.prog else PK_JPEG
+    p.prog = f.prog
+    p.smin = 2 if f.prog else 0
+    # three components are YCbCr - unless, as libjpeg reads them, there is no
+    # JFIF marker and an Adobe one says transform 0, or neither and the
+    # components are named R, G, B: then they are R, G, B as they stand
+    p.jrgb = f.nf == 3 and not jfif and (
+        adobe == 0 if adobe is not None else
+        [c[0] for c in f.comps] == [82, 71, 66])
+    return p
+
+
+class JDec:
+    """The decode's state: tables, the frame, the store (SPEC.md 106.19)."""
+
+    def __init__(self, p, rd, s):
+        self.p, self.rd, self.s = p, rd, s
+        self.qt = [None] * 4
+        self.dc = [None] * 4
+        self.ac = [None] * 4
+        self.ri = 0
+        self.f = None
+        self.keep = JP_KEEP[s]
+        self.mult = None            # per component, latched at its first scan
+        self.img = []               # the scaled rows, top-down, unoriented
+
+
+def jp_seg(rd):
+    """A marker segment's bytes after its length (the file ending is `cut
+    short`; a length below 2 is `damaged`)."""
+    ln = (rd.byte() << 8) | rd.byte()
+    if ln < 2:
+        raise Refused(PXD_DATA)
+    return rd.take(ln - 2)
+
+
+def jp_dqt(d, seg):
+    o = 0
+    while o < len(seg):
+        pq, tq = seg[o] >> 4, seg[o] & 15
+        o += 1
+        if pq > 1 or tq > 3:
+            raise Refused(PXD_DATA)
+        n = 128 if pq else 64
+        if o + n > len(seg):
+            raise Refused(PXD_DATA)
+        q = [0] * 64
+        for k in range(64):
+            v = (seg[o + 2 * k] << 8) | seg[o + 2 * k + 1] if pq else seg[o + k]
+            if v == 0:
+                raise Refused(PXD_DATA)
+            q[JZZ[k]] = v
+        d.qt[tq] = q
+        o += n
+
+
+def jp_dht(d, seg):
+    o = 0
+    while o < len(seg):
+        tc, th = seg[o] >> 4, seg[o] & 15
+        o += 1
+        if tc > 1 or th > 3 or o + 16 > len(seg):
+            raise Refused(PXD_DATA)
+        counts = list(seg[o:o + 16])
+        o += 16
+        n = sum(counts)
+        if n > 256 or o + n > len(seg):
+            raise Refused(PXD_DATA)
+        h = JHuff(counts, seg[o:o + n], tc == 0)
+        o += n
+        (d.ac if tc else d.dc)[th] = h
+
+
+def jpeg_rows(p, rd, s):
+    """THE DECODE: the stream from its first byte, at scale s - the rows of
+    the picture at 1/2^s, upright, into p.rows as MASTER rows (p.presc)."""
+    d = JDec(p, rd, s)
+    if p.prog and s < 2:
+        raise Refused(PXD_BIG)      # (the resident never asks: SPEC 106.19)
+    rd.skip_to(2)
+    m = None
+    while True:
+        if m is None:
+            if rd.byte() != 0xFF:
+                raise Refused(PXD_DATA)
+            m = rd.byte()
+            while m == 0xFF:
+                m = rd.byte()
+        if m == 0xD9:                       # EOI
+            if d.f is None or not d.f.prog or not getattr(d, "scans", 0):
+                raise Refused(PXD_DATA)
+            jp_output(d)
+            break
+        if m in (0xD8,) or (m == 0xDA and d.f is None):
+            raise Refused(PXD_DATA)
+        if m == 0x01 or 0xD0 <= m <= 0xD7:
+            m = None
+            continue
+        seg = jp_seg(rd)
+        if m == 0xDB:
+            jp_dqt(d, seg)
+        elif m == 0xC4:
+            jp_dht(d, seg)
+        elif m == 0xDD:
+            if len(seg) != 2:
+                raise Refused(PXD_DATA)
+            d.ri = (seg[0] << 8) | seg[1]
+        elif 0xC0 <= m <= 0xCF and m not in (0xC4, 0xC8, 0xCC):
+            if d.f is not None or m not in (0xC0, 0xC1, 0xC2):
+                raise Refused(PXD_DATA)
+            d.f = jp_sof(seg, m == 0xC2, PXD_DATA)
+        elif m == 0xDA:
+            nm = jp_scan(d, seg)
+            if not d.f.prog:
+                break
+            m = nm
+            continue
+        m = None
+    jp_orient(p, d)
+
+
+def jp_scan(d, seg):
+    """One scan: SOS's checks, then its data. Answers the marker that ended
+    it (a progressive scan's), None for a baseline one."""
+    f = d.f
+    if len(seg) < 1:
+        raise Refused(PXD_DATA)
+    ns = seg[0]
+    if not (1 <= ns <= f.nf) or len(seg) != 4 + 2 * ns:
+        raise Refused(PXD_DATA)
+    sc = []
+    for i in range(ns):
+        cid, t = seg[1 + 2 * i], seg[2 + 2 * i]
+        ci = [k for k in range(f.nf) if f.comps[k][0] == cid]
+        if not ci or ci[0] in [c[0] for c in sc] or t >> 4 > 3 or t & 15 > 3:
+            raise Refused(PXD_DATA)
+        sc.append((ci[0], t >> 4, t & 15))
+    ss, se = seg[1 + 2 * ns], seg[2 + 2 * ns]
+    ah, al = seg[3 + 2 * ns] >> 4, seg[3 + 2 * ns] & 15
+    if f.prog:
+        if ss == 0:
+            if se != 0:
+                raise Refused(PXD_DATA)
+        elif ss > se or se > 63 or ns != 1:
+            raise Refused(PXD_DATA)
+        if ah and al != ah - 1:
+            raise Refused(PXD_DATA)
+        if al > 13:
+            raise Refused(PXD_DATA)
+    elif ns != f.nf:
+        raise Refused(PXD_PACK)             # a baseline picture in more scans
+    # the tables it needs: present now; the quant tables latched at a
+    # component's first scan
+    if d.mult is None:
+        d.mult = [None] * f.nf
+        d.store = None
+    for ci, td, ta in sc:
+        if d.mult[ci] is None:
+            q = d.qt[f.comps[ci][3]]
+            if q is None:
+                raise Refused(PXD_DATA)
+            d.mult[ci] = jp_mults(q, d.s)
+        if (not f.prog or ss == 0 and ah == 0) and d.dc[td] is None:
+            raise Refused(PXD_DATA)
+        if (not f.prog or ss) and d.ac[ta] is None:
+            raise Refused(PXD_DATA)
+    d.scans = getattr(d, "scans", 0) + 1
+    br = JBits(d.rd)
+    if not f.prog:
+        jp_baseline(d, br, sc)
+        return None
+    if d.store is None:
+        d.store = []
+        for c in f.comps:
+            bpl, rows = f.mcux * c[1], f.mcuy * c[2]
+            d.store.append([[0, 0, 0, 0, 0] for _ in range(bpl * rows)])
+    if ss and d.s == 3:                     # 1/8 needs no AC: the scan is
+        return br.to_marker(True)           # skipped to its next marker
+    jp_progscan(d, br, sc, ss, se, ah, al)
+    m = br.to_marker(True)
+    if m is None:
+        raise Refused(PXD_TRUNC)
+    return m
+
+
+def jp_restart(d, br, n):
+    """The end of a restart interval: the RST marker that must follow."""
+    br.check()
+    m = br.to_marker()
+    if m is None:
+        raise Refused(PXD_TRUNC)
+    if m != 0xD0 + (n & 7):
+        raise Refused(PXD_DATA)
+    br.reset()
+
+
+def jp_baseline(d, br, sc):
+    f, s = d.f, d.s
+    n8 = 8 >> s
+    pred = [0] * f.nf
+    W_s, H_s = f.w >> s, f.h >> s
+    total, done = f.mcux * f.mcuy, 0
+    rst = 0
+    for my in range(f.mcuy):
+        planes = []
+        for c in f.comps:
+            planes.append([bytearray(f.mcux * c[1] * n8) for _ in range(c[2] * n8)])
+        for mx in range(f.mcux):
+            for ci, td, ta in sc:
+                c = f.comps[ci]
+                for v in range(c[2]):
+                    for h in range(c[1]):
+                        coef = [0] * 64
+                        t = d.dc[td].decode(br)
+                        pred[ci] = s16(pred[ci] + jp_extend(br.bits(t), t))
+                        coef[0] = pred[ci]
+                        k = 1
+                        while k < 64:
+                            rs = d.ac[ta].decode(br)
+                            r, z = rs >> 4, rs & 15
+                            if z:
+                                k += r
+                                if k > 63:
+                                    br.bad()
+                                val = jp_extend(br.bits(z), z)
+                                if not JZZ[k] & d.keep:
+                                    coef[JZZ[k]] = val
+                                k += 1
+                            elif r == 15:
+                                k += 16
+                            else:
+                                break
+                        jp_put(d, planes[ci], coef, d.mult[ci],
+                               (mx * c[1] + h) * n8, v * n8)
+            br.check()
+            done += 1
+            if d.ri and done % d.ri == 0 and done < total:
+                jp_restart(d, br, rst)
+                rst += 1
+                pred = [0] * f.nf
+        jp_band(d, planes, my)
+
+
+def jp_put(d, plane, coef, mult, x0, y0):
+    """Dequantise the kept coefficients, the bias on the DC, the IDCT at
+    the scale, into the plane at (x0, y0)."""
+    s = d.s
+    n8 = 8 >> s
+    blk = [0] * 64
+    for z in range(64):
+        if coef[z] and not z & d.keep:
+            blk[z] = s16(coef[z] * mult[z])
+    blk[0] = s16(blk[0] + JP_BIAS)
+    px = jp_idct(blk, s)
+    for y in range(n8):
+        plane[y0 + y][x0:x0 + n8] = bytes(px[y * n8:(y + 1) * n8])
+
+
+def jp_band(d, planes, my):
+    """MCU row my's pixels at the scale into d.img: Y and, for colour, the
+    chroma by REPLICATION - each chroma pixel serves hmax x vmax."""
+    f, s = d.f, d.s
+    n8 = 8 >> s
+    W_s, H_s = f.w >> s, f.h >> s
+    for yy in range(f.vmax * n8):
+        y = my * f.vmax * n8 + yy
+        if y >= H_s:
+            break
+        yp = planes[0][yy]
+        if f.nf == 1:
+            d.img.append(bytes(yp[:W_s]))
+            continue
+        cb = planes[1][yy // f.vmax]
+        cr = planes[2][yy // f.vmax]
+        row = bytearray(3 * W_s)
+        if d.p.jrgb:
+            for x in range(W_s):
+                row[3 * x] = yp[x]
+                row[3 * x + 1] = cb[x // f.hmax]
+                row[3 * x + 2] = cr[x // f.hmax]
+            d.img.append(bytes(row))
+            continue
+        for x in range(W_s):
+            Y, b, r = yp[x], cb[x // f.hmax], cr[x // f.hmax]
+            g = (JC_GCB[b] + JC_GCR[r]) >> 16
+            row[3 * x] = jp_c8(Y + JC_RCR[r])
+            row[3 * x + 1] = jp_c8(Y + g)
+            row[3 * x + 2] = jp_c8(Y + JC_BCB[b])
+        d.img.append(bytes(row))
+
+
+def jp_progscan(d, br, sc, ss, se, ah, al):
+    """A progressive scan into the store: DC first or refine (interleaved or
+    not), AC first or refine (one component). The store keeps, a block,
+    the four coefficients 1/4 needs (zigzag 0, 1, 2, 4) and which of the
+    63 have been nonzero - which a refinement scan must know to be read."""
+    f = d.f
+    p1, m1 = 1 << al, s16(-1 << al)
+    eobrun = 0
+    pred = [0] * f.nf
+    if len(sc) > 1:
+        units = []
+        for my in range(f.mcuy):
+            for mx in range(f.mcux):
+                u = []
+                for ci, td, ta in sc:
+                    c = f.comps[ci]
+                    for v in range(c[2]):
+                        for h in range(c[1]):
+                            u.append((ci, td, ta, (my * c[2] + v) * f.mcux * c[1]
+                                      + mx * c[1] + h))
+                units.append(u)
+    else:
+        ci, td, ta = sc[0]
+        c = f.comps[ci]
+        cw = (f.w * c[1] + f.hmax - 1) // f.hmax
+        ch = (f.h * c[2] + f.vmax - 1) // f.vmax
+        bw, bh = (cw + 7) // 8, (ch + 7) // 8
+        units = [[(ci, td, ta, by * f.mcux * c[1] + bx)]
+                 for by in range(bh) for bx in range(bw)]
+    rst = 0
+    for i, u in enumerate(units):
+        for ci, td, ta, bi in u:
+            b = d.store[ci][bi]
+            if ss == 0:
+                if ah == 0:
+                    t = d.dc[td].decode(br)
+                    pred[ci] = s16(pred[ci] + jp_extend(br.bits(t), t))
+                    b[0] = s16(pred[ci] << al)
+                elif br.bit():
+                    b[0] = s16(b[0] | p1)
+                continue
+            k = ss
+            if ah == 0:                     # AC first
+                if eobrun:
+                    eobrun -= 1
+                    continue
+                while k <= se:
+                    rs = d.ac[ta].decode(br)
+                    r, z = rs >> 4, rs & 15
+                    if z:
+                        k += r
+                        if k > se:
+                            br.bad()
+                        val = s16(jp_extend(br.bits(z), z) << al)
+                        jp_sput(d, b, k, val)
+                        b[4] |= 1 << k
+                        k += 1
+                    elif r == 15:
+                        k += 16
+                    else:
+                        eobrun = (1 << r) + (br.bits(r) if r else 0) - 1
+                        break
+                continue
+            # AC refine (jdphuff.c's decode_mcu_AC_refine, on the history)
+            if eobrun == 0:
+                while k <= se:
+                    rs = d.ac[ta].decode(br)
+                    r, z = rs >> 4, rs & 15
+                    nv = 0
+                    if z:
+                        if z != 1:
+                            br.bad()
+                        nv = p1 if br.bit() else m1
+                    elif r != 15:
+                        eobrun = (1 << r) + (br.bits(r) if r else 0)
+                        break
+                    while k <= se:
+                        if b[4] >> k & 1:
+                            if br.bit():
+                                jp_refine(d, b, k, p1, m1)
+                        else:
+                            if r == 0:
+                                break
+                            r -= 1
+                        k += 1
+                    if nv:
+                        if k > se:
+                            br.bad()
+                        jp_sput(d, b, k, nv)
+                        b[4] |= 1 << k
+                    k += 1
+            if eobrun > 0:
+                while k <= se:
+                    if b[4] >> k & 1 and br.bit():
+                        jp_refine(d, b, k, p1, m1)
+                    k += 1
+                eobrun -= 1
+        br.check()
+        if d.ri and (i + 1) % d.ri == 0 and i + 1 < len(units):
+            jp_restart(d, br, rst)
+            rst += 1
+            pred = [0] * f.nf
+            eobrun = 0
+
+
+def jp_sput(d, b, k, val):
+    if k in JP_ZKEPT[1:]:
+        b[JP_ZKEPT.index(k)] = val
+
+
+def jp_refine(d, b, k, p1, m1):
+    if k in JP_ZKEPT[1:]:
+        i = JP_ZKEPT.index(k)
+        if not b[i] & p1:
+            b[i] = s16(b[i] + (p1 if b[i] >= 0 else m1))
+
+
+def jp_output(d):
+    """After a progressive picture's last scan: the store through the
+    reduced IDCT, MCU row by MCU row, into d.img."""
+    f, s = d.f, d.s
+    n8 = 8 >> s
+    for my in range(f.mcuy):
+        planes = []
+        for ci, c in enumerate(f.comps):
+            bpl = f.mcux * c[1]
+            pl = [bytearray(bpl * n8) for _ in range(c[2] * n8)]
+            for v in range(c[2]):
+                for bx in range(bpl):
+                    b = d.store[ci][(my * c[2] + v) * bpl + bx]
+                    coef = [0] * 64
+                    for i, k in enumerate(JP_ZKEPT):
+                        coef[JZZ[k]] = b[i]
+                    jp_put(d, pl, coef, d.mult[ci], bx * n8, v * n8)
+            planes.append(pl)
+        jp_band(d, planes, my)
+
+
+def jp_orient(p, d):
+    """THE ORIENTATION (EXIF tag 274) applied to the master: d.img is the
+    picture as stored, W_s x H_s; p.rows the master's rows, upright."""
+    f, s = d.f, d.s
+    W_s, H_s = f.w >> s, f.h >> s
+    nch = 1 if f.nf == 1 else 3
+    o = p.orient
+    img = d.img
+    if o == 1:
+        rows = img
+    else:
+        mw, mh = (H_s, W_s) if o >= 5 else (W_s, H_s)
+        rows = []
+        for r in range(mh):
+            row = bytearray(mw * nch)
+            for c in range(mw):
+                x, y = {2: (W_s - 1 - c, r), 3: (W_s - 1 - c, H_s - 1 - r),
+                        4: (c, H_s - 1 - r), 5: (r, c), 6: (r, H_s - 1 - c),
+                        7: (W_s - 1 - r, H_s - 1 - c), 8: (W_s - 1 - r, c)}[o]
+                row[c * nch:(c + 1) * nch] = img[y][x * nch:(x + 1) * nch]
+            rows.append(bytes(row))
+    p.rows = list(enumerate(rows))
+    p.presc = s
+
+
+# =============================================================================
 # decode: a file's bytes -> a Pic with its rows, or Refused
 # =============================================================================
-def decode(data, ext=""):
+def decode(data, ext="", scale=None):
+    """`scale` is a JPEG's: it is decoded straight to it (SPEC.md 106.19),
+    and None is the finest it may be shown at (1/4 for a progressive one);
+    every other format's rows are the source's, and emit() scales them."""
     ext = ext.upper()
     fmt = sniff(data, ext)
     head = data[:HEAD_MAX]
@@ -1333,6 +2178,10 @@ def decode(data, ext=""):
     elif fmt == "PNG":
         p = png_header(head, fsz)
         rows = png_rows
+    elif fmt == "JPEG":
+        p = jpeg_header(data, fsz)
+        jpeg_rows(p, Reader(data), p.smin if scale is None else scale)
+        return p
     elif fmt == "":
         raise Refused(PXD_NOTPIC)
     else:
@@ -1425,6 +2274,14 @@ def emit(p, s, pal_out=None):
     if s and p.par is not None:     # an interlaced picture below 1/1: the
         nb, sh = n >> 1, 2 * s - 1  # rows of one parity (SPEC.md 106.18)
     acc, cnt = None, 0
+    if getattr(p, "presc", None) is not None:
+        # a JPEG's rows are the MASTER's already, at its scale and upright
+        assert p.presc == s, "a JPEG decoded at 1/%d emitted at 1/%d" % (
+            1 << p.presc, 1 << s)
+        for y, row in p.rows:
+            out = q.row(row, mw, y) if mode == PM_CUBE else row[:mw]
+            master[y * mw:(y + 1) * mw] = out
+        return master, mw, mh, mode, (CUBE if mode == PM_CUBE else GREY)
     for y, row in p.rows:
         if y >= mh * n:
             continue
@@ -1722,8 +2579,9 @@ def plans_inc():
            ";",
            "; The mixing plans (SPEC.md 106.11) of the two palettes that never change:",
            "; the CUBE's and GREY's. Per index three bytes - c1, c2, t - in index order.",
-           "; Then the ordered quantiser's blue-noise classes and thresholds (106.8).",
-           "; A PAL palette's are built on the worker by px_plans, the same search;",
+           "; Then the search's own tables. A PAL palette's plans are that search's,",
+           "; run by the decoder PART of the picture's kind (apps/pixel/pxplan.inc,",
+           "; SPEC.md 106.20), which every decoder part includes - this file with it;",
            "; `pixelsim --selfcheck` (a fast row) fails the build if this file is not",
            "; what that search answers. Do not edit it by hand.",
            "; ============================================================================="]
@@ -1752,8 +2610,23 @@ def plans_inc():
     out.append("px_pk578:")
     for i in range(0, KMAX + 1, 7):
         out.append("    dd " + ", ".join("%d" % PENK[K] for K in range(i, min(i + 7, KMAX + 1))))
-    out.append("; the ordered quantiser (SPEC.md 106.8): per master row & 15 and column")
-    out.append("; & 15, the first of its class's three table pages (class x 3)...")
+    return "\n".join(out) + "\n"
+
+
+def qtab_inc():
+    """apps/pixel/pxqtab.inc: the ordered quantiser's tables, which stay in
+    the resident package while the plans went to the decoder parts
+    (SPEC.md 106.20)."""
+    out = ["; =============================================================================",
+           "; os8088 - apps/pixel/pxqtab.inc - GENERATED by tools/pixelsim.py --gen",
+           ";",
+           "; The ordered quantiser's blue-noise classes and thresholds (SPEC.md",
+           "; 106.8), resident: the emitter's. `pixelsim --selfcheck` (a fast row)",
+           "; fails the build if this file is not what pixelsim's BLUE16 and T16",
+           "; say. Do not edit it by hand.",
+           "; =============================================================================",
+           "; per master row & 15 and column & 15, the first of its class's three",
+           "; table pages (class x 3)..."]
     out.append("px_qpage:")
     for y in range(16):
         out.append("    db " + ", ".join("%d" % (3 * qclass(x, y))
@@ -1837,6 +2710,8 @@ def selfcheck():
     try:
         ok(open(PLANS_INC).read() == plans_inc(),
            "apps/pixel/pxplans.inc is stale: run tools/pixelsim.py --gen")
+        ok(open(QTAB_INC).read() == qtab_inc(),
+           "apps/pixel/pxqtab.inc is stale: run tools/pixelsim.py --gen")
     except OSError:
         bad.append("apps/pixel/pxplans.inc missing: run tools/pixelsim.py --gen")
     # a small truecolour BMP round trip through the emitter at both scales
@@ -1930,6 +2805,7 @@ def main():
     a = ap.parse_args()
     if a.gen:
         open(PLANS_INC, "w").write(plans_inc())
+        open(QTAB_INC, "w").write(qtab_inc())
         print("pixelsim: wrote apps/pixel/pxplans.inc")
         return 0
     if a.decode:

@@ -14,40 +14,40 @@
 ; stood in OSAPI_TASK_ALIVE (SPEC.md 66.5).
 ; =============================================================================
 
-; --- the picture RECORD (SPEC.md 106.8): everything one picture is, so a
-; cancelled open puts the previous one back by copying 48 bytes -------------
-PXR_NAME    equ 0                   ; 13: NAME.EXT
-PXR_VOL     equ 13                  ; byte: its drive
-PXR_DIR     equ 14                  ; word: its folder's cluster
-PXR_FSIZE   equ 16                  ; dword: its size, expanded
-PXR_SW      equ 20                  ; word: the SOURCE's width...
-PXR_SH      equ 22                  ; ...and height
-PXR_FMT     equ 24                  ; byte: PXF_*
-PXR_BITS    equ 25                  ; byte: bits a pixel, as the file says
-PXR_PROG    equ 26                  ; byte: a progressive JPEG
-PXR_FHAVE   equ 27                  ; byte: a file has been examined
-PXR_FCOUNT  equ 28                  ; word: pictures in its folder
-PXR_FIDX    equ 30                  ; word: its place among them
-PXR_MW      equ 32                  ; word: the MASTER's width...
-PXR_MH      equ 34                  ; ...and height
-PXR_SCL     equ 36                  ; byte: s, the master is 1/2^s
-PXR_PMODE   equ 37                  ; byte: PM_*
-PXR_MSEG    equ 38                  ; word: the master's claim
-PXR_MKB     equ 40                  ; word: ...and its KB
-PXR_PACK    equ 42                  ; byte: PK_*
-PXR_HAVE    equ 43                  ; byte: a DECODED picture is in the master
-PXR_NPAL    equ 44                  ; word: palette entries a PAL source has
-PXR_RF      equ 46                  ; byte: the decoder's row format (RF_*)
-PXR_SERIAL  equ 47                  ; byte: bumped per picture (the thumbnail's
-                                    ; key)
-PXR_SZ      equ 48
-
-PM_PAL      equ 0                   ; SPEC.md 106.8's three modes
-PM_CUBE     equ 1
-PM_GREY     equ 2
-; (RF_* and PK_* are apps/pixel/pxpart.inc's: a part hands them over too)
+; (the record's fields, PXR_*, and the modes, PM_*, are apps/pixel/pxrec.inc's:
+; a part linked against the package reads them too, SPEC.md 106.20)
 
 PX_RESKB    equ 8                   ; what the master leaves of the largest run
+PX_HTAILKB  equ 2                   ; THE HISTOGRAM'S TAIL, past the master's
+PXH_HIST    equ 0                   ; pixels in its own claim (SPEC.md
+PXH_BINS    equ 1024                ; 106.20): 256 dword counts, then 256
+                                    ; dword bins (and the count's three
+                                    ; byte planes while it runs) - the
+                                    ; picture's own, so they move and are
+                                    ; put back with it
+
+; px_htail - ES = the shown picture's histogram tail: the master's segment
+; and its pixels' paragraphs, re-read (the master may have moved).
+; Preserves all but ES
+px_htail:
+    push ax
+    push cx
+    push dx
+    mov ax, [px_cur + PXR_MW]
+    mul word [px_cur + PXR_MH]
+    add ax, 15
+    adc dx, 0
+    mov cx, 4
+.p:
+    shr dx, 1
+    rcr ax, 1
+    loop .p
+    add ax, [px_cur + PXR_MSEG]
+    mov es, ax
+    pop dx
+    pop cx
+    pop ax
+    ret
 
 ; =============================================================================
 ; px_mreloc - the master's relocation proc (SPEC.md 66): BX = where a claim
@@ -155,6 +155,7 @@ px_cdiv32:
 ; greys. Preserves all
 ; =============================================================================
 px_setpal:
+    mov byte [px_pvalid], 0         ; a new palette: its plans not made yet
     push ax
     push bx
     push cx
@@ -264,8 +265,8 @@ px_mkb:
     jz .no
     or bx, bx
     jz .no                          ; (any width's row shares one segment with
-    mul bx                          ; the quantiser's 12 KB: 3 x 8,192 + 12 KB)                          ; DX:AX = the bytes
-    add ax, 1023
+    mul bx                          ; the quantiser's 12 KB: 3 x 8,192 + 12 KB)
+    add ax, 1023                    ; DX:AX = the bytes...
     adc dx, 0
     mov cx, 10                      ; ...in KB, up
 .kb:
@@ -274,6 +275,7 @@ px_mkb:
     loop .kb
     or dx, dx
     jnz .no
+    add ax, PX_HTAILKB              ; ...and the histogram's TAIL (106.20)
     clc
     jmp short .out
 .no:
@@ -345,8 +347,14 @@ px_wkb:
     add dx, ax
     mov [px_wo_lut], dx             ; THE TABLES: a KB...
     add dx, 1024 / 16 + 1
-    mov [px_wo_dec], dx             ; ...a decoder part's scratch (106.18)...
-    add dx, [px_ddpara]
+    mov [px_wo_dec], dx             ; ...a decoder part's scratch (106.18),
+    mov bl, [px_tscl]               ; what the part needs at this scale
+    xor bh, bh                      ; (106.19)...
+    shl bx, 1
+    mov ax, [px_dsc + bx]
+    cmp ax, 0xFFFF
+    je .big
+    add dx, ax
     jc .big
     add dx, QT_SIZE / 16            ; ...and the quantiser's pages below the
     jc .big                         ; row
@@ -374,12 +382,16 @@ px_claims:
     push cx
     push dx
     push si
+    call px_scfloor                 ; a JPEG's floor (SPEC.md 106.19)
+.again:
     call OSAPI_MEM_AVAIL            ; AX = largest run, BX = total, KB
     call px_capavl
     call px_pickscale               ; CL = the scale, CF = none fits
     jc .free1
     cmp byte [px_prev + PXR_HAVE], 0
     je .go
+    cmp byte [px_keepv], 0          ; a RE-DECODE keeps the picture it is
+    jne .go                         ; finer than (106.19): never freed for it
     mov [px_kscl], cl               ; would freeing the old master buy more?
     mov ax, [px_prev + PXR_MKB]
     add [px_avl], ax
@@ -393,7 +405,9 @@ px_claims:
     jmp short .go
 .free1:
     cmp byte [px_prev + PXR_HAVE], 0  ; nothing fits with it held: let it go
-    je .nomem                         ; and ask again
+    je .nomem                         ; and ask again - but not the picture
+    cmp byte [px_keepv], 0            ; a re-decode is finer than
+    jne .nomem
 .free:
     call px_freeprev
     call OSAPI_MEM_AVAIL
@@ -401,6 +415,11 @@ px_claims:
     call px_pickscale
     jc .nomem
 .go:
+    cmp byte [px_keepv], 0          ; a re-decode that memory would leave no
+    je .go1                         ; finer than the picture shown is not
+    cmp cl, [px_prev + PXR_SCL]     ; worth its minute: refused, the picture
+    jae .nomem                      ; kept
+.go1:
     mov [px_cur + PXR_SCL], cl
     call px_mkb                     ; AX = master KB, px_tmw/tmh
     mov [px_cur + PXR_MKB], ax
@@ -444,10 +463,32 @@ px_claims:
 .nomem3:
     mov dx, [px_wbase]
     call OSAPI_MEM_FREE
+    mov word [px_wbase], 0
 .nomem2:
     mov dx, [px_cur + PXR_MSEG]
     call OSAPI_MEM_FREE
     mov word [px_cur + PXR_MSEG], 0
+    ; THE RUNS, NOT THE TOTAL: px_pickscale knows the largest free run and
+    ; the total, and the master went into the largest - so the work claim or
+    ; the ring can still find every run left too small (a cache, the old
+    ; master and the stack between them: VACATION.JPG after ROOM.JPG on a
+    ; 640 KB XT, 92 KB free and none of it 51 KB long). The next scale down,
+    ; then, rather than a refusal while one fits (SPEC.md 106.8) - after the
+    ; old master, when one is held: freeing it first is the better scale the
+    ; rule above already lets it buy
+    cmp byte [px_prev + PXR_HAVE], 0
+    je .down
+    cmp byte [px_keepv], 0
+    jne .down
+    call px_freeprev
+    jmp .again
+.down:
+    mov al, [px_cur + PXR_SCL]
+    inc al
+    cmp al, 4
+    jae .nomem
+    mov [px_sfloor], al
+    jmp .again
 .nomem:
     mov ax, PXD_MEM
     stc
@@ -481,7 +522,7 @@ px_capavl:
 px_pickscale:
     push ax
     push bx
-    xor cl, cl
+    mov cl, [px_sfloor]             ; 0, or a JPEG's floor
 .s:
     call px_mkb
     jc .next
@@ -508,6 +549,87 @@ px_pickscale:
 .out:
     pop bx
     pop ax
+    ret
+
+; px_scfloor - [px_sfloor], the finest scale this open may take (SPEC.md
+; 106.19): 0, unless the picture is decoded to a scale (a JPEG) and either a
+; re-decode asked for one ([px_zreq]) or the CPU is an 8088 - FAST OPEN, the
+; coarsest scale that still covers the canvas at Fit. The record's PXR_FAST
+; says so. Preserves all
+px_scfloor:
+    push ax
+    mov byte [px_sfloor], 0
+    mov byte [px_cur + PXR_FAST], 0
+    test byte [px_k + PXK_FLAGS], PXKF_DCT
+    jz .out
+    mov al, [px_zreq]
+    cmp al, 0xFF
+    jne .set
+    call OSAPI_CPU_INFO             ; AL = the tier
+    cmp al, CPU_8086
+    jne .out
+    call px_sfast
+.set:
+    mov [px_sfloor], al
+    mov [px_cur + PXR_FAST], al
+.out:
+    pop ax
+    ret
+
+; px_sfast - AL = the coarsest scale whose master the canvas shows at Fit
+; magnified by at most 4/3: the largest s <= 3 with 2^-s >= 3/4 Z_fit,
+; Z_fit computed for the source's own size in the canvas as laid out.
+; Preserves all but AL
+px_sfast:
+    push bx
+    push cx
+    push dx
+    mov ax, [px_cvx2]               ; the canvas, as the layout placed it
+    sub ax, [px_cvx1]
+    inc ax
+    mov [px_vw], ax
+    mov ax, [px_midy2]
+    sub ax, [px_midy1]
+    inc ax
+    mov [px_vh], ax
+    push word [px_cur + PXR_MW]     ; Fit for the source itself: scale 0
+    push word [px_cur + PXR_MH]
+    mov al, [px_cur + PXR_SCL]
+    push ax
+    mov ax, [px_cur + PXR_SW]
+    mov [px_cur + PXR_MW], ax
+    mov ax, [px_cur + PXR_SH]
+    mov [px_cur + PXR_MH], ax
+    mov byte [px_cur + PXR_SCL], 0
+    call px_fitz                    ; [px_vz] = Z_fit, 16.16, at most 1
+    pop ax
+    mov [px_cur + PXR_SCL], al
+    pop word [px_cur + PXR_MH]
+    pop word [px_cur + PXR_MW]
+    mov cl, 3                       ; the largest s with 65536 >> s >= Z
+    cmp word [px_vz + 2], 0         ; (Z = 1: only s = 0 covers it)
+    jne .z
+    mov bx, [px_vz]                 ; COVERS within a third: the master may
+    mov ax, bx                      ; be shown magnified up to 4/3, so the
+    shr ax, 1                       ; test is 3/4 Z <= 2^-s (the plan's own
+    shr ax, 1                       ; example: 640x480 in a 430x300 canvas
+    sub bx, ax                      ; opens at 1/2, SPEC.md 106.19)
+.s:
+    mov ax, 0x8000
+    dec cl
+    shr ax, cl                      ; 32768 >> (s - 1) = 65536 >> s
+    inc cl
+    cmp bx, ax
+    jbe .ge
+    dec cl
+    jnz .s
+.z:
+    xor cl, cl
+.ge:
+    mov al, cl
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; px_freeprev - give the previous picture's master back: a cancel will then
@@ -542,6 +664,10 @@ px_emit:
     inc word [px_srcdone]
     mov bx, ax                      ; BX = y
     mov cl, [px_cur + PXR_SCL]
+    test byte [px_k + PXK_FLAGS], PXKF_DCT
+    jz .src                         ; a JPEG's rows are the MASTER's, already
+    xor cl, cl                      ; at its scale (SPEC.md 106.19)
+.src:
     mov ax, [px_cur + PXR_MH]
     shl ax, cl
     cmp bx, ax
@@ -580,8 +706,10 @@ px_emit:
     call px_mrow
     call px_emitrow
 .wrote:
-    inc word [px_rdone]
-.done:
+    cmp word [px_kbx], 0xFFFF       ; a part that SAYS which rows are complete
+    jne .done                       ; has them set after this (px_kfix): an
+    inc word [px_rdone]             ; increment here let the wake paint one
+.done:                              ; row early (wave-3 review F3)
     pop es
     jmp px_progress                 ; pxpump.inc: abort, liveness, the wake
 

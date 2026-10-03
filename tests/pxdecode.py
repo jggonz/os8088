@@ -17,10 +17,15 @@ poke is the only thing a test adds.
                    verdict, which --check holds pixelsim to), the picture
                    that was showing still showing, and PiXEL holding exactly
                    the claims it held before the refusal
-  the SCALE        two fixtures again with [px_mcap] set, so memory "allows"
+  the SCALE        fixtures again with [px_mcap] set, so memory "allows"
                    only 1/2: the box filter and, for an 8-bit source, the
                    palette's colours through the cube - against pixelsim at
-                   the same scale
+                   the same scale; and the JPEGs at each DCT scale memory
+                   can be made to choose (SPEC.md 106.19), the progressive
+                   one at 1/4 and at 1/8
+
+THE DISK IS 1.44 MB and the machine the VGA XT with 1.44 MB drives: the
+corpus is over 250 files since wave 4, more than a 360 KB volume's clusters.
 
 A decoder that writes one byte wrong, reads one past a row, frees a claim it
 did not make or forgets one it did fails here, and none of those show on a
@@ -47,7 +52,7 @@ def check(name, ok, detail=""):
 
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--machine", default="os8088_xt_vga")
+ap.add_argument("--machine", default="os8088_xt_vga_144")
 ap.add_argument("-k", default=None, help="only fixtures whose name has this")
 a = ap.parse_args()
 
@@ -77,7 +82,9 @@ folder[first] = "PA"
 FOLDERS = sorted(set(folder.values()))
 files = ["PA:" + os.path.join(tmp, first)] + \
     ["%s:%s" % (folder[n], os.path.join(tmp, n)) for n in names]
-M.scratch_disk(DISK, "build/pixel.o88", *files)
+M.scratch_disk(DISK, "build/pixel.o88", *files, size=1440)
+SYSDISK = "build/os8088.img" if a.machine.endswith("_144") else \
+    "build/os8088-360.img"
 
 
 def dir_cluster(img, name):
@@ -94,7 +101,7 @@ def dir_cluster(img, name):
 
 print("== PiXEL: %d fixtures against tools/pixelsim.py (SPEC.md 106.13) =="
       % len(corpus))
-with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
+with os88ui.boot(SYSDISK, apps=DISK, machine=a.machine) as ui:
     m = ui.m
     S = ui._S
 
@@ -119,8 +126,11 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
                     have=b[43], fmt=b[24])
 
     OP_T_ROWS, OP_FETCHED = 10, 32      # apps/os88parts.inc
-    PXF_PNG, PXF_GIF = 2, 3
-    DECPART = {1: PXF_GIF, 2: PXF_PNG}  # pixel.asm's PXPART_* -> PXF_*
+    PXF_JPEG, PXF_PNG, PXF_GIF = 1, 2, 3
+    # PXPART_* -> the PXF_*s it reads (pixel.asm); part 4 is the SIMPLE
+    # part, linked against the package (SPEC.md 106.20): BMP, PCX, TGA,
+    # PIX, PNM
+    DECPART = {1: {PXF_GIF}, 2: {PXF_PNG}, 3: {PXF_JPEG}, 4: {4, 5, 7, 8, 9}}
 
     def parts_here():
         """{part: its segment} for the decoder parts fetched now."""
@@ -147,7 +157,7 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
         here = parts_here()
         r = rec()
         return len(here) <= 1 and all(
-            r["have"] and DECPART[k] == r["fmt"] for k in here), here
+            r["have"] and r["fmt"] in DECPART[k] for k in here), here
 
     def idle():
         return B("px_busy") == 0 and B("px_job") == 0
@@ -170,7 +180,7 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
         return rec()
 
     def compare(name, data, scale):
-        p = P.decode(data, name.rsplit(".", 1)[1])
+        p = P.decode(data, name.rsplit(".", 1)[1], scale)
         sm, mw, mh, mode, pal = P.emit(p, scale)
         r = rec()
         got = m.read(r["mseg"] * 16, r["mw"] * r["mh"])
@@ -186,8 +196,9 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
                   (len(bad), bad[:1], sm[bad[0]], got[bad[0]]) if bad else "")
             check("%s: the palette" % name, gpal == spal, "")
 
-    order = [first] + [n for n in names if folder[n] == "PA"] + \
-        [n for n in names if folder[n] == "PB"]
+    # EVERY folder, in order (until wave 4 only PA and PB were visited, and
+    # the 69 fixtures past them were never decoded on the guest)
+    order = [first] + [n for f in FOLDERS for n in names if folder[n] == f]
     bydata = {n: (d, v) for n, d, v in corpus}
     bydata.setdefault(first, ([d for n, d, v in C.corpus() if n == first][0], 0))
     here = "PA"
@@ -205,9 +216,14 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
         shown = (was["mseg"], was["mw"], was["mh"], was["pmode"], was["have"])
         r = revert(name)
         if not want:
-            check("%s: opened" % name, r["name"] == name and r["have"] == 1,
+            # (the name alone proves nothing: a refused open puts the shown
+            # picture's record back with the poked name in it - so the
+            # refusal number is what says it opened)
+            opened = r["name"] == name and r["have"] == 1 and \
+                B("px_lastref") == 0
+            check("%s: opened" % name, opened,
                   "record %r, refusal %d" % (r, B("px_lastref")))
-            if r["name"] == name and r["have"]:
+            if opened:
                 compare(name, data, r["scl"])
         else:
             check("%s: refused, %d (%s)" % (name, want, P.PXD_WORDS[want]),
@@ -221,9 +237,9 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
                   and r["have"] == 1, "record %r, was %r" % (r, shown))
             check("%s: claims as they were" % name, claims() == before,
                   "%s -> %s" % (before, claims()))
-            pok, here = parts_ok()
+            pok, held = parts_ok()
             check("%s: no decoder part but the shown picture's" % name, pok,
-                  "parts %r, shown format %d" % (here, rec()["fmt"]))
+                  "parts %r, shown format %d" % (held, rec()["fmt"]))
 
     # --- the scale: memory "allows" 1/2 ---------------------------------------
     for name in ("BIG24.BMP", "BIG8.BMP", "GBIG.GIF", "GBIGI.GIF",
@@ -233,12 +249,54 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
         cl = dir_cluster(DISK, folder[name])
         m.write(base + syms["px_cur"] + 14, bytes((cl & 255, cl >> 8)))
         data = bydata[name][0]
-        r = revert(name, cap=9)     # 3 KB at 1/1 + the 8 KB reserve > 9
+        # 3 KB at 1/1 + the 2 KB histogram tail (SPEC.md 106.20) + the
+        # 8 KB reserve > 11; 1 KB at 1/2 + 2 + 8 fits
+        r = revert(name, cap=11)
         check("%s: memory took it to 1/2" % name, r["scl"] == 1,
               "scale 1/%d, record %r, refusal %d, largest %d total %d" %
               (1 << r["scl"], r, B("px_lastref"), W("px_avl"), W("px_avt")))
         if r["scl"] == 1:
             compare(name, data, 1)
+    # --- JPEG: memory's choice of a DCT scale (SPEC.md 106.19) -----------
+    def kb(n):
+        return (n + 1023) // 1024
+    for name, scales in (("JBIG.JPG", (1, 2)),):
+        if name not in bydata:
+            continue
+        data = bydata[name][0]
+        ph = P.jpeg_header(data, len(data))
+        for s in scales:
+            cap = kb((ph.w >> s) * (ph.h >> s)) + 2 + 8   # + the tail
+            cl = dir_cluster(DISK, folder[name])
+            m.write(base + syms["px_cur"] + 14, bytes((cl & 255, cl >> 8)))
+            r = revert(name, cap=cap)
+            check("%s: memory took it to 1/%d" % (name, 1 << s),
+                  r["scl"] == s, "scale 1/%d, record %r, refusal %d" %
+                  (1 << r["scl"], r, B("px_lastref")))
+            if r["scl"] == s:
+                compare(name, data, s)
+    m.write(base + syms["px_mcap"], b"\0\0")
+    # --- ...and EVERY good JPEG at every scale it can be shown at: the
+    # re-decode's floor ([px_zreq], SPEC.md 106.19) poked, as a zoom past
+    # fast open's scale sets it - pixelsim's master at each, byte for byte
+    for name in order:
+        if not name.endswith(".JPG") or bydata[name][1]:
+            continue
+        data = bydata[name][0]
+        ph = P.jpeg_header(data, len(data))
+        cl = dir_cluster(DISK, folder[name])
+        m.write(base + syms["px_cur"] + 14, bytes((cl & 255, cl >> 8)))
+        for s in range(max(ph.smin, 1), 4):
+            if ph.w >> s == 0 or ph.h >> s == 0:
+                continue
+            m.write(base + syms["px_zreq"], bytes((s,)))
+            r = revert(name)
+            check("%s: asked for 1/%d" % (name, 1 << s), r["scl"] == s,
+                  "scale 1/%d, record %r, refusal %d" %
+                  (1 << r["scl"], r, B("px_lastref")))
+            if r["scl"] == s:
+                compare(name, data, s)
+    m.write(base + syms["px_zreq"], b"\xFF")
     m.write(base + syms["px_mcap"], b"\0\0")
 
 print("pxdecode: %s" % ("ok" if not FAIL else "%d FAILED" % len(FAIL)))

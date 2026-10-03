@@ -23,6 +23,7 @@
 
 %include "os88api.inc"
 %include "pxpart.inc"
+%include "pxrec.inc"                ; the record, the formats, the decoders
 
     OS88_HEADER 'PiXEL', px_entry, OS88_F_ICON | OS88_F_ASSOC | OS88_F_GLYPH | OS88_F_PARTS
 
@@ -53,7 +54,10 @@
 PXPART_HELP equ 0                   ; the keyboard card, apps/pixel/pxhelp.asm
 PXPART_GIF  equ 1                   ; the GIF decoder, apps/pixel/pxgif.asm
 PXPART_PNG  equ 2                   ; the PNG decoder, apps/pixel/pxpng.asm
-PX_NPARTS   equ 3                   ; (a decoder part is never 0: [px_kheld]
+PXPART_JPEG equ 3                   ; the JPEG decoder, apps/pixel/pxjpeg.asm
+PXPART_SIMP equ 4                   ; BMP, PCX, TGA, PNM, PIX, LINKED against
+                                    ; the package: apps/pixel/pxsimp.asm
+PX_NPARTS   equ 5                   ; (a decoder part is never 0: [px_kheld]
                                     ; 0 is "none held", SPEC.md 106.18)
 PXD_QUIET   equ 0xFE                ; a refusal already said (op_fetch's own
                                     ; toast): px_refusal says nothing more
@@ -121,22 +125,6 @@ PX_PR_HAND   equ 3                  ; a Hand drag on the picture
 PX_PR_NAV    equ 4                  ; a press or drag in the Navigator
 PX_NAMES     equ 128                ; the folder's pictures px_walk keeps
 
-; --- the formats PiXEL names (SPEC.md 106.6) -----------------------------------
-PXF_NONE    equ 0
-PXF_JPEG    equ 1
-PXF_PNG     equ 2
-PXF_GIF     equ 3
-PXF_BMP     equ 4
-PXF_PCX     equ 5
-PXF_TIFF    equ 6
-PXF_TGA     equ 7
-PXF_PIX     equ 8
-PXF_PNM     equ 9
-PXF_ICO     equ 10
-PXF_LBM     equ 11
-PXF_MAC     equ 12
-PXF_PACKED  equ 13                  ; a 'CZ' wrapper (SPEC.md 20.14)
-PXF_N       equ 14
 
 ; =============================================================================
 ; px_entry - the loader's call. SI = the kernel's name buffer, ES = KERNEL_SEG
@@ -231,6 +219,7 @@ px_initstate:
     mov byte [px_c_rule], CBLACK    ; until the first layout picks a palette
     mov word [px_ncur], 0xFFFF      ; no folder yet
     mov byte [px_zfit], 1
+    mov byte [px_zreq], 0xFF        ; no re-decode asked for (SPEC.md 106.19)
     xor bx, bx
 .sv:
     mov si, px_s_empty0             ; every field blank until it knows
@@ -1783,8 +1772,25 @@ px_fpart:
     ret
 .p:
     cmp al, PXF_PNG
-    jne .n
+    jne .j
     mov al, PXPART_PNG
+    ret
+.j:
+    cmp al, PXF_JPEG
+    jne .s
+    mov al, PXPART_JPEG
+    ret
+.s:
+    cmp al, PXF_BMP                 ; BMP, PCX (4, 5), TGA, PIX, PNM (7-9)
+    je .simp
+    cmp al, PXF_PCX
+    je .simp
+    cmp al, PXF_TGA
+    jb .n
+    cmp al, PXF_PNM
+    ja .n
+.simp:
+    mov al, PXPART_SIMP
     ret
 .n:
     xor al, al
@@ -1975,6 +1981,7 @@ px_namesum:
 ; px_sortnames - [px_names] in name order (insertion: there are at most
 ; PX_NAMES), and [px_ncur] where [px_fname] is among them. Preserves all
 px_sortnames:
+    mov byte [px_pvalid], 0         ; (its swap is px_tbuf: px_plan's bytes)
     push ax
     push bx
     push cx
@@ -2069,11 +2076,16 @@ px_head:
     cmp byte [px_fcomp], 0
     jne .flat
     call px_clbytes                 ; AX = the cluster
+    mov cx, ax
     cmp ax, PX_HEADMAX
     jae .h
     mov ax, PX_HEADMAX
 .h:
     mov [px_tcl], ax                ; (the capacity)
+    add cx, ax                      ; a JPEG's NEXT head (SPEC.md 106.19) is
+    mov [px_hcap], cx               ; read from a cluster: a cluster more
+    mov ax, cx
+    add ax, 1023
     mov cl, 10
     shr ax, cl                      ; KB
     call px_dmaclaim
@@ -2485,21 +2497,12 @@ px_compose:
     call px_ivset
     mov bx, PX_SF_BYTES
     call px_sval
-    ; 3: the format, and ", progressive" for a progressive JPEG
+    ; 3: the format (a progressive JPEG says so on the Packing line: the
+    ; value column is fourteen characters, and "JPEG, progressive" was cut)
     mov al, [px_ffmt]
     call px_fmtname                 ; SI = its name
-    mov di, px_cline
-    call px_strcpy
-    cmp byte [px_fprog], 0
-    je .np
-    mov si, px_s_prog
-    call px_strcat
-.np:
     mov bx, 3
-    mov si, px_cline
     call px_ivset
-    mov al, [px_ffmt]
-    call px_fmtname
     mov bx, PX_SF_FMT
     call px_sval
     ; 4: the pixels, "640 x 480" (Info) and "640x480" (status)
@@ -2530,8 +2533,11 @@ px_compose:
     mov ax, [px_fh]
     xor dx, dx
     call px_u32n
-    cmp byte [px_cur + PXR_SCL], 0  ; shown smaller: "at 1/4"
-    je .nodim
+    cmp byte [px_cur + PXR_SCL], 0  ; shown smaller: "640x480 at 1/4", the
+    je .nodim                       ; compact form, or it would not fit the
+    mov si, px_cvdims               ; fourteen characters
+    mov di, px_cline
+    call px_strcpy
     mov si, px_s_at
     mov di, px_cline
     call px_strcat
@@ -3526,7 +3532,6 @@ px_s_fit:   db 'Fit', 0
 px_s_fsnone: db 'Open a picture to see its folder', 0
 px_s_fsn:   db ' pictures in this folder', 0
 px_s_bytes: db ' bytes', 0
-px_s_prog:  db ', progressive', 0
 px_s_x:     db ' x ', 0
 px_s_xs:    db 'x', 0
 px_s_bit:   db '-bit', 0
@@ -3556,6 +3561,7 @@ px_s_pgrey: db 'Grey', 0
 px_c_stop:  db 'Stop', 0
 px_packnames: dw px_s_pknone, px_s_pkrle, px_s_pkrle8, px_s_pkrle4, px_s_pkbf
               dw px_s_pklzw, px_s_pklzwi, px_s_pkdefl, px_s_pkdefli
+              dw px_s_pkjpg, px_s_pkjpgp
 %if ($ - px_packnames) != 2 * PK_N
   %error "px_packnames has a name per PK_*"
 %endif
@@ -3563,6 +3569,8 @@ px_s_pklzw: db 'LZW', 0
 px_s_pklzwi: db 'LZW interlaced', 0 ; (fourteen: the Info value's cells)
 px_s_pkdefl: db 'Deflate', 0
 px_s_pkdefli: db 'Deflate, Adam7', 0
+px_s_pkjpg: db 'Baseline DCT', 0
+px_s_pkjpgp: db 'Progressive', 0
 px_s_pknone: db 'None', 0
 px_s_pkrle: db 'RLE', 0
 px_s_pkrle8: db 'RLE8', 0
@@ -3609,6 +3617,8 @@ px_s_r11:   db 'too big to unpack', 0
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 0 the keyboard card (106.5)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 1 GIF (106.18)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 2 PNG (106.18)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 3 JPEG (106.19)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 4 the simple five (106.20)
     OS88_PARTS_END
 
 ; =============================================================================
@@ -3753,14 +3763,21 @@ px_ppal     equ px_pal + 768                    ; 768: the previous one's
 px_spal     equ px_ppal + 768                   ; 768: the file's, as parsed
 px_plan     equ px_spal + 768                   ; 768: a PAL palette's plans
 px_t1       equ px_plan + 768                   ; 256: 1bpp thresholds
-px_hist     equ px_t1 + 256                     ; 1024: counts, dwords
-px_bins     equ px_hist + 1024                  ; 1024: folded, dwords
-px_names    equ px_bins + 1024                  ; PX_NAMES x 13: the folder
-px_pscr     equ px_names + PX_NAMES * 13        ; 512: the plan search's
-                                                ; scratch (pxview.inc's PXS_*)
-px_rcur     equ px_pscr + 512                   ; FSEQ_SIZE: READ_SEQ's cursor
-px_tbuf     equ px_rcur + FSEQ_SIZE             ; 769: a PCX's tail
-px_gsum     equ px_tbuf + 770                   ; 4 x PX_HBW: graph columns
+px_tbuf     equ px_plan                         ; 769: a PCX's tail, and the
+                                                ; name sort's swap - on the UI
+                                                ; task, where no table is ever
+                                                ; being built (an open is
+                                                ; refused while one is), so it
+                                                ; shares the plans' bytes,
+                                                ; which only px_tables reads
+                                                ; (the histogram's counts and
+                                                ; bins: the master's tail,
+                                                ; pxmaster.inc, SPEC.md 106.20)
+px_names    equ px_t1 + 256                     ; PX_NAMES x 13: the folder
+px_pplan    equ px_names + PX_NAMES * 13        ; 768: the previous picture's
+                                                ; plans, banked (106.20)
+px_rcur     equ px_pplan + 768                  ; FSEQ_SIZE: READ_SEQ's cursor
+px_gsum     equ px_rcur + FSEQ_SIZE             ; 4 x PX_HBW: graph columns
 px_hband    equ px_gsum + 4 * PX_HBW            ; PX_HBST x PX_HBH: the graph
 px_w2       equ px_hband + PX_HBST * PX_HBH     ; the words and bytes below
 ; the record's fields under their wave-1 names: the shown picture's
@@ -3896,21 +3913,9 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_vo_band, 2
     PXVAR px_vo_thm, 2
     PXVAR px_planp, 2
-    PXVAR px_pbest, 4               ; the plan search
-    PXVAR px_pc1, 2
-    PXVAR px_pc2, 2
-    PXVAR px_pt, 2
-    PXVAR px_pch, 2
-    PXVAR px_pdd, 6
-    PXVAR px_pk, 6
-    PXVAR px_pkk, 2
-    PXVAR px_pss, 2
-    PXVAR px_ptt, 2
-    PXVAR px_pee, 4
-    PXVAR px_psq, 24                ; a target's four squares a channel
-    PXVAR px_pddk, 42               ; ...its dd x k, k = -3..3, a channel
-    PXVAR px_pl1, 2                 ; ...c1's levels
-    PXVAR px_pt85, 2
+    PXVAR px_pvalid, 1              ; [px_plan] is [px_pal]'s 4bpp plans
+    PXVAR px_ppvalid, 1             ; ...and [px_pplan] [px_ppal]'s
+    PXVAR px_pdefer, 1              ; px_pumpfill has deferred a fill
     PXVAR px_vcan, VW_SZ            ; the canvas's view
     PXVAR px_vthm, VW_SZ            ; the Navigator's
     PXVAR px_vtry, VW_SZ            ; a zoom, tried
@@ -4048,7 +4053,19 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_kheld, 1               ; the decoder part held, 0 none
     PXVAR px_pfail, 1               ; px_pcall's answer was its own
     PXVAR px_wfar, 4                ; px_wcall's far vector
-    PXVAR px_ddpara, 2              ; the decoder scratch, paragraphs
+    PXVAR px_dsc, 8                 ; the decoder scratch, paragraphs, at
+                                    ; each scale; FFFFh not usable (106.19)
+    PXVAR px_hcap, 2                ; the head claim's bytes, a cluster
+                                    ; multiple: a JPEG's next head (106.19)
+    PXVAR px_sfloor, 1              ; the scale a JPEG may be no finer than
+    PXVAR px_zreq, 1                ; a re-decode's scale, FFh none
+    PXVAR px_keepv, 1               ; the open keeps the view (a re-decode)
+    PXVAR px_kdi, 2                 ; K_COLS: rows complete
+    PXVAR px_ccol, 2                ; ...its block's first column
+    PXVAR px_cpix, 2                ; ...pixels a row
+    PXVAR px_cn, 2                  ; ...rows
+    PXVAR px_kcrow, 2               ; ...its first row
+    PXVAR px_csrc, 4                ; ...where the block is
     PXVAR px_wo_dec, 2              ; ...its place in the work claim
     PXVAR px_kbx, 2                 ; a service's BX and DX, banked across
     PXVAR px_kdx, 2                 ; px_emit

@@ -3,8 +3,9 @@
 ;
 ; The mixing plans (SPEC.md 106.11) of the two palettes that never change:
 ; the CUBE's and GREY's. Per index three bytes - c1, c2, t - in index order.
-; Then the ordered quantiser's blue-noise classes and thresholds (106.8).
-; A PAL palette's are built on the worker by px_plans, the same search;
+; Then the search's own tables. A PAL palette's plans are that search's,
+; run by the decoder PART of the picture's kind (apps/pixel/pxplan.inc,
+; SPEC.md 106.20), which every decoder part includes - this file with it;
 ; `pixelsim --selfcheck` (a fast row) fails the build if this file is not
 ; what that search answers. Do not edit it by hand.
 ; =============================================================================
@@ -150,25 +151,3 @@ px_pk578:
     dd 4046000, 4103800, 4161600, 4219400, 4277200, 4335000, 4392800
     dd 4450600, 4508400, 4566200, 4624000, 4681800, 4739600, 4797400
     dd 4855200, 4913000, 4970800, 5028600, 5086400, 5144200, 5202000
-; the ordered quantiser (SPEC.md 106.8): per master row & 15 and column
-; & 15, the first of its class's three table pages (class x 3)...
-px_qpage:
-    db 3, 15, 39, 6, 21, 45, 9, 39, 21, 45, 3, 24, 30, 45, 24, 12
-    db 27, 6, 36, 30, 12, 36, 15, 30, 0, 12, 33, 9, 15, 36, 6, 39
-    db 18, 45, 21, 0, 18, 27, 3, 42, 18, 24, 42, 21, 39, 0, 21, 33
-    db 0, 33, 12, 39, 42, 6, 33, 9, 27, 36, 3, 9, 30, 15, 42, 9
-    db 24, 15, 27, 3, 30, 15, 24, 39, 12, 6, 33, 24, 45, 6, 27, 36
-    db 45, 6, 39, 21, 9, 45, 3, 30, 21, 45, 15, 36, 0, 30, 15, 3
-    db 27, 18, 33, 12, 27, 36, 15, 39, 0, 24, 9, 12, 18, 42, 21, 39
-    db 9, 3, 42, 0, 33, 3, 18, 12, 33, 30, 42, 27, 33, 9, 0, 18
-    db 45, 24, 30, 18, 21, 39, 27, 45, 6, 18, 3, 39, 6, 45, 30, 36
-    db 6, 15, 36, 6, 45, 9, 0, 24, 15, 42, 21, 12, 18, 24, 12, 21
-    db 33, 42, 0, 12, 30, 15, 33, 36, 30, 0, 36, 27, 42, 0, 36, 3
-    db 27, 18, 24, 36, 21, 42, 3, 12, 18, 45, 15, 6, 33, 21, 42, 9
-    db 39, 6, 45, 9, 3, 27, 21, 39, 9, 24, 3, 39, 12, 6, 27, 15
-    db 36, 12, 24, 30, 39, 15, 33, 0, 30, 42, 30, 21, 45, 24, 30, 0
-    db 21, 33, 0, 18, 42, 6, 18, 42, 12, 18, 9, 0, 33, 12, 42, 9
-    db 27, 45, 9, 24, 33, 3, 27, 24, 6, 36, 27, 39, 15, 3, 18, 36
-; ...and each class's threshold, T16
-px_qt16:
-    db 7, 23, 39, 55, 71, 87, 103, 119, 135, 151, 167, 183, 199, 215, 231, 247

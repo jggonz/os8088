@@ -16,12 +16,15 @@
 ; =============================================================================
 
 %include "pxpart.inc"
+%include "pxrec.inc"
+%include "pxlink.inc"                ; LINKED: the package's variables (106.20)
+%include "os88api.inc"               ; (OSAPI_TASK_ALIVE, for the plans)
 
     cpu 8086
     bits 16
     org 0
 
-    PXPART_HEAD pg_init, pg_decode, pg_info, pg_head
+    PXPART_HEAD pg_init, pg_decode, pg_info, pg_head, pg_plans
 
 PG_DONE     equ 0x7FFF              ; LZW_RUN's "the image is whole": no PXD_*
 
@@ -41,6 +44,13 @@ pg_info:
     mov ax, PXE_NOTSUP
     stc
     retf
+
+; PXV_PLANS - [px_plan] for the picture's palette (SPEC.md 106.20): the
+; shared source's, apps/pixel/pxplan.inc
+pg_plans:
+    call pl_plans
+    retf
+
 
 ; =============================================================================
 ; PXV_HEAD - the UI task: DS = the package, DI = the context. The logical
@@ -265,6 +275,14 @@ pg_body:
     mov byte [es:di + 1], PXP_BG
     mov byte [es:di + 2], PXP_BG
     pop di
+    mov ah, 0                       ; a key past the table (old encoders) is
+    cmp ax, [pg_gn]                 ; still a colour: NPAL covers it, or the
+    jb .bgi                         ; plans draw it black at 1/1 (wave-3
+    push ax                         ; review F2)
+    inc ax
+    call pg_ctxb
+    mov [es:bx + PXK_NPAL], ax
+    pop ax
 .bgi:
     mov [pg_bgi], al
     mov byte [pg_par], 0
@@ -789,3 +807,5 @@ pg_prog:    dw 0                    ; rows done, for the progress
 pg_blk:     db 0                    ; the sub-block's bytes left
 pg_blkend:  db 0                    ; the terminator (or the end) is met
 pg_lzw:     times LZW_BSSSZ db 0
+
+%include "pxplan.inc"                ; the plans: shared source (106.20)

@@ -21,7 +21,7 @@ PX_RINGKB   equ 17                  ; the ring the SCALE is decided against:
                                     ; changes which scale a picture gets
 PX_HEADMAX  equ 2048                ; the bytes a header may be parsed from
 PX_FLATWIN  equ 32768               ; an in-memory file, as the worker sees it
-PXS_DEFER   equ px_pscr + 511       ; byte: px_pumpfill has deferred a fill
+PXS_DEFER   equ px_pdefer           ; byte: px_pumpfill has deferred a fill
                                     ; for the first paint (the plan search's
                                     ; scratch is done with before any row)
 
@@ -348,102 +348,8 @@ px_rseq:
 ; which px_wjob turns into what actually happened
 ; =============================================================================
 
-; px_rb - AL = the next byte. Preserves all but AL
-px_rb:
-    push si
-.again:
-    mov si, [px_rpos]
-    cmp si, [px_rend]
-    jae .next
-    push ds
-    mov ds, [px_rsegc]
-    lodsb
-    pop ds
-    mov [px_rpos], si
-    pop si
-    clc
-    ret
-.next:
-    call px_rnext
-    jnc .again
-    pop si
-    ret
-
-; px_rdn - CX bytes into ES:DI (DI advanced). Preserves all but DI
-px_rdn:
-    push ax
-    push cx
-    push si
-.l:
-    jcxz .ok
-    mov ax, [px_rend]
-    sub ax, [px_rpos]
-    jnz .have
-    call px_rnext
-    jc .out
-    jmp short .l
-.have:
-    cmp ax, cx
-    jbe .n
-    mov ax, cx
-.n:
-    sub cx, ax
-    push cx
-    mov cx, ax
-    mov si, [px_rpos]
-    add [px_rpos], ax
-    push ds
-    mov ds, [px_rsegc]
-    cld
-    rep movsb
-    pop ds
-    pop cx
-    jmp short .l
-.ok:
-    clc
-.out:
-    pop si
-    pop cx
-    pop ax
-    ret
-
-; px_rskip - move on to absolute offset DX:AX (a header's "the pixels start
-; here"). An offset already behind us costs nothing: the decoders parse their
-; headers from the head, not from the stream. Preserves all
-px_rskip:
-    push ax
-    push bx
-    push cx
-    push dx
-.l:
-    mov bx, ax                      ; DX:BX = the target - the window's start
-    mov cx, dx
-    sub bx, [px_rbase]
-    sbb cx, [px_rbase + 2]
-    jb .ok                          ; behind the window: nothing to skip
-    or cx, cx
-    jnz .past
-    cmp bx, [px_rend]
-    ja .past
-    cmp bx, [px_rpos]
-    jb .ok
-    mov [px_rpos], bx               ; inside it (or at its end)
-.ok:
-    clc
-    jmp short .out
-.past:
-    push ax
-    mov ax, [px_rend]
-    mov [px_rpos], ax
-    pop ax
-    call px_rnext
-    jnc .l
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+; (px_rb, px_rdn and px_rskip, the simple formats' readers of the window
+; below, moved with them into the SIMPLE part in wave 4: SPEC.md 106.20)
 
 ; px_rnext - give the window back and take the next one. CF = 1 at the end,
 ; on a cancel, or after a read error. Preserves all
@@ -541,6 +447,7 @@ px_rnext:
 ; does nothing with what is out of range rather than trust a part
 ; =============================================================================
 px_kst:     dw px_ks_next, px_ks_emit, px_ks_scat, px_ks_tick, px_ks_pal
+            dw px_ks_cols, px_ks_ring
 
 ; K_NEXT - out CF = 0: ES:SI the rest of the worker's window or the next one,
 ; CX its bytes (> 0); CF = 1 at the end, a cancel or a read error. Keeps all
@@ -681,6 +588,170 @@ px_ks_scat:
     pop ds
     retf
 
+; K_COLS - ES:SI = a block of BX master rows of DX pixels each (3 bytes a
+; pixel for truecolour), its top-left at master row AX, column CX; DI = the
+; rows complete from the top, or FFFFh (SPEC.md 106.19). Each row is
+; quantised into the cube with its own row's and columns' dither, or
+; copied, clipped to the master. CF/AX as K_EMIT's
+px_ks_cols:
+    push ds
+    push cs
+    pop ds
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+    call px_kfirst
+    jc .out
+    mov [px_kdi], di
+    mov [px_kcrow], ax
+    mov [px_cn], bx
+    mov [px_ccol], cx
+    mov [px_cpix], dx
+    mov [px_csrc], si
+    mov [px_csrc + 2], es
+    cmp dx, PX_DIMMAX               ; (nothing a part hands over is trusted)
+    ja .prog
+.r:
+    cmp word [px_cn], 0
+    je .prog
+    mov ax, [px_kcrow]
+    cmp ax, [px_cur + PXR_MH]
+    jae .nx
+    call px_colrow
+.nx:
+    inc word [px_kcrow]
+    dec word [px_cn]
+    mov ax, [px_cpix]               ; the next block row
+    cmp byte [px_cur + PXR_RF], RF_RGB
+    jne .g
+    mov dx, ax
+    shl ax, 1
+    add ax, dx
+.g:
+    add [px_csrc], ax
+    jmp short .r
+.prog:
+    mov ax, [px_kdi]
+    cmp ax, 0xFFFF
+    je .p
+    cmp ax, [px_cur + PXR_MH]
+    jbe .rd
+    mov ax, [px_cur + PXR_MH]
+.rd:
+    mov [px_rdone], ax
+.p:
+    call px_progress
+.out:
+    pop bp
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ds
+    retf
+
+; px_colrow - K_COLS's block row at [px_csrc] into master row AX, columns
+; [px_ccol] on: the run clipped to the master, then copied into the row
+; buffer and quantised from there (the dither's phase is the master's
+; column), or copied straight in for grey. Clobbers AX, BX, CX, DX, SI, DI
+px_colrow:
+    mov [px_qrow], ax
+    call px_mrow                    ; ES:DI = the master row
+    mov bx, [px_ccol]               ; BX = the first column...
+    mov cx, [px_cpix]               ; ...CX the pixels
+    cmp bx, [px_cur + PXR_MW]
+    jae .o
+    mov dx, [px_cur + PXR_MW]
+    sub dx, bx
+    cmp cx, dx
+    jbe .n
+    mov cx, dx
+.n:
+    jcxz .o
+    add di, bx
+    cmp byte [px_cur + PXR_RF], RF_RGB
+    je .rgb
+    push ds
+    lds si, [px_csrc]
+    rep movsb
+    pop ds
+.o:
+    ret
+.rgb:
+    push es
+    push di
+    push cx
+    mov ax, cx                      ; the run's triples into the row buffer
+    shl cx, 1
+    add cx, ax
+    mov es, [px_wseg]
+    xor di, di
+    push ds
+    lds si, [px_csrc]
+    rep movsb
+    pop ds
+    pop cx
+    pop di
+    pop es
+    jmp px_qrun
+
+; px_qrun - the row buffer's CX triples into ES:DI: the cube by the ordered
+; dither (SPEC.md 106.8), a pixel at a time, for master row [px_qrow] from
+; column BX - px_quant's lookups with the page found per pixel rather than
+; patched, because a run starts at any column. Clobbers AX, BX, CX, SI, BP
+px_qrun:
+    push ds
+    mov bp, [px_qrow]
+    and bp, 15
+    shl bp, 1
+    shl bp, 1
+    shl bp, 1
+    shl bp, 1
+    add bp, px_qpage                ; BP = this matrix row's sixteen pages
+    mov dx, bx                      ; DX = the column
+    mov si, QT_SIZE
+    mov ds, [cs:px_wbase]
+    cld
+.p:
+    mov bx, dx
+    and bx, 15
+    add bx, bp
+    mov bh, [cs:bx]                 ; this column's class x 3
+    xor bl, bl
+    lodsb
+    xlatb
+    mov ah, al
+    inc bh
+    lodsb
+    xlatb
+    add ah, al
+    inc bh
+    lodsb
+    xlatb
+    add al, ah
+    stosb
+    inc dx
+    loop .p
+    pop ds
+    ret
+
+; K_RING - px_rnext for a part LINKED against the package (SPEC.md 106.20),
+; whose readers walk the worker's ring window in place: [px_rpos], [px_rend]
+; and [px_rsegc] on to the next window. CF = 1 at the end. Keeps all
+px_ks_ring:
+    push ds
+    push cs
+    pop ds
+    call px_rnext
+    pop ds
+    retf
+
 ; K_TICK - AX = the progress, without a row. CF/AX as K_EMIT's
 px_ks_tick:
     push ds
@@ -725,6 +796,7 @@ px_kpal1:
 .n:
     cmp byte [px_cur + PXR_PMODE], PM_PAL
     jne .t
+    mov byte [px_pvalid], 0         ; a new palette: its plans are not made
     push ds
     pop es
     mov si, px_spal
@@ -939,6 +1011,12 @@ px_open:
     mov di, px_ppal
     mov cx, 768
     rep movsb
+    mov si, px_plan                 ; ...and its plans, when they are its
+    mov di, px_pplan                ; (SPEC.md 106.20): a cancel's restore
+    mov cx, 768                     ; then needs no part to make them
+    rep movsb
+    mov al, [px_pvalid]
+    mov [px_ppvalid], al
     mov byte [px_cur + PXR_HAVE], 0
     mov word [px_cur + PXR_MSEG], 0
     mov word [px_cur + PXR_MKB], 0
@@ -965,7 +1043,10 @@ px_open:
     jc .refuse
     call px_setpal
     inc byte [px_cur + PXR_SERIAL]
+    cmp byte [px_keepv], 0          ; a re-decode keeps the zoom and the pan
+    jne .kv                         ; (SPEC.md 106.19)
     call px_viewnew                 ; pxview.inc: Fit, centred
+.kv:
     call px_viewclaim               ; ...and the tables' claim for this depth
     jc .nomem
     mov al, [px_bpp]                ; the worker builds them for THIS depth
@@ -1020,6 +1101,7 @@ px_open:
 ; and the histogram; a refusal BEFORE that touched neither, and the window
 ; is exactly as it was. Preserves all
 px_restore:
+    push ax                         ; (a refusal's PXD_* rides through here)
     push cx
     push si
     push di
@@ -1035,6 +1117,15 @@ px_restore:
     mov di, px_pal
     mov cx, 768
     rep movsb
+    mov al, [px_ppvalid]            ; its plans, banked (SPEC.md 106.20)
+    mov [px_pvalid], al
+    or al, al
+    jz .np
+    mov si, px_pplan
+    mov di, px_plan
+    mov cx, 768
+    rep movsb
+.np:
     mov byte [px_prev + PXR_HAVE], 0
     mov word [px_prev + PXR_MSEG], 0
     call px_kkeep                   ; a decoder part of another kind goes
@@ -1062,6 +1153,7 @@ px_restore:
     pop di
     pop si
     pop cx
+    pop ax
     ret
 
 ; px_relclaims - give back the new picture's master, ring, work and flat

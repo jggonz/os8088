@@ -24,7 +24,7 @@
     bits 16
     org 0
 
-    PXPART_HEAD ph_init, ph_decode, ph_info, ph_decode
+    PXPART_HEAD ph_init, ph_decode, ph_info, ph_decode, ph_decode
 
 ; PXV_INIT - out AX = PXP_PROBE, CF = 0
 ph_init:

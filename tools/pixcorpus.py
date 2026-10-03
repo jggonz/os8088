@@ -765,6 +765,37 @@ def put_dyn_header(bw, ll, dl, cl_lens=None, rle=True, hlit=None, raw=None):
             bw.put(ex, 7)
 
 
+def subtab_png(nprefix, w, h):
+    """A grey PNG whose lit/len code has `nprefix` nine-bit prefixes each
+    holding two ten-bit codes, short codes completing the tree, and every
+    symbol of the data a LONG one (the wave-3 review's subtab.py)."""
+    ll = [0] * 286
+    left = 512 - nprefix
+    shorts = []
+    for L in range(1, 10):
+        if left >= (512 >> L):
+            shorts.append(L)
+            left -= 512 >> L
+    longs = list(range(2 * nprefix))
+    for c in longs:
+        ll[c] = 10
+    rest = [c for c in range(256) if c not in longs][:len(shorts) - 1] + [256]
+    for c, L in zip(rest, shorts):
+        ll[c] = L
+    raw = bytearray()
+    for y in range(h):
+        raw.append(y % 5)                       # the filter bytes are long too
+        raw += bytes(longs[5 + (x * 7 + y * 3) % (len(longs) - 5)]
+                     for x in range(w))
+    bw = BitW()
+    bw.put(1, 1)
+    bw.put(2, 2)
+    put_dyn_header(bw, ll, [0] * 30)
+    put_syms(bw, list(raw), ll, [0] * 30)
+    z = b"\x78\x01" + bw.bytes() + struct.pack(">I", zlib.adler32(bytes(raw)))
+    return png(w, h, 0, 8, z=z)
+
+
 def runs1(data):
     """Literals and distance-1 matches only: a stream with ONE distance code."""
     out, i = [], 0
@@ -838,6 +869,149 @@ def unary_lens(syms_by_freq, n=286):
     for i, s in enumerate(syms_by_freq):
         L[s] = min(i + 1, k - 1)
     return L
+
+
+# =============================================================================
+# JPEG (SPEC.md 106.19): the committed good fixtures (tools/pixjpeg.py, made
+# once by Pillow and cjpeg and pinned), and a HOSTILE half derived from them
+# here in pure Python - so no hostile file is committed, and every mutation
+# says what it breaks
+# =============================================================================
+def jsegs(d):
+    """[(offset, marker, length)] of a JPEG's segments up to its first SOS."""
+    out, p = [], 2
+    while p + 4 <= len(d):
+        m = d[p + 1]
+        ln = (d[p + 2] << 8) | d[p + 3]
+        out.append((p, m, ln))
+        if m == 0xDA:
+            break
+        p += 2 + ln
+    return out
+
+
+def jfind(d, m, n=0):
+    return [s for s in jsegs(d) if s[1] == m][n]
+
+
+def jpatch(d, off, *vals):
+    d = bytearray(d)
+    for i, v in enumerate(vals):
+        d[off + i] = v
+    return bytes(d)
+
+
+def jsos_all(d):
+    """Every SOS's offset (progressive files have many)."""
+    out, p = [], 0
+    while True:
+        p = d.find(b"\xFF\xDA", p + 1)
+        if p < 0:
+            return out
+        out.append(p)
+
+
+def jcorpus(add):
+    import pixjpeg as J
+    for name, data, verdict in J.fixtures():
+        add(name, data, verdict)
+    g = J.fixtures()
+    base = [d for n, d, v in g if n == "J420.JPG"][0]
+    prog = [d for n, d, v in g if n == "JPROG.JPG"][0]
+    rst = [d for n, d, v in g if n == "JRST.JPG"][0]
+    o1 = [d for n, d, v in g if n == "JO1.JPG"][0]
+    sof = jfind(base, 0xC0)[0]
+    dht = jfind(base, 0xC4)[0]
+    dqt = jfind(base, 0xDB)[0]
+    sos = jfind(base, 0xDA)[0]
+    app0 = jfind(base, 0xE0)[0]
+    T, D, P_, Hd, Dm, Dp = (P.PXD_TRUNC, P.PXD_DATA, P.PXD_PACK, P.PXD_HEAD,
+                            P.PXD_DIMS, P.PXD_DEPTH)
+    # --- cut short ------------------------------------------------------------
+    add("HJ01.JPG", base[:sof + 19], T)              # ends after the frame
+    add("HJ02.JPG", base[:sos + 14 + 200], T)        # ends inside the data
+    add("HJ03.JPG", base[:4], T)                     # inside the first marker
+    add("HJ04.JPG", base[:sos + 14 + 200] + b"\xFF\xD9", T)  # EOI inside it
+    # --- Huffman tables ------------------------------------------------------
+    add("HJ05.JPG", jpatch(base, dht + 5, 3), D)     # three codes of length 1
+    add("HJ06.JPG", jpatch(base, dht + 5 + 15, 255), D)  # 256+ symbols
+    seg = base[dht:dht + 2 + ((base[dht + 2] << 8) | base[dht + 3])]
+    short = seg[:2] + bytes(((len(seg) - 7) >> 8, (len(seg) - 7) & 255)) + \
+        seg[4:-5]                                    # its symbols cut short
+    add("HJ07.JPG", base[:dht] + short + base[dht + len(seg):], D)
+    add("HJ08.JPG", jpatch(base, dht + 21, 16), D)   # a DC symbol of 16
+    add("HJ09.JPG", jpatch(base, dht + 4, 0x20), D)  # table class 2
+    add("HJ10.JPG", base[:dht] + base[dht + 2 + ((base[dht + 2] << 8) |
+                                                 base[dht + 3]):], D)  # no DHT 0
+    # --- quantisation --------------------------------------------------------
+    add("HJ11.JPG", jpatch(base, dqt + 5 + 10, 0), D)  # a quantiser of 0
+    add("HJ12.JPG", jpatch(base, dqt + 4, 0x20), D)  # precision 2
+    add("HJ13.JPG", jpatch(base, sof + 12, 2), D)    # Y's table: never defined
+    # --- the frame -----------------------------------------------------------
+    add("HJ14.JPG", jpatch(base, sof + 11, 0x31), P_)  # Y 3 x 1
+    add("HJ15.JPG", jpatch(base, sof + 14, 0x21), P_)  # Cb 2 x 1
+    add("HJ16.JPG", jpatch(base, sof + 11, 0x02), Hd)  # H = 0
+    add("HJ17.JPG", jpatch(base, sof + 7, 0, 0), Dm)   # width 0
+    add("HJ18.JPG", jpatch(base, sof + 5, 0xFF, 0xFF, 0xFF, 0xFF), Dm)
+    add("HJ19.JPG", jpatch(base, sof + 9, 2), Dp)      # two components
+    add("HJ20.JPG", jpatch(base, sof + 4, 12), Dp)     # 12-bit samples
+    add("HJ21.JPG", jpatch(base, sof + 1, 0xC3), P_)   # lossless
+    add("HJ22.JPG", jpatch(base, sof + 1, 0xC9), P_)   # arithmetic
+    add("HJ23.JPG", jpatch(base, sof + 13, 1), Hd)     # a repeated id
+    # --- lengths that lie, bytes that are not markers ------------------------
+    add("HJ24.JPG", jpatch(base, app0 + 2, 0xFF, 0xF0), T)  # past the file
+    add("HJ25.JPG", jpatch(base, app0 + 2, 0, 1), Hd)  # a length of 1
+    add("HJ26.JPG", jpatch(base, dqt, 0x00), Hd)       # not a marker
+    # a frame header length past the 2,048 any head holds
+    add("HJ27.JPG", jpatch(base, sof + 2, 0x08, 0x00), Hd)
+    # seventeen heads' worth of segments before the frame header (106.19)
+    pad = b"".join(b"\xFF\xE2\x08\x04" + bytes(2050) for _ in range(17))
+    add("HJ28.JPG", base[:2] + pad + base[2:], Hd)
+    # ...and three, which a header walk follows (good)
+    pad3 = b"".join(b"\xFF\xE2\x08\x04" + bytes(2050) for _ in range(3))
+    add("JHEADS3.JPG", base[:2] + pad3 + base[2:])
+    # --- the scan -----------------------------------------------------------
+    add("HJ29.JPG", jpatch(base, sos + 5, 9), D)       # a component not framed
+    add("HJ30.JPG", jpatch(base, sos + 4, 2), D)       # Ns 2, length for 3
+    add("HJ31.JPG", base[:sof] + base[sos:], Hd)       # a scan before a frame
+    add("HJ32.JPG", base[:sos] + b"\xFF\xD9", D)       # EOI, no scan
+    add("HJ33.JPG", base[:sos] + base[sof:sof + 19] + base[sos:], D)  # 2 frames
+    add("HJ34.JPG", jpatch(base, sos + 6, 0x44), D)    # tables 4
+    dri = jfind(rst, 0xDD)[0]
+    add("HJ35.JPG", jpatch(rst, dri + 3, 5), D)        # DRI's length 5
+    r0 = rst.find(b"\xFF\xD0")
+    add("HJ36.JPG", jpatch(rst, r0 + 1, 0xD3), D)      # RST3 where RST0 is due
+    add("HJ37.JPG", rst[:r0] + rst[r0 + 2:], D)        # RST0 missing
+    # --- progressive -------------------------------------------------------
+    ps = jsos_all(prog)
+    ac = ps[1]                                         # Y 1-5, Al 2
+    n = prog[ac + 4]
+    k = ac + 5 + 2 * n
+    add("HJ38.JPG", jpatch(prog, k, 6, 5), D)          # Ss 6 > Se 5
+    add("HJ39.JPG", jpatch(prog, k + 1, 64), D)        # Se 64
+    add("HJ40.JPG", jpatch(prog, k + 2, 0x20), D)      # Ah 2, Al 0
+    add("HJ41.JPG", jpatch(prog, k + 2, 0x0E), D)      # Al 14
+    dc = ps[0]
+    n0 = prog[dc + 4]
+    add("HJ42.JPG", jpatch(prog, dc + 5 + 2 * n0 + 1, 5), D)  # DC Se 5
+    add("HJ43.JPG", prog[:ps[3]], T)                   # ends between scans
+    add("HJ44.JPG", prog[:ps[4] + 60], T)              # ...and inside one
+    # a DC first scan at Al 0 that a refinement then refines anyway: odd,
+    # legal, and read (good)
+    add("JPAL0.JPG", jpatch(prog, ps[0] + 5 + 2 * n0 + 1, 0, 0x00))
+    # --- EXIF that lies is ignored, not refused; big-endian is read --------
+    a1 = jfind(o1, 0xE1)[0]
+    tif = a1 + 10
+    add("JEXLIE.JPG", jpatch(o1, tif + 4, 0x40, 0x7F, 0, 0))  # IFD0 offset away
+    mm = bytearray(o1)
+    ln = (o1[a1 + 2] << 8) | o1[a1 + 3]
+    exif = (b"Exif\0\0MM\0*\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01"
+            b"\0\x06\0\0\0\0\0\0")
+    add("JEXMM.JPG", bytes(o1[:a1]) + b"\xFF\xE1" +
+        bytes(((len(exif) + 2) >> 8, (len(exif) + 2) & 255)) + exif +
+        bytes(o1[a1 + 2 + ln:]))
+    # fill bytes before a marker, and a standalone RST outside a scan (good)
+    add("JFILL.JPG", base[:dqt] + b"\xFF\xFF\xFF" + base[dqt:])
 
 
 def wcorpus(add, W, H):
@@ -947,6 +1121,20 @@ def wcorpus(add, W, H):
     add("PBIGI.PNG", png(64, 48, 2, 8, rgb_rows(64, 48), ilace=True))
     add("PBIG3I.PNG", png(64, 48, 3, 8, idx_rows(64, 48, 256), plte=pal_n(256),
                           ilace=True))
+    # inflate's slow paths, which no fixture reached until the wave-3 review
+    # measured it (F9): a lit/len tree whose long codes fill MORE than the 64
+    # sub-tables, so the canonical walk decodes real symbols; a distance code
+    # past nine bits (the distance sub-table); a 16-bit grey's tRNS key,
+    # plain and Adam7
+    add("PSUB65.PNG", subtab_png(65, 60, 9))
+    add("PDLONG.PNG", png(W, H, 0, 8, z=deflate(
+        runs, "dyn", matches="runs", dl=[10, 10] + list(range(1, 10)) +
+        [0] * 19), stream=runs))
+    k16 = [[(0x1234, 0x12FF, 0x3412)[(x + y) % 3] for x in range(9)]
+           for y in range(5)]
+    add("PG16K.PNG", png(9, 5, 0, 16, k16, trns=struct.pack(">H", 0x1234)))
+    add("PG16KI.PNG", png(9, 5, 0, 16, k16, ilace=True,
+                          trns=struct.pack(">H", 0x1234)))
     # --- the HOSTILE half -----------------------------------------------------
     g = gif(W, H, i16, gpal=pal_n(16))
     add("HG01.GIF", g[:-12], P.PXD_TRUNC)                   # data cut short
@@ -1193,19 +1381,21 @@ def corpus():
     add("H23.PPM", pnm_raw(6, W, H, 255, c255)[:100], P.PXD_TRUNC)
     add("H24.PGM", b"P5\n3 2\n0\n" + b"\x00" * 6, P.PXD_HEAD)
     add("H25.PIX", pix(W, H, i16, ver=2), P.PXD_HEAD)
-    add("H26.JPG", b"\xFF\xD8\xFF\xE0" + b"\x00" * 60, P.PXD_NOTYET)
+    add("H26.JPG", b"\xFF\xD8\xFF\xE0" + b"\x00" * 60, P.PXD_HEAD)
     add("H27.PGM", b"P5\n" + b"#" * 3000 + b"\n3 2\n255\n" + b"\x00" * 6,
         P.PXD_HEAD)                                         # header past the head
     add("H28.BMP", bmp(W, H, 8, idx_rows(W, H, 4), pal=pal_n(4), used=4,
                        planes=3), P.PXD_HEAD)
     # a JPEG whose APP1 length walks the marker scan to the edge of 64K: the
-    # sniff must stop, not wrap (wave-1 review MAJ-1). Named, not decoded
+    # sniff must stop, not wrap (wave-1 review MAJ-1); since wave 4 the
+    # header walk follows it past the file's end, which is `cut short`
     add("H29.JPG", b"\xFF\xD8\xFF\xE1\xFF\xF2" + b"\xFF" * 2042,
-        P.PXD_NOTYET)
+        P.PXD_TRUNC)
     add("H30.DAT", b"Not a picture at all, just words." * 9, P.PXD_NOTPIC)
     # ...and a picture under a name PiXEL does not list: its bytes win
     add("B24X.DAT", bmp(W, H, 24, rgb))
     wcorpus(add, W, H)               # GIF and PNG (SPEC.md 106.18)
+    jcorpus(add)                     # JPEG (SPEC.md 106.19)
     return [c for c in out if c is not None]
 
 
@@ -1244,6 +1434,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--jpeg", action="store_true",
+                    help="the JPEG fixtures' verdicts too (a pure-Python "
+                    "JPEG decode is soak's, `pixjpegref`)")
     a = ap.parse_args()
     cs = corpus()
     names = [c[0] for c in cs]
@@ -1256,24 +1449,25 @@ def main():
         print("pixcorpus: %d fixtures in %s" % (len(cs), a.out))
     if a.check or not a.out:
         bad = 0
+        agree = set(n for g in AGREE for n in g)
+        got = {}
         for name, data, want in cs:
-            got, p = verdict(name, data)
-            if got != want:
+            if name.endswith(".JPG") and not a.jpeg:
+                continue            # SPEC.md 106.19: soak's `pixjpegref`
+            v, p = verdict(name, data)
+            if v != want:
                 print("pixcorpus: FAIL %s: pixelsim says %d (%s), the corpus %d (%s)"
-                      % (name, got, P.PXD_WORDS[got], want, P.PXD_WORDS[want]))
+                      % (name, v, P.PXD_WORDS[v], want, P.PXD_WORDS[want]))
                 bad += 1
             elif p is not None:
-                P.emit(p, 0)
+                m = P.emit(p, getattr(p, "presc", None) or 0)[0]
+                if name in agree:
+                    got[name] = bytes(m)
         # two readings of one picture are one master: every truecolour
         # fixture of the same content, through five different decoders and
         # both emission orders, must quantise to the same bytes
-        got = {}
-        for name, data, want in cs:
-            if not want:
-                p = P.decode(data, name.rsplit(".", 1)[1])
-                got[name] = bytes(P.emit(p, 0)[0])
         for grp in AGREE:
-            if len(set(got[n] for n in grp)) != 1:
+            if len(set(got.get(n) for n in grp)) != 1:
                 print("pixcorpus: FAIL these should be one master: %s"
                       % " ".join(grp))
                 bad += 1

@@ -46,6 +46,7 @@ here reads the guest rather than the glass:
          left the instance standing at home ([px_pmoved] says the bracket
          moved; the picture decoded says it came back). The part is KEPT
          after a picture of its kind (106.18), and a PCX after it drops it
+         for the SIMPLE part, which reads the PCX (106.20)
 """
 import os, re, sys, subprocess, tempfile, argparse, functools
 print = functools.partial(print, flush=True)
@@ -327,9 +328,11 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
           prow()[1] & OP_FETCHED and B("px_kheld") == 2,
           "flags %02X held %d" % (prow()[1], B("px_kheld")))
     name, have = revert("C8.PCX")
-    check("F: a PCX after it opens, and the PNG part is DROPPED",
+    SIMPROW = base + syms["op_table"] + OP_T_ROWS + 8 * 4
+    check("F: a PCX after it opens, and the PNG part is DROPPED - for the "
+          "SIMPLE part, which reads it (SPEC.md 106.20)",
           name == "C8.PCX" and have == 1 and not prow()[1] & OP_FETCHED
-          and B("px_kheld") == 0,
+          and B("px_kheld") == 4 and m.read(SIMPROW, 8)[1] & OP_FETCHED,
           "record %s have %d flags %02X held %d" % (name, have, prow()[1],
                                                     B("px_kheld")))
 

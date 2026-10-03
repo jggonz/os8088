@@ -1241,6 +1241,14 @@ FAST = [
         "(the agreement groups): the reference and the corpus are two "
         "readings of one section, and tests/pxdecode.py then holds the "
         "guest to the reference"),
+    Row("pixjpeg", "fast", py("tools/pixjpeg.py", "--check"), 0.1,
+        "PiXEL's JPEG fixtures (SPEC.md 106.19) are the committed ones: the "
+        "34 files under tests/pixel/ that Pillow and cjpeg made once - every "
+        "sampling, restarts, 16-bit tables, progressive scripts, the eight "
+        "EXIF orientations, the refused-by-name kinds - each against its "
+        "pinned SHA-256, and the list the same as the pins. A pure-Python "
+        "JPEG decode is too slow for this tier: soak's `pixjpegref` decodes "
+        "them"),
     Row("checkreadme", "fast", py("tools/checkreadme.py", "readme.txt"), 0.1,
         "README.TXT's width and size rules - Note Pad refuses a file one byte "
         "too long and shows nothing at all"),
@@ -7810,7 +7818,19 @@ SOAK = [
         "REFUSED and its claim still given back",
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/os8088-360.img")),
-    Row("pxdecode", "soak", py("tests/pxdecode.py"), 120.0,
+    Row("pixjpegref", "soak", ["sh", "-c", "python3 tools/pixjpeg.py "
+                               "--verify && python3 tools/pixcorpus.py "
+                               "--check --jpeg"],
+        1.5,
+        "SPEC.md 106.19's reference against its fixtures, on the host: every "
+        "committed JPEG through tools/pixelsim.py at every scale it can be "
+        "shown at - 1/1, 1/2, 1/4, 1/8, a progressive one from 1/4 - with "
+        "the verdict pixjpeg.py names, and each decode against Pillow's own "
+        "(box-averaged below 1/1, its EXIF orientation applied) above 30 dB; "
+        "then pixcorpus's hostile JPEGs, each refused with its number. "
+        "Without Pillow the PSNR half SKIPS and says so - the verdicts, which "
+        "are what the guest is held to, need nothing but Python"),
+    Row("pxdecode", "soak", py("tests/pxdecode.py"), 420.0,
         "SPEC.md 106.13: every fixture tools/pixcorpus.py makes, decoded by "
         "PIXEL.O88 itself through File > Revert, against tools/pixelsim.py "
         "BYTE FOR BYTE - the master and the palette of each good one (BMP "
@@ -7820,9 +7840,13 @@ SOAK = [
         "cube's four greys), each hostile one refused with SPEC.md 106.10's "
         "number with the shown picture still shown and PiXEL's claims "
         "exactly as before, and two pictures at 1/2 when memory is capped "
-        "(the box filter, and an 8-bit source averaged into the cube)",
+        "(the box filter, and an 8-bit source averaged into the cube); since "
+        "wave 4 every JPEG fixture too (SPEC.md 106.19) - baseline, "
+        "progressive, every sampling and orientation, restarts, the hostile "
+        "half - and JPEGs at each DCT scale memory can be made to choose. "
+        "On the 1.44 MB VGA XT: the corpus outgrew a 360 KB disk",
         needs=("marty", "nasm"), serial=True,
-        wants=("build/pixel.o88", "build/os8088-360.img")),
+        wants=("build/pixel.o88", "build/os8088.img")),
     Row("pxopen", "soak", py("tests/pxopen.py"), 90.0,
         "SPEC.md 106.11/106.13 on a VGA: a picture opened by its association "
         "is drawn as tools/pixelsim.py renders it - the zoom is pixelsim's "
@@ -7884,18 +7908,21 @@ SOAK = [
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/PIXEL.GFX",
                "build/os8088-360.img")),
-    Row("pxbench", "soak", py("tests/pxbench.py"), 240.0,
+    Row("pxbench", "soak", py("tests/pxbench.py"), 700.0,
         "SPEC.md 106.17 on the 5150 with a CGA: the TIME, in guest cycles from "
         "breakpoints, of opening MOUNTAIN.BMP (24-bit: the cube's ordered "
         "dither), CITY.PCX (8-bit RLE) and a 640x480 8-bit BMP made by the "
         "row (308 KB: the disk's share) - to the end and to the first rows - "
-        "and of a zoom step with the canvas covered, a pan step and Fit; each "
+        "and of a zoom step with the canvas covered, a pan step and Fit; "
+        "the GIF and PNG parts; and wave 4's JPEGs (SPEC.md 106.19) - "
+        "VACATION.JPG at 1/8, 1/2, 1/1 and by fast open, ROOM.JPG "
+        "progressive, the Huffman and IDCT in cycles a pixel; each "
         "held to a ceiling of the recorded figure plus a margin, so a change "
         "that makes PiXEL slower on the target fails here",
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/os8088-360.img")),
     Row("pxbenchvga", "soak", py("tests/pxbench.py", "--machine",
-                                 "os8088_xt_vga"), 240.0,
+                                 "os8088_xt_vga"), 760.0,
         "pxbench on the XT with a VGA (SPEC.md 106.17): the same figures where "
         "a PAL picture's 256 mixing plans are searched before its first row "
         "and the composer turns lanes into four planes for BLITP",

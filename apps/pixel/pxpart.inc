@@ -53,7 +53,11 @@ PXP_VEC     equ 6                   ; PXP_NVEC words: near offsets in the part
 PXP_HDRSZ   equ 6
 
 PXP_SIGVAL  equ 'PX'                ; as `dw 'PX'`: 'P' at +0, 'X' at +1
-PXP_ABIVER  equ 2                   ; 2 since wave 3 added PXV_HEAD
+PXP_ABIVER  equ 4                   ; 2 since wave 3 added PXV_HEAD, 3
+                                    ; since wave 4 added the flags, the
+                                    ; scratch a scale, heads past the first
+                                    ; and K_COLS (SPEC.md 106.19), 4 PLANS
+                                    ; (106.20)
 
 ; --- the vectors, in this order in every part ---------------------------------
 PXV_INIT    equ 0                   ; out AX = PXP_PROBE. Nothing else: it is
@@ -67,7 +71,11 @@ PXV_INFO    equ 2                   ; in ES:DI = a buffer, CX = its bytes. The
 PXV_HEAD    equ 3                   ; a decoder's HEADER, on the UI task: in
                                     ; DI = the CONTEXT (below), its head at
                                     ; [PXK_HSEG]:0. SPEC.md 106.18
-PXV_N       equ 4
+PXV_PLANS   equ 4                   ; a decoder's PLANS: [px_plan] for the
+                                    ; picture's palette (106.20), on either
+                                    ; task; a part that is not one answers
+                                    ; PXE_NOTSUP
+PXV_N       equ 5
 
 PXP_PROBE   equ 0x5850 ^ 0x1D06     ; PXV_INIT's answer, which no register a
                                     ; caller set up could already hold
@@ -83,9 +91,9 @@ PXE_BADPART equ 4                   ; THE RESIDENT'S: it was fetched and is
                                     ; signature, version or vector count is
                                     ; wrong. Nothing has said so yet
 
-; --- PXPART_HEAD init, decode, info, head -------------------------------------
+; --- PXPART_HEAD init, decode, info, head, plans ------------------------------
 ; The header a part opens with. Assemble the part with `org 0`.
-%macro PXPART_HEAD 4
+%macro PXPART_HEAD 5
     dw PXP_SIGVAL               ; +0
     db PXP_ABIVER               ; +2
     db PXV_N                    ; +3
@@ -94,6 +102,7 @@ PXE_BADPART equ 4                   ; THE RESIDENT'S: it was fetched and is
     dw %2                       ; +8 PXV_DECODE
     dw %3                       ; +10 PXV_INFO
     dw %4                       ; +12 PXV_HEAD
+    dw %5                       ; +14 PXV_PLANS
 %endmacro
 
 ; =============================================================================
@@ -117,6 +126,13 @@ PXD_NOFILE  equ 12                  ; the resident's: not in this folder
 PXD_NOTPIC  equ 13                  ; neither its bytes nor its name are a
                                     ; picture's
 PXD_NREASON equ 14
+PXD_MORE    equ 0x80                ; not a refusal: HEAD wants the head
+                                    ; read again at [PXK_HNEXT] (106.19)
+PXD_TAIL    equ 0x81                ; not a refusal: the SIMPLE part's PCX
+                                    ; HEAD wants the file's 769-byte tail
+                                    ; read, then to be called again (106.20)
+PXD_LINK    equ 0x82                ; the SIMPLE part was linked against
+                                    ; another build of the package (106.20)
 PXD_ABORT   equ 0xFF                ; not a refusal: the user said stop
 
 RF_IDX      equ 0                   ; what a decoder hands the emitter
@@ -132,7 +148,9 @@ PK_LZW      equ 5
 PK_LZWI     equ 6                   ; ...interlaced
 PK_DEFL     equ 7
 PK_DEFLI    equ 8                   ; ...Adam7
-PK_N        equ 9
+PK_JPEG     equ 9                   ; baseline (or extended) DCT
+PK_JPEGP    equ 10                  ; progressive DCT
+PK_N        equ 11
 
 PX_DIMMAX   equ 8192                ; refused above, before any arithmetic
 PXP_BG      equ 85                  ; THE VIEW BACKGROUND a transparent pixel
@@ -158,8 +176,33 @@ PXK_MH      equ 20                  ; word in  DECODE: ...and height
 PXK_RSEG    equ 22                  ; word in  DECODE: the ROW BUFFER (106.9)
 PXK_DSEG    equ 24                  ; word in  DECODE: the decoder SCRATCH
 PXK_SPAL    equ 26                  ; word in  DECODE: [px_spal]'s offset
-PXK_SVC     equ 28                  ; 5 words in: the services' offsets
-PXK_SZ      equ PXK_SVC + 2 * 5
+PXK_SVC     equ 28                  ; PXS_N words in: the services' offsets
+PXK_FLAGS   equ 42                  ; byte out HEAD: PXKF_*
+PXK_HCNT    equ 43                  ; byte in/out HEAD: heads read so far (the
+                                    ; resident zeroes it before the first);
+                                    ; the SIMPLE part's PCX tail: 1 read, 2
+                                    ; none (SPEC.md 106.20)
+PXK_HPOS    equ 44                  ; word in  HEAD: where the walk starts in
+                                    ; the head, 0 on the first call
+PXK_HBASE   equ 46                  ; dword in HEAD: the file offset of the
+                                    ; head's byte 0
+PXK_HNEXT   equ 50                  ; dword out HEAD, with PXD_MORE: the file
+                                    ; offset the next head is to start at
+PXK_FSZ     equ 54                  ; dword in HEAD, DECODE: the file's size
+PXK_DSC     equ 58                  ; 4 words out HEAD (PXKF_DSC): decoder
+                                    ; scratch, paragraphs, at scale 0..3;
+                                    ; FFFFh = not at that scale
+PXK_PRIV    equ 66                  ; 16 bytes: the PART's own, HEAD to
+                                    ; DECODE - the resident never reads them
+PXK_SZ      equ 82
+
+PXKF_UP     equ 1                   ; rows arrive bottom-up ([px_dtop] 0)
+PXKF_DCT    equ 2                   ; rows arrive AT THE MASTER'S SCALE, a
+                                    ; master row each: no box filter
+PXKF_DSC    equ 4                   ; PXK_DSC answers the scratch per scale
+PXKF_PROG   equ 8                   ; a progressive picture (the Info panel)
+PXKF_LATE   equ 16                  ; no row is complete before the last:
+                                    ; nothing to paint as it arrives
 
 ; --- THE SERVICES (SPEC.md 106.18): far thunks of the package, a part calls
 ; `call far` on PXK_SVC + 2 x one of these and the package's segment, and
@@ -171,5 +214,11 @@ PXS_EMIT    equ 1                   ; in AX = source row, BX = rows complete
 PXS_SCAT    equ 2                   ; in AX = row, CL = x0, CH = dx, BX, DX
 PXS_TICK    equ 3                   ; in AX = progress. out CF/AX as EMIT
 PXS_PAL     equ 4                   ; the palette is known. out CF/AX
+PXS_COLS    equ 5                   ; ES:SI = BX master rows of DX pixels,
+                                    ; top-left at row AX column CX; DI =
+                                    ; rows complete or FFFFh (106.19)
+PXS_RING    equ 6                   ; px_rnext: the worker's ring window on
+                                    ; (the SIMPLE part's, SPEC.md 106.20)
+PXS_N       equ 7
 
 %endif

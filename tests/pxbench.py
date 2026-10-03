@@ -28,6 +28,15 @@ measures the same numbers as an idle one:
          reads of the next slot), over the 230,640 bytes inflate writes -
          with the canvas's progressive painting held off for it. (A CZ-
          wrapped PNG would read no disk at all, but a PNG does not pack.)
+  wave 4 VACATION.JPG (640x480 4:2:0) at 1/8, 1/2 and 1/1 - each asked for
+         through the re-decode's floor, [px_zreq] - and as FAST OPEN picks;
+         ROOM.JPG (640x480 progressive, 1/4); where VACATION's decode goes
+         at 1/8 and 1/2 (Huffman, IDCT, colour, rows out, the ring's waits);
+         and LAKE.JPG's (320x240 grey) Huffman and IDCT in cycles a pixel
+         (SPEC.md 106.19). BIG.BMP's disk is 720 KB since wave 4's parts
+         made PIXEL.O88 68 clusters, so its session runs the same machine
+         with an 80-cylinder 720 KB B: (os8088_5150_cga_720b_gla,
+         os8088_xt_vga_720b), whose tracks read as the 360 KB drive's do
 
 A routine is timed from its entry to its return - the return address is read
 off the guest's stack at the entry stop - so a figure is the exact cycles
@@ -55,20 +64,28 @@ FAIL = []
 # wave 3 was built on, before any of its changes - not 106.17's 1.52, so its
 # ceiling follows the measurement (SPEC.md 106.18 says so) and the cause is
 # wave 9's to find. The GIF and PNG rows and the inflate figure are wave 3's
-# (106.18), with the same margins.
+# (106.18), with the same margins; the JPEG rows wave 4's (106.19), and
+# its FIRST ROWS of a progressive picture are the whole store's decode, so
+# that one carries the open's margin.
 CEIL = {
     "os8088_5150_cga_gla": {
         "MOUNTAIN.BMP": (21.0, 4.0), "CITY.PCX": (14.7, 3.5),
         "BIG.BMP": (40.8, 5.3),
         "CAT.GIF": (36.5, 3.7), "BALLOONS.PNG": (19.3, 5.2),
         "HOUSE.PNG": (57.0, 3.1), "inflate": 460,
-        "zoom": 1.0, "fit": 0.55, "pan": 0.35},
+        "zoom": 1.0, "fit": 0.55, "pan": 0.35,
+        "VACATION.JPG 1/8": (36.1, 6.2), "VACATION.JPG 1/2": (72.7, 4.5),
+        "VACATION.JPG 1/1": (174.2, 8.6), "VACATION.JPG fast": (75.0, 5.2),
+        "ROOM.JPG": (147.0, 149.8), "huffman": 212, "idct": 1074},
     "os8088_xt_vga": {
         "MOUNTAIN.BMP": (23.0, 4.1), "CITY.PCX": (19.3, 6.0),
         "BIG.BMP": (47.0, 5.9),
         "CAT.GIF": (41.0, 5.4), "BALLOONS.PNG": (23.7, 7.3),
         "HOUSE.PNG": (60.7, 3.1), "inflate": 485,
-        "zoom": 4.3, "fit": 2.25, "pan": 0.57},
+        "zoom": 4.3, "fit": 2.25, "pan": 0.57,
+        "VACATION.JPG 1/8": (39.4, 5.8), "VACATION.JPG 1/2": (77.5, 5.6),
+        "VACATION.JPG 1/1": (178.0, 8.7), "VACATION.JPG fast": (77.5, 5.6),
+        "ROOM.JPG": (151.0, 149.8), "huffman": 220, "idct": 1079},
 }
 
 
@@ -96,7 +113,7 @@ def big_bmp(path):
 ap = argparse.ArgumentParser()
 ap.add_argument("--machine", default="os8088_5150_cga_gla")
 ap.add_argument("--no-ceiling", action="store_true")
-ap.add_argument("--sessions", default="1234",
+ap.add_argument("--sessions", default="12345",
                 help="which of the four sessions to run (for a quick look)")
 a = ap.parse_args()
 ceil = CEIL.get(a.machine, {})
@@ -124,11 +141,11 @@ def check(name, secs, cap):
         FAIL.append(name)
 
 
-def session(disk, pics, work):
+def session(disk, pics, work, machine=None):
     """Boot with `pics` on B:, open the first by its association, then hand
     the machine to `work`."""
     with os88ui.boot("build/os8088-360.img", apps=disk,
-                     machine=a.machine) as ui:
+                     machine=machine or a.machine) as ui:
         m = ui.m
         S = ui._S
         ui.path("B:/PICS/" + pics[0])
@@ -282,8 +299,14 @@ def work1(m, px):
 
 if "1" in a.sessions:
     session(DISK, ["CITY.PCX", "MOUNTAIN.BMP"], work1)
+# BIG.BMP (302 clusters) and PIXEL.O88 (68 since wave 4's parts) are more
+# than a 360 KB volume holds, so this one disk is 720 KB and goes in an
+# 80-cylinder 720 KB B: - the same machine with that drive, whose 9 sectors a
+# track at 250 kbps read as the 360 KB drive's do. A is the 360 KB system disk
 DISK2 = M.scratch_disk("build/pxbench2.img", "build/pixel.o88",
-                       "PICS:" + SMALL, "PICS:" + BIG)
+                       "PICS:" + SMALL, "PICS:" + BIG, size=720)
+MACH720 = {"os8088_5150_cga_gla": "os8088_5150_cga_720b_gla",
+           "os8088_xt_vga": "os8088_xt_vga_720b"}
 
 
 def work2(m, px):
@@ -294,7 +317,7 @@ def work2(m, px):
 
 
 if "2" in a.sessions:
-    session(DISK2, ["C8.PCX"], work2)
+    session(DISK2, ["C8.PCX"], work2, MACH720.get(a.machine))
 
 # --- wave 3: the decoder parts (SPEC.md 106.18) --------------------------------
 def part_syms(src):
@@ -303,7 +326,8 @@ def part_syms(src):
         cp, mp = os.path.join(d, "p.asm"), os.path.join(d, "p.map")
         open(cp, "w").write(open(src).read() + "\n[map symbols %s]\n" % mp)
         subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
-                        "-I", "apps/pixel/", "-o", os.path.join(d, "p.bin"),
+                        "-I", "apps/pixel/", "-I", os88build.at("build") + "/",
+                        "-o", os.path.join(d, "p.bin"),
                         cp], check=True)
         out = {}
         for L in open(mp):
@@ -438,6 +462,136 @@ def work4(m, px):
 
 if "4" in a.sessions:
     session(DISK4, ["C8.PCX"], work4)
+
+# --- wave 4: JPEG (SPEC.md 106.19) ----------------------------------------------
+JPGSYMS = part_syms("apps/pixel/pxjpeg.asm")
+
+
+def stage_bench(m, px, name, routines):
+    """Guest cycles inside each of `routines` (entry to return, outermost
+    calls only) over one open of `name`: where a decode's time goes, stage
+    by stage. A `pj_` name is the JPEG part's, near-called inside it; a
+    `px_ks_` name is a resident SERVICE, far-called from the part."""
+    ent = px.a("px_dpart") & 0xFFFFF
+    st = {"pseg": None, "rets": {}, "open": [], "tot": {r: 0 for r in routines},
+          "n": {r: 0 for r in routines}, "t0": None, "t1": None, "dret": None}
+    base_bps = [{"type": "exec", "addr": ent}]
+
+    def arm():
+        at = [st["ents"][r] for r in routines] + list(st["rets"])
+        if st["dret"] is not None:
+            at.append(st["dret"])
+        m.breakpoints(base_bps + [{"type": "exec", "addr": x} for x in at])
+
+    def stop(flat, cyc):
+        if st["t0"] is None:
+            if flat != ent:
+                return
+            st["t0"] = cyc
+            r = m.regs()
+            st["dret"] = (px.base + u16(m.read(r["ss"] * 16 + r["sp"], 2))) & 0xFFFFF
+            row = m.read(px.a("op_table") + OP_T_ROWS + 8 * 3, 8)
+            st["pseg"] = u16(row, 6)
+            st["ents"] = {r: ((st["pseg"] * 16 + JPGSYMS[r]) if r in JPGSYMS
+                              else px.a(r)) & 0xFFFFF for r in routines}
+            st["byent"] = {v: k for k, v in st["ents"].items()}
+            arm()
+            return
+        if flat == st["dret"] and not st["open"]:
+            st["t1"] = cyc
+            m.breakpoints([])
+            return
+        if flat in st.get("byent", {}):
+            r = m.regs()
+            sk = m.read(r["ss"] * 16 + r["sp"], 4)
+            if st["byent"][flat] in JPGSYMS:
+                ret = (st["pseg"] * 16 + u16(sk)) & 0xFFFFF
+            else:                       # a far call's return: IP, then CS
+                ret = (u16(sk, 2) * 16 + u16(sk)) & 0xFFFFF
+            st["open"].append((cyc, st["byent"][flat], ret))
+            if ret not in st["rets"]:
+                st["rets"][ret] = 1
+                arm()
+            return
+        if st["open"] and flat == st["open"][-1][2]:
+            c0, rt, _ = st["open"].pop()
+            st["tot"][rt] += cyc - c0
+            st["n"][rt] += 1
+
+    def trigger():
+        m.write(px.a("px_cur"), name.encode().ljust(13, b"\0"))
+        m.ctrl("KeyR")
+    px.pump(base_bps, stop, lambda: st["t1"] is not None, trigger)
+    M.until(m, lambda _: px.idle(), "the open to settle", poll=0.3, limit=900)
+    M.ui_done(m, "the open")
+    return st["t1"] - st["t0"], st["tot"], st["n"]
+
+
+DISK5 = M.scratch_disk("build/pxbench5.img", "build/pixel.o88",
+                       "PICS:" + SMALL, "PICS:apps/pixel/samples/VACATION.JPG",
+                       "PICS:apps/pixel/samples/ROOM.JPG",
+                       "PICS:apps/pixel/samples/LAKE.JPG")
+
+
+def work5(m, px):
+    # VACATION.JPG, 640x480 4:2:0: at 1/8, at 1/2, at 1/1 - each scale asked
+    # for through the re-decode's floor ([px_zreq], SPEC.md 106.19) - and as
+    # FAST OPEN chooses it in this machine's canvas
+    for sc, label in ((3, "1/8"), (1, "1/2"), (0, "1/1")):
+        px.m.write(px.a("px_zreq"), bytes((sc,)))
+        t, first = px.open("VACATION.JPG")
+        cap = ceil.get("VACATION.JPG " + label, (None, None))
+        got = m.read(px.a("px_cur") + 36, 1)[0]
+        check("open VACATION.JPG at %s (got 1/%d)" % (label, 1 << got), t, cap[0])
+        check("   ...first rows on the glass", first, cap[1])
+    px.m.write(px.a("px_zreq"), b"\xFF")
+    t, first = px.open("VACATION.JPG")
+    got = m.read(px.a("px_cur") + 36, 1)[0]
+    cap = ceil.get("VACATION.JPG fast", (None, None))
+    check("open VACATION.JPG by FAST OPEN (1/%d here)" % (1 << got), t, cap[0])
+    check("   ...first rows on the glass", first, cap[1])
+    t, first = px.open("ROOM.JPG")
+    got = m.read(px.a("px_cur") + 36, 1)[0]
+    cap = ceil.get("ROOM.JPG", (None, None))
+    check("open ROOM.JPG, progressive (1/%d)" % (1 << got), t, cap[0])
+    check("   ...first rows on the glass", first, cap[1])
+    # where a decode's time goes: LAKE.JPG (320x240 grey, 1,200 blocks) at
+    # 1/1 - Huffman (the block's coefficients), dequantise + IDCT, rows out
+    px.m.write(px.a("px_zreq"), b"\0")
+    tot, stg, n = stage_bench(m, px, "LAKE.JPG", ("pj_bdec", "pj_bput",
+                                                 "pj_band"))
+    px.m.write(px.a("px_zreq"), b"\xFF")
+    # ...and VACATION.JPG's own, at 1/8 and at 1/2: the entropy decode, the
+    # IDCT, the colour conversion, the rows out (K_EMIT, the master and its
+    # progress) and the waits for the disk (K_NEXT, the ring)
+    for sc in (3, 1):
+        px.m.write(px.a("px_zreq"), bytes((sc,)))
+        vt, vs, vn = stage_bench(m, px, "VACATION.JPG", (
+            "pj_bdec", "pj_bput", "pj_conv", "px_ks_emit", "px_ks_next"))
+        print("   VACATION.JPG at 1/%d: decode %.2f s - Huffman %.2f, IDCT %.2f, "
+              "colour %.2f, rows out %.2f, the ring's waits %.2f" % (
+                  1 << sc, vt / HZ, vs["pj_bdec"] / HZ, vs["pj_bput"] / HZ,
+                  vs["pj_conv"] / HZ, vs["px_ks_emit"] / HZ,
+                  vs["px_ks_next"] / HZ))
+    px.m.write(px.a("px_zreq"), b"\xFF")
+    pixels = 320 * 240
+    print("   LAKE.JPG at 1/1: decode %.2f s - Huffman %.2f s (%d blocks, %.0f "
+          "cycles a pixel), dequantise + IDCT %.2f s (%.0f a pixel), rows out "
+          "%.2f s" % (tot / HZ, stg["pj_bdec"] / HZ, n["pj_bdec"],
+                      stg["pj_bdec"] / pixels, stg["pj_bput"] / HZ,
+                      stg["pj_bput"] / pixels, stg["pj_band"] / HZ))
+    cap = ceil.get("idct")
+    if cap is not None and not a.no_ceiling and stg["pj_bput"] / pixels > cap:
+        print("   ...dequantise + IDCT over its ceiling of %.0f FAIL" % cap)
+        FAIL.append("idct")
+    cap = ceil.get("huffman")
+    if cap is not None and not a.no_ceiling and stg["pj_bdec"] / pixels > cap:
+        print("   ...Huffman over its ceiling of %.0f FAIL" % cap)
+        FAIL.append("huffman")
+
+
+if "5" in a.sessions:
+    session(DISK5, ["C8.PCX"], work5)
 print()
 if FAIL:
     print("pxbench: FAILED: " + ", ".join(FAIL))

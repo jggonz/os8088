@@ -1408,6 +1408,13 @@ op_lazyok:
     jc .no
     call op_lazykb
     jc .no
+%if OP_HAS_COMP
+    test byte [si+OP_R_FLAG], OP_COMP
+    jz .plainkb
+    call op_zkb                 ; op_fetch's own figure (SPEC.md 20.12.7.4.3)
+    jc .no
+.plainkb:
+%endif
     push ax                     ; ...BANKED, because OSAPI_MEM_AVAIL answers
     call OSAPI_MEM_AVAIL        ; in TWO registers - AX the largest free run
     pop bx                      ; and BX the total free - so a wanted figure
@@ -1475,13 +1482,14 @@ op_fetch:
     call op_lazykb              ; AX = the KB it wants, slack included
     jc .toobig
 %if OP_HAS_COMP
-    ; A COMPRESSED ROW HOLDS slack + R + packed, and R is `len - packed`
-    ; rounded UP to a paragraph - so up to fifteen bytes more than the `len`
-    ; op_lazykb sized from. One KB covers it and is transient: the claim lives
-    ; for one expansion.
+    ; A COMPRESSED ROW HOLDS R, up to 496 bytes more so that the READ starts
+    ; 512-aligned, and the packed stream read in whole clusters - which is
+    ; op_zkb's sum and not `len` plus a guess: with a cluster over a KB the
+    ; read alone outgrew the KB this once added (SPEC.md 20.12.7.4.3)
     test byte [si+OP_R_FLAG], OP_COMP
     jz .plainkb
-    inc ax
+    call op_zkb
+    jc .toobig
 .plainkb:
 %endif
     mov bx, ax
@@ -1554,8 +1562,8 @@ op_fetch:
 %if OP_HAS_COMP
     test byte [si+OP_R_FLAG], OP_COMP
     jz .plainrd
-    call op_zrpara              ; AX = R, in paragraphs
-    add [op_rdseg], ax
+    call op_zrseg               ; AX = R up the claim, 512-aligned (DX = it)
+    mov [op_rdseg], ax
 .plainrd:
 %endif
     call op_read
@@ -1582,7 +1590,8 @@ op_fetch:
     push dx                     ; THE CLAIM, for .zbad - the base is not it
     push si                     ; the row
     push ax                     ; the base
-    call op_zrpara              ; AX = R in paragraphs; SI preserved
+    call op_zrseg               ; AX = where the read landed (DX = the claim)
+    sub ax, dx                  ; ...as paragraphs up the claim
     pop dx                      ; DX = the base
     push dx
     add ax, dx                  ; ...and AX = where the stream was read to
@@ -1787,6 +1796,72 @@ op_zrpara:
     mov cl, 4
     shr ax, cl
     pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; op_zrseg - where a compressed lazy row's stream is READ to: R paragraphs up
+; the claim, rounded UP to a 32-paragraph boundary (SPEC.md 20.12.7.4.3)
+; in:  DX = the claim's base segment, SI -> the row
+; out: AX = the segment. Every other register preserved
+;
+; mem_claim is only PARAGRAPH aligned and R is any number of paragraphs, so
+; the read used to land wherever the two put it - and a sector that straddles
+; a 64KB physical boundary is int 13h's error 09h, FERR_IO here. PiXEL's
+; simple part, fetched again at 2EA0h with R = 69h, read to 2F09h and stopped
+; at the sector over 30000h. Rounding the READ up is enough: the stream only
+; has to sit at or above `base + R`, and the expansion is not a disk transfer.
+; -----------------------------------------------------------------------------
+op_zrseg:
+    call op_zrpara
+    add ax, dx
+    add ax, 31
+    and ax, 0xFFE0
+    ret
+
+; -----------------------------------------------------------------------------
+; op_zkb - the claim a compressed lazy row needs, in KB: R, the 496 bytes
+; op_zrseg may round it up by, and the stream read from its cluster-aligned
+; start (the head slack) in whole clusters - op_fetch's own op_cap
+; in:  SI -> the row, [op_clb] live; out: CF=0 AX = KB, CF=1 64KB or more
+; preserves: every other register
+; -----------------------------------------------------------------------------
+op_zkb:
+    push bx
+    push cx
+    push dx
+    mov ax, [si+OP_R_OFF]
+    mov cl, 9
+    shl ax, cl
+    mov bx, [op_clb]
+    dec bx
+    and bx, ax                  ; BX = the head slack
+    mov ax, [si+OP_R_ZKB]       ; + the packed length (not fetched: the row
+    add ax, bx                  ; still holds it)
+    jc .no
+    mov dx, [op_clb]
+    dec dx
+    add ax, dx
+    jc .no
+    not dx
+    and ax, dx                  ; ...in whole clusters: the read
+    mov bx, ax
+    call op_zrpara
+    mov cl, 4
+    shl ax, cl                  ; R in bytes (a part is under 64KB)
+    add ax, bx
+    jc .no
+    add ax, 496 + 1023          ; the rounding, and up to a KB
+    jc .no
+    mov cl, 10
+    shr ax, cl
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop dx
+    pop cx
+    pop bx
     ret
 %endif
 %if OP_HAS_ZERO
