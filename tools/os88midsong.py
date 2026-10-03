@@ -5,11 +5,20 @@
     python3 tools/os88midsong.py --check apps/midirack/songs
 
 These are the ten Standard MIDI Files MIDIRack ships beside itself (SPEC.md
-§105): a title fanfare, eight pieces of 1990s game music and a feature test.
-Every note is composed here, in this file, and the songs are ORIGINAL - no
-existing melody is quoted. The compositions and the files this tool writes
-are dedicated to the public domain under CC0 1.0, and every file says so in
-its first track.
+§105): a title fanfare, two pieces of 1990s-style game music, six classics
+everyone knows and a feature test.
+
+The fanfare, the game music and the feature test are ORIGINAL - composed here,
+quoting no existing melody. The six classics are PUBLIC-DOMAIN compositions -
+Beethoven's Fur Elise, Joplin's The Entertainer, Grieg's In the Hall of the
+Mountain King, the Russian folk song Korobeiniki, Offenbach's Can-can and
+Mozart's Rondo alla Turca, all published before 1903 - and only their
+melodies are taken; every arrangement (voicing, accompaniment, drums, form)
+is written here. Copyrighted popular songs are deliberately NOT here: a MIDI
+transcription of one is a copy of the composition, and these files ship. The
+originals, every arrangement and the files this tool writes are dedicated to
+the public domain under CC0 1.0, and every file says which it is in its
+first track.
 
 `--out` is byte-for-byte deterministic: nothing reads the clock, and the only
 randomness (a few units of velocity, so a part does not sound typed in) comes
@@ -21,7 +30,7 @@ sounding at once (6 most of the time) and at most 3 drum notes, drum hits no
 longer than a 16th, drums only on channel 10 (index 9), GM programs and GM
 drum keys only, every file under 12KB and the ten under 64KB. Both SMF
 formats are exercised (INTRO is format 0, the rest format 1), and both a
-small and a large division (96, and 480 for DEMO and CREDITS). The writer
+small and a large division (96, and 480 for DEMO). The writer
 uses running status wherever the spec allows it.
 
 `--check` is a SECOND, INDEPENDENT reader: it shares no code or data
@@ -39,10 +48,12 @@ import sys
 import zlib
 
 COPYRIGHT = 'MIDIRack demo song for os8088 - CC0'
+PD_COPYRIGHT = ('Public-domain composition; this arrangement for os8088 '
+                'MIDIRack is CC0')
 
-SONGS = ('INTRO.MID', 'SPACEJAM.MID', 'CASTLE.MID', 'BATTLE1.MID',
-         'NIGHTDRV.MID', 'FOREST.MID', 'DUNGEON.MID', 'VICTORY.MID',
-         'CREDITS.MID', 'DEMO.MID')
+SONGS = ('INTRO.MID', 'SPACEJAM.MID', 'BATTLE1.MID', 'ENTERTNR.MID',
+         'FURELISE.MID', 'MOUNTKNG.MID', 'KOROBEIN.MID', 'CANCAN.MID',
+         'TURKISH.MID', 'DEMO.MID')
 
 FILE_MAX = 12 * 1024
 TOTAL_MAX = 64 * 1024
@@ -302,11 +313,11 @@ class Part:
 
 
 class Song:
-    def __init__(self, fname, title, div, fmt, bpm, ts):
+    def __init__(self, fname, title, div, fmt, bpm, ts, notice=COPYRIGHT):
         self.fname, self.title, self.div, self.fmt = fname, title, div, fmt
         self.rng = random.Random(zlib.crc32(fname.encode('ascii')))
         self.parts, self.metas, self.seq = [], [], 0
-        self.meta(0, 0x02, COPYRIGHT.encode('ascii'))
+        self.meta(0, 0x02, notice.encode('ascii'))
         self.timesig(0, *ts)
         self.tempo(0, bpm)
         self.bar = div * 4 * ts[0] // ts[1]
@@ -463,53 +474,6 @@ def song_spacejam():
     return s
 
 
-def song_castle():
-    s = Song('CASTLE.MID', 'Hall of the Old King', 96, 1, 90, (3, 4))
-    S, E, B = 24, 48, s.bar
-    smel = s.part('Strings melody', 0, 48, 96, 60)
-    oboe = s.part('Oboe', 1, 68, 100, 76)
-    pad = s.part('Strings pad', 2, 49, 66, 92)
-    hpsi = s.part('Harpsichord', 3, 6, 92, 38)
-    cello = s.part('Cello', 4, 42, 90, 54)
-    timp = s.part('Timpani', 5, 47, 96, 64)
-    PA = prog("Dm:3 Gm:3 C:3 F:3 Bb:3 Gm:3 A:3 A:3", 96)
-    PA2 = prog("Dm:3 Dm/C:3 Bb:3 A:3 Gm:3 Dm:3 A7:3 Dm:3", 96)
-    PB = prog("F:3 C:3 Dm:3 Am:3 Bb:3 F:3 Gm:3 C7:3", 96)
-    PF = prog("Dm:3 Gm:3 A:3 A:3 Dm:3 Dm:3", 96)
-    smel.mel(0, """
-        d5:4 f5:4 a5:4 | g5:6 f5:2 e5:2 d5:2 | e5:4 g5:4 c6:4 |
-        a5:8 f5:4 | d5:4 f5:4 bb5:4 | g5:6 bb5:2 a5:2 g5:2 |
-        e5:4 c#5:4 a4:4 | c#5:4 d5:4 e5:4
-    """, S, vel=90, gate=0.95, bar=12)
-    smel.mel(16 * B, """
-        c6:6! a5:2 f5:4 | g5:6 e5:2 c5:4 | d5:4 f5:4 a5:4 |
-        c5:4 e5:4 a5:4 | bb5:6! a5:2 g5:4 | a5:6 g5:2 f5:4 |
-        g5:4 bb5:4 d6:4 | c6:6 bb5:2 g5:4
-    """, S, vel=92, gate=0.95, bar=12)
-    oboe.mel(8 * B, """
-        a5:6 g5:2 f5:4 | e5:4 f5:4 g5:4 | f5:6 e5:2 d5:4 |
-        c#5:8 a4:4 | bb4:4 d5:4 g5:4 | f5:4 a5:4 d6:4 |
-        c#6:4 a5:4 g5:4 | d6:12
-    """, S, vel=96, gate=0.92, bar=12)
-    oboe.mel(24 * B, """
-        d6:6! c6:2 a5:4 | bb5:6 a5:2 g5:4 | e5:4 a5:4 c#6:4 |
-        e6:6! d6:2 c#6:4 | d6:24
-    """, S, vel=100, gate=0.95)
-    pad.pad(8 * B, PA2 + PB + PF, center=62, vel=58)
-    body = PA + PA2 + PB + PF[:4]
-    hpsi.arp(0, body, [0, 1, 2, 3, 2, 1], E, center=64, lo=43, vel=78)
-    hpsi.arp(28 * B, PF[4:5], [0, 1, 2, 3, 4, 5], E, center=64, lo=43,
-             vel=82)
-    cello.riff(0, body, "0:8 7:4", S, lo=36, vel=84)
-    cello.note(28 * B, 2 * B, 38, 96, 0.95)
-    for bar, (sym, _) in enumerate(body[:-1]):
-        pcs, bpc = chord_tones(sym)
-        if pcs[0] in (2, 9):            # the drums are tuned to D and A
-            timp.note(bar * B, E, 38 if pcs[0] == 2 else 45, 90, 0.8)
-    for i in range(12):
-        timp.note(27 * B + i * S, S, 45, 52 + i * 5, 0.8)
-    timp.note(28 * B, B, 38, 122, 0.9)
-    return s
 
 
 def song_battle1():
@@ -585,204 +549,14 @@ def song_battle1():
     return s
 
 
-def song_nightdrv():
-    s = Song('NIGHTDRV.MID', 'Neon Overpass', 96, 1, 100, (4, 4))
-    S, B = 24, s.bar
-    pad = s.part('Warm pad', 0, 89, 80, 64)
-    arp = s.part('Square arpeggio', 1, 80, 68, 40)
-    bass = s.part('Synth bass', 2, 39, 100, 64)
-    lead = s.part('Saw lead', 3, 81, 92, 84)
-    drum = s.part('Drums', DRUM_CH, None, 96, 64)
-    P4 = prog("Am:4 F:4 C:4 G:4", 96)
-    pad.pad(0, P4 * 6 + prog("Am:4", 96), center=60, vel=64)
-    arp.arp(0, P4 * 6, [1, 2, 3, 4, 3, 2, 1, 2, 1, 2, 3, 4, 5, 4, 3, 2],
-            S, center=64, lo=45, vel=70, gate=0.6)
-    PULSE = "0:2! 12:2 0:2 12:2 0:2 12:2 0:2 12:2"
-    bass.riff(4 * B, P4 * 4, PULSE, S, lo=33, vel=96, gate=0.7)
-    bass.riff(22 * B, P4[2:], PULSE, S, lo=33, vel=98, gate=0.7)
-    bass.note(24 * B, B, 33, 108, 0.95)
-    CH = """
-        a4:4 c5:4 e5:6! d5:2 | c5:6 a4:2 c5:4 f5:4 | e5:8! g5:4 e5:4 |
-        d5:12 r:4 | a5:6! g5:2 e5:4 c5:4 | f5:6 e5:2 c5:4 a4:4 |
-        g5:4 e5:4 c6:4! g5:4 | b5:8 a5:4 g5:4
-    """
-    lead.mel(12 * B, CH, S, vel=92, gate=0.95, bar=16)
-    lead.mel(22 * B, "e5:8 g5:8 | d5:8 b4:8 | a4:16!", S, vel=94,
-             gate=0.97, bar=16)
-    VERSE = {K: "x.......x.......", ES: "....x.......x...",
-             HH: "x.x.x.x.x.x.x.x."}
-    CHORUS = {K: "x.......x.x.....", ES: "....x.......x...",
-              HH: "x.x.x.x.x.x.x...", OH: "..............x."}
-    hv = {HH: 72, OH: 78}
-    drum.beat(4 * B, 8, VERSE, S, vel=96, vels=hv)
-    drum.beat(12 * B, 8, CHORUS, S, vel=100, vels=hv)
-    drum.beat(20 * B, 2, {HH: "x.x.x.x.x.x.x.x."}, S, vel=60)
-    drum.beat(22 * B, 2, VERSE, S, vel=96, vels=hv)
-    for bar in (4, 12, 22, 24):
-        drum.note(bar * B, S, CR, 104)
-    drum.note(24 * B, S, K, 112)
-    return s
 
 
-def song_forest():
-    s = Song('FOREST.MID', 'Fernlight', 96, 1, 80, (6, 8))
-    S, E, B = 24, 48, s.bar
-    flute = s.part('Flute', 0, 73, 100, 72)
-    gtr = s.part('Nylon guitar', 1, 24, 92, 44)
-    strg = s.part('Strings', 2, 49, 66, 92)
-    bass = s.part('Acoustic bass', 3, 32, 84, 60)
-    shak = s.part('Shaker', DRUM_CH, None, 70, 70)
-    PA = prog("G:3 Em:3 C:3 D:3 G:3 Bm:3 C:3 D:3 "
-              "G:3 Em:3 C:3 D:3 Em:3 C:3 D:3 G:3", 96)
-    PB = prog("Am:3 D:3 G:3 Em:3 Am:3 D:3 G:3 D7:3", 96)
-    PE = prog("G:3 G:3", 96)
-    flute.mel(0, """
-        b4:4 d5:2 g5:4 f#5:2 | e5:6 b4:6 | c5:4 e5:2 g5:4 e5:2 |
-        d5:4 f#5:2 a5:6 | b5:4! a5:2 g5:4 d5:2 | f#5:6 d5:6 |
-        e5:4 g5:2 c5:4 e5:2 | d5:12 |
-        g5:4! a5:2 b5:4 g5:2 | e5:4 g5:2 b5:6 | c6:4! b5:2 a5:4 g5:2 |
-        f#5:6 a5:6 | g5:4 f#5:2 e5:4 b4:2 | c5:4 e5:2 g5:6 |
-        a5:4 g5:2 f#5:4 d5:2 | g5:12
-    """, S, vel=92, gate=0.92, bar=12)
-    flute.mel(16 * B, """
-        e5:4 c5:2 a4:6 | d5:4 f#5:2 a5:6 | g5:4 b5:2 d6:4 b5:2 |
-        e6:6 b5:6 | c6:4 b5:2 a5:4 e5:2 | f#5:6 a5:6 |
-        g5:4 d5:2 b4:6 | a4:4 c5:2 f#5:4 a5:2 | b5:12 | g5:12
-    """, S, vel=82, gate=0.94, bar=12)
-    strg.pad(0, PA + PB + PE, center=60, vel=56)
-    gtr.arp(0, PA + PB + PE[:1], [0, 1, 2, 3, 2, 1], E, center=62, lo=40,
-            vel=76, gate=0.95)
-    gtr.arp(25 * B, PE[1:], [0, 1, 2, 3, 4, 5], E, center=62, lo=40,
-            vel=70, gate=0.95)
-    bass.riff(0, PA + PB + PE[:1], "0:6 7:6", S, lo=36, vel=80)
-    bass.note(25 * B, B, 43, 84, 0.95)
-    shak.beat(8 * B, 16, {MAR: "X.x.x.X.x.x."}, S, vel=50)
-    return s
 
 
-def song_dungeon():
-    s = Song('DUNGEON.MID', 'Below the Keep', 96, 1, 70, (4, 4))
-    S, B = 24, s.bar
-    organ = s.part('Church organ', 0, 19, 76, 56)
-    choir = s.part('Choir', 1, 52, 100, 72)
-    cb = s.part('Contrabass', 2, 43, 104, 48)
-    bell = s.part('Tubular bells', 3, 14, 70, 90)
-    drum = s.part('Percussion', DRUM_CH, None, 96, 64)
-    P = prog("Dm:4 Eb:4 Dm:4 Eb:4 Dm:4 C:4 Bb:4 Eb:4 Gm:4 A:4 "
-             "Dm:4 Eb:4 Dm:4 C:4 Bb:4 A:4 Dm:4 Dm:4", 96)
-    organ.pad(0, P, center=55, vel=68)
-    for bar, ch in enumerate(P[:16]):
-        line = "0:4! 0:4 1:4 0:4" if ch[0] == 'Dm' else "0:8! 0:8"
-        cb.riff(bar * B, [ch], line, S, lo=28, vel=96, gate=0.92)
-    cb.note(16 * B, 2 * B, 38, 104, 0.97)
-    choir.mel(2 * B, """
-        d5:8 f5:8 | g5:8 f5:4 eb5:4 | d5:16 | e5:8 c5:8 |
-        d5:8 f5:8 | g5:12 bb5:4 | a5:8 g5:8 | e5:16 |
-        a5:8! d6:8 | bb5:8 g5:8 | a5:8 f5:4 d5:4 | e5:8 g5:8 |
-        f5:8 d5:8 | c#5:8 e5:8
-    """, S, vel=92, gate=0.98, tr=-12, bar=16)
-    choir.mel(16 * B, "d5:32", S, vel=96, gate=0.98, tr=-12)
-    for bar, note in ((2, 'd5'), (6, 'f5'), (10, 'a5'), (14, 'd5'),
-                      (16, 'd5')):
-        bell.mel(bar * B, note + ':16', S, vel=84, gate=0.6)
-    drum.beat(0, 7, {K2: "x...............x...............",
-                     T_LF: "........................x......."},
-              S, vel=92)
-    drum.beat(14 * B, 1, {K2: "x...............",
-                          T_LF: "........x......."}, S, vel=88)
-    drum.beat(15 * B, 1, {K2: "x...............",
-                          T_LM: "x...x...........",
-                          T_HF: "........x.x.....",
-                          T_LF: "............x.xX"}, S, vel=86)
-    for bar in (2, 10, 16):
-        drum.note(bar * B, S, CHN, 96)
-    drum.note(16 * B, S, K2, 112)
-    drum.note(16 * B, S, T_LF, 100)
-    return s
 
 
-def song_victory():
-    s = Song('VICTORY.MID', 'Victory Jingle', 96, 1, 132, (4, 4))
-    S, B = 24, s.bar
-    tpt = s.part('Trumpet', 0, 56, 112, 64)
-    brs = s.part('Brass section', 1, 61, 92, 44)
-    strg = s.part('Strings', 2, 48, 80, 88)
-    timp = s.part('Timpani', 3, 47, 96, 64)
-    drum = s.part('Drums', DRUM_CH, None, 100, 64)
-    P = prog("C:4 F:4 G:4 C:4 Ab:4 Bb:4 C:6", 96)
-    tpt.mel(0, """
-        g4:2 c5:2 e5:2 g5:6! e5:2 g5:2 | a5:4 f5:4 c6:8! |
-        b5:2 a5:2 g5:2 f5:2 e5:4 d5:4 | e5:4 c5:4 g4:4 c5:4 |
-        c6:2! c6:2 c6:4 eb6:4 c6:4 | d6:2! d6:2 d6:4 f6:4 d6:4 | e6:24!
-    """, S, vel=104, gate=0.85)
-    brs.stabs(0, P[:6], "x.....x.x...x...", S, center=60, vel=88, steps=2)
-    brs.pad(6 * B, P[6:], center=62, vel=100)
-    strg.pad(0, P, center=55, vel=70, n=2)
-    timp.riff(0, P[:5], "0:4! r:12", S, lo=36, vel=90, gate=0.6)
-    timp.note(5 * B, 4 * S, 46, 96, 0.6)
-    for i in range(8):
-        timp.note(5 * B + (8 + i) * S, S, 41, 64 + i * 6, 0.8)
-    timp.note(6 * B, 24 * S, 36, 124, 0.9)
-    drum.beat(0, 5, {K: "x.......x.......", SN: "....x.......x...",
-                     HH: "x.x.x.x.x.x.x.x."}, S, vel=96, vels={HH: 72})
-    drum.beat(5 * B, 1, {K: "x.......x.......",
-                         SN: "....x...xxxxxxxX"}, S, vel=90)
-    for bar in (0, 6):
-        drum.note(bar * B, S, CR, 116)
-    drum.note(6 * B, S, K, 120)
-    return s
 
 
-def song_credits():
-    s = Song('CREDITS.MID', 'Thank You For Playing', 480, 1, 95, (4, 4))
-    Q, E, S, B = 480, 240, 120, s.bar
-    mel = s.part('Piano melody', 0, 0, 100, 70)
-    acc = s.part('Piano accompaniment', 1, 0, 80, 52)
-    pad = s.part('Strings pad', 2, 49, 72, 92)
-    smel = s.part('Strings melody', 3, 48, 90, 64)
-    bass = s.part('Bass', 4, 33, 92, 60)
-    drum = s.part('Soft drums', DRUM_CH, None, 72, 64)
-    PI = prog("F:4 Bb:4 F:4 C:4", Q)
-    PA = prog("F:4 C/E:4 Dm:4 Bb:4 F/A:4 Bb:4 Gm7:4 C:4", Q)
-    PB = prog("Bb:4 C:4 Am:4 Dm:4 Bb:4 C:4 Gm7:4 C:4", Q)
-    PC = prog("Bb:4 C:4 Am:4 Dm:4 Gm7:4 C:4", Q)
-    PE = prog("F:8", Q)
-    MA = """
-        c5:4 f5:4 a5:6! g5:2 | g5:8 e5:4 c5:4 | d5:4 f5:4 a5:4 c6:4 |
-        bb5:8! a5:4 g5:4 | a5:6 g5:2 f5:4 c5:4 | d5:4 f5:4 bb5:4 a5:4 |
-        f5:4 g5:4 bb5:4 a5:4 | g5:12 r:4
-    """
-    acc.arp(0, PI + PA + PB + PA + PC, [0, 1, 2, 3, 4, 3, 2, 1], E,
-            center=60, lo=41, vel=62, gate=0.95)
-    acc.arp(34 * B, prog("F:4", Q), [0, 1, 2, 3, 4, 5, 6, 6], E,
-            center=60, lo=41, vel=60, gate=0.95)
-    pad.pad(4 * B, PA + PB + PA + PC + PE, center=64, vel=56)
-    bass.riff(4 * B, PA + PB + PA + PC, "0:10 0:2 0:4", S, lo=29, vel=86)
-    bass.note(34 * B, 2 * B, 29, 90, 0.95)
-    mel.mel(4 * B, MA, S, vel=90, bar=16)
-    mel.mel(20 * B, MA, S, vel=94, bar=16)
-    mel.mel(28 * B, """
-        f5:4 d5:4 bb4:8 | c5:4 e5:4 g5:8 | a5:4 e5:4 c5:8 |
-        d5:4 f5:4 a5:8 | bb5:8! a5:4 g5:4 | e5:8 g5:8
-    """, S, vel=88, bar=16)
-    mel.mel(34 * B, "f5:32", S, vel=86, gate=0.98)
-    smel.mel(12 * B, """
-        f5:12 d5:4 | e5:8 g5:8 | a5:12 c6:4 | d6:8! a5:8 |
-        bb5:8 a5:4 g5:4 | g5:12 c5:4 | f5:8 g5:8 | e5:16
-    """, S, vel=88, gate=0.97, bar=16)
-    smel.mel(20 * B, MA, S, vel=68, gate=0.97, tr=-12, bar=16)
-    hv = {K: 70, SS: 66, HH: 50, RD: 54}
-    groove = {K: "x.......x.......", SS: "....x.......x...",
-              HH: "x.x.x.x.x.x.x.x."}
-    drum.beat(4 * B, 8, groove, S, vels=hv)
-    drum.beat(12 * B, 8, {K: "x.......x.......", SS: "....x.......x...",
-                          RD: "x.x.x.x.x.x.x.x."}, S, vels=hv)
-    drum.beat(20 * B, 13, groove, S, vels=hv)
-    drum.beat(33 * B, 1, {K: "x.......x.......",
-                          SS: "....x...x.x.x.xx"}, S, vels=hv)
-    for bar in (4, 12, 20, 34):
-        drum.note(bar * B, S, CR, 64)
-    return s
 
 
 def song_demo():
@@ -904,9 +678,241 @@ def song_demo():
     return s
 
 
-COMPOSERS = (song_intro, song_spacejam, song_castle, song_battle1,
-             song_nightdrv, song_forest, song_dungeon, song_victory,
-             song_credits, song_demo)
+# ---------------------------------------------------------------------------
+# the CLASSICS: six public-domain pieces everyone knows, arranged here for an
+# OPL2 (the melodies are the composers'; every arrangement - the voicing, the
+# accompaniment, the drums - is this file's, and CC0 like the rest)
+# ---------------------------------------------------------------------------
+
+def song_furelise():
+    """Beethoven, Bagatelle in A minor WoO 59 (1810). 3/8, a 16th a unit."""
+    s = Song('FURELISE.MID', 'Fur Elise (Beethoven)', 96, 1, 112, (3, 8),
+             PD_COPYRIGHT)
+    S = 24
+    rh = s.part('Right hand', 0, 0, 108, 72)
+    lh = s.part('Left hand', 1, 0, 96, 52)
+    A = """e5:1 d#5:1 e5:1 b4:1 d5:1 c5:1 | a4:2 r:1 c4:1 e4:1 a4:1 |
+           b4:2 r:1 e4:1 g#4:1 b4:1 | c5:2 r:1 e4:1 e5:1 d#5:1 |
+           e5:1 d#5:1 e5:1 b4:1 d5:1 c5:1 | a4:2 r:1 c4:1 e4:1 a4:1 |
+           b4:2 r:1 e4:1 c5:1 b4:1 |"""
+    A_LH = ("r:6 | a2:1 e3:1 a3:1 r:3 | e2:1 e3:1 g#3:1 r:3 | "
+            "a2:1 e3:1 a3:1 r:3 | r:6 | a2:1 e3:1 a3:1 r:3 | "
+            "e2:1 e3:1 g#3:1 r:3 |")
+    END1, END1_LH = "a4:2 r:2 e5:1 d#5:1 |", "a2:1 e3:1 a3:1 r:3 |"
+    END2, END2_LH = "a4:2 r:1 b4:1 c5:1 d5:1 |", "a2:1 e3:1 a3:1 r:3 |"
+    B = """e5:3 g4:1 f5:1 e5:1 | d5:3 f4:1 e5:1 d5:1 | c5:3 e4:1 d5:1 c5:1 |
+           b4:2 r:1 e4:1 e5:1 r:1 | r:1 e5:1 e6:1 r:1 d#5:1 e5:1 |
+           r:1 d#5:1 e5:1 d#5:1 e5:1 d#5:1 |"""
+    B_LH = ("c3:1 g3:1 c4:1 r:3 | g2:1 g3:1 b3:1 r:3 | a2:1 e3:1 a3:1 r:3 | "
+            "e2:1 e3:1 e4:1 r:3 | r:6 | r:6 |")
+    t = rh.mel(0, "e5:1 d#5:1", S, vel=86)          # the pickup
+    form = [(A, A_LH), (END1, END1_LH), (A, A_LH), (END2, END2_LH),
+            (B, B_LH), (A, A_LH), (END1, END1_LH), (A, A_LH),
+            (END2, END2_LH), (B, B_LH), (A, A_LH)]
+    for r, l in form:
+        lh.mel(t, l, S, vel=80, gate=0.95, bar=6)
+        t = rh.mel(t, r, S, vel=100, gate=0.9, bar=6)
+    rh.mel(t, "a4:6", S, vel=96, gate=1.0, bar=6)
+    lh.mel(t, "a2+a3:6", S, vel=84, gate=1.0, bar=6)
+    return s
+
+
+def song_entertainer():
+    """Joplin, The Entertainer (1902). 2/4, a 16th a unit: the A strain,
+    twice, over a stride left hand - a bass on the beat, a chord off it."""
+    s = Song('ENTERTNR.MID', 'The Entertainer (Joplin)', 96, 1, 80,
+             (2, 4), PD_COPYRIGHT)
+    S, B = 24, s.bar
+    rh = s.part('Melody', 0, 3, 108, 70)
+    bs = s.part('Stride bass', 1, 0, 100, 56)
+    ch = s.part('Stride chords', 2, 0, 80, 60)
+    LEAD = "r:6 d5:1 d#5:1 |"
+    STRAIN = """e5:1 c6:2 e5:1 c6:2 e5:1 c6:1 | c6:5 c6:1 d6:1 d#6:1 |
+        e6:1 c6:1 d6:1 e6:2 b5:1 d6:2 | c6:6 d5:1 d#5:1 |
+        e5:1 c6:2 e5:1 c6:2 e5:1 c6:1 | c6:6 a5:1 g5:1 |
+        f#5:1 a5:1 c6:1 e6:2 d6:1 c6:1 a5:1 | d6:6 d5:1 d#5:1 |
+        e5:1 c6:2 e5:1 c6:2 e5:1 c6:1 | c6:5 c6:1 d6:1 d#6:1 |
+        e6:1 c6:1 d6:1 e6:2 b5:1 d6:2 | c6:4 c6:1 d6:1 e6:1 c6:1 |
+        d6:1 e6:2 c6:1 d6:1 c6:1 e6:1 c6:1 |
+        d6:1 e6:2 c6:1 d6:1 c6:1 e6:1 c6:1 |
+        d6:1 e6:2 b5:1 d6:2 c6:2 |"""
+    P = prog("C:2 C:2 G7:2 C:2 C:2 C:2 D7:2 G7:2 C:2 C:2 G7:2 C:2 "
+             "C:2 G7:2 G7:2 C:2", 96)
+    t = rh.mel(0, LEAD, S, vel=96, bar=8)
+    for last in ("c6:6 d5:1 d#5:1 |", "c6:6 r:2 |"):
+        bs.riff(t, P, "0:2! r:2 7:2 r:2", S, lo=36, vel=96, gate=0.8)
+        ch.stabs(t, P, "..x...x.", S, center=60, vel=76, n=3, steps=2)
+        t = rh.mel(t, STRAIN + last, S, vel=100, gate=0.86, bar=8)
+    bs.note(t, B, 36, 104, 1.0)
+    ch.mel(t, "c4+e4+g4:8", S, vel=80, gate=1.0, bar=8)
+    rh.note(t, B, 72, 100, 1.0)
+    return s
+
+
+def song_mountainking():
+    """Grieg, In the Hall of the Mountain King (1875). The theme four times,
+    louder, higher and faster each time, the way the piece builds."""
+    s = Song('MOUNTKNG.MID', 'Hall of the Mountain King (Grieg)', 96, 1,
+             84, (4, 4), PD_COPYRIGHT)
+    S, B = 24, s.bar
+    bsn = s.part('Bassoon', 0, 70, 104, 54)
+    strg = s.part('Strings', 1, 48, 96, 74)
+    brass = s.part('Brass', 2, 61, 100, 64)
+    pizz = s.part('Pizzicato bass', 3, 45, 104, 60)
+    timp = s.part('Timpani', 4, 47, 100, 64)
+    drum = s.part('Drums', DRUM_CH, None, 96, 64)
+    THEME = """b3:2 c#4:2 d4:2 e4:2 f#4:2 d4:2 f#4:4 |
+               f4:2 c#4:2 f4:4 e4:2 c4:2 e4:4 |
+               b3:2 c#4:2 d4:2 e4:2 f#4:2 d4:2 f#4:2 b4:2 |
+               a4:2 f#4:2 d4:2 f#4:2 a4:8 |"""
+    BASS = "b2:4 r:4 b2:4 r:4 | f#2:4 r:4 f#2:4 r:4 | " \
+           "b2:4 r:4 b2:4 r:4 | f#2:4 r:4 f#2:4 r:4 |"
+    t = 0
+    for i, bpm in enumerate((84, 104, 132, 168)):
+        if i:
+            s.tempo(t, bpm)
+        for _ in range(2):
+            pizz.mel(t, BASS, S, vel=88 + 8 * i, gate=0.4, tr=-12 if i > 1
+                     else 0, bar=16)
+            if i == 0:
+                bsn.mel(t, THEME, S, vel=96, gate=0.6, bar=16)
+            elif i == 1:
+                bsn.mel(t, THEME, S, vel=104, gate=0.55, bar=16)
+                strg.mel(t, THEME, S, vel=84, gate=0.5, tr=12, bar=16)
+            elif i == 2:
+                strg.mel(t, THEME, S, vel=104, gate=0.6, tr=12, bar=16)
+                brass.mel(t, THEME, S, vel=96, gate=0.5, bar=16)
+                timp.mel(t, BASS, S, vel=96, gate=0.5, bar=16)
+            else:
+                strg.mel(t, THEME, S, vel=118, gate=0.6, tr=12, bar=16)
+                brass.mel(t, THEME, S, vel=116, gate=0.55, tr=12, bar=16)
+                bsn.mel(t, THEME, S, vel=110, gate=0.55, bar=16)
+                timp.mel(t, BASS, S, vel=112, gate=0.5, bar=16)
+            if i >= 2:
+                drum.beat(t, 4, {K: "x...x...x...x...",
+                                 SN: "....x.......x..." if i == 2 else
+                                     "..x...x...x...x."}, S, vel=86 + 10 * i)
+            t += 4 * B
+    for k, bar in ((0, 0), (8, 1)):     # the crash: B minor, twice, and out
+        tt = t + k * S
+        for part, key in ((strg, 71), (strg, 66), (brass, 59), (brass, 62),
+                          (pizz, 35)):
+            part.note(tt, 4 * S, key, 120, 0.8)
+        timp.note(tt, 4 * S, 35, 120, 0.8)
+        drum.note(tt, S, CR, 120)
+        drum.note(tt, S, K, 120)
+    return s
+
+
+def song_korobeiniki():
+    """Korobeiniki, the Russian folk song (1861) - and the tune everyone
+    knows from the game. A minor, a square lead over an octave bass."""
+    s = Song('KOROBEIN.MID', 'Korobeiniki (Russian folk song)', 96, 1, 144,
+             (4, 4), PD_COPYRIGHT)
+    S, B = 24, s.bar
+    lead = s.part('Square lead', 0, 80, 100, 64)
+    harm = s.part('Harmony', 1, 81, 76, 84)
+    bass = s.part('Synth bass', 2, 38, 104, 52)
+    pad = s.part('Strings', 3, 48, 64, 64)
+    drum = s.part('Drums', DRUM_CH, None, 90, 64)
+    A = """e5:4 b4:2 c5:2 d5:4 c5:2 b4:2 | a4:4 a4:2 c5:2 e5:4 d5:2 c5:2 |
+           b4:6 c5:2 d5:4 e5:4 | c5:4 a4:4 a4:8 |"""
+    Bp = """r:2 d5:4 f5:2 a5:4 g5:2 f5:2 | e5:6 c5:2 e5:4 d5:2 c5:2 |
+            b4:4 b4:2 c5:2 d5:4 e5:4 | c5:4 a4:4 a4:8 |"""
+    HA = """g#4:4 g#4:2 a4:2 b4:4 a4:2 g#4:2 | e4:4 e4:2 a4:2 c5:4 b4:2 a4:2 |
+            g#4:6 a4:2 b4:4 c5:4 | a4:4 e4:4 e4:8 |"""
+    HB = """r:2 f4:4 a4:2 c5:4 b4:2 a4:2 | g4:6 e4:2 g4:4 f4:2 e4:2 |
+            g#4:4 g#4:2 a4:2 b4:4 c5:4 | a4:4 e4:4 e4:8 |"""
+    PA = prog("E:4 Am:4 E:4 Am:4", 96)
+    PB = prog("Dm:4 C:4 E:4 Am:4", 96)
+    t = 0
+    for n, (m, h, P) in enumerate([(A, HA, PA), (Bp, HB, PB), (A, HA, PA),
+                                   (Bp, HB, PB), (A, HA, PA), (Bp, HB, PB)]):
+        lead.mel(t, m, S, vel=100, gate=0.86, bar=16)
+        if n >= 2:
+            harm.mel(t, h, S, vel=78, gate=0.8, bar=16)
+        bass.riff(t, P, "0:2! 12:2", S, lo=33, vel=96, gate=0.7)
+        if n >= 1:
+            pad.pad(t, P, center=60, vel=56, n=3)
+        if n >= 2:
+            drum.beat(t, 4, {K: "x.......x.......", SN: "....x.......x...",
+                             HH: "x.x.x.x.x.x.x.x."}, S, vel=88,
+                      vels={HH: 64})
+        t += 4 * B
+    lead.note(t, B, 69, 104, 1.0)
+    bass.note(t, B, 33, 104, 1.0)
+    drum.note(t, S, CR, 110)
+    drum.note(t, S, K, 110)
+    return s
+
+
+def song_cancan():
+    """Offenbach, the Galop infernal from Orpheus in the Underworld (1858)
+    - the Can-can. 2/4, a trumpet over an oom-pah piano and a snare."""
+    s = Song('CANCAN.MID', 'Can-can (Offenbach)', 96, 1, 150, (2, 4),
+             PD_COPYRIGHT)
+    S, B = 24, s.bar
+    tpt = s.part('Trumpet', 0, 56, 104, 70)
+    fl = s.part('Piccolo', 1, 72, 80, 84)
+    bs = s.part('Oom', 2, 0, 100, 52)
+    ch = s.part('Pah', 3, 0, 80, 60)
+    drum = s.part('Drums', DRUM_CH, None, 92, 64)
+    TUNE = """c5:4 c5:4 | d5:2 f5:2 e5:2 d5:2 | g5:4 g5:4 |
+              g5:2 a5:2 e5:2 f5:2 | d5:4 d5:4 | d5:2 f5:2 e5:2 d5:2 |
+              c5:2 c6:2 b5:2 a5:2 | g5:2 f5:2 e5:2 d5:2 |
+              c5:4 c5:4 | d5:2 f5:2 e5:2 d5:2 | g5:4 g5:4 |
+              g5:2 a5:2 e5:2 f5:2 | d5:4 d5:4 | d5:2 f5:2 e5:2 d5:2 |
+              c5:2 c6:2 g5:2 e5:2 | c5:4 r:4 |"""
+    P = prog("C:2 G7:2 C:2 C:2 G7:2 G7:2 C:2 G7:2 "
+             "C:2 G7:2 C:2 C:2 G7:2 G7:2 C:2 C:2", 96)
+    t = 0
+    for n in range(3):
+        tpt.mel(t, TUNE, S, vel=100 + 6 * n, gate=0.7, bar=8)
+        if n:
+            fl.mel(t, TUNE, S, vel=80, gate=0.6, tr=12, bar=8)
+        bs.riff(t, P, "0:2! r:2 -5:2 r:2", S, lo=40, vel=96, gate=0.7)
+        ch.stabs(t, P, "..x...x.", S, center=60, vel=76, n=3, steps=2)
+        drum.beat(t, 16, {K: "x...x...", SN: "..x...x."}, S, vel=84)
+        drum.note(t, S, CR, 108)
+        t += 16 * B
+    for part, key in ((tpt, 72), (fl, 84), (bs, 36), (ch, 64), (ch, 67)):
+        part.note(t, 2 * S, key, 120, 0.8)
+    drum.note(t, S, CR, 120)
+    drum.note(t, S, K, 118)
+    return s
+
+
+def song_turkish():
+    """Mozart, Rondo alla Turca from the Sonata in A K. 331 (1783). 2/4, a
+    harpsichord over a broken-chord left hand."""
+    s = Song('TURKISH.MID', 'Rondo alla Turca (Mozart)', 96, 1, 116,
+             (2, 4), PD_COPYRIGHT)
+    S, B = 24, s.bar
+    rh = s.part('Right hand', 0, 6, 104, 74)
+    lh = s.part('Left hand', 1, 6, 92, 52)
+    LEAD = "r:4 b4:1 a4:1 g#4:1 a4:1 |"
+    TUNE = """c5:2 r:2 d5:1 c5:1 b4:1 c5:1 | e5:2 r:2 f5:1 e5:1 d#5:1 e5:1 |
+        b5:1 a5:1 g#5:1 a5:1 b5:1 a5:1 g#5:1 a5:1 | c6:4 a5:2 c6:2 |
+        b5:2 a5:2 g5:2 a5:2 | b5:2 a5:2 g5:2 a5:2 | b5:2 a5:2 g5:2 f#5:2 |
+        e5:4 b4:1 a4:1 g#4:1 a4:1 |
+        c5:2 r:2 d5:1 c5:1 b4:1 c5:1 | e5:2 r:2 f5:1 e5:1 d#5:1 e5:1 |
+        b5:1 a5:1 g#5:1 a5:1 b5:1 a5:1 g#5:1 a5:1 | c6:4 a5:2 b5:2 |
+        c6:2 b5:2 a5:2 g#5:2 | a5:2 e5:2 f5:2 d5:2 | c5:4 b4:4 |"""
+    P = prog("Am:2 Am:2 Am:2 Am:2 C:2 C:2 B7:2 Em:2 "
+             "Am:2 Am:2 Am:2 Am:2 E:2 Dm:2 E7:2 Am:2", 96)
+    t = rh.mel(0, LEAD, S, vel=96, bar=8)
+    for last in ("a4:4 b4:1 a4:1 g#4:1 a4:1 |", "a4:4 b4:1 a4:1 g#4:1 a4:1 |",
+                 "a4:8 |"):
+        lh.arp(t, P, (0, 1, 2, 1), 2 * S, center=57, lo=33, vel=78,
+               gate=0.8)
+        t = rh.mel(t, TUNE + last, S, vel=100, gate=0.8, bar=8)
+    lh.note(t - B, B, 45, 90, 1.0)
+    return s
+
+
+COMPOSERS = (song_intro, song_spacejam, song_battle1, song_entertainer,
+             song_furelise, song_mountainking, song_korobeiniki, song_cancan,
+             song_turkish, song_demo)
 
 
 def write_all(outdir):

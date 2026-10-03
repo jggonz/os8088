@@ -2401,7 +2401,7 @@ mr_ab1:     db 'MIDIRack for os8088', 0
 mr_ab2:     db 'Version 1.0', 0
 mr_ab3:     db 'Standard MIDI Files on an OPL2 / OPL3,', 0
 mr_ab4:     db 'a Sound Blaster, or the PC speaker', 0
-mr_ab5:     db 'FM bank and demo songs: original, CC0', 0
+mr_ab5:     db 'FM bank and song arrangements: CC0', 0
 
 ; --- MIDI Info: its lines, built when it is drawn -----------------------------
 mr_inlines:

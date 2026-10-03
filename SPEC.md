@@ -161409,6 +161409,24 @@ DSP** as well as the card's own OPL; and OPL3 and raw registers come from
 | `mrtab.inc` | **GENERATED** by `tools/os88midi.py` (§105.6.1) |
 | `songs/*.MID` | the ten demo songs, **GENERATED** by `tools/os88midsong.py` and committed |
 
+**The ten songs are four originals and six classics.** INTRO (a title
+fanfare, format 0), SPACEJAM and BATTLE1 (1990s-style game music) and DEMO (the
+feature test: division 480, program changes, pitch bend under an RPN
+range, the modulation wheel, a volume swell and tempo changes) are composed
+in `tools/os88midsong.py` and quote no existing melody. ENTERTNR (Joplin, *The
+Entertainer*), FURELISE (Beethoven, *Für Elise*), MOUNTKNG (Grieg, *In the Hall
+of the Mountain King*, the theme four times under a rising tempo map, 84 to
+168 BPM), KOROBEIN (the Russian
+folk song), CANCAN (Offenbach, *Galop infernal*) and TURKISH (Mozart, *Rondo
+alla Turca*) are **public-domain compositions**, every one published before
+1903; only the melody is taken and the arrangement - voicing, accompaniment,
+drums, form - is written in the tool. Each file's first track says which it
+is in a copyright meta, and the arrangements are CC0 like the originals.
+**A copyrighted song is not a candidate**, however recognisable: a MIDI
+transcription is a copy of the composition, and these files ship on every
+apps disk and the live media. A user plays their own files from any folder
+(§105.3); the demo set is only what the machine arrives with.
+
 ### 105.3 The playlist and the loads
 
 The Audio Player's store (§86.10): an entry is a name, a folder and a volume,

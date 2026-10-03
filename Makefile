@@ -12118,7 +12118,7 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
             $(APPSYSARGS) \
             $(addprefix SYSTEM/DOS:,$(APPS_DOS) $(APPS_DOSCZ)) \
             $(APPDATAFOLDER)
-# ...and the 720KB disk's, which is that list with three songs (MIDISONGS720)
+# ...and the 720KB disk's, which is that list with two songs (MIDISONGS720)
 APPSARGS720 := $(filter-out $(MIDISONGARGS),$(APPSARGS))
 APPSARGS720 := $(filter-out $(APPDATAFOLDER),$(APPSARGS720)) \
                $(MIDISONGARGS720) $(APPDATAFOLDER)

@@ -291,8 +291,10 @@ multi-instance:
   ModPlug Player's windowed face when ModPlug retired), an Audio Player that
   streams a WAV off the disk and keeps playing while you work in another
   window, MIDIRack (a Standard MIDI File player with a channel rack, on an
-  OPL2/OPL3 FM chip, a Sound Blaster's DSP or the PC speaker, ten original
-  demo songs in `MEDIA\MIDI`), and the three that talk over the network —
+  OPL2/OPL3 FM chip, a Sound Blaster's DSP or the PC speaker, with ten demo
+  songs in `MEDIA\MIDI` - Für Elise, The Entertainer, the Can-can and three
+  more public-domain classics beside four originals), and the three that talk
+  over the network —
   Browser, Telnet and an FTP server.
 - **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, Dot Delirium,
   [Gorillas](apps/gorillas/README.md) (solo or two-player banana artillery, windowed
