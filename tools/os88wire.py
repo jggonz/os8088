@@ -452,8 +452,16 @@ def pack(manifest, pkgdir, picdir, date=None):
     tab = bytearray()
     for name, n in sides:
         e = bytearray(WIRE_SC)
-        e[WC_SCNAME:WC_SCNAME + 12] = ascii_field(name, 12,
-                                                  "sidecar name %s" % name)
+        # AN 8.3 NAME IN A 12-BYTE SLOT, NUL-padded when shorter and with no
+        # NUL at all when it is twelve - arc_name's rule, and the reader's
+        # since the first Wire: the Add chain copies at most twelve bytes and
+        # stops at a NUL (wr_sputn), into a 14-byte wr_fname that it then
+        # terminates itself. This writer used to keep a NUL inside the twelve,
+        # which refused every full 8.3 name (MIDIRACK.GFX, ENTERTNR.MID) for
+        # no reason the machine had. The name lands in a FAT directory as
+        # written, so it is checked as an 8.3 name and not only for length.
+        e[WC_SCNAME:WC_SCNAME + 12] = arc_name(
+            name, "sidecar name %s" % name).encode("ascii").ljust(12, b"\0")
         struct.pack_into("<I", e, WC_SCSIZE, n)
         tab += e
 
@@ -640,9 +648,10 @@ def verify(blob, pkgdir=None):
             if e + WIRE_SC > len(blob):
                 continue
             nm = blob[e:e + 12]
-            if b"\0" not in nm:
-                no("%s: sidecar %d's name is not NUL-terminated" % (tag, j))
+            # a full slot has no NUL and is a name of twelve (SPEC.md 92.2)
             sname = nm.split(b"\0")[0].decode("latin1")
+            if not sname:
+                no("%s: sidecar %d has no name" % (tag, j))
             sz = struct.unpack_from("<I", blob, e + WC_SCSIZE)[0]
             tot += sz
             if sz == 0 or (sz > WIRE_FILEMAX and not flags & WF_FLOPPY):
@@ -933,9 +942,10 @@ def arc_name(name, what, folder=False):
     is `wr_sputn`'s rule. The first draft of 92.13 said NUL-TERMINATED, and
     five of the RunCPM master disk's 77 files are twelve characters
     (`CONSOLE7.COM`, `LEFT-OFF.TXT`), so the format's own motivating example
-    would have been unpackable. The catalog's `WC_SCNAME` is NOT this - it
-    stays NUL-terminated inside its 12 (SPEC.md 92.2) and `ascii_field`
-    enforces that.
+    would have been unpackable. The catalog's `WC_SCNAME` is the same slot
+    (SPEC.md 92.2): it was kept NUL-terminated inside its 12 until
+    v1.0.20261003 for no reason the reader had, and a sidecar name goes
+    through this function now too.
 
     The writer refuses a lowercase name rather than upper-casing it, and that
     is deliberate: `readme` and `README` are one FAT12 directory entry, so a

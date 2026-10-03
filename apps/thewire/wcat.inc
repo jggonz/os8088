@@ -45,7 +45,7 @@ WC_DESCN    equ 5
 WC_DESCW    equ 28
 
 ; --- one 16-byte sidecar entry, at [WC_SCOFF] + WIRE_SC*j --------------------
-WC_SCNAME   equ 0               ; 12, a NUL-terminated 8.3 name
+WC_SCNAME   equ 0               ; 12, an 8.3 name, NUL-padded (none at 12)
 WC_SCSIZE   equ 12              ; dword
 WIRE_SC     equ 16
 

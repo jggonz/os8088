@@ -168,9 +168,12 @@ FIXTURE = {
          "description": "The 1990 game, in assembly."},
         # ELEVEN SIDECARS, which is more than the eight WIRE_SCMAX was until
         # v1.0.20261002.1 (SPEC.md 92.2) - so the Add chain is walked past the
-        # old bound on the machine and not only in the host's packer.
+        # old bound on the machine and not only in the host's packer. The ten
+        # extra names are TWELVE characters, a full 8.3 with no NUL in its
+        # slot (SPEC.md 92.2), so assertion 7's byte-for-byte compare is the
+        # machine's proof that the Add chain takes one.
         {"stem": "BIGONE", "title": "Needs a disk", "kind": 0, "tier": 3,
-         "files": ["hello.o88", "mines.o88"] + ["wsc%02d.dat" % j
+         "files": ["hello.o88", "mines.o88"] + ["wiresc%02d.dat" % j
                                                for j in range(1, 11)],
          "description": "Twelve files, so Load Program refuses it."},
         # THE ARCHIVE (SPEC.md 92.13). Tier 0 so the 8088/8086 filter keeps
@@ -190,7 +193,7 @@ ARC_PROG = "MSEG.O88"                   # ...and the entry that carries
                                         # about (see fixture_tree)
 SIDECAR = "MINES.O88"                   # what BIGONE's second file is called
                                         # in /wire/pkg/ and on the disk
-XSIDE = {"WSC%02d.DAT" % j: (b"sidecar %02d " % j) * (20 + 7 * j)
+XSIDE = {"WIRESC%02d.DAT" % j: (b"sidecar %02d " % j) * (20 + 7 * j)
          for j in range(1, 11)}         # BIGONE's other ten, distinct bytes
 PICX, PICY = 208, 21                    # WR_PICX and the picture's y in the
                                         # detail pane, both content-relative

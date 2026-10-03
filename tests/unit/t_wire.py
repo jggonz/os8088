@@ -234,7 +234,8 @@ def read_catalog(blob):
     for j in range(scn):
         e = scoff + j * S_SC
         nm = blob[e:e + 12]
-        assert b"\0" in nm, "sidecar %d has no NUL" % j
+        assert nm[:1] != b"\0", "sidecar %d has no name" % j  # a FULL slot
+        #   has no NUL: it is a twelve-character name (SPEC.md 92.2)
         sides.append((nm.split(b"\0")[0].decode("ascii"),
                       struct.unpack_from("<I", blob, e + 12)[0]))
 
@@ -516,6 +517,43 @@ def refusals(tmp):
     check(r.returncode != 0, "--pack refuses WIRE_SCMAX + 1 sidecars",
           "wr_catck refuses the whole catalog over one such record, so the "
           "writer has to refuse it first, naming the entry",
+          got=(r.stdout + r.stderr).strip() or "exit 0")
+
+    # A FULL 8.3 SIDECAR NAME FILLS ITS SLOT (SPEC.md 92.2). The writer kept a
+    # NUL inside the twelve until v1.0.20261003 and so refused MIDIRACK.GFX
+    # and ENTERTNR.MID, although the Add chain has copied at most twelve
+    # bytes and terminated them itself since the first Wire. The machine half
+    # of this is tests/thewire.py, whose ten extra sidecars are twelve long.
+    open(os.path.join(tmp, "named.o88"), "wb").write(
+        open(os.path.join(BUILD, "hello.o88"), "rb").read())
+    def named(nm):
+        open(os.path.join(tmp, nm.lower()), "wb").write(b"twelve")
+        m = json.loads(json.dumps(FIXTURE))
+        m["entries"] = [{"stem": "NAMED", "title": "Named", "tier": 0,
+                         "files": ["named.o88", nm],
+                         "description": "One sidecar."}]
+        man = os.path.join(tmp, "named.json")
+        cat = os.path.join(tmp, "named.bin")
+        json.dump(m, open(man, "w"))
+        return run("--pack", man, "--pkgdir", tmp, "--out", cat), cat
+    r, cat = named("entertnr.mid")
+    check(r.returncode == 0, "--pack accepts a twelve-character sidecar name",
+          "an 8.3 name is up to twelve characters and the slot is twelve",
+          got=(r.stdout + r.stderr).strip(), want="exit 0")
+    if r.returncode == 0:
+        blob = open(cat, "rb").read()
+        e = struct.unpack_from("<H", blob, 10)[0]
+        eq(blob[e:e + 12], b"ENTERTNR.MID",
+           "...and it fills the slot with no NUL",
+           "the reader copies at most twelve bytes and stops at a NUL")
+        v = run("--verify", cat, "--pkgdir", tmp)
+        check(v.returncode == 0, "...and --verify accepts it",
+              "a full slot is a name of twelve, not a missing terminator",
+              got=(v.stdout + v.stderr).strip(), want="exit 0")
+    r, _ = named("toolongnam.e")
+    check(r.returncode != 0, "--pack refuses a sidecar name that is not 8.3",
+          "it lands in a FAT directory exactly as written, so the length "
+          "alone was never the whole check",
           got=(r.stdout + r.stderr).strip() or "exit 0")
 
 
