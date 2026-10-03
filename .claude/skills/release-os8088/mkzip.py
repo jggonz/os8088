@@ -296,6 +296,16 @@ ITEMS = [
      "file.",
      [("redline.img", "1.44MB", ""), ("redline120.img", "1.2MB", ""),
       ("redline720.img", "720KB", ""), ("redline360.img", "360KB", "")]),
+    ("progs", "MIDIRack", False,
+     "A MIDI music player, with ten songs to play: four written for it and "
+     "six public-domain classics. It sounds "
+     "through an AdLib or Sound Blaster FM chip, a synthesizer or a "
+     "wavetable on a Sound Blaster, an MPU-401 MIDI port, or the PC "
+     "speaker. The wavetable's instruments are made from S. Christian "
+     "Collins's GeneralUser GS sound bank, and only this disk, the "
+     "everything set and the live media carry them.",
+     [("midirack.img", "1.44MB", ""), ("midirack120.img", "1.2MB", ""),
+      ("midirack720.img", "720KB", ""), ("midirack360.img", "360KB", "")]),
     ("progs", "Weave", False,
      "Web-style programs -- markup, script and formulas -- compiled into one "
      "bundle file and run natively. Carries the runtime, three demo "
