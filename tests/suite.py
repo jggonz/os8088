@@ -376,6 +376,12 @@ FAST = [
         "table edited by hand or a model nobody regenerated would put the "
         "machine and its reference apart while both still ran. FAST because "
         "three packages include it and it costs 0.04s"),
+    Row("midtab", "fast", py("tests/unit/t_midtab.py"), 0.2,
+        "MIDIRack's GENERATED tables (apps/midirack/mrtab.inc) are "
+        "tools/os88midi.py's, and its ten shipped songs are read by TWO "
+        "readers that share no code - the composer's checker and the "
+        "reference sequencer the player's gates compare against - which must "
+        "agree on every song's length (SPEC.md 105.6.1)"),
     Row("bits", "fast", py("tests/unit/t_bits.py"), 0.5,
         "TWO FLAGS THAT SHARE ONE BYTE MAY NOT SHARE A BIT (SPEC.md 96.11.10). "
         "t_mirror's sibling and the same class of gate: a flag is `NAME equ "
@@ -2907,6 +2913,39 @@ SOAK = [
         "ties. Checks native pixels and repaint consistency on three adapters",
         needs=("marty", "nasm"), serial=True,
         wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("midirackfm", "soak", py("tests/midirack.py", "--arm", "fm"), 60.0,
+        "MIDIRack on the AdLib (SPEC.md 105.6): the autoload finds "
+        "MEDIA\\MIDI and measures BATTLE1, the chip is claimed in OPL2 mode "
+        "and voices key, and the capture's strongest pitch class agrees with "
+        "the reference sequencer half a second at a time; the same capture "
+        "against a tritone-transposed reference must fail",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midiracksb", "soak", py("tests/midirack.py", "--arm", "sb"), 60.0,
+        "MIDIRack's synth on the Sound Blaster (SPEC.md 105.8.4): the grant "
+        "ring this DSP needs, no underrun after the first, the stream at its "
+        "rate by the guest's own clock, and the pitch agreement and its "
+        "negative control",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midirackspk", "soak", py("tests/midirack.py", "--arm", "spk"), 60.0,
+        "MIDIRack's synth on the PC speaker, in its bracket (SPEC.md 105.7.1, "
+        "105.8.3): 5.5 kHz on the 8088, the ring never under a quarter, CONS "
+        "at the rate, the pitch agreement on the low-passed capture and its "
+        "negative control",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midiracktone", "soak", py("tests/midirack.py", "--arm", "tone"), 50.0,
+        "MIDIRack's 'Play in Background' on a machine with no card (SPEC.md "
+        "105.8.2): the melody as one square wave on the desktop, moving "
+        "through the song's pitches",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midirackend", "soak", py("tests/midirack.py", "--arm", "end"), 120.0,
+        "MIDIRack's song end (SPEC.md 105.8.1): Loop plays INTRO again from "
+        "its start, and without it the last song's end stops the playlist",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
     Row("gorillascity", "soak", py("tests/gorillascity.py"), 100.0,
         "Gorillas skyline redraw (SPEC.md 99.4): seed-stable city construction "
         "under 400 ms; complete VGA paints under 1800 ms and mono/CGA under "

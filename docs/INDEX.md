@@ -340,6 +340,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | HELLO | `apps/hello/hello.asm` | §27 | no |
 | IMGTEST | `apps/imgtest/imgtest.asm` |  | no |
 | LOOM | `apps/loom/loom.asm` | `docs/WEAVE-SPEC.md` | yes |
+| MIDIRack | `apps/midirack/midirack.asm` | §105 | yes |
 | MINES | `apps/mines/mines.asm` | §23 | yes |
 | MISSILE | `apps/missile/missile.asm` | §48 | yes |
 | MODPLUG | `apps/modplug/modplug.asm` | §56 | **retired** |
@@ -479,6 +480,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 101 | 1942 — native vertical shooter (`apps/1942/`) |
 | 102 | Excitebike — native motocross racer (`apps/excitebike/excitebike.asm`) |
 | 103 | REDLINE — CPU and graphics benchmarks (`apps/redline/`) |
+| 105 | MIDIRack — a MIDI file player (`apps/midirack/`) |
 
 ## docs/
 
