@@ -2963,6 +2963,46 @@ SOAK = [
         "programs. --break transposes the reference and must fail",
         needs=("marty", "nasm"), serial=True,
         wants=("build/midisys720.img", "build/apps720.img")),
+    Row("midirackcovox", "soak", py("tests/midirack.py", "--arm", "covox"),
+        60.0,
+        "MIDIRack's synth on a COVOX (SPEC.md 105.8.7, 34.14) on MartyPC's "
+        "Covox machine (patches/10-covox-lpt-dac.patch, the DAC on LPT2): the "
+        "ring's table the identity, IRQ0 at os88spk_isrd, the speaker arm's "
+        "ring checks, the reference sequencer's pitch classes in the DAC's "
+        "own capture, and the PC speaker's capture SILENT. --break must fail",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/covoxsys720.img", "build/apps720.img")),
+    Row("trkspkcovox", "soak", py("tests/trkspk.py", "--leg", "covox"), 90.0,
+        "Tracker with no card and a COVOX on LPT2 (SPEC.md 45.25.5, 34.14), "
+        "MartyPC's Covox machine off `make covoxtest`'s disk and the 720KB "
+        "apps disk: BEVERLY.MOD NOT filtered for a cone at load, the line "
+        "naming the Covox with no carrier warning, the samples on 378h at the "
+        "rate with the ring never dry, not one write to 42h, the DAC's "
+        "capture sounding and the speaker's silent",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/covoxsys720.img", "build/apps720.img")),
+    Row("apspkcovox", "soak", py("tests/apspk.py", "--covox"), 60.0,
+        "Audio with no card and a COVOX on LPT2 (SPEC.md 86.21.3, 34.14), on "
+        "MartyPC's Covox machine: an 8,000 Hz WAV's own samples on port 378h "
+        "one for one after the ring's first silence - copied as a card plays "
+        "them, no shaper - and not one write to the speaker's 42h",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/covoxsys720.img",)),
+    Row("vidspkcovox", "soak", py("tests/vidspk.py", "--covox"), 90.0,
+        "the Video Player with no card and a COVOX on LPT2 (SPEC.md "
+        "98.3.15.1, 34.14), on MartyPC's Covox machine: every frame drawn, "
+        "800 writes to port 378h following the clip's sweep through the "
+        "leveller (correlation over 0.9 at the best alignment), the DAC's "
+        "capture sounding, the speaker's flat, the kernel clean",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/covoxsys720.img",)),
+    Row("vidspkcovoxc", "soak", py("tests/vidspk.py", "--covox", "--counts"),
+        90.0,
+        "...and a clip made FOR THE SPEAKER (counts, SPEC.md 98.1.1.3) on the "
+        "Covox: copied raw, as a card plays one - the writes on 378h are the "
+        "file's stored bytes",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/covoxsys720.img",)),
     Row("covoxdrv", "soak", py("tests/covox.py", "--arm", "drv"), 30.0,
         "SOUND.DRV's Covox (SPEC.md 34.14) on MartyPC's Covox machine - a "
         "Hercules 5150 whose adapter port at 3BCh is LPT1 and whose Covox is "

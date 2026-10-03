@@ -29,6 +29,14 @@ loaded and choose PC Speaker - in SYSTEM.CFG before the boot, or in the
 Control Panel's Sound page at run time - and the play must still be the
 speaker's: the route is the user's, and the card's presence does not
 outrank it (SPEC.md 34.8).
+--covox plays the clip on MartyPC's Covox machine (a Covox on LPT2, no card,
+`make covoxtest`'s disk, the clip and VIDEO.O88 on a scratch floppy in B:):
+the play goes to the DAC (SPEC.md 98.3.15.1) - every frame drawn, the
+sample writes on port 378h FOLLOWING THE CLIP'S SWEEP (the leveller's gain
+moves a frame at a time, so the oracle is the best alignment's correlation
+and not byte equality), the DAC's capture sounding and the speaker's flat,
+and the kernel left clean. --counts with it: a speaker-counts clip, copied
+to the DAC raw (98.1.1.3's card rule): the writes are the file's bytes.
 VIDSPK_APUT=1 is an instrument, not a check: vp_aput's cycles a byte, entry
 to exit over 30 calls (27.7 copying counts, 92.8 translating samples), and
 VIDSPK_ISR=1 the ISR's fast path, entry to iret over 60 pulses, and
@@ -112,6 +120,119 @@ CP_I0Y, CP_IROWH, CP_RX, CP_PGX, CP_PR0Y = 6, 14, 96, 4, 26  # kernel/ctrl.inc
 CP_SOUND = 4                    # cp_items' record: sched, time, drivers, display, SOUND
 
 
+def corr(xs, ys):
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    return sxy / ((sxx * syy) ** .5 or 1.0)
+
+
+def covox(a):
+    """the clip through a Covox on LPT2 (98.3.15.1)"""
+    os.chdir(ROOT)
+    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
+    bad = []
+    with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
+        v88 = clip(tmp, a.secs, a.rate, a.counts)
+        r = vid.Reader(v88)
+        audio = b"".join(rec[-r.abytes:] for rec, _, _ in r.records())
+        img = os.path.join(tmp, "cvx.img")
+        subprocess.run([sys.executable, "tools/os88disk.py", "-o", img,
+                        "--size", "720", os88build.at("build/video.o88"),
+                        v88], check=True, capture_output=True)
+        cap = os.path.join(tmp, "cap")
+        os.environ["MARTYPC_WAV"] = cap
+        try:
+            m = os88marty.launch("build/covoxsys720.img", apps=img,
+                                 machine="os8088_5150_herc_covox_720_gla")
+        finally:
+            os.environ.pop("MARTYPC_WAV", None)
+        try:
+            ui = os88ui.UI(m)
+            ui.ready(limit=240)
+            w = ui.path("B:/CLIP.V88")
+            rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
+                         geom.WIN_SIZE)
+            base = u16(rec, geom.W_SEG) << 4
+            rw = lambda n_: u16(m.read(base + syms[n_], 2))
+            rb = lambda n_: m.read(base + syms[n_], 1)[0]
+            os88marty.until(m, lambda mm: rb("vp_loaded") == 1, "the header",
+                            poll=0.3, limit=300.0, guest=30.0)
+            if rb("vp_mute"):
+                bad.append("0: opened MUTED (why %d) - a Covox play at %d Hz "
+                           "is not too fast for an 8088" % (rb("vp_mwhy"),
+                                                            a.rate))
+            m.write(base + syms["vp_played"], b"\0")
+            ev = {"open": None, "w": []}
+            k_open = m.sym("osapi_fsx_spk")
+
+            def hit(mm, rec_):
+                r_ = mm.regs()
+                if rec_.get("addr") == k_open:
+                    if r_["ax"] & 0xFF == 0 and ev["open"] is None:
+                        ev["open"] = rec_["cycles"]
+                        mm.breakpoints([{"type": "io", "addr": 0x378}])
+                elif len(ev["w"]) < PULSES:
+                    ev["w"].append(r_["ax"] & 0xFF)
+                    if len(ev["w"]) == PULSES:
+                        mm.breakpoints([])
+            with os88marty.bp_trace(m, k_open, on_hit=hit) as tr:
+                m.type_text("p")
+                tr.until(lambda: rb("vp_played") == 1, "the play's end",
+                         limit=900.0)
+            st = {k: rw(k) for k in ("vp_done", "vp_stall")}
+            ch2 = m.read(m.sym("snd_ch2mode"), 1)[0]
+            isr = u16(m.read(m.sym("spk_seg"), 2))
+        finally:
+            m.close()
+        print("   1: drew %d of %d, stalls %d; %d writes to 378h"
+              % (st["vp_done"], r.frames, st["vp_stall"], len(ev["w"])))
+        if st["vp_done"] != r.frames or st["vp_stall"]:
+            bad.append("1: the play (drew %d, stalls %d)" % (st["vp_done"],
+                                                           st["vp_stall"]))
+        got = ev["w"]
+        if len(got) < PULSES:
+            bad.append("2: only %d writes reached the Covox's port" % len(got))
+        else:
+            body = got[100:]            # past the ring's first silence
+            if r.spk:                   # counts: the file's bytes, raw
+                ok = bytes(body) in audio
+                print("   2: the writes %s the clip's stored counts"
+                      % ("ARE" if ok else "are NOT"))
+                if not ok:
+                    bad.append("2: a counts clip's bytes did not reach the "
+                               "DAC as they are")
+            else:
+                best = max((corr(body, audio[o:o + len(body)]), o)
+                           for o in range(0, min(len(audio) - len(body),
+                                                 4000)))
+                print("   2: the writes follow the sweep at offset %d, "
+                      "correlation %.3f" % (best[1], best[0]))
+                if best[0] < 0.9:
+                    bad.append("2: the DAC's writes do not follow the clip "
+                               "(best correlation %.3f)" % best[0])
+        for nm, want_loud in (("covox", True), ("pc_speaker", False)):
+            rate_, s, _ = sndcheck.load(cap + "." + nm + ".wav")
+            seg = s[-int(3 * rate_):]
+            mm_ = sum(seg) / max(len(seg), 1)
+            rms = (sum((x - mm_) ** 2 for x in seg) / max(len(seg), 1)) ** .5
+            print("   3: the %s capture's RMS over the play's end: %.4f"
+                  % (nm, rms))
+            if want_loud and rms < 0.02:
+                bad.append("3: the DAC's capture is silent")
+            if not want_loud and rms > 0.01:
+                bad.append("3: the PC speaker sounded during a Covox play")
+        print("   4: channel 2 %d, sample ISR %04x" % (ch2, isr))
+        if ch2 or isr:
+            bad.append("4: the kernel was not left clean")
+    for b_ in bad:
+        print("FAIL " + b_)
+    print("vidspk: %s" % ("FAIL" if bad else "ok"))
+    return 1 if bad else 0
+
+
 def cp_speaker(m, ui, bad):
     """Chip menu -> Control Panel -> Sound -> PC Speaker, and close it: what
     the owner did. Every step confirmed off the kernel's own bytes."""
@@ -170,7 +291,12 @@ def main():
                          "34.11.7): muted by default on an 8088, so M; its "
                          "writes to 42h are each count twice")
     ap.add_argument("--keep", help="copy the capture here")
+    ap.add_argument("--covox", action="store_true",
+                    help="MartyPC's Covox machine: the clip on the DAC "
+                         "(98.3.15.1)")
     a = ap.parse_args()
+    if a.covox:
+        return covox(a)
     a.full = a.full or a.fs_off or a.fs_on
     if a.pulses > 1:                    # (an 8088 mutes it by default, and
         a.counts, a.unmute = True, True     # only a speaker file has it)
