@@ -190,6 +190,16 @@ snd_entry:
     mov byte [drv_up], 1
     mov word [snd_services+DSV_NAME], snd_s_mpu
 .nompu:
+    call cvx_probe              ; THE FOURTH (SPEC.md 34.14): a parallel port
+    jc .nocvx                   ; a Covox could be on. It says only that the
+    or word [snd_services+DSV_TIERS], 1 << SND_RT_LPT  ; Sound page's Covox
+    cmp byte [drv_up], 0        ; row is live - the DAC itself is undetectable
+    jne .nocvx                  ; and is never published here, only by the
+    mov byte [drv_up], 1        ; tier the user picks (cvx_tier). On a machine
+    mov word [snd_services+DSV_NAME], snd_s_cvx ; with no card it is the
+                                ; whole reason the driver is up, so the page
+                                ; names the row after it
+.nocvx:
     cmp byte [drv_up], 0
     je .nohw
     mov si, snd_services
@@ -255,8 +265,12 @@ snd_hicap:
 snd_tier:
     cmp byte [drv_up], 0
     je .nohw                    ; nothing attached: no tier to move
-    cmp ah, SND_RT_SB
-    jae .want
+    call cvx_tier               ; the Covox's cap, for this tier (SPEC.md
+    cmp ah, SND_RT_LPT          ; 34.14) - and its tier is the AdLib's as far
+    je .off                     ; as the DSP goes: SND_RT_LPT is 4, numerically
+    cmp ah, SND_RT_SB           ; ABOVE the Sound Blaster and not a rung over
+    jae .want                   ; it, so it is caught by equality first
+.off:
                                 ; --- off ----------------------------------
     cmp word [snd_services+DSV_STREAM], 0
     je .table                   ; already off
@@ -415,6 +429,7 @@ snd_services:
 snd_s_opl:  db 'AdLib', 0
 snd_s_sb:   db 'Sound Blaster', 0
 snd_s_mpu:  db 'MPU-401', 0
+snd_s_cvx:  db 'Covox', 0
 
 ; =============================================================================
 ; OPL2 geometry and data
@@ -1029,6 +1044,8 @@ snd_pkg:
     clc
     ret
 .n0:
+    cmp bl, SNDV_DACINFO
+    je cvx_v_info
     cmp bl, SNDV_MIDINFO
     je mpu_v_info
     cmp bl, SNDV_MIDOPEN
@@ -1419,6 +1436,7 @@ opl_init:
 
 %include "sb.inc"               ; the Sound Blaster half (SPEC.md 34.5/34.6)
 %include "mpu.inc"              ; ...and the MPU-401's MIDI out (SPEC.md 34.13)
+%include "covox.inc"            ; ...and the Covox's port (SPEC.md 34.14)
 
 %ifdef PICOMEM
 %include "picomem.inc"          ; ...and the PicoMEM's side of getting one to

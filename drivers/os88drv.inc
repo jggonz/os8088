@@ -91,6 +91,8 @@ SND_CAP_PCM_HI   equ 20h        ; ...and PCM_BG above 22,222 Hz: DSP >= 3.00,
                                 ; an SB Pro or SB16 (SPEC.md 34.2.1)
 SND_CAP_ADPCM4Q  equ 40h        ; ...and a DSP 4.xx, whose ADPCM4 is asked
                                 ; for with SND_OPENF_FORCE (SPEC.md 34.5.3.1)
+SND_CAP_LPTDAC   equ 0100h      ; a Covox on a parallel port, ANNOUNCED by the
+                                ; user's tier and never probed (SPEC.md 34.14)
 
 ; --- sound tiers (SPEC.md 34.8): what DRVV_TIER's AH carries -----------------
 ; The kernel's own [snd_route], mirrored here so a driver can compare against
@@ -100,6 +102,10 @@ SND_RT_AUTO  equ 0              ; unset: whatever answered at boot
 SND_RT_SPK   equ 1              ; the PC speaker
 SND_RT_FM    equ 2              ; AdLib - FM only
 SND_RT_SB    equ 3              ; Sound Blaster - FM and streams
+SND_RT_LPT   equ 4              ; Covox - FM, no streams, and the parallel
+                                ; port's DAC for a package's own bracket
+                                ; (SPEC.md 34.14). NOT above SND_RT_SB in the
+                                ; ladder: compare for it by equality
 
 ; --- entry verbs (AL on the far call into your entry proc) -------------------
 ; --- the record OSAPI_DRV_SUSPEND fills from DRVV_HWINFO (SPEC.md 51.11.2) ---

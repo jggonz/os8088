@@ -48,6 +48,9 @@
 ; The FM / background-PCM / input bits went with the hardware that had them.
 SND_CAP_TONE     equ 01h        ; square voice: freq on/off
 SND_CAP_PCM_EXCL equ 08h        ; CPU-paced PCM out - exclusive clip contract
+SND_CAP_LPTDAC   equ 0100h      ; a Covox, announced by the user's tier -
+                                ; the driver's bit, read by the Sound page's
+                                ; dot (ctrl.inc) and nothing resident (34.14)
 
 ; --- which sound hardware the machine uses (SPEC.md 34.8), a user setting ---
 ; Three tiers, not two, and the middle one is the point: an AdLib is an OPL2
@@ -60,6 +63,13 @@ SND_RT_AUTO equ 0               ; unset (a fresh SYSTEM.CFG): the best tier
 SND_RT_SPK  equ 1               ; the PC speaker, whatever else is loaded
 SND_RT_FM   equ 2               ; AdLib: FM only - no streams, no 12KB
 SND_RT_SB   equ 3               ; Sound Blaster: FM and streams both
+SND_RT_LPT  equ 4               ; Covox: FM, no streams, and the parallel
+                                ; port's DAC (SPEC.md 34.14) - a SIBLING of
+                                ; SND_RT_FM, not a rung above SND_RT_SB, so it
+                                ; is only ever compared for by equality. No
+                                ; resident byte reads it: snd_rt_card already
+                                ; sends a tone to the driver for anything but
+                                ; SND_RT_SPK, which is the AdLib here
 SND_RT_CARD equ SND_RT_FM       ; the old two-value name, kept so a SYSTEM.CFG
                                 ; written before the split still reads as "a
                                 ; card" - and reads as the CHEAP card, which

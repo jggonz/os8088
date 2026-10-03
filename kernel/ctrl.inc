@@ -5170,11 +5170,19 @@ cp_flush_close_x:
 ; =============================================================================
 
 CPS_B2Y2  equ CP_PR0Y + 2*CP_PROWH + CP_GW + 3  ; 81: route row 2's bottom
+CPS_B3Y2  equ CP_PR0Y + 3*CP_PROWH + CP_GW + 3  ; 101: row 3's (the Covox)
+CPS_NROW  equ 4                         ; the tier rows (SPEC.md 34.14 made it
+                                        ; four, and moved what is below them
+                                        ; down a row pitch: the content is 132
+                                        ; high and the notice ends at 131)
 CPS_BTX1  equ CP_PGX                    ; the Test button
 CPS_BTX2  equ CP_PGX + 44
-CPS_BTY1  equ 84
-CPS_BTY2  equ 99
-CPS_NOTEY equ 104                       ; the refusal notice's text row
+CPS_BTY1  equ 104
+CPS_BTY2  equ 119
+CPS_NOTEY equ 124                       ; the refusal notice's text row
+%if CPS_NOTEY + 8 > CP_CH
+%error "the Sound page's notice line runs off the pane"
+%endif
 section .text
 
 
@@ -5192,12 +5200,12 @@ section .modu                   ; the on-demand image (SPEC.md 2.8): a segment
 ; bits, which is a table rather than a shift because cp_snd_rowok promises to
 ; clobber nothing and a variable shift count costs CL. In the image, read
 ; [cs:] (kernel size pass 8).
-cp_snd_tiers: db SND_RT_SPK, SND_RT_FM, SND_RT_SB
-cp_snd_tbit:  db 0, 1 << SND_RT_FM, 1 << SND_RT_SB
+cp_snd_tiers: db SND_RT_SPK, SND_RT_FM, SND_RT_SB, SND_RT_LPT
+cp_snd_tbit:  db 0, 1 << SND_RT_FM, 1 << SND_RT_SB, 1 << SND_RT_LPT
 
 
 ; -----------------------------------------------------------------------------
-; cp_snd_paint - the page: heading, three tier rows, the Test button, notice
+; cp_snd_paint - the page: heading, four tier rows, the Test button, notice
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
@@ -5205,7 +5213,7 @@ cp_snd_paint:
     call kentm_si                ; KENT: push ax..si
 
 
-    xor bx, bx                      ; BX = row 0..2
+    xor bx, bx                      ; BX = row 0..3
 .lbl:
     mov al, bl
     call cp_snd_rowok               ; greyed rows still draw - they are what
@@ -5218,17 +5226,20 @@ cp_snd_paint:
     cmp bl, 1                       ; naming one outside CPSTAGE is what the
     je .str                         ; gate refuses. Rows 1 and 2 therefore copy
     CPSTAGE cp_s_ssb                ; a string they discard: 6 bytes of the
-.str:                               ; image and ~30 clocks, on a page paint
+    cmp bl, 2                       ; image and ~30 clocks, on a page paint
+    je .str
+    CPSTAGE cp_s_slpt
+.str:
     mov cx, di
     add cx, CP_PLX
     mov ax, CP_PROWH
-    mul bl                          ; AX = bl * CP_PROWH (bl <= 2, so AH = 0)
+    mul bl                          ; AX = bl * CP_PROWH (bl <= 3, so AH = 0)
     mov dx, bp
     add dx, ax
     add dx, CP_PR0Y + CP_PLDY
     call cp_run
     inc bl
-    cmp bl, 3
+    cmp bl, CPS_NROW
     jb .lbl
     call cp_penlive
 
@@ -5241,13 +5252,14 @@ cp_snd_paint:
 
 ; -----------------------------------------------------------------------------
 ; cp_snd_rowok - is tier row AL selectable? (module internal)
-; in:  AL = 0 speaker, 1 AdLib, 2 Sound Blaster
+; in:  AL = 0 speaker, 1 AdLib, 2 Sound Blaster, 3 Covox
 ; out: CF = 0 yes; CF = 1 no - the hardware that row names is not here
 ; clobbers: nothing (flags)
 ;
-; ONE test for both driver rows, because both ask the same question and the
+; ONE test for every driver row, because all ask the same question and the
 ; driver answered it once, at attach. The bits are in the low byte for every
-; SND_RT_* there is (they are 1..3), so this is a byte test.
+; SND_RT_* there is (they are 1..4), so this is a byte test. The Covox's bit
+; says a parallel PORT answered, which is all a probe can say (SPEC.md 34.14).
 ; -----------------------------------------------------------------------------
 cp_snd_rowok:
     or al, al
@@ -5277,7 +5289,7 @@ cp_snd_rowok:
 ; -----------------------------------------------------------------------------
 ; cp_snd_row - which row is EFFECTIVELY live? (module internal)
 ; in:  nothing
-; out: AL = 0 speaker, 1 AdLib, 2 Sound Blaster
+; out: AL = 0 speaker, 1 AdLib, 2 Sound Blaster, 3 Covox
 ; clobbers: AL (the output), flags
 ;
 ; The dot follows the effective tier, not the stored setting, so it can never
@@ -5290,6 +5302,13 @@ cp_snd_rowok:
 cp_snd_row:
     cmp byte [snd_route], SND_RT_SPK
     je .spk
+    cmp byte [snd_route], SND_RT_LPT
+    jne .nlpt
+    test word [drv_svc+DSV_CAPS], SND_CAP_LPTDAC
+    jz .fm                      ; a Covox setting whose port has gone is the
+    mov al, 3                   ; AdLib tier (cvx_tier), and the dot says so
+    ret
+.nlpt:
     cmp byte [snd_route], SND_RT_FM
     je .fm                      ; AUTO and SB both take the best tier up
     cmp word [drv_svc+DSV_STREAM], 0
@@ -5308,7 +5327,7 @@ cp_snd_row:
     ret
 
 ; -----------------------------------------------------------------------------
-; cp_snd_radios - the three glyphs (module internal)
+; cp_snd_radios - the four glyphs (module internal)
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
 ;
@@ -5398,7 +5417,7 @@ cp_snd_radios:
     mov al, OS88UI_GRADIO | OS88UI_GON
 .draw:
 %ifdef KERN_BIG
-    push bx                     ; ids 2..4, the Test button being 1
+    push bx                     ; ids 2..5, the Test button being 1
     mov bh, bl
     add bh, 2
     call cp_dngly
@@ -5407,7 +5426,7 @@ cp_snd_radios:
     call cp_gemit                ; ...which leaves the pen LIVE by itself, so
     add dx, CP_PROWH            ; the gfx_pen_live that used to close this
     inc bl                      ; loop is gone too
-    cmp bl, 3
+    cmp bl, CPS_NROW
     jb .r
     jmp kretm_si
 
@@ -5478,7 +5497,7 @@ cp_snd_click:
     jmp short .done
 
 .rows:
-    cmp dx, CP_B0Y1             ; --- the three tier rows -------------------
+    cmp dx, CP_B0Y1             ; --- the four tier rows --------------------
     jl .done
     xor bl, bl                  ; BL = the row the y lands in
     cmp dx, CP_B0Y2
@@ -5488,6 +5507,9 @@ cp_snd_click:
     jle .band
     inc bl
     cmp dx, CPS_B2Y2
+    jle .band
+    inc bl
+    cmp dx, CPS_B3Y2
     jg .done
 .band:
     mov al, bl
@@ -5500,7 +5522,7 @@ cp_snd_click:
                                 ; draws it held and SPEC.md 13.8's "disabled
                                 ; outranks down" is broken by this page
 %ifdef KERN_BIG
-    add al, 2                   ; ids 2..4, the Test button being 1
+    add al, 2                   ; ids 2..5, the Test button being 1
     call cp_ctl
     jc .done
     mov al, bl
@@ -6718,6 +6740,7 @@ cp_vmodnam: dw cp_s_vsing, cp_s_vrgt, cp_s_vblw
 CPS cp_s_sspk,  'PC Speaker'
 CPS cp_s_sfm,   'AdLib'
 CPS cp_s_ssb,   'Sound Blaster'
+CPS cp_s_slpt,  'Covox'
 CPS cp_s_stest, 'Test'
 
 ; The Date/Time page names the RTC ladder tier that answered (SPEC.md 37.90),
