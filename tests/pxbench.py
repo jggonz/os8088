@@ -19,6 +19,15 @@ measures the same numbers as an idle one:
          canvas composed and blitted, the Navigator's frame and the zoom
          field; and Fit (the key 0) from there
   pan    an arrow key: one OSAPI_GFX_SCROLL and the exposed strip (px_panby)
+  wave 3 CAT.GIF (320x240, 256 colours), BALLOONS.PNG (320x240 palette) and
+         HOUSE.PNG (320x240 RGB, 160 KB): the decoder PARTS (SPEC.md 106.18),
+         opened as above; and INFLATE's own cost on HOUSE.PNG: the cycles
+         inside the part's DECODE less those in its scanline extraction
+         (unfilter, pixels, emit), in K_NEXT (the worker waiting on the
+         disk) and in the UI task's wakes that land while inflate runs (its
+         reads of the next slot), over the 230,640 bytes inflate writes -
+         with the canvas's progressive painting held off for it. (A CZ-
+         wrapped PNG would read no disk at all, but a PNG does not pack.)
 
 A routine is timed from its entry to its return - the return address is read
 off the guest's stack at the entry stop - so a figure is the exact cycles
@@ -28,7 +37,7 @@ Each figure is held to a CEILING: what SPEC.md 106.17 records plus a margin.
 A change that makes PiXEL slower on the target fails here with both numbers
 on the line; `--no-ceiling` prints them and judges nothing.
 """
-import os, sys, struct, argparse, functools, time
+import os, sys, struct, argparse, functools, time, subprocess, tempfile
 print = functools.partial(print, flush=True)
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, "tests"); sys.path.insert(0, "tools")
@@ -42,14 +51,23 @@ FAIL = []
 # ROWS figure, which moves with where in its tick and its disk revolution the
 # key happened to land: the bench's CEILINGS. (open, first rows) per picture;
 # then the zoom step, Fit and pan figures
+# BIG.BMP's first rows on the 5150 measure 4.05 s at 58a75ef8 - the base
+# wave 3 was built on, before any of its changes - not 106.17's 1.52, so its
+# ceiling follows the measurement (SPEC.md 106.18 says so) and the cause is
+# wave 9's to find. The GIF and PNG rows and the inflate figure are wave 3's
+# (106.18), with the same margins.
 CEIL = {
     "os8088_5150_cga_gla": {
         "MOUNTAIN.BMP": (21.0, 4.0), "CITY.PCX": (14.7, 3.5),
-        "BIG.BMP": (40.8, 2.6),
+        "BIG.BMP": (40.8, 5.3),
+        "CAT.GIF": (36.5, 3.7), "BALLOONS.PNG": (19.3, 5.2),
+        "HOUSE.PNG": (57.0, 3.1), "inflate": 460,
         "zoom": 1.0, "fit": 0.55, "pan": 0.35},
     "os8088_xt_vga": {
         "MOUNTAIN.BMP": (23.0, 4.1), "CITY.PCX": (19.3, 6.0),
         "BIG.BMP": (47.0, 5.9),
+        "CAT.GIF": (41.0, 5.4), "BALLOONS.PNG": (23.7, 7.3),
+        "HOUSE.PNG": (60.7, 3.1), "inflate": 485,
         "zoom": 4.3, "fit": 2.25, "pan": 0.57},
 }
 
@@ -78,6 +96,8 @@ def big_bmp(path):
 ap = argparse.ArgumentParser()
 ap.add_argument("--machine", default="os8088_5150_cga_gla")
 ap.add_argument("--no-ceiling", action="store_true")
+ap.add_argument("--sessions", default="1234",
+                help="which of the four sessions to run (for a quick look)")
 a = ap.parse_args()
 ceil = CEIL.get(a.machine, {})
 
@@ -260,7 +280,8 @@ def work1(m, px):
           ceil.get("fit"))
 
 
-session(DISK, ["CITY.PCX", "MOUNTAIN.BMP"], work1)
+if "1" in a.sessions:
+    session(DISK, ["CITY.PCX", "MOUNTAIN.BMP"], work1)
 DISK2 = M.scratch_disk("build/pxbench2.img", "build/pixel.o88",
                        "PICS:" + SMALL, "PICS:" + BIG)
 
@@ -272,7 +293,151 @@ def work2(m, px):
     check("   ...first rows on the glass", first, cap[1])
 
 
-session(DISK2, ["C8.PCX"], work2)
+if "2" in a.sessions:
+    session(DISK2, ["C8.PCX"], work2)
+
+# --- wave 3: the decoder parts (SPEC.md 106.18) --------------------------------
+def part_syms(src):
+    """{name: offset} of a part, assembled with a map from this tree."""
+    with tempfile.TemporaryDirectory() as d:
+        cp, mp = os.path.join(d, "p.asm"), os.path.join(d, "p.map")
+        open(cp, "w").write(open(src).read() + "\n[map symbols %s]\n" % mp)
+        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
+                        "-I", "apps/pixel/", "-o", os.path.join(d, "p.bin"),
+                        cp], check=True)
+        out = {}
+        for L in open(mp):
+            f = L.split()
+            if len(f) == 3 and all(c in "0123456789ABCDEF" for c in f[0]):
+                out[f[2]] = int(f[1], 16)
+        return out
+
+
+PNGSYMS = part_syms("apps/pixel/pxpng.asm")
+OP_T_ROWS = 10                          # apps/os88parts.inc
+
+
+def inflate_bench(m, px, name, outbytes):
+    """Guest cycles a byte inflate writes: DECODE's (px_dpart, entry to
+    return) less pz_extract's and K_NEXT's, over `outbytes`."""
+    ent = px.a("px_dpart") & 0xFFFFF
+    nxt = px.a("px_ks_next") & 0xFFFFF
+    wake = px.a("px_onwake") & 0xFFFFF
+    st = {"t0": None, "t1": None, "ext": 0, "next": 0, "ui": 0, "open": [],
+          "rets": {}, "segbp": None, "ow": None, "owret": None}
+    base_bps = [{"type": "exec", "addr": ent}, {"type": "exec", "addr": nxt},
+                {"type": "exec", "addr": wake}]
+
+    def arm():
+        extra = [a for a in (st.get("ext_at"), st.get("dret"), st.get("owret"))
+                 if a is not None] + list(st["rets"])
+        m.breakpoints(base_bps + [{"type": "exec", "addr": a} for a in extra])
+
+    def stop(flat, cyc):
+        if st["t0"] is None:
+            if flat != ent:
+                return
+            st["t0"] = cyc
+            r = m.regs()
+            st["dret"] = (px.base + u16(m.read(r["ss"] * 16 + r["sp"], 2))) & 0xFFFFF
+            row = m.read(px.a("op_table") + OP_T_ROWS + 8 * 2, 8)
+            pseg = u16(row, 6)
+            st["ext_at"] = (pseg * 16 + PNGSYMS["pz_extract"]) & 0xFFFFF
+            st["pseg"] = pseg
+            m.write(px.a("px_abon"), b"\1")  # the progressive paint held off
+            arm()
+            return
+        if flat == st["dret"]:
+            st["t1"] = cyc
+            for c0, kind in st["open"]:
+                if c0 is not None:
+                    st[kind] += cyc - c0
+            st["open"] = []
+            m.write(px.a("px_abon"), b"\0")
+            m.breakpoints([])
+            return
+        if flat == wake:
+            # THE UI TASK, waking to read the next slot (or to paint the
+            # progress): its cycles are taken off inflate's when it lands
+            # while inflate runs and nothing of the worker's interrupts it
+            r = m.regs()
+            st["ow"] = [cyc, not st["open"]]
+            st["owret"] = (px.base + u16(m.read(r["ss"] * 16 + r["sp"], 2))) & 0xFFFFF
+            arm()
+            return
+        if flat == st.get("owret") and st["ow"] is not None:
+            c0, clean = st["ow"]
+            if clean:
+                st["ui"] += cyc - c0
+            st["ow"] = None
+            return
+        if st["ow"] is not None:
+            st["ow"][1] = False         # the worker ran inside the wake
+        if flat == st["ext_at"] or flat == nxt:
+            r = m.regs()
+            sp = r["ss"] * 16 + r["sp"]
+            if flat == nxt:                     # far: IP then CS
+                ret = (u16(m.read(sp + 2, 2)) * 16 + u16(m.read(sp, 2))) & 0xFFFFF
+                kind = "next"
+            else:
+                ret = (st["pseg"] * 16 + u16(m.read(sp, 2))) & 0xFFFFF
+                kind = "ext"
+            st["open"].append((cyc if not st["open"] else None, kind))
+            if ret not in st["rets"]:
+                st["rets"][ret] = 1
+                arm()
+            return
+        if flat in st["rets"] and st["open"]:
+            c0, kind = st["open"].pop()
+            if c0 is not None:
+                st[kind] += cyc - c0
+
+    def trigger():
+        m.write(px.a("px_cur"), name.encode().ljust(13, b"\0"))
+        m.ctrl("KeyR")
+    px.pump(base_bps, stop, lambda: st["t1"] is not None, trigger)
+    M.until(m, lambda _: px.idle(), "the open to settle", poll=0.3, limit=600)
+    M.ui_done(m, "the open")
+    tot = st["t1"] - st["t0"]
+    infl = tot - st["ext"] - st["next"] - st["ui"]
+    return tot, infl, st["ext"], st["next"], st["ui"]
+
+
+DISK3 = M.scratch_disk("build/pxbench3.img", "build/pixel.o88",
+                       "PICS:" + SMALL, "PICS:apps/pixel/samples/CAT.GIF",
+                       "PICS:apps/pixel/samples/BALLOONS.PNG",
+                       "PICS:apps/pixel/samples/HOUSE.PNG")
+
+
+def work3(m, px):
+    for pic in ("CAT.GIF", "BALLOONS.PNG", "HOUSE.PNG"):
+        t, first = px.open(pic)
+        cap = ceil.get(pic, (None, None))
+        check("open %s" % pic, t, cap[0])
+        check("   ...first rows on the glass", first, cap[1])
+
+
+if "3" in a.sessions:
+    session(DISK3, ["C8.PCX"], work3)
+DISK4 = M.scratch_disk("build/pxbench4.img", "build/pixel.o88",
+                       "PICS:" + SMALL, "PICS:apps/pixel/samples/HOUSE.PNG")
+
+
+def work4(m, px):
+    tot, infl, ext, nxt, ui = inflate_bench(m, px, "HOUSE.PNG", 240 * 961)
+    cpb = infl / (240 * 961)
+    print("   HOUSE.PNG decode %.2f s = inflate %.2f s + rows %.2f s + "
+          "K_NEXT %.2f s + the UI's wakes %.2f s"
+          % (tot / HZ, infl / HZ, ext / HZ, nxt / HZ, ui / HZ))
+    print("   inflate: %.1f cycles a byte written (230,640 bytes)" % cpb)
+    cap = ceil.get("inflate")
+    if cap is not None and not a.no_ceiling and cpb > cap:
+        print("   ...over its ceiling of %.0f FAIL" % cap)
+        FAIL.append("inflate")
+
+
+if "4" in a.sessions:
+    session(DISK4, ["C8.PCX"], work4)
 print()
 if FAIL:
     print("pxbench: FAILED: " + ", ".join(FAIL))

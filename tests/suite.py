@@ -7833,6 +7833,17 @@ SOAK = [
         "is pixelsim's too",
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxopenpng", "soak", py("tests/pxopen.py", "--picture",
+                                "apps/pixel/samples/BALLOONS.PNG", "--second",
+                                "apps/pixel/samples/CAT.GIF"), 120.0,
+        "pxopen for the decoder PARTS on a VGA (SPEC.md 106.18): a palette "
+        "PNG opened by its association - whose palette is known only in the "
+        "stream, so its 256 plans must be searched for the PLTE's entries "
+        "(the first build searched none and drew it black) - then an "
+        "interlaced GIF painted as its passes came: every canvas pixel "
+        "pixelsim's, at Fit, zoomed, scrolled and shifted",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
     Row("pxopencga", "soak", py("tests/pxopen.py", "--machine",
                                 "os8088_5150_cga_gla"), 90.0,
         "pxopen on a 1bpp display (SPEC.md 106.11): the CGA's 5/12 pixel "

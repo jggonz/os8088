@@ -66,15 +66,15 @@ for name, data, _ in corpus:
 first = "C1.PCX"                    # PiXEL's own association opens it
 open(os.path.join(tmp, first), "wb").write(
     [d for n, d, v in C.corpus() if n == first][0])
-# TWO FOLDERS: the kernel lists at most 64 entries a directory, and the
-# corpus is more. PA holds C1.PCX and the first half, PB the rest; the run
-# moves PiXEL from one to the other by poking the record's folder, which is
-# exactly what File > Revert reads
+# FOLDERS OF FIFTY: the kernel lists at most 64 entries a directory, and the
+# corpus is more. PA holds C1.PCX and the first fifty, PB the next, and so
+# on; the run moves PiXEL from one to the next by poking the record's
+# folder, which is exactly what File > Revert reads
 DISK = "build/pxdecode.img"
 names = sorted(set(n for n, _, _ in corpus) - {first})
-half = (len(names) + 1) // 2
-folder = {n: ("PA" if i < half else "PB") for i, n in enumerate(names)}
+folder = {n: "P" + chr(ord("A") + i // 50) for i, n in enumerate(names)}
 folder[first] = "PA"
+FOLDERS = sorted(set(folder.values()))
 files = ["PA:" + os.path.join(tmp, first)] + \
     ["%s:%s" % (folder[n], os.path.join(tmp, n)) for n in names]
 M.scratch_disk(DISK, "build/pixel.o88", *files)
@@ -116,13 +116,38 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
         b = m.read(base + syms["px_cur"], 48)
         return dict(name=b[:13].split(b"\0")[0].decode(), mw=u16(b, 32),
                     mh=u16(b, 34), scl=b[36], pmode=b[37], mseg=u16(b, 38),
-                    have=b[43])
+                    have=b[43], fmt=b[24])
+
+    OP_T_ROWS, OP_FETCHED = 10, 32      # apps/os88parts.inc
+    PXF_PNG, PXF_GIF = 2, 3
+    DECPART = {1: PXF_GIF, 2: PXF_PNG}  # pixel.asm's PXPART_* -> PXF_*
+
+    def parts_here():
+        """{part: its segment} for the decoder parts fetched now."""
+        out = {}
+        for k in DECPART:
+            r = m.read(base + syms["op_table"] + OP_T_ROWS + 8 * k, 8)
+            if r[1] & OP_FETCHED:
+                out[k] = u16(r, 6)
+        return out
 
     def claims():
+        """PiXEL's claims but its region - and but a DECODER PART's, which
+        an open of another kind may drop and fetch (SPEC.md 106.18): what
+        PiXEL holds of those is parts_ok()'s question."""
         hm = heapmap.Map(m, {n: S(n) for n in ("mem_base", "mem_top",
                                               "spl_live", "mem_tab")})
+        here = parts_here().values()
         return sorted((c.seg, c.para) for c in hm.claims
-                      if c.own == seg and c.seg != seg)
+                      if c.own == seg and c.seg != seg
+                      and not any(c.seg <= p < c.seg + c.para for p in here))
+
+    def parts_ok():
+        """At most one decoder part, and only the shown picture's kind."""
+        here = parts_here()
+        r = rec()
+        return len(here) <= 1 and all(
+            r["have"] and DECPART[k] == r["fmt"] for k in here), here
 
     def idle():
         return B("px_busy") == 0 and B("px_job") == 0
@@ -196,9 +221,13 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
                   and r["have"] == 1, "record %r, was %r" % (r, shown))
             check("%s: claims as they were" % name, claims() == before,
                   "%s -> %s" % (before, claims()))
+            pok, here = parts_ok()
+            check("%s: no decoder part but the shown picture's" % name, pok,
+                  "parts %r, shown format %d" % (here, rec()["fmt"]))
 
     # --- the scale: memory "allows" 1/2 ---------------------------------------
-    for name in ("BIG24.BMP", "BIG8.BMP"):
+    for name in ("BIG24.BMP", "BIG8.BMP", "GBIG.GIF", "GBIGI.GIF",
+                 "PBIG.PNG", "PBIGI.PNG", "PBIG3I.PNG"):
         if name not in bydata:
             continue
         cl = dir_cluster(DISK, folder[name])

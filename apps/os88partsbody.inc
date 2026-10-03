@@ -1681,6 +1681,15 @@ op_drop:
     call op_row
     test byte [si+OP_R_FLAG], OP_LAZY
     jz .out
+%if OP_HAS_ZLAZY
+    ; A COMPRESSED LAZY ROW'S zkb IS ITS PACKED LENGTH until it is fetched -
+    ; and again after a drop, out of the shadow - so `zkb != 0` below does
+    ; not mean "here" on one; OP_FETCHED does (SPEC.md 20.12.7.4.1). Without
+    ; this a drop of a part never fetched (a caller unwinding a failed fetch)
+    ; wrote OP_SPENT over it and freed a segment nobody owned
+    test byte [si+OP_R_FLAG], OP_FETCHED
+    jz .out
+%endif
     mov dx, [si+OP_R_ZKB]
     or dx, dx
     jz .out

@@ -51,7 +51,12 @@
 
 ; --- the parts (SPEC.md 106.5) --------------------------------------------------
 PXPART_HELP equ 0                   ; the keyboard card, apps/pixel/pxhelp.asm
-PX_NPARTS   equ 1
+PXPART_GIF  equ 1                   ; the GIF decoder, apps/pixel/pxgif.asm
+PXPART_PNG  equ 2                   ; the PNG decoder, apps/pixel/pxpng.asm
+PX_NPARTS   equ 3                   ; (a decoder part is never 0: [px_kheld]
+                                    ; 0 is "none held", SPEC.md 106.18)
+PXD_QUIET   equ 0xFE                ; a refusal already said (op_fetch's own
+                                    ; toast): px_refusal says nothing more
 
 ; --- the buttons: ONE record for the window (os88ui_btnclick finds a window's
 ; record by walking the package's list, so every control lives in it) ---------
@@ -1142,8 +1147,16 @@ px_about:
 
 ; --- W_ONRESIZE: the box changed under us. Nothing is kept across a paint, so
 ; there is nothing to re-derive; the full repaint that follows lays out anew
-; (the view too: px_layout recomputes it, and Fit follows the new canvas)
+; (the view too: px_layout recomputes it, and Fit follows the new canvas).
+; Every record is owed here all the same (speed review F3): a landing on a
+; display of another KIND at the same depth - a CGA's half-height pictures
+; against a Hercules' - must not leave the records describing the old layout
+; if a repaint ever does not follow
 px_onresize:
+    push ax
+    mov al, PX_R_ALL
+    call px_owe
+    pop ax
     ret
 
 ; --- W_ONTIMER: free memory, every PX_MEMT ticks ------------------------------------
@@ -1656,15 +1669,17 @@ px_pcall:
     mov [px_pfar + 2], es
     pop es
     inc word [px_pcalls]
+    mov byte [px_pfail], 0          ; from here an answer is the PART's
     call far [px_pfar]              ; DS = ours, CS = the part
     jmp short .out
 .badp:
     pop es
     mov ax, PXE_BADPART
-    stc
-    jmp short .out
+    jmp short .own
 .nopart:
     mov ax, PXE_PART
+.own:
+    mov byte [px_pfail], 1          ; ...and these are px_pcall's own
     stc
 .out:
     pop si
@@ -1720,6 +1735,93 @@ px_pfetch:
 ; px_pdrop - AL = a part: give its claim back. Preserves all
 px_pdrop:
     call op_drop
+    ret
+
+; px_wcall - THE WORKER'S far call (SPEC.md 106.18): vector BL of part AL,
+; which must be here - the UI task fetched it for HEAD and keeps it while a
+; decode runs - so nothing is fetched and op_seg is a lookup. Its own far
+; pointer, because the UI task may be in px_pcall (F1) at the same time.
+; out the vector's CF/AX, or CF = 1 AX = PXD_DATA when the part is not
+; here. BX, DX, SI preserved
+px_wcall:
+    push bx
+    push dx
+    push si
+    push es
+    mov dl, bl
+    call op_seg
+    or ax, ax
+    jz .no
+    mov es, ax
+    mov ax, cs
+    mov [es:PXP_PKG], ax            ; stamped before EVERY call (106.5)
+    mov bl, dl
+    xor bh, bh
+    shl bx, 1
+    mov ax, [es:PXP_VEC + bx]
+    mov [px_wfar], ax
+    mov [px_wfar + 2], es
+    pop es
+    call far [px_wfar]
+    jmp short .out
+.no:
+    pop es
+    mov ax, PXD_DATA
+    stc
+.out:
+    pop si
+    pop dx
+    pop bx
+    ret
+
+; px_fpart - AL = a PXF_*: AL = the decoder part that reads it, 0 none.
+; Preserves all but AL
+px_fpart:
+    cmp al, PXF_GIF
+    jne .p
+    mov al, PXPART_GIF
+    ret
+.p:
+    cmp al, PXF_PNG
+    jne .n
+    mov al, PXPART_PNG
+    ret
+.n:
+    xor al, al
+    ret
+
+; px_kneed - AL = the decoder part an open needs, 0 none: one decoder part
+; at a time (SPEC.md 106.18), so any OTHER held one is dropped before the
+; new one is fetched. UI task. Preserves all
+px_kneed:
+    push ax
+    mov ah, [px_kheld]
+    cmp ah, al
+    je .out
+    or ah, ah
+    jz .set
+    push ax
+    mov al, ah
+    call px_pdrop
+    pop ax
+.set:
+    mov [px_kheld], al
+.out:
+    pop ax
+    ret
+
+; px_kkeep - after a refusal or a cancel: the held decoder part stays only
+; while the picture shown is of its kind. Preserves all
+px_kkeep:
+    push ax
+    xor al, al
+    cmp byte [px_cur + PXR_HAVE], 0
+    je .k
+    mov al, [px_cur + PXR_FMT]
+    call px_fpart
+.k:
+    call px_kneed
+    pop ax
     ret
 
 ; =============================================================================
@@ -3453,6 +3555,14 @@ px_s_pcube: db 'Cube', 0
 px_s_pgrey: db 'Grey', 0
 px_c_stop:  db 'Stop', 0
 px_packnames: dw px_s_pknone, px_s_pkrle, px_s_pkrle8, px_s_pkrle4, px_s_pkbf
+              dw px_s_pklzw, px_s_pklzwi, px_s_pkdefl, px_s_pkdefli
+%if ($ - px_packnames) != 2 * PK_N
+  %error "px_packnames has a name per PK_*"
+%endif
+px_s_pklzw: db 'LZW', 0
+px_s_pklzwi: db 'LZW interlaced', 0 ; (fourteen: the Info value's cells)
+px_s_pkdefl: db 'Deflate', 0
+px_s_pkdefli: db 'Deflate, Adam7', 0
 px_s_pknone: db 'None', 0
 px_s_pkrle: db 'RLE', 0
 px_s_pkrle8: db 'RLE8', 0
@@ -3497,6 +3607,8 @@ px_s_r11:   db 'too big to unpack', 0
 ; --- the part table, and the standard's code after it (SPEC.md 20.12.3) -------
     OS88_PARTS_BEGIN PX_NPARTS
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 0 the keyboard card (106.5)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 1 GIF (106.18)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 2 PNG (106.18)
     OS88_PARTS_END
 
 ; =============================================================================
@@ -3931,6 +4043,15 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_bvcap, 2
     PXVAR px_bvy, 2                 ; ...and the next row
     PXVAR pxa_seg, 2                ; PIXEL.GFX's claim, or 0
+    ; the decoder parts (SPEC.md 106.18)
+    PXVAR px_k, PXK_SZ              ; THE CONTEXT, both vectors' DI
+    PXVAR px_kheld, 1               ; the decoder part held, 0 none
+    PXVAR px_pfail, 1               ; px_pcall's answer was its own
+    PXVAR px_wfar, 4                ; px_wcall's far vector
+    PXVAR px_ddpara, 2              ; the decoder scratch, paragraphs
+    PXVAR px_wo_dec, 2              ; ...its place in the work claim
+    PXVAR px_kbx, 2                 ; a service's BX and DX, banked across
+    PXVAR px_kdx, 2                 ; px_emit
 PX_BSSEND   equ px_w2 + PXV
 PX_BSS      equ PX_BSSEND - PXB
 

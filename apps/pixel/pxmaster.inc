@@ -45,16 +45,8 @@ PXR_SZ      equ 48
 PM_PAL      equ 0                   ; SPEC.md 106.8's three modes
 PM_CUBE     equ 1
 PM_GREY     equ 2
-RF_IDX      equ 0                   ; what a decoder hands the emitter
-RF_GREY     equ 1
-RF_RGB      equ 2
-PK_NONE     equ 0                   ; the Info panel's Packing
-PK_RLE      equ 1
-PK_RLE8     equ 2
-PK_RLE4     equ 3
-PK_BITF     equ 4
+; (RF_* and PK_* are apps/pixel/pxpart.inc's: a part hands them over too)
 
-PX_DIMMAX   equ 8192                ; refused above, before any arithmetic
 PX_RESKB    equ 8                   ; what the master leaves of the largest run
 
 ; =============================================================================
@@ -351,8 +343,13 @@ px_wkb:
     mov cl, 3
     shr ax, cl
     add dx, ax
-    mov [px_wo_lut], dx             ; THE TABLES: a KB, and the quantiser's
-    add dx, 1024 / 16 + 1 + QT_SIZE / 16    ; pages below the row
+    mov [px_wo_lut], dx             ; THE TABLES: a KB...
+    add dx, 1024 / 16 + 1
+    mov [px_wo_dec], dx             ; ...a decoder part's scratch (106.18)...
+    add dx, [px_ddpara]
+    jc .big
+    add dx, QT_SIZE / 16            ; ...and the quantiser's pages below the
+    jc .big                         ; row
     mov ax, dx
     add ax, 63
     mov cl, 6
@@ -567,8 +564,12 @@ px_emit:
 .sum:
     call px_accrow
     inc byte [px_rcnt]
+    mov al, [px_k + PXK_RBLK]       ; the rows a block sums: 2^s, or fewer
+    or al, al                       ; for an interlaced picture (106.18)
+    jnz .rb
     mov al, 1
     shl al, cl
+.rb:
     cmp [px_rcnt], al
     jb .done
     mov byte [px_rcnt], 0
@@ -757,7 +758,11 @@ px_accavg:
     push ds
     push es
     mov bl, cl
-    shl bl, 1                       ; BL = 2s
+    shl bl, 1                       ; BL = 2s, or 2s - 1 when a block is
+    cmp byte [px_k + PXK_RBLK], 0   ; half its rows (an interlaced picture,
+    je .sh                          ; SPEC.md 106.18)
+    dec bl
+.sh:
     call px_accseg                  ; ES = acc, CX = words
     push es
     pop ds                          ; DS:SI = acc

@@ -21,22 +21,8 @@
 ; and neither does this file: px_refusal (pxpump.inc) words the number.
 ; =============================================================================
 
-PXD_OK      equ 0                   ; the answers (pixelsim's PXD_*)
-PXD_HEAD    equ 1
-PXD_DIMS    equ 2
-PXD_DEPTH   equ 3
-PXD_PACK    equ 4
-PXD_TRUNC   equ 5
-PXD_DATA    equ 6
-PXD_MEM     equ 7
-PXD_READ    equ 8
-PXD_ORIENT  equ 9
-PXD_NOTYET  equ 10
-PXD_BIG     equ 11
-PXD_NOFILE  equ 12                  ; the resident's: not in this folder
-PXD_NOTPIC  equ 13                  ; neither its bytes nor its name are a
-                                    ; picture's
-PXD_NREASON equ 14
+; (the PXD_* answers are apps/pixel/pxpart.inc's: a part gives them too)
+
 
 DF_BMP      equ 0                   ; the row decoders
 DF_BMPRLE   equ 1
@@ -45,6 +31,7 @@ DF_TGA      equ 3
 DF_PNMA     equ 4                   ; P1-P3, text
 DF_PNMR     equ 5                   ; P4-P6, binary
 DF_PIX      equ 6
+DF_PART     equ 7                   ; a decoder PART (SPEC.md 106.18)
 
 ; =============================================================================
 ; px_hdrparse - the header of [px_cur]'s file, from the head. The format is
@@ -70,8 +57,18 @@ px_hdrparse:
     mov [px_bgr], al                ; R, G, B unless a reader says not
     mov [px_cur + PXR_PACK], al
     mov [px_cur + PXR_NPAL], ax
+    mov [px_ddpara], ax             ; no decoder scratch...
+    mov [px_k + PXK_RBLK], al       ; ...and every row of a block summed
+    mov al, [px_cur + PXR_FMT]
+    call px_fpart                   ; the decoder part this format needs, and
+    call px_kneed                   ; no other held (SPEC.md 106.18)
     mov es, [px_hseg]
     mov al, [px_cur + PXR_FMT]
+    mov bx, px_hpart
+    cmp al, PXF_GIF
+    je .go
+    cmp al, PXF_PNG
+    je .go
     mov bx, px_hbmp
     cmp al, PXF_BMP
     je .go
@@ -1261,7 +1258,95 @@ px_decode:
     jmp [px_dectab + bx]
 
 px_dectab:  dw px_dbmp, px_dbmprle, px_dpcx, px_dtga, px_dpnma, px_dpnmr
-            dw px_dpix
+            dw px_dpix, px_dpart
+
+; =============================================================================
+; A DECODER PART (SPEC.md 106.18): its HEAD on the UI task, its DECODE here
+; =============================================================================
+
+; px_hpart - the header, by the part [px_kheld] names: the head through the
+; context, the answers into the record. CF = 1 AX = a PXD_*, or PXD_QUIET
+; when the part could not be fetched (op_fetch has said why)
+px_hpart:
+    mov ax, [px_hseg]
+    mov [px_k + PXK_HSEG], ax
+    mov ax, [px_hlen]
+    mov [px_k + PXK_HLEN], ax
+    mov al, [px_kheld]
+    mov bl, PXV_HEAD
+    mov di, px_k
+    call px_pcall
+    jnc .ok
+    cmp byte [px_pfail], 0          ; the part's own answer: a PXD_*
+    je .no
+    cmp ax, PXE_PART
+    je .quiet
+    mov si, px_s_badpart            ; fetched, and not a part of this ABI
+    call px_toast
+.quiet:
+    mov ax, PXD_QUIET
+.no:
+    stc
+    ret
+.ok:
+    mov ax, [px_k + PXK_SW]
+    mov bx, [px_k + PXK_SH]
+    call px_dims
+    mov al, [px_k + PXK_RF]
+    mov [px_cur + PXR_RF], al
+    mov al, [px_k + PXK_BITS]
+    mov [px_cur + PXR_BITS], al
+    mov al, [px_k + PXK_PACK]
+    mov [px_cur + PXR_PACK], al
+    mov ax, [px_k + PXK_NPAL]
+    mov [px_cur + PXR_NPAL], ax
+    mov ax, [px_k + PXK_DPARA]
+    mov [px_ddpara], ax
+    mov byte [px_dfmt], DF_PART
+    mov byte [px_dtop], 1           ; (an interlaced picture says which of its
+    xor ax, ax                      ; rows are complete itself)
+    mov [px_doff], ax
+    mov [px_doff + 2], ax
+    clc
+    ret
+
+; px_dpart - the worker: the context's decode half, the part's DECODE, and
+; what the stream told it back into the record. out CF/AX as any decoder's
+px_dpart:
+    mov al, [px_cur + PXR_SCL]
+    mov [px_k + PXK_SCL], al
+    mov ax, [px_cur + PXR_MW]
+    mov [px_k + PXK_MW], ax
+    mov ax, [px_cur + PXR_MH]
+    mov [px_k + PXK_MH], ax
+    mov ax, [px_wseg]
+    mov [px_k + PXK_RSEG], ax
+    add ax, [px_wo_dec]
+    mov [px_k + PXK_DSEG], ax
+    mov word [px_k + PXK_SPAL], px_spal
+    mov byte [px_k + PXK_RBLK], 0
+    push ds
+    pop es
+    mov si, px_kst
+    mov di, px_k + PXK_SVC
+    mov cx, 5
+    cld
+    rep movsw
+    mov al, [px_kheld]
+    mov bl, PXV_DECODE
+    mov di, px_k
+    call px_wcall
+    pushf
+    push ax
+    mov al, [px_k + PXK_PACK]
+    mov [px_cur + PXR_PACK], al
+    mov al, [px_k + PXK_BITS]
+    mov [px_cur + PXR_BITS], al
+    mov ax, [px_k + PXK_NPAL]
+    mov [px_cur + PXR_NPAL], ax
+    pop ax
+    popf
+    ret
 
 ; px_rowy - AX = i, the i-th row the file holds: AX = its y, top-down
 ; ([px_dtop]) or bottom-up. Preserves all but AX

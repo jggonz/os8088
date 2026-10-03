@@ -21,7 +21,6 @@ PX_RINGKB   equ 17                  ; the ring the SCALE is decided against:
                                     ; changes which scale a picture gets
 PX_HEADMAX  equ 2048                ; the bytes a header may be parsed from
 PX_FLATWIN  equ 32768               ; an in-memory file, as the worker sees it
-PXD_ABORT   equ 0xFF                ; not a refusal: the user said stop
 PXS_DEFER   equ px_pscr + 511       ; byte: px_pumpfill has deferred a fill
                                     ; for the first paint (the plan search's
                                     ; scratch is done with before any row)
@@ -183,7 +182,12 @@ px_pumpfill:
     mov ax, [px_ypaint]             ; is a second and more on an XT. So until
     or ax, [px_ypbot]               ; something is painted the ring is filled
     jnz .painted                    ; only when the worker has run DRY (its
-    push bx                         ; next slot empty), not ahead of it...
+    cmp word [px_rdone], 0          ; next slot empty), not ahead of it -
+    jne .wait                       ; unless rows are decoded and NONE is
+    cmp word [px_srcdone], 0        ; showable yet (an interlaced picture's
+    jne .painted                    ; early passes, SPEC.md 106.18): then no
+.wait:                              ; paint is coming to wait for...
+    push bx
     mov bl, [px_wslot]
     xor bh, bh
     cmp byte [px_sfull + bx], 0
@@ -530,6 +534,248 @@ px_rnext:
     pop ax
     ret
 
+; =============================================================================
+; THE SERVICES a decoder PART far-calls on the worker (SPEC.md 106.18). Each
+; sets DS to the package itself - a part calls `call far` with its own
+; registers - and answers with retf. Every one checks what it is handed and
+; does nothing with what is out of range rather than trust a part
+; =============================================================================
+px_kst:     dw px_ks_next, px_ks_emit, px_ks_scat, px_ks_tick, px_ks_pal
+
+; K_NEXT - out CF = 0: ES:SI the rest of the worker's window or the next one,
+; CX its bytes (> 0); CF = 1 at the end, a cancel or a read error. Keeps all
+; else
+px_ks_next:
+    push ds
+    push cs
+    pop ds
+    push ax
+    push si
+    mov si, [px_rpos]
+    cmp si, [px_rend]
+    jb .have
+    call px_rnext                   ; CF at the end
+    jc .end
+    mov si, [px_rpos]
+.have:
+    mov ax, [px_rend]
+    mov cx, ax
+    sub cx, si
+    mov [px_rpos], ax               ; ...all of it the part's now
+    mov es, [px_rsegc]
+    add sp, 2                       ; (the SI it came with: not wanted)
+    pop ax
+    pop ds
+    clc
+    retf
+.end:
+    pop si
+    pop ax
+    pop ds
+    stc
+    retf
+
+; K_EMIT - AX = a source row in the row buffer: px_emit; then BX (not FFFFh)
+; the master rows complete from the top, DX (not FFFFh) the progress.
+; out CF = 1 AX = PXD_ABORT or a refusal. Keeps all but AX
+px_ks_emit:
+    push ds
+    push cs
+    pop ds
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+    call px_kfirst                  ; the tables, if the part did not ask
+    jc .out
+    mov [px_kbx], bx
+    mov [px_kdx], dx
+    call px_emit
+    jc .out
+    call px_kfix
+    clc
+.out:
+    pop bp
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ds
+    retf
+
+; K_SCAT - at 1/1: the row buffer's pixels at columns CL + k CH into master
+; row AX, quantised whole into the cube first on a truecolour picture (the
+; dither is a pixel's place's, so a pass's pixels quantise as the whole row
+; would); BX and DX as K_EMIT's. CF/AX as K_EMIT's
+px_ks_scat:
+    push ds
+    push cs
+    pop ds
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+    call px_kfirst
+    jc .out
+    mov [px_kbx], bx
+    mov [px_kdx], dx
+    cmp byte [px_cur + PXR_SCL], 0
+    jne .prog
+    cmp ax, [px_cur + PXR_MH]
+    jae .prog
+    or ch, ch
+    jz .prog
+    cmp ch, 8
+    ja .prog
+    mov bl, cl
+    xor bh, bh
+    cmp bx, [px_cur + PXR_MW]
+    jae .prog
+    mov [px_qrow], ax
+    push ax
+    push cx
+    cmp byte [px_tquant], 0
+    je .nq
+    mov es, [px_wbase]              ; the cube, in place: each index lands
+    mov di, QT_SIZE                 ; at or left of the triple it is read
+    call px_quant                   ; from
+.nq:
+    pop cx
+    pop ax
+    call px_mrow                    ; ES:DI = the master row
+    mov bl, ch
+    xor bh, bh                      ; BX = the step
+    xor ch, ch                      ; CX = the first column
+    add di, cx
+    mov si, cx
+    mov dx, [px_cur + PXR_MW]
+    push ds
+    mov ds, [px_wseg]
+.c:
+    mov al, [si]
+    mov [es:di], al
+    add di, bx
+    add si, bx
+    cmp si, dx
+    jb .c
+    pop ds
+.prog:
+    call px_kfix
+    call px_progress                ; the cancel, the liveness, the wake
+.out:
+    pop bp
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ds
+    retf
+
+; K_TICK - AX = the progress, without a row. CF/AX as K_EMIT's
+px_ks_tick:
+    push ds
+    push cs
+    pop ds
+    mov [px_srcdone], ax
+    call px_progress
+    pop ds
+    retf
+
+; K_PAL - the palette is known (SPEC.md 106.18). CF/AX as px_tables'
+px_ks_pal:
+    push ds
+    push cs
+    pop ds
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+    call px_kpal1
+    pop bp
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ds
+    retf
+
+; px_kpal1 - [px_spal] is the palette of a PAL picture now, and the display
+; tables are built for it - what px_wjob does before a resident format's
+; first row. out CF = 1 AX = PXD_ABORT on a cancel
+px_kpal1:
+    mov ax, [px_k + PXK_NPAL]       ; the entries the STREAM gave the part
+    or ax, ax                       ; (a PNG's PLTE, a GIF's local table):
+    jz .n                           ; px_tables searches that many plans and
+    mov [px_cur + PXR_NPAL], ax     ; takes the rest as black
+.n:
+    cmp byte [px_cur + PXR_PMODE], PM_PAL
+    jne .t
+    push ds
+    pop es
+    mov si, px_spal
+    mov di, px_pal
+    mov cx, 768 / 2
+    cld
+    rep movsw
+.t:
+    call px_tables
+    jc .out
+    mov byte [px_tabok], 1
+    call px_wake
+    clc
+.out:
+    ret
+
+; px_kfirst - the tables are built, or K_PAL's work is done now. out CF = 1
+; AX = why not; else AX kept
+px_kfirst:
+    cmp byte [px_tabok], 0
+    jne .ok
+    push ax
+    call px_kpal1
+    jc .no
+    pop ax
+.ok:
+    clc
+    ret
+.no:
+    add sp, 2
+    ret
+
+; px_kfix - a service's BX and DX, banked: the rows complete (at most the
+; master's) and the progress, where they are not FFFFh. Preserves all but AX
+px_kfix:
+    mov ax, [px_kbx]
+    cmp ax, 0xFFFF
+    je .d
+    cmp ax, [px_cur + PXR_MH]
+    jbe .r
+    mov ax, [px_cur + PXR_MH]
+.r:
+    mov [px_rdone], ax
+.d:
+    mov ax, [px_kdx]
+    cmp ax, 0xFFFF
+    je .o
+    mov [px_srcdone], ax
+.o:
+    ret
+
 ; px_wake - post a wake for our window: worker-safe, at most one queued
 ; (SPEC.md 74.1). Preserves all
 px_wake:
@@ -601,12 +847,18 @@ px_worker:
 ; PXD_ABORT
 px_wjob:
     mov byte [px_wstage], 0
+    cmp byte [px_job], JOB_DECODE   ; a decoder PART knows its palette only
+    jne .tab                        ; in the stream: it asks for the tables
+    cmp byte [px_dfmt], DF_PART     ; itself (K_PAL, SPEC.md 106.18)
+    je .dec
+.tab:
     call px_tables                  ; pxview.inc: the palette's display tables
     jc .fail
     mov byte [px_tabok], 1
     call px_wake                    ; ...so the rows can be painted as they come
     cmp byte [px_job], JOB_DECODE
     jne .hist
+.dec:
     mov byte [px_wstage], 1
     xor ax, ax
     mov [px_srcdone], ax
@@ -619,9 +871,8 @@ px_wjob:
     mov byte [px_wstage], 2
     call px_hcount                  ; pxview.inc
     jc .fail
-    mov byte [px_hok], 1
-    xor al, al
-    ret
+    xor al, al                      ; ([px_hok] is the UI task's to set,
+    ret                             ; after px_hstats has folded the counts)
 .fail:
     cmp byte [px_abort], 0          ; what actually happened, not what the
     jne .ab                         ; decoder saw
@@ -709,9 +960,9 @@ px_open:
     mov [px_rfmt], al
     call px_hdrparse                ; pxsimple.inc: CF AX = a PXD_*
     jc .refuse
-    call px_claims                  ; the scale, the master, ring and work
+    call px_headfree                ; the head is parsed: given back before
+    call px_claims                  ; the claims (SPEC.md 106.18)
     jc .refuse
-    call px_headfree
     call px_setpal
     inc byte [px_cur + PXR_SERIAL]
     call px_viewnew                 ; pxview.inc: Fit, centred
@@ -786,6 +1037,7 @@ px_restore:
     rep movsb
     mov byte [px_prev + PXR_HAVE], 0
     mov word [px_prev + PXR_MSEG], 0
+    call px_kkeep                   ; a decoder part of another kind goes
     cmp byte [px_tabdirty], 0
     je .out
     mov byte [px_tabdirty], 0
@@ -894,8 +1146,9 @@ px_finish:
     call px_freeprev                ; THE PICTURE: the old one is let go
     mov byte [px_cur + PXR_HAVE], 1
     mov byte [px_tabdirty], 0
-    call px_hstats                  ; the Histogram's numbers from its counts
-    call px_compose
+    call px_hstats                  ; the Histogram's numbers from its counts,
+    mov byte [px_hok], 1            ; and only then counted (speed review F2:
+    call px_compose                 ; a sync between the two drew byte planes)
     call px_flags
     call px_progpaint               ; the last rows, onto what is there: the
     mov al, PX_R_TB | PX_R_PANELS | PX_R_FS | PX_R_STATUS
@@ -925,6 +1178,8 @@ px_finish:
     call px_regdraw
     jmp short .out
 .tables:
+    call px_hstats                  ; a restore's counts folded too - it never
+    mov byte [px_hok], 1            ; was, and the graph drew byte planes
     mov al, PX_R_CANVAS | PX_R_PANELS
     call px_regdraw
 .out:

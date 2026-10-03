@@ -43,7 +43,8 @@ RF_IDX, RF_GREY, RF_RGB = 0, 1, 2
 # --- palette modes ------------------------------------------------------------
 PM_PAL, PM_CUBE, PM_GREY = 0, 1, 2
 # --- packings, for the Info panel ---------------------------------------------
-PK_NONE, PK_RLE, PK_RLE8, PK_RLE4, PK_BITF = range(5)
+PK_NONE, PK_RLE, PK_RLE8, PK_RLE4, PK_BITF, PK_LZW, PK_LZWI, PK_DEFL, \
+    PK_DEFLI = range(9)
 
 # os8088's sixteen (apps/os88api.inc, apps/os88img.inc's img_pal8088)
 EGA16 = [
@@ -169,6 +170,9 @@ class Pic:
         self.pack = PK_NONE
         self.bits = 0
         self.rows = []          # (y, bytes) in emission order
+        self.npal = 0
+        self.par = None         # an INTERLACED picture: below 1/1 only the
+                                # rows of this parity are summed (106.18)
 
 
 # =============================================================================
@@ -711,6 +715,595 @@ def pix_rows(p, rd):
 
 
 # =============================================================================
+# GIF (SPEC.md 106.18): the logical screen is the picture, the FIRST image is
+# placed in it, and the rest of the screen is the background index
+# =============================================================================
+BG = 85                         # the view background a transparent pixel
+                                # shows: the canvas's own dark grey
+
+
+def blend(a, c):
+    """c over the view background at alpha a (0..255), SPEC.md 106.18."""
+    t = a * c + (255 - a) * BG + 128
+    return (t + (t >> 8)) >> 8
+
+
+def gif_header(head, fsz):
+    if len(head) < 13:
+        raise Refused(PXD_HEAD)
+    w, h = u16(head, 6), u16(head, 8)
+    if not (1 <= w <= DIM_MAX and 1 <= h <= DIM_MAX):
+        raise Refused(PXD_DIMS)
+    p = Pic()
+    p.fmt, p.w, p.h, p.rf, p.pack = "GIF", w, h, RF_IDX, PK_LZW
+    pk = head[10]
+    p.bits = (pk & 7) + 1 if pk & 0x80 else 8
+    p.npal = (2 << (pk & 7)) if pk & 0x80 else 0
+    return p
+
+
+GIF_START = (0, 4, 2, 1)
+GIF_STEP = (8, 8, 4, 2)
+
+
+def gif_frame_rows(fh, ilace):
+    """The frame's rows in the order the stream carries them."""
+    if not ilace:
+        return list(range(fh))
+    out = []
+    for k in range(4):
+        out += list(range(GIF_START[k], fh, GIF_STEP[k]))
+    return out
+
+
+def lzw_decode(flat, mincode, run):
+    """os88lzw.inc in Python: GIF's LZW over the flat code bytes. run(bytes)
+    answers True to stop. 'EOI', 'END' (the input ran out) or 'STOP'; a code
+    the table never built is PXD_DATA."""
+    if not 2 <= mincode <= 8:
+        raise Refused(PXD_DATA)
+    nbits = 8 * len(flat)
+    pos = 0
+    clr = 1 << mincode
+    eoi = clr + 1
+    prefix = [0] * 4096
+    suffix = [0] * 4096
+    free = cs = 0
+    old = None
+    first = 0
+
+    def reset():
+        return clr + 2, mincode + 1, None
+    free, cs, old = reset()
+    while True:
+        if pos + cs > nbits:
+            return "END"
+        o = pos >> 3
+        v = int.from_bytes(bytes(flat[o:o + 3]) + b"\0\0\0", "little")
+        c = (v >> (pos & 7)) & ((1 << cs) - 1)
+        pos += cs
+        if c == clr:
+            free, cs, old = reset()
+            continue
+        if c == eoi:
+            return "EOI"
+        if old is None:
+            if c >= clr:
+                raise Refused(PXD_DATA)
+            old = first = c
+            if run(bytes((c,))):
+                return "STOP"
+            continue
+        if c > free:
+            raise Refused(PXD_DATA)
+        out = []
+        k = c
+        if c == free:
+            out.append(first)
+            k = old
+        while k >= clr:
+            out.append(suffix[k])
+            k = prefix[k]
+        out.append(k)
+        first = k
+        out.reverse()
+        if run(bytes(out)):
+            return "STOP"
+        if free < 4096 and old < free:
+            prefix[free] = old
+            suffix[free] = first
+            free += 1
+            if cs < 12 and free >= (1 << cs):
+                cs += 1
+        old = c
+
+
+def gif_rows(p, rd):
+    hdr = rd.take(13)
+    pk = hdr[10]
+    gpal = rd.take(3 * (2 << (pk & 7))) if pk & 0x80 else None
+    trans = None
+    while True:                         # the blocks before the first image
+        b = rd.byte()
+        if b == 0x2C:
+            break
+        if b != 0x21:
+            raise Refused(PXD_DATA)
+        label = rd.byte()
+        while True:
+            n = rd.byte()
+            if n == 0:
+                break
+            blk = rd.take(n)
+            if label == 0xF9 and n >= 4:
+                trans = blk[3] if blk[0] & 1 else None
+    d = rd.take(9)
+    left, top, fw, fh, fpk = u16(d, 0), u16(d, 2), u16(d, 4), u16(d, 6), d[8]
+    if fw == 0 or fh == 0:
+        raise Refused(PXD_DATA)
+    if fpk & 0x80:
+        n = 2 << (fpk & 7)
+        raw = rd.take(3 * n)
+        p.bits = (fpk & 7) + 1
+    elif gpal is not None:
+        raw = gpal
+        n = len(raw) // 3
+    else:
+        raise Refused(PXD_DATA)
+    p.npal = n
+    pal = [tuple(raw[3 * i:3 * i + 3]) for i in range(n)]
+    pal += [(0, 0, 0)] * (256 - n)
+    if trans is not None:
+        pal[trans] = (BG, BG, BG)
+    p.pal = pal
+    bgi = trans if trans is not None else hdr[11]
+    ilace = bool(fpk & 0x40)
+    if ilace:
+        p.pack = PK_LZWI
+        p.par = (top + 1) & 1
+    mincode = rd.byte()
+    flat = bytearray()                  # the sub-blocks, joined: the code
+    while True:                         # stream ends at the terminator or the
+        n = rd.byte_or_end()            # file's end, and is never an error
+        if n <= 0:
+            break
+        got = rd.d[rd.p:rd.p + n]
+        rd.p += len(got)
+        flat += got
+        if len(got) < n:
+            break
+    w, h = p.w, p.h
+    order = gif_frame_rows(fh, ilace)
+    rows = {}
+    st = {"i": 0, "col": 0, "row": bytearray([bgi]) * w}
+
+    def place(s):
+        k = 0
+        while k < len(s):
+            take = min(fw - st["col"], len(s) - k)
+            x = left + st["col"]
+            if x < w:
+                keep = min(take, w - x)
+                st["row"][x:x + keep] = s[k:k + keep]
+            st["col"] += take
+            k += take
+            if st["col"] == fw:
+                y = top + order[st["i"]]
+                if y < h:
+                    rows[y] = st["row"]
+                st["i"] += 1
+                st["col"] = 0
+                st["row"] = bytearray([bgi]) * w
+                if st["i"] == fh:
+                    return True
+        return False
+    end = lzw_decode(flat, mincode, place)
+    if end != "STOP":
+        raise Refused(PXD_TRUNC)
+    out = []
+    for y in range(min(top, h)):
+        out.append((y, bytes([bgi]) * w))
+    for fy in order:
+        y = top + fy
+        if y < h:
+            out.append((y, bytes(rows[y])))
+    for y in range(top + fh, h):
+        out.append((y, bytes([bgi]) * w))
+    p.rows = out
+
+
+# =============================================================================
+# PNG (SPEC.md 106.18): chunks, zlib, inflate, the five filters, Adam7
+# =============================================================================
+PNG_DEPTHS = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8), 4: (8, 16),
+              6: (8, 16)}
+PNG_CHAN = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+PNG_ROWMAX = 32760              # two rows and their guards in one segment
+ADAM7 = ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
+         (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))      # x0, y0, dx, dy
+
+
+def be32(b, o):
+    return (b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]
+
+
+def png_header(head, fsz):
+    if len(head) < 33 or head[8:16] != b"\0\0\0\x0dIHDR":
+        raise Refused(PXD_HEAD)
+    w, h = be32(head, 16), be32(head, 20)
+    if not (1 <= w <= DIM_MAX and 1 <= h <= DIM_MAX):
+        raise Refused(PXD_DIMS)
+    depth, ct, comp, filt, il = head[24:29]
+    if ct not in PNG_DEPTHS or depth not in PNG_DEPTHS[ct]:
+        raise Refused(PXD_DEPTH)
+    if comp or filt or il > 1:
+        raise Refused(PXD_PACK)
+    rowb = (w * depth * PNG_CHAN[ct] + 7) // 8
+    if rowb > PNG_ROWMAX:
+        raise Refused(PXD_BIG)
+    p = Pic()
+    p.fmt, p.w, p.h = "PNG", w, h
+    p.rf = RF_IDX if ct == 3 else (RF_GREY if ct in (0, 4) else RF_RGB)
+    p.bits = depth * PNG_CHAN[ct]
+    p.pack = PK_DEFLI if il else PK_DEFL
+    p.ct, p.depth, p.il = ct, depth, il
+    return p
+
+
+class IdatBits:
+    """The IDAT stream, LSB first. A read past its end is PXD_TRUNC: the
+    guest reads zeros there, and says 'cut short' at the first use of one."""
+
+    def __init__(self, rd):
+        self.rd = rd
+        self.left = 0
+        self.end = False
+        self.bb = 0
+        self.bn = 0
+
+    def _byte(self):
+        rd = self.rd
+        while self.left == 0:
+            if self.end:
+                return -1
+            if self.started:            # the CRC, then the next chunk
+                if rd.p + 4 > len(rd.d):
+                    self.end = True
+                    return -1
+                rd.p += 4
+                if rd.p + 8 > len(rd.d):
+                    self.end = True
+                    return -1
+                ln = be32(rd.d, rd.p)
+                if rd.d[rd.p + 4:rd.p + 8] != b"IDAT" or ln >= 0x80000000:
+                    self.end = True
+                    return -1
+                rd.p += 8
+                self.left = ln
+            self.started = True
+        if rd.p >= len(rd.d):
+            self.end = True
+            self.left = 0
+            return -1
+        self.left -= 1
+        v = rd.d[rd.p]
+        rd.p += 1
+        return v
+
+    def bits(self, n):
+        while self.bn < n:
+            b = self._byte()
+            if b < 0:
+                raise Refused(PXD_TRUNC)
+            self.bb |= b << self.bn
+            self.bn += 8
+        v = self.bb & ((1 << n) - 1)
+        self.bb >>= n
+        self.bn -= n
+        return v
+
+    def align(self):
+        k = self.bn & 7
+        self.bb >>= k
+        self.bn -= k
+
+
+LBASE = (3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51,
+         59, 67, 83, 99, 115, 131, 163, 195, 227, 258)
+LEXT = (0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4,
+        5, 5, 5, 5, 0)
+DBASE = (1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385,
+         513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385,
+         24577)
+DEXT = (0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10,
+        10, 11, 11, 12, 12, 13, 13)
+CLORD = (16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15)
+
+
+def huff(lens, complete):
+    """Canonical code from lengths: (counts, symbols), or PXD_DATA when the
+    set is over-subscribed, or incomplete where that is not allowed - an
+    incomplete set is allowed only empty or as one code of length 1, and
+    never for the code-length code (zlib's inftrees rule)."""
+    cnt = [0] * 16
+    for v in lens:
+        cnt[v] += 1
+    cnt[0] = 0
+    left = 1
+    for n in range(1, 16):
+        left = 2 * left - cnt[n]
+        if left < 0:
+            raise Refused(PXD_DATA)
+    used = sum(cnt)
+    if left > 0 and (complete or not (used == 0 or (used == 1 and cnt[1] == 1))):
+        raise Refused(PXD_DATA)
+    syms = [s for n in range(1, 16) for s in range(len(lens)) if lens[s] == n]
+    return cnt, syms
+
+
+def hdecode(br, h):
+    cnt, syms = h
+    code = first = index = 0
+    for n in range(1, 16):
+        code |= br.bits(1)
+        c = cnt[n]
+        if code - first < c:
+            return syms[index + code - first]
+        index += c
+        first = (first + c) << 1
+        code <<= 1
+    raise Refused(PXD_DATA)
+
+
+FIXED_L = None
+
+
+def inflate(br, need):
+    """Up to `need` bytes of the stream: decoding stops after the symbol
+    that reaches it, exactly as the guest's extraction does."""
+    global FIXED_L
+    cmf, flg = br.bits(8), br.bits(8)
+    if (cmf & 15) != 8 or (cmf >> 4) > 7 or ((cmf << 8) | flg) % 31 or flg & 32:
+        raise Refused(PXD_DATA)
+    out = bytearray()
+    while True:
+        final = br.bits(1)
+        bt = br.bits(2)
+        if bt == 0:
+            br.align()
+            ln = br.bits(16)
+            nl = br.bits(16)
+            if ln != nl ^ 0xFFFF:
+                raise Refused(PXD_DATA)
+            while ln:
+                out.append(br.bits(8))
+                ln -= 1
+                if len(out) >= need:
+                    return out
+        elif bt == 3:
+            raise Refused(PXD_DATA)
+        else:
+            if bt == 1:
+                if FIXED_L is None:
+                    FIXED_L = (huff([8] * 144 + [9] * 112 + [7] * 24 + [8] * 8,
+                                    False), huff([5] * 32, False))
+                lh, dh = FIXED_L
+            else:
+                nlen = br.bits(5) + 257
+                ndist = br.bits(5) + 1
+                ncode = br.bits(4) + 4
+                if nlen > 286 or ndist > 30:
+                    raise Refused(PXD_DATA)
+                cl = [0] * 19
+                for i in range(ncode):
+                    cl[CLORD[i]] = br.bits(3)
+                ch = huff(cl, True)
+                lens = []
+                while len(lens) < nlen + ndist:
+                    s = hdecode(br, ch)
+                    if s < 16:
+                        lens.append(s)
+                        continue
+                    if s == 16:
+                        if not lens:
+                            raise Refused(PXD_DATA)
+                        v, r = lens[-1], 3 + br.bits(2)
+                    elif s == 17:
+                        v, r = 0, 3 + br.bits(3)
+                    else:
+                        v, r = 0, 11 + br.bits(7)
+                    if len(lens) + r > nlen + ndist:
+                        raise Refused(PXD_DATA)
+                    lens += [v] * r
+                if lens[256] == 0:
+                    raise Refused(PXD_DATA)
+                lh = huff(lens[:nlen], False)
+                dh = huff(lens[nlen:], False)
+            while True:
+                s = hdecode(br, lh)
+                if s < 256:
+                    out.append(s)
+                    if len(out) >= need:
+                        return out
+                    continue
+                if s == 256:
+                    break
+                s -= 257
+                if s >= 29:
+                    raise Refused(PXD_DATA)
+                ln = LBASE[s] + br.bits(LEXT[s])
+                d = hdecode(br, dh)
+                if d >= 30:
+                    raise Refused(PXD_DATA)
+                dist = DBASE[d] + br.bits(DEXT[d])
+                if dist > len(out):
+                    raise Refused(PXD_DATA)
+                for _ in range(ln):
+                    out.append(out[-dist])
+                if len(out) >= need:
+                    return out
+        if final:
+            raise Refused(PXD_TRUNC)    # the stream ended before the rows
+
+
+def paeth(a, b, c):
+    p = a + b - c
+    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+    if pa <= pb and pa <= pc:
+        return a
+    return b if pb <= pc else c
+
+
+def unfilter(ft, cur, prev, bpp):
+    n = len(cur)
+    if ft == 0:
+        return
+    for i in range(n):
+        a = cur[i - bpp] if i >= bpp else 0
+        b = prev[i]
+        c = prev[i - bpp] if i >= bpp else 0
+        if ft == 1:
+            v = a
+        elif ft == 2:
+            v = b
+        elif ft == 3:
+            v = (a + b) >> 1
+        elif ft == 4:
+            v = paeth(a, b, c)
+        else:
+            raise Refused(PXD_DATA)
+        cur[i] = (cur[i] + v) & 255
+
+
+def png_pixels(p, raw, n):
+    """n pixels of an unfiltered scanline, in the emitter's row format."""
+    ct, d = p.ct, p.depth
+    if ct == 3 or (ct == 0 and d < 8):
+        vals = unpack_bits(raw, n, d) if d < 8 else list(raw[:n])
+        if ct == 3:
+            return bytes(vals)
+        scale = 255 // ((1 << d) - 1)
+        return bytes(BG if v == p.tgrey else v * scale for v in vals)
+    out = bytearray()
+    if ct == 0:
+        for i in range(n):
+            if d == 16:
+                v = (raw[2 * i] << 8) | raw[2 * i + 1]
+                out.append(BG if v == p.tgrey else raw[2 * i])
+            else:
+                out.append(BG if raw[i] == p.tgrey else raw[i])
+    elif ct == 4:
+        st = 2 if d == 8 else 4
+        for i in range(n):
+            g, a = raw[st * i], raw[st * i + st // 2]
+            out.append(blend(a, g))
+    elif ct == 2:
+        st = 3 if d == 8 else 6
+        for i in range(n):
+            px = raw[st * i:st * i + st]
+            if d == 16:
+                key = ((px[0] << 8) | px[1], (px[2] << 8) | px[3],
+                       (px[4] << 8) | px[5])
+                rgb = (px[0], px[2], px[4])
+            else:
+                key = rgb = (px[0], px[1], px[2])
+            out += bytes((BG, BG, BG)) if key == p.trgb else bytes(rgb)
+    else:
+        st = 4 if d == 8 else 8
+        h = st // 4
+        for i in range(n):
+            px = raw[st * i:st * i + st]
+            a = px[3 * h]
+            out += bytes((blend(a, px[0]), blend(a, px[h]), blend(a, px[2 * h])))
+    return bytes(out)
+
+
+def unpack_bits(raw, n, d):
+    out = []
+    for i in range(n):
+        bit = i * d
+        out.append((raw[bit >> 3] >> (8 - d - (bit & 7))) & ((1 << d) - 1))
+    return out
+
+
+def png_rows(p, rd):
+    rd.skip_to(8)
+    pal = None
+    trns = None
+    while True:                         # the chunks before the first IDAT
+        hd = rd.take(8)
+        ln, typ = be32(hd, 0), bytes(hd[4:8])
+        if ln >= 0x80000000:
+            raise Refused(PXD_DATA)
+        if typ == b"IDAT":
+            break
+        if typ == b"IEND":
+            raise Refused(PXD_DATA)
+        if typ == b"PLTE" and p.ct == 3:
+            if ln == 0 or ln % 3 or ln > 768:
+                raise Refused(PXD_DATA)
+            pal = rd.take(ln)
+            rd.take(4)
+        elif typ == b"tRNS" and ln <= 256:
+            trns = rd.take(ln)
+            rd.take(4)
+        else:
+            rd.take(ln)
+            rd.take(4)
+    p.tgrey = -1
+    p.trgb = None
+    if p.ct == 3:
+        if pal is None:
+            raise Refused(PXD_DATA)
+        n = len(pal) // 3
+        p.npal = n
+        pl = [tuple(pal[3 * i:3 * i + 3]) for i in range(n)]
+        if trns is not None:
+            for i in range(min(n, len(trns))):
+                pl[i] = tuple(blend(trns[i], c) for c in pl[i])
+        p.pal = pl + [(0, 0, 0)] * (256 - n)
+    elif trns is not None and p.ct == 0 and len(trns) == 2:
+        p.tgrey = (trns[0] << 8) | trns[1]
+    elif trns is not None and p.ct == 2 and len(trns) == 6:
+        p.trgb = tuple((trns[2 * k] << 8) | trns[2 * k + 1] for k in range(3))
+    br = IdatBits(rd)
+    br.left = ln
+    br.started = True
+    w, h, ch = p.w, p.h, PNG_CHAN[p.ct]
+    bpp = max(1, p.depth * ch // 8)
+    passes = ADAM7 if p.il else ((0, 0, 1, 1),)
+    plan = []
+    total = 0
+    for x0, y0, dx, dy in passes:
+        pw = (w - x0 + dx - 1) // dx if w > x0 else 0
+        ph = (h - y0 + dy - 1) // dy if h > y0 else 0
+        if pw and ph:
+            rb = (pw * p.depth * ch + 7) // 8
+            plan.append((x0, y0, dx, dy, pw, ph, rb))
+            total += ph * (rb + 1)
+    data = inflate(br, total)
+    nch = 3 if p.rf == RF_RGB else 1
+    img = [bytearray(w * nch) for _ in range(h)]
+    o = 0
+    for x0, y0, dx, dy, pw, ph, rb in plan:
+        prev = bytearray(rb)
+        for j in range(ph):
+            ft = data[o]
+            cur = bytearray(data[o + 1:o + 1 + rb])
+            o += rb + 1
+            unfilter(ft, cur, prev, bpp)
+            px = png_pixels(p, cur, pw)
+            y = y0 + j * dy
+            for k in range(pw):
+                x = x0 + k * dx
+                img[y][x * nch:(x + 1) * nch] = px[k * nch:(k + 1) * nch]
+            prev = cur
+    if p.il:
+        p.par = 1
+    p.rows = [(y, bytes(img[y])) for y in range(h)]
+
+
+# =============================================================================
 # decode: a file's bytes -> a Pic with its rows, or Refused
 # =============================================================================
 def decode(data, ext=""):
@@ -734,6 +1327,12 @@ def decode(data, ext=""):
     elif fmt == "PIX":
         p = pix_header(head, fsz)
         rows = pix_rows
+    elif fmt == "GIF":
+        p = gif_header(head, fsz)
+        rows = gif_rows
+    elif fmt == "PNG":
+        p = png_header(head, fsz)
+        rows = png_rows
     elif fmt == "":
         raise Refused(PXD_NOTPIC)
     else:
@@ -822,9 +1421,14 @@ def emit(p, s, pal_out=None):
     pal = p.pal + [(0, 0, 0)] * (256 - len(p.pal))
     q = Ordered(mw) if mode == PM_CUBE else None
     n = 1 << s
+    nb, sh = n, 2 * s               # rows a block sums, and the shift
+    if s and p.par is not None:     # an interlaced picture below 1/1: the
+        nb, sh = n >> 1, 2 * s - 1  # rows of one parity (SPEC.md 106.18)
     acc, cnt = None, 0
     for y, row in p.rows:
         if y >= mh * n:
+            continue
+        if s and p.par is not None and (y & 1) != p.par:
             continue
         if p.rf == RF_IDX and s:
             rgb = bytearray(3 * p.w)
@@ -847,8 +1451,8 @@ def emit(p, s, pal_out=None):
                     t += row[(X * n + k) * nch + c]
                 acc[X * nch + c] += t
         cnt += 1
-        if cnt == n:
-            avg = bytes(a >> (2 * s) for a in acc)
+        if cnt == nb:
+            avg = bytes(a >> sh for a in acc)
             r = y >> s
             out = q.row(avg, mw, r) if mode == PM_CUBE else avg
             master[r * mw:(r + 1) * mw] = out
@@ -1268,12 +1872,33 @@ def selfcheck():
     c[0], c[255] = 2, 2
     _, mean, sd, lo, hi = hist_stats(c, GREY, 0)
     ok((mean, sd, lo, hi) == (127, 127, 0, 255), "stats %r" % ((mean, sd, lo, hi),))
+    # wave 3 (SPEC.md 106.18): the blend is exact rounding, with the two
+    # ends the guest takes without a multiply; this inflate is zlib's on
+    # streams of every level; this LZW reads a stream the encoder of the
+    # textbook shape writes
+    ok(all(blend(255, v) == v and blend(0, v) == BG for v in range(256)),
+       "blend's ends")
+    ok(all(blend(a, v) == (a * v + (255 - a) * BG + 127) // 255
+           for a in range(0, 256, 17) for v in range(0, 256, 5)), "blend rounds")
+    src = bytes(((i * 7919) >> 3) & 255 if i % 97 > 40 else i & 3
+                for i in range(6000))
+    for lvl in (0, 1, 6, 9):
+        z = zlib.compress(src, lvl)
+
+        rd = Reader(z)
+        br = IdatBits(rd)
+        br.left, br.started = len(z), True
+        try:
+            got = bytes(inflate(br, len(src)))
+        except Refused as e:
+            got = b"refused %d" % e.code
+        ok(got == src, "inflate at zlib level %d" % lvl)
     if bad:
         for b in bad:
             print("pixelsim: FAIL " + b)
         return 1
     print("pixelsim: selfcheck ok (cube, %d+%d plans, emitter, refusals, "
-          "views, statistics)" % (len(CUBE_PLANS), len(GREY_PLANS)))
+          "views, statistics, blend, inflate)" % (len(CUBE_PLANS), len(GREY_PLANS)))
     return 0
 
 

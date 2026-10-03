@@ -34,7 +34,7 @@ to care about are marked **(owner)**.
 | 5 | **The master image is 8 bits per pixel, INDEXED, with a 256-entry RGB palette.** Truecolour sources are quantised during decode onto a fixed **6x7x6 colour cube + 4 greys**; greyscale sources get **256 greys**; paletted sources keep their own palette | One byte a pixel is the only depth that fits: 640x480 is 300 KB indexed, and 900 KB as RGB. An indexed master makes every display path a **per-palette-entry lookup**, and makes most of Effects (brightness, contrast, gamma, invert, greyscale, sepia, posterize, threshold, levels) a 256-entry palette edit that is instant even on an XT. §2 has the arithmetic |
 | 6 | **The windowed view uses an ORDERED (8x8 Bayer) dither. Full screen uses error diffusion (Floyd-Steinberg) by default.** Both are on View > Dither | An ordered dither is position-stable, so any damage rect, any pan strip and any zoom renders on its own and matches its neighbours. That is what lets the canvas obey "nothing repaints more than it changed". Error diffusion would have to re-render the whole canvas on every pan |
 | 7 | **Decoding runs on a WORKER. The UI task is the file pump** (the Audio Player's request-byte handshake, §86.5 / §77.1). The UI stays live: progress in the status bar, Esc / the Stop button cancels | A worker may not touch files (§20.6 rule 7), claim memory or load parts. A 640x480 baseline JPEG is tens of seconds on an XT, and a frozen desktop for that long is not acceptable |
-| 8 | **Heavy decoders are lazy, compressed, far-called code PARTS** (`OP_SEG|OP_COMP|OP_LAZY`, §20.12) — *superseded in part by SPEC.md §106.5: the parts are PLAIN, because a dropped `OP_COMP|OP_LAZY` row cannot be fetched again*: GIF, PNG, JPEG, TIFF and the save writers each load only when needed and are dropped after. PiXEL is the first assembly package to far-call a lazy code part (§68.10 calls this "the next step"), so wave 1 proves the mechanism with a gate row before any decoder depends on it | `APP_MAX_SIZE` is 61,440 bytes of image + bss. The decoders alone are bigger than that |
+| 8 | **Heavy decoders are lazy, compressed, far-called code PARTS** (`OP_SEG|OP_COMP|OP_LAZY`, §20.12) — *wave 1 shipped them PLAIN, because a dropped `OP_COMP|OP_LAZY` row could not be fetched again; the speed wave's shadow word (§20.12.7.4.1) fixed that, and since SPEC.md §106.5 they are compressed again, as written here*: GIF, PNG, JPEG, TIFF and the save writers each load only when needed and are dropped after. PiXEL is the first assembly package to far-call a lazy code part (§68.10 calls this "the next step"), so wave 1 proves the mechanism with a gate row before any decoder depends on it | `APP_MAX_SIZE` is 61,440 bytes of image + bss. The decoders alone are bigger than that |
 | 9 | **Associations: PiXEL declares JPG, PNG, PCX, TIF, PIX** (5 is the header maximum, §54.6). **BMP and GIF stay Paint's** built-in rows. PiXEL still opens them through File > Open, Prev/Next and the filmstrip. **(owner)** | Taking BMP/GIF from Paint is a kernel `assoc.inc` change and changes what OS8088.GIF opens in. TGA, ICO, PNM, LBM and MacPaint have no owner either; they open through File > Open and the filmstrip |
 | 10 | **PiXEL carries its own streaming decoders and does not grow `os88img.inc`**, and §106 records the departure from §94.1's "8-bit is refused, quantising belongs on the host" policy **for PiXEL only**. **(owner)** | §94's contract is a whole file under 64 KB in, one 4bpp segment out. PiXEL's is a stream in and rows into a master of up to ~300 KB. Different shape, not a wider one. SCRIBE and the other `os88img.inc` consumers keep §94.1 unchanged |
 | 11 | **GIF's LZW is lifted from Paint into a shared include, `apps/os88lzw.inc`.** PiXEL uses it in wave 3; Paint is switched to it in wave 9 only if `tests/paintgif.py` and `paint1load.py` stay byte-identical | What two programs share they share as source (WEAVE-SPEC §1.2's rule). Paint's decoder already has the guards that matter (code validation, no loop on corrupt data) |
@@ -100,7 +100,10 @@ approximated silently.
   §42.26.1 lesson).
 - **Right panels:** Navigator, Histogram, Image Info. Each has a [-] collapse
   box, so a collapsed panel is its title strip only, and View > Panels toggles
-  them.
+  them. *Superseded by SPEC.md §106.1 and §106.15: the owner removed the
+  title strips and the collapse boxes - a panel is its body, the rows went
+  to the bodies - and §106.16 added the colour face (bevelled buttons out of
+  `PIXEL.GFX`, framed panes) on a 4bpp display with room for it.*
 - **Filmstrip:** "Images (N)" with < > paging and the current picture framed.
 - **Status bar:** one `OSAPI_FONT_RUN` per field, each repainted only when its
   value changes. State goes here; verdicts go to toasts (§59.5).
@@ -148,7 +151,11 @@ pmode    : PAL (source palette, n <= 256 entries)
 - **Truecolour to CUBE** during decode: per pixel `r6 = r*6>>8`, `g7 = g*7>>8`,
   `b6 = b*6>>8` and `idx = (r6*7+g7)*6+b6`, through three 256-byte tables. One
   row of Floyd-Steinberg error (3 x (W+2) words) gives a smooth master. It is
-  on by default and off with Settings > Fast decode.
+  on by default and off with Settings > Fast decode. *Superseded by SPEC.md
+  §106.8 and §106.17: the cube is reached by a 16x16 BLUE-NOISE ORDERED
+  dither (139 cycles a pixel against Floyd-Steinberg's 1,361, the same look
+  through the window's own dither), so there is no Floyd-Steinberg in the
+  master and no Fast decode to switch to.*
 - **Why the cube, and not an adaptive palette:** a truecolour source cannot be
   stored to make a second pass, and neighbourhood effects (§7.3) need a
   colour-to-index map. In a cube that map is arithmetic. For an arbitrary
@@ -273,6 +280,17 @@ UI task (file pump)                  worker (decoder)
   stub part, with the claim count checked before and after.
 
 ### 3.3 GIF and PNG (wave 3)
+
+*As built, SPEC.md §106.18 differs from this sketch in four places: the part
+ABI grew a HEAD vector (the header is the part's too) and a CONTEXT with five
+far services; the 32 KB window and the trees are in the WORK claim's decoder
+scratch, not the ring's (claims stay at seven); no CRC is read and
+Adler-32 is not computed, on any CPU; and an interlaced picture below 1/1 is
+built from the rows of one parity (its last pass), because a box filter of
+interlaced rows needs an accumulator six masters large. A GIF's picture is
+its logical screen, with the first image placed in it. The two-level
+Huffman tables are as sketched, with fixed 64-entry sub-tables (10 KB of
+them) and the canonical walk for no code or a set that needs more.*
 
 - **GIF:**
   - `os88lzw.inc`, lifted from Paint (§42.14), with the dictionary in a 16 KB

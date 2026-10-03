@@ -53,7 +53,7 @@ PXP_VEC     equ 6                   ; PXP_NVEC words: near offsets in the part
 PXP_HDRSZ   equ 6
 
 PXP_SIGVAL  equ 'PX'                ; as `dw 'PX'`: 'P' at +0, 'X' at +1
-PXP_ABIVER  equ 1
+PXP_ABIVER  equ 2                   ; 2 since wave 3 added PXV_HEAD
 
 ; --- the vectors, in this order in every part ---------------------------------
 PXV_INIT    equ 0                   ; out AX = PXP_PROBE. Nothing else: it is
@@ -64,7 +64,10 @@ PXV_DECODE  equ 1                   ; a decoder's body (SPEC.md 106.5); a part
                                     ; that is not a decoder answers PXE_NOTSUP
 PXV_INFO    equ 2                   ; in ES:DI = a buffer, CX = its bytes. The
                                     ; part's text or facts, copied out
-PXV_N       equ 3
+PXV_HEAD    equ 3                   ; a decoder's HEADER, on the UI task: in
+                                    ; DI = the CONTEXT (below), its head at
+                                    ; [PXK_HSEG]:0. SPEC.md 106.18
+PXV_N       equ 4
 
 PXP_PROBE   equ 0x5850 ^ 0x1D06     ; PXV_INIT's answer, which no register a
                                     ; caller set up could already hold
@@ -80,9 +83,9 @@ PXE_BADPART equ 4                   ; THE RESIDENT'S: it was fetched and is
                                     ; signature, version or vector count is
                                     ; wrong. Nothing has said so yet
 
-; --- PXPART_HEAD init, decode, info -------------------------------------------
+; --- PXPART_HEAD init, decode, info, head -------------------------------------
 ; The header a part opens with. Assemble the part with `org 0`.
-%macro PXPART_HEAD 3
+%macro PXPART_HEAD 4
     dw PXP_SIGVAL               ; +0
     db PXP_ABIVER               ; +2
     db PXV_N                    ; +3
@@ -90,6 +93,83 @@ PXE_BADPART equ 4                   ; THE RESIDENT'S: it was fetched and is
     dw %1                       ; +6 PXV_INIT
     dw %2                       ; +8 PXV_DECODE
     dw %3                       ; +10 PXV_INFO
+    dw %4                       ; +12 PXV_HEAD
 %endmacro
+
+; =============================================================================
+; A DECODER PART (SPEC.md 106.10, 106.18): the answers it gives, the row
+; formats it hands the emitter, the packings the Info panel names - shared
+; with the resident's simple formats, so both sides mean the same number
+; =============================================================================
+PXD_OK      equ 0                   ; the answers (pixelsim's PXD_*)
+PXD_HEAD    equ 1
+PXD_DIMS    equ 2
+PXD_DEPTH   equ 3
+PXD_PACK    equ 4
+PXD_TRUNC   equ 5
+PXD_DATA    equ 6
+PXD_MEM     equ 7
+PXD_READ    equ 8
+PXD_ORIENT  equ 9
+PXD_NOTYET  equ 10
+PXD_BIG     equ 11
+PXD_NOFILE  equ 12                  ; the resident's: not in this folder
+PXD_NOTPIC  equ 13                  ; neither its bytes nor its name are a
+                                    ; picture's
+PXD_NREASON equ 14
+PXD_ABORT   equ 0xFF                ; not a refusal: the user said stop
+
+RF_IDX      equ 0                   ; what a decoder hands the emitter
+RF_GREY     equ 1
+RF_RGB      equ 2
+
+PK_NONE     equ 0                   ; the Info panel's Packing
+PK_RLE      equ 1
+PK_RLE8     equ 2
+PK_RLE4     equ 3
+PK_BITF     equ 4
+PK_LZW      equ 5
+PK_LZWI     equ 6                   ; ...interlaced
+PK_DEFL     equ 7
+PK_DEFLI    equ 8                   ; ...Adam7
+PK_N        equ 9
+
+PX_DIMMAX   equ 8192                ; refused above, before any arithmetic
+PXP_BG      equ 85                  ; THE VIEW BACKGROUND a transparent pixel
+                                    ; shows, each channel: the canvas's own
+                                    ; dark grey (SPEC.md 106.18)
+
+; --- THE CONTEXT: one block of the package's bss, its offset in DI on HEAD
+; and DECODE. "in" is the resident's to fill, "out" the part's --------------
+PXK_HSEG    equ 0                   ; word in  HEAD: the head's segment...
+PXK_HLEN    equ 2                   ; word in  HEAD: ...and its bytes
+PXK_SW      equ 4                   ; word out HEAD: the source's width...
+PXK_SH      equ 6                   ; word out HEAD: ...and height
+PXK_RF      equ 8                   ; byte out HEAD: RF_*
+PXK_BITS    equ 9                   ; byte out HEAD, DECODE: bits a pixel
+PXK_PACK    equ 10                  ; byte out HEAD, DECODE: PK_*
+PXK_RBLK    equ 11                  ; byte out DECODE: source rows a block
+                                    ; sums below 1/1, 0 = all 2^s of them
+PXK_NPAL    equ 12                  ; word out HEAD, DECODE: palette entries
+PXK_DPARA   equ 14                  ; word out HEAD: decoder scratch, paras
+PXK_SCL     equ 16                  ; byte in  DECODE: the scale s
+PXK_MW      equ 18                  ; word in  DECODE: the master's width...
+PXK_MH      equ 20                  ; word in  DECODE: ...and height
+PXK_RSEG    equ 22                  ; word in  DECODE: the ROW BUFFER (106.9)
+PXK_DSEG    equ 24                  ; word in  DECODE: the decoder SCRATCH
+PXK_SPAL    equ 26                  ; word in  DECODE: [px_spal]'s offset
+PXK_SVC     equ 28                  ; 5 words in: the services' offsets
+PXK_SZ      equ PXK_SVC + 2 * 5
+
+; --- THE SERVICES (SPEC.md 106.18): far thunks of the package, a part calls
+; `call far` on PXK_SVC + 2 x one of these and the package's segment, and
+; each sets its own DS -------------------------------------------------------
+PXS_NEXT    equ 0                   ; out CF = 1 the end; else ES:SI, CX bytes
+PXS_EMIT    equ 1                   ; in AX = source row, BX = rows complete
+                                    ; or FFFFh, DX = progress or FFFFh.
+                                    ; out CF = 1 AX = PXD_ABORT
+PXS_SCAT    equ 2                   ; in AX = row, CL = x0, CH = dx, BX, DX
+PXS_TICK    equ 3                   ; in AX = progress. out CF/AX as EMIT
+PXS_PAL     equ 4                   ; the palette is known. out CF/AX
 
 %endif

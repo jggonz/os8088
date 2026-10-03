@@ -40668,7 +40668,13 @@ never move - because a restored length used to read as *already here*:
 back is all a re-fetch needs: two stores and ~35 bytes of code, at the two
 sites that touch the word, and no change to `op_seg` or `op_lazyok`.
 `OP_SPENT` stays as the guard for a shadow of 0, which a fetched row cannot
-have.
+have. **`op_drop` asks the flag too** (PiXEL wave 3, the speed review's F1):
+it used to take `zkb != 0` for "here", which on a compressed lazy row is the
+packed length before a fetch and after a drop - so dropping a part that a
+failed fetch never brought (a caller unwinding, as PiXEL's F1 card does)
+wrote `OP_SPENT` over the row and freed a segment nobody owned, and the part
+was gone for the instance. Under `%if OP_HAS_ZLAZY` a row without
+`OP_FETCHED` is now not here, whatever its `zkb` says: six bytes.
 
 The use case is the one the paragraph above this used to argue was real:
 PiXEL's decoders are lazy parts used fetch, call, drop and fetch again
@@ -40691,9 +40697,10 @@ package with lazy rows and no compressed one, or the other way round, pays
 flags, which is narrower than the pair above: a package with an eager
 compressed part and a plain lazy one (Clear Skies, PIXELSTEIN 3D, Word's
 loader) assembles to the byte it did, and so does every C package, because
-none has such a row. It costs **2 bytes a row and 35 of code**, measured on
-`apps/dos/dosload.asm` (2,187 -> 2,228 bytes, three rows), the one other
-image that has one. PiXEL's keyboard card is the third (§106.5).
+none has such a row. It costs **2 bytes a row and 41 of code**, measured on
+`apps/dos/dosload.asm` (2,187 -> 2,234 bytes, three rows: 2,228 before
+`op_drop` asked `OP_FETCHED`), the one other image that has one. PiXEL's
+three decoder-and-card parts are the others (§106.5, §106.18).
 
 #### 20.12.9 The standard takes only what the table asks for
 
@@ -162167,19 +162174,21 @@ command costs since, and 106.16 the colour face's full repaint.)
 
 ### 106.5 The part ABI: far-called lazy code parts (wave 1)
 
-PIXEL.O88 carries a parts table (§20.12). Every row is `OP_SEG|OP_LAZY`:
+PIXEL.O88 carries a parts table (§20.12). Every row is `OP_SEG|OP_COMP|
+OP_LAZY` (below: the compression came back with the speed wave's shadow):
 a flat binary at org 0, appended by `os88pkg.py --part`, fetched into a
 claim of its own when first wanted and dropped after. The header every part
 opens with (`apps/pixel/pxpart.inc`):
 
 ```
 +0  dw 'PX'        signature
-+2  db 1           ABI version
-+3  db 3           vectors that follow
++2  db 2           ABI version (1 until wave 3 added +12)
++3  db 4           vectors that follow
 +4  dw 0           the package's segment - stamped by the resident before EVERY call
 +6  dw init        out AX = PXP_PROBE
-+8  dw decode      a decoder's body; PXE_NOTSUP from a part that is not one
++8  dw decode      a decoder's body, on the WORKER (106.18); PXE_NOTSUP from a part that is not one
 +10 dw info        ES:DI = a buffer, CX = its size: the part's text or facts
++12 dw head        a decoder's header parse, on the UI task (106.18); PXE_NOTSUP otherwise
 ```
 
 `px_pcall` (AL = part, BL = vector) fetches the part if it is not here,
@@ -162351,7 +162360,8 @@ a cancel then leaves the canvas empty.
 **Claims** (at most eight an owner, §50.2): the region, the master, the VIEW
 claim (106.11), and — only while a picture decodes — the old master, the
 RING and the WORK claim (106.9), and a drop-down's bank (13.14.1) while its
-list is open. Seven at the worst moment.
+list is open. Seven at the worst moment. (Wave 3 adds a decoder PART and
+frees the head before the claims are made: still seven, 106.18.)
 
 ### 106.9 The decode pipeline: a worker, and the UI task as its file pump (wave 2)
 
@@ -162457,8 +162467,9 @@ ring or ends the row. **The answers are numbers** (`PXD_*`), and the
 resident caller words them as `FORMAT: reason` in one toast of at most 24
 characters: `bad header`, `size not valid`, `depth not read`, `packing not
 read`, `cut short`, `damaged`, `not enough memory`, `disk read failed`,
-`right-to-left`, `not read yet` (JPEG, PNG, GIF, TIFF and the rest, whose
-decoders are later waves), `too big to unpack`. Two say it without a format:
+`right-to-left`, `not read yet` (JPEG, TIFF and the rest, whose
+decoders are later waves; GIF and PNG are read since wave 3, 106.18), `too
+big to unpack`. Two say it without a format:
 `Not a file here` and `Not a picture` (neither its bytes nor its extension
 name one). A file whose extension PiXEL does not list is opened by its bytes
 like any other (106.6). The refusal's words also stand in the empty canvas
@@ -162809,7 +162820,7 @@ one-pixel gap, as MIDIRack's are (§105.9.5). Planar, plane 0 first; 45 faces,
 **27,648 bytes**, `--selfcheck` a fast row (`pixart`) and `--check-asm` the
 Makefile's guard that `pixel.asm`'s `PXA_*` numbers and widths are the art's.
 
-**They are a file beside the package, `PIXEL.GFX`** (5,386 bytes LZ-wrapped
+**They are a file beside the package, `PIXEL.GFX`** (5,537 bytes LZ-wrapped
 on the disk; 6 clusters at 360 KB), read at entry - after the window is
 made, so a failed entry holds no claim - into a claim of its own, **only on
 a colour primary**: a Hercules or a CGA machine never reads a byte of it. A
@@ -162885,3 +162896,266 @@ which this package does not ship (a 16-level grid settles `c1` alone in 65%
 of its cells). **A first-rows figure can move by a few tenths** from run to
 run - it is where in its tick and in its disk revolution the key landed - so
 the bench holds it to a wider ceiling than the rest.
+
+### 106.18 GIF and PNG: the decoder parts, the shared LZW, inflate (wave 3)
+
+GIF and PNG are read by two lazy compressed PARTS of PIXEL.O88 - part 1
+`apps/pixel/pxgif.asm`, part 2 `apps/pixel/pxpng.asm`, both `OP_SEG |
+OP_COMP | OP_LAZY` (106.5, §20.12.7.4.1) - so the resident package grows by
+the plumbing alone. **A part does what 106.10's two halves do**: its HEAD
+vector parses the header out of the head on the UI task, and its DECODE
+vector runs on the WORKER and reads the stream, emits rows and answers a
+`PXD_*`. It never speaks, never draws, never touches a file and never claims
+(§20.6 rule 7); the five things it needs the package for are services.
+
+**The CONTEXT** (`PXK_*`, `apps/pixel/pxpart.inc`) is one block of package
+bss whose offset both vectors are handed in DI. HEAD reads the head's
+segment and length from it and answers the source's width and height, its
+row format (`RF_IDX`, `RF_GREY`, `RF_RGB`, 106.8), bits, packing, palette
+entries, and the paragraphs of DECODER SCRATCH it needs. DECODE reads the
+scale, the master's size, the row buffer's segment, the scratch's segment,
+the source palette's offset and the services' offsets, and answers packing,
+palette entries and bits as the stream told them, and `PXK_RBLK` (below).
+**The services** are near procs of the package behind far thunks, which set
+DS to the package themselves - so a part calls `call far` with its own
+registers and nothing to restore:
+
+| service | does |
+|---|---|
+| `K_NEXT` | the rest of the worker's ring window, or the next one: ES:SI and CX; CF = 1 at the end of the file, a cancel or a read error (the part answers `cut short`; `px_wjob` says which it was) |
+| `K_EMIT` | `px_emit` (106.8) on source row AX, whose pixels the part has put in the row buffer; BX, when not FFFFh, is then the count of master rows complete from the top, and DX the decode's progress in source rows |
+| `K_SCAT` | at 1/1 only: the row buffer's pixels at columns `CL + k CH` into master row AX - quantised whole into the cube first when the picture is truecolour, which is exact because the cube's dither is a function of a pixel's place (106.8); BX and DX as `K_EMIT` |
+| `K_TICK` | progress without a row: AX source rows; the cancel and the liveness `px_progress` already does |
+| `K_PAL` | the palette is known: `[px_spal]` becomes `[px_pal]` on a PAL picture, the display tables are built (`px_tables`) and the UI is woken, which `px_wjob` does before the first row of a resident format. A part's palette can come after the head (a GIF's local table, a PNG's PLTE), so it calls this before its first row, and `K_EMIT` calls it if a part did not |
+
+Every service checks what it is handed - a row past the master, a column
+step of 0 or above 8 - and does nothing with it rather than trust a part.
+`px_wcall` is the worker's far call: no fetch (the part is here, because the
+UI task fetched it to call HEAD and does not drop it while a decode runs),
+`op_seg` being a lookup and nothing more; it stamps `PXP_PKG` and calls.
+
+**One decoder part at a time, kept while pictures are of its kind** (plan
+3.2): the open that needs a part drops whichever other decoder part is held
+and fetches its own before HEAD; a successful decode keeps it, so a folder
+of PNGs reads the part once; a refusal or a cancel that leaves a picture of
+another kind showing (or none) drops it. The HEAD's fetch goes home and
+back (106.5), and the head is freed straight after the header parse, before
+the claims - so an open holds at most the region, the view, the previous
+master, the part, the new master, the work claim and the ring: **seven**,
+and a drop-down's bank eight. The decoder scratch is not a claim of its own:
+it is the WORK claim's last region (`[px_wo_dec]`), so the scale (106.8)
+prices it with the rest, and it shares the claim's fate on a cancel.
+
+#### `apps/os88lzw.inc`: the shared LZW (plan decision 11)
+
+GIF-flavoured LZW DECODE, lifted from Paint's `pt_gdec` (§42.21) with its
+two guarantees kept: **a code above the next free code - and a first code
+after a Clear that is not a root - is refused**, and **an entry whose prefix
+is not below its own index is never added**, so a chain strictly descends,
+cannot cycle, and a string is at most 4,092 characters into a 4,096-byte
+stack - no character of the walk is counted. The includer gives it state
+(`LZW_BSS`, `LZW_BSSSZ` bytes, DS-relative), a table segment in ES of
+`LZW_KB` = 18 KB (prefixes, suffixes, the string stack and a 2 KB input
+buffer), and two near routines: `LZW_FILL` appends input to the buffer (0
+bytes is the end of the input - a GIF's block terminator, or the file's end)
+and `LZW_RUN` takes each decoded string as ES:SI and CX, forwards, and
+answers CF = 1 to stop. `lzw_decode` (AL = the minimum code size, 2..8)
+answers CF = 0 at the End code or the input's end, or CF = 1 with
+`LZW_EBAD` (the includer's number) or the run's own answer. Codes are read
+LSB first a whole code at a time from the buffer, which is refilled when
+fewer than three bytes remain; a code that would need bits past the input's
+end is the end. The code size grows after the code that fills a power of
+two, to twelve bits, and a full table adds nothing until a Clear (the
+DEFERRED clear). TIFF's LZW (wave 8) adds an MSB-first reader and the early
+change through `LZW_EARLY`; the GIF ENCODER (wave 7) joins the same file;
+Paint moves onto it in wave 9, and only if its rows stay byte-identical.
+
+#### GIF
+
+- **The picture is the LOGICAL SCREEN** (its size is in the 13-byte header,
+  so it is in every head): 1..8,192 each way, else `size not valid`; a head
+  under 13 bytes is `bad header`. Its FIRST image is placed in it at (left,
+  top), clipped at the screen's edges, and every pixel of the screen it does
+  not cover is the BACKGROUND index - the transparent index when the image
+  has one, else the screen's background colour index. Later images are not
+  read (animation is wave 8). PAL at 1/1, the cube below.
+- **The blocks before the image**: an extension (`21h`) has its sub-blocks
+  skipped by their lengths - a Graphic Control Extension's first sub-block
+  of four bytes or more sets (or clears) the transparent index; an image
+  descriptor (`2Ch`) ends the walk; any other byte, the trailer included,
+  is `damaged`. The file ending is `cut short`.
+- **The palette** is the image's local table, else the global one; neither
+  is `damaged`. It is padded with black to 256, and the transparent index's
+  entry becomes the view background `(85, 85, 85)` - the canvas's own dark
+  grey - so transparency costs no pixel anything.
+- **An image of 0 by anything is `damaged`; a minimum code size outside 2..8
+  is `damaged`.** The sub-blocks are the code stream; a code past the table
+  is `damaged`; the stream ending (End code, block terminator or the file)
+  before the image's last pixel is `cut short`; nothing after the last pixel
+  is read. Rows go to the emitter in the order the screen needs them: the
+  rows above the image, the image's rows in the stream's order - an
+  interlaced image's at their final y, pass by pass - and the rows below.
+- **Progressive painting of an interlaced image** at 1/1 shows only rows
+  complete from the top (`K_EMIT`'s BX): the row at the image's top after
+  the first pass, then two at a time as the fourth pass fills the odd rows.
+
+#### PNG
+
+- **The header** (the head's first 33 bytes: the signature and IHDR, of
+  length 13, first): `bad header` otherwise; width and height 1..8,192
+  (`size not valid`); a colour type and depth PNG defines - 0 (grey) at
+  1/2/4/8/16, 2 (RGB) at 8/16, 3 (palette) at 1/2/4/8, 4 (grey and alpha)
+  and 6 (RGBA) at 8/16 - or `depth not read`; compression and filter
+  method 0 and interlace 0 or 1, or `packing not read`; and a row of at most
+  **32,760 bytes**, two of which and their guards fit one segment, or `too
+  big to unpack` (8,192 RGBA pixels is 32,768). Type 3 is `RF_IDX` (PAL at
+  1/1), 0 and 4 `RF_GREY`, 2 and 6 `RF_RGB` (the cube).
+- **The chunks before the first IDAT** are walked by their lengths: a
+  length of 2^31 or more is `damaged`, IEND is `damaged`, the file ending
+  is `cut short`. PLTE (type 3 only; 1..256 entries, a multiple of three, or
+  `damaged`; the last one wins) and tRNS (256 bytes or fewer) are kept; any
+  other chunk, ancillary or critical, is skipped. A type 3 picture without
+  PLTE at its first IDAT is `damaged`.
+- **The image data** is the IDATs that follow one another, zero-length ones
+  included; any other chunk, a length of 2^31 or more, or the file's end ends
+  it. **No CRC is read and Adler-32 is not computed**: an 8088 would pay a
+  table lookup and a dozen instructions a byte for each, and the deflate
+  stream's own structure is checked to the bit - so a file whose CRC is
+  wrong and whose data is right opens (the corpus has one, `PCRC.PNG`).
+- **zlib**: CM 8, CINFO 7 or less, the check bits, no preset dictionary -
+  or `damaged`. **Inflate**: stored, fixed and dynamic blocks; block type 3,
+  a stored length whose complement is wrong, more than 286 length or 30
+  distance codes, a code-length code over-subscribed or incomplete, a repeat
+  with nothing before it or past the end, a literal/length set without an
+  end-of-block code, a literal/length or distance set over-subscribed, or
+  incomplete other than empty or a single code of one bit (zlib's rule),
+  a length symbol 286/287, a distance symbol 30/31, a distance reaching
+  before the stream's first byte, and a code no set contains - each is
+  `damaged`. The stream ending before the last row is `cut short`.
+  **Huffman decoding** is two levels of table. The PRIMARY has 512 entries
+  indexed by the next nine bits, symbol and length in one word: a literal is
+  `AH` > 0 - its length, so its write and its shift take no test of the
+  symbol's range - a length symbol or the block's end `80h | length`, and a
+  code longer than nine bits `C0h` with `AL` naming its SUB-TABLE: 64
+  entries indexed by the six bits after the nine (15 - 9), filled for every
+  long code that shares the prefix. There are 64 sub-tables for the
+  literal/length code and 16 for the distances (10 KB); a set that would
+  need more, and an entry no code fills, go to the CANONICAL WALK (count and
+  symbol arrays, a bit at a time from the first bit, puff's loop), which is
+  also what refuses a code no set contains - after the fifteen bits the walk
+  reads, so the guest consumes what the reference does. (The first build
+  walked every long code: 18% of HOUSE.PNG's instructions were the walk.)
+  The tables are built per dynamic block, in the scratch above the window.
+- **The window is 32 KB** at the scratch's base; a distance is checked
+  against the bytes written so far until 32 KB have been. Scanlines are
+  EXTRACTED from it in batches of at most 4,096 bytes (fewer when fewer are
+  still wanted), so decoding stops after the symbol that produced the last
+  byte the last row needs and nothing past it is read. **Past the end of
+  the image data the stream reads as zero bytes**, at most four; a decode
+  that has USED one of them - by finishing, refusing or asking for a fifth -
+  is `cut short`, which is exactly where a reader that stops at the end
+  would have stopped.
+- **Filters**: None, Sub, Up, Average, Paeth (the specification's
+  predictor order, in registers), two scanline buffers in the scratch with
+  eight zero bytes before each, so a left neighbour off the row's start is
+  read as 0 without a test; a row's first pass and a pass's first row read
+  a zeroed previous row. **A filter type above 4 is `damaged`**, said when
+  the last row is in, so that a stream error anywhere before it is the
+  answer instead, as it is in the reference.
+- **Pixels**: a 1/2/4-bit grey is scaled by 255, 85 or 17; 16-bit samples
+  take their high byte; a palette's tRNS alphas are composited into the
+  palette, so they cost no pixel anything; a grey or RGB tRNS key compares
+  the WHOLE sample (16 bits for a 16-bit picture) and makes the pixel the
+  view background; alpha (types 4 and 6) is composited over it, `c' = (t +
+  (t >> 8)) >> 8` with `t = a c + (255 - a) 85 + 128` - exact rounding of
+  `(a c + (255 - a) 85) / 255`, and an alpha of 255 or 0 takes the colour or
+  the background without a multiply.
+- **Adam7**: at 1/1 each pass's rows are placed at their final coordinates
+  (`K_SCAT`) and the rows complete from the top are shown as the seventh
+  pass fills them. Until then no row can be painted, so 106.9's pump does
+  not hold the disk back for a first paint - it does that only when rows
+  are complete (`px_pumpfill`: rows decoded and none showable fills ahead
+  of the worker, as after the first paint).
+
+**An interlaced picture below 1/1** - a GIF's interlaced image, a PNG's
+Adam7 - cannot be box-filtered as it arrives: a block's rows come in
+different passes, and keeping every block open until its last row is an
+accumulator the size of six masters. So it is built from the rows of ONE
+PARITY, the parity its LAST pass carries whole (a PNG's odd rows; a GIF's
+image rows `top + 1, top + 3, ...` and the screen rows of that parity
+around it): each master row is the average of its block's 2^(s-1) such rows
+across its 2^s columns (`PXK_RBLK` = 2^(s-1), the shift 2s - 1). The other
+rows are decoded, because the stream cannot be skipped, and not emitted.
+`tools/pixelsim.py`'s `emit` takes the same rows (`Pic.par`).
+
+**What PiXEL refuses is checked before it is used, and nothing loops**:
+every length, code, distance, table, chunk and dimension above; every
+decoding loop consumes a bit, a byte or a row; a skip is bounded by the
+file; and the only code that writes the master is the emitter and
+`K_SCAT`, both of which clip to it.
+
+**What it costs** (MartyPC's cycle counter, `tests/pxbench.py`, 4.77 MHz;
+the key that opens to the open's end, every disk read included):
+
+| picture | 5150, CGA | its first rows | XT, VGA | its first rows |
+|---|---|---|---|---|
+| CAT.GIF, 320x240, 256 colours, interlaced, 70 KB | 31.78 s | 2.80 s | 35.73 s | 4.21 s |
+| BALLOONS.PNG, 320x240, a palette, 41 KB | 16.73 s | 3.98 s | 20.57 s | 5.63 s |
+| HOUSE.PNG, 320x240 RGB, 160 KB | 49.45 s | 2.34 s | 52.63 s | 2.23 s |
+
+(A palette picture's first rows on the VGA wait for its 256 plans, 106.11.)
+
+HOUSE.PNG's DECODE (`px_dpart`, entry to return) is 42.9 s of it, of which
+**inflate is 19.2 s: 396 cycles a byte it writes** (421 on the VGA XT,
+whose UI task paints more of the progress), the scanlines 12.1 s (filters,
+pixels, the cube's dither, the emitter) and the worker's waits for the disk
+the rest - with the canvas's progressive painting held off for the
+measurement, which is what makes the pump read only when the worker runs
+dry (106.9). The plan's 30-40 cycles a byte is not an 8088's: a literal is a
+table lookup, a variable shift of the bit buffer (8 + 4n cycles), a byte's
+refill most times and a masked store - about 25 instructions, most of them
+fetch-bound - and the speed pass inside this wave (two-level tables, the
+literal's entry its own length, Average as `add`/`rcr`, Paeth on 8-bit
+magnitudes) took the same picture from 65.3 s to 49.5 s and the GIF from
+35.5 s to 31.8 s; the next steps are wave 9's. **BIG.BMP's first rows on
+the 5150 measure 4.05 s at this wave's base (58a75ef8) and 3.96 s with it,
+not 106.17's 1.52 s**: the bench's ceiling follows the measurement, and the
+cause - before this wave - is wave 9's to find.
+
+**Sizes.** The resident package grows by the plumbing alone: image 41,589
+-> **42,456** bytes and bss 14,144 -> **14,196**, so **56,652 of 61,440**;
+the GIF part is 2,038 bytes (1,885 packed), the PNG part 5,874 (4,887
+packed), and PIXEL.O88 is 49,943 bytes on the disk. The decoder scratch
+is the work claim's: 18 KB for a GIF (the LZW's tables and its input
+buffer), 45 KB and two scanlines for a PNG (the window, two 1 KB primaries,
+10 KB of sub-tables, the counts and symbols, two rows with their guards).
+
+**Tests.** `tools/pixelsim.py` decodes both formats independently of the
+guest - its own LZW and its own inflate, held to zlib's at four levels and
+to the corpus by `--selfcheck` - and `tools/pixcorpus.py` makes their
+fixtures from nothing: every colour type and depth, Adam7 on each kind, a
+1x1 and a 3x2 interlaced picture (empty passes), every transparency, many
+and zero-length IDATs, stored, fixed and three-block dynamic streams, a
+tree with 13-bit codes and no distances, a single one-bit distance code,
+chunks past the head, a wrong CRC; GIF 87a and 89a at 1, 2, 4 and 8 bits,
+local, global and both tables, transparency, an image smaller than the
+screen and one hanging off it with an odd top, extensions and a second
+frame, Clear at a full table and the deferred clear; and a hostile set of
+46 (13 GIF, 33 PNG) - each verdict pixelsim's, and the same picture through
+BMP, GIF and PNG one master (AGREE). `pxdecode` holds the guest to all of
+them byte for byte, the hostile ones refused with their number and PiXEL's
+claims as they were - other than a decoder part the refused picture
+fetched, which is dropped when the picture left showing is of another kind
+(above), so the row checks that what PiXEL holds besides is the part of the
+shown picture's kind or none. `pxparts` adds the go-home leg (MIN-10 of the
+wave-1 review): a PNG opened from a folder PiXEL was not launched from
+decodes, its part fetched from PIXEL.O88's own folder and the stream then
+read from the picture's, the part kept after it and dropped by a PCX; and a
+leg for 20.12.7.4.1's `op_drop` fix - a fetch that fails before any has
+succeeded leaves the row fetchable (red without the fix: `zkb` FFFFh).
+`pxopenpng` is `pxopen` for the parts: BALLOONS.PNG by its association on
+the VGA - every canvas pixel pixelsim's at Fit, zoomed, scrolled and
+shifted, which is what caught a palette's plans searched for none of its
+entries - and the interlaced CAT.GIF painted as its passes came.
+`pxbench` holds the three gallery opens and inflate's cycles a byte to
+ceilings.

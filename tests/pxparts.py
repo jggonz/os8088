@@ -25,12 +25,27 @@ here reads the guest rather than the glass:
          is OP_COMP|OP_LAZY, so this is the leg the SHADOW is for (SPEC.md
          20.12.7.4.1): without it a dropped compressed row is spent and this
          second fetch refuses
+  leg G  (run right after A, before any fetch) A FETCH THAT FAILS, THEN ONE
+         THAT DOES NOT (the speed review's F1): PiXEL's home folder poked to a
+         drive that is not there, F1 refused - and its unwinding drop must
+         leave the compressed row a never-fetched one (op_drop asks
+         OP_FETCHED, SPEC.md 20.12.7.4.1), not SPENT, which is what it became
+         while the shadow word was still 0. Home put back, F1 fetches and the
+         card comes up
   leg E  THE NEGATIVE CONTROL: the row's file offset pointed at sector 0, so
          the fetch reads the package's own header where a part should be -
          as a compressed stream, which either will not expand (op_fetch
          refuses) or expands to bytes without the part's signature (px_pcall
          refuses). Either way no card, the call count unmoved, and the claim
          given back - a check that never refuses is not a check
+  leg F  THE GO-HOME BRACKET (SPEC.md 106.5, wave-1 review MIN-10): a PNG
+         in a folder of its own, P/, opened through File > Revert with the
+         record pointed there. The PNG part is fetched out of PIXEL.O88 in
+         the root - so the fetch must go HOME and come BACK - and the
+         picture then decodes from P/, which it could not if the bracket had
+         left the instance standing at home ([px_pmoved] says the bracket
+         moved; the picture decoded says it came back). The part is KEPT
+         after a picture of its kind (106.18), and a PCX after it drops it
 """
 import os, re, sys, subprocess, tempfile, argparse, functools
 print = functools.partial(print, flush=True)
@@ -99,7 +114,27 @@ LINES = help_lines()
 print("== PiXEL: the part boundary (SPEC.md 106.5) ==")
 print("   op_table at +%04X, the card %d lines" % (syms["op_table"], len(LINES)))
 DISK = "build/pxpartsgate.img"
-M.scratch_disk(DISK, "build/pixel.o88")
+sys.path.insert(0, "tools")
+import pixcorpus
+_fx = dict((n, d) for n, d, v in pixcorpus.corpus())
+os.makedirs("build/pxparts", exist_ok=True)
+for _n in ("P2_8.PNG", "C8.PCX"):
+    open("build/pxparts/" + _n, "wb").write(_fx[_n])
+M.scratch_disk(DISK, "build/pixel.o88", "P:build/pxparts/P2_8.PNG",
+               "P:build/pxparts/C8.PCX")
+
+
+def dir_cluster(img, name):
+    """A root folder's first cluster, read off the FAT12 image itself."""
+    d = open(img, "rb").read()
+    bps, res, nfat, nroot = (u16(d, 11), u16(d, 14), d[16], u16(d, 17))
+    spf = u16(d, 22)
+    root = (res + nfat * spf) * bps
+    for i in range(nroot):
+        e = d[root + 32 * i:root + 32 * i + 32]
+        if e[:11] == name.ljust(11).encode() and e[11] & 0x10:
+            return u16(e, 26)
+    raise SystemExit("no folder %s on %s" % (name, img))
 
 with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
     m = ui.m
@@ -170,6 +205,36 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
             M.ui_done(m, what)
         return tr.count(tr._by_addr[fetch & 0xFFFFF])
 
+    # --- G: a failed fetch spends nothing - BEFORE any fetch, while the
+    # shadow word is still 0: the case op_drop used to turn into OP_SPENT ----
+    home = B("px_homevol")
+    m.write(base + syms["px_homevol"], bytes((25,)))     # Z: nobody's
+    calls0 = W("px_pcalls")
+    m.key("F1")
+    M.ui_done(m, "the refused fetch")
+    M.pace(m, 1.0)
+    check("G: home unreachable: F1 refused, nothing called",
+          B("px_helpon") == 0 and W("px_pcalls") == calls0,
+          "helpon %d calls %d -> %d" % (B("px_helpon"), calls0, W("px_pcalls")))
+    check("G: ...and the row is a NEVER-FETCHED one still, not spent",
+          not row()[1] & OP_FETCHED and u16(row(), 6) == packed
+          and claims() == c0,
+          "flags %02X zkb %04X claims %s" % (row()[1], u16(row(), 6), claims()))
+    m.write(base + syms["px_homevol"], bytes((home,)))
+    m.key("Escape")                 # (a toast, if one stands)
+    M.ui_done(m, "the toast")
+    calls0 = W("px_pcalls")
+    n = f1("the card after the failure")
+    check("G: home back: F1 fetches and the card is up", n == 1
+          and B("px_helpon") == 1 and W("px_pcalls") == calls0 + 2,
+          "fetched %d helpon %d calls %d" % (n, B("px_helpon"), W("px_pcalls")))
+    m.key("Escape")
+    M.until(m, lambda _: B("px_helpon") == 0, "the card to come down",
+            poll=0.2, limit=30)
+    M.ui_done(m, "the repaint")
+    m.write(base + syms["px_pcalls"], b"\0\0")    # B counts from nothing
+
+
     # --- B and C -------------------------------------------------------------
     calls0 = W("px_pcalls")
     n = f1("the keyboard card")
@@ -228,6 +293,45 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
     check("E: ...and its claim given back all the same", claims() == c0
           and not row()[1] & OP_FETCHED, "claims %s" % claims())
     m.write(off, keep)
+
+    # --- F: the go-home bracket ---------------------------------------------
+    PNGROW = base + syms["op_table"] + OP_T_ROWS + 8 * 2
+    prow = lambda: m.read(PNGROW, 8)
+
+    def revert(name):
+        cl = dir_cluster(DISK, "P")
+        m.write(base + syms["px_cur"], name.encode().ljust(13, b"\0"))
+        m.write(base + syms["px_cur"] + 14, bytes((cl & 255, cl >> 8)))
+        m.write(base + syms["px_cur"] + 13, bytes((B("px_homevol"),)))
+        m.write(base + syms["px_cur"] + 27, b"\1")     # PXR_FHAVE: Revert's
+        m.write(base + syms["px_lastref"], b"\0")      # one condition
+        n0 = W("px_ndone")
+        m.ctrl("KeyR")
+        M.until(m, lambda _: W("px_ndone") != n0 and B("px_busy") == 0
+                and B("px_job") == 0, "the open of " + name, poll=0.3,
+                limit=600)
+        M.ui_done(m, name)
+        r = m.read(base + syms["px_cur"], 48)
+        return r[:13].split(b"\0")[0].decode(), r[43]
+    m.write(base + syms["px_pmoved"], b"\0")
+    calls0 = W("px_pcalls")
+    name, have = revert("P2_8.PNG")
+    check("F: a PNG in P/ decoded (the stream read from P/)",
+          name == "P2_8.PNG" and have == 1 and B("px_lastref") == 0,
+          "record %s have %d refusal %d" % (name, have, B("px_lastref")))
+    check("F: ...its part fetched from PIXEL.O88's folder: the bracket moved",
+          B("px_pmoved") == 1, "[px_pmoved] = %d" % B("px_pmoved"))
+    check("F: ...HEAD far-called once, DECODE on the worker",
+          W("px_pcalls") == calls0 + 1, "%d -> %d" % (calls0, W("px_pcalls")))
+    check("F: ...and the part KEPT after a picture of its kind",
+          prow()[1] & OP_FETCHED and B("px_kheld") == 2,
+          "flags %02X held %d" % (prow()[1], B("px_kheld")))
+    name, have = revert("C8.PCX")
+    check("F: a PCX after it opens, and the PNG part is DROPPED",
+          name == "C8.PCX" and have == 1 and not prow()[1] & OP_FETCHED
+          and B("px_kheld") == 0,
+          "record %s have %d flags %02X held %d" % (name, have, prow()[1],
+                                                    B("px_kheld")))
 
 print()
 if FAIL:
