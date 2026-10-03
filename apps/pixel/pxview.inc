@@ -23,11 +23,12 @@
 PX_BANDH    equ 16                  ; rows a band
 PX_VOC2P    equ 0x4000              ; the 4bpp layout's plane table
 PX_THMW     equ 160                 ; the thumbnail's largest width...
-PX_THMH     equ 64                  ; ...and height
+PX_THMH     equ 96                  ; ...and height (no title strip over the
+                                    ; Navigator: SPEC.md 106.15)
 PX_ZMIN     equ 256                 ; the smallest zoom (16.16): 1/256
 PX_SIDEMAX  equ 32767               ; no zoom makes a side longer than this
 PX_HBW      equ 128                 ; the Histogram's band (os88gfx.inc's
-PX_HBH      equ 64                  ; PX_HBW/H, defined from these)
+PX_HBH      equ 80                  ; PX_HBW/H, defined from these)
 PX_HBST     equ PX_HBW / 8
 
 ; --- a VIEW: where the picture is on the screen and how it is sampled -------
@@ -619,13 +620,14 @@ px_viewclaim:
     mov word [px_vo_c2p], PX_VOC2P  ; 4bpp: tables, plane table, a packed row,
     mov word [px_vo_row], 0x5000    ; a band, the thumbnail
     mov word [px_vo_band], 0x5200
-    mov word [px_vo_thm], 0x6900
-    mov ax, 32
+    mov word [px_vo_thm], 0x6900    ; the thumbnail is LAST in the claim:
+    mov ax, (0x6900 + PX_THMW / 2 * PX_THMH + 1023) / 1024    ; its area
+                                    ; is PX_THMW / 2 x PX_THMH at 4bpp
     jmp short .claim
 .one:
     mov word [px_vo_band], 0x4000   ; 1bpp: tables, a band, the thumbnail
-    mov word [px_vo_thm], 0x4600
-    mov ax, 19
+    mov word [px_vo_thm], 0x4600    ; ...and PX_THMW / 8 x PX_THMH at 1bpp
+    mov ax, (0x4600 + PX_THMW / 8 * PX_THMH + 1023) / 1024
 .claim:
     call OSAPI_MEM_CLAIM
     jc .out
@@ -2154,23 +2156,20 @@ px_navthumb:
     call px_fitz
     mov bx, px_vthm
     call px_vmake
+    mov ax, [px_thbw]               ; a side the rounding made one pixel
+    cmp ax, [px_vthm + VW_DW]       ; longer than the box is cut to it, or
+    jae .bw                         ; the blit would take the well's frame
+    mov [px_vthm + VW_DW], ax
+.bw:
+    mov ax, [px_thbh]
+    cmp ax, [px_vthm + VW_DH]
+    jae .bh
+    mov [px_vthm + VW_DH], ax
+.bh:
     call px_thrender
     mov byte [px_thok], 1
 .have:
-    ; place it: centred across (on the grid) and down
-    mov ax, [px_thbw]
-    sub ax, [px_vthm + VW_DW]
-    shr ax, 1
-    and ax, 0xFFF8
-    add ax, [px_ntx]
-    mov [px_vthm + VW_IX], ax
-    mov ax, [px_nh2]
-    sub ax, [px_nh1]
-    inc ax
-    sub ax, [px_vthm + VW_DH]
-    shr ax, 1
-    add ax, [px_nh1]
-    mov [px_vthm + VW_IY], ax
+    call px_navput                  ; place it: centred, on the grid
     ; the ground round it, then the bank
     mov ax, [px_nw1]
     mov bx, [px_nh1]
@@ -2211,6 +2210,57 @@ px_navthumb:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; px_navput - the thumbnail's place in the well [px_ntx] / [px_nh1..2]:
+; centred across (on the grid) and down. Preserves all
+px_navput:
+    push ax
+    mov ax, [px_thbw]
+    sub ax, [px_vthm + VW_DW]
+    jae .w
+    xor ax, ax
+.w:
+    shr ax, 1
+    and ax, 0xFFF8
+    add ax, [px_ntx]
+    mov [px_vthm + VW_IX], ax
+    mov ax, [px_nh2]
+    sub ax, [px_nh1]
+    inc ax
+    sub ax, [px_vthm + VW_DH]
+    jae .h
+    xor ax, ax
+.h:
+    shr ax, 1
+    add ax, [px_nh1]
+    mov [px_vthm + VW_IY], ax
+    pop ax
+    ret
+
+; px_navplace - from the layout: the thumbnail's place in the well where it
+; is NOW (a window that moved was not repainted, SPEC.md 11.96.12, and a
+; press in the Navigator, its frame and a pan all read the place). Only a
+; bank that is this well's is placed. Preserves all
+px_navplace:
+    push ax
+    test byte [px_pvis], 1
+    jz .out
+    cmp word [px_pbhw], 0
+    je .out
+    cmp byte [px_thok], 0
+    je .out
+    mov ax, [px_nwell]
+    add ax, 7
+    and ax, 0xFFF8
+    mov [px_ntx], ax
+    mov ax, [px_nwell + 2]
+    mov [px_nh1], ax
+    mov ax, [px_nwell + 6]
+    mov [px_nh2], ax
+    call px_navput
+.out:
     pop ax
     ret
 
@@ -2488,11 +2538,15 @@ px_navframe_on:
     push dx
     call px_navrect
     jc .no
+    call OSAPI_GFX_XOR_RECT
+    sub ax, [px_cx0]                ; kept from the content's corner: a
+    sub cx, [px_cx0]                ; window that moved took the frame with
+    sub bx, [px_cy0]                ; it (SPEC.md 11.96.12)
+    sub dx, [px_cy0]
     mov [px_nfr], ax
     mov [px_nfr + 2], bx
     mov [px_nfr + 4], cx
     mov [px_nfr + 6], dx
-    call OSAPI_GFX_XOR_RECT
     mov byte [px_nfon], 1
 .no:
     pop dx
@@ -2504,6 +2558,14 @@ px_navframe_on:
 px_navframe_off:
     cmp byte [px_nfon], 0
     je .ret
+    test byte [px_pvis], 1          ; the Navigator is not laid out (the
+    jz .gone                        ; panels hidden, the compact column on
+    cmp word [px_pbhw], 0           ; another panel): what was there has
+    jne .xor                        ; been drawn over, frame and all, so
+.gone:                              ; there is nothing to take back - an
+    mov byte [px_nfon], 0           ; XOR now would land on the canvas
+    ret
+.xor:
     push ax
     push bx
     push cx
@@ -2512,6 +2574,10 @@ px_navframe_off:
     mov bx, [px_nfr + 2]
     mov cx, [px_nfr + 4]
     mov dx, [px_nfr + 6]
+    add ax, [px_cx0]
+    add cx, [px_cx0]
+    add bx, [px_cy0]
+    add dx, [px_cy0]
     call OSAPI_GFX_XOR_RECT
     mov byte [px_nfon], 0
     pop dx
@@ -2519,6 +2585,44 @@ px_navframe_off:
     pop bx
     pop ax
 .ret:
+    ret
+
+; px_navframe_sync - the frame where the view is now: left alone when it
+; is there already (no XOR at all), else off and on. Preserves all
+px_navframe_sync:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp byte [px_nfon], 0
+    je .on
+    cmp byte [px_thok], 0
+    je .move
+    test byte [px_pvis], 1
+    jz .move
+    call px_navrect
+    jc .move
+    sub ax, [px_cx0]
+    sub cx, [px_cx0]
+    sub bx, [px_cy0]
+    sub dx, [px_cy0]
+    cmp ax, [px_nfr]
+    jne .move
+    cmp bx, [px_nfr + 2]
+    jne .move
+    cmp cx, [px_nfr + 4]
+    jne .move
+    cmp dx, [px_nfr + 6]
+    je .out
+.move:
+    call px_navframe_off
+.on:
+    call px_navframe_on
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; px_navpan - CX, DX = a point in the Navigator's picture: the canvas
@@ -2955,6 +3059,12 @@ px_hgraph:
     jb .c2
 .put:
     mov ax, (CBLACK << 8) | CWHITE  ; paper lit (white), ink dark (black)
+    cmp byte [px_col], 0            ; the colour face draws the channel in its
+    je .pen                         ; own colour (SPEC.md 106.16)
+    mov bl, [px_hchan]
+    xor bh, bh
+    mov ah, [px_hink + bx]
+.pen:
     call OSAPI_GFX_BLIT1_PEN
     call gfxe_bput
     jmp short .out
@@ -2969,6 +3079,8 @@ px_hgraph:
     pop bx
     pop ax
     ret
+
+px_hink:    db CDGRAY, CRED, CGREEN, CBLUE  ; Luminosity, Red, Green, Blue
 
 ; px_gcol - SI = a column: DX:AX = the sum of its bins. Preserves all else
 px_gcol:

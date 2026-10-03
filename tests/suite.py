@@ -1225,6 +1225,14 @@ FAST = [
         "CUBE's and GREY's shipped plans, is exactly what its search answers "
         "today: a plan search changed in one place and not the other fails "
         "the build rather than putting a different picture on the glass"),
+    Row("pixart", "fast", py("tools/pixart.py", "--selfcheck"), 0.3,
+        "PiXEL's colour faces (SPEC.md 106.16): tools/pixart.py draws the "
+        "toolbar's and the tool column's pictures out of pxicons.inc's own "
+        "art, every face whole bytes for the planar blit, every toolbar "
+        "face's gap chrome and every tool face's last column the column's "
+        "rule (a negative control proves the gap check can fail), each "
+        "caption with air in its button, and two builds byte-identical; "
+        "the Makefile's --check-asm then holds pixel.asm's numbers to it"),
     Row("pixcorpus", "fast", py("tools/pixcorpus.py", "--check"), 0.3,
         "PiXEL's fixtures (SPEC.md 106.13) - every depth, type, orientation "
         "and packing of BMP, PCX, TGA, PNM and PIX, and a hostile half - each "
@@ -7834,11 +7842,35 @@ SOAK = [
         "SPEC.md 106.14's budget: the primitive calls of an open, a zoom "
         "step (the canvas and the Navigator's frame, not the panels), a pan "
         "down (ONE scroll and the strip), a pan across (SAVE/REST and the "
-        "columns), a panel collapse and a status field (one run) - counted "
+        "columns), a tool (two buttons) and a status field (one run of the "
+        "cells that moved) - counted "
         "at the API cells; a change that repaints more than it changed "
         "fails with the counts beside the budget",
         needs=("marty", "nasm"), serial=True,
-        wants=("build/pixel.o88", "build/os8088-360.img")),
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
+    Row("pxdraw", "soak", py("tests/pxdraw.py"), 200.0,
+        "PiXEL's redraw priced in drawing calls (SPEC.md 106.15), on the "
+        "Hercules face: every far call into a drawing cell of the API table "
+        "that RETURNS INTO PIXEL (the planar blit's own clip walk re-enters "
+        "its cell from .cold and is not a call of ours), per gesture - a "
+        "tool, a zoom step each way, a pan each way, Fit, the panels and the "
+        "filmstrip hidden and shown, the key card, a status field, an open - "
+        "each under a ceiling a repaint blows through, named by the routine "
+        "that made it; and the picture the records drew pixel-identical to "
+        "a forced full repaint",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
+    Row("pxdrawvga", "soak", py("tests/pxdraw.py", "--machine",
+                                "os8088_xt_vga"), 200.0,
+        "pxdraw on the VGA XT, the COLOUR face (SPEC.md 106.16): the "
+        "toolbar's and tools' faces one planar blit each, the panes, the "
+        "same ceilings and the same incremental-equals-repaint identity, "
+        "compared as the card rasterised it in colour",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
     Row("wdpen", "soak", py("tests/wdpen.py"), 60.0,
         "SPEC.md 68.2.5: [gfx_dis] is ONE KERNEL BYTE whose lifetime is one "
         "gfx-lock hold, and 12.8.3 takes that lock around the WHOLE event "

@@ -16,8 +16,8 @@ length of one operation - and holds each operation to the budget SPEC.md
                 OSAPI_GFX_SCROLL and the exposed strip, not the canvas
   pan across    the right arrow: OSAPI_GFX_SAVE/REST band by band and the
                 exposed columns
-  collapse      the Histogram's box: the panel column and nothing else
-  status        a status field that changed: one run, nothing else
+  tool          a tool by its letter: the two buttons whose latch moved
+  status        a status field that changed: one run of the cells that did
 
 A change that makes any of them repaint more than it changed fails here
 with the counts side by side. --record prints the numbers to put in the
@@ -40,11 +40,11 @@ KSEG = 0x60
 # Measured, then rounded up a little: a change past one of these is a
 # decision, not a drift.
 BUDGET = {
-    "open":     {"total": 830, "blitp": 130},
+    "open":     {"total": 200, "blitp": 130},
     "zoom":     {"total": 50, "blitp": 45, "fill": 0, "font_run": 3},
     "pan":      {"total": 10, "scroll": 1, "blitp": 7},
     "across":   {"total": 90, "save": 22, "rest": 22},
-    "collapse": {"total": 110, "blitp": 3},
+    "tool":     {"total": 4},
     "status":   {"total": 1, "font_run": 1},
 }
 FAIL = []
@@ -67,7 +67,8 @@ if o88[:syms["op_table"]] != image[:syms["op_table"]]:
     sys.exit("build/pixel.o88 is not this tree's pixel.asm - run "
              "`make build/pixel.o88`")
 DISK = "build/pxpaint.img"
-M.scratch_disk(DISK, "build/pixel.o88", "PICS:apps/pixel/samples/CITY.PCX")
+M.scratch_disk(DISK, "build/pixel.o88", "build/PIXEL.GFX",
+               "PICS:apps/pixel/samples/CITY.PCX")
 print("== PiXEL: primitive calls an operation (SPEC.md 106.14) ==")
 with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
     m = ui.m
@@ -123,17 +124,14 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
     ox = W("px_ox")
     report("across", counted("a pan across", lambda: m.key("ArrowRight")))
     check("across: the picture moved", W("px_ox") != ox, "")
-    # the Histogram's box: PX_B_PB0 + 1 (pixel.asm's button order)
-    pb = syms["px_brects"] + 8 * (19 + 1)
-    r = m.read(base + pb, 8)
-    x1, y1, x2, y2 = (u16(r, i) for i in (0, 2, 4, 6))
-    report("collapse", counted("a panel collapse",
-                               lambda: ui.mo.click((x1 + x2) // 2,
-                                                   (y1 + y2) // 2, settle=0)))
+    report("tool", counted("a tool by its letter", lambda: m.key("KeyZ")))
     ui.mo.to(2, 2)
     ui.settle()
     mem = syms["px_sv"] + 6 * 16    # PX_SF_MEM's value: a stale one, so the
-    m.write(base + mem, b"x\0")     # next five-second look redraws it
+    m.write(base + mem, b"x\0")     # next five-second look redraws it - and
+    slot = syms["px_slots"] + 6 * syms.get("PX_SLOTSZ", 32) + 8 + 5
+    m.write(base + slot, b"x")      # its record told one cell differs, so
+                                    # that one cell is what it draws (106.15)
     report("status", counted("a status field",
                              lambda: None,
                              lambda: m.read(base + mem, 1) != b"x"))

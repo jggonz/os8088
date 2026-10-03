@@ -162039,7 +162039,7 @@ the **status bar**. Two tiers, chosen from the live content height:
 | | FULL (content ≥ 240 rows: VGA, Hercules) | COMPACT (shorter: CGA) |
 |---|---|---|
 | toolbar | 16x16 pictures with captions underneath | pictures only |
-| panels | Navigator, Histogram, Image Info stacked | ONE panel; its box (`>`), its strip or Tab turns to the next |
+| panels | Navigator, Histogram, Image Info stacked, no title strips (106.15) | ONE panel; Tab, or a press on it that no control takes, turns to the next |
 | filmstrip | shown | hidden (View > Show Filmstrip shows it) |
 
 The captions also need a content width of 616 pixels; a narrower full-tier
@@ -162049,21 +162049,33 @@ drops the panel column. Inside the column a panel that does not fit is
 dropped from the bottom up — Image Info, then Histogram, then Navigator — and
 only Image Info may be cut short (a picture well or a column of buttons cut
 in half is neither); on the full tier, Image Info open and last takes the
-rows left under it, so the column reads as one stack. The tool column drops
+rows left under it, so the column reads as one stack. **A panel is its
+body:** there is no title strip and no collapse box (the owner's call: they
+cost rows, and the panels are not minimised), so the Navigator's picture,
+the Histogram's graph and its Luminosity drop-down and Image Info's labelled
+lines say what each panel is. Two panels are parted by one rule row on the
+plain face and are framed panes on the colour face (106.16); the rows the
+strips had went to the bodies — the Navigator's is 100 / 64 / 48 rows (VGA /
+Hercules and EGA / CGA, `px_k_nav`) where it was 60 / 46 / 40, the
+Histogram's 84 / 56 / 58 (`px_k_hist`), and Image Info shows six lines on a
+Hercules where it showed four. Showing and hiding them stays View > Hide
+Panels, and the filmstrip View > Hide Filmstrip. The tool column drops
 its last tools the same way when the middle band is short (the CGA with the
 filmstrip shown keeps four of six); their letters still choose them.
 
 **The display decides two things the size does not.** The palette is chosen
 by DEPTH (`OSAPI_WM_DISPLAY`'s DH): on 4bpp the chrome is light grey, the
-panel bodies white, the strips blue, the canvas dark grey; on 1bpp
+panel bodies white, the highlight blue, the canvas dark grey; on 1bpp
 everything is black on white, because a grey is a dither there (§39.4) and
 text on a dither cannot be read. And on a **CGA** every picture is drawn at
 half height: a CGA pixel is 2.4 times as tall as it is wide, so `px_halfinit`
 ORs each pair of icon rows into one at launch (every one-pixel stroke
 survives) and the CGA's buttons are 12 rows rather than 20. The picture
-heights in the panels and the filmstrip (thumbnail 48 / 31 / 20 rows for a
-64-pixel width) follow the pixel's aspect the same way; EGA takes Hercules'
-row of every table.
+heights in the panels and the filmstrip (a card's box 60 / 40 / 25 rows for
+an 80-pixel width, 4:3 at the pixel's aspect) follow the pixel's aspect the
+same way; EGA takes Hercules' row of every table. A 4bpp display with the
+full tier and a content box at least 560 x 260 is drawn as the COLOUR FACE
+(106.16).
 
 ### 106.2 Menus, About and keys (wave 1)
 
@@ -162081,14 +162093,15 @@ decides as often as the user does), and View > Keyboard Help.
 
 Keys: Ctrl+O opens; F1 or `?` shows the key card; H Z M C E R pick the Hand,
 Zoom, Marquee, Crop, Eyedropper and Rotate tools; Tab turns the compact
-layout's panel. Any key or click takes a card down and does nothing else.
+layout's panel (and so does a press on that panel which no control takes). Any key or click takes a card down and does nothing else.
 
 ### 106.3 Toolbar, tools, panels, filmstrip, status bar (wave 1)
 
-**Every control is one `os88ui_btn` record** (`OS88UI_BIMG`, §13.8.9) — 27
-buttons: ten on the toolbar, six tools, the Navigator's `+` `-` `Fit`, a box
-on each panel's strip and the filmstrip's, the filmstrip's `<` `>` and the
-status bar's `<` `>`. One record, because `os88ui_btnclick` finds a window's
+**Every control is one `os88ui_btn` record** (`OS88UI_BIMG`, §13.8.9, and
+`OS88UI_BOWN`, §13.8.10, for the colour face) — 23 buttons: ten on the
+toolbar, six tools, the Navigator's `+` `-` `Fit`, the filmstrip's `<` `>` and
+the status bar's `<` `>`. (Wave 1's four boxes, one on each panel's strip and
+one on the filmstrip's, went with the strips: 106.1.) One record, because `os88ui_btnclick` finds a window's
 record by walking the package's list and takes the first. A button not laid
 out this pass keeps the rect {1,1,0,0}, which `os88ui_bhit` (signed) never
 matches. The library arms and fires on geometry alone, so `px_bfire` tests
@@ -162101,19 +162114,22 @@ matches. The library arms and fires on geometry alone, so `px_bfire` tests
   1-pixel rule in the middle of the button row.
 - **Tool column.** Six pictures; the active tool is `OS88UI_LATCH`. Picking
   one redraws exactly two buttons.
-- **Panels.** A title strip (the title as one run, a `-`/`+` box that
-  collapses and expands, or `>` on the compact tier) and a body: Navigator's
-  picture well and its three zoom buttons; Histogram's graph well and Mean,
-  Std Dev, Min, Max; Image Info's File, Folder, Size, Format, Pixels, Depth.
-- **Filmstrip.** `Images (N)` with a collapse box, the `<` `>` pagers and the
-  folder's line. Wave 1 counts the pictures beside the one opened; the
-  thumbnails are wave 5's.
+- **Panels.** A body each, no title strip (106.1): Navigator's picture well
+  and its three zoom buttons; Histogram's graph well, its channel's
+  drop-down and Mean, Std Dev, Min, Max; Image Info's File, Folder, Size,
+  Format, Pixels, Depth, Packing, Palette.
+- **Filmstrip.** A rule over it, the `<` `>` pagers and the folder's cards
+  (its count is the status bar's `n of N`). Wave 1 counts the pictures beside
+  the one opened; the thumbnails are wave 5's.
 - **Status bar.** Eight fields — name, dimensions, format, zoom, colours,
   bytes, `Memory: 412K` (`OSAPI_MEM_AVAIL`'s total free, looked at every five
-  seconds by `OSAPI_WM_TIMER`) and `n of N` — each drawn as ONE run,
-  ` value `, with a 1-pixel rule between two. A field is redrawn alone when,
-  and only when, its value changed (`px_sval` marks it, `px_sflush` draws
-  it). A bar too narrow for all eight drops colours, then bytes, then memory,
+  seconds by `OSAPI_WM_TIMER`) and `n of N` — each ONE run on the 8-pixel
+  grid, a cell of margin before the first and an 8-pixel separator cell with
+  its 1-pixel rule inside between two (the wave-1 review's MIN-6: a bare rule
+  between two runs put every field after the first off the grid, on
+  `font_run`'s slower unaligned path). A field is redrawn when, and only
+  when, its value changed (`px_sval` marks it), and then only the cells that
+  changed (106.15). A bar too narrow for all eight drops colours, then bytes, then memory,
   then format, zoom, dimensions and place, in that order; the name stays.
   The bar's arrows end 24 pixels short of the right edge — the grow box's
   13 columns (§11.1.1) and air enough that the arrows do not read as part of
@@ -162134,7 +162150,8 @@ about 225 ms at CLAUDE.md's 756 us floor on a 4.77 MHz XT. Two thirds of the
 fills are the buttons' own rings. The incremental paths: a tool change is
 two buttons, a status field one run, a panel collapse the panel column, the
 card going down a full repaint. Wave 2's `pxpaint` row makes these numbers a
-gate.
+gate. (These are wave 1's numbers, with title strips; 106.15 has what a
+command costs since, and 106.16 the colour face's full repaint.)
 
 ### 106.5 The part ABI: far-called lazy code parts (wave 1)
 
@@ -162447,8 +162464,10 @@ own packed-to-planar BLIT4 decoder is 107 a pixel on top of composing. The
 plan's 25 a pixel was not reached.
 
 **The VIEW claim** holds the 16 KB of tables, the 4 KB plane table (4bpp),
-the band and the Navigator's banked thumbnail: 31 KB on a colour display,
-19 KB on a 1bpp one.
+the band and the Navigator's banked thumbnail, which is LAST in the claim
+and `PX_THMW / 2 x PX_THMH` bytes on a colour display, `PX_THMW / 8 x
+PX_THMH` on a 1bpp one: 34 KB and 20 KB since 106.15 gave the Navigator the
+rows its title strip had (`PX_THMH` 96, where it was 64: 32 KB and 19 KB).
 
 **Pixel aspect and zoom.** A zoom is a 16.16 factor `Z` of screen pixels per
 SOURCE pixel across; down the screen it is `Z * a`, with `a` = 1 on VGA,
@@ -162488,7 +162507,8 @@ a straddle) or the pan is wider than the canvas.
   mean)^2 / N))` (48-bit sums), Min and Max the first and last non-empty bin.
   The graph is one 1bpp band (`apps/os88gfx.inc`'s `GFXE_BAND`), one column
   per `256/width` bins scaled to the tallest, put up with
-  `OSAPI_GFX_BLIT1_PEN` black on white.
+  `OSAPI_GFX_BLIT1_PEN` black on white — on the colour face (106.16) in the
+  channel's own colour on white: dark grey, red, green or blue.
 - **Image Info.** File, Folder, Size, Format, Pixels (`at 1/n` when scaled),
   Depth, Packing (`None`, `RLE`, `RLE8`, `RLE4`, `Bit fields`) and Palette
   (`Own, 256`, `Cube`, `Grey`). File > Image Info... shows the same lines
@@ -162505,8 +162525,8 @@ a straddle) or the pan is wider than the canvas.
   toolbar button says why in a toast: `No picture open` or `Not in this
   build yet`.
 - **The filmstrip** shows the folder's pictures as CARDS — the format's name
-  in a framed card, the file's name under it, the open picture's card
-  inverted — around the open one, from the sorted list `px_walk` keeps (128
+  in a framed card, the file's name under it, the open picture's card in
+  the highlight's colours — around the open one, from the sorted list `px_walk` keeps (128
   names at most); the thumbnails are wave 5's.
 
 ### 106.13 Tests for the image core (wave 2)
@@ -162538,8 +162558,12 @@ a straddle) or the pan is wider than the canvas.
   render at Fit, after two zoom steps, after a scroll and after a shift, and
   for a bottom-up file painted as it decoded.
 - **`pxpaint`** (soak, MartyPC): the primitive calls of open, a pan step, a
-  zoom step, a panel collapse and a status update, counted at the API cells
-  and held to the budget in 106.14.
+  zoom step, a tool and a status update, counted at the API cells and held
+  to the budget in 106.14.
+- **`pxdraw`** / **`pxdrawvga`** (soak, MartyPC, Hercules and the VGA's
+  colour face): every gesture's calls per routine under 106.15's ceilings,
+  and the identity assertion; **`pixart`** (fast) is 106.16's pictures'
+  own checks.
 
 ### 106.14 What it costs (wave 2)
 
@@ -162570,3 +162594,164 @@ wave 9's `pxbench` starts from.
 | pan across | 79 | 19 SAVE + 19 REST, the strip's bands |
 | panel collapse | 98 | the panel column |
 | status field | 1 | one run |
+
+**Since 106.15 and 106.16** the open is **180** (113 BLITP hits, 45 runs, 9
+fills - the canvas and what the records found moved), and the panel
+collapse is gone with the panels' boxes: its row is a **tool** by its letter,
+**4** - the two faces' planar blits. `pxpaint` counts every hit of a cell,
+so a planar blit that walks a clip region is TWO hits (the kernel's walk
+far-calls the cell again for its fragment, from `.cold`, SPEC.md 5.4.3.6);
+`pxdraw` (106.15) counts PiXEL's own calls, which is why its numbers for the
+same gestures are smaller.
+
+### 106.15 A command draws what it changed — the records
+
+Waves 1 and 2 drew a command by REGION: an open ended by repainting the
+toolbar, the panel column, the filmstrip and the status bar whole, because
+each of them had something on it that might have changed. **Measured on
+MartyPC** (`tests/pxdraw.py`: a breakpoint on every drawing cell of the API
+table, each hit counted only when its far return address is PiXEL's - the
+planar blit's clip walk re-enters its own cell from `.cold` - and named by
+the routine that made it), an open of CITY.PCX was 597 drawing calls on
+the Hercules face and 660 on the VGA - 216 of them the twenty-odd buttons
+drawing their rings again over buttons that had not moved.
+
+**A region painter now draws its region whole and RECORDS what it drew**, and
+`px_usync` walks the window comparing the state with the record, drawing what
+moved and nothing else:
+
+| on the glass | the record | drawn when |
+|---|---|---|
+| a button | its flags and its picture as drawn (`px_bkey`) | either moved: a tool latched, Open becoming Stop, a button ungreyed |
+| a line of text - each status field, each of Image Info's lines, the Histogram's four statistics, the toolbar's caption row | a SLOT: its cells, where, and in what colours (`px_slots`) | the run from the first cell that differs to the last, ONE `font_run`; nothing at all when nothing moved |
+| the Histogram's graph | counted, channel, picture, face, well (`px_kg`) | any of them moved |
+| its drop-down | counted, channel (`px_kd`) | ditto |
+| the Navigator's picture | picture, depth, face, well (`px_kn`) | ditto; otherwise only its frame follows the view, and not even that when the view did not move |
+| a filmstrip card | which name, and whether it is the open one (`px_kcard`), out of a sum of the folder's names (`px_nsum`) | either moved; a Revert walks the same folder to the same sum and draws no card |
+
+Every record keeps its place RELATIVE to the content's corner: a window that
+moves is not repainted (SPEC.md 11.96.12), its pixels go with it, and so must
+what the records say about them. For the same reason the Navigator's frame,
+its well, the Histogram's well and its drop-down are laid out with the rest
+of the window (`px_lay_bodies`, `px_navplace`), where wave 2 banked them at
+the last paint - so a press in a Navigator that had moved went to where it
+used to be.
+
+`px_regdraw` decides which way a command draws. A command that MOVES a region
+- a panel shown or turned, the panels or the filmstrip hidden or shown, a
+card taken down, a drop-down's list closed over the content - sets
+`[px_geo]` (`px_regpaint`) and its regions are drawn whole, as `W_PAINT`
+draws them; every other caller gets the canvas rendered when it asked for it
+(the picture is the renderer's, not a record's) and the walk for the rest.
+`W_PAINT` and a whole region forget that region's records first (`px_owe`),
+so a damaged region is drawn whole whatever they said. The wave-2 callers -
+the end of a decode, a refusal, a zoom - needed no change: they already
+named regions, and the regions now go through the records.
+
+| gesture | Hercules before | after | VGA before | after |
+|---|---:|---:|---:|---:|
+| a tool, by its letter | 12 | 12 | 12 | 2 |
+| a zoom step in | 14 | 14 | 22 | 22 |
+| a pan down | 5 | 5 | 6 | 6 |
+| a pan across | 38 | 38 | 60 | 60 |
+| Fit | 15 | 15 | 21 | 21 |
+| Show Panels | 120 | 98 | 140 | 136 |
+| Show Filmstrip | 213 | 182 | 232 | 191 |
+| a status field (free memory) | 1 (14 cells) | 1 (1 cell) | 1 (14 cells) | 1 (1 cell) |
+| an open (Revert of CITY.PCX, the decode included) | 597 | 125 | 660 | 141 |
+| the key card down: a FULL repaint, the yardstick | 326 | 308 | 343 | 261 |
+
+A status field that changes draws the CELLS that changed - `Memory: 412K`
+becoming `411K` is one cell where it was fourteen, and a glyph cell is about
+0.9 ms on a 4.77 MHz 8088. Showing the panels or the filmstrip is a repaint
+of the regions that moved and stays the dearest gesture; it is also the
+rarest.
+
+**THE IDENTITY ASSERTION is what makes the records trustworthy.** After a run
+of gestures - a tool, a zoom each way, a pan each way, the filmstrip hidden
+and shown - `pxdraw` captures the content, forces a full repaint (the key
+card up and down) and captures again, and the two must be identical to the
+pixel, on the Hercules face (`pxdraw`) and on the VGA's colour face
+(`pxdrawvga`). Each gesture is also held under a ceiling a repaint of what it
+touches would blow through (`CEIL` in the test), so a caller that goes back
+to repainting regions fails by name.
+
+### 106.16 The colour face
+
+On a 4bpp display - the one the window is ON (`OSAPI_WM_DISPLAY`'s DH, laid
+out on every pass, §39.16.4) - with the full tier and a content box at least
+**560 x 260** (a VGA's is 640 x 416; an EGA's is about 640 x 284, the 350
+lines less the menu bar, the title and the dock), PiXEL is drawn as a COLOUR
+FACE. Below that gate, and on every 1bpp display, it is the plain face of
+106.1 - which is a complete face, not a degraded one. Content is the
+application's (§76) and the canvas the picture's; colour goes where it
+carries meaning:
+
+- **Buttons are pictures with their captions inside them.** Every button is
+  painted by PiXEL (`OS88UI_BOWN`, §13.8.10; `px_lab_col` points every label
+  at `px_bpaint`), so the library's press, drag-off and release redraw this
+  face and not the standard one. The toolbar's ten and the tool column's six
+  are **`PIXEL.GFX`'s pictures, one `OSAPI_GFX_BLITP` each**: a black frame
+  with its corners left as chrome, a white top-left and a grey bottom-right
+  bevel, the icon over its caption (the toolbar's) or alone (the tools'); up,
+  pressed (one grey line in at the top and the left, the contents a pixel
+  down and right) and greyed (embossed: the ink grey with white a pixel down
+  and right). A greyed button's caption greys with it, which the plain
+  face's one-run caption row cannot do (the wave-1 review's NIT 2). The
+  latched tool is pressed AND white inside, because it has to read from
+  across the window and not only under the pointer. The Navigator's `+ - Fit`
+  and the arrows are bevelled in code (`px_bevel`), their label opaque on the
+  grey with the grey ringed round it - every pixel once.
+- **Panes**: each panel is a dark-grey frame round its white body, four rows
+  of chrome round and between them; the column is 16 pixels wider than the
+  plain face's so a line keeps its 22 cells. No title strip (106.1).
+- **The Histogram's graph is drawn in its channel's colour**: dark grey for
+  Luminosity, then red, green and blue - the drop-down says which, and the
+  graph agrees with it.
+- **Highlight**: the open picture's filmstrip card is blue with white text.
+
+**The toolbar's layout is the faces'**: each a multiple of 8 wide (40, 48,
+56 or 64 pixels, `PXA_TABLES`), 30 rows, the button the face less its two
+columns of chrome at the right - so faces laid edge to edge on the grid are
+buttons with a gap and need no ground between them - with an 8-pixel
+separator cell between groups. A tool's face is the tool column's whole
+width, its rule included, 24 rows, edge to edge from two rows under the
+toolbar. A full repaint of the toolbar is ten planar blits, three
+separators, a margin and a tail, two rows of air each side and the rule:
+**~22 calls where the plain face's is ~60.**
+
+**`tools/pixart.py` draws the pictures** - in code, nothing hand-painted: the
+icons are pxicons.inc's own 16x16 art read out of the asm (so the two faces
+cannot drift apart), each icon's INSIDE - every paper pixel the cell's edge
+cannot reach - in an accent colour (the folder yellow, a lens cyan, the stop
+sign's octagon red with a white cross), the captions SET IN THE SYSTEM'S OWN
+HELVETICA (`faces/helv.t88`, §6.4) letter by letter on the ink with a
+one-pixel gap, as MIDIRack's are (§105.9.5). Planar, plane 0 first; 45 faces,
+**27,648 bytes**, `--selfcheck` a fast row (`pixart`) and `--check-asm` the
+Makefile's guard that `pixel.asm`'s `PXA_*` numbers and widths are the art's.
+
+**They are a file beside the package, `PIXEL.GFX`** (5,386 bytes LZ-wrapped
+on the disk; 6 clusters at 360 KB), read at entry - after the window is
+made, so a failed entry holds no claim - into a claim of its own, **only on
+a colour primary**: a Hercules or a CGA machine never reads a byte of it. A
+sidecar and not a part for MIDIRack's reason (§105.9.5: `os88pkg.py` will not
+compress an image with parts), and one more of PiXEL's own: **a picture's
+master is sized from the heap** (106.8), and a 27 KB claim can be the
+difference between 1/1 and 1/2. So the claim goes straight back, and every
+button is the code-drawn bevel, when the heap has less than **256 KB**
+(`PXA_MINFREE`) free beside it; a disk without the file, and a block the card
+refuses (a window straddling two displays, an origin off the grid), draw the
+same bevel. The VGA XT with PiXEL open and no picture reads 455 KB free with
+the pictures held and 482 KB without them (486 KB before this change: the
+records and the face's code are the other 4 KB).
+
+`PIXEL.GFX` rides beside `PIXEL.O88` wherever it ships: the 1.44 MB and
+1.2 MB apps disks, `office360`, every `pixeldisk`, the everything set and the
+live media.
+
+**EGA has no MartyPC profile**, so its face is ARITHMETIC here and not a
+picture: a content box of about 640 x 284 passes the gate; the toolbar is 35
+rows, the status bar 14 and the filmstrip 56 (its card box 40 rows, Hercules'
+row), which leaves a middle band of about 179 rows - the six tool faces need
+146, and the column holds the Navigator (64 + its frame), the Histogram
+(56 + its frame) and about three of Image Info's eight lines.

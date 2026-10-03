@@ -11963,8 +11963,10 @@ MIDISONGARGS := $(addprefix MEDIA/MIDI:,$(MIDISONGS))
 MIDISONGARGS720 := $(addprefix MEDIA/MIDI:,$(MIDISONGS720))
 ifneq ($(PKGZ),)
 MRGFX := $(ZDATA)/MIDIRACK.GFX
+PXGFX := $(ZDATA)/PIXEL.GFX
 else
 MRGFX := $(BUILD)/MIDIRACK.GFX
+PXGFX := $(BUILD)/PIXEL.GFX
 endif
 
 $(ZDATA)/MIDIRACK.GFX: $(BUILD)/MIDIRACK.GFX tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
@@ -12090,7 +12092,7 @@ os88cz: $(BUILD)/os88cz.com
 .PHONY: os88cz
 
 APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
-        $(APPS_DOSCZ) $(MIDISONGS) $(MRGFX)
+        $(APPS_DOSCZ) $(MIDISONGS) $(MRGFX) $(PXGFX)
 # ...and the 360KB disk's list, which is that one less what the media disk
 # carries. Kept as its own variable rather than reusing $(APPS): a rule whose
 # prerequisites name a file that is not on the disk it builds is a dependency
@@ -12193,7 +12195,7 @@ APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(AP
 # taking a value in the MIDDLE of a positional list stops the list being
 # collected, so os88disk.py answered "unrecognized arguments: SYSTEM/DOS:..."
 # for the packages that followed it.
-APPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(MRGFX)) \
+APPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(MRGFX) $(PXGFX)) \
             $(addprefix GAMES:,$(APPS_GAMES)) \
             $(addprefix MEDIA:,$(APPS_DATA)) $(LOGOVIDARG) \
             $(MIDISONGARGS) \
@@ -12212,8 +12214,8 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(MRGFX)) \
 #     warning above binds it: the prerequisites ($(APPS720)) and the recipe
 #     ($(APPSARGS720)) are filtered together or the private-tree build names a
 #     file nothing made.
-APPS720 := $(filter-out $(BUILD)/pixel.o88,$(APPS))
-APPSARGS720 := $(filter-out $(MIDISONGARGS) APPS:$(MRGFX) APPS:$(BUILD)/pixel.o88,$(APPSARGS))
+APPS720 := $(filter-out $(BUILD)/pixel.o88 $(PXGFX),$(APPS))
+APPSARGS720 := $(filter-out $(MIDISONGARGS) APPS:$(MRGFX) APPS:$(BUILD)/pixel.o88 APPS:$(PXGFX),$(APPSARGS))
 APPSARGS720 := $(filter-out $(APPDATAFOLDER),$(APPSARGS720)) \
                $(MIDISONGARGS720) $(APPDATAFOLDER)
 
@@ -12340,8 +12342,8 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) $(BUILD)/midirack.o88 \
 OFFICE_PKGS := $(BUILD)/artful.o88 $(BUILD)/calc.o88 $(BUILD)/chart.o88 \
                $(BUILD)/fontview.o88 $(BUILD)/paint.o88 $(BUILD)/sheet.o88 \
                $(BUILD)/texpad.o88 $(BUILD)/word.o88 $(BUILD)/pixel.o88
-OFFICE360 := $(OFFICE_PKGS) $(OFFICE_DATA)
-OFFICEARGS360 := $(OFFICE_PKGS) \
+OFFICE360 := $(OFFICE_PKGS) $(PXGFX) $(OFFICE_DATA)
+OFFICEARGS360 := $(OFFICE_PKGS) $(PXGFX) \
                  $(addprefix MEDIA:,$(OFFICE_DATA)) \
                  $(MEDIAFOLDER) $(APPDATAFOLDER)
 
@@ -12569,7 +12571,7 @@ ALLAPPS := $(ALLAPPSFILES) $(BUILD)/runcpm-src.stamp tools/getruncpm.py
 # priced with it; the LOOM=32 directory slots below are priced too.
 
 ALLAPPSARGS := APPS:$(BUILD)/redline.o88 $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
-                                 $(BUILD)/frotz.o88 $(MRGFX) \
+                                 $(BUILD)/frotz.o88 $(MRGFX) $(PXGFX) \
                                  $(BUILD)/MIDIRACK.BNK) \
                $(addprefix GAMES:,$(APPS_GAMES)) \
                $(addprefix MEDIA:,$(APPS_DATA)) \
@@ -14343,6 +14345,20 @@ $(BUILD)/pxhelp.bin: apps/pixel/pxhelp.asm apps/pixel/pxpart.inc | $(BUILD)
 $(BUILD)/pixel.o88: $(BUILD)/pixel.bin $(BUILD)/pxhelp.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/pixel.bin -o $@ --part $(BUILD)/pxhelp.bin
 
+# THE COLOUR FACE'S PICTURES (SPEC.md 106.16): the toolbar's eleven faces and
+# the tool column's six, drawn by tools/pixart.py out of pxicons.inc's own art
+# - which first holds the package's numbers to its own (--check-asm) - and
+# shipped BESIDE the package as PIXEL.GFX, LZ-wrapped like any data file
+# (27,648 bytes, 5,386 packed). A sidecar and not a part for MIDIRACK.GFX's
+# reason (SPEC.md 105.9.5); PXGFX is what the disk lists name, and its
+# variable is set with MRGFX's, above the lists that use it.
+$(BUILD)/PIXEL.GFX: tools/pixart.py tools/os88face.py faces/helv.t88 \
+                    apps/pixel/pxicons.inc apps/pixel/pixel.asm | $(BUILD)
+	python3 tools/pixart.py --check-asm apps/pixel/pixel.asm -o $@
+$(ZDATA)/PIXEL.GFX: $(BUILD)/PIXEL.GFX tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
+	@mkdir -p $(ZDATA)
+	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
+
 # THE GALLERY (SPEC.md 106.7). Committed, and pinned by tools/pixsamples.py
 # --check, which also compares these three lists with its own - so a picture
 # added here and not there, or there and not here, fails the build. PLAIN on
@@ -14359,15 +14375,15 @@ PX_SAMPLES_360 := $(PXS)/VACATION.JPG $(PXS)/LAKE.JPG $(PXS)/CAT.GIF \
                   $(PXS)/BALLOONS.PNG
 
 # `make pixeldisk`: PiXEL and its gallery, in all four geometries, REDLINE's
-# shape. The package at the root, the pictures in PICTURES/ - the folder the
+# shape. The package and PIXEL.GFX at the root, the pictures in PICTURES/ - the folder the
 # filmstrip shows - and SYSTEM/APPDATA/ made for the thumbnail cache to come
 # (SPEC.md 19.9). On demand, like every application floppy.
 pixeldisk: $(BUILD)/pixel.img $(BUILD)/pixel720.img $(BUILD)/pixel120.img $(BUILD)/pixel360.img
-$(BUILD)/pixel.img: $(BUILD)/pixel.o88 $(PX_SAMPLES) tools/os88disk.py
-	python3 tools/os88disk.py --size 1440 -o $@ $< $(addprefix PICTURES:,$(PX_SAMPLES)) --folder SYSTEM/APPDATA
-$(BUILD)/pixel120.img: $(BUILD)/pixel.o88 $(PX_SAMPLES) tools/os88disk.py
-	python3 tools/os88disk.py --size 1200 -o $@ $< $(addprefix PICTURES:,$(PX_SAMPLES)) --folder SYSTEM/APPDATA
-$(BUILD)/pixel720.img: $(BUILD)/pixel.o88 $(PX_SAMPLES_720) tools/os88disk.py
-	python3 tools/os88disk.py --size 720 -o $@ $< $(addprefix PICTURES:,$(PX_SAMPLES_720)) --folder SYSTEM/APPDATA
-$(BUILD)/pixel360.img: $(BUILD)/pixel.o88 $(PX_SAMPLES_360) tools/os88disk.py
-	python3 tools/os88disk.py --size 360 -o $@ $< $(addprefix PICTURES:,$(PX_SAMPLES_360)) --folder SYSTEM/APPDATA
+$(BUILD)/pixel.img: $(BUILD)/pixel.o88 $(PXGFX) $(PX_SAMPLES) tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $< $(PXGFX) $(addprefix PICTURES:,$(PX_SAMPLES)) --folder SYSTEM/APPDATA
+$(BUILD)/pixel120.img: $(BUILD)/pixel.o88 $(PXGFX) $(PX_SAMPLES) tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ $< $(PXGFX) $(addprefix PICTURES:,$(PX_SAMPLES)) --folder SYSTEM/APPDATA
+$(BUILD)/pixel720.img: $(BUILD)/pixel.o88 $(PXGFX) $(PX_SAMPLES_720) tools/os88disk.py
+	python3 tools/os88disk.py --size 720 -o $@ $< $(PXGFX) $(addprefix PICTURES:,$(PX_SAMPLES_720)) --folder SYSTEM/APPDATA
+$(BUILD)/pixel360.img: $(BUILD)/pixel.o88 $(PXGFX) $(PX_SAMPLES_360) tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $< $(PXGFX) $(addprefix PICTURES:,$(PX_SAMPLES_360)) --folder SYSTEM/APPDATA
