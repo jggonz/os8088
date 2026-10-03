@@ -70,13 +70,12 @@ PX_NTOOL    equ 6
 PX_B_NZIN   equ 16                  ; the Navigator's +, - and Fit
 PX_B_NZOUT  equ 17
 PX_B_NFIT   equ 18
-PX_B_PB0    equ 19                  ; each panel's box, three
-PX_B_FSBOX  equ 22                  ; the filmstrip's box...
-PX_B_FSL    equ 23                  ; ...and its two arrows
-PX_B_FSR    equ 24
-PX_B_SPREV  equ 25                  ; the status bar's two
-PX_B_SNEXT  equ 26
-PX_NB       equ 27
+PX_B_FSL    equ 19                  ; the filmstrip's two arrows
+PX_B_FSR    equ 20
+PX_B_SPREV  equ 21                  ; the status bar's two
+PX_B_SNEXT  equ 22
+PX_NB       equ 23                  ; (no panel has a title strip or a box
+                                    ; any more: SPEC.md 106.15)
 
 PX_TBN      equ 13                  ; toolbar items, separators included
 PX_NSF      equ 8                   ; status fields
@@ -112,7 +111,7 @@ PX_R_ALL    equ 63
 
 PX_PR_NONE   equ 0                  ; what a press that was no button's hit
 PX_PR_CANVAS equ 1
-PX_PR_STRIP  equ 2
+PX_PR_PANEL  equ 2                  ; the compact layout's panel, no control
 PX_PR_HAND   equ 3                  ; a Hand drag on the picture
 PX_PR_NAV    equ 4                  ; a press or drag in the Navigator
 PX_NAMES     equ 128                ; the folder's pictures px_walk keeps
@@ -164,6 +163,7 @@ px_entry:
     mov [px_homevol], bl            ; goes back to (px_pfetch)
     call px_halfinit
     call px_qinit                   ; the cube's level tables (pxmaster.inc)
+    call px_slotsinit               ; every record owed (pxui.inc)
     call px_initstate
     mov si, px_tpl
     call OSAPI_WM_CREATE
@@ -171,6 +171,9 @@ px_entry:
     jmp .fail
 .made:
     mov [px_win], bx
+    call px_artload                 ; the colour face's pictures, on a colour
+                                    ; primary (SPEC.md 106.16): after the
+                                    ; window, so a failed entry holds none
     OS88_REGION_MOVABLE             ; SPEC.md 66.6.1: our region may move
     mov al, 1
     call OSAPI_WM_SIZABLE           ; every paint lays out from the live box
@@ -240,9 +243,6 @@ px_initstate:
     inc bx
     cmp bx, PX_INFON
     jb .iv
-    mov si, px_s_fs0
-    mov di, px_fstitle
-    call px_strcpy
     mov si, px_s_fsnone
     mov di, px_fsline
     call px_strcpy
@@ -317,6 +317,8 @@ px_draw:
     mov dx, [px_tby2]
     call px_meets
     jc .t
+    mov al, PX_R_TB
+    call px_owe                     ; drawn whole: its records too
     call px_draw_tb
 .t:
     test byte [px_rmask], PX_R_TOOLS
@@ -327,6 +329,8 @@ px_draw:
     mov dx, [px_midy2]
     call px_meets
     jc .c
+    mov al, PX_R_TOOLS
+    call px_owe                     ; drawn whole: its records too
     call px_draw_tools
 .c:
     test byte [px_rmask], PX_R_CANVAS
@@ -349,6 +353,8 @@ px_draw:
     mov dx, [px_midy2]
     call px_meets
     jc .f
+    mov al, PX_R_PANELS
+    call px_owe                     ; drawn whole: its records too
     call px_draw_panels
 .f:
     test byte [px_rmask], PX_R_FS
@@ -362,6 +368,8 @@ px_draw:
     dec dx
     call px_meets
     jc .s
+    mov al, PX_R_FS
+    call px_owe                     ; drawn whole: its records too
     call px_draw_fs
 .s:
     test byte [px_rmask], PX_R_STATUS
@@ -372,6 +380,8 @@ px_draw:
     mov dx, [px_yb]
     call px_meets
     jc .sd
+    mov al, PX_R_STATUS
+    call px_owe                     ; drawn whole: its records too
     call px_draw_status
     mov byte [px_sdirty], 0         ; the fields on the glass are the values
     jmp short .out
@@ -435,10 +445,18 @@ px_cards:
     pop bx
     ret
 
-; px_regdraw - AL = a mask of PX_R_* regions: draw them NOW, from a callback
-; (the lock is held there and nothing has armed a clip). Lays out first,
-; because the window may have moved since it was painted. A card that is up
-; is left alone - taking it down repaints everything anyway. Preserves all
+; px_regdraw - AL = a mask of PX_R_* regions, NOW, from a callback (the lock
+; is held there and nothing has armed a clip). Lays out first, because the
+; window may have moved since it was painted. A card that is up is left
+; alone - taking it down repaints everything anyway. Two ways (SPEC.md
+; 106.15):
+;   [px_geo] set - a command that MOVED a region (a panel shown or turned,
+;     the filmstrip hidden, a card taken down, a list closed over the
+;     content): each region in the mask is drawn whole, as W_PAINT does;
+;   otherwise the canvas, when it is in the mask, is rendered - the picture
+;     is the renderer's, not a record's - and the rest of the window is
+;     walked through its records (px_usync), which draw only what moved.
+; Preserves all
 px_regdraw:
     push ax
     push bx
@@ -463,13 +481,30 @@ px_regdraw:
     mov ax, [px_yb]
     mov [px_dy2], ax
     pop ax
+    mov byte [px_udrew], 0
+    cmp byte [px_geo], 0
+    jne .geo
+    test al, PX_R_CANVAS
+    jz .walk
+    push ax
+    mov al, PX_R_CANVAS
+    call px_draw
+    pop ax
+.walk:
+    call px_usync
+    cmp byte [px_half], 0           ; the CGA's 11-row bar under a 13-row
+    je .clr                         ; grow box: a region over it drawn, the
+    test al, PX_R_CANVAS            ; box goes back
+    jnz .grow
+    cmp byte [px_udrew], 0
+    je .clr
+    jmp short .grow
+.geo:
     call px_draw
     ; A SELF-INITIATED REPAINT OF THE CORNER ENDS WITH THE GROW BOX (SPEC.md
     ; 11.1.1). The box is 13 rows: inside a 14-row status bar, so only the bar
     ; reaches it on the full layout, but two rows above an 11-row one on the
-    ; CGA, where the regions over the bar reach it too. A status FIELD never
-    ; does - the bar's text stops PX_GROW short - and the five-second memory
-    ; look must not flash the box
+    ; CGA, where the regions over the bar reach it too
     test al, PX_R_STATUS
     jnz .grow
     cmp byte [px_half], 0
@@ -482,29 +517,24 @@ px_regdraw:
 .clr:
     call OSAPI_WM_CLIP_CLEAR
 .out:
+    mov byte [px_geo], 0
     pop bx
     pop ax
     ret
 
-; px_regbtn - SI = a button: redraw it alone, now, from a callback
-px_regbtn:
-    push bx
-    cmp byte [px_abon], 0
-    jne .out
-    cmp byte [px_helpon], 0
-    jne .out
-    cmp byte [px_infoon], 0
-    jne .out
-    mov bx, [px_win]
-    call OSAPI_WM_CLIP_SET
-    jc .out
-    call px_layout
-    jc .clr
-    call px_btn
-.clr:
-    call OSAPI_WM_CLIP_CLEAR
-.out:
-    pop bx
+; px_regpaint - AL = a mask: px_regdraw's regions drawn WHOLE (a command
+; that moved them). Preserves all
+px_regpaint:
+    mov byte [px_geo], 1
+    jmp px_regdraw
+
+; px_update - the window through its records alone: what moved is drawn
+; (SPEC.md 106.15). From a callback. Preserves all
+px_update:
+    push ax
+    xor al, al
+    call px_regdraw
+    pop ax
     ret
 
 ; --- W_ONCLICK, ours, in front of the library's -------------------------------
@@ -554,17 +584,14 @@ px_dropdone:
     jnc .pick
     push ax
     mov al, PX_R_ALL                ; the list came down over the content
-    call px_regdraw
+    call px_regpaint
     pop ax
 .pick:
     cmp al, 0xFF
     je .spent
     mov [px_hchan], al
     call px_hstats
-    push ax
-    mov al, PX_R_PANELS
-    call px_regdraw
-    pop ax
+    call px_update                  ; the graph, the box, the numbers
 .spent:
     stc
     ret
@@ -589,15 +616,15 @@ px_carddown:
     mov byte [px_infoon], 0
     push ax
     mov al, PX_R_ALL
-    call px_regdraw
+    call px_regpaint
     pop ax
     stc
     ret
 
 ; a press on no button (the library hands it on): CX, DX screen, SI window.
 ; The canvas: with no picture it is a big Open button; with the Hand it
-; starts a pan. The Navigator's picture: a pan to there. A compact panel's
-; strip: the next panel
+; starts a pan. The Navigator's picture: a pan to there. Anywhere else in a
+; compact layout's panel: the next panel
 px_onclick:
     mov byte [px_press], PX_PR_NONE
     push ax
@@ -644,23 +671,17 @@ px_onclick:
     mov al, PX_PR_NAV
     jmp short .got
 .strip:
-    mov al, PX_PR_STRIP             ; a panel strip on the compact layout:
-    cmp byte [px_tier], 0           ; the strip itself turns the page too
-    je .out
-    cmp byte [px_pnon], 0
+    mov al, PX_PR_PANEL             ; the compact layout's one panel, where
+    cmp byte [px_tier], 0           ; no control took the press: it turns to
+    je .out                         ; the next (SPEC.md 106.15 - there is no
+    cmp byte [px_pnon], 0           ; title strip, and no box, to do it)
     je .out
     cmp cx, [px_pnx1]
     jle .out
-    mov bx, [px_pcurw]
-    shl bx, 1
-    cmp dx, [px_pyw + bx]
+    cmp dx, [px_midy1]
     jl .out
-    push ax
-    mov ax, [px_pyw + bx]
-    add ax, [px_sh]
-    cmp dx, ax
-    pop ax
-    jge .out
+    cmp dx, [px_midy2]
+    jg .out
 .got:
     mov [px_press], al
 .out:
@@ -779,7 +800,7 @@ px_onup:
     call px_cmd_open
     jmp short .out
 .st:
-    cmp al, PX_PR_STRIP
+    cmp al, PX_PR_PANEL
     jne .out
     call px_nextpanel
 .out:
@@ -857,25 +878,9 @@ px_bfire:
     cmp ax, PX_B_T0
     jb .out
     cmp ax, PX_B_T0 + PX_NTOOL
-    jae .box
+    jae .out
     sub al, PX_B_T0
     call px_settool
-    jmp short .out
-.box:
-    cmp ax, PX_B_PB0
-    jb .out
-    cmp ax, PX_B_PB0 + 3
-    jae .fsbox
-    sub al, PX_B_PB0
-    call px_panelbox
-    jmp short .out
-.fsbox:
-    cmp ax, PX_B_FSBOX
-    jne .out
-    xor byte [px_fscol], 1
-    call px_flags
-    mov al, PX_R_TOOLS | PX_R_CANVAS | PX_R_PANELS | PX_R_FS
-    call px_regdraw                 ; the middle band and the filmstrip move
 .out:
     pop si
     pop bx
@@ -895,7 +900,7 @@ px_onkey:
     jnc .k0
     push ax
     mov al, PX_R_ALL
-    call px_regdraw
+    call px_regpaint
     pop ax
 .k0:
     jmp .out
@@ -1415,7 +1420,8 @@ px_shown:
     pop ax
     ret
 
-; px_settool - AL = a tool: latch it, and redraw the two buttons that change
+; px_settool - AL = a tool: latch it; the walk draws the two buttons that
+; change
 px_settool:
     push ax
     push si
@@ -1423,43 +1429,11 @@ px_settool:
     jae .out
     cmp al, [px_tool]
     je .out
-    mov ah, [px_tool]
     mov [px_tool], al
     call px_flags
-    mov al, ah
-    xor ah, ah
-    add ax, PX_B_T0
-    mov si, ax
-    call px_regbtn                  ; the old one up
-    mov al, [px_tool]
-    xor ah, ah
-    add ax, PX_B_T0
-    mov si, ax
-    call px_regbtn                  ; the new one down
+    call px_update                  ; the two buttons whose flags moved
 .out:
     pop si
-    pop ax
-    ret
-
-; px_panelbox - AL = a panel whose box fired: on the full layout it collapses
-; or expands; on the compact one the column turns to the next panel
-px_panelbox:
-    push ax
-    push bx
-    cmp byte [px_tier], 0
-    je .full
-    call px_nextpanel
-    jmp short .out
-.full:
-    xor ah, ah
-    mov bx, ax
-    mov al, [px_bit + bx]
-    xor [px_pcol], al
-    call px_flags
-    mov al, PX_R_PANELS
-    call px_regdraw
-.out:
-    pop bx
     pop ax
     ret
 
@@ -1477,7 +1451,7 @@ px_nextpanel:
     mov [px_pcurw], ax
     call px_flags
     mov al, PX_R_PANELS
-    call px_regdraw
+    call px_regpaint
     pop ax
     ret
 
@@ -1493,7 +1467,7 @@ px_paneltog:
     mov [px_miv + 2 * PX_MV_PANELS], ax
     call px_menuset
     mov al, PX_R_CANVAS | PX_R_PANELS
-    call px_regdraw                 ; the canvas takes the column, or gives it
+    call px_regpaint                ; the canvas takes the column, or gives it
     pop ax
     ret
 
@@ -1508,10 +1482,9 @@ px_filmtog:
     mov al, 1                       ; ...else on
 .set:
     mov [px_fsuser], al
-    mov byte [px_fscol], 0
     call px_flags
     mov al, PX_R_TOOLS | PX_R_CANVAS | PX_R_PANELS | PX_R_FS
-    call px_regdraw                 ; ...which lays out, and relabels
+    call px_regpaint                ; ...which lays out, and relabels
     pop ax
     ret
 
@@ -1861,12 +1834,40 @@ px_walk:
     jmp short .next
 .end:
     call px_sortnames
+    call px_namesum                 ; what the filmstrip's cards are made of
     cmp byte [px_ffound], 0
     jne .yes
     stc
     ret
 .yes:
     clc
+    ret
+
+; px_namesum - [px_nsum] = a sum over the folder's sorted names: the
+; filmstrip's cards are drawn again when it moves (SPEC.md 106.15), and only
+; then - a Revert walks the same folder to the same sum. Preserves all
+px_namesum:
+    push ax
+    push cx
+    push si
+    mov ax, [px_nnames]
+    mov cx, 13
+    mul cx
+    mov cx, ax
+    mov ax, [px_nnames]
+    mov si, px_names
+    jcxz .out
+.s:
+    rol ax, 1
+    add al, [si]
+    adc ah, 0
+    inc si
+    loop .s
+.out:
+    mov [px_nsum], ax
+    pop si
+    pop cx
+    pop ax
     ret
 
 ; px_sortnames - [px_names] in name order (insertion: there are at most
@@ -2548,15 +2549,7 @@ px_compose:
     mov si, px_ival + 4 * PX_IVSZ
     call px_strcat
 .ncv:
-    ; the filmstrip: "Images (13)" and "13 pictures in this folder"
-    mov di, px_fstitle
-    mov si, px_s_fsimg
-    call px_strcpy
-    mov ax, [px_fcount]
-    xor dx, dx
-    call px_u32n
-    mov si, px_s_rpar
-    call px_strcat
+    ; the filmstrip: "13 pictures in this folder"
     mov di, px_fsline
     mov ax, [px_fcount]
     xor dx, dx
@@ -2666,7 +2659,15 @@ px_flags:
     mov bx, ax
     shl bx, 1
     or word [px_bflags + bx], OS88UI_LATCH
-    call px_boxlabels
+    cmp byte [px_col], 0            ; the colour face paints every button
+    je .ml                          ; itself (SPEC.md 13.8.10, 106.16)
+    xor bx, bx
+.own:
+    or word [px_bflags + bx], OS88UI_OWN
+    add bx, 2
+    cmp bx, PX_NB * 2
+    jb .own
+.ml:
     call px_menulive
     pop si
     pop cx
@@ -2709,47 +2710,6 @@ px_menulive:
 .out:
     pop si
     pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; px_boxlabels - each box's label from the state: '>' on the compact layout,
-; where the box turns the column to the next panel, else '-' to collapse or
-; '+' to expand. Called by px_flags and by every layout, because the tier is
-; the layout's to know. Preserves all
-px_boxlabels:
-    push ax
-    push bx
-    push cx
-    push si
-    xor bx, bx
-.b:
-    mov ax, px_s_next
-    cmp byte [px_tier], 0
-    jne .bl
-    mov ax, px_s_minus
-    mov cl, [px_bit + bx]
-    test [px_pcol], cl
-    jz .bl
-    mov ax, px_s_plus
-.bl:
-    mov si, bx
-    add si, PX_B_PB0
-    shl si, 1
-    mov [px_lab_full + si], ax
-    mov [px_lab_half + si], ax
-    inc bx
-    cmp bx, 3
-    jb .b
-    mov ax, px_s_minus              ; ...and the filmstrip's
-    cmp byte [px_fscol], 0
-    je .fl
-    mov ax, px_s_plus
-.fl:
-    mov [px_lab_full + 2 * PX_B_FSBOX], ax
-    mov [px_lab_half + 2 * PX_B_FSBOX], ax
-    pop si
     pop cx
     pop bx
     pop ax
@@ -3111,9 +3071,13 @@ px_pal1:    db CWHITE, CWHITE, CBLACK, CWHITE, CWHITE, CBLACK, CBLACK, CBLACK
             db CWHITE
 
 ; --- per display kind: VGA, Hercules (and EGA), CGA ----------------------------
-px_k_thumb: dw 48, 31, 20           ; a filmstrip thumbnail's rows: 64 wide
-                                    ; at the pixel's own aspect
-px_k_nav:   dw 60, 46, 40           ; the Navigator's body (its buttons fit)
+px_k_thumb: dw 60, 40, 25           ; a filmstrip card's box's rows: 4:3 for
+                                    ; its 80 at the pixel's own aspect
+px_k_nav:   dw 100, 64, 48          ; the Navigator's body: the rows its
+                                    ; title strip had, given to the picture
+                                    ; (SPEC.md 106.15)
+px_k_hist:  dw 84, 56, 58           ; ...the Histogram's: to the graph (and
+                                    ; on a CGA its four lines whole)
 px_k_pw:    dw 176, 184, 176        ; the panel column's width
 
 px_bit:     db 1, 2, 4, 8, 16, 32, 64, 128
@@ -3175,12 +3139,59 @@ px_lab_full:
     dw pxi_fit, px_s_one, pxi_rotate, pxi_show
     dw pxi_hand, pxi_magnify, pxi_marquee, pxi_crop, pxi_eyedrop, pxi_rotate
     dw px_s_plus, px_s_minus, px_s_fit
-    dw px_s_minus, px_s_minus, px_s_minus
-    dw px_s_minus, px_s_lt, px_s_gt
+    dw px_s_lt, px_s_gt
     dw px_s_lt, px_s_gt
 %if ($ - px_lab_full) != PX_NB * 2
   %error "px_lab_full has a label per button"
 %endif
+
+; --- the colour face's labels: every entry our painter (OS88UI_OWN), which
+; finds the picture and the caption by the button's index ----------------------
+px_lab_col: times PX_NB dw px_bpaint
+
+; --- the colour face's pictures, PIXEL.GFX (SPEC.md 106.16) -------------------
+; tools/pixart.py draws them, and compares these numbers with its own
+; (--check-asm): the toolbar's faces are PXA_TBH rows of their own widths
+; (PXA_TABLES, PX_B_* order then Stop), PXA_TBS states each - up, pressed,
+; greyed - then the tools', PXA_TLW x PXA_TLH, up and pressed
+PXA_TBH     equ 30
+PXA_TBN     equ 11
+PXA_TBS     equ 3
+PXA_GAP     equ 2                   ; chrome right of each toolbar button
+PXA_STOP    equ 10                  ; Stop's faces, after the ten
+PXA_TLW     equ 32                  ; a tool's face: the column's width...
+PXA_TLH     equ 24
+PXA_TLN     equ 6
+PXA_TLS     equ 2
+PXA_TLX0    equ 4                   ; ...its button's columns...
+PXA_TLX1    equ 27
+PXA_TLY0    equ 1                   ; ...and rows
+PXA_TLY1    equ 22
+PXA_TLFACE  equ 4 * PXA_TLH * PXA_TLW / 8
+PXA_MINFREE equ 256                 ; KB free beside the pictures, or no
+                                    ; pictures (a picture's master is sized
+                                    ; from the heap: SPEC.md 106.8)
+%macro PXA_TABLES 1-*
+pxa_w:
+  %rep %0
+    db %1
+    %rotate 1
+  %endrep
+pxa_off:
+  %assign PXA_O 0
+  %rep %0
+    dw PXA_O
+    %assign PXA_O PXA_O + PXA_TBS * 4 * PXA_TBH * (%1 / 8)
+    %rotate 1
+  %endrep
+PXA_TLOFF   equ PXA_O
+%endmacro
+    PXA_TABLES 40, 40, 40, 40, 56, 64, 40, 40, 48, 64, 40
+PXA_SIZE    equ PXA_TLOFF + PXA_TLN * PXA_TLS * PXA_TLFACE
+%if PXA_SIZE != 27648
+  %error "PIXEL.GFX is 27,648 bytes (tools/pixart.py)"
+%endif
+pxa_name:   db 'PIXEL.GFX', 0
 
 ; --- each button's kind: OS88UI_IMG for a picture, PX_BK_PIC when it needs a
 ; picture and is greyed without one (px_flags) ---------------------------------
@@ -3199,9 +3210,7 @@ px_bkind:
     dw OS88UI_IMG | PX_BK_LATER                 ; Slideshow
     times PX_NTOOL dw OS88UI_IMG                ; the tools
     dw PX_BK_PIC, PX_BK_PIC, PX_BK_PIC          ; Navigator's +, -, Fit
-    dw 0, 0, 0                                  ; the panel boxes
-    dw 0                                        ; the filmstrip's box
-    dw PX_BK_LATER, PX_BK_LATER                 ; ...its arrows
+    dw PX_BK_LATER, PX_BK_LATER                 ; the filmstrip's arrows
     dw PX_BK_LATER, PX_BK_LATER                 ; the status bar's
 %if ($ - px_bkind) != PX_NB * 2
   %error "px_bkind has a kind per button"
@@ -3211,11 +3220,7 @@ px_toolkeys: db 'HZMCER', 0         ; Hand, Zoom, Marquee, Crop, Eyedropper,
                                     ; Rotate - the tool column's order
 
 ; --- the panels ------------------------------------------------------------------
-px_ptitle:  dw px_s_pnav, px_s_phist, px_s_pinfo
 px_pbodyp:  dw px_body_nav, px_body_hist, px_body_info
-px_s_pnav:  db 'Navigator', 0
-px_s_phist: db 'Histogram', 0
-px_s_pinfo: db 'Image Info', 0
 px_hlabs:   dw px_s_hmean, px_s_hsd, px_s_hmin, px_s_hmax
 px_hvals:   dw px_hmean, px_hsd, px_hmin, px_hmax
 px_s_hmean: db 'Mean    ', 0
@@ -3416,9 +3421,6 @@ px_s_next:  db '>', 0
 px_s_lt:    db '<', 0
 px_s_gt:    db '>', 0
 px_s_fit:   db 'Fit', 0
-px_s_fs0:   db 'Images', 0
-px_s_fsimg: db 'Images (', 0
-px_s_rpar:  db ')', 0
 px_s_fsnone: db 'Open a picture to see its folder', 0
 px_s_fsn:   db ' pictures in this folder', 0
 px_s_bytes: db ' bytes', 0
@@ -3480,6 +3482,7 @@ px_s_r11:   db 'too big to unpack', 0
 %include "pxicons.inc"
 
 %define OS88UI_BIMG                 ; the one-write button body, and pictures
+%define OS88UI_BOWN                 ; ...and the colour face's own (13.8.10)
 %define OS88UI_ABOUT                ; the About card, and the keyboard card
 %define OS88UI_NOGLYPH              ; no check box, no radio
 %define OS88UI_DROP                 ; the Histogram's channel
@@ -3521,17 +3524,17 @@ px_half     equ PXB + 50            ; byte: half-height pictures (a CGA)
 px_tier     equ PXB + 51            ; byte: 0 full, 1 compact
 px_caps     equ PXB + 52            ; byte: the toolbar has captions
 px_fson     equ PXB + 53            ; byte: the filmstrip is laid out
-px_fscol    equ PXB + 54            ; byte: ...collapsed
+px_col      equ PXB + 54            ; byte: the COLOUR face (SPEC.md 106.16)
 px_fsuser   equ PXB + 55            ; byte: 0 the tier's, 1 on, 2 off
 px_pnon     equ PXB + 56            ; byte: the panel column is laid out
 px_pnoff    equ PXB + 57            ; byte: View > Hide Panels
 px_pvis     equ PXB + 58            ; byte: the panels laid out, a bit each
-px_pcol     equ PXB + 59            ; byte: ...collapsed by the user
+px_geo      equ PXB + 59            ; byte: px_regdraw repaints its regions
 px_pcur     equ PXB + 60            ; byte: the compact layout's panel
 px_dither   equ PXB + 61            ; byte: 0 ordered, 1 diffusion
 px_btnh     equ PXB + 62            ; word
 px_sth      equ PXB + 64
-px_sh       equ PXB + 66
+px_hsth     equ PXB + 66            ; the Histogram's body
 px_lp       equ PXB + 68
 px_thh      equ PXB + 70
 px_navh     equ PXB + 72
@@ -3622,8 +3625,7 @@ px_cline    equ px_line + PX_LINEMAX + 2
 px_cvline   equ px_cline + PX_LINEMAX + 2       ; 48
 px_cvdims   equ px_cvline + 48                  ; 16
 px_cvcols   equ px_cvdims + 16                  ; 16
-px_fstitle  equ px_cvcols + 16                  ; 24
-px_fsline   equ px_fstitle + 24                 ; 48
+px_fsline   equ px_cvcols + 16                  ; 48
 px_title    equ px_fsline + 48                  ; 24
 px_helptab  equ px_title + 24                   ; (PX_HELPMAX + 1) words
 px_helpbuf  equ px_helptab + (PX_HELPMAX + 1) * 2
@@ -3900,6 +3902,38 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_clok, 1                ; the cluster's size, asked this open
     PXVAR px_clsz, 2
     PXVAR px_cvmsg, 32              ; the empty canvas's line: a refusal
+    ; the records a command draws through, and the colour face (pxui.inc,
+    ; SPEC.md 106.15, 106.16)
+    PXVAR px_colwas, 1              ; the face last laid out
+    PXVAR px_plast, 2               ; the panel column's last usable row
+    PXVAR px_nbx1, 2                ; the Navigator's body's left
+    PXVAR px_nwf, 8                 ; ...its well's frame
+    PXVAR px_hcol, 2                ; the Histogram's column
+    PXVAR px_hwf, 8                 ; ...its well's frame
+    PXVAR px_knew, 8                ; a key being made
+    PXVAR px_kn, 8                  ; the thumbnail as drawn
+    PXVAR px_kg, 8                  ; the graph as drawn
+    PXVAR px_kd, 2                  ; the drop-down as drawn
+    PXVAR px_kcard, 2 * PX_MAXCARD  ; each card as drawn
+    PXVAR px_kfser, 2               ; ...out of the names that summed to this
+    PXVAR px_nsum, 2                ; the folder's names' sum
+    PXVAR px_fsmany, 1
+    PXVAR px_fry1, 2                ; the filmstrip's body
+    PXVAR px_fry2, 2
+    PXVAR px_bkey, 4 * PX_NB        ; each button's flags and picture as drawn
+    PXVAR px_slot, 2                ; px_tband's slot, or 0
+    PXVAR px_slots, PX_NSLOT * PX_SLOTSZ
+    PXVAR px_capslot, SL_CELLS + PX_LINEMAX
+    PXVAR px_udrew, 1               ; draws a walk made (the CGA's grow box)
+    PXVAR px_pax, 2                 ; px_bpaint's arguments...
+    PXVAR px_pbx, 2
+    PXVAR px_pdi, 2
+    PXVAR px_bv, 8                  ; ...px_bevel's rect...
+    PXVAR px_bf, 8                  ; ...its face...
+    PXVAR px_bvpic, 2               ; ...its picture and caption...
+    PXVAR px_bvcap, 2
+    PXVAR px_bvy, 2                 ; ...and the next row
+    PXVAR pxa_seg, 2                ; PIXEL.GFX's claim, or 0
 PX_BSSEND   equ px_w2 + PXV
 PX_BSS      equ PX_BSSEND - PXB
 
