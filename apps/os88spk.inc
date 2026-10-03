@@ -23,6 +23,21 @@
 ; speaker takes. SPEC.md 34.11 has the measured cycles; the Video Player's
 ; encoder budgets frames against them (98.2.15).
 ;
+; A COVOX PLAYS THROUGH THE SAME PLAYER (SPEC.md 34.14). The Covox Speech
+; Thing is a resistor DAC on a parallel port's data lines: a sample is one
+; `out dx, al` of the SAMPLE ITSELF where the speaker's is an `out 42h, al` of
+; a count, and that is the whole difference. So os88spk_lpt names the port
+; before os88spk_init, and then: the table is the IDENTITY (t[s] = s, so a
+; producer's xlatb and os88spkfx's composed rows pass samples through
+; unchanged), silence is 80h, there is one entry a sample whatever CL asked
+; for (no carrier to push above hearing), os88spk_go hands IRQ0 to
+; os88spk_isrd and turns the SPEAKER off at 61h inside the door's own IF = 0
+; window - the door still takes channel 2 and its arbitration, which is what
+; keeps a beep from sounding over the play - and the door's close puts 61h
+; back as it does for the speaker. The rate range is the speaker's: its
+; floors are the ISR's cost on an 8088 as much as the pulse's, and the DAC's
+; ISR is a `push`, a `mov` and a `pop` dearer.
+;
 ;   os88spk_init  DI = the ring's segment, AH bits 4-5 = its size code, DX =
 ;                 the rate, CL = PULSES A SAMPLE (0 or 1: one). The pulse's
 ;                 period is N / pulses, N = 1,193,182 / rate, and must be
@@ -37,12 +52,49 @@
 ;                 exact; the ring is kept, and os88spk_go goes on from it.
 ;                 The bracket's end stops it too, so call go again in the next
 ;                 bracket. Harmless when stopped
+;   os88spk_lpt   DX = a Covox's data port, or 0 for the speaker (the
+;                 default). Before os88spk_init, which builds the table for it
+;   os88spk_lptq  out CF = 0, DX = the Covox's port: the sound tier is the
+;                 Covox and SOUND.DRV found a port (SND_CAP_LPTDAC, then its
+;                 SNDV_DACINFO). CF = 1 none. UI task or worker
 ;
 ; All preserve every register but their outputs. Labels os88spk_; the
 ; state is in the including package's own image, reached through CS.
 ; =============================================================================
 
 OS88SPK_DRYN    equ 16              ; samples a dry grant plays: 2 ms at 8 kHz
+
+; -----------------------------------------------------------------------------
+os88spk_lpt:
+    mov [cs:os88spk_lptp], dx
+    ret
+
+SNDV_DACINFO    equ 6               ; SOUND.DRV's verb (drivers/sound/sndpkg.inc,
+                                    ; typed out again so a package needs no
+                                    ; -I drivers/sound/; t_mirror holds the
+                                    ; two equal, and NASM takes the second
+                                    ; definition of an equal value silently)
+
+; -----------------------------------------------------------------------------
+os88spk_lptq:
+    push ax
+    push bx
+    call OSAPI_SND_CAPS             ; AX = caps; BL and DX spent
+    test ax, SND_CAP_LPTDAC         ; the user's tier, and a port behind it
+    jz .no                          ; (SPEC.md 34.14) - the cap is the driver's
+    mov bh, DRVC_SOUND              ; alone, so the verb is SOUND.DRV's
+    mov bl, SNDV_DACINFO
+    call OSAPI_DRV_CALL             ; out AX = the port, or CF = 1
+    jc .no
+    mov dx, ax
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 os88spk_init:
@@ -70,6 +122,10 @@ os88spk_init:
     div bx                          ; AX = N
     pop bx
     mov cl, [cs:os88spk_pin]        ; CL = pulses a sample (0 is one)
+    cmp word [cs:os88spk_lptp], 0   ; ...and ONE on a Covox, whatever was
+    je .ppa                         ; asked: a DAC holds its level, so there
+    xor cl, cl                      ; is no carrier to push above hearing
+.ppa:
     or cl, cl
     jnz .pp
     inc cx
@@ -101,6 +157,14 @@ os88spk_init:
     sub cl, 2                       ; never N (the pulse ends inside its
     xor dx, dx                      ; period)
     cld
+    cmp word [cs:os88spk_lptp], 0
+    je .tab
+.ltab:                              ; ...or a COVOX'S: t[s] = s, the sample
+    mov al, dl                      ; is the voltage (SPEC.md 34.14)
+    stosb
+    inc dl
+    jnz .ltab
+    jmp short .sil
 .tab:
     mov ax, dx
     mul cl
@@ -112,6 +176,7 @@ os88spk_init:
     stosb
     inc dl
     jnz .tab
+.sil:
     mov al, [es:bx+SND_EXT_TAB+128] ; a dry grant's count: the middle, which
     mov [cs:os88spk_sil], al        ; is what silence sounds like here
     clc
@@ -163,6 +228,13 @@ os88spk_go:
     popf                            ; chain are set by then, below
     mov dx, [cs:os88spk_n]
     mov si, os88spk_isr
+    mov ax, [cs:os88spk_lptp]
+    or ax, ax
+    jz .spk
+    mov [cs:os88spk_isrd.port+1], ax ; A COVOX (SPEC.md 34.14): its port is
+    mov si, os88spk_isrd            ; the ISR's own immediate
+    jmp short .one
+.spk:
     mov al, [cs:os88spk_pp]
     cmp al, 1
     je .one
@@ -195,6 +267,16 @@ os88spk_go:
     out 0x40, al                    ; [ticks] drifts
     mov al, ah
     out 0x40, al
+    cmp word [cs:os88spk_lptp], 0
+    je .pwm
+    in al, 0x61                     ; A COVOX: the door turned the speaker on
+    and al, 0xFC                    ; for a PWM nobody will write, so it goes
+    out 0x61, al                    ; off again in the same window - gate and
+                                    ; data both, read-modify-write as 34.1
+                                    ; binds. The close's spk_pcm_idle puts the
+                                    ; boot state back, exactly as for the
+                                    ; speaker
+.pwm:
     popf
     xor ax, ax
     jmp short .out
@@ -329,6 +411,37 @@ os88spk_isrm:
     jmp os88spk_isr.ev
 
 ; -----------------------------------------------------------------------------
+; os88spk_isrd - os88spk_isr for a COVOX (SPEC.md 34.14): the sample out of the
+; parallel port's data register instead of a count into channel 2. DX is the
+; one more register, and the port is the `mov`'s own immediate, written by
+; os88spk_go - so nothing is read per sample that os88spk_isr does not read.
+; The event paths are os88spk_isr's, entered with its three words pushed
+; -----------------------------------------------------------------------------
+os88spk_isrd:
+    push ax
+    push si
+    push ds
+    push dx
+    cld                             ; (os88spk_isr's reason)
+    lds si, [cs:os88spk_rp]
+    lodsb                           ; a sample, unsigned
+.port:
+    mov dx, 0x0378                  ; (the port, patched in)
+    out dx, al                      ; ...and the voltage
+    pop dx
+    mov [cs:os88spk_rp], si
+    dec word [cs:os88spk_left]
+    jz .ev
+    mov al, 0x20
+    out 0x20, al
+    pop ds
+    pop si
+    pop ax
+    iret
+.ev:
+    jmp os88spk_isr.ev
+
+; -----------------------------------------------------------------------------
 ; os88spk_grant - IF = 0: what the last grant played added to CONS, and the
 ; next samples granted - no more than are queued (TOTAL - CONS), than this
 ; period has left ([os88spk_kr]) or than lie before the ring's end. So CONS is
@@ -407,3 +520,5 @@ os88spk_rseg:   dw 0                ; the ring's segment
 os88spk_n:      dw 0                ; the PIT counts a PULSE: N / pulses
 os88spk_pp:     db 1                ; pulses a sample (34.11.7)
 os88spk_pin:    db 0                ; ...as init was handed it
+os88spk_lptp:   dw 0                ; a Covox's data port, 0 = the speaker
+                                    ; (os88spk_lpt, SPEC.md 34.14)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """TRACKER ON THE PC SPEAKER, with no card - SPEC.md 45.25.
 
-    make && python3 tests/trkspk.py [--leg play|refuse|turbo|end|card|scrub|rate|level]
+    make && python3 tests/trkspk.py [--leg play|refuse|turbo|end|card|scrub|rate|level|covox]
 
 On MartyPC's card-less Hercules 5150 with a fixed disk, BEVERLY.MOD opened
 from C:. With no card Tracker plays through the speaker on its own (the
@@ -31,6 +31,13 @@ window - after timing this machine once (question 5). What must hold:
   level   no card: the volume bar is the speaker's level - auto picks it, +
           makes it the user's and frozen, a pause keeps it, a press on the
           volume groove sets it without pausing. With a card - is the master
+  covox   MartyPC's Covox machine (a Covox on LPT2, no card) booting `make
+          covoxtest`'s disk, BEVERLY.MOD opened off the 720KB apps disk:
+          the play goes to the DAC (SPEC.md 45.25.5) - [tsp_lpt] 378h, the
+          samples NOT filtered at load, the line `Covox 4800 Hz, N% cpu`
+          with no carrier warning, the sample writes on port 378h at the
+          rate with the ring never dry, NOT ONE write to 42h while it
+          plays, the DAC's capture sounding and the speaker's silent
   scrub   paused, a click on the scrubber: the thumb stays where it was put
           and Play resumes from there - on the speaker and on the card. A
           paused player draws no frames, and the frame was the only thing that
@@ -126,8 +133,9 @@ class Trk:
         return (self.m.read(self.m.sym("snd_ch2mode"), 1)[0],
                 u16(self.m.read(self.m.sym("spk_seg"), 2)))
 
-    def pulses(self, n=PULSES):
-        """n writes to port 42h, and the ring's dry grants over them"""
+    def pulses(self, n=PULSES, port=0x42):
+        """n writes to PORT (the speaker's counter, or a Covox's data
+        register), and the ring's dry grants over them"""
         cyc, dry = [], [0]
         k_dry = self.base + self.syms["os88spk_grant.dry"]
 
@@ -136,7 +144,7 @@ class Trk:
                 dry[0] += 1
             else:
                 cyc.append(rec["cycles"])
-        with os88marty.bp_trace(self.m, {"type": "io", "addr": 0x42},
+        with os88marty.bp_trace(self.m, {"type": "io", "addr": port},
                                 k_dry, on_hit=hit):
             t0 = time.time()
             while len(cyc) < n and time.time() - t0 < 600:
@@ -230,6 +238,102 @@ def leg_play(bad):
         check(bad, ch2 == 0 and seg == 0, "stop: the kernel clean")
     finally:
         t.close()
+
+
+class TrkCovox(Trk):
+    """Trk on MartyPC's Covox machine, off floppies: `make covoxtest`'s
+    system disk (SOUND.DRV wanted, the tier a Covox on LPT2) in A: and the
+    720KB apps disk, whose MEDIA has BEVERLY.MOD, in B:"""
+
+    def __init__(self, cap):
+        self.syms, _ = pkg_syms(*SRC)
+        self.tmp = tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build"))
+        os.environ["MARTYPC_WAV"] = cap
+        try:
+            self.m = os88marty.launch("build/covoxsys720.img",
+                                      apps="build/apps720.img",
+                                      machine="os8088_5150_herc_covox_720_gla")
+        finally:
+            os.environ.pop("MARTYPC_WAV", None)
+        self.ui = os88ui.UI(self.m)
+        self.ui.ready(limit=240)
+        w = self.ui.path("B:/MEDIA/BEVERLY.MOD")
+        rec = self.m.read(self.ui._S("wm_wins") + w.i * geom.WIN_SIZE,
+                          geom.WIN_SIZE)
+        self.base = (rec[geom.W_SEG] | rec[geom.W_SEG + 1] << 8) << 4
+
+    def writes(self, port, n, limit=60.0):
+        """the rate of n writes to PORT - or, n = 0, how many in `limit`
+        guest-blind seconds of wall clock (a stop does not say WHICH port
+        it was, so the two ports are counted one at a time)"""
+        cyc = []
+        with os88marty.bp_trace(self.m, {"type": "io", "addr": port},
+                                on_hit=lambda mm, rec: cyc.append(
+                                    rec["cycles"])):
+            t0 = time.time()
+            while (not n or len(cyc) < n) and time.time() - t0 < limit:
+                time.sleep(0.2)
+        if not n:
+            return len(cyc)
+        if len(cyc) < 2:
+            return 0.0
+        return (len(cyc) - 1) / ((cyc[-1] - cyc[0]) / CPU)
+
+
+def leg_covox(bad):
+    sys.path.insert(0, os.path.join(ROOT, "tests"))
+    import sndcheck                                    # noqa: E402
+    with tempfile.TemporaryDirectory() as d:
+        cap = os.path.join(d, "cap")
+        t = TrkCovox(cap)
+        try:
+            t.until(lambda: t.rb("tsp_open") == 1 or t.rb("tsp_force") == 1,
+                    "the play or its refusal")
+            rate, pct = t.rw("tsp_rate"), t.rw("tsp_pct")
+            check(bad, t.rw("tsp_lpt") == 0x378,
+                  "covox: the output is the DAC on LPT2 (tsp_lpt %03Xh)"
+                  % t.rw("tsp_lpt"))
+            check(bad, t.rb("tsp_pre") == 0,
+                  "covox: the samples were NOT filtered for a cone at load")
+            check(bad, t.rb("tsp_open") == 1, "covox: it plays (%d Hz, "
+                  "predicted %d%%)" % (rate, pct))
+            if t.rb("tsp_open") != 1:
+                return
+            os88marty.pace(t.m, 3.0)
+            p = t.rw("tui_msgp")
+            msg = t.m.read(t.base + p, 64).split(b"\0")[0].decode()
+            want = "Covox %d Hz, %d%% cpu" % (rate, pct)
+            check(bad, msg == want,
+                  "covox: the status line reads %r (want %r)" % (msg, want))
+            r, dry = t.pulses(port=0x378)
+            spk = t.writes(0x42, 0, limit=10.0)
+            print("   %d samples to 378h at %.0f Hz, the ring dry %d times; "
+                  "then %d writes to 42h in 10 s" % (PULSES, r, dry, spk))
+            check(bad, r >= rate * (1 - LOSS),
+                  "covox: the DAC is written at the rate")
+            check(bad, dry == 0, "covox: the ring never runs dry - the "
+                  "rate the bench chose is one the machine holds")
+            check(bad, spk == 0, "covox: the speaker's counter untouched")
+            os88marty.pace(t.m, 3.0)
+            t.m.type_text("s")
+            t.until(lambda: t.rb("tsp_run") == 0 and
+                    t.kernel_clean()[1] == 0, "S to stop")
+            ch2, seg = t.kernel_clean()
+            check(bad, ch2 == 0 and seg == 0, "covox: stop, the kernel clean")
+        finally:
+            t.close()
+        rate_c, s, _ = sndcheck.load(cap + ".covox.wav")
+        seg = s[-int(8 * rate_c):]
+        m = sum(seg) / max(len(seg), 1)
+        rms = (sum((x - m) ** 2 for x in seg) / max(len(seg), 1)) ** .5
+        check(bad, rms > 0.02, "covox: the DAC's capture sounds (RMS %.3f)"
+              % rms)
+        rate_s, s, _ = sndcheck.load(cap + ".pc_speaker.wav")
+        seg = s[-int(8 * rate_s):]
+        m = sum(seg) / max(len(seg), 1)
+        rms = (sum((x - m) ** 2 for x in seg) / max(len(seg), 1)) ** .5
+        check(bad, rms < 0.01, "covox: the speaker's capture silent (RMS "
+              "%.4f)" % rms)
 
 
 def leg_refuse(bad):
@@ -616,6 +720,7 @@ def leg_level(bad):
 
 
 LEGS = {"play": leg_play, "refuse": leg_refuse, "drop": leg_drop,
+        "covox": leg_covox,
         "turbo": leg_turbo,
         "end": leg_end, "card": leg_card, "scrub": leg_scrub,
         "rate": leg_rate, "level": leg_level}

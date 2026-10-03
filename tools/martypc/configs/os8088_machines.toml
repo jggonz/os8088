@@ -242,6 +242,41 @@ overlays = [
     type = "Mpu401"
     io_base = 0x330
 
+# THE COVOX MACHINE (SPEC.md 34.14): the Hercules 5150 with a Centronics card
+# at 378h, a Covox Speech Thing on its data lines and NO other card - so
+# SOUND.DRV attaches on the parallel port alone, which is the fourth reason it
+# has to attach at all, and the DAC is the only sampled output there is. The
+# Covox is os8088's own (patches/10-covox-lpt-dac.patch): an R-2R ladder has
+# no clock, so the device holds the last byte the guest wrote and samples it
+# at 44.1 kHz into MARTYPC_WAV's `Covox` capture, beside the speaker's - which
+# is how a row tells a play that went to the DAC from one that went to the
+# cone. 720KB drives for MIDIRack's songs disk, the MPU machine's shape.
+[[machine]]
+name = "os8088_5150_herc_covox_720_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_720k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+    "parallel_port",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "Covox"
+
 # The GLaBIOS twin, for when you want a machine that BOOTS FAST rather than one
 # that boots the way the calibration machine does.
 #

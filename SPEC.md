@@ -42423,9 +42423,14 @@ again and writes, and the two must agree block for block. It costs the parse
 twice. The alternative, patching part 1's header at the end, needs part 1's
 disk back in the drive.
 
-**`OS88CZ.COM` ships in `SYSTEM/DOS/` beside `OS88NET.COM`** on the 720KB,
-1.2MB and 1.44MB apps disks and the everything disk (§19.10). The 360KB apps
-disk is at 352 of 354 clusters and this program is five.
+**`OS88CZ.COM` ships in `SYSTEM/DOS/` beside `OS88NET.COM`** on the 1.2MB
+and 1.44MB apps disks and the everything disk (§19.10). The 360KB apps disk
+is at 352 of 354 clusters and this program is five. **The 720KB one carried
+it until the Covox** (§34.14): that disk was at 713 of 713, the Covox took
+MIDIRack and Audio over a cluster each, and of everything on it this was
+the one thing two larger disks still carry - a §24.6.1 decision, with its
+date, and the first thing to put back when the disk has five clusters
+again.
 
 ## 21. loader.inc
 
@@ -61180,6 +61185,180 @@ keyboard on MIDI IN, a module's active sensing - is full.
 MPU-401 (it has none) and the debug server a `midi` command, so the gate
 compares the bytes on the wire with the reference sequencer's (§105.11).
 
+### 34.14 The Covox Speech Thing — a DAC on the parallel port (`SOUND.DRV`, `drivers/sound/covox.inc`, `apps/os88spk.inc`)
+
+**Eight resistors on a printer port.** The Covox Speech Thing (1986) is an
+R-2R ladder across a parallel port's eight data lines, so a byte written to
+the port's DATA register - base + 0, `out dx, al` - is a voltage at the jack:
+unsigned, 80h the middle. There is no FIFO, no IRQ, no DMA and no clock. The
+CPU writes every sample at the sample rate, which every DOS tracker that
+supported one (Scream Tracker, FastTracker, Impulse Tracker) did off a
+re-rated PIT channel 0. That is exactly §34.11's speaker player with one
+instruction changed: the speaker's sample ISR puts a pulse COUNT into channel
+2 (`out 42h, al`), and the Covox's puts the SAMPLE into the port. Clones
+that wire the same ladder - the "LPT DAC", 86Box's `lpt_dac`, DOSBox's
+`covox` - are the same device to this code.
+
+**So the player is `apps/os88spk.inc` and not the driver**, and the driver
+owns only the two things a package cannot know for itself.
+
+**Which ports could be one.** `cvx_probe`, at attach: the BIOS's own table
+at 0040:0008 (LPT1, LPT2, LPT3 - three words and never the fourth, which is
+the EBDA's segment on every machine since the PS/2: `lplink.inc`'s
+`lpl_scan` has the field report), each believed only after `lp_latch`'s
+two-value read-back - AAh then 55h, with the control register's bit 5
+cleared first so a bidirectional port is reading its latch and not its pins,
+and both registers put back. Nothing is strobed, so a printer on the same
+port prints nothing.
+
+**The BIOS's numbering, because it is the user's.** The first build took
+"the first port that answers", and the first run on MartyPC's Covox machine
+said why that is wrong: a **Hercules carries its own printer port at 3BCh**,
+the POST makes it LPT1, and the Covox on the add-on card at 378h is LPT2 -
+so the driver found the adapter's port, published it, and every package
+would have played its DAC into a printer port with nothing on it. Every
+MDA-family machine with a Covox is that machine. A period tracker's setup
+screen asked "LPT1, LPT2 or LPT3?", and so does this one.
+
+**Whether a Covox is on it at all - which nothing can answer.** A resistor
+ladder reads back exactly like a bare port or a printer, so the device is
+ANNOUNCED and never detected: docs/history/SOUND-PLAN.md planned it
+as "a row with presence set from a Control Panel checkbox", and the row it
+became is the Sound page's fourth tier (§31.7, §34.8), with the port in the
+same byte:
+
+```
+SND_RT_LPT + n (4..6)  a Covox on LPTn+1: FM if there is a chip, NO streams,
+                       and that parallel port's DAC for a package's own
+                       bracket
+```
+
+The page draws it as a fourth row, `Covox`, with three small radios beside
+the label - `LPT1`, `LPT2`, `LPT3` - each greyed unless that port answered.
+A click on a port picks it; a click on the label picks the port already
+chosen, or the first that answered. The dot sits on a port only while the
+driver has its DAC up, so it never claims one that is not sounding, which is
+`cp_snd_row`'s rule for the rows.
+
+**Siblings of `SND_RT_FM`, not rungs above `SND_RT_SB`**, so every test of
+them is `>= SND_RT_LPT`, made before any `>= SND_RT_SB`. A Covox tier keeps the AdLib (tones, `SND_FM_CLAIM`, MIDIRack's FM)
+and turns the Sound Blaster's DSP tier OFF - because a package that sees
+`SND_CAP_PCM_BG` streams to the card, and the user who picked the Covox
+asked for the other path. An AdLib and a Covox side by side was the period's
+commonest pairing, and this tier is that machine.
+
+What the setting costs is the point of putting it there: **`[snd_route]`
+already persists in `SYSTEM.CFG`** (`'SR'`, §51.5), so the announcement needs
+no settings blob - §51.9's 34 bytes of `.bss` reserved on every machine - and
+**no resident kernel byte**. `snd_rt_card` already sends a tone to the driver
+for every tier but `SND_RT_SPK`, which is the AdLib here or, with none, the
+speaker through its existing fallback. `osapi_snd_caps` already ORs in the
+whole `DSV_CAPS` word. `tools/kernsize.py` reads **+0 on every section** of
+both kernels.
+
+The two halves of the announcement are the two cells §34.8 already has:
+- **`DSV_TIERS` bits `SND_RT_LPT + n`** are set at attach, one for each of
+  LPT1..LPT3 that answered, card or no card. They say which CHOICES are live,
+  which is all a probe can say.
+- **`SND_CAP_LPTDAC` (0100h)** is set by `cvx_tier`, inside `DRVV_TIER`,
+  only while the tier IS a Covox's and its port answered - so a package
+  plays the DAC only when somebody said one is there. Every other tier
+  withdraws it. A Covox tier on a machine whose port has gone is the AdLib
+  tier, and the page's dot says so (`cp_snd_row`).
+
+**The fourth reason to attach.** `snd_entry` attached for an OPL, a DSP or an
+MPU-401 (§34.13); a parallel port alone now does too, and names the row
+`Covox` when nothing else has. The kernel's boot sniff still looks for an
+OPL2 only, so on a machine with no card the driver is ticked on the Drivers
+page once, as on an MPU-only one - and `make covoxtest`'s disk is that tick,
+and the tier, already made.
+
+**One package verb**, `SNDV_DACINFO` (6) through `DSV_PKGCALL`: AX = the data
+port of the LPT the tier names, while it is live, else CF = 1 `SNDE_NODAC`
+(6). It claims nothing.
+Only one `FSXF_RATE` bracket is ever open (§53.2.2), and the door below
+already serialises it.
+
+#### 34.14.1 The player: `os88spk_lpt` and `os88spk_isrd`
+
+Two calls in `apps/os88spk.inc`, and the rest of §34.11.2 unchanged:
+- **`os88spk_lptq`**: CF = 0 and DX = the port when `OSAPI_SND_CAPS` carries
+  `SND_CAP_LPTDAC` and `SNDV_DACINFO` answers. The verb number is typed out
+  in the library as well as in `sndpkg.inc`, so Tracker, Audio and the Video
+  Player - which a dozen symbol-reading tests reassemble with their own
+  include lists - need no `-I drivers/sound/`; `t_mirror` holds the two
+  equal.
+- **`os88spk_lpt`**: DX = the port, or 0 for the speaker. Before
+  `os88spk_init`, which then:
+  - writes the IDENTITY table, t[s] = s, so a producer's `xlatb` and
+    `os88spkfx`'s composed rows pass samples through unchanged and the ring
+    holds the DAC's own bytes; silence is 80h;
+  - plays ONE entry a sample whatever CL asked for: a DAC holds its level,
+    so there is no carrier to push above hearing (§34.11.7);
+  - keeps the speaker's rate range. Its floors (74 PIT counts on an 8088, 48
+    past one) are the ISR's cost as much as the pulse's, and the DAC's ISR
+    is dearer, not cheaper.
+
+`os88spk_go` then hands IRQ0 to **`os88spk_isrd`** - `os88spk_isr` with `push
+dx`, `mov dx, imm16` (the port, patched into the instruction by `go`, so
+nothing more is read per sample) and `pop dx` around an `out dx, al` - and
+shares every event path with it. **The door is the speaker's**
+(`OSAPI_FSX_SPK`, unchanged): it still takes channel 2 and its arbitration,
+which is what keeps a beep or a clip from sounding over the play, and its
+close still puts everything back on every way out of the bracket. What it
+does that a Covox does not want is turn the speaker on for a PWM, so `go`
+turns 61h's gate and data bits off again inside the same IF = 0 window,
+read-modify-write as §34.1 binds; the close's `spk_pcm_idle` restores the
+boot state exactly as it does for the speaker.
+
+**`os88spkfx` is a leveller and nothing else on a Covox.** `os88spkfx_init`
+ignores both of its knobs when `os88spk_lpt` named a port: no pre-emphasis,
+because the tilt is for a cone that cannot move bass and a DAC can, and no
+carrier to put away. Its rows compose with the identity table, so a row is
+the gain and the soft clip on the sample itself, and every caller's level
+control keeps working.
+
+**What it costs**: `SOUND.DRV` **+252 bytes** (7,721 → 7,973), the library
+**+150 bytes** of each package that plays (Tracker's image 34,030 → 34,180
+on the library alone), the Control Panel module a row and
+three port radios, and **no resident kernel byte** - `tools/kernsize.py`
+reads +0 on every section. The ISR is three instructions dearer than the
+speaker's. The 8088's ceiling stands - `VP_SPKMAX`, MIDIRack's 149-count
+floor, Tracker's rungs - because it is the cost of an interrupt a sample,
+which a Covox pays exactly as the speaker does.
+
+**Who plays through it**: Tracker (§45.25.5), MIDIRack (§105.8.7), Audio
+(§86.21.3) and the Video Player (§98.3.15.1) - each where it played the
+speaker, and each with what was only the speaker's (the shaping, the
+carrier, the load-time high-pass) left out.
+
+#### 34.14.2 The gates
+
+`tests/covox.py` is the driver's, on MartyPC, whose own Covox is
+`tools/martypc/patches/10-covox-lpt-dac.patch`: a parallel-port device that
+holds the last data byte and samples it at 44.1 kHz into `MARTYPC_WAV`'s
+`covox` capture, beside the speaker's - so a row can tell a play that went
+to the DAC from one that went to the cone. Its machine,
+`os8088_5150_herc_covox_720_gla`, is the Hercules 5150 with a Centronics card
+at 378h and no sound card: LPT1 is the adapter's 3BCh, the Covox is LPT2,
+and `make covoxtest`'s 720KB disk asks for SOUND.DRV with the tier at LPT2.
+
+| arm | machine, disk | asserts |
+|---|---|---|
+| `drv` | the Covox machine, covoxsys720 | attached on the ports alone; DSV_TIERS = LPT1 and LPT2 and not LPT3; tier LPT2 taken; `SND_CAP_LPTDAC`; the DAC at 378h |
+| `auto` | the Covox machine, midisys720 (tier AUTO) | attached, both choices live, the cap NOT published |
+| `nolpt` | the CGA 5150 (no port at all), covoxsys360 | refused; the tier byte kept for the machine the disk goes home to |
+
+Each package's own leg plays its subject through the DAC and is judged off
+the `covox` capture (§105.11's `--arm covox` for MIDIRack). `vm/xt-covox` is
+the machine to LISTEN to: 86Box's XT with its own `lpt_dac` on LPT1 and
+`make covoxtest`'s 360KB disk, whose tier is LPT1.
+
+**Stereo-on-1 and the Disney Sound Source are not this.** The first is two
+ladders selected by the strobe line, the second a 16-byte FIFO clocked at a
+fixed 7 kHz whose FIFO-full line is the one Covox-family device a program
+CAN detect. Both are a verb and an ISR beside this one, and neither is built.
+
 ## 35. Recorder — the sound layer's recording client
 
 `apps/recorder` needs `SND_CAP_PCM_IN` (a Sound Blaster) to record and
@@ -78413,6 +78592,71 @@ BEVERLY.MOD, the squared samples included - so a wrong route, sum or clamp
 fails there (5,283 bytes differ with `tsp_bass` not called). `-DTSP_NOBASS`
 assembles the Tracker before it, byte for byte - the A/B. It costs 373 bytes
 of `TRACKER.O88`'s image and no kernel byte.
+
+#### 45.25.5 A Covox: the same play, without what was only the speaker's
+
+With the Sound page's Covox tier (§34.14) there are no streams -
+`SND_CAP_PCM_BG` is clear - so a Play takes 45.25's path as it stands, and
+`os88spk_lptq` decides where it comes out. `tsp_outq` asks it at each load
+and at each Play and keeps the answer in `[tsp_lpt]`: the Covox's data port,
+or 0 for the speaker. `tsp_tables` hands it to `os88spk_lpt` before
+`os88spk_init`, so the table is the identity, the ISR is `os88spk_isrd` and
+the shaper a leveller (§34.14.1) - and everything else is 45.25's unchanged:
+the bench, the rungs and the live drop, the ring and the door, the imposter
+and the full screen, the volume bar as the level, the Rate menu. `trk_spkq`
+and `tw_spkq` still mean *no card*, which is still true. A play keeps the
+device it opened on until it stops: the port is asked again only at the next
+Play, and `tsp_behind`'s rung down rebuilds its tables for the same one.
+
+What it leaves out is what was only the speaker's:
+- **The load filter.** `tsp_natural` (45.25, 45.25.4) takes the bass a cone
+  cannot move and squares up what is left; a DAC plays bass, so a load whose
+  output is a Covox keeps the module as the file has it - `[tsp_pre]` = 0,
+  which `tests/lzmod.py` reads as "compare the file's bytes", and
+  `[tsp_lvok]` = 0, the new song's new level that is `tsp_natural`'s first
+  line. The filter is destructive and paid once, so **the choice is the
+  LOAD'S**: a module loaded on the Covox tier and played after the tier
+  became the speaker plays unfiltered - muddier, not broken - and one loaded
+  on the speaker plays its filtered samples on the Covox, thinner, until it is
+  loaded again. That is the case a card mounted later already had (45.25).
+  Filtering again at Play was not built: it is seconds on an 8088, inside a
+  bracket, for a tier changed in the middle of a session.
+- **The carrier's warning.** `(CARRIER WHINES!)` names the PWM carrier under
+  8 kHz, and a DAC has none.
+- **The speaker's name.** Every line that names the output says Covox:
+  `Covox 4800 Hz, 95% cpu`, `Covox level 5 of 10 (+/-)`, `Covox: needs 107%
+  of this PC - Play again to try`, `No meters: Covox`, and the LCD's
+  `4.8 kHz  Covox  Level 5` or `Covox, auto rate`. Each speaker string has its
+  Covox twin's address in the word before it and `tsp_lptsi` swaps them, so
+  no call site grew a branch. Idle, the face names the output the last load
+  or Play chose; a tier changed on the Control Panel shows at the next one.
+  `The PC speaker is busy` stays: a Covox play opens the speaker's own door
+  (§34.14), and a clip on the speaker is what refuses it.
+
+**The prediction prices a Covox's ISR**: `TSP_CSD` = 112 in place of
+`TSP_CS` = 104 (`tsp_predict`), and it is DERIVED, not measured.
+`os88spk_isrd` is `os88spk_isr` plus a `push dx` (15 cycles), a `mov dx,
+imm16` (13, the fetch floor) and a `pop dx` (12), with an `out dx, al` two
+cheaper than `out 42h, al` - ~433 cycles a sample against the ~395 SPKBENCH
+measured, and `(433 / 106 + 1) x 400 / 18.2` = 112. On the 5150 with
+BEVERLY.MOD that moves 4,800 Hz from 91% to ~95% and 5,512 Hz from ~103% to
+~108% against the speaker's own bench. Without it a Covox play would be
+predicted ~4 points light on an 8088 - the direction 45.25.1's history says
+costs a play its tempo. SPKBENCH times the speaker only, so a
+Covox row there is what would replace the derivation; `-DTSP_CSD=` is the
+knob for it.
+
+**Measured, the Covox opens a rung HIGHER than the speaker**, and the
+reason is the BENCH, not the ISR: `tsp_calib` times `os88spkfx_emit` as it
+will run, and on a Covox that is the leveller with no carrier to subtract,
+so the shaper's share falls by more than `TSP_CSD` adds. On MartyPC's Covox
+5150 (`tests/trkspk.py --leg covox`) BEVERLY.MOD opens at **5,512 Hz,
+predicted 79%**, where the speaker's own leg takes 4,800 at 91% - and holds
+it: 3,000 samples on 378h at 5,427 Hz, the ring never dry, not one write to
+42h, and the DAC's capture sounding while the speaker's is flat.
+
+It costs Tracker **189 bytes of image** (34,180 -> 34,369), 2 of bss and 140
+of the packed file; no kernel byte.
 
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
@@ -121417,8 +121661,8 @@ declares, within the set.
   Stop closes and rewinds.
 - **Recorder (§35)**: size the driver-pool grant in tiers and keep the first
   the driver will part with; keep working with no card by saying so honestly
-  (`ap_have_sb` from `OSAPI_SND_CAPS` greys playback and the status line says
-  "No Sound Blaster", not a memory error).
+  (`OSAPI_SND_CAPS`, read at every open since §86.21.3, sends a machine with
+  no stream to the speaker or the Covox - §86.21 - never to a memory error).
 - **FTPD (§77.1)**: the worker-stages / UI-task-commits handshake with a
   single `[ap_req]` byte cleared last, and the `OSAPI_SND_STREAM` slot being
   an X stub means the stage buffer for `verb 6` must be in the package's own
@@ -121468,7 +121712,8 @@ either (`ap_prep_track`: the file parsed, the look-ahead claimed and primed)
 and then goes to the card (`ap_open_card`) or to `aps_open`
 (`apps/audio/apspk.inc`). The test is `SND_CAP_PCM_BG`, so the Control
 Panel's route to PC Speaker (§34.11's lesson 5) sends a machine WITH a card
-here too.
+here too - and it is asked at every open, not once at launch, because that
+route is the Control Panel's and can move while Audio is open (§86.21.3).
 
 **It inverts §86's premise, and says so.** The pulses need IRQ0 at the
 sample rate, which only a package's own `FSXF_RATE` bracket may have (§53.2.2,
@@ -121636,6 +121881,73 @@ Tracker's and the Video Player's painters do: 5 bytes of `AUDIO.O88` and no
 kernel byte. `tests/apspk.py --pause` reads the widget's span of the menu
 bar once the bracket is up and FAILS on any black pixel there, with the
 clear taken out.
+
+### 86.21.3 A Covox: the same bracket, and the samples as they are
+
+**Under the Sound page's Covox tier (§34.14) Audio plays the DAC**, through
+§86.21's bracket and nothing else: the tier withdraws `SND_CAP_PCM_BG`, so
+`ap_open_track` sends the track to `aps_open`, whose first call, `aps_dev`,
+asks `os88spk_lptq` for the port and names it to `os88spk_lpt` - 0, the
+speaker, when there is none - before `os88spk_init` builds the table. The
+imposter window, the 16 KB ring, the plan, the ladder and its rungs, pause
+and resume, N and P inside the bracket and the list's end are the speaker's
+code unchanged; `os88spk` turns the bytes into voltages (§34.14.1).
+
+**When it is asked.** At every play's start from the desktop, because the
+tier is the Control Panel's and can move between plays. `ap_open_track`
+reads `OSAPI_SND_CAPS` at every open for the same reason, where it used to
+read a byte `ap_entry` had set at launch: a Covox picked while Audio was open
+sent the next track to a card stream the tier had just withdrawn, and it
+said `Cannot play this file`. **Not on a resume**: a paused session's ring
+holds its device's bytes, so it resumes on the device it opened on, as it
+keeps its rung, and a new tier takes effect at the next play from the
+desktop. Never inside the bracket, where nothing can reach the Control
+Panel.
+
+**What changes is the ring's bytes, and Audio COPIES them** (`APS_COPY`): no
+shaper and no leveller. `os88spkfx` drops its pre-emphasis on a Covox by
+itself; what it would still be is a leveller, and that exists because the
+speaker's ~N levels and its carrier's whine bury a quiet passage. A DAC has
+neither: a WAV's eight bits are the DAC's eight, which is how the card path
+plays them - so a Covox play is the card's sound on the speaker's clock. It
+also takes the shaper's ~104 cycles a sample (§34.11.9) off the bracket's
+producer, about 17 points of a 4.77 MHz 8088 at 8,000 Hz, which is that much
+more machine for the ladder to find a rung in. The box and the step are
+unchanged: a resample is the rate's, not the device's.
+
+**A file of counts** (§86.21.1's kind 2) plays 1:1 as it does on the
+speaker, but through `ap_cinv` on its way into the ring (`APS_XL`: built by
+`aps_plan`, `cs xlatb` in `aps_put`), so it is the samples the counts were
+made from - what a card plays. Copied raw it would be the counts AS
+voltages, 1 to N - 1 about N / 2 (1 to 148 about 74 at 8,000 Hz): 58% of the
+swing, ~4.8 dB down and off the DAC's middle. The Video Player takes that
+(§98.1.1.3); here the inverse table was already in the package, and the loop
+costs ~40 cycles a sample over `rep movsb`, about a third of the shaper this
+path no longer runs. **A file shaped on the host** (kind 1) is copied as it is:
+its pre-emphasis is in the samples and nothing on the machine takes it out,
+so it plays bright; nothing writes one any more (§86.21.1), and a
+de-emphasis would be bytes for a file nobody makes.
+
+**The status line says Covox where it said speaker**: `Covox - click or
+Space to pause`, `Paused - Space plays on the Covox`, `The Covox is busy`
+(the door that refused is still the speaker's - §34.14.1 - but the user
+picked a Covox) and `Too slow for this file on the Covox`. Each of the four
+speaker sentences is preceded by two bytes, where its device is and how long,
+which the `APSAY` macro counts so that a reworded sentence cannot leave them
+stale, and `aps_say` tells it again into a 40-byte buffer with `Covox` in
+that place: 8 bytes of data where four more sentences were 120.
+
+**The cost**: `AUDIO.O88`'s image stays **14,336 bytes** - the code inside it
+14,213 -> 14,328, +115, eight short of the next 512-byte step - the file
+11,294 -> 11,414 packed, and 42 bytes of bss (`aps_lpt`, the sentence buffer,
+less `ap_have_sb`). The `-DAPROF` build crosses its step, 15,872 -> 16,384;
+it ships nowhere. No kernel byte and no library byte.
+
+**The gate needs no model**: `tests/apspk.py --covox` plays an 8,000 Hz WAV
+on MartyPC's Covox machine (`os8088_5150_herc_covox_720_gla`, `make
+covoxtest`'s disk, the WAV and AUDIO.O88 on a scratch floppy) and holds the
+bytes on port 378h to the FILE: after the ring's first silence they are the
+WAV's own samples one for one, and nothing reaches 42h.
 
 ## 87. Hibernate — the machine to a file on the hard disk, and back (`kernel/hiber.inc`, `HIBER.DRV`)
 
@@ -158372,7 +158684,7 @@ around the pulses, carries the counts so the player only copies them
 (98.1.1.3, ~48%), and plays as made. **S, which is now M's other name, MUTES
 it** (§98.3.17) - and mute is the one choice for every kind of sound:
 - **in the window** it takes effect now, and the info line's third row says
-  which: `, speaker` or `, muted`;
+  which: `, speaker` or `, muted` (or `, Covox`, 98.3.15.1);
 - **in the full screen** it turns the speaker off NOW: the door closes, the
   play goes on silent on the PIT, and a toast says `Sound off`.
 
@@ -158409,6 +158721,62 @@ pointer's ISR needs kept atomic (§34.11.3).
 - `vidspkfast`: 11,025 Hz on the 8088, which opens MUTED (§98.3.17);
 - `vidspkunmute`: the same, unmuted with M - the speaker plays it anyway;
 - `vidspkfson`: muted, then M mid-play in the full screen - on from the key.
+
+#### 98.3.15.1 A Covox: the speaker's path, one port along
+
+**Where the Sound page's tier is the Covox (§34.14), this section's speaker
+plays the Covox instead**, and nothing else about the play changes. That tier
+withdraws `SND_CAP_PCM_BG`, so `vp_sndprep` already takes its no-card branch;
+there it asks `os88spk_lptq` and hands the answer to `os88spk_lpt` - the
+port, or 0 and the speaker - **per play, before `os88spk_init`**, so a tier
+changed on the Control Panel between two plays is the next play's, and a
+machine that never picked it runs exactly the instructions it ran before
+plus one `OSAPI_SND_CAPS`. `[vp_snd]` is still `VP_SPK`: the ring, the
+door, the pause, the swap, the seek and the mute are §34.11's on both, and
+`os88spk.inc` is the only thing that knows which ISR it installed.
+
+What the library does with the port is §34.14.1's, and three things in the
+player follow from it:
+- **A clip made for a card is LEVELLED, not shaped.** `vp_aput` still calls
+  `os88spkfx_level` and `os88spkfx_emit`, but `os88spkfx_init` ignores the
+  `PRE_DIFF` and the carrier `vp_sndprep` asks for: the family composes with
+  the identity table, so a row is the gain and the soft clip on the sample
+  and the ring holds the DAC's bytes. Silence, `os88spk_sil`, is 80h.
+- **A file of counts (98.1.1.3) is a copy, as on a card** - the counts are
+  the samples scaled by (N/P - 2)/255, so the same wave, quieter, centred on
+  the table's middle and not on 80h, which is what the card has always
+  played and for the same reason: a copy is all an 8088 can afford, and
+  re-expanding the counts would be the translation the flag exists to save.
+- **P does not exist on a Covox.** `os88spk_init` plays one entry a sample
+  whatever the file's SPKMUL asked, so:
+  - `vp_mdet` does not mute a `P > 1` file on `CPU_8086` when
+    `SND_CAP_LPTDAC` is set - two pulses a sample were the speaker's ~96% of
+    an 8088 (34.11.7.1), and a DAC's ISR runs once a sample. **The rate
+    ceiling stands**: past `VP_SPKMAX` it is still `muted: fast`, because
+    that is the cost of an interrupt a sample, which the Covox pays as the
+    speaker does (§34.14);
+  - the clock's period is rounded to whole samples by the pulses the
+    library is PLAYING (`os88spk_pp`) rather than the file's `[vp_spkp]` -
+    one on a Covox, the file's on the speaker, so the speaker's arithmetic
+    is unchanged to the bit;
+  - a `P` of 3 or 4, which the speaker refuses (only two pulses are built),
+    plays on a Covox.
+
+The info line's third row says `, Covox` where it said `, speaker`, read off
+the same `OSAPI_SND_CAPS` word. The full screen's `Sound off` and `Sound on`
+are about the sound and stay as they are.
+
+`tests/vidspk.py --covox` is the gate, on MartyPC's Covox machine: every
+frame drawn, 800 writes to 378h that FOLLOW the clip's sweep through the
+leveller (the gain moves a frame at a time, so the oracle is the best
+alignment's correlation - 0.966 measured - and not byte equality), the DAC's
+capture sounding and the speaker's flat; `--counts` with it holds a counts
+clip's writes to the file's own bytes.
+
+**+31 bytes of the package** (38,428 -> 38,459): `vp_sndprep`'s two calls
+10, `vp_mdet`'s test 5, the info line 8 and its string 8, and the period's
+rounding 0 (it reads another byte of the same image); no kernel byte, no
+change to `os88spk.inc`.
 
 #### 98.3.16 TEXT: full screen, on any adapter
 
@@ -161459,10 +161827,11 @@ speaker bracket, card), `mrl_` (playlist), `mru_` (window).
 | **Sound Blaster** (the DSP) | the synth (§105.7), streamed | the worker, half a second ahead |
 | **PC speaker** | the synth through os88spk.inc's pulse width | the UI task, in an `FSXF_RATE` bracket |
 | **PC speaker tone** ("Play in Background") | the melody, one square wave | the worker, on the desktop |
+| **Covox** (a DAC on the parallel port, §34.14) | the synth, its bytes raw to the port | the UI task, in the speaker's bracket |
 
 **Automatic** (the default) picks an FM chip first - it costs the machine
-nothing while it sounds - then the DSP, then the speaker. Settings picks any of
-them by name; what the machine lacks is greyed (§47).
+nothing while it sounds - then the DSP, then a Covox, then the speaker. Settings
+picks any of them by name; what the machine lacks is greyed (§47).
 
 ### 105.1 The owner's decisions
 
@@ -161647,7 +162016,7 @@ three colours (snare, hats, cymbals).
 
 | | 8088 | 286 | 386+ |
 |---|---|---|---|
-| speaker (bracket) | **5,512 Hz** (5,523 played), 4 voices | 16,000 (16,124 played), 6 | the same, 6 |
+| speaker or Covox (bracket) | **5,512 Hz** (5,523 played), 4 voices | 16,000 (16,124 played), 6 | the same, 6 |
 | Sound Blaster | 8,000 Hz, 6 voices | 16,000, 8 | 22,050, 8 |
 
 **Settings chooses any of 8,000, 11,025, 16,000, 22,050, 32,000 and 44,100
@@ -161793,6 +162162,63 @@ tool fetching from the author's own repository at a pinned commit is not
 one. `synth` writes the same format from computed waveforms - CC0, no
 network - for the gate.
 
+#### 105.8.7 A Covox: the speaker's bracket with a DAC at the end of it
+
+**The speaker's synth, one call earlier.** `mrk_start` calls `os88spk_lpt`
+with the port - or with 0, every time, because the library keeps what it was
+last told - before `os88spk_init`, which then tables the IDENTITY and plays
+one entry a sample (§34.14.1). So the synth needs no map at all: `mry_open`
+gets SI = 0, the card's case, and the ring holds the soft-clipped unsigned
+bytes the DSP would have been sent; the ISR puts each on the port's data
+lines. Everything else is §105.8.3's - the imposter window, the 4 KB ring,
+the keys, the pause to the desktop, the rate and voices of §105.7.1's
+speaker row. **The rate policy is the speaker's on purpose**: on an 8088 its
+5.5 kHz and 149-count floor are the cost of an interrupt a sample, which a
+Covox pays three instructions dearer, and past an 8088 the 24.8 kHz ceiling
+is a count of 48, the door's own floor. A DAC holds its level, so nothing a
+pulse width needs - the carrier, the pre-emphasis - is wanted, and none is
+built.
+
+**A Covox is announced, never detected** (§34.14): it is a row in Settings
+and a choice for Automatic only while the Sound page's tier is Covox and
+`SOUND.DRV` found a port - `os88spk_lptq`'s answer, kept in `[mr_haslpt]` and
+`[mr_lptport]` by `mr_lptinfo`. **That question is asked again at every
+Play and every time Settings opens**, not only at entry: the tier is the
+Control Panel's and moves while the player is open, and the question is one
+`OSAPI_SND_CAPS` and one `OSAPI_DRV_CALL` beside a song's start. So the
+row's greying is the tier as it is when the dialog is drawn (§47: grey a
+fact), and a Covox chosen by name and then withdrawn refuses its Play in
+words - "No Covox: pick it on the Sound page (Control Panel)" - rather than
+falling silently to the speaker. **`[mr_hassb]` and `[mr_sbhi]` are asked
+again with it**, because the same click moves them: the Covox tier turns
+the DSP's streams off and any other tier on a Sound Blaster turns them back
+on, so an entry-time "there is a card" would have Automatic open a stream
+the driver no longer has. A Covox play names itself: the status line
+says `Covox at 378h - 8-bit DAC synth at 5,523 Hz`, the bracket's line
+`Covox - click or Space to pause`, Now Playing's Output `Covox (LPT DAC)`.
+
+**In Automatic it ranks above the speaker and below the DSP.** Both bracket
+outputs take the whole machine while they sound, so the order by cost is
+unchanged; between the two the Covox is the better sound at the same price,
+and it is only there because the user said so. The Covox tier turns the DSP
+tier off and keeps FM, so on a machine with an AdLib Automatic still plays
+FM and the Covox is one Settings pick away. **Play in Background turns it
+into the tone**, as it does the speaker: neither can sound on the desktop.
+
+What it cost: **464 bytes of image and 19 of bss** (36,464 → 36,928; the
+file 29,586 → 29,922 packed), of which ~200 are strings and 16 are the
+Settings' `Found:` line's scratch going 48 → 64 - that line is 62 bytes on
+an OPL3, an SB16, an MPU-401 and a bank, and ran into `mru_s2` before - and
+no byte of the library, the driver or the kernel: `os88spk_lpt` and
+`os88spk_lptq` were already in every package that plays the speaker.
+
+`tests/midirack.py --arm covox` is the gate, on MartyPC's Covox machine:
+the ring's table the identity, IRQ0 at `os88spk_isrd`, the speaker arm's
+ring checks, and then the oracle the card arms have - the reference
+sequencer's pitch classes in the DAC's OWN capture, 8 of 10 half-seconds
+measured, the tritone-transposed reference 0 - with the PC speaker's
+capture silent.
+
 ### 105.9 The window
 ### 105.9 The window
 
@@ -161828,22 +162254,35 @@ controls, so a press reaches `mr_onclick` and takes the card down.
 
 A **modal dialog** drawn over the content: a "Found:" line naming what the
 machine answered (OPL2/OPL3, the DSP and whether it reaches 44.1 kHz, an
-MPU-401, a wavetable bank, the speaker), the **output** (Automatic, OPL3,
-OPL2, Sound Blaster synth, PC speaker synth, MIDI out (MPU-401), SB
-wavetable - what is missing greyed; the last two are only ever CHOSEN, and
-Automatic picks exactly what it always has), the **synth's sample rate**
+MPU-401, a wavetable bank, a Covox, the speaker), the **output** (Automatic,
+OPL3, OPL2, Sound Blaster synth, PC speaker synth, MIDI out (MPU-401), SB
+wavetable, Covox (parallel port) - what is missing greyed; MIDI out and the
+wavetable are only ever CHOSEN, and the Covox's row is live only while the
+Sound page announces one, §105.8.7), the **synth's sample rate**
 (§105.7.1), **Play in Background**, a note on the rates' limits, and **OK /
 Cancel**. It edits COPIES (`mrs_*`): Cancel, Esc and a press outside it change
 nothing; OK and Enter commit them, and a song that is playing or paused
 **restarts on the new choice** rather than waiting for the next Play. While it
 is up the window's one button record is PAGED onto the dialog's own pair
 (os88ui's documented device for a paged window), so nothing under it can be
-pressed. Both groups are seven rows now, so on a CGA too the pair has a row of
-its own under them, and the dialog is 133 lines: compact drops the background check box, which the Options menu carries anyway.
+pressed. **The output group is eight rows and the rate group seven**, and a
+CGA's content is 136 lines (200, less the menu bar, the dock, the title and
+the frame). An eighth row with the pair on a row of its own under both groups
+would be 145 and run off the window, so compact puts OK and Cancel **under the
+rate group, in the row its seven leave beside the output's eighth**: 131
+lines, 5 to spare where the seven-row dialog had 3. A pitch of 11 was not the
+answer - the radio ring is 12 tall, and rows closer than that touch. The tall
+dialog keeps the pair on its own row under the check box and the note (232
+lines with the mono face's buttons and 236 with the colour face's, of at
+least 262). Compact drops the
+background check box, which the Options menu carries anyway. An assembly-time
+check refuses a rate group that is not the shorter of the two.
 
 **The settings are kept** in `MIDIRACK.CFG` in `SYSTEM\APPDATA` on the
 player's own volume (§19.9; `apps/pixelstein/pxset.inc`'s shape): a magic and
 five bytes - the output, the rate, Play in Background, Loop and Show Levels.
+The Covox is output 7, APPENDED, so a file written before it keeps meaning
+what it said; an older player clamps a 7 to Automatic.
 Read at the first wake; written when OK commits a change and, if a check box
 moved, at the close. A foreign file is ignored and a damaged one clamped, and a
 disk without the folder simply keeps nothing.

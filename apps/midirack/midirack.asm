@@ -13,7 +13,9 @@
 ;   the PC speaker - the same synth through os88spk.inc's pulse width, in a
 ;       rate bracket like the Audio Player's (SPEC.md 34.11, 86.21); or, with
 ;       "Play in Background" ticked, ONE square wave on the desktop, the
-;       melody, through OSAPI_SND_TONE.
+;       melody, through OSAPI_SND_TONE;
+;   a Covox Speech Thing - the same synth, the same bracket, its bytes
+;       written raw to the parallel port's DAC (SPEC.md 34.14, 105.8.7).
 ;
 ; Files (SPEC.md 105.2):
 ;   midirack.asm  header, icon, the .MID association, all bss, entry, data
@@ -98,7 +100,9 @@ MR_OUT_SB   equ 3
 MR_OUT_SPK  equ 4
 MR_OUT_MIDI equ 5                   ; MIDI out, through an MPU-401 (105.8.5)
 MR_OUT_WT   equ 6                   ; the Sound Blaster WAVETABLE (105.8.6)
-MR_NOUT     equ 7                   ; (the Settings group's rows)
+MR_OUT_LPT  equ 7                   ; a Covox on the parallel port (105.8.7) -
+                                    ; LAST, so MIDIRACK.CFG's 0..6 keep meaning
+MR_NOUT     equ 8                   ; (the Settings group's rows)
 
 MRO_NONE    equ 0                   ; [mr_out]: what is OPEN
 MRO_FM      equ 1
@@ -107,6 +111,7 @@ MRO_SPK     equ 3                   ; the synth, in a bracket
 MRO_TONE    equ 4                   ; one square wave, on the desktop
 MRO_MIDI    equ 5                   ; the song's events, to an MPU-401
 MRO_WT      equ 6                   ; the bank's samples, mixed for the card
+MRO_LPT     equ 7                   ; the synth, in a bracket, to a Covox
 
 MR_FILEMAX  equ 63                  ; KB: the largest file taken whole
 
@@ -142,14 +147,16 @@ MR_FILEMAX  equ 63                  ; KB: the largest file taken whole
     MRBUF mr_w, 8                   ; the multi-word scratch (mr_mdiv)
     MRB mr_cpu                      ; CPU_8086 / 286 / 386
     MRB mr_fmkind                   ; 0 none / SND_OPL2 / SND_OPL3 (at entry)
-    MRB mr_hassb                    ; SND_CAP_PCM_BG at entry
-    MRB mr_sbhi                     ; ...and SND_CAP_PCM_HI: rates past 22 kHz
+    MRB mr_hassb                    ; SND_CAP_PCM_BG (mr_lptinfo: entry,
+    MRB mr_sbhi                     ; Settings, Play) ...and PCM_HI: > 22 kHz
     MRB mr_rate                     ; the synth's rate: an index into mr_rates,
                                     ; 0 = Automatic (Settings, SPEC.md 105.9.2)
     MRB mr_cfgdirty                 ; a setting moved since MIDIRACK.CFG
     MRB mr_hasmpu                   ; SOUND.DRV found an MPU-401 (at entry)
     MRW mr_mpubase                  ; ...its data port
     MRB mr_hasbank                  ; MIDIRACK.BNK is beside us (at entry)
+    MRB mr_haslpt                   ; a Covox is ANNOUNCED (mr_lptinfo: at
+    MRW mr_lptport                  ; entry, Settings and Play) ...its port
     MRBUF mr_snap, 2                ; (scratch)
 
 ; =============================================================================
@@ -177,6 +184,7 @@ mr_entry:
 .nofm:
     call mrm_info                   ; an MPU-401 behind SOUND.DRV?
     call mwt_info                   ; ...and a wavetable bank beside us?
+    call mr_lptinfo                 ; ...and a Covox the user announced?
     call mra_load                   ; the colour face's pictures, if colour
     mov byte [mr_levels], 1
     mov byte [mr_want], MR_OUT_AUTO
@@ -329,6 +337,9 @@ mr_s_spkbusy:   db 'The PC speaker is busy', 0
 mr_s_spkpaused: db 'Paused - Space plays on the speaker', 0
 mr_s_spkplay:   db 'PC speaker - click or Space to pause', 0
 mr_s_spkslow:   db 'The speaker cannot play at this rate here', 0
+mr_s_lptpaused: db 'Paused - Space plays on the Covox', 0
+mr_s_lptplay:   db 'Covox - click or Space to pause', 0
+mr_s_nolpt:     db 'No Covox: pick it on the Sound page (Control Panel)', 0
 mr_s_full:      db 'The playlist is full', 0
 mr_s_added:     db 'Added to the playlist', 0
 mr_s_nomid:     db 'Not a .MID file', 0

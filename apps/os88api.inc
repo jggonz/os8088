@@ -497,6 +497,15 @@ SND_CAP_ADPCM4Q  equ 40h         ; the DSP answers 4.xx, where Creative DROPPED
                                  ; 34.5.3.1)
 SND_CAP_EXTBLK   equ 80h         ; verb 0 honours SND_OPENF_BLKSH
                                  ; (SPEC.md 34.5.3)
+SND_CAP_LPTDAC   equ 0100h       ; a COVOX on a parallel port (SPEC.md 34.14):
+                                 ; the user picked the Covox tier on the Sound
+                                 ; page and a port answered. Not a streaming
+                                 ; sink - it is played from inside your own
+                                 ; FSXF_RATE bracket by apps/os88spk.inc, the
+                                 ; speaker's ring player with os88spk_lpt
+                                 ; naming the port, and os88spk_lptq asks the
+                                 ; driver which one. NEVER set by a probe:
+                                 ; a resistor ladder answers nothing
 
 ; verb 9 is verb 3 with DX = the bytes PLAYED EXACTLY, the DMA's progress into
 ; the block now sounding added to the block-granular count (SPEC.md 34.5.1).

@@ -280,6 +280,15 @@ make usbmousetest # THE CH375 USB MOUSE'S GATE DISKS (§9.12.6): no emulator
                 #   mailbox on MartyPC) and usbmbusy.img (a flash drive the
                 #   BIOS configured, which attach must refuse). The shipped
                 #   driver never contains the model
+make covoxtest  # THE COVOX'S GATE DISKS (§34.14): a SYSTEM.CFG asking for
+                #   SOUND.DRV with the sound tier a Covox - LPT2 on the 720KB
+                #   disk (MartyPC's os8088_5150_herc_covox_720_gla, whose
+                #   Hercules port at 3BCh is LPT1) and LPT1 on the 360KB one
+                #   (vm/xt-covox). A Covox is undetectable, so the tier is the
+                #   announcement, and this disk is it already made.
+                #   `make covoxtest && python3 tests/covox.py --arm drv`; each
+                #   player's own leg is `--arm covox` / `--leg covox` /
+                #   `--covox`. MartyPC's Covox is patches/10-covox-lpt-dac.patch
 make thewiretest # THE WIRE'S GATE DISKS (§92.12): ethertest's shape plus one
                 #   file - a SYSTEM/APPDATA/WIRE.CFG naming 10.0.2.2:8092
                 #   instead of os8088.com, so the machine fetches a fixture
@@ -508,7 +517,9 @@ exactly like the feature being broken.
 `xt-mfm` (a 20MB ST-225 on a Xebec MFM controller — the machine to install
 and hibernate on; `build/mfm20.img` is created blank and kept),
 `xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-sound`,
-`xt-sound-1.44`, `xt-midirack` and `386-midirack` (MIDIRack's, SPEC.md
+`xt-sound-1.44`, `xt-covox` (an XT with no card and 86Box's `lpt_dac` on
+LPT1, booting `make covoxtest`'s 360KB disk - SPEC.md §34.14's machine to
+listen to), `xt-midirack` and `386-midirack` (MIDIRack's, SPEC.md
 §105.11: `xt-sound`'s XT plus a standalone MPU-401, and `386-sound`'s 386
 whose SB16 carries one, each sending MIDI to 86Box's FluidSynth with the
 GeneralUser GS soundfont `make midibank` fetches, and each with `make

@@ -5170,11 +5170,25 @@ cp_flush_close_x:
 ; =============================================================================
 
 CPS_B2Y2  equ CP_PR0Y + 2*CP_PROWH + CP_GW + 3  ; 81: route row 2's bottom
+CPS_B3Y2  equ CP_PR0Y + 3*CP_PROWH + CP_GW + 3  ; 101: row 3's (the Covox)
+CPS_NROW  equ 4                         ; the tier rows (SPEC.md 34.14 made it
+                                        ; four, and moved what is below them
+                                        ; down a row pitch: the content is 132
+                                        ; high and the notice ends at 131)
+CPS_LY    equ CP_PR0Y + 3*CP_PROWH      ; 86: the Covox row's glyph top...
+CPS_LX0   equ 66                        ; ...and its three PORT radios, LPT1
+CPS_LDX   equ 50                        ; to LPT3 beside the label, 50 apart:
+CPS_LLX   equ 16                        ; each glyph, then its 'LPTn' 16 on.
+                                        ; The last ends at 66+100+16+32 = 214,
+                                        ; inside the pane's 222
 CPS_BTX1  equ CP_PGX                    ; the Test button
 CPS_BTX2  equ CP_PGX + 44
-CPS_BTY1  equ 84
-CPS_BTY2  equ 99
-CPS_NOTEY equ 104                       ; the refusal notice's text row
+CPS_BTY1  equ 104
+CPS_BTY2  equ 119
+CPS_NOTEY equ 124                       ; the refusal notice's text row
+%if CPS_NOTEY + 8 > CP_CH
+%error "the Sound page's notice line runs off the pane"
+%endif
 section .text
 
 
@@ -5192,12 +5206,14 @@ section .modu                   ; the on-demand image (SPEC.md 2.8): a segment
 ; bits, which is a table rather than a shift because cp_snd_rowok promises to
 ; clobber nothing and a variable shift count costs CL. In the image, read
 ; [cs:] (kernel size pass 8).
-cp_snd_tiers: db SND_RT_SPK, SND_RT_FM, SND_RT_SB
-cp_snd_tbit:  db 0, 1 << SND_RT_FM, 1 << SND_RT_SB
+cp_snd_tiers: db SND_RT_SPK, SND_RT_FM, SND_RT_SB, SND_RT_LPT
+cp_snd_tbit:  db 0, 1 << SND_RT_FM, 1 << SND_RT_SB, 7 << SND_RT_LPT
+                                ; (the Covox row is live when ANY of LPT1..3
+                                ; answered; its port radios ask one bit each)
 
 
 ; -----------------------------------------------------------------------------
-; cp_snd_paint - the page: heading, three tier rows, the Test button, notice
+; cp_snd_paint - the page: heading, four tier rows, the Test button, notice
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
@@ -5205,7 +5221,7 @@ cp_snd_paint:
     call kentm_si                ; KENT: push ax..si
 
 
-    xor bx, bx                      ; BX = row 0..2
+    xor bx, bx                      ; BX = row 0..3
 .lbl:
     mov al, bl
     call cp_snd_rowok               ; greyed rows still draw - they are what
@@ -5218,18 +5234,39 @@ cp_snd_paint:
     cmp bl, 1                       ; naming one outside CPSTAGE is what the
     je .str                         ; gate refuses. Rows 1 and 2 therefore copy
     CPSTAGE cp_s_ssb                ; a string they discard: 6 bytes of the
-.str:                               ; image and ~30 clocks, on a page paint
+    cmp bl, 2                       ; image and ~30 clocks, on a page paint
+    je .str
+    CPSTAGE cp_s_slpt
+.str:
     mov cx, di
     add cx, CP_PLX
     mov ax, CP_PROWH
-    mul bl                          ; AX = bl * CP_PROWH (bl <= 2, so AH = 0)
+    mul bl                          ; AX = bl * CP_PROWH (bl <= 3, so AH = 0)
     mov dx, bp
     add dx, ax
     add dx, CP_PR0Y + CP_PLDY
     call cp_run
     inc bl
-    cmp bl, 3
+    cmp bl, CPS_NROW
     jb .lbl
+    xor bl, bl                      ; THE COVOX'S PORTS: 'LPT1'..'LPT3', each
+.lpt:                               ; greyed when that port did not answer
+    mov al, bl
+    call cp_snd_lptok
+    call cp_pencf
+    CPSTAGE cp_s_slpt1
+    add [si+3], bl                  ; the digit, staged: '1' + n
+    mov al, CPS_LDX
+    mul bl
+    mov cx, di
+    add cx, ax
+    add cx, CPS_LX0 + CPS_LLX
+    mov dx, bp
+    add dx, CPS_LY + CP_PLDY
+    call cp_run
+    inc bl
+    cmp bl, 3
+    jb .lpt
     call cp_penlive
 
     call cp_snd_test
@@ -5241,13 +5278,14 @@ cp_snd_paint:
 
 ; -----------------------------------------------------------------------------
 ; cp_snd_rowok - is tier row AL selectable? (module internal)
-; in:  AL = 0 speaker, 1 AdLib, 2 Sound Blaster
+; in:  AL = 0 speaker, 1 AdLib, 2 Sound Blaster, 3 Covox
 ; out: CF = 0 yes; CF = 1 no - the hardware that row names is not here
 ; clobbers: nothing (flags)
 ;
-; ONE test for both driver rows, because both ask the same question and the
+; ONE test for every driver row, because all ask the same question and the
 ; driver answered it once, at attach. The bits are in the low byte for every
-; SND_RT_* there is (they are 1..3), so this is a byte test.
+; SND_RT_* there is (they are 1..4), so this is a byte test. The Covox's bit
+; says a parallel PORT answered, which is all a probe can say (SPEC.md 34.14).
 ; -----------------------------------------------------------------------------
 cp_snd_rowok:
     or al, al
@@ -5275,9 +5313,32 @@ cp_snd_rowok:
     ret
 
 ; -----------------------------------------------------------------------------
+; cp_snd_lptok - did LPT(AL+1) answer SOUND.DRV's latch test? (module internal)
+; in:  AL = 0..2
+; out: CF = 0 yes, so a Covox on it can be chosen; CF = 1 no
+; clobbers: nothing (flags)
+; -----------------------------------------------------------------------------
+cp_snd_lptok:
+    cmp word [drv_owner], 0
+    je .no                      ; no driver, no port to know about
+    push cx
+    mov cl, al
+    add cl, SND_RT_LPT          ; DSV_TIERS bit SND_RT_LPT + n (SPEC.md 34.14)
+    mov ch, 1
+    shl ch, cl
+    test byte [drv_svc+DSV_TIERS], ch
+    pop cx                      ; POP does not touch flags
+    jz .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; cp_snd_row - which row is EFFECTIVELY live? (module internal)
 ; in:  nothing
-; out: AL = 0 speaker, 1 AdLib, 2 Sound Blaster
+; out: AL = 0 speaker, 1 AdLib, 2 Sound Blaster, 3 Covox
 ; clobbers: AL (the output), flags
 ;
 ; The dot follows the effective tier, not the stored setting, so it can never
@@ -5290,6 +5351,13 @@ cp_snd_rowok:
 cp_snd_row:
     cmp byte [snd_route], SND_RT_SPK
     je .spk
+    cmp byte [snd_route], SND_RT_LPT
+    jb .nlpt                    ; SND_RT_LPT + n, a Covox on LPTn+1
+    test word [drv_svc+DSV_CAPS], SND_CAP_LPTDAC
+    jz .fm                      ; a Covox setting whose port has gone is the
+    mov al, 3                   ; AdLib tier (cvx_tier), and the dot says so
+    ret
+.nlpt:
     cmp byte [snd_route], SND_RT_FM
     je .fm                      ; AUTO and SB both take the best tier up
     cmp word [drv_svc+DSV_STREAM], 0
@@ -5308,7 +5376,7 @@ cp_snd_row:
     ret
 
 ; -----------------------------------------------------------------------------
-; cp_snd_radios - the three glyphs (module internal)
+; cp_snd_radios - the four glyphs (module internal)
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
 ;
@@ -5398,7 +5466,7 @@ cp_snd_radios:
     mov al, OS88UI_GRADIO | OS88UI_GON
 .draw:
 %ifdef KERN_BIG
-    push bx                     ; ids 2..4, the Test button being 1
+    push bx                     ; ids 2..5, the Test button being 1
     mov bh, bl
     add bh, 2
     call cp_dngly
@@ -5407,8 +5475,38 @@ cp_snd_radios:
     call cp_gemit                ; ...which leaves the pen LIVE by itself, so
     add dx, CP_PROWH            ; the gfx_pen_live that used to close this
     inc bl                      ; loop is gone too
-    cmp bl, 3
+    cmp bl, CPS_NROW
     jb .r
+    mov cx, di                  ; THE COVOX'S THREE PORTS (SPEC.md 34.14),
+    add cx, CPS_LX0             ; ids 6..8: the dot on the one the tier names
+    mov dx, bp                  ; while the driver has the DAC up - so, like
+    add dx, CPS_LY              ; the rows', it never claims a port that is
+    xor bl, bl                  ; not sounding
+.p:
+    mov al, bl
+    call cp_snd_lptok
+    mov ax, OS88UI_GRADIO
+    adc ah, 0                   ; (cp_snd_radios' own ADC: AH = 1 refused)
+    mov bh, bl
+    add bh, SND_RT_LPT
+    cmp bh, [snd_route]
+    jne .pd
+    test word [drv_svc+DSV_CAPS], SND_CAP_LPTDAC
+    jz .pd
+    mov al, OS88UI_GRADIO | OS88UI_GON
+.pd:
+%ifdef KERN_BIG
+    push bx
+    mov bh, bl
+    add bh, 6
+    call cp_dngly
+    pop bx
+%endif
+    call cp_gemit
+    add cx, CPS_LDX
+    inc bl
+    cmp bl, 3
+    jb .p
     jmp kretm_si
 
 ; -----------------------------------------------------------------------------
@@ -5478,7 +5576,7 @@ cp_snd_click:
     jmp short .done
 
 .rows:
-    cmp dx, CP_B0Y1             ; --- the three tier rows -------------------
+    cmp dx, CP_B0Y1             ; --- the four tier rows --------------------
     jl .done
     xor bl, bl                  ; BL = the row the y lands in
     cmp dx, CP_B0Y2
@@ -5488,6 +5586,9 @@ cp_snd_click:
     jle .band
     inc bl
     cmp dx, CPS_B2Y2
+    jle .band
+    inc bl
+    cmp dx, CPS_B3Y2
     jg .done
 .band:
     mov al, bl
@@ -5499,14 +5600,17 @@ cp_snd_click:
                                 ; that will refuse must not arm, or the press
                                 ; draws it held and SPEC.md 13.8's "disabled
                                 ; outranks down" is broken by this page
+    cmp bl, 3
+    je .lpt                     ; the Covox row: which PORT is its own question
 %ifdef KERN_BIG
-    add al, 2                   ; ids 2..4, the Test button being 1
+    add al, 2                   ; ids 2..5, the Test button being 1
     call cp_ctl
     jc .done
     mov al, bl
 %endif
     xor bh, bh
     mov ah, [cs:bx+cp_snd_tiers] ; the SND_RT_* that row asks for
+.ask:
     mov byte [cp_snd_err], 0
     cmp ah, [snd_route]
     je .redraw                  ; already the setting: still redraw, because
@@ -5523,6 +5627,55 @@ cp_snd_click:
     call cp_snd_note
 .done:
     jmp kretm_dx
+.lpt:                           ; --- the Covox row (SPEC.md 34.14) ---------
+    cmp cx, CPS_LX0 - 2         ; on a PORT radio: that port, if it answered.
+    jl .lab                     ; On the label: the port already chosen, or
+    mov ax, cx                  ; the first that answered - a Covox tier is
+    sub ax, CPS_LX0 - 2         ; SND_RT_LPT + n, LPTn+1, and the byte that
+    mov dl, CPS_LDX             ; holds it is the one SYSTEM.CFG already keeps.
+    div dl                      ; SIGNED first: CX is pane-relative and the
+                                ; gutter left of the pane is -8..-1, which an
+                                ; unsigned test passed on to a `div` whose
+                                ; quotient then overflowed - INT 0, and no
+                                ; handler for it
+    cmp al, 3
+    jae .done
+    mov bl, al
+    call cp_snd_lptok
+    jc .done
+%ifdef KERN_BIG
+    add al, 6                   ; ids 6..8
+    call cp_ctl
+    jc .done
+%endif
+    mov ah, bl
+    add ah, SND_RT_LPT
+    jmp short .ask
+.lab:
+%ifdef KERN_BIG
+    mov al, 5                   ; the row's own id
+    call cp_ctl
+    jc .done
+%endif
+    mov ah, [snd_route]
+    cmp ah, SND_RT_LPT
+    jb .fst                     ; already a Covox that SOUNDS: re-asking is
+    test word [drv_svc+DSV_CAPS], SND_CAP_LPTDAC    ; harmless. One whose
+    jnz .ask                    ; port did not answer here falls to the first
+.fst:                           ; that did, as a setting from another machine
+    xor bl, bl
+.first:
+    mov al, bl
+    call cp_snd_lptok
+    jnc .got
+    inc bl
+    cmp bl, 3
+    jb .first
+    jmp short .done             ; (cp_snd_rowok passed, so one answered)
+.got:
+    mov ah, bl
+    add ah, SND_RT_LPT
+    jmp .ask
 
 ; =============================================================================
 ; The Drivers page (SPEC.md 31.6/51)
@@ -6718,6 +6871,8 @@ cp_vmodnam: dw cp_s_vsing, cp_s_vrgt, cp_s_vblw
 CPS cp_s_sspk,  'PC Speaker'
 CPS cp_s_sfm,   'AdLib'
 CPS cp_s_ssb,   'Sound Blaster'
+CPS cp_s_slpt,  'Covox'
+CPS cp_s_slpt1, 'LPT1'
 CPS cp_s_stest, 'Test'
 
 ; The Date/Time page names the RTC ladder tier that answered (SPEC.md 37.90),

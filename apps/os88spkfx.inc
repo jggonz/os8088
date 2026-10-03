@@ -27,6 +27,8 @@
 ;   os88spkfx_init   after os88spk_init. DI = 256 x SPKFX_NLEV bytes in the
 ;                    package's own segment for the family, AL = SPKFX_PRE_*,
 ;                    AH = 1 to put the carrier away in the quiet (0 not).
+;                    BOTH ARE IGNORED for a Covox (os88spk_lpt): PRE_NONE
+;                    and no carrier, whatever was asked (SPEC.md 34.14).
 ;                    Builds the family (~0.2 s on a 5150); os88spk_sil
 ;                    becomes 1 with AH = 1 (a dry ring is then silent AND
 ;                    quiet). Any time outside a play
@@ -56,6 +58,13 @@ os88spkfx_init:
     push di
     push ds
     push es
+    cmp word [cs:os88spk_lptp], 0   ; ON A COVOX IT IS A LEVELLER AND NOTHING
+    je .spk                         ; ELSE (SPEC.md 34.14): no pre-emphasis -
+    xor ax, ax                      ; the tilt is for a cone that cannot move
+.spk:                               ; bass, and a DAC can - and no carrier to
+                                    ; put away. The table it composes with is
+                                    ; os88spk's identity, so a row is the gain
+                                    ; and the clip on the sample itself
     mov [cs:os88spkfx_pre], al
     mov [cs:os88spkfx_idle], ah
     mov [cs:os88spkfx_fam], di

@@ -29,6 +29,14 @@ and its guest sampled from outside instead (flat_ip, ~150 a second, the
 guest charged nothing), bucketed by the package's labels, the kernel's and
 the ROM's - where a play's time goes when it does not keep up.
 
+--covox plays an 8,000 Hz WAV on MartyPC's Covox machine (a Covox on LPT2,
+no card, `make covoxtest`'s disk, the WAV on a scratch floppy in B:): on a
+Covox Audio copies a WAV's samples into the ring as a card would play them
+(SPEC.md 86.21.3), so after the ring's first silence the bytes on port 378h
+are THE FILE'S OWN SAMPLES, in order, one for one - no model needed - and
+not one byte goes to 42h. Broken on purpose - aps_plan's Covox copy taken
+out, so the leveller runs - it FAILS on the first sample the gain moves.
+
 --pause also reads the menu bar once the bracket is up: the progress
 widget the file's read armed must be gone from it (SPEC.md 86.21.2). Broken
 on purpose - apu_repaint's OSAPI_WM_CLIP_CLEAR taken out - it FAILS on the
@@ -478,6 +486,81 @@ def pause(a):
     return 1 if bad else 0
 
 
+def covox(a):
+    """the WAV's samples, one for one, on the Covox's port (86.21.3)"""
+    os.chdir(ROOT)
+    bad = []
+    n = 300
+    with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
+        xs = song(int(8000 * max(a.secs, 4.0)), 8000)
+        path = os.path.join(tmp, "T0.WAV")
+        wav(path, 8000, xs)
+        img = os.path.join(tmp, "cvx.img")
+        subprocess.run([sys.executable, "tools/os88disk.py", "-o", img,
+                        "--size", "720", os88build.at("build/audio.o88"),
+                        path], check=True, capture_output=True)
+        m = os88marty.launch("build/covoxsys720.img", apps=img,
+                             machine="os8088_5150_herc_covox_720_gla")
+        try:
+            ui = os88ui.UI(m)
+            ui.ready(limit=240)
+            k_open = m.sym("osapi_fsx_spk")
+            ev = {"open": 0, "w": []}
+
+            def hit(mm, rec):
+                r_ = mm.regs()
+                if rec.get("addr") == k_open:
+                    if r_["ax"] & 0xFF == 0:
+                        ev["open"] += 1
+                        mm.breakpoints([{"type": "io", "addr": 0x378}])
+                elif len(ev["w"]) < n:
+                    ev["w"].append(r_["ax"] & 0xFF)
+                    if len(ev["w"]) == n:
+                        mm.breakpoints([])
+            with os88marty.bp_trace(m, k_open, on_hit=hit) as tr:
+                ui.path("B:/T0.WAV")
+                tr.until(lambda: len(ev["w"]) >= n, "the play's first "
+                         "samples on 378h", limit=300.0)
+            got = ev["w"]
+            # THE RING'S FIRST SILENCE (80h, a dry grant's) runs into the
+            # song's own first samples, which are 80h too - so the start is
+            # FOUND, as the shortest lead of 80h after which the writes are
+            # the file, rather than counted
+            lead = 0
+            while lead < 64 and got[lead] == 0x80 and \
+                    bytes(got[lead:]) != bytes(xs[:len(got) - lead]):
+                lead += 1
+            body = got[lead:]
+            print("   %d writes to 378h: %d of the ring's silence, then %s"
+                  % (len(got), lead, bytes(body[:12]).hex()))
+            if bytes(body) != bytes(xs[:len(body)]):
+                k = next(i for i, (x, y) in enumerate(zip(body, xs)) if x != y)
+                bad.append("covox: write %d is %02x, the file's sample is %02x"
+                           " - the DAC is not being handed the WAV"
+                           % (lead + k, body[k], xs[k]))
+            elif len(body) < n // 2:
+                bad.append("covox: only %d of the file's samples reached the "
+                           "port" % len(body))
+            else:
+                print("   ok   covox: %d samples on 378h, the file's own, in "
+                      "order" % len(body))
+            spk = []
+            with os88marty.bp_trace(m, {"type": "io", "addr": 0x42},
+                                    on_hit=lambda mm, rec: spk.append(1)):
+                os88marty.pace(m, 2.0)
+            if spk:
+                bad.append("covox: %d writes to the speaker's 42h while the "
+                           "Covox played" % len(spk))
+            else:
+                print("   ok   covox: nothing written to 42h in two seconds")
+        finally:
+            m.close()
+    for b_ in bad:
+        print("   FAIL " + b_)
+    print("apspk: %s" % ("FAIL" if bad else "ok"))
+    return 1 if bad else 0
+
+
 def u16r(m, addr, off):
     b = m.read(addr + off, 2)
     return b[0] | b[1] << 8
@@ -497,7 +580,12 @@ def main():
                     help="Space a second in (back to the desktop, paused), "
                          "Space again (the play resumes AT the sample it "
                          "stopped on), then Esc (stopped, the door shut)")
+    ap.add_argument("--covox", action="store_true",
+                    help="MartyPC's Covox machine: the WAV's own samples on "
+                         "port 378h, one for one (86.21.3)")
     a = ap.parse_args()
+    if a.covox:
+        return covox(a)
     if a.cardcounts:
         return cardcounts(a)
     if a.card:

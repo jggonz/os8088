@@ -23,6 +23,12 @@ on what came out of the machine:
         least half full (the synth keeps ahead of the pulses, SPEC.md
         105.7.1), CONS advancing at the rate, the agreement on the low-passed
         capture
+  covox no card, a Covox on LPT2 (MartyPC's Covox machine, `make
+        covoxtest`'s disk - SPEC.md 34.14, 105.8.7): spk's checks on the
+        ring, the IRQ0 vector the Covox's ISR and the ring's table the
+        identity, then the agreement on the DAC's OWN capture - and the
+        speaker's capture silent, so the play went to the ladder and not
+        the cone
   tone  no card, "Play in Background": one square wave on the desktop, its
         frequency always the highest melodic note the reference has sounding
   end   the AdLib profile: INTRO looped (Loop on - the same song again, from
@@ -65,9 +71,11 @@ ARMS = {
     "end": ("os8088_5150_herc_adlib_720_gla", None),
     "mpu": ("os8088_5150_herc_mpu_720_gla", None),
     "wt": ("os8088_5150_herc_sb_720_gla", "sound_blaster"),
+    "covox": ("os8088_5150_herc_covox_720_gla", "covox"),
 }
 OUT_MIDI, MRO_MIDI = 5, 5
 OUT_WT, MRO_WT = 6, 6
+OUT_LPT, MRO_LPT = 7, 7
 
 
 def fail(msg):
@@ -157,7 +165,8 @@ def session(arm, cap, brk):
     machine, src = ARMS[arm]
     # the MPU-only machine boots `make miditest`'s disk: SOUND.DRV wanted by
     # its SYSTEM.CFG, since the kernel's boot sniff finds no FM chip there
-    img = "build/midisys720.img" if arm == "mpu" else IMG
+    img = {"mpu": "build/midisys720.img",
+           "covox": "build/covoxsys720.img"}.get(arm, IMG)
     # ...and the wavetable's, `make mrwttest`'s apps disk: the synthetic bank
     # beside the package
     apps = "build/mrwt720.img" if arm == "wt" else APPS
@@ -181,18 +190,20 @@ def session(arm, cap, brk):
         if arm == "wt" and p.b("mr_hasbank") != 1:
             fail("wt: MIDIRack found no MIDIRACK.BNK beside it")
         p.put("mr_want", bytes([{"fm": OUT_OPL2, "sb": OUT_SB,
-                                 "wt": OUT_WT}.get(arm, OUT_SPK)]))
+                                 "wt": OUT_WT,
+                                 "covox": OUT_LPT}.get(arm, OUT_SPK)]))
         if arm == "tone":
             p.put("mr_bg", b"\x01")
         if RATE:
             p.put("mr_rate", bytes([RATE]))     # Settings' rate, by index
         ui.menu_pick("Play", "Play")
         want = {"fm": MRO_FM, "sb": MRO_SB, "spk": MRO_SPK, "tone": MRO_TONE,
-                "wt": MRO_WT}
+                "wt": MRO_WT, "covox": MRO_LPT}
         M.until(ui.m, lambda _: p.b("mr_out") == want[arm], "the output open",
                 poll=.1, limit=10)
         return {"fm": arm_fm, "sb": arm_sb, "spk": arm_spk,
-                "tone": arm_tone, "wt": arm_wt}[arm](ui, p)
+                "tone": arm_tone, "wt": arm_wt,
+                "covox": arm_covox}[arm](ui, p)
 
 
 def arm_fm(ui, p):
@@ -300,6 +311,30 @@ def arm_spk(ui, p):
     print("PASS spk: %d Hz, the ring never under %d, %d played in %.2f s"
           % (rate, low, played, secs), flush=True)
     return 5.0
+
+
+def arm_covox(ui, p):
+    """THE COVOX (SPEC.md 105.8.7, 34.14): the speaker's bracket and ring,
+    with the port named - so the ring's table is the identity and IRQ0 is
+    os88spk_isrd - and then arm_spk's own checks on the ring."""
+    if p.b("mr_haslpt") != 1 or p.w("mr_lptport") != 0x378:
+        fail("covox: MIDIRack has no Covox (haslpt %d, port %03X) - the "
+             "Sound page's tier on this disk is LPT2 at 378h"
+             % (p.b("mr_haslpt"), p.w("mr_lptport")))
+    M.until(ui.m, lambda _: p.w("mrk_seg"), "the ring", poll=.05, limit=10)
+    tab = bytes(ui.m.readseg(p.w("mrk_seg"), 4096 + 16, 256))
+    if tab != bytes(range(256)):
+        fail("covox: the ring's table is not the identity - os88spk built "
+             "the speaker's counts")
+    tail = arm_spk(ui, p)
+    vec = ui.m.read(0x20, 4)
+    off, seg = vec[0] | vec[1] << 8, vec[2] | vec[3] << 8
+    if (seg, off) != (p.seg, p.s["os88spk_isrd"]):
+        fail("covox: IRQ0 is %04X:%04X, not os88spk_isrd at %04X:%04X"
+             % (seg, off, p.seg, p.s["os88spk_isrd"]))
+    print("PASS covox: the identity table, IRQ0 at os88spk_isrd, the DAC at "
+          "378h", flush=True)
+    return tail
 
 
 def arm_tone(ui, p):
@@ -482,7 +517,7 @@ def main():
         ref = spans(SONG, 6 if a.brk else 0)
         box, dec = (9, 4) if a.arm == "spk" else (1, 2)
         hit, n = agreement(wav, ref, tail + 2.0, box, dec)
-        need = {"fm": 6, "sb": 8, "spk": 5, "wt": 7}[a.arm]
+        need = {"fm": 6, "sb": 8, "spk": 5, "wt": 7, "covox": 7}[a.arm]
         print("%s %s: %d of %d half-seconds' strongest pitch class sounding "
               "in the reference (need %d)" % ("PASS" if hit >= need else
                                               "FAIL", a.arm, hit, n, need),
@@ -498,6 +533,19 @@ def main():
             return 1
         print("PASS %s: the transposed reference scores %d (must stay under "
               "%d)" % (a.arm, bad, need), flush=True)
+        if a.arm == "covox":
+            # ...AND THE CONE SILENT: the door turned the speaker on for a
+            # PWM nobody writes, and os88spk_go turns it off again
+            rate, s, _ = sndcheck.load(cap + ".pc_speaker.wav")
+            seg = s[-int((tail + 2.0) * rate):]
+            m = sum(seg) / max(len(seg), 1)
+            rms = math.sqrt(sum((x - m) ** 2 for x in seg) / max(len(seg), 1))
+            if rms > 0.01:
+                print("FAIL covox: the PC speaker sounded (RMS %.3f) while "
+                      "the Covox played" % rms, flush=True)
+                return 1
+            print("PASS covox: the speaker silent (RMS %.4f) - the play went "
+                  "to the ladder and not the cone" % rms, flush=True)
         return 0
 
 

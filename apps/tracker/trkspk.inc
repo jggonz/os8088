@@ -32,6 +32,14 @@
 ;   tsp_halt    the door shut and the play over (trk_play_stop's)
 ;   tsp_leave   ...the door shut at a bracket's end, the play going on
 ;   tsp_natural a loaded module's samples high-passed (no card, at load)
+;
+; A COVOX PLAYS THROUGH ALL OF IT (SPEC.md 45.25.5, 34.14). With the Sound
+; page's Covox tier there are no streams, so this is the path a Play takes,
+; and os88spk_lptq names the port: tsp_outq keeps it in [tsp_lpt] (0 = the
+; speaker) at each load and each Play, tsp_tables hands it to os88spk_lpt
+; before os88spk_init, and what was only the speaker's is left out - the
+; load-time filter (the DAC plays bass), the carrier's warning, the speaker's
+; name on the glass. The rungs, the bench, the ring and the door are the same.
 ; =============================================================================
 
 TSP_RSIZE   equ 0x20                ; the ring: 4096 << 2
@@ -70,6 +78,14 @@ TSP_CS      equ 104                 ; THE SPEAKER'S SHARE against the shaper's
                                     ; 89, built on MartyPC's ~325, and a 5150
                                     ; opened at 5,512 on a "95%" that was ~103
 %endif
+%ifndef TSP_CSD
+TSP_CSD     equ 112                 ; ...AND A COVOX'S, DERIVED (45.25.5):
+%endif                              ; os88spk_isrd is os88spk_isr with a push
+                                    ; dx (15 cycles), a mov dx, imm16 (13, the
+                                    ; fetch floor) and a pop dx (12), and its
+                                    ; out dx, al is 2 cheaper than out 42h, al
+                                    ; - so ~433 cycles a sample against ~395,
+                                    ; and (433 / 106 + 1) x 400 / 18.2 = 112
 TSP_FSDIV   equ 21845               ; the full screen's period: 54.6 Hz, the
                                     ; text screen's frame clock (45.16)
 
@@ -115,6 +131,8 @@ tsp_rat:    dw 22050, 16000, 11025, 8000, 0
     TRKW tsp_mchunk                 ; ...mixed a tick's chunk at a time
     TRKW tsp_ne                     ; the shaper's in TSP_BTICKS
     TRKW tsp_pct                    ; the load predicted for the rung
+    TRKW tsp_lpt                    ; THE OUTPUT: a Covox's data port, 0 the
+                                    ; speaker (tsp_outq, at a load and a Play)
     TRKBUF tsp_save, 3              ; mp_playing, mp_tickrem across the bench
     TRKBUF tsp_chsave, MP_CHSZ * 4  ; ...and the channel records
     TRKBUF tsp_msg, 64              ; the refusal, with its figure (<= 55)
@@ -128,6 +146,7 @@ tsp_hook:                           ; FSXF_RATE's hook: a period, counted
 ; tsp_play - trk_play with no card. [trk_pmode] as trk_play's AL. lock held
 ; -----------------------------------------------------------------------------
 tsp_play:
+    call tsp_outq                   ; the speaker or a Covox, asked per Play
     call tsp_ring                   ; the ring claimed once, for the session
     jc .out
     cmp byte [trk_fs], 0            ; INSIDE THE FULL SCREEN: its bracket is
@@ -182,6 +201,21 @@ tsp_ring:
     stc
     ret
 
+; tsp_outq - THE OUTPUT, asked of the driver (SPEC.md 45.25.5): [tsp_lpt] =
+; the Covox's data port when the Sound page's tier is the Covox and SOUND.DRV
+; found a port, else 0, the speaker. At a load (the filter's question) and
+; at each Play (tsp_play), so a play keeps the device it opened on until it
+; stops. Preserves all
+tsp_outq:
+    push dx
+    call os88spk_lptq               ; CF = 0, DX = the port
+    jnc .s
+    xor dx, dx
+.s:
+    mov [tsp_lpt], dx
+    pop dx
+    ret
+
 ; tsp_rates - SI -> this machine's rungs
 tsp_rates:
     push ax
@@ -207,6 +241,8 @@ tsp_tables:
     jbe .sp
     mov word [tsp_span], 512
 .sp:
+    mov dx, [tsp_lpt]               ; the Covox's port, or 0 the speaker: the
+    call os88spk_lpt                ; table, the ISR and the shaper follow it
     mov dx, ax
     mov di, [tsp_rseg]
     mov ah, TSP_RSIZE
@@ -464,6 +500,10 @@ tsp_predict:
     push ax
     mov ax, cx                      ; the pulses and the shaper
     mov bx, TSP_CS
+    cmp word [tsp_lpt], 0           ; ...or a Covox's dearer ISR (45.25.5)
+    je .cs
+    mov bx, TSP_CSD
+.cs:
     mul bx
     mov bx, [tsp_ne]
     or bx, bx
@@ -493,7 +533,7 @@ tsp_refuse:
     push es
     call tsp_mbeg
     mov si, trk_s_spk1
-    call tsp_mcat
+    call tsp_mout                   ; `Speaker:` or `Covox:`
     call tsp_mpct
     mov si, trk_s_spk2
     call tsp_mcat
@@ -513,7 +553,7 @@ tsp_readout:
     push es
     call tsp_mbeg
     mov si, trk_s_spk3
-    call tsp_mcat
+    call tsp_mout                   ; `Spk` or `Covox`
     mov ax, [tsp_rate]
     call tsp_mnum
     mov si, trk_s_spk4
@@ -523,7 +563,9 @@ tsp_readout:
     call tsp_mcat
     cmp word [tsp_rate], 8000       ; UNDER 8 kHz THE CARRIER IS IN THE EAR's
     jae .e                          ; best band, and the owner would rather
-    mov si, trk_s_spk6              ; say so than have it taken for a fault
+    cmp word [tsp_lpt], 0           ; say so than have it taken for a fault -
+    jne .e                          ; and a Covox HAS no carrier (45.25.5)
+    mov si, trk_s_spk6
     call tsp_mcat
 .e:
     call tsp_mend
@@ -628,7 +670,7 @@ tsp_levsay:
     push es
     call tsp_mbeg
     mov si, trk_s_lev1
-    call tsp_mcat
+    call tsp_mout                   ; `Spk level` or `Covox level`
     call tsp_lvnow                  ; what the BAR shows: paused, the play's
     xor ah, ah                      ; own [os88spkfx_lev] is last play's
     call tsp_mnum
@@ -648,6 +690,19 @@ tsp_mbeg:
     cld
     mov di, tsp_msg
     ret
+
+; tsp_lptsi - SI = a string that names the SPEAKER -> its COVOX twin, the word
+; stored just before it, when the output is a Covox (45.25.5). Preserves all
+; but SI
+tsp_lptsi:
+    cmp word [tsp_lpt], 0
+    je .out
+    mov si, [si-2]
+.out:
+    ret
+
+tsp_mout:                           ; ...and into the message
+    call tsp_lptsi
 
 tsp_mcat:                           ; SI's string, not its NUL
     push ax
@@ -1416,8 +1471,9 @@ tsp_bsx:    dw 0, 0                 ; sum |x|, one byte in 8
 ; C-2 and moving with the note, flat above it - where the first difference it
 ; replaced tilted the whole band 6 dB an octave and took the lows the owner
 ; could not hear (SPEC.md 45.25, 34.11.9). Paid ONCE, at load: a linear filter
-; commutes with the mix. Only with no card, and for the module's life (a
-; card's route taken later hears it thinner). tools/os88spkfx.py's tracker_hp
+; commutes with the mix. Only with no card and no Covox (a DAC plays bass,
+; 45.25.5), and for the module's life (a card's route or a Covox taken later
+; hears it thinner). tools/os88spkfx.py's tracker_hp
 ; is it exactly: Y = 128 y, so the output y/2 is Y's HIGH BYTE - |y| <= 255
 ; for bytes in, so Y fits a word and y/2 a signed byte, and there is no
 ; clamp and no output shift. It was 303 cycles a sample with them. A big

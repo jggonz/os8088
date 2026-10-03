@@ -6165,12 +6165,12 @@ vp_sstart:
 .clk:
     cmp byte [vp_snd], VP_SPK       ; PULSES A SAMPLE (34.11.7): the period
     jne .clk2                       ; a whole number of SAMPLES, so the
-    cmp byte [vp_spkp], 1           ; door's K is a multiple of the pulses
+    cmp byte [os88spk_pp], 1        ; door's K is a multiple of the pulses
     je .clk2                        ; and the kernel's entry is a sample's
     push ax                         ; first - within a sample of the
     push bx                         ; file's, as the door's own rounding
-    mov al, [cs:os88spk_n]          ; is
-    mul byte [vp_spkp]              ; AX = N, the counts a sample
+    mov al, [cs:os88spk_n]          ; is. THE PULSES PLAYED, not the file's:
+    mul byte [os88spk_pp]           ; one on a Covox (98.3.15.1). AX = N
     mov bx, ax
     mov ax, dx
     xor dx, dx
@@ -8742,8 +8742,11 @@ vp_mdet:
     jnz .set
     cmp byte [vp_tier], CPU_8086
     jne .set
+    test ax, SND_CAP_LPTDAC         ; (A COVOX plays one entry a sample
+    jnz .rate                       ; whatever the file's P: 98.3.15.1)
     cmp byte [vp_spkp], 1           ; (two pulses a sample are ~96% of an
     ja .fast                        ; 8088: 34.11.7.1)
+.rate:
     cmp word [vp_rate], VP_SPKMAX
     jbe .set
 .fast:
@@ -8821,7 +8824,8 @@ vp_sndoff:
     ret
 
 ; vp_sndprep - the sound this play will have (SPEC.md 98.3.1, 98.3.15): its
-; ring claimed and [vp_snd] = 1 the card's stream, VP_SPK the speaker - or
+; ring claimed and [vp_snd] = 1 the card's stream, VP_SPK the speaker (or
+; the Covox, os88spk_lpt naming its port: 98.3.15.1) - or
 ; 0 none: no audio, MUTED, told to be silent, or no room. The card is not
 ; opened here. Clobbers AX, CX, DX
 vp_sndprep:
@@ -8850,6 +8854,11 @@ vp_sndprep:
     jne .ret                        ; channel 0). The ring the card would
     cmp byte [vp_audio], 1          ; read, and the table its counts are
     jne .ret                        ; made through
+    call os88spk_lptq               ; ...OR A COVOX (98.3.15.1, 34.14): DX =
+    jnc .lpt                        ; its port when the Sound page's tier is
+    xor dx, dx                      ; the Covox, else 0 and the speaker -
+.lpt:                               ; asked per play, before os88spk_init
+    call os88spk_lpt                ; builds the table for it
     mov ax, VP_RL / 1024 + 1        ; (RL + 272 of it: the table follows
     call OSAPI_MEM_CLAIM            ; the control words)
     jc .ret
@@ -8936,7 +8945,8 @@ vp_unmfs:
     ret
 
 ; vp_spkinfo - the info line's word on the sound (98.3.15, 98.3.17), at DI:
-; MUTED and why, or with no card, the speaker. Preserves all
+; MUTED and why, or with no card, the speaker - or the Covox, when the Sound
+; page's tier is (98.3.15.1). Preserves all
 vp_spkinfo:
     cmp byte [vp_audio], 0
     je .r
@@ -8962,6 +8972,9 @@ vp_spkinfo:
     cmp byte [vp_audio], 1
     jne .o
     mov si, vp_s_spkon
+    test ax, SND_CAP_LPTDAC         ; ...or the Covox (98.3.15.1)
+    jz .p
+    mov si, vp_s_cvx
 .p:
     call vp_puts
 .o:
@@ -12503,6 +12516,7 @@ vp_s_silent:  db 'silent', 0
 vp_s_pcm8:    db 'sound PCM8', 0
 vp_s_adpcm:   db 'sound ADPCM4', 0
 vp_s_spkon:   db ', speaker', 0
+vp_s_cvx:     db ', Covox', 0
 vp_s_muted:   db ', muted', 0
 vp_s_mdsp:    db ', muted: DSP 4', 0         ; (35 columns: 16 left here)
 vp_s_spkfast: db ', muted: fast', 0

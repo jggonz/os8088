@@ -290,12 +290,15 @@ mr_scroll:
     pop ax
     ret
 
-; mr_isspk - CF = 1 when the speaker is the output a Play would use (so
-; Play in Background means something)
+; mr_isspk - CF = 1 when a BRACKET output - the speaker or a Covox - is the
+; one a Play would use (so Play in Background means something: neither can
+; play on the desktop, and the tone is what plays there instead)
 mr_isspk:
     push ax
     mov al, [mr_want]
     cmp al, MR_OUT_SPK
+    je .yes
+    cmp al, MR_OUT_LPT
     je .yes
     cmp al, MR_OUT_AUTO
     jne .no
@@ -687,6 +690,7 @@ mr_dlg:
 
 mr_cmd_settings:
     push ax
+    call mr_lptinfo                 ; the Covox row greyed by today's tier
     mov al, [mr_want]               ; the dialog edits COPIES: OK commits
     mov [mrs_out], al
     mov al, [mr_rate]

@@ -1,6 +1,6 @@
 ; =============================================================================
-; SOUND.DRV's package verbs - the FM chip, whole (SPEC.md 34.12), and the
-; MPU-401's MIDI out (SPEC.md 34.13)
+; SOUND.DRV's package verbs - the FM chip, whole (SPEC.md 34.12), the
+; MPU-401's MIDI out (SPEC.md 34.13) and the Covox's port (SPEC.md 34.14)
 ;
 ; Included by BOTH ends, netpkg.inc's shape: the driver that answers these and
 ; every package that asks. Two doors, because the two halves need different
@@ -74,11 +74,27 @@ SNDV_MIDCLOSE equ 5             ; every channel's notes off and controllers
                                 ; reset, and the interface given back. Closing
                                 ; one that is not yours does nothing
 
+SNDV_DACINFO equ 6              ; THE COVOX (SPEC.md 34.14). out CF=0, AX = the
+                                ; DATA PORT of the LPT the user said a Covox
+                                ; Speech Thing is on (the Sound page's tier
+                                ; SND_RT_LPT + n, LPTn+1); CF=1 AX = SNDE_NODAC
+                                ; when the tier is not a Covox's or its port
+                                ; did not answer attach's latch test. Claims
+                                ; nothing: the DAC is played from inside the
+                                ; caller's own FSXF_RATE bracket
+                                ; (apps/os88spk.inc's os88spk_lpt), and only
+                                ; one bracket is ever open. WORKER-SAFE.
+                                ; apps/os88spk.inc types this number out a
+                                ; second time (its os88spk_lptq asks it with
+                                ; no -I drivers/sound/); tests/unit/t_mirror
+                                ; holds the two equal
+
 SNDE_NOFM    equ 1
 SNDE_NOCLAIM equ 2
 SNDE_NOMIDI  equ 3
 SNDE_BUSY    equ 4
 SNDE_MIDTIME equ 5
+SNDE_NODAC   equ 6
 
 ; --- OSAPI_SND_FM verbs, after 0..3 (apps/os88api.inc) -----------------------
 SND_FM_INFO  equ 4              ; out CF=0, AL = SND_OPL2 / SND_OPL3 (the chip),

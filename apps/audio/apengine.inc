@@ -506,9 +506,12 @@ ap_open_track:
     call ap_stream_close          ; a clean slate (drains the worker)
     call ap_prep_track            ; the file parsed and the look-ahead primed
     jc .refuse                    ; (ap_msg says why)
-    cmp byte [ap_have_sb], 0      ; NO CARD: THE SPEAKER (SPEC.md 86.21) -
-    jne .card                     ; sound and nothing else is better than
-    jmp aps_open                  ; no sound. It returns CF itself
+    call OSAPI_SND_CAPS           ; THE TIER NOW, not at launch: the
+    test ax, SND_CAP_PCM_BG       ; Control Panel's, and it may have moved
+    jnz .card                     ; (the Covox's turns streams off, 34.14).
+    jmp aps_open                  ; NO CARD: THE SPEAKER, or the Covox (SPEC.md
+                                  ; 86.21, 86.21.3) - sound and nothing else
+                                  ; is better than no sound. CF its own
 .card:
     jmp ap_open_card
 .refuse:
