@@ -2027,7 +2027,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
 .PHONY: stkdiag small emu kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 pc5150 xt-mfm xt-cga \
-        xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack xt-wire \
+        xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-wire \
         286-525-z 286-525-word 286-525-cword 286-525-runcpm 286-525-c64 \
         286-525-weave 286-525-loom 286-525-all \
         286-sound 286-video 386-sound 486 pentium \
@@ -3457,7 +3457,7 @@ $(BUILD)/fontview.o88: $(BUILD)/fontview.bin tools/os88pkg.py $(PKGZSTAMP)
 # like. The disk would have come out identical to the one that did not work.
 SNDSTAMP := $(BUILD)/.sound-$(if $(PICOMEM),pm$(PICOMEM),def)$(if $(PM_BASE),-b$(PM_BASE))$(if $(PM_SB_PORT),-s$(PM_SB_PORT))
 
-$(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc \
+$(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc drivers/sound/mpu.inc \
                     drivers/sound/picomem.inc drivers/sound/sndpkg.inc \
                     drivers/os88drv.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(SNDDEF) -I drivers/sound/ -I drivers/ -I apps/ \
@@ -4338,6 +4338,49 @@ telnettest: $(BUILD)/telnetsys.img $(BUILD)/telnetdata.img
 	@echo "telnettest: build/telnetsys.img - ETHER.DRV already wanted, and"
 	@echo "            build/telnetdata.img is the scratch B: a download writes."
 	@echo "            Run it with: python3 tests/telansi.py"
+
+# MIDITEST - the MIDI gate's system disk (SPEC.md 34.13, 105.8.5): the 720KB
+# system disk with a SYSTEM.CFG asking for SOUND.DRV (bit 0), for the one
+# machine the kernel's boot sniff cannot see - an MPU-401 with NO FM chip
+# beside it (MartyPC's os8088_5150_herc_mpu_720_gla, or an XT with an MT-32
+# on a Roland card). drv_snd_sniff looks for an OPL2 only, so on that machine
+# the driver is not loaded by default; a user ticks it in the Control Panel,
+# and this disk is that tick already made, so tests/midirack.py --arm mpu
+# reads the MIDI stream rather than driving a Drivers page. The driver's own
+# attach is what has to accept the MPU alone, and that is what the row tests.
+$(BUILD)/midicfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/midicfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 0).to_bytes(2,'little') + b'\0\0')" > $@
+
+$(BUILD)/midisys720.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/midicfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/midicfg/system.cfg $(APPDATAFOLDER)
+
+# MRWTTEST - the WAVETABLE gate's apps disk (SPEC.md 105.8.6): MIDIRACK.O88
+# with tools/os88midbank.py's SYNTHETIC bank beside it - computed waveforms,
+# CC0, no network - and the 720KB disk's two songs. The bank is unwrapped:
+# MIDIRack reads it with OSAPI_FILE_READ_AT, which delivers a file raw.
+$(BUILD)/mrsynth/MIDIRACK.BNK: tools/os88midbank.py | $(BUILD)
+	python3 tools/os88midbank.py synth -o $@
+
+$(BUILD)/mrwt720.img: $(BUILD)/midirack.o88 $(BUILD)/mrsynth/MIDIRACK.BNK $(MIDISONGS720) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 \
+		APPS:$(BUILD)/midirack.o88 APPS:$(BUILD)/mrsynth/MIDIRACK.BNK \
+		$(MIDISONGARGS720) --folder SYSTEM/APPDATA
+
+.PHONY: mrwttest
+mrwttest: $(BUILD)/mrwt720.img
+	@echo "mrwttest: build/mrwt720.img - MIDIRack and the synthetic bank."
+	@echo "          Run it with: python3 tests/midirack.py --arm wt"
+
+.PHONY: miditest
+miditest: $(BUILD)/midisys720.img $(APPSIMG720)
+	@echo "miditest: build/midisys720.img - SOUND.DRV already wanted, for the"
+	@echo "          MPU-only machine. Run it with: python3 tests/midirack.py --arm mpu"
 
 .PHONY: ethertest
 ethertest: $(BUILD)/ether360.img
@@ -6011,6 +6054,7 @@ MIDIRACK_SRC := apps/midirack/midirack.asm apps/midirack/mrseq.inc \
                 apps/midirack/mrsyn.inc apps/midirack/mrout.inc \
                 apps/midirack/mrlist.inc apps/midirack/mrui.inc \
                 apps/midirack/mrcb.inc apps/midirack/mrtab.inc \
+                apps/midirack/mrmid.inc apps/midirack/mrwt.inc \
                 apps/os88pit.inc apps/os88spk.inc apps/os88ui.inc \
                 apps/os88api.inc drivers/sound/sndpkg.inc
 $(BUILD)/midirack.bin: $(MIDIRACK_SRC) | $(BUILD)
@@ -12468,6 +12512,7 @@ N1942_ROM ?= $(wildcard 1942.nes)
 N1942SCENES = $(if $(strip $(N1942_ROM)),WORLD.V42 WORLD.C42,SEA.V42 REEF.V42 PORT.V42 SEA.C42 REEF.C42 PORT.C42)
 N1942LIVE := $(BUILD)/1942.o88 $(addprefix $(BUILD)/,1942V.GFX 1942C.GFX 1942VX.GFX 1942CX.GFX 1942L.GFX $(N1942SCENES) 1942.SFX)
 ALLAPPSFILES := $(BUILD)/redline.o88 $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
+                $(BUILD)/MIDIRACK.BNK \
                 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
                 $(PACCMANDISK) \
@@ -12489,7 +12534,8 @@ ALLAPPS := $(ALLAPPSFILES) $(BUILD)/runcpm-src.stamp tools/getruncpm.py
 # priced with it; the LOOM=32 directory slots below are priced too.
 
 ALLAPPSARGS := APPS:$(BUILD)/redline.o88 $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
-                                 $(BUILD)/frotz.o88 $(MRGFX)) \
+                                 $(BUILD)/frotz.o88 $(MRGFX) \
+                                 $(BUILD)/MIDIRACK.BNK) \
                $(addprefix GAMES:,$(APPS_GAMES)) \
                $(addprefix MEDIA:,$(APPS_DATA)) \
                $(addprefix WORD:,$(BUILD)/word.o88 $(BUILD)/WELCOME.DOC) \
@@ -13551,15 +13597,67 @@ xt-sound-1.44: $(IMG360) $(ALLAPPSIMG)
 	@$(UNPROTECT) $(VMXTSND144)/86box.cfg
 	$(BOX) -P $(VMXTSND144) -N
 
-# MIDIRACK'S MACHINE (SPEC.md 105): xt-sound's XT - the 1986 board at 4.77MHz,
-# 640KB, an OTI-067 and the SB 2.0 at 220h/5/1 - with the 360KB MEDIA disk in
-# B:, which is where that geometry carries MIDIRACK.O88 (at its root) and the
-# ten songs (MEDIA\MIDI\, which the player finds by itself). The SB 2.0 gives
-# it both halves: the OPL2 for the FM output and a DSP with auto-init for the
-# synth's external ring. A copy of vm/xt-sound with only the uuid and B: changed.
-xt-midirack: $(IMG360) $(MEDIAIMG360)
+# MIDIRACK'S MACHINES (SPEC.md 105.11). xt-midirack is xt-sound's XT - the
+# 1986 board at 4.77MHz, 640KB, an OTI-067 and the SB 2.0 at 220h/5/1 - PLUS a
+# standalone MPU-401 at 330h whose MIDI goes to 86Box's own FluidSynth, playing
+# GeneralUser GS: the daughterboard's road (105.8.5), on the CPU this OS is
+# for. B: is `make midirackdisk`'s 360KB disk - the player, its pictures, the
+# wavetable bank and the ten songs - so all six outputs are one click away:
+# the OPL2, the SB synth, the speaker, the tone, MIDI out and the wavetable.
+# 386-midirack is vm/386-sound's 386DX/25 with an SB16, whose own MPU-401 is
+# the one at 330h (so no standalone card beside it), the same FluidSynth, and
+# the 1.44MB disk: the machine the wavetable is FOR - sixteen voices.
+#
+# BOTH NEED THE SOUNDFONT: `make midibank` fetches GeneralUser GS at its pin
+# (once, into build/midibank-src/, which `make clean` spares) and builds the
+# bank from it. The configs name it RELATIVE TO THE TREE'S ROOT and not to
+# their own directory as they name their disks: 86Box resolves a disk path
+# against the config's folder, but hands FluidSynth the string as it is, and
+# 86Box never changes directory - so it is opened from where `make` launched
+# it, which is the root. Launch these two through make.
+MIDISF2 := $(BUILD)/midibank-src/GeneralUser-GS.sf2
+VM386MIDI := $(CURDIR)/vm/386-midirack
+xt-midirack: $(IMG360) $(BUILD)/midirack360.img $(MIDISF2)
 	@$(UNPROTECT) $(VMXTMIDI)/86box.cfg
 	$(BOX) -P $(VMXTMIDI) -N
+
+386-midirack: $(IMG) $(BUILD)/midirack.img $(MIDISF2)
+	@$(UNPROTECT) $(VM386MIDI)/86box.cfg
+	$(BOX) -P $(VM386MIDI) -N
+
+# THE WAVETABLE BANK (SPEC.md 105.8.6): tools/os88midbank.py makes
+# MIDIRACK.BNK out of the fetched SoundFont. On demand, like the Apple II ROM:
+# nothing in `all` fetches.
+$(MIDISF2): tools/os88midbank.py
+	python3 tools/os88midbank.py fetch
+
+$(BUILD)/MIDIRACK.BNK: $(MIDISF2) tools/os88midbank.py
+	python3 tools/os88midbank.py build -o $@
+
+.PHONY: midibank
+midibank: $(BUILD)/MIDIRACK.BNK
+
+# MIDIRACK'S OWN DISK, in all four geometries: MIDIRACK.O88 and its pictures
+# at the root, MIDIRACK.BNK beside them (UNWRAPPED - MIDIRack reads it in
+# 32 KB chunks with OSAPI_FILE_READ_AT, which delivers a file raw), the ten
+# songs in MEDIA\MIDI\ and SYSTEM\APPDATA for its settings. At 360KB it is
+# ~261 of 354 clusters: the bank is 206 of them.
+MIDIRACKDISKARGS := $(BUILD)/midirack.o88 $(MRGFX) $(BUILD)/MIDIRACK.BNK \
+                    $(MIDISONGARGS) --folder SYSTEM/APPDATA
+MIDIRACKDISKDEPS := $(BUILD)/midirack.o88 $(MRGFX) $(BUILD)/MIDIRACK.BNK \
+                    $(MIDISONGS) tools/os88disk.py
+$(BUILD)/midirack.img: $(MIDIRACKDISKDEPS)
+	python3 tools/os88disk.py -o $@ --size 1440 $(MIDIRACKDISKARGS)
+$(BUILD)/midirack120.img: $(MIDIRACKDISKDEPS)
+	python3 tools/os88disk.py -o $@ --size 1200 $(MIDIRACKDISKARGS)
+$(BUILD)/midirack720.img: $(MIDIRACKDISKDEPS)
+	python3 tools/os88disk.py -o $@ --size 720 $(MIDIRACKDISKARGS)
+$(BUILD)/midirack360.img: $(MIDIRACKDISKDEPS)
+	python3 tools/os88disk.py -o $@ --size 360 $(MIDIRACKDISKARGS)
+
+.PHONY: midirackdisk
+midirackdisk: $(BUILD)/midirack.img $(BUILD)/midirack120.img \
+              $(BUILD)/midirack720.img $(BUILD)/midirack360.img
 
 # THE WIRE'S MACHINE (SPEC.md 92): xt-sound's XT - the 1986 board, 640KB, an
 # OTI-067 and the SB 2.0 - with a Novell NE1000 on 86Box's slirp. The NE1000

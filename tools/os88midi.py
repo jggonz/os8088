@@ -559,7 +559,17 @@ def generate():
     for i, e in enumerate(ENV):
         L.append('    db %d, %d, %d, %d   ; class %d' % (e + (i,)))
     L.append('')
+    L += _rows('mrt_pow', pow_table(), 'dw', 8, "the wavetable's pitch: 2^(i/384) x 32768, 1/32 semitone steps")
+    L.append('')
     return '\n'.join(L)
+
+
+def pow_table():
+    """THE WAVETABLE'S PITCH (SPEC.md 105.8.6): a voice's step is its sample's
+    rate over the output's, times 2 ** (n / 384) for n in 1/32 of a semitone -
+    split into whole octaves (a shift) and the 384 steps inside one (this)."""
+    return [min(65535, int(round(32768 * 2 ** (i / 384.0)))) for i in range(384)]
+
 
 
 # ---------------------------------------------------------------------------

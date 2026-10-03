@@ -210,6 +210,38 @@ overlays = [
     irq = 7
     dsp_version = [2, 1]
 
+# THE MIDI MACHINE (SPEC.md 34.13, 105.8.5): the Hercules 5150 with an MPU-401
+# at 330h and NO other card - so SOUND.DRV attaches on the MPU alone, which is
+# the third reason it has to attach at all - and MIDIRack's MIDI out is the
+# only sound output there is. The MPU is os8088's recording one
+# (patches/09-mpu401-uart.patch): it answers the UART probe and keeps every
+# byte it is sent, with its time, for the debug server's `midi` command.
+[[machine]]
+name = "os8088_5150_herc_mpu_720_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_720k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "Mpu401"
+    io_base = 0x330
+
 # The GLaBIOS twin, for when you want a machine that BOOTS FAST rather than one
 # that boots the way the calibration machine does.
 #

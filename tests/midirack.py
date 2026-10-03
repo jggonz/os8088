@@ -63,7 +63,11 @@ ARMS = {
     "spk": ("os8088_5150_herc_720_gla", "pc_speaker"),
     "tone": ("os8088_5150_herc_720_gla", "pc_speaker"),
     "end": ("os8088_5150_herc_adlib_720_gla", None),
+    "mpu": ("os8088_5150_herc_mpu_720_gla", None),
+    "wt": ("os8088_5150_herc_sb_720_gla", "sound_blaster"),
 }
+OUT_MIDI, MRO_MIDI = 5, 5
+OUT_WT, MRO_WT = 6, 6
 
 
 def fail(msg):
@@ -151,7 +155,13 @@ def agreement(wav, ref, tail, box=1, dec=2, wins=10):
 # --- the session --------------------------------------------------------------
 def session(arm, cap, brk):
     machine, src = ARMS[arm]
-    with os88ui.boot(IMG, apps=APPS, machine=machine) as ui:
+    # the MPU-only machine boots `make miditest`'s disk: SOUND.DRV wanted by
+    # its SYSTEM.CFG, since the kernel's boot sniff finds no FM chip there
+    img = "build/midisys720.img" if arm == "mpu" else IMG
+    # ...and the wavetable's, `make mrwttest`'s apps disk: the synthetic bank
+    # beside the package
+    apps = "build/mrwt720.img" if arm == "wt" else APPS
+    with os88ui.boot(img, apps=apps, machine=machine) as ui:
         ui.path("B:/APPS/MIDIRACK.O88")
         p = mrprobe.attach(ui)
         M.until(ui.m, lambda _: p.b("mr_loaded") == 1, "the autoload",
@@ -166,18 +176,23 @@ def session(arm, cap, brk):
               % (p.b("mrl_n"), p.dw("mr_lenlo"), p.w("mr_meas")), flush=True)
         if arm == "end":
             return arm_end(ui, p)
-        p.put("mr_want", bytes([{"fm": OUT_OPL2, "sb": OUT_SB}.get(arm,
-                                                                  OUT_SPK)]))
+        if arm == "mpu":
+            return arm_mpu(ui, p, brk)
+        if arm == "wt" and p.b("mr_hasbank") != 1:
+            fail("wt: MIDIRack found no MIDIRACK.BNK beside it")
+        p.put("mr_want", bytes([{"fm": OUT_OPL2, "sb": OUT_SB,
+                                 "wt": OUT_WT}.get(arm, OUT_SPK)]))
         if arm == "tone":
             p.put("mr_bg", b"\x01")
         if RATE:
             p.put("mr_rate", bytes([RATE]))     # Settings' rate, by index
         ui.menu_pick("Play", "Play")
-        want = {"fm": MRO_FM, "sb": MRO_SB, "spk": MRO_SPK, "tone": MRO_TONE}
+        want = {"fm": MRO_FM, "sb": MRO_SB, "spk": MRO_SPK, "tone": MRO_TONE,
+                "wt": MRO_WT}
         M.until(ui.m, lambda _: p.b("mr_out") == want[arm], "the output open",
                 poll=.1, limit=10)
         return {"fm": arm_fm, "sb": arm_sb, "spk": arm_spk,
-                "tone": arm_tone}[arm](ui, p)
+                "tone": arm_tone, "wt": arm_wt}[arm](ui, p)
 
 
 def arm_fm(ui, p):
@@ -236,6 +251,24 @@ def arm_sb(ui, p):
           "underrun(s)" % ("grant" if p.b("mrb_grant") else "external", rate,
                            played, secs, p.w("mrb_unders")), flush=True)
     return 9.0
+
+
+def arm_wt(ui, p):
+    """THE WAVETABLE (SPEC.md 105.8.6): the bank read, the samples mixed into
+    the card's ring at the rate, and the card's own consumption - arm_sb's
+    test, since the card and the ring are the synth's exactly. From the
+    stream's OPENING: the bank is read off the floppy first, and the seconds
+    that takes are not the mixer's."""
+    M.until(ui.m, lambda _: p.b("mrb_open") == 1, "the wavetable's stream",
+            poll=.2, limit=60)
+    tail = arm_sb(ui, p)
+    if p.w("mwt_bseg") == 0:
+        fail("wt: the bank was never read")
+    if p.w("mwt_xseg") == 0:
+        fail("wt: no mix claim")
+    print("PASS wt: the bank in a claim at %04X, %d voices" %
+          (p.w("mwt_bseg"), p.b("mrv_n")), flush=True)
+    return tail
 
 
 def arm_spk(ui, p):
@@ -308,6 +341,117 @@ def arm_end(ui, p):
     return None
 
 
+def midi_msgs(hexs, us):
+    """The MPU's log as (seconds, message) - full status every time, which
+    is what MIDIRack sends, and a SysEx whole."""
+    b = bytes.fromhex(hexs)
+    out, i = [], 0
+    while i < len(b):
+        s = b[i]
+        if s == 0xF0:
+            j = b.index(0xF7, i)
+            out.append((us[i] / 1e6, b[i:j + 1]))
+            i = j + 1
+            continue
+        if s < 0x80:
+            fail("MIDI out: a data byte 0x%02x where a status was due, at "
+                 "byte %d" % (s, i))
+        n = 2 if (s & 0xF0) in (0xC0, 0xD0) else 3
+        out.append((us[i] / 1e6, b[i:i + n]))
+        i += n
+    return out
+
+
+def arm_mpu(ui, p, brk):
+    """MIDI OUT (SPEC.md 105.8.5): the song's own events, byte for byte, at
+    the song's own times, to the recording MPU-401 - with SOUND.DRV attached
+    on the MPU alone, since this machine has no other card."""
+    if p.b("mr_hasmpu") != 1:
+        fail("mpu: MIDIRack found no MPU-401 - SOUND.DRV must attach on it "
+             "alone (SPEC.md 34.13)")
+    m = ui.m
+    m.cmd(cmd="midi", reset=True)
+    p.put("mr_want", bytes([OUT_MIDI]))
+    ui.menu_pick("Play", "Play")
+    M.until(m, lambda _: p.b("mr_out") == MRO_MIDI, "MIDI out open",
+            poll=.1, limit=10)
+    M.guest_sleep(m, 8.0)
+    r = m.cmd(cmd="midi", reset=True)
+    if not r["uart"]:
+        fail("mpu: the interface was never put in UART mode")
+    msgs = midi_msgs(r["bytes"], r["us"])
+    if not msgs or bytes(msgs[0][1]) != bytes([0xF0, 0x7E, 0x7F, 0x09, 0x01,
+                                               0xF7]):
+        fail("mpu: the first thing sent was %r, want GM ON"
+             % (msgs[0][1].hex() if msgs else None))
+    chan = [(t, bytes(x)) for t, x in msgs if x[0] < 0xF0]
+    ev, _ = om.timeline(open(SONG, "rb").read())
+    ref = []
+    for t, st, d in ev:
+        d = bytes(d)
+        if brk and st & 0xF0 in (0x80, 0x90):
+            d = bytes([(d[0] + 6) & 0x7F]) + d[1:]
+        ref.append((t, bytes([st]) + d))
+    if len(chan) < 100:
+        fail("mpu: only %d channel messages in 8 s of BATTLE1" % len(chan))
+    # CONTENT: what the module was sent is the reference's own events. Events
+    # on one tick in different tracks may legitimately come out in another
+    # order, so the comparison is of MULTISETS over the first n, with a margin
+    # at the edge of the window for a tick's worth of difference
+    n = len(chan) - 20
+    from collections import Counter
+    sent = Counter(x for _, x in chan)
+    want = Counter(x for _, x in ref[:n])
+    missing = want - sent
+    if missing:
+        fail("mpu: %d of the reference's first %d messages were never sent, "
+             "e.g. %s" % (sum(missing.values()), n,
+                          [x.hex() for x in list(missing)[:4]]))
+    # TIME: the k-th note-on of each (channel, key) against the reference's,
+    # with the first note aligning the two clocks
+    def ons(lst):
+        seen, out = {}, {}
+        for t, x in lst:
+            if x[0] & 0xF0 == 0x90 and len(x) > 2 and x[2]:
+                k = (x[0], x[1], seen.get((x[0], x[1]), 0))
+                seen[(x[0], x[1])] = k[2] + 1
+                out[k] = t
+        return out
+    a, b = ons(chan), ons(ref)
+    common = [k for k in a if k in b]
+    t0a = min(a[k] for k in common)
+    t0b = min(b[k] for k in common)
+    late = [abs((a[k] - t0a) - (b[k] - t0b)) for k in common]
+    good = sum(1 for d in late if d <= 0.1)
+    if good < 0.95 * len(common):
+        fail("mpu: %d of %d note-ons within 0.1 s of the song's time (worst "
+             "%.3f s)" % (good, len(common), max(late)))
+    print("PASS mpu: GM ON first, %d channel messages, the reference's first "
+          "%d all sent, %d of %d note-ons on time (worst %.3f s)"
+          % (len(chan), n, good, len(common), max(late)), flush=True)
+    # PAUSE silences every channel; RESUME tells each its program again
+    m.key("Space")
+    M.until(m, lambda _: p.b("mr_state") == 2, "paused", poll=.1, limit=10)
+    M.guest_sleep(m, 0.5)
+    r = m.cmd(cmd="midi", reset=True)
+    got = {bytes(x) for _, x in midi_msgs(r["bytes"], r["us"])}
+    off = [c for c in range(16) if bytes([0xB0 | c, 123, 0]) not in got]
+    if off:
+        fail("mpu: the pause sent no All Notes Off on channels %s" % off)
+    m.key("Space")
+    M.until(m, lambda _: p.b("mr_state") == 1, "resumed", poll=.1, limit=10)
+    M.guest_sleep(m, 0.5)
+    r = m.cmd(cmd="midi", reset=True)
+    progs = {x[0] & 15 for _, x in midi_msgs(r["bytes"], r["us"])
+             if x[0] & 0xF0 == 0xC0}
+    if len(progs) < 16:
+        fail("mpu: the resume told only channels %s their program"
+             % sorted(progs))
+    print("PASS mpu: a pause silences all sixteen channels and a resume "
+          "tells each its program", flush=True)
+    return None
+
+
 RATES = [0, 8000, 11025, 16000, 22050, 32000, 44100]   # mr_rates (mrout.inc)
 RATE = 0
 
@@ -338,7 +482,7 @@ def main():
         ref = spans(SONG, 6 if a.brk else 0)
         box, dec = (9, 4) if a.arm == "spk" else (1, 2)
         hit, n = agreement(wav, ref, tail + 2.0, box, dec)
-        need = {"fm": 6, "sb": 8, "spk": 5}[a.arm]
+        need = {"fm": 6, "sb": 8, "spk": 5, "wt": 7}[a.arm]
         print("%s %s: %d of %d half-seconds' strongest pitch class sounding "
               "in the reference (need %d)" % ("PASS" if hit >= need else
                                               "FAIL", a.arm, hit, n, need),

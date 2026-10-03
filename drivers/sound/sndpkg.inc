@@ -1,5 +1,6 @@
 ; =============================================================================
-; SOUND.DRV's package verbs - the FM chip, whole (SPEC.md 34.12)
+; SOUND.DRV's package verbs - the FM chip, whole (SPEC.md 34.12), and the
+; MPU-401's MIDI out (SPEC.md 34.13)
 ;
 ; Included by BOTH ends, netpkg.inc's shape: the driver that answers these and
 ; every package that asks. Two doors, because the two halves need different
@@ -58,8 +59,26 @@ SNDV_OPLW    equ 1              ; ES:SI -> CX two-byte entries {register,
                                 ; not counted, never refused: a batch is not
                                 ; half-applied over one bad byte
 
+SNDV_MIDINFO equ 2              ; THE MPU-401 (SPEC.md 34.13). out CF=0, AX =
+                                ; the interface's data port (330h / 300h);
+                                ; CF=1 AX = SNDE_NOMIDI, none answered
+SNDV_MIDOPEN equ 3              ; the interface is the CALLER'S SEGMENT's (ES):
+                                ; CF=1 AX = SNDE_BUSY when another package's.
+                                ; Reopening your own is not an error
+SNDV_MIDW    equ 4              ; ES:SI -> CX bytes of MIDI, sent in order.
+                                ; out CF=0 AX = the bytes sent; CF=1 AX =
+                                ; SNDE_NOCLAIM (not yours) or SNDE_MIDTIME (the
+                                ; interface stopped taking bytes - AX is then
+                                ; NOT a count). WORKER-SAFE: port I/O only
+SNDV_MIDCLOSE equ 5             ; every channel's notes off and controllers
+                                ; reset, and the interface given back. Closing
+                                ; one that is not yours does nothing
+
 SNDE_NOFM    equ 1
 SNDE_NOCLAIM equ 2
+SNDE_NOMIDI  equ 3
+SNDE_BUSY    equ 4
+SNDE_MIDTIME equ 5
 
 ; --- OSAPI_SND_FM verbs, after 0..3 (apps/os88api.inc) -----------------------
 SND_FM_INFO  equ 4              ; out CF=0, AL = SND_OPL2 / SND_OPL3 (the chip),

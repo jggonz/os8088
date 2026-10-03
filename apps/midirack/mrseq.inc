@@ -679,8 +679,25 @@ mrq_event:
     jne .dead                       ; (F1..FE are not file events)
 .sysex:
     mov byte [mrq_rs+bx], 0         ; SysEx cancels running status
+    mov cl, al                      ; (F0 or F7, for MIDI out)
+    push cx
     call mrq_vlq
+    pop cx
     jc .dead
+    cmp byte [mr_out], MRO_MIDI     ; MIDI OUT: forwarded, as the module is
+    jne .sxskip                     ; owed (105.8.5) - nothing else here
+    cmp byte [mr_dry], 0            ; plays SysEx
+    jne .sxskip
+    or dx, dx
+    jnz .sxskip
+    push cx                         ; (ES:SI, AX bytes - within the track:
+    mov cx, di                      ; the skip below refuses one that is not)
+    sub cx, si
+    cmp ax, cx
+    pop cx
+    ja .sxskip
+    call mrm_sysex
+.sxskip:
     call mrq_skip
     jc .dead
     jmp short .next

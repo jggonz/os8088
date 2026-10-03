@@ -61139,6 +61139,47 @@ allocator's two tables grew from 9 entries to 18, `opl_wr` became the bank-0
 face of `opl_wrp` (the address port in DX), and the claim, release, gate and
 batch are the rest. MIDIRack (§105) is the consumer.
 
+### 34.13 The MPU-401 — MIDI out, in UART mode (`SOUND.DRV`, `drivers/sound/mpu.inc`)
+
+**The daughterboard's road.** A Roland SC-55 or MT-32 on the connector, a
+Waveblaster or Dreamblaster on a card's header, or an emulator's synthesiser
+behind its MPU (86Box's FluidSynth) holds its own samples and plays them
+itself; the machine sends three bytes a note. That is the one realistic-
+instrument output an 8088 at 4.77 MHz can afford, which is why it is in the
+driver at all.
+
+**UART mode only.** RESET (FFh), its ACK (FEh), then 3Fh - whose ACK is
+drained if it comes and not required, because UART-only clones differ there.
+The intelligent mode's sequencer is not wanted and is not used. **330h, then
+300h.** The probe reads the status port FIRST and gives up on FFh - an empty
+port, DSR and DRR both "not ready" - so a machine with no interface pays two
+port reads and no timeout at boot.
+
+**A third reason to attach.** `snd_entry` attached when an OPL or a DSP
+answered; an MPU-401 alone now does too, and names the Control Panel's row
+`MPU-401` when nothing else has named it - an XT with an MT-32 on a Roland
+card is a real configuration of the period. **The kernel's boot sniff does
+not look for one** (`drv_snd_sniff`, §51.3.1: an OPL2's timer dance, in a
+boot overlay with no room to spare), so on that machine the driver is ticked
+in the Control Panel once, and `make miditest`'s disk is that tick made for
+the gate. Every machine with an FM chip beside its MPU - which is nearly all
+of them - loads the driver as before and finds the MPU at attach.
+
+**Four package verbs**, through `DSV_PKGCALL` (`sndpkg.inc`): `SNDV_MIDINFO`
+(the port, or `SNDE_NOMIDI`), `SNDV_MIDOPEN` (the interface becomes the
+CALLER'S SEGMENT's - ES, which `OSAPI_DRV_CALL` stamps - or `SNDE_BUSY`),
+`SNDV_MIDW` (ES:SI, CX bytes, in order; **worker-safe**: port I/O only) and
+`SNDV_MIDCLOSE` (All Notes Off and Reset All Controllers on all sixteen
+channels, then given back). Detach silences a module that was playing. A
+send waits for DRR with a bounded loop and reads and drops anything waiting
+on the way, because some clones stop taking output while their input - a
+keyboard on MIDI IN, a module's active sensing - is full.
+
+**Cost: 420 bytes of `SOUND.DRV`** (7,289 → 7,709), no kernel byte.
+`tools/martypc/patches/09-mpu401-uart.patch` gives MartyPC a recording
+MPU-401 (it has none) and the debug server a `midi` command, so the gate
+compares the bytes on the wire with the reference sequencer's (§105.11).
+
 ## 35. Recorder — the sound layer's recording client
 
 `apps/recorder` needs `SND_CAP_PCM_IN` (a Sound Blaster) to record and
@@ -161658,6 +161699,87 @@ the external ring; the grant ring pauses by not being fed. On MartyPC's 5150
 (DSP without auto-init) the grant ring plays 8 kHz with six voices and no
 underrun after the first.
 
+#### 105.8.5 MIDI out, through an MPU-401 (`mrmid.inc`)
+
+The song's own events go to the module (§34.13) and the module makes the
+sound. Nothing allocates a voice: `mr_chan_event` FORWARDS each channel
+message as it is played, unchanged, and goes on keeping the channel state the
+rack shows - the levels and the programs - exactly as it does for the FM;
+the voice table is `mrm_vt`, all no-ops but the song's end. **SysEx is
+forwarded too** (`mrm_sysex`): a GM or GS file says GM ON and sets its parts
+up with it, and a module is owed that. The clock is the FM's - the worker, in
+real time, off the PIT - and the bytes are batched a pass at a time into one
+`SNDV_MIDW`. **GM ON first**, so a module left in another mode or holding
+another song's parts starts from the standard; **a pause** sends All Notes
+Off, All Sound Off and the pedal up on all sixteen channels; **a resume**
+sends each channel's program, volume, pan and expression again and centres
+its bend, so a module touched in between plays on as it was. Measured on
+MartyPC's recording MPU (§105.11): the reference sequencer's first 183
+messages of BATTLE1 all sent, and 98 of 98 note-ons within 0.1 s of the
+song's time, the worst 73 ms.
+
+#### 105.8.6 The Sound Blaster wavetable (`mrwt.inc`, `tools/os88midbank.py`)
+
+**A sample player, mixed by the CPU and played by the card** - what a
+daughterboard does in silicon, done in a loop. Every General MIDI program and
+every drum key has ONE 8-bit sample in `MIDIRACK.BNK`, with its loop, its root
+key and a four-stage envelope; a note plays it at the step its pitch asks for
+(nearest sample, no interpolation) through one of 32 volume pages into a
+16-bit sum, which the synth's own soft-clip table turns into the card's bytes.
+It is the synth's place in the machine exactly - the same card, ring and
+worker (`mrb_start` opens whichever, through `[mrb_spanfn]`), the same
+sequencer in sample time and the same voice allocator.
+
+**The pitch** is the sample's rate over the output's (16.16, per voice) times
+2^(n/384), n in 1/32 of a semitone: (key - root) x 32 + the sample's fine
+tune + the channel's bend - whole octaves a shift and the rest a 384-entry
+table (`mrt_pow`, generated). **The envelope** steps once a 128-sample span:
+attack, decay to the sustain level, release; a sustain of nothing ends the
+note, and a drum ignores its note-off and plays out. **The level** is the
+velocity x the channel's volume x expression x the sample's gain, times the
+envelope, as a page 0..31.
+
+**THE LOOP IS EIGHTEEN BYTES** (`mwt_voice`): DS the mix claim (the pages and
+the sum), ES the sample, the step's whole part an immediate patched into the
+`adc` so CX is free for `loop`, and no end test - each run is cut short of the
+sample's end ((end - pos - 1) / (whole + 1) samples are certainly safe) and
+the one sample that may cross is made by a careful path that loops or ends
+the voice. On an 8088 the bytes are the cost: the first cut was 27 and played
+58% of 8 kHz with four voices on the 5150. **Measured on that machine** at
+8,000 Hz: one or two voices hold the rate, three make 94%, four 78%. So an
+8088 opens it at **6,000 Hz with three voices** (99%), a 286 at 11,025 with
+eight, a 386 or better at 11,025 with sixteen - the bank's samples are 11,025
+Hz at most, so Automatic goes no higher; Settings' rate overrides it. That
+cost is why the wavetable is a CHOICE in Settings and never Automatic's.
+
+**The bank is read whole** the first time the wavetable plays, into a claim
+of its own, in 32 KB chunks with `OSAPI_FILE_READ_AT` (a chunk that size is a
+multiple of every legal cluster; `OSAPI_FILE_READ` is not for a file this
+big) - from the folder MIDIRack was LAUNCHED from, recorded at entry, since
+adding songs through the Open dialog moves the instance's folder - and is
+kept until the window closes. Its index stays in it; nothing is copied. Its
+presence and size are read at entry for nothing: a 16-byte `OSAPI_FILE_READ`
+answers `FERR_BIG` with the KB it needs from the directory entry, before a
+byte of data. **It ships UNWRAPPED** - `READ_AT` delivers a file raw.
+
+**The bank is made, never committed** (CONTRIBUTING.md 6, the Apple II ROM's
+rule). `tools/os88midbank.py fetch` downloads **GeneralUser GS v2.0.3** by S.
+Christian Collins from its author's own repository at a pinned commit and
+SHA-256 into `build/midibank-src/` (`make clean` spares it); `build` takes,
+for each program, the zone sounding middle C at a moderate velocity and for
+each drum key its own, resamples to at most 11,025 Hz, and - when a loop
+still does not fit its budget - LOWERS THAT SAMPLE'S RATE rather than cutting
+the loop, since a sustained note that stops is worse than a duller one; a
+one-shot that does not fit is cut with a fade. 128 programs, 61 drum keys,
+160 samples, **210 KB**. Its licence (documentation/LICENSE.txt there):
+*"Please feel free to use it in your software projects, and to modify the
+SoundFont bank or its packaging to suit your needs"*; its one request - not
+to link a website to its download files - is about websites, and a build
+tool fetching from the author's own repository at a pinned commit is not
+one. `synth` writes the same format from computed waveforms - CC0, no
+network - for the gate.
+
+### 105.9 The window
 ### 105.9 The window
 
 Laid out from the live content box every paint (§39). **Tall** (content
@@ -161691,17 +161813,19 @@ controls, so a press reaches `mr_onclick` and takes the card down.
 #### 105.9.2 The Settings dialog
 
 A **modal dialog** drawn over the content: a "Found:" line naming what the
-machine answered (OPL2/OPL3, the DSP and whether it reaches 44.1 kHz, the
-speaker), the **output** (Automatic, OPL3, OPL2, Sound Blaster synth, PC
-speaker synth - what is missing greyed), the **synth's sample rate**
+machine answered (OPL2/OPL3, the DSP and whether it reaches 44.1 kHz, an
+MPU-401, a wavetable bank, the speaker), the **output** (Automatic, OPL3,
+OPL2, Sound Blaster synth, PC speaker synth, MIDI out (MPU-401), SB
+wavetable - what is missing greyed; the last two are only ever CHOSEN, and
+Automatic picks exactly what it always has), the **synth's sample rate**
 (§105.7.1), **Play in Background**, a note on the rates' limits, and **OK /
 Cancel**. It edits COPIES (`mrs_*`): Cancel, Esc and a press outside it change
 nothing; OK and Enter commit them, and a song that is playing or paused
 **restarts on the new choice** rather than waiting for the next Play. While it
 is up the window's one button record is PAGED onto the dialog's own pair
 (os88ui's documented device for a paged window), so nothing under it can be
-pressed. On a CGA the pair rides under the five-row output group, beside the
-seven-row rate group, so the dialog fits 200 lines.
+pressed. Both groups are seven rows now, so on a CGA too the pair has a row of
+its own under them, and the dialog is 133 lines: compact drops the background check box, which the Options menu carries anyway.
 
 **The settings are kept** in `MIDIRACK.CFG` in `SYSTEM\APPDATA` on the
 player's own volume (§19.9; `apps/pixelstein/pxset.inc`'s shape): a magic and
@@ -161823,7 +161947,15 @@ the disk stands at 710 of 713 - the pictures would have left it ONE) and
 **the 360 KB apps disk none**: it is curated (§24.6.1) and had 12. At 360 KB
 the player, its pictures and all ten songs ride the MEDIA disk
 (`media360.img`, 204 of 354), the floppy whose subject is music already. Both are decisions with this section's date
-on them. The `kern_small` disks leave it off (§24.5's table): its outputs are
+on them.
+
+**`make midirackdisk`** is the player's own floppy in all four geometries:
+`MIDIRACK.O88`, `MIDIRACK.GFX` and `MIDIRACK.BNK` (unwrapped, §105.8.6) at
+the root, the ten songs in `MEDIA\MIDI\` and `SYSTEM\APPDATA\` for its
+settings - 270 of 354 clusters at 360 KB, the bank being 206 of them. It
+needs `make midibank` (the fetch, once). The bank also rides `APPS\` on the
+everything set and the live media (§80), whose premise is completeness; no
+other shipped floppy carries it. The `kern_small` disks leave it off (§24.5's table): its outputs are
 a driver's and a rate bracket's, and the songs go with it. `SOUND.DRV` grew 603 bytes for §34.12; no kernel byte moved.
 
 ### 105.11 Tests
@@ -161841,11 +161973,26 @@ caches drew identical to a forced repaint's. `tests/unit/t_midtab.py` (fast)
 also holds `tools/os88midart.py`'s selfcheck and the four numbers the package
 states about `MIDIRACK.GFX`.
 
+Three more rows: `midirackmpu` (MIDI out, on a 5150 whose ONLY card is
+MartyPC's recording MPU-401 - so `SOUND.DRV` attaches on it alone, booted
+from `make miditest`'s disk: GM ON first, the reference's own channel
+messages byte for byte, the note-ons within 0.1 s, a pause's All Notes Off
+on all sixteen channels and a resume's programs, and `--break` must fail) and
+`midirackwt` (the wavetable with the synthetic bank on `make mrwttest`'s
+disk: three voices at 6 kHz on the 8088, the card consuming at the rate with
+no underrun, and the pitch agreement and its negative control).
+
 **`make xt-midirack`** is the period machine to hear it on: 86Box's 1986 XT
-at 4.77 MHz with 640 KB, an OTI-067 VGA and a Sound Blaster 2.0 (220h, IRQ 5,
-DMA 1 - the OPL2 for FM and a DSP with auto-init for the synth), with
-`media360.img` in B:, which carries the player and the ten songs. It is
-`vm/xt-sound` with only the uuid and B: changed.
+at 4.77 MHz with 640 KB, an OTI-067 VGA, a Sound Blaster 2.0 (220h, IRQ 5,
+DMA 1 - the OPL2 for FM and a DSP with auto-init for the synth) AND a
+standalone MPU-401 at 330h whose MIDI 86Box plays through its own FluidSynth
+with GeneralUser GS - with `midirack360.img` in B:, so all six outputs are
+one Settings pick away. **`make 386-midirack`** is `vm/386-sound`'s 386DX/25
+with an SB16 (whose own MPU-401 is the one at 330h), the same FluidSynth and
+`midirack.img`: the machine the wavetable is for, sixteen voices. Both need
+`make midibank`, and both name the SoundFont relative to the tree's root,
+because 86Box hands FluidSynth the path unresolved and never changes
+directory - launch them through make.
 
 ### 105.12 Deliberately not done
 

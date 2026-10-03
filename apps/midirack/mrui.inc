@@ -2563,6 +2563,12 @@ mru_outname:
     jne .k
     call mro_pick
 .k:
+    mov si, mru_o_mid
+    cmp al, MRO_MIDI
+    je .r
+    mov si, mru_o_wt
+    cmp al, MRO_WT
+    je .r
     mov si, mru_o_spk
     cmp al, MRO_SPK
     je .r
@@ -2594,6 +2600,8 @@ mru_o_opl3: db 'OPL3 (Stereo FM)', 0
 mru_o_sb:   db 'Sound Blaster', 0
 mru_o_spk:  db 'PC Speaker', 0
 mru_o_tone: db 'PC Speaker tone', 0
+mru_o_mid:  db 'MIDI out (MPU-401)', 0
+mru_o_wt:   db 'SB Wavetable', 0
 
 ; -----------------------------------------------------------------------------
 ; mru_np_dyn - Elapsed, Measure, Tempo, the bar and the times under it, each
@@ -3277,6 +3285,30 @@ mru_mkdev:
     jne .k
     call mro_pick
 .k:
+    cmp al, MRO_MIDI
+    jne .n0
+    mov si, mru_d_mpu3              ; "MPU-401 at 330h - MIDI out ..."
+    cmp word [mr_mpubase], 0x300
+    jne .mp
+    mov si, mru_d_mpu0
+.mp:
+    call mru_cat
+    jmp .out
+.n0:
+    cmp al, MRO_WT
+    jne .n00
+    mov si, mru_d_wt
+    call mru_cat
+    mov ax, [mrb_rate]
+    cmp byte [mr_out], MRO_WT
+    je .wr
+    call mwt_rate_for
+.wr:
+    call mru_decc
+    mov si, mru_d_hz
+    call mru_cat
+    jmp .out
+.n00:
     cmp al, MRO_FM
     jne .n1
     mov si, mru_d_opl2
@@ -3331,6 +3363,9 @@ mru_d_sb:   db 'Sound Blaster DSP - synth at ', 0
 mru_d_hz:   db ' Hz', 0
 mru_d_spk:  db 'PC speaker - pulse-width synth at ', 0
 mru_d_tone: db 'PC speaker - melody line, in the background', 0
+mru_d_mpu3: db 'MPU-401 at 330h - MIDI out to the module', 0
+mru_d_mpu0: db 'MPU-401 at 300h - MIDI out to the module', 0
+mru_d_wt:   db 'Sound Blaster DSP - wavetable at ', 0
 
 ; mru_mkfile - status line 2: "File: NAME (6,337 bytes) - Standard MIDI File
 ; (Type 1)"
@@ -3796,12 +3831,14 @@ mr_in_notext: db '(no text in the file)', 0
 mru_clabs:  dw mru_l_ok, mru_l_cancel
 mru_l_ok:     db 'OK', 0
 mru_l_cancel: db 'Cancel', 0
-mru_radit:  dw mru_r0, mru_r1, mru_r2, mru_r3, mru_r4
+mru_radit:  dw mru_r0, mru_r1, mru_r2, mru_r3, mru_r4, mru_r5, mru_r6
 mru_r0:     db 'Automatic', 0
 mru_r1:     db 'OPL3 FM, 17 voices', 0
 mru_r2:     db 'OPL2 FM (AdLib), 8', 0
 mru_r3:     db 'Sound Blaster synth', 0
 mru_r4:     db 'PC speaker synth', 0
+mru_r5:     db 'MIDI out (MPU-401)', 0
+mru_r6:     db 'SB wavetable (bank)', 0
 mru_ratit:  dw mru_q0, mru_q1, mru_q2, mru_q3, mru_q4, mru_q5, mru_q6
 mru_q0:     db 'Automatic', 0
 mru_q1:     db '8,000 Hz', 0
@@ -3815,13 +3852,15 @@ mru_sho:    db 'Output device', 0
 mru_shr:    db 'Synth sample rate', 0
 mru_l_bgd:  db 'Speaker: play the melody in the background', 0
 mru_snote:  db 'Above 22,050 Hz needs an SB Pro or SB16. The speaker', 0
-mru_snote2: db 'reaches 24.8 kHz (8 kHz on an 8088); FM has no rate.', 0
+mru_snote2: db 'reaches 24.8 kHz (8 kHz on an 8088). FM, MIDI: no rate.', 0
 mru_sfnd:   db 'Found: ', 0
 mru_f_opl2: db 'OPL2  ', 0
 mru_f_opl3: db 'OPL3  ', 0
 mru_f_dsp:  db 'SB DSP  ', 0
 mru_f_hi:   db '(to 44.1 kHz)  ', 0
 mru_f_spk:  db 'PC speaker', 0
+mru_f_mpu:  db 'MPU-401  ', 0
+mru_f_bnk:  db 'Bank  ', 0
 MRU_SCW     equ 520
 
 ; mru_screct - the dialog's rect and every record in it, from the layout
@@ -3835,15 +3874,15 @@ mru_screct:
     je .p
     mov word [mru_scp], 12          ; compact: the rows close up
 .p:
-    mov ax, [mru_scp]               ; the height: the rate group's seven rows
-    mov cx, 7                       ; and the rows around it
+    mov ax, [mru_scp]               ; the height: the groups' seven rows
+    mov cx, 7                       ; and the rows around them
     mul cx
-    add ax, 6 + 11 + 12 + 2 + 14 + 6
-    cmp byte [mru_cmp], 0
-    jne .h                          ; compact: OK and Cancel ride beside the
-    add ax, 17 + 22 + 6             ; rate group (below); tall: the Found
-    add ax, [mru_bh]                ; line, the note and their own row
-.h:
+    add ax, 6 + 11 + 12 + 2 + 6
+    add ax, [mru_bh]                ; ...OK and Cancel's own row
+    cmp byte [mru_cmp], 0           ; compact: that is all - 133 lines, and
+    jne .h                          ; the background box is the menu's alone
+    add ax, 14 + 17 + 22            ; there; tall: that box, the Found line
+.h:                                 ; and the note
     mov [mru_sch], ax
     mov ax, [mru_cw]                ; centred, clamped to the content
     sub ax, MRU_SCW
@@ -3883,7 +3922,7 @@ mru_screct:
     add ax, MRU_SCW / 2 - 8
     mov [mru_rad+OS88UI_RD_RECT+4], ax
     mov ax, [mru_scp]
-    mov cx, 5
+    mov cx, MR_NOUT
     push dx
     mul cx
     pop dx
@@ -3938,28 +3977,9 @@ mru_screct:
     mov [mru_crect+6], dx
     mov [mru_crect+2], bx
     sub cx, 75
-    mov [mru_crect], cx
-    cmp byte [mru_cmp], 0           ; COMPACT (a CGA): the row is in the space
-    je .cdone                       ; the five-row output group leaves under
-    mov bx, [mru_rad+OS88UI_RD_RECT+6]  ; it beside the seven-row rate group,
-    add bx, 5                       ; which is what makes the dialog fit 200
-    mov dx, bx                      ; lines
-    add dx, [mru_bh]
-    dec dx
-    mov cx, [mru_sc]
-    add cx, 12
-    mov [mru_crect], cx
-    mov [mru_crect+2], bx
-    add cx, 74
-    mov [mru_crect+4], cx
-    mov [mru_crect+6], dx
-    add cx, 8
-    mov [mru_crect+8], cx
-    mov [mru_crect+10], bx
-    add cx, 74
-    mov [mru_crect+12], cx
-    mov [mru_crect+14], dx
-.cdone:
+    mov [mru_crect], cx             ; (both faces: the output group is seven
+                                    ; rows now, and the space a five-row one
+                                    ; left under it for the pair is gone)
     mov word [mru_cflg], OS88UI_FILL | OS88UI_DEF   ; Enter is OK
     mov word [mru_cflg+2], OS88UI_FILL
     call mru_radset
@@ -3973,7 +3993,7 @@ mru_screct:
 mru_radset:
     push ax
     mov word [mru_rad+OS88UI_RD_ITEMS], mru_radit
-    mov word [mru_rad+OS88UI_RD_N], 5
+    mov word [mru_rad+OS88UI_RD_N], MR_NOUT
     mov al, [mrs_out]
     xor ah, ah
     mov [mru_rad+OS88UI_RD_SEL], ax
@@ -3990,8 +4010,16 @@ mru_radset:
 .o2:
     cmp byte [mr_hassb], 0
     jne .sb
-    or al, 8                        ; no DSP
+    or al, 8 | 64                   ; no DSP: no synth and no wavetable
 .sb:
+    cmp byte [mr_hasmpu], 0
+    jne .mpu
+    or al, 32                       ; no MPU-401
+.mpu:
+    cmp byte [mr_hasbank], 0
+    jne .bnk
+    or al, 64                       ; no MIDIRACK.BNK beside us
+.bnk:
     mov [mru_rad+OS88UI_RD_DIS], ax
     mov word [mru_rad2+OS88UI_RD_ITEMS], mru_ratit
     mov word [mru_rad2+OS88UI_RD_N], MR_NRATE
@@ -4060,10 +4088,10 @@ mru_setcard:
     call os88ui_rad
     mov bx, mru_rad2
     call os88ui_rad
+    cmp byte [mru_cmp], 0
+    jne .nonote                     ; (compact: no box, no note)
     mov bx, mru_ck4
     call os88ui_chk
-    cmp byte [mru_cmp], 0
-    jne .nonote
     mov cx, [mru_sc]
     add cx, 12
     mov dx, [mru_scky]
@@ -4113,6 +4141,16 @@ mru_found:
     mov si, mru_f_hi
     call mru_cat
 .nosb:
+    cmp byte [mr_hasmpu], 0
+    je .nompu
+    mov si, mru_f_mpu
+    call mru_cat
+.nompu:
+    cmp byte [mr_hasbank], 0
+    je .nobnk
+    mov si, mru_f_bnk
+    call mru_cat
+.nobnk:
     mov si, mru_f_spk
     call mru_cat
     pop di

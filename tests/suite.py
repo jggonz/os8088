@@ -2954,6 +2954,24 @@ SOAK = [
         "its start, and without it the last song's end stops the playlist",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midirackmpu", "soak", py("tests/midirack.py", "--arm", "mpu"), 60.0,
+        "MIDIRack's MIDI out (SPEC.md 105.8.5, SOUND.DRV's MPU-401, 34.13) on "
+        "a 5150 with an MPU-401 and NO other card - so the driver attaches on "
+        "the MPU alone: GM ON first, the reference sequencer's own channel "
+        "messages byte for byte, the note-ons within 0.1 s of the song's "
+        "time, a pause's All Notes Off on all sixteen channels and a resume's "
+        "programs. --break transposes the reference and must fail",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/midisys720.img", "build/apps720.img")),
+    Row("midirackwt", "soak", py("tests/midirack.py", "--arm", "wt"), 70.0,
+        "MIDIRack's Sound Blaster WAVETABLE (SPEC.md 105.8.6) on the 5150, "
+        "with tools/os88midbank.py's synthetic bank beside the package (no "
+        "network): the bank read in 32 KB chunks, three voices at the 8088's "
+        "6 kHz, the card consuming at the rate with no underrun, and the "
+        "capture's pitch classes against the reference sequencer - with the "
+        "tritone-transposed reference as the negative control",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/mrwt720.img")),
     Row("mrdraw", "soak", py("tests/mrdraw.py"), 200.0,
         "MIDIRack's redraw, priced in drawing calls (SPEC.md 105.9.4): every "
         "far call into a drawing cell of the API table, per gesture, told "

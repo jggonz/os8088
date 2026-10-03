@@ -72,6 +72,10 @@ mr_nullvt:  dw mr_nop, mr_nop, mr_nop, mr_nop, mr_nop, mr_nop, mr_nop
 ; -----------------------------------------------------------------------------
 mro_pick:
     mov al, [mr_want]
+    cmp al, MR_OUT_MIDI             ; the two that are only ever CHOSEN
+    je .mid                         ; (Settings): Automatic never picks them,
+    cmp al, MR_OUT_WT               ; so a machine plays as it always has
+    je .wt                          ; until somebody asks
     cmp al, MR_OUT_SPK
     je .spk
     cmp al, MR_OUT_SB
@@ -88,6 +92,12 @@ mro_pick:
     ret
 .sb:
     mov al, MRO_SB
+    ret
+.mid:
+    mov al, MRO_MIDI
+    ret
+.wt:
+    mov al, MRO_WT
     ret
 .spk:
     mov al, MRO_SPK
@@ -132,6 +142,13 @@ mro_play:
     mov word [mrq_urate], MRW_URATE
     jmp short .rt
 .nfm:
+    cmp al, MRO_MIDI
+    jne .nmid
+    call mrm_open                   ; (its own message on a refusal)
+    jc .no
+    mov word [mrq_urate], MRW_URATE
+    jmp short .rt
+.nmid:
     cmp al, MRO_TONE
     jne .ntone
     call mrn_open
@@ -144,7 +161,12 @@ mro_play:
     jmp short .go
 .ntone:
     cmp al, MRO_SB
-    jne .nsb
+    je .card
+    cmp al, MRO_WT                  ; THE WAVETABLE: the bank first (once),
+    jne .nsb                        ; then the card exactly as the synth has
+    call mwt_load                   ; it - mrb_start opens whichever
+    jc .no
+.card:
     call mrb_start
     jc .no
     call mro_worker
@@ -216,6 +238,8 @@ mro_pause:
     mov al, [mr_out]
     cmp al, MRO_SB
     je .sb
+    cmp al, MRO_WT
+    je .sb
     call mro_hush                   ; FM / tone: silence, the clock held
     call pit_now
     sub ax, [mr_pblo]
@@ -249,11 +273,16 @@ mro_resume:
 .nspk:
     cmp al, MRO_SB
     je .sb
+    cmp al, MRO_WT
+    je .sb
     call pit_now                    ; the clock from where it stood
     sub ax, [mr_pplo]
     sbb dx, [mr_pphi]
     mov [mr_pblo], ax
     mov [mr_pbhi], dx
+    cmp byte [mr_out], MRO_MIDI     ; the module told the channels again
+    jne .go
+    call mrm_resend
     jmp short .go
 .sb:
     call mrb_tc
@@ -284,6 +313,16 @@ mro_hush:
     call mrn_alloff
     jmp short .out
 .n2:
+    cmp al, MRO_MIDI
+    jne .n3
+    call mrm_hush
+    jmp short .out
+.n3:
+    cmp al, MRO_WT
+    jne .n4
+    call mwt_hush
+    jmp short .out
+.n4:
     call mry_hush
 .out:
     pop ax
@@ -308,9 +347,17 @@ mro_close:
     call mrn_close
     jmp short .done
 .n2:
+    cmp al, MRO_WT
+    je .n2c
     cmp al, MRO_SB
-    jne .n3
+    jne .n2m
+.n2c:
     call mrb_close
+    jmp short .done
+.n2m:
+    cmp al, MRO_MIDI
+    jne .n3
+    call mrm_close
     jmp short .done
 .n3:
     mov byte [mrk_on], 0            ; the speaker's session is over
@@ -392,9 +439,13 @@ mr_worker:
     mov al, [mr_out]
     cmp al, MRO_SB
     je .sb
+    cmp al, MRO_WT
+    je .sb
     cmp al, MRO_FM
     je .rt
     cmp al, MRO_TONE
+    je .rt
+    cmp al, MRO_MIDI
     je .rt
 .idle:
     mov byte [mr_inpass], 0
@@ -497,8 +548,12 @@ mrw_rt:
 ; mrw_flush - the FM batch out (the tone needs none)
 mrw_flush:
     cmp byte [mr_out], MRO_FM
-    jne .out
+    jne .n
     call mrf_flush
+.n:
+    cmp byte [mr_out], MRO_MIDI
+    jne .out
+    call mrm_flush
 .out:
     ret
 
@@ -562,7 +617,7 @@ mrw_sb:
     je .fill
     mov byte [mr_tail], 1           ; the song is all made: let the voices
     mov al, 0xFF                    ; ring out, then drain the ring
-    call mry_alloff
+    call mrb_alloff
     call OSAPI_GET_TICKS
     mov [mr_tailt], ax
     jmp short .fed
@@ -617,6 +672,14 @@ mrw_sb:
     MRW mrb_gtot                    ; ...TOTAL and CONS, ours to keep
     MRW mrb_gcons
     MRBUF mrb_half, MRB_HALF        ; ...and the half it is staged from
+
+    MRW mrb_spanfn                  ; the span maker: mry_span / mwt_span
+
+; mrb_alloff - AL = 0xFF: every voice of whichever engine feeds the card
+mrb_alloff:
+    cmp byte [mr_out], MRO_WT
+    je mwt_alloff
+    jmp mry_alloff
 
 ; mrb_tc - AX = TOTAL, DX = CONS, of whichever ring
 mrb_tc:
@@ -677,7 +740,7 @@ mrb_span1:
     and di, MRB_RL - 1
     mov cx, MRB_RL
     sub cx, di
-    call mry_span
+    call [mrb_spanfn]               ; the synth's, or the wavetable's
     add word [es:MRB_RL+SND_EXT_TOTAL], MRY_SPAN
     pop es
     pop di
@@ -698,7 +761,7 @@ mrb_half1:
     mov di, mrb_half
 .s:
     mov cx, 0xFFFF                  ; (the half is not a ring: no wrap)
-    call mry_span
+    call [mrb_spanfn]
     add di, MRY_SPAN
     cmp di, mrb_half + MRB_HALF
     jb .s
@@ -752,6 +815,12 @@ mrb_start:
     jc .no
     mov [mrb_seg], dx
 .have:
+    cmp byte [mr_out], MRO_WT       ; the WAVETABLE's rate and voices
+    jne .syn                        ; (mrwt.inc), else the synth's
+    call mwt_rate_for
+    call mwt_voices
+    jmp short .r
+.syn:
     call mrb_rate_for               ; THE RATE: the user's (Settings), else
     mov cl, 6                       ; the CPU's. THE VOICES BY THE CPU: an
     cmp byte [mr_cpu], CPU_8086     ; 8088 has ~60% of itself for 8 kHz and
@@ -777,8 +846,18 @@ mrb_start:
     jbe .p                          ; verb 0 refuses less (SPEC.md 34.5)
     mov word [mrb_pre], 4096
 .p:
+    cmp byte [mr_out], MRO_WT
+    jne .psyn
+    call mwt_open                   ; (the synth's output table, and ours)
+    mov word [mrb_spanfn], mwt_span
+    mov word [mr_msg], mr_s_nomem
+    jc .no
+    jmp short .pdone
+.psyn:
     xor si, si                      ; a card plays the bytes as they are
     call mry_open
+    mov word [mrb_spanfn], mry_span
+.pdone:
     call mro_rewind
     mov byte [mr_seqon], 1
     mov es, [mrb_seg]
@@ -1440,7 +1519,11 @@ mr_elapsed:
     je .rt
     cmp al, MRO_TONE
     je .rt
+    cmp al, MRO_MIDI
+    je .rt
     cmp al, MRO_SB
+    je .sb
+    cmp al, MRO_WT
     je .sb
     cmp al, MRO_SPK
     je .spk

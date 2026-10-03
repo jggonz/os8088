@@ -183,6 +183,13 @@ snd_entry:
                                 ; DSP tier attach?", since nothing else can
                                 ; put that string on the page.
 .nosb:
+    call mpu_probe              ; THE THIRD REASON TO ATTACH (SPEC.md 34.13):
+    jc .nompu                   ; an MPU-401 alone is worth loading for - a
+    cmp byte [drv_up], 0        ; module on the connector is a whole synth
+    jne .nompu                  ; the package reaches through DSV_PKGCALL
+    mov byte [drv_up], 1
+    mov word [snd_services+DSV_NAME], snd_s_mpu
+.nompu:
     cmp byte [drv_up], 0
     je .nohw
     mov si, snd_services
@@ -330,6 +337,7 @@ snd_detach:
     push cx
     cmp byte [drv_up], 0
     je .out
+    call mpu_detach             ; a module that was playing, silenced
     call sbl_detach             ; the Sound Blaster FIRST: it is the tier
                                 ; with an interrupt vector and a worker task
                                 ; in it, and neither may outlive this call -
@@ -406,6 +414,7 @@ snd_services:
 
 snd_s_opl:  db 'AdLib', 0
 snd_s_sb:   db 'Sound Blaster', 0
+snd_s_mpu:  db 'MPU-401', 0
 
 ; =============================================================================
 ; OPL2 geometry and data
@@ -1020,6 +1029,14 @@ snd_pkg:
     clc
     ret
 .n0:
+    cmp bl, SNDV_MIDINFO
+    je mpu_v_info
+    cmp bl, SNDV_MIDOPEN
+    je mpu_v_open
+    cmp bl, SNDV_MIDW
+    je mpu_v_write
+    cmp bl, SNDV_MIDCLOSE
+    je mpu_v_close
     cmp bl, SNDV_OPLW
     jne .bad
     mov ax, SNDE_NOFM
@@ -1401,6 +1418,7 @@ opl_init:
     ret
 
 %include "sb.inc"               ; the Sound Blaster half (SPEC.md 34.5/34.6)
+%include "mpu.inc"              ; ...and the MPU-401's MIDI out (SPEC.md 34.13)
 
 %ifdef PICOMEM
 %include "picomem.inc"          ; ...and the PicoMEM's side of getting one to

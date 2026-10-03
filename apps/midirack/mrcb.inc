@@ -722,6 +722,8 @@ mr_setclick:
     mov [mrs_rate], al
     jmp short .out
 .ck:
+    cmp byte [mru_cmp], 0           ; (compact has no such box: the menu's
+    jne .out                        ; Play in Background is the way there)
     mov bx, mru_ck4
     call os88ui_chkhit
     jc .out
@@ -870,8 +872,8 @@ mr_cfg_load:
     cmp ax, [mr_cfg_magic+2]
     jne .out
     mov al, [mr_cfgbuf+4]           ; each byte clamped to what it may hold
-    cmp al, MR_OUT_SPK
-    jbe .w
+    cmp al, MR_NOUT
+    jb .w
     xor al, al
 .w:
     mov [mr_want], al
@@ -1115,6 +1117,7 @@ mr_onclose:                         ; SI = the window; gfx lock held
 .kept:
     call mro_free
     call mra_free
+    call mwt_free
     push dx
     mov dx, [mr_fseg]
     or dx, dx

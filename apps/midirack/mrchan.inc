@@ -127,6 +127,12 @@ mr_chan_event:
     push cx
     push dx
     push bp
+    cmp byte [mr_out], MRO_MIDI     ; MIDI OUT: the event goes to the module
+    jne .nomid                      ; as it is, and the channel state below
+    cmp byte [mr_dry], 0            ; is kept for the rack alone (105.8.5)
+    jne .nomid
+    call mrm_ev
+.nomid:
     mov al, cl
     and al, 0x0F                    ; AL = the channel
     mov bl, al

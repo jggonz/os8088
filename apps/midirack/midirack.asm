@@ -96,12 +96,17 @@ MR_OUT_OPL3 equ 1
 MR_OUT_OPL2 equ 2
 MR_OUT_SB   equ 3
 MR_OUT_SPK  equ 4
+MR_OUT_MIDI equ 5                   ; MIDI out, through an MPU-401 (105.8.5)
+MR_OUT_WT   equ 6                   ; the Sound Blaster WAVETABLE (105.8.6)
+MR_NOUT     equ 7                   ; (the Settings group's rows)
 
 MRO_NONE    equ 0                   ; [mr_out]: what is OPEN
 MRO_FM      equ 1
 MRO_SB      equ 2
 MRO_SPK     equ 3                   ; the synth, in a bracket
 MRO_TONE    equ 4                   ; one square wave, on the desktop
+MRO_MIDI    equ 5                   ; the song's events, to an MPU-401
+MRO_WT      equ 6                   ; the bank's samples, mixed for the card
 
 MR_FILEMAX  equ 63                  ; KB: the largest file taken whole
 
@@ -142,6 +147,9 @@ MR_FILEMAX  equ 63                  ; KB: the largest file taken whole
     MRB mr_rate                     ; the synth's rate: an index into mr_rates,
                                     ; 0 = Automatic (Settings, SPEC.md 105.9.2)
     MRB mr_cfgdirty                 ; a setting moved since MIDIRACK.CFG
+    MRB mr_hasmpu                   ; SOUND.DRV found an MPU-401 (at entry)
+    MRW mr_mpubase                  ; ...its data port
+    MRB mr_hasbank                  ; MIDIRACK.BNK is beside us (at entry)
     MRBUF mr_snap, 2                ; (scratch)
 
 ; =============================================================================
@@ -167,6 +175,8 @@ mr_entry:
     jc .nofm
     mov [mr_fmkind], al
 .nofm:
+    call mrm_info                   ; an MPU-401 behind SOUND.DRV?
+    call mwt_info                   ; ...and a wavetable bank beside us?
     call mra_load                   ; the colour face's pictures, if colour
     mov byte [mr_levels], 1
     mov byte [mr_want], MR_OUT_AUTO
@@ -236,6 +246,8 @@ mr_entry:
 %include "mrseq.inc"
 %include "mrchan.inc"
 %include "mrfm.inc"
+%include "mrmid.inc"
+%include "mrwt.inc"
 %include "mrsyn.inc"
 %include "mrout.inc"
 %include "mrlist.inc"
@@ -321,6 +333,11 @@ mr_s_full:      db 'The playlist is full', 0
 mr_s_added:     db 'Added to the playlist', 0
 mr_s_nomid:     db 'Not a .MID file', 0
 mr_s_nodir:     db 'No .MID files in that folder', 0
+mr_s_nompu:     db 'No MPU-401 MIDI interface (SOUND.DRV)', 0
+mr_s_mpubusy:   db 'The MPU-401 is in use by another program', 0
+mr_s_nobank:    db 'No MIDIRACK.BNK beside MIDIRack (make midibank)', 0
+mr_s_bankmem:   db 'Not enough memory for the wavetable bank', 0
+mr_s_notbank:   db 'MIDIRACK.BNK is not a bank this player reads', 0
 
 %define OS88UI_BIMG
 %define OS88UI_BOWN                 ; the colour face draws its own (13.8.10)
