@@ -40649,31 +40649,33 @@ second answers no in advance, and the third answers 0 — *not here* — rather
 than a segment. It is safe as a sentinel because it is not a segment any claim
 can have: `0xFFFF:0000` is sixteen bytes below the 1MB wrap.
 
-**A compressed lazy part is therefore fetch-once.** That is a real capability
-lost and it is the right trade *today*: nothing in the tree has ever
-re-fetched a dropped part, and lazy exists precisely so a part is read when it
-is wanted — usually once — rather than at load.
+**It was fetch-once, and is not any more: THE SHADOW.** A table with an
+`OP_COMP|OP_LAZY` row (§20.12.9 derives the flag, `OP_HAS_ZLAZY`, from the
+rows) carries one more word a row, `op_zshadow`, emitted by
+`OS88_PARTS_END_TABLE` right after the rows - so it is the package's own data
+in its own segment (a C package's `.data`, where that macro is expanded), and
+`os88pkg.py`, which walks exactly `count` rows, never sees it. `op_fetch`
+copies a compressed row's PACKED length into its shadow one store before the
+segment takes the word, and `op_drop` puts it back instead of `OP_SPENT`. The
+row is then indistinguishable from one never fetched, and the next `op_fetch`
+reads and expands it again.
 
-**BUT THE USE CASE IS REAL AND SHOULD NOT BE ARGUED AWAY.** Take an RPG whose
-world is one map per part, each far bigger than the machine: walking east and
-then back west is fetch, drop, fetch the first one again — and that is the
-shape lazy parts are *for*, not an abuse of them. Two workarounds exist and
-both are worse than a fix. A package can carry its own loader that never
-re-homes, keeping the table (and so the packed lengths) alive for the session
-— which is `apps/skies/csload.asm` plus the 2 KB it exists to give back. Or it
-can keep its own copy of the lengths, which does not actually work: `op_fetch`
-reads a non-zero `zkb` as *already here*, so a restored length is
-indistinguishable from a banked segment.
+**What made it this simple is `OP_FETCHED`.** The fix this section first
+costed was the other way round - a word a row for the SEGMENT, so `zkb` would
+never move - because a restored length used to read as *already here*:
+`op_fetch` asked `zkb != 0`. Since the runtime flag answers that question
+(§20.12.4), a packed length in `zkb` means only what it says, and putting it
+back is all a re-fetch needs: two stores and ~35 bytes of code, at the two
+sites that touch the word, and no change to `op_seg` or `op_lazyok`.
+`OP_SPENT` stays as the guard for a shadow of 0, which a fetched row cannot
+have.
 
-**The fix, when somebody needs it, is a `%if OP_HAS_COMP && OP_HAS_LAZY` bss
-array**: one word per part holding the banked segment, so `zkb` stays the
-packed length for the life of the package and nothing is shared at all.
-`op_seg`, `op_fetch`, `op_lazyok` and `op_drop` are the five sites; the row
-index is `(SI − op_table − OP_T_ROWS) >> 2` as a word offset. It was
-costed here at roughly **60 bytes of code and two of bss per part**, against
-the ~24 bytes the sentinel takes — worth paying the day a package wants to go
-back and forth, and not before. `OP_SPENT` is what makes waiting safe: until
-then a re-fetch is a REFUSAL that names itself, not a silent wrong answer.
+The use case is the one the paragraph above this used to argue was real:
+PiXEL's decoders are lazy parts used fetch, call, drop and fetch again
+(§106.5), and an RPG walking east and back west is the same shape.
+`tests/pxparts.py` is the gate: a compressed part fetched, far-called,
+dropped - its `zkb` the packed length again, out of the shadow - and fetched
+again, the claims as they were.
 
 ###### 20.12.7.4.2 What it costs
 
@@ -40684,6 +40686,14 @@ can now give back more than that by deleting its own packer and expander. A
 package with lazy rows and no compressed one, or the other way round, pays
 **zero**: every line of it is behind `%if OP_HAS_COMP && OP_HAS_LAZY`, which
 §20.12.9's rule derives from the table rather than from an opinion.
+
+**The shadow (20.12.7.4.1) is behind `%if OP_HAS_ZLAZY`** - a row with BOTH
+flags, which is narrower than the pair above: a package with an eager
+compressed part and a plain lazy one (Clear Skies, PIXELSTEIN 3D, Word's
+loader) assembles to the byte it did, and so does every C package, because
+none has such a row. It costs **2 bytes a row and 35 of code**, measured on
+`apps/dos/dosload.asm` (2,187 -> 2,228 bytes, three rows), the one other
+image that has one. PiXEL's keyboard card is the third (§106.5).
 
 #### 20.12.9 The standard takes only what the table asks for
 
@@ -148312,12 +148322,14 @@ neither lands anywhere different.
 
 **And the core's ROW is banked before the loader spends it.** `dsl_core`
 `op_fetch`es that row and `op_drop`s it, and a dropped compressed row's `zkb`
-is `OP_SPENT` rather than its packed length (§20.12.7.4) — which is right over
-there and fatal here, because the handoff needs that exact figure to expand
-the core with no file layer left to ask. So `dsl_entry` copies the row into
-the loader's own bss *before* `dsl_core` runs and hands the box that copy.
-Read afterwards it is `0xFFFF`, and the stub expands 64 KB of rubble into the
-image it is about to jump into.
+was `OP_SPENT` rather than its packed length (§20.12.7.4) — which was right
+over there and fatal here, because the handoff needs that exact figure to
+expand the core with no file layer left to ask. So `dsl_entry` copies the row
+into the loader's own bss *before* `dsl_core` runs and hands the box that
+copy. Read afterwards it was `0xFFFF`, and the stub expanded 64 KB of rubble
+into the image it was about to jump into. (§20.12.7.4.1's shadow now puts
+the packed length back on a drop, so the row read afterwards is right too;
+the copy stays, because it is taken before anything can move the row.)
 
 **MEASURED, on `os8088_5150_cga_gla`**: the program is handed **585 KB above
 its PSP** against 431 windowed, the exit code comes back through §96.41's
@@ -162185,23 +162197,27 @@ leaves the instance standing in the picture's folder (§38.10), so
 `px_pfetch` banks `OSAPI_FILE_HERE`, goes to the folder the package was
 launched from, fetches, and goes back — SCRIBE's bracket (§95.8.6).
 
-**The parts are PLAIN, not `OP_COMP`.** A dropped `OP_COMP|OP_LAZY` row is
+**The parts are `OP_COMP`.** A dropped `OP_COMP|OP_LAZY` row used to be
 SPENT (§20.12.7.4): the word that held its packed length holds the segment
-while it is here, and `op_drop` leaves `OP_SPENT` so a second fetch refuses
-rather than read nothing. PiXEL's whole use of a part is fetch, use, drop and
-fetch again, so its rows carry no `OP_COMP` — the plan's decision 8 said they
-would, and this is the measured reason they do not. The image itself is not
-compressed either (`os88pkg.py` declines `--compress` beside parts), so the
-package costs its full size on the disk.
+while it is here, and `op_drop` left `OP_SPENT` so a second fetch refused
+rather than read nothing - and PiXEL's whole use of a part is fetch, use,
+drop and fetch again, so wave 1 shipped its rows plain. §20.12.7.4.1's
+SHADOW is the fix: a word a row in the package's own data, which `op_fetch`
+fills with the packed length and `op_drop` puts back, so a dropped compressed
+part is a never-fetched one again. It is the plan's decision 8 as written.
+The image itself is not compressed (`os88pkg.py` declines `--compress`
+beside parts), so the package still costs its full size on the disk; its
+parts do not.
 
 The one part in wave 1 is **the keyboard card** (`apps/pixel/pxhelp.asm`):
 F1 fetches it, calls INIT and INFO, copies its nine lines into the package,
 drops it and puts the card up with `os88ui_about`. `tests/pxparts.py` is the
-gate: no part fetched at launch; F1 fetches once, far-calls twice, INIT
-answers `PXP_PROBE` and the lines are the part's byte for byte, one claim
-held while it is here and none after; F1 again fetches again; and a row
-aimed at the package's own header is refused on the signature with its
-claim still given back.
+gate: no part fetched at launch, the row compressed and lazy; F1 fetches
+once, far-calls twice, INIT answers `PXP_PROBE` and the lines are the part's
+byte for byte, one claim held while it is here and none after, and the row's
+`zkb` the packed length again; F1 again fetches again - the leg a compressed
+part could not pass before the shadow; and a row aimed at the package's own
+header is refused with its claim still given back.
 
 ### 106.6 Opening a file before there is a decoder (wave 1)
 
@@ -162272,31 +162288,45 @@ the buffer of a file call, so §66.5.7.1 never pins it.
 | CUBE | **6x7x6 colour cube + 4 greys**: index `(r*7+g)*6+b` holds `(51r, R7[g], 51b)` with `R7 = 0,43,85,128,170,213,255`; 252..255 hold the greys 51, 102, 153, 204 | 16/24/32-bit BMP, 24-bit PCX, TGA types 2/10 (15/16/24/32), PNM P3/P6 |
 | GREY | 256 greys, index = level | 8-bit PCX without a palette, TGA types 3/11, PNM P2/P5 |
 
-**Truecolour reaches the cube through Floyd–Steinberg with ONE row of error**,
-on by default. Per channel, in sixteenths: `v = c + ((err[x] + carry) >> 4)`
-(arithmetic shift), clamped to 0..255; the level is the NEAREST
-(`q6 = (5v + 127) div 255`, `q7 = (6v + 127) div 255`). A pixel whose
-levels are `(k, G[k], k)` for `k` in 1..4 (`G = 0,1,2,4,5,6`) is a neutral
-and takes grey `251 + k` instead, every channel reconstructing to `51k`. The
-error `e = v - recon` goes `7e` right (`carry`), and the next row's
-accumulators take `3e` down-left, `5e` down and `e` down-right through the
-one-row buffer (the three-term pending shift `row[x-1] = p1 + 3e; p1 = p0 +
-5e; p0 = e`). The row is walked left to right in EMISSION order, so a
-bottom-up file diffuses upwards. `tools/pixelsim.py` is this arithmetic in
-Python and the guest is compared with it byte for byte (106.13).
+**Truecolour reaches the cube through an ORDERED dither**: a 16x16
+blue-noise threshold matrix (void-and-cluster ranks, Ulichney's construction
+with a Gaussian of sigma 1.5 on the torus; `tools/pixelsim.py`'s `BLUE16` is
+the constant) cut to sixteen classes, `k = rank >> 4`, with ONE threshold a
+pixel shared by its three channels. A level is the threshold's floor,
+`q6 = (5v + T16[k]) div 255`, `q7 = (6v + T16[k]) div 255`, `T16[k] =
+(255 (2k + 1)) div 32`, and the index is `(q6r*7 + q7g)*6 + q6b`. The
+matrix row is the MASTER row (and the column the master column), so a
+bottom-up file dithers as a top-down one and the same picture read by eleven
+different readers is one master (106.13). **The four NEUTRAL codes**
+`(k, G[k], k)` for `k` in 1..4 (`G = 0,1,2,4,5,6`: 49, 98, 153, 202) hold
+the exact greys `51k` in the palette rather than `(51k, R7[G[k]], 51k)`, so
+a grey that lands on one is grey with no test of its own; 252..255 keep the
+same four greys and nothing maps to them.
 
-**The guest does it in THREE PASSES, one a channel** (`px_quant`): a
-channel's error depends on that channel alone, so a pass keeps p0 and p1 in
-registers, folds the carry straight into the slot it is owed to, and finds
-every per-value term — the level, its share of the index, e, 3e, 5e, 7e — by
-one lookup at `2v` in tables built per decode at the work claim's base. The
-one coupling, a neutral's grey, needs all three levels, so the passes run B,
-R, G and the G pass recognises the four neutral indices (49, 98, 153, 202:
-the only codes of `(k, G[k], k)`) before taking its own error against `51k`.
-The sums and their order are pixelsim's, so the result is the same to the
-byte. A 24-bit BMP's or raw TGA's B, G, R rows are read in that order
-(`[px_bgr]`), never swapped. An RGB source wider than 6,144 at 1/1 takes 1/2:
-its row, its three error rows and the 5 KB of tables then share one segment.
+**Why ordered, and why blue noise** (106.17 has the measurements): the master
+is dithered once and shown through a second dither, the window's Bayer
+(106.11), which at 100% is phase-locked to it. The window's own 8x8 Bayer in
+the master renders a tone between two cube levels as `max(t0, 64f)` rather
+than `t0 + f (t1 - t0)` - flat, then steep - and blows out a sky on a 1bpp
+display; a 3x3 matrix beats against the period 8 in diagonal hatching. Blue
+noise has period 16, a multiple of 8, so nothing beats, and its classes are
+near-independent of Bayer's, so the second dither sees the right tone: on a
+grey ramp through a 1bpp display it errs by 1.9% of white against
+Floyd–Steinberg's 1.2%, and through VGA the two are hard to tell apart. It
+costs an 8088 **139 cycles a pixel against Floyd–Steinberg's 1,361**, which
+is why there is no Floyd–Steinberg, and no Settings > Fast decode to turn it
+off.
+
+**The guest does it with 48 `xlat` pages** (`px_quant`, `px_qtabs`): a page
+per class and channel holding that channel's part of the index - `42 q`,
+`6 q` or `q`, in the ROW's byte order (`[px_bgr]`: a 24-bit BMP's or raw
+TGA's B, G, R rows are read in that order, never swapped) - built per decode
+a run at a time at the work claim's base, under the row, so a pixel is three
+`lodsb; xlatb` and two adds. A column's class is an arbitrary page, so the
+sixteen-pixel unrolled loop is PATCHED, sixteen `mov bh, imm8` a row (the
+Tracker's mixer is the precedent, §45), and entered part-way, Duff's way,
+with the immediates rotated to match, so no pixel tests a count. Any width's
+row shares one segment with the 12 KB of pages (3 x 8,192 + 12 KB < 64 KB).
 
 **THE SCALE is decided by memory, before a byte is read.** The master is the
 largest of 1/1, 1/2, 1/4 and 1/8 of the source whose `mw*mh` (`mw = sw >>
@@ -162346,10 +162376,23 @@ three and the worker does only arithmetic:
    `r < mh`, `mw` bytes at most). Then it counts the histogram (106.12),
    writes its answer to `[px_wres]`, clears `[px_job]` LAST and wakes the UI.
 
-**The ring is two slots of 8 KB** (one cluster where a cluster is larger,
-which is then the only slot; the volume is asked its cluster once an open) in a claim made with `OSAPI_MEM_CLAIM_DMA` and
-rounded up to a 512-byte base by hand (§2.1.1; the claim is one KB larger
-for it). It is pinned: it is the target of every read. **The handshake is
+**The ring is two slots of 16 KB** - two of 8 KB when the heap will not
+give 33, and one cluster where a cluster is larger, which is then the only
+slot; the volume is asked its cluster once an open - in a claim made with
+`OSAPI_MEM_CLAIM_DMA` and rounded up to a 512-byte base by hand (§2.1.1; the
+claim is one KB larger for it). The SCALE (106.8) is decided against the
+8 KB ring, so a bigger ring never changes which scale a picture gets. It is
+pinned: it is the target of every read. **A read is priced per `int 13h`,
+not per sector** (CLAUDE.md), and a 16 KB one crosses a cylinder about half
+as often a sector as an 8 KB one; and when BOTH slots are empty - the first
+fill, or a worker that drained the two - `px_pumpfill` reads them as ONE
+`READ_SEQ`, since they are adjacent, which is one rotational wait the disk
+does not spend. **The open's first read is 8 KB**, the first rows' wait;
+and until a row is painted the ring is filled only when the worker has run
+DRY, and the first wake that finds rows ready fills nothing and wakes again
+(once an open) - because `px_onwake` fills before it paints, which is right
+for throughput (the worker decodes while the UI paints) and was a 16 KB read
+queued in front of the first paint, seconds of first rows on an XT. **The handshake is
 the Audio Player's** (§86.5, §77.1): a slot the worker has emptied has its
 `full` byte cleared and the request byte set LAST, then `OSAPI_WM_WAKE`;
 `px_onwake`, on the UI task and without the lock, fills every empty slot in
@@ -162433,16 +162476,33 @@ search, weights `(3, 6, 1)`: `c1` is the nearest single colour, then every
 one. The CUBE's and GREY's plans never change, so they are SHIPPED
 (`apps/pixel/pxplans.inc`, generated by `tools/pixelsim.py --gen` and checked
 by its `--selfcheck`); a PAL palette's are built on the worker before its
-first row. On a 1bpp display the plan is a threshold of luma, `Y = (77R +
+first row, by a search that reaches the same answer with less work
+(pixelsim's `plan_fast`, held equal to `plan_for` by `--selfcheck` over a
+grid of colours): `c1` from twelve weighted squares a target and three
+lookups a candidate; then each `c2` in order of its `K` (the order, the `K`s
+and each pair's `k` ship in `pxplans.inc`), the penalty `57,800 K` being a
+floor under the pair's error, so the first `K` whose penalty exceeds the best
+error ends the search - about four pairs reach a division rather than
+fifteen; a pair's error summed G, R, B and dropped once past the best; and a
+tie to the LOWER `c2`, which is `plan_for`'s strict `<` in index order. 256
+plans: 3.96 s on an XT before, 2.28 s now (106.17). On a 1bpp display the plan is a threshold of luma, `Y = (77R +
 150G + 29B) >> 8`, through a gamma halfway between linear and square, `L =
 (Y + (Y^2 + 127) div 255) >> 1`, and `t = (64L + 127) div 255`: lit (`c2`)
 or dark.
 
 **The dither tables** expand the plans into one 256-byte `xlat` table for
 each of the 64 Bayer cells — 16 KB, rebuilt when the palette or the
-display's depth changes. On 4bpp an even column's table holds `c << 4` and
-an odd column's `c`, so two lookups and an `or` are one packed byte; on 1bpp
-a table holds the cell's own bit or 0. **The x phase is the SCREEN column**
+display's depth changes. On 4bpp a table holds a LANE half: colour `c`'s
+bits 3..0 at bits 7, 5, 3, 1 in an even column's table and at 6, 4, 2, 0 in
+an odd one's, so two lookups and an `or` are a lane - two pixels with their
+bits interleaved, a 4x8 transpose already two stages done (the composer
+below finishes it); on 1bpp a table holds the cell's own bit or 0. **They are
+built by threshold, not by cell**: walked in Bayer order `b = 0..63`, entry
+`i` changes exactly once, from `c2` to `c1` at `b = t_i`, so one state row is
+kept, the entries whose `t` is `b` are switched (a list per `t`), and the cell
+whose threshold is `b` is a copy of the state - 64 block moves and 256
+switches where comparing every entry of every table was 16,384 compares and a
+second of an 8088 on every open. **The x phase is the SCREEN column**
 (every band starts on the byte grid, so it is `x & 7`) and **the y phase is
 the IMAGE row** (`(y - image top) & 7`), so a vertical scroll moves the
 pattern with the picture and a strip rendered under it matches.
@@ -162450,22 +162510,28 @@ pattern with the picture and a strip rendered under it matches.
 **The composer** renders a screen rect a band of at most 16 rows at a time.
 Per row it finds the master row by the vertical step and walks the columns
 by a 16.16 DDA (`lodsb; add dx, frac; adc si, int - 1`), then: on 4bpp, two
-pixels a packed byte, and the packed row turned into four planes by a 4 KB
-table (`OSAPI_GFX_BLITP`, DI bit 14 set so an armed clip is walked); when
-BLITP refuses (CF), the packed rows go to `OSAPI_GFX_BLIT4` instead; on 1bpp,
-eight pixels a byte straight to `OSAPI_GFX_BLIT1`. The image's left edge is
-always on the byte grid: the canvas starts on it (the tool column is 32
-pixels) and the horizontal pan moves in steps of 8. At exactly one master
-pixel a screen pixel (a picture at 100%) the DDA is left out of the loop.
-**What it costs on an 8088**: ~160 cycles a pixel on VGA, composing and
-turning (BLITP itself is under a tenth of it), measured; the 8088's 8-bit bus
-and its fetch queue, not the instruction count, set that, and the kernel's
-own packed-to-planar BLIT4 decoder is 107 a pixel on top of composing. The
-plan's 25 a pixel was not reached.
+pixels a lane, and the row of lanes turned into four planes by a BUTTERFLY in
+registers - nibbles swapped between lanes 0/2 and 1/3, then 2-bit fields
+between 0/1 and 2/3, and the four bytes are the planes (`OSAPI_GFX_BLITP`,
+DI bit 14 set so an armed clip is walked); when BLITP refuses (CF), the lanes
+are made packed pairs through a 256-byte table and go to `OSAPI_GFX_BLIT4`
+instead; on 1bpp, eight pixels a byte straight to `OSAPI_GFX_BLIT1`. The
+image's left edge is always on the byte grid: the canvas starts on it (the
+tool column is 32 pixels) and the horizontal pan moves in steps of 8. At
+exactly one master pixel a screen pixel (a picture at 100%) the DDA is left
+out of the loop and CX counts the groups. **What it costs on an 8088**
+(106.17): on VGA, 137 cycles a pixel zoomed in (the DDA) and 116 at 100%,
+where it was 160 and 145 - composing 77 / 54, turning 45 (a 4 KB table cost
+70), BLITP 12; on the CGA 81 and 55, where it was 81 and 65. The 8088's 8-bit
+bus and its fetch queue set that: a pixel is at least a `lodsb`, an
+`es xlatb` and a combine, nine bus bytes, and MartyPC measures such code at
+about 1.4 times its bus-byte count. The plan's 25 a pixel is not reachable
+for planar 4bpp from an indexed master on this CPU.
 
-**The VIEW claim** holds the 16 KB of tables, the 4 KB plane table (4bpp),
-the band and the Navigator's banked thumbnail: 31 KB on a colour display,
-19 KB on a 1bpp one.
+**The VIEW claim** holds the 16 KB of tables, the 256-byte unspread table
+(4bpp), a row of lanes, the band and the Navigator's banked thumbnail: 28 KB
+on a colour display (it was 32, with a 4 KB plane table), 19 KB on a 1bpp
+one.
 
 **Pixel aspect and zoom.** A zoom is a 16.16 factor `Z` of screen pixels per
 SOURCE pixel across; down the screen it is `Z * a`, with `a` = 1 on VGA,
@@ -162499,7 +162565,10 @@ a straddle) or the pan is wider than the canvas.
   `+`, `-` and `Fit` zoom; a press or drag in the picture pans. While a
   picture decodes the well, and the Histogram's, are the well's grey.
 - **Histogram.** The worker counts the master's indices into 256 dwords
-  after the last row; the UI folds them through the palette into 256 bins of
+  after the last row - one `inc byte` a pixel into three byte planes (a low
+  byte that wraps carries into the next; the master is under 2^24 pixels),
+  joined into the dwords at the end, 92 cycles a pixel where a word count
+  with a doubled index was 120; the UI folds them through the palette into 256 bins of
   Luminosity (the luma above), Red, Green or Blue — an `OS88UI_DROP` picks —
   and from the bins: Mean `floor(S1/N)`, Std Dev `isqrt(floor(sum n_v (v -
   mean)^2 / N))` (48-bit sums), Min and Max the first and last non-empty bin.
@@ -162530,11 +162599,13 @@ a straddle) or the pan is wider than the canvas.
 ### 106.13 Tests for the image core (wave 2)
 
 - **`tools/pixelsim.py`** is the reference: the five formats' decoders, the
-  emitter (scale, cube, Floyd–Steinberg), the plan search, the dither
+  emitter (scale, the cube's ordered dither), the plan search, the dither
   tables, the composer (4bpp packed and planar, 1bpp) under any zoom, pan
   and aspect, and the histogram's statistics — pure Python, no Pillow.
-  `--selfcheck` is a FAST row (`pixelsim`): its own invariants and
-  `apps/pixel/pxplans.inc` regenerated and compared.
+  `--selfcheck` is a FAST row (`pixelsim`): its own invariants, the guest's
+  pruned plan search (`plan_fast`) equal to `plan_for` over a grid of
+  colours and both shipped palettes (150,000 random colours agreed off-line), and `apps/pixel/pxplans.inc` regenerated
+  and compared.
 - **`tools/pixcorpus.py`** generates the fixtures deterministically: every
   depth, type, orientation and packing above, and a HOSTILE set — truncated,
   lying lengths, 65,535 x 65,535 and zero dimensions, palettes past the head,
@@ -162542,7 +162613,8 @@ a straddle) or the pan is wider than the canvas.
   whose length walks the sniff to the edge of 64K, a file that is not a
   picture - and a picture under a name PiXEL does not list. `--check` is the
   FAST row `pixcorpus`: every verdict pixelsim's, and the same picture read
-  by five different readers one master.
+  by five different readers - eleven files, bottom-up and top-down alike,
+  since the cube's dither is a function of the master row - one master.
 - **`pxdecode`** (soak, MartyPC): a scratch disk of the corpus, in two
   folders (a directory lists 64); PiXEL opens each through File > Revert with
   the name poked in, and the master and palette are compared with pixelsim's
@@ -162562,6 +162634,11 @@ a straddle) or the pan is wider than the canvas.
   colour face): every gesture's calls per routine under 106.15's ceilings,
   and the identity assertion; **`pixart`** (fast) is 106.16's pictures'
   own checks.
+- **`pxbench`** / **`pxbenchvga`** (soak, MartyPC, the 5150 with CGA and the
+  XT with VGA): the TIME of an open (three pictures, to the end and to the
+  first rows), a zoom step, a pan step and Fit, in guest cycles from
+  breakpoints, each held to a ceiling of 106.17's figure plus a margin - the
+  row that fails when a change makes PiXEL slower on the target.
 
 ### 106.14 What it costs (wave 2)
 
@@ -162575,12 +162652,13 @@ the end of its decode, every disk read included.
 | CITY.PCX, 320x240 8-bit RLE (its own palette) | 16.6 s | 22.3 s | 3.6 / 7.3 s |
 | a 640x480 8-bit BMP, 308 KB | 40.3 s | 47.9 s | 4.6 / 6.8 s |
 
-Of MOUNTAIN.BMP's open about a third is the disk and nearly half the
-quantiser, whose three passes cost about 1,000 cycles a pixel; a PAL picture
-on VGA waits for its 256 plans before its first row (about 4 s). A full
-render of the canvas: **4.8 s** on VGA for 432x293 (zoomed in), **2.1-2.9 s**
-at Fit for a 320x240 picture, **1.4 s** on the CGA. These are the numbers
-wave 9's `pxbench` starts from.
+Of MOUNTAIN.BMP's open about a third was the disk and nearly half the
+quantiser, whose three passes cost 1,361 cycles a pixel; a PAL picture on VGA
+waited for its 256 plans before its first row (about 4 s). A full render of
+the canvas: **4.8 s** on VGA for 432x293 (zoomed in), **2.1-2.9 s** at Fit
+for a 320x240 picture, **1.4 s** on the CGA. **These are wave 2's figures,
+taken by polling; 106.17 has what the speed wave made of them, measured by
+breakpoints, and is the table `pxbench` holds the package to.**
 
 `pxpaint`'s calls on VGA, held as a budget (`tests/pxpaint.py`):
 
@@ -162753,3 +162831,54 @@ rows, the status bar 14 and the filmstrip 56 (its card box 40 rows, Hercules'
 row), which leaves a middle band of about 179 rows - the six tool faces need
 146, and the column holds the Navigator (64 + its frame), the Histogram
 (56 + its frame) and about three of Image Info's eight lines.
+
+### 106.17 The speed wave: what an 8088 pays, before and after
+
+The package was made fast on the machine it is calibrated against: the 5150
+with a CGA and the XT with a VGA, both a 4.77 MHz 8088, under MartyPC's cycle
+counter. `tests/pxbench.py` is the instrument (106.13): a figure is the guest
+cycles between two instructions - the key that opens and the one that counts
+an open ended, a routine's entry and its return - so a loaded host measures
+the same numbers as an idle one. "Before" is the same bench run against the
+image core as wave 2 left it.
+
+| | 5150, CGA: before | after | XT, VGA: before | after |
+|---|---|---|---|---|
+| open MOUNTAIN.BMP, 256x192 24-bit | 34.55 s | **18.23 s** | 37.68 s | **19.96 s** |
+| ...its first rows on the glass | 2.97 s | 3.08 s | 3.52 s | 3.18 s |
+| open CITY.PCX, 320x240 8-bit RLE | 15.61 s | **12.78 s** | 21.64 s | **16.62 s** |
+| ...its first rows on the glass | 3.33 s | **2.69 s** | 6.99 s | **4.60 s** |
+| open a 640x480 8-bit BMP, 308 KB | 39.84 s | **35.23 s** | 47.61 s | **41.00 s** |
+| ...its first rows on the glass | 4.20 s | **1.52 s** | 6.35 s | **4.49 s** |
+| zoom step, the canvas covered | 0.87 s | 0.87 s | 4.31 s | **3.71 s** |
+| Fit, from there | 0.52 s | 0.46 s | 2.41 s | **1.95 s** |
+| pan step, an arrow | 0.29 s | 0.29 s | 0.56 s | 0.49 s |
+
+What moved them, each measured entry to return on its own routine:
+
+| | before | after | how (section) |
+|---|---|---|---|
+| the cube's quantiser, a pixel | 1,361 cycles | **139** | Floyd–Steinberg's three error passes, replaced by the blue-noise ordered dither: three `xlatb` and two adds (106.8) |
+| the disk, MOUNTAIN.BMP's 147 KB | 18 reads of 8 KB, ~12 s | 10 of 16 KB, ~11 s | 16 KB slots, both empty slots in one `READ_SEQ`, the first paint ahead of the second read (106.9) |
+| 256 mixing plans, CITY.PCX (VGA) | 18.9 M cycles, 3.96 s | **10.9 M, 2.28 s** | pairs in `K` order, the penalty a floor, terms dropped past the best (106.11) |
+| the 64 dither tables (VGA) | 4.76 M cycles, 1.00 s | **0.70 M, 0.15 s** | built by threshold: 64 block copies, 256 switches (106.11) |
+| the 64 tables + 1bpp thresholds (CGA) | 3.20 M cycles | 1.74 M | the same |
+| turning a row into planes, a pixel | 70 cycles | **45** | a register butterfly on lanes, no 4 KB table (106.11) |
+| composing at 100%, a pixel | 62 (4bpp) / 58 (1bpp) | 54 / 49 | CX counts the groups; 1bpp's ends folded |
+| the histogram, a pixel | 120 cycles | 92 | one `inc byte` into three byte planes (106.12) |
+| PCX runs, CITY.PCX's 240 lines | 38.7 M cycles | 18.4 M | a literal byte is four instructions (106.10) |
+
+**What did not move, and why.** A colour pixel through the composer is still
+over a hundred cycles - 137 zoomed, 116 at 100% - against the plan's 25: a
+pixel is at least a `lodsb`, an `es xlatb` and a combine, nine bus bytes, and
+MartyPC measures this code at about 1.4 times its bus-byte count (the 8088
+fetches a byte every four clocks, and its 4-byte queue runs dry on code this
+dense). The DDA, a zoom's per-pixel step, is four more bytes. The CGA's zoom
+step is its 1bpp DDA and stands where it was. And a PAL picture on a colour
+display still waits about two seconds for its plans before its first row:
+the search is exact, `plan_for`'s answer to the bit, and that is what it
+costs; a coarse lookup grid would have been faster and approximately right,
+which this package does not ship (a 16-level grid settles `c1` alone in 65%
+of its cells). **A first-rows figure can move by a few tenths** from run to
+run - it is where in its tick and in its disk revolution the key landed - so
+the bench holds it to a wider ceiling than the rest.

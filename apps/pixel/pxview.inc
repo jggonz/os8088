@@ -14,14 +14,15 @@
 ; THE VIEW CLAIM (one claim, movable, laid out per depth):
 ;   0x0000  64 Bayer tables of 256 bytes: table (py * 8 + px), so BH = the
 ;           cell and BL = 0 makes `es xlatb` the whole lookup
-;   [px_vo_c2p]   (4bpp) 4 KB: packed byte -> four plane bits, per position
-;   [px_vo_row]   (4bpp) one packed row
+;   [px_vo_c2p]   (4bpp) 256 bytes: a LANE byte -> the packed pair BLIT4
+;                 wants, for the fallback (px_rband)
+;   [px_vo_row]   (4bpp) one row of lanes (px_crow)
 ;   [px_vo_band]  a band: 16 rows, planes row-interleaved, or 1bpp
 ;   [px_vo_thm]   the Navigator's thumbnail, the same layout
 ; =============================================================================
 
 PX_BANDH    equ 16                  ; rows a band
-PX_VOC2P    equ 0x4000              ; the 4bpp layout's plane table
+PX_VOC2P    equ 0x4000              ; the 4bpp layout's unspread table
 PX_THMW     equ 160                 ; the thumbnail's largest width...
 PX_THMH     equ 96                  ; ...and height (no title strip over the
                                     ; Navigator: SPEC.md 106.15)
@@ -75,219 +76,236 @@ px_aspd:    dw 1, 45, 12, 48
 ; =============================================================================
 
 ; px_plan1 - the plan for the colour at DS:SI (R, G, B): AL = c1, AH = c2,
-; DL = t. pixelsim's plan_for, check for check and sum for sum - computed the
-; way an 8088 can afford, because a PAL palette is 256 of these on the
-; worker before its first row (SPEC.md 106.11):
-;   - the sixteen are all levels of 85, so a channel's distance to any of
-;     them is one of FOUR squares, made once (12 multiplies, not 48), and a
-;     candidate's distance is three lookups;
-;   - the pure colour's error is 256 x its distance ((64 dd >> 2)^2 = 256 dd^2);
-;   - a pair's k is a difference of levels, so dd x k is one of seven sums
-;     made once per target, and K, 85K and the penalty are small products.
-; What remains a pair is one division and three squares. Preserves all but
-; AX, DX
+; DL = t. pixelsim's plan_fast, which `--selfcheck` holds equal to plan_for
+; over a grid of colours: the same sums, reached with less work, because a
+; PAL palette is 256 of these on the worker before its first row
+; (SPEC.md 106.11):
+;   - c1, the nearest, from twelve weighted squares a target (each channel's
+;     distance to the four levels the sixteen are made of) and three lookups
+;     a candidate;
+;   - each c2 in order of K (px_pord), whose penalty 57,800 K is a floor
+;     under its error, so the first K whose penalty exceeds the best ends
+;     the search - about four pairs reach a division, not fifteen;
+;   - a pair's error summed G, R, B and dropped as soon as it exceeds the
+;     best; a tie goes to the lower c2, plan_for's strict < in index order.
+; Preserves all but AX, DX
+PS_WSQ      equ px_pscr + 0         ; 12 dwords: channel x 16 + level x 4
+PS_WKD      equ px_pscr + 48        ; 21 words: channel x 14 + (k + 3) x 2 -
+                                    ; w dd k, k = -3..3
+PS_D64      equ px_pscr + 90        ; 3 words: 64 dd
+PS_KX       equ px_pscr + 100       ; 7 words: k x 85 t, k = -3..3
+PS_BE       equ px_pscr + 114       ; dword: the best error
+PS_E        equ px_pscr + 118       ; dword: this pair's
+PS_C1       equ px_pscr + 122       ; byte: c1
+PS_BC       equ px_pscr + 123       ; byte: the best c2
+PS_BT       equ px_pscr + 124       ; byte: its t
+PS_CAND     equ px_pscr + 125       ; byte: the best is a pair, not c1 alone
+PS_J        equ px_pscr + 126       ; byte: the pair being tried
+PS_K        equ px_pscr + 127       ; byte: its K
+PS_L1       equ px_pscr + 128       ; 3 bytes: c1's levels
+PS_PI       equ px_pscr + 132       ; word: the pair's px_pki offset
 px_plan1:
     push bx
     push cx
     push si
     push di
     push bp
-    ; --- the four squares a channel can have ------------------------------
-    xor bx, bx                      ; BX = channel x 8 (four words)
-    xor di, di                      ; DI = channel
+    ; --- twelve weighted squares: w (T - 85 l)^2 ------------------------------
+    xor bx, bx                      ; BX = the channel
+    mov di, PS_WSQ
 .sq:
-    push si
-    add si, di
-    mov cl, [si]
-    pop si
-    xor ch, ch                      ; CX = T
-    xor bp, bp                      ; BP = 85 x level
+    mov al, [si + bx]
+    xor ah, ah
+    mov cx, ax                      ; CX = T - 85 l
 .sq1:
     mov ax, cx
-    sub ax, bp
-    imul ax                         ; <= 65025: AX
-    mov [px_psq + bx], ax
-    add bx, 2
-    add bp, 85
-    cmp bp, 340
-    jb .sq1
-    inc di
-    cmp di, 3
-    jb .sq
-    ; --- c1: the nearest, by lookups ---------------------------------------
-    mov word [px_pbest], 0xFFFF
-    mov word [px_pbest + 2], 0xFFFF
-    xor bp, bp                      ; BP = the candidate
-.c1:
-    mov di, bp
-    shl di, 1
-    add di, bp                      ; DI = its three levels
-    mov bl, [px_egalev + di]        ; 3 x sq_r
-    xor bh, bh
-    shl bx, 1
-    mov ax, [px_psq + bx]
+    or ax, ax
+    jns .sq2
+    neg ax
+.sq2:
+    mul al                          ; AX = (T - 85 l)^2, |.| <= 255
     xor dx, dx
-    mov cx, ax
+    cmp bl, 2
+    je .w1                          ; B: x 1
+    mov dx, ax                      ; R: x 3, G: x 6
+    xor bp, bp                      ; (BP borrowed: the high word)
     shl ax, 1
-    rcl dx, 1
-    add ax, cx
-    adc dx, 0
-    mov bl, [px_egalev + di + 1]    ; + 6 x sq_g
-    xor bh, bh
-    shl bx, 1
-    mov cx, [px_psq + 8 + bx]
-    push dx
-    push ax
-    mov ax, cx
-    xor dx, dx
-    shl ax, 1                       ; 2 x
-    rcl dx, 1
-    add ax, cx                      ; 3 x
-    adc dx, 0
-    shl ax, 1                       ; 6 x
-    rcl dx, 1
-    pop cx
-    add ax, cx
-    pop cx
-    adc dx, cx
-    mov bl, [px_egalev + di + 2]    ; + sq_b
-    xor bh, bh
-    shl bx, 1
-    add ax, [px_psq + 16 + bx]
-    adc dx, 0
-    cmp dx, [px_pbest + 2]          ; strictly less: the lower index wins a tie
+    rcl bp, 1
+    add ax, dx
+    adc bp, 0
+    cmp bl, 1
+    jne .w3
+    shl ax, 1
+    rcl bp, 1
+.w3:
+    mov dx, bp
+.w1:
+    mov [di], ax
+    mov [di + 2], dx
+    add di, 4
+    sub cx, 85
+    mov ax, di                      ; four a channel: (DI - PS_WSQ) & 15
+    sub ax, PS_WSQ
+    test al, 15
+    jnz .sq1
+    inc bx
+    cmp bx, 3
+    jb .sq
+    ; --- c1: the nearest of the sixteen, three lookups each ------------------
+    mov word [PS_BE], 0xFFFF
+    mov word [PS_BE + 2], 0xFFFF
+    push si
+    xor si, si                      ; SI = the candidate x 3
+    xor cx, cx                      ; CL = the candidate
+    xor bx, bx                      ; (BH stays 0)
+.c1:
+    mov bl, [px_egal4 + si]         ; its levels, as dword offsets
+    mov ax, [PS_WSQ + bx]
+    mov dx, [PS_WSQ + bx + 2]
+    mov bl, [px_egal4 + si + 1]
+    add ax, [PS_WSQ + 16 + bx]
+    adc dx, [PS_WSQ + 16 + bx + 2]
+    mov bl, [px_egal4 + si + 2]
+    add ax, [PS_WSQ + 32 + bx]
+    adc dx, [PS_WSQ + 32 + bx + 2]
+    cmp dx, [PS_BE + 2]             ; strictly less: the lower index wins a tie
     ja .c1n
     jb .c1y
-    cmp ax, [px_pbest]
+    cmp ax, [PS_BE]
     jae .c1n
 .c1y:
-    mov [px_pbest], ax
-    mov [px_pbest + 2], dx
-    mov [px_pc1], bp
+    mov [PS_BE], ax
+    mov [PS_BE + 2], dx
+    mov [PS_C1], cl
 .c1n:
-    inc bp
-    cmp bp, 16
+    add si, 3
+    inc cl
+    cmp cl, 16
     jb .c1
-    ; --- the pure colour: E0 = 256 x D(c1); dd, and dd x k for k = -3..3 --
-    mov ax, [px_pbest]
-    mov dx, [px_pbest + 2]
+    pop si
+    ; --- E0 = 256 D(c1), the pure colour; dd, 64 dd and w dd k ----------------
+    mov ax, [PS_BE]
+    mov dx, [PS_BE + 2]
     mov dh, dl                      ; x 256
     mov dl, ah
     mov ah, al
     xor al, al
-    mov [px_pbest], ax
-    mov [px_pbest + 2], dx
-    mov bx, [px_pc1]
-    mov di, bx
-    shl di, 1
-    add di, bx                      ; DI = c1's levels
-    mov [px_pl1], di
-    xor bx, bx                      ; BX = channel
+    mov [PS_BE], ax
+    mov [PS_BE + 2], dx
+    mov al, [PS_C1]
+    mov [PS_BC], al
+    mov byte [PS_BT], 0
+    mov byte [PS_CAND], 0
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    add bx, ax                      ; BX = c1 x 3: its levels, to PS_L1
+    mov ax, [px_egalev + bx]
+    mov [PS_L1], ax
+    mov al, [px_egalev + bx + 2]
+    mov [PS_L1 + 2], al
+    xor bx, bx                      ; BX = the channel
+    mov di, PS_WKD
 .dd:
-    mov al, [px_egalev + di + bx]
+    mov al, [PS_L1 + bx]
     mov ah, 85
     mul ah
     mov cx, ax
     mov al, [si + bx]
     xor ah, ah
-    sub ax, cx                      ; dd
+    sub ax, cx                      ; AX = dd
     push bx
     shl bx, 1
-    mov [px_pdd + bx], ax
+    mov cx, ax
+    push cx
+    mov cl, 6
+    shl ax, cl
+    pop cx
+    mov [PS_D64 + bx], ax           ; 64 dd
     pop bx
-    push bx
-    mov cx, bx                      ; dd x k, k = -3..3: 7 words a channel
-    shl bx, 1
-    shl bx, 1
-    shl bx, 1
-    sub bx, cx
-    shl bx, 1                       ; BX = channel x 14
+    mov ax, cx                      ; w dd
+    cmp bl, 2
+    je .wd
+    shl ax, 1
+    add ax, cx                      ; 3 dd
+    cmp bl, 1
+    jne .wd
+    shl ax, 1                       ; 6 dd
+.wd:
+    mov word [di + 6], 0            ; k = 0
+    mov [di + 8], ax                ; 1
     mov cx, ax
-    neg cx                          ; -dd
-    mov [px_pddk + bx + 4], cx      ; k = -1
-    add cx, cx
-    mov [px_pddk + bx + 2], cx      ; -2
-    sub cx, ax
-    mov [px_pddk + bx], cx          ; -3
-    mov word [px_pddk + bx + 6], 0  ; 0
-    mov [px_pddk + bx + 8], ax      ; 1
-    mov cx, ax
-    add cx, cx
-    mov [px_pddk + bx + 10], cx     ; 2
     add cx, ax
-    mov [px_pddk + bx + 12], cx     ; 3
-    pop bx
+    mov [di + 10], cx               ; 2
+    add cx, ax
+    mov [di + 12], cx               ; 3
+    neg ax
+    mov [di + 4], ax                ; -1
+    mov cx, ax
+    add cx, ax
+    mov [di + 2], cx                ; -2
+    add cx, ax
+    mov [di], cx                    ; -3
+    add di, 14
     inc bx
     cmp bx, 3
     jb .dd
-    mov ax, [px_pc1]
-    mov [px_pc2], ax
-    mov word [px_pt], 0
-    ; --- every c2 -------------------------------------------------------------
-    xor bp, bp
-.c2:
-    cmp bp, [px_pc1]
-    jne .c2a
-    jmp .c2n
-.c2a:
-    mov di, bp                      ; k = c2's levels - c1's
-    shl di, 1
-    add di, bp
-    mov bx, [px_pl1]
-    xor cx, cx                      ; CX = K
-    xor dx, dx                      ; DX = S
-%assign pqc 0
-%rep 3
-    mov al, [px_egalev + di + pqc]
-    sub al, [px_egalev + bx + pqc]
-    cbw                             ; k, -3..3
-    mov [px_pk + 2 * pqc], ax
-    push bx
+    ; --- the pairs, by K ---------------------------------------------------------
+    mov byte [PS_J], 0
+.pair:
+    mov al, [PS_C1]
+    mov ah, 15
+    mul ah
+    add al, [PS_J]
+    adc ah, 0
     mov bx, ax
-    add bx, 3
-    shl bx, 1                       ; dd x k
-    mov ax, [px_pddk + 14 * pqc + bx]
-  %if pqc == 0
-    mov bx, ax                      ; S += 3 dd k
-    shl ax, 1
-    add ax, bx
-  %elif pqc == 1
-    mov bx, ax                      ; S += 6 dd k
-    shl ax, 1
-    add ax, bx
-    shl ax, 1
-  %endif
-    add dx, ax
-    mov ax, [px_pk + 2 * pqc]        ; K += w k^2
-    imul al
-  %if pqc == 0
-    mov bx, ax
-    shl ax, 1
-    add ax, bx
-  %elif pqc == 1
-    mov bx, ax
-    shl ax, 1
-    add ax, bx
-    shl ax, 1
-  %endif
-    add cx, ax
-    pop bx
-%assign pqc pqc + 1
-%endrep
-    or dx, dx
+    mov si, ax                      ; the pair's k indices: 3 a pair
+    shl si, 1
+    add si, ax
+    mov [PS_PI], si
+    mov al, [px_pordk + bx]
+    mov [PS_K], al
+    mov dl, [px_pord + bx]          ; DL = c2
+    mov bl, al                      ; the penalty: past the best, and every
+    xor bh, bh                      ; later K is as far
+    shl bx, 1
+    shl bx, 1
+    mov ax, [px_pk578 + bx]
+    mov cx, [px_pk578 + bx + 2]
+    cmp cx, [PS_BE + 2]
+    jb .p1
+    ja .p0
+    cmp ax, [PS_BE]
+    jbe .p1
+.p0:
+    jmp .done
+.p1:
+    mov [PS_E], ax
+    mov [PS_E + 2], cx
+    mov si, [PS_PI]                 ; S = sum w dd k, through the pair's k
+    mov bl, [px_pki + si]           ; indices (px_pki: (k + 3) x 2 each)
+    xor bh, bh
+    mov cx, [PS_WKD + bx]
+    mov bl, [px_pki + si + 1]
+    add cx, [PS_WKD + 14 + bx]
+    mov bl, [px_pki + si + 2]
+    add cx, [PS_WKD + 28 + bx]
+    or cx, cx
     jg .s
-    jmp .c2n                        ; S <= 0: away from the target
+    jmp .next                       ; S <= 0: away from the target
 .s:
-    mov [px_pkk], cx
-    mov ax, 85                      ; den = 85 K, t = (64 S + den / 2) / den
-    push dx
-    mul cx
-    pop dx
-    mov bx, ax
-    mov ax, dx
-    mov cx, 64
-    imul cx                         ; DX:AX = 64 S (> 0)
-    mov cx, bx
+    mov ax, cx                      ; t = (64 S + den / 2) div den, den = 85 K
+    xor dx, dx
+    mov cx, 6
+.s64:
+    shl ax, 1
+    rcl dx, 1
+    loop .s64
+    mov bl, [PS_K]
+    xor bh, bh
+    shl bx, 1
+    mov cx, [px_pk85 + bx]
+    mov bx, cx
     shr bx, 1
     add ax, bx
     adc dx, 0
@@ -298,76 +316,101 @@ px_plan1:
 .t1:
     or ax, ax
     jnz .t2
-    jmp .c2n
+    jmp .next
 .t2:
-    mov [px_ptt], ax
-    mov cx, 85
-    mul cx
-    mov [px_pt85], ax               ; 85 t
-    mov ax, [px_pkk]                ; E = 57,800 K + sum w r'^2
-    mov cx, 57800
-    mul cx
-    mov [px_pee], ax
-    mov [px_pee + 2], dx
-%assign pqc 0
-%rep 3
-    mov ax, [px_pt85]               ; k x 85 t
-    imul word [px_pk + 2 * pqc]      ; (|.| <= 16320: AX)
+    push ax
+    mov ah, 85                      ; X = 85 t, and k X for k = -3..3
+    mul ah
+    mov word [PS_KX + 6], 0
+    mov [PS_KX + 8], ax
     mov cx, ax
-    mov ax, [px_pdd + 2 * pqc]
-    push cx
-    mov cl, 6
-    shl ax, cl                      ; 64 dd
-    pop cx
-    sub ax, cx                      ; r
+    add cx, ax
+    mov [PS_KX + 10], cx
+    add cx, ax
+    mov [PS_KX + 12], cx
+    neg ax
+    mov [PS_KX + 4], ax
+    mov cx, ax
+    add cx, ax
+    mov [PS_KX + 2], cx
+    add cx, ax
+    mov [PS_KX], cx
+    pop cx                          ; CL = t
+    ; --- E = the penalty + w r'^2, G, R, B, dropped once past the best ------
+%macro PXP_TERM 2                   ; channel, weight
+    mov si, [PS_PI]
+    mov bl, [px_pki + si + %1]
+    xor bh, bh
+    mov ax, [PS_D64 + 2 * %1]
+    sub ax, [PS_KX + bx]            ; r = 64 dd - 85 k t
     sar ax, 1
     sar ax, 1                       ; r' = r >> 2
     imul ax                         ; DX:AX = r'^2
-  %if pqc == 0
-    mov bx, ax                      ; x 3
-    mov cx, dx
+  %if %2 == 3
+    mov bx, ax
+    mov di, dx
     shl ax, 1
     rcl dx, 1
     add ax, bx
-    adc dx, cx
-  %elif pqc == 1
-    mov bx, ax                      ; x 6
-    mov cx, dx
+    adc dx, di
+  %elif %2 == 6
+    mov bx, ax
+    mov di, dx
     shl ax, 1
     rcl dx, 1
     add ax, bx
-    adc dx, cx
+    adc dx, di
     shl ax, 1
     rcl dx, 1
   %endif
-    add [px_pee], ax
-    adc [px_pee + 2], dx
-%assign pqc pqc + 1
-%endrep
-    mov ax, [px_pee + 2]            ; better than the best so far?
-    cmp ax, [px_pbest + 2]
-    ja .c2n
-    jb .c2y
-    mov ax, [px_pee]
-    cmp ax, [px_pbest]
-    jae .c2n
-.c2y:
-    mov ax, [px_pee]
-    mov [px_pbest], ax
-    mov ax, [px_pee + 2]
-    mov [px_pbest + 2], ax
-    mov [px_pc2], bp
-    mov ax, [px_ptt]
-    mov [px_pt], ax
-.c2n:
-    inc bp
-    cmp bp, 16
+    add ax, [PS_E]
+    adc dx, [PS_E + 2]
+    mov [PS_E], ax
+    mov [PS_E + 2], dx
+    cmp dx, [PS_BE + 2]
+    jb %%in
+    ja %%out
+    cmp ax, [PS_BE]
+    jbe %%in
+%%out:
+    jmp .next
+%%in:
+%endmacro
+    PXP_TERM 1, 6
+    PXP_TERM 0, 3
+    PXP_TERM 2, 1
+    ; DX:AX = E <= the best: better, or a tie the lower c2 wins
+    mov bx, [PS_J]                  ; BL = the pair's place in the order
+    xor bh, bh
+    mov al, [PS_C1]
+    mov ah, 15
+    mul ah
+    add bx, ax
+    mov bl, [px_pord + bx]          ; BL = c2
+    mov ax, [PS_E]
+    cmp dx, [PS_BE + 2]
+    jb .take
+    cmp ax, [PS_BE]
+    jb .take
+    cmp byte [PS_CAND], 0           ; equal: only a pair ties a pair
+    je .next
+    cmp bl, [PS_BC]
+    jae .next
+.take:
+    mov [PS_BE], ax
+    mov [PS_BE + 2], dx
+    mov [PS_BC], bl
+    mov [PS_BT], cl
+    mov byte [PS_CAND], 1
+.next:
+    inc byte [PS_J]
+    cmp byte [PS_J], 15
     jae .done
-    jmp .c2
+    jmp .pair
 .done:
-    mov al, [px_pc1]
-    mov ah, [px_pc2]
-    mov dl, [px_pt]
+    mov al, [PS_C1]
+    mov ah, [PS_BC]
+    mov dl, [PS_BT]
     pop bp
     pop di
     pop si
@@ -379,6 +422,9 @@ px_plan1:
 px_egalev:
     db 0,0,0, 0,0,2, 0,2,0, 0,2,2, 2,0,0, 2,0,2, 2,1,0, 2,2,2
     db 1,1,1, 1,1,3, 1,3,1, 1,3,3, 3,1,1, 3,1,3, 3,3,1, 3,3,3
+px_egal4:                           ; ...and x 4, a dword table's offsets
+    db 0,0,0, 0,0,8, 0,8,0, 0,8,8, 8,0,0, 8,0,8, 8,4,0, 8,8,8
+    db 4,4,4, 4,4,12, 4,12,4, 4,12,12, 12,4,4, 12,4,12, 12,12,4, 12,12,12
 
 ; px_t1for - the 1bpp threshold of the colour at DS:SI: AL = (64 L + 127)
 ; div 255, L = (Y + (Y^2 + 127) div 255) >> 1, Y the luma. Preserves all
@@ -523,9 +569,24 @@ px_tabpoll:
     ret
 
 ; px_texpand - the 64 tables from the plans (4bpp) or the thresholds (1bpp):
-; table (py * 8 + px), entry i = c2 if bayer(py, px) < t_i else c1 - as
-; c << 4 in an even column's table (the packed byte's left pixel) - or, on
-; 1bpp, the cell's bit (0x80 >> px) if lit. Preserves all
+; table (py * 8 + px), entry i = c2 if bayer(py, px) < t_i else c1, as a
+; LANE's half (px_crow, px_c2p): c's bits at 7, 5, 3, 1 in an even column's
+; table and at 6, 4, 2, 0 in an odd one's, so a pair of lookups OR'd is a
+; byte the composer's butterfly turns into planes. On 1bpp the entry is the
+; cell's bit (0x80 >> px) if lit, else 0.
+;
+; BUILT BY THRESHOLD, NOT BY CELL: walked in Bayer order b = 0..63, entry i
+; changes exactly once - from c2 (lit) to c1 (dark) at b = t_i - so one state
+; row is kept, the entries whose t is b are switched (a list per t, made
+; once), and the cell whose threshold is b is a COPY of the state: 64 block
+; moves and 256 switches, where comparing every entry of every table was
+; 16,384 of them and a second of an 8088 on every open. The scratch is the
+; band's (nothing renders while the tables are not good). Preserves all
+PXT_SE      equ 0                   ; the state row, an even column's lanes
+PXT_SO      equ 256                 ; ...an odd column's (4bpp)
+PXT_NX      equ 512                 ; 256 words: the next entry with its t
+PXT_HD      equ 1024                ; 65 words: each t's first entry
+PXT_INV     equ 1154                ; 64 bytes: the cell whose threshold is b
 px_texpand:
     push ax
     push bx
@@ -533,54 +594,129 @@ px_texpand:
     push dx
     push si
     push di
+    push bp
     push es
+    push ds
     mov es, [px_vseg]
-    xor di, di
-    xor bx, bx                      ; BX = the cell, py * 8 + px
-.cell:
-    mov dl, [px_bayer + bx]         ; DL = its threshold
-    cmp byte [px_tdepth], 1
-    je .one
-    mov si, [px_planp]
-    mov cx, 256
-.e4:
-    mov al, [si]                    ; c1
-    cmp dl, [si + 2]
-    jae .c1
-    mov al, [si + 1]                ; c2
-.c1:
-    test bl, 1
-    jnz .odd
-    shl al, 1
-    shl al, 1
-    shl al, 1
-    shl al, 1
-.odd:
-    stosb
-    add si, 3
-    loop .e4
-    jmp short .next
-.one:
-    mov cl, bl
-    and cl, 7
-    mov dh, 0x80
-    shr dh, cl                      ; DH = the cell's bit
-    mov si, px_t1
-    mov cx, 256
-.e1:
-    xor al, al
-    cmp dl, [si]
-    jae .dark
-    mov al, dh
-.dark:
-    stosb
-    inc si
-    loop .e1
-.next:
+    mov bp, [px_vo_band]            ; BP = the scratch (in ES)
+    cld
+    lea di, [bp + PXT_HD]           ; every list empty
+    mov cx, 65
+    mov ax, 0xFFFF
+    rep stosw
+    xor bx, bx                      ; the cell of each threshold
+.inv:
+    mov al, [px_bayer + bx]
+    xor ah, ah
+    mov di, ax
+    mov [es:bp + di + PXT_INV], bl
     inc bx
     cmp bx, 64
-    jb .cell
+    jb .inv
+    mov cx, 255                     ; --- the state at b = 0, and the lists --
+.init:
+    mov di, cx
+    cmp byte [px_tdepth], 1
+    je .i1
+    mov si, cx
+    shl si, 1
+    add si, cx
+    add si, [px_planp]              ; SI = plan i: c1, c2, t
+    mov bl, [si + 1]
+    xor bh, bh
+    mov al, [px_spread + bx]        ; c2, every entry's state below its t
+    mov [es:bp + di + PXT_SE], al
+    shr al, 1
+    mov [es:bp + di + PXT_SO], al
+    mov al, [si + 2]
+    jmp short .lk
+.i1:
+    mov byte [es:bp + di + PXT_SE], 0xFF
+    mov al, [px_t1 + di]
+.lk:
+    xor ah, ah                      ; i onto t's list
+    mov bx, ax
+    shl bx, 1
+    add bx, bp
+    shl di, 1
+    add di, bp
+    mov ax, [es:bx + PXT_HD]
+    mov [es:di + PXT_NX], ax
+    mov [es:bx + PXT_HD], cx
+    dec cx
+    jns .init
+    xor dx, dx                      ; --- DL = b ------------------------------
+.b:
+    mov bl, dl                      ; every entry whose t is b goes dark
+    xor bh, bh
+    shl bx, 1
+    add bx, bp
+    mov ax, [es:bx + PXT_HD]
+.sw:
+    cmp ax, 0xFFFF
+    je .cell
+    mov di, ax
+    cmp byte [px_tdepth], 1
+    je .sw1
+    mov si, ax
+    shl si, 1
+    add si, ax
+    add si, [px_planp]
+    mov bl, [si]                    ; c1
+    xor bh, bh
+    mov bl, [px_spread + bx]
+    mov [es:bp + di + PXT_SE], bl
+    shr bl, 1
+    mov [es:bp + di + PXT_SO], bl
+    jmp short .swn
+.sw1:
+    mov byte [es:bp + di + PXT_SE], 0
+.swn:
+    shl di, 1
+    mov ax, [es:bp + di + PXT_NX]
+    jmp short .sw
+.cell:
+    mov bl, dl                      ; the cell whose threshold is b
+    xor bh, bh
+    mov di, bx
+    mov al, [es:bp + di + PXT_INV]
+    mov bl, al
+    mov ah, al
+    xor al, al
+    mov di, ax                      ; DI = its table
+    lea si, [bp + PXT_SE]
+    and bl, 7                       ; BL = px
+    push es
+    pop ds                          ; (DS = the view claim for the copy)
+    cmp byte [cs:px_tdepth], 1
+    je .c1
+    test bl, 1
+    jz .ce
+    add si, PXT_SO - PXT_SE
+.ce:
+    mov cx, 128
+    rep movsw
+    jmp short .cn
+.c1:
+    mov cl, bl                      ; the cell's bit, both bytes of a word
+    mov bl, 0x80
+    shr bl, cl
+    mov bh, bl
+    mov cx, 128
+.c1w:
+    lodsw
+    and ax, bx
+    stosw
+    loop .c1w
+.cn:
+    push cs
+    pop ds
+    inc dl
+    cmp dl, 64
+    jb .b
+    pop ds
     pop es
+    pop bp
     pop di
     pop si
     pop dx
@@ -588,6 +724,12 @@ px_texpand:
     pop bx
     pop ax
     ret
+
+; a colour's lane half: c's bits 3, 2, 1, 0 at 7, 5, 3, 1 (shifted right once
+; for an odd column)
+px_spread:
+    db 0x00, 0x02, 0x08, 0x0A, 0x20, 0x22, 0x28, 0x2A
+    db 0x80, 0x82, 0x88, 0x8A, 0xA0, 0xA2, 0xA8, 0xAA
 
 ; =============================================================================
 ; THE VIEW CLAIM (UI task)
@@ -617,11 +759,11 @@ px_viewclaim:
     mov [px_vdepth], al
     cmp al, 1
     je .one
-    mov word [px_vo_c2p], PX_VOC2P  ; 4bpp: tables, plane table, a packed row,
-    mov word [px_vo_row], 0x5000    ; a band, the thumbnail
-    mov word [px_vo_band], 0x5200
-    mov word [px_vo_thm], 0x6900    ; (+ PX_THMW / 2 x PX_THMH = 0x8700)
-    mov ax, 34
+    mov word [px_vo_c2p], PX_VOC2P  ; 4bpp: tables, the unspread table, a row
+    mov word [px_vo_row], 0x4100    ; of lanes, a band, the thumbnail (30 KB:
+    mov word [px_vo_band], 0x4300   ; the 4 KB plane table it had is the
+    mov word [px_vo_thm], 0x5A00    ; butterfly's registers now; + PX_THMW / 2
+    mov ax, 30                      ; x PX_THMH = 0x7800)
     jmp short .claim
 .one:
     mov word [px_vo_band], 0x4000   ; 1bpp: tables, a band, the thumbnail
@@ -636,7 +778,7 @@ px_viewclaim:
     mov byte [px_thok], 0
     cmp byte [px_vdepth], 1
     je .ok
-    call px_c2pbuild
+    call px_unspread
 .ok:
     clc
 .out:
@@ -649,75 +791,41 @@ px_viewclaim:
     pop ax
     ret
 
-; px_c2pbuild - the plane table: for each position j (0..3) of a packed byte
-; in an 8-pixel group and each byte b, four plane bytes holding its two
-; pixels' bits at 7 - 2j and 6 - 2j. Preserves all
-px_c2pbuild:
+; px_unspread - the 256-byte table at [px_vo_c2p] that turns a LANE byte -
+; two pixels' bits interleaved, the left's at 7, 5, 3, 1 (px_texpand) - into
+; the packed pair BLIT4 wants, left << 4 | right: BLITP's fallback, and rare.
+; Preserves all
+px_unspread:
     push ax
     push bx
     push cx
-    push dx
     push di
     push es
     mov es, [px_vseg]
     mov di, [px_vo_c2p]
-    xor cx, cx                      ; CL = j, CH unused
-.j:
-    xor bx, bx                      ; BX = b
+    xor bx, bx                      ; BL = the lane byte
+    cld
 .b:
-    xor dx, dx                      ; DL/DH/AL/AH = planes 0..3
-    xor ax, ax
-    push cx
-    mov ch, 0x80
-    shl cl, 1
-    shr ch, cl                      ; CH = the left pixel's bit
-    mov cl, ch
-    shr cl, 1                       ; CL = the right pixel's
-    test bl, 0x10
-    jz .a0
-    or dl, ch
-.a0:
-    test bl, 0x20
-    jz .a1
-    or dh, ch
-.a1:
-    test bl, 0x40
-    jz .a2
-    or al, ch
-.a2:
-    test bl, 0x80
-    jz .a3
-    or ah, ch
-.a3:
-    test bl, 0x01
-    jz .b0
-    or dl, cl
-.b0:
-    test bl, 0x02
-    jz .b1
-    or dh, cl
-.b1:
-    test bl, 0x04
-    jz .b2
-    or al, cl
-.b2:
-    test bl, 0x08
-    jz .b3
-    or ah, cl
-.b3:
-    pop cx
-    mov [es:di], dx
-    mov [es:di + 2], ax
-    add di, 4
-    inc bx
-    cmp bx, 256
-    jb .b
-    inc cl
-    cmp cl, 4
-    jb .j
+    xor ax, ax                      ; AH = the pair, built bit by bit
+    mov al, bl
+    mov cx, 4
+.bit:                               ; the lane's bits from the top: the
+    shl al, 1                       ; left pixel's into AH, the right's
+    rcl ah, 1                       ; into BH, a bit each a round
+    shl al, 1
+    rcl bh, 1
+    loop .bit
+    mov al, ah                      ; AL = the left's four bits, BH's low
+    mov cl, 4                       ; nibble the right's
+    shl al, cl
+    and bh, 0x0F
+    or al, bh
+    stosb
+    xor bh, bh
+    inc bl
+    jnz .b
     pop es
     pop di
-    pop dx
     pop cx
     pop bx
     pop ax
@@ -1157,6 +1265,7 @@ px_crow:
     jne .dda                        ; DDA at all (a picture at 100%)
     cmp word [px_chint], 0
     jne .dda
+    mov cx, [px_cgrp]               ; ...and CX is free to count the groups
     cmp byte [px_cdep], 1
     mov ds, [px_crseg]
     je .one1
@@ -1173,23 +1282,26 @@ px_crow:
     inc bh
 %endrep
     sub bh, 8
-    dec word [cs:px_ccnt]
-    jnz .g41
+    loop .g41
     pop ds
     ret
 .one1:
-    xor ah, ah
-%rep 8
+    lodsb                           ; the first pixel's bit is the byte...
+    es xlatb
+    mov ah, al
+%rep 6
+    inc bh
     lodsb
     es xlatb
     or ah, al
-    inc bh
 %endrep
-    sub bh, 8
-    mov al, ah
+    inc bh
+    lodsb
+    es xlatb
+    or al, ah                       ; ...and the eighth's goes straight out
     stosb
-    dec word [cs:px_ccnt]
-    jnz .one1
+    sub bh, 7
+    loop .one1
     pop ds
     ret
 .dda:
@@ -1235,44 +1347,55 @@ px_crow:
     pop ds
     ret
 
-; px_c2p - the packed row at [px_vo_row] into four planes at DI (plane k at
+; px_c2p - the LANE row at [px_vo_row] into four planes at DI (plane k at
 ; DI + k x BP), [px_cgrp] groups. ES = the view claim. Clobbers AX, BX, CX,
-; DX, SI, DI
+; DX, SI, DI.
+;
+; A group is four lanes, a lane two pixels with their bits interleaved
+; (px_texpand) - [a3 b3 a2 b2 a1 b1 a0 b0] - which is a 4x8 bit transpose
+; already two stages done. The last two are a BUTTERFLY in registers: swap
+; nibbles between lanes 0/2 and 1/3, then 2-bit fields between 0/1 and 2/3,
+; and the four bytes ARE the planes. Fifteen register operations a group,
+; where a 4 KB table turned it at four lookups and eight memory words - 70
+; cycles a pixel on an 8088 against about 40
 px_c2p:
     push ds
     mov si, [px_vo_row]
-    mov ax, [px_cgrp]
-    mov [px_ccnt], ax
+    mov ch, [px_cgrp]               ; CH = groups (a canvas has under 256),
+    mov cl, 4                       ; CL = the nibble shift
     push es
     pop ds
-    xor ax, ax                      ; AH stays 0: BX = AX x 4 is the index
 .g:
-    lodsb
-    mov bx, ax
+    lodsw
+    xchg ax, dx                     ; DL, DH = lanes 0, 1
+    lodsw                           ; AL, AH = lanes 2, 3
+    mov bx, ax                      ; nibbles: 0 <-> 2, 1 <-> 3
+    shr bx, cl
+    xor bx, dx
+    and bx, 0x0F0F
+    xor dx, bx
+    shl bx, cl
+    xor ax, bx
+    xchg al, dh                     ; (the next pairs side by side)
+    mov bx, ax                      ; 2-bit fields: 0 <-> 1, 2 <-> 3
+    shr bx, 1
+    shr bx, 1
+    xor bx, dx
+    and bx, 0x3333
+    xor dx, bx
     shl bx, 1
     shl bx, 1
-    mov dx, [bx + PX_VOC2P]         ; planes 0, 1 (the table's place is the
-    mov cx, [bx + PX_VOC2P + 2]     ; 4bpp layout's constant)
-%assign pqj 1
-%rep 3
-    lodsb
-    mov bx, ax
-    shl bx, 1
-    shl bx, 1
-    or dx, [bx + PX_VOC2P + 1024 * pqj]
-    or cx, [bx + PX_VOC2P + 1024 * pqj + 2]
-%assign pqj pqj + 1
-%endrep
-    mov [di], dl
+    xor ax, bx                      ; AH, DH, AL, DL = planes 0, 1, 2, 3
+    mov [di], ah
     mov [ds:bp + di], dh
     add di, bp
-    mov [ds:bp + di], cl
+    mov [ds:bp + di], al
     add di, bp
-    mov [ds:bp + di], ch
+    mov [ds:bp + di], dl
     sub di, bp
     sub di, bp
     inc di
-    dec word [cs:px_ccnt]
+    dec ch
     jnz .g
     pop ds
     ret
@@ -1398,6 +1521,24 @@ px_rband:
     pop ax
     inc ax
     loop .krow
+    push ds                         ; the lanes made packed pairs, in place
+    mov ax, [px_cgrp]
+    shl ax, 1
+    shl ax, 1
+    mul word [px_rbn]
+    mov cx, ax
+    mov bx, [px_vo_c2p]
+    mov si, [px_vo_band]
+    mov di, si
+    push es
+    pop ds
+    cld
+.unsp:
+    lodsb
+    xlatb
+    stosb
+    loop .unsp
+    pop ds
     mov si, [px_vo_band]
     mov bp, [px_cgrp]
     shl bp, 1
@@ -2664,7 +2805,16 @@ px_navpan:
 ; =============================================================================
 
 ; px_hcount - ON THE WORKER: the master's indices counted into [px_hist],
-; 256 dwords. Liveness and the cancel every 8 rows. CF = 1 AX on a cancel
+; 256 dwords. Liveness and the cancel every 8 rows. CF = 1 AX on a cancel.
+;
+; A pixel is ONE `inc byte`: the counts are kept as three bytes an index -
+; low, middle and high planes of 256 at [px_bins], which nothing reads while
+; [px_hok] is 0 - and a low byte that wraps carries into the middle one (the
+; master is under 2^24 pixels: it fits in conventional memory). The dwords
+; are put together at the end. A word count with its index doubled was 120
+; cycles a pixel on an 8088; this is 92
+PXH_MID     equ 256
+PXH_HI      equ 512
 px_hcount:
     push bx
     push cx
@@ -2674,15 +2824,15 @@ px_hcount:
     push es
     push ds
     pop es
-    mov di, px_hist
-    mov cx, 512
+    mov di, px_bins
+    mov cx, 768 / 2
     xor ax, ax
     cld
     rep stosw
     xor dx, dx                      ; DX = the row
 .row:
     cmp dx, [px_cur + PXR_MH]
-    jae .ok
+    jae .sum
     test dl, 7
     jnz .r
     cmp byte [px_abort], 0
@@ -2697,18 +2847,16 @@ px_hcount:
     call px_mrow                    ; ES:DI = the row
     pop dx
     mov cx, [px_cur + PXR_MW]
-    mov si, di                      ; DS:SI on it, AH = 0 throughout: a
-    push ds                         ; count is one inc, and its high word
-    push es                         ; the rare carry
+    mov si, di                      ; DS:SI on it, BH = 0 throughout
+    push ds
+    push es
     pop ds
-    xor ax, ax
+    xor bx, bx
     cld
 .px:
     lodsb
-    mov bx, ax
-    shl bx, 1
-    shl bx, 1
-    inc word [cs:px_hist + bx]
+    mov bl, al
+    inc byte [cs:px_bins + bx]
     jz .carry
 .n:
     loop .px
@@ -2716,9 +2864,25 @@ px_hcount:
     inc dx
     jmp short .row
 .carry:
-    inc word [cs:px_hist + bx + 2]
+    inc byte [cs:px_bins + PXH_MID + bx]
+    jnz .n
+    inc byte [cs:px_bins + PXH_HI + bx]
     jmp short .n
-.ok:
+.sum:
+    push ds                         ; (px_mrow left ES on the master)
+    pop es
+    xor bx, bx                      ; the dwords: lo + 256 mid + 65536 hi
+    mov di, px_hist
+.s:
+    mov al, [px_bins + bx]
+    mov ah, [px_bins + PXH_MID + bx]
+    stosw
+    mov al, [px_bins + PXH_HI + bx]
+    xor ah, ah
+    stosw
+    inc bx
+    cmp bx, 256
+    jb .s
     clc
     jmp short .out
 .ab:

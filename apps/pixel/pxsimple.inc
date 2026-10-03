@@ -1817,13 +1817,16 @@ px_pcxfill:
     jcxz .done
     or bl, bl
     jnz .put
-    cmp si, dx
-    jae .refill
-    lodsb
-    mov ah, al
-    and ah, 0xC0
-    cmp ah, 0xC0
-    jne .lit
+.lit:                               ; LITERALS, a byte at a time and nothing
+    cmp si, dx                      ; else: a photograph's stream is mostly
+    jae .refill                     ; these, and the run path below costs
+    lodsb                           ; four times as much a byte
+    cmp al, 0xC0
+    jae .run
+    stosb
+    loop .lit
+    jmp short .done
+.run:
     and al, 0x3F
     mov bl, al
     cmp si, dx
@@ -1832,9 +1835,6 @@ px_pcxfill:
     lodsb
     mov bh, al
     jmp short .b
-.lit:
-    mov bh, al
-    mov bl, 1
 .put:                               ; min(the run, the line's rest), at once
     mov al, bh
     mov bp, cx
