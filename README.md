@@ -161,6 +161,8 @@ make 286-525-cword#   -z -word -cword -runcpm -c64 -weave -loom -all. The
 make 286-525-all  #   ONLY machines that read a 1.2MB disk (an XT cannot)
 make redlinedisk # REDLINE CPU/graphics lab, four disk sizes; R runs, S saves
 make redline-profile # record the cycle-accurate 4.77 MHz MartyPC reference
+make pixeldisk # PiXEL, the image viewer, with its sample gallery in PICTURES/,
+              # four disk sizes
 make allapps  # every program on a set of floppies - both word processors,
               # Frotz, RunCPM, the Commodore 64, PaccMan and the Weave
               # family included - apps-all-1.img, -2.img, ... at 1.44MB and
@@ -528,6 +530,14 @@ three graphics tiers in a canvas that doubles in height when it fits.
 VGA bars use color and share a highest-score-plus-5x scale; CGA/Hercules/VGA have measured
 4.77 MHz references. R runs and S saves `REDLINE.TXT`. See [the research, CPU/MHz detection limits
 and reproducible baseline](docs/REDLINE.md).
+
+**PiXEL** is the image viewer and editor, laid out like a modern photo tool -
+a toolbar, a tool column, the canvas, Navigator / Histogram / Image Info
+panels, a filmstrip and a status bar - on VGA, Hercules and CGA alike (SPEC.md
+106, [the design record](docs/plans/PIXEL-PLAN.md)). It is being built in
+waves: this one is the window, its menus and controls, and File > Open naming
+a picture's format and size from its first bytes; decoding arrives next.
+`make pixeldisk` builds its floppy with a gallery of original sample pictures.
 
 Programs live on a **FAT12** software floppy (drive B:) — and, once os8088 is
 installed on one, on a hard-disk partition. Either way it is an ordinary
