@@ -1735,7 +1735,7 @@ mru_draw_rack:
     pop ax
     ret
 
-mru_rkh:    db 'Ch  Lev    Program / Instrument', 0
+mru_rkh:    db 'Ch  Lev   Program / Instrument', 0
 mru_rkh2:   db 'Ch Lev  Program', 0
 MRU_BARW    equ 32                  ; a level bar's width
 MRU_BARW2   equ 20                  ; ...in two columns
