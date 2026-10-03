@@ -34,8 +34,10 @@ port, and what it publishes is split along exactly that line:
          a 1bpp adapter, where grey is a checkerboard (SPEC.md 47):
          LPT1 picks SND_RT_LPT and the DAC at the adapter's 3BCh, LPT2
          picks + 1 and 378h, LPT3 - which did not answer - is refused and
-         changes nothing, PC Speaker withdraws the cap, and the Covox LABEL
-         picks the first port that answered. --shots keeps a picture of the
+         changes nothing, a click in the gutter left of the pane changes
+         nothing and the machine lives (a negative x once reached a `div`),
+         PC Speaker withdraws the cap, and the Covox LABEL picks the first
+         port that answered. --shots keeps a picture of the
          page at each step
 
 The packages' own legs - each plays its subject through the DAC and is
@@ -131,6 +133,23 @@ def cp(ui, shots):
     if state() != (SND_RT_LPT + 1, SND_CAP_LPTDAC):
         fail("cp: LPT3, which did not answer, moved the tier to %r"
              % (state(),))
+    # THE GUTTER: x is pane-relative, and the 8 pixels left of the pane are
+    # -8..-1 - which an unsigned test once handed to a `div` whose quotient
+    # overflowed (INT 0, no handler: a dead machine). Nothing may change
+    # there, and the clock must still run after it
+    # - and INT 0 is watched for directly, since a ROM whose divide-error
+    # vector is a bare IRET (GLaBIOS's) survives it and hides it
+    t0 = u16(m.read(0x46C, 2))
+    with M.bp_trace(m, {"type": "int", "addr": 0}) as tr:
+        ui.mo.click(px - 4, ly, settle=0)
+        M.guest_sleep(m, 1.0)
+    if tr.n:
+        fail("cp: a click in the gutter left of the Covox row raised INT 0 "
+             "%d time(s) - a divide overflow in cp_snd_click" % tr.n)
+    if state() != (SND_RT_LPT + 1, SND_CAP_LPTDAC) or \
+            u16(m.read(0x46C, 2)) == t0:
+        fail("cp: a click in the gutter left of the Covox row moved the tier "
+             "to %r or stopped the clock" % (state(),))
     click(px + CP_PGX + 6, cy + CP_PR0Y + 6, "PC Speaker", (1, 0))
     snap("3-speaker", w)
     click(px + 30, ly, "the Covox label", (SND_RT_LPT, SND_CAP_LPTDAC))
