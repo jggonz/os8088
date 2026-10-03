@@ -106,4 +106,5 @@
 1 kernel/ctrl.inc                  # every Control Panel page's buttons
 1 kernel/hiber.inc                 # the hibernate prompt's
 1 apps/redline/ui.inc              # dashboard/view controls; SDK arm/track/release
+1 apps/pixel/pxui.inc              # every PiXEL control, through px_btn; SDK arm/track/release
 1 kernel/shutdown.inc              # modal confirmation; release inside the armed control

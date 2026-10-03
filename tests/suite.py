@@ -1205,6 +1205,12 @@ FAST = [
         "say - the expectations are GENERATED, and a generated file with no "
         "staleness gate describes a corpus that has moved out from under it "
         "(SPEC.md 93.3)"),
+    Row("pixsamples", "fast", py("tools/pixsamples.py", "--check"), 0.2,
+        "PiXEL's sample gallery (SPEC.md 106.7) is the committed one: every "
+        "picture under apps/pixel/samples/ against its pinned SHA-256, no "
+        "stray file there, and the Makefile's three gallery lists "
+        "(PX_SAMPLES, _720, _360) the same as the tool's - a list edited in "
+        "one place and not the other would ship a disk short of a picture"),
     Row("checkreadme", "fast", py("tools/checkreadme.py", "readme.txt"), 0.1,
         "README.TXT's width and size rules - Note Pad refuses a file one byte "
         "too long and shows nothing at all"),
@@ -7685,6 +7691,20 @@ SOAK = [
         "Measured at 20.4s.",
         needs=("marty",), serial=True,
         wants=("build/word.o88", "build/word.p1.bin", "build/WELCOME.DOC")),
+    Row("pxparts", "soak", py("tests/pxparts.py"), 60.0,
+        "SPEC.md 106.5: PiXEL far-calls LAZY code parts - the first assembly "
+        "package to - and every decoder will stand on the boundary, so wave 1 "
+        "proves it with the keyboard card before anything depends on it. A: "
+        "launched with no part fetched and no claim but the region; B: F1 "
+        "fetches once, far-calls INIT and INFO, INIT answers PXP_PROBE (a "
+        "number only the part computes), the card's lines are pxhelp.asm's "
+        "byte for byte and the part held exactly one claim of PiXEL's while it "
+        "was here; C: dropped - the row clear, the heap as it was; D: F1 again "
+        "FETCHES AGAIN, which an OP_COMP|OP_LAZY row could not (20.12.7.4); E, "
+        "the negative control: the row aimed at sector 0, the package's own "
+        "header, is REFUSED on the signature and its claim still given back",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
     Row("wdpen", "soak", py("tests/wdpen.py"), 60.0,
         "SPEC.md 68.2.5: [gfx_dis] is ONE KERNEL BYTE whose lifetime is one "
         "gfx-lock hold, and 12.8.3 takes that lock around the WHOLE event "

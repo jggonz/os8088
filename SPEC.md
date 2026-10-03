@@ -161321,3 +161321,211 @@ on the machine, because a viewer whose formats are JPEG and PNG has no host to
 defer to. `apps/os88img.inc` and its consumers keep §94.1 unchanged, and PiXEL
 does not grow that include (§94's contract is a whole file under 64KB in and
 one 4bpp segment out; PiXEL's is a stream in and rows out).
+
+### 106.1 The window and its layout tiers (wave 1)
+
+One sizable window (`OSAPI_WM_SIZABLE`), `OSAPI_WM_OWNBG` (every content
+pixel is PiXEL's), content snapped to the byte grid (`OSAPI_WM_SNAP`, §11.94),
+`OSAPI_WM_PREFER` asking for the whole width of each card and as much height
+as the desktop band gives (640x480 / 720x348 / 640x200 frames, clamped by the
+kernel), and a minimum of 336x150. **Nothing about the layout is kept across
+a paint:** `px_layout` reads `OSAPI_WM_CONTENT`, `OSAPI_WM_GEOM` and
+`OSAPI_WM_DISPLAY` and recomputes every rect, on every paint, every press and
+every incremental draw — a move does not call `W_PAINT` (§11.96.12), and the
+display a window is on can change under it (§39.16.4), so `W_ONRESIZE` has
+nothing to re-derive.
+
+The regions, top to bottom: the **toolbar**, then the **tool column**, the
+**canvas** and the **panel column** side by side, then the **filmstrip** and
+the **status bar**. Two tiers, chosen from the live content height:
+
+| | FULL (content ≥ 240 rows: VGA, Hercules) | COMPACT (shorter: CGA) |
+|---|---|---|
+| toolbar | 16x16 pictures with captions underneath | pictures only |
+| panels | Navigator, Histogram, Image Info stacked | ONE panel; its box (`>`), its strip or Tab turns to the next |
+| filmstrip | shown | hidden (View > Show Filmstrip shows it) |
+
+The captions also need a content width of 616 pixels; a narrower full-tier
+window drops them. A window too short for both the canvas and the filmstrip
+drops the filmstrip; one too narrow for a 160-pixel canvas beside the panels
+drops the panel column. Inside the column a panel that does not fit is
+dropped from the bottom up — Image Info, then Histogram, then Navigator — and
+only Image Info may be cut short (a picture well or a column of buttons cut
+in half is neither).
+
+**The display decides two things the size does not.** The palette is chosen
+by DEPTH (`OSAPI_WM_DISPLAY`'s DH): on 4bpp the chrome is light grey, the
+panel bodies white, the strips blue, the canvas dark grey; on 1bpp
+everything is black on white, because a grey is a dither there (§39.4) and
+text on a dither cannot be read. And on a **CGA** every picture is drawn at
+half height: a CGA pixel is 2.4 times as tall as it is wide, so `px_halfinit`
+ORs each pair of icon rows into one at launch (every one-pixel stroke
+survives) and the CGA's buttons are 12 rows rather than 20. The picture
+heights in the panels and the filmstrip (thumbnail 48 / 31 / 20 rows for a
+64-pixel width) follow the pixel's aspect the same way; EGA takes Hercules'
+row of every table.
+
+### 106.2 Menus, About and keys (wave 1)
+
+The bar is **File / Edit / Image / Effects / View** — `MENU_APPMAX`'s five —
+and there is **no Help menu**: About PiXEL is the app-name cell's item
+(`OSAPI_ABOUT_SET`, §12.7, the `OS88UI_ABOUT` card), and the key card is
+View > Keyboard Help (F1). The items are PIXEL-PLAN.md's section 1.3 list. An item that
+needs a picture is greyed (`MENU_DIS`) for that fact (§47); in this build no
+picture is ever decoded, so they are always grey, and the status bar's first
+field says `No picture`. Live from the start: File > Open, View > Dither
+(Ordered / Diffusion — a setting, stored now and applied by the renderer
+that arrives with wave 2), View > Hide/Show Panels, View > Hide/Show
+Filmstrip (its label follows the filmstrip *as laid out*, which the tier
+decides as often as the user does), and View > Keyboard Help.
+
+Keys: Ctrl+O opens; F1 or `?` shows the key card; H Z M C E R pick the Hand,
+Zoom, Marquee, Crop, Eyedropper and Rotate tools; Tab turns the compact
+layout's panel. Any key or click takes a card down and does nothing else.
+
+### 106.3 Toolbar, tools, panels, filmstrip, status bar (wave 1)
+
+**Every control is one `os88ui_btn` record** (`OS88UI_BIMG`, §13.8.9) — 27
+buttons: ten on the toolbar, six tools, the Navigator's `+` `-` `Fit`, a box
+on each panel's strip and the filmstrip's, the filmstrip's `<` `>` and the
+status bar's `<` `>`. One record, because `os88ui_btnclick` finds a window's
+record by walking the package's list and takes the first. A button not laid
+out this pass keeps the rect {1,1,0,0}, which `os88ui_bhit` (signed) never
+matches. The library arms and fires on geometry alone, so `px_bfire` tests
+`OS88UI_DIS` itself before acting.
+
+- **Toolbar.** Open, Save | Prev, Next | Zoom In, Zoom Out, Fit, 1:1 |
+  Rotate, Slideshow. Every item is a whole number of 8-pixel cells; its
+  button is centred over its cell and its caption centred in it, so the whole
+  caption row is ONE aligned opaque run. A separator is one cell with a
+  1-pixel rule in the middle of the button row.
+- **Tool column.** Six pictures; the active tool is `OS88UI_LATCH`. Picking
+  one redraws exactly two buttons.
+- **Panels.** A title strip (the title as one run, a `-`/`+` box that
+  collapses and expands, or `>` on the compact tier) and a body: Navigator's
+  picture well and its three zoom buttons; Histogram's graph well and Mean,
+  Std Dev, Min, Max; Image Info's File, Folder, Size, Format, Pixels, Depth.
+- **Filmstrip.** `Images (N)` with a collapse box, the `<` `>` pagers and the
+  folder's line. Wave 1 counts the pictures beside the one opened; the
+  thumbnails are wave 5's.
+- **Status bar.** Eight fields — name, dimensions, format, zoom, colours,
+  bytes, `Memory: 412K` (`OSAPI_MEM_AVAIL`'s total free, looked at every five
+  seconds by `OSAPI_WM_TIMER`) and `n of N` — each drawn as ONE run,
+  ` value `, with a 1-pixel rule between two. A field is redrawn alone when,
+  and only when, its value changed (`px_sval` marks it, `px_sflush` draws
+  it). A bar too narrow for all eight drops colours, then bytes, then memory,
+  then format, zoom, dimensions and place, in that order; the name stays.
+  The bar stops 16 pixels short of the right edge, the grow box's corner
+  (§11.1.1), and every self-initiated draw of the status bar or the panel
+  column ends with `OSAPI_WM_GROW`.
+
+### 106.4 What a repaint costs (wave 1)
+
+`W_PAINT` asks `OSAPI_WM_DAMAGE` and draws only the regions the rect meets,
+each whole and **every pixel once**: a text band is one opaque run padded
+with spaces to the band's whole cells (`px_tband`), ground beside a control
+is filled in strips that stop at the control's edge, and a button draws its
+own interior (`os88ui_bdraw1`). A full repaint of the empty window, counted
+by tracing the API cells, is **297 primitive calls on VGA** (205 fills, 29
+frames, 35 runs, 16 icons, 12 lines), **293 on Hercules** and **191 on CGA** —
+about 225 ms at CLAUDE.md's 756 us floor on a 4.77 MHz XT. Two thirds of the
+fills are the buttons' own rings. The incremental paths: a tool change is
+two buttons, a status field one run, a panel collapse the panel column, the
+card going down a full repaint. Wave 2's `pxpaint` row makes these numbers a
+gate.
+
+### 106.5 The part ABI: far-called lazy code parts (wave 1)
+
+PIXEL.O88 carries a parts table (§20.12). Every row is `OP_SEG|OP_LAZY`:
+a flat binary at org 0, appended by `os88pkg.py --part`, fetched into a
+claim of its own when first wanted and dropped after. The header every part
+opens with (`apps/pixel/pxpart.inc`):
+
+```
++0  dw 'PX'        signature
++2  db 1           ABI version
++3  db 3           vectors that follow
++4  dw 0           the package's segment - stamped by the resident before EVERY call
++6  dw init        out AX = PXP_PROBE
++8  dw decode      a decoder's body; PXE_NOTSUP from a part that is not one
++10 dw info        ES:DI = a buffer, CX = its size: the part's text or facts
+```
+
+`px_pcall` (AL = part, BL = vector) fetches the part if it is not here,
+checks the signature, the version and the vector count, stamps `+4`, and
+`call far`s the vector with DS = the package. It answers the vector's CF/AX,
+or CF = 1 with `PXE_PART` (the fetch failed; `op_fetch` has toasted why) or
+`PXE_BADPART` (what was fetched is not a PiXEL part of this ABI; the caller
+says so). A part obeys §95.8's module rules: its own tables through `CS:`;
+the package through DS as it arrived, or `[cs:PXP_PKG]` if it repoints DS —
+never `push cs / pop ds`, and never a copy kept past the call, because the
+region may move between calls (§66); it never speaks; it answers in CF/AX.
+
+**A fetch goes home first.** A part is read out of PIXEL.O88, and File > Open
+leaves the instance standing in the picture's folder (§38.10), so
+`px_pfetch` banks `OSAPI_FILE_HERE`, goes to the folder the package was
+launched from, fetches, and goes back — SCRIBE's bracket (§95.8.6).
+
+**The parts are PLAIN, not `OP_COMP`.** A dropped `OP_COMP|OP_LAZY` row is
+SPENT (§20.12.7.4): the word that held its packed length holds the segment
+while it is here, and `op_drop` leaves `OP_SPENT` so a second fetch refuses
+rather than read nothing. PiXEL's whole use of a part is fetch, use, drop and
+fetch again, so its rows carry no `OP_COMP` — the plan's decision 8 said they
+would, and this is the measured reason they do not. The image itself is not
+compressed either (`os88pkg.py` declines `--compress` beside parts), so the
+package costs its full size on the disk.
+
+The one part in wave 1 is **the keyboard card** (`apps/pixel/pxhelp.asm`):
+F1 fetches it, calls INIT and INFO, copies its nine lines into the package,
+drops it and puts the card up with `os88ui_about`. `tests/pxparts.py` is the
+gate: no part fetched at launch; F1 fetches once, far-calls twice, INIT
+answers `PXP_PROBE` and the lines are the part's byte for byte, one claim
+held while it is here and none after; F1 again fetches again; and a row
+aimed at the package's own header is refused on the signature with its
+claim still given back.
+
+### 106.6 Opening a file before there is a decoder (wave 1)
+
+File > Open runs the Standard File dialog (§38); a document launch (JPG,
+PNG, PCX, TIF and PIX are PiXEL's associations; BMP and GIF stay Paint's
+built-in rows) is banked in the entry proc and opened from `W_ONWAKE`
+(§54.10). Either way `px_examine` walks the folder with `OSAPI_FILE_FIND` —
+the pictures PiXEL names by extension, where this one sorts among them, its
+size — and reads the file's FIRST CLUSTER (`OSAPI_FILE_READ_AT` into a
+DMA-safe claim of one cluster, freed at once). Its bytes name the format,
+and win over the extension: JPEG (its frame header found by walking the
+markers inside that cluster: dimensions, components, progressive), PNG (IHDR),
+GIF, BMP (both header sizes), PCX (only under its own name: two bytes are
+too common a signature), TIFF, PIX, PNM, and a `CZ` wrapper. The window then
+shows what it knows — Image Info, the status fields, the canvas's second
+line, `Images (N)`, and `PiXEL - NAME.EXT` in the title — and decodes
+nothing. A header that lies is not believed: every offset is checked against
+the bytes read.
+
+### 106.7 Disks, the gallery and kern_small (wave 1)
+
+- **Where it ships:** `APPS_TOOLS`, so `apps.img` (1.44MB), `apps120.img`,
+  the everything set and the live media; `office360.img` with
+  `LAKE.JPG` in `MEDIA/` (§24.6.2: the gallery's smallest picture, 18 KB,
+  where `VACATION.JPG` would have taken 85 of that disk's 181 free clusters); and `make pixeldisk` in all four
+  geometries — the package at the root, the gallery in `PICTURES/`,
+  `SYSTEM/APPDATA/` made.
+- **Off `apps360.img` and `apps720.img`**, by §24.6.1's dated decision,
+  taken 2026-10-02 with the plan: those disks had 25 and 37 clusters free,
+  and PiXEL is ~16 KB on arrival and grows by a decoder a wave. The 720KB
+  filter is the first per-geometry list at that size, so its prerequisites
+  (`APPS720`) and its recipe (`APPSARGS720`) are filtered together.
+- **The gallery** (`apps/pixel/samples/`, 729,074 bytes): nine ORIGINAL
+  pictures made for this project, reduced and re-encoded once by
+  `tools/pixsamples.py` — baseline JPEG at 4:2:0 and 4:4:4, a progressive and
+  a greyscale JPEG, a 256-colour GIF, an 8-bit and a truecolour PNG, a 24-bit
+  BMP and an 8-bit PCX. Committed and pinned by SHA-256; `pixsamples --check`
+  is a fast-tier row and also compares the Makefile's three lists with its
+  own. The 720KB pixeldisk leaves out `HOUSE.PNG` (the whole gallery does
+  not fit), the 360KB one carries four. Every picture is shipped PLAIN: it
+  is compressed already, and PiXEL reads in chunks (§20.14.3).
+- **kern_small: `SMALLOMIT`**, a requirement omission of Sheet's kind
+  (§24.5): a picture decodes into an 8-bit master of W x H bytes — 75 KB at
+  half of a 640x480 photo — beside its decoder's claims, against a 52.5 KB
+  arena whose largest run is 17.5–20 KB. It would open a window and refuse
+  every picture it was shown.

@@ -10521,7 +10521,15 @@ small: $(BUILD)/small360.img $(BUILD)/small.img
 SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
              $(BUILD)/thewire.o88 \
              $(BUILD)/tracker.o88 \
-             $(BUILD)/audio.o88 $(BUILD)/sheet.o88 $(BUILD)/video.o88
+             $(BUILD)/audio.o88 $(BUILD)/sheet.o88 $(BUILD)/video.o88 \
+             $(BUILD)/pixel.o88
+# PIXEL (SPEC.md 106.7) is a REQUIREMENT omission of SHEET's kind: a picture
+# decodes into an 8-bit master of W x H bytes (PIXEL-PLAN 2.1) - 75KB at half
+# of a 640x480 photo, 19KB at an eighth - beside a 32KB inflate window or a
+# JPEG decoder's claims, against a 52.5KB arena whose largest run is
+# 17.5-20KB once the caches are shed (SKIES' and PIXELSTEIN's ground below).
+# It would open a window and then refuse every picture it was shown.
+#
 # VIDEO (SPEC.md 98.3) is a REQUIREMENT omission of the SOUND rows' kind: it
 # plays through FSXF_RATE (53.2.2) and OSAPI_FILE_READ_SEQ (18.4.8), and both
 # are kern_big's alone by the owner's decision (VIDEO-PLAN 4). On kern_small
@@ -11605,7 +11613,7 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
-              $(BUILD)/video.o88
+              $(BUILD)/video.o88 $(BUILD)/pixel.o88
 # MODPLUG.O88 IS RETIRED too (SPEC.md 56.15): Tracker's windowed face
 # (SPEC.md 45.21) is ModPlug's player done to the tree's standards, with the
 # playlist, the Repeat modes and the per-adapter faces carried over, so two
@@ -11789,7 +11797,8 @@ APPS_DATA_360   := $(filter-out $(MEDIA_DISK_DATA),$(APPS_DATA))
 # is a subject the user chose, and the faces are on A: either way.
 OFFICE_DATA := apps/texpad/PAPER.TEX apps/texpad/GUIDE.TEX \
                apps/sheet/SALES.SLK apps/artful/WRITING.MD \
-               $(BUILD)/WELCOME.DOC $(BUILD)/SAMPLE.BMP
+               $(BUILD)/WELCOME.DOC $(BUILD)/SAMPLE.BMP \
+               apps/pixel/samples/LAKE.JPG
 NETWORK_DATA := apps/browser/browser.htm
 
 # ...UNLESS THE DISK IS COMPRESSED, and this is the single most visible thing
@@ -11841,7 +11850,11 @@ MEDIA_DISK_DATA := $(ZDATA)/BEVERLY.MOD
 # to them, so a list defined only in the plain arm ships uncompressed
 # alongside eleven packed files and nothing says so.
 OFFICE_DATA  := $(ZDATA)/PAPER.TEX $(ZDATA)/GUIDE.TEX $(ZDATA)/SALES.SLK \
-                $(ZDATA)/WRITING.MD $(ZDATA)/WELCOME.DOC $(ZDATA)/SAMPLE.BMP
+                $(ZDATA)/WRITING.MD $(ZDATA)/WELCOME.DOC $(ZDATA)/SAMPLE.BMP \
+                apps/pixel/samples/LAKE.JPG
+# ...the picture PLAIN in both arms, deliberately: a JPEG is compressed
+# already, cz_wrap would refuse it as unshrinkable, and PiXEL reads it in
+# chunks, which SPEC.md 20.14.3 makes the reason a file must not be wrapped
 NETWORK_DATA := $(ZDATA)/BROWSER.HTM
 endif
 
@@ -12033,7 +12046,17 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
 #     ARTFUL and TEXPAD stay for now, on the general disk as well as the
 #     office one. Every other geometry carries the full list, and
 #     `make smallapps` is untouched.
-APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88,$(APPS_TOOLS))
+#
+# --- AND PIXEL IS NOT ON apps360.img (SPEC.md 106.7; 24.6.1's dated decision,
+#     taken 2026-10-02 with the plan - docs/plans/PIXEL-PLAN.md decision 12).
+#     That disk had 25 of its 354 clusters free and PiXEL is ~16 of them on
+#     the day it arrives, growing with every decoder wave; a viewer is also a
+#     program whose subject is FILES, and on this geometry the files are
+#     elsewhere. It rides office360.img with a sample picture, and its own
+#     pixeldisk at 360KB with a gallery subset. Remade, like every row here,
+#     the next time this geometry runs out.
+APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
+                    $(BUILD)/pixel.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
@@ -12058,6 +12081,23 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
             $(APPSYSARGS) \
             $(addprefix SYSTEM/DOS:,$(APPS_DOS) $(APPS_DOSCZ)) \
             $(APPDATAFOLDER)
+
+# --- 720KB LEAVES PIXEL OFF (SPEC.md 106.7; 24.6.1's rule, the same dated
+#     decision as the 360KB filter above, 2026-10-02). apps720.img had 37 of
+#     713 clusters free and the decoders to come are tens of KB; the 720KB
+#     pixeldisk carries PiXEL and eight of the gallery's nine pictures. This
+#     is the FIRST per-geometry list at 720KB, and the warning above binds
+#     it: the prerequisites ($(APPS720)) and the recipe ($(APPSARGS720)) are
+#     filtered together or the private-tree build names a file nothing made.
+APPS_TOOLS_720 := $(filter-out $(BUILD)/pixel.o88,$(APPS_TOOLS))
+APPS720 := $(APPS_TOOLS_720) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
+           $(APPS_DOSCZ)
+APPSARGS720 := $(addprefix APPS:,$(APPS_TOOLS_720)) \
+               $(addprefix GAMES:,$(APPS_GAMES)) \
+               $(addprefix MEDIA:,$(APPS_DATA)) $(LOGOVIDARG) \
+               $(APPSYSARGS) \
+               $(addprefix SYSTEM/DOS:,$(APPS_DOS) $(APPS_DOSCZ)) \
+               $(APPDATAFOLDER)
 
 # The 360KB apps disk is the same disk with the media-disk data taken out of
 # it, and with MEDIAFOLDER put in explicitly: every other argument here is
@@ -12094,8 +12134,8 @@ $(APPSIMG): $(APPS) $(LOGOVID) tools/os88disk.py
 $(APPSIMG120): $(APPS) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS)
 
-$(APPSIMG720): $(APPS) $(LOGOVID) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 720 $(APPSARGS)
+$(APPSIMG720): $(APPS720) $(LOGOVID) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(APPSARGS720)
 
 $(APPSIMG360): $(APPS360) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(APPSARGS360)
@@ -12170,9 +12210,15 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) tools/os88disk.py
 # spreadsheet on it wants next - and NOTEPAD is deliberately NOT (the owner's
 # call): ArtfulType and TeXPad and Word are three writers already, and a
 # fourth that is none of them is the row this disk would drop first.
+#
+# PIXEL rides here too (SPEC.md 106.7): the 360KB machine's home for it, off
+# apps360.img by the dated decision at APPS_TOOLS_360, with LAKE.JPG in
+# MEDIA/ as its one sample (24.6.2) - the picture its File dialog opens on,
+# and the gallery's smallest (18KB, greyscale): VACATION.JPG would have been
+# 85 of this disk's 181 free clusters.
 OFFICE_PKGS := $(BUILD)/artful.o88 $(BUILD)/calc.o88 $(BUILD)/chart.o88 \
                $(BUILD)/fontview.o88 $(BUILD)/paint.o88 $(BUILD)/sheet.o88 \
-               $(BUILD)/texpad.o88 $(BUILD)/word.o88
+               $(BUILD)/texpad.o88 $(BUILD)/word.o88 $(BUILD)/pixel.o88
 OFFICE360 := $(OFFICE_PKGS) $(OFFICE_DATA)
 OFFICEARGS360 := $(OFFICE_PKGS) \
                  $(addprefix MEDIA:,$(OFFICE_DATA)) \
@@ -14085,3 +14131,53 @@ $(BUILD)/redline360.img: $(BUILD)/redline.o88 apps/redline/README.TXT tools/os88
 	python3 tools/os88disk.py --size 360 -o $@ $< apps/redline/README.TXT
 redline-profile: redlinedisk $(IMG360)
 	python3 tools/redline_profile.py
+
+# PiXEL, the image viewer and editor (SPEC.md 106, docs/plans/PIXEL-PLAN.md).
+# ONE FILE, SEVERAL BINARIES: pixel.asm is the resident package, and every
+# lazy code PART is assembled on its own at org 0 and appended by os88pkg.py
+# --part in the part table's order (SPEC.md 106.5). os88pkg.py declines
+# --compress beside parts - a part's offset is measured from the start of the
+# file and lives inside the image - so PKGZ leaves the IMAGE plain and every
+# part carries OP_COMP on its own row instead. Every %include is a
+# prerequisite (tests/unit/t_pkgdeps.py).
+PIXEL_SRC := apps/pixel/pixel.asm apps/pixel/pxui.inc apps/pixel/pxicons.inc \
+             apps/pixel/pxappico.inc apps/pixel/pxpart.inc apps/os88api.inc \
+             apps/os88ui.inc apps/os88parts.inc apps/os88partsbody.inc \
+             apps/os88rseq.inc
+.PHONY: pixel pixeldisk
+pixel: $(BUILD)/pixel.o88
+$(BUILD)/pixel.bin: $(PIXEL_SRC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -o $@ apps/pixel/pixel.asm
+$(BUILD)/pxhelp.bin: apps/pixel/pxhelp.asm apps/pixel/pxpart.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/pixel/ -o $@ apps/pixel/pxhelp.asm
+$(BUILD)/pixel.o88: $(BUILD)/pixel.bin $(BUILD)/pxhelp.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/pixel.bin -o $@ --part $(BUILD)/pxhelp.bin
+
+# THE GALLERY (SPEC.md 106.7). Committed, and pinned by tools/pixsamples.py
+# --check, which also compares these three lists with its own - so a picture
+# added here and not there, or there and not here, fails the build. PLAIN on
+# every disk: a JPEG, a GIF and a PNG are compressed already, and PiXEL reads
+# in chunks, which SPEC.md 20.14.3 makes the reason not to wrap a file.
+PXS := apps/pixel/samples
+PX_SAMPLES := $(PXS)/VACATION.JPG $(PXS)/FLOWER.JPG $(PXS)/ROOM.JPG \
+              $(PXS)/LAKE.JPG $(PXS)/CAT.GIF $(PXS)/BALLOONS.PNG \
+              $(PXS)/HOUSE.PNG $(PXS)/MOUNTAIN.BMP $(PXS)/CITY.PCX
+PX_SAMPLES_720 := $(PXS)/VACATION.JPG $(PXS)/FLOWER.JPG $(PXS)/ROOM.JPG \
+                  $(PXS)/LAKE.JPG $(PXS)/CAT.GIF $(PXS)/BALLOONS.PNG \
+                  $(PXS)/MOUNTAIN.BMP $(PXS)/CITY.PCX
+PX_SAMPLES_360 := $(PXS)/VACATION.JPG $(PXS)/LAKE.JPG $(PXS)/CAT.GIF \
+                  $(PXS)/BALLOONS.PNG
+
+# `make pixeldisk`: PiXEL and its gallery, in all four geometries, REDLINE's
+# shape. The package at the root, the pictures in PICTURES/ - the folder the
+# filmstrip shows - and SYSTEM/APPDATA/ made for the thumbnail cache to come
+# (SPEC.md 19.9). On demand, like every application floppy.
+pixeldisk: $(BUILD)/pixel.img $(BUILD)/pixel720.img $(BUILD)/pixel120.img $(BUILD)/pixel360.img
+$(BUILD)/pixel.img: $(BUILD)/pixel.o88 $(PX_SAMPLES) tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $< $(addprefix PICTURES:,$(PX_SAMPLES)) --folder SYSTEM/APPDATA
+$(BUILD)/pixel120.img: $(BUILD)/pixel.o88 $(PX_SAMPLES) tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ $< $(addprefix PICTURES:,$(PX_SAMPLES)) --folder SYSTEM/APPDATA
+$(BUILD)/pixel720.img: $(BUILD)/pixel.o88 $(PX_SAMPLES_720) tools/os88disk.py
+	python3 tools/os88disk.py --size 720 -o $@ $< $(addprefix PICTURES:,$(PX_SAMPLES_720)) --folder SYSTEM/APPDATA
+$(BUILD)/pixel360.img: $(BUILD)/pixel.o88 $(PX_SAMPLES_360) tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $< $(addprefix PICTURES:,$(PX_SAMPLES_360)) --folder SYSTEM/APPDATA
