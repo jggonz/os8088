@@ -161545,10 +161545,24 @@ three colours (snare, hats, cymbals).
 
 #### 105.7.1 Rates and voices, by machine
 
+**Automatic** (the default) picks the rate by the CPU:
+
 | | 8088 | 286 | 386+ |
 |---|---|---|---|
-| speaker (bracket) | **5,512 Hz** (5,523 played), 4 voices | 16,124, 6 | 16,124, 6 |
+| speaker (bracket) | **5,512 Hz** (5,523 played), 4 voices | 16,000 (16,124 played), 6 | the same, 6 |
 | Sound Blaster | 8,000 Hz, 6 voices | 16,000, 8 | 22,050, 8 |
+
+**Settings chooses any of 8,000, 11,025, 16,000, 22,050, 32,000 and 44,100
+Hz instead**, for a faster machine that can afford it. The two past 22,050 are
+greyed unless the DSP answers `SND_CAP_PCM_HI` (an SB Pro or SB16, §34.2.1),
+and the speaker plays the nearest rate its pulses can make (`mrk_real`): N =
+1,193,182 / R held to 48..255 counts past an 8088 - 24,857 Hz at most - and
+to 149..255 on one, **8 kHz**, the Video Player's `VP_SPKMAX` ceiling, past
+which the pulses alone are more than the machine. Voices stay the CPU's.
+**A rate is free of the octave it plays in down to 57 Hz**: a half-period may
+be 383 samples (`MRY_LMAX`, the most an edge one half past a span leaves in a
+word), so at 44.1 kHz a bass note keeps its octave; the period is split into
+halves in 32 bits.
 
 **The speaker's 8088 rate was 8 kHz and is not**: a pulse is ~400 cycles
 (§34.11.4), so 8,000 of them are two thirds of a 4.77 MHz machine, and on
@@ -161589,7 +161603,10 @@ leaves the bracket and the UI loads the next song and enters it again.
 
 #### 105.8.4 The Sound Blaster: an external ring, or a grant ring
 
-The worker keeps about half a second queued. **An external ring** (§34.5.3) is
+The worker keeps about half a second queued (`[mrb_lead]`: half the rate, at
+least 4,096 samples and at most the 16 KB ring less a half), and the pre-roll
+is a whole half of the card's regime - 4,096 above 22,222 Hz, which verb 0
+otherwise refuses. **An external ring** (§34.5.3) is
 tried first - spans made straight into it, TOTAL a word the block IRQ reads -
 but it needs an auto-init DSP, and an SB 1.x answers verb 0 with 7. Then **the
 grant ring** every other player uses (§34.5.2): a 2,048-sample half made
@@ -161615,21 +161632,46 @@ strip between its old length and its new one - so no pixel is written twice.
 The transport buttons are pictures (`OS88UI_IMG`) with their captions under
 them; Loop is latched; what cannot act is greyed.
 
+The buttons carry no ellipsis (Add, Load Directory, Settings, MIDI Info,
+About): in a 23%-wide pane it was what the caption lost first. The menus keep
+theirs, where it is the convention that a dialog follows.
+
 #### 105.9.1 The cards
 
-About (`OSAPI_ABOUT_SET`, os88ui's card), MIDI Info (format, tracks,
-division, length, measures, notes and channels, the song's first text) and
-Settings (the output, a radio group) are drawn last over the content; while one
-is up the button group has no live controls, so a press reaches `mr_onclick`
-and takes the card down (Settings: a press outside the list).
+About (`OSAPI_ABOUT_SET`, os88ui's card) and MIDI Info (format, tracks,
+division, length, measures, notes and channels, the song's first text) are
+drawn last over the content; while one is up the button group has no live
+controls, so a press reaches `mr_onclick` and takes the card down.
+
+#### 105.9.2 The Settings dialog
+
+A **modal dialog** drawn over the content: a "Found:" line naming what the
+machine answered (OPL2/OPL3, the DSP and whether it reaches 44.1 kHz, the
+speaker), the **output** (Automatic, OPL3, OPL2, Sound Blaster synth, PC
+speaker synth - what is missing greyed), the **synth's sample rate**
+(§105.7.1), **Play in Background**, a note on the rates' limits, and **OK /
+Cancel**. It edits COPIES (`mrs_*`): Cancel, Esc and a press outside it change
+nothing; OK and Enter commit them, and a song that is playing or paused
+**restarts on the new choice** rather than waiting for the next Play. While it
+is up the window's one button record is PAGED onto the dialog's own pair
+(os88ui's documented device for a paged window), so nothing under it can be
+pressed. On a CGA the pair rides under the five-row output group, beside the
+seven-row rate group, so the dialog fits 200 lines.
+
+**The settings are kept** in `MIDIRACK.CFG` in `SYSTEM\APPDATA` on the
+player's own volume (§19.9; `apps/pixelstein/pxset.inc`'s shape): a magic and
+five bytes - the output, the rate, Play in Background, Loop and Show Levels.
+Read at the first wake; written when OK commits a change and, if a check box
+moved, at the close. A foreign file is ignored and a damaged one clamped, and a
+disk without the folder simply keeps nothing.
 
 ### 105.10 Disks and cost
 
-`MIDIRACK.O88` is 28,128 bytes of image and 7,989 of bss (22.8 KB packed).
+`MIDIRACK.O88` is 29,680 bytes of image and 8,078 of bss (24.4 KB packed).
 It rides `APPS\` on the 1.44 MB, 1.2 MB and 720 KB apps disks with the songs
 LZ-wrapped in `MEDIA\MIDI\` (ten songs, 27 clusters). **The 720 KB disk
-carries two** (BATTLE1 and INTRO, 7 clusters, leaving it 6 - it had 36 spare
-and the player is 23) and **the 360 KB apps disk none**: it is curated
+carries two** (BATTLE1 and INTRO, 7 clusters, leaving it 5 - it had 36 spare
+and the player is 24) and **the 360 KB apps disk none**: it is curated
 (§24.6.1) and had 12. At 360 KB the
 player and all ten songs ride the MEDIA disk (`media360.img`), the floppy
 whose subject is music already. Both are decisions with this section's date

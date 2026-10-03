@@ -25,10 +25,10 @@
 ; and drains it (mro_drain), so the two never touch the sequencer at once.
 ; =============================================================================
 
-MRB_RL      equ 8192                ; the card's ring
-MRB_RLCODE  equ 1                   ; ...4096 << 1
-MRB_LEAD    equ 4096                ; samples kept queued (~0.5 s at 8 kHz)
-MRB_PRE     equ 2048                ; ...and in before the card starts
+MRB_RL      equ 16384               ; the card's ring: 0.37 s at 44.1 kHz
+MRB_RLCODE  equ 2                   ; ...4096 << 2
+MRB_LEADMIN equ 4096                ; samples kept queued: half a second, and
+MRB_LEADMAX equ MRB_RL - 2048       ; never under 4096 nor past the ring
 MRB_HALF    equ 2048                ; a grant ring's unit (mrb_half1)
 MRK_RL      equ 4096                ; the speaker's ring (code 0)
 MRW_URATE   equ 18643               ; FM / tone units a second: PIT / 64
@@ -517,7 +517,7 @@ mrw_over:
     ret
 
 ; -----------------------------------------------------------------------------
-; mrw_sb - the card's ring topped up to MRB_LEAD samples ahead, and an
+; mrw_sb - the card's ring topped up to [mrb_lead] samples ahead, and an
 ; underrun resumed. Worker context: verbs 1, 3 and 6 are any-task.
 ;
 ; TWO KINDS OF RING (SPEC.md 105.8.4). An EXTERNAL one (34.5.3) is ours and
@@ -610,6 +610,8 @@ mrw_sb:
     MRW mrb_unders                  ; passes that found the card dry
     MRB mrb_err                     ; verb 0's refusal, for the gate
     MRB mrb_grant                   ; 1 = the GRANT ring (no auto-init DSP)
+    MRW mrb_lead                    ; samples kept queued, by the rate
+    MRW mrb_pre                     ; ...and the pre-roll: a regime's half
     MRW mrb_goff                    ; ...its offset in the driver's pool
     MRW mrb_grl                     ; ...its length
     MRW mrb_gtot                    ; ...TOTAL and CONS, ours to keep
@@ -632,13 +634,13 @@ mrb_tc:
     ret
 
 ; mrb_room - CF = 0 another unit may be made (a span, or a half): the lead is
-; under MRB_LEAD and the ring has room for it
+; under [mrb_lead] and the ring has room for it
 mrb_room:
     push ax
     push dx
     call mrb_tc
     sub ax, dx                      ; AX = the lead
-    cmp ax, MRB_LEAD
+    cmp ax, [mrb_lead]
     jae .no
     cmp byte [mrb_grant], 0
     je .yes
@@ -750,14 +752,31 @@ mrb_start:
     jc .no
     mov [mrb_seg], dx
 .have:
-    call mrb_rate_for               ; THE RATE AND THE VOICES BY THE CPU: an
-    mov cl, 6                       ; 8088 has ~60% of itself for 8 kHz and
-    cmp byte [mr_cpu], CPU_8086     ; six; a 286 or better takes eight at
-    je .r                           ; twice the rate and more
+    call mrb_rate_for               ; THE RATE: the user's (Settings), else
+    mov cl, 6                       ; the CPU's. THE VOICES BY THE CPU: an
+    cmp byte [mr_cpu], CPU_8086     ; 8088 has ~60% of itself for 8 kHz and
+    je .r                           ; six; a 286 or better takes eight
     mov cl, 8
 .r:
     mov [mrb_rate], ax
     mov [mrq_urate], ax
+    push ax                         ; the lead: half a second of the rate,
+    shr ax, 1                       ; inside MRB_LEADMIN..MRB_LEADMAX
+    cmp ax, MRB_LEADMIN
+    jae .l1
+    mov ax, MRB_LEADMIN
+.l1:
+    cmp ax, MRB_LEADMAX
+    jbe .l2
+    mov ax, MRB_LEADMAX
+.l2:
+    mov [mrb_lead], ax
+    pop ax
+    mov word [mrb_pre], 2048        ; the pre-roll is one of the regime's
+    cmp ax, 22222                   ; halves: 4,096 above 22,222 Hz, where
+    jbe .p                          ; verb 0 refuses less (SPEC.md 34.5)
+    mov word [mrb_pre], 4096
+.p:
     xor si, si                      ; a card plays the bytes as they are
     call mry_open
     call mro_rewind
@@ -768,7 +787,8 @@ mrb_start:
     mov [es:MRB_RL+SND_EXT_CONS], ax
 .pre:
     call mrb_span1                  ; the pre-roll
-    cmp word [es:MRB_RL+SND_EXT_TOTAL], MRB_PRE
+    mov ax, [mrb_pre]
+    cmp [es:MRB_RL+SND_EXT_TOTAL], ax
     jb .pre
     mov bl, SND_OPENF_RING + SND_OPENF_EXT + (MRB_RLCODE << SND_OPENF_RLSH)
     call OSAPI_SND_CAPS
@@ -811,25 +831,26 @@ mrb_start:
     pop ax
     ret
 
-; mrb_grantopen - the grant ring: 8 KB of the driver's pool (4 KB if that is
-; refused), the song from its start again, three halves of pre-roll and verb
-; 0 in ring mode. out: CF = 0 and AH = the handle; CF = 1 refused
+; mrb_grantopen - the grant ring: 16 KB of the driver's pool (8, then 4, if
+; that is refused), the song from its start again, the ring all but a half
+; full of pre-roll and verb 0 in ring mode. out: CF = 0 and AH = the handle;
+; CF = 1 refused
 mrb_grantopen:
     push bx
     push cx
     push dx
     push si
-    mov cx, 8192
+    mov cx, 16384
 .try:
     mov al, 7
     mov ah, 0                       ; verb 7, sub-op 0: a grant
     call OSAPI_SND_STREAM           ; AX = 0 and SI = its offset
     or ax, ax
     jz .got
+    shr cx, 1                       ; refused: half of it, down to 4 KB
     cmp cx, 4096
-    jbe .no
-    mov cx, 4096
-    jmp short .try
+    jae .try
+    jmp short .no
 .got:
     mov [mrb_goff], si
     mov [mrb_grl], cx
@@ -900,6 +921,92 @@ mrb_close:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; mrb_rate_for / mrk_rate_for - AX = the rate a synth play asks for: the one
+; Settings chose ([mr_rate], an index into mr_rates), else the CPU's own -
+; the card 8,000 on an 8088, 16,000 on a 286, 22,050 past it; the speaker
+; 5,512 on an 8088 (its pulses are half the machine, SPEC.md 105.7.1) and
+; 16,000 past it. The speaker clamps what it is given (mrk_start)
+; -----------------------------------------------------------------------------
+mr_rates:   dw 0, 8000, 11025, 16000, 22050, 32000, 44100
+MR_NRATE    equ 7
+
+mrb_rate_for:
+    call mr_rate_user
+    jnc .r
+    mov ax, 8000
+    cmp byte [mr_cpu], CPU_8086
+    je .r
+    mov ax, 16000
+    cmp byte [mr_cpu], CPU_286
+    je .r
+    mov ax, 22050
+.r:
+    ret
+
+mrk_rate_for:
+    call mr_rate_user
+    jnc .r
+    mov ax, 5512
+    cmp byte [mr_cpu], CPU_8086
+    je .r
+    mov ax, 16000
+.r:
+    ret
+
+; mrk_real - AX = a rate asked of the speaker -> AX = the rate it plays.
+; N = 1,193,182 / R CLAMPED to what a pulse can be - 48..255 counts past an
+; 8088 (SPEC.md 34.11.8) - and on an 8088 to 149..255, 8 kHz: a pulse is ~400
+; of its cycles, so past the Video Player's VP_SPKMAX the pulses alone are
+; more than the machine (SPEC.md 34.11.4). R = 1,193,182 / N back: 8,007 Hz
+; at most on an 8088, 24,857 past it, 4,679 at least
+mrk_real:
+    push bx
+    push dx
+    mov bx, ax
+    mov dx, 0x0012
+    mov ax, 0x34DE
+    div bx
+    mov bx, 149
+    cmp byte [mr_cpu], CPU_8086
+    je .nmin
+    mov bx, 48
+.nmin:
+    cmp ax, bx
+    jae .nlo
+    mov ax, bx
+.nlo:
+    cmp ax, 255
+    jbe .nhi
+    mov ax, 255
+.nhi:
+    mov bx, ax
+    mov dx, 0x0012
+    mov ax, 0x34DE
+    div bx
+    pop dx
+    pop bx
+    ret
+
+; mr_rate_user - CF = 0 and AX = the rate Settings chose; CF = 1 Automatic
+mr_rate_user:
+    push bx
+    mov bl, [mr_rate]
+    xor bh, bh
+    cmp bx, MR_NRATE
+    jae .auto
+    shl bx, 1
+    mov ax, [mr_rates+bx]
+    or ax, ax
+    jz .auto
+    pop bx
+    clc
+    ret
+.auto:
+    pop bx
+    stc
+    ret
+
 ; mro_free - every claim the outputs hold, given back (the window's close)
 mro_free:
     push dx
@@ -948,24 +1055,14 @@ mrk_start:
     jc .no
     mov [mrk_seg], dx
 .have:
-    mov ax, 5512                    ; AN 8088: 5.5 kHz and four voices. A
-    mov cl, 4                       ; pulse is ~400 cycles (SPEC.md 34.11.4),
-    cmp byte [mr_cpu], CPU_8086     ; so 8 kHz of them is two thirds of the
-    je .r                           ; machine and the synth starved behind
-                                    ; them on MartyPC's 5150 - CONS ran at
-                                    ; 66% of the rate. 5.5 kHz is 46%
-    mov ax, 16000
+    call mrk_rate_for               ; AX = the rate asked for
+    mov cl, 4                       ; four voices on an 8088, six past it
+    cmp byte [mr_cpu], CPU_8086
+    je .r
     mov cl, 6
 .r:
     push cx
-    mov bx, ax                      ; N = 1,193,182 / R, and the rate the
-    mov dx, 0x0012                  ; pulses really make: R = 1,193,182 / N
-    mov ax, 0x34DE
-    div bx
-    mov bx, ax
-    mov dx, 0x0012
-    mov ax, 0x34DE
-    div bx
+    call mrk_real                   ; the rate the pulses can really make
     mov [mrk_rate], ax
     mov [mrq_urate], ax
     pop cx

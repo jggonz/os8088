@@ -511,16 +511,18 @@ mru_aim:
     add si, 8
     cmp si, MRU_NB * 8
     jb .r
-    mov ax, MRU_NB                  ; the live count: compact drops the row
-    cmp byte [mru_cmp], 0
-    je .n
-    mov ax, MRU_NBC
-.n:
+    call mru_recmain                ; the rack's buttons, live...
     cmp byte [mr_card], 0
     je .nc
-    xor ax, ax                      ; a card is up: no button is live under it
+    mov word [mru_btrec+OS88UI_BT_N], 0 ; ...or none under a card - and under
+    cmp byte [mr_card], MR_CARD_SET ; the Settings dialog, ITS pair: one
+    jne .nc                         ; record, paged (os88ui.inc's BT_N note)
+    call mru_screct
+    mov word [mru_btrec+OS88UI_BT_RECTS], mru_crect
+    mov word [mru_btrec+OS88UI_BT_LABELS], mru_clabs
+    mov word [mru_btrec+OS88UI_BT_FLAGS], mru_cflg
+    mov word [mru_btrec+OS88UI_BT_N], 2
 .nc:
-    mov [mru_btrec+OS88UI_BT_N], ax
     call mru_flags
     ; --- the check boxes: rows of the Status pane's right side -------------
     cmp byte [mru_cmp], 0
@@ -570,6 +572,22 @@ mru_aim:
     pop si
     pop cx
     pop bx
+    pop ax
+    ret
+
+; mru_recmain - the record pointed at the rack's own buttons, its live count
+; the layout's: all fourteen, or compact's ten
+mru_recmain:
+    push ax
+    mov word [mru_btrec+OS88UI_BT_RECTS], mru_rect
+    mov word [mru_btrec+OS88UI_BT_LABELS], mru_blabs
+    mov word [mru_btrec+OS88UI_BT_FLAGS], mru_bflg
+    mov ax, MRU_NB
+    cmp byte [mru_cmp], 0
+    je .n
+    mov ax, MRU_NBC
+.n:
+    mov [mru_btrec+OS88UI_BT_N], ax
     pop ax
     ret
 
@@ -638,14 +656,14 @@ mru_blabs:
     dw mru_i_prev, mru_i_play, mru_i_pause, mru_i_stop, mru_i_next
     dw mru_l_eject, mru_l_loopb
     dw mru_l_set, mru_l_info, mru_l_about, mru_l_quit
-mru_l_add:   db 'Add...', 0
+mru_l_add:   db 'Add', 0
 mru_l_rem:   db 'Remove', 0
-mru_l_dir:   db 'Load Directory...', 0
+mru_l_dir:   db 'Load Directory', 0
 mru_l_eject: db 'Eject', 0
 mru_l_loopb: db 'Loop', 0
-mru_l_set:   db 'Settings...', 0
-mru_l_info:  db 'MIDI Info...', 0
-mru_l_about: db 'About...', 0
+mru_l_set:   db 'Settings', 0
+mru_l_info:  db 'MIDI Info', 0
+mru_l_about: db 'About', 0
 mru_l_quit:  db 'Quit', 0
 mru_caps:    dw mru_c_prev, mru_c_play, mru_c_pause, mru_c_stop, mru_c_next
 mru_c_prev:  db 'Prev', 0
@@ -2099,9 +2117,9 @@ mru_mkdev:
     jne .n2
     mov si, mru_d_sb
     call mru_cat
-    mov ax, [mrb_rate]
-    or ax, ax
-    jnz .sr
+    mov ax, [mrb_rate]              ; the open stream's, or what a Play would
+    cmp byte [mr_out], MRO_SB       ; ask for now
+    je .sr
     call mrb_rate_for
 .sr:
     call mru_decc
@@ -2109,10 +2127,19 @@ mru_mkdev:
     call mru_cat
     jmp short .out
 .n2:
-    mov si, mru_d_spk
-    cmp al, MRO_TONE
-    jne .sp
     mov si, mru_d_tone
+    cmp al, MRO_TONE
+    je .sp
+    mov si, mru_d_spk
+    call mru_cat
+    mov ax, [mrk_rate]
+    cmp byte [mr_out], MRO_SPK
+    je .kr
+    call mrk_rate_for
+    call mrk_real
+.kr:
+    call mru_decc
+    mov si, mru_d_hz
 .sp:
     call mru_cat
 .out:
@@ -2126,20 +2153,8 @@ mru_d_opl3: db 'OPL3 detected at 0x388', 0
 mru_d_fm:   db ' - FM driver loaded', 0
 mru_d_sb:   db 'Sound Blaster DSP - synth at ', 0
 mru_d_hz:   db ' Hz', 0
-mru_d_spk:  db 'PC speaker - pulse-width synth', 0
+mru_d_spk:  db 'PC speaker - pulse-width synth at ', 0
 mru_d_tone: db 'PC speaker - melody line, in the background', 0
-
-; mrb_rate_for - AX = the rate the card's synth would run at on this CPU
-mrb_rate_for:
-    mov ax, 8000
-    cmp byte [mr_cpu], CPU_8086
-    je .r
-    mov ax, 16000
-    cmp byte [mr_cpu], CPU_286
-    je .r
-    mov ax, 22050
-.r:
-    ret
 
 ; mru_mkfile - status line 2: "File: NAME (6,337 bytes) - Standard MIDI File
 ; (Type 1)"
@@ -2186,14 +2201,13 @@ mru_draw_buttons:
     push ax
     push bx
     push cx
-    mov cx, MRU_NB                  ; EVERY button the layout has - not the
-    cmp byte [mru_cmp], 0           ; group's live count, which is 0 under a
-    je .n                           ; card and would leave the row unpainted.
-    mov cx, MRU_NBC                 ; os88ui_btn draws nothing past the live
-.n:                                 ; count, so it is raised for the paint and
-    push word [mru_btrec+OS88UI_BT_N]   ; put back after: only the UI task
-    mov [mru_btrec+OS88UI_BT_N], cx     ; draws buttons, and nothing presses
-    xor ax, ax                          ; in between
+    push word [mru_btrec+OS88UI_BT_RECTS]   ; EVERY button the layout has,
+    push word [mru_btrec+OS88UI_BT_LABELS]  ; whatever the record is live
+    push word [mru_btrec+OS88UI_BT_FLAGS]   ; on: under a card it is none or
+    push word [mru_btrec+OS88UI_BT_N]       ; the dialog's pair, and the row
+    call mru_recmain                ; would go unpainted. Put back after - only
+    mov cx, [mru_btrec+OS88UI_BT_N] ; the UI task draws buttons, and nothing
+    xor ax, ax                      ; presses in between
 .b:
     cmp ax, cx
     jae .out
@@ -2203,6 +2217,9 @@ mru_draw_buttons:
     jmp short .b
 .out:
     pop word [mru_btrec+OS88UI_BT_N]
+    pop word [mru_btrec+OS88UI_BT_FLAGS]
+    pop word [mru_btrec+OS88UI_BT_LABELS]
+    pop word [mru_btrec+OS88UI_BT_RECTS]
     pop cx
     pop bx
     pop ax
@@ -2503,34 +2520,79 @@ mr_in_on:    db ' on ', 0
 mr_in_ch:    db ' channels', 0
 mr_in_notext: db '(no text in the file)', 0
 
-; --- Settings: the output, a radio group in a card ----------------------------
-    MRBUF mru_sc, 8                 ; the card's rect (screen)
-    MRBUF mru_rad, 18               ; OS88UI_RD_SIZE (asserted below)
+; =============================================================================
+; THE SETTINGS DIALOG (SPEC.md 105.9.2): the output, the synth's sample rate
+; and Play in Background, edited as COPIES (mrs_*) and committed only by OK -
+; Cancel, Esc or a second Settings leave the player exactly as it was. While
+; it is up the window's one button record points at the dialog's own pair
+; (mru_aim), the paged-window device os88ui.inc's record was built for, so a
+; press on a rack button under the card cannot reach the rack.
+; =============================================================================
+    MRBUF mru_sc, 8                 ; the dialog's rect (screen)
+    MRBUF mru_rad, 18               ; the output group
+    MRBUF mru_rad2, 18              ; the rate group
+    MRBUF mru_ck4, 12               ; Play in Background
+    MRBUF mru_crect, 16             ; OK and Cancel (screen)
+    MRBUF mru_cflg, 4
+    MRB mrs_out                     ; the dialog's copies
+    MRB mrs_rate
+    MRB mrs_bg
+    MRW mru_scp                     ; its row pitch
+    MRW mru_sch                     ; ...and its height
+    MRW mru_shy                     ; the groups' heading row
+    MRW mru_scky                    ; the check box's row
+mru_clabs:  dw mru_l_ok, mru_l_cancel
+mru_l_ok:     db 'OK', 0
+mru_l_cancel: db 'Cancel', 0
 mru_radit:  dw mru_r0, mru_r1, mru_r2, mru_r3, mru_r4
-mru_r0:     db 'Automatic (the best there is)', 0
-mru_r1:     db 'OPL3 FM, 17 voices, stereo', 0
-mru_r2:     db 'OPL2 FM (AdLib), 8 voices', 0
-mru_r3:     db 'Sound Blaster, software synth', 0
-mru_r4:     db 'PC speaker, software synth', 0
-mru_sct:    db 'Settings - Output device', 0
-mru_sch:    db 'Takes effect at the next Play.', 0
-mru_sch2:   db 'Click outside the list to close.', 0
-MRU_SCW     equ 300
-MRU_SCH     equ 132
+mru_r0:     db 'Automatic', 0
+mru_r1:     db 'OPL3 FM, 17 voices', 0
+mru_r2:     db 'OPL2 FM (AdLib), 8', 0
+mru_r3:     db 'Sound Blaster synth', 0
+mru_r4:     db 'PC speaker synth', 0
+mru_ratit:  dw mru_q0, mru_q1, mru_q2, mru_q3, mru_q4, mru_q5, mru_q6
+mru_q0:     db 'Automatic', 0
+mru_q1:     db '8,000 Hz', 0
+mru_q2:     db '11,025 Hz', 0
+mru_q3:     db '16,000 Hz', 0
+mru_q4:     db '22,050 Hz', 0
+mru_q5:     db '32,000 Hz', 0
+mru_q6:     db '44,100 Hz', 0
+mru_sct:    db 'Settings', 0
+mru_sho:    db 'Output device', 0
+mru_shr:    db 'Synth sample rate', 0
+mru_l_bgd:  db 'Speaker: play the melody in the background', 0
+mru_snote:  db 'Above 22,050 Hz needs an SB Pro or SB16. The speaker', 0
+mru_snote2: db 'reaches 24.8 kHz (8 kHz on an 8088); FM has no rate.', 0
+mru_sfnd:   db 'Found: ', 0
+mru_f_opl2: db 'OPL2  ', 0
+mru_f_opl3: db 'OPL3  ', 0
+mru_f_dsp:  db 'SB DSP  ', 0
+mru_f_hi:   db '(to 44.1 kHz)  ', 0
+mru_f_spk:  db 'PC speaker', 0
+MRU_SCW     equ 520
 
-mru_setcard:
+; mru_screct - the dialog's rect and every record in it, from the layout
+mru_screct:
     push ax
     push bx
     push cx
     push dx
-    push si
-    push di
-    call mru_screct
-    jmp mru_setdraw
-
-; mru_screct - the card's rect and its radio group's record, from the layout
-mru_screct:
-    push ax
+    mov word [mru_scp], 16
+    cmp byte [mru_cmp], 0
+    je .p
+    mov word [mru_scp], 12          ; compact: the rows close up
+.p:
+    mov ax, [mru_scp]               ; the height: the rate group's seven rows
+    mov cx, 7                       ; and the rows around it
+    mul cx
+    add ax, 6 + 11 + 12 + 2 + 14 + 6
+    cmp byte [mru_cmp], 0
+    jne .h                          ; compact: OK and Cancel ride beside the
+    add ax, 17 + 22 + 6             ; rate group (below); tall: the Found
+    add ax, [mru_bh]                ; line, the note and their own row
+.h:
+    mov [mru_sch], ax
     mov ax, [mru_cw]                ; centred, clamped to the content
     sub ax, MRU_SCW
     jns .x
@@ -2542,78 +2604,129 @@ mru_screct:
     add ax, MRU_SCW - 1
     mov [mru_sc+4], ax
     mov ax, [mru_ch]
-    sub ax, MRU_SCH
+    sub ax, [mru_sch]
     jns .y
     xor ax, ax
 .y:
     shr ax, 1
     add ax, [mru_oy]
     mov [mru_sc+2], ax
-    add ax, MRU_SCH - 1
+    add ax, [mru_sch]
+    dec ax
     mov [mru_sc+6], ax
-    call mru_radset
-    pop ax
-    ret
-
-mru_setdraw:
-    mov al, CWHITE                  ; the card's ground, then its frame
-    call OSAPI_SET_COLOR
+    mov ax, [mru_sc+2]              ; the groups' headings
+    add ax, 6 + 11
+    cmp byte [mru_cmp], 0
+    jne .hy
+    add ax, 17                      ; (under the Found line, with air)
+.hy:
+    mov [mru_shy], ax
+    add ax, 12                      ; the two groups
+    mov dx, ax
     mov ax, [mru_sc]
-    mov bx, [mru_sc+2]
+    add ax, 12
+    mov [mru_rad+OS88UI_RD_RECT], ax
+    mov [mru_rad+OS88UI_RD_RECT+2], dx
+    mov ax, [mru_sc]
+    add ax, MRU_SCW / 2 - 8
+    mov [mru_rad+OS88UI_RD_RECT+4], ax
+    mov ax, [mru_scp]
+    mov cx, 5
+    push dx
+    mul cx
+    pop dx
+    add ax, dx
+    dec ax
+    mov [mru_rad+OS88UI_RD_RECT+6], ax
+    mov ax, [mru_sc]
+    add ax, MRU_SCW / 2 + 4
+    mov [mru_rad2+OS88UI_RD_RECT], ax
+    mov [mru_rad2+OS88UI_RD_RECT+2], dx
+    mov ax, [mru_sc+4]
+    sub ax, 10
+    mov [mru_rad2+OS88UI_RD_RECT+4], ax
+    mov ax, [mru_scp]
+    mov cx, 7
+    push dx
+    mul cx
+    pop dx
+    add ax, dx
+    mov cx, ax                      ; CX = under the groups
+    dec ax
+    mov [mru_rad2+OS88UI_RD_RECT+6], ax
+    add cx, 2
+    mov [mru_scky], cx              ; the check box
+    mov ax, [mru_sc]
+    add ax, 12
+    mov [mru_ck4+OS88UI_CK_RECT], ax
+    mov [mru_ck4+OS88UI_CK_RECT+2], cx
+    add ax, 360
+    mov [mru_ck4+OS88UI_CK_RECT+4], ax
+    mov ax, cx
+    add ax, 11
+    mov [mru_ck4+OS88UI_CK_RECT+6], ax
+    mov word [mru_ck4+OS88UI_CK_LABEL], mru_l_bgd
+    mov al, [mrs_bg]
+    mov [mru_ck4+OS88UI_CK_ON], al
+    mov ax, [mru_sc+6]              ; OK and Cancel, bottom right
+    sub ax, 5
+    mov dx, ax                      ; DX = y2
+    sub ax, [mru_bh]
+    inc ax
+    mov bx, ax                      ; BX = y1
     mov cx, [mru_sc+4]
-    mov dx, [mru_sc+6]
-    call OSAPI_GFX_FILL
-    xor al, al
-    call OSAPI_SET_COLOR
-    call OSAPI_GFX_FRAME
+    sub cx, 10
+    mov [mru_crect+12], cx          ; Cancel
+    mov [mru_crect+14], dx
+    mov [mru_crect+10], bx
+    sub cx, 75
+    mov [mru_crect+8], cx
+    sub cx, 8                       ; OK, to its left
+    mov [mru_crect+4], cx
+    mov [mru_crect+6], dx
+    mov [mru_crect+2], bx
+    sub cx, 75
+    mov [mru_crect], cx
+    cmp byte [mru_cmp], 0           ; COMPACT (a CGA): the row is in the space
+    je .cdone                       ; the five-row output group leaves under
+    mov bx, [mru_rad+OS88UI_RD_RECT+6]  ; it beside the seven-row rate group,
+    add bx, 5                       ; which is what makes the dialog fit 200
+    mov dx, bx                      ; lines
+    add dx, [mru_bh]
+    dec dx
     mov cx, [mru_sc]
-    add cx, 10
-    mov dx, [mru_sc+2]
-    add dx, 7
-    mov si, mru_sct
-    mov ax, 0x0F00
-    call OSAPI_FONT_RUN
-    xor di, di
-    mov bx, mru_rad
-    call os88ui_rad
-    mov cx, [mru_sc]
-    add cx, 10
-    mov dx, [mru_sc+6]
-    sub dx, 24
-    mov si, mru_sch
-    mov ax, 0x0F00
-    call OSAPI_FONT_RUN
-    add dx, 11
-    mov si, mru_sch2
-    call OSAPI_FONT_RUN
-    pop di
-    pop si
+    add cx, 12
+    mov [mru_crect], cx
+    mov [mru_crect+2], bx
+    add cx, 74
+    mov [mru_crect+4], cx
+    mov [mru_crect+6], dx
+    add cx, 8
+    mov [mru_crect+8], cx
+    mov [mru_crect+10], bx
+    add cx, 74
+    mov [mru_crect+12], cx
+    mov [mru_crect+14], dx
+.cdone:
+    mov word [mru_cflg], OS88UI_FILL | OS88UI_DEF   ; Enter is OK
+    mov word [mru_cflg+2], OS88UI_FILL
+    call mru_radset
     pop dx
     pop cx
     pop bx
     pop ax
     ret
 
-; mru_radset - the radio group's record, from the card and the state
+; mru_radset - the two groups' records, from the dialog's copies
 mru_radset:
     push ax
-    mov ax, [mru_sc]
-    add ax, 14
-    mov [mru_rad+OS88UI_RD_RECT], ax
-    mov ax, [mru_sc+2]
-    add ax, 22
-    mov [mru_rad+OS88UI_RD_RECT+2], ax
-    add ax, 5 * 16 - 1
-    mov [mru_rad+OS88UI_RD_RECT+6], ax
-    mov ax, [mru_sc+4]
-    sub ax, 10
-    mov [mru_rad+OS88UI_RD_RECT+4], ax
     mov word [mru_rad+OS88UI_RD_ITEMS], mru_radit
     mov word [mru_rad+OS88UI_RD_N], 5
-    mov al, [mr_want]
+    mov al, [mrs_out]
     xor ah, ah
     mov [mru_rad+OS88UI_RD_SEL], ax
-    mov word [mru_rad+OS88UI_RD_PITCH], 16
+    mov ax, [mru_scp]
+    mov [mru_rad+OS88UI_RD_PITCH], ax
     xor ax, ax                      ; what this machine does not have, greyed
     cmp byte [mr_fmkind], SND_OPL3
     je .o3
@@ -2628,5 +2741,128 @@ mru_radset:
     or al, 8                        ; no DSP
 .sb:
     mov [mru_rad+OS88UI_RD_DIS], ax
+    mov word [mru_rad2+OS88UI_RD_ITEMS], mru_ratit
+    mov word [mru_rad2+OS88UI_RD_N], MR_NRATE
+    mov al, [mrs_rate]
+    xor ah, ah
+    mov [mru_rad2+OS88UI_RD_SEL], ax
+    mov ax, [mru_scp]
+    mov [mru_rad2+OS88UI_RD_PITCH], ax
+    xor ax, ax
+    cmp byte [mr_sbhi], 0           ; past 22,050 Hz: a DSP that can, or
+    jne .hi                         ; nothing - the speaker stops at 24.8k
+    mov al, 0x60
+.hi:
+    mov [mru_rad2+OS88UI_RD_DIS], ax
     pop ax
+    ret
+
+; mru_setcard - the dialog, drawn whole (last, over the content)
+mru_setcard:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call mru_screct
+    mov al, CWHITE                  ; the ground, then a double frame: a
+    call OSAPI_SET_COLOR            ; dialog, not a pane
+    mov ax, [mru_sc]
+    mov bx, [mru_sc+2]
+    mov cx, [mru_sc+4]
+    mov dx, [mru_sc+6]
+    call OSAPI_GFX_FILL
+    xor al, al
+    call OSAPI_SET_COLOR
+    call OSAPI_GFX_FRAME
+    add ax, 2
+    add bx, 2
+    sub cx, 2
+    sub dx, 2
+    call OSAPI_GFX_FRAME
+    mov cx, [mru_sc]
+    add cx, 10
+    mov dx, [mru_sc+2]
+    add dx, 7
+    mov si, mru_sct
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+    cmp byte [mru_cmp], 0
+    jne .nofound
+    call mru_found                  ; "Found: OPL2  SB DSP  PC speaker"
+    add dx, 12
+    mov si, mru_s
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+.nofound:
+    mov dx, [mru_shy]
+    mov si, mru_sho
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+    mov cx, [mru_rad2+OS88UI_RD_RECT]
+    mov si, mru_shr
+    call OSAPI_FONT_RUN
+    xor di, di
+    mov bx, mru_rad
+    call os88ui_rad
+    mov bx, mru_rad2
+    call os88ui_rad
+    mov bx, mru_ck4
+    call os88ui_chk
+    cmp byte [mru_cmp], 0
+    jne .nonote
+    mov cx, [mru_sc]
+    add cx, 12
+    mov dx, [mru_scky]
+    add dx, 16
+    mov si, mru_snote
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+    add dx, 10
+    mov si, mru_snote2
+    call OSAPI_FONT_RUN
+.nonote:
+    mov bx, mru_btrec               ; OK and Cancel: the record is the
+    mov al, 1                       ; dialog's while it is up (mru_aim)
+    call os88ui_btn
+    mov al, 2
+    call os88ui_btn
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; mru_found - "Found: OPL3  SB DSP (to 44.1 kHz)  PC speaker" into mru_s
+mru_found:
+    push si
+    push di
+    mov di, mru_s
+    mov si, mru_sfnd
+    call mru_cat
+    mov si, mru_f_opl2
+    cmp byte [mr_fmkind], SND_OPL2
+    je .fm
+    mov si, mru_f_opl3
+    cmp byte [mr_fmkind], SND_OPL3
+    jne .nofm
+.fm:
+    call mru_cat
+.nofm:
+    cmp byte [mr_hassb], 0
+    je .nosb
+    mov si, mru_f_dsp
+    call mru_cat
+    cmp byte [mr_sbhi], 0
+    je .nosb
+    mov si, mru_f_hi
+    call mru_cat
+.nosb:
+    mov si, mru_f_spk
+    call mru_cat
+    pop di
+    pop si
     ret

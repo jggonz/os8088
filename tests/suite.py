@@ -2928,6 +2928,14 @@ SOAK = [
         "negative control",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midiracksbrate", "soak", py("tests/midirack.py", "--arm", "sb",
+                                     "--rate", "2"), 60.0,
+        "MIDIRack's Settings rate reaching the card (SPEC.md 105.7.1, "
+        "105.9.2): 11,025 Hz chosen, the stream opened at it, the card "
+        "consuming it by the guest's clock, the pitch agreement and its "
+        "negative control",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/apps720.img")),
     Row("midirackspk", "soak", py("tests/midirack.py", "--arm", "spk"), 60.0,
         "MIDIRack's synth on the PC speaker, in its bracket (SPEC.md 105.7.1, "
         "105.8.3): 5.5 kHz on the 8088, the ring never under a quarter, CONS "

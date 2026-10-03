@@ -36,6 +36,16 @@ mr_onup:
     call os88ui_btnup               ; AX = what FIRED (1-based), 0 = cancelled
     or ax, ax
     jz .out
+    cmp byte [mr_card], MR_CARD_SET ; the record is the dialog's pair
+    jne .rack
+    cmp al, 1
+    jne .cancel
+    call mr_set_ok
+    jmp short .out
+.cancel:
+    call mr_set_cancel
+    jmp short .out
+.rack:
     dec ax
     call mr_button
 .out:
@@ -89,14 +99,8 @@ mr_onclick:
     jz .nocard
     cmp al, MR_CARD_SET
     jne .close                      ; About, MIDI Info: any press takes it down
-    call mru_screct
-    mov bx, mru_rad
-    call os88ui_radhit
-    jc .close                       ; outside the list: closed
-    jnz .out                        ; the pick it already had
-    mov al, [mru_rad+OS88UI_RD_SEL]
-    mov [mr_want], al
-    jmp .out
+    call mr_setclick                ; THE DIALOG IS MODAL: its controls, and a
+    jmp .out                        ; press anywhere else is nothing
 .close:
     mov byte [mr_card], 0
     call mru_repaint
@@ -116,6 +120,7 @@ mr_onclick:
     jc .c2
     mov al, [mru_ck1+OS88UI_CK_ON]
     mov [mr_levels], al
+    mov byte [mr_cfgdirty], 1
     call mr_levels_redraw
     jmp .out
 .c2:
@@ -124,6 +129,7 @@ mr_onclick:
     jc .c3
     mov al, [mru_ck2+OS88UI_CK_ON]
     mov [mr_loop], al
+    mov byte [mr_cfgdirty], 1
     call mru_refresh
     jmp .out
 .c3:
@@ -134,6 +140,7 @@ mr_onclick:
     jc .nock
     mov al, [mru_ck3+OS88UI_CK_ON]
     mov [mr_bg], al
+    mov byte [mr_cfgdirty], 1
     call mru_refresh
     jmp .out
 .nock:
@@ -304,6 +311,18 @@ mr_isspk:
 mr_onkey:                           ; AL = ascii, AH = scancode
     push ax
     push bx
+    cmp byte [mr_card], MR_CARD_SET ; the dialog: Enter is OK, Esc is
+    jne .notset                     ; Cancel, and nothing else reaches the
+    cmp al, 0x0D                    ; player under it
+    jne .nok
+    call mr_set_ok
+    jmp .out
+.nok:
+    cmp al, 0x1B
+    jne .out
+    call mr_set_cancel
+    jmp .out
+.notset:
     cmp byte [mr_card], 0
     je .nocard
     mov byte [mr_card], 0           ; any key takes a card down
@@ -463,6 +482,7 @@ mr_oncmd:                           ; AL = item, AH = menu
     cmp al, MR_CMD_LEV
     jne .o3
     xor byte [mr_levels], 1
+    mov byte [mr_cfgdirty], 1
     call mr_levels_redraw
     call mru_refresh
     jmp .out
@@ -472,6 +492,7 @@ mr_oncmd:                           ; AL = item, AH = menu
     call mr_isspk
     jnc .out                        ; (only the speaker has a background)
     xor byte [mr_bg], 1
+    mov byte [mr_cfgdirty], 1
     call mru_repaint
     jmp .out
 .o4:
@@ -597,6 +618,7 @@ mr_cmd_eject:
 
 mr_cmd_loop:
     xor byte [mr_loop], 1
+    mov byte [mr_cfgdirty], 1
     call mru_refresh
     ret
 
@@ -659,8 +681,264 @@ mr_dlg:
     ret
 
 mr_cmd_settings:
+    push ax
+    mov al, [mr_want]               ; the dialog edits COPIES: OK commits
+    mov [mrs_out], al
+    mov al, [mr_rate]
+    mov [mrs_rate], al
+    mov al, [mr_bg]
+    mov [mrs_bg], al
+    pop ax
     mov byte [mr_card], MR_CARD_SET
     call mru_repaint
+    ret
+
+; -----------------------------------------------------------------------------
+; mr_setclick - a press on the Settings dialog (CX, DX screen): a pick in
+; either group or the check box - each control redraws itself - or nothing
+; -----------------------------------------------------------------------------
+mr_setclick:
+    push ax
+    push bx
+    call mru_screct
+    mov bx, mru_rad
+    call os88ui_radhit
+    jc .r2
+    jnz .out
+    mov al, [mru_rad+OS88UI_RD_SEL]
+    mov [mrs_out], al
+    jmp short .out
+.r2:
+    mov bx, mru_rad2
+    call os88ui_radhit
+    jc .ck
+    jnz .out
+    mov al, [mru_rad2+OS88UI_RD_SEL]
+    mov [mrs_rate], al
+    jmp short .out
+.ck:
+    mov bx, mru_ck4
+    call os88ui_chkhit
+    jc .out
+    mov al, [mru_ck4+OS88UI_CK_ON]
+    mov [mrs_bg], al
+.out:
+    pop bx
+    pop ax
+    ret
+
+; mr_set_cancel - the dialog down, nothing changed
+mr_set_cancel:
+    mov byte [mr_card], 0
+    call mru_repaint
+    ret
+
+; -----------------------------------------------------------------------------
+; mr_set_ok - the dialog's copies committed and kept (MIDIRACK.CFG), and a
+; song that is playing or paused RESTARTED on what was chosen, so a change is
+; heard at once rather than at the next Play
+; -----------------------------------------------------------------------------
+mr_set_ok:
+    push ax
+    push bx
+    xor bl, bl                      ; BL = did the output or the rate move?
+    mov al, [mrs_out]
+    cmp al, [mr_want]
+    je .o
+    inc bl
+.o:
+    mov [mr_want], al
+    mov al, [mrs_rate]
+    cmp al, [mr_rate]
+    je .r
+    inc bl
+.r:
+    mov [mr_rate], al
+    mov al, [mrs_bg]
+    cmp al, [mr_bg]
+    je .b
+    inc bl
+.b:
+    mov [mr_bg], al
+    mov byte [mr_card], 0
+    or bl, bl
+    jz .same
+    call mr_cfg_save
+    cmp byte [mr_state], MR_ST_STOP
+    je .same
+    call mr_play_sel                ; the song again, on the new choice
+    jmp short .out
+.same:
+    call mru_repaint
+.out:
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; THE SETTINGS, KEPT (SPEC.md 105.9.2): MIDIRACK.CFG in SYSTEM\APPDATA on our
+; own volume (SPEC.md 19.9) - the output, the rate, and the three check boxes.
+; Read once at the first wake; written when the dialog commits a change and
+; at the close when a check box moved. A file that is not ours (the magic) is
+; ignored and one that is is CLAMPED, never refused (apps/pixelstein's
+; pxset.inc, whose shape this is). A disk without the folder simply keeps
+; nothing, which is a user's own disk and not an error
+; =============================================================================
+MR_CFGN     equ 4 + 5
+mr_cfg_file:  db 'MIDIRACK.CFG', 0
+mr_cfg_magic: db 'MRC', 1
+mr_s_system:  db 'SYSTEM', 0
+mr_s_appdat:  db 'APPDATA', 0
+    MRBUF mr_cfgbuf, 16
+    MRW mr_cfghd                    ; where we were standing
+    MRB mr_cfghv
+
+; mr_cfg_enter - into SYSTEM\APPDATA on our volume; CF = 1 there is none
+mr_cfg_enter:
+    push bx
+    push dx
+    push si
+    call OSAPI_FILE_HERE
+    mov [mr_cfghd], dx
+    mov [mr_cfghv], bl
+    call mrl_root
+    mov si, mr_s_system
+    call mrl_enter
+    jc .back
+    mov si, mr_s_appdat
+    call mrl_enter
+    jc .back
+    pop si
+    pop dx
+    pop bx
+    clc
+    ret
+.back:
+    call mr_cfg_leave
+    pop si
+    pop dx
+    pop bx
+    stc
+    ret
+
+; mr_cfg_leave - back where mr_cfg_enter found us. Preserves every register
+; and the flags
+mr_cfg_leave:
+    pushf
+    push ax                         ; (GOTO_QM answers in AX, and the read's
+    push bx                         ; size is still in it)
+    push dx
+    mov dx, [mr_cfghd]
+    mov bl, [mr_cfghv]
+    call OSAPI_FILE_GOTO_QM
+    pop dx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; mr_cfg_load - the kept settings, if there are any
+mr_cfg_load:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    call mr_cfg_enter
+    jc .out
+    push ds
+    pop es
+    mov si, mr_cfg_file
+    mov bx, mr_cfgbuf
+    mov cx, 16
+    xor dx, dx
+    call OSAPI_FILE_READ            ; DX:AX = its size
+    call mr_cfg_leave
+    jc .out
+    or dx, dx
+    jnz .out
+    cmp ax, MR_CFGN
+    jne .out
+    mov ax, [mr_cfgbuf]
+    cmp ax, [mr_cfg_magic]
+    jne .out
+    mov ax, [mr_cfgbuf+2]
+    cmp ax, [mr_cfg_magic+2]
+    jne .out
+    mov al, [mr_cfgbuf+4]           ; each byte clamped to what it may hold
+    cmp al, MR_OUT_SPK
+    jbe .w
+    xor al, al
+.w:
+    mov [mr_want], al
+    mov al, [mr_cfgbuf+5]
+    cmp al, MR_NRATE
+    jb .rt
+    xor al, al
+.rt:
+    mov [mr_rate], al
+    mov al, [mr_cfgbuf+6]
+    and al, 1
+    mov [mr_bg], al
+    mov al, [mr_cfgbuf+7]
+    and al, 1
+    mov [mr_loop], al
+    mov al, [mr_cfgbuf+8]
+    and al, 1
+    mov [mr_levels], al
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; mr_cfg_save - the settings written; [mr_cfgdirty] cleared only when the
+; write LANDED (pxset.inc's review lesson)
+mr_cfg_save:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov byte [mr_cfgdirty], 1
+    mov ax, [mr_cfg_magic]
+    mov [mr_cfgbuf], ax
+    mov ax, [mr_cfg_magic+2]
+    mov [mr_cfgbuf+2], ax
+    mov al, [mr_want]
+    mov [mr_cfgbuf+4], al
+    mov al, [mr_rate]
+    mov [mr_cfgbuf+5], al
+    mov al, [mr_bg]
+    mov [mr_cfgbuf+6], al
+    mov al, [mr_loop]
+    mov [mr_cfgbuf+7], al
+    mov al, [mr_levels]
+    mov [mr_cfgbuf+8], al
+    call mr_cfg_enter
+    jc .out
+    push ds
+    pop es
+    mov si, mr_cfg_file
+    mov bx, mr_cfgbuf
+    mov cx, MR_CFGN
+    xor dx, dx
+    call OSAPI_FILE_WRITE
+    call mr_cfg_leave
+    jc .out
+    mov byte [mr_cfgdirty], 0
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 mr_cmd_info:
@@ -700,6 +978,7 @@ mr_onwake:
     je .nofirst
     mov byte [mr_first_paint], 0
     call OSAPI_GFX_LOCK
+    call mr_cfg_load                ; the settings kept from the last session
     cmp byte [mr_arg_pending], 0    ; the document we were launched on, or
     je .auto                        ; the songs that ship
     mov byte [mr_arg_pending], 0
@@ -823,6 +1102,10 @@ mr_songend:
 ; =============================================================================
 mr_onclose:                         ; SI = the window; gfx lock held
     call mro_close
+    cmp byte [mr_cfgdirty], 0       ; a check box moved since the file
+    je .kept
+    call mr_cfg_save
+.kept:
     call mro_free
     push dx
     mov dx, [mr_fseg]

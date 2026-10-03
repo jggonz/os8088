@@ -123,6 +123,10 @@ MR_FILEMAX  equ 63                  ; KB: the largest file taken whole
     MRB mr_cpu                      ; CPU_8086 / 286 / 386
     MRB mr_fmkind                   ; 0 none / SND_OPL2 / SND_OPL3 (at entry)
     MRB mr_hassb                    ; SND_CAP_PCM_BG at entry
+    MRB mr_sbhi                     ; ...and SND_CAP_PCM_HI: rates past 22 kHz
+    MRB mr_rate                     ; the synth's rate: an index into mr_rates,
+                                    ; 0 = Automatic (Settings, SPEC.md 105.9.2)
+    MRB mr_cfgdirty                 ; a setting moved since MIDIRACK.CFG
     MRBUF mr_snap, 2                ; (scratch)
 
 ; =============================================================================
@@ -137,6 +141,10 @@ mr_entry:
     jz .nosb
     mov byte [mr_hassb], 1
 .nosb:
+    test ax, SND_CAP_PCM_HI
+    jz .nohi
+    mov byte [mr_sbhi], 1
+.nohi:
     test ax, SND_CAP_FM
     jz .nofm
     mov al, SND_FM_INFO             ; which chip (claims nothing)

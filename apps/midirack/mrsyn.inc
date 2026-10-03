@@ -33,7 +33,10 @@ MRY_SPAN    equ 128                 ; samples a span
 MRY_SPANF   equ MRY_SPAN * 128      ; ...in 1/128 sample
 MRY_MAXV    equ 8
 MRY_AMAX    equ 120                 ; one voice's peak, of the level's 1023
-MRY_LMAX    equ 24576               ; the longest half-period: 192 samples
+MRY_LMAX    equ 49024               ; the longest half-period: 383 samples -
+                                    ; MRY_SPANF + this must fit a word (an edge
+                                    ; is at most one half past the span), and
+                                    ; at 44.1 kHz that is down to 57 Hz
 MRY_LMIN    equ 160                 ; ...and the shortest: past ~Nyquist, mute
 
     MRW mry_rate                    ; the sample rate the pitches are for
@@ -482,6 +485,8 @@ mry_drift:
     add [mry_l1+bx], ax
     cmp word [mry_l0+bx], MRY_LMAX
     jbe .out
+    mov word [mry_l0+bx], MRY_LMAX  ; held at the longest: one past it would
+    mov word [mry_l1+bx], MRY_LMAX  ; let an edge pass the word
     mov word [mry_slide+bx], 0
 .out:
     pop bx
@@ -752,42 +757,38 @@ mry_tune:
     rcr ax, 1
     loop .sh
 .sh0:
-.fit:
-    or dx, dx                       ; P must fit a word, and each half
-    jnz .up                         ; under MRY_LMAX
-    mov cl, [mry_duty+bx]
-    mov di, ax                      ; DI = P
-    shr ax, 1                       ; 50%: P/2 and P/2
-    or cl, cl
-    jz .halves
-    shr ax, 1                       ; 25%: P/4
-    cmp cl, 1
-    je .halves
-    shr ax, 1                       ; 12.5%: P/8
-.halves:
-    sub di, ax                      ; DI = the long half
-    cmp di, MRY_LMAX
-    ja .upp
-    cmp ax, MRY_LMIN / 2
-    jb .mute
+.fit:                               ; DX:AX = P, 32 bits: the short half is
+    mov cl, [mry_duty+bx]           ; P >> (duty + 1), the long one the rest,
+    inc cl                          ; and the long one must fit MRY_LMAX
+    mov si, ax
+    mov di, dx                      ; DI:SI = P...
+.s:
+    shr di, 1
+    rcr si, 1
+    dec cl
+    jnz .s                          ; ...>> (duty + 1): the short half
+    push ax
+    push dx
+    sub ax, si
+    sbb dx, di                      ; DX:AX = the long half
+    jnz .long
+    cmp ax, MRY_LMAX
+    ja .long
+    mov cx, ax                      ; CX = the long half
+    pop dx
+    pop ax
+    cmp si, MRY_LMIN / 2
+    jb .mute                        ; (DI is 0: short <= long <= LMAX)
     push bx
     shl bx, 1
-    mov [mry_l0+bx], ax             ; high for the short half (the duty)
-    mov [mry_l1+bx], di
+    mov [mry_l0+bx], si             ; high for the short half (the duty)
+    mov [mry_l1+bx], cx
     pop bx
     jmp short .out
-.upp:
-    shl ax, 1                       ; undo the split: P again in DX:AX
-    or cl, cl
-    jz .u0
-    shl ax, 1
-    cmp cl, 1
-    je .u0
-    shl ax, 1
-.u0:
-    xor dx, dx
-.up:
-    shr dx, 1                       ; an octave up
+.long:
+    pop dx
+    pop ax
+    shr dx, 1                       ; too long: an octave up
     rcr ax, 1
     jmp short .fit
 .mute:
@@ -945,4 +946,8 @@ mry_hush:
 
 %if MRY_MAXV * MRY_AMAX > 1023
   %error "mry_mix reads its table unmasked: the voices' sum must stay inside it"
+%endif
+
+%if MRY_SPANF + MRY_LMAX > 65535
+  %error "an edge one half past the span must still fit a word"
 %endif

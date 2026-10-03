@@ -15,7 +15,8 @@ on what came out of the machine:
         105.6.2): the chip claimed, voices keyed, and the capture's strongest
         pitch class in each half second one the REFERENCE SEQUENCER
         (tools/os88midi.py) has sounding then
-  sb    the SB profile, the DSP synth: the stream open (a grant ring - this
+  sb    the SB profile, the DSP synth (--rate N: at the rate Settings would
+        choose, an index into mr_rates - the row takes 11,025 Hz): the stream open (a grant ring - this
         DSP has no auto-init, SPEC.md 105.8.4), no underrun after the first,
         the stream advancing at its rate, and the same pitch-class agreement
   spk   no card, the speaker in its bracket at 5.5 kHz: the ring kept at
@@ -169,6 +170,8 @@ def session(arm, cap, brk):
                                                                   OUT_SPK)]))
         if arm == "tone":
             p.put("mr_bg", b"\x01")
+        if RATE:
+            p.put("mr_rate", bytes([RATE]))     # Settings' rate, by index
         ui.menu_pick("Play", "Play")
         want = {"fm": MRO_FM, "sb": MRO_SB, "spk": MRO_SPK, "tone": MRO_TONE}
         M.until(ui.m, lambda _: p.b("mr_out") == want[arm], "the output open",
@@ -206,7 +209,7 @@ def arm_sb(ui, p):
     def cons():
         if p.b("mrb_grant"):
             return p.w("mrb_gcons")
-        b = ui.m.readseg(p.w("mrb_seg"), 8192 + 2, 2)
+        b = ui.m.readseg(p.w("mrb_seg"), 16384 + 2, 2)
         return b[0] | b[1] << 8
     M.guest_sleep(ui.m, 1.0)
     c0, k0 = cons(), bios(ui.m)
@@ -218,6 +221,9 @@ def arm_sb(ui, p):
         c0 = c1
     secs = ((bios(ui.m) - k0) & 0xFFFF) / 18.2065    # the guest's own clock
     rate = p.w("mrb_rate")
+    if RATE and rate != RATES[RATE]:
+        fail("SB: the card was opened at %d Hz, Settings chose %d"
+             % (rate, RATES[RATE]))
     if p.b("mrb_open") != 1:
         fail("SB: the stream is not open (verb 0 said %d)" % p.b("mrb_err"))
     if p.w("mrb_unders") > 1:
@@ -302,12 +308,20 @@ def arm_end(ui, p):
     return None
 
 
+RATES = [0, 8000, 11025, 16000, 22050, 32000, 44100]   # mr_rates (mrout.inc)
+RATE = 0
+
+
 def main():
+    global RATE
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True, choices=sorted(ARMS))
+    ap.add_argument("--rate", type=int, default=0,
+                    help="Settings' rate, an index into mr_rates (sb arm)")
     ap.add_argument("--break", dest="brk", action="store_true",
                     help="transpose the reference a tritone: must FAIL")
     a = ap.parse_args()
+    RATE = a.rate
     machine, src = ARMS[a.arm]
     with tempfile.TemporaryDirectory() as d:
         cap = os.path.join(d, "cap")

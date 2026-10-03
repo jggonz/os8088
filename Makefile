@@ -11884,8 +11884,8 @@ $(ZDATA)/BEVERLY.MOD: apps/tracker/beverly.mod tools/os88lz.py $(PKGZSTAMP) | $(
 # (SPEC.md 20.14.3), and ten songs go from 46 clusters to 27.
 #
 # THE 720KB DISK CARRIES TWO (SPEC.md 105.10, 24.6.1's rule, 2026-10-02): it
-# had 36 clusters spare, the player is 23 of them, and BATTLE1 and INTRO - the
-# mock-up's song and the title theme - are 7, which leaves it 6. With DEMO as
+# had 36 clusters spare, the player is 24 of them, and BATTLE1 and INTRO - the
+# mock-up's song and the title theme - are 7, which leaves it 5. With DEMO as
 # well it was 709 of 713, and a disk that is exactly full is one the next
 # byte breaks.
 MIDISONGS_SRC := $(sort $(wildcard apps/midirack/songs/*.MID))
