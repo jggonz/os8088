@@ -471,11 +471,16 @@ def corpus():
     return [c for c in out if c is not None]
 
 
-# fixtures of one content and one emission order (bottom-up / top-down)
+# fixtures of one content. The cube's ordered dither (SPEC.md 106.8) is a
+# function of a pixel and its MASTER row, not of the order rows arrive in, so
+# a bottom-up file and a top-down one agree too - eleven readers of one
+# truecolour picture, one master. (B16BF.BMP is 5:6:5, a different picture
+# at eight bits a channel: Floyd-Steinberg used to round it onto 5:5:5's
+# master by luck, and an ordered dither is not obliged to.)
 AGREE = [
-    ("B24.BMP", "B32.BMP", "B32V4.BMP", "T2_32.TGA"),
-    ("B24TD.BMP", "C24.PCX", "T2_24.TGA", "N3.PPM", "N6.PPM", "N6W.PPM"),
-    ("B16.BMP", "B16BF.BMP", "T2_16.TGA"),
+    ("B24.BMP", "B32.BMP", "B32V4.BMP", "T2_32.TGA", "B24TD.BMP", "C24.PCX",
+     "T2_24.TGA", "N3.PPM", "N6.PPM", "N6W.PPM"),
+    ("B16.BMP", "T2_16.TGA"),
     ("N5.PGM", "T3.TGA"),
     ("N1.PBM", "N4.PBM"),
     ("C4.PCX", "X.PIX"),
@@ -515,8 +520,8 @@ def main():
             elif p is not None:
                 P.emit(p, 0)
         # two readings of one picture are one master: every truecolour
-        # fixture of the same content and the same emission order, through
-        # five different decoders, must quantise to the same bytes
+        # fixture of the same content, through five different decoders and
+        # both emission orders, must quantise to the same bytes
         got = {}
         for name, data, want in cs:
             if not want:

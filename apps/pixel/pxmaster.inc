@@ -3,10 +3,10 @@
 ;
 ; PiXEL's IMAGE MODEL (SPEC.md 106.8): the master, its palette and its mode,
 ; the scale memory decides, the claims that hold them, and the ONE row
-; emitter - box filter, Floyd-Steinberg into the cube, the write - which is
-; the only code in PiXEL that writes the master. tools/pixelsim.py's `emit`
-; and `Quant` are this file in Python, and tests/pxdecode.py holds the two to
-; the byte.
+; emitter - box filter, the ordered dither into the cube, the write - which
+; is the only code in PiXEL that writes the master. tools/pixelsim.py's
+; `emit` and `Ordered` are this file in Python, and tests/pxdecode.py holds
+; the two to the byte.
 ;
 ; The emitter and everything it calls run on the WORKER (SPEC.md 106.9): no
 ; file slot, no claim, no drawing. They read [px_cur + PXR_MSEG] afresh at
@@ -55,10 +55,6 @@ PK_RLE4     equ 3
 PK_BITF     equ 4
 
 PX_DIMMAX   equ 8192                ; refused above, before any arithmetic
-PX_QWMAX    equ 6144                ; an RGB source wider than this at 1/1
-                                    ; takes 1/2: its row, its three error
-                                    ; rows and the quantiser's tables then
-                                    ; share one segment (3w + 6(w+2) + 5 KB)
 PX_RESKB    equ 8                   ; what the master leaves of the largest run
 
 ; =============================================================================
@@ -223,6 +219,19 @@ px_setpal:
     add al, 51
     cmp al, 51 * 5
     jb .cgr
+    xor bx, bx                      ; the NEUTRAL codes are those greys too
+    mov al, 51                      ; (SPEC.md 106.8)
+.cn:
+    mov di, [px_neut + bx]
+    add di, px_pal
+    stosb
+    stosb
+    stosb
+    add al, 51
+    inc bx
+    inc bx
+    cmp bx, 8
+    jb .cn
     jmp short .out
 .grey:
     mov di, px_pal
@@ -247,8 +256,8 @@ px_setpal:
 ; =============================================================================
 
 ; px_mkb - for scale CL: AX = the master's KB at it, [px_tmw]/[px_tmh] its
-; size; CF = 1 when the scale is not usable (a side would be 0, or an RGB
-; row too wide for one segment at 1/1). Preserves all but AX
+; size; CF = 1 when the scale is not usable (a side would be 0). Preserves
+; all but AX
 px_mkb:
     push bx
     push cx
@@ -262,15 +271,8 @@ px_mkb:
     or ax, ax
     jz .no
     or bx, bx
-    jz .no
-    or cl, cl                       ; 1/1 truecolour: the row and its error row
-    jnz .ok                         ; must share a segment (PX_QWMAX)
-    cmp byte [px_cur + PXR_RF], RF_RGB
-    jne .ok
-    cmp ax, PX_QWMAX
-    ja .no
-.ok:
-    mul bx                          ; DX:AX = the bytes
+    jz .no                          ; (any width's row shares one segment with
+    mul bx                          ; the quantiser's 12 KB: 3 x 8,192 + 12 KB)                          ; DX:AX = the bytes
     add ax, 1023
     adc dx, 0
     mov cx, 10                      ; ...in KB, up
@@ -291,11 +293,10 @@ px_mkb:
     ret
 
 ; px_wkb - the WORK claim's KB for scale CL at [px_tmw] (SPEC.md 106.9): the
-; row buffer (with the error row behind it when the cube is the target),
-; the accumulators below 1/1, a PCX line, the tables. Sets the sub-buffers'
-; offsets - [px_woerr] in bytes, [px_wo_acc] [px_wo_lin] [px_wo_lut] in
-; paragraphs - and [px_tquant]. AX = KB; CF = 1 the row and its error row
-; would not share one segment. Preserves all but AX
+; quantiser's pages, the row buffer, the accumulators below 1/1, a PCX line,
+; a KB of the decoder's tables. Sets the sub-buffers' offsets - [px_wo_acc]
+; [px_wo_lin] [px_wo_lut] in paragraphs from the row - and [px_tquant].
+; AX = KB; CF = 1 too large. Preserves all but AX
 px_wkb:
     push bx
     push cx
@@ -321,18 +322,6 @@ px_wkb:
     je .noq
 .q:
     mov byte [px_tquant], 1
-    add ax, 15                      ; ...so the error rows follow, three of
-    jc .big                         ; mw + 2 words, and then the tables
-    and ax, 0xFFF0
-    mov [px_woerr], ax
-    mov bx, [px_tmw]
-    add bx, 2
-    mov dx, bx
-    shl bx, 1
-    add bx, dx
-    shl bx, 1                       ; 6 (mw + 2)
-    add ax, bx
-    jc .big
 .noq:
     add ax, 15
     jc .big
@@ -363,7 +352,7 @@ px_wkb:
     shr ax, cl
     add dx, ax
     mov [px_wo_lut], dx             ; THE TABLES: a KB, and the quantiser's
-    add dx, 1024 / 16 + 1 + QT_SIZE / 16
+    add dx, 1024 / 16 + 1 + QT_SIZE / 16    ; pages below the row
     mov ax, dx
     add ax, 63
     mov cl, 6
@@ -563,6 +552,7 @@ px_emit:
     or cl, cl
     jnz .scaled
     mov ax, bx                      ; --- 1/1: this row IS master row y
+    mov [px_qrow], ax               ; (the dither's phase)
     call px_mrow                    ; ES:DI = it
     call px_emitrow
     jmp short .wrote
@@ -585,6 +575,7 @@ px_emit:
     call px_accavg                  ; the averages, back into the row buffer
     mov ax, bx
     shr ax, cl                      ; the block's master row
+    mov [px_qrow], ax
     call px_mrow
     call px_emitrow
 .wrote:
@@ -789,249 +780,127 @@ px_accavg:
     ret
 
 ; =============================================================================
-; px_quant - FLOYD-STEINBERG INTO THE CUBE, one row of error (SPEC.md 106.8):
-; the row buffer's mw triples into ES:DI, mw indices.
+; px_quant - THE CUBE BY ORDERED DITHER (SPEC.md 106.8): the row buffer's mw
+; triples into ES:DI, mw indices, for master row [px_qrow].
 ;
-; IT IS THREE PASSES, ONE A CHANNEL, and that is the whole of its speed: one
-; channel's error is a function of that channel alone, so a pass keeps its
-; whole state in registers - the pending sums p0 and p1 in DX and BP, the
-; carry folded straight into the slot it is owed to - and every per-value
-; quantity (the level, its share of the index, e, 3e, 5e, 7e) is ONE table
-; lookup by 2v. The one coupling, a NEUTRAL's grey, needs all three levels,
-; so the passes run B, R, G: B leaves its level in its byte, R leaves 42 qr +
-; qb in its byte, and G finds the cube index there, recognises the four
-; neutral indices (49, 98, 153, 202 - the only codes of (k, GNEUT[k], k))
-; and only then takes its own error against 51k instead of its level's. That
-; is pixelsim's Quant exactly: the same sums in the same order, the same
-; floor shift, and G's error the one a neutral changes. The G bytes then
-; hold the indices and one more pass copies them out.
+; A 16x16 BLUE-NOISE matrix cut to sixteen classes, ONE threshold a pixel
+; shared by its three channels, so a channel's part of the index - 42 qr,
+; 6 qg or qb, q = (n v + T16[class]) div 255 - is one `xlatb` into a page of
+; 256 built per decode, and a pixel is three lookups and two adds. The 48
+; pages (sixteen classes, three channels in the ROW's byte order, [px_bgr])
+; sit at the work claim's base, under the row, so DS:BX is a page and DS:SI
+; the row and `xlatb` needs no prefix. tools/pixelsim.py's `Ordered` is this
+; loop in Python, and SPEC.md 106.8 is why it replaced Floyd-Steinberg: the
+; same look through the window's dither, at about a tenth of the 1,361
+; cycles a pixel the three error passes cost.
 ;
-; THE WORK SEGMENT ([px_wseg]) holds the row, the three channels' error rows
-; at [px_woerr] ((mw + 2) words each: slot x + 1 is what pixel x of THIS row
-; is owed, slot x is overwritten with what pixel x - 1 of the NEXT is), and
-; the two kinds of table at the CLAIM's base, [px_wbase]:0, below the row
-; (px_qtabs), so a lookup is [2v]. [px_bgr] = 1: the row is
-; B, G, R (a BMP's own order, read without a swap). Preserves ES
+; THE UNROLLED LOOP IS PATCHED, sixteen `mov bh, imm8` immediates a row: a
+; column's class is its matrix row's, and nothing cheaper than an immediate
+; can put an arbitrary page in BH (an `inc bh` only walks pages in order).
+; The patching runs here, a routine call and hundreds of instructions before
+; the loop is fetched, so no stale byte can sit in the 4-byte prefetch queue
+; (apps/tracker/trkplay.inc's mixer is the precedent). The loop is ENTERED
+; part-way, Duff's way, at slot (16 - mw % 16) % 16, with the immediates
+; rotated to match, so no pixel tests a count. Preserves ES
 ; =============================================================================
-QT_T1       equ 0                   ; per kind (6 levels, then 7): word tables
-QT_T3       equ 512                 ; by 2v - e, 3e, 5e, 7e - and the parts
-QT_T5       equ 1024
-QT_T7       equ 1536
-QT_PART     equ 2048                ; 6-level: lo 42q (R's), hi q (B's);
-                                    ; 7-level: lo 6q (G's)
-QT_KIND     equ 2560                ; bytes from one kind's tables to the next
-QT_SIZE     equ 2 * QT_KIND
+QT_SIZE     equ 48 * 256            ; the pages, then the row
 
-; PXQ_PASS chan, kind, parthi, other - one channel's pass. chan = the
-; channel's byte in a triple, kind = 0 (six levels) or 1 (seven), parthi =
-; 0 low byte of the part / 1 high byte, other = the offset (from this
-; channel's byte) of the byte to add to the part, or none
-%macro PXQ_PASS 4
-    mov si, QT_SIZE + %1            ; SI = the channel's first byte
-    mov di, [cs:px_woerr]           ; DI = its error row's slot 0
-    add di, [cs:px_qerrc]
-    add di, QT_SIZE
-    mov cx, [cs:px_cur + PXR_MW]
-    xor dx, dx                      ; p0
-    xor bp, bp                      ; p1
-    jmp short %%px
-%%lo:
-    xor ax, ax
-    jmp short %%in
-%%hi:
-    mov ax, 255
-    jmp short %%in
-%%px:
-    mov ax, [di + 2]                ; owed to this pixel, the carry in it
-    sar ax, 1
-    sar ax, 1
-    sar ax, 1
-    sar ax, 1
-    add al, [si]                    ; v = c + (owed >> 4)
-    adc ah, 0
-    js %%lo
-    or ah, ah
-    jnz %%hi
-%%in:
-    mov bx, ax
-    shl bx, 1                       ; BX = 2v: the tables are at DS:0
-    mov al, [bx + %2 * QT_KIND + QT_PART + %3] ; this channel's part...
-  %ifnidn %4, none
-    add al, [si + %4]               ; ...and what the earlier pass left
-  %endif
-    mov [si], al
-    mov ax, [bx + %2 * QT_KIND + QT_T7]
-    add [di + 4], ax                ; 7e: right, into the next pixel's slot
-    mov ax, [bx + %2 * QT_KIND + QT_T3]
-    add ax, bp
-    mov [di], ax                    ; slot x := p1 + 3e
-    mov bp, [bx + %2 * QT_KIND + QT_T5]
-    add bp, dx                      ; p1 := p0 + 5e
-    mov dx, [bx + %2 * QT_KIND + QT_T1] ; p0 := e
-    add si, 3
-    inc di
-    inc di
-    dec cx
-    jnz %%px
-    mov [di], bp                    ; slot mw := the last pixel's p1
-%endmacro
-
-; PXQ_GPASS chan, rofs - G's pass: as PXQ_PASS with seven levels, the R
-; byte's 42 qr + qb at rofs added in to make the index - and a NEUTRAL index
-; (49, 98, 153, 202) put right: grey 251 + k, and G's own error taken
-; against 51k
-%macro PXQ_GPASS 2
-    mov si, QT_SIZE + %1
-    mov di, [cs:px_woerr]
-    add di, [cs:px_qerrc]
-    add di, QT_SIZE
-    mov cx, [cs:px_cur + PXR_MW]
-    xor dx, dx
-    xor bp, bp
-    jmp short %%px
-%%lo:
-    xor ax, ax
-    jmp short %%in
-%%hi:
-    mov ax, 255
-    jmp short %%in
-%%px:
-    mov ax, [di + 2]
-    sar ax, 1
-    sar ax, 1
-    sar ax, 1
-    sar ax, 1
-    add al, [si]
-    adc ah, 0
-    js %%lo
-    or ah, ah
-    jnz %%hi
-%%in:
-    mov bx, ax
-    shl bx, 1
-    mov [cs:px_qvg], ax             ; (v, should it be a neutral)
-    mov al, [bx + QT_KIND + QT_PART]
-    add al, [si + %2]               ; the cube's index
-    cmp al, 49
-    jb %%cube
-    je %%n1
-    cmp al, 98
-    je %%n2
-    cmp al, 153
-    je %%n3
-    cmp al, 202
-    je %%n4
-%%cube:
-    mov [si], al
-    mov ax, [bx + QT_KIND + QT_T7]
-    add [di + 4], ax
-    mov ax, [bx + QT_KIND + QT_T3]
-    add ax, bp
-    mov [di], ax
-    mov bp, [bx + QT_KIND + QT_T5]
-    add bp, dx
-    mov dx, [bx + QT_KIND + QT_T1]
-%%next:
-    add si, 3
-    inc di
-    inc di
-    dec cx
-    jz %%end
-    jmp %%px
-%%n1:
-    mov ah, 51
-    mov al, 252
-    jmp short %%neut
-%%n2:
-    mov ah, 102
-    mov al, 253
-    jmp short %%neut
-%%n3:
-    mov ah, 153
-    mov al, 254
-    jmp short %%neut
-%%n4:
-    mov ah, 204
-    mov al, 255
-%%neut:                             ; G's error against the grey: arithmetic,
-    mov [si], al                    ; not the tables (four codes in 252)
-    mov bl, ah
-    mov ax, [cs:px_qvg]             ; AX = v
-    xor bh, bh
-    sub ax, bx                      ; e
-    mov bx, ax
-    shl bx, 1
-    shl bx, 1
-    shl bx, 1
-    sub bx, ax                      ; 7e
-    add [di + 4], bx
-    mov bx, ax
-    shl bx, 1
-    add bx, ax                      ; 3e
-    add bx, bp
-    mov [di], bx
-    mov bp, ax
-    shl bp, 1
-    shl bp, 1
-    add bp, ax                      ; 5e
-    add bp, dx
-    mov dx, ax
-    jmp short %%next
-%%end:
-    mov [di], bp
+%macro PXQ_SLOT 1
+.qs%1:
+    mov bh, 0                       ; PATCHED: this column's class x 3
+    lodsb                           ; the row's first channel...
+    xlatb
+    mov ah, al
+    inc bh
+    lodsb                           ; ...G...
+    xlatb
+    add ah, al
+    inc bh
+    lodsb                           ; ...and the third
+    xlatb
+    add al, ah                      ; the cube's index
+    stosb
 %endmacro
 
 px_quant:
+    ; STKBALANCE-OK: the `jmp dx` below is Duff's entry into the unrolled
+    ; loop (a slot of this routine's own, from px_qslots), not a tail call:
+    ; every slot runs on to the same `.done` that pops the two words pushed
+    ; here. No static walk can follow a computed jump into the middle of a
+    ; routine, so the balance is this routine's to state.
     push bp
     push ds
-    push di                         ; the master row
-    mov ax, [px_cur + PXR_MW]       ; each channel's error row: mw + 2 words
-    add ax, 2
-    shl ax, 1
-    mov [px_qerrsz], ax
-    mov ds, [px_wbase]              ; the tables at 0, the row at QT_SIZE
-    cmp byte [cs:px_bgr], 0
-    jne .bgr
-    ; --- R, G, B: B is +2, R is +0, G is +1 -----------------------------------
-    mov ax, [cs:px_qerrsz]          ; B's error row is the third
-    shl ax, 1
-    mov [cs:px_qerrc], ax
-    PXQ_PASS 2, 0, 1, none          ; B: its level
-    mov word [cs:px_qerrc], 0
-    PXQ_PASS 0, 0, 0, 2             ; R: 42 qr + qb
-    mov ax, [cs:px_qerrsz]
-    mov [cs:px_qerrc], ax
-    PXQ_GPASS 1, -1                 ; G: the index
-    jmp .copy
-.bgr:
-    ; --- B, G, R: B is +0, R is +2 -------------------------------------------
-    mov ax, [cs:px_qerrsz]
-    shl ax, 1
-    mov [cs:px_qerrc], ax
-    PXQ_PASS 0, 0, 1, none
-    mov word [cs:px_qerrc], 0
-    PXQ_PASS 2, 0, 0, -2
-    mov ax, [cs:px_qerrsz]
-    mov [cs:px_qerrc], ax
-    PXQ_GPASS 1, 1
-.copy:
-    pop di                          ; the G bytes are the indices: out
-    mov si, QT_SIZE + 1
-    mov cx, [cs:px_cur + PXR_MW]
+    mov ax, [px_cur + PXR_MW]
+    mov bp, ax
+    add bp, 15
+    mov cl, 4
+    shr bp, cl                      ; BP = groups of sixteen, the first partial
+    neg ax
+    and ax, 15                      ; AX = the slot pixel 0 enters at
+    push ax
+    mov si, [px_qrow]               ; --- the row's sixteen pages, rotated ----
+    and si, 15
+    shl si, cl
+    add si, px_qpage                ; SI = this matrix row's page bytes
+    mov dx, si
+    xor bx, bx                      ; BX = slot x 2
+.pat:
+    mov si, bx                      ; slot i takes column (i - entry) & 15
+    shr si, 1
+    sub si, ax
+    and si, 15
+    add si, dx
+    mov cl, [si]
+    mov si, [px_qslots + bx]
+    mov [si + 1], cl                ; the `mov bh, imm8`'s immediate
+    inc bx
+    inc bx
+    cmp bx, 32
+    jb .pat
+    pop bx                          ; the entry slot
+    shl bx, 1
+    mov dx, [px_qslots + bx]
+    mov cx, bp
+    mov si, QT_SIZE
+    mov ds, [px_wbase]
+    xor bx, bx                      ; BL stays 0: BX is a page
     cld
-.c:
-    movsb
-    inc si
-    inc si
-    loop .c
+    jmp dx
+.top:
+%assign pqs 0
+%rep 16
+    PXQ_SLOT pqs
+%assign pqs pqs + 1
+%endrep
+    dec cx                          ; (sixteen slots are 304 bytes: too far
+    jz .done                        ; back for `loop`)
+    jmp .top
+.done:
     pop ds
     pop bp
     ret
 
-; px_qtabs - the quantiser's tables in the work segment (SPEC.md 106.8): for
-; the six levels and the seven, by 2v, e = v - the level's value and 3e, 5e,
-; 7e, and the part of the index (42q and q; 6q). Once a decode, before its
-; first row. Preserves all
+px_qslots:
+%assign pqs 0
+%rep 16
+    dw px_quant.qs %+ pqs
+%assign pqs pqs + 1
+%endrep
+
+; px_qprep - before a picture's first row: the quantiser's 48 pages, when the
+; emitter quantises (SPEC.md 106.8). Preserves all
+px_qprep:
+    cmp byte [px_tquant], 0
+    je .out
+    call px_qtabs
+.out:
+    ret
+
+; px_qtabs - the 48 pages at the work claim's base: page (class x 3 + c) is
+; the part of the index that the row's byte c contributes at that class's
+; threshold - 42 q, 6 q or q, by [px_bgr]'s order. Each page is a staircase
+; of at most seven runs, so it is filled a run at a time: level q starts at
+; v = ceil((255 q - T) / n). Once a decode. Preserves all
 px_qtabs:
     push ax
     push bx
@@ -1039,48 +908,36 @@ px_qtabs:
     push dx
     push si
     push di
+    push bp
     push es
-    mov es, [px_wbase]              ; at the work claim's base
+    mov es, [px_wbase]
     xor di, di
-    xor si, si                      ; SI = v
-.v6:
-    mov bl, [px_q6 + si]            ; the level
-    xor bh, bh
-    mov al, [px_r6 + bx]            ; e = v - R6[q]
+    cld
+    xor si, si                      ; SI = the class
+.k:
+    xor bp, bp                      ; BP = c, the byte in the triple
+.c:
+    mov bx, 0x0606                  ; BL = n, BH = the part's multiplier:
+    cmp bp, 1                       ; G (byte 1) is seven levels and 6 q,
+    je .k1
+    mov bx, 0x0105                  ; and R / B six levels and 42 q / q, R
+    mov al, [px_bgr]                ; at byte 0 unless the row is B, G, R
     xor ah, ah
-    mov dx, si
-    sub dx, ax
-    call px_qterms                  ; e, 3e, 5e, 7e at ES:DI(+512k)
-    mov al, bl                      ; the parts: 42q low, q high
-    mov cl, 42
-    mul cl
-    mov ah, bl
-    mov [es:di + QT_PART], ax
-    inc di
-    inc di
+    shl ax, 1                       ; AX = 2 when B, G, R; 0 when R, G, B
+    cmp bp, ax
+    jne .k1
+    mov bh, 42
+.k1:
+    mov al, [px_qt16 + si]          ; T
+    call px_qpage1
+    inc bp
+    cmp bp, 3
+    jb .c
     inc si
-    cmp si, 256
-    jb .v6
-    mov di, QT_KIND
-    xor si, si
-.v7:
-    mov bl, [px_q7 + si]
-    xor bh, bh
-    mov al, [px_r7 + bx]
-    xor ah, ah
-    mov dx, si
-    sub dx, ax
-    call px_qterms
-    mov al, bl                      ; 6q
-    mov cl, 6
-    mul cl
-    mov [es:di + QT_PART], ax
-    inc di
-    inc di
-    inc si
-    cmp si, 256
-    jb .v7
+    cmp si, 16
+    jb .k
     pop es
+    pop bp
     pop di
     pop si
     pop dx
@@ -1089,83 +946,53 @@ px_qtabs:
     pop ax
     ret
 
-; px_qterms - DX = e: e, 3e, 5e, 7e into ES:DI's four word tables. Preserves
-; all
-px_qterms:
-    push ax
-    mov [es:di + QT_T1], dx
-    mov ax, dx
-    shl ax, 1
-    add ax, dx
-    mov [es:di + QT_T3], ax
-    add ax, dx
-    add ax, dx
-    mov [es:di + QT_T5], ax
-    add ax, dx
-    add ax, dx
-    mov [es:di + QT_T7], ax
-    pop ax
-    ret
-
-; px_qinit - the quantiser's level tables, once at launch: q6[v] = (5v + 127)
-; div 255 and q7[v] = (6v + 127) div 255 (SPEC.md 106.8). Preserves all
-px_qinit:
-    push ax
-    push bx
-    push cx
+; px_qpage1 - one page at ES:DI (DI advanced by 256): AL = T, BL = n, BH =
+; the multiplier. Clobbers AX, CX, DX
+px_qpage1:
+    push si
+    push bp
+    mov ah, 0
+    mov bp, ax                      ; BP = T
+    mov si, di                      ; SI = the page's first byte
+    xor dx, dx                      ; DL = q, DH = q x the multiplier
+.q:
+    inc dl                          ; where does level q (DL) start?
+    cmp dl, bl
+    ja .last
+    mov al, 255
+    mul dl                          ; AX = 255 q
+    sub ax, bp                      ; ...- T (> 0: T <= 247)
     push dx
-    xor bx, bx
-.l:
-    mov ax, bx
-    mov cx, 5
-    mul cx
-    add ax, 127
-    mov cx, 255
-    div cx
-    mov [px_q6 + bx], al
-    mov ax, bx
-    mov cx, 6
-    mul cx
-    add ax, 127
-    mov cx, 255
-    div cx
-    mov [px_q7 + bx], al
-    inc bx
-    cmp bx, 256
-    jb .l
+    mov cl, bl
+    xor ch, ch
+    add ax, cx
+    dec ax
+    xor dx, dx
+    div cx                          ; AX = ceil((255 q - T) / n) <= 255
     pop dx
-    pop cx
-    pop bx
-    pop ax
+    add ax, si                      ; ...as an offset
+    mov cx, ax
+    sub cx, di                      ; the run of level q - 1
+    mov al, dh
+    rep stosb
+    add dh, bh
+    jmp short .q
+.last:
+    mov cx, si
+    add cx, 256
+    sub cx, di                      ; the rest of the page is level n
+    mov al, dh
+    rep stosb
+    pop bp
+    pop si
     ret
 
-; px_errclear - the error row to zero, before a picture's first row
-px_errclear:
-    push ax
-    push cx
-    push di
-    push es
-    cmp byte [px_tquant], 0
-    je .out
-    mov es, [px_wseg]
-    mov di, [px_woerr]
-    mov cx, [px_cur + PXR_MW]
-    add cx, 2
-    mov ax, cx
-    shl cx, 1
-    add cx, ax                      ; 3 (mw + 2) words
-    xor ax, ax
-    cld
-    rep stosw
-    call px_qtabs                   ; ...and its tables
-.out:
-    pop es
-    pop di
-    pop cx
-    pop ax
+; px_qinit - once at launch (pixel.asm): nothing the ordered quantiser needs
+; (its pages are built per decode, its classes ship in pxplans.inc). Kept as
+; the launch hook the image core has. Preserves all
+px_qinit:
     ret
 
 ; --- the cube's tables (SPEC.md 106.8) ------------------------------------------
-px_r6:      db 0, 51, 102, 153, 204, 255
 px_r7:      db 0, 43, 85, 128, 170, 213, 255
-px_gneut:   db 0, 1, 2, 4, 5, 6
+px_neut:    dw 49 * 3, 98 * 3, 153 * 3, 202 * 3    ; the NEUTRAL codes' entries

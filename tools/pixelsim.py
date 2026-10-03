@@ -72,12 +72,20 @@ Q6 = [(5 * v + 127) // 255 for v in range(256)]
 Q7 = [(6 * v + 127) // 255 for v in range(256)]
 
 
+# the four NEUTRAL codes, (k, GNEUT[k], k) for k = 1..4: their entries are the
+# exact greys 51k, not (51k, R7[GNEUT[k]], 51k) - so a quantiser that lands on
+# one has made a grey with no test of its own (SPEC.md 106.8)
+NEUTRAL = [(k * 7 + GNEUT[k]) * 6 + k for k in range(1, 5)]     # 49, 98, 153, 202
+
+
 def cube_palette():
     pal = []
     for r in range(6):
         for g in range(7):
             for b in range(6):
                 pal.append((R6[r], R7[g], R6[b]))
+    for k in range(1, 5):
+        pal[NEUTRAL[k - 1]] = (51 * k, 51 * k, 51 * k)
     pal += [(51 * k, 51 * k, 51 * k) for k in range(1, 5)]
     assert len(pal) == 256
     return pal
@@ -743,39 +751,66 @@ def mode_for(p, s):
     return PM_GREY if p.rf == RF_GREY else PM_PAL
 
 
-class Quant:
-    """Floyd-Steinberg into the cube, ONE row of error (sixteenths)."""
+# THE CUBE BY ORDERED DITHER (SPEC.md 106.8). A 16x16 BLUE-NOISE threshold
+# matrix - void-and-cluster ranks 0..255 (Ulichney's construction, a Gaussian
+# of sigma 1.5 on the torus, seeded by a fixed LCG; a constant here because
+# the guest ships it) - cut to SIXTEEN classes, rank >> 4, with ONE threshold
+# a pixel shared by its three channels. A level is (n v + T16[k]) div 255,
+# n = 5 (six levels) or 6 (seven).
+#
+# WHY NOT THE WINDOW'S OWN 8x8 BAYER, OR A SMALL MATRIX: the master is
+# dithered once and then shown through a second dither, the window's Bayer
+# (106.11), which at 100% is phase-locked to it. The same Bayer in the master
+# renders a tone between two cube levels as max(t0, 64f) rather than t0 +
+# f (t1 - t0) - flat, then steep, which on a 1bpp display blows out a sky;
+# and a 3x3 matrix beats against the period 8 in diagonal hatching. Blue
+# noise has period 16, a multiple of 8, so nothing beats, and its classes are
+# near-independent of Bayer's, so the second dither sees the right tone: on a
+# grey ramp through a 1bpp display it errs by 1.9 per cent of white against
+# Floyd-Steinberg's 1.2, and on VGA the two are hard to tell apart. It costs
+# an 8088 a lookup a channel, where Floyd-Steinberg cost 1,361 cycles a pixel
+# - which is why the guest no longer has one.
+BLUE16 = [
+    [ 19,  90, 218,  32, 119, 250,  57, 213, 116, 247,  28, 128, 167, 251, 139,  71],
+    [149,  45, 195, 165,  70, 202,  87, 171,   1,  69, 184,  48,  80, 192,  38, 222],
+    [103, 245, 123,   4, 106, 146,  23, 237, 101, 141, 231, 113, 215,   6, 121, 176],
+    [ 13, 186,  67, 212, 234,  42, 188,  52, 154, 205,  18,  63, 160,  95, 233,  59],
+    [134,  86, 153,  27, 172,  94, 129, 223,  75,  35, 178, 131, 244,  43, 145, 199],
+    [254,  41, 221, 120,  54, 248,  17, 162, 115, 252,  92, 201,  15, 173,  83,  29],
+    [159, 108, 191,  74, 144, 200,  84, 214,   7, 137,  49,  72, 111, 225, 127, 211],
+    [ 60,  22, 232,   5, 180,  31, 110,  64, 189, 169, 235, 147, 183,  55,   3,  96],
+    [240, 136, 163, 100, 126, 217, 152, 242,  39, 102,  21, 208,  34, 249, 166, 194],
+    [ 44,  85, 207,  40, 246,  56,  14, 132,  81, 224, 124,  66,  99, 140,  79, 122],
+    [179, 227,  10,  73, 170,  91, 182, 204, 161,   2, 193, 155, 228,  12, 203,  25],
+    [156, 105, 143, 196, 114, 236,  30,  68, 109, 255,  88,  47, 177, 112, 239,  62],
+    [219,  33, 253,  53,  20, 151, 125, 216,  51, 138,  26, 209,  78,  36, 148,  93],
+    [198,  77, 130, 168, 210,  82, 190,   9, 174, 226, 164, 118, 243, 133, 175,   0],
+    [117, 181,  11,  97, 230,  46, 104, 238,  76,  98,  58,   8, 187,  65, 229,  50],
+    [158, 241,  61, 142, 185,  16, 157, 135,  37, 197, 150, 220,  89,  24, 107, 206],
+]
+T16 = [(255 * (2 * k + 1)) // 32 for k in range(16)]
+
+
+def qclass(x, y):
+    return BLUE16[y & 15][x & 15] >> 4
+
+
+class Ordered:
+    """The cube by ordered dither: a pixel is three lookups and two adds.
+    `y` is the MASTER row, so a bottom-up file dithers as a top-down one."""
 
     def __init__(self, mw):
-        self.err = [[0, 0, 0] for _ in range(mw + 1)]   # +1: x-1 at x = 0
+        pass
 
-    def row(self, rgb, mw):
+    def row(self, rgb, mw, y):
         out = bytearray(mw)
-        err = self.err
-        carry = [0, 0, 0]
-        p0 = [0, 0, 0]
-        p1 = [0, 0, 0]
+        brow = BLUE16[y & 15]
         for x in range(mw):
-            v = [0, 0, 0]
-            for c in range(3):
-                t = rgb[3 * x + c] + ((err[x + 1][c] + carry[c]) >> 4)
-                v[c] = 0 if t < 0 else 255 if t > 255 else t
-            qr, qg, qb = Q6[v[0]], Q7[v[1]], Q6[v[2]]
-            if qr == qb and 1 <= qr <= 4 and qg == GNEUT[qr]:
-                idx = 251 + qr
-                rec = (51 * qr, 51 * qr, 51 * qr)
-            else:
-                idx = (qr * 7 + qg) * 6 + qb
-                rec = (R6[qr], R7[qg], R6[qb])
-            out[x] = idx
-            for c in range(3):
-                e = v[c] - rec[c]
-                carry[c] = 7 * e
-                err[x][c] = p1[c] + 3 * e       # x-1, final (slot x is x-1)
-                p1[c] = p0[c] + 5 * e
-                p0[c] = e
-        for c in range(3):
-            err[mw][c] = p1[c]
+            t = T16[brow[x & 15] >> 4]
+            qr = (5 * rgb[3 * x] + t) // 255
+            qg = (6 * rgb[3 * x + 1] + t) // 255
+            qb = (5 * rgb[3 * x + 2] + t) // 255
+            out[x] = (qr * 7 + qg) * 6 + qb
         return out
 
 
@@ -785,7 +820,7 @@ def emit(p, s, pal_out=None):
     mode = mode_for(p, s)
     master = bytearray(mw * mh)
     pal = p.pal + [(0, 0, 0)] * (256 - len(p.pal))
-    q = Quant(mw) if mode == PM_CUBE else None
+    q = Ordered(mw) if mode == PM_CUBE else None
     n = 1 << s
     acc, cnt = None, 0
     for y, row in p.rows:
@@ -800,7 +835,7 @@ def emit(p, s, pal_out=None):
             rf = p.rf
         nch = 3 if rf == RF_RGB else 1
         if s == 0:
-            out = q.row(row, mw) if mode == PM_CUBE else row[:mw]
+            out = q.row(row, mw, y) if mode == PM_CUBE else row[:mw]
             master[y * mw:(y + 1) * mw] = out
             continue
         if cnt == 0:
@@ -814,8 +849,8 @@ def emit(p, s, pal_out=None):
         cnt += 1
         if cnt == n:
             avg = bytes(a >> (2 * s) for a in acc)
-            out = q.row(avg, mw) if mode == PM_CUBE else avg
             r = y >> s
+            out = q.row(avg, mw, r) if mode == PM_CUBE else avg
             master[r * mw:(r + 1) * mw] = out
             cnt = 0
     if mode == PM_CUBE:
@@ -864,6 +899,59 @@ def plan_for(T):
         E += (1849600 * K) >> PEN_SH
         if E < bestE:
             bestE, bc2, bt = E, c2, t
+    return c1, bc2, bt
+
+
+# THE GUEST'S SEARCH ORDER (pxview.inc's px_plan1): the same answer as
+# plan_for, reached with less work, and `--selfcheck` holds the two equal
+# over a grid of colours. Every c2 is tried in order of its K - the pair's
+# contrast, whose penalty 57,800 K alone is a floor under its error - so the
+# first K whose penalty exceeds the best error found ends the search; a
+# pair's error is summed G, R, B and dropped once it exceeds the best; and
+# a tie goes to the LOWER c2, which is plan_for's strict < in index order.
+def _lev(c, k):
+    return EGA16[c][k] // 85
+
+
+PORD = []                       # per c1: the other fifteen, by (K, c2)
+for _c1 in range(16):
+    _o = []
+    for _c2 in range(16):
+        if _c2 != _c1:
+            _kk = [_lev(_c2, k) - _lev(_c1, k) for k in range(3)]
+            _o.append((sum(WGT[k] * _kk[k] ** 2 for k in range(3)), _c2))
+    PORD.append(sorted(_o))
+KMAX = 3 * 9 + 6 * 9 + 9
+PENK = [(1849600 * K) >> PEN_SH for K in range(KMAX + 1)]
+
+
+def plan_fast(T):
+    best, c1 = None, 0
+    for c in range(16):
+        d = sum(WGT[k] * (T[k] - EGA16[c][k]) ** 2 for k in range(3))
+        if best is None or d < best:
+            best, c1 = d, c
+    dd = [T[k] - EGA16[c1][k] for k in range(3)]
+    bestE, bc2, bt, cand = 256 * best, c1, 0, False
+    for K, c2 in PORD[c1]:
+        if PENK[K] > bestE:
+            break
+        kk = [_lev(c2, k) - _lev(c1, k) for k in range(3)]
+        S = sum(WGT[k] * dd[k] * kk[k] for k in range(3))
+        if S <= 0:
+            continue
+        den = 85 * K
+        t = min((64 * S + den // 2) // den, 64)
+        if t == 0:
+            continue
+        E = PENK[K]
+        for k in (1, 0, 2):
+            E += WGT[k] * ((64 * dd[k] - 85 * kk[k] * t) >> 2) ** 2
+            if E > bestE:
+                break
+        else:
+            if E < bestE or (E == bestE and cand and c2 < bc2):
+                bestE, bc2, bt, cand = E, c2, t, True
     return c1, bc2, bt
 
 
@@ -1030,6 +1118,7 @@ def plans_inc():
            ";",
            "; The mixing plans (SPEC.md 106.11) of the two palettes that never change:",
            "; the CUBE's and GREY's. Per index three bytes - c1, c2, t - in index order.",
+           "; Then the ordered quantiser's blue-noise classes and thresholds (106.8).",
            "; A PAL palette's are built on the worker by px_plans, the same search;",
            "; `pixelsim --selfcheck` (a fast row) fails the build if this file is not",
            "; what that search answers. Do not edit it by hand.",
@@ -1039,6 +1128,35 @@ def plans_inc():
         for i in range(0, 256, 8):
             out.append("    db " + ", ".join("%d,%d,%d" % pl[j]
                                               for j in range(i, i + 8)))
+    out.append("; the plan search's ORDER (SPEC.md 106.11): per c1, the other fifteen")
+    out.append("; by their K, and the K's; then 85 K and the penalty 57,800 K a K")
+    out.append("px_pord:")
+    for c1 in range(16):
+        out.append("    db " + ", ".join("%d" % c2 for K, c2 in PORD[c1]))
+    out.append("px_pordk:")
+    for c1 in range(16):
+        out.append("    db " + ", ".join("%d" % K for K, c2 in PORD[c1]))
+    out.append("; ...each pair's k a channel, as (k + 3) x 2 (a word index)")
+    out.append("px_pki:")
+    for c1 in range(16):
+        out.append("    db " + ", ".join(
+            ",".join("%d" % ((_lev(c2, k) - _lev(c1, k) + 3) * 2) for k in range(3))
+            for K, c2 in PORD[c1]))
+    out.append("px_pk85:")
+    for i in range(0, KMAX + 1, 13):
+        out.append("    dw " + ", ".join("%d" % (85 * K) for K in range(i, min(i + 13, KMAX + 1))))
+    out.append("px_pk578:")
+    for i in range(0, KMAX + 1, 7):
+        out.append("    dd " + ", ".join("%d" % PENK[K] for K in range(i, min(i + 7, KMAX + 1))))
+    out.append("; the ordered quantiser (SPEC.md 106.8): per master row & 15 and column")
+    out.append("; & 15, the first of its class's three table pages (class x 3)...")
+    out.append("px_qpage:")
+    for y in range(16):
+        out.append("    db " + ", ".join("%d" % (3 * qclass(x, y))
+                                         for x in range(16)))
+    out.append("; ...and each class's threshold, T16")
+    out.append("px_qt16:")
+    out.append("    db " + ", ".join("%d" % t for t in T16))
     return "\n".join(out) + "\n"
 
 
@@ -1088,6 +1206,15 @@ def selfcheck():
             bad.append(what)
     # the cube's arithmetic
     ok(len(set(CUBE[:252])) == 252, "cube entries distinct")
+    ok(all(CUBE[NEUTRAL[k - 1]] == (51 * k,) * 3 for k in range(1, 5)),
+       "the neutral codes are greys")
+    # the ordered quantiser: the matrix is a permutation of the ranks, and a
+    # flat field's sixteen classes average back to it within half a level
+    ok(sorted(v for r in BLUE16 for v in r) == list(range(256)),
+       "BLUE16 is a permutation of 0..255")
+    for v in (0, 30, 100, 128, 200, 255):
+        tot = sum(R6[(5 * v + T16[k]) // 255] for k in range(16))
+        ok(abs(tot / 16.0 - v) <= 26, "ordered mean at %d" % v)
     ok(all(Q6[R6[k]] == k for k in range(6)), "Q6 inverts R6")
     ok(all(Q7[R7[k]] == k for k in range(7)), "Q7 inverts R7")
     ok(all(abs(R7[GNEUT[k]] - 51 * k) <= 26 for k in range(6)), "GNEUT")
@@ -1095,6 +1222,13 @@ def selfcheck():
     for c in range(16):
         ok(plan_for(EGA16[c]) == (c, c, 0), "EGA %d is its own plan" % c)
     ok(all(0 <= t <= 64 for _, _, t in CUBE_PLANS + GREY_PLANS), "t range")
+    # the guest's pruned search answers plan_for's, over a grid and the two
+    # shipped palettes (an 8-level grid with its top edge; 150,000 random
+    # colours agreed too when it was written, which is too slow for a row)
+    grid = [(r, g, b) for r in range(0, 256, 36) for g in range(0, 256, 36)
+            for b in range(0, 256, 36)] + [(255, g, b) for g in range(0, 256, 15) for b in (0, 85, 170, 255)]
+    bad_fast = [T for T in grid + CUBE + GREY if plan_fast(T) != plan_for(T)]
+    ok(not bad_fast, "plan_fast differs from plan_for at %r" % bad_fast[:3])
     # the shipped plans are this search's
     try:
         ok(open(PLANS_INC).read() == plans_inc(),

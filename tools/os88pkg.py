@@ -569,8 +569,9 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts,
             # stream; the ones that shipped before this each grew a packer and
             # an expander outside the standard. The zkb word is shared in TIME
             # now - the packed length until op_fetch runs, the segment after -
-            # and op_drop leaves OP_SPENT rather than 0 so a second fetch
-            # refuses instead of reading a stream of nothing.
+            # and op_drop puts the packed length back out of the row's shadow
+            # word (SPEC.md 20.12.7.4.1: words after the rows, which this tool
+            # never walks), so a dropped part can be fetched again.
             if pflags & OPF_XMS:
                 fail(f"part {i}: OP_COMP with OP_XMS. The span above 1MB is "
                      "staged through a transient conventional buffer a chunk "

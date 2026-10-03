@@ -13,12 +13,18 @@
 ; most once a tick; the wake paints the rows that are new (pxview.inc).
 ; =============================================================================
 
-PX_CHUNK    equ 8192                ; a ring slot, unless a cluster is bigger
-PX_RINGKB   equ 17                  ; the ring's claim at most: 2 x 8 KB + the
-                                    ; KB the 512 alignment may cost
+PX_CHUNK    equ 16384               ; a ring slot, unless a cluster is bigger
+PX_CHUNKLO  equ 8192                ; ...or the heap will not give 33 KB
+PX_RINGKB   equ 17                  ; the ring the SCALE is decided against:
+                                    ; 2 x 8 KB + the KB the 512 alignment may
+                                    ; cost - the floor, so a bigger ring never
+                                    ; changes which scale a picture gets
 PX_HEADMAX  equ 2048                ; the bytes a header may be parsed from
 PX_FLATWIN  equ 32768               ; an in-memory file, as the worker sees it
 PXD_ABORT   equ 0xFF                ; not a refusal: the user said stop
+PXS_DEFER   equ px_pscr + 511       ; byte: px_pumpfill has deferred a fill
+                                    ; for the first paint (the plan search's
+                                    ; scratch is done with before any row)
 
 JOB_NONE    equ 0
 JOB_DECODE  equ 1                   ; tables, rows, histogram
@@ -78,15 +84,20 @@ px_clbytes:
 ; THE RING (SPEC.md 106.9)
 ; =============================================================================
 
-; px_ringclaim - the ring: two 8 KB slots, or one cluster-sized one where a
-; cluster is bigger. CF = 1 refused. Preserves all
+; px_ringclaim - the ring: two 16 KB slots - or two of 8 KB when the heap
+; will not give 33, or one cluster-sized one where a cluster is bigger. A
+; read is priced per int 13h and not per sector (CLAUDE.md), and a 16 KB one
+; crosses a cylinder about half as often a sector as an 8 KB one; with both
+; slots empty px_pumpfill reads the two as ONE call (SPEC.md 106.9).
+; CF = 1 refused. Preserves all
 px_ringclaim:
     push ax
     push bx
     push cx
     push dx
-    call px_clbytes                 ; AX = the cluster
     mov cx, PX_CHUNK
+.try:
+    call px_clbytes                 ; AX = the cluster
     mov byte [px_nslot], 2
     cmp ax, cx
     jbe .c
@@ -104,7 +115,16 @@ px_ringclaim:
     mov cl, 9
     shr ax, cl
     call px_dmaclaim
-    jc .out
+    jnc .have
+    cmp byte [px_nslot], 1          ; a cluster-sized slot has no smaller form
+    je .no
+    mov cx, PX_CHUNKLO              ; the smaller ring, if the bigger did not
+    cmp [px_chunk], cx              ; fit
+    ja .try
+.no:
+    stc
+    jmp short .out
+.have:
     mov [px_ringraw], bx
     mov [px_sseg], dx
     mov ax, [px_chunk]
@@ -144,6 +164,7 @@ px_pumpinit:
     mov [px_fabs], ax
     mov [px_fabs + 2], ax
     mov [px_fk], ax
+    mov [PXS_DEFER], al             ; (px_pumpfill's one deferral, unspent)
     mov di, px_rcur
     call os88_rseq_new
     pop di
@@ -156,6 +177,54 @@ px_pumpinit:
 ; is an end of file too, with [px_rerr] set, so the decoder's "cut short"
 ; becomes the caller's "disk read failed". Clears the request byte LAST
 px_pumpfill:
+    cmp byte [px_busy], 1           ; THE FIRST ROWS BEFORE THE NEXT READ:
+    jne .fill                       ; px_onwake fills, then paints, and a
+    push ax                         ; 16 KB read in front of the first paint
+    mov ax, [px_ypaint]             ; is a second and more on an XT. So until
+    or ax, [px_ypbot]               ; something is painted the ring is filled
+    jnz .painted                    ; only when the worker has run DRY (its
+    push bx                         ; next slot empty), not ahead of it...
+    mov bl, [px_wslot]
+    xor bh, bh
+    cmp byte [px_sfull + bx], 0
+    pop bx
+    je .dry
+    pop ax
+    ret                             ; (it wakes us when it has: px_rnext)
+.dry:
+    cmp byte [px_tabok], 0          ; ...and the first wake that finds rows
+    je .painted                     ; ready and none painted fills nothing
+    cmp word [px_rdone], 0          ; and wakes again - once an open
+    je .painted                     ; ([px_pumpinit]), so a zoom that paints
+    cmp byte [PXS_DEFER], 0         ; no screen row of one master row cannot
+    jne .painted                    ; hold the disk off for ever
+    mov byte [PXS_DEFER], 1
+    pop ax
+    jmp px_wake
+.painted:
+    pop ax
+.fill:
+    push ax
+    xor al, al
+    call px_pumpn
+    pop ax
+    ret
+
+; px_pumpone - the same, ONE slot of at most 8 KB: the open's first fill, so
+; the first rows wait on what they did before the ring grew, and the rest of
+; the file comes 16 KB at a time from the first wake on. (Without
+; px_pumpfill's deferral this LOST: the second read landed in front of the
+; first paint, and a bottom-up BMP's first rows came 1.8 s later.)
+; Preserves all
+px_pumpone:
+    push ax
+    mov al, 1
+    call px_pumpn
+    pop ax
+    ret
+
+; px_pumpn - px_pumpfill's body: AL = 1 for one slot only
+px_pumpn:
     cmp byte [px_rflat], 0
     jne .ret
     push ax
@@ -165,8 +234,43 @@ px_pumpfill:
     push si
     push di
     push es
+    push bp
+    mov bp, ax                      ; BP's low byte: one slot, and short
     mov cl, [px_nslot]
     xor ch, ch
+    or al, al
+    jz .all
+    mov cl, 1                       ; (one slot: the loop below, once)
+    jmp short .slot
+.all:
+    cmp cl, 2                       ; BOTH slots empty, in memory order: one
+    jne .slot                       ; read fills the two (they are adjacent),
+    cmp byte [px_fslot], 0          ; which is one rotational wait the disk
+    jne .slot                       ; does not spend
+    cmp word [px_sfull], 0
+    jne .slot
+    cmp byte [px_feof], 0
+    jne .slot
+    mov es, [px_sseg]
+    mov cx, [px_chunk]
+    shl cx, 1
+    call px_rseq                    ; AX = bytes delivered (0 on an error)
+    mov cx, [px_chunk]
+    xor bx, bx
+    cmp ax, cx                      ; the first slot: up to a chunk of it...
+    jbe .two
+    mov bx, ax
+    sub bx, cx                      ; ...the second, the rest
+    mov ax, cx
+.two:
+    mov [px_slen], ax
+    mov [px_slen + 2], bx
+    or bx, bx
+    jnz .both
+    mov byte [px_feof], 1           ; (an empty second slot is the end)
+.both:
+    mov word [px_sfull], 0x0101     ; ...the slots' LAST field
+    jmp short .done
 .slot:
     mov bl, [px_fslot]
     xor bh, bh
@@ -177,23 +281,18 @@ px_pumpfill:
     cmp byte [px_feof], 0
     jne .mark
     push cx
-    mov es, [px_sseg + bx]
     push bx
-    xor bx, bx
+    mov es, [px_sseg + bx]
     mov cx, [px_chunk]
-    mov ax, [px_fabs]
-    mov dx, [px_fabs + 2]
-    mov si, px_cur + PXR_NAME
-    mov di, px_rcur
-    call os88_rseq                  ; DX:AX = bytes delivered
+    test bp, 0x00FF                 ; the open's FIRST read is 8 KB at most:
+    jz .full                        ; it is what the first rows wait on, and
+    cmp cx, PX_CHUNKLO              ; the worker takes a slot of any length
+    jbe .full
+    mov cx, PX_CHUNKLO
+.full:
+    call px_rseq
     pop bx
     pop cx
-    jnc .got
-    mov byte [px_rerr], 1
-    xor ax, ax
-.got:
-    add [px_fabs], ax
-    adc word [px_fabs + 2], 0
     or ax, ax
     jnz .mark
     mov byte [px_feof], 1
@@ -210,6 +309,7 @@ px_pumpfill:
     loop .slot
 .done:
     mov byte [px_rq], 0             ; LAST
+    pop bp
     pop es
     pop di
     pop si
@@ -218,6 +318,24 @@ px_pumpfill:
     pop bx
     pop ax
 .ret:
+    ret
+
+; px_rseq - UI TASK: CX bytes of the stream at [px_fabs] into ES:0, the
+; offset advanced. AX = bytes delivered: 0 at the end, and 0 with [px_rerr]
+; set on a read error. Clobbers BX, DX, SI, DI
+px_rseq:
+    xor bx, bx
+    mov ax, [px_fabs]
+    mov dx, [px_fabs + 2]
+    mov si, px_cur + PXR_NAME
+    mov di, px_rcur
+    call os88_rseq                  ; DX:AX = bytes delivered
+    jnc .got
+    mov byte [px_rerr], 1
+    xor ax, ax
+.got:
+    add [px_fabs], ax
+    adc word [px_fabs + 2], 0
     ret
 
 ; =============================================================================
@@ -494,7 +612,7 @@ px_wjob:
     mov [px_srcdone], ax
     mov [px_rdone], ax
     mov [px_rcnt], al
-    call px_errclear
+    call px_qprep                   ; pxmaster.inc: the quantiser's pages
     call px_decode                  ; pxsimple.inc
     jc .fail
 .hist:
@@ -602,7 +720,7 @@ px_open:
     mov al, [px_bpp]                ; the worker builds them for THIS depth
     mov [px_tdepth], al
     call px_pumpinit
-    call px_pumpfill                ; the first slots now, not a wake later
+    call px_pumpone                 ; the first slot now, not a wake later
     call px_spawn
     jc .nowork
     mov byte [px_abort], 0
