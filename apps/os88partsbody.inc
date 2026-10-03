@@ -1606,6 +1606,17 @@ op_fetch:
     pop si                      ; the row
     pop dx                      ; the claim
     jc .zbad
+%if OP_HAS_ZLAZY
+    ; THE SHADOW (SPEC.md 20.12.7.4.1): the packed length, one store before
+    ; the segment takes its word, into the row's own shadow - op_drop's to
+    ; put back, so a dropped part is a never-fetched one and not a spent one
+    mov bx, si
+    sub bx, op_table + OP_T_ROWS
+    shr bx, 1
+    shr bx, 1                   ; the row x 2: rows are 8 bytes, shadows 2
+    mov cx, [si+OP_R_ZKB]
+    mov [op_zshadow + bx], cx
+%endif
 .plainbank:
 %endif
     or byte [si+OP_R_FLAG], OP_FETCHED  ; ...and the flag is what SAYS so
@@ -1682,6 +1693,15 @@ op_drop:
     xor ax, ax
     test byte [si+OP_R_FLAG], OP_COMP
     jz .plaindrop
+  %if OP_HAS_ZLAZY
+    mov bx, si                  ; ...UNLESS IT HAS A SHADOW (SPEC.md
+    sub bx, op_table + OP_T_ROWS    ; 20.12.7.4.1): the packed length
+    shr bx, 1                   ; op_fetch kept goes back, and the row is a
+    shr bx, 1                   ; never-fetched one again. BX is free: the
+    mov ax, [op_zshadow + bx]   ; free below reloads it
+    or ax, ax
+    jnz .plaindrop
+  %endif
     mov ax, OP_SPENT
 .plaindrop:
     mov [si+OP_R_ZKB], ax       ; CLEARED FIRST: op_seg must never answer a

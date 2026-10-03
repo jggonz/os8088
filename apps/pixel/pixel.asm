@@ -3493,7 +3493,7 @@ px_s_r11:   db 'too big to unpack', 0
 
 ; --- the part table, and the standard's code after it (SPEC.md 20.12.3) -------
     OS88_PARTS_BEGIN PX_NPARTS
-      OS88_PART OP_SEG, OP_LAZY             ; 0 the keyboard card (106.5: plain)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 0 the keyboard card (106.5)
     OS88_PARTS_END
 
 ; =============================================================================
@@ -3642,9 +3642,9 @@ px_t1       equ px_plan + 768                   ; 256: 1bpp thresholds
 px_hist     equ px_t1 + 256                     ; 1024: counts, dwords
 px_bins     equ px_hist + 1024                  ; 1024: folded, dwords
 px_names    equ px_bins + 1024                  ; PX_NAMES x 13: the folder
-px_q6       equ px_names + PX_NAMES * 13        ; 256: the cube's levels
-px_q7       equ px_q6 + 256                     ; 256
-px_rcur     equ px_q7 + 256                     ; FSEQ_SIZE: READ_SEQ's cursor
+px_pscr     equ px_names + PX_NAMES * 13        ; 512: the plan search's
+                                                ; scratch (pxview.inc's PXS_*)
+px_rcur     equ px_pscr + 512                   ; FSEQ_SIZE: READ_SEQ's cursor
 px_tbuf     equ px_rcur + FSEQ_SIZE             ; 769: a PCX's tail
 px_gsum     equ px_tbuf + 770                   ; 4 x PX_HBW: graph columns
 px_hband    equ px_gsum + 4 * PX_HBW            ; PX_HBST x PX_HBH: the graph
@@ -3680,7 +3680,6 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_avl, 2                 ; OSAPI_MEM_AVAIL's two answers
     PXVAR px_avt, 2
     PXVAR px_wrowsz, 2              ; the work claim: the row's bytes
-    PXVAR px_woerr, 2               ; ...the error row's byte offset
     PXVAR px_wo_acc, 2              ; ...and paragraph offsets
     PXVAR px_wo_lin, 2
     PXVAR px_wo_lut, 2
@@ -3692,9 +3691,7 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_rdone, 2               ; master rows complete
     PXVAR px_wbase, 2               ; the work claim itself (px_wseg is its
                                     ; row's segment, past the tables)
-    PXVAR px_qerrsz, 2              ; ...an error row's bytes...
-    PXVAR px_qerrc, 2               ; ...the one a pass is on...
-    PXVAR px_qvg, 2                 ; ...G's value, a neutral's to know
+    PXVAR px_qrow, 2                ; the master row the dither is on
     PXVAR px_vkey, 16               ; what the canvas's view was made from
     PXVAR px_vkeyn, 16
     PXVAR px_bgr, 1                 ; the row is B, G, R

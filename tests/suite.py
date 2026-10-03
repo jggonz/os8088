@@ -7794,10 +7794,12 @@ SOAK = [
         "fetches once, far-calls INIT and INFO, INIT answers PXP_PROBE (a "
         "number only the part computes), the card's lines are pxhelp.asm's "
         "byte for byte and the part held exactly one claim of PiXEL's while it "
-        "was here; C: dropped - the row clear, the heap as it was; D: F1 again "
-        "FETCHES AGAIN, which an OP_COMP|OP_LAZY row could not (20.12.7.4); E, "
-        "the negative control: the row aimed at sector 0, the package's own "
-        "header, is REFUSED on the signature and its claim still given back",
+        "was here; C: dropped - the row clear, the heap as it was, and the "
+        "row's zkb the PACKED length again out of its shadow word; D: F1 "
+        "again FETCHES AGAIN - the part is OP_COMP|OP_LAZY, which before "
+        "20.12.7.4.1's shadow was spent once dropped; E, the negative "
+        "control: the row aimed at sector 0, the package's own header, is "
+        "REFUSED and its claim still given back",
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/os8088-360.img")),
     Row("pxdecode", "soak", py("tests/pxdecode.py"), 120.0,
@@ -7837,6 +7839,23 @@ SOAK = [
         "columns), a panel collapse and a status field (one run) - counted "
         "at the API cells; a change that repaints more than it changed "
         "fails with the counts beside the budget",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxbench", "soak", py("tests/pxbench.py"), 240.0,
+        "SPEC.md 106.17 on the 5150 with a CGA: the TIME, in guest cycles from "
+        "breakpoints, of opening MOUNTAIN.BMP (24-bit: the cube's ordered "
+        "dither), CITY.PCX (8-bit RLE) and a 640x480 8-bit BMP made by the "
+        "row (308 KB: the disk's share) - to the end and to the first rows - "
+        "and of a zoom step with the canvas covered, a pan step and Fit; each "
+        "held to a ceiling of the recorded figure plus a margin, so a change "
+        "that makes PiXEL slower on the target fails here",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxbenchvga", "soak", py("tests/pxbench.py", "--machine",
+                                 "os8088_xt_vga"), 240.0,
+        "pxbench on the XT with a VGA (SPEC.md 106.17): the same figures where "
+        "a PAL picture's 256 mixing plans are searched before its first row "
+        "and the composer turns lanes into four planes for BLITP",
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/os8088-360.img")),
     Row("wdpen", "soak", py("tests/wdpen.py"), 60.0,

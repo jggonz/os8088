@@ -21,14 +21,16 @@ here reads the guest rather than the glass:
   leg C  ...and the part was DROPPED: the row is clear again and PiXEL holds
          exactly the claims it held before
   leg D  a key takes the card down; F1 again FETCHES AGAIN (op_fetch twice
-         now), calls twice more, and drops again - claims unchanged. This is
-         the leg an OP_COMP|OP_LAZY row would fail (SPEC.md 20.12.7.4: a
-         dropped compressed row is spent), which is why the part is plain
+         now), calls twice more, and drops again - claims unchanged. The part
+         is OP_COMP|OP_LAZY, so this is the leg the SHADOW is for (SPEC.md
+         20.12.7.4.1): without it a dropped compressed row is spent and this
+         second fetch refuses
   leg E  THE NEGATIVE CONTROL: the row's file offset pointed at sector 0, so
-         the fetch reads the package's own header where a part should be.
-         px_pcall must refuse it on the signature (no card, the call count
-         unmoved) and still give the claim back - a check that never refuses
-         is not a check
+         the fetch reads the package's own header where a part should be -
+         as a compressed stream, which either will not expand (op_fetch
+         refuses) or expands to bytes without the part's signature (px_pcall
+         refuses). Either way no card, the call count unmoved, and the claim
+         given back - a check that never refuses is not a check
 """
 import os, re, sys, subprocess, tempfile, argparse, functools
 print = functools.partial(print, flush=True)
@@ -41,6 +43,7 @@ u16 = lambda b, i=0: b[i] | (b[i + 1] << 8)
 FAIL = []
 PROBE = 0x5850 ^ 0x1D06             # apps/pixel/pxpart.inc's PXP_PROBE
 OP_T_ROWS, OP_FETCHED = 10, 32      # apps/os88parts.inc
+OP_LAZY, OP_COMP = 8, 16
 
 
 def check(name, ok, detail=""):
@@ -143,6 +146,12 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
     c0 = claims()
     check("A: launched with no part fetched", not r0[1] & OP_FETCHED,
           "row flags %02X" % r0[1])
+    packed = u16(r0, 6)
+    check("A: the part is COMPRESSED and lazy, its zkb the packed length",
+          r0[1] & (OP_COMP | OP_LAZY) == OP_COMP | OP_LAZY
+          and 0 < packed < u16(r0, 4),
+          "flags %02X zkb %d len %d" % (r0[1], packed, u16(r0, 4)))
+    shadow = base + syms["op_zshadow"]
     check("A: ...and no call made", W("px_pcalls") == 0, "%d" % W("px_pcalls"))
     check("A: PiXEL holds no claim but its region", c0 == [],
           "claims %s" % c0)
@@ -177,8 +186,12 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
           len(held) >= 2 and len(held[-1]) == len(c0) + 1,
           "claims at the fetch / drop: %s" % held)
     r1 = row()
-    check("C: the part was dropped (its row is clear)", not r1[1] & OP_FETCHED
-          and u16(r1, 6) == 0, "flags %02X zkb %04X" % (r1[1], u16(r1, 6)))
+    check("C: the part was dropped (its row is clear)", not r1[1] & OP_FETCHED,
+          "flags %02X" % r1[1])
+    check("C: ...and its zkb is the PACKED LENGTH again, from the shadow",
+          u16(r1, 6) == packed and u16(m.read(shadow, 2)) == packed,
+          "zkb %04X shadow %04X, want %04X" % (u16(r1, 6),
+                                               u16(m.read(shadow, 2)), packed))
     check("C: ...and PiXEL holds what it held before", claims() == c0,
           "claims %s, were %s" % (claims(), c0))
 
@@ -194,7 +207,8 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
           "[px_pcalls] = %d" % W("px_pcalls"))
     check("D: ...the card is the same card", card() == LINES, "")
     check("D: ...dropped again, the heap as it was", claims() == c0
-          and not row()[1] & OP_FETCHED, "claims %s" % claims())
+          and not row()[1] & OP_FETCHED and u16(row(), 6) == packed,
+          "claims %s, zkb %04X" % (claims(), u16(row(), 6)))
 
     # --- E: the negative control --------------------------------------------
     m.key("Escape")
@@ -208,7 +222,7 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
     m.key("F1")
     M.ui_done(m, "the refused card")
     M.pace(m, 1.0)
-    check("E: a part with the wrong signature is REFUSED", B("px_helpon") == 0
+    check("E: a part that is not a part is REFUSED", B("px_helpon") == 0
           and W("px_pcalls") == calls0,
           "helpon %d, calls %d -> %d" % (B("px_helpon"), calls0, W("px_pcalls")))
     check("E: ...and its claim given back all the same", claims() == c0
