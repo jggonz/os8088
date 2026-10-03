@@ -208,6 +208,7 @@ VM386PS2 := $(CURDIR)/vm/386-ps2
 # something to attach to, and it is not a real card: these are.
 VMXTSND := $(CURDIR)/vm/xt-sound
 VMXTSND144 := $(CURDIR)/vm/xt-sound-1.44
+VMXTMIDI := $(CURDIR)/vm/xt-midirack
 VMXTWIRE := $(CURDIR)/vm/xt-wire
 VM286SND := $(CURDIR)/vm/286-sound
 VM286VID := $(CURDIR)/vm/286-video
@@ -2026,7 +2027,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
 .PHONY: stkdiag small emu kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 pc5150 xt-mfm xt-cga \
-        xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-wire \
+        xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack xt-wire \
         286-525-z 286-525-word 286-525-cword 286-525-runcpm 286-525-c64 \
         286-525-weave 286-525-loom 286-525-all \
         286-sound 286-video 386-sound 486 pentium \
@@ -13528,6 +13529,16 @@ xt-sound: $(IMG360) $(APPSIMG360)
 xt-sound-1.44: $(IMG360) $(ALLAPPSIMG)
 	@$(UNPROTECT) $(VMXTSND144)/86box.cfg
 	$(BOX) -P $(VMXTSND144) -N
+
+# MIDIRACK'S MACHINE (SPEC.md 105): xt-sound's XT - the 1986 board at 4.77MHz,
+# 640KB, an OTI-067 and the SB 2.0 at 220h/5/1 - with the 360KB MEDIA disk in
+# B:, which is where that geometry carries MIDIRACK.O88 (at its root) and the
+# ten songs (MEDIA\MIDI\, which the player finds by itself). The SB 2.0 gives
+# it both halves: the OPL2 for the FM output and a DSP with auto-init for the
+# synth's external ring. A copy of vm/xt-sound with only the uuid and B: changed.
+xt-midirack: $(IMG360) $(MEDIAIMG360)
+	@$(UNPROTECT) $(VMXTMIDI)/86box.cfg
+	$(BOX) -P $(VMXTMIDI) -N
 
 # THE WIRE'S MACHINE (SPEC.md 92): xt-sound's XT - the 1986 board, 640KB, an
 # OTI-067 and the SB 2.0 - with a Novell NE1000 on 86Box's slirp. The NE1000

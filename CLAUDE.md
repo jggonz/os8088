@@ -508,7 +508,8 @@ exactly like the feature being broken.
 `xt-mfm` (a 20MB ST-225 on a Xebec MFM controller — the machine to install
 and hibernate on; `build/mfm20.img` is created blank and kept),
 `xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-sound`,
-`xt-sound-1.44`, `xt-wire`, `286`, `286-525`,
+`xt-sound-1.44`, `xt-midirack` (MIDIRack's: `xt-sound`'s XT with the
+360KB media disk in B:, SPEC.md §105), `xt-wire`, `286`, `286-525`,
 `286-sound`, the eight `286-525-*` application machines (`-z`, `-word`,
 `-cword`, `-runcpm`, `-c64`, `-weave`, `-loom`, `-all` — `vm/286-525` with a
 1.2MB app disk in B: instead of the apps floppy, and the only machines in the

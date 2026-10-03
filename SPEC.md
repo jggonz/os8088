@@ -161644,6 +161644,12 @@ claims the chip and keys voices; the SB plays without underrunning; the
 speaker keeps its ring full; the tone mode sounds the melody; a song's end
 loops or advances; and the captures (`MARTYPC_WAV`) carry the song's notes.
 
+**`make xt-midirack`** is the period machine to hear it on: 86Box's 1986 XT
+at 4.77 MHz with 640 KB, an OTI-067 VGA and a Sound Blaster 2.0 (220h, IRQ 5,
+DMA 1 - the OPL2 for FM and a DSP with auto-init for the synth), with
+`media360.img` in B:, which carries the player and the ten songs. It is
+`vm/xt-sound` with only the uuid and B: changed.
+
 ### 105.12 Deliberately not done
 
 General MIDI level 2, SysEx, aftertouch, the OPL's rhythm mode and four-op
