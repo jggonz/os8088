@@ -3018,6 +3018,14 @@ SOAK = [
         "- a port is not a Covox until the user says so (SPEC.md 34.14)",
         needs=("marty", "nasm"), serial=True,
         wants=("build/midisys720.img",)),
+    Row("covoxcp", "soak", py("tests/covox.py", "--arm", "cp"), 45.0,
+        "the Control Panel's Sound page on the Covox machine's HERCULES "
+        "(SPEC.md 34.14, 31.7), by the mouse: LPT1 takes SND_RT_LPT and "
+        "publishes the DAC, LPT2 takes + 1, LPT3 - which did not answer - is "
+        "refused and moves nothing, PC Speaker withdraws the cap, and the "
+        "Covox label takes the first port that answered",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/midisys720.img",)),
     Row("covoxnolpt", "soak", py("tests/covox.py", "--arm", "nolpt"), 30.0,
         "the 360KB Covox disk on the CGA 5150, which has no parallel port at "
         "all and no card: SOUND.DRV refuses, and the Covox tier stays in the "

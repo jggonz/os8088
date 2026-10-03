@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """THE COVOX'S ANNOUNCEMENT (SPEC.md 34.14): SOUND.DRV on a parallel port.
 
-    python3 tests/covox.py --arm drv|auto|nolpt
+    python3 tests/covox.py --arm drv|auto|nolpt|cp [--shots DIR]
 
 A Covox Speech Thing is eight resistors on a printer port's data lines and
 answers nothing, so SOUND.DRV cannot detect one. What it CAN find is the
@@ -29,6 +29,15 @@ port, and what it publishes is split along exactly that line:
          refuses and the kernel's tier byte stays where SYSTEM.CFG put it,
          with nothing published
 
+  cp     the Covox machine, `make miditest`'s disk (tier AUTO), and the
+         Control Panel's Sound page driven by the mouse on the Hercules -
+         a 1bpp adapter, where grey is a checkerboard (SPEC.md 47):
+         LPT1 picks SND_RT_LPT and the DAC at the adapter's 3BCh, LPT2
+         picks + 1 and 378h, LPT3 - which did not answer - is refused and
+         changes nothing, PC Speaker withdraws the cap, and the Covox LABEL
+         picks the first port that answered. --shots keeps a picture of the
+         page at each step
+
 The packages' own legs - each plays its subject through the DAC and is
 checked off MartyPC's Covox capture - live with each package's test:
 tests/midirack.py --arm covox, tests/trkspk.py --leg covox,
@@ -51,7 +60,13 @@ ARMS = {
     "drv": (COVOX_M, "build/covoxsys720.img"),
     "auto": (COVOX_M, "build/midisys720.img"),
     "nolpt": (PLAIN_M, "build/covoxsys360.img"),
+    "cp": (COVOX_M, "build/midisys720.img"),
 }
+# kernel/ctrl.inc's geometry: the item list, the pane and the Sound page
+CP_I0Y, CP_IROWH, CP_RX = 6, 14, 96
+CP_PGX, CP_PR0Y, CP_PROWH = 4, 26, 20
+CPS_LX0, CPS_LDX, CPS_LY = 66, 50, 86
+CP_SOUND = 4
 DSV_CAPS, DSV_TIERS = 0, 14             # drivers/os88drv.inc
 SND_CAP_LPTDAC = 0x0100                 # apps/os88api.inc
 SND_RT_LPT = 4                          # kernel/snd.inc: + n = LPTn+1
@@ -67,13 +82,75 @@ def u16(b):
     return b[0] | b[1] << 8
 
 
+def cp(ui, shots):
+    m = ui.m
+
+    def snap(name, w):
+        if not shots:
+            return
+        fw, fh, rgb = m.fbuf()
+        x0, y0 = w.content[0] - 4, w.content[1] - 24
+        cw, ch = 330, 160
+        rows = bytearray()
+        for y in range(y0, y0 + ch):
+            rows += rgb[3 * (y * fw + x0):3 * (y * fw + x0 + cw)]
+        M.write_png_rgb(os.path.join(shots, name + ".png"), cw, ch,
+                        bytes(rows))
+
+    def state():
+        caps = u16(m.read(m.sym("drv_svc") + DSV_CAPS, 2))
+        return m.read(m.sym("snd_route"), 1)[0], caps & SND_CAP_LPTDAC
+
+    def click(x, y, what, want):
+        ui.mo.click(x, y, settle=0)
+        M.until(m, lambda mm: state() == want, what, poll=0.3, limit=60.0,
+                guest=5.0)
+    ui.menu_pick("Apple", "Control Panel")
+    w = ui.wait_window("Control Panel")
+    cx, cy = w.content[0], w.content[1]
+    for ordinal in range(8):
+        ui.mo.click(cx + 40, cy + CP_I0Y + ordinal * CP_IROWH + 7, settle=0)
+        M.until(m, lambda mm: True, "a beat", poll=0.2, limit=30.0, guest=.5)
+        if m.read(m.sym("cp_sel"), 1)[0] == CP_SOUND:
+            break
+    else:
+        fail("cp: no row of the list is the Sound page")
+    M.guest_sleep(m, 1.0)
+    snap("0-auto", w)
+    px = cx + CP_RX
+    ly = cy + CPS_LY + 6
+    if state() != (0, 0):
+        fail("cp: the page opened on %r, want AUTO and no DAC" % (state(),))
+    click(px + CPS_LX0 + 6, ly, "LPT1", (SND_RT_LPT, SND_CAP_LPTDAC))
+    snap("1-lpt1", w)
+    click(px + CPS_LX0 + CPS_LDX + 6, ly, "LPT2",
+          (SND_RT_LPT + 1, SND_CAP_LPTDAC))
+    snap("2-lpt2", w)
+    ui.mo.click(px + CPS_LX0 + 2 * CPS_LDX + 6, ly, settle=0)
+    M.guest_sleep(m, 2.0)
+    if state() != (SND_RT_LPT + 1, SND_CAP_LPTDAC):
+        fail("cp: LPT3, which did not answer, moved the tier to %r"
+             % (state(),))
+    click(px + CP_PGX + 6, cy + CP_PR0Y + 6, "PC Speaker", (1, 0))
+    snap("3-speaker", w)
+    click(px + 30, ly, "the Covox label", (SND_RT_LPT, SND_CAP_LPTDAC))
+    snap("4-label", w)
+    print("PASS cp: LPT1 and LPT2 each taken and published, LPT3 refused, "
+          "the speaker withdrew the DAC, the label took LPT1", flush=True)
+    ui.close(w)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True, choices=sorted(ARMS))
+    ap.add_argument("--shots", help="keep the cp arm's pictures here")
     a = ap.parse_args()
     machine, img = ARMS[a.arm]
     with os88ui.boot(img, machine=machine, settle=False) as ui:
         m = ui.m
+        if a.arm == "cp":
+            return cp(ui, a.shots)
         caps = u16(m.read(m.sym("drv_svc") + DSV_CAPS, 2))
         tiers = u16(m.read(m.sym("drv_svc") + DSV_TIERS, 2))
         owner = u16(m.read(m.sym("drv_owner"), 2))
