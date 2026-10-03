@@ -63,10 +63,12 @@ SND_RT_AUTO equ 0               ; unset (a fresh SYSTEM.CFG): the best tier
 SND_RT_SPK  equ 1               ; the PC speaker, whatever else is loaded
 SND_RT_FM   equ 2               ; AdLib: FM only - no streams, no 12KB
 SND_RT_SB   equ 3               ; Sound Blaster: FM and streams both
-SND_RT_LPT  equ 4               ; Covox: FM, no streams, and the parallel
-                                ; port's DAC (SPEC.md 34.14) - a SIBLING of
-                                ; SND_RT_FM, not a rung above SND_RT_SB, so it
-                                ; is only ever compared for by equality. No
+SND_RT_LPT  equ 4               ; Covox on LPT1; + 1 LPT2, + 2 LPT3: FM, no
+                                ; streams, and that parallel port's DAC
+                                ; (SPEC.md 34.14) - SIBLINGS of SND_RT_FM, not
+                                ; rungs above SND_RT_SB, so they are compared
+                                ; for as `>= SND_RT_LPT` and never in the
+                                ; ladder's own `>= SND_RT_SB`. No
                                 ; resident byte reads it: snd_rt_card already
                                 ; sends a tone to the driver for anything but
                                 ; SND_RT_SPK, which is the AdLib here

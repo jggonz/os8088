@@ -2963,6 +2963,27 @@ SOAK = [
         "programs. --break transposes the reference and must fail",
         needs=("marty", "nasm"), serial=True,
         wants=("build/midisys720.img", "build/apps720.img")),
+    Row("covoxdrv", "soak", py("tests/covox.py", "--arm", "drv"), 30.0,
+        "SOUND.DRV's Covox (SPEC.md 34.14) on MartyPC's Covox machine - a "
+        "Hercules 5150 whose adapter port at 3BCh is LPT1 and whose Covox is "
+        "on LPT2 at 378h, no sound card - booting `make covoxtest`'s disk: "
+        "the driver attaches on the ports alone, publishes LPT1 and LPT2 as "
+        "choices and not LPT3, takes the LPT2 tier and publishes "
+        "SND_CAP_LPTDAC with the DAC at 378h",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/covoxsys720.img",)),
+    Row("covoxauto", "soak", py("tests/covox.py", "--arm", "auto"), 30.0,
+        "the same machine with the sound tier AUTO (`make miditest`'s disk): "
+        "attached, both port choices live, and SND_CAP_LPTDAC NOT published "
+        "- a port is not a Covox until the user says so (SPEC.md 34.14)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/midisys720.img",)),
+    Row("covoxnolpt", "soak", py("tests/covox.py", "--arm", "nolpt"), 30.0,
+        "the 360KB Covox disk on the CGA 5150, which has no parallel port at "
+        "all and no card: SOUND.DRV refuses, and the Covox tier stays in the "
+        "kernel's byte for the machine the disk goes home to (SPEC.md 34.14)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/covoxsys360.img",)),
     Row("midirackwt", "soak", py("tests/midirack.py", "--arm", "wt"), 70.0,
         "MIDIRack's Sound Blaster WAVETABLE (SPEC.md 105.8.6) on the 5150, "
         "with tools/os88midbank.py's synthetic bank beside the package (no "

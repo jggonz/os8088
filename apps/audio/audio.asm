@@ -200,7 +200,6 @@ AP_B_NONE  equ 0xFF
     APW ap_win
     APB ap_state
     APB ap_have_worker
-    APB ap_have_sb
     APB ap_shuffle
     APB ap_repeat
     APW ap_msg
@@ -338,14 +337,6 @@ apw_hdrbuf equ ap_scratch
 ; out: CF = 0 ok / CF = 1 fatal (no window)
 ; =============================================================================
 ap_entry:
-    call OSAPI_SND_CAPS            ; AX = merged caps word
-    xor cl, cl
-    test ax, SND_CAP_PCM_BG
-    jz .nosb
-    mov cl, 1
-.nosb:
-    mov [ap_have_sb], cl
-
     call OSAPI_ARG_FILE           ; CF = 1 launched empty (the common case)
     jc .nodoc
     ; SI -> name in KERNEL_SEG; ES is KERNEL_SEG on entry - copy it out
@@ -513,11 +504,22 @@ ap_s_playing: db 'Playing', 0
 ap_s_paused:  db 'Paused', 0
 ap_s_stopped: db 'Stopped', 0
 ap_s_nosb:    db 'No Sound Blaster - playback off', 0
-ap_s_spk:     db 'PC speaker - click or Space to pause', 0
-ap_s_spkpaused: db 'Paused - Space plays on the speaker', 0
-ap_s_spkbusy: db 'The PC speaker is busy', 0
+; THE SPEAKER'S SENTENCES, each after two bytes: where its device is and how
+; long, so that aps_say can tell it again with the Covox in that place (SPEC.md
+; 86.21.3) - a play opened on a Covox says Covox where the speaker's says
+; speaker, for 8 bytes here rather than four more sentences. The macro counts
+; them, so a sentence reworded cannot leave its two bytes pointing elsewhere
+%macro APSAY 4                     ; label, before, the device, after
+%strlen %%b %2
+%strlen %%d %3
+              db %%b, %%d
+%1:           db %2, %3, %4, 0
+%endmacro
+    APSAY ap_s_spk, '', 'PC speaker', ' - click or Space to pause'
+    APSAY ap_s_spkpaused, 'Paused - Space plays on the ', 'speaker', ''
+    APSAY ap_s_spkbusy, 'The ', 'PC speaker', ' is busy'
 ap_s_spkfast: db 'Made for a faster machine', 0
-ap_s_spkslow: db 'Too slow for this file on the speaker', 0
+    APSAY ap_s_spkslow, 'Too slow for this file on the ', 'speaker', ''
 ap_s_nomem:   db 'Out of memory', 0
 ap_s_nofile:  db 'Playlist is empty', 0
 ap_s_loaderr: db 'Cannot play this file', 0

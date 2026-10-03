@@ -18,6 +18,9 @@
 ;             desktop is frozen and the window is an imposter, the Audio
 ;             Player's shape (86.21). The bracket's body renders; the pulses
 ;             are os88spk.inc's
+;   LPT       a Covox: SPK exactly, but os88spk_lpt names the port first, so
+;             the ring holds the synth's own unsigned bytes and the ISR puts
+;             each on the parallel port's DAC (SPEC.md 34.14, 105.8.7)
 ;
 ; THE HANDSHAKE (the Tracker rule, SPEC.md 45.2): [mr_inpass] brackets the
 ; worker's sequencing and nothing else - never its drawing, which takes the
@@ -68,7 +71,14 @@ mr_nullvt:  dw mr_nop, mr_nop, mr_nop, mr_nop, mr_nop, mr_nop, mr_nop
 
 ; -----------------------------------------------------------------------------
 ; mro_pick - AL = the output to open (MRO_*), from [mr_want] and what the
-; machine answered at entry. Never MRO_NONE: the speaker is always there
+; machine answered at entry. Never MRO_NONE: the speaker is always there.
+;
+; AUTOMATIC's order is what each output costs the machine while it sounds:
+; FM nothing, the DSP a worker, and the two bracket outputs the whole of it.
+; Of those two the Covox goes first - it is only ever there because the USER
+; announced it (the Sound page's Covox tier, SPEC.md 34.14), and an 8-bit
+; DAC is a better sound than a pulse width at exactly the same price. Play
+; in Background turns either into the tone: neither can play on the desktop
 ; -----------------------------------------------------------------------------
 mro_pick:
     mov al, [mr_want]
@@ -78,6 +88,8 @@ mro_pick:
     je .wt                          ; until somebody asks
     cmp al, MR_OUT_SPK
     je .spk
+    cmp al, MR_OUT_LPT
+    je .lpt
     cmp al, MR_OUT_SB
     je .sb
     cmp al, MR_OUT_AUTO
@@ -86,7 +98,11 @@ mro_pick:
     jne .fm                         ; machine nothing while it sounds
     cmp byte [mr_hassb], 0
     jne .sb
-    jmp short .spk
+    cmp byte [mr_haslpt], 0         ; ...then a Covox, then the speaker
+    je .spk
+.lpt:
+    mov al, MRO_LPT
+    jmp short .bg
 .fm:
     mov al, MRO_FM
     ret
@@ -101,6 +117,7 @@ mro_pick:
     ret
 .spk:
     mov al, MRO_SPK
+.bg:
     cmp byte [mr_bg], 0
     je .r
     mov al, MRO_TONE
@@ -127,6 +144,7 @@ mro_play:
     push cx
     push dx
     call mro_close                  ; whatever was open, gone
+    call mr_lptinfo                 ; the Covox as the Sound page says NOW
     call mro_pick
     mov [mr_out], al
     cmp al, MRO_FM
@@ -173,7 +191,7 @@ mro_play:
     jc .no
     jmp short .go
 .nsb:
-    mov byte [mr_state], MR_ST_PLAY ; THE SPEAKER: the bracket, now
+    mov byte [mr_state], MR_ST_PLAY ; THE SPEAKER OR THE COVOX: the bracket
     call mrk_start                  ; (it returns when the user leaves it)
     jc .no
     jmp short .ok
@@ -268,7 +286,10 @@ mro_resume:
     jne .out
     mov al, [mr_out]
     cmp al, MRO_SPK
+    je .brk
+    cmp al, MRO_LPT
     jne .nspk
+.brk:
     jmp mrk_resume                  ; the bracket again
 .nspk:
     cmp al, MRO_SB
@@ -360,7 +381,7 @@ mro_close:
     call mrm_close
     jmp short .done
 .n3:
-    mov byte [mrk_on], 0            ; the speaker's session is over
+    mov byte [mrk_on], 0            ; the speaker's (or Covox's) session is over
 .done:
     mov byte [mr_out], MRO_NONE
     mov byte [mr_ended], 0
@@ -1086,6 +1107,45 @@ mr_rate_user:
     stc
     ret
 
+; -----------------------------------------------------------------------------
+; mr_lptinfo - [mr_haslpt] and [mr_lptport] from what SOUND.DRV says NOW: the
+; Covox tier picked on the Sound page and a port behind it (os88spk_lptq,
+; SPEC.md 34.14). Asked at entry, when Settings opens (so the row's greying
+; is the fact at the moment it is drawn) and at every Play - the tier is the
+; Control Panel's and moves while we are open, and the question is one
+; OSAPI_SND_CAPS and one OSAPI_DRV_CALL, nothing beside a song's start.
+;
+; [mr_hassb] and [mr_sbhi] are asked again with it, because THE SAME CLICK
+; MOVES THEM: the Covox tier turns the DSP's streams off (and any other tier
+; on a Sound Blaster turns them back on), so an entry-time "there is a card"
+; would have Automatic open a stream the driver no longer has
+; -----------------------------------------------------------------------------
+mr_lptinfo:
+    push ax
+    push bx
+    push dx
+    call OSAPI_SND_CAPS             ; AX = caps; BL and DX spent
+    mov byte [mr_hassb], 0
+    test ax, SND_CAP_PCM_BG
+    jz .nsb
+    mov byte [mr_hassb], 1
+.nsb:
+    mov byte [mr_sbhi], 0
+    test ax, SND_CAP_PCM_HI
+    jz .nhi
+    mov byte [mr_sbhi], 1
+.nhi:
+    mov byte [mr_haslpt], 0
+    call os88spk_lptq               ; CF = 0, DX = the port
+    jc .out
+    mov [mr_lptport], dx
+    mov byte [mr_haslpt], 1
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 ; mro_free - every claim the outputs hold, given back (the window's close)
 mro_free:
     push dx
@@ -1126,6 +1186,16 @@ mrk_start:
     push si
     push di
     push es
+    xor dx, dx                      ; DX = the Covox's port, or 0 the speaker
+    cmp byte [mr_out], MRO_LPT
+    jne .dac
+    mov word [mr_msg], mr_s_nolpt   ; chosen by name and not announced (or
+    cmp byte [mr_haslpt], 0         ; withdrawn since): refused in words
+    je .no
+    mov dx, [mr_lptport]
+.dac:
+    call os88spk_lpt                ; BEFORE init, which tables for it - and
+                                    ; every time, since the port is kept
     cmp word [mrk_seg], 0
     jne .have
     mov ax, (MRK_RL + 272 + 1023) / 1024
@@ -1154,6 +1224,9 @@ mrk_start:
     pop cx
     mov word [mr_msg], mr_s_spkslow
     jc .no
+    xor si, si                      ; A COVOX: no map - the synth's own
+    cmp byte [mr_out], MRO_LPT      ; unsigned bytes ARE the DAC's (os88spk
+    je .map                         ; tabled the identity), the card's case
     push ds                         ; the PWM table, copied in: the synth's
     pop es                          ; output table goes through it
     mov di, mrk_map
@@ -1166,8 +1239,9 @@ mrk_start:
     rep movsb
     pop cx
     pop ds
-    mov ax, [mrk_rate]
     mov si, mrk_map
+.map:
+    mov ax, [mrk_rate]
     call mry_open
     call mro_rewind
     mov es, [mrk_seg]
@@ -1216,6 +1290,10 @@ mrk_bracket:
     push si
     push di
     mov word [mr_msg], mr_s_spkplay
+    cmp byte [mr_out], MRO_LPT      ; (a Covox play names itself)
+    jne .m1
+    mov word [mr_msg], mr_s_lptplay
+.m1:
     mov byte [mr_state], MR_ST_PLAY
     call mru_update
     mov byte [mrk_exit], MRX_ERR
@@ -1232,6 +1310,9 @@ mrk_bracket:
     jne .nd
     mov byte [mr_state], MR_ST_PAUSE
     mov word [mr_msg], mr_s_spkpaused
+    cmp byte [mr_out], MRO_LPT
+    jne .out
+    mov word [mr_msg], mr_s_lptpaused
     jmp short .out
 .nd:
     mov byte [mr_state], MR_ST_STOP
@@ -1527,6 +1608,8 @@ mr_elapsed:
     je .sb
     cmp al, MRO_SPK
     je .spk
+    cmp al, MRO_LPT
+    je .spk                         ; (the Covox's ring is the speaker's)
     xor ax, ax                      ; nothing open: the start
     xor dx, dx
     jmp short .sec

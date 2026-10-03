@@ -75,11 +75,11 @@ SNDV_MIDCLOSE equ 5             ; every channel's notes off and controllers
                                 ; one that is not yours does nothing
 
 SNDV_DACINFO equ 6              ; THE COVOX (SPEC.md 34.14). out CF=0, AX = the
-                                ; DATA PORT of the parallel port the user said
-                                ; a Covox Speech Thing is on - the first that
-                                ; answered attach's latch test, LPT1 first;
-                                ; CF=1 AX = SNDE_NODAC when the sound tier is
-                                ; not SND_RT_LPT or no port answered. Claims
+                                ; DATA PORT of the LPT the user said a Covox
+                                ; Speech Thing is on (the Sound page's tier
+                                ; SND_RT_LPT + n, LPTn+1); CF=1 AX = SNDE_NODAC
+                                ; when the tier is not a Covox's or its port
+                                ; did not answer attach's latch test. Claims
                                 ; nothing: the DAC is played from inside the
                                 ; caller's own FSXF_RATE bracket
                                 ; (apps/os88spk.inc's os88spk_lpt), and only

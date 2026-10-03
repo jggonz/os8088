@@ -95,7 +95,12 @@ MRB_QUIT    equ 13
     MRW mru_lbar
     MRW mru_lmeas
     MRW mru_ltempo
-    MRBUF mru_s, 48                 ; formatting scratch
+    MRBUF mru_s, 64                 ; formatting scratch - 64, not 48: the
+                                    ; Settings' Found line is 62 on an OPL3,
+                                    ; an SB16, an MPU-401 and a bank, and ran
+                                    ; into mru_s2 at 48. A Covox's is never on
+                                    ; it beside the DSP (its tier turns the
+                                    ; streams off), so it adds nothing here
     MRBUF mru_s2, 48
     MRBUF mru_dev, 64               ; status line 1
     MRBUF mru_file, 72              ; status line 2
@@ -2572,6 +2577,9 @@ mru_outname:
     mov si, mru_o_spk
     cmp al, MRO_SPK
     je .r
+    mov si, mru_o_lpt
+    cmp al, MRO_LPT
+    je .r
     mov si, mru_o_tone
     cmp al, MRO_TONE
     je .r
@@ -2602,6 +2610,7 @@ mru_o_spk:  db 'PC Speaker', 0
 mru_o_tone: db 'PC Speaker tone', 0
 mru_o_mid:  db 'MIDI out (MPU-401)', 0
 mru_o_wt:   db 'SB Wavetable', 0
+mru_o_lpt:  db 'Covox (LPT DAC)', 0
 
 ; -----------------------------------------------------------------------------
 ; mru_np_dyn - Elapsed, Measure, Tempo, the bar and the times under it, each
@@ -3338,11 +3347,24 @@ mru_mkdev:
     mov si, mru_d_tone
     cmp al, MRO_TONE
     je .sp
-    mov si, mru_d_spk
+    cmp al, MRO_LPT
+    jne .n3
+    mov si, mr_s_nolpt              ; A COVOX: "Covox at 378h - ...", or
+    cmp byte [mr_haslpt], 0         ; why there is none (Play's own words)
+    je .sp
+    mov si, mru_d_lpt
     call mru_cat
-    mov ax, [mrk_rate]
-    cmp byte [mr_out], MRO_SPK
-    je .kr
+    mov ax, [mr_lptport]
+    call mru_hex3
+    mov si, mru_d_lpt2
+    jmp short .kc
+.n3:
+    mov si, mru_d_spk
+.kc:
+    call mru_cat
+    cmp [mr_out], al                ; AL = the output shown: OPEN, its rate;
+    mov ax, [mrk_rate]              ; else what a Play would ask the pulses
+    je .kr                          ; for now (a mov leaves the flags)
     call mrk_rate_for
     call mrk_real
 .kr:
@@ -3366,6 +3388,37 @@ mru_d_tone: db 'PC speaker - melody line, in the background', 0
 mru_d_mpu3: db 'MPU-401 at 330h - MIDI out to the module', 0
 mru_d_mpu0: db 'MPU-401 at 300h - MIDI out to the module', 0
 mru_d_wt:   db 'Sound Blaster DSP - wavetable at ', 0
+mru_d_lpt:  db 'Covox at ', 0
+mru_d_lpt2: db 'h - 8-bit DAC synth at ', 0
+
+; mru_hex3 - AX's low three hex digits at DI (left on the NUL): a parallel
+; port's address, 278 / 378 / 3BC
+mru_hex3:
+    push ax
+    push cx
+    push dx
+    mov dx, ax
+    mov cl, 4
+    rol dx, cl                      ; past the top nibble
+    mov ch, 3
+.h:
+    rol dx, cl
+    mov al, dl
+    and al, 15
+    add al, '0'
+    cmp al, '9'
+    jbe .p
+    add al, 'A' - '9' - 1
+.p:
+    mov [di], al
+    inc di
+    dec ch
+    jnz .h
+    mov byte [di], 0
+    pop dx
+    pop cx
+    pop ax
+    ret
 
 ; mru_mkfile - status line 2: "File: NAME (6,337 bytes) - Standard MIDI File
 ; (Type 1)"
@@ -3687,7 +3740,7 @@ mr_ab0:     db 0
 mr_ab1:     db 'MIDIRack for os8088', 0
 mr_ab2:     db 'Version 1.0', 0
 mr_ab3:     db 'Standard MIDI Files on an OPL2 / OPL3,', 0
-mr_ab4:     db 'a Sound Blaster, or the PC speaker', 0
+mr_ab4:     db 'a Sound Blaster, a Covox or the speaker', 0
 mr_ab5:     db 'FM bank and song arrangements: CC0', 0
 
 ; --- MIDI Info: its lines, built when it is drawn -----------------------------
@@ -3831,7 +3884,7 @@ mr_in_notext: db '(no text in the file)', 0
 mru_clabs:  dw mru_l_ok, mru_l_cancel
 mru_l_ok:     db 'OK', 0
 mru_l_cancel: db 'Cancel', 0
-mru_radit:  dw mru_r0, mru_r1, mru_r2, mru_r3, mru_r4, mru_r5, mru_r6
+mru_radit:  dw mru_r0, mru_r1, mru_r2, mru_r3, mru_r4, mru_r5, mru_r6, mru_r7
 mru_r0:     db 'Automatic', 0
 mru_r1:     db 'OPL3 FM, 17 voices', 0
 mru_r2:     db 'OPL2 FM (AdLib), 8', 0
@@ -3839,6 +3892,7 @@ mru_r3:     db 'Sound Blaster synth', 0
 mru_r4:     db 'PC speaker synth', 0
 mru_r5:     db 'MIDI out (MPU-401)', 0
 mru_r6:     db 'SB wavetable (bank)', 0
+mru_r7:     db 'Covox (parallel port)', 0
 mru_ratit:  dw mru_q0, mru_q1, mru_q2, mru_q3, mru_q4, mru_q5, mru_q6
 mru_q0:     db 'Automatic', 0
 mru_q1:     db '8,000 Hz', 0
@@ -3851,8 +3905,8 @@ mru_sct:    db 'Settings', 0
 mru_sho:    db 'Output device', 0
 mru_shr:    db 'Synth sample rate', 0
 mru_l_bgd:  db 'Speaker: play the melody in the background', 0
-mru_snote:  db 'Above 22,050 Hz needs an SB Pro or SB16. The speaker', 0
-mru_snote2: db 'reaches 24.8 kHz (8 kHz on an 8088). FM, MIDI: no rate.', 0
+mru_snote:  db 'Above 22,050 Hz needs an SB Pro or SB16. Speaker and', 0
+mru_snote2: db 'Covox: 24.8 kHz (8 kHz on an 8088). FM, MIDI: no rate.', 0
 mru_sfnd:   db 'Found: ', 0
 mru_f_opl2: db 'OPL2  ', 0
 mru_f_opl3: db 'OPL3  ', 0
@@ -3861,6 +3915,7 @@ mru_f_hi:   db '(to 44.1 kHz)  ', 0
 mru_f_spk:  db 'PC speaker', 0
 mru_f_mpu:  db 'MPU-401  ', 0
 mru_f_bnk:  db 'Bank  ', 0
+mru_f_lpt:  db 'Covox  ', 0
 MRU_SCW     equ 520
 
 ; mru_screct - the dialog's rect and every record in it, from the layout
@@ -3873,16 +3928,24 @@ mru_screct:
     cmp byte [mru_cmp], 0
     je .p
     mov word [mru_scp], 12          ; compact: the rows close up
+%if MR_NRATE >= MR_NOUT
+  %error "mru_screct: compact puts OK and Cancel under the SHORTER rate group"
+%endif
 .p:
-    mov ax, [mru_scp]               ; the height: the groups' seven rows
-    mov cx, 7                       ; and the rows around them
-    mul cx
-    add ax, 6 + 11 + 12 + 2 + 6
-    add ax, [mru_bh]                ; ...OK and Cancel's own row
-    cmp byte [mru_cmp], 0           ; compact: that is all - 133 lines, and
-    jne .h                          ; the background box is the menu's alone
-    add ax, 14 + 17 + 22            ; there; tall: that box, the Found line
-.h:                                 ; and the note
+    mov ax, [mru_scp]               ; the height: the output group's eight
+    mov cx, MR_NOUT                 ; rows (the taller of the two) and the
+    mul cx                          ; rows around them
+    add ax, 6 + 11 + 12 + 6
+    cmp byte [mru_cmp], 0           ; COMPACT: that is all - 131 lines of a
+    jne .h                          ; CGA's 136. OK and Cancel sit under the
+                                    ; rate group's seven rows, beside the
+                                    ; output's eighth, where an own row would
+                                    ; have made 145 (SPEC.md 105.9.2); and
+                                    ; the background box is the menu's alone
+    add ax, 2                       ; TALL: OK and Cancel's own row, that
+    add ax, [mru_bh]                ; box, the Found line and the note
+    add ax, 14 + 17 + 22
+.h:
     mov [mru_sch], ax
     mov ax, [mru_cw]                ; centred, clamped to the content
     sub ax, MRU_SCW
@@ -3937,15 +4000,15 @@ mru_screct:
     sub ax, 10
     mov [mru_rad2+OS88UI_RD_RECT+4], ax
     mov ax, [mru_scp]
-    mov cx, 7
+    mov cx, MR_NRATE
     push dx
     mul cx
     pop dx
     add ax, dx
-    mov cx, ax                      ; CX = under the groups
     dec ax
     mov [mru_rad2+OS88UI_RD_RECT+6], ax
-    add cx, 2
+    mov cx, [mru_rad+OS88UI_RD_RECT+6]  ; CX = under BOTH groups: the output's
+    add cx, 3                       ; is the taller, and the box spans it
     mov [mru_scky], cx              ; the check box
     mov ax, [mru_sc]
     add ax, 12
@@ -3977,9 +4040,9 @@ mru_screct:
     mov [mru_crect+6], dx
     mov [mru_crect+2], bx
     sub cx, 75
-    mov [mru_crect], cx             ; (both faces: the output group is seven
-                                    ; rows now, and the space a five-row one
-                                    ; left under it for the pair is gone)
+    mov [mru_crect], cx             ; (tall: under everything; compact:
+                                    ; under the rate group, the row its
+                                    ; seven leave beside the output's eight)
     mov word [mru_cflg], OS88UI_FILL | OS88UI_DEF   ; Enter is OK
     mov word [mru_cflg+2], OS88UI_FILL
     call mru_radset
@@ -4020,6 +4083,10 @@ mru_radset:
     jne .bnk
     or al, 64                       ; no MIDIRACK.BNK beside us
 .bnk:
+    cmp byte [mr_haslpt], 0
+    jne .lpt
+    or al, 128                      ; no Covox announced (the Sound page)
+.lpt:
     mov [mru_rad+OS88UI_RD_DIS], ax
     mov word [mru_rad2+OS88UI_RD_ITEMS], mru_ratit
     mov word [mru_rad2+OS88UI_RD_N], MR_NRATE
@@ -4132,8 +4199,8 @@ mru_found:
 .fm:
     call mru_cat
 .nofm:
-    cmp byte [mr_hassb], 0
-    je .nosb
+    cmp byte [mr_hassb], 0          ; (asked again with the Covox, since
+    je .nosb                        ; its tier turns the DSP's off: 34.14)
     mov si, mru_f_dsp
     call mru_cat
     cmp byte [mr_sbhi], 0
@@ -4151,6 +4218,11 @@ mru_found:
     mov si, mru_f_bnk
     call mru_cat
 .nobnk:
+    cmp byte [mr_haslpt], 0
+    je .nolpt
+    mov si, mru_f_lpt
+    call mru_cat
+.nolpt:
     mov si, mru_f_spk
     call mru_cat
     pop di

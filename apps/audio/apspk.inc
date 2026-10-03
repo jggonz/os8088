@@ -29,6 +29,13 @@
 ; IMA ADPCM, whose decode is paid at the source rate), 24,858 past it
 ; (34.11.8) - else S / k averaged over k (a box, the cheapest anti-alias) when
 ; k divides S, else a step through the source to TOP.
+;
+; A COVOX PLAYS THROUGH THE SAME BRACKET (SPEC.md 86.21.3, 34.14). aps_dev asks
+; os88spk_lptq at every play's start from the desktop and names the port to
+; os88spk, which then plays the ring's bytes as voltages. The plan and the
+; ladder are the speaker's; what changes is the ring's bytes: the SAMPLES,
+; COPIED as a card would play them - no shaper, no leveller - and a file of
+; counts turned back into its samples through ap_cinv on the way in.
 ; =============================================================================
 
 APS_RSIZE   equ 0x20                ; ring size code (bits 4-5): 4096 << 2
@@ -37,7 +44,9 @@ APS_LOW     equ APS_RL / 4          ; a lead under this, still producing:
                                     ; the machine is behind (aps_fall)
 APS_RMIN    equ 4679                ; a pulse of 255 counts, mode 0's lobyte
 APS_SPANS   equ 6                   ; spans made between polls of the keys
-APS_COPY    equ 0xFF                ; aps_mode: a file of counts, copied
+APS_COPY    equ 0xFF                ; aps_mode: copied - a file of counts,
+                                    ; or anything on a Covox...
+APS_XL      equ 0xFE                ; ...or through ap_cinv: counts, Covox
 
 APX_DESK    equ 1                   ; paused, back to the desktop
 APX_STOP    equ 2                   ; stopped
@@ -56,7 +65,8 @@ APX_ERR     equ 4                   ; ap_msg says why
     APB aps_rung                    ; the ladder's rung, for the session
     APB aps_lag                     ; the last rung is still behind: play on
     APW aps_crem                    ; the clock's remainder, in 1/R samples
-    APB aps_mode                    ; SPKFX_PRE_* or APS_COPY
+    APB aps_mode                    ; SPKFX_PRE_*, APS_COPY or APS_XL
+    APW aps_lpt                     ; the Covox's port this play, 0 = speaker
     APW aps_span                    ; samples a span (34.11.9)
     APB aps_exit                    ; APX_*
     APW aps_hk                      ; rate periods, counted by aps_hook
@@ -119,6 +129,10 @@ aps_plan:
     jne .nshp
     mov byte [aps_mode], SPKFX_PRE_NONE     ; shaped on the host: tables only
 .nshp:
+    cmp word [aps_lpt], 0           ; A COVOX: the samples COPIED, as a card
+    je .nlpt                        ; plays them - a WAV's eight bits are the
+    mov byte [aps_mode], APS_COPY   ; DAC's, so nothing to shape (86.21.3)
+.nlpt:
     cmp byte [apw_spk], 2           ; COUNTS: 1:1, or not at all - and
     jne .pcm                        ; nothing to come down a rung to
     mov byte [aps_mode], APS_COPY
@@ -126,6 +140,10 @@ aps_plan:
     jne .slow
     cmp ax, bx
     ja .fast
+    cmp word [aps_lpt], 0           ; ...and on a Covox turned back into the
+    je .rate                        ; samples they came from, as on a card
+    mov byte [aps_mode], APS_XL     ; (86.21.1): copied raw they are a quiet
+    call ap_cinv_build              ; wave off the DAC's middle
     jmp short .rate
 .pcm:
     cmp ax, bx
@@ -185,7 +203,8 @@ aps_plan:
     stc
     jmp short .out
 .slow:
-    mov word [ap_msg], ap_s_spkslow
+    mov ax, ap_s_spkslow
+    call aps_say
     stc
 .out:
     pop dx
@@ -244,8 +263,8 @@ aps_setup:
     xor cl, cl                      ; one pulse a sample
     call os88spk_init
     jc .rate
-    cmp byte [aps_mode], APS_COPY
-    je .ring
+    cmp byte [aps_mode], APS_XL     ; (APS_COPY or APS_XL: no shaper)
+    jae .ring
     mov di, aps_fam
     mov al, [aps_mode]
     mov ah, 1                       ; the carrier put away in the quiet
@@ -289,6 +308,7 @@ aps_trk_reset:
 ; lock held (a callback, or ap_onwake with it taken)
 ; -----------------------------------------------------------------------------
 aps_open:
+    call aps_dev                    ; the speaker or the Covox, asked now
     call aps_trk_reset
     call aps_plan
     jc .no
@@ -306,12 +326,72 @@ aps_open:
 aps_resume:
     cmp byte [aps_on], 0
     je .no
-    call aps_bracket
-    clc
-    ret
+    call aps_bracket                ; (on the device it opened on: the ring
+    clc                             ; holds that device's bytes, and the
+    ret                             ; session keeps it as it keeps its rung)
 .no:
     stc
     ret
+
+; aps_dev - WHICH DEVICE: the Covox's data port while the sound tier is the
+; Covox and SOUND.DRV found one (os88spk_lptq, SPEC.md 34.14), else 0 - the
+; speaker - into aps_lpt and os88spk_lpt. Asked when a play starts from the
+; desktop: the tier is the Control Panel's and may have moved since the last
+; one. Not on a resume (the session's ring is its device's bytes), and never
+; inside the bracket, where nothing can reach the Control Panel
+aps_dev:
+    push dx
+    call os88spk_lptq               ; DX = the port, or CF = 1
+    jnc .have
+    xor dx, dx
+.have:
+    call os88spk_lpt
+    mov [aps_lpt], dx
+    pop dx
+    ret
+
+; aps_say - ap_msg = AX, a speaker sentence - or on a Covox play the same
+; sentence told again in aps_cvxs with the Covox where the speaker was: the
+; two bytes before it say where and how long (audio.asm). DS = CS; AX spent
+aps_say:
+    cmp word [aps_lpt], 0
+    je .s
+    push cx
+    push si
+    push di
+    push es
+    push cs
+    pop es
+    mov si, ax
+    mov di, aps_cvxs
+    mov cx, [si-2]                  ; CL = where the device is, CH how long
+    mov al, ch
+    xor ch, ch
+    cld
+    rep movsb                       ; the sentence up to it...
+    cbw
+    add si, ax                      ; ...past it...
+    mov ax, 'Co'
+    stosw
+    mov ax, 'vo'
+    stosw
+    mov al, 'x'
+    stosb                           ; ...the Covox...
+.c:
+    lodsb                           ; ...and the rest, its NUL too
+    stosb
+    or al, al
+    jnz .c
+    mov ax, aps_cvxs
+    pop es
+    pop di
+    pop si
+    pop cx
+.s:
+    mov [ap_msg], ax
+    ret
+
+    APBUF aps_cvxs, 40              ; the sentence, told for the Covox
 
 ; aps_close - the session over. The ring's claim is kept for the next
 aps_close:
@@ -342,7 +422,8 @@ aps_bracket:
     push dx
     push si
     push di
-    mov word [ap_msg], ap_s_spk     ; the window as the bracket takes it: the
+    mov ax, ap_s_spk                ; the window as the bracket takes it: the
+    call aps_say                    ; (or the Covox's)
     mov byte [ap_state], AP_ST_PLAY ; status line and the clock say playing
     call apu_repaint
     mov byte [aps_exit], APX_ERR
@@ -357,7 +438,8 @@ aps_bracket:
     cmp al, APX_DESK
     jne .ndesk
     mov byte [ap_state], AP_ST_PAUSE
-    mov word [ap_msg], ap_s_spkpaused
+    mov ax, ap_s_spkpaused
+    call aps_say
     jmp short .out
 .ndesk:
     mov byte [ap_state], AP_ST_STOP
@@ -389,7 +471,8 @@ aps_main:
     call aps_prefill
     call os88spk_go
     jnc .go
-    mov word [ap_msg], ap_s_spkbusy
+    mov ax, ap_s_spkbusy
+    call aps_say
     mov byte [aps_exit], APX_ERR
     ret
 .go:
@@ -519,7 +602,8 @@ aps_behind:
     call os88spk_go
     mov al, 0
     jnc .out
-    mov word [ap_msg], ap_s_spkbusy
+    mov ax, ap_s_spkbusy
+    call aps_say
 .err:
     mov al, APX_ERR
 .out:
@@ -573,8 +657,8 @@ aps_span1:
     mov si, [aps_soff]              ; DS:SI = the span, wherever it is
     mov ds, [aps_sseg]
     mov bx, cx                      ; BX = the span's length
-    cmp byte [cs:aps_mode], APS_COPY
-    je .put
+    cmp byte [cs:aps_mode], APS_XL
+    jae .put
     call os88spkfx_level
 .put:
     mov di, [es:APS_RL]             ; into the ring at TOTAL, split at its end
@@ -606,14 +690,29 @@ aps_span1:
     pop ax
     ret
 
-; aps_put - DS:SI -> ES:DI, CX samples: shaped, or copied as they are
+; aps_put - DS:SI -> ES:DI, CX samples: shaped, or copied as they are - or,
+; a file of counts on a Covox, through ap_cinv (in our segment: `cs xlatb`,
+; os88spkfx's own idiom, DS being the source). CX > 0
 aps_put:
-    cmp byte [cs:aps_mode], APS_COPY
-    je .copy
+    cmp byte [cs:aps_mode], APS_XL
+    jae .copy
     jmp os88spkfx_emit
 .copy:
-    cld
+    cld                             ; (ZF: APS_XL)
+    je .xl
     rep movsb
+    ret
+.xl:
+    push ax
+    push bx
+    mov bx, ap_cinv
+.x:
+    lodsb
+    cs xlatb
+    stosb
+    loop .x
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1038,7 +1137,8 @@ aps_skip:
     call os88spk_go
     mov al, 0
     jnc .out
-    mov word [ap_msg], ap_s_spkbusy
+    mov ax, ap_s_spkbusy
+    call aps_say
     mov al, APX_ERR
 .out:
     ret
@@ -1088,7 +1188,8 @@ aps_trackend:
     call os88spk_go
     mov al, 0
     jnc .out
-    mov word [ap_msg], ap_s_spkbusy
+    mov ax, ap_s_spkbusy
+    call aps_say
     mov al, APX_ERR
 .out:
     ret

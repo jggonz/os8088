@@ -132,6 +132,7 @@ TWV_N       equ 4                   ; ...the four a pick cycles through; the
 TWV_THIN    equ 4                   ; one below is only ever FORCED: the XT meter
 TW_OFFLEN   equ 19                  ; tw_s_voff's length (asserted below)
 TW_SOFFLEN  equ 18                  ; tw_s_soff's
+TW_COFFLEN  equ 16                  ; tw_s_coff's (a Covox's, SPEC.md 45.25.5)
 TW_UOFFLEN  equ 9                   ; ...and tw_s_uoff's
 TW_NBAND    equ 16                  ; the 286+ spectrum: sixteen bands...
 TW_BPITCH2  equ 14                  ; ...at this pitch...
@@ -886,6 +887,7 @@ tw_lcd_line:
     or ax, ax                       ; 0: the speaker, before the bench has
     jnz .num                        ; picked it a rate (45.25)
     mov si, tw_s_spka
+    call tsp_lptsi                  ; ...or a Covox's (SPEC.md 45.25.5)
     call tw_put
     jmp short .xtf
 .num:
@@ -916,6 +918,7 @@ tw_lcd_line:
     call tw_spkq
     jnc .kp
     mov si, tw_s_khzs
+    call tsp_lptsi                  ; ...or a Covox's (SPEC.md 45.25.5)
 .kp:
     call tw_put
 .xtf:
@@ -1787,6 +1790,10 @@ tw_voff:
     je .pick
     mov si, tw_s_soff               ; ...or the speaker's play (SPEC.md 45.25)
     mov di, TW_SOFFLEN
+    cmp word [tsp_lpt], 0
+    je .pick
+    mov si, tw_s_coff               ; ...or a Covox's (SPEC.md 45.25.5)
+    mov di, TW_COFFLEN
 .pick:
     cmp byte [tw_viz], TWV_OFF
     jne .str
@@ -3334,6 +3341,10 @@ tw_s_soff:  db 'No meters: speaker', 0
 %if $ - tw_s_soff - 1 != TW_SOFFLEN
 %error "tw_s_soff: TW_SOFFLEN is the string's length"
 %endif
+tw_s_coff:  db 'No meters: Covox', 0
+%if $ - tw_s_coff - 1 != TW_COFFLEN
+%error "tw_s_coff: TW_COFFLEN is the string's length"
+%endif
 tw_s_uoff:  db 'Meter off', 0         ; ...the PICKED Off's line (SPEC.md 45.23)
 %if $ - tw_s_uoff - 1 != TW_UOFFLEN
 %error "tw_s_uoff: TW_UOFFLEN is the string's length"
@@ -3347,8 +3358,12 @@ tw_s_nomod:    db 'Tracker - no module loaded', 0
 tw_s_untitled: db '(untitled module)', 0
 tw_s_nofile:   db '- no module -', 0
 tw_s_khz:   db ' kHz  8 bit mono', 0
+            dw tw_s_khzc            ; (the Covox twin, before each:
 tw_s_khzs:  db ' kHz  PC speaker', 0    ; ...with no card (45.25)
+            dw tw_s_spkc            ; tsp_lptsi, 45.25.5)
 tw_s_spka:  db 'PC speaker, auto rate', 0   ; ...before its first play
+tw_s_khzc:  db ' kHz  Covox', 0
+tw_s_spkc:  db 'Covox, auto rate', 0
 tw_s_fxt:   db '  XT', 0
 tw_s_vol:   db '  Vol ', 0
 tw_s_lvl:   db '  Level ', 0

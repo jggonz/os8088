@@ -1415,8 +1415,15 @@ trk_fdone:
     call OSAPI_SND_CAPS             ; NO CARD: the samples filtered for the
     test ax, SND_CAP_PCM_BG         ; speaker now, once, rather than per
     jnz .card                       ; output sample (SPEC.md 45.25)
+    call tsp_outq                   ; ...unless the output is a COVOX, which
+    cmp word [tsp_lpt], 0           ; plays bass: the module as the file has
+    jne .lpt                        ; it (SPEC.md 45.25.5)
     call tsp_natural
-.card:
+    jmp short .card
+.lpt:
+    mov byte [tsp_pre], 0           ; nothing filtered (tests/lzmod.py)...
+    mov byte [tsp_lvok], 0          ; ...and a new song, a new level - which
+.card:                              ; is tsp_natural's first line
     mov byte [ttx_shok], 0          ; a NEW module can name the same pattern
                                     ; NUMBER with different rows in it, and
                                     ; that is the one thing SPEC.md 45.13.6's
@@ -3900,17 +3907,25 @@ trk_s_nofit:  db 'Too big for free memory', 0
 trk_s_cpq:    db 'Making room...', 0
 trk_s_noload: db 'No module loaded - L loads one', 0
 trk_s_nosb:   db 'No Sound Blaster: viewer only', 0
+; A STRING THAT NAMES THE SPEAKER has its COVOX twin's address in the word
+; just before it, which is where tsp_lptsi looks (SPEC.md 45.25.5)
+              dw trk_s_cvx1
 trk_s_spk1:   db 'Speaker: needs ', 0
 trk_s_spk2:   db '% of this PC - Play again to try', 0
+              dw trk_s_cvx3
 trk_s_spk3:   db 'Spk ', 0         ; (short: the compact face's strip holds
                                    ; the legend's 38 and no more)
 trk_s_spkflt: db 'Filtering the samples for the speaker...', 0
 trk_s_spk4:   db ' Hz, ', 0
 trk_s_spk5:   db '% cpu', 0
+             dw trk_s_cvxl
 trk_s_lev1:  db 'Spk level ', 0
 trk_s_lev2:  db ' of 10 (+/-)', 0
 trk_s_spk6:   db ' (CARRIER WHINES!)', 0
 trk_s_spkbusy: db 'The PC speaker is busy', 0
+trk_s_cvx1:   db 'Covox: needs ', 0
+trk_s_cvx3:   db 'Covox ', 0
+trk_s_cvxl:   db 'Covox level ', 0
 trk_s_nomem:  db 'Out of memory', 0
 trk_s_toobig: db 'File too big', 0
 trk_s_noent:  db 'File not found', 0

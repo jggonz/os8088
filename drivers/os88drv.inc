@@ -102,10 +102,11 @@ SND_RT_AUTO  equ 0              ; unset: whatever answered at boot
 SND_RT_SPK   equ 1              ; the PC speaker
 SND_RT_FM    equ 2              ; AdLib - FM only
 SND_RT_SB    equ 3              ; Sound Blaster - FM and streams
-SND_RT_LPT   equ 4              ; Covox - FM, no streams, and the parallel
-                                ; port's DAC for a package's own bracket
-                                ; (SPEC.md 34.14). NOT above SND_RT_SB in the
-                                ; ladder: compare for it by equality
+SND_RT_LPT   equ 4              ; Covox on LPT1 (+1 LPT2, +2 LPT3) - FM, no
+                                ; streams, and that parallel port's DAC for a
+                                ; package's own bracket (SPEC.md 34.14). NOT
+                                ; above SND_RT_SB in the ladder: test for the
+                                ; three BEFORE any `>= SND_RT_SB`
 
 ; --- entry verbs (AL on the far call into your entry proc) -------------------
 ; --- the record OSAPI_DRV_SUSPEND fills from DRVV_HWINFO (SPEC.md 51.11.2) ---

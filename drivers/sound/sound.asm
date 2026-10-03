@@ -190,15 +190,15 @@ snd_entry:
     mov byte [drv_up], 1
     mov word [snd_services+DSV_NAME], snd_s_mpu
 .nompu:
-    call cvx_probe              ; THE FOURTH (SPEC.md 34.14): a parallel port
+    call cvx_probe              ; THE FOURTH (SPEC.md 34.14): parallel ports
     jc .nocvx                   ; a Covox could be on. It says only that the
-    or word [snd_services+DSV_TIERS], 1 << SND_RT_LPT  ; Sound page's Covox
-    cmp byte [drv_up], 0        ; row is live - the DAC itself is undetectable
-    jne .nocvx                  ; and is never published here, only by the
-    mov byte [drv_up], 1        ; tier the user picks (cvx_tier). On a machine
-    mov word [snd_services+DSV_NAME], snd_s_cvx ; with no card it is the
-                                ; whole reason the driver is up, so the page
-                                ; names the row after it
+    cmp byte [drv_up], 0        ; Sound page's Covox choices are live (their
+    jne .nocvx                  ; DSV_TIERS bits) - the DAC is undetectable
+    mov byte [drv_up], 1        ; and is never published here, only by the
+    mov word [snd_services+DSV_NAME], snd_s_cvx ; tier the user picks
+                                ; (cvx_tier). On a machine with no card it is
+                                ; the whole reason the driver is up, so the
+                                ; page names the row after it
 .nocvx:
     cmp byte [drv_up], 0
     je .nohw
@@ -266,10 +266,10 @@ snd_tier:
     cmp byte [drv_up], 0
     je .nohw                    ; nothing attached: no tier to move
     call cvx_tier               ; the Covox's cap, for this tier (SPEC.md
-    cmp ah, SND_RT_LPT          ; 34.14) - and its tier is the AdLib's as far
-    je .off                     ; as the DSP goes: SND_RT_LPT is 4, numerically
-    cmp ah, SND_RT_SB           ; ABOVE the Sound Blaster and not a rung over
-    jae .want                   ; it, so it is caught by equality first
+    cmp ah, SND_RT_LPT          ; 34.14) - and a Covox tier is the AdLib's as
+    jae .off                    ; far as the DSP goes: SND_RT_LPT + n is 4..6,
+    cmp ah, SND_RT_SB           ; numerically ABOVE the Sound Blaster and not a
+    jae .want                   ; rung over it, so it is caught first
 .off:
                                 ; --- off ----------------------------------
     cmp word [snd_services+DSV_STREAM], 0
