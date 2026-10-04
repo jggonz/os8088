@@ -163014,7 +163014,9 @@ stack - no character of the walk is counted. The includer gives it state
 buffer), and two near routines: `LZW_FILL` appends input to the buffer (0
 bytes is the end of the input - a GIF's block terminator, or the file's end)
 and `LZW_RUN` takes each decoded string as ES:SI and CX, forwards, and
-answers CF = 1 to stop. `lzw_decode` (AL = the minimum code size, 2..8)
+answers CF = 1 to stop - keeping DX and BP, the code reader's registers
+since 106.22 - and, optionally, `LZW_RUN1` a one-character string (a root
+code's) in AL, keeping SI (the next free code) as well. `lzw_decode` (AL = the minimum code size, 2..8)
 answers CF = 0 at the End code or the input's end, or CF = 1 with
 `LZW_EBAD` (the includer's number) or the run's own answer. Codes are read
 LSB first a whole code at a time from the buffer, which is refilled when
@@ -163157,8 +163159,9 @@ decoding loop consumes a bit, a byte or a row; a skip is bounded by the
 file; and the only code that writes the master is the emitter and
 `K_SCAT`, both of which clip to it.
 
-**What it costs** (MartyPC's cycle counter, `tests/pxbench.py`, 4.77 MHz;
-the key that opens to the open's end, every disk read included):
+**What it costs** (as wave 3 left it - 106.22 has the decoder speed pass's
+figures; MartyPC's cycle counter, `tests/pxbench.py`, 4.77 MHz; the key that
+opens to the open's end, every disk read included):
 
 | picture | 5150, CGA | its first rows | XT, VGA | its first rows |
 |---|---|---|---|---|
@@ -163183,15 +163186,18 @@ magnitudes) took the same picture from 65.3 s to 49.5 s and the GIF from
 35.5 s to 31.8 s; the next steps are wave 9's. **BIG.BMP's first rows on
 the 5150 measure 4.05 s at this wave's base (58a75ef8) and 3.96 s with it,
 not 106.17's 1.52 s**: the bench's ceiling follows the measurement, and the
-cause - before this wave - is wave 9's to find.
+cause - before this wave - is wave 9's to find. (Found and fixed by the
+decoder speed pass, 106.22: the wake's deferral counted a row as painted
+that the canvas clipped.)
 
 **Sizes.** The resident package grows by the plumbing alone: image 41,589
 -> **42,456** bytes and bss 14,144 -> **14,196**, so **56,652 of 61,440**;
 the GIF part is 2,038 bytes (1,885 packed), the PNG part 5,874 (4,887
 packed), and PIXEL.O88 is 49,943 bytes on the disk. The decoder scratch
 is the work claim's: 18 KB for a GIF (the LZW's tables and its input
-buffer), 45 KB and two scanlines for a PNG (the window, two 1 KB primaries,
-10 KB of sub-tables, the counts and symbols, two rows with their guards).
+buffer), 46 KB and two scanlines for a PNG (the window, two 1 KB primaries,
+10 KB of sub-tables, the counts and symbols, since 106.22 the 1 KB clean
+input, two rows with their guards).
 
 **Tests.** `tools/pixelsim.py` decodes both formats independently of the
 guest - its own LZW and its own inflate, held to zlib's at four levels and
@@ -163204,7 +163210,7 @@ chunks past the head, a wrong CRC; GIF 87a and 89a at 1, 2, 4 and 8 bits,
 local, global and both tables, transparency, an image smaller than the
 screen and one hanging off it with an odd top, extensions and a second
 frame, Clear at a full table and the deferred clear; and a hostile set of
-46 (13 GIF, 33 PNG) - each verdict pixelsim's, and the same picture through
+48 (13 GIF, 35 PNG - the last two 106.22's) - each verdict pixelsim's, and the same picture through
 BMP, GIF and PNG one master (AGREE). `pxdecode` holds the guest to all of
 them byte for byte, the hostile ones refused with their number and PiXEL's
 claims as they were - other than a decoder part the refused picture
@@ -163329,8 +163335,9 @@ otherwise).
 eight bits - its length and symbol, and for an AC code whose length and
 magnitude bits together are at most eight, the coefficient's value and run
 already made - and a longer code from the canonical walk by length (Annex
-C's maxcode), a bit at a time, which is also what refuses a code no table
-holds: after sixteen bits, so the guest consumes what the reference does.
+C's maxcode), from its ninth bit with the first eight in hand (106.22),
+which is also what refuses a code no table holds: after sixteen bits, so
+the guest consumes what the reference does.
 A coefficient past the 63rd is `damaged`; a zero run past it ends the
 block.
 
@@ -163353,7 +163360,7 @@ Every operation is **16-bit two's complement**, as the guest computes it:
   at 1/8 16,384). A coefficient's value is `s16(coef M)`, and the DC's then
   gains `(128 << 5) + 16`, the level shift and the final rounding.
 - **1/1**: jidctfst.c's two passes, columns then rows, with `MUL(x, K) =
-  s16((x K) >> 8)` - `imul` and the product's middle word - and `K` 362,
+  s16((x K) >> 8)` - by table since 106.22, the same value - and `K` 362,
   473, 277, -669; an all-zero AC column or row is the DC copied, which the
   butterflies would give exactly. **1/2**: per pass `ea = d0 + d2`, `eb =
   d0 - d2`, `oa = d1 + MUL(d3, 106)`, `ob = MUL(d1, 106) - d3`, out `ea +
@@ -163441,9 +163448,11 @@ which is why pxbench's BIG.BMP disk is 720 KB now.
 
 #### What it costs
 
-MartyPC's cycle counter, `tests/pxbench.py`'s fifth session, 4.77 MHz, the
-key that opens to the open's end with every disk read in it. VACATION.JPG
-is 640x480 4:2:0, 86,957 bytes; ROOM.JPG the same size progressive.
+As wave 4 left it - **106.22 has the figures since the decoder speed pass**
+(VACATION.JPG at 1/2 46.1 s on the 5150, ROOM.JPG 62.4 s). MartyPC's cycle
+counter, `tests/pxbench.py`'s fifth session, 4.77 MHz, the key that opens to
+the open's end with every disk read in it. VACATION.JPG is 640x480 4:2:0,
+86,957 bytes; ROOM.JPG the same size progressive.
 
 | open | 5150, CGA | its first rows | XT, VGA | its first rows |
 |---|---|---|---|---|
@@ -163466,19 +163475,14 @@ ceilings 15% above them). A progressive picture's first rows are its whole
 store's decode: they come after the last scan.
 
 **Against the plan's estimates (PIXEL-PLAN 3.4: 4-6 s at 1/8, ~20 s at 1/2,
-45-60 s at 1/1) these are three to five times slower**, and the reasons are
-measured rather than guessed: a detailed photo is ~97 bits a block, and most
-of its coefficients need more than the eight-bit fast table's bits (code and
-magnitude together), so they take the canonical path; and the 16-bit AAN
-pass is fetch-bound at ~2,300 cycles on the 8088 (80 instructions, five
-`imul`s). Wave 4 took what was cheap - the AC fast table with WHOLE
-entries, the dequantise walk over the nonzero coefficients alone, the
-zero-skipping multiply, the inlined clamps, the colour conversion unrolled,
-fast open at 1/2 for a 640x480 picture - and the candidates are wave 9's,
-in the order the figures rank them: a 16-bit peek for the Huffman decode
-(code and magnitude in one lookup more often), the bput's per-block clear
-and walk (2,400 cycles a block even at 1/8), and a specialised row pass for
-the rows whose columns 4-7 are all zero.
+45-60 s at 1/1) these were three to five times slower.** The reason this
+paragraph first gave - that most coefficients need more than the fast
+table's eight bits and take the canonical path - was wrong (wave-4 review
+F9): 89% of VACATION.JPG's symbols are WHOLE fast entries and 2.3% take the
+walk, and the cost was the loop around the table, the per-block clear and
+walk of the zigzag coefficients, three `mul`s a block to place it, and the
+16-bit AAN pass's `imul`s and memory temporaries (~2,300 cycles on the
+8088). The decoder speed pass (106.22) took them; its figures replace these.
 
 #### What PiXEL refuses is checked before it is used, and nothing loops
 
@@ -163782,3 +163786,221 @@ twenty Next and Prev end with PiXEL's claims as they were and the largest run
 as it was. `[px_thoff]` is a test's byte that keeps the thumbnails out of the
 rows that measure something else (`pxdecode`, `pxopen`, `pxpaint`,
 `pxbench`).
+
+### 106.22 The decoder speed pass: what an 8088 pays to read a picture, before and after
+
+The decoders were made as fast as an 8088 allows without changing a single
+byte of a master: every picture is pixelsim's still, so `tools/pixelsim.py`
+did not move and `pxdecode` is the proof, byte for byte, as it was. The
+method is 106.17's - MartyPC's cycle counter on the 5150 with a CGA and the
+XT with a VGA, both 4.77 MHz - and a second instrument for the iterating:
+each part alone under Unicorn with an 8088 cost per instruction (the larger
+of the 8088 table's clocks and four a byte fetched or moved), which reads
+within ten to thirty per cent of MartyPC on this code and is only ever used
+to rank and A/B. Wave 4's harness held the JPEG part to pixelsim after every
+change at every scale and at ring windows of 1 to 16,384 bytes, and the
+wave-4 review's fenced harness and its fuzzers ran on the result (below).
+
+**What it costs now** (`tests/pxbench.py`, the key to the open's end, every
+disk read in it; "before" is the same bench at 45763b72):
+
+| open | 5150, CGA: before | after | its first rows | XT, VGA: before | after | its first rows |
+|---|---|---|---|---|---|---|
+| VACATION.JPG at 1/8 | 31.4 s | **23.8 s** | 4.6 s | 34.3 s | **27.3 s** | 4.5 s |
+| VACATION.JPG at 1/2 | 63.2 s | **46.1 s** | 2.8 s | 67.4 s | **50.0 s** | 3.9 s |
+| VACATION.JPG at 1/1 | 151.5 s | **116.1 s** | 6.2 s | 154.7 s | **119.9 s** | 6.3 s |
+| VACATION.JPG by fast open (1/2) | 65.2 s | **47.4 s** | 3.7 s | 67.4 s | **50.0 s** | 2.8 s |
+| ROOM.JPG, progressive at 1/4 | 127.8 s | **62.4 s** | 55.7 s (was 115.1) | 131.3 s | **66.1 s** | 55.9 s |
+| CAT.GIF, 320x240, 256 colours | 31.8 s | **25.2 s** | 3.1 s | 35.7 s | **29.6 s** | 4.8 s |
+| BALLOONS.PNG, 320x240 palette | 16.7 s | **15.9 s** | 4.3 s | 20.6 s | **20.6 s** | 6.4 s |
+| HOUSE.PNG, 320x240 RGB | 49.5 s | **45.7 s** | 2.3 s | 52.6 s | **48.4 s** | 2.1 s |
+| BIG.BMP, 640x480 8-bit: its first rows | 3.64 s | **1.34 s** | | 3.09 s | **2.95 s** | |
+
+Inside them (the same bench): LAKE.JPG at 1/1, 320x240 grey, was 184 cycles
+a pixel of Huffman and 934 of dequantise + IDCT - **1,118** - and is 300 of
+entropy decode WITH its dequantising and 533 of IDCT - **833** (VGA XT 313 +
+552); inflate on HOUSE.PNG was 396 cycles a byte it writes and is **323**
+(the VGA XT's figure, 421 -> 402, carries more of the UI task's painting).
+VACATION.JPG at 1/2: the IDCT 10.0 s, the colour 7.5 s, the rows out 3.2 s
+and the entropy decode and dequantising 19.6 s - that last with the UI
+task's disk reads inside it, which pre-empt the worker (6.1 s of them).
+
+**Where the time was, measured first.** VACATION.JPG is 126,227 Huffman
+symbols in 7,200 blocks - 17.5 a block - and 89% of them have their code
+and magnitude within eight bits (wave-4 review F9: 106.19's "most of its
+coefficients need more than the eight-bit fast table's bits" was wrong; the
+cost was the loop around the table, not the table). The decode itself, at
+1/2, was 208 M cycles by the model: the dequantise walk and the block's
+clears 54 M, the 4x4 IDCT 52 M, the AC loop 37 M, the colour 31 M, the
+canonical walks, EXTEND and the bit fetches 12 M, three `mul`s a block to
+place it 5.5 M. The disk is 6.1 s of every VACATION.JPG open (87 KB, 70 ms a
+KB) and HOUSE.PNG's 12.4 s (165 KB): a cylinder an `int 13h` and a lost
+revolution between cylinders, which is near the drive's own floor, so the
+ring was not changed.
+
+#### JPEG
+
+- **A bit POSITION, not a window.** The entropy data is already de-stuffed
+  into a clean buffer with 300 bytes ahead of every block (106.19), so the
+  reader keeps no bits at all: SI is the byte holding the next bit and CL how
+  many of its bits are taken, the next eight bits are AH after `mov ax,[si]`
+  / `xchg al,ah` / `shl ax,cl` (nine or more of the sixteen are real), and
+  taking n bits is `add cl, n` and a byte on at 8. Nothing is ever refilled.
+  A short code read where fewer than eight real bits remain is still the
+  right one - the bits it covers are real - and a longer one goes to the
+  canonical walk, which now starts at the ninth bit with the first eight in
+  hand (a code no table holds is still refused after sixteen bits). The
+  cut-short test is the same rule on the position: the bits taken past the
+  segment's end, less the [pj_gb] a WHOLE entry gives back.
+- **A loop per scale, the entry one test.** A fast entry is its LEN (the
+  bits it takes) and, a page up, ADV - k's step x 2 for a WHOLE entry, else
+  C0h. k is kept as `2k - 128`, so the loop's end is the sign, and anything
+  that is not a coefficient inside the scale's range - EOB, ZRL, a code
+  alone, a long code, a coefficient past 63 (`damaged`, its magnitude given
+  back) - lands past the test and is sorted out of line. 1/8 runs only the
+  SKIP loop (decode, keep nothing: ~160 cycles a symbol); 1/4, 1/2 and 1/1
+  run a VALUE loop to the scale's last kept k (4, 24, 63) that DEQUANTISES a
+  kept coefficient as it is read - `imul` by the component's multiplier into
+  D at its natural place, the multipliers' displacement patched per
+  component (px_quant's precedent) - and then the skip loop. The old
+  per-block clear of 64 zigzag words, the walk over them and the written
+  list are gone; D's columns that held anything are zeroed after the IDCT.
+- **The MCU as a program of blocks.** A scan's blocks - component, place in
+  its plane, plane stride - are listed once (`pj_bprog`), and a block's place
+  moves on by H N an MCU: no `mul` a block (three before).
+- **The IDCT's multiplies by table.** jidctfst.c's constants are each 256 m +
+  c with c under 256 (362 = 256 + 106, 473 = 256 + 217, 277 = 256 + 21, -669
+  = -768 + 99), and for x = 256 xh + xl, `(x K) >> 8` is exactly `m x + xh c
+  + ((xl c) >> 8)` - so MUL is a byte lookup on xl, a word lookup on xh and
+  an add, where `imul` was ~140 cycles and took DX. Three pages a constant,
+  in the scratch at fixed pages: twelve at 1/1, three at 1/2. The passes keep
+  their values in registers and on the stack (`push`/`pop` are the 8088's
+  cheapest temporaries) instead of eleven words of memory. The arithmetic is
+  pixelsim's to the bit; 106.19's shortcuts (a column with nothing below its
+  DC, a block whose columns past the first are empty) stand.
+- **Colour.** Cr->R and Cb->B are clamp-table PLACES (the base folded in),
+  G's two 32-bit terms split into low and high words added with the carry;
+  the chroma pointer rides on the stack, Cr's displacement from Cb is patched
+  a row, and 4:2:x, 4:4:x and 4:1:1 have a loop each.
+- **Progressive.** The same reader and fast table. An AC refinement scan
+  reads a correction bit for every position with nonzero history, but only
+  1/4's three kept ones (k 1, 2, 4) need its value: past the first byte of
+  the history the bits are COUNTED - a byte of history at a time, by a
+  256-byte popcount in the part - and taken whole; the zero run is walked a
+  history byte at a time too. An AC first scan's block inside an EOB run is
+  one decrement; an interleaved scan has an MCU program; the output pass
+  dequantises the store's four words straight into D (no zigzag buffer).
+- **Measured against wave 4 by the model** (the decode alone): VACATION.JPG
+  1/8 83.1 -> 50.6 M cycles, 1/2 208 -> 135 M, 1/1 511 -> 366 M; LAKE.JPG 1/1
+  74.2 -> 53.6 M; ROOM.JPG 1/4 464 -> 206 M.
+
+The wave-4 review's findings in this part are fixed here: **F5** (a picture
+of 65,536 MCUs or more with restart markers was refused `cut short`: the
+unit counts are 32 bits), **F6** (a progressive component of more than
+65,536 blocks decoded wrong at 1/8: the block index is 32 bits), **F1** (a
+file changed between HEAD's read and DECODE's could lay the planes out past
+the scratch: HEAD banks the frame - size, components, their sampling,
+progressive - in PXK_PRIV and DECODE refuses `damaged` unless its frame is
+that one), **F2** (256 scans wrapped a byte) and **F3** (a scale 0 wide or
+high is not offered). A refusal's give-back ([pj_gb]) is also reset at each
+decode - it lived in the part, which stays fetched, and a refusal's value
+could leak into the next file's cut-short test.
+
+#### PNG
+
+- **The image data, de-chunked.** pz_cfill copies the IDATs' bytes out of
+  the ring into a clean 1 KB buffer in the scratch (their CRCs and headers
+  stepped over, the ring's windows taken), and inflate reads it by the same
+  bit position (LSB first: `mov bx,[si]` / `shr bx,cl` / `and bh,1` is the
+  primary's index). The fast path tests no window, no chunk and no count;
+  the buffer is refilled when SI reaches DX, 16 bytes short of its data.
+  Past the image data's end it reads as zeros, and taking a bit of them is
+  `cut short` when the decode finishes, refuses or reaches the fifth zero
+  byte - 106.18's rule, the limit now the fifth byte.
+- The length's and the distance's extra bits are read inline (a word at the
+  position holds nine), not by a call; the unfilter loops do two bytes a
+  turn.
+- HOUSE.PNG (by the model): 124 -> 108 M cycles - inflate 78 -> 63 M, the
+  rest the scanlines. A literal is still ~230 cycles: its table lookup, the
+  position's step and the window's store and wrap are ~45 bytes of code,
+  fetched at four cycles a byte; Paeth is ~250 cycles a byte and was left.
+
+#### GIF
+
+`apps/os88lzw.inc` keeps its code reader in registers - BP the input byte,
+DL the bit, DH the code size - with the next power of two kept beside the
+mask ([lzw_lim], review-w3's (a)), the fast reader's bound precomputed
+([lzw_ie2], (c)), a root code (62% of CAT.GIF's) handled first and handed to
+an optional `LZW_RUN1` with its one character (b), the next free code in
+SI; LZW_RUN's contract now also keeps DX and BP, LZW_RUN1's SI as well.
+pxgif's run takes a string inside the row and the screen with one compare
+against [pg_flim]. CAT.GIF (by the model): 79.6 -> 53.3 M cycles.
+
+#### BIG.BMP's first rows (106.18's open question)
+
+They were 3.6-4.1 s on the 5150 against 106.17's 1.52, and the cause is a
+race between the wake's paint and its deferral (106.9). `px_pumpfill` holds
+the disk off until a row has been painted, judging "painted" by the counters
+the paint moves, [px_ypaint] and [px_ypbot] - which px_paintrows moves BEFORE
+it clips the span to the canvas. At Fit the picture's last screen row can be
+one row past the canvas's last ([px_midy2]), so a first wake that found only
+that row complete counted it painted, drew nothing, and the next wake read
+both 16 KB slots (2.5 s) in front of the first row that did reach the glass.
+The deferral now asks whether the painted rows REACH the canvas
+(`px_onglass`, pxpump.inc): **1.34 s** on the 5150 (VGA XT 2.95, which waits
+for the palette's plans first). The paint's own counters are pxview.inc's
+and were left as they are; the one-row overhang at Fit is noted for the
+view's owner.
+
+#### What did not move, and what an 8088 cannot do
+
+- **The Huffman floor.** A symbol is a peek, two table bytes, a shift and a
+  test - ~25 bytes of code at four cycles a byte - so 126,227 symbols are
+  ~20 M cycles, ~4 s, at EVERY scale: 1/8 is now mostly that and the disk.
+- **Dequantising** a kept coefficient is an `imul` (~150 cycles): 9 a block
+  at 1/2 on VACATION.JPG, 65,000 of them, 2 s. A table of small multiples
+  was weighed and not built: the kept coefficients are the large ones
+  (|v| = 1 is 32% of them, against 46% of all).
+- **Colour + the cube in one pass** would save ~270 cycles a pixel (4 s at
+  1/2, 17 s at 1/1 on a 640x480): a table per dither class and channel
+  indexed by Y plus the chroma's delta, the clamp folded in - but that is
+  sixteen classes x three channels x ~700 bytes, 34 KB more scratch, which
+  would push 1/1 off the 640 KB machine for the pictures that need it most.
+  Not built; the owner's call.
+- **A 64 KB inflate window** (review-w3's second proposal) would take the
+  window's wrap (`and di, 7FFFh`) off every literal and every copy's split -
+  ~4% of HOUSE.PNG - for 32 KB more scratch on every PNG; not taken, for the
+  same reason. Nor was unfiltering fused into the extraction: the filters
+  are 30% of HOUSE.PNG's decode, but the copy it would save is 5%.
+- **The disk**, above, and the UI task's histogram count after the decode
+  (`px_hcount`, 92 cycles a pixel: 5.8 s of a 640x480 at 1/1, pxview.inc).
+
+**Sizes.** The JPEG part is 14,507 -> **17,704** bytes (11,545 -> 12,896
+packed: the unrolled passes, the per-scale loops, a 256-byte popcount), the
+PNG part 10,543 -> 10,785 (8,439 -> 8,592), the GIF part 6,673 -> 6,759
+(5,417 -> 5,488); PIXEL.O88 is 71,342 bytes. The resident package grows by
+`px_onglass` alone: image 34,875 -> **34,921**, bss 11,606, so **46,527 of
+61,440** - 14,913 to spare. The JPEG scratch grows by the multiply pages and
+the zigzag-to-place words: VACATION.JPG's 1/1 2,268 -> 2,472 paragraphs,
+1/2 1,488 -> 1,548, 1/4 and 1/8 +12; the PNG scratch by the clean buffer,
+1,088 bytes.
+
+**Tests.** `pxdecode` unchanged and green (every fixture byte for byte at
+every scale it is shown at), and `tools/pixcorpus.py` adds two PNGs it now
+holds the guest to: a STORED block whose length runs past the image data,
+far past it (HP34.PNG) and by three bytes, the rows complete inside the zeros
+(HP35.PNG) - both `cut short`. The first is what the wave-3 review's PNG
+fuzzer found in this pass's first build: the clean buffer's limit was moved
+on at the fifth zero byte instead of refusing there, and a stored copy walked
+the reader out past the buffer's guard. `pxbench`'s JPEG breakdown now times
+`pj_blk` (the entropy decode with its dequantising, and the IDCT it calls)
+and the IDCT alone (`pj_id8`, `pj_id4`, `pj_id1`), so its `huffman` figure
+is the block less its IDCT and `idct` the IDCT alone; its ceilings are this
+section's figures plus the same margins. Off the tree (the method above):
+the wave-4 review's fenced harness on the new part - the 85 JPEG fixtures at
+every scale, 54,000 mutated and progressive JPEGs, every truncation of
+JPROGR, JRST, JEXBIG, JPROG444 and JRSTG (10,658) - and the wave-3 review's
+on the GIF and PNG parts - their 106 fixtures at four ring shapes and 19,000
+generated and mutated pictures - with 0 out-of-region accesses, 0 runaways
+and 0 disagreements with pixelsim; and the wave-4 review's two hand-built
+pictures (F5, F6) now decode as pixelsim decodes them.

@@ -31,6 +31,7 @@ PG_DONE     equ 0x7FFF              ; LZW_RUN's "the image is whole": no PXD_*
 %define LZW_BSS     pg_lzw
 %define LZW_FILL    pg_lfill
 %define LZW_RUN     pg_lrun
+%define LZW_RUN1    pg_lrun1
 %define LZW_EBAD    PXD_DATA
 
 ; PXV_INIT - out AX = PXP_PROBE
@@ -325,6 +326,19 @@ pg_body:
 .frame:
     call pg_rbt                     ; the minimum code size
     mov [pg_min], al
+    mov ax, [pg_sw]                 ; [pg_flim]: a string ending before it
+    sub ax, [pg_left]               ; is inside the row and the screen -
+    jbe .fl0                        ; min(fw, sw - left + 1), 0 when the
+    inc ax                          ; image starts past the screen
+    cmp ax, [pg_fw]
+    jbe .fl1
+    mov ax, [pg_fw]
+.fl1:
+    mov [pg_flim], ax
+    jmp short .fl2
+.fl0:
+    mov word [pg_flim], 0
+.fl2:
     xor ax, ax
     mov [pg_fcol], ax
     mov [pg_fi], ax
@@ -537,23 +551,17 @@ pg_lfill:
 
 ; pg_lrun - LZW_RUN: ES:SI = a string of CX indices, into the image's rows.
 ; A row complete goes to the emitter; the image complete answers CF = 1 AX =
-; PG_DONE, and anything a service refuses is that refusal
+; PG_DONE, and anything a service refuses is that refusal. Keeps DX and BP
+; (os88lzw.inc's contract)
 pg_lrun:
     mov ax, [pg_fcol]               ; THE COMMON CASE, a string inside the
-    mov bx, ax                      ; row and inside the screen: one copy
-    add ax, cx
-    jc .chunk
-    cmp ax, [pg_fw]
-    jae .chunk                      ; (it ends the row: the general path)
-    add bx, [pg_left]
-    jc .chunk
-    mov dx, bx
-    add dx, cx
-    jc .chunk
-    cmp dx, [pg_sw]
-    ja .chunk
+    mov di, ax                      ; row and inside the screen ([pg_flim]):
+    add ax, cx                      ; one copy
+    jc .gen
+    cmp ax, [pg_flim]
+    jae .gen
     mov [pg_fcol], ax
-    mov di, bx
+    add di, [pg_left]
     push ds
     push es
     pop ds                          ; DS:SI = the table's string
@@ -564,6 +572,9 @@ pg_lrun:
     pop ds
     clc
     ret
+.gen:
+    push dx
+    push bp
 .chunk:
     mov ax, [pg_fw]
     sub ax, [pg_fcol]               ; what is left of this image row (> 0)
@@ -610,6 +621,34 @@ pg_lrun:
     jnz .chunk
     clc
 .out:
+    pop bp
+    pop dx
+    ret
+
+; pg_lrun1 - LZW_RUN1: the one-character string AL, LZW_RUN's way. Keeps
+; SI as well (os88lzw.inc's contract)
+pg_lrun1:
+    mov di, [pg_fcol]
+    mov bx, di
+    inc bx
+    cmp bx, [pg_flim]
+    jae .gen
+    mov [pg_fcol], bx
+    add di, [pg_left]
+    push es
+    mov es, [cs:pg_rseg]
+    stosb
+    pop es
+    clc
+    ret
+.gen:
+    push si                         ; (LZW_RUN1 keeps SI: the free code)
+    mov di, LZW_STK - 1             ; the general path, from the stack
+    mov [es:di], al
+    mov si, di
+    mov cx, 1
+    call pg_lrun.gen
+    pop si
     ret
 
 ; pg_frow - the image row [pg_fy] is whole: to the emitter at its screen row,
@@ -800,6 +839,8 @@ pg_ilace:   db 0
 pg_par:     db 0                    ; the parity below 1/1
 pg_pass:    db 0
 pg_fcol:    dw 0                    ; the image row's next column...
+pg_flim:    dw 0                    ; ...a string ending before which needs
+                                    ; no row end and no clipping (pg_lrun)
 pg_fi:      dw 0                    ; ...rows done, in the stream's order...
 pg_fy:      dw 0                    ; ...and the row being filled
 pg_y:       dw 0                    ; a screen row outside the image

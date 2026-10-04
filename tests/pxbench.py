@@ -31,9 +31,10 @@ measures the same numbers as an idle one:
   wave 4 VACATION.JPG (640x480 4:2:0) at 1/8, 1/2 and 1/1 - each asked for
          through the re-decode's floor, [px_zreq] - and as FAST OPEN picks;
          ROOM.JPG (640x480 progressive, 1/4); where VACATION's decode goes
-         at 1/8 and 1/2 (Huffman, IDCT, colour, rows out, the ring's waits);
-         and LAKE.JPG's (320x240 grey) Huffman and IDCT in cycles a pixel
-         (SPEC.md 106.19). BIG.BMP's disk is 720 KB since wave 4's parts
+         at 1/8 and 1/2 (the entropy decode with its dequantising, the IDCT,
+         colour, rows out, the ring's waits); and LAKE.JPG's (320x240 grey)
+         entropy + dequantise and IDCT in cycles a pixel (SPEC.md 106.19,
+         106.22). BIG.BMP's disk is 720 KB since wave 4's parts
          made PIXEL.O88 68 clusters, so its session runs the same machine
          with an 80-cylinder 720 KB B: (os8088_5150_cga_720b_gla,
          os8088_xt_vga_720b), whose tracks read as the 360 KB drive's do
@@ -60,32 +61,34 @@ FAIL = []
 # ROWS figure, which moves with where in its tick and its disk revolution the
 # key happened to land: the bench's CEILINGS. (open, first rows) per picture;
 # then the zoom step, Fit and pan figures
-# BIG.BMP's first rows on the 5150 measure 4.05 s at 58a75ef8 - the base
-# wave 3 was built on, before any of its changes - not 106.17's 1.52, so its
-# ceiling follows the measurement (SPEC.md 106.18 says so) and the cause is
-# wave 9's to find. The GIF and PNG rows and the inflate figure are wave 3's
-# (106.18), with the same margins; the JPEG rows wave 4's (106.19), and
-# its FIRST ROWS of a progressive picture are the whole store's decode, so
-# that one carries the open's margin.
+# The GIF, PNG and JPEG rows, the inflate figure and the decode breakdown's
+# two are the decoder speed pass's (SPEC.md 106.22), with the same margins
+# (a progressive picture's FIRST ROWS are the whole store's decode, so that
+# one carries the open's margin; a first-rows ceiling is the larger of a
+# picture's measured first rows across its opens at one scale, + 30%).
+# BIG.BMP's first rows are 106.17's again (1.34 s on the 5150): the wake's
+# deferral had been reading 32 KB in front of the first paint (106.22). The
+# JPEG `huffman` figure is the block's entropy decode WITH its dequantising
+# now (pj_blk less its IDCT), `idct` the IDCT alone (pj_id8)
 CEIL = {
     "os8088_5150_cga_gla": {
         "MOUNTAIN.BMP": (21.0, 4.0), "CITY.PCX": (14.7, 3.5),
-        "BIG.BMP": (40.8, 5.3),
-        "CAT.GIF": (36.5, 3.7), "BALLOONS.PNG": (19.3, 5.2),
-        "HOUSE.PNG": (57.0, 3.1), "inflate": 460,
+        "BIG.BMP": (40.8, 1.8),
+        "CAT.GIF": (29.0, 4.0), "BALLOONS.PNG": (18.3, 5.6),
+        "HOUSE.PNG": (52.6, 3.0), "inflate": 372,
         "zoom": 1.0, "fit": 0.55, "pan": 0.35,
-        "VACATION.JPG 1/8": (36.1, 6.2), "VACATION.JPG 1/2": (72.7, 4.5),
-        "VACATION.JPG 1/1": (174.2, 8.6), "VACATION.JPG fast": (75.0, 5.2),
-        "ROOM.JPG": (147.0, 149.8), "huffman": 212, "idct": 1074},
+        "VACATION.JPG 1/8": (27.4, 6.0), "VACATION.JPG 1/2": (53.0, 4.8),
+        "VACATION.JPG 1/1": (133.5, 8.0), "VACATION.JPG fast": (54.5, 4.8),
+        "ROOM.JPG": (71.8, 64.1), "huffman": 345, "idct": 613},
     "os8088_xt_vga": {
         "MOUNTAIN.BMP": (23.0, 4.1), "CITY.PCX": (19.3, 6.0),
-        "BIG.BMP": (47.0, 5.9),
-        "CAT.GIF": (41.0, 5.4), "BALLOONS.PNG": (23.7, 7.3),
-        "HOUSE.PNG": (60.7, 3.1), "inflate": 485,
+        "BIG.BMP": (47.0, 3.9),
+        "CAT.GIF": (34.1, 6.2), "BALLOONS.PNG": (23.7, 8.4),
+        "HOUSE.PNG": (55.6, 2.8), "inflate": 463,
         "zoom": 4.3, "fit": 2.25, "pan": 0.57,
-        "VACATION.JPG 1/8": (39.4, 5.8), "VACATION.JPG 1/2": (77.5, 5.6),
-        "VACATION.JPG 1/1": (178.0, 8.7), "VACATION.JPG fast": (77.5, 5.6),
-        "ROOM.JPG": (151.0, 149.8), "huffman": 220, "idct": 1079},
+        "VACATION.JPG 1/8": (31.4, 5.8), "VACATION.JPG 1/2": (57.5, 5.1),
+        "VACATION.JPG 1/1": (138.0, 8.2), "VACATION.JPG fast": (57.5, 5.1),
+        "ROOM.JPG": (76.0, 64.3), "huffman": 360, "idct": 635},
 }
 
 
@@ -558,39 +561,42 @@ def work5(m, px):
     check("open ROOM.JPG, progressive (1/%d)" % (1 << got), t, cap[0])
     check("   ...first rows on the glass", first, cap[1])
     # where a decode's time goes: LAKE.JPG (320x240 grey, 1,200 blocks) at
-    # 1/1 - Huffman (the block's coefficients), dequantise + IDCT, rows out
+    # 1/1 - the block (pj_blk: its entropy decode, the dequantising as each
+    # coefficient is read, and the IDCT it calls), the IDCT alone (pj_id8),
+    # rows out (SPEC.md 106.22)
     px.m.write(px.a("px_zreq"), b"\0")
-    tot, stg, n = stage_bench(m, px, "LAKE.JPG", ("pj_bdec", "pj_bput",
+    tot, stg, n = stage_bench(m, px, "LAKE.JPG", ("pj_blk", "pj_id8",
                                                  "pj_band"))
     px.m.write(px.a("px_zreq"), b"\xFF")
-    # ...and VACATION.JPG's own, at 1/8 and at 1/2: the entropy decode, the
-    # IDCT, the colour conversion, the rows out (K_EMIT, the master and its
-    # progress) and the waits for the disk (K_NEXT, the ring)
-    for sc in (3, 1):
+    # ...and VACATION.JPG's own, at 1/8 and at 1/2: the entropy decode (the
+    # block less its IDCT), the IDCT, the colour conversion, the rows out
+    # (K_EMIT, the master and its progress) and the waits for the disk
+    # (K_NEXT, the ring)
+    for sc, idct in ((3, "pj_id1"), (1, "pj_id4")):
         px.m.write(px.a("px_zreq"), bytes((sc,)))
         vt, vs, vn = stage_bench(m, px, "VACATION.JPG", (
-            "pj_bdec", "pj_bput", "pj_conv", "px_ks_emit", "px_ks_next"))
-        print("   VACATION.JPG at 1/%d: decode %.2f s - Huffman %.2f, IDCT %.2f, "
-              "colour %.2f, rows out %.2f, the ring's waits %.2f" % (
-                  1 << sc, vt / HZ, vs["pj_bdec"] / HZ, vs["pj_bput"] / HZ,
-                  vs["pj_conv"] / HZ, vs["px_ks_emit"] / HZ,
-                  vs["px_ks_next"] / HZ))
+            "pj_blk", idct, "pj_conv", "px_ks_emit", "px_ks_next"))
+        print("   VACATION.JPG at 1/%d: decode %.2f s - entropy + dequantise "
+              "%.2f, IDCT %.2f, colour %.2f, rows out %.2f, the ring's waits "
+              "%.2f" % (1 << sc, vt / HZ, (vs["pj_blk"] - vs[idct]) / HZ,
+                        vs[idct] / HZ, vs["pj_conv"] / HZ,
+                        vs["px_ks_emit"] / HZ, vs["px_ks_next"] / HZ))
     px.m.write(px.a("px_zreq"), b"\xFF")
     pixels = 320 * 240
-    print("   LAKE.JPG at 1/1: decode %.2f s - Huffman %.2f s (%d blocks, %.0f "
-          "cycles a pixel), dequantise + IDCT %.2f s (%.0f a pixel), rows out "
-          "%.2f s" % (tot / HZ, stg["pj_bdec"] / HZ, n["pj_bdec"],
-                      stg["pj_bdec"] / pixels, stg["pj_bput"] / HZ,
-                      stg["pj_bput"] / pixels, stg["pj_band"] / HZ))
+    huff = stg["pj_blk"] - stg["pj_id8"]
+    print("   LAKE.JPG at 1/1: decode %.2f s - entropy + dequantise %.2f s (%d "
+          "blocks, %.0f cycles a pixel), IDCT %.2f s (%.0f a pixel), rows out "
+          "%.2f s" % (tot / HZ, huff / HZ, n["pj_blk"], huff / pixels,
+                      stg["pj_id8"] / HZ, stg["pj_id8"] / pixels,
+                      stg["pj_band"] / HZ))
     cap = ceil.get("idct")
-    if cap is not None and not a.no_ceiling and stg["pj_bput"] / pixels > cap:
-        print("   ...dequantise + IDCT over its ceiling of %.0f FAIL" % cap)
+    if cap is not None and not a.no_ceiling and stg["pj_id8"] / pixels > cap:
+        print("   ...IDCT over its ceiling of %.0f FAIL" % cap)
         FAIL.append("idct")
     cap = ceil.get("huffman")
-    if cap is not None and not a.no_ceiling and stg["pj_bdec"] / pixels > cap:
-        print("   ...Huffman over its ceiling of %.0f FAIL" % cap)
+    if cap is not None and not a.no_ceiling and huff / pixels > cap:
+        print("   ...entropy + dequantise over its ceiling of %.0f FAIL" % cap)
         FAIL.append("huffman")
-
 
 if "5" in a.sessions:
     session(DISK5, ["C8.PCX"], work5)

@@ -53,7 +53,10 @@ PZ_DSYM     equ 0xB280              ; 32 words
 PZ_LENS     equ 0xB2C0              ; 320 lengths, then the code-length
 PZ_CLL      equ PZ_LENS + 320       ; code's 19
 PZ_OFFS     equ 0xB420              ; 16 words: a build's offsets
-PZ_WPARA    equ 0xB44               ; ...all of it, paragraphs
+PZ_CB       equ 0xB440              ; the CLEAN input: the image data's
+PZ_CBSZ     equ 1024                ; bytes, de-chunked (pz_cfill)...
+PZ_CBGRD    equ 64                  ; ...and zeros past the data's end
+PZ_WPARA    equ (PZ_CB + PZ_CBSZ + PZ_CBGRD + 15) >> 4  ; all of it
 PZ_ROWMAX   equ 32760               ; a row's bytes: two and their guards
                                     ; fit one segment (SPEC.md 106.18)
 PZ_BATCH    equ 4096                ; bytes inflated between extractions
@@ -284,15 +287,14 @@ pz_decode:
     mov [cs:pz_tkind], al
     mov [cs:pz_hplte], al
     mov [cs:pz_tabk], al
-    mov [cs:pz_bn], al
     xor si, si                      ; DS:SI = no window yet: the first read
     mov [cs:pz_sp], sp              ; takes one
     call pz_body
     jmp short pz_ret
 
-; pz_bad - `damaged`, with the bit count banked for pz_fail's question
+; pz_bad - `damaged`, with the bit position banked for pz_fail's question
 pz_bad:
-    mov [cs:pz_bn], ch
+    call pz_bank
     mov ax, PXD_DATA
     ; fall into pz_fail
 
@@ -316,26 +318,24 @@ pz_ret:
     pop bp
     retf
 
-; pz_padused - CF = 1 when a pad byte has been consumed: the bits left
-; ([pz_bn]) are fewer than the pad bits appended. Preserves all
+; pz_padused - CF = 1 when a bit past the image data's end has been taken:
+; the banked position ([pz_bsi]/[pz_bcl]) past [pz_dend]. Preserves all
 pz_padused:
+    cmp byte [cs:pz_dry], 0
+    je .no
     push ax
-    push cx
-    mov al, [cs:pz_pad]
-    or al, al
-    jz .no
-    mov cl, 3
-    shl al, cl
-    cmp [cs:pz_bn], al
-    jb .yes
+    mov ax, [cs:pz_bsi]
+    cmp ax, [cs:pz_dend]
+    pop ax
+    ja .yes
+    jb .no
+    cmp byte [cs:pz_bcl], 0
+    jne .yes
 .no:
     clc
-    jmp short .out
+    ret
 .yes:
     stc
-.out:
-    pop cx
-    pop ax
     ret
 
 ; pz_done - the last row is in (from inside an extraction)
@@ -425,19 +425,23 @@ pz_body:
     call pz_setpal                  ; palette and transparency, K_PAL
     call pz_plan                    ; the passes, the bytes they need
     ; --- inflate's registers ---------------------------------------------
-    mov [cs:pz_mark], si
-    call pz_limit
-    xor dx, dx                      ; the bit buffer, empty
-    xor ch, ch
-    mov es, [cs:pz_wseg]
+    mov [cs:pz_ids], ds             ; the ring's position, for pz_cfill
+    mov [cs:pz_isi], si
+    mov ax, [cs:pz_wseg]
+    mov ds, ax                      ; DS = ES = the scratch, for good
+    mov es, ax
+    mov si, PZ_CB                   ; the bit position: an empty buffer,
+    mov [cs:pz_cend], si            ; its limit there (the first read
+    xor cl, cl                      ; fills it)
+    mov dx, si
     xor di, di
     mov [cs:pz_rd], di
     mov [cs:pz_hav], di
     call pz_budget                  ; BP
-    mov cl, 8                       ; zlib: CM 8, CINFO <= 7, the check,
+    mov al, 8                       ; zlib: CM 8, CINFO <= 7, the check,
     call pz_bits                    ; no dictionary
     mov bl, al
-    mov cl, 8
+    mov al, 8
     call pz_bits
     mov bh, al
     mov al, bl
@@ -837,107 +841,6 @@ pz_skip:
     pop bx
     ret
 
-; pz_limit - [pz_inlim]: where the fast path stops - the window's end or
-; the chunk's, whichever is first. Preserves all
-pz_limit:
-    push ax
-    mov ax, [cs:pz_wend]
-    sub ax, si
-    cmp word [cs:pz_left + 2], 0
-    jne .set
-    cmp ax, [cs:pz_left]
-    jbe .set
-    mov ax, [cs:pz_left]
-.set:
-    add ax, si
-    mov [cs:pz_inlim], ax
-    pop ax
-    ret
-
-; pz_byte - AL = the next byte of the image data. Preserves all but AL
-pz_byte:
-    cmp si, [cs:pz_inlim]
-    jae pz_inslow
-    lodsb
-    ret
-
-; pz_inslow - the slow half of pz_byte: a window or a chunk has ended. The
-; IDATs that follow one another are the data; anything else (or the file's
-; end) is its end, past which the data reads as zero bytes - at most four
-; (SPEC.md 106.18). Preserves all but AL, DS, SI
-pz_inslow:
-    cmp byte [cs:pz_dry], 0
-    jne .pad
-    push ax
-.again:
-    mov ax, si                      ; what the fast path took from the chunk
-    sub ax, [cs:pz_mark]
-    sub [cs:pz_left], ax
-    sbb word [cs:pz_left + 2], 0
-    mov [cs:pz_mark], si
-    mov ax, [cs:pz_left]
-    or ax, [cs:pz_left + 2]
-    jnz .inchunk
-    push cx                         ; the chunk is over: its CRC, unread,
-    mov cx, 4                       ; then the next chunk's header
-.crc:
-    call pz_rawq
-    jc .dryp
-    loop .crc
-    mov cx, 8
-    push di
-    mov di, pz_chk
-.hd:
-    call pz_rawq
-    jc .dryd
-    mov [cs:di], al
-    inc di
-    loop .hd
-    pop di
-    pop cx
-    cmp word [cs:pz_chk + 4], 'ID'
-    jne .dry
-    cmp word [cs:pz_chk + 6], 'AT'
-    jne .dry
-    mov ax, [cs:pz_chk]
-    xchg al, ah
-    test ah, 0x80
-    jnz .dry
-    mov [cs:pz_left + 2], ax
-    mov ax, [cs:pz_chk + 2]
-    xchg al, ah
-    mov [cs:pz_left], ax
-    mov [cs:pz_mark], si
-    jmp short .again                ; (a zero-length IDAT: the next)
-.inchunk:
-    cmp si, [cs:pz_wend]
-    jb .lim
-    call pz_next
-    jc .dry
-    mov [cs:pz_mark], si
-.lim:
-    call pz_limit
-    pop ax
-    lodsb
-    ret
-.dryd:
-    pop di
-.dryp:
-    pop cx
-.dry:
-    pop ax
-    mov byte [cs:pz_dry], 1
-    mov word [cs:pz_inlim], 0       ; every byte from now is this path's
-.pad:
-    inc byte [cs:pz_pad]
-    cmp byte [cs:pz_pad], 4
-    ja .over
-    xor al, al
-    ret
-.over:
-    mov ax, PXD_TRUNC
-    jmp pz_fail
-
 ; pz_rawq - AL = the next byte of the file, CF = 1 at its end (no refusal:
 ; the chunk walk past the image data only ever ENDS it). Preserves all but AL
 pz_rawq:
@@ -952,84 +855,228 @@ pz_rawq:
     ret
 
 ; =============================================================================
-; BITS (LSB first): DX holds CH of them
+; THE IMAGE DATA, DE-CHUNKED (SPEC.md 106.22): the IDATs' bytes are copied
+; out of the ring into a CLEAN buffer in the scratch, PZ_CB, a run at a time
+; (the chunks' CRCs and headers stepped over, the ring's windows taken), and
+; inflate reads the clean buffer by a BIT POSITION - SI its byte, CL the
+; bits of it already taken (0..7), DS = ES = the scratch - so the hot path
+; tests no chunk, no window and no count: the next nine bits are a word at
+; SI shifted down by CL. The buffer is refilled when SI reaches DX (its
+; limit, 16 bytes short of the data in it). Past the image data's end the
+; buffer reads as zeros (PZ_CBGRD of them); a decode that has TAKEN a bit
+; of them is `cut short` - when it finishes, refuses, or reaches the fifth
+; zero byte (the limit is then there) - which is where a reader that stops
+; at the end would have stopped (SPEC.md 106.18)
 ; =============================================================================
 
-; pz_bits - CL = n (0..8): AX = the next n bits. Preserves all but AX, DX,
-; CH (the buffer)
-pz_bits:
-    cmp ch, cl
-    jae .have
-    push cx
-    call pz_byte
-    pop cx
-    push cx
-    mov cl, ch
-    xor ah, ah
-    shl ax, cl
-    or dx, ax
-    pop cx
-    add ch, 8
-    jmp short pz_bits
-.have:
+; NORM2 - CL up to 16 after a take: whole bytes on
+%macro NORM2 0
+    cmp cl, 8
+    jb %%n
+    inc si
+    sub cl, 8
+    cmp cl, 8
+    jb %%n
+    inc si
+    sub cl, 8
+%%n:
+%endmacro
+
+; pz_cfill - SI has reached DX: what is left of the clean data moved to the
+; buffer's start (SI with it; CL is unchanged) and the buffer filled again
+; from the image data - or, past its end, `cut short` once the fifth zero
+; byte is reached. out DX = the new limit. Preserves all else
+pz_cfill:
+    cmp byte [cs:pz_dry], 0
+    jne .dry
+    push ax
     push bx
-    mov bl, cl
-    xor bh, bh
-    shl bx, 1
-    mov ax, [cs:pz_masks + bx]
-    and ax, dx
-    shr dx, cl
-    sub ch, cl
+    push cx
+    push di
+    mov cx, [cs:pz_cend]            ; the clean bytes left
+    sub cx, si
+    mov di, PZ_CB
+    rep movsb
+.f:
+    mov bx, PZ_CB + PZ_CBSZ         ; BX = the room
+    sub bx, di
+    jbe .full
+    push ds
+    mov ds, [cs:pz_ids]             ; DS:SI = the ring
+    mov si, [cs:pz_isi]
+.run:
+    mov ax, [cs:pz_wend]            ; this window's bytes...
+    sub ax, si
+    jz .win
+    cmp word [cs:pz_left + 2], 0    ; ...the chunk's...
+    jne .r1
+    cmp ax, [cs:pz_left]
+    jbe .r1
+    mov ax, [cs:pz_left]
+.r1:
+    or ax, ax
+    jz .chunk
+    cmp ax, bx                      ; ...the room's
+    jbe .r2
+    mov ax, bx
+.r2:
+    mov cx, ax
+    rep movsb
+    sub [cs:pz_left], ax
+    sbb word [cs:pz_left + 2], 0
+    sub bx, ax
+    jnz .run
+    mov [cs:pz_isi], si
+    mov [cs:pz_ids], ds
+    pop ds
+.full:
+    mov [cs:pz_cend], di
+    mov dx, di
+    sub dx, 16
+    jmp short .out
+.win:
+    call pz_next                    ; the ring's next window
+    jnc .run
+    jmp short .end
+.chunk:
+    mov cx, 4                       ; the chunk is over: its CRC, unread,
+.crc:                               ; then the next chunk's header
+    call pz_rawq
+    jc .end
+    loop .crc
+    mov cx, 8
+    push di
+    mov di, pz_chk
+.hd:
+    call pz_rawq
+    jc .endd
+    mov [cs:di], al
+    inc di
+    loop .hd
+    pop di
+    cmp word [cs:pz_chk + 4], 'ID'
+    jne .end
+    cmp word [cs:pz_chk + 6], 'AT'
+    jne .end
+    mov ax, [cs:pz_chk]
+    xchg al, ah
+    test ah, 0x80
+    jnz .end
+    mov [cs:pz_left + 2], ax
+    mov ax, [cs:pz_chk + 2]
+    xchg al, ah
+    mov [cs:pz_left], ax
+    jmp .run                        ; (a zero-length IDAT: the next)
+.endd:
+    pop di
+.end:
+    mov [cs:pz_isi], si             ; THE DATA'S END: zeros after it
+    mov [cs:pz_ids], ds
+    pop ds
+    mov byte [cs:pz_dry], 1
+    mov [cs:pz_cend], di
+    mov [cs:pz_dend], di
+    mov cx, PZ_CBGRD / 2
+    xor ax, ax
+    rep stosw
+    mov dx, [cs:pz_dend]            ; the limit: the fifth zero byte
+    add dx, 4
+.out:
+    pop di
+    pop cx
     pop bx
+    pop ax
+    mov si, PZ_CB
+    ret
+.dry:
+    cmp si, dx                      ; DX = the fifth zero byte, for good:
+    ja .t                           ; past it, or at it with a bit of it
+    or cl, cl                       ; taken, is `cut short`; at it with
+    jnz .t                          ; none taken the decode goes on - and
+    ret                             ; asks here again at its next step
+.t:
+    mov [cs:pz_bsi], si
+    mov [cs:pz_bcl], cl
+    mov ax, PXD_TRUNC
+    jmp pz_fail
+
+; pz_bank - the position into [pz_bsi]/[pz_bcl], for pz_padused. Preserves
+; all
+pz_bank:
+    mov [cs:pz_bsi], si
+    mov [cs:pz_bcl], cl
     ret
 
-%macro PZ_FILL9 0                   ; at least nine bits in DX
-%%l:
-    cmp ch, 9
-    jae %%ok
-    cmp si, [cs:pz_inlim]
-    jae %%s
-    lodsb
-%%p:
+; =============================================================================
+; BITS (LSB first) at the bit position
+; =============================================================================
+
+; pz_bits - AL = n (0..16): AX = the next n bits, taken. Preserves all but
+; AX (and DX, SI as pz_cfill moves them)
+pz_bits:
+    or al, al
+    jnz .go
+    xor ax, ax
+    ret
+.go:
+    cmp si, dx
+    jb .ok
+    call pz_cfill
+.ok:
+    push bx
+    push cx
+    mov bl, al                      ; BL = n
+    mov ax, [si]                    ; three bytes, shifted down by CL
+    shr ax, cl
+    mov bh, [si + 2]
+    mov ch, cl
+    mov cl, 8
+    sub cl, ch
+    shl bh, cl
+    or ah, bh
     mov cl, ch
-    xor ah, ah
-    shl ax, cl
-    or dx, ax
-    add ch, 8
-    jmp short %%l
-%%s:
-    call pz_inslow
-    jmp short %%p
-%%ok:
-%endmacro
+    add cl, bl                      ; taken
+    mov bh, 0
+    shl bx, 1
+    and ax, [cs:pz_m16 + bx]
+    pop bx                          ; (the caller's CH; BX's CX)
+    mov ch, bh
+    pop bx
+.n:
+    cmp cl, 8
+    jb .x
+    inc si
+    sub cl, 8
+    jmp short .n
+.x:
+    ret
 
 ; pz_sub - AL = a sub-table's number, BX = the table's sub-tables: the nine
 ; bits taken, the next six index the sub-table. out AX = the symbol (256 + n
 ; for a length entry); no code there is `damaged`, after the fifteen bits the
-; canonical walk would have read (SPEC.md 106.18). Preserves all but AX, DX,
-; CH (the buffer)
+; canonical walk would have read (SPEC.md 106.18). SI/CL live
 pz_sub:
-    mov cl, 9
-    shr dx, cl
-    sub ch, cl
-    push ax
-    call pz_fill9
-    pop ax
+    add cl, 9
+    NORM2
     xor ah, ah
+    push cx
     mov cl, 7
     shl ax, cl                      ; 128 bytes a sub-table
+    pop cx
     add bx, ax
-    mov ax, dx
+    mov ax, [si]
+    shr ax, cl
     and ax, 63
     shl ax, 1
     add bx, ax
-    mov ax, [es:bx]
+    mov ax, [bx]
     or ah, ah
     jz .bad
-    mov cl, ah
-    and cl, 0x0F
-    shr dx, cl
-    sub ch, cl
+    push ax
+    and ah, 0x0F
+    add cl, ah
+    NORM2
+    pop ax
     test ah, 0x80
     mov ah, 0
     jz .out
@@ -1037,20 +1084,14 @@ pz_sub:
 .out:
     ret
 .bad:
-    mov cl, 6
-    call pz_bits
+    add cl, 6
+    NORM2
     jmp pz_bad
-
-; pz_fill9 - at least nine bits in DX (PZ_FILL9, called). Preserves all but
-; AX, CL, DX, CH
-pz_fill9:
-    PZ_FILL9
-    ret
 
 ; pz_walk - BX = a code's count array (its symbols 32 bytes on): the
 ; CANONICAL WALK, a bit at a time from the first (puff's loop) - the codes
 ; longer than the primary table's nine bits, and a code no set contains
-; (`damaged`). out AX = the symbol. Preserves all but AX, DX, CH
+; (`damaged`). out AX = the symbol. SI/CL live
 pz_walk:
     push bx
     push di
@@ -1060,7 +1101,7 @@ pz_walk:
     mov word [cs:pz_widx], 0        ; ...and its first symbol's index
     mov byte [cs:pz_wlen], 1
 .l:
-    mov cl, 1
+    mov al, 1
     call pz_bits
     or di, ax
     mov al, [cs:pz_wlen]
@@ -1068,7 +1109,7 @@ pz_walk:
     shl ax, 1
     push bx
     add bx, ax
-    mov ax, [es:bx]                 ; the codes of this length
+    mov ax, [bx]                    ; the codes of this length
     pop bx
     mov [cs:pz_wcnt], ax
     mov ax, di
@@ -1093,21 +1134,23 @@ pz_walk:
     add ax, bx
     add ax, 32
     mov bx, ax
-    mov ax, [es:bx]
+    mov ax, [bx]
     pop bp
     pop di
     pop bx
     ret
 
 ; =============================================================================
-; INFLATE
+; INFLATE. DS = ES = the scratch: SI/CL the bit position, DI the window's
+; write position, BP the bytes left before the next extraction, DX the
+; clean buffer's limit
 ; =============================================================================
 pz_inflate:
 .block:
-    mov cl, 1
+    mov al, 1
     call pz_bits
     mov [cs:pz_final], al
-    mov cl, 2
+    mov al, 2
     call pz_bits
     cmp al, 1
     je .fixed
@@ -1118,44 +1161,48 @@ pz_inflate:
     jmp pz_bad                      ; block type 3
 .fixed:
     cmp byte [cs:pz_tabk], 1
-    je .sym
+    je .chk
     call pz_fixed
     mov byte [cs:pz_tabk], 1
-    jmp short .sym
+    jmp short .chk
 .dyn:
     call pz_dynhdr
     mov byte [cs:pz_tabk], 2
-    jmp short .sym
+    jmp short .chk
 .stored:
     call pz_stored
     jmp .eob
     ; --- the symbol loop -------------------------------------------------
 .sym:
-    PZ_FILL9
-    mov bx, dx
+    mov bx, [si]                    ; the next nine bits
+    shr bx, cl
     and bh, 1
     shl bx, 1
-    mov ax, [es:bx + PZ_LPRIM]
+    mov ax, [bx + PZ_LPRIM]
     or ah, ah
     jle .lother                     ; a literal is AH > 0: its length
-    mov cl, ah
-    shr dx, cl
-    sub ch, cl
+    add cl, ah
+    NORM2
 .lit:
     stosb
     and di, 0x7FFF
     dec bp
-    jnz .sym
-    call pz_extract
+    jz .ext
+.chk:
+    cmp si, dx
+    jb .sym
+    call pz_cfill
     jmp short .sym
+.ext:
+    call pz_extract
+    jmp short .chk
 .lother:
     jz .lwalk
     cmp ah, 0xC0
     jae .lsub
-    mov cl, ah                      ; a length symbol, or the block's end
-    and cl, 0x0F
-    shr dx, cl
-    sub ch, cl
+    and ah, 0x0F                    ; a length symbol, or the block's end
+    add cl, ah
+    NORM2
     or al, al
     jz .eob
     jmp short .len
@@ -1179,27 +1226,30 @@ pz_inflate:
     dec al
     xor ah, ah
     mov bx, ax
-    mov cl, [cs:pz_lext + bx]
+    mov ch, [cs:pz_lext + bx]
     shl bx, 1
     mov ax, [cs:pz_lbase + bx]
-    or cl, cl
+    or ch, ch
     jz .lfix
-    push ax
-    call pz_bits
+    push ax                         ; its extra bits (five at most): a word
+    mov ax, [si]                    ; at the position holds them
+    shr ax, cl
+    and ax, [cs:pz_lmask + bx]
+    add cl, ch
+    NORM2
     pop bx
     add ax, bx
 .lfix:
     mov [cs:pz_mlen], ax
-    PZ_FILL9                        ; --- the distance ---
-    mov bx, dx
+    mov bx, [si]                    ; --- the distance ---
+    shr bx, cl
     and bh, 1
     shl bx, 1
-    mov ax, [es:bx + PZ_DPRIM]
+    mov ax, [bx + PZ_DPRIM]
     or ah, ah
     jle .dother
-    mov cl, ah
-    shr dx, cl
-    sub ch, cl
+    add cl, ah
+    NORM2
     xor ah, ah
     jmp short .dsym
 .dother:
@@ -1216,29 +1266,28 @@ pz_inflate:
     jmp pz_bad                      ; 30 and 31
 .d29:
     mov bx, ax
-    mov cl, [cs:pz_dext + bx]
+    mov ch, [cs:pz_dext + bx]
     shl bx, 1
     mov ax, [cs:pz_dbase + bx]
-    or cl, cl
+    or ch, ch
     jz .dist
-    cmp cl, 8
-    jbe .d8
-    push ax                         ; 9..13 bits: eight, then the rest
-    mov [cs:pz_tmp], cl
-    mov cl, 8
-    call pz_bits
-    mov bx, ax
-    mov cl, [cs:pz_tmp]
-    sub cl, 8
-    call pz_bits
-    mov ah, al
-    xor al, al
-    or ax, bx
+    cmp ch, 9
+    ja .dbig
+    push ax                         ; nine bits or fewer: a word holds them
+    mov ax, [si]
+    shr ax, cl
+    mov bl, ch
+    xor bh, bh
+    shl bx, 1
+    and ax, [cs:pz_m16 + bx]
+    add cl, ch
+    NORM2
     pop bx
     add ax, bx
     jmp short .dist
-.d8:
-    push ax
+.dbig:
+    push ax                         ; 10..13 bits: pz_bits
+    mov al, ch
     call pz_bits
     pop bx
     add ax, bx
@@ -1256,16 +1305,16 @@ pz_inflate:
     call pz_copy
     mov ax, [cs:pz_mlen]
     sub bp, ax
-    ja .sym2
+    ja .chk2
     call pz_extract
-.sym2:
-    jmp .sym
+.chk2:
+    jmp .chk
 .eob:
     cmp byte [cs:pz_final], 0
     jne .short
     jmp .block
 .short:
-    mov [cs:pz_bn], ch              ; the stream is over and the rows are not
+    call pz_bank                    ; the stream is over and the rows are not
     mov ax, PXD_TRUNC
     jmp pz_fail
 
@@ -1274,13 +1323,10 @@ pz_inflate:
 pz_copy:
     push cx
     push si
-    push ds
     mov si, di
     sub si, ax
     and si, 0x7FFF
     mov cx, [cs:pz_mlen]
-    push es
-    pop ds
     mov ax, si                      ; neither end wraps: one movsb run (a
     add ax, cx                      ; byte at a time, so an overlap repeats
     cmp ax, 0x8000                  ; the string, as deflate means it)
@@ -1299,7 +1345,6 @@ pz_copy:
     and di, 0x7FFF
     loop .slow
 .out:
-    pop ds
     pop si
     pop cx
     ret
@@ -1307,12 +1352,16 @@ pz_copy:
 ; pz_stored - a stored block, after its three bits: to the byte, LEN, NLEN,
 ; and LEN bytes into the window
 pz_stored:
-    mov cl, ch
-    and cl, 7
-    call pz_bits                    ; to the byte
-    call pz_get16
+    or cl, cl                       ; to the byte
+    jz .al
+    inc si
+    xor cl, cl
+.al:
+    mov al, 16
+    call pz_bits
     mov [cs:pz_slen], ax
-    call pz_get16
+    mov al, 16
+    call pz_bits
     not ax
     cmp ax, [cs:pz_slen]
     je .copy
@@ -1320,7 +1369,7 @@ pz_stored:
 .copy:
     cmp word [cs:pz_slen], 0
     je .out
-    mov cl, 8
+    mov al, 8
     call pz_bits
     stosb
     and di, 0x7FFF
@@ -1330,18 +1379,6 @@ pz_stored:
     call pz_extract
     jmp short .copy
 .out:
-    ret
-
-; pz_get16 - AX = sixteen bits
-pz_get16:
-    mov cl, 8
-    call pz_bits
-    push ax
-    mov cl, 8
-    call pz_bits
-    mov ah, al
-    pop bx
-    mov al, bl
     ret
 
 ; pz_fixed - the fixed code's two tables (RFC 1951 3.2.6): 288 literal/
@@ -1368,7 +1405,7 @@ pz_fixed:
     rep stosb
     pop di
     pop cx
-    mov [cs:pz_bn], ch
+    call pz_bank
     mov word [cs:pz_bl], PZ_LENS
     mov word [cs:pz_bnum], 288
     call pz_buildl
@@ -1381,15 +1418,15 @@ pz_fixed:
 ; code, the lengths, and the two tables
 pz_dynhdr:
     call pz_dtick
-    mov cl, 5
+    mov al, 5
     call pz_bits
     add ax, 257
     mov [cs:pz_nlen], ax
-    mov cl, 5
+    mov al, 5
     call pz_bits
     inc ax
     mov [cs:pz_ndist], ax
-    mov cl, 4
+    mov al, 4
     call pz_bits
     add ax, 4
     mov [cs:pz_ncode], ax
@@ -1407,7 +1444,7 @@ pz_dynhdr:
     xor bx, bx
 .cl:
     push bx
-    mov cl, 3
+    mov al, 3
     call pz_bits
     pop bx
     push bx
@@ -1419,7 +1456,7 @@ pz_dynhdr:
     cmp bx, [cs:pz_ncode]
     jb .cl
     pop di
-    mov [cs:pz_bn], ch
+    call pz_bank
     mov word [cs:pz_bl], PZ_CLL     ; ...built COMPLETE into the distance
     mov word [cs:pz_bnum], 19       ; code's arrays
     mov byte [cs:pz_bcmp], 1
@@ -1432,16 +1469,19 @@ pz_dynhdr:
     cmp bx, ax
     jae .read
     push bx
-    PZ_FILL9
-    mov bx, dx
+    cmp si, dx
+    jb .clp
+    call pz_cfill
+.clp:
+    mov bx, [si]
+    shr bx, cl
     and bh, 1
     shl bx, 1
-    mov ax, [es:bx + PZ_DPRIM]
+    mov ax, [bx + PZ_DPRIM]
     or ah, ah
     jle .clslow                     ; (seven bits at most: never a sub-table)
-    mov cl, ah
-    shr dx, cl
-    sub ch, cl
+    add cl, ah
+    NORM2
     xor ah, ah
     jmp short .clsym
 .clslow:
@@ -1459,7 +1499,7 @@ pz_dynhdr:
     or bx, bx                       ; 16: the previous length, 3..6 times
     jz .bad
     push bx
-    mov cl, 2
+    mov al, 2
     call pz_bits
     pop bx
     add ax, 3
@@ -1473,12 +1513,12 @@ pz_dynhdr:
     push bx
     cmp al, 17
     jne .z18
-    mov cl, 3                       ; 17: zeros, 3..10
+    mov al, 3                       ; 17: zeros, 3..10
     call pz_bits
     add ax, 3
     jmp short .z1
 .z18:
-    mov cl, 7                       ; 18: zeros, 11..138
+    mov al, 7                       ; 18: zeros, 11..138
     call pz_bits
     add ax, 11
 .z1:
@@ -1507,7 +1547,7 @@ pz_dynhdr:
     mov bx, [cs:pz_nlen]            ; the end-of-block code must exist
     cmp byte [es:PZ_LENS + 256], 0
     je .bad
-    mov [cs:pz_bn], ch
+    call pz_bank
     mov word [cs:pz_bl], PZ_LENS
     mov [cs:pz_bnum], bx
     call pz_buildl
@@ -1805,7 +1845,7 @@ pz_budget:
 ; goes into the scanline being gathered, a whole scanline is decoded and
 ; emitted, and the last one ends the decode (pz_done). Preserves all but BP
 pz_extract:
-    mov [cs:pz_bn], ch
+    call pz_bank
     push ax
     push bx
     push cx
@@ -1942,29 +1982,70 @@ pz_unfilter:
     mov byte [cs:pz_badf], 1
 .out:
     ret
-.sub:
+.sub:                               ; (two a turn: the loop's own cost
+    shr bp, 1                       ; halved - SPEC.md 106.22)
+    jnc .sub2
     mov al, [di + bx]
     add [di], al
     inc di
+    or bp, bp
+    jz .sret
+.sub2:
+    mov al, [di + bx]
+    add [di], al
+    mov al, [di + bx + 1]
+    add [di + 1], al
+    inc di
+    inc di
     dec bp
-    jnz .sub
+    jnz .sub2
+.sret:
     ret
 .up:
+    shr bp, 1
+    jnc .up2
     lodsb
     add [di], al
     inc di
+    or bp, bp
+    jz .uret
+.up2:
+    lodsw
+    add [di], al
+    add [di + 1], ah
+    inc di
+    inc di
     dec bp
-    jnz .up
+    jnz .up2
+.uret:
     ret
 .avg:
+    shr bp, 1
+    jnc .avg2
     mov al, [di + bx]               ; (a + b) >> 1, the ninth bit in CF
     add al, [si]
     rcr al, 1
     add [di], al
     inc si
     inc di
+    or bp, bp
+    jz .aret
+.avg2:
+    mov al, [di + bx]
+    add al, [si]
+    rcr al, 1
+    add [di], al
+    mov al, [di + bx + 1]
+    add al, [si + 1]
+    rcr al, 1
+    add [di + 1], al
+    inc si
+    inc si
+    inc di
+    inc di
     dec bp
-    jnz .avg
+    jnz .avg2
+.aret:
     ret
 .paeth:                             ; a = [di+bx], b = [si], c = [si+bx]
     mov dl, [si + bx]               ; c
@@ -2412,7 +2493,10 @@ pz_dbase:   dw 1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193
 pz_dext:    db 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6
             db 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13
 pz_clord:   db 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
-pz_masks:   dw 0, 1, 3, 7, 15, 31, 63, 127, 255
+pz_m16:     dw 0, 1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, 2047, 4095
+            dw 8191, 16383, 32767, 65535
+pz_lmask:   dw 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3, 7, 7, 7, 7
+            dw 15, 15, 15, 15, 31, 31, 31, 31, 0
 pz_gscale:  db 0, 255, 85, 0, 17     ; a 1/2/4-bit grey's scale, by depth
 ; Adam7's seven passes and the plain picture's one: x0, y0, the steps' shifts
 pz_a7:      db 0, 0, 3, 3
@@ -2444,12 +2528,15 @@ pz_bitsp:   db 0
 pz_bpp:     db 0
 pz_rowb:    dw 0
 pz_wend:    dw 0                    ; the input
-pz_inlim:   dw 0
-pz_mark:    dw 0
+pz_isi:     dw 0                    ; the ring's position, de-chunking
+pz_ids:     dw 0
+pz_cend:    dw 0                    ; the clean data's end
+pz_dend:    dw 0                    ; ...the image data's, when it is met
+pz_bsi:     dw 0                    ; the bit position, banked
+pz_bcl:     db 0
 pz_left:    dd 0
 pz_dry:     db 0
 pz_pad:     db 0
-pz_bn:      db 0                    ; the bit count, banked
 pz_chk:     times 8 db 0
 pz_hplte:   db 0
 pz_npal:    dw 0
