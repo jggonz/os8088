@@ -40685,22 +40685,22 @@ again, the claims as they were.
 
 ###### 20.12.7.4.2 What it costs
 
-**+176 bytes** of `apps/skies/csload.asm`, measured — the only shipped image
-carrying both flags today. It is a loader, freed the moment it re-homes
-(§20.12.10), so those bytes are transient RAM and 176 of disk; and Clear Skies
-can now give back more than that by deleting its own packer and expander. A
-package with lazy rows and no compressed one, or the other way round, pays
-**zero**: every line of it is behind `%if OP_HAS_COMP && OP_HAS_LAZY`, which
-§20.12.9's rule derives from the table rather than from an opinion.
+**Every line of it is behind `%if OP_HAS_ZLAZY`** - a table with a row that
+carries BOTH `OP_COMP` and `OP_LAZY`, which §20.12.9 derives from the table
+rather than from an opinion. A package with an eager compressed part and a
+plain lazy one (Clear Skies' `csload`, PIXELSTEIN 3D's `pxstein`, Word's
+loader) pays **zero**, and so does every C package: none has such a row. Until
+PiXEL's wave 4 review the expansion's helpers (`op_zrpara`, `op_zrseg`,
+`op_zkb`) and their call sites were gated on `OP_HAS_COMP && OP_HAS_LAZY`
+instead, which such a table satisfies without ever taking either branch:
+`csload` measured 2,354 bytes under that gate and **2,167** under this one,
+`pxstein` 2,993 and **2,806**.
 
-**The shadow (20.12.7.4.1) is behind `%if OP_HAS_ZLAZY`** - a row with BOTH
-flags, which is narrower than the pair above: a package with an eager
-compressed part and a plain lazy one (Clear Skies, PIXELSTEIN 3D, Word's
-loader) assembles to the byte it did, and so does every C package, because
-none has such a row. It costs **2 bytes a row and 41 of code**, measured on
-`apps/dos/dosload.asm` (2,187 -> 2,234 bytes, three rows: 2,228 before
-`op_drop` asked `OP_FETCHED`), the one other image that has one. PiXEL's
-three decoder-and-card parts are the others (§106.5, §106.18).
+The two images that do have such a row pay for all of it: the shadow
+(20.12.7.4.1) at **2 bytes a row**, the expansion down its own claim, the
+512-aligned read and the claim's real size (20.12.7.4.3). `apps/dos/dosload.asm`
+measures **2,332 bytes** with its three rows (2,187 before any of this). PiXEL's
+decoder-and-card parts are the others (§106.5, §106.18).
 
 ###### 20.12.7.4.3 Where the stream is read to, and the claim around it
 

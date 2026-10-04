@@ -1408,7 +1408,7 @@ op_lazyok:
     jc .no
     call op_lazykb
     jc .no
-%if OP_HAS_COMP
+%if OP_HAS_ZLAZY
     test byte [si+OP_R_FLAG], OP_COMP
     jz .plainkb
     call op_zkb                 ; op_fetch's own figure (SPEC.md 20.12.7.4.3)
@@ -1481,7 +1481,7 @@ op_fetch:
     jc .nodisk
     call op_lazykb              ; AX = the KB it wants, slack included
     jc .toobig
-%if OP_HAS_COMP
+%if OP_HAS_ZLAZY
     ; A COMPRESSED ROW HOLDS R, up to 496 bytes more so that the READ starts
     ; 512-aligned, and the packed stream read in whole clusters - which is
     ; op_zkb's sum and not `len` plus a guess: with a cluster over a KB the
@@ -1559,7 +1559,7 @@ op_fetch:
     push word [op_rdseg]
     mov [op_base], dx
     mov [op_rdseg], dx
-%if OP_HAS_COMP
+%if OP_HAS_ZLAZY
     test byte [si+OP_R_FLAG], OP_COMP
     jz .plainrd
     call op_zrseg               ; AX = R up the claim, 512-aligned (DX = it)
@@ -1580,7 +1580,7 @@ op_fetch:
     mov cl, 4                   ; is a multiple of 512 and therefore of 16 -
     shr ax, cl                  ; op_seg's arithmetic, one part at a time
     add ax, dx
-%if OP_HAS_COMP
+%if OP_HAS_ZLAZY
     test byte [si+OP_R_FLAG], OP_COMP
     jz .plainbank
     ; --- EXPAND IT, DOWN ITS OWN CLAIM (SPEC.md 20.12.7.4) -----------------
@@ -1762,8 +1762,8 @@ op_row:
     pop ax
     ret
 
-%if OP_HAS_COMP && OP_HAS_LAZY
-; GATED (SPEC.md 20.12.9): only a table with an OP_COMP|OP_LAZY row reaches it
+%if OP_HAS_ZLAZY
+; GATED (SPEC.md 20.12.9, OP_HAS_ZLAZY): only an OP_COMP|OP_LAZY row reaches it
 
 ; -----------------------------------------------------------------------------
 ; op_zrpara - R for a compressed lazy row, in paragraphs (SPEC.md 20.12.7.4)
