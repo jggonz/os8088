@@ -128,6 +128,11 @@ px_luma:
 ; an 8088 is the longest step. out CF = 1 AX = PXD_ABORT on a cancel
 ; =============================================================================
 px_tables:
+    cmp byte [px_hmode], 0          ; a HIDDEN decode (SPEC.md 106.21) paints
+    je .go                          ; nothing: the tables stay the shown
+    clc                             ; picture's
+    ret
+.go:
     push bx
     push cx
     push dx

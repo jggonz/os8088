@@ -162169,8 +162169,9 @@ matches. The library arms and fires on geometry alone, so `px_bfire` tests
   drop-down and Mean, Std Dev, Min, Max; Image Info's File, Folder, Size,
   Format, Pixels, Depth, Packing, Palette.
 - **Filmstrip.** A rule over it, the `<` `>` pagers and the folder's cards
-  (its count is the status bar's `n of N`). Wave 1 counts the pictures beside
-  the one opened; the thumbnails are wave 5's.
+  (its count is the status bar's `n of N`). Wave 1 counted the pictures
+  beside the one opened; the pagers, a card pressed and the thumbnails are
+  106.21's.
 - **Status bar.** Eight fields — name, dimensions, format, zoom, colours,
   bytes, `Memory: 412K` (`OSAPI_MEM_AVAIL`'s total free, looked at every five
   seconds by `OSAPI_WM_TIMER`) and `n of N` — each ONE run on the 8-pixel
@@ -162271,10 +162272,16 @@ size — and reads the file's FIRST CLUSTER (`OSAPI_FILE_READ_AT` into a
 DMA-safe claim of one cluster, freed at once). Its bytes name the format,
 and win over the extension — so the walk compares EVERY file's name with the
 one chosen, and the extension only decides whether a file counts among the
-folder's pictures: JPEG (its frame header found by walking the
-markers inside that cluster: dimensions, components, progressive), PNG (IHDR),
-GIF, BMP (both header sizes), PCX (only under its own name: two bytes are
-too common a signature), TIFF, PIX, PNM, and a `CZ` wrapper. The window then
+folder's pictures: JPEG, PNG, GIF, BMP, PCX (only under its own name: two
+bytes are too common a signature), TIFF, PIX, PNM, and a `CZ` wrapper. **The
+sniff names the format and nothing else since wave 5** (106.21): wave 1 also
+read each format's dimensions and depth out of its signature's header — a
+JPEG's frame header by walking the markers — and since wave 4 every format's
+decoder part reads them again in HEAD and checks every one, so the sniff's
+copies were dead, 446 bytes of them. A volume whose cluster is 32 KB (a 2 GB
+FAT16) reads the whole file into memory instead, as a packed one is: its
+head and the spare cluster beside it would be 64 KB, which no word holds
+(the wave-4 review's F4). The window then
 shows what it knows — Image Info, the status fields, the canvas's second
 line, `Images (N)`, and `PiXEL - NAME.EXT` in the title — and decodes
 nothing. A header that lies is not believed: every offset is checked against
@@ -162644,14 +162651,15 @@ a straddle) or the pan is wider than the canvas.
 - **What is live in this wave**: Open/Stop, Zoom In, Zoom Out, Fit and 1:1 on
   the toolbar, the Navigator and View; File > Revert (Ctrl+R) and Image
   Info...; the tools (Hand pans; the others are wave 7's and only latch).
-  Save, Prev, Next, Rotate, Slideshow, the filmstrip's and the status bar's
-  arrows, Edit, Image, Effects and Full Screen stay grey. A press on a grey
+  Save, Rotate, Edit, Image, Effects and Full Screen stay grey (Prev, Next,
+  the Slideshow and the four arrows came with 106.21). A press on a grey
   toolbar button says why in a toast: `No picture open` or `Not in this
   build yet`.
 - **The filmstrip** shows the folder's pictures as CARDS — the format's name
   in a framed card, the file's name under it, the open picture's card in
-  the highlight's colours — around the open one, from the sorted list `px_walk` keeps (128
-  names at most); the thumbnails are wave 5's.
+  the highlight's colours — around the open one, from the sorted list `px_walk` keeps (64
+  names at most since 106.21: a folder lists no more); the thumbnails are
+  106.21's.
 
 ### 106.13 Tests for the image core (wave 2)
 
@@ -163577,7 +163585,7 @@ spare at every wave's end, for the fixes the review after it brings):
 
 | wave | resident at most | what goes where |
 |---|---:|---|
-| 5, the folder | 3,000 | Prev/Next, the filmstrip's thumbnail cards and the slideshow's timer resident; a thumbnail is any decoder part's DECODE at 1/8 into a claim of its own; the cache file's reading and writing a FOLDER part, fetched by the UI task for the walk and dropped |
+| 5, the folder | 3,000 | Prev/Next, the filmstrip's thumbnail cards and the slideshow's timer resident; a thumbnail is any decoder part's DECODE at 1/8 into a claim of its own; the cache file's reading and writing a FOLDER part, fetched by the UI task for the walk and dropped. **Measured: +2,996** (106.21), 11,963 to spare |
 | 6, full screen | 1,500 | the entry, the exit and the restoring of the desktop resident; every mode's renderer and the palette choosers (median cut, the error diffusion) one FULL-SCREEN part, held while the screen is PiXEL's and dropped on the way out |
 | 7, editing | 4,500 | the tools' gestures, the menus' handlers, undo's bookkeeping and the palette operations (each a 768-byte edit) resident; the pixel operations (blur, sharpen, resize, rotate) an EFFECTS part on the worker; Save As a WRITERS part |
 
@@ -163585,3 +163593,192 @@ Measured leftover candidates, should a wave need them: the sniff's
 per-format dimensions (about 450 bytes), the CGA's half-height icon copies
 (544 bytes of bss, computed at launch), the folder's 128 names at 11 bytes
 rather than 13 (256 bytes).
+
+### 106.21 The folder: Prev/Next, the filmstrip's thumbnails, PIXEL.THC, the slideshow (wave 5)
+
+**The folder list.** `px_walk` (106.6) keeps every picture `OSAPI_FILE_FIND`
+names in the picture's folder as a 20-byte record - the 8.3 name, a flags
+byte (bit 0: packed on the disk, bit 1: no thumbnail could be made), the
+file's first cluster and its size - sorted by name, the open one at
+`[px_ncur]`. **At most 64**, which is `DSK_NENT`: a folder lists no more, so
+106.12's 128 names were half of them never fillable. The folder walked is
+banked (`[px_nfdir]`, `[px_nfvol]`): Prev, Next, the thumbnails and the cache
+act in IT, wherever a File > Open dialog that was cancelled has left the
+instance.
+
+**Prev and Next** - the toolbar's pair, the status bar's `<` `>`, File >
+Previous Image and Next Image, **Space** and **Backspace** - open the
+neighbour by name through `px_open`, exactly as File > Open would, wrapping
+at either end; **Home** and **End** open the first and the last; a press on
+a filmstrip card opens its picture. Every one goes through **`px_navto`**,
+the one place a picture is LEFT: wave 7's `OS88UI_ASAVE` goes there and
+nowhere else. They are greyed while the folder holds fewer than two
+pictures or the open one is not among them (a misnamed picture); a press on
+a greyed one says `No other picture here`. The filmstrip's own `<` `>` turn
+the strip a stripful at a time and are greyed, silently, at either end; a
+newly opened picture centres it again.
+
+**Thumbnails** are at most **72 x 54** (4:3 is exactly that; a picture of
+another shape fits inside it), **8bpp indices into 106.8's colour cube**, so
+every display draws every thumbnail with the same tables: on 4bpp the cube's
+own mixing plans (the CUBE's shipped plans, through any decoder part's
+`PXV_PLANS`) against the canvas's 8x8 Bayer, on 1bpp each entry's
+`px_t1for` threshold - the rules `px_texpand` builds the canvas's tables by.
+A card's box shows its thumbnail centred, its rows scaled by the pixel's
+aspect (54 on a VGA, 34 on a Hercules, 22 on a CGA, 39 or the box's 38 on an
+EGA), in the card's inside colour round it - the highlight's for the open
+picture, whose name line is in the highlight's colours too. **One planar
+blit a card** (`OSAPI_GFX_BLITP`, `OSAPI_GFX_BLIT4` when the probe refuses)
+or one `OSAPI_GFX_BLIT1`, and four fills round it. A thumbnail is part of a
+card's record (106.15): a card whose thumbnail arrives is drawn again, and no
+other.
+
+**How one is made.** The OPEN picture's from its own master, in the first
+idle moment after its open, through its palette: nearest-point sampling to
+the thumbnail's size, each palette entry taken to the nearest cube colour
+(an exact grey to the cube's nearest grey). Every other card's by a
+**HIDDEN DECODE**: the
+decode pipeline of 106.9 run on the picture with the shown one banked as
+the previous picture (`px_prev`, 106.8) - but with its `HAVE` byte masked,
+so `px_claims` never frees it for a better scale, and `px_mreloc` still
+follows its master. The display tables are not touched (`px_tables` returns
+at once while `[px_hmode]` says so), nothing is painted, nothing is
+composed, and at the end the picture shown is put back by `px_restore`
+exactly as a cancel would, with no tables to rebuild. The scale is the
+coarsest at or below 1/8 whose master still covers the thumbnail, forced by
+capping the run `px_claims` sees (`[px_mcap]`) at that master's size; a JPEG
+there is DC-only (106.19). "Covers" is the box's sides, `min(72, w)` by
+`min(54, h)`: a picture wider than 4:3 may decode one scale finer than its
+thumbnail needs, which is a few seconds of idle time and no resident byte.
+
+- **When:** in IDLE time only - at least a second after the last key,
+  press or menu command (`PX_THIDLE`), never while a press, a drop-down
+  list, an open, a re-decode or a slideshow is in progress, one step a
+  timer call: first the CACHE, read for the cards on show once a folder and
+  once a window of the strip, and only when a card there lacks one; then
+  the open picture's from its master; then one hidden decode, the open
+  picture's card first and outward among the cards on show, right before
+  left.
+- **Cancelled the moment the user acts:** every callback that could draw or
+  act - a paint, a key, a press, a drag, a release, a menu command, About -
+  first stops a hidden decode (`px_hstop`: the cancel byte, then a yield
+  until the worker answers, at most one of its rows; on a 4.77 MHz 8088 a
+  JPEG's row of blocks is about 0.6 s), and the window is then exactly as
+  it was. A stopped thumbnail starts again from nothing later; one REFUSED
+  marks its name and the card keeps its format's name until the folder is
+  walked again.
+- **The store** is one claim of **31 KB** (`PX_TSLOTS` = 6 thumbnails, the
+  cache's header and a 4 KB band and transfer buffer), made when a strip is
+  first laid out with a folder in it and the heap has 128 KB free beside it
+  (`PX_THMINFREE`) - a picture's master is sized from the heap (106.8), and
+  six thumbnails are not worth a coarser picture. Movable, and pinned around
+  every file transfer into it (66.5.7.1). A card on show with no slot left
+  keeps its format's name.
+
+**THE FOLDER PART.** What a paint needs is resident - the store, a card's
+key, the drawing, the engine, the hidden decode and the slideshow - and the
+rest is **part 5 of PIXEL.O88, `apps/pixel/pxfold.asm`, LINKED like the
+SIMPLE part** (106.20): the cache's reading and writing and the making of a
+thumbnail from a master, 2,422 bytes (2,129 packed), fetched when the strip
+has a use for it and dropped after every call (`px_fcall`, the store pinned
+round it). One vector, DECODE, takes a verb in `CL` (`apps/pixel/pxthc.inc`,
+the numbers both halves read): `PF_VISIT` the header and the cards on show,
+`PF_WRITE` the cache written, `PF_MAKE` a thumbnail from `[px_cur]`'s master.
+A part calls the API like the package does - a cell is a far call made with
+the caller's DS (§20.3), and a file cell resolves in the instance the
+dispatched callback is stamped with (§19.2.1) - so the file names it hands a
+cell are copied into the package's `[px_line]` first. It never speaks: a
+refused write comes back as a number and the resident says it once. A part
+that cannot be had - PiXEL's disk taken out - ends the thumbnails until the
+folder is walked again, with only `op_fetch`'s own toast.
+
+**The cache, `SYSTEM/APPDATA/PIXEL.THC`** (§19.9) on PiXEL's own volume -
+the folder exists on every disk PiXEL ships on; without it there is no
+cache and nothing is said. Read once per folder, written only when the strip
+is idle, never mid-browse.
+
+| offset | what |
+|---|---|
+| 0 | the header, 4 KB: `PXTC`, version 1, the entries used (at most 64), a clock; at +32 64 keys of 32 bytes |
+| 4096 x (c + 1) | entry c, 4 KB: the thumbnail's bytes, then at +3888 its key again |
+
+A **key** is the name (12 bytes), the folder's first cluster, the file's
+first cluster, its size, its drive, the thumbnail's width and height, flags
+and a stamp. **No slot offers a volume serial**, so the drive, the folder's
+cluster, the file's first cluster and its size stand for one: a file
+rewritten in place nearly always moves its first cluster or its size.
+Everything is 4 KB because `OSAPI_FILE_READ_AT` and `_WRITE_AT` move whole
+clusters at cluster offsets: a volume whose cluster does not divide 4096 has
+no cache.
+
+- **A visit:** the header once, when the strip's folder is not the one it
+  was matched for; then ONE 4 KB read an entry for every card on show it
+  holds, in one walk to `SYSTEM/APPDATA` and back (bank, `OSAPI_FILE_GOTO_QM`
+  a folder at a time, read, go back - §19.9), the entry's own key checked
+  against the header's. A second visit fills the strip with no decode.
+- **A write:** the header read again (another PiXEL may have written), each
+  new thumbnail written to an entry - a new one appended only while the disk
+  keeps 32 KB free, else the least recently used (the lowest stamp; a hit
+  stamps an entry too) replaced - then the header. A refused write (a
+  write-protected or full disk) says `Thumbnails not saved` ONCE and is not
+  tried again this session; the thumbnails stay in the store.
+
+**The slideshow (windowed).** File > Slideshow or the toolbar's Slideshow
+button, which stays latched while it runs and whose menu item then reads
+`Stop Slideshow`: the next picture in the folder, wrapping, **5 seconds**
+(`PX_SLIDE`, fixed - no settings card in this wave) after the one before it
+is whole on the glass, at Fit. The next one is decoded HIDDEN while the
+current one shows, beside it, when memory gives it a master there; at the
+deadline it REPLACES the shown one - the old master freed, the tables built
+for its palette, the canvas rendered whole, the window composed. When memory
+does not (or the hidden open refuses for any reason) it is opened at the
+deadline as any open is: the canvas fills as rows arrive, the name field says
+`Opening 42%`. **Any key or press stops it and does nothing else; a menu
+command stops it and then runs.** Thumbnails wait while it runs - all but
+the slide's own, made from its master before the next slide's decode
+begins. Full
+screen's slideshow is wave 6's: `px_slnext` is the step it calls.
+
+**The timer.** One `OSAPI_WM_TIMER`, re-armed by its own handler: every 91
+ticks for the free memory (106.3) when nothing else is pending, every 9 while
+the thumbnails or the slideshow have work (`[px_tq]`). A hidden decode's
+progress and its end arrive through `W_ONWAKE` as an open's do, and paint
+nothing.
+
+**Associations and a document launch** are wave 1's (106.6): JPG, PNG, PCX,
+TIF and PIX; the document's folder is the instance's before the open, so the
+strip shows it - in a subfolder and on B: alike.
+
+**What it costs.** Resident **+2,996 bytes** - image 34,875 → 38,134, bss
+11,606 → 11,343 - against the 3,000 106.20 set: `pxfolder.inc`'s 3,159
+bytes of code, the callbacks, keys and menus 546, less the sniff's 446
+(106.6) and 263 of bss (the folder list's 64 records of 20 bytes where 128
+of 13 were). **11,963 to spare.** The store is 31 KB of heap while a strip
+is shown; a hidden decode adds, for its length, its master, the work claim
+and the ring - claims at the worst moment the face, the master, the view
+claim, the store, the hidden master, the work claim, the ring and the
+decoder part: eight, §50.2's limit (the FOLDER part is dropped before a
+hidden decode claims, and fetched again only after its ring and work claim
+are given back). Drawing (`pxdraw`, PiXEL's own calls, Hercules / the VGA's
+colour face): Next **83 / 135** and Prev **132 / 195** (an open each, the
+decode included: G8.GIF and CITY.PCX), a strip page **109 / 115** - the
+cards that changed, each a frame, four strips of ground and one band, and
+the two pagers - and Show Filmstrip **237 / 240**. A full repaint, the
+yardstick, is **363 / 310** where it was 308 / 261: `pxdraw`'s folder holds
+seven pictures now where it held one, so the strip is seven named cards
+with their thumbnails where it was one named card and blank ones.
+
+**Tests.** `pxdraw` / `pxdrawvga` (106.15) gain Next, Prev and a strip page
+among their gestures, each under a ceiling, and the identity assertion holds
+with thumbnails on the cards; every gesture is measured from STILL - no
+hidden decode, the timer at its slow pace - or a card arriving would be
+counted as the gesture's. **`pxthumb`** (soak, MartyPC, the VGA XT): a
+folder of pictures opened by its association from a subfolder of B: - the
+thumbnails come, the open one's with no decode and every other card's by
+exactly one, and `PIXEL.THC` is written, read back off the floppy on the host
+and every thumbnail in it compared with its key; PiXEL closed and opened
+again on the same document fills the strip from the cache with **no decode**;
+twenty Next and Prev end with PiXEL's claims as they were and the largest run
+as it was. `[px_thoff]` is a test's byte that keeps the thumbnails out of the
+rows that measure something else (`pxdecode`, `pxopen`, `pxpaint`,
+`pxbench`).

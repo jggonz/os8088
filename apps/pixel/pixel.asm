@@ -24,6 +24,7 @@
 %include "os88api.inc"
 %include "pxpart.inc"
 %include "pxrec.inc"                ; the record, the formats, the decoders
+%include "pxthc.inc"                ; the folder list, the thumbnails (106.21)
 
     OS88_HEADER 'PiXEL', px_entry, OS88_F_ICON | OS88_F_ASSOC | OS88_F_GLYPH | OS88_F_PARTS
 
@@ -57,7 +58,9 @@ PXPART_PNG  equ 2                   ; the PNG decoder, apps/pixel/pxpng.asm
 PXPART_JPEG equ 3                   ; the JPEG decoder, apps/pixel/pxjpeg.asm
 PXPART_SIMP equ 4                   ; BMP, PCX, TGA, PNM, PIX, LINKED against
                                     ; the package: apps/pixel/pxsimp.asm
-PX_NPARTS   equ 5                   ; (a decoder part is never 0: [px_kheld]
+PXPART_FOLD equ 5                   ; the FOLDER: the thumbnail cache and the
+                                    ; making of one, LINKED: pxfold.asm
+PX_NPARTS   equ 6                   ; (a decoder part is never 0: [px_kheld]
                                     ; 0 is "none held", SPEC.md 106.18)
 PXD_QUIET   equ 0xFE                ; a refusal already said (op_fetch's own
                                     ; toast): px_refusal says nothing more
@@ -106,6 +109,8 @@ PXH_SZ      equ 2 + 8 * 4           ; a half-height picture record
 PX_HELPSZ   equ 400                 ; the keyboard card's text, copied in
 PX_HELPMAX  equ 12                  ; ...and its lines
 PX_MEMT     equ 91                  ; ticks between looks at free memory (5 s)
+PX_TQ       equ 9                   ; ...and between timer calls while the
+                                    ; thumbnails or the slideshow have work
 
 PX_R_TB     equ 1                   ; px_regdraw's regions
 PX_R_TOOLS  equ 2
@@ -123,7 +128,11 @@ PX_PR_CANVAS equ 1
 PX_PR_PANEL  equ 2                  ; the compact layout's panel, no control
 PX_PR_HAND   equ 3                  ; a Hand drag on the picture
 PX_PR_NAV    equ 4                  ; a press or drag in the Navigator
-PX_NAMES     equ 128                ; the folder's pictures px_walk keeps
+PX_PR_CARD   equ 5                  ; a press on a filmstrip card
+PX_NAMES     equ 64                 ; the folder's pictures px_walk keeps: a
+                                    ; folder lists no more (DSK_NENT, SPEC.md
+                                    ; 106.21)
+                                    ; (a PX_NREC record each: pxthc.inc)
 
 
 ; =============================================================================
@@ -262,7 +271,8 @@ px_paint:
     push si
     push di
     mov [px_win], si
-    call px_layout
+    call px_hstop                   ; a hidden decode gives the record back
+    call px_layout                  ; first (SPEC.md 106.21)
     jc .out
     mov bx, [px_win]
     call OSAPI_WM_DAMAGE            ; CF = 1: all of it; else AX..DX
@@ -285,7 +295,8 @@ px_paint:
     mov al, PX_R_ALL
     call px_draw                    ; every region the damage touches
     call px_cards
-.out:
+    call px_tqarm                   ; (a strip laid out anew may show cards
+.out:                               ; with no thumbnail yet, SPEC.md 106.21)
     pop di
     pop si
     pop dx
@@ -538,6 +549,8 @@ px_update:
 ; the library (SPEC.md 20.5.1.3.3)
 px_clickw:
     mov [px_win], si
+    call px_acted                   ; a hidden decode stopped; a slideshow too,
+    jc .out                         ; and the press spent on that
     call px_carddown
     jc .out
     call px_layout
@@ -665,6 +678,12 @@ px_onclick:
     mov al, PX_PR_NAV
     jmp short .got
 .strip:
+    call px_cardat                  ; a filmstrip card: its picture opens on
+    jc .panel                       ; the release (SPEC.md 106.21)
+    mov [px_pcard], ax
+    mov al, PX_PR_CARD
+    jmp short .got
+.panel:
     mov al, PX_PR_PANEL             ; the compact layout's one panel, where
     cmp byte [px_tier], 0           ; no control took the press: it turns to
     je .out                         ; the next (SPEC.md 106.15 - there is no
@@ -747,6 +766,7 @@ px_onup:
     push cx
     push dx
     push si
+    call px_touch                   ; (the idle the thumbnails wait for)
     call px_layout
     jnc .lay
     jmp .out
@@ -794,6 +814,17 @@ px_onup:
     call px_cmd_open
     jmp short .out
 .st:
+    cmp al, PX_PR_CARD
+    jne .pn
+    call px_cardat                  ; released on the card it was pressed on
+    jc .out
+    cmp ax, [px_pcard]
+    jne .out
+    cmp ax, [px_ncur]               ; (the open one is open)
+    je .out
+    call px_navto
+    jmp short .out
+.pn:
     cmp al, PX_PR_PANEL
     jne .out
     call px_nextpanel
@@ -816,14 +847,25 @@ px_bfire:
     shl si, 1
     test word [px_bflags + si], OS88UI_DIS
     jz .live
-    test word [px_bkind + si], PX_BK_LATER
-    mov si, px_s_later              ; why it is grey (mov keeps the flags)
+    mov bx, [px_bkind + si]
+    test bx, PX_BK_PAGE             ; a pager at its end: nothing to say
+    jnz .out1
+    mov si, px_s_later              ; why it is grey
+    test bx, PX_BK_LATER
     jnz .why
     mov si, px_s_nopico
+    test bx, PX_BK_FOLD             ; a picture, and no other beside it
+    jz .why
+    call px_haspic
+    jc .why
+    mov si, px_s_noother
 .why:
     call px_toast
+.out1:
     jmp .out
 .live:
+    call px_navbtn                  ; Prev, Next, the pagers, the slideshow
+    jnc .out1                       ; (pxfolder.inc)
     cmp ax, PX_B_OPEN
     jne .z
     cmp byte [px_busy], 1           ; Stop while a picture decodes
@@ -887,6 +929,10 @@ px_onkey:
     push bx
     push dx
     mov [px_win], si
+    call px_acted                   ; a hidden decode stopped; a slideshow
+    jnc .act                        ; stopped too, and the key spent on that
+    jmp .out
+.act:
     cmp byte [px_hdrop + OS88UI_DR_OPEN], 0
     je .nodrop
     mov bx, px_hdrop                ; an open list: any key takes it down
@@ -934,6 +980,8 @@ px_onkey:
     jmp .out
 .k3:
     call px_navkey                  ; the arrows, PgUp/PgDn, + - 0 1
+    jnc .out
+    call px_foldkey                 ; Space, Backspace, Home, End (106.21)
     jnc .out
     and al, 0xDF                    ; the tools' letters, either case
     mov bx, px_toolkeys
@@ -1045,6 +1093,12 @@ px_cmd:
     push ax
     push dx
     mov [px_win], si
+    call px_hstop                   ; a hidden decode gives the record back
+    call px_touch
+    cmp ax, (PX_M_FILE << 8) | PX_MF_SLIDE
+    je .slide                       ; (the one command a slideshow survives:
+    call px_slstop                  ; it is the one that stops it)
+.slide:
     call px_carddown                ; a card is taken down first (106.2): a
                                     ; command under it would act unseen
     cmp ah, PX_M_FILE
@@ -1055,8 +1109,25 @@ px_cmd:
     jmp .out
 .f1:
     cmp al, PX_MF_REVERT
-    jne .f2
+    jne .fp
     call px_revert
+    jmp .out
+.fp:
+    cmp al, PX_MF_PREV              ; the folder (SPEC.md 106.21)
+    jne .fn
+    xor al, al
+    call px_navstep
+    jmp .out
+.fn:
+    cmp al, PX_MF_NEXT
+    jne .fs
+    mov al, 1
+    call px_navstep
+    jmp .out
+.fs:
+    cmp al, PX_MF_SLIDE
+    jne .f2
+    call px_sltoggle
     jmp .out
 .f2:
     cmp al, PX_MF_INFO
@@ -1120,6 +1191,8 @@ px_cmd:
 px_about:
     push bx
     push si
+    call px_hstop                   ; (it draws: the record goes back first)
+    call px_slstop
     cmp byte [px_abon], 0           ; another card up: down first, or its edges
     jne .up                         ; show round the smaller About card
     call px_carddown
@@ -1146,14 +1219,30 @@ px_onresize:
     mov al, PX_R_ALL
     call px_owe
     pop ax
-    ret
+    jmp px_tqarm                    ; (another width holds other cards)
 
-; --- W_ONTIMER: free memory, every PX_MEMT ticks ------------------------------------
+; --- W_ONTIMER: free memory every PX_MEMT ticks; and while they have work,
+; every PX_TQ, the slideshow's step and the thumbnails' (SPEC.md 106.21) ------
 px_ontimer:
     push ax
     push bx
     mov [px_win], si
+    call OSAPI_GET_TICKS
+    mov bx, ax
+    sub ax, [px_memt]
+    cmp ax, PX_MEMT
+    jb .nm
+    mov [px_memt], bx
     call px_memfield
+.nm:
+    mov al, [px_hmode]              ; a hidden decode RUNNING holds the record:
+    dec al                          ; nothing is laid out or drawn until it is
+    cmp al, 2                       ; done (modes 1 and 2; a finished slide, 3,
+    jb .rearm                       ; waits for px_sltick)
+    call px_thstep                  ; (first: a slide's own thumbnail before
+    call px_sltick                  ; the next slide's decode begins)
+    cmp byte [px_hmode], 0          ; (one may have started just now)
+    jne .rearm
     cmp byte [px_sdirty], 0         ; the usual answer: nothing moved, and
     je .rearm                       ; nothing is drawn or even laid out
     mov al, PX_R_SDIRTY
@@ -1161,6 +1250,13 @@ px_ontimer:
 .rearm:
     mov bx, [px_win]
     mov ax, PX_MEMT
+    cmp byte [px_tq], 0
+    jne .fast
+    cmp byte [px_slon], 0
+    je .arm
+.fast:
+    mov ax, PX_TQ
+.arm:
     call OSAPI_WM_TIMER
     pop bx
     pop ax
@@ -1196,6 +1292,20 @@ px_onwake:
     call px_open
     call OSAPI_GFX_UNLOCK
 .pump:
+    cmp byte [px_hmode], 0          ; A HIDDEN DECODE (SPEC.md 106.21): the
+    je .vis                         ; pump, and its end - nothing is painted
+    cmp byte [px_hmode], 3          ; (a slide decoded waits for its deadline)
+    je .out
+    call px_pumpfill                ; (px_busy is 0: every empty slot)
+    call OSAPI_GFX_LOCK
+    cmp byte [px_job], JOB_NONE
+    jne .unl
+    call px_hdone                   ; CF = 0: a card has something new
+    jc .unl
+    call px_update
+    call px_tqarm
+    jmp short .unl
+.vis:
     cmp byte [px_busy], 0
     je .out
     cmp byte [px_busy], 1
@@ -1205,7 +1315,12 @@ px_onwake:
     call OSAPI_GFX_LOCK
     cmp byte [px_job], JOB_NONE
     jne .prog
+    mov al, [px_busy]
+    push ax
+    call px_slpre                   ; a slide's commit: the window composed
     call px_finish                  ; the worker has answered
+    pop ax
+    call px_finished                ; the open picture's thumbnail (106.21)
     jmp short .unl
 .prog:
     cmp byte [px_busy], 1
@@ -1487,6 +1602,7 @@ px_filmtog:
     call px_flags
     mov al, PX_R_TOOLS | PX_R_CANVAS | PX_R_PANELS | PX_R_FS
     call px_regpaint                ; ...which lays out, and relabels
+    call px_tqarm                   ; (cards on show: the thumbnails told)
     pop ax
     ret
 
@@ -1858,9 +1974,15 @@ px_examine:
     mov [px_fprog], al
     mov [px_cur + PXR_PACK], al
     mov [px_cur + PXR_SCL], al
+    cmp byte [px_hmode], 0          ; a hidden decode's file is one of the
+    je .walk                        ; folder list's: no walk (SPEC.md 106.21)
+    call px_hfile
+    jmp short .found
+.walk:
     call px_walk                    ; CF = 1: the name is not in this folder
     mov ax, PXD_NOFILE
     jc .out
+.found:
     mov si, px_fname                ; the format by its extension first...
     call px_extfmt
     mov [px_ffmt], al
@@ -1883,16 +2005,24 @@ px_examine:
 
 ; px_walk - OSAPI_FILE_FIND over the folder: [px_fcount] pictures PiXEL
 ; reads, [px_fidx] this one's place among them sorted by name (1-based),
-; [px_fsize] and [px_fcomp]; and the first PX_NAMES of them, sorted, in
-; [px_names] with this one at [px_ncur] (the filmstrip's cards). CF = 1 when
-; [px_fname] is not one of the files listed
+; [px_fsize] and [px_fcomp]; and the first PX_NAMES of them,
+; sorted, as PX_NREC-byte records in [px_names] - the name, the packed bit,
+; the first cluster and the size - with this one at [px_ncur] (the
+; filmstrip's cards, Prev and Next, the thumbnails' keys: SPEC.md 106.21).
+; The folder walked is banked. CF = 1 when [px_fname] is not one of the files
+; listed. ES = DS
 px_walk:
     mov word [px_fcount], 0
     mov word [px_fidx], 1
     mov word [px_nnames], 0
     mov word [px_ncur], 0xFFFF
+    mov word [px_fsoff], 0          ; (a new picture centres the strip)
+    mov byte [px_tnone], 0          ; (and may have room for a store)
     mov byte [px_ffound], 0
     mov byte [px_fcomp], 0
+    call OSAPI_FILE_HERE            ; the folder the list is OF
+    mov [px_nfdir], dx
+    mov [px_nfvol], bl
     xor cx, cx
 .next:
     mov di, px_find
@@ -1922,7 +2052,7 @@ px_walk:
     jae .cmp
     push cx
     mov ax, [px_nnames]
-    mov di, 13
+    mov di, PX_NREC
     mul di
     add ax, px_names
     mov di, ax
@@ -1931,15 +2061,25 @@ px_walk:
     cld
     rep movsb
     mov byte [di - 1], 0
+    mov al, [px_find + 22]          ; NR_FLAGS: packed, or not
+    and al, NRF_PACKED
+    stosb
+    mov ax, [px_find + 16]          ; NR_CLUS
+    stosw
+    mov ax, [px_find + 18]          ; NR_SIZE
+    stosw
+    mov ax, [px_find + 20]
+    stosw
     inc word [px_nnames]
     pop cx
 .cmp:
     mov si, px_find
     mov di, px_fname
     call px_strcmp                  ; CF = 1: listed < ours
-    jae .next
+    jae .nx
     inc word [px_fidx]
-    jmp short .next
+.nx:
+    jmp .next
 .end:
     call px_sortnames
     call px_namesum                 ; what the filmstrip's cards are made of
@@ -1959,7 +2099,7 @@ px_namesum:
     push cx
     push si
     mov ax, [px_nnames]
-    mov cx, 13
+    mov cx, PX_NREC
     mul cx
     mov cx, ax
     mov ax, [px_nnames]
@@ -1995,11 +2135,11 @@ px_sortnames:
 .j:
     jcxz .in
     mov ax, cx
-    mov di, 13
+    mov di, PX_NREC
     mul di
     add ax, px_names
     mov di, ax                      ; DI = names[j]
-    lea si, [di - 13]               ; SI = names[j - 1]
+    lea si, [di - PX_NREC]          ; SI = names[j - 1]
     call px_strcmp                  ; CF = 1: in order
     jbe .in
     push cx                         ; swap the two through px_tbuf
@@ -2008,7 +2148,7 @@ px_sortnames:
     push es
     push ds
     pop es
-    mov cx, 13
+    mov cx, PX_NREC
     mov di, px_tbuf
     cld
     rep movsb                       ; tbuf = names[j - 1]
@@ -2021,7 +2161,7 @@ px_sortnames:
     push ds
     pop es
     xchg si, di
-    mov cx, 13
+    mov cx, PX_NREC
     rep movsb                       ; names[j - 1] = names[j]
     pop es
     pop di
@@ -2032,7 +2172,7 @@ px_sortnames:
     push ds
     pop es
     mov si, px_tbuf
-    mov cx, 13
+    mov cx, PX_NREC
     rep movsb                       ; names[j] = tbuf
     pop es
     pop di
@@ -2055,7 +2195,7 @@ px_sortnames:
     mov [px_ncur], bx
     jmp short .out
 .fn:
-    add si, 13
+    add si, PX_NREC
     inc bx
     jmp short .f
 .out:
@@ -2076,6 +2216,12 @@ px_head:
     cmp byte [px_fcomp], 0
     jne .flat
     call px_clbytes                 ; AX = the cluster
+    cmp ax, 0x8000                  ; A 32 KB CLUSTER (a 2 GB FAT16): the
+    jae .flat                       ; head and its spare cluster would be
+                                    ; 64 KB, which no word below holds - so
+                                    ; the file is read whole, as a packed one
+                                    ; is, and every reader takes it from
+                                    ; memory (wave-4 review F4)
     mov cx, ax
     cmp ax, PX_HEADMAX
     jae .h
@@ -2247,222 +2393,76 @@ px_strcmp:
     pop ax
     ret
 
-; px_sniffbuf - ES:0..[px_snlen] = a file's first bytes: the format, and the
-; header's width, height and bits where it states them. Every offset is
-; checked against the length first; a header that lies is simply not believed
+; px_sniffbuf - ES:0..[px_snlen] = a file's first bytes: the FORMAT, by its
+; signature, which wins over the name (SPEC.md 106.6). Only the format: the
+; header's facts - dimensions, depth, progressive - are the decoder part's
+; HEAD's since wave 4, which reads them again and checks every one, so the
+; sniff's own copies were dead and went with wave 5's budget (106.21).
+; Clobbers AX, BX, DX
 px_sniffbuf:
-    mov cx, [px_snlen]
-    cmp cx, 32
-    jae .long
-    jmp .out
-.long:
-    cmp word [es:0], 0xD8FF         ; FF D8: JPEG
-    jne .png
-    cmp byte [es:2], 0xFF
-    jne .png
-    mov byte [px_ffmt], PXF_JPEG
-    jmp px_sniffjpeg
-.png:
-    cmp word [es:0], 0x5089         ; 89 'P' 'N' 'G'
-    jne .gif
-    cmp word [es:2], 0x474E
-    jne .gif
-    mov byte [px_ffmt], PXF_PNG
-    cmp word [es:16], 0             ; a width past 65535 is not believed
-    jne .out
-    cmp word [es:20], 0
-    jne .out
-    mov ax, [es:18]
-    xchg al, ah
-    mov [px_fw], ax
-    mov ax, [es:22]
-    xchg al, ah
-    mov [px_fh], ax
-    mov al, [es:24]                 ; bit depth, times the samples a pixel
-    mov bl, [es:25]                 ; colour type: 0 grey, 2 RGB, 3 palette,
-    mov ah, 3                       ; 4 grey + alpha, 6 RGBA
-    cmp bl, 2
-    je .pbits
-    mov ah, 4
-    cmp bl, 6
-    je .pbits
-    mov ah, 2
-    cmp bl, 4
-    je .pbits
-    mov ah, 1
-.pbits:
-    mul ah
-    mov [px_fbits], al
-    jmp .out
-.gif:
-    cmp word [es:0], 0x4947         ; 'GIF8'
-    jne .bmp
-    cmp word [es:2], 0x3846
-    jne .bmp
-    mov byte [px_ffmt], PXF_GIF
-    mov ax, [es:6]
-    mov [px_fw], ax
-    mov ax, [es:8]
-    mov [px_fh], ax
-    mov al, [es:10]
-    mov ah, 8
-    test al, 0x80
-    jz .gbits
-    and al, 7
-    inc al
-    mov ah, al
-.gbits:
-    mov [px_fbits], ah
-    jmp .out
-.bmp:
-    cmp word [es:0], 0x4D42         ; 'BM'
-    jne .pcx
-    mov byte [px_ffmt], PXF_BMP
-    cmp word [es:14], 12            ; an OS/2 v1 header: 16-bit sizes
-    jne .bmpw
-    mov ax, [es:18]
-    mov [px_fw], ax
-    mov ax, [es:20]
-    mov [px_fh], ax
-    mov al, [es:24]
-    mov [px_fbits], al
-    jmp .out
-.bmpw:
-    cmp word [es:20], 0
-    jne .out
-    mov ax, [es:18]
-    mov [px_fw], ax
-    mov ax, [es:22]                 ; a negative height is a top-down picture
-    or ax, ax
-    jns .bh
-    neg ax
-.bh:
-    mov [px_fh], ax
-    mov al, [es:28]
-    mov [px_fbits], al
-    jmp .out
-.pcx:
-    cmp byte [es:0], 0x0A           ; PCX: the manufacturer byte and RLE
-    jne .tif
-    cmp byte [es:2], 1
-    jne .tif
-    cmp byte [px_ffmt], PXF_PCX     ; ...and only by that name: two bytes are
-    jne .tif                        ; too common a signature to trust alone
-    mov ax, [es:8]
-    sub ax, [es:4]
-    inc ax
-    mov [px_fw], ax
-    mov ax, [es:10]
-    sub ax, [es:6]
-    inc ax
-    mov [px_fh], ax
-    cmp cx, 66
+    cmp word [px_snlen], 32
     jb .out
-    mov al, [es:3]
-    mul byte [es:65]
-    mov [px_fbits], al
-    jmp short .out
+    mov ax, [es:0]
+    mov bx, [es:2]
+    mov dl, PXF_JPEG                ; FF D8 FF
+    cmp ax, 0xD8FF
+    jne .png
+    cmp bl, 0xFF
+    je .set
+.png:
+    mov dl, PXF_PNG                 ; 89 'P' 'N' 'G'
+    cmp ax, 0x5089
+    jne .gif
+    cmp bx, 0x474E
+    je .set
+.gif:
+    mov dl, PXF_GIF                 ; 'GIF8'
+    cmp ax, 0x4947
+    jne .bmp
+    cmp bx, 0x3846
+    je .set
+.bmp:
+    mov dl, PXF_BMP                 ; 'BM'
+    cmp ax, 0x4D42
+    je .set
+    mov dl, PXF_PCX                 ; PCX: the manufacturer byte and RLE -
+    cmp al, 0x0A                    ; and only by that name: two bytes are
+    jne .tif                        ; too common a signature to trust alone
+    cmp bl, 1
+    jne .tif
+    cmp byte [px_ffmt], PXF_PCX
+    je .set
 .tif:
-    cmp word [es:0], 0x4949         ; 'II' 42 / 'MM' 42: TIFF
+    mov dl, PXF_TIFF                ; 'II' 42 / 'MM' 42
+    cmp ax, 0x4949
     jne .tifm
-    cmp word [es:2], 42
-    je .istif
+    cmp bx, 42
+    je .set
 .tifm:
-    cmp word [es:0], 0x4D4D
+    cmp ax, 0x4D4D
     jne .pix
-    cmp word [es:2], 0x2A00
-    jne .pix
-.istif:
-    mov byte [px_ffmt], PXF_TIFF
-    jmp short .out
+    cmp bx, 0x2A00
+    je .set
 .pix:
-    cmp word [es:0], 0x384F         ; 'O8PIX', os8088's own (SPEC.md 94)
+    mov dl, PXF_PIX                 ; 'O8PIX', os8088's own (SPEC.md 94)
+    cmp ax, 0x384F
     jne .pnm
-    cmp word [es:2], 0x4950
-    jne .pnm
-    mov byte [px_ffmt], PXF_PIX
-    jmp short .out
+    cmp bx, 0x4950
+    je .set
 .pnm:
-    cmp byte [es:0], 'P'            ; 'P1'..'P6'
+    mov dl, PXF_PNM                 ; 'P1'..'P6'
+    cmp al, 'P'
     jne .cz
-    mov al, [es:1]
-    cmp al, '1'
+    cmp ah, '1'
     jb .cz
-    cmp al, '6'
-    ja .cz
-    mov byte [px_ffmt], PXF_PNM
-    jmp short .out
+    cmp ah, '6'
+    jbe .set
 .cz:
-    cmp word [es:0], 0x5A43         ; 'CZ': packed on the disk (SPEC.md
-    jne .out                        ; 20.14), which READ_AT hands over raw
-    mov byte [px_ffmt], PXF_PACKED
-.out:
-    ret
-
-; px_sniffjpeg - walk the markers to the frame header: its height, width,
-; components, and whether it is progressive. ES:0 = the bytes, CX = their
-; length. A JPEG whose frame header is past the first cluster (a large EXIF
-; thumbnail) is named without dimensions
-px_sniffjpeg:
-    sub cx, 10                      ; THE LIMIT, once: a marker and the frame
-    jbe .out                        ; header's fields must start below it, so
-    mov si, 2                       ; no read can pass the bytes read - and
-.m:                                 ; SI is compared, never SI + 10, which a
-    cmp si, cx                      ; lying length could wrap past 64K
-    jae .out                        ; (wave-1 review MAJ-1)
-    cmp byte [es:si], 0xFF
+    mov dl, PXF_PACKED              ; 'CZ': packed on the disk (SPEC.md
+    cmp ax, 0x5A43                  ; 20.14), which READ_AT hands over raw
     jne .out
-    mov al, [es:si + 1]
-    cmp al, 0xFF                    ; fill bytes
-    jne .mk
-    inc si
-    jz .out
-    jmp short .m
-.mk:
-    cmp al, 0xD0                    ; RSTn, SOI, EOI and TEM have no length
-    jb .len
-    cmp al, 0xD9
-    jbe .two
-.len:
-    cmp al, 0x01
-    je .two
-    cmp al, 0xC0
-    jb .skip
-    cmp al, 0xCF
-    ja .skip
-    cmp al, 0xC4                    ; DHT, JPG and DAC are not frame headers
-    je .skip
-    cmp al, 0xC8
-    je .skip
-    cmp al, 0xCC
-    je .skip
-    cmp al, 0xC2
-    jne .sof
-    mov byte [px_fprog], 1
-.sof:
-    mov ax, [es:si + 5]
-    xchg al, ah
-    mov [px_fh], ax
-    mov ax, [es:si + 7]
-    xchg al, ah
-    mov [px_fw], ax
-    mov al, [es:si + 9]             ; components: 1 grey, 3 colour
-    mov ah, 8
-    mul ah
-    mov [px_fbits], al
-    jmp short .out
-.skip:
-    mov ax, [es:si + 2]
-    xchg al, ah
-    add ax, 2
-    jc .out
-    add si, ax
-    jc .out
-    jmp short .m
-.two:
-    add si, 2
-    jc .out
-    jmp short .m
+.set:
+    mov [px_ffmt], dl
 .out:
     ret
 
@@ -2750,6 +2750,11 @@ px_flags:
     and ax, OS88UI_IMG
     test cx, PX_BK_LATER
     jnz .grey
+    test cx, PX_BK_FOLD
+    jz .pic
+    call px_foldok                  ; another picture in the folder
+    jc .grey
+.pic:
     test cx, PX_BK_PIC
     jz .nd
     call px_haspic
@@ -2767,6 +2772,11 @@ px_flags:
     mov bx, ax
     shl bx, 1
     or word [px_bflags + bx], OS88UI_LATCH
+    cmp byte [px_slon], 0           ; ...and the slideshow, while it runs
+    je .sl
+    or word [px_bflags + 2 * PX_B_SHOW], OS88UI_LATCH
+.sl:
+    call px_pgflags                 ; the filmstrip's pagers, at their ends
     cmp byte [px_col], 0            ; the colour face paints every button
     je .ml                          ; itself (SPEC.md 13.8.10, 106.16)
     xor bx, bx
@@ -2799,6 +2809,38 @@ px_menulive:
     inc dx
 .g:
     mov si, px_mlive
+    call px_mlset
+    xor dx, dx                      ; the folder's: another picture in it
+    call px_foldok
+    jc .g2
+    inc dx
+.g2:
+    mov si, px_mfold
+    call px_mlset
+    mov ax, px_mi_slide             ; the slideshow's: Stop while it runs
+    add ax, dx
+    cmp byte [px_slon], 0
+    je .s
+    mov ax, px_mi_slstop + 1
+.s:
+    cmp [px_mif + 2 * PX_MF_SLIDE], ax
+    je .done
+    mov [px_mif + 2 * PX_MF_SLIDE], ax
+    inc cx
+.done:
+    jcxz .out
+    call px_menuset
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; px_mlset - the list at SI (slot, string), each item live (DX = 1) or grey
+; (DX = 0); CX counts those that changed. Preserves the rest but AX, BX, SI
+px_mlset:
 .l:
     mov bx, [si]                    ; the item's slot in its menu
     or bx, bx
@@ -2813,14 +2855,6 @@ px_menulive:
     add si, 4
     jmp short .l
 .done:
-    jcxz .out
-    call px_menuset
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; px_halfinit - the CGA's half-height pictures (pxicons.inc): each pair of
@@ -3110,6 +3144,7 @@ px_u32:
 %include "pxpump.inc"               ; the worker and its file pump (106.9)
 %include "pxsimple.inc"             ; BMP, PCX, TGA, PNM, PIX (106.10)
 %include "pxview.inc"               ; the renderer, Navigator, Histogram (106.11)
+%include "pxfolder.inc"             ; the folder, thumbnails, slideshow (106.21)
 %include "os88rseq.inc"             ; READ_SEQ behind READ_AT's registers
 
 ; px_zfield - the status bar's zoom: "100%", or "Fit 47%" (SPEC.md 106.12).
@@ -3305,21 +3340,25 @@ pxa_name:   db 'PIXEL.GFX', 0
 ; picture and is greyed without one (px_flags) ---------------------------------
 PX_BK_PIC   equ 0x8000              ; grey without a picture
 PX_BK_LATER equ 0x4000              ; grey in this build: a later wave's
+PX_BK_FOLD  equ 0x2000              ; grey without another picture in the
+                                    ; folder (SPEC.md 106.21)
+PX_BK_PAGE  equ 0x1000              ; a filmstrip pager: grey at its end, and
+                                    ; a press on it then says nothing
 px_bkind:
     dw OS88UI_IMG                               ; Open (Stop while opening)
     dw OS88UI_IMG | PX_BK_LATER                 ; Save
-    dw OS88UI_IMG | PX_BK_LATER                 ; Prev
-    dw OS88UI_IMG | PX_BK_LATER                 ; Next
+    dw OS88UI_IMG | PX_BK_FOLD                  ; Prev
+    dw OS88UI_IMG | PX_BK_FOLD                  ; Next
     dw OS88UI_IMG | PX_BK_PIC                   ; Zoom In
     dw OS88UI_IMG | PX_BK_PIC                   ; Zoom Out
     dw OS88UI_IMG | PX_BK_PIC                   ; Fit
     dw PX_BK_PIC                                ; 1:1
     dw OS88UI_IMG | PX_BK_LATER                 ; Rotate
-    dw OS88UI_IMG | PX_BK_LATER                 ; Slideshow
+    dw OS88UI_IMG | PX_BK_FOLD                  ; Slideshow
     times PX_NTOOL dw OS88UI_IMG                ; the tools
     dw PX_BK_PIC, PX_BK_PIC, PX_BK_PIC          ; Navigator's +, -, Fit
-    dw PX_BK_LATER, PX_BK_LATER                 ; the filmstrip's arrows
-    dw PX_BK_LATER, PX_BK_LATER                 ; the status bar's
+    dw PX_BK_PAGE, PX_BK_PAGE                   ; the filmstrip's arrows
+    dw PX_BK_FOLD, PX_BK_FOLD                   ; the status bar's
 %if ($ - px_bkind) != PX_NB * 2
   %error "px_bkind has a kind per button"
 %endif
@@ -3414,6 +3453,9 @@ px_exts:
 PX_M_FILE   equ 0
 PX_MF_OPEN  equ 0
 PX_MF_REVERT equ 2
+PX_MF_PREV  equ 4
+PX_MF_NEXT  equ 5
+PX_MF_SLIDE equ 6
 PX_MF_INFO  equ 8
 PX_M_VIEW   equ 4
 PX_MV_ZIN   equ 0
@@ -3448,6 +3490,7 @@ px_mi_revert: db MENU_DIS, 'Revert  Ctrl+R', 0
 px_mi_prev:   db MENU_DIS, 'Previous Image', 0
 px_mi_next:   db MENU_DIS, 'Next Image', 0
 px_mi_slide:  db MENU_DIS, 'Slideshow', 0
+px_mi_slstop: db MENU_DIS, 'Stop Slideshow', 0
 px_mi_info:   db MENU_DIS, 'Image Info...', 0
 
 px_mie: dw px_mi_undo, px_sep, px_mi_copy, px_sep, px_mi_selall
@@ -3509,6 +3552,11 @@ px_mlive:
     dw px_miv + 2 * PX_MV_FIT, px_mi_fit
     dw px_miv + 2 * PX_MV_ACTUAL, px_mi_actual
     dw 0
+; ...and those that follow the FOLDER: another picture in it (px_foldok)
+px_mfold:
+    dw px_mif + 2 * PX_MF_PREV, px_mi_prev
+    dw px_mif + 2 * PX_MF_NEXT, px_mi_next
+    dw 0
 
 ; --- About (SPEC.md 12.7): the app-name cell's item, not a Help menu -------------
 px_ablines: dw px_ab1, px_ab2, px_ab3, px_ab0, px_ab4, 0
@@ -3550,6 +3598,8 @@ px_s_busy:  db 'Still opening a picture', 0
 px_s_diskback: db "Put PiXEL's disk back", 0
 px_s_later: db 'Not in this build yet', 0
 px_s_nopico: db 'No picture open', 0
+px_s_noother: db 'No other picture here', 0
+px_s_nothc: db 'Thumbnails not saved', 0
 px_s_opening: db 'Opening ', 0
 px_s_pct:   db '%', 0
 px_s_fitsp: db 'Fit ', 0
@@ -3619,6 +3669,7 @@ px_s_r11:   db 'too big to unpack', 0
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 2 PNG (106.18)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 3 JPEG (106.19)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 4 the simple five (106.20)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 5 the folder (106.21)
     OS88_PARTS_END
 
 ; =============================================================================
@@ -3773,8 +3824,9 @@ px_tbuf     equ px_plan                         ; 769: a PCX's tail, and the
                                                 ; (the histogram's counts and
                                                 ; bins: the master's tail,
                                                 ; pxmaster.inc, SPEC.md 106.20)
-px_names    equ px_t1 + 256                     ; PX_NAMES x 13: the folder
-px_pplan    equ px_names + PX_NAMES * 13        ; 768: the previous picture's
+px_names    equ px_t1 + 256                     ; PX_NAMES x PX_NREC: the
+                                                ; folder (SPEC.md 106.21)
+px_pplan    equ px_names + PX_NAMES * PX_NREC   ; 768: the previous picture's
                                                 ; plans, banked (106.20)
 px_rcur     equ px_pplan + 768                  ; FSEQ_SIZE: READ_SEQ's cursor
 px_gsum     equ px_rcur + FSEQ_SIZE             ; 4 x PX_HBW: graph columns
@@ -4009,6 +4061,7 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_fciy2, 2
     PXVAR px_fcpair, 2
     PXVAR px_fcfmt, 2
+    PXVAR px_fckey, 2               ; the card being drawn's key
     PXVAR px_fcmid, 2
     PXVAR px_mcap, 2                ; a test's cap on the largest run, KB
     PXVAR px_lastref, 1             ; the last refusal's number, for a test
@@ -4069,6 +4122,62 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_wo_dec, 2              ; ...its place in the work claim
     PXVAR px_kbx, 2                 ; a service's BX and DX, banked across
     PXVAR px_kdx, 2                 ; px_emit
+    ; the folder (pxfolder.inc, SPEC.md 106.21)
+    PXVAR px_nfdir, 2               ; the folder the list is of...
+    PXVAR px_nfvol, 1               ; ...and its drive
+    PXVAR px_fsoff, 2               ; the strip turned from its centring
+    PXVAR px_pcard, 2               ; a card pressed: its name
+    PXVAR px_hmode, 1               ; a HIDDEN decode: 1 a thumbnail, 2 a
+                                    ; slide, 3 a slide decoded and waiting
+    PXVAR px_hidx, 2                ; ...of this name
+    PXVAR px_hhave, 1               ; ...the shown picture's HAVE, masked
+    PXVAR px_htab, 1                ; ...its tables' state, banked
+    PXVAR px_htdep, 1
+    PXVAR px_hzreq, 1
+    PXVAR px_hmcap, 2
+    PXVAR px_thoff, 1               ; a test's byte: no thumbnails at all
+    PXVAR px_tq, 1                  ; the thumbnails have work: a fast timer
+    PXVAR px_lastact, 2             ; the tick of the last key or press
+    PXVAR px_memt, 2                ; ...and of the last look at free memory
+    PXVAR px_tseg, 2                ; the STORE, or 0
+    PXVAR px_tnone, 1               ; ...refused for this folder
+    PXVAR px_tplok, 1               ; ...its cube plans are made
+    PXVAR px_tt1ok, 1               ; ...its 1bpp thresholds are made
+    PXVAR px_tslot, 2               ; a slot being made or drawn
+    PXVAR px_tkey, 32               ; a key being made
+    PXVAR px_ttw, 1                 ; px_tfit's answer
+    PXVAR px_tth, 1
+    PXVAR px_tsi, 2                 ; a DDA's whole step
+    PXVAR px_trgb, 3                ; a cube entry's colour
+    PXVAR px_tdh, 2                 ; a thumbnail's rows on the glass...
+    PXVAR px_tty, 2                 ; ...its first
+    PXVAR px_tlp, 2                 ; ...and its left margin in the band
+    PXVAR px_tdep, 1                ; the band's form: 1bpp, 4 planes, 2 packed
+    PXVAR px_tgv, 1                 ; ...the ground's value in it
+    PXVAR px_tbandx, 2              ; ...and its left on the glass
+    PXVAR px_centry, 2              ; the cache: the entry being read or
+                                    ; written
+    PXVAR px_cnew, 1                ; ...it has something to be written
+    PXVAR px_cvsum, 2               ; ...read for this folder's names...
+    PXVAR px_cvfcs, 2               ; ...and this window of the strip
+    PXVAR px_cvfcn, 2
+    PXVAR px_tname, 2               ; the name a thumbnail is made of
+    PXVAR px_cstat, 1               ; the cache: 0 not read, 1 read, 2 none
+    PXVAR px_cnowr, 1               ; ...a write was refused this session
+    PXVAR px_cdir, 2                ; ...read for this folder
+    PXVAR px_cvol, 1
+    PXVAR px_chit, 8                ; ...its entries read since its last write
+    PXVAR px_cwas, 2                ; the folder a visit to SYSTEM/APPDATA
+    PXVAR px_cwvol, 1               ; comes back to
+    PXVAR px_slon, 1                ; THE SLIDESHOW runs
+    PXVAR px_sldue, 2               ; ...the next slide's tick
+    PXVAR px_slmem, 1               ; ...it opens in sight (no room to hide it)
+    PXVAR px_slpost, 1              ; ...a commit's tables are being built
+    PXVAR px_thdec, 2               ; hidden thumbnail decodes begun (a test's)
+    PXVAR px_thmade, 2              ; thumbnails made (a test's)
+    PXVAR px_thread, 2              ; thumbnails read from the cache (a test's)
+    PXVAR px_thwrote, 2             ; the cache's writes (a test's)
+    PXVAR px_thref, 1               ; a thumbnail's last refusal (a test's)
 PX_BSSEND   equ px_w2 + PXV
 PX_BSS      equ PX_BSSEND - PXB
 

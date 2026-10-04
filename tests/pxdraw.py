@@ -62,9 +62,21 @@ KSEG = 0x60
 CEIL = {"tool: Zoom (z)": 16, "tool: Hand (h)": 16, "zoom in (=)": 40,
         "pan down (arrow)": 12, "pan across (arrow)": 90,
         "zoom out (-)": 40, "Fit (0)": 40, "Hide Panels": 50,
-        "Show Panels": 180, "Hide Filmstrip": 200, "Show Filmstrip": 240,
+        "Show Panels": 180, "Hide Filmstrip": 200,
+        # (since 106.21 the folder holds seven pictures, so the strip's
+        # cards are seven named cards with their thumbnails where wave 4's
+        # were one named card and blank ones: ~14 calls a card either way)
+        "Show Filmstrip": 280,
         "card up (F1)": 15, "status field (timer)": 2,
-        "open (Revert)": 200}
+        "open (Revert)": 200,
+        # THE FOLDER (SPEC.md 106.21): Next and Prev are an open each, the
+        # strip's two cards whose highlight moved and nothing else of it;
+        # a page is the strip's cards that changed and its two pagers
+        "Next (Space)": 230, "Prev (Backspace)": 230,
+        "strip page (>)": 130, "strip page (<)": 130}
+# the folder beside CITY.PCX (tools/pixcorpus.py's): seven pictures, more
+# than a strip shows, so it pages
+FOLDER = ("B24.BMP", "C8.PCX", "G8.GIF", "N6.PPM", "P0_8.PNG", "T2_24.TGA")
 
 
 def pkg_syms_at(src):
@@ -133,8 +145,16 @@ def main():
         os.makedirs("build/pxdraw-ab", exist_ok=True)       # own name)
         o88path = "build/pxdraw-ab/PIXEL.O88"
         open(o88path, "wb").write(o88)
+    sys.path.insert(0, "tools")
+    import pixcorpus as C
+    cor = {n: d for n, d, v in C.corpus()}
+    os.makedirs("build/pxdrawf", exist_ok=True)
+    extra = []
+    for n in FOLDER:
+        open(os.path.join("build/pxdrawf", n), "wb").write(cor[n])
+        extra.append(os.path.join("build/pxdrawf", n))
     M.scratch_disk(disk, o88path, "build/PIXEL.GFX",
-                   "apps/pixel/samples/CITY.PCX")
+                   "apps/pixel/samples/CITY.PCX", *extra)
     rows, ok = [], True
     print("== PiXEL: drawing calls a gesture, %s (SPEC.md 106.15) =="
           % a.machine)
@@ -151,7 +171,13 @@ def main():
 
         def idle():
             return B("px_busy") == 0 and B("px_job") == 0
-        M.until(m, lambda _: W("px_ndone") and idle(), "the decode",
+
+        def still():
+            """...and the thumbnails done: no hidden decode, the timer at
+            its slow pace (SPEC.md 106.21) - a gesture is measured from
+            still, or a card arriving would be counted as its"""
+            return idle() and B("px_hmode") == 0 and B("px_tq") == 0
+        M.until(m, lambda _: W("px_ndone") and still(), "the decode",
                 poll=0.3, limit=900)
         ui.settle()
         ui.mo.to(2, 2)
@@ -159,6 +185,9 @@ def main():
         addrs = {KSEG * 16 + off: n for n, off in CELLS.items()}
 
         def measure(what, act, wait=None):
+            M.until(m, lambda _: still(), "still, before " + what,
+                    poll=0.3, limit=900)
+            M.ui_done(m, "still")
             with M.bp_trace(m, *addrs.keys(), cap=50000, regs=True,
                             on_hit=caller) as tr:
                 act()
@@ -220,6 +249,23 @@ def main():
             m.ctrl("KeyR")
         measure("open (Revert)", revert,
                 lambda: W("px_ndone") != n0 and idle())
+        n0 = W("px_ndone")
+        measure("Next (Space)", lambda: key("Space"),
+                lambda: W("px_ndone") != n0 and idle())
+        n0 = W("px_ndone")
+        measure("Prev (Backspace)", lambda: key("Backspace"),
+                lambda: W("px_ndone") != n0 and idle())
+
+        def pager(i):
+            r = m.read(base + syms["px_brects"] + 8 * i, 8)
+            x1, y1, x2, y2 = (u16(r, 0), u16(r, 2), u16(r, 4), u16(r, 6))
+            ui.mo.click((x1 + x2) // 2, (y1 + y2) // 2)
+        fcs = W("px_fcs")
+        measure("strip page (>)", lambda: pager(20),
+                lambda: W("px_fcs") != fcs)
+        fcs = W("px_fcs")
+        measure("strip page (<)", lambda: pager(19),
+                lambda: W("px_fcs") != fcs)
 
         for r in rows:
             c = CEIL.get(r["gesture"])
@@ -238,6 +284,8 @@ def main():
         ui.menu_pick("View", "Show Filmstrip")
         ui.mo.to(2, 2)
         ui.settle()
+        M.until(m, lambda _: still(), "still, before the identity",
+                poll=0.3, limit=900)
         M.guest_sleep(m, 1.0)
 
         def content():

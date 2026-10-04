@@ -14337,7 +14337,8 @@ PIXEL_SRC := apps/pixel/pixel.asm apps/pixel/pxui.inc apps/pixel/pxicons.inc \
              apps/os88ui.inc apps/os88parts.inc apps/os88partsbody.inc \
              apps/os88rseq.inc apps/os88gfx.inc apps/pixel/pxmaster.inc \
              apps/pixel/pxpump.inc apps/pixel/pxsimple.inc \
-             apps/pixel/pxview.inc apps/pixel/pxqtab.inc apps/pixel/pxrec.inc
+             apps/pixel/pxview.inc apps/pixel/pxqtab.inc apps/pixel/pxrec.inc \
+             apps/pixel/pxfolder.inc apps/pixel/pxthc.inc
 .PHONY: pixel pixeldisk
 pixel: $(BUILD)/pixel.o88
 $(BUILD)/pixel.bin: $(PIXEL_SRC) | $(BUILD)
@@ -14368,8 +14369,15 @@ $(BUILD)/pxlink.inc: $(BUILD)/pixel.bin tools/pxlink.py
 $(BUILD)/pxsimp.bin: apps/pixel/pxsimp.asm apps/pixel/pxpart.inc \
                      $(PIXEL_PLANS) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxsimp.asm
+# THE FOLDER PART (SPEC.md 106.21), linked the same way: the thumbnail cache,
+# SYSTEM/APPDATA/PIXEL.THC, and the making of a thumbnail from a master - the
+# cold half of the filmstrip's thumbnails, out of the resident's budget
+$(BUILD)/pxfold.bin: apps/pixel/pxfold.asm apps/pixel/pxpart.inc \
+                     apps/pixel/pxthc.inc apps/pixel/pxrec.inc \
+                     apps/os88api.inc $(BUILD)/pxlink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxfold.asm
 PIXEL_PARTS := $(BUILD)/pxhelp.bin $(BUILD)/pxgif.bin $(BUILD)/pxpng.bin \
-               $(BUILD)/pxjpeg.bin $(BUILD)/pxsimp.bin
+               $(BUILD)/pxjpeg.bin $(BUILD)/pxsimp.bin $(BUILD)/pxfold.bin
 $(BUILD)/pixel.o88: $(BUILD)/pixel.bin $(PIXEL_PARTS) tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/pixel.bin -o $@ $(addprefix --part ,$(PIXEL_PARTS))
 

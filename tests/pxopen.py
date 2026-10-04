@@ -74,6 +74,8 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
             limit=90)
     seg = instance(m, S, image)
     base = seg * 16
+    if "px_thoff" in syms:          # no thumbnails here (SPEC.md 106.21):
+        m.write(base + syms["px_thoff"], b"\1")   # not what this row measures
     B = lambda n: m.read(base + syms[n], 1)[0]
     W = lambda n: u16(m.read(base + syms[n], 2))
     D = lambda n: W(n) | (u16(m.read(base + syms[n] + 2, 2)) << 16)

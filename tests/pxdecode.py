@@ -116,6 +116,8 @@ with os88ui.boot(SYSDISK, apps=DISK, machine=a.machine) as ui:
     M.until(m, lambda _: inst(), "PiXEL's instance", poll=0.3, limit=90)
     seg = inst()
     base = seg * 16
+    if "px_thoff" in syms:          # no thumbnails here (SPEC.md 106.21):
+        m.write(base + syms["px_thoff"], b"\1")   # not what this row measures
     B = lambda n: m.read(base + syms[n], 1)[0]
     W = lambda n: u16(m.read(base + syms[n], 2))
 

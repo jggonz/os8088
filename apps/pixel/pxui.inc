@@ -2678,6 +2678,7 @@ px_card:
     mov bx, bp
     shl bx, 1
     mov [px_kcard + bx], ax
+    mov [px_fckey], ax              ; (its thumbnail bit: SPEC.md 106.21)
     inc byte [px_udrew]
     mov ax, bp
     mov cx, PX_CARDW
@@ -2707,7 +2708,7 @@ px_card:
     jne .nc
     mov byte [px_fccur], 1
 .nc:
-    mov cx, 13
+    mov cx, PX_NREC
     mul cx
     add ax, px_names
     mov [px_fcname], ax
@@ -2757,9 +2758,16 @@ px_card:
     mov [px_fcpair], ax
     mov si, [px_fcname]
     cmp byte [si], 0
-    jne .fmt
+    jne .th
     mov ax, [px_fcix]               ; a blank card: one fill
     PXFILL [px_fcpair]
+    jmp short .name
+.th:
+    test word [px_fckey], 0x2000    ; ITS THUMBNAIL, when one is made and the
+    jz .fmt                         ; display can draw it (SPEC.md 106.21)
+    mov ax, bp
+    add ax, [px_fcs]
+    call px_thcard
     jmp short .name
 .fmt:
     push si                         ; the format's name, by the extension
@@ -2797,6 +2805,11 @@ px_card:
     mov si, [px_fcname]
     mov bl, [px_c_text]
     mov bh, [px_c_chrome]
+    cmp byte [px_fccur], 0          ; the open picture's name in the
+    je .nl                          ; highlight's colours: its thumbnail
+    mov bl, [px_c_stript]           ; leaves little of the box's to say so
+    mov bh, [px_c_strip]
+.nl:
     mov di, 1
     call px_tband
     mov bx, [px_fcny]
@@ -2864,10 +2877,12 @@ px_fslay:
     mov bx, PX_MAXCARD
 .nc:
     mov [px_fcn], bx
-    mov ax, [px_ncur]               ; the window of names
-    mov bx, [px_fcn]
+    mov ax, [px_ncur]               ; the window of names: centred on the open
+    mov bx, [px_fcn]                ; one, turned by the pagers (106.21)
     shr bx, 1
     sub ax, bx
+    mov dx, ax                      ; (DX = the centred start)
+    add ax, [px_fsoff]
     jns .s1
     xor ax, ax
 .s1:
@@ -2877,10 +2892,13 @@ px_fslay:
     xor bx, bx
 .s2:
     cmp ax, bx
-    jbe .s3
+    jle .s3
     mov ax, bx
 .s3:
     mov [px_fcs], ax
+    sub ax, dx                      ; the turn as it stands, clamped: a pager
+    mov [px_fsoff], ax              ; pressed past the end does not bank it
+    call px_pgflags
     mov ax, [px_fry1]               ; the rows: the card's box, then the
     add ax, 2                       ; name's line
     mov [px_fct], ax
@@ -2910,7 +2928,11 @@ px_ckey:
 .r:
     ret
 .some:
+    call px_thkey                   ; + 2000h: its thumbnail is drawn (106.21)
+    push ax
+    and ax, 0x1FFF
     cmp ax, [px_ncur]
+    pop ax
     jne .r
     or ax, 0x4000
     ret
