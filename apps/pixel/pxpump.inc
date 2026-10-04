@@ -179,10 +179,10 @@ px_pumpfill:
     cmp byte [px_busy], 1           ; THE FIRST ROWS BEFORE THE NEXT READ:
     jne .fill                       ; px_onwake fills, then paints, and a
     push ax                         ; 16 KB read in front of the first paint
-    mov ax, [px_ypaint]             ; is a second and more on an XT. So until
-    or ax, [px_ypbot]               ; something is painted the ring is filled
-    jnz .painted                    ; only when the worker has run DRY (its
-    cmp word [px_rdone], 0          ; next slot empty), not ahead of it -
+    call px_onglass                 ; is a second and more on an XT. So until
+    jc .painted                     ; something is painted the ring is filled
+    cmp word [px_rdone], 0          ; only when the worker has run DRY (its
+                                    ; next slot empty), not ahead of it -
     jne .wait                       ; unless rows are decoded and NONE is
     cmp word [px_srcdone], 0        ; showable yet (an interlaced picture's
     jne .painted                    ; early passes, SPEC.md 106.18): then no
@@ -211,6 +211,44 @@ px_pumpfill:
     push ax
     xor al, al
     call px_pumpn
+    pop ax
+    ret
+
+; px_onglass - CF = 1 when a row of the picture being decoded has reached
+; the glass: the rows the wake has painted from the top ([px_ypaint]) or
+; the bottom ([px_ypbot]) reach the canvas ([px_midy1] .. [px_midy2]).
+; Those counters are moved before the span is clipped to the canvas, and at
+; Fit the picture's last screen row can be one past [px_midy2] - so a first
+; wake that "painted" only that row left [px_ypbot] at 1, and the deferral
+; above read 32 KB in front of the first row that did reach the glass: BIG.BMP's
+; first rows were 3.6-4.1 s on the 5150 against 1.2-1.5 (SPEC.md 106.22).
+; Preserves all
+px_onglass:
+    push ax
+    push bx
+    mov ax, [px_ypaint]             ; from the top: rows iy .. iy + ypaint - 1
+    or ax, ax
+    jz .bot
+    add ax, [px_vcan + VW_IY]
+    dec ax
+    cmp ax, [px_midy1]
+    jge .yes
+.bot:
+    mov ax, [px_ypbot]              ; from the bottom: iy + dh - ypbot ..
+    or ax, ax
+    jz .no
+    mov bx, [px_vcan + VW_IY]
+    add bx, [px_vcan + VW_DH]
+    sub bx, ax
+    cmp bx, [px_midy2]
+    jle .yes
+.no:
+    clc
+    jmp short .out
+.yes:
+    stc
+.out:
+    pop bx
     pop ax
     ret
 

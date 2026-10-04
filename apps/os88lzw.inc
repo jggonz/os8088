@@ -28,13 +28,17 @@
 ;               ended. May clobber AX, BX, DX, SI, DI; keeps DS, ES, BP
 ;   LZW_RUN     a near routine: A DECODED STRING. in ES:SI = its bytes, in
 ;               order, CX = how many (>= 1). out CF = 1 stops the decode
-;               with AX = the includer's answer. May clobber AX, BX, CX, DX,
-;               SI, DI; keeps DS, ES, BP
+;               with AX = the includer's answer. May clobber AX, BX, CX,
+;               SI, DI; keeps DS, ES, BP and DX (the decode's code reader)
+;   LZW_RUN1    (optional) a near routine: a ONE-character string, AL - a
+;               root code's, the common case on a noisy picture: LZW_RUN's
+;               contract without the string's round trip through the stack,
+;               and it keeps SI too (the decode's next free code)
 ;   LZW_EBAD    (optional, default FFFFh) the answer for a code the table
 ;               never built
 ;   LZW_EARLY   (optional, default 0) 1 grows the code size one code early -
 ;               TIFF's rule, for the day the TIFF reader adds its MSB-first
-;               code reader beside lzw_get (wave 8)
+;               code reader beside lzw_decode's (wave 8)
 ;
 ; THE TABLE SEGMENT, in ES for the whole decode: LZW_KB (18) KB, the
 ; includer's claim -
@@ -83,8 +87,15 @@ lzw_bit     equ LZW_BSS + 17        ; byte: the bit within [lzw_ib]
 lzw_first   equ LZW_BSS + 18        ; byte: the last string's first char
 lzw_min     equ LZW_BSS + 19        ; byte: the minimum code size
 lzw_eof     equ LZW_BSS + 20        ; byte: LZW_FILL has said the end
-LZW_BSSSZ   equ 22
+lzw_lim     equ LZW_BSS + 22        ; word: 1 << the code size
+lzw_ie2     equ LZW_BSS + 24        ; word: [lzw_ie] - 2, the fast reader's
+                                    ; bound (three bytes from it)
+LZW_BSSSZ   equ 26
 
+; THE LOOP keeps the code reader in registers - BP the input byte, DL the
+; bit in it, DH the code size - and SI the next free code, and reads a code
+; as a word and, past bit 16, a third byte, shifted down (SPEC.md 106.22).
+; LZW_RUN keeps BP and DX; LZW_RUN1 keeps SI too
 lzw_decode:
     cmp al, 2
     jb .bad0
@@ -96,92 +107,151 @@ lzw_decode:
     mov [lzw_eof], al
     mov word [lzw_ib], LZW_IN
     mov word [lzw_ie], LZW_IN
+    mov word [lzw_ie2], LZW_IN - 2
     call lzw_reset
+    mov bp, LZW_IN
+    xor dl, dl
+    mov dh, [lzw_cs]
+    mov si, [lzw_free]
 .next:
-    call lzw_get                    ; AX = the code
-    jc .end
-    cmp ax, [lzw_clr]
-    je .clear
-    cmp ax, [lzw_eoi]
-    je .eoi
-    mov [lzw_code], ax
-    cmp word [lzw_old], 0xFFFF
-    jne .chain
-    cmp ax, [lzw_clr]               ; the first code after a Clear is a ROOT
-    jae .bad
-    mov [lzw_old], ax
-    mov [lzw_first], al
+    cmp bp, [lzw_ie2]               ; --- the next code: AX ----------------
+    jae .refill
+.have:
+    mov ax, [es:bp]
+    mov cl, dl
+    shr ax, cl
+    add cl, dh                      ; CL = where the code ends
+    cmp cl, 16
+    ja .three
+.got:
+    and ax, [lzw_mask]
+    mov dl, cl                      ; ...and on past it
+    and dl, 7
+    shr cl, 1
+    shr cl, 1
+    shr cl, 1
+    xor ch, ch
+    add bp, cx
+    cmp ax, [lzw_clr]               ; --- what it is -----------------------
+    jae .ctl
+    mov [lzw_code], ax              ; a ROOT: one character, itself - the
+    mov [lzw_first], al             ; common case first
+%ifdef LZW_RUN1
+    call LZW_RUN1
+%else
     mov di, LZW_STK - 1
     mov [es:di], al
     mov si, di
     mov cx, 1
     call LZW_RUN
+%endif
     jc .out
-    jmp short .next
-.chain:
-    mov dx, [lzw_clr]
+    cmp word [lzw_old], 0xFFFF
+    jne .add
+    mov ax, [lzw_code]              ; (the first after a Clear: no entry)
+    mov [lzw_old], ax
+    jmp .next
+.add:
+    cmp si, 4096                    ; --- and the code this one defines
+    jae .noadd                      ; full: nothing until a Clear (deferred)
+    mov ax, [lzw_old]
+    cmp ax, si
+    jae .noadd                      ; a prefix at or above its own index is
+    mov di, si                      ; a chain that cycles: never added
+    add di, di
+    mov [es:di + LZW_PREF], ax
+    mov al, [lzw_first]
+    mov [es:si + LZW_SUFF], al
+    inc si
+    mov bx, si
+%if LZW_EARLY
+    inc bx
+%endif
+    cmp bx, [lzw_lim]               ; the table crossed a power of two
+    jae .grow
+.noadd:
+    mov ax, [lzw_code]
+    mov [lzw_old], ax
+    jmp .next
+.grow:
+    cmp dh, 12
+    jae .noadd
+    inc dh
+    mov [lzw_cs], dh
+    shl word [lzw_lim], 1
+    stc
+    rcl word [lzw_mask], 1
+    jmp short .noadd
+.ctl:
+    je .clear
+    cmp ax, [lzw_eoi]
+    je .eoi
+    mov [lzw_code], ax              ; a table code: never the first after a
+    cmp word [lzw_old], 0xFFFF      ; Clear (that must be a root)
+    je .bad
+    mov cx, [lzw_clr]
     mov di, LZW_STK - 1             ; the string is built downwards from the
     mov bx, ax                      ; top, so it reads upwards afterwards
-    cmp ax, [lzw_free]
+    cmp ax, si
     ja .bad                         ; past the table: never built
     std                             ; (std touches neither CF nor ZF, so the
-    jb .walk                        ; compare above is still the live one)
+    jb .walkin                      ; compare above is still the live one)
     mov al, [lzw_first]             ; == the next free code: the forward
     stosb                           ; reference, closed by its own first
     mov bx, [lzw_old]               ; character
-.walk:
-    cmp bx, dx
+    cmp bx, cx
     jb .root
 .walkin:
     mov al, [es:bx + LZW_SUFF]
     stosb
     add bx, bx
     mov bx, [es:bx + LZW_PREF]
-    cmp bx, dx
+    cmp bx, cx
     jae .walkin
 .root:
     mov al, bl                      ; a root is its own character
     mov [lzw_first], al
     stosb
     cld
+    push si
     mov si, di
     inc si                          ; ES:SI = the string, CX = its length
     mov cx, LZW_STK
     sub cx, si
     call LZW_RUN
+    pop si
     jc .out
-    mov bx, [lzw_free]              ; --- and the code this one defines
-    cmp bx, 4096
-    jae .noadd                      ; full: nothing until a Clear (deferred)
-    mov ax, [lzw_old]
+    jmp .add
+.three:
+    mov bl, [es:bp + 2]             ; the third byte's bits, at 16 - bit:
+    mov ch, cl                      ; (byte << (8 - bit)) in AH
+    mov cl, 8
+    sub cl, dl
+    shl bl, cl
+    or ah, bl
+    mov cl, ch
+    jmp .got
+.refill:
+    mov [lzw_ib], bp                ; fewer than three bytes: the buffer
+    call lzw_refill                 ; refilled - AX = the bytes there
+    mov bp, [lzw_ib]
+    mov bx, [lzw_ie]
+    dec bx
+    dec bx
+    mov [lzw_ie2], bx
+    mov cl, 3
+    shl ax, cl                      ; ...as bits (at most LZW_INSZ x 8)
+    mov bl, dl
+    xor bh, bh
+    sub ax, bx
+    mov bl, dh
     cmp ax, bx
-    jae .noadd                      ; a prefix at or above its own index is
-    mov di, bx                      ; a chain that cycles: never added
-    add di, di
-    mov [es:di + LZW_PREF], ax
-    mov al, [lzw_first]
-    mov [es:bx + LZW_SUFF], al
-    inc bx
-    mov [lzw_free], bx
-    cmp byte [lzw_cs], 12
-    jae .noadd
-%if LZW_EARLY
-    inc bx
-%endif
-    mov cl, [lzw_cs]
-    mov ax, 1
-    shl ax, cl
-    cmp bx, ax                      ; the table crossed a power of two
-    jb .noadd
-    inc byte [lzw_cs]
-    stc
-    rcl word [lzw_mask], 1
-.noadd:
-    mov ax, [lzw_code]
-    mov [lzw_old], ax
-    jmp .next
+    jb .end                         ; not a whole code: the input has ended
+    jmp .have
 .clear:
     call lzw_reset
+    mov dh, [lzw_cs]
+    mov si, [lzw_free]
     jmp .next
 .eoi:
     mov ax, LZW_EOI
@@ -215,61 +285,12 @@ lzw_reset:
     mov [lzw_cs], cl
     mov ax, 1
     shl ax, cl
+    mov [lzw_lim], ax
     dec ax
     mov [lzw_mask], ax
     mov word [lzw_old], 0xFFFF
     pop cx
     pop ax
-    ret
-
-; lzw_get - the next code, LSB first: AX. CF = 1 when it would need bits
-; past the input's end. A code spans at most three bytes (7 bits left over
-; and twelve), so it is a word and a byte shifted down together. Clobbers
-; BX, CX, DX
-lzw_get:
-    mov bx, [lzw_ib]
-    mov ax, [lzw_ie]
-    sub ax, bx
-    cmp ax, 3
-    jae .have
-    call lzw_refill                 ; AX = the bytes there now
-    mov bx, [lzw_ib]
-    mov cl, 3
-    shl ax, cl                      ; ...as bits (at most LZW_INSZ x 8)
-    mov dl, [lzw_bit]
-    xor dh, dh
-    sub ax, dx
-    mov dl, [lzw_cs]
-    cmp ax, dx
-    jb .end                         ; not a whole code: the input has ended
-.have:
-    mov ax, [es:bx]
-    mov cl, [lzw_bit]
-    mov dl, cl
-    add dl, [lzw_cs]                ; DL = where the code ends
-    shr ax, cl                      ; the bits of the first two bytes
-    cmp dl, 16
-    jbe .two
-    mov dh, [es:bx + 2]             ; ...and the third's, at 16 - bit:
-    mov cl, 8                       ; (byte << (8 - bit)) in AH
-    sub cl, [lzw_bit]
-    shl dh, cl
-    or ah, dh
-.two:
-    and ax, [lzw_mask]              ; AX = the code
-    mov cl, dl                      ; ...and on past it
-    and dl, 7
-    mov [lzw_bit], dl
-    shr cl, 1
-    shr cl, 1
-    shr cl, 1
-    xor ch, ch
-    add bx, cx
-    mov [lzw_ib], bx
-    clc
-    ret
-.end:
-    stc
     ret
 
 ; lzw_refill - the bytes not yet read go to the buffer's start, and LZW_FILL

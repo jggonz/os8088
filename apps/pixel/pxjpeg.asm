@@ -60,6 +60,13 @@ pj_plans:
 JP_ORIENT   equ PXK_PRIV + 0        ; byte: EXIF orientation 1..8
 JP_PF       equ PXK_PRIV + 1        ; byte: JPF_* below
 JP_ADOBE    equ PXK_PRIV + 2        ; byte: Adobe's transform
+JP_FW       equ PXK_PRIV + 3        ; word: the frame HEAD read - its width,
+JP_FH       equ PXK_PRIV + 5        ; word: height,
+JP_FNF      equ PXK_PRIV + 7        ; byte: components,
+JP_FPROG    equ PXK_PRIV + 8        ; byte: progressive,
+JP_FHV      equ PXK_PRIV + 9        ; 3 bytes: each one's H << 4 | V - which
+                                    ; DECODE's frame must be (the scratch is
+                                    ; sized by it: wave-4 review F1)
 JPF_EXIF    equ 1                   ; an EXIF APP1 has been read
 JPF_JFIF    equ 2
 JPF_ADOBE   equ 4
@@ -445,6 +452,34 @@ pj_sofhead:
     jnc .ok
     jmp pj_head.fail
 .ok:
+    mov ax, [cs:pj_fr + JF_W]       ; the frame, banked for DECODE
+    mov [di + JP_FW], ax
+    mov ax, [cs:pj_fr + JF_H]
+    mov [di + JP_FH], ax
+    mov al, [cs:pj_fr + JF_NF]
+    mov [di + JP_FNF], al
+    mov al, [cs:pj_fprog]
+    mov [di + JP_FPROG], al
+    push bx
+    push si
+    xor bx, bx
+    xor si, si
+    mov ch, [cs:pj_fr + JF_NF]      ; (its components only)
+.hv:
+    mov al, [cs:pj_fr + JF_C + bx + JC_H]
+    mov cl, 4
+    shl al, cl
+    or al, [cs:pj_fr + JF_C + bx + JC_V]
+    push di
+    add di, si
+    mov [di + JP_FHV], al
+    pop di
+    inc si
+    add bx, JC_SZ
+    dec ch
+    jnz .hv
+    pop si
+    pop bx
     ; --- the colour space: libjpeg's rule ----------------------------------
     cmp byte [cs:pj_fr + JF_NF], 3
     jne .cs
@@ -718,11 +753,8 @@ JS_EXT      equ 0x02F0              ; 17 words: (1 << s) - 1
 JS_HALF     equ 0x0320              ; 17 words: 1 << (s - 1)
 JS_QT       equ 0x0400              ; 4 x 64 words: quantisers, natural
 JS_MULT     equ 0x0600              ; 3 x 64 words: a component's multipliers
-JS_BLKZ     equ 0x0780              ; 64 words, ZIGZAG order, + 32 of guard
 JS_D        equ 0x0840              ; 64 words: dequantised, natural order
 JS_WS       equ 0x08C0              ; 64 words: the IDCT's columns
-JS_WL       equ 0x0940              ; 64 words: the D offsets written
-JS_TMP      equ 0x09C0              ; 64 bytes: the IDCT's temporaries
 JS_NMASK    equ 0x0A00              ; 64 words: natural n's column bit, and
                                     ; again in the high byte when n has v > 0
 JS_SLOW     equ 0x0A80              ; 8 tables x JH_SLOWSZ: the canonical
@@ -735,18 +767,27 @@ JS_HAC      equ 0x1D00              ; 4 AC tables x 5 pages (below)
 JA_VLO      equ 0                   ; an AC table's pages: the value made...
 JA_VHI      equ 256
 JA_LEN      equ 512                 ; ...the bits to take, 0 = the slow walk
-JA_ADV      equ 768                 ; (r + 1) x 2 when the value is made
+JA_ADV      equ 768                 ; (r + 1) x 2 when the value is made,
+                                    ; else JA_SPEC: the code alone, EOB, ZRL
+                                    ; or a code longer than eight bits
 JA_RS       equ 1024                ; the symbol
+JA_SPEC     equ 0xC0                ; (past any k x 2 a whole entry makes)
 JS_CLEAN    equ 0x3100              ; the de-stuffed data...
 JS_CLEANSZ  equ 2048
 JS_GUARD    equ 320                 ; ...and zeros past its end
-JS_COL      equ 0x3A40              ; Cr->R, Cb->B words; Cb->G, Cr->G dwords
-JS_RCR      equ JS_COL
-JS_BCB      equ JS_COL + 512
-JS_GCB      equ JS_COL + 1024
-JS_GCR      equ JS_COL + 2048
+JS_COL      equ 0x3A40              ; the colour tables, words by Cb or Cr,
+JS_RCR      equ JS_COL              ; each R, G or B one a clamp table's
+JS_BCB      equ JS_COL + 512        ; place (JS_CLAMP + 384 + the delta):
+JS_GBL      equ JS_COL + 1024       ; Cr->R, Cb->B; and G's two 32-bit
+JS_GBH      equ JS_COL + 1536       ; terms by halves, Cb's low and high
+JS_GRL      equ JS_COL + 2048       ; words, Cr's low and high (the place
+JS_GRH      equ JS_COL + 2560       ; on the high), added per chroma pixel
 JS_CLAMP    equ 0x4640              ; 1,024: clamp(i - 384), the colour's
-JS_VAR      equ 0x4A40              ; the row, the planes, the block
+JS_KNW      equ 0x4A40              ; 64 words: zigzag k -> natural x 2
+                                    ; when the scale keeps it, else FFFFh
+JS_VAR      equ 0x4B00              ; the multiply pages at 1/1 and 1/2,
+                                    ; (pj_vartab), then the row, the planes,
+                                    ; the block
 JS_FIXED    equ JS_VAR
 
 ; pj_dsc - CL = a scale, the frame at CS:pj_fr, [cs:pj_fprog], DI = the
@@ -761,6 +802,14 @@ pj_dsc:
     push di
     push ds
     mov [cs:pj_dscl], cl
+    mov ax, [cs:pj_fr + JF_W]       ; 0 wide or high at the scale: not
+    shr ax, cl                      ; usable (wave-4 review F3)
+    or ax, ax                       ; (a shift by 0 sets no flag)
+    jz .no0
+    mov ax, [cs:pj_fr + JF_H]
+    shr ax, cl
+    or ax, ax
+    jz .no0
     mov al, [di + JP_ORIENT]
     mov [cs:pj_fr + JF_OR], al
     push cs
@@ -797,6 +846,15 @@ pj_dsc:
     pop cx
     pop bx
     ret
+.no0:
+    mov ax, 0xFFFF
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
 
 ; pj_layout - DS:DI = a frame (its JF_OR set), AL = the scale: the
 ; variable part of the scratch - the converted row (the Y plane's pixels, 3
@@ -820,7 +878,10 @@ pj_layout:
     or dx, dx
     jnz .no
     mov [di + JL_RPX], ax           ; the row's pixels
-    mov si, JS_VAR
+    mov si, cx                      ; (CL = the scale)
+    and si, 3
+    shl si, 1
+    mov si, [cs:pj_vartab + si]     ; past the scale's multiply pages
     mov [di + JL_ROW], si
     mov cx, 3
     mul cx
@@ -969,9 +1030,10 @@ JV_ENDED    equ 0x3C                ; byte: the segment's end was met...
 JV_MARK     equ 0x3D                ; byte: ...at this marker, 0 the file's
 JV_OVER     equ 0x3E                ; byte: a fill bit has been taken
 JV_RI       equ 0x40                ; word: the restart interval
-JV_WIN      equ 0x42                ; word: the bit window, banked
-JV_CNT      equ 0x44                ; byte: its bits
-JV_CPOS     equ 0x46                ; word: the clean data's next byte
+JV_DONEH    equ 0x42                ; word: JV_DONE's high word...
+JV_UNITH    equ 0x44                ; ...JV_UNIT's (wave-4 review F5: a
+                                    ; picture of 65,536 MCUs or more)
+JV_CPOS     equ 0x46                ; word: the bit position's byte
 JV_HAVEF    equ 0x48                ; byte: a frame has been read
 JV_SCANS    equ 0x49                ; byte: scans read
 JV_LATCH    equ 0x4A                ; byte: a bit a component latched
@@ -990,8 +1052,8 @@ JV_AH       equ 0x5C
 JV_AL       equ 0x5D
 JV_PRED     equ 0x5E                ; 3 words: the DC predictions
 JV_EOBRUN   equ 0x64                ; word
-JV_KMAX     equ 0x66                ; word: past the block's last coefficient
-JV_DONE     equ 0x68                ; word: MCUs (units) done this interval
+JV_DONE     equ 0x68                ; word: MCUs (units) done in the scan
+JV_TOTALH   equ 0x66                ; word: JV_TOTAL's high word
 JV_RSTN     equ 0x6A                ; word: restart markers met
 JV_MY       equ 0x6C                ; word: the MCU row
 JV_MX       equ 0x6E                ; word
@@ -1003,7 +1065,6 @@ JV_MASK     equ 0x7C                ; word: columns with any / with an AC
 JV_MLT      equ 0x7E                ; word: the component's multipliers
 JV_PL       equ 0x80                ; word: the block's place in its plane
 JV_ST       equ 0x82                ; word: ...that plane's stride
-JV_WLN      equ 0x84                ; word: D offsets written, x 2
 JV_P1       equ 0x86                ; word: 1 << Al
 JV_M1       equ 0x88                ; word: -1 << Al
 JV_BW       equ 0x8A                ; words: a non-interleaved scan's grid
@@ -1017,9 +1078,15 @@ JV_X        equ 0x96                ; word: pixels left in the row
 JV_CDLT     equ 0x98                ; word: Cr's plane less Cb's
 JV_COMP     equ 0x9A                ; word: the component (x 2)
 JV_BI       equ 0x9C                ; word: the block's index in its store
+JV_BIH      equ 0x84                ; word: ...its high word (review F6: a
+                                    ; component of 65,536 blocks at 1/8)
 JV_RCNT     equ 0xA0                ; word: units in this restart interval
 JV_J        equ 0xA2                ; word: the band's row
 JV_KCAP     equ 0xA4                ; word: the last zigzag k the scale keeps
+JV_BPE      equ 0xA6                ; word: the MCU program's end (pj_bprog)
+JV_BPI      equ 0xA8                ; word: its block being decoded
+JV_BOFF     equ 0xAA                ; byte: the bit position's bits taken
+                                    ; of JV_CPOS's byte (a baseline scan)
 JV_FR       equ 0x100               ; JF_SZ: the frame, and its layout
 
 JP_SEGMAX   equ JS_CLEANSZ + JS_GUARD   ; a table segment's bytes at most
@@ -1071,6 +1138,7 @@ pj_decode:
     push es
     pop ds                          ; DS = ES = the scratch, for good
     mov [cs:pj_dsp], sp             ; the way out from any depth
+    mov byte [cs:pj_gb], 0          ; (a refusal's give-back: this decode's)
     call pj_body
     clc
     jmp short pj_dret
@@ -1107,6 +1175,7 @@ pj_body:
     jmp pj_dfail
 .s:
     call pj_tinit
+    call pj_mtabs
     xor ax, ax
     mov [JV_IPOS], ax
     mov [JV_IEND], ax
@@ -1207,6 +1276,11 @@ pj_body:
 .fbad:
     jmp pj_data
 .fok:
+    mov al, [cs:pj_mk]
+    call pj_samef                   ; the frame HEAD sized the scratch by
+    jnc .fsame
+    jmp pj_data
+.fsame:
     mov byte [JV_HAVEF], 1
     mov al, [JV_OR]
     mov [JV_FR + JF_OR], al
@@ -1227,6 +1301,57 @@ pj_body:
 .next:
     mov al, [JV_MARK]               ; the marker that ended the scan
     jmp .have
+
+; pj_samef - AL = DECODE's frame's marker, its fields at JV_FR: CF = 1
+; unless it is the frame HEAD read and banked (JP_F*) - a file changed
+; between the two reads would lay the planes out past the scratch the
+; resident claimed by HEAD's (wave-4 review F1). Preserves all but AX
+pj_samef:
+    push bx
+    push cx
+    push si
+    push es
+    mov es, [JV_PKG]
+    mov si, [JV_CTX]
+    xor ah, ah                      ; the kind: progressive or not
+    cmp al, 0xC2
+    jne .k
+    inc ah
+.k:
+    cmp ah, [es:si + JP_FPROG]
+    jne .no
+    mov ax, [JV_FR + JF_W]
+    cmp ax, [es:si + JP_FW]
+    jne .no
+    mov ax, [JV_FR + JF_H]
+    cmp ax, [es:si + JP_FH]
+    jne .no
+    mov al, [JV_FR + JF_NF]
+    cmp al, [es:si + JP_FNF]
+    jne .no
+    xor bx, bx
+    mov ch, [JV_FR + JF_NF]         ; (its components only)
+.hv:
+    mov al, [JV_FR + JF_C + bx + JC_H]
+    mov cl, 4
+    shl al, cl
+    or al, [JV_FR + JF_C + bx + JC_V]
+    cmp al, [es:si + JP_FHV]
+    jne .no
+    inc si
+    add bx, JC_SZ
+    dec ch
+    jnz .hv
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop si
+    pop cx
+    pop bx
+    ret
 
 ; pj_istab - AL = a marker: CF = 0 when it is one whose segment is read
 ; whole and parsed (DQT, DHT, DRI, SOS, a frame header), CF = 1 skipped.
@@ -1272,6 +1397,7 @@ pj_fsizes:
     mov ax, [JV_FR + JF_MCUX]
     mul word [JV_FR + JF_MCUY]
     mov [JV_TOTAL], ax
+    mov [JV_TOTALH], dx
     cmp byte [JV_FR + JF_NF], 3     ; the colour tables, for YCbCr
     jne .nc
     test byte [JV_PF], JPF_RGB
@@ -1696,9 +1822,12 @@ pj_hbuild:
     add ax, JS_HAC
     mov [cs:pj_tpg], ax
     add ax, JA_LEN                  ; the AC table's length and advance
-    mov di, ax                      ; pages, both: an entry no short code
-    mov cx, 256                     ; fills is LEN 0 and ADV 0 (pj_acs)
+    mov di, ax                      ; pages: an entry no short code fills
+    mov cx, 128                     ; is LEN 0 and ADV JA_SPEC (pj_blk)
     xor ax, ax
+    rep stosw
+    mov cx, 128
+    mov ax, JA_SPEC * 0x0101
     rep stosw
     jmp short .fill
 .clr:
@@ -1817,7 +1946,7 @@ pj_hfill:
     jmp short .nx
 .codeonly:
     mov [bx + JA_LEN], dl
-    mov byte [bx + JA_ADV], 0
+    mov byte [bx + JA_ADV], JA_SPEC
     mov byte [bx + JA_VLO], 0
     mov byte [bx + JA_VHI], 0
 .nx:
@@ -1911,6 +2040,15 @@ pj_tinit:
     mov [JV_KCAP], bx
 .kn:
     mov [JS_KN + bx], al
+    mov di, bx
+    shl di, 1
+    cbw                             ; (FFh -> FFFFh, a place -> itself)
+    mov [JS_KNW + di], ax
+    push bx                         ; (AH again: the scale's mask)
+    mov bl, [JV_SCL]
+    xor bh, bh
+    mov ah, [cs:pj_keep + bx]
+    pop bx
     inc bx
     cmp bx, 64
     jb .k
@@ -1918,17 +2056,14 @@ pj_tinit:
     xor ax, ax
     mov cx, 64
     rep stosw
-    mov di, JS_BLKZ
-    mov cx, 96
-    rep stosw
     pop es
     ret
 
 ; pj_ctabs - the colour tables, jdcolor.c's exactly (SPEC.md 106.19), for x
 ; = i - 128: Cr->R = x + hi(26,345 x + 32,768), Cb->B = 2x + hi(-14,942 x +
-; 32,768), Cb->G = -22,554 x, Cr->G = 18,734 x - 65,536 x + 32,768 (the
-; last two whole, added and their high word taken per pixel pair).
-; Preserves all
+; 32,768), each as a clamp table's place; Cb->G = -22,554 x and Cr->G =
+; 18,734 x - 65,536 x + 32,768 whole, by halves - G's delta is their sum's
+; high word, the low words' carry in it (pj_conv). Preserves all
 pj_ctabs:
     push ax
     push bx
@@ -1945,6 +2080,7 @@ pj_ctabs:
     add ax, 0x8000
     adc dx, 0
     add dx, bx
+    add dx, JS_CLAMP + 384
     mov [JS_RCR + si], dx
     mov ax, -14942
     imul bx
@@ -1952,21 +2088,20 @@ pj_ctabs:
     adc dx, 0
     add dx, bx
     add dx, bx
+    add dx, JS_CLAMP + 384
     mov [JS_BCB + si], dx
-    push si
-    shl si, 1                       ; dwords
     mov ax, -22554
     imul bx
-    mov [JS_GCB + si], ax
-    mov [JS_GCB + si + 2], dx
+    mov [JS_GBL + si], ax
+    mov [JS_GBH + si], dx
     mov ax, 18734
     imul bx
     sub dx, bx
     add ax, 0x8000
     adc dx, 0
-    mov [JS_GCR + si], ax
-    mov [JS_GCR + si + 2], dx
-    pop si
+    add dx, JS_CLAMP + 384
+    mov [JS_GRL + si], ax
+    mov [JS_GRH + si], dx
     add si, 2
     cmp si, 512
     jb .i
@@ -2166,7 +2301,7 @@ pj_sos:
     jae .tdone
     jmp .t
 .tdone:
-    inc byte [JV_SCANS]
+    mov byte [JV_SCANS], 1          ; (any: 256 scans must not wrap it)
     call pj_binit                   ; the data
     cmp byte [JV_PROG], 0
     jne .prog
@@ -2285,45 +2420,19 @@ pj_mults:
 
 ; =============================================================================
 ; THE ENTROPY-CODED DATA (SPEC.md 106.19): DE-STUFFED into the clean buffer,
-; then read MSB first through a 16-bit window. In the hot loops DX is the
-; window (its next bit is bit 15), CH how many of its bits are real, SI the
-; clean buffer's next byte; between blocks they are banked in JV_WIN,
-; JV_CNT and JV_CPOS
+; then read MSB first by a BIT POSITION (SI the byte, CL its bits taken; see
+; pj_blk), banked between blocks in JV_CPOS and JV_BOFF
 ; =============================================================================
 
-; FILL - one byte into the window: CH < 8 before, 8..15 after. AX, CL
-%macro FILL 0
-    lodsb
-    mov cl, 8
-    sub cl, ch
-    xor ah, ah
-    shl ax, cl
-    or dx, ax
-    add ch, 8
-%endmacro
-
-; pj_binit - a scan's data starts: an empty window and an empty buffer.
+; pj_binit - a scan's data starts: the position at an empty buffer.
 ; Preserves all
 pj_binit:
-    mov word [JV_WIN], 0
-    mov byte [JV_CNT], 0
+    mov byte [JV_BOFF], 0
     mov word [JV_CPOS], JS_CLEAN
     mov word [JV_CEND], JS_CLEAN
     mov byte [JV_ENDED], 0
     mov byte [JV_MARK], 0
     mov byte [JV_OVER], 0
-    ret
-
-; pj_load / pj_bank - the window into DX, CH, SI and back. Preserve all else
-pj_load:
-    mov dx, [JV_WIN]
-    mov ch, [JV_CNT]
-    mov si, [JV_CPOS]
-    ret
-pj_bank:
-    mov [JV_WIN], dx
-    mov [JV_CNT], ch
-    mov [JV_CPOS], si
     ret
 
 ; pj_room - before a block: at least JP_AHEAD bytes of clean data ahead of
@@ -2347,8 +2456,8 @@ pj_room:
     mov ax, si
     sub ax, [JV_CEND]
     jbe .out
-    cmp ax, 8                       ; eight bytes of zeros loaded is more
-    jb .out                         ; than the window holds: some were taken
+    cmp ax, 8                       ; eight bytes of zeros taken: kept
+    jb .out                         ; inside the guard, remembered
     mov byte [JV_OVER], 1
     mov si, [JV_CEND]
     add si, 8
@@ -2518,784 +2627,110 @@ pj_tomark:
     pop bx
     ret
 
-; pj_isover - with DX/CH/SI live: CF = 1 when a bit past the segment's end
-; has been taken - less the [pj_gb] last bits, which a WHOLE fast entry
-; took before the reference would have read them. Preserves all
-pj_isover:
-    push ax
-    cmp byte [JV_OVER], 0
-    jne .y
-    mov ax, si
-    sub ax, [JV_CEND]
-    jbe .n
-    cmp byte [JV_ENDED], 0
-    je .n
-    shl ax, 1
-    shl ax, 1
-    shl ax, 1                       ; the bits loaded past the end...
-    push cx
-    add ch, [cs:pj_gb]
-    cmp al, ch                      ; ...more than are still in the window
-    pop cx
-    ja .y
-.n:
-    clc
-    pop ax
-    ret
-.y:
-    stc
-    pop ax
-    ret
-
-; pj_badgb - pj_bad, the magnitude bits of the WHOLE entry at BX given
-; back first: the reference refuses a coefficient's place before it reads
-; them
-pj_badgb:
-    mov al, [bx + JA_RS]
-    and al, 15
-    mov [cs:pj_gb], al
-    ; fall into pj_bad
-
-; pj_bad - a refusal inside the data: `cut short` when it read past the
-; end, else `damaged` (SPEC.md 106.19). DX/CH/SI live
-pj_bad:
-    call pj_isover
-    jc .t
-    jmp pj_data
-.t:
-    jmp pj_trunc
-
-; pj_chk - an MCU's end: `cut short` if a bit past the end was taken. With
-; the window banked. Preserves all
-pj_chk:
-    push dx
-    push cx
-    push si
-    call pj_load
-    call pj_isover
-    pop si
-    pop cx
-    pop dx
-    jc .t
-    ret
-.t:
-    jmp pj_trunc
-
-; pj_getb - AL = n, 0..16: AX = the next n bits. DX/CH/SI live; preserves
-; BX, DI; clobbers CL
-pj_getb:
-    or al, al
-    jnz .go
-    xor ax, ax
-    ret
-.go:
-    push bx
-    mov bl, al
-.again:
-    cmp ch, bl
-    jae .take
-    cmp ch, 8
-    ja .split
-    FILL
-    jmp short .again
-.take:
-    mov cl, 16
-    sub cl, bl
-    mov ax, dx
-    shr ax, cl
-    mov cl, bl
-    shl dx, cl
-    sub ch, bl
-    pop bx
-    ret
-.split:
-    ; 9 <= CH < n <= 16: the CH bits there, then the rest after two fills
-    mov bh, bl
-    sub bh, ch                      ; BH = the rest
-    mov cl, 16
-    sub cl, ch
-    mov ax, dx
-    shr ax, cl                      ; the first CH bits
-    push ax
-    xor dx, dx
-    xor ch, ch
-    FILL
-    FILL
-    mov cl, 16
-    sub cl, bh
-    mov ax, dx
-    shr ax, cl                      ; the last BH bits
-    mov cl, bh
-    shl dx, cl
-    sub ch, bh                      ; (CL = BH, the rest's bits)
-    pop bx                          ; BX = the first part...
-    shl bx, cl                      ; ...shifted on past the rest
-    or ax, bx
-    pop bx
-    ret
-
-; pj_ext - AX = s bits as read, BL = s: AX = the value they code (Annex
-; F's EXTEND). Preserves all but AX
-pj_ext:
-    push bx
-    xor bh, bh
-    shl bx, 1
-    test ax, [JS_HALF + bx]
-    jnz .p
-    sub ax, [JS_EXT + bx]
-.p:
-    pop bx
-    ret
-
-; pj_hslow - the CANONICAL WALK (Annex C's maxcode), a bit at a time from
-; the first: AL = the symbol of [JV_SLOWP]'s table. A code no table holds
-; is refused after sixteen bits, as the reference refuses it. DX/CH/SI
-; live; preserves BX, DI
-pj_hslow:
-    push bx
-    push di
-    push bp
-    mov bp, [JV_SLOWP]
-    xor bx, bx                      ; BX = the code
-    mov di, 2                       ; DI = the length x 2
-.l:
-    or ch, ch
-    jnz .b
-    FILL
-.b:
-    shl dx, 1
-    rcl bx, 1
-    dec ch
-    cmp bx, [ds:bp + di + JH_MAXC]
-    jb .hit
-    add di, 2
-    cmp di, 34
-    jb .l
-    jmp pj_bad
-.hit:
-    add bx, [ds:bp + di + JH_OFF]
-    add bx, bp
-    mov al, [bx + JH_VALS]
-    pop bp
-    pop di
-    pop bx
-    ret
-
-; pj_hdc - BH = a DC table's page, [JV_SLOWP] its slow tables: AL = the
-; symbol (the magnitude's bits). DX/CH/SI live; clobbers BL, CL
-pj_hdc:
-    cmp ch, 8
-    jae .p
-    FILL
-.p:
-    mov bl, dh
-    mov cl, [bx + 256]
-    or cl, cl
-    jz .slow
-    shl dx, cl
-    sub ch, cl
-    mov al, [bx]
-    ret
-.slow:
-    jmp pj_hslow
-
-; pj_dcdiff - BH = the DC table's page: AX = the DC difference (decoded,
-; its bits read and extended). DX/CH/SI live; preserves BH, DI
-pj_dcdiff:
-    call pj_hdc
-    push bx
-    mov bl, al
-    call pj_getb
-    call pj_ext
-    pop bx
-    ret
-
 ; =============================================================================
-; A BLOCK'S COEFFICIENTS, ZIGZAG ORDER, into JS_BLKZ (SPEC.md 106.19). The
-; AC loop's fast entry is WHOLE when a code and its magnitude fit eight
-; bits: its bits taken, k advanced, the value stored, with no test of the
-; symbol; otherwise the symbol's run and size are read as Annex F reads
-; them. DI = the next coefficient's place: a coefficient past the 63rd is
-; `damaged`, a zero run past it ends the block
+; A BASELINE BLOCK (SPEC.md 106.19, 106.22): the DC, then the ACs - each
+; kept coefficient DEQUANTISED as it is read, straight into D at its natural
+; place, the rest only decoded - then the IDCT at the scale.
+;
+; THE READER IS A BIT POSITION, not a window: SI the clean buffer's byte
+; holding the next bit, CL how many of its bits are taken (0..7). The next
+; eight bits are AH after `mov ax, [si]` / `xchg al, ah` / `shl ax, cl` -
+; nine or more of the sixteen are real - so nothing is ever refilled: the
+; de-stuffed buffer has 300 bytes ahead of a block (pj_room) or the zeros
+; past the segment's end. Taking n bits is `add cl, n`, and a byte on when
+; CL reaches 8. A position between blocks is banked in JV_CPOS / JV_BOFF.
+;
+; A symbol's fast entry is read by BH = its AC table's LEN page: LEN (the
+; bits it takes: code and magnitude when WHOLE, the code alone otherwise,
+; 0 for a code longer than eight bits) and, a page up, ADV (k's step x 2
+; when WHOLE, else JA_SPEC). A WHOLE entry is ONE test: k x 2 past the
+; loop's end is everything else - a coefficient past the kept range, past
+; 63 (`damaged`), or JA_SPEC (pj_acsp: EOB, ZRL, the code alone, the
+; canonical walk). A loop per scale, so its end is an immediate:
+;
+;   pj_sk    every k: decode only - 1/8's whole AC, and the rest of a block
+;            past the scale's last kept k. DH = 0 for `add bp, dx`
+;   pj_vaN   up to the scale's last kept k: a kept coefficient x its
+;            multiplier (`imul`) into D, its columns into JV_MASK
 ; =============================================================================
+JB_PRED     equ 0                   ; word: its component's prediction
+JB_DCP      equ 2                   ; byte: its DC table's symbol page
+JB_ACP      equ 3                   ; byte: its AC table's LEN page
+JB_DCS      equ 4                   ; word: the DC table's slow tables
+JB_ACS      equ 6                   ; word: the AC table's
+JB_MLT      equ 8                   ; word: the component's multipliers
+JB_OFF      equ 10                  ; word: its place in its plane at mx 0
+JB_STEP     equ 12                  ; word: its plane's bytes an MCU across
+JB_CUR      equ 14                  ; word: its place this MCU
+JB_ST       equ 16                  ; word: its plane's stride
+JB_SZ       equ 18
+JS_BPROG    equ 0x0140              ; 10 x JB_SZ: an MCU's blocks, in order
+JB_MAX      equ 10
 
-; pj_acs - BH = the AC table's page, DI = &BLKZ[k]: the block's ACs from k.
-; DX/CH/SI live. out [JV_KMAX] = past the last place written
-pj_acs:
-.ac:
-    cmp ch, 8
-    jae .pk
-    FILL
-.pk:
-    mov bl, dh                      ; (an entry with no code of eight bits
-    mov cl, [bx + JA_LEN]           ; or fewer is LEN 0, ADV 0: the shift
-    shl dx, cl                      ; and the subtraction do nothing, and
-    sub ch, cl                      ; .code sends it to the walk)
-    mov al, [bx + JA_ADV]
-    or al, al
-    jz .code
-    cbw
-    add di, ax
-    mov al, [bx + JA_VLO]
-    mov ah, [bx + JA_VHI]
-    mov [di - 2], ax
-    cmp di, JS_BLKZ + 128
-    jb .ac
-    je .done
-    jmp pj_badgb                    ; k past 63, from a WHOLE entry
-.badk:
-    jmp pj_bad                      ; k past 63
-.code:
-    or cl, cl
-    jz .slow
-    mov al, [bx + JA_RS]
-    jmp short .rs
-.slow:
-    call pj_hslow
-.rs:
-    push bx
-    mov bl, al
-    and bl, 15                      ; BL = s
-    jz .zr
-    mov bh, al
-    mov cl, 4
-    shr bh, cl                      ; BH = r
-    mov al, bh
-    cbw
-    shl ax, 1
-    add di, ax                      ; k += r
-    cmp di, JS_BLKZ + 126
-    ja .badk2
-    mov al, bl
-    call pj_getb
-    call pj_ext
-    stosw
-    pop bx
-    cmp di, JS_BLKZ + 128
-    jb .ac
-    jmp short .done
-.badk2:
-    pop bx
-    jmp short .badk
-.zr:
-    pop bx
-    cmp al, 0xF0                    ; ZRL: sixteen zeros
-    jne .done                       ; EOB
-    add di, 32
-    cmp di, JS_BLKZ + 128
-    jb .ac
-.done:
-    mov [JV_KMAX], di
-    ret
-
-; pj_bdec - one block of scan component BX (x 8): the DC (prediction added)
-; and the ACs into JS_BLKZ. The window loaded and banked here
-pj_bdec:
-    push bx
-    push di
-    call pj_load
-    call pj_room                    ; the clean data ahead
-    mov ax, [JV_SC + bx + JS_DCS]
-    mov [JV_SLOWP], ax
-    mov al, [JV_SC + bx + JS_CI]
-    xor ah, ah
-    shl ax, 1
-    mov di, ax                      ; DI = the component x 2
-    mov bh, [JV_SC + bx + JS_DCP]
-    call pj_dcdiff
-    add [JV_PRED + di], ax
-    mov ax, [JV_PRED + di]
-    mov [JS_BLKZ], ax
-    pop di
-    pop bx
-    push bx
-    push di
-    mov ax, [JV_SC + bx + JS_ACS]
-    mov [JV_SLOWP], ax
-    mov bh, [JV_SC + bx + JS_ACP]
-    mov di, JS_BLKZ + 2
-    call pj_acs
-    call pj_bank
-    pop di
-    pop bx
-    ret
-
-; =============================================================================
-; DEQUANTISE AND THE IDCT, at the scale (SPEC.md 106.19), into the plane
-; at [JV_PL], stride [JV_ST]; [JV_MLT] the component's multipliers
-; =============================================================================
-pj_bput:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov ax, [JS_BLKZ]               ; the DC, always, the bias on it
-    mov bx, [JV_MLT]
-    imul word [bx]
-    add ax, JP_BIAS
-    mov [JS_D], ax
-    mov word [JS_WL], 0
-    mov word [JV_WLN], 2
-    mov word [JV_MASK], 0x0001
-    mov cx, [JV_KMAX]               ; the ACs written, up to the last the
-    cmp cx, JS_BLKZ + 128           ; scale keeps (JS_KN)
-    jbe .kw
-    mov cx, JS_BLKZ + 128
-.kw:
-    sub cx, JS_BLKZ + 2
-    jbe .kd
-    shr cx, 1
-    cmp cx, [JV_KCAP]
-    jbe .kc0
-    mov cx, [JV_KCAP]
-.kc0:
-    jcxz .kd
-    mov si, JS_BLKZ + 2
-.k:
-    lodsw
-    or ax, ax
-    jnz .nz
-    loop .k
-    jmp short .kd
-.nz:
-    mov bx, si                      ; k = (SI - BLKZ - 2) / 2: its natural
-    sub bx, JS_BLKZ + 2             ; place x 2, or FFh when the scale does
-    shr bx, 1                       ; not keep it
-    mov bl, [JS_KN + bx]
-    cmp bl, 0xFF
-    je .kn
-    xor bh, bh
-    push cx
-    mov di, [JV_MLT]
-    imul word [di + bx]
-    pop cx
-    mov [JS_D + bx], ax
-    mov di, [JV_WLN]
-    mov [JS_WL + di], bx
-    add word [JV_WLN], 2
-    mov ax, [JS_NMASK + bx]
-    or [JV_MASK], ax
-.kn:
-    loop .k
-.kd:
-    mov cx, [JV_KMAX]               ; the block's coefficients cleared
-    cmp cx, JS_BLKZ + 128
-    jbe .kc
-    mov cx, JS_BLKZ + 128
-.kc:
-    sub cx, JS_BLKZ
-    shr cx, 1
-    mov di, JS_BLKZ
-    xor ax, ax
-    rep stosw
-    mov bl, [JV_SCL]
-    xor bh, bh
-    shl bx, 1
-    call [cs:pj_idtab + bx]
-    mov cx, [JV_WLN]                ; D's written words cleared
-    xor bx, bx
-    xor ax, ax
-.wl:
-    mov di, [JS_WL + bx]
-    mov [JS_D + di], ax
-    add bx, 2
-    cmp bx, cx
-    jb .wl
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; MUL - AX = s16((AX x K) >> 8) for the immediate K, by BX (clobbered) and
-; DX: `imul`, and the product's middle word
-%macro MULK 1
-    or ax, ax                       ; (0 x K is 0: no `imul` for it)
-    jz %%z
-    mov bx, %1
-    imul bx
-    mov al, ah
-    mov ah, dl
-%%z:
-%endmacro
-
-; AAN %1 %2 %3 - jidctfst.c's 1-D pass in 16 bits (pixelsim's aan8): the
-; eight inputs at [si + k x %1], the eight outputs by OUT8 %2 %3 k, reg.
-; Temporaries in JS_TMP. Clobbers AX, BX, CX, DX, SI
-%macro AAN 3
-    mov ax, [si + 0 * %1]           ; --- the even part ---
-    mov bx, [si + 4 * %1]
-    mov cx, ax
-    add ax, bx                      ; t10 = d0 + d4
-    sub cx, bx                      ; t11 = d0 - d4
-    mov [JS_TMP + 0], ax
-    mov [JS_TMP + 2], cx
-    mov ax, [si + 2 * %1]
-    mov bx, [si + 6 * %1]
-    mov cx, ax
-    add cx, bx                      ; t13 = d2 + d6
-    sub ax, bx
-    MULK 362                        ; MUL(d2 - d6, 1.414)
-    sub ax, cx                      ; t12
-    mov bx, [JS_TMP + 0]
-    mov dx, bx
-    add bx, cx                      ; t0 = t10 + t13
-    sub dx, cx                      ; t3 = t10 - t13
-    mov [JS_TMP + 4], bx
-    mov [JS_TMP + 10], dx
-    mov bx, [JS_TMP + 2]
-    mov dx, bx
-    add bx, ax                      ; t1 = t11 + t12
-    sub dx, ax                      ; t2 = t11 - t12
-    mov [JS_TMP + 6], bx
-    mov [JS_TMP + 8], dx
-    mov ax, [si + 5 * %1]           ; --- the odd part ---
-    mov bx, [si + 3 * %1]
-    mov cx, ax
-    add cx, bx                      ; z13 = d5 + d3
-    sub ax, bx                      ; z10 = d5 - d3
-    mov [JS_TMP + 12], ax
-    mov ax, [si + 1 * %1]
-    mov bx, [si + 7 * %1]
-    mov dx, ax
-    add ax, bx                      ; z11 = d1 + d7
-    sub dx, bx                      ; z12 = d1 - d7
-    mov [JS_TMP + 14], dx
-    mov bx, ax
-    add bx, cx                      ; t7 = z11 + z13
-    mov [JS_TMP + 16], bx
-    sub ax, cx
-    MULK 362                        ; t11 = MUL(z11 - z13, 1.414)
-    mov [JS_TMP + 18], ax
-    mov ax, [JS_TMP + 12]
-    add ax, [JS_TMP + 14]
-    MULK 473                        ; z5 = MUL(z10 + z12, 1.848)
-    mov cx, ax
-    mov ax, [JS_TMP + 14]
-    MULK 277
-    sub ax, cx                      ; t10 = MUL(z12, 1.082) - z5
-    mov [JS_TMP + 20], ax
-    mov ax, [JS_TMP + 12]
-    MULK -669
-    add ax, cx                      ; t12 = MUL(z10, -2.613) + z5
-    sub ax, [JS_TMP + 16]
-    mov cx, ax                      ; t6 = t12 - t7
-    mov bx, [JS_TMP + 18]
-    sub bx, cx                      ; t5 = t11 - t6
-    mov ax, [JS_TMP + 20]
-    add ax, bx                      ; t4 = t10 + t5
-    mov dx, [JS_TMP + 10]           ; --- out: AX t4, BX t5, CX t6 ---
-    mov si, dx
-    add si, ax
-    sub dx, ax
-    OUT8 %2, %3, 4, si              ; t3 + t4
-    OUT8 %2, %3, 3, dx              ; t3 - t4
-    mov dx, [JS_TMP + 8]
-    mov si, dx
-    add si, bx
-    sub dx, bx
-    OUT8 %2, %3, 2, si              ; t2 + t5
-    OUT8 %2, %3, 5, dx              ; t2 - t5
-    mov dx, [JS_TMP + 6]
-    mov si, dx
-    add si, cx
-    sub dx, cx
-    OUT8 %2, %3, 1, si              ; t1 + t6
-    OUT8 %2, %3, 6, dx              ; t1 - t6
-    mov dx, [JS_TMP + 4]
-    mov ax, [JS_TMP + 16]
-    mov si, dx
-    add si, ax
-    sub dx, ax
-    OUT8 %2, %3, 0, si              ; t0 + t7
-    OUT8 %2, %3, 7, dx              ; t0 - t7
-%endmacro
-
-; OUT8 base stride k reg - [base + k x stride] := reg
-%macro OUT8 4
-    mov [%1 + %3 * %2], %4
-%endmacro
-
-; CLAMP5 - AX = a sum: AL = (AX >> 5) clamped to 0..255. Clobbers CL
-%macro CLAMP5 0
-    mov cl, 5
-    sar ax, cl
-    or ah, ah
-    jz %%ok
-    mov al, 0
-    js %%ok
-    mov al, 255
-%%ok:
-%endmacro
-
-; PUT5 reg k - the sum in reg >> 5, clamped, to the plane at [di + k]; CL
-; must be 5. Clobbers AX
-%macro PUT5 2
-%ifnidni %1, ax
-    mov ax, %1
-%endif
-    sar ax, cl
-    or ah, ah
-    jz %%ok
-    mov al, 0
-    js %%ok
-    mov al, 255
-%%ok:
-    mov [di + %2], al
-%endmacro
-
-; pj_id8 - 1/1: jidctfst.c's columns then rows. A column with no AC is its
-; DC copied, and when no column but the first has any coefficient every row
-; is its first value - the butterflies would give exactly those (SPEC.md
-; 106.19)
-pj_id8:
-    xor bp, bp                      ; BP = u x 2
-.col:
-    mov cx, bp
-    shr cl, 1
-    mov al, [JV_MASK + 1]           ; the columns with an AC
-    shr al, cl
-    test al, 1
-    jnz .full
-    mov ax, [ds:JS_D + bp]
-    mov di, JS_WS
-    add di, bp
-%assign k 0
-%rep 8
-    mov [di + k * 16], ax
-%assign k k + 1
-%endrep
-    jmp .nc
-.full:
-    lea si, [bp + JS_D]
-    lea di, [bp + JS_WS]
-    AAN 16, di, 16
-.nc:
-    add bp, 2
-    cmp bp, 16
-    jb .col
-    mov di, [JV_PL]
-    test byte [JV_MASK], 0xFE
-    jz .dc
-    xor bp, bp                      ; BP = y x 16
-.row:
-    lea si, [bp + JS_WS]
-    AAN 2, JS_TMP + 32, 2
-    mov cl, 5                       ; the eight, clamped into the plane
-%assign k 0
-%rep 8
-    PUT5 [JS_TMP + 32 + k * 2], k
-%assign k k + 1
-%endrep
-    add di, [JV_ST]
-    add bp, 16
-    cmp bp, 128
-    jb .row
-    ret
-.dc:
-    xor bp, bp
-.dr:
-    mov ax, [ds:JS_WS + bp]
-    CLAMP5
-    mov ah, al
-%assign k 0
-%rep 4
-    mov [di + k * 2], ax
-%assign k k + 1
-%endrep
-    add di, [JV_ST]
-    add bp, 16
-    cmp bp, 128
-    jb .dr
-    ret
-
-; RED4 %1 %2 %3 - the 4-point pass (1/2; pixelsim's red4): inputs at [si +
-; k x %1], outputs by OUT8 %2 %3 k, reg. Clobbers AX, BX, CX, DX
-%macro RED4 3
+; PEEK8 - AH = the next eight bits at SI/CL (AL clobbered)
+%macro PEEK8 0
     mov ax, [si]
-    mov cx, [si + 2 * %1]
-    mov dx, ax
-    add ax, cx                      ; ea = d0 + d2
-    sub dx, cx                      ; eb = d0 - d2
-    mov [JS_TMP + 0], ax
-    mov [JS_TMP + 2], dx
-    mov ax, [si + 3 * %1]
-    MULK 106
-    add ax, [si + 1 * %1]           ; oa = d1 + MUL(d3, tan pi/8)
-    mov [JS_TMP + 4], ax
-    mov ax, [si + 1 * %1]
-    MULK 106
-    sub ax, [si + 3 * %1]           ; ob = MUL(d1, tan pi/8) - d3
-    mov cx, ax
-    mov ax, [JS_TMP + 0]
-    mov bx, [JS_TMP + 4]
-    mov dx, ax
-    add ax, bx
-    sub dx, bx
-    OUT8 %2, %3, 0, ax              ; ea + oa
-    OUT8 %2, %3, 3, dx              ; ea - oa
-    mov ax, [JS_TMP + 2]
-    mov dx, ax
-    add ax, cx
-    sub dx, cx
-    OUT8 %2, %3, 1, ax              ; eb + ob
-    OUT8 %2, %3, 2, dx              ; eb - ob
+    xchg al, ah
+    shl ax, cl
 %endmacro
 
-; pj_id4 - 1/2: the 4x4, columns then rows, the same shortcuts
-pj_id4:
-    xor bp, bp
-.col:
-    mov cx, bp
-    shr cl, 1
-    mov al, [JV_MASK + 1]
-    shr al, cl
-    test al, 1
-    jnz .full
-    mov ax, [ds:JS_D + bp]
-%assign k 0
-%rep 4
-    mov [ds:JS_WS + bp + k * 16], ax
-%assign k k + 1
-%endrep
-    jmp short .nc
-.full:
-    lea si, [bp + JS_D]
-    lea di, [bp + JS_WS]
-    RED4 16, di, 16
-.nc:
-    add bp, 2
-    cmp bp, 8
-    jb .col
-    mov di, [JV_PL]
-    test byte [JV_MASK], 0x0E
-    jz .dc
-    xor bp, bp
-.row:
-    lea si, [bp + JS_WS]
-    mov ax, [si]                    ; the 4-point pass, its four outputs
-    mov cx, [si + 4]                ; put straight into the plane
-    mov dx, ax
-    add ax, cx                      ; ea
-    sub dx, cx                      ; eb
-    mov [JS_TMP + 0], ax
-    mov [JS_TMP + 2], dx
-    mov ax, [si + 6]
-    MULK 106
-    add ax, [si + 2]                ; oa
-    mov [JS_TMP + 4], ax
-    mov ax, [si + 2]
-    MULK 106
-    sub ax, [si + 6]                ; ob
-    mov [JS_TMP + 6], ax
-    mov cl, 5
-    mov ax, [JS_TMP + 0]
-    add ax, [JS_TMP + 4]
-    PUT5 ax, 0                      ; ea + oa
-    mov ax, [JS_TMP + 0]
-    sub ax, [JS_TMP + 4]
-    PUT5 ax, 3                      ; ea - oa
-    mov ax, [JS_TMP + 2]
-    add ax, [JS_TMP + 6]
-    PUT5 ax, 1                      ; eb + ob
-    mov ax, [JS_TMP + 2]
-    sub ax, [JS_TMP + 6]
-    PUT5 ax, 2                      ; eb - ob
-    add di, [JV_ST]
-    add bp, 16
-    cmp bp, 64
-    jb .row
-    ret
-.dc:
-    xor bp, bp
-.dr:
-    mov ax, [ds:JS_WS + bp]
-    CLAMP5
-    mov ah, al
-    mov [di], ax
-    mov [di + 2], ax
-    add di, [JV_ST]
-    add bp, 16
-    cmp bp, 64
-    jb .dr
-    ret
+; NORM - CL past 7: a byte on. (CL <= 15)
+%macro NORM 0
+    cmp cl, 8
+    jb %%n
+    inc si
+    sub cl, 8
+%%n:
+%endmacro
 
-; pj_id2 - 1/4: the 2x2 - d0 + d1, d0 - d1 each way
-pj_id2:
-    mov ax, [JS_D + 0]              ; column 0: d(0,0), d(1,0)
-    mov bx, [JS_D + 16]
-    mov cx, ax
-    add ax, bx
-    sub cx, bx
-    mov [JS_WS + 0], ax             ; WS row 0, row 1
-    mov [JS_WS + 16], cx
-    mov ax, [JS_D + 2]              ; column 1
-    mov bx, [JS_D + 18]
-    mov cx, ax
-    add ax, bx
-    sub cx, bx
-    mov [JS_WS + 2], ax
-    mov [JS_WS + 18], cx
-    mov di, [JV_PL]
-    xor bp, bp
-.r:
-    mov ax, [ds:JS_WS + bp]
-    mov dx, [ds:JS_WS + bp + 2]
+; pj_bprog - the scan's MCU as a program of blocks: for each scan
+; component in order, its V x H blocks. Preserves all
+pj_bprog:
     push ax
-    add ax, dx
-    CLAMP5
-    mov [di], al
-    pop ax
-    sub ax, dx
-    CLAMP5
-    mov [di + 1], al
-    add di, [JV_ST]
-    add bp, 16
-    cmp bp, 32
-    jb .r
-    ret
-
-; pj_id1 - 1/8: the DC
-pj_id1:
-    mov ax, [JS_D]
-    CLAMP5
-    mov di, [JV_PL]
-    mov [di], al
-    ret
-
-; =============================================================================
-; A BASELINE SCAN: MCU rows of blocks into the planes, each row then out
-; =============================================================================
-pj_baseline:
-    xor ax, ax
-    mov [JV_PRED], ax
-    mov [JV_PRED + 2], ax
-    mov [JV_PRED + 4], ax
-    mov [JV_DONE], ax
-    mov [JV_RSTN], ax
-    mov [JV_RCNT], ax
-    mov [JV_MY], ax
-    mov ax, [JV_TOTAL]
-    mov [JV_UNIT], ax
-.my:
-    mov word [JV_MX], 0
-.mx:
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, JS_BPROG
     xor bx, bx                      ; BX = the scan's component, x 8
 .c:
     mov al, [JV_SC + bx + JS_CI]
-    call pj_cset                    ; its multipliers, plane, stride; AL
-    mov byte [cs:pj_v], 0           ; = its H, AH its V
+    call pj_cset                    ; pj_cpl, JV_ST, pj_ch, pj_cv, JV_MLT
+    mov byte [cs:pj_v], 0
 .v:
     mov byte [cs:pj_h], 0
 .h:
     mov al, [JV_SC + bx + JS_CI]
-    call pj_bplace                  ; [JV_PL] for (mx H + h, v)
-    call pj_bdec
-    call pj_bput
+    xor ah, ah
+    shl ax, 1
+    add ax, JV_PRED
+    mov [di + JB_PRED], ax
+    mov al, [JV_SC + bx + JS_DCP]
+    mov [di + JB_DCP], al
+    mov al, [JV_SC + bx + JS_ACP]
+    add al, JA_LEN >> 8
+    mov [di + JB_ACP], al
+    mov ax, [JV_SC + bx + JS_DCS]
+    mov [di + JB_DCS], ax
+    mov ax, [JV_SC + bx + JS_ACS]
+    mov [di + JB_ACS], ax
+    mov ax, [JV_MLT]
+    mov [di + JB_MLT], ax
+    mov ax, [JV_ST]
+    mov [di + JB_ST], ax
+    mov al, [cs:pj_v]               ; v N rows down...
+    mul byte [JV_FR + JL_N]
+    mul word [JV_ST]
+    add ax, [cs:pj_cpl]
+    mov cx, ax
+    mov al, [cs:pj_h]               ; ...h N across
+    mul byte [JV_FR + JL_N]
+    add ax, cx
+    mov [di + JB_OFF], ax
+    mov al, [cs:pj_ch]              ; H N an MCU
+    mul byte [JV_FR + JL_N]
+    mov [di + JB_STEP], ax
+    add di, JB_SZ
     inc byte [cs:pj_h]
     mov al, [cs:pj_h]
     cmp al, [cs:pj_ch]
@@ -3311,9 +2746,995 @@ pj_baseline:
     shl ax, cl
     cmp bx, ax
     jb .c
+    mov [JV_BPE], di
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; pj_brow - an MCU row starts: every block's place back to MCU column 0.
+; Preserves all
+pj_brow:
+    push ax
+    push bx
+    mov bx, JS_BPROG
+.b:
+    mov ax, [bx + JB_OFF]
+    mov [bx + JB_CUR], ax
+    add bx, JB_SZ
+    cmp bx, [JV_BPE]
+    jb .b
+    pop bx
+    pop ax
+    ret
+
+; pj_peek16 - AX = the next sixteen bits at SI/CL, three bytes read.
+; Preserves all but AX
+pj_peek16:
+    push cx
+    push dx
+    mov ax, [si]
+    xchg al, ah
+    shl ax, cl
+    mov dl, [si + 2]
+    mov ch, cl
+    mov cl, 8
+    sub cl, ch
+    shr dl, cl
+    or al, dl
+    pop dx
+    pop cx
+    ret
+
+; pj_bits - AL = s, 1..15: AX = the next s bits, extended (Annex F's
+; EXTEND), taken. SI/CL live (CL normalised). Preserves BX, DX, DI, BP;
+; clobbers CH
+pj_bits:
+    push bx
+    mov bl, al
+    xor bh, bh                      ; BX = s
+    mov ax, [si]
+    xchg al, ah
+    shl ax, cl                      ; 16 - CL real bits, nine or more
+    add cl, bl
+    mov ch, cl                      ; CH = the position's bits after it
+    cmp cl, 16
+    ja .x3
+.x:
+    mov cl, 16
+    sub cl, bl
+    shr ax, cl                      ; the s bits
+    shl bx, 1
+    test ax, [bx + JS_HALF]
+    jnz .p
+    sub ax, [bx + JS_EXT]
+.p:
+    mov bl, ch                      ; taken: CH >> 3 bytes on
+    mov cl, ch
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    xor bh, bh
+    add si, bx
+    and cl, 7
+    pop bx
+    ret
+.x3:
+    push dx                         ; more than the word held: the third
+    mov dl, [si + 2]                ; byte's top bits into AX's zeros
+    mov dh, ch
+    sub dh, bl                      ; (DH = the CL before)
+    mov cl, 8
+    sub cl, dh
+    shr dl, cl
+    or al, dl
+    pop dx
+    jmp short .x
+
+; pj_walk9 - the canonical walk (Annex C) of [JV_SLOWP]'s table from the
+; ninth bit, when the next eight begin no code of eight bits or fewer: AL
+; = the symbol, its bits taken. A code no table holds is refused after
+; sixteen bits, as the reference refuses it. SI/CL live; preserves BX, DX,
+; DI, BP
+pj_walk9:
+    push bx
+    push dx
+    push di
+    push bp
+    call pj_peek16
+    mov dx, ax                      ; DX = the sixteen bits
+    mov bp, [JV_SLOWP]
+    mov bl, dh
+    xor bh, bh                      ; BX = the code, eight bits
+    mov dh, dl
+    mov di, 18                      ; DI = the length x 2, 9 first
+.l:
+    shl dh, 1
+    rcl bx, 1
+    cmp bx, [ds:bp + di + JH_MAXC]
+    jb .hit
+    add di, 2
+    cmp di, 34
+    jb .l
+    add si, 2                       ; sixteen bits taken, and refused
+    jmp pj_badb
+.hit:
+    add bx, [ds:bp + di + JH_OFF]
+    add bx, bp
+    mov al, [bx + JH_VALS]
+    shr di, 1                       ; the code's length, taken
+    add cx, di                      ; (CH is not live here: CL <= 7 + 16)
+    mov ch, cl
+    shr ch, 1
+    shr ch, 1
+    shr ch, 1
+    mov bl, ch
+    xor bh, bh
+    add si, bx
+    and cl, 7
+    pop bp
+    pop di
+    pop dx
+    pop bx
+    ret
+
+; pj_blk - one block of the MCU program, entry BX: decoded, dequantised and
+; through the IDCT into its plane, its place moved on an MCU. The position
+; loaded and banked here. Clobbers all but DS, ES
+pj_blk:
+    mov bp, bx                      ; BP = the entry, until the AC
+    mov ax, [ds:bp + JB_CUR]
+    mov [JV_PL], ax
+    add ax, [ds:bp + JB_STEP]
+    mov [ds:bp + JB_CUR], ax
+    mov ax, [ds:bp + JB_ST]
+    mov [JV_ST], ax
+    mov ax, [ds:bp + JB_MLT]
+    cmp ax, [JV_MLT]
+    je .m
+    mov [JV_MLT], ax                ; the value loops' multipliers: their
+    mov [cs:pj_va0.imul + 2], ax    ; `imul`s' displacements, PATCHED - a
+    mov [cs:pj_va1.imul + 2], ax    ; call and a jump before any of them is
+    mov [cs:pj_va2.imul + 2], ax    ; fetched (px_quant's precedent)
+.m:
+    mov ax, [ds:bp + JB_DCS]
+    mov [JV_SLOWP], ax
+    mov si, [JV_CPOS]               ; the position
+    mov cl, [JV_BOFF]
+    mov ax, [JV_CEND]               ; the clean data ahead (pj_room)
+    sub ax, si
+    jl .room
+    cmp ax, JP_AHEAD
+    jge .dc
+.room:
+    call pj_room
+.dc:
+    PEEK8                           ; --- the DC ---------------------------
+    mov bh, [ds:bp + JB_DCP]
+    mov bl, ah
+    mov ch, [bx + 256]              ; its length, 0 longer than eight bits
+    or ch, ch
+    jz .dsl
+    add cl, ch
+    NORM
+    mov al, [bx]                    ; AL = s
+.dg:
+    or al, al
+    jz .d0
+    call pj_bits                    ; AX = the difference
+    jmp short .dd
+.dsl:
+    call pj_walk9
+    jmp short .dg
+.d0:
+    xor ax, ax
+.dd:
+    mov di, [ds:bp + JB_PRED]
+    add ax, [di]
+    mov [di], ax                    ; the prediction
+    mov di, [JV_MLT]
+    imul word [di]
+    add ax, JP_BIAS
+    mov [JS_D], ax
+    mov word [JV_MASK], 0x0001
+    mov ax, [ds:bp + JB_ACS]        ; --- the ACs ------------------------
+    mov [JV_SLOWP], ax
+    mov bh, [ds:bp + JB_ACP]
+    mov bp, 2 - 128                 ; BP = k x 2 - 128
+    xor dx, dx
+    mov al, [JV_SCL]
+    cmp al, 1
+    jb .v0
+    je .v1
+    cmp al, 2
+    je .v2
+    jmp pj_sk                       ; (1/8: no AC kept)
+.v0:
+    jmp pj_va0
+.v1:
+    jmp pj_va1
+.v2:
+    jmp pj_va2
+
+; pj_bend - the block's ACs are read (the loops jump here): the position
+; banked, the IDCT at the scale into the plane, D's written columns zeroed
+pj_bend:
+    mov [JV_CPOS], si
+    mov [JV_BOFF], cl
+    mov bl, [JV_SCL]
+    xor bh, bh
+    shl bx, 1
+    call [cs:pj_idtab + bx]
+    mov al, [JV_MASK]               ; D's columns that held anything, the
+    xor dx, dx                      ; scale's rows of each
+    mov bl, [JV_SCL]
+    cmp bl, 1
+    jb .c8
+    je .c4
+    cmp bl, 2
+    jne .o
+    mov [JS_D], dx                  ; 1/4: the 2x2
+    mov [JS_D + 2], dx
+    mov [JS_D + 16], dx
+    mov [JS_D + 18], dx
+.o:
+    ret
+.c4:
+%assign u 0
+%rep 4
+    test al, 1 << u
+    jz .n4%+u
+%assign v 0
+%rep 4
+    mov [JS_D + 16 * v + 2 * u], dx
+%assign v v + 1
+%endrep
+.n4%+u:
+%assign u u + 1
+%endrep
+    ret
+.c8:
+    mov bx, JS_D
+.c:
+    shr al, 1
+    jnc .n
+%assign v 0
+%rep 8
+    mov [bx + 16 * v], dx
+%assign v v + 1
+%endrep
+.n:
+    inc bx
+    inc bx
+    or al, al
+    jnz .c
+    ret
+
+; pj_acsp - the special entry: BP = k x 2 - 128 + JA_SPEC, BX = the entry
+; (its LEN 0: a code longer than eight bits, the canonical walk). out CF =
+; 1 the block is done (EOB, or a zero run to its end); else BP = k x 2 -
+; 128 past the symbol and AX = its coefficient, 0 for ZRL. A coefficient
+; past 63 is `damaged`, before its magnitude is read. SI/CL live (taken);
+; preserves BX, DX
+pj_acsp:
+    push bx
+    sub bp, JA_SPEC
+    cmp byte [bx], 0
+    jne .code
+    call pj_walk9                   ; AL = the symbol
+    jmp short .rs
+.code:
+    mov al, [bx + JA_RS - JA_LEN]
+.rs:
+    mov bl, al
+    and bl, 15                      ; BL = s
+    jz .zr
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    and al, 0x1E                    ; r x 2
+    xor ah, ah
+    add bp, ax
+    cmp bp, -2
+    jg .bad
+    mov al, bl
+    call pj_bits                    ; AX = the coefficient
+    inc bp
+    inc bp
+    pop bx
+    clc
+    ret
+.zr:
+    cmp al, 0xF0
+    jne .eob
+    add bp, 32                      ; ZRL: sixteen zeros
+    xor ax, ax
+    pop bx
+    or bp, bp
+    js .zn
+.eob1:
+    stc                             ; (to its end: done)
+    ret
+.zn:
+    clc
+    ret
+.eob:
+    pop bx
+    stc
+    ret
+.bad:
+    jmp pj_badb
+
+; pj_sk - the skip loop: every symbol decoded, nothing kept, to the block's
+; end. BH = the LEN page, BP = k x 2 - 128 (negative until k is 64), DH = 0
+pj_sk:
+.top:
+    PEEK8
+    mov bl, ah
+    add cl, [bx]                    ; the bits it takes
+    mov dl, [bx + JA_ADV - JA_LEN]  ; k's step x 2
+    NORM
+    add bp, dx
+    js .top
+    jz .done                        ; (a coefficient at 63: the end)
+    cmp bp, 64
+    jae .spec
+    mov al, [bx + JA_RS - JA_LEN]   ; a WHOLE coefficient past 63: its
+    and al, 15                      ; magnitude given back to the cut-short
+    mov [cs:pj_gb], al              ; test, as the reference refuses its
+    jmp pj_badb                     ; place before reading it
+.spec:
+    cmp byte [bx + JA_RS - JA_LEN], 0   ; EOB, its code taken: the block's
+    jne .sp                         ; end, without the special path (a long
+    cmp byte [bx], 0                ; code's entry is LEN 0, and its RS
+    jne .done                       ; byte nothing)
+.sp:
+    call pj_acsp
+    jc .done
+    or bp, bp
+    js .top
+.done:
+    jmp pj_bend
+
+; VLOOP n, end - the value loop of scale n, keeping k < end / 2: a WHOLE
+; entry's coefficient, when its place is kept (JS_KNW), x its multiplier
+; into D, and its columns into JV_MASK. BP = k x 2 - 128
+%macro VLOOP 2
+pj_va%1:
+.top:
+    PEEK8
+    mov bl, ah
+    add cl, [bx]
+    mov dl, [bx + JA_ADV - JA_LEN]
+    NORM
+    add bp, dx
+    cmp bp, %2 - 128
+    jg .out
+    mov di, [ds:bp + JS_KNW + 126]  ; its natural place x 2, or FFFFh
+    or di, di
+    js .top
+    mov al, [bx + JA_VLO - JA_LEN]
+    mov ah, [bx + JA_VHI - JA_LEN]
+.mul:
+.imul:
+    imul word [di + 0x7FFF]         ; PATCHED: the component's multipliers
+    mov [di + JS_D], ax
+    mov ax, [di + JS_NMASK]
+    or [JV_MASK], ax
+    xor dx, dx
+    cmp bp, %2 - 128
+    jl .top
+%if %2 < 128
+    or bp, bp                       ; the rest of the block: nothing kept
+    js .sk
+%endif
+    jmp pj_bend
+.out:
+    cmp bp, 64
+    jge .spec
+%if %2 < 128
+    or bp, bp                       ; a coefficient past the kept range
+    js .sk
+    jz .end
+%endif
+    mov al, [bx + JA_RS - JA_LEN]   ; ...past 63: its magnitude given back
+    and al, 15
+    mov [cs:pj_gb], al
+    jmp pj_badb
+.spec:
+    cmp byte [bx + JA_RS - JA_LEN], 0   ; EOB (pj_sk's test)
+    jne .sp
+    cmp byte [bx], 0
+    jne .end
+.sp:
+    call pj_acsp
+    jc .end
+    or ax, ax
+    jz .z
+    cmp bp, %2 - 128                ; a coefficient: kept?
+    jg .past
+    mov di, [ds:bp + JS_KNW + 126]
+    or di, di
+    jns .mul
+.z:
+    cmp bp, %2 - 128
+    jl .top
+.past:
+%if %2 < 128
+    or bp, bp
+    js .sk
+%endif
+.end:
+    jmp pj_bend
+%if %2 < 128
+.sk:
+    jmp pj_sk.top
+%endif
+%endmacro
+
+    VLOOP 0, 128
+    VLOOP 1, 50
+    VLOOP 2, 10
+
+; pj_isoverb - pj_isover for the bit position: CF = 1 when a bit past the
+; segment's end has been taken - less the [pj_gb] last bits. SI/CL live.
+; Preserves all
+pj_isoverb:
+    push ax
+    cmp byte [JV_OVER], 0
+    jne .y
+    cmp byte [JV_ENDED], 0
+    je .n
+    mov ax, si
+    sub ax, [JV_CEND]
+    jl .n
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add al, cl
+    adc ah, 0                       ; AX = the bits taken past the end
+    push bx
+    mov bl, [cs:pj_gb]
+    xor bh, bh
+    cmp ax, bx
+    pop bx
+    jle .n                          ; (none, or only those given back)
+.y:
+    stc
+    pop ax
+    ret
+.n:
+    clc
+    pop ax
+    ret
+
+; pj_badb - pj_bad for the bit position
+pj_badb:
+    call pj_isoverb
+    jc .t
+    jmp pj_data
+.t:
+    jmp pj_trunc
+
+; pj_chkb - an MCU's end, the position banked: `cut short` if a bit past
+; the end was taken. Preserves all
+pj_chkb:
+    push cx
+    push si
+    mov si, [JV_CPOS]
+    mov cl, [JV_BOFF]
+    call pj_isoverb
+    pop si
+    pop cx
+    jc .t
+    ret
+.t:
+    jmp pj_trunc
+
+; =============================================================================
+; THE IDCT'S MULTIPLIES BY TABLE (SPEC.md 106.22). MUL(x, K) = s16((x K)
+; >> 8) is, for x = 256 xh + xl (xh signed, xl unsigned), exactly xh K +
+; ((xl K) >> 8) - and each of jidctfst.c's constants is 256 m + c with c
+; under 256: 362 = 256 + 106, 473 = 256 + 217, 277 = 256 + 21 and -669 =
+; -768 + 99, so MUL(x, K) = m x + ((xl c) >> 8) + xh c. A constant c is
+; three pages: (xl c) >> 8 a byte, then xh c's low and high bytes. Two
+; lookups and an add where an 8088's `imul` was ~140 cycles, and DX is
+; left alone. At 1/1 the four c (12 pages), at 1/2 the one (3), in the
+; scratch's fixed part at a fixed page so the pages are immediates
+; =============================================================================
+JS_MPG      equ 0x4B00              ; the pages: 106, 217, 21, 99 at 1/1
+JM_106      equ (JS_MPG >> 8)
+JM_217      equ JM_106 + 3
+JM_21       equ JM_106 + 6
+JM_99       equ JM_106 + 9
+
+; MULT page - AX = x: AX = (x c) >> 8's low word, c the page's constant.
+; Clobbers BX, CL
+%macro MULT 1
+    mov bl, al
+    mov bh, %1
+    mov cl, [bx]
+    mov bl, ah
+    inc bh
+    mov al, [bx]
+    inc bh
+    mov ah, [bx]
+    add al, cl
+    adc ah, 0
+%endmacro
+
+; pj_mtabs - the scale's multiply pages. Preserves all
+pj_mtabs:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov cl, [JV_SCL]
+    cmp cl, 2
+    jae .out
+    mov si, pj_mcon
+    mov di, JS_MPG
+    mov bp, 4                       ; constants: four at 1/1...
+    or cl, cl
+    jz .c
+    mov bp, 1                       ; ...one at 1/2
+.c:
+    mov bl, [cs:si]                 ; BX = c
+    xor bh, bh
+    inc si
+    xor dx, dx                      ; DX = xl c
+    xor al, al
+.lo:
+    mov [di], dh
+    add dx, bx
+    inc di
+    inc al
+    jnz .lo
+    mov ax, bx                      ; -128 c, for xh = 80h
+    mov cl, 7
+    shl ax, cl
+    neg ax
+    xor dx, dx                      ; DX = xh c, xh = 0, 1, ...
+    xor cl, cl
+.hi:
+    cmp cl, 128
+    jne .h
+    mov dx, ax
+.h:
+    mov [di], dl
+    mov [di + 256], dh
+    add dx, bx
+    inc di
+    inc cl
+    jnz .hi
+    add di, 256
+    dec bp
+    jnz .c
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+pj_mcon:    db 106, 217, 21, 99
+
+; PUTC k - [di + k] := clamp(AX >> 5), CL = 5. Clobbers AX
+%macro PUTC 1
+    sar ax, cl
+    or ah, ah
+    jz %%ok
+    mov al, 0
+    js %%ok
+    mov al, 255
+%%ok:
+    mov [di + %1], al
+%endmacro
+
+; R4 s - the 4-point pass (pixelsim's red4) on [si + k s], k = 0..3: out AX
+; = ea + oa, BX = ea - oa, SI = eb (preserved inputs gone), DX = ob -
+; the outputs ea + oa, eb + ob, eb - ob, ea - oa are AX, SI + DX, SI - DX,
+; BX. Clobbers BP, CL
+%macro R4 1
+    mov ax, [si + 3 * %1]           ; d3
+    MULT JM_106
+    add ax, [si + 1 * %1]           ; oa = d1 + MUL(d3, 106)
+    mov bp, ax
+    mov ax, [si + 1 * %1]           ; d1
+    MULT JM_106
+    sub ax, [si + 3 * %1]           ; ob = MUL(d1, 106) - d3
+    mov dx, ax
+    mov ax, [si]                    ; d0
+    mov bx, [si + 2 * %1]           ; d2
+    mov si, ax
+    add ax, bx                      ; ea
+    sub si, bx                      ; eb
+    mov bx, ax
+    add ax, bp                      ; ea + oa
+    sub bx, bp                      ; ea - oa
+%endmacro
+
+; pj_id4 - 1/2: D's 4x4 through the columns that hold anything (a column
+; with nothing below its DC is that DC four times, which the pass would
+; give), then the rows; all rows the same when no column but the first
+; holds anything
+pj_id4:
+    mov di, [JV_PL]
+    mov ax, [JV_MASK]
+    test al, 0x0E
+    jnz .g
+    test ah, 1
+    jnz .c0
+    mov ax, [JS_D]                  ; the DC alone: sixteen of one pixel
+    mov cl, 5
+    PUTC 0
+    mov ah, al
+    mov bx, [JV_ST]
+%rep 4
+    mov [di], ax
+    mov [di + 2], ax
+    add di, bx
+%endrep
+    ret
+.c0:
+    mov si, JS_D                    ; column 0 alone: each row one pixel
+    R4 16
+    mov cx, 5
+    mov [JS_WS], ax
+    mov [JS_WS + 24], bx
+    mov ax, si
+    add ax, dx
+    mov [JS_WS + 8], ax
+    sub si, dx
+    mov [JS_WS + 16], si
+    mov si, JS_WS
+    mov dx, [JV_ST]
+%rep 4
+    lodsw
+    PUTC 0
+    mov ah, al
+    mov [di], ax
+    mov [di + 2], ax
+    add si, 6
+    add di, dx
+%endrep
+    ret
+.g:
+%assign u 0
+%rep 4
+    test byte [JV_MASK + 1], 1 << u
+    jz .cc%+u
+    mov si, JS_D + 2 * u
+    R4 16
+    mov [JS_WS + 2 * u], ax
+    mov [JS_WS + 24 + 2 * u], bx
+    mov ax, si
+    add ax, dx
+    mov [JS_WS + 8 + 2 * u], ax
+    sub si, dx
+    mov [JS_WS + 16 + 2 * u], si
+    jmp short .cn%+u
+.cc%+u:
+    mov ax, [JS_D + 2 * u]
+    mov [JS_WS + 2 * u], ax
+    mov [JS_WS + 8 + 2 * u], ax
+    mov [JS_WS + 16 + 2 * u], ax
+    mov [JS_WS + 24 + 2 * u], ax
+.cn%+u:
+%assign u u + 1
+%endrep
+%assign y 0
+%rep 4
+    mov si, JS_WS + 8 * y
+    R4 2
+    push bx
+    push si
+    mov cl, 5
+    PUTC 0
+    pop si
+    pop bx
+    mov ax, si
+    add ax, dx
+    PUTC 1
+    mov ax, si
+    sub ax, dx
+    PUTC 2
+    mov ax, bx
+    PUTC 3
+    add di, [JV_ST]
+%assign y y + 1
+%endrep
+    ret
+
+; AAN s - jidctfst.c's 1-D pass in 16 bits (pixelsim's aan8) on [si + k
+; s], k = 0..7. The even part first, t3 t2 t1 t0 pushed (t0 on top); then
+; the odd part: out DX = t4, BX = t5, AX = t6, SI = t7. The outputs are
+; t0 + t7, t1 + t6, t2 + t5, t3 - t4, t3 + t4, t2 - t5, t1 - t6, t0 - t7.
+; Clobbers CX, BP (and SI)
+%macro AAN 1
+    mov ax, [si + 2 * %1]           ; --- the even part ---
+    mov bx, [si + 6 * %1]
+    mov dx, ax
+    add dx, bx                      ; t13 = d2 + d6
+    sub ax, bx
+    mov bp, ax
+    MULT JM_106
+    add ax, bp                      ; MUL(d2 - d6, 362)
+    sub ax, dx                      ; t12
+    mov bp, ax
+    mov ax, [si]
+    mov bx, [si + 4 * %1]
+    mov cx, ax
+    add ax, bx                      ; t10 = d0 + d4
+    sub cx, bx                      ; t11 = d0 - d4
+    mov bx, ax
+    add ax, dx                      ; t0 = t10 + t13
+    sub bx, dx                      ; t3 = t10 - t13
+    push bx
+    mov bx, cx
+    sub bx, bp                      ; t2 = t11 - t12
+    push bx
+    add cx, bp                      ; t1 = t11 + t12
+    push cx
+    push ax
+    mov ax, [si + 1 * %1]           ; --- the odd part ---
+    mov bx, [si + 7 * %1]
+    mov dx, ax
+    add ax, bx                      ; z11 = d1 + d7
+    sub dx, bx                      ; z12 = d1 - d7
+    mov bx, [si + 5 * %1]
+    mov si, [si + 3 * %1]
+    mov bp, bx
+    add bx, si                      ; z13 = d5 + d3
+    sub bp, si                      ; z10 = d5 - d3
+    mov si, ax
+    add ax, bx                      ; t7 = z11 + z13
+    sub si, bx
+    push ax
+    push dx
+    mov ax, si
+    MULT JM_106
+    add ax, si                      ; t11 = MUL(z11 - z13, 362)
+    pop dx                          ; (z12)
+    push ax
+    mov ax, bp
+    add ax, dx
+    mov si, ax
+    MULT JM_217
+    add ax, si                      ; z5 = MUL(z10 + z12, 473)
+    push ax
+    mov ax, dx
+    MULT JM_21
+    add ax, dx                      ; MUL(z12, 277)
+    pop si                          ; (z5)
+    sub ax, si
+    mov dx, ax                      ; t10 = MUL(z12, 277) - z5
+    mov ax, bp
+    MULT JM_99
+    sub ax, bp
+    sub ax, bp
+    sub ax, bp                      ; MUL(z10, -669)
+    add ax, si                      ; t12 = MUL(z10, -669) + z5
+    pop bx                          ; (t11)
+    pop si                          ; t7
+    sub ax, si                      ; t6 = t12 - t7
+    sub bx, ax                      ; t5 = t11 - t6
+    add dx, bx                      ; t4 = t10 + t5
+%endmacro
+
+; AANCOL - AAN's eight outputs into [di + 16 k]: the even part's four
+; popped (AAN pushed them). Clobbers AX, CX, BP
+%macro AANCOL 0
+    mov bp, ax
+    pop ax                          ; t0
+    mov cx, ax
+    add ax, si
+    sub cx, si
+    mov [di], ax
+    mov [di + 112], cx
+    pop ax                          ; t1
+    mov cx, ax
+    add ax, bp
+    sub cx, bp
+    mov [di + 16], ax
+    mov [di + 96], cx
+    pop ax                          ; t2
+    mov cx, ax
+    add ax, bx
+    sub cx, bx
+    mov [di + 32], ax
+    mov [di + 80], cx
+    pop ax                          ; t3
+    mov cx, ax
+    add ax, dx
+    sub cx, dx
+    mov [di + 64], ax
+    mov [di + 48], cx
+%endmacro
+
+; AANROW - AAN's eight outputs clamped into [di + k]. Clobbers AX, CX, BP
+%macro AANROW 0
+    mov bp, ax
+    mov cl, 5
+    pop ax                          ; t0
+    push ax
+    add ax, si
+    PUTC 0
+    pop ax
+    sub ax, si
+    PUTC 7
+    pop ax                          ; t1
+    push ax
+    add ax, bp
+    PUTC 1
+    pop ax
+    sub ax, bp
+    PUTC 6
+    pop ax                          ; t2
+    push ax
+    add ax, bx
+    PUTC 2
+    pop ax
+    sub ax, bx
+    PUTC 5
+    pop ax                          ; t3
+    push ax
+    add ax, dx
+    PUTC 4
+    pop ax
+    sub ax, dx
+    PUTC 3
+%endmacro
+
+; pj_id8 - 1/1: jidctfst.c's columns then rows. A column with nothing
+; below its DC is that DC eight times, and when no column but the first
+; holds anything every row is its first value - the butterflies would give
+; exactly those (SPEC.md 106.19)
+pj_id8:
+    xor ax, ax                      ; [pj_u] = u x 2
+    mov [cs:pj_u], ax
+.col:
+    mov cx, [cs:pj_u]
+    shr cl, 1
+    mov al, [JV_MASK + 1]
+    shr al, cl
+    test al, 1
+    jnz .full
+    mov bx, [cs:pj_u]
+    mov ax, [JS_D + bx]
+%assign k 0
+%rep 8
+    mov [JS_WS + bx + k * 16], ax
+%assign k k + 1
+%endrep
+    jmp .nc
+.full:
+    mov si, [cs:pj_u]
+    lea di, [si + JS_WS]
+    add si, JS_D
+    AAN 16
+    AANCOL
+.nc:
+    add word [cs:pj_u], 2
+    cmp word [cs:pj_u], 16
+    jae .rows
+    jmp .col
+.rows:
+    mov di, [JV_PL]
+    test byte [JV_MASK], 0xFE
+    jz .dc
+    mov word [cs:pj_u], JS_WS       ; [pj_u] = the row
+.row:
+    mov si, [cs:pj_u]
+    AAN 2
+    AANROW
+    add di, [JV_ST]
+    add word [cs:pj_u], 16
+    cmp word [cs:pj_u], JS_WS + 128
+    jae .done
+    jmp .row
+.done:
+    ret
+.dc:
+    mov si, JS_WS
+    mov dx, [JV_ST]
+    mov cl, 5
+.dr:
+    lodsw
+    PUTC 0
+    mov ah, al
+    mov [di], ax
+    mov [di + 2], ax
+    mov [di + 4], ax
+    mov [di + 6], ax
+    add si, 14
+    add di, dx
+    cmp si, JS_WS + 128
+    jb .dr
+    ret
+
+; pj_id2 - 1/4: the 2x2 - d0 + d1, d0 - d1 each way
+pj_id2:
+    mov ax, [JS_D + 0]              ; column 0: d(0,0), d(1,0)
+    mov bx, [JS_D + 16]
+    mov cx, ax
+    add ax, bx
+    sub cx, bx
+    mov si, ax                      ; WS row 0, row 1: SI BP / DX BX
+    mov bp, cx
+    mov ax, [JS_D + 2]              ; column 1
+    mov bx, [JS_D + 18]
+    mov dx, ax
+    add dx, bx
+    sub ax, bx
+    mov bx, ax
+    mov di, [JV_PL]
+    mov cl, 5
+    mov ax, si
+    add ax, dx
+    PUTC 0
+    mov ax, si
+    sub ax, dx
+    PUTC 1
+    add di, [JV_ST]
+    mov ax, bp
+    add ax, bx
+    PUTC 0
+    mov ax, bp
+    sub ax, bx
+    PUTC 1
+    ret
+
+; pj_id1 - 1/8: the DC
+pj_id1:
+    mov ax, [JS_D]
+    mov di, [JV_PL]
+    mov cl, 5
+    PUTC 0
+    ret
+
+; =============================================================================
+; A BASELINE SCAN: MCU rows of blocks into the planes, each row then out
+; =============================================================================
+pj_baseline:
+    xor ax, ax
+    mov [JV_PRED], ax
+    mov [JV_PRED + 2], ax
+    mov [JV_PRED + 4], ax
+    mov [JV_DONE], ax
+    mov [JV_RSTN], ax
+    mov [JV_RCNT], ax
+    mov [JV_MY], ax
+    mov [JV_DONEH], ax
+    mov ax, [JV_TOTAL]
+    mov [JV_UNIT], ax
+    mov ax, [JV_TOTALH]
+    mov [JV_UNITH], ax
+    call pj_bprog
+    mov word [JV_MLT], 0xFFFF       ; (the first block patches the loops)
+.my:
+    mov word [JV_MX], 0
+    call pj_brow
+.mx:
+    mov bx, JS_BPROG
+.b:
+    mov [JV_BPI], bx
+    call pj_blk
+    mov bx, [JV_BPI]
+    add bx, JB_SZ
+    cmp bx, [JV_BPE]
+    jb .b
     ; --- the MCU's end: a bit past the end, the restart interval --------
-    call pj_chk
-    inc word [JV_DONE]
+    call pj_chkb
+    add word [JV_DONE], 1
+    adc word [JV_DONEH], 0
     call pj_rstnext
     inc word [JV_MX]
     mov ax, [JV_MX]
@@ -3341,8 +3762,12 @@ pj_rstnext:
     jb .out
     mov word [JV_RCNT], 0
     push ax
+    mov ax, [JV_DONEH]              ; (32 bits: wave-4 review F5)
+    cmp ax, [JV_UNITH]
+    jne .cmp
     mov ax, [JV_DONE]
     cmp ax, [JV_UNIT]
+.cmp:
     pop ax
     jae .out
     push ax
@@ -3551,6 +3976,30 @@ pj_prog:
     pop ax
     ret
 
+; CHROMA - the next chroma pixel, by the pointer on the stack (moved on):
+; BP, DX, CX = R's, G's and B's clamp places for it (pj_ctabs). Cr's
+; displacement from Cb (.crN) is PATCHED per row. Clobbers AX, BX
+%macro CHROMA 1
+    pop bx
+    mov al, [bx]                    ; Cb
+.cr%1:
+    mov ah, [bx + 0x7FFF]           ; Cr (PATCHED: Cr's plane less Cb's)
+    inc bx
+    push bx
+    mov bl, ah
+    xor bh, bh
+    shl bx, 1                       ; BX = Cr x 2
+    mov bp, [JS_RCR + bx]
+    mov cx, [JS_GRL + bx]
+    mov dx, [JS_GRH + bx]
+    mov bl, al
+    xor bh, bh
+    shl bx, 1                       ; BX = Cb x 2
+    add cx, [JS_GBL + bx]
+    adc dx, [JS_GBH + bx]           ; G's: the high word, the carry in it
+    mov cx, [JS_BCB + bx]
+%endmacro
+
 ; YCC1 - one luma pixel at DS:SI through the clamp bases BP (R), DX (G), CX
 ; (B) to R, G, B at ES:DI. Clobbers AX, BX
 %macro YCC1 0
@@ -3604,56 +4053,60 @@ pj_conv:
     mov [JV_X], cx
     test byte [JV_PF], JPF_RGB
     jnz .rgb
-.c:
-    mov bx, [JV_CX]                 ; a chroma pixel: Cb, Cr
-    mov al, [bx]
-    add bx, [JV_CDLT]
-    mov ah, [bx]
-    inc word [JV_CX]
-    mov bl, ah                      ; BP = R's clamp base
-    xor bh, bh
-    shl bx, 1
-    mov bp, [JS_RCR + bx]
-    add bp, JS_CLAMP + 384
-    shl bx, 1
-    mov cx, [JS_GCR + bx]
-    mov dx, [JS_GCR + bx + 2]
-    mov bl, al
-    xor bh, bh
-    shl bx, 1
-    push word [JS_BCB + bx]
-    shl bx, 1
-    add cx, [JS_GCB + bx]
-    adc dx, [JS_GCB + bx + 2]
-    add dx, JS_CLAMP + 384          ; DX = G's
-    pop cx
-    add cx, JS_CLAMP + 384          ; CX = B's
+    mov [cs:.cr0 + 2], ax           ; Cr's place from Cb's: PATCHED, a row
+    mov [cs:.cr1 + 2], ax           ; before it is fetched
+    mov [cs:.cr2 + 2], ax
+    mov [cs:.cr3 + 2], ax
+    add cx, si
+    mov [JV_X], cx                  ; [JV_X] = the Y row's end
+    push word [JV_CX]               ; the chroma pointer, on the stack
     mov al, [JV_FR + JF_HMAX]
-    xor ah, ah
-    cmp ax, [JV_X]
-    jbe .n
+    cmp al, 2
+    je .h2
+    cmp al, 1
+    je .h1
+    ; --- 4:1:1: four luma pixels a chroma one -------------------------------
+.h4:
     mov ax, [JV_X]
-.n:
-    sub [JV_X], ax
-    cmp al, 2                       ; the common cases unrolled: two luma
-    je .p2                          ; pixels a chroma one (4:2:x), one
-    cmp al, 1                       ; (4:4:x)
-    je .p1
-    mov [JV_HN], al
-.p:
+    sub ax, si
+    cmp ax, 4
+    jb .tail
+    CHROMA 0
     YCC1
-    dec byte [JV_HN]
-    jnz .p
-    jmp short .nc
-.p2:
     YCC1
-.p1:
     YCC1
-.nc:
-    cmp word [JV_X], 0
-    je .ycdone
-    jmp .c
-.ycdone:
+    YCC1
+    jmp .h4
+    ; --- 4:4:x: one ---------------------------------------------------------
+.h1:
+    cmp si, [JV_X]
+    jae .done
+    CHROMA 1
+    YCC1
+    jmp short .h1
+    ; --- 4:2:x: two ---------------------------------------------------------
+.h2:
+    mov ax, [JV_X]
+    dec ax
+.h2l:
+    cmp si, ax                      ; (a pair left: SI < end - 1)
+    jae .tail
+    CHROMA 2
+    YCC1
+    YCC1
+    mov ax, [JV_X]
+    dec ax
+    jmp short .h2l
+.tail:
+    cmp si, [JV_X]                  ; the row's last pixels, fewer than the
+    jae .done                       ; chroma one serves
+    CHROMA 3
+.tl:
+    YCC1
+    cmp si, [JV_X]
+    jb .tl
+.done:
+    pop ax                          ; (the chroma pointer)
     jmp .out
 .rgb:
     mov bx, [JV_CX]                 ; R G B as they stand: G and B are the
@@ -3808,6 +4261,7 @@ pj_progscan:
     mov [JV_PRED + 2], ax
     mov [JV_PRED + 4], ax
     mov [JV_DONE], ax
+    mov [JV_DONEH], ax
     mov [JV_RSTN], ax
     mov [JV_RCNT], ax
     cmp byte [JV_NS], 1
@@ -3819,14 +4273,20 @@ pj_progscan:
     call pj_grid                    ; JV_BW, JV_BH, JV_UNIT
     mov word [JV_MY], 0
 .by:
-    mov word [JV_MX], 0
-.bx:
-    mov al, [cs:pj_ch]              ; bi = by (mcux H) + bx
-    xor ah, ah
+    mov al, [cs:pj_ch]              ; the row's first: by (mcux H), in 32
+    xor ah, ah                      ; bits (wave-4 review F6)
     mul word [JV_FR + JF_MCUX]
     mul word [JV_MY]
+    mov [cs:pj_rbi], ax
+    mov [cs:pj_rbi + 2], dx
+    mov word [JV_MX], 0
+.bx:
+    mov ax, [cs:pj_rbi]             ; bi = by (mcux H) + bx
+    mov dx, [cs:pj_rbi + 2]
     add ax, [JV_MX]
+    adc dx, 0
     mov [JV_BI], ax
+    mov [JV_BIH], dx
     xor bx, bx
     call pj_pblock
     call pj_punit
@@ -3840,43 +4300,112 @@ pj_progscan:
     jb .by
     ret
 .il:
-    ; --- interleaved (DC scans): MCUs ---------------------------------------
+    ; --- interleaved (DC scans): MCUs, by a program of the MCU's blocks -----
     mov ax, [JV_TOTAL]
     mov [JV_UNIT], ax
+    mov ax, [JV_TOTALH]
+    mov [JV_UNITH], ax
+    call pj_pprog
     mov word [JV_MY], 0
 .my:
+    mov bx, JS_BPROG                ; the MCU row's first block of each
+.r:
+    mov ax, [bx + PB_ROW]
+    mov dx, [bx + PB_ROWH]
+    add ax, [bx + PB_OFF]
+    adc dx, 0
+    mov [bx + PB_CUR], ax
+    mov [bx + PB_CURH], dx
+    add bx, PB_SZ
+    cmp bx, [JV_BPE]
+    jb .r
     mov word [JV_MX], 0
 .mx:
+    mov bx, JS_BPROG
+.b:
+    mov ax, [bx + PB_CUR]
+    mov dx, [bx + PB_CURH]
+    mov [JV_BI], ax
+    mov [JV_BIH], dx
+    add ax, [bx + PB_COL]
+    adc dx, 0
+    mov [bx + PB_CUR], ax
+    mov [bx + PB_CURH], dx
+    push bx
+    mov bx, [bx + PB_SC]
+    call pj_pblock
+    pop bx
+    add bx, PB_SZ
+    cmp bx, [JV_BPE]
+    jb .b
+    call pj_punit
+    inc word [JV_MX]
+    mov ax, [JV_MX]
+    cmp ax, [JV_FR + JF_MCUX]
+    jb .mx
+    mov bx, JS_BPROG                ; the next MCU row
+.rn:
+    mov ax, [bx + PB_RSTEP]
+    add [bx + PB_ROW], ax
+    adc word [bx + PB_ROWH], 0
+    add bx, PB_SZ
+    cmp bx, [JV_BPE]
+    jb .rn
+    inc word [JV_MY]
+    mov ax, [JV_MY]
+    cmp ax, [JV_FR + JF_MCUY]
+    jb .my
+    ret
+
+; pj_pprog - an interleaved progressive scan's MCU as a program of blocks:
+; for each scan component, its V x H blocks - the store's block index of
+; each at MCU (0, 0) (v (mcux H) + h), and the steps an MCU across (H) and
+; an MCU row down (V mcux H). Preserves all
+PB_SC       equ 0                   ; word: the scan's component, x 8
+PB_OFF      equ 2                   ; word: v (mcux H) + h
+PB_COL      equ 4                   ; word: H
+PB_RSTEP    equ 6                   ; word: V (mcux H)
+PB_ROW      equ 8                   ; dword: my V (mcux H)
+PB_ROWH     equ 10
+PB_CUR      equ 12                  ; dword: this MCU's block index
+PB_CURH     equ 14
+PB_SZ       equ 16
+pj_pprog:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, JS_BPROG
     xor bx, bx
 .c:
     mov al, [JV_SC + bx + JS_CI]
     call pj_cset
+    mov al, [cs:pj_ch]
+    xor ah, ah
+    mul word [JV_FR + JF_MCUX]
+    mov cx, ax                      ; CX = mcux H
     mov byte [cs:pj_v], 0
 .v:
     mov byte [cs:pj_h], 0
 .h:
-    mov al, [cs:pj_cv]              ; bi = (my V + v) (mcux H) + mx H + h
+    mov [di + PB_SC], bx
+    mov al, [cs:pj_v]
     xor ah, ah
-    mul word [JV_MY]
-    add al, [cs:pj_v]
-    adc ah, 0
-    push ax
-    mov al, [cs:pj_ch]
-    xor ah, ah
-    mul word [JV_FR + JF_MCUX]
-    mov cx, ax
-    pop ax
     mul cx
-    push ax
-    mov al, [cs:pj_ch]
-    xor ah, ah
-    mul word [JV_MX]
     add al, [cs:pj_h]
     adc ah, 0
-    pop cx
-    add ax, cx
-    mov [JV_BI], ax
-    call pj_pblock
+    mov [di + PB_OFF], ax
+    mov al, [cs:pj_ch]
+    xor ah, ah
+    mov [di + PB_COL], ax
+    mov al, [cs:pj_cv]
+    xor ah, ah
+    mul cx
+    mov [di + PB_RSTEP], ax
+    mov word [di + PB_ROW], 0
+    mov word [di + PB_ROWH], 0
+    add di, PB_SZ
     inc byte [cs:pj_h]
     mov al, [cs:pj_h]
     cmp al, [cs:pj_ch]
@@ -3892,23 +4421,21 @@ pj_progscan:
     shl ax, cl
     cmp bx, ax
     jb .c
-    call pj_punit
-    inc word [JV_MX]
-    mov ax, [JV_MX]
-    cmp ax, [JV_FR + JF_MCUX]
-    jb .mx
-    inc word [JV_MY]
-    mov ax, [JV_MY]
-    cmp ax, [JV_FR + JF_MCUY]
-    jb .my
+    mov [JV_BPE], di
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; pj_punit - a unit of a progressive scan done: the check, the interval,
 ; and every 64 units the progress (which is also where a cancel is seen).
 ; Preserves all
 pj_punit:
-    call pj_chk
-    inc word [JV_DONE]
+    call pj_chkb
+    add word [JV_DONE], 1
+    adc word [JV_DONEH], 0
     call pj_rstnext
     test byte [JV_DONE], 63
     jnz .o
@@ -4001,6 +4528,7 @@ pj_grid:
     mov [JV_BH], ax
     mul word [JV_BW]
     mov [JV_UNIT], ax
+    mov [JV_UNITH], dx
     pop dx
     pop cx
     pop bx
@@ -4008,57 +4536,98 @@ pj_grid:
     ret
 
 ; pj_pblock - scan component BX (x 8), block [JV_BI] of its store: the
-; scan's kind of decode on it. The window loaded and banked here
+; scan's kind of decode on it, by the bit position (pj_blk's reader). The
+; position loaded and banked here
 pj_pblock:
+    cmp byte [JV_SS], 0             ; an AC first scan's EOB run: nothing
+    je .full                        ; to read (pj_acfb's own test, before
+    cmp byte [JV_AH], 0             ; anything is loaded)
+    jne .full
+    cmp word [JV_EOBRUN], 0
+    je .full
+    dec word [JV_EOBRUN]
+    ret
+.full:
     push bx
     push es
-    call pj_load
+    mov si, [JV_CPOS]
+    mov cl, [JV_BOFF]
+    mov ax, [JV_CEND]               ; the clean data ahead (pj_room)
+    sub ax, si
+    jl .room
+    cmp ax, JP_AHEAD
+    jge .rok
+.room:
     call pj_room
+.rok:
     mov al, [JV_SC + bx + JS_CI]
     xor ah, ah
     shl ax, 1
     mov di, ax                      ; DI = the component x 2
-    mov ax, [JV_SBASE + di]         ; ES:[pj_soff] = the block's store
+    mov ax, [JV_SBASE + di]         ; ES:BP = the block's store
     mov bp, [JV_BI]
     cmp byte [JV_SCL], 3
     je .s8
-    add ax, bp
-    mov word [cs:pj_soff], 0
+    add ax, bp                      ; (1/4: under F000h blocks, a word)
+    xor bp, bp
     jmp short .s
 .s8:
-    push bp
+    push cx                         ; 1/8: bi >> 3 paragraphs on, from 32
+    mov cx, [JV_BIH]                ; bits (wave-4 review F6)
+    mov dx, bp
+    shr cx, 1
+    rcr dx, 1
+    shr cx, 1
+    rcr dx, 1
+    shr cx, 1
+    rcr dx, 1
+    pop cx
     and bp, 7
     shl bp, 1
-    mov [cs:pj_soff], bp
-    pop bp
-    push cx
-    mov cl, 3
-    shr bp, cl
-    pop cx
-    add ax, bp
+    add ax, dx
 .s:
     mov es, ax
     cmp byte [JV_SS], 0
     jne .ac
     ; --- DC ------------------------------------------------------------------
-    mov bp, [cs:pj_soff]
     cmp byte [JV_AH], 0
     jne .dcr
     mov ax, [JV_SC + bx + JS_DCS]
     mov [JV_SLOWP], ax
     mov bh, [JV_SC + bx + JS_DCP]
-    call pj_dcdiff
+    PEEK8
+    mov bl, ah
+    mov ch, [bx + 256]
+    or ch, ch
+    jz .dw
+    add cl, ch
+    NORM
+    mov al, [bx]
+    jmp short .dg
+.dw:
+    call pj_walk9
+.dg:
+    or al, al
+    jz .d0
+    call pj_bits
+    jmp short .dd
+.d0:
+    xor ax, ax
+.dd:
     add [JV_PRED + di], ax
     mov ax, [JV_PRED + di]
-    push cx
+    mov ch, cl
     mov cl, [JV_AL]
     shl ax, cl
-    pop cx
+    mov cl, ch
     mov [es:bp], ax
     jmp short .out
 .dcr:
-    call pj_bit
-    jnc .out
+    PEEK8                           ; one bit
+    inc cl
+    NORM
+    test ah, 0x80
+    jz .out
     mov ax, [JV_P1]
     or [es:bp], ax
     jmp short .out
@@ -4066,315 +4635,468 @@ pj_pblock:
     mov ax, [JV_SC + bx + JS_ACS]
     mov [JV_SLOWP], ax
     mov bh, [JV_SC + bx + JS_ACP]
+    add bh, JA_LEN >> 8             ; BH = the LEN page
+    xor dx, dx
     cmp byte [JV_AH], 0
     jne .acr
-    call pj_acfirst
+    call pj_acfb
     jmp short .out
 .acr:
-    call pj_acref
+    call pj_acrb
 .out:
-    call pj_bank
+    mov [JV_CPOS], si
+    mov [JV_BOFF], cl
     pop es
     pop bx
     ret
 
-; pj_bit - one bit, into CF. DX/CH/SI live; clobbers AX, CL
-pj_bit:
-    or ch, ch
-    jnz .b
-    FILL
-.b:
-    shl dx, 1
-    dec ch
+; pj_rbits - AL = n, 1..15: AX = the next n bits as they are, taken.
+; SI/CL live. Preserves BX, DX, DI, BP; clobbers CH
+pj_rbits:
+    push bx
+    mov bl, al
+    xor bh, bh
+    mov ax, [si]
+    xchg al, ah
+    shl ax, cl
+    add cl, bl
+    mov ch, cl
+    cmp cl, 16
+    jbe .x
+    push dx                         ; the third byte's top bits
+    mov dl, [si + 2]
+    mov dh, ch
+    sub dh, bl
+    mov cl, 8
+    sub cl, dh
+    shr dl, cl
+    or al, dl
+    pop dx
+.x:
+    mov cl, 16
+    sub cl, bl
+    shr ax, cl
+    mov bl, ch
+    mov cl, ch
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    xor bh, bh
+    add si, bx
+    and cl, 7
+    pop bx
     ret
 
-; pj_sym - BH = an AC table's page: one symbol by the fast table, the way
-; pj_acs reads it. out AL = the run r; AH = s, or 0FFh when the entry was
-; WHOLE (its value then in BP, r in AL); for s = 0 AL is the symbol's r.
-; DX/CH/SI live; clobbers BL, CL
-pj_sym:
-    cmp ch, 8
-    jae .p
-    FILL
-.p:
-    mov bl, dh
-    mov cl, [bx + JA_LEN]
-    or cl, cl
-    jz .slow
-    shl dx, cl
-    sub ch, cl
-    mov al, [bx + JA_ADV]
-    or al, al
-    jz .code
-    shr al, 1
-    dec al                          ; r
-    mov cl, [bx + JA_VLO]
-    mov ah, [bx + JA_VHI]
+; pj_kset - DL = k, AX = a value: into the store's word for k when 1/4
+; keeps it (k = 1, 2, 4), and k's bit of the nonzero history set. ES =
+; the block's paragraph. Preserves all
+pj_kset:
+    push bx
     push ax
-    mov al, cl
-    mov bp, ax
-    pop ax
-    mov ah, 0xFF
-    ret
-.slow:
-    call pj_hslow
-    jmp short .rs
-.code:
-    mov al, [bx + JA_RS]
-.rs:
-    mov ah, al
-    and ah, 15                      ; s
-    mov cl, 4
-    shr al, cl                      ; r
-    ret
-
-; pj_nzbit - AL = k: BL... ES:[8 + (k >> 3)] and CL = the bit's mask in
-; AH. out ZF = 0 when k has been nonzero. Preserves all but AH, CL
-pj_nzt:
-    push bx
-    mov bl, al
-    mov cl, al
-    and cl, 7
-    shr bl, 1
-    shr bl, 1
-    shr bl, 1
-    xor bh, bh
-    mov ah, 1
-    shl ah, cl
-    test [es:bx + 8], ah
-    pop bx
-    ret
-pj_nzs:
-    push bx
-    mov bl, al
-    mov cl, al
-    and cl, 7
-    shr bl, 1
-    shr bl, 1
-    shr bl, 1
-    xor bh, bh
-    mov ah, 1
-    shl ah, cl
-    or [es:bx + 8], ah
-    pop bx
-    ret
-
-; pj_kput - AL = k, BP = a value: into the store when k is one of the four
-; it keeps. Preserves all
-pj_kput:
-    push bx
-    mov bl, al
-    xor bh, bh
+    cmp dl, 4
+    ja .h
+    mov bx, dx                      ; (DH = 0)
     mov bl, [cs:pj_kidx + bx]
     cmp bl, 0xFF
-    je .o
+    je .h
     shl bl, 1
-    mov [es:bx], bp
-.o:
-    pop bx
-    ret
-
-; pj_kref - AL = k, an old nonzero coefficient's correction bit was 1: its
-; value, when kept, made one step larger in magnitude where that bit is
-; still clear (jdphuff.c). Preserves all
-pj_kref:
-    push ax
-    push bx
-    mov bl, al
-    xor bh, bh
-    mov bl, [cs:pj_kidx + bx]
-    cmp bl, 0xFF
-    je .o
-    shl bl, 1
-    mov ax, [es:bx]
-    test ax, [JV_P1]
-    jnz .o
-    or ax, ax
-    js .neg
-    add ax, [JV_P1]
-    jmp short .st
-.neg:
-    add ax, [JV_M1]
-.st:
     mov [es:bx], ax
-.o:
-    pop bx
+.h:
+    mov bl, dl
+    and bl, 7
+    xor bh, bh
+    mov al, [cs:pj_bitm + bx]
+    mov bl, dl
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    or [es:bx + 8], al
     pop ax
+    pop bx
     ret
 
-; pj_acfirst - an AC first scan's block: EOB runs, Ss..Se, values << Al
-pj_acfirst:
+; pj_acfb - an AC first scan's block: EOB runs, Ss..Se, values << Al. DL =
+; k (DH = 0), BH = the LEN page. SI/CL live
+pj_acfb:
     cmp word [JV_EOBRUN], 0
     je .go
     dec word [JV_EOBRUN]
     ret
 .go:
-    mov al, [JV_SS]
-    mov [cs:pj_k], al
+    mov dl, [JV_SS]
 .l:
-    mov al, [cs:pj_k]
-    cmp al, [JV_SE]
+    cmp dl, [JV_SE]
     ja .done
-    call pj_sym
-    cmp ah, 0xFF
-    je .whole
-    or ah, ah
+    PEEK8
+    mov bl, ah
+    mov al, [bx + JA_ADV - JA_LEN]
+    cmp al, JA_SPEC
+    je .sp
+    add cl, [bx]                    ; WHOLE: its bits taken
+    NORM
+    shr al, 1
+    dec al
+    add dl, al                      ; k += r: past Se is damaged, the
+    cmp dl, [JV_SE]                 ; magnitude given back
+    ja .badgb
+    mov al, [bx + JA_VLO - JA_LEN]
+    mov ah, [bx + JA_VHI - JA_LEN]
+    jmp short .put
+.sp:
+    cmp byte [bx], 0
+    jne .code
+    call pj_walk9
+    jmp short .rs
+.code:
+    add cl, [bx]
+    NORM
+    mov al, [bx + JA_RS - JA_LEN]
+.rs:
+    mov ah, al
+    and ah, 15                      ; s
     jz .z
-    add [cs:pj_k], al               ; k += r: past Se is damaged, before
-    mov cl, [cs:pj_k]               ; the magnitude is read
-    cmp cl, [JV_SE]
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    add dl, al                      ; k += r, before the magnitude
+    cmp dl, [JV_SE]
     ja .bad
     mov al, ah
-    push bx
-    mov bl, al
-    call pj_getb
-    call pj_ext
-    pop bx
-    mov bp, ax
-    jmp short .put
-.whole:
-    add [cs:pj_k], al
-    mov al, [cs:pj_k]
-    cmp al, [JV_SE]
-    ja .badgb
+    call pj_bits
 .put:
-    mov ax, bp
+    mov ch, cl
     mov cl, [JV_AL]
     shl ax, cl
-    mov bp, ax
-    mov al, [cs:pj_k]
-    call pj_kput
-    call pj_nzs
-    inc byte [cs:pj_k]
+    mov cl, ch
+    call pj_kset
+    inc dl
     jmp short .l
 .z:
-    cmp al, 15                      ; ZRL
+    cmp al, 0xF0
     jne .eob
-    add byte [cs:pj_k], 16
-    jmp short .l
-.eob:
-    mov cl, al                      ; EOBRUN = 2^r + r bits - 1
-    mov bp, 1
-    shl bp, cl
-    push bx
-    call pj_getb
-    pop bx
-    add ax, bp
-    dec ax
-    mov [JV_EOBRUN], ax
-.done:
-    ret
-.badgb:
-    jmp pj_badgb
-.bad:
-    jmp pj_bad
-
-; pj_acref - an AC refinement scan's block (jdphuff.c's
-; decode_mcu_AC_refine), on the nonzero history
-pj_acref:
-    mov al, [JV_SS]
-    mov [cs:pj_k], al
-    cmp word [JV_EOBRUN], 0
-    jne .eob
-.l:
-    mov al, [cs:pj_k]
-    cmp al, [JV_SE]
-    ja .done
-    call pj_sym
-    mov word [cs:pj_nv], 0
-    cmp ah, 0xFF
-    je .whole
-    or ah, ah
-    jz .z
-    cmp ah, 1                       ; a new coefficient's size is always 1
-    jne .bad
-    mov [cs:pj_r], al
-    push ax
-    call pj_bit
-    pop ax
-    mov bp, [JV_P1]
-    jc .nv
-    mov bp, [JV_M1]
-    jmp short .nv
-.whole:
-    mov [cs:pj_r], al
-    cmp bp, 1                       ; WHOLE: s was 1 when the value is +-1
-    je .wp
-    cmp bp, -1
-    jne .badgb
-    mov bp, [JV_M1]
-    jmp short .nv
-.wp:
-    mov bp, [JV_P1]
-.nv:
-    mov [cs:pj_nv], bp
-    jmp short .adv
-.z:
-    mov [cs:pj_r], al
-    cmp al, 15
-    je .adv                         ; ZRL: sixteen zeros, no new one
-    mov cl, al                      ; EOBRUN = 2^r + r bits; the rest of
-    mov bp, 1                       ; the block is the EOB's
-    shl bp, cl
-    push bx
-    call pj_getb
-    pop bx
-    add ax, bp
-    mov [JV_EOBRUN], ax
-    jmp short .eob
-.adv:
-    ; past the nonzero ones (their correction bits) and r zero ones
-    mov al, [cs:pj_k]
-    cmp al, [JV_SE]
-    ja .place
-    call pj_nzt
-    jz .zero
-    call pj_bit
-    jnc .nx
-    mov al, [cs:pj_k]
-    call pj_kref
-    jmp short .nx
-.zero:
-    cmp byte [cs:pj_r], 0
-    je .place
-    dec byte [cs:pj_r]
-.nx:
-    inc byte [cs:pj_k]
-    jmp short .adv
-.place:
-    mov bp, [cs:pj_nv]
-    or bp, bp
-    jz .pn
-    mov al, [cs:pj_k]
-    cmp al, [JV_SE]
-    ja .bad
-    call pj_kput
-    call pj_nzs
-.pn:
-    inc byte [cs:pj_k]
+    add dl, 16                      ; ZRL
     jmp .l
 .eob:
-    ; the EOB run's block: correction bits for every nonzero one left
-    mov al, [cs:pj_k]
-    cmp al, [JV_SE]
-    ja .ed
-    call pj_nzt
-    jz .en
-    call pj_bit
-    jnc .en
-    mov al, [cs:pj_k]
-    call pj_kref
-.en:
-    inc byte [cs:pj_k]
-    jmp short .eob
-.ed:
-    dec word [JV_EOBRUN]
+    shr al, 1                       ; EOBRUN = 2^r + r bits - 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    mov ch, cl
+    mov cl, al
+    mov bx, 1
+    shl bx, cl
+    mov cl, ch
+    or al, al
+    jz .e0
+    call pj_rbits
+    add bx, ax
+.e0:
+    dec bx
+    mov [JV_EOBRUN], bx
 .done:
     ret
 .badgb:
-    jmp pj_badgb
+    mov al, [bx + JA_RS - JA_LEN]
+    and al, 15
+    mov [cs:pj_gb], al
 .bad:
-    jmp pj_bad
+    jmp pj_badb
+
+; REF1 - DL = k, a history position: its correction bit read; a 1 makes a
+; kept coefficient one step larger in magnitude where that bit is still
+; clear (jdphuff.c). Clobbers AX, BX
+%macro REF1 0
+    PEEK8
+    inc cl
+    NORM
+    test ah, 0x80
+    jz %%n
+    cmp dl, 4
+    ja %%n
+    mov bx, dx
+    mov bl, [cs:pj_kidx + bx]
+    cmp bl, 0xFF
+    je %%n
+    shl bl, 1
+    mov ax, [es:bx]
+    test ax, [JV_P1]
+    jnz %%n
+    or ax, ax
+    js %%m
+    add ax, [JV_P1]
+    jmp short %%s
+%%m:
+    add ax, [JV_M1]
+%%s:
+    mov [es:bx], ax
+%%n:
+%endmacro
+
+; HIST - DL = k: ZF = 0 when k has been nonzero. Clobbers AX, BX
+%macro HIST 0
+    mov bl, dl
+    and bl, 7
+    xor bh, bh
+    mov al, [cs:pj_bitm + bx]
+    mov bl, dl
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    test [es:bx + 8], al
+%endmacro
+
+; BULK - from k (DL) a whole byte of positions past the kept ones, when
+; k >= 8 starts one and Se is past it: AL = its history byte, AH its
+; zero positions; ZF = 1 when it cannot be taken whole. Clobbers BX
+%macro BULK 1
+    test dl, 7
+    jnz %1
+    cmp dl, 8
+    jb %1
+    mov al, dl
+    add al, 7
+    cmp al, [JV_SE]
+    ja %1
+    mov bl, dl
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    xor bh, bh
+    mov al, [es:bx + 8]             ; the history byte
+    mov bx, pj_popc
+    cs xlatb                        ; AL = its positions with history
+    mov ah, 8
+    sub ah, al                      ; AH = its zero ones
+%endmacro
+
+; NORMW - CL any number of bits past SI: whole bytes on. Clobbers AX
+%macro NORMW 0
+    mov al, cl
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    xor ah, ah
+    add si, ax
+    and cl, 7
+%endmacro
+
+; pj_acrb - an AC refinement scan's block (jdphuff.c's
+; decode_mcu_AC_refine, on the history). DL = k (DH = 0), BH = the LEN
+; page. SI/CL live. The correction bits of the history positions past the
+; kept ones are counted a byte at a time (pj_popc) and taken whole: their
+; values change nothing 1/4 keeps
+pj_acrb:
+    mov dl, [JV_SS]
+    cmp word [JV_EOBRUN], 0
+    je .l
+    jmp .eob
+.l:
+    cmp dl, [JV_SE]
+    jbe .sym
+    ret
+.sym:
+    PEEK8
+    mov bl, ah
+    mov al, [bx + JA_ADV - JA_LEN]
+    cmp al, JA_SPEC
+    je .sp
+    add cl, [bx]                    ; WHOLE: a new coefficient's size is
+    NORM                            ; always 1, its sign bit in the entry
+    mov ah, [bx + JA_RS - JA_LEN]   ; (else `damaged` once its code is
+    and ah, 15                      ; read: the rest given back)
+    cmp ah, 1
+    jne .badgb
+    shr al, 1
+    dec al
+    mov ch, al                      ; CH = r
+    mov di, [JV_P1]
+    cmp byte [bx + JA_VLO - JA_LEN], 1
+    je .walk
+    mov di, [JV_M1]
+    jmp short .walk
+.sp:
+    cmp byte [bx], 0
+    jne .code
+    call pj_walk9
+    jmp short .rs
+.code:
+    add cl, [bx]
+    NORM
+    mov al, [bx + JA_RS - JA_LEN]
+.rs:
+    mov ah, al
+    shr ah, 1
+    shr ah, 1
+    shr ah, 1
+    shr ah, 1                       ; AH = r
+    and al, 15                      ; AL = s
+    jz .z
+    cmp al, 1
+    jne .bad
+    mov ch, ah                      ; CH = r
+    PEEK8                           ; the sign bit
+    inc cl
+    NORM
+    mov di, [JV_P1]
+    test ah, 0x80
+    jnz .walk
+    mov di, [JV_M1]
+    jmp short .walk
+.z:
+    cmp ah, 15
+    je .zrl
+    mov ch, cl                      ; EOBRUN = 2^r + r bits, this block
+    mov cl, ah                      ; its first
+    mov di, 1
+    shl di, cl
+    mov cl, ch
+    mov al, ah
+    or al, al
+    jz .ez
+    call pj_rbits
+    add di, ax
+.ez:
+    mov [JV_EOBRUN], di
+    jmp .eob
+.zrl:
+    mov ch, 15                      ; ZRL: fifteen zeros and a sixteenth
+    xor di, di
+    ; --- past r zero positions, the history positions' bits read ----------
+.walk:
+    push bx
+.w0:
+    cmp dl, 8                       ; (the kept positions: one at a time)
+    jae .wbytes
+    cmp dl, [JV_SE]
+    ja .wd
+    HIST
+    jz .zero0
+    REF1
+    inc dl
+    jmp short .w0
+.zero0:
+    or ch, ch
+    jz .wd
+    dec ch
+    inc dl
+    jmp short .w0
+.wbytes:
+    mov bh, cl                      ; BH = the bit position's CL; AH the
+    xor ah, ah                      ; history positions passed, their
+.wby:                               ; correction bits taken at the end
+    cmp dl, [JV_SE]
+    ja .wfin
+    mov bp, dx
+    shr bp, 1
+    shr bp, 1
+    shr bp, 1
+    mov al, [es:bp + 8]             ; AL = k's history byte, from k on
+    mov cl, dl
+    and cl, 7
+    shr al, cl
+    mov bl, 8                       ; BL = its positions, to Se at most
+    sub bl, cl
+    mov cl, [JV_SE]
+    sub cl, dl
+    inc cl
+    cmp bl, cl
+    jbe .wc
+    mov bl, cl
+.wc:
+    or al, al                       ; none with history: BL zeros at once
+    jnz .wb
+    cmp ch, bl
+    jb .wlast
+    sub ch, bl
+    add dl, bl
+    jmp short .wby
+.wlast:
+    add dl, ch
+    xor ch, ch
+    jmp short .wfin
+.wb:
+    shr al, 1
+    jnc .wz
+    inc ah
+    inc dl
+    dec bl
+    jnz .wb
+    jmp short .wby
+.wz:
+    or ch, ch
+    jz .wfin
+    dec ch
+    inc dl
+    dec bl
+    jnz .wb
+    jmp short .wby
+.wfin:
+    mov cl, bh
+    add cl, ah
+    NORMW
+.wd:
+    pop bx
+    or di, di                       ; the new coefficient at k
+    jz .nn
+    cmp dl, [JV_SE]
+    ja .bad
+    mov ax, di
+    call pj_kset
+.nn:
+    inc dl
+    jmp .l
+    ; --- the EOB run: every history position's bit to Se ------------------
+.eob:
+.e0:
+    cmp dl, 8
+    jae .ebytes
+    cmp dl, [JV_SE]
+    ja .ed
+    HIST
+    jz .en0
+    REF1
+.en0:
+    inc dl
+    jmp short .e0
+.ebytes:
+    xor ah, ah                      ; AH = the bits to take
+.eby:
+    cmp dl, [JV_SE]
+    ja .efin
+    mov bp, dx
+    shr bp, 1
+    shr bp, 1
+    shr bp, 1
+    mov al, [es:bp + 8]
+    mov bl, dl
+    and bl, 7
+    xor bh, bh
+    and al, [cs:pj_lmask + bx]      ; k's byte's history from k...
+    mov bl, dl
+    or bl, 7
+    cmp bl, [JV_SE]
+    jbe .ef
+    mov bl, [JV_SE]
+    and bl, 7
+    and al, [cs:pj_hmask + bx]      ; ...to Se
+.ef:
+    mov bx, pj_popc
+    cs xlatb
+    add ah, al
+    or dl, 7
+    inc dl
+    jmp short .eby
+.efin:
+    add cl, ah
+    NORMW
+.ed:
+    dec word [JV_EOBRUN]
+    ret
+.badgb:
+    mov [cs:pj_gb], ah
+.bad:
+    jmp pj_badb
 
 ; =============================================================================
 ; pj_output - after a progressive picture's EOI: the store, MCU row by MCU
@@ -4387,72 +5109,34 @@ pj_output:
 .c:
     mov [JV_COMP], ax
     call pj_cset
-    mov byte [cs:pj_v], 0
-.v:
-    mov word [JV_MX], 0             ; JV_MX here = the block across, bx
-.b:
-    mov al, [cs:pj_cv]              ; bi = (my V + v) (mcux H) + bx
-    xor ah, ah
-    mul word [JV_MY]
-    add al, [cs:pj_v]
-    adc ah, 0
-    push ax
-    mov al, [cs:pj_ch]
-    xor ah, ah
+    mov al, [cs:pj_ch]              ; bpl = mcux H; the band's first block
+    xor ah, ah                      ; my V bpl
     mul word [JV_FR + JF_MCUX]
     mov [cs:pj_bpl], ax
-    pop cx
-    mul cx
-    add ax, [JV_MX]
-    mov bp, ax                      ; BP = bi
-    mov bx, [JV_COMP]
-    shl bx, 1
-    mov ax, [JV_SBASE + bx]
-    cmp byte [JV_SCL], 3
-    je .o8
-    add ax, bp
-    mov es, ax
-    mov ax, [es:0]
-    mov [JS_BLKZ + 0], ax
-    mov ax, [es:2]
-    mov [JS_BLKZ + 2], ax
-    mov ax, [es:4]
-    mov [JS_BLKZ + 4], ax
-    mov ax, [es:6]
-    mov [JS_BLKZ + 8], ax
-    mov word [JV_KMAX], JS_BLKZ + 10
-    jmp short .put
-.o8:
-    mov dx, bp
-    mov cl, 3
-    shr dx, cl
-    add ax, dx
-    mov es, ax
-    and bp, 7
-    shl bp, 1
-    mov ax, [es:bp]
-    mov [JS_BLKZ], ax
-    mov word [JV_KMAX], JS_BLKZ + 2
-.put:
-    push ds
-    pop es
-    mov al, [cs:pj_ch]              ; the block's place: bx N across, v N
-    mov [cs:pj_h], al               ; down (pj_bplace's with mx 0, h = bx)
-    mov ax, [JV_MX]
-    mul byte [JV_FR + JL_N]
-    push ax
-    mov al, [cs:pj_v]
+    mov al, [cs:pj_cv]
+    xor ah, ah
+    mul word [JV_MY]
+    mul word [cs:pj_bpl]
+    mov [JV_BI], ax
+    mov [JV_BIH], dx
+    mov byte [cs:pj_v], 0
+.v:
+    mov al, [cs:pj_v]               ; the row of blocks' place: v N rows
     mul byte [JV_FR + JL_N]
     mul word [JV_ST]
-    pop dx
-    add ax, dx
     add ax, [cs:pj_cpl]
     mov [JV_PL], ax
-    call pj_bput
-    inc word [JV_MX]
-    mov ax, [JV_MX]
-    cmp ax, [cs:pj_bpl]
-    jb .b
+    mov cx, [cs:pj_bpl]
+.b:
+    push cx
+    call pj_oblk
+    add word [JV_BI], 1
+    adc word [JV_BIH], 0
+    mov al, [JV_FR + JL_N]
+    xor ah, ah
+    add [JV_PL], ax
+    pop cx
+    loop .b
     inc byte [cs:pj_v]
     mov al, [cs:pj_v]
     cmp al, [cs:pj_cv]
@@ -4468,6 +5152,58 @@ pj_output:
     jb .my
     ret
 
+; pj_oblk - block [JV_BI] of component [JV_COMP]'s store, dequantised into
+; D (1/4: its four, natural 0, 1, 8 and 9; 1/8: the DC) and through the
+; reduced IDCT into [JV_PL]. Clobbers AX, BX, CX, DX, SI, DI, BP, ES
+pj_oblk:
+    mov bx, [JV_COMP]
+    shl bx, 1
+    mov ax, [JV_SBASE + bx]
+    mov bp, [JV_BI]
+    mov si, [JV_MLT]
+    cmp byte [JV_SCL], 3
+    je .o8
+    add ax, bp                      ; 1/4: a paragraph a block
+    mov es, ax
+    mov ax, [es:0]
+    imul word [si]
+    add ax, JP_BIAS
+    mov [JS_D], ax
+%macro OKEEP 2                      ; the store's word %1 -> D's natural %2
+    mov ax, [es:%1]
+    or ax, ax
+    jz %%z
+    imul word [si + %2]
+%%z:
+    mov [JS_D + %2], ax
+%endmacro
+    OKEEP 2, 2
+    OKEEP 4, 16
+    OKEEP 6, 18
+    push ds
+    pop es
+    jmp pj_id2
+.o8:
+    mov cx, [JV_BIH]                ; 1/8: a word a block, bi >> 3 from 32
+    mov dx, bp                      ; bits
+    shr cx, 1
+    rcr dx, 1
+    shr cx, 1
+    rcr dx, 1
+    shr cx, 1
+    rcr dx, 1
+    add ax, dx
+    mov es, ax
+    and bp, 7
+    shl bp, 1
+    mov ax, [es:bp]
+    imul word [si]
+    add ax, JP_BIAS
+    mov [JS_D], ax
+    push ds
+    pop es
+    jmp pj_id1
+
 ; =============================================================================
 ; THIS PART'S OWN MEMORY AND CONSTANTS (rule 1: through CS)
 ; =============================================================================
@@ -4477,6 +5213,15 @@ pj_zz:      db 0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5
             db 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63
 pj_keep:    db 0x00, 0x24, 0x36, 0x3F   ; a natural index i is kept: i & K = 0
 pj_kidx:    db 0, 1, 2, 0xFF, 3         ; zigzag k -> the store's word, 1/4
+pj_bitm:    db 1, 2, 4, 8, 16, 32, 64, 128
+pj_lmask:   db 0xFF, 0xFE, 0xFC, 0xF8, 0xF0, 0xE0, 0xC0, 0x80
+pj_hmask:   db 0x01, 0x03, 0x07, 0x0F, 0x1F, 0x3F, 0x7F, 0xFF
+pj_popc:                                ; a byte's bits set
+%assign i 0
+%rep 256
+            db ((i >> 0) & 1) + ((i >> 1) & 1) + ((i >> 2) & 1) + ((i >> 3) & 1) + ((i >> 4) & 1) + ((i >> 5) & 1) + ((i >> 6) & 1) + ((i >> 7) & 1)
+%assign i i + 1
+%endrep
             times 59 db 0xFF
 pj_idtab:   dw pj_id8, pj_id4, pj_id2, pj_id1
 pj_ptab:    dw pj_p0, pj_p1, pj_p2, pj_p3
@@ -4519,7 +5264,10 @@ pj_k:       db 0                    ; a progressive scan's k
 pj_r:       db 0                    ; ...its zero run
 pj_nv:      dw 0                    ; ...its new coefficient
 pj_bpl:     dw 0                    ; the output pass's blocks a row
+pj_rbi:     dd 0                    ; a non-interleaved scan's row's first
 pj_vend:    dw 0                    ; the scratch's variable part's end
 pj_gb:      db 0                    ; bits a refusal gives back
+pj_u:       dw 0                    ; pj_id8: the column, then the row
+pj_vartab:  dw JS_VAR + 12 * 256, JS_VAR + 3 * 256, JS_VAR, JS_VAR
 
 %include "pxplan.inc"                ; the plans: shared source (106.20)

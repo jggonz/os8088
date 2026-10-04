@@ -1260,6 +1260,16 @@ def wcorpus(add, W, H):
     add("HP32.PNG", gp[:33] + b"\x00\x10\x00\x00tEXt" + b"x" * 64, P.PXD_TRUNC)
     add("HP33.PNG", png(W, H, 0, 8, z=deflate(s0, "fixed")[:20], iend=False),
         P.PXD_TRUNC)                                        # the file ends
+    # a STORED block whose length runs past the image data: the copy reaches
+    # the zeros past the end - far past them (HP34), and by only three bytes,
+    # the rows complete inside the four the guest reads as zero (HP35) - the
+    # speed pass's de-chunked buffer ran past its guard on the first (SPEC.md
+    # 106.22)
+    stl = len(s0)
+    add("HP34.PNG", png(W, H, 0, 8, z=b"\x78\x01\x01" + struct.pack(
+        "<HH", 1000, 1000 ^ 0xFFFF) + s0[:10]), P.PXD_TRUNC)
+    add("HP35.PNG", png(W, H, 0, 8, z=b"\x78\x01\x01" + struct.pack(
+        "<HH", stl, stl ^ 0xFFFF) + s0[:stl - 3]), P.PXD_TRUNC)
 
 
 # =============================================================================
