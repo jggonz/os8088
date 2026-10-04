@@ -26,6 +26,8 @@
 %include "pxrec.inc"                ; the record, the formats, the decoders
 %include "pxthc.inc"                ; the folder list, the thumbnails (106.21)
 %include "pxfs.inc"                 ; full screen's modes and verbs (106.23)
+%include "pxed.inc"                 ; editing's verbs and formats (106.24)
+%include "pxsvc.inc"                ; ...and the parts' UI services
 
     OS88_HEADER 'PiXEL', px_entry, OS88_F_ICON | OS88_F_ASSOC | OS88_F_GLYPH | OS88_F_PARTS
 
@@ -63,7 +65,11 @@ PXPART_FOLD equ 5                   ; the FOLDER: the thumbnail cache and the
                                     ; making of one, LINKED: pxfold.asm
 PXPART_FULL equ 6                   ; FULL SCREEN: every mode's renderer and
                                     ; its colours, LINKED: pxfull.asm
-PX_NPARTS   equ 7                   ; (a decoder part is never 0: [px_kheld]
+PXPART_EDIT equ 7                   ; EDITING: the palette and pixel
+                                    ; operations, LINKED: pxedit.asm
+PXPART_WRITE equ 8                  ; SAVE AS's five writers, LINKED:
+                                    ; pxwrite.asm (SPEC.md 106.24)
+PX_NPARTS   equ 9                   ; (a decoder part is never 0: [px_kheld]
                                     ; 0 is "none held", SPEC.md 106.18)
 PXD_QUIET   equ 0xFE                ; a refusal already said (op_fetch's own
                                     ; toast): px_refusal says nothing more
@@ -89,7 +95,9 @@ PX_B_FSL    equ 19                  ; the filmstrip's two arrows
 PX_B_FSR    equ 20
 PX_B_SPREV  equ 21                  ; the status bar's two
 PX_B_SNEXT  equ 22
-PX_NB       equ 23                  ; (no panel has a title strip or a box
+                                    ; (23-28, PX_B_C1M..PX_B_CCAN: a
+                                    ; parameter card's, pxed.inc)
+PX_NB       equ PX_NBTN                  ; (no panel has a title strip or a box
                                     ; any more: SPEC.md 106.15)
 
 PX_TBN      equ 13                  ; toolbar items, separators included
@@ -132,6 +140,7 @@ PX_PR_PANEL  equ 2                  ; the compact layout's panel, no control
 PX_PR_HAND   equ 3                  ; a Hand drag on the picture
 PX_PR_NAV    equ 4                  ; a press or drag in the Navigator
 PX_PR_CARD   equ 5                  ; a press on a filmstrip card
+                                    ; (6, PX_PR_TOOL: a tool's, pxtools.inc)
 PX_NAMES     equ 64                 ; the folder's pictures px_walk keeps: a
                                     ; folder lists no more (DSK_NENT, SPEC.md
                                     ; 106.21)
@@ -167,6 +176,8 @@ px_entry:
     mov [px_homedir], dx            ; PIXEL.O88 is in, which every part fetch
     mov [px_homevol], bl            ; goes back to (px_pfetch)
     call px_halfinit
+    mov word [px_svgp], px_svgate   ; the parts' UI services (pxsvc.inc)
+    mov word [px_mrelp], px_mreloc  ; ...and the master's relocation proc
     call px_qinit                   ; the cube's level tables (pxmaster.inc)
     call px_slotsinit               ; every record owed (pxui.inc)
     call px_initstate
@@ -208,6 +219,10 @@ px_entry:
     call OSAPI_WM_ONCLICK           ; the rects are where the window is NOW
     mov ax, px_onwake
     call OSAPI_WM_ONWAKE
+    mov ax, px_onclose              ; unsaved edits are asked about (SPEC.md
+    call OSAPI_WM_ONCLOSE           ; 75.1, 106.24)
+    mov ax, px_trclick              ; the right button: the Zoom tool out,
+    call OSAPI_WM_ONRCLICK          ; the Rotate tool the other way
     mov ax, px_onresize
     call OSAPI_WM_ONRESIZE
     mov ax, px_ontimer
@@ -448,9 +463,16 @@ px_cards:
     call os88ui_about_d
 .i:
     cmp byte [px_infoon], 0
-    je .out
+    je .p
     mov si, px_infotab
     call os88ui_about_d
+.p:
+    cmp byte [px_pcon], 0
+    je .out
+    push cx
+    mov cl, EV_UDRAW                ; a parameter card (the EDIT part's)
+    call px_ecall
+    pop cx
 .out:
     pop si
     pop bx
@@ -471,6 +493,11 @@ px_cards:
 px_regdraw:
     push ax
     push bx
+    cmp byte [px_pcon], 0           ; a parameter card (SPEC.md 106.24):
+    je .nopc                        ; what it covers waits for it to go -
+    cmp byte [px_geo], 0            ; but for a repaint of the regions whole
+    je .out                         ; (px_regpaint), which puts it back on
+.nopc:                              ; them (px_cards)
     cmp byte [px_abon], 0
     jne .out
     cmp byte [px_helpon], 0
@@ -512,6 +539,7 @@ px_regdraw:
     jmp short .grow
 .geo:
     call px_draw
+    call px_cards                   ; (a parameter card, last)
     ; A SELF-INITIATED REPAINT OF THE CORNER ENDS WITH THE GROW BOX (SPEC.md
     ; 11.1.1). The box is 13 rows: inside a 14-row status bar, so only the bar
     ; reaches it on the full layout, but two rows above an 11-row one on the
@@ -557,10 +585,25 @@ px_clickw:
     mov [px_win], si
     call px_acted                   ; a hidden decode stopped; a slideshow too,
     jc .out                         ; and the press spent on that
+    cmp byte [px_pcon], 0           ; A PARAMETER CARD: a press on it is its
+    je .nc                          ; controls', and one anywhere else does
+    call px_layout                  ; nothing (SPEC.md 106.24)
+    jc .out
+    cmp cx, [px_pcr]
+    jl .out
+    cmp cx, [px_pcr + 4]
+    jg .out
+    cmp dx, [px_pcr + 2]
+    jl .out
+    cmp dx, [px_pcr + 6]
+    jg .out
+    jmp short .lib
+.nc:
     call px_carddown
     jc .out
     call px_layout
     jc .out
+.lib:
     call px_droppress               ; CF = 1: the drop-down had it
     jc .out
     jmp os88ui_btnclick
@@ -570,17 +613,23 @@ px_clickw:
 ; px_droppress - CX, DX = a press: the Histogram's drop-down's, if it is on
 ; show. CF = 1 it was spent there (a new channel is applied)
 px_droppress:
+    push bx
+    mov bx, px_fdrop                ; Save As's format, while its card is up
+    cmp byte [px_pcon], PC_SAVE
+    je .go
+    pop bx
     test byte [px_pvis], 2
     jz .no
     cmp word [px_pbhw + 2], 0
     je .no
-    push ax
     push bx
     mov bx, px_hdrop
+.go:
+    push ax
     call os88ui_drpress             ; AH = 1 spent, AL = a pick, CF = repaint
     call px_dropdone
-    pop bx
     pop ax
+    pop bx
     ret
 .no:
     clc
@@ -602,6 +651,8 @@ px_dropdone:
 .pick:
     cmp al, 0xFF
     je .spent
+    cmp byte [px_pcon], PC_SAVE     ; (Save As's list: the record holds the
+    je .spent                       ; pick, and the card shows it)
     mov [px_hchan], al
     call px_hstats
     call px_update                  ; the graph, the box, the numbers
@@ -613,8 +664,25 @@ px_dropdone:
     clc
     ret
 
+; px_dropon - CF = 1 and BX = its record when a drop-down's list is open:
+; the Histogram's channel, or Save As's format. Preserves all but BX
+px_dropon:
+    mov bx, px_hdrop
+    cmp byte [bx + OS88UI_DR_OPEN], 0
+    jne .y
+    mov bx, px_fdrop
+    cmp byte [bx + OS88UI_DR_OPEN], 0
+    jne .y
+    clc
+    ret
+.y:
+    stc
+    ret
+
 ; px_carddown - if a card is up, take it down and repaint. CF = 1 it was
 px_carddown:
+    cmp byte [px_pcon], 0           ; (a parameter card too, unanswered)
+    jne .down
     cmp byte [px_abon], 0
     jne .down
     cmp byte [px_helpon], 0
@@ -627,7 +695,9 @@ px_carddown:
     mov byte [px_abon], 0
     mov byte [px_helpon], 0
     mov byte [px_infoon], 0
+    mov byte [px_pcon], 0
     push ax
+    call px_flags
     mov al, PX_R_ALL
     call px_regpaint
     pop ax
@@ -654,7 +724,16 @@ px_onclick:
     call px_haspic
     jc .got
     cmp byte [px_tool], 0           ; the Hand
+    je .hand
+    cmp byte [px_cur + PXR_HAVE], 0 ; THE OTHER TOOLS (pxtools.inc), on a
+    je .out                         ; picture that is there and idle
+    cmp byte [px_busy], 0
     jne .out
+    call OSAPI_GET_TICKS
+    mov [px_htick], ax
+    call px_tpress                  ; AL = PX_PR_TOOL, or none
+    jmp .got
+.hand:
     mov [px_hx0], cx                ; where the drag starts, and where the
     mov [px_hy0], dx                ; picture was
     mov ax, [px_ox]
@@ -716,9 +795,8 @@ px_ondrag:
     push bx
     call px_layout
     jc .out
-    mov bx, px_hdrop
-    cmp byte [px_hdrop + OS88UI_DR_OPEN], 0
-    je .btn
+    call px_dropon                  ; BX = an open list's record
+    jnc .btn
     call os88ui_drdrag
     jmp short .out
 .btn:
@@ -731,6 +809,8 @@ px_ondrag:
 .pan:
     mov al, [px_press]
     cmp al, PX_PR_HAND
+    je .tick
+    cmp al, PX_PR_TOOL
     je .tick
     cmp al, PX_PR_NAV
     jne .out
@@ -745,8 +825,12 @@ px_ondrag:
     pop ax
     ret
 
-; px_dragmove - CX, DX = the pointer during a Hand or Navigator drag
+; px_dragmove - CX, DX = the pointer during a Hand, Navigator or tool drag
 px_dragmove:
+    cmp byte [px_press], PX_PR_TOOL
+    jne .nav
+    jmp px_tdragto
+.nav:
     cmp byte [px_press], PX_PR_NAV
     jne .hand
     jmp px_navpan
@@ -777,9 +861,8 @@ px_onup:
     jnc .lay
     jmp .out
 .lay:
-    cmp byte [px_hdrop + OS88UI_DR_OPEN], 0
-    je .btn
-    mov bx, px_hdrop
+    call px_dropon
+    jnc .btn
     call os88ui_drup
     call px_dropdone
     jmp .out
@@ -797,6 +880,11 @@ px_onup:
 .region:
     mov al, [px_press]
     mov byte [px_press], PX_PR_NONE
+    cmp al, PX_PR_TOOL
+    jne .rh
+    call px_trelease
+    jmp .out
+.rh:
     cmp al, PX_PR_HAND
     je .drag
     cmp al, PX_PR_NAV
@@ -870,6 +958,22 @@ px_bfire:
 .out1:
     jmp .out
 .live:
+    cmp ax, PX_B_C1M                ; a parameter card's (pxcard.inc)
+    jb .nc
+    call px_pcfire
+    jmp .out
+.nc:
+    cmp ax, PX_B_SAVE               ; Save As (pxsave.inc)
+    jne .rt
+    call px_saveas
+    jmp .out
+.rt:
+    cmp ax, PX_B_ROT                ; a quarter turn (pxedit.inc)
+    jne .nv
+    mov al, EV_ROTCW
+    call px_edo
+    jmp .out
+.nv:
     call px_navbtn                  ; Prev, Next, the pagers, the slideshow
     jnc .out1                       ; (pxfolder.inc)
     cmp ax, PX_B_OPEN
@@ -941,9 +1045,8 @@ px_onkey:
     jnc .act                        ; stopped too, and the key spent on that
     jmp .out
 .act:
-    cmp byte [px_hdrop + OS88UI_DR_OPEN], 0
-    je .nodrop
-    mov bx, px_hdrop                ; an open list: any key takes it down
+    call px_dropon                  ; an open list: any key takes it down
+    jnc .nodrop
     call os88ui_drclose
     jnc .k0
     push ax
@@ -953,13 +1056,24 @@ px_onkey:
 .k0:
     jmp .out
 .nodrop:
+    call px_pckey                   ; a parameter card's keys (pxcard.inc)
+    jc .k0
     call px_carddown                ; any key takes a card down, and does
     jc .k0                          ; nothing else
-    cmp ah, KSC_ESC                 ; Esc: stop a picture that is opening
-    jne .k1
+    cmp ah, KSC_ESC                 ; Esc: stop a picture that is opening,
+    jne .k1                         ; an operation or a save; else drop the
+    cmp byte [px_busy], 0           ; selection
+    je .desel
     call px_cancel
     jmp .out
+.desel:
+    call px_seloff
+    call px_menulive
+    jmp .out
 .k1:
+    call px_edkey                   ; editing's keys (Ctrl+S, Z, C, A; the
+    jnc .k0                         ; Crop tool's Enter; the selection's
+                                    ; arrows)
     cmp al, 0x0F                    ; Ctrl+O
     jne .k1r
     call px_cmd_open
@@ -1118,6 +1232,11 @@ px_cmd:
     call px_cmd_open
     jmp .out
 .f1:
+    cmp al, PX_MF_SAVEAS
+    jne .f1r
+    call px_saveas
+    jmp .out
+.f1r:
     cmp al, PX_MF_REVERT
     jne .fp
     call px_revert
@@ -1146,6 +1265,8 @@ px_cmd:
 .out1:
     jmp .out
 .view:
+    call px_edcmd                   ; Edit, Image, Effects (pxedit.inc)
+    jnc .out1
     cmp ah, PX_M_VIEW
     jne .out1
     cmp al, PX_MV_ZIN
@@ -1259,6 +1380,7 @@ px_ontimer:
     dec al                          ; nothing is laid out or drawn until it is
     cmp al, 2                       ; done (modes 1 and 2; a finished slide, 3,
     jb .rearm                       ; waits for px_sltick)
+    call px_eyetick                 ; the Eyedropper's readout (106.24)
     call px_thstep                  ; (first: a slide's own thumbnail before
     call px_sltick                  ; the next slide's decode begins)
     cmp byte [px_hmode], 0          ; (one may have started just now)
@@ -1269,6 +1391,9 @@ px_ontimer:
     call px_regdraw
 .rearm:
     mov bx, [px_win]
+    mov ax, 2                       ; the Eyedropper follows the pointer
+    cmp byte [px_tool], PX_TOOL_EYE
+    je .arm
     mov ax, PX_MEMT
     cmp byte [px_tq], 0
     jne .fast
@@ -1328,6 +1453,10 @@ px_onwake:
 .vis:
     cmp byte [px_busy], 0
     je .out
+    cmp byte [px_busy], PXB_SAVE    ; a save: its full slots written, no lock
+    jne .v1                         ; (pxsave.inc)
+    call px_wpump
+.v1:
     cmp byte [px_busy], 1
     jne .job
     call px_pumpfill                ; the disk, with no lock held
@@ -1335,6 +1464,15 @@ px_onwake:
     call OSAPI_GFX_LOCK
     cmp byte [px_job], JOB_NONE
     jne .prog
+    cmp byte [px_busy], PXB_EDIT    ; an operation's, a save's end
+    jb .dec
+    jne .sv
+    call px_efin
+    jmp short .unl
+.sv:
+    call px_sfin
+    jmp short .unl
+.dec:
     mov al, [px_busy]
     push ax
     call px_slpre                   ; a slide's commit: the window composed
@@ -1343,6 +1481,13 @@ px_onwake:
     call px_finished                ; the open picture's thumbnail (106.21)
     jmp short .unl
 .prog:
+    cmp byte [px_busy], PXB_EDIT    ; an operation or a save: its progress
+    jb .p1
+    call px_eprog
+    mov al, PX_R_SDIRTY
+    call px_regdraw
+    jmp short .unl
+.p1:
     cmp byte [px_busy], 1
     jne .unl
     call px_progpaint               ; the new rows, the progress
@@ -1438,10 +1583,14 @@ px_cmd_open:
     push si
     push di
     cmp byte [px_busy], 0
-    je .go
+    je .g0
     mov si, px_s_busy
     call px_toast
     jmp short .out
+.g0:
+    mov al, PXL_OPEN                ; unsaved edits: asked first (106.24)
+    call px_gate
+    jc .out
 .go:
     mov al, 0
     mov bx, [px_win]
@@ -1567,8 +1716,14 @@ px_settool:
     cmp al, [px_tool]
     je .out
     mov [px_tool], al
+    call px_eyeoff                  ; (a readout goes with its tool)
     call px_flags
     call px_update                  ; the two buttons whose flags moved
+    push bx
+    mov bx, [px_win]                ; the timer's pace follows the tool
+    mov ax, 2
+    call OSAPI_WM_TIMER
+    pop bx
 .out:
     pop si
     pop ax
@@ -2879,6 +3034,7 @@ px_menulive:
     inc cx
 .fs:
     call px_fsmenu                  ; Full Screen and Screen (106.23)
+    call px_emenu                   ; Edit, Image, Effects, Save As (106.24)
 .done:
     jcxz .out
     call px_menuset
@@ -2993,7 +3149,10 @@ px_memfield:
     mov bx, PX_SF_MEM
     mov si, px_cline
     call px_sval
-    pop di
+    call px_menulive                ; (what the heap allows, greyed for it:
+    pop di                          ; SPEC.md 106.24 - and View > Screen
+                                    ; for the display the window is on now,
+                                    ; the wave-6 review's F5)
     pop si
     pop dx
     pop bx
@@ -3191,6 +3350,34 @@ px_u32:
     pop ax
     ret
 
+; px_svgate - THE UI SERVICES' GATE (pxsvc.inc): far-called by a part on
+; the UI task with [px_svi] the service - its routine called with every
+; register as the part left it, DS ours, and its flags and registers the
+; part's answer
+px_svgate:
+    push es
+    push ds                         ; (ES ours, as the routines found it when
+    pop es                          ; the package called them: px_walk's
+    push bx                         ; OSAPI_FILE_FIND fills ES:DI)
+    mov bl, [px_svi]
+    xor bh, bh
+    shl bx, 1
+    mov bx, [px_svtab + bx]
+    mov [px_svfn], bx
+    pop bx
+    call [px_svfn]
+    pop es
+    retf
+px_svtab:   dw px_tband, px_btn, px_getrect, px_setrect, px_strcpy
+            dw px_strcat, px_u32, px_u32n, px_flags, px_regpaint, px_layout
+            dw px_eshow, os88ui_drop, px_toast, px_fillc, px_regdraw
+            dw px_ringclaim, px_spawn, px_eprog, px_update, px_walk
+            dw px_compose, px_lvdo, px_strcmp, px_ask, px_kkeep, px_kneed
+            dw px_wfree, px_setpal, px_viewnew, px_seloff, px_ufree
+%if ($ - px_svtab) != 2 * SV_N
+  %error "px_svtab has a routine per SV_*"
+%endif
+
 %include "pxui.inc"
 %include "pxmaster.inc"             ; the image model (SPEC.md 106.8)
 %include "pxpump.inc"               ; the worker and its file pump (106.9)
@@ -3198,11 +3385,20 @@ px_u32:
 %include "pxview.inc"               ; the renderer, Navigator, Histogram (106.11)
 %include "pxfolder.inc"             ; the folder, thumbnails, slideshow (106.21)
 %include "pxfull.inc"               ; full screen, the resident half (106.23)
+%include "pxedit.inc"               ; editing: operations and undo (106.24)
+%include "pxtools.inc"              ; ...the tools and the selection
+%include "pxcard.inc"               ; ...the parameter cards
+%include "pxsave.inc"               ; ...Save As, unsaved edits, Copy
 %include "os88rseq.inc"             ; READ_SEQ behind READ_AT's registers
 
 ; px_zfield - the status bar's zoom: "100%", or "Fit 47%" (SPEC.md 106.12).
-; Marked for a redraw only when it changed. Preserves all
+; Marked for a redraw only when it changed. Preserves all. The Eyedropper's
+; readout has the field while it reads (px_eyeon, SPEC.md 106.24)
 px_zfield:
+    cmp byte [px_eyeon], 0
+    je .go
+    ret
+.go:
     push ax
     push bx
     push cx
@@ -3337,6 +3533,8 @@ px_lab_full:
     dw px_s_plus, px_s_minus, px_s_fit
     dw px_s_lt, px_s_gt
     dw px_s_lt, px_s_gt
+    dw px_s_minus, px_s_plus, px_s_minus, px_s_plus
+    dw px_s_pcok, px_s_pccan
 %if ($ - px_lab_full) != PX_NB * 2
   %error "px_lab_full has a label per button"
 %endif
@@ -3399,19 +3597,22 @@ PX_BK_PAGE  equ 0x1000              ; a filmstrip pager: grey at its end, and
                                     ; a press on it then says nothing
 px_bkind:
     dw OS88UI_IMG                               ; Open (Stop while opening)
-    dw OS88UI_IMG | PX_BK_LATER                 ; Save
+    dw OS88UI_IMG | PX_BK_PIC                   ; Save (As)
     dw OS88UI_IMG | PX_BK_FOLD                  ; Prev
     dw OS88UI_IMG | PX_BK_FOLD                  ; Next
     dw OS88UI_IMG | PX_BK_PIC                   ; Zoom In
     dw OS88UI_IMG | PX_BK_PIC                   ; Zoom Out
     dw OS88UI_IMG | PX_BK_PIC                   ; Fit
     dw PX_BK_PIC                                ; 1:1
-    dw OS88UI_IMG | PX_BK_LATER                 ; Rotate
+    dw OS88UI_IMG | PX_BK_PIC                   ; Rotate
     dw OS88UI_IMG | PX_BK_FOLD                  ; Slideshow
     times PX_NTOOL dw OS88UI_IMG                ; the tools
     dw PX_BK_PIC, PX_BK_PIC, PX_BK_PIC          ; Navigator's +, -, Fit
     dw PX_BK_PAGE, PX_BK_PAGE                   ; the filmstrip's arrows
     dw PX_BK_FOLD, PX_BK_FOLD                   ; the status bar's
+    dw 0, 0, 0, 0                               ; a card's - and +
+    dw PX_BK_PAGE, 0                            ; ...its OK (grey: the card
+                                                ; says why) and Cancel
 %if ($ - px_bkind) != PX_NB * 2
   %error "px_bkind has a kind per button"
 %endif
@@ -3428,7 +3629,7 @@ px_s_hsd:   db 'Std Dev ', 0
 px_s_hmin:  db 'Min     ', 0
 px_s_hmax:  db 'Max     ', 0
 px_ilabels: dw px_s_ifile, px_s_ifold, px_s_isize, px_s_ifmt, px_s_ipix
-            dw px_s_idep, px_s_ipack, px_s_ipal
+            dw px_s_idep, px_s_ipack, px_s_ipal, px_s_ipick
 px_s_ifile: db 'File', 0
 px_s_ifold: db 'Folder', 0
 px_s_isize: db 'Size', 0
@@ -3437,6 +3638,7 @@ px_s_ipix:  db 'Pixels', 0
 px_s_idep:  db 'Depth', 0
 px_s_ipack: db 'Packing', 0
 px_s_ipal:  db 'Palette', 0
+px_s_ipick: db 'Picked', 0
 
 ; the Histogram's channel (OS88UI_DROP, SPEC.md 13.14): the record and its
 ; items. The rect is the painter's to fill in
@@ -3505,11 +3707,20 @@ px_exts:
 ; a greyed row of dashes (kernel/menu.inc's own idiom) ------------------------------
 PX_M_FILE   equ 0
 PX_MF_OPEN  equ 0
+PX_MF_SAVEAS equ 1
 PX_MF_REVERT equ 2
 PX_MF_PREV  equ 4
 PX_MF_NEXT  equ 5
 PX_MF_SLIDE equ 6
 PX_MF_INFO  equ 8
+PX_M_EDIT   equ 1
+PX_ME_UNDO  equ 0
+PX_ME_COPY  equ 2
+PX_ME_SELALL equ 4
+PX_ME_DESEL equ 5
+PX_ME_CROP  equ 6
+PX_M_IMAGE  equ 2
+PX_M_FX     equ 3
 PX_M_VIEW   equ 4
 PX_MV_ZIN   equ 0
 PX_MV_ZOUT  equ 1
@@ -3725,7 +3936,9 @@ px_s_r11:   db 'too big to unpack', 0
 %define OS88UI_BOWN                 ; ...and the colour face's own (13.8.10)
 %define OS88UI_ABOUT                ; the About card, and the keyboard card
 %define OS88UI_NOGLYPH              ; no check box, no radio
-%define OS88UI_DROP                 ; the Histogram's channel
+%define OS88UI_DROP                 ; the Histogram's channel, Save As's
+                                    ; format
+%define OS88UI_ALERT                ; "Save changes?", "Replace?" (106.24)
 %include "os88ui.inc"
 
 %define GFXE_BAND_W   PX_HBW        ; the Histogram's graph: one band
@@ -3743,6 +3956,8 @@ px_s_r11:   db 'too big to unpack', 0
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 4 the simple five (106.20)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 5 the folder (106.21)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 6 full screen (106.23)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 7 editing (106.24)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 8 Save As's writers (106.24)
     OS88_PARTS_END
 
 ; =============================================================================
@@ -4265,6 +4480,69 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_fsnav, 1               ; a next picture decodes: commit when done
     PXVAR px_fsdue, 1               ; ...the slide's deadline is set
     PXVAR px_fsn, 2                 ; brackets entered (a test's)
+    ; editing (pxedit.inc, SPEC.md 106.24): the EDIT part's arguments and
+    ; answers, read and written by name (apps/pixel/pxedit.asm)
+    PXVAR px_ep, 8                  ; an operation's parameters
+    PXVAR px_edseg, 2               ; ...its destination, 0 = in place
+    PXVAR px_edw, 2                 ; ...and its size
+    PXVAR px_edh, 2
+    PXVAR px_ewseg, 2               ; ...its work claim
+    PXVAR px_egrey, 1               ; ...it wrote GREY, not the cube
+    PXVAR px_erow, 2                ; ...rows done
+    PXVAR px_etick, 2               ; ...the last wake's tick
+    PXVAR px_erows, 2               ; ...the rows it will count
+    PXVAR px_eop, 1                 ; the operation running
+    PXVAR px_eredo, 1               ; ...it is undo's flip again
+    PXVAR px_ewkb, 2                ; ...its work claim's KB
+    PXVAR px_edkb2, 2               ; ...its destination's
+    PXVAR px_dirty, 1               ; the picture has unsaved edits
+    PXVAR px_udirty, 1              ; UNDO: the other half's dirt...
+    PXVAR px_ukind, 1               ; ...what it holds (UK_*)
+    PXVAR px_uop, 1                 ; ...of which operation
+    PXVAR px_uredo, 1               ; ...undone already: Redo
+    PXVAR px_ulkey, 1               ; ...the label as registered
+    PXVAR px_urec, PXR_SZ           ; ...the record's other half
+    PXVAR px_uxms, 4                ; ...an XMS copy's base
+    PXVAR px_uxlen, 4               ; ...and its bytes
+    PXVAR px_mundo, 26              ; Edit > Undo's label
+    PXVAR px_sel, 1                 ; THE SELECTION (pxtools.inc)
+    PXVAR px_selr, 8                ; ...master pixels, inclusive
+    PXVAR px_mqon, 1                ; ...its outline on the glass
+    PXVAR px_mqr, 8                 ; ...there
+    PXVAR px_mqhold, 1              ; ...held off by a pan or a zoom
+    PXVAR px_tdrag, 1               ; a tool's drag: 1 a band, 2 a selection
+    PXVAR px_tmoved, 1
+    PXVAR px_tx0, 2                 ; ...its press, on the glass
+    PXVAR px_ty0, 2
+    PXVAR px_tmx, 2                 ; ...and in the master
+    PXVAR px_tmy, 2
+    PXVAR px_dclk, 2                ; the last click's tick
+    PXVAR px_eyex, 2                ; the Eyedropper's pixel
+    PXVAR px_eyey, 2
+    PXVAR px_eyeon, 1               ; ...on the status bar
+    PXVAR px_pcon, 1                ; A PARAMETER CARD up (pxcard.inc)
+    PXVAR px_pcv, 4                 ; ...its rows' values
+    PXVAR px_pcr, 8                 ; ...its rect
+    PXVAR px_pcbtn, 1               ; ...the button that fired
+    PXVAR px_wfmt, 1                ; SAVE AS: the format (pxsave.inc)
+    PXVAR px_wclip, 1               ; ...it is a copy's
+    PXVAR px_wfirst, 1              ; ...the first slot creates the file
+    PXVAR px_wtok, 2                ; ...WRITE_SEQ's token
+    PXVAR px_wtot, 4                ; ...the bytes written
+    PXVAR px_wsel, 8                ; ...a copy's rect (bit 15: one)
+    PXVAR px_cblen, 2               ; ...a copy's bytes
+    PXVAR px_sname, 14              ; ...the file's name
+    PXVAR px_sdir, 2                ; ...and its folder
+    PXVAR px_svol, 1
+    PXVAR px_lvpend, 1              ; "Save changes?": the action banked
+    PXVAR px_lvarg, 2               ; ...and its name
+    PXVAR px_aq, 36                 ; an alert's question (px_ask)
+    PXVAR px_fdrop, PE_DRSZ         ; Save As's format: its drop-down
+    PXVAR px_svgp, 2                ; THE UI SERVICES' GATE (pxsvc.inc)...
+    PXVAR px_svi, 1                 ; ...the service asked for
+    PXVAR px_svfn, 2                ; ...its routine
+    PXVAR px_earg, 2                ; a UI verb's argument (px_ecall)
+    PXVAR px_mrelp, 2               ; px_mreloc, for a part (MEM_MOVABLE)
 PX_BSSEND   equ px_w2 + PXV
 PX_BSS      equ PX_BSSEND - PXB
 

@@ -16,8 +16,10 @@ The gestures are the ones a user makes with a picture open (CITY.PCX, a
 320x240 PCX): a tool by its letter and back, a zoom step in and out, a pan,
 Fit, the Histogram's channel through its drop-down, Hide Panels and Show
 Panels, Hide Filmstrip and Show Filmstrip, the keyboard card up and down, and
-an open (File > Revert, the decode included). Keys and menu picks, so a
-press's own button flash is not in the count.
+an open (File > Revert, the decode included); and EDITING's (106.24): the
+Marquee by its letter, a drag, a nudge, Esc, Invert and its Undo, a card up
+and down, the Eyedropper's readout following the pointer, Select All. Keys
+and menu picks, so a press's own button flash is not in the count.
 
 TWO ASSERTIONS, on Hercules (the default, the mono face) AND on the VGA (the
 colour face, --machine os8088_xt_vga):
@@ -30,7 +32,8 @@ colour face, --machine os8088_xt_vga):
             repaint is forced (the keyboard card up and down) and captured
             again, and the two must be IDENTICAL to the pixel: the caches
             are only sound if drawing through them arrives at the picture a
-            paint from nothing does
+            paint from nothing does. The run ends with Select All, so the
+            marquee's XOR outline is in both pictures (SPEC.md 106.24)
 """
 import argparse
 import functools
@@ -49,7 +52,8 @@ import os88build               # noqa: E402
 from pxsyms import pkg_syms, instance, u16      # noqa: E402
 
 CELLS = {"pixel": 0x20, "hline": 0x28, "vline": 0x30, "fill": 0x38,
-         "frame": 0x40, "gray": 0x48, "xor": 0x50, "blit4": 0x182,
+         "frame": 0x40, "gray": 0x48, "xor": 0x50, "xorfill": 0x58,
+         "blit4": 0x182,
          "scroll": 0x19C, "text": 0x1E5, "blit1": 0x320, "icon": 0x39D,
          "blitp": 0x3A4, "save": 0x3DC, "rest": 0x3E4}
 KSEG = 0x60
@@ -73,7 +77,16 @@ CEIL = {"tool: Zoom (z)": 16, "tool: Hand (h)": 16, "zoom in (=)": 40,
         # strip's two cards whose highlight moved and nothing else of it;
         # a page is the strip's cards that changed and its two pagers
         "Next (Space)": 230, "Prev (Backspace)": 230,
-        "strip page (>)": 130, "strip page (<)": 130}
+        "strip page (>)": 130, "strip page (<)": 130,
+        # EDITING (SPEC.md 106.24): a tool is two buttons; the marquee is
+        # four XOR fills a step of the drag off and four on; a nudge, Esc
+        # and Select All are the outline and nothing else; a palette
+        # operation and its Undo are the canvas's composer bands and the
+        # Navigator's well, never the chrome; a card is itself
+        "tool: Marquee (m)": 16, "marquee drag": 140,
+        "nudge (arrow)": 12, "deselect (Esc)": 10, "Select All": 10,
+        "Invert (palette)": 200, "Undo Invert": 200,
+        "card up (Gamma)": 60, "eyedropper (tick)": 12}
 # the folder beside CITY.PCX (tools/pixcorpus.py's): seven pictures, more
 # than a strip shows, so it pages
 FOLDER = ("B24.BMP", "C8.PCX", "G8.GIF", "N6.PPM", "P0_8.PNG", "T2_24.TGA")
@@ -267,6 +280,55 @@ def main():
         measure("strip page (<)", lambda: pager(19),
                 lambda: W("px_fcs") != fcs)
 
+        # EDITING (SPEC.md 106.24)
+        measure("tool: Marquee (m)", lambda: key("KeyM"))
+
+        def org():
+            """The picture's top-left on the glass (the view's ix, iy)."""
+            b = bytes(m.read(base + syms["px_vcan"], 4))
+            return tuple(v - 65536 if v >= 32768 else v
+                         for v in (u16(b, 0), u16(b, 2)))
+
+        def drag():
+            ix, iy = org()
+            x0, y0 = ix + 30, iy + 20
+            ui.mo.to(x0, y0)
+            ui.mo._edge(True)
+            ui.mo.to(x0 + 60, y0 + 40, l=True)
+            M.guest_sleep(m, 0.3)
+            ui.mo._edge(False)
+        measure("marquee drag", drag, lambda: B("px_sel") == 1)
+        measure("nudge (arrow)", lambda: key("ArrowRight"))
+        measure("deselect (Esc)", lambda: key("Escape"),
+                lambda: B("px_sel") == 0)
+        ui.mo.to(2, 2)
+        measure("Invert (palette)",         # (the plans: the worker's,
+                lambda: ui.menu_pick("Image", "Invert"),    # then drawn)
+                lambda: B("px_dirty") == 1 and idle())
+        measure("Undo Invert",
+                lambda: ui.menu_pick("Edit", "Undo Invert"),
+                lambda: B("px_dirty") == 0 and idle())
+        measure("card up (Gamma)",
+                lambda: ui.menu_pick("Effects", "Gamma..."),
+                lambda: B("px_pcon") != 0)
+        measure("card down (Esc, a repaint)", lambda: key("Escape"),
+                lambda: B("px_pcon") == 0)
+        key("KeyE")
+        M.ui_done(m, "Eyedropper")
+        ix, iy = org()
+        ui.mo.to(ix + 40, iy + 30)
+        M.guest_sleep(m, 0.5)
+        measure("eyedropper (tick)", lambda: ui.mo.to(ix + 48, iy + 34),
+                lambda: B("px_eyeon") == 1)
+        key("KeyH")
+        M.ui_done(m, "Hand")
+        ui.mo.to(2, 2)
+        # (the MENU, not Ctrl+A: a modifier's release sent while the trace
+        # holds the guest at a stop can be lost, and a Ctrl left down turns
+        # the identity's F1 into Ctrl+F1, scan 5Eh, which nothing answers)
+        measure("Select All", lambda: ui.menu_pick("Edit", "Select All"),
+                lambda: B("px_sel") == 1)
+
         for r in rows:
             c = CEIL.get(r["gesture"])
             if not a.record and c is not None and r["calls"] > c:
@@ -296,9 +358,22 @@ def main():
             for y in range(y0, y0 + ch):
                 out += px[(y * w + x0) * 3:(y * w + x0 + cw) * 3]
             return cw, ch, bytes(out)
+        def mq():
+            return "sel %d on %d hold %d mqr %r" % (
+                B("px_sel"), B("px_mqon"), B("px_mqhold"),
+                [W("px_mqr") if k == 0 else u16(m.read(
+                    base + syms["px_mqr"] + 2 * k, 2)) for k in range(4)])
         ca = content()
+        mqa = mq()
         key("F1")
-        M.ui_done(m, "the card")
+        try:
+            M.until(m, lambda _: B("px_helpon") == 1, "the key card up",
+                    poll=0.3, limit=60)     # (an Esc before it would
+        except Exception:
+            print("the key card did not come up: the toast %r" % (
+                ui.toast(),))
+            raise
+        M.ui_done(m, "the card")            # drop the selection instead)
         M.guest_sleep(m, 1.0)
         key("Escape")
         M.ui_done(m, "the repaint")
@@ -316,6 +391,7 @@ def main():
             print("FAIL identity: %d pixels differ between the incremental "
                   "picture and a repaint, in (%d,%d)-(%d,%d) of the content"
                   % (len(bad), min(xs), min(ys), max(xs), max(ys)))
+            print("     the marquee: %s, then %s" % (mqa, mq()))
             ok = False
         else:
             print("PASS identity: %dx%d content, the incremental picture IS "

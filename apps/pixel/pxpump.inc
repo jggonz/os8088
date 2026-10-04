@@ -963,6 +963,21 @@ px_wjob:
                                     ; took the UI task's branch
 px_wjob1:
     mov byte [px_wstage], 0
+    mov cl, [px_eop]                ; EDITING'S TWO (SPEC.md 106.24): an
+    mov al, PXPART_EDIT             ; operation, or a save, the part the UI
+    cmp byte [px_job], JOB_EDIT     ; task fetched for it (px_wcall: no
+    je .part                        ; fetch here)
+    mov cl, [px_wfmt]
+    mov al, PXPART_WRITE
+    cmp byte [px_job], JOB_SAVE
+    jne .nopart
+.part:
+    mov bl, PXV_DECODE
+    call px_wcall
+    jc .fail
+    xor al, al
+    ret
+.nopart:
     cmp byte [px_job], JOB_DECODE   ; a decoder PART knows its palette only
     jne .tab                        ; in the stream: it asks for the tables
     cmp byte [px_dfmt], DF_PART     ; itself (K_PAL, SPEC.md 106.18)
@@ -1046,8 +1061,9 @@ px_open:
     call px_toast
     jmp .out
 .free:
-    mov si, px_cur                  ; bank what is showing (SPEC.md 106.8)
-    mov di, px_prev
+    call px_eclear                  ; undo, the selection and the EDIT part
+    mov si, px_cur                  ; let go (SPEC.md 106.24); bank what is
+    mov di, px_prev                 ; showing (SPEC.md 106.8)
     mov cx, PXR_SZ
     cld
     rep movsb
@@ -1282,6 +1298,7 @@ px_finish:
     jnz .bad
     call px_freeprev                ; THE PICTURE: the old one is let go
     mov byte [px_cur + PXR_HAVE], 1
+    mov byte [px_dirty], 0          ; (the file's, as it is on the disk)
     mov byte [px_tabdirty], 0
     call px_hstats                  ; the Histogram's numbers from its counts,
     mov byte [px_hok], 1            ; and only then counted (speed review F2:
@@ -1317,6 +1334,7 @@ px_finish:
 .tables:
     call px_hstats                  ; a restore's counts folded too - it never
     mov byte [px_hok], 1            ; was, and the graph drew byte planes
+    call px_flags                   ; (what [px_busy] greyed, live again)
     mov al, PX_R_CANVAS | PX_R_PANELS
     call px_regdraw
 .out:
@@ -1328,8 +1346,10 @@ px_finish:
 ; px_cancel - Esc, or Stop: the worker stops at its next row or refill and
 ; px_finish puts the previous picture back. Preserves all
 px_cancel:
-    cmp byte [px_busy], 1
-    jne .out
+    cmp byte [px_busy], 2           ; a decode, an operation, a save - not
+    je .out                         ; a table's rebuild (nothing to undo)
+    cmp byte [px_busy], 0
+    je .out
     mov byte [px_abort], 1
 .out:
     ret

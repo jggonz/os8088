@@ -1285,6 +1285,7 @@ px_rcanvas:
     push dx
     push si
     push di
+    call px_mqhide                  ; the selection's outline (pxtools.inc)
     mov [px_qx1], ax
     mov [px_qy1], bx
     mov [px_qx2], cx
@@ -1366,6 +1367,7 @@ px_rcanvas:
     mov dx, [px_qy2]
     call px_ground
 .out:
+    call px_mqshow                  ; ...back where the view puts it
     pop di
     pop si
     pop dx
@@ -1626,6 +1628,8 @@ px_zfiner:
     push ax
     push cx
     push dx
+    cmp byte [px_dirty], 0          ; an edited picture is the master, not
+    jne .out                        ; the file: nothing to read finer
     mov cl, [px_cur + PXR_SCL]
     or cl, cl
     jz .out
@@ -1761,6 +1765,8 @@ px_panto:
     jnc .vis
     jmp .out
 .vis:
+    call px_mqhide                  ; the selection's outline, off for the
+    inc byte [px_mqhold]            ; move and back after it
     call px_navframe_off            ; the Navigator's frame, off for the move
     cmp byte [px_busy], 1
     je .full
@@ -1816,6 +1822,8 @@ px_panto:
     call px_rcanvas
     call px_rowsall
 .done:
+    dec byte [px_mqhold]
+    call px_mqshow
     call px_navframe_on
     call OSAPI_WM_CLIP_CLEAR
 .out:

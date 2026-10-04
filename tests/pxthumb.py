@@ -205,6 +205,14 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
         mine = sorted(c.para for c in hm.claims
                       if c.own == seg and c.seg != seg
                       and not any(c.seg <= p < c.seg + c.para for p in here))
+        # the largest free run with the decoder parts taken as free, as the
+        # claims are taken without them: a part is fetched into whatever
+        # hole the picture it came after left, so where it lands is that
+        # picture's size and not a leak (SPEC.md 106.24: a 1,216-paragraph
+        # JPEG part landed 224 paragraphs higher after the browse, behind
+        # the other neighbour's master, with every claim as it was)
+        hm.claims = [c for c in hm.claims
+                     if not any(c.seg <= p < c.seg + c.para for p in here)]
         return mine, max(p for _, p in hm.runs())
 
     def record():

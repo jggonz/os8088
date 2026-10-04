@@ -74,14 +74,15 @@ ph_info:
 ph_text:
     db 'PiXEL - keyboard', 0
     db 0
-    db 'Ctrl+O       Open a picture       ', 0
-    db 'Space  Bksp  Next, previous       ', 0
-    db 'Home  End    First, last          ', 0
-    db 'H  Z  M      Hand, Zoom, Select   ', 0
-    db 'C  E  R      Crop, Dropper, Rotate', 0
-    db 'Tab          Next panel (1 column)', 0
-    db 'F1  or  ?    This card            ', 0
+    db 'Ctrl+O  Ctrl+S   Open, Save As    ', 0
+    db 'Ctrl+Z  C  A     Undo, Copy, All  ', 0
+    db 'Space Bksp Home End   Pictures    ', 0
+    db 'H  Z  M  C  E  R The six tools    ', 0
+    db 'Arrows           Pan, nudge a sel.', 0
+    db 'Enter            Crop to selection', 0
+    db 'F  Esc  Tab      Full, Stop, Panel', 0
+    db 'F1  or  ?        This card        ', 0
     db 0
     db 'A key or a click closes it.', 0
 ph_end:
-PH_LINES equ 11
+PH_LINES equ 12

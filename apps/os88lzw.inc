@@ -58,6 +58,8 @@
 %ifndef OS88LZW_INC
 %define OS88LZW_INC
 
+%ifndef LZW_NODECODE                ; (an includer that only WRITES: the
+                                    ; encoder below, and no decoder)
 %ifndef LZW_EBAD
   %define LZW_EBAD 0xFFFF
 %endif
@@ -339,5 +341,247 @@ lzw_refill:
     pop cx
     pop bx
     ret
+
+%endif                              ; LZW_NODECODE
+
+; =============================================================================
+; LZW ENCODE (SPEC.md 106.24) - GIF's flavour, behind %define LZW_ENCODE, so
+; a package that only reads pays nothing for it. PiXEL's WRITE part is its
+; first includer (apps/pixel/pxwrite.asm); Paint's own encoder (SPEC.md
+; 42.21) is the lineage and stays Paint's until wave 9.
+;
+; It is giflib's encoder rule for rule - tools/pixelsim.py's lzw_encode is
+; the same in Python, and GREEDY LZW'S OUTPUT IS ITS TABLE POLICY'S ALONE, so
+; the two write the same bytes whatever finds a string: a Clear first; the
+; code width raised once a code has been written at it while the next free
+; code has reached its top; a Clear when the next free code reaches 4,095.
+; A string is found by open addressing (compress's 5,003-entry table and its
+; secondary probe), the key (prefix, character) and the code it names.
+;
+; CONFIGURATION, before the %include (with LZW_ENCODE defined):
+;   LZW_PUTB    a near routine: AL = one CODE BYTE of the stream, in order.
+;               Keeps every register but the flags; it is called with the
+;               encoder's DS (the input's) and ES (the table's), so it
+;               reaches its own state through CS or a segment of its own
+;
+; THE TABLE SEGMENT, in ES for every call: LZW_EKB (25) KB, the includer's -
+;   LZW_HPRE   0       5,003 words: the key's prefix + 1, 0 = an empty slot
+;   LZW_HCHR   10006   5,003 bytes: the key's character
+;   LZW_HCODE  15009   5,003 words: the code the key names
+;   LZW_EST    25015   the encoder's own state, LZW_ESTSZ bytes
+;
+; lzw_enc_init  AL = the minimum code size (2..8), ES = the table: a Clear
+;               written, the table empty
+; lzw_enc_run   DS:SI = bytes, CX = how many (>= 1): encoded. SI advanced
+; lzw_enc_end   the string in hand, the End code and the last bits written
+; All three keep DS and ES; lzw_enc_run clobbers AX, BX, CX, DX, SI, DI, BP.
+; =============================================================================
+%ifdef LZW_ENCODE
+LZW_HSIZE   equ 5003
+LZW_HPRE    equ 0
+LZW_HCHR    equ 2 * LZW_HSIZE
+LZW_HCODE   equ 3 * LZW_HSIZE
+LZW_EST     equ 5 * LZW_HSIZE
+LZW_EKB     equ (LZW_EST + 16 + 1023) / 1024
+lzw_e_ent   equ LZW_EST + 0         ; word: the string in hand, FFFFh none
+lzw_e_run   equ LZW_EST + 2         ; word: the next free code
+lzw_e_clr   equ LZW_EST + 4         ; word: the Clear code
+lzw_e_acc   equ LZW_EST + 6         ; word: the bits not yet written...
+lzw_e_n     equ LZW_EST + 8         ; byte: ...how many
+lzw_e_bits  equ LZW_EST + 9         ; byte: the code width
+lzw_e_min   equ LZW_EST + 10        ; byte: the minimum code size
+LZW_ESTSZ   equ 11
+
+lzw_enc_init:
+    push ax
+    push cx
+    mov [es:lzw_e_min], al
+    mov cl, al
+    mov ax, 1
+    shl ax, cl
+    mov [es:lzw_e_clr], ax
+    xor ax, ax
+    mov [es:lzw_e_acc], ax
+    mov [es:lzw_e_n], al
+    mov word [es:lzw_e_ent], 0xFFFF
+    call lzw_e_reset
+    mov ax, [es:lzw_e_clr]
+    call lzw_e_put                  ; the Clear the stream opens with
+    pop cx
+    pop ax
+    ret
+
+; lzw_e_reset - the table empty, the width and the next code back to their
+; first. Preserves all
+lzw_e_reset:
+    push ax
+    push cx
+    push di
+    mov ax, [es:lzw_e_clr]
+    add ax, 2
+    mov [es:lzw_e_run], ax
+    mov al, [es:lzw_e_min]
+    inc al
+    mov [es:lzw_e_bits], al
+    xor ax, ax
+    mov di, LZW_HPRE
+    mov cx, LZW_HSIZE
+    cld
+    rep stosw
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; lzw_e_put - AX = a code, [lzw_e_bits] wide, LSB first; then giflib's
+; widening (the next free code at the width's top, the code a real one).
+; Preserves all
+lzw_e_put:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov dx, ax                      ; DX = the code
+    mov cl, [es:lzw_e_n]
+    shl ax, cl                      ; the low 16 bits of code << held
+    or ax, [es:lzw_e_acc]
+    mov bx, dx
+    mov ch, cl
+    mov cl, 16
+    sub cl, ch
+    shr bx, cl                      ; ...and what spilled past them
+    mov cl, ch
+    add cl, [es:lzw_e_bits]         ; CL = the bits now held
+.b:
+    cmp cl, 8
+    jb .r
+    call LZW_PUTB
+    mov al, ah                      ; BX:AX >>= 8
+    mov ah, bl
+    mov bl, bh
+    xor bh, bh
+    sub cl, 8
+    jmp short .b
+.r:
+    mov [es:lzw_e_acc], ax
+    mov [es:lzw_e_n], cl
+    mov cl, [es:lzw_e_bits]
+    cmp cl, 12
+    jae .o
+    mov ax, 1
+    shl ax, cl
+    cmp [es:lzw_e_run], ax
+    jb .o
+    cmp dx, 4095
+    ja .o
+    inc byte [es:lzw_e_bits]
+.o:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; lzw_enc_run - the bytes at DS:SI, CX of them. The string in hand is DX
+; through the loop, the slot BX
+lzw_enc_run:
+    cld
+    mov dx, [es:lzw_e_ent]
+    cmp dx, 0xFFFF
+    jne .l
+    lodsb                           ; the stream's first byte: a string
+    xor ah, ah
+    mov dx, ax
+    dec cx
+    jz .out
+.l:
+    lodsb
+    mov bl, al                      ; h = (c << 4) ^ prefix, < 4,096
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    xor bx, dx
+    mov di, dx
+    inc di                          ; DI = the key's prefix + 1
+    mov bp, 1                       ; BP = the probe's step: HSIZE - h,
+    or bx, bx                       ; or 1 when h is 0 (compress's)
+    jz .p
+    mov bp, LZW_HSIZE
+    sub bp, bx
+.p:
+    push bx
+    shl bx, 1
+    mov bx, [es:bx + LZW_HPRE]
+    or bx, bx
+    jz .new                         ; an empty slot: not in the table
+    cmp bx, di
+    jne .miss
+    pop bx
+    cmp al, [es:bx + LZW_HCHR]
+    jne .miss1
+    shl bx, 1                       ; FOUND: its code is the string now
+    mov dx, [es:bx + LZW_HCODE]
+    loop .l
+    jmp short .out
+.miss:
+    pop bx
+.miss1:
+    sub bx, bp                      ; the next probe
+    jns .p
+    add bx, LZW_HSIZE
+    jmp short .p
+.new:
+    pop bx
+    push ax
+    mov ax, dx                      ; the string in hand goes out...
+    call lzw_e_put
+    pop ax
+    mov dl, al                      ; ...the character is the next one's
+    xor dh, dh
+    push ax
+    mov ax, [es:lzw_e_run]
+    cmp ax, 4095
+    jb .ins
+    mov ax, [es:lzw_e_clr]          ; the table full: a Clear, and empty it
+    call lzw_e_put
+    call lzw_e_reset
+    pop ax
+    loop .l
+    jmp short .out
+.ins:
+    shl bx, 1                       ; the key, and its code
+    mov [es:bx + LZW_HPRE], di
+    mov [es:bx + LZW_HCODE], ax
+    shr bx, 1
+    pop ax
+    mov [es:bx + LZW_HCHR], al
+    inc word [es:lzw_e_run]
+    dec cx                          ; (the loop is past a short jump's reach)
+    jz .out
+    jmp .l
+.out:
+    mov [es:lzw_e_ent], dx
+    ret
+
+lzw_enc_end:
+    push ax
+    mov ax, [es:lzw_e_ent]
+    cmp ax, 0xFFFF
+    je .e
+    call lzw_e_put
+.e:
+    mov ax, [es:lzw_e_clr]
+    inc ax
+    call lzw_e_put                  ; the End code
+    cmp byte [es:lzw_e_n], 0
+    je .o
+    mov al, [es:lzw_e_acc]
+    call LZW_PUTB
+.o:
+    pop ax
+    ret
+%endif                              ; LZW_ENCODE
 
 %endif

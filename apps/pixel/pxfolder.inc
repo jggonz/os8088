@@ -132,6 +132,11 @@ px_navto:
     push di
     cmp ax, [px_nnames]
     jae .out
+    mov [px_lvarg], ax              ; UNSAVED EDITS: "Save changes?" first
+    mov al, PXL_NAV                 ; (SPEC.md 106.24), and this again once
+    call px_gate                    ; its answer allows (px_lvdo)
+    mov ax, [px_lvarg]
+    jc .out
     call px_nfgo
     jc .gone
     call px_rec
@@ -760,6 +765,11 @@ px_sltoggle:
     ret
 .go:
     push ax
+    mov al, PXL_SLIDE               ; unsaved edits: asked first (106.24)
+    call px_gate
+    pop ax
+    jc .x0
+    push ax
     push bx
     mov byte [px_slon], 1
     mov byte [px_slmem], 0
@@ -771,6 +781,7 @@ px_sltoggle:
     call px_tqarm                   ; (the timer's pace: the slideshow's now)
     pop bx
     pop ax
+.x0:
     ret
 
 ; px_slstop - the slideshow stops, a slide decoded and waiting let go.
@@ -1516,8 +1527,10 @@ px_thstep:
     jne .lay                        ; from its master (its decodes are slides)
     cmp byte [px_press], PX_PR_NONE
     jne .out1
-    cmp byte [px_hdrop + OS88UI_DR_OPEN], 0
-    jne .out1
+    push bx
+    call px_dropon                  ; (either drop-down's list)
+    pop bx
+    jc .out1
     call os88ui_armed               ; (a button held down)
     or ax, ax
     jnz .out1
@@ -1565,6 +1578,10 @@ px_thstep:
 .out1:
     jmp .out
 .cur:
+    cmp byte [px_dirty], 0          ; AN EDITED PICTURE (SPEC.md 106.24): its
+    jne .flush                      ; master is not its file's, and undo's
+    cmp byte [px_ukind], UK_NONE    ; claims leave no room for a hidden
+    jne .flush                      ; decode's - the cache's cards only
     mov ax, [px_ncur]               ; THE OPEN PICTURE'S, from its master
     cmp ax, [px_nnames]
     jae .dec

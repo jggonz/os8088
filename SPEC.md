@@ -163595,7 +163595,7 @@ spare at every wave's end, for the fixes the review after it brings):
 |---|---:|---|
 | 5, the folder | 3,000 | Prev/Next, the filmstrip's thumbnail cards and the slideshow's timer resident; a thumbnail is any decoder part's DECODE at 1/8 into a claim of its own; the cache file's reading and writing a FOLDER part, fetched by the UI task for the walk and dropped. **Measured: +2,996** (106.21), 11,963 to spare |
 | 6, full screen | 1,500 | the entry, the exit and the restoring of the desktop resident; every mode's renderer and the palette choosers (median cut, the error diffusion) one FULL-SCREEN part, held while the screen is PiXEL's and dropped on the way out. **Measured: +1,481**, and +67 of fixes to earlier waves (106.23), 10,369 to spare |
-| 7, editing | 4,500 | the tools' gestures, the menus' handlers, undo's bookkeeping and the palette operations (each a 768-byte edit) resident; the pixel operations (blur, sharpen, resize, rotate) an EFFECTS part on the worker; Save As a WRITERS part |
+| 7, editing | 4,500 | the tools' gestures, the menus' handlers, undo's bookkeeping and the palette operations (each a 768-byte edit) resident; the pixel operations (blur, sharpen, resize, rotate) an EFFECTS part on the worker; Save As a WRITERS part. **Measured: +6,102, 4,267 to spare** - 1,602 over this line and inside the 3 KB rule; the palette operations went to the EDIT part with the pixel ones, and the cards and Save As's flow behind a service gate (106.24) |
 
 Measured leftover candidates, should a wave need them: the sniff's
 per-format dimensions (about 450 bytes), the CGA's half-height icon copies
@@ -164054,7 +164054,9 @@ its list. View > `Screen: 320x240, 256` names the mode the display the window
 is on will get, and choosing it turns to the next one that display offers
 (`M` does the same inside full screen); a choice another display does not
 offer falls back to that display's default. With one mode, a Hercules, the
-item is greyed.
+item is greyed. **C160 snows on a genuine IBM CGA**: it writes `B800`
+during active display for the whole render and every caption band, which
+§88.15 accepted for Clear Skies and this inherits with the retime.
 
 **Inside**, everything is the FULL-SCREEN PART's (`apps/pixel/pxfull.asm`,
 part 6, LINKED like the SIMPLE and FOLDER parts, 106.20): fetched before
@@ -164303,3 +164305,213 @@ Hercules page 704 columns wide; its memory, which the row checks, holds all
 720. And **wave 7's `OS88UI_ASAVE`** must also stand in front of
 `px_fsstart`: full screen leaves a picture by its own commit, not by
 `px_navto`.
+
+### 106.24 Editing: tools, palette and pixel operations, undo, Save As (wave 7)
+
+**Two more LINKED parts** (106.20's mechanism): part 7 **EDIT**
+(`apps/pixel/pxedit.asm`, 11,291 bytes, 7,753 packed) - every palette
+operation, every pixel operation, the parameter cards, the XMS copy and the
+operations' own start, commit and undo; and part 8 **WRITE**
+(`apps/pixel/pxwrite.asm`, 47,908 bytes of which 42 KB is scratch, 4,974
+packed) - the five writers and Save As's names, start, pump and end, and
+Copy. `apps/pixel/pxed.inc` is the verbs, formats and classes both halves
+read, so a verb cannot mean two things.
+
+**A part calls the resident through ONE far gate** (`apps/pixel/pxsvc.inc`):
+`pxlink.inc` names the package's bss and nothing else (106.20), so a part
+cannot name a routine; it puts a service's number in `[px_svi]` and far-calls
+`[cs:pv_sv]`, which every entry sets from `[px_svgp]` (the resident's
+`px_svgate`) and `[cs:PXP_PKG]`. The gate calls the routine with the part's
+registers, **ES = DS** (the first version passed a completion's ES =
+`KERNEL_SEG` through, and `OSAPI_FILE_FIND` wrote PiXEL's find record over
+the kernel's task table), and answers its flags. Thirty-two services: the
+text band, a button, the rect helpers, the string helpers, flags, paint,
+layout, the toast, the ring, the worker's spawn, the walk, the alert, the
+parts' keep and need, the palette, the view. A UI verb (CL bit 6) takes its
+argument in `[px_earg]`, because AL carries the part's number to `px_pcall`.
+
+**Menus** (106.2's five, each within 11 items of 24 characters):
+
+| menu | items |
+|---|---|
+| File | Open... Ctrl+O, Save As..., Revert Ctrl+R, Previous/Next Image, Slideshow, Image Info... |
+| Edit | Undo NAME / Redo NAME, Copy, Select All, Deselect, Crop to Selection |
+| Image | Rotate 90 CW, Rotate 90 CCW, Rotate 180, Flip Horizontal, Flip Vertical, Resize..., Auto Levels, Brightness/Contrast..., Greyscale, Invert |
+| Effects | Blur, Sharpen, Edge Detect, Emboss, Pixelate, Sepia, Posterize..., Threshold..., Gamma... |
+
+Keys: Ctrl+S Save As, Ctrl+Z Undo, Ctrl+C Copy, Ctrl+A Select All, Ctrl+R
+Revert; Enter crops to the selection; the arrows nudge a selection a master
+pixel (and pan without one); Esc stops an operation or a save, else drops
+the selection. Every item that needs a picture, a selection, room or an idle
+worker is greyed for that fact (§47); Undo's label is the operation's name,
+cached in `[px_ulkey]` so a `MENU_SET` is spent only when it changes.
+
+**The tools** (106.3's column): **Hand** pans; **Zoom** steps in about the
+click, Shift or the right button out, a drag zooms to the rect;
+**Marquee** drags a selection in MASTER pixels, drawn as an XOR outline
+(four `OSAPI_GFX_XOR_FILL`s clipped to the canvas) that every canvas paint
+takes off first and puts back last (`px_mqhide`/`px_mqshow`, nested by
+`[px_mqhold]` across a pan); **Crop** drags the same and Enter or a
+double-click crops; **Eyedropper** reads the pixel under the pointer every
+other tick while the window is in front - `x,y`, `#RRGGBB` and the index in
+the status bar's fields (the zoom field is the readout's while it reads) -
+and a click pins it as Image Info's ninth line, **Picked**, which File >
+Image Info always shows and the panel shows when its height has room; **Rotate** turns the picture clockwise on a click and anticlockwise
+on the right button (`OSAPI_WM_ONRCLICK`).
+
+**Palette operations** - Invert, Greyscale, Sepia, Brightness/Contrast,
+Gamma, Posterize, Threshold, Auto Levels - run on the UI task over the 768
+bytes of `[px_pal]` and nothing else: the master is not touched and the mode
+becomes PAL with 256 entries (an edited cube or grey is a palette like any
+other). On a 1bpp display the new tables are thresholds and are made at once;
+on a 4bpp one the palette's 256 plans are a SEARCH, 2.28 s on an XT (106.17),
+so the WORKER makes them (`JOB_TABLES`, `[px_busy]` 2, the way a restored
+picture's are) and the picture shown stays on the glass until they are done
+and drawn - the first build made them on the UI task, and the window took
+no key for those two seconds. Undo is an EXCHANGE with the banked palette
+and plans (`px_ppal`/`px_pplan`, 106.20's bank), so Undo and Redo are each a
+swap and instant; a turn, a flip or a crop keeps the palette and its plans
+(`[px_pvalid]`). Brightness is `b x 51/20` added;
+contrast `25600/(100-c)` (c >= 0) or `256(100+c)/100` as an 8.8 factor about
+128; gamma is fifteen curves of 33 points (`apps/pixel/pxgam.inc`, written by
+`tools/pixelsim.py --gen` and held by its `--selfcheck`) interpolated; Auto
+Levels stretches the master's histogram's 1% and 99% points to 0 and 255;
+Sepia is a fixed 3x3 matrix in sevenths of 128. Four take a CARD - a box
+over the canvas with one or two `- value +` rows, OK and Cancel, in the
+window's own button record (six more: 29 records), the arrows stepping its
+rows and Enter and Esc its buttons. A card going up draws itself and nothing
+else (the buttons under it are put out of reach by the layout, not
+repainted); going down repaints, as the key card's does.
+
+**Pixel operations** run on the WORKER (`JOB_EDIT`, `[px_busy]` = 3), a row
+at a time with the progress field and Esc, from the shown master into a
+destination, by class:
+
+| class | operations | the destination | undo |
+|---|---|---|---|
+| FLIP | Rotate 180, Flip Horizontal, Flip Vertical | in place | the same operation again |
+| DEST | Rotate 90 CW/CCW, Resize | a second master | the old master, kept (an exchange) |
+| EITHER | Crop, Blur, Sharpen, Edge Detect, Emboss, Pixelate | a second master when there is room; else in place over a copy of the old one ABOVE 1 MB (`OSAPI_XMEM_*`, a 286 with a pool) | the master exchange, or the copy back |
+
+An operation with no room is REFUSED BEFORE IT STARTS with the arithmetic
+(`Blur needs 302K; 120K free`). Resize offers 1/4, 1/3, 1/2, 2/3, 3/4, 3/2,
+2x, 3x and 4x - a box filter down, bilinear in 8.8 up - capped at the master's
+`PX_DIMMAX`. The kernels are 3x3 on the palette's RGB with the edges
+clamped; Pixelate averages blocks of 8. **A result that is not the old
+picture's indices is re-quantised**: to GREY when every palette entry is
+grey, else to the CUBE through the ordered blue-noise rule (the part's own
+copy of `pxqtab.inc`), so the mode the operation leaves is one the renderer
+has tables for without a search. The part counts the new master's histogram
+into its tail (106.20). Esc in an operation leaves the picture, its claims
+and undo as they were.
+
+**One level of undo**, and the kinds are what it holds: the other palette,
+nothing (a flip), the other master's claim (whose segment `px_mreloc`
+follows, as it follows the shown one), or the copy above 1 MB. A new
+operation forgets the old undo first; opening another picture forgets it.
+
+**Save As** is a card (the format: PNG, GIF, BMP, PCX, PIX, and BMP 24-bit on
+a CUBE master only), then the Standard File dialog (§38) for the folder and
+the name. The name's own extension wins when it is one PiXEL writes, else
+the card's is put on it. A name that is taken asks **"Replace NAME?"**
+(`OS88UI_AYESNO`, whose message is a buffer of its own, `[px_aq]`, because the
+alert reads it at every paint, and whose caller sets ES = `KERNEL_SEG`,
+because it reads the caption through it). The WORKER encodes into the ring's
+two slots (`JOB_SAVE`, `[px_busy]` = 4) and sleeps between them
+(`OSAPI_TASK_SLEEP`, not `ALIVE`, so the master it reads cannot move); the UI
+task writes each full one from `W_ONWAKE` into **`PXSAVE.TMP` in the target
+folder** (the worker may not touch a file, §20.6 rule 7); only when the last
+is down is the target deleted and the temporary renamed to it. So **a full
+disk, a write-protected one or Esc leaves the old file as it was and no half
+file under the user's name** - `Disk full: not saved`, `Disk is
+write-protected`, `Not saved: disk error`, `Not saved`. A saved picture takes
+its new name, folder and format in the record, the title and the folder
+list.
+
+| format | what is written |
+|---|---|
+| PNG | 8-bit indexed (type 3, PLTE) or grey (type 0 when the mode is GREY); one zlib stream of FIXED-Huffman deflate - a 16 KB window slid by 8 KB, a 4,096-entry hash of three bytes, chains of 8, a match of 32 good enough - in IDAT chunks of 8,192; CRC-32 and Adler-32 |
+| GIF | GIF87a, the 256-colour table, LZW through `apps/os88lzw.inc`'s ENCODER (`LZW_ENCODE`; the decoder is `LZW_NODECODE`'s other half) - compress's 5,003-entry hash, a clear code when the table is full |
+| BMP | 8-bit, bottom-up, a 1,024-byte palette |
+| BMP 24 | 24-bit, the cube's colours |
+| PCX | version 5, 8-bit RLE, the 769-byte tail |
+| PIX | §61.7's block, nearest of the sixteen; refused when the block would pass one segment |
+
+`tools/pixelsim.py` has every writer (`write_as`), and the part's output is
+pixelsim's to the byte.
+
+**Unsaved edits are asked about** (`OS88UI_ASAVE`: Save / Discard / Cancel)
+wherever the picture would be LEFT: `px_navto` (Prev, Next, Home, End, a
+strip card), File > Open, the slideshow, and the window's close
+(`OSAPI_WM_ONCLOSE`, §75.1; a save still running refuses the close). A
+document opened from the Disk window is a new instance and leaves nothing.
+`px_gate` banks what was asked for and `px_lvdo` does it once the
+answer allows. Save writes over the file itself when PiXEL writes its format
+and the master is the whole picture, else goes through Save As, and the
+banked action waits for the save's end. **Full screen does not ask**: its
+glass has no room for an alert, so its Next and Prev say `Save the edit
+first` and do nothing.
+
+**Copy** (Ctrl+C) puts an 8-bit BMP of the selection, or of the picture, on
+the system clipboard (§55): the WRITE part's BMP writer into one slot and
+`OSAPI_CLIP_PUT`. The clipboard is `CLIP_MAXKB`, so a larger one is refused
+with its size (`Copy: 77K, over 32K`). §55's clipboard is text by contract
+and nothing in the tree pastes a picture yet; the bytes are a whole BMP file,
+so a future paste needs no other format.
+
+**Claims.** A save holds the face, the master, the view, the store, undo's
+master, the WRITE part and the ring - seven, inside §50.2's eight; the
+decoder and EDIT parts are given back first (`px_wgo`). An operation holds
+the destination and the work claim beside the EDIT part. Full screen drops
+the EDIT part on its way in.
+
+**What it cost the resident**: image 45,382 + bss 11,791 = **57,173, +6,102
+on wave 6 and 4,267 to spare** - over 106.20's 4,500 line by 1,602, inside
+its keep-3-KB rule. The first build was +9,733 (588 spare); the cards, the
+XMS copy, the operations' start, commit and undo, and Save As's names, start,
+pump, end and Copy went to the two parts behind the service gate. What stays
+resident is the tools' gestures and the marquee (2,141 bytes), the menus'
+handlers and undo's labels (1,026), the cards' and Save As's thin halves
+(939), ASAVE's gate and the window's routing.
+
+**Tests.** `tests/pxpartemu.py` runs a LINKED part on the host under Unicorn
+(a faked package at `pxlink.inc`'s addresses, every API cell a `retf`, the
+clock and `TASK_ALIVE`/`TASK_SLEEP` hooked; a test without Unicorn skips that
+leg and says so). **`pxedit`** (soak, MartyPC VGA XT): the EDIT part on the
+host against pixelsim - 63 palette cases and 546 pixel cases (seven sizes,
+three palettes, both destinations), the counts too; then on the machine
+every menu operation and card on CITY.PCX against pixelsim, Undo restoring
+the master, palette, mode and saved state with PiXEL's claims as before (and
+Redo's kept master), Redo, a chain (Blur, Invert, Sharpen), Revert, Esc in
+Blur, and the tools: a Marquee drag's rect, a nudge, Esc; the Crop tool and
+Enter; the Zoom tool; the Eyedropper's pin; the Rotate tool. **`pxsave`**
+(soak): the WRITE part on the host - 336 files over formats, sizes, pictures
+and modes, five ring shapes and four Copy rects, each pixelsim's to the
+byte; then on the machine a save in every format read back off the floppy
+(pixelsim's bytes, and decoded to the master and palette shown), BMP 24 from
+the card's drop-down, Replace No and Yes, Esc in a PNG's save (no file, no
+temporary, claims as before), Save changes? Cancel, Discard and Save on
+Next and Cancel on the close box, Copy refused and Copy of a selection, and a
+disk too full for the save (the old file as it was, no temporary).
+`tools/pixelsim.py --editcheck` reads every writer back through pixelsim's
+decoders and Pillow.
+
+**Fixed in this wave, in earlier waves' code** (the wave-6 review):
+**F1** a render owed no longer samples a master the hidden decode gave
+back (`pxf_poll`); **F2** the view claim is given back at every entry to
+the bracket, `M` back from the Desktop included; **F3** an Esc in a Next
+whose decode had given the shown master back opens the picture the window
+still names rather than leaving it empty; **F4** the bands' two seconds
+count from the end of the render that letters them; **F5** View > Screen
+follows a window dragged to another display within five seconds, the memory
+field's look calling `px_menulive` (a `MENU_SET` from inside a painter -
+`px_layout`, the first fix - drew the menu bar mid-paint and left the
+window's grow box overdrawn on the CGA); **N1** the view claim goes
+before the part's fetch; **N2** C160 snows on a genuine IBM CGA (106.23).
+The wave-6 review's note on an Esc leaving one claim fewer is the decoder
+part `px_kkeep` declines to keep, and a test that counts claims across an
+Esc leaves the decoder parts out - and so does `pxthumb`'s largest free run
+now: a part is fetched into the hole the picture it came after left, so its
+place is that neighbour's size and not a leak (the wave's growth moved
+LAKE.JPG's 1,216-paragraph part 224 paragraphs up after the browse, with
+every claim as it was).

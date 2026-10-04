@@ -7942,6 +7942,36 @@ SOAK = [
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/PIXEL.GFX",
                "build/os8088-360.img")),
+    Row("pxedit", "soak", py("tests/pxedit.py"), 600.0,
+        "SPEC.md 106.24, PiXEL's editing: the EDIT part on the host under "
+        "Unicorn (tests/pxpartemu.py; the leg skips without it) - 63 palette "
+        "cases and 546 pixel cases over seven sizes, three palettes and both "
+        "destinations against tools/pixelsim.py, the histogram counts too; "
+        "then on MartyPC's VGA XT, CITY.PCX: every Image and Effects "
+        "operation from its menu or card against pixelsim, Undo putting the "
+        "master, palette, mode and saved state back with PiXEL's claims as "
+        "they were (and Redo's kept master), Redo, a chain through an edited "
+        "cube, Revert, Esc in Blur, and the six tools' gestures - a "
+        "Marquee drag's rect, a nudge and Esc, the Crop tool and Enter, a "
+        "Zoom click, the Eyedropper's pin in Image Info, the Rotate tool. "
+        "Each operation's guest time is printed",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX", "build/os8088.img")),
+    Row("pxsave", "soak", py("tests/pxsave.py"), 600.0,
+        "SPEC.md 106.24, PiXEL's Save As: the WRITE part on the host under "
+        "Unicorn - 336 files over every format, seven sizes, three pictures "
+        "and the three palette modes, five ring shapes and four Copy rects, "
+        "each tools/pixelsim.py's write_as to the byte; then on MartyPC's VGA "
+        "XT a save in each of PNG, GIF, BMP, PCX and PIX through the card "
+        "and the Standard File dialog, read back off the floppy - pixelsim's "
+        "bytes, decoded to the master and palette shown - and BMP 24 from "
+        "the card's drop-down; Replace No and Yes; Esc in a PNG's save (no "
+        "file, no PXSAVE.TMP, claims as before); Save changes? Cancel, "
+        "Discard and Save on Next and Cancel on the close box; Copy refused "
+        "over 32K and a selection's BMP on the clipboard; and a disk too "
+        "full for the save, which leaves the old file and no temporary",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX", "build/os8088.img")),
     Row("pxbench", "soak", py("tests/pxbench.py"), 700.0,
         "SPEC.md 106.17 on the 5150 with a CGA: the TIME, in guest cycles from "
         "breakpoints, of opening MOUNTAIN.BMP (24-bit: the cube's ordered "

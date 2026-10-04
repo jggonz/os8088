@@ -2074,6 +2074,11 @@ pxf_poll:
     cmp byte [pxf_jon], 0
     je .out
 .slice:
+    call pxf_mseg                   ; THE MASTER GIVEN BACK (a next picture
+    or ax, ax                       ; decoding where it was, 106.23): the
+    jz .out                         ; render waits - a slice now would sample
+                                    ; segment 0 (review-w6 F1); the commit's
+                                    ; FSV_SHOW renders anew
     call pxf_slice
     mov ax, FSA_BUSY
     cmp byte [pxf_jon], 0
@@ -2467,6 +2472,16 @@ pxf_slice:
     jb .r
     mov byte [pxf_jon], 0
     inc word [pxf_nren]             ; (renders finished: a test's)
+    cmp byte [pxf_jkind], 0         ; a whole render: the bands' two seconds
+    jne .f                          ; count from now, when they are on the
+    call far OSAPI_GET_TICKS        ; glass (the render letters them)
+    test byte [pxf_bup], 1
+    jz .b1
+    mov [pxf_bt0], ax
+.b1:
+    test byte [pxf_bup], 2
+    jz .f
+    mov [pxf_bt1], ax
 .f:
     call pxf_flush
     ret

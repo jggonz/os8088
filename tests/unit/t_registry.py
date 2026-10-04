@@ -80,6 +80,9 @@ UNREGISTERED = {
     "pxsyms.py": "PiXEL's guest reader (SPEC.md 106.13) - the package's "
                  "symbols out of nasm's map and its instance by its image - "
                  "imported by pxdecode, pxopen and pxpaint, not a test",
+    "pxpartemu.py": "PiXEL's linked parts run on the host under Unicorn "
+                    "(SPEC.md 106.24) - imported by pxedit and pxsave for "
+                    "their host legs, not a test",
     "pxslib.py": "PIXELSTEIN 3D's guest reader (SPEC.md 97.12) - the "
                  "package's symbols out of nasm's map, its window and part-0 "
                  "segment, the loader's handoff words, the pinned scenes "

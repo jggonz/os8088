@@ -28,6 +28,7 @@ import zlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLANS_INC = os.path.join(HERE, "..", "apps", "pixel", "pxplans.inc")
 QTAB_INC = os.path.join(HERE, "..", "apps", "pixel", "pxqtab.inc")
+GAM_INC = os.path.join(HERE, "..", "apps", "pixel", "pxgam.inc")
 
 # --- the answers (apps/pixel/pxsimple.inc's PXD_*) ---------------------------
 PXD_OK, PXD_HEAD, PXD_DIMS, PXD_DEPTH, PXD_PACK, PXD_TRUNC, PXD_DATA, \
@@ -2994,6 +2995,707 @@ def cmd_render(path, out, depth, aspect, cw, ch, scale):
 # =============================================================================
 # --selfcheck
 # =============================================================================
+# =============================================================================
+# EDITING (SPEC.md 106.24): the palette operations, the pixel operations and
+# the five writers - each the integer arithmetic apps/pixel/pxedit.asm and
+# apps/pixel/pxwrite.asm do, so tests/pxedit.py and tests/pxsave.py hold the
+# guest to these byte for byte
+# =============================================================================
+
+def pal_full(pal):
+    return list(pal) + [(0, 0, 0)] * (256 - len(pal))
+
+
+def clamp8(v):
+    return 0 if v < 0 else 255 if v > 255 else v
+
+
+# --- the palette operations: 256 entries in, 256 out -------------------------
+def pal_invert(pal):
+    return [(255 - r, 255 - g, 255 - b) for r, g, b in pal_full(pal)]
+
+
+def pal_grey(pal):
+    return [(luma(c),) * 3 for c in pal_full(pal)]
+
+
+SEPIA = ((50, 98, 24), (45, 88, 21), (35, 68, 17))     # the matrix, x 128
+
+
+def pal_sepia(pal):
+    out = []
+    for r, g, b in pal_full(pal):
+        out.append(tuple(min(255, (k[0] * r + k[1] * g + k[2] * b) >> 7)
+                         for k in SEPIA))
+    return out
+
+
+def bc_factor(c):
+    """Contrast c (-90..90, a step of 10) as an 8.8 factor."""
+    return 25600 // (100 - c) if c >= 0 else (256 * (100 + c)) // 100
+
+
+def bc_offset(b):
+    """Brightness b (-100..100) as an offset, rounded toward zero."""
+    o = abs(b) * 51 // 20
+    return o if b >= 0 else -o
+
+
+def pal_bricon(pal, b, c):
+    f, o = bc_factor(c), bc_offset(b)
+    return [tuple(clamp8((((v - 128) * f) >> 8) + 128 + o) for v in e)
+            for e in pal_full(pal)]
+
+
+GAMMAS = [30, 40, 50, 60, 70, 80, 90, 100, 120, 140, 160, 180, 200, 250, 300]
+
+
+def gamma_curve(g):
+    """33 words, v = 8i, of 255 (v / 255) ^ (100 / g) - the last at v = 256,
+    one past the range, so the top segment interpolates like the rest: what
+    the part interpolates between (apps/pixel/pxgam.inc, made by --gen)."""
+    return [int(round(255.0 * (8.0 * i / 255.0) ** (100.0 / g)))
+            for i in range(33)]
+
+
+def gamma_lut(g):
+    c = gamma_curve(g)
+    return [min(255, c[v >> 3] + (((c[(v >> 3) + 1] - c[v >> 3]) * (v & 7)
+                                   + 4) >> 3)) for v in range(256)]
+
+
+def pal_gamma(pal, g):
+    t = gamma_lut(g)
+    return [(t[r], t[gg], t[b]) for r, gg, b in pal_full(pal)]
+
+
+def pal_poster(pal, n):
+    def q(v):
+        k = (v * (n - 1) + 127) // 255
+        return (k * 255 + (n - 1) // 2) // (n - 1)
+    return [(q(r), q(g), q(b)) for r, g, b in pal_full(pal)]
+
+
+def pal_thresh(pal, t):
+    return [((255,) * 3 if luma(c) >= t else (0,) * 3) for c in pal_full(pal)]
+
+
+def levels_points(counts, pal, ch):
+    """A channel's 1% and 99% points over the picture's pixels."""
+    bins = [0] * 256
+    for i in range(256):
+        bins[pal[i][ch]] += counts[i]
+    n = sum(bins)
+    lo_n = n // 100
+    hi_n = n - n // 100
+    acc, lo, hi = 0, 0, 255
+    for v in range(256):
+        acc += bins[v]
+        if acc > lo_n:
+            lo = v
+            break
+    acc = 0
+    for v in range(256):
+        acc += bins[v]
+        if acc >= hi_n:
+            hi = v
+            break
+    return lo, hi
+
+
+def pal_levels(pal, counts):
+    pal = pal_full(pal)
+    pts = [levels_points(counts, pal, ch) for ch in range(3)]
+    out = []
+    for e in pal:
+        c = []
+        for ch in range(3):
+            lo, hi = pts[ch]
+            v = e[ch]
+            if hi <= lo:
+                c.append(v)
+            elif v <= lo:
+                c.append(0)
+            elif v >= hi:
+                c.append(255)
+            else:
+                c.append((v - lo) * 255 // (hi - lo))
+        out.append(tuple(c))
+    return out
+
+
+# --- the pixel operations: (master, w, h) in, (master, w, h, mode) out -------
+def grey_pal(pal):
+    return all(r == g == b for r, g, b in pal_full(pal))
+
+
+def requant(rgbrows, w, h, pal):
+    """RGB rows into a master: GREY when the palette is all greys (the
+    operations keep a grey a grey), else the cube by the ordered dither at
+    the DESTINATION's own place (SPEC.md 106.8)."""
+    if grey_pal(pal):
+        return bytes(b for row in rgbrows for b in row[0::3]), PM_GREY
+    q = Ordered(w)
+    return b"".join(bytes(q.row(row, w, y)) for y, row in enumerate(rgbrows)), \
+        PM_CUBE
+
+
+def op_rotate(m, w, h, k):
+    """k = 1 a quarter clockwise, 3 anticlockwise, 2 a half turn."""
+    if k == 2:
+        return bytes(reversed(m)), w, h
+    out = bytearray(w * h)
+    for y in range(w):              # the destination is h wide, w tall
+        for x in range(h):
+            if k == 1:
+                out[y * h + x] = m[(h - 1 - x) * w + y]
+            else:
+                out[y * h + x] = m[x * w + (w - 1 - y)]
+    return bytes(out), h, w
+
+
+def op_flip(m, w, h, across):
+    rows = [m[y * w:(y + 1) * w] for y in range(h)]
+    if across:
+        rows = [bytes(reversed(r)) for r in rows]
+    else:
+        rows.reverse()
+    return b"".join(rows), w, h
+
+
+def op_crop(m, w, h, x1, y1, x2, y2):
+    return b"".join(m[y * w + x1:y * w + x2 + 1] for y in range(y1, y2 + 1)), \
+        x2 - x1 + 1, y2 - y1 + 1
+
+
+RESIZE_STEPS = [(1, 4), (1, 3), (1, 2), (2, 3), (3, 4), (3, 2), (2, 1),
+                (3, 1), (4, 1)]
+
+
+def resize_dims(w, h, num, den):
+    return max(1, w * num // den), max(1, h * num // den)
+
+
+def op_resize(m, w, h, pal, num, den):
+    pal = pal_full(pal)
+    nw, nh = resize_dims(w, h, num, den)
+    rows = []
+    if num < den:                   # down: a box of the source a pixel
+        for y in range(nh):
+            y0 = y * h // nh
+            y1 = max(y0 + 1, (y + 1) * h // nh)
+            row = bytearray()
+            for x in range(nw):
+                x0 = x * w // nw
+                x1 = max(x0 + 1, (x + 1) * w // nw)
+                n = (x1 - x0) * (y1 - y0)
+                s = [0, 0, 0]
+                for yy in range(y0, y1):
+                    for xx in range(x0, x1):
+                        c = pal[m[yy * w + xx]]
+                        s[0] += c[0]; s[1] += c[1]; s[2] += c[2]
+                row += bytes((v + n // 2) // n for v in s)
+            rows.append(row)
+    else:                           # up: bilinear, in 8.8
+        sx = (w << 8) // nw
+        sy = (h << 8) // nh
+
+        def place(i, step, lim):
+            f = ((step * (2 * i + 1)) >> 1) - 128
+            if f < 0:
+                f = 0
+            i0 = f >> 8
+            if i0 >= lim - 1:
+                return lim - 1, lim - 1, 0
+            return i0, i0 + 1, f & 255
+        for y in range(nh):
+            ya, yb, wy = place(y, sy, h)
+            row = bytearray()
+            for x in range(nw):
+                xa, xb, wx = place(x, sx, w)
+                for ch in range(3):
+                    a = pal[m[ya * w + xa]][ch]
+                    b = pal[m[ya * w + xb]][ch]
+                    c = pal[m[yb * w + xa]][ch]
+                    d = pal[m[yb * w + xb]][ch]
+                    top = a * (256 - wx) + b * wx
+                    bot = c * (256 - wx) + d * wx
+                    row.append((top * (256 - wy) + bot * wy + 32768) >> 16)
+            rows.append(row)
+    out, mode = requant(rows, nw, nh, pal)
+    return out, nw, nh, mode
+
+
+KERNELS = {                         # (taps row-major, shift, bias)
+    "blur": ((1, 2, 1, 2, 4, 2, 1, 2, 1), 4, 8),
+    "sharpen": ((0, -1, 0, -1, 5, -1, 0, -1, 0), 0, 0),
+    "edge": ((-1, -1, -1, -1, 8, -1, -1, -1, -1), 0, 0),
+    "emboss": ((-2, -1, 0, -1, 1, 1, 0, 1, 2), 0, 0),
+}
+
+
+def op_conv(m, w, h, pal, kind):
+    pal = pal_full(pal)
+    k, sh, bias = KERNELS[kind]
+    rows = []
+    for y in range(h):
+        row = bytearray()
+        ys = [min(max(y + d, 0), h - 1) for d in (-1, 0, 1)]
+        for x in range(w):
+            xs = [min(max(x + d, 0), w - 1) for d in (-1, 0, 1)]
+            for ch in range(3):
+                s = 0
+                for j in range(3):
+                    for i in range(3):
+                        s += k[3 * j + i] * pal[m[ys[j] * w + xs[i]]][ch]
+                row.append(clamp8((s + bias) >> sh))
+        rows.append(row)
+    out, mode = requant(rows, w, h, pal)
+    return out, w, h, mode
+
+
+PIXELATE = 8
+
+
+def op_pixelate(m, w, h, pal, n=PIXELATE):
+    pal = pal_full(pal)
+    rows = [bytearray(3 * w) for _ in range(h)]
+    for by in range(0, h, n):
+        for bx in range(0, w, n):
+            ye, xe = min(by + n, h), min(bx + n, w)
+            cnt = (ye - by) * (xe - bx)
+            s = [0, 0, 0]
+            for y in range(by, ye):
+                for x in range(bx, xe):
+                    c = pal[m[y * w + x]]
+                    s[0] += c[0]; s[1] += c[1]; s[2] += c[2]
+            avg = bytes((v + cnt // 2) // cnt for v in s)
+            for y in range(by, ye):
+                for x in range(bx, xe):
+                    rows[y][3 * x:3 * x + 3] = avg
+    out, mode = requant(rows, w, h, pal)
+    return out, w, h, mode
+
+
+# --- the writers (apps/pixel/pxwrite.asm) -------------------------------------
+def write_bmp8(m, w, h, pal):
+    pal = pal_full(pal)
+    stride = (w + 3) & ~3
+    data = bytearray()
+    for y in range(h - 1, -1, -1):
+        data += m[y * w:(y + 1) * w] + b"\0" * (stride - w)
+    off = 14 + 40 + 1024
+    hdr = b"BM" + struct.pack("<IHHI", off + len(data), 0, 0, off)
+    hdr += struct.pack("<IiiHHIIiiII", 40, w, h, 1, 8, 0, len(data),
+                       2835, 2835, 256, 0)
+    hdr += b"".join(bytes((b, g, r, 0)) for r, g, b in pal)
+    return hdr + bytes(data)
+
+
+def write_bmp24(m, w, h, pal):
+    pal = pal_full(pal)
+    stride = (3 * w + 3) & ~3
+    data = bytearray()
+    for y in range(h - 1, -1, -1):
+        line = bytearray()
+        for x in range(w):
+            r, g, b = pal[m[y * w + x]]
+            line += bytes((b, g, r))
+        data += line + b"\0" * (stride - len(line))
+    hdr = b"BM" + struct.pack("<IHHI", 54 + len(data), 0, 0, 54)
+    hdr += struct.pack("<IiiHHIIiiII", 40, w, h, 1, 24, 0, len(data),
+                       2835, 2835, 0, 0)
+    return hdr + bytes(data)
+
+
+def write_pcx8(m, w, h, pal):
+    pal = pal_full(pal)
+    bpl = (w + 1) & ~1
+    hdr = bytearray(128)
+    hdr[0:4] = bytes((10, 5, 1, 8))
+    struct.pack_into("<HHHHHH", hdr, 4, 0, 0, w - 1, h - 1, 72, 72)
+    hdr[65] = 1
+    struct.pack_into("<HH", hdr, 66, bpl, 1)
+    out = bytearray(hdr)
+    for y in range(h):
+        line = m[y * w:(y + 1) * w] + b"\0" * (bpl - w)
+        i = 0
+        while i < bpl:
+            v = line[i]
+            n = 1
+            while i + n < bpl and n < 63 and line[i + n] == v:
+                n += 1
+            if n > 1 or v >= 0xC0:
+                out += bytes((0xC0 | n, v))
+            else:
+                out.append(v)
+            i += n
+    out.append(12)
+    out += b"".join(bytes(c) for c in pal)
+    return bytes(out)
+
+
+def lzw_encode(data, mincode=8):
+    """GIF's LZW, giflib's encoder rule for rule: a Clear first, the width
+    raised once a code has been written at it while the next free code has
+    reached its top, and a Clear when the next free code reaches 4095. Greedy
+    LZW's output is the table policy's alone, so the guest's hash table and
+    this dict write the same bytes."""
+    clr = 1 << mincode
+    eoi = clr + 1
+    out = bytearray()
+    acc = [0, 0]                        # bits, count
+    st = {"run": eoi + 1, "bits": mincode + 1}
+
+    def put(code):
+        acc[0] |= code << acc[1]
+        acc[1] += st["bits"]
+        while acc[1] >= 8:
+            out.append(acc[0] & 255)
+            acc[0] >>= 8
+            acc[1] -= 8
+        if st["run"] >= (1 << st["bits"]) and code <= 4095 and st["bits"] < 12:
+            st["bits"] += 1
+    table = {}
+    put(clr)
+    cur = data[0]
+    for c in data[1:]:
+        k = (cur << 8) | c
+        if k in table:
+            cur = table[k]
+            continue
+        put(cur)
+        cur = c
+        if st["run"] >= 4095:
+            put(clr)
+            st["run"], st["bits"] = eoi + 1, mincode + 1
+            table = {}
+        else:
+            table[k] = st["run"]
+            st["run"] += 1
+    put(cur)
+    put(eoi)
+    if acc[1]:
+        out.append(acc[0] & 255)
+    return bytes(out)
+
+
+def write_gif(m, w, h, pal):
+    pal = pal_full(pal)
+    out = bytearray(b"GIF87a")
+    out += struct.pack("<HHBBB", w, h, 0xF7, 0, 0)
+    out += b"".join(bytes(c) for c in pal)
+    out += b"\x2C" + struct.pack("<HHHHB", 0, 0, w, h, 0) + b"\x08"
+    z = lzw_encode(m)
+    for i in range(0, len(z), 255):
+        blk = z[i:i + 255]
+        out.append(len(blk))
+        out += blk
+    out += b"\x00\x3B"
+    return bytes(out)
+
+
+# deflate: fixed Huffman (RFC 1951 3.2.6) over a hash-chain LZ77 - window
+# 4,095 bytes, 4,096 hash heads, a chain of at most DF_CHAIN, a match of
+# 3..258 bytes, the longest kept (the nearest on a tie), and every position
+# hashed after it is searched
+DF_DIST = 4095
+DF_CHAIN = 8
+DF_GOOD = 32
+LBASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43,
+         51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+LEXT = [0] * 8 + [1] * 4 + [2] * 4 + [3] * 4 + [4] * 4 + [5] * 4 + [0]
+DBASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257,
+         385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289,
+         16385, 24577]
+DEXT = [0, 0, 0, 0] + [k for k in range(1, 14) for _ in (0, 1)]
+
+
+def df_hash(d, i):
+    return ((d[i] << 8) ^ (d[i + 1] << 4) ^ d[i + 2]) & 4095
+
+
+def deflate_fixed(d):
+    out = bytearray()
+    acc = [0, 0]
+
+    def bits(v, n):                     # LSB first
+        acc[0] |= v << acc[1]
+        acc[1] += n
+        while acc[1] >= 8:
+            out.append(acc[0] & 255)
+            acc[0] >>= 8
+            acc[1] -= 8
+
+    def huff(code, n):                  # a Huffman code goes MSB first
+        r = 0
+        for _ in range(n):
+            r = (r << 1) | (code & 1)
+            code >>= 1
+        bits(r, n)
+
+    def lit(v):
+        if v < 144:
+            huff(0x30 + v, 8)
+        elif v < 256:
+            huff(0x190 + v - 144, 9)
+        elif v < 280:
+            huff(v - 256, 7)
+        else:
+            huff(0xC0 + v - 280, 8)
+    bits(1, 1)                          # BFINAL
+    bits(1, 2)                          # BTYPE 01, fixed
+    n = len(d)
+    head = [-1] * 4096
+    prev = [-1] * 4096
+    i = 0
+
+    def insert(p):
+        if p + 2 < n:
+            hh = df_hash(d, p)
+            prev[p & 4095] = head[hh]
+            head[hh] = p
+    while i < n:
+        best, bdist = 0, 0
+        if i + 2 < n:
+            c = head[df_hash(d, i)]
+            chain = DF_CHAIN
+            lim = min(258, n - i)
+            while c >= 0 and i - c <= DF_DIST and chain:
+                ln = 0
+                while ln < lim and d[c + ln] == d[i + ln]:
+                    ln += 1
+                if ln > best:
+                    best, bdist = ln, i - c
+                    if ln >= DF_GOOD or ln == lim:
+                        break
+                c = prev[c & 4095]
+                chain -= 1
+        if best >= 3:
+            k = 0
+            while LBASE[k + 1] <= best if k + 1 < len(LBASE) else False:
+                k += 1
+            lit(257 + k)
+            if LEXT[k]:
+                bits(best - LBASE[k], LEXT[k])
+            j = 0
+            while j + 1 < len(DBASE) and DBASE[j + 1] <= bdist:
+                j += 1
+            huff(j, 5)
+            if DEXT[j]:
+                bits(bdist - DBASE[j], DEXT[j])
+            for p in range(i, i + best):
+                insert(p)
+            i += best
+        else:
+            lit(d[i])
+            insert(i)
+            i += 1
+    lit(256)
+    if acc[1]:
+        out.append(acc[0] & 255)
+    return bytes(out)
+
+
+def adler32(d):
+    a, b = 1, 0
+    for v in d:
+        a = (a + v) % 65521
+        b = (b + a) % 65521
+    return (b << 16) | a
+
+
+PNG_IDAT = 8192                         # the IDAT chunks' data, at most
+
+
+def write_png8(m, w, h, pal, mode):
+    """Colour type 3 with a 256-entry PLTE, or type 0 on a GREY master;
+    filter None on every row; one zlib stream of one fixed-Huffman block,
+    cut into IDAT chunks of PNG_IDAT bytes."""
+    raw = b"".join(b"\0" + m[y * w:(y + 1) * w] for y in range(h))
+    z = b"\x78\x01" + deflate_fixed(raw) + struct.pack(">I", adler32(raw))
+
+    def chunk(t, d):
+        c = struct.pack(">I", len(d)) + t + d
+        return c + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    grey = mode == PM_GREY
+    out = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(
+        ">IIBBBBB", w, h, 8, 0 if grey else 3, 0, 0, 0))
+    if not grey:
+        out += chunk(b"PLTE", b"".join(bytes(c) for c in pal_full(pal)))
+    for i in range(0, len(z), PNG_IDAT):
+        out += chunk(b"IDAT", z[i:i + PNG_IDAT])
+    return out + chunk(b"IEND", b"")
+
+
+def pix_nearest(pal):
+    """Each entry's nearest of os8088's sixteen, the squared distance
+    unweighted and the lower index on a tie (tools/os88pix.py's rule)."""
+    out = []
+    for c in pal_full(pal):
+        best, bd = 0, None
+        for i, e in enumerate(EGA16):
+            d = sum((c[k] - e[k]) ** 2 for k in range(3))
+            if bd is None or d < bd:
+                best, bd = i, d
+        out.append(best)
+    return out
+
+
+PIX_MAX = 0xFFFF
+
+
+def write_pix(m, w, h, pal):
+    """os8088's own archive (SPEC.md 61.7), one picture, number 1: packed
+    4bpp, the high nibble leftmost, in the fixed sixteen. None if a block
+    of it would not fit one segment."""
+    stride = (w + 1) // 2
+    if stride * h > PIX_MAX:
+        return None
+    nm = pix_nearest(pal)
+    buf = bytearray(32 + stride * h)
+    buf[0:5] = b"O8PIX"
+    buf[5] = 1
+    struct.pack_into("<HHH", buf, 6, 1, 0, 16)
+    struct.pack_into("<HHHHI", buf, 16, 1, w, h, stride, 32)
+    for y in range(h):
+        for x in range(0, w, 2):
+            hi = nm[m[y * w + x]]
+            lo = nm[m[y * w + x + 1]] if x + 1 < w else 0
+            buf[32 + y * stride + (x >> 1)] = (hi << 4) | lo
+    return bytes(buf)
+
+
+WRITERS = {"BMP": write_bmp8, "BMP24": write_bmp24, "PCX": write_pcx8,
+           "GIF": write_gif, "PIX": write_pix}
+
+
+def write_as(fmt, m, w, h, pal, mode):
+    if fmt == "PNG":
+        return write_png8(m, w, h, pal, mode)
+    return WRITERS[fmt](m, w, h, pal)
+
+
+def gam_inc():
+    out = ["; " + "=" * 77,
+           "; os8088 - apps/pixel/pxgam.inc - GENERATED by tools/pixelsim.py --gen",
+           ";",
+           "; Effects > Gamma's curves (SPEC.md 106.24): for each of pixelsim's",
+           "; GAMMAS, 33 words of 255 (8i / 255) ^ (100 / g), i = 0..32, which the",
+           "; EDIT part interpolates between (gamma_lut). Do not edit it by hand.",
+           "; " + "=" * 77,
+           "pe_gam:"]
+    for g in GAMMAS:
+        c = gamma_curve(g)
+        out.append("    dw " + ", ".join(str(v) for v in c[:17]) + "    ; %d.%02d" % (g // 100, g % 100))
+        out.append("    dw " + ", ".join(str(v) for v in c[17:]))
+    return "\n".join(out) + "\n"
+
+
+def editcheck():
+    """The wave-7 references against themselves and the readers: each
+    operation's invariants, and every writer's file read back by pixelsim's
+    own decoder (and Pillow's, when it is here) as the master it was made
+    from. Too slow for the fast tier; tests/pxedit.py and pxsave.py run it."""
+    bad = []
+
+    def ok(c, what):
+        if not c:
+            bad.append(what)
+    pal = [((i * 37) & 255, (i * 91) & 255, (i * 13) & 255) for i in range(256)]
+    ok(pal_invert(pal_invert(pal)) == pal, "invert twice")
+    ok(all(a == b == c for a, b, c in pal_grey(pal)), "greyscale is grey")
+    ok(pal_bricon(pal, 0, 0) == pal, "brightness/contrast 0, 0 is nothing")
+    ok(pal_gamma(GREY, 100) == GREY, "gamma 1.0 is nothing")
+    ok(all(len(set(c)) == 1 and c[0] in (0, 255) for c in pal_thresh(pal, 128)),
+       "threshold is black and white")
+    ok(len(set(pal_poster(GREY, 4))) == 4, "posterize 4 is four levels")
+    w, h = 13, 7
+    m = bytes(((x * 7 + y * 31) ^ (x * y)) & 255 for y in range(h) for x in range(w))
+    for k, back in ((1, 3), (3, 1), (2, 2)):
+        r, rw, rh = op_rotate(m, w, h, k)
+        ok(op_rotate(r, rw, rh, back)[0] == m, "rotate %d undone" % k)
+    for a in (0, 1):
+        f = op_flip(m, w, h, a)
+        ok(op_flip(f[0], w, h, a)[0] == m, "flip %d twice" % a)
+    ok(op_crop(m, w, h, 0, 0, w - 1, h - 1)[0] == m, "crop to all")
+    g, _, _, mode = op_conv(m, w, h, GREY, "blur")
+    ok(mode == PM_GREY and len(g) == w * h, "a grey blur is grey")
+    flat = bytes([9] * (w * h))
+    ok(op_conv(flat, w, h, GREY, "blur")[0] == flat, "a flat blur")
+    for num, den in RESIZE_STEPS:
+        out, nw, nh, _ = op_resize(m, w, h, GREY, num, den)
+        ok((nw, nh) == resize_dims(w, h, num, den) and len(out) == nw * nh,
+           "resize %d/%d" % (num, den))
+    # writers: read back by the decoders, as the master they were made from
+    try:
+        from PIL import Image
+        import io
+    except ImportError:
+        Image = None
+    for mw, mh in ((13, 7), (64, 33), (1, 1), (300, 2)):
+        m = bytes((((x * 7 + y * 31) ^ (x * y)) * 5) & 255
+                  for y in range(mh) for x in range(mw))
+        noise = bytes(((i * 2654435761) >> 13) & 255 for i in range(mw * mh))
+        for mm in (m, noise):
+            for fmt in ("BMP", "BMP24", "PCX", "GIF", "PNG", "PIX"):
+                for p, mode in ((pal, PM_PAL), (CUBE, PM_CUBE), (GREY, PM_GREY)):
+                    if fmt == "BMP24" and mode != PM_CUBE:
+                        continue
+                    f = write_as(fmt, mm, mw, mh, p, mode)
+                    if f is None:
+                        continue
+                    ext = "BMP" if fmt == "BMP24" else fmt
+                    q = decode(f, ext)
+                    rm, rw, rh, rmode, rpal = emit(q, 0)
+                    if fmt == "PIX":
+                        nm = pix_nearest(p)
+                        want = bytes(nm[v] for v in mm)
+                        ok(rm == want, "PIX %dx%d read back" % (mw, mh))
+                        continue
+                    if fmt == "BMP24":
+                        rgb = [b for v in mm for b in p[v]]
+                        rows = [bytes(rgb[3 * mw * y:3 * mw * (y + 1)])
+                                for y in range(mh)]
+                        want, _ = requant(rows, mw, mh, p)
+                        ok(rm == want, "BMP24 %dx%d read back" % (mw, mh))
+                        continue
+                    ok(rm == mm, "%s %dx%d mode %d: the master read back"
+                       % (fmt, mw, mh, mode))
+                    rp = pal_full(rpal)
+                    ok(all(rp[v] == pal_full(p)[v] for v in set(mm)),
+                       "%s %dx%d mode %d: the palette read back"
+                       % (fmt, mw, mh, mode))
+                    if Image is not None:
+                        im = Image.open(io.BytesIO(f)).convert("RGB")
+                        px = im.load()
+                        good = all(px[x, y] == pal_full(p)[mm[y * mw + x]]
+                                   for y in range(mh) for x in range(mw))
+                        ok(good, "Pillow reads %s %dx%d mode %d"
+                           % (fmt, mw, mh, mode))
+    # a table that fills (GIF's Clear at 4,095) and a window that slides
+    # (deflate's 4,095 bytes): a noisy 200 x 150 picture with repeats in it
+    mw, mh = 200, 150
+    big = bytes((((i * 2654435761) >> 13) & 255) if (i // 997) & 1
+                else (i % 50) for i in range(mw * mh))
+    for fmt in ("GIF", "PNG"):
+        f = write_as(fmt, big, mw, mh, pal, PM_PAL)
+        rm = emit(decode(f, fmt), 0)[0]
+        ok(rm == big, "%s 200x150: a full table / a sliding window" % fmt)
+        if Image is not None:
+            im = Image.open(io.BytesIO(f))
+            ok(im.mode == "P" and bytes(im.getdata()) == big,
+               "Pillow reads %s 200x150" % fmt)
+    if bad:
+        for b in bad:
+            print("pixelsim: FAIL " + b)
+        return 1
+    print("pixelsim: editcheck ok (palette and pixel operations; BMP, BMP24, "
+          "PCX, GIF, PNG and PIX read back%s)"
+          % ("" if Image is None else ", and by Pillow"))
+    return 0
+
+
 def selfcheck():
     bad = []
 
@@ -3031,6 +3733,8 @@ def selfcheck():
            "apps/pixel/pxplans.inc is stale: run tools/pixelsim.py --gen")
         ok(open(QTAB_INC).read() == qtab_inc(),
            "apps/pixel/pxqtab.inc is stale: run tools/pixelsim.py --gen")
+        ok(open(GAM_INC).read() == gam_inc(),
+           "apps/pixel/pxgam.inc is stale: run tools/pixelsim.py --gen")
     except OSError:
         bad.append("apps/pixel/pxplans.inc missing: run tools/pixelsim.py --gen")
     # a small truecolour BMP round trip through the emitter at both scales
@@ -3142,7 +3846,10 @@ def main():
     ap.add_argument("--fsrender", nargs=2, metavar=("FILE", "OUT"))
     ap.add_argument("--fsmode", type=int, default=FSM_MODEX)
     ap.add_argument("--ordered", action="store_true")
+    ap.add_argument("--editcheck", action="store_true")
     a = ap.parse_args()
+    if a.editcheck:
+        return editcheck()
     if a.fsrender:
         cmd_fsrender(a.fsrender[0], a.fsrender[1], a.fsmode, a.scale,
                      a.ordered)
@@ -3150,6 +3857,7 @@ def main():
     if a.gen:
         open(PLANS_INC, "w").write(plans_inc())
         open(QTAB_INC, "w").write(qtab_inc())
+        open(GAM_INC, "w").write(gam_inc())
         print("pixelsim: wrote apps/pixel/pxplans.inc")
         return 0
     if a.decode:

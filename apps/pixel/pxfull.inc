@@ -192,8 +192,10 @@ px_fsdoor:
     pop ax
     jne .no
 .door:
-    cmp byte [px_hdrop + OS88UI_DR_OPEN], 0
-    jne .no                         ; (a list owns every key)
+    push bx
+    call px_dropon                  ; (either drop-down's list)
+    pop bx
+    jc .no                         ; (a list owns every key)
     call px_carddown                ; a card: the key takes it down, and
     jc .yes                         ; does nothing else (106.2)
     call px_hstop
@@ -231,16 +233,21 @@ px_fsgo:
     mov [px_fsmode], al
     mov [px_fsmask], ah
     mov [px_fskind], dl
+    mov al, PXPART_EDIT             ; (a claim full screen's eight want back:
+    call px_pdrop                   ; SPEC.md 106.24)
+    call px_vfree                   ; (the view's 30K first, so the part fits)
     mov al, PXPART_FULL
     mov bl, PXV_INIT
     call px_pcall
     jc .bad
-    call px_vfree
     mov byte [px_fsin], 1
     mov byte [px_fschg], 0
     mov ax, [px_ncur]
     mov [px_fsidx], ax
 .again:
+    call px_vfree                   ; ...and again on M back from the Desktop,
+                                    ; whose repaint claimed it (106.23's
+                                    ; eight claims do not count it)
     mov byte [px_fsre], PXM_NONE
     inc word [px_fsn]
     mov ax, px_fsmain
@@ -311,6 +318,13 @@ px_fsafter:
 .nov:
     mov byte [px_busy], 0           ; none now: the next paint makes them
 .same:
+    cmp byte [px_cur + PXR_HAVE], 0 ; an Esc in a Next whose decode had the
+    jne .have                       ; shown master given back: the picture
+    cmp byte [px_busy], 0           ; the window still names, opened again
+    jne .have                       ; (and not an empty window under it)
+    mov ax, [px_ncur]
+    call px_navto
+.have:
     call px_flags
     call px_update
     mov bx, [px_win]
@@ -497,6 +511,8 @@ px_fsnavkey:
     jb .x
     cmp ax, FSA_LAST
     ja .x
+    call px_fsdirty                 ; an edit unsaved: said, not left
+    jc .x
     cmp byte [px_hmode], 0
     jne .x
     call px_foldok
@@ -538,6 +554,8 @@ px_fsnavkey:
 px_fsslide:
     cmp byte [px_slon], 0
     jne px_fsstop
+    call px_fsdirty
+    jc .x
     call px_foldok
     jc .x
     mov byte [px_slon], 1
@@ -607,6 +625,19 @@ px_fsmodekey:
     ret
 .x:
     clc
+    ret
+
+; px_fsdirty - CF = 1 when the picture has an unsaved edit: the bottom band
+; says "Save the edit first" - full screen has no room for a card to ask
+; (SPEC.md 106.24). Clobbers AX, CL, DI
+px_fsdirty:
+    cmp byte [px_dirty], 0
+    je .x
+    mov di, px_s_sfirst
+    mov cl, FSV_MSG
+    call px_fscall
+    stc
+.x:
     ret
 
 ; px_fsprogoff - the progress line taken off. Clobbers AX, CL, DI

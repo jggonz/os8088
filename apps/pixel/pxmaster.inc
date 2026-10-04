@@ -65,8 +65,12 @@ px_mreloc:
     mov [px_prev + PXR_MSEG], dx
 .v:
     cmp [px_vseg], bx               ; the view claim (pxview.inc) moves too
-    jne .out
+    jne .u
     mov [px_vseg], dx
+.u:
+    cmp [px_urec + PXR_MSEG], bx    ; ...and the master undo holds, or the
+    jne .out                        ; shown one's copy of its own name
+    mov [px_urec + PXR_MSEG], dx    ; (SPEC.md 106.24)
 .out:
     ret
 

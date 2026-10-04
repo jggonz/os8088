@@ -51,7 +51,8 @@ PX_GROW     equ 24                  ; the grow box's corner (SPEC.md 11.1.1):
                                     ; status bar's arrows do not read as part
                                     ; of it
 PX_ARH      equ 16                  ; a filmstrip arrow's rows
-PX_INFON    equ 8                   ; Image Info's lines
+PX_INFON    equ 9                   ; Image Info's lines
+PX_IPICK    equ 8                   ; ...the last the Eyedropper's (106.24)
 PX_HISTN    equ 5                   ; Histogram's lines: the drop-down, then
                                     ; Mean, Std Dev, Min, Max
 PX_DROPH    equ 12                  ; the drop-down's closed box
@@ -644,6 +645,13 @@ px_lay_buttons:
     mov si, PX_B_SPREV
     call px_setrect
     mov [px_sbx], ax                ; the status text stops short of them
+    cmp byte [px_pcon], 0           ; A PARAMETER CARD: its buttons, and
+    je .nocard                      ; none under it (the EDIT part's,
+    push cx                         ; SPEC.md 106.24)
+    mov cl, EV_ULAY
+    call px_ecall
+    pop cx
+.nocard:
     pop di
     pop si
     pop dx
