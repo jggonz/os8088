@@ -5,6 +5,7 @@
     python3 tools/pixelsim.py --gen                # rewrite apps/pixel/pxplans.inc
     python3 tools/pixelsim.py --decode FILE        # what PiXEL makes of a file
     python3 tools/pixelsim.py --render FILE OUT.PNG [--depth 4|1] [--aspect vga|ega|herc|cga]
+    python3 tools/pixelsim.py --fsrender FILE OUT.PNG [--fsmode 0..7] [--ordered]
 
 THIS IS THE AUTHORITY THE GUEST IS COMPARED WITH, BYTE FOR BYTE. Every
 routine here is the integer arithmetic SPEC.md 106 states, written so that
@@ -2444,11 +2445,18 @@ def div_floor(a, b):
 
 
 def fit_z(mw, mh, s, cw, ch, aspect):
+    """Fit (SPEC.md 106.11): the largest z up to 1 that shows the whole
+    picture, IN CLOSED FORM from the steps the view takes (106.23): hs =
+    2^32 div (z << s) >= ceil(mw 2^16 / cw) keeps the width inside, vs = hs
+    ad div an >= ceil(mh 2^16 / ch) the height. It was min(cw 2^16 / sw, ch
+    ad 2^16 / (sh an)), whose view could floor its steps into a picture a
+    row longer than the canvas (one case in seven, the CGA the worst), so
+    the master's last row never showed at Fit."""
     an, ad = aspect
-    sw, sh = mw << s, mh << s
-    zx = (cw << 16) // sw
-    zy = ((ch * ad) << 16) // (sh * an)
-    z = min(zx, zy, 65536)
+    hx = -(-(mw << 16) // cw)
+    vy = -(-(mh << 16) // ch)
+    hy = -(-(vy * an) // ad)
+    z = min(65536, ((1 << 32) // max(hx, hy, 1)) >> s)
     return max(z, 1)
 
 
@@ -2638,6 +2646,317 @@ def qtab_inc():
 
 
 # =============================================================================
+# FULL SCREEN (SPEC.md 106.23): every mode PiXEL draws when the screen is its
+# own, as the FULL-SCREEN part (apps/pixel/pxfull.asm) draws it - the view,
+# the median cut, the plan search over any colours, the CGA palette's choice,
+# the diffuser and the ordered dither - to the colour code of every pixel.
+# tests/pxfsx.py reads the machine's video memory and DAC back against this.
+# =============================================================================
+# apps/pixel/pxfs.inc's PXM_*: the order a display's default is taken in
+FSM_MODEX, FSM_VGA13, FSM_VGA12, FSM_DESK, FSM_C160, FSM_CGA320, \
+    FSM_CGA640, FSM_HERC = range(8)
+FSM_N = 8
+FSM_NAMES = ["320x240, 256", "320x200, 256", "640x480, 16", "Desktop, 16",
+             "160x100, 16", "320x200, 4", "640x200, 2", "720x348, 2"]
+# the screen and its pixel's aspect a = an / ad, width over height (106.11's
+# meaning): 13h, C160 and the CGA's 320 are 5/6, the CGA's 640 is 5/12, the
+# EGA's desktop 35/48
+FS_GEOM = [(320, 240, 1, 1), (320, 200, 5, 6), (640, 480, 1, 1),
+           (640, 350, 35, 48), (160, 100, 5, 6), (320, 200, 5, 6),
+           (640, 200, 5, 12), (720, 348, 29, 45)]
+FS_256 = (FSM_MODEX, FSM_VGA13)
+FS_MONO = (FSM_CGA640, FSM_HERC)
+FS_BAND = 10                    # a caption band's rows (the part's PF_BAND)
+# the CGA's RGBI sixteen are os8088's own, brown included; in the DAC's six
+# bits a level is 0, 21, 42 or 63
+CGA6 = [tuple(v >> 2 for v in c) for c in EGA16]
+# the three sets of 320x200's foreground colours, in the order the chooser
+# tries them: palette 1, palette 0, and mode 5's cyan, red and white
+CGA_SETS = ((1, (3, 5, 7)), (0, (2, 4, 6)), (5, (3, 4, 7)))
+
+
+def lum6(c):
+    return 77 * c[0] + 150 * c[1] + 29 * c[2]
+
+
+def fs_fit(mw, mh, W, H, an, ad):
+    """Fit: the LARGEST zoom (16.16, screen pixels a master pixel across) at
+    which the whole master shows. In closed form from the steps the view
+    takes - hs >= ceil(mw 2^16 / W) keeps dw <= W, and vs = hs ad // an >=
+    ceil(mh 2^16 / H) keeps dh <= H - so no row hangs past the screen."""
+    hx = -(-(mw << 16) // W)
+    vy = -(-(mh << 16) // H)
+    hy = -(-(vy * an) // ad)
+    return max(1, (1 << 32) // max(hx, hy, 1))
+
+
+def fs_place(d, S, o):
+    """A side's offset: centred when it fits (o None or not), else o clamped
+    so the screen stays covered."""
+    if d <= S:
+        return (S - d) >> 1
+    return max(S - d, min(0, o if o is not None else (S - d) >> 1))
+
+
+class FsView:
+    def __init__(self, mw, mh, mode, z, ox=None, oy=None, geom=None):
+        W, H, an, ad = geom or FS_GEOM[mode]
+        self.W, self.H = W, H
+        self.z = z
+        self.hs = (1 << 32) // z
+        self.vs = (self.hs * ad) // an
+        self.dw = -(-(mw << 16) // self.hs)
+        self.dh = -(-(mh << 16) // self.vs)
+        self.ox = fs_place(self.dw, W, ox)
+        self.oy = fs_place(self.dh, H, oy)
+
+
+def fs_zstep(z, up, mw, mh, mode):
+    """The next of ZSTEPS above (up) or below z - z itself when there is
+    none, or when that step would make a side of 32,768 or more."""
+    for s in (ZSTEPS if up else ZSTEPS[::-1]):
+        if s > z if up else s < z:
+            v = FsView(mw, mh, mode, s)
+            return s if v.dw < 32768 and v.dh < 32768 else z
+    return z
+
+
+def fs_weights(counts, n):
+    """The histogram as weights under 2^16 in all: each count shifted right
+    until the picture's pixels would be under 32,768, at least 1 where any."""
+    sh = 0
+    while (n >> sh) > 32767:
+        sh += 1
+    return [0 if c == 0 else max(1, c >> sh) for c in counts]
+
+
+def fs_mediancut(pal, w, nmax=16):
+    """THE ADAPTIVE SIXTEEN (SPEC.md 106.23): the palette's used entries as
+    points weighted by their pixels; the box with the largest weight x
+    weighted range (WGT, the plans' weights) is cut on that channel at its
+    weighted MEAN - entries at or below it first, in palette order - until
+    there are sixteen or nothing can be cut. Each box is its weighted mean,
+    rounded. out (colours, their weights)."""
+    boxes = [[i for i in range(256) if w[i]]]
+    while len(boxes) < nmax:
+        best = None
+        for bi, b in enumerate(boxes):
+            if len(b) < 2:
+                continue
+            rk = None
+            for k in range(3):
+                lo = min(pal[i][k] for i in b)
+                hi = max(pal[i][k] for i in b)
+                r = WGT[k] * (hi - lo)
+                if rk is None or r > rk[0]:
+                    rk = (r, k)
+            if rk[0] == 0:
+                continue
+            pr = sum(w[i] for i in b) * rk[0]
+            if best is None or pr > best[0]:
+                best = (pr, bi, rk[1])
+        if best is None:
+            break
+        _, bi, k = best
+        b = boxes[bi]
+        m = sum(w[i] * pal[i][k] for i in b) // sum(w[i] for i in b)
+        boxes[bi:bi + 1] = [[i for i in b if pal[i][k] <= m],
+                            [i for i in b if pal[i][k] > m]]
+    cols, wts = [], []
+    for b in boxes:
+        W = sum(w[i] for i in b)
+        cols.append(tuple((sum(w[i] * pal[i][k] for i in b) + W // 2) // W
+                          for k in range(3)))
+        wts.append(W)
+    return cols, wts
+
+
+def plan6(T, cols):
+    """106.11's plan over ANY colours, in the DAC's six bits: (c1, c2, t, E).
+    c1 the nearest (WGT, ties to the lower); each other c2 by the projection
+    of T - c1 onto c2 - c1, t = round(64 S / K) clipped to 64, its error
+    sum WGT (64 d - D t)^2 plus the contrast penalty 128 K - 106.11's own
+    weights and penalty, scaled to six bits; a strictly lower error wins."""
+    best, c1 = None, 0
+    for i, C in enumerate(cols):
+        d = sum(WGT[k] * (T[k] - C[k]) ** 2 for k in range(3))
+        if best is None or d < best:
+            best, c1 = d, i
+    C1 = cols[c1]
+    dd = [T[k] - C1[k] for k in range(3)]
+    bestE = sum(WGT[k] * (64 * dd[k]) ** 2 for k in range(3))
+    bc2, bt = c1, 0
+    for c2, C2 in enumerate(cols):
+        if c2 == c1:
+            continue
+        D = [C2[k] - C1[k] for k in range(3)]
+        K = sum(WGT[k] * D[k] * D[k] for k in range(3))
+        S = sum(WGT[k] * dd[k] * D[k] for k in range(3))
+        if K == 0 or S <= 0:
+            continue
+        t = min(64, (64 * S + K // 2) // K)
+        if t == 0:
+            continue
+        E = sum(WGT[k] * (64 * dd[k] - D[k] * t) ** 2 for k in range(3))
+        E += 128 * K
+        if E < bestE:
+            bestE, bc2, bt = E, c2, t
+    return c1, bc2, bt, bestE
+
+
+def fs_cgapick(cols, wts):
+    """320x200's four (SPEC.md 106.23): every background x {palette 1,
+    palette 0, mode 5} x {high, low} scored against the adaptive colours,
+    each its weight x (its best plan's error >> 8) over the four; the lowest
+    score, the first in that order on a tie. out (set, high, bg, the four)."""
+    T = [tuple(v >> 2 for v in c) for c in cols]
+    best = None
+    for st, fg in CGA_SETS:
+        for hi in (1, 0):
+            four = [None] + [c + 8 * hi for c in fg]
+            for bg in range(16):
+                four[0] = bg
+                cc = [CGA6[c] for c in four]
+                s = sum(w * (plan6(t, cc)[3] >> 8) for t, w in zip(T, wts))
+                if best is None or s < best[0]:
+                    best = (s, st, hi, bg, list(four))
+    return best[1:]
+
+
+class FsPic:
+    """What the part makes of the shown picture for one mode: the colours
+    the mode shows (6-bit), and per palette entry a plan or a level."""
+
+    def __init__(self, master, mw, mh, pal, mode, ordered=False):
+        self.master, self.mw, self.mh, self.mode = master, mw, mh, mode
+        self.ordered = ordered
+        pal = list(pal) + [(0, 0, 0)] * (256 - len(pal))
+        cnt = hist_counts(master)
+        self.cols6 = None
+        self.cga = None
+        if mode in FS_256:
+            self.cols6 = [tuple(v >> 2 for v in c) for c in pal]
+            self.kind = "256"
+        elif mode in FS_MONO:
+            self.kind = "mono"
+            self.c1, self.c2 = [0] * 256, [1] * 256
+            self.T = [gam1(luma(pal[i])) if cnt[i] else 0 for i in range(256)]
+            self.t = [(64 * self.T[i] + 127) // 255 for i in range(256)]
+            self.ground, self.light = 0, 1
+            return
+        else:
+            self.kind = "plan"
+            if mode == FSM_VGA12:
+                cols, _ = fs_mediancut(pal, fs_weights(cnt, mw * mh))
+                self.cols6 = [tuple(v >> 2 for v in c) for c in cols]
+            elif mode == FSM_CGA320:
+                cols, wts = fs_mediancut(pal, fs_weights(cnt, mw * mh))
+                self.cga = fs_cgapick(cols, wts)
+                self.cols6 = [CGA6[c] for c in self.cga[3]]
+            else:                           # C160, the EGA's desktop
+                self.cols6 = list(CGA6)
+            self.c1, self.c2, self.t, self.T = [0] * 256, [0] * 256, \
+                [0] * 256, [0] * 256
+            for i in range(256):
+                if cnt[i]:
+                    c1, c2, t, _ = plan6(tuple(v >> 2 for v in pal[i]),
+                                         self.cols6)
+                    self.c1[i], self.c2[i], self.t[i] = c1, c2, t
+                    self.T[i] = (t * 255 + 32) >> 6
+        lum = [lum6(c) for c in self.cols6]
+        self.ground = lum.index(min(lum))
+        self.light = lum.index(max(lum))
+
+    def frame(self, v, y0=0, y1=None, err=None):
+        """Rows y0..y1-1 of the screen as colour codes (an index into
+        cols6, or 0/1 lit on a mono mode). A full frame starts its diffusion
+        at zero; a band starts from `err`, the state the full frame had
+        there (the part keeps it for the caption band). Returns (rows, err)
+        - err the state before row y1."""
+        W, H = v.W, v.H
+        if y1 is None:
+            y1 = H
+        err = list(err) if err is not None else [0] * W
+        xa, xb = max(0, v.ox), min(W, v.ox + v.dw)
+        rows = []
+        for y in range(y0, y1):
+            row = [self.ground] * W
+            ky = y - v.oy
+            if 0 <= ky < v.dh and xa < xb:
+                my = (ky * v.vs) >> 16
+                base = my * self.mw
+                acc = (xa - v.ox) * v.hs
+                idx = []
+                for x in range(xa, xb):
+                    idx.append(self.master[base + (acc >> 16)])
+                    acc += v.hs
+                if self.kind == "256":
+                    row[xa:xb] = idx
+                elif self.ordered:
+                    brow = BAYER8[y & 7]
+                    for k, i in enumerate(idx):
+                        x = xa + k
+                        row[x] = self.c2[i] if brow[x & 7] < self.t[i] \
+                            else self.c1[i]
+                else:
+                    nxt = [0] * W
+                    carry = 0
+                    for k, i in enumerate(idx):
+                        x = xa + k
+                        val = self.T[i] + err[x] + carry
+                        if val >= 128:
+                            row[x], e = self.c2[i], val - 255
+                        else:
+                            row[x], e = self.c1[i], val
+                        q = e >> 2
+                        if x > xa:
+                            nxt[x - 1] += q
+                        nxt[x] += q
+                        carry = e - 2 * q
+                    err = nxt
+            rows.append(row)
+        return rows, err
+
+    def rgb(self, code):
+        """A colour code as 8-bit RGB, the DAC's six bits widened."""
+        if self.kind == "mono":
+            return (255, 255, 255) if code else (0, 0, 0)
+        return tuple((v << 2) | (v >> 4) for v in self.cols6[code])
+
+
+def fs_frame(master, mw, mh, pal, mode, ordered=False, z=None, ox=None,
+             oy=None):
+    """The whole screen of a mode at Fit (or zoom z): (FsPic, FsView, rows)."""
+    W, H, an, ad = FS_GEOM[mode]
+    fp = FsPic(master, mw, mh, pal, mode, ordered)
+    v = FsView(mw, mh, mode, z or fs_fit(mw, mh, W, H, an, ad), ox, oy)
+    rows, _ = fp.frame(v)
+    return fp, v, rows
+
+
+def cmd_fsrender(path, out, mode, scale, ordered):
+    data = open(path, "rb").read()
+    p = decode(data, os.path.splitext(path)[1][1:], scale)
+    master, mw, mh, _, pal = emit(p, scale)
+    fp, v, rows = fs_frame(master, mw, mh, pal, mode, ordered)
+    W, H, an, ad = FS_GEOM[mode]
+    # widened to the screen's own 4:3, so a look sees the shape the glass has
+    sy = max(1, round(W * 3 / 4 / H))
+    out_rows = []
+    for r in rows:
+        line = b"".join(bytes(fp.rgb(c)) for c in r)
+        out_rows += [line] * sy
+    write_png(out, W, H * sy, out_rows)
+    extra = ""
+    if fp.cga:
+        extra = " set %d %s bg %d" % (fp.cga[0], "high" if fp.cga[1] else "low",
+                                      fp.cga[2])
+    print("%s: %s master %dx%d -> %s, z %d, %dx%d at (%d, %d)%s" % (
+        path, FSM_NAMES[mode], mw, mh, out, v.z, v.dw, v.dh, v.ox, v.oy,
+        extra))
+
+
+# =============================================================================
 # --render: a PNG of what PiXEL shows (for looking, on the host)
 # =============================================================================
 def write_png(path, w, h, rgbrows):
@@ -2768,12 +3087,30 @@ def selfcheck():
         except Refused as e:
             got = b"refused %d" % e.code
         ok(got == src, "inflate at zlib level %d" % lvl)
+    # full screen (SPEC.md 106.23): Fit keeps the picture inside every
+    # mode's screen; a colour of the set is its own plan; the cut of two
+    # colours is the two; and a frame's errors stay in a byte's reach
+    for mode in range(FSM_N):
+        for mw, mh in ((320, 240), (72, 54), (640, 480), (1, 1), (8191, 3)):
+            W, H, an, ad = FS_GEOM[mode]
+            v = FsView(mw, mh, mode, fs_fit(mw, mh, W, H, an, ad))
+            ok(v.dw <= W and v.dh <= H, "fs_fit inside, mode %d %dx%d"
+               % (mode, mw, mh))
+    ok(all(plan6(CGA6[c], CGA6)[:3] == (c, c, 0) for c in range(16)),
+       "a CGA colour is its own plan6")
+    two = [(10, 20, 30), (200, 100, 50)] + [(0, 0, 0)] * 254
+    ok(fs_mediancut(two, [5, 3] + [0] * 254)[0] == two[:2], "the cut of two")
+    m4 = bytes((x * 37 + y * 11) & 255 for y in range(8) for x in range(12))
+    fp = FsPic(m4, 12, 8, GREY, FSM_HERC)
+    rows, err = fp.frame(FsView(12, 8, FSM_HERC, 65536 * 4))
+    ok(max(abs(e) for e in err) < 256, "the diffuser's errors stay bounded")
     if bad:
         for b in bad:
             print("pixelsim: FAIL " + b)
         return 1
     print("pixelsim: selfcheck ok (cube, %d+%d plans, emitter, refusals, "
-          "views, statistics, blend, inflate)" % (len(CUBE_PLANS), len(GREY_PLANS)))
+          "views, statistics, blend, inflate, full screen)"
+          % (len(CUBE_PLANS), len(GREY_PLANS)))
     return 0
 
 
@@ -2802,7 +3139,14 @@ def main():
     ap.add_argument("--aspect", default="vga")
     ap.add_argument("--size", default="408x300")
     ap.add_argument("--scale", type=int, default=0)
+    ap.add_argument("--fsrender", nargs=2, metavar=("FILE", "OUT"))
+    ap.add_argument("--fsmode", type=int, default=FSM_MODEX)
+    ap.add_argument("--ordered", action="store_true")
     a = ap.parse_args()
+    if a.fsrender:
+        cmd_fsrender(a.fsrender[0], a.fsrender[1], a.fsmode, a.scale,
+                     a.ordered)
+        return 0
     if a.gen:
         open(PLANS_INC, "w").write(plans_inc())
         open(QTAB_INC, "w").write(qtab_inc())

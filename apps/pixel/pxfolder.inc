@@ -404,9 +404,13 @@ px_hopen:
     rep movsb
     mov al, [px_pvalid]
     mov [px_ppvalid], al
-    mov al, [px_prev + PXR_HAVE]    ; ...and MASKED: px_claims never frees it
-    mov [px_hhave], al              ; for a better scale (px_mreloc still
-    mov byte [px_prev + PXR_HAVE], 0    ; follows its master)
+    mov al, 0xFF                    ; FULL SCREEN's is unmasked (106.23):
+    cmp byte [px_fsin], 0           ; the glass keeps the shown picture, so
+    jne .hm                         ; its master may go for a finer scale
+    mov al, [px_prev + PXR_HAVE]    ; ...the window's is MASKED: px_claims
+    mov byte [px_prev + PXR_HAVE], 0    ; never frees it for a better scale
+.hm:                                ; (px_mreloc still follows its master)
+    mov [px_hhave], al
     mov al, [px_tabok]
     mov [px_htab], al
     mov al, [px_tdepth]
@@ -528,7 +532,10 @@ px_tcap:
 px_hback:
     push ax
     mov al, [px_hhave]
+    cmp al, 0xFF                    ; (unmasked: what px_claims left stands)
+    je .u
     mov [px_prev + PXR_HAVE], al
+.u:
     mov ax, [px_hmcap]
     mov [px_mcap], ax
     call px_restore
@@ -652,20 +659,7 @@ px_hstop:
 ; Lock held
 px_hcommit:
     push ax
-    mov al, [px_hhave]
-    mov [px_prev + PXR_HAVE], al
-    call px_freeprev                ; the old master goes
-    mov ax, [px_hmcap]
-    mov [px_mcap], ax
-    mov al, [px_hzreq]
-    mov [px_zreq], al
-    mov byte [px_hmode], 0
-    mov byte [px_cur + PXR_HAVE], 1
-    inc byte [px_cur + PXR_SERIAL]
-    mov ax, [px_hidx]
-    mov [px_ncur], ax
-    mov word [px_fsoff], 0
-    mov byte [px_cvmsg], 0
+    call px_hcommit0
     call px_viewnew                 ; at Fit
     call px_viewclaim
     mov al, [px_bpp]
@@ -680,6 +674,28 @@ px_hcommit:
     mov byte [px_slpost], 1
     mov byte [px_job], JOB_TABLES   ; LAST
     pop ax
+    ret
+
+; px_hcommit0 - the commit's head, full screen's too (106.23): the banked
+; picture's master given back, the hidden one shown. Clobbers AX
+px_hcommit0:
+    mov al, [px_hhave]              ; (0FFh: full screen's unmasked decode -
+    cmp al, 0xFF                    ; the shown one's HAVE was never touched)
+    je .u
+    mov [px_prev + PXR_HAVE], al
+.u:
+    call px_freeprev                ; the old master goes
+    mov ax, [px_hmcap]
+    mov [px_mcap], ax
+    mov al, [px_hzreq]
+    mov [px_zreq], al
+    mov byte [px_hmode], 0
+    mov byte [px_cur + PXR_HAVE], 1
+    inc byte [px_cur + PXR_SERIAL]
+    mov ax, [px_hidx]
+    mov [px_ncur], ax
+    mov word [px_fsoff], 0
+    mov byte [px_cvmsg], 0
     ret
 
 ; px_slpre - before px_finish: a commit's tables are built, so the window is

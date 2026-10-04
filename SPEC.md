@@ -162602,7 +162602,11 @@ SOURCE pixel across; down the screen it is `Z * a`, with `a` = 1 on VGA,
 35/48 on EGA's 640x350, 29/45 on Hercules and 5/12 on the CGA's 640x200, so a
 photograph has its own shape on every adapter. The steps are 1/8, 1/6, 1/4,
 1/3, 1/2, 2/3, 1, 2, 3, 4, 6, 8; **Fit** is the largest `Z` up to 1 that shows
-the whole picture, and a new picture opens at Fit. The steps in master
+the whole picture, and a new picture opens at Fit - in closed form since
+106.23, `Z = (2^32 div max(ceil(mw 2^16 / w), ceil(ceil(mh 2^16 / h) an /
+ad))) >> s`, the largest the floored steps below keep inside the canvas
+(until then a minimum of two ratios, whose picture could come out a row
+taller than the canvas, so the master's last row never showed at Fit). The steps in master
 pixels a screen pixel are `hstep = 2^32 / (Z << s)` and `vstep = hstep / a`,
 both floored, and the picture's screen size is `ceil(mw * 2^16 / hstep)` by
 `ceil(mh * 2^16 / vstep)`, which keeps every DDA inside the master; a zoom
@@ -163590,7 +163594,7 @@ spare at every wave's end, for the fixes the review after it brings):
 | wave | resident at most | what goes where |
 |---|---:|---|
 | 5, the folder | 3,000 | Prev/Next, the filmstrip's thumbnail cards and the slideshow's timer resident; a thumbnail is any decoder part's DECODE at 1/8 into a claim of its own; the cache file's reading and writing a FOLDER part, fetched by the UI task for the walk and dropped. **Measured: +2,996** (106.21), 11,963 to spare |
-| 6, full screen | 1,500 | the entry, the exit and the restoring of the desktop resident; every mode's renderer and the palette choosers (median cut, the error diffusion) one FULL-SCREEN part, held while the screen is PiXEL's and dropped on the way out |
+| 6, full screen | 1,500 | the entry, the exit and the restoring of the desktop resident; every mode's renderer and the palette choosers (median cut, the error diffusion) one FULL-SCREEN part, held while the screen is PiXEL's and dropped on the way out. **Measured: +1,481**, and +67 of fixes to earlier waves (106.23), 10,369 to spare |
 | 7, editing | 4,500 | the tools' gestures, the menus' handlers, undo's bookkeeping and the palette operations (each a 768-byte edit) resident; the pixel operations (blur, sharpen, resize, rotate) an EFFECTS part on the worker; Save As a WRITERS part |
 
 Measured leftover candidates, should a wave need them: the sniff's
@@ -163741,7 +163745,8 @@ deadline as any open is: the canvas fills as rows arrive, the name field says
 command stops it and then runs.** Thumbnails wait while it runs - all but
 the slide's own, made from its master before the next slide's decode
 begins. Full
-screen's slideshow is wave 6's: `px_slnext` is the step it calls.
+screen's slideshow (106.23) runs the same hidden decode from the bracket's
+own loop.
 
 **The timer.** One `OSAPI_WM_TIMER`, re-armed by its own handler: every 91
 ticks for the free memory (106.3) when nothing else is pending, every 9 while
@@ -164004,3 +164009,297 @@ on the GIF and PNG parts - their 106 fixtures at four ring shapes and 19,000
 generated and mutated pictures - with 0 out-of-region accesses, 0 runaways
 and 0 disagreements with pixelsim; and the wave-4 review's two hand-built
 pictures (F5, F6) now decode as pixelsim decodes them.
+
+### 106.23 Full screen: more colours where the card has them (wave 6)
+
+The desktop has sixteen colours on a VGA or an EGA and two on a CGA or a
+Hercules, and the window dithers a picture to those (106.11). **Full screen
+takes the machine** (§53) and shows the picture in the richest mode the
+display the window is on can be put in - 256 colours on a VGA, sixteen
+chosen for the picture at 640x480, sixteen at 160x100 on a CGA - or, where
+the card has nothing richer, at the whole display's size in the desktop's
+own colours.
+
+**The way in** is View > Full Screen, **F** (either case) and **Alt+Enter**
+(§11.2.1, §11.2.1.1: `OS88_ALTENTER_ARM` in the entry proc, `KEY_ALTENTER`
+in `W_ONKEY`). It is greyed - and the keys say why in a toast - while there
+is no picture, while one is opening, and on a display that offers no mode
+below. A running slideshow (106.21) is carried in rather than stopped: the
+three doors are the one command a slideshow survives besides its own.
+
+**The modes are chosen by what the display offers** - `OSAPI_FSX_CAPS` with
+PiXEL's own window, asked when the menu is built and again on the way in
+(§39.18.2), tested BY MODE BIT - in the first family the bits hold:
+
+| PiXEL's mode | on a display whose caps hold | screen | colours | how |
+|---|---|---|---|---|
+| **320x240, 256** (the VGA's default) | `FSXM_MODEX` | Mode X, square pixels | the master's own 256 | DAC = the palette's six bits |
+| 320x200, 256 | `FSXM_VGA13` | 13h, a pixel 5/6 as wide as tall | the master's own 256 | the same |
+| 640x480, 16 | `FSXM_VGA12` | 12h, square | sixteen CHOSEN for the picture | identity attribute map + 16 DAC entries, then the plan diffuser |
+| **Desktop, 16** (the EGA's default) | no VGA bit, and a 4bpp display | the display's own mode, a SAME-MODE bracket | os8088's sixteen | the plan diffuser, put up with `OSAPI_GFX_BLITP` |
+| **160x100, 16** (the CGA's default) | no VGA bit, `FSXM_TEXT80`, and DL = `VID_CGA` | C160, a pixel 5/6 | the CGA's sixteen | Clear Skies' retime (§88.15), the plan diffuser |
+| 320x200, 4 | no VGA bit, `FSXM_CGA320` | mode 4, 5/6 | four CHOSEN of the CGA's sets | the BIOS's `AH=0Bh`, the plan diffuser |
+| 640x200, 2 | no VGA bit, `FSXM_CGA640` | mode 6, 5/12 | black, white | the luma diffuser |
+| **720x348, 2** | `FSXM_HERC` | the Hercules' page 0, 29/45 | black, green | the luma diffuser |
+
+C160 is the one row that asks the KIND as well as a bit, and for the reason
+§98.3.12 and §88.15.7 give: an EGA's 80-column text is 350 lines, where the
+retime's arithmetic needs 200; and a VGA, which could run it, has three
+richer modes. **The EGA's default is a same-mode bracket and not the §11.2
+latch**: the same loop, keys, lettering and slideshow as every other mode and
+no third layout of the window, and the sixteen colours at 640x350, diffused,
+beat 320x200's four on every picture of the gallery (the host's renders,
+`tools/pixelsim.py --fsrender`). The CGA's two 320- and 640-wide modes stay on
+its list. View > `Screen: 320x240, 256` names the mode the display the window
+is on will get, and choosing it turns to the next one that display offers
+(`M` does the same inside full screen); a choice another display does not
+offer falls back to that display's default. With one mode, a Hercules, the
+item is greyed.
+
+**Inside**, everything is the FULL-SCREEN PART's (`apps/pixel/pxfull.asm`,
+part 6, LINKED like the SIMPLE and FOLDER parts, 106.20): fetched before
+`OSAPI_FSX_RUN` (`FSXF_KEEPWORKER`), held while the screen is PiXEL's and
+dropped on the way out. Its one vector, DECODE, takes a verb: `FSV_ENTER` (the
+mode set, its colours, the picture whole, the captions), `FSV_SHOW` (another
+picture, its colours chosen again), `FSV_POLL` (one pass of the keys, the
+mouse and Alt+Enter, a zoom or a pan done there, a slice of any render owed;
+it answers a verb for the resident: leave, next, previous, first, last, the
+slideshow, the next mode, or the slideshow stopped), `FSV_PROG` (the
+progress line) and `FSV_MSG` (a line of the resident's, for two seconds) -
+`apps/pixel/pxfs.inc` holds the numbers both sides read. The part
+draws into the mode's memory directly - §53.7 gives a foreign mode's card to
+the app and forbids every drawing slot after the first `fsx_mode` - and
+letters from `OSAPI_FONT_GLYPHS`. In the same-mode Desktop bracket it draws
+with `OSAPI_GFX_BLITP` instead, which §53.7 allows until a mode is set and
+which needs nothing put back.
+
+**The keys** (§11.2.1, both cases; Alt+Enter is `apps/os88alt.inc`'s edge,
+seeded at the top and kept in the part, since a part cannot call the
+package's copy):
+
+| key | does |
+|---|---|
+| F, Esc, Alt+Enter | leave full screen (a slideshow stops with it) |
+| Space, N, the left button | the next picture in the folder, wrapping |
+| Backspace, P, the right button | the previous one |
+| Home, End | the first, the last |
+| + (=), - | zoom a step in, out (106.11's steps); 0 Fit, 1 one master pixel a screen pixel |
+| the arrows | pan, an eighth of the screen, when the picture is larger than it |
+| S | the slideshow, from full screen |
+| M | the next mode the display offers: one the kernel sets is entered in place; the Desktop, from a mode it set, only by a bracket anew (the desktop flashes past) |
+
+While a slideshow runs any key but the three doors stops it and does nothing
+else, as in the window (106.21).
+
+**The view.** A zoom `Z` is screen pixels a MASTER pixel across (the window's
+is a source pixel's), and the mode's own pixel aspect `a` gives the steps:
+`hs = 2^32 div Z`, `vs = hs x ad div an`, the picture `ceil(mw 2^16 / hs)` by
+`ceil(mh 2^16 / vs)`. **Fit is in closed form** - the largest `Z` with `hs >=
+ceil(mw 2^16 / W)` and `vs >= ceil(mh 2^16 / H)`, `Z = 2^32 div max(ceil(mw
+2^16 / W), ceil(ceil(mh 2^16 / H) an / ad))` - so the whole master shows and
+no row hangs past the screen; it is NOT capped at 1, because a 320x240 master
+belongs on all of a 640x480 screen. A side that fits is centred; a larger one
+is clamped to keep the screen covered. A screen pixel `(x, y)` inside the
+picture shows master pixel `((x - ox) hs >> 16, (y - oy) vs >> 16)`, nearest,
+by a DDA; outside it is the mode's GROUND.
+
+**The colours a mode shows** (`tools/pixelsim.py`'s `FsPic`, every rule here
+its line):
+
+- **256.** The DAC is the palette, each channel `v >> 2`. The GROUND is the
+  darkest entry (`77 r + 150 g + 29 b` of its six bits, the lowest index on a
+  tie) and the lettering's ink the lightest.
+- **The adaptive sixteen (640x480).** A MEDIAN CUT over the palette's used
+  entries, weighted by the histogram the worker counted (106.12) - each count
+  shifted right until the picture's pixels would be under 32,768, and at
+  least 1 - so the weights sum below 2^16: the box with the largest weight x
+  weighted range (106.11's `(3, 6, 1)`) is cut on that channel at its
+  weighted MEAN, the entries at or below it first, until there are sixteen
+  or nothing can be cut; a box's colour is its weighted mean, rounded.
+  Cutting at the mean rather than the median was measured: the weighted
+  squared error over the gallery fell by a third, and the median lost the
+  balloon picture's sky from the sixteen altogether. Then **the identity
+  attribute map and the sixteen DAC entries** (Gorillas' recipe, §53's
+  `FSXM_VGA12` set even though the desktop is already 12h, which is what
+  makes the exit's mode set put the desktop's palette back).
+- **The CGA's four (320x200).** The same cut, then every background x
+  {palette 1, palette 0, mode 5's cyan-red-white} x {high, low} - 96 sets -
+  scored against the cut's colours: each colour's weight x (its best plan's
+  error over the four `>> 8`), the lowest sum, the first in that order on a
+  tie. Set through the BIOS (`AH=0Bh` twice: background and intensity, then
+  the palette), Clear Skies' portable way and never port 3D9h; mode 5's red
+  is the CGA's `3D8h = 0Eh` and an EGA's palette register 2 (`AX=1000h`,
+  4 or 14h), the Video Player's (§98.3.12).
+- **The fixed sixteen** (C160 and the Desktop): the CGA's RGBI colours, which
+  are os8088's, brown included.
+- **Two** (640x200, Hercules): black and white.
+
+**THE PLAN DITHER.** Every used palette entry gets 106.11's plan `(c1, c2,
+t)` against the mode's colours, searched in the DAC's six bits (`plan6`):
+`c1` the nearest by the weights `(3, 6, 1)`; each other colour `c2` tried by
+the projection of the entry on `c2 - c1`, `t = round(64 S / K)` clipped to 64,
+its error `sum w (64 d - D t)^2 + 128 K` - 106.11's own error and contrast
+penalty scaled to six bits - and the strictly lowest kept. Six bits keep
+every term in 32 bits on an 8088: `K` under 2^16, so `t` is one `div`. The
+part expands the error rather than summing it - `sum w (64 d - D t)^2 =
+4096 sum w d^2 - 128 t S + t^2 K` exactly, with the `S` and `K` the
+projection needs anyway - and skips a pair whose penalty `128 K` alone
+already reaches the best error (`plan_fast`'s floor, 106.11): the same
+answers, a third of the work.
+On a mono mode an entry's level is the window's 1bpp luma (106.11's `L`),
+between black and white.
+
+**THE DIFFUSER** turns those into pixels, View > Dither's DIFFUSION - now
+the item's default and full screen's alone, since the window always orders
+(106.11's reason: a pan would re-render the canvas). Each entry's target is
+`T = (255 t + 32) >> 6` (or `L`), and a screen row is walked left to right
+across the picture: `v = T + e_in[x] + carry`; `c2` (lit) when `v >= 128`,
+else `c1`; the error `e = v - 255` or `v`; `q = e >> 2` (arithmetic) to the
+pixel below-left and the one below, `carry = e - 2q` to the right - Frankie
+Sierra's "Filter Lite" (2/4, 1/4, 1/4), whose total error is exact. Rows
+start the picture at zero; an error past the picture's sides is dropped. It
+diffuses the plan's ONE number where a colour Floyd-Steinberg diffuses three
+and searches the sixteen for each pixel - and on the host's prototypes it
+looked the better of the two, because a cube-quantised master re-diffused in
+RGB turns the cube's blue noise into coloured speckle. **ORDERED** is the
+window's rule on the screen's coordinates: `c2` where `bayer(y & 7, x & 7) <
+t`.
+
+**The captions** are lettered into the rows as they are made, from
+`OSAPI_FONT_GLYPHS`, on BANDS of ten rows in the ground colour with the
+lightest colour's ink: the top band, on the way in, the keys (three
+wordings, the longest that fits the width); the bottom band the picture's
+name and `3 of 9`, at every new picture, or a line of the resident's (a
+refusal, `GIF: not enough memory`, the toast's words). Each comes down after **two
+seconds**, by rendering its rows again - the diffuser's state where the
+bottom band starts is KEPT by the full render, so the band comes back the
+same pixels it would have been. While another picture decodes, the bottom
+row is a progress line, `pct` of the width in the ink - the worker's rows
+emitted over the picture's, 106.9's percent - over everything else there.
+
+**What a change redraws.** A render is resumable: `PF_POLL` renders until it
+is done or a key is waiting, and the next poll goes on from that row, so
+Esc in the middle of a 640x480 render leaves at once. In the two 256-colour
+modes a pan MOVES what stays - Mode X by the latches, four pixels an
+address (write mode 1), 13h a byte at a time - and renders only the strip it exposed, the
+dither being no part of them; a master row shown on several screen rows is
+sampled once. Every dithered mode renders whole on a pan or a zoom: the
+diffuser's error runs from the top-left, so no strip of it stands alone.
+
+**Another picture inside** - Next, Prev, Home, End and the slideshow - is a
+HIDDEN DECODE (106.21) on the kept worker, and the UI task, in the bracket's
+loop, is its pump: `px_pumpfill` when the request byte asks, `px_hdone` when
+the worker answers - the two things `W_ONWAKE` does, which no event reaches
+inside a bracket. Unlike the window's, it may give the SHOWN picture's master
+back when that buys the next one a finer scale (106.8's rule): the glass
+keeps showing it, so nothing is lost but a zoom or a pan while the next one
+decodes, which wait. The answer is COMMITTED at once (or at the slideshow's
+deadline, `PX_SLIDE` after the last slide was whole): the old master goes,
+the new one is shown, and `PF_SHOW` chooses its colours. A refusal is said in
+the bottom band and the picture shown stays; a refusal that leaves no master
+at all (the shown one given back) leaves full screen.
+
+**The way out** is the bracket's: §53.6 sets the desktop's mode and repaints
+every window. PiXEL gives the VIEW claim back on the way in - 30 KB, and a
+claim of §50.2's eight while a hidden decode holds three - so the repaint
+claims it again and builds the tables (106.11); a picture changed inside
+leaves the window at Fit, its canvas ground until the worker's tables job
+ends, exactly as the windowed slideshow's commit does. The timer, whose
+event the bracket's exit drained, is armed again, and a slideshow running
+inside stops with the full screen.
+
+**What it costs** on the machines PiXEL is calibrated against, a 4.77 MHz
+8088 under MartyPC's cycle counter (`tests/pxfsx.py`, from the bracket's
+entry to the part's render starting - the mode set and its COLOURS - and on
+to the picture whole), BALLOONS.PNG (320x240, its own 256 colours):
+
+| machine | mode | its colours | the picture whole | a pixel |
+|---|---|---:|---:|---:|
+| XT, VGA | 320x240, 256 | 0.37 s | **1.85 s** | 115 cycles |
+| | 320x200, 256 | 0.27 s | 1.55 s | 116 |
+| | 640x480, 16 | 2.81 s | 26.4 s | 410 |
+| 5150, CGA | 160x100, 16 | 2.74 s | **1.38 s** | 410 |
+| | 320x200, 4 | 3.44 s | 5.25 s | 390 |
+| | 640x200, 2 | 0.15 s | 8.83 s | 330 |
+| 5150, Hercules | 720x348, 2 | 0.19 s | 16.1 s | 310 |
+
+The two 256-colour modes are the sampling and a copy; every dithered pixel
+is the diffuser's ~250 cycles (the 640x480 mode's planes another ~95), and
+an 8088 fetches its ~45 bytes of loop at four cycles a byte: the 8088's
+floor, not a slow path left in. **Measured while it was built**: the error
+row was a pair swapped a row and written read-modify-write - the in-place
+row above took 640x200 from 11.4 s to 9.96, the two-colour arm (an `xlat`
+and an immediate where a plan's two lookups were) to 8.83; the plan search
+expanded and pruned by its penalty, 160x100's colours from 3.79 s to 2.74;
+and the CGA's chooser, its targets heaviest first and a candidate abandoned
+once past the best, from 7.88 s to 3.44. Ordered is not a fast path here -
+a compare a pixel where the diffuser is an add - and is there for its look.
+On a 286 every figure is a fifth or less.
+
+**The resident's share** (106.20's budget for this wave, 1,500): **+1,481
+bytes** - the doors and View > Screen, the modes a display offers, the
+bracket's loop with its pump, commit and slideshow, the toasts held off the
+glass inside it - and **+67** of fixes to earlier waves, below: 51,071 of
+61,440, **10,369 to spare**. The FULL-SCREEN part is 23,290 bytes, 6,604
+packed (7,794 of code and tables; its scratch is zeroes): a claim of its own while the
+screen is PiXEL's. **Claims at the worst moment**, a next picture decoding:
+the face, the shown master, the store, the full-screen part, the decoder
+part, the hidden master, the work claim and the ring - eight, §50.2's limit,
+which is why the view claim is given back on the way in.
+
+**Tests.** `tools/pixelsim.py`'s `FsView`, `FsPic`, `fs_mediancut`, `plan6`
+and `fs_cgapick` are the reference, `--fsrender` a PNG of any mode for
+looking, and `--selfcheck` holds a few of their invariants (Fit inside every
+screen, a colour its own plan, the cut of two colours). **`pxfsx`** (soak,
+MartyPC: the VGA XT, the CGA 5150 and the Hercules 5150) enters every mode
+each display offers and holds the part's tables, the DAC read back and EVERY
+PIXEL of the mode to pixelsim's - the CGA's and the Hercules' memory read
+straight, the VGA's out of MartyPC's whole field (its display apertures stop
+at 400 lines; Mode X has 480) through the DAC's widening - then leaves and
+holds the desktop's mode, its DAC, its pixels and PiXEL's claims to what
+they were; holds View > Dither's ordered rule the same way on each machine's first
+dithered mode; zooms Mode X and 13h two steps in and pans them three ways,
+each pan's moved screen and rendered strip held to pixelsim's view; drives
+the EGA's same-mode Desktop on the VGA's own 12h (no MartyPC machine has an
+EGA); and takes a next picture and a slideshow of two in full screen. It
+prints the table above. **`pxbench`'s third disk is 720 KB now**: PIXEL.O88
+no longer fits a 360 KB volume beside its three pictures, and in the 720 KB
+drive HOUSE.PNG's first rows measure 3.20 s (5150) and 2.89 s (VGA XT), its
+ceilings re-based on those; and the 5150's `inflate` takes the VGA XT's
+ceiling, because that figure moves with where the UI task's reads land - in
+K_NEXT's waits or in inflate's time - which the package's growth moved on the
+disk: 404 cycles a byte against 323 at the same 38.98 s decode.
+
+**Fixed in this wave, in earlier waves' code:**
+
+- **Fit** (106.11): the closed form above. The decoder speed pass had seen
+  the symptom - rows counted painted past the canvas - and the cause was the
+  view's own rounding.
+- **`[px_onworker]` was never set**, so on the worker `px_plans` took the UI
+  task's branch: `px_kneed` and `px_pcall`, which could FETCH a part on the
+  worker (§20.6's rule 7) and shared the UI task's far pointer, and the plan
+  search never polled the cancel. `px_wjob` sets it for a job's length;
+  `px_tabpoll`, which nothing called, is gone.
+- **The Navigator's well** recorded a picture as drawn when it had drawn the
+  well grey while the worker built its tables - after a commit, or full
+  screen's way out - and so never drew it; its key now holds no picture
+  while `[px_busy]` is set.
+- **The wave-5 review's F1**: the cache's header was read into the store at
+  offset 0, so its 4 KB put the FILE's bytes over the cube's plans and
+  thresholds; it is read into the buffer and the header's own 2,080 bytes
+  copied down, and written from there with zeroes after them. **F2**: a
+  refused open's walk left `[px_ncur]` on the refused file, and the idle
+  engine made that file's thumbnail from the shown picture's master;
+  `px_restore` puts the list's place back (`px_ncfind`: FFFFh when the
+  shown picture is not in the list walked). **F3**: a short, empty or
+  foreign `PIXEL.THC` is taken as none, so the writer makes it anew whole
+  rather than write at an offset the file has not got.
+
+**Left as it is, and why.** A part that cannot be fetched inside full screen
+(PiXEL's disk taken out between two pictures) is `op_fetch`'s own toast,
+which draws the menu bar into the foreign mode - PiXEL's own toasts are held
+off the glass there, the shared parts code's are not. MartyPC rasterises a
+Hercules page 704 columns wide; its memory, which the row checks, holds all
+720. And **wave 7's `OS88UI_ASAVE`** must also stand in front of
+`px_fsstart`: full screen leaves a picture by its own commit, not by
+`px_navto`.

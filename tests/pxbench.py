@@ -69,13 +69,23 @@ FAIL = []
 # BIG.BMP's first rows are 106.17's again (1.34 s on the 5150): the wake's
 # deferral had been reading 32 KB in front of the first paint (106.22). The
 # JPEG `huffman` figure is the block's entropy decode WITH its dequantising
-# now (pj_blk less its IDCT), `idct` the IDCT alone (pj_id8)
+# now (pj_blk less its IDCT), `idct` the IDCT alone (pj_id8).
+# Wave 6 (SPEC.md 106.23): PIXEL.O88 grew past what a 360 KB volume holds
+# beside DISK3's three pictures, so DISK3 is 720 KB in the 720 KB drive -
+# another geometry, and HOUSE.PNG's FIRST ROWS there measured 3.20 s (5150)
+# and 2.89 s (VGA XT): the ceilings are those + 30%. And the 5150's
+# `inflate` takes the VGA XT's ceiling: the figure is the decode less the
+# extraction, K_NEXT and the wakes, and where the UI task's disk reads land
+# - inside K_NEXT's waits or inside inflate - moves with the files' places
+# on the disk, which the package's growth moved: 404 against 323 at the
+# SAME 38.98 s decode and the same inflate + K_NEXT (27.04 s), as the
+# decoder pass's own VGA run had read 402.5
 CEIL = {
     "os8088_5150_cga_gla": {
         "MOUNTAIN.BMP": (21.0, 4.0), "CITY.PCX": (14.7, 3.5),
         "BIG.BMP": (40.8, 1.8),
         "CAT.GIF": (29.0, 4.0), "BALLOONS.PNG": (18.3, 5.6),
-        "HOUSE.PNG": (52.6, 3.0), "inflate": 372,
+        "HOUSE.PNG": (52.6, 4.2), "inflate": 463,
         "zoom": 1.0, "fit": 0.55, "pan": 0.35,
         "VACATION.JPG 1/8": (27.4, 6.0), "VACATION.JPG 1/2": (53.0, 4.8),
         "VACATION.JPG 1/1": (133.5, 8.0), "VACATION.JPG fast": (54.5, 4.8),
@@ -84,7 +94,7 @@ CEIL = {
         "MOUNTAIN.BMP": (23.0, 4.1), "CITY.PCX": (19.3, 6.0),
         "BIG.BMP": (47.0, 3.9),
         "CAT.GIF": (34.1, 6.2), "BALLOONS.PNG": (23.7, 8.4),
-        "HOUSE.PNG": (55.6, 2.8), "inflate": 463,
+        "HOUSE.PNG": (55.6, 3.8), "inflate": 463,
         "zoom": 4.3, "fit": 2.25, "pan": 0.57,
         "VACATION.JPG 1/8": (31.4, 5.8), "VACATION.JPG 1/2": (57.5, 5.1),
         "VACATION.JPG 1/1": (138.0, 8.2), "VACATION.JPG fast": (57.5, 5.1),
@@ -432,10 +442,13 @@ def inflate_bench(m, px, name, outbytes):
     return tot, infl, st["ext"], st["next"], st["ui"]
 
 
+# PIXEL.O88 grew past what a 360 KB volume holds beside these three with
+# wave 6's full-screen part (358 clusters of 354): DISK2's 720 KB disk and
+# drive, which read as the 360 KB's do
 DISK3 = M.scratch_disk("build/pxbench3.img", "build/pixel.o88",
                        "PICS:" + SMALL, "PICS:apps/pixel/samples/CAT.GIF",
                        "PICS:apps/pixel/samples/BALLOONS.PNG",
-                       "PICS:apps/pixel/samples/HOUSE.PNG")
+                       "PICS:apps/pixel/samples/HOUSE.PNG", size=720)
 
 
 def work3(m, px):
@@ -447,7 +460,7 @@ def work3(m, px):
 
 
 if "3" in a.sessions:
-    session(DISK3, ["C8.PCX"], work3)
+    session(DISK3, ["C8.PCX"], work3, MACH720.get(a.machine))
 DISK4 = M.scratch_disk("build/pxbench4.img", "build/pixel.o88",
                        "PICS:" + SMALL, "PICS:apps/pixel/samples/HOUSE.PNG")
 

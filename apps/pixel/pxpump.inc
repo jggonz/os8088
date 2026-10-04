@@ -956,6 +956,12 @@ px_worker:
 ; px_wjob - the job [px_job] names. out AL = PXD_OK, a PXD_* refusal or
 ; PXD_ABORT
 px_wjob:
+    mov byte [px_onworker], 1       ; px_plans asks the part the decode holds
+    call px_wjob1                   ; (px_wcall), never fetches, and polls the
+    mov byte [px_onworker], 0       ; cancel (pl_poll): 106.23's fix - the
+    ret                             ; byte was never set, so on the worker it
+                                    ; took the UI task's branch
+px_wjob1:
     mov byte [px_wstage], 0
     cmp byte [px_job], JOB_DECODE   ; a decoder PART knows its palette only
     jne .tab                        ; in the stream: it asks for the tables
@@ -1166,6 +1172,7 @@ px_restore:
 .np:
     mov byte [px_prev + PXR_HAVE], 0
     mov word [px_prev + PXR_MSEG], 0
+    call px_ncfind                  ; the list's place, the shown one's again
     call px_kkeep                   ; a decoder part of another kind goes
     cmp byte [px_tabdirty], 0
     je .out
@@ -1331,12 +1338,34 @@ px_cancel:
 ; most TOAST_MAX glyphs. Preserves all
 px_refusal:
     push ax
-    push bx
     push si
     push di
     mov [px_lastref], al            ; (for tests/pxdecode.py)
+    call px_refwords
+    jc .out
+    mov si, px_cline
+    call px_toast
+    mov di, px_cvmsg                ; ...and it stands in the empty canvas
+    call px_strcpy                  ; until something is shown (wave-1
+.out:                               ; review MIN-9)
+    pop di
+    pop si
+    pop ax
+    ret
+
+; px_refwords - AX = a PXD_*: px_cline = "FORMAT: reason", or the reason
+; alone for the two that name no format; the toast's words, and full
+; screen's (106.23). CF = 1 it is not a reason. Preserves all
+px_refwords:
     cmp ax, PXD_NREASON
-    jae .out
+    jb .go
+    stc
+    ret
+.go:
+    push ax
+    push bx
+    push si
+    push di
     mov di, px_cline
     mov byte [di], 0
     cmp ax, PXD_NOFILE              ; these two say it without a format
@@ -1355,17 +1384,11 @@ px_refusal:
     shl bx, 1
     mov si, [px_reasons + bx]
     call px_strcat
-    mov si, px_cline
-    call px_toast
-    push di                         ; ...and it stands in the empty canvas
-    mov di, px_cvmsg                ; until something is shown (wave-1
-    call px_strcpy                  ; review MIN-9)
-    pop di
-.out:
     pop di
     pop si
     pop bx
     pop ax
+    clc
     ret
 
 ; px_bstop / px_bopen - the toolbar's first button is Stop while a picture

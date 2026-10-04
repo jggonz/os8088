@@ -25,6 +25,7 @@
 %include "pxpart.inc"
 %include "pxrec.inc"                ; the record, the formats, the decoders
 %include "pxthc.inc"                ; the folder list, the thumbnails (106.21)
+%include "pxfs.inc"                 ; full screen's modes and verbs (106.23)
 
     OS88_HEADER 'PiXEL', px_entry, OS88_F_ICON | OS88_F_ASSOC | OS88_F_GLYPH | OS88_F_PARTS
 
@@ -60,7 +61,9 @@ PXPART_SIMP equ 4                   ; BMP, PCX, TGA, PNM, PIX, LINKED against
                                     ; the package: apps/pixel/pxsimp.asm
 PXPART_FOLD equ 5                   ; the FOLDER: the thumbnail cache and the
                                     ; making of one, LINKED: pxfold.asm
-PX_NPARTS   equ 6                   ; (a decoder part is never 0: [px_kheld]
+PXPART_FULL equ 6                   ; FULL SCREEN: every mode's renderer and
+                                    ; its colours, LINKED: pxfull.asm
+PX_NPARTS   equ 7                   ; (a decoder part is never 0: [px_kheld]
                                     ; 0 is "none held", SPEC.md 106.18)
 PXD_QUIET   equ 0xFE                ; a refusal already said (op_fetch's own
                                     ; toast): px_refusal says nothing more
@@ -212,6 +215,7 @@ px_entry:
     mov ax, PX_MEMT
     call OSAPI_WM_TIMER             ; the status bar's free memory
     call px_memfield
+    OS88_ALTENTER_ARM               ; the key-state map, or Alt+Enter is dead
     mov bx, [px_win]                ; the loader publishes the window we
     clc                             ; return in BX
     ret
@@ -229,6 +233,8 @@ px_initstate:
     mov word [px_ncur], 0xFFFF      ; no folder yet
     mov byte [px_zfit], 1
     mov byte [px_zreq], 0xFF        ; no re-decode asked for (SPEC.md 106.19)
+    mov byte [px_dither], 1         ; full screen diffuses (SPEC.md 106.23)
+    mov byte [px_fsm], PXM_NONE     ; ...in the display's own default mode
     xor bx, bx
 .sv:
     mov si, px_s_empty0             ; every field blank until it knows
@@ -929,6 +935,8 @@ px_onkey:
     push bx
     push dx
     mov [px_win], si
+    call px_fsdoor                  ; F, Alt+Enter: full screen (106.23),
+    jnc .out                        ; a slideshow carried in
     call px_acted                   ; a hidden decode stopped; a slideshow
     jnc .act                        ; stopped too, and the key spent on that
     jmp .out
@@ -1096,8 +1104,10 @@ px_cmd:
     call px_hstop                   ; a hidden decode gives the record back
     call px_touch
     cmp ax, (PX_M_FILE << 8) | PX_MF_SLIDE
-    je .slide                       ; (the one command a slideshow survives:
-    call px_slstop                  ; it is the one that stops it)
+    je .slide                       ; (the two commands a slideshow survives:
+    cmp ax, (PX_M_VIEW << 8) | PX_MV_FULL   ; the one that stops it, and full
+    je .slide                       ; screen, which carries it in, 106.23)
+    call px_slstop
 .slide:
     call px_carddown                ; a card is taken down first (106.2): a
                                     ; command under it would act unseen
@@ -1164,6 +1174,16 @@ px_cmd:
     call px_zoomto
     jmp short .out
 .v0d:
+    cmp al, PX_MV_FULL
+    jne .v0e
+    call px_fsgo
+    jmp short .out
+.v0e:
+    cmp al, PX_MV_SCREEN
+    jne .v0f
+    call px_fscycle
+    jmp short .out
+.v0f:
     cmp al, PX_MV_DITHER
     jne .v1
     call px_dithertog
@@ -1645,15 +1665,20 @@ px_menuset:
     push bx
     push si
     mov bx, [px_win]
+    or bx, bx                       ; (no window yet: the entry registers the
+    jz .x                           ; set once it has made one)
     mov si, px_menus
     call OSAPI_MENU_SET
+.x:
     pop si
     pop bx
     ret
 
 ; px_toast - SI = a line of ours (<= 24 glyphs, SPEC.md 59.10)
 px_toast:
-    push cx
+    cmp byte [px_fsin], 0           ; inside full screen the glass is the
+    jne .x                          ; part's: a toast draws the menu bar
+    push cx                         ; (SPEC.md 106.23)
     push es
     push ds
     pop es
@@ -1661,6 +1686,7 @@ px_toast:
     call OSAPI_TOAST
     pop es
     pop cx
+.x:
     ret
 
 ; =============================================================================
@@ -2184,6 +2210,31 @@ px_sortnames:
     inc bx
     jmp short .i
 .find:
+    call px_ncfind
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; px_ncfind - [px_ncur] := the shown picture's place in the folder list, or
+; FFFFh when it is not in it - another folder's list, or a misnamed file.
+; Called by the walk, and by px_restore: a REFUSED open's walk left the list
+; pointing at the refused file, and the thumbnail engine then made ITS card
+; from the shown picture's master (review-w5 F2). Preserves all
+px_ncfind:
+    push ax
+    push bx
+    push si
+    push di
+    mov word [px_ncur], 0xFFFF
+    mov ax, [px_cur + PXR_DIR]
+    cmp ax, [px_nfdir]
+    jne .out
+    mov al, [px_cur + PXR_VOL]
+    cmp al, [px_nfvol]
+    jne .out
     xor bx, bx
     mov si, px_names
 .f:
@@ -2201,7 +2252,6 @@ px_sortnames:
 .out:
     pop di
     pop si
-    pop cx
     pop bx
     pop ax
     ret
@@ -2824,9 +2874,11 @@ px_menulive:
     mov ax, px_mi_slstop + 1
 .s:
     cmp [px_mif + 2 * PX_MF_SLIDE], ax
-    je .done
+    je .fs
     mov [px_mif + 2 * PX_MF_SLIDE], ax
     inc cx
+.fs:
+    call px_fsmenu                  ; Full Screen and Screen (106.23)
 .done:
     jcxz .out
     call px_menuset
@@ -3145,6 +3197,7 @@ px_u32:
 %include "pxsimple.inc"             ; BMP, PCX, TGA, PNM, PIX (106.10)
 %include "pxview.inc"               ; the renderer, Navigator, Histogram (106.11)
 %include "pxfolder.inc"             ; the folder, thumbnails, slideshow (106.21)
+%include "pxfull.inc"               ; full screen, the resident half (106.23)
 %include "os88rseq.inc"             ; READ_SEQ behind READ_AT's registers
 
 ; px_zfield - the status bar's zoom: "100%", or "Fit 47%" (SPEC.md 106.12).
@@ -3462,17 +3515,19 @@ PX_MV_ZIN   equ 0
 PX_MV_ZOUT  equ 1
 PX_MV_FIT   equ 2
 PX_MV_ACTUAL equ 3
-PX_MV_DITHER equ 6
-PX_MV_PANELS equ 7
-PX_MV_FILM  equ 8
-PX_MV_HELP  equ 9
+PX_MV_FULL  equ 5
+PX_MV_SCREEN equ 6
+PX_MV_DITHER equ 7
+PX_MV_PANELS equ 8
+PX_MV_FILM  equ 9
+PX_MV_HELP  equ 10
 
     OS88_MENUSET px_menus, px_ttl, px_cmd
         OS88_MENU px_m_file, px_mif, 9
         OS88_MENU px_m_edit, px_mie, 7
         OS88_MENU px_m_image, px_mii, 11
         OS88_MENU px_m_fx, px_mix, 10
-        OS88_MENU px_m_view, px_miv, 10
+        OS88_MENU px_m_view, px_miv, 11
     OS88_MENUSET_END px_menus
 
 px_m_file:  db 'File', 0
@@ -3527,12 +3582,28 @@ px_mi_thr:    db MENU_DIS, 'Threshold...', 0
 px_mi_gam:    db MENU_DIS, 'Gamma...', 0
 
 px_miv: dw px_mi_zin, px_mi_zout, px_mi_fit, px_mi_actual, px_sep
-        dw px_mi_full, px_mi_dord, px_mi_hidep, px_mi_hidef, px_mi_help
+        dw px_mi_full, px_mi_fsm0, px_mi_ddif, px_mi_hidep, px_mi_hidef
+        dw px_mi_help
 px_mi_zin:    db MENU_DIS, 'Zoom In', 0
 px_mi_zout:   db MENU_DIS, 'Zoom Out', 0
 px_mi_fit:    db MENU_DIS, 'Fit', 0
 px_mi_actual: db MENU_DIS, 'Actual Size', 0
-px_mi_full:   db MENU_DIS, 'Full Screen', 0
+px_mi_full:   db MENU_DIS, 'Full Screen  F', 0
+; View > Screen: the mode the display the window is on will get, one string
+; a PXM_* (SPEC.md 106.23); choosing it turns to the next one offered
+px_mi_fsm0:   db MENU_DIS, 'Screen: 320x240, 256', 0
+px_mi_fsm1:   db MENU_DIS, 'Screen: 320x200, 256', 0
+px_mi_fsm2:   db MENU_DIS, 'Screen: 640x480, 16', 0
+px_mi_fsm3:   db MENU_DIS, 'Screen: Desktop, 16', 0
+px_mi_fsm4:   db MENU_DIS, 'Screen: 160x100, 16', 0
+px_mi_fsm5:   db MENU_DIS, 'Screen: 320x200, 4', 0
+px_mi_fsm6:   db MENU_DIS, 'Screen: 640x200, 2', 0
+px_mi_fsm7:   db MENU_DIS, 'Screen: 720x348, 2', 0
+px_fsmlab:    dw px_mi_fsm0, px_mi_fsm1, px_mi_fsm2, px_mi_fsm3
+              dw px_mi_fsm4, px_mi_fsm5, px_mi_fsm6, px_mi_fsm7
+%if ($ - px_fsmlab) != 2 * PXM_N
+  %error "px_fsmlab has a label per PXM_*"
+%endif
 px_mi_dord:   db 'Dither: Ordered', 0
 px_mi_ddif:   db 'Dither: Diffusion', 0
 px_mi_hidep:  db 'Hide Panels', 0
@@ -3599,6 +3670,7 @@ px_s_diskback: db "Put PiXEL's disk back", 0
 px_s_later: db 'Not in this build yet', 0
 px_s_nopico: db 'No picture open', 0
 px_s_noother: db 'No other picture here', 0
+px_s_nofs:  db 'No full screen here', 0
 px_s_nothc: db 'Thumbnails not saved', 0
 px_s_opening: db 'Opening ', 0
 px_s_pct:   db '%', 0
@@ -3670,6 +3742,7 @@ px_s_r11:   db 'too big to unpack', 0
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 3 JPEG (106.19)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 4 the simple five (106.20)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 5 the folder (106.21)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 6 full screen (106.23)
     OS88_PARTS_END
 
 ; =============================================================================
@@ -4178,6 +4251,20 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_thread, 2              ; thumbnails read from the cache (a test's)
     PXVAR px_thwrote, 2             ; the cache's writes (a test's)
     PXVAR px_thref, 1               ; a thumbnail's last refusal (a test's)
+    ; full screen (pxfull.inc, SPEC.md 106.23)
+    PXVAR px_fsm, 1                 ; the mode chosen (View > Screen), or none
+    PXVAR px_fsmode, 1              ; the mode this bracket is in
+    PXVAR px_fskind, 1              ; ...the display's VID_* (fsx_caps' DL)
+    PXVAR px_fsmask, 1              ; ...the modes it offers (bit = PXM_*)
+    PXVAR px_fsre, 1                ; a bracket anew in this mode, or none
+    PXVAR px_fsin, 1                ; inside: a hidden decode may give the
+                                    ; shown master back (106.23)
+    PXVAR px_fsrec, 2               ; the record the screen shows
+    PXVAR px_fsidx, 2               ; the folder's place Next steps from
+    PXVAR px_fschg, 1               ; the picture changed inside
+    PXVAR px_fsnav, 1               ; a next picture decodes: commit when done
+    PXVAR px_fsdue, 1               ; ...the slide's deadline is set
+    PXVAR px_fsn, 2                 ; brackets entered (a test's)
 PX_BSSEND   equ px_w2 + PXV
 PX_BSS      equ PX_BSSEND - PXB
 

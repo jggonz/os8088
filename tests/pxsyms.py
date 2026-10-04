@@ -36,3 +36,22 @@ def instance(m, S, image):
         if c and m.read(c * 16, 32) == image[:32]:
             return c
     return None
+
+
+def part_syms(asm, build="build"):
+    """{name: offset} of one of PiXEL's LINKED parts (apps/pixel/<asm>), as
+    THIS tree assembles it against build/pxlink.inc - the part's own state
+    is read through its segment, which op_table names while it is fetched."""
+    with tempfile.TemporaryDirectory() as d:
+        cp, mp = os.path.join(d, "p.asm"), os.path.join(d, "p.map")
+        open(cp, "w").write(open(os.path.join("apps", "pixel", asm)).read()
+                            + "\n[map symbols %s]\n" % mp)
+        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
+                        "-I", "apps/pixel/", "-I", build + "/",
+                        "-o", os.path.join(d, "p.bin"), cp], check=True)
+        out = {}
+        for L in open(mp):
+            f = L.split()
+            if len(f) == 3 and all(c in "0123456789ABCDEF" for c in f[0]):
+                out[f[2]] = int(f[1], 16)
+        return out

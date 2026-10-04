@@ -1884,7 +1884,9 @@ px_nkey:
     jc .k
     cmp byte [px_cur + PXR_HAVE], 0
     je .k
-    mov al, [px_cur + PXR_SERIAL]
+    cmp byte [px_busy], 0           ; its tables being built (a commit's, or
+    jne .k                          ; full screen's way out, 106.23): the
+    mov al, [px_cur + PXR_SERIAL]   ; well's grey, and not recorded as drawn
     inc ah
 .k:
     mov [px_knew], ax

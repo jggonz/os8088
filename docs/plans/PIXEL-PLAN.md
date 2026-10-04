@@ -415,7 +415,7 @@ the user pick another available mode. Everything happens in a §53 bracket:
 | CGA | **320x200 x 4** (`FSXM_CGA320`) | 4 | the palette is CHOSEN: 16 backgrounds x {pal 0, pal 1} x {low, high} x {mode 5 cyan/red/white} are scored against the weighted palette and the best one is used. It is set through the BIOS (`AH=0Bh`, Skies' portable way), never port 3D9h |
 | CGA | 640x200 mono | 2 | diffusion, full-screen aspect |
 | Hercules | 720x348 mono (`FSXM_HERC`) | 2 | diffusion at full resolution, aspect corrected |
-| EGA | the §11.2 latch (a full-screen window, desktop mode and palette) | 16 | EGA's FSX caps offer only CGA modes |
+| EGA | the §11.2 latch (a full-screen window, desktop mode and palette) | 16 | EGA's FSX caps offer only CGA modes. *Built as a SAME-MODE bracket instead (SPEC.md 106.23): the same loop and renderer as every other mode, drawn with `OSAPI_GFX_BLITP`* |
 
 - **Letterboxing:** pictures are fitted inside the mode and centred.
 - **Pan in full screen:** arrow keys pan when the picture is bigger than the

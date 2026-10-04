@@ -7925,6 +7925,23 @@ SOAK = [
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/PIXEL.GFX",
                "build/os8088-360.img")),
+    Row("pxfsx", "soak", py("tests/pxfsx.py"), 1500.0,
+        "SPEC.md 106.23, PiXEL's full screen, on MartyPC's VGA XT, CGA 5150 "
+        "and Hercules 5150: every mode each display offers (Mode X, 13h and "
+        "640x480's adaptive sixteen; C160, 320x200's chosen four and "
+        "640x200; 720x348) entered with F, the part's tables - the median "
+        "cut, every used entry's plan, the CGA's chosen set - pixelsim's "
+        "FsPic, the DAC read back, and every pixel of the mode pixelsim's "
+        "frame at Fit; Esc (Alt+Enter once) puts the desktop's mode, its DAC, "
+        "its pixels and PiXEL's claims back as they were; the EGA's same-mode "
+        "Desktop bracket driven on the VGA's 12h; N decodes the next picture "
+        "hidden with the worker kept, commits it and shows it, and the window "
+        "has it after; S runs a slideshow of two slides, a key stops it. Each "
+        "mode's colours and whole render are timed by the guest's cycle "
+        "counter and printed",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
     Row("pxbench", "soak", py("tests/pxbench.py"), 700.0,
         "SPEC.md 106.17 on the 5150 with a CGA: the TIME, in guest cycles from "
         "breakpoints, of opening MOUNTAIN.BMP (24-bit: the cube's ordered "

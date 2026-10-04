@@ -88,7 +88,8 @@ pl_plans:
     ret
 
 ; pl_poll - on the worker ([px_onworker]): the cancel, and OSAPI_TASK_ALIVE
-; (px_tabpoll's two). On the UI task: nothing. CF = 1 the user cancelled.
+; (set by px_wjob since 106.23). On the UI task: nothing. CF = 1 the user
+; cancelled.
 ; Preserves all
 pl_poll:
     cmp byte [px_onworker], 0

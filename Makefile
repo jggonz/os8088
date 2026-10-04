@@ -14338,7 +14338,8 @@ PIXEL_SRC := apps/pixel/pixel.asm apps/pixel/pxui.inc apps/pixel/pxicons.inc \
              apps/os88rseq.inc apps/os88gfx.inc apps/pixel/pxmaster.inc \
              apps/pixel/pxpump.inc apps/pixel/pxsimple.inc \
              apps/pixel/pxview.inc apps/pixel/pxqtab.inc apps/pixel/pxrec.inc \
-             apps/pixel/pxfolder.inc apps/pixel/pxthc.inc
+             apps/pixel/pxfolder.inc apps/pixel/pxthc.inc \
+             apps/pixel/pxfull.inc apps/pixel/pxfs.inc
 .PHONY: pixel pixeldisk
 pixel: $(BUILD)/pixel.o88
 $(BUILD)/pixel.bin: $(PIXEL_SRC) | $(BUILD)
@@ -14376,8 +14377,15 @@ $(BUILD)/pxfold.bin: apps/pixel/pxfold.asm apps/pixel/pxpart.inc \
                      apps/pixel/pxthc.inc apps/pixel/pxrec.inc \
                      apps/os88api.inc $(BUILD)/pxlink.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxfold.asm
+# THE FULL-SCREEN PART (SPEC.md 106.23), linked the same way: every full-
+# screen mode's renderer and colours, held only while the screen is PiXEL's
+$(BUILD)/pxfull.bin: apps/pixel/pxfull.asm apps/pixel/pxpart.inc \
+                     apps/pixel/pxfs.inc apps/pixel/pxrec.inc \
+                     apps/os88api.inc $(BUILD)/pxlink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxfull.asm
 PIXEL_PARTS := $(BUILD)/pxhelp.bin $(BUILD)/pxgif.bin $(BUILD)/pxpng.bin \
-               $(BUILD)/pxjpeg.bin $(BUILD)/pxsimp.bin $(BUILD)/pxfold.bin
+               $(BUILD)/pxjpeg.bin $(BUILD)/pxsimp.bin $(BUILD)/pxfold.bin \
+               $(BUILD)/pxfull.bin
 $(BUILD)/pixel.o88: $(BUILD)/pixel.bin $(PIXEL_PARTS) tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/pixel.bin -o $@ $(addprefix --part ,$(PIXEL_PARTS))
 

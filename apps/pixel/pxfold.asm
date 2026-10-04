@@ -795,10 +795,14 @@ pf_chdr:
     push cx
     push dx
     push si
+    push di
     push es
     mov es, [px_tseg]
-    xor bx, bx
-    mov cx, 4096
+    mov bx, PXT_BUF                 ; INTO THE BUFFER, and only the header's
+    mov cx, 4096                    ; own bytes copied down: the 4 KB past it
+                                    ; are the store's plans, thresholds and
+                                    ; map (pxthc.inc), and a file's would be
+                                    ; believed (review-w5 F1)
     xor ax, ax
     xor dx, dx
     mov si, pf_s_thc
@@ -811,29 +815,65 @@ pf_chdr:
     cmp ax, 4096
     jb .bad
 .chk:
-    cmp word [es:PXT_HDR], 'PX'
+    cmp word [es:PXT_BUF], 'PX'
     jne .bad
-    cmp word [es:PXT_HDR + 2], 'TC'
+    cmp word [es:PXT_BUF + 2], 'TC'
     jne .bad
-    cmp byte [es:PXT_HDR + CH_VER], 1
+    cmp byte [es:PXT_BUF + CH_VER], 1
     jne .bad
-    cmp byte [es:PXT_HDR + CH_COUNT], PX_CMAX
+    cmp byte [es:PXT_BUF + CH_COUNT], PX_CMAX
     ja .bad
+    push ds
+    push es
+    pop ds
+    mov si, PXT_BUF
+    mov di, PXT_HDR
+    mov cx, (CH_KEYS + PX_CMAX * PX_TKSZ) / 2
+    cld
+    rep movsw
+    pop ds
     clc
     jmp short .out
-.none:
-    call pf_chempty
-    stc
-    jmp short .out
-.bad:
-    call pf_chempty
-    clc
-.out:
+.bad:                               ; short, empty or not ours: as if there
+.none:                              ; were none, so the writer makes the
+    call pf_chempty                 ; file anew whole rather than write at
+    stc                             ; an offset it may not have (review-w5
+.out:                               ; F3)
     pop es
+    pop di
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; pf_hbuf - the store's header into PXT_BUF as the file's 4 KB: its own
+; bytes, then zeroes (never the store's plans past it, review-w5 F1).
+; Preserves all
+pf_hbuf:
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    mov es, [px_tseg]
+    push es
+    pop ds
+    mov si, PXT_HDR
+    mov di, PXT_BUF
+    mov cx, (CH_KEYS + PX_CMAX * PX_TKSZ) / 2
+    cld
+    rep movsw
+    mov cx, (4096 - CH_KEYS - PX_CMAX * PX_TKSZ) / 2
+    xor ax, ax
+    rep stosw
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
 
@@ -1077,9 +1117,10 @@ pf_write:
     call pf_chits
     cmp byte [cs:pf_miss], 0        ; a new file: its header first
     je .slots
+    call pf_hbuf
     mov si, pf_s_thc
     call pf_name
-    xor bx, bx
+    mov bx, PXT_BUF
     mov cx, 4096
     xor dx, dx
     call OSAPI_FILE_WRITE
@@ -1097,8 +1138,9 @@ pf_write:
     inc bx
     cmp bx, PX_TSLOTS
     jb .s
-    mov es, [px_tseg]               ; the header last
-    xor bx, bx
+    call pf_hbuf                    ; the header last
+    mov es, [px_tseg]
+    mov bx, PXT_BUF
     mov cx, 4096
     xor ax, ax
     xor dx, dx

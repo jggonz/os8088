@@ -205,25 +205,6 @@ px_plans:
 .out:
     ret
 
-; px_tabpoll - on the worker: the cancel, and OSAPI_TASK_ALIVE (which is
-; also where the view claim may move). On the UI task: nothing. CF = 1 the
-; user cancelled. Preserves all
-px_tabpoll:
-    cmp byte [px_onworker], 0
-    je .ok
-    cmp byte [px_abort], 0
-    jne .ab
-    push bx
-    mov bx, [px_win]
-    call OSAPI_TASK_ALIVE
-    pop bx
-.ok:
-    clc
-    ret
-.ab:
-    stc
-    ret
-
 ; px_texpand - the 64 tables from the plans (4bpp) or the thresholds (1bpp):
 ; table (py * 8 + px), entry i = c2 if bayer(py, px) < t_i else c1, as a
 ; LANE's half (px_crow, px_c2p): c's bits at 7, 5, 3, 1 in an even column's
@@ -617,58 +598,96 @@ px_vside:
 ; px_fitz - [px_vz] := the largest zoom up to 1 that shows the whole picture
 ; in [px_vw] x [px_vh] at this display's aspect, at least PX_ZMIN. Preserves
 ; all
+;
+; IN CLOSED FORM from the steps the view takes (SPEC.md 106.23, pixelsim's
+; fit_z): hs = 2^32 div (z << s) >= ceil(mw 2^16 / w) keeps the picture's
+; width inside, vs = hs ad div an >= ceil(mh 2^16 / h) its height, so z =
+; (2^32 div max(ceil(mw 2^16 / w), ceil(ceil(mh 2^16 / h) an / ad))) >> s.
+; Until then it was min(w 2^16 / sw, h ad 2^16 / (sh an)), whose view could
+; floor its steps into a picture a row longer than the canvas - one case in
+; seven, the CGA's 5/12 the worst - so at Fit the master's last row never
+; showed (the decoder speed pass's note)
 px_fitz:
     push ax
     push bx
     push cx
     push dx
-    mov cl, [px_cur + PXR_SCL]
-    mov bx, [px_cur + PXR_MW]       ; zx = (w << 16) / (mw << s)
-    shl bx, cl
-    mov dx, [px_vw]
+    push si
+    push di
+    mov dx, [px_cur + PXR_MW]       ; hx
     xor ax, ax
+    mov bx, [px_vw]
     xor cx, cx
-    call px_div32
-    mov [px_vz], ax
-    mov [px_vz + 2], dx
-    mov bl, [px_rkind]              ; zy = (h x ad << 16) / ((mh << s) x an)
-    xor bh, bh
-    shl bx, 1
-    mov ax, [px_vh]
-    mul word [px_aspd + bx]
-    mov dx, ax
-    xor ax, ax
+    call px_cdiv32
     push dx
     push ax
-    mov ax, [px_cur + PXR_MH]
-    mov cl, [px_cur + PXR_SCL]
-    shl ax, cl
-    mul word [px_aspn + bx]
-    mov bx, ax
-    mov cx, dx
+    mov dx, [px_cur + PXR_MH]       ; vy
+    xor ax, ax
+    mov bx, [px_vh]
+    xor cx, cx
+    call px_cdiv32
+    mov bl, [px_rkind]              ; hy = ceil(vy an / ad)
+    xor bh, bh
+    shl bx, 1
+    mov si, [px_aspd + bx]
+    mov cx, [px_aspn + bx]
+    push ax
+    mov ax, dx
+    mul cx
+    mov di, ax
     pop ax
-    pop dx
-    call px_div32
-    cmp dx, [px_vz + 2]             ; the smaller of the two
-    ja .x
-    jb .y
-    cmp ax, [px_vz]
-    jae .x
-.y:
+    mul cx
+    add dx, di
+    mov bx, si
+    xor cx, cx
+    call px_cdiv32
+    pop bx                          ; CX:BX = hx
+    pop cx
+    cmp dx, cx                      ; the larger
+    ja .hy
+    jb .hx
+    cmp ax, bx
+    jae .hy
+.hx:
+    mov ax, bx
+    mov dx, cx
+.hy:
+    mov [px_dv0], ax
+    mov [px_dv1], dx
+    or ax, dx
+    jnz .dv
+    inc word [px_dv0]
+.dv:
+    xor ax, ax
+    mov [px_n0], ax
+    mov [px_n1], ax
+    inc ax
+    mov [px_n2], ax
+    call px_div                     ; 2^32 / it...
+    mov ax, [px_n0]
+    mov dx, [px_n1]
+    mov cl, [px_cur + PXR_SCL]      ; ...>> s
+    xor ch, ch
+    jcxz .s0
+.sh:
+    shr dx, 1
+    rcr ax, 1
+    loop .sh
+.s0:
+    or dx, dx                       ; never above 1
+    jz .lo
+    xor ax, ax
+    mov dx, 1
+    jmp short .st
+.lo:
+    cmp ax, PX_ZMIN                 ; ...nor below the least
+    jae .st
+    mov ax, PX_ZMIN
+.st:
     mov [px_vz], ax
     mov [px_vz + 2], dx
-.x:
-    cmp word [px_vz + 2], 1         ; never above 1
-    jb .lo
-    mov word [px_vz], 0
-    mov word [px_vz + 2], 1
-.lo:
-    cmp word [px_vz + 2], 0
-    jne .out
-    cmp word [px_vz], PX_ZMIN
-    jae .out
-    mov word [px_vz], PX_ZMIN
-.out:
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx
