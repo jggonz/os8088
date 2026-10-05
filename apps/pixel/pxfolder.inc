@@ -20,7 +20,8 @@
 ; pxthc.inc's: the FOLDER part, apps/pixel/pxfold.asm, reads them too)
 PX_TKB      equ (PXT_SL0 + PX_TSLOTS * PXT_SLSZ + 1023) / 1024
 PX_THMINFREE equ 128                ; KB the heap keeps beside the store
-PX_THIDLE   equ 18                  ; ticks of no input before a decode
+PX_THIDLE   equ 36                  ; ticks of no input before a step: a
+                                    ; step is up to ~2.4 s on an XT (106.25)
 PX_SLIDE    equ 91                  ; ticks a slide shows (5 s)
 
 ; =============================================================================
@@ -110,9 +111,9 @@ px_nfgo:
     cmp bl, [px_nfvol]
     je .ok
 .go:
-    mov dx, [px_nfdir]
-    mov bl, [px_nfvol]
-    call OSAPI_FILE_GOTO
+    mov dx, [px_nfdir]              ; (the quiet form: a folder that will not
+    mov bl, [px_nfvol]              ; list moves nothing, review-w5 F6)
+    call OSAPI_FILE_GOTO_QM
     jc .out
 .ok:
     clc
@@ -632,9 +633,18 @@ px_hdone:
 
 ; px_hstop - THE USER ACTS: a hidden decode running is cancelled and its
 ; answer waited for - one row of the decoder at most - and a slide decoded
-; and waiting let go; the window is then exactly as it was. Every callback
-; that draws or acts calls this first. Preserves all
+; and waiting let go; the window is then exactly as it was. A GIF's frame
+; job stops the same way (106.25: its next tick takes it up where it was).
+; Every callback that draws or acts calls this first. Preserves all
 px_hstop:
+    cmp byte [px_anjob], 0
+    je .h
+    call px_await
+    push cx
+    mov cl, AV_WAKE                 ; (its claims back, its rect owed)
+    call px_ancall
+    pop cx
+.h:
     cmp byte [px_hmode], 0
     jne .go
     ret
@@ -642,13 +652,7 @@ px_hstop:
     push ax
     cmp byte [px_hmode], 3
     je .ready
-    mov byte [px_abort], 1
-.w:
-    cmp byte [px_job], JOB_NONE     ; (the worker needs no lock: holding it
-    je .ans                         ; while yielding only keeps other
-    call OSAPI_TASK_YIELD           ; drawers waiting)
-    jmp short .w
-.ans:
+    call px_await
     call px_hdone                   ; (a thumbnail it finished is kept)
     cmp byte [px_hmode], 3
     jne .out
@@ -656,6 +660,19 @@ px_hstop:
     call px_hfree
 .out:
     pop ax
+    ret
+
+; px_await - the worker's job aborted and its answer waited for - one row
+; of the decoder at most. The worker needs no lock: holding it while
+; yielding only keeps other drawers waiting. Preserves all
+px_await:
+    mov byte [px_abort], 1
+.w:
+    cmp byte [px_job], JOB_NONE
+    je .x
+    call OSAPI_TASK_YIELD
+    jmp short .w
+.x:
     ret
 
 ; px_hcommit - the slide decoded (mode 3) REPLACES the picture shown: the old
@@ -684,6 +701,9 @@ px_hcommit:
 ; px_hcommit0 - the commit's head, full screen's too (106.23): the banked
 ; picture's master given back, the hidden one shown. Clobbers AX
 px_hcommit0:
+    call px_anfree                  ; (a slide is shown still, 106.25)
+    call px_eclear                  ; undo, the selection: an open's
+                                    ; (review-w7 F9)
     mov al, [px_hhave]              ; (0FFh: full screen's unmasked decode -
     cmp al, 0xFF                    ; the shown one's HAVE was never touched)
     je .u
@@ -749,6 +769,63 @@ px_finished:
     ret
 
 ; =============================================================================
+; A GIF THAT PLAYS (SPEC.md 106.25): the resident's hooks. The GIF part does
+; the rest - its frames on the worker, its UI verbs through PXV_INFO
+; =============================================================================
+
+; px_ancall - CL = an AV_* verb of the GIF part's (fetched if it must be).
+; Preserves all but the flags
+px_ancall:
+    push ax
+    push bx
+    mov al, PXPART_GIF
+    mov bl, PXV_INFO
+    call px_pcall
+    pop bx
+    pop ax
+    ret
+
+; px_antick - the timer: a GIF playing goes on while the window is in front,
+; and stops - holding nothing but its own small claim - while it is not.
+; Lock held. Preserves all
+px_antick:
+    cmp byte [px_anon], 0
+    je .x
+    cmp word [px_behind], 0         ; (px_ontimer's)
+    je .front
+    jmp px_hstop
+.front:
+    push cx
+    mov cl, AV_TICK
+.c:
+    call px_ancall
+    pop cx
+.x:
+    ret
+
+; px_antog - File > Play / Stop Animation, and A. Lock held. Preserves all
+px_antog:
+    push cx
+    mov cl, AV_TOGGLE
+    jmp short px_antick.c
+
+; px_anfree - a picture left: its animation's claim back, nothing playing.
+; Preserves all
+px_anfree:
+    push dx
+    mov dx, [px_anseg]
+    or dx, dx
+    jz .z
+    call OSAPI_MEM_FREE
+.z:
+    xor dx, dx
+    mov [px_anseg], dx
+    mov [px_anim], dx               ; (and px_anon, the byte after it)
+    mov [px_anuser], dl
+    pop dx
+    ret
+
+; =============================================================================
 ; THE SLIDESHOW (SPEC.md 106.21)
 ; =============================================================================
 
@@ -764,6 +841,14 @@ px_sltoggle:
     pop si
     ret
 .go:
+    cmp byte [px_busy], 0           ; not over an operation or a save under
+    je .g2                          ; way: its result would be thrown away
+    push si                         ; with no question (review-w7 F9)
+    mov si, px_s_busy
+    call px_toast
+    pop si
+    ret
+.g2:
     push ax
     mov al, PXL_SLIDE               ; unsaved edits: asked first (106.24)
     call px_gate
@@ -807,6 +892,15 @@ px_sltick:
     jne .out
     cmp byte [px_job], JOB_NONE
     jne .out
+    cmp byte [px_dirty], 0          ; AN EDIT on the slide shown (one that
+    je .cl                          ; was under way when it began): the
+    push si                         ; slideshow stops there - the next slide
+    call px_slstop                  ; would replace it unasked (review-w7
+    mov si, px_s_sfirst             ; F9)
+    call px_toast
+    pop si
+    ret
+.cl:
     push ax
     push dx
     call OSAPI_GET_TICKS
@@ -1104,6 +1198,91 @@ px_fcall:
     pop bx
     ret
 
+; px_cwrite - CL = PF_WRITE, a step of the cache's write (one entry, or the
+; header last), or PF_WALL, the whole of it (the window closing): the FOLDER
+; part's (review-w5 F13). A write that cannot be made is forgotten; one the
+; volume refuses is said once and not tried again this session. Lock held.
+; Preserves all
+px_cwrite:
+    push ax
+    push si
+    cmp byte [px_cstat], 1
+    jne .forget
+    cmp byte [px_cnowr], 0
+    jne .forget
+    call px_fcall
+    jnc .x
+    cmp ax, 1                       ; the volume refused
+    jne .forget
+    mov byte [px_cnowr], 1
+    mov si, px_s_nothc
+    call px_toast
+.forget:
+    mov byte [px_cnew], 0
+    mov byte [px_cwip], 0
+.x:
+    pop si
+    pop ax
+    ret
+
+; px_tfree - the store given back - the strip has gone, or a picture's
+; master would be finer for its 31 KB (review-w5 F5) - unless it holds
+; thumbnails the cache has not had yet, or a hidden decode is making one.
+; Its slots, header and plans go with it, and the next strip visits the
+; cache again. Preserves all
+px_tfree:
+    cmp word [px_tseg], 0
+    je .x
+    cmp byte [px_cnew], 0
+    jne .x
+    cmp byte [px_hmode], 0
+    jne .x
+    push dx
+    mov dx, [px_tseg]
+    call OSAPI_MEM_FREE
+    xor dx, dx
+    mov [px_tseg], dx
+    mov [px_cstat], dl
+    dec dx
+    mov [px_cvfcn], dx              ; (no visit stands)
+    pop dx
+.x:
+    ret
+
+; px_tgive - px_pickscale chose CL (FFh: none fits): CF = 1 the store was
+; given back because its 31 KB buy a finer scale, and the caller asks again
+; (review-w5 F5); else CF = 0 and [px_avl] [px_avt] as they were. Preserves
+; all but the flags
+px_tgive:
+    cmp word [px_tseg], 0
+    je .no
+    cmp byte [px_cnew], 0
+    jne .no
+    cmp byte [px_hmode], 0
+    jne .no
+    push ax
+    push cx
+    mov ch, cl
+    add word [px_avl], PX_TKB
+    add word [px_avt], PX_TKB
+    call px_pickscale               ; CL
+    jc .n
+    cmp cl, ch
+    jae .n
+    call px_tfree
+    pop cx
+    pop ax
+    stc
+    ret
+.n:
+    sub word [px_avl], PX_TKB
+    sub word [px_avt], PX_TKB
+    pop cx
+    pop ax
+.no:
+    clc
+    ret
+
 ; px_thmake - AX = a name: its thumbnail made from [px_cur]'s master (the
 ; FOLDER part's PF_MAKE); none, and the name is marked, when no slot is free
 ; or the part is not to be had. Then, on a colour display, the cube's plans.
@@ -1163,6 +1342,7 @@ px_tplans:
     push ds
     pop es
     mov bl, PXV_PLANS
+    xor cl, cl                      ; (the plans, not pl_stats)
     mov di, px_k
     call px_pcall
     pop bx
@@ -1523,6 +1703,11 @@ px_thstep:
     jne .out1
     cmp byte [px_job], JOB_NONE
     jne .out1
+    cmp word [px_behind], 0         ; ONLY WHILE WE ARE IN FRONT (review-w5
+    jne .out1                       ; F13): every step runs on the one UI
+                                    ; task, and the user is elsewhere
+    cmp byte [px_anon], 0           ; ...and not while a GIF plays (106.25):
+    jne .out1                       ; the worker is its
     cmp byte [px_slon], 0           ; A SLIDESHOW: only the open picture's,
     jne .lay                        ; from its master (its decodes are slides)
     cmp byte [px_press], PX_PR_NONE
@@ -1541,12 +1726,47 @@ px_thstep:
 .lay:
     call px_layout                  ; (not visible - minimised: idle until
     jc .idle                        ; a paint arms it again)
-    cmp byte [px_fson], 0
-    je .flush
+    cmp byte [px_cnew], 0           ; THE CACHE IS WRITTEN when the strip has
+    je .nw                          ; gone or its folder is not the one the
+    cmp byte [px_fson], 0           ; new thumbnails were made in (review-w5
+    je .wr                          ; F13): never mid-browse, and one entry a
+    mov ax, [px_cdir]               ; call, so no step holds the desktop
+    cmp ax, [px_nfdir]              ; longer than one write
+    jne .wr
+    mov al, [px_cvol]
+    cmp al, [px_nfvol]
+    je .nw
+.wr:
+    cmp byte [px_slon], 0           ; (not mid-slideshow)
+    jne .out1
+    mov cl, PF_WRITE
+    call px_cwrite
+    jmp .out
+.nw:
+    cmp byte [px_fson], 0           ; no strip, nothing owed: the store's
+    jne .on                         ; 31 KB back (review-w5 F5)
+    call px_tfree
+    jmp .idle
+.on:
     cmp byte [px_tnone], 0
     jne .idle
+    cmp byte [px_bpp], 1            ; a store filled on a 1bpp display, the
+    jbe .pk                         ; window now on a colour one: the plans
+    cmp word [px_tseg], 0           ; it never needed there (review-w5 F11)
+    je .pk
+    cmp byte [px_tplok], 0
+    jne .pk
+    call px_tplans
+    call px_kkeep
+    cmp byte [px_tplok], 0          ; (no part to make them: no thumbnails
+    jne .tpu                        ; until the folder is walked again)
+    mov byte [px_tnone], 1
+.tpu:
+    call px_update
+    jmp .out
+.pk:
     call px_thpick                  ; a card on show lacks its thumbnail?
-    jc .flush
+    jc .idle
     call px_tstore
     jc .idle
     cmp byte [px_slon], 0
@@ -1569,19 +1789,19 @@ px_thstep:
     mov [px_cvfcs], ax
     mov ax, [px_fcn]
     mov [px_cvfcn], ax
-    mov cl, PF_VISIT
-    call px_fcall
-    jc .out1
-    or ax, ax
-    jz .cur
+    mov cl, PF_VISIT                ; (a step of its own: the open picture's
+    call px_fcall                   ; card waits for the next one, so no
+    jc .out1                        ; call holds the desktop for the visit
+    or ax, ax                       ; and a make together - review-w5 F13)
+    jz .out1
     jmp short .drew
 .out1:
     jmp .out
 .cur:
     cmp byte [px_dirty], 0          ; AN EDITED PICTURE (SPEC.md 106.24): its
-    jne .flush                      ; master is not its file's, and undo's
+    jne .idle                       ; master is not its file's, and undo's
     cmp byte [px_ukind], UK_NONE    ; claims leave no room for a hidden
-    jne .flush                      ; decode's - the cache's cards only
+    jne .idle                       ; decode's - the cache's cards only
     mov ax, [px_ncur]               ; THE OPEN PICTURE'S, from its master
     cmp ax, [px_nnames]
     jae .dec
@@ -1595,9 +1815,12 @@ px_thstep:
     cmp byte [px_slon], 0
     jne .out1
     call px_thpick                  ; the next card's: a hidden decode
-    jc .flush
-    call px_nfgo
     jc .idle
+    call px_nfgo
+    jnc .hd
+    mov byte [px_tnone], 1          ; its folder will not list (a disk
+    jmp short .idle                 ; swapped): not tried again until the
+.hd:                                ; folder is walked (review-w5 F6)
     mov dl, 1
     call px_hopen
     jnc .out
@@ -1614,23 +1837,6 @@ px_thstep:
 .dr:
     call px_update
     jmp short .out
-.flush:
-    cmp byte [px_slon], 0           ; (not mid-slideshow: mid-browse)
-    jne .out1
-    cmp byte [px_cnew], 0           ; THE CACHE WRITTEN, the strip idle
-    je .idle
-    cmp byte [px_cstat], 1
-    jne .idle
-    cmp byte [px_cnowr], 0
-    jne .idle
-    mov cl, PF_WRITE
-    call px_fcall
-    jnc .idle
-    cmp ax, 1                       ; the volume refused: said once, and not
-    jne .idle                       ; tried again this session
-    mov byte [px_cnowr], 1
-    mov si, px_s_nothc
-    call px_toast
 .idle:
     mov byte [px_tq], 0
 .out:

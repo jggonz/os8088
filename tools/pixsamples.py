@@ -17,7 +17,9 @@ scenes, apps/pixel/samples/README.TXT says how) and are not committed at that
 size: --regen reduces each to at most 640x480 and re-encodes it into one of the
 formats PiXEL reads, so the gallery shows every decoder something - baseline
 JPEG at 4:2:0 and 4:4:4, a progressive one, a greyscale one, a 256-colour GIF,
-an 8-bit and a truecolour PNG, a 24-bit BMP and an 8-bit PCX.
+an 8-bit and a truecolour PNG, a 24-bit BMP and an 8-bit PCX. The tenth,
+BOUNCE.GIF, has no scene: `bounce()` below draws its ten frames (SPEC.md
+106.25's animation), so --regen makes it from nothing.
 
 Pillow's encoders are not promised stable across its versions, so a --regen on
 another machine may well produce different bytes. That is expected: re-pin the
@@ -42,18 +44,21 @@ GALLERY = [
     ("HOUSE.PNG",    "house",    (320, 240), "png truecolour"),
     ("MOUNTAIN.BMP", "mountains", (256, 192), "bmp 24-bit"),
     ("CITY.PCX",     "city",     (320, 240), "pcx 8-bit"),
+    ("BOUNCE.GIF",   None,       (96, 72),   "gif animated"),
 ]
 
 # THE 360KB DISK'S SUBSET (SPEC.md 106.7): what fits beside the package on
 # 354 one-KB clusters with room to spare - one of each family, smallest first
-SUBSET_360 = ["VACATION.JPG", "LAKE.JPG", "CAT.GIF", "BALLOONS.PNG"]
+SUBSET_360 = ["VACATION.JPG", "LAKE.JPG", "CAT.GIF", "BALLOONS.PNG",
+              "BOUNCE.GIF"]
 # ...and the 720KB one's: everything but the truecolour PNG, the largest file,
 # which the 8-bit PNG stands in for there (the whole gallery is 729KB and that
 # volume holds ~710KB). The Makefile spells all three lists out - PX_SAMPLES,
 # PX_SAMPLES_720, PX_SAMPLES_360 - and --check compares them with these, so a
 # list edited in one place and not the other fails the build
 SUBSET_720 = ["VACATION.JPG", "FLOWER.JPG", "ROOM.JPG", "LAKE.JPG",
-              "CAT.GIF", "BALLOONS.PNG", "MOUNTAIN.BMP", "CITY.PCX"]
+              "CAT.GIF", "BALLOONS.PNG", "MOUNTAIN.BMP", "CITY.PCX",
+              "BOUNCE.GIF"]
 
 # --pin writes these. The --check gate reads nothing else.
 PINS = {
@@ -66,6 +71,7 @@ PINS = {
     "HOUSE.PNG": "08c8271856815644810642ab59f9ef6486a37a6a13c294c38cee53bb669b3ef9",
     "MOUNTAIN.BMP": "ce1177df39609c0d7e0e79a100300e33a666cc9ec11b2e19a0400e3edf3fb7a1",
     "CITY.PCX": "719ea82e9b80ee701133a7a125a15dd584e599f5823c67b6a9146922f8ce0508",
+    "BOUNCE.GIF": "8b96774a6de8165ffccba6f6084d0d1ff7ebd3b97988462abfd421a6255fb5f4",
 }
 
 
@@ -90,10 +96,48 @@ def fit(im, size):
     return im.resize(size, Image.LANCZOS)
 
 
+def bounce(size, n=10):
+    """BOUNCE.GIF (SPEC.md 106.25): a beach ball crossing the sand, drawn
+    here rather than reduced from a scene - n frames of an 8-colour picture,
+    a tenth of a second each, looping for ever, each frame only the rect it
+    changed (disposal 1: Pillow's own crop of the difference)"""
+    import math
+    from PIL import Image, ImageDraw
+    w, h = size
+    pal = [(96, 160, 224), (240, 216, 160), (208, 40, 40), (250, 250, 250),
+           (150, 120, 80), (40, 40, 60), (255, 220, 64), (120, 190, 240)]
+    frames = []
+    for k in range(n):
+        im = Image.new("P", (w, h), 0)
+        im.putpalette(sum(pal, ()))
+        d = ImageDraw.Draw(im)
+        d.rectangle((0, 56, w - 1, h - 1), fill=1)          # the sand
+        d.ellipse((74, 5, 90, 21), fill=6)                  # the sun
+        t = k / n
+        x = 11 + int(74 * t)
+        up = abs(math.sin(math.pi * 2 * t))
+        y, r, sw = 47 - int(36 * up), 7, 10 - int(4 * up)
+        d.ellipse((x - sw, 58, x + sw, 62), fill=4)         # its shadow
+        d.ellipse((x - r, y - r, x + r, y + r), fill=2)
+        for a0 in (30, 210):                                # the stripes
+            d.pieslice((x - r, y - r, x + r, y + r), a0 + 30 * k,
+                       a0 + 60 + 30 * k, fill=3)
+        d.ellipse((x - r, y - r, x + r, y + r), outline=5)
+        frames.append(im)
+    return frames
+
+
 def regen(src):
     from PIL import Image
     os.makedirs(OUT, exist_ok=True)
     for name, stem, size, how in GALLERY:
+        if stem is None:
+            dst = os.path.join(OUT, name)
+            fr = bounce(size)
+            fr[0].save(dst, "GIF", save_all=True, append_images=fr[1:],
+                       duration=100, loop=0, optimize=False, disposal=1)
+            print(f"  {name:13s} {os.path.getsize(dst):7,d} bytes  {size[0]}x{size[1]}  {how}")
+            continue
         path = None
         for ext in (".jpg", ".png", ".jpeg"):
             p = os.path.join(src, stem + ext)

@@ -28,6 +28,7 @@
 %include "pxfs.inc"                 ; full screen's modes and verbs (106.23)
 %include "pxed.inc"                 ; editing's verbs and formats (106.24)
 %include "pxsvc.inc"                ; ...and the parts' UI services
+%include "pxanim.inc"               ; a GIF that plays (106.25)
 
     OS88_HEADER 'PiXEL', px_entry, OS88_F_ICON | OS88_F_ASSOC | OS88_F_GLYPH | OS88_F_PARTS
 
@@ -69,7 +70,9 @@ PXPART_EDIT equ 7                   ; EDITING: the palette and pixel
                                     ; operations, LINKED: pxedit.asm
 PXPART_WRITE equ 8                  ; SAVE AS's five writers, LINKED:
                                     ; pxwrite.asm (SPEC.md 106.24)
-PX_NPARTS   equ 9                   ; (a decoder part is never 0: [px_kheld]
+PXPART_EXTRA equ 9                  ; TIFF, ICO, IFF and MacPaint, LINKED:
+                                    ; pxextra.asm (SPEC.md 106.25)
+PX_NPARTS   equ 10                  ; (a decoder part is never 0: [px_kheld]
                                     ; 0 is "none held", SPEC.md 106.18)
 PXD_QUIET   equ 0xFE                ; a refusal already said (op_fetch's own
                                     ; toast): px_refusal says nothing more
@@ -1106,6 +1109,11 @@ px_onkey:
     call px_foldkey                 ; Space, Backspace, Home, End (106.21)
     jnc .out
     and al, 0xDF                    ; the tools' letters, either case
+    cmp al, 'A'                     ; ...and A, a GIF's Play / Stop (106.25)
+    jne .ta
+    call px_antog
+    jmp short .out
+.ta:
     mov bx, px_toolkeys
 .tk:
     cmp byte [bx], 0
@@ -1255,8 +1263,13 @@ px_cmd:
     jmp .out
 .fs:
     cmp al, PX_MF_SLIDE
-    jne .f2
+    jne .fa
     call px_sltoggle
+    jmp .out
+.fa:
+    cmp al, PX_MF_ANIM              ; Play / Stop Animation (106.25)
+    jne .f2
+    call px_antog
     jmp .out
 .f2:
     cmp al, PX_MF_INFO
@@ -1376,6 +1389,15 @@ px_ontimer:
     mov [px_memt], bx
     call px_memfield
 .nm:
+    call OSAPI_WM_TOP               ; ANOTHER WINDOW IN FRONT (review-w5 F13):
+    sub bx, [px_win]                ; 0 when it is ours - the engine, the
+    mov [px_behind], bx             ; animation and this timer go by it
+    cmp byte [px_hmode], 1          ; a THUMBNAIL's hidden decode with another
+    jne .h1                         ; window in front: stopped - its worker
+    or bx, bx                       ; takes the CPU from the program the user
+    jz .h1                          ; is in
+    call px_hstop
+.h1:
     mov al, [px_hmode]              ; a hidden decode RUNNING holds the record:
     dec al                          ; nothing is laid out or drawn until it is
     cmp al, 2                       ; done (modes 1 and 2; a finished slide, 3,
@@ -1383,6 +1405,7 @@ px_ontimer:
     call px_eyetick                 ; the Eyedropper's readout (106.24)
     call px_thstep                  ; (first: a slide's own thumbnail before
     call px_sltick                  ; the next slide's decode begins)
+    call px_antick                  ; a GIF that plays (106.25)
     cmp byte [px_hmode], 0          ; (one may have started just now)
     jne .rearm
     cmp byte [px_sdirty], 0         ; the usual answer: nothing moved, and
@@ -1391,7 +1414,14 @@ px_ontimer:
     call px_regdraw
 .rearm:
     mov bx, [px_win]
-    mov ax, 2                       ; the Eyedropper follows the pointer
+    mov ax, 1                       ; a GIF that plays: its frames' delays
+    cmp byte [px_anon], 0           ; are ticks (106.25) - in front; behind
+    je .na                          ; another window it waits at the
+    cmp [px_behind], ax             ; thumbnails' pace, and draws nothing
+    jb .arm
+    jmp short .fast
+.na:
+    inc ax                          ; the Eyedropper follows the pointer
     cmp byte [px_tool], PX_TOOL_EYE
     je .arm
     mov ax, PX_MEMT
@@ -1437,6 +1467,16 @@ px_onwake:
     call px_open
     call OSAPI_GFX_UNLOCK
 .pump:
+    cmp byte [px_anjob], 0          ; A GIF THAT PLAYS (106.25): the pump,
+    je .hid                         ; then its frame painted or its job's end
+    call px_pumpfill
+    call OSAPI_GFX_LOCK
+    push cx
+    mov cl, AV_WAKE
+    call px_ancall
+    pop cx
+    jmp .unl
+.hid:
     cmp byte [px_hmode], 0          ; A HIDDEN DECODE (SPEC.md 106.21): the
     je .vis                         ; pump, and its end - nothing is painted
     cmp byte [px_hmode], 3          ; (a slide decoded waits for its deadline)
@@ -2060,38 +2100,29 @@ px_wcall:
     pop bx
     ret
 
-; px_fpart - AL = a PXF_*: AL = the decoder part that reads it, 0 none.
-; Preserves all but AL
+; px_fpart - AL = a PXF_*: AL = the decoder part that reads it, 0 none. A
+; PNG inside an ICO ([px_cur]'s PXR_PROG 2, set by its HEAD's PXD_REDIR) is
+; the PNG part's (106.25). Preserves all but AL
 px_fpart:
-    cmp al, PXF_GIF
-    jne .p
-    mov al, PXPART_GIF
-    ret
-.p:
-    cmp al, PXF_PNG
-    jne .j
-    mov al, PXPART_PNG
-    ret
-.j:
-    cmp al, PXF_JPEG
-    jne .s
-    mov al, PXPART_JPEG
-    ret
-.s:
-    cmp al, PXF_BMP                 ; BMP, PCX (4, 5), TGA, PIX, PNM (7-9)
-    je .simp
-    cmp al, PXF_PCX
-    je .simp
-    cmp al, PXF_TGA
-    jb .n
-    cmp al, PXF_PNM
-    ja .n
-.simp:
-    mov al, PXPART_SIMP
+    cmp al, PXF_N
+    jae .n
+    cmp al, PXF_ICO
+    jne .t
+    cmp byte [px_cur + PXR_PROG], 2
+    jne .t
+    mov al, PXF_PNG
+.t:
+    push bx
+    mov bx, px_fptab
+    xlatb
+    pop bx
     ret
 .n:
     xor al, al
     ret
+px_fptab:   db 0, PXPART_JPEG, PXPART_PNG, PXPART_GIF, PXPART_SIMP
+            db PXPART_SIMP, PXPART_EXTRA, PXPART_SIMP, PXPART_SIMP
+            db PXPART_SIMP, PXPART_EXTRA, PXPART_EXTRA, PXPART_EXTRA, 0
 
 ; px_kneed - AL = the decoder part an open needs, 0 none: one decoder part
 ; at a time (SPEC.md 106.18), so any OTHER held one is dropped before the
@@ -2657,12 +2688,51 @@ px_sniffbuf:
 .pnm:
     mov dl, PXF_PNM                 ; 'P1'..'P6'
     cmp al, 'P'
-    jne .cz
+    jne .lbm
     cmp ah, '1'
-    jb .cz
+    jb .lbm
     cmp ah, '6'
     jbe .set
+.lbm:
+    mov dl, PXF_LBM                 ; 'FORM' .. 'ILBM' / 'PBM ' (106.25)
+    cmp ax, 'FO'
+    jne .ico
+    cmp bx, 'RM'
+    jne .ico
+    cmp word [es:8], 'IL'
+    jne .pbm
+    cmp word [es:10], 'BM'
+    je .set
+.pbm:
+    cmp word [es:8], 'PB'
+    jne .ico
+    cmp word [es:10], 'M '
+    je .set
+.ico:
+    mov dl, PXF_ICO                 ; 0, 1 or 2, a count of 1..255, a zero
+    or ax, ax                       ; byte 9
+    jnz .mac
+    dec bx
+    cmp bx, 1
+    ja .mac
+    mov ax, [es:4]
+    dec ax
+    cmp ax, 254
+    ja .mac
+    cmp byte [es:9], 0
+    je .set
+.mac:
+    mov dl, PXF_MAC                 ; MacBinary's 'PNTG' at 65 (106.25)
+    cmp word [px_snlen], 69
+    jb .cz
+    cmp byte [es:0], 0
+    jne .cz
+    cmp word [es:65], 'PN'
+    jne .cz
+    cmp word [es:67], 'TG'
+    je .set
 .cz:
+    mov ax, [es:0]
     mov dl, PXF_PACKED              ; 'CZ': packed on the disk (SPEC.md
     cmp ax, 0x5A43                  ; 20.14), which READ_AT hands over raw
     jne .out
@@ -3033,6 +3103,20 @@ px_menulive:
     mov [px_mif + 2 * PX_MF_SLIDE], ax
     inc cx
 .fs:
+    mov ax, px_mi_anplay            ; THE ANIMATION's (106.25): Stop while it
+    cmp byte [px_anon], 0           ; plays, live while the picture is one
+    je .ap
+    mov ax, px_mi_anstop
+.ap:
+    cmp byte [px_anim], 0
+    je .ag
+    inc ax
+.ag:
+    cmp [px_mif + 2 * PX_MF_ANIM], ax
+    je .af
+    mov [px_mif + 2 * PX_MF_ANIM], ax
+    inc cx
+.af:
     call px_fsmenu                  ; Full Screen and Screen (106.23)
     call px_emenu                   ; Edit, Image, Effects, Save As (106.24)
 .done:
@@ -3374,6 +3458,7 @@ px_svtab:   dw px_tband, px_btn, px_getrect, px_setrect, px_strcpy
             dw px_ringclaim, px_spawn, px_eprog, px_update, px_walk
             dw px_compose, px_lvdo, px_strcmp, px_ask, px_kkeep, px_kneed
             dw px_wfree, px_setpal, px_viewnew, px_seloff, px_ufree
+            dw px_rimg, px_mqhide, px_mqshow, px_pumpinit
 %if ($ - px_svtab) != 2 * SV_N
   %error "px_svtab has a routine per SV_*"
 %endif
@@ -3712,7 +3797,8 @@ PX_MF_REVERT equ 2
 PX_MF_PREV  equ 4
 PX_MF_NEXT  equ 5
 PX_MF_SLIDE equ 6
-PX_MF_INFO  equ 8
+PX_MF_ANIM  equ 7
+PX_MF_INFO  equ 9
 PX_M_EDIT   equ 1
 PX_ME_UNDO  equ 0
 PX_ME_COPY  equ 2
@@ -3734,7 +3820,7 @@ PX_MV_FILM  equ 9
 PX_MV_HELP  equ 10
 
     OS88_MENUSET px_menus, px_ttl, px_cmd
-        OS88_MENU px_m_file, px_mif, 9
+        OS88_MENU px_m_file, px_mif, 10
         OS88_MENU px_m_edit, px_mie, 7
         OS88_MENU px_m_image, px_mii, 11
         OS88_MENU px_m_fx, px_mix, 10
@@ -3749,7 +3835,7 @@ px_m_view:  db 'View', 0
 px_sep:     db MENU_DIS, '----------------', 0
 
 px_mif: dw px_mi_open, px_mi_saveas, px_mi_revert, px_sep, px_mi_prev
-        dw px_mi_next, px_mi_slide, px_sep, px_mi_info
+        dw px_mi_next, px_mi_slide, px_mi_anplay, px_sep, px_mi_info
 px_mi_open:   db 'Open...  Ctrl+O', 0
 px_mi_saveas: db MENU_DIS, 'Save As...', 0
 px_mi_revert: db MENU_DIS, 'Revert  Ctrl+R', 0
@@ -3757,12 +3843,14 @@ px_mi_prev:   db MENU_DIS, 'Previous Image', 0
 px_mi_next:   db MENU_DIS, 'Next Image', 0
 px_mi_slide:  db MENU_DIS, 'Slideshow', 0
 px_mi_slstop: db MENU_DIS, 'Stop Slideshow', 0
+px_mi_anplay: db MENU_DIS, 'Play Animation  A', 0
+px_mi_anstop: db MENU_DIS, 'Stop Animation  A', 0
 px_mi_info:   db MENU_DIS, 'Image Info...', 0
 
 px_mie: dw px_mi_undo, px_sep, px_mi_copy, px_sep, px_mi_selall
         dw px_mi_desel, px_mi_crop
 px_mi_undo:   db MENU_DIS, 'Undo', 0
-px_mi_copy:   db MENU_DIS, 'Copy', 0
+px_mi_copy:   db MENU_DIS, 'Copy Info  Ctrl+C', 0
 px_mi_selall: db MENU_DIS, 'Select All', 0
 px_mi_desel:  db MENU_DIS, 'Deselect', 0
 px_mi_crop:   db MENU_DIS, 'Crop to Selection', 0
@@ -3855,7 +3943,6 @@ px_s_dash:  db '-', 0
 px_s_one:   db '1:1', 0
 px_s_plus:  db '+', 0
 px_s_minus: db '-', 0
-px_s_next:  db '>', 0
 px_s_lt:    db '<', 0
 px_s_gt:    db '>', 0
 px_s_fit:   db 'Fit', 0
@@ -3958,6 +4045,7 @@ px_s_r11:   db 'too big to unpack', 0
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 6 full screen (106.23)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 7 editing (106.24)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 8 Save As's writers (106.24)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 9 TIFF, ICO, IFF, MAC (106.25)
     OS88_PARTS_END
 
 ; =============================================================================
@@ -4230,8 +4318,6 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_mbo, 3
     PXVAR px_mbs, 3
     PXVAR px_mmx, 3
-    PXVAR px_ttail, 4
-    PXVAR px_tgot, 2
     PXVAR px_tcl, 2
     PXVAR px_tkpos, 2
     PXVAR px_tokget, 2
@@ -4452,6 +4538,35 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_tname, 2               ; the name a thumbnail is made of
     PXVAR px_cstat, 1               ; the cache: 0 not read, 1 read, 2 none
     PXVAR px_cnowr, 1               ; ...a write was refused this session
+    PXVAR px_cwip, 1                ; ...a write is under way, a step a call
+    ; A GIF THAT PLAYS (SPEC.md 106.25): the window's half here, the GIF
+    ; part's DECODE reads and writes the rest by name (it is LINKED)
+    PXVAR px_anoff, 1               ; a test's byte: no animation at all
+    PXVAR px_behind, 2              ; the timer's: 0 while PiXEL is in front
+    PXVAR px_anim, 1                ; the picture is animated and may play
+    PXVAR px_anon, 1                ; ...it plays (px_anfree: the byte after)
+    PXVAR px_anuser, 1              ; ...the user stopped it (File, or A)
+    PXVAR px_anjob, 1               ; the worker's job is a FRAME's
+    PXVAR px_anrun, 1               ; ...1 composing, 2 a frame ready
+    PXVAR px_ango, 1                ; ...the UI's word: the next one
+    PXVAR px_anpos, 4               ; the file offset the next frame's blocks
+    PXVAR px_an0, 4                 ; start at, and frame 0's
+    PXVAR px_anfr, 2                ; frames drawn this pass
+    PXVAR px_andue, 2               ; the tick the frame shown ends
+    PXVAR px_andly, 2               ; ...its delay in ticks
+    PXVAR px_anloop, 2              ; passes left after this; FFFFh forever
+    PXVAR px_anl0, 2                ; ...and as the file says them
+    PXVAR px_andisp, 1              ; the frame shown's disposal...
+    PXVAR px_andr, 8                ; ...and its rect, master pixels
+    PXVAR px_anrect, 8              ; what changed and is not yet painted
+    PXVAR px_anbg, 1                ; the background index (106.18's)
+    PXVAR px_anflg, 1               ; ANF_* below
+    PXVAR px_anseg, 2               ; THE ANIMATION's claim: the global
+    PXVAR px_ankb, 2                ; table, then the backup (disposal 3)
+    PXVAR px_anneed, 2              ; ...the KB a frame asked it to grow to
+    PXVAR px_sbase, 4               ; THE STREAM'S BASE: a PNG inside an ICO
+                                    ; (106.25), a GIF's next frame...
+    PXVAR px_rdrop, 2               ; ...and its cluster's bytes before it
     PXVAR px_cdir, 2                ; ...read for this folder
     PXVAR px_cvol, 1
     PXVAR px_chit, 8                ; ...its entries read since its last write
@@ -4525,17 +4640,15 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_pcr, 8                 ; ...its rect
     PXVAR px_pcbtn, 1               ; ...the button that fired
     PXVAR px_wfmt, 1                ; SAVE AS: the format (pxsave.inc)
-    PXVAR px_wclip, 1               ; ...it is a copy's
     PXVAR px_wfirst, 1              ; ...the first slot creates the file
     PXVAR px_wtok, 2                ; ...WRITE_SEQ's token
     PXVAR px_wtot, 4                ; ...the bytes written
-    PXVAR px_wsel, 8                ; ...a copy's rect (bit 15: one)
-    PXVAR px_cblen, 2               ; ...a copy's bytes
     PXVAR px_sname, 14              ; ...the file's name
     PXVAR px_sdir, 2                ; ...and its folder
     PXVAR px_svol, 1
     PXVAR px_lvpend, 1              ; "Save changes?": the action banked
     PXVAR px_lvarg, 2               ; ...and its name
+    PXVAR px_lvok, 1                ; ...Discard said to it: it goes ahead
     PXVAR px_aq, 36                 ; an alert's question (px_ask)
     PXVAR px_fdrop, PE_DRSZ         ; Save As's format: its drop-down
     PXVAR px_svgp, 2                ; THE UI SERVICES' GATE (pxsvc.inc)...

@@ -1,7 +1,7 @@
 PiXEL's sample gallery
 ======================
 
-Nine pictures for PiXEL, the os8088 image viewer (SPEC.md 106), one in each
+Ten pictures for PiXEL, the os8088 image viewer (SPEC.md 106), one in each
 format and shape its decoders read, so every one of them has something to
 show:
 
@@ -14,13 +14,15 @@ show:
   HOUSE.PNG     320x240  truecolour PNG
   MOUNTAIN.BMP  256x192  24-bit BMP
   CITY.PCX      320x240  8-bit PCX
+  BOUNCE.GIF     96x72   animated GIF, ten frames, looping
 
 Where they come from
 --------------------
 
-All nine are ORIGINAL images, made for this project: nine 1200x896 scenes
-generated for os8088 and not taken from anywhere else. Nothing here is a
-photograph of a real place or a copy of someone else's work.
+All ten are ORIGINAL images, made for this project: nine 1200x896 scenes
+generated for os8088 and not taken from anywhere else, and BOUNCE.GIF, which
+tools/pixsamples.py draws itself (a beach ball crossing the sand). Nothing
+here is a photograph of a real place or a copy of someone else's work.
 
 tools/pixsamples.py reduced each scene to the size above (a centre crop to
 the target's aspect, then Lanczos) and re-encoded it with Pillow into the

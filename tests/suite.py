@@ -1233,9 +1233,10 @@ FAST = [
         "rule (a negative control proves the gap check can fail), each "
         "caption with air in its button, and two builds byte-identical; "
         "the Makefile's --check-asm then holds pixel.asm's numbers to it"),
-    Row("pixcorpus", "fast", py("tools/pixcorpus.py", "--check"), 0.3,
+    Row("pixcorpus", "fast", py("tools/pixcorpus.py", "--check"), 0.4,
         "PiXEL's fixtures (SPEC.md 106.13) - every depth, type, orientation "
-        "and packing of BMP, PCX, TGA, PNM and PIX, and a hostile half - each "
+        "and packing of BMP, PCX, TGA, PNM and PIX, of TIFF, ICO, IFF and "
+        "MacPaint and the animated GIFs (106.25), and a hostile half - each "
         "get the verdict SPEC.md 106.10 promises from tools/pixelsim.py, and "
         "the same picture through five different readers is ONE master "
         "(the agreement groups): the reference and the corpus are two "
@@ -7830,6 +7831,28 @@ SOAK = [
         "then pixcorpus's hostile JPEGs, each refused with its number. "
         "Without Pillow the PSNR half SKIPS and says so - the verdicts, which "
         "are what the guest is held to, need nothing but Python"),
+    Row("pxextraemu", "soak", py("tests/pxextraemu.py"), 5.0,
+        "SPEC.md 106.25's EXTRAS part (build/pxextra.bin) on the HOST, under "
+        "Unicorn (tests/pxpartemu.py): every TIFF, ICO, IFF and MacPaint "
+        "fixture tools/pixcorpus.py makes through HEAD - its own next heads "
+        "read through a faked OSAPI_FILE_READ_AT, whole clusters at a "
+        "cluster's offset - and DECODE over a ring of windows K_RING hands "
+        "out: the verdict, the heads counted, the palette and every row K_EMIT "
+        "is given equal tools/pixelsim.py's, and a PNG inside an ICO answers "
+        "PXD_REDIR with the head moved down and [px_sbase] at it. The fast "
+        "loop; pxdecode holds the same part inside the package on MartyPC. "
+        "Without Unicorn it SKIPS and says so",
+        needs=("nasm",), wants=("build/pixel.o88",)),
+    Row("pxanimemu", "soak", py("tests/pxanimemu.py"), 3.0,
+        "SPEC.md 106.25's GIF that plays, on the HOST under Unicorn: the GIF "
+        "part decodes frame 0 into a 1/1 master, AV_INIT reads the "
+        "animation's facts out of that decode, and the worker's frame job "
+        "(JOB_ANIM) runs with this script as the UI - at every frame it says "
+        "is ready the master, the rect it leaves owed and its delay equal "
+        "tools/pixelsim.py's gif_anim's; a job asking for more backup gets "
+        "it; AV_WAKE ends the pass for real, and the second pass's frame 0 "
+        "is gif_restart's. Without Unicorn it SKIPS and says so",
+        needs=("nasm",), wants=("build/pixel.o88",)),
     Row("pxdecode", "soak", py("tests/pxdecode.py"), 420.0,
         "SPEC.md 106.13: every fixture tools/pixcorpus.py makes, decoded by "
         "PIXEL.O88 itself through File > Revert, against tools/pixelsim.py "
@@ -7843,7 +7866,11 @@ SOAK = [
         "(the box filter, and an 8-bit source averaged into the cube); since "
         "wave 4 every JPEG fixture too (SPEC.md 106.19) - baseline, "
         "progressive, every sampling and orientation, restarts, the hostile "
-        "half - and JPEGs at each DCT scale memory can be made to choose. "
+        "half - and JPEGs at each DCT scale memory can be made to choose; "
+        "since wave 8 (SPEC.md 106.25) TIFF, ICO and CUR (a PNG inside one "
+        "included), IFF and MacPaint, and nine animated GIFs PLAYED - every "
+        "frame's master and delay tools/pixelsim.py's gif_anim, read with "
+        "the guest stopped at px_antick while a frame is on the glass. "
         "On the 1.44 MB VGA XT: the corpus outgrew a 360 KB disk",
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/os8088.img")),
@@ -7895,7 +7922,9 @@ SOAK = [
         "filmstrip hidden and shown, the key card, a status field, an open - "
         "each under a ceiling a repaint blows through, named by the routine "
         "that made it; and the picture the records drew pixel-identical to "
-        "a forced full repaint",
+        "a forced full repaint; then the gallery's BOUNCE.GIF playing "
+        "(106.25): a frame's calls under 12, and the stopped frame's glass "
+        "identical to a repaint",
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/PIXEL.GFX",
                "build/os8088-360.img")),
@@ -7908,16 +7937,20 @@ SOAK = [
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/PIXEL.GFX",
                "build/os8088-360.img")),
-    Row("pxthumb", "soak", py("tests/pxthumb.py"), 300.0,
+    Row("pxthumb", "soak", py("tests/pxthumb.py"), 400.0,
         "SPEC.md 106.21 on the VGA XT with a 720 KB B:: a folder of seven "
-        "pictures opened by its ASSOCIATION from a subfolder of B: - the "
-        "strip is the document's folder; the cards on show get their "
+        "pictures opened by its ASSOCIATION from a subfolder of B: - with "
+        "ANOTHER window in front (106.25, review-w5 F13) no thumbnail is "
+        "begun for 20 s and no PiXEL callback holds the UI task 0.25 s, "
+        "timed in guest cycles entry to return; in front, none holds it "
+        "3 s; the strip is the document's folder; the cards on show get their "
         "thumbnails, the open picture's from its master with no decode and "
         "every other one by exactly one hidden decode, each the host's own "
         "(tools/pixelsim.py's master at px_tcap's scale, sampled and taken "
-        "to the cube) byte for byte; SYSTEM/APPDATA/PIXEL.THC written once, "
-        "read back off the floppy ON THE HOST (tools/os88flush.py) and every "
-        "entry its own key and the store's bytes; PiXEL closed and opened "
+        "to the cube) byte for byte; SYSTEM/APPDATA/PIXEL.THC NOT written "
+        "while its folder is on show and written whole by the close (under "
+        "20 s), read back off the floppy ON THE HOST (tools/os88flush.py) "
+        "and every entry its own key and the store's bytes; PiXEL opened "
         "again: the strip from the cache with NO decode; a slideshow of "
         "three slides with its button latched, stopped by Esc on the slide "
         "shown, no decode's claim left; and twenty Next and Prev ending "

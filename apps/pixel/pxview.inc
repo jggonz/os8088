@@ -32,14 +32,8 @@ PX_HBW      equ 128                 ; the Histogram's band (os88gfx.inc's
 PX_HBH      equ 80                  ; PX_HBW/H, defined from these)
 PX_HBST     equ PX_HBW / 8
 
-; --- a VIEW: where the picture is on the screen and how it is sampled -------
-VW_IX       equ 0                   ; word: the picture's left on the screen
-VW_IY       equ 2                   ; word: ...its top
-VW_HS       equ 4                   ; dword: master pixels a screen pixel, 16.16
-VW_VS       equ 8                   ; dword: master rows a screen row, 16.16
-VW_DW       equ 12                  ; word: the picture's width on the screen
-VW_DH       equ 14                  ; word: ...and height
-VW_SZ       equ 16
+; (a VIEW's layout, VW_*, is apps/pixel/pxrec.inc's: the GIF part paints
+; an animation's frame through it, SPEC.md 106.25)
 
 ; =============================================================================
 ; THE CONSTANTS
@@ -184,9 +178,11 @@ px_plans:
     jne .ok
     push bx
     push di
+    push cx
     mov al, [px_cur + PXR_FMT]
     call px_fpart
     mov bl, PXV_PLANS
+    xor cl, cl                      ; (the plans; CL = 1 is pl_stats)
     mov di, px_k
     cmp byte [px_onworker], 0
     je .ui
@@ -196,6 +192,7 @@ px_plans:
     call px_kneed                   ; one decoder part at a time
     call px_pcall
 .r:
+    pop cx
     pop di
     pop bx
     jc .out
@@ -2549,282 +2546,26 @@ px_navpan:
 ; THE HISTOGRAM (SPEC.md 106.12)
 ; =============================================================================
 
-; px_hcount - ON THE WORKER: the master's indices counted into [px_hist],
-; 256 dwords. Liveness and the cancel every 8 rows. CF = 1 AX on a cancel.
-;
-; A pixel is ONE `inc byte`: the counts are kept as three bytes an index -
-; low, middle and high planes of 256 at [px_bins], which nothing reads while
-; [px_hok] is 0 - and a low byte that wraps carries into the middle one (the
-; master is under 2^24 pixels: it fits in conventional memory). The dwords
-; are put together at the end. A word count with its index doubled was 120
-; cycles a pixel on an 8088; this is 92
-PXH_MID     equ 256
-PXH_HI      equ 512
-px_hcount:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    call px_htail                   ; the planes, in the master's tail
-    mov di, PXH_BINS
-    mov cx, 768 / 2
-    xor ax, ax
-    cld
-    rep stosw
-    xor dx, dx                      ; DX = the row
-.row:
-    cmp dx, [px_cur + PXR_MH]
-    jae .sum
-    test dl, 7
-    jnz .r
-    cmp byte [px_abort], 0
-    jne .ab
-    push bx
-    mov bx, [px_win]
-    call OSAPI_TASK_ALIVE
-    pop bx
-.r:
-    mov ax, dx
-    push dx
-    call px_htail                   ; (re-read each row: the master moves)
-    push es
-    call px_mrow                    ; ES:DI = the row
-    pop si
-    pop dx
-    mov cx, [px_cur + PXR_MW]
-    push ds
-    push es
-    mov es, si                      ; ES = the tail...
-    mov si, di                      ; ...DS:SI the row, BH = 0 throughout
-    pop ds
-    xor bx, bx
-    cld
-.px:
-    lodsb
-    mov bl, al
-    inc byte [es:PXH_BINS + bx]
-    jz .carry
-.n:
-    loop .px
-    pop ds
-    inc dx
-    jmp short .row
-.carry:
-    inc byte [es:PXH_BINS + PXH_MID + bx]
-    jnz .n
-    inc byte [es:PXH_BINS + PXH_HI + bx]
-    jmp short .n
-.sum:
-    push ds
-    call px_htail
-    push es
-    pop ds                          ; DS = ES = the tail
-    xor bx, bx                      ; the dwords: lo + 256 mid + 65536 hi
-    mov di, PXH_HIST
-.s:
-    mov al, [PXH_BINS + bx]
-    mov ah, [PXH_BINS + PXH_MID + bx]
-    stosw
-    mov al, [PXH_BINS + PXH_HI + bx]
-    xor ah, ah
-    stosw
-    inc bx
-    cmp bx, 256
-    jb .s
-    pop ds
-    clc
-    jmp short .out
-.ab:
-    mov ax, PXD_ABORT
-    stc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
-
 ; px_hstats - [px_bins] folded from [px_hist] through the palette for
 ; channel [px_hchan] (0 luma, 1 R, 2 G, 3 B), and Mean, Std Dev, Min, Max
 ; from them into [px_hmean] [px_hsd] [px_hmin] [px_hmax] (SPEC.md 106.12).
 ; Preserves all
 px_hstats:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    call px_htail                   ; ES = the picture's tail
-    mov di, PXH_BINS
-    mov cx, 512
-    xor ax, ax
-    cld
-    rep stosw
-    mov si, px_pal
-    xor bx, bx                      ; BX = the index x 4
-.f:
-    mov ax, [es:PXH_HIST + bx]
-    or ax, [es:PXH_HIST + bx + 2]
-    jz .fn
-    mov al, [px_hchan]
-    or al, al
-    jnz .chan
-    call px_luma
-    jmp short .v
-.chan:
-    xor ah, ah
-    dec ax
-    push si
-    add si, ax
-    mov al, [si]
-    pop si
-    xor ah, ah
-.v:
-    mov di, ax
-    shl di, 1
-    shl di, 1
-    mov ax, [es:PXH_HIST + bx]
-    add [es:PXH_BINS + di], ax
-    mov ax, [es:PXH_HIST + bx + 2]
-    adc [es:PXH_BINS + di + 2], ax
-.fn:
-    add si, 3
-    add bx, 4
-    cmp bx, 1024
-    jb .f
-    ; N and S1 (32 bits each: N is at most a master's bytes)
-    xor ax, ax
-    mov [px_hn], ax
-    mov [px_hn + 2], ax
-    mov [px_hs1], ax
-    mov [px_hs1 + 2], ax
-    mov word [px_hmin], 0xFFFF
-    mov word [px_hmax], 0
-    xor si, si                      ; SI = v
-.s1:
-    mov di, si
-    shl di, 1
-    shl di, 1
-    mov ax, [es:PXH_BINS + di]
-    mov dx, [es:PXH_BINS + di + 2]
-    mov cx, ax
-    or cx, dx
-    jz .s1n
-    cmp word [px_hmin], 0xFFFF
-    jne .mx
-    mov [px_hmin], si
-.mx:
-    mov [px_hmax], si
-    add [px_hn], ax
-    adc [px_hn + 2], dx
-    mov cx, si
-    call px_mulx                    ; v x n
-    add [px_hs1], ax
-    adc [px_hs1 + 2], dx
-.s1n:
-    inc si
-    cmp si, 256
-    jb .s1
-    mov ax, [px_hn]
-    or ax, [px_hn + 2]
-    jnz .some
-    mov word [px_hmin], 0
-    xor ax, ax
-    mov [px_hmean], ax
-    mov [px_hsd], ax
-    jmp .out
-.some:
-    mov ax, [px_hs1]                ; mean = S1 / N
-    mov dx, [px_hs1 + 2]
-    mov bx, [px_hn]
-    mov cx, [px_hn + 2]
-    call px_div32
-    mov [px_hmean], ax
-    xor ax, ax                      ; S2 = sum n (v - mean)^2, 48 bits
-    mov [px_n0], ax
-    mov [px_n1], ax
-    mov [px_n2], ax
-    xor si, si
-.s2:
-    mov di, si
-    shl di, 1
-    shl di, 1
-    mov ax, [es:PXH_BINS + di]
-    mov dx, [es:PXH_BINS + di + 2]
-    mov cx, ax
-    or cx, dx
-    jz .s2n
-    mov cx, si
-    sub cx, [px_hmean]
-    jns .p
-    neg cx
-.p:
-    push ax
-    mov ax, cx
-    mul ax
-    mov cx, ax                      ; CX = (v - mean)^2, <= 65025
-    pop ax
-    call px_mulx                    ; BX:DX:AX = n x it
-    add [px_n0], ax
-    adc [px_n1], dx
-    adc [px_n2], bx
-.s2n:
-    inc si
-    cmp si, 256
-    jb .s2
-    mov ax, [px_hn]
-    mov [px_dv0], ax
-    mov ax, [px_hn + 2]
-    mov [px_dv1], ax
-    call px_div                     ; the variance
-    mov ax, [px_n0]
-    call px_isqrt
-    mov [px_hsd], ax
-.out:
-    pop es
+    push ax                         ; the shown picture's decoder part folds
+    push bx                         ; them (pxplan.inc's pl_stats, through
+    push cx                         ; PXV_PLANS with CL = 1: SPEC.md 106.25 -
+    push di                         ; the resident's room), fetched if it
+    mov al, [px_cur + PXR_FMT]      ; must be, as px_plans' is
+    call px_fpart
+    call px_kneed
+    mov bl, PXV_PLANS
+    mov cl, 1
+    mov di, px_k
+    call px_pcall
     pop di
-    pop si
-    pop dx
     pop cx
     pop bx
     pop ax
-    ret
-
-; px_isqrt - AX = floor(sqrt(AX)), by the bit method. Preserves all but AX
-px_isqrt:
-    push bx
-    push cx
-    push dx
-    mov cx, ax                      ; CX = n
-    xor ax, ax                      ; AX = the root
-    mov bx, 0x4000                  ; BX = the bit
-.l:
-    or bx, bx
-    jz .out
-    mov dx, ax
-    add dx, bx
-    cmp cx, dx
-    jb .no
-    sub cx, dx
-    shr ax, 1
-    add ax, bx
-    jmp short .n
-.no:
-    shr ax, 1
-.n:
-    shr bx, 1
-    shr bx, 1
-    jmp short .l
-.out:
-    pop dx
-    pop cx
-    pop bx
     ret
 
 ; px_hgraph - the graph in the well AX/BX/CX/DX (its interior): one column a

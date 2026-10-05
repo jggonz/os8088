@@ -1,10 +1,10 @@
 ; =============================================================================
 ; os8088 - apps/pixel/pxsave.inc
 ;
-; SAVE AS, UNSAVED EDITS AND COPY (SPEC.md 106.24) - the resident half; the
-; names, the job's start, the pump, the end and Copy's rect are the WRITE
-; part's UI verbs (WV_U*, apps/pixel/pxwrite.asm), the encoding its worker
-; half.
+; SAVE AS, UNSAVED EDITS AND COPY INFO (SPEC.md 106.24, 106.25) - the
+; resident half; the names, the job's start, the pump, the end and Copy
+; Info's line are the WRITE part's UI verbs (WV_U*, apps/pixel/pxwrite.asm),
+; the encoding its worker half.
 ;
 ; SAVE AS is a card (the format: a drop-down - BMP 24-bit is offered on a
 ; CUBE master only), then the Standard File dialog (SPEC.md 38) for where
@@ -27,10 +27,10 @@
 ; Full screen does not ask: its Next and Prev say "Save the edit first"
 ; (pxfull.inc), since its glass has no room for a card.
 ;
-; COPY puts an 8-bit BMP of the selection - or of the picture - on the
-; system clipboard (SPEC.md 55): the WRITE part's BMP writer into one slot,
-; and OSAPI_CLIP_PUT. The clipboard is CLIP_MAXKB, so a larger one is
-; refused with its size.
+; COPY INFO puts the picture DESCRIBED on the system clipboard - its name,
+; size and format, the selection's rect, the Eyedropper's pinned pixel -
+; because the clipboard is text (SPEC.md 55.1, 106.25): the WRITE part's
+; WV_UCOPY builds the line and puts it.
 ; =============================================================================
 
 PXL_NAV     equ 1                   ; px_gate's banked actions
@@ -54,8 +54,14 @@ px_wcallu:
     pop bx
     ret
 
-; px_saveas - File > Save As..., Ctrl+S, the toolbar's Save. Lock held
+; px_saveas - File > Save As..., Ctrl+S, the toolbar's Save: a save the
+; USER asked for, so no action a "Save changes?" banked rides on it - one
+; whose Save As was cancelled at the card or the dialog fired at the next
+; save's end (review-w7 F5). px_saveas0 is "Save changes?"'s own way in.
+; Lock held
 px_saveas:
+    mov byte [px_lvpend], 0
+px_saveas0:
     push ax
     push si
     mov si, px_s_nopico
@@ -141,6 +147,8 @@ px_sdone:
     jnc px_sgo
     cmp byte [px_pfail], 0
     jne .x
+    cmp byte [px_aq], 0             ; (no question: a folder or a read-only
+    je .x                           ; file, refused and said - review-w7 F4)
     mov al, OS88UI_AYESNO           ; "Replace NAME?"
     mov di, px_sreplace
     jmp px_ask
@@ -167,8 +175,6 @@ px_sgo:
     mov si, px_s_busy
     cmp byte [px_busy], 0
     jne .say
-    mov byte [px_wclip], 0
-    mov word [px_wsel], 0           ; the whole picture
     mov cl, [px_wfmt]
     or cl, WF_SIZE
     call px_wcallu
@@ -209,7 +215,7 @@ px_wgo:
     pop ax
     ret
 
-; px_wfree - the ring (or the copy's slot) given back. Preserves all
+; px_wfree - the ring given back. Preserves all
 px_wfree:
     push dx
     mov dx, [px_ringraw]
@@ -246,8 +252,8 @@ px_sfin:
     pop ax
     ret
 
-; px_copy - Edit > Copy (Ctrl+C): the selection, or the picture, as an
-; 8-bit BMP on the system clipboard. Lock held
+; px_copy - Edit > Copy Info (Ctrl+C): the picture described, as a line of
+; text, on the system clipboard (SPEC.md 106.25). Lock held
 px_copy:
     push ax
     push cx
@@ -255,15 +261,11 @@ px_copy:
     mov si, px_s_nopico
     cmp byte [px_cur + PXR_HAVE], 0
     je .say
-    mov si, px_s_busy
-    cmp byte [px_busy], 0
-    jne .say
-    mov cl, WV_UCOPY                ; the rect, and its size (refused: said)
+    mov cl, WV_UCOPY                ; built, put and said by the part
     call px_wcallu
-    jc .x
-    call px_wgo
-    jnc .x
-    mov si, px_s_r7
+    mov al, PXPART_WRITE
+    call px_pdrop
+    jmp short .x
 .say:
     call px_toast
 .x:
@@ -297,12 +299,16 @@ px_ask:
     ret
 
 ; px_gate - AL = what the user asked for (PXL_*; px_navto's name banked as
-; [px_lvarg]): CF = 0 go on - nothing is unsaved; CF = 1 the question is up,
-; and the action is done (px_lvdo) when its answer lets it. Lock held.
+; [px_lvarg]): CF = 0 go on - nothing is unsaved, or the user has just said
+; Discard to this very action ([px_lvok]); CF = 1 the question is up, and
+; the action is done (px_lvdo) when its answer lets it. Lock held.
 ; Preserves all
 px_gate:
     cmp byte [px_dirty], 0
-    jne .ask
+    je .go
+    cmp byte [px_lvok], 0
+    je .ask
+.go:
     clc
     ret
 .ask:
@@ -336,14 +342,27 @@ px_asked:
     mov byte [px_lvpend], 0
     ret
 .disc:
+    cmp byte [px_lvpend], PXL_OPEN  ; DISCARD: an open (Next, a card, File
+    ja .dgo                         ; > Open) leaves the edit only if it
+    mov byte [px_lvok], 1           ; happens - a cancelled dialog or a
+    call px_lvdo                    ; refused file keeps it, still unsaved
+    mov byte [px_lvok], 0           ; (review-w7 F10); the slideshow and the
+    ret                             ; close leave it for good
+.dgo:
     mov byte [px_dirty], 0
     jmp px_lvdo
 .save:
-    ; over the file itself when PiXEL writes its format and the master is
-    ; the whole picture; else where, through the card (the action waits for
-    ; the save's end either way)
-    cmp byte [px_cur + PXR_SCL], 0
+    ; over the file itself when PiXEL writes its format, the master is the
+    ; whole picture - DECODED at 1/1, which an edit does not change (review-
+    ; w7 F8) - and holds every bit the file did: no truecolour picture held
+    ; as the cube, nothing over 8 bits (F2); else where, through the card
+    ; and its "Replace?" (the action waits for the save's end either way)
+    cmp byte [px_cur + PXR_DSCL], 0
     jne .as
+    cmp byte [px_cur + PXR_PMODE], PM_CUBE
+    je .as
+    cmp byte [px_cur + PXR_BITS], 8
+    ja .as
     mov al, [px_cur + PXR_FMT]
     cmp al, PXF_PNG
     je .own
@@ -367,7 +386,7 @@ px_asked:
     mov [px_svol], al
     jmp px_sgo
 .as:
-    jmp px_saveas
+    jmp px_saveas0
 
 ; px_lvdo - the action a "Save changes?" banked, now the picture may be
 ; left. Lock held
@@ -417,4 +436,14 @@ px_onclose:
     mov al, PXL_CLOSE
     call px_gate
     pop ax
+    jc .x
+    call px_hstop                   ; CLOSING: what the thumbnails' cache
+    cmp byte [px_cnew], 0           ; has not had yet is written, whole -
+    je .x                           ; the one write that is not a step
+    push cx                         ; (review-w5 F13); CF = 0 from the cmp
+    mov cl, PF_WALL
+    call px_cwrite
+    pop cx
+    clc
+.x:
     ret

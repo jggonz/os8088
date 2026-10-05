@@ -37,8 +37,11 @@
 ;   LZW_EBAD    (optional, default FFFFh) the answer for a code the table
 ;               never built
 ;   LZW_EARLY   (optional, default 0) 1 grows the code size one code early -
-;               TIFF's rule, for the day the TIFF reader adds its MSB-first
-;               code reader beside lzw_decode's (wave 8)
+;               TIFF's rule (SPEC.md 106.25): when the next free code PLUS
+;               ONE reaches the power of two
+;   LZW_MSB     (optional, default 0) 1 reads each code MOST significant bit
+;               first, from the high bit of a byte down - TIFF's order (106.25);
+;               GIF's, the default, is least significant first
 ;
 ; THE TABLE SEGMENT, in ES for the whole decode: LZW_KB (18) KB, the
 ; includer's claim -
@@ -65,6 +68,9 @@
 %endif
 %ifndef LZW_EARLY
   %define LZW_EARLY 0
+%endif
+%ifndef LZW_MSB
+  %define LZW_MSB 0
 %endif
 
 LZW_PREF    equ 0
@@ -119,12 +125,33 @@ lzw_decode:
     cmp bp, [lzw_ie2]               ; --- the next code: AX ----------------
     jae .refill
 .have:
+%if LZW_MSB
+    mov ax, [es:bp]                 ; TIFF'S ORDER: the bytes big-endian, the
+    xchg al, ah                     ; bits taken shifted out at the top, a
+    mov cl, dl                      ; third byte's top bits in under them past
+    shl ax, cl                      ; bit 16, and the code the top DH bits
+    mov bl, dl
+    add bl, dh                      ; BL = where the code ends
+    cmp bl, 16
+    jbe .m2
+    mov ch, [es:bp + 2]
+    mov cl, 8
+    sub cl, dl
+    shr ch, cl
+    or al, ch
+.m2:
+    mov cl, 16
+    sub cl, dh
+    shr ax, cl
+    mov cl, bl
+%else
     mov ax, [es:bp]
     mov cl, dl
     shr ax, cl
     add cl, dh                      ; CL = where the code ends
     cmp cl, 16
     ja .three
+%endif
 .got:
     and ax, [lzw_mask]
     mov dl, cl                      ; ...and on past it
@@ -141,11 +168,13 @@ lzw_decode:
 %ifdef LZW_RUN1
     call LZW_RUN1
 %else
-    mov di, LZW_STK - 1
-    mov [es:di], al
+    push si                         ; (SI is the next free code: LZW_RUN may
+    mov di, LZW_STK - 1             ; clobber it, LZW_RUN1 keeps it - wave 8
+    mov [es:di], al                 ; met the first includer without RUN1)
     mov si, di
     mov cx, 1
     call LZW_RUN
+    pop si
 %endif
     jc .out
     cmp word [lzw_old], 0xFFFF
@@ -224,6 +253,7 @@ lzw_decode:
     pop si
     jc .out
     jmp .add
+%if LZW_MSB = 0
 .three:
     mov bl, [es:bp + 2]             ; the third byte's bits, at 16 - bit:
     mov ch, cl                      ; (byte << (8 - bit)) in AH
@@ -233,6 +263,7 @@ lzw_decode:
     or ah, bl
     mov cl, ch
     jmp .got
+%endif
 .refill:
     mov [lzw_ib], bp                ; fewer than three bytes: the buffer
     call lzw_refill                 ; refilled - AX = the bytes there

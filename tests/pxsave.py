@@ -7,9 +7,9 @@ THE HOST LEG first, when Unicorn is installed (tests/pxpartemu.py; without
 it the leg SKIPS and says so): the WRITE part - build/pxwrite.bin, the bytes
 PIXEL.O88 carries - run on a faked package, every format over seven sizes,
 three pictures and the three palette modes, then over five ring shapes (a
-slot of 512 bytes to one of 32K, one slot or two) and a RECT (Copy's one
-slot): each file tools/pixelsim.py's write_as to the byte, and PIX's
-one-segment refusal where pixelsim refuses.
+slot of 512 bytes to one of 32K, one slot or two): each file
+tools/pixelsim.py's write_as to the byte, and PIX's one-segment refusal
+where pixelsim refuses; and Copy Info's line of text (SPEC.md 106.25).
 
 THE GUEST LEG on MartyPC (the VGA XT; --machine for another), CITY.PCX and
 CAT.GIF on a scratch floppy:
@@ -27,8 +27,8 @@ CAT.GIF on a scratch floppy:
             the picture over its own file first; an edit and the close box:
             Cancel keeps the window
   ESC       Esc in a PNG's save: no file, no PXSAVE.TMP, claims as before
-  COPY      the whole of CITY.PCX refused with its size; a selection's BMP
-            on the clipboard, pixelsim's to the byte
+  COPY INFO a selection's picture DESCRIBED, as text, on the clipboard -
+            SPEC.md 55.1's clipboard (106.25)
   FULL      a save that does not fit says "Disk full", leaves the file it
             would have replaced as it was and no PXSAVE.TMP
 """
@@ -69,20 +69,13 @@ def first_diff(a, b):
 # =============================================================================
 # THE HOST LEG
 # =============================================================================
-def save(fmt, m, w, h, pal, mode, chunk=8192, nslot=2, rect=None):
+def save(fmt, m, w, h, pal, mode, chunk=8192, nslot=2):
     """The WRITE part's file, drained slot by slot as the UI task would."""
     p = pxpartemu.PxPart("build/pxwrite.bin")
     p.set_pal(pal)
     p.set_master(m, w, h)
     p.w8("px_cur", mode, 37)
-    if rect:
-        x1, y1, x2, y2 = rect
-        p.wbytes("px_wsel", struct.pack("<4H", x1 | 0x8000, y1, x2, y2))
-        chunk, nslot = 0xFFFF, 1
-        n = 1078 + ((x2 - x1 + 4) & ~3) * (y2 - y1 + 1)
-        segs = [p.claim(n + 16)]
-    else:
-        segs = [p.claim(chunk) for _ in range(nslot)]
+    segs = [p.claim(chunk) for _ in range(nslot)]
     for k, s in enumerate(segs):
         p.w16("px_sseg", s, 2 * k)
     p.w16("px_chunk", chunk)
@@ -101,11 +94,38 @@ def save(fmt, m, w, h, pal, mode, chunk=8192, nslot=2, rect=None):
     if cf:
         return None
     ax, cf = p.decode(WF[fmt])
-    if rect:
-        out.extend(p.seg_read(segs[0], p.r16("px_slen")))
-    else:
-        drain(p)
+    drain(p)
     return bytes(out)
+
+
+def copy_info(sel, pick):
+    """WV_UCOPY on a faked package: the line it puts on the clipboard."""
+    from unicorn import UC_HOOK_CODE
+    from unicorn.x86_const import UC_X86_REG_ES, UC_X86_REG_SI, UC_X86_REG_CX
+    p = pxpartemu.PxPart("build/pxwrite.bin")
+    gate = 0x0F40
+    p.mu.mem_write(pxpartemu.PKG * 16 + gate, b"\xF8\xCB")    # clc ; retf
+    p.w16("px_svgp", gate)
+    put = []
+
+    def clip(mu, addr, size, _):
+        if addr - pxpartemu.KSEG * 16 == p.cells["OSAPI_CLIP_PUT"]:
+            es, si = mu.reg_read(UC_X86_REG_ES), mu.reg_read(UC_X86_REG_SI)
+            n = mu.reg_read(UC_X86_REG_CX)
+            put.append(bytes(mu.mem_read(es * 16 + si, n)))
+    p.mu.hook_add(UC_HOOK_CODE, clip, begin=pxpartemu.KSEG * 16,
+                  end=pxpartemu.KSEG * 16 + 0xFFFF)
+    iv = 24                                     # PX_IVSZ
+    p.wbytes("px_ival", b"CITY.PCX\0")
+    p.wbytes("px_ival", b"PCX\0", 3 * iv)
+    p.wbytes("px_ival", pick + b"\0", 8 * iv)
+    p.w16("px_cur", 320, 20)
+    p.w16("px_cur", 240, 22)
+    p.w8("px_sel", 1 if sel else 0)
+    if sel:
+        p.wbytes("px_selr", struct.pack("<4H", *sel))
+    p.decode(0x45)                              # WV_UCOPY
+    return put[0] if put else None
 
 
 def host_leg():
@@ -151,17 +171,19 @@ def host_leg():
                 bad += 1
                 print("      %s through %d x %d" % (fmt, ns, chunk))
     check("%d files through five ring shapes" % n, not bad, "%d differ" % bad)
-    n = bad = 0
-    for rect in ((0, 0, w - 1, h - 1), (10, 20, 109, 79), (5, 5, 5, 5),
-                 (3, 0, 61, 89)):
-        n += 1
-        x1, y1, x2, y2 = rect
-        cm, cw, ch = P.op_crop(m, w, h, *rect)
-        if save("BMP", m, w, h, pal, 0, rect=rect) != \
-                P.write_bmp8(cm, cw, ch, pal):
-            bad += 1
-            print("      Copy's BMP of %r" % (rect,))
-    check("%d copies of a rect (one slot)" % n, not bad, "%d differ" % bad)
+    # COPY INFO (SPEC.md 106.25): the picture DESCRIBED on the clipboard -
+    # text, which is what SPEC.md 55.1 says the clipboard is
+    for sel, pick, want in (
+            (None, b"", "CITY.PCX 320x240 PCX"),
+            ((10, 20, 109, 99), b"", "CITY.PCX 320x240 PCX; selection "
+             "10,20-109,99"),
+            ((0, 0, 0, 0), b"12,34 #A0B0C0 17", "CITY.PCX 320x240 PCX; "
+             "selection 0,0-0,0; pixel 12,34 #A0B0C0 17"),
+            (None, b"7,8 #000000 0", "CITY.PCX 320x240 PCX; pixel 7,8 "
+             "#000000 0"),
+            (None, b"-", "CITY.PCX 320x240 PCX")):     # (the line's dash)
+        got = copy_info(sel, pick)
+        check("Copy Info: %r" % want, got == want.encode(), "%r" % got)
 
 
 # =============================================================================
@@ -208,7 +230,7 @@ def guest_leg(machine):
             b = m.read(base + syms["px_cur"], 50)
             return dict(name=bytes(b[:13]).split(b"\0")[0].decode(),
                         mw=u16(b, 32), mh=u16(b, 34), pmode=b[37],
-                        mseg=u16(b, 38))
+                        mseg=u16(b, 38), sw=u16(b, 20), sh=u16(b, 22))
 
         def pal():
             b = m.read(base + syms["px_pal"], 768)
@@ -421,29 +443,22 @@ def guest_leg(machine):
               instance(m, S, image) == seg and B("px_dirty") == 1)
         menu("Edit", "Undo Invert")
         wait_idle("undo")
-        # --- COPY ----------------------------------------------------------------
+        # --- COPY INFO: TEXT on the clipboard (SPEC.md 55.1, 106.25) --------------
         r = rec()
-        menu("Edit", "Copy")
-        M.ui_done(m, "Copy")
-        n = 1078 + ((r["mw"] + 3) & ~3) * r["mh"]
-        txt = ui.toast()[0]
-        if n > 32 * 1024:
-            check("Copy of the whole picture: refused with its size",
-                  txt == "Copy: %dK, over 32K" % ((n + 1023) // 1024),
-                  "%r" % txt)
         sel = (10, 20, 109, 99)
         menu("Edit", "Select All")
         m.write(base + syms["px_selr"], struct.pack("<4H", *sel))
-        menu("Edit", "Copy")
-        wait_idle("Copy")
-        cm, cw, ch = P.op_crop(master(), r["mw"], r["mh"], *sel)
-        want = P.write_bmp8(cm, cw, ch, pal())
+        menu("Edit", "Copy Info")
+        wait_idle("Copy Info")
+        fmt = bytes(m.read(base + syms["px_ival"] + 3 * 24, 24)).split(
+            b"\0")[0].decode()                         # (Image Info's Format)
+        want = ("%s %dx%d %s; selection 10,20-109,99"
+                % (r["name"], r["sw"], r["sh"], fmt)).encode()
         cseg, cn = ui._word("clip_seg"), ui._word("clip_bytes")
         got = bytes(m.read(cseg * 16, cn)) if cseg else b""
-        check("Copy of a selection: pixelsim's BMP on the clipboard",
-              got == want, "%d bytes, first diff %s" % (
-                  len(got), first_diff(got, want)))
-        check("Copy: says so", ui.toast()[0] == "Copied to the clipboard")
+        check("Copy Info: the picture described, as text, on the clipboard",
+              got == want, "%r, want %r" % (got, want))
+        check("Copy Info: says so", ui.toast()[0] == "Copied to the clipboard")
 
 
 def P_WF_of(name):

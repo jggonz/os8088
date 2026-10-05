@@ -50,7 +50,13 @@ SV_SETPAL   equ 28                  ; px_setpal: the mode's palette
 SV_VIEWNEW  equ 29                  ; px_viewnew: the view at Fit
 SV_SELOFF   equ 30                  ; px_seloff: no selection
 SV_UFREE    equ 31                  ; px_ufree: undo forgets
-SV_N        equ 32
+SV_RIMG     equ 32                  ; px_rimg: the canvas's rect AX..CX x
+                                    ; BX..DX rendered (an animation's frame,
+                                    ; SPEC.md 106.25)
+SV_MQHIDE   equ 33                  ; px_mqhide / px_mqshow: the selection's
+SV_MQSHOW   equ 34                  ; outline off and back round it
+SV_PUMPINIT equ 35                  ; px_pumpinit: a stream from [px_sbase]
+SV_N        equ 36
 
 ; PSV n - call service n from a part (its far pointer pv_sv, set at the
 ; part's every entry from [px_svgp] and [cs:PXP_PKG])

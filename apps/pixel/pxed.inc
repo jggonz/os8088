@@ -137,6 +137,10 @@ PE_DR_WIN   equ 14
 PE_DR_OPEN  equ 16
 PE_DR_HOT   equ 17
 
+PE_IVSZ     equ 24                  ; Image Info's value buffers (pixel.asm's
+PE_IPICK    equ 8                   ; PX_IVSZ) and the Picked line's (pxui.inc's
+                                    ; PX_IPICK): Copy Info reads them
+
 ; --- what both write back: the answers -------------------------------------------
 PXW_OK      equ 0
 PXW_PIXBIG  equ 1                   ; a PIX block would pass one segment

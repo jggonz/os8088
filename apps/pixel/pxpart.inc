@@ -127,12 +127,18 @@ PXD_NOTPIC  equ 13                  ; neither its bytes nor its name are a
                                     ; picture's
 PXD_NREASON equ 14
 PXD_MORE    equ 0x80                ; not a refusal: HEAD wants the head
-                                    ; read again at [PXK_HNEXT] (106.19)
-PXD_TAIL    equ 0x81                ; not a refusal: the SIMPLE part's PCX
-                                    ; HEAD wants the file's 769-byte tail
-                                    ; read, then to be called again (106.20)
+                                    ; read again at [PXK_HNEXT] (106.19) -
+                                    ; the part's own read since 106.25
+                                    ; (pxhmore.inc), never the resident's
+PXD_TAIL    equ 0x81                ; RETIRED (106.25): the SIMPLE part reads
+                                    ; a PCX's tail itself; the number is not
+                                    ; given to anything else
 PXD_LINK    equ 0x82                ; the SIMPLE part was linked against
                                     ; another build of the package (106.20)
+PXD_REDIR   equ 0x83                ; not a refusal: the EXTRAS part's ICO
+                                    ; HEAD found a PNG inside it, moved the
+                                    ; head down to it and set [px_sbase]:
+                                    ; the PNG part reads it (106.25)
 PXD_ABORT   equ 0xFF                ; not a refusal: the user said stop
 
 RF_IDX      equ 0                   ; what a decoder hands the emitter

@@ -87,9 +87,26 @@ CEIL = {"tool: Zoom (z)": 16, "tool: Hand (h)": 16, "zoom in (=)": 40,
         "nudge (arrow)": 12, "deselect (Esc)": 10, "Select All": 10,
         "Invert (palette)": 200, "Undo Invert": 200,
         "card up (Gamma)": 60, "eyedropper (tick)": 12}
+# A GIF THAT PLAYS (SPEC.md 106.25): the most one frame may draw - its rect
+# through the canvas's composer, a band or two, and nothing of the chrome
+CEIL_ANIM = 12
+ANIM_N = 6
 # the folder beside CITY.PCX (tools/pixcorpus.py's): seven pictures, more
 # than a strip shows, so it pages
 FOLDER = ("B24.BMP", "C8.PCX", "G8.GIF", "N6.PPM", "P0_8.PNG", "T2_24.TGA")
+
+
+def dir_cluster(img, name):
+    """A root folder's first cluster, read off the FAT12 image itself."""
+    d = open(img, "rb").read()
+    bps, res, nfat, nroot = (u16(d, 11), u16(d, 14), d[16], u16(d, 17))
+    spf = u16(d, 22)
+    root = (res + nfat * spf) * bps
+    for i in range(nroot):
+        e = d[root + 32 * i:root + 32 * i + 32]
+        if e[:11] == name.ljust(11).encode() and e[11] & 0x10:
+            return u16(e, 26)
+    raise SystemExit("no folder %s on %s" % (name, img))
 
 
 def pkg_syms_at(src):
@@ -167,7 +184,8 @@ def main():
         open(os.path.join("build/pxdrawf", n), "wb").write(cor[n])
         extra.append(os.path.join("build/pxdrawf", n))
     M.scratch_disk(disk, o88path, "build/PIXEL.GFX",
-                   "apps/pixel/samples/CITY.PCX", *extra)
+                   "apps/pixel/samples/CITY.PCX", *extra,
+                   "ANIM:apps/pixel/samples/BOUNCE.GIF")
     rows, ok = [], True
     print("== PiXEL: drawing calls a gesture, %s (SPEC.md 106.15) =="
           % a.machine)
@@ -348,7 +366,10 @@ def main():
         ui.settle()
         M.until(m, lambda _: still(), "still, before the identity",
                 poll=0.3, limit=900)
-        M.guest_sleep(m, 1.0)
+        # (and the free-memory field's look past: it is a five-second look,
+        # PX_MEMT, and the store Hide Filmstrip gave back and Show Filmstrip
+        # claimed again moves it 31K - the repaint draws it as it is now)
+        M.guest_sleep(m, 6.0)
 
         def content():
             w, h, px = m.fbuf()
@@ -396,6 +417,73 @@ def main():
         else:
             print("PASS identity: %dx%d content, the incremental picture IS "
                   "the repaint's" % (cw, ch))
+
+        # A GIF THAT PLAYS (SPEC.md 106.25): the gallery's BOUNCE.GIF, in a
+        # folder of its own (the record's folder poked, pxdecode's way), and
+        # what its frames draw - the rect each changed, never the window
+        m.write(base + syms["px_thoff"], b"\1")    # (no thumbnail arriving
+        cl = dir_cluster(disk, "ANIM")              # between the two shots)
+        m.write(base + syms["px_cur"] + 14, bytes((cl & 255, cl >> 8)))
+        m.write(base + syms["px_cur"], b"BOUNCE.GIF".ljust(13, b"\0"))
+        n0 = W("px_ndone")
+        m.ctrl("KeyR")
+        M.until(m, lambda _: W("px_ndone") != n0 and B("px_anon") == 1
+                and W("px_anfr") >= 3, "BOUNCE.GIF playing", poll=0.3,
+                limit=900)
+        f0 = W("px_anfr")
+        with M.bp_trace(m, *addrs.keys(), cap=50000, regs=True,
+                        on_hit=caller) as tr:
+            M.until(m, lambda _: (W("px_anfr") - f0) % 65536 >= ANIM_N,
+                    "%d frames" % ANIM_N, poll=0.1, limit=600)
+        n_ = sum(1 for h in tr.hits
+                 if (h.get("hit") or (0, 0))[1] == base >> 4)
+        fn = {}
+        for h in tr.hits:
+            ip, cs = h.get("hit") or (0, 0)
+            if cs == base >> 4:
+                f = nearest(ip)
+                fn[f] = fn.get(f, 0) + 1
+        per = n_ / float(ANIM_N)
+        print("%-26s %4d  over %d frames, %.1f a frame" % (
+            "animation (BOUNCE.GIF)", n_, ANIM_N, per))
+        print("      " + ", ".join("%s %d" % kv for kv in sorted(
+            fn.items(), key=lambda kv: -kv[1])[:8]))
+        rows.append({"gesture": "animation frame", "calls": per,
+                     "callers": fn})
+        if not a.record and per > CEIL_ANIM:
+            print("FAIL animation frame: %.1f drawing calls, ceiling %d"
+                  % (per, CEIL_ANIM))
+            ok = False
+        # ...and what they drew is the picture: stopped (A), the glass
+        # against a repaint from nothing, as the identity above - a frame
+        # whose rect was spent on the pixels before its rows were in shows
+        # here as the ball's old places left on the sand
+        m.key("KeyA")
+        M.until(m, lambda _: B("px_anon") == 0 and B("px_anjob") == 0,
+                "the animation stopped", poll=0.2, limit=60)
+        M.ui_done(m, "A")
+        M.guest_sleep(m, 6.0)           # (the free-memory field's look)
+        ga = content()
+        key("F1")
+        M.until(m, lambda _: B("px_helpon") == 1, "the key card up",
+                poll=0.3, limit=60)
+        M.ui_done(m, "the card")
+        M.guest_sleep(m, 1.0)
+        key("Escape")
+        M.ui_done(m, "the repaint")
+        M.guest_sleep(m, 1.0)
+        gb = content()
+        bad = sum(1 for i in range(0, len(ga[2]), 3)
+                  if ga[2][i:i + 3] != gb[2][i:i + 3])
+        if bad:
+            M.write_png_rgb("build/pxdraw-anim-a.png", ga[0], ga[1], ga[2])
+            M.write_png_rgb("build/pxdraw-anim-b.png", gb[0], gb[1], gb[2])
+            print("FAIL animation identity: %d pixels of the stopped frame "
+                  "differ from a repaint" % bad)
+            ok = False
+        else:
+            print("PASS animation identity: the frames drawn ARE the "
+                  "repaint's")
     print("gestures: %d drawing calls" % sum(r["calls"] for r in rows))
     if a.json:
         json.dump(rows, open(a.json, "w"), indent=1)

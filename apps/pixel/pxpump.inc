@@ -61,6 +61,7 @@ px_clbytes:
     mov ax, [px_clsz]               ; MIN-7) - not one a caller, and not one
     ret                             ; a session: a swapped floppy may differ
 .ask:
+    push bx
     push cx
     push dx
     call OSAPI_VOL_STAT             ; AX = sectors a cluster, CX = bytes each
@@ -77,6 +78,7 @@ px_clbytes:
     mov byte [px_clok], 1
     pop dx
     pop cx
+    pop bx                          ; (VOL_STAT clobbers it: free clusters)
     ret
 
 ; =============================================================================
@@ -156,13 +158,29 @@ px_pumpinit:
     mov [px_rhave], al
     mov [px_rpos], ax
     mov [px_rend], ax
-    mov [px_rbase], ax
-    mov [px_rbase + 2], ax
-    mov [px_rnxt], ax
-    mov [px_rnxt + 2], ax
-    mov [px_fabs], ax
-    mov [px_fabs + 2], ax
     mov [px_fk], ax
+    push bx                         ; THE BASE (106.25): 0, a PNG inside an
+    push cx                         ; ICO, a GIF's next frame. A read starts
+    push dx                         ; on a cluster (READ_SEQ's rule), so the
+    mov dx, [px_sbase + 2]          ; stream starts at the base's cluster and
+    mov bx, [px_sbase]              ; the first window drops what is before
+    mov cx, bx                      ; the base (px_rnext)
+    call px_clbytes                 ; AX = the cluster, a power of two
+    dec ax
+    and bx, ax
+    mov [px_rdrop], bx
+    not ax
+    and cx, ax
+    mov [px_rbase], cx
+    mov [px_rnxt], cx
+    mov [px_fabs], cx
+    mov [px_rbase + 2], dx
+    mov [px_rnxt + 2], dx
+    mov [px_fabs + 2], dx
+    pop dx
+    pop cx
+    pop bx
+    xor ax, ax
     mov [PXS_DEFER], al             ; (px_pumpfill's one deferral, unspent)
     mov di, px_rcur
     call os88_rseq_new
@@ -178,6 +196,9 @@ px_pumpinit:
 px_pumpfill:
     cmp byte [px_busy], 1           ; THE FIRST ROWS BEFORE THE NEXT READ:
     jne .fill                       ; px_onwake fills, then paints, and a
+    test byte [PXS_DEFER], 2        ; (not for a re-decode that keeps the
+    jnz .fill                       ; view: its first rows may be far from
+                                    ; it, review-w5 F8)
     push ax                         ; 16 KB read in front of the first paint
     call px_onglass                 ; is a second and more on an XT. So until
     jc .painted                     ; something is painted the ring is filled
@@ -468,6 +489,13 @@ px_rnext:
     mov ax, [px_rend]
     add [px_rnxt], ax
     adc word [px_rnxt + 2], 0
+    mov ax, [px_rdrop]              ; the bytes before the stream's base
+    cmp ax, [px_rend]               ; (px_pumpinit): the window starts past
+    jbe .dr                         ; them
+    mov ax, [px_rend]
+.dr:
+    mov [px_rpos], ax
+    sub [px_rdrop], ax
     clc
     jmp short .out
 .end:
@@ -963,6 +991,9 @@ px_wjob:
                                     ; took the UI task's branch
 px_wjob1:
     mov byte [px_wstage], 0
+    mov al, PXPART_GIF              ; A GIF'S FRAMES (106.25): its part's
+    cmp byte [px_job], JOB_ANIM     ; DECODE, which knows the job
+    je .part
     mov cl, [px_eop]                ; EDITING'S TWO (SPEC.md 106.24): an
     mov al, PXPART_EDIT             ; operation, or a save, the part the UI
     cmp byte [px_job], JOB_EDIT     ; task fetched for it (px_wcall: no
@@ -987,8 +1018,9 @@ px_wjob1:
     jc .fail
     mov byte [px_tabok], 1
     call px_wake                    ; ...so the rows can be painted as they come
-    cmp byte [px_job], JOB_DECODE
-    jne .hist
+    cmp byte [px_job], JOB_DECODE   ; (a TABLES job counts nothing: its
+    jne .done                       ; master's tail holds its counts - every
+                                    ; master is counted when it is made)
 .dec:
     mov byte [px_wstage], 1
     xor ax, ax
@@ -999,9 +1031,14 @@ px_wjob1:
     call px_decode                  ; pxsimple.inc
     jc .fail
 .hist:
-    mov byte [px_wstage], 2
-    call px_hcount                  ; pxview.inc
+    mov byte [px_wstage], 2         ; THE HISTOGRAM's counts: the decoder
+    mov al, [px_kheld]              ; part's (pxplan.inc's pl_hcount, CL = 2:
+    mov bl, PXV_PLANS               ; SPEC.md 106.25), the part the decode
+    mov cl, 2                       ; holds
+    mov di, px_k
+    call px_wcall
     jc .fail
+.done:
     xor al, al                      ; ([px_hok] is the UI task's to set,
     ret                             ; after px_hstats has folded the counts)
 .fail:
@@ -1046,7 +1083,8 @@ px_spawn:
 ; head, parses it, claims, hands the worker the job. Any refusal puts the
 ; picture that was showing back and says why
 px_open:
-    push ax
+    call px_hstop                   ; (a hidden decode or a GIF's frame: the
+    push ax                         ; worker free, the record the shown one's)
     push bx
     push cx
     push dx
@@ -1112,6 +1150,9 @@ px_open:
     mov al, [px_bpp]                ; the worker builds them for THIS depth
     mov [px_tdepth], al
     call px_pumpinit
+    mov al, [px_keepv]              ; (a re-decode reads ahead from the
+    shl al, 1                       ; start: px_pumpfill)
+    mov [PXS_DEFER], al
     call px_pumpone                 ; the first slot now, not a wake later
     call px_spawn
     jc .nowork
@@ -1300,6 +1341,14 @@ px_finish:
     mov byte [px_cur + PXR_HAVE], 1
     mov byte [px_dirty], 0          ; (the file's, as it is on the disk)
     mov byte [px_tabdirty], 0
+    call px_anfree                  ; ...and its animation; a GIF's own, if
+    cmp byte [px_cur + PXR_FMT], PXF_GIF    ; it moves (106.25)
+    jne .na
+    push cx
+    mov cl, AV_INIT
+    call px_ancall
+    pop cx
+.na:
     call px_hstats                  ; the Histogram's numbers from its counts,
     mov byte [px_hok], 1            ; and only then counted (speed review F2:
     call px_compose                 ; a sync between the two drew byte planes)

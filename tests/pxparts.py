@@ -322,8 +322,11 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
           "record %s have %d refusal %d" % (name, have, B("px_lastref")))
     check("F: ...its part fetched from PIXEL.O88's folder: the bracket moved",
           B("px_pmoved") == 1, "[px_pmoved] = %d" % B("px_pmoved"))
-    check("F: ...HEAD far-called once, DECODE on the worker",
-          W("px_pcalls") == calls0 + 1, "%d -> %d" % (calls0, W("px_pcalls")))
+    # (two UI-task calls since 106.25: HEAD, and the histogram's statistics
+    # - PXV_PLANS with CL = 1, which left the resident for the parts)
+    check("F: ...HEAD and the statistics far-called once each, DECODE on "
+          "the worker", W("px_pcalls") == calls0 + 2,
+          "%d -> %d" % (calls0, W("px_pcalls")))
     check("F: ...and the part KEPT after a picture of its kind",
           prow()[1] & OP_FETCHED and B("px_kheld") == 2,
           "flags %02X held %d" % (prow()[1], B("px_kheld")))

@@ -17,6 +17,10 @@ poke is the only thing a test adds.
                    verdict, which --check holds pixelsim to), the picture
                    that was showing still showing, and PiXEL holding exactly
                    the claims it held before the refusal
+  a GIF THAT PLAYS (SPEC.md 106.25): the animated fixtures opened with
+                   the animation on, every frame of the first pass read
+                   while it is on the glass - the master and its delay -
+                   against pixelsim's gif_anim
   the SCALE        fixtures again with [px_mcap] set, so memory "allows"
                    only 1/2: the box filter and, for an 8-bit source, the
                    palette's colours through the cube - against pixelsim at
@@ -118,6 +122,8 @@ with os88ui.boot(SYSDISK, apps=DISK, machine=a.machine) as ui:
     base = seg * 16
     if "px_thoff" in syms:          # no thumbnails here (SPEC.md 106.21):
         m.write(base + syms["px_thoff"], b"\1")   # not what this row measures
+    if "px_anoff" in syms:          # ...and no GIF plays (106.25): its frame
+        m.write(base + syms["px_anoff"], b"\1")   # 0 is what this row holds
     B = lambda n: m.read(base + syms[n], 1)[0]
     W = lambda n: u16(m.read(base + syms[n], 2))
 
@@ -128,11 +134,13 @@ with os88ui.boot(SYSDISK, apps=DISK, machine=a.machine) as ui:
                     have=b[43], fmt=b[24])
 
     OP_T_ROWS, OP_FETCHED = 10, 32      # apps/os88parts.inc
-    PXF_JPEG, PXF_PNG, PXF_GIF = 1, 2, 3
+    PXF_JPEG, PXF_PNG, PXF_GIF, PXF_ICO = 1, 2, 3, 10
     # PXPART_* -> the PXF_*s it reads (pixel.asm); part 4 is the SIMPLE
     # part, linked against the package (SPEC.md 106.20): BMP, PCX, TGA,
-    # PIX, PNM
-    DECPART = {1: {PXF_GIF}, 2: {PXF_PNG}, 3: {PXF_JPEG}, 4: {4, 5, 7, 8, 9}}
+    # PIX, PNM; part 9 the EXTRAS (106.25): TIFF, ICO, LBM, MAC - and a PNG
+    # inside an ICO is the PNG part's
+    DECPART = {1: {PXF_GIF}, 2: {PXF_PNG, PXF_ICO}, 3: {PXF_JPEG},
+               4: {4, 5, 7, 8, 9}, 9: {6, 10, 11, 12}}
 
     def parts_here():
         """{part: its segment} for the decoder parts fetched now."""
@@ -300,6 +308,64 @@ with os88ui.boot(SYSDISK, apps=DISK, machine=a.machine) as ui:
                 compare(name, data, s)
     m.write(base + syms["px_zreq"], b"\xFF")
     m.write(base + syms["px_mcap"], b"\0\0")
+    # --- A GIF THAT PLAYS (SPEC.md 106.25): every frame of the first pass,
+    # its master, the rect it leaves owed and its delay, held to
+    # tools/pixelsim.py's gif_anim - read with the guest stopped at the
+    # timer's animation hook (px_antick) whenever a frame is ON THE GLASS
+    # ([px_anrun] 3), so the worker is between frames and the master whole
+    import time as _t
+    m.write(base + syms["px_anoff"], b"\0")
+    hook = (base + syms["px_antick"]) & 0xFFFFF
+    for name in ("GA1.GIF", "GA2.GIF", "GA3.GIF", "GA4.GIF", "GA5.GIF",
+                 "GA6.GIF", "GA7.GIF", "GA8.GIF", "GX.GIF"):
+        if name not in bydata:
+            continue
+        data = bydata[name][0]
+        loop, frames = P.gif_anim(data)
+        cl = dir_cluster(DISK, folder[name])
+        m.write(base + syms["px_cur"] + 14, bytes((cl & 255, cl >> 8)))
+        m.write(base + syms["px_cur"], name.encode().ljust(13, b"\0"))
+        n0 = W("px_ndone")
+        m.ctrl("KeyR")
+        # armed at once, not after the open: frame 0's delay runs from the
+        # open's end, and a frame missed is a pass replayed at best
+        seen = {}
+        m.pause()
+        m.breakpoints([{"type": "exec", "addr": hook}])
+        m.run()
+        t0 = _t.time()
+        last = None
+        while len(seen) < len(frames) and _t.time() - t0 < 300:
+            st = m.status()
+            if st.get("state") != "breakpoint" or st.get("stops") == last:
+                _t.sleep(0.02)
+                continue
+            last = st.get("stops")
+            if W("px_ndone") != n0 and B("px_anrun") == 3:
+                k = W("px_anfr") - 1
+                if k not in seen and 0 <= k < len(frames):
+                    r = rec()
+                    seen[k] = (bytes(m.read(r["mseg"] * 16, r["mw"] * r["mh"])),
+                               W("px_andly"))
+            m.run()
+        m.breakpoints([])
+        m.run()
+        bad = []
+        for k, f in enumerate(frames):
+            if k not in seen:
+                bad.append("frame %d never shown" % k)
+                continue
+            got, dly = seen[k]
+            if got != f["master"]:
+                d = next(i for i in range(len(got)) if got[i] != f["master"][i])
+                bad.append("frame %d differs at %d: %d vs %d" % (
+                    k, d, got[d], f["master"][d]))
+            if dly != f["delay"]:
+                bad.append("frame %d's delay %d, pixelsim %d" % (k, dly,
+                                                                f["delay"]))
+        check("%s: %d frames played, each pixelsim's" % (name, len(frames)),
+              not bad, "; ".join(bad[:3]))
+    m.write(base + syms["px_anoff"], b"\1")
 
 print("pxdecode: %s" % ("ok" if not FAIL else "%d FAILED" % len(FAIL)))
 sys.exit(1 if FAIL else 0)

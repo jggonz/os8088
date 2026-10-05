@@ -9,14 +9,21 @@ folder the cache lives in. PiXEL is opened on LAKE.JPG by its ASSOCIATION,
 from a subfolder of B: (SPEC.md 106.6 / 54.10: the strip shows the
 document's own folder), and then:
 
-  COLD   the cards on show come: the open picture's from its master with no
-         decode, every other one by exactly one hidden decode; each
-         thumbnail in the store is the host's own - tools/pixelsim.py's
-         master at the scale the rule picks, sampled and taken to the cube
-         as 106.21 says - byte for byte; and PIXEL.THC is written: read back
-         off the floppy ON THE HOST (tools/os88flush.py), its header names
-         every one and each entry is the store's thumbnail and its key
-  WARM   PiXEL closed and opened again on the same document: the strip
+  BEHIND another window in front while the open finishes, and 20 s of
+         guest time after it: no thumbnail begun, and no callback of
+         PiXEL's over CEIL_BEHIND (SPEC.md 106.25, review-w5 F13: every
+         callback runs on the ONE UI task, so one that holds it holds the
+         desktop) - timed in guest cycles, entry to return
+  COLD   PiXEL in front: the cards on show come - the open picture's from
+         its master with no decode, every other one by exactly one hidden
+         decode, and no callback over CEIL_FRONT; each thumbnail in the
+         store is the host's own - tools/pixelsim.py's master at the scale
+         the rule picks, sampled and taken to the cube as 106.21 says - byte
+         for byte; and PIXEL.THC is NOT written while its folder is on show
+  CLOSE  the close writes it, whole, under CEIL_CLOSE: read back off the
+         floppy ON THE HOST (tools/os88flush.py), its header names every one
+         and each entry is the store's thumbnail and its key
+  WARM   PiXEL opened again on the same document: the strip
          fills from the cache with NO decode, and every thumbnail is the
          cold one
   SLIDES File > Slideshow: three slides go by, the button latched; a key
@@ -31,6 +38,7 @@ import argparse
 import functools
 import os
 import sys
+import time
 
 print = functools.partial(print, flush=True)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -58,6 +66,13 @@ TW, TH, TSLOTS, TDATA = 72, 54, 6, 72 * 54
 SLSZ, SL0 = TDATA + 32, 0x2000
 GREY = [0, 49, 98, 153, 202, 251]
 FAIL = []
+HZ = 4772727                    # the 5150's clock: guest seconds from cycles
+BEHIND_S = 20                   # how long PiXEL waits behind another window
+CEIL_BEHIND = 0.25              # its longest callback meanwhile (the
+                                # free-memory field's look, ~0.13 s)
+CEIL_FRONT = 3.0                # its longest, in front (review-w5 F13)
+CEIL_CLOSE = 20.0               # the close, the cache's one whole write:
+                                # 15.3 s for five new entries (106.25)
 
 
 def check(what, ok, detail=""):
@@ -220,8 +235,90 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
         return (b[:13].split(b"\0")[0].decode(), u16(b, 32), u16(b, 34), b[36],
                 u16(b, 38), b[43])
 
+    def profile(stop, limit, what):
+        """Every W_ONTIMER / W_ONWAKE / W_ONCLOSE of PiXEL's until stop()
+        holds or `limit` guest seconds pass: [(name, seconds, (decodes begun,
+        made, written) before, after)], timed in the guest's own cycles from
+        a breakpoint at the callback's entry to one at the address it returns
+        to (review-w5 F13's measurement: every callback runs on the ONE UI
+        task, the timer's under the gfx lock, so while one runs nothing else
+        on the desktop is answered)"""
+        ents = {(base + syms[r]) & 0xFFFFF: r
+                for r in ("px_ontimer", "px_onwake", "px_onclose")}
+        rets, opn, calls = {}, [], []
+        snap = lambda: (W("px_thdec"), W("px_thmade"),     # noqa: E731
+                        W("px_thwrote"))
+
+        def arm():
+            m.breakpoints([{"type": "exec", "addr": x}
+                           for x in list(ents) + list(rets)])
+        m.pause()
+        arm()
+        c0 = int(m.status()["cycles"])
+        m.run()
+        seen = None
+        while True:
+            st = m.status()
+            cyc = int(st["cycles"])
+            if st.get("state") == "breakpoint":
+                if st.get("stops") != seen:
+                    seen = st.get("stops")
+                    flat = ((st["cs"] << 4) + st["ip"]) & 0xFFFFF
+                    if flat in ents:
+                        r = m.regs()
+                        ret = (r["cs"] * 16 + u16(m.read(r["ss"] * 16
+                                                         + r["sp"], 2)))
+                        ret &= 0xFFFFF
+                        opn.append((cyc, ents[flat], ret, snap()))
+                        if ret not in rets:
+                            rets[ret] = 1
+                            arm()
+                    elif flat in rets:
+                        for i in range(len(opn) - 1, -1, -1):
+                            if opn[i][2] == flat:
+                                t, nme, _, s0 = opn.pop(i)
+                                calls.append((nme, (cyc - t) / HZ, s0,
+                                              snap()))
+                                break
+                m.run()
+                continue
+            if not opn and (stop() or (cyc - c0) / HZ > limit):
+                break
+            time.sleep(0.02)
+        m.breakpoints([])
+        m.run()
+        long = max(calls, key=lambda c: c[1]) if calls else ("-", 0, 0, 0)
+        print("   %s: %d callbacks, %.2f s of the UI task in %.1f s; the "
+              "longest %s, %.3f s" % (what, len(calls),
+                                       sum(c[1] for c in calls),
+                                       (cyc - c0) / HZ, long[0], long[1]))
+        for nme, d, s0, s1 in calls:
+            if d > 0.25:
+                print("     %-10s %.3f s  decodes %d->%d made %d->%d "
+                      "written %d->%d" % (nme, d, s0[0], s1[0], s0[1], s1[1],
+                                          s0[2], s1[2]))
+        return calls, long[1]
+
+    # -------------------------------------------------------------- BEHIND --
+    # another window in front while the open is still decoding: the engine
+    # begins nothing, and no callback of PiXEL's holds the desktop
+    other = [w for w in ui.windows() if not w.title.startswith("PiXEL")]
+    ui.raise_window(other[-1])
+    M.until(m, lambda _: W("px_ndone") and B("px_busy") == 0
+            and B("px_job") == 0, "the open, behind", poll=0.5, limit=900)
+    calls, longb = profile(lambda: False, BEHIND_S, "BEHIND")
+    check("BEHIND: %.0f s with another window in front, no thumbnail begun "
+          "(%d decodes, %d made)" % (BEHIND_S, W("px_thdec"), W("px_thmade")),
+          W("px_thdec") == 0 and W("px_thmade") == 0 and B("px_hmode") == 0)
+    check("BEHIND: the longest callback %.3f s, under %.2f s"
+          % (longb, CEIL_BEHIND), longb < CEIL_BEHIND)
+    ui.raise_window(ui.window("PiXEL"))
+
     # ---------------------------------------------------------------- COLD --
+    calls, longc = profile(still, 900, "COLD")
     wait_still("the first open and its thumbnails")
+    check("COLD: the longest callback %.3f s, under %.2f s"
+          % (longc, CEIL_FRONT), longc < CEIL_FRONT)
     nm = names()
     win = window()
     shown = record()
@@ -254,8 +351,24 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
               "guest %dx%d, %d of %d bytes differ" % (
                   g[0], g[1], sum(1 for x, y in zip(g[2], ref) if x != y),
                   len(ref)))
-    check("the cache written once: %d" % W("px_thwrote"),
-          W("px_thwrote") == 1)
+    check("the cache NOT written while its folder is on show: %d"
+          % W("px_thwrote"), W("px_thwrote") == 0)
+    cold = {n: st[n][:3] for n in onshow if n in st}
+    c0 = claims()
+
+    # ---------------------------------------------------------------- WARM --
+    w = ui.window("PiXEL")
+    k0 = int(m.status()["cycles"])
+    m.disk(reset=True)
+    ui.close(w, limit=60)           # (the cache's whole write: seconds)
+    tclose = (int(m.status()["cycles"]) - k0) / HZ
+    dk = m.disk()
+    print("   CLOSE: the floppy controller asked for %r" % (
+        {k: dk[k] for k in sorted(dk) if not isinstance(dk[k], (list, dict))},))
+    M.ui_done(m, "PiXEL closed")
+    check("CLOSE: the cache written whole as the window goes, %.2f s from "
+          "the click (under %.1f s)" % (tclose, CEIL_CLOSE),
+          tclose < CEIL_CLOSE)
     vol = fl.volume(1)
     thc = vol.read("SYSTEM/APPDATA/PIXEL.THC")
     count = thc[5] if thc and len(thc) >= 4096 else -1
@@ -275,13 +388,6 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
               "bytes the store's" % (c, n), ok)
     check("...and every card on show is in it", seen == set(onshow),
           "%r" % sorted(seen))
-    cold = {n: st[n][:3] for n in onshow if n in st}
-    c0 = claims()
-
-    # ---------------------------------------------------------------- WARM --
-    w = ui.window("PiXEL")
-    ui.close(w)
-    M.ui_done(m, "PiXEL closed")
     base = launch()
     wait_still("the second visit's strip")
     st = store()

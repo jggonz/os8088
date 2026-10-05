@@ -14341,7 +14341,8 @@ PIXEL_SRC := apps/pixel/pixel.asm apps/pixel/pxui.inc apps/pixel/pxicons.inc \
              apps/pixel/pxfolder.inc apps/pixel/pxthc.inc \
              apps/pixel/pxfull.inc apps/pixel/pxfs.inc \
              apps/pixel/pxed.inc apps/pixel/pxedit.inc apps/pixel/pxtools.inc \
-             apps/pixel/pxcard.inc apps/pixel/pxsave.inc apps/pixel/pxsvc.inc
+             apps/pixel/pxcard.inc apps/pixel/pxsave.inc apps/pixel/pxsvc.inc \
+             apps/pixel/pxanim.inc
 .PHONY: pixel pixeldisk
 pixel: $(BUILD)/pixel.o88
 $(BUILD)/pixel.bin: $(PIXEL_SRC) | $(BUILD)
@@ -14354,11 +14355,13 @@ $(BUILD)/pxhelp.bin: apps/pixel/pxhelp.asm apps/pixel/pxpart.inc | $(BUILD)
 PIXEL_PLANS := apps/pixel/pxplan.inc apps/pixel/pxplans.inc \
                apps/pixel/pxrec.inc apps/os88api.inc $(BUILD)/pxlink.inc
 $(BUILD)/pxgif.bin: apps/pixel/pxgif.asm apps/pixel/pxpart.inc apps/os88lzw.inc \
-                    $(PIXEL_PLANS) | $(BUILD)
+                    apps/pixel/pxanim.inc apps/pixel/pxed.inc \
+                    apps/pixel/pxsvc.inc $(PIXEL_PLANS) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxgif.asm
 $(BUILD)/pxpng.bin: apps/pixel/pxpng.asm apps/pixel/pxpart.inc $(PIXEL_PLANS) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxpng.asm
-$(BUILD)/pxjpeg.bin: apps/pixel/pxjpeg.asm apps/pixel/pxpart.inc $(PIXEL_PLANS) | $(BUILD)
+$(BUILD)/pxjpeg.bin: apps/pixel/pxjpeg.asm apps/pixel/pxpart.inc \
+                     apps/pixel/pxhmore.inc $(PIXEL_PLANS) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxjpeg.asm
 # THE SIMPLE PART IS LINKED against the package (SPEC.md 106.20): it reads the
 # package's variables by name, out of build/pxlink.inc, which tools/pxlink.py
@@ -14401,9 +14404,18 @@ $(BUILD)/pxwrite.bin: apps/pixel/pxwrite.asm apps/pixel/pxpart.inc \
                       apps/pixel/pxsvc.inc apps/os88lzw.inc apps/os88api.inc \
                       $(BUILD)/pxlink.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxwrite.asm
+# THE EXTRAS PART (SPEC.md 106.25), linked the same way: TIFF (its LZW out
+# of apps/os88lzw.inc, MSB-first with the early change), ICO and CUR, IFF's
+# ILBM and PBM, and MacPaint - HEAD a state machine over heads, the strips'
+# and the AND mask's table in the part's own memory
+$(BUILD)/pxextra.bin: apps/pixel/pxextra.asm apps/pixel/pxpart.inc \
+                      apps/pixel/pxhmore.inc apps/os88lzw.inc \
+                      $(PIXEL_PLANS) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxextra.asm
 PIXEL_PARTS := $(BUILD)/pxhelp.bin $(BUILD)/pxgif.bin $(BUILD)/pxpng.bin \
                $(BUILD)/pxjpeg.bin $(BUILD)/pxsimp.bin $(BUILD)/pxfold.bin \
-               $(BUILD)/pxfull.bin $(BUILD)/pxedit.bin $(BUILD)/pxwrite.bin
+               $(BUILD)/pxfull.bin $(BUILD)/pxedit.bin $(BUILD)/pxwrite.bin \
+               $(BUILD)/pxextra.bin
 $(BUILD)/pixel.o88: $(BUILD)/pixel.bin $(PIXEL_PARTS) tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/pixel.bin -o $@ $(addprefix --part ,$(PIXEL_PARTS))
 
@@ -14429,12 +14441,13 @@ $(ZDATA)/PIXEL.GFX: $(BUILD)/PIXEL.GFX tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
 PXS := apps/pixel/samples
 PX_SAMPLES := $(PXS)/VACATION.JPG $(PXS)/FLOWER.JPG $(PXS)/ROOM.JPG \
               $(PXS)/LAKE.JPG $(PXS)/CAT.GIF $(PXS)/BALLOONS.PNG \
-              $(PXS)/HOUSE.PNG $(PXS)/MOUNTAIN.BMP $(PXS)/CITY.PCX
+              $(PXS)/HOUSE.PNG $(PXS)/MOUNTAIN.BMP $(PXS)/CITY.PCX \
+              $(PXS)/BOUNCE.GIF
 PX_SAMPLES_720 := $(PXS)/VACATION.JPG $(PXS)/FLOWER.JPG $(PXS)/ROOM.JPG \
                   $(PXS)/LAKE.JPG $(PXS)/CAT.GIF $(PXS)/BALLOONS.PNG \
-                  $(PXS)/MOUNTAIN.BMP $(PXS)/CITY.PCX
+                  $(PXS)/MOUNTAIN.BMP $(PXS)/CITY.PCX $(PXS)/BOUNCE.GIF
 PX_SAMPLES_360 := $(PXS)/VACATION.JPG $(PXS)/LAKE.JPG $(PXS)/CAT.GIF \
-                  $(PXS)/BALLOONS.PNG
+                  $(PXS)/BALLOONS.PNG $(PXS)/BOUNCE.GIF
 
 # `make pixeldisk`: PiXEL and its gallery, in all four geometries, REDLINE's
 # shape. The package and PIXEL.GFX at the root, the pictures in PICTURES/ - the folder the

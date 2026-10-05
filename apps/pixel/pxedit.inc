@@ -264,7 +264,11 @@ px_eroom:
     mov bl, al
     call px_mkbnow                  ; AX = the master's claim in KB
     mov dx, ax
-    call OSAPI_MEM_AVAIL            ; AX = the largest run
+    call OSAPI_MEM_AVAIL            ; AX = the largest run - and, when undo
+    cmp byte [px_ukind], UK_MASTER  ; holds a master, its claim, which the
+    jne .r                          ; operation frees before it claims
+    add ax, [px_urec + PXR_MKB]     ; (an upper bound: review-w7 F12)
+.r:
     cmp ax, dx
     jae .yes
     cmp bl, OC_EITHER

@@ -18,6 +18,7 @@ tests/pxdecode.py then holds the GUEST to pixelsim.
 Names are 8.3 and upper case because they go onto a FAT12 floppy as they are.
 """
 import argparse
+import itertools
 import os
 import struct
 import sys
@@ -1273,6 +1274,873 @@ def wcorpus(add, W, H):
 
 
 # =============================================================================
+# THE EXTRAS (SPEC.md 106.25): TIFF, ICO and CUR, IFF ILBM and PBM, MacPaint -
+# writers of our own, so a hostile file is a parameter rather than a patch
+# =============================================================================
+def packbits(data):
+    """PackBits / ByteRun1: a repeat for two or more of a byte (128 at most),
+    literals of up to 128 bytes."""
+    out = bytearray()
+    lit = bytearray()
+
+    def flush():
+        for i in range(0, len(lit), 128):
+            part = lit[i:i + 128]
+            out.append(len(part) - 1)
+            out.extend(part)
+        del lit[:]
+    for v, g in itertools.groupby(data):
+        n = len(list(g))
+        while n >= 2:
+            k = min(n, 128)
+            flush()
+            out.extend((257 - k, v))
+            n -= k
+        if n:
+            lit.append(v)
+    flush()
+    return bytes(out)
+
+
+def tlzw(data):
+    """TIFF LZW as libtiff writes it: Clear first, codes MSB first from 9
+    bits, the size growing one code EARLY, a Clear when the next free code
+    would be 4094, the End code last (at the width the reader then has)."""
+    codes = []
+    nb, free, tab = 9, 258, {}
+
+    def put(c):
+        codes.append((c, nb))
+    put(256)
+    if data:
+        w = data[0]
+        for c in data[1:]:
+            k = (w << 8) | c
+            t = tab.get(k)
+            if t is not None:
+                w = t
+                continue
+            put(w)
+            tab[k] = free
+            free += 1
+            if free == 4094:
+                put(256)
+                nb, free, tab = 9, 258, {}
+            elif free > (1 << nb) - 1:
+                nb += 1
+            w = c
+        put(w)
+        free += 1
+        if free > (1 << nb) - 1 and nb < 12:
+            nb += 1
+    put(257)
+    acc = n = 0
+    out = bytearray()
+    for c, k in codes:
+        acc = (acc << k) | c
+        n += k
+        while n >= 8:
+            n -= 8
+            out.append((acc >> n) & 255)
+    if n:
+        out.append((acc << (8 - n)) & 255)
+    return bytes(out)
+
+
+def msb_codes(codes):
+    """(code, width) pairs packed MSB first: a hand-made LZW stream."""
+    acc = n = 0
+    out = bytearray()
+    for c, k in codes:
+        acc = (acc << k) | c
+        n += k
+        while n >= 8:
+            n -= 8
+            out.append((acc >> n) & 255)
+    if n:
+        out.append((acc << (8 - n)) & 255)
+    return bytes(out)
+
+
+def pack_msb(vals, d):
+    """One row of d-bit values, MSB first, padded to a byte."""
+    acc = nb = 0
+    line = bytearray()
+    for v in vals:
+        acc = (acc << d) | v
+        nb += d
+        if nb == 8:
+            line.append(acc)
+            acc = nb = 0
+    if nb:
+        line.append(acc << (8 - nb))
+    return bytes(line)
+
+
+TSZ = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8}
+
+
+def tiff(w, h, photo, bits, rows, spp=1, comp=1, rps=None, pred=1, be=False,
+         first=False, cmap=None, extra=None, short=False, tags=None, drop=(),
+         strips=None, soffs=None, ifd_at=None, stride=None, cut=None):
+    """A TIFF of `rows` (each row's sample bytes, packed). `first` puts the
+    IFD before the data (Pillow's layout), else after it (libtiff's); `ifd_at`
+    and `stride` place the IFD and each out-of-line value at offsets of their
+    own (a head each); `tags` adds or replaces entries - tag: (type, values)
+    or (type, count, raw 4 bytes) - and `drop` removes them."""
+    o = ">" if be else "<"
+    rows = [bytearray(r) for r in rows or []]
+    if pred == 2:
+        for r in rows:
+            for i in range(len(r) - 1, spp - 1, -1):
+                r[i] = (r[i] - r[i - spp]) & 255
+    rp = h if rps is None or rps > h or rps == 0 else rps
+    if strips is None:
+        strips = []
+        for s in range(0, h, rp):
+            blk = rows[s:s + rp]
+            if comp == 5:
+                strips.append(tlzw(b"".join(blk)))
+            elif comp == 32773:
+                strips.append(b"".join(packbits(bytes(r)) for r in blk))
+            else:
+                strips.append(b"".join(bytes(r) for r in blk))
+    ns = len(strips)
+    at = 4 if not short else 3
+    e = {256: (at, [w]), 257: (at, [h]), 258: (3, [bits] * spp),
+         259: (3, [comp]), 262: (3, [photo]), 273: (at, [0] * ns),
+         277: (3, [spp]), 279: (at, [len(s) for s in strips]), 284: (3, [1])}
+    if rps is not None:
+        e[278] = (4, [rps])
+    if pred != 1:
+        e[317] = (3, [pred])
+    if cmap is not None:
+        e[320] = (3, [c[0] * 257 for c in cmap] + [c[1] * 257 for c in cmap] +
+                  [c[2] * 257 for c in cmap])
+    if extra is not None:
+        e[338] = (3, [extra])
+    e.update(tags or {})
+    for t in drop:
+        e.pop(t, None)
+    tl = sorted(e)
+
+    def blob(t):
+        ent = e[t]
+        if len(ent) == 3:
+            return None
+        typ, vals = ent
+        sz = TSZ.get(typ, 1)
+        if len(vals) * sz <= 4:
+            return None
+        fmt = {1: "B", 2: "B", 3: "H", 4: "I"}.get(typ, "Q")
+        b = b"".join(struct.pack(o + fmt, v) for v in vals)
+        return b + b"\0" * (len(b) & 1)
+    isz = 2 + 12 * len(tl) + 4
+    data = b"".join(strips)
+    pos = {}
+    if first:
+        ifd = ifd_at if ifd_at is not None else 8
+        p = ifd + isz
+        for t in tl:
+            b = blob(t)
+            if b is not None:
+                if stride:
+                    p = (p + stride - 1) // stride * stride
+                pos[t] = p
+                p += len(b)
+        dat = p + (p & 1)
+    else:
+        dat = 8
+        p = dat + len(data)
+        p += p & 1
+        for t in tl:
+            b = blob(t)
+            if b is not None:
+                pos[t] = p
+                p += len(b)
+        ifd = p
+    so = []
+    q = dat
+    for s in strips:
+        so.append(q)
+        q += len(s)
+    if 273 in e and len(e[273]) == 2 and e[273][1] == [0] * ns:
+        e[273] = (e[273][0], soffs if soffs is not None else so)
+    end = max([ifd + isz, dat + len(data)] + [pos[t] + len(blob(t)) for t in pos])
+    out = bytearray(end)
+    out[0:8] = (b"MM" if be else b"II") + struct.pack(o + "HI", 42, ifd)
+    out[dat:dat + len(data)] = data
+    ib = bytearray(struct.pack(o + "H", len(tl)))
+    for t in tl:
+        ent = e[t]
+        if len(ent) == 3:
+            ib += struct.pack(o + "HHI", t, ent[0], ent[1]) + ent[2]
+            continue
+        typ, vals = ent
+        b = blob(t)
+        if b is None:
+            fmt = {1: "B", 2: "B", 3: "H", 4: "I"}.get(typ, "B")
+            raw = b"".join(struct.pack(o + fmt, v) for v in vals)
+            ib += struct.pack(o + "HHI", t, typ, len(vals)) + (raw + b"\0" * 4)[:4]
+        else:
+            out[pos[t]:pos[t] + len(b)] = b
+            ib += struct.pack(o + "HHII", t, typ, len(vals), pos[t])
+    ib += b"\0\0\0\0"
+    out[ifd:ifd + len(ib)] = ib
+    return bytes(out[:cut] if cut is not None else out)
+
+
+def t_grey(grid, d, wiz=False):
+    mx = (1 << d) - 1
+    return [pack_msb([mx - v if wiz else v for v in r], d) for r in grid]
+
+
+def t_rgb(rows, alpha=None):
+    out = []
+    for y, r in enumerate(rows):
+        line = bytearray()
+        for x, px in enumerate(r):
+            line += bytes(px)
+            if alpha is not None:
+                line.append(alpha(x, y))
+        out.append(bytes(line))
+    return out
+
+
+def dib(w, h, bits, px, pal=None, mask=None, hsz=40, used=0, planes=1,
+        comp=0, hfield=None, nomask=False):
+    """An ICO's DIB: `px` top-down rows of indices (bits <= 8), (r, g, b)
+    (24) or (r, g, b, a) (32); `mask` top-down rows of 0/1 (1 transparent)."""
+    ih = struct.pack("<IiiHHIIiiII", hsz, w, 2 * h if hfield is None else hfield,
+                     planes, bits, comp, 0, 0, 0, used, 0)
+    ih += b"\0" * (hsz - 40)
+    pb = b"".join(bytes((B, G, R, 0)) for (R, G, B) in (pal or []))
+    stride = ((w * bits + 31) // 32) * 4
+    xor = bytearray()
+    for r in reversed(px):
+        if bits <= 8:
+            line = pack_msb(r, bits)
+        elif bits == 24:
+            line = b"".join(bytes((B, G, R)) for (R, G, B) in r)
+        else:
+            line = b"".join(bytes((B, G, R, A)) for (R, G, B, A) in r)
+        xor += line + b"\0" * (stride - len(line))
+    ms = ((w + 31) // 32) * 4
+    am = bytearray()
+    if not nomask:
+        for r in reversed(mask or [[0] * w for _ in range(h)]):
+            line = pack_msb(r, 1)
+            am += line + b"\0" * (ms - len(line))
+    return ih + pb + bytes(xor) + bytes(am)
+
+
+def ico(imgs, typ=1, count=None, offs=None, reserved=0):
+    """imgs: (dir w, dir h, bit count, blob) each; a CUR's bit count word is
+    its hotspot's y."""
+    n = len(imgs)
+    out = bytearray(struct.pack("<HHH", reserved, typ,
+                                n if count is None else count))
+    p = 6 + 16 * n
+    blobs = b""
+    for i, (dw, dh, bc, b) in enumerate(imgs):
+        off = p + len(blobs) if offs is None or offs[i] is None else offs[i]
+        out += struct.pack("<BBBBHHII", dw & 255, dh & 255, 0, 0,
+                           1 if typ == 1 else 3, bc, len(b), off)
+        blobs += b
+    return bytes(out) + blobs
+
+
+def iff_chunk(cid, d):
+    return cid + struct.pack(">I", len(d)) + d + (b"\0" if len(d) & 1 else b"")
+
+
+def ilbm_raw(w, h, planes, idx, masking=0, pbm=False):
+    out = bytearray()
+    for y in range(h):
+        if pbm:
+            out += bytes(idx[y]) + (b"\0" if w & 1 else b"")
+            continue
+        pb = ((w + 15) >> 4) * 2
+        for pl in range(planes):
+            line = pack_msb([(v >> pl) & 1 for v in idx[y]], 1)
+            out += line + b"\0" * (pb - len(line))
+        if masking == 1:
+            line = pack_msb([(x + y) & 1 for x in range(w)], 1)
+            out += line + b"\0" * (pb - len(line))
+    return bytes(out)
+
+
+def iff(w, h, planes, idx, kind=b"ILBM", cmap=None, comp=0, masking=0,
+        camg=None, pre=(), body=None, bmhd=None, cross=True, rowlen=None,
+        tail=b""):
+    """An IFF: BMHD, CMAP, CAMG, `pre` chunks, BODY. ByteRun1 runs cross
+    plane rows and rows when `cross` (one stream), else each row on its own."""
+    pbm = kind == b"PBM "
+    if body is None:
+        raw = ilbm_raw(w, h, planes, idx, masking, pbm)
+        if comp == 1:
+            if cross:
+                body = packbits(raw)
+            else:
+                rl = rowlen or len(raw) // h
+                body = b"".join(packbits(raw[i:i + rl])
+                                for i in range(0, len(raw), rl))
+        else:
+            body = raw
+    bm = bmhd if bmhd is not None else struct.pack(
+        ">HHhhBBBBHBBhh", w, h, 0, 0, planes, masking, comp, 0, 0, 10, 11,
+        w, h)
+    ch = iff_chunk(b"BMHD", bm)
+    if cmap is not None:
+        ch += iff_chunk(b"CMAP", b"".join(bytes(c) for c in cmap))
+    if camg is not None:
+        ch += iff_chunk(b"CAMG", struct.pack(">I", camg))
+    for c in pre:
+        ch += c
+    ch += iff_chunk(b"BODY", body)
+    ch = kind + ch + tail
+    return b"FORM" + struct.pack(">I", len(ch)) + ch
+
+
+def mac_row(y):
+    """MacPaint's picture: blocks of 24 bytes, a band of 50% grey, a
+    diagonal, and two bytes at each end that differ row to row - so a
+    stream that runs across rows carries both a repeat and a literal over
+    a row's end."""
+    a, b = (0xFF, 0x00) if (y >> 5) & 1 else (0x00, 0xFF)
+    if 200 <= y < 260:
+        a = b = 0xAA if y & 1 else 0x55
+    r = bytearray(bytes((a,)) * 24 + bytes((b,)) * 24 + bytes((a,)) * 24)
+    r[(y // 10) % 72] ^= 0x3C
+    if y % 3:
+        r[0:2] = bytes(((y * 13) & 255, (y * 17) & 255))
+        r[70:72] = bytes(((y * 7) & 255, (y * 11) & 255))
+    return bytes(r)
+
+
+MAC_BODY = {}
+
+
+def macpaint(macbin=False, cross=False):
+    if cross not in MAC_BODY:
+        rows = [mac_row(y) for y in range(720)]
+        MAC_BODY[cross] = packbits(b"".join(rows)) if cross else \
+            b"".join(packbits(r) for r in rows)
+    hdr = struct.pack(">I", 2) + bytes((x * 13) & 255 for x in range(304))
+    hdr += b"\0" * (512 - len(hdr))
+    f = hdr + MAC_BODY[cross]
+    if macbin:
+        mb = bytearray(128)
+        mb[1] = 7
+        mb[2:9] = b"PICTURE"
+        mb[65:69] = b"PNTG"
+        mb[69:73] = b"MPNT"
+        struct.pack_into(">I", mb, 83, len(f))
+        f = bytes(mb) + f
+    return f
+
+
+def xcorpus(add, W, H):
+    """TIFF, ICO and CUR, IFF and MacPaint (SPEC.md 106.25), good and
+    hostile."""
+    rgb = rgb_rows(W, H)
+    grey = [[(x * 19 + y * 7) & 255 for x in range(W)] for y in range(H)]
+    i2, i4, i16 = idx_rows(W, H, 2), idx_rows(W, H, 4), idx_rows(W, H, 16)
+    i200 = idx_rows(W, H, 200)
+    p200 = pal_n(200)
+    p256 = p200 + [(0, 0, 0)] * 56
+
+    def pgrid(d):
+        mx = (1 << d) - 1
+        return [[(x * 3 + y * 5) % (mx + 1) for x in range(W)]
+                for y in range(H)]
+    # --- TIFF: every kind, both byte orders, every packing --------------------
+    add("FRGB.TIF", tiff(W, H, 2, 8, t_rgb(rgb), spp=3))
+    add("FRGBM.TIF", tiff(W, H, 2, 8, t_rgb(rgb), spp=3, be=True, first=True))
+    add("FRGBP.TIF", tiff(W, H, 2, 8, t_rgb(rgb), spp=3, comp=32773, rps=3))
+    add("FRGBL.TIF", tiff(W, H, 2, 8, t_rgb(rgb), spp=3, comp=5, rps=2,
+                          be=True))
+    add("FRGBLP.TIF", tiff(W, H, 2, 8, t_rgb(rgb), spp=3, comp=5, pred=2,
+                           rps=1, first=True))
+    add("FRGBA0.TIF", tiff(W, H, 2, 8, t_rgb(rgb, lambda x, y: (x * 77) & 255),
+                           spp=4, extra=0))             # ExtraSamples 0: ignored
+    add("FRGBAN.TIF", tiff(W, H, 2, 8, t_rgb(rgb, lambda x, y: x * 9),
+                           spp=4))                      # no ExtraSamples: ignored
+    add("FRGBA1.TIF", tiff(W, H, 2, 8, t_rgb(rgb, lambda x, y: 255),
+                           spp=4, extra=1, be=True))     # opaque: the picture
+    add("FRGBA.TIF", tiff(W, H, 2, 8, t_rgb(rgb, lambda x, y: (x * 23 + y * 61)
+                                            & 255 if (x + y) % 4 else
+                                            (0 if x & 1 else 255)),
+                          spp=4, extra=2, comp=5, pred=2, rps=3))
+    add("FRGBS.TIF", tiff(W, H, 2, 8, t_rgb(rgb), spp=3, rps=0xFFFFFFFF,
+                          short=True, first=True))       # SHORT, rps past h
+    for d in (1, 2, 4, 8):
+        g = pgrid(d) if d < 8 else grey
+        add("FG%d.TIF" % d, tiff(W, H, 1, d, t_grey(g, d), rps=3))
+        add("FW%d.TIF" % d, tiff(W, H, 0, d, t_grey(g, d, wiz=True), rps=2,
+                                 be=True, first=True, comp=32773))
+    add("FG8L.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), comp=5, rps=1))
+    add("FG8LP.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), comp=5, pred=2,
+                          be=True))
+    add("FG8PL2.TIF", tiff(W, H, 1, 8, t_grey(grey, 8),
+                           tags={284: (3, [2])}))        # planar 2, one sample
+    for d, idx, n in ((1, i2, 2), (2, i4, 4), (4, i16, 16), (8, i200, 256)):
+        pal = (p256 if d == 8 else pal_n(n))
+        add("FP%d.TIF" % d, tiff(W, H, 3, d, [pack_msb(r, d) for r in idx],
+                                 cmap=pal, rps=3))
+        add("FP%dM.TIF" % d, tiff(W, H, 3, d, [pack_msb(r, d) for r in idx],
+                                  cmap=pal, be=True, first=True, comp=5))
+    add("FP8P.TIF", tiff(W, H, 3, 8, [bytes(r) for r in i200], cmap=p256,
+                         comp=32773, rps=1, short=True))
+    big = rgb_rows(64, 48)
+    add("FBIG.TIF", tiff(64, 48, 2, 8, t_rgb(big), spp=3, rps=5))  # IFD a head on
+    noise = [[(x * 7919 + y * 104729 + (x * y * 31)) % 251 for x in range(96)]
+             for y in range(64)]
+    add("FFULL.TIF", tiff(96, 64, 3, 8, [bytes(r) for r in noise],
+                          cmap=pal_n(256), comp=5))       # a Clear at 4094
+    col = [bytes((y & 255,)) for y in range(1024)]
+    add("F1024.TIF", tiff(1, 1024, 1, 8, col, rps=1, first=True))
+    add("FTPNG.TIF", png(W, H, 2, 8, rgb))               # the bytes win
+    add("FCNTBIG.TIF", tiff(W, H, 1, 8, t_grey(grey, 8),
+                            tags={279: (4, [0x7FFFFFFF])}))  # a count past
+                                                    # the file: rows first
+    # 16 heads exactly: the IFD past the first head and ten values, two
+    # 2,400-byte arrays, each of its own (the rule SPEC.md 106.25 states)
+    sp = {t: (4, [v, 0]) for t, v in ((256, 1), (257, 600))}
+    sp.update({t: (3, [v, v, v]) for t, v in ((258, 8), (259, 1), (262, 1),
+                                               (266, 1), (277, 1), (284, 1))})
+    sp[278] = (4, [1, 1])
+    sp[317] = (3, [1, 1, 1])
+    col600 = [bytes(((y * 7) & 255,)) for y in range(600)]
+    add("FHEAD16.TIF", tiff(1, 600, 1, 8, col600, rps=1, first=True,
+                            ifd_at=2048, stride=2048, tags=sp))
+    # --- TIFF: the HOSTILE half ---------------------------------------------
+    good = tiff(W, H, 1, 8, t_grey(grey, 8), rps=3, first=True)
+    add("HF01.TIF", good[:7], P.PXD_HEAD)                     # under 8 bytes
+    add("HF02.TIF", b"IM" + good[2:], P.PXD_HEAD)             # no byte order
+    add("HF03.TIF", good[:2] + b"\x2B\x00" + good[4:], P.PXD_HEAD)   # 43
+    add("HF04.TIF", good[:4] + b"\x04\0\0\0" + good[8:], P.PXD_HEAD)
+    add("HF05.TIF", good[:4] + b"\x00\x00\x01\x00" + good[8:], P.PXD_TRUNC)
+    add("HF06.TIF", good[:8] + b"\0\0" + good[10:], P.PXD_HEAD)      # 0 tags
+    add("HF07.TIF", good[:8] + b"\xAB\0" + good[10:], P.PXD_HEAD)    # 171
+    add("HF08.TIF", good[:8] + b"\x09\0" + good[10:60], P.PXD_TRUNC)  # IFD cut
+    add("HF09.TIF", tiff(W, H, 1, 8, t_grey(grey, 8),
+                         tags={256: (1, [W])}), P.PXD_HEAD)   # BYTE width
+    add("HF10.TIF", tiff(W, H, 1, 8, t_grey(grey, 8),
+                         tags={259: (5, [1])}), P.PXD_HEAD)   # RATIONAL
+    add("HF11.TIF", tiff(W, H, 1, 8, t_grey(grey, 8),
+                         tags={277: (3, 0, b"\1\0\0\0")}), P.PXD_HEAD)  # count 0
+    add("HF12.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), drop=(256,)), P.PXD_HEAD)
+    add("HF13.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), drop=(262,)), P.PXD_HEAD)
+    add("HF14.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), drop=(273,)), P.PXD_HEAD)
+    add("HF15.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), drop=(279,)), P.PXD_HEAD)
+    add("HF16.TIF", tiff(W, H, 1, 8, t_grey(grey, 8),
+                         tags={256: (4, [0])}), P.PXD_DIMS)
+    add("HF17.TIF", tiff(W, H, 1, 8, t_grey(grey, 8),
+                         tags={257: (4, [8193])}), P.PXD_DIMS)
+    add("HF18.TIF", tiff(W, H, 1, 8, t_grey(grey, 8),
+                         tags={256: (4, [70000, 1])}), P.PXD_DIMS)  # out of line
+    add("HF19.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), comp=7),
+        P.PXD_PACK)                                       # JPEG-in-TIFF
+    add("HF20.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), comp=8), P.PXD_PACK)
+    add("HF21.TIF", tiff(W, H, 0, 1, t_grey(i2, 1), comp=4), P.PXD_PACK)
+    add("HF22.TIF", tiff(W, H, 5, 8, t_rgb([[px + (9,) for px in r]
+                                            for r in rgb]), spp=4),
+        P.PXD_DEPTH)                                      # CMYK
+    add("HF23.TIF", tiff(W, H, 6, 8, t_rgb(rgb), spp=3), P.PXD_DEPTH)
+    add("HF24.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), tags={266: (3, [2])}),
+        P.PXD_PACK)                                       # FillOrder 2
+    add("HF25.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), rps=0), P.PXD_HEAD)
+    add("HF26.TIF", tiff(W, H, 2, 8, t_rgb(rgb), spp=3,
+                         tags={284: (3, [2])}), P.PXD_PACK)    # planar RGB
+    add("HF27.TIF", tiff(W, H, 1, 4, t_grey(pgrid(4), 4), pred=2), P.PXD_PACK)
+    add("HF28.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), pred=3), P.PXD_PACK)
+    add("HF29.TIF", tiff(W, H, 1, 8, t_grey(grey, 8),
+                         tags={322: (3, [16]), 323: (3, [16]),
+                               324: (4, [8])}, drop=(273, 279)), P.PXD_PACK)
+    add("HF30.TIF", tiff(W, H, 1, 16, [b"\0" * 2 * W] * H), P.PXD_DEPTH)
+    add("HF31.TIF", tiff(W, H, 1, 3, [b"\0" * 5] * H), P.PXD_DEPTH)
+    add("HF32.TIF", tiff(W, H, 2, 16, [b"\0" * 6 * W] * H, spp=3), P.PXD_DEPTH)
+    add("HF33.TIF", tiff(W, H, 1, 8, [b"\0" * 2 * W] * H, spp=2), P.PXD_DEPTH)
+    add("HF34.TIF", tiff(W, H, 3, 8, [bytes(r) for r in i200]), P.PXD_HEAD)
+    add("HF35.TIF", tiff(W, H, 3, 4, [pack_msb(r, 4) for r in i16],
+                         cmap=pal_n(15)), P.PXD_HEAD)     # 45 of 48
+    add("HF36.TIF", tiff(W, H, 3, 4, [pack_msb(r, 4) for r in i16],
+                         tags={320: (4, [0] * 48)}), P.PXD_HEAD)  # LONG map
+    add("HF37.TIF", tiff(W, H, 3, 16, [b"\0" * 2 * W] * H), P.PXD_DEPTH)
+    add("HF38.TIF", tiff(1, 1025, 1, 8, [b"\0"] * 1025, rps=1, tags={
+        273: (4, 1025, b"\x08\0\0\0"), 279: (4, 1025, b"\x08\0\0\0")}),
+        P.PXD_BIG)                                        # 1,025 strips
+    add("HF39.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), rps=3,
+                         tags={279: (4, [21, 21])}), P.PXD_HEAD)  # 2 of 3
+    st = [bytes(r) for r in grey]
+    add("HF40.TIF", tiff(W, H, 1, 8, st, rps=1, first=True,
+                         soffs=[400 + 13 * (H - 1 - i) for i in range(H)]),
+        P.PXD_PACK)                                       # strips backwards
+    add("HF41.TIF", tiff(W, H, 1, 8, st, rps=1, first=True,
+                         soffs=[300 + 12 * i for i in range(H)]),
+        P.PXD_PACK)                                       # overlapping by one
+    add("HF42.TIF", tiff(1, 600, 1, 8, col600, rps=1, first=True,
+                         ifd_at=2048, stride=2048,
+                         tags=dict(list(sp.items()) + [(338, (3, [0, 0, 0]))])),
+        P.PXD_HEAD)                                       # 17 heads
+    add("HF43.TIF", tiff(W, H, 3, 8, [bytes(r) for r in i200], cmap=p256,
+                         first=True)[:300], P.PXD_TRUNC)  # ColorMap cut
+    add("HF44.TIF", tiff(W, H, 1, 8, st, rps=1, first=True)[:150],
+        P.PXD_TRUNC)                                      # array cut
+    add("HF45.TIF", tiff(W, H, 1, 8, t_grey(grey, 8),
+                         tags={257: (4, 2, struct.pack("<I", 100000))}),
+        P.PXD_TRUNC)                                      # a value past the end
+    add("HF46.TIF", good[:-5],
+        P.PXD_TRUNC)                                      # data cut
+    add("HF47.TIF", tiff(W, H, 1, 8, t_grey(grey, 8),
+                         tags={279: (4, [W * H - 1])}), P.PXD_TRUNC)  # count lies
+    add("HF48.TIF", tiff(W, H, 1, 8, t_grey(grey, 8), rps=3,
+                         soffs=[8, 8 + 39, 0x7FFFFFF0]), P.PXD_TRUNC)  # past end
+    pbcut = bytes((W - 1,)) + bytes(grey[0][:W - 1])
+    add("HF49.TIF", tiff(W, H, 1, 8, None, comp=32773, rps=H,
+                         strips=[pbcut]), P.PXD_TRUNC)    # PackBits cut
+    lit = bytes((20,)) + bytes(range(21))                 # 21 for a row of 13
+    add("HF50.TIF", tiff(W, 2, 1, 8, None, comp=32773,
+                         strips=[lit]), P.PXD_TRUNC)      # 21 of 26 bytes
+    add("FPBCROSS.TIF", tiff(W, 2, 1, 8, None, comp=32773,
+                             strips=[lit + bytes((256 - 30, 77))]))  # a
+                    # literal and a repeat across the row's end, the repeat
+                    # stopping at the strip's last byte
+    add("FPBTAIL.TIF", tiff(W, 1, 1, 8, None, comp=32773,
+                            strips=[lit[:16]]))           # a literal of 21
+                    # whose 13 needed bytes are in the strip: the rest unread
+    lz = tlzw(b"".join(bytes(r) for r in grey))
+    add("HF51.TIF", tiff(W, H, 1, 8, None, comp=5, strips=[lz[:40]]),
+        P.PXD_TRUNC)                                      # LZW cut
+    add("HF52.TIF", tiff(W, H, 1, 8, None, comp=5,
+                         strips=[msb_codes([(256, 9), (65, 9), (66, 9),
+                                            (257, 9)])]), P.PXD_TRUNC)  # End
+    add("HF53.TIF", tiff(W, H, 1, 8, None, comp=5,
+                         strips=[msb_codes([(256, 9), (65, 9), (300, 9),
+                                            (257, 9)])]), P.PXD_DATA)  # > free
+    add("HF54.TIF", tiff(W, H, 1, 8, None, comp=5,
+                         strips=[msb_codes([(256, 9), (65, 9), (256, 9),
+                                            (258, 9)])]), P.PXD_DATA)  # not a root
+    add("HF55.TIF", tiff(W, H, 1, 8, None, comp=5,
+                         strips=[msb_codes([(300, 9)] + [(0, 9)] * 9)]),
+        P.PXD_DATA)                                       # no Clear, no root
+    add("HF56.TIF", b"Not a TIFF, though it is named one." * 2, P.PXD_HEAD)
+    # --- ICO and CUR -----------------------------------------------------------
+    def mgrid(f):
+        return [[1 if f(x, y) else 0 for x in range(W)] for y in range(H)]
+    hole = mgrid(lambda x, y: (x * 3 + y * 5) % 7 == 0)
+    rgba = [[px + (255,) for px in r] for r in rgb]
+    add("I24.ICO", ico([(W, H, 24, dib(W, H, 24, rgb))]))
+    add("I32.ICO", ico([(W, H, 32, dib(W, H, 32, rgba))]))
+    add("I8.ICO", ico([(W, H, 8, dib(W, H, 8, i200, p200, used=200))]))
+    add("I4.ICO", ico([(W, H, 4, dib(W, H, 4, i16, pal_n(16)))]))
+    add("I1.ICO", ico([(W, H, 1, dib(W, H, 1, i2, [(0, 0, 0), (255, 255, 255)],
+                                     hsz=108))]))
+    add("I24M.ICO", ico([(W, H, 24, dib(W, H, 24, rgb, mask=hole))]))
+    add("I8M.ICO", ico([(W, H, 8, dib(W, H, 8, i200, p200, used=200,
+                                      mask=hole))]))
+    add("I8F.ICO", ico([(W, H, 8, dib(W, H, 8, idx_rows(W, H, 256), pal_n(256),
+                                      mask=hole))]))       # 256: the RGB path
+    add("I4M.ICO", ico([(W, H, 4, dib(W, H, 4, i16, pal_n(9), used=9,
+                                      mask=hole, hsz=124))]))  # 9..15 past it
+    add("I1M.ICO", ico([(W, H, 1, dib(W, H, 1, i2, pal_n(2), mask=hole))]))
+    a32 = [[px + (((x * 23 + y * 61) & 255) if (x + y) % 4 else
+                  (0 if x & 1 else 255),) for x, px in enumerate(r)]
+           for y, r in enumerate(rgb)]
+    add("I32A.ICO", ico([(W, H, 32, dib(W, H, 32, a32, mask=hole))]))
+    small = dib(4, 3, 4, idx_rows(4, 3, 16), pal_n(16))
+    add("IPICK.ICO", ico([(4, 3, 4, small), (W, H, 24, dib(W, H, 24, rgb)),
+                          (16, 3, 8, small), (W, H, 8, dib(W, H, 8, i200, p200,
+                                                           used=200))]))
+    add("ITIE.ICO", ico([(W, H, 4, dib(W, H, 4, i16, pal_n(16))),
+                         (W, H, 24, dib(W, H, 24, rgb)),
+                         (W, H, 24, dib(W, H, 8, i200, p200, used=200))]))
+    add("I256.ICO", ico([(255, 255, 32, dib(W, H, 32, rgba)),
+                         (0, 0, 4, dib(W, H, 4, i16, pal_n(16)))]))  # 0 is 256
+    add("ICUR.CUR", ico([(W, H, 9, dib(W, H, 4, i16, pal_n(16), mask=hole)),
+                         (W, H, 2, dib(W, H, 24, rgb))], typ=2))   # hotspots
+    add("IPNG.ICO", ico([(4, 3, 4, small), (0, 0, 32, png(W, H, 2, 8, rgb))]))
+    add("IPNGT.ICO", ico([(W, H, 32, png(W, H, 6, 8, [[px + (((x * 51 + y * 13)
+                                                               & 255),)
+                                                         for x, px in enumerate(r)]
+                                                        for y, r in enumerate(rgb)]))]))
+    add("IPNGX.DAT", ico([(W, H, 8, png(W, H, 3, 8, i200, plte=p200))]))
+    add("I4X.DAT", ico([(W, H, 4, dib(W, H, 4, i16, pal_n(16)))]))
+    # --- ICO: the HOSTILE half ------------------------------------------------
+    g4 = ico([(W, H, 4, dib(W, H, 4, i16, pal_n(16)))])
+    add("HI01.ICO", g4[:5], P.PXD_HEAD)
+    add("HI02.ICO", b"\0\1" + g4[2:], P.PXD_HEAD)            # reserved 256
+    add("HI03.ICO", g4[:2] + b"\3\0" + g4[4:], P.PXD_HEAD)   # type 3
+    add("HI04.ICO", g4[:4] + b"\0\0" + g4[6:], P.PXD_HEAD)   # no images
+    add("HI05.ICO", g4[:4] + b"\x80\0" + g4[6:], P.PXD_HEAD)  # 128
+    add("HI06.ICO", g4[:4] + b"\x05\0" + g4[6:60], P.PXD_TRUNC)  # dir cut
+    add("HI07.ICO", ico([(W, H, 4, b"")], offs=[10]) + g4[22:], P.PXD_HEAD)
+    add("HI08.ICO", ico([(W, H, 4, b"")], offs=[5000]) + g4[22:], P.PXD_TRUNC)
+    add("HI09.ICO", ico([(W, H, 4, dib(W, H, 4, i16, pal_n(16), hsz=40)[:4]
+                          .replace(b"\x28", b"\x0C") + dib(W, H, 4, i16,
+                                                           pal_n(16))[4:])]),
+        P.PXD_HEAD)                                       # a 12-byte header
+    add("HI10.ICO", ico([(W, H, 4, dib(0, H, 4, [[]] * H, pal_n(16)))]),
+        P.PXD_DIMS)
+    add("HI11.ICO", ico([(W, H, 4, dib(W, H, 4, i16, pal_n(16),
+                                       hfield=2 * H + 1))]), P.PXD_HEAD)  # odd
+    add("HI12.ICO", ico([(W, H, 4, dib(W, H, 4, i16, pal_n(16),
+                                       hfield=-2 * H))]), P.PXD_HEAD)
+    add("HI13.ICO", ico([(W, H, 4, dib(W, H, 4, i16, pal_n(16),
+                                       hfield=0))]), P.PXD_DIMS)
+    add("HI14.ICO", ico([(W, H, 4, dib(W, H, 4, i16, pal_n(16),
+                                       planes=2))]), P.PXD_HEAD)
+    add("HI15.ICO", ico([(W, H, 16, struct.pack("<IiiHHIIiiII", 40, W, 2 * H,
+                                                1, 16, 0, 0, 0, 0, 0, 0) +
+                          b"\0" * 400)]), P.PXD_DEPTH)
+    add("HI16.ICO", ico([(W, H, 8, dib(W, H, 8, i200, p200, used=200,
+                                       comp=1))]), P.PXD_PACK)
+    add("HI17.ICO", ico([(W, H, 4, dib(W, H, 4, i16, pal_n(16), used=17))]),
+        P.PXD_HEAD)
+    add("HI18.ICO", ico([(W, H, 4, dib(W, H, 4, i16, pal_n(16), hsz=124))])
+        [:22 + 100], P.PXD_TRUNC)                         # header cut
+    add("HI19.ICO", g4[:22 + 40 + 30], P.PXD_TRUNC)       # palette cut
+    add("HI20.ICO", g4[:-3], P.PXD_TRUNC)                 # mask cut
+    add("HI21.ICO", ico([(W, H, 32, dib(W, H, 32, rgba, nomask=True))])[:-9],
+        P.PXD_TRUNC)                                      # pixels cut
+    add("HI22.ICO", ico([(0, 0, 1, dib(1024, 65, 1, [[]] * 65, pal_n(2))[:48])]),
+        P.PXD_BIG)                                        # mask 8,320 bytes
+    add("HI23.ICO", ico([(W, H, 32, png(W, H, 2, 8, rgb)[:40])]),
+        P.PXD_TRUNC)                                      # PNG cut
+    add("HI24.ICO", ico([(W, H, 32, png(W, H, 2, 8, rgb,
+                                        ihdr=struct.pack(">IIBBBBB", W, H, 8, 2,
+                                                         1, 0, 0)))]),
+        P.PXD_PACK)                                       # PNG's own word
+    add("HI25.ICO", ico([(W, H, 32, png(W, H, 2, 3, stream=b"\0" * 9,
+                                        ihdr=struct.pack(">IIBBBBB", W, H, 3, 2,
+                                                         0, 0, 0)))]),
+        P.PXD_DEPTH)
+    add("HI26.ICO", ico([(W, H, 32, png(W, H, 2, 8, rgb)[:12] + b"JHDR" +
+                          png(W, H, 2, 8, rgb)[16:])]),
+        P.PXD_HEAD)                                       # IHDR cut in a PNG
+    add("HI27.ICO", ico([(W, H, 4, dib(W, H, 4, i16, pal_n(16)))])[:6 + 16 + 3],
+        P.PXD_TRUNC)                                      # 3 bytes of the DIB
+    # --- IFF: ILBM and PBM -----------------------------------------------------
+    add("L8.LBM", iff(W, H, 8, i200, cmap=p200, comp=1))
+    add("L8R.LBM", iff(W, H, 8, i200, cmap=p256))
+    add("L4.LBM", iff(W, H, 4, i16, cmap=pal_n(16), comp=1, cross=False))
+    add("L4M.IFF", iff(W, H, 4, i16, cmap=pal_n(16), comp=1, masking=1))
+    add("L1.LBM", iff(W, H, 1, i2, cmap=[(250, 240, 230), (10, 20, 30)]))
+    add("L1G.LBM", iff(W, H, 1, i2))                     # no CMAP: greys
+    add("L5G.LBM", iff(W, H, 5, idx_rows(W, H, 32), comp=1))
+    i64 = idx_rows(W, H, 64)
+    add("L6EHB.LBM", iff(W, H, 6, i64, cmap=pal_n(32), camg=0x80, comp=1,
+                         pre=(iff_chunk(b"DPPS", b"\1\2\3"),)))  # odd chunk
+    add("L6.LBM", iff(W, H, 6, i64, cmap=pal_n(64), camg=0x4))
+    add("L3S.LBM", iff(W, H, 3, idx_rows(W, H, 8), cmap=pal_n(5)))  # short CMAP
+    add("LPBM.LBM", iff(W, H, 8, i200, kind=b"PBM ", cmap=p200, comp=1))
+    add("LPBMR.LBM", iff(W, H, 8, i200, kind=b"PBM ", cmap=p256))
+    add("LPBM8.IFF", iff(8, 4, 8, idx_rows(8, 4, 256), kind=b"PBM ",
+                         cmap=pal_n(256)))                  # an even width
+    add("L8X.DAT", iff(W, H, 8, i200, cmap=p200, comp=1))
+    # 16 heads exactly: fifteen chunks of 2,040 bytes before BODY, whose
+    # headers are a head each but the first's
+    fill = tuple(iff_chunk(b"ANNO", bytes((k,)) * 2040) for k in range(15))
+    add("LHEAD16.LBM", iff(W, H, 4, i16, cmap=pal_n(16), pre=fill))
+    # --- IFF: the HOSTILE half ------------------------------------------------
+    gl = iff(W, H, 4, i16, cmap=pal_n(16), comp=1)
+    add("HL01.LBM", gl[:11], P.PXD_HEAD)
+    add("HL02.LBM", gl[:8] + b"ACBM" + gl[12:], P.PXD_HEAD)
+    add("HL03.LBM", gl[:12 + 8 + 20 + 4], P.PXD_TRUNC)    # a chunk header cut
+    add("HL04.LBM", iff(W, H, 4, i16, bmhd=b"\0" * 18), P.PXD_HEAD)
+    add("HL05.LBM", gl[:12 + 8 + 10], P.PXD_TRUNC)        # BMHD cut
+    bodyfirst = b"FORM\0\0\0\x40ILBM" + iff_chunk(b"BODY", b"\0" * 8) + \
+        gl[12:]
+    add("HL06.LBM", bodyfirst, P.PXD_HEAD)
+    add("HL07.LBM", iff(0, H, 4, [[]] * H), P.PXD_DIMS)
+    add("HL08.LBM", iff(W, 9000, 1, [[0] * W], body=b""), P.PXD_DIMS)
+    add("HL09.LBM", iff(W, H, 4, i16, comp=2, body=b"\0" * 8), P.PXD_PACK)
+    add("HL10.LBM", iff(W, H, 0, i16, body=b"\0" * 8), P.PXD_DEPTH)
+    add("HL11.LBM", iff(W, H, 24, [[0] * W] * H, body=b"\0" * 8),
+        P.PXD_DEPTH)                                      # deep ILBM
+    add("HL12.LBM", iff(W, H, 6, i64, cmap=pal_n(16), camg=0x800),
+        P.PXD_DEPTH)                                      # HAM
+    add("HL13.LBM", iff(W, H, 4, i16, kind=b"PBM ", body=b"\0" * 8),
+        P.PXD_DEPTH)                                      # PBM of 4 planes
+    add("HL14.LBM", iff(W, H, 4, i16, cmap=pal_n(16))[:-9], P.PXD_TRUNC)
+    add("HL15.LBM", gl[:-5], P.PXD_TRUNC)                 # ByteRun1 cut
+    lie = bytearray(iff(W, H, 4, i16, cmap=pal_n(16)))
+    bo = lie.find(b"BODY")
+    struct.pack_into(">I", lie, bo + 4, 20)               # BODY's size lies
+    add("HL16.LBM", bytes(lie), P.PXD_TRUNC)
+    add("HL17.LBM", iff(W, H, 4, i16, cmap=pal_n(16))[:12 + 28 + 8 + 20],
+        P.PXD_TRUNC)                                      # CMAP cut
+    add("HL18.LBM", iff(W, H, 4, i16, cmap=pal_n(16),
+                        pre=fill + (iff_chunk(b"ANNO", b"\0" * 2040),)),
+        P.PXD_HEAD)                                       # 17 heads
+    add("HL19.LBM", iff(W, H, 4, i16, cmap=pal_n(16),
+                        pre=(b"ANNO\xFF\xFF\xFF\xF0",)), P.PXD_TRUNC)  # a leap
+    # --- MacPaint ---------------------------------------------------------------
+    add("MPAINT.MAC", macpaint())
+    add("MBINX.DAT", macpaint(macbin=True, cross=True))    # by its bytes
+    mp = macpaint()
+    add("HM01.MAC", mp[:511], P.PXD_TRUNC)                # no header
+    add("HM02.MAC", macpaint(macbin=True)[:128 + 511], P.PXD_TRUNC)
+    add("HM03.MAC", mp[:3000], P.PXD_TRUNC)               # the body cut
+    add("HM04.MAC", mp[:512], P.PXD_TRUNC)                # no body at all
+
+
+# =============================================================================
+# ANIMATED GIF (SPEC.md 106.25): frames after the first, every disposal,
+# tables mapped and not, interlace, clipping, the loop, and what ends a pass
+# =============================================================================
+def gframe(pix=None, w=None, h=None, left=0, top=0, lpal=None, ilace=False,
+           trans=None, disp=0, delay=0, gce=True, mincode=None, codes=None,
+           cut=None):
+    """One frame: its GCE (when `gce`), descriptor, local table and data.
+    `pix` rows in picture order; `cut` keeps that many bytes of the frame."""
+    h = len(pix) if h is None else h
+    w = len(pix[0]) if w is None else w
+    b = bytearray()
+    if gce:
+        b += b"\x21\xF9\x04" + bytes(((disp << 2) | (trans is not None),)) + \
+            struct.pack("<H", delay) + bytes((trans or 0,)) + b"\0"
+    pk = 0x40 if ilace else 0
+    if lpal:
+        lb = 1
+        while (2 << (lb - 1)) < len(lpal):
+            lb += 1
+        pk |= 0x80 | (lb - 1)
+    b += b"\x2C" + struct.pack("<HHHH", left, top, w, h) + bytes((pk,))
+    if lpal:
+        b += b"".join(bytes(c) for c in lpal) + \
+            b"\0\0\0" * ((2 << (lb - 1)) - len(lpal))
+    mc = mincode if mincode is not None else 4
+    if codes is None:
+        codes = lzw_encode([v for y in gif_frame_order(h, ilace)
+                            for v in pix[y]], mc) if w and h else b""
+    b += bytes((mc,)) + subblocks(codes)
+    return bytes(b[:cut] if cut is not None else b)
+
+
+def gif_frame_order(h, ilace):
+    if not ilace:
+        return list(range(h))
+    out = []
+    for k in range(4):
+        out += list(range((0, 4, 2, 1)[k], h, (8, 8, 4, 2)[k]))
+    return out
+
+
+def agif(sw, sh, frames, gpal=None, bgi=0, loop=None, pre=(), tail=b"\x3B"):
+    b = bytearray(b"GIF89a" + struct.pack("<HH", sw, sh))
+    if gpal:
+        gb = 1
+        while (2 << (gb - 1)) < len(gpal):
+            gb += 1
+        b += bytes((0x80 | ((gb - 1) << 4) | (gb - 1), bgi, 0))
+        b += b"".join(bytes(c) for c in gpal) + \
+            b"\0\0\0" * ((2 << (gb - 1)) - len(gpal))
+    else:
+        b += bytes((0, bgi, 0))
+    if loop is not None:
+        b += b"\x21\xFF\x0BNETSCAPE2.0\x03\x01" + struct.pack("<H", loop) + \
+            b"\0"
+    for e in pre:
+        b += e
+    for f in frames:
+        b += f
+    return bytes(b + tail)
+
+
+def ablock(w, h, k):
+    """A frame's pixels: sixteen indices, moving with k."""
+    return [[(x + 2 * y + 3 * k) % 16 for x in range(w)] for y in range(h)]
+
+
+# what --anim expects of each: (frames in the first pass, loop, the last
+# frame whole) - gif_anim's own invariants are checked for every one
+ANIM = {"GA1.GIF": (4, None, True), "GA2.GIF": (4, None, True),
+        "GA3.GIF": (4, None, True), "GA4.GIF": (3, None, True),
+        "GA5.GIF": (3, None, True), "GA6.GIF": (2, None, True),
+        "GA7.GIF": (4, None, True), "GA8.GIF": (4, 3, True),
+        "GA9.GIF": (3, 0, False), "GA10.GIF": (2, None, True),
+        "GA11.GIF": (3, None, False), "GA12.GIF": (2, None, True),
+        "GA13.GIF": (2, None, True), "GAJUNK.GIF": (1, None, True),
+        "GX.GIF": (2, 0, True)}
+
+
+def acorpus(add):
+    """The animated GIFs: every one OPENS (106.18) as its first image."""
+    p16 = pal_n(16)
+    sw, sh = 24, 16
+    bg = ablock(sw, sh, 0)
+    f0 = gframe(bg, delay=10)
+    add("GA1.GIF", agif(sw, sh, [f0] + [
+        gframe(ablock(6, 5, k), left=2 + 6 * k, top=2 + 3 * k, disp=1,
+               delay=20) for k in range(3)], gpal=p16, bgi=4))
+    hole = [[3 if (x + y) % 3 == 0 else (x * y) % 16 for x in range(7)]
+            for y in range(6)]
+    add("GA2.GIF", agif(sw, sh, [gframe(bg, trans=5, disp=2)] + [
+        gframe(hole, left=3 * k, top=2 * k + 1, trans=3, disp=2)
+        for k in range(1, 4)], gpal=p16, bgi=9))         # B = 5, frame 0's key
+    add("GA3.GIF", agif(sw, sh, [gframe(bg, disp=3)] + [
+        gframe(ablock(8, 6, k), left=4 * k, top=k + 2, disp=3 if k != 2 else 1,
+               trans=7 if k == 3 else None) for k in range(1, 4)],
+        gpal=p16, bgi=2))                                 # 0's disposal 3: B
+    near = [(c[0] ^ 3, c[1], min(255, c[2] + 9)) for c in p16[::-1]]
+    g4 = p16[:12] + [(200, 10, 10), (200, 10, 10), (10, 20, 30), (10, 20, 32)]
+    tie = [(10, 20, 31), (200, 10, 10), (201, 10, 10), (255, 255, 255),
+           (0, 0, 0)]                     # 14 and 15 tie: 14; 12 and 13: 12
+    add("GA4.GIF", agif(sw, sh, [f0, gframe(ablock(10, 6, 1), left=1, top=1,
+                                            lpal=near, disp=1),
+                                 gframe([[(x + 2 * y) % 8 for x in range(5)]
+                                         for y in range(4)], left=9, top=8,
+                                        lpal=tie)],
+                        gpal=g4))       # local tables: mapped; indices 5..7
+                                        # past the second's table are black
+    lp0 = pal_n(13)
+    add("GA5.GIF", agif(sw, sh, [gframe([[v % 13 for v in r] for r in bg],
+                                        lpal=lp0, trans=12),
+                                 gframe(ablock(9, 7, 1), left=6, top=3),
+                                 gframe(ablock(4, 4, 2), left=0, top=0,
+                                        lpal=p16[:8], disp=2)],
+                        gpal=p16))                        # 0 local, then global
+    add("GA6.GIF", agif(sw, sh, [f0, gframe(ablock(11, 13, 1), left=5, top=2,
+                                            ilace=True, trans=0)],
+                        gpal=p16))                        # interlaced later
+    add("GA7.GIF", agif(sw, sh, [f0, gframe(ablock(10, 9, 1), left=18, top=11,
+                                            disp=2),
+                                 gframe(ablock(5, 5, 2), left=30, top=3,
+                                        disp=2),         # wholly off: no rect
+                                 gframe(ablock(6, 20, 3), left=0, top=4)],
+                        gpal=p16))                        # partly off-screen
+    add("GA8.GIF", agif(16, 12, [gframe(ablock(16, 12, 0), delay=0)] + [
+        gframe(ablock(5, 5, k), left=k * 3, top=k * 2, delay=d)
+        for k, d in ((1, 1), (2, 5), (3, 100))], gpal=p16, loop=3))
+    good = gframe(ablock(12, 10, 2), left=4, top=3)
+    add("GA9.GIF", agif(sw, sh, [f0, gframe(ablock(6, 5, 1), left=1, top=1),
+                                 good[:len(good) - 14]], gpal=p16, loop=0,
+                        tail=b""))                        # cut: the pass ends
+    add("GA10.GIF", agif(sw, sh, [f0, gframe(None, w=0, h=5, left=3, top=3,
+                                             disp=2, codes=b"\1\2\3"),
+                                  gframe(ablock(6, 6, 1), left=8, top=4)],
+                         gpal=p16))                      # a 0-wide frame skipped
+    bad = lzw_encode([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 4)
+    add("GA11.GIF", agif(sw, sh, [f0, gframe(ablock(4, 3, 1), left=2, top=2),
+                                  gframe(ablock(4, 3, 2), left=9, top=9,
+                                         codes=bad[:4] + b"\xFF\xFF\xFF")],
+                         gpal=p16))                       # a code past the table
+    add("GA12.GIF", agif(sw, sh, [gframe(bg, lpal=p16),
+                                  gframe(ablock(4, 4, 1), left=2, top=2,
+                                         lpal=p16[:4]),
+                                  gframe(ablock(4, 4, 2), left=9, top=5)]))
+    # ...no global table: frame 2 has no table and ENDS the pass unread
+    add("GA13.GIF", agif(sw, sh, [f0, gframe(ablock(5, 5, 1), left=1, top=1),
+                                  gframe(ablock(5, 5, 2), mincode=9,
+                                         codes=b"\0")], gpal=p16))
+    # ...a minimum code size of 9 ends it too
+    add("GAJUNK.GIF", agif(sw, sh, [f0], gpal=p16,
+                           tail=b"\x21\xF9\x04\0\0\0\0\0\x99junk after it"))
+
+
+# =============================================================================
 # THE CORPUS: (name, bytes, verdict) - a verdict is 0 or a PXD_*
 # =============================================================================
 def corpus():
@@ -1406,6 +2274,8 @@ def corpus():
     add("B24X.DAT", bmp(W, H, 24, rgb))
     wcorpus(add, W, H)               # GIF and PNG (SPEC.md 106.18)
     jcorpus(add)                     # JPEG (SPEC.md 106.19)
+    xcorpus(add, W, H)               # TIFF, ICO, IFF, MacPaint (SPEC.md 106.25)
+    acorpus(add)                     # animated GIFs (SPEC.md 106.25)
     return [c for c in out if c is not None]
 
 
@@ -1429,6 +2299,25 @@ AGREE = [
     ("B8.BMP", "G8.GIF", "P3_8.PNG"),
     ("G4.GIF", "GI.GIF", "GL.GIF", "GCLR.GIF", "P3_4.PNG"),
     ("GFULL.GIF", "GDEF.GIF"),
+    # wave 8 (SPEC.md 106.25): the same pictures through TIFF, ICO, IFF -
+    # every byte order, packing, predictor and layout; an opaque alpha, an
+    # ExtraSamples of 0 and none; the ICO directory's choice; PNG-in-ICO
+    ("B24.BMP", "FRGB.TIF", "FRGBM.TIF", "FRGBP.TIF", "FRGBL.TIF",
+     "FRGBLP.TIF", "FRGBA0.TIF", "FRGBAN.TIF", "FRGBA1.TIF", "FRGBS.TIF",
+     "FTPNG.TIF", "I24.ICO", "I32.ICO", "IPICK.ICO", "ITIE.ICO", "IPNG.ICO"),
+    ("B8.BMP", "FP8.TIF", "FP8M.TIF", "FP8P.TIF", "I8.ICO", "IPNGX.DAT",
+     "L8.LBM", "L8R.LBM", "LPBM.LBM", "LPBMR.LBM", "L8X.DAT"),
+    ("N5.PGM", "FG8.TIF", "FW8.TIF", "FG8L.TIF", "FG8LP.TIF", "FG8PL2.TIF",
+     "FCNTBIG.TIF"),
+    ("C4.PCX", "FP4.TIF", "FP4M.TIF", "I4.ICO", "I256.ICO", "I4X.DAT",
+     "L4.LBM", "L4M.IFF", "LHEAD16.LBM"),
+    ("N1.PBM", "FP1.TIF", "FP1M.TIF", "I1.ICO", "L1.LBM", "L1G.LBM"),
+    ("P3_2.PNG", "FP2.TIF", "FP2M.TIF"),
+    ("P0_1.PNG", "FG1.TIF", "FW1.TIF"),
+    ("P0_2.PNG", "FG2.TIF", "FW2.TIF"),
+    ("P0_4.PNG", "FG4.TIF", "FW4.TIF"),
+    ("FBIG.TIF", "PBIG.PNG"),
+    ("MPAINT.MAC", "MBINX.DAT"),
 ]
 
 
@@ -1440,6 +2329,42 @@ def verdict(name, data):
     return 0, p
 
 
+def anim_check(cs):
+    """SPEC.md 106.25: each animated GIF's first pass - its frame count, loop
+    count and how it ends; frame 0 is the first decode's master and a pass
+    that begins again draws it exactly; every dirty rect is on the screen."""
+    bad = 0
+    data = dict((n, d) for n, d, _ in cs)
+    for name, (nf, loop, whole) in sorted(ANIM.items()):
+        d = data[name]
+        p = P.decode(d, "GIF")
+        lp, fr = P.gif_anim(d)
+        why = []
+        if (len(fr), lp, fr[-1]["whole"]) != (nf, loop, whole):
+            why.append("frames/loop/whole %r" % ((len(fr), lp, fr[-1]["whole"]),))
+        if fr[0]["master"] != bytes(P.emit(p, 0)[0]):
+            why.append("frame 0 is not the first decode's master")
+        if P.gif_restart(d) != fr[0]["master"]:
+            why.append("a restarted pass is not frame 0")
+        if P.gif_animated(d) != (name != "GAJUNK.GIF"):
+            why.append("animated flag")
+        for f in fr:
+            r = f["rect"]
+            if len(f["master"]) != p.w * p.h or r is not None and not (
+                    0 <= r[0] <= r[2] < p.w and 0 <= r[1] <= r[3] < p.h):
+                why.append("a frame's master or rect")
+        if name == "GA8.GIF" and [f["delay"] for f in fr] != [2, 2, 1, 18]:
+            why.append("delays %r" % [f["delay"] for f in fr])
+        if why:
+            print("pixcorpus: FAIL %s: %s" % (name, "; ".join(why)))
+            bad += 1
+    if bad:
+        return 1
+    print("pixcorpus: %d animated GIFs, every first pass as expected"
+          % len(ANIM))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out")
@@ -1447,8 +2372,13 @@ def main():
     ap.add_argument("--jpeg", action="store_true",
                     help="the JPEG fixtures' verdicts too (a pure-Python "
                     "JPEG decode is soak's, `pixjpegref`)")
+    ap.add_argument("--anim", action="store_true",
+                    help="play every animated GIF's first pass through "
+                    "pixelsim.gif_anim and check what ANIM expects")
     a = ap.parse_args()
     cs = corpus()
+    if a.anim:
+        return anim_check(cs)
     names = [c[0] for c in cs]
     if len(set(names)) != len(names):
         sys.exit("pixcorpus: two fixtures share a name")

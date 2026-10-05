@@ -35,7 +35,7 @@
     bits 16
     org 0
 
-    PXPART_HEAD pj_init, pj_decode, pj_info, pj_head, pj_plans
+    PXPART_HEAD pj_init, pj_decode, pj_info, pj_headv, pj_plans
 
 ; PXV_INIT - out AX = PXP_PROBE
 pj_init:
@@ -54,6 +54,22 @@ pj_info:
 pj_plans:
     call pl_plans
     retf
+
+; PXV_HEAD - pj_head's walk, and a NEXT head read whenever it asks for one
+; (pxhmore.inc: the resident's until 106.25)
+pj_headv:
+    call pj_head
+    jnc .x
+    cmp ax, PXD_MORE
+    jne .no
+    call ph_more
+    jnc pj_headv
+.no:
+    stc
+.x:
+    retf
+
+%include "pxhmore.inc"
 
 
 ; --- the PRIVATE block of the context: HEAD's facts, for DECODE ---------------
@@ -320,7 +336,7 @@ pj_hret:
     pop dx
     pop cx
     pop bx
-    retf
+    ret                             ; (to pj_headv, the vector: 106.25)
 
 ; pj_exif - ES:SI = an APP1 marker whose first six bytes are Exif\0\0, BP
 ; = the bytes the head holds after its length: AL = the orientation (tag

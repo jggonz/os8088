@@ -38,7 +38,30 @@ PXR_SERIAL  equ 47                  ; byte: bumped per picture (the thumbnail's
                                     ; key)
 PXR_FAST    equ 48                  ; byte: the scale FAST OPEN held a JPEG
                                     ; to (SPEC.md 106.19), 0 none
+PXR_DSCL    equ 49                  ; byte: the scale the master was DECODED
+                                    ; at, which an edit does not change: a
+                                    ; picture smaller than its file is never
+                                    ; saved over it unasked (review-w7 F8)
 PXR_SZ      equ 50
+
+; --- a VIEW (pxview.inc): where the picture is on the screen and how it is
+; sampled - the GIF part maps an animation frame's rect through the canvas's
+; (SPEC.md 106.25) ------------------------------------------------------------
+VW_IX       equ 0                   ; word: the picture's left on the screen
+VW_IY       equ 2                   ; word: ...its top
+VW_HS       equ 4                   ; dword: master pixels a screen pixel, 16.16
+VW_VS       equ 8                   ; dword: master rows a screen row, 16.16
+VW_DW       equ 12                  ; word: the picture's width on the screen
+VW_DH       equ 14                  ; word: ...and height
+VW_SZ       equ 16
+
+; --- THE HISTOGRAM'S TAIL, past a master's pixels in its own claim (SPEC.md
+; 106.20): 256 dword counts, then 256 dword bins (and the count's three byte
+; planes while it runs) - the picture's own, so they move and are put back
+; with it. The decoder parts fold them into the Histogram's statistics
+; (pxplan.inc's pl_stats, 106.25) ---------------------------------------------
+PXH_HIST    equ 0
+PXH_BINS    equ 1024
 
 PM_PAL      equ 0                   ; SPEC.md 106.8's three modes
 PM_CUBE     equ 1

@@ -51,5 +51,9 @@ PX_CMAX     equ 64
 
 PF_VISIT    equ 0                   ; THE FOLDER PART'S VERBS (CL, through its
 PF_WRITE    equ 1                   ; DECODE vector): the cache read for the
-PF_MAKE     equ 2                   ; cards on show, the cache written, a
-                                    ; thumbnail made from [px_cur]'s master
+PF_MAKE     equ 2                   ; cards on show, a STEP of the cache's
+PF_WALL     equ 3                   ; write (one entry, or the header last:
+                                    ; AX = 2 more to do, 0 done), a thumbnail
+                                    ; made from [px_cur]'s master, and the
+                                    ; whole write in one call (the window
+                                    ; closing)

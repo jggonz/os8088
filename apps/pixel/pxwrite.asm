@@ -89,29 +89,13 @@ pw_decode:
     mov [cs:pw_dseg], ax
     mov word [px_erow], 0
     mov byte [cs:pw_gbn], 0
-    xor ax, ax                      ; THE RECT: the whole master, or - a
-    mov [cs:pw_x0], ax              ; copy's - [px_wsel] with bit 15 of its
-    mov [cs:pw_y0], ax              ; first word set
+    xor ax, ax                      ; THE RECT: the whole master (a copy's
+    mov [cs:pw_x0], ax              ; rect went with the BMP on the clipboard,
+    mov [cs:pw_y0], ax              ; SPEC.md 106.25)
     mov ax, [px_cur + PXR_MW]
     mov [cs:pw_w], ax
     mov ax, [px_cur + PXR_MH]
     mov [cs:pw_h], ax
-    mov ax, [px_wsel]
-    test ah, 0x80
-    jz .whole
-    and ah, 0x7F
-    mov [cs:pw_x0], ax
-    neg ax
-    add ax, [px_wsel + 4]
-    inc ax
-    mov [cs:pw_w], ax
-    mov ax, [px_wsel + 2]
-    mov [cs:pw_y0], ax
-    neg ax
-    add ax, [px_wsel + 6]
-    inc ax
-    mov [cs:pw_h], ax
-.whole:
     call pw_slot                    ; the first slot
     mov bl, cl
     xor bh, bh
@@ -1602,18 +1586,20 @@ pu_ui:
 pu_tab:     dw pu_name, pu_done, pu_start, pu_pump, pu_fin, pu_copy
 
 pu_wext:    db 'PNG', 'GIF', 'BMP', 'PCX', 'PIX', 'BMP'
-pu_s_tmp:   db 'PXSAVE.TMP', 0
 pu_s_saved: db 'Saved ', 0
 pu_s_nsfull: db 'Disk full: not saved', 0
 pu_s_nswp:  db 'Disk is write-protected', 0
 pu_s_nsio:  db 'Not saved: disk error', 0
 pu_s_nscan: db 'Not saved', 0
 pu_s_repl:  db 'Replace ', 0
+pu_s_isro:  db ' is read-only', 0
+pu_s_nsro:  db 'Not saved: read-only', 0
+pu_s_kept:  db 'Saved as ', 0
 pu_s_qm:    db '?', 0
 pu_s_copied: db 'Copied to the clipboard', 0
-pu_s_cbig:  db 'Copy: ', 0
-pu_s_over:  db 'K, over 32K', 0
 pu_s_mem:   db 'not enough memory', 0
+pu_s_sel:   db '; selection ', 0
+pu_s_pix:   db '; pixel ', 0
 pu_wfmts:   db PXF_PNG, PXF_GIF, PXF_BMP, PXF_PCX, PXF_PIX, PXF_BMP
 
 ; pu_cstr / pu_cat - the part's words into the package's (pxedit.asm's
@@ -1658,13 +1644,37 @@ pu_say:
 ; pu_tmp - SI = the temporary's name, in the package's (a file cell reads
 ; its name through DS). Preserves all but SI
 pu_tmp:
-    push di
-    mov si, pu_s_tmp
+    push ax                         ; 'PX' and the INSTANCE's segment in hex:
+    push cx                         ; two PiXELs saving into one folder never
+    push di                         ; share a temporary (review-w7 F1)
     mov di, px_line
-    mov byte [di], 0
-    call pu_cat
+    mov word [di], 'PX'
+    add di, 2
+    mov ax, [cs:PXP_PKG]
+    mov cx, 4
+.h:
+    push cx
+    mov cl, 4
+    rol ax, cl
+    pop cx
+    push ax
+    and al, 15
+    add al, '0'
+    cmp al, '9'
+    jbe .d
+    add al, 'A' - '9' - 1
+.d:
+    mov [di], al
+    inc di
+    pop ax
+    loop .h
+    mov word [di], '.T'
+    mov word [di + 2], 'MP'
+    mov byte [di + 4], 0
     mov si, px_line
     pop di
+    pop cx
+    pop ax
     ret
 
 ; pu_name - WV_UNAME: [px_sname] := the picture's name with the chosen
@@ -1778,6 +1788,21 @@ pu_done:
     jne .n
     mov di, px_aq
     mov byte [di], 0
+    cmp word [px_find + 14], OSAPI_FT_DIR   ; A FOLDER, or a READ-ONLY file:
+    jae .ro                         ; refused now, not after the whole
+    test byte [px_find + 13], 1     ; encode (review-w7 F4)
+    jz .rq
+.ro:
+    mov si, px_sname
+    mov di, px_cline
+    PSV SV_STRCPY
+    mov si, pu_s_isro
+    call pu_cat
+    mov si, px_cline
+    PSV SV_TOAST
+    stc                             ; (CF and no question: the resident
+    ret                             ; says nothing more)
+.rq:
     mov si, pu_s_repl
     call pu_cat
     mov si, px_sname
@@ -1796,25 +1821,8 @@ pu_done:
 ; (nothing held then)
 pu_start:
     mov byte [px_clok], 0           ; the target volume's cluster
-    cmp byte [px_wclip], 0
-    je .ring
-    mov ax, [px_cblen]              ; COPY: one slot, never handed over
-    add ax, 1023 + 16               ; before the end
-    mov al, ah
-    xor ah, ah
-    shr ax, 1
-    shr ax, 1
-    call OSAPI_MEM_CLAIM
-    jc .no
-    mov [px_ringraw], dx
-    mov [px_sseg], dx
-    mov word [px_chunk], 0xFFFF
-    mov byte [px_nslot], 1
-    jmp short .go
-.ring:
     PSV SV_RINGCL
     jc .no
-.go:
     PSV SV_SPAWN
     jc .nw
     xor ax, ax
@@ -1830,12 +1838,6 @@ pu_start:
     mov [px_erow], ax
     mov byte [px_wfirst], 1
     mov ax, [px_cur + PXR_MH]
-    test byte [px_wsel + 1], 0x80
-    jz .h
-    mov ax, [px_wsel + 6]
-    sub ax, [px_wsel + 2]
-    inc ax
-.h:
     mov [px_erows], ax
     mov byte [px_busy], PXB_SAVE
     mov byte [px_job], JOB_SAVE     ; LAST
@@ -1878,11 +1880,8 @@ pu_goto:
 ; filled, in order, written to the temporary file - the first creates it
 ; (OSAPI_FILE_WRITE), the rest go on with OSAPI_FILE_WRITE_SEQ, held
 ; (SPEC.md 18.4.9) - and emptied; the request byte cleared LAST. A refused
-; write is the worker's cancel, its number kept for the toast. A copy's slot
-; waits for the end
+; write is the worker's cancel, its number kept for the toast
 pu_pump:
-    cmp byte [px_wclip], 0
-    jne .rq
 .s:
     mov bl, [px_fslot]
     xor bh, bh
@@ -1936,28 +1935,10 @@ pu_pump:
     clc
     ret
 
-; pu_fin - WV_UFIN: THE WORKER HAS ANSWERED a save or a copy (UI task, lock
-; held, [px_busy] already 0): the stream closed, the target replaced by the
+; pu_fin - WV_UFIN: THE WORKER HAS ANSWERED a save (UI task, lock held,
+; [px_busy] already 0): the stream closed, the target replaced by the
 ; temporary - or the temporary deleted and the reason said
 pu_fin:
-    cmp byte [px_wclip], 0
-    je .file
-    ; --- COPY: the slot is the clipboard's -----------------------------------
-    mov si, pu_s_nscan
-    cmp byte [px_wres], 0
-    jne .cbd
-    mov cx, [px_slen]
-    mov es, [px_sseg]
-    xor si, si
-    call OSAPI_CLIP_PUT
-    mov si, pu_s_copied
-    jnc .cbd
-    mov si, pu_s_mem
-.cbd:
-    call pu_say
-    PSV SV_WFREE
-    jmp .end
-.file:
     call pu_pump                    ; THE LAST SLOT: the worker can fill it
                                     ; and answer between W_ONWAKE's pump and
                                     ; its look at [px_job] (a PCX lost its
@@ -1987,7 +1968,19 @@ pu_fin:
     call pu_tmp
     mov di, px_sname
     call OSAPI_FILE_RENAME
-    jc .wfail
+    jnc .saved
+    call pu_tmp                     ; THE TARGET IS GONE and the temporary
+    mov di, px_cline                ; holds the picture: kept, and named in
+    mov byte [di], 0                ; the toast - never deleted (review-w7
+    push si                         ; F3)
+    mov si, pu_s_kept
+    call pu_cat
+    pop si
+    PSV SV_STRCAT
+    mov si, px_cline
+    PSV SV_TOAST
+    jmp .nod2
+.saved:
     ; --- SAVED: the picture is the file's now ---------------------------------
     mov si, px_sname
     mov di, px_cur + PXR_NAME
@@ -2004,6 +1997,20 @@ pu_fin:
     mov [px_cur + PXR_FSIZE], ax
     mov ax, [px_wtot + 2]
     mov [px_cur + PXR_FSIZE + 2], ax
+    mov ax, [px_cur + PXR_MW]       ; ...and the file IS the master now: its
+    mov [px_cur + PXR_SW], ax       ; size, at 1/1, 8 bits a pixel (24 for
+    mov ax, [px_cur + PXR_MH]       ; BMP 24) - review-w7 F6
+    mov [px_cur + PXR_SH], ax
+    xor ax, ax
+    mov [px_cur + PXR_SCL], al
+    mov [px_cur + PXR_FAST], al
+    mov [px_cur + PXR_DSCL], al
+    mov al, 8
+    cmp byte [px_wfmt], WF_BMP24
+    jne .b8
+    mov al, 24
+.b8:
+    mov [px_cur + PXR_BITS], al
     mov byte [px_dirty], 0
     mov byte [px_udirty], 1         ; (undo now leaves it unsaved)
     PSV SV_WALK                     ; the folder as it is now
@@ -2021,8 +2028,10 @@ pu_fin:
     PSV SV_STRCAT
     mov si, px_cline
     PSV SV_TOAST
-    PSV SV_LVDO                     ; what a "Save changes?" was asked for
-    jmp short .end
+    PSV SV_KKEEP                    ; (BEFORE the banked action: a Next it
+    PSV SV_LVDO                     ; starts has a decode running in its part,
+    clc                             ; and px_kkeep with nothing HAVE would
+    ret                             ; drop it under the worker - "damaged")
 .wfail:
     mov [px_rerr], al
 .fail:
@@ -2043,9 +2052,13 @@ pu_fin:
     mov si, pu_s_nswp
     cmp al, FERR_WPROT
     je .say
+    mov si, pu_s_nsro
+    cmp al, FERR_PROT
+    je .say
     mov si, pu_s_nsio
 .say:
     call pu_say
+.nod2:
     mov byte [px_lvpend], 0         ; a question that asked to save: dropped
     PSV SV_COMPOSE
     PSV SV_FLAGS
@@ -2057,71 +2070,123 @@ pu_fin:
     ret
 PANELS_FS_STATUS equ 8 | 16 | 32    ; pixel.asm's PX_R_PANELS | _FS | _STATUS
 
-; pu_copy - WV_UCOPY: Edit > Copy's rect - the selection's, or all - and
-; the BMP's size against the clipboard's ceiling. CF = 1 refused, said
+; pu_copy - WV_UCOPY: Edit > Copy Info. THE CLIPBOARD IS TEXT (SPEC.md
+; 55.1: "a bitmap pasted into Note Pad has no meaning"), so what goes on it is
+; the picture DESCRIBED - "CITY.PCX 320x240 PCX", then the selection's master
+; rect and the Eyedropper's pinned pixel when there are ones (SPEC.md
+; 106.25) - one line, built in this part's own memory and put with ES = CS.
+; Said in a toast either way
 pu_copy:
-    xor ax, ax
-    mov [px_wsel + 2], ax
-    mov cx, [px_cur + PXR_MW]
-    dec cx
-    mov dx, [px_cur + PXR_MH]
-    dec dx
-    cmp byte [px_sel], 0
-    je .all
-    mov si, px_selr
-    mov di, px_wsel
     push es
-    push ds
+    push cs
     pop es
-    mov cx, 4
-    rep movsw
+    mov di, pu_ctext                ; ES:DI, the line
+    mov si, px_ival                 ; Image Info's File: the name
+    call pu_tds
+    mov al, ' '
+    stosb
+    mov ax, [px_cur + PXR_SW]       ; the source's size
+    call pu_tnum
+    mov al, 'x'
+    stosb
+    mov ax, [px_cur + PXR_SH]
+    call pu_tnum
+    mov al, ' '
+    stosb
+    mov si, px_ival + 3 * PE_IVSZ   ; ...and Format's value
+    call pu_tds
+    cmp byte [px_sel], 0
+    je .pk
+    mov si, pu_s_sel                ; "; selection 10,20-109,119"
+    call pu_tcs
+    mov si, px_selr
+    call pu_txy
+    mov al, '-'
+    stosb
+    mov si, px_selr + 4
+    call pu_txy
+.pk:
+    mov al, [px_ival + PE_IPICK * PE_IVSZ]
+    or al, al                       ; (none pinned: empty, or the line's
+    jz .put                         ; own "-")
+    cmp al, '-'
+    je .put
+    mov si, pu_s_pix                ; "; pixel 123,45 #A0B0C0 17"
+    call pu_tcs
+    mov si, px_ival + PE_IPICK * PE_IVSZ
+    call pu_tds
+.put:
+    mov cx, di
+    sub cx, pu_ctext
+    mov si, pu_ctext
+    call OSAPI_CLIP_PUT             ; ES:SI, CX
     pop es
-    jmp short .size
-.all:
-    mov [px_wsel], ax
-    mov [px_wsel + 4], cx
-    mov [px_wsel + 6], dx
-.size:
-    mov ax, [px_wsel + 4]           ; 1,078 + ((w + 3) & ~3) h <= 32 KB?
-    sub ax, [px_wsel]
-    add ax, 4
-    and ax, 0xFFFC
-    mov cx, [px_wsel + 6]
-    sub cx, [px_wsel + 2]
-    inc cx
-    mul cx
-    add ax, 54 + 1024
-    adc dx, 0
-    mov [px_cblen], ax
-    jnz .big
-    cmp ax, CLIP_MAXKB * 1024
-    ja .big
-    or byte [px_wsel + 1], 0x80     ; (a rect: the writer's flag)
-    mov byte [px_wclip], 1
-    mov byte [px_wfmt], WF_BMP
+    mov si, pu_s_copied
+    jnc .say
+    mov si, pu_s_mem
+.say:
+    call pu_say
     clc
     ret
-.big:
-    push ax                         ; "Copy: 41K, over 32K"
-    push dx
-    mov si, pu_s_cbig
-    call pu_cstr
-    pop dx
-    pop ax
-    add ax, 1023
-    adc dx, 0
-    mov al, ah
-    mov ah, dl
-    shr ax, 1
-    shr ax, 1
-    xor dx, dx
-    mov di, px_cline
-    PSV SV_U32N
-    mov si, pu_s_over
-    call pu_cat
-    mov si, px_cline
-    PSV SV_TOAST
-    stc
+
+; pu_tds / pu_tcs - the NUL string at DS:SI (the package's) or CS:SI (this
+; part's) onto ES:DI, its NUL not. Clobber AL, SI
+pu_tds:
+    lodsb
+    or al, al
+    jz .x
+    stosb
+    jmp short pu_tds
+.x:
     ret
+pu_tcs:
+    mov al, [cs:si]
+    inc si
+    or al, al
+    jz .x
+    stosb
+    jmp short pu_tcs
+.x:
+    ret
+
+; pu_txy - "x,y" of the two words at DS:SI onto ES:DI. Clobbers AX, SI
+pu_txy:
+    lodsw
+    call pu_tnum
+    mov al, ','
+    stosb
+    lodsw
+    ; fall into pu_tnum
+
+; pu_tnum - AX in decimal onto ES:DI, its digits made backwards in
+; pu_tdig (a loop that pushes is one the stack checker cannot follow).
+; Clobbers AX
+pu_tnum:
+    push bx
+    push dx
+    push si
+    mov si, pu_tdig + 5
+    mov bx, 10
+.d:
+    xor dx, dx
+    div bx
+    add dl, '0'
+    dec si
+    mov [cs:si], dl
+    or ax, ax
+    jnz .d
+.p:
+    mov al, [cs:si]
+    stosb
+    inc si
+    cmp si, pu_tdig + 5
+    jb .p
+    pop si
+    pop dx
+    pop bx
+    ret
+
+pu_tdig:    times 5 db 0
+pu_ctext:   times 128 db 0          ; the line, before it is put
 
 pv_sv:      dw 0, 0                 ; the resident's service gate (pxsvc.inc)

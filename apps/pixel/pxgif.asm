@@ -17,6 +17,9 @@
 
 %include "pxpart.inc"
 %include "pxrec.inc"
+%include "pxanim.inc"                ; a GIF that plays (106.25)
+%include "pxed.inc"                  ; (UK_NONE)
+%include "pxsvc.inc"                 ; the UI services (106.24)
 %include "pxlink.inc"                ; LINKED: the package's variables (106.20)
 %include "os88api.inc"               ; (OSAPI_TASK_ALIVE, for the plans)
 
@@ -40,11 +43,44 @@ pg_init:
     clc
     retf
 
-; PXV_INFO - nothing to say
+; PXV_INFO - CL = an animation verb (AV_*, apps/pixel/pxanim.inc): the UI
+; task's half of a GIF that plays (SPEC.md 106.25). DS = the package
 pg_info:
-    mov ax, PXE_NOTSUP
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+    cmp word [8], PXL_IMAGE         ; THE STAMP (106.20)
+    jne .link
+    cmp word [10], PXL_BSS
+    jne .link
+    mov ax, [px_svgp]               ; the resident's UI services (pxsvc.inc)
+    mov [cs:pv_sv], ax
+    mov ax, [cs:PXP_PKG]
+    mov [cs:pv_sv + 2], ax
+    cld
+    mov bl, cl
+    and bx, 3
+    shl bx, 1
+    call [cs:av_tab + bx]
+    clc
+    jmp short .out
+.link:
+    mov ax, PXD_LINK
     stc
+.out:
+    pop bp
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     retf
+av_tab:     dw av_init, av_tick, av_wake, av_toggle
 
 ; PXV_PLANS - [px_plan] for the picture's palette (SPEC.md 106.20): the
 ; shared source's, apps/pixel/pxplan.inc
@@ -117,6 +153,10 @@ pg_dimok:
 pg_decode:
     push bp
     push ds
+    cmp byte [px_job], JOB_ANIM     ; A FRAME'S JOB (106.25): the services
+    jne .ctx                        ; are the context's, whatever DI says
+    mov di, px_k
+.ctx:
     mov [cs:pg_ctx], di
     mov [cs:pg_pkg], ds
     mov ax, [di + PXK_SW]
@@ -154,6 +194,17 @@ pg_decode:
     mov [pg_blk], al
     mov [pg_blkend], al
     mov [pg_ilace], al
+    mov [pg_anim], al
+    mov [pa_fdisp], al              ; frame 0's GCE, the loop count, the
+    mov [pa_fdly], ax               ; animated flag (106.25)
+    mov [pa_hasloop], al
+    mov [pa_isanim], al
+    mov es, [pg_pkg]
+    cmp byte [es:px_job], JOB_ANIM
+    jne .dec
+    call pa_job
+    jmp short pg_ret
+.dec:
     call pg_body
     jmp short pg_ret
 
@@ -180,6 +231,8 @@ pg_body:
     mov [di], al
     inc di
     loop .h
+    mov word [pa_an0], 13
+    mov word [pa_an0 + 2], 0
     mov al, [pg_hdr + 10]
     mov byte [pg_gtab], 0
     test al, 0x80
@@ -188,6 +241,9 @@ pg_body:
     call pg_tsize                   ; CX = entries
     mov [pg_gn], cx
     call pg_pal                     ; into [px_spal]
+    call pa_off                     ; (frame 0's blocks start here: a pass
+    mov [pa_an0], ax                ; of the animation begins again here,
+    mov [pa_an0 + 2], dx            ; 106.25)
     ; --- the blocks before the image -----------------------------------
 .blk:
     call pg_rbt
@@ -200,23 +256,26 @@ pg_body:
 .ext:
     call pg_rbt
     mov [pg_lab], al
+    mov byte [pa_subn], 0
 .sub:
     call pg_rbt                     ; a sub-block's length
     or al, al
     jz .blk
     mov cl, al
     xor ch, ch
+    inc byte [pa_subn]
+    cmp byte [pg_lab], 0xFF         ; NETSCAPE2.0's loop count (106.25)
+    jne .gce
+    call pa_netscape
+    jc .tr
+    jmp short .skip
+.gce:
     cmp byte [pg_lab], 0xF9         ; a Graphic Control Extension sets (or
-    jne .skip                       ; clears) the transparent index
-    cmp cx, 4
+    jne .skip                       ; clears) the transparent index - and
+    cmp cx, 4                       ; frame 0's disposal and delay (106.25)
     jb .skip
-    call pg_rbt
-    and al, 1
-    mov [pg_trans], al
-    call pg_rbt
-    call pg_rbt
-    call pg_rbt
-    mov [pg_tidx], al
+    call pa_gce
+    jc .tr
     sub cx, 4
 .skip:
     jcxz .sub
@@ -224,6 +283,9 @@ pg_body:
     call pg_rbt
     loop .sk
     jmp short .sub
+.tr:
+    mov ax, PXD_TRUNC
+    jmp pg_fail
     ; --- the image descriptor --------------------------------------------
 .img:
     mov di, pg_idesc
@@ -365,6 +427,7 @@ pg_body:
     inc word [pg_y]
     jmp short .below
 .done:
+    call pa_peek                    ; is there more? (never a refusal)
     clc
     ret
 .short:
@@ -663,6 +726,11 @@ pg_frow:
     jc .gone                        ; past the screen: decoded, not shown
     cmp ax, [pg_sh]
     jae .gone
+    cmp byte [pg_anim], 0           ; AN ANIMATION'S FRAME (106.25): the row
+    je .vis                         ; onto the master, its transparent pixels
+    call pa_comp                    ; left
+    jmp short .gone
+.vis:
     mov bx, 0xFFFF                  ; the rows complete from the top: as the
     cmp byte [pg_ilace], 0          ; emitter counts them, except for an
     je .emit                        ; interlaced image at 1/1
@@ -775,6 +843,8 @@ pg_tick:
 ; unless the image covers every column (and [pg_fcol] is not FFFFh, which
 ; asks for the whole row). Preserves all
 pg_fill:
+    cmp byte [pg_anim], 0           ; (an animation's frame has no ground: its
+    jne pg_fret                     ; columns are composited, 106.25)
     push ax
     push cx
     push di
@@ -798,7 +868,1425 @@ pg_fill:
     pop di
     pop cx
     pop ax
+pg_fret:
     ret
+
+
+; =============================================================================
+; A GIF THAT PLAYS (SPEC.md 106.25). The first decode reads frame 0 as it
+; always did and then looks on, never refusing: is there a second image
+; (pa_peek)? The ANIMATION's job (JOB_ANIM) then draws the frames after it
+; onto the 1/1 master a frame at a time - the previous frame's disposal, its
+; pixels through a colour map, its transparent ones left - and waits between
+; them for the UI's word; tools/pixelsim.py's gif_anim is it in Python
+; =============================================================================
+
+; pa_off - DX:AX = the file offset of the stream's next byte: the window's
+; start ([px_rbase]) and where in it ([pg_ipos]). DS = this part
+pa_off:
+    push es
+    mov es, [pg_pkg]
+    mov ax, [es:px_rbase]
+    mov dx, [es:px_rbase + 2]
+    add ax, [pg_ipos]
+    adc dx, 0
+    pop es
+    ret
+
+; pa_gce - a Graphic Control Extension's four bytes: transparency, the
+; disposal, the delay, the transparent index. CF = 1 the file ended
+pa_gce:
+    call pg_rb
+    jc .x
+    mov ah, al
+    and al, 1
+    mov [pg_trans], al
+    mov al, ah
+    shr al, 1
+    shr al, 1
+    and al, 7
+    mov [pa_fdisp], al
+    call pg_rb
+    jc .x
+    mov [pa_fdly], al
+    call pg_rb
+    jc .x
+    mov [pa_fdly + 1], al
+    call pg_rb
+    jc .x
+    mov [pg_tidx], al
+.x:
+    ret
+
+; pa_netscape - an application extension's sub-block [pa_subn], CX bytes
+; long: the first exactly 'NETSCAPE2.0', the second 3 bytes or more of 01,
+; lo, hi - the loop count (the last such before frame 0 wins). CX left at
+; what is still to skip. CF = 1 the file ended
+pa_netscape:
+    cmp byte [pa_subn], 1
+    jne .two
+    mov byte [pa_ns], 0
+    cmp cx, 11
+    jne .ok
+    mov byte [pa_ns], 1
+    mov si, pa_s_ns
+.c:
+    call pg_rb
+    jc .x
+    cmp al, [si]
+    je .m
+    mov byte [pa_ns], 0
+.m:
+    inc si
+    loop .c
+.ok:
+    clc
+.x:
+    ret
+.two:
+    cmp byte [pa_subn], 2
+    jne .ok
+    cmp byte [pa_ns], 0
+    je .ok
+    cmp cx, 3
+    jb .ok
+    call pg_rb
+    jc .x
+    mov bl, al
+    call pg_rb
+    jc .x
+    mov [pa_tl], al
+    call pg_rb
+    jc .x
+    mov [pa_tl + 1], al
+    sub cx, 3
+    cmp bl, 1
+    jne .ok
+    mov ax, [pa_tl]
+    mov [pa_loop], ax
+    mov byte [pa_hasloop], 1
+    jmp short .ok
+
+; pa_subs - frame's remaining sub-blocks walked to its terminator: the rest
+; of the one under way ([pg_blk], unless the terminator was met), then each
+; by its length. CF = 1 the file ended inside them
+pa_subs:
+    cmp byte [pg_blkend], 0
+    jne .ok
+    mov cl, [pg_blk]
+    xor ch, ch
+.sk:
+    jcxz .len
+    call pg_rb
+    jc .x
+    loop .sk
+.len:
+    call pg_rb
+    jc .x
+    mov cl, al
+    or al, al
+    jnz .sk
+.ok:
+    clc
+.x:
+    ret
+
+; pa_peek - after frame 0's last row: animated when a SECOND image follows,
+; extensions only between - frame 0's sub-blocks to their terminator, then
+; the blocks by their lengths; anything else (the trailer, the file's end, a
+; byte that is no block) is a still picture. Never a refusal
+pa_peek:
+    mov byte [pa_isanim], 0
+    call pa_subs
+    jc .no
+    call pa_off                     ; the next frame's blocks start here
+    mov [pa_pos1], ax
+    mov [pa_pos1 + 2], dx
+.b:
+    call pg_rb
+    jc .no
+    cmp al, 0x2C
+    je .yes
+    cmp al, 0x21
+    jne .no
+    call pg_rb                      ; (its label)
+    jc .no
+    mov byte [pg_blkend], 0
+    mov byte [pg_blk], 0
+    call pa_subs
+    jc .no
+    jmp short .b
+.yes:
+    mov byte [pa_isanim], 1
+.no:
+    ret
+
+; pa_crect - the frame's rect, clipped to the screen, into [pa_cr]: x1, y1,
+; x2, y2 inclusive, x1 FFFFh when none of it is on the screen. CS's words
+; throughout (the UI task calls it too). Preserves all but AX, BX, CX, DX
+pa_crect:
+    mov word [cs:pa_cr], 0xFFFF
+    mov ax, [cs:pg_left]
+    cmp ax, [cs:pg_sw]
+    jae .x
+    mov bx, [cs:pg_top]
+    cmp bx, [cs:pg_sh]
+    jae .x
+    mov cx, ax
+    add cx, [cs:pg_fw]
+    jc .cw
+    cmp cx, [cs:pg_sw]
+    jbe .c1
+.cw:
+    mov cx, [cs:pg_sw]
+.c1:
+    dec cx
+    mov dx, bx
+    add dx, [cs:pg_fh]
+    jc .ch
+    cmp dx, [cs:pg_sh]
+    jbe .c2
+.ch:
+    mov dx, [cs:pg_sh]
+.c2:
+    dec dx
+    mov [cs:pa_cr], ax
+    mov [cs:pa_cr + 2], bx
+    mov [cs:pa_cr + 4], cx
+    mov [cs:pa_cr + 6], dx
+.x:
+    ret
+
+; pa_ticks - AX = a delay in hundredths: AX = ticks of 18.2 a second - less
+; than 2 is 10, browsers' rule - at least 1. Preserves all but AX
+pa_ticks:
+    push cx
+    push dx
+    cmp ax, 2
+    jae .k
+    mov ax, 10
+.k:
+    mov dx, 182
+    mul dx
+    add ax, 500
+    adc dx, 0
+    mov cx, 1000
+    div cx
+    or ax, ax
+    jnz .x
+    inc ax
+.x:
+    pop dx
+    pop cx
+    ret
+
+; --- THE WORKER'S JOB: a frame at a time, from [px_anpos] -------------------
+pa_job:
+    mov ax, [es:px_cur + PXR_MW]    ; the screen IS the 1/1 master
+    mov [pg_sw], ax
+    mov ax, [es:px_cur + PXR_MH]
+    mov [pg_sh], ax
+    mov ax, [es:px_wbase]           ; the work claim: the LZW's tables, then
+    mov [pg_dseg], ax               ; the row
+    add ax, LZW_KB * 64
+    mov [pg_rseg], ax
+    mov byte [pg_scl], 0
+    mov byte [pg_anim], 1
+    test byte [es:px_anflg], ANF_GREAD
+    jz .frame
+    ; --- THE GLOBAL TABLE, once (frame 0 had its own): the header, then the
+    ; table into the animation's claim, then on to the frame it is at
+    mov di, pg_hdr
+    mov cx, 13
+.h:
+    call pg_rb
+    jc .endp
+    mov [di], al
+    inc di
+    loop .h
+    mov al, [pg_hdr + 10]
+    call pg_tsize                   ; CX = entries
+    mov ax, cx
+    shl cx, 1
+    add cx, ax
+    mov es, [es:px_anseg]
+    xor di, di
+.g:
+    call pg_rb
+    jc .endp
+    stosb
+    loop .g
+    mov es, [pg_pkg]
+    or byte [es:px_anflg], ANF_GHAVE
+    and byte [es:px_anflg], ~ANF_GREAD
+.sk:
+    call pa_off
+    cmp dx, [es:px_anpos + 2]
+    jb .s1
+    ja .frame
+    cmp ax, [es:px_anpos]
+    jae .frame
+.s1:
+    call pg_rb
+    jc .endp
+    jmp short .sk
+.frame:
+    call pa_walk                    ; CF = 1: the pass ends
+    jc .endp
+    call pa_begin                   ; CF = 1: no room for its backup
+    jc .ret
+    call pa_draw                    ; CF = 1: stopped
+    jc .ret
+    call pa_rec
+    call pa_wait                    ; shown; then the UI's word, or a stop
+    jc .ret
+    mov es, [pg_pkg]
+    test byte [es:px_anflg], ANF_END
+    jz .frame
+.endp:
+    xor ax, ax                      ; THE PASS HAS ENDED
+    clc
+.ret:
+    ret
+
+; pa_walk - the blocks to the next frame (SPEC.md 106.25's order): its GCE
+; (reset per frame), its descriptor and local table; a frame of no width or
+; height skipped; no table at all, or a minimum code size outside 2..8, and
+; the trailer, the file's end or any other byte, END THE PASS (CF = 1)
+pa_walk:
+    xor ax, ax
+    mov [pa_fdisp], al
+    mov [pa_fdly], ax
+    mov [pg_trans], al
+.blk:
+    call pg_rb
+    jc .end
+    cmp al, 0x2C
+    je .img
+    cmp al, 0x21
+    jne .end
+    call pg_rb
+    jc .end
+    mov [pg_lab], al
+.sub:
+    call pg_rb
+    jc .end
+    or al, al
+    jz .blk
+    mov cl, al
+    xor ch, ch
+    cmp byte [pg_lab], 0xF9
+    jne .skip
+    cmp cx, 4
+    jb .skip
+    call pa_gce
+    jc .end
+    sub cx, 4
+.skip:
+    jcxz .sub
+.sk:
+    call pg_rb
+    jc .end
+    loop .sk
+    jmp short .sub
+.img:
+    mov di, pg_idesc
+    mov cx, 9
+.d:
+    call pg_rb
+    jc .end
+    mov [di], al
+    inc di
+    loop .d
+    mov byte [pa_haslt], 0
+    test byte [pg_fpk], 0x80
+    jz .nol
+    mov al, [pg_fpk]                ; its local table, padded black
+    call pg_tsize
+    mov ax, cx
+    shl cx, 1
+    add cx, ax
+    push cx
+    push ds
+    pop es
+    mov di, pa_ltab
+    push cx
+    mov cx, 768 / 2
+    xor ax, ax
+    rep stosw
+    pop cx
+    mov di, pa_ltab
+.lt:
+    call pg_rb
+    jc .end2
+    stosb
+    loop .lt
+    pop cx
+    mov byte [pa_haslt], 1
+.nol:
+    cmp word [pg_fw], 0
+    je .zero
+    cmp word [pg_fh], 0
+    je .zero
+    cmp byte [pa_haslt], 0          ; a table: its own, or the global
+    jne .t
+    mov es, [pg_pkg]
+    test byte [es:px_anflg], ANF_GLOB
+    jz .end
+.t:
+    call pg_rb                      ; the minimum code size, 2..8
+    jc .end
+    mov [pg_min], al
+    sub al, 2
+    cmp al, 6
+    ja .end
+    clc
+    ret
+.zero:
+    call pg_rb                      ; SKIPPED: its code size and sub-blocks
+    jc .end                         ; by their lengths, nothing read in
+    mov byte [pg_blkend], 0         ; them; its GCE forgotten
+    mov byte [pg_blk], 0
+    call pa_subs
+    jc .end
+    jmp pa_walk
+.end2:
+    pop cx
+.end:
+    stc
+    ret
+
+; pa_begin - A FRAME BEGINS: the previous frame's disposal (unless a stopped
+; job applied it already), what changes on the glass, this frame's backup
+; when its own disposal is 3, its colour map. CF = 1 AX = PXD_MEM, the
+; backup's room asked for ([px_anneed])
+pa_begin:
+    call pa_crect
+    mov es, [pg_pkg]
+    test byte [es:px_anflg], ANF_DISPD
+    jnz .dd
+    call pa_dispose
+    or byte [es:px_anflg], ANF_DISPD
+.dd:
+    mov si, pa_cr                   ; the glass changes where it is drawn
+    call pa_union
+    cmp byte [pa_fdisp], 3          ; ITS OWN DISPOSAL 3: the rect kept
+    jne .map                        ; (frame 0's is a fill of the
+    cmp word [es:px_anfr], 0        ; background: before it the screen WAS
+    je .map                         ; the background, 106.25)
+    cmp word [pa_cr], 0xFFFF
+    je .map
+    test byte [es:px_anflg], ANF_BKD
+    jnz .map
+    mov si, pa_cr
+    mov di, pa_t
+    mov cx, 4
+.cp:
+    mov ax, [si]
+    mov [di], ax
+    add si, 2
+    add di, 2
+    loop .cp
+    call pa_size                    ; DX:AX = its bytes
+    or dx, dx
+    jnz .huge
+    cmp ax, 0xFFFF - AN_GTAB
+    ja .huge
+    add ax, AN_GTAB + 1023          ; the claim it needs, KB
+    mov al, ah
+    xor ah, ah
+    shr ax, 1
+    shr ax, 1
+    cmp ax, [es:px_ankb]
+    jbe .room
+    mov [es:px_anneed], ax
+    mov ax, PXD_MEM
+    stc
+    ret
+.huge:
+    mov word [es:px_anneed], 0xFFFF ; (more than a segment: not played)
+    mov ax, PXD_MEM
+    stc
+    ret
+.room:
+    mov byte [pa_op], 1             ; the rect into the backup
+    call pa_rows
+    mov es, [pg_pkg]
+    or byte [es:px_anflg], ANF_BKD
+.map:
+    call pa_mkmap
+    clc
+    ret
+
+; pa_size - [pa_t]'s bytes: DX:AX. Preserves all else
+pa_size:
+    push cx
+    mov ax, [pa_t + 4]
+    sub ax, [pa_t]
+    inc ax
+    mov cx, [pa_t + 6]
+    sub cx, [pa_t + 2]
+    inc cx
+    mul cx
+    pop cx
+    ret
+
+; pa_dispose - the previous frame's disposal on its rect ([px_andisp],
+; [px_andr]): 2 the background index, 3 the backup put back; the rect then
+; changes on the glass
+pa_dispose:
+    mov al, [es:px_andisp]
+    cmp al, 2
+    je .go
+    cmp al, 3
+    jne .x
+.go:
+    cmp word [es:px_andr], 0xFFFF
+    je .x
+    mov si, px_andr
+    mov di, pa_t
+    mov cx, 4
+.cp:
+    mov ax, [es:si]
+    mov [di], ax
+    add si, 2
+    add di, 2
+    loop .cp
+    mov si, pa_t
+    call pa_union
+    mov byte [pa_op], 0             ; 2: filled
+    cmp byte [es:px_andisp], 2
+    je .r
+    mov byte [pa_op], 2             ; 3: put back
+.r:
+    call pa_rows
+    mov es, [pg_pkg]
+.x:
+    ret
+
+; pa_rows - [pa_t]'s rows of the master: [pa_op] 0 filled with the
+; background index, 1 copied into the backup, 2 copied back from it (the
+; backup at AN_GTAB in the animation's claim, a row after a row). DS = CS.
+; Clobbers AX, BX, CX, DX, SI, DI, ES
+pa_rows:
+    mov bx, [pa_t + 2]
+    mov word [pa_bk], AN_GTAB
+.r:
+    cmp bx, [pa_t + 6]
+    ja .x
+    mov ax, bx                      ; the master row's x1: (y w + x1)
+    mul word [pg_sw]
+    add ax, [pa_t]
+    adc dx, 0
+    mov di, ax
+    and di, 15
+    mov cl, 4
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl
+    or ax, dx
+    mov es, [pg_pkg]
+    add ax, [es:px_cur + PXR_MSEG]  ; (re-read: it moves only at a park)
+    mov cx, [pa_t + 4]
+    sub cx, [pa_t]
+    inc cx
+    cmp byte [pa_op], 1
+    je .save
+    ja .back
+    mov dl, [es:px_anbg]            ; 0: the background
+    mov es, ax
+    mov al, dl
+    rep stosb
+    jmp short .n
+.save:
+    push ds                         ; 1: master -> backup
+    mov si, di
+    mov di, [cs:pa_bk]
+    add [cs:pa_bk], cx
+    mov es, [es:px_anseg]
+    mov ds, ax
+    rep movsb
+    pop ds
+    jmp short .n
+.back:
+    push ds                         ; 2: backup -> master
+    mov si, [cs:pa_bk]
+    add [cs:pa_bk], cx
+    mov ds, [es:px_anseg]
+    mov es, ax
+    rep movsb
+    pop ds
+.n:
+    inc bx
+    jmp short .r
+.x:
+    ret
+
+; pa_union - the rect at CS:SI (x1 FFFFh: none) into what changes on the
+; glass, [px_anrect]. Preserves all but AX
+pa_union:
+    push es
+    mov es, [cs:pg_pkg]
+    cmp word [cs:si], 0xFFFF
+    je .x
+    cmp word [es:px_anrect], 0xFFFF
+    jne .u
+    mov ax, [cs:si]
+    mov [es:px_anrect], ax
+    mov ax, [cs:si + 2]
+    mov [es:px_anrect + 2], ax
+    mov ax, [cs:si + 4]
+    mov [es:px_anrect + 4], ax
+    mov ax, [cs:si + 6]
+    mov [es:px_anrect + 6], ax
+    jmp short .x
+.u:
+    mov ax, [cs:si]
+    cmp ax, [es:px_anrect]
+    jae .a
+    mov [es:px_anrect], ax
+.a:
+    mov ax, [cs:si + 2]
+    cmp ax, [es:px_anrect + 2]
+    jae .b
+    mov [es:px_anrect + 2], ax
+.b:
+    mov ax, [cs:si + 4]
+    cmp ax, [es:px_anrect + 4]
+    jbe .c
+    mov [es:px_anrect + 4], ax
+.c:
+    mov ax, [cs:si + 6]
+    cmp ax, [es:px_anrect + 6]
+    jbe .x
+    mov [es:px_anrect + 6], ax
+.x:
+    pop es
+    ret
+
+; pa_mkmap - [pa_map]: the frame's indices onto the master's palette -
+; itself for frame 0, and for a frame of the global table when frame 0 was
+; too; else each entry of its table (padded black) the nearest of the
+; palette's first NPAL by 3 dR^2 + 6 dG^2 + dB^2, the lower on a tie
+pa_mkmap:
+    mov es, [pg_pkg]
+    cmp word [es:px_anfr], 0
+    je .id
+    cmp byte [pa_haslt], 0
+    jne .near
+    test byte [es:px_anflg], ANF_LOCAL0
+    jnz .glob
+.id:
+    xor bx, bx
+.i:
+    mov [pa_map + bx], bl
+    inc bl
+    jnz .i
+    ret
+.glob:
+    push ds                         ; the global table, from the claim
+    push ds
+    pop es
+    mov ax, [cs:pg_pkg]
+    mov ds, ax
+    mov ds, [px_anseg]
+    xor si, si
+    mov di, pa_ltab
+    mov cx, 768 / 2
+    rep movsw
+    pop ds
+.near:
+    cmp byte [pa_sqok], 0           ; the squares, once
+    jne .sq
+    xor bx, bx
+.q:
+    mov al, bl
+    mul al
+    shl bx, 1
+    mov [pa_sq + bx], ax
+    shr bx, 1
+    inc bl
+    jnz .q
+    mov byte [pa_sqok], 1
+.sq:
+    mov es, [pg_pkg]
+    mov ax, [es:px_cur + PXR_NPAL]
+    or ax, ax
+    jnz .np
+    mov ax, 256
+.np:
+    cmp ax, 256
+    jbe .np2
+    mov ax, 256
+.np2:
+    mov [pa_np], ax
+    mov si, pa_ltab
+    xor di, di                      ; DI = the entry
+.e:
+    mov word [pa_best], 0xFFFF
+    mov word [pa_best + 2], 0xFFFF
+    mov byte [pa_bi], 0
+    mov bp, px_pal                  ; ES:BP = the palette's entry
+    xor cx, cx
+.p:
+    mov al, [si]                    ; 3 dR^2
+    sub al, [es:bp]
+    jnc .r
+    neg al
+.r:
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    mov ax, [pa_sq + bx]
+    xor dx, dx
+    mov bx, ax
+    add ax, bx
+    adc dx, 0
+    add ax, bx
+    adc dx, 0
+    mov [pa_sum], ax
+    mov [pa_sum + 2], dx
+    mov al, [si + 1]                ; 6 dG^2
+    sub al, [es:bp + 1]
+    jnc .g
+    neg al
+.g:
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    mov ax, [pa_sq + bx]
+    xor dx, dx
+    shl ax, 1                       ; x 2...
+    rcl dx, 1
+    mov bx, ax
+    mov ax, dx                      ; (keep 2 g^2 in AX:BX... thrice)
+    add [pa_sum], bx
+    adc [pa_sum + 2], ax
+    add [pa_sum], bx
+    adc [pa_sum + 2], ax
+    add [pa_sum], bx
+    adc [pa_sum + 2], ax
+    mov al, [si + 2]                ; dB^2
+    sub al, [es:bp + 2]
+    jnc .b
+    neg al
+.b:
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    mov ax, [pa_sq + bx]
+    add [pa_sum], ax
+    adc word [pa_sum + 2], 0
+    mov ax, [pa_sum]                ; strictly less: the lower wins a tie
+    mov dx, [pa_sum + 2]
+    cmp dx, [pa_best + 2]
+    ja .n
+    jb .take
+    cmp ax, [pa_best]
+    jae .n
+.take:
+    mov [pa_best], ax
+    mov [pa_best + 2], dx
+    mov [pa_bi], cl
+    or ax, dx                       ; (exact: nothing nearer)
+    jz .done
+.n:
+    add bp, 3
+    inc cx
+    cmp cx, [pa_np]
+    jb .p
+.done:
+    mov al, [pa_bi]
+    mov [pa_map + di], al
+    add si, 3
+    inc di
+    cmp di, 256
+    jb .e
+    ret
+
+; pa_draw - the frame's rows: pg_body's decode of an image, in animation
+; mode - a whole row composited onto the master as it completes (pg_frow,
+; pa_comp). [pa_whole] 1 the frame was whole, 0 it ended part-drawn (the
+; stream ended, or a code was damaged: the pass ends after it). CF = 1 AX =
+; PXD_ABORT: stopped
+pa_draw:
+    mov ax, [pg_sw]                 ; pg_body's [pg_flim]
+    sub ax, [pg_left]
+    jbe .f0
+    inc ax
+    cmp ax, [pg_fw]
+    jbe .f1
+    mov ax, [pg_fw]
+.f1:
+    mov [pg_flim], ax
+    jmp short .f2
+.f0:
+    mov word [pg_flim], 0
+.f2:
+    xor ax, ax
+    mov [pg_fcol], ax
+    mov [pg_fi], ax
+    mov [pg_fy], ax
+    mov [pg_pass], al
+    mov [pg_blk], al
+    mov [pg_blkend], al
+    mov [pg_ilace], al
+    test byte [pg_fpk], 0x40
+    jz .ni
+    mov byte [pg_ilace], 1
+.ni:
+    mov byte [pa_whole], 0
+    mov al, [pg_min]
+    mov es, [pg_dseg]
+    call lzw_decode
+    jnc .sub                        ; the stream ended first
+    cmp ax, PXD_ABORT
+    je .ab
+    cmp ax, PG_DONE
+    jne .sub                        ; damaged: part-drawn
+    mov byte [pa_whole], 1
+.sub:
+    call pa_subs                    ; on to its terminator (the file may end)
+    clc
+    ret
+.ab:
+    stc
+    ret
+
+; pa_comp - screen row AX of the frame is whole in the row buffer: its
+; columns on the screen onto the master row, a transparent index left, every
+; other through [pa_map]. Preserves all
+pa_comp:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push ds
+    mov bx, [pg_left]
+    mov cx, bx                      ; CX = the end: min(left + w, screen)
+    add cx, [pg_fw]
+    jc .cw
+    cmp cx, [pg_sw]
+    jbe .c1
+.cw:
+    mov cx, [pg_sw]
+.c1:
+    sub cx, bx
+    jbe .x
+    mul word [pg_sw]                ; the master row's left: y w + left
+    add ax, bx
+    adc dx, 0
+    mov di, ax
+    and di, 15
+    push cx
+    mov cl, 4
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl
+    or ax, dx
+    pop cx
+    mov es, [pg_pkg]
+    add ax, [es:px_cur + PXR_MSEG]
+    mov es, ax                      ; ES:DI = the master
+    mov si, bx                      ; DS:SI = the row buffer's columns
+    mov ah, [pg_trans]
+    mov dl, [pg_tidx]
+    mov bx, pa_map
+    mov ds, [cs:pg_rseg]
+    cld
+.p:
+    lodsb
+    or ah, ah
+    jz .w
+    cmp al, dl
+    jne .w
+    inc di                          ; transparent: left as it is
+    loop .p
+    jmp short .x
+.w:
+    cs xlatb
+    stosb
+    loop .p
+.x:
+    pop ds
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; pa_rec - the frame is drawn: what its successor needs - its disposal (frame
+; 0's 3 a fill of the background), its rect, its delay - where the next one
+; starts, and whether this one ended the pass
+pa_rec:
+    mov es, [pg_pkg]
+    mov al, [pa_fdisp]
+    cmp word [es:px_anfr], 0
+    jne .d
+    cmp al, 3
+    jne .d
+    mov al, 2
+.d:
+    mov [es:px_andisp], al
+    mov si, pa_cr
+    mov di, px_andr
+    mov cx, 4
+.cp:
+    mov ax, [si]
+    mov [es:di], ax
+    add si, 2
+    add di, 2
+    loop .cp
+    mov ax, [pa_fdly]
+    call pa_ticks
+    mov [es:px_andly], ax
+    call pa_off
+    mov [es:px_anpos], ax
+    mov [es:px_anpos + 2], dx
+    inc word [es:px_anfr]
+    and byte [es:px_anflg], ~(ANF_DISPD | ANF_BKD)
+    cmp byte [pa_whole], 0
+    jne .x
+    or byte [es:px_anflg], ANF_END
+.x:
+    ret
+
+; pa_wait - the frame is ready: the UI is woken to paint it, and the worker
+; sleeps a tick at a time until it says go - or stop. CF = 1 AX = PXD_ABORT
+pa_wait:
+    push ds
+    mov ds, [cs:pg_pkg]
+    mov byte [px_anrun], 2
+    mov bx, [px_win]
+    call OSAPI_WM_WAKE
+.w:
+    cmp byte [px_abort], 0
+    jne .ab
+    cmp byte [px_ango], 0
+    jne .go
+    mov ax, 1
+    call OSAPI_TASK_SLEEP
+    mov bx, [px_win]
+    call OSAPI_TASK_ALIVE
+    jmp short .w
+.go:
+    mov byte [px_ango], 0
+    mov byte [px_anrun], 1
+    pop ds
+    clc
+    ret
+.ab:
+    pop ds
+    mov ax, PXD_ABORT
+    stc
+    ret
+
+; =============================================================================
+; THE UI TASK's HALF (PXV_INFO's verbs): DS = the package. It runs beside a
+; worker waiting inside this same part between frames, so it touches none of
+; the worker's own words - only the package's and its own (av_*)
+; =============================================================================
+
+; AV_INIT - a picture of ours was decoded and is shown: animated, at 1/1 and
+; read from the disk (an in-memory file has no stream to come back to), it
+; plays - frame 0 is on the glass, frame 1 next
+av_init:
+    cmp byte [cs:pa_isanim], 0
+    je .x
+    cmp byte [px_anoff], 0          ; (a test's: frame 0 stays)
+    jne .x
+    cmp byte [px_cur + PXR_SCL], 0
+    jne .x
+    cmp byte [px_rflat], 0
+    jne .x
+    mov byte [px_anim], 1
+    mov byte [px_anon], 1
+    mov byte [px_anuser], 0
+    mov ax, [cs:pa_pos1]
+    mov [px_anpos], ax
+    mov ax, [cs:pa_pos1 + 2]
+    mov [px_anpos + 2], ax
+    mov ax, [cs:pa_an0]
+    mov [px_an0], ax
+    mov ax, [cs:pa_an0 + 2]
+    mov [px_an0 + 2], ax
+    mov word [px_anfr], 1
+    mov al, [cs:pa_fdisp]           ; frame 0's disposal (3: the background)
+    cmp al, 3
+    jne .d
+    mov al, 2
+.d:
+    mov [px_andisp], al
+    call pa_crect                   ; ...and its rect
+    mov ax, [cs:pa_cr]
+    mov [px_andr], ax
+    mov ax, [cs:pa_cr + 2]
+    mov [px_andr + 2], ax
+    mov ax, [cs:pa_cr + 4]
+    mov [px_andr + 4], ax
+    mov ax, [cs:pa_cr + 6]
+    mov [px_andr + 6], ax
+    mov ax, [cs:pa_fdly]
+    call pa_ticks
+    mov [px_andly], ax
+    call OSAPI_GET_TICKS
+    add ax, [px_andly]
+    mov [px_andue], ax
+    mov byte [px_anrun], 3          ; (frame 0: shown, its delay running)
+    xor ax, ax                      ; the passes after this one: none without
+    cmp byte [cs:pa_hasloop], 0     ; NETSCAPE2.0, forever (FFFFh) for 0,
+    je .l                           ; else its count
+    mov ax, [cs:pa_loop]
+    or ax, ax
+    jnz .l
+    dec ax
+.l:
+    mov [px_anloop], ax
+    mov [px_anl0], ax
+    mov al, [cs:pg_bgi]
+    mov [px_anbg], al
+    xor al, al
+    test byte [cs:pg_fpk], 0x80
+    jz .g
+    or al, ANF_LOCAL0
+.g:
+    cmp byte [cs:pg_gtab], 0
+    je .f
+    or al, ANF_GLOB
+    test al, ANF_LOCAL0             ; frame 0 had its own: the global is read
+    jz .f                           ; into the claim by the first job
+    or al, ANF_GREAD
+.f:
+    mov [px_anflg], al
+    mov word [px_anrect], 0xFFFF
+    PSV SV_FLAGS
+.x:
+    ret
+
+; AV_TICK - the timer, the window in front and the animation playing: an
+; edit has made the picture a still (for good); else what is owed the glass
+; painted, a job started when none runs, and the next frame let go when the
+; one shown is due
+av_tick:
+    cmp byte [px_dirty], 0
+    jne .still
+    cmp byte [px_ukind], UK_NONE
+    jne .still
+    cmp byte [px_anon], 0
+    je .x
+    cmp byte [px_slon], 0           ; A SLIDESHOW: the slide is a still - the
+    je .ns                          ; frame job holds the worker, and the
+    cmp byte [px_anjob], 0          ; next slide's decode needs it (px_hstop's
+    je .x                           ; shape: the cancel, the answer, the
+    mov byte [px_abort], 1          ; claims back)
+.aw:
+    cmp byte [px_job], 0            ; (JOB_NONE)
+    je .ad
+    call OSAPI_TASK_YIELD
+    jmp short .aw
+.ad:
+    jmp av_wake
+.ns:
+    cmp byte [px_busy], 0
+    jne .x
+    cmp byte [px_hmode], 0
+    jne .x
+    cmp byte [px_anrun], 1          ; what is owed the glass - but never
+    je .np                          ; while a frame is being made: its rect
+    call av_paint                   ; is unioned before its rows are in, and
+.np:                                ; painting it then spends it on the old
+    cmp byte [px_anjob], 0          ; pixels (the wave-8 shots caught it)
+    jne .run
+    cmp byte [px_job], 0           ; (JOB_NONE)
+    jne .x
+    jmp av_start
+.run:
+    cmp byte [px_anrun], 3          ; shown, and its delay done?
+    jne .x
+    call OSAPI_GET_TICKS
+    sub ax, [px_andue]
+    js .x
+    mov byte [px_ango], 1
+.x:
+    ret
+.still:
+    jmp av_free
+
+; av_free - not an animation any more: its claim back, every byte cleared.
+; Preserves all
+av_free:
+    push ax
+    push dx
+    mov dx, [px_anseg]
+    or dx, dx
+    jz .z
+    call OSAPI_MEM_FREE
+.z:
+    xor ax, ax
+    mov [px_anseg], ax
+    mov [px_anim], al
+    mov [px_anon], al
+    mov [px_anuser], al
+    PSV SV_FLAGS
+    pop dx
+    pop ax
+    ret
+
+; av_start - the job, from [px_anpos] (or the file's start, for the global
+; table): the animation's claim made the first time (1 KB: the global table
+; and a small backup), the ring and the work claim (the LZW's tables, a row)
+av_start:
+    cmp word [px_anseg], 0
+    jne .have
+    mov ax, 1
+    call OSAPI_MEM_CLAIM
+    jc .nomem
+    mov [px_anseg], dx
+    mov word [px_ankb], 1
+    push es
+    mov es, dx
+    xor di, di
+    mov cx, AN_GTAB / 2
+    xor ax, ax
+    rep stosw
+    pop es
+.have:
+    PSV SV_RINGCL
+    jc .nomem
+    mov ax, [px_cur + PXR_MW]       ; LZW_KB and a row, KB
+    add ax, 1023
+    mov al, ah
+    xor ah, ah
+    shr ax, 1
+    shr ax, 1
+    add ax, LZW_KB
+    call OSAPI_MEM_CLAIM
+    jc .nring
+    mov [px_wbase], dx
+    xor ax, ax                      ; THE STREAM: from the frame, or from the
+    mov dx, ax                      ; start for the global table
+    test byte [px_anflg], ANF_GREAD
+    jnz .sb
+    mov ax, [px_anpos]
+    mov dx, [px_anpos + 2]
+.sb:
+    mov [px_sbase], ax
+    mov [px_sbase + 2], dx
+    PSV SV_PUMPINIT
+    PSV SV_SPAWN
+    jc .nwork
+    xor ax, ax
+    mov [px_abort], al
+    mov [px_ango], al
+    mov byte [px_anrun], 1
+    mov byte [px_anjob], 1
+    mov byte [px_job], JOB_ANIM     ; LAST: the worker starts on this byte
+    ret
+.nwork:
+    mov dx, [px_wbase]
+    call OSAPI_MEM_FREE
+    mov word [px_wbase], 0
+.nring:
+    PSV SV_WFREE
+.nomem:
+    mov byte [px_anon], 0           ; not played: said, once
+    mov si, av_s_mem
+    call av_say
+    PSV SV_FLAGS
+    ret
+
+; av_say - CS:SI said in a toast. Preserves all
+av_say:
+    push si
+    push di
+    mov di, px_cline
+.c:
+    mov al, [cs:si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .c
+    mov si, px_cline
+    PSV SV_TOAST
+    pop di
+    pop si
+    ret
+
+; AV_WAKE - the worker's wake (the ring already pumped, the lock held): a
+; frame ready is painted and its delay begins; a job that has ended gives its
+; claims back and is read - the pass over (another, or the last frame stays),
+; the backup's room asked for, or stopped
+av_wake:
+    cmp byte [px_anjob], 0
+    je .x
+    cmp byte [px_job], 0           ; (JOB_NONE)
+    jne .rdy
+    PSV SV_WFREE                    ; THE JOB HAS ENDED
+    mov dx, [px_wbase]
+    or dx, dx
+    jz .w0
+    call OSAPI_MEM_FREE
+.w0:
+    xor ax, ax
+    mov [px_wbase], ax
+    mov [px_wseg], ax
+    mov [px_anjob], al
+    mov [px_anrun], al
+    mov [px_ango], al
+    mov al, [px_wres]
+    or al, al
+    jz .pass
+    cmp al, PXD_ABORT
+    je .x
+    cmp al, PXD_MEM
+    je .grow
+.off:
+    mov byte [px_anon], 0           ; anything else: it stops where it is
+    jmp .fl
+.pass:
+    mov ax, [px_anloop]             ; THE PASS IS OVER: another, or the last
+    or ax, ax                       ; frame stays
+    jz .off
+    cmp ax, 0xFFFF
+    je .again
+    dec word [px_anloop]
+.again:
+    call av_restart
+    jmp .x
+.grow:
+    mov ax, [px_anneed]             ; THE BACKUP'S ROOM: a claim that big, the
+    cmp ax, 0xFFFF                  ; global table copied over
+    je .nm
+    call OSAPI_MEM_CLAIM
+    jc .nm
+    push ds
+    push es
+    mov es, dx
+    mov ax, [px_anseg]
+    mov ds, ax
+    xor si, si
+    xor di, di
+    mov cx, AN_GTAB / 2
+    rep movsw
+    pop es
+    pop ds
+    push dx
+    mov dx, [px_anseg]
+    call OSAPI_MEM_FREE
+    pop dx
+    mov [px_anseg], dx
+    mov ax, [px_anneed]
+    mov [px_ankb], ax
+    jmp short .x
+.nm:
+    mov si, av_s_mem
+    call av_say
+    jmp short .off
+.fl:
+    PSV SV_FLAGS
+.x:
+    ret
+.rdy:
+    cmp byte [px_anrun], 2          ; A FRAME READY: on the glass, its delay
+    jne .x                          ; from now
+    call av_paint
+    call OSAPI_GET_TICKS
+    add ax, [px_andly]
+    mov [px_andue], ax
+    mov byte [px_anrun], 3
+    ret
+
+; av_restart - a pass from frame 0 again: the whole screen disposed to the
+; background first. Preserves all
+av_restart:
+    push ax
+    mov byte [px_andisp], 2
+    xor ax, ax
+    mov [px_andr], ax
+    mov [px_andr + 2], ax
+    mov ax, [px_cur + PXR_MW]
+    dec ax
+    mov [px_andr + 4], ax
+    mov ax, [px_cur + PXR_MH]
+    dec ax
+    mov [px_andr + 6], ax
+    mov ax, [px_an0]
+    mov [px_anpos], ax
+    mov ax, [px_an0 + 2]
+    mov [px_anpos + 2], ax
+    mov word [px_anfr], 0
+    and byte [px_anflg], ~(ANF_DISPD | ANF_BKD | ANF_END)
+    pop ax
+    ret
+
+; AV_TOGGLE - File > Stop / Play Animation, or A: a playing one stops (its
+; job was stopped by the command's px_hstop), a stopped one goes on, and one
+; whose passes have all played starts from frame 0
+av_toggle:
+    cmp byte [px_anim], 0
+    je .x
+    cmp byte [px_anuser], 0
+    jne .go
+    cmp byte [px_anon], 0
+    jne .stop
+    call av_restart                 ; over: from the start
+    mov ax, [px_anl0]
+    mov [px_anloop], ax
+.go:
+    mov byte [px_anuser], 0
+    mov byte [px_anon], 1
+    jmp short .fl
+.stop:
+    mov byte [px_anuser], 1
+    mov byte [px_anon], 0
+    call av_paint                   ; (what a stopped frame changed)
+.fl:
+    PSV SV_FLAGS
+.x:
+    ret
+
+; av_paint - what changed on the glass ([px_anrect], master pixels) mapped
+; through the canvas's view and rendered there - not while a card is up.
+; Lock held
+av_paint:
+    cmp word [px_anrect], 0xFFFF
+    je .x
+    cmp byte [px_abon], 0
+    jne .x
+    cmp byte [px_helpon], 0
+    jne .x
+    cmp byte [px_infoon], 0
+    jne .x
+    cmp byte [px_pcon], 0
+    jne .x
+    PSV SV_LAYOUT
+    jc .x
+    mov bx, [px_win]
+    call OSAPI_WM_CLIP_SET
+    jc .x
+    PSV SV_MQHIDE
+    mov si, px_vcan + VW_HS         ; across: the first screen column of x1,
+    mov cx, [px_vcan + VW_DW]       ; the last of x2
+    mov ax, [px_anrect]
+    call av_m2s
+    add ax, [px_vcan + VW_IX]
+    mov [cs:av_r], ax
+    mov ax, [px_anrect + 4]
+    inc ax
+    call av_m2s
+    add ax, [px_vcan + VW_IX]
+    dec ax
+    mov [cs:av_r + 4], ax
+    mov si, px_vcan + VW_VS         ; down
+    mov cx, [px_vcan + VW_DH]
+    mov ax, [px_anrect + 2]
+    call av_m2s
+    add ax, [px_vcan + VW_IY]
+    mov [cs:av_r + 2], ax
+    mov ax, [px_anrect + 6]
+    inc ax
+    call av_m2s
+    add ax, [px_vcan + VW_IY]
+    dec ax
+    mov [cs:av_r + 6], ax
+    mov ax, [cs:av_r]               ; inside the canvas
+    cmp ax, [px_cvx1]
+    jge .a
+    mov ax, [px_cvx1]
+.a:
+    mov cx, [cs:av_r + 4]
+    cmp cx, [px_cvx2]
+    jle .c
+    mov cx, [px_cvx2]
+.c:
+    mov bx, [cs:av_r + 2]
+    cmp bx, [px_midy1]
+    jge .b
+    mov bx, [px_midy1]
+.b:
+    mov dx, [cs:av_r + 6]
+    cmp dx, [px_midy2]
+    jle .d
+    mov dx, [px_midy2]
+.d:
+    cmp ax, cx
+    jg .ns
+    cmp bx, dx
+    jg .ns
+    and ax, 0xFFF8                  ; (the picture's left is on the grid)
+    PSV SV_RIMG
+.ns:
+    PSV SV_MQSHOW
+    mov bx, [px_win]
+    call OSAPI_WM_CLIP_CLEAR
+    mov word [px_anrect], 0xFFFF
+.x:
+    ret
+
+; av_m2s - AX = master pixels, DS:SI = a step (16.16, master pixels a screen
+; pixel): AX = ceil((AX << 16) / step), the screen pixels before the first
+; that shows master pixel AX - at most CX. Preserves all but AX
+av_m2s:
+    push bx
+    push cx
+    push dx
+    push di
+    push bp
+    push si
+    mov dx, ax                      ; DX:AX = AX << 16
+    xor ax, ax
+    mov bx, [si]                    ; CX:BX = the step
+    mov cx, [si + 2]
+    xor si, si                      ; DI:SI = the remainder
+    xor di, di
+    mov bp, 32
+.l:
+    shl ax, 1
+    rcl dx, 1
+    rcl si, 1
+    rcl di, 1
+    cmp di, cx
+    jb .n
+    ja .s
+    cmp si, bx
+    jb .n
+.s:
+    sub si, bx
+    sbb di, cx
+    or al, 1
+.n:
+    dec bp
+    jnz .l
+    or si, di                       ; (up)
+    jz .c
+    add ax, 1
+    adc dx, 0
+.c:
+    pop si
+    pop bp
+    pop di
+    or dx, dx                       ; at most CX
+    pop dx
+    pop cx
+    jnz .cap
+    cmp ax, cx
+    jbe .o
+.cap:
+    mov ax, cx
+.o:
+    pop bx
+    ret
+
+av_s_mem:   db 'Animation: not enough memory', 0
+pv_sv:      dw 0, 0                 ; the resident's service gate (pxsvc.inc)
+pa_s_ns:    db 'NETSCAPE2.0'
 
 %include "os88lzw.inc"
 
@@ -845,8 +2333,34 @@ pg_fi:      dw 0                    ; ...rows done, in the stream's order...
 pg_fy:      dw 0                    ; ...and the row being filled
 pg_y:       dw 0                    ; a screen row outside the image
 pg_prog:    dw 0                    ; rows done, for the progress
+pg_anim:    db 0                    ; the decode is an animation's frame
 pg_blk:     db 0                    ; the sub-block's bytes left
 pg_blkend:  db 0                    ; the terminator (or the end) is met
+pa_fdisp:   db 0                    ; THE ANIMATION (106.25): a frame's GCE -
+pa_fdly:    dw 0                    ; its disposal and delay
+pa_subn:    db 0                    ; ...an extension's sub-block's number
+pa_ns:      db 0                    ; ...it is NETSCAPE2.0
+pa_tl:      dw 0
+pa_loop:    dw 0                    ; ...its loop count, found
+pa_hasloop: db 0
+pa_isanim:  db 0                    ; frame 0's decode: a second image follows
+pa_pos1:    dd 0                    ; ...where its blocks start
+pa_an0:     dd 0                    ; ...and where frame 0's do
+pa_cr:      dw 0, 0, 0, 0           ; a frame's rect on the screen
+pa_t:       dw 0, 0, 0, 0           ; ...a rect being disposed or kept
+pa_op:      db 0                    ; ...pa_rows' doing
+pa_bk:      dw 0                    ; ...its place in the backup
+pa_haslt:   db 0                    ; the frame has its own table
+pa_whole:   db 0                    ; ...it was drawn whole
+pa_np:      dw 0                    ; the palette's entries, for the map
+pa_best:    dd 0
+pa_bi:      db 0
+pa_sum:     dd 0
+pa_sqok:    db 0                    ; [pa_sq] made
+av_r:       dw 0, 0, 0, 0           ; AV's: a rect on the glass
+pa_map:     times 256 db 0          ; a frame's indices onto the palette
+pa_sq:      times 256 dw 0          ; d^2
+pa_ltab:    times 768 db 0          ; a frame's table, padded black
 pg_lzw:     times LZW_BSSSZ db 0
 
 %include "pxplan.inc"                ; the plans: shared source (106.20)

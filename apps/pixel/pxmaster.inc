@@ -19,12 +19,9 @@
 
 PX_RESKB    equ 8                   ; what the master leaves of the largest run
 PX_HTAILKB  equ 2                   ; THE HISTOGRAM'S TAIL, past the master's
-PXH_HIST    equ 0                   ; pixels in its own claim (SPEC.md
-PXH_BINS    equ 1024                ; 106.20): 256 dword counts, then 256
-                                    ; dword bins (and the count's three
-                                    ; byte planes while it runs) - the
-                                    ; picture's own, so they move and are
-                                    ; put back with it
+                                    ; pixels in its own claim (PXH_HIST and
+                                    ; PXH_BINS, pxrec.inc's: the decoder
+                                    ; parts fold it, 106.25)
 
 ; px_htail - ES = the shown picture's histogram tail: the master's segment
 ; and its pixels' paragraphs, re-read (the master may have moved).
@@ -391,7 +388,13 @@ px_claims:
     call OSAPI_MEM_AVAIL            ; AX = largest run, BX = total, KB
     call px_capavl
     call px_pickscale               ; CL = the scale, CF = none fits
-    jc .free1
+    jnc .fits
+    mov cl, 0xFF
+.fits:
+    call px_tgive                   ; the thumbnails' store first, when its
+    jc .again                       ; 31 KB buy a finer one (review-w5 F5)
+    cmp cl, 0xFF
+    je .free1
     cmp byte [px_prev + PXR_HAVE], 0
     je .go
     cmp byte [px_keepv], 0          ; a RE-DECODE keeps the picture it is
@@ -425,6 +428,7 @@ px_claims:
     jae .nomem                      ; kept
 .go1:
     mov [px_cur + PXR_SCL], cl
+    mov [px_cur + PXR_DSCL], cl
     call px_mkb                     ; AX = master KB, px_tmw/tmh
     mov [px_cur + PXR_MKB], ax
     mov bx, [px_tmw]

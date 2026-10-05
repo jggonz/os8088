@@ -5,9 +5,9 @@
 ; header's dispatch to the decoder PART that reads the format - since wave 4
 ; every one has a part, the simple five (BMP, PCX, TGA, PNM, PIX) a part of
 ; their own LINKED against the package (apps/pixel/pxsimp.asm) - and the
-; resident halves of the part protocol: px_hpart (HEAD, with the next head a
-; JPEG asks for and the tail a PCX asks for), px_hmore, px_pcxtail (a file
-; read, so the resident's), px_dpart (DECODE on the worker).
+; resident halves of the part protocol: px_hpart (HEAD, and a PNG inside an
+; ICO handed on) and px_dpart (DECODE on the worker). A next head is read by
+; the part that wants it (apps/pixel/pxhmore.inc, SPEC.md 106.25).
 ;
 ; Every answer is CF = 0, or CF = 1 with AX = a PXD_*. A part never speaks
 ; and neither does this file: px_refusal (pxpump.inc) words the number.
@@ -45,6 +45,8 @@ px_hdrparse:
     mov [px_dsc + 6], ax
     mov [px_k + PXK_RBLK], al       ; ...every row of a block summed...
     mov [px_k + PXK_FLAGS], al      ; ...and rows at the source's scale
+    mov [px_sbase], ax              ; ...from the file's first byte (a PNG
+    mov [px_sbase + 2], ax          ; inside an ICO moves it, 106.25)
     mov al, [px_cur + PXR_FMT]
     call px_fpart                   ; the decoder part this format needs, and
     call px_kneed                   ; no other held (SPEC.md 106.18)
@@ -76,124 +78,6 @@ px_hdrparse:
 px_dims:
     mov [px_cur + PXR_SW], ax
     mov [px_cur + PXR_SH], bx
-    ret
-
-; px_pcxtail - an 8-bit PCX's palette: the file's last 769 bytes, a 0x0C and
-; 256 R,G,B triples, read into [px_spal] when the file is long enough to
-; have one (SPEC.md 106.10). CF = 1 there is none: the picture is grey.
-; In memory (a CZ file) it is read from there; else with OSAPI_FILE_READ_AT
-; into the head's claim, a cluster at a time. Preserves all
-px_pcxtail:
-    mov byte [px_pvalid], 0         ; (px_tbuf is px_plan's bytes)
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov ax, [px_cur + PXR_FSIZE]    ; the file must hold the header and it
-    mov dx, [px_cur + PXR_FSIZE + 2]
-    sub ax, 128 + 769
-    sbb dx, 0
-    jb .none
-    mov ax, [px_cur + PXR_FSIZE]    ; DX:AX = where the tail starts
-    mov dx, [px_cur + PXR_FSIZE + 2]
-    sub ax, 769
-    sbb dx, 0
-    mov [px_ttail], ax
-    mov [px_ttail + 2], dx
-    mov word [px_tgot], 0
-    cmp byte [px_rflat], 0
-    jne .flat
-    call px_clbytes
-    mov [px_tcl], ax
-.chunk:                             ; the cluster holding byte [px_ttail] +
-    mov ax, [px_ttail]              ; [px_tgot]
-    mov dx, [px_ttail + 2]
-    add ax, [px_tgot]
-    adc dx, 0
-    mov cx, [px_tcl]
-    div cx                          ; AX = the cluster, DX = the byte in it
-    mov si, dx
-    mul cx                          ; DX:AX = its offset
-    push si
-    mov es, [px_hseg]               ; into the head claim's SPARE cluster,
-    mov bx, [px_hcap]               ; past the head: the PCX's HEAD parses
-    sub bx, cx                      ; the head again once this is read
-    mov si, px_cur + PXR_NAME       ; (SPEC.md 106.20)
-    call OSAPI_FILE_READ_AT         ; DX:AX = bytes delivered
-    pop si
-    jc .none
-    or dx, dx
-    jnz .some
-    cmp ax, si
-    jbe .none
-.some:
-    mov cx, [px_tcl]                ; copy what this cluster holds of it
-    sub cx, si
-    mov ax, 769
-    sub ax, [px_tgot]
-    cmp cx, ax
-    jbe .cp
-    mov cx, ax
-.cp:
-    mov di, px_tbuf
-    add di, [px_tgot]
-    add [px_tgot], cx
-    add si, [px_hcap]               ; (the spare cluster's place)
-    sub si, [px_tcl]
-.cl:
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    loop .cl
-    cmp word [px_tgot], 769
-    jb .chunk
-    jmp short .have
-.flat:                              ; in memory: segment arithmetic
-    mov ax, [px_ttail]
-    mov dx, [px_ttail + 2]
-    mov si, ax
-    and si, 15
-    mov cl, 4
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or ax, dx
-    add ax, [px_flatseg]
-    mov es, ax
-    mov di, px_tbuf
-    mov cx, 769
-.fl:
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    loop .fl
-.have:
-    cmp byte [px_tbuf], 0x0C
-    jne .none
-    push ds
-    pop es
-    mov si, px_tbuf + 1
-    mov di, px_spal
-    mov cx, 768
-    cld
-    rep movsb
-    clc
-    jmp short .out
-.none:
-    stc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -249,21 +133,16 @@ px_hpart:
 .no:
     stc
     ret
-.own:
-    cmp ax, PXD_MORE
-    jne .tail
-    call px_hmore                   ; the next head, or CF AX = why not
-    jnc .call
-    ret
-.tail:
-    cmp ax, PXD_TAIL                ; a PCX's 769-byte palette: a file read,
-    jne .link                       ; so the resident's (SPEC.md 106.20)
-    call px_pcxtail
-    mov byte [px_k + PXK_HCNT], 1
-    jnc .call
-    mov byte [px_k + PXK_HCNT], 2
+.own:                               ; (a next head is the part's own read
+.redir:                             ; since 106.25: pxhmore.inc)
+    cmp ax, PXD_REDIR               ; a PNG inside an ICO (106.25): the head
+    jne .tail                       ; moved down to it and the stream's base
+    mov byte [px_cur + PXR_PROG], 2 ; set by the EXTRAS part - the PNG part
+    mov al, PXPART_PNG              ; reads it, and px_fpart says so from
+    call px_kneed                   ; now on (the plans, px_kkeep)
     jmp short .call
-.link:
+.tail:                              ; (a PCX's tail is the SIMPLE part's own
+.link:                              ; read since 106.25)
     cmp ax, PXD_LINK                ; another build's SIMPLE part
     jne .no
     mov si, px_s_badpart
@@ -317,94 +196,6 @@ px_hpart:
 .np:
     clc                             ; ([px_doff] is the SIMPLE part's own:
     ret                             ; its DECODE skips to it, SPEC.md 106.20)
-
-; px_hmore - the NEXT head a JPEG's HEAD asked for (SPEC.md 106.19): its
-; marker is at file offset [px_k + PXK_HNEXT]. READ_AT reads from a cluster
-; multiple, so the head is read from the cluster that holds the marker and
-; the walk starts inside it (PXK_HPOS); an in-memory file's head is a
-; pointer moved. Either way it holds the 2,048 bytes from the marker, or to
-; the file's end. CF = 1 AX = PXD_READ
-px_hmore:
-    push bx
-    push cx
-    push dx
-    push si
-    push es
-    mov ax, [px_k + PXK_HNEXT]
-    mov dx, [px_k + PXK_HNEXT + 2]
-    cmp byte [px_rflat], 0
-    jne .flat
-    mov cx, [px_clsz]               ; a power of two
-    dec cx
-    mov bx, ax
-    and bx, cx                      ; BX = the marker's place in its cluster
-    not cx
-    and ax, cx                      ; DX:AX = the cluster's offset
-    mov [px_k + PXK_HPOS], bx
-    mov [px_k + PXK_HBASE], ax
-    mov [px_k + PXK_HBASE + 2], dx
-    push bx
-    mov es, [px_hseg]
-    xor bx, bx
-    mov cx, [px_hcap]
-    mov si, px_fname
-    call OSAPI_FILE_READ_AT         ; DX:AX = the bytes delivered
-    pop bx
-    jc .rd
-    add bx, PX_HEADMAX              ; the head: what was read, to 2,048
-    or dx, dx                       ; past the marker
-    jnz .cap
-    cmp ax, bx
-    jbe .len
-.cap:
-    mov ax, bx
-.len:
-    mov [px_k + PXK_HLEN], ax
-    clc
-    jmp short .out
-.rd:
-    mov ax, PXD_READ
-    stc
-    jmp short .out
-.flat:
-    mov bx, ax
-    and bx, 15                      ; the paragraph's place
-    and ax, 0xFFF0
-    mov [px_k + PXK_HPOS], bx
-    mov [px_k + PXK_HBASE], ax
-    mov [px_k + PXK_HBASE + 2], dx
-    push ax                         ; the head: the in-memory file at the
-    push dx                         ; marker's paragraph
-    mov cl, 4
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or ax, dx
-    add ax, [px_flatseg]
-    mov [px_k + PXK_HSEG], ax
-    pop dx
-    pop ax
-    mov cx, [px_flatlen]            ; its bytes from there: to the file's
-    mov si, [px_flatlen + 2]        ; end, at most 2,048 past the marker
-    sub cx, ax
-    sbb si, dx
-    add bx, PX_HEADMAX
-    or si, si
-    jnz .fc
-    cmp cx, bx
-    jbe .fl
-.fc:
-    mov cx, bx
-.fl:
-    mov [px_k + PXK_HLEN], cx
-    clc
-.out:
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
 
 ; px_dpart - the worker: the context's decode half, the part's DECODE, and
 ; what the stream told it back into the record. out CF/AX as any decoder's

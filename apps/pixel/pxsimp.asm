@@ -15,9 +15,9 @@
 ;
 ;   HEAD     the UI task: the format's header parser from the head, as it
 ;            was (106.10), then the record's answers into the context. A PCX
-;            that wants its 769-byte tail answers PXD_TAIL; the resident
-;            reads it (it is a file read, and a part never touches a file)
-;            and calls HEAD again
+;            reads its 769-byte tail itself (ps_tail: a file read, which a
+;            part on the UI task may make - since 106.25 the resident's room
+;            is the animation's)
 ;   DECODE   the worker: to the pixels, then the format's row decoder
 ;
 ; tools/pixelsim.py's simple-format readers are this file in Python, check
@@ -706,18 +706,10 @@ px_hpcx:
     clc
     ret
 .eight:
-    mov bx, [cs:ps_ctx]             ; the 769-byte tail, 0x0C and 256 colours:
-    mov al, [bx + PXK_HCNT]         ; a file read, so the resident reads it
-    or al, al                       ; and calls HEAD again (SPEC.md 106.20)
-    jnz .told
-    mov ax, PXD_TAIL
-    stc
-    ret
-.told:
-    cmp al, 1                       ; 1: read; 2: the file has none
-    jne .grey
-    mov word [px_cur + PXR_NPAL], 256
-    clc
+    call ps_tail                    ; the 769-byte tail, 0x0C and 256 colours
+    jc .grey                        ; (this part reads it since 106.25: the
+    mov word [px_cur + PXR_NPAL], 256   ; resident's room went to the GIF
+    clc                             ; that plays)
     ret
 .grey:
     mov byte [px_cur + PXR_RF], RF_GREY
@@ -735,6 +727,124 @@ px_hpcx:
 .head:
     mov ax, PXD_HEAD
     stc
+    ret
+
+; ps_tail - an 8-bit PCX's palette: the file's last 769 bytes, a 0x0C and
+; 256 R,G,B triples, read into [px_spal] when the file is long enough to
+; have one (SPEC.md 106.10) - CF = 1 there is none: the picture is grey. In
+; memory (a CZ file) it is read from there; else with OSAPI_FILE_READ_AT
+; into the head claim's SPARE cluster, past the head, a cluster at a time -
+; the resident's px_pcxtail until wave 8 (106.25). UI task: the HEAD's.
+; Preserves all but the flags
+ps_tail:
+    mov byte [px_pvalid], 0         ; (px_tbuf is px_plan's bytes)
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, [px_cur + PXR_FSIZE]    ; the file must hold the header and it
+    mov dx, [px_cur + PXR_FSIZE + 2]
+    sub ax, 128 + 769
+    sbb dx, 0
+    jb .none
+    mov ax, [px_cur + PXR_FSIZE]    ; DX:AX = where the tail starts
+    mov dx, [px_cur + PXR_FSIZE + 2]
+    sub ax, 769
+    sbb dx, 0
+    mov [cs:ps_ttail], ax
+    mov [cs:ps_ttail + 2], dx
+    mov word [cs:ps_tgot], 0
+    cmp byte [px_rflat], 0
+    jne .flat
+.chunk:                             ; the cluster holding byte [ps_ttail] +
+    mov ax, [cs:ps_ttail]           ; [ps_tgot]
+    mov dx, [cs:ps_ttail + 2]
+    add ax, [cs:ps_tgot]
+    adc dx, 0
+    mov cx, [px_clsz]               ; (the cluster, px_head asked it)
+    div cx                          ; AX = the cluster, DX = the byte in it
+    mov si, dx
+    mul cx                          ; DX:AX = its offset
+    push si
+    mov es, [px_hseg]               ; into the head claim's SPARE cluster
+    mov bx, [px_hcap]
+    sub bx, cx
+    mov si, px_cur + PXR_NAME
+    call OSAPI_FILE_READ_AT         ; DX:AX = bytes delivered
+    pop si
+    jc .none
+    or dx, dx
+    jnz .some
+    cmp ax, si
+    jbe .none
+.some:
+    mov cx, [px_clsz]               ; copy what this cluster holds of it
+    sub cx, si
+    mov ax, 769
+    sub ax, [cs:ps_tgot]
+    cmp cx, ax
+    jbe .cp
+    mov cx, ax
+.cp:
+    mov di, px_tbuf
+    add di, [cs:ps_tgot]
+    add [cs:ps_tgot], cx
+    add si, [px_hcap]               ; (the spare cluster's place)
+    sub si, [px_clsz]
+.cl:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .cl
+    cmp word [cs:ps_tgot], 769
+    jb .chunk
+    jmp short .have
+.flat:                              ; in memory: segment arithmetic
+    mov ax, [cs:ps_ttail]
+    mov dx, [cs:ps_ttail + 2]
+    mov si, ax
+    and si, 15
+    mov cl, 4
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl
+    or ax, dx
+    add ax, [px_flatseg]
+    mov es, ax
+    mov di, px_tbuf
+    mov cx, 769
+.fl:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .fl
+.have:
+    cmp byte [px_tbuf], 0x0C
+    jne .none
+    push ds
+    pop es
+    mov si, px_tbuf + 1
+    mov di, px_spal
+    mov cx, 768
+    cld
+    rep movsb
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; px_pal16 - ES:SI = sixteen R,G,B triples into [px_spal]. Preserves all
@@ -2510,5 +2620,7 @@ ps_ctx:     dw 0                    ; HEAD: the context
 ps_emitf:   dd 0                    ; DECODE: K_EMIT, far
 ps_ringf:   dd 0                    ; ...and K_RING
 ps_dnpl:    db 0                    ; px_pcxconv: the planes, kept in CS
+ps_ttail:   dd 0                    ; ps_tail: where the tail starts...
+ps_tgot:    dw 0                    ; ...and its bytes read so far
 
 %include "pxplan.inc"                ; the plans: shared source (106.20)

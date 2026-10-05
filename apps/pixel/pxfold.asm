@@ -15,11 +15,15 @@
 ;             for another (or not yet), then every card on show whose
 ;             thumbnail the store lacks and the cache holds read into a slot -
 ;             ONE walk to SYSTEM/APPDATA and back. AX = the cards read
-;   PF_WRITE  the header read again (another PiXEL may have written), every
-;             NEW slot written to its entry (its own, a new one while the disk
-;             keeps 32 KB free, else the least recently used), the entries
-;             read since the last write stamped, the header last.
+;   PF_WRITE  ONE STEP of the cache's write (review-w5 F13: the whole of it
+;             in one call held the desktop 10.6 s on an XT): the first step
+;             reads the header again (another PiXEL may have written) and
+;             stamps the entries read since the last write, each next one
+;             writes ONE NEW slot to its entry (its own, a new one while the
+;             disk keeps 32 KB free, else the least recently used), and the
+;             last writes the header. AX = 2 there is more, 0 it is done.
 ;             CF = 1 AX = 1 the volume refused (the resident says so once)
+;   PF_WALL   every step in one call: the window is closing
 ;   PF_MAKE   the thumbnail of name [px_tname] from [px_cur]'s master through
 ;             [px_pal] into the slot already holding it or a free one (none
 ;             free: CF = 1); the cube's 1bpp thresholds made the first time
@@ -77,17 +81,20 @@ pf_decode:
     cld
     cmp cl, PF_VISIT
     je .v
+    cmp cl, PF_MAKE
+    je .m
     cmp cl, PF_WRITE
     je .w
-    cmp cl, PF_MAKE
+    cmp cl, PF_WALL
     jne .bad
+.w:
+    call pf_write
+    jmp short .out
+.m:
     call pf_make
     jmp short .out
 .v:
     call pf_visit
-    jmp short .out
-.w:
-    call pf_write
     jmp short .out
 .bad:
     mov ax, PXE_NOTSUP
@@ -1071,12 +1078,16 @@ pf_cread:
     shr si, cl
     and bx, 7
     mov al, [cs:pf_bit + bx]
-    or [px_chit + si], al
-    mov byte [px_cnew], 1
-    clc
-    jmp short .out
+    or [px_chit + si], al           ; (stamped at the next write that has a
+    clc                             ; NEW slot to make: a visit of hits alone
+    jmp short .out                  ; writes nothing, review-w5 F7)
 .no:
-    stc
+    mov bx, [px_centry]             ; AN ENTRY THAT IS NOT ITS KEY'S - short,
+    mov cl, 5                       ; another key, a size out of range - is
+    shl bx, cl                      ; forgotten in the store's header, so the
+    mov es, [px_tseg]               ; thumbnail made instead is NEW and is
+    and byte [es:bx + PXT_HDR + CH_KEYS + TK_FLAGS], ~TKF_VALID
+    stc                             ; written over it (review-w5 F12)
 .out:
     pop es
     pop di
@@ -1098,16 +1109,22 @@ pf_chitclr:
     ret
 
 ; =============================================================================
-; PF_WRITE
+; PF_WRITE (a step) and PF_WALL (all of them). [px_cwip] says a write is
+; under way: its header is the STORE's from the first step on, so a later
+; step never reads the file's again - that would forget the entries this
+; write has put in it
 ; =============================================================================
 pf_write:
+    mov [cs:pf_all], cl
     call pf_cgo
-    jnc .in
+    jnc .step
     mov byte [px_cstat], 2          ; (the folder went: nothing to say)
     jmp .drop
-.in:
-    call pf_chdr                    ; read again: CF = the file is not there
-    mov byte [cs:pf_miss], 0
+.step:
+    cmp byte [px_cwip], 0
+    jne .slots
+    call pf_chdr                    ; THE FIRST: read again, CF = the file
+    mov byte [cs:pf_miss], 0        ; is not there
     jnc .ex
     mov byte [cs:pf_miss], 1
 .ex:
@@ -1115,8 +1132,9 @@ pf_write:
     mov es, [px_tseg]
     inc word [es:PXT_HDR + CH_CLOCK]    ; this write's stamp
     call pf_chits
+    mov byte [px_cwip], 1
     cmp byte [cs:pf_miss], 0        ; a new file: its header first
-    je .slots
+    je .next
     call pf_hbuf
     mov si, pf_s_thc
     call pf_name
@@ -1125,8 +1143,9 @@ pf_write:
     xor dx, dx
     call OSAPI_FILE_WRITE
     jc .fail
+    jmp short .next
 .slots:
-    xor bx, bx
+    xor bx, bx                      ; THE NEXT NEW slot, if one is left
 .s:
     call pf_slotdi
     mov es, [px_tseg]
@@ -1134,11 +1153,12 @@ pf_write:
     jz .sn
     call pf_cput
     jc .fail
+    jmp short .next
 .sn:
     inc bx
     cmp bx, PX_TSLOTS
     jb .s
-    call pf_hbuf                    ; the header last
+    call pf_hbuf                    ; none: THE HEADER, last
     mov es, [px_tseg]
     mov bx, PXT_BUF
     mov cx, 4096
@@ -1150,9 +1170,17 @@ pf_write:
     jc .fail
     call pf_cback
     call pf_chitclr
-    mov byte [px_cnew], 0
-    inc word [px_thwrote]
     xor ax, ax
+    mov [px_cnew], al
+    mov [px_cwip], al
+    inc word [px_thwrote]
+    clc
+    ret
+.next:
+    cmp byte [cs:pf_all], PF_WALL   ; the window closing: on, in this call
+    je .step
+    call pf_cback
+    mov ax, 2                       ; more to do
     clc
     ret
 .fail:
@@ -1168,6 +1196,7 @@ pf_write:
     ret
 
 pf_miss:    db 0
+pf_all:     db 0
 
 ; pf_drop - nothing more to write: NEW cleared, the hits forgotten.
 ; Preserves all
@@ -1185,6 +1214,7 @@ pf_drop:
     jb .s
     call pf_chitclr
     mov byte [px_cnew], 0
+    mov byte [px_cwip], 0
     pop es
     pop di
     pop bx

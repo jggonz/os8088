@@ -176,6 +176,22 @@ def host_leg():
                         name, args, w, h, pn, ip, first_diff(got, want[0])))
     check("%d pixel operations (sizes x palettes x destinations)" % n,
           not bad, "%d differ" % bad)
+    # review-w7 F7: a WIDE short master whose work layout passes 64 KB in
+    # an intermediate sum is refused ("too wide to edit") - it used to wrap,
+    # claim a small work area and write up to 45 KB past it
+    for name, ww, hh, args in (("RESIZE", 950, 2, (4, 1)),
+                               ("RESIZE", 1300, 2, (3, 1)),
+                               ("RESIZE", 2000, 2, (2, 1)),
+                               ("BLUR", 6000, 3, ())):
+        p = pxpartemu.PxPart(part)
+        p.set_pal(pal)
+        mm = bytes(ww * hh)
+        p.set_master(mm, ww, hh, P.hist_counts(mm))
+        for k, a in enumerate(args):
+            p.w16("px_ep", a, 2 * k)
+        ax, cf = p.decode(EV[name] | 0x80)
+        check("%s%r of %dx%d: refused, not wrapped" % (name, args, ww, hh),
+              cf, "EV_WORK answered %d KB" % ax)
 
 
 # =============================================================================

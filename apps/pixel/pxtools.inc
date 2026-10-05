@@ -1129,7 +1129,7 @@ px_eyetick:
     ret
 
 ; px_edkey - AL/AH = a key: editing's (SPEC.md 106.24) - Ctrl+S Save As,
-; Ctrl+Z Undo, Ctrl+C Copy, Ctrl+A Select All; Enter crops with the Crop
+; Ctrl+Z Undo, Ctrl+C Copy Info, Ctrl+A Select All; Enter crops with the Crop
 ; tool and a selection; the arrows nudge the selection while Marquee or Crop
 ; is the tool. CF = 0 it was one. Lock held. Preserves all
 px_edkey:

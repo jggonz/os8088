@@ -689,12 +689,16 @@ pe_layout:
     mov [px_edh], ax
     mov ax, [px_edw]                ; the out row: 3 dw
     call pe_x3
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, QT_SIZE
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov [cs:pe_o_s0], ax            ; a source row's RGB: 3 sw
     mov bx, ax
     mov ax, si
     call pe_x3
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, bx
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov bx, [px_ep]
     cmp bx, [px_ep + 2]
     jae .up
@@ -703,70 +707,98 @@ pe_layout:
     mov ax, [px_edw]
     inc ax
     shl ax, 1
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, bx
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov [cs:pe_o_acc], ax           ; ...and the sums, 3 dw words
     mov bx, ax
     mov ax, [px_edw]
     call pe_x3
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     shl ax, 1
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, bx
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     jmp .tot
 .up:
     mov [cs:pe_o_s1], ax            ; UP: a second source row...
     mov bx, ax
     mov ax, si
     call pe_x3
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, bx
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov [cs:pe_o_xb], ax            ; ...the columns' places, 4 dw bytes...
     mov bx, ax
     mov ax, [px_edw]
     shl ax, 1
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     shl ax, 1
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, bx
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov [cs:pe_o_h0], ax            ; ...and the two interpolated rows, 3 dw
     mov bx, ax                      ; words each
     mov ax, [px_edw]
     call pe_x3
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     shl ax, 1
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov dx, ax
     add ax, bx
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov [cs:pe_o_h1], ax
     add ax, dx
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     jmp .tot
 .conv:
     cmp cl, EV_PIXEL
     je .pix
     mov ax, si                      ; three rows of 3 (sw + 2), and the out
     add ax, 2                       ; row
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     call pe_x3
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov [cs:pe_rsz], ax
     mov bx, si
     xchg ax, bx
     call pe_x3
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, QT_SIZE
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov [cs:pe_o_s0], ax
     add ax, bx
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov [cs:pe_o_s1], ax
     add ax, bx
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov [cs:pe_o_s2], ax
     add ax, bx
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     jmp short .tot
 .pix:
     mov ax, si                      ; a source row's RGB...
     call pe_x3
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov bx, ax
     add ax, QT_SIZE
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov [cs:pe_o_s0], ax
     add ax, bx
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov [cs:pe_o_acc], ax           ; ...and the blocks' sums, 3 words each
     mov bx, ax
     mov ax, si
     add ax, PE_PIXN - 1
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     mov cl, 3
     shr ax, cl
     call pe_x3
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     shl ax, 1
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, bx
+    jc .big                         ; (a sum past 64 KB: review-w7 F7)
 .tot:
     jc .big
     add ax, 15                      ; the palette, last, on a paragraph
@@ -3436,8 +3468,11 @@ pf_pal:
 pf_start:
     mov [px_eop], al
     mov byte [px_eredo], 0
-    PSV SV_UFREE
-pf_go:
+    cmp byte [px_ukind], UK_MASTER  ; undo's MASTER (or its copy above 1 MB)
+    jb pf_go                        ; goes first - its room may be what the
+    PSV SV_UFREE                    ; operation needs; a palette's or a
+pf_go:                              ; flip's only once it is sure to run
+                                    ; (review-w7 F11: a refused one kept it)
     mov cl, [px_eop]
     call pe_layout                  ; AX = the work's KB, the destination's
     jnc .w                          ; size in [px_edw] [px_edh]
@@ -3481,6 +3516,7 @@ pf_go:
 .start:
     cmp byte [px_eredo], 0          ; (undo's flip again keeps its bank)
     jne .sp
+    PSV SV_UFREE                    ; (the old undo now, F11)
     call pf_bank                    ; the picture as it is: undo's
 .sp:
     PSV SV_SPAWN

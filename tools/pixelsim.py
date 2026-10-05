@@ -181,9 +181,22 @@ class Pic:
 # =============================================================================
 # THE SNIFF (SPEC.md 106.6): the content names the format
 # =============================================================================
+SNIFF_EXT = {"JPG": "JPEG", "JPE": "JPEG", "PNG": "PNG", "GIF": "GIF",
+             "BMP": "BMP", "PCX": "PCX", "TIF": "TIFF", "TGA": "TGA",
+             "PIX": "PIX", "PBM": "PNM", "PGM": "PNM", "PPM": "PNM",
+             "PNM": "PNM", "ICO": "ICO", "CUR": "ICO", "LBM": "LBM",
+             "IFF": "LBM", "MAC": "MAC"}
+
+
 def sniff(data, ext):
-    h = data[:32]
-    if len(h) >= 3 and h[0] == 0xFF and h[1] == 0xD8 and h[2] == 0xFF:
+    """The EXTENSION first, then - on a file of 32 bytes or more - the
+    CONTENT, which wins, in the order SPEC.md 106.25 says it (the guest's
+    px_extfmt and px_sniffbuf)."""
+    fmt = SNIFF_EXT.get(ext, "")
+    if len(data) < 32:
+        return fmt
+    h = data[:69]
+    if h[0] == 0xFF and h[1] == 0xD8 and h[2] == 0xFF:
         return "JPEG"
     if h[:4] == b"\x89PNG":
         return "PNG"
@@ -191,17 +204,24 @@ def sniff(data, ext):
         return "GIF"
     if h[:2] == b"BM":
         return "BMP"
-    if len(h) >= 3 and h[0] == 0x0A and h[2] == 1 and ext == "PCX":
+    if h[0] == 0x0A and h[2] == 1 and fmt == "PCX":
         return "PCX"
     if h[:4] in (b"II*\x00", b"MM\x00*"):
         return "TIFF"
     if h[:4] == b"O8PI":
         return "PIX"
-    if len(h) >= 2 and h[0:1] == b"P" and 0x31 <= h[1] <= 0x36:
+    if h[0:1] == b"P" and 0x31 <= h[1] <= 0x36:
         return "PNM"
+    if h[:4] == b"FORM" and h[8:12] in (b"ILBM", b"PBM "):
+        return "LBM"
+    if h[0] == 0 and h[1] == 0 and u16(h, 2) in (1, 2) and \
+            1 <= u16(h, 4) <= 255 and h[9] == 0:
+        return "ICO"
+    if len(h) >= 69 and h[0] == 0 and h[65:69] == b"PNTG":
+        return "MAC"
     if h[:2] == b"CZ":
         return "CZ"
-    return {"PCX": "PCX", "TGA": "TGA"}.get(ext, "")
+    return fmt
 
 
 # =============================================================================
@@ -2148,6 +2168,940 @@ def jp_orient(p, d):
 
 
 # =============================================================================
+# THE EXTRAS PART (SPEC.md 106.25): TIFF, ICO and CUR, IFF ILBM and PBM,
+# MacPaint - apps/pixel/pxextra.asm is this section in assembly, check for
+# check and in the same order
+# =============================================================================
+EX_HEADS = 16                   # heads a header walk may read (the first too)
+EX_TABLE = 8192                 # the part's TABLE: strips, or ICO's AND mask
+EX_STRIPS = EX_TABLE // 8       # a dword offset and a dword count each
+EX_ROWMAX = 32768
+
+
+class Heads:
+    """HEAD's view of the file: ONE head of up to HEAD_MAX bytes at a time,
+    the first at offset 0 and each next one (PXD_MORE) the HEAD_MAX bytes at
+    the offset asked for, clipped to the file. At most EX_HEADS of them, the
+    first counted; one more is `bad header`. Two ways to read:
+
+    need(off, n) - a STRUCTURE (n <= HEAD_MAX) from one head: the current
+        head when it holds [off, off+n) whole; else, when the file holds it,
+        a new head AT off; else `cut short` (checked before the head is
+        counted, so a file that ends first is `cut short`, never `bad
+        header`).
+    run(off, n) - a BYTE RUN of any length, streamed: `cut short` at once
+        when the file does not hold [off, off+n); then the bytes the current
+        head holds from off, a new head at the FIRST BYTE IT DOES NOT HOLD,
+        and so on - so a run starting outside the current head starts a head
+        at off."""
+
+    def __init__(self, data):
+        self.d = data
+        self.fsz = len(data)
+        self.base = 0
+        self.hl = min(HEAD_MAX, self.fsz)
+        self.n = 1
+
+    def _more(self, off):
+        self.n += 1
+        if self.n > EX_HEADS:
+            raise Refused(PXD_HEAD)
+        self.base = off
+        self.hl = min(HEAD_MAX, self.fsz - off)
+
+    def holds(self, off, n):
+        return self.base <= off and off + n <= self.base + self.hl
+
+    def need(self, off, n):
+        if not self.holds(off, n):
+            if off + n > self.fsz:
+                raise Refused(PXD_TRUNC)
+            self._more(off)
+        return self.d[off:off + n]
+
+    def run(self, off, n):
+        if off + n > self.fsz:
+            raise Refused(PXD_TRUNC)
+        out = bytearray()
+        a, end = off, off + n
+        while a < end:
+            if not self.base <= a < self.base + self.hl:
+                self._more(a)
+            b = min(end, self.base + self.hl)
+            out += self.d[a:b]
+            a = b
+        return bytes(out)
+
+
+class Bytes:
+    """A bounded byte source: a TIFF strip's bytes, an IFF BODY's, the rest
+    of a MacPaint file - reading past them is `cut short`."""
+
+    def __init__(self, src):
+        self.s = src
+        self.p = 0
+
+    def byte(self):
+        if self.p >= len(self.s):
+            raise Refused(PXD_TRUNC)
+        v = self.s[self.p]
+        self.p += 1
+        return v
+
+    def take(self, n):
+        if self.p + n > len(self.s):
+            raise Refused(PXD_TRUNC)
+        v = self.s[self.p:self.p + n]
+        self.p += n
+        return v
+
+
+BYTE1 = [bytes((v,)) for v in range(256)]
+
+
+def unpackbits(src, total):
+    """PackBits / ByteRun1 as ONE continuous stream (a TIFF strip's, IFF's
+    BODY, MacPaint's):
+    `total` bytes out; a run may cross a row; the stream stops the moment
+    the last byte is made - the rest of a run dropped, nothing more read (a
+    literal's unneeded bytes are not read either). 128 is nothing."""
+    s, p, end = src.s, src.p, len(src.s)
+    out = bytearray()
+    while len(out) < total:
+        if p >= end:
+            raise Refused(PXD_TRUNC)
+        n = s[p]
+        p += 1
+        if n < 128:
+            k = min(n + 1, total - len(out))
+            if p + k > end:
+                raise Refused(PXD_TRUNC)
+            out += s[p:p + k]
+            p += k
+        elif n > 128:
+            if p >= end:
+                raise Refused(PXD_TRUNC)
+            out += BYTE1[s[p]] * min(257 - n, total - len(out))
+            p += 1
+    src.p = p
+    return out
+
+
+def lzw_tiff(src, run):
+    """TIFF's LZW (os88lzw.inc's MSB-first reader with LZW_EARLY): codes MSB
+    first from 9 bits to 12, Clear 256, End 257; the code size grows when the
+    next free code PLUS ONE reaches a power of two (libtiff's early change);
+    a full table (4096) adds nothing until a Clear. run(bytes) answers True
+    to stop. 'EOI' (the End code), 'END' (a code would need bits past the
+    input) or 'STOP'; a code above the next free code, or a first code after
+    a Clear (or at the start) that is not a root, is PXD_DATA."""
+    nbits = 8 * len(src)
+    pos = 0
+    prefix = [0] * 4096
+    suffix = [0] * 4096
+    free, cs, old, first = 258, 9, None, 0
+    while True:
+        if pos + cs > nbits:
+            return "END"
+        o = pos >> 3
+        seg = bytes(src[o:o + 3])
+        v = int.from_bytes(seg + b"\0" * (3 - len(seg)), "big")
+        c = (v >> (24 - (pos & 7) - cs)) & ((1 << cs) - 1)
+        pos += cs
+        if c == 256:
+            free, cs, old = 258, 9, None
+            continue
+        if c == 257:
+            return "EOI"
+        if old is None:
+            if c > 255:
+                raise Refused(PXD_DATA)
+            old = first = c
+            if run(bytes((c,))):
+                return "STOP"
+            continue
+        if c > free:
+            raise Refused(PXD_DATA)
+        out = []
+        k = c
+        if c == free:
+            out.append(first)
+            k = old
+        while k > 255:
+            out.append(suffix[k])
+            k = prefix[k]
+        out.append(k)
+        first = k
+        out.reverse()
+        if run(bytes(out)):
+            return "STOP"
+        if free < 4096 and old < free:
+            prefix[free] = old
+            suffix[free] = first
+            free += 1
+            if cs < 12 and free + 1 >= (1 << cs):
+                cs += 1
+        old = c
+
+
+# --- TIFF ---------------------------------------------------------------------
+TIF_READ = (256, 257, 258, 259, 262, 266, 273, 277, 278, 279, 284, 317, 320,
+            338)                # the tags read, in the order values are read
+TIF_ARRAYS = (273, 279, 320)    # read as arrays, not as a first value
+TIF_TILES = (322, 323, 324)     # present: a tiled TIFF
+TIF_SIZE = {3: 2, 4: 4}
+TIF_GREY = {1: 255, 2: 85, 4: 17, 8: 1}
+
+
+def tiff_header(data, fsz):
+    """THE HEADER (SPEC.md 106.25), as the part's HEAD walks it:
+    1. the 8-byte header in the first head; IFD0's offset 8 or more;
+    2. the IFD's count word (need(ifd, 2)), 1..170, then the whole IFD
+       (need(ifd, 2 + 12 n)) - ONE head holds 170 entries;
+    3. THE SCAN, in entry order, nothing read through a head: a tag of
+       TIF_READ whose type is not SHORT or LONG, or whose count is 0, is
+       `bad header`; a later entry of the same tag replaces an earlier;
+       a tile tag (322-324) is noted, its type unread; any other tag is
+       skipped;
+    4. THE VALUES, in TIF_READ's order (ascending tag, whatever the IFD's),
+       every tag present but the three arrays: its FIRST value, from the
+       entry's own 4 bytes when count x size <= 4, else need(offset, size);
+    5. THE CHECKS, in this order: width or length absent `bad header`; either
+       outside 1..8192 `size not valid`; a tile tag `packing not read`;
+       compression not 1/5/32773 `packing not read`; photometric absent
+       `bad header`, not 0..3 `depth not read`; FillOrder not 1 `packing not
+       read`; StripOffsets or StripByteCounts absent `bad header`;
+       RowsPerStrip 0 `bad header` (above the height: the height);
+       PlanarConfiguration not 1 (2 with one sample is 1) `packing not
+       read`; Predictor not 1, or 2 on samples not of 8 bits, `packing not
+       read`; the kind `depth not read`; a row over 32,768 bytes `too big to
+       unpack`; for Palette: ColorMap absent, not SHORT, or its count not
+       3 x 2^bits `bad header`, then need(offset, 6 x 2^bits) (one head);
+       the strips: more than 1,024 `too big to unpack`, either array's count
+       below the strips `bad header`, then StripOffsets' first n values and
+       StripByteCounts' (each from the entry when count x size <= 4, else
+       run(offset, n x size)), then each offset at or past the end of the
+       strip before it (unbounded arithmetic) or `packing not read`."""
+    hd = Heads(data)
+    head = data[:HEAD_MAX]
+    if len(head) < 8:
+        raise Refused(PXD_HEAD)
+    if head[:2] == b"II":
+        be = False
+    elif head[:2] == b"MM":
+        be = True
+    else:
+        raise Refused(PXD_HEAD)
+
+    def w16(b, o):
+        return (b[o] << 8) | b[o + 1] if be else b[o] | (b[o + 1] << 8)
+
+    def w32(b, o):
+        return (w16(b, o) << 16) | w16(b, o + 2) if be else \
+            w16(b, o) | (w16(b, o + 2) << 16)
+    if w16(head, 2) != 42:
+        raise Refused(PXD_HEAD)
+    ifd = w32(head, 4)
+    if ifd < 8:
+        raise Refused(PXD_HEAD)
+    n = w16(hd.need(ifd, 2), 0)
+    if not 1 <= n <= 170:
+        raise Refused(PXD_HEAD)
+    ifdb = bytes(hd.need(ifd, 2 + 12 * n))
+    ent = {}
+    tiles = False
+    for i in range(n):
+        e = 2 + 12 * i
+        tag, typ, cnt = w16(ifdb, e), w16(ifdb, e + 2), w32(ifdb, e + 4)
+        if tag in TIF_TILES:
+            tiles = True
+        elif tag in TIF_READ:
+            if typ not in TIF_SIZE or cnt == 0:
+                raise Refused(PXD_HEAD)
+            ent[tag] = (typ, cnt, ifdb[e + 8:e + 12])
+
+    def val(b, typ):
+        return w16(b, 0) if typ == 3 else w32(b, 0)
+    v = {}
+    for tag in TIF_READ:
+        if tag in ent and tag not in TIF_ARRAYS:
+            typ, cnt, f = ent[tag]
+            sz = TIF_SIZE[typ]
+            b = f if cnt * sz <= 4 else hd.need(w32(f, 0), sz)
+            v[tag] = val(b, typ)
+    if 256 not in v or 257 not in v:
+        raise Refused(PXD_HEAD)
+    w, h = v[256], v[257]
+    if not (1 <= w <= DIM_MAX and 1 <= h <= DIM_MAX):
+        raise Refused(PXD_DIMS)
+    if tiles:
+        raise Refused(PXD_PACK)
+    comp = v.get(259, 1)
+    if comp not in (1, 5, 32773):
+        raise Refused(PXD_PACK)
+    if 262 not in v:
+        raise Refused(PXD_HEAD)
+    photo = v[262]
+    if photo > 3:
+        raise Refused(PXD_DEPTH)
+    if v.get(266, 1) != 1:
+        raise Refused(PXD_PACK)
+    if 273 not in ent or 279 not in ent:
+        raise Refused(PXD_HEAD)
+    rps = v.get(278, h)
+    if rps == 0:
+        raise Refused(PXD_HEAD)
+    if rps > h:
+        rps = h
+    bits, spp = v.get(258, 1), v.get(277, 1)
+    planar = v.get(284, 1)
+    if planar != 1 and not (planar == 2 and spp == 1):
+        raise Refused(PXD_PACK)
+    pred = v.get(317, 1)
+    if pred != 1 and not (pred == 2 and bits == 8):
+        raise Refused(PXD_PACK)
+    if photo == 2:
+        ok = bits == 8 and spp in (3, 4)
+    else:
+        ok = spp == 1 and bits in (1, 2, 4, 8)
+    if not ok:
+        raise Refused(PXD_DEPTH)
+    rb = (w * bits * spp + 7) // 8
+    if rb > EX_ROWMAX:
+        raise Refused(PXD_BIG)
+    p = Pic()
+    p.fmt, p.w, p.h, p.bits = "TIFF", w, h, bits * spp
+    p.pack = {1: PK_NONE, 5: PK_LZW, 32773: PK_RLE}[comp]
+    if photo == 3:
+        if 320 not in ent:
+            raise Refused(PXD_HEAD)
+        typ, cnt, f = ent[320]
+        ne = 1 << bits
+        if typ != 3 or cnt != 3 * ne:
+            raise Refused(PXD_HEAD)
+        m = hd.need(w32(f, 0), 6 * ne)
+        p.pal = [(w16(m, 2 * i) >> 8, w16(m, 2 * (ne + i)) >> 8,
+                  w16(m, 2 * (2 * ne + i)) >> 8) for i in range(ne)]
+        p.rf, p.npal = RF_IDX, ne
+    elif photo == 2:
+        p.rf = RF_RGB
+    else:
+        p.rf = RF_GREY
+    ns = (h + rps - 1) // rps
+    if ns > EX_STRIPS:
+        raise Refused(PXD_BIG)
+    if ent[273][1] < ns or ent[279][1] < ns:
+        raise Refused(PXD_HEAD)
+
+    def array(tag):
+        typ, cnt, f = ent[tag]
+        sz = TIF_SIZE[typ]
+        b = f if cnt * sz <= 4 else hd.run(w32(f, 0), ns * sz)
+        return [val(b[sz * i:sz * i + sz], typ) for i in range(ns)]
+    offs = array(273)
+    cnts = array(279)
+    for i in range(1, ns):
+        if offs[i] < offs[i - 1] + cnts[i - 1]:
+            raise Refused(PXD_PACK)
+    p.strips = list(zip(offs, cnts))
+    p.rps, p.rb, p.comp, p.pred, p.spp, p.photo = rps, rb, comp, pred, spp, photo
+    p.tbits = bits
+    p.alpha = photo == 2 and spp == 4 and v.get(338) in (1, 2)
+    p.heads = hd.n
+    return p
+
+
+def tiff_pixels(p, row):
+    w, b = p.w, p.tbits
+    if p.photo == 2:
+        if p.spp == 3:
+            return bytes(row[:3 * w])
+        out = bytearray(3 * w)
+        for x in range(w):
+            px = row[4 * x:4 * x + 4]
+            if p.alpha:
+                a = px[3]
+                out[3 * x:3 * x + 3] = bytes((blend(a, px[0]), blend(a, px[1]),
+                                              blend(a, px[2])))
+            else:
+                out[3 * x:3 * x + 3] = px[:3]
+        return bytes(out)
+    vals = unpack_bits(row, w, b) if b < 8 else row[:w]
+    if p.photo == 3:
+        return bytes(vals)
+    k = TIF_GREY[b]
+    if p.photo == 0:
+        return bytes(255 - x * k for x in vals)
+    return bytes(x * k for x in vals)
+
+
+def tiff_rows(p, rd):
+    w, h, rb, rps, spp = p.w, p.h, p.rb, p.rps, p.spp
+    y = 0
+    for off, cnt in p.strips:
+        nr = min(rps, h - y)
+        rd.skip_to(off)
+        src = Bytes(rd.d[off:off + cnt])
+        if p.comp == 1:
+            rows = [src.take(rb) for _ in range(nr)]
+        elif p.comp == 32773:
+            body = unpackbits(src, nr * rb)
+            rows = [body[i * rb:(i + 1) * rb] for i in range(nr)]
+        else:
+            need = nr * rb
+            buf = bytearray()
+
+            def run(s):
+                buf.extend(s)
+                return len(buf) >= need
+            if lzw_tiff(src.s, run) != "STOP":
+                raise Refused(PXD_TRUNC)
+            rows = [buf[i * rb:(i + 1) * rb] for i in range(nr)]
+        for r in rows:
+            r = bytearray(r)
+            if p.pred == 2:
+                for i in range(spp, rb):
+                    r[i] = (r[i] + r[i - spp]) & 255
+            p.rows.append((y, tiff_pixels(p, r)))
+            y += 1
+
+
+# --- ICO and CUR ----------------------------------------------------------------
+def ico_header(data, fsz):
+    """THE HEADER (SPEC.md 106.25): the directory from the first head; the
+    image (largest w x h, a byte of 0 being 256; then the larger bit count,
+    a CUR's counting 0; then the first); need(off, 4) for its first bytes:
+    89 'PNG' is PNG-in-ICO - png_header on the head AT off - else a DIB:
+    need(off, hsz) for its header, the checks, need(off, hsz + 4 n) for the
+    palette; then, but for 32 bits, the AND mask's size (8,192 or `too big
+    to unpack`) and run(mask, size) into the TABLE."""
+    hd = Heads(data)
+    head = data[:HEAD_MAX]
+    if len(head) < 6:
+        raise Refused(PXD_HEAD)
+    typ, n = u16(head, 2), u16(head, 4)
+    if u16(head, 0) != 0 or typ not in (1, 2) or not 1 <= n <= 127:
+        raise Refused(PXD_HEAD)
+    dsz = 6 + 16 * n
+    if fsz < dsz:
+        raise Refused(PXD_TRUNC)
+    best, key = 0, None
+    for i in range(n):
+        e = 6 + 16 * i
+        k = ((head[e] or 256) * (head[e + 1] or 256),
+             u16(head, e + 6) if typ == 1 else 0)
+        if key is None or k > key:
+            best, key = i, k
+    off = u32(head, 6 + 16 * best + 12)
+    if off < dsz:
+        raise Refused(PXD_HEAD)
+    if off >= fsz:
+        raise Refused(PXD_TRUNC)
+    sig = hd.need(off, 4)
+    if bytes(sig) == b"\x89PNG":
+        p = png_header(data[off:off + HEAD_MAX], fsz - off)
+        p.fmt = "ICO"
+        p.sbase = off
+        p.heads = hd.n
+        return p
+    hsz = u32(sig, 0)
+    if hsz not in (40, 108, 124):
+        raise Refused(PXD_HEAD)
+    b = hd.need(off, hsz)
+    w, h2 = s32(b, 4), s32(b, 8)
+    planes, bits, comp, used = u16(b, 12), u16(b, 14), u32(b, 16), u32(b, 32)
+    if not 1 <= w <= DIM_MAX:
+        raise Refused(PXD_DIMS)
+    if h2 < 0 or h2 & 1:
+        raise Refused(PXD_HEAD)
+    hh = h2 >> 1
+    if not 1 <= hh <= DIM_MAX:
+        raise Refused(PXD_DIMS)
+    if planes > 1:
+        raise Refused(PXD_HEAD)
+    if bits not in (1, 4, 8, 24, 32):
+        raise Refused(PXD_DEPTH)
+    if comp != 0:
+        raise Refused(PXD_PACK)
+    ne = 0
+    if bits <= 8:
+        ne = used or (1 << bits)
+        if ne > (1 << bits):
+            raise Refused(PXD_HEAD)
+    b = hd.need(off, hsz + 4 * ne)
+    pal = [(b[hsz + 4 * i + 2], b[hsz + 4 * i + 1], b[hsz + 4 * i])
+           for i in range(ne)]
+    p = Pic()
+    p.fmt, p.w, p.h, p.bits, p.pack = "ICO", w, hh, bits, PK_NONE
+    p.xo = off + hsz + 4 * ne
+    p.stride = ((w * bits + 31) // 32) * 4
+    p.ms = ((w + 31) // 32) * 4
+    p.mask = None
+    if bits != 32:
+        msz = hh * p.ms
+        if msz > EX_TABLE:
+            raise Refused(PXD_BIG)
+        p.mask = hd.run(p.xo + hh * p.stride, msz)
+    p.ne = ne
+    if bits <= 8 and ne < 256:
+        p.rf, p.pal, p.npal = RF_IDX, pal + [(BG, BG, BG)], ne + 1
+    else:
+        p.rf, p.pal = RF_RGB, pal
+    p.heads = hd.n
+    return p
+
+
+def ico_rows(p, rd):
+    if getattr(p, "sbase", None) is not None:
+        return png_rows(p, Reader(rd.d[p.sbase:]))
+    rd.skip_to(p.xo)
+    w, hh, bits = p.w, p.h, p.bits
+    for r in range(hh):
+        raw = rd.take(p.stride)
+        y = hh - 1 - r
+        m = p.mask[r * p.ms:(r + 1) * p.ms] if p.mask is not None else None
+
+        def masked(x):
+            return (m[x >> 3] >> (7 - (x & 7))) & 1
+        if bits <= 8:
+            vals = unpack_bits(raw, w, bits) if bits < 8 else raw[:w]
+            if p.rf == RF_IDX:
+                out = bytes(p.ne if masked(x) else vals[x] for x in range(w))
+            else:
+                out = bytearray(3 * w)
+                for x in range(w):
+                    out[3 * x:3 * x + 3] = bytes((BG, BG, BG)) if masked(x) \
+                        else bytes(p.pal[vals[x]])
+        elif bits == 24:
+            out = bytearray(3 * w)
+            for x in range(w):
+                out[3 * x:3 * x + 3] = bytes((BG, BG, BG)) if masked(x) else \
+                    bytes((raw[3 * x + 2], raw[3 * x + 1], raw[3 * x]))
+        else:
+            out = bytearray(3 * w)
+            for x in range(w):
+                a = raw[4 * x + 3]
+                out[3 * x:3 * x + 3] = bytes((blend(a, raw[4 * x + 2]),
+                                              blend(a, raw[4 * x + 1]),
+                                              blend(a, raw[4 * x])))
+        p.rows.append((y, bytes(out)))
+
+
+# --- IFF: ILBM and PBM ----------------------------------------------------------
+def be16(b, o):
+    return (b[o] << 8) | b[o + 1]
+
+
+def lbm_header(data, fsz):
+    """THE HEADER (SPEC.md 106.25): 'FORM', a size, 'ILBM' or 'PBM '; the
+    chunks from 12, each header need(pos, 8), to BODY; BMHD's 20 bytes
+    need(data, 20) (its size below 20 `bad header`; width and height checked
+    there and then), CMAP's first 3 x min(size / 3, 256) need(data, ...) (a
+    CMAP of under 3 bytes is a CMAP of no entries: every one black), CAMG's
+    4 when its size is 4 or more; the next chunk at data + size + (size &
+    1), unbounded (past the file is `cut short` at the next header). A later
+    BMHD, CMAP or CAMG replaces an earlier. After the walk: compression,
+    then planes (PBM: 8), then HAM."""
+    hd = Heads(data)
+    head = data[:HEAD_MAX]
+    if len(head) < 12:
+        raise Refused(PXD_HEAD)
+    if head[:4] != b"FORM" or head[8:12] not in (b"ILBM", b"PBM "):
+        raise Refused(PXD_HEAD)
+    pbm = head[8:12] == b"PBM "
+    pos = 12
+    bm = cmap = None
+    camg = 0
+    while True:
+        ch = hd.need(pos, 8)
+        cid, sz = bytes(ch[:4]), be32(ch, 4)
+        d = pos + 8
+        if cid == b"BMHD":
+            if sz < 20:
+                raise Refused(PXD_HEAD)
+            b = hd.need(d, 20)
+            w, h = be16(b, 0), be16(b, 2)
+            if not (1 <= w <= DIM_MAX and 1 <= h <= DIM_MAX):
+                raise Refused(PXD_DIMS)
+            bm = (w, h, b[8], b[9], b[10])
+        elif cid == b"CMAP":
+            k = min(sz // 3, 256)
+            cmap = bytes(hd.need(d, 3 * k)) if k else b""
+        elif cid == b"CAMG" and sz >= 4:
+            camg = be32(hd.need(d, 4), 0)
+        elif cid == b"BODY":
+            if bm is None:
+                raise Refused(PXD_HEAD)
+            break
+        pos = d + sz + (sz & 1)
+    w, h, planes, masking, comp = bm
+    if comp not in (0, 1):
+        raise Refused(PXD_PACK)
+    if pbm:
+        if planes != 8:
+            raise Refused(PXD_DEPTH)
+    else:
+        if not 1 <= planes <= 8:
+            raise Refused(PXD_DEPTH)
+        if camg & 0x800:
+            raise Refused(PXD_DEPTH)
+    ne = 256 if pbm else 1 << planes
+    if cmap is None:
+        pal = [(g, g, g) for g in (i * 255 // (ne - 1) for i in range(ne))]
+    else:
+        k = len(cmap) // 3
+        pal = [tuple(cmap[3 * i:3 * i + 3]) if i < k else (0, 0, 0)
+               for i in range(ne)]
+    if not pbm and planes == 6 and camg & 0x80:
+        for i in range(32):
+            pal[32 + i] = tuple(c >> 1 for c in pal[i])
+    p = Pic()
+    p.fmt, p.w, p.h, p.bits, p.rf = "LBM", w, h, planes, RF_IDX
+    p.pal, p.npal = pal, ne
+    p.pack = PK_RLE if comp else PK_NONE
+    p.pbm, p.planes, p.masking, p.comp = pbm, planes, masking, comp
+    p.body, p.bsize = d, sz
+    p.heads = hd.n
+    return p
+
+
+def lbm_rows(p, rd):
+    rd.skip_to(p.body)
+    w, h = p.w, p.h
+    if p.pbm:
+        rl = (w + 1) & ~1
+    else:
+        pb = ((w + 15) >> 4) * 2
+        rl = pb * (p.planes + (1 if p.masking == 1 else 0))
+    src = Bytes(rd.d[p.body:p.body + p.bsize])
+    if p.comp:
+        body = unpackbits(src, rl * h)
+    else:
+        body = src.take(rl * h)
+    for y in range(h):
+        r = body[y * rl:(y + 1) * rl]
+        if p.pbm:
+            p.rows.append((y, bytes(r[:w])))
+            continue
+        out = bytearray(w)
+        for pl in range(p.planes):
+            pr = r[pl * pb:(pl + 1) * pb]
+            for x in range(w):
+                out[x] |= ((pr[x >> 3] >> (7 - (x & 7))) & 1) << pl
+        p.rows.append((y, bytes(out)))
+
+
+# --- MacPaint -------------------------------------------------------------------
+MAC_W, MAC_H, MAC_RB = 576, 720, 72
+BITS8 = [bytes((b >> (7 - i)) & 1 for i in range(8)) for b in range(256)]
+
+
+def mac_header(data, fsz):
+    start = 128 if fsz >= 69 and data[0] == 0 and data[65:69] == b"PNTG" \
+        else 0
+    if fsz < start + 512:
+        raise Refused(PXD_TRUNC)
+    p = Pic()
+    p.fmt, p.w, p.h, p.bits, p.rf = "MAC", MAC_W, MAC_H, 1, RF_IDX
+    p.pal, p.npal, p.pack = [(255, 255, 255), (0, 0, 0)], 2, PK_RLE
+    p.off = start + 512
+    p.heads = 1
+    return p
+
+
+def mac_rows(p, rd):
+    rd.skip_to(p.off)
+    body = unpackbits(Bytes(rd.d[p.off:]), MAC_RB * MAC_H)
+    for y in range(MAC_H):
+        p.rows.append((y, b"".join(map(BITS8.__getitem__,
+                                       body[y * MAC_RB:(y + 1) * MAC_RB]))))
+
+
+# =============================================================================
+# GIF ANIMATION (SPEC.md 106.25): the images after the first, played on the
+# 1/1 master. gif_anim() is the first pass, frame by frame; the guest is held
+# to it a frame at a time
+# =============================================================================
+def gif_delay(d):
+    """A GCE's delay in hundredths -> ticks of 18.2 a second."""
+    if d < 2:
+        d = 10
+    return max(1, (d * 182 + 500) // 1000)
+
+
+def _gif_exts(d, pos, st):
+    """The blocks from pos to the next image descriptor: its offset (at the
+    2Ch), or None - the trailer, the file's end, or any other byte, which end
+    the pass. A GCE's sub-block of four bytes or more sets st's disposal,
+    delay and transparent index (gif_rows' rule); a NETSCAPE2.0 extension's
+    second sub-block, 3 bytes or more and starting 01, sets st['loop']."""
+    while True:
+        if pos >= len(d) or d[pos] != 0x21:
+            return pos if pos < len(d) and d[pos] == 0x2C else None
+        if pos + 1 >= len(d):
+            return None
+        label = d[pos + 1]
+        pos += 2
+        k = 0
+        ns = False
+        while True:
+            if pos >= len(d):
+                return None
+            n = d[pos]
+            pos += 1
+            if n == 0:
+                break
+            if pos + n > len(d):
+                return None
+            blk = d[pos:pos + n]
+            pos += n
+            if label == 0xF9 and n >= 4:
+                st["disp"] = (blk[0] >> 2) & 7
+                st["delay"] = blk[1] | (blk[2] << 8)
+                st["trans"] = blk[3] if blk[0] & 1 else None
+            elif label == 0xFF:
+                if k == 0:
+                    ns = n == 11 and bytes(blk) == b"NETSCAPE2.0"
+                elif k == 1 and ns and n >= 3 and blk[0] == 1:
+                    st["loop"] = blk[1] | (blk[2] << 8)
+            k += 1
+
+
+def _gif_image(d, at):
+    """The image whose descriptor is at `at`: (left, top, w, h, packed,
+    table or None, offset after the table) - or None when the descriptor
+    or its local table is past the file."""
+    if at + 10 > len(d):
+        return None
+    left, top, fw, fh, fpk = u16(d, at + 1), u16(d, at + 3), u16(d, at + 5), \
+        u16(d, at + 7), d[at + 9]
+    pos = at + 10
+    tab = None
+    if fpk & 0x80:
+        n = 2 << (fpk & 7)
+        if pos + 3 * n > len(d):
+            return None
+        tab = [tuple(d[pos + 3 * i:pos + 3 * i + 3]) for i in range(n)]
+        pos += 3 * n
+    return left, top, fw, fh, fpk, tab, pos
+
+
+def _gif_data(d, pos):
+    """The minimum code size byte and the sub-blocks after it: (mincode,
+    the code bytes, the offset after the terminator - None when the file
+    ended first), or None when there is no mincode byte."""
+    if pos >= len(d):
+        return None
+    mc = d[pos]
+    pos += 1
+    flat = bytearray()
+    while True:
+        if pos >= len(d):
+            return mc, flat, None
+        n = d[pos]
+        pos += 1
+        if n == 0:
+            return mc, flat, pos
+        got = d[pos:pos + n]
+        pos += len(got)
+        flat += got
+        if len(got) < n:
+            return mc, flat, None
+
+
+def _gif_rect(left, top, fw, fh, sw, sh):
+    """A frame's rect clipped to the screen, inclusive, or None."""
+    if fw == 0 or fh == 0 or left >= sw or top >= sh:
+        return None
+    return left, top, min(left + fw, sw) - 1, min(top + fh, sh) - 1
+
+
+def _rect_union(a, b):
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+
+
+def _gif_draw(master, sw, sh, img, mp, trans, mc, flat):
+    """Frame pixels onto the master: each WHOLE row at its final y, clipped,
+    a pixel equal to `trans` left as it is, every other one mp[index].
+    True when every row was made; False when the stream ended or was
+    damaged first (the rows already written stay)."""
+    left, top, fw, fh, fpk = img[:5]
+    order = gif_frame_rows(fh, bool(fpk & 0x40))
+    st = {"i": 0, "row": bytearray()}
+
+    def place(s):
+        k = 0
+        while k < len(s):
+            take = min(fw - len(st["row"]), len(s) - k)
+            st["row"] += s[k:k + take]
+            k += take
+            if len(st["row"]) == fw:
+                y = top + order[st["i"]]
+                if y < sh:
+                    row = st["row"]
+                    base = y * sw
+                    for j in range(min(fw, sw - left) if left < sw else 0):
+                        v = row[j]
+                        if v != trans:
+                            master[base + left + j] = mp[v]
+                st["i"] += 1
+                st["row"] = bytearray()
+                if st["i"] == fh:
+                    return True
+        return False
+    try:
+        return lzw_decode(flat, mc, place) == "STOP"
+    except Refused:
+        return False
+
+
+def _gif_nearest(c, pal, npal):
+    best, bi = None, 0
+    for i in range(npal):
+        q = pal[i]
+        e = 3 * (c[0] - q[0]) ** 2 + 6 * (c[1] - q[1]) ** 2 + (c[2] - q[2]) ** 2
+        if best is None or e < best:
+            best, bi = e, i
+    return bi
+
+
+def gif_scan(data):
+    """The walk the first decode makes, and on: the global table, frame 0's
+    image and GCE state, the loop count, and where frame 0's sub-blocks end
+    (None when the file ended inside them)."""
+    pk = data[10]
+    gn = (2 << (pk & 7)) if pk & 0x80 else 0
+    gpal = [tuple(data[13 + 3 * i:16 + 3 * i]) for i in range(gn)] or None
+    st = {"disp": 0, "delay": 0, "trans": None, "loop": None}
+    at = _gif_exts(data, 13 + 3 * gn, st)
+    img = _gif_image(data, at)
+    dat = _gif_data(data, img[6])
+    return gpal, img, st, dat[2]
+
+
+def gif_animated(data):
+    """THE FLAG the first decode sets after its last row: a second image
+    descriptor after the first image's sub-blocks, with only extensions
+    between (walked by their lengths). The trailer, the file's end or any
+    other byte: not animated. Never a refusal; the picture is unchanged."""
+    _, _, _, pos = gif_scan(data)
+    if pos is None:
+        return False
+    return _gif_exts(data, pos, {}) is not None
+
+
+def gif_anim(data):
+    """(loop, frames): `loop` the NETSCAPE2.0 count before the first image
+    (0 forever, n passes after the first) or None (plays once); `frames` the
+    FIRST pass, frame 0 first, each a dict:
+      master    bytes, sw x sh: the 1/1 master after this frame is drawn
+                (frame 0's is emit(decode(data), 0)'s)
+      rect      the dirty rect (x1, y1, x2, y2) inclusive, or None: the
+                previous frame's disposal rect when its disposal is 2 or 3,
+                union this frame's rect, both clipped; frame 0's is the
+                whole screen
+      delay     ticks (gif_delay of its GCE's delay)
+      disposal  its GCE's disposal, 0..7 (0 without a GCE)
+      frame     (left, top, w, h) as its descriptor says
+      whole     False for the frame that ENDED THE PASS part-drawn (its
+                whole rows written; always the last in the list)
+    A GIF that is not animated answers frame 0 alone. Raises Refused when
+    the first decode refuses."""
+    p0 = decode(data, "GIF")
+    if p0.fmt != "GIF":
+        raise Refused(PXD_HEAD)
+    m0 = bytes(emit(p0, 0)[0])
+    sw, sh = p0.w, p0.h
+    pal, npal = p0.pal, p0.npal
+    gpal, img0, st0, pos = gif_scan(data)
+    B = st0["trans"] if st0["trans"] is not None else data[11]
+    g0 = not img0[4] & 0x80              # frame 0 drew with the global table
+    frames = [dict(master=m0, rect=(0, 0, sw - 1, sh - 1),
+                   delay=gif_delay(st0["delay"]), disposal=st0["disp"],
+                   frame=img0[:4], whole=True)]
+    master = bytearray(m0)
+    prev_rect = _gif_rect(img0[0], img0[1], img0[2], img0[3], sw, sh)
+    prev_disp = st0["disp"]
+    prev_save = None                     # frame 0's "before": all B
+    ident = list(range(256))
+    while pos is not None:
+        st = {"disp": 0, "delay": 0, "trans": None}
+        at = _gif_exts(data, pos, st)
+        if at is None:
+            break
+        img = _gif_image(data, at)
+        if img is None:
+            break
+        left, top, fw, fh, fpk, tab, pos = img
+        if fw == 0 or fh == 0:           # skipped: its table, its data
+            dat = _gif_data(data, pos)
+            if dat is None:
+                break
+            pos = dat[2]
+            continue
+        if tab is None and gpal is None:
+            break
+        dat = _gif_data(data, pos)
+        if dat is None or not 2 <= dat[0] <= 8:
+            break
+        mc, flat, pos = dat
+        # the frame begins: the previous one's disposal, then what this
+        # one's rect holds (for its own disposal 3), then its pixels
+        dirty = None
+        if prev_disp in (2, 3) and prev_rect is not None:
+            x1, y1, x2, y2 = prev_rect
+            for y in range(y1, y2 + 1):
+                for x in range(x1, x2 + 1):
+                    master[y * sw + x] = B if prev_save is None or \
+                        prev_disp == 2 else prev_save[(y - y1) * (x2 - x1 + 1)
+                                                      + x - x1]
+            dirty = prev_rect
+        rect = _gif_rect(left, top, fw, fh, sw, sh)
+        save = None
+        if rect is not None:
+            x1, y1, x2, y2 = rect
+            save = bytes(master[y * sw + x] for y in range(y1, y2 + 1)
+                         for x in range(x1, x2 + 1))
+        if tab is None and g0:
+            mp = ident
+        else:
+            t = (tab if tab is not None else gpal)
+            t = t + [(0, 0, 0)] * (256 - len(t))
+            cache = {}
+            mp = []
+            for c in t:
+                if c not in cache:
+                    cache[c] = _gif_nearest(c, pal, npal)
+                mp.append(cache[c])
+        whole = _gif_draw(master, sw, sh, img, mp, st["trans"], mc, flat)
+        frames.append(dict(master=bytes(master), rect=_rect_union(dirty, rect),
+                           delay=gif_delay(st["delay"]), disposal=st["disp"],
+                           frame=(left, top, fw, fh), whole=whole))
+        if not whole:
+            break
+        prev_rect, prev_disp, prev_save = rect, st["disp"], save
+    return (st0["loop"], frames)
+
+
+def gif_restart(data):
+    """The master when a pass begins again: the WHOLE screen disposed to the
+    background index B, then frame 0 drawn by the frame rules (its
+    transparent pixels leave B). It must be frame 0's master."""
+    p0 = decode(data, "GIF")
+    sw, sh = p0.w, p0.h
+    gpal, img0, st0, _ = gif_scan(data)
+    B = st0["trans"] if st0["trans"] is not None else data[11]
+    master = bytearray([B]) * (sw * sh)
+    mc, flat, _ = _gif_data(data, img0[6])
+    _gif_draw(master, sw, sh, img0, list(range(256)), st0["trans"], mc, flat)
+    return bytes(master)
+
+
+# =============================================================================
 # decode: a file's bytes -> a Pic with its rows, or Refused
 # =============================================================================
 def decode(data, ext="", scale=None):
@@ -2180,6 +3134,18 @@ def decode(data, ext="", scale=None):
     elif fmt == "PNG":
         p = png_header(head, fsz)
         rows = png_rows
+    elif fmt == "TIFF":
+        p = tiff_header(data, fsz)
+        rows = tiff_rows
+    elif fmt == "ICO":
+        p = ico_header(data, fsz)
+        rows = ico_rows
+    elif fmt == "LBM":
+        p = lbm_header(data, fsz)
+        rows = lbm_rows
+    elif fmt == "MAC":
+        p = mac_header(data, fsz)
+        rows = mac_rows
     elif fmt == "JPEG":
         p = jpeg_header(data, fsz)
         jpeg_rows(p, Reader(data), p.smin if scale is None else scale)
@@ -3808,12 +4774,46 @@ def selfcheck():
     fp = FsPic(m4, 12, 8, GREY, FSM_HERC)
     rows, err = fp.frame(FsView(12, 8, FSM_HERC, 65536 * 4))
     ok(max(abs(e) for e in err) < 256, "the diffuser's errors stay bounded")
+    # wave 8 (SPEC.md 106.25): one head holds the largest IFD and directory
+    # the extras part reads, and the TABLE its strips; TIFF's LZW reads
+    # KwKwK; a run-length stream stops at its last byte, a literal's
+    # unneeded bytes unread
+    ok(2 + 12 * 170 <= HEAD_MAX < 2 + 12 * 171 and 6 + 16 * 127 <= HEAD_MAX,
+       "an IFD of 170 and a directory of 127 are one head each")
+    ok(EX_STRIPS * 8 == EX_TABLE, "1,024 strips fill the TABLE")
+    acc = 0
+    for c in (256, 65, 66, 258, 260, 257):
+        acc = (acc << 9) | c
+    st = (acc << 2).to_bytes(7, "big")
+    got = bytearray()
+    ok(lzw_tiff(st, lambda s: got.extend(s)) == "EOI" and got == b"ABABABA",
+       "TIFF LZW reads ABABABA")
+    src = Bytes(b"\x02\x01\x02\x03\xFE\x09\x80")
+    ok(unpackbits(src, 6) == b"\1\2\3\x09\x09\x09" and src.p == 6,
+       "a run-length stream stops at its last byte")
+    src = Bytes(b"\x04\1\2\3")
+    ok(unpackbits(src, 3) == b"\1\2\3" and src.p == 4,
+       "a literal's unneeded bytes are not read")
+    # GIF animation (SPEC.md 106.25): two frames, the first transparent and
+    # disposed to the background; a pass that begins again draws frame 0's
+    # master exactly
+    g = write_gif(bytes((x + y) % 3 for y in range(3) for x in range(4)), 4, 3,
+                  EGA16)
+    sub = lzw_encode(bytes((5, 2, 7, 7)))
+    g = g[:781] + b"\x21\xF9\x04\x09\x0A\x00\x02\x00" + g[781:-1] + \
+        b"\x21\xF9\x04\x01\x64\x00\x07\x00\x2C\x01\x00\x01\x00\x02\x00" \
+        b"\x02\x00\x00\x08" + bytes((len(sub),)) + sub + b"\x00\x3B"
+    loop, fr = gif_anim(g)
+    ok(gif_animated(g) and loop is None and len(fr) == 2 and
+       fr[1]["rect"] == (0, 0, 3, 2) and fr[1]["delay"] == 18 and
+       fr[1]["master"] == bytes((2, 2, 2, 2, 2, 5, 2, 2, 2, 2, 2, 2)) and
+       gif_restart(g) == fr[0]["master"], "GIF animation: two frames")
     if bad:
         for b in bad:
             print("pixelsim: FAIL " + b)
         return 1
     print("pixelsim: selfcheck ok (cube, %d+%d plans, emitter, refusals, "
-          "views, statistics, blend, inflate, full screen)"
+          "views, statistics, blend, inflate, full screen, extras, animation)"
           % (len(CUBE_PLANS), len(GREY_PLANS)))
     return 0
 
