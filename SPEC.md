@@ -133563,10 +133563,24 @@ RECORD i, 256 bytes at 32 + 256*i
  +252 4   zero
 
 SIDECAR TABLE entry j, 16 bytes at (header +10) + 16*j
- +0   12  NUL-terminated 8.3 name, uppercase ('WEAVE.OVL') - fetched from
+ +0   12  8.3 name, uppercase ('WEAVE.OVL'), NUL-padded when shorter and
+          with NO NUL when it is twelve ('MIDIRACK.GFX') - fetched from
           /wire/pkg/<NAME>, written beside the .O88
  +12  4   size in bytes
 ```
+
+**A twelve-character name fills its slot**, the rule 92.13's archive slots
+already follow. The Add chain copies at most twelve bytes and stops at a NUL
+(`wr_sputn`), into the 14-byte `wr_fname`, which it then terminates itself -
+and it has since the first Wire, so every reader in the field takes one and
+no version moved. Both writers kept a NUL inside the twelve until
+v1.0.20261003, which refused every full 8.3 name for no reason the reader had:
+MIDIRack's `MIDIRACK.GFX` and five of its songs could not be sidecars, and it
+went out as an archive. Both writers now check a sidecar name as an 8.3 name,
+not only by length, because it lands in a FAT directory exactly as written.
+`tests/unit/t_wire.py` packs and verifies one, and `tests/thewire.py`'s ten
+extra sidecars are twelve characters each, so the Add chain writes them on
+the machine.
 
 The offsets are `WC_*` equs in `apps/thewire/wcat.inc` and are **mirrored in
 `tools/os88wire.py`**; `tests/unit/t_wire.py` compares the two files and
@@ -162020,17 +162034,20 @@ with the caption, a complete face rather than a broken one.
 
 ### 105.10 Disks and cost
 
-`MIDIRACK.O88` is 32,416 bytes of image and 9,710 of bss (25.8 KB packed):
-§105.9.4's caches are ~2.4 KB of that bss and §105.9.5's colour face ~2.1 KB
-of the image. It rides `APPS\` on the 1.44 MB, 1.2 MB and 720 KB apps disks
-with the songs LZ-wrapped in `MEDIA\MIDI\` (ten songs, 27 clusters) and
-`MIDIRACK.GFX` beside it (2 clusters). **The 720 KB disk carries two songs
-and not the pictures** (BATTLE1 and INTRO, 7 clusters; the player is 26 and
-the disk stands at 710 of 713 - the pictures would have left it ONE) and
-**the 360 KB apps disk none**: it is curated (§24.6.1) and had 12. At 360 KB
+`MIDIRACK.O88` is **36,320 bytes of image and 10,414 of bss (29,486 bytes,
+28.8 KB, packed)**, measured at v1.0.20261003 - MIDI out (§105.8.5) and the
+wavetable (§105.8.6) took it from the 32,416 / 9,710 / 25.8 KB this section
+first gave. §105.9.4's caches are ~2.4 KB of that bss and §105.9.5's colour
+face ~2.1 KB of the image. It rides `APPS\` on the 1.44 MB, 1.2 MB and 720 KB
+apps disks with the songs LZ-wrapped in `MEDIA\MIDI\` (ten songs, 27
+clusters) and `MIDIRACK.GFX` beside it (2 clusters). **The 720 KB disk
+carries two songs and not the pictures** (BATTLE1 and INTRO, 7 clusters; the
+player is 29) **and is FULL: 713 of 713 clusters**, so the next byte anything
+on it grows by is a curation decision for that disk, not a build fix. **The
+360 KB apps disk carries none**: it is curated (§24.6.1) and had 12. At 360 KB
 the player, its pictures and all ten songs ride the MEDIA disk
-(`media360.img`, 204 of 354), the floppy whose subject is music already. Both are decisions with this section's date
-on them.
+(`media360.img`, 207 of 354), the floppy whose subject is music already. All
+three are decisions with this section's date on them.
 
 **`make midirackdisk`** is the player's own floppy in all four geometries:
 `MIDIRACK.O88`, `MIDIRACK.GFX` and `MIDIRACK.BNK` (unwrapped, §105.8.6) at
@@ -162039,7 +162056,12 @@ settings - 270 of 354 clusters at 360 KB, the bank being 206 of them. It
 needs `make midibank` (the fetch, once). The bank also rides `APPS\` on the
 everything set and the live media (§80), whose premise is completeness; no
 other shipped floppy carries it. The `kern_small` disks leave it off (§24.5's table): its outputs are
-a driver's and a rate bracket's, and the songs go with it. `SOUND.DRV` grew 603 bytes for §34.12; no kernel byte moved.
+a driver's and a rate bracket's, and the songs go with it. **The Wire** (§92)
+serves it as an ARCHIVE (§92.13) - the player, `MIDIRACK.GFX` and the ten
+songs in a `MIDI\` folder beside it, the first place §105.3.1 looks - and
+**never the bank**, which is over `WIRE_FILEMAX` in either kind of record.
+`SOUND.DRV` grew 603 bytes of image for §34.12 and 420 for §34.13 (5,098 to
+5,997 bytes on the system disk, packed); no kernel byte moved.
 
 ### 105.11 Tests
 
@@ -162080,8 +162102,9 @@ directory - launch them through make.
 ### 105.12 Deliberately not done
 
 General MIDI level 2, SysEx, aftertouch, the OPL's rhythm mode and four-op
-voices; seeking inside a song (the bar is a display); and a MIDI port - there
-is no MPU-401 in this machine's world yet.
+voices; and seeking inside a song (the bar is a display). A MIDI port was on
+this list until §105.8.5 and §34.13 built one: MIDIRack drives an MPU-401 in
+UART mode, so "no MPU-401 in this machine's world" is no longer true.
 
 ## 106. PiXEL — an image viewer and editor (`apps/pixel/`)
 
