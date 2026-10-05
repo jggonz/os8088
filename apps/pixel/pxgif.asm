@@ -901,6 +901,12 @@ pa_gce:
     mov ah, al
     and al, 1
     mov [pg_trans], al
+    jz .nt
+    push es                         ; a transparent index: more than a
+    mov es, [pg_pkg]                ; master holds (review-w8 N1)
+    mov byte [es:px_cur + PXR_KEEP], 1
+    pop es
+.nt:
     mov al, ah
     shr al, 1
     shr al, 1
@@ -1144,9 +1150,16 @@ pa_job:
     test byte [es:px_anflg], ANF_END
     jz .frame
 .endp:
+    mov es, [pg_pkg]                ; THE STREAM ENDED - or was STOPPED: a
+    cmp byte [es:px_abort], 0       ; read refused by the cancel is no end
+    jne .ab                         ; of the pass (review-w8 A3)
     xor ax, ax                      ; THE PASS HAS ENDED
     clc
 .ret:
+    ret
+.ab:
+    mov ax, PXD_ABORT
+    stc
     ret
 
 ; pa_walk - the blocks to the next frame (SPEC.md 106.25's order): its GCE
@@ -1292,10 +1305,11 @@ pa_begin:
     jnz .huge
     cmp ax, 0xFFFF - AN_GTAB
     ja .huge
-    add ax, AN_GTAB + 1023          ; the claim it needs, KB
-    mov al, ah
-    xor ah, ah
-    shr ax, 1
+    add ax, AN_GTAB + 1023          ; the claim it needs, KB - the sum in
+    mov al, ah                      ; 17 bits: a 320 x 200 frame is 64,000
+    mov ah, 0                       ; and its sum carries (review-w8 A1: it
+    adc ah, ah                      ; read as 0 KB, and the backup ran ~63
+    shr ax, 1                       ; KB past a 1 KB claim)
     shr ax, 1
     cmp ax, [es:px_ankb]
     jbe .room
@@ -1314,9 +1328,7 @@ pa_begin:
     mov es, [pg_pkg]
     or byte [es:px_anflg], ANF_BKD
 .map:
-    call pa_mkmap
-    clc
-    ret
+    jmp pa_mkmap                    ; (CF = 1 AX = PXD_ABORT: stopped)
 
 ; pa_size - [pa_t]'s bytes: DX:AX. Preserves all else
 pa_size:
@@ -1467,7 +1479,17 @@ pa_union:
 ; pa_mkmap - [pa_map]: the frame's indices onto the master's palette -
 ; itself for frame 0, and for a frame of the global table when frame 0 was
 ; too; else each entry of its table (padded black) the nearest of the
-; palette's first NPAL by 3 dR^2 + 6 dG^2 + dB^2, the lower on a tie
+; palette's first NPAL by 3 dR^2 + 6 dG^2 + dB^2, the lower on a tie. CF = 1
+; AX = PXD_ABORT: stopped, the map not made.
+;
+; That search is 256 x 256 distances, and an XT paid ~5.8 s a frame for it
+; (review-w8 A4) - every frame, since a frame's table is often its own copy
+; of the same colours, or the global one after a frame 0 with its own. So:
+; the map is KEPT with the table, the palette's size and the picture's
+; serial it was made for, and a frame whose three match reuses it; an entry
+; that repeats the one before it (the black padding) takes its map; a
+; candidate is dropped the moment its partial sum passes the best; and the
+; cancel is polled an entry at a time
 pa_mkmap:
     mov es, [pg_pkg]
     cmp word [es:px_anfr], 0
@@ -1482,6 +1504,7 @@ pa_mkmap:
     mov [pa_map + bx], bl
     inc bl
     jnz .i
+    clc
     ret
 .glob:
     push ds                         ; the global table, from the claim
@@ -1496,6 +1519,37 @@ pa_mkmap:
     rep movsw
     pop ds
 .near:
+    mov es, [pg_pkg]
+    mov ax, [es:px_cur + PXR_NPAL]
+    or ax, ax
+    jnz .np
+    mov ax, 256
+.np:
+    cmp ax, 256
+    jbe .np2
+    mov ax, 256
+.np2:
+    mov [pa_np], ax
+    mov dl, [es:px_cur + PXR_SERIAL]
+    cmp byte [pa_mok], 0            ; THE MAP KEPT: the same table, palette
+    je .new                         ; size and picture
+    cmp dl, [pa_mser]
+    jne .new
+    cmp ax, [pa_mnp]
+    jne .new
+    push ds
+    pop es
+    mov si, pa_ltab
+    mov di, pa_mtab
+    mov cx, 768 / 2
+    repe cmpsw
+    jne .new
+    clc
+    ret
+.new:
+    mov byte [pa_mok], 0
+    mov [pa_mser], dl
+    mov [pa_mnp], ax
     cmp byte [pa_sqok], 0           ; the squares, once
     jne .sq
     xor bx, bx
@@ -1510,19 +1564,26 @@ pa_mkmap:
     mov byte [pa_sqok], 1
 .sq:
     mov es, [pg_pkg]
-    mov ax, [es:px_cur + PXR_NPAL]
-    or ax, ax
-    jnz .np
-    mov ax, 256
-.np:
-    cmp ax, 256
-    jbe .np2
-    mov ax, 256
-.np2:
-    mov [pa_np], ax
     mov si, pa_ltab
     xor di, di                      ; DI = the entry
 .e:
+    cmp byte [es:px_abort], 0       ; (the cancel, an entry at a time)
+    je .e1
+    mov ax, PXD_ABORT
+    stc
+    ret
+.e1:
+    or di, di                       ; the same colour as the entry before:
+    jz .e2                          ; the same map (the black padding)
+    mov ax, [si]
+    cmp ax, [si - 3]
+    jne .e2
+    mov al, [si + 2]
+    cmp al, [si - 1]
+    jne .e2
+    mov al, [pa_map + di - 1]
+    jmp .done
+.e2:
     mov word [pa_best], 0xFFFF
     mov word [pa_best + 2], 0xFFFF
     mov byte [pa_bi], 0
@@ -1544,6 +1605,12 @@ pa_mkmap:
     adc dx, 0
     add ax, bx
     adc dx, 0
+    cmp dx, [pa_best + 2]           ; (past the best already: dropped)
+    ja .n
+    jb .r2
+    cmp ax, [pa_best]
+    jae .n
+.r2:
     mov [pa_sum], ax
     mov [pa_sum + 2], dx
     mov al, [si + 1]                ; 6 dG^2
@@ -1589,19 +1656,30 @@ pa_mkmap:
     mov [pa_best + 2], dx
     mov [pa_bi], cl
     or ax, dx                       ; (exact: nothing nearer)
-    jz .done
+    jz .pd
 .n:
     add bp, 3
     inc cx
     cmp cx, [pa_np]
     jb .p
-.done:
+.pd:
     mov al, [pa_bi]
+.done:
     mov [pa_map + di], al
     add si, 3
     inc di
     cmp di, 256
-    jb .e
+    jae .kept
+    jmp .e
+.kept:
+    push ds                         ; made: kept with its table
+    pop es
+    mov si, pa_ltab
+    mov di, pa_mtab
+    mov cx, 768 / 2
+    rep movsw
+    mov byte [pa_mok], 1
+    clc
     ret
 
 ; pa_draw - the frame's rows: pg_body's decode of an image, in animation
@@ -1647,8 +1725,13 @@ pa_draw:
     mov byte [pa_whole], 1
 .sub:
     call pa_subs                    ; on to its terminator (the file may end)
+    mov es, [pg_pkg]                ; ...unless it was the CANCEL that ended
+    cmp byte [es:px_abort], 0       ; the stream: the frame begins again
+    jne .ab0                        ; later, from its start (review-w8 A3)
     clc
     ret
+.ab0:
+    mov ax, PXD_ABORT
 .ab:
     stc
     ret
@@ -1799,6 +1882,8 @@ pa_wait:
 av_init:
     cmp byte [cs:pa_isanim], 0
     je .x
+    mov byte [px_cur + PXR_KEEP], 1 ; (its frames: a Save over it is a Save
+                                    ; As, review-w8 N1 - played or not)
     cmp byte [px_anoff], 0          ; (a test's: frame 0 stays)
     jne .x
     cmp byte [px_cur + PXR_SCL], 0
@@ -1882,16 +1967,7 @@ av_tick:
     je .x
     cmp byte [px_slon], 0           ; A SLIDESHOW: the slide is a still - the
     je .ns                          ; frame job holds the worker, and the
-    cmp byte [px_anjob], 0          ; next slide's decode needs it (px_hstop's
-    je .x                           ; shape: the cancel, the answer, the
-    mov byte [px_abort], 1          ; claims back)
-.aw:
-    cmp byte [px_job], 0            ; (JOB_NONE)
-    je .ad
-    call OSAPI_TASK_YIELD
-    jmp short .aw
-.ad:
-    jmp av_wake
+    jmp av_halt                     ; next slide's decode needs it
 .ns:
     cmp byte [px_busy], 0
     jne .x
@@ -1916,7 +1992,26 @@ av_tick:
 .x:
     ret
 .still:
-    jmp av_free
+    call av_halt                    ; (never freed under a running job:
+    jmp av_free                     ; review-w8 A2)
+
+; av_halt - the frame job, if one runs, stopped and its claims back
+; (px_hstop's shape: the cancel, the answer, AV_WAKE). Preserves all
+av_halt:
+    cmp byte [px_anjob], 0
+    je .x
+    push ax
+    mov byte [px_abort], 1
+.w:
+    cmp byte [px_job], 0            ; (JOB_NONE)
+    je .d
+    call OSAPI_TASK_YIELD
+    jmp short .w
+.d:
+    pop ax
+    jmp av_wake
+.x:
+    ret
 
 ; av_free - not an animation any more: its claim back, every byte cleared.
 ; Preserves all
@@ -2359,6 +2454,10 @@ pa_sum:     dd 0
 pa_sqok:    db 0                    ; [pa_sq] made
 av_r:       dw 0, 0, 0, 0           ; AV's: a rect on the glass
 pa_map:     times 256 db 0          ; a frame's indices onto the palette
+pa_mok:     db 0                    ; ...KEPT: made for this table [pa_mtab],
+pa_mser:    db 0                    ; this picture and this palette size
+pa_mnp:     dw 0
+pa_mtab:    times 768 db 0
 pa_sq:      times 256 dw 0          ; d^2
 pa_ltab:    times 768 db 0          ; a frame's table, padded black
 pg_lzw:     times LZW_BSSSZ db 0

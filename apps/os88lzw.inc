@@ -3,8 +3,10 @@
 ;
 ; LZW DECODE, GIF's flavour (SPEC.md 106.18), shared as source by every
 ; package that reads LZW: PiXEL's GIF part first (apps/pixel/pxgif.asm), and
-; - PIXEL-PLAN.md decision 11 - Paint once its rows stay byte-identical on
-; it (wave 9), TIFF's strips (wave 8) and the GIF encoder (wave 7). What two
+; - PIXEL-PLAN.md decision 11 - Paint's READER once it fits (wave 9 measured
+; it byte-identical but 308 bytes too big for the 720KB apps disk, SPEC.md
+; 42.21.4; Paint's WRITER is on the encoder below), TIFF's strips (wave 8)
+; and the GIF encoder (wave 7). What two
 ; programs share they share as source, never as a copy (WEAVE-SPEC 1.2).
 ;
 ; It is Paint's pt_gdec (SPEC.md 42.21) with Paint taken out of it - no
@@ -378,8 +380,9 @@ lzw_refill:
 ; =============================================================================
 ; LZW ENCODE (SPEC.md 106.24) - GIF's flavour, behind %define LZW_ENCODE, so
 ; a package that only reads pays nothing for it. PiXEL's WRITE part is its
-; first includer (apps/pixel/pxwrite.asm); Paint's own encoder (SPEC.md
-; 42.21) is the lineage and stays Paint's until wave 9.
+; first includer (apps/pixel/pxwrite.asm); Paint (SPEC.md 42.21.4) is the
+; second, and LZW_EMAXC / LZW_ENARROW / LZW_EHSIZE are what keep its files
+; the bytes its own encoder wrote.
 ;
 ; It is giflib's encoder rule for rule - tools/pixelsim.py's lzw_encode is
 ; the same in Python, and GREEDY LZW'S OUTPUT IS ITS TABLE POLICY'S ALONE, so
@@ -390,6 +393,13 @@ lzw_refill:
 ; secondary probe), the key (prefix, character) and the code it names.
 ;
 ; CONFIGURATION, before the %include (with LZW_ENCODE defined):
+;   LZW_EMAXC   (optional, default 4095) the next free code that forces a
+;               Clear; 2047 keeps every code to 11 bits
+;   LZW_ENARROW (optional, default 0) 1 writes the End code at the last
+;               string's width even where the table has just reached the
+;               next power of two - one bit narrower than giflib's
+;   LZW_EHSIZE  (optional, default 5003) the hash's slots: a prime above
+;               every (c << 4) ^ prefix, and LZW_EKB follows it
 ;   LZW_PUTB    a near routine: AL = one CODE BYTE of the stream, in order.
 ;               Keeps every register but the flags; it is called with the
 ;               encoder's DS (the input's) and ES (the table's), so it
@@ -408,7 +418,16 @@ lzw_refill:
 ; All three keep DS and ES; lzw_enc_run clobbers AX, BX, CX, DX, SI, DI, BP.
 ; =============================================================================
 %ifdef LZW_ENCODE
-LZW_HSIZE   equ 5003
+%ifndef LZW_EMAXC                   ; the next free code that forces a Clear:
+  %define LZW_EMAXC 4095            ; giflib's. Paint's is 2047 - eleven-bit
+%endif                              ; codes (SPEC.md 42.21) - and so is its file
+%ifndef LZW_ENARROW                 ; 1 writes the End code at the width the
+  %define LZW_ENARROW 0             ; last string went out at, never one wider:
+%endif                              ; Paint's files, to the byte (SPEC.md 42.21)
+%ifndef LZW_EHSIZE                  ; the hash's slots, a PRIME above every
+  %define LZW_EHSIZE 5003           ; (c << 4) ^ prefix the includer makes:
+%endif                              ; compress's 5,003 for 8-bit pixels
+LZW_HSIZE   equ LZW_EHSIZE
 LZW_HPRE    equ 0
 LZW_HCHR    equ 2 * LZW_HSIZE
 LZW_HCODE   equ 3 * LZW_HSIZE
@@ -573,7 +592,7 @@ lzw_enc_run:
     xor dh, dh
     push ax
     mov ax, [es:lzw_e_run]
-    cmp ax, 4095
+    cmp ax, LZW_EMAXC
     jb .ins
     mov ax, [es:lzw_e_clr]          ; the table full: a Clear, and empty it
     call lzw_e_put
@@ -601,6 +620,9 @@ lzw_enc_end:
     mov ax, [es:lzw_e_ent]
     cmp ax, 0xFFFF
     je .e
+%if LZW_ENARROW
+    mov word [es:lzw_e_run], 0      ; (so lzw_e_put cannot widen after it)
+%endif
     call lzw_e_put
 .e:
     mov ax, [es:lzw_e_clr]

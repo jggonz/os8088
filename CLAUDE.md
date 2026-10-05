@@ -523,7 +523,8 @@ controller, so no XT profile can host one),
 `386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
 `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,
-`xt-weave`, `386-weave`, `xt-weave-256`, `xt-pixelstein`, `xt-pixelstein-herc`;
+`xt-weave`, `386-weave`, `xt-weave-256`, `xt-pixelstein`, `xt-pixelstein-herc`,
+`xt-pixel`, `386-pixel`;
 plus `marty` (MartyPC). **`386-ps2` is the only machine here with a PS/2
 mouse** — every other config is `mouse_type = msserial`, which is why §9.9
 shipped and went untested on anything but QEMU for months; it is a Packard
@@ -562,9 +563,10 @@ reaches the `]` prompt and answers a keystroke and is a machine to look at,
 which is why the Wire record is tier 3; it was 0.41% until APPLE2-SPEC
 section 4.3.1 made the wall slice a duty-cycle controller), and
 `xt-weave`/`386-weave`/`xt-weave-256` the Weave family's
-(WEAVE-SPEC §13.1), and `xt-pixelstein`/`xt-pixelstein-herc` PIXELSTEIN 3D's
-(§97.15) — the twenty that put a dedicated
-floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
+(WEAVE-SPEC §13.1), `xt-pixelstein`/`xt-pixelstein-herc` PIXELSTEIN 3D's
+(§97.15), and `xt-pixel`/`386-pixel` PiXEL's (§106.26: `vm/xt-weave`'s
+640KB VGA XT with `pixel360.img`, `vm/386dx` with `pixel.img`) — the
+twenty-two that put a dedicated floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
 disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
 family on one floppy — so it is where that geometry of it is booted at all,
 and **`xt-weave-256` is the same 4.77MHz XT with 256KB** rather than 640,

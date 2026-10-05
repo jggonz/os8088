@@ -484,6 +484,51 @@ def main():
         else:
             print("PASS animation identity: the frames drawn ARE the "
                   "repaint's")
+        # ...and A RELEASE THAT ACTS while it plays (review-w8 A2): the
+        # Rotate tool's click is the release path, and a tick restarts the
+        # frame job between the press and it - the release stops the job
+        # first now, so the turn is made rather than refused (it read
+        # "Rotate CW needs 9K; 241K") or the job wedged beside it
+        m.key("KeyA")
+        M.until(m, lambda _: B("px_anon") == 1 and B("px_anjob") == 1,
+                "playing again", poll=0.1, limit=120)
+        key("KeyR")
+        M.ui_done(m, "the Rotate tool")
+        M.until(m, lambda _: B("px_anjob") == 1, "a frame job running",
+                poll=0.05, limit=120)
+        v = bytes(m.read(base + syms["px_vcan"], 16))
+        ix, iy = [x - 65536 if x >= 32768 else x for x in (u16(v, 0),
+                                                         u16(v, 2))]
+        ui.mo.click(ix + u16(v, 12) // 2, iy + u16(v, 14) // 2)
+        try:
+            M.until(m, lambda _: B("px_dirty") == 1 and idle(),
+                    "the turn made", poll=0.2, limit=300)
+            good = B("px_anon") == 0 and B("px_anjob") == 0
+        except Exception:
+            good = False
+        print("%s A2: the Rotate tool's click while a GIF plays turns it "
+              "(dirty %d busy %d job %d anon %d anjob %d, the toast %r)" % (
+                  "PASS" if good else "FAIL", B("px_dirty"), B("px_busy"),
+                  B("px_job"), B("px_anon"), B("px_anjob"), ui.toast()))
+        ok = ok and good
+        # ...and that edited ANIMATED GIF is not saved over itself as one
+        # picture (review-w8 N1): File > Open asks "Save changes?" (Revert
+        # discards without asking, by design), and its Save (Enter) goes to
+        # Save As's card, the file untouched
+        if good:
+            m.ctrl("KeyO")
+            M.until(m, lambda _: u16(m.read(base + syms["os88ui_awin"], 2)),
+                    "Save changes?", poll=0.2, limit=60)
+            M.ui_done(m, "asked")
+            m.key("Enter")
+            M.ui_done(m, "Save")
+            n1 = B("px_pcon") == 6 and B("px_dirty") == 1
+            print("%s N1: Save over the edited animated GIF is Save As "
+                  "(card %d, dirty %d, the toast %r)" % (
+                      "PASS" if n1 else "FAIL", B("px_pcon"), B("px_dirty"),
+                      ui.toast()))
+            ok = ok and n1
+            key("Escape")
     print("gestures: %d drawing calls" % sum(r["calls"] for r in rows))
     if a.json:
         json.dump(rows, open(a.json, "w"), indent=1)

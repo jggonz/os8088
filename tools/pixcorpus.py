@@ -2063,7 +2063,7 @@ ANIM = {"GA1.GIF": (4, None, True), "GA2.GIF": (4, None, True),
         "GA9.GIF": (3, 0, False), "GA10.GIF": (2, None, True),
         "GA11.GIF": (3, None, False), "GA12.GIF": (2, None, True),
         "GA13.GIF": (2, None, True), "GAJUNK.GIF": (1, None, True),
-        "GX.GIF": (2, 0, True)}
+        "GA14.GIF": (3, None, True), "GX.GIF": (2, 0, True)}
 
 
 def acorpus(add):
@@ -2138,6 +2138,13 @@ def acorpus(add):
     # ...a minimum code size of 9 ends it too
     add("GAJUNK.GIF", agif(sw, sh, [f0], gpal=p16,
                            tail=b"\x21\xF9\x04\0\0\0\0\0\x99junk after it"))
+    # 320 x 200 with a WHOLE-SCREEN disposal-3 frame after frame 0: its
+    # backup is 64,000 bytes, whose claim's sum carried 16 bits and read as
+    # 0 KB (review-w8 A1) - the ordinary shape of a 320 x 200 animation
+    add("GA14.GIF", agif(320, 200, [gframe(ablock(320, 200, 0)),
+                                    gframe(ablock(320, 200, 1), disp=3),
+                                    gframe(ablock(8, 8, 2), left=10, top=10)],
+                         gpal=p16))
 
 
 # =============================================================================

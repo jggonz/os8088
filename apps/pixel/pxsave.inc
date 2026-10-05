@@ -356,13 +356,17 @@ px_asked:
     ; whole picture - DECODED at 1/1, which an edit does not change (review-
     ; w7 F8) - and holds every bit the file did: no truecolour picture held
     ; as the cube, nothing over 8 bits (F2); else where, through the card
-    ; and its "Replace?" (the action waits for the save's end either way)
+    ; and its "Replace?" (the action waits for the save's end either way).
+    ; Nor a file with more in it than its master: an animated GIF's frames,
+    ; a transparent index or alpha (PXR_KEEP, review-w8 N1)
     cmp byte [px_cur + PXR_DSCL], 0
     jne .as
     cmp byte [px_cur + PXR_PMODE], PM_CUBE
     je .as
     cmp byte [px_cur + PXR_BITS], 8
     ja .as
+    cmp byte [px_cur + PXR_KEEP], 0 ; frames, a transparent index, alpha:
+    jne .as                         ; more than a master holds (review-w8 N1)
     mov al, [px_cur + PXR_FMT]
     cmp al, PXF_PNG
     je .own
@@ -412,8 +416,9 @@ px_lvdo:
 .c:
     cmp al, PXL_CLOSE
     jne .x
-    push bx
-    mov bx, [px_win]
+    call px_cfinal                  ; (WM_CLOSE retires the negotiator, so
+    push bx                         ; px_onclose's write is made here -
+    mov bx, [px_win]                ; review-w8 E4)
     call OSAPI_WM_CLOSE             ; deferred (SPEC.md 75.2)
     pop bx
 .x:
@@ -437,13 +442,7 @@ px_onclose:
     call px_gate
     pop ax
     jc .x
-    call px_hstop                   ; CLOSING: what the thumbnails' cache
-    cmp byte [px_cnew], 0           ; has not had yet is written, whole -
-    je .x                           ; the one write that is not a step
-    push cx                         ; (review-w5 F13); CF = 0 from the cmp
-    mov cl, PF_WALL
-    call px_cwrite
-    pop cx
+    call px_cfinal                  ; CLOSING: the thumbnails' cache
     clc
 .x:
     ret

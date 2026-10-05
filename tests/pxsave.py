@@ -341,6 +341,15 @@ def guest_leg(machine):
                   "%r dirty %d" % (rec(), B("px_dirty")))
             check("%s: the toast" % nm, ui.toast()[0] == "Saved " + nm,
                   "%r" % (ui.toast(),))
+            # Image Info reads the record: its depth and packing are the
+            # FILE's now (the wave-9 functional check's F2: they were the
+            # source's - "Packing None" for a GIF just saved)
+            b = m.read(base + syms["px_cur"], 50)
+            want_bp = {"PNG": (8, 7), "GIF": (8, 5), "BMP": (8, 0),
+                       "PCX": (8, 1), "PIX": (4, 0)}[fmt]
+            check("%s: Image Info's depth and packing the file's (%d, %d)"
+                  % (nm, b[25], b[42]), (b[25], b[42]) == want_bp,
+                  "want %r" % (want_bp,))
         menu("Effects", "Blur")
         wait_idle("Blur")
         mm, pl, r = master(), pal(), rec()

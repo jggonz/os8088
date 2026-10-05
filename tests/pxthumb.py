@@ -19,10 +19,13 @@ document's own folder), and then:
          decode, and no callback over CEIL_FRONT; each thumbnail in the
          store is the host's own - tools/pixelsim.py's master at the scale
          the rule picks, sampled and taken to the cube as 106.21 says - byte
-         for byte; and PIXEL.THC is NOT written while its folder is on show
-  CLOSE  the close writes it, whole, under CEIL_CLOSE: read back off the
-         floppy ON THE HOST (tools/os88flush.py), its header names every one
-         and each entry is the store's thumbnail and its key
+         for byte; and once the strip on show is complete PIXEL.THC is
+         WRITTEN AHEAD, an entry a step, in the same idle time (SPEC.md
+         106.26) - every step under CEIL_FRONT too
+  CLOSE  so the close has nothing left to write: under CEIL_CLOSE and with
+         NO write of the floppy's; the cache read back off the floppy ON THE
+         HOST (tools/os88flush.py), its header names every one and each
+         entry is the store's thumbnail and its key
   WARM   PiXEL opened again on the same document: the strip
          fills from the cache with NO decode, and every thumbnail is the
          cold one
@@ -71,8 +74,11 @@ BEHIND_S = 20                   # how long PiXEL waits behind another window
 CEIL_BEHIND = 0.25              # its longest callback meanwhile (the
                                 # free-memory field's look, ~0.13 s)
 CEIL_FRONT = 3.0                # its longest, in front (review-w5 F13)
-CEIL_CLOSE = 20.0               # the close, the cache's one whole write:
-                                # 15.3 s for five new entries (106.25)
+CEIL_CLOSE = 5.0                # the close: nothing left to write since
+                                # 106.26 (15.0 s for five entries written
+                                # whole at the close in 106.25) - 3.5 s
+                                # from the click is the window's teardown
+                                # and the desktop's repaint under it
 
 
 def check(what, ok, detail=""):
@@ -351,8 +357,11 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
               "guest %dx%d, %d of %d bytes differ" % (
                   g[0], g[1], sum(1 for x, y in zip(g[2], ref) if x != y),
                   len(ref)))
-    check("the cache NOT written while its folder is on show: %d"
-          % W("px_thwrote"), W("px_thwrote") == 0)
+    check("the cache WRITTEN AHEAD, the strip complete and PiXEL still: "
+          "%d write%s, nothing owed (106.26)" % (
+              W("px_thwrote"), "" if W("px_thwrote") == 1 else "s"),
+          W("px_thwrote") == 1 and B("px_cnew") == 0 and B("px_cwip") == 0
+          and B("px_fkept") == 0)
     cold = {n: st[n][:3] for n in onshow if n in st}
     c0 = claims()
 
@@ -360,15 +369,16 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
     w = ui.window("PiXEL")
     k0 = int(m.status()["cycles"])
     m.disk(reset=True)
-    ui.close(w, limit=60)           # (the cache's whole write: seconds)
+    ui.close(w, limit=60)
     tclose = (int(m.status()["cycles"]) - k0) / HZ
     dk = m.disk()
     print("   CLOSE: the floppy controller asked for %r" % (
         {k: dk[k] for k in sorted(dk) if not isinstance(dk[k], (list, dict))},))
     M.ui_done(m, "PiXEL closed")
-    check("CLOSE: the cache written whole as the window goes, %.2f s from "
-          "the click (under %.1f s)" % (tclose, CEIL_CLOSE),
-          tclose < CEIL_CLOSE)
+    check("CLOSE: nothing left to write - %.2f s from the click (under "
+          "%.1f s), %d writes of the floppy" % (tclose, CEIL_CLOSE,
+                                               dk.get("writes", -1)),
+          tclose < CEIL_CLOSE and dk.get("writes", -1) == 0)
     vol = fl.volume(1)
     thc = vol.read("SYSTEM/APPDATA/PIXEL.THC")
     count = thc[5] if thc and len(thc) >= 4096 else -1

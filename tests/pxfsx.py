@@ -343,7 +343,28 @@ for mach in machines:
 
         still("BALLOONS.PNG open")
         c0 = claims()
+        # THE PICTURE EVERY EXIT IS HELD TO, taken when it is STILL: the
+        # status bar's "Memory:" is a look every PX_MEMT (5 s), and a d0
+        # taken inside the open's last look holds the decode's figure while
+        # every exit's repaint draws the next - the wave-8 soak's one
+        # failure and wave 9's one in four runs, all three CGA modes alike
+        # ("59 pixels differ"). Two pictures a look apart must agree
         d0 = desktop()
+        for _ in range(3):
+            M.guest_sleep(m, 5.5)
+            d0b = desktop()
+            if d0b == d0:
+                break
+            if d0b[:2] == d0[:2]:
+                mv = [k // 3 for k in range(0, len(d0[2]), 3)
+                      if d0[2][k:k + 3] != d0b[2][k:k + 3]]
+                print("      (the desktop moved under the baseline: %d pixels "
+                      "in (%d, %d, %d, %d))" % (
+                          len(mv), min(k % d0[0] for k in mv),
+                          min(k // d0[0] for k in mv),
+                          max(k % d0[0] for k in mv),
+                          max(k // d0[0] for k in mv)))
+            d0 = d0b
         m.pause()
         v0 = m.video()
         dac0 = dac(m, 256) if vga else None

@@ -602,14 +602,25 @@ def work5(m, px):
           "%.2f s" % (tot / HZ, huff / HZ, n["pj_blk"], huff / pixels,
                       stg["pj_id8"] / HZ, stg["pj_id8"] / pixels,
                       stg["pj_band"] / HZ))
-    cap = ceil.get("idct")
-    if cap is not None and not a.no_ceiling and stg["pj_id8"] / pixels > cap:
-        print("   ...IDCT over its ceiling of %.0f FAIL" % cap)
-        FAIL.append("idct")
-    cap = ceil.get("huffman")
-    if cap is not None and not a.no_ceiling and huff / pixels > cap:
-        print("   ...entropy + dequantise over its ceiling of %.0f FAIL" % cap)
-        FAIL.append("huffman")
+    # THE SUM is the gate (SPEC.md 106.26): each routine's figure carries the
+    # UI task's slices that pre-empted it, and the IDCT is called from inside
+    # the block, so where a disk read lands - which the files' places on the
+    # disk move, as 106.23 found for inflate - moves cycles BETWEEN the two:
+    # 364 + 473 against 300 + 533 at the same 837-833 a pixel, the JPEG part
+    # byte for byte the same. Either alone over its ceiling is printed
+    cap_i, cap_h = ceil.get("idct"), ceil.get("huffman")
+    if stg["pj_id8"] / pixels > (cap_i or 1e9):
+        print("   ...IDCT over its own ceiling of %.0f (printed)" % cap_i)
+    if huff / pixels > (cap_h or 1e9):
+        print("   ...entropy + dequantise over its own ceiling of %.0f "
+              "(printed)" % cap_h)
+    if cap_i is not None and cap_h is not None and not a.no_ceiling:
+        both = stg["pj_blk"] / pixels
+        print("   ...the block, entropy + IDCT: %.0f cycles a pixel (ceiling "
+              "%.0f)" % (both, cap_i + cap_h))
+        if both > cap_i + cap_h:
+            print("   ...over it FAIL")
+            FAIL.append("huffman+idct")
 
 if "5" in a.sessions:
     session(DISK5, ["C8.PCX"], work5)

@@ -70,19 +70,19 @@ ph_info:
 
 ; The card. Every line the same width (see above), and only keys that DO
 ; something in this build: a card that lists a key which does nothing is a
-; card that is wrong.
+; card that is wrong. TEN lines and no blank one: at 12 pixels a line the
+; card must fit the CGA's window, which twelve did not (the wave-9
+; functional check)
 ph_text:
     db 'PiXEL - keyboard', 0
-    db 0
     db 'Ctrl+O  Ctrl+S   Open, Save As    ', 0
     db 'Ctrl+Z  C  A     Undo, Copy, All  ', 0
     db 'Space Bksp Home End   Pictures    ', 0
     db 'H  Z  M  C  E  R The six tools    ', 0
-    db 'Arrows           Pan, nudge a sel.', 0
-    db 'Enter            Crop to selection', 0
+    db 'Arrows  Enter    Pan, crop to sel.', 0
     db 'F  Esc  Tab      Full, Stop, Panel', 0
+    db 'A                Play/Stop a GIF  ', 0
     db 'F1  or  ?        This card        ', 0
-    db 0
-    db 'A key or a click closes it.', 0
+    db 'Any key or a click closes it.', 0
 ph_end:
-PH_LINES equ 12
+PH_LINES equ 10

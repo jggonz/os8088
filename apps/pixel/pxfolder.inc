@@ -393,6 +393,7 @@ px_hopen:
     push es
     push ds
     pop es
+    call px_fpdrop                   ; (no FOLDER part beside its claims)
     mov [px_hidx], ax
     mov [px_hmode], dl
     mov si, px_cur                  ; bank what is showing, as px_open does
@@ -458,7 +459,10 @@ px_hopen:
     jc .refuse
     call px_setpal
     call px_pumpinit
-    call px_pumpone
+    cmp byte [px_hmode], 1          ; a THUMBNAIL's first slot waits for the
+    je .nop1                        ; worker's first wake: one disk access
+    call px_pumpone                 ; fewer in this step (SPEC.md 106.26)
+.nop1:
     call px_spawn
     jc .nowork
     mov byte [px_abort], 0
@@ -637,6 +641,7 @@ px_hdone:
 ; job stops the same way (106.25: its next tick takes it up where it was).
 ; Every callback that draws or acts calls this first. Preserves all
 px_hstop:
+    call px_fpdrop                   ; (a kept FOLDER part: SPEC.md 106.26)
     cmp byte [px_anjob], 0
     je .h
     call px_await
@@ -795,6 +800,15 @@ px_antick:
     je .front
     jmp px_hstop
 .front:
+    cmp byte [px_pcon], 0           ; A CARD UP OR A PRESS HELD: no frame is
+    jne .x                          ; begun or let go under it - its release
+    cmp byte [px_press], PX_PR_NONE ; acts, and an action meets no running
+    jne .x                          ; job (review-w8 A2)
+    push ax
+    call os88ui_armed
+    or ax, ax
+    pop ax
+    jnz .x
     push cx
     mov cl, AV_TICK
 .c:
@@ -805,6 +819,8 @@ px_antick:
 
 ; px_antog - File > Play / Stop Animation, and A. Lock held. Preserves all
 px_antog:
+    cmp byte [px_anim], 0           ; (no GIF that moves: nothing fetched -
+    je px_antick.x                  ; review-w8 A6)
     push cx
     mov cl, AV_TOGGLE
     jmp short px_antick.c
@@ -1161,9 +1177,12 @@ px_thkey:
 
 ; px_fcall - CL = a verb of the FOLDER part (pxfold.asm): the part fetched,
 ; called with the store pinned - its transfers land in it - and dropped
-; (SPEC.md 106.20). out its CF/AX. A part that cannot be had, or is another
-; build's, sets [px_tnone]: no thumbnails until the folder is walked again.
-; Lock held. Preserves all but AX
+; (SPEC.md 106.20) - unless a cache write is under way or owed: then it is
+; KEPT for the next step (SPEC.md 106.26: a fetch is a FILE_GOTO, a read
+; and a FILE_GOTO back, most of a step) until px_fpdrop. out its CF/AX. A
+; part that cannot be had, or is another build's, sets [px_tnone]: no
+; thumbnails until the folder is walked again. Lock held. Preserves all but
+; AX
 px_fcall:
     push bx
     mov al, 1
@@ -1175,8 +1194,18 @@ px_fcall:
     push ax
     xor al, al
     call px_tpin
+    mov [px_fkept], al
+    cmp [px_cwip], al               ; (a write under way, or one owed: the
+    jne .keep                       ; step after a make that completes the
+    cmp [px_cnew], al               ; strip is a write, and it need not
+    je .drop                        ; fetch the part again)
+.keep:
+    inc byte [px_fkept]
+    jmp short .kept
+.drop:
     mov al, PXPART_FOLD
     call px_pdrop
+.kept:
     pop ax
     popf
     jnc .out
@@ -1196,6 +1225,38 @@ px_fcall:
     stc
 .out:
     pop bx
+    ret
+
+; px_fpdrop - the FOLDER part a cache write kept, let go: before anything
+; that claims (a hidden decode, an open - every user act passes px_hstop),
+; so §50.2's eight are never nine. Preserves all
+px_fpdrop:
+    cmp byte [px_fkept], 0
+    je .x
+    push ax
+    mov byte [px_fkept], 0
+    mov al, PXPART_FOLD
+    call px_pdrop
+    pop ax
+.x:
+    ret
+
+; px_cfinal - the window is going: a hidden decode stopped, and what the
+; cache has not had yet written, whole - the one write that is not a step
+; (review-w5 F13), and since SPEC.md 106.26 normally nothing, the idle steps
+; having written it ahead. The pointer is the clock for it (SPEC.md 7.5).
+; From the close negotiator AND from "Save changes?"'s close (review-w8 E4:
+; WM_CLOSE retires the negotiator). Lock held. Preserves all
+px_cfinal:
+    call px_hstop
+    cmp byte [px_cnew], 0
+    je .x
+    call OSAPI_CUR_BUSY
+    push cx
+    mov cl, PF_WALL
+    call px_cwrite
+    pop cx
+.x:
     ret
 
 ; px_cwrite - CL = PF_WRITE, a step of the cache's write (one entry, or the
@@ -1220,6 +1281,7 @@ px_cwrite:
 .forget:
     mov byte [px_cnew], 0
     mov byte [px_cwip], 0
+    call px_fpdrop
 .x:
     pop si
     pop ax
@@ -1727,12 +1789,14 @@ px_thstep:
     call px_layout                  ; (not visible - minimised: idle until
     jc .idle                        ; a paint arms it again)
     cmp byte [px_cnew], 0           ; THE CACHE IS WRITTEN when the strip has
-    je .nw                          ; gone or its folder is not the one the
-    cmp byte [px_fson], 0           ; new thumbnails were made in (review-w5
-    je .wr                          ; F13): never mid-browse, and one entry a
-    mov ax, [px_cdir]               ; call, so no step holds the desktop
-    cmp ax, [px_nfdir]              ; longer than one write
-    jne .wr
+    je .nw                          ; gone, its folder is not the one the new
+    cmp byte [px_cwip], 0           ; thumbnails were made in, a write is
+    jne .wr                         ; under way (it goes before anything
+    cmp byte [px_fson], 0           ; else: a visit would read the header it
+    je .wr                          ; is building), or - SPEC.md 106.26 - the
+    mov ax, [px_cdir]               ; strip on show has every thumbnail it
+    cmp ax, [px_nfdir]              ; can have (.done): one entry a step, so
+    jne .wr                         ; the close finds nothing left to write
     mov al, [px_cvol]
     cmp al, [px_nfvol]
     je .nw
@@ -1749,7 +1813,7 @@ px_thstep:
     jmp .idle
 .on:
     cmp byte [px_tnone], 0
-    jne .idle
+    jne .done
     cmp byte [px_bpp], 1            ; a store filled on a 1bpp display, the
     jbe .pk                         ; window now on a colour one: the plans
     cmp word [px_tseg], 0           ; it never needed there (review-w5 F11)
@@ -1766,9 +1830,9 @@ px_thstep:
     jmp .out
 .pk:
     call px_thpick                  ; a card on show lacks its thumbnail?
-    jc .idle
+    jc .done
     call px_tstore
-    jc .idle
+    jc .done
     cmp byte [px_slon], 0
     jne .cur
     cmp byte [px_cstat], 2          ; THE CACHE: read for this folder and this
@@ -1815,7 +1879,7 @@ px_thstep:
     cmp byte [px_slon], 0
     jne .out1
     call px_thpick                  ; the next card's: a hidden decode
-    jc .idle
+    jc .done
     call px_nfgo
     jnc .hd
     mov byte [px_tnone], 1          ; its folder will not list (a disk
@@ -1837,6 +1901,12 @@ px_thstep:
 .dr:
     call px_update
     jmp short .out
+.done:
+    cmp byte [px_cnew], 0           ; NOTHING LEFT TO MAKE ON SHOW: what the
+    je .idle                        ; cache has not had is written now, a
+    cmp byte [px_slon], 0           ; step at a time (SPEC.md 106.26)
+    jne .idle
+    jmp .wr
 .idle:
     mov byte [px_tq], 0
 .out:

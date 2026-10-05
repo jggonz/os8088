@@ -13,7 +13,8 @@ played by this script - at every frame the job says is ready ([px_anrun] 2)
 the master is held to pixelsim's frame byte for byte, and the dirty rect
 the frame leaves owed ([px_anrect]) to pixelsim's; then go. At the pass's
 end AV_WAKE is called for real, and the second pass's frame 0 must be
-pixelsim's gif_restart. A job that asks for more backup (PXD_MEM) gets it.
+pixelsim's gif_restart. A job that asks for more backup (PXD_MEM) gets it,
+and every animation claim - av_start's 1 KB first - has a fence after it.
 
 The fast loop; tests/pxdecode.py's animation leg holds the same part on
 MartyPC.
@@ -219,6 +220,19 @@ def run(name, data, win, v):
         msgs.append("passes after the first %d, pixelsim %r" % (
             a.p.r16("px_anloop"), loop))
     seen = []
+    fences = []
+
+    def fenced(kb):
+        """A claim of KB as av_start / AV_WAKE make it, with 4 KB of 0xA5
+        laid straight after it: a backup that runs past its claim (review-
+        w8 A1: a 320 x 200 frame's sum carried and read as 0 KB) breaks it"""
+        seg = a.p.claim(kb * 1024)
+        fs = a.p.claim(4096)
+        a.p.seg_write(fs, b"\xA5" * 4096)
+        fences.append(fs)
+        return seg
+    a.p.w16("px_anseg", fenced(1))     # av_start's first: 1 KB
+    a.p.w16("px_ankb", 1)
 
     def ready():
         k = a.p.r16("px_anfr") - 1
@@ -251,7 +265,7 @@ def run(name, data, win, v):
                 msgs.append("a backup over a segment")
                 break
             old = a.p.r16("px_anseg")
-            seg = a.p.claim(need * 1024)
+            seg = fenced(need)
             a.p.seg_write(seg, a.p.seg_read(old, 768))
             a.p.w16("px_anseg", seg)
             a.p.w16("px_ankb", need)
@@ -261,6 +275,10 @@ def run(name, data, win, v):
         break
     if seen != list(range(1, len(frames))):
         msgs.append("frames shown %r, pixelsim 1..%d" % (seen, len(frames) - 1))
+    for fs in fences:
+        if a.p.seg_read(fs, 4096) != b"\xA5" * 4096:
+            msgs.append("a write past the animation's claim")
+            break
     # the pass is over: AV_WAKE's restart, then the second pass's frame 0
     a.wake_end(0)
     if loop is None:

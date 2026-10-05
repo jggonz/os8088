@@ -527,6 +527,13 @@ pz_setpal:
     push es
     push di
     mov es, [cs:pz_pkg]
+    test byte [cs:pz_ct], 4         ; ALPHA, or a tRNS: more than a master
+    jnz .keep                       ; holds - a Save over it is a Save As
+    cmp word [cs:pz_trn], 0         ; (review-w8 N1)
+    je .nk
+.keep:
+    mov byte [es:px_cur + PXR_KEEP], 1
+.nk:
     cmp byte [cs:pz_ct], 3
     jne .key
     cmp byte [cs:pz_hplte], 0
@@ -869,6 +876,33 @@ pz_rawq:
 ; at the end would have stopped (SPEC.md 106.18)
 ; =============================================================================
 
+; LIT1 %1, %2 - inflate's literal, to its stosb: the next nine bits a word
+; at SI shifted down by CL, the primary's entry, and the position on - a
+; literal's AH is its length - 8, so CL + AH is 8..15 most often, the line
+; that falls through; below 8 (or not a literal) to %1, 16 to %2
+%macro LIT1 2
+    mov bx, [si]
+    shr bx, cl
+    and bh, 1
+    shl bx, 1
+    mov ax, [bx + PZ_LPRIM]
+    add cl, ah
+    js %1
+    inc si
+    cmp cl, 8
+    jae %2
+%endmacro
+
+; COPYCX - CX bytes DS:SI -> ES:DI, a word at a time (25 cycles a word on
+; an 8088 against 17 a byte). Not for the window's own copies: an overlap
+; there must repeat a byte at a time
+%macro COPYCX 0
+    shr cx, 1
+    rep movsw
+    adc cx, cx
+    rep movsb
+%endmacro
+
 ; NORM2 - CL up to 16 after a take: whole bytes on
 %macro NORM2 0
     cmp cl, 8
@@ -896,7 +930,7 @@ pz_cfill:
     mov cx, [cs:pz_cend]            ; the clean bytes left
     sub cx, si
     mov di, PZ_CB
-    rep movsb
+    COPYCX
 .f:
     mov bx, PZ_CB + PZ_CBSZ         ; BX = the room
     sub bx, di
@@ -921,7 +955,7 @@ pz_cfill:
     mov ax, bx
 .r2:
     mov cx, ax
-    rep movsb
+    COPYCX
     sub [cs:pz_left], ax
     sbb word [cs:pz_left + 2], 0
     sub bx, ax
@@ -1058,11 +1092,9 @@ pz_bits:
 pz_sub:
     add cl, 9
     NORM2
-    xor ah, ah
-    push cx
-    mov cl, 7
-    shl ax, cl                      ; 128 bytes a sub-table
-    pop cx
+    mov ah, al
+    xor al, al
+    shr ax, 1                       ; 128 bytes a sub-table
     add bx, ax
     mov ax, [si]
     shr ax, cl
@@ -1142,8 +1174,8 @@ pz_walk:
 
 ; =============================================================================
 ; INFLATE. DS = ES = the scratch: SI/CL the bit position, DI the window's
-; write position, BP the bytes left before the next extraction, DX the
-; clean buffer's limit
+; write position, BP the bytes left in the symbol loop's budget (.sym:
+; [pz_bias] more before the next extraction), DX the clean buffer's limit
 ; =============================================================================
 pz_inflate:
 .block:
@@ -1161,68 +1193,103 @@ pz_inflate:
     jmp pz_bad                      ; block type 3
 .fixed:
     cmp byte [cs:pz_tabk], 1
-    je .chk
+    je .go
     call pz_fixed
     mov byte [cs:pz_tabk], 1
-    jmp short .chk
+    jmp short .go
 .dyn:
     call pz_dynhdr
     mov byte [cs:pz_tabk], 2
-    jmp short .chk
+    jmp short .go
 .stored:
     call pz_stored
-    jmp .eob
+    jmp .eobt
     ; --- the symbol loop -------------------------------------------------
-.sym:
-    mov bx, [si]                    ; the next nine bits
-    shr bx, cl
-    and bh, 1
-    shl bx, 1
-    mov ax, [bx + PZ_LPRIM]
-    or ah, ah
-    jle .lother                     ; a literal is AH > 0: its length
-    add cl, ah
-    NORM2
+    ; BP here is a BUDGET of output bytes that needs no other test: the
+    ; least of the extraction's (BP + [pz_bias] is that one), the window's
+    ; room before 8000h (so DI wraps only in .slow) and half the clean
+    ; bytes before DX - every output byte takes at most 16 bits (a literal
+    ; 15, a match of 3 bytes or more 48), so every symbol in the budget
+    ; starts with SI below DX, which is the test the loop used to make
+    ; before each one. When it is spent, .slow makes the three tests
+.sym:                               ; (two a turn: the first's end is a
+    LIT1 .lt8, .ge16                ; test that falls through)
 .lit:
     stosb
-    and di, 0x7FFF
     dec bp
-    jz .ext
-.chk:
-    cmp si, dx
-    jb .sym
-    call pz_cfill
-    jmp short .sym
-.ext:
+    jz .slow
+.sym2:
+    LIT1 .lt8b, .ge16b
+.lit2:
+    stosb
+    dec bp
+    jnz .sym
+.slow:                              ; the budget is spent (or overspent by
+    add bp, [cs:pz_bias]            ; a copy): the extraction's own
+    and di, 0x7FFF
+    or bp, bp
+    jg .go
     call pz_extract
-    jmp short .chk
-.lother:
-    jz .lwalk
-    cmp ah, 0xC0
+.go:                                ; BP = the extraction's budget
+    cmp si, dx
+    jb .g1
+    call pz_cfill
+.g1:
+    mov ax, dx                      ; half the clean bytes (one symbol at
+    sub ax, si                      ; least: after pz_cfill the loop always
+    sar ax, 1                       ; took one)
+    jg .g2
+    mov ax, 1
+.g2:
+    mov bx, 0x8000                  ; the window's room
+    sub bx, di
+    cmp ax, bx
+    jbe .g3
+    mov ax, bx
+.g3:
+    mov bx, bp
+    sub bx, ax
+    jae .g4
+    xor bx, bx                      ; the extraction's is the least
+    mov ax, bp
+.g4:
+    mov [cs:pz_bias], bx
+    mov bp, ax
+    jmp short .sym
+.lt8:
+    add cl, 8                       ; past 7Fh still: not a literal (AH 80h
+    js .lother                      ; and up, CL + AH + 8 88h..CFh)
+    stosb
+    dec bp
+    jnz .sym2
+    jmp short .slow
+.lt8b:
+    add cl, 8
+    js .lother
+    stosb
+    dec bp
+    jnz .sym
+    jmp short .slow
+.ge16:
+    inc si
+    sub cl, 8
+    jmp short .lit
+.ge16b:
+    inc si
+    sub cl, 8
+    jmp short .lit2
+.lother:                            ; CL = the position's + AH + 8, AH 80h
+    cmp ah, 0xC0                    ; and up: a sub-table's (C0h)...
     jae .lsub
-    and ah, 0x0F                    ; a length symbol, or the block's end
-    add cl, ah
+    sub cl, 0x88                    ; ...no entry (80h: the walk's), or a
+    cmp ah, 0x80                    ; length symbol or the block's end
+    je .lwalk                       ; (80h + its length), taken
     NORM2
     or al, al
     jz .eob
-    jmp short .len
-.lsub:
-    mov bx, PZ_LSUB
-    call pz_sub
-    jmp short .lsym
-.lwalk:
-    mov bx, PZ_LCNT
-    call pz_walk
-.lsym:
-    cmp ax, 256
-    jb .lit
-    je .eob
-    sub ax, 256
 .len:                               ; AL = the symbol - 256, 1..31
     cmp al, 30
-    jb .l29
-    jmp pz_bad                      ; 286 and 287
-.l29:
+    jae .lbad                       ; 286 and 287
     dec al
     xor ah, ah
     mov bx, ax
@@ -1240,7 +1307,7 @@ pz_inflate:
     pop bx
     add ax, bx
 .lfix:
-    mov [cs:pz_mlen], ax
+    push ax                         ; the length, until the copy
     mov bx, [si]                    ; --- the distance ---
     shr bx, cl
     and bh, 1
@@ -1251,20 +1318,9 @@ pz_inflate:
     add cl, ah
     NORM2
     xor ah, ah
-    jmp short .dsym
-.dother:
-    jz .dwalk
-    mov bx, PZ_DSUB
-    call pz_sub
-    jmp short .dsym
-.dwalk:
-    mov bx, PZ_DCNT
-    call pz_walk
 .dsym:
     cmp ax, 30
-    jb .d29
-    jmp pz_bad                      ; 30 and 31
-.d29:
+    jae .dbad                       ; 30 and 31
     mov bx, ax
     mov ch, [cs:pz_dext + bx]
     shl bx, 1
@@ -1284,13 +1340,6 @@ pz_inflate:
     NORM2
     pop bx
     add ax, bx
-    jmp short .dist
-.dbig:
-    push ax                         ; 10..13 bits: pz_bits
-    mov al, ch
-    call pz_bits
-    pop bx
-    add ax, bx
 .dist:                              ; AX = the distance: not before the first
     cmp word [cs:pz_hav], 0x8000    ; byte the stream wrote
     jae .copy
@@ -1299,17 +1348,159 @@ pz_inflate:
     and bx, 0x7FFF
     add bx, [cs:pz_hav]
     cmp ax, bx
-    jbe .copy
-    jmp pz_bad
+    ja .dbad
+    ; --- the copy: the window copies itself, a byte at a time (an overlap
+    ; repeats the string, as deflate means it). Inside the budget DI + the
+    ; length cannot pass 8000h, so only the source can wrap
 .copy:
-    call pz_copy
-    mov ax, [cs:pz_mlen]
-    sub bp, ax
-    ja .chk2
-    call pz_extract
-.chk2:
-    jmp .chk
+    pop bx                          ; BX = the length
+    sub bp, bx
+    jl .cover
+    push cx
+    push si
+    mov si, di
+    sub si, ax
+    jb .cwrap
+    mov cx, bx
+    rep movsb
+.cout:
+    pop si
+    pop cx
+    or bp, bp
+    jz .cspent
+    jmp .sym
+.cspent:
+    jmp .slow
+.dbad:
+    pop bx                          ; (the length)
+.lbad:
+    jmp pz_bad
+.cwrap:
+    and si, 0x7FFF                  ; the source from the window's top
+    mov cx, si
+    add cx, bx
+    cmp cx, 0x8000
+    mov cx, bx
+    ja .cbyte
+    rep movsb
+    jmp short .cout
+.cbyte:
+    lodsb
+    stosb
+    and si, 0x7FFF
+    loop .cbyte
+    jmp short .cout
+.cover:                             ; past the budget: either end can wrap
+    push cx
+    push si
+    mov cx, bx
+    mov si, di
+    sub si, ax
+    and si, 0x7FFF
+    mov ax, si
+    add ax, cx
+    cmp ax, 0x8000
+    ja .cobyte
+    mov ax, di
+    add ax, cx
+    cmp ax, 0x8000
+    ja .cobyte
+    rep movsb
+    jmp short .coout
+.cobyte:
+    lodsb
+    stosb
+    and si, 0x7FFF
+    and di, 0x7FFF
+    loop .cobyte
+.coout:
+    pop si
+    pop cx
+    jmp .slow
+.lsub:                              ; pz_sub, inline: the nine bits taken,
+    sub cl, 0xC8 - 9                ; the next six index sub-table AL
+    NORM2
+    mov ah, al
+    xor al, al
+    shr ax, 1                       ; 128 bytes a sub-table
+    mov bx, ax
+    mov ax, [si]
+    shr ax, cl
+    and ax, 63
+    shl ax, 1
+    add bx, ax
+    mov ax, [bx + PZ_LSUB]
+    or ah, ah
+    jz .lsbad
+    add cl, ah                      ; (a length symbol's 80h is in CL's
+    and cl, 0x7F                    ; top bit and taken off)
+    NORM2
+    test ah, ah
+    js .lslen
+    jmp .lit
+.lslen:
+    or al, al
+    jz .lseob
+    jmp .len
+.lseob:
+    jmp .eob
+.lsbad:
+    add cl, 6                       ; `damaged` after the fifteen bits
+    NORM2
+    jmp pz_bad
+.lwalk:
+    mov bx, PZ_LCNT
+    call pz_walk
+.lsym:
+    cmp ax, 256
+    jae .lsym2
+    jmp .lit
+.lsym2:
+    je .eob
+    sub ax, 256
+    jmp .len
+.dother:
+    jz .dwalk
+    mov bx, PZ_DSUB
+    call pz_sub
+    jmp .dsym
+.dwalk:
+    mov bx, PZ_DCNT
+    call pz_walk
+    jmp .dsym
+.dbig:                              ; 10..13 bits: eight, then the rest -
+    cmp si, dx                      ; pz_bits's own test first (past DX it
+    jae .dbits                      ; is pz_bits, which asks pz_cfill)
+    mov bx, [si]
+    shr bx, cl
+    inc si                          ; eight taken
+    add al, bl
+    adc ah, 0
+    mov bx, [si]
+    shr bx, cl
+    sub ch, 8                       ; 2..5 more
+    xchg cl, ch
+    mov bh, 0xFF
+    shl bh, cl
+    not bh
+    and bl, bh
+    xchg cl, ch
+    add ah, bl
+    add cl, ch
+    NORM2
+    jmp .dist
+.dbits:
+    push ax
+    mov al, ch
+    call pz_bits
+    pop bx
+    add ax, bx
+    jmp .dist
 .eob:
+    add bp, [cs:pz_bias]            ; BP = the extraction's budget again
+    and di, 0x7FFF
+.eobt:
+    mov word [cs:pz_bias], 0
     cmp byte [cs:pz_final], 0
     jne .short
     jmp .block
@@ -1317,37 +1508,6 @@ pz_inflate:
     call pz_bank                    ; the stream is over and the rows are not
     mov ax, PXD_TRUNC
     jmp pz_fail
-
-; pz_copy - AX = a distance, [pz_mlen] bytes: the window copies itself.
-; Preserves all but AX
-pz_copy:
-    push cx
-    push si
-    mov si, di
-    sub si, ax
-    and si, 0x7FFF
-    mov cx, [cs:pz_mlen]
-    mov ax, si                      ; neither end wraps: one movsb run (a
-    add ax, cx                      ; byte at a time, so an overlap repeats
-    cmp ax, 0x8000                  ; the string, as deflate means it)
-    ja .slow
-    mov ax, di
-    add ax, cx
-    cmp ax, 0x8000
-    ja .slow
-    rep movsb
-    and di, 0x7FFF
-    jmp short .out
-.slow:
-    lodsb
-    stosb
-    and si, 0x7FFF
-    and di, 0x7FFF
-    loop .slow
-.out:
-    pop si
-    pop cx
-    ret
 
 ; pz_stored - a stored block, after its three bits: to the byte, LEN, NLEN,
 ; and LEN bytes into the window
@@ -1657,8 +1817,9 @@ pz_build:
     inc dx
     jmp short .s
 .prim:
-    mov di, [cs:pz_bprim]           ; --- the primary table: nine bits
-    xor ax, ax
+    mov di, [cs:pz_bprim]           ; --- the primary table: nine bits;
+    xor al, al                      ; no entry is 0 in the distance code's,
+    mov ah, [cs:pz_blit]            ; 8000h in the literal/length code's
     mov cx, 512
     rep stosw
     xor si, si                      ; SI = the symbol index (x 2)
@@ -1678,8 +1839,13 @@ pz_build:
     mov ax, [bx + 32]
     mov ah, [cs:pz_blen]            ; the entry: the length...
     cmp word [bx + 32], 256
-    jb .e
+    jb .e0
     or ah, [cs:pz_blit]             ; ...and a literal/length table's flag
+    jmp short .e
+.e0:
+    cmp byte [cs:pz_blit], 0        ; ...or a literal's, the length - 8
+    je .e                           ; (inflate's .sym)
+    sub ah, 8
 .e:
     mov bp, ax                      ; BP = the entry
     mov cl, [cs:pz_blen]            ; the code, bit-reversed: the stream's
@@ -1752,6 +1918,7 @@ pz_build:
     mov ax, [bx]
     cmp ah, 0xC0
     je .have
+    xor ah, [cs:pz_blit]            ; (no entry: the table's fill)
     or ax, ax
     jnz .skip
     mov al, [cs:pz_bnsub]           ; a new sub-table - or, when they are all
@@ -1902,7 +2069,7 @@ pz_extract:
     push es
     pop ds
     mov es, [cs:pz_xseg]
-    rep movsb
+    COPYCX
     pop di
     pop es
     and si, 0x7FFF
@@ -1958,6 +2125,51 @@ pz_row:
 .ret:
     ret
 
+; PAETH1 - one byte of a Paeth row: b by lodsb (SI on), a = [di+bx],
+; c = [si+bx-1]; x + the predictor by stosb. %1 = its PAETHMID's label
+%macro PAETH1 1
+    lodsb                           ; b
+    mov ah, [di + bx]               ; a
+    mov dl, [si + bx - 1]           ; c
+    cmp al, ah
+    jbe %%p1
+    xchg al, ah
+%%p1:                               ; AL = lo, AH = hi
+    cmp dl, ah
+    jae %1_pa                       ; c >= hi: lo
+    cmp dl, al
+    ja %1                           ; strictly between: PAETHMID
+    mov al, ah                      ; c <= lo: hi
+%1_pa:
+    add al, [di]
+    stosb
+%endmacro
+
+; PAETHMID %1, %2 - lo < c < hi, out of line: lo when 2(hi - c) <= c - lo,
+; hi when 2(c - lo) <= hi - c, else c; back to %1_pa
+%macro PAETHMID 2
+%1:
+    mov cl, ah
+    sub cl, dl                      ; CL = hi - c
+    mov ch, dl
+    sub ch, al                      ; CH = c - lo
+    mov dh, cl
+    shl dh, 1                       ; 2(hi - c), past a byte: not lo
+    jc %%nlo
+    cmp dh, ch
+    jbe %1_pa                       ; lo
+%%nlo:
+    shl ch, 1                       ; 2(c - lo)
+    jc %%c
+    cmp ch, cl
+    ja %%c
+    mov al, ah                      ; hi
+    jmp short %1_pa
+%%c:
+    mov al, dl                      ; c
+    jmp short %1_pa
+%endmacro
+
 ; pz_unfilter - DS = ES = the row segment: [pz_cur]'s [pz_prb] bytes, with
 ; [pz_prev] above them. A type past 4 is noted (pz_done says it) and the
 ; row taken as it is
@@ -1983,20 +2195,21 @@ pz_unfilter:
 .out:
     ret
 .sub:                               ; (two a turn: the loop's own cost
-    shr bp, 1                       ; halved - SPEC.md 106.22)
+    mov si, di                      ; halved - SPEC.md 106.22) - x by lodsb,
+    shr bp, 1                       ; the sum by stosb
     jnc .sub2
-    mov al, [di + bx]
-    add [di], al
-    inc di
+    lodsb
+    add al, [di + bx]
+    stosb
     or bp, bp
     jz .sret
 .sub2:
-    mov al, [di + bx]
-    add [di], al
-    mov al, [di + bx + 1]
-    add [di + 1], al
-    inc di
-    inc di
+    lodsb
+    add al, [di + bx]
+    stosb
+    lodsb
+    add al, [di + bx]
+    stosb
     dec bp
     jnz .sub2
 .sret:
@@ -2019,77 +2232,52 @@ pz_unfilter:
     jnz .up2
 .uret:
     ret
-.avg:
-    shr bp, 1
+.avg:                               ; b by lodsb, (a + b) >> 1 with the
+    shr bp, 1                       ; ninth bit in CF, x + it by stosb
     jnc .avg2
-    mov al, [di + bx]               ; (a + b) >> 1, the ninth bit in CF
-    add al, [si]
+    lodsb
+    add al, [di + bx]
     rcr al, 1
-    add [di], al
-    inc si
-    inc di
+    add al, [di]
+    stosb
     or bp, bp
     jz .aret
 .avg2:
-    mov al, [di + bx]
-    add al, [si]
+    lodsb
+    add al, [di + bx]
     rcr al, 1
-    add [di], al
-    mov al, [di + bx + 1]
-    add al, [si + 1]
+    add al, [di]
+    stosb
+    lodsb
+    add al, [di + bx]
     rcr al, 1
-    add [di + 1], al
-    inc si
-    inc si
-    inc di
-    inc di
+    add al, [di]
+    stosb
     dec bp
     jnz .avg2
 .aret:
     ret
-.paeth:                             ; a = [di+bx], b = [si], c = [si+bx]
-    mov dl, [si + bx]               ; c
-    mov al, [di + bx]               ; a
-    mov cl, [si]                    ; b
-    mov ch, al
-    sub cl, dl                      ; b - c: its sign in DH...
-    sbb dh, dh
-    sub ch, dl                      ; ...a - c: its sign in DL
-    sbb dl, dl
-    xor cl, dh
-    sub cl, dh                      ; CL = pa = |b - c|
-    xor ch, dl
-    sub ch, dl                      ; CH = pb = |a - c|
-    cmp dh, dl
-    jne .pmix
-    cmp cl, ch                      ; c outside a..b: pc = pa + pb is the
-    jbe .pa                         ; largest, so a when pa <= pb, else b
-    mov al, [si]
-    jmp short .pa
-.pmix:                              ; c between them: pc = |pa - pb|
-    mov dl, cl
-    sub dl, ch
-    jnc .pm1
-    neg dl
-.pm1:
-    cmp cl, ch                      ; pa <= pb and pa <= pc: a
-    ja .pnota
-    cmp cl, dl
-    jbe .pa
-.pnota:
-    cmp ch, dl                      ; pb <= pc: b, else c
-    ja .pc
-    mov al, [si]
-    jmp short .pa
-.pc:
-    mov al, [si + bx]
-.pa:
-    add [di], al
-    inc si
-    inc di
+    ; Paeth (PAETH1): a = [di+bx], b = [si], c = [si+bx]. The predictor is a, b or
+    ; c, and which is a matter of where c lies against lo = min(a, b) and
+    ; hi = max(a, b) - it is symmetric in a and b, ties included:
+    ; c >= hi gives lo, c <= lo gives hi, and c strictly between gives lo
+    ; when 2(hi - c) <= c - lo, hi when 2(c - lo) <= hi - c, else c (with
+    ; pa = |b - c|, pb = |a - c|, pc = |pa - pb| there; at most one of the
+    ; two holds, both differences being at least 1)
+.paeth:                             ; (two a turn, an odd count entering
+    shr bp, 1                       ; at the second)
+    jnc .pt1
+    inc bp
+    jmp short .pt2
+.pt1:
+    PAETH1 .pm1
+.pt2:
+    PAETH1 .pm2
     dec bp
-    jnz .paeth
+    jnz .pt1
     ret
+    PAETHMID .pm1, .pt1
+    PAETHMID .pm2, .pt2
 
 ; pz_out - the unfiltered row to the emitter: K_EMIT, K_SCAT for Adam7 at
 ; 1/1, or progress alone for the passes an interlaced picture below 1/1
@@ -2243,7 +2431,7 @@ pz_conv:
     cmp bx, 1
     jne .i8s
     mov cx, bp
-    rep movsb
+    COPYCX
     jmp .out
 .i8s:
     dec bx
@@ -2373,7 +2561,7 @@ pz_conv:
     mov cx, bp                      ; no key, no step: one copy
     add cx, bp
     add cx, bp
-    rep movsb
+    COPYCX
     jmp .out
 .r8s:
     movsb
@@ -2547,7 +2735,6 @@ pz_tgrey:   dw 0
 pz_trgb:    times 3 dw 0
 pz_final:   db 0                    ; inflate
 pz_tabk:    db 0                    ; the tables built: 1 fixed, 2 dynamic
-pz_mlen:    dw 0
 pz_rd:      dw 0
 pz_hav:     dw 0
 pz_slen:    dw 0
@@ -2572,6 +2759,7 @@ pz_bnsub:   db 0
 pz_bsb:     dw 0
 pz_remain:  dd 0                    ; the rows: the bytes still wanted
 pz_pend:    dw 0
+pz_bias:    dw 0                    ; inflate's budget: the extraction's less BP
 pz_ptot:    dw 0
 pz_rdone:   dw 0
 pz_pass:    db 0

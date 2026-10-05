@@ -264,6 +264,12 @@ VM386PACCMAN := $(CURDIR)/vm/386-paccman
 # (tests/pxs256.py, SPEC.md 97.9)
 VMXTPXS := $(CURDIR)/vm/xt-pixelstein
 VMXTPXSHERC := $(CURDIR)/vm/xt-pixelstein-herc
+# The PiXEL machines (SPEC.md 106.26): vm/xt-weave's 640KB VGA XT (vm/xt on
+# the ibmxt86 board, the bend that machine already carries: 256KB holds no
+# master worth showing) and vm/386dx, each with only B: - the pixeldisk its
+# drive takes - and the uuid changed
+VMXTPIXEL := $(CURDIR)/vm/xt-pixel
+VM386PIXEL := $(CURDIR)/vm/386-pixel
 
 # The RUNCPM machines (SPEC.md 74.5, 74.6): one per FLOPPY GEOMETRY, because
 # the three RUNCPM disks do not carry the same software and the machines that
@@ -2039,7 +2045,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         scribe scribedisk \
         cc-note chello covl pkgrun pkgbig pkgfmt cword cworddisk 386-c-word runcpm runcpmdisk \
         paccman paccmandisk pmcbandbench xt-paccman 386-paccman \
-        xt-pixelstein xt-pixelstein-herc \
+        xt-pixelstein xt-pixelstein-herc xt-pixel 386-pixel \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
@@ -6231,7 +6237,7 @@ $(BUILD)/fractal.o88: $(BUILD)/fractal.bin tools/os88pkg.py $(PKGZSTAMP)
 # memory for its canvas (int 12h decides; a smaller machine gets a notice
 # window instead), so `make run-640` is the way to exercise it.
 $(BUILD)/paint.bin: apps/paint/paint.asm apps/os88api.inc apps/os88ui.inc \
-                    apps/os88alt.inc | $(BUILD)
+                    apps/os88alt.inc apps/os88lzw.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/paint/paint.asm
 	@echo "paint:  $(call FILESIZE,$@) bytes"
 
@@ -14462,3 +14468,21 @@ $(BUILD)/pixel720.img: $(BUILD)/pixel.o88 $(PXGFX) $(PX_SAMPLES_720) tools/os88d
 	python3 tools/os88disk.py --size 720 -o $@ $< $(PXGFX) $(addprefix PICTURES:,$(PX_SAMPLES_720)) --folder SYSTEM/APPDATA
 $(BUILD)/pixel360.img: $(BUILD)/pixel.o88 $(PXGFX) $(PX_SAMPLES_360) tools/os88disk.py
 	python3 tools/os88disk.py --size 360 -o $@ $< $(PXGFX) $(addprefix PICTURES:,$(PX_SAMPLES_360)) --folder SYSTEM/APPDATA
+
+# ...and the two machines to LOOK at it on (SPEC.md 106.26): `xt-pixel` the
+# 4.77MHz 640KB XT with a VGA and the 360KB pixeldisk in B: - the machine
+# every figure in SPEC.md 106 is about, so the opens, the filmstrip's idle
+# steps and the close are felt at their real length - and `386-pixel` the
+# 386DX/25 with the 1.44MB one, where the same gallery opens in seconds.
+# Copies of vm/xt-weave and vm/386dx with fdd_02_fn and the uuid changed and
+# nothing else, for the standing reason. 86Box cannot ASSERT anything
+# (docs/TESTING.md): the gates are MartyPC's (tests/px*.py); these are where
+# a human looks. $(UNPROTECT) for the standing reason: Save As and the
+# thumbnail cache (SYSTEM/APPDATA/PIXEL.THC) write to B:
+xt-pixel: $(IMG360) $(BUILD)/pixel360.img
+	@$(UNPROTECT) $(VMXTPIXEL)/86box.cfg
+	$(BOX) -P $(VMXTPIXEL) -N
+
+386-pixel: $(IMG) $(BUILD)/pixel.img
+	@$(UNPROTECT) $(VM386PIXEL)/86box.cfg
+	$(BOX) -P $(VM386PIXEL) -N

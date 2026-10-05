@@ -859,6 +859,11 @@ px_onup:
     push cx
     push dx
     push si
+    call px_hstop                   ; A RELEASE ACTS: the frame job a tick
+                                    ; started after the press is stopped
+                                    ; first, as every other input's is
+                                    ; (review-w8 A2: a card's OK beside a
+                                    ; running GIF wedged PiXEL busy)
     call px_touch                   ; (the idle the thumbnails wait for)
     call px_layout
     jnc .lay
@@ -1392,6 +1397,22 @@ px_ontimer:
     call OSAPI_WM_TOP               ; ANOTHER WINDOW IN FRONT (review-w5 F13):
     sub bx, [px_win]                ; 0 when it is ours - the engine, the
     mov [px_behind], bx             ; animation and this timer go by it
+    jnz .nmv
+    push cx                         ; ...and in front, the POINTER MOVING is
+    push dx                         ; the user too (review-w8 E2): a step
+    call OSAPI_MOUSE                ; waits PX_THIDLE past it, as past a
+    cmp cx, [px_mxy]                ; press or a key
+    jne .mv
+    cmp dx, [px_mxy + 2]
+    je .mvn
+.mv:
+    mov [px_mxy], cx
+    mov [px_mxy + 2], dx
+    call px_touch
+.mvn:
+    pop dx
+    pop cx
+.nmv:
     cmp byte [px_hmode], 1          ; a THUMBNAIL's hidden decode with another
     jne .h1                         ; window in front: stopped - its worker
     or bx, bx                       ; takes the CPU from the program the user
@@ -1481,7 +1502,8 @@ px_onwake:
     je .vis                         ; pump, and its end - nothing is painted
     cmp byte [px_hmode], 3          ; (a slide decoded waits for its deadline)
     je .out
-    call px_pumpfill                ; (px_busy is 0: every empty slot)
+    call px_pumpfill                ; (px_busy 0: every empty slot - one, a
+                                    ; thumbnail's, SPEC.md 106.26)
     call OSAPI_GFX_LOCK
     cmp byte [px_job], JOB_NONE
     jne .unl
@@ -2186,6 +2208,7 @@ px_examine:
     mov [px_fprog], al
     mov [px_cur + PXR_PACK], al
     mov [px_cur + PXR_SCL], al
+    mov [px_cur + PXR_KEEP], al
     cmp byte [px_hmode], 0          ; a hidden decode's file is one of the
     je .walk                        ; folder list's: no walk (SPEC.md 106.21)
     call px_hfile
@@ -4539,6 +4562,8 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_cstat, 1               ; the cache: 0 not read, 1 read, 2 none
     PXVAR px_cnowr, 1               ; ...a write was refused this session
     PXVAR px_cwip, 1                ; ...a write is under way, a step a call
+    PXVAR px_fkept, 1               ; ...the FOLDER part kept between its steps
+    PXVAR px_mxy, 4                 ; the pointer at the last timer call
     ; A GIF THAT PLAYS (SPEC.md 106.25): the window's half here, the GIF
     ; part's DECODE reads and writes the rest by name (it is LINKED)
     PXVAR px_anoff, 1               ; a test's byte: no animation at all

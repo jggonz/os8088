@@ -1601,6 +1601,8 @@ pu_s_mem:   db 'not enough memory', 0
 pu_s_sel:   db '; selection ', 0
 pu_s_pix:   db '; pixel ', 0
 pu_wfmts:   db PXF_PNG, PXF_GIF, PXF_BMP, PXF_PCX, PXF_PIX, PXF_BMP
+pu_wbits:   db 8, 8, 8, 8, 4, 24    ; ...the depth each writes
+pu_wpack:   db PK_DEFL, PK_LZW, PK_NONE, PK_RLE, PK_NONE, PK_NONE
 
 ; pu_cstr / pu_cat - the part's words into the package's (pxedit.asm's
 ; pv_cstr / pv_cat). Preserve all but SI / DI
@@ -2005,12 +2007,22 @@ pu_fin:
     mov [px_cur + PXR_SCL], al
     mov [px_cur + PXR_FAST], al
     mov [px_cur + PXR_DSCL], al
-    mov al, 8
-    cmp byte [px_wfmt], WF_BMP24
-    jne .b8
-    mov al, 24
-.b8:
-    mov [px_cur + PXR_BITS], al
+    mov bl, [px_wfmt]               ; ...what it holds as the file says it
+    xor bh, bh                      ; - the depth and the packing Image Info
+    mov al, [cs:pu_wbits + bx]      ; shows (the wave-9 functional check:
+    mov [px_cur + PXR_BITS], al     ; they were the source's)
+    mov al, [cs:pu_wpack + bx]
+    mov [px_cur + PXR_PACK], al
+    mov byte [px_cur + PXR_KEEP], 0 ; (one picture, as written)
+    mov dx, [px_anseg]              ; A STILL by construction: an animation
+    or dx, dx                       ; that played goes with its claim
+    jz .na                          ; (review-w8 A5: it walked the new file
+    call OSAPI_MEM_FREE             ; at the GIF's offsets)
+.na:
+    xor ax, ax
+    mov [px_anseg], ax
+    mov [px_anim], ax               ; (and px_anon, the byte after it)
+    mov [px_anuser], al
     mov byte [px_dirty], 0
     mov byte [px_udirty], 1         ; (undo now leaves it unsaved)
     PSV SV_WALK                     ; the folder as it is now

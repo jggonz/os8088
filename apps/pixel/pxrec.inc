@@ -42,7 +42,11 @@ PXR_DSCL    equ 49                  ; byte: the scale the master was DECODED
                                     ; at, which an edit does not change: a
                                     ; picture smaller than its file is never
                                     ; saved over it unasked (review-w7 F8)
-PXR_SZ      equ 50
+PXR_KEEP    equ 50                  ; byte: the file holds what a master
+                                    ; cannot - more frames, a transparent
+                                    ; index, alpha: a Save over it goes
+                                    ; through Save As (review-w8 N1)
+PXR_SZ      equ 52
 
 ; --- a VIEW (pxview.inc): where the picture is on the screen and how it is
 ; sampled - the GIF part maps an animation frame's rect through the canvas's

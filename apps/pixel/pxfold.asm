@@ -1123,6 +1123,7 @@ pf_write:
 .step:
     cmp byte [px_cwip], 0
     jne .slots
+    mov byte [cs:pf_dfok], 0        ; (the free room asked afresh)
     call pf_chdr                    ; THE FIRST: read again, CF = the file
     mov byte [cs:pf_miss], 0        ; is not there
     jnc .ex
@@ -1197,6 +1198,8 @@ pf_write:
 
 pf_miss:    db 0
 pf_all:     db 0
+pf_dfok:    db 0                    ; [pf_df] holds this write's free room
+pf_df:      dd 0
 
 ; pf_drop - nothing more to write: NEW cleared, the hits forgotten.
 ; Preserves all
@@ -1250,15 +1253,28 @@ pf_cput:
     xor bh, bh
     cmp bx, PX_CMAX
     jae .lru
-    push bx
+    cmp byte [cs:pf_dfok], 0        ; the disk's free room, asked ONCE a
+    jne .df                         ; write (a FAT scan) and counted down
+    push bx                         ; for each entry it grows by
     call OSAPI_FILE_DFREE           ; DX:AX = free bytes
     pop bx
-    jc .lru
+    jnc .dfs
+    xor ax, ax                      ; (unknown: no room, the LRU's)
+    xor dx, dx
+.dfs:
+    mov [cs:pf_df], ax
+    mov [cs:pf_df + 2], dx
+    mov byte [cs:pf_dfok], 1
+.df:
+    mov ax, [cs:pf_df]
+    mov dx, [cs:pf_df + 2]
     or dx, dx
     jnz .grow
     cmp ax, PF_CROOM
     jb .lru
 .grow:
+    sub word [cs:pf_df], 4096
+    sbb word [cs:pf_df + 2], 0
     mov es, [px_tseg]
     inc byte [es:PXT_HDR + CH_COUNT]
     jmp short .have

@@ -117,6 +117,27 @@ px_eshow:
     jne .sync
     call px_viewclaim
     jc .sync
+    mov al, [px_cur + PXR_FMT]      ; THE PART THE PLANS ARE MADE BY, here:
+    call px_fpart                   ; a save gave it back, and a worker
+    or al, al                       ; cannot fetch - the search fell to the
+    jz .sync                        ; UI task again (review-w7 F14)
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov [px_ppart], al
+    call px_pfetch
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    jc .sync
+    mov al, [px_ppart]
+    call px_kneed                   ; (held from now, as a decode's is)
     call px_spawn
     jc .sync
     mov al, [px_bpp]

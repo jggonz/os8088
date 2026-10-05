@@ -45,6 +45,11 @@ ph_more:
     call OSAPI_FILE_READ_AT         ; DX:AX = the bytes delivered
     pop bx
     jc .rd
+    or dx, dx                       ; NOT EVEN TO THE MARKER (a FAT chain
+    jnz .some                       ; shorter than the file's size): cut
+    cmp ax, bx                      ; short - never a window over bytes no
+    jb .tr                          ; read put there (review-w8 X1)
+.some:
     add bx, PH_HEADMAX              ; the head: what was read, to 2,048
     or dx, dx                       ; past the marker
     jnz .cap
@@ -58,6 +63,10 @@ ph_more:
     jmp short .out
 .rd:
     mov ax, PXD_READ
+    stc
+    jmp short .out
+.tr:
+    mov ax, PXD_TRUNC
     stc
     jmp short .out
 .flat:
@@ -82,6 +91,12 @@ ph_more:
     mov si, [px_flatlen + 2]        ; end, at most 2,048 past the marker
     sub cx, ax
     sbb si, dx
+    jc .tr                          ; (past the file's end: X1's twin)
+    or si, si
+    jnz .fb
+    cmp cx, bx
+    jb .tr
+.fb:
     add bx, PH_HEADMAX
     or si, si
     jnz .fc

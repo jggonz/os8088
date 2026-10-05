@@ -29,11 +29,15 @@ def pkg_syms(defines=()):
 
 
 def instance(m, S, image):
-    """PiXEL's segment: the instance whose image carries this header."""
+    """PiXEL's segment: the LIVE instance whose image carries this header.
+    A record whose state is not 1 is a closed one whose region may still
+    hold the image (review-w8 N2's probe waited for a close through a freed
+    record and never saw one)."""
     for i in range(12):
         r = m.read(S("inst_tab") + i * os88geom.I_RECSZ, os88geom.I_RECSZ)
         c = u16(r, os88geom.I_SPTR)
-        if c and m.read(c * 16, 32) == image[:32]:
+        if (r[os88geom.I_STATE] == 1 and c
+                and m.read(c * 16, 32) == image[:32]):
             return c
     return None
 

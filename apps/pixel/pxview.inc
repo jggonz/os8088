@@ -2375,9 +2375,13 @@ px_s2t:
     mov cx, ax
     mov ax, [px_vcan + VW_HS]
     mov dx, [px_vcan + VW_HS + 2]
-    call px_mulx                    ; BX:DX:AX = master x, 16.16
-    mov ax, dx                      ; ...x 2^16 / the thumbnail's step
-    mov dx, bx
+    call px_mulx                    ; BX:DX:AX = master x, 16.16 (BX is 0:
+                                    ; x < 8,192); DX:AX / the thumbnail's
+                                    ; 16.16 step is the thumbnail's x.
+                                    ; (Wave 2 divided DX:AX's whole part,
+                                    ; 2^16 short: the frame was ONE PIXEL
+                                    ; at the thumbnail's corner - the
+                                    ; wave-9 functional check's F1)
     mov bx, [px_vthm + VW_HS]
     mov cx, [px_vthm + VW_HS + 2]
     call px_div32
@@ -2392,9 +2396,7 @@ px_s2tv:
     mov cx, ax
     mov ax, [px_vcan + VW_VS]
     mov dx, [px_vcan + VW_VS + 2]
-    call px_mulx
-    mov ax, dx
-    mov dx, bx
+    call px_mulx                    ; (px_s2t's)
     mov bx, [px_vthm + VW_VS]
     mov cx, [px_vthm + VW_VS + 2]
     call px_div32

@@ -231,6 +231,10 @@ px_pumpfill:
 .fill:
     push ax
     xor al, al
+    cmp byte [px_hmode], 1          ; a THUMBNAIL's decode: one slot a wake
+    jne .fn                         ; (2: a whole one), so a callback reads
+    mov al, 2                       ; one slot - nobody is waiting on its
+.fn:                                ; rows (SPEC.md 106.26)
     call px_pumpn
     pop ax
     ret
@@ -286,7 +290,8 @@ px_pumpone:
     pop ax
     ret
 
-; px_pumpn - px_pumpfill's body: AL = 1 for one slot only
+; px_pumpn - px_pumpfill's body: AL = 1 for one slot only, of 8 KB at most;
+; 2 for one whole slot
 px_pumpn:
     cmp byte [px_rflat], 0
     jne .ret
@@ -347,7 +352,7 @@ px_pumpn:
     push bx
     mov es, [px_sseg + bx]
     mov cx, [px_chunk]
-    test bp, 0x00FF                 ; the open's FIRST read is 8 KB at most:
+    test bp, 1                      ; the open's FIRST read is 8 KB at most:
     jz .full                        ; it is what the first rows wait on, and
     cmp cx, PX_CHUNKLO              ; the worker takes a slot of any length
     jbe .full
@@ -1099,6 +1104,7 @@ px_open:
     call px_toast
     jmp .out
 .free:
+    call px_fpdrop                   ; (a kept FOLDER part: its claim back)
     call px_eclear                  ; undo, the selection and the EDIT part
     mov si, px_cur                  ; let go (SPEC.md 106.24); bank what is
     mov di, px_prev                 ; showing (SPEC.md 106.8)
