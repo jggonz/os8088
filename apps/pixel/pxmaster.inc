@@ -568,14 +568,20 @@ px_scfloor:
     push ax
     mov byte [px_sfloor], 0
     mov byte [px_cur + PXR_FAST], 0
-    test byte [px_k + PXK_FLAGS], PXKF_DCT
-    jz .out
+    cmp byte [px_hmode], 2          ; A SLIDE in the window, of any format: it
+    jne .nsl                        ; is shown at Fit, so fast open's floor -
+    cmp byte [px_fsin], 0           ; or memory's choice beside the shown
+    je .fast                        ; master alternates fine and coarse
+.nsl:                               ; (review-w5 F15); a zoom re-decodes it
+    test byte [px_k + PXK_FLAGS], PXKF_DCT  ; finer, PXR_FAST's way. Full
+    jz .out                         ; screen's are its own screen's
     mov al, [px_zreq]
     cmp al, 0xFF
     jne .set
     call OSAPI_CPU_INFO             ; AL = the tier
     cmp al, CPU_8086
     jne .out
+.fast:
     call px_sfast
 .set:
     mov [px_sfloor], al

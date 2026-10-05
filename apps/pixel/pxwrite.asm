@@ -2014,6 +2014,12 @@ pu_fin:
     mov al, [cs:pu_wpack + bx]
     mov [px_cur + PXR_PACK], al
     mov byte [px_cur + PXR_KEEP], 0 ; (one picture, as written)
+    cmp bl, WF_PIX                  ; ...and a PAL master's palette is the
+    jae .np                         ; 256 entries the 8-bit writers put in the
+    cmp byte [px_cur + PXR_PMODE], PM_PAL   ; file (Image Info said the
+    jne .np                         ; source's count: review-w8 A5's MINOR)
+    mov word [px_cur + PXR_NPAL], 256
+.np:
     mov dx, [px_anseg]              ; A STILL by construction: an animation
     or dx, dx                       ; that played goes with its claim
     jz .na                          ; (review-w8 A5: it walked the new file

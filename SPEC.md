@@ -165234,8 +165234,32 @@ the frame follows a zoom and a pan (`final/w9-cga-navframe.png`).
   in-memory file's head past its end does the same.
 - **X2** wording (above, 106.25): "a file read whole into memory", which a
   32 KB-cluster volume's every file is.
+- **Image Info's two leftovers**: a PAL picture saved as PNG, GIF, BMP or
+  PCX reads the 256 entries those writers put in the file (it read the
+  source's count - "Own, 8" for a PCX); and a picture edited at a scale
+  reads its size at the FILE's scale (an 800 x 600 turned at 1/2 read 300 x
+  400 as if the file were that; 600 x 800 now - Copy Info likewise).
 - **N2** was the probe's: `tests/pxsyms.py`'s `instance()` matched a CLOSED
   record whose region still held the image; it asks the record's state now.
+
+Two of the **wave-5 review's** last: **F15** a slide decoded beside the
+shown master took whatever scale memory left - so on the 640 KB machine
+large slides alternated, 1/1 then 1/2 then 1/1, every other one softer at
+Fit. A WINDOWED slide of any format now takes fast open's floor, the
+coarsest scale the canvas shows at Fit magnified by at most 4/3 (106.19's
+rule, which only a JPEG on an 8088 had), and `PXR_FAST` says so, so a zoom
+past it reads the file again finer; full screen's slides keep their own
+screen's choice. **F16** a hidden decode holds exactly §50.2's eight claims
+(the face, the shown master, the view, the store, the hidden master, the
+work claim, the ring, the decoder part), so a NINTH held while PiXEL is idle
+made every thumbnail refuse `PXD_MEM` and marked every name - silently. The
+ninth that ships is a shown GIF's animation claim (1 KB, held while it plays
+AND while it is stopped): no hidden decode begins while it is held (the
+cache's visits, the open picture's own thumbnail and the writes go on). Any
+other is caught where it bites: a hidden decode refused `PXD_MEM` while 64
+KB or more are free is the claims and not the bytes, so no name is marked,
+the thumbnails wait until the folder is walked again, and the toast says
+`Thumbnails wait: all claims in use` once.
 
 And the **wave-7 review's F14**, which 106.25 named and did not fix: after a
 save had given the decoder part back, the next palette operation's plans
@@ -165250,8 +165274,7 @@ only later frame cannot be read restarting for ever, in front and playing), `av_
 two failure paths (MINORs whose fixes cost resident bytes against no
 measured harm); X3 (an in-memory leg in `pxextraemu`, a NIT); E3 (a pending
 entry follows the drive, not the disk: its key makes a false hit
-improbable, and nothing but the cache is written); F8's residue (the record
-of a picture turned at a scale reports the reduced size as the source's).
+improbable, and nothing but the cache is written).
 
 #### The functional check on the glass
 
@@ -165297,8 +165320,9 @@ regression against one of those numbers.
 
 #### Resident
 
-Image **45,547** + bss **11,845** = **57,392** of 61,440, 4,048 to spare:
-**+221** on wave 8's 57,171, every byte a fix - the pointer's look (E2),
+Image **45,640** + bss **11,845** = **57,485** of 61,440, 3,955 to spare:
+**+314** on wave 8's 57,171, every byte a fix (F15's floor, F16's test and
+its toast among them) - the pointer's look (E2),
 `px_fpdrop` and `px_cfinal` and the kept part's test, the release's stop
 and the timer's gate (A2), the A key's guard, the thumbnail decode's
 first-slot and one-slot reads, `PXR_KEEP`'s two tests, the palette part's
@@ -165333,4 +165357,7 @@ the other three and five more CGA-only runs. A baseline every comparison
 disagrees with identically is the baseline's: it was taken the moment the
 open went still, inside the status bar's five-second memory look, and every
 exit repaints the look that followed. `pxfsx` now takes it when two pictures
-a look apart agree, and says so when they did not.
+a look apart agree, and says so when they did not - and in five runs alone
+afterwards it said so in every one, the pixels that moved the status bar's
+`Memory:` digits (the CGA's 368-390 x 165-171, the VGA's 464-486 x 475-481)
+and the menu bar's clock: the cause, seen. All five passed.

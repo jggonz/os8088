@@ -3605,7 +3605,7 @@ pf_fin:
     mov al, [px_dirty]
     xchg al, [px_udirty]
     mov [px_dirty], al
-    jmp short .shown
+    jmp near .shown
 .new:
     mov ah, [px_eop]
     mov [px_uop], ah
@@ -3627,11 +3627,15 @@ pf_fin:
 .inpl:
     mov ax, [px_edw]
     mov [px_cur + PXR_MW], ax
-    mov [px_cur + PXR_SW], ax       ; the master IS the picture now: no
-    mov ax, [px_edh]                ; scale, nothing for a re-decode to
-    mov [px_cur + PXR_MH], ax       ; read finer (SPEC.md 106.19)
-    mov [px_cur + PXR_SH], ax
-    mov byte [px_cur + PXR_SCL], 0
+    mov dx, [px_edh]
+    mov [px_cur + PXR_MH], dx
+    mov cl, [px_cur + PXR_DSCL]     ; the master IS the picture now: no
+    shl ax, cl                      ; scale, nothing for a re-decode to read
+    shl dx, cl                      ; finer (SPEC.md 106.19) - and Image
+    mov [px_cur + PXR_SW], ax       ; Info's size is the FILE's scale's, so
+    mov [px_cur + PXR_SH], dx       ; an 800 x 600 turned at 1/2 reads 600 x
+    mov byte [px_cur + PXR_SCL], 0  ; 800, not 300 x 400 (review-w8, F8's
+                                    ; residue)
     mov byte [px_cur + PXR_FAST], 0
     cmp byte [px_eop], EV_RESIZE
     jb .done

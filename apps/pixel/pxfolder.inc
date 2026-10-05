@@ -20,6 +20,9 @@
 ; pxthc.inc's: the FOLDER part, apps/pixel/pxfold.asm, reads them too)
 PX_TKB      equ (PXT_SL0 + PX_TSLOTS * PXT_SLSZ + 1023) / 1024
 PX_THMINFREE equ 128                ; KB the heap keeps beside the store
+PX_THROOM   equ 64                  ; KB free that a hidden decode's PXD_MEM
+                                    ; cannot be the bytes' (its master is a
+                                    ; thumbnail's scale): the claims'
 PX_THIDLE   equ 36                  ; ticks of no input before a step: a
                                     ; step is up to ~2.4 s on an XT (106.25)
 PX_SLIDE    equ 91                  ; ticks a slide shows (5 s)
@@ -1858,7 +1861,7 @@ px_thstep:
     jc .out1                        ; call holds the desktop for the visit
     or ax, ax                       ; and a make together - review-w5 F13)
     jz .out1
-    jmp short .drew
+    jmp .drew
 .out1:
     jmp .out
 .cur:
@@ -1878,6 +1881,9 @@ px_thstep:
 .dec:
     cmp byte [px_slon], 0
     jne .out1
+    cmp word [px_anseg], 0          ; A GIF'S ANIMATION CLAIM, held while it
+    jne .done                       ; is shown: a hidden decode's eight claims
+                                    ; would be nine (review-w5 F16)
     call px_thpick                  ; the next card's: a hidden decode
     jc .done
     call px_nfgo
@@ -1889,6 +1895,18 @@ px_thstep:
     call px_hopen
     jnc .out
     mov [px_thref], al              ; (the refusal, for a test)
+    cmp al, PXD_MEM                 ; NO MEMORY, WITH MEMORY FREE: it is the
+    jne .mk                         ; claims, not the bytes - §50.2 gives an
+    push bx                         ; owner eight and a hidden decode uses
+    call OSAPI_MEM_AVAIL            ; them all (review-w5 F16). Said once,
+    pop bx                          ; and no name is marked: the thumbnails
+    cmp ax, PX_THROOM               ; wait until the folder is walked again
+    jb .mk
+    mov byte [px_tnone], 1
+    mov si, px_s_thcl
+    call px_toast
+    jmp short .out
+.mk:
     mov ax, [px_hidx]               ; refused before the worker: marked
     call px_rec
     or byte [si + NR_FLAGS], NRF_NOTH

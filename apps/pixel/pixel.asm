@@ -3993,6 +3993,7 @@ px_s_nopico: db 'No picture open', 0
 px_s_noother: db 'No other picture here', 0
 px_s_nofs:  db 'No full screen here', 0
 px_s_nothc: db 'Thumbnails not saved', 0
+px_s_thcl:  db 'Thumbnails wait: all claims in use', 0
 px_s_opening: db 'Opening ', 0
 px_s_pct:   db '%', 0
 px_s_fitsp: db 'Fit ', 0
