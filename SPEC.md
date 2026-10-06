@@ -1199,7 +1199,7 @@ moves, and each had already shipped a failure by the time it was written:
   **thunk**, not the `_x` body. A kernel window's template, menu set and
   installed handlers are the one exception, and a deliberate one: `wm_pkgcall`
   dispatches a `W_SEG` 0 window **into `.cold`** (§2.6.3), so `fm_tpl`,
-  `fm_menus`, `fdlg_tpl`, `cp_tpl` and the rest name near procs in the cold
+  `fm_menus`, `cp_tpl` and the rest name near procs in the cold
   segment — and a `.text` proc there would be the wild jump.
 - **A macro argument is a call site.** `OSAPI_SLOT dskw_dfree` near-calls its
   argument from inside the macro body, and six of those pointed into these
@@ -39533,10 +39533,10 @@ split is what makes the failure read as *§47 rule 1 is broken* when rule 1 is
 working perfectly. Measured on a cycle-accurate 5150/CGA, the same refused
 button reached two ways: **158 ink pixels redrawn in place against 116
 freshly painted**, 0 apart after the fix. In the kernel exactly one button
-needs it for this reason — the file dialog's default, redrawn by
-`fdlg_draw_name` on the edge where `fdlg_actok` moves; Cancel, Drive and New
-Folder are drawn once onto a pane `wm_paint_all` has already whited and can
-never change what they say. `tests/fdlggrey.py` is the gate and it
+needs it for this reason — the Standard File chooser's default, redrawn
+where its greying flips (§38.8; the retired dialog's `fdlg_draw_name`, on
+the edge where `fdlg_actok` moved); Cancel and Drive are drawn once onto a
+pane `wm_paint_all` has already whited and can never change what they say. `tests/fdlggrey.py` is the gate and it
 discriminates: 42 pixels differ without the flag, 0 with it.
 
 **`OS88UI_INK` puts the label's colour in `DI`'s HIGH BYTE**, for a button
@@ -46017,7 +46017,8 @@ The dialog's header draws the leaf where it drew `fdlg_s_sub`: its pen is
 x=30 and the list frame starts at `FD_LX2` = 213, so 22 cells are free
 against the 12 an 8.3 name needs — measured before the name was allowed
 there. A folder it was *placed* in still reads `Folder`, and the one default
-that can be named is `MEDIA`, which `fdlg_home_go` really does walk into.
+that can be named is `MEDIA`, which `fdlg_home_go` really did walk into
+(the chooser's `fdlg_seed` since §38.1, §38.10).
 
 Cost, measured: `.text` +11, `.bss` +165 (4 × 33 for the windows, 33 for the
 dialog), `.cold` +349 — **`KERN_SIZE` unchanged**, so the machine has not
@@ -55451,8 +55452,9 @@ has to be checked rather than argued.** `dsk_chdir_q` publishes
 left a listing built — so a reader of the global snapshot that skipped the
 staleness test would now come up empty. `drv_mounted` and `drv_vol_back` have
 left exactly that debt since §51.5.2 and nothing collects it, on the same
-grounds: every Disk window paints from its own view cache (§22.1) and
-`fdlg_home_go` ends in a full `dsk_chdir` on both branches. Driven on a
+grounds: every Disk window paints from its own view cache (§22.1) — the
+Standard File chooser too, since §38.1 — and the retired dialog's
+`fdlg_home_go` ended in a full `dsk_chdir` on both branches. Driven on a
 cycle-accurate 5150/CGA, an identical session on this kernel and on the one
 before it — open the Task Manager, click back to Locator, open a Disk
 window — puts that window up in the same 3 `int 13h` calls at **0 differing

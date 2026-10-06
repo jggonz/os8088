@@ -4779,7 +4779,7 @@ api_rn:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target
 ; the dialog ask for no default - Tracker, Frotz (twice) and ModPlug (twice,
 ; Open and PlayList > Add...) - so this was every one of them.
 ;
-; It takes no V for the reason the macro's header gives: fdlg_home_go decides
+; It takes no V for the reason the macro's header gives: fdlg_seed decides
 ; where a DIALOG opens, and a volume switch underneath it would pre-empt that.
 ; -----------------------------------------------------------------------------
 api_fdlg_open:
