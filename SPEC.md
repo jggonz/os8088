@@ -163043,6 +163043,31 @@ first would buy a better scale for the new one (the scale computed with the
 old master's KB added to the largest run is finer), it is freed first, and
 a cancel then leaves the canvas empty.
 
+**...and only when its claims fit beside it (2026-10-06).** Keeping the old
+master was decided on the scale alone: the new master in the largest run,
+its work claim and its ring in the TOTAL. So an open that kept it could find
+no run for the work claim or the ring, and learn so the dear way -
+`mem_claim` compacting and shedding the kernel's caches (§66.4, §50.6.2) on
+each claim that failed, then the fallback above freeing the old master and
+claiming again. `pxbench` caught it once the resident package was 4.7 KB
+smaller (106.21): FAST OPEN of VACATION.JPG straight after its 1/1 open, on
+the 5150, kept the 1/1 master, compacted three times, rolled back, and put
+its first rows on the glass in 5.05 s where it had 2.84. Now `px_keepok`
+keeps the old master only when the new master, its work claim and the ring
+(`PX_RINGKB`, the floor the scale is decided against) fit, with the 8 KB
+reserve, in `OSAPI_MEM_AVAIL`'s largest run TOGETHER, computed with the old
+master standing - the one run the package can see, and the run `mem_claim`
+leaves after its own compaction (§66.10.3). Otherwise the old master is freed
+before anything is claimed, as the fallback would have ended up doing, and
+the scale is asked again without it. What changes is which claims are held
+while a picture decodes, never how a master is made (`pxdecode`). It costs
+52 bytes of image (41,299 -> 41,351), and the same FAST OPEN puts its first
+rows up in 2.84 s again, its whole open 45.54 s; the 1/1 open beside it is
+115.47 s, no slower.
+The windowed slideshow's hidden decode masks the shown picture's `HAVE`
+(106.21), so it never reaches this decision: px_claims still never frees the
+picture on the glass for a slide.
+
 **Claims** (at most eight an owner, §50.2; since wave 4 a master's claim is
 2 KB longer, the histogram's counts at its tail, 106.20): the face
 (106.16), the master, the VIEW

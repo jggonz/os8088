@@ -407,6 +407,11 @@ px_claims:
     jb .free
 .keep:
     mov cl, [px_kscl]
+    mov ax, [px_prev + PXR_MKB]     ; KEPT ONLY IF ITS CLAIMS FIT BESIDE IT
+    sub [px_avl], ax                ; (SPEC.md 106.8, 2026-10-06): the
+    sub [px_avt], ax                ; numbers as they are, the old master
+    call px_keepok                  ; standing - else it goes now, not after
+    jc .free                        ; the claims compact, shed and roll back
     jmp short .go
 .free1:
     cmp byte [px_prev + PXR_HAVE], 0  ; nothing fits with it held: let it go
@@ -521,6 +526,36 @@ px_capavl:
 .k:
     pop ax
 .out:
+    ret
+
+; px_keepok - CL = the scale px_claims would keep the previous master
+; beside: CF = 0 when its master, its work claim and the ring fit [px_avl]
+; TOGETHER - the largest run (the run mem_claim would leave after its own
+; compaction, SPEC.md 66.10.3) is the one run the package can see, so it is
+; the claims' one run here. CF = 1: they may not, and claiming them would
+; compact, shed the caches and refuse the work claim or the ring before
+; px_claims let the old master go anyway. Preserves all but the flags
+px_keepok:
+    push ax
+    push bx
+    call px_mkb
+    jc .no
+    mov bx, ax                      ; BX = master KB
+    call px_wkb
+    jc .no
+    add bx, ax
+    jc .no
+    add bx, PX_RESKB + PX_RINGKB + 1
+    jc .no
+    cmp bx, [px_avl]
+    ja .no
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop bx
+    pop ax
     ret
 
 ; px_pickscale - out CL = the finest scale whose master fits [px_avl] less
