@@ -20,6 +20,8 @@ not do, SPEC.md 11.96.12 replays a moved window's pixels instead of drawing
 them):
 
   greyed -> live      a click on a row          (fm_onclick's FDH_SEL)
+  live   -> live      Down, on kern_big         (22.26's FDH_SEL: no flip,
+                                                 so NO redraw, SPEC.md 38.8)
   live   -> greyed    a click on empty list     (fm_onclick's .clear)
 
 The negative control is free: the live and greyed pictures must DIFFER, so a
@@ -127,6 +129,21 @@ with os88ui.boot(SYS, apps=APPS, machine=MACHINE) as ui:
     check("GREYED carries less ink than LIVE (a dithered caption)",
           sum(grey0) < sum(live_fresh),
           "(ink %d vs %d)" % (sum(grey0), sum(live_fresh)))
+
+    # --- live -> live, by Down (kern_big: SPEC.md 22.26 moves a selection) ---
+    # FDH_SEL again, and this time the greying does not flip, so 38.8 draws
+    # nothing: the button must still be the freshly painted live one
+    if not SMALL:
+        m.key("ArrowDown")
+        until(ui, lambda: fs(ui, geom.FS_SEL) == 1, "Down to select row 1")
+        ui.settle()
+        down_redrawn = btn(ui, w)
+        repaint(ui)
+        down_fresh = btn(ui, w)
+        same("LIVE (Down): redrawn == freshly painted", down_redrawn,
+             down_fresh)
+        same("...and is the live picture the click left", down_fresh,
+             live_fresh)
 
     # --- live -> greyed, by a click on empty list ----------------------------
     # The row BELOW the last entry, inside the list (fm_listb is the layout

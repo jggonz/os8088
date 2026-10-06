@@ -1134,9 +1134,10 @@ dkx_hit:
 ; with the record the press found possibly gone in between.
 ;
 ; It asks wm_top HERE rather than reading [dock_act], which is dkx_paint's
-; scratch - fdlg_sel_bar's rule about [fdlg_shown] (SPEC.md 38.3). And it
-; compares WINDOWS where dkx_key compares records: inst_bind_win writes I_WIN
-; and wm_owner together, so the two cannot disagree.
+; scratch - the retired dialog's fdlg_sel_bar rule about [fdlg_shown]
+; (SPEC.md 30.4). And it compares WINDOWS where dkx_key compares records:
+; inst_bind_win writes I_WIN and wm_owner together, so the two cannot
+; disagree.
 ; -----------------------------------------------------------------------------
 dkx_act_slot:
     push ax

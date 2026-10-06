@@ -547,6 +547,16 @@ class UI:
                        % ((w.title,) + want), limit)
         except UIError:
             got = self._rect(w.i)[:2]
+            if got == want:
+                # ...and the record says it ARRIVED, so the half of the wait
+                # that timed out is the lock's - a "landed at" naming the
+                # very spot asked for would blame the window manager for a
+                # drag that worked
+                raise UIError(
+                    "window %r arrived at (%d,%d) but gfx_lock_flag never "
+                    "came free within the limit - ui_drag has not finished "
+                    "(SPEC.md 11.96.12's wm_dc_take) or another task holds "
+                    "the gfx lock." % ((w.title,) + want))
             if got == was:
                 raise UIError(
                     "window %r did not move at all: it is still at (%d,%d) "

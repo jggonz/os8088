@@ -7463,8 +7463,10 @@ SOAK = [
     Row("fdlggrey", "soak", py("tests/fdlggrey.py"), 60.0,
         "SPEC.md 38.3/38.8: the chooser's default button (Open form, greyed "
         "with nothing selected). Each state is reached by a PARTIAL redraw - "
-        "a row click, a click on empty list, Down (FDH_SEL -> fdlg_drawbtn) - "
-        "and must be pixel-identical to the same state after a FULL repaint "
+        "a row click (FDH_SEL -> fdlg_drawbtn), a click on empty list, and "
+        "Down, whose FDH_SEL does not flip the greying and so draws nothing "
+        "(38.8) - and must be pixel-identical to the same state after a FULL "
+        "repaint "
         "(V twice; a move would replay, not repaint, SPEC.md 11.96.12). "
         "Greyed must carry less ink than live. Red when the state moves "
         "without the button being redrawn (171 px).",
@@ -7541,11 +7543,14 @@ SOAK = [
         "Pad's own File > Open and Save As - a first Open on MEDIA (38.10) "
         "captioned Open with the default button greyed until a row is "
         "selected, the arrows SELECTING where a Disk window's scroll "
-        "(38.4), Save As holding the document and committing a typed name "
+        "(38.4), Save As holding the document, Down filling the box from the "
+        "next row, and committing a typed name "
         "that is then in the folder, Escape / the Cancel button / the close "
         "box each cancelling - and a drive double-click queued in the close "
         "box's own drain swallowed rather than launched into the dead "
-        "chooser's slot and adopted (38.2) - Drive leaving the floppy (38.11), and the "
+        "chooser's slot and adopted (38.2) - Down with nothing selected "
+        "scrolling a folder that pages (22.26), Drive leaving the floppy "
+        "(38.11), and the "
         "chooser still opening with four of the user's Disk windows up - "
         "the fifth pool block is its own (38.1). Every step confirmed off "
         "[fdlg_win], the chooser's own block and fm_ebuf. VERIFIED TO FAIL "
@@ -10936,6 +10941,10 @@ SOAK = [
         "one now.",
         needs=("marty",), serial=True,
         wants=()),
+    Row("sbardlg", "soak", py("tests/sbar.py", "dlg"), 60.0,
+        "SPEC.md 13.10/38.3: the chooser's bar at the list's right edge "
+        "narrowed by FM_CHCOLW, its arrow scrolling the chooser's own block.",
+        needs=("marty",), serial=True),
     Row("sizesnap", "soak", py("tests/sizesnap.py"), 20.0,
         "the SIZE snap aligns a content width WITHOUT shrinking the zoom "
         "(SPEC.md 11.94.5) - a maximized window must stay x=0, w=[vid_pw]",

@@ -1421,10 +1421,11 @@ deleted (`cp_onkey_x` has since gone into `CTRL.DRV`, and the template names
 `cpf_cp_onkey`, a near proc in front of its slot - §31.9.2), and the notice
 window's paint — the one kernel callback that was in
 `.text` — moved to `.cold` as `ui_note_paint_x`. The file dialog's key and
-click bodies are near on **both** kernels, so on `kern_small` FDLG.DRV's
-header wraps them (`modd_e_onkey`, `modd_e_onclick`) exactly as it already
-wrapped open and paint, and the resident stubs in front of the image return
-near.
+click bodies were near on **both** kernels and FDLG.DRV's header wrapped
+them as it wrapped open and paint; the chooser has no key, click or paint of
+its own now (§38.1), so the header is §38.0's five entries: open and the
+hook are wrapped (`modd_e_open`, `modd_e_hook`) and reap, grab and top end
+in their own `retf`.
 
 `tools/os88ovlchk.py` **cannot see this**: a template word or a `mov ax,
 proc` is data, and the dispatch is `call bp`. What it does still check is
@@ -25767,7 +25768,7 @@ affordable to take before anybody has run it on a 286.
 | bar | 8086 | 286+ | one commit, measured on a 4.77 MHz 8088 / CGA |
 |---|---:|---:|---|
 | Disk window (`FM_SBRATE`) | **1** | **1** | **78–84 ms** at a live rate (§13.10.5.4.3 measured it; the 116.9 ms below is the rate-0 commit, which is a different quantity) |
-| Standard File dialog (`FD_SBRATE`) | **1** | **1** | **169–179 ms**, and it has no blit tier at all — every change to `fdlg_scrl` repaints the whole list, which `FD_ROWS` = 6 makes affordable anyway |
+| Standard File dialog (`FD_SBRATE`) — **retired** with the dialog's own list (§38.1): the chooser is a Disk window and takes the row above | **1** | **1** | **169–179 ms** as measured then, with no blit tier at all — every change to `fdlg_scrl` repainted the whole list, which `FD_ROWS` = 6 made affordable anyway |
 | Word, Scribe, TexPad, Note Pad, Frotz, Browser (`SB_RATE`) | 0 | **2** | **383.8** (Note Pad, 200 lines), **417.3** (TeXPad), **300.4** (Word) |
 | **The Wire**, **Sheet** | **2** | **2** | unchanged — and they are the CALIBRATION, not the subject |
 
@@ -32606,7 +32607,10 @@ not by calling `dsk_xfer` again, because the routine's head calls `fpg_busy`,
 which may draw, and a draw inside `[sch_lock]` can wait on a gfx lock another
 task holds. At most one sector per 64KB of caller buffer is staged, and a
 512-aligned base (every buffer of the kernel's own making, `clo_size`'s and
-`cmz`'s rounded ones) never reaches it.
+`cmz`'s rounded ones) never reaches it. **The bounce covers BIOS volumes**: a
+`DVK_DRV` volume leaves `dsk_xfer` for its driver before the int 13h loop,
+with the caller's ES:BX and the whole run, and that driver bounds its own
+runs.
 
 ### 18.92 The diskette parameter table is OURS, and EOT is why
 
@@ -36935,8 +36939,8 @@ Seven things hold it up:
   kernel's own callers (`drv_cfg_*`, the copy engine, the file manager) call
   `dskw_*` directly and are untouched, because they act for the machine
   rather than for an app. `FDLG_OPEN` uses the same name-staging stub and is
-  deliberately **not** given the switch: `fdlg_home_go` is the routine that
-  decides where a *dialog* opens, and a volume switch underneath it would
+  deliberately **not** given the switch: `fdlg_seed` (§38.10; the retired
+  dialog's `fdlg_home_go`) is the routine that decides where a *dialog* opens, and a volume switch underneath it would
   pre-empt that decision.
 - **The compare is what makes it free.** `inst_vol_enter` loads the
   instance's pair, compares it against the globals and returns — six
@@ -44049,8 +44053,8 @@ Two things hold it up:
   status line has to be redrawn anyway and the repaint draws the new band
   itself.
 
-`fdlg.inc` has the same rule and its own `fdlg_sel_bar` (§38.3): the geometry
-differs, the argument does not.
+The retired dialog's `fdlg.inc` had the same rule and its own `fdlg_sel_bar`;
+the chooser is a Disk window now (§38.1), so this rule is its own.
 
 ### 22.2.1 A right-click moves the selection; a keystroke owes one line
 
@@ -57771,9 +57775,9 @@ Four things about it.
 **The question is asked at click time, not read out of `[dock_act]`.**
 `dock_act` is `dock_paint`'s scratch — resolved once per paint and valid
 inside that one lock hold — so a click must call `wm_top` itself, under the
-lock it is about to act with. This is `fdlg_sel_bar`'s rule about
-`[fdlg_shown]` (§38.3) in another module: painter scratch answers about the
-last frame, and a click is not in it.
+lock it is about to act with. This is the retired dialog's `fdlg_sel_bar`
+rule about `[fdlg_shown]` (both gone with it, §38.1) in another module:
+painter scratch answers about the last frame, and a click is not in it.
 
 **Comparing windows is the same test the mark is drawn from.**
 `inst_bind_win` is the only writer of `I_WIN` and of `wm_owner`, and it
@@ -64089,7 +64093,8 @@ mode on it (unlike the mono card, §39.20).
 Every window template in the tree — built-in, dialog and package alike — is
 authored against 640x480. `wm_create` therefore clamps the frame onto the
 live screen at the single point all four creation paths funnel through
-(`inst_tplbuf` and its per-slot cascade, `fdlg_tpl`, every built-in template,
+(`inst_tplbuf` and its per-slot cascade, `fdlg_tpl` — the retired dialog's;
+the chooser is a Disk window now, §38.1 — every built-in template,
 and every already-built third-party `.o88`, with zero app rebuilds). Size
 first, then position, and the y floor last so it wins:
 
@@ -80349,9 +80354,10 @@ Conformant, and worth reading as the reference:
   which is which without a checkmark glyph and without spending a character of
   `MENU_MAXCH`.
 - **"Close Window"** (§12.3) — greys from `wm_top` rather than beeping.
-- **The file dialog's default button** (§38.8) — `fdlg_actok` behind the pen,
-  the click and the Enter key alike, greyed while the name box is empty and no
-  row is chosen. `fdlg_btn` stopped forcing `CBLACK` so the frame greys too,
+- **The file dialog's default button** (§38.8) — greyed in the Open form
+  while no row is chosen (`fdlg_blabel`, §38.3); the retired dialog put the
+  pen, the click and the Enter key behind one test, `fdlg_actok`, greyed while
+  the name box was empty and no row was chosen. `fdlg_btn` stopped forcing `CBLACK` so the frame greys too,
   and carries the state as a flag into `os88ui_btn` now (§20.5.1) so the
   colour and `[gfx_dis]` cannot be set apart.
 
@@ -90391,9 +90397,10 @@ audit for this path, since it is the one that decides:
 
 - **`files_refresh`**, which runs immediately after, paints from the
   WINDOW's cache and not the globals (22.1).
-- **`fdlg`** reads the snapshot directly (38.2) and is safe for a different
-  reason: `fdlg_home_go` ends in a full `dsk_chdir` on BOTH branches - the
-  remembered folder and the inherited one - so a dialog always re-lists.
+- **`fdlg`** is the bullet above now: the chooser is a Disk window and lists
+  into its own window cache (38.1, 22.1). The retired dialog read the
+  snapshot directly and was safe for a different reason - its `fdlg_home_go`
+  ended in a full `dsk_chdir` on BOTH branches, so it always re-listed.
 - **`fmv_sync`** is what a second double-click in that window goes through,
   and it is the one that would fail silently: right folder, no listing, so a
   (drive, cwd) compare says "already there" and the index resolves against

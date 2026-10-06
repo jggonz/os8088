@@ -7,16 +7,18 @@ File > Open and File > Save As, and confirms every step off guest state:
 
   1. a first Open lands on MEDIA (38.10), captioned 'Open', with the button
      column's Open GREYED until a row is selected (38.3, SPEC.md 47);
-  2. a click selects and Enter answers; with nothing selected Down scrolls,
-     and on kern_big Up and Down then MOVE the selection - SPEC.md 22.26's,
-     the Disk window's own, which the chooser inherits (38.4);
-  3. Save As puts the app's document in the box, Down fills it from a row,
-     a typed name commits, and the file is in the folder afterwards;
+  2. a click selects and Enter answers; with nothing selected Down selects
+     nothing, and on kern_big Up and Down then MOVE the selection - SPEC.md
+     22.26's, the Disk window's own, which the chooser inherits (38.4);
+  3. Save As puts the app's document in the box, on kern_big Down fills it
+     from the next row (FDH_SEL), a typed name commits, and the file is in
+     the folder afterwards;
   4. Escape, the Cancel button and the close box each cancel, and the next
      Open remembers the folder (38.10) - and presses queued in the SAME drain
      as the close box's release are swallowed, so a drive icon's double-click
      there cannot launch a Disk window into the dead chooser's slot and be
-     adopted as the chooser (38.2);
+     adopted as the chooser (38.2) - and in a folder that PAGES, Down with
+     nothing selected scrolls the chooser's own block (22.26);
   5. Drive leaves the floppy (38.11);
   6. with four of the USER's Disk windows open a fifth is refused and the
      chooser still opens - the fifth pool block is its own (38.1).
@@ -126,8 +128,8 @@ with os88ui.boot(SYS, apps=APPS) as ui:
     # --- 2: a click selects, Enter answers; the arrows only scroll ----------
     m.key("ArrowDown")
     ui.settle()
-    check("Down with nothing selected scrolls (22.26)", fs_sel(ui) == 0xFFFF,
-          "(FS_SEL %04X)" % fs_sel(ui))
+    check("Down with nothing selected selects nothing (22.26)",
+          fs_sel(ui) == 0xFFFF, "(FS_SEL %04X)" % fs_sel(ui))
     want = ui.chooser_select("GUIDE.TEX", w)
     ui.settle()
     live = ink(ui, w, ui.CH_OPEN)
@@ -153,6 +155,28 @@ with os88ui.boot(SYS, apps=APPS) as ui:
     check("captioned Save As", w.title == "Save As", "(%r)" % w.title)
     check("the box holds the document", ebuf(ui) == "GUIDE.TEX",
           "(%r)" % ebuf(ui))
+    if "KERN_SMALL" not in os.environ.get("OS88_DEFINES", ""):
+        # a FILE row with a file below it: the click fills the box (38.4),
+        # and Down moves the selection, whose FDH_SEL fills it again (22.26)
+        ls = ui.listing(w)
+        i = next((k for k in range(len(ls) - 1)
+                  if ls[k][1] not in (2, 3) and ls[k + 1][1] not in (2, 3)),
+                 None)
+        if i is None:
+            sys.exit("FAILURES: MEDIA has no two files in a row to walk "
+                     "(%r)" % ls)
+        ui.chooser_select(ls[i][0], w)
+        check("a click on a file fills the box", ebuf(ui) == ls[i][0],
+              "(%r)" % ebuf(ui))
+        m.key("ArrowDown")
+        try:
+            ui._wait(lambda: ebuf(ui) == ls[i + 1][0], "Down to fill the box",
+                     os88ui.T_NAV)
+        except os88ui.UIError:
+            pass
+        check("Down fills the box from the next row (22.26)",
+              ebuf(ui) == ls[i + 1][0] and fs_sel(ui) == i + 1,
+              "(%r, FS_SEL %d)" % (ebuf(ui), fs_sel(ui)))
     ui.chooser_save("NEWNOTE.TXT")
     check("Save As commits a typed name", True)
 
@@ -166,6 +190,28 @@ with os88ui.boot(SYS, apps=APPS) as ui:
                   "(%r)" % rows)
         ui.chooser_cancel(how)
         check("cancelled by %s" % how, True)
+
+    # --- 4a: with nothing selected, Down scrolls a folder that PAGES ---------
+    # MEDIA has fewer rows than fit, so step 2's Down cannot scroll there;
+    # APPS beside it pages on both builds
+    ui.menu_pick("File", "Open")
+    w = ui.chooser()
+    ui.open("..", expect="nav", win=w)
+    ui.open("APPS", expect="nav", win=w)
+    ui.settle()
+    n, fit, s0 = len(ui.listing(w)), ui._word("fm_fit"), ui.scroll(w)
+    check("APPS pages in the chooser", n > fit, "(%d rows, %d fit)"
+          % (n, fit))
+    m.key("ArrowDown")
+    try:
+        ui._wait(lambda: ui.scroll(w) != s0, "the chooser to scroll",
+                 os88ui.T_NAV)
+    except os88ui.UIError:
+        pass
+    check("Down with nothing selected scrolls (22.26)",
+          ui.scroll(w) == s0 + 1 and fs_sel(ui) == 0xFFFF,
+          "(FS_SCRL %d -> %d, FS_SEL %04X)" % (s0, ui.scroll(w), fs_sel(ui)))
+    ui.chooser_cancel("escape")
 
     # --- 4b: the close box, and a drive double-click in the SAME drain -------
     # Between the release that closes the chooser and the reap at the pass's

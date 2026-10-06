@@ -1822,12 +1822,14 @@ dsk_xfer:
     ; any offset, and dskw_runadd stages this case for an append and a read
     ; (18.4.2.1) - but WRITE_AT's inside arm and every dsk_read_chain caller
     ; reach the transfer with the caller's ES:BX, so it is staged HERE, once,
-    ; for everyone. The sector re-enters .sector as a one-sector transfer of
-    ; the scratch (512-aligned, so it cannot straddle) and .success puts the
-    ; caller's buffer back. NOT a recursive dsk_xfer: its head calls
-    ; fpg_busy, which may draw, and a draw inside this sch_lock can wait on a
-    ; gfx lock another task holds. dsk_secbuf is free: no caller of a
-    ; transfer on a buffer of its own holds a live sector there across it.
+    ; for every BIOS volume - a DVK_DRV volume left for its driver above,
+    ; which bounds its own runs. The sector re-enters .sector as a
+    ; one-sector transfer of the scratch (512-aligned, so it cannot
+    ; straddle) and .success puts the caller's buffer back. NOT a recursive
+    ; dsk_xfer: its head calls fpg_busy, which may draw, and a draw inside
+    ; this sch_lock can wait on a gfx lock another task holds. dsk_secbuf
+    ; is free: no caller of a transfer on a buffer of its own holds a live
+    ; sector there across it.
 .bounce:
     pop ax                      ; the head pushed for DH: .sector recomputes it
     mov [dsk_bnc_es], es

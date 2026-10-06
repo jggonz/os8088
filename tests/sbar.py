@@ -119,7 +119,7 @@ if DLG:
     # fm_layout takes FM_CHCOLW off the content width (SPEC.md 38.3), so the
     # bar sits at the narrowed list's right edge, left of the button column.
     # This arm checks the same mirrored picture THERE, and that its arrow
-    # scrolls the chooser's own block. Not a registered row: `sbar.py dlg`.
+    # scrolls the chooser's own block. Registered as `sbardlg`.
     import os88ui                                        # noqa: E402
     with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
                      machine=MACHINE) as ui:

@@ -1110,12 +1110,12 @@ db_hit:
 ;
 ; Two things about the active test. It asks wm_top HERE rather than reading
 ; [dock_act], which is db_paint's scratch and valid only inside the paint
-; that resolved it - fdlg_sel_bar's rule about [fdlg_shown] (SPEC.md 38.3) in
-; another module. And it compares WINDOWS where db_key compares records:
-; inst_bind_win is the only writer of I_WIN and of wm_owner and writes both
-; together, so wm_top == [di+I_WIN] and inst_win_owner(wm_top) == di cannot
-; disagree - this is the same predicate the tile's own mark is drawn from,
-; taken the cheaper way round.
+; that resolved it - the retired dialog's fdlg_sel_bar rule about
+; [fdlg_shown] (SPEC.md 30.4) in another module. And it compares WINDOWS
+; where db_key compares records: inst_bind_win is the only writer of I_WIN
+; and of wm_owner and writes both together, so wm_top == [di+I_WIN] and
+; inst_win_owner(wm_top) == di cannot disagree - this is the same predicate
+; the tile's own mark is drawn from, taken the cheaper way round.
 ;
 ; A window hidden WITHOUT being minimized is never wm_top's answer (it counts
 ; visible windows only), so it still takes the wm_front path exactly as
