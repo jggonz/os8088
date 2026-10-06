@@ -2052,7 +2052,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         xt-pixelstein xt-pixelstein-herc \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
-        allapps usb iso live burn rcbandbench \
+        allapps usb usb-emu iso live burn rcbandbench \
         paccman paccmandisk pmcbandbench xt-paccman \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         apple2 apple2disk apple2rom a2bandbench a2memtest a2cputest 386-apple2 \
@@ -12806,8 +12806,13 @@ $(BUILD)/zcat/live/CATALOG.TXT: tools/getstories.py
 # disks carry it, so the Memory page's `Give DOS the whole machine` arm
 # (SPEC.md 96.36) is live on the live media too - a 26MB partition has none of
 # the 360KB cluster argument that made that a decision.
-LIVEARGS := $(DRIVERS) $(SYSDOC) $(SYSLOGOARG) $(LOGOVIDARG) $(FACESARG) $(ALLAPPSARGS) \
+#
+# SPLIT AT THE DRIVERS, and only so the browser's image below can put its own
+# in front of the same rest (SPEC.md 80.7): $(LIVEARGS) is still what it was,
+# byte for byte, and build/livepayload.txt still prints it.
+LIVEREST := $(SYSDOC) $(SYSLOGOARG) $(LOGOVIDARG) $(FACESARG) $(ALLAPPSARGS) \
             $(LIVESYSARGS) $(LIVEPKGARGS) $(LIVESTORYARGS) $(SYSROOTARG)
+LIVEARGS := $(DRIVERS) $(LIVEREST)
 
 # ...and the live volume's own FOLDER COUNT.
 # getruncpm.py --folders prices every folder directory at a cluster, and the
@@ -12834,6 +12839,42 @@ usb: $(USBIMG)
 iso: $(LIVEISO)
 live: $(USBIMG) $(LIVEISO)
 
+# --- THE BROWSER'S IMAGE: THE SAME VOLUME ON kern_emu (SPEC.md 80.7) ----------
+# build/os8088-emu-usb.img is $(USBIMG) with three things changed and nothing
+# else: the kernel and its two boot sectors are $(EMUDIR)'s, the drivers are
+# $(EMUDRIVERS) - $(DRIVERS) plus VMMOUSE.DRV, with the on-demand kernel
+# modules cut out of THAT kernel - and the root carries `make emu`'s SYSTEM.CFG
+# with bit 5 set, so the absolute pointer is wanted from the first boot. It is
+# what os8088.com's live demo boots (the website's tools/release.py publishes
+# it), because v86 answers SPEC.md 9.11's backdoor and the pointer then tracks
+# the visitor's with no capture at all.
+#
+# IT IS NOT A LIVE MEDIUM AND NEVER SHIPS AS ONE. The stick and the CD stay
+# kern_big: they boot real PCs, and an XT carries none of kern_emu's 385 bytes
+# for the reason SPEC.md 9.11.7 gives. So `live` does not build this and the
+# release zip does not carry it; `make usb-emu` is the website's target.
+#
+# ONE RECIPE FOR BOTH, through the target-specific variables below, rather
+# than a second copy of the one above: the payload is the whole point of the
+# live volume (SPEC.md 80.6) and two recipes are two payloads by the next
+# release. The emu half reaches its kernel through a sub-make, `make emu`'s
+# shape, and names the kernel sources as prerequisites for the vmmouse gate
+# disk's reason - without them a kernel edit leaves this image up to date.
+EMUUSBIMG := $(BUILD)/os8088-emu-usb.img
+
+usb-emu: $(EMUUSBIMG)
+
+$(USBIMG): LIVEKDIR := $(BUILD)
+$(USBIMG): LIVEDRVS = $(DRIVERS)
+$(USBIMG): LIVESUB :=
+$(EMUUSBIMG): KMODDIR := $(EMUDIR)
+$(EMUUSBIMG): LIVEKDIR := $(EMUDIR)
+$(EMUUSBIMG): LIVEDRVS = $(EMUDRIVERS) $(BUILD)/vmmcfg/system.cfg
+$(EMUUSBIMG): LIVESUB = $(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 \
+                        $(EMUDIR)/mbr.bin $(EMUDIR)/boothd.bin $(EMUDIR)/boot.bin
+$(EMUUSBIMG): $(KERNEL_SRC) $(KERNEL_INC) $(BUILD)/vmmouse.drv \
+              $(BUILD)/vmmcfg/system.cfg
+
 # THE SELECTIONS ARE "hdd" AND NOT 1440 (SPEC.md 80.6). Both fetch tools
 # price their fill in the target geometry's clusters, and this volume is
 # 16,324 of 2,048 bytes against a 1.44MB floppy's 2,847 of 512 - so asking
@@ -12844,12 +12885,13 @@ live: $(USBIMG) $(LIVEISO)
 # "hdd" arm of each tool carries everything and leaves a megabyte to save
 # into. The GAMES are priced first and the master disk fills what is left,
 # which is RUNCPMIMG's order and is here for its reason.
-$(USBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
+$(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
            $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(LOGOVID) $(FACES) $(FACELIC) \
            $(SYSAPPS) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
            $(BUILD)/zcat/live/CATALOG.TXT $(BUILD)/cpmsw.stamp \
            tools/getcpmsw.py tools/getstories.py \
            $(ALLAPPS) tools/os88disk.py
+	$(if $(LIVESUB),@$(LIVESUB))
 	gsel="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --select hdd | sed 's,^,RUNCPM/,')"; \
 	gcost="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --cost hdd)"; \
 	gslot="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --slots hdd | sed 's,--dir-slots ,--dir-slots RUNCPM/,g')"; \
@@ -12859,16 +12901,21 @@ $(USBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select hdd --dir-slots $(RUNCPMSLOTS) --folders $(LIVEFOLDERS) --reserve-clusters $$gcost --reserve $(ALLAPPSFILES) $(LIVEPKGDEPS) $(SYSAPPS) | sed 's,^,RUNCPM/A/0:,')"; \
 	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select hdd chose nothing"; exit 1; }; \
 	python3 tools/os88disk.py -o $@ --hdd \
-		--mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
-		--kernel $(KERNFILE) \
+		--mbr $(LIVEKDIR)/mbr.bin --boot $(LIVEKDIR)/boothd.bin \
+		--kernel $(LIVEKDIR)/$(KERNNAME) \
 		--deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) $$gslot \
 		--folder DOCS $(APPDATAFOLDER) $(LIVESTORYDIRS) \
-		$(LIVEARGS) $$sel $$gsel $$zsel $(CPMSW) $(STORIES)
+		$(LIVEDRVS) $(LIVEREST) $$sel $$gsel $$zsel $(CPMSW) $(STORIES)
 	@python3 tools/os88disk.py --verify-hdd $@
-	@echo "usb:    $@ - the live USB image (SPEC.md 80.1). Write it raw"
-	@echo "        to a stick and boot a legacy-BIOS machine from it; the"
-	@echo "        partition mounts as C:. QEMU: qemu-system-i386 -drive"
-	@echo "        file=$@,format=raw -boot c"
+	@$(if $(LIVESUB),$(LIVENOTE_EMU),$(LIVENOTE_USB))
+
+LIVENOTE_USB = echo "usb:    $@ - the live USB image (SPEC.md 80.1). Write it raw"; \
+	echo "        to a stick and boot a legacy-BIOS machine from it; the"; \
+	echo "        partition mounts as C:. QEMU: qemu-system-i386 -drive"; \
+	echo "        file=$@,format=raw -boot c"
+LIVENOTE_EMU = echo "usb-emu: $@ - the browser's image (SPEC.md 80.7):"; \
+	echo "         the live volume on kern_emu with VMMOUSE.DRV wanted. It"; \
+	echo "         is not a live medium: os8088.com's demo boots it in v86."
 
 $(LIVEISO): $(USBIMG) $(SYSDOCRAW) tools/os88iso.py
 	python3 tools/os88iso.py -o $@ --boot-image $(USBIMG) \
