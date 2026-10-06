@@ -27,7 +27,7 @@ deliberately, so that a knob change cannot boot the previous configuration.
 So a gate for `make SBDRAG=1` that asks here for its fixture deletes the very
 kernel it is about to test, from a make that then reports "up to date", and
 the run continues against whatever the floppy still carries.
-tests/fdlgthumb.py builds its fixture with nasm and os88pkg.py directly for
+tests/fdlgthumb.py (retired with the old dialog, SPEC.md 38.4.1) built its fixture with nasm and os88pkg.py directly for
 exactly that reason.
 
 It does NOT delete the artifact first.  Where a test WRITES to its own image

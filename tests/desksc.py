@@ -137,7 +137,10 @@ def badge_on_glass(m, cx, cy, lky, inverted):
     frame starts some pixels into the screen, so `fbuf` coordinates are not
     the kernel's there. VGA has no flat framebuffer, so it is the card's own
     rasterised frame - which is 1:1 on that card."""
-    bx, by = cx + SC_PICX - 11, cy + lky + 16 - 10
+    # the picture column is on the byte grid (SPEC.md 26.9.9): the centred
+    # x rounded to the nearest multiple of 8
+    col = (cx + (DESK_CW - DESK_ZW) // 2 + 4) & ~7
+    bx, by = col + 16 - 11, cy + lky + 16 - 10
     if m.cmd(cmd="video")["type"] == "vga":
         w, _h, data = m.fbuf()
         black = lambda x, y: sum(data[(y * w + x) * 3:(y * w + x) * 3 + 3]) \

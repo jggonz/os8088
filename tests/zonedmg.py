@@ -41,9 +41,10 @@ is that kernel's (and was kern_big's before 11.91.6):
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1): put `clc` in front of
 the `jc .mset` after `wm_dmg_wins`' zone test at `.mnodmg` and the overlap
 comes back as B:'s cell: 348 of the 840 pixels differ, measured. On kern_big
-today the break is tests/deskclip.py's - `wm_zone_r` without its frame
-subtraction - which reads 313 pixels in this layout (deskclip's `close`,
-measured).
+today the break is tests/deskclip.py's - the region a cell is drawn into
+(wm_dmg_gray's own since SPEC.md 26.9.9) without its frame subtraction -
+which read 313 pixels in this layout when that region was `wm_zone_r`'s
+(deskclip's `close`, measured).
 """
 import os
 import sys

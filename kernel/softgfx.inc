@@ -633,42 +633,21 @@ sw_pairbuild:
     push dx
     push si
     push di
-    xor bx, bx
+    xor bx, bx                  ; BH stays 0: the loop runs BL round once
 .byte:
-    mov ax, bx                  ; AL = the byte; SI = its high nibble...
-    mov cl, 4
-    shr al, cl
-    xor ah, ah
-    mov si, ax
-    mov ax, bx                  ; ...and DI its low one
-    and al, 15
-    xor ah, ah
-    mov di, ax
+    mov si, bx                  ; SI = the byte's high nibble (the LEFT
+    mov cl, 4                   ; pixel)...
+    shr si, cl
+    mov di, bx                  ; ...and DI its low one
+    and di, 15
     xor dh, dh                  ; --- tab0: hi at parity 0, lo at parity 1
-    call sw_pbit
-    shl al, 1
-    mov dl, al
-    push si
-    mov si, di
-    mov dh, 1
-    call sw_pbit
-    pop si
-    or dl, al
+    call .pair
     mov [ss:bx + gfx_pairtab0], dl
     mov dh, 1                   ; --- tab1: the other way round
-    call sw_pbit
-    shl al, 1
-    mov dl, al
-    push si
-    mov si, di
-    xor dh, dh
-    call sw_pbit
-    pop si
-    or dl, al
+    call .pair
     mov [ss:bx + gfx_pairtab1], dl
-    inc bx
-    cmp bx, 256
-    jb .byte
+    inc bl
+    jnz .byte                   ; 256 entries: BL wraps to 0 after 255
 %ifdef GFX_PLANE
     mov word [gfx_pairbuilt], 0x0001 ; built - and vga_p4built = 0, UNION: the
                                 ; pair tables overwrote it (one word store,
@@ -678,6 +657,21 @@ sw_pairbuild:
 %endif
     jmp kret_di                 ; once a boot: the shared epilogue, not six
                                 ; pops of its own
+
+; one table entry: DL = sw_pbit(SI, parity DH) << 1 | sw_pbit(DI, parity
+; DH ^ 1). DH, SI and DI come back as they went in (size pass 9: the two
+; table halves were this sequence written out twice)
+.pair:
+    call sw_pbit
+    shl al, 1
+    mov dl, al
+    xchg si, di
+    xor dh, 1
+    call sw_pbit
+    xor dh, 1
+    xchg si, di
+    or dl, al
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sw_blit_row - ONE ROW of packed 4bpp into the 1bpp framebuffer (SPEC.md 5.4.1)

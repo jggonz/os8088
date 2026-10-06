@@ -44,7 +44,7 @@ TWELVE ASSERTIONS.
    band INVERTED so that one `gfx_blit1` is correct on all three adapters, and
    an inversion that went the wrong way draws a perfectly plausible picture in
    negative.
-7. ADD TO DISK WRITES BOTH FILES, BYTE-IDENTICAL. The Save dialog's default
+7. ADD TO DISK WRITES BOTH FILES, BYTE-IDENTICAL. The Save chooser's default
    button is clicked, the chain runs, and after `quit` the B: image is read on
    the HOST by an independent FAT12 reader (`tools/os88disk.py --verify`, then
    the directory walked here) and both files are compared with what the server
@@ -108,7 +108,7 @@ so the ethertest-shaped disk that already asks for the driver has the icon on
 it, and this file double-clicks the icon rather than a row in a Disk window.
 Three things follow from that and all three are handled below: the zone
 launches out of the BOOT volume's `SYSTEM/`, so the instance's current
-directory is **A:** and `WIRE.CFG` is read off A:; and the Save dialog
+directory is **A:** and `WIRE.CFG` is read off A:; and the Save chooser
 therefore opens on A: and has to be walked to B: with its Drive button before
 the write.
 """
@@ -148,8 +148,9 @@ WS_DONE, WS_FAIL = 7, 8                 # thewire.asm's WS_*, and WS_PAUSE
                                         # up. Named here rather than read out
                                         # of the source, so the reason travels
 TITLE_H = 18
-FD_BX1, FD_BX2, FD_BH = 224, 286, 13    # kernel/fdlg.inc's button column
-FD_BY0, FD_BY2 = 20, 60                 # ...Save, and Drive two rows down
+CH_SAVE, CH_DRIVE = 0, 2                # the chooser's button column, top
+                                        # down: Save, Cancel, Drive (SPEC.md
+                                        # 38.3) - os88ui's CH_OPEN/CH_DRIVE
 VOL_B = ord("B") - ord("A")             # a VOLUME INDEX, which is what
                                         # [disk_drive] holds since SPEC.md 52
 DVK_FILE = 2                            # kernel/disk.inc: a REDIRECTED volume,
@@ -1044,57 +1045,85 @@ def main():
             no("Add to Disk is greyed on a WF_DISK record, and Add to Disk is "
                "exactly what such a record is FOR (wr_grey = %d)" % grey)
 
-        def save_to_b(tag, base):
-            """Add to Disk..., walk the Save dialog to B:, and press Save.
+        def chooser_slot():
+            """The chooser's window SLOT, or None. [fdlg_win] is its window
+            pointer (SPEC.md 38.1) - 0 when none, 0FFFFh while it launches."""
+            ptr = u16(m.read(S("fdlg_win"), 2))
+            if ptr in (0, 0xFFFF):
+                return None
+            return (ptr + (os88geom.KERNEL_SEG << 4) - S("wm_wins")) \
+                // dispcp.WIN_SIZE
 
-            THE DIALOG OPENS ON THE VOLUME THE WIRE WAS LAUNCHED FROM, which
-            since the zone landed is A: - the boot disk, whose SYSTEM/ the
-            zone reads the package out of. Its Drive button steps to the next
-            LIVE volume and wraps (SPEC.md 38.11), so this walks rather than
+        def chooser_drv():
+            """The volume the CHOOSER lists: its own pool block's FS_DRV. The
+            globals are put back where it stood only at a commit (SPEC.md
+            38.7), so [disk_drive] is not the question while it is up."""
+            blk = u16(m.read(S("fdlg_blk"), 2))
+            return m.read((os88geom.KERNEL_SEG << 4) + blk
+                          + os88geom.FS_DRV, 1)[0]
+
+        def chooser_btn(slot, k):
+            """The centre of column button k - os88ui.chooser_button_xy's
+            arithmetic, which this QEMU row cannot import: fm_rgt + 5, 20px
+            apart, the list's content being the window's less FM_CHCOLW."""
+            x, y, wd = dispcp.win_rect(m, S, slot)[:3]
+            cx, cy = x + 1, y + TITLE_H + 1
+            rgt = cx + (wd - 2 - os88geom.FM_CHCOLW) - 1
+            return (rgt + 5 + os88geom.FM_BTN_W // 2,
+                    cy + 2 + 20 * k + os88geom.FM_BTN_H // 2)
+
+        def save_to_b(tag, base):
+            """Add to Disk..., walk the Save chooser to B:, and press Save.
+
+            The chooser is a Disk window in a chooser role (SPEC.md 38.1), and
+            where it OPENS is SPEC.md 38.10's: MEDIA on the volume The Wire
+            was launched from - A:, the boot disk, whose SYSTEM/ the zone
+            reads the package out of - the first time, and where the user
+            left it after that. Its Drive button steps to the next LIVE
+            volume and wraps (SPEC.md 38.11), so this walks rather than
             assuming one click is enough: a machine that mounted a hard disk
-            would need two, and [disk_drive] is the machine's own answer. The
-            second call finds it already on B:, which the loop reads and
-            leaves alone.
+            would need two, and the chooser's own FS_DRV is the machine's
+            answer. The second call finds it already on B:, which the loop
+            reads and leaves alone.
             """
             settled()
             press("wr_rb")                       # Add to Disk...
-            if os88qemu.acted(m, lambda: len(dispcp.win_list(m, S))
-                              > len(base), secs=10, what="the Save dialog",
-                              poll=0.25):
-                os88qemu.pace(m, 0.5)           # ...and its first paint
+            if os88qemu.acted(m, lambda: chooser_slot() is not None,
+                              secs=10, what="the Save chooser", poll=0.25):
+                os88qemu.pace(m, 1.0)           # ...and its first paint
             shot(tag + "-savedlg")
-            wins = dispcp.win_list(m, S)
-            if len(wins) <= len(base):
-                no("Add to Disk... put up no Save dialog")
+            slot = chooser_slot()
+            if slot is None:
+                no("Add to Disk... put up no Save chooser")
                 return False
-            dx, dy = dispcp.win_rect(m, S, wins[-1])[:2]
-            bx = dx + 1 + (FD_BX1 + FD_BX2) // 2
             for _ in range(dispcp.DVOL_MAX):
-                was = m.read(S("disk_drive"), 1)[0]
+                was = chooser_drv()
                 if was == VOL_B:
                     break
-                mo.click(bx, dy + TITLE_H + FD_BY2 + FD_BH // 2)
-                if os88qemu.acted(m, lambda: m.read(S("disk_drive"), 1)[0]
-                                  != was, secs=6, what="[disk_drive]",
-                                  poll=0.2):
+                mo.click(*chooser_btn(slot, CH_DRIVE))
+                if os88qemu.acted(m, lambda: chooser_drv() != was, secs=6,
+                                  what="the chooser's FS_DRV", poll=0.2):
                     os88qemu.pace(m, 0.5)       # ...and the listing behind it
-            vol = m.read(S("disk_drive"), 1)[0]
-            say("the Save dialog is on volume %d (B: is %d)" % (vol, VOL_B))
+            vol = chooser_drv()
+            say("the Save chooser is on volume %d (B: is %d)" % (vol, VOL_B))
             shot(tag + "-onB")
             if vol != VOL_B:
-                no("the Save dialog would not walk to B:, so the write below "
+                no("the Save chooser would not walk to B:, so the write below "
                    "is about the wrong disk")
                 return False
             nasked = len(srv.asked)
-            mo.click(bx, dy + TITLE_H + FD_BY0 + FD_BH // 2)
-            # Save CLOSES the dialog and its completion starts the chain, so
-            # the dialog going is the first answer; the chain GETTING GOING is
+            mo.click(*chooser_btn(slot, CH_SAVE))
+            # Save POSTS the answer (SPEC.md 38.6): the chooser closes on the
+            # next UI pass and its completion starts the chain, so the
+            # chooser going is the first answer; the chain GETTING GOING is
             # the second, before "settled" can mean FINISHED rather than NOT
             # YET STARTED - [wr_state] reads WS_DONE either way. Its first
             # act is a request to the host, which the server saw or did not;
             # the two guest seconds this used to sleep are the bound.
-            os88qemu.acted(m, lambda: len(dispcp.win_list(m, S)) <= len(base),
-                           secs=10, what="the Save dialog closing", poll=0.25)
+            os88qemu.acted(m, lambda: chooser_slot() is None
+                           and u16(m.read(S("fdlg_win"), 2)) == 0,
+                           secs=10, what="the Save chooser closing",
+                           poll=0.25)
             os88qemu.acted(m, lambda: len(srv.asked) > nasked
                            or b("wr_job")[0] != 0, secs=2.0,
                            what="the Add chain to start", poll=0.1)

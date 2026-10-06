@@ -1420,6 +1420,16 @@ ifneq ($(NOSEAMCUT),)
 VIDDEF += -DNOSEAMCUT
 endif
 
+# NOFDMEDIA=1 takes SPEC.md 38.10's MEDIA default out of the Standard File
+# chooser: an app whose user has never chosen a folder opens it where the app
+# was LAUNCHED from instead of in MEDIA at its drive's root. The default is a
+# nicety rather than a contract, so it is the part of the dialog whose bytes
+# are easy to take back - the knob is how, and t_buildmatrix keeps it
+# assembling until somebody decides.
+ifneq ($(NOFDMEDIA),)
+VIDDEF += -DNOFDMEDIA
+endif
+
 # NOCURDISK=1 puts the pointer back on the freeze it took before SPEC.md 7.4:
 # the arrow stops dead for the length of every disk transfer, and once an
 # operation moves FPG_WARM = 3 sectors fpg_paint's unconditional cur_unlazy
@@ -1869,7 +1879,7 @@ endif
 # BUILD on api-abi. KERN_SMALL was the sharp one: `make KERN_SMALL=1` is the
 # second build CLAUDE.md asks for after every change, and it exited 1.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSEAMCUT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE FATWNONE FATWGATE \
+                             KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSEAMCUT NOFDMEDIA NOSUOCCL SNDSNIFF RAMKB DRAGCACHE FATWNONE FATWGATE \
                              SNAPAUDIT SCROLLROW QUANTUM GFXAUDIT \
                              CURFIX \
                              FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
@@ -1938,7 +1948,7 @@ endif
 # `make` believes is current, and every image shipped from it wrong. The
 # knob roster above still carries NOKZIP, because that is what somebody asks
 # for and what a knob build has to announce.
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KERN_EMU),-emu$(KERN_EMU))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(MOUROUND),-mrd$(MOUROUND))$(if $(DOSRMARK),-drm$(DOSRMARK))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(SBRATE286),-sbr2$(SBRATE286))$(if $(SBIDLE),-sbi$(SBIDLE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(FONTSLOW),-fsw$(FONTSLOW))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(LDDIAG),-ldd$(LDDIAG))$(if $(DRVDIAG),-drd$(DRVDIAG))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(NOFDDPARK),-nfp$(NOFDDPARK))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PICOMEM),-pm$(PICOMEM))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(DPTROM),-dpr$(DPTROM))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))-cmp$(LZFMTS)$(if $(KZIP),-kz)
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOFDMEDIA),-nfm$(NOFDMEDIA))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KERN_EMU),-emu$(KERN_EMU))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(MOUROUND),-mrd$(MOUROUND))$(if $(DOSRMARK),-drm$(DOSRMARK))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(SBRATE286),-sbr2$(SBRATE286))$(if $(SBIDLE),-sbi$(SBIDLE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(FONTSLOW),-fsw$(FONTSLOW))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(LDDIAG),-ldd$(LDDIAG))$(if $(DRVDIAG),-drd$(DRVDIAG))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(NOFDDPARK),-nfp$(NOFDDPARK))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PICOMEM),-pm$(PICOMEM))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(DPTROM),-dpr$(DPTROM))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))-cmp$(LZFMTS)$(if $(KZIP),-kz)
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -4705,6 +4715,32 @@ $(BUILD)/lzmodlzb360.img: $(BUILD)/tracker.o88 $(BUILD)/lzb/BEVERLY.MOD \
 .PHONY: lzmodlzbtest
 lzmodlzbtest: $(BUILD)/lzmodlzb360.img
 
+# ...and a module whose LZ4 form is PAST 64KB PACKED (SPEC.md 20.14.5.2):
+# BEVERLY.MOD with 30,000 bytes of noise and then 30,000 of text after it -
+# 176,085 bytes that pack to ~92KB with a short raw tail. Before 20.14.5.2
+# cz_wrap stored this PLAIN, and the decoder refused an LZ4 source past one
+# segment. The noise is one literal run of ~30KB, so the read also takes the
+# 16KB-piece path, which nothing shipped exercises. Tracker ignores the bytes
+# past its last sample; tests/lzmod.py --fmt lz4big compares all of them.
+# Padded with tests/multiseg/mkwide.py, MSEGW's generator, so both fixtures
+# are one deterministic LCG.
+$(BUILD)/lz4big/plain.mod: apps/tracker/beverly.mod tests/multiseg/mkwide.py
+	@mkdir -p $(BUILD)/lz4big
+	python3 tests/multiseg/mkwide.py noise 30000 $< $@.tmp
+	python3 tests/multiseg/mkwide.py text 30000 $@.tmp $@
+	@rm -f $@.tmp
+
+$(BUILD)/lz4big/BEVERLY.MOD: $(BUILD)/lz4big/plain.mod tools/os88lz.py
+	python3 tools/os88lz.py --wrap $@ $<
+
+$(BUILD)/lzmodbig360.img: $(BUILD)/tracker.o88 $(BUILD)/lz4big/BEVERLY.MOD \
+                          tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/tracker.o88 \
+	    $(BUILD)/lz4big/BEVERLY.MOD
+
+.PHONY: lzmodbigtest
+lzmodbigtest: $(BUILD)/lzmodbig360.img
+
 $(BUILD)/fmtest.bin: tests/fmtest/fmtest.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/fmtest/fmtest.asm
 	@echo "fmtest: $(call FILESIZE,$@) bytes"
@@ -6402,14 +6438,15 @@ $(BUILD)/skies.bin: $(SKIES_SRC) $(BUILD)/cswidx.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/skies/ -I $(BUILD)/ $(CSDIAGDEF) -o $@ apps/skies/skies.asm
 	@echo "skies: $(call FILESIZE,$@) bytes"
 
-# THE TITLE BANDS ARE PART 0 (SPEC.md 88.10.3). tools/csart.py writes the
-# .inc - the offsets, which is all the image carries now - and with --raw the
-# UNPACKED bands, which os88pkg.py appends and compresses for the OP_COMP row.
-# ONE COMPRESSOR: the generator used to pack them itself and the package used
-# to unpack them itself, so the two had to agree about the format for ever.
-$(BUILD)/csart.bin: tools/csart.py tools/os88lz.py | $(BUILD)
-	python3 tools/csart.py -o apps/skies/csart.inc --stream $@
-	@echo "csart: $(call FILESIZE,$@) bytes of packed bands"
+# THE TITLE BANDS ARE PART 1 (SPEC.md 88.10.3, 88.10.4.1). tools/csart.py
+# writes the .inc - the offsets, which is all the image carries - and with
+# --raw the UNPACKED bands, which os88pkg.py appends and compresses for the
+# OP_COMP | OP_LAZY row. ONE COMPRESSOR: the generator used to pack them itself
+# and the loader used to unpack them itself, so the two had to agree about the
+# format for ever.
+$(BUILD)/csart.bin: tools/csart.py | $(BUILD)
+	python3 tools/csart.py -o apps/skies/csart.inc --raw $@
+	@echo "csart: $(call FILESIZE,$@) bytes of bands, raw"
 
 # THE PACKAGE'S IMAGE IS THE LOADER (SPEC.md 88.10.4, 20.12.10). It reads the
 # two parts, tells the program where the art went, and hands its identity over;
@@ -6422,7 +6459,7 @@ $(BUILD)/csart.bin: tools/csart.py tools/os88lz.py | $(BUILD)
 # went 37,534 -> 49,031 bytes on a 360KB disk with 8 clusters spare. The
 # loader is 1,343 bytes uncompressed and everything large is an OP_COMP part.
 $(BUILD)/csload.bin: apps/skies/csload.asm apps/skies/csicon.inc \
-                     apps/skies/csart.inc apps/os88api.inc \
+                     apps/os88api.inc \
                      apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/skies/ -o $@ apps/skies/csload.asm
 	@echo "csload: $(call FILESIZE,$@) bytes"
@@ -6515,9 +6552,11 @@ $(BUILD)/pxgame.bin: $(PXGAME_SRC) | $(BUILD)
 # 127 spare clusters when this package was planned and wave 6's art lands
 # after the disk arithmetic was checked, so the ceiling is asserted where
 # the file is made and not discovered on the 1.44MB disk. AND SO IS THE
-# READ RUN: SPEC.md 20.12.7 bounds the eager parts at 128 UNPACKED sectors
-# (op_load refuses the launch at 128, and OP_COMP does not relieve it - the
-# claim is cut from the unpacked total), the run is 116 on the shipped build
+# READ RUN: SPEC.md 20.12.11 bounds the eager parts at OP_SECMAX UNPACKED
+# sectors (op_load refuses the launch there, and OP_COMP does not relieve it
+# - the claim is cut from the unpacked total); the bound was 128 until the
+# carve passed 64KB, which is what the history below is measured against.
+# The run is 116 on the shipped build
 # (part 0 59,378 bytes, SPEC.md 97.15; 111 after wave 4) - part 0 alone, the
 # level stream having gone lazy: eager, its 20 sectors would have made it
 # 131 after wave 4 and 136 now (101 after wave 3 with it eager, 68 after wave 1, 79 after
@@ -6532,7 +6571,7 @@ $(BUILD)/pxstein.o88: $(BUILD)/pxstein.bin $(BUILD)/pxgame.bin $(BUILD)/pxsart.b
 	@test $(call FILESIZE,$@) -le $(PXSTEIN_MAXZ) || { \
 	    echo "pxstein: $@ is $(call FILESIZE,$@) bytes, over the $(PXSTEIN_MAXZ) SPEC.md 97.9 allows the disks"; \
 	    rm -f $@; exit 1; }
-	@python3 tools/os88parts.py --run $@ --max-run 128 || { rm -f $@; exit 1; }
+	@python3 tools/os88parts.py --run $@ || { rm -f $@; exit 1; }
 
 # THE COMPACTION GATE'S DISK (SPEC.md 97.9, 66.6.1.2; tests/pxsmove.py): the
 # package and tests/filler, nothing else, at 360KB - the geometry whose head
@@ -6554,14 +6593,15 @@ $(BUILD)/pxsmove360.img: $(BUILD)/pxstein.o88 $(BUILD)/filler.o88 \
 # guard's 17, six decorations, eight pickups and, since wave 6, the dog's
 # eleven: 4 facings x 2 walk, bite, die, dead) and the weapon's nine of
 # 16x32, 29,760 of the stream's 37,440 bytes (PXA_NSPR, PXA_SIZE in
-# pxart.inc) - LZ4 - tools/pxsart.py reads the committed PNGs with the
+# pxart.inc) - RAW, packed by os88pkg.py for the OP_COMP | OP_LAZY row
+# (SPEC.md 20.12.7.4) - tools/pxsart.py reads the committed PNGs with the
 # stdlib and refuses a bad one in words (--check: the sixteen colours only,
 # no key and no alpha on a wall, alpha 0 or 255 on a sprite, and the two
 # losable criteria). The include beside it (pxart.inc) is committed text held by
 # the pxs-gen fast row; the stream is built here because its bytes are the
 # masters' and nothing else
-$(BUILD)/pxsart.bin: tools/pxsart.py tools/os88lz.py tools/pxslevel.py $(PXSART) | $(BUILD)
-	python3 tools/pxsart.py --check --stream $@
+$(BUILD)/pxsart.bin: tools/pxsart.py tools/pxslevel.py $(PXSART) | $(BUILD)
+	python3 tools/pxsart.py --check --raw $@
 
 # the level STREAM the lazy level part carries (SPEC.md 97.9; lazy since
 # wave 4 - eight floors are 20 sectors the eager run had no room for): one record a
@@ -7595,6 +7635,56 @@ $(BUILD)/msegz360.img: $(BUILD)/msegzd/MSEG.O88 $(BUILD)/msegbig.o88 \
 
 .PHONY: msegz
 msegz: $(BUILD)/msegz.img $(BUILD)/msegz360.img
+
+# --- MSEGW: the same package with a carve PAST 64KB (SPEC.md 20.12.11) ------
+# Parts 1 and 2 padded by tests/multiseg/mkwide.py: part 1 (plain) with noise,
+# part 2 with text, so the carve is past 64KB at both ends - packed, which is
+# what op_read moves, and unpacked, which op_claim cuts and op_unpack walks.
+# The primaries are mseg.bin and msegz.bin UNCHANGED, so tests/multiseg.py
+# reads them through the same maps; only where each later part lands moves.
+# Both images name the file MSEG.O88, msegz's way, because the row opens it by
+# name. Before 20.12.11 the packer refused both, at 128 sectors.
+$(BUILD)/msegwp1.bin: $(BUILD)/msegp1.bin tests/multiseg/mkwide.py
+	python3 tests/multiseg/mkwide.py noise 45000 $< $@
+
+$(BUILD)/msegwp2.bin: $(BUILD)/msegp2.bin tests/multiseg/mkwide.py
+	python3 tests/multiseg/mkwide.py text 40000 $< $@
+
+MSEGW_PARTS = $(BUILD)/msegp0.bin $(BUILD)/msegwp1.bin $(BUILD)/msegwp2.bin \
+              $(BUILD)/msegp3.bin $(BUILD)/msegp4.bin
+
+$(BUILD)/msegwd/MSEG.O88: $(BUILD)/mseg.bin $(MSEGW_PARTS) tools/os88pkg.py \
+                          apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc
+	@mkdir -p $(BUILD)/msegwd
+	python3 tools/os88pkg.py $(BUILD)/mseg.bin -o $@ \
+		$(foreach p,$(MSEGW_PARTS),--part $(p))
+
+$(BUILD)/msegwzd/MSEG.O88: $(BUILD)/msegz.bin $(MSEGW_PARTS) tools/os88pkg.py \
+                           tools/os88lz.py apps/os88parts.inc \
+                           apps/os88partsbody.inc apps/os88rseq.inc
+	@mkdir -p $(BUILD)/msegwzd
+	python3 tools/os88pkg.py $(BUILD)/msegz.bin -o $@ \
+		--part-compress lz4 $(foreach p,$(MSEGW_PARTS),--part $(p))
+
+$(BUILD)/msegw.img: $(BUILD)/msegwd/MSEG.O88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 $<
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/msegw360.img: $(BUILD)/msegwd/MSEG.O88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 360 $<
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/msegwz.img: $(BUILD)/msegwzd/MSEG.O88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 $<
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/msegwz360.img: $(BUILD)/msegwzd/MSEG.O88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 360 $<
+	@python3 tools/os88disk.py --verify $@
+
+.PHONY: msegw
+msegw: $(BUILD)/msegw.img $(BUILD)/msegw360.img $(BUILD)/msegwz.img \
+       $(BUILD)/msegwz360.img
 
 # --- CWORD and its document floppy (SPEC.md 73.12) ---------------------------
 # The C toolchain's demonstrator: a word processor whose UI, layout, redraw
@@ -10639,7 +10729,11 @@ SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
 # its widest. Hercules is the bigger board and was measured too - 8KB windowed,
 # 19KB fullscreen - so 19 is the deepest kern_small can ever be asked for.
 # `soak -k 'ddsmall'` is that measurement kept runnable (SPEC.md 24.5.5).
-SMALLOMIT_GAMES := $(BUILD)/skies.o88 $(BUILD)/pxstein.o88 $(DM_SHIP)
+# DEFERRED (`=`), and it has to be: $(DM_SHIP) is defined ~1,100 lines BELOW
+# here, so `:=` took it as EMPTY and DrMarco shipped on both kern_small system
+# disks and both small apps disks from #207 on, the omission written down and
+# never applied - $(SMALLGAMES)'s own warning, one list along.
+SMALLOMIT_GAMES = $(BUILD)/skies.o88 $(BUILD)/pxstein.o88 $(DM_SHIP)
 #   pxstein                 PIXELSTEIN 3D (SPEC.md 97.9, 24.5): a REQUIREMENT
 #                           the arena cannot meet. Its program part is a
 #                           ~33KB image with two 4KB map layouts and two
@@ -12220,8 +12314,15 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(MRGFX) $(PXGFX)) \
 #     warning above binds it: the prerequisites ($(APPS720)) and the recipe
 #     ($(APPSARGS720)) are filtered together or the private-tree build names a
 #     file nothing made.
+# ...AND WITHOUT DRMARCO (SPEC.md 24.6.1's rule, the owner's decision of
+# 2026-10-04, "for now"): main's own 720KB disk built at 713 of 713 clusters
+# after MIDIRack, and elendilon's OS88CZ.COM crossed a cluster on top of it.
+# DrMarco is the package and its three front screens, and its own disk
+# (`make drmarcodisk`) and every other geometry's apps disk still carry it.
 APPS720 := $(filter-out $(BUILD)/pixel.o88 $(PXGFX),$(APPS))
-APPSARGS720 := $(filter-out $(MIDISONGARGS) APPS:$(MRGFX) APPS:$(BUILD)/pixel.o88 APPS:$(PXGFX),$(APPSARGS))
+APPSARGS720 := $(filter-out $(MIDISONGARGS) APPS:$(MRGFX) \
+                 APPS:$(BUILD)/pixel.o88 APPS:$(PXGFX) \
+                 $(addprefix GAMES:,$(DM_SHIP)),$(APPSARGS))
 APPSARGS720 := $(filter-out $(APPDATAFOLDER),$(APPSARGS720)) \
                $(MIDISONGARGS720) $(APPDATAFOLDER)
 

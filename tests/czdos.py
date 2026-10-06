@@ -15,7 +15,10 @@ batch file, and each leg's output goes to a .LOG the host reads back:
                 peak decodes perfectly here and overruns there.
   host -> DOS   J joins sets os88cz.py made - LZ4, LZB, stored and mixed,
                 several parts - into OUT\\, byte for byte.
-  CZ            U expands a 'CZ' file in each format.
+  CZ            U expands a 'CZ' file in each format, at 40KB and at a size
+                whose STREAM is past 64KB (SPEC.md 20.14.5.1, 20.14.5.2) - the
+                %included decoder refused an LZ4 one of those until 20.14.5.2,
+                and only this leg runs the DOS build of it on one.
   refusals      a set with a damaged STORED byte (only the check can see it),
                 a part from another set, and a missing part on the drive the
                 result is going to - which is NOT asked for, because that disk
@@ -123,8 +126,12 @@ def main():
         "HLZB": (t_lzfmt.half_text(90000, 13), os88cz.M_LZB, "720k"),
         "HMIX": (mix, os88cz.M_LZ4, 60000),
     }
-    czs = {"CZ4.CZ": os88lz.LZ4, "CZB.CZ": os88lz.LZB}
     czdata = t_lzfmt.half_text(40000, 17)
+    # ~138KB of stream either way: the noise keeps it past 64KB packed
+    bigdata = (t_lzfmt.half_text(110000, 27) + noise(40000, 29)
+               + t_lzfmt.half_text(60000, 31))
+    czs = {"CZ4.CZ": (os88lz.LZ4, czdata), "CZB.CZ": (os88lz.LZB, czdata),
+           "BZ4.CZ": (os88lz.LZ4, bigdata), "BZB.CZ": (os88lz.LZB, bigdata)}
 
     with tempfile.TemporaryDirectory() as d:
         os.makedirs(os.path.join(d, "OUT"))
@@ -140,9 +147,12 @@ def main():
             for k, p in enumerate(os88cz.split(data, base + ".BIN", size, m,
                                                jobs=1), 1):
                 open(os.path.join(d, "%s.%03d" % (base, k)), "wb").write(p)
-        for name, fmt in czs.items():
-            open(os.path.join(d, name), "wb").write(
-                os88lz.cz_wrap(czdata, fmt)[0])
+        for name, (fmt, data) in czs.items():
+            z, did = os88lz.cz_wrap(data, fmt)
+            if not did:
+                sys.exit("czdos: %s would not pack - the fixture is wrong"
+                         % name)
+            open(os.path.join(d, name), "wb").write(z)
         dmg = os88cz.split(t_lzfmt.half_text(70000, 19), "DMG.BIN", 40000,
                            os88cz.M_STORE, jobs=1)
         dmg[1] = bytearray(dmg[1])
@@ -203,11 +213,12 @@ def main():
                      "identical" if got == data else
                      "MISSING" if got is None else "WRONG",
                      log(d, "J%s.LOG" % base).strip()[-60:]))
-        for name in czs:
+        for name, (fmt, data) in czs.items():
             p = os.path.join(d, "OUT", name[:3] + ".OUT")
             got = open(p, "rb").read() if os.path.exists(p) else None
-            check(got == czdata, "U %s: %s" % (
-                name, "identical" if got == czdata else
+            check(got == data, "U %s (%d-byte stream): %s" % (
+                name, os.path.getsize(os.path.join(d, name)) - os88lz.CZ_HDR,
+                "identical" if got == data else
                 log(d, "U%s.LOG" % name[:3]).strip()))
         # --- refusals ------------------------------------------------------
         out = set(os.listdir(os.path.join(d, "OUT")))

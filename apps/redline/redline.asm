@@ -232,9 +232,31 @@ rl_run:
     mov [bl_body], ax
     mov ax, [rl_table+bx+4]
     mov [bl_n], ax
+    mov ax, [rl_table+bx+6]          ; slow compositor work uses tick timing
+    or ax, ax
+    jnz .meth
+    ; ONE UNTIMED ITERATION, INTERRUPTS ON, before a method-P row: bl_time runs
+    ; each iteration under cli, and a body that spans a whole tick laps the PIT
+    ; there - which bl_run only finds out after the WHOLE row has run blind.
+    ; On a 4.77 MHz machine that was ~40 s a pass with IRQ0 held off (wire,
+    ; shaded, fractal, composition...), the clock losing every tick of it and
+    ; a serial mouse overrunning. A body that took two ticks or more here goes
+    ; straight to method T, the counts the references already hold for it.
+    call OSAPI_GET_TICKS
+    push ax
+    call word [bl_body]             ; the body may clobber anything bar BP
+    call OSAPI_GET_TICKS
+    pop dx
+    sub ax, dx                      ; modular, as bl_run's own
+    cmp ax, 2
+    mov ax, 0                       ; (mov leaves CF)
+    jb .meth
+    inc ax                          ; method T
+.meth:
+    mov bx, [rl_tableoff]
+    mov si, [rl_table+bx]           ; the label again: the probe spent SI
     mov word [rl_angle], 0        ; identical complete revolutions in every row
     mov byte [bl_lapped], 0        ; explicit T rows must not inherit a P lap
-    mov ax, [rl_table+bx+6]          ; slow compositor work uses tick timing
     call bl_run
     push bx
     mov bx, [rl_win]
@@ -615,7 +637,8 @@ rl_frontclock:
     shl di, 1
     add di, si
     mov cx, [rl_clockrow]
-    sub cx, 2                       ; keep title and CPU/vendor at rows 0,1
+    sub cx, 3                       ; keep title, canvas and CPU/vendor at
+                                    ; rows 0..2 (rl_facts' order)
 .shift:
     mov ax, [bl_idx+si]
     mov [bl_idx+di], ax
@@ -623,7 +646,7 @@ rl_frontclock:
     sub di, 2
     loop .shift
     mov cx, [rl_clockrows]
-    mov di, 4
+    mov di, 6                       ; ...so the clock lines land at row 3
     xor si, si
 .restore:
     mov ax, [rl_clockidx+si]
@@ -992,7 +1015,7 @@ rl_l_largest: db 'OS largest run KB', 0
 rl_l_xfree: db 'OS free extended KB', 0
 rl_l_fpu: db 'OS x87 detected (0/1)', 0
 rl_l_video: db 'OS video adapter', 0
-rl_videokey: db 'Video IDs: 0 VGA/EGA  1 Hercules  2 CGA. OS graphics mode.', 0
+rl_videokey: db 'Video IDs: 0 VGA  1 Hercules  2 CGA  3 EGA. OS graphics mode.', 0
 rl_l_width: db 'Screen width pixels', 0
 rl_l_height: db 'Screen height pixels', 0
 rl_l_bpp: db 'Screen bits per pixel', 0

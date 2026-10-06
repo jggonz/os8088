@@ -45,6 +45,14 @@ NAMES = {LZ4: "lz4", LZB: "lzb"}
 MINMATCH = 4                    # LZ4: a match is at least 4 bytes
 MFLIMIT  = 12                   # ...and none may START in the last 12
 LASTLITS = 5                    # ...and a block ends in at least 5 literals
+LZ_MAXLEN = 0xFFFF              # kernel/lz.inc counts a length - a match, or an
+                                # LZ4 literal run - in ONE 16-bit register, so
+                                # both encoders cap at it and both decoders
+                                # REFUSE past it, as the kernel's would: a
+                                # host decoder that accepted what the machine
+                                # cannot read is how a 64KB run of one byte
+                                # packed into a stream only the host could
+                                # expand (SPEC.md 20.14.5.3)
 
 
 # =============================================================================
@@ -152,6 +160,12 @@ def _lz4_seq_len(litlen, mlen):
 
 
 def _lz4_emit(out, lits, mlen, off):
+    if len(lits) > LZ_MAXLEN:
+        # kernel/lz.inc counts a length in ONE register, so a literal run
+        # longer than a word cannot be said to it. Nothing but a match can
+        # break a run, so this is a refusal - cz_wrap stores the file plain
+        raise ValueError(f"a literal run of {len(lits)} bytes does not fit "
+                         "the decoder's 16-bit length")
     tok = (min(len(lits), 15) << 4) | (min(mlen - MINMATCH, 15) if mlen else 0)
     out.append(tok)
     if len(lits) >= 15:
@@ -198,13 +212,14 @@ def lz4_compress(src, depth=128, tail=True):
     mend = n - LASTLITS
     anchor = i = 0
     while i < lim:
-        l, o = ch.find(i, 65535, mend - i, depth)
+        l, o = ch.find(i, 65535, min(mend - i, LZ_MAXLEN), depth)
         if not l:
             i += 1
             continue
         # lazy: a longer match one or two bytes on beats emitting this one
         while i + 1 < lim:
-            l2, o2 = ch.find(i + 1, 65535, mend - (i + 1), depth)
+            l2, o2 = ch.find(i + 1, 65535, min(mend - (i + 1), LZ_MAXLEN),
+                             depth)
             if l2 > l + 1:
                 i += 1
                 l, o = l2, o2
@@ -239,6 +254,8 @@ def lz4_decompress(buf, outlen, tail=True):
                 e = buf[p]; p += 1; ll += e
                 if e != 255:
                     break
+        if ll > LZ_MAXLEN:
+            raise ValueError(f"LZ4: a literal run of {ll} - past a word")
         out += buf[p:p + ll]; p += ll
         if p >= end:
             if tail:
@@ -254,6 +271,8 @@ def lz4_decompress(buf, outlen, tail=True):
                 if e != 255:
                     break
         ml += MINMATCH
+        if ml > LZ_MAXLEN:
+            raise ValueError(f"LZ4: a match of {ml} - past a word")
         s = len(out) - off
         for k in range(ml):
             out.append(out[s + k])
@@ -344,7 +363,7 @@ def lzb_compress(src, depth=128):
     for i in range(n - 1, -1, -1):
         dp[i] = 9 + dp[i + 1]
         nxt[i] = (0, 0)
-        ml, off = ch.find(i, 65535, n - i, depth)
+        ml, off = ch.find(i, 65535, min(n - i, LZ_MAXLEN), depth)
         # A shorter match at the same offset is legal too and can win, because
         # its gamma is cheaper - so the candidates are not just the longest.
         # But walking every length is O(n * matchlen), which on a 4,066-byte
@@ -542,6 +561,8 @@ def lzb_decompress(buf, outlen):
             out.append(r.byte())
         else:
             ml = r.gamma()
+            if ml > LZ_MAXLEN:
+                raise ValueError(f"LZB: a match of {ml} - past a word")
             off = ((r.gamma() - 2) << 8) | r.byte()
             if off == 0 or off > len(out):
                 raise ValueError(f"LZB: bad offset {off} at output {len(out)}")
@@ -642,11 +663,10 @@ def in_place_margin(data, fmt=LZ4, packed=None, tail=True):
 # AUTHORITY**: a foreign tool may drop those bytes, and the read path checks
 # the magic here before it believes anything.
 CZ_MAGIC = b"CZ"
-CZ_HDR = 8
-CZ_SRCMAX = 0xFFFF             # LZ4's own ceiling: its literal runs are the
-                                # one copy lz_decomp_x will not carry across a
-                                # source segment. LZB's input crosses since
-                                # SPEC.md 20.14.5.1, so LZB has none
+CZ_HDR = 8                      # ...and NO ceiling on the packed form in
+                                # either format: the decoder's input crosses a
+                                # segment for LZB (SPEC.md 20.14.5.1) and LZ4
+                                # (20.14.5.2) alike
 
 
 def cz_wrap(data, fmt=LZ4, packed=None):
@@ -668,13 +688,10 @@ def cz_wrap(data, fmt=LZ4, packed=None):
     """
     try:
         z = compress(data, fmt) if packed is None else packed
-    except ValueError:          # a tail T cannot count: over 64KB packed
-        return data, False
+    except ValueError:          # a tail T cannot count, or an LZ4 literal
+        return data, False      # run the decoder cannot (20.14.5.3)
     if CZ_HDR + len(z) >= len(data):
         return data, False
-    if fmt == LZ4 and CZ_HDR + len(z) > CZ_SRCMAX:
-        return data, False      # lz_decomp_x reads an LZ4 source inside ONE
-                                # segment (SPEC.md 20.14.5.1)
     if decompress(z, fmt, len(data)) != data:
         raise ValueError("round trip failed - os88lz is the reference")
     if in_place_margin(data, fmt, packed=z):

@@ -697,10 +697,12 @@ vid_apply:
     ; below, which moved down with it.  ES = DS from the prologue, DF is
     ; clear (the vid_tab copy's own `cld`, and nothing sets it after), and
     ; SI, DI and CX are all dead here.
-    mov si, vid_w
-    mov di, vid_pw
-    mov cx, 4
-    rep movsw
+    mov si, vid_w               ; (DI is already vid_pw: the m1/m8 copy above
+    mov cx, 4                   ; ends on vid_wm8, which vid_pw follows - the
+    rep movsw                   ; %error below pins it. Size pass 9)
+%if vid_pw - vid_wm8 != 2
+  %error "vid_pw must follow vid_wm8: vid_apply's second copy starts where the first one's DI stops"
+%endif
 
     mov ax, [vid_pw]            ; ...AND THE CLOCK IS THE PRIMARY'S, because the
     sub ax, MENU_CLK_W + 14     ; MENU BAR is (SPEC.md 39.2.1.2). One subtract:
@@ -738,19 +740,22 @@ vid_apply:
 
     mov al, [vid_kind]          ; --- the renderer's DEPTH, in one place
     call vid_depth_set          ; (see there: a display swap needs it too)
-    xor ax, ax                  ; PLANAR (VGA or EGA): the software renderer
-    cmp byte [vid_mono], 0      ; has no target - 0, because nothing routes
-    je .rend                    ; through it (SPEC.md 39.5/39.24). Keyed on
-    mov ax, [vid_seg]           ; the DEPTH vid_depth_set has just set and not
-.rend:                          ; on the kind - EGA is planar and 0 here too.
-    mov [vid_rseg], ax          ; MONO: the renderer draws straight into the
+    mov ax, [vid_seg]           ; font_run's target, [vid_tseg]: see the block
+    mov [vid_tseg], ax          ; below for why it is the LIVE [vid_seg]
+    cmp byte [vid_mono], 0      ; PLANAR (VGA or EGA): the software renderer
+    jne .rend                   ; has no target - 0, because nothing routes
+    xor ax, ax                  ; through it (SPEC.md 39.5/39.24). Keyed on
+.rend:                          ; the DEPTH vid_depth_set has just set and not
+    mov [vid_rseg], ax          ; on the kind - EGA is planar and 0 here too.
+                                ; MONO: the renderer draws straight into the
                                 ; framebuffer, so its target IS the screen.
                                 ; This set a plane STEP and an exclusive END
                                 ; beside it until both were found to have no
-                                ; reader anywhere (SPEC.md 39.26)
+                                ; reader anywhere (SPEC.md 39.26). [vid_seg] is
+                                ; loaded ONCE for both words (size pass 9)
 
-    ; --- font_run's target (SPEC.md 6.1.10), and it belongs HERE and not one
-    ; line above the block it reads. It IS [vid_seg] on every adapter there
+    ; --- font_run's target (SPEC.md 6.1.10), and it belongs AFTER the vid_tab
+    ; copy and not earlier in vid_apply. It IS [vid_seg] on every adapter there
     ; is - [vid_rseg] three lines up is `mono ? [vid_seg] : 0`, so the
     ; conditional this used to be read `mono ? [vid_seg] : [vid_seg]` - and
     ; the ordering trap the block below records is why it still reads the
@@ -763,9 +768,8 @@ vid_apply:
     ; (It was NOT always [vid_seg]: SPEC.md 32's renderer had an off-screen
     ; target and vidsel.inc's sw_set wrote [vid_rseg] from inside the run.
     ; That renderer is gone, and the cell stays published because font.inc
-    ; reads it once per composed row.)
-    mov ax, [vid_seg]
-    mov [vid_tseg], ax
+    ; reads it once per composed row.) The store itself is at the top of the
+    ; block above, where [vid_seg] is loaded once for [vid_rseg] as well.
 
     ; --- gfx_rowbase's answer, laid down instead of computed (SPEC.md 39.3.1)
     ; Every input to a row's base address - the stride, the bank mask and the
@@ -1026,9 +1030,11 @@ vid_setmode:
     cmp byte [vid_kind], VID_CGA    ; renderer in the build [vid_kind] can only
     jne .nocga                  ; be VID_HERC or VID_CGA and the mono arm
 %endif                          ; branched away above, so .bios IS the CGA
-    mov ax, 0x0040              ; there and the test is dead weight.
+    xor ax, ax                  ; there and the test is dead weight.
     mov es, ax                  ; NO PUSH: this routine banks ES at entry and
-    mov al, [es:0x0065]         ; nothing below reads it - the planar arms and
+    mov al, [es:0x0465]         ; nothing below reads it - the planar arms and
+                                ; (0000:0465 = 0040:0065, segment 0 being a byte
+                                ; cheaper to load - size pass 9)
     mov [vid_cgamode], al       ; vid_wipe each load their own
 .nocga:
 %ifdef GFX_VGA
@@ -1247,13 +1253,13 @@ vid_wipe:
 vid_cga_equip:
     push ax
     push ds
-    mov ax, 0x0040              ; the BIOS data area
-    mov ds, ax
-    mov al, [0x0010]            ; equipment flag, bits 5:4 = the display
-    and al, 0x30
+    xor ax, ax                  ; the BIOS data area, by segment 0 and the
+    mov ds, ax                  ; LINEAR offset (0040:0010 = 0000:0410, a byte
+    mov al, [0x0410]            ; cheaper than mov ax, 40h - size pass 9):
+    and al, 0x30                ; equipment flag, bits 5:4 = the display
     cmp al, 0x30                ; 11b = monochrome at B000
     jne .out
-    and byte [0x0010], 0xEF     ; 11b -> 10b is "clear bit 4, leave bit 5", and
+    and byte [0x0410], 0xEF     ; 11b -> 10b is "clear bit 4, leave bit 5", and
                                 ; ONE and does it. Correct only because the
                                 ; `cmp al, 0x30 / jne .out` above has already
                                 ; proved the pair IS 11b - relax that guard and

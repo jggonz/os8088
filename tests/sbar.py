@@ -8,15 +8,15 @@ Two claims, and they need different instruments.
   THE PICTURE. files.inc's bar is what the element unified ON, so the Disk
   window's must be byte-identical to what it drew before - and that is checked
   against the GEOMETRY the old code is on record as drawing, mirrored here,
-  rather than against a screenshot of the same build. fdlg.inc's changes by
-  the two pixels 13.10 names (arrow cells 11 rows not 12, centre x1+6 not +7)
-  and is checked against the SAME mirror, which is the whole point: the two
-  bars were a pixel apart and are not any more.
+  rather than against a screenshot of the same build. The Standard File
+  dialog's own bar was the second kernel bar, a pixel apart in two places;
+  SPEC.md 38.1 made the chooser a Disk window, so it IS this bar now, and the
+  `dlg` arm checks the same mirror where the chooser puts it - at the list's
+  right edge, narrowed by the button column (SPEC.md 38.3).
 
   THE PARTS. os88ui_sbhit is geometry and the callers own the policy, so what
   is asserted is that each part of the bar does what its window says it does:
-  the arrows step one row, the track pages, and a click ON THE THUMB pages
-  down in the Disk window and does nothing in the dialog.
+  the arrows step one row, the track pages, and a press ON THE THUMB grabs.
 
 A Disk window needs more entries than fit to have a thumb at all, which
 B:\\APPS has (11 packages on the apps disk against 7 rows in a default window).
@@ -30,14 +30,11 @@ import os88marty as M
 from os88mouse import Mouse
 import os88geom                                              # noqa: E402
 from os88geom import WIN_SIZE, MAX_WIN
-from os88fixture import need                             # noqa: E402
 import dispcp                                            # noqa: E402
 
 ARG = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
 DLG = ARG == "dlg"
 MACHINE = "os8088_5150_cga_gla" if DLG else ARG
-# fdlg.inc's bar, content-relative - the numbers 13.10 took away from it
-FD_SBX, FD_LX2, FD_LY1, FD_LY2 = 200, 213, 20, 120
 TITLE_H = 18
 FM_SB_W, FM_ROW_Y0 = 14, 22
 
@@ -114,55 +111,42 @@ def front(m, after):
     return live[-1]
 
 
-def dialog(m, mo):
-    """muptest's second window puts a Standard File dialog up (fdlgup.py's
-    route) - the only way to get one on screen."""
-    mo.dblclick(*os88geom.drive_pt(m, "B"))  # the zone BY LETTER, off desk_zslot (SPEC.md 26.9)
-    M.settle(m)
-    d = front(m, "the second muptest window was double-clicked open")
-    mo.click(d[0] + d[2] // 2, d[1] + 9)
-    M.settle(m)
-    mo.dblclick(d[0] + 40, d[1] + TITLE_H + 30)
-    M.settle(m)
-    w = front(m, "the Standard File dialog was asked for")
-    cx, cy = w[0] + 1, w[1] + TITLE_H
-    two = (cx + 100 + 31, cy + 40 + 9)
-    mo.menu(two[0], two[1], two[0] + 2, two[1])
-    M.settle(m)
-    return front(m, "the dialog's menu was dragged")
-
-
-# `all` builds NOTHING under tests/, so on a clean tree this disk is absent
-# and launch() dies in its copy with a FileNotFoundError in a tenth of a
-# second - an ABSENT gate that reads as a failing one, which is worse than
-# either. fdlgup and mouseup want the same disk and have asked for it since
-# it was written; this row never did, so WHICH ROW RAN FIRST decided whether
-# it passed.
-need("build/muptest.img")
-
 if DLG:
-    with M.launch("build/os8088-360.img", apps="build/muptest.img",
-                  machine=MACHINE) as m:
-        M.settle(m)
-        mo = Mouse(marty=m)
-        print(f"== {MACHINE} : the DIALOG's bar, same derivation (13.10) ==")
-        d = dialog(m, mo)
-        check("the dialog is up", d is not None, f"{d}")
-        if not d:
-            sys.exit("no dialog")
-        cx, cy = d[0] + 1, d[1] + TITLE_H
-        x1, x2 = cx + FD_SBX, cx + FD_LX2
-        y1, y2 = cy + FD_LY1, cy + FD_LY2
-        print(f"  bar {x1},{y1} .. {x2},{y2}")
+    # THE CHOOSER'S BAR. SPEC.md 13.10 unified the dialog's bar with the Disk
+    # window's, and SPEC.md 38.1 has since made the chooser a Disk window, so
+    # there is no second bar left to be a pixel apart: it is fm_sbset's, drawn
+    # by the same call. What is still the chooser's own is WHERE it goes -
+    # fm_layout takes FM_CHCOLW off the content width (SPEC.md 38.3), so the
+    # bar sits at the narrowed list's right edge, left of the button column.
+    # This arm checks the same mirrored picture THERE, and that its arrow
+    # scrolls the chooser's own block. Registered as `sbardlg`.
+    import os88ui                                        # noqa: E402
+    with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
+                     machine=MACHINE) as ui:
+        m = ui.m
+        print(f"== {MACHINE} : the CHOOSER's bar, same derivation (13.10, "
+              f"38.3) ==")
+        ui.path("B:/APPS/NOTEPAD.O88")
+        ui.settle()                     # os88ui's menu-after-launch race
+        ui.menu_pick("File", "Open")
+        w = ui.chooser()
+        ui.open("..", expect="nav", win=w)          # MEDIA -> B:\
+        ui.open("APPS", expect="nav", win=w)        # ...a folder that pages
+        ui.settle()
+        cx, cy = w.x + 1, w.y + TITLE_H
+        listb = int.from_bytes(m.read(m.sym("fm_listb"), 2), "little")
+        x2 = cx + (w.w - 2 - os88geom.FM_CHCOLW) - 1
+        x1, y1, y2 = x2 - (FM_SB_W - 1), cy + FM_ROW_Y0, cy + listb - 1
+        print(f"  bar {x1},{y1} .. {x2},{y2}   ({len(ui.listing(w))} rows)")
         r = rows(m)
 
         def ink(x, y):
             return not r[y][x]
 
-        # THE SAME MIRROR THE DISK WINDOW IS CHECKED AGAINST, which is the
-        # whole claim: these two bars used to be a pixel apart in two places
-        # (arrow cells 11 rows against 12, centre x1+6 against x1+7).
         check("the frame's corners are drawn", ink(x1, y1) and ink(x2, y2))
+        check("...and the column beside it is clear of the bar",
+              not ink(x2 + 2, y1 + SBCELL) and not ink(x2 + 3, y2 - SBCELL),
+              "(the bar ends at the narrowed list, SPEC.md 38.3)")
         check("the arrow-cell rules are at y1+10 / y2-10",
               all(ink(x, y1 + SBCELL) for x in range(x1, x2 + 1)) and
               all(ink(x, y2 - SBCELL) for x in range(x1, x2 + 1)))
@@ -170,10 +154,20 @@ if DLG:
         check("...and the arrows are centred on x1+(x2-x1)/2",
               ink(ccx, y1 + 3) and not ink(ccx - 1, y1 + 3) and
               ink(ccx, y2 - 3) and not ink(ccx - 1, y2 - 3),
-              f"(x1+{ccx - x1}, and it was x1+7 before)")
+              f"(x1+{ccx - x1})")
         check("the up glyph widens 1..9 over five rows",
               all(all(ink(x, y1 + 3 + i) for x in range(ccx - i, ccx + i + 1))
                   and not ink(ccx - i - 1, y1 + 3 + i) for i in range(5)))
+        s0 = ui.scroll(w)
+        ui.mo.click(ccx, y2 - 5, settle=0)          # the DOWN arrow
+        try:
+            ui._wait(lambda: ui.scroll(w) != s0, "the chooser to scroll",
+                     os88ui.T_NAV)
+        except os88ui.UIError:
+            pass
+        check("the down arrow steps the CHOOSER's list one row",
+              ui.scroll(w) == s0 + 1, f"(FS_SCRL {s0} -> {ui.scroll(w)})")
+        ui.chooser_cancel("escape")
     print()
     if fails:
         print(f"{len(fails)} FAILED: {', '.join(fails)}")

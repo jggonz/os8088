@@ -411,8 +411,9 @@ osapi_dos_handoff_x:
     mov [hb_dosoff], si
     mov byte [ui_rebootq], UI_RBQ_DOSRUN
     mov byte [sch_uiwake], 1    ; ui_task blocks (SPEC.md 8.1.2), so the post
-    clc                         ; has to wake it or the handoff waits for
-    retf                        ; whatever else happens to
+                                ; has to wake it or the handoff waits for
+                                ; whatever else happens to. CF = 0 still:
+    retf                        ; the cmp found nothing posted
 .no:                            ; ...shared with the verbs above: a `stc`/`retf`
     stc                         ; is a `stc`/`retf`
     retf
@@ -457,10 +458,7 @@ hb_pick1:                       ; is volume CL one? out: CF = 0 and AL = CL
     cmp ah, DVK_FILE
     je .no
     mov al, cl
-    clc
-    ret
-.no:
-    stc
+    CLC_OR_STC .no              ; CF = 0 AL = CL, or (.no) CF = 1
     ret
 
 ; -----------------------------------------------------------------------------
@@ -563,7 +561,8 @@ hbf_onup:                       ; a release can only follow a press this
     pop ax
     jc .gone
     call far [HBFP + HBE_ONUP*4]
-    call hbf_dropck
+    jmp short hbf_dropck        ; a tail call: its ret is ours (.gone
+                                ; stays, for the refusal above)
 .gone:
     ret
 
@@ -571,7 +570,8 @@ hbf_onkey:
     call hbf_need
     jc .gone
     call far [HBFP + HBE_ONKEY*4]
-    call hbf_dropck
+    jmp short hbf_dropck        ; a tail call: its ret is ours (.gone
+                                ; stays, for the refusal above)
 .gone:
     ret
 

@@ -83,8 +83,7 @@ icon_draw_x:
     push cx
     push si
     push di
-    mov al, [es:si]             ; the header: words a row, then rows
-    mov ah, [es:si+1]
+    mov ax, [es:si]             ; the header: words a row (AL), then rows (AH)
     cmp al, ICO_STAGE_WW        ; ONE compare, two refusals: `ja` refused
     jne .refuse                 ; ww > 1 and `jz` refused ww = 0, so the only
                                 ; surviving value was ICO_STAGE_WW itself -
@@ -159,23 +158,31 @@ icon_draw:
     push di
     push bp
     push es
-    mov al, [si]                ; header: wwords, height
-    mov ah, 0
+    lodsw                       ; header: AL = wwords, AH = height, and SI ->
+    mov bl, ah                  ; body (mask rows first)
+    xor ah, ah
     mov [ico_ww], ax
-    mov al, [si+1]              ; AH still 0
-    mov [ico_h], ax
-    add si, 2                   ; SI -> body (mask rows first)
+    mov bh, ah
+    mov [ico_h], bx
 
 ; ico_draw_common - the tail both wrappers share, written once. Everything
 ; from here down was byte-identical in icon_draw16; the only difference
 ; between the two entries is how [ico_ww] and [ico_h] get set, and where SI
 ; is pointing when they are.
 ico_draw_common:
+%ifdef OS88_SHORTCUTS
+    cmp byte [ico_bnd], 0       ; a desktop cell is COMPOSING (SPEC.md 26.9.9):
+    je .scr                     ; the picture goes into its band and not onto
+    call COLD_SEG:ico_band_x    ; the glass, whichever entry it came in by -
+    jmp short .pen              ; a volume's indexed record, a shortcut's,
+.scr:                           ; its badge or the Wire's driver through
+%endif                          ; OSAPI_ICON_DRAW
     GFXDENTERCD                 ; whole-shape, like a glyph (SPEC.md 39.14.2)
     call ico_core
-    mov word [ico_c1], (CBLACK << 8) | CWHITE   ; SPEC.md 25.6: ONE-SHOT
     GFXDLEAVE
-    jmp kret_es
+.pen:
+    mov word [ico_c1], (CBLACK << 8) | CWHITE   ; SPEC.md 25.6: ONE-SHOT, on
+    jmp kret_es                 ; both paths (gfx_dleave never reads the pen)
 
 ; -----------------------------------------------------------------------------
 ; icon_draw16 - draw a header-less 16x16 icon body (16 mask words + 16 data
@@ -269,6 +276,10 @@ icon_draw_ix:
     mov di, ico_ibuf
     xor bx, bx                  ; BH stays 0 for the whole walk: nothing below
                                 ; writes it and the mask keeps BL under 0x80
+%ifdef OS88_SHORTCUTS
+    cmp byte [ico_bnd], 0
+    jne .band                   ; a desktop cell composing (SPEC.md 26.9.9)
+%endif
 .run:
     mov bl, [si]                ; run byte: pool row << 3 | repeat count - 1
     inc si
@@ -306,6 +317,54 @@ icon_draw_ix:
 
     mov si, ico_ibuf            ; ...and from here down it IS a plain body
     jmp ico_draw_common
+%ifdef OS88_SHORTCUTS
+; ...and IN A CELL'S BAND the runs go straight into it, a row at a time, so
+; this record never decodes into ico_ibuf - which the band shares (below). A
+; volume's picture is the column's own and sits at the band's origin: its h
+; mask rows are ORed onto the band's rows 0.., then its h data rows AND-NOTed
+; over the same rows, which is ico_band_x's rule. BP counts the rows still to
+; come, so it is above h exactly while the mask table is.
+.band:
+    pop dx
+    pop cx
+    xor cx, cx                  ; (CH stays 0: `loop` leaves CX at 0)
+    mov di, ico_band
+.brun:
+    mov bl, [si]
+    inc si
+    mov cl, bl
+    shr bl, 1
+    and bl, 0x7C
+    and cl, 0x07
+    inc cx                      ; CX = 1..8
+.brow:
+    mov ax, [bx+ico_pool]
+    call .bop
+    mov ax, [bx+ico_pool+2]
+    call .bop
+    dec bp
+    cmp bp, [ico_h]
+    jne .bnx
+    mov di, ico_band            ; the mask table is in: the data over it
+.bnx:
+    loop .brow
+    or bp, bp
+    jnz .brun
+    jmp kret_es
+.bop:
+    xchg al, ah                 ; the band's bytes run left to right
+    cmp bp, [ico_h]
+    ja .bor
+    not ax
+    and [di], ax
+    jmp short .bo
+.bor:
+    or [di], ax
+.bo:
+    inc di
+    inc di
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; ico_core - shared body: clip, set up the GC, run the white (mask) pass and
@@ -320,8 +379,8 @@ ico_core:
     mov [ico_y], dx
 
     CLIPQ                        ; against an armed clip region (SPEC.md 11.3):
-    je .noclip                  ; whole-icon on kern_small, the font_char
-    mov ax, cx                  ; rule; one fragment's part on kern_big
+    je .noclip                  ; whole-icon, the font_char rule (11.3.5)
+    mov ax, cx
     mov bx, dx
     mov cx, [ico_ww]            ; CX = 16 * wwords = the body's pixel width
     shl cx, 1                   ; (a "word" of an icon row is 16 pixels, not
@@ -333,15 +392,13 @@ ico_core:
     add dx, [ico_h]             ; DX is STILL y - nothing between the bank at
     dec dx                      ; `mov bx,dx` and here writes it - so y2 is
                                 ; one add rather than a load and an add
-%ifdef KERN_BIG
-    call ico_clip               ; ...and on kern_big its ROWS and COLUMNS
-%else                           ; inside one fragment (SPEC.md 11.3.5)
     call wm_clip_test
-%endif
     mov cx, [ico_x]
-    mov dx, [ico_y]             ; (ico_clip may have moved it)
-    jc .none
-.noclip:
+    mov dx, [ico_y]
+    jnc .noclip
+.ret:                           ; a `ret` within short reach of the three
+    ret                         ; refusals above .rows_ok, where `.none` at the
+.noclip:                        ; foot was a relaxed five-byte jcc away
 
     mov ax, [ico_ww]            ; source/VRAM stride bookkeeping
     shl ax, 1
@@ -365,7 +422,7 @@ ico_core:
     jns .top_ok
     neg ax                      ; AX = rows clipped off the top
     cmp ax, bx
-    jae .none                   ; fully above the screen
+    jae .ret                    ; fully above the screen
     sub bx, ax
     mul word [ico_rb]           ; AX = bytes to skip in both tables
     add [ico_maskp], ax
@@ -450,131 +507,36 @@ ico_core:
 .none:
     ret
 
-%ifdef KERN_BIG
+; (ico_core_bb sits HERE, straight after ico_core, so ico_core's `jne` to it
+; is a short jump rather than a relaxed five-byte one.)
 ; -----------------------------------------------------------------------------
-; ico_clip - which part of an icon may be drawn under the armed region?
-;            (SPEC.md 11.3.5)
-; in:  AX..DX = the icon's rect; SI -> its body; [ico_ww]/[ico_h]/[ico_x]/
-;      [ico_y] set; a region armed
-; out: CF = 1 draw nothing. CF = 0 draw from SI - which, whenever ONE
-;      fragment does not hold the whole icon, is ico_ibuf holding only the rows
-;      it does hold ([ico_h] and [ico_y] moved to say so), with every column
-;      outside it cleared from both tables
-; clobbers: AX, BX, CX, DX, DI, BP, ES (ico_core sets all of them afresh)
-;
-; 11.3.2's rows and 11.3.4's columns, for a 16- or 32-wide shape. Both passes
-; write only SET bits, so a column is clipped by clearing it from the mask
-; word and the data word alike - done once, into the stage, so the unclipped
-; path (`CLIPQ` / `je .noclip` above) pays nothing and the passes are
-; unchanged. Under the cull (11.3.3) the answer is wm_clip_rows' own, whole.
-;
-; THE STAGE IS ico_ibuf, and that is bounded by construction rather than by a
-; test: every record the kernel draws is at most ICO_IBUF_WW words by
-; ICO_IBUF_H rows - icon_draw_x refuses wider than one word and taller than
-; ICO_STAGE_H, the indexed kind is 32x32, icon_draw16 is 16x16 and the
-; kernel's own plain records are one word wide - so 2 x rows x 2 x words
-; is at most ICO_IBUF_SZ. The copy runs forward and never passes its source:
-; an indexed body IS ico_ibuf and a staged one starts two bytes into it.
+; ico_core_bb - the software renderer's icon body (SPEC.md 32/39.5): the white underlay
+;               ORs the shifted mask-row bits into all four planes, the
+;               black pass AND-NOTs the data-row bits out of them - color
+;               15 under the mask, 0 under the data, like the VRAM passes.
+; in:       DI = row offset, CL/CH = shift pair, ico_* vars set by ico_core
+; out:      returns to icon_draw/icon_draw16's epilogue (ico_core contract)
+; clobbers: everything but DS (the wrappers restore)
 ; -----------------------------------------------------------------------------
-ico_clip:
-    call wm_clip_rows           ; CF, [wm_clip_r0]/[wm_clip_rn], the winner
-    jc .ret
-    cmp byte [wm_dmg_cull], 0
-    jne .ret                    ; the cull draws a shape whole (CF = 0 here)
-    push si
-    mov bx, [wm_clip_wf]        ; the winning fragment, VIRTUAL coordinates
-    mov ax, [ico_x]
-    cmp byte [gfx_dnest], 0
-    je .v
-    add ax, [vid_ox]            ; (39.14.4, as wm_clip_rows itself translates)
-.v:
-    mov di, ico_cmw
-    mov bp, [ico_ww]
-    mov si, 0FFFFh              ; SI = the AND of every mask
-.m:
-    mov cx, [bx+WCR_X1]         ; d0: columns cut off this word's LEFT...
-    sub cx, ax
-    call .clamp
-    mov dx, 0FFFFh
-    shr dx, cl
-    mov cx, ax
-    add cx, 15
-    sub cx, [bx+WCR_X2]         ; ...d1 off its RIGHT
-    call .clamp
-    push ax
-    mov ax, 0FFFFh
-    shl ax, cl
-    and dx, ax                  ; (0FFFFh >> d0) & (0FFFFh << d1)
-    pop ax
-    mov [di], dx
-    and si, dx
-    inc di
-    inc di
-    add ax, 16
-    dec bp
-    jnz .m
-    inc si                      ; ZF = 1: no column is cut
-    pop si                      ; (`pop` writes no flag)
-    jnz .stage
-    cmp byte [wm_clip_r0], 0
-    jne .stage
-    mov al, [wm_clip_rn]
-    cmp al, [ico_h]
-    jne .stage                  ; equal leaves CF = 0: draw it as it is
-.ret:
-    ret
-.stage:
-    push ds
-    pop es
-    mov bx, [ico_ww]
-    shl bx, 1                   ; BX = bytes a row
-    mov ax, bx
-    mul word [ico_h]
-    xchg ax, bp                 ; BP = the mask table's size: data table's offset
-    mov al, [wm_clip_r0]
-    mul bl                      ; AX = the first drawn row's offset
-    add si, ax
-    mov di, ico_ibuf
-    mov dl, [wm_clip_rn]
-    push si
-    call .tab                   ; the drawn rows of the mask table...
-    pop si
-    add si, bp
-    call .tab                   ; ...and the same rows of the data table
-    mov al, [wm_clip_r0]
-    cbw                         ; (r0 and rn are under 128: ICO_IBUF_H)
-    add [ico_y], ax
-    mov al, dl
-    cbw
-    mov [ico_h], ax
-    mov si, ico_ibuf
-    clc
-    ret
-.tab:                           ; DL rows of [ico_ww] words, DS:SI -> ES:DI,
-    mov dh, dl                  ; each word ANDed with its column's mask
-.tr:
-    mov bx, ico_cmw
-    mov cx, [ico_ww]
-.tw:
-    lodsw
-    and ax, [bx]
-    stosw
-    inc bx
-    inc bx
-    loop .tw
-    dec dh
-    jnz .tr
-    ret
-.clamp:                         ; CX = a distance -> 0..16 in CL. 16 and not
-    jns .c0                     ; "16 or more": a 286 masks a shift count to
-    xor cx, cx                  ; five bits, so 256 would shift by 0 there
-.c0:
-    cmp cx, 16
-    jbe .c1
-    mov cl, 16
-.c1:
-    ret
-%endif
+ico_core_bb:
+    mov ax, [ico_col0]
+    cmp ax, [vid_stride]        ; x < 0 (huge unsigned) or entirely off the
+    jae ico_core.none           ; right edge: the passes would skip every
+                                ; byte - so skip them. It is also what proves
+                                ; ico_pass_bb's byte column cannot wrap: col0
+                                ; is below the stride, the stride is 90 at
+                                ; most, and the walk adds 2*ww <= 4 to it.
+    mov al, [ico_c1]            ; SPEC.md 25.6: WHITE ors the rows in and
+    call ico_bbop_of            ; anything else ands them out - which is the
+    mov [ico_bbop], al          ; hardcoded pair's own behaviour, and gives a
+    mov si, [ico_maskp]         ; pressed control its black underlay and a
+    call ico_pass_bb            ; disabled one its stipple for free (the
+    mov al, [ico_c2]            ; CALLER dithers the data rows; a 1bpp op has
+    call ico_bbop_of            ; nowhere to put a grey)
+    mov [ico_bbop], al
+    mov si, [ico_datap]
+    jmp ico_pass_bb
+
 
 %ifdef GFX_VGA
 ; -----------------------------------------------------------------------------
@@ -651,36 +613,6 @@ ico_pass:
     pop di
     ret
 %endif                          ; ...end of the VGA icon pass
-
-; -----------------------------------------------------------------------------
-; ico_core_bb - the software renderer's icon body (SPEC.md 32/39.5): the white underlay
-;               ORs the shifted mask-row bits into all four planes, the
-;               black pass AND-NOTs the data-row bits out of them - color
-;               15 under the mask, 0 under the data, like the VRAM passes.
-; in:       DI = row offset, CL/CH = shift pair, ico_* vars set by ico_core
-; out:      returns to icon_draw/icon_draw16's epilogue (ico_core contract)
-; clobbers: everything but DS (the wrappers restore)
-; -----------------------------------------------------------------------------
-ico_core_bb:
-    mov ax, [ico_col0]
-    cmp ax, [vid_stride]        ; x < 0 (huge unsigned) or entirely off the
-    jae .none                   ; right edge: the passes would skip every
-                                ; byte - so skip them. It is also what proves
-                                ; ico_pass_bb's byte column cannot wrap: col0
-                                ; is below the stride, the stride is 90 at
-                                ; most, and the walk adds 2*ww <= 4 to it.
-    mov al, [ico_c1]            ; SPEC.md 25.6: WHITE ors the rows in and
-    call ico_bbop_of            ; anything else ands them out - which is the
-    mov [ico_bbop], al          ; hardcoded pair's own behaviour, and gives a
-    mov si, [ico_maskp]         ; pressed control its black underlay and a
-    call ico_pass_bb            ; disabled one its stipple for free (the
-    mov al, [ico_c2]            ; CALLER dithers the data rows; a 1bpp op has
-    call ico_bbop_of            ; nowhere to put a grey)
-    mov [ico_bbop], al
-    mov si, [ico_datap]
-    jmp ico_pass_bb
-.none:
-    ret
 
 ; ico_bbop_of - AL = a colour -> AL = 0 (or) for white, 1 (and-not) otherwise
 ; The 1bpp reduction is gfx_ink's (SPEC.md 39.4): only pure white lights a
@@ -1293,7 +1225,28 @@ ico_wleft   resw 1              ; words left in the current row
 ico_x       resw 1              ; requested x
 ico_y       resw 1              ; requested y, clamped to 0 after top clip
 ico_bbop    resb 1              ; bb pass: 0 = or (white), 1 = and-not (black)
-%ifdef KERN_BIG
-ico_cmw     resw ICO_IBUF_WW    ; ico_clip: each icon word's column mask
+%ifdef OS88_SHORTCUTS
+; --- a desktop cell's COMPOSE band (SPEC.md 26.9.9) ---------------------------
+; desk_col lays the ground into ico_band, sets [ico_bnd], draws its picture -
+; every icon entry lands in ico_band_x instead of on the glass - and puts the
+; band down with ONE gfx_blit1, so no pixel of the picture column is written
+; twice. 1 = white, 0 = black, bit 7 leftmost, ICO_BSTR bytes a row.
+ICO_BSTR    equ 4               ; 32 px: the picture column, on the byte grid
+ICO_BROWS   equ 34              ; the picture box and the gap under it: 32 +
+                                ; DESK_ZGAP, asserted in desk.inc where that
+                                ; is defined (a resb wants it on pass one)
+ico_bnd     resb 1              ; 1 = icon draws go to the band
+ico_bx0     resw 1              ; the band's screen x (a multiple of 8)...
+ico_by0     resw 1              ; ...and y
+ico_bh      resw 1              ; its rows, <= ICO_BROWS
+; THE BAND IS THE TOP OF ico_ibuf: nothing else needs that buffer while a cell
+; composes. The indexed kind writes straight into the band there (icon_draw_ix
+; .band), icon_draw_x's stage is the buffer's first ICO_STAGE_SZ bytes, and
+; desk_cap's caption reuses the whole buffer only once the column is on the
+; glass
+ico_band    equ ico_ibuf + ICO_IBUF_SZ - ICO_BSTR * ICO_BROWS
+%if ICO_IBUF_SZ - ICO_BSTR * ICO_BROWS < ICO_STAGE_SZ
+  %error "ico_band shares ico_ibuf with icon_draw_x's stage and must clear it"
+%endif
 %endif
 section .text

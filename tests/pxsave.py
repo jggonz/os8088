@@ -291,7 +291,7 @@ def guest_leg(machine):
                 M.ui_done(m, "down")
             m.key("Enter")
             M.ui_done(m, "the card's OK")
-            ui.wait_window("Save", limit=60)
+            ui.chooser(limit=60)            # SPEC.md 38: a Disk window
             m.type_text("\b" * 12 + name)
             M.ui_done(m, "typed")
             m.key("Enter")
@@ -383,7 +383,7 @@ def guest_leg(machine):
             m.key("ArrowDown")
             M.ui_done(m, "down")
         m.key("Enter")
-        ui.wait_window("Save", limit=60)
+        ui.chooser(limit=60)            # SPEC.md 38: a Disk window
         m.type_text("\b" * 12 + "ESC.PNG")
         m.key("Enter")
         M.until(m, lambda _: B("px_busy") == 4 and W("px_erow") >= 8,
@@ -520,7 +520,7 @@ def full_leg(machine):
             m.key("ArrowDown")
             M.ui_done(m, "down")
         m.key("Enter")
-        ui.wait_window("Save", limit=60)
+        ui.chooser(limit=60)            # SPEC.md 38: a Disk window
         m.type_text("\b" * 12 + "CITY.PCX")
         m.key("Enter")
         M.until(m, lambda _: W("os88ui_awin"), "Replace CITY.PCX?",

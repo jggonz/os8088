@@ -16,13 +16,14 @@ walker - never out of the Makefile's variables, which is the trap SPEC.md
     the everything set, which needs the C toolchain, is checked when it exists;
   * the packed file is <= 56KB, the ceiling the Makefile asserts where the
     file is made, read back here off the disk it landed on;
-  * its parts run is under SPEC.md 20.12.7's 128 sectors, decoded out of
-    the package's own part table with tools/os88parts.py - in UNPACKED
-    sectors, which IS the bound (op_load cuts the claim from the unpacked
-    total and refuses at 128 on both sides; OP_COMP does not relieve it):
+  * its parts run is under SPEC.md 20.12.11's OP_SECMAX sectors (128 until
+    the carve passed 64KB), decoded out of the package's own part table with
+    tools/os88parts.py - in UNPACKED sectors, which IS the bound (op_load
+    cuts the claim from the unpacked total and refuses at OP_SECMAX on both
+    sides; OP_COMP does not relieve it):
     68 today where the packed file on the floppy carries ~28, so the figure
     is not the disk's and cannot false-pass. The recipe that makes the
-    file asserts the same (`os88parts.py --run --max-run 128`); this row is
+    file asserts the same (`os88parts.py --run`); this row is
     the read-back off the built tree.
 """
 import os
@@ -114,7 +115,8 @@ def main():
     run = os88parts.run_sectors(rows)       # the recipe's own reader
     print("   parts: %s" % ", ".join("%d:%s len %d flags %d" % (i, "SEG" if r["kind"] == 0
           else "ASSET", r["len"], r["flags"]) for i, r in enumerate(rows)))
-    check(run < 128, "the eager run is %d UNPACKED sectors, under 128 (20.12.7)" % run)
+    lim = os88parts.EQU["OP_SECMAX"]
+    check(run < lim, "the eager run is %d UNPACKED sectors, under %d (20.12.11)" % (run, lim))
     if FAIL:
         print("pxsdisk: FAIL (%d)" % len(FAIL))
         return 1

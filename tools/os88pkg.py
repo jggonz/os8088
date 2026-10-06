@@ -47,6 +47,10 @@ GLYPH_ROWS = 8            # bit 5: eight glyph bytes, one a row, then eight
                           # reserved - sixteen so the clear prefix stays a
                           # multiple of 16 (SPEC.md 20.13.1)
 PKG_GLYPH_BIT = 0x20      # ...and the bit itself
+OP_SECMAX = 1920          # apps/os88parts.inc's: the carve's ceiling in
+                          # sectors, packed and unpacked (SPEC.md 20.12.11)
+OP_PARTMAX = 0xFE00       # ...and ONE part's: op_size rounds a row's length
+                          # up to a sector in a word and refuses the carry
 APP_MAX_SIZE = 0xF000     # image + bss budget: 60KB (one segment's worth -
                           # the region is a heap claim, so the real limit is
                           # also whatever the heap has contiguous)
@@ -607,10 +611,13 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts,
         body = read_file(next(it))
         if not body:
             fail(f"part {i}: the payload is empty")
-        if len(body) > 0xFFFF:
+        if len(body) > OP_PARTMAX:
             fail(f"part {i}: {len(body)} bytes. A part is reached through a "
-                 "SEGMENT, so it is addressed by a 16-bit offset and 65,535 "
-                 "is the ceiling (SPEC.md 20.12)")
+                 "SEGMENT, so it is addressed by a 16-bit offset, and op_size "
+                 "rounds its length up to a whole sector in a word - so "
+                 f"{OP_PARTMAX:,} is the ceiling. An asset bigger than that is "
+                 "two adjacent rows: plain rows sit back to back in the carve "
+                 "(SPEC.md 20.12, 20.12.11)")
         # A PART THAT IS ITSELF A PACKAGE IMAGE has one extra rule, and it is
         # checked here rather than left to fail at launch. SPEC.md 20.12.10's
         # re-home hands the kernel `image + bss` as the bytes available at the
@@ -666,12 +673,13 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts,
                      (len(body) + PART_ALIGN - 1) // PART_ALIGN))
         out.extend(body)
 
-    # THE RUN AND THE SPAN ARE EACH BOUNDED AT 128 SECTORS, and the bound is
-    # the standard's own arithmetic rather than any machine's memory: op_size
-    # refuses a carve of 64KB or more ("Parts do not fit", everywhere) because
-    # op_cap is a word with the head slack added to it, and op_xload climbs
-    # the OP_XMS span through `shl ax, 9` in a word, so a span of 128 sectors
-    # reads as 0 bytes and 180 as 26,624 (apps/os88parts.inc). A package past
+    # THE RUN AND THE SPAN ARE EACH BOUNDED, and each bound is the standard's
+    # own arithmetic rather than any machine's memory. op_size refuses a carve
+    # of OP_SECMAX sectors or more ("Parts do not fit", everywhere) because
+    # op_cap counts the read in a word of PARAGRAPHS with the head slack in
+    # it (SPEC.md 20.12.11 - it was a word of BYTES, and the bound was 128).
+    # op_xload still climbs the OP_XMS span through `shl ax, 9` in a word, so
+    # a span of 128 sectors reads as 0 bytes and 180 as 26,624. A package past
     # either bound builds, ships, and fails at launch with a toast that blames
     # the machine - so refuse it HERE, where the author is. The OP_XMS rows
     # are counted in the carve too: where there is no store they fall back
@@ -680,20 +688,20 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts,
         return rows_[-1][2] + rows_[-1][3] - rows_[0][2] if rows_ else 0
     carve = [r for r in laid if not r[1] & OPF_LAZY]
     span = [r for r in laid if r[1] & OPF_XMS]
-    if extent(carve) >= 128:
+    if extent(carve) >= OP_SECMAX:
         fail(f"the carved run is {extent(carve)} sectors (parts "
              f"{carve[0][0]}..{carve[-1][0]}, OP_XMS rows included - they "
              "fall back into the carve on a machine with no store). op_size "
-             "refuses 128 or more: the carve plus a cluster has to fit one "
-             "WORD (SPEC.md 20.12.4)")
+             f"refuses {OP_SECMAX} or more: the carve plus a cluster has to "
+             "fit one WORD of paragraphs (SPEC.md 20.12.11)")
     if extent(span) >= 128:
         fail(f"the OP_XMS span is {extent(span)} sectors (parts "
              f"{span[0][0]}..{span[-1][0]}). op_xload walks it in a WORD of "
              "bytes, so 128 sectors is its ceiling too (SPEC.md 20.12.4)")
 
     # ...AND THE UNPACKED CARVE IS BOUNDED THE SAME WAY, on the other side.
-    # op_size cuts the CLAIM from the unpacked lengths and refuses 128 sectors
-    # there too - so a package whose parts compress from 70KB to 40KB passes
+    # op_size cuts the CLAIM from the unpacked lengths and refuses OP_SECMAX
+    # sectors there too - so a package whose parts compress from 70KB to 40KB passes
     # the disk bound above and fails at launch without this (SPEC.md 20.12.7).
     if seen_comp:
         usecs = 0
@@ -702,9 +710,9 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts,
             _, pf, po, pl, _ = struct.unpack_from("<BBHHH", out, off)
             if po and not pf & OPF_LAZY:
                 usecs += (pl + PART_ALIGN - 1) // PART_ALIGN
-        if usecs >= 128:
-            fail(f"the carve UNPACKS to {usecs} sectors. op_size refuses 128 "
-                 "or more on that side too - the claim is cut from the "
+        if usecs >= OP_SECMAX:
+            fail(f"the carve UNPACKS to {usecs} sectors. op_size refuses "
+                 f"{OP_SECMAX} or more on that side too - the claim is cut from the "
                  "unpacked lengths, and compressing a part makes the file "
                  "smaller without making the memory smaller (SPEC.md 20.12.7)")
         out[table + PART_FMT_AT] = (0 if part_fmt == "lz4" else 1)

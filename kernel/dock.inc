@@ -288,11 +288,9 @@ dkb_band:
 ; raise caches go because a window that did not move can have had the strip
 ; stand up or lie down behind it.
 ; -----------------------------------------------------------------------------
-dock_apply:
-    call COLD_SEG:dkf_apply
-    ret
 section .cold
-dkf_apply:
+dock_apply:                     ; (the name its callers knew: they far-call
+dkf_apply:                      ; dkf_apply, and the .text thunk is gone)
     push ax
     mov al, MOD_DOCK
     test byte [dock_cfg], DOCK_P_MASK | DOCK_F_AUTO
@@ -511,8 +509,12 @@ db_paint:
                                 ; which is a slow death nothing in the tree
                                 ; would report. See the matching `pop ax`.
     mov byte [dock_drew], 0
-    mov word [dock_px1], 07FFFh ; ...and nothing of the strip is painted YET
-    mov word [dock_px2], 08000h ; (SPEC.md 30.3.3): [dock_px1]/[dock_px2] are
+    mov ax, 07FFFh              ; ...and nothing of the strip is painted YET
+    mov cx, 08000h              ; (SPEC.md 30.3.3): [dock_px1]/[dock_px2] are
+    mov [dock_px1], ax          ; (the same two registers carry the sentinel
+    mov [dock_px2], cx          ; into `.full`'s exchange: wm_top and
+                                ; inst_win_owner preserve both - kernel size
+                                ; pass 9, five bytes and two immediates fewer)
                                 ; this pass's answer, not the last one's, and
                                 ; EMPTY is the inverted bounding box 07FFFh..
                                 ; 08000h so that db_px_hit's signed compares
@@ -553,8 +555,7 @@ db_paint:
                                 ; the window as well, and this does not depend
                                 ; on believing it. `pushf`/`popf`, never
                                 ; `cli`/`sti` - the caller's IF is its own.
-    mov ax, 07FFFh
-    mov cx, 08000h
+                                ; AX:CX = 07FFFh:08000h still, from above
     pushf
     cli
     xchg ax, [dock_dx1]
@@ -1109,12 +1110,12 @@ db_hit:
 ;
 ; Two things about the active test. It asks wm_top HERE rather than reading
 ; [dock_act], which is db_paint's scratch and valid only inside the paint
-; that resolved it - fdlg_sel_bar's rule about [fdlg_shown] (SPEC.md 38.3) in
-; another module. And it compares WINDOWS where db_key compares records:
-; inst_bind_win is the only writer of I_WIN and of wm_owner and writes both
-; together, so wm_top == [di+I_WIN] and inst_win_owner(wm_top) == di cannot
-; disagree - this is the same predicate the tile's own mark is drawn from,
-; taken the cheaper way round.
+; that resolved it - the retired dialog's fdlg_sel_bar rule about
+; [fdlg_shown] (SPEC.md 30.4) in another module. And it compares WINDOWS
+; where db_key compares records: inst_bind_win is the only writer of I_WIN
+; and of wm_owner and writes both together, so wm_top == [di+I_WIN] and
+; inst_win_owner(wm_top) == di cannot disagree - this is the same predicate
+; the tile's own mark is drawn from, taken the cheaper way round.
 ;
 ; A window hidden WITHOUT being minimized is never wm_top's answer (it counts
 ; visible windows only), so it still takes the wm_front path exactly as

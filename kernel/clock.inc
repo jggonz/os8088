@@ -36,6 +36,111 @@
 ; on which one answered.
 ; =============================================================================
 
+; --- THE SIX PORT HELPERS, ASSEMBLED TWICE (SPEC.md 37.94) -----------------
+; The boot overlay READS the clock and CTRL.DRV WRITES it, and these six are the
+; port helpers both halves share. They were resident for that, far-called from
+; both address spaces - 110 bytes of every machine's RAM, for code that runs at
+; boot and while the Control Panel closes. They are a copy in each image now:
+; `clk_*` below in `.ovlw`, `clkw_*` in clockw.inc, near-called in both (kernel
+; size pass 9; LAST-DROP-BYTES 7.7.3, which priced it). The BODIES are these
+; macros and only the bodies: each copy writes its own LABEL in its own file,
+; so tools/os88ovlchk.py's label map sees both, and its near/far checks cover
+; them as they cover any other `.ovlw` or `.modu` routine.
+;
+; clk_at_get: AL = CMOS index 00h..3Fh, IF = 0 already -> AL = the byte; every
+;   other register preserved. Index write and data read back to back, bit 7 set
+;   (NMI masked) - SPEC.md 37.90's pairing rule.
+%macro CLK_AT_GET_BODY 0
+    or al, 0x80
+    out CLK_AT_IDX, al          ; E6 70 - the immediate port form: no DX
+    jmp short $+2               ; I/O settling
+    in al, CLK_AT_DAT
+    ret
+%endmacro
+; clk_at_done: park the index at 0Dh (read-only) with NMI back on; preserves all
+%macro CLK_AT_DONE_BODY 0
+    push ax
+    pushf
+    cli
+    mov al, 0x0D                ; read-only, and bit 7 clear = NMI enabled
+    out CLK_AT_IDX, al
+    jmp short $+2
+    in al, CLK_AT_DAT           ; a write to 70h must always be followed by
+    popf                        ; an access of 71h, and soon (PS/2 TR)
+    pop ax
+    ret
+%endmacro
+; clk_ns_put: AL = MM58167 register 00h..1Fh, AH = the value; preserves all.
+; The base whole, the index into DL: AL <= 1Fh, so DL <= 0DFh and no carry
+%macro CLK_NS_PUT_BODY 0
+    push ax
+    push dx
+    mov dx, CLK_XT_BASE
+    add dl, al
+    mov al, ah
+    out dx, al
+    pop dx
+    pop ax
+    ret
+%endmacro
+; clk_rp_get: AL = RP5C01 port 00h..0Fh -> AL = the digit (D0-D3; the rest
+; floats). Preserves every other register
+%macro CLK_RP_GET_BODY 0
+    push dx
+    mov dx, CLK_XT_BASE
+    add dl, al
+    in al, dx
+    and al, 0x0F
+    pop dx
+    ret
+%endmacro
+; clk_tobcd: AL = 0..99 -> AL = packed BCD; clobbers AH
+%macro CLK_TOBCD_BODY 0
+    push cx
+    aam                         ; AH = tens, AL = ones
+    mov cl, 4
+    shl ah, cl
+    or al, ah
+    pop cx
+    ret
+%endmacro
+; clk_ns_stamp: AX = the year, DL = the month -> the two year bytes (0Ah is
+; ASTCLOCK's, 0Eh 86Box's), the month shadow and 0Bh's magic written back to
+; the card; preserves all. %1 = this copy's ns_put, %2 its tobcd. The year is
+; SUBTRACTED FIRST, THEN CLAMPED: the borrow is the "before CLK_YMIN" test and
+; is exact for any 16-bit input, and the clamp happens before the card is
+; written. AH carries the year byte into BOTH writes because ns_put banks AX.
+%macro CLK_NS_STAMP_BODY 2
+    push ax
+    push dx
+    pushf
+    cli                         ; every other 2C0h burst runs guarded
+    sub ax, CLK_YMIN
+    jnc %%ylo
+    xor ax, ax
+%%ylo:
+    cmp ax, CLK_YMAX - CLK_YMIN
+    jbe %%yok
+    mov al, CLK_YMAX - CLK_YMIN
+%%yok:
+    mov ah, al
+    mov al, CLK_NS_YRA
+    call %1
+    mov al, CLK_NS_YRB
+    call %1
+    mov al, dl
+    call %2
+    mov ah, al
+    mov al, CLK_NS_LMON
+    call %1
+    mov ax, (CLK_NS_MAGIC << 8) | CLK_NS_OK     ; one store, not two
+    call %1
+    popf
+    pop dx
+    pop ax
+    ret
+%endmacro
+
 ; --- the no-RTC fallback: 4 July 2026, 00:00:00 (SPEC.md 37) ----------------
 CLK_DEF_Y   equ 2026
 CLK_DEF_M   equ 7
@@ -122,20 +227,26 @@ section .ovlw                  ; boot overlay (SPEC.md 2.5)
 ; -----------------------------------------------------------------------------
 clk_init:
     push ax
-    mov byte [clk_rtc], 0
-    mov byte [clk_dirty], 0
-    mov byte [clk_h12], 0       ; display settings, boot defaults (SPEC.md
-    mov byte [clk_secs], 0      ; 37): 24-hour, no seconds in the menu bar
-    mov byte [clk_barq], 0
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    xor ax, ax                  ; clk_sec .. clk_acc are ONE run of .bss (the
+    mov di, clk_sec             ; %if under it), and every byte of it but the
+    mov cx, (clk_acc + 2 - clk_sec) / 2 ; date and clk_last starts at 0: the
+    cld                         ; time, [clk_rtc], [clk_dirty], the display
+    rep stosw                   ; settings (24-hour, no seconds - SPEC.md 37),
+                                ; [clk_barq] and [clk_acc]. Eleven immediate
+                                ; stores were 68 bytes of the boot overlay
+                                ; (kernel size pass 9)
+    pop es
+    pop di
+    pop cx
     mov word [clk_year], CLK_DEF_Y
-    mov byte [clk_mon], CLK_DEF_M
-    mov byte [clk_day], CLK_DEF_D
-    mov byte [clk_hour], 0
-    mov byte [clk_min], 0
-    mov byte [clk_sec], 0
+    mov word [clk_day], (CLK_DEF_M << 8) | CLK_DEF_D    ; day, then month
     mov ax, [ticks]
     mov [clk_last], ax
-    mov word [clk_acc], 0
     call clk_probe              ; CF = 1: no usable RTC, keep the fallback
     jc .out
     mov byte [clk_rtc], 1
@@ -331,30 +442,9 @@ section .text
 ; burst by parking the index at 0Dh - read-only, so a stray later write to
 ; 71h cannot corrupt anything - with the NMI bit CLEAR, which is the state
 ; the BIOS leaves after POST.
-; -----------------------------------------------------------------------------
-; clk_at_get - read CMOS register AL
-; in:  AL = index 00h..3Fh; IF = 0 already
-; out: AL = the byte; preserves every other register
-; -----------------------------------------------------------------------------
-clk_at_get:
-    or al, 0x80
-    out CLK_AT_IDX, al          ; E6 70 - THE IMMEDIATE PORT FORM. 70h and 71h
-                                ; are both below 100h, so DX is not needed at
-                                ; all and there is nothing to bank; the pair
-                                ; is faster as well as shorter, because the
-                                ; `mov dx,imm16` it deletes costs more than
-                                ; `out imm8,al` costs over `out dx,al`
-    jmp short $+2               ; I/O settling: two bytes, and it removes a
-                                ; whole class of works-here-fails-there bug
-    in al, CLK_AT_DAT           ; E4 71 - ...and this is CLK_AT_DAT's first
-                                ; reader in the tree; it used to be `inc dx`
-    retf                        ; RESIDENT FOR TWO ADDRESS SPACES (SPEC.md 37.94):
-                                ; the boot overlay reads the clock, CTRL.DRV writes
-                                ; it, and both far-call this. `retf` is not a detail
-                                ; here - os88ovlchk REFUSES a near call to it, which
-                                ; is how "nothing in .text may use me" is enforced
-                                ; rather than remembered (SPEC.md 2.6.1)
 section .ovlw                  ; boot overlay (SPEC.md 2.5)
+clk_at_get:                     ; the overlay's copy (CLK_AT_GET_BODY above)
+    CLK_AT_GET_BODY
 
 
 ; -----------------------------------------------------------------------------
@@ -364,28 +454,11 @@ section .ovlw                  ; boot overlay (SPEC.md 2.5)
 clk_at_lock:
     pushf
     cli
-    call KERNEL_SEG:clk_at_get
+    call clk_at_get
     popf
     ret
-section .text
-
-
-; -----------------------------------------------------------------------------
-; clk_at_done - leave the index somewhere harmless, NMI back on
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-clk_at_done:
-    push ax
-    pushf
-    cli
-    mov al, 0x0D                ; read-only, and bit 7 clear = NMI enabled
-    out CLK_AT_IDX, al          ; the immediate form, as clk_at_get - no DX
-    jmp short $+2
-    in al, CLK_AT_DAT           ; a write to 70h must always be followed by
-    popf                        ; an access of 71h, and soon (PS/2 TR)
-    pop ax
-    retf                        ; far entry, both address spaces (SPEC.md 37.94)
-section .ovlw                  ; boot overlay (SPEC.md 2.5)
+clk_at_done:                    ; the overlay's copy (CLK_AT_DONE_BODY above)
+    CLK_AT_DONE_BODY
 
 
 ; -----------------------------------------------------------------------------
@@ -430,13 +503,13 @@ clk_at_probe:
     jz .yes
     loop .uip
 .no:
-    call KERNEL_SEG:clk_at_done
+    call clk_at_done
     pop cx
     pop ax
     stc
     ret
 .yes:
-    call KERNEL_SEG:clk_at_done
+    call clk_at_done
     pop cx
     pop ax
     clc
@@ -473,14 +546,14 @@ clk_at_read:
     pushf
     cli
     xor al, al
-    call KERNEL_SEG:clk_at_get
+    call clk_at_get
     mov bh, al                  ; the seconds, stashed before the UIP test
     mov al, 0x0A
-    call KERNEL_SEG:clk_at_get
+    call clk_at_get
     test al, 0x80
     jnz .again                  ; an update is imminent or running
     xor al, al
-    call KERNEL_SEG:clk_at_get
+    call clk_at_get
     cmp al, bh
     jne .again                  ; one happened between the two reads
     mov [clk_rr+0], al
@@ -492,25 +565,25 @@ clk_at_read:
     cld                         ; byte is only meaningful beside the year
 .rd:
     cs lodsb                    ; AL = the next register index, through CS
-    call KERNEL_SEG:clk_at_get
+    call clk_at_get
     mov [di], al
     inc di
     loop .rd
     pop di
     pop si
     mov al, 0x0B
-    call KERNEL_SEG:clk_at_get
+    call clk_at_get
     mov [clk_rb], al            ; Register B: DM and 24/12 live here, and
     mov al, 0x0A                ; reading it here reads it under the guard
-    call KERNEL_SEG:clk_at_get
+    call clk_at_get
     test al, 0x80
     jnz .again                  ; an update started under the burst
     xor al, al
-    call KERNEL_SEG:clk_at_get
+    call clk_at_get
     cmp al, bh
     jne .again
     popf
-    call KERNEL_SEG:clk_at_done
+    call clk_at_done
     mov al, [clk_rb]
     and al, 0x04                ; DM: 0 = BCD, 1 = binary
     call clk_at_dec
@@ -527,7 +600,7 @@ clk_at_read:
     jz .fail                    ; CX, and the burst is well past a short jump's
     jmp .try                    ; reach either way
 .fail:
-    call KERNEL_SEG:clk_at_done
+    call clk_at_done
     pop dx
     pop cx
     pop bx
@@ -797,20 +870,8 @@ clk_ns_get:
     in al, dx
     pop dx
     ret
-section .text
-
-
-clk_ns_put:
-    push ax
-    push dx
-    mov dx, CLK_XT_BASE         ; ...as clk_ns_get, and for the same reason
-    add dl, al
-    mov al, ah
-    out dx, al
-    pop dx
-    pop ax
-    ret
-section .ovlw                  ; boot overlay (SPEC.md 2.5)
+clk_ns_put:                     ; the overlay's copy (CLK_NS_PUT_BODY above)
+    CLK_NS_PUT_BODY
 
 
 ; -----------------------------------------------------------------------------
@@ -1002,13 +1063,13 @@ clk_ns_half:
     mov bl, al                  ; the original
     mov al, cl
     mov ah, ch
-    call KERNEL_SEG:cw_clk_ns_put
+    call clk_ns_put
     mov al, cl
     call clk_ns_get
     mov bh, al                  ; what it answered
     mov al, cl
     mov ah, bl
-    call KERNEL_SEG:cw_clk_ns_put
+    call clk_ns_put
     mov al, bh
     pop cx
     pop bx
@@ -1036,7 +1097,7 @@ clk_ns_read:
     je .clean
     mov ax, [clk_tb_y]
     mov dl, [clk_tb_mo]
-    call KERNEL_SEG:clk_ns_stamp           ; the roll fired: put the corrected year and
+    call clk_ns_stamp           ; the roll fired: put the corrected year and
 .clean:                         ; a fresh month shadow BACK on the card, or
     clc                         ; the same single +1 applies again next year
 .out:                           ; and the date drifts one year low per year
@@ -1156,61 +1217,10 @@ clk_ns_roll:
 .out:
     pop ax
     ret
-section .text
-
-
-; -----------------------------------------------------------------------------
-; clk_ns_stamp - write the year bytes and the month shadow back to the card
-; in:  AX = the year, DL = the month
-; out: nothing (all registers preserved)
-;
-; The chip has no year register, so both of the conventions in the wild get
-; written: 0Ah is ASTCLOCK's and 0Eh is the one 86Box's cards read. 0Bh's
-; magic is what says the three are ours, and 09h is the shadow that lets a
-; later boot notice a New Year. Shared by clk_ns_write and by the roll
-; correction in clk_ns_read.
-; -----------------------------------------------------------------------------
-clk_ns_stamp:
-    push ax                     ; ...and NOT BX: no form of it is named below
-    push dx                     ; any more, so the routine preserves BX by not
-                                ; writing it. It carried the year byte in BL
-                                ; until the two `clk_ns_put` calls above
-                                ; started sharing AH.
-    pushf
-    cli                         ; every other 2C0h burst runs guarded, and
-                                ; this one is reached from clk_probe
-    sub ax, CLK_YMIN            ; SUBTRACT FIRST, THEN CLAMP THE SMALL NUMBER.
-    jnc .ylo                    ; The borrow is the "before CLK_YMIN" test and
-    xor ax, ax                  ; it is exact for any 16-bit input: 1979 -> CF
-.ylo:                           ; -> 0, and 65535 -> 63555 -> above the span ->
-    cmp ax, CLK_YMAX - CLK_YMIN ; the top. It still clamps BEFORE the card is
-    jbe .yok                    ; written, which is the point: clk_commit's
-    mov al, CLK_YMAX - CLK_YMIN ; clamp happens later and would not save a card
-.yok:                           ; stamped 120 from being unreadable by both of
-                                ; the readers next boot. AL and not AX in the
-                                ; high clamp - the cmp above already settled
-                                ; the high half
-    mov ah, al                  ; AH = the year byte, and it stays there for
-    mov al, CLK_NS_YRA          ; BOTH conventions: clk_ns_put banks AX
-    call clk_ns_put             ; (`push ax` ... `pop ax`), so the second write
-    mov al, CLK_NS_YRB          ; needs only its own register index in AL.
-    call clk_ns_put             ; If clk_ns_put ever RETURNS something in AX
-                                ; this breaks the second year byte only - the
-                                ; convention 86Box's cards read - so it would
-                                ; fail on the field machine's SixPakPlus and
-                                ; nowhere else in this tree (rung 2 is in no
-                                ; emulator here).
-    mov al, dl
-    call clk_tobcd
-    mov ah, al
-    mov al, CLK_NS_LMON
-    call clk_ns_put
-    mov ax, (CLK_NS_MAGIC << 8) | CLK_NS_OK     ; one store, not two
-    call clk_ns_put
-    popf
-    pop dx
-    pop ax
-    retf                        ; far entry, both address spaces (SPEC.md 37.94)
+clk_ns_stamp:                   ; the overlay's copy (CLK_NS_STAMP_BODY above);
+    CLK_NS_STAMP_BODY clk_ns_put, clk_tobcd ; clk_ns_read's roll correction
+clk_tobcd:                      ; ...and the BCD byte it needs, which is
+    CLK_TOBCD_BODY              ; nobody else's in this image
 
 ; =============================================================================
 ; Tier CLK_T_RP (3): the Ricoh RP5C01 / Toshiba TC8521 at 2C0h (probed THIRD)
@@ -1224,16 +1234,8 @@ CLK_RP_DOW  equ 0x06            ; 0-based on this chip, unlike the MM58167
 CLK_RP_24   equ 0x0A            ; page 1: 1 = 24-hour
 CLK_RP_LEAP equ 0x0B            ; page 1: the leap counter, year mod 4
 
-clk_rp_get:
-    push dx
-    mov dx, CLK_XT_BASE         ; the base whole, the index into DL alone: AL
-    add dl, al                  ; is 00h..0Fh here, so DL <= 0xCF and the add
-                                ; cannot carry (see clk_ns_get)
-    in al, dx
-    and al, 0x0F                ; only D0-D3 exist; the rest floats
-    pop dx
-    retf                        ; far entry, both address spaces (SPEC.md 37.94)
-section .ovlw                  ; boot overlay (SPEC.md 2.5)
+clk_rp_get:                     ; the overlay's copy (CLK_RP_GET_BODY above)
+    CLK_RP_GET_BODY
 
 
 ; -----------------------------------------------------------------------------
@@ -1244,7 +1246,7 @@ section .ovlw                  ; boot overlay (SPEC.md 2.5)
 clk_rp_digit:
     push bx
     mov bl, ah
-    call KERNEL_SEG:clk_rp_get
+    call clk_rp_get
     cmp al, bl
     ja .no
     pop bx
@@ -1403,7 +1405,7 @@ clk_rp_fields:
     pushf
     cli
     xor al, al
-    call KERNEL_SEG:clk_rp_get
+    call clk_rp_get
     mov bh, al
     call clk_rp_digits
     mov bl, 0
@@ -1411,7 +1413,7 @@ clk_rp_fields:
     mov bl, 1
 .clean:
     xor al, al
-    call KERNEL_SEG:clk_rp_get
+    call clk_rp_get
     popf
     or bl, bl
     jnz .no                     ; a bad digit, not a torn read
@@ -1454,7 +1456,7 @@ clk_rp_probe:
     push ax
     call clk_xt_charge
     mov al, CLK_RP_MODE
-    call KERNEL_SEG:clk_rp_get
+    call clk_rp_get
     test al, 0x03
     jnz .no
     call clk_rp_fields
@@ -2126,21 +2128,6 @@ clk_bcd:
 section .text
 
 
-; -----------------------------------------------------------------------------
-; clk_tobcd - binary byte to packed BCD
-; in:  AL = value 0..99
-; out: AL = BCD
-; clobbers: AH
-; -----------------------------------------------------------------------------
-clk_tobcd:
-    push cx
-    aam                         ; AH = tens, AL = ones
-    mov cl, 4
-    shl ah, cl
-    or al, ah
-    pop cx
-    ret
-
 ; =============================================================================
 ; The block a test package reads (registry tag 'CK', SPEC.md 37.92)
 ;
@@ -2234,6 +2221,9 @@ clk_barq:   resb 1              ; sticky: the bar's text is stale (an edit or a
                                 ; words below even-aligned" - see clk_year)
 clk_last:   resw 1              ; last [ticks] sample
 clk_acc:    resw 1              ; tenth-of-tick remainder
+%if clk_mon - clk_day != 1 || (clk_acc + 2 - clk_sec) & 1 || clk_rtc < clk_sec || clk_rtc > clk_acc || clk_dirty < clk_sec || clk_dirty > clk_acc || clk_year < clk_sec || clk_year > clk_acc || clk_h12 < clk_sec || clk_h12 > clk_acc || clk_secs < clk_sec || clk_secs > clk_acc || clk_barq < clk_sec || clk_barq > clk_acc || clk_last < clk_sec
+  %error "clock: clk_init zeroes clk_sec..clk_acc as one even run of words and stores day+month as one word"
+%endif
 
 clk_sn_sec:  resb 1             ; clk_snapshot's copy - the ONLY thing the
 clk_sn_min:  resb 1             ; formatters read. Same order and adjacency

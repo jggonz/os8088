@@ -7,11 +7,12 @@
 ; the one it is drawn from in CSP_ART (SPEC.md 88.10.1).
 ;
 ; THE BANDS ARE NOT IN THIS FILE (SPEC.md 88.10.3). They are a PART
-; of SKIES.O88 - the LZ4 stream this same script writes with
-; --stream - so the program's image carries the offsets and nothing
-; else. apps/skies/csload.asm fetches that part, expands it into a
-; claim and hands the segment over, and every blit reads
-; [cs_artseg]:offset exactly as it did when the stream was in the
+; of SKIES.O88 - the raw bands this same script writes with --raw,
+; which os88pkg.py packs into an OP_COMP | OP_LAZY row - so the
+; program's image carries the offsets and nothing else.
+; apps/skies/csload.asm op_fetches that part, which expands it into
+; a claim of its own, and hands the segment over; every blit reads
+; [cs_artseg]:offset exactly as it did when the bands were in the
 ; image. The names below are OFFSETS INTO THAT BLOB and not labels
 ; in this segment.
 
@@ -27,8 +28,6 @@ cs_art_fouga     equ 5008
 cs_art_bijave    equ 6832
 cs_art_a5        equ 8656
 
-CS_ART_SIZE equ 10480        ; the bands, UNPACKED - what the
-                             ; loader claims and decodes into
-CS_ART_ZLEN equ 4487         ; ...out of this many, T word in -
-                             ; which is part 1's whole length
-CS_ART_KB   equ 11            ; ...into a claim of this many KB
+CS_ART_SIZE equ 10480        ; the bands, UNPACKED - part 1's
+                             ; whole length once op_fetch has
+                             ; expanded it

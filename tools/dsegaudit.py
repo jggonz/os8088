@@ -53,7 +53,8 @@ CLAIMERS = {"mem_claim", "mem_claim_x", "mem_claim_dma", "mem_claim_dma_x",
             "mem_claim_hi", "mem_claim_hi_x", "mem_claim_dma_hi",
             "mem_claim_dma_hi_x", "mem_compact", "mem_compact_x",
             "mem_cp_run", "mem_regrow", "mem_regrow_x",
-            "osapi_mem_claim_x", "osapi_mem_claim_dma_x"}
+            "mmf_osapi_mem_claim", "mmf_osapi_mem_claim_hi",
+            "osapi_mem_claim_dma_x", "osapi_mem_claim_dma_hi_x"}
 
 # A far call this walk cannot follow. Named rather than skipped.
 OPAQUE = {"drv_fs_call", "drv_call", "drv_cp_call_x", "wm_pkgcall",

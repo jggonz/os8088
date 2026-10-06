@@ -111,6 +111,22 @@ class Flow:
         fn()
         self.m.run()
 
+    def at_frame(self, fn):
+        """Write guest memory at the end of a frame's render (xb_presented), the
+        one point no sim step is part-way through. pause_write stops the machine
+        wherever the host's pause lands: mid-step, after the step has read
+        xb_cs and before it latches the finish, a poked clock comes back one
+        hundredth late (7363 for 7362) - the host deciding the result."""
+        done = [False]
+
+        def hit(mm, rec):
+            if not done[0]:
+                fn()
+                done[0] = True
+                mm.breakpoints([])
+        with M.bp_trace(self.m, self.g.a("xb_presented") & 0xFFFFF, on_hit=hit) as tr:
+            tr.until(lambda: done[0], "a frame to be presented", limit=30)
+
     # ---- the menus -------------------------------------------------------------
     def to_race(self, sel, course, wait_cd=False):
         """From the title: the mode, the course, the race."""
@@ -153,7 +169,7 @@ class Flow:
             self.put("xm_fin", 1)
             self.put("xb_fint", 199, 2)
             self.put("xb_cd", 0, 2)
-        self.pause_write(go)
+        self.at_frame(go)
         self.wait_state(ST_RESULT)
         M.guest_sleep(self.m, .4)                      # the screen draws
         return par
@@ -349,11 +365,18 @@ def item_race_start(fl):
     assert fl.b("xb_nai") == 0, "Selection A has no opponents"
     saw = set()
     for _ in range(80):
-        cd = fl.w("xb_cd")
+        # ONE SNAPSHOT, with the guest stopped between two of its
+        # instructions. Read one at a time while it runs, the countdown could
+        # read 1 and the rider's steps a moment later read the first step
+        # AFTER GO - a lawful machine failing on where the host's reads fell.
+        fl.m.pause()
+        cd, hud = fl.w("xb_cd"), fl.hud()[13:20]
+        stepn, cs = fl.w("xm_stepn"), fl.w("xb_cs")
+        fl.m.run()
         if cd == 0:
             break
-        saw.add(fl.hud()[13:20])
-        assert fl.w("xm_stepn") == 0 and fl.w("xb_cs") == 0, "the rider or the clock moved during READY"
+        saw.add(hud)
+        assert stepn == 0 and cs == 0, "the rider or the clock moved during READY"
         M.guest_sleep(fl.m, .05)
     assert {"READY 3", "READY 2"} <= saw, ("the countdown text", saw)
     for _ in range(20):                             # GO! is on the HUD for 45 steps (0.75 s)

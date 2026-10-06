@@ -122,7 +122,7 @@ class Caller(object):
     and so does the return trap - a near `ret` cannot cross one.
 
     SS IS LEFT ALONE, and that is a requirement rather than an economy:
-    `dskw_stage` reaches `dsk_secbuf` as `push ss / pop es`, so the staging
+    `dskw_wone` reaches `dsk_secbuf` as `push ss / pop es`, so the staging
     this file is about only works with SS = LOW_SEG.
     """
 
@@ -161,7 +161,7 @@ class Caller(object):
         # idle task's slice, which is a better experiment as well as a
         # survivable one.
         #
-        # SS is still LOW_SEG, which is the requirement: `dskw_stage` reaches
+        # SS is still LOW_SEG, which is the requirement: `dskw_wone` reaches
         # `dsk_secbuf` as `push ss / pop es`.  Clobbering task 0's parked frame
         # costs nothing here - `park` clears IF, so from the first call on,
         # nothing but this file's own calls ever executes.

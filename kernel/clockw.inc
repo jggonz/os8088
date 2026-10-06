@@ -29,11 +29,11 @@
 ; THE CONTRACT, and all of it matters:
 ;   CS = this module's heap claim, DS = KERNEL_SEG, SS = LOW_SEG.
 ; DS is the kernel's, so every [clk_*] below is the same reference it was in
-; .text and nothing needed rewriting. What DID need rewriting is the six port
-; helpers this reaches: they stay RESIDENT because the boot overlay's read
-; path shares them (SPEC.md 37.94's table), so each is far-called. Four of
-; them end in `retf` and are called by name; the two clk_ns_stamp near-calls
-; keep a `ret` and a cw_ thunk. os88ovlchk.py refuses either written wrong.
+; .text and nothing needed rewriting. The six port helpers it shares with
+; the boot overlay's read path are THIS IMAGE'S OWN COPIES, clkw_* at the foot
+; of the file - the bodies are clock.inc's CLK_*_BODY macros, assembled once
+; there into `.ovlw` and once here (SPEC.md 37.94). They were resident and
+; far-called from both address spaces until kernel size pass 9.
 ;
 ; clk_dowt is the one piece of DATA that came along, and it is read through
 ; CS per SPEC.md 2.8.6: nothing can ask for a weekday while this image is not
@@ -125,7 +125,7 @@ clk_at_put:
 clk_at_enc:
     cmp byte [clk_rbin], 0
     jne .bin
-    call KERNEL_SEG:cw_clk_tobcd
+    call clkw_tobcd
 .bin:
     ret
 ; -----------------------------------------------------------------------------
@@ -137,7 +137,7 @@ clk_at_enc:
 ; call clk_at_put` written once. CH AND NOT DX: DX is what clk_at_write does
 ; not bank any more (F-clockw-02), CL is the divisor 100 later in the same
 ; routine and BL parks the century across it, so CH is the free half.
-; clk_at_enc reaches cw_clk_tobcd, which banks CX; clk_at_put banks AX.
+; clk_at_enc reaches clkw_tobcd, which banks CX; clk_at_put banks AX.
 ; -----------------------------------------------------------------------------
 clk_at_eput:
     call clk_at_enc
@@ -204,7 +204,7 @@ clk_at_write:
     pushf
     cli
     mov al, 0x0B
-    call KERNEL_SEG:clk_at_get
+    call clkw_at_get
     mov [clk_rb], al            ; save_control, restored whole at the end
     mov ah, al
     or ah, 0x80                 ; SET
@@ -243,7 +243,7 @@ clk_at_write:
     cmp byte [clk_cent], 0
     je .nocent                  ; this BIOS keeps no century byte, so do not
     mov al, bl                  ; invent one. 32h is outside the AT CMOS
-    call KERNEL_SEG:cw_clk_tobcd              ; checksum range (10h..2Dh), so writing it
+    call clkw_tobcd              ; checksum range (10h..2Dh), so writing it
     mov ah, al                  ; needs no checksum fixup - and equally, must
     mov al, 0x32                ; not trigger one. ALWAYS BCD, never clk_at_enc:
     call clk_at_put             ; 32h is BIOS RAM and DM does not describe it,
@@ -253,7 +253,7 @@ clk_at_write:
     mov ah, [clk_rb]
     call clk_at_put             ; SET cleared, every other bit as we found it
     popf
-    call KERNEL_SEG:clk_at_done
+    call clkw_at_done
     pop cx
     pop bx
     pop ax
@@ -278,17 +278,17 @@ clk_at_write:
 ; in:  AL = a 0..99 field, BL = its register
 ; out: nothing (AH spent, everything else preserved)
 ;
-; Five sites of `mov al,[clk_X] / call cw_clk_tobcd / mov ah,al /
-; mov al,CLK_NS_Y / call cw_clk_ns_put` written once. The day-of-week site is
+; Five sites of `mov al,[clk_X] / call clkw_tobcd / mov ah,al /
+; mov al,CLK_NS_Y / call clkw_ns_put` written once. The day-of-week site is
 ; the sixth and is deliberately NOT BCD, so it keeps its own sequence.
 ;
 ; BL is what makes clk_ns_write's `push bx` live again - see its prologue.
 ; -----------------------------------------------------------------------------
 clk_ns_bput:
-    call KERNEL_SEG:cw_clk_tobcd
+    call clkw_tobcd
     mov ah, al
     mov al, bl
-    call KERNEL_SEG:cw_clk_ns_put
+    call clkw_ns_put
     ret
 
 clk_ns_write:
@@ -310,7 +310,7 @@ clk_ns_write:
     inc al                      ; 1..7, and our own probe insists on it. NOT
     mov ah, al                  ; BCD - the day of the week is a plain 3-bit
     mov al, CLK_NS_DOW          ; counter - so this one is written out
-    call KERNEL_SEG:cw_clk_ns_put
+    call clkw_ns_put
     mov al, [clk_hour]
     mov bl, CLK_NS_HR
     call clk_ns_bput
@@ -323,7 +323,7 @@ clk_ns_write:
     ; --- the year, in both conventions, plus the bookkeeping that says so
     mov ax, [clk_year]
     mov dl, [clk_mon]
-    call KERNEL_SEG:clk_ns_stamp
+    call clkw_ns_stamp
     popf
     pop dx
     pop bx
@@ -460,7 +460,7 @@ clk_rp_write:
     pushf
     cli
     mov al, CLK_RP_MODE
-    call KERNEL_SEG:clk_rp_get
+    call clkw_rp_get
     mov bl, al
     and bl, 0x04                ; keep alarm-enable; page 0, timer STOPPED
     mov ah, bl
@@ -495,7 +495,7 @@ clk_rp_write:
     mov al, CLK_RP_MODE
     call clk_rp_put
     mov al, CLK_RP_24
-    call KERNEL_SEG:clk_rp_get
+    call clkw_rp_get
     mov [clk_rp24], al
     mov ax, [clk_year]
     and ax, 3                   ; this chip's leap rule is a mod-4 counter
@@ -537,13 +537,13 @@ clk_bios_write:
     push dx
 
     mov al, [clk_hour]          ; AH=03h: CH/CL/DH = hour/min/sec BCD,
-    call KERNEL_SEG:cw_clk_tobcd              ; DL = 0 (no daylight saving, SPEC.md 37)
+    call clkw_tobcd              ; DL = 0 (no daylight saving, SPEC.md 37)
     mov ch, al
     mov al, [clk_min]
-    call KERNEL_SEG:cw_clk_tobcd
+    call clkw_tobcd
     mov cl, al
     mov al, [clk_sec]
-    call KERNEL_SEG:cw_clk_tobcd
+    call clkw_tobcd
     mov dh, al
     mov dl, 0
     mov ah, 0x03
@@ -553,17 +553,17 @@ clk_bios_write:
     mov cl, 100                 ; DH/DL = month/day BCD
     div cl                      ; AL = century, AH = year within it
     mov bl, ah                  ; clk_tobcd clobbers AH - park it
-    call KERNEL_SEG:cw_clk_tobcd
+    call clkw_tobcd
     mov bh, al
     mov al, bl
-    call KERNEL_SEG:cw_clk_tobcd
+    call clkw_tobcd
     mov ch, bh
     mov cl, al
     mov al, [clk_mon]
-    call KERNEL_SEG:cw_clk_tobcd
+    call clkw_tobcd
     mov dh, al
     mov al, [clk_day]
-    call KERNEL_SEG:cw_clk_tobcd
+    call clkw_tobcd
     mov dl, al
     mov ah, 0x05
     int 0x1a
@@ -630,3 +630,23 @@ clk_dow:
 
 ; --- Sakamoto's month offsets (SPEC.md 2.8.6: module data, read through CS) --
 clk_dowt:   db 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4
+
+
+; =============================================================================
+; The six port helpers - this image's copies (SPEC.md 37.94)
+; =============================================================================
+; The boot overlay assembles the same bodies as clk_* in `.ovlw`; the contracts
+; are written at the macros in clock.inc. Near, because every caller is in
+; this image.
+clkw_at_get:
+    CLK_AT_GET_BODY
+clkw_at_done:
+    CLK_AT_DONE_BODY
+clkw_ns_put:
+    CLK_NS_PUT_BODY
+clkw_rp_get:
+    CLK_RP_GET_BODY
+clkw_tobcd:
+    CLK_TOBCD_BODY
+clkw_ns_stamp:
+    CLK_NS_STAMP_BODY clkw_ns_put, clkw_tobcd

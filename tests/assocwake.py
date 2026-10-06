@@ -152,7 +152,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
 
     # --- 1. the window is on the glass BEFORE the document is read ----------
     try:
-        state = dbl_at_bp(m, mo, wx, wy, DOC, "assoc_handover")
+        state = dbl_at_bp(m, mo, wx, wy, DOC, "assoc_run_x.handover")  # inlined, size pass 9
         if state is None:
             m.bp_exec()
             m.run()

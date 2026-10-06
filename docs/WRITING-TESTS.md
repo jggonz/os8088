@@ -248,8 +248,9 @@ actually has is a host-clock wait — see §7.
 
 ## 5. Never build in `build/`
 
-`builds=True` is **three** rows (`buildmatrix`, `ctoolchain`, `fdlgthumb`).
-Do not add a fourth without reading this section and deciding it applies to
+`builds=True` is **two** rows (`buildmatrix`, `ctoolchain`; `fdlgthumb` was
+the third until the dialog it tested was retired, SPEC.md 38.4.1). Do not
+add a third without reading this section and deciding it applies to
 you.
 
 The hazard is reproducible in about twenty seconds: three rows that pass 3/3

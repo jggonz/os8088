@@ -18,10 +18,10 @@ THE SESSION, on a GLaBIOS 5150 with a SCRATCH B: this row writes on the host:
   2  B:SRC/DATA.BIN - 40,000 bytes of a fixed pseudo-random stream, so it
      spans 40 extents and no chunk of it can match by being zero - copied
      onto D: by the file manager
-  3  Preserve As, the Save dialog stepped to B: with its Drive button, and the
+  3  Preserve As, the Save chooser stepped to B: with its Drive button, and the
      default name taken: B:RAMDISK.RAM
   4  Unmount, which DISCARDS the store (SPEC.md 62.9.11), then Load of that
-     file back through the Open dialog
+     file back through the Open chooser
   5  DATA.BIN copied from D: back to B:'s root
 
 THE CHECKS, every one of them on bytes the writer did not produce:
@@ -94,11 +94,6 @@ R_SBOX = (42, 15, 101, 26)          # page.inc's rects, pane-relative
 R_MOUNT = (2, 52, 65, 67)
 R_LOAD = (152, 52, 215, 67)
 R_PRESA = (2, 72, 97, 87)
-# fdlg.inc's button column and list, content-relative (SPEC.md 38.3)
-FD_BX1, FD_BX2 = 224, 286
-FD_BY = (20, 40, 60)                # Open/Save, Cancel, Drive
-FD_BH = 13
-FD_LY0, FD_ROWH, FD_NROWS = 22, 16, 6
 
 # rdabi.inc, the image (SPEC.md 62.9.12) - restated here deliberately: this
 # is the INDEPENDENT reader, and a reader that imported the writer's numbers
@@ -161,7 +156,7 @@ def drv_syms(src):
 
 def scratch_b(work, data):
     """A blank 360KB volume holding SRC/DATA.BIN and nothing else, so the
-    image and the copy-back both have room and the dialog lists two rows."""
+    image and the copy-back both have room and the chooser lists two rows."""
     f = os.path.join(work, DOC)
     open(f, "wb").write(data)
     img = os.path.join(work, "b.img")
@@ -259,7 +254,17 @@ def session(ui, a, R, data):
             return False
 
     def fdlg_up():
-        return u16(m.read(ui.sym("fdlg_win"), 2)) != 0
+        """A chooser is up: [fdlg_win] names a window, not 0 and not the
+        0FFFFh launch mark (SPEC.md 38.1)."""
+        return u16(m.read(ui.sym("fdlg_win"), 2)) not in (0, 0xFFFF)
+
+    def ch_drv():
+        """The volume the CHOOSER lists - its own pool block's FS_DRV. The
+        globals are put back where it stood only at a commit (SPEC.md 38.7),
+        so [disk_drive] is not the question while it is up."""
+        blk = u16(m.read(ui.sym("fdlg_blk"), 2))
+        return m.read((os88marty.KERNEL_SEG << 4) + blk
+                      + os88ui.geom.FS_DRV, 1)[0]
 
     # --- the panel, its Drivers page, the row, the Ram Disk page -----------
     def open_page(first):
@@ -282,31 +287,19 @@ def session(ui, a, R, data):
     def press(px, py, r):
         mo.click(px + (r[0] + r[2]) // 2, py + (r[1] + r[3]) // 2)
 
-    def dlg_rect():
-        """The dialog is modal and in front while [fdlg_win] is set."""
-        return ui.front() if fdlg_up() else None
-
-    def dlg_names():
-        """What the DIALOG lists - its own store (SPEC.md 38.5), not a Disk
-        window's cache, which is what `ui.listing` would read."""
-        n = u16(m.read(ui.sym("disk_nfiles"), 2))
-        vseg = u16(m.read(ui.sym("fdlg_vseg"), 2))
-        return [x for x, _ in os88ui._decode(
-            m.read(vseg << 4, n * os88ui.geom.DSK_DE_STRIDE), n)]
-
     def dlg_to_b():
-        """Step the dialog's Drive button until it stands on B: (SPEC.md
-        38.11 cycles every volume), confirmed off [disk_drive]."""
-        d = dlg_rect()
-        if d is None:
+        """Step the chooser's Drive button until it stands on B: (SPEC.md
+        38.11 cycles every volume), confirmed off the chooser's own block."""
+        try:
+            w = ui.chooser(limit=20.0)
+        except os88ui.UIError:
             return False
         for _ in range(6):
-            if m.read(ui.sym("disk_drive"), 1)[0] == 1:
+            if ch_drv() == 1:
                 return True
-            mo.click(d.x + 1 + (FD_BX1 + FD_BX2) // 2,
-                     d.y + TITLE_H + FD_BY[2] + FD_BH // 2)
+            ui.chooser_button(ui.CH_DRIVE, w)
             ui.settle(limit=20.0)
-        return m.read(ui.sym("disk_drive"), 1)[0] == 1
+        return ch_drv() == 1
 
     say("rdpreserve: %s, a %dKB conventional store, %d bytes of %s"
         % (a.machine, a.kb, len(data), DOC))
@@ -348,12 +341,12 @@ def session(ui, a, R, data):
     # --- 3: Preserve As, onto B: -------------------------------------------
     cp, px, py = open_page(False)
     press(px, py, R_PRESA)
-    if not check("D", wait(fdlg_up, "the Save dialog", 20.0),
-                 "Preserve As put up the Save dialog"):
+    if not check("D", wait(fdlg_up, "the Save chooser", 20.0),
+                 "Preserve As put up the Save chooser"):
         return
     ui.settle(limit=15.0)
-    if not check("D", dlg_to_b(), "the dialog stepped to B:",
-                 "[disk_drive] is %d" % m.read(ui.sym("disk_drive"), 1)[0]):
+    if not check("D", dlg_to_b(), "the chooser stepped to B:",
+                 "its FS_DRV is %d" % ch_drv()):
         return
     m.disk(reset=True)
     m.key("Enter")                  # the default name, RAMDISK.RAM
@@ -439,23 +432,23 @@ def session(ui, a, R, data):
         return
     ui.settle(limit=15.0)
     press(px, py, R_LOAD)
-    if not check("D", wait(fdlg_up, "the Open dialog", 20.0),
-                 "Load put up the Open dialog"):
+    if not check("D", wait(fdlg_up, "the Open chooser", 20.0),
+                 "Load put up the Open chooser"):
         return
     ui.settle(limit=15.0)
-    if not check("D", dlg_to_b(), "the Open dialog stepped to B:"):
+    if not check("D", dlg_to_b(), "the Open chooser stepped to B:"):
         return
-    names = dlg_names()
-    say("  (the dialog lists %s)" % names)
-    if IMG not in names or names.index(IMG) >= FD_NROWS:
-        check("D", False, "%s is on the dialog's first page" % IMG,
+    ch = ui.chooser()
+    names = [n for n, _ in ui.listing(ch)]
+    say("  (the chooser lists %s)" % names)
+    if IMG not in names:
+        check("D", False, "%s is listed in the chooser" % IMG,
               "it lists %s" % names)
         return
-    d = dlg_rect()
-    mo.click(d.x + 1 + 40,
-             d.y + TITLE_H + FD_LY0 + names.index(IMG) * FD_ROWH + FD_ROWH // 2)
+    i = names.index(IMG)
+    mo.click(*ui.row_xy(ch, ui.scroll_to(i, win=ch)))
     ui.settle(limit=10.0)
-    m.key("Enter")
+    m.key("Enter")                  # a FILE in the Open form answers (38.4)
     ok = wait(lambda: not fdlg_up() and db("rd_vol") != 0xFF
               and dw("rd_arena"), "the load to mount", 120.0)
     ui.settle(limit=20.0)

@@ -649,6 +649,7 @@ SPK_E_BUSY       equ 3           ; open already, or a clip plays
 ; implementation both this and the kernel copy.
 OSAPI_LZ_LZ4 equ 0
 OSAPI_LZ_LZB equ 1
+OSAPI_LZ_BIG equ 0x80            ; ...OR'd in: AH:CX is the length (20.13.3)
 %define OSAPI_DECOMP        KERNEL_SEG:0x03D3   ; DS:SI = the compressed bytes,
                                  ; T word first (SPEC.md 20.13.7: every stream
                                  ; ends in T raw bytes, and needs NO in-place
@@ -662,17 +663,18 @@ OSAPI_LZ_LZB equ 1
                                  ; claim's base), CX = compressed bytes,
                                  ; BX:DX = the EXACT expected output length,
                                  ; 32 bits, AL = OSAPI_LZ_*.
+                                 ; **AL | OSAPI_LZ_BIG** says AH is the
+                                 ; compressed length's HIGH byte, so AH:CX is
+                                 ; 24 bits; without it AH is not read.
                                  ; out CF=0 and ES:DI one past the last byte;
                                  ; CF=1 = refused, and nothing past the
                                  ; declared length was written.
-                                 ; **THE OUTPUT CROSSES 64KB AND THE INPUT
-                                 ; DOES NOT** (SPEC.md 20.14.5): the output has
-                                 ; to, because a 116KB MOD is the biggest win
-                                 ; compression has in this system, and the
-                                 ; input need not, because a stream over 64KB
-                                 ; is a file that compressed badly and is
-                                 ; better stored plain. CX >= 64KB, or SI + CX
-                                 ; wrapping, is refused.
+                                 ; **BOTH SIDES CROSS 64KB, IN BOTH FORMATS**
+                                 ; (SPEC.md 20.14.5, 20.14.5.2): DS:SI may
+                                 ; run past one segment, and the decoder
+                                 ; slides DS itself. A kernel older than the
+                                 ; bit REFUSES it as an unknown format, so
+                                 ; setting it is never a misread.
                                  ; clobbers AX BX CX DX SI DI; DS and ES come
                                  ; back YOURS - which is why this is a plain
                                  ; cell and not an X one: the decompressor
@@ -1635,10 +1637,11 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
                                  ; framebuffer's own bit order (row-major, bit
                                  ; 7 leftmost, 1 = a LIT pixel), BP = its
                                  ; stride in BYTES per row, AX = destination x
-                                 ; - A MULTIPLE OF 8 - CX = width in pixels,
-                                 ; ANY (off the byte grid, the last partial
-                                 ; byte is merged under a mask and the bits
-                                 ; past the width are untouched, SPEC.md
+                                 ; - ANY on kern_big (SPEC.md 5.4.2.8), A
+                                 ; MULTIPLE OF 8 on kern_small - CX = width
+                                 ; in pixels, ANY (off the byte grid, the last
+                                 ; partial byte is merged under a mask and the
+                                 ; bits past the width are untouched, SPEC.md
                                  ; 5.4.2.5), BX = y, DX = rows, 1..255. x and
                                  ; y are SIGNED: a window dragged half off the
                                  ; left edge has content at a negative x, and
@@ -1998,7 +2001,7 @@ MEM_K_HIB   equ 0xFF0C          ; the resume's extent list (SPEC.md 87.5)
 ; SPEC.md 25.9 made it the purgeable MEM_P_ICO. It is a TOMBSTONE - nothing
 ; claims it - and it is kept unreusable for the reason above, so the dialog's
 ; listing below is 0xFF0F.
-MEM_K_FDLG  equ 0xFF0F          ; the Standard File dialog's listing (SPEC.md 38.2)
+MEM_K_FDLG  equ 0xFF0F          ; RESERVED: the old dialog's listing; no claim carries it since SPEC.md 38.1
 MEM_K_FONT  equ 0xFF10          ; the 8x8 glyph table copied out of an option ROM (SPEC.md 6.0.1)
 MEM_K_SC    equ 0xFF11          ; the desktop shortcuts' table (SPEC.md 26.8)
 
@@ -2031,8 +2034,9 @@ MEM_P_WSAVE_N equ 16            ; 0x10..0x1F, the window's slot added (11.96.3)
 MEM_P_FATW  equ MEM_PG_MED<<8 | 0x20    ; one volume's FAT window - a RANGE,
 MEM_P_FATW_N equ 8              ; 0x20..0x27, the VOLUME added (SPEC.md 18.8.4)
 MEM_P_VIEW  equ MEM_PG_LOW<<8 | 0x10    ; a Disk window's listing cache - a
-MEM_P_VIEW_N equ 4              ; RANGE, 0x10..0x13 with the window's fm_pool
-                                ; slot added (SPEC.md 50.6.5). Low bytes are
+MEM_P_VIEW_N equ 5              ; RANGE, 0x10..0x14 with the window's fm_pool
+                                ; slot added (SPEC.md 50.6.5) - the fifth is
+                                ; the Standard File chooser's (SPEC.md 38.1). Low bytes are
                                 ; per-RANK, so this 0x10 does not collide with
                                 ; MEM_P_WSAVE's at TRIV.
                                 ;

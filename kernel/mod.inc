@@ -175,6 +175,20 @@ mod_f_fdlg: db 'FDLG.DRV', 0    ; ...and its sixth (SPEC.md 38.0)
                                 ; drv_tab, so nothing lists them as drivers or
                                 ; tries to attach one
 
+; THE HEADER mod_check EXPECTS, as the image carries it (kernel size pass 9):
+; the magic, the version, an id byte mod_check stamps per call, this build's
+; number and this kernel's layout stamp - four words one `repe cmpsw` asks in
+; place of four compares with an immediate each. It is .text because it is
+; WRITTEN (the id), and data so MOD_STAMP's self-reference cannot reach it:
+; a `dw` is two bytes whatever value it holds.
+%if MOD_H_MAGIC != 0 || MOD_H_VER != 2 || MOD_H_ID != 3 || MOD_H_BUILD != 4 || MOD_H_STAMP != 6
+  %error "mod_hdrt is the image header's first four words, in MOD_H_* order"
+%endif
+mod_hdrt:   dw 0x384F           ; MOD_H_MAGIC
+            db MOD_VER, 0       ; MOD_H_VER, MOD_H_ID (mod_check's to stamp)
+            dw BUILD_NUM        ; MOD_H_BUILD
+            dw MOD_STAMP        ; MOD_H_STAMP
+
 mod_tab:
     dw 0, mod_f_ctrl            ; MOD_CTRL
     dw 0, mod_f_fmt             ; MOD_FMT
@@ -475,10 +489,6 @@ mod_need:
 mod_check:
     push bx
     mov es, [bx+MODR_SEG]
-    cmp word [es:MOD_H_MAGIC], 0x384F
-    jne .bad
-    cmp byte [es:MOD_H_VER], MOD_VER
-    jne .bad
     mov ax, di                  ; the id mod_need was CALLED with - nine
 %ifdef OS88_SHORTCUTS
     cmp al, MOD_SETS            ; ...whose image is CTRL.DRV's, cut short
@@ -486,22 +496,15 @@ mod_check:
     mov al, MOD_CTRL
 .id:
 %endif
-    cmp [es:MOD_H_ID], al       ; bytes of arithmetic recovered a number the
-    jne .bad                    ; caller was holding. If DI were ever
-                                ; clobbered on the way here the failure is a
-                                ; REFUSAL and not a wrong dispatch, which is
-                                ; the safe direction
-    cmp word [es:MOD_H_BUILD], BUILD_NUM
-    jne .bad
-    cmp word [es:MOD_H_STAMP], strict word MOD_STAMP
-                                ; STRICT, because MOD_STAMP is the sum of the
-                                ; section sizes THIS instruction is in: a
-                                ; stamp of 0xFF80..0xFFFF fits a sign-extended
-                                ; byte, the byte shortens .cold, the stamp
-                                ; leaves that range, and nasm never settles
-                                ; ("stalled for 1001 passes"). kern_small hit
-                                ; it on a one-byte saving in desk_rowcalc
-    jne .bad
+    mov [mod_hdrt + MOD_H_ID], al ; bytes of arithmetic recovered a number the
+    push di                     ; caller was holding. If DI were ever
+    mov si, mod_hdrt            ; clobbered on the way here the failure is a
+    xor di, di                  ; REFUSAL and not a wrong dispatch, which is
+    mov cx, 4                   ; the safe direction. The magic, the version,
+    cld                         ; the id, the BUILD and the layout STAMP
+    repe cmpsw                  ; (SPEC.md 2.8.2) in one compare against
+    pop di                      ; mod_hdrt; SI and CX are this routine's to
+    jne .bad                    ; spend (the arming below reloads both)
     mov ax, [es:MOD_H_IMG]
     cmp ax, bp                  ; the image IS the file
 %ifdef OS88_SHORTCUTS
@@ -536,7 +539,6 @@ mod_check:
                                 ; the `pop bx / push bx` that used to put the
                                 ; row back goes with the id derivation
     mov si, MOD_H_ENT           ; ...and CX is the count both sides agreed
-    cld
 .arm:
     es lodsw                    ; the entry table, one word a pass
     cmp ax, dx

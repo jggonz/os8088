@@ -318,9 +318,14 @@ sc_nul      db 0                ; ...which is also an EMPTY name, for a
                                 ; document's open. Nothing may go between
 sc_s_nf     db 'Shortcut not found (?:)', 0   ; 23: exactly a toast
 sc_bdg      db 1, 10            ; the badge: 10x10, one word across - a box
-            times 10 dw 0xFFC0  ; the mask: the whole box white
-            dw 0xFFC0, 0x8040, 0x8740, 0x8340, 0x8540   ; the box, and an arrow
-            dw 0xB840, 0xA040, 0xA040, 0x8040, 0xFFC0   ; curving up and right
+            times 10 dw 0x07FE  ; the mask: the whole box white
+            dw 0x07FE, 0x0402, 0x043A, 0x041A, 0x042A   ; the box, and an arrow
+            dw 0x05C2, 0x0502, 0x0502, 0x0402, 0x07FE   ; curving up and right
+                                ; ...FIVE PIXELS IN from the word's left, so
+                                ; it is drawn at the picture column's own x,
+                                ; on the byte grid (SPEC.md 26.9.9), and lands
+                                ; where the 10x10 box always did: eleven left
+                                ; of the link's 16x16 picture
 
 ; =============================================================================
 section .bss
@@ -368,6 +373,7 @@ modc_e_sc:                      ; CPE_SC (SPEC.md 2.8.7): AH = the operation
 ; was four bytes each
 sc_m_cold:
     call COLD_SEG:wm_cbd
+sc_m_ret:                       ; ...and sc_m_new's early refusals' `ret`
     ret
 
 ; -----------------------------------------------------------------------------
@@ -387,19 +393,19 @@ sc_m_cold:
 ; -----------------------------------------------------------------------------
 sc_m_new:
     cmp dx, MBAR_H              ; not the bar, not the dock, not another
-    jb .ret                     ; display: those are not the desktop, and a
+    jb sc_m_ret                     ; display: those are not the desktop, and a
     cmp dx, [vid_dock_y0]       ; drop there does what it always did -
-    jae .ret                    ; nothing
+    jae sc_m_ret                    ; nothing
     cmp cx, [vid_band_x0]
-    jb .ret
+    jb sc_m_ret
     cmp cx, [vid_band_xe]
-    jae .ret
+    jae sc_m_ret
     push cx
     push dx
     call sc_m_row               ; AL = a free zone
     pop dx
     pop cx
-    jc .ret                     ; ...and the user has been told why not
+    jc sc_m_ret                     ; ...and the user has been told why not
     mov [cs:sc_mz], al
     mov bl, 0xFF                ; no row to leave out of the search
     call sc_m_cell              ; [cs:sc_bc] = the nearest free cell
@@ -532,8 +538,6 @@ sc_m_new:
 .noroom:
     mov si, sc_s_room
     jmp sc_m_say
-.ret:
-    ret
 
 ; -----------------------------------------------------------------------------
 ; sc_m_add - SC_OP_ADD: a PACKAGE's link, through OSAPI_DESK_ITEM (SPEC.md 26.9)

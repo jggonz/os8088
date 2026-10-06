@@ -52,7 +52,7 @@ _OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import os88fixture                                       # noqa: E402
-import os88marty, os88mouse, os88sym, os88geom, dispcp
+import os88marty, os88mouse, os88sym, os88geom, os88ui, dispcp
 
 MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 
@@ -69,9 +69,6 @@ PKG_MPP = {"heapfrag": "HEAPFRAG.O88", "modplug": "MODPLUG.O88"}
 # gives a running app that holds no claim at all, which reads as "declared
 # nothing movable" and is really "there is no story in it".
 PKG_Z   = {"frotz": "ZOPS.Z5", "heapfrag": "HEAPFRAG.O88"}
-
-# the Standard File dialog's geometry (SPEC.md 38, kernel/fdlg.inc)
-FD_ROW0, FD_ROWH, FD_TEXTX = 22, 16, 28
 
 APPS = {
     # title prefix, source, includes, and the base words the proc must fix
@@ -372,24 +369,19 @@ def main():
             mo.click(cx0 + 20, cy0 + 20)     # focus the player first
             os88marty.settle(m)
             m.key("KeyL")
-            until_ok(m, lambda: any(
-                w.visible and w.title.startswith("Open")
-                for w in os88geom.windows(m, S)), "the Open dialog")
-            os88marty.settle(m)
-            # MATCH ON THE TITLE, not the size: wm_fit clamps the template's
-            # 170 rows to 155 on a 640x200 screen (SPEC.md 39.7), so a size
-            # test reports "the dialog never opened" about one that did
-            fd = [w for w in os88geom.windows(m, S)
-                  if w.visible and w.title.startswith("Open")]
-            if not fd:
-                print("FAIL: the file dialog never opened")
+            # THE CHOOSER IS A DISK WINDOW (SPEC.md 38.1): `chooser` waits for
+            # it up and painted, and `chooser_open` names BEVERLY.MOD out of
+            # its own listing and waits for it to come down - no remembered
+            # row offsets. It opens on this instance's own folder (SPEC.md
+            # 38.10), which is B:'s root because MEDIA does not exist on this
+            # image.
+            ui = os88ui.UI(m, mouse=mo, sym=S)
+            try:
+                ui.chooser()
+            except os88ui.UIError as e:
+                print("FAIL: the file dialog never opened (%s)" % e)
                 return 1
-            fd = fd[-1]
-            fx0, fy0, _, _ = fd.content
-            # row 0 is BEVERLY.MOD - the listing is sorted by name and the
-            # dialog opens on this instance's own folder (SPEC.md 38.10),
-            # which is B:'s root because MEDIA does not exist on this image
-            mo.dblclick(fx0 + FD_TEXTX + 20, fy0 + FD_ROW0 + FD_ROWH // 2)
+            ui.chooser_open("BEVERLY.MOD")
             # 116KB off a 360KB floppy: the claim, then the reads stopping
             until_ok(m, lambda: pword("mpp_modseg") != 0,
                      "ModPlug to claim the module")

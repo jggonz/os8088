@@ -162,6 +162,11 @@ OP_T_FMT      equ 9             ; ...and the byte before them is the FORMAT the
                                 ; package's own scope, so it needs nothing of
                                 ; the header's and nothing of the kernel's
 
+OP_SECMAX     equ 1920          ; the carve's ceiling in sectors, packed AND
+                                ; unpacked (SPEC.md 20.12.11): op_cap counts
+                                ; PARAGRAPHS in a word, and 1,920 sectors plus
+                                ; a 32KB cluster of slack is 65,503 of them.
+                                ; Mirrored by os88pkg.py (t_lzfmt checks)
 OP_CHUNK      equ 32768         ; bytes a read moves at a time: a multiple of
                                 ; EVERY legal cluster size (512 bytes to 32KB,
                                 ; a power of two capped at 64 sectors by BPB
@@ -340,11 +345,17 @@ op_name     equ OP_BSS_AT + 0       ; the file we came out of, NUL-term
 op_first    equ OP_BSS_AT + 13      ; the carved run's first sector
 op_secs     equ OP_BSS_AT + 15      ; ...its length in sectors, 0 = none
 op_kb       equ OP_BSS_AT + 17      ; ...in KB
-op_bytes    equ OP_BSS_AT + 19      ; ...and in bytes
+op_bendh    equ OP_BSS_AT + 19      ; op_bend's HIGH word. It was op_bytes,
+                                    ; the run in a word of bytes, which is
+                                    ; what held the carve under 64KB; the
+                                    ; read counts paragraphs now (SPEC.md
+                                    ; 20.12.11) and the slot is reused so
+                                    ; that no offset below moves
 op_clb      equ OP_BSS_AT + 21      ; this volume's bytes per cluster
 op_off      equ OP_BSS_AT + 23      ; the cluster-aligned read offset (32)
 op_slack    equ OP_BSS_AT + 27      ; ...how far the run is past it
-op_cap      equ OP_BSS_AT + 29      ; the capacity that read asks for
+op_cap      equ OP_BSS_AT + 29      ; the capacity that read asks for, in
+                                    ; PARAGRAPHS (SPEC.md 20.12.11)
 op_base     equ OP_BSS_AT + 31      ; the claim it lands in
 op_reqkb    equ OP_BSS_AT + 33      ; the run plus the REQUIRED scratch...
 op_allkb    equ OP_BSS_AT + 35      ; ...and plus the optional too
@@ -380,17 +391,17 @@ op_xneed    equ OP_BSS_AT + 63      ; ...what the read has to cover in all
 op_xcap     equ OP_BSS_AT + 65      ; ...one bufferful of it
 op_xstg     equ OP_BSS_AT + 67      ; ...and the transient claim it uses
 op_want     equ OP_BSS_AT + 69      ; bytes of the run that MUST still arrive,
-                                    ; so a file that ends inside it refuses
-                                    ; rather than filling half a claim
-                                    ; (OP_BSS_AT + 71 was op_tail, the padding
-                                    ; after the run's last body. op_bend
-                                    ; already excludes it, so measuring it
-                                    ; twice is what made a payload under 512
-                                    ; bytes refuse itself - SPEC.md 20.12.7.3.
-                                    ; The word is left UNNAMED rather than
-                                    ; reclaimed: every offset below it would
-                                    ; move, and this chain is read by
-                                    ; apps/cc/crt0.asm too)
+                                    ; 32 BITS, so a file that ends inside it
+                                    ; refuses rather than filling half a claim.
+                                    ; (OP_BSS_AT + 71, its high word, was
+                                    ; op_tail, the padding after the run's last
+                                    ; body - which op_bend already excludes,
+                                    ; so measuring it twice made a payload
+                                    ; under 512 bytes refuse itself, SPEC.md
+                                    ; 20.12.7.3. It sat unnamed until the carve
+                                    ; passed 64KB and the count needed it,
+                                    ; 20.12.11 - and the chain did not move,
+                                    ; which apps/cc/crt0.asm reads too)
 
 op_zn       equ OP_BSS_AT + 73      ; byte: how many rows carry OP_COMP. ZERO
                                     ; IS THE WHOLE OF THE OLD BEHAVIOUR - every
@@ -398,11 +409,15 @@ op_zn       equ OP_BSS_AT + 73      ; byte: how many rows carry OP_COMP. ZERO
                                     ; what it took before, so a package with no
                                     ; compressed part is unchanged to the
                                     ; instruction (SPEC.md 20.12.7)
-op_usecs    equ OP_BSS_AT + 74      ; the run's UNPACKED length in sectors...
-op_ubytes   equ OP_BSS_AT + 76      ; ...and in bytes. The claim is cut from
-                                    ; these and the READ from op_secs/op_bytes,
-                                    ; and the two are the same run measured at
-                                    ; its two ends
+op_usecs    equ OP_BSS_AT + 74      ; the run's UNPACKED length in sectors.
+                                    ; The claim is cut from this and the READ
+                                    ; from op_secs, and the two are the same
+                                    ; run measured at its two ends.
+                                    ; (OP_BSS_AT + 76 was op_ubytes, the same
+                                    ; in a word of bytes. R comes from the two
+                                    ; sector counts now (SPEC.md 20.12.11), and
+                                    ; the word is left UNNAMED, op_tail's way,
+                                    ; so no offset below moves)
 op_rpara    equ OP_BSS_AT + 78      ; R, in paragraphs: how far up the claim the
                                     ; packed run lands so op_unpack can walk
                                     ; down onto it. 0 = it lands at the base,
@@ -414,8 +429,9 @@ op_rdseg    equ OP_BSS_AT + 80      ; ...and the segment that comes to, which is
 op_zsrc     equ OP_BSS_AT + 82      ; op_unpack's read pointer, as a segment -
                                     ; BP is its write pointer and there is no
                                     ; third register left to hold this one
-op_bend     equ OP_BSS_AT + 84      ; the run's EXACT byte end, where op_bytes
-                                    ; is the same run rounded to whole sectors.
+op_bend     equ OP_BSS_AT + 84      ; the run's EXACT byte end, low word -
+                                    ; op_bendh is the high one, because the
+                                    ; run may pass 64KB (SPEC.md 20.12.11).
                                     ; op_want is cut from this one, because the
                                     ; last part's padding is the end of the
                                     ; FILE and asking for it is a short read

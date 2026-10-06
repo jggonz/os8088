@@ -38,15 +38,8 @@ import suite                                              # noqa: E402
 # otherwise ask for it to be dropped. Same rule as UNREGISTERED: the reason is
 # the point, and an unexplained entry is how a stale flag survives.
 BUILDS_WITHOUT_MAKE = {
-    "fdlgthumb": "a KNOB gate, so it may not call the fixture helper at all - "
-                 "that runs `make`, and the Makefile's VIDSTAMP rule removes "
-                 "build/kernel.bin whenever the knob set differs, which would "
-                 "delete the very kernel the row is about to test. It builds "
-                 "fdthumb.img with nasm and os88pkg.py directly instead, "
-                 "which is still writing the tree the run is reading - "
-                 "through os88build.at, so it writes where it reads "
-                 "(docs/plans/SOAK-PARALLEL.md 14.2), but into a shared directory "
-                 "either way",
+    # (fdlgthumb was the one entry: the old Standard File dialog's own
+    # scroll bar, retired with it - SPEC.md 38.4.1)
 }
 
 # Not registered, and why. Keep the reason specific and true.
@@ -297,9 +290,8 @@ def _private_build(path):
     # not building anything: `os88build.at()` is a PATH RESOLVER and rows
     # import it to spell `build/x.img` correctly under a frozen run
     # (docs/plans/SOAK-PARALLEL.md 14.2) - eight of them do, and none of those
-    # builds a tree. Keying on the import therefore told `fdlgthumb` to drop
-    # a flag it genuinely needs: that row builds its fixture with nasm and
-    # os88disk directly and writes whichever tree the run reads.
+    # builds a tree. Keying on the import would tell a row that builds its fixture with
+    # nasm and os88disk directly to drop a flag it genuinely needs.
     return bool(re.search(r'\bos88build\.tree\s*\(', body)
                 or re.search(r'\b_B\.tree\s*\(', body)
                 or "BUILD=" in body)

@@ -2109,7 +2109,7 @@ SOAK = [
         "TITLE, read out of the package's segment rather than off the glass. "
         "MEASURED with the kernel's bit-2 exception disabled: ld_status 2, "
         "`Bad package`. Needs `make mseg`.",
-        needs=("marty",), serial=True, wants=("build/mseg360.img",)),
+        needs=("marty",), serial=True, wants=("build/mseg.img",)),
     Row("mseg360", "soak", py("tests/multiseg.py", "360"), 40.0,
         "...and the same package off a 360KB disk, where it is NOT a "
         "duplicate. A part begins on a 512-byte boundary in the FILE and "
@@ -2152,6 +2152,34 @@ SOAK = [
         "everything else is tested on, and a walk that ignored it would pass "
         "at 1.44MB and put every part 512 bytes low here. Needs `make msegz`.",
         needs=("marty",), serial=True, wants=("build/msegz360.img",)),
+    Row("msegw", "soak", py("tests/multiseg.py", "1440", "--wide"), 60.0,
+        "SPEC.md 20.12.11: the CARVE PASSES 64KB. MSEG's own primary with "
+        "parts 1 and 2 padded by tests/multiseg/mkwide.py, so the eager run "
+        "is 179 sectors - past the 128 op_size and the packer used to refuse "
+        "- and every per-part proof the rows above make has to come out "
+        "unchanged across 92KB of claim. The row also asserts op_secs and "
+        "op_usecs are both past 128, so a padding that shrank cannot pass it "
+        "on a carve the old bound allowed. MEASURED against the loader before "
+        "20.12.11: the same file is refused at launch, ld_status 4 (the "
+        "package refusing itself). Needs `make msegw`.",
+        needs=("marty",), serial=True, wants=("build/msegw.img",)),
+    Row("msegw360", "soak", py("tests/multiseg.py", "360", "--wide"), 60.0,
+        "...and off a 360KB disk, where the head slack is 512 and the 32-bit "
+        "op_want and op_bend have it added in; mseg360's argument for the "
+        "carve past 64KB. Needs `make msegw`.",
+        needs=("marty",), serial=True, wants=("build/msegw360.img",)),
+    Row("msegwz", "soak", py("tests/multiseg.py", "1440", "--comp", "--wide"),
+        60.0,
+        "...and with parts 0 and 2 COMPRESSED, so the carve is past 64KB at "
+        "BOTH ends - 146 sectors read, 179 unpacked - and op_unpack walks the "
+        "packed run R paragraphs up a claim bigger than a segment, R now "
+        "being cut from two sector counts. Needs `make msegw`.",
+        needs=("marty",), serial=True, wants=("build/msegwz.img",)),
+    Row("msegwz360", "soak", py("tests/multiseg.py", "360", "--comp",
+                                "--wide"), 60.0,
+        "...and that off a 360KB disk, with the head slack. Needs `make "
+        "msegw`.",
+        needs=("marty",), serial=True, wants=("build/msegwz360.img",)),
     Row("msegnomem", "soak", py("tests/msegnomem.py"), 40.0,
         "SPEC.md 20.12.3: a package that cannot fit is refused BEFORE IT "
         "READS ANYTHING, and this row measures that rather than asserting it. "
@@ -2510,8 +2538,9 @@ SOAK = [
         "Does a capsule the blit REFUSED leave a streak behind it? (SPEC.md "
         "44.10.6.2). VGA on purpose - on CGA ARK_PUFALL floors to 1 and the "
         "one vacated row is the capsule's BLACK top edge on a BLACK playfield, "
-        "so the broken build scores zero. `--small --img build/small360.img` "
-        "is trigger A, and wants `make small` first.",
+        "so the broken build scores zero. kern_big has DRAWN an off-grid x "
+        "since SPEC.md 5.4.2.8, so the row re-arms trigger B by sending "
+        "gfx_blit1_x's `.offg` to `.refuse` in the running kernel.",
         needs=("marty",), serial=True),
     Row("gfxewalk", "soak", py("tests/gfxewalk.py"), 90.0,
         "SPEC.md 5.12.5: Cyclone's warp and Missile's trails step the"
@@ -5225,32 +5254,6 @@ SOAK = [
         "no I/O at all' measured rather than quoted. Reads 3/0/0 here.",
         needs=("marty",), serial=True,
         wants=("build/pathtest360.img",)),
-    Row("fdlgstore", "soak", py("tests/fdlgstore.py"), 90.0,
-        "THE FILE DIALOG LISTS INTO ITS OWN STORE "
-        "(docs/plans/LISTING-HOME-PLAN.md 13). A listing has no home of its "
-        "own any more - a mount writes where its CALLER keeps a store - and "
-        "the Standard File dialog claims one at fdlg_open and frees it at "
-        "fdlg_close, which is what lets disk_dir leave `.lowbss` entirely. "
-        "THE FAILURE IS SILENT AND THAT IS THE WHOLE REASON FOR THE ROW: "
-        "fdlg_vclaim falls back to the floor listing when the claim is "
-        "refused, and a dialog reading the floor looks EXACTLY like one "
-        "reading its own store - same rows, same icons, same pixels - so "
-        "every other fdlg* row stays green with the feature doing nothing, "
-        "and stays green after the floor is deleted and the fallback "
-        "becomes a blank list. Four things, none visible on the glass: "
-        "[fdlg_vseg] is 0 with no dialog up, because the store is TRANSIENT "
-        "and a desktop pays nothing for it; with one up it names a real "
-        "claim and [dsk_dseg] IS that claim, so the mount was aimed at it "
-        "and not at LOW_SEG; entry 0 read straight out of the claim is a "
-        "real name, so something actually wrote there; and after Cancel "
-        "both words are back, because a .bss word left naming a freed block "
-        "is the next loud mount writing a listing into whatever took its "
-        "place - and this one is MOVABLE on kern_big and PURGEABLE on "
-        "kern_small. VERIFIED TO FAIL by forcing fdlg_vclaim down its "
-        "`.floor` arm: it reads `fdlg_vseg=0000 dsk_dseg=1940` and names "
-        "the refusal.",
-        needs=("marty",), serial=True,
-        wants=("build/muptest.img",)),
     Row("ldcost", "soak", py("tests/ldcost.py"), 120.0,
         "A LAUNCH READS THE POSTER'S OWN CACHE, AND THE COST IS THE "
         "ASSERTION (docs/plans/LISTING-HOME-PLAN.md wave 1). loader_run_x is "
@@ -6932,15 +6935,24 @@ SOAK = [
         "size pass 8 - must letter. Red with the staging copy skipped."
         "Measured 20s",
         needs=("marty",), serial=True),
-    Row("fddpage", "soak", py("tests/fddpage.py"), 20.0,
-        "SPEC.md 31.14: does the Control Panel's Floppy page override the"
-        "drive detection? Four drop-down picks by a real left-press gesture"
-        "(menu_popup, 12.4), the panel's close writes 'FD', and a second boot"
-        "of the written disk reads what ovl_fdd_apply made of dsk_vtab and the"
-        "read bound - A: forced 5.25 with no guess, B: hidden with its row"
-        "kept, a third unit given a row at D:, the canary's finding reversed."
-        "Measured 15s",
-        needs=("marty",), serial=True),
+    Row("fddpage", "soak", py("tests/fddpage.py"), 120.0,
+        "SPEC.md 31.14: does the Control Panel's Floppy page override the "
+        "drive detection? Four drop-down picks by a real left-press gesture "
+        "(menu_popup, 12.4), the panel's close writes 'FD', and a second boot "
+        "of the written disk reads what ovl_fdd_apply made of dsk_vtab and the "
+        "read bound - A: forced 5.25 with no guess, B: hidden with its row "
+        "kept, a third unit given a row at D:, the canary's finding reversed. "
+        "Then a fifth pick, Cylinder, on a boot that did not cross a head: "
+        "the save TESTS it with one cylinder run (counted at the int 13h "
+        "gate), and a second save whose run is given an EOT-short ROM's "
+        "answer comes back Auto with the toast said. The close writes boot "
+        "sector byte 509, "
+        "and the disk boots on QEMU (a 286 and up) with the byte - the gate "
+        "opens and the canary turns the run ON - and without it, where "
+        "SYSTEM.CFG alone must force nothing; and on the 5150 with KSIG "
+        "broken so the canary FAILS (it must stay off), witnessed by the same "
+        "patch on the Auto disk reading boot_cylrun 0",
+        needs=("marty", "qemu"), serial=True, builds=True),
     Row("dispreboot", "soak", py("tests/dispreboot.py"), 100.0,
         "WHO WRITES ui_rebootq? (docs/plans/completed/DUAL-DISPLAY-VGA.md 8(11))",
         needs=("marty",), serial=True),
@@ -7300,7 +7312,7 @@ SOAK = [
         "set's SET.002 on the second disk and the row goes red. 90s "
         "measured",
         needs=("marty",), wants=("build/os8088.img",)),
-    Row("czdos", "soak", py("tests/czdos.py"), 10.0,
+    Row("czdos", "soak", py("tests/czdos.py"), 11.0,
         "SPEC.md 20.17.4: OS88CZ.COM under a real DOS (DOSBox, headless, "
         "one session running every leg from a batch file). What DOS splits, "
         "os88cz.py must join - text, text-and-noise and a /S store - and "
@@ -7308,7 +7320,8 @@ SOAK = [
         "property a host decoder cannot see and the machine depends on "
         "(20.13.7). What os88cz.py splits - LZ4, LZB, mixed, several parts "
         "- DOS must join byte for byte, and U must expand a 'CZ' file in "
-        "each format. A damaged stored byte, a part from another set and a "
+        "each format, at 40KB and with a stream past 64KB (20.14.5.2: the "
+        "old decoder refused the LZ4 one). A damaged stored byte, a part from another set and a "
         "missing part answered with Esc through redirected stdin must each "
         "refuse and leave nothing behind. `--break` hands J the damaged "
         "set as a good one and goes red",
@@ -7383,6 +7396,19 @@ SOAK = [
         "one on both arms now, so neither builds anything",
         needs=("marty",), serial=True,
         wants=("build/lzmodlzb360.img",)),
+    Row("lzmod-lz4big", "soak", py("tests/lzmod.py", "--fmt", "lz4big"), 40.0,
+        "SPEC.md 20.14.5.2: an LZ4 file PAST 64KB PACKED, through the "
+        "transparent read. BEVERLY.MOD with 30,000 bytes of noise and 30,000 "
+        "of text after it - 176,085 bytes that pack to 92,508 - so the "
+        "decoder's LZ4 source slides DS at its checkpoint and the noise, one "
+        "~30KB literal run, is copied in 16KB pieces with lz_at between "
+        "them. Nothing shipped packs past 64KB in LZ4, so nothing else on a "
+        "machine runs either. The row asserts the fixture really is LZ4 and "
+        "past 64KB, and compares all 176,085 bytes in Tracker's claim. "
+        "MEASURED on the decoder before 20.14.5.2: Tracker opens holding no "
+        "module, status `trk_s_ioerr` - FERR_IO, the LZ4 refusal at entry",
+        needs=("marty",), serial=True,
+        wants=("build/lzmodbig360.img",)),
     Row("lzship", "soak", py("tests/lzship.py", "--fmt", "lz4"), 80.0,
         "THE WHOLE SHIPPED SET, COMPRESSED (`make zset ZFMT=lz4`): every "
         "shipped package, every shipped driver and every data file on both "
@@ -7474,18 +7500,24 @@ SOAK = [
         "back when the view moves.",
         needs=("marty",), serial=True),
     Row("fdlggrey", "soak", py("tests/fdlggrey.py"), 60.0,
-        "The file dialog's default button: REDRAWN IN PLACE must equal"
-        "FRESHLY PAINTED.",
-        needs=("marty",), serial=True,
-        wants=("build/muptest.img",)),
+        "SPEC.md 38.3/38.8: the chooser's default button (Open form, greyed "
+        "with nothing selected). Each state is reached by a PARTIAL redraw - "
+        "a row click (FDH_SEL -> fdlg_drawbtn), a click on empty list, and "
+        "Down, whose FDH_SEL does not flip the greying and so draws nothing "
+        "(38.8) - and must be pixel-identical to the same state after a FULL "
+        "repaint "
+        "(V twice; a move would replay, not repaint, SPEC.md 11.96.12). "
+        "Greyed must carry less ink than live. Red when the state moves "
+        "without the button being redrawn (171 px).",
+        needs=("marty",), serial=True),
     Row("fdlgsmall", "soak",
         ["env", "OS88_DEFINES=KERN_SMALL", "OS88_BUILD=build/smallk",
          "OS88_SYSIMG=build/small360.img"] + py("tests/fdlggrey.py"), 300.0,
-        "...and the SAME drive against kern_small, where the WHOLE dialog is "
-        "an on-demand module (SPEC.md 38.0, docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md "
-        "9.2.6) rather than resident code. It is `fcpsmall`'s argument one "
-        "feature along and a bigger engine: seven entries with two exit "
-        "conventions, every call out of the image a far one through an `xd_` "
+        "...and the SAME drive against kern_small, where the chooser's glue "
+        "is the on-demand module FDLG.DRV (SPEC.md 38.0) rather than resident "
+        "code. It is `fcpsmall`'s argument one feature along: five entries "
+        "with two exit conventions, the button column drawn by the image "
+        "itself, every call out of the image a far one through an `xd_` "
         "entry, the register epilogues copied inside the image, and mod_need "
         "reading it off the disk on fdlg_open with mod_drop giving it back in "
         "fdlg_reap. NONE of that is exercised by the row above, which runs "
@@ -7498,14 +7530,16 @@ SOAK = [
         # A `wants=` that names a different artefact from the command is a row
         # that cannot run anywhere but a checkout where somebody has already
         # typed `make small` by hand (docs/WRITING-TESTS.md 4).
-        wants=("build/muptest.img", "build/small360.img",
-               "build/small.img", "build/smallapps.img")),
+        wants=("build/small360.img",)),
     Row("fdlgdrop", "soak", py("tests/fdlgdrop.py"), 80.0,
         "...and the module comes BACK on every route a dialog ends by "
         "(SPEC.md 38.0.1). The row above drives the dialog and never asks "
-        "what happened to its image; three of the four dismissals - Open, "
-        "Cancel, Escape - clear [fdlg_win] from inside the image's own "
-        "W_ONCLICK, and mod_drop sat behind three separate compares of that "
+        "what happened to its image. Today the commit and the two cancels "
+        "POST from inside the chooser's own callbacks (SPEC.md 38.6) and the "
+        "close box is found by fdlg_gate - two roads to fdlg_reap's mod_drop. "
+        "When this row was written three of the four dismissals cleared "
+        "[fdlg_win] from inside the image's own W_ONCLICK, and mod_drop sat "
+        "behind three separate compares of that "
         "same word, so the pass that should have collected the claim was "
         "turned away by the very store it was meant to notice. A 16KB claim "
         "held for the rest of the session on the machine with 128KB in it, "
@@ -7522,10 +7556,57 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/muptest.img", "build/small360.img")),
     Row("fdlgup", "soak", py("tests/fdlgup.py"), 60.0,
-        "SPEC.md 13.8.3: the Standard File dialog's buttons fire on the"
-        "RELEASE.",
+        "SPEC.md 13.8.3/38.3: the chooser's column buttons are ids 3..5 of "
+        "the Disk window's own button set and fire on RELEASE: a press draws "
+        "Cancel down ([fm_dbtn]), sliding off lets it up, a slide-off release "
+        "or a release on Drive fires nothing (chooser up, FS_DRV unmoved), "
+        "Drive held does not fire and its release does, and press+release on "
+        "Cancel closes.",
         needs=("marty",), serial=True,
         wants=("build/muptest.img",)),
+    Row("fmarrows", "soak", py("tests/fmarrows.py"), 20.0,
+        "SPEC.md 22.26: in a Disk window the arrows move a SELECTION on "
+        "kern_big - with nothing selected Down still scrolls; a click on row "
+        "0 then Down past the view moves FS_SEL and FS_SCRL follows to make "
+        "it the last visible row; PgUp moves a page and Up stops at the top. "
+        "After each walk exactly ONE row band is inverted on the glass and it "
+        "is the selected row's, which is what catches a band left behind by "
+        "the follow-scroll. VERIFIED RED with the old band's fm_sel_bar taken "
+        "out of .selmove (five inverted rows). Then click row 1, Down, click "
+        "row 2, stepped inside the 9-tick double-click window: nothing may "
+        "open, because a move shuts that window. VERIFIED RED with .selmove's "
+        "FS_CLKT store taken out (the Audio Player launched on one click).",
+        needs=("marty",), serial=True),
+    Row("fdlgchoose", "soak", py("tests/fdlgchoose.py"), 40.0,
+        "SPEC.md 38: the Standard File chooser end to end, through Note "
+        "Pad's own File > Open and Save As - a first Open on MEDIA (38.10) "
+        "captioned Open with the default button greyed until a row is "
+        "selected, the arrows SELECTING where a Disk window's scroll "
+        "(38.4), Save As holding the document, Down filling the box from the "
+        "next row, and committing a typed name "
+        "that is then in the folder, Escape / the Cancel button / the close "
+        "box each cancelling - and a drive double-click queued in the close "
+        "box's own drain swallowed rather than launched into the dead "
+        "chooser's slot and adopted (38.2) - Down with nothing selected "
+        "scrolling a folder that pages (22.26), Drive leaving the floppy "
+        "(38.11), and the "
+        "chooser still opening with four of the user's Disk windows up - "
+        "the fifth pool block is its own (38.1). Every step confirmed off "
+        "[fdlg_win], the chooser's own block and fm_ebuf. VERIFIED TO FAIL "
+        "on `make NOFDMEDIA=1`, whose first Open lands on B:\\APPS.",
+        needs=("marty",), serial=True),
+    Row("fdlgchsmall", "soak",
+        ["env", "OS88_DEFINES=KERN_SMALL", "OS88_BUILD=build/smallk",
+         "OS88_SYSIMG=build/small360.img", "OS88_NP=A:/APPS/NOTEPAD.O88"]
+        + py("tests/fdlgchoose.py"), 40.0,
+        "...and the same drive on kern_small, where the glue is FDLG.DRV "
+        "(SPEC.md 38.0): every hook crosses into the image through "
+        "fdlg_hook's far call, and the button column is drawn and fired by "
+        "the image itself on its own W_ONMOUSEUP (38.3) because this "
+        "build's Disk window has none. The small system disk carries the "
+        "apps, so Note Pad is opened off A:.",
+        needs=("marty",), serial=True,
+        wants=("build/small360.img",)),
     Row("fmthumb", "soak", py("tests/fmthumb.py"), 30.0,
         "SPEC.md 13.10.5: the Disk window's scroll-bar THUMB is dragged, and"
         "x is never read.",
@@ -7545,10 +7626,6 @@ SOAK = [
         "kernel case instead of quietly asserting the shipped numbers "
         "against another tree.",
         needs=("marty",), serial=True),
-    Row("fdlgthumb", "soak", py("tests/fdlgthumb.py"), 50.0,
-        "SPEC.md 13.10.5: ...and the Standard File dialog's, which is the"
-        "second bar one gesture record has to tell apart (13.10.5.10).",
-        needs=("marty",), serial=True, builds=True),
     Row("regrowshed", "soak", py("tests/regrowshed.py"), 70.0,
         "SPEC.md 50.6.2.1 and 27.6.1: a GROW is not refused over a cache, "
         "and 'Too big' is not said about memory. Reported from the field as "
@@ -8426,16 +8503,52 @@ SOAK = [
         needs=("marty",), timeout=600),
     Row("deskclip", "soak", py("tests/deskclip.py"), 100.0,
         "SPEC.md 11.91.6: on kern_big a desktop cell is drawn only where the "
-        "damage pass reveals it - zone AND damage minus every window's "
-        "frame, a fragment at a time, ico_clip cutting the picture's rows "
-        "and columns (11.3.5) - so a window lying on the cell is NOT owed a "
+        "damage pass reveals it - into wm_dmg_gray's own region, the damage "
+        "minus every window's frame and shadow L, its pictures gfx_blit1 "
+        "bands cut exactly (26.9.9) - so a window lying on the cell is NOT owed a "
         "repaint; and an in-place cell repaint uncovered nothing and "
         "promotes nobody. Three gestures (cell, close, drag) on Hercules and "
         "VGA: the window over the cell is not redrawn and its pixels there "
-        "match a whole repaint. Red without the frame subtraction (495 px), "
-        "without ico_clip's column masks (32 px) and without the "
+        "match a whole repaint. Red without the frame subtraction (495 px, "
+        "measured on the first build's per-zone region) and without the "
         "nothing-uncovered stores (the window redrawn, a title promoted).",
         needs=("marty",), serial=True, timeout=900),
+    Row("deskflash", "soak", py("tests/deskflash.py"), 85.0,
+        "SPEC.md 26.9.9: a desktop cell is drawn ONCE, and only where it "
+        "shows. On VGA and CGA, frame by frame: an in-place cell repaint "
+        "(plain and selected) changes and flashes nothing; a Disk window "
+        "dragged half over the drive column draws NO cell (desk_draw_zone "
+        "never entered); dragged back 8 and 24 px it changes the revealed "
+        "sliver and flashes nothing, and the column matches a whole "
+        "repaint. Red without wm_occl_l (2 cells drawn), without gfx_blit1's "
+        "head piece (SPEC.md 5.4.2.8: 204 px stale) and without desk_zones_r "
+        "taking each drawn cell out of the dither's region (243 px "
+        "flashed). About one run in six reads 3 alternating CGA pixels "
+        "flashing on one row - on the kernel before as well (tests/"
+        "deskflash.py's note).",
+        needs=("marty",), timeout=600),
+    Row("deskzoom", "soak", py("tests/deskzoom.py"), 72.0,
+        "SPEC.md 11.91.6: wm_dmg_gray's `.whole` fallback, reached two ways "
+        "on Hercules and VGA, each against a whole repaint. A zoomed Disk "
+        "window's RESTORE - red with desk_dmg_zones_x called below .whole's "
+        "pops, where it first landed: 39,565 px stale on Hercules, the "
+        "field's maximize-and-restore report. And a DRAG whose region "
+        "overflows while 11.91.2's vacated rect is armed - red without "
+        ".whole's `mov word [wm_dmg_stwin], 0`: the Calculator beside the "
+        "dragged window keeps the dither, 1,019 px on Hercules and 1,588 "
+        "on VGA.",
+        needs=("marty",), timeout=600),
+    Row("deskpen", "soak", py("tests/deskpen.py"), 31.0,
+        "SPEC.md 5.4.2.2.2: the gfx_blit1 pen is scoped to a CALLBACK, not "
+        "to a lock hold, which is wider than one caller - a repaint pass "
+        "calls several packages' paints in one and a drag holds it from "
+        "press to release. A pen poked into the hold as a package would "
+        "leave it: at desk_draw_zone during a zoom's restore the cells must "
+        "match a whole repaint, and at wm_pkgcall before a package's "
+        "W_ONKEY its dispatcher must see the resting pen. VGA, the one "
+        "adapter that reads the pen. Red without either bank: 1,596 px in "
+        "the two drive cells, and the poked 0100 at the dispatcher.",
+        needs=("marty",), timeout=300),
     Row("deskclipsmall", "soak", py("tests/deskclip.py", "--small"), 50.0,
         "SPEC.md 11.91.6, kern_small's half: a cell the pass reveals NONE "
         "of is not drawn and marks nobody, and an in-place cell repaint "
@@ -10943,9 +11056,14 @@ SOAK = [
         "38.6.2 every image was 'Not a disk image' (5 of 10 checks, 691 "
         "sectors untouched), and before 18.99.7's carry fix the failed "
         "write said NOTHING (1 of 17). Between them, Clone Disk... with "
-        "the IMAGE as its target: the Save As box CLONE.DRV opens itself "
-        "since size pass 8 (fdf_fdlg_open, fm_img_done_x as the proc) must "
-        "be up on DISK.IMG with the pick prompt armed under it, and its "
+        "the IMAGE as its target: the Save As CHOOSER CLONE.DRV opens itself "
+        "(fdf_fdlg_open, fm_img_done_x as the proc) must be up on DISK.IMG - "
+        "fdlg_name and the mode-8 box both - with the requester Disk "
+        "window's pick prompt (mode 7) STILL ARMED under it while the "
+        "chooser's Drive button walks it to B: (SPEC.md 38.5: a click in a "
+        "chooser ends only the chooser's own prompt - it ended the clone's "
+        "and freed its claim when this row first ran against the chooser), "
+        "and its "
         "commit must reach clo_saved on the clone's claim - the name in "
         "clo_fnbuf, refused 'Disk full' by clo_froom (B: has 706 of the 720 "
         "sectors). VERIFIED RED with clo_saved's clo_fnget taken out (the "
@@ -11083,7 +11201,11 @@ SOAK = [
         "SPEC.md 13.10: the shared scroll bar, and the two kernel bars are"
         "one now.",
         needs=("marty",), serial=True,
-        wants=("build/muptest.img",)),
+        wants=()),
+    Row("sbardlg", "soak", py("tests/sbar.py", "dlg"), 60.0,
+        "SPEC.md 13.10/38.3: the chooser's bar at the list's right edge "
+        "narrowed by FM_CHCOLW, its arrow scrolling the chooser's own block.",
+        needs=("marty",), serial=True),
     Row("sizesnap", "soak", py("tests/sizesnap.py"), 20.0,
         "the SIZE snap aligns a content width WITHOUT shrinking the zoom "
         "(SPEC.md 11.94.5) - a maximized window must stay x=0, w=[vid_pw]",

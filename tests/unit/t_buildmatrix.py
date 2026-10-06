@@ -203,6 +203,12 @@ KNOBS = [
     # single spender in the sector.
     ("bootmark",    ["BOOTMARK=1"]),
     ("boothalt",    ["BOOTMARK=1", "BOOTHALT=20"]),
+    # ...and BOOTMARK= with a knob that grows the LOADER, which pulls
+    # kernel.asm's OVL_KNOBGIVE the other way: the MARKW sites want it large
+    # and DISKAL=1's 2,491-byte loader wants it small, and 128 is the give
+    # that holds both. boot360.bin, so pass 2's decoder arguments are what is
+    # measured - the loader is one byte longer with them than with pass 1's.
+    ("bootmark-diskal", ["BOOTMARK=1", "DISKAL=1"], "boot360.bin"),
     # ...and on kern_small, which is a different blob: SPEC.md 2.5.3.3 put
     # kmain's boot half in it, so every MARKW site is blob bytes, and the
     # shipped kern_small leaves the blob ~40 of them. What keeps these arms
@@ -401,6 +407,9 @@ KNOBS = [
     # NOPLANE's sentence exactly: an A/B that stopped assembling is found at
     # the moment somebody reaches for it to tell a real fix from a null run.
     ("noseamcut",   ["NOSEAMCUT=1"]),
+    # NOFDMEDIA= takes SPEC.md 38.10's MEDIA default out of the Standard File
+    # chooser - kept assembling so the bytes stay one flag away.
+    ("nofdmedia",   ["NOFDMEDIA=1"]),
     # COMPRESS= picks which decompressors the kernel carries
     # (docs/plans/O88-COMPRESSION-PLAN.md 12.7, SPEC.md 20.13.6). `both` SHIPS now,
     # so the rows here are the two SINGLE-format arms, and neither is the same

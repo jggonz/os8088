@@ -266,9 +266,9 @@ FCPBODY fcp_arm
     cmp ax, [di+FS_N]           ; FS_SEL, a drag passes the row it began on
     jae .none                   ; (0xFFFF fails this too)
     FCPX fm_stage_name          ; fm_name + [fm_ftype], out of THIS window's
-    cmp word [fm_ftype], 3      ; cache (SPEC.md 22.1)
+    mov ax, [fm_ftype]          ; cache (SPEC.md 22.1)
+    cmp ax, 3
     je .none
-    mov ax, [fm_ftype]
     mov [fcp_cbtype], ax
     mov al, [di+FS_DRV]
     mov [fcp_cbdrv], al
@@ -303,12 +303,11 @@ fcp_ncopy   equ dsk_ncopy
 ; is an UNCONDITIONAL remount whenever a quiet switch left [dsk_lstale] set -
 ; real disk I/O, the scan, the sort and an icon read per file - whose only
 ; product is the GLOBAL listing, which no Disk window is drawn from
-; (fmv_gneed's own account: a Disk window paints from its VIEW cache, fmv_mark
+; (SPEC.md 22.8's account: a Disk window paints from its VIEW cache, fmv_mark
 ; has just marked it, and fm_paste_res's fmv_reload_all is the coherence pass
 ; every paste already pays). dskw_sync_x settles the same debt honestly: it
-; marks every window showing this folder, rebuilds the snapshot only when
-; something ON SCREEN is drawn from it (the Standard File dialog), and
-; otherwise publishes the empty-listing-plus-debt that dsk_relist collects on
+; marks every window showing this folder and publishes the
+; empty-listing-plus-debt that dsk_relist collects on
 ; the next read. So the file manager sees exactly what it always saw, and a
 ; PACKAGE calling the door (SPEC.md 22.24) - which has no Disk window at all -
 ; no longer buys a remount per call for a listing nothing reads.
@@ -436,10 +435,15 @@ fcp_run2:
     call fcp_selfchk            ; a folder may not be pasted into itself
     jc .loop_err
 
-    mov word [fcp_depth], 0
-    mov byte [fcp_busy], 1
-    mov byte [fcp_err], FERR_OK
-    mov byte [fcp_started], 0
+%if FERR_OK != 0
+  %error "fcp_run2 stores FERR_OK out of a zeroed AX"
+%endif
+    xor ax, ax                  ; (AL is fcp_step's to set on the way back)
+    mov [fcp_depth], ax
+    mov [fcp_err], al           ; FERR_OK
+    mov [fcp_started], al
+    inc ax
+    mov [fcp_busy], al
     jmp fcp_step                ; a tail call: AL = FCPS_* is its answer
 .none:
     mov byte [fcp_err], FERR_EXIST  ; the truthful name for "the destination
@@ -1112,11 +1116,11 @@ fcp_frame:
     ret
 
 fcp_push:
+    cmp word [fcp_depth], FCP_MAXD
+    jae .deep                   ; ...asked BEFORE anything is banked
     push ax
     push bx
     push dx
-    cmp word [fcp_depth], FCP_MAXD
-    jae .deep
     mov ax, [fcp_depth]
     call fcp_faddr              ; BX -> the new frame, AX = its destination
     mov FF(FCP_FDST), ax
@@ -1130,9 +1134,6 @@ fcp_push:
     clc
     ret
 .deep:
-    pop dx
-    pop bx
-    pop ax
     mov ax, FERR_DIRFULL
     stc
     ret
@@ -1386,12 +1387,13 @@ fcp_file1:
     push cx
     push dx
     push si                     ; ...and NOT DI: nothing here writes it, and
-    mov byte [fcp_ovw], 0       ; every callee banks it (fcp_fnames, fcp_xfer)
+    xor ax, ax                  ; every callee banks it (fcp_fnames, fcp_xfer).
+    mov [fcp_ovw], al           ; (AX is this routine's to clobber)
                                 ; or publishes preserving it (dskw_stat_x,
                                 ; fcp_goto - which four other routines in this
                                 ; file already trust across the FSV path)
-    mov word [fcp_ovwsz], 0     ; ...and it replaces nothing until proven
-    mov word [fcp_ovwsz+2], 0   ; otherwise (SPEC.md 22.5.2)
+    mov [fcp_ovwsz], ax         ; ...and it replaces nothing until proven
+    mov [fcp_ovwsz+2], ax       ; otherwise (SPEC.md 22.5.2)
     call fcp_fnames             ; publish this file's source and destination
     FCPX fcp_gofd               ; does the destination already hold it?
     jc .err
@@ -1418,9 +1420,9 @@ fcp_file1:
     call fcp_xfer
     jc .err
     mov byte [fcp_pend], 0
-.ok:
-    clc
-    jmp short .out
+.ok:                            ; CF = 0 on both arrivals: the `jc` above
+    jmp short .out              ; not taken, and the `cmp [fcp_all], 0` (a
+                                ; compare against 0 never borrows)
 .clash:
     mov ax, FERR_EXIST
 .err:
@@ -1443,24 +1445,25 @@ fcp_file2:
     call fcp_xfer               ; and fcp_xfer banks all five itself - so the
     jc .out                     ; contract above is honoured directly rather
 .skip:                          ; than by saving registers nothing touches
-    mov byte [fcp_pend], 0
-    clc
-.out:
+    mov byte [fcp_pend], 0      ; (CF = 0 both ways: the `jc` not taken, or
+.out:                           ; the `cmp [fcp_ovw], 0` EQUAL)
     ret
 
 ; -----------------------------------------------------------------------------
 ; fcp_fnames - publish the pending file's source and destination
 ; out: fcp_fname = its name, [fcp_fsdrv]/[fcp_fsclus] the source directory,
-;      [fcp_fddrv]/[fcp_fdclus] the destination. All registers preserved.
+;      [fcp_fddrv]/[fcp_fdclus] the destination
+; clobbers: AX - its one caller, fcp_file1, clobbers AX too, and banking BX..DI
+;      in that order is what lets it leave through fcp_x5 (kernel size pass 9)
 ;
 ; The first step and the walk name a file differently - the clipboard entry
 ; itself versus whatever fcp_scan just found - and resolving that here means
 ; fcp_file1, fcp_file2 and the question all read one set of words.
 ; -----------------------------------------------------------------------------
 fcp_fnames:
-    push ax
     push bx
     push cx
+    push dx
     push si
     push di
     mov al, [fcp_ddrv]
@@ -1487,12 +1490,7 @@ fcp_fnames:
     call fcp_n13                ; other end, which is what a copy means here:
                                 ; fcp_wprep and fcp_undo read this one word
                                 ; for the destination too
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fcp_x5
 
 ; -----------------------------------------------------------------------------
 ; fcp_rdopen - begin a streaming read of SI in the CURRENT directory
@@ -1508,8 +1506,9 @@ fcp_rdopen:
     mov [fcp_rclus], bx         ; ...or, on a redirected volume, THE HANDLE
     mov [fcp_rsz], cx           ; dskw_stat answered (SPEC.md 62.9.1)
     mov [fcp_rszh], dx
-    mov word [fcp_roff], 0      ; such a read walks an OFFSET, not a chain
-    mov word [fcp_roff+2], 0    ; (CF = 0 from the `jc`; mov keeps it)
+    xor ax, ax                  ; such a read walks an OFFSET, not a chain
+    mov [fcp_roff], ax          ; (CF = 0 from the `xor`; mov keeps it - AX
+    mov [fcp_roff+2], ax        ; is this routine's to clobber)
 .out:
     jmp fcp_bufget.out          ; the same three pops (a pop writes no flag)
 
@@ -1607,12 +1606,11 @@ fcp_rdnext:
     call fcp_took
     mov ax, [dsk_chain_end]     ; resume past the last cluster it touched
     FCPX dsk_next_clus_x
-    jc .stop
+    jnc .store
+    xor ax, ax                  ; the chain ended exactly here, which for a
+.store:                         ; final chunk is what should happen
     mov [fcp_rclus], ax
-    jmp short .done
-.stop:
-    mov word [fcp_rclus], 0     ; the chain ended exactly here, which for a
-.done:                          ; final chunk is what should happen
+.done:
     mov ax, [fcp_rgot]
     clc
     jmp short .out
