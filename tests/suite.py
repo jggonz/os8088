@@ -2248,6 +2248,31 @@ SOAK = [
         "of the row itself and that is still 0. Presence is what the package "
         "was told; the carve is what the disk did. Needs `make mseg`.",
         needs=("marty", "nasm"), serial=True, wants=("build/mseg.img",)),
+    Row("mseglzslack", "soak", py("tests/mseglzslack.py"), 50.0,
+        "SPEC.md 88.10.4.1, 20.12.7.4: a fetched OP_COMP | OP_LAZY part "
+        "keeps ITS OWN LENGTH and nothing of the volume's. op_fetch claims R "
+        "plus the packed read rounded to whole clusters, and a read may only "
+        "begin on a cluster boundary, so the part's bytes start a HEAD SLACK "
+        "up the claim - up to 31.5KB on a 32KB-cluster hard disk. It expands "
+        "onto the claim's BASE and shrinks the claim to `len` rounded to a "
+        "KB; it used to expand past the slack, where a shrink (which only "
+        "takes the tail) could not reach it. SOAK and not full because it "
+        "is a MartyPC launch plus two keys, and because the floppies every "
+        "other row boots cannot show it: their slack is at most 512 bytes "
+        "and the two layouts round to the same KB. The fixture is MSEG built "
+        "-DMSEG_LZC (OP_COMP on its lazy part 6 alone) on a 1.44MB disk "
+        "built --fatcap 1, whose clusters are 8KB, so part 6 starts 3KB into "
+        "one. FOUR ASSERTIONS: the fixture's slack is non-zero; the key "
+        "fetches the part and MSEG's own three checks pass on it (`MSEG 7/7 "
+        "OK`); a live claim BEGINS at op_seg's answer and is `len` rounded "
+        "to a KB in paragraphs; and a second key leaves the claim table "
+        "byte-for-byte as it was, which is the only thing that sees a wrong "
+        "op_drop free - OSAPI_MEM_FREE matches a base exactly and nobody "
+        "reads its CF. VERIFIED TO FAIL on the shrink-past-the-slack "
+        "op_fetch: no claim at the part's segment, and the holder 6KB where "
+        "the part is 3KB. Needs `make mseglz`.",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/mseglz.img", "build/mseglz.bin")),
     Row("msegxms", "soak", py("tests/msegxms.py"), 50.0,
         "SPEC.md 20.12.4: an OP_XMS part really goes ABOVE 1MB. Every MartyPC "
         "row proves the FALLBACK - an 8088 has nothing up there, so the part "

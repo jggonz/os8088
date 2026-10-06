@@ -33,6 +33,11 @@ MSEG = Syms("tests/multiseg/mseg.asm", "build/mseg.bin",
 MSEGZ = Syms("tests/multiseg/mseg.asm", "build/msegz.bin",
              ["apps", "tests/multiseg"], defines=("MSEG_COMP",))
 
+# ...and built -DMSEG_LZC, OP_COMP on the LAZY part alone, which is
+# tests/mseglzslack.py's fixture (SPEC.md 88.10.4.1).
+MSEGLZ = Syms("tests/multiseg/mseg.asm", "build/mseglz.bin",
+              ["apps", "tests/multiseg"], defines=("MSEG_LZC",))
+
 
 def sym(name, comp=False):
     return (MSEGZ if comp else MSEG).sym(name)

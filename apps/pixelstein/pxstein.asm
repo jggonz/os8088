@@ -147,7 +147,7 @@ pxl_art:
     mov ax, 0                       ; `mov` and not `xor`: CF is the answer
     jc .out
     mov al, PX_PART_ART
-    call op_seg                     ; AX = the masters, past the head slack
+    call op_seg                     ; AX = the masters, at the claim's base
 .out:
     ret
 

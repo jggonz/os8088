@@ -1370,8 +1370,9 @@ op_lazykb:
     mov dx, ax                  ; ...and R paragraphs UP the claim, which is
     call op_zrpara              ; where it lands (SPEC.md 20.12.7.4). R + the
     add ax, dx                  ; read covers the expanded part as well: R is
-    jc .no                      ; at least len - packed, so slack + len ends
-.kb:                            ; inside it
+    jc .no                      ; at least len - packed, so `len` from the
+.kb:                            ; claim's base, which is where op_fetch
+                                ; expands it (88.10.4.1), ends inside it
 %endif
     add ax, 63                  ; paragraphs -> KB, rounded up
     jc .no
@@ -1586,64 +1587,69 @@ op_fetch:
     pop si                      ; the row
     jc .ioerr
 
-    mov ax, bx                  ; ...and the part sits past the slack, which
-    mov cl, 4                   ; is a multiple of 512 and therefore of 16 -
-    shr ax, cl                  ; op_seg's arithmetic, one part at a time
+    mov ax, bx                  ; ...and the part's READ sits past the slack,
+    mov cl, 4                   ; which is a multiple of 512 and therefore of
+    shr ax, cl                  ; 16 - op_seg's arithmetic, one part at a time.
+                                ; A plain row is used where it was read; a
+                                ; compressed one is expanded onto the claim's
+                                ; base below
     add ax, dx
 %if OP_HAS_COMP
     test byte [si+OP_R_FLAG], OP_COMP
     jz .plainbank
-    ; --- EXPAND IT, DOWN ITS OWN CLAIM (SPEC.md 20.12.7.4) -----------------
+    ; --- EXPAND IT ONTO ITS OWN CLAIM'S BASE (SPEC.md 20.12.7.4) -----------
     ; op_unpack's walk with one row in it: the stream is R paragraphs up and
-    ; the output starts at the base, so the write pointer chases the read
-    ; pointer and never catches it.
-    push dx                     ; THE CLAIM, for .zbad - the base is not it
+    ; the output starts BELOW it, so the write pointer chases the read pointer
+    ; and never catches it. **AND BELOW IT MEANS THE CLAIM'S BASE, not the
+    ; part's place past the head slack** (SPEC.md 88.10.4.1). The read had to
+    ; start on the cluster at or below the part, so the stream's own bytes are
+    ; slack + R paragraphs up - and an output at the base starts slack FURTHER
+    ; below them than the R that in_place_margin was measured against, which
+    ; is only more room: the writer never overtakes a reader that far ahead
+    ; for the reason it never overtakes one exactly R ahead. Expanding past the
+    ; slack instead, which is what this did, put the part where the shrink
+    ; below could not reach the bytes in front of it - a shrink only takes the
+    ; TAIL - so a 32KB-cluster volume kept up to 31.5KB of dead slack for the
+    ; whole session.
+    push dx                     ; THE CLAIM: .zbad's, and now the OUTPUT's
     push si                     ; the row
-    push ax                     ; the base
+    push ax                     ; the part's place in the READ, past the slack
     call op_zrpara              ; AX = R in paragraphs; SI preserved
-    pop dx                      ; DX = the base
-    push dx
-    add ax, dx                  ; ...and AX = where the stream was read to
-    push ax
+    pop di
+    add di, ax                  ; DI = where the stream's own bytes were read
     mov cx, [si+OP_R_ZKB]       ; CX = the PACKED length, while it is still
     mov ax, [si+OP_R_LEN]       ; there - one more store and it is a segment
     mov dx, ax                  ; BX:DX = the 32-bit expected output, and a
     xor bx, bx                  ; part is 16 bits by os88pkg.py
     mov al, [op_table + OP_T_FMT]   ; THE FORMAT, READ BEFORE DS MOVES: one
     xor ah, ah                      ; instruction later op_table is
-    pop di                          ; unreachable, which op_unpack's own
+    pop si                          ; unreachable, which op_unpack's own
     pop es                          ; header records as the defect that
-    push es                         ; refused every stream
+    push es                         ; refused every stream. ES = the claim
+    push si
     push ds
     mov ds, di                  ; DS:SI the stream, ES:DI the output, DI = 0
     xor si, si                  ; being the contract (SPEC.md 20.13.3)
     xor di, di
     call OSAPI_DECOMP
-    pop ds                      ; ...and none of these four touches CF
-    pop ax                      ; the base
+    pop ds                      ; ...and none of these three touches CF
     pop si                      ; the row
     pop dx                      ; the claim
     jc .zbad
-    ; --- AND GIVE BACK WHAT ONLY THE EXPANSION NEEDED (SPEC.md 88.10.4.1) --
+    ; --- AND KEEP THE PART AND NOTHING ELSE (SPEC.md 88.10.4.1) ------------
     ; The claim is op_lazykb's: R plus the packed read rounded to whole
     ; clusters, which is room for the stream to sit above its output and, on
-    ; a 32KB-cluster volume, mostly cluster. Expanded, the part is the slack
-    ; plus `len` and nothing else, and that is never more than the claim
-    ; (R >= len - packed). A shrink always succeeds IN PLACE (SPEC.md
-    ; 50.3.1), so the base banked below stays right and op_drop's slack
-    ; arithmetic still finds the claim. CF is not read: a refused shrink
-    ; leaves the claim as it was, which is only the cost it had before.
-    push ax                     ; the base
-    mov bx, ax
-    sub bx, dx                  ; BX = the head slack, in paragraphs
+    ; a 32KB-cluster volume, mostly cluster. Expanded, the part is `len` bytes
+    ; from the claim's base and nothing else, which is never more than the
+    ; claim (R >= len - packed). A shrink always succeeds IN PLACE (SPEC.md
+    ; 50.3.1), so the base banked below is the claim's and op_drop frees it as
+    ; it stands. CF is not read: a refused shrink leaves the claim as it was,
+    ; which is only the cost it had before.
+    push dx                     ; the claim, which IS the part's base now
     mov ax, [si+OP_R_LEN]
-    add ax, 15                  ; `len` in paragraphs, rounded up - the RCR
-    rcr ax, 1                   ; takes the carry back in, so a part near
-    mov cl, 3                   ; 64KB keeps its 17th bit
-    shr ax, cl
-    add ax, bx                  ; ...plus the slack: under 8,192 paragraphs,
-    add ax, 63                  ; so neither add carries
-    mov cl, 6
+    add ax, 1023                ; `len` in KB, rounded up - the RCR takes the
+    rcr ax, 1                   ; carry back in, so a part near 64KB keeps its
+    mov cl, 9                   ; 17th bit
     shr ax, cl                  ; AX = the KB the session keeps
     call OSAPI_MEM_REGROW       ; DX = the claim, and a shrink keeps it there
     pop ax                      ; the base
@@ -1712,8 +1718,14 @@ op_drop:
     test byte [si+OP_R_FLAG], OP_LAZY
     jz .out
     mov dx, [si+OP_R_ZKB]
-    or dx, dx
-    jz .out
+    test byte [si+OP_R_FLAG], OP_FETCHED
+    jz .out                     ; NOT HERE, and the flag is what says so: on
+                                ; an OP_COMP row zkb is the PACKED LENGTH until
+                                ; the fetch and OP_SPENT after a drop, both
+                                ; non-zero, so `zkb != 0` spent an unfetched
+                                ; part and freed its length as a segment - the
+                                ; no-op promised above was op_fetch's old
+                                ; question asked here (os88parts.inc OP_FETCHED)
     and byte [si+OP_R_FLAG], ~OP_FETCHED & 0xFF  ; not here any more
 %if OP_HAS_COMP
     ; **A COMPRESSED ROW IS SPENT, NOT EMPTY** (SPEC.md 20.12.7.4): the packed
@@ -1726,20 +1738,28 @@ op_drop:
     mov ax, OP_SPENT
 .plaindrop:
     mov [si+OP_R_ZKB], ax       ; CLEARED FIRST: op_seg must never answer a
+                                ; segment that is on its way back to the heap
+    or ax, ax                   ; ...and a COMPRESSED row's banked word IS its
+    jnz .free                   ; claim: op_fetch expands it onto the claim's
+                                ; base (SPEC.md 88.10.4.1), so there is no
+                                ; slack to take off. AX is OP_SPENT exactly
+                                ; when the row is OP_COMP
 %else
     mov word [si+OP_R_ZKB], 0   ; CLEARED FIRST: op_seg must never answer a
-%endif
                                 ; segment that is on its way back to the heap
-    mov ax, [si+OP_R_OFF]       ; ...and the word op_fetch banked is the PART's
-    mov cl, 9                   ; base, which sits past the head slack (op_seg
-    shl ax, cl                  ; answers it as such). OSAPI_MEM_FREE matches
-    mov bx, [op_clb]            ; the CLAIM's base exactly (mem_find_own,
-    dec bx                      ; SPEC.md 50.3) and op_drop never reads its CF,
-    and ax, bx                  ; so a free of the biased word was a silent
-    mov cl, 4                   ; leak on every volume whose cluster is over
-    shr ax, cl                  ; 512 bytes. This is op_fetch's slack
-    sub dx, ax                  ; arithmetic run backwards; [op_clb] is live
-    call OSAPI_MEM_FREE         ; because op_fetch ran op_clbget before it claimed
+%endif
+    mov ax, [si+OP_R_OFF]       ; ...and the word op_fetch banked for a PLAIN
+    mov cl, 9                   ; row is the PART's base, which sits past the
+    shl ax, cl                  ; head slack (op_seg answers it as such).
+    mov bx, [op_clb]            ; OSAPI_MEM_FREE matches the CLAIM's base
+    dec bx                      ; exactly (mem_find_own, SPEC.md 50.3) and
+    and ax, bx                  ; op_drop never reads its CF, so a free of the
+    mov cl, 4                   ; biased word was a silent leak on every
+    shr ax, cl                  ; volume whose cluster is over 512 bytes. This
+    sub dx, ax                  ; is op_fetch's slack arithmetic run backwards;
+                                ; [op_clb] is live because op_fetch ran
+.free:                          ; op_clbget before it claimed
+    call OSAPI_MEM_FREE
 .out:
     pop es
     pop si

@@ -59,6 +59,18 @@ MS_OPT_KB  equ 600                  ; chosen so NOTHING here can grant it: a
   %define MS_ZF 0
 %endif
 
+; MSEG_LZC=1 puts OP_COMP on part 6, the LAZY one, and on nothing else
+; (SPEC.md 20.12.7.4) - the fixture for tests/mseglzslack.py, which fetches it
+; off a volume whose clusters are bigger than a sector and measures what the
+; session keeps (SPEC.md 88.10.4.1). A separate define and not MSEG_COMP's,
+; because MSEG_COMP's rows re-fetch part 6 after dropping it and a dropped
+; compressed lazy part refuses that by design (SPEC.md 20.12.7.4.1).
+%ifdef MSEG_LZC
+  %define MS_LF OP_COMP
+%else
+  %define MS_LF 0
+%endif
+
     OS88_PARTS_BEGIN MS_PARTS
       OS88_PART OP_SEG, MS_ZF           ; 0 code
       OS88_PART OP_SEG                  ; 1 code
@@ -85,7 +97,7 @@ MS_OPT_KB  equ 600                  ; chosen so NOTHING here can grant it: a
                                         ;   because os88pkg.py requires it:
                                         ;   the span that goes up has to be
                                         ;   contiguous
-      OS88_PART OP_SEG, OP_LAZY         ; 6 NOT CLAIMED AND NOT READ AT LOAD.
+      OS88_PART OP_SEG, OP_LAZY | MS_LF ; 6 NOT CLAIMED AND NOT READ AT LOAD.
                                         ;   op_size steps over its row, so it
                                         ;   is in no total and outside the
                                         ;   carve, and op_fetch claims and

@@ -7630,6 +7630,37 @@ $(BUILD)/msegz360.img: $(BUILD)/msegzd/MSEG.O88 $(BUILD)/msegbig.o88 \
 .PHONY: msegz
 msegz: $(BUILD)/msegz.img $(BUILD)/msegz360.img
 
+# ...AND WITH ITS LAZY PART COMPRESSED, on a disk whose CLUSTERS ARE 8KB
+# (SPEC.md 88.10.4.1, 20.12.7.4). `-DMSEG_LZC` puts OP_COMP on part 6 and on
+# nothing else, and `--fatcap 1` raises the 1.44MB disk's sectors-per-cluster
+# until its FAT is one sector - which is 16 - so the fetch's read starts up to
+# 7.5KB BELOW the part, the way it does by up to 31.5KB on a FAT16 hard disk.
+# tests/mseglzslack.py measures the claim the fetch leaves behind: the part's
+# own length rounded to a KB, at the part's own segment, and none of that
+# head slack in front of it.
+$(BUILD)/mseglz.bin: tests/multiseg/mseg.asm apps/os88api.inc \
+                     apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DMSEG_LZC -I apps/ -I tests/multiseg/ -o $@ $<
+
+$(BUILD)/mseglzd/MSEG.O88: $(BUILD)/mseglz.bin $(BUILD)/msegp0.bin \
+                           $(BUILD)/msegp1.bin $(BUILD)/msegp2.bin \
+                           $(BUILD)/msegp3.bin $(BUILD)/msegp4.bin \
+                           tools/os88pkg.py tools/os88lz.py apps/os88parts.inc \
+                           apps/os88partsbody.inc apps/os88rseq.inc
+	@mkdir -p $(BUILD)/mseglzd
+	python3 tools/os88pkg.py $(BUILD)/mseglz.bin -o $@ \
+		--part-compress lz4 \
+		--part $(BUILD)/msegp0.bin --part $(BUILD)/msegp1.bin \
+		--part $(BUILD)/msegp2.bin --part $(BUILD)/msegp3.bin \
+		--part $(BUILD)/msegp4.bin
+
+$(BUILD)/mseglz.img: $(BUILD)/mseglzd/MSEG.O88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 --fatcap 1 $<
+	@python3 tools/os88disk.py --verify $@
+
+.PHONY: mseglz
+mseglz: $(BUILD)/mseglz.img
+
 # --- MSEGW: the same package with a carve PAST 64KB (SPEC.md 20.12.11) ------
 # Parts 1 and 2 padded by tests/multiseg/mkwide.py: part 1 (plain) with noise,
 # part 2 with text, so the carve is past 64KB at both ends - packed, which is

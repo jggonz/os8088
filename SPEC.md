@@ -40789,6 +40789,31 @@ page the first time a fetch landed across one (Pixelstein's art masters,
 packed part, so `op_fetch`'s claim, `op_lazyok`'s answer and a package's own
 precheck are one figure.
 
+**And it expands onto the claim's BASE, not onto the part's place in the
+read.** A read may only begin on a cluster boundary (§20.12.2), so the stream's
+own bytes are the head slack plus R up the claim — and the output starting at
+the base sits the slack *further* below them than the R that `in_place_margin`
+was measured against, which is only more room: a writer that never overtakes a
+reader `len − packed` ahead never overtakes one further ahead. Once it has
+expanded, `op_fetch` shrinks the claim in place through `OSAPI_MEM_REGROW`
+(§50.3.1) to **`len` rounded up to a KB**, banks the claim's own base as the
+part's segment, and `op_drop` frees that word as it stands — a plain lazy row
+still banks the part past its slack, and `op_drop` still takes the slack off
+that one. **What a fetched compressed part costs the session is therefore its
+own length and nothing of the volume's**: the slack is at most a cluster less a
+sector, which is 512 bytes on a 360KB or 720KB floppy, 1.5KB on the live
+media's 2KB clusters and **31.5KB on a FAT16 hard disk with 32KB clusters** —
+and expanded past it, as this first shipped, it was the one thing in the claim
+a shrink could not reach, because a shrink only ever takes the tail.
+
+**`op_drop` asks `OP_FETCHED` whether there is anything to give back, not the
+word.** It asked `zkb != 0`, which is the question `op_fetch` stopped asking
+when this section made the word the packed length before a fetch — so dropping
+a compressed part that had never been fetched, which the routine promises is a
+no-op for a caller unwinding, wrote `OP_SPENT` over its length and freed that
+length as a segment. Nothing in the tree drops before it fetches, so no
+package met it; it is two bytes.
+
 ###### 20.12.7.4.1 What `op_drop` leaves behind, and why it is not zero
 
 A dropped row cannot simply go back to 0. On an uncompressed lazy row 0 means
@@ -129905,15 +129930,18 @@ in place of two while the fetch runs, and **no packer or expander outside the
 standard**. The session pays nothing for it: the fetch's claim is
 `op_lazykb`'s figure, R plus the read of the packed part rounded to whole
 clusters, because the stream has to sit above its output while it expands —
-and once it has, `op_fetch` shrinks the claim through `OSAPI_MEM_REGROW` to the
-head slack plus `len`, rounded to a KB. A shrink always happens in place
-(§50.3.1), so the banked base and `op_drop`'s slack arithmetic are unchanged.
-What the session keeps is therefore **the slack plus `len`**: the same
-**11KB** the old exact-size claim was on a floppy, where the slack is at most
-a cluster less a sector, and no longer R plus a cluster of read on a hard disk
-whose clusters are 32KB, which kept the fetch's ~70KB for the life of the
-instance. The slack is still there, ahead of the part, because the shrink can
-only take the tail.
+and it expands onto the claim's **base**, so once it has, `op_fetch` shrinks
+the claim through `OSAPI_MEM_REGROW` to `len` rounded to a KB (§20.12.7.4). A
+shrink always happens in place (§50.3.1), so the banked base is the claim's
+and `op_drop` frees it as it stands. What the session keeps is therefore
+**`len` and nothing else**: **11KB** on every volume — the old exact-size
+claim's figure — and no longer R plus a cluster of read on a hard disk whose
+clusters are 32KB, which kept the fetch's ~70KB for the life of the instance.
+**Nor the head slack.** The first shrink kept the part where the read had put
+it, past the cluster's slack, and a shrink only takes the tail — so up to
+31.5KB of that 32KB cluster stayed in front of the bands for the session.
+Expanding onto the base costs nothing to do: the output is one pointer lower
+and the stream is where it always was.
 
 **It found a defect in the standard on the way**, which no package had
 reached because none had ever fetched an `OP_COMP | OP_LAZY` row across a
@@ -153636,10 +153664,10 @@ Skies' bands, and for the same two withdrawn reasons: `tools/pxsart.py
 --raw` writes the masters unpacked, `os88pkg.py` packs them (8,890 bytes),
 and the loader's `pxl_art` is `op_fetch` and `op_seg`, which expand them into
 a claim of their own: `op_lazykb`'s figure, R plus the read, while it expands,
-and the head slack plus `len` once it has — `op_fetch` shrinks it in place
-(§88.10.4.1) — which is 37 KB on the shipped floppies, the same `PXA_KB` the
-old exact-size claim was, and more only by the slack on a volume with bigger
-clusters. It used to fetch a
+and `len` rounded to a KB once it has — `op_fetch` expands onto the claim's
+base and shrinks it in place (§88.10.4.1, §20.12.7.4) — which is 37 KB on
+every volume, the same `PXA_KB` the old exact-size claim was, and no longer
+37 KB plus up to 31.5 KB of head slack on a hard disk with 32KB clusters. It used to fetch a
 stream `pxsart.py` packed into one claim, expand it through `OSAPI_DECOMP`
 into a second and drop the first. **It stays LAZY because only a Textured
 launch wants it**: eager, 37KB would ride in every launch's carve and a 256KB
