@@ -4851,12 +4851,13 @@ cp_fdnop:  dw cp_s_fdno         ; ...through this, which cp_flush_x reads cs:
 ;
 ; The question is the one dsk_xfer would put, put the way it would put it:
 ; cylinder 1 of the system disk as ONE cylinder run - [dsk_cylrun] raised for
-; this call alone - and then each of its two tracks track-bounded, compared
-; word for word. Cylinder 1 is KERNEL.SYS on every geometry this tree builds
-; (the loader reads the kernel from the start of the data area), so the
-; sectors are never blank and a head's worth of them cannot match the other
-; head's by accident. [dsk_rah_busy] keeps SPEC.md 18.95's cache out of it, or
-; the second read would be served the first one's bytes.
+; it and the crossing read below alone - and then each of its two tracks
+; track-bounded, compared word for word. Cylinder 1 is KERNEL.SYS on every
+; geometry this tree builds (the loader reads the kernel from the start of the
+; data area), so the sectors are never blank and a head's worth of them
+; cannot match the other head's by accident. [dsk_rah_busy] keeps SPEC.md
+; 18.95's cache out of it, or the second read would be served the first one's
+; bytes.
 ;
 ; The run must not be split at a 64KB DMA page - dsk_runcap would shorten it,
 ; and a run cut at the head proves nothing - and a module has no door to
@@ -4866,8 +4867,17 @@ cp_fdnop:  dw cp_s_fdno         ; ...through this, which cp_flush_x reads cs:
 ; track: R >= 2T fits at once; T <= R < 2T leaves a track below; R < T ends
 ; the cylinder at R + 2T < 3T, with the track after it, inside 4T.
 ;
-; A read that FAILS answers nothing and the pick stands - the loader's canary
-; still decides at every boot. So does a heap that cannot spare 18..36KB.
+; Two ROM classes cannot cross a head, and they fail differently. One LIES -
+; the other head's sectors, CF = 0 - and the compare catches it. The other
+; ERRORS, and dsk_xfer hides that: three strikes, then single sectors, and
+; CF = 0 with the right bytes. So [dsk_ioerr], which only a failed int 13h
+; writes, is cleared first and read after, and a non-zero one is a NO. A
+; two-sector run across the head goes first, so that controller costs three
+; strikes and not three for every sector of head 0 before the answer.
+;
+; A read that FAILS outright answers nothing and the pick stands - the
+; loader's canary still decides at every boot. So does a heap that cannot
+; spare 18..36KB.
 ; -----------------------------------------------------------------------------
 cpc_fdret:                      ; the five early refusals' `ret`, in short
     ret                         ; reach of them (it was 230 bytes away)
@@ -4919,13 +4929,30 @@ cpc_fdtest:
     inc byte [dsk_rah_busy]
     mov es, di
     xor bx, bx
+    mov byte [dsk_ioerr], 0     ; written only by a FAILED int 13h, so it is
+                                ; how a crossing that ERRORS is seen at all:
+                                ; dsk_xfer falls back to single sectors and
+                                ; answers CF = 0 with the right bytes
+    mov byte [dsk_cylrun], 1    ; ONE cylinder run, the way dsk_xfer would
+    mov ax, [disk_spt]
+    mov cx, ax
+    shl ax, 1
+    add ax, cx
+    dec ax                      ; AX = head 0's last sector of cylinder 1...
+    mov cx, 2                   ; ...and the next: ONE call across the head,
+    call COLD_SEG:dskf_disk_read    ; three strikes at most and not three a
+    jc .rdone                   ; sector of the whole track
+    cmp byte [dsk_ioerr], 0
+    jne .rdone
     mov ax, [disk_spt]
     shl ax, 1                   ; AX = cylinder 1's LBA (two heads)...
     mov cx, ax                  ; ...and CX = its sectors
-    mov byte [dsk_cylrun], 1    ; ONE cylinder run, the way dsk_xfer would
     call COLD_SEG:dskf_disk_read
+.rdone:
     mov byte [dsk_cylrun], 0    ; (boot_cylrun is 0, so this IS its value)
     jc .done                    ; no answer: the pick stands
+    cmp byte [dsk_ioerr], 0
+    jne .no                     ; it answered by falling back: no crossing
     mov es, dx                  ; ES:0 = the track buffer
     mov cx, [disk_spt]
     mov byte [cs:cp_fdn], 2

@@ -2623,23 +2623,26 @@ OVL_AT      equ 2624            ; ...and it is ONE value for every build now.
 ; 415 on kern_small at that pass's close), and
 ; BOOTMARK=1's MARKW sites need 127 of a knob's give (BOOTHALT=20 131,
 ; DRVDIAG=1 with it 141). BOOTDIAG=1 keeps the 96 its own loader leaves room
-; for (2,507 with MOUDIAG=1). KERNEL SIZE PASS 9 SPLIT IT, measured with
-; pass 2's decoder arguments: the knob loaders had grown past 2,480 (DISKAL=1
-; is 2,490, MOUDIAG=1 2,484, BOOTSTOP=1 2,482), so five knob builds did not
-; assemble at the pass's base. drv_boot_x's one walk question took kern_big's
-; shipped `.ovl` 2,494 -> 2,470, and the 24 bytes go back here: 128 for a
-; knob whose growth is in the LOADER (DISKAL=1's overlay is then 2,470 of
-; 2,624) and 136 for BOOTMARK=1, whose loader is the shipped one (2,478) and
-; whose MARKW sites are all overlay - 2,617, BOOTHALT=20 2,621 and DRVDIAG=1
-; with it 2,631, of 2,632. BOOTDIAG=1 stays at 96 (2,514; 2,520 with
-; MOUDIAG=1).
+; for (2,507 with MOUDIAG=1). KERNEL SIZE PASS 9 TOOK IT TO 128, measured
+; with pass 2's decoder arguments: the knob loaders had grown past 2,480
+; (DISKAL=1 is 2,491, MOUDIAG=1 2,485, BOOTSTOP=1 2,483), so five knob builds
+; did not assemble at the pass's base. drv_boot_x's one walk question took
+; kern_big's shipped `.ovl` 2,494 -> 2,470, and the 24 bytes go back here.
+; BOOTMARK=1 takes the same 128 and that is a choice: its MARKW sites are all
+; overlay, so it wants the give LARGE - 2,617 of overlay needs 121, BOOTHALT=20
+; 2,621 needs 125 - while the loader knob it is paired with wants it SMALL:
+; BOOTMARK=1 DISKAL=1 is a 2,491 loader, 133 at the most, and the 144 before
+; this assembled it. 128 holds both. What is GIVEN UP is BOOTMARK=1 with
+; DRVDIAG=1 (2,631, 135 at the least; 2,635 and 139 with BOOTHALT=20), which
+; cannot share one give with DISKAL=1's 133 and did not fit at 144 either;
+; MOUDIAG=1 and BOOTPROF=1 with it never did. tests/unit/t_buildmatrix.py's
+; `bootmark-diskal` row is the pairing kept. BOOTDIAG=1 stays at 96 (2,514;
+; 2,520 with MOUDIAG=1).
 %define OVL_KNOBGIVE 0
 %ifdef KERN_KNOB
 %ifndef SPLSTARS
 %ifdef BOOT_DIAG
   %define OVL_KNOBGIVE 96
-%elifdef BOOT_MARK
-  %define OVL_KNOBGIVE 136
 %else
   %define OVL_KNOBGIVE 128
 %endif

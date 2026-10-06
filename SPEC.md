@@ -953,10 +953,15 @@ KNOB build already has and a shipped build does not use:
   a knob build `.ovl` starts `OVL_KNOBGIVE` = **96** bytes lower, at
   `OVL_BASE` = 2,528. `SPLSTARS=1` is the one knob whose `.boot2` is above
   that (2,562 with `NOKZIP=1`) — it is what sets `OVL_AT`'s floor — so it
-  keeps the shipped split. **Every other knob but `BOOTDIAG=1` gives 144**
-  (`OVL_BASE` = 2,480): its `.boot2` is the shipped loader's, 2,470 at the
-  most (`MOUDIAG=1`), and §31.14's `ovl_fdd_apply` took the shipped blob from
-  147 spare to 20, which `BOOTMARK=1` needed. `OVL_AT` stays the one literal, which is what
+  keeps the shipped split. **Every other knob but `BOOTDIAG=1` gives 128**
+  (`OVL_BASE` = 2,496; it was 144 until kernel size pass 9, when the knob
+  loaders grew past 2,480 — `DISKAL=1` is 2,491 with pass 2's decoder
+  arguments, `MOUDIAG=1` 2,485 — and `drv_boot_x` gave the shipped `.ovl` 24
+  bytes back). `BOOTMARK=1` is the knob pulled both ways: its `MARKW` sites
+  are overlay and want the give large (2,617 bytes needs 121, `BOOTHALT=20`'s
+  2,621 needs 125), and paired with a loader knob it wants it small
+  (`BOOTMARK=1 DISKAL=1` fits at 133 at the most). 128 holds both, and the
+  `bootmark-diskal` buildmatrix row keeps it so. `OVL_AT` stays the one literal, which is what
   `tools/os88ladder.py` reads and what describes every kernel a disk carries.
   §26.8.6's `ovl_sc_load` first left kern_big's own `.ovl` at **2,495 of
   2,496** - kern_emu six past the line and `BOOTMARK=1` two past even with
@@ -979,8 +984,10 @@ the kern_big column re-measured after §31.14:
 | `BOOTMARK` + `BOOTPROF` + `MOUDIAG` | 2,185 — **57 over on kern_big** since §31.14 | 1,516 | 2,283 |
 
 The triple was never a `buildmatrix` row and does not fit kern_big's blob any
-more; each of the three alone does, and so does `BOOTMARK` with `DRVDIAG`
-(2,125).
+more; each of the three alone does. `BOOTMARK` with `DRVDIAG` is GIVEN UP:
+its overlay is 2,631 (2,635 with `BOOTHALT=20`), a give of 135 at the least,
+which cannot share one value with `BOOTMARK=1 DISKAL=1`'s 133, and it did not
+fit the 144 before it either.
 
 **A knob build is a different blob layout from the kernel it diagnoses**, and
 that is the price: the probe runs from the window on a kern_small `BOOTMARK=1`
@@ -59891,16 +59898,27 @@ Reads row changed this session, says Cylinder, and this boot did NOT cross a
 head (`boot_cylrun` 0: a 286 and up that the gate kept off the canary, or a
 machine whose canary failed), `cpc_fdtest` asks the question `dsk_xfer` would
 put, the way it would put it: cylinder 1 of the system disk as ONE cylinder
-run — `[dsk_cylrun]` raised for that call alone — and then each of its two
-tracks track-bounded, compared word for word. Cylinder 1 is `KERNEL.SYS` on
+run — `[dsk_cylrun]` raised for it and the crossing read below alone — and
+then each of its two tracks track-bounded, compared word for word. Cylinder 1 is `KERNEL.SYS` on
 every geometry this tree builds (the loader reads the kernel from the start of
 the data area), so the sectors are never blank, and `[dsk_rah_busy]` keeps
 §18.95's cache out of it, or the second read would be served the first one's
-bytes. On a mismatch Reads goes back to **Auto** before `SYSTEM.CFG` is
-composed, byte 509 is written 0, and the bar says `No Cylinder Here: Auto` in
-place of `Settings Saved`. An XT that passed its canary is never asked; a read
-that fails, or a heap that cannot spare the buffer, answers nothing and the
-pick stands — the loader's canary still decides at every boot.
+bytes. **Two ROM classes cannot cross a head and they fail differently**: one
+LIES — the other head's sectors with CF = 0 — and the compare catches it; the
+other ERRORS, and `dsk_xfer` hides that, falling back to single sectors after
+three strikes and answering CF = 0 with the right bytes. So `[dsk_ioerr]`,
+which only a failed `int 13h` writes, is cleared before the reads and read
+after them, and non-zero is a refusal too. A two-sector run across the head
+(head 0's last sector of cylinder 1 and the next) is read first, so that
+controller costs three strikes before the answer rather than three for every
+sector of head 0. On a mismatch or a fallback Reads goes back to **Auto**
+before `SYSTEM.CFG` is composed, byte 509 is written 0, and the bar says
+`No Cylinder Here: Auto` in place of `Settings Saved` — one toast, chosen
+before it is shown, not a second one drawn over the first. An XT that passed
+its canary is never asked; a read that fails outright, or a heap that cannot
+spare the buffer, answers nothing and the pick stands — the loader's canary
+still decides at every boot. A fallback forced by marginal media rather than
+by the head refuses as well: Auto is the safe direction to be wrong in.
 
 The run must not be split at a 64KB DMA page — `dsk_runcap` would shorten it,
 and a run cut at the head proves nothing — and a module has no door to
@@ -59930,6 +59948,10 @@ The owed byte (`[cp_fdbsd]`) is RESIDENT, beside `[cp_wdirty]`: a save that
 fails leaves both owed, and a retry from a later load of `CTRL.DRV` tests the
 pick and writes byte 509 as the first attempt would have. And a failed save's
 own toast stands - `No Cylinder Here: Auto` replaces only `Settings Saved`.
+So when the test turned Cylinder back to Auto and the save then FAILED,
+`cp_flush_x` puts `CFG_FDR` back to 2: the test wrote the resident
+`drv_cfg`, and leaving it at Auto would have the retry skip the test, save
+Auto and say `Settings Saved`, the pick gone with nothing on the bar.
 
 **Nothing resident reads the record.** `CFG_FDD` (two bits per unit, unit *n*
 at bits 2*n*..2*n*+1, value = the menu index) and `CFG_FDR` live in `drv_cfg`
@@ -60017,11 +60039,12 @@ could override a failed canary; it came back as the boot sector's byte 509,
 | boot sector | +0 | byte 509 was padding |
 | `.boot2` | +11 | `b2_cylok` (1), its `dec` on entry and `inc` on the canary's pass (4 + 4), and the gate's `sub` / `or al, [ss:...]` (+5 over `cmp` / `je`); three `xor ah, ah` that follow an AL ≤ 15 became `cbw` (−3). A knob build's `.boot2` is the shipped loader's against `OVL_BASE` = 2,480, and it is **2,478**: the next loader byte on a knob arm takes `OVL_KNOBGIVE` down or `BOOT2_SECS` up |
 | `.ovl` | +5 | `ovl_fdd_apply`'s `and al, [cs:b2_cylok]`. **2 bytes of the blob are left** |
-| `CTRL.DRV` | +427 image | the menu's third item and its pointer (11); `cpc_fdbs` and the byte that says it is owed; `cpc_fdtest`, its toast line and pointer, and `cp_flush_x`'s arm that says it. All of it in the settings core's `.modc`, so a desktop gesture's core-only load carries it too |
+| `CTRL.DRV` | +427 image | the menu's third item and its pointer (11); `cpc_fdbs` and the byte that says it is owed; `cpc_fdtest`, its toast line and pointer, and `cp_flush_x`'s arm that says it. All of it in the settings core's `.modc`, so a desktop gesture's core-only load carries it too. **+39 more** (12,220 → 12,259) for the `[dsk_ioerr]` refusal and its two-sector crossing read, and for `cp_flush_x` choosing its one line before the toast and putting Cylinder back after a failed save |
 
 `tests/fddpage.py` picks Cylinder by the same gesture on a boot that did not
 cross a head (Track was forced on it) and counts the save's cylinder runs at
-the `int 13h` gate — exactly one, the test's; then picks Track and Cylinder
+the `int 13h` gate — calls of `2 * spt` sectors, so the two-sector crossing
+read ahead of it is not one — exactly one, the test's; then picks Track and Cylinder
 again and, at the next `int 13h` after that run, rewrites the run's buffer to
 what an EOT-short ROM returns (head 1's sectors from slot `spt - 1` on — MartyPC's
 FDC carries a multi-track read on correctly whatever `int 1Eh`'s EOT says, so

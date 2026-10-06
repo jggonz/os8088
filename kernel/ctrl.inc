@@ -5076,6 +5076,26 @@ cp_flush_x:
 .say:
     push si
     push es
+%ifdef OS88_DRIVERS
+    cmp byte [cs:cp_fdno], 0    ; the save turned Cylinder back to Auto
+    je .verdict                 ; (SPEC.md 31.14): ONE line on the bar, so
+    mov byte [cs:cp_fdno], 0    ; it is chosen before the toast and not
+    cmp byte [cp_dsave], 0      ; drawn over 'Settings Saved' after it
+    jne .fdback
+    push cs
+    pop es                      ; the line is this image's: a toast copies it
+    mov si, [cs:cp_fdnop]       ; a POINTER to image data, read `cs:` - the
+                                ; core has no cp_stage (that is .modu's), and
+                                ; the line goes out through ES = CS
+    jmp short .tell
+.fdback:
+    mov byte [drv_cfg+CFG_FDR], 2   ; ...but a FAILED save's line is the news,
+                                ; and the pick goes back to Cylinder so the
+                                ; retry [cp_wdirty] promises tests it again -
+                                ; [cp_fdbsd] is still owed - rather than
+                                ; saving Auto and saying 'Settings Saved'
+.verdict:
+%endif
     mov si, cp_s_dsdsk          ; [cp_dsave] = 1, no system disk: RESIDENT,
     push ds                     ; because its drive letter is stamped by the
     pop es                      ; mount (disk.inc) - every other line is
@@ -5090,21 +5110,6 @@ cp_flush_x:
 .tell:
     xor cx, cx                  ; a toast COPIES its line, so image data is
     call KERNEL_SEG:cw_toast_show   ; fine for the drop that follows
-%ifdef OS88_DRIVERS
-    cmp byte [cs:cp_fdno], 0    ; ...unless the save turned Cylinder back to
-    je .said                    ; Auto (SPEC.md 31.14): that is the news, and
-    mov byte [cs:cp_fdno], 0    ; it replaces 'Settings Saved' on the bar -
-    cmp byte [cp_dsave], 0      ; but never a FAILED save's line, which is the
-    jne .said                   ; news the user has to act on
-    push cs
-    pop es                      ; the line is this image's: a toast copies it
-    mov si, [cs:cp_fdnop]       ; a POINTER to image data, read `cs:` - the
-                                ; core has no cp_stage (that is .modu's), and
-                                ; the line goes out through ES = CS
-    xor cx, cx
-    call KERNEL_SEG:cw_toast_show
-.said:
-%endif
     pop es
     pop si
     jmp kretm_cx
