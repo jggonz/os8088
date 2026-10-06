@@ -7,11 +7,11 @@
 Two Disk windows, the second double-clicked on its title bar to zoom over the
 whole desktop band - drive cells included - and double-clicked again to
 restore. The restore's damage is the union of the two rects, which is most of
-the screen with two windows in it and the cells, and that region OVERFLOWS
-wm_clip_tab's sixteen fragments: so this is the one ordinary gesture that
-takes wm_dmg_gray's `.whole` fallback, which no other desktop row reaches.
-The screen it leaves must match a forced whole repaint (tools/deskclip.py's
-verify).
+the screen with two windows in it and the cells, and that region OVERFLOWED
+wm_clip_tab's sixteen fragments: so this was the one ordinary gesture that
+took wm_dmg_gray's `.whole` fallback (it no longer does - see the end of
+this note, and tests/deskwhole.py). The screen it leaves must match a forced
+whole repaint (tools/deskclip.py's verify).
 
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1), measured: put the
 `call COLD_SEG:desk_dmg_zones_x` at `.whole` back BELOW its pops, where it
@@ -41,9 +41,10 @@ in the ZONE subtraction, and desk_zones_r now counts a zone's cost to the
 region first and leaves one that would overflow it to be drawn whole, so the
 region never overflows - one cell refused on each leg, measured. The two
 breakages above were measured on the kernel before that and no longer
-reproduce here; `.whole` is reached only when the FRAMES alone overflow.
-What both legs still gate is the picture: whichever answer the pass takes,
-it must leave a whole repaint's screen.
+reproduce here; `.whole` is reached only when the FRAMES alone overflow,
+and tests/deskwhole.py is the row that drives a layout there on purpose
+and is `.whole`'s gate now. What both legs here still gate is the picture:
+whichever answer the pass takes, it must leave a whole repaint's screen.
 """
 import argparse
 import os

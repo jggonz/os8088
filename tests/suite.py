@@ -8267,16 +8267,32 @@ SOAK = [
         "deskflash.py's note).",
         needs=("marty",), timeout=600),
     Row("deskzoom", "soak", py("tests/deskzoom.py"), 72.0,
-        "SPEC.md 11.91.6: wm_dmg_gray's `.whole` fallback, reached two ways "
-        "on Hercules and VGA, each against a whole repaint. A zoomed Disk "
-        "window's RESTORE - red with desk_dmg_zones_x called below .whole's "
-        "pops, where it first landed: 39,565 px stale on Hercules, the "
-        "field's maximize-and-restore report. And a DRAG whose region "
-        "overflows while 11.91.2's vacated rect is armed - red without "
-        ".whole's `mov word [wm_dmg_stwin], 0`: the Calculator beside the "
-        "dragged window keeps the dither, 1,019 px on Hercules and 1,588 "
-        "on VGA.",
+        "SPEC.md 11.91.6: two gestures that used to overflow wm_dmg_gray's "
+        "region in its Ls and zones and take `.whole`, on Hercules and VGA, "
+        "each against a whole repaint: a zoomed Disk window's RESTORE (the "
+        "field's maximize-and-restore report, 39,565 px stale on Hercules "
+        "with desk_dmg_zones_x below .whole's pops) and a DRAG with 11.91.2's "
+        "vacated rect armed (1,019 / 1,588 px without .whole's stwin clear). "
+        "Since 26.9.9 neither reaches .whole - one cell is refused on each "
+        "instead - and red is any pixel that differs from the whole repaint; "
+        "deskwhole is .whole's own gate now.",
         needs=("marty",), timeout=600),
+    Row("deskwhole", "soak", py("tests/deskwhole.py"), 215.0,
+        "SPEC.md 11.91.6/26.9.9: wm_dmg_gray's `.whole`, the one fallback "
+        "left once the Ls and the zones stopped overflowing the region, "
+        "reached ON PURPOSE: six windows cascaded down the screen so the "
+        "FRAMES alone need 26 of WM_CLIP_MAX's 16 fragments (the row replays "
+        "wm_clip_split over the live records and refuses a layout that does "
+        "not overflow), a seventh dragged across them and then zoomed and "
+        "restored. Asserted per gesture on Hercules and VGA: a breakpoint "
+        "on .whole hit, with neither wm_occl_l nor .frames before it; every "
+        "window in the damage drawn; the screen equal to a whole repaint. "
+        "Red without .whole's `mov word [wm_dmg_stwin], 0` (the drag: no "
+        "parked window redrawn, 30,907 px on Hercules, 31,135 on VGA) and "
+        "without its re-seed of the bands (the restore: 1,214 / 220 px of "
+        "the zoomed window left beside the mover). Red on a SETUP line if "
+        "the layout stops overflowing, never green.",
+        needs=("marty",), timeout=900),
     Row("deskpen", "soak", py("tests/deskpen.py"), 31.0,
         "SPEC.md 5.4.2.2.2: the gfx_blit1 pen is scoped to a CALLBACK, not "
         "to a lock hold, which is wider than one caller - a repaint pass "

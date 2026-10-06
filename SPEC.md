@@ -17858,7 +17858,8 @@ piece for each side an overlapped fragment reaches past it, as
 and the region, untouched, goes on for the rest. If the Ls overflow it
 first (`wm_occl_l`), `wm_dmg_gray` rebuilds it from the FRAMES alone - the
 region before §26.9.9 - and every touched zone takes the answer. Only an
-overflow of the frames themselves reaches `.whole` (§26.9.9). A zone nothing
+overflow of the frames themselves reaches `.whole` (§26.9.9;
+`tests/deskwhole.py` drives a layout there on purpose). A zone nothing
 of which is revealed is not drawn at all.
 
 **`kern_small` takes the cheap half.** Its cell is 32 wide and 56 px in from
@@ -50589,7 +50590,8 @@ drawn some that the whole dither then covers) - called ABOVE `.whole`'s pops,
 because it spends AX and AX is the damage's x1 the bands are re-seeded from.
 It first landed below them, and a zoomed window's restore - whose damage
 overflowed sixteen fragments - left the desktop it had covered undithered
-left of x 618 (39,565 px on Hercules; `tests/deskzoom.py` is the gate).
+left of x 618 (39,565 px on Hercules; `tests/deskzoom.py` was the gate then,
+and reaches `.whole` no longer - see below).
 
 **`.whole` is the FRAMES' overflow alone now** (§11.91.6). The Ls and the
 zones took it too, and they made it the ordinary case: that restore, and a
@@ -50610,6 +50612,22 @@ The window no longer redrawn is the Calculator, clear of where the dragged
 window was, which §11.91.2 exempts and `.whole` could not. Each gesture now
 refuses one cell, drawn whole over the dither as Color's are, and matches a
 whole repaint to the pixel on both adapters.
+
+**So `.whole` is reached on purpose, by `tests/deskwhole.py`**: six windows
+cascaded down the screen, each 8 px left of and 28 px below the last, cut
+the region past sixteen fragments on their FRAMES alone (the row replays
+`wm_clip_split` over the live records: 26 on the drag), and a seventh is dragged
+across them and then zoomed and restored. Each gesture must hit a
+breakpoint on `.whole` with neither `wm_occl_l` nor `.frames` before it,
+draw every window in the damage, and match a whole repaint on Hercules and
+VGA. It is red without `.whole`'s `[wm_dmg_stwin]` clear (the drag: no
+parked window redrawn, ~31,000 px of dither left over them) and without its
+re-seed of the bands (the restore: the zoomed window's picture left in a
+strip beside the mover). Its zone re-owe is NOT load-bearing there and
+cannot be: the frames overflow before `desk_zones_r` has drawn a zone or
+cleared a bit, and `desk_zones_r`'s own count keeps its `jc .whole` from
+ever being taken, so the call rebuilds the mask `wm_paint_dmg` built a few
+instructions earlier.
 
 **A window's DROP-SHADOW L is no part of the region** (`wm_occl_l`): the
 frame moved (1,1) covers the L in one rect and leaves the two corners no
