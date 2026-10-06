@@ -2500,8 +2500,8 @@ SOAK = [
         "44.10.6.2). VGA on purpose - on CGA ARK_PUFALL floors to 1 and the "
         "one vacated row is the capsule's BLACK top edge on a BLACK playfield, "
         "so the broken build scores zero. kern_big has DRAWN an off-grid x "
-        "since SPEC.md 5.4.2.8, so the row re-arms trigger B by retargeting "
-        "gfx_blit1_x's `jnz .offg` at `.refuse` in the running kernel.",
+        "since SPEC.md 5.4.2.8, so the row re-arms trigger B by sending "
+        "gfx_blit1_x's `.offg` to `.refuse` in the running kernel.",
         needs=("marty",), serial=True),
     Row("gfxewalk", "soak", py("tests/gfxewalk.py"), 90.0,
         "SPEC.md 5.12.5: Cyclone's warp and Missile's trails step the"
@@ -7531,7 +7531,10 @@ SOAK = [
         "After each walk exactly ONE row band is inverted on the glass and it "
         "is the selected row's, which is what catches a band left behind by "
         "the follow-scroll. VERIFIED RED with the old band's fm_sel_bar taken "
-        "out of .selmove (five inverted rows).",
+        "out of .selmove (five inverted rows). Then click row 1, Down, click "
+        "row 2, stepped inside the 9-tick double-click window: nothing may "
+        "open, because a move shuts that window. VERIFIED RED with .selmove's "
+        "FS_CLKT store taken out (the Audio Player launched on one click).",
         needs=("marty",), serial=True),
     Row("fdlgchoose", "soak", py("tests/fdlgchoose.py"), 40.0,
         "SPEC.md 38: the Standard File chooser end to end, through Note "

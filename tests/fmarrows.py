@@ -16,8 +16,17 @@ the view has to FOLLOW:
      a full repaint cannot be had here: the view toggle that forces one also
      scrolls back to the top.)
 
+  5. a move SHUTS the double-click window: click row 1, Down, click row 2,
+     all inside FM_DBLCLK's 9 ticks, and nothing opens. FS_CLKT was the
+     click on row 1, and fm_onclick reads "same index as FS_SEL, within 9
+     ticks" as a double-click, so without .selmove's re-stamp the second
+     click alone opened row 2. The gesture is STEPPED with the guest paused
+     (the shape of os88mouse's dblclick), so its span is the guest's and not
+     the host's, and the span is checked rather than assumed.
+
 VERIFIED TO FAIL: taking `call fm_sel_bar ; the old band off` out of
-.selmove leaves the old band on screen and reds the picture checks.
+.selmove leaves the old band on screen and reds the picture checks; taking
+.selmove's FS_CLKT store out opens row 2 on leg 5's one click.
 """
 import os
 import sys
@@ -26,6 +35,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 import os88geom as geom                                     # noqa: E402
 import os88ui                                               # noqa: E402
+from os88mouse import DBL_TICKS                             # noqa: E402
 
 fails = []
 
@@ -38,6 +48,29 @@ def check(name, cond, note=""):
 
 def word(ui, blk, off):
     return int.from_bytes(ui.m.read(blk + off, 2), "little")
+
+
+def step_until(ui, cond, what, steps=240):
+    """Advance the PAUSED guest ~4 ms at a time until `cond()` holds."""
+    for _ in range(steps):
+        ui.m.advance(cycles=ui.mo.DBL_STEP)
+        if cond():
+            return
+    raise RuntimeError("never saw %s across %d guest cycles"
+                       % (what, steps * ui.mo.DBL_STEP))
+
+
+def step_to(ui, x, y):
+    """os88mouse's `to`, with the guest PAUSED: one packet, then cycles until
+    the published pointer moves, until it is exactly at (x, y)."""
+    for _ in range(8):
+        cx, cy, _b = ui.mo.where()
+        if (cx, cy) == (x, y):
+            return
+        ui.m.mouse(max(-100, min(100, x - cx)), max(-100, min(100, y - cy)))
+        step_until(ui, lambda: ui.mo.where()[:2] != (cx, cy),
+                   "the pointer move from (%d,%d)" % (cx, cy))
+    raise RuntimeError("the pointer never reached (%d,%d)" % (x, y))
 
 
 def bands(ui, w, fit):
@@ -114,6 +147,45 @@ with os88ui.boot("build/os8088-360.img", apps="build/apps360.img") as ui:
                                  word(ui, blk, geom.FS_SCRL)))
     b = bands(ui, w, fit)
     check("...and ONE band, on row 0", b == [0], "(inverted rows %r)" % b)
+
+    # --- 5: a move shuts the double-click window -----------------------------
+    mo = ui.mo
+    x1, y1 = ui.row_xy(w, 1)
+    x2, y2 = ui.row_xy(w, 2)
+    mo.to(x1, y1)
+    mo._sep()                           # the first press is a FIRST click
+    before = {v.i for v in ui.windows()}
+    was = ui.listing(w)
+    m.pause()
+    try:
+        mo._gedge(True)
+        t1 = mo.ticks()
+        mo._gedge(False)
+        step_until(ui, lambda: word(ui, blk, geom.FS_SEL) == 1,
+                   "the click select row 1")
+        m.key("ArrowDown")
+        step_until(ui, lambda: word(ui, blk, geom.FS_SEL) == 2,
+                   "Down move the selection to row 2")
+        step_to(ui, x2, y2)
+        mo._gedge(True)
+        t2 = mo.ticks()
+        mo._gedge(False)
+    finally:
+        m.go()
+    span = (t2 - t1) & 0xFFFFFFFF
+    check("click, Down, click lands inside the double-click window",
+          span < DBL_TICKS, "(%d ticks apart, window %d)" % (span, DBL_TICKS))
+
+    def opened():
+        return (any(v.i not in before and v.visible for v in ui.windows())
+                or ui.listing(w) != was or ui._byte("ld_pending") != 0)
+    try:
+        ui._wait(opened, "an open", 10.0)
+        quiet = False
+    except os88ui.UIError:
+        quiet = True
+    check("...and the second click only SELECTS: nothing opened", quiet,
+          "(sel %d, titles %r)" % (word(ui, blk, geom.FS_SEL), ui.titles()))
 
 print()
 if fails:

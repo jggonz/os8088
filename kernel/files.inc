@@ -3908,6 +3908,9 @@ fm_onkey_x:
     call fm_sel_bar             ; the old band off (22.2) - and nothing for
     mov word [fm_lsel], 0xFFFF  ; a scroll below to carry: fm_scrollpaint
     mov [di+FS_SEL], dx         ; lifts and relays [fm_lsel]
+    mov ax, [ui_click_t]        ; ...and the double-click window shut: the
+    sub ax, FM_DBLCLK           ; last click's stamp is the OLD row's, and
+    mov [di+FS_CLKT], ax        ; one click on the new one is not a second
     mov al, FDH_SEL             ; a chooser's answer to a new selection:
     call fdlg_hook              ; a Save box takes a file's name, an Open
     mov ax, dx                  ; button its greying (SPEC.md 38.4)

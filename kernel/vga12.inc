@@ -5343,21 +5343,20 @@ section .cold                   ; gfx_blit1's body, and its far entry below it
 ; SPEC.md 5.4.2.1 is the account.
 ; =============================================================================
 gfx_blit1_x:
-    test al, 7                  ; an x off the byte grid: on kern_big the band
-%ifdef KERN_BIG                 ; is cut at it exactly (SPEC.md 5.4.2.8, .offg
-    jnz .offg                   ; below); on kern_small a caller error, not a
-%else                           ; shape to clip. A WIDTH off it is honoured
-    jnz .refuse                 ; since SPEC.md 5.4.2.5: the last partial byte
-%endif                          ; column is merged under a mask, one RMW a row
     jcxz .refuse
-    dec dx                      ; ...and rows 1..255, a band taller than
+    dec dx                      ; rows 1..255, a band taller than
     cmp dx, 0FFh                ; wm_clip_rows' own byte answer can express
     inc dx                      ; (SPEC.md 11.3.2) refused with none: DX - 1
-    jb .argok                   ; below 255 is both at once, and `inc` keeps
-.refuse:                        ; the carry. HERE and not at the end, so the
-    stc                         ; ladder is short jumps: 38 clocks a blit
-    ret                         ; where the five-byte `jcc`s cost 77
-%ifdef KERN_BIG
+    jae .refuse                 ; below 255 is both at once, and `inc` keeps
+                                ; the carry. FIRST, so an x off the grid is
+                                ; refused on the same terms as one on it
+    test al, 7                  ; an x off the byte grid: on kern_big the band
+    jz .argok                   ; is cut at it exactly (SPEC.md 5.4.2.8, .offg
+%ifndef KERN_BIG                ; below); on kern_small a caller error, not a
+.refuse:                        ; shape to clip. A WIDTH off it is honoured
+    stc                         ; since SPEC.md 5.4.2.5: the last partial byte
+    ret                         ; column is merged under a mask, one RMW a row
+%else
 ; --- AN x OFF THE BYTE GRID (SPEC.md 5.4.2.8): the band's first byte is the
 ; byte column holding x, and its first x & 7 pixels are not drawn. Under a
 ; region the fragment walk cuts it, every piece arriving here disarmed; with
@@ -5368,7 +5367,6 @@ gfx_blit1_x:
 ; hook, the two cases 5.4.2.7 keeps on the row answer: a piece comes back
 ; disarmed, and desk.inc's caption is neither.)
 .offg:
-    jcxz .refuse
     CLIPQF
     je .head
     jmp .frags
@@ -5411,6 +5409,9 @@ gfx_blit1_x:
     pop ax
     clc
     ret
+.refuse:                        ; HERE and not at the end, so the ladder is
+    stc                         ; short jumps: 38 clocks a blit where the
+    ret                         ; five-byte `jcc`s cost 77
 %endif
 .argok:
 

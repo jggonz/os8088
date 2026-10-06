@@ -225,20 +225,25 @@ def refuse_offgrid(m, S):
     kernel having moved rather than the package. A refusal can still happen
     (kern_small refuses every off-grid x, trigger A), so the package's
     handling of one still wants gating - and the faithful reproduction is the
-    kernel as it was: that one `jnz .offg` retargeted at `.refuse`, the
-    branch the `%else` arm still assembles.
+    kernel as it was: an x off the grid sent to `.refuse`, which is what the
+    `%else` arm still assembles.
+
+    The row and width checks come FIRST since 5.4.2.8's own refusal fix, so
+    the x test is `test al, 7 / jz .argok` with `.offg` the fall-through:
+    the patch is a `jmp short .refuse` over `.offg`'s first two bytes, which
+    an off-grid band reaches only after the arguments have passed.
     """
-    at = S("gfx_blit1_x")
-    code = m.read(at, 4)
-    if code[:3] != b"\xA8\x07\x75":
-        raise RuntimeError("gfx_blit1_x does not open `test al, 7 / jnz`: %s"
-                           % code.hex())
-    want = S("gfx_blit1_x.offg") - (at + 4)
-    if code[3] != want:
-        raise RuntimeError("gfx_blit1_x's jnz is not to .offg (%d, not %d)"
-                           % (code[3], want))
-    rel = S("gfx_blit1_x.refuse") - (at + 4)
-    m.write(at + 3, bytes([rel & 0xFF]))
+    at = S("gfx_blit1_x.offg")
+    code = m.read(at - 4, 4)
+    if code[:3] != b"\xA8\x07\x74":
+        raise RuntimeError("gfx_blit1_x.offg does not follow `test al, 7 / "
+                           "jz`: %s" % code.hex())
+    if at + code[3] - 256 * (code[3] > 127) != S("gfx_blit1_x.argok"):
+        raise RuntimeError("gfx_blit1_x's jz is not to .argok")
+    rel = S("gfx_blit1_x.refuse") - (at + 2)
+    if not -128 <= rel <= 127:
+        raise RuntimeError(".refuse is out of a short jump's reach (%d)" % rel)
+    m.write(at, bytes([0xEB, rel & 0xFF]))
 
 
 def run(m, p, frames, steps, stop):

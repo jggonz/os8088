@@ -3873,7 +3873,8 @@ one call it is one floor, and the composition happens at RAM speed
 ```
 in:   ES:SI = the band: 1bpp, row-major, bit 7 leftmost, 1 = a LIT pixel
       BP    = the band's stride in BYTES per row
-      AX    = destination x, signed. MUST be a multiple of 8
+      AX    = destination x, signed. ANY on `kern_big` (§5.4.2.8); a
+              multiple of 8 on `kern_small`
       BX    = destination y, signed
       CX    = width in PIXELS, any. Off a multiple of 8, the last partial
               byte column is MERGED under a mask (§5.4.2.5): the bits past
@@ -3883,7 +3884,7 @@ in:   ES:SI = the band: 1bpp, row-major, bit 7 leftmost, 1 = a LIT pixel
 
 out:  CF=0  drawn — wholly, or clipped exactly
       CF=1  REFUSED, nothing drawn, in three cases only:
-              1. AX & 7 non-zero
+              1. AX & 7 non-zero, on `kern_small`
               2. CX or DX is zero, or DX above 255
               3. this is `kern_small`, which does not carry the body at all
       EVERY register preserved, ES and BP included.
@@ -4701,6 +4702,15 @@ the walk's planar pieces (§5.4.3.6), whose x is always on the grid, compute
 what they always did. `kern_small` still refuses an x off the grid: none of
 its callers passes one. **+88 bytes of `.cold`** on `kern_big`, against the
 145 of `desk_bout` and its four helpers it deletes.
+
+**The argument checks come FIRST, before the x test**, so a band off the grid
+is refused on exactly the terms of one on it: `CX` zero, or `DX` zero or above
+255, is `CF = 1` with nothing drawn. The first cut tested `AL & 7` at the door
+and `.offg` checked only `CX`, so a too-tall band off the grid reached the
+head, whose two recursive calls each refused and which then answered
+`CF = 0`, or the walk, which drew the pieces 255 rows or shorter, dropped the
+rest and answered `CF = 0` too: a caller splitting on `CF` drew a blank and
+never knew.
 
 ### 5.4.3 `gfx_blitp` — a block that is already framebuffer bytes
 
@@ -47369,6 +47379,14 @@ takes the OLD band off itself, parks `[fm_lsel]` at 0FFFFh across the scroll
 and puts the NEW band on once the view has settled. A chooser hears the new
 selection through `FDH_SEL` (§38.9), and a Save chooser's box, which owns the
 characters, leaves the arrows to this.
+
+A move also SHUTS the double-click window: `FS_CLKT` is set to
+`[ui_click_t]` - `FM_DBLCLK`, because the stamp it held was the last click's,
+on the OLD row, and `fm_onclick` reads "same index as `FS_SEL`, within 9
+ticks" as a double-click. Without it *click row 3, Down, click row 4* inside
+half a second opened row 4 - a package launched, or a chooser answered - on
+one click. Every later click is born at or after that `[ui_click_t]`, so the
+wrap-safe difference is at least `FM_DBLCLK` and the click only re-stamps.
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
