@@ -218,7 +218,6 @@ def guest_leg(machine):
         base = seg * 16
         B = lambda n, k=0: m.read(base + syms[n] + k, 1)[0]      # noqa
         W = lambda n, k=0: u16(m.read(base + syms[n] + k, 2))    # noqa
-        m.write(base + syms["px_thoff"], b"\1")
 
         def idle():
             return B("px_busy") == 0 and B("px_job") == 0
@@ -504,7 +503,6 @@ def full_leg(machine):
         base = instance(m, S, image) * 16
         B = lambda n, k=0: m.read(base + syms[n] + k, 1)[0]      # noqa
         W = lambda n, k=0: u16(m.read(base + syms[n] + k, 2))    # noqa
-        m.write(base + syms["px_thoff"], b"\1")
         idle = lambda: B("px_busy") == 0 and B("px_job") == 0   # noqa
         M.until(m, lambda _: W("px_ndone") and idle(), "the decode",
                 poll=0.3, limit=600)

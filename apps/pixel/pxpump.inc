@@ -231,10 +231,6 @@ px_pumpfill:
 .fill:
     push ax
     xor al, al
-    cmp byte [px_hmode], 1          ; a THUMBNAIL's decode: one slot a wake
-    jne .fn                         ; (2: a whole one), so a callback reads
-    mov al, 2                       ; one slot - nobody is waiting on its
-.fn:                                ; rows (SPEC.md 106.26)
     call px_pumpn
     pop ax
     ret
@@ -1104,7 +1100,6 @@ px_open:
     call px_toast
     jmp .out
 .free:
-    call px_fpdrop                   ; (a kept FOLDER part: its claim back)
     call px_eclear                  ; undo, the selection and the EDIT part
     mov si, px_cur                  ; let go (SPEC.md 106.24); bank what is
     mov di, px_prev                 ; showing (SPEC.md 106.8)
@@ -1360,7 +1355,7 @@ px_finish:
     call px_compose                 ; a sync between the two drew byte planes)
     call px_flags
     call px_progpaint               ; the last rows, onto what is there: the
-    mov al, PX_R_TB | PX_R_PANELS | PX_R_FS | PX_R_STATUS
+    mov al, PX_R_TB | PX_R_PANELS | PX_R_STATUS
     call px_regdraw                 ; canvas is NOT rendered again
     jmp short .out
 .bad:

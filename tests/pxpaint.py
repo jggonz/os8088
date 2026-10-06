@@ -41,9 +41,14 @@ KSEG = 0x60
 # decision, not a drift.
 BUDGET = {
     "open":     {"total": 200, "blitp": 130},
-    "zoom":     {"total": 50, "blitp": 45, "fill": 0, "font_run": 3},
+    # (the canvas's composer bands: 41 calls, 39 of them BLITP, until
+    # SPEC.md 106.21 gave the canvas the filmstrip's rows - 49 and 47 since)
+    "zoom":     {"total": 60, "blitp": 55, "fill": 0, "font_run": 3},
     "pan":      {"total": 10, "scroll": 1, "blitp": 7},
-    "across":   {"total": 90, "save": 22, "rest": 22},
+    # (a SAVE and a REST a band of the canvas's height: 19 of each, 79 in
+    # all, until SPEC.md 106.21 gave the canvas the filmstrip's 77 rows -
+    # 23 of each and 95 since, on a canvas 367 rows tall where it was 290)
+    "across":   {"total": 105, "save": 26, "rest": 26},
     "tool":     {"total": 4},
     "status":   {"total": 1, "font_run": 1},
 }
@@ -78,8 +83,6 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
             limit=90)
     seg = instance(m, S, image)
     base = seg * 16
-    if "px_thoff" in syms:          # no thumbnails here (SPEC.md 106.21):
-        m.write(base + syms["px_thoff"], b"\1")   # not what this row measures
     B = lambda n: m.read(base + syms[n], 1)[0]
     W = lambda n: u16(m.read(base + syms[n], 2))
 

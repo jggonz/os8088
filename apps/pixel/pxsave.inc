@@ -19,8 +19,8 @@
 ; 7), which is why the work is split there and nowhere else.
 ;
 ; UNSAVED EDITS are asked about (OS88UI_ASAVE: Save / Discard / Cancel)
-; wherever the picture would be LEFT - px_navto (Prev, Next, Home, End, a
-; card of the strip), File > Open, the slideshow, and the window's close -
+; wherever the picture would be LEFT - px_navto (Prev, Next, Home, End),
+; File > Open, the slideshow, and the window's close -
 ; through px_gate, which banks what was asked for and does it once the
 ; answer allows. Save saves over the file when PiXEL writes its format and
 ; the master is the whole picture (not a scale of it), else asks where.
@@ -416,8 +416,8 @@ px_lvdo:
 .c:
     cmp al, PXL_CLOSE
     jne .x
-    call px_cfinal                  ; (WM_CLOSE retires the negotiator, so
-    push bx                         ; px_onclose's write is made here -
+    call px_hstop                   ; (WM_CLOSE retires the negotiator, so
+    push bx                         ; px_onclose's stop is made here -
     mov bx, [px_win]                ; review-w8 E4)
     call OSAPI_WM_CLOSE             ; deferred (SPEC.md 75.2)
     pop bx
@@ -442,7 +442,7 @@ px_onclose:
     call px_gate
     pop ax
     jc .x
-    call px_cfinal                  ; CLOSING: the thumbnails' cache
+    call px_hstop                   ; CLOSING: a slide decoding let go
     clc
 .x:
     ret

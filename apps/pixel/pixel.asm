@@ -3,8 +3,8 @@
 ;
 ; PiXEL - an image viewer and editor (SPEC.md 106; the design record is
 ; docs/plans/PIXEL-PLAN.md). This is the RESIDENT package: the window, its
-; layout tiers, the toolbar, the tool column, the panels, the filmstrip and
-; the status bar (apps/pixel/pxui.inc), the menus and About, and the far-call
+; layout tiers, the toolbar, the tool column, the panels and the status bar
+; (apps/pixel/pxui.inc), the menus and About, and the far-call
 ; boundary into PiXEL's lazy code PARTS (SPEC.md 106.5, apps/pixel/pxpart.inc).
 ;
 ; WAVE 1 OF THE PLAN IS WHAT IS HERE, AND NOTHING PRETENDS OTHERWISE. A
@@ -24,7 +24,6 @@
 %include "os88api.inc"
 %include "pxpart.inc"
 %include "pxrec.inc"                ; the record, the formats, the decoders
-%include "pxthc.inc"                ; the folder list, the thumbnails (106.21)
 %include "pxfs.inc"                 ; full screen's modes and verbs (106.23)
 %include "pxed.inc"                 ; editing's verbs and formats (106.24)
 %include "pxsvc.inc"                ; ...and the parts' UI services
@@ -62,17 +61,15 @@ PXPART_PNG  equ 2                   ; the PNG decoder, apps/pixel/pxpng.asm
 PXPART_JPEG equ 3                   ; the JPEG decoder, apps/pixel/pxjpeg.asm
 PXPART_SIMP equ 4                   ; BMP, PCX, TGA, PNM, PIX, LINKED against
                                     ; the package: apps/pixel/pxsimp.asm
-PXPART_FOLD equ 5                   ; the FOLDER: the thumbnail cache and the
-                                    ; making of one, LINKED: pxfold.asm
-PXPART_FULL equ 6                   ; FULL SCREEN: every mode's renderer and
+PXPART_FULL equ 5                   ; FULL SCREEN: every mode's renderer and
                                     ; its colours, LINKED: pxfull.asm
-PXPART_EDIT equ 7                   ; EDITING: the palette and pixel
+PXPART_EDIT equ 6                   ; EDITING: the palette and pixel
                                     ; operations, LINKED: pxedit.asm
-PXPART_WRITE equ 8                  ; SAVE AS's five writers, LINKED:
+PXPART_WRITE equ 7                  ; SAVE AS's five writers, LINKED:
                                     ; pxwrite.asm (SPEC.md 106.24)
-PXPART_EXTRA equ 9                  ; TIFF, ICO, IFF and MacPaint, LINKED:
+PXPART_EXTRA equ 8                  ; TIFF, ICO, IFF and MacPaint, LINKED:
                                     ; pxextra.asm (SPEC.md 106.25)
-PX_NPARTS   equ 10                  ; (a decoder part is never 0: [px_kheld]
+PX_NPARTS   equ 9                   ; (a decoder part is never 0: [px_kheld]
                                     ; 0 is "none held", SPEC.md 106.18)
 PXD_QUIET   equ 0xFE                ; a refusal already said (op_fetch's own
                                     ; toast): px_refusal says nothing more
@@ -94,11 +91,9 @@ PX_NTOOL    equ 6
 PX_B_NZIN   equ 16                  ; the Navigator's +, - and Fit
 PX_B_NZOUT  equ 17
 PX_B_NFIT   equ 18
-PX_B_FSL    equ 19                  ; the filmstrip's two arrows
-PX_B_FSR    equ 20
-PX_B_SPREV  equ 21                  ; the status bar's two
-PX_B_SNEXT  equ 22
-                                    ; (23-28, PX_B_C1M..PX_B_CCAN: a
+PX_B_SPREV  equ 19                  ; the status bar's two
+PX_B_SNEXT  equ 20
+                                    ; (21-26, PX_B_C1M..PX_B_CCAN: a
                                     ; parameter card's, pxed.inc)
 PX_NB       equ PX_NBTN                  ; (no panel has a title strip or a box
                                     ; any more: SPEC.md 106.15)
@@ -124,30 +119,32 @@ PX_HELPSZ   equ 400                 ; the keyboard card's text, copied in
 PX_HELPMAX  equ 12                  ; ...and its lines
 PX_MEMT     equ 91                  ; ticks between looks at free memory (5 s)
 PX_TQ       equ 9                   ; ...and between timer calls while the
-                                    ; thumbnails or the slideshow have work
+                                    ; slideshow runs
 
 PX_R_TB     equ 1                   ; px_regdraw's regions
 PX_R_TOOLS  equ 2
 PX_R_CANVAS equ 4
 PX_R_PANELS equ 8
-PX_R_FS     equ 16
+                                    ; (16 was the filmstrip's)
 PX_R_STATUS equ 32
 PX_R_SDIRTY equ 64                  ; only the status fields that changed
 PX_R_NFRAME equ 128                 ; the Navigator's frame, where the view
                                     ; now is
-PX_R_ALL    equ 63
+PX_R_ALL    equ PX_R_TB | PX_R_TOOLS | PX_R_CANVAS | PX_R_PANELS | PX_R_STATUS
 
 PX_PR_NONE   equ 0                  ; what a press that was no button's hit
 PX_PR_CANVAS equ 1
 PX_PR_PANEL  equ 2                  ; the compact layout's panel, no control
 PX_PR_HAND   equ 3                  ; a Hand drag on the picture
 PX_PR_NAV    equ 4                  ; a press or drag in the Navigator
-PX_PR_CARD   equ 5                  ; a press on a filmstrip card
                                     ; (6, PX_PR_TOOL: a tool's, pxtools.inc)
 PX_NAMES     equ 64                 ; the folder's pictures px_walk keeps: a
                                     ; folder lists no more (DSK_NENT, SPEC.md
                                     ; 106.21)
-                                    ; (a PX_NREC record each: pxthc.inc)
+PX_NREC      equ 18                 ; THE FOLDER LIST: a record a picture -
+NR_FLAGS     equ 13                 ; the 8.3 name and its NUL, flags,
+NR_SIZE      equ 14                 ; and its size
+NRF_PACKED   equ 1                  ; packed on the disk (SPEC.md 20.14)
 
 
 ; =============================================================================
@@ -270,9 +267,6 @@ px_initstate:
     inc bx
     cmp bx, PX_INFON
     jb .iv
-    mov si, px_s_fsnone
-    mov di, px_fsline
-    call px_strcpy
     call px_flags
     pop si
     pop bx
@@ -319,8 +313,7 @@ px_paint:
     mov al, PX_R_ALL
     call px_draw                    ; every region the damage touches
     call px_cards
-    call px_tqarm                   ; (a strip laid out anew may show cards
-.out:                               ; with no thumbnail yet, SPEC.md 106.21)
+.out:
     pop di
     pop si
     pop dx
@@ -373,33 +366,18 @@ px_draw:
     call px_draw_canvas
 .p:
     test byte [px_rmask], PX_R_PANELS
-    jz .f
+    jz .s
     cmp byte [px_pnon], 0
-    je .f
+    je .s
     mov ax, [px_pnx1]
     mov bx, [px_midy1]
     mov cx, [px_xr]
     mov dx, [px_midy2]
     call px_meets
-    jc .f
+    jc .s
     mov al, PX_R_PANELS
     call px_owe                     ; drawn whole: its records too
     call px_draw_panels
-.f:
-    test byte [px_rmask], PX_R_FS
-    jz .s
-    cmp byte [px_fson], 0
-    je .s
-    mov ax, [px_cx0]
-    mov bx, [px_fsy1]
-    mov cx, [px_xr]
-    mov dx, [px_sty1]
-    dec dx
-    call px_meets
-    jc .s
-    mov al, PX_R_FS
-    call px_owe                     ; drawn whole: its records too
-    call px_draw_fs
 .s:
     test byte [px_rmask], PX_R_STATUS
     jz .sd
@@ -487,7 +465,7 @@ px_cards:
 ; alone - taking it down repaints everything anyway. Two ways (SPEC.md
 ; 106.15):
 ;   [px_geo] set - a command that MOVED a region (a panel shown or turned,
-;     the filmstrip hidden, a card taken down, a list closed over the
+;     a card taken down, a list closed over the
 ;     content): each region in the mask is drawn whole, as W_PAINT does;
 ;   otherwise the canvas, when it is in the mask, is rendered - the picture
 ;     is the renderer's, not a record's - and the rest of the window is
@@ -551,7 +529,7 @@ px_regdraw:
     jnz .grow
     cmp byte [px_half], 0
     je .clr
-    test al, PX_R_PANELS | PX_R_FS | PX_R_CANVAS
+    test al, PX_R_PANELS | PX_R_CANVAS
     jz .clr
 .grow:
     mov bx, [px_win]
@@ -749,27 +727,21 @@ px_onclick:
     jmp short .got
 .nav:
     test byte [px_pvis], 1          ; the Navigator's picture
-    jz .strip
+    jz .panel
     cmp word [px_pbhw], 0
-    je .strip
+    je .panel
     cmp cx, [px_nwell]
-    jl .strip
+    jl .panel
     cmp cx, [px_nwell + 4]
-    jg .strip
+    jg .panel
     cmp dx, [px_nwell + 2]
-    jl .strip
+    jl .panel
     cmp dx, [px_nwell + 6]
-    jg .strip
+    jg .panel
     call px_navpan
     call OSAPI_GET_TICKS
     mov [px_htick], ax
     mov al, PX_PR_NAV
-    jmp short .got
-.strip:
-    call px_cardat                  ; a filmstrip card: its picture opens on
-    jc .panel                       ; the release (SPEC.md 106.21)
-    mov [px_pcard], ax
-    mov al, PX_PR_CARD
     jmp short .got
 .panel:
     mov al, PX_PR_PANEL             ; the compact layout's one panel, where
@@ -864,7 +836,6 @@ px_onup:
                                     ; first, as every other input's is
                                     ; (review-w8 A2: a card's OK beside a
                                     ; running GIF wedged PiXEL busy)
-    call px_touch                   ; (the idle the thumbnails wait for)
     call px_layout
     jnc .lay
     jmp .out
@@ -904,7 +875,7 @@ px_onup:
     jmp short .out
 .cv:
     cmp al, PX_PR_CANVAS
-    jne .st
+    jne .pn
     cmp cx, [px_cvx1]               ; released where it was pressed: the
     jl .out                         ; empty canvas is a big Open button
     cmp cx, [px_cvx2]
@@ -914,17 +885,6 @@ px_onup:
     cmp dx, [px_midy2]
     jg .out
     call px_cmd_open
-    jmp short .out
-.st:
-    cmp al, PX_PR_CARD
-    jne .pn
-    call px_cardat                  ; released on the card it was pressed on
-    jc .out
-    cmp ax, [px_pcard]
-    jne .out
-    cmp ax, [px_ncur]               ; (the open one is open)
-    je .out
-    call px_navto
     jmp short .out
 .pn:
     cmp al, PX_PR_PANEL
@@ -950,7 +910,7 @@ px_bfire:
     test word [px_bflags + si], OS88UI_DIS
     jz .live
     mov bx, [px_bkind + si]
-    test bx, PX_BK_PAGE             ; a pager at its end: nothing to say
+    test bx, PX_BK_QUIET            ; grey, and its card says why
     jnz .out1
     mov si, px_s_later              ; why it is grey
     test bx, PX_BK_LATER
@@ -982,7 +942,7 @@ px_bfire:
     call px_edo
     jmp .out
 .nv:
-    call px_navbtn                  ; Prev, Next, the pagers, the slideshow
+    call px_navbtn                  ; Prev, Next, the slideshow
     jnc .out1                       ; (pxfolder.inc)
     cmp ax, PX_B_OPEN
     jne .z
@@ -1229,7 +1189,6 @@ px_cmd:
     push dx
     mov [px_win], si
     call px_hstop                   ; a hidden decode gives the record back
-    call px_touch
     cmp ax, (PX_M_FILE << 8) | PX_MF_SLIDE
     je .slide                       ; (the two commands a slideshow survives:
     cmp ax, (PX_M_VIEW << 8) | PX_MV_FULL   ; the one that stops it, and full
@@ -1329,13 +1288,8 @@ px_cmd:
     jmp short .out
 .v1:
     cmp al, PX_MV_PANELS
-    jne .v2
-    call px_paneltog
-    jmp short .out
-.v2:
-    cmp al, PX_MV_FILM
     jne .v3
-    call px_filmtog
+    call px_paneltog
     jmp short .out
 .v3:
     cmp al, PX_MV_HELP
@@ -1378,10 +1332,10 @@ px_onresize:
     mov al, PX_R_ALL
     call px_owe
     pop ax
-    jmp px_tqarm                    ; (another width holds other cards)
+    ret
 
-; --- W_ONTIMER: free memory every PX_MEMT ticks; and while they have work,
-; every PX_TQ, the slideshow's step and the thumbnails' (SPEC.md 106.21) ------
+; --- W_ONTIMER: free memory every PX_MEMT ticks; and while a slideshow runs,
+; every PX_TQ, its step (SPEC.md 106.21) ----------------------------------------
 px_ontimer:
     push ax
     push bx
@@ -1395,37 +1349,14 @@ px_ontimer:
     call px_memfield
 .nm:
     call OSAPI_WM_TOP               ; ANOTHER WINDOW IN FRONT (review-w5 F13):
-    sub bx, [px_win]                ; 0 when it is ours - the engine, the
-    mov [px_behind], bx             ; animation and this timer go by it
-    jnz .nmv
-    push cx                         ; ...and in front, the POINTER MOVING is
-    push dx                         ; the user too (review-w8 E2): a step
-    call OSAPI_MOUSE                ; waits PX_THIDLE past it, as past a
-    cmp cx, [px_mxy]                ; press or a key
-    jne .mv
-    cmp dx, [px_mxy + 2]
-    je .mvn
-.mv:
-    mov [px_mxy], cx
-    mov [px_mxy + 2], dx
-    call px_touch
-.mvn:
-    pop dx
-    pop cx
-.nmv:
-    cmp byte [px_hmode], 1          ; a THUMBNAIL's hidden decode with another
-    jne .h1                         ; window in front: stopped - its worker
-    or bx, bx                       ; takes the CPU from the program the user
-    jz .h1                          ; is in
-    call px_hstop
-.h1:
-    mov al, [px_hmode]              ; a hidden decode RUNNING holds the record:
-    dec al                          ; nothing is laid out or drawn until it is
-    cmp al, 2                       ; done (modes 1 and 2; a finished slide, 3,
-    jb .rearm                       ; waits for px_sltick)
+    sub bx, [px_win]                ; 0 when it is ours - the animation and
+    mov [px_behind], bx             ; this timer go by it
+    cmp byte [px_hmode], 2          ; a hidden decode RUNNING holds the record:
+    je .rearm                       ; nothing is laid out or drawn until it is
+                                    ; done (a finished slide, 3, waits for
+                                    ; px_sltick)
     call px_eyetick                 ; the Eyedropper's readout (106.24)
-    call px_thstep                  ; (first: a slide's own thumbnail before
-    call px_sltick                  ; the next slide's decode begins)
+    call px_sltick
     call px_antick                  ; a GIF that plays (106.25)
     cmp byte [px_hmode], 0          ; (one may have started just now)
     jne .rearm
@@ -1437,8 +1368,8 @@ px_ontimer:
     mov bx, [px_win]
     mov ax, 1                       ; a GIF that plays: its frames' delays
     cmp byte [px_anon], 0           ; are ticks (106.25) - in front; behind
-    je .na                          ; another window it waits at the
-    cmp [px_behind], ax             ; thumbnails' pace, and draws nothing
+    je .na                          ; another window it waits at PX_TQ's
+    cmp [px_behind], ax             ; pace, and draws nothing
     jb .arm
     jmp short .fast
 .na:
@@ -1446,8 +1377,6 @@ px_ontimer:
     cmp byte [px_tool], PX_TOOL_EYE
     je .arm
     mov ax, PX_MEMT
-    cmp byte [px_tq], 0
-    jne .fast
     cmp byte [px_slon], 0
     je .arm
 .fast:
@@ -1502,15 +1431,11 @@ px_onwake:
     je .vis                         ; pump, and its end - nothing is painted
     cmp byte [px_hmode], 3          ; (a slide decoded waits for its deadline)
     je .out
-    call px_pumpfill                ; (px_busy 0: every empty slot - one, a
-                                    ; thumbnail's, SPEC.md 106.26)
+    call px_pumpfill                ; (px_busy 0: every empty slot)
     call OSAPI_GFX_LOCK
     cmp byte [px_job], JOB_NONE
     jne .unl
-    call px_hdone                   ; CF = 0: a card has something new
-    jc .unl
-    call px_update
-    call px_tqarm
+    call px_hdone
     jmp short .unl
 .vis:
     cmp byte [px_busy], 0
@@ -1540,7 +1465,7 @@ px_onwake:
     call px_slpre                   ; a slide's commit: the window composed
     call px_finish                  ; the worker has answered
     pop ax
-    call px_finished                ; the open picture's thumbnail (106.21)
+    call px_finished                ; a slideshow's next deadline (106.21)
     jmp short .unl
 .prog:
     cmp byte [px_busy], PXB_EDIT    ; an operation or a save: its progress
@@ -1762,7 +1687,7 @@ px_shown:
     mov bx, [px_win]                ; "PiXEL - NAME.EXT" in the title bar: a
     mov ax, px_title                ; strip, not a repaint (SPEC.md 11.92)
     call OSAPI_WM_TITLE
-    mov al, PX_R_TB | PX_R_CANVAS | PX_R_PANELS | PX_R_FS | PX_R_STATUS
+    mov al, PX_R_TB | PX_R_CANVAS | PX_R_PANELS | PX_R_STATUS
     call px_regdraw                 ; (the tool column is the same column)
     pop bx
     pop ax
@@ -1822,43 +1747,6 @@ px_paneltog:
     call px_menuset
     mov al, PX_R_CANVAS | PX_R_PANELS
     call px_regpaint                ; the canvas takes the column, or gives it
-    pop ax
-    ret
-
-; px_filmtog - View > Hide Filmstrip / Show Filmstrip. The choice outlives a
-; change of tier: it is the user's, where the tier's default is only a default
-px_filmtog:
-    push ax
-    call px_layout
-    mov al, 2                       ; shown now: off from now on
-    cmp byte [px_fson], 0
-    jne .set
-    mov al, 1                       ; ...else on
-.set:
-    mov [px_fsuser], al
-    call px_flags
-    mov al, PX_R_TOOLS | PX_R_CANVAS | PX_R_PANELS | PX_R_FS
-    call px_regpaint                ; ...which lays out, and relabels
-    call px_tqarm                   ; (cards on show: the thumbnails told)
-    pop ax
-    ret
-
-; px_filmlabel - the View menu's Filmstrip item says what choosing it would
-; do to the filmstrip AS LAID OUT - which the tier decides as often as the
-; user does, so every layout asks. The set is re-registered only when the
-; word changes: OSAPI_MENU_SET draws nothing, but it is not free either
-px_filmlabel:
-    push ax
-    mov ax, px_mi_hidef
-    cmp byte [px_fson], 0
-    jne .l
-    mov ax, px_mi_showf
-.l:
-    cmp ax, [px_miv + 2 * PX_MV_FILM]
-    je .out
-    mov [px_miv + 2 * PX_MV_FILM], ax
-    call px_menuset
-.out:
     pop ax
     ret
 
@@ -2241,9 +2129,9 @@ px_examine:
 ; px_walk - OSAPI_FILE_FIND over the folder: [px_fcount] pictures PiXEL
 ; reads, [px_fidx] this one's place among them sorted by name (1-based),
 ; [px_fsize] and [px_fcomp]; and the first PX_NAMES of them,
-; sorted, as PX_NREC-byte records in [px_names] - the name, the packed bit,
-; the first cluster and the size - with this one at [px_ncur] (the
-; filmstrip's cards, Prev and Next, the thumbnails' keys: SPEC.md 106.21).
+; sorted, as PX_NREC-byte records in [px_names] - the name, the packed bit
+; and the size - with this one at [px_ncur] (Prev, Next and the slideshow:
+; SPEC.md 106.21).
 ; The folder walked is banked. CF = 1 when [px_fname] is not one of the files
 ; listed. ES = DS
 px_walk:
@@ -2251,8 +2139,6 @@ px_walk:
     mov word [px_fidx], 1
     mov word [px_nnames], 0
     mov word [px_ncur], 0xFFFF
-    mov word [px_fsoff], 0          ; (a new picture centres the strip)
-    mov byte [px_tnone], 0          ; (and may have room for a store)
     mov byte [px_ffound], 0
     mov byte [px_fcomp], 0
     call OSAPI_FILE_HERE            ; the folder the list is OF
@@ -2299,8 +2185,6 @@ px_walk:
     mov al, [px_find + 22]          ; NR_FLAGS: packed, or not
     and al, NRF_PACKED
     stosb
-    mov ax, [px_find + 16]          ; NR_CLUS
-    stosw
     mov ax, [px_find + 18]          ; NR_SIZE
     stosw
     mov ax, [px_find + 20]
@@ -2317,40 +2201,12 @@ px_walk:
     jmp .next
 .end:
     call px_sortnames
-    call px_namesum                 ; what the filmstrip's cards are made of
     cmp byte [px_ffound], 0
     jne .yes
     stc
     ret
 .yes:
     clc
-    ret
-
-; px_namesum - [px_nsum] = a sum over the folder's sorted names: the
-; filmstrip's cards are drawn again when it moves (SPEC.md 106.15), and only
-; then - a Revert walks the same folder to the same sum. Preserves all
-px_namesum:
-    push ax
-    push cx
-    push si
-    mov ax, [px_nnames]
-    mov cx, PX_NREC
-    mul cx
-    mov cx, ax
-    mov ax, [px_nnames]
-    mov si, px_names
-    jcxz .out
-.s:
-    rol ax, 1
-    add al, [si]
-    adc ah, 0
-    inc si
-    loop .s
-.out:
-    mov [px_nsum], ax
-    pop si
-    pop cx
-    pop ax
     ret
 
 ; px_sortnames - [px_names] in name order (insertion: there are at most
@@ -2430,8 +2286,7 @@ px_sortnames:
 ; px_ncfind - [px_ncur] := the shown picture's place in the folder list, or
 ; FFFFh when it is not in it - another folder's list, or a misnamed file.
 ; Called by the walk, and by px_restore: a REFUSED open's walk left the list
-; pointing at the refused file, and the thumbnail engine then made ITS card
-; from the shown picture's master (review-w5 F2). Preserves all
+; pointing at the refused file (review-w5 F2). Preserves all
 px_ncfind:
     push ax
     push bx
@@ -2766,7 +2621,7 @@ px_sniffbuf:
 
 ; px_compose - everything the window shows about the file, from what
 ; px_examine found: Image Info's values, the status fields, the canvas's
-; second line, the filmstrip's title and line, and the window title
+; second line and the window title
 px_compose:
     push ax
     push bx
@@ -2955,13 +2810,6 @@ px_compose:
     mov si, px_ival + 4 * PX_IVSZ
     call px_strcat
 .ncv:
-    ; the filmstrip: "13 pictures in this folder"
-    mov di, px_fsline
-    mov ax, [px_fcount]
-    xor dx, dx
-    call px_u32
-    mov si, px_s_fsn
-    call px_strcat
     ; the title: "PiXEL - VACATION.JPG"
     mov si, px_s_ttl
     mov di, px_title
@@ -3074,7 +2922,6 @@ px_flags:
     je .sl
     or word [px_bflags + 2 * PX_B_SHOW], OS88UI_LATCH
 .sl:
-    call px_pgflags                 ; the filmstrip's pagers, at their ends
     cmp byte [px_col], 0            ; the colour face paints every button
     je .ml                          ; itself (SPEC.md 13.8.10, 106.16)
     xor bx, bx
@@ -3491,7 +3338,7 @@ px_svtab:   dw px_tband, px_btn, px_getrect, px_setrect, px_strcpy
 %include "pxpump.inc"               ; the worker and its file pump (106.9)
 %include "pxsimple.inc"             ; BMP, PCX, TGA, PNM, PIX (106.10)
 %include "pxview.inc"               ; the renderer, Navigator, Histogram (106.11)
-%include "pxfolder.inc"             ; the folder, thumbnails, slideshow (106.21)
+%include "pxfolder.inc"             ; the folder and the slideshow (106.21)
 %include "pxfull.inc"               ; full screen, the resident half (106.23)
 %include "pxedit.inc"               ; editing: operations and undo (106.24)
 %include "pxtools.inc"              ; ...the tools and the selection
@@ -3566,13 +3413,9 @@ px_ttl:     db 'PiXEL', 0
 ; --- the palettes, by depth (px_display): chrome, body, strip, strip text,
 ; canvas, canvas text, rule, chrome text ---------------------------------------
 px_pal4:    db CLGRAY, CWHITE, CBLUE, CWHITE, CDGRAY, CWHITE, CDGRAY, CBLACK
-            db CWHITE                   ; a filmstrip card's inside
 px_pal1:    db CWHITE, CWHITE, CBLACK, CWHITE, CWHITE, CBLACK, CBLACK, CBLACK
-            db CWHITE
 
 ; --- per display kind: VGA, Hercules (and EGA), CGA ----------------------------
-px_k_thumb: dw 60, 40, 25           ; a filmstrip card's box's rows: 4:3 for
-                                    ; its 80 at the pixel's own aspect
 px_k_nav:   dw 100, 64, 48          ; the Navigator's body: the rows its
                                     ; title strip had, given to the picture
                                     ; (SPEC.md 106.15)
@@ -3640,7 +3483,6 @@ px_lab_full:
     dw pxi_hand, pxi_magnify, pxi_marquee, pxi_crop, pxi_eyedrop, pxi_rotate
     dw px_s_plus, px_s_minus, px_s_fit
     dw px_s_lt, px_s_gt
-    dw px_s_lt, px_s_gt
     dw px_s_minus, px_s_plus, px_s_minus, px_s_plus
     dw px_s_pcok, px_s_pccan
 %if ($ - px_lab_full) != PX_NB * 2
@@ -3701,8 +3543,8 @@ PX_BK_PIC   equ 0x8000              ; grey without a picture
 PX_BK_LATER equ 0x4000              ; grey in this build: a later wave's
 PX_BK_FOLD  equ 0x2000              ; grey without another picture in the
                                     ; folder (SPEC.md 106.21)
-PX_BK_PAGE  equ 0x1000              ; a filmstrip pager: grey at its end, and
-                                    ; a press on it then says nothing
+PX_BK_QUIET equ 0x1000              ; grey, and a press on it says nothing:
+                                    ; what it is on says why
 px_bkind:
     dw OS88UI_IMG                               ; Open (Stop while opening)
     dw OS88UI_IMG | PX_BK_PIC                   ; Save (As)
@@ -3716,10 +3558,9 @@ px_bkind:
     dw OS88UI_IMG | PX_BK_FOLD                  ; Slideshow
     times PX_NTOOL dw OS88UI_IMG                ; the tools
     dw PX_BK_PIC, PX_BK_PIC, PX_BK_PIC          ; Navigator's +, -, Fit
-    dw PX_BK_PAGE, PX_BK_PAGE                   ; the filmstrip's arrows
     dw PX_BK_FOLD, PX_BK_FOLD                   ; the status bar's
     dw 0, 0, 0, 0                               ; a card's - and +
-    dw PX_BK_PAGE, 0                            ; ...its OK (grey: the card
+    dw PX_BK_QUIET, 0                           ; ...its OK (grey: the card
                                                 ; says why) and Cancel
 %if ($ - px_bkind) != PX_NB * 2
   %error "px_bkind has a kind per button"
@@ -3839,15 +3680,14 @@ PX_MV_FULL  equ 5
 PX_MV_SCREEN equ 6
 PX_MV_DITHER equ 7
 PX_MV_PANELS equ 8
-PX_MV_FILM  equ 9
-PX_MV_HELP  equ 10
+PX_MV_HELP  equ 9
 
     OS88_MENUSET px_menus, px_ttl, px_cmd
         OS88_MENU px_m_file, px_mif, 10
         OS88_MENU px_m_edit, px_mie, 7
         OS88_MENU px_m_image, px_mii, 11
         OS88_MENU px_m_fx, px_mix, 10
-        OS88_MENU px_m_view, px_miv, 11
+        OS88_MENU px_m_view, px_miv, 10
     OS88_MENUSET_END px_menus
 
 px_m_file:  db 'File', 0
@@ -3904,8 +3744,7 @@ px_mi_thr:    db MENU_DIS, 'Threshold...', 0
 px_mi_gam:    db MENU_DIS, 'Gamma...', 0
 
 px_miv: dw px_mi_zin, px_mi_zout, px_mi_fit, px_mi_actual, px_sep
-        dw px_mi_full, px_mi_fsm0, px_mi_ddif, px_mi_hidep, px_mi_hidef
-        dw px_mi_help
+        dw px_mi_full, px_mi_fsm0, px_mi_ddif, px_mi_hidep, px_mi_help
 px_mi_zin:    db MENU_DIS, 'Zoom In', 0
 px_mi_zout:   db MENU_DIS, 'Zoom Out', 0
 px_mi_fit:    db MENU_DIS, 'Fit', 0
@@ -3930,8 +3769,6 @@ px_mi_dord:   db 'Dither: Ordered', 0
 px_mi_ddif:   db 'Dither: Diffusion', 0
 px_mi_hidep:  db 'Hide Panels', 0
 px_mi_showp:  db 'Show Panels', 0
-px_mi_hidef:  db 'Hide Filmstrip', 0
-px_mi_showf:  db 'Show Filmstrip', 0
 px_mi_help:   db 'Keyboard Help  F1', 0
 
 ; the menu items that follow the picture (px_menulive): each one's slot in
@@ -3969,8 +3806,6 @@ px_s_minus: db '-', 0
 px_s_lt:    db '<', 0
 px_s_gt:    db '>', 0
 px_s_fit:   db 'Fit', 0
-px_s_fsnone: db 'Open a picture to see its folder', 0
-px_s_fsn:   db ' pictures in this folder', 0
 px_s_bytes: db ' bytes', 0
 px_s_x:     db ' x ', 0
 px_s_xs:    db 'x', 0
@@ -3992,8 +3827,6 @@ px_s_later: db 'Not in this build yet', 0
 px_s_nopico: db 'No picture open', 0
 px_s_noother: db 'No other picture here', 0
 px_s_nofs:  db 'No full screen here', 0
-px_s_nothc: db 'Thumbnails not saved', 0
-px_s_thcl:  db 'Thumbnails wait: all claims in use', 0
 px_s_opening: db 'Opening ', 0
 px_s_pct:   db '%', 0
 px_s_fitsp: db 'Fit ', 0
@@ -4065,11 +3898,10 @@ px_s_r11:   db 'too big to unpack', 0
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 2 PNG (106.18)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 3 JPEG (106.19)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 4 the simple five (106.20)
-      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 5 the folder (106.21)
-      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 6 full screen (106.23)
-      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 7 editing (106.24)
-      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 8 Save As's writers (106.24)
-      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 9 TIFF, ICO, IFF, MAC (106.25)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 5 full screen (106.23)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 6 editing (106.24)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 7 Save As's writers (106.24)
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 8 TIFF, ICO, IFF, MAC (106.25)
     OS88_PARTS_END
 
 ; =============================================================================
@@ -4096,9 +3928,9 @@ px_kind     equ PXB + 49            ; byte: VGA / Hercules (and EGA) / CGA
 px_half     equ PXB + 50            ; byte: half-height pictures (a CGA)
 px_tier     equ PXB + 51            ; byte: 0 full, 1 compact
 px_caps     equ PXB + 52            ; byte: the toolbar has captions
-px_fson     equ PXB + 53            ; byte: the filmstrip is laid out
+                                    ; (PXB + 53 free)
 px_col      equ PXB + 54            ; byte: the COLOUR face (SPEC.md 106.16)
-px_fsuser   equ PXB + 55            ; byte: 0 the tier's, 1 on, 2 off
+                                    ; (PXB + 55 free)
 px_pnon     equ PXB + 56            ; byte: the panel column is laid out
 px_pnoff    equ PXB + 57            ; byte: View > Hide Panels
 px_pvis     equ PXB + 58            ; byte: the panels laid out, a bit each
@@ -4109,13 +3941,13 @@ px_btnh     equ PXB + 62            ; word
 px_sth      equ PXB + 64
 px_hsth     equ PXB + 66            ; the Histogram's body
 px_lp       equ PXB + 68
-px_thh      equ PXB + 70
+                                    ; (PXB + 70 free)
 px_navh     equ PXB + 72
 px_pw       equ PXB + 74
 px_tbh      equ PXB + 76
 px_tby2     equ PXB + 78
 px_sty1     equ PXB + 80
-px_fsy1     equ PXB + 82
+                                    ; (PXB + 82 free)
 px_midy1    equ PXB + 84
 px_midy2    equ PXB + 86
 px_tcx2     equ PXB + 88
@@ -4129,7 +3961,7 @@ px_pbody    equ PXB + 110           ; 3 words: ...its body's full height
 px_pcurw    equ PXB + 116           ; word: px_pcur, as a word
 px_pc       equ PXB + 118           ; byte: px_fillc's colour
 px_rmask    equ PXB + 119           ; byte
-px_c_chrome equ PXB + 120           ; 9 bytes: the palette, px_pal4's order
+px_c_chrome equ PXB + 120           ; 8 bytes: the palette, px_pal4's order
 px_c_body   equ PXB + 121
 px_c_strip  equ PXB + 122
 px_c_stript equ PXB + 123
@@ -4164,7 +3996,7 @@ px_ry2      equ PXB + 174
 px_scells   equ PXB + 176
 px_skeep    equ PXB + 178           ; byte
 px_sdirty   equ PXB + 179           ; byte
-px_c_card   equ PXB + 180           ; byte: a filmstrip card's inside
+                                    ; (PXB + 180 free)
 px_rkind    equ PXB + 181           ; byte: OSAPI_WM_DISPLAY's own kind
 px_hchan    equ PXB + 182           ; byte: the Histogram's channel
 px_zfit     equ PXB + 183           ; byte: the zoom is Fit
@@ -4198,8 +4030,7 @@ px_cline    equ px_line + PX_LINEMAX + 2
 px_cvline   equ px_cline + PX_LINEMAX + 2       ; 48
 px_cvdims   equ px_cvline + 48                  ; 16
 px_cvcols   equ px_cvdims + 16                  ; 16
-px_fsline   equ px_cvcols + 16                  ; 48
-px_title    equ px_fsline + 48                  ; 24
+px_title    equ px_cvcols + 16                  ; 24
 px_helptab  equ px_title + 24                   ; (PX_HELPMAX + 1) words
 px_helpbuf  equ px_helptab + (PX_HELPMAX + 1) * 2
 px_hicons   equ px_helpbuf + PX_HELPSZ          ; PXI_N * PXH_SZ
@@ -4444,23 +4275,6 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_gmax, 4
     PXVAR px_nnames, 2              ; the folder's pictures, sorted
     PXVAR px_ncur, 2                ; ...and the open one among them
-    PXVAR px_fcx1, 2                ; the filmstrip's cards
-    PXVAR px_fcx2, 2
-    PXVAR px_fcl, 2
-    PXVAR px_fcn, 2
-    PXVAR px_fcs, 2
-    PXVAR px_fct, 2
-    PXVAR px_fcny, 2
-    PXVAR px_fcx, 2
-    PXVAR px_fcb, 2
-    PXVAR px_fccur, 1
-    PXVAR px_fcname, 2
-    PXVAR px_fcix, 2
-    PXVAR px_fciy2, 2
-    PXVAR px_fcpair, 2
-    PXVAR px_fcfmt, 2
-    PXVAR px_fckey, 2               ; the card being drawn's key
-    PXVAR px_fcmid, 2
     PXVAR px_mcap, 2                ; a test's cap on the largest run, KB
     PXVAR px_lastref, 1             ; the last refusal's number, for a test
     PXVAR px_ndone, 2               ; opens ended, for a test
@@ -4479,12 +4293,6 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_kn, 8                  ; the thumbnail as drawn
     PXVAR px_kg, 8                  ; the graph as drawn
     PXVAR px_kd, 2                  ; the drop-down as drawn
-    PXVAR px_kcard, 2 * PX_MAXCARD  ; each card as drawn
-    PXVAR px_kfser, 2               ; ...out of the names that summed to this
-    PXVAR px_nsum, 2                ; the folder's names' sum
-    PXVAR px_fsmany, 1
-    PXVAR px_fry1, 2                ; the filmstrip's body
-    PXVAR px_fry2, 2
     PXVAR px_bkey, 4 * PX_NB        ; each button's flags and picture as drawn
     PXVAR px_slot, 2                ; px_tband's slot, or 0
     PXVAR px_slots, PX_NSLOT * PX_SLOTSZ
@@ -4523,48 +4331,15 @@ px_fidx     equ px_cur + PXR_FIDX
     ; the folder (pxfolder.inc, SPEC.md 106.21)
     PXVAR px_nfdir, 2               ; the folder the list is of...
     PXVAR px_nfvol, 1               ; ...and its drive
-    PXVAR px_fsoff, 2               ; the strip turned from its centring
-    PXVAR px_pcard, 2               ; a card pressed: its name
-    PXVAR px_hmode, 1               ; a HIDDEN decode: 1 a thumbnail, 2 a
-                                    ; slide, 3 a slide decoded and waiting
+    PXVAR px_hmode, 1               ; a HIDDEN decode: 2 a slide decoding, 3
+                                    ; a slide decoded and waiting
     PXVAR px_hidx, 2                ; ...of this name
     PXVAR px_hhave, 1               ; ...the shown picture's HAVE, masked
     PXVAR px_htab, 1                ; ...its tables' state, banked
     PXVAR px_htdep, 1
     PXVAR px_hzreq, 1
     PXVAR px_hmcap, 2
-    PXVAR px_thoff, 1               ; a test's byte: no thumbnails at all
-    PXVAR px_tq, 1                  ; the thumbnails have work: a fast timer
-    PXVAR px_lastact, 2             ; the tick of the last key or press
-    PXVAR px_memt, 2                ; ...and of the last look at free memory
-    PXVAR px_tseg, 2                ; the STORE, or 0
-    PXVAR px_tnone, 1               ; ...refused for this folder
-    PXVAR px_tplok, 1               ; ...its cube plans are made
-    PXVAR px_tt1ok, 1               ; ...its 1bpp thresholds are made
-    PXVAR px_tslot, 2               ; a slot being made or drawn
-    PXVAR px_tkey, 32               ; a key being made
-    PXVAR px_ttw, 1                 ; px_tfit's answer
-    PXVAR px_tth, 1
-    PXVAR px_tsi, 2                 ; a DDA's whole step
-    PXVAR px_trgb, 3                ; a cube entry's colour
-    PXVAR px_tdh, 2                 ; a thumbnail's rows on the glass...
-    PXVAR px_tty, 2                 ; ...its first
-    PXVAR px_tlp, 2                 ; ...and its left margin in the band
-    PXVAR px_tdep, 1                ; the band's form: 1bpp, 4 planes, 2 packed
-    PXVAR px_tgv, 1                 ; ...the ground's value in it
-    PXVAR px_tbandx, 2              ; ...and its left on the glass
-    PXVAR px_centry, 2              ; the cache: the entry being read or
-                                    ; written
-    PXVAR px_cnew, 1                ; ...it has something to be written
-    PXVAR px_cvsum, 2               ; ...read for this folder's names...
-    PXVAR px_cvfcs, 2               ; ...and this window of the strip
-    PXVAR px_cvfcn, 2
-    PXVAR px_tname, 2               ; the name a thumbnail is made of
-    PXVAR px_cstat, 1               ; the cache: 0 not read, 1 read, 2 none
-    PXVAR px_cnowr, 1               ; ...a write was refused this session
-    PXVAR px_cwip, 1                ; ...a write is under way, a step a call
-    PXVAR px_fkept, 1               ; ...the FOLDER part kept between its steps
-    PXVAR px_mxy, 4                 ; the pointer at the last timer call
+    PXVAR px_memt, 2                ; the tick of the last look at free memory
     ; A GIF THAT PLAYS (SPEC.md 106.25): the window's half here, the GIF
     ; part's DECODE reads and writes the rest by name (it is LINKED)
     PXVAR px_anoff, 1               ; a test's byte: no animation at all
@@ -4593,20 +4368,10 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_sbase, 4               ; THE STREAM'S BASE: a PNG inside an ICO
                                     ; (106.25), a GIF's next frame...
     PXVAR px_rdrop, 2               ; ...and its cluster's bytes before it
-    PXVAR px_cdir, 2                ; ...read for this folder
-    PXVAR px_cvol, 1
-    PXVAR px_chit, 8                ; ...its entries read since its last write
-    PXVAR px_cwas, 2                ; the folder a visit to SYSTEM/APPDATA
-    PXVAR px_cwvol, 1               ; comes back to
     PXVAR px_slon, 1                ; THE SLIDESHOW runs
     PXVAR px_sldue, 2               ; ...the next slide's tick
     PXVAR px_slmem, 1               ; ...it opens in sight (no room to hide it)
     PXVAR px_slpost, 1              ; ...a commit's tables are being built
-    PXVAR px_thdec, 2               ; hidden thumbnail decodes begun (a test's)
-    PXVAR px_thmade, 2              ; thumbnails made (a test's)
-    PXVAR px_thread, 2              ; thumbnails read from the cache (a test's)
-    PXVAR px_thwrote, 2             ; the cache's writes (a test's)
-    PXVAR px_thref, 1               ; a thumbnail's last refusal (a test's)
     ; full screen (pxfull.inc, SPEC.md 106.23)
     PXVAR px_fsm, 1                 ; the mode chosen (View > Screen), or none
     PXVAR px_fsmode, 1              ; the mode this bracket is in

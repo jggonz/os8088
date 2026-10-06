@@ -2,7 +2,7 @@
 ; os8088 - apps/pixel/pxfs.inc
 ;
 ; FULL SCREEN's numbers (SPEC.md 106.23), shared by the resident package and
-; the FULL-SCREEN part (apps/pixel/pxfull.asm, part 6, LINKED), so both sides
+; the FULL-SCREEN part (apps/pixel/pxfull.asm, part 5, LINKED), so both sides
 ; mean the same mode, the same verb and the same answer. Pure equates.
 ; =============================================================================
 

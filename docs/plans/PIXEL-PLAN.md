@@ -7,6 +7,12 @@ ended**, each pointing at the §106.x that settled it. Where this plan and
 §106 differ, §106 is what shipped. Authority order when two documents
 disagree: SPEC.md §106 > this plan > the research notes it was built from.
 
+**Since 2026-10-06 there is no filmstrip.** The owner withdrew it after the
+build - *"the bottom file strip on the UI is no longer needed"* - and with it
+the thumbnails, their store, the FOLDER part and `PIXEL.THC` (SPEC.md
+§106.21). Everything below about the strip, its thumbnails and its cache is
+the record of what was planned and built, not of what ships.
+
 The owner's brief, in one paragraph: an image viewer and editor named
 **PiXEL**, laid out like the PixelStudio mock-up (toolbar, tool column, big
 canvas, Navigator / Histogram / Image Info panels, a filmstrip of the folder's
@@ -49,13 +55,13 @@ to care about are marked **(owner)**.
 
 | # | final state | where |
 |---|---|---|
-| 1 | **Kept.** Native assembly: ten far-called parts beside the resident package, every one 8086 | §106.5, §106.20 |
+| 1 | **Kept.** Native assembly: nine far-called parts beside the resident package, every one 8086 (ten until the FOLDER part went with the filmstrip, 2026-10-06) | §106.5, §106.20, §106.21 |
 | 2 | **Kept.** §106, twenty-six sections, one a wave or more, each written before its code | §106 |
 | 3 | **Kept.** File / Edit / Image / Effects / View; About in the app-name cell; View > Keyboard Help and F1 the key card (ten lines since wave 9, so it fits the CGA's window, and A listed) | §106.2, §106.26 |
 | 4 | **Kept.** No scroll bars: the Hand, the Navigator's frame (which only drew since wave 9 - §106.26), the arrows | §106.11, §106.26 |
 | 5 | **Kept**, the cube's quantiser changed: an ORDERED blue-noise dither (139 cycles a pixel) where Floyd-Steinberg was 1,361 | §106.8, §106.17 |
 | 6 | **Kept** for the window (8x8 Bayer); full screen diffuses only where it has 16, 4 or 2 colours - 256 shows the cube as it is | §106.11, §106.23 |
-| 7 | **Kept**, and grown: the same worker runs HIDDEN decodes for the filmstrip and the slideshow, a GIF's frames, the pixel operations and the writers | §106.9, §106.21, §106.24, §106.25 |
+| 7 | **Kept**, and grown: the same worker runs HIDDEN decodes for the slideshow (and for the filmstrip's thumbnails until it was withdrawn, 2026-10-06), a GIF's frames, the pixel operations and the writers | §106.9, §106.21, §106.24, §106.25 |
 | 8 | **Kept.** Shipped plain in wave 1, compressed again since the shadow word (§20.12.7.4.1) | §106.5 |
 | 9 | **Kept.** JPG, PNG, PCX, TIF, PIX; BMP and GIF stay Paint's | §106.6, §106.25 |
 | 10 | **Kept.** Streaming decoders of PiXEL's own; `os88img.inc` untouched | §106.8 |
@@ -134,13 +140,16 @@ approximated silently.
   to the bodies - and §106.16 added the colour face (bevelled buttons out of
   `PIXEL.GFX`, framed panes) on a 4bpp display with room for it.*
 - **Filmstrip:** "Images (N)" with < > paging and the current picture framed.
+  *Withdrawn by the owner on 2026-10-06 (SPEC.md §106.21): the middle band
+  runs down to the status bar, whose `n of N` says where the picture is.*
 - **Status bar:** one `OSAPI_FONT_RUN` per field, each repainted only when its
   value changes. State goes here; verdicts go to toasts (§59.5).
 - **Layout tiers from the live window size** (`W_W`/`W_H` on every paint,
   §11.100 `OSAPI_WM_PREFER` per adapter):
   - VGA 640x480 and Hercules 720x348: the full layout.
   - CGA 640x200: toolbar without captions, panels collapsed into a single
-    switchable column, filmstrip hidden by default (View > Filmstrip shows it).
+    switchable column, filmstrip hidden by default (View > Filmstrip shows it;
+    *both went with the filmstrip, §106.21*).
   - Any window too small for a tier drops panels in the order Info, Histogram,
     Navigator, then the filmstrip.
 - Look at every layout tier on a 1bpp adapter before calling it done (§39.4,
@@ -157,7 +166,8 @@ approximated silently.
 - **Effects:** Blur, Sharpen, Edge Detect, Emboss, Pixelate, -, Sepia,
   Posterize..., Threshold..., Gamma...
 - **View:** Zoom In, Zoom Out, Fit, Actual Size, -, Full Screen, Dither:
-  Ordered/Diffusion, Panels..., Filmstrip, Keyboard Help
+  Ordered/Diffusion, Panels..., Filmstrip, Keyboard Help (*Filmstrip went
+  with the filmstrip, §106.21*)
 
 Greyed items carry their reason in the status line (§47: grey a fact, never a
 guess). Examples: "Undo needs 300K; 120K free", "Full Screen 256: VGA only".
@@ -466,6 +476,10 @@ the user pick another available mode. Everything happens in a §53 bracket:
 
 ## 6. The folder: Prev/Next, filmstrip, slideshow (wave 5)
 
+*The filmstrip, its thumbnails and the thumbnail cache below were built in
+wave 5 and withdrawn by the owner on 2026-10-06 (SPEC.md §106.21); the
+folder list, Prev/Next, the slideshow and the document launch stand.*
+
 - **Folder list:** after File > Open (or a document launch) the instance's
   directory is the picture's folder (§38.10). `OSAPI_FILE_FIND` walks it once
   and keeps the names of files whose extension is one PiXEL reads. The list is
@@ -597,7 +611,8 @@ All rows are registered in `tests/suite.py`. MartyPC is the default emulator
     budget.
   - `pxfsx`: enter every full-screen mode, read the surface back, then check
     the desktop and palette are restored.
-  - `pxthumb`: thumbnail cache cold/warm.
+  - `pxthumb`: thumbnail cache cold/warm. (*Retired with the filmstrip,
+    2026-10-06: its folder, slideshow and heap legs are `pxfolder`'s.*)
   - `pxedit`: each effect against `pixelsim`.
   - `pxsave`: the round trip save, re-read, then the host decodes it with
     stdlib (`zlib`) / Pillow if present.
@@ -629,6 +644,7 @@ apps/pixel/pxextra.asm    part: TIFF, ICO, ILBM, MacPaint
 apps/pixel/pxwrite.asm    part: the writers (BMP/PCX/GIF/PNG/PIX)
 apps/pixel/pxfsx.inc      full-screen modes, palette choosers
 apps/pixel/pxfolder.inc   folder list, filmstrip, thumbnail cache, slideshow
+                          (folder list, Prev/Next, slideshow since §106.21)
 apps/pixel/pxedit.inc     tools, palette ops, pixel ops, undo
 apps/pixel/samples/       the sample gallery + README (provenance)
 apps/os88lzw.inc          the shared LZW (decode + encode)
@@ -679,7 +695,8 @@ commit per wave** to this PR with the wave's size line (`os88pkgsize`). SPEC
    - The first XT timings.
 5. **The folder.** Folder list, Prev/Next, the filmstrip with thumbnails and
    `PIXEL.THC`, slideshow (windowed), associations, document launch,
-   `pxthumb`.
+   `pxthumb`. (*The filmstrip, its thumbnails and `PIXEL.THC` were withdrawn
+   on 2026-10-06, §106.21, and `pxthumb` became `pxfolder`.*)
 6. **Full screen.** Mode X 256 and 13h, VGA 16-adaptive (median cut + FS), CGA
    C160 / 320x200x4 (palette chooser) / 640x200, Hercules, the EGA latch, the
    full-screen slideshow, `pxfsx`.
@@ -703,9 +720,9 @@ commit per wave** to this PR with the wave's size line (`os88pkgsize`). SPEC
 | risk | caught by |
 |---|---|
 | A far-called lazy part is new ground | wave 1 builds the gate row before any decoder depends on it |
-| Heap fragmentation after browsing many pictures | `pxthumb` and `pxopen` assert the claim count and the largest run after 20 Prev/Next cycles |
+| Heap fragmentation after browsing many pictures | `pxfolder` (wave 5's `pxthumb`) and `pxopen` assert the claim count and the largest run after 20 Prev/Next cycles |
 | The fast tier's 30 s budget | new fast rows are pure host checks ≤0.5 s each; anything heavier is soak |
 | CGA's 156 content rows | layout tiers are asserted by `pxopen` on CGA, and wave 1's screenshots |
-| Decode times on an XT worse than estimated | fast open (§3.4), progressive row display, DC-only thumbnails, and the cache; wave 4 measures before wave 5 builds on it |
+| Decode times on an XT worse than estimated | fast open (§3.4), progressive row display, DC-only thumbnails, and the cache (the last two until the filmstrip was withdrawn, §106.21); wave 4 measures before wave 5 builds on it |
 | A corrupt file crashes the machine | the hostile corpus in every decoder wave; one clipped row emitter |
 | Palette leaks out of full screen | `pxfsx` reads the DAC back after exit (the `fsx.inc:378` trap) |

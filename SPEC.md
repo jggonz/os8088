@@ -162718,23 +162718,29 @@ display a window is on can change under it (§39.16.4), so `W_ONRESIZE` has
 nothing to re-derive.
 
 The regions, top to bottom: the **toolbar**, then the **tool column**, the
-**canvas** and the **panel column** side by side, then the **filmstrip** and
-the **status bar**. Two tiers, chosen from the live content height:
+**canvas** and the **panel column** side by side - the MIDDLE BAND, which
+runs down to - the **status bar**. Two tiers, chosen from the live content
+height:
 
 | | FULL (content ≥ 240 rows: VGA, Hercules) | COMPACT (shorter: CGA) |
 |---|---|---|
 | toolbar | 16x16 pictures with captions underneath | pictures only |
 | panels | Navigator, Histogram, Image Info stacked, no title strips (106.15) | ONE panel; Tab, or a press on it that no control takes, turns to the next |
-| filmstrip | shown | hidden (View > Show Filmstrip shows it) |
+
+**There is no filmstrip.** Waves 1 to 9 had one between the middle band and
+the status bar - the folder's pictures as cards with thumbnails, cached in
+`PIXEL.THC` - and it was withdrawn at the owner's request on 2026-10-06
+(106.21): the middle band takes its rows, the folder is walked by Prev and
+Next, and the status bar's `n of N` says where in it the picture is.
 
 The captions also need a content width of 616 pixels; a narrower full-tier
-window drops them. A window too short for both the canvas and the filmstrip
-drops the filmstrip; one too narrow for a 160-pixel canvas beside the panels
-drops the panel column. Inside the column a panel that does not fit is
+window drops them. A window too narrow for a 160-pixel canvas beside the
+panels drops the panel column. Inside the column a panel that does not fit is
 dropped from the bottom up — Image Info, then Histogram, then Navigator — and
 only Image Info may be cut short (a picture well or a column of buttons cut
 in half is neither); on the full tier, Image Info open and last takes the
-rows left under it, so the column reads as one stack. **A panel is its
+rows left under it, down to the status bar, so the column reads as one
+stack. **A panel is its
 body:** there is no title strip and no collapse box (the owner's call: they
 cost rows, and the panels are not minimised), so the Navigator's picture,
 the Histogram's graph and its Luminosity drop-down and Image Info's labelled
@@ -162744,9 +162750,11 @@ strips had went to the bodies — the Navigator's is 100 / 64 / 48 rows (VGA /
 Hercules and EGA / CGA, `px_k_nav`) where it was 60 / 46 / 40, the
 Histogram's 84 / 56 / 58 (`px_k_hist`), and Image Info shows six lines on a
 Hercules where it showed four. Showing and hiding them stays View > Hide
-Panels, and the filmstrip View > Hide Filmstrip. The tool column drops
-its last tools the same way when the middle band is short (the CGA with the
-filmstrip shown keeps four of six); their letters still choose them.
+Panels. The tool column drops its last tools the same way when the middle
+band is short - only a window dragged down towards its 150-row minimum: every
+display's window, the CGA's included, shows all six since the filmstrip went
+(the CGA with the filmstrip shown kept four); their letters still choose
+them.
 
 **The display decides two things the size does not.** The palette is chosen
 by DEPTH (`OSAPI_WM_DISPLAY`'s DH): on 4bpp the chrome is light grey, the
@@ -162756,9 +162764,8 @@ text on a dither cannot be read. And on a **CGA** every picture is drawn at
 half height: a CGA pixel is 2.4 times as tall as it is wide, so `px_halfinit`
 ORs each pair of icon rows into one at launch (every one-pixel stroke
 survives) and the CGA's buttons are 12 rows rather than 20. The picture
-heights in the panels and the filmstrip (a card's box 60 / 40 / 25 rows for
-an 80-pixel width, 4:3 at the pixel's aspect) follow the pixel's aspect the
-same way; EGA takes Hercules' row of every table. A 4bpp display with the
+heights in the panels follow the pixel's aspect the same way; EGA takes
+Hercules' row of every table. A 4bpp display with the
 full tier and a content box at least 560 x 260 is drawn as the COLOUR FACE
 (106.16).
 
@@ -162772,21 +162779,21 @@ needs a picture is greyed (`MENU_DIS`) for that fact (§47); in this build no
 picture is ever decoded, so they are always grey, and the status bar's first
 field says `No picture`. Live from the start: File > Open, View > Dither
 (Ordered / Diffusion — a setting, stored now and applied by the renderer
-that arrives with wave 2), View > Hide/Show Panels, View > Hide/Show
-Filmstrip (its label follows the filmstrip *as laid out*, which the tier
-decides as often as the user does), and View > Keyboard Help.
+that arrives with wave 2), View > Hide/Show Panels, and View > Keyboard
+Help. (View > Hide/Show Filmstrip went with the filmstrip, 106.21.)
 
 Keys: Ctrl+O opens; F1 or `?` shows the key card; H Z M C E R pick the Hand,
 Zoom, Marquee, Crop, Eyedropper and Rotate tools; Tab turns the compact
 layout's panel (and so does a press on that panel which no control takes). Any key or click takes a card down and does nothing else.
 
-### 106.3 Toolbar, tools, panels, filmstrip, status bar (wave 1)
+### 106.3 Toolbar, tools, panels, status bar (wave 1)
 
 **Every control is one `os88ui_btn` record** (`OS88UI_BIMG`, §13.8.9, and
-`OS88UI_BOWN`, §13.8.10, for the colour face) — 23 buttons: ten on the
-toolbar, six tools, the Navigator's `+` `-` `Fit`, the filmstrip's `<` `>` and
-the status bar's `<` `>`. (Wave 1's four boxes, one on each panel's strip and
-one on the filmstrip's, went with the strips: 106.1.) One record, because `os88ui_btnclick` finds a window's
+`OS88UI_BOWN`, §13.8.10, for the colour face) — 21 buttons: ten on the
+toolbar, six tools, the Navigator's `+` `-` `Fit` and the status bar's `<`
+`>` (and six of a parameter card's, 106.24). (Wave 1's four boxes, one on
+each panel's strip and one on the filmstrip's, went with the strips: 106.1;
+the filmstrip's own `<` `>` went with it: 106.21.) One record, because `os88ui_btnclick` finds a window's
 record by walking the package's list and takes the first. A button not laid
 out this pass keeps the rect {1,1,0,0}, which `os88ui_bhit` (signed) never
 matches. The library arms and fires on geometry alone, so `px_bfire` tests
@@ -162803,10 +162810,6 @@ matches. The library arms and fires on geometry alone, so `px_bfire` tests
   and its three zoom buttons; Histogram's graph well, its channel's
   drop-down and Mean, Std Dev, Min, Max; Image Info's File, Folder, Size,
   Format, Pixels, Depth, Packing, Palette.
-- **Filmstrip.** A rule over it, the `<` `>` pagers and the folder's cards
-  (its count is the status bar's `n of N`). Wave 1 counted the pictures
-  beside the one opened; the pagers, a card pressed and the thumbnails are
-  106.21's.
 - **Status bar.** Eight fields — name, dimensions, format, zoom, colours,
   bytes, `Memory: 412K` (`OSAPI_MEM_AVAIL`'s total free, looked at every five
   seconds by `OSAPI_WM_TIMER`) and `n of N` — each ONE run on the 8-pixel
@@ -163297,11 +163300,11 @@ a straddle) or the pan is wider than the canvas.
   the Slideshow and the four arrows came with 106.21). A press on a grey
   toolbar button says why in a toast: `No picture open` or `Not in this
   build yet`.
-- **The filmstrip** shows the folder's pictures as CARDS — the format's name
-  in a framed card, the file's name under it, the open picture's card in
-  the highlight's colours — around the open one, from the sorted list `px_walk` keeps (64
-  names at most since 106.21: a folder lists no more); the thumbnails are
-  106.21's.
+- **The filmstrip** showed the folder's pictures as CARDS — the format's
+  name in a framed card, the file's name under it, the open picture's card
+  in the highlight's colours — around the open one, from the sorted list
+  `px_walk` keeps. It was withdrawn on 2026-10-06 (106.21); the list stays,
+  and Prev, Next and the slideshow walk it.
 
 ### 106.13 Tests for the image core (wave 2)
 
@@ -163387,6 +163390,13 @@ far-calls the cell again for its fragment, from `.cold`, SPEC.md 5.4.3.6);
 `pxdraw` (106.15) counts PiXEL's own calls, which is why its numbers for the
 same gestures are smaller.
 
+**Since 106.21** the canvas has the withdrawn filmstrip's rows - 367 tall on
+the VGA where it was 290 - and what covers it is a band of it more often: a
+pan across is a SAVE and a REST a band, **95** calls with 23 of each where it
+was 79 with 19, and a zoom step **49** with 47 BLITP where it was 41 with 39
+(`pxpaint` at `f0957d53` and after). Its budgets are 105 (26 SAVE, 26 REST)
+and 60 (55 BLITP).
+
 ### 106.15 A command draws what it changed — the records
 
 Waves 1 and 2 drew a command by REGION: an open ended by repainting the
@@ -163410,7 +163420,6 @@ moved and nothing else:
 | the Histogram's graph | counted, channel, picture, face, well (`px_kg`) | any of them moved |
 | its drop-down | counted, channel (`px_kd`) | ditto |
 | the Navigator's picture | picture, depth, face, well (`px_kn`) | ditto; otherwise only its frame follows the view, and not even that when the view did not move |
-| a filmstrip card | which name, and whether it is the open one (`px_kcard`), out of a sum of the folder's names (`px_nsum`) | either moved; a Revert walks the same folder to the same sum and draws no card |
 
 Every record keeps its place RELATIVE to the content's corner: a window that
 moves is not repainted (SPEC.md 11.96.12), its pixels go with it, and so must
@@ -163420,9 +163429,11 @@ of the window (`px_lay_bodies`, `px_navplace`), where wave 2 banked them at
 the last paint - so a press in a Navigator that had moved went to where it
 used to be.
 
+(A filmstrip card was a record too, `px_kcard` out of a sum of the folder's
+names, until the filmstrip was withdrawn: 106.21.)
+
 `px_regdraw` decides which way a command draws. A command that MOVES a region
-- a panel shown or turned, the panels or the filmstrip hidden or shown, a
-card taken down, a drop-down's list closed over the content - sets
+- a panel shown or turned, the panels hidden or shown, a card taken down, a drop-down's list closed over the content - sets
 `[px_geo]` (`px_regpaint`) and its regions are drawn whole, as `W_PAINT`
 draws them; every other caller gets the canvas rendered when it asked for it
 (the picture is the renderer's, not a record's) and the walk for the rest.
@@ -163439,20 +163450,19 @@ named regions, and the regions now go through the records.
 | a pan across | 38 | 38 | 60 | 60 |
 | Fit | 15 | 15 | 21 | 21 |
 | Show Panels | 120 | 98 | 140 | 136 |
-| Show Filmstrip | 213 | 182 | 232 | 191 |
+| Show Filmstrip (withdrawn, 106.21) | 213 | 182 | 232 | 191 |
 | a status field (free memory) | 1 (14 cells) | 1 (1 cell) | 1 (14 cells) | 1 (1 cell) |
 | an open (Revert of CITY.PCX, the decode included) | 597 | 125 | 660 | 141 |
 | the key card down: a FULL repaint, the yardstick | 326 | 308 | 343 | 261 |
 
 A status field that changes draws the CELLS that changed - `Memory: 412K`
 becoming `411K` is one cell where it was fourteen, and a glyph cell is about
-0.9 ms on a 4.77 MHz 8088. Showing the panels or the filmstrip is a repaint
-of the regions that moved and stays the dearest gesture; it is also the
-rarest.
+0.9 ms on a 4.77 MHz 8088. Showing the panels is a repaint of the regions
+that moved and stays the dearest gesture; it is also the rarest.
 
 **THE IDENTITY ASSERTION is what makes the records trustworthy.** After a run
-of gestures - a tool, a zoom each way, a pan each way, the filmstrip hidden
-and shown - `pxdraw` captures the content, forces a full repaint (the key
+of gestures - a tool, a zoom each way, a pan each way, the panels hidden and
+shown (the filmstrip until 106.21 withdrew it) - `pxdraw` captures the content, forces a full repaint (the key
 card up and down) and captures again, and the two must be identical to the
 pixel, on the Hercules face (`pxdraw`) and on the VGA's colour face
 (`pxdrawvga`). Each gesture is also held under a ceiling a repaint of what it
@@ -163491,7 +163501,8 @@ carries meaning:
 - **The Histogram's graph is drawn in its channel's colour**: dark grey for
   Luminosity, then red, green and blue - the drop-down says which, and the
   graph agrees with it.
-- **Highlight**: the open picture's filmstrip card is blue with white text.
+- **Highlight**: blue with white text - the open picture's filmstrip card
+  wore it until the filmstrip was withdrawn (106.21).
 
 **The toolbar's layout is the faces'**: each a multiple of 8 wide (40, 48,
 56 or 64 pixels, `PXA_TABLES`), 30 rows, the button the face less its two
@@ -163534,10 +163545,10 @@ live media.
 
 **EGA has no MartyPC profile**, so its face is ARITHMETIC here and not a
 picture: a content box of about 640 x 284 passes the gate; the toolbar is 35
-rows, the status bar 14 and the filmstrip 56 (its card box 40 rows, Hercules'
-row), which leaves a middle band of about 179 rows - the six tool faces need
-146, and the column holds the Navigator (64 + its frame), the Histogram
-(56 + its frame) and about three of Image Info's eight lines.
+rows and the status bar 14, which leaves a middle band of about 235 rows
+(179 while the filmstrip's 56 were under it, 106.21) - the six tool faces
+need 146, and the column holds the Navigator (64 + its frame), the
+Histogram (56 + its frame) and all of Image Info's lines.
 
 ### 106.17 The speed wave: what an 8088 pays, before and after
 
@@ -164245,150 +164256,34 @@ per-format dimensions (about 450 bytes), the CGA's half-height icon copies
 (544 bytes of bss, computed at launch), the folder's 128 names at 11 bytes
 rather than 13 (256 bytes).
 
-### 106.21 The folder: Prev/Next, the filmstrip's thumbnails, PIXEL.THC, the slideshow (wave 5)
+### 106.21 The folder: Prev/Next and the slideshow (wave 5; the filmstrip withdrawn 2026-10-06)
 
 **The folder list.** `px_walk` (106.6) keeps every picture `OSAPI_FILE_FIND`
-names in the picture's folder as a 20-byte record - the 8.3 name, a flags
-byte (bit 0: packed on the disk, bit 1: no thumbnail could be made), the
-file's first cluster and its size - sorted by name, the open one at
-`[px_ncur]`. **At most 64** - the first 64 `OSAPI_FILE_FIND` names, in
-directory order. FILE_FIND itself has no cap (the wave-5 review's F4); what
-has one is every way a user picks a picture - the Disk window lists
-`DSK_NENT` = 64 entries - so no picture a user can open is past the list,
-Prev and Next simply stop at the 64th found, and 106.12's 128 names were half
-of them never fillable. The folder walked is
-banked (`[px_nfdir]`, `[px_nfvol]`): Prev, Next, the thumbnails and the cache
-act in IT, wherever a File > Open dialog that was cancelled has left the
-instance.
+names in the picture's folder as an 18-byte record - the 8.3 name, a flags
+byte (bit 0: packed on the disk) and the file's size - sorted by name, the
+open one at `[px_ncur]`. **At most 64** - the first 64 `OSAPI_FILE_FIND`
+names, in directory order. FILE_FIND itself has no cap (the wave-5 review's
+F4); what has one is every way a user picks a picture - the Disk window
+lists `DSK_NENT` = 64 entries - so no picture a user can open is past the
+list, Prev and Next simply stop at the 64th found, and 106.12's 128 names
+were half of them never fillable. The folder walked is banked
+(`[px_nfdir]`, `[px_nfvol]`): Prev, Next and the slideshow act in IT,
+wherever a File > Open dialog that was cancelled has left the instance.
+(The record was 20 bytes while it also carried the file's first cluster,
+which only the thumbnail cache's key read.)
 
 **Prev and Next** - the toolbar's pair, the status bar's `<` `>`, File >
 Previous Image and Next Image, **Space** and **Backspace** - open the
 neighbour by name through `px_open`, exactly as File > Open would, wrapping
-at either end; **Home** and **End** open the first and the last; a press on
-a filmstrip card opens its picture. Every one goes through **`px_navto`** -
-which is NOT the only place a picture is left (the wave-5 review's F14):
-File > Open, Revert, a document handed to a running instance and the
-slideshow's commit (`px_hcommit`) leave it too, and 106.24's `px_gate` is
-asked at each of them that can lose an edit. They are greyed while the folder holds fewer than two
-pictures or the open one is not among them (a misnamed picture); a press on
-a greyed one says `No other picture here`. The filmstrip's own `<` `>` turn
-the strip a stripful at a time and are greyed, silently, at either end; a
-newly opened picture centres it again.
-
-**Thumbnails** are at most **72 x 54** (4:3 is exactly that; a picture of
-another shape fits inside it), **8bpp indices into 106.8's colour cube**, so
-every display draws every thumbnail with the same tables: on 4bpp the cube's
-own mixing plans (the CUBE's shipped plans, through any decoder part's
-`PXV_PLANS`) against the canvas's 8x8 Bayer, on 1bpp each entry's
-`px_t1for` threshold - the rules `px_texpand` builds the canvas's tables by.
-A card's box shows its thumbnail centred, its rows scaled by the pixel's
-aspect (54 on a VGA, 34 on a Hercules, 22 on a CGA, 39 or the box's 38 on an
-EGA), in the card's inside colour round it - the highlight's for the open
-picture, whose name line is in the highlight's colours too. **One planar
-blit a card** (`OSAPI_GFX_BLITP`, `OSAPI_GFX_BLIT4` when the probe refuses)
-or one `OSAPI_GFX_BLIT1`, and four fills round it. A thumbnail is part of a
-card's record (106.15): a card whose thumbnail arrives is drawn again, and no
-other.
-
-**How one is made.** The OPEN picture's from its own master, in the first
-idle moment after its open, through its palette: nearest-point sampling to
-the thumbnail's size, each palette entry taken to the nearest cube colour
-(an exact grey to the cube's nearest grey). Every other card's by a
-**HIDDEN DECODE**: the
-decode pipeline of 106.9 run on the picture with the shown one banked as
-the previous picture (`px_prev`, 106.8) - but with its `HAVE` byte masked,
-so `px_claims` never frees it for a better scale, and `px_mreloc` still
-follows its master. The display tables are not touched (`px_tables` returns
-at once while `[px_hmode]` says so), nothing is painted, nothing is
-composed, and at the end the picture shown is put back by `px_restore`
-exactly as a cancel would, with no tables to rebuild. The scale is the
-coarsest at or below 1/8 whose master still covers the thumbnail, forced by
-capping the run `px_claims` sees (`[px_mcap]`) at that master's size; a JPEG
-there is DC-only (106.19). "Covers" is the box's sides, `min(72, w)` by
-`min(54, h)`: a picture wider than 4:3 may decode one scale finer than its
-thumbnail needs, which is a few seconds of idle time and no resident byte.
-
-- **When:** in IDLE time only - while PiXEL is the FRONT window (106.25), at
-  least two seconds after the last key, press or menu command (`PX_THIDLE`,
-  36 ticks since 106.25: a step is up to ~2.6 s on an XT, so a shorter pause
-  should not start one), never while a press, a drop-down
-  list, an open, a re-decode or a slideshow is in progress, one step a
-  timer call: first the CACHE, read for the cards on show once a folder and
-  once a window of the strip, and only when a card there lacks one; then
-  the open picture's from its master; then one hidden decode, the open
-  picture's card first and outward among the cards on show, right before
-  left.
-- **Cancelled the moment the user acts:** every callback that could draw or
-  act - a paint, a key, a press, a drag, a release, a menu command, About -
-  first stops a hidden decode (`px_hstop`: the cancel byte, then a yield
-  until the worker answers, at most one of its rows; on a 4.77 MHz 8088 a
-  JPEG's row of blocks is about 0.6 s), and the window is then exactly as
-  it was. A stopped thumbnail starts again from nothing later; one REFUSED
-  marks its name and the card keeps its format's name until the folder is
-  walked again.
-- **The store** is one claim of **31 KB** (`PX_TSLOTS` = 6 thumbnails, the
-  cache's header and a 4 KB band and transfer buffer), made when a strip is
-  first laid out with a folder in it and the heap has 128 KB free beside it
-  (`PX_THMINFREE`) - a picture's master is sized from the heap (106.8), and
-  six thumbnails are not worth a coarser picture. Movable, and pinned around
-  every file transfer into it (66.5.7.1). A card on show with no slot left
-  keeps its format's name.
-
-**THE FOLDER PART.** What a paint needs is resident - the store, a card's
-key, the drawing, the engine, the hidden decode and the slideshow - and the
-rest is **part 5 of PIXEL.O88, `apps/pixel/pxfold.asm`, LINKED like the
-SIMPLE part** (106.20): the cache's reading and writing and the making of a
-thumbnail from a master, 2,422 bytes (2,129 packed), fetched when the strip
-has a use for it and dropped after every call (`px_fcall`, the store pinned
-round it). One vector, DECODE, takes a verb in `CL` (`apps/pixel/pxthc.inc`,
-the numbers both halves read): `PF_VISIT` the header and the cards on show,
-`PF_WRITE` the cache written, `PF_MAKE` a thumbnail from `[px_cur]`'s master.
-A part calls the API like the package does - a cell is a far call made with
-the caller's DS (§20.3), and a file cell resolves in the instance the
-dispatched callback is stamped with (§19.2.1) - so the file names it hands a
-cell are copied into the package's `[px_line]` first. It never speaks: a
-refused write comes back as a number and the resident says it once. A part
-that cannot be had - PiXEL's disk taken out - ends the thumbnails until the
-folder is walked again, with only `op_fetch`'s own toast.
-
-**The cache, `SYSTEM/APPDATA/PIXEL.THC`** (§19.9) on PiXEL's own volume -
-the folder exists on every disk PiXEL ships on; without it there is no
-cache and nothing is said. Read once per folder; written only when the
-strip's folder changes, the strip goes or the window closes (106.25) - never
-while its folder is on show.
-
-| offset | what |
-|---|---|
-| 0 | the header, 4 KB: `PXTC`, version 1, the entries used (at most 64), a clock; at +32 64 keys of 32 bytes |
-| 4096 x (c + 1) | entry c, 4 KB: the thumbnail's bytes, then at +3888 its key again |
-
-A **key** is the name (12 bytes), the folder's first cluster, the file's
-first cluster, its size, its drive, the thumbnail's width and height, flags
-and a stamp. **No slot offers a volume serial**, so the drive, the folder's
-cluster, the file's first cluster and its size stand for one: a file
-rewritten in place nearly always moves its first cluster or its size.
-The case "nearly always" misses (the wave-5 review's F10): §18.4's replace
-allocates the new chain before it frees the old, so a picture re-saved at
-the same size alternates between two first clusters, and its third save
-matches the first's key and brings that thumbnail back. FILE_FIND's record
-carries no date, so nothing better is to be had without a new cell.
-Everything is 4 KB because `OSAPI_FILE_READ_AT` and `_WRITE_AT` move whole
-clusters at cluster offsets: a volume whose cluster is over 4,096 bytes has
-no cache (FAT's clusters are powers of two, so that is "does not divide
-4096" - the wave-5 review's F9).
-
-- **A visit:** the header once, when the strip's folder is not the one it
-  was matched for; then ONE 4 KB read an entry for every card on show it
-  holds, in one walk to `SYSTEM/APPDATA` and back (bank, `OSAPI_FILE_GOTO_QM`
-  a folder at a time, read, go back - §19.9), the entry's own key checked
-  against the header's. A second visit fills the strip with no decode.
-- **A write:** a STEP a timer call since 106.25 (`PF_WRITE`; `PF_WALL`, the
-  whole of it, at the close): the header read again (another PiXEL may have
-  written), each new thumbnail written to an entry - a new one appended only while the disk
-  keeps 32 KB free, else the least recently used (the lowest stamp; a hit
-  stamps an entry too) replaced - then the header. A refused write (a
-  write-protected or full disk) says `Thumbnails not saved` ONCE and is not
-  tried again this session; the thumbnails stay in the store.
+at either end; **Home** and **End** open the first and the last. Every one
+goes through **`px_navto`** - which is NOT the only place a picture is left
+(the wave-5 review's F14): File > Open, Revert, a document handed to a
+running instance and the slideshow's commit (`px_hcommit`) leave it too,
+and 106.24's `px_gate` is asked at each of them that can lose an edit. They
+are greyed while the folder holds fewer than two pictures or the open one is
+not among them (a misnamed picture); a press on a greyed one says `No other
+picture here`. The status bar's `n of N` (106.3) says where in the folder
+the picture is.
 
 **The slideshow (windowed).** File > Slideshow or the toolbar's Slideshow
 button, which stays latched while it runs and whose menu item then reads
@@ -164401,24 +164296,86 @@ for its palette, the canvas rendered whole, the window composed. When memory
 does not (or the hidden open refuses for any reason) it is opened at the
 deadline as any open is: the canvas fills as rows arrive, the name field says
 `Opening 42%`. **Any key or press stops it and does nothing else; a menu
-command stops it and then runs.** Thumbnails wait while it runs - all but
-the slide's own, made from its master before the next slide's decode
-begins. Full
-screen's slideshow (106.23) runs the same hidden decode from the bracket's
-own loop.
+command stops it and then runs.** Full screen's slideshow (106.23) runs the
+same hidden decode from the bracket's own loop.
+
+**The HIDDEN DECODE** (`px_hopen`, `[px_hmode]` 2 while it runs, 3 when the
+slide is decoded and waiting) is the decode pipeline of 106.9 run on the
+next picture with the shown one banked as the previous picture (`px_prev`,
+106.8) - but with its `HAVE` byte masked, so `px_claims` never frees it for
+a better scale, and `px_mreloc` still follows its master (full screen's is
+unmasked: 106.23). The display tables are not touched (`px_tables` returns
+at once while `[px_hmode]` says so), nothing is painted and nothing is
+composed; a refusal or a stop puts the picture shown back by `px_restore`
+exactly as a cancel would, with no tables to rebuild. **Every callback that
+could draw or act** - a paint, a key, a press, a drag, a release, a menu
+command, About, the close - first stops one (`px_hstop`: the cancel byte,
+then a yield until the worker answers, at most one of its rows; on a 4.77
+MHz 8088 a JPEG's row of blocks is about 0.6 s), and the window is then
+exactly as it was.
 
 **The timer.** One `OSAPI_WM_TIMER`, re-armed by its own handler: every 91
 ticks for the free memory (106.3) when nothing else is pending, every 9 while
-the thumbnails or the slideshow have work (`[px_tq]`), every tick while a GIF
-plays in front (106.25). A hidden decode's
-progress and its end arrive through `W_ONWAKE` as an open's do, and paint
-nothing.
+the slideshow runs (`PX_TQ`), every tick while a GIF plays in front (106.25).
+A hidden decode's progress and its end arrive through `W_ONWAKE` as an
+open's do, and paint nothing.
 
 **Associations and a document launch** are wave 1's (106.6): JPG, PNG, PCX,
 TIF and PIX; the document's folder is the instance's before the open, so the
-strip shows it - in a subfolder and on B: alike.
+folder list is the document's - in a subfolder and on B: alike.
 
-**What it costs.** Resident **+2,996 bytes** - image 34,875 → 38,134, bss
+**WITHDRAWN 2026-10-06, AT THE OWNER'S REQUEST: THE FILMSTRIP, ITS
+THUMBNAILS AND `PIXEL.THC`.** *"The bottom file strip on the UI is no longer
+needed."* Waves 5 to 9 had a FILMSTRIP between the middle band and the
+status bar - the folder's pictures as cards, each with a 72 x 54 thumbnail
+(8bpp indices into 106.8's colour cube), made from the open picture's master
+or by a HIDDEN DECODE of the others in idle time (106.25, 106.26's engine),
+held in a 31 KB store and cached in `SYSTEM/APPDATA/PIXEL.THC` by the
+FOLDER part. All of it is gone:
+
+- the strip region and its rule, its cards, its `<` `>` pagers, a card
+  pressed (`PX_PR_CARD`), View > Hide/Show Filmstrip and its label;
+- the thumbnail engine (`px_thstep`, two seconds of stillness `PX_THIDLE`
+  and the pointer's own idle test, review-w8 E2), the 31 KB store
+  (`PX_TSLOTS`, `px_tgive`), thumbnails made from the master or by a hidden
+  decode (`[px_hmode]` 1), and the cube's plans and thresholds kept for them;
+- **the FOLDER part** (`apps/pixel/pxfold.asm`, `apps/pixel/pxthc.inc`, the
+  `PF_*` verbs): the cache's reading and writing and a thumbnail's making.
+  It was part 5, so the parts after it are one lower: full screen 5, EDIT 6,
+  WRITE 7, the extras 8, and `PX_NPARTS` is 9;
+- **`SYSTEM/APPDATA/PIXEL.THC`**: never read or written now. One an earlier
+  build left on a disk is a file nothing opens, and the user may delete it;
+- `[px_thoff]`, the tests' byte that kept the thumbnails out of what they
+  measured, and `tests/pxthumb.py`, whose surviving legs are `pxfolder`'s.
+
+What it bought back, measured: the resident **image 45,604 -> 41,299**
+(-4,305) and **bss 11,845 -> 11,473** (-372) - **4,677 bytes**, so 52,772
+of `APP_MAX_SIZE`'s 61,440 with 8,668 to spare (`f0957d53` against this
+change); PIXEL.O88 loses part 5, the
+FOLDER part's 2,605 bytes (2,294 packed), and is **121,852 -> 114,684**
+bytes on the disk; and **the heap's 31 KB store is never claimed**, and no
+decode runs while the user is idle, so the claims at the worst moment of a
+windowed slideshow are seven of §50.2's eight - the face, the master, the
+view claim, the hidden master, the work claim, the ring and the decoder
+part - and eight beside a shown GIF's animation claim, which the store
+used to make nine (106.26's F16). The middle band takes the strip's rows:
+the tool column shows all six tools on every display, and Image Info, open and last on the full tier,
+runs down to the status bar (106.1). Drawing (`pxdraw`, PiXEL's own calls,
+Hercules / the VGA's colour face, the same run of gestures at `f0957d53`
+and at this change): **a full repaint, the yardstick, 279 / 220** where it
+was 363 / 310 with the strip's seven thumbnailed cards; **Next 63 / 52 and
+Prev 116 / 114** where they were 83 / 138 and 129 / 196 - the strip's two
+cards whose highlight moved, and on the colour face their thumbnails, are
+no longer in them; an open (Revert of CITY.PCX) 103 / 107 (107 / 109). The
+canvas is taller by the strip's rows (56 on a Hercules, 77 on a VGA), so
+what covers it costs a few composer bands more: a zoom step in 17 / 26
+(14 / 22), a pan across 47 / 72 (38 / 60); and Show Panels is 107 / 140
+(98 / 136), Image Info now running down to the status bar. The gestures
+`pxdraw` measures add up to 1,216 / 1,173 calls where they were 1,986 /
+2,092 with the strip's four.
+
+**What wave 5 cost, the filmstrip included** (history: the withdrawal
+below has the numbers that stand). Resident **+2,996 bytes** - image 34,875 → 38,134, bss
 11,606 → 11,343 - against the 3,000 106.20 set: `pxfolder.inc`'s 3,159
 bytes of code, the callbacks, keys and menus 546, less the sniff's 446
 (106.6) and 263 of bss (the folder list's 64 records of 20 bytes where 128
@@ -164437,20 +164394,17 @@ yardstick, is **363 / 310** where it was 308 / 261: `pxdraw`'s folder holds
 seven pictures now where it held one, so the strip is seven named cards
 with their thumbnails where it was one named card and blank ones.
 
-**Tests.** `pxdraw` / `pxdrawvga` (106.15) gain Next, Prev and a strip page
-among their gestures, each under a ceiling, and the identity assertion holds
-with thumbnails on the cards; every gesture is measured from STILL - no
-hidden decode, the timer at its slow pace - or a card arriving would be
-counted as the gesture's. **`pxthumb`** (soak, MartyPC, the VGA XT): a
-folder of pictures opened by its association from a subfolder of B: - the
-thumbnails come, the open one's with no decode and every other card's by
-exactly one, and `PIXEL.THC` is written, read back off the floppy on the host
-and every thumbnail in it compared with its key; PiXEL closed and opened
-again on the same document fills the strip from the cache with **no decode**;
-twenty Next and Prev end with PiXEL's claims as they were and the largest run
-as it was. `[px_thoff]` is a test's byte that keeps the thumbnails out of the
-rows that measure something else (`pxdecode`, `pxopen`, `pxpaint`,
-`pxbench`).
+**Tests.** `pxdraw` / `pxdrawvga` (106.15) measure Next and Prev among their
+gestures, each under a ceiling, and the identity assertion runs the panels
+hidden and shown where it ran the filmstrip; every gesture is measured from
+STILL - no hidden decode. **`pxfolder`** (soak, MartyPC, the VGA XT with a
+720 KB B:) is what survived of wave 5's `pxthumb`: a folder of seven
+pictures opened by its association from a subfolder of B:; BEHIND another
+window no hidden decode is begun and no callback of PiXEL's holds the UI
+task 0.25 s; in front the folder list is the document's folder; a slideshow
+of three slides with its button latched, stopped by Esc on the slide shown,
+no decode's claim left behind; and twenty Next and Prev end with PiXEL's
+claims as they were and the largest free run as it was.
 
 ### 106.22 The decoder speed pass: what an 8088 pays to read a picture, before and after
 
@@ -164724,7 +164678,8 @@ during active display for the whole render and every caption band, which
 §88.15 accepted for Clear Skies and this inherits with the retime.
 
 **Inside**, everything is the FULL-SCREEN PART's (`apps/pixel/pxfull.asm`,
-part 6, LINKED like the SIMPLE and FOLDER parts, 106.20): fetched before
+part 6 - part 5 since the FOLDER part was withdrawn, 106.21 - LINKED like
+the SIMPLE and FOLDER parts, 106.20): fetched before
 `OSAPI_FSX_RUN` (`FSXF_KEEPWORKER`), held while the screen is PiXEL's and
 dropped on the way out. Its one vector, DECODE, takes a verb: `FSV_ENTER` (the
 mode set, its colours, the picture whole, the captions), `FSV_SHOW` (another
@@ -164973,7 +164928,8 @@ Hercules page 704 columns wide; its memory, which the row checks, holds all
 
 ### 106.24 Editing: tools, palette and pixel operations, undo, Save As (wave 7)
 
-**Two more LINKED parts** (106.20's mechanism): part 7 **EDIT**
+**Two more LINKED parts** (106.20's mechanism; one lower each since the
+FOLDER part was withdrawn, 106.21, so 6 and 7): part 7 **EDIT**
 (`apps/pixel/pxedit.asm`, 11,291 bytes, 7,753 packed) - every palette
 operation, every pixel operation, the parameter cards, the XMS copy and the
 operations' own start, commit and undo; and part 8 **WRITE**
@@ -165211,13 +165167,13 @@ hostile, and 15 animated GIFs).
 
 #### The EXTRAS part: TIFF, ICO, IFF, MacPaint
 
-Part 9 of PIXEL.O88, `apps/pixel/pxextra.asm`, `OP_SEG | OP_COMP | OP_LAZY`,
+Part 9 of PIXEL.O88 (part 8 since the FOLDER part was withdrawn, 106.21), `apps/pixel/pxextra.asm`, `OP_SEG | OP_COMP | OP_LAZY`,
 LINKED (106.20): TIFF (`PXF_TIFF`), ICO and CUR (`PXF_ICO`), IFF ILBM and PBM
 (`PXF_LBM`) and MacPaint (`PXF_MAC`). HEAD on the UI task, DECODE on the
 worker, 106.18's services, as every decoder part; the rows reach the emitter
 through `K_EMIT`, which does every scale and the cube. **ASSOCIATIONS DO NOT
 CHANGE**: PiXEL's stay JPG, PNG, PCX, TIF and PIX (106.6) - an ICO, an LBM or
-a MAC is opened from File > Open or the strip, or reached by Prev and Next.
+a MAC is opened from File > Open, or reached by Prev and Next.
 
 **The sniff, said exactly** (106.6; `px_sniffbuf` and pixelsim's `sniff` are
 the same rule):
@@ -165423,7 +165379,7 @@ animation holds its 1 KB and nothing else.
 **What stops it, and what it costs then.** **Another window in front, or
 PiXEL minimised**: the next timer call stops the job (`px_hstop`: the
 cancel, the worker's answer, its claims back), nothing is drawn, and the
-timer drops to the thumbnails' pace - the frame goes on from where it was
+timer drops to `PX_TQ`'s pace - the frame goes on from where it was
 when PiXEL is in front again. **Any command** stops a frame being made, as it
 stops a hidden decode. **An edit** makes it a still for good (its master is
 not the file's any more). **File > Stop Animation / Play Animation** (and the
@@ -165434,8 +165390,8 @@ until it ends), and **so does a slideshow**: a frame job holds the worker
 from the first frame to the pass's end, and the next slide's hidden decode
 needs it, so `AV_TICK` stops the job while one runs and starts none. A
 frame does not redraw the Navigator, which shows the master as it was when
-it was last drawn. The thumbnail engine waits while a GIF plays, so the open
-GIF's thumbnail is made from whatever frame it stopped on.
+it was last drawn. (The thumbnail engine waited while a GIF played, until
+the filmstrip was withdrawn: 106.21.)
 
 **What a frame costs**: `pxdraw` plays the gallery's `BOUNCE.GIF` and counts
 **2.8 calls a frame** on Hercules and **4.5** on the VGA - the dirty
@@ -165457,6 +165413,11 @@ clusters free and the 360KB one 13 - the rule was "on every disk the gallery
 rides, or not at all".
 
 #### The idle engine yields (review-w5 F13)
+
+*(Withdrawn 2026-10-06 with the filmstrip, 106.21: the thumbnail engine,
+its store and `PIXEL.THC` are gone, and what follows is the record of what
+was built and measured. The hidden decode it describes is the slideshow's
+now, and only the slideshow's.)*
 
 Every step of the thumbnail engine runs in a callback on the ONE UI task -
 the timer's under the gfx lock - so while one runs nothing else on the
@@ -165583,7 +165544,7 @@ cleared by a word and a byte.
   and delay `gif_anim`'s - read with the guest stopped at `px_antick` while
   a frame is on the glass. `[px_anoff]` is a test's byte that keeps the
   other legs' GIFs still.
-- **`pxthumb`** gains BEHIND - the open finishing with another window in
+- **`pxthumb`** (retired with the filmstrip, 106.21: BEHIND is `pxfolder`'s now) gains BEHIND - the open finishing with another window in
   front, 20 s of guest time with no thumbnail begun and no callback over
   0.25 s - and the callback profile of COLD under 3 s; the cache is
   checked NOT written while its folder is on show, then written whole at the
@@ -165602,6 +165563,11 @@ the glass of every feature on VGA, CGA and Hercules - which found one defect
 that had shipped since wave 2.
 
 #### The cache is written AHEAD, so the close has nothing left
+
+*(Withdrawn 2026-10-06 with the filmstrip, 106.21: the thumbnail engine,
+its store and `PIXEL.THC` are gone, and what follows is the record of what
+was built and measured. The hidden decode it describes is the slideshow's
+now, and only the slideshow's.)*
 
 106.25 wrote `PIXEL.THC` only when the strip's folder changed, the strip went
 or the window closed, and the close wrote it whole: **15.0 s** on the XT for
@@ -165656,6 +165622,11 @@ since the last call counts as the user's, so a step never starts under a
 user who is pointing at the strip rather than clicking it.
 
 #### Long callbacks with PiXEL in front
+
+*(Withdrawn 2026-10-06 with the filmstrip, 106.21: the thumbnail engine,
+its store and `PIXEL.THC` are gone, and what follows is the record of what
+was built and measured. The hidden decode it describes is the slideshow's
+now, and only the slideshow's.)*
 
 Every step of the engine runs on the ONE UI task. A floppy access is ~0.4 s
 an `int 13h` and one a slice is the floor; what could be sliced is:
@@ -165838,7 +165809,10 @@ cache's visits, the open picture's own thumbnail and the writes go on). Any
 other is caught where it bites: a hidden decode refused `PXD_MEM` while 64
 KB or more are free is the claims and not the bytes, so no name is marked,
 the thumbnails wait until the folder is walked again, and the toast says
-`Thumbnails wait: all claims in use` once.
+`Thumbnails wait: all claims in use` once. (Since the filmstrip was
+withdrawn, 106.21, there is no store and no idle decode: a windowed
+slideshow's hidden decode beside a shown GIF's animation claim is exactly
+eight, and fits.)
 
 And the **wave-7 review's F14**, which 106.25 named and did not fix: after a
 save had given the decoder part back, the next palette operation's plans
@@ -165911,7 +165885,7 @@ part 13,629 (its map kept: 768 bytes of table), the HELP part 389.
 
 #### Tests
 
-- `pxthumb`: COLD asserts the cache WRITTEN AHEAD (one write, nothing owed,
+- `pxthumb` (retired with the filmstrip, 106.21; its folder, slideshow and heap legs are `pxfolder`'s): COLD asserts the cache WRITTEN AHEAD (one write, nothing owed,
   the part let go) and every callback under 3 s; CLOSE is now under 3 s
   with no write of the floppy's at all.
 - `pxanimemu`: a fence after every animation claim, av_start's 1 KB first;

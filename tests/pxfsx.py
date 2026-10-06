@@ -62,7 +62,7 @@ fs = part_syms("pxfull.asm")
 o88 = open(os88build.at("build/pixel.o88"), "rb").read()
 if o88[:syms["op_table"]] != image[:syms["op_table"]]:
     sys.exit("build/pixel.o88 is not this tree's pixel.asm - run make")
-PART_FULL = 6
+PART_FULL = 5
 HZ = 4772727                    # the 8088's clock, both machines (MartyPC)
 BAR = 20                        # the menu bar's rows, with the clock in them
 FAIL = []
@@ -164,7 +164,6 @@ for mach in machines:
         base = instance(m, S, image) * 16
         B = lambda n: m.read(base + syms[n], 1)[0]             # noqa: E731
         W2 = lambda n: u16(m.read(base + syms[n], 2))          # noqa: E731
-        m.write(base + syms["px_thoff"], b"\x01")
 
         def still(what, limit=900):
             M.until(m, lambda _: W2("px_ndone") and B("px_busy") == 0
@@ -554,9 +553,8 @@ for mach in machines:
         M.until(m, lambda _: B("px_slon") == 1, "the slideshow", poll=0.3,
                 limit=60)
         for k in range(2):
-            M.until(m, lambda _: master()[0] != seen[-1]
-                    and B("px_hmode") != 1, "slide %d" % (k + 2), poll=0.5,
-                    limit=900)
+            M.until(m, lambda _: master()[0] != seen[-1],
+                    "slide %d" % (k + 2), poll=0.5, limit=900)
             seen.append(master()[0])
         m.key("KeyQ")
         M.until(m, lambda _: B("px_slon") == 0, "the slideshow to stop",

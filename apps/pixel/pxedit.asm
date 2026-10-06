@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/pixel/pxedit.asm
 ;
-; PiXEL's EDIT PART (SPEC.md 106.24): part 7 of PIXEL.O88, LINKED against
+; PiXEL's EDIT PART (SPEC.md 106.24): part 6 of PIXEL.O88, LINKED against
 ; the package (build/pxlink.inc, SPEC.md 106.20). It is the arithmetic of
 ; Image and Effects, and nothing else - it never draws, never touches a file
 ; and never claims (SPEC.md 20.6 rule 7): the resident fetches it, claims

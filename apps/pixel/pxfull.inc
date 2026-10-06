@@ -199,7 +199,6 @@ px_fsdoor:
     call px_carddown                ; a card: the key takes it down, and
     jc .yes                         ; does nothing else (106.2)
     call px_hstop
-    call px_touch
     call px_fsgo
 .yes:
     clc
@@ -330,8 +329,6 @@ px_fsafter:
     mov bx, [px_win]
     mov ax, PX_MEMT
     call OSAPI_WM_TIMER
-    call px_tqarm
-    call px_touch
     ret
 
 ; px_fscall - the full-screen part's DECODE, verb CL (CH, DI its argument):
@@ -493,7 +490,6 @@ px_fsstart:
     mov [px_fsidx], ax
     call px_nfgo
     jc .gone
-    mov dl, 2
     call px_hopen
     jc .ref
     mov word [px_fsrec], px_prev    ; the shown one is the banked one now

@@ -224,7 +224,6 @@ def guest_leg(machine):
         base = seg * 16
         B = lambda n, k=0: m.read(base + syms[n] + k, 1)[0]      # noqa
         W = lambda n, k=0: u16(m.read(base + syms[n] + k, 2))    # noqa
-        m.write(base + syms["px_thoff"], b"\1")     # (no thumbnails here)
 
         def idle():
             return B("px_busy") == 0 and B("px_job") == 0

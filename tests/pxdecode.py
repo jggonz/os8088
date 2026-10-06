@@ -120,9 +120,7 @@ with os88ui.boot(SYSDISK, apps=DISK, machine=a.machine) as ui:
     M.until(m, lambda _: inst(), "PiXEL's instance", poll=0.3, limit=90)
     seg = inst()
     base = seg * 16
-    if "px_thoff" in syms:          # no thumbnails here (SPEC.md 106.21):
-        m.write(base + syms["px_thoff"], b"\1")   # not what this row measures
-    if "px_anoff" in syms:          # ...and no GIF plays (106.25): its frame
+    if "px_anoff" in syms:          # no GIF plays (106.25): its frame
         m.write(base + syms["px_anoff"], b"\1")   # 0 is what this row holds
     B = lambda n: m.read(base + syms[n], 1)[0]
     W = lambda n: u16(m.read(base + syms[n], 2))
@@ -140,7 +138,7 @@ with os88ui.boot(SYSDISK, apps=DISK, machine=a.machine) as ui:
     # PIX, PNM; part 9 the EXTRAS (106.25): TIFF, ICO, LBM, MAC - and a PNG
     # inside an ICO is the PNG part's
     DECPART = {1: {PXF_GIF}, 2: {PXF_PNG, PXF_ICO}, 3: {PXF_JPEG},
-               4: {4, 5, 7, 8, 9}, 9: {6, 10, 11, 12}}
+               4: {4, 5, 7, 8, 9}, 8: {6, 10, 11, 12}}
 
     def parts_here():
         """{part: its segment} for the decoder parts fetched now."""

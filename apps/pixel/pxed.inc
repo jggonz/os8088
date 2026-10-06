@@ -120,13 +120,13 @@ PC_THR      equ 4
 PC_RES      equ 5
 PC_SAVE     equ 6
 
-PX_B_C1M    equ 23                  ; a card's buttons, in the window's one
-PX_B_C1P    equ 24                  ; record (pixel.asm's PX_B_*)
-PX_B_C2M    equ 25
-PX_B_C2P    equ 26
-PX_B_COK    equ 27
-PX_B_CCAN   equ 28
-PX_NBTN     equ 29
+PX_B_C1M    equ 21                  ; a card's buttons, in the window's one
+PX_B_C1P    equ 22                  ; record (pixel.asm's PX_B_*)
+PX_B_C2M    equ 23
+PX_B_C2P    equ 24
+PX_B_COK    equ 25
+PX_B_CCAN   equ 26
+PX_NBTN     equ 27
 PE_DIS      equ 1                   ; os88ui.inc's OS88UI_DIS
 PE_DRSZ     equ 26                  ; ...and its drop-down record
 PE_DR_RECT  equ 0

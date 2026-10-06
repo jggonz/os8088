@@ -2,7 +2,7 @@
 ; os8088 - apps/pixel/pxedit.inc
 ;
 ; EDITING, THE RESIDENT HALF (SPEC.md 106.24): what Image and Effects do
-; between a menu item and the EDIT part (apps/pixel/pxedit.asm, part 7) -
+; between a menu item and the EDIT part (apps/pixel/pxedit.asm, part 6) -
 ; the claims an operation needs, the job the worker runs, its commit, and
 ; UNDO. The arithmetic is all the part's; this file decides, claims, and
 ; says what happened.

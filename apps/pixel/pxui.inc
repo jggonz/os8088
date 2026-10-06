@@ -3,7 +3,7 @@
 ;
 ; PiXEL's WINDOW (SPEC.md 106.1 - 106.4, 106.15, 106.16): the layout, worked
 ; out from the live content box every time it is wanted, one painter per
-; region - toolbar, tool column, canvas, panel column, filmstrip, status bar -
+; region - toolbar, tool column, canvas, panel column, status bar -
 ; the CACHES a command draws through, and the colour face's button painter.
 ;
 ; THE LAYOUT IS A FUNCTION OF THE WINDOW, NOT A COPY OF IT. px_layout reads
@@ -22,10 +22,10 @@
 ;
 ; A COMMAND DRAWS WHAT IT CHANGED (SPEC.md 106.15). A region painter draws its
 ; region whole and RECORDS what it drew - each button's flags and picture,
-; each line's cells, the graph's and the thumbnail's keys, each filmstrip
-; card's name - and px_usync walks the same window comparing the state with
-; the record, drawing only what moved. W_PAINT and a command that moves a
-; region (a panel shown, the filmstrip hidden, a card taken down) still draw
+; each line's cells, the graph's and the Navigator's thumbnail's keys - and
+; px_usync walks the same window comparing the state with the record,
+; drawing only what moved. W_PAINT and a command that moves a region (a
+; panel shown or hidden, a card taken down) still draw
 ; regions whole; everything else goes through the records.
 ;
 ; Every routine here preserves every register, takes no lock and arms no
@@ -40,27 +40,20 @@ PX_TCL      equ 5                   ; ...the margin left of its buttons
 PX_BTNW     equ 22                  ; an icon button: 16 + a 2px ring + frame
 PX_ONEW     equ 30                  ; ...and the "1:1" text button, 3 glyphs
 PX_MINCW    equ 160                 ; narrowest canvas the panel column leaves
-PX_MINMID   equ 40                  ; shortest canvas the filmstrip leaves
 PX_FULLH    equ 240                 ; content height below which the window is
                                     ; COMPACT: one panel at a time, no captions
 PX_CAPW     equ 77 * 8              ; content width the captioned toolbar needs
 PX_NAVW     equ 36                  ; the Navigator's three buttons, wide
-PX_SBW      equ 14                  ; a status / filmstrip arrow button
+PX_SBW      equ 14                  ; a status bar arrow button
 PX_GROW     equ 24                  ; the grow box's corner (SPEC.md 11.1.1):
                                     ; its 13 columns and air enough that the
                                     ; status bar's arrows do not read as part
                                     ; of it
-PX_ARH      equ 16                  ; a filmstrip arrow's rows
 PX_INFON    equ 9                   ; Image Info's lines
 PX_IPICK    equ 8                   ; ...the last the Eyedropper's (106.24)
 PX_HISTN    equ 5                   ; Histogram's lines: the drop-down, then
                                     ; Mean, Std Dev, Min, Max
 PX_DROPH    equ 12                  ; the drop-down's closed box
-PX_CARDW    equ 104                 ; a filmstrip card's cell: 13 glyphs, so
-                                    ; NAME.EXT fits under its box
-PX_BOXW     equ 80                  ; ...and the card's box: a 4:3 picture
-                                    ; at the pixel's own aspect (px_k_thumb)
-PX_MAXCARD  equ 8                   ; cards a strip can hold (720 / 104 = 6)
 ; THE COLOUR FACE (SPEC.md 106.16): a 4bpp display, the full tier, and a
 ; content box this big - a VGA's is 640 x 418, an EGA's 640 x ~280
 PX_COLW     equ 560
@@ -142,8 +135,6 @@ px_layout:
     mov bl, [px_kind]               ; the picture heights scale with the
     xor bh, bh                      ; pixel's aspect (SPEC.md 106.1)
     shl bx, 1
-    mov ax, [px_k_thumb + bx]
-    mov [px_thh], ax
     mov ax, [px_k_nav + bx]
     mov [px_navh], ax
     mov ax, [px_k_hist + bx]
@@ -180,7 +171,7 @@ px_layout:
     dec ax
     mov [px_tby2], ax
 
-    ; --- the status bar and the filmstrip, from the bottom up -------------
+    ; --- the status bar, and the middle band down to it ------------------
     mov ax, [px_yb]
     sub ax, [px_sth]
     inc ax
@@ -191,33 +182,12 @@ px_layout:
     dec ax
 .sty:
     mov [px_tyy0], ax
-    call px_fs_wanted               ; AL = 1 the filmstrip is shown
-    mov [px_fson], al
-.fsagain:
-    xor ax, ax
-    cmp byte [px_fson], 0
-    je .fs1
-    mov ax, [px_thh]                ; its rule, a card's box, the name's
-    add ax, [px_lp]                 ; line and the air (no title strip:
-    add ax, 1 + 6                   ; SPEC.md 106.15)
-.fs1:
-    mov bx, [px_sty1]
-    sub bx, ax
-    mov [px_fsy1], bx               ; the filmstrip's first row, which is the
-    dec bx                          ; status bar's when it is hidden
+    mov bx, [px_sty1]               ; the middle band: under the toolbar,
+    dec bx                          ; over the status bar
     mov [px_midy2], bx
     mov ax, [px_tby2]
     inc ax
     mov [px_midy1], ax
-    sub bx, ax
-    inc bx                          ; BX = the middle band's height
-    cmp bx, PX_MINMID
-    jge .midok
-    cmp byte [px_fson], 0
-    je .midok
-    mov byte [px_fson], 0           ; the filmstrip goes first when the
-    jmp short .fsagain              ; window is too short for both
-.midok:
 
     ; --- the columns ----------------------------------------------------
     mov ax, [px_cx0]
@@ -247,9 +217,7 @@ px_layout:
     call px_lay_panels
     call px_lay_buttons
     call px_lay_bodies
-    call px_fslay
     call px_status_fit
-    call px_filmlabel               ; the View menu follows the layout
     call px_vcalc                   ; the picture's view on this canvas
     call px_navplace                ; ...and the thumbnail's in its well
     clc
@@ -263,24 +231,6 @@ px_layout:
     pop cx
     pop bx
     pop ax
-    ret
-
-; px_fs_wanted - out AL = 1 when the filmstrip is shown: the user's View >
-; Filmstrip choice when one was made, else the tier's default - shown on the
-; full layout, hidden on the compact one (SPEC.md 106.1). Preserves the rest
-px_fs_wanted:
-    mov al, [px_fsuser]             ; 0 = the tier's, 1 = on, 2 = off
-    or al, al
-    jz .tier
-    cmp al, 1
-    je .on
-    xor al, al
-    ret
-.on:
-    ret
-.tier:
-    mov al, [px_tier]
-    xor al, 1
     ret
 
 ; px_display - the display the window is ON (SPEC.md 39.16.4), never
@@ -321,8 +271,6 @@ px_display:
     mov [px_c_canvas], ax           ; canvas, canvas text
     mov ax, [si+6]
     mov [px_c_rule], ax             ; rule, chrome text
-    mov al, [si+8]
-    mov [px_c_card], al             ; a filmstrip card's inside
     pop si
     pop dx
     pop cx
@@ -590,38 +538,6 @@ px_lay_buttons:
     cmp si, PX_B_NZIN + 3
     jb .nl
 .nonav:
-
-    ; --- the filmstrip's two arrows ---------------------------------------
-    cmp byte [px_fson], 0
-    je .nofs
-    mov bx, [px_fsy1]               ; the arrows: PX_ARH rows (half that on a
-    inc bx                          ; CGA), centred in the body under the rule
-    mov dx, [px_sty1]
-    sub dx, bx                      ; DX = the body's rows
-    mov cx, PX_ARH
-    cmp byte [px_half], 0
-    je .arh
-    mov cx, PX_ARH / 2 + 2
-.arh:
-    sub dx, cx
-    sar dx, 1
-    add bx, dx                      ; BX = their top
-    mov dx, bx
-    add dx, cx
-    dec dx
-    mov ax, [px_cx0]
-    add ax, 3
-    mov cx, ax
-    add cx, PX_SBW - 1
-    mov si, PX_B_FSL
-    call px_setrect
-    mov cx, [px_xr]
-    sub cx, 3
-    mov ax, cx
-    sub ax, PX_SBW - 1
-    mov si, PX_B_FSR
-    call px_setrect
-.nofs:
 
     ; --- the status bar's two, short of the grow box's corner -----------
     mov cx, [px_xr]
@@ -2498,535 +2414,6 @@ px_infoline:
     ret
 
 
-; --- the filmstrip -------------------------------------------------------------
-; A rule over it - there is no title strip (SPEC.md 106.15): the folder's
-; count is the status bar's "n of N" - then the two arrows and the cards.
-px_draw_fs:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    cmp byte [px_fson], 0
-    jne .on
-    jmp .out
-.on:
-    mov ax, [px_cx0]                ; the rule
-    mov bx, [px_xr]
-    mov dx, [px_fsy1]
-    call px_hrule
-    mov ax, [px_fsy1]               ; the body: under the rule, over the bar
-    inc ax
-    mov [px_ry1], ax
-    mov ax, [px_sty1]
-    dec ax
-    mov [px_ry2], ax
-    mov si, PX_B_FSL                ; the left arrow, and its margin round it
-    call px_getrect
-    mov [px_bx1], cx
-    push ax
-    push bx
-    push cx
-    push dx
-    mov ax, [px_cx0]
-    mov bx, [px_ry1]
-    mov dx, [px_ry2]
-    call px_aroundbtn
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    call px_btn
-    mov si, PX_B_FSR                ; the right one
-    call px_getrect
-    mov [px_bx2], ax
-    push ax
-    push bx
-    push cx
-    push dx
-    mov cx, [px_xr]
-    mov bx, [px_ry1]
-    mov dx, [px_ry2]
-    call px_aroundbtn
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    call px_btn
-    call px_fscards                 ; the cards between them
-.out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; px_aroundbtn - the ground round button SI's rect inside the column AX..CX,
-; rows BX..DX (the band), in the filmstrip's ground. Preserves all
-px_aroundbtn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov [px_rx1], ax
-    mov [px_rx2], cx
-    mov [px_tyy], dx
-    push si
-    call px_getrect                 ; AX..CX, BX..DX = the button
-    pop si
-    mov di, [px_tyy]
-    push ax
-    push cx
-    push dx
-    mov ax, [px_rx1]                ; above it
-    mov cx, [px_rx2]
-    mov dx, bx
-    dec dx
-    mov bx, [px_ry1]
-    PXFILL [px_c_chrome]
-    pop dx
-    pop cx
-    pop ax
-    push ax
-    push bx
-    push cx
-    mov ax, [px_rx1]                ; below it
-    mov cx, [px_rx2]
-    mov bx, dx
-    inc bx
-    mov dx, di
-    PXFILL [px_c_chrome]
-    pop cx
-    pop bx
-    pop ax
-    push cx
-    mov cx, ax                      ; left of it
-    dec cx
-    mov ax, [px_rx1]
-    PXFILL [px_c_chrome]
-    pop cx
-    mov ax, cx                      ; right of it
-    inc ax
-    mov cx, [px_rx2]
-    PXFILL [px_c_chrome]
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; px_fscards - THE FILMSTRIP'S CARDS (SPEC.md 106.12) in columns AX..CX of
-; the body [px_ry1]..[px_ry2]: the folder's pictures around the open one, a
-; framed card each with its format's name, the file's name under it, the
-; open one's card in the highlight's colours. With no folder yet the cards
-; are blank and one line says how to fill them. The thumbnails are wave 5's.
-; The cells are px_fslay's; each card is drawn whole and recorded (px_ckey),
-; so px_fsync redraws the cards whose name or highlight moved and no other.
-px_fscards:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov ax, [px_fcx1]               ; the ground left of the cells...
-    mov bx, [px_fry1]
-    mov cx, [px_fcl]
-    dec cx
-    mov dx, [px_fry2]
-    PXFILL [px_c_chrome]
-    mov ax, [px_fcn]                ; ...and right of them
-    mov cx, PX_CARDW
-    mul cx
-    add ax, [px_fcl]
-    mov cx, [px_fcx2]
-    mov bx, [px_fry1]
-    mov dx, [px_fry2]
-    PXFILL [px_c_chrome]
-    mov ax, [px_nsum]               ; the cards' records: these names
-    mov [px_kfser], ax
-    xor bp, bp                      ; BP = the cell
-.cell:
-    cmp bp, [px_fcn]
-    jb .c1
-    jmp .msg
-.c1:
-    call px_card
-    inc bp
-    jmp short .cell
-.msg:
-    call px_fsmsg
-.out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; px_card - card BP: its cell, its box, the format in it, the name under it.
-; Every pixel of the cell once. Preserves all
-px_card:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    call px_ckey                    ; ...and what it shows, recorded
-    mov bx, bp
-    shl bx, 1
-    mov [px_kcard + bx], ax
-    mov [px_fckey], ax              ; (its thumbnail bit: SPEC.md 106.21)
-    inc byte [px_udrew]
-    mov ax, bp
-    mov cx, PX_CARDW
-    mul cx
-    add ax, [px_fcl]
-    mov [px_fcx], ax                ; the cell's left
-    add ax, (PX_CARDW - PX_BOXW) / 2
-    mov [px_fcb], ax                ; the box's left
-    ; which name, and is it the open picture?
-    mov byte [px_fccur], 0
-    mov word [px_fcname], px_s_empty0
-    mov ax, bp
-    add ax, [px_fcs]
-    cmp ax, [px_nnames]
-    jb .some
-    cmp word [px_nnames], 0         ; past a folder's last picture: no card,
-    je .named                       ; just the ground (blank cards are for the
-    mov ax, [px_fcx]                ; folder not yet known)
-    mov bx, [px_fry1]
-    mov cx, ax
-    add cx, PX_CARDW - 1
-    mov dx, [px_fry2]
-    PXFILL [px_c_chrome]
-    jmp .done
-.some:
-    cmp ax, [px_ncur]
-    jne .nc
-    mov byte [px_fccur], 1
-.nc:
-    mov cx, PX_NREC
-    mul cx
-    add ax, px_names
-    mov [px_fcname], ax
-.named:
-    ; --- above the name: ground, the box, ground --------------------------
-    mov ax, [px_fcx]                ; left of the box
-    mov bx, [px_fry1]
-    mov cx, [px_fcb]
-    dec cx
-    mov dx, [px_fcny]
-    dec dx
-    PXFILL [px_c_chrome]
-    mov ax, [px_fcb]                ; right of it
-    add ax, PX_BOXW
-    mov cx, [px_fcx]
-    add cx, PX_CARDW - 1
-    PXFILL [px_c_chrome]
-    mov ax, [px_fcb]                ; over it
-    mov cx, ax
-    add cx, PX_BOXW - 1
-    mov dx, [px_fct]
-    dec dx
-    PXFILL [px_c_chrome]
-    mov bx, [px_fct]                ; under it, to the name
-    add bx, [px_thh]
-    mov dx, [px_fcny]
-    dec dx
-    PXFILL [px_c_chrome]
-    mov bx, [px_fct]                ; the box
-    mov dx, bx
-    add dx, [px_thh]
-    dec dx
-    call px_wellframe
-    inc ax
-    inc bx
-    dec cx
-    dec dx
-    mov [px_fcix], ax
-    mov [px_fciy2], dx
-    mov al, [px_c_card]             ; its inside: the open one's in the
-    mov ah, [px_c_text]             ; strip's colours
-    cmp byte [px_fccur], 0
-    je .col
-    mov al, [px_c_strip]
-    mov ah, [px_c_stript]
-.col:
-    mov [px_fcpair], ax
-    mov si, [px_fcname]
-    cmp byte [si], 0
-    jne .th
-    mov ax, [px_fcix]               ; a blank card: one fill
-    PXFILL [px_fcpair]
-    jmp short .name
-.th:
-    test word [px_fckey], 0x2000    ; ITS THUMBNAIL, when one is made and the
-    jz .fmt                         ; display can draw it (SPEC.md 106.21)
-    mov ax, bp
-    add ax, [px_fcs]
-    call px_thcard
-    jmp short .name
-.fmt:
-    push si                         ; the format's name, by the extension
-    call px_extfmt                  ; AL = its PXF_*
-    call px_fmtname                 ; SI = the name
-    mov [px_fcfmt], si
-    pop si
-    mov ax, [px_fct]                ; the text's row: the box's middle
-    mov dx, [px_thh]
-    sub dx, 8
-    sar dx, 1
-    add ax, dx
-    mov [px_fcmid], ax
-    mov ax, [px_fcix]               ; above the text
-    mov dx, [px_fcmid]
-    dec dx
-    PXFILL [px_fcpair]
-    mov bx, [px_fcmid]              ; below it
-    add bx, 8
-    mov dx, [px_fciy2]
-    PXFILL [px_fcpair]
-    mov ax, [px_fcix]               ; the text: one run, centred
-    mov dx, [px_fcmid]
-    mov si, [px_fcfmt]
-    mov bl, [px_fcpair + 1]
-    mov bh, [px_fcpair]
-    mov di, 1
-    call px_tband
-.name:
-    ; --- the name's line, and the ground under it ---------------------------
-    mov ax, [px_fcx]
-    mov cx, ax
-    add cx, PX_CARDW - 1
-    mov dx, [px_fcny]
-    mov si, [px_fcname]
-    mov bl, [px_c_text]
-    mov bh, [px_c_chrome]
-    cmp byte [px_fccur], 0          ; the open picture's name in the
-    je .nl                          ; highlight's colours: its thumbnail
-    mov bl, [px_c_stript]           ; leaves little of the box's to say so
-    mov bh, [px_c_strip]
-.nl:
-    mov di, 1
-    call px_tband
-    mov bx, [px_fcny]
-    add bx, 8
-    mov dx, [px_fry2]
-    PXFILL [px_c_chrome]
-.done:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-
-; px_fslay - the filmstrip's cells, from the layout: between the arrows, on
-; the grid, at most PX_MAXCARD; which of the folder's names they show (the
-; open one in the middle where it can be); the box's and the name's rows.
-; Preserves all
-px_fslay:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov word [px_fcn], 0
-    cmp byte [px_fson], 0
-    jne .on
-    jmp .out
-.on:
-    mov ax, [px_fsy1]               ; the body: under the rule, over the bar
-    inc ax
-    mov [px_fry1], ax
-    mov ax, [px_sty1]
-    dec ax
-    mov [px_fry2], ax
-    mov si, PX_B_FSR
-    call px_getrect
-    dec ax
-    mov [px_fcx2], ax
-    mov si, PX_B_FSL
-    call px_getrect
-    mov ax, cx
-    inc ax
-    mov [px_fcx1], ax
-    add ax, 4 + 7                   ; the first cell, on the grid
-    and ax, 0xFFF8
-    mov [px_fcl], ax
-    mov dx, [px_fcx2]               ; cells that fit
-    sub dx, 4
-    sub dx, ax
-    inc dx
-    xor bx, bx
-    or dx, dx
-    jle .nc
-    mov ax, dx
-    xor dx, dx
-    mov cx, PX_CARDW
-    div cx
-    mov bx, ax
-    cmp bx, PX_MAXCARD
-    jbe .nc
-    mov bx, PX_MAXCARD
-.nc:
-    mov [px_fcn], bx
-    mov ax, [px_ncur]               ; the window of names: centred on the open
-    mov bx, [px_fcn]                ; one, turned by the pagers (106.21)
-    shr bx, 1
-    sub ax, bx
-    mov dx, ax                      ; (DX = the centred start)
-    add ax, [px_fsoff]
-    jns .s1
-    xor ax, ax
-.s1:
-    mov bx, [px_nnames]
-    sub bx, [px_fcn]
-    jns .s2
-    xor bx, bx
-.s2:
-    cmp ax, bx
-    jle .s3
-    mov ax, bx
-.s3:
-    mov [px_fcs], ax
-    sub ax, dx                      ; the turn as it stands, clamped: a pager
-    mov [px_fsoff], ax              ; pressed past the end does not bank it
-    call px_pgflags
-    mov ax, [px_fry1]               ; the rows: the card's box, then the
-    add ax, 2                       ; name's line
-    mov [px_fct], ax
-    add ax, [px_thh]
-    add ax, 2
-    mov [px_fcny], ax
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; px_ckey - AX = what card BP shows: its name's place in the folder (+ 4000h
-; for the open picture's), 0FFFEh a blank card (no folder yet), 0FFFDh no
-; card (past the folder's last picture). Preserves the rest
-px_ckey:
-    mov ax, bp
-    add ax, [px_fcs]
-    cmp ax, [px_nnames]
-    jb .some
-    mov ax, 0xFFFE
-    cmp word [px_nnames], 0
-    je .r
-    dec ax
-.r:
-    ret
-.some:
-    call px_thkey                   ; + 2000h: its thumbnail is drawn (106.21)
-    push ax
-    and ax, 0x1FFF
-    cmp ax, [px_ncur]
-    pop ax
-    jne .r
-    or ax, 0x4000
-    ret
-
-; px_fsync - each card against its record: a card whose name or highlight
-; moved is drawn, and no other. A new folder owes them all. Layout done,
-; clip armed. Preserves all
-px_fsync:
-    push ax
-    push bx
-    push bp
-    cmp byte [px_fson], 0
-    je .out
-    mov ax, [px_nsum]               ; another folder's names
-    cmp ax, [px_kfser]
-    je .same
-    mov [px_kfser], ax
-    xor bx, bx
-.owe:
-    mov word [px_kcard + bx], 0xFFFF
-    add bx, 2
-    cmp bx, PX_MAXCARD * 2
-    jb .owe
-.same:
-    xor bp, bp
-    mov byte [px_fsmany], 0
-.c:
-    cmp bp, [px_fcn]
-    jae .msg
-    call px_ckey
-    mov bx, bp
-    shl bx, 1
-    cmp ax, [px_kcard + bx]
-    je .n
-    call px_card
-    inc byte [px_fsmany]
-.n:
-    inc bp
-    jmp short .c
-.msg:
-    cmp byte [px_fsmany], 0         ; the cards moved under the blank names'
-    je .out                         ; line: it goes back over them
-    call px_fsmsg
-.out:
-    pop bp
-    pop bx
-    pop ax
-    ret
-
-; px_fsmsg - with no folder known, one line over the blank cards' names
-; saying how to fill them. Preserves all
-px_fsmsg:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    cmp word [px_nnames], 0
-    jne .out
-    cmp word [px_fcn], 0
-    je .out
-    mov ax, [px_fcn]
-    mov bx, PX_CARDW
-    mul bx
-    add ax, [px_fcl]
-    dec ax
-    mov cx, ax                      ; CX = the last cell's last column
-    mov ax, [px_fcl]
-    mov dx, [px_fcny]
-    mov si, px_fsline
-    mov bl, [px_c_text]
-    mov bh, [px_c_chrome]
-    mov di, 1
-    call px_tband
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 ; --- the status bar --------------------------------------------------------------
 ; A rule, the fields - each ONE run on the 8-pixel grid, parted by a
 ; separator's cell with its rule inside (wave-1 review MIN-6: a 1-pixel rule
@@ -3311,7 +2698,6 @@ px_sfcopy:
 ;   the graph       counted, channel, picture, face, well    px_kg
 ;   the drop-down   counted, channel                         px_kd
 ;   the thumbnail   picture, depth, face, well               px_kn
-;   a card          the name's place and the highlight       px_kcard
 ;
 ; A region painter draws its region whole and records; px_owe forgets a
 ; region's records first, so a painter under W_PAINT draws all of it
@@ -3514,7 +2900,7 @@ px_owe:
     call px_owebtns
 .p:
     test bl, PX_R_PANELS
-    jz .f
+    jz .s
     mov ax, PX_B_NZIN
     mov cx, 3
     call px_owebtns
@@ -3524,13 +2910,6 @@ px_owe:
     mov word [px_kg], 0xFFFF        ; (no key is: a counted byte is 0 or 1)
     mov word [px_kn], 0xFFFF
     mov word [px_kd], 0xFFFF
-.f:
-    test bl, PX_R_FS
-    jz .s
-    mov ax, PX_B_FSL
-    mov cx, 2
-    call px_owebtns
-    not word [px_kfser]             ; (px_fscards records them all)
 .s:
     test bl, PX_R_STATUS
     jz .out
@@ -3584,7 +2963,7 @@ px_bsync:
 ; px_usync - THE WALK (SPEC.md 106.15): the window against its records -
 ; buttons, the caption row, the status fields, the Navigator's picture and
 ; frame, the Histogram's graph, drop-down and statistics, Image Info's
-; lines, the filmstrip's cards - each drawing what moved. Layout done, clip
+; lines - each drawing what moved. Layout done, clip
 ; armed, the lock held. Preserves all
 px_usync:
     push ax
@@ -3613,7 +2992,6 @@ px_usync:
     call px_histsync
     call px_infosync
 .fs:
-    call px_fsync
     pop bx
     pop ax
     ret

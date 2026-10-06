@@ -2,7 +2,7 @@
 ; os8088 - apps/pixel/pxextra.asm
 ;
 ; PiXEL's EXTRAS, a far-called lazy PART LINKED against the package (SPEC.md
-; 106.25, 106.20): part 9 of PIXEL.O88. Four formats a period PC met and
+; 106.25, 106.20): part 8 of PIXEL.O88. Four formats a period PC met and
 ; this OS's own era made - TIFF, ICO and CUR, IFF (Deluxe Paint's ILBM and
 ; PBM) and MacPaint - with 106.18's shape: HEAD on the UI task, DECODE on
 ; the worker, rows to the package's ONE emitter through K_EMIT.

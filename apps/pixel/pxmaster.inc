@@ -391,8 +391,6 @@ px_claims:
     jnc .fits
     mov cl, 0xFF
 .fits:
-    call px_tgive                   ; the thumbnails' store first, when its
-    jc .again                       ; 31 KB buy a finer one (review-w5 F5)
     cmp cl, 0xFF
     je .free1
     cmp byte [px_prev + PXR_HAVE], 0

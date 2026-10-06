@@ -15,8 +15,8 @@ found rather than only detected. tests/mrdraw.py is the shape this copies.
 The gestures are the ones a user makes with a picture open (CITY.PCX, a
 320x240 PCX): a tool by its letter and back, a zoom step in and out, a pan,
 Fit, the Histogram's channel through its drop-down, Hide Panels and Show
-Panels, Hide Filmstrip and Show Filmstrip, the keyboard card up and down, and
-an open (File > Revert, the decode included); and EDITING's (106.24): the
+Panels, the keyboard card up and down, an open (File > Revert, the decode
+included), Next and Prev; and EDITING's (106.24): the
 Marquee by its letter, a drag, a nudge, Esc, Invert and its Undo, a card up
 and down, the Eyedropper's readout following the pointer, Select All. Keys
 and menu picks, so a press's own button flash is not in the count.
@@ -66,18 +66,11 @@ KSEG = 0x60
 CEIL = {"tool: Zoom (z)": 16, "tool: Hand (h)": 16, "zoom in (=)": 40,
         "pan down (arrow)": 12, "pan across (arrow)": 90,
         "zoom out (-)": 40, "Fit (0)": 40, "Hide Panels": 50,
-        "Show Panels": 180, "Hide Filmstrip": 200,
-        # (since 106.21 the folder holds seven pictures, so the strip's
-        # cards are seven named cards with their thumbnails where wave 4's
-        # were one named card and blank ones: ~14 calls a card either way)
-        "Show Filmstrip": 280,
+        "Show Panels": 180,
         "card up (F1)": 15, "status field (timer)": 2,
         "open (Revert)": 200,
-        # THE FOLDER (SPEC.md 106.21): Next and Prev are an open each, the
-        # strip's two cards whose highlight moved and nothing else of it;
-        # a page is the strip's cards that changed and its two pagers
+        # THE FOLDER (SPEC.md 106.21): Next and Prev are an open each
         "Next (Space)": 230, "Prev (Backspace)": 230,
-        "strip page (>)": 130, "strip page (<)": 130,
         # EDITING (SPEC.md 106.24): a tool is two buttons; the marquee is
         # four XOR fills a step of the drag off and four on; a nudge, Esc
         # and Select All are the outline and nothing else; a palette
@@ -91,8 +84,8 @@ CEIL = {"tool: Zoom (z)": 16, "tool: Hand (h)": 16, "zoom in (=)": 40,
 # through the canvas's composer, a band or two, and nothing of the chrome
 CEIL_ANIM = 12
 ANIM_N = 6
-# the folder beside CITY.PCX (tools/pixcorpus.py's): seven pictures, more
-# than a strip shows, so it pages
+# the folder beside CITY.PCX (tools/pixcorpus.py's): seven pictures, for
+# Next and Prev
 FOLDER = ("B24.BMP", "C8.PCX", "G8.GIF", "N6.PPM", "P0_8.PNG", "T2_24.TGA")
 
 
@@ -204,10 +197,9 @@ def main():
             return B("px_busy") == 0 and B("px_job") == 0
 
         def still():
-            """...and the thumbnails done: no hidden decode, the timer at
-            its slow pace (SPEC.md 106.21) - a gesture is measured from
-            still, or a card arriving would be counted as its"""
-            return idle() and B("px_hmode") == 0 and B("px_tq") == 0
+            """...and no hidden decode (SPEC.md 106.21): a gesture is
+            measured from still"""
+            return idle() and B("px_hmode") == 0
         M.until(m, lambda _: W("px_ndone") and still(), "the decode",
                 poll=0.3, limit=900)
         ui.settle()
@@ -257,10 +249,6 @@ def main():
         measure("Fit (0)", lambda: key("Digit0"))
         measure("Hide Panels", lambda: ui.menu_pick("View", "Hide Panels"))
         measure("Show Panels", lambda: ui.menu_pick("View", "Show Panels"))
-        measure("Hide Filmstrip",
-                lambda: ui.menu_pick("View", "Hide Filmstrip"))
-        measure("Show Filmstrip",
-                lambda: ui.menu_pick("View", "Show Filmstrip"))
         measure("card up (F1)", lambda: key("F1"))
         measure("card down (Esc)", lambda: key("Escape"))
         # the free memory "changed" (its value made stale, so the next
@@ -286,17 +274,6 @@ def main():
         n0 = W("px_ndone")
         measure("Prev (Backspace)", lambda: key("Backspace"),
                 lambda: W("px_ndone") != n0 and idle())
-
-        def pager(i):
-            r = m.read(base + syms["px_brects"] + 8 * i, 8)
-            x1, y1, x2, y2 = (u16(r, 0), u16(r, 2), u16(r, 4), u16(r, 6))
-            ui.mo.click((x1 + x2) // 2, (y1 + y2) // 2)
-        fcs = W("px_fcs")
-        measure("strip page (>)", lambda: pager(20),
-                lambda: W("px_fcs") != fcs)
-        fcs = W("px_fcs")
-        measure("strip page (<)", lambda: pager(19),
-                lambda: W("px_fcs") != fcs)
 
         # EDITING (SPEC.md 106.24)
         measure("tool: Marquee (m)", lambda: key("KeyM"))
@@ -360,15 +337,14 @@ def main():
                   "Minus"):
             key(k)
             M.ui_done(m, k)
-        ui.menu_pick("View", "Hide Filmstrip")
-        ui.menu_pick("View", "Show Filmstrip")
+        ui.menu_pick("View", "Hide Panels")
+        ui.menu_pick("View", "Show Panels")
         ui.mo.to(2, 2)
         ui.settle()
         M.until(m, lambda _: still(), "still, before the identity",
                 poll=0.3, limit=900)
         # (and the free-memory field's look past: it is a five-second look,
-        # PX_MEMT, and the store Hide Filmstrip gave back and Show Filmstrip
-        # claimed again moves it 31K - the repaint draws it as it is now)
+        # PX_MEMT, and the repaint draws it as it is now)
         M.guest_sleep(m, 6.0)
 
         def content():
@@ -421,8 +397,7 @@ def main():
         # A GIF THAT PLAYS (SPEC.md 106.25): the gallery's BOUNCE.GIF, in a
         # folder of its own (the record's folder poked, pxdecode's way), and
         # what its frames draw - the rect each changed, never the window
-        m.write(base + syms["px_thoff"], b"\1")    # (no thumbnail arriving
-        cl = dir_cluster(disk, "ANIM")              # between the two shots)
+        cl = dir_cluster(disk, "ANIM")
         m.write(base + syms["px_cur"] + 14, bytes((cl & 255, cl >> 8)))
         m.write(base + syms["px_cur"], b"BOUNCE.GIF".ljust(13, b"\0"))
         n0 = W("px_ndone")

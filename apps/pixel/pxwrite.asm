@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/pixel/pxwrite.asm
 ;
-; PiXEL's WRITE PART (SPEC.md 106.24): part 8 of PIXEL.O88, LINKED against
+; PiXEL's WRITE PART (SPEC.md 106.24): part 7 of PIXEL.O88, LINKED against
 ; the package (build/pxlink.inc, SPEC.md 106.20) - File > Save As's five
 ; writers: BMP (8-bit, and 24-bit on a CUBE master), PCX (8-bit), GIF (the
 ; LZW encoder of apps/os88lzw.inc), PNG (a zlib stream of one fixed-Huffman

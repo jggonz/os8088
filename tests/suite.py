@@ -7995,8 +7995,9 @@ SOAK = [
         "Hercules face: every far call into a drawing cell of the API table "
         "that RETURNS INTO PIXEL (the planar blit's own clip walk re-enters "
         "its cell from .cold and is not a call of ours), per gesture - a "
-        "tool, a zoom step each way, a pan each way, Fit, the panels and the "
-        "filmstrip hidden and shown, the key card, a status field, an open - "
+        "tool, a zoom step each way, a pan each way, Fit, the panels "
+        "hidden and shown, the key card, a status field, an open, Next and "
+        "Prev - "
         "each under a ceiling a repaint blows through, named by the routine "
         "that made it; and the picture the records drew pixel-identical to "
         "a forced full repaint; then the gallery's BOUNCE.GIF playing "
@@ -8014,24 +8015,18 @@ SOAK = [
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/PIXEL.GFX",
                "build/os8088-360.img")),
-    Row("pxthumb", "soak", py("tests/pxthumb.py"), 400.0,
+    Row("pxfolder", "soak", py("tests/pxfolder.py"), 300.0,
         "SPEC.md 106.21 on the VGA XT with a 720 KB B:: a folder of seven "
         "pictures opened by its ASSOCIATION from a subfolder of B: - with "
-        "ANOTHER window in front (106.25, review-w5 F13) no thumbnail is "
+        "ANOTHER window in front (106.25, review-w5 F13) no hidden decode is "
         "begun for 20 s and no PiXEL callback holds the UI task 0.25 s, "
-        "timed in guest cycles entry to return; in front, none holds it "
-        "3 s; the strip is the document's folder; the cards on show get their "
-        "thumbnails, the open picture's from its master with no decode and "
-        "every other one by exactly one hidden decode, each the host's own "
-        "(tools/pixelsim.py's master at px_tcap's scale, sampled and taken "
-        "to the cube) byte for byte; SYSTEM/APPDATA/PIXEL.THC NOT written "
-        "while its folder is on show and written whole by the close (under "
-        "20 s), read back off the floppy ON THE HOST (tools/os88flush.py) "
-        "and every entry its own key and the store's bytes; PiXEL opened "
-        "again: the strip from the cache with NO decode; a slideshow of "
+        "timed in guest cycles entry to return; the folder list is the "
+        "document's folder, the open picture at its place; a slideshow of "
         "three slides with its button latched, stopped by Esc on the slide "
         "shown, no decode's claim left; and twenty Next and Prev ending "
-        "with PiXEL's claims as they were and the largest free run too",
+        "with PiXEL's claims as they were and the largest free run too. "
+        "What survived of pxthumb when the filmstrip, its thumbnails and "
+        "PIXEL.THC were withdrawn (2026-10-06)",
         needs=("marty", "nasm"), serial=True,
         wants=("build/pixel.o88", "build/PIXEL.GFX",
                "build/os8088-360.img")),

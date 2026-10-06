@@ -12,7 +12,7 @@
 ; (PXK_SVC, SPEC.md 106.18) are the precedent; these are the UI task's.
 ;
 ; A routine reached so reads its strings through DS: a part copies its own
-; words into the package's [px_cline] first (pv_cstr), pxfold.asm's rule.
+; words into the package's [px_cline] first (pv_cstr).
 ; =============================================================================
 
 %ifndef PXSVC_INC

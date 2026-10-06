@@ -1,8 +1,8 @@
 ; =============================================================================
 ; os8088 - apps/pixel/pxfull.asm
 ;
-; PiXEL's FULL-SCREEN PART (SPEC.md 106.23): part 6 of PIXEL.O88, LINKED
-; against the package (build/pxlink.inc) like the SIMPLE and FOLDER parts -
+; PiXEL's FULL-SCREEN PART (SPEC.md 106.23): part 5 of PIXEL.O88, LINKED
+; against the package (build/pxlink.inc) like the SIMPLE part -
 ; every mode's renderer, the colours each mode shows (the median cut, the
 ; plan search over any colours, the CGA's palette chooser), the diffuser,
 ; the lettering and the input poll of the full screen. The resident fetches

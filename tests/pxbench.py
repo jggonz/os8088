@@ -177,8 +177,6 @@ def session(disk, pics, work, machine=None):
 class Guest:
     def __init__(self, m, seg):
         self.m, self.seg, self.base = m, seg, seg * 16
-        if "px_thoff" in syms:      # no thumbnails here (SPEC.md 106.21):
-            m.write(self.base + syms["px_thoff"], b"\1")  # not what this row times
 
     def a(self, n):
         return self.base + syms[n]
