@@ -2291,6 +2291,8 @@ fm_s_compress: db 'Compress', 0 ; SPEC.md 22.22 - no ellipsis: it asks nothing
 fm_s_uncomp:  db 'Uncompress', 0 ; and starts the moment it is picked, and
                                 ; SPEC.md 22.23's other half says the same
 %ifdef KERN_BIG
+              db MENU_DIS       ; its greyed twin is the byte before it, as
+                                ; Close Window's is (fm_rclick, SPEC.md 38.1)
 fm_s_uncto:   db 'Uncompress To...', 0  ; SPEC.md 22.23.6 - kern_big's alone: the
                                 ; join it names cannot fit kern_small's heap
 %endif
@@ -3072,6 +3074,10 @@ fm_btn1:
                                 ; on a full paint and a PRESSED button on a
                                 ; release, and only the fill covers both
 .dn:
+    cmp al, FM_BGO              ; the chooser's default: its flags as DRAWN,
+    jne .ndef                   ; which FDH_SEL's edge test reads (SPEC.md
+    mov [fdlg_gdis], di         ; 38.8)
+.ndef:
     call fm_isdown              ; ZF = 1: this is the one being held
     jne .draw
     or di, OS88UI_DOWN
@@ -4481,7 +4487,10 @@ fm_settitle:
     or di, di
     jz .out                     ; unowned window: nothing to retitle
     mov ax, [di+I_WIN]          ; inst_bind_win runs before KD_INIT, so this
-    mov [fm_tdirty], ax         ; is already valid on the very first call
+    cmp ax, [fdlg_win]          ; is already valid on the very first call -
+    je .cap                     ; and the CHOOSER's caption is fdlg_ttl, which
+    mov [fm_tdirty], ax         ; no move changes: its strip is never owed
+.cap:                           ; (SPEC.md 38.8), only the dock's 16 bytes
     add di, I_NAME              ; DI -> the 16 bytes the caption points at
     push di
     mov di, [fm_vp]
@@ -5218,9 +5227,12 @@ fm_c_uncto:                     ; ...three times on kern_big (SPEC.md 22.23.6)
                                 ; itself, which is why there is none here
     pushf
     push ax
+    cmp word [clo_seg], 0       ; ...UNLESS a claim is live: an armed clone or
+    jne .held                   ; join owns the image (fm_clone_bad's rule)
     mov al, MOD_CLONE
     call mod_drop               ; ...and the image goes back on EVERY path,
-    pop ax                      ; including the ones that said nothing
+.held:                          ; including the ones that said nothing
+    pop ax
     popf
     jnc .done
     or ax, ax
@@ -5765,8 +5777,9 @@ fm_cxi_file:
     dw fm_s_open, fm_s_cut, fm_s_copy, fm_s_rename, fm_s_delete
     dw fm_s_compress, fm_s_uncomp
 %ifdef KERN_BIG
-    dw fm_s_uncto               ; SPEC.md 22.23.6: the WF_FULL surface too
-%endif
+fm_cxi_uto:
+    dw fm_s_uncto               ; SPEC.md 22.23.6: the WF_FULL surface too -
+%endif                          ; or its MENU_DIS twin (fm_rclick)
 fm_cxc_file:
     db FMC_OPEN, FMC_CUT, FMC_COPY, FMC_RENAME, FMC_DELETE
     db FMC_COMPRESS, FMC_UNCOMP
@@ -5874,6 +5887,14 @@ fm_rclick_x:
 .rc_full:                       ; still puts it on screen BEFORE the popup, so
     call fm_repaint             ; the save-under captures the new highlight
 .rc_shown:
+%ifdef KERN_BIG
+    mov ax, fm_s_uncto          ; Uncompress To... opens a Save box, so inside
+    cmp word [fdlg_win], 0      ; the chooser - the one Disk window a press
+    je .uto                     ; can reach while one is up - it is GREY, a
+    dec ax                      ; fact (SPEC.md 47, 38.1): its MENU_DIS twin
+.uto:
+    mov [fm_cxi_uto], ax
+%endif
     pop di
     pop dx                      ; the absolute press point again
     pop cx

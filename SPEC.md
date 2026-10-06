@@ -47227,8 +47227,12 @@ refusal - is that section's.
    places and both names. That is the 512-byte header at the front of the
    claim (§22.23.5's table; 512 so the window behind it is sector-aligned),
    written when the join starts and again at every prompt, not image scratch, because anything that drops and reloads
-   `CLONE.DRV` while the prompt is up - a Compress in another Disk window -
-   would lose image scratch and keeps the claim.
+   `CLONE.DRV` while the prompt is up would lose image scratch and keeps the
+   claim. A Compress or Uncompress in another Disk window no longer does:
+   `fm_c_compress` leaves the image loaded while `[clo_seg]` is live, which is
+   `fm_clone_bad`'s rule - a live claim's mode 7 owns the image, and a clone
+   resuming through `CLV_SAVED` with the system disk out would otherwise
+   answer `CERR_NOMOD` with its prompt and claim still armed.
 3. **The claim IS `[clo_seg]`**, with `CLS_JOIN` where a clone keeps its
    step. That buys the whole prompt for nothing: mode 7 (§22.21.1) already
    routes every key to `CLV_KEY`, asks `CLV_LINE` for both lines and frees
@@ -62656,6 +62660,7 @@ hook sites in §38.9 and nowhere else:
 | content width | the window's | the window's less `FD_COLW`, the button column (§38.3) |
 | status line at rest | Size / Free | Save form: the name box, `Save as:` (edit mode 8, §38.5) |
 | Open in New Window | opens one | refused with a beep: it would land over a modal chooser |
+| Uncompress To... (`kern_big`, §22.23.6) | asks with a Save box | grey on the file menu: a second dialog cannot open (`fm_rclick` points the item at its `MENU_DIS` twin, the byte before the string) |
 
 Everything else — the listing, icons and list view, folder dive and `..`,
 Backspace, the A/B keys, Refresh, the scroll bar, the right-click menu with
@@ -62710,11 +62715,31 @@ Disk window that is not the chooser never crosses into the glue.
 - `fdlg_top` — called right after `wm_top` in the keyboard poll: it
   substitutes the chooser for the frontmost window.
 
+**Between the end and the reap, nothing gets through.** A chooser ends inside
+the pass's event drain - a posted answer (§38.6), or its window closed or
+minimized from its own title bar - and `fdlg_reap` runs at that pass's tail,
+so the rest of the drain is still to come. From the moment `[fdlg_act]` is
+non-zero, or `fdlg_gate` finds the window gone while `[fdlg_win]` still names
+it, `fdlg_grab` swallows **every** press, the chooser's own included,
+**silently** and arming nothing - so its release is ignored too - and
+`fdlg_top` sends a key to no window at all. `fdlg_gate` tells the two
+not-up cases apart by `ZF` (none, or gone), which costs it nothing. Without
+this a press later in the same drain reached a live-looking machine: a click
+moved the folder or rewrote the name a posted Save would commit, a Cancel
+overwrote a posted commit, and a drive icon's double-click launched a Disk
+window into the dead chooser's freed record, pool block and window slot -
+the first free of each - which the reap then found used and visible and
+adopted **as the chooser**, button column, `Save as:` box, completion proc
+and all. The gap is one drain and never a tick: the `wm_hide` or
+`wm_destroy` that took the window posted `[ui_post]` through
+`wm_paint_dmg`, so the tail's ladder reaches the reap in the same pass.
+
 **Self-validating.** Both helpers begin at `fdlg_gate`, which answers
 whether `[fdlg_win]` names a window that is still *used and visible* - and
 does nothing else. A chooser closed by its close box, minimized, or taken
-down by anything else is **no chooser** to either filter, so no path can
-wedge the system behind a dead modal.
+down by anything else is ended by the reap of the same pass, and until then
+the two filters hold everything still (below) - so no path can wedge the
+system behind a dead modal, and none can act on one.
 
 A third call site, `fdlg_reap`, sits in the UI task's deferred section and
 runs once per loop pass, **after** the pass's event and **before** its
@@ -62830,6 +62855,7 @@ role one block plays):
 | `fdlg_blk` | its pool block, 0 when none |
 | `fdlg_mode` | 0 Open, 1 Save |
 | `fdlg_act` | the posted answer: 0 none, 1 commit, 2 cancel (§38.6) |
+| `fdlg_gdis` | button 1's flags as last drawn, for `FDH_SEL`'s edge test (§38.8) |
 | `fdlg_rqcb`, `fdlg_rqwin`, `fdlg_rqrec`, `fdlg_rqsp` | the requester: completion proc, window, record and `I_SPTR` |
 | `fdlg_name` | the name handed back, 13 bytes |
 | `fdlg_cdrv`, `fdlg_ccwd` | where the chooser stood when it closed |
@@ -62932,8 +62958,11 @@ that same window when the hook returns. Closing the chooser there would hand
 it a destroyed window to draw. So the hook only records the answer in
 `[fdlg_act]` and wakes the UI task, and `fdlg_reap`, on the next pass and
 with the lock free, takes the lock and does the work: close, restore the
-folder, size, remember, call back. A keystroke typed between the post and the
-reap still lands on the chooser and changes nothing.
+folder, size, remember, call back. **The answer is frozen once posted**: a
+press later in the same drain is swallowed (§38.2), a column release whose
+press came before the answer fires nothing (`fdlg_btn`), and a keystroke
+cannot arrive between the post and the reap at all - the keyboard is polled
+at the top of a pass and the reap runs at the tail of the one that posted.
 
 **Staleness (binding).** The request records the requester's instance
 record, its `I_WIN` and its `I_SPTR`. The callback is skipped, silently, if
@@ -63017,8 +63046,15 @@ All of it is the Disk window's (§22.2, §22.13): a selection change XORs two
 bands, a typed character in the name box redraws the status line only, a
 scroll blits. The chooser adds one partial redraw: in the Open form a
 selection change redraws button 1, whose greying is the selection
-(`FDH_SEL`). Nothing else the chooser does repaints more than the Disk window
-would have.
+(`FDH_SEL`) - **and only when that greying flips**. `[fdlg_gdis]` is the
+flags the button was last DRAWN with, recorded by the draw itself
+(`fdlg_drawbtn`, `kern_big`'s `fm_btn1`) and not by `fdlg_blabel`, which a hit
+test calls too; one file to another leaves the button as it was and costs no
+fill and no label. And the chooser repaints LESS than a Disk window in one
+place: its caption is the constant `Open` or `Save As` (`fdlg_ttl`), so
+`fm_settitle` banks no `[fm_tdirty]` for it and a dive, `..`, Drive or
+Backspace does not redraw a title strip that cannot have changed - only the
+instance's 16 name bytes move, for its dock tile and Task Manager row.
 
 ### 38.9 Symbols
 
@@ -63028,7 +63064,7 @@ would have.
 | `fdlg_hook` | resident: `AL` = event; `CF=1` when the acting Disk window is the chooser and it took the event |
 | `fdlg_hook_x` | the glue's dispatcher, one table of `FDH_*` events; each `FDH_*` is its own table offset (twice the row), so the dispatch needs no shift |
 | `fdlg_reap_x` | the UI ladder's collection and the posted answer, far-called straight from `ui.inc`'s guarded step |
-| `fdlg_gate` | is `[fdlg_win]` still used and visible - a test, nothing more (§38.2) |
+| `fdlg_gate` | is `[fdlg_win]` still used and visible - a test, nothing more; `ZF` says none or gone (§38.2) |
 | `fdlg_grab_x`, `fdlg_top_x` | modality (§38.2) |
 | `fdlg_close`, `fdlg_commit`, `fdlg_sizeof` | §38.7 steps 6 and 7 |
 | `fdlg_brect`, `fdlg_blabel` | the button column's rect and label/greying, shared by both builds |

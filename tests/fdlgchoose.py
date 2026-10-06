@@ -13,7 +13,10 @@ File > Open and File > Save As, and confirms every step off guest state:
   3. Save As puts the app's document in the box, Down fills it from a row,
      a typed name commits, and the file is in the folder afterwards;
   4. Escape, the Cancel button and the close box each cancel, and the next
-     Open remembers the folder (38.10);
+     Open remembers the folder (38.10) - and presses queued in the SAME drain
+     as the close box's release are swallowed, so a drive icon's double-click
+     there cannot launch a Disk window into the dead chooser's slot and be
+     adopted as the chooser (38.2);
   5. Drive leaves the floppy (38.11);
   6. with four of the USER's Disk windows open a fifth is refused and the
      chooser still opens - the fifth pool block is its own (38.1).
@@ -26,7 +29,9 @@ os88sym's own knobs and the small system disk, which carries the apps:
         python3 tests/fdlgchoose.py
 
 VERIFIED TO FAIL: `make NOFDMEDIA=1` reds step 1 (the chooser opens on
-B:\\APPS, where Note Pad was launched from).
+B:\\APPS, where Note Pad was launched from). Step 4's same-drain leg reds on
+the kernel before SPEC.md 38.2's "between the end and the reap" rule: the
+drive's double-click opens A: in that drain.
 """
 import os
 import sys
@@ -59,6 +64,36 @@ def fs_sel(ui):
 def ebuf(ui):
     raw = bytes(ui.m.read(ui._S("fm_ebuf"), 13))
     return raw.split(b"\0")[0].decode("ascii", "replace")
+
+
+def inject(ui, recs):
+    """Queue mouse records in the guest's event ring as ONE drain's worth.
+
+    The machine is stopped at the top of ui_task's event section, where no
+    evq_* critical section is in flight, and the records go in behind
+    whatever is queued - so the pass that resumes pops them all, in order,
+    before its tail runs. That is the only way to put two gestures in one
+    drain on purpose: a real mouse spaces them by the UART and the clock.
+    """
+    m = ui.m
+    m.bp_exec(ui._S("ui_task.events"))
+    m.run()
+    if not m.wait_stop(60.0):
+        raise RuntimeError("ui_task never reached its event section")
+    m.bp_exec()
+    t = ui._word("ticks")
+    tail = ui._byte("evq_tail")
+    n = ui._byte("evq_count")
+    assert n + len(recs) <= 16, "the ring has %d queued" % n
+    buf = ui._S("evq_buf")
+    for ty, x, y in recs:
+        m.write(buf + tail, b"".join(v.to_bytes(2, "little")
+                                     for v in (ty, x, y, t)))
+        tail = (tail + 8) & 0x7F
+        n += 1
+    m.write(ui._S("evq_tail"), bytes([tail]))
+    m.write(ui._S("evq_count"), bytes([n]))
+    m.run()
 
 
 def ink(ui, w, k):
@@ -131,6 +166,39 @@ with os88ui.boot(SYS, apps=APPS) as ui:
                   "(%r)" % rows)
         ui.chooser_cancel(how)
         check("cancelled by %s" % how, True)
+
+    # --- 4b: the close box, and a drive double-click in the SAME drain -------
+    # Between the release that closes the chooser and the reap at the pass's
+    # tail, the chooser's record, pool block and window slot are free, and a
+    # Disk window launched there takes them - and was adopted as the chooser
+    # (SPEC.md 38.2). With the rule, every press in that drain is swallowed.
+    ui.menu_pick("File", "Open")
+    w = ui._refresh(ui.chooser())
+    cx, cy = geom.close_xy(w.x, w.y)
+    dx, dy = geom.drive_pt(m, "A", ui.sym)
+    over = [o.title for o in ui.windows()
+            if o.visible and o.i != w.i and o.covers(dx, dy)]
+    check("drive A:'s zone is on the glass", not over, "(%r)" % over)
+    before = sorted(o.i for o in ui.windows() if o.i != w.i)
+    inject(ui, [(1, cx, cy), (2, cx, cy),          # EVT_MDOWN, EVT_MUP
+                (1, dx, dy), (2, dx, dy), (1, dx, dy), (2, dx, dy)])
+    try:
+        ui.chooser_gone()
+    except os88ui.UIError:
+        pass                        # ...the checks below say what is up
+    ui.settle()
+    after = sorted(o.i for o in ui.windows())
+    check("the chooser is reaped (38.2)", ui._word("fdlg_win") == 0
+          and ui._word("fdlg_blk") == 0,
+          "(fdlg_win %04X)" % ui._word("fdlg_win"))
+    check("the same drain's double-click is swallowed", after == before,
+          "(%r -> %r: %r)" % (before, after, ui.titles()))
+    if ui._word("fdlg_win"):
+        sys.exit("FAILURES: a Disk window was adopted as the chooser - "
+                 "nothing below can run behind it (%r)" % fails)
+    for o in ui.windows():
+        if o.i not in before:
+            ui.close(o)             # ...so step 6 counts what it always did
 
     # --- 5: Drive leaves the floppy -------------------------------------------
     ui.menu_pick("File", "Open")

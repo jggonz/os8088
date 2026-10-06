@@ -409,12 +409,14 @@ fdlg_home_save:
 
 ; -----------------------------------------------------------------------------
 ; fdlg_gate - is the chooser still a USED and VISIBLE window? (SPEC.md 38.2)
-; out: CF=0 with BX = the chooser; CF=1 when there is none, or the one there
-;      was has gone (close box, minimize, anything). AL clobbered - all
-;      three callers bank AX - and nothing else is touched.
+; out: CF=0 with BX = the chooser; CF=1 when there is none (ZF=1), or the one
+;      there was has gone (ZF=0: close box, minimize, anything). AL clobbered
+;      - all three callers bank AX - and nothing else is touched.
 ;
-; It ANSWERS and does nothing else: a chooser that has gone is no chooser to
-; the two filters, and fdlg_reap - the same UI pass - is what cancels it.
+; It ANSWERS and does nothing else: fdlg_reap - the same UI pass, because the
+; wm_hide or wm_destroy that took the window posted [ui_post] through
+; wm_paint_dmg - is what cancels a chooser that has gone, and the two filters
+; hold everything still until it has (ZF is how they tell the cases apart).
 ; -----------------------------------------------------------------------------
 fdlg_gate:
     mov bx, [fdlg_win]
@@ -473,34 +475,50 @@ FDBODY fdlg_reap_x
 ; "Outside" is wm_hit's answer: the press passes only when the window it
 ; would reach IS the chooser, so the menu bar, the dock, the desktop and every
 ; other window are inert - including one that has come up OVER the chooser.
+;
+; A chooser that has ANSWERED, or whose window has GONE, is not reaped until
+; the tail of this pass, and the rest of the drain is still to come: every
+; press in it is swallowed, silently and arming nothing, so no release fires
+; either. A press let through there would change a posted answer's folder or
+; name, or - a drive icon's double-click - launch a Disk window into the dead
+; chooser's freed block and slot, which the reap would then adopt as the
+; chooser (SPEC.md 38.2).
 ; -----------------------------------------------------------------------------
 FDBODY fdlg_grab_x
     push ax
     push bx
     call fdlg_gate
-    jc .pass
+    jc .notup
+    cmp byte [fdlg_act], 0
+    jne .eat                    ; answered: nothing more reaches it
     push bx
     call KERNEL_SEG:cw_wm_hit   ; BX = the window this press would reach
     pop ax
     cmp ax, bx
     je .out                     ; CF=0 from the compare
     FDK cw_snd_beep
+.eat:
     stc
     jmp short .out
-.pass:
-    clc
+.notup:
+    jnz .eat                    ; ZF=0: gone, and not yet reaped
+    clc                         ; ZF=1: there is none
 .out:
     pop bx
     pop ax
     retf
 
-; fdlg_top - in: BX = wm_top's answer; out: BX = the chooser instead, if up
+; fdlg_top - in: BX = wm_top's answer; out: BX = the chooser instead, if up,
+; and 0 - the key goes nowhere - if it has gone and is not yet reaped
 FDBODY fdlg_top_x
     push ax
     push bx
     call fdlg_gate
     pop ax                      ; AX = wm_top's answer
     jnc .out
+    jz .stand                   ; ZF=1: there is none
+    xor ax, ax                  ; ZF=0: gone (SPEC.md 38.2)
+.stand:
     xchg ax, bx                 ; ...which stands
 .out:
     pop ax
@@ -754,7 +772,11 @@ fdlg_h_pick:
 
 ; FDH_SEL - fm_onclick's new FS_SEL. Save form: a file fills the box (the
 ; status line is the caller's to redraw - the click ended mode 8, so it is
-; owed). Open form: the default button's greying is the selection. CF=0.
+; owed). Open form: the default button's greying is the selection, and it is
+; redrawn only when that greying FLIPS (SPEC.md 38.8) - [fdlg_gdis] is the
+; flags it was last DRAWN with, recorded by the draw itself (fdlg_drawbtn,
+; kern_big's fm_btn1) and not by fdlg_blabel, which a hit test calls too.
+; CF=0; CX, DX, SI and DI kept.
 fdlg_h_sel:
     cmp byte [fdlg_mode], 0
     je .open
@@ -762,7 +784,15 @@ fdlg_h_sel:
     jc fdlg_h_no
     jmp fdlg_toebuf
 .open:
+    push si
+    push di
+    mov si, [fdlg_gdis]         ; what the glass shows...
     mov al, FM_BGO
+    call fdlg_blabel            ; ...against what it should
+    cmp si, di
+    pop di
+    pop si                      ; (pop writes no flag)
+    je fdlg_h_no                ; one file to another: not a pixel changes
 %ifdef KERN_BIG
     FDX fm_btn1                 ; the Disk window's own: pressed look and all
 %else
@@ -819,6 +849,8 @@ fdlg_post:
 fdlg_h_btn:
     mov al, ah
 fdlg_btn:
+    cmp byte [fdlg_act], 0      ; ANSWERED already: a release whose press
+    jne .done                   ; came before the answer acts on nothing
     cmp al, FM_BCANCEL
     je fdlg_post_cancel
     mov bx, [fdlg_blk]
@@ -937,6 +969,10 @@ fdlg_drawbtn:
     push di
     call fdlg_brect
     call fdlg_blabel
+    cmp al, FM_BGO              ; the default's flags as DRAWN, for FDH_SEL
+    jne .ndef                   ; (fm_btn1 records them on kern_big)
+    mov [fdlg_gdis], di
+.ndef:
     cmp al, [fdlg_down]         ; the one being held (SPEC.md 13.8.3)
     jne .up
     or di, OS88UI_DOWN
@@ -1028,6 +1064,7 @@ section .bss
 fdlg_mode:  resb 1              ; 0 = Open, 1 = Save
 fdlg_ttl:   resw 1              ; its caption, for fm_kinit to adopt
 fdlg_act:   resb 1              ; the posted answer: 0, FDA_COMMIT, FDA_CANCEL
+fdlg_gdis:  resw 1              ; the Open button's flags as last drawn
 fdlg_rqwin: resw 1              ; the requester's window...
 fdlg_rqcb:  resw 1              ; ...its near completion proc...
 fdlg_rqrec: resw 1              ; ...its instance record...
