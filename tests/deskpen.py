@@ -31,6 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
+import os88marty            # noqa: E402
 import os88ui               # noqa: E402
 import deskclip as dc       # noqa: E402
 import os88geom as geom     # noqa: E402
@@ -56,14 +57,26 @@ def leg_desk():
         ui.mo.dblclick(w.x + 40, w.y + 5)       # zoom over the cells...
         ui.settle()
         w = ui._refresh(w)
-        m.bp_exec("desk_draw_zone")
-        ui.mo.dblclick(w.x + 40, w.y + 5)       # ...and the restore redraws
-        if m.wait_stop(30) is None:             # them
-            print("   FAIL  desk_draw_zone was never reached")
-            return 1
-        m.write(m.sym("gfx_b1ink"), POKE)
-        m.bp_exec()
-        m.run()
+        pen = m.sym("gfx_b1ink")
+
+        def poke(mm, rec):
+            mm.write(pen, POKE)                 # at the stop, as a package
+            mm.breakpoints([])                  # would leave it; ONE entry
+            return True                         # is the experiment
+
+        # THE RESTORE RUNS ON THE SECOND PRESS, so desk_draw_zone's first
+        # entry lands with the button still down, before the release is
+        # decoded. This was a bare `bp_exec` and a `dblclick` after it, and
+        # the stepped double-click raises at a breakpoint inside it - so the
+        # row passed only when the release won that race, and lost it once
+        # in a two-lane soak. Pumped, the stop is serviced wherever it falls
+        # (paintsu's shape, os88marty.bp_trace); the poke and the disarm are
+        # the same ones the bare form made, at the same first entry.
+        with os88marty.bp_trace(m, "desk_draw_zone", on_hit=poke) as tr:
+            ui.mo.dblclick(w.x + 40, w.y + 5)   # ...and the restore redraws
+            if not tr.wait(1, "desk_draw_zone", limit=30.0):    # them
+                print("   FAIL  desk_draw_zone was never reached")
+                return 1
         ui.settle()
         bad = dc.verify(ui)
         print("   %s  desk: cells drawn under a leftover pen match a whole "
