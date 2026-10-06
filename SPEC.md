@@ -129871,8 +129871,17 @@ lettered in the 8x8 face and no aeroplane, because **every refusal answers
 (it is freed at the re-home, so that is disk and transient RAM), one claim
 in place of two while the fetch runs, and **no packer or expander outside the
 standard**. The session pays nothing for it: the fetch's claim is
-`op_lazykb`'s figure, R plus the read of the packed part, and that is the same
-**11KB** the old exact-size claim was.
+`op_lazykb`'s figure, R plus the read of the packed part rounded to whole
+clusters, because the stream has to sit above its output while it expands —
+and once it has, `op_fetch` shrinks the claim through `OSAPI_MEM_REGROW` to the
+head slack plus `len`, rounded to a KB. A shrink always happens in place
+(§50.3.1), so the banked base and `op_drop`'s slack arithmetic are unchanged.
+What the session keeps is therefore **the slack plus `len`**: the same
+**11KB** the old exact-size claim was on a floppy, where the slack is at most
+a cluster less a sector, and no longer R plus a cluster of read on a hard disk
+whose clusters are 32KB, which kept the fetch's ~70KB for the life of the
+instance. The slack is still there, ahead of the part, because the shrink can
+only take the tail.
 
 **It found a defect in the standard on the way**, which no package had
 reached because none had ever fetched an `OP_COMP | OP_LAZY` row across a
@@ -153594,8 +153603,11 @@ carve** (20.12.4; the first cut had it second and was refused in words)
 Skies' bands, and for the same two withdrawn reasons: `tools/pxsart.py
 --raw` writes the masters unpacked, `os88pkg.py` packs them (8,890 bytes),
 and the loader's `pxl_art` is `op_fetch` and `op_seg`, which expand them into
-a claim of their own: `op_lazykb`'s figure, R plus the read, which is 37 KB on
-the shipped floppies, the same `PXA_KB` the old exact-size claim was. It used to fetch a
+a claim of their own: `op_lazykb`'s figure, R plus the read, while it expands,
+and the head slack plus `len` once it has — `op_fetch` shrinks it in place
+(§88.10.4.1) — which is 37 KB on the shipped floppies, the same `PXA_KB` the
+old exact-size claim was, and more only by the slack on a volume with bigger
+clusters. It used to fetch a
 stream `pxsart.py` packed into one claim, expand it through `OSAPI_DECOMP`
 into a second and drop the first. **It stays LAZY because only a Textured
 launch wants it**: eager, 37KB would ride in every launch's carve and a 256KB

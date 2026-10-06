@@ -1624,6 +1624,29 @@ op_fetch:
     pop si                      ; the row
     pop dx                      ; the claim
     jc .zbad
+    ; --- AND GIVE BACK WHAT ONLY THE EXPANSION NEEDED (SPEC.md 88.10.4.1) --
+    ; The claim is op_lazykb's: R plus the packed read rounded to whole
+    ; clusters, which is room for the stream to sit above its output and, on
+    ; a 32KB-cluster volume, mostly cluster. Expanded, the part is the slack
+    ; plus `len` and nothing else, and that is never more than the claim
+    ; (R >= len - packed). A shrink always succeeds IN PLACE (SPEC.md
+    ; 50.3.1), so the base banked below stays right and op_drop's slack
+    ; arithmetic still finds the claim. CF is not read: a refused shrink
+    ; leaves the claim as it was, which is only the cost it had before.
+    push ax                     ; the base
+    mov bx, ax
+    sub bx, dx                  ; BX = the head slack, in paragraphs
+    mov ax, [si+OP_R_LEN]
+    add ax, 15                  ; `len` in paragraphs, rounded up - the RCR
+    rcr ax, 1                   ; takes the carry back in, so a part near
+    mov cl, 3                   ; 64KB keeps its 17th bit
+    shr ax, cl
+    add ax, bx                  ; ...plus the slack: under 8,192 paragraphs,
+    add ax, 63                  ; so neither add carries
+    mov cl, 6
+    shr ax, cl                  ; AX = the KB the session keeps
+    call OSAPI_MEM_REGROW       ; DX = the claim, and a shrink keeps it there
+    pop ax                      ; the base
 .plainbank:
 %endif
     or byte [si+OP_R_FLAG], OP_FETCHED  ; ...and the flag is what SAYS so

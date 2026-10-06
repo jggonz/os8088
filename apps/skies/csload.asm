@@ -72,9 +72,10 @@ LD_H_BSS   equ 10               ; at, which are the FORMAT's and not ours
 ; THE CLAIM IS THE BANDS' FOR THE SESSION and it is NOT in the carve: after
 ; the re-home it is a slot-owned data claim with no proc, so it never moves,
 ; and the program's bare region proc stays right (SPEC.md 66.6.1.1). It is
-; op_lazykb's figure - R plus the read of the packed part - which comes out
-; at the same 11KB the old exact-size claim had, and there is no second claim
-; at any point.
+; op_lazykb's figure - R plus the read of the packed part - while it expands,
+; and op_fetch then shrinks it in place to the head slack plus the bands
+; (88.10.4.1), the same 11KB the old exact-size claim had on a floppy. There
+; is no second claim at any point.
 ;
 ; EVERY REFUSAL IS SURVIVABLE and answers 0, which is the plainer title page
 ; the program has always been able to draw - the title lettered in the 8x8
