@@ -6228,13 +6228,30 @@ wm_dmg_gray:
     jc .whole                   ; overflowed: dither the lot, as before
 %ifdef OS88_SHORTCUTS
     call wm_occl_l              ; ...and every drop shadow's L, which the
-    jc .whole                   ; window pass draws; then every touched ZONE,
+    jc .frames                  ; window pass draws; then every touched ZONE,
     call COLD_SEG:desk_zones_r_x    ; DRAWN into what is left and taken out
     jc .whole                   ; of it - a cell lays its own ground, and is
 %endif                          ; drawn only where it shows (SPEC.md 11.91.6)
+.cmpn:
     cmp word [wm_clip_n], 0
     je .out                     ; wholly covered: not one pixel is revealed
     jmp short .fill
+%ifdef OS88_SHORTCUTS
+.frames:                        ; the Ls overflowed it: the FRAMES alone, the
+    pop si                      ; region before SPEC.md 26.9.9, rebuilt from the
+    pop dx                      ; damage (see .whole's pops). No zone is drawn
+    pop cx                      ; yet, so desk_paint_mask draws each whole
+    pop bx                      ; over it, and the dither goes under no window
+    pop ax                      ; - 11.91.2's exemption still holds, where
+    push ax                     ; `.whole` repainted every window in the
+    push bx                     ; damage on top of a dither laid under it
+    push cx
+    push dx
+    push si
+    call wm_dmg_bands
+    call wm_dmg_occl
+    jnc .cmpn
+%endif
 .whole:
     mov word [wm_dmg_stwin], 0  ; the lot is dithered, WINDOWS INCLUDED, so
                                 ; 11.91.2's vacated-rect exemption no longer
@@ -6242,7 +6259,10 @@ wm_dmg_gray:
                                 ; owed. The drop-shadow Ls and the zones made
                                 ; an ordinary drag overflow the region, and a
                                 ; window clear of where the dragged one WAS
-                                ; kept the dither laid over it
+                                ; kept the dither laid over it. Only the
+                                ; FRAMES' overflow lands here now: the Ls'
+                                ; is .frames, and a zone that would overflow
+                                ; it is refused by desk_zones_r's own count
 %ifdef OS88_SHORTCUTS
     call COLD_SEG:desk_dmg_zones_x  ; every touched zone owed again: desk_zones_r
 %endif                          ; may have drawn some that this dithers over.

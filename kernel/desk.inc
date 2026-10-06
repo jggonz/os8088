@@ -1874,10 +1874,17 @@ DESK_TBSTR  equ 14              ; the widest rect, 100 px, off the byte grid.
 ; damage minus every window's frame and drop-shadow L, so a cell is drawn
 ; exactly where it shows and marks no window; one nothing of which is revealed
 ; is not drawn at all. Far, from wm_dmg_gray.
-; out: CF = 0 and the mask emptied - or, under Color, whose teal a band cannot
-;      say, the mask left whole and the region untouched, for desk_paint_mask
-;      to draw each zone whole over the dither as it always did. CF = 1 the
-;      region overflowed.
+; out: CF = 0 and the mask emptied but for a zone that would not fit (below) -
+;      or, under Color, whose teal a band cannot say, the mask left whole and
+;      the region untouched, for desk_paint_mask to draw each zone whole over
+;      the dither as it always did. CF = 1 the region overflowed.
+;
+; A zone whose subtraction would OVERFLOW the region is counted first and not
+; drawn: it stays in the mask, for desk_paint_mask to draw whole over the
+; dither the way Color's are, and the region stays intact for the rest. An
+; overflow here took wm_dmg_gray's `.whole` - every cell already drawn dithered
+; over and drawn again, and every window in the damage repainted on top of the
+; dither - and a cell column of five did it on an ordinary drag.
 ; -----------------------------------------------------------------------------
 desk_zones_r_x:
     call kentc_bp
@@ -1905,17 +1912,73 @@ desk_zones_r_x:
     call ct_cw_mem_disp
     pop ax
     jc .n                       ; no: drawn nowhere, and it takes nothing out
+    push ax
+    mov bx, wm_clip_tab         ; ...and would taking it out FIT? wm_clip_split
+    mov cx, [wm_clip_n]         ; puts a piece for each side a fragment reaches
+    mov dx, cx                  ; past it where the fragment was: DX = the most
+.f:                             ; the region can grow to, counted the same way
+    mov ax, [bx+WCR_X2]
+    cmp ax, [wm_cl_ox1]
+    jl .fk
+    mov ax, [bx+WCR_X1]
+    cmp ax, [wm_cl_ox2]
+    jg .fk
+    mov ax, [bx+WCR_Y2]
+    cmp ax, [wm_cl_oy1]
+    jl .fk
+    mov ax, [bx+WCR_Y1]
+    cmp ax, [wm_cl_oy2]
+    jg .fk
+    mov bp, -1                  ; overlapped: dropped (AX = its y1)...
+    cmp ax, [wm_cl_oy1]
+    jge .f1
+    inc bp                      ; ...a piece above,
+.f1:
+    mov ax, [bx+WCR_Y2]
+    cmp ax, [wm_cl_oy2]
+    jle .f2
+    inc bp                      ; below,
+.f2:
+    mov ax, [bx+WCR_X1]
+    cmp ax, [wm_cl_ox1]
+    jge .f3
+    inc bp                      ; left
+.f3:
+    mov ax, [bx+WCR_X2]
+    cmp ax, [wm_cl_ox2]
+    jle .f4
+    inc bp                      ; and right
+.f4:
+    or bp, bp
+    js .fk                      ; none: it shrinks, but maybe not before the
+    add dx, bp                  ; others grow it - a bound counts only growth
+.fk:
+    add bx, WCR_SZ
+    loop .f
+    pop ax
+    cmp dx, WM_CLIP_MAX + 1
+    cmc
+    jc .k                       ; it would not: still owed, and drawn whole
     call desk_draw_zone
     mov bp, wm_clip_subr
     call ct_cw_mem_disp
     jc .out                     ; overflowed
 .n:
+    clc                         ; drawn, or shown nowhere: owed no more
+.k:                             ; (CF = 1 from `jc .k`: still owed)
+    rcl word [desk_dmgm], 1     ; the mask is REBUILT from the bits each zone
+    rcl word [desk_dmgm+2], 1   ; leaves, zone 0 rotated in first
     inc ax
     cmp al, DESK_NZ
     jb .z
-    xor ax, ax                  ; (CF = 0)
-    mov [desk_dmgm], ax
-    mov [desk_dmgm+2], ax
+%if DESK_NZ < 32
+    mov cx, 32 - DESK_NZ        ; ...and moved up to bit 31, where
+.up:                            ; desk_paint_mask reads it from
+    shl word [desk_dmgm], 1
+    rcl word [desk_dmgm+2], 1
+    loop .up
+%endif
+    clc
 .out:
     jmp kretfc_bp
 

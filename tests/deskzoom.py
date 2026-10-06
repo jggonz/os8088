@@ -35,6 +35,15 @@ not overflow at the Hercules layout and reads 0. The VGA layout keeps every
 y EVEN: a Disk window moved by an odd total delta brings its scroll trough
 back in the other dither phase from a whole repaint's, which is not this
 row's subject and read 1,416 px on the fixed kernel at the first layout tried.
+
+NEITHER LEG REACHES `.whole` ANY MORE (SPEC.md 26.9.9): both overflowed it
+in the ZONE subtraction, and desk_zones_r now counts a zone's cost to the
+region first and leaves one that would overflow it to be drawn whole, so the
+region never overflows - one cell refused on each leg, measured. The two
+breakages above were measured on the kernel before that and no longer
+reproduce here; `.whole` is reached only when the FRAMES alone overflow.
+What both legs still gate is the picture: whichever answer the pass takes,
+it must leave a whole repaint's screen.
 """
 import argparse
 import os

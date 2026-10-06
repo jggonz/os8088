@@ -17840,10 +17840,18 @@ FRAGMENT AT A TIME (`desk_zone_clip`, each fragment copied into slot 0 with
 `[wm_clip_n]` at 1), because `font_char` and `ico_clip` (§11.3.5) were exact
 against one fragment and under-drew against several; both that routine and
 `ico_clip` are gone. `wm_paint_all`'s pass still draws every zone whole: there
-the windows are drawn over it after. **Overflow is the old answer** - every
-touched zone whole, its box grown into `[wm_dmg_zb]` - and so is Color's
-theme, whose teal a band cannot say. A zone nothing of which is revealed is
-not drawn at all.
+the windows are drawn over it after. **Overflow is the old answer, a zone at
+a time** - drawn whole over the dither, its box grown into `[wm_dmg_zb]` -
+and so is Color's theme, whose teal a band cannot say. `desk_zones_r` COUNTS
+what taking a zone out would cost the region before it draws the zone: a
+piece for each side an overlapped fragment reaches past it, as
+`wm_clip_split` makes them. A zone that would take the region past
+`WM_CLIP_MAX` is not drawn into it and stays in the mask for that answer,
+and the region, untouched, goes on for the rest. If the Ls overflow it
+first (`wm_occl_l`), `wm_dmg_gray` rebuilds it from the FRAMES alone - the
+region before §26.9.9 - and every touched zone takes the answer. Only an
+overflow of the frames themselves reaches `.whole` (§26.9.9). A zone nothing
+of which is revealed is not drawn at all.
 
 **`kern_small` takes the cheap half.** Its cell is 32 wide and 56 px in from
 the band's edge, so windows cover one routinely; `desk_dmg_zones` asks
@@ -50568,8 +50576,28 @@ overflowing region takes the same whole answer on every theme, after
 drawn some that the whole dither then covers) - called ABOVE `.whole`'s pops,
 because it spends AX and AX is the damage's x1 the bands are re-seeded from.
 It first landed below them, and a zoomed window's restore - whose damage
-overflows sixteen fragments - left the desktop it had covered undithered
+overflowed sixteen fragments - left the desktop it had covered undithered
 left of x 618 (39,565 px on Hercules; `tests/deskzoom.py` is the gate).
+
+**`.whole` is the FRAMES' overflow alone now** (§11.91.6). The Ls and the
+zones took it too, and they made it the ordinary case: that restore, and a
+drag over the drive column (`tests/deskzoom.py`'s drag leg), dithered every
+band under the windows as well, drew the cells `desk_zones_r` had already
+drawn a second time, and cleared `[wm_dmg_stwin]` so every window in the
+damage was repainted over a dither laid under it - the double draw §11.91.1
+removed. A zone that would overflow the region is now refused before it is
+drawn, and the Ls' overflow falls back to the frames alone. Measured with
+`tools/deskclip.py`'s tracer on those two gestures (guest ms, one pass):
+
+| gesture | `thm_desk` fills | cells drawn | windows redrawn | Hercules ms | VGA ms |
+|---|---|---|---|---|---|
+| a zoom's restore, two Disk windows | 17 -> **9** | 4 -> **2** | 2 -> 2 | 531.0 -> **460.5** | 488.7 -> **425.3** |
+| the drag leg, three windows | 17 -> **9** | 4 -> **2** | 3 -> **2** | 579.6 -> **497.2** | 549.5 -> **446.4** |
+
+The window no longer redrawn is the Calculator, clear of where the dragged
+window was, which §11.91.2 exempts and `.whole` could not. Each gesture now
+refuses one cell, drawn whole over the dither as Color's are, and matches a
+whole repaint to the pixel on both adapters.
 
 **A window's DROP-SHADOW L is no part of the region** (`wm_occl_l`): the
 frame moved (1,1) covers the L in one rect and leaves the two corners no
