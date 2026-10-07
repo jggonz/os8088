@@ -163688,7 +163688,7 @@ image core as wave 2 left it.
 | ...its first rows on the glass | 3.33 s | **2.69 s** | 6.99 s | **4.60 s** |
 | open a 640x480 8-bit BMP, 308 KB | 39.84 s | **35.23 s** | 47.61 s | **41.00 s** |
 | ...its first rows on the glass | 4.20 s | **1.52 s** (never reproduced: 106.18; **1.34 s** since 106.22) | 6.35 s | **4.49 s** (2.95 s since 106.22) |
-| zoom step, the canvas covered | 0.87 s | 0.87 s | 4.31 s | **3.71 s** |
+| zoom step, the canvas covered | 0.87 s | 0.87 s | 4.31 s | **3.71 s** (4.50 s since 106.21: the canvas taller by the filmstrip's 77 rows, 26 composer bands where it was 22) |
 | Fit, from there | 0.52 s | 0.46 s | 2.41 s | **1.95 s** |
 | pan step, an arrow | 0.29 s | 0.29 s | 0.56 s | 0.49 s |
 
