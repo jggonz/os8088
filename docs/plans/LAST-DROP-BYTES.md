@@ -717,7 +717,17 @@ Two hazards, neither named by either finder, and both to carry forward:
   **moot** — both sides carry the size in BP and neither `.bss` word exists any
   more — so whoever takes it starts better than the position it was refused at.
 
-#### 7.7.3 OPEN — `clk_ns_stamp` out of `.text` (−65 segment, +60 `.ovlw`, +60 `.modc`)
+#### 7.7.3 BUILT (kernel size pass 9) — `clk_ns_stamp` out of `.text` (−65 segment, +60 `.ovlw`, +60 `.modc`)
+
+*Built in kernel size pass 9, and wider: all SIX shared port helpers, not
+`clk_ns_stamp` alone - `kern_big` resident −118, `.ovlw` +71, `CTRL.DRV` +76
+(SPEC.md 37.94). The mitigation that did not assemble is replaced by one that
+does: the BODIES are `%macro`s with no labels in them, and each copy writes
+its own label in its own file - `clk_*` in `clock.inc`'s `.ovlw`, `clkw_*` in
+`clockw.inc` - so `os88ovlchk.py`'s label map sees both and its near/far and
+return-kind checks cover them. The record below is the pricing it was refused
+on.*
+
 
 The strongest currency argument in that pass: 65 bytes of the binding guard for
 120 bytes of two transient images, one of which is forfeit at the first mount.

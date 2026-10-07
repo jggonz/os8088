@@ -45,9 +45,6 @@ EXEMPT = {
     "fmthumb.py": "the 30 filler .TXT files are written inside the guard, so "
                   "the disk's inputs are the guard's own output and no "
                   "build/ product reaches it",
-    "fdlgthumb.py": "same shape - the fillers and MUPTEST.O88 are built "
-                    "inside the guard, which has its own nested exists check "
-                    "for the package",
 }
 
 CALL = re.compile(r"os88disk\.py")
@@ -64,8 +61,8 @@ def main():
             if not GUARD.search(line):
                 continue
             # Everything more deeply indented than the guard IS the guard's
-            # block, which beats counting lines: fdlgthumb builds a package
-            # and 24 fillers before it reaches the disk, and any constant big
+            # block, which beats counting lines: fmthumb writes thirty
+            # fillers before it reaches the disk, and any constant big
             # enough for that would be big enough to catch anything.
             depth = len(line) - len(line.lstrip())
             for j in range(i + 1, len(lines)):

@@ -489,7 +489,11 @@ def refusals(tmp):
     def many(n):
         names = []
         for j in range(n):
-            nm = "side%02d.dat" % j
+            nm = "SIDE%02d.DAT" % j     # as the catalog names it: --pack
+                                        # upper-cases a sidecar (8.3), and
+                                        # --verify opens that name, which a
+                                        # case-sensitive host does not find
+                                        # as side00.dat
             open(os.path.join(tmp, nm), "wb").write(b"x" * (j + 1))
             names.append(nm)
         m = json.loads(json.dumps(FIXTURE))
@@ -527,7 +531,9 @@ def refusals(tmp):
     open(os.path.join(tmp, "named.o88"), "wb").write(
         open(os.path.join(BUILD, "hello.o88"), "rb").read())
     def named(nm):
-        open(os.path.join(tmp, nm.lower()), "wb").write(b"twelve")
+        open(os.path.join(tmp, nm), "wb").write(b"twelve")  # as the
+        #   catalog names it: --pack upper-cases a sidecar and --verify opens
+        #   that name, which a case-sensitive host does not find in lower case
         m = json.loads(json.dumps(FIXTURE))
         m["entries"] = [{"stem": "NAMED", "title": "Named", "tier": 0,
                          "files": ["named.o88", nm],
@@ -536,7 +542,7 @@ def refusals(tmp):
         cat = os.path.join(tmp, "named.bin")
         json.dump(m, open(man, "w"))
         return run("--pack", man, "--pkgdir", tmp, "--out", cat), cat
-    r, cat = named("entertnr.mid")
+    r, cat = named("ENTERTNR.MID")
     check(r.returncode == 0, "--pack accepts a twelve-character sidecar name",
           "an 8.3 name is up to twelve characters and the slot is twelve",
           got=(r.stdout + r.stderr).strip(), want="exit 0")
@@ -550,7 +556,7 @@ def refusals(tmp):
         check(v.returncode == 0, "...and --verify accepts it",
               "a full slot is a name of twelve, not a missing terminator",
               got=(v.stdout + v.stderr).strip(), want="exit 0")
-    r, _ = named("toolongnam.e")
+    r, _ = named("TOOLONGNAM.E")
     check(r.returncode != 0, "--pack refuses a sidecar name that is not 8.3",
           "it lands in a FAT directory exactly as written, so the length "
           "alone was never the whole check",

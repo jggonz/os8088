@@ -275,7 +275,8 @@ cp_sname:   db 'Control', 0     ; KD_NAME: fits the memory view's 7-char
 ; Deferred-repaint flag, drained by ui_task step 3 (SPEC.md 13/31.2). Inline
 ; .text data, not .bss, so it is initialised on disk and needs no cp_init -
 ; the osapi_seed trick from kernel.asm.
-cp_dirty:   db 0                ; 1 = the mode changed, repaint everything
+cp_dirty:   db 0                ; 1 = the mode changed, repaint everything -
+                                ; 0 or 1 ONLY: ui_task tests it with `shr`
 cp_wdirty:  db 0                ; 1 = a setting changed and SYSTEM.CFG is owed
                                 ; a write. Deferred to the panel's teardown
                                 ; (cp_flush_close) rather than taken on the
@@ -309,6 +310,15 @@ cp_dsave:   db 0                ; the last SYSTEM.CFG write: 0 = fine, 1 =
                                 ; to be found next session; what is left of
                                 ; its old job is telling cp_flush_close_x
                                 ; whether to keep [cp_wdirty] and retry
+%ifdef OS88_DRIVERS
+cp_fdbsd:   db 0                ; the Reads row changed (SPEC.md 31.14): byte
+                                ; 509 is owed and a Cylinder pick is tested.
+                                ; RESIDENT, beside [cp_wdirty], because it is
+                                ; owed exactly as long as that is: in the
+                                ; module's image a failed save dropped it
+                                ; with the image, and the retry [cp_wdirty]
+                                ; promises wrote SYSTEM.CFG and neither
+%endif
 
 ; The selected item, as a RECORD index into cp_items - never as a position in
 ; the drawn list (SPEC.md 31.10.1). That distinction is what lets a hidden row
@@ -630,7 +640,6 @@ CPV_MB2   equ CPV_MY + CP_GW + 3
 ; user has been working off it - and what it is not is the SYSTEM disk
 ; (drv_cfg_save asks dskw_stat for KERNEL.SYS, SPEC.md 51.5.1). `need disk`
 ; reads as an empty drive and sends the reader to look at the light.
-cp_s_dsok:  db 'Settings Saved', 0
 cp_s_dsdsk: db 'Not Saved: No Sys in '
 cp_s_dsdrv: db 'A:', 0          ; the letter, stamped (SPEC.md 52.10.3): the
                                 ; system volume is not A: on a machine booted
@@ -639,14 +648,12 @@ cp_s_dsdrv: db 'A:', 0          ; the letter, stamped (SPEC.md 52.10.3): the
                                 ; none. This is the only string in the kernel
                                 ; that needs it, and dsk_bootltr's second
                                 ; store exists for it
-cp_s_dserr: db 'Not saved: disk error', 0
-; Indexed by [cp_dsave] + 1, so slot 0 keeps toast_say's "nothing to say" and
-; SUCCESS gets a message of its own - a save is a thing the user asked for and
-; waited seconds of floppy for, so silence is the wrong report. It only fires
-; when [cp_wdirty] was set, because that is what cp_flush_close_x gates on:
-; closing a panel nobody changed says nothing.
-cp_savetab: dw 0, cp_s_dsok, cp_s_dsdsk, cp_s_dserr
-CP_NSAVE  equ 4
+; ...and the other two verdicts, `Settings Saved` and `Not saved: disk error`,
+; are CTRL.DRV's own lines beside cp_flush_x, which is the only thing that
+; says any of the three. SUCCESS gets a message of its own - a save is a thing
+; the user asked for and waited seconds of floppy for, so silence is the wrong
+; report. It only fires when [cp_wdirty] was set, because that is what
+; cp_flush_close_x gates on: closing a panel nobody changed says nothing.
 
 ; ...and the other end of the same conversation (SPEC.md 2.8.4): the panel's
 ; own code is a file on the system disk now, so OPENING it can fail for the
@@ -988,18 +995,17 @@ cp_tick_due_x:
     push ax
     push bx
     push di
-    cmp byte [cp_sel], CP_ITIME
-    jne .no
+    mov al, [cp_sel]
+    xor al, CP_ITIME            ; ...and `xor` leaves CF = 0, so every "no"
+    jnz .out                    ; below can go straight to .out
     mov al, KIND_CTRL
     call KERNEL_SEG:cw_inst_find_kind         ; CF = 1: no live Control Panel
-    jc .no
+    cmc
+    jnc .out
     mov bx, [di+I_WIN]
-    test byte [bx+W_FLAGS], 2   ; visible?
-    jz .no
+    test byte [bx+W_FLAGS], 2   ; visible? (`test` clears CF too)
+    jz .out
     stc
-    jmp .out
-.no:
-    clc
 .out:
     pop di
     pop bx
@@ -3310,7 +3316,7 @@ cp_dock_click:
     je .done                    ; already the setting: change nothing
     mov ah, [dock_cfg]
     mov [dock_cfg], al
-    call KERNEL_SEG:cw_dock_apply
+    call COLD_SEG:dkf_apply
     jnc .changed
     mov [dock_cfg], ah          ; failed enable: keep the working preference
     push cx
@@ -3342,8 +3348,9 @@ cp_dock_fail: db 'Dock Module Unavailable', 0
 ; The Floppy page (SPEC.md 31.14)
 ;
 ; Five drop-downs over SYSTEM.CFG's 'FD' record: one per unit a machine can
-; claim, Auto / None / 5.25 / 3.5, and the read bound, Auto / Track - no
-; Cylinder, which would override a failed canary (SPEC.md 31.14). The page
+; claim, Auto / None / 5.25 / 3.5, and the read bound, Auto / Track /
+; Cylinder - Cylinder being how a 286 and up, which never runs the canary,
+; gets the cylinder run at all (SPEC.md 31.14). The page
 ; EDITS THE RECORD AND NOTHING ELSE - the bytes live in drv_cfg alone, nothing
 ; resident reads them, and ovl_fdd_apply applies them at the next boot, which
 ; is when the detection they override runs. So the caption says restart, and
@@ -3449,6 +3456,7 @@ cp_fdd_click:
     cmp ah, [drv_cfg+CFG_FDR]
     je .done
     mov [drv_cfg+CFG_FDR], ah
+    mov byte [cp_fdbsd], 1   ; ...and the boot sector's byte is owed too
     jmp short .changed
 .drv:
     mov cl, bl
@@ -3532,7 +3540,7 @@ cp_fdy:
     pop ax
     ret
 
-; cp_fdval - row BL's setting: AL = 0..3 for a unit, 0..1 for the reads
+; cp_fdval - row BL's setting: AL = 0..3 for a unit, 0..2 for the reads
 cp_fdval:
     mov al, [drv_cfg+CFG_FDR]
     cmp bl, 4
@@ -3546,10 +3554,10 @@ cp_fdval:
     and al, 3
     ret
 .rd:
-    cmp al, 2
+    cmp al, 3
     jb .ok
-    xor al, al                  ; 2 (once Cylinder) or a future byte: Auto,
-.ok:                            ; which is what ovl_fdd_apply does with it
+    xor al, al                  ; a future byte: Auto, which is what
+.ok:                            ; ovl_fdd_apply does with it
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3612,7 +3620,7 @@ cp_fdstg:
     jb .c
     mov si, CPF_MRO
     mov cx, CPF_MRN
-    mov bh, 2
+    mov bh, 3
 .c:
     mov al, [cs:si + cp_fdmd]
     mov [di], al
@@ -3637,8 +3645,10 @@ cp_fdm2: db '5.25', 0
 cp_fdm3: db '3.5', 0
 cp_fdmr:
     dw cp_sbuf + (cp_fdr0 - cp_fdmr), cp_sbuf + (cp_fdr1 - cp_fdmr)
+    dw cp_sbuf + (cp_fdr2 - cp_fdmr)
 cp_fdr0: db 'Auto', 0
 cp_fdr1: db 'Track', 0
+cp_fdr2: db 'Cylinder', 0
 cp_fdend:
 CPF_MDN   equ cp_fdmr - cp_fdmd
 CPF_MRO   equ cp_fdmr - cp_fdmd
@@ -5064,12 +5074,48 @@ cp_flush_x:
 .wrongdisk:
     mov byte [cp_dsave], 1
 .say:
-    mov al, [cp_dsave]
-    inc al                      ; slot 0 stays toast_say's "nothing to say"
-    mov bx, cp_savetab
-    mov cx, CP_NSAVE
-    call KERNEL_SEG:toast_say
+    push si
+    push es
+%ifdef OS88_DRIVERS
+    cmp byte [cs:cp_fdno], 0    ; the save turned Cylinder back to Auto
+    je .verdict                 ; (SPEC.md 31.14): ONE line on the bar, so
+    mov byte [cs:cp_fdno], 0    ; it is chosen before the toast and not
+    cmp byte [cp_dsave], 0      ; drawn over 'Settings Saved' after it
+    jne .fdback
+    push cs
+    pop es                      ; the line is this image's: a toast copies it
+    mov si, [cs:cp_fdnop]       ; a POINTER to image data, read `cs:` - the
+                                ; core has no cp_stage (that is .modu's), and
+                                ; the line goes out through ES = CS
+    jmp short .tell
+.fdback:
+    mov byte [drv_cfg+CFG_FDR], 2   ; ...but a FAILED save's line is the news,
+                                ; and the pick goes back to Cylinder so the
+                                ; retry [cp_wdirty] promises tests it again -
+                                ; [cp_fdbsd] is still owed - rather than
+                                ; saving Auto and saying 'Settings Saved'
+.verdict:
+%endif
+    mov si, cp_s_dsdsk          ; [cp_dsave] = 1, no system disk: RESIDENT,
+    push ds                     ; because its drive letter is stamped by the
+    pop es                      ; mount (disk.inc) - every other line is
+    mov al, [cp_dsave]          ; this image's own, out through ES = CS. The
+    cmp al, 1                   ; save's verdicts were a resident word table
+    je .tell                    ; and three resident lines for a message only
+    push cs                     ; this image ever says (kernel size pass 9)
+    pop es                      ; ...flags untouched by the push, pop and mov
+    mov si, [cs:cp_dsvt]        ; 0: saved - a POINTER to image data, read
+    jb .tell                    ; `cs:` (SPEC.md 2.8.6, cp_fdnop's shape)
+    mov si, [cs:cp_dsvt+2]      ; 2: the write itself failed
+.tell:
+    xor cx, cx                  ; a toast COPIES its line, so image data is
+    call KERNEL_SEG:cw_toast_show   ; fine for the drop that follows
+    pop es
+    pop si
     jmp kretm_cx
+cp_dsvt:    dw cp_s_dsok, cp_s_dserr       ; [cp_dsave] = 0 and 2, read `cs:`
+cp_s_dsok:  db 'Settings Saved', 0
+cp_s_dserr: db 'Not saved: disk error', 0
 
 ; -----------------------------------------------------------------------------
 ; cp_flush_cfg - [cp_wdirty]'s half of cp_flush_close_x, and the SETTINGS

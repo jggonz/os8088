@@ -35,11 +35,14 @@ cover it between them - asserting (a), (b) and that no cell is drawn at all,
 and `cell` asserting (b) and (c).
 
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1), each measured:
-  * `wm_zone_r` without its `call wm_dmg_occl` (no frame subtracted): the
-    cell is drawn over the window that is no longer marked - (b), 495
-    pixels on Hercules;
-  * `ico_clip`'s masks forced to 0FFFFh (rows clipped, columns not): the
-    picture is drawn across the window's edge - (b), 32 pixels on both;
+  * the region's frame subtraction taken out: the cell is drawn over the
+    window that is no longer marked - (b), 495 pixels on Hercules when the
+    region was `wm_zone_r`'s own. Since SPEC.md 26.9.9 a kern_big cell is
+    drawn into wm_dmg_gray's region (`desk_zones_r`), whose frames are
+    `wm_dmg_occl`'s - the same subtraction, one region per pass;
+  * (`ico_clip`'s columns were the fourth break, 32 pixels; SPEC.md 11.3.5
+    withdrew it - a cell's picture is a gfx_blit1 band, cut exactly by the
+    walk, and tests/deskflash.py's head break is what reaches that now)
   * desk_zones_paint_x's three C2 stores taken out: the window over the cell
     is marked by the cell's own damage again - (a), and (c) where the front
     window is not redrawn for a reason of its own (Hercules);

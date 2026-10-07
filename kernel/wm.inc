@@ -347,6 +347,14 @@ wm_strseg:
 ; proc.
 ; -----------------------------------------------------------------------------
 wm_pkgcall:
+%ifdef KERN_BIG
+    push word [gfx_b1ink]       ; EVERY CALLBACK STARTS WITH THE RESTING PEN
+    mov word [gfx_b1ink], CBLACK*256 + CWHITE   ; (SPEC.md 5.4.2.2.2), and
+%endif                          ; the caller's comes back after it: the pen
+                                ; lives as long as the LOCK HOLD, and a repaint
+                                ; pass calls several packages' paints inside
+                                ; one - so a terminal's last attribute turned
+                                ; the next window's default-pen text its colour
     push word [gfx_mono1]       ; WHOSE CONTENT IS ABOUT TO BE DRAWN (SPEC.md
                                 ; 11.96.17.1), banked exactly as snap_cur is
                                 ; below and for its reason: a repaint pass
@@ -418,6 +426,9 @@ wm_pkgcall:
     pop word [gfx_mono1]        ; ...and the outer window's claim is back.
                                 ; A pop writes no flags either, which the
                                 ; callback's own CF depends on
+%ifdef KERN_BIG
+    pop word [gfx_b1ink]        ; ...and the outer pen (no flags either)
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
@@ -555,24 +566,23 @@ wm_fit:
     mov [bx+W_H], di            ; still too tall: now it really is the screen
 .hfit:
     pop di
-    push cx                     ; ...AND THE FLOOR LAST, SO IT WINS (SPEC.md
-    push dx                     ; 11.100.2). HERE and not below the position
-    sub cx, ax                  ; clamps, so the origin is settled against the
-    sub dx, si                  ; size the window really ends up with.
-    call wm_min_floor           ; The height cap is the display's own bottom
-    pop dx                      ; less the TOP OF THE BAND rather than less
-    pop cx                      ; W_Y, and that is what makes it provable: a
+    push dx                     ; ...AND THE FLOOR LAST, SO IT WINS (SPEC.md
+    sub cx, ax                  ; 11.100.2). HERE and not below the position
+    sub dx, si                  ; clamps, so the origin is settled against the
+    call wm_min_floor           ; size the window really ends up with.
+    pop dx                      ; The height cap is the display's own bottom
+                                ; less the TOP OF THE BAND rather than less
+                                ; W_Y, and that is what makes it provable: a
                                 ; frame that big can only start at y0, and the
                                 ; y clamp below floors y there - so a window
                                 ; whose minimum binds ends exactly ON the
                                 ; display's last row, never past it
-    push cx                     ; x = min(x, xe - w), floor x0
-    sub cx, [bx+W_W]
-    cmp [bx+W_X], cx
-    jle .xok
+    sub cx, [bx+W_W]            ; x = min(x, xe - w), floor x0 - CX is the
+    add cx, ax                  ; band's WIDTH here (wm_min_floor keeps it),
+    cmp [bx+W_X], cx            ; so xe - w is x0 + it - w, and CX is not
+    jle .xok                    ; needed again
     mov [bx+W_X], cx
 .xok:
-    pop cx
     cmp [bx+W_X], ax
     jge .xfl
     mov [bx+W_X], ax
@@ -1064,23 +1074,6 @@ wm_nat_bank:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_nat_take - put the banked rect back into the record (module internal)
-; in:  BX = window ptr
-; out: nothing (all registers preserved); an empty slot leaves the record alone
-; clobbers: flags
-; -----------------------------------------------------------------------------
-wm_nat_take:
-    cmp word [bx+W_NATR+NR_W], 0
-    je wm_nat_take_wh           ; nothing banked: whatever is in the record is
-    push ax                     ; the best answer there is (and take_wh then
-    mov ax, [bx+W_NATR+NR_X]    ; agrees and does nothing)
-    mov [bx+W_X], ax
-    mov ax, [bx+W_NATR+NR_Y]
-    mov [bx+W_Y], ax
-    pop ax                      ; ...and the SIZE is wm_nat_take_wh's: it
-                                ; FOLLOWS, and nothing but comment is between
-
-; -----------------------------------------------------------------------------
 ; wm_nat_bank_xy - bank this window's POSITION and leave its size alone
 ; in:  BX = window ptr
 ; out: nothing - every register preserved, FLAGS INCLUDED
@@ -1347,10 +1340,9 @@ wm_create:
                                 ; smaller screen the record, not the template,
                                 ; is the truth (SPEC.md 39.7)
 %ifdef KERN_BIG
-    push ax                     ; ...and the adapter it was sized FOR, which is
-    call wm_kind_now            ; what 11.100.4 compares a drag's landing against
-    call wm_kind_bank
-    pop ax
+    call wm_kind_bank           ; ...and the adapter it was sized FOR, which is
+                                ; what 11.100.4 compares a drag's landing against
+                                ; (it asks wm_kind_now itself, and keeps AX)
 %endif
     call wm_ptr2idx             ; AL = index, AH = 0, CX preserved
     mov ch, 0
@@ -1809,9 +1801,14 @@ wm_minsize:
 ; -----------------------------------------------------------------------------
 wm_apply_size:
     pushf
-    push ax
-    call wm_nat_take            ; the rect it ASKED for, POSITION INCLUDED
-    jmp short wm_apply_pf       ; (SPEC.md 39.11.2.1)
+    push ax                     ; the rect it ASKED for, POSITION INCLUDED
+    cmp word [bx+W_NATR+NR_W], 0    ; (SPEC.md 39.11.2.1). This was wm_nat_take,
+    je wm_apply_pf              ; a routine with this as its one caller. Nothing
+    mov ax, [bx+W_NATR+NR_X]    ; banked: whatever is in the record is the best
+    mov [bx+W_X], ax            ; answer there is (and wm_nat_take_wh would
+    mov ax, [bx+W_NATR+NR_Y]    ; agree and do nothing)...
+    mov [bx+W_Y], ax
+    jmp short wm_apply_wh.one   ; ...and the SIZE is wm_nat_take_wh's
 
 ; -----------------------------------------------------------------------------
 ; wm_apply_wh - the same sequence with the ORIGIN LEFT ALONE (SPEC.md 11.100.9)
@@ -2137,7 +2134,8 @@ wm_ask_close:
     mov si, bx                  ; SI = the window: wm_pkgcall's contract
     mov bp, [bx+W_ONCL]         ; ...and BX must stay the window
     or bp, bp
-    jz .yes                     ; no negotiator: the close goes ahead
+    jz .out                     ; no negotiator: the close goes ahead (CF = 0,
+                                ; the OR's)
     cmp [wm_clask], si
     je .no                      ; its own negotiator is already on the stack
     push word [wm_clask]        ; nested, not replaced - AND ON THE STACK, the
@@ -2162,10 +2160,7 @@ wm_ask_close:
                                 ; API cell's shape)
     pop word [snd_inst]         ; the outer dispatch's stamp, back
     pop word [wm_clask]         ; ...and the outer ask's fence
-    jc .no
-.yes:
-    clc
-    jmp short .out
+    jnc .out                    ; yes - and CF = 0 is the yes
 .no:
     stc
 .out:
@@ -2559,25 +2554,27 @@ wm_resize_nb:                   ; ...and the entry for a caller that has
     ; where wm_damage consumes it. A package that draws its whole face every
     ; paint (cal_hist_toggle folds its history pane through here) never sees
     ; it and is repainted exactly as before.
-    push ax
-    mov word [wm_dmg_rzwin], 0
-    mov ax, [bx+W_X]
-    cmp ax, [wm_rz_ox]
+    xor ax, ax                  ; AX = the answer, DX the scratch - both
+                                ; spent from here: the pops at the foot put
+                                ; them back, and wm_rz_paint takes neither
+    mov dx, [bx+W_X]
+    cmp dx, [wm_rz_ox]
     jne .norz                   ; the origin moved: the content went with it
-    mov ax, [bx+W_Y]
-    cmp ax, [wm_rz_oy]
+    mov dx, [bx+W_Y]
+    cmp dx, [wm_rz_oy]
     jne .norz
-    mov ax, [bx+W_W]
-    cmp ax, [wm_rz_ow]
+    mov dx, [bx+W_W]
+    cmp dx, [wm_rz_ow]
     ja .norz                    ; wider: the new columns were never drawn
-    mov ax, [bx+W_H]
-    cmp ax, [wm_rz_oh]
+    mov dx, [bx+W_H]
+    cmp dx, [wm_rz_oh]
     ja .norz
-    mov [wm_dmg_rzwin], bx
+    mov ax, bx
 .norz:
-    pop ax
+    mov [wm_dmg_rzwin], ax
     call wm_rz_paint            ; ...and only what the move disturbed (11.95.1)
-    mov word [wm_dmg_rzwin], 0  ; a one-shot, exactly as ui_grow's is
+    xor ax, ax
+    mov [wm_dmg_rzwin], ax      ; a one-shot, exactly as ui_grow's is
     pop dx
     pop cx
     pop ax
@@ -3151,17 +3148,9 @@ wm_destroy:
                                 ; reason again (SPEC.md 39.11.2.1). The two
                                 ; tables share a stride, so they share the
                                 ; index SI already holds
-    call wm_zabove              ; CX = entries above us; compact them down a
-    jc .paint                   ; slot, so SI wants to be OUR entry. BX is
-    dec si                      ; still the record - nothing above writes it
-    jcxz .count
-.shift:
-    mov ah, [si+1]
-    mov [si], ah
-    inc si
-    loop .shift
-.count:
-    dec byte [wm_zn]
+    call wm_zcut                ; out of the z-order, the ones above it moved
+    jc .paint                   ; down a slot (BX is still the record - nothing
+    dec byte [wm_zn]            ; above writes it) - and one fewer
 .paint:
     pop dx                      ; the rect -> AX..DX
     pop cx
@@ -3743,13 +3732,14 @@ wm_hide_b:
                                 ; stood here spelled out a second time. It is
                                 ; that window's DISPLAY, not the machine's
                                 ; screen (SPEC.md 39.17.1), either way
-    push bx                     ; ...and the rect is banked in ONE register,
-    mov bx, si                  ; not four words of .bss: wm_fs_drop preserves
-    call wm_fs_drop             ; everything and the `and` below is the only
-                                ; other instruction here, so BX is the whole
+    xchg bx, si                 ; ...and the rect is banked in ONE register,
+    call wm_fs_drop             ; not four words of .bss: wm_fs_drop preserves
+                                ; everything and the `and` below is the only
+                                ; other instruction here, so swapping BX (y1)
+                                ; with SI (the window) and back is the whole
                                 ; of what needs saving (SPEC.md 11.2)
     and word [bx+W_FLAGS], 0xFFFD
-    pop bx
+    xchg bx, si
     call wm_paint_dmg
     jmp kret_si
 
@@ -3917,15 +3907,14 @@ wm_snap_win:
 ; tracker has had the fast path all along without any of this.
 ; -----------------------------------------------------------------------------
 wm_snap_want:
-    test byte [bx+W_FLAGS], WF_NOSNAP
-    jnz .no                     ; ...opted out (SPEC.md 11.94's default is ON)
-    test byte [bx+W_FLAGS], WF_FULL
-    jnz .no
-    stc
-    ret
-.no:
-    clc
-    ret
+    test byte [bx+W_FLAGS], WF_NOSNAP | WF_FULL
+    jnz .no                     ; ...opted out (SPEC.md 11.94's default is ON),
+    stc                         ; or fullscreen. TEST clears CF, so the no is
+.no:                            ; the bare ret. ONE test for both bits: they
+    ret                         ; share W_FLAGS's low byte (16 and 8)
+%if (WF_NOSNAP | WF_FULL) > 0FFh
+  %error "wm_snap_want tests WF_NOSNAP and WF_FULL in ONE byte test"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; wm_flush - is this window's LEFT BORDER suppressed? (SPEC.md 11.95.2)
@@ -4089,9 +4078,8 @@ wm_flush_ck:
     add di, dx                  ; monitor (SPEC.md 11.95.2.1)
     add ax, cx
     cmp di, ax
-    jb .no
-    stc
-    jmp short .out
+    cmc                         ; CF = 1 iff the right edge reaches it (NOT
+    jmp short .out              ; below) - the compare's own carry, inverted
 .no:
     clc
 .out:
@@ -4314,16 +4302,13 @@ wm_sizable:
 wm_fullscreen:
     push ax
     push bx
+    cmp [wm_fs], bx             ; ONE test of the latch serves both verbs:
+    je .ours                    ; held by US, held by NOBODY, or held by
+    cmp word [wm_fs], 0         ; someone else - and someone else refuses
+    stc                         ; either verb (CF = 1 rides past the `jne`)
+    jne .out
     or al, al
-    jz .exit
-    mov ax, [wm_fs]
-    or ax, ax
-    jz .claim
-    cmp ax, bx
-    je .ok                      ; already ours: no-op
-    stc                         ; someone else owns the screen
-    jmp .out
-.claim:
+    jz .ok                      ; put down with nothing fullscreen: no-op
     mov [wm_fs], bx
     push di
     mov di, wm_fs_save
@@ -4356,16 +4341,15 @@ wm_fullscreen:
     call wm_raise
     pop di
     pop bp
-    jmp .ok
-.exit:
-    mov ax, [wm_fs]
-    or ax, ax
-    jz .ok                      ; nothing fullscreen: no-op
-    cmp ax, bx                  ; ...and it has to be YOURS to put down. BX is
-    je .drop                    ; the latch holder on this path, so wm_fs_drop
-    stc                         ; is handed exactly what it was handed before
-    jmp short .out
-.drop:
+    jmp short .ok
+.ours:
+    or bx, bx                   ; [wm_fs] = 0 = BX is NOBODY's latch, not
+    jz .ok                      ; ours: exit with no owner stays a no-op
+    or al, al
+    jnz .ok                     ; already ours: no-op
+                                ; ...and only the holder puts it down. BX is
+                                ; the latch holder on this path, so wm_fs_drop
+                                ; is handed exactly what it was handed before
     call wm_fs_drop             ; restore geometry, clear latch
     call wm_paint_all
 .ok:
@@ -4427,21 +4411,17 @@ wm_front_b:
                                 ; which is what separates it from wm_show's
                                 ; AL = 1 - a window with no pixels on screen
 .titled:
-    push ax
-    call wm_top                 ; BX = the outgoing front (may be us)
-    mov bp, bx
+    call wm_top                 ; BX = the outgoing front (may be us); AX is
+    mov bp, bx                  ; preserved, so AL needs no bank
     mov bx, di
-    pop ax
     cmp bp, di
-    jne .raise
-    xor al, al                  ; already frontmost: not even the title bar
-    mov bp, di                  ; changes - but wm_raise still owes the bar
-.raise:                         ; and the dock, so it is not skipped
-    cmp bp, di
-    jne .go
-    or al, al
-    jnz .go
-    call menu_activate          ; the degenerate case: chrome only
+    jne .go                     ; another window was in front: raise us
+    call menu_activate          ; ALREADY FRONTMOST, whatever AL says: not even
+                                ; the title bar changes - the degenerate case,
+                                ; chrome only, but the bar and the dock are
+                                ; still owed, so it is not skipped. (This was
+                                ; AL forced to 0 and then tested again; a
+                                ; frontmost window only ever reached this arm.)
     call wm_lift
     call wm_fs_vis              ; ...and under a fullscreen window, not even
     jc .out                     ; that
@@ -4473,21 +4453,32 @@ wm_lift:
     push ax
     push cx
     push si
-    call wm_zabove              ; CX = entries above us; shift them back one
-    jc .out                     ; slot, so SI wants to be OUR entry
-    dec si
-    jcxz .place
-.shift:
-    mov ah, [si+1]
-    mov [si], ah
-    inc si
-    loop .shift
-.place:
+    call wm_zcut
+    jc .out
     mov [si], al                ; and we land on top
 .out:
     pop si
     pop cx
     pop ax
+    ret
+
+; wm_zcut - take window BX's entry out of wm_zord, shifting every entry above
+;           it down one slot: wm_lift then puts it back on top, wm_destroy
+;           shortens the list. The two had the walk written out twice.
+; in:  BX = window ptr
+; out: CF = 1 not listed (nothing moved); CF = 0, AL = its index and SI = the
+;      top slot, now free. AH, CX, SI clobbered (and AL as said)
+wm_zcut:
+    call wm_zabove              ; CX = entries above us; shift them back one
+    jc .out                     ; slot, so SI wants to be OUR entry
+    dec si
+    jcxz .out                   ; (CF is still wm_zabove's 0: DEC, MOV, INC
+.shift:                         ; and LOOP leave it alone)
+    mov ah, [si+1]
+    mov [si], ah
+    inc si
+    loop .shift
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4687,12 +4678,10 @@ wm_hit:
     ja .plain
     mov al, 4
     jmp .out
-.plain:
-    mov al, 0
-    jmp .out
 .none:
-    xor bx, bx
-    mov al, 0
+    xor bx, bx                  ; no window, and so part 0 as well...
+.plain:
+    mov al, 0                   ; (...which .plain is, falling through)
 .out:
     mov bp, sp                  ; patch AL into the saved AX, keeping AH
     mov [bp], al
@@ -4894,18 +4883,6 @@ wm_dmg_stale:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_dmg_add - grow the damage rect to cover AX,BX,CX,DX as well
-; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive)
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-wm_dmg_add:
-    push si                     ; "all registers preserved", which
-    mov si, wm_dmg_x1           ; wm_dmg_wins' .dfull relies on
-    call wm_runion
-    pop si
-    ret
-
-; -----------------------------------------------------------------------------
 ; wm_runion - the rect at DS:SI grown to cover AX/BX/CX/DX as well
 ; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); SI = a four-word block
 ;      in x1,y1,x2,y2 order
@@ -4989,7 +4966,7 @@ wm_win_hit:
 ;
 ; For the one caller that has to name two rects at once: ui_drag knows where
 ; the window was and the record knows where it is, and wm_paint_dmg wants one
-; rect. Separate from wm_dmg_add because that one edits the armed damage rect
+; rect. Separate from wm_runion into wm_dmg_x1 because that edits the armed damage rect
 ; and this runs BEFORE there is one.
 ; -----------------------------------------------------------------------------
 wm_dmg_union:
@@ -5093,8 +5070,10 @@ wm_paint_dmg:
     push di
     push bp
 
-    mov byte [wm_dmg_fs], 0     ; a visible fullscreen window covers the
-    mov byte [wm_dmg_dk], 0     ; desktop, its drive zones, the dock and the
+    mov word [wm_dmg_fs], 0     ; ...and wm_dmg_dk beside it, ONE store (the
+                                ; %if at wm_dmg_j). A visible fullscreen window
+                                ; covers the desktop, its drive zones, the dock
+                                ; and the
     call wm_fs_vis              ; bar - so none of those is drawn, and the
     jnc .clamp                  ; window pass is the whole of the work
     mov byte [wm_dmg_fs], 1
@@ -5139,16 +5118,19 @@ wm_paint_dmg:
                                 ; vacated rect (11.91.2) stays armed too
 .fill:
     mov ax, [wm_dmg_x1]         ; the desktop dither, clipped to the damage,
-    mov bx, [wm_dmg_y1]         ; to EACH display's own chrome band and to the
-    mov cx, [wm_dmg_x2]         ; windows about to cover it. The band used to
-    mov dx, [wm_dmg_y2]         ; be worked out here, from this rect's top-left
-    call wm_dmg_gray            ; corner alone - see wm_dmg_bands
-    call COLD_SEG:desk_paint_mask_x ; the touched drive zones, whole
-%ifdef DOCK_OPT
-    mov ax, [wm_dmg_x1]         ; reached the strip? then whatever WAS covering
-    mov bx, [wm_dmg_y1]         ; it has moved - the one case that owes the
-    mov cx, [wm_dmg_x2]         ; strip a restore rather than a tile. Only the
-    mov dx, [wm_dmg_y2]         ; DAMAGED span of it, though (SPEC.md 30.3),
+                                ; to EACH display's own chrome band and to the
+                                ; windows about to cover it. The band used to
+                                ; be worked out here, from this rect's top-left
+                                ; corner alone - see wm_dmg_bands. BX..DX are
+                                ; still the rect: desk_dmg_zones_x spends AX
+                                ; alone (its header), so only AX is reloaded
+    call wm_dmg_gray            ; (preserves every register)
+    call COLD_SEG:desk_paint_mask_x ; the touched drive zones, whole (AX..DX
+%ifdef DOCK_OPT                 ; preserved: so the rect is STILL in AX..DX)
+                                ; reached the strip? then whatever WAS covering
+                                ; it has moved - the one case that owes the
+                                ; strip a restore rather than a tile. Only the
+                                ; DAMAGED span of it, though (SPEC.md 30.3),
     call dock_force_r           ; and "reached" is dock_force_r's own overlap
                                 ; test now, so a strip on a SIDE is asked in x
                                 ; (SPEC.md 30.5)
@@ -5241,9 +5223,9 @@ wm_dmg_wins:
     ; Bottom to top, so "already marked" means "marked and below us" and one
     ; pass reaches the whole transitive closure. Nothing here may keep a loop
     ; counter in a general register: wm_win_rect writes all four of them.
-    mov word [wm_dmg_mask], 0
-    mov word [wm_dmg_shad], 0
-    xor bp, bp                  ; BP = index into wm_zord
+    xor bp, bp                  ; BP = index into wm_zord - and the zero the
+    mov [wm_dmg_mask], bp       ; two masks start from
+    mov [wm_dmg_shad], bp
 .mark:
     mov al, [wm_zn]
     xor ah, ah
@@ -5397,8 +5379,9 @@ wm_dmg_wins:
     push si                     ; ...and it has now painted its own FRAME,
     mov si, bx                  ; cache hit or not - so every window above it
     call wm_win_rect            ; owes that too. (SI is the z-order cursor here
-    call wm_dmg_add             ; and wm_win_rect wants the window.)
-    pop si
+    mov si, wm_dmg_x1           ; and wm_win_rect wants the window - and then
+    call wm_runion              ; wm_runion the damage rect: this was wm_dmg_add,
+    pop si                      ; its one caller and a push/pop of SI shorter)
 %endif
 .dnext:
     inc si
@@ -5410,9 +5393,10 @@ wm_dmg_wins:
     inc ax                      ; entry frame's, and kret_bp puts it back
     mov [wm_dmg_zb+4], ax
     mov [wm_dmg_zb+6], ax
-    mov byte [wm_dmg_dk], 0     ; consumed: a one-shot argument must not be
-    mov word [wm_dmg_stwin], 0  ; left set for a caller that draws no strip -
-    mov word [wm_su_son], 0     ; and the vacated rect is one for the same
+    xor ax, ax
+    mov [wm_dmg_dk], al         ; consumed: a one-shot argument must not be
+    mov [wm_dmg_stwin], ax      ; left set for a caller that draws no strip -
+    mov [wm_su_son], ax         ; and the vacated rect is one for the same
                                 ; reason (SPEC.md 11.91.2). The sub-rect is the
                                 ; third: wm_covered can skip the window it was
                                 ; armed for, and it must not reach the next
@@ -5855,6 +5839,9 @@ wm_dmg_dk   db 0                ; 1 = the dock strip really was drawn, so a
                                 ; one-shot argument to wm_dmg_wins, which
                                 ; clears it on the way out
 wm_dmg_j    dw 0                ; the marking pass's inner index
+%if wm_dmg_dk - wm_dmg_fs != 1
+  %error "wm_paint_dmg clears wm_dmg_fs and wm_dmg_dk with ONE word store"
+%endif
 
 ; --- the rect a moved window is LEAVING (SPEC.md 11.91.2) -------------------
 ; A one-shot argument to wm_dmg_wins, like wm_dmg_dk, and cleared by it for
@@ -6221,7 +6208,15 @@ wm_dmg_gray:
     push cx
     push dx
     push si
+%ifdef KERN_BIG
+    call cur_lazyrect           ; ...or the DAMAGE's own question (SPEC.md
+                                ; 7.1.4.5): everything this pass draws outside
+                                ; the damage - a window whole, the dock, the
+                                ; bar - asks its own, so an arrow parked away
+                                ; from the repaint no longer blinks with it
+%else
     call cur_unlazy              ; ...as the unclipped fill did (see above).
+%endif
                                 ; The DAMAGE is banked by the pushes above:
                                 ; the overflow path below re-seeds from it,
                                 ; and the region build eats every register
@@ -6231,10 +6226,61 @@ wm_dmg_gray:
                                 ; which stays in wm_db_b across the build
     call wm_dmg_occl            ; every visible window, shadow included
     jc .whole                   ; overflowed: dither the lot, as before
+%ifdef OS88_SHORTCUTS
+    call wm_occl_l              ; ...and every drop shadow's L, which the
+    jc .frames                  ; window pass draws; then every touched ZONE,
+    call COLD_SEG:desk_zones_r_x    ; DRAWN into what is left and taken out
+    jc .whole                   ; of it - a cell lays its own ground, and is
+                                ; drawn only where it shows (SPEC.md 11.91.6).
+                                ; UNREACHABLE while desk_zones_r's pre-count
+                                ; matches wm_clip_split; the ONE entry to
+                                ; .whole after cells are drawn, which is what
+                                ; .whole's re-owe guards (SPEC.md 26.9.9). A
+                                ; new subtraction past here that overflows
+                                ; to .whole leans on that guard too
+%endif
+.cmpn:
     cmp word [wm_clip_n], 0
     je .out                     ; wholly covered: not one pixel is revealed
     jmp short .fill
+%ifdef OS88_SHORTCUTS
+.frames:                        ; the Ls overflowed it: the FRAMES alone, the
+    pop si                      ; region before SPEC.md 26.9.9, rebuilt from the
+    pop dx                      ; damage (see .whole's pops). No zone is drawn
+    pop cx                      ; yet, so desk_paint_mask draws each whole
+    pop bx                      ; over it, and the dither goes under no window
+    pop ax                      ; - 11.91.2's exemption still holds, where
+    push ax                     ; `.whole` repainted every window in the
+    push bx                     ; damage on top of a dither laid under it
+    push cx
+    push dx
+    push si
+    call wm_dmg_bands
+    call wm_dmg_occl
+    jnc .cmpn
+%endif
 .whole:
+    mov word [wm_dmg_stwin], 0  ; the lot is dithered, WINDOWS INCLUDED, so
+                                ; 11.91.2's vacated-rect exemption no longer
+                                ; holds: every window the damage reaches is
+                                ; owed. The drop-shadow Ls and the zones made
+                                ; an ordinary drag overflow the region, and a
+                                ; window clear of where the dragged one WAS
+                                ; kept the dither laid over it. Only the
+                                ; FRAMES' overflow lands here now: the Ls'
+                                ; is .frames, and a zone that would overflow
+                                ; it is refused by desk_zones_r's own count
+%ifdef OS88_SHORTCUTS
+    call COLD_SEG:desk_dmg_zones_x  ; every touched zone owed again: desk_zones_r
+%endif                          ; may have drawn some that this dithers over.
+                                ; A GUARD: no entry today reaches here with
+                                ; the mask changed, so it rebuilds the same
+                                ; one - kept for an overflow AFTER the zones
+                                ; (SPEC.md 26.9.9), which nothing would see.
+                                ; HERE, above the pops: it spends AX, and AX
+                                ; is the damage's x1 the bands are re-seeded
+                                ; from - called below them it cut the whole
+                                ; dither down to x 618 on a zoom's restore
     pop si                      ; ...THE BANDS, not their bounding box, and not
     pop dx                      ; the damage: re-seeding from the box would
     pop cx                      ; (the damage is the entry frame's AX..DX,
@@ -6273,7 +6319,25 @@ wm_dmg_gray:
 ; is ground that does not need dithering; one that does not overlap subtracts
 ; nothing and costs a compare.
 ; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+; wm_occl_l - the same walk subtracting every visible window's frame moved
+; (1,1), so its drop-shadow L too (SPEC.md 11.91.6): wm_dmg_gray's region for
+; the desktop's ZONES, which are drawn into it and must not go under an L the
+; window pass then draws back - a window dragged ONTO the cells repainted a
+; 1-px column of every cell it stopped on. The dither under the L was the same
+; double draw, and the window pass owes every L the damage reaches anyway
+; (11.91.4). out: CF = 1 overflowed; clobbers flags.
+wm_occl_l:
+    push di
+    mov di, wm_clip_subl
+    jmp short wm_occl_w
+%endif
 wm_dmg_occl:
+%ifdef KERN_BIG
+    push di
+    mov di, wm_clip_subf
+wm_occl_w:
+%endif
     push ax
     push bx
     push cx
@@ -6288,9 +6352,13 @@ wm_dmg_occl:
     call wm_idx2ptr             ; BX = the window (AX and CX preserved)
     test byte [bx+W_FLAGS], 2
     jz .next
-    call wm_clip_subf           ; the FRAME rect: what will be REPAINTED, not
-    jc .over                    ; what is occupied - the shadow's two corners
-    cmp word [wm_clip_n], 0     ; are in the second and in neither
+%ifdef KERN_BIG
+    call di                     ; the FRAME rect: what will be REPAINTED, not
+%else                           ; what is occupied - the shadow's two corners
+    call wm_clip_subf           ; are in the second and in neither
+%endif
+    jc .over
+    cmp word [wm_clip_n], 0
     je .done                    ; nothing left: stop walking
 .next:
     loop .scan
@@ -6306,6 +6374,9 @@ wm_dmg_occl:
     pop cx
     pop bx
     pop ax
+%ifdef KERN_BIG
+    pop di
+%endif
     ret
 
 ; wm_ttl_rect - DI = window -> AX/BX/CX/DX = its TITLE STRIP, inclusive
@@ -6412,24 +6483,20 @@ wm_clip_rect:
     pop ax
     retf
 
+%ifdef KERN_SMALL
 ; -----------------------------------------------------------------------------
-; wm_zone_r - what a damage pass really reveals of one desktop ZONE
+; wm_zone_r - is any of one desktop ZONE revealed by this damage pass?
 ; in:  AX..DX = the zone's rect, touching [wm_dmg_x1..y2] (desk.inc only ever
 ;      asks about one that does, so the intersection is never empty); the
 ;      gfx lock held
-; out: CF = 1 the region overflowed - nothing armed;
-;      CF = 0, ZF = 1 nothing of the zone is revealed - nothing armed;
-;      CF = 0, ZF = 0 kern_big: ARMED with that region, for the caller to
-;      draw the zone into and disarm; kern_small: disarmed, a question only
+; out: CF = 1 the region overflowed; CF = 0, ZF = 1 nothing of the zone is
+;      revealed; CF = 0, ZF = 0 some of it is. Nothing is left armed.
 ; clobbers: AX, BX, CX, DX, SI, flags
 ;
-; SPEC.md 11.91.6. The region is zone AND damage minus every visible window's
-; FRAME - wm_dmg_gray's own (11.91.1), so the zone and the dither agree on
-; every pixel: an OCCUPIED box would hold the two shadow corners no window
-; draws and the dither does, and a zone clipped by it would leave a dithered
-; pixel where its picture should be. It keeps the shadow L lines, which the
-; zone then draws over - inside the damage, where wm_dmg_shadowed already owes
-; every L the damage reaches. Placed here for the two short `jc`s into
+; SPEC.md 11.91.6, kern_small's half: the region is zone AND damage minus
+; every visible window's FRAME - wm_dmg_gray's own (11.91.1) - and it is a
+; question only. kern_big draws its zones into wm_dmg_gray's region instead
+; (desk.inc's desk_zones_r). Placed here for the two short `jc`s into
 ; wm_clip_clear, which writes no flag.
 ; -----------------------------------------------------------------------------
 wm_zone_r:
@@ -6440,11 +6507,28 @@ wm_zone_r:
     call wm_clip_seed
     call wm_dmg_occl            ; ...minus every frame (and an open dock)
     jc wm_clip_clear            ; overflowed: disarmed, CF still 1
-    cmp word [wm_clip_n], 0     ; ZF = 1: wholly covered (and so disarmed)
-%ifdef KERN_SMALL
-    jmp short wm_clip_clear     ; ...and on kern_small only ever a question
+    cmp word [wm_clip_n], 0     ; ZF = 1: wholly covered
+    jmp short wm_clip_clear     ; ...and only ever a question
 %else
-    ret
+; wm_clip_subl - subtract window BX's frame moved (1,1) - its frame and its
+; DROP-SHADOW L, leaving the two corners no window draws - for wm_occl_l
+; (SPEC.md 11.91.6). Clobbers flags; CF = 1 overflowed.
+wm_clip_subl:
+    push ax
+    mov ax, [bx+W_X]
+    inc ax
+    mov [wm_cl_ox1], ax
+    add ax, [bx+W_W]
+    dec ax
+    mov [wm_cl_ox2], ax
+    mov ax, [bx+W_Y]
+    inc ax
+    mov [wm_cl_oy1], ax
+    add ax, [bx+W_H]
+    dec ax
+    mov [wm_cl_oy2], ax
+    pop ax
+    jmp wm_clip_subr
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -7171,8 +7255,7 @@ wm_ownseg:
     or dx, dx
     jnz .yes
     mov dx, KERNEL_SEG          ; 0 means the kernel made it (wm_seg_of's rule)
-.yes:
-    clc
+.yes:                           ; (CF = 0: the OR above, and MOV keeps it)
     jmp short .out
 .no:
     stc
@@ -7620,21 +7703,26 @@ wm_draw_title:
     pop bx
     pop ax
 .none:
-%ifdef KERN_BIG
-    call wm_chrome_relit        ; SPEC.md 13.8.1: a box being HELD DOWN stays
-                                ; down across a repaint, and a window that just
-                                ; lost its boxes stops claiming one is lit. The
-                                ; common tail, so both exits pay it - the
-                                ; fullscreen early-out above included, which is
-                                ; the case that has no title bar at all
-%endif
 %ifdef SNAPAUDIT
+ %ifdef KERN_BIG
+    call wm_chrome_relit        ; (see below - the audit's restore follows it)
+ %endif
     push ax
     mov ax, [snap_tsave]
     mov [snap_cur], ax
     pop ax
-%endif
     ret
+%elifdef KERN_BIG
+    jmp wm_chrome_relit         ; SPEC.md 13.8.1: a box being HELD DOWN stays
+                                ; down across a repaint, and a window that just
+                                ; lost its boxes stops claiming one is lit. The
+                                ; common tail, so both exits pay it - the
+                                ; fullscreen early-out above included, which is
+                                ; the case that has no title bar at all. A TAIL
+                                ; jump: it was this routine's last call
+%else
+    ret
+%endif
 
 %ifdef KERN_BIG
 section .cold                   ; the two chrome-box helpers are COLD (SPEC.md
@@ -7918,11 +8006,7 @@ wm_chrome_relit_x:
     mov ah, [ui_armr]
     call wm_chrome_rect_x
     call ct_cw_gfx_xor_fill         ; the caller holds the gfx lock: every
-    pop si                          ; wm_draw_title caller does
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp kretc_si                    ; wm_draw_title caller does
 .out:
     ret
 .clear:
@@ -8098,14 +8182,12 @@ wm_title_set:
 ; -----------------------------------------------------------------------------
 wm_saveu:
     pushf
-    push ax                     ; **BX CAME FROM A PACKAGE** (SPEC.md
-    mov ax, bx                  ; 11.96.11.4) and both writes below go THROUGH
-    sub ax, wm_wins             ; it - so it is a window record or we do
-    cmp ax, MAX_WIN * WIN_SIZE  ; nothing. BELOW the table wraps high, so one
-    pop ax                      ; unsigned compare catches both ends, and `pop`
-    jae .done                   ; leaves the flags alone. Paint once passed its
-                                ; screen's HEIGHT here and the kernel set a bit
-                                ; at KERNEL_SEG:480, inside the API jump table
+    call wm_isrec               ; **BX CAME FROM A PACKAGE** (SPEC.md
+    jae .done                   ; 11.96.11.4) and both writes below go THROUGH
+                                ; it - so it is a window record or we do
+                                ; nothing. Paint once passed its screen's
+                                ; HEIGHT here and the kernel set a bit at
+                                ; KERNEL_SEG:480, inside the API jump table
     or al, al
     jz .clear
     and word [bx+W_FLAGS], ~WF_1BPP & 0xFFFF    ; the depth claim is RE-STATED
@@ -8344,8 +8426,27 @@ wm_damage:
     je .noband                  ; 11.96.11), so the app owes the content INSET
     call wm_su_bget             ; by them - which is the whole point of naming
     jc .noband                  ; any. It is [wm_su_bok] and not the extents,
-    call wm_su_orect            ; because on a cache MISS the app owes the
-    inc si                      ; bands too and nothing else tells those apart
+                                ; because on a cache MISS the app owes the
+                                ; bands too and nothing else tells those apart.
+    ; The inset is wm_su_flay's CLAMPED extents, so the kept rect and the
+    ; fragments are complementary by construction rather than by two
+    ; arithmetics agreeing - and it is READ OFF wm_su_flay's table rather than
+    ; re-derived (this was wm_su_orect, with this its one caller, until size
+    ; pass 9): the left edge is one past LEFT's x2 (x1 + l), the right one short
+    ; of RIGHT's x1 (x2 - r), and the rows are the middle band LEFT and RIGHT
+    ; share (mid1 = y1 + t, mid2 = y2 - b). Possibly EMPTY, which is legal and
+    ; means the bands were the whole of it; with no bands at all that table has
+    ; mid1 = y2 + 1 and the answer is empty too, fragment 0 being the whole
+    ; content - a consistency rather than a path, wm_su_bget having said a band
+    ; was named.
+    call wm_su_flay
+    mov ax, [wm_su_ftab+20]     ; LEFT's x2 = x1 + l - 1
+    inc ax
+    mov bx, [wm_su_ftab+18]     ; LEFT's y1 = mid1
+    mov cx, [wm_su_ftab+24]     ; RIGHT's x1 = x2 - r + 1
+    dec cx
+    mov dx, [wm_su_ftab+22]     ; LEFT's y2 = mid2
+    inc si
 .noband:
 %endif
     cmp word [wm_su_son], 0
@@ -8472,9 +8573,10 @@ wm_su_segs: times MAX_WIN dw 0  ; the banked content, one word per window
                                 ; for being in .text as the row above
                                 ; (wm_su_kex - those four CLAMPED - is below,
                                 ; after wm_su_y2: see the %if there)
-wm_su_kany: db 0                ; ...and whether any of them is non-zero
 wm_su_ftab: times 16 dw 0       ; the four fragment rects, x1/y1/x2/y2 each;
-                                ; an empty one has x1 > x2 (SPEC.md 11.96.11.1)
+                                ; an empty one has x1 > x2 or y1 > y2
+                                ; (SPEC.md 11.96.11.1, and wm_su_flay's
+                                ; table says which)
 wm_su_fn: dw 0                  ; ...which one the loop in hand is on
 wm_su_fsz: dw 0                 ; ...and how many buffer bytes it occupies
 wm_su_scrb: dw 0                ; where the fragments end and 11.96.2's edge
@@ -8865,94 +8967,32 @@ wm_cov_rect:
     call wm_idx2ptr             ; BX = the window above (AX and CX preserved)
     test byte [bx+W_FLAGS], 2
     jz .scan
-    call wm_cov_add
+    ; --- fold (its frame INTERSECT wm_cov_c1..c4) into the box. It was
+    ; wm_cov_add, 123 bytes of open-coded overlap test, clamp and fold and two
+    ; edge helpers, with this walk its only caller; since size pass 9 it is
+    ; three shared calls in line. The frame is wm_win_rect's - x + w and y + h, drop shadow included, one less on a
+    ; fullscreen window, which has no shadow (SPEC.md 11.2), the same two edges
+    ; wm_obscured tests - gfx_rect_isectcf clips it to our content and says whether
+    ; anything is left, and wm_runion folds what is left into the box. "Do the two
+    ; overlap" and "is their intersection non-empty" are the same question for two
+    ; non-empty rects, which is what the four compares it replaced asked first.
+    push cx                     ; the walk's count and cursor
+    push si
+    mov si, bx
+    call wm_win_rect            ; AX..DX = its frame, shadow included
+    mov si, wm_cov_c1
+    call gfx_rect_isectcf       ; ...cut to our content, CF = 1 = nothing left
+    jc .none
+    mov si, wm_cov_x1
+    call wm_runion              ; ...and grown into the box
+.none:
+    pop si
+    pop cx
     jmp short .scan
 .out:
     jmp kret_di
 
 ; -----------------------------------------------------------------------------
-; wm_cov_add - fold (window BX's frame INTERSECT wm_cov_c1..c4) into the box
-; in:  BX = an occluder above us, visible; wm_cov_c1..c4 = our content rect
-; out: nothing; AX/CX/SI/DI preserved (the walk above holds all four)
-;
-; The overlap is settled FIRST, by four compares, and only then is each edge
-; clamped and folded - which is what lets the four axes be done one at a time
-; with two registers instead of holding a whole intersection rect.
-; -----------------------------------------------------------------------------
-wm_cov_add:
-    push ax
-    push dx
-    mov ax, [bx+W_X]
-    cmp ax, [wm_cov_c3]
-    jg .out                     ; entirely to our right
-    mov ax, [bx+W_Y]
-    cmp ax, [wm_cov_c4]
-    jg .out                     ; entirely below us
-    call wm_cov_ox2             ; AX = its right edge, drop shadow included
-    cmp ax, [wm_cov_c1]
-    jl .out                     ; entirely to our left
-    mov dx, ax                  ; ...banked: the y test clobbers AX
-    call wm_cov_oy2
-    cmp ax, [wm_cov_c2]
-    jl .out                     ; entirely above us
-    cmp ax, [wm_cov_c4]         ; --- y2 = min(its bottom, our bottom)
-    jle .y2
-    mov ax, [wm_cov_c4]
-.y2:
-    cmp ax, [wm_cov_y2]
-    jle .x2
-    mov [wm_cov_y2], ax
-.x2:
-    cmp dx, [wm_cov_c3]         ; --- x2 = min(its right, our right)
-    jle .x2f
-    mov dx, [wm_cov_c3]
-.x2f:
-    cmp dx, [wm_cov_x2]
-    jle .y1
-    mov [wm_cov_x2], dx
-.y1:
-    mov ax, [bx+W_Y]            ; --- y1 = max(its top, our top)
-    cmp ax, [wm_cov_c2]
-    jge .y1f
-    mov ax, [wm_cov_c2]
-.y1f:
-    cmp ax, [wm_cov_y1]
-    jge .x1
-    mov [wm_cov_y1], ax
-.x1:
-    mov ax, [bx+W_X]            ; --- x1 = max(its left, our left)
-    cmp ax, [wm_cov_c1]
-    jge .x1f
-    mov ax, [wm_cov_c1]
-.x1f:
-    cmp ax, [wm_cov_x1]
-    jge .out
-    mov [wm_cov_x1], ax
-.out:
-    pop dx
-    pop ax
-    ret
-
-; wm_cov_ox2 / wm_cov_oy2 - window BX's right and bottom edges in AX, drop
-; shadow included: x+w and y+h, one less on a fullscreen window, which has no
-; shadow (SPEC.md 11.2). wm_obscured tests the same two edges the same way.
-wm_cov_ox2:                     ; W_X/W_W and W_Y/W_H are +0 and +2 apart, so
-    push si                     ; the two differ by an index (SI is live in
-    xor si, si                  ; wm_cov_add's walk, hence the bank)
-    jmp short wm_cov_o2
-wm_cov_oy2:
-    push si
-    mov si, 2
-wm_cov_o2:
-    mov ax, [bx+si+W_X]
-    add ax, [bx+si+W_W]
-    test byte [bx+W_FLAGS], WF_FULL
-    jz .out
-    dec ax
-.out:
-    pop si
-    ret
-
 ; -----------------------------------------------------------------------------
 ; wm_su_sub - the next window drawn owes only this rect (SPEC.md 11.96.6)
 ; in:  AX = x1, BX = y1, CX = x2, DX = y2 - everything painted so far by the
@@ -9218,8 +9258,8 @@ wm_su_rect:
 ; wm_su_flay - lay DI's cached region out (SPEC.md 11.96.11.1)
 ; in:  DI = window ptr
 ; out: wm_su_x1..y2 = its CONTENT rect, wm_su_kex[0..3] = the extents clamped
-;      to fit it, wm_su_kany = are there any, wm_su_ftab = the four fragments
-;      (an empty one has x1 > x2). Every register preserved.
+;      to fit it, wm_su_ftab = the four fragments
+;      (an empty one has x1 > x2 or y1 > y2). Every register preserved.
 ;
 ; The clamp is left-then-right and top-then-bottom, each into what the one
 ; before it left, so two bands that together overrun the content cannot make a
@@ -9246,30 +9286,92 @@ wm_su_arm:
     popf
     ret
 
-; wm_su_1bpp - may window DI's cache hold ONE plane? (SPEC.md 11.96.17)
-; in:  DI = the window; wm_su_x1/x2 = the content rect just laid out
-; out: CF = 0 yes; every register preserved
-;
-; TWO questions, and the second is not about the window at all.
-;
-; It must have DECLARED it. Four identical planes are one plane of content,
-; and only the application knows whether its planes are identical.
-;
-; And the rect must be WHOLE BYTES. gfx_restore writes x1 rounded down and x2
-; up, so a content ending mid-byte overhangs its own window, and 11.96.2's
-; wm_su_edge repairs that overhang by reading the screen back - which on a VGA
-; is somebody else's COLOUR, and one plane of buffer cannot carry it.
-; Broadcast through Map Mask 0Fh it would come back as 15 or 0: a stripe of
-; flattened neighbour down the side of the window, up to 6px left and 5px
-; right. SPEC.md 11.94.5 snaps both edges so whole bytes are the ordinary
-; answer, and the two windows they are not are the one that opted out
-; (WF_NOSNAP) and the one that spans the screen, whose content is W_W-1 and
-; whose width 11.95.2 will not let anyone touch.
-wm_su_1bpp:
-    test word [di+W_FLAGS], WF_1BPP
-    jz .no
-    cmp byte [wm_su_kany], 0
-    jne .no                     ; ...AND IT MAY NOT HAVE NAMED A BAND. The
+%endif
+
+; WSU_CLAMP2 - store the two band bytes at DS:SI at ES:DI, the first clamped to
+; BX and the second to what the first left of it. SI += 2, DI += 2; AX and BX
+; clobbered. A macro and not a routine: wm_su_flay runs on every window paint
+; and a call per pair would hand back the cycles the branch-free fragment
+; table below pays for.
+%macro WSU_CLAMP2 0
+    lodsb
+    mov ah, 0
+    cmp ax, bx
+    jbe %%a
+    mov ax, bx
+%%a:
+    stosb
+    sub bx, ax
+    lodsb
+    mov ah, 0
+    cmp ax, bx
+    jbe %%b
+    mov ax, bx
+%%b:
+    stosb
+%endmacro
+
+wm_su_flay:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call wm_su_rect
+    mov [wm_su_x1], ax
+    mov [wm_su_y1], bx
+    mov [wm_su_x2], cx
+    mov [wm_su_y2], dx
+    sub dx, bx
+    inc dx                      ; DX = the content's height...
+    sub cx, ax
+    inc cx                      ; ...and CX its width
+%ifdef KERN_BIG
+    push cx                     ; ...and HOW DEEP the display holding it is,
+    call vid_disp_planes        ; before anything sizes a buffer from it. Here
+    mov [WM_SU_PW], cx          ; because this is the one routine both the take
+    pop bx                      ; and the check reach the content rect through
+%else                           ; (AX/BX are still its top-left; it clobbers CX
+    mov bx, cx                  ; alone). kern_small: WM_SU_PW IS
+%endif                          ; [vid_planes_w] and there is nothing to
+                                ; establish. BX = the width either way
+    lea si, [di+W_SUEXT]
+    push es
+    push ds
+    pop es                      ; ES = DS for the STOSBs here and the STOSWs
+    mov di, wm_su_kex           ; below; the ladder gives the caller's DI back
+    WSU_CLAMP2                  ; left, then right into what the left left
+    mov bx, dx
+    WSU_CLAMP2                  ; top, then bottom, the same again
+    mov ax, [wm_su_kex]
+    or ax, [wm_su_kex+2]
+    or al, ah                   ; AL = any of the four, and ZF = none
+%ifdef KERN_BIG
+    ; --- ...OR ONE PLANE (SPEC.md 11.96.17), and HERE rather than beside
+    ; vid_disp_planes because the answer needs the bands, which the clamping
+    ; above has only just settled. It was wm_su_1bpp, a routine of its own with
+    ; this as its only caller; inline it reads the band test off the flags
+    ; already in hand and the window off SI, and [wm_su_kany] - a byte kept for
+    ; it alone - is gone.
+    ;
+    ; TWO questions, and the second is not about the window at all.
+    ;
+    ; It must have DECLARED it. Four identical planes are one plane of content,
+    ; and only the application knows whether its planes are identical.
+    ;
+    ; And the rect must be WHOLE BYTES. gfx_restore writes x1 rounded down and x2
+    ; up, so a content ending mid-byte overhangs its own window, and 11.96.2's
+    ; wm_su_edge repairs that overhang by reading the screen back - which on a VGA
+    ; is somebody else's COLOUR, and one plane of buffer cannot carry it.
+    ; Broadcast through Map Mask 0Fh it would come back as 15 or 0: a stripe of
+    ; flattened neighbour down the side of the window, up to 6px left and 5px
+    ; right. SPEC.md 11.94.5 snaps both edges so whole bytes are the ordinary
+    ; answer, and the two windows they are not are the one that opted out
+    ; (WF_NOSNAP) and the one that spans the screen, whose content is W_W-1 and
+    ; whose width 11.95.2 will not let anyone touch.
+    jnz .deep                   ; ...AND IT MAY NOT HAVE NAMED A BAND. The
                                 ; test below is about the CONTENT rect, and
                                 ; 11.96.11.1's LEFT and RIGHT fragments are
                                 ; sub-spans of it that can end mid-byte even
@@ -9278,225 +9380,92 @@ wm_su_1bpp:
                                 ; one-plane buffer. Nothing wants both yet
                                 ; (a band needs WF_OWNBG), and refusing is a
                                 ; cache the ordinary depth still takes
-    push ax
-    mov ax, [wm_su_x1]
-    test al, 7                  ; the content's FIRST byte is whole...
-    jnz .popno
-    mov ax, [wm_su_x2]
-    and al, 7                   ; ...and its LAST one is: x2 must be the eighth
-    cmp al, 7                   ; pixel of its byte, not the first of the next
-    pop ax
-    jne .no
-    clc
-    ret
-.popno:
-    pop ax
-.no:
-    stc
-    ret
+    test byte [si-(W_SUEXT+4)+W_FLAGS+1], WF_1BPP >> 8
+    jz .deep                    ; (SI is 4 past the window's W_SUEXT here)
+    test byte [wm_su_x1], 7     ; the content's FIRST byte is whole...
+    jnz .deep
+    mov bl, [wm_su_x2]
+    not bl
+    test bl, 7                  ; ...and its LAST one is: x2 must be the eighth
+    jnz .deep                   ; pixel of its byte, not the first of the next
+    mov word [WM_SU_PW], 1
+.deep:
+    or al, al                   ; the flags below are the bands' again
+ %if (WF_1BPP & 0FFh) || (W_SUEXT + 4 - W_FLAGS - 1) > 128
+  %error "wm_su_flay tests WF_1BPP as a bit of W_FLAGS's HIGH byte, through SI 4 past W_SUEXT on a disp8"
+ %endif
 %endif
-
-wm_su_flay:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call wm_su_rect
-    mov [wm_su_x1], ax
-    mov [wm_su_y1], bx
-    mov [wm_su_x2], cx
-    mov [wm_su_y2], dx
-
-%ifdef KERN_BIG
-    push cx                     ; ...and HOW DEEP the display holding it is,
-    push dx                     ; before anything sizes a buffer from it. Here
-    call vid_disp_planes        ; because this is the one routine both the take
-    mov [WM_SU_PW], cx          ; and the check reach the content rect through
-    pop dx                      ; (AX/BX are still its top-left)
-    pop cx
-%endif                          ; kern_small: WM_SU_PW IS [vid_planes_w] and
-                                ; there is nothing to establish
-
-    lea si, [di+W_SUEXT]
-    mov ax, cx
-    sub ax, [wm_su_x1]
-    inc ax                      ; AX = the content's width...
-    mov bx, ax
-    mov al, [si]
-    xor ah, ah
-    cmp ax, bx
-    jbe .l
-    mov ax, bx
-.l:
-    mov [wm_su_kex+0], al
-    sub bx, ax                  ; ...and what the left band left of it
-    mov al, [si+1]
-    xor ah, ah
-    cmp ax, bx
-    jbe .r
-    mov ax, bx
-.r:
-    mov [wm_su_kex+1], al
-    mov ax, dx
-    sub ax, [wm_su_y1]
-    inc ax                      ; AX = the height, same again
-    mov bx, ax
-    mov al, [si+2]
-    xor ah, ah
-    cmp ax, bx
-    jbe .t
-    mov ax, bx
-.t:
-    mov [wm_su_kex+2], al
-    sub bx, ax
-    mov al, [si+3]
-    xor ah, ah
-    cmp ax, bx
-    jbe .b
-    mov ax, bx
-.b:
-    mov [wm_su_kex+3], al
-    mov al, [wm_su_kex+0]
-    or al, [wm_su_kex+1]
-    or al, [wm_su_kex+2]
-    or al, [wm_su_kex+3]
-    mov [wm_su_kany], al
-%ifdef KERN_BIG
-    call wm_su_1bpp             ; ...OR ONE PLANE (SPEC.md 11.96.17), and HERE
-    jc .deep                    ; rather than beside vid_disp_planes because
-    mov word [WM_SU_PW], 1      ; the answer needs [wm_su_kany], which the
-.deep:                          ; clamping above has only just settled
-    mov al, [wm_su_kany]        ; (...and the branch below wants its flags)
-    or al, al
-%endif
-    jnz .frags
-    mov ax, [wm_su_x1]          ; no bands: fragment 0 is the whole content
-    mov [wm_su_ftab+0], ax
-    mov ax, [wm_su_y1]
-    mov [wm_su_ftab+2], ax
-    mov ax, [wm_su_x2]
-    mov [wm_su_ftab+4], ax
-    mov ax, [wm_su_y2]
-    mov [wm_su_ftab+6], ax
-    mov si, 1
-    call wm_su_fnil
-    mov si, 2
-    call wm_su_fnil
-    mov si, 3
-    call wm_su_fnil
-    jmp .out
-.frags:
-    ; --- 0 TOP: (x1, y1, x2, y1 + t - 1), full width -----------------------
-    mov al, [wm_su_kex+2]
-    xor ah, ah
-    or ax, ax
-    jz .notop
-    add ax, [wm_su_y1]
-    dec ax
-    mov [wm_su_ftab+6], ax
-    mov ax, [wm_su_x1]
-    mov [wm_su_ftab+0], ax
-    mov ax, [wm_su_y1]
-    mov [wm_su_ftab+2], ax
-    mov ax, [wm_su_x2]
-    mov [wm_su_ftab+4], ax
-    jmp short .bot
-.notop:
-    xor si, si
-    call wm_su_fnil
-.bot:
-    ; --- 1 BOTTOM: (x1, y2 - b + 1, x2, y2), full width --------------------
-    mov al, [wm_su_kex+3]
-    xor ah, ah
-    or ax, ax
-    jz .nobot
+    ; --- the four fragments, laid out WITHOUT A BRANCH PER FRAGMENT --------
+    ; With l, r, t, b the clamped extents and mid1 = y1 + t, mid2 = y2 - b:
+    ;   0 TOP    (x1,          y1,       x2,          mid1 - 1)
+    ;   1 BOTTOM (x1,          mid2 + 1, x2,          y2)
+    ;   2 LEFT   (x1,          mid1,     x1 + l - 1,  mid2)
+    ;   3 RIGHT  (x2 - r + 1,  mid1,     x2,          mid2)
+    ; and a band of width zero comes out EMPTY on its own - TOP with t = 0 has
+    ; y2 = y1 - 1, LEFT with l = 0 has x2 = x1 - 1, and LEFT and RIGHT both have
+    ; mid1 > mid2 when the strips meet - which is all wm_su_frag ever asks
+    ; (x1 > x2 OR y1 > y2, signed). That is what retired wm_su_fnil and its
+    ; seven calls. NO BANDS is the same table with mid1 = y2 + 1: TOP is then the
+    ; whole content and the other three are empty, which is SPEC.md 11.96.11.1's
+    ; "fragment 0 is the WHOLE content and 1..3 are empty" to the coordinate,
+    ; and b = 0 there, so mid2 = y2 needs nothing.
+    mov si, [wm_su_x1]
+    mov cx, [wm_su_x2]
     mov bx, [wm_su_y2]
-    sub bx, ax
-    inc bx
-    mov [wm_su_ftab+10], bx
-    mov ax, [wm_su_x1]
-    mov [wm_su_ftab+8], ax
-    mov ax, [wm_su_x2]
-    mov [wm_su_ftab+12], ax
-    mov ax, [wm_su_y2]
-    mov [wm_su_ftab+14], ax
-    jmp short .mid
-.nobot:
-    mov si, 1
-    call wm_su_fnil
-.mid:
-    ; --- the rows LEFT and RIGHT share: y1 + t .. y2 - b -------------------
-    mov al, [wm_su_kex+2]
-    xor ah, ah
-    add ax, [wm_su_y1]
-    mov bx, ax                  ; BX = the middle band's first row
+    mov bp, bx                  ; BP = mid2 if there is no bottom band
+    jz .whole                   ; ...and BX + 1 = mid1 if there are no bands
     mov al, [wm_su_kex+3]
     xor ah, ah
-    mov cx, [wm_su_y2]
-    sub cx, ax                  ; CX = ...and its last
-    cmp bx, cx
-    jle .side
-    mov si, 2                   ; nothing between the strips: no sides
-    call wm_su_fnil
-    mov si, 3
-    call wm_su_fnil
-    jmp short .out
-.side:
-    ; --- 2 LEFT: (x1, mid1, x1 + l - 1, mid2) ------------------------------
+    sub bp, ax                  ; BP = mid2 = y2 - b
+    mov al, [wm_su_kex+2]
+    xor ah, ah
+    mov bx, [wm_su_y1]
+    add bx, ax
+    dec bx                      ; BX + 1 = mid1 = y1 + t
+.whole:
+    inc bx                      ; BX = mid1
+    mov di, wm_su_ftab
+    mov ax, si                  ; 0 TOP
+    stosw
+    mov ax, [wm_su_y1]
+    stosw
+    mov ax, cx
+    stosw
+    lea ax, [bx-1]
+    stosw
+    mov ax, si                  ; 1 BOTTOM
+    stosw
+    lea ax, [bp+1]
+    stosw
+    mov ax, cx
+    stosw
+    mov ax, [wm_su_y2]
+    stosw
+    mov ax, si                  ; 2 LEFT
+    stosw
+    mov ax, bx
+    stosw
     mov al, [wm_su_kex+0]
     xor ah, ah
-    or ax, ax
-    jz .noleft
-    add ax, [wm_su_x1]
+    add ax, si
     dec ax
-    mov [wm_su_ftab+20], ax
-    mov ax, [wm_su_x1]
-    mov [wm_su_ftab+16], ax
-    mov [wm_su_ftab+18], bx
-    mov [wm_su_ftab+22], cx
-    jmp short .right
-.noleft:
-    mov si, 2
-    call wm_su_fnil
-.right:
-    ; --- 3 RIGHT: (x2 - r + 1, mid1, x2, mid2) -----------------------------
-    mov al, [wm_su_kex+1]
+    stosw
+    mov ax, bp
+    stosw
+    mov al, [wm_su_kex+1]       ; 3 RIGHT
     xor ah, ah
-    or ax, ax
-    jz .noright
-    mov dx, [wm_su_x2]
-    sub dx, ax
-    inc dx
-    mov [wm_su_ftab+24], dx
-    mov [wm_su_ftab+26], bx
-    mov ax, [wm_su_x2]
-    mov [wm_su_ftab+28], ax
-    mov [wm_su_ftab+30], cx
-    jmp short .out
-.noright:
-    mov si, 3
-    call wm_su_fnil
-.out:
-    jmp kret_si
-
-; wm_su_fnil - mark fragment SI empty (x1 > x2, which every reader already
-;              treats as nothing to do). Preserves every register.
-wm_su_fnil:
-    push ax
-    push si
-    add si, si
-    add si, si
-    add si, si
-    mov ax, 1
-    mov [si+wm_su_ftab+0], ax
-    xor ax, ax
-    mov [si+wm_su_ftab+2], ax
-    mov [si+wm_su_ftab+4], ax
-    mov [si+wm_su_ftab+6], ax
-    pop si
-    pop ax
-    ret
+    neg ax
+    add ax, cx
+    inc ax
+    stosw
+    mov ax, bx
+    stosw
+    mov ax, cx
+    stosw
+    mov ax, bp
+    stosw
+    pop es
+    jmp kret_bp
 
 ; wm_su_frag - fragment [wm_su_fn] (0..3) of the laid-out region
 ; in:  [wm_su_fn] = 0..3, in memory rather than a register because every loop
@@ -9528,9 +9497,10 @@ wm_su_frag:
 ;               AX/BX/CX/DX, which is what a later fragment's offset is past.
 ; out: CF = 1 = it does not fit a word; every register preserved
 ;
-; The +3 is wm_su_kb's own: the byte span, plus the TWO EDGE COLUMNS 11.96.2's
-; merge keeps its scratch in. Both this and wm_su_kb read it from here, so the
-; claim's size and the offsets inside it cannot disagree.
+; The +3 was wm_su_kb's own (wm_su_take's sizing now): the byte span, plus the
+; TWO EDGE COLUMNS 11.96.2's merge keeps its scratch in. Both this and that
+; sizing read it from here, so the claim's size and the offsets inside it
+; cannot disagree.
 wm_su_bytes:
     push ax
     push bx
@@ -9636,38 +9606,6 @@ wm_su_bget:
     ret
 .no:
     stc
-    ret
-
-; wm_su_orect - the part of DI's content the APP still owes once the cached
-;               bands have come back: the content INSET by the four extents,
-;               and possibly EMPTY (x1 > x2), which is legal and means the
-;               bands were the whole of it.
-; in:  DI = window ptr
-; out: AX/BX/CX/DX; clobbers those and flags
-;
-; It insets by wm_su_flay's CLAMPED extents, so the kept rect and the fragments
-; are complementary by construction rather than by two arithmetics agreeing.
-wm_su_orect:
-    push si                     ; the four results are INDEPENDENT, so each
-    call wm_su_flay             ; extent applies to its own register and only
-    mov bx, [wm_su_y1]          ; x1 needs a bank - which SI, already pushed,
-    mov cx, [wm_su_x2]          ; is. BP used to hold every one of them in
-    mov dx, [wm_su_y2]          ; turn, which is also the one place in this
-    mov si, [wm_su_x1]          ; file that needed the "BP as a plain scratch
-    mov al, [wm_su_kex+0]       ; register is legal" note
-    xor ah, ah
-    add si, ax
-    mov al, [wm_su_kex+1]
-    xor ah, ah
-    sub cx, ax
-    mov al, [wm_su_kex+2]
-    xor ah, ah
-    add bx, ax
-    mov al, [wm_su_kex+3]
-    xor ah, ah
-    sub dx, ax
-    mov ax, si
-    pop si
     ret
 
 ; wm_su_slot - which cache belongs to a window
@@ -9810,9 +9748,8 @@ wm_su_ck:
     jne .no                     ; withdrawn, or a window that has crossed to a
 %endif                          ; display of another depth, leaves a buffer
                                 ; that means something else at the same stride
-    mov ax, si                  ; ...and the segment, for wm_su_try
-    clc
-    jmp short .out
+    mov ax, si                  ; ...and the segment, for wm_su_try. CF = 0
+    jmp short .out              ; already: the compare that just said EQUAL
 .no:
     stc
 .out:
@@ -9942,12 +9879,13 @@ wm_dc_take:
                                 ; where the load was three, and the two it
                                 ; saves are what lets `jc .out` above reach)
     sub ax, [ui_origx]          ; compares, so moving it by the drag's own
-    add [es:WSU_X1], ax         ; delta is the whole trick. WSU_EXT is left
-    add [es:WSU_X2], ax         ; alone because a drag does not resize, so the
-    mov ax, [di+W_Y]            ; band extents it describes are unchanged
-    sub ax, [ui_origy]
-    add [es:WSU_Y1], ax
-    add [es:WSU_Y2], ax
+    xor bx, bx                  ; delta is the whole trick. WSU_EXT is left
+    add [es:bx+WSU_X1], ax      ; alone because a drag does not resize, so the
+    add [es:bx+WSU_X2], ax      ; band extents it describes are unchanged.
+    mov ax, [di+W_Y]            ; (BX = 0 is the header's base: [es:bx+d8] is
+    sub ax, [ui_origy]          ; a byte or two shorter than [es:disp16], four
+    add [es:bx+WSU_Y1], ax      ; times over, and BX is spent - the slot tag
+    add [es:bx+WSU_Y2], ax      ; wm_su_slot left in it is not needed again)
     jmp short .out
 .drop:
     mov word [wm_dc_win], 0
@@ -10058,9 +9996,31 @@ wm_su_take:
                                 ; the buffer wrongly. wm_fit keeps a window on
                                 ; screen, so this refuses nothing in practice
 %endif
-    call wm_su_kb               ; AX = KB for every fragment together, the
-    jc .out                     ; header included - or it does not fit one
-                                ; segment at all
+    ; --- the KB for the banked rect, menu_save_kb's arithmetic. It was
+    ; wm_su_kb, with this as its one caller, and it banked five registers that
+    ; nothing it calls touches (wm_su_scrset preserves every one, mem_bytes_kb
+    ; all but AX).
+    ;
+    ; The block is WSU_IMG + (bytes per row + 2) x rows x planes: the four-word
+    ; header, the image gfx_save writes, and behind it wm_su_edge's two
+    ; one-byte-wide screen columns, which are rows x planes each.
+    ;
+    ; IT REFUSES OVER 64KB rather than wrapping. gfx_save advances a 16-bit DI
+    ; inside one segment, so a rect needing more than a segment cannot be banked
+    ; however big the claim is - and the old arithmetic could not even ASK for the
+    ; right size, because `mul` answers in DX:AX and the plane multiply threw DX
+    ; away. A maximised window on VGA came to 135,432 bytes, which truncated to a
+    ; 5KB claim that gfx_save then wrote 132KB into.
+    call wm_su_scrset           ; the FRAGMENTS' images end at [wm_su_scrb] -
+    jc .out                     ; header included - and 11.96.2's shared edge
+    mov ax, [wm_su_scrb]        ; scratch takes [wm_su_scrsz] past that
+    add ax, [wm_su_scrsz]
+    jc .out
+    cmp ax, 0xFC00
+    ja .out                     ; ...nor could the rounding below survive it
+    call mem_bytes_kb           ; AX = KB for every fragment together, the
+                                ; header included, rounded UP and never 0
+                                ; (memory.inc)
     mov bx, di
     call wm_su_slot             ; SI = its wm_su_segs word, BX = its own tag
     call mem_claim              ; DX = segment
@@ -10094,46 +10054,6 @@ wm_su_take:
 .out:
     pop es
     jmp kret_di
-
-; wm_su_kb - KB for the banked rect, menu_save_kb's arithmetic
-; in: the four wm_su_* rect words
-; out: CF=0, AX = KB (never 0); CF=1 = it cannot be banked at all
-;
-; The block is WSU_IMG + (bytes per row + 2) x rows x planes: the four-word
-; header, the image gfx_save writes, and behind it wm_su_edge's two
-; one-byte-wide screen columns, which are rows x planes each.
-;
-; IT REFUSES OVER 64KB rather than wrapping. gfx_save advances a 16-bit DI
-; inside one segment, so a rect needing more than a segment cannot be banked
-; however big the claim is - and the old arithmetic could not even ASK for the
-; right size, because `mul` answers in DX:AX and the plane multiply threw DX
-; away. A maximised window on VGA came to 135,432 bytes, which truncated to a
-; 5KB claim that gfx_save then wrote 132KB into.
-wm_su_kb:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call wm_su_scrset           ; the FRAGMENTS' images end at [wm_su_scrb] -
-    jc .big                     ; header included - and 11.96.2's shared edge
-    mov ax, [wm_su_scrb]        ; scratch takes [wm_su_scrsz] past that
-    add ax, [wm_su_scrsz]
-    jc .big
-    cmp ax, 0xFC00
-    ja .big                     ; ...nor could the rounding below survive it
-    call mem_bytes_kb           ; rounded UP, and never 0 (memory.inc)
-    clc
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
-.big:
-    stc
-    jmp short .out
 
 ; wm_su_edge - make the banked buffer's two edge byte columns agree with the
 ;              screen OUTSIDE the window (SPEC.md 11.96.2)
@@ -10181,13 +10101,13 @@ wm_su_kb:
 %define WSE_Y1 bp+10               ; `mov bp, sp` leave AX..DX - x1, y1, x2, y2 -
 %define WSE_X1 bp+12               ; at these offsets
 wm_su_edge:
-    mov si, [wm_su_x1]          ; A WHOLE-BYTE RECT HAS NO OVERHANG, so there
-    test si, 7                  ; is nothing outside it in either edge byte
-    jnz .work                   ; and both masks come out FFh - which makes
-    mov si, [wm_su_x2]          ; wm_su_merge write the buffer back over
-    and si, 7                   ; itself, twice, after two gfx_saves that read
-    cmp si, 7                   ; the screen for nothing. SPEC.md 11.96.8
-    je .skip                    ; prices that at 18.22 ms of a 47.86 ms
+    test byte [wm_su_x1], 7     ; A WHOLE-BYTE RECT HAS NO OVERHANG, so there
+    jnz .work                   ; is nothing outside it in either edge byte
+    mov si, [wm_su_x2]          ; and both masks come out FFh - which makes
+    inc si                      ; wm_su_merge write the buffer back over
+    test si, 7                  ; itself, twice, after two gfx_saves that read
+    jnz .work                   ; the screen for nothing. SPEC.md 11.96.8
+    ret                         ; prices that at 18.22 ms of a 47.86 ms
 .work:                          ; restore, and SPEC.md 11.94.5 snaps both
                                 ; edges so it is now the ORDINARY case rather
                                 ; than a lucky one. It is also what makes a
@@ -10315,15 +10235,7 @@ wm_su_edge:
     mov dl, [wm_su_rm]
     call wm_su_merge
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.skip:
-    ret
+    jmp kret_bp
 .col:                           ; AX = the column's x, DI = its scratch
     mov bx, [WSE_Y1]
     mov cx, ax                  ; x2 = x1: one byte wide, whole bytes copied
@@ -10564,7 +10476,7 @@ wm_su_try:
     call wm_su_frag             ; any of them lives (SPEC.md 11.96.11.1)
     jc .fnext
     call wm_su_bytes            ; [wm_su_fsz] = this one's span in the buffer.
-    jc .fnext                   ; It cannot overflow - wm_su_kb refused the
+    jc .fnext                   ; It cannot overflow - wm_su_take refused the
                                 ; claim if it could - and skipping is the safe
                                 ; answer if it somehow does
     mov [wm_su_fbase], di       ; ...and where it lives, for the edge merge
@@ -10610,8 +10522,9 @@ wm_su_try:
     mov byte [wm_su_bok], 1     ; the bands are on the glass again - including
 %endif                          ; when nothing was put back, which says the
                                 ; same thing (SPEC.md 11.96.11)
-    clc                         ; THE CACHE IS NOT SPENT HERE. It used to be
-    jmp short .out              ; dropped on the grounds that this window is
+                                ; (CF = 0: `jb .frag` was not taken.)
+    jmp short .out              ; THE CACHE IS NOT SPENT HERE. It used to be
+                                ; dropped on the grounds that this window is
                                 ; about to be the front one and will change
                                 ; its own pixels - true of a raise and false
                                 ; of a damage repaint, which redraws a window
@@ -10715,10 +10628,13 @@ wm_draw_win:
     mov di, bx                  ; DI = window ptr for the duration
 %ifndef REDRAWFULL
     mov byte [wm_su_bok], 0     ; no band has been put back in THIS draw yet
-    mov byte [wm_dw_part], 0    ; IS THIS DRAW PARTIAL? (SPEC.md 11.96.9) Read
-    cmp word [wm_su_son], 0     ; HERE, because wm_su_srect spends the one-shot
-    je .whole                   ; inside wm_su_try below and wm_su_bank needs to
-    mov byte [wm_dw_part], 1    ; know about it afterwards
+    mov al, [wm_su_son]         ; IS THIS DRAW PARTIAL? (SPEC.md 11.96.9) Read
+    mov [wm_dw_part], al        ; HERE, because wm_su_srect spends the one-shot
+                                ; inside wm_su_try below and wm_su_bank needs to
+                                ; know about it afterwards. [wm_su_son] is only
+                                ; ever 0 or 1 (every store is an immediate), so
+                                ; its low byte IS the answer - and AX is banked
+                                ; and reloaded just below
 .whole:
 %endif
 
@@ -10876,7 +10792,8 @@ wm_draw_win:
                                 ; both correct and finished with (SPEC.md
                                 ; 11.96.4)
 %ifndef REDRAWFULL
-    mov word [wm_su_son], 0     ; THE ONE-SHOT DIES WITH THE DRAW IT WAS ARMED
+    xor ax, ax                  ; (AX is banked: kret_di puts it back)
+    mov [wm_su_son], ax         ; THE ONE-SHOT DIES WITH THE DRAW IT WAS ARMED
                                 ; FOR, at the one site every window in the system
                                 ; is drawn through. wm_su_srect spends it, but
                                 ; only when there is a cache to restore from: on
@@ -11007,27 +10924,26 @@ wm_su_precover:
     mov cl, [wm_zn]
     xor ch, ch
     jcxz .out
-.scan:
-    mov al, [si]
-    inc si
-    push cx
-    push si
+.scan:                          ; (CX and SI are the walk's, and no call in
+    mov al, [si]                ; it touches either: wm_idx2ptr, wm_win_over,
+    inc si                      ; wm_obscured, wm_su_ck and wm_su_take each
+                                ; preserve both - so they are not banked)
     call wm_idx2ptr             ; BX = the record this z-order slot names
     cmp bx, di
     je .next                    ; ourselves: we are what is doing the covering
     cmp bx, bp
     je .next                    ; wm_raise's own, above
-    test byte [bx+W_FLAGS], 2
-    jz .next                    ; hidden: no pixels on the glass to bank
-    test byte [bx+W_FLAGS], WF_SAVEU
-    jz .next                    ; made no promise - wm_su_take would refuse,
-                                ; and asking here keeps the walk cheap on a
+    mov al, [bx+W_FLAGS]        ; VISIBLE and SAVEU, one compare: hidden has
+    and al, WF_SAVEU | 2        ; no pixels on the glass to bank, and no
+    cmp al, WF_SAVEU | 2        ; promise means wm_su_take would refuse -
+    jne .next                   ; and asking here keeps the walk cheap on a
                                 ; desktop full of windows that cannot use one
     push di                     ; ...AGAINST THE RECT WE ARE ABOUT TO HAVE,
-    cmp word [wm_su_pcrp], 0    ; which for a RESIZE is not the one in our
-    je .ownr                    ; record any more (SPEC.md 11.96.16.2). A
-    mov di, [wm_su_pcrp]        ; window appearing has no such distinction and
-.ownr:                          ; leaves this 0
+    mov ax, [wm_su_pcrp]        ; which for a RESIZE is not the one in our
+    or ax, ax                   ; record any more (SPEC.md 11.96.16.2). A
+    jz .ownr                    ; window appearing has no such distinction and
+    xchg ax, di                 ; leaves this 0
+.ownr:
     call wm_win_over            ; DI = us: do we land on it at all? A window
     pop di                      ; we do not touch keeps whatever it has and
     jc .next                    ; owes us no blit
@@ -11042,8 +10958,6 @@ wm_su_precover:
 .have:
     pop di
 .next:
-    pop si
-    pop cx
     loop .scan
 .out:
     pop bp
@@ -11090,23 +11004,19 @@ wm_grow_rect:
 ; back to how it looked before the box, not to something new.
 ; -----------------------------------------------------------------------------
 wm_grow_erase:
-    push ax                     ; wm_grow_paint's own two gates and the visible
-    mov al, [di+W_FLAGS]        ; bit, as ONE compare - the idiom wm_grow_paint
-    and al, WF_SIZABLE|WF_FULL|2; already uses for two of the three. A hidden
-    cmp al, WF_SIZABLE|2        ; window has no pixels to erase
-    jne .pop
+    push ax
     push bx
     push cx
     push dx
+    mov al, [di+W_FLAGS]        ; wm_grow_paint's own two gates and the visible
+    and al, WF_SIZABLE|WF_FULL|2; bit, as ONE compare - the idiom wm_grow_paint
+    cmp al, WF_SIZABLE|2        ; already uses for two of the three. A hidden
+    jne .pop                    ; window has no pixels to erase
     call wm_grow_rect
     call thm_bg                
     call gfx_fill
-    pop dx
-    pop cx
-    pop bx
 .pop:
-    pop ax
-    ret
+    jmp kret_dx
 
 ; -----------------------------------------------------------------------------
 ; wm_grow_paint - draw a window's grow box if it deserves one (SPEC.md 11.1)
@@ -11130,9 +11040,9 @@ wm_grow_paint:
     call wm_top                 ; BX = frontmost visible (0 if none)
     cmp di, bx
     jne .out
-    mov ax, [di+W_FLAGS]
-    and ax, WF_SIZABLE | WF_FULL
-    cmp ax, WF_SIZABLE
+    mov al, [di+W_FLAGS]        ; (both bits are in the LOW byte, which is
+    and al, WF_SIZABLE | WF_FULL; what wm_grow_erase's own test reads too)
+    cmp al, WF_SIZABLE
     jne .out
     call wm_grow_rect           ; 13x13 white square, black frame
     call thm_bg                
@@ -11221,12 +11131,10 @@ wm_an_ok:
                                 ; come and go too often to be worth a third of
                                 ; a second each (11.99.2)
     call wm_fs_vis              ; a fullscreen window owns the screen: an
-    jc .no                      ; outline over it is drawing on somebody's
-    stc                         ; borrowed surface
-    ret
-.no:
-    clc
-    ret
+    cmc                         ; outline over it is drawing on somebody's
+.no:                            ; borrowed surface - so its answer, inverted.
+    ret                         ; Both jumps here arrive with CF = 0 already:
+                                ; an EQUAL compare and a TEST
 
 ; wm_anim - walk an outline from wm_an_s to wm_an_d
 ; in:  both rects filled, inclusive; the caller holds the gfx lock
@@ -11351,28 +11259,26 @@ wm_an_setw:
 ; arrives from a menu item, a drive zone, a Disk window row or a package's own
 ; wm_create, none of which reaches wm_show. The window's own middle is the
 ; honest general answer and is what a system with no icon to hand does.
-; clobbers: flags
+; clobbers: SI and DI (each two along - its one caller is done with both),
+; flags. One half-routine run twice, x then y.
 wm_an_seed:
     push ax
-    push bx
-    mov ax, [di]                ; cx = (x1 + x2) / 2
+    call .half                  ; x: cx = (x1 + x2) / 2, the seed cx -/+ 8
+    inc si
+    inc si
+    inc di
+    inc di
+    call .half                  ; ...and y, one word along in both rects
+    pop ax
+    ret
+.half:
+    mov ax, [di]
     add ax, [di+4]
     sar ax, 1
-    mov bx, ax
     sub ax, WM_AN_SEED
     mov [si], ax
-    add bx, WM_AN_SEED
-    mov [si+4], bx
-    mov ax, [di+2]              ; cy = (y1 + y2) / 2
-    add ax, [di+6]
-    sar ax, 1
-    mov bx, ax
-    sub ax, WM_AN_SEED
-    mov [si+2], ax
-    add bx, WM_AN_SEED
-    mov [si+6], bx
-    pop bx
-    pop ax
+    add ax, 2*WM_AN_SEED
+    mov [si+4], ax
     ret
 
 ; wm_an_arm - the NEXT wm_show zooms out of this rect instead of a centre
@@ -11402,8 +11308,7 @@ wm_an_open:
     call wm_an_setw             ; destination = where it is about to appear
     cmp byte [wm_an_armed], 0
     jne .armed                  ; ...source already set by wm_an_arm
-    mov di, wm_an_d
-    mov si, wm_an_s
+    mov si, wm_an_s             ; (DI is still wm_an_d: wm_an_setw keeps it)
     call wm_an_seed             ; ...or its own centre
 .armed:
     mov byte [wm_an_armed], 0
@@ -11449,14 +11354,21 @@ wm_an_n     dw WM_ANIM_N        ; idiv takes a memory or register operand, not
 ; of the cursor shape by WF_HIBITS exactly as on kern_big, and never read.
 ; -----------------------------------------------------------------------------
 wm_noanim:
-    push ax                     ; **BX CAME FROM A PACKAGE**: wm_saveu's test,
-    mov ax, bx                  ; for wm_saveu's reason (SPEC.md 11.96.11.4) -
-    sub ax, wm_wins             ; a window record or nothing, and `pop` leaves
-    cmp ax, MAX_WIN * WIN_SIZE  ; the compare's flags alone. Without it a
-    pop ax                      ; height passed here sets a bit inside the API
-    jae .done                   ; jump table, as Paint once did to wm_saveu
-    or word [bx+W_FLAGS], WF_NOANIM
-.done:
+    call wm_isrec               ; **BX CAME FROM A PACKAGE**: wm_saveu's test,
+    jae .done                   ; for wm_saveu's reason (SPEC.md 11.96.11.4).
+    or word [bx+W_FLAGS], WF_NOANIM ; Without it a height passed here sets a
+.done:                          ; bit inside the API jump table, as Paint once
+    ret                         ; did to wm_saveu
+
+; wm_isrec - is BX a window record? CF = 1 yes (below the table's end),
+; CF = 0 no; every register preserved. BELOW the table wraps high, so one
+; unsigned compare catches both ends, and `pop` leaves the flags alone.
+wm_isrec:
+    push ax
+    mov ax, bx
+    sub ax, wm_wins
+    cmp ax, MAX_WIN * WIN_SIZE
+    pop ax
     ret
 
 ; --- SPEC.md 76.11: does the user want the zoom? ----------------------------

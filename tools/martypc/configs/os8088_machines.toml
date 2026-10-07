@@ -516,6 +516,42 @@ overlays = [
     type = "VGA"
     clock_mode = "Default"
 
+# ...and the VGA XT with an 80-CYLINDER 720KB B:, os8088_5150_cga_720b_gla's
+# drive pair on the VGA XT. tests/pxbench.py's BIG.BMP disk is why: a 308 KB
+# picture beside PiXEL's package outgrew a 360 KB volume when wave 4's parts
+# landed, and a 720 KB drive reads 9 sectors a track at 250 kbps as the
+# 360 KB one does, so the bench's figures stay comparable. Drive 0 stays 360k
+# so the boot is the shipped 360KB system disk.
+[[machine]]
+name = "os8088_xt_vga_720b"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+
+        [[machine.fdc.drive]]
+        type = "360k"
+
+        [[machine.fdc.drive]]
+        type = "720k"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"
+
 # ...AND THE SAME VGA XT WITH 1.44MB DRIVES, which exists because of an
 # intersection this tree did not have: a machine with an EGA/VGA *and* a floppy
 # big enough for the software that needs one.

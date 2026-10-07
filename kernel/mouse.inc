@@ -324,7 +324,8 @@ MOU_L3      equ 0x08            ; ...and IRQ3's. Named because the ISR entries
 mou_bases   dw 0x3F8, 0x2F8     ; UART base per port; 0 = nothing answered
 mou_ivecs   dw 0x30, 0x2C       ; ...its IVT offset: int 0x0C, int 0x0B
 mou_masks   dw MOU_L4, MOU_L3   ; ...the line its base says it drives, which is
-                                ; what to HOOK and never what to retire
+                                ; what to HOOK and never what to retire. READ
+                                ; AS BYTES ONLY: mou_b1 lives in the high bytes
 mou_isrs    dw mou_isr, mou_isr3    ; ...and the stub that vector points at
 
 
@@ -1169,13 +1170,16 @@ mou_claim:
 ; is indistinguishable, to a counter that never decays, from a mouse being
 ; moved.
 ; ins:  none
-; outs: none (all registers preserved)
+; outs: none (all registers preserved; the flags are not)
 ; -----------------------------------------------------------------------------
 mou_newround:
-    mov word [mou_phase], 0
-    mov word [mou_phase+2], 0
-    mov word [mou_run], 0
-    mov word [mou_run+2], 0
+    push ax                     ; four ACCUMULATOR stores, three bytes apiece,
+    xor ax, ax                  ; where four immediate ones were six (size
+    mov [mou_phase], ax         ; pass 9). The flags are not preserved, and no
+    mov [mou_phase+2], ax       ; caller reads them across this
+    mov [mou_run], ax
+    mov [mou_run+2], ax
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1584,15 +1588,15 @@ mou_p2wr:
 .w:
     in  al, MOU_P2CMD
     test al, 0x02               ; IBF: the controller has not taken the last
-    jz .ok                      ; byte yet
+    jz .out                     ; byte yet. (`test` CLEARS CF, so the ready
+                                ; exit is already the CF = 0 answer - size
+                                ; pass 9; vid_dual_ok's header is the warning
+                                ; about the same fact read the other way)
     mov cx, [ticks]
     sub cx, dx                  ; wrap-safe: elapsed since the wait began
     cmp cx, MOU_P2TMO
     jb .w
-    stc
-    jmp short .out
-.ok:
-    clc
+    stc                         ; timed out
 .out:
     pop dx                      ; a pop does not touch the flags, so CF is the
     pop cx                      ; answer all the way out
@@ -2372,9 +2376,9 @@ kbm_pass:
 kbm_slock:
     push ax
     push es
-    mov ax, 0x40
-    mov es, ax
-    test byte [es:0x17], 0x10   ; KB_FLAG bit 4 = Scroll Lock active
+    xor ax, ax                  ; segment 0, LINEAR offset: 0040:0017 is
+    mov es, ax                  ; 0000:0417 (a byte shorter than mov ax, 40h)
+    test byte [es:0x417], 0x10  ; KB_FLAG bit 4 = Scroll Lock active
     pop es                      ; pop does not disturb flags
     pop ax
     ret
@@ -2418,12 +2422,12 @@ kbm_btn:
     sub ax, [kbm_btick]         ; wrap-safe, like every other tick compare here
     cmp ax, KBM_GAP
     jb .held
-    xor byte [mouse_btn], 0x01
-    mov ax, EVT_MUP
-    test byte [mouse_btn], 0x01
-    jz .post
-    mov ax, EVT_MDOWN
-.post:
+    xor byte [mouse_btn], 0x01  ; ONE read-modify-write: mou_apply stores
+    mov al, [mouse_btn]         ; this byte from an ISR and the USB worker
+    and ax, 0x01                ; 1 = now DOWN, which IS EVT_MDOWN: the event
+    jnz .post                   ; codes are published ABI (events.inc, every
+    mov al, EVT_MUP             ; package's os88api.inc), so 1 cannot move.
+.post:                          ; AH is already 0 for the up event
     call kbm_post
 .held:
     mov ax, [ticks]
@@ -2466,10 +2470,10 @@ kbm_move:
     add ax, [mouse_x]
     push ax                     ; banked on OUR stack until y is ready, for
                                 ; mou_clamp's 2-D reason (SPEC.md 39.15.4).
-                                ; NOT in [mou_nx]: that word is the IRQ4
-                                ; ISR's staging area, and a serial byte
-                                ; landing between our store and read-back
-                                ; paired the ISR's x with our y
+                                ; NOT in a shared word: when the ISR staged
+                                ; its x in one ([mou_nx], gone since size
+                                ; pass 9), a serial byte landing between our
+                                ; store and read-back paired its x with our y
     mov al, [bx+2]              ; dy, the same way
     imul dl
     add ax, [mouse_y]
@@ -2752,13 +2756,15 @@ kbm_isr:
     cmp al, KBM_5SCAN
     jne .chain
     push es
-    mov ax, 0x40                ; the BIOS data area, NOT zero: KB_FLAG is at
-    mov es, ax                  ; 0040:0017, and an ES of 0 reads the middle of
-                                ; the vector table instead - which has bits in
-                                ; 0x30 set, so the test below always chained
-                                ; and this key stayed dead (kbm_slock is the
-                                ; idiom; the vector install above is not)
-    test byte [es:0x17], 0x30   ; KB_FLAG: NumLock (20h) - int 16h will deliver
+    xor ax, ax                  ; the BIOS data area through segment 0 and its
+    mov es, ax                  ; LINEAR offset 0x417 = 0040:0017. NOT 0x17 with
+                                ; ES 0: that reads the middle of the vector
+                                ; table, which has bits in 0x30 set, so the
+                                ; test below always chained and this key stayed
+                                ; dead - the defect the 0x40 segment fixed, and
+                                ; why the offset here is 0x417 (size pass 9:
+                                ; xor is a byte shorter than mov ax, 40h)
+    test byte [es:0x417], 0x30  ; KB_FLAG: NumLock (20h) - int 16h will deliver
     pop es                      ; it and kbm_key claims it - or ScrollLock
     jnz .chain                  ; (10h), the hatch. pop leaves the flags alone
     mov byte [kbm_p5], 1        ; ...otherwise it is a press, spent in task
@@ -2998,10 +3004,11 @@ kbd_ovflow:
     push ax
     push bx
     push es
-    mov ax, 0x40
-    mov es, ax
-    mov ax, [es:0x1A]           ; head - where the reader is
-    mov bx, [es:0x1C]           ; tail - where the BIOS is about to write
+    xor ax, ax                  ; segment 0, LINEAR offsets: 0040:001A is
+    mov es, ax                  ; 0000:041A (size pass 9, a byte shorter). The
+    mov ax, [es:0x41A]          ; head - where the reader is - and the
+    mov bx, [es:0x41C]          ; tail - where the BIOS is about to write -
+                                ; are still 0040-relative VALUES (1Eh..3Dh)
     cmp ax, bx
     je .drained                 ; empty: the reader has caught up, so the next
                                 ; burst is a new one and beeps again
@@ -3025,7 +3032,7 @@ kbd_ovflow:
     jae .wind                   ; newest is gone
     add ax, KBD_BUFE - KBD_BUFB
 .wind:
-    mov [es:0x1C], ax
+    mov [es:0x41C], ax
     cmp byte [kbd_ovn], KBD_OVBEEPS
     jae .out                    ; three beeps is the lot: past that the drop is
                                 ; silent, so the machine spends the time
@@ -3216,12 +3223,12 @@ kbm_ui:
     jne .p5                     ; .p5 and NOT .out: nothing to release is the
     test byte [mouse_btn], 0x01 ; commonest pass there is, and it is exactly
     jz .p5                      ; the pass a fresh keypad-5 press arrives in
-    push ax
     and byte [mouse_btn], 0xFE  ; bit 1 is the right button's own latch, and is
     mov ax, EVT_MUP             ; released by its own key (SPEC.md 12.4)
-    call kbm_post
-    pop ax
-.p5:
+    call kbm_post               ; (AX is not banked: the header's contract is
+.p5:                            ; CLOBBERS EVERYTHING, AL was already spent at
+                                ; the top, and kbm_p5spend keeps its own AX -
+                                ; size pass 9)
     call kbm_p5spend            ; LAST, and after .relax: a press spent above
                                 ; the release would be taken back by the very
                                 ; pass that made it (SPEC.md 9.6.4)
@@ -3422,11 +3429,15 @@ mou_byte:
 .drainover:
     mov byte [mou_drain], 0     ; window over: this byte is live
 .live:
+    mov ah, [bx+mou_phase]      ; the phase ONCE, into the free half of AX: the
+                                ; five compares below are register ones (4
+                                ; clocks and 3 bytes where a memory compare is
+                                ; ~19 and 5 - size pass 9, and an ISR)
     test al, 0x40               ; bit 6 set -> first byte of a packet
     jz .cont
-    cmp byte [bx+mou_phase], 0  ; ...but MID-PACKET it is a resync, and a real
+    or ah, ah                   ; ...but MID-PACKET it is a resync, and a real
     je .b0                      ; mouse never causes one. Break the run of
-    cmp byte [bx+mou_phase], 3  ; clean packets (SPEC.md 9.5) - EXCEPT out of
+    cmp ah, 3                   ; clean packets (SPEC.md 9.5) - EXCEPT out of
     je .b0                      ; phase 3, which is a complete packet whose
     mov byte [bx+mou_run], 0    ; optional fourth byte simply never came
 .b0:                            ; (SPEC.md 9.5.4)
@@ -3436,16 +3447,16 @@ mou_byte:
     ret
 
 .cont:
-    cmp byte [bx+mou_phase], 1
+    cmp ah, 1
     jne .chk2
     mov [bx+mou_b1], al         ; second byte: X low 6 bits
     mov byte [bx+mou_phase], 2
     ret
 
 .chk2:
-    cmp byte [bx+mou_phase], 2  ; anything else is a stray byte - drop it, and
+    cmp ah, 2                   ; anything else is a stray byte - drop it, and
     je .pkt                     ; break the run for the same reason: a byte
-    cmp byte [bx+mou_phase], 3  ; with bit 6 clear arriving between packets is
+    cmp ah, 3                   ; with bit 6 clear arriving between packets is
     jne .stray                  ; a thing the protocol cannot produce...
     mov byte [bx+mou_phase], 0  ; ...UNLESS it is the FOURTH byte of a wheel
     ret                         ; mouse's packet, which is exactly a bit-6-clear
@@ -3620,8 +3631,8 @@ mou_apply_abs:
 ; mou_apply - one decoded report, whatever hardware carried it (SPEC.md 9.9.3)
 ;
 ; From the moment a packet is a signed dx, a signed dy and two button bits,
-; NOTHING about it is protocol-specific - so both mice end here: the staging
-; through mou_nx, mou_clamp's 2-D answer (SPEC.md 39.15.4), the event rules
+; NOTHING about it is protocol-specific - so both mice end here: the staged
+; candidate, mou_clamp's 2-D answer (SPEC.md 39.15.4), the event rules
 ; including the binding fall-through that makes a both-buttons packet queue the
 ; LEFT event only (SPEC.md 9), [blk_act] (SPEC.md 64.1), [cur_mvt] (SPEC.md
 ; 7.1.4.3) and SPEC.md 7's draw-or-defer decision.
@@ -3643,14 +3654,13 @@ mou_apply:
                                 ; awake all night. One store, no register - the
                                 ; UI task spends it, so nothing in an ISR
                                 ; touches a video port or reads a clock
-    add ax, [mouse_x]
-    mov [mou_nx], ax            ; STAGED, not stored: the clamp is 2-D on a
-                                ; machine with two displays (SPEC.md 39.15.4)
-                                ; and cannot answer about x until y is known
-    mov ax, bx
-    add ax, [mouse_y]
-    mov bx, ax
-    mov ax, [mou_nx]
+    add ax, [mouse_x]           ; STAGED, not stored: the clamp is 2-D on a
+    add bx, [mouse_y]           ; machine with two displays (SPEC.md 39.15.4)
+                                ; and cannot answer about x until y is known -
+                                ; and the candidates stay in the two registers
+                                ; they arrived in. (They went through a [mou_nx]
+                                ; word until size pass 9, because y was summed
+                                ; in AX: 12 bytes and an ISR store/load pair)
     call mou_clamp              ; ...and CX is untouched by it, which the
     mov [mouse_x], ax           ; button decode below relies on
     mov [mouse_y], bx
@@ -4009,8 +4019,9 @@ cur_vis:
 cur_put_1:
     cmp byte [vid_mono], 0
     jne cur_put_mono
-    call cur_saveu
-    jmp cur_draw
+    call cur_geom               ; the NEW cell's geometry FIRST: cur_saveu's
+    call cur_saveu              ; cur_rect reads it out of [cur_cellx/y], and
+    jmp cur_draw                ; cur_draw out of [cur_off] (size pass 9)
 
 ; -----------------------------------------------------------------------------
 ; cur_put_mono - save the cell under the cursor and draw the arrow into it, in
@@ -4092,7 +4103,8 @@ cur_get_1:
 cur_restoreu:
     push es
     push word [vga_pn]          ; **AND THE POINTER IS ALWAYS FOUR PLANES**
-    call gfx_1bpp_off           ; (SPEC.md 11.96.17, 32). vga_pn/vga_pm's own
+    call cur_rect               ; (SPEC.md 11.96.17, 32 - cur_rect disarms the
+                                ; one-plane arm, see there). vga_pn/vga_pm's own
                                 ; header says an arm "cannot leak onto the
                                 ; pointer, which reaches vga_restore_vram
                                 ; DIRECTLY out of IRQ4, below the two routines
@@ -4107,10 +4119,6 @@ cur_restoreu:
                                 ; black or white. Two words, at the one point
                                 ; both cursor paths pass through; the mono
                                 ; branch is inside vga_restore_vram, below this
-    call cur_rect
-    push ds
-    pop es
-    mov si, cur_save
     call vga_restore_vram
     pop word [vga_pn]           ; ...and the caller's arm is its own again
     pop es
@@ -4160,12 +4168,8 @@ cur_get_mono:
 cur_saveu:
     push es
     push word [vga_pn]          ; four planes, cur_restoreu's reason exactly -
-    call gfx_1bpp_off           ; and it has to be BOTH halves or the save and
+    call cur_rect               ; and it has to be BOTH halves or the save and
                                 ; the restore disagree about the buffer
-    call cur_rect
-    push ds
-    pop es                      ; buffer lives in kernel .bss
-    mov di, cur_save
     call vga_save_vram
     pop word [vga_pn]
     pop es
@@ -4175,24 +4179,26 @@ cur_saveu:
 ; because a save and a restore that disagree about it by a byte smear the
 ; cursor across the screen. CUR_GW/CUR_GH bound it, and the tables are cut to
 ; the same 8x12 - there is no larger cell left to walk by accident.
-; out: AX/BX/CX/DX = x1/y1/x2/y2
+; out: AX/BX/CX/DX = x1/y1/x2/y2, ES = DS, SI = DI = cur_save, and the
+;      one-plane arm DOWN ([vga_pn] = 4 planes) - EVERYTHING the save and the
+;      restore set up besides banking ES and the arm, in the one routine both
+;      already call (size pass 9: gfx_1bpp_off's call and the buffer setup were
+;      written twice, once each side)
 cur_rect:
-    mov ax, [cur_drawn_x]
-    mov bx, [cur_drawn_y]
-%ifdef KERN_BIG
-    sub ax, [vid_ox]            ; ...into the ACTIVE display's own coordinates
-    sub bx, [vid_oy]            ; (SPEC.md 39.15.1). Unconditional rather than
-%endif                          ; gated on [vid_ndisp]: display 0 is always at
-                                ; the virtual origin, so on a one-card machine
-                                ; this subtracts zero
-    sub ax, [cur_hx]            ; ...and off the HOT SPOT, clamped at the
-    jns .xok                    ; display origin rather than clipped there
-    xor ax, ax                  ; (SPEC.md 7.2.2)
-.xok:
-    sub bx, [cur_hy]
-    jns .yok
-    xor bx, bx
-.yok:
+    mov word [vga_pn], VGA_PN_FOUR  ; gfx_1bpp_off, inline (vga12.inc)
+    push ds                     ; the buffer lives in kernel .bss
+    pop es
+    mov si, cur_save            ; the restore's source...
+    mov di, si                  ; ...and the save's destination
+    mov ax, [cur_cellx]         ; the CELL as cur_geom banked it: the drawn
+    mov bx, [cur_celly]         ; point in the ACTIVE display's coordinates
+                                ; (SPEC.md 39.15.1), off the HOT SPOT and
+                                ; clamped at the display origin (7.2.2). Every
+                                ; planar draw runs cur_geom first now (cur_put_1,
+                                ; cur_move_1), so for a restore this is the cell
+                                ; that was DRAWN - with the hot spot it was drawn
+                                ; with - and for a save the one about to be.
+                                ; Size pass 9: it re-derived both, twice a move
     mov cx, ax
     add cx, CUR_GW-1
     mov dx, bx
@@ -4214,11 +4220,12 @@ cur_rect:
 cur_geom:
     mov ax, [cur_drawn_y]       ; DI = rowbase(y) + x/8
 %ifdef KERN_BIG
-    sub ax, [vid_oy]            ; cur_rect's subtraction, and for cur_rect's
-%endif                          ; reason: these two are the ONLY places a
-                                ; position becomes an ADDRESS (SPEC.md 39.15.1)
-    sub ax, [cur_hy]            ; ...and cur_rect's hot spot, clamped the same
-    jns .yok                    ; way, or a centred shape near the top edge
+    sub ax, [vid_oy]            ; into the ACTIVE display's coordinates: this
+%endif                          ; is the ONLY place a position becomes an
+                                ; ADDRESS (SPEC.md 39.15.1) - cur_rect reads
+                                ; the banked cell below rather than re-deriving
+    sub ax, [cur_hy]            ; ...and off the hot spot, clamped at the
+    jns .yok                    ; origin, or a centred shape near the top edge
     xor ax, ax                  ; addresses the row above the framebuffer
 .yok:
     mov [cur_celly], ax         ; BANKED: the bottom clip below and
@@ -4373,6 +4380,16 @@ cur_lazyck:
     push si
     mov si, [wm_clipwin]
     call wm_win_rect            ; AX/BX/CX/DX = the frame, drop shadow included
+%ifdef KERN_BIG
+    jmp short cur_lazyrect.test ; ...and THE FRAME IS A RECTANGLE, so the test
+                                ; is cur_lazyrect's, entered past its own
+                                ; pushes: the frame above is the same five
+                                ; words, so its pops and its tail to
+                                ; cur_unlazy are this routine's too. One body
+                                ; for two questions (size pass 9: +15 cycles
+                                ; here for the jump, -27 there for the DI it
+                                ; no longer banks)
+%else
     mov si, [cur_drawn_x]       ; separated on x?  cell is [x, x+CUR_GW-1]
     sub si, [cur_hx]
     cmp si, cx
@@ -4399,6 +4416,7 @@ cur_lazyck:
     pop cx
     pop bx
     pop ax
+%endif
 %else
     cmp word [wm_clip_n], 0
     je cur_unlazy               ; NOTHING ARMED BOUNDS NOTHING, so the hide is
@@ -4499,12 +4517,12 @@ cur_lazyck:
 cur_lazyrect:
     cmp byte [cur_lazy], 0
     je .out
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    push ax                     ; AX..DX are only READ here: they are banked so
+    push bx                     ; that this frame is cur_lazyck's, which joins
+    push cx                     ; at .test with the window's frame in AX..DX
+    push dx                     ; and owes them back. SI alone is the scratch
+    push si                     ; (DI was a second one until size pass 9)
+.test:
     mov si, [cur_drawn_x]
     sub si, [cur_hx]            ; SI = the cell's x1
     cmp cx, si                  ; SIGNED throughout: gfx_blit1 takes a signed
@@ -4512,25 +4530,23 @@ cur_lazyrect:
     add si, CUR_GW-1            ; negative at the screen's top left
     cmp ax, si
     jg .clear
-    mov di, [cur_drawn_y]
-    sub di, [cur_hy]
-    cmp dx, di
+    mov si, [cur_drawn_y]
+    sub si, [cur_hy]
+    cmp dx, si
     jl .clear
-    add di, CUR_GH-1
-    cmp bx, di
+    add si, CUR_GH-1
+    cmp bx, si
     jg .clear
-    pop di                      ; they overlap: the hide is owed after all
-    pop si
+    pop si                      ; they overlap: the hide is owed after all
     pop dx
     pop cx
     pop bx
     pop ax
     jmp cur_unlazy
 .clear:
-    pop di                      ; the band cannot reach the arrow, so it stays
-    pop si                      ; on the glass - and gfx_unlock then owes no
-    pop dx                      ; show either
-    pop cx
+    pop si                      ; the band cannot reach the arrow, so it stays
+    pop dx                      ; on the glass - and gfx_unlock then owes no
+    pop cx                      ; show either
     pop bx
     pop ax
 .out:
@@ -4632,13 +4648,10 @@ cur_shape_set:
     add bx, bx                  ; two bytes a shape
     mov ax, [bx + cur_shtab]
     mov [cur_tabp], ax
-    mov al, [bx + cur_shhot]
-    xor ah, ah
-    mov [cur_hx], ax
-    mov al, [bx + cur_shhot + 1]
-    xor ah, ah
-    mov [cur_hy], ax
-    pop bx
+    mov ax, [bx + cur_shhot]    ; AL = hot x, AH = hot y - and each goes into
+    mov [cur_hx], al            ; the LOW byte of its word: the high bytes are
+    mov [cur_hy], ah            ; 0 from the initialisers below and nothing
+    pop bx                      ; else ever writes either word
     pop ax
 .out:
     ret
@@ -4820,12 +4833,9 @@ cur_shape_pass:
     push bx
     push cx
     push dx
-    mov ax, [mouse_x]
-    mov bx, [mouse_y]
-.look:
     mov byte [cur_shchk], 0
-    mov cx, ax
-    mov dx, bx
+    mov cx, [mouse_x]           ; straight into wm_hit's own registers (they
+    mov dx, [mouse_y]           ; went through AX/BX until size pass 9)
     call wm_hit                 ; BX = the topmost visible window over the
                                 ; point (0 = none), AL = which part of it
     mov ah, CUR_ARROWSH
@@ -4942,18 +4952,14 @@ cur_move_multi:
     jmp short .out
 
 .jump:                          ; --- erase whole, then draw whole ----------
-    push ax
-    push bx
-    push cx
+    mov [cur_drawn_x], ax       ; the new position FIRST: cur_get_1 reads the
+    mov [cur_drawn_y], bx       ; OLD cell out of cur_geom's bank, not these
+    push cx                     ; (size pass 9: AX/BX need no banking)
     mov al, dh
     call vid_ctx_act
     call cur_get_1              ; the arrow leaves the display it was on...
     pop cx
-    pop bx
-    pop ax
     mov [cur_disp], cl
-    mov [cur_drawn_x], ax
-    mov [cur_drawn_y], bx
     mov al, cl
     call vid_ctx_act
     call cur_put_1              ; ...and arrives on the one it crossed onto
@@ -4974,15 +4980,16 @@ cur_move_1:
     CURLOG 'm'                  ; ...from HERE (cur_drawn is still the old one)
     cmp byte [vid_mono], 0
     jne cur_move_mono
-    push ax                     ; planar: the save is four planes through Read
-    push bx                     ; Map Select and cannot take a background from
-    call cur_restoreu           ; a buffer, so it stays erase-then-draw
-    pop bx
-    pop ax
-    mov [cur_drawn_x], ax
-    mov [cur_drawn_y], bx
+    mov [cur_drawn_x], ax       ; planar: the save is four planes through Read
+    mov [cur_drawn_y], bx       ; Map Select and cannot take a background from
+    call cur_restoreu           ; a buffer, so it stays erase-then-draw. The
+                                ; NEW position is stored first: the restore
+                                ; reads the OLD cell out of cur_geom's bank
+                                ; ([cur_cellx/y]), not out of these, so AX/BX
+                                ; need no banking across it (size pass 9)
     CURLOG 'M'                  ; ...to HERE
-    call cur_saveu
+    call cur_geom               ; ...and the new cell's geometry, which the
+    call cur_saveu              ; save and the draw both read (see cur_put_1)
     jmp cur_draw
 
 cur_move_mono:
@@ -4993,21 +5000,17 @@ cur_move_mono:
     ; differ, and everything below is about where the CELL is (SPEC.md 7.2.2).
     ; A shape may only change while the cursor is hidden, so both cells here
     ; are the same shape's and the row test stays an honest subtraction.
-    mov ax, [cur_celly]
-    mov [mv_oy], ax
-    mov ax, [cur_cellx]
+    push ds                     ; cur_off, cur_rows, cur_b1ok, cur_cellx and
+    pop es                      ; cur_celly -> mv_ooff..mv_oy, one block (the
+    mov si, cur_off             ; %error beside mv_ooff pins the layout). DF
+    mov di, mv_ooff             ; is clear on every path here - the ISR's own
+    mov cx, 4                   ; cld, and this file's other string reads
+    rep movsw                   ; already assume it from task code
     mov cl, 3
-    shr ax, cl
-    mov [mv_d], ax              ; the OLD byte column, banked in the word that
+    shr word [mv_d], cl         ; the OLD byte column, banked in the word that
                                 ; will hold the DELTA: cur_geom clobbers DX
                                 ; and the new column is not known until it has
                                 ; run, so the subtraction moved below it
-    mov al, [cur_rows]
-    mov [mv_orows], al
-    mov al, [cur_b1ok]
-    mov [mv_ob1ok], al
-    mov ax, [cur_off]
-    mov [mv_ooff], ax
     mov ax, [cur_sptr]          ; the buffer holding the OLD background...
     mov [mv_osave], ax
     mov bx, cur_save            ; ...and the other one takes the new, so pass 2
@@ -5186,21 +5189,21 @@ cur_mvcols:
 ; out: [mv_orp] = a pointer into the old save buffer, or 0
 ; clobbers: ax, bx, flags
 cur_mvrow:
-    push dx
     mov ax, [cur_celly]         ; the NEW cell's top row (SPEC.md 7.2.2), not
     add ax, [mv_prow]           ; the pointer's y - [mv_oy] is the OLD cell's
     sub ax, [mv_oy]             ; AX = the row's index in the OLD cell
-    mov word [mv_orp], 0
     mov bl, [mv_orows]
     xor bh, bh
     cmp ax, bx
+    mov bx, 0                   ; (a MOV: the compare's flags survive it)
     jae .out                    ; unsigned: a row above it is a huge number
     add ax, ax                  ; CUR_SPAN bytes a row
     add ax, [mv_osave]
-    mov [mv_orp], ax
+    xchg ax, bx
 .out:
-    pop dx
-    ret
+    mov [mv_orp], bx            ; ONE store of the answer, where a zero was
+    ret                         ; stored first and then overwritten - and no
+                                ; DX bank: nothing here writes DX (size pass 9)
 
 ; cur_mvbg - one byte's background: the old save buffer if this column's
 ;            answer names an offset AND the old cell reaches this row,
@@ -5233,7 +5236,9 @@ cur_mvbg:
 ; clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
 cur_draw:
-    call cur_geom               ; DI = the top-left byte, CL = shift, and
+    mov di, [cur_off]           ; DI = the top-left byte, CL = shift - cur_geom
+    mov cl, [cur_cellx]         ; ran before the save (cur_put_1, cur_move_1),
+    and cl, 7                   ; which spent both registers - and
     mov ch, [cur_rows]          ; [cur_rows]/[cur_b1ok] = how much is on screen
     or ch, ch
     jz .done                    ; wholly off the bottom
@@ -5587,8 +5592,6 @@ cur_inxfer   db 0                ; **THE CPU IS INSIDE AN int 13h** (SPEC.md
                                 ; ours could run, so a garbage byte here would
                                 ; let IRQ4 draw during the splash
 %endif
-mou_nx      dw 0                ; the candidate x, staged across the y decode
-                                ; because mou_clamp is 2-D (SPEC.md 39.15.4)
 cur_dirty   db 0                ; set when the ISR could not move the cursor
 cur_drawn_x dw 0                ; where the cursor pixels actually are, in
 cur_drawn_y dw 0                ; VIRTUAL coordinates (SPEC.md 39.15) - the
@@ -5619,8 +5622,19 @@ mou_phase   db 0,0,0,0          ; packet state: 0 idle, 1 got b0, 2 got b1,
                                 ; optional FOURTH byte may follow (SPEC.md
                                 ; 9.5.4). 3 behaves as 0 for every other
                                 ; purpose - mou_newround still zeroes it
-mou_b0      db 0,0,0,0          ; packet byte 0: 1 LB RB Y7 Y6 X7 X6
-mou_b1      db 0,0,0,0          ; packet byte 1: X low 6 bits
+mou_b0      equ mou_phase + 1   ; packet byte 0: 1 LB RB Y7 Y6 X7 X6. These
+                                ; arrays are indexed by the port's WORD row
+                                ; (BX = 0 or 2), so a byte array uses bytes 0
+                                ; and 2 and leaves 1 and 3 idle: b0 lives in
+                                ; mou_phase's (size pass 9). mou_newround's
+                                ; zeroing of mou_phase clears it too, which is
+                                ; harmless - b0 means nothing below phase 1
+mou_b1      equ mou_masks + 1   ; packet byte 1: X low 6 bits - in the HIGH
+                                ; bytes of mou_masks' words, which every
+                                ; reader takes as a BYTE (`mov cl, [bx +
+                                ; mou_masks]`) and so never sees: the same
+                                ; word-row trick as mou_b0, one table along
+                                ; (size pass 9)
 mou_evrec   times 8 db 0        ; scratch event record for evq_push (ISR only).
                                 ; ABOVE the published block on purpose - it is
                                 ; scratch, not state, and it used to sit in
@@ -5894,9 +5908,28 @@ mdg_n2      dw 0                ; and at 12%. n1-n0 IS mouse_init and n2-n1 is
 section .bss
 cur_save    resb CUR_SAVE_SZ    ; save-under: CUR_SPAN bytes x CUR_GH rows,
                                 ; x four planes on VGA
+%ifndef GFX_VGA
 cur_savex   resb CUR_SPAN * CUR_GH  ; ...and its twin. A MOVE reads one while
                                 ; it fills the other (SPEC.md 7.1.2); 24 bytes,
                                 ; and the pointer swap means nothing is copied
+%else
+cur_savex   equ cur_save + CUR_SPAN * CUR_GH    ; ...and on a build WITH a VGA
+                                ; renderer the twin is the SECOND plane's
+                                ; quarter of cur_save itself. Only the 1bpp
+                                ; path ever names cur_savex (cur_move_mono's
+                                ; flip), and a 1bpp save is one plane - 24 of
+                                ; the 96 bytes - so the other 72 lie idle on
+                                ; every mono display. The planar path uses all
+                                ; 96 only while the arrow is ON a planar
+                                ; display, and the two never overlap in time:
+                                ; cur_move_multi takes the arrow off the old
+                                ; display (restoring from its save) before it
+                                ; draws it on the new one (saving into its
+                                ; own). Size pass 9: 24 bytes of .bss
+%if CUR_SAVE_SZ < 2 * CUR_SPAN * CUR_GH
+  %error "cur_savex is carved out of cur_save on a VGA build - cur_save must hold two 1bpp saves"
+%endif
+%endif
 %ifdef GFXAUDIT
 CURLOG_N    equ 64              ; a WRAPPING ring of cursor events, for the
 CURLOG_SZ   equ 6               ; sessions where the question is "which draw
@@ -5948,18 +5981,40 @@ cur_celly   resw 1              ; hot-spot-relative (SPEC.md 7.2.2). Banked
                                 ; two derivations of a save-under's geometry
                                 ; are two chances to disagree by a byte
 
-mv_oy       resw 1              ; cur_move's banked OLD geometry: top row,
-mv_ooff     resw 1              ; framebuffer offset, rows, right-byte clip
-mv_orows    resb 1
-mv_ob1ok    resb 1
+absolute gfx_u                  ; ...and cur_move_mono's working set is a
+                                ; member of vga12.inc's PRIMITIVE UNION (size
+                                ; pass 9). cur_move runs from the mouse ISR and
+                                ; kbm_paint only with the gfx lock FREE, and
+                                ; from gfx_unlock's cur_lazyend after every
+                                ; primitive of the hold has returned - so it is
+                                ; never inside one of the union's five, which is
+                                ; the invariant the cursor ALREADY leans on for
+                                ; the rect block (cur_saveu -> vga_save_vram ->
+                                ; gfx_rect_setup). Every member below is written
+                                ; at the top of each move before it is read
+mv_ooff     resw 1              ; cur_move's banked OLD geometry: framebuffer
+mv_orows    resb 1              ; offset, rows, right-byte clip, cell column
+mv_ob1ok    resb 1              ; (then the delta - see mv_d) and top row. THE
+mv_d        resw 1              ; ORDER IS cur_off..cur_celly's, word for word:
+mv_oy       resw 1              ; cur_move_mono banks all five with one rep
+                                ; movsw (size pass 9). mv_d is the old CELL x
+                                ; as copied, its byte column after the shift
+                                ; that follows, and newcol - oldcol, signed,
+                                ; once cur_geom has run: the ONE number the
+                                ; four column answers below come out of
+%if mv_orows - mv_ooff != cur_rows - cur_off || mv_ob1ok - mv_ooff != cur_b1ok - cur_off || mv_d - mv_ooff != cur_cellx - cur_off || mv_oy - mv_ooff != cur_celly - cur_off || mv_oy - mv_ooff != 6
+  %error "mv_ooff..mv_oy must mirror cur_off..cur_celly exactly: cur_move_mono banks them with one 4-word rep movsw"
+%endif
 mv_osave    resw 1              ; -> the buffer holding the old background...
 mv_nsave    resw 1              ; ...and the one taking the new
-mv_d        resw 1              ; newcol - oldcol, signed: the ONE number the
-                                ; four column answers below come out of
 mv_p1s0     resb 1              ; pass 1 skips this old column (pass 2 has it)
 mv_p1s1     resb 1
 mv_p2s0     resb 1              ; pass 2's background offset in the old save,
 mv_p2s1     resb 1              ; or 0FFh for "read the screen"
 mv_prow     resw 1              ; the new cell's row, as pass 2 walks it
 mv_orp      resw 1              ; -> that row in the old save, or 0
+gfx_u_mv:
+%if gfx_u_mv - gfx_u > gfx_u_end - gfx_u
+  %error "cur_move_mono's working set no longer fits the primitive union - raise GFX_U_FLOOR in vga12.inc"
+%endif
 section .text

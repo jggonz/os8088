@@ -74,6 +74,15 @@
 LZ_LZ4      equ 0               ; format ids, as stored in a header's format
 LZ_LZB      equ 1               ; field. Mirrored by os88lz.py's LZ4/LZB and
                                 ; guarded by tests/unit/t_mirror.py
+LZ_BIG      equ 0x80            ; OR'd into AL at the published door: AH:CX is
+                                ; the input length (SPEC.md 20.13.3). It is
+                                ; the SIGN bit because the door tests it with
+                                ; `js`, and an older kernel refuses it as a
+                                ; format past LZ_LZB. Mirrored by os88api.inc's
+                                ; OSAPI_LZ_BIG (tests/unit/t_lzfmt.py)
+%if LZ_BIG != 0x80
+  %error "LZ_BIG is tested with `js`: it has to be AL's sign bit"
+%endif
 
 ; Which decoders this kernel carries (SPEC.md 20.13.6). **BOTH IS THE DEFAULT
 ; AND SHIPS**, and it needs no -D at all: `make COMPRESS=lz4` and
@@ -100,20 +109,22 @@ section .cold
 ;              produced" only when production started at 0. Every caller in the
 ;              tree hands over a claim's base, so this costs nothing and saves
 ;              an instruction in the hottest test in the routine.
-;      CX    = compressed bytes, 1..0xFFFF. AH is NOT an input here - this is
-;              the published cell's door, and a caller written before the
-;              input could cross never had to say anything in it
+;      CX    = compressed bytes, 1..0xFFFF - and AH:CX, 24 bits, when AL
+;              bit 7 is set (SPEC.md 20.13.3). Without the bit AH is NOT an
+;              input: this is the published cell's door, and a caller written
+;              before the input could cross never had to say anything in it
 ;      BX:DX = the EXACT expected output length, 32 bits (not a capacity:
 ;              every caller knows it - the loader from `image`, a part from its
 ;              table row, a file from its own header - and a stream that
 ;              produces a different number is a corrupt one)
-;      AL    = LZ_LZ4 or LZ_LZB
+;      AL    = LZ_LZ4 or LZ_LZB, | 0x80 for the 24-bit length
 ; out: CF=0 and ES:DI is one past the last byte written. CF=1 = refused, and
 ;      nothing past the declared length was written.
 ; clobbers: AX BX CX DX SI DI and the flags. DS and ES come back the caller's.
 ;
 ; lz_decomp_big - the same, with AH:CX = the compressed bytes, 24 bits
-;      (SPEC.md 20.14.5.1). The kernel's own file read is its one caller.
+;      (SPEC.md 20.14.5.1) and no bit 7. The kernel's own file read is its
+;      one caller.
 ; -----------------------------------------------------------------------------
 ; **BOTH SIDES CROSS 64KB NOW, AND THE HOT PATH PAYS FOR NEITHER** (SPEC.md
 ; 20.14.5, 20.14.5.1). The output has to: BEVERLY.MOD is 116,085 bytes, and
@@ -135,12 +146,14 @@ section .cold
 ; DS shifted once at the entry, and is what makes a slide a `dec` and the
 ; re-arm one compare (SPEC.md 20.14.5.1).
 
-; **LZ4 IS STILL ONE SEGMENT OF INPUT**, refused past it at entry. Its literal
+; **AND LZ4 CROSSES TOO, IN 16KB PIECES** (SPEC.md 20.14.5.2). Its literal
 ; runs go through lz_copy, whose slow arm bumps DS by 64KB when SI wraps, and a
-; bump there would leave the checkpoint describing a segment nobody is reading
-; - so a stream that could wrap mid-run is one this routine does not start.
-; LZB's literals are single bytes and its matches read the OUTPUT, so it has no
-; such run; LZB is also the format this machine writes (SPEC.md 20.15).
+; bump there would leave the checkpoint describing a segment nobody is reading.
+; So no legitimate run is allowed to wrap: a run under 16KB fits the 32KB
+; budget above the checkpoint, and a longer one - which can only arrive through
+; the extension bytes, so a short run never meets the test - is copied 16KB at a
+; time with lz_at between the pieces. A run past 0xFFFF cannot be counted in CX
+; at all, and os88lz refuses to write one (SPEC.md 20.14.5.3).
 ;
 ; The locals are PUSHED rather than carved with `sub sp`, and the frame is
 ; unwound with one `add sp` between `lahf` and `sahf` rather than `mov sp, bp`,
@@ -169,7 +182,11 @@ LZ_CHK      equ 0x8000          ; the checkpoint while the tail is further:
                                 ; that reads further reads - it never writes
 
 lz_decomp_x:
-    mov ah, 0                   ; the published door: under 64KB, as it was
+    test al, al                 ; the published door: AL bit 7 says AH is the
+    js .big                     ; input's high byte (an older kernel refuses
+    mov ah, 0                   ; the bit as an unknown format); without it,
+.big:                           ; under 64KB as it was
+    and al, ~LZ_BIG & 0xFF
 lz_decomp_big:
     push ds                     ; both segments are the caller's and both come
     push bp                     ; back: the match copies below swap DS to ES
@@ -183,10 +200,6 @@ lz_decomp_big:
     mov bp, cx                  ; AH:BP = the length (BP is scratch until the
     add bp, si                  ; frame: .early pops the caller's back)...
     adc ah, 0                   ; ...and now the stream's END, from DS:0
-    jz .reach
-    or al, al                   ; ...which only LZB may put past one segment:
-    jz .early                   ; LZ_LZ4 is 0. This is the old `add cx, si /
-.reach:                         ; jc` refusal, kept for LZ4
     xchg ax, cx                 ; (AL the format and AH the end's high byte,
     lodsw                       ; out of lodsw's way) T: how much of the
     xchg ax, cx                 ; output is stored raw, in CX
@@ -256,12 +269,13 @@ lz_decomp_big:
 
 ; -----------------------------------------------------------------------------
 ; lz_at - the source reached its checkpoint: slide DS up and re-arm it
-;         (module internal; both arms' end paths)
+;         (module internal; both arms' end paths, and between the pieces
+;         of a long LZ4 literal run, which ignores the flags)
 ; out: the flags of `cmp si, [bp+LZ_F_TSI]` against the re-armed checkpoint -
 ;      BELOW = more symbols, EQUAL = the tail, ABOVE = the stream ran past its
 ;      own tail
-; clobbers: AX, SI and DS (the same address, slid), flags - AX is dead at both
-;      arms' end paths
+; clobbers: AX, SI and DS (the same address, slid), flags - AX is dead at all
+;      three callers
 ;
 ; The slide is a FIXED 32KB while SI is in the top half, and SI is under 32KB
 ; after one, so it is never taken twice. A slide with K already 0 is a stream
@@ -413,7 +427,11 @@ lz_lz4:
     mov dl, al                  ; match length - 4 in the low one
     mov cl, 4
     shr al, cl
-    call lz_len                 ; CX = the literal run
+    cbw                         ; lz_len's body, inline for the literal: a run
+    mov cx, ax                  ; of 16KB or more can only arrive through the
+    cmp al, 15                  ; extension bytes, so that is where it is
+    je .litx                    ; caught, and a short run pays nothing
+.lit:
     jcxz .nolit
     call lz_take                ; the literals may not run past what was
     jc .bad                     ; declared, and this is where that is decided
@@ -431,6 +449,25 @@ lz_lz4:
 .bad:
     stc
     ret
+.litx:
+    call lz_len.x               ; the extension bytes, as lz_len reads them
+    cmp ch, 0x40
+    jb .lit                     ; under 16KB: the 32KB budget above the
+    call lz_take                ; checkpoint covers it. Over: claimed whole,
+    jc .bad                     ; then copied 16KB at a time with the source
+    mov bx, cx                  ; slid between pieces, so SI never wraps
+.piece:
+    mov cx, 0x4000
+    cmp bx, cx
+    jae .full
+    mov cx, bx
+.full:
+    sub bx, cx
+    call lz_copy
+    call lz_at                  ; slide DS if SI reached the top half, re-arm
+    or bx, bx
+    jnz .piece
+    jmp short .nolit
 .end:
     call lz_at                  ; a CHECKPOINT, or the tail (SPEC.md 20.14.5.1)
     jb .seq                     ; ...more source beyond it: go round
@@ -463,21 +500,26 @@ lz_tail:
 
 %ifdef LZ_HAVE_LZ4
 ; lz_len - a token nibble AL, extended 255 at a time while it says 15 (module
-;          internal; both nibbles of every token come through here)
+;          internal; a match's nibble comes through here, and the literal's
+;          enters at .x with CX and AH already set - lz_lz4's .litx)
 ; out: CX = the length
 ; clobbers: AX, CX
 lz_len:
-    xor ah, ah
-    mov cx, ax
+    cbw                         ; AH = 0: AL is a nibble, so its sign is 0 -
+    mov cx, ax                  ; one byte and a clock under `xor ah, ah`
     cmp al, 15
     jne .done
 .x:
     lodsb                       ; AH stays 0: `lodsb` loads AL alone
     add cx, ax
-    cmp al, 255
-    je .x
-.done:
+    jc .sat                     ; past a word: no encoder writes one, and an
+    cmp al, 255                 ; all-0xFF window would spin here for ever -
+    je .x                       ; `lodsb` wraps SI and never slides DS, which
+.done:                          ; the 24-bit door (bit 7) made reachable
     ret
+.sat:
+    sbb cx, cx                  ; CF=1: CX = 0xFFFF, the longest legal length,
+    ret                         ; and lz_take bounds what follows
 %endif
 
 %ifdef LZ_HAVE_LZB
@@ -536,8 +578,12 @@ lz_lzb:
 .g:
     LZ_GETBIT
     adc ax, ax
-    LZ_GETBIT
+    jc .gsat                    ; a gamma past a word: lz_len's .sat, for the
+    LZ_GETBIT                   ; same all-ones window
     jc .g
+    ret
+.gsat:
+    sbb ax, ax                  ; CF=1: AX = 0xFFFF
     ret
 %endif
 

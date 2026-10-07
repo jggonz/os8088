@@ -1310,9 +1310,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 section .ovlw                  ; THE BOOT OVERLAY (SPEC.md 2.5.2,
                                 ; docs/plans/LAST-DROP-BYTES.md row 8): kmain seeds
                                 ; the driver table once and nothing re-seeds it
-                                ; - drv_unload clears ONE row. drv_svc_clear_all
-                                ; goes with it, being this body's only callee
-                                ; that is not shared and having no other caller
+                                ; - drv_unload clears ONE row
 drv_init_x:
     push ax
     push bx
@@ -1326,11 +1324,18 @@ drv_init_x:
     mov di, drv_cfg + CFG_DBLOB
     mov cx, DRV_BLOB_SZ
     xor ax, ax                  ; the WHOLE register, at the same two bytes:
-    cld                         ; the zero is wanted below as well, and
-    rep stosb                   ; drv_svc_clear_all preserves AX
+    cld                         ; the zero is wanted below as well
+    rep stosb
+    mov di, drv_owner           ; ...and every class's services FORGOTTEN:
+    mov cx, drv_svc_end - drv_owner ; drv_owner and the drv_svc copies are
+    rep stosb                   ; one run of .bss (the %if beside them), and
+                                ; drv_fptr's segment halves ship as 0 in
+                                ; .text. This was drv_svc_clear_all, a loop
+                                ; of five far calls to drv_svc_clear through
+                                ; a thunk that existed for it alone (kernel
+                                ; size pass 9: -4 resident, -12 .ovlw)
     pop es
     pop di
-    call drv_svc_clear_all
     xor cx, cx                  ; nothing is loaded on a cold boot, and .bss
     mov bx, drv_tab             ; is not what these live in - clear the three
 .next:                          ; per-load words the table ships non-zero.
@@ -1361,20 +1366,16 @@ drv_init_x:
 ; -----------------------------------------------------------------------------
 section .cold                   ; ...and back to resident cold code
 drv_cls_fp_x:
-    push ax
     call drv_cls_idx            ; DI = class-1, CF set if bad - and DI is
     jc .out                     ; ALREADY 0 on that path, and CF already 1
     shl di, 1
     shl di, 1                   ; * DRV_FPSZ
-    add di, drv_fptr
-    clc
-.out:
-    pop ax
-    ret
+    add di, drv_fptr            ; ...whose CF = 0 is the answer: no carry out
+.out:                           ; of a .text offset. NO AX BANK - drv_cls_idx
+    ret                         ; does not touch AX (kernel size pass 9)
 
 drv_cls_svc_x:
     push ax
-    push cx
     call drv_cls_idx            ; ...same: CF = 1 on a refusal, and `pop`
     jc .out                     ; writes no flag
     cmp al, DRVC_POINT          ; ...and the class with no copy: CF = 1 below
@@ -1384,15 +1385,12 @@ drv_cls_svc_x:
     jbe .lo                     ; COMPACTED past it (drv_fptr/drv_owner are
     dec di                      ; not - a class number is shipped ABI)
 .lo:
-    mov ax, DSV_SIZE
-    push dx
-    mul di                      ; DSV_SIZE is not a power of two
-    pop dx
-    mov di, ax
-    add di, drv_svc
-    clc
+    mov ax, di                  ; DSV_SIZE is not a power of two, and DI <= 4:
+    mov ah, DSV_SIZE            ; the BYTE multiply, so DX needs no bank
+    mul ah
+    add ax, drv_svc             ; ...whose CF = 0 is the answer (no carry out
+    xchg ax, di                 ; of a .bss offset), and xchg writes no flag
 .out:
-    pop cx
     pop ax
     ret
 
@@ -1450,9 +1448,7 @@ drv_pub_seg:
     push di
     mov al, 1
 .scan:
-    push ax
-    call drv_cls_fp_x
-    pop ax
+    call drv_cls_fp_x           ; (AX survives it)
     jc .next
     mov cx, [di+2]
     or cx, cx
@@ -1804,24 +1800,53 @@ drv_call:
                                 ; not yet, which is why this reads through DS
                                 ; and the body below reads through ES.
 .go:
-    push word [snd_inst]        ; ...while DS still names the kernel
+    push word [bx+DRVR_SEG]     ; ...read while DS still names the kernel
+    call drv_stamped            ; the far call, stamp off, segment popped
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_stamped - the far call into a driver, with the stamp off for its length
+; in:  the DRIVER'S SEGMENT pushed by the caller just before the call; BP =
+;      the near proc in it; DS = KERNEL_SEG; every other register is the
+;      proc's own arguments
+; out: whatever the proc returns, CF included; the segment word is gone
+;      (`ret 2`); DS and ES the caller's
+;
+; drv_call, drv_fs_call and drv_cp_call were three copies of this body that
+; differed only in where they read the segment - a row, a fixed pair, a
+; pointer in SI - and none of them could take it in a register, because every
+; general register is an argument to some driver ABI (drv_svc_call's banner
+; has the history). So the SEGMENT comes on the stack, which is per task and
+; so re-entrant where a staged word is not, and it is read through BP banked
+; for three instructions. The far target is drv_pkg_disp's synthesised frame:
+; every row's offset half is PKG_DISP and DS already holds the segment half,
+; so nothing names a far pointer at all (kernel size pass 9).
+;
+; The stamp is pushed FIRST and popped LAST for drv_call's reason above:
+; `pop word [mem]` goes through DS, and DS is the driver's until `pop ds`
+; (SPEC.md 51.2.4). ES = KERNEL_SEG is taken from DS and NOT from CS: this
+; module is .cold, and CS is COLD_SEG there (SPEC.md 2.6 rule 2). Pop, mov
+; and `ret 2` write no flag, so the driver's CF is the answer.
+; -----------------------------------------------------------------------------
+drv_stamped:
+    ; STKBALANCE-NET: -1 - `ret 2` takes the segment word its caller pushed
+    push word [snd_inst]
     push ds
     push es
     call drv_nostamp            ; ...and it preserves DS, which the next two
-    push ds                     ; lines depend on: ES = KERNEL_SEG is taken
-                                ; from DS and NOT from CS, because this module
-                                ; is .cold now and CS is COLD_SEG there
-                                ; (SPEC.md 2.6 rule 2)
+    push ds                     ; lines depend on
     pop es
-    mov ds, [es:bx+DRVR_SEG]
+    push bp
+    mov bp, sp                  ; [bp] BP, +2 ES, +4 DS, +6 the stamp,
+    mov ds, [bp+10]             ; +8 the return, +10 THE SEGMENT (SS-relative,
+    pop bp                      ; which is where it is); BP the proc again
     call wm_nest_pushd          ; SPEC.md 66.6.3
-    call far [es:bx+DRVR_DISP]
+    call KERNEL_SEG:drv_pkg_disp    ; -> DS:PKG_DISP, back here
     pop es
-    pop ds                      ; DS names the kernel again...
-    call wm_nest_pop            ; ...which is what the pop reads, so it needs
-    pop word [snd_inst]         ; no segment of its own; and the stamp lands
-                                ; in the kernel
-    ret
+    pop ds                      ; DS names the kernel again, which is what
+    call wm_nest_pop            ; the pop reads, so it needs no segment of
+    pop word [snd_inst]         ; its own; and the stamp lands in the kernel
+    ret 2
 
 ; -----------------------------------------------------------------------------
 ; drv_svc_call - dispatch one of the published service procs
@@ -2011,7 +2036,7 @@ drv_fs_call:
     mov bp, [es:di]             ; BP = the near proc, in the driver's segment
     pop di
     pop es
-    push word [snd_inst]        ; **THE DRIVER IS ASKING, NOT THE APP THAT
+                                ; **THE DRIVER IS ASKING, NOT THE APP THAT
                                 ; HAPPENED TO BE DISPATCHING** (SPEC.md
                                 ; 51.2.3). drv_call and drv_cp_call both
                                 ; cleared the stamp and this did not, which was
@@ -2029,23 +2054,9 @@ drv_fs_call:
                                 ; FIRST in and LAST out, for drv_call's reason:
                                 ; the restore addresses DS and DS is the
                                 ; driver's until `pop ds` (SPEC.md 51.2.4)
-    push ds
-    push es
-    call drv_nostamp            ; ...and it preserves DS, which the next two
-    push ds                     ; lines depend on
-    pop es                      ; ES = KERNEL_SEG: what the driver reads the
-                                ; things it was handed through. From DS and
-                                ; NOT from CS - driver.inc is .cold, so CS is
-                                ; COLD_SEG here (SPEC.md 2.6 rule 1), and the
-                                ; push has to come before DS is spent below
-    mov ds, [es:drv_fseg5]
-    call wm_nest_pushd          ; SPEC.md 66.6.3
-    call far [es:drv_fptr5]     ; drv_fptr5/drv_fseg5 are adjacent and in that
-    pop es                      ; order, so they ARE the far pointer - no
-    pop ds                      ; staging like drv_blk_call's is needed
-    call wm_nest_pop            ; ...and DS names the kernel again, which is
-    pop word [snd_inst]         ; the segment the pop reads. Neither touches a
-    ret                         ; flag, so the driver's CF still comes back out
+    push word [drv_fseg5]       ; ...and drv_stamped takes it off, around a
+    call drv_stamped            ; far call to the DRVC_FILE driver's segment
+    ret
 
 ; -----------------------------------------------------------------------------
 ; drv_fs_has - does the DRVC_FILE driver publish this verb? (SPEC.md 62.9.1)
@@ -2108,38 +2119,20 @@ drv_fs_has:
 ; the PANEL was launched in.
 ; -----------------------------------------------------------------------------
 drv_cp_call_x:
-    push si
     push di                     ; DI is the PAGE's argument (the pane left)
     or bp, bp                   ; and drv_cls_fp answers in it, so it has to
     jz .out                     ; come back before the call
     call drv_cls_fp_x
     jc .out
-    cmp word [di+2], 0
-    je .out
-    mov si, di                  ; SI = the far pointer
-    pop di
+    mov ax, [di+2]              ; AX = the segment: the page ABI leaves AX
+    or ax, ax                   ; alone (the banner above), so it is the one
+    jz .out                     ; register free to carry it - SI was, at two
+    pop di                      ; more bytes of push and pop
     push di                     ; ...and DI is the pane left again
-    push word [snd_inst]        ; FIRST in and LAST out, for drv_call's
-                                ; reason: the restore addresses DS and DS is
-                                ; the driver's until `pop ds` (SPEC.md 51.2.4)
-    push ds
-    push es
-    call drv_nostamp            ; ...and it preserves DS, which the next two
-    push ds                     ; lines depend on: ES = KERNEL_SEG is taken
-                                ; from DS and NOT from CS, because this module
-                                ; is .cold now and CS is COLD_SEG there
-                                ; (SPEC.md 2.6 rule 2)
-    pop es
-    mov ds, [es:si+2]
-    call wm_nest_pushd          ; SPEC.md 66.6.3
-    call far [es:si]
-    pop es
-    pop ds                      ; ...and DS names the kernel again, which is
-    call wm_nest_pop            ; the segment the pop reads
-    pop word [snd_inst]
+    push ax
+    call drv_stamped            ; stamp off, far call, segment popped
 .out:
     pop di
-    pop si
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2245,12 +2238,9 @@ osapi_drv_cfg_x:
     add di, drv_cfg             ; DI = the blob, resolved BEFORE either branch
     or al, al                   ; spends a segment register
     jnz .set
-    mov ax, si                  ; get: the store -> the caller's buffer. DS is
-    mov si, di                  ; the kernel and ES the caller already, so this
-    mov di, ax                  ; is one rep movsb with no override
-    rep movsb
-    pop cx
-    jmp short .ok
+    xchg si, di                 ; get: the store -> the caller's buffer. DS is
+    rep movsb                   ; the kernel and ES the caller already, so this
+    jmp short .copied           ; is one rep movsb with no override
 .set:                           ; ...and a set is the SAME copy with the two
     push ds                     ; segments swapped, rather than a second loop
     push es
@@ -2260,11 +2250,12 @@ osapi_drv_cfg_x:
     rep movsb
     pop es
     pop ds
-    pop cx
     mov byte [cp_wdirty], 1     ; the file is OWED a write, and the panel's
                                 ; teardown is the only thing that pays it -
                                 ; there is no reachable flush from here now
                                 ; (SPEC.md 31.8)
+.copied:
+    pop cx
 .ok:
     clc
 .out:
@@ -2587,22 +2578,6 @@ drv_svc_clear:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; drv_svc_clear_all - forget every class's services (module internal)
-; in:  nothing
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-section .ovlw                  ; ...and its one callee, row 8's other half
-drv_svc_clear_all:
-    push ax
-    mov al, 1
-.next:
-    call COLD_SEG:drvf_drv_svc_clear
-    inc al
-    cmp al, DRVC_MAX
-    jbe .next
-    pop ax
-    ret
 
 ; --- the volume plumbing moved to drvvol.inc (SPEC.md 51.0) -----------------
 ; drv_mounted, drv_vol_bank/_back and drv_find are NOT driver code: mod.inc
@@ -3397,7 +3372,8 @@ drv_release:
 ;      by the slot's X stub
 ; out: spawn: CF = 0 and AL = the task slot; CF = 1 refused.
 ;      exit:  NEVER RETURNS.
-; clobbers: AX (an output), flags
+; clobbers: AX (an output), CX (the spawn's stack size, which it always
+;           was), flags
 ;
 ; A driver cannot use OSAPI_TASK_SPAWN, and the reason is the thing that makes
 ; that call safe: inst_pkg_spawn's fence is a chain of five tests all keyed on
@@ -3467,9 +3443,10 @@ drv_task_x:
     push bx                     ; until our popf)
     mov bl, al                  ; AL = the slot: a driver's worker is service
     xor bh, bh                  ; plumbing and survives the fsx freeze
-    shl bx, 1                   ; (SPEC.md 53.2) - stamped inside the same
-    shl bx, 1                   ; IF=0 window, so no tick can scan the record
-    shl bx, 1                   ; before the bit is on
+    mov cl, 3                   ; (SPEC.md 53.2) - stamped inside the same
+    shl bx, cl                  ; IF=0 window, so no tick can scan the record
+                                ; before the bit is on. CX is SCH_DRV_STK's
+                                ; already, so CL is free for the shift
     or byte [bx+sch_tasks+T_FLAGS], TF_SERVICE
     pop bx
     popf
@@ -3729,7 +3706,7 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     mov ax, [drv_cfg+CFG_WANT]
     call %1 %+ _want_set
 %ifdef DOCK_OPT
-    call KERNEL_SEG:cw_dock_apply ; the map above stored [dock_cfg]; the band,
+    call COLD_SEG:dkf_apply     ; the map above stored [dock_cfg]; the band,
                                 ; the strip and the drive column are DERIVED
                                 ; from it (SPEC.md 30.5), which is not a store.
                                 ; No window exists yet, so the refit inside it
@@ -4040,6 +4017,8 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     call COLD_SEG:dwf_dskw_stat ; the disk in A: is not guaranteed to be ours
     jc %%notsys
 
+    call %1 %+ _fdtest          ; a Cylinder the machine cannot do goes back
+                                ; to Auto BEFORE the file is composed (31.14)
     call %1 %+ _pack            ; rebuild the whole file: a settings file is
     call %1 %+ _ser             ; small and a partial one is a bug waiting for
                                 ; the next format change. CX = its length
@@ -4060,6 +4039,10 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 %ifdef OS88_SHORTCUTS
     call sc_m_serx              ; ...and that claim back; CF and AX survive
 %endif
+    jc %%out
+    call %1 %+ _fdbs            ; ...and the boot sector's Cylinder byte, while
+                                ; this is the mounted, verified system disk
+                                ; (SPEC.md 31.14). CF and AX are its verdict
     jmp short %%out
 %ifdef OS88_SHORTCUTS
 %%nomem:                        ; no room to compose them: a write WITHOUT the
@@ -4161,17 +4144,25 @@ ovl_cfg_load:
 ; mount re-reads (dsk_bpb_check) and the one hiber.inc carries to kern_dos:
 ; overriding the finding, rather than adding a test beside it, is what makes
 ; this free at every reader. The loader stores the RUN BOUND there, at most 36,
-; so the high byte is always 0 and the byte decides the word. ONLY TRACK
-; writes it: a failed canary's ROM returns the other head's sectors with CF=0
-; for a crossing READ (SPEC.md 18.93.1), so nothing may turn cylinder runs
-; back on over it, and 2 - once Cylinder - reads as Auto (SPEC.md 31.14).
+; so the high byte is always 0 and the byte decides the word. Track writes 0
+; and Cylinder 1 - which is the whole reason the page HAS a Cylinder: a 286
+; and up never runs the canary (SPEC.md 18.93.2's gate) and a hard-disk boot
+; has no floppy loader, so without it nothing turns the cylinder run on for
+; the great majority of those machines, whose FDC crosses a head correctly.
+; EXCEPT over a canary that FAILED this boot (b2_cylok, SPEC.md 31.14): that
+; ROM returns the other head's sectors with CF=0 for a crossing READ (18.93.1),
+; so Cylinder reads as Track for the session. The record is left alone - the
+; disk that met a bad ROM here may be carried back to the machine it was
+; chosen on, and this ROM fails the canary again at every boot.
 ; -----------------------------------------------------------------------------
 ovl_fdd_apply:
     mov dx, [drv_cfg+CFG_FDD]   ; DL = the four drives, DH = the read bound
     mov al, dh
-    dec ax                      ; 1 Track -> 0, 0 Auto -> FF
-    cmp al, 1
-    jae .drives                 ; Auto, 2 (was Cylinder) or a future byte
+    dec ax                      ; 1 Track -> 0, 2 Cylinder -> 1, 0 Auto -> FF
+    cmp al, 2
+    jae .drives                 ; Auto or a future byte: the canary's finding
+    and al, [cs:b2_cylok]       ; Cylinder over a FAILED canary -> 0, Track
+                                ; (the loader's byte, through the blob's CS)
     mov [boot_cylrun], al       ; ...for every mount after this one
     mov [dsk_cylrun], al        ; ...and the one drv_boot is standing on
 .drives:
@@ -4541,11 +4532,7 @@ drv_boot_x:
     xor dh, dh                  ; DH = how many, DL = how many so far
     xor cl, cl
 .count:
-    mov al, cl
-    call COLD_SEG:drvf_drv_row
-    cmp word [bx+DRVR_FILE], 0
-    je .cskip
-    cmp byte [bx+DRVR_WANT], 0
+    call drv_boot_want          ; a row with a file that is wanted?
     je .cskip
     inc dh
 .cskip:
@@ -4556,11 +4543,7 @@ drv_boot_x:
 
     xor cl, cl
 .next:
-    mov al, cl
-    call COLD_SEG:drvf_drv_row
-    cmp word [bx+DRVR_FILE], 0
-    je .skip
-    cmp byte [bx+DRVR_WANT], 0
+    call drv_boot_want          ; a row with a file that is wanted?
     je .skip
     inc dl                      ; ...and NAME it, before the sectors start
     mov al, dl
@@ -4604,11 +4587,7 @@ drv_boot_x:
     ; about a floppy it does not need.
     xor cx, cx
 .dnext:
-    mov al, cl
-    call COLD_SEG:drvf_drv_row
-    cmp word [bx+DRVR_FILE], 0
-    je .dskip
-    cmp byte [bx+DRVR_WANT], 0
+    call drv_boot_want          ; a row with a file that is wanted?
     je .dskip
     mov byte [bx+DRVR_ERR], DRVE_DISK
     mov byte [drv_nerr], 1
@@ -4623,6 +4602,14 @@ drv_boot_x:
     pop bx
     pop ax
     retf
+drv_boot_want:                  ; CL = a row: ZF = 1 when it has no file or is
+    mov al, cl                  ; not wanted, else BX = it - the one question
+    call COLD_SEG:drvf_drv_row  ; all three walks above ask (CH is 0 in each).
+    cmp word [bx+DRVR_FILE], 0  ; A ROUTINE OF ITS OWN and not a local of
+    je .wret                    ; drv_boot_x: a near `ret` inside a far
+    cmp byte [bx+DRVR_WANT], 0  ; routine's extent makes os88ovlchk read its
+.wret:                          ; return kind as mixed and skip the check
+    ret
 
 ; -----------------------------------------------------------------------------
 ; drv_notice - tell the user, once the screen exists (SPEC.md 51.3)
@@ -4723,6 +4710,10 @@ drv_owner:  resw DRVC_MAX       ; per class: the row whose services are
 drv_svc:    resb DSV_SIZE*(DRVC_MAX-2) ; ...and a copy of each one's table, so
                                 ; every `[drv_svc+DSV_*]` in snd.inc still
                                 ; names the SOUND driver's and did not change
+drv_svc_end:
+%if drv_svc - drv_owner != DRVC_MAX * 2
+  %error "driver: drv_init zeroes drv_owner..drv_svc_end as one run"
+%endif
 drv_cfg:    resb CFG_NB         ; the live settings, staged (layout above).
                                 ; THE ONE PIECE OF THE SETTINGS THAT IS STILL
                                 ; RESIDENT (SPEC.md 51.5.3): osapi_drv_cfg
@@ -4762,8 +4753,6 @@ drvf_drv_row:            call drv_row_x
 drvf_drv_load_at:        call drv_load_at
                     retf
 %endif
-drvf_drv_svc_clear:      call drv_svc_clear
-                    retf
 drvf_drv_call:           call drv_call
                     retf
 drvf_drv_release:        call drv_release
@@ -4831,6 +4820,253 @@ cpc_buf:    resb CFG_FBUF       ; module's own BSS (docs/plans/MODULE-
                                 ; (kernel size pass 8). ES = CS reaches it
 section .modc
 
+; =============================================================================
+; The Floppy page's Cylinder, at the save (SPEC.md 31.14)
+;
+; HERE, in the settings CORE (.modc), and not beside the page in .modu: both
+; are called from cpc_save, and MOD_SETS loads the core ALONE for a desktop
+; gesture's save - so the core may name nothing of the panel's (SPEC.md
+; 2.8.7). The page only sets [cp_fdbsd], a RESIDENT byte (ctrl.inc), so a
+; save that fails and is retried on a later load still owes what it owed.
+; =============================================================================
+cp_fdno:   db 0                 ; cpc_fdtest turned Cylinder back to Auto:
+                                ; cp_flush_x says so after the save
+cp_fdn:    db 0                 ; cpc_fdtest's track count
+cp_s_fdno: db 'No Cylinder Here: Auto', 0   ; ...and what it says. A toast
+                                ; copies its line (SPEC.md 59), so it may be
+                                ; read out of this image through ES = CS
+cp_fdnop:  dw cp_s_fdno         ; ...through this, which cp_flush_x reads cs:
+
+; -----------------------------------------------------------------------------
+; cpc_fdtest - can THIS machine read across a head? Asked once, at the save
+;              that follows a Cylinder pick (SPEC.md 31.14)
+; in:  the BOOT VOLUME mounted and verified as the system disk (cpc_save)
+; out: nothing; a machine that cannot has [drv_cfg+CFG_FDR] = 0 (Auto) and
+;      [cs:cp_fdno] = 1. All registers preserved
+;
+; Asked only when the answer is not already known: the Reads row changed this
+; session, it says Cylinder, and this boot did NOT cross a head already
+; (boot_cylrun 0 - a 286 and up, which the gate kept off the canary, or a
+; machine whose canary failed). An XT that passed is never asked again.
+;
+; The question is the one dsk_xfer would put, put the way it would put it:
+; cylinder 1 of the system disk as ONE cylinder run - [dsk_cylrun] raised for
+; it and the crossing read below alone - and then each of its two tracks
+; track-bounded, compared word for word. Cylinder 1 is KERNEL.SYS on every
+; geometry this tree builds (the loader reads the kernel from the start of the
+; data area), so the sectors are never blank and a head's worth of them
+; cannot match the other head's by accident. [dsk_rah_busy] keeps SPEC.md
+; 18.95's cache out of it, or the second read would be served the first one's
+; bytes.
+;
+; The run must not be split at a 64KB DMA page - dsk_runcap would shorten it,
+; and a run cut at the head proves nothing - and a module has no door to
+; mem_claim_dma. So the claim is FOUR tracks and the cylinder (two) is placed
+; by hand: at the base if it fits before the next page, else ON the page, with
+; the track buffer whichever side has room. R paragraphs to the page and T a
+; track: R >= 2T fits at once; T <= R < 2T leaves a track below; R < T ends
+; the cylinder at R + 2T < 3T, with the track after it, inside 4T.
+;
+; Two ROM classes cannot cross a head, and they fail differently. One LIES -
+; the other head's sectors, CF = 0 - and the compare catches it. The other
+; ERRORS, and dsk_xfer hides that: three strikes, then single sectors, and
+; CF = 0 with the right bytes. So [dsk_ioerr], which only a failed int 13h
+; writes, is cleared first and read after, and a non-zero one is a NO. A
+; two-sector run across the head goes first, so that controller costs three
+; strikes and not three for every sector of head 0 before the answer.
+;
+; A read that FAILS outright answers nothing and the pick stands - the
+; loader's canary still decides at every boot. So does a heap that cannot
+; spare 18..36KB.
+; -----------------------------------------------------------------------------
+cpc_fdret:                      ; the five early refusals' `ret`, in short
+    ret                         ; reach of them (it was 230 bytes away)
+cpc_fdtest:
+    cmp byte [cp_fdbsd], 0
+    je cpc_fdret
+    cmp byte [drv_cfg+CFG_FDR], 2
+    jne cpc_fdret
+    cmp word [boot_cylrun], 0
+    jne cpc_fdret                    ; this boot crossed a head: it can
+    test byte [dsk_unit], 0x80
+    jnz cpc_fdret                    ; a hard disk: nothing here to ask
+    cmp word [disk_heads], 2
+    jne cpc_fdret
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov ax, [disk_spt]
+    shl ax, 1                   ; 2*spt KB = four tracks
+    mov bx, MEM_K_MOD           ; the panel module's, and gone before it is
+    call COLD_SEG:mmf_mem_claim ; DX = the claim
+    jc .out
+    mov si, dx                  ; SI = the claim, for the free
+    mov bp, [disk_spt]
+    mov cl, 5
+    shl bp, cl                  ; BP = T, a track in paragraphs
+    mov cx, dx
+    and cx, 0x0FFF
+    neg cx
+    add cx, 0x1000              ; CX = R, paragraphs to the next 64KB page
+    mov di, dx                  ; DI = the cylinder's segment
+    mov bx, bp
+    shl bx, 1                   ; BX = 2T
+    cmp cx, bx
+    jae .after                  ; it fits before the page
+    add di, cx                  ; ...else it starts ON the page
+    cmp cx, bp
+    jb .after                   ; no track's room below it
+    jmp short .read             ; DX = the claim's base: the track goes there
+.after:
+    mov dx, di
+    add dx, bx                  ; the track buffer after the cylinder
+.read:
+    inc byte [dsk_rah_busy]
+    mov es, di
+    xor bx, bx
+    mov byte [dsk_ioerr], 0     ; written only by a FAILED int 13h, so it is
+                                ; how a crossing that ERRORS is seen at all:
+                                ; dsk_xfer falls back to single sectors and
+                                ; answers CF = 0 with the right bytes
+    mov byte [dsk_cylrun], 1    ; ONE cylinder run, the way dsk_xfer would
+    mov ax, [disk_spt]
+    mov cx, ax
+    shl ax, 1
+    add ax, cx
+    dec ax                      ; AX = head 0's last sector of cylinder 1...
+    mov cx, 2                   ; ...and the next: ONE call across the head,
+    call COLD_SEG:dskf_disk_read    ; three strikes at most and not three a
+    jc .rdone                   ; sector of the whole track
+    cmp byte [dsk_ioerr], 0
+    jne .rdone
+    mov ax, [disk_spt]
+    shl ax, 1                   ; AX = cylinder 1's LBA (two heads)...
+    mov cx, ax                  ; ...and CX = its sectors
+    call COLD_SEG:dskf_disk_read
+.rdone:
+    mov byte [dsk_cylrun], 0    ; (boot_cylrun is 0, so this IS its value)
+    jc .done                    ; no answer: the pick stands
+    cmp byte [dsk_ioerr], 0
+    jne .no                     ; it answered by falling back: no crossing
+    mov es, dx                  ; ES:0 = the track buffer
+    mov cx, [disk_spt]
+    mov byte [cs:cp_fdn], 2
+.trk:
+    call COLD_SEG:dskf_disk_read    ; LBA AX, one track, track-bounded
+    jc .done
+    push cx
+    push si
+    push di
+    push ds
+    mov ds, di                  ; DS:0 = this track's half of the cylinder run
+    xor si, si
+    xor di, di
+    mov ch, cl
+    xor cl, cl                  ; CX = spt*256 words
+    cld
+    repe cmpsw
+    pop ds
+    pop di
+    pop si
+    pop cx
+    jne .no
+    add ax, cx                  ; the next track's LBA
+    add di, bp                  ; ...and the cylinder run's next half
+    dec byte [cs:cp_fdn]
+    jnz .trk
+    jmp short .done
+.no:
+    mov byte [drv_cfg+CFG_FDR], 0   ; Auto - and cpc_fdbs then writes byte 509
+    mov byte [cs:cp_fdno], 1        ; as 0, which is what Auto means there
+.done:
+    dec byte [dsk_rah_busy]
+    mov dx, si
+    mov bx, MEM_K_MOD
+    call COLD_SEG:mmf_mem_free
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.ret:
+    ret
+
+; -----------------------------------------------------------------------------
+; cpc_fdbs - the boot sector's Cylinder byte, made to match the setting
+; in:  the BOOT VOLUME mounted and verified as the system disk - cpc_save's
+;      own state, which is the only place this is called from
+; out: CF = 0 written or nothing owed; CF = 1 and AX = FERR_IO
+; clobbers: AX
+;
+; Cylinder is two bytes in two places because two programs read it. SYSTEM.CFG
+; is the kernel's - ovl_fdd_apply, for a hard-disk boot - and the boot sector's
+; BS_CYLASK is the LOADER's, which has no file system and reads it `ss:` at
+; the 286 gate: set, a 286 takes the cylinder bound and the canary decides,
+; exactly as on an 8088. Either byte alone is SAFE: SYSTEM.CFG's Cylinder
+; without this one leaves a 286's floppy boot at the track bound, because
+; b2_cylok says it never looked; this one without SYSTEM.CFG's is a canary
+; run on a 286, which is what the canary is for.
+;
+; Owed only when the Reads row changed this session ([cp_fdbsd]), so a
+; save over any other setting pays nothing for it - and written only when the
+; byte differs, so a pick changed and changed back pays one read. A hard
+; disk's sector 0 is boothd's and its boot never reaches the gate, and a
+; sector whose byte is neither 0 nor 1, or that does not end 55AA, is not one
+; this tree wrote: both are left alone, and that is not a failure.
+; -----------------------------------------------------------------------------
+cpc_fdbs:
+    cmp byte [cp_fdbsd], 0
+    je .ret                     ; nothing owed (CF = 0: equal)
+    test byte [dsk_unit], 0x80
+    jnz .ret                    ; a hard disk's (CF = 0: test clears it)
+    push bx
+    push cx
+    push es
+    push ss
+    pop es                      ; ES = LOW_SEG: dsk_secbuf is .lowbss
+    mov bx, dsk_secbuf
+    mov cx, 1
+    xor ax, ax                  ; LBA 0
+    call COLD_SEG:dskf_disk_read
+    jc .err
+    cmp word [es:bx+510], 0xAA55
+    jne .done
+    cmp byte [es:bx+BS_CYLASK], 1
+    ja .done
+    xor ax, ax                  ; AL = 1 for Cylinder, 0 for the rest
+    cmp byte [drv_cfg+CFG_FDR], 2
+    jne .v
+    inc ax
+.v:
+    cmp [es:bx+BS_CYLASK], al
+    je .done
+    mov [es:bx+BS_CYLASK], al
+    xor ax, ax
+    call COLD_SEG:dskf_disk_write   ; CX and BX survive: dsk_xfer is KENT
+    jc .err
+.done:
+    mov byte [cp_fdbsd], 0
+    clc
+    jmp short .out
+.err:
+    mov ax, FERR_IO             ; [cp_wdirty] stays set and so does this, so
+    stc                         ; the next close tries both again
+.out:
+    pop es
+    pop cx
+    pop bx
+.ret:
+    ret
+
 ; -----------------------------------------------------------------------------
 ; cp_cfg_save - what cp_flush_x calls (SPEC.md 51.5)
 ; out: CF = 0 written; CF = 1 and AX = FERR_*
@@ -4892,33 +5128,29 @@ drv_pkg_call_x:
     mov al, bh
     cmp al, 1
     jb .none
-    cmp al, DRVC_MAX
-    ja .none
-    dec al
+    cmp al, DRVC_MAX            ; DRVC_POINT IS DRVC_MAX and has no drv_svc
+    jae .none                   ; slot (drv_cls_svc_x refuses it too): its
+                                ; index would be 4, past the table's four
+    dec ax                      ; AL >= 1, so AH is not touched
     cmp al, DRVC_RETIRED3       ; ...the same compaction, inline
     jb .lo
-    dec al
+    dec ax                      ; ...and AL >= 3 here
 .lo:
-    xor ah, ah
-    push dx
-    mov di, ax
-    mov ax, DSV_SIZE
-    mul di                      ; AX = (class-1) * DSV_SIZE
-    pop dx
-    mov di, ax
-    add di, drv_svc
-    mov bp, [di+DSV_PKGCALL]    ; BP = the driver's near proc...
+    mov ah, DSV_SIZE            ; AL <= 3: the BYTE multiply, which leaves DX
+    mul ah                      ; alone - two bytes and ~70 cycles where the
+    xchg ax, di                 ; word one with DX banked round it was eight
+                                ; and ~150 (kernel size pass 9)
+    mov bp, [di+drv_svc+DSV_PKGCALL]    ; BP = the driver's near proc...
     or bp, bp
     jz .none                    ; ...and 0 is THE FENCE: not published, so not
                                 ; reachable. HDD.DRV lands here
     mov al, bh
-    dec al
-    xor ah, ah
-    mov di, ax
-    shl di, 1
-    shl di, 1
-    add di, drv_fptr            ; DI = &drv_fptr for the class...
-    mov ax, [cs:di+2]
+    cbw                         ; BH is 1..DRVC_MAX here, so AH = 0
+    dec ax
+    shl ax, 1
+    shl ax, 1
+    xchg ax, di                 ; DI = (class-1) * 4: drv_fptr's row...
+    mov ax, [cs:di+drv_fptr+2]
     or ax, ax
     jz .none                    ; nothing attached, or attached and not yet
                                 ; published (SPEC.md 51.2.1)
@@ -5158,7 +5390,7 @@ section .text
 ; whether a driver has offered it a tone proc. ONE class' worth, and in
 ; `.text` with real zero bytes rather than `.bss`: nothing zeroes .bss on this
 ; assembler (SPEC.md 8), and the live build gets its zeros from
-; drv_svc_clear_all, which is inside the gate. So the answer is "no proc",
+; drv_init_x, which is inside the gate. So the answer is "no proc",
 ; permanently and without an initialiser - which is what it would be.
 drv_svc:      times DSV_SIZE db 0
 drv_blkcls:   db 0              ; disk.inc writes it per volume and only

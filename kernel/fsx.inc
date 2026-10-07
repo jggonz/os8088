@@ -339,34 +339,8 @@ fsx_run:
     mov bp, ax                  ; offset in BP (SPEC.md 53.1)
     call wm_pkgcall
     pop bp
-    call fsx_restore            ; SPEC.md 53.6, ordered
-    clc
-.out:
-    jmp kret_di
-
-; -----------------------------------------------------------------------------
-; fsx_restore - one path home (SPEC.md 53.6, order binding)
-;
-; 1. the desktop's mode back (skipped when no fsx_mode call happened - the
-;    screen is already the desktop's mode); the BIOS mode set also restores
-;    the default palette and the standard planar write state; 2. drain the
-;    BIOS key buffer and the event queue - keys typed and clicks queued at
-;    the game must not land in the desktop ladder (the SPEC.md 34.4
-;    click-abort drain is the precedent); 3. disarm the freeze; 4. repaint
-;    the desktop under the still-held lock. The callback epilogue's
-;    gfx_unlock then flushes (if buffered) and re-shows the cursor with a
-;    fresh save-under from the restored VRAM - SPEC.md 7's own contract.
-;
-; Step 4 is a wm_paint_all on every machine and every CPU tier, and SPEC.md
-; 53.6.1 is the record of the snapshot that used to short-circuit it: a
-; bracket takes real TIME, so the desktop behind it is live state (the bar's
-; clock, the Timer, a Bounce, and the exclusive app's own window content)
-; rather than an image to be put back. wm_paint_all asks every window what it
-; looks like NOW, which is the only question with a correct answer here.
-; -----------------------------------------------------------------------------
-fsx_restore:
-    push ax
-    push di
+.restore:                       ; FSX_RESTORE - one path home, SPEC.md 53.6,
+                                ; ordered (its header, below, is the order)
 %ifdef KERN_BIG
     call spk_off                ; a speaker ring the app left open (SPEC.md
                                 ; 34.11): channel 2 idle and channel 0 at the
@@ -439,9 +413,32 @@ fsx_restore:
                                 ; The bracket WAS the user. CF is not read:
                                 ; the screen cannot be dark here, because
                                 ; entering a bracket took the input that lit it
-    pop di
-    pop ax
-    ret
+    clc
+.out:
+    jmp kret_di
+
+; -----------------------------------------------------------------------------
+; fsx_restore - one path home (SPEC.md 53.6, order binding)
+;
+; 1. the desktop's mode back (skipped when no fsx_mode call happened - the
+;    screen is already the desktop's mode); the BIOS mode set also restores
+;    the default palette and the standard planar write state; 2. drain the
+;    BIOS key buffer and the event queue - keys typed and clicks queued at
+;    the game must not land in the desktop ladder (the SPEC.md 34.4
+;    click-abort drain is the precedent); 3. disarm the freeze; 4. repaint
+;    the desktop under the still-held lock. The callback epilogue's
+;    gfx_unlock then flushes (if buffered) and re-shows the cursor with a
+;    fresh save-under from the restored VRAM - SPEC.md 7's own contract.
+;
+; Step 4 is a wm_paint_all on every machine and every CPU tier, and SPEC.md
+; 53.6.1 is the record of the snapshot that used to short-circuit it: a
+; bracket takes real TIME, so the desktop behind it is live state (the bar's
+; clock, the Timer, a Bounce, and the exclusive app's own window content)
+; rather than an image to be put back. wm_paint_all asks every window what it
+; looks like NOW, which is the only question with a correct answer here.
+; -----------------------------------------------------------------------------
+; (THE CODE IS fsx_run's .restore, its one caller, since size pass 9: AX
+; and DI are fsx_run's to restore at kret_di, so the body banks nothing.)
 
 ; -----------------------------------------------------------------------------
 ; fsx_mode - set a foreign mode and describe it (SPEC.md 53.4, 0x02D0)
@@ -532,7 +529,49 @@ fsx_mode:
 .modex:
     mov al, 0x13
     call fsx_setbios
-    call fsx_modex              ; unchain + retime to 320x240 (SPEC.md 53.4)
+    push cx                     ; FSX_MODEX, inlined: unchain + retime to
+    push di                     ; 320x240 (SPEC.md 53.4). CH is the id, ES:DI
+    push es                     ; the buffer .fill writes; vid_wipe spends all three
+    mov dx, 0x3C4
+    mov ax, 0x0604              ; chain4 off, odd/even off
+    out dx, ax
+    mov ax, 0x0100              ; sync reset while the clock changes
+    out dx, ax
+    mov dx, 0x3C2
+    mov al, 0xE3                ; 25MHz, 60Hz, 480-line sync polarity
+    out dx, al
+    mov dx, 0x3C4
+    mov ax, 0x0300              ; run again
+    out dx, ax
+    mov dx, 0x3D4
+    mov al, 0x11                ; unprotect CRTC 0..7
+    out dx, al
+    inc dx
+    in al, dx
+    and al, 0x7F
+    out dx, al
+    dec dx
+    mov si, fsx_xcrtc
+    mov cx, 10
+    cld
+.crtc:
+    lodsw
+    out dx, ax
+    loop .crtc
+    mov dx, 0x3C4
+    mov ax, 0x0F02              ; map mask: all four planes...
+    out dx, ax
+    mov ax, 0xA000              ; ...and clear the whole 256KB. vid_wipe is
+    mov cx, 0x8000              ; this body, factored (viddet.inc): both ends
+    call vid_wipe               ; are .text in KERNEL_SEG so the call is near,
+                                ; the four registers it clobbers - AX, CX, DI
+                                ; and ES - are all pushed at this routine's
+                                ; own entry, and zero is the right fill. Its
+                                ; own `cld` is redundant after the one above
+                                ; and harmless
+    pop es
+    pop di
+    pop cx
 %endif
 .fill:
     mov al, ch                  ; DS:SI = the id's row, ES:DI = the buffer;
@@ -682,57 +721,9 @@ fsx_setbios:
 ; on, and all four planes cleared through map mask 0Fh - the BIOS cleared
 ; only the 64KB the chained mode could see.
 ; -----------------------------------------------------------------------------
-fsx_modex:
-    push ax
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov dx, 0x3C4
-    mov ax, 0x0604              ; chain4 off, odd/even off
-    out dx, ax
-    mov ax, 0x0100              ; sync reset while the clock changes
-    out dx, ax
-    mov dx, 0x3C2
-    mov al, 0xE3                ; 25MHz, 60Hz, 480-line sync polarity
-    out dx, al
-    mov dx, 0x3C4
-    mov ax, 0x0300              ; run again
-    out dx, ax
-    mov dx, 0x3D4
-    mov al, 0x11                ; unprotect CRTC 0..7
-    out dx, al
-    inc dx
-    in al, dx
-    and al, 0x7F
-    out dx, al
-    dec dx
-    mov si, fsx_xcrtc
-    mov cx, 10
-    cld
-.crtc:
-    lodsw
-    out dx, ax
-    loop .crtc
-    mov dx, 0x3C4
-    mov ax, 0x0F02              ; map mask: all four planes...
-    out dx, ax
-    mov ax, 0xA000              ; ...and clear the whole 256KB. vid_wipe is
-    mov cx, 0x8000              ; this body, factored (viddet.inc): both ends
-    call vid_wipe               ; are .text in KERNEL_SEG so the call is near,
-                                ; the four registers it clobbers - AX, CX, DI
-                                ; and ES - are all pushed at this routine's
-                                ; own entry, and zero is the right fill. Its
-                                ; own `cld` is redundant after the one above
-                                ; and harmless
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
+; (THE CODE IS fsx_mode's .modex since size pass 9, its one caller. fsx_mode
+; restores AX, DX and SI at kret_di; CX (the id in CH), DI and ES (the
+; caller's buffer) are banked around it because .fill reads them.)
 
 fsx_xcrtc:                      ; Mode X CRTC retiming, index in the low byte
     dw 0x0D06, 0x3E07, 0x4109, 0xEA10, 0xAC11
@@ -842,11 +833,7 @@ fsx_wait:
     call fsx_insync
     jnc .pb
 .ok:
-    clc
-    jmp short .out
-.fail:
-    stc
-.out:
+    CLC_OR_STC .fail            ; CF = 0 waited, or (.fail) CF = 1 refused
     pop dx
     pop bx
     pop ax

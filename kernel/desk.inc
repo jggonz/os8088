@@ -42,6 +42,17 @@ DESK_IH_S   equ 16              ; ...and a shortcut's 16 rows on kern_big, so
                                 ; a link's picture fits above its caption
 %endif
 DESK_PICX   equ (DESK_CW - DESK_ZW) / 2     ; a drive's picture in its cell
+%ifdef OS88_SHORTCUTS
+; THE PICTURE COLUMN IS ON THE BYTE GRID (SPEC.md 26.9.9): the centred x
+; rounded to the nearest multiple of 8, so it moves at most 4 px and every
+; picture whose x is the column's - a volume's, the Wire's, a shortcut's - is
+; whole band bytes. DESK_PX is 102, so the centred x alone is on the grid one
+; column in four. %1 = a cell's left in, the column's left out; %2 its low byte
+%macro DESKPIC 2
+    add %1, DESK_PICX + 4
+    and %2, 0F8h
+%endmacro
+%endif
 
 ; --- the table's byte (SPEC.md 26.9) ------------------------------------------
 DSL_SLOT    equ 0x3F            ; the cell...
@@ -411,11 +422,14 @@ desk_init:
     cmp cl, DVOL_MAX
     jb .kloop
 
-    call KERNEL_SEG:ovw_desk_rowcalc  ; FAR: overlay -> resident. The row
+    call COLD_SEG:desk_rowcalc_x    ; FAR: overlay -> resident. The row
                                 ; count is geometry, and geometry can change
                                 ; after boot now (SPEC.md 39.11.2), so the
-                                ; arithmetic lives in .text where vid_switch
-                                ; can reach it too
+                                ; arithmetic is resident where vid_switch can
+                                ; reach it too - and it ends in a `retf`
+                                ; already, so the overlay names the body and
+                                ; the ovw_ shim that bounced through .text is
+                                ; gone (kernel size pass 9, -4 resident)
 
     xor ax, ax                  ; AX is popped two lines down, so it is free
     mov [desk_clkt], ax
@@ -573,12 +587,11 @@ desk_zs:
     xor bh, bh
     mov al, [bx+desk_zslot]
     pop bx
-    cmp al, DSL_GONE            ; GONE, and 0xFF, are "not shown"
-    jae .no
+    cmp al, DSL_GONE            ; GONE, and 0xFF, are "not shown": CF = 0
+    cmc                         ; there, so complemented CF = 1 is the answer
+    jc .no
     and al, DSL_SLOT            ; ...which also leaves CF = 0
-    ret
 .no:
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -782,8 +795,8 @@ desk_reflow:
 %else
 desk_reflow:
     cmp byte [desk_ready], 0
-    je .ret
-    call kentc_di
+    je desk_free.ret            ; a `ret` in short reach (desk_free's own) -
+    call kentc_di               ; this one's was five bytes off the far end
     xor di, di                  ; --- 1: let go -----------------------------
 .a:
     mov al, [di+desk_zslot]
@@ -874,8 +887,6 @@ desk_reflow:
     cmp di, DESK_NZ
     jb .c
     jmp kretc_di
-.ret:
-    ret
 
 %endif
 
@@ -1073,8 +1084,9 @@ desk_caprect:
 ;              fill; caller holds the gfx lock. All registers preserved.
 ; desk_paint_mask - draw the zones desk_dmg_zones collected into [desk_dmgm];
 ;              AX (wm.inc's "any" word) is not read. Lock held. On kern_big
-;              each is drawn only where the pass reveals it (desk_zone_clip,
-;              SPEC.md 11.91.6); wm_paint_all's pass draws them whole, the
+;              wm_dmg_gray has already drawn them into its region and emptied
+;              the mask (desk_zones_r, SPEC.md 11.91.6), so what is left here
+;              is drawn whole; wm_paint_all's pass draws them whole too, the
 ;              painter's algorithm putting every window back over them.
 ; -----------------------------------------------------------------------------
 desk_paint_x:
@@ -1089,7 +1101,7 @@ desk_paint_x:
 desk_paint_mask_x:
     push ax
 %ifdef KERN_BIG
-    mov ax, desk_zone_clip
+    mov ax, desk_zone_whole     ; what desk_zones_r left in the mask
 %endif
 desk_pm_body:
     push bx
@@ -1117,57 +1129,26 @@ desk_pm_body:
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
-; desk_zone_clip - draw a touched zone ONLY where this damage pass reveals it
-;                  (SPEC.md 11.91.6)
-; in:  AL = a zone desk_dmg_zones marked (so a SHOWN one); [wm_dmg_*] set;
-;      the gfx lock held
+; desk_zone_whole - a touched zone wm_dmg_gray could not draw into its region
+;                   (desk_zones_r: Color's ground, or an overflow), drawn WHOLE
+;                   and its box grown so every window over it is owed a repaint
+;                   (11.91's per-window test) - the old answer, kept for those
+; in:  AL = a zone desk_dmg_zones marked; the gfx lock held
 ; out: nothing (all registers preserved)
-;
-; The region is wm_zone_r's: zone AND damage minus every window's frame. Each
-; fragment is drawn ALONE - copied into slot 0 with the count at 1 - because
-; font_char and ico_clip are exact against ONE fragment and under-draw against
-; several (11.3.2, 11.3.4). The fragments are disjoint, so no pixel is drawn
-; twice, and copying over slot 0 loses nothing: it was drawn first. Nothing
-; in desk_draw_zone writes wm_clip_tab.
-;
-; Overflow is the old answer: the zone whole, its box grown so every window
-; over it is owed a repaint (11.91's per-window test).
 ; -----------------------------------------------------------------------------
-desk_zone_clip:
-    call kentc_di
-    push ax
-    call desk_zone_rect
-    call KERNEL_SEG:cw_wm_zone_r
-    pop ax
-    jc .whole
-    jz .out                     ; nothing of it revealed
-    xchg ax, dx                 ; DL = the zone
-    mov cx, [wm_clip_n]
-    mov si, wm_clip_tab
-    push es
-    push ds
-    pop es
-.frag:
-    mov di, wm_clip_tab         ; fragment k into slot 0...
-    movsw
-    movsw
-    movsw
-    movsw
-    mov word [wm_clip_n], 1     ; ...and only it armed
-    mov al, dl
-    call desk_draw_zone
-    loop .frag
-    pop es
-    call KERNEL_SEG:cw_wm_clip_clear
-    jmp short .out
-.whole:
+desk_zone_whole:
+    push bx
+    push cx
+    push dx
     push ax
     call desk_zone_rect
     call KERNEL_SEG:cw_wm_dmg_zadd
     pop ax
     call desk_draw_zone
-.out:
-    jmp kretc_di
+    pop dx
+    pop cx
+    pop bx
+    ret
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -1310,10 +1291,12 @@ desk_hit:
 ; clobbers: AH, BX, flags
 ;
 ; The click's birth tick (EV_C) is stamped on every call, so a slow second
-; click restarts the window. The store is INSIDE the lock hold, because
-; desk_zone_redraw's partial case FLIPS the highlight rather than redrawing
-; it (SPEC.md 26.2). On kern_big it also keeps Locator's File > Remove
-; Shortcut current - live while a shortcut is the selection, greyed otherwise
+; click restarts the window. On kern_small the store is INSIDE the lock hold,
+; because desk_zone_redraw's partial case FLIPS the highlight rather than
+; redrawing it (SPEC.md 26.2); kern_big repaints the two CELLS, there and
+; then, by the path a mount takes (desk_zones_paint) - drawn once and only
+; where they show, so a flip has nothing left to save (SPEC.md 26.9.9). It
+; also keeps Locator's File > Remove Shortcut current - live while a shortcut is the selection, greyed otherwise
 ; - so the menu and the right-click's popup, which IS that item, cannot
 ; disagree. Its greyed twin is ONE byte before it, so live is a carry added.
 ; -----------------------------------------------------------------------------
@@ -1342,6 +1325,9 @@ desk_select:
     call .one                   ; the old one loses it...
     xchg al, ah
     call .one                   ; ...and the new one gains it
+%ifdef OS88_SHORTCUTS
+    call COLD_SEG:desk_zones_paint_x
+%endif
     call ct_cw_gfx_unlock
     clc
 .r:
@@ -1349,7 +1335,17 @@ desk_select:
 .one:
     cmp al, 0xFF
     je .r
+%ifdef OS88_SHORTCUTS
+    push ax
+    call desk_zs                ; its cell, posted...
+    jc .o
+    call desk_cmark
+.o:
+    pop ax
+    ret
+%else
     jmp desk_zone_redraw
+%endif
 
 ; -----------------------------------------------------------------------------
 ; desk_unsel_x - the FOCUS left the desktop: nothing on it stays selected
@@ -1367,15 +1363,22 @@ desk_unsel_x:
     push ax
     mov al, 0xFF
     xchg al, [desk_sel]
-    cmp al, 0xFF
-    je .o                       ; nothing was selected
 %ifdef OS88_SHORTCUTS
     mov word [menu_items_file+2], sc_s_remx ; ...so Remove Shortcut greys,
-%endif                          ; desk_select's other half
+                                ; desk_select's other half - and harmlessly
+                                ; again when nothing was selected, which
+                                ; already left it there
+    call desk_select.one        ; 0xFF = nothing was selected; else its cell
+                                ; (if shown) owes a repaint - .one's body, a
+                                ; copy of which stood here (kernel size pass 9)
+%else
+    cmp al, 0xFF
+    je .o                       ; nothing was selected
     call desk_zs                ; AL = its cell; CF = 1 not shown
     jc .o
     call desk_cmark
 .o:
+%endif
     pop ax
     popf
     retf
@@ -1390,10 +1393,13 @@ desk_open:
     call desk_select
     pop ax
 %ifdef OS88_SHORTCUTS
-    cmp al, DESK_SC0
-    jae sc_open                 ; a shortcut opens BY NAME (SPEC.md 26.8.5)
-%endif
-%ifndef KERN_SMALL
+    cmp al, DESK_SVZ
+    je .svc
+    jb .vol                     ; ...the shortcuts last, so neither branch to
+    jmp sc_open                 ; a far label is a 5-byte inverted pair - the
+.vol:                           ; `jae sc_open` this was is (kernel size pass
+                                ; 9). A shortcut opens BY NAME (SPEC.md 26.8.5)
+%elifndef KERN_SMALL
     cmp al, DESK_SVZ
     je .svc
 %endif
@@ -1404,6 +1410,7 @@ desk_open:
     ret                             ; (SPEC.md 28.3.2)
 %endif
 
+%ifndef OS88_SHORTCUTS
 ; -----------------------------------------------------------------------------
 ; desk_zone_redraw - flip one zone's SELECTION outside wm_paint_all
 ; in:  AL = zone index, whose selection state has just changed; caller holds
@@ -1465,36 +1472,19 @@ desk_zone_redraw:
 ; (SPEC.md 26.8.2), and the picture column is where every kind's picture is.
 ; -----------------------------------------------------------------------------
 desk_zone_hilite:
-%ifdef OS88_SHORTCUTS
-    push ax                     ; THE PICTURE COLUMN, the picture box and the
-    call desk_zone_xy           ; gap under it - which holds a drive's picture,
-    add ax, DESK_PICX           ; the Wire's, and a shortcut's with its badge
-    mov bx, dx                  ; (both sit in it, desk_draw_zone) - then the
-    mov cx, ax                  ; CAPTION, which may be wider than the column
-    add cx, DESK_ZW - 1         ; and is the other half of what a selected
-    add dx, [desk_zh1]          ; item looks like. The column stops where the
-    sub dx, DESK_LBLH           ; label band starts, so the two never overlap
-    call ct_cw_gfx_xor_fill     ; and no pixel is flipped twice
-    pop ax
-    push si
-    push es
-    call desk_caprect
-    pop es
-    pop si
-%else
     call desk_zone_xy           ; kern_small: the drive's column, top to bottom
     mov bx, dx                  ; - picture, gap and label band - which is
     mov cx, ax                  ; what a drive always inverted. A cell there IS
     add cx, DESK_ZW - 1         ; the column, so this is the whole zone
     add dx, [desk_zh1]
-%endif
     jmp ct_cw_gfx_xor_fill      ; the NEAR trampoline, so a tail jump is safe
+%endif
 
 ; -----------------------------------------------------------------------------
 ; desk_draw_zone - repaint one zone from scratch: the desktop ground (its
 ;                  dither is pixel-parity, so it meets the surroundings), the
 ;                  picture, the caption, and the highlight when selected.
-; ins:  AL = zone index; caller holds the gfx lock
+; ins:  AL = zone index; caller holds the gfx lock; a region may be armed
 ; outs: none (all registers preserved; [gfx_color] restored)
 ;
 ; THREE PICTURE SOURCES and one of everything else (SPEC.md 26.9):
@@ -1502,6 +1492,497 @@ desk_zone_hilite:
 ;   DRIVER  the service item: the driver paints it (26.7)
 ;   CACHE   a shortcut: its stored 16x16 body, and the badge beside it (26.8.3)
 ; -----------------------------------------------------------------------------
+%ifdef OS88_SHORTCUTS
+; EVERY PIXEL ONCE (SPEC.md 26.9.9): the ground goes ROUND the picture column
+; and the caption, never under them, and each of those two is composed in RAM
+; and put down by ONE gfx_blit1 - which is exact against any region armed,
+; however many fragments it has and wherever their edges fall (5.4.2.7,
+; 5.4.2.8). So a cell drawn into wm_dmg_gray's region (desk_zones_r) is drawn
+; only where it shows, in one call per piece and with no pass of its own per
+; fragment.
+desk_draw_zone:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov ah, [gfx_color]         ; read ABOVE cw_thm_desk, which writes it
+    push ax
+    push word [gfx_b1ink]       ; THE PEN, banked and put to rest: desk_col and
+    mov word [gfx_b1ink], CBLACK*256 + CWHITE   ; desk_cap emit with
+                                ; gfx_blit1, and the pen lives as long as the
+                                ; LOCK HOLD (SPEC.md 5.4.2.2) - a package's
+                                ; callback that set one and then repainted,
+                                ; or a drag's hold after a package's paint,
+                                ; drew every cell in that package's colours
+    mov [desk_zdrv], al
+    call desk_zone_xy
+    jc .done                    ; not shown: nothing to draw
+    mov [desk_zx], ax
+    mov [desk_zy], dx
+    call desk_colr              ; the ground beside the picture column...
+    call desk_g2
+    mov al, [desk_zdrv]
+    call desk_caprect           ; ...and beside the caption
+    call desk_g2
+    call desk_col
+    call desk_cap
+.done:
+    pop word [gfx_b1ink]
+    pop ax
+    mov [gfx_color], ah
+    pop es
+    pop bp
+    jmp kretc_di
+
+; desk_colr - zone [desk_zdrv]'s PICTURE COLUMN: AX..CX its 32 columns, on the
+; byte grid (DESKPIC), BX..DX the picture box and the gap under it - every row
+; above the caption's band
+desk_colr:
+    mov ax, [desk_zx]
+    DESKPIC ax, al
+    mov cx, ax
+    add cx, DESK_ZW - 1
+    mov bx, [desk_zy]
+    mov dx, bx
+    add dx, [desk_zh1]
+    sub dx, DESK_LBLH
+    ret
+
+; desk_g2 - the ground in rows BX..DX of the cell, either side of AX..CX
+desk_g2:
+    push cx
+    mov cx, ax
+    dec cx
+    mov ax, [desk_zx]
+    sub ax, DESK_ZOVER
+    call desk_gfill
+    pop ax
+    inc ax
+    mov cx, [desk_zx]
+    add cx, DESK_CW + DESK_ZOVER - 1
+desk_gfill:                     ; ...and AX,BX..CX,DX alone, if not empty
+    cmp ax, cx
+    jg .no
+    call KERNEL_SEG:cw_thm_desk
+.no:
+    ret
+
+; desk_bpat - the ground as a band says it: BH an even row's byte, BL what an
+; odd row XORs it with (gfx_fill_gray's phase is the ABSOLUTE row's, and every
+; band here starts on the byte grid, so an even x). CF = 1: Color's teal, a
+; third colour a 1bpp band cannot say. Clobbers BX.
+desk_bpat:
+    mov bx, 0AAFFh              ; SPEC.md 26's dither...
+%ifdef OS88_THEME
+    cmp byte [thm_deskc], THM_DITHER
+    je .ok                      ; (equal: CF = 0)
+    xor bx, bx                  ; ...or Dark's black
+    cmp byte [thm_deskc], CBLACK
+    je .ok
+    stc
+.ok:
+%endif
+    ret
+
+; desk_col - the picture column: composed in ico_band - the ground, the
+; picture (every icon entry lands there while [ico_bnd] is set, the Wire
+; driver's OSAPI_ICON_DRAW included) and the selection, which is the band
+; inverted, exactly desk_zone_hilite's XOR - and put down by one blit. Color
+; draws it the way it always did. Clobbers AX..DI, BP, ES.
+desk_col:
+    call desk_colr
+    mov [ico_bx0], ax
+    mov [ico_by0], bx
+    sub dx, bx
+    inc dx
+    mov [ico_bh], dx
+    mov cx, dx
+    mov dx, bx
+    call desk_bpat
+    jc .scr
+    push ds
+    pop es
+    mov di, ico_band
+.row:
+    mov al, bh
+    test dl, 1
+    jz .ev
+    xor al, bl
+.ev:
+    mov ah, al
+    stosw                       ; ICO_BSTR = 4
+    stosw
+    inc dx
+    loop .row
+    inc byte [ico_bnd]
+    call desk_pic
+    dec byte [ico_bnd]
+    mov si, ico_band
+    mov dx, [ico_bh]
+    call desk_issel
+    jne .put
+    mov di, si
+    mov cx, dx
+.inv:
+    not word [di]
+    not word [di+2]
+    add di, ICO_BSTR
+    loop .inv
+.put:
+    push ds
+    pop es
+    mov bp, ICO_BSTR
+    mov ax, [ico_bx0]
+    mov bx, [ico_by0]
+    mov cx, ICO_BSTR * 8
+    jmp gfx_blit1_x
+.scr:
+    call desk_colr              ; Color: its ground, the picture over it...
+    call KERNEL_SEG:cw_thm_desk
+    call desk_pic
+    call desk_issel
+    jne desk_ret
+    call desk_colr              ; ...and its selection the way it always was
+    jmp ct_cw_gfx_xor_fill
+
+; desk_issel - ZF = 1 when the zone being drawn ([desk_zdrv]) is the selected
+; one; clobbers AL. The three sites were one compare written three times
+; (kernel size pass 9), and its `ret` is desk_col's as well
+desk_issel:
+    mov al, [desk_sel]
+    cmp al, [desk_zdrv]
+desk_ret:
+    ret
+%if ICO_BSTR != 4 || ICO_BSTR * 8 != DESK_ZW
+  %error "ico_band is the 32-wide column: desk_col lays a row as two stosw and inverts it as two words"
+%endif
+%if ICO_BROWS != 32 + DESK_ZGAP
+  %error "ico_band's rows are the tallest picture box plus DESK_ZGAP (icons.inc's ICO_BROWS)"
+%endif
+
+; desk_pic - the zone's picture at [desk_zx]/[desk_zy], into ico_band or onto
+; the glass as [ico_bnd] says. Clobbers AX, BX, CX, DX, SI, BP, ES.
+desk_pic:
+    mov cx, [desk_zx]
+    mov dx, [desk_zy]
+    DESKPIC cx, cl              ; the 32-wide picture, in the cell's middle
+    mov bl, [desk_zdrv]
+    cmp bl, DESK_SC0
+    jae .link
+    mov si, [desk_pico]         ; [diskette, 5.25", hard disk] at this height
+    cmp bl, DESK_SVZ
+    je .svcico
+    call dsk_vol_fixed_x        ; the MEDIUM, not the transport (SPEC.md 18.7.2)
+    jc .icon
+    or al, al
+    jz .flop
+    add si, byte 4
+    jmp short .icon
+.svcico:                        ; THE DRIVER DRAWS IT (SPEC.md 26.7): no glyph
+    push ds                     ; in here, so a machine with no network card
+    pop es                      ; carries none. drv_pkg_call refuses (CF = 1)
+    mov bh, [desk_svc_cls]      ; when no such driver is published, so one
+    mov bl, [desk_svc_vrb]      ; that went away draws nothing
+    call KERNEL_SEG:cw_drv_pkg_call
+    ret
+.link:                          ; THE CACHE: the stored picture, drawn
+    mov al, bl                  ; straight out of the claim - the record
+    call sc_row                 ; carries an icon header in front of its body
+    lea si, [bx+SC_R_HDR]       ; (SPEC.md 26.8.1), so the two ARE a record
+    push cx                     ; for icon_draw_x, which reads ES:SI
+    add cx, SC_PICX - DESK_PICX
+    add dx, [desk_lky]          ; bottom-aligned on a drive's picture box, so
+    mov bp, icon_draw_x         ; a row of mixed items lines up
+    call ct_cw_mem_disp
+    pop cx                      ; ...and the badge BESIDE it (SPEC.md 26.8.3),
+    add dx, 16 - 10             ; drawn from the column's own left: its rows
+    mov si, sc_bdg              ; are stored five pixels in, so it is on the
+    call KERNEL_SEG:cw_icon_draw ; byte grid like every other picture here
+    ret
+.flop:
+    call dsk_vol_slot_x         ; the KIND of diskette (SPEC.md 26.4.1):
+    mov al, [bx+DV_FLAGS]       ; DVF_525 is 2, the table's second word
+    and ax, DVF_525
+    add si, ax
+.icon:
+    mov si, [si]
+    call KERNEL_SEG:cw_icon_draw_ix
+    ret
+
+; -----------------------------------------------------------------------------
+; ico_band_x - icons.inc's ico_draw_common while a cell composes: the record
+;              into ico_band instead of onto the glass (SPEC.md 26.9.9)
+; in:  CX = x, DX = y (screen), SI -> the body (mask rows, then data rows),
+;      [ico_ww], [ico_h]; the band armed
+; out: nothing; clobbers AX..DI, BP and [ico_h] (ico_draw_common's entry saved
+;      every register, and every entry sets [ico_h] afresh)
+;
+; The screen pass's rule, in RAM: the mask lays white and the data black over
+; it. EVERY PICTURE HERE IS ON THE BYTE GRID - the column is (DESKPIC), a
+; volume's and the Wire's pictures are at its x and x + 16, a link's at + 16
+; and its badge at + 0 (desksc.inc) - so a word is two band bytes as it
+; stands, and an x off the grid is floored to it. A record any part of which
+; is outside the band's columns is dropped whole, and so is any row outside
+; its rows: nothing a cell draws is, and the test is what makes that a
+; property rather than a hope.
+; -----------------------------------------------------------------------------
+ico_band_x:
+    mov al, [ico_h]             ; <= 32
+    mul byte [ico_ww]
+    shl ax, 1
+    mov bp, ax                  ; BP = a data word's distance from its mask's
+    sub cx, [ico_bx0]
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1                   ; CX = its byte in the band (left of it: huge)
+    mov ax, [ico_ww]
+    shl ax, 1
+    add ax, cx
+    cmp ax, ICO_BSTR
+    ja .out
+    sub dx, [ico_by0]           ; DX = the record's top row in the band
+.row:
+    cmp dx, [ico_bh]            ; unsigned: above the band is huge
+    jae .next
+    mov di, dx
+    shl di, 1
+    shl di, 1                   ; ICO_BSTR = 4
+    add di, cx
+    add di, ico_band
+    push si
+    mov bh, [ico_ww]
+.w:
+    mov ax, [si]                ; the mask, set...
+    xchg al, ah
+    or [di], ax
+    mov ax, [ds:si+bp]          ; ...and the data over it, cleared
+    xchg al, ah
+    not ax
+    and [di], ax
+    inc si
+    inc si
+    inc di
+    inc di
+    dec bh
+    jnz .w
+    pop si
+.next:
+    mov ax, [ico_ww]
+    shl ax, 1
+    add si, ax
+    inc dx
+    dec word [ico_h]
+    jnz .row
+.out:
+    retf
+
+; -----------------------------------------------------------------------------
+; desk_cap - the caption's rect, composed in ico_ibuf - free here, the picture
+;            being on the glass - and put down by one blit at the rect's own x,
+;            whatever its byte phase (5.4.2.8). Its ground is the rect's colour,
+;            white or (selected) black, and each glyph row is XORed onto it:
+;            the glyphs are a pitch apart, so none meets another, and the ink is
+;            the ground's complement either way - which is exactly what
+;            desk_zone_hilite's XOR makes of it. Clobbers AX..DI, BP, ES.
+; -----------------------------------------------------------------------------
+desk_cap:
+    mov al, [desk_zdrv]
+    call desk_caprect           ; AX..DX the rect, ES:SI the caption
+    push ax
+    push bx
+    sub cx, ax
+    inc cx
+    push cx                     ; the rect's x, y and width, for the blit
+    and ax, 7
+    add ax, DESK_ZOVER
+    xchg ax, bp                 ; BP = the pen, in bits from the band's start
+    call desk_issel
+    mov al, 0FFh                ; white...
+    jne .g
+    inc ax                      ; ...or black, selected
+.g:
+    mov ah, al
+    push es
+    push ds
+    pop es
+    mov di, ico_ibuf
+    mov cx, DESK_TBSTR * DESK_LBLH / 2
+    rep stosw
+    pop es
+.ch:
+    es lodsb
+    or al, al
+    jz .put
+    sub al, FONT_FIRST
+    cmp al, FONT_LAST - FONT_FIRST
+    ja .nx                      ; outside the face: the ground
+    cbw
+    mov cl, 3
+    shl ax, cl
+    add ax, [font_base]         ; the face wherever it is (SPEC.md 6):
+    push si                     ; [font_seg]:[font_base] is glyph FONT_FIRST
+    push es
+    mov es, [font_seg]
+    xchg ax, si                 ; ES:SI -> the glyph's eight rows
+    mov di, bp
+    shr di, cl                  ; (CL is still 3)
+    add di, ico_ibuf + 2 * DESK_TBSTR   ; under the two-row margin
+    mov cx, bp
+    and cx, 7
+    mov ch, 8
+.gr:
+    mov ah, [es:si]             ; a row, bit 7 leftmost...
+    xor al, al
+    shr ax, cl                  ; ...at the pen's phase, across two bytes
+    xor [di], ah
+    xor [di+1], al
+    inc si
+    add di, DESK_TBSTR
+    dec ch
+    jnz .gr
+    pop es
+    pop si
+.nx:
+    add bp, 8
+    jmp short .ch
+.put:
+    push ds
+    pop es
+    pop cx
+    pop bx
+    pop ax
+    mov si, ico_ibuf
+    mov bp, DESK_TBSTR
+    mov dx, DESK_LBLH
+    jmp gfx_blit1_x
+DESK_TBSTR  equ 14              ; the widest rect, 100 px, off the byte grid.
+                                ; No caption is wider than twelve glyphs - a
+                                ; link's SC_CAPMAX, a label's eleven - so the
+                                ; last glyph's second byte is the band's 14th
+%if DESK_TBSTR * DESK_LBLH > ICO_IBUF_SZ
+  %error "desk_cap composes its caption in ico_ibuf"
+%endif
+
+; -----------------------------------------------------------------------------
+; desk_zones_r - draw every zone [desk_dmgm] marks INTO wm_dmg_gray's region
+; (SPEC.md 11.91.6), taking each one's rect out of it as it goes, so the
+; dither then lays the ground round them and never under. The region is the
+; damage minus every window's frame and drop-shadow L, so a cell is drawn
+; exactly where it shows and marks no window; one nothing of which is revealed
+; is not drawn at all. Far, from wm_dmg_gray.
+; out: CF = 0 and the mask emptied but for a zone that would not fit (below) -
+;      or, under Color, whose teal a band cannot say, the mask left whole and
+;      the region untouched, for desk_paint_mask to draw each zone whole over
+;      the dither as it always did. CF = 1 the region overflowed.
+;
+; A zone whose subtraction would OVERFLOW the region is counted first and not
+; drawn: it stays in the mask, for desk_paint_mask to draw whole over the
+; dither the way Color's are, and the region stays intact for the rest. An
+; overflow here took wm_dmg_gray's `.whole` - every cell already drawn dithered
+; over and drawn again, and every window in the damage repainted on top of the
+; dither - and a cell column of five did it on an ordinary drag.
+; -----------------------------------------------------------------------------
+desk_zones_r_x:
+    call kentc_bp
+    call desk_bpat
+    cmc
+    jnc .out                    ; Color: CF = 0, nothing done here
+    mov si, [desk_dmgm]
+    mov di, [desk_dmgm+2]       ; DI:SI = the mask, zone 0 at bit 31
+    xor ax, ax                  ; AL = the zone
+.z:
+    shl si, 1
+    rcl di, 1
+    jnc .n
+    cmp word [wm_clip_n], 0
+    je .n                       ; nothing left uncovered: it shows nowhere
+    push ax
+    call desk_zone_rect
+    mov [wm_cl_ox1], ax         ; (wm_clip_subr's, below: nothing a cell
+    mov [wm_cl_oy1], bx         ; draws builds a region)
+    mov [wm_cl_ox2], cx
+    mov [wm_cl_oy2], dx
+    xchg ax, cx                 ; containment with the corners exchanged IS
+    xchg bx, dx                 ; overlap (wm_clip_test's own idiom): is any
+    mov bp, wm_clip_walk        ; of it revealed?
+    call ct_cw_mem_disp
+    pop ax
+    jc .n                       ; no: drawn nowhere, and it takes nothing out
+    push ax
+    mov bx, wm_clip_tab         ; ...and would taking it out FIT? wm_clip_split
+    mov cx, [wm_clip_n]         ; puts a piece for each side a fragment reaches
+    mov dx, cx                  ; past it where the fragment was: DX = the most
+.f:                             ; the region can grow to, counted the same way
+    mov ax, [bx+WCR_X2]
+    cmp ax, [wm_cl_ox1]
+    jl .fk
+    mov ax, [bx+WCR_X1]
+    cmp ax, [wm_cl_ox2]
+    jg .fk
+    mov ax, [bx+WCR_Y2]
+    cmp ax, [wm_cl_oy1]
+    jl .fk
+    mov ax, [bx+WCR_Y1]
+    cmp ax, [wm_cl_oy2]
+    jg .fk
+    mov bp, -1                  ; overlapped: dropped (AX = its y1)...
+    cmp ax, [wm_cl_oy1]
+    jge .f1
+    inc bp                      ; ...a piece above,
+.f1:
+    mov ax, [bx+WCR_Y2]
+    cmp ax, [wm_cl_oy2]
+    jle .f2
+    inc bp                      ; below,
+.f2:
+    mov ax, [bx+WCR_X1]
+    cmp ax, [wm_cl_ox1]
+    jge .f3
+    inc bp                      ; left
+.f3:
+    mov ax, [bx+WCR_X2]
+    cmp ax, [wm_cl_ox2]
+    jle .f4
+    inc bp                      ; and right
+.f4:
+    or bp, bp
+    js .fk                      ; none: it shrinks, but maybe not before the
+    add dx, bp                  ; others grow it - a bound counts only growth
+.fk:
+    add bx, WCR_SZ
+    loop .f
+    pop ax
+    cmp dx, WM_CLIP_MAX + 1
+    cmc
+    jc .k                       ; it would not: still owed, and drawn whole
+    call desk_draw_zone
+    mov bp, wm_clip_subr
+    call ct_cw_mem_disp
+    jc .out                     ; overflowed
+.n:
+    clc                         ; drawn, or shown nowhere: owed no more
+.k:                             ; (CF = 1 from `jc .k`: still owed)
+    rcl word [desk_dmgm], 1     ; the mask is REBUILT from the bits each zone
+    rcl word [desk_dmgm+2], 1   ; leaves, zone 0 rotated in first
+    inc ax
+    cmp al, DESK_NZ
+    jb .z
+%if DESK_NZ < 32
+    mov cx, 32 - DESK_NZ        ; ...and moved up to bit 31, where
+.up:                            ; desk_paint_mask reads it from
+    shl word [desk_dmgm], 1
+    rcl word [desk_dmgm+2], 1
+    loop .up
+%endif
+    clc
+.out:
+    jmp kretfc_bp
+
+%else
 desk_draw_zone:
     push ax
     push bx
@@ -1522,49 +2003,13 @@ desk_draw_zone:
     mov cx, [desk_zx]
     mov dx, [desk_zy]
     mov bl, [desk_zdrv]
-%ifdef OS88_SHORTCUTS
-    cmp bl, DESK_SC0
-    jae .link
-%endif
-%if DESK_PICX
-    add cx, DESK_PICX           ; the 32-wide picture, centred in the cell
-%endif
     mov si, [desk_pico]         ; [diskette, 5.25", hard disk] at this height
-%ifndef KERN_SMALL
-    cmp bl, DESK_SVZ
-    je .svcico
-%endif
     call dsk_vol_fixed_x        ; the MEDIUM, not the transport (SPEC.md 18.7.2)
     jc .icon
     or al, al
     jz .flop
     add si, byte 4
     jmp short .icon
-%ifndef KERN_SMALL
-.svcico:                        ; THE DRIVER DRAWS IT (SPEC.md 26.7): no glyph
-    push ds                     ; in here, so a machine with no network card
-    pop es                      ; carries none. drv_pkg_call refuses (CF = 1)
-    mov bh, [desk_svc_cls]      ; when no such driver is published, so one
-    mov bl, [desk_svc_vrb]      ; that went away draws nothing
-    call KERNEL_SEG:cw_drv_pkg_call
-    jmp short .label
-%endif
-%ifdef OS88_SHORTCUTS
-.link:                          ; THE CACHE: the stored picture, drawn
-    mov al, bl                  ; straight out of the claim - the record
-    call sc_row                 ; carries an icon header in front of its body
-    lea si, [bx+SC_R_HDR]       ; (SPEC.md 26.8.1), so the two ARE a record
-    mov cx, [desk_zx]           ; for icon_draw_x, which reads ES:SI
-    add cx, SC_PICX
-    add dx, [desk_lky]          ; bottom-aligned on a drive's picture box, so
-    mov bp, icon_draw_x         ; a row of mixed items lines up
-    call ct_cw_mem_disp
-    sub cx, 11                  ; ...and the badge BESIDE it (SPEC.md 26.8.3)
-    add dx, 16 - 10
-    mov si, sc_bdg
-    call KERNEL_SEG:cw_icon_draw
-    jmp short .label
-%endif
 .flop:
     call dsk_vol_slot_x         ; the KIND of diskette (SPEC.md 26.4.1):
     mov al, [bx+DV_FLAGS]       ; DVF_525 is 2, the table's second word
@@ -1573,11 +2018,10 @@ desk_draw_zone:
 .icon:
     mov si, [si]
     call KERNEL_SEG:cw_icon_draw_ix
-.label:
     mov al, [desk_zdrv]         ; --- the caption, in a white rect that hugs
     call desk_caprect           ; it (SPEC.md 26.4), drawn as one opaque run
-    mov byte [gfx_color], CWHITE    ; (26.6) - out of ES:SI, which for a
-    call ct_cw_gfx_fill         ; shortcut is its claim row
+    mov byte [gfx_color], CWHITE    ; (26.6)
+    call ct_cw_gfx_fill
     mov cx, ax
     add cx, DESK_ZOVER
     lea dx, [bx+2]
@@ -1594,6 +2038,7 @@ desk_draw_zone:
     pop es
     pop bp
     jmp kretc_si
+%endif
 
 ; -----------------------------------------------------------------------------
 ; desk_learn_x - a floppy just mounted: settle its drive's KIND off the medium,
@@ -1820,7 +2265,8 @@ desk_ready   resb 1             ; 0 until kmain has everything in: no reflow
 desk_ncell   resb 1             ; cells on this screen, <= DSL_SLOT
 %endif
 desk_zdirty  resb 1             ; 1 = [desk_cdirty] holds cells that owe a
-                                ; repaint (SPEC.md 26.9), posted
+                                ; repaint (SPEC.md 26.9), posted - 0 or 1
+                                ; ONLY: ui_task tests it with `shr`
 desk_cdirty  resb (DSL_SLOT + 1) / 8    ; ...one bit a cell
 desk_zslot   resb DESK_NZ       ; THE TABLE: one byte a zone (SPEC.md 26.9).
                                 ; desk_init fills it with 0xFF, "nothing"

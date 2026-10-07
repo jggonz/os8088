@@ -202,11 +202,13 @@ inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
 %endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
     dw fm_tpl,         0,               fm_pool,       FS_SIZE,  fm_kinit,     fm_ttl
     dw inst_ico_disk
-    db VIEW_SLOTS, WF_SIZABLE   ; Disk: FOUR windows, each with its own
-                                ; FS_SIZE-byte state block and its own claimed
-                                ; listing cache; resizable (SPEC.md 22/22.1).
-                                ; The cap, VIEW_SLOTS and fm_pool's size are
-                                ; one number wearing three hats.
+    db VIEW_SLOTS+1, WF_SIZABLE ; Disk: FOUR of the user's windows, each with
+                                ; its own FS_SIZE-byte state block and its own
+                                ; claimed listing cache; resizable (SPEC.md
+                                ; 22/22.1) - PLUS ONE, the Standard File
+                                ; chooser's (SPEC.md 38.1), which fm_count
+                                ; does not count. The cap and fm_pool's size
+                                ; are one number (files.inc's FM_NSLOT)
     dw cp_tpl,         0,               0,             0,   cp_kinit,         cp_sname
     dw inst_ico_ctrl
     db 1, 0                     ; Control Panel: stateless task-less singleton
@@ -406,13 +408,11 @@ section .text
 inst_next:
     add di, I_RECSZ
     cmp di, inst_tab + INST_MAX * I_RECSZ
-    jae .end
-    cmp byte [di+I_STATE], 0
+    cmc                         ; CF = 1 once DI is past the last record
+    jc .end
+    cmp byte [di+I_STATE], 0    ; CF = 0: no unsigned byte is below 0
     je inst_next                ; a free row: keep going, no body runs
-    clc
-    ret
 .end:
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -443,8 +443,7 @@ inst_of_seg:
     test byte [di+I_KIND], KIND_PKG
     jz .scan
     cmp [di+I_SPTR], bx
-    jne .scan
-    clc
+    jne .scan                   ; ...and equal is CF = 0, the answer
 .out:
     ret
 %endif
@@ -481,7 +480,7 @@ inst_of_seg:
 ;
 ; PER TASK and not per instance (SPEC.md 66.5.5): a driver's worker has
 ; T_INST = 0xFF and no record to be parked in at all. The two callers differ
-; only in the guard they ask BEFORE this - inst_park_wait validates DI as a
+; only in the guard they ask BEFORE this - inst_pkg_alive validates DI as a
 ; record, inst_task_park tests [inst_parkreq] - and each keeps its own.
 ; -----------------------------------------------------------------------------
 inst_park_hold:
@@ -497,30 +496,9 @@ inst_park_hold:
     mov byte [bx+sch_parked], 0
     ret
 
-; -----------------------------------------------------------------------------
-inst_park_wait:
-    pushf
-    push ax
-    push bx                     ; and NOT DI: this body only READS it, and
-                                ; neither callee writes it - inst_idx takes it
-                                ; as its input, inst_park_hold touches BX
-                                ; alone, and task_yield restores the whole
-                                ; frame through iret
-    call inst_idx               ; AX = the index. inst_idx BANKS CX, which is
-    cmp ax, INST_MAX            ; the whole reason the seven-instruction copy
-    jae .out                    ; that used to be here existed: the first cut
-                                ; wrote CL and then pushed, so the pop restored
-                                ; a 5, and OSAPI_TASK_ALIVE - which promises
-                                ; every register back - handed a worker CL = 5
-                                ; on exactly the pass a compaction was pending.
-                                ; Not a record at all: park nothing
-    call inst_park_hold
-.out:
-    pop bx
-    pop ax
-    popf
-    ret
-
+; (inst_park_wait, inst_park_hold's other caller, is INLINE in inst_pkg_alive
+; since size pass 9 - that was its one caller, and that routine already banks
+; the flags. Its notes are there.)
 ; -----------------------------------------------------------------------------
 ; inst_park_lk / inst_park_unlk - park while BLOCKED ON THE GFX LOCK (66.5.4)
 ; in:  nothing (the running task's own instance)
@@ -545,7 +523,7 @@ inst_park_wait:
 ; so it is set exactly across the window in which this task is descheduled
 ; inside gfx_lock. The few instructions either side are inside gfx_lock's own
 ; retry loop, which is the state being asserted about. A compactor sampling
-; the mark in that gap simply waits another tick - inst_park_all is a poll -
+; the mark in that gap simply waits another tick - inst_park_req's walk is a poll -
 ; and one sampling it late refuses the move, which is the safe direction.
 ; -----------------------------------------------------------------------------
 ; The two differ by one immediate, so they are two doors into one body. The
@@ -564,26 +542,15 @@ inst_park_unlk:
     mov al, 0
 inst_park_mk:
     push bx
-    call inst_park_me           ; BX = our parked byte, or CF = 1 for none
-    jc .out
-    mov [bx], al
-.out:
-    pop bx
-    pop ax
-    popf
-    ret
-
-; inst_park_me - BX = the running task's sch_parked byte; CF = 1 when it has
-; none (the UI task, or a task with no record) or has not declared itself
-; park-safe. Clobbers BX and the flags and nothing else.
-inst_park_me:
-    push ax                     ; NO push cx: sch_currec clobbers BX only, and
-                                ; CX was banked here for nothing but the
-                                ; `mov cl, 3` that has gone with it
+    push ax                     ; AL = the value to mark; the test below
+                                ; spends AX. (The test was inst_park_me, a
+                                ; routine with this one caller - inline since
+                                ; size pass 9.) NO push cx: sch_currec
+                                ; clobbers BX only
     call sch_currec             ; BX = the running task's record offset
     mov al, [bx+sch_tasks+T_INST]
     cmp al, INST_MAX
-    jae .no
+    jae .no                     ; the UI task, or a task with no record
     mov bl, al
     xor bh, bh
     cmp byte [bx+inst_parksafe], 0
@@ -591,13 +558,14 @@ inst_park_me:
                                 ; else (SPEC.md 66.5.4)
     mov bl, [sch_cur]           ; ...and the MARK is the running task's
     xor bh, bh
-    add bx, sch_parked
     pop ax
-    clc
-    ret
+    mov [bx+sch_parked], al
+    push ax                     ; (for the pop the refusals share)
 .no:
     pop ax
-    stc
+    pop bx
+    pop ax
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -684,16 +652,26 @@ inst_park_req:                  ; FAR-ENTERED (SPEC.md 2.6.1): no near caller
     pushf
     push ax
     push dx                     ; and NOT CX: this body never writes it, and
-                                ; both callees bank it - inst_park_all by
-                                ; hand, task_yield through the whole frame
+    push di                     ; task_yield banks it through the whole frame
     mov byte [inst_parkreq], 1
     mov ax, [ticks]
     add ax, INST_PARKW
     mov dx, ax                  ; DX = the deadline
 .wait:
-    call inst_park_all          ; CF = 0: everybody who has a worker has parked
-    jnc .out
-    mov ax, [ticks]
+    ; HAS EVERY LIVE PACKAGE WORKER PARKED? (this walk was inst_park_all, a
+    ; routine with this one caller - inline since size pass 9). Off the end
+    ; of the table is yes, or there were none.
+    mov di, inst_tab - I_RECSZ
+.scan:
+    call inst_next
+    jc .out                     ; everybody who has a worker has parked
+    test byte [di+I_KIND], KIND_PKG
+    jz .scan
+    cmp byte [di+I_TASK], 0xFF
+    je .scan                    ; no worker: nothing to wait for
+    call inst_wk_parked
+    jne .scan
+    mov ax, [ticks]             ; ...somebody is still running
     sub ax, dx
     jns .out                    ; SPEC.md 45.15's rule: two free-running
                                 ; counters compare by the SIGN of the
@@ -701,49 +679,25 @@ inst_park_req:                  ; FAR-ENTERED (SPEC.md 2.6.1): no near caller
     call task_yield
     jmp short .wait
 .out:
+    pop di
     pop dx
     pop ax
     popf
     retf
 %endif
 
-; inst_park_end - withdraw the request; every parked worker resumes
-inst_park_end:
-    mov byte [inst_parkreq], 0
-    retf
+; (inst_park_end - withdraw the request - is one store, and its one caller,
+; mem_compact's .end, makes it itself since size pass 9.)
 
-; -----------------------------------------------------------------------------
-; inst_park_all - has every live package worker parked? (module internal)
-; out: CF = 0 yes (or there are none), CF = 1 somebody is still running
-; clobbers: flags
-;
-; It keeps that promise by NOT WRITING AX AT ALL, rather than by banking it:
-; the scan used to carry a `xor ax,ax` / `inc al` slot index nothing ever
-; read (the bound is CX and `loop`), and the push/pop pair existed only for
-; that. Anything added here that touches AX has to bring the pair back.
-; -----------------------------------------------------------------------------
-inst_park_all:
-    push di
-    mov di, inst_tab - I_RECSZ
-.scan:
-    call inst_next
-    jnc .row
-    clc                         ; off the end: every one of them is parked
-    jmp short .out
-.row:
-    test byte [di+I_KIND], KIND_PKG
-    jz .scan
-    cmp byte [di+I_TASK], 0xFF
-    je .scan                    ; no worker: nothing to wait for
+; inst_wk_parked - ZF = 0 when record DI's worker (its I_TASK, which the caller
+; has seen is not 0xFF) has parked; preserves every register. One copy of the
+; sch_parked lookup inst_park_req's walk and inst_seg_parked both make.
+inst_wk_parked:
     push bx
     mov bl, [di+I_TASK]         ; the worker's OWN task slot
     xor bh, bh
     cmp byte [bx+sch_parked], 0
     pop bx
-    jne .scan
-    stc
-.out:
-    pop di
     ret
 
 ; -----------------------------------------------------------------------------
@@ -756,10 +710,10 @@ inst_park_all:
 ; module's (SPEC.md 29). A segment that matches no instance answers CF = 1:
 ; a driver's image matches none, and "I cannot tell" has to mean "it is busy".
 ;
-; Like inst_park_all above, it keeps "clobbers: flags" by writing no AX
-; outside the [mem_cp_pl] arm, which banks its own - and its one callee on the
-; exhaust path, inst_svc_parked, writes none either, which is why that one no
-; longer banks it.
+; Like inst_park_req's walk above, it keeps "clobbers: flags" by writing no AX
+; outside the [mem_cp_pl] arm, which banks its own - and its exhaust path,
+; inst_svc_parked's walk (inline in .drv since size pass 9), writes none
+; either: it banks the BX and SI it walks with.
 ; -----------------------------------------------------------------------------
 inst_seg_parked:
     push di
@@ -767,11 +721,7 @@ inst_seg_parked:
     jc .drv
     cmp byte [di+I_TASK], 0xFF
     je .free                    ; no worker at all
-    push bx
-    mov bl, [di+I_TASK]
-    xor bh, bh
-    cmp byte [bx+sch_parked], 0
-    pop bx
+    call inst_wk_parked
     jne .free                   ; parked: it is standing at the top of its own
                                 ; loop and holds nothing derived
     cmp byte [mem_cp_pl], 0     ; ...OR mem_avail IS PLANNING (SPEC.md 66.4.3.5):
@@ -794,28 +744,49 @@ inst_seg_parked:
     sub ax, INST_PARKW          ; SPEC.md 45.15: by the SIGN of the difference
     js .plok                    ; due before the park's deadline (or stale)
     cmp byte [bx+sch_tasks+T_STATE], 2
-    jne .plok                   ; not asleep: it reaches ALIVE inside the park
-    pop bx                      ; ASLEEP PAST INST_PARKW (ArtfulType's caret
-    pop ax                      ; worker sleeps 9): inst_park_req wakes nobody,
-    jmp short .busy             ; so the claim will find it where it is now
-.plok:
-    pop bx
+    je .plbusy                  ; ASLEEP PAST INST_PARKW (ArtfulType's caret
+                                ; worker sleeps 9): inst_park_req wakes nobody,
+                                ; so the claim will find it where it is now
+.plok:                          ; ...not asleep: it reaches ALIVE in the park
+    CLC_OR_STC .plbusy          ; CF = 0 free, or (.plbusy) CF = 1 busy
+    pop bx                      ; (pops write no flag)
     pop ax
-    jmp short .free
-.drv:
-    call inst_svc_parked        ; no instance owns it, so it is a DRIVER image
-    jnc .free                   ; (SPEC.md 51.3) - and a driver's workers are
-                                ; the TF_SERVICE tasks (SPEC.md 66.5.5)
-.busy:
-    pop di
-    stc
-    retf
+    jmp short .cf
 .free:
+    CLC_OR_STC .busy            ; CF = 0 free, or (.busy) CF = 1
+    jmp short .cf
+.drv:
+    ; NO INSTANCE OWNS IT, so it is a DRIVER image (SPEC.md 51.3) - and a
+    ; driver's workers are the TF_SERVICE tasks (SPEC.md 66.5.5). Has every
+    ; one of them parked? (This was inst_svc_parked, whose header is below; it
+    ; had this one caller and is inline since size pass 9, walking the record
+    ; and the sch_parked byte side by side instead of re-deriving one from a
+    ; slot count.)
+    push bx
+    push si
+    mov bx, sch_tasks
+    mov si, sch_parked
+.svc:
+    cmp byte [bx+T_STATE], 0
+    je .svcnext                 ; a free slot
+    test byte [bx+T_FLAGS], TF_SERVICE
+    jz .svcnext
+    cmp byte [si], 0
+    je .svcbusy                 ; a driver worker still running
+.svcnext:
+    inc si
+    add bx, T_SIZE
+    cmp bx, sch_tasks + MAX_TASKS * T_SIZE
+    jb .svc
+    CLC_OR_STC .svcbusy         ; CF = 0 all parked, or (.svcbusy) CF = 1
+    pop si
+    pop bx
+.cf:
     pop di
-    clc
     retf
 ; -----------------------------------------------------------------------------
-; inst_svc_parked - has every DRIVER worker parked? (SPEC.md 66.5.5)
+; inst_svc_parked - has every DRIVER worker parked? (SPEC.md 66.5.5) - INLINE,
+; in inst_seg_parked's .drv arm above (size pass 9)
 ; out: CF = 0 yes (or there are none), CF = 1 somebody is still running
 ; clobbers: flags
 ;
@@ -826,35 +797,6 @@ inst_seg_parked:
 ; running. Conservative, and the conservative direction is a claim that stays
 ; where it is.
 ; -----------------------------------------------------------------------------
-inst_svc_parked:
-    push bx                     ; and NOT AX: the body writes no AX at all,
-    push cx                     ; which is what keeps "clobbers: flags"
-    mov bx, sch_tasks
-    xor cx, cx                  ; CL = the slot
-.scan:
-    cmp byte [bx+T_STATE], 0
-    je .next                    ; a free slot
-    test byte [bx+T_FLAGS], TF_SERVICE
-    jz .next
-    push bx
-    mov bl, cl
-    xor bh, bh
-    cmp byte [bx+sch_parked], 0
-    pop bx
-    je .busy
-.next:
-    inc cl
-    add bx, T_SIZE
-    cmp cl, MAX_TASKS
-    jb .scan
-    pop cx
-    pop bx
-    ret
-.busy:
-    pop cx
-    pop bx
-    stc
-    ret
 
 ; -----------------------------------------------------------------------------
 ; inst_task_park - API slot 0x0318: a DRIVER's worker parks here (SPEC.md
@@ -997,12 +939,8 @@ inst_of_win:
     mov al, [wm_owner+si]       ; owning instance index, 0xFF = none
     cmp al, 0xFF
     je .none
-    call inst_ptr               ; DI = record
-    clc
-    jmp .out
-.none:
-    stc
-.out:
+    call inst_ptr               ; DI = record (and CF = 0 off its `add`)
+    CLC_OR_STC .none            ; CF = 0 owned, or (.none) CF = 1
     pop si
     pop ax
     ret
@@ -1057,29 +995,39 @@ inst_alloc:
     jmp .out
 .hit:
     push ax                     ; a reused record never inherits a dead
-    push di                     ; instance's CPU tally (SPEC.md 8.1), nor
-    push es                     ; anything else it left: the whole 32 bytes
-    push ds                     ; go, not the six fields somebody remembered
+    push bx                     ; instance's CPU tally (SPEC.md 8.1), nor
+    push si                     ; anything else it left: the whole 32 bytes
+    push di                     ; go, not the six fields somebody remembered
+    push es
+    push ds
     pop es
     mov cx, I_RECSZ / 2         ; CX is already banked by the push above
     xor ax, ax
     cld
-    rep stosw
-    pop es
+    rep stosw                   ; ...and leaves AX = 0 and CX = 0, which the
+    pop es                      ; side tables below are cleared with
     pop di
-    pop ax
-    call inst_fhome_clr         ; ...nor its Standard File location (38.10)
+    call inst_fhome_idx         ; BX = the slot (AX survives it)
+    mov [inst_fpick+bx], al     ; ...nor its Standard File location (38.10):
+                                ; the drive is not one the user has CHOSEN
 %ifdef OS88_COMPACT
-    push bx                     ; ...nor a dead instance's PARKSAFE (66.5.4):
-    call inst_fhome_idx         ; the byte is a side table keyed by slot, and
-    push bx                     ; ...and the restart point with it (SPEC.md
-    shl bx, 1                   ; 66.6.2), for the same reason one line down:
-    mov word [bx+inst_restart], 0 ; a reused slot inheriting a dead package's
-    pop bx                      ; offset would re-enter a new one at it
-    mov byte [bx+inst_parksafe], 0 ; a package that never declared it must
-    pop bx                      ; not be parked in gfx_lock because the last
-%endif                          ; tenant of its slot said so - and neither
-                                ; table exists on kern_small
+    mov [bx+inst_parksafe], al  ; ...nor a dead instance's PARKSAFE (66.5.4):
+    shl bx, 1                   ; a package that never declared it must not be
+    mov [bx+inst_restart], ax   ; parked in gfx_lock because the last tenant of
+    shr bx, 1                   ; its slot said so - and the restart point with
+%endif                          ; it (SPEC.md 66.6.2): a reused slot inheriting
+                                ; a dead package's offset would re-enter a new
+                                ; one at it. Neither table exists on kern_small
+    mov al, bl                  ; ...and the NAME row goes while BX is still
+    mov cl, INST_FNSZ           ; the plain slot (this, and the drive above
+    mul cl                      ; and the folder below, were inst_fhome_clr -
+    mov si, ax                  ; its notes are below - inline since size pass
+    mov [inst_fname+si], ch     ; 9). AL is 0..11, so AX = slot * INST_FNSZ;
+                                ; CH is still the rep's 0
+    call inst_fhome_here        ; ...then SEED the drive and the folder, in the
+    pop si                      ; body inst_vol_mark shares
+    pop bx
+    pop ax
     clc
 .out:
     pop cx
@@ -1264,7 +1212,8 @@ inst_fhome_idx:
     ret
 
 ; -----------------------------------------------------------------------------
-; inst_fhome_clr - seed a slot's own current directory (SPEC.md 19.2.1)
+; inst_fhome_clr - seed a slot's own current directory (SPEC.md 19.2.1) - INLINE
+; in inst_alloc, its one caller, since size pass 9
 ; in:  DI = the record being (re)allocated
 ; out: nothing (all registers preserved, flags included)
 ;
@@ -1280,44 +1229,17 @@ inst_fhome_idx:
 ; chosen one is the separate question [inst_fpick] answers, and only the
 ; dialog's default (SPEC.md 38.10) reads it.
 ; -----------------------------------------------------------------------------
-inst_fhome_clr:
-    pushf
-    push ax
-    push bx
-    push cx
-    push si
-    call inst_fhome_idx         ; BX = the slot
-    mov byte [inst_fpick+bx], 0 ; the drive is not one the user has CHOSEN...
-    mov al, bl                  ; ...and the NAME row goes while BX is still the
-    mov cl, INST_FNSZ           ; plain slot
-    mul cl                      ; AX = slot * INST_FNSZ (AL is 0..11, so the
-    mov si, ax                  ; product cannot leave AX)
-    mov byte [inst_fname+si], 0
-    call inst_fhome_here        ; ...then the drive and the folder, in the body
-                                ; inst_vol_mark shares - which is what leaves BX
-                                ; shifted to the word row
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    popf
-    ret
+
 
 ; -----------------------------------------------------------------------------
-; inst_set_name - copy a name into a record's I_NAME field
+; inst_set_name - copy a name into a record's I_NAME field. GONE as a routine
+; (size pass 9): app_launch, its one caller, sets ES = DS itself and calls
+; inst_set_name_x below, whose contract this was:
 ; in:  DI = record, SI = source: NUL-terminated OR NUL-padded (a package
 ;      header's 16-byte name field is safe); at most 15 chars are taken
 ; out: nothing (all registers preserved); byte I_NAME+15 is always 0, written
 ;      before the copy rather than by a zero-fill before it
 ; -----------------------------------------------------------------------------
-inst_set_name:
-    push es
-    push ds
-    pop es                      ; the kernel's own strings; the ES-taking
-    call inst_set_name_x        ; body below is the one that copies
-    pop es
-    ret
-
 ; -----------------------------------------------------------------------------
 ; inst_set_name_x - inst_set_name with the source at ES:SI (SPEC.md 20.1)
 ; in:  DI = record, ES:SI = the name; at most 15 chars are taken
@@ -1412,10 +1334,8 @@ inst_icon_ptr:
     mov cx, DSK_ICO_SIZE        ; dock_draw_tile, which wm_destroy reaches
     mov ax, cs                  ; from inst_task_die ON THE WORKER, while
     call COLD_SEG:dkf_dsk_copy_seg  ; task 0 may be inside disk_mount_x's
-    mov si, inst_icobuf         ; icon pass (osapi_file_goto takes no lock) -
-.have:                          ; so it cannot be dsk_ico's fifth tenant
-    clc
-    jmp short .out
+    jmp short .have             ; icon pass (osapi_file_goto takes no lock) -
+                                ; so it cannot be dsk_ico's fifth tenant
 .runs:                          ; SI -> (count-1) << 6 | pool index, bytes,
     push bx                     ; until 32 rows are down (inst_ico_pool)
     mov di, inst_icobuf
@@ -1439,11 +1359,9 @@ inst_icon_ptr:
     cmp di, inst_icobuf + DSK_ICO_SIZE
     jb .run
     pop bx
-    mov si, inst_icobuf
-    jmp short .have
-.none:
-    stc
-.out:
+.have:
+    mov si, inst_icobuf         ; both arms leave the icon there
+    CLC_OR_STC .none            ; CF = 0 SI = the icon, or (.none) CF = 1
     pop di
     pop dx
     pop cx
@@ -1493,6 +1411,11 @@ inst_charge:
     pop dx
     pop ax
     ret
+
+; inst_lkhd - 1 while fdlg_open launches the chooser: app_launch's caller
+; holds the gfx lock already (SPEC.md 38.6). In .text with an initialiser,
+; because .bss is not zeroed at boot and app_launch reads it on every launch.
+inst_lkhd:  db 0
 
 ; -----------------------------------------------------------------------------
 ; app_launch - launch (or front) a built-in app kind (SPEC.md 29.4)
@@ -1575,31 +1498,23 @@ app_launch:
     mov bp, di                  ; BP = our record for the duration
 
     ; --- state-pool slot pick (SPEC.md 29.4) ---------------------------------
-    mov word [inst_slot], 0
-    cmp word [si+KD_POOL], 0
-    je .tpl                     ; stateless: I_SPTR stays 0
+    xor dx, dx                  ; DX = the slot, which is also the cascade step
+    mov ax, [si+KD_POOL]        ; AX = the candidate state ptr, stepped by the
+    or ax, ax                   ; stride rather than multiplied out per slot
+    jz .tpl                     ; stateless: I_SPTR stays 0
+    mov bl, [inst_knd]
 .pslot:
-    mov ax, [si+KD_SSIZE]
-    mul word [inst_slot]        ; AX = slot * stride (pools are small)
-    add ax, [si+KD_POOL]        ; AX = candidate state ptr
     mov di, inst_tab - I_RECSZ  ; held by any same-kind record in use?
 .pscan:
     call inst_next
     jc .pfree
-    mov bl, [inst_knd]
     cmp bl, [di+I_KIND]
     jne .pscan
     cmp ax, [di+I_SPTR]
     jne .pscan
-    jmp short .ptaken
-.pfree:
-    mov [ds:bp+I_SPTR], ax      ; free candidate found
-    jmp .tpl
-.ptaken:
-    inc word [inst_slot]
-    mov cl, [si+KD_CAP]
-    xor ch, ch
-    cmp [inst_slot], cx
+    add ax, [si+KD_SSIZE]       ; taken: the next slot
+    inc dx
+    cmp dl, [si+KD_CAP]
     jb .pslot
 .failj:                         ; ...AND THE REFUSAL TRAMPOLINE, at no cost at
     jmp .fail                   ; all: this `jmp` was already here, and `.fail`
@@ -1612,6 +1527,8 @@ app_launch:
                                 ; arms are at cap with nothing live, the heap
                                 ; refusing, and the window table full
 
+.pfree:
+    mov [ds:bp+I_SPTR], ax      ; free candidate found
 .tpl:
     ; --- window from the template, cascaded per pool slot --------------------
     push si
@@ -1621,13 +1538,11 @@ app_launch:
     pop es
     mov cx, 8
     rep movsw                   ; 16-byte template copy
-    pop si
-    mov ax, [inst_slot]         ; cascade: (+16,+16) per pool slot so
+    xchg ax, dx                 ; cascade: (+16,+16) per pool slot so
     mov cl, 4                   ; instances don't stack exactly
     shl ax, cl
     add [inst_tplbuf], ax       ; x
     add [inst_tplbuf+2], ax     ; y
-    push si
     mov si, inst_tplbuf
     call wm_create              ; BX = window (hidden), CF = table full
     pop si
@@ -1645,9 +1560,11 @@ app_launch:
     push si
     mov si, [si+KD_NAME]
     mov di, bp
-    call inst_set_name
-    pop si
-    mov di, bp
+    push ds                     ; the kernel's own strings: this was
+    pop es                      ; inst_set_name, ES = DS around the ES-taking
+    call inst_set_name_x        ; body, and app_launch was its one caller.
+    pop si                      ; ES is app_launch's to restore (kret_es), and
+                                ; the body preserves DI, so it is still BP
     call inst_bind_win          ; I_WIN + wm_owner
 
     mov ax, [si+KD_INIT]
@@ -1681,10 +1598,15 @@ app_launch:
     mov [ds:bp+I_TASK], al
 
 .show:
-    call gfx_lock
     mov bx, [ds:bp+I_WIN]
+    cmp byte [inst_lkhd], 0     ; the Standard File chooser is launched by a
+    jne .held                   ; caller that HOLDS the lock (SPEC.md 38.6),
+    call gfx_lock               ; and the lock is not recursive. Only .show
+    call wm_show                ; asks: .rollback is a task-spawn failure and
+    call gfx_unlock             ; a Disk window has no task
+    jmp short .ok
+.held:
     call wm_show
-    call gfx_unlock
 .ok:
     clc
     jmp .out
@@ -1817,15 +1739,22 @@ inst_minimize:
                                 ; an fsx bracket owns the screen drew an XOR
                                 ; outline over somebody's borrowed surface,
                                 ; which is the hazard 11.99 names
-    call inst_an_tile           ; SPEC.md 11.99: the window flies to its tile -
-                                ; BEFORE wm_hide, while it is still on the glass
+    push ax                     ; SPEC.md 11.99: the window flies to its tile -
+    push bx                     ; BEFORE wm_hide, while it is still on the
+    push cx                     ; glass. wm_an_d = this record's dock tile:
+    push dx                     ; inst_an_tile, written at its one call site
+    call inst_tile_rect         ; (size pass 9)
+    call rect_put               ; <- AX..DX, four adjacent words
+    dw wm_an_d
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     push si
-    push di
     mov si, bx
-    mov di, wm_an_s
-    call wm_an_setw
-    call wm_anim
-    pop di
+    mov di, wm_an_s             ; DI is the routine's own to spend from here:
+    call wm_an_setw             ; wm_hide reads BX alone and the `pop di` at
+    call wm_anim                ; the foot puts the record back
     pop si
 %endif
 .hide:
@@ -1859,15 +1788,7 @@ inst_tile_rect:
     jmp dock_tile_rect          ; near - dock.inc is .text (SPEC.md 30)
 %endif
 
-inst_an_tile:
-    push ax
-    push bx
-    push cx
-    push dx
-    call inst_tile_rect
-    call rect_put               ; <- AX..DX, four adjacent words
-    dw wm_an_d
-    jmp kret_dx
+; (inst_minimize's anim arm carries this body since size pass 9.)
 
 ; -----------------------------------------------------------------------------
 ; inst_unmin - clear the minimized bit AND say where the window is coming from
@@ -1907,10 +1828,7 @@ inst_unmin:
                                 ; caller makes next reaches wm_an_open, which
                                 ; writes wm_an_d itself (wm_an_setw) before
                                 ; wm_anim ever reads it
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp kret_dx
 .out:
     ret
 %endif
@@ -2025,10 +1943,7 @@ inst_wchk:
     div cl                      ; AH = offset mod WIN_SIZE
     test ah, ah
     jnz .bad                    ; not record-aligned
-    jmp short .out
-.bad:
-    stc
-.out:
+    CLC_OR_STC .bad             ; CF = 0 a window, or (.bad) CF = 1
     pop cx                      ; POP touches no flags: CF survives
     pop ax
     ret
@@ -2136,23 +2051,19 @@ inst_pkg_spawn:
     mov bl, [es:LD_H_CLASS]     ; built before this - and 0 is "no opinion",
     pop es                      ; which gets the largest class, so nothing has
     xor bh, bh                  ; to be rebuilt to keep working
+    xor cx, cx                  ; task_spawn's own spelling of "no opinion"
     cmp bx, SCH_NCLASS          ; AN INDEX OUT OF RANGE IS NOT A REFUSAL: a
-    jae .defcls                 ; package with a byte we do not understand gets
+    jae .havecls                ; package with a byte we do not understand gets
     shl bx, 1                   ; the largest class and launches, where a
     mov cx, [bx+sch_clsbytes]   ; refused launch would be a hostile-input
-    jmp short .havecls          ; failure over a field nobody validated
-.defcls:
-    xor cx, cx                  ; task_spawn's own spelling of "no opinion"
-.havecls:
+.havecls:                       ; failure over a field nobody validated
     pop bx                      ; the segment back
     call task_spawn             ; in AX = entry, BX = seg, CX = stack, DX = arg
     pop cx                      ; the banked AX...
     mov ah, ch                  ; ...and the caller's AH out of its high half
     jc .out                     ; task table full: nothing was created
     mov [di+I_TASK], al         ; the record now owns the worker
-    jmp short .out
-.fail:
-    stc
+    CLC_OR_STC .fail            ; CF = 0 spawned, or (.fail) CF = 1
 .out:
     pop di
     pop dx
@@ -2207,7 +2118,26 @@ inst_pkg_alive:
 %ifndef NOPARK
     cmp byte [inst_parkreq], 0  ; THE COMPACTION PARK (SPEC.md 66.5). This is
     je .out                     ; the one call rule 2 already makes mandatory
-    call inst_park_wait         ; once per outer loop, and therefore the one
+                                ; once per outer loop, and therefore the one
+                                ; point at which a worker is known to hold no
+                                ; pointer derived from any claim of its own
+    push ax                     ; --- what was inst_park_wait (size pass 9).
+    push bx                     ; And NOT DI: this only READS it, and neither
+                                ; callee writes it - inst_idx takes it as its
+                                ; input, inst_park_hold touches BX alone, and
+                                ; task_yield restores the whole frame
+    call inst_idx               ; AX = the index. inst_idx BANKS CX, which is
+    cmp ax, INST_MAX            ; why there is no copy of it here: the first
+    jae .np                     ; cut wrote CL and then pushed, so the pop
+                                ; restored a 5, and OSAPI_TASK_ALIVE - which
+                                ; promises every register back - handed a
+                                ; worker CL = 5 on exactly the pass a
+                                ; compaction was pending. Not a record at
+                                ; all: park nothing
+    call inst_park_hold
+.np:
+    pop bx
+    pop ax
 %endif
 %endif
 .out:                           ; point at which a worker is known to hold no
@@ -2324,17 +2254,19 @@ osapi_sys_snapshot_x:
                                 ; the end hands the CALLER its own DF back -
                                 ; packages do use std (apps/word, apps/sheet,
                                 ; apps/notepad and a dozen more)
+%if SS_TICKS != 0 || SS_CUR != 2 || SS_COOP != 3 || SS_NTASK != 4 || \
+    SS_NINST != 5 || SS_TSTATE != 6
+  %error "osapi_sys_snapshot stores the header as three stosw and lands on SS_TSTATE"
+%endif
     mov ax, [ticks]
-    mov [es:di+SS_TICKS], ax
+    stosw                       ; SS_TICKS
     mov al, [sch_cur]
-    mov [es:di+SS_CUR], al
-    mov al, [sch_coop]
-    mov [es:di+SS_COOP], al
-    mov byte [es:di+SS_NTASK], MAX_TASKS
-    mov byte [es:di+SS_NINST], INST_MAX
+    mov ah, [sch_coop]
+    stosw                       ; SS_CUR, SS_COOP
+    mov ax, (INST_MAX << 8) | MAX_TASKS
+    stosw                       ; SS_NTASK, SS_NINST - and DI is at SS_TSTATE
 
     mov si, sch_tasks + T_STATE ; T_STATE per slot
-    add di, SS_TSTATE
     mov cx, MAX_TASKS
 .ssnap:
     movsb                       ; DS:SI -> ES:DI, both advanced by one...
@@ -2344,15 +2276,16 @@ osapi_sys_snapshot_x:
     cmp bl, 0xFF                ; its own (SPEC.md 28.7): it is READY like any
     je .noidle                  ; other ready task and reading it as one makes
     xor bh, bh                  ; the process page charge 97% of the machine
-    mov di, bp                  ; to a row it cannot explain. A fourth value
-    add di, SS_TSTATE           ; costs no byte of the snapshot, which a slot
-    add di, bx                  ; index in the header would have - and every
-    mov byte [es:di], 3         ; field after it moving is an ABI break for
-.noidle:                        ; something the Task Manager alone reads
+                                ; to a row it cannot explain. A fourth value
+                                ; costs no byte of the snapshot, which a slot
+                                ; index in the header would have - and every
+                                ; field after it moving is an ABI break for
+                                ; something the Task Manager alone reads. DI
+    mov byte [es:bx+di-MAX_TASKS], 3   ; is one past the last state copied
+.noidle:
 
     mov si, sch_cycles          ; ...and the cycle counters, MAX_TASKS dwords
-    mov di, bp
-    add di, SS_TCYC
+    lea di, [bp+SS_TCYC]
     mov cx, MAX_TASKS * 2       ; ...WORDS: MAX_TASKS dwords, contiguous
     rep movsw
 
@@ -2369,8 +2302,7 @@ osapi_sys_snapshot_x:
     ; the buffer against - so a kern_small snapshot fills six records and says
     ; six, exactly as the per-record loop did.
     mov si, inst_tab
-    mov di, bp
-    add di, SS_INST
+    lea di, [bp+SS_INST]
     mov cx, INST_MAX * I_RECSZ / 2
     rep movsw
     popf
@@ -2379,8 +2311,7 @@ osapi_sys_snapshot_x:
     ; A package's claims are stamped with the segment it runs in and a
     ; built-in's with its slot (SPEC.md 50.2), so which owner word to ask for
     ; depends on the record we just copied.
-    mov di, bp
-    add di, SS_INST
+    lea di, [bp+SS_INST]
     xor si, si                  ; SI = slot
 .claim:
     xor ax, ax
@@ -2494,7 +2425,8 @@ sch_parked:   resb MAX_TASKS    ; ...and which TASKS have. PER TASK and not per
 
 inst_launch: resw 1             ; deferred launch: 0 = none, else kind + 1
 inst_knd:    resb 1             ; app_launch scratch: kind being launched
-inst_slot:   resw 1             ; app_launch scratch: state-pool slot
+                                ; (the state-pool slot was a word here, and is
+                                ; DX across the pick since size pass 9)
 inst_tplbuf: resb 16            ; app_launch scratch: cascaded template copy
                                 ; (inst_icon_ptr's staging slot was 64 bytes
                                 ; HERE and is now dsk_ico itself - the

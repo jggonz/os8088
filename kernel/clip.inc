@@ -160,13 +160,11 @@ clip_put:
                                 ; addressing SS and kret_bp being a run of pops
                                 ; and a ret. Do not re-add a `push cs / pop ds`
                                 ; here: it wrote a register nobody read
-    jmp short .ok
-.empty:
-    call clip_drop
-.ok:                            ; both of these are the CF=0 answer, so one
-    clc                         ; `clc` serves them; `.toobig` still enters at
-    jmp short .out              ; its own `stc` below
-.toobig:
+    jmp short .out              ; CF = 0: `xor di, di` cleared it and REP
+.empty:                         ; MOVSB writes no flag
+    call clip_drop              ; ...and CF = 0 out of clip_drop too (its
+    jmp short .out              ; header says so); `.toobig` enters at its
+.toobig:                        ; own `stc` below
     stc
 .out:
     pop es                      ; POP touches no flags, so the answer above
@@ -250,8 +248,9 @@ clip_size:
 
 ; -----------------------------------------------------------------------------
 ; clip_drop - give the block back and forget it (module-internal)
-; in:  nothing; out: nothing (every register preserved; the FLAGS are not -
-;      see the `ret` below, which is where the two call sites are audited)
+; in:  nothing; out: CF = 0 (every register preserved; the other flags are
+;      not - see the `ret` below, which is where the two call sites are
+;      audited)
 ; -----------------------------------------------------------------------------
 clip_drop:
     push ax
@@ -283,9 +282,11 @@ clip_drop:
                                 ; clip_put and neither reads the flags - the
                                 ; first is followed by `mov bx,MEM_K_CLIP` and
                                 ; a mem_claim that sets CF itself, the second
-                                ; (.empty) falls into .ok's `clc`. The
-                                ; contract line above is the whole contract,
-                                ; this proc being module-internal
+                                ; (.empty) RETURNS this CF = 0 as clip_put's
+                                ; answer - both paths end on OR or XOR, which
+                                ; clear it. The contract line above is the
+                                ; whole contract, this proc being
+                                ; module-internal
 
 section .text
 

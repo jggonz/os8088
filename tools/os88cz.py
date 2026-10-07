@@ -336,9 +336,7 @@ def pack(data, method=M_LZ4):
             raise CZError("it would not get smaller")
     out, did = os88lz.cz_wrap(data, method - 1, packed=z)
     if not did:
-        raise CZError("it would not get smaller"
-                      + (" (or the LZ4 stream is over 64KB - try --lzb, or "
-                         "split it)" if method == M_LZ4 else ""))
+        raise CZError("it would not get smaller")
     return out
 
 

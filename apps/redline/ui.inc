@@ -1270,6 +1270,10 @@ ru_facts:
 .video:
     mov si, ru_adapter
     mov bl, [rl_video]
+    cmp bl, VID_EGA             ; a code past the table's four is not an
+    jbe .vidok                  ; index (a future VID_*): name it VGA's way
+    mov bl, VID_VGA
+.vidok:
     xor bh, bh
     shl bx, 1
     mov ax, [ru_adapters+bx]
@@ -2009,8 +2013,9 @@ ru_com4: db 'COM4 base', 0
 ru_lpt1: db 'LPT1 base', 0
 ru_lpt2: db 'LPT2 base', 0
 ru_lpt3: db 'LPT3 base', 0
-ru_adapters: dw ru_vga, ru_herc, ru_cga
-ru_vga: db 'VGA/EGA', 0
+ru_adapters: dw ru_vga, ru_herc, ru_cga, ru_ega   ; VID_* order: EGA is 3
+ru_vga: db 'VGA', 0
+ru_ega: db 'EGA', 0
 ru_herc: db 'Hercules', 0
 ru_cga: db 'CGA', 0
 ru_labels: dw ru_alu, ru_rotate, ru_mul, ru_div, ru_copy, ru_fill

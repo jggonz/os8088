@@ -193,11 +193,7 @@ spk_tone:
     out 0x61, al                ; both arms end in the popf that closes
 .pf:                            ; SPEC.md 34.1's window and the CF=0 answer
     popf
-    clc
-    jmp short .out
-.bad:
-    stc
-.out:
+    CLC_OR_STC .bad             ; CF = 0 done, or (.bad) CF = 1 refused
     pop dx
     pop bx
     pop ax
@@ -383,10 +379,8 @@ snd_rt_card:
 %ifdef OS88_SNDCARD
     cmp byte [snd_route], SND_RT_SPK
     je .no
-    cmp word [drv_svc+DSV_TONE], 0
-    je .no
-    clc
-    ret
+    cmp word [drv_svc+DSV_TONE], 1  ; CF = 1 exactly when no driver has a
+    ret                             ; tone verb - and CF = 0 is the card
 .no:
 %endif
     stc                         ; SPEC.md 34.0: always the speaker, and the
@@ -439,7 +433,12 @@ snd_tick:
     je .tone                    ; a loaded driver may want the tick too; it
     mov bp, [drv_svc+DSV_TICK]  ; runs here, inside IRQ0, at IF=0 - and
     call drv_svc_call           ; banks nothing: AX and BP are sch_isr's
-.tone:                          ; scratch here like the rest (see above)
+.tone:                          ; scratch here like the rest (see above).
+                                ; NOT `mov bp / or bp, bp / jz` (3 bytes
+                                ; less): on the machine with no driver - the
+                                ; common one - that is ~6 cycles a tick MORE
+                                ; on an 8088 (the 2-byte `or` pays its fetch),
+                                ; and this is inside IRQ0 (size pass 9)
 %endif                          ; SPEC.md 34.0: no driver, so nothing else
                                 ; wants the tick and the expiry test is the
                                 ; whole of it. The one gate here that is on a
@@ -452,7 +451,9 @@ snd_tick:
     mov al, [snd_texp_gen]      ; expiry generation-guarded (SPEC.md 34.3)
     cmp al, [snd_town_gen]
     jne .done
-    call snd_town_off           ; IF is already 0: the tick IS the window.
+    jmp short snd_town_off      ; (a TAIL call since size pass 9: 2 bytes and
+                                ; one ret fewer on the expiry tick, its ret
+                                ; being ours) IF is already 0: the tick IS the window.
                                 ; No push bx/si: snd_town_off banks both in
                                 ; its own frame, on its one exit
 .done:
@@ -475,13 +476,14 @@ snd_release_inst:
     cli
     cmp byte [snd_live], 0
     je .done
-    cmp word [drv_svc+DSV_RELINST], 0
-    je .spk                     ; a loaded driver's grants go first: its FM
-    push ax                     ; channels and streams are stamped with the
-    push bp                     ; same instance slot ours are (SPEC.md 34.3)
-    push dx
+    push ax                     ; a loaded driver's grants go first: its FM
+    push bp                     ; channels and streams are stamped with the
+    push dx                     ; same instance slot ours are (SPEC.md 34.3)
     mov bp, [drv_svc+DSV_RELINST]
+    or bp, bp
+    jz .nodrv
     call drv_svc_call
+.nodrv:
     pop dx
     pop bp
     pop ax

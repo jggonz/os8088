@@ -232,9 +232,8 @@ op_load:
 ; -----------------------------------------------------------------------------
 op_size:
     mov word [op_secs], 0
-    mov word [op_bytes], 0
-    mov word [op_usecs], 0      ; ...and these two stay ungated: the .norun
-    mov word [op_ubytes], 0     ; path writes neither, and op_claim reads
+    mov word [op_usecs], 0      ; ...ungated: the .norun path does not
+                                ; write it, and op_claim reads
                                 ; op_usecs whatever the table says
 %if OP_HAS_COMP
     mov byte [op_zn], 0
@@ -377,10 +376,16 @@ op_size:
     push ax
     sub ax, bx                  ; sectors from the run's start...
     push cx
-    mov cl, 9
-    shl ax, cl                  ; ...as bytes, and the run is under 64KB
+    push ax
+    mov cl, 7
+    shr ax, cl
+    mov [op_bendh], ax          ; ...as bytes, in 32 bits: the run may pass
+    pop ax                      ; 64KB now, and the high half of n << 9 is
+    mov cl, 9                   ; n >> 7
+    shl ax, cl
     pop cx
     add [op_bend], ax           ; ...so this is (off - first) * 512 + packed
+    adc word [op_bendh], 0
     pop ax
     add ax, cx
     pop cx
@@ -427,24 +432,19 @@ op_size:
     sub dx, bx
     jbe .bad                    ; a run of nothing, out of rows that are filed
     mov [op_secs], dx
-    cmp dx, 128
-    jae .bad                    ; 64KB OR MORE, and this wave carves neither:
-                                ; op_cap is a word and op_claim's head slack
-                                ; is added to it, so the whole carve plus a
-                                ; cluster has to be expressible as one. A
-                                ; later wave chunks the read and lifts it.
-                                ; **`ja` HERE WAS AN OFF-BY-ONE AND IT WAS
-                                ; SILENT**: a run of exactly 128 sectors
-                                ; passed, and `128 << 9` is 65,536, which in a
-                                ; word is ZERO - so op_bytes came out 0,
-                                ; op_claim asked for the head slack alone and
-                                ; op_read moved nothing at all. The package
-                                ; would then be handed segments into a claim
-                                ; that was never filled
-    mov ax, dx
-    mov cl, 9
-    shl ax, cl                  ; sectors -> bytes; <= 65,536 by the test above
-    mov [op_bytes], ax
+    cmp dx, OP_SECMAX
+    jae .bad                    ; THE CARVE MAY PASS 64KB (SPEC.md 20.12.11):
+                                ; op_cap counts PARAGRAPHS and op_want and
+                                ; op_bend are 32 bits, so what bounds it is R
+                                ; plus the read, plus a cluster of head slack,
+                                ; fitting a word of paragraphs - which
+                                ; OP_SECMAX does with a 32KB cluster. It was
+                                ; 128 here, with op_cap a word of BYTES, and
+                                ; `ja` against that was a SILENT off-by-one:
+                                ; 128 << 9 is 65,536, a word of ZERO, and the
+                                ; package was handed segments into a claim
+                                ; that was never filled. Nothing here shifts
+                                ; sectors into bytes in a word any more
 
     ; ...and the same run at its UNPACKED end, which is what the CLAIM is cut
     ; from. With no compressed row the two are equal by construction - the
@@ -457,17 +457,11 @@ op_size:
     ; above went with the gate.
 %if OP_HAS_COMP
     mov ax, [op_usecs]
-    cmp ax, 128
+    cmp ax, OP_SECMAX
     jae .bad                    ; the carve's own ceiling, on the side that
                                 ; decides the claim rather than the read
-    push ax
-    mov cl, 9
-    shl ax, cl
-    mov [op_ubytes], ax
-    pop ax
 %else
-    mov [op_ubytes], ax         ; AX is still op_bytes, and DX still op_secs
-    mov [op_usecs], dx
+    mov [op_usecs], dx          ; DX is still op_secs
     mov ax, dx
 %endif
     inc ax
@@ -539,9 +533,11 @@ op_claim:
     mov [op_off+2], dx
 
     mov ax, [op_bend]           ; capacity = slack + the run, rounded up to a
-    add ax, bx                  ; whole number of clusters, which is the
-    jc .no                      ; slot's other precondition. THE CARRY IS THE
+    mov dx, [op_bendh]          ; whole number of clusters, which is the
+    add ax, bx                  ; slot's other precondition - in 32 bits
+    adc dx, 0
     mov [op_want], ax           ; ...and before the rounding, THIS is what has
+    mov [op_want+2], dx
                                 ; to arrive - op_read's fourth input. NOT less
                                 ; [op_tail]: op_bend is the run's EXACT byte
                                 ; end (see op_size) and so already excludes the
@@ -562,12 +558,17 @@ op_claim:
                                 ; known until here, so a 64KB run on a
                                 ; 32KB-cluster volume overflows this word. It
                                 ; is refused rather than wrapped
-    mov dx, [op_clb]
-    dec dx
-    add ax, dx
-    jc .no
-    not dx
-    and ax, dx
+    mov cx, [op_clb]
+    dec cx
+    add ax, cx
+    adc dx, 0
+    not cx
+    and ax, cx
+    mov cl, 4                   ; ...and in PARAGRAPHS, which a run under
+    shr ax, cl                  ; OP_SECMAX sectors fits in a word
+    mov cl, 12
+    shl dx, cl
+    or ax, dx
     mov [op_cap], ax
 
     ; --- R: how far UP the packed run lands (SPEC.md 20.12.7) --------------
@@ -591,37 +592,36 @@ op_claim:
 %if OP_HAS_COMP
     cmp byte [op_zn], 0
     je .plainrun                ; nothing compressed: R is 0 and the run lands
-    mov ax, [op_ubytes]         ; at the base, exactly as it always has
-    sub ax, [op_bytes]
-    add ax, OP_MARGIN + 512 + 15
-    jc .no
-    and ax, 0FFF0h
-    mov cl, 4
-    shr ax, cl
+    mov ax, [op_usecs]          ; at the base, exactly as it always has
+    sub ax, [op_secs]           ; (unpacked - packed) sectors, plus the one
+    inc ax                      ; extra sector below, as paragraphs
+    mov cl, 5
+    shl ax, cl
+%if OP_MARGIN
+    add ax, (OP_MARGIN + 15) >> 4
+%endif
     mov [op_rpara], ax          ; ...in paragraphs, which is what a segment
 .plainrun:                      ; adjustment takes
 %endif
 
     ; The claim's share for the run is R PLUS THE READ, and that one quantity
     ; covers both things that have to fit: the read occupies R + op_cap from
-    ; the base, and the unpacked carve occupies slack + op_ubytes - and
+    ; the base, and the unpacked carve occupies slack + the unpacked run - and
     ; R + op_cap >= (unpacked - packed + margin) + (slack + packed), which is
     ; slack + unpacked + margin, so the read is always the larger. With
     ; nothing compressed R is 0 and this is the line that was here before.
 %if OP_HAS_COMP
-    mov ax, [op_rpara]
-    mov cl, 4
-    shl ax, cl                  ; R, in bytes - it is under 64KB because
-    add ax, [op_cap]            ; op_ubytes is (op_size refuses 128 sectors)
+    mov ax, [op_rpara]          ; R and the read, both in paragraphs
+    add ax, [op_cap]
     jc .no
 %else
     mov ax, [op_cap]            ; ...and "with nothing compressed R is 0" is
                                 ; the line that was here before compression,
                                 ; which is exactly what the gate restores
 %endif
-    add ax, 1023                ; the READ's share of the claim, in KB - the
+    add ax, 63                  ; the READ's share of the claim, in KB - the
     jc .no                      ; slack included, because the read starts at
-    mov cl, 10                  ; the cluster below the run and those bytes
+    mov cl, 6                   ; the cluster below the run and those bytes
     shr ax, cl                  ; land in front of it
     mov [op_runkb], ax          ; ...and this is where the scratch begins
 
@@ -689,14 +689,17 @@ op_read:
                                 ; and R paragraphs above it when one is
                                 ; (SPEC.md 20.12.7). Every caller sets it
 .chunk:
-    or di, di
-    jz .done
-    mov cx, OP_CHUNK
-    cmp di, cx
+    or di, di                   ; DI = PARAGRAPHS still to move, which is what
+    jz .done                    ; lets a run pass 64KB
+    mov ax, OP_CHUNK >> 4
+    cmp di, ax
     jae .full
-    mov cx, di
+    mov ax, di
 .full:
-    push cx
+    push ax
+    mov cl, 4
+    shl ax, cl
+    mov cx, ax                  ; ...and this chunk in bytes, for the read
     mov es, bp
     xor bx, bx
     mov si, op_name
@@ -713,24 +716,19 @@ op_read:
     jz .done                    ; at or past the end, and [op_want] below is
                                 ; what turns that into a refusal
 
-    mov bx, [op_want]           ; ...how much of what MUST arrive just did
-    or dx, dx
-    jnz .allof                  ; 64KB or more in one chunk cannot happen - a
-    cmp ax, bx                  ; chunk is at most OP_CHUNK - so this is the
-    jae .allof                  ; whole of what is left either way
-    sub bx, ax
-    mov [op_want], bx
-    jmp short .adv
-.allof:
+    sub [op_want], ax           ; ...how much of what MUST arrive just did,
+    sbb [op_want+2], dx         ; in 32 bits; a borrow is more than was owed,
+    jnc .adv                    ; which is all of it
     mov word [op_want], 0
+    mov word [op_want+2], 0
 .adv:
     sub di, cx                  ; advance by what was ASKED for, which is a
-    add [op_off], cx            ; whole number of clusters; a short final take
-    adc word [op_off+2], 0      ; is the contract and the loop ends above
-    mov ax, cx
+    add bp, cx                  ; whole number of clusters; a short final take
+    mov ax, cx                  ; is the contract and the loop ends above
     mov cl, 4
-    shr ax, cl                  ; bytes -> paragraphs
-    add bp, ax
+    shl ax, cl
+    add [op_off], ax
+    adc word [op_off+2], 0
     jmp short .chunk
 .done:
     ; **A SHORT RUN IS A REFUSAL, and it did not used to be.** The loop above
@@ -743,8 +741,9 @@ op_read:
     ; segments into a claim holding whatever the heap had. Wave 6's first
     ; consumer is what found it: C64 was about to grow a hand-written "is the
     ; ROM really there" test that belongs here (docs/plans/completed/O88-MULTISEG-PLAN.md 11).
-    cmp word [op_want], 0
-    jne .fail
+    mov ax, [op_want]
+    or ax, [op_want+2]
+    jnz .fail
     push ds
     pop es
     pop bp
@@ -1332,7 +1331,10 @@ op_clbget:
 ;
 ; The READ's share, slack included, exactly as op_claim computes the carve's:
 ; the read starts at the cluster at or below the part and those bytes land in
-; front of it (SPEC.md 20.12.2).
+; front of it (SPEC.md 20.12.2). For a COMPRESSED row it is R plus the read of
+; the PACKED length, which op_claim's arithmetic for the carve is too: the
+; claim op_fetch makes, the answer op_lazyok gives, and a package pricing a
+; fetch ahead of time are the one figure.
 ; -----------------------------------------------------------------------------
 op_lazykb:
     push bx
@@ -1344,8 +1346,14 @@ op_lazykb:
     mov bx, [op_clb]
     dec bx
     and bx, ax                  ; BX = the head slack: a cluster size is a
-                                ; power of two, so this is an AND
+                                ; power of two
     mov ax, [si+OP_R_LEN]
+%if OP_HAS_COMP && OP_HAS_LAZY
+    test byte [si+OP_R_FLAG], OP_COMP
+    jz .rd
+    mov ax, [si+OP_R_ZKB]       ; a COMPRESSED row reads its packed length...
+.rd:
+%endif
     add ax, bx
     jc .no
     mov dx, [op_clb]
@@ -1354,9 +1362,21 @@ op_lazykb:
     jc .no
     not dx
     and ax, dx                  ; ...rounded to whole clusters, the slot's
-    add ax, 1023                ; other precondition
+    mov cl, 4                   ; other precondition: the READ, in paragraphs
+    shr ax, cl
+%if OP_HAS_COMP && OP_HAS_LAZY
+    test byte [si+OP_R_FLAG], OP_COMP
+    jz .kb
+    mov dx, ax                  ; ...and R paragraphs UP the claim, which is
+    call op_zrpara              ; where it lands (SPEC.md 20.12.7.4). R + the
+    add ax, dx                  ; read covers the expanded part as well: R is
+    jc .no                      ; at least len - packed, so `len` from the
+.kb:                            ; claim's base, which is where op_fetch
+                                ; expands it (88.10.4.1), ends inside it
+%endif
+    add ax, 63                  ; paragraphs -> KB, rounded up
     jc .no
-    mov cl, 10
+    mov cl, 6
     shr ax, cl
     pop dx
     pop cx
@@ -1472,18 +1492,14 @@ op_fetch:
 .get:
     call op_clbget
     jc .nodisk
-    call op_lazykb              ; AX = the KB it wants, slack included
-    jc .toobig
-%if OP_HAS_COMP
-    ; A COMPRESSED ROW HOLDS slack + R + packed, and R is `len - packed`
-    ; rounded UP to a paragraph - so up to fifteen bytes more than the `len`
-    ; op_lazykb sized from. One KB covers it and is transient: the claim lives
-    ; for one expansion.
-    test byte [si+OP_R_FLAG], OP_COMP
-    jz .plainkb
-    inc ax
-.plainkb:
-%endif
+    call op_lazykb              ; AX = the KB it wants: the slack, and for a
+    jc .toobig                  ; COMPRESSED row R + the read, which is what
+                                ; it holds while it expands (op_lazykb). It
+                                ; was op_lazykb of `len` plus one KB here and
+                                ; nothing in op_lazyok, so the question and
+                                ; the fetch disagreed - and neither covered
+                                ; R plus a whole cluster of read on a volume
+                                ; whose clusters are bigger than 1KB
     mov bx, ax
     push bx
     call OSAPI_MEM_AVAIL        ; ASK, then claim - op_load's rule, for
@@ -1517,6 +1533,7 @@ op_fetch:
 %endif
     add ax, bx                  ; op_lazykb has already proved that neither of
     mov [op_want], ax           ; these carries, and refused if they did - and
+    mov word [op_want+2], 0
                                 ; THIS, before the rounding, is what op_read
                                 ; must see arrive
     mov dx, [op_clb]
@@ -1524,6 +1541,8 @@ op_fetch:
     add ax, dx
     not dx
     and ax, dx
+    mov cl, 4
+    shr ax, cl                  ; in paragraphs, as op_read counts
     mov [op_cap], ax
 
     ; THE CARVE'S READ WORDS ARE BORROWED AND PUT BACK. op_read reads
@@ -1568,44 +1587,83 @@ op_fetch:
     pop si                      ; the row
     jc .ioerr
 
-    mov ax, bx                  ; ...and the part sits past the slack, which
-    mov cl, 4                   ; is a multiple of 512 and therefore of 16 -
-    shr ax, cl                  ; op_seg's arithmetic, one part at a time
+    mov ax, bx                  ; ...and the part's READ sits past the slack,
+    mov cl, 4                   ; which is a multiple of 512 and therefore of
+    shr ax, cl                  ; 16 - op_seg's arithmetic, one part at a time.
+                                ; A plain row is used where it was read; a
+                                ; compressed one is expanded onto the claim's
+                                ; base below
     add ax, dx
 %if OP_HAS_COMP
     test byte [si+OP_R_FLAG], OP_COMP
     jz .plainbank
-    ; --- EXPAND IT, DOWN ITS OWN CLAIM (SPEC.md 20.12.7.4) -----------------
+    ; --- EXPAND IT ONTO ITS OWN CLAIM'S BASE (SPEC.md 20.12.7.4) -----------
     ; op_unpack's walk with one row in it: the stream is R paragraphs up and
-    ; the output starts at the base, so the write pointer chases the read
-    ; pointer and never catches it.
-    push dx                     ; THE CLAIM, for .zbad - the base is not it
+    ; the output starts BELOW it, so the write pointer chases the read pointer
+    ; and never catches it. **AND BELOW IT MEANS THE CLAIM'S BASE, not the
+    ; part's place past the head slack** (SPEC.md 88.10.4.1). The read had to
+    ; start on the cluster at or below the part, so the stream's own bytes are
+    ; slack + R paragraphs up - and an output at the base starts slack FURTHER
+    ; below them than the R that in_place_margin was measured against, which
+    ; is only more room: the writer never overtakes a reader that far ahead
+    ; for the reason it never overtakes one exactly R ahead. Expanding past the
+    ; slack instead, which is what this did, put the part where the shrink
+    ; below could not reach the bytes in front of it - a shrink only takes the
+    ; TAIL - so a 32KB-cluster volume kept up to 31.5KB of dead slack for the
+    ; whole session.
+    push dx                     ; THE CLAIM: .zbad's, and now the OUTPUT's
     push si                     ; the row
-    push ax                     ; the base
+    push ax                     ; the part's place in the READ, past the slack
     call op_zrpara              ; AX = R in paragraphs; SI preserved
-    pop dx                      ; DX = the base
-    push dx
-    add ax, dx                  ; ...and AX = where the stream was read to
-    push ax
+    pop di
+    add di, ax                  ; DI = where the stream's own bytes were read
     mov cx, [si+OP_R_ZKB]       ; CX = the PACKED length, while it is still
     mov ax, [si+OP_R_LEN]       ; there - one more store and it is a segment
     mov dx, ax                  ; BX:DX = the 32-bit expected output, and a
     xor bx, bx                  ; part is 16 bits by os88pkg.py
     mov al, [op_table + OP_T_FMT]   ; THE FORMAT, READ BEFORE DS MOVES: one
     xor ah, ah                      ; instruction later op_table is
-    pop di                          ; unreachable, which op_unpack's own
+    pop si                          ; unreachable, which op_unpack's own
     pop es                          ; header records as the defect that
-    push es                         ; refused every stream
+    push es                         ; refused every stream. ES = the claim
+    push si
     push ds
     mov ds, di                  ; DS:SI the stream, ES:DI the output, DI = 0
     xor si, si                  ; being the contract (SPEC.md 20.13.3)
     xor di, di
     call OSAPI_DECOMP
-    pop ds                      ; ...and none of these four touches CF
-    pop ax                      ; the base
+    pop ds                      ; ...and none of these three touches CF
     pop si                      ; the row
     pop dx                      ; the claim
     jc .zbad
+%if OP_HAS_ZLAZY
+    ; THE SHADOW (SPEC.md 20.12.7.4.1): the packed length, one store before
+    ; the segment takes its word, into the row's own shadow - op_drop's to
+    ; put back, so a dropped part is a never-fetched one and not a spent one
+    mov bx, si
+    sub bx, op_table + OP_T_ROWS
+    shr bx, 1
+    shr bx, 1                   ; the row x 2: rows are 8 bytes, shadows 2
+    mov cx, [si+OP_R_ZKB]
+    mov [op_zshadow + bx], cx
+%endif
+    ; --- AND KEEP THE PART AND NOTHING ELSE (SPEC.md 88.10.4.1) ------------
+    ; The claim is op_lazykb's: R plus the packed read rounded to whole
+    ; clusters, which is room for the stream to sit above its output and, on
+    ; a 32KB-cluster volume, mostly cluster. Expanded, the part is `len` bytes
+    ; from the claim's base and nothing else, which is never more than the
+    ; claim (R >= len - packed). A shrink always succeeds IN PLACE (SPEC.md
+    ; 50.3.1), so the base banked below is the claim's and op_drop frees it as
+    ; it stands. CF is not read: a refused shrink leaves the claim as it was,
+    ; which is only the cost it had before.
+    push dx                     ; the claim, which IS the part's base now
+    mov ax, [si+OP_R_LEN]
+    add ax, 1023                ; `len` in KB, rounded up - the RCR takes the
+    rcr ax, 1                   ; carry back in, so a part near 64KB keeps its
+    mov cl, 9                   ; 17th bit
+    shr ax, cl                  ; AX = the KB the session keeps
+    call OSAPI_MEM_REGROW       ; DX = the claim, and a shrink keeps it there
+    pop ax                      ; the base
 .plainbank:
 %endif
     or byte [si+OP_R_FLAG], OP_FETCHED  ; ...and the flag is what SAYS so
@@ -1671,8 +1729,21 @@ op_drop:
     test byte [si+OP_R_FLAG], OP_LAZY
     jz .out
     mov dx, [si+OP_R_ZKB]
-    or dx, dx
-    jz .out
+%if OP_HAS_ZLAZY
+    test byte [si+OP_R_FLAG], OP_FETCHED
+    jz .out                     ; NOT HERE, and the flag is what says so: on
+                                ; an OP_COMP row zkb is the PACKED LENGTH until
+                                ; the fetch and again after a drop (out of the
+                                ; shadow, SPEC.md 20.12.7.4.1, or OP_SPENT),
+                                ; never zero, so `zkb != 0` spent an unfetched
+                                ; part and freed its length as a segment - the
+                                ; no-op promised above was op_fetch's old
+                                ; question asked here (os88parts.inc OP_FETCHED)
+%else
+    or dx, dx                   ; ...and on a table with no compressed lazy
+    jz .out                     ; row the word and the flag always agree, so
+                                ; the two bytes shorter question is asked
+%endif
     and byte [si+OP_R_FLAG], ~OP_FETCHED & 0xFF  ; not here any more
 %if OP_HAS_COMP
     ; **A COMPRESSED ROW IS SPENT, NOT EMPTY** (SPEC.md 20.12.7.4): the packed
@@ -1682,23 +1753,44 @@ op_drop:
     xor ax, ax
     test byte [si+OP_R_FLAG], OP_COMP
     jz .plaindrop
+  %if OP_HAS_ZLAZY
+    mov bx, si                  ; ...UNLESS IT HAS A SHADOW (SPEC.md
+    sub bx, op_table + OP_T_ROWS    ; 20.12.7.4.1): the packed length
+    shr bx, 1                   ; op_fetch kept goes back, and the row is a
+    shr bx, 1                   ; never-fetched one again. BX is free: the
+    mov ax, [op_zshadow + bx]   ; frame below restores it
+    or ax, ax
+    jnz .plaindrop
+  %endif
     mov ax, OP_SPENT
 .plaindrop:
     mov [si+OP_R_ZKB], ax       ; CLEARED FIRST: op_seg must never answer a
+                                ; segment that is on its way back to the heap
+  %if OP_HAS_ZLAZY
+    or ax, ax                   ; ...and a COMPRESSED row's banked word IS its
+    jnz .free                   ; claim: op_fetch expands it onto the claim's
+                                ; base (SPEC.md 88.10.4.1), so there is no
+                                ; slack to take off. AX is non-zero exactly
+                                ; when the row is OP_COMP: the shadow's packed
+                                ; length, or OP_SPENT. Without such a row
+                                ; every lazy row here is plain and AX is 0
+  %endif
 %else
     mov word [si+OP_R_ZKB], 0   ; CLEARED FIRST: op_seg must never answer a
-%endif
                                 ; segment that is on its way back to the heap
-    mov ax, [si+OP_R_OFF]       ; ...and the word op_fetch banked is the PART's
-    mov cl, 9                   ; base, which sits past the head slack (op_seg
-    shl ax, cl                  ; answers it as such). OSAPI_MEM_FREE matches
-    mov bx, [op_clb]            ; the CLAIM's base exactly (mem_find_own,
-    dec bx                      ; SPEC.md 50.3) and op_drop never reads its CF,
-    and ax, bx                  ; so a free of the biased word was a silent
-    mov cl, 4                   ; leak on every volume whose cluster is over
-    shr ax, cl                  ; 512 bytes. This is op_fetch's slack
-    sub dx, ax                  ; arithmetic run backwards; [op_clb] is live
-    call OSAPI_MEM_FREE         ; because op_fetch ran op_clbget before it claimed
+%endif
+    mov ax, [si+OP_R_OFF]       ; ...and the word op_fetch banked for a PLAIN
+    mov cl, 9                   ; row is the PART's base, which sits past the
+    shl ax, cl                  ; head slack (op_seg answers it as such).
+    mov bx, [op_clb]            ; OSAPI_MEM_FREE matches the CLAIM's base
+    dec bx                      ; exactly (mem_find_own, SPEC.md 50.3) and
+    and ax, bx                  ; op_drop never reads its CF, so a free of the
+    mov cl, 4                   ; biased word was a silent leak on every
+    shr ax, cl                  ; volume whose cluster is over 512 bytes. This
+    sub dx, ax                  ; is op_fetch's slack arithmetic run backwards;
+                                ; [op_clb] is live because op_fetch ran
+.free:                          ; op_clbget before it claimed
+    call OSAPI_MEM_FREE
 .out:
     pop es
     pop si
@@ -1730,7 +1822,7 @@ op_row:
 ; -----------------------------------------------------------------------------
 ; op_zrpara - R for a compressed lazy row, in paragraphs (SPEC.md 20.12.7.4)
 ; in:  SI -> the row
-; out: AX = roundup16(len - packed), as paragraphs
+; out: AX = roundup512(len - packed), as paragraphs
 ; clobbers: AX (the output), flags. SI preserved.
 ;
 ; The stream is read R paragraphs up its own claim and expands DOWN to the
@@ -1748,14 +1840,24 @@ op_row:
 ; on the DOS core - so the expansion ran off the end of its own stream and
 ; refused with `A part will not unpack`.
 ;
-; Rounded UP to a paragraph, because op_read lands on a segment boundary.
+; **AND ROUNDED UP TO A SECTOR, not a paragraph**, because R is where a DISK
+; READ lands: every disk-visible base is 512-byte aligned (CLAUDE.md), since
+; the kernel splits a run at a 64KB physical page only on a sector boundary
+; and int 13h answers a sector that straddles one with error 09h. Rounded to a
+; paragraph it read fine wherever the destination happened not to straddle a
+; page - the DOS core, by luck - and answered FERR_IO the first time a fetch
+; landed across one: Pixelstein's art masters, 0x2ED90 + 9,216 bytes across
+; 0x30000. Rounding the DIFFERENCE up keeps the paragraph's guarantee too -
+; it is never less than `len - packed` - which rounding the two terms
+; separately did not.
 ; -----------------------------------------------------------------------------
 op_zrpara:
     push cx
     mov ax, [si+OP_R_LEN]
     sub ax, [si+OP_R_ZKB]       ; os88pkg.py refuses a part that does not get
-    add ax, 15                  ; smaller, so this cannot go negative
-    mov cl, 4
+    add ax, 511                 ; smaller, so this cannot go negative, and a
+    and ax, 0FE00h              ; part is at most OP_PARTMAX, so this cannot
+    mov cl, 4                   ; carry
     shr ax, cl
     pop cx
     ret

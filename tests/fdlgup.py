@@ -1,186 +1,178 @@
 #!/usr/bin/env python3
-"""SPEC.md 13.8.3: the Standard File dialog's buttons fire on the RELEASE.
+"""SPEC.md 13.8.3 / 38.3: the chooser's column buttons fire on the RELEASE.
 
     python3 tests/fdlgup.py [machine]
 
-Before this, a press on `Cancel` fired Cancel - there was no way to think
-better of a mis-aimed press, which is the whole of what SPEC.md 13.6 says a
-control with no safe prefix action wants the release for.
+The Standard File chooser is a Disk window in a chooser role (SPEC.md 38.1),
+and on kern_big its button column - Open|Save, Cancel, Drive - is ids 3 to 5
+of the Disk window's OWN button set: `fm_brect` takes their rects from
+`fdlg_brect`, `fm_bhit` walks five ids for the chooser, and `fm_onup_x` hands
+a fired id >= 3 to the chooser (SPEC.md 38.3). So they press, track, cancel on
+slide-off and fire on release (SPEC.md 13.7) exactly like Refresh - and that
+is what this row holds them to, because a press that fired would leave no way
+to think better of a mis-aimed press, which is the whole of what SPEC.md 13.6
+says a control with no safe prefix action wants the release for.
 
-FIVE CASES, and the shape of the file is muptest's (tests/mouseup.py): the
-signal is read out of the WINDOW TABLE wherever it can be, so a pass is a
-memory read rather than a picture.
+SIX CASES. Every verdict is guest STATE where there is one - [fdlg_win] for
+"did it close", the chooser block's FS_DRV for "did Drive fire", [fm_dbtn] for
+"which button is DRAWN pressed" - and pixels only for what is a picture:
 
-  A  press Cancel, slide OFF it, release      -> the dialog is STILL UP
-  B  ...and the button came back up while held (the tracking edge, 13.8.2)
-  C  press Cancel, release ON it              -> the dialog is GONE
-  D  press Cancel, release on ANOTHER button  -> still up, nothing fired
-  E  a press draws the button DOWN            -> the pane changed under it
+  E  a press draws Cancel DOWN            -> [fm_dbtn] = Cancel, and its
+                                             rect changed under the press
+  B  ...and back UP when it slides off    -> [fm_dbtn] = 0, the rect upright
+  A  the slide-off release fires NOTHING  -> the chooser is still up
+  D  press Cancel, release on DRIVE       -> still up AND FS_DRV unmoved -
+                                             neither the pressed button nor
+                                             the one under the release fired
+  F  press Drive and HOLD                 -> FS_DRV unmoved while held; the
+                                             release moves it (SPEC.md 38.11)
+  C  press and release ON Cancel          -> the chooser closes
 
-C is the one that says the feature did not eat the feature it decorates: a
-build that had simply stopped dispatching would pass A, B and D.
+C and F are the ones that say the feature did not eat the feature it
+decorates: a build that had simply stopped dispatching column ids would pass
+A, B and D. F is also the direct positive form of the claim - the same button
+NOT firing on its press and firing on its release.
 
-The dialog is reached the way tests/fdlggrey.py reaches it - muptest's second
-window puts one up - because a package that opens a Standard File dialog is
-the only way to get one on screen.
+The chooser is muptest's: its button Two opens a Save chooser (any chooser
+would do; this is the fixture the row has always used).
 """
+import os
 import sys
 
-sys.path.insert(0, "tools")
-import os88marty as M
-from os88mouse import Mouse
-from os88fixture import need
-import os88geom                                              # noqa: E402
-from os88geom import WIN_SIZE, MAX_WIN
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "tools"))
+import os88geom as geom                                     # noqa: E402
+import os88marty as M                                       # noqa: E402
+import os88ui                                               # noqa: E402
+from os88fixture import need                                # noqa: E402
 
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
-W_FLAGS, W_X, W_Y, W_W, W_H, W_TITLE = 0, 2, 4, 6, 8, 10
-
-# fdlg.inc's button column, content-relative. Mirrored so that a change to
-# either side has to be made twice deliberately - which is what a gate is for.
-FD_BX1, FD_BX2 = 224, 286
-FD_BY0, FD_BY1, FD_BY2 = 20, 40, 60
-FD_BH = 13
-
+FM_BCANCEL, FM_BDRIVE = 4, 5        # files.inc's ids: the column is 3..5
 fails = []
 
 
 def check(name, cond, note=""):
-    print(f"  [{'PASS' if cond else 'FAIL'}] {name} {note}")
+    print("  [%s] %s %s" % ("PASS" if cond else "FAIL", name, note))
     if not cond:
         fails.append(name)
 
 
-def _u16(b, o):
-    return b[o] | (b[o + 1] << 8)
-
-
-def wins(m):
-    blob = m.read(m.sym("wm_wins"), WIN_SIZE * MAX_WIN)
-    out = []
-    for i in range(MAX_WIN):
-        r = blob[i * WIN_SIZE:(i + 1) * WIN_SIZE]
-        if _u16(r, W_FLAGS) & 2:
-            out.append(tuple(_u16(r, o) for o in (W_X, W_Y, W_W, W_H,
-                                                  W_TITLE)))
-    return out
-
-
-def titled(m, sym):
-    want = m.sym(sym) - (M.KERNEL_SEG << 4)     # W_TITLE is a NEAR offset
-    for w in wins(m):
-        if w[4] == want:
-            return w
-    return None
-
-
-def dlg(m):
-    return titled(m, "fdlg_s_topen") or titled(m, "fdlg_s_tsave")
-
-
-def btn_pt(d, which):
-    """The centre of button `which` (1..3), in SCREEN coordinates."""
-    cx, cy = d[0] + 1, d[1] + 18
-    top = (FD_BY0, FD_BY1, FD_BY2)[which - 1]
-    return cx + (FD_BX1 + FD_BX2) // 2, cy + top + FD_BH // 2
-
-
-def lit(m, mono, rect):
-    if mono:
-        w, h, rows = m.vram()
-        return sum(rows[y][x] for y in range(rect[1], rect[3] + 1)
-                   for x in range(rect[0], rect[2] + 1))
-    w, h, px = m.fbuf()
-    n = 0
-    for y in range(rect[1], rect[3] + 1):
-        for x in range(rect[0], rect[2] + 1):
-            i = (y * w + x) * 3
-            if px[i] or px[i + 1] or px[i + 2]:
-                n += 1
-    return n
-
-
-def open_dialog(m, mo):
-    """muptest's window two puts one up (tests/fdlggrey.py's route)."""
-    mo.dblclick(*os88geom.drive_pt(m, "B"))  # the zone BY LETTER, off desk_zslot (SPEC.md 26.9)
-    M.settle(m)
-    d = [w for w in wins(m)][-1]
-    mo.click(d[0] + d[2] // 2, d[1] + 9)
-    M.settle(m)
-    mo.dblclick(d[0] + 40, d[1] + 18 + 30)
-    M.settle(m)
-    w = wins(m)[-1]
-    cx, cy = w[0] + 1, w[1] + 18
-    two = (cx + 100 + 31, cy + 40 + 9)
-    mo.menu(two[0], two[1], two[0] + 2, two[1])
-    M.settle(m)
-    return dlg(m)
-
-
 need("build/muptest.img")          # `all` builds nothing under tests/
 
-with M.launch("build/os8088-360.img", apps="build/muptest.img",
-              machine=MACHINE) as m:
-    M.settle(m)
-    mo = Mouse(marty=m)
+with os88ui.boot("build/os8088-360.img", apps="build/muptest.img",
+                 machine=MACHINE) as ui:
+    m, mo = ui.m, ui.mo
     mono = m.video()["type"] in ("cga", "mda", "herc")
-    print(f"== {MACHINE} : fdlg fires on the release (SPEC.md 13.8.3) ==")
+    print("== %s : the chooser fires on the release (SPEC.md 13.8.3) =="
+          % MACHINE)
 
-    d = open_dialog(m, mo)
-    check("dialog up", d is not None)
-    if not d:
-        sys.exit("no dialog")
+    def lit(rect):
+        if mono:
+            _, _, rows = m.vram()
+            return sum(rows[y][x] for y in range(rect[1], rect[3] + 1)
+                       for x in range(rect[0], rect[2] + 1))
+        W, _, px = m.fbuf()
+        return sum(1 for y in range(rect[1], rect[3] + 1)
+                   for x in range(rect[0], rect[2] + 1)
+                   if any(px[(y * W + x) * 3:(y * W + x) * 3 + 3]))
 
-    cancel = btn_pt(d, 2)
-    rect = (d[0] + 1 + FD_BX1, d[1] + 18 + FD_BY1,
-            d[0] + 1 + FD_BX2, d[1] + 18 + FD_BY1 + FD_BH)
+    def dbtn():
+        return ui._byte("fm_dbtn")
 
-    # --- E: the press DRAWS it down --------------------------------------
+    def drv():
+        return m.read((geom.KERNEL_SEG << 4) + ui._word("fdlg_blk")
+                      + geom.FS_DRV, 1)[0]
+
+    def up():
+        return ui._word("fdlg_win") not in (0, 0xFFFF)
+
+    def wait(cond, what):
+        ui._wait(cond, what, os88ui.T_NAV)
+
+    ui.path("B:/MUPTEST.O88")
+    ui.settle()
+    cx, cy = ui.window("MupTest").content[:2]
+    ui.raise_window(ui.window("MupTest"))
+    mo.click(cx + 100 + 31, cy + 40 + 9, settle=0)   # muptest's Two
+    w = ui.chooser()
+
+    cancel = ui.chooser_button_xy(ui.CH_CANCEL, w)
+    drive = ui.chooser_button_xy(ui.CH_DRIVE, w)
+    rect = (cancel[0] - geom.FM_BTN_W // 2, cancel[1] - geom.FM_BTN_H // 2,
+            cancel[0] + geom.FM_BTN_W // 2, cancel[1] + geom.FM_BTN_H // 2)
+    d0 = drv()
+
+    # --- E: the press DRAWS it down ----------------------------------------
     mo.to(cancel[0], cancel[1] - 40)        # park off the column first
-    M.settle(m)                             # ...the next reads are PIXELS
-    up = lit(m, mono, rect)
+    ui.settle()                             # ...the next reads are PIXELS
+    upright = lit(rect)
     mo.to(*cancel)
     mo._edge(True)
-    M.settle(m)
-    down = lit(m, mono, rect)
-    check("a press draws Cancel DOWN", down < up - 100,
-          f"({down} lit held, {up} upright)")
+    wait(lambda: dbtn() == FM_BCANCEL, "Cancel to be drawn pressed")
+    ui.settle()
+    down = lit(rect)
+    check("a press draws Cancel DOWN", down != upright,
+          "([fm_dbtn]=%d; %d lit held, %d upright)" % (dbtn(), down, upright))
 
-    # --- B: it comes back UP while still held, off the button -------------
+    # --- B: it comes back UP while still held, off the button --------------
     mo.to(cancel[0] - 90, cancel[1], l=True)        # l=True: STILL HELD
-    M.settle(m)
-    off = lit(m, mono, rect)
-    check("...and back UP when the pointer slides off it", off == up,
-          f"({off} lit, upright is {up})")
+    wait(lambda: dbtn() == 0, "Cancel to be drawn upright again")
+    ui.settle()
+    off = lit(rect)
+    check("...and back UP when the pointer slides off it", off == upright,
+          "(%d lit, upright is %d)" % (off, upright))
 
-    # --- A: the release lands off it: NOTHING fires -----------------------
+    # --- A: the release lands off it: NOTHING fires ------------------------
     mo._edge(False)
-    M.settle(m)
-    check("a slide-off release does NOT close the dialog", dlg(m) is not None)
+    M.pace(m, 1.0)          # a fired Cancel posts and the reap closes it a
+                            # pass later: give it that pass, then ask
+    check("a slide-off release does NOT close the chooser", up())
 
-    # --- D: released on a DIFFERENT button: nothing fires -----------------
-    d = dlg(m)
-    mo.to(*btn_pt(d, 2))
+    # --- D: released on a DIFFERENT button: nothing fires ------------------
+    mo.to(*cancel)
     mo._edge(True)
-    M.pace(m, 0.6)
-    mo.to(*btn_pt(d, 3), l=True)            # slide onto Drive, still held
+    wait(lambda: dbtn() == FM_BCANCEL, "Cancel to be drawn pressed")
+    mo.to(*drive, l=True)                   # slide onto Drive, still held
+    wait(lambda: dbtn() == 0, "Cancel to let go")
+    check("...and sliding onto Drive does not press Drive", dbtn() == 0,
+          "([fm_dbtn]=%d)" % dbtn())
+    mo._edge(False)
     M.pace(m, 1.0)
-    mo._edge(False)
-    M.settle(m)
-    check("released on ANOTHER button, nothing fires", dlg(m) is not None)
+    check("released on ANOTHER button: the chooser is still up", up())
+    check("...and Drive did not fire either", drv() == d0,
+          "(FS_DRV %d -> %d)" % (d0, drv()))
 
-    # --- C: press AND release on Cancel: it closes ------------------------
-    # The one that says the feature did not eat the feature it decorates.
-    d = dlg(m)
-    mo.to(*btn_pt(d, 2))
+    # --- F: Drive does NOT fire on its press, and DOES on its release ------
+    mo.to(*drive)
     mo._edge(True)
-    M.pace(m, 0.6)
+    wait(lambda: dbtn() == FM_BDRIVE, "Drive to be drawn pressed")
+    M.pace(m, 1.0)
+    check("Drive held: nothing has fired yet", drv() == d0,
+          "(FS_DRV %d -> %d)" % (d0, drv()))
     mo._edge(False)
-    M.settle(m)
-    check("press-and-release ON Cancel closes the dialog", dlg(m) is None)
+    try:
+        wait(lambda: drv() != d0, "Drive to move the chooser")
+    except os88ui.UIError:
+        pass                                # ...said below
+    check("Drive released: it fires (SPEC.md 38.11)", drv() != d0,
+          "(FS_DRV %d -> %d)" % (d0, drv()))
+    check("...and the chooser is still up", up())
+
+    # --- C: press AND release on Cancel: it closes -------------------------
+    # The one that says the feature did not eat the feature it decorates.
+    mo.to(*cancel)
+    mo._edge(True)
+    wait(lambda: dbtn() == FM_BCANCEL, "Cancel to be drawn pressed")
+    mo._edge(False)
+    try:
+        ui.chooser_gone()
+    except os88ui.UIError:
+        pass
+    check("press-and-release ON Cancel closes the chooser",
+          ui._word("fdlg_win") == 0)
 
 print()
 if fails:
-    print(f"{len(fails)} FAILED: {', '.join(fails)}")
+    print("%d FAILED: %s" % (len(fails), ", ".join(fails)))
     sys.exit(1)
 print("all pass")

@@ -267,9 +267,7 @@ ld_hdr_ok:
     je .yes                                  ; kernel's first call in jumps
 .no:                                         ; into the image's data
     stc
-    ret
-.yes:
-    clc
+.yes:                                        ; (equal is CF = 0, the answer)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -292,65 +290,7 @@ ld_hdr_ok:
 ; It is, so the destination is a SEGMENT `prefix/16` paragraphs along and DI
 ; stays 0, which keeps the offset bound one instruction.
 ; -----------------------------------------------------------------------------
-ld_expand:
-    push ds
-    mov si, [ld_roff]           ; every kernel variable this needs is read
-    mov cx, [ld_fsz]            ; while DS is still KERNEL_SEG
-    mov dx, [ld_img]
-    mov ax, [ld_base]           ; (the format comes off the header itself,
-    mov es, ax                  ; below, once DS reaches it)
-    mov ds, ax                  ; source and destination are one region
-    mov al, [si+LD_H_FLAGS]     ; the CLEAR prefix, off the header the file
-    mov bx, LD_HDR_SIZE         ; carries at R: what the mount reads out of
-    test al, 1                  ; the first sector and must never have to
-    jz .noico                   ; decompress to get (SPEC.md 20.13.1) - the
-    add bx, 64                  ; header, the icon, the association block,
-.noico:                         ; the document glyph. At most 128, and ALWAYS
-    test al, 2                  ; a multiple of 16, which is what lets the
-    jz .noasc                   ; body's destination be a SEGMENT below
-    add bx, 16
-.noasc:
-    test al, LD_HF_GLYPH        ; ...and the document glyph (SPEC.md 54.3.2),
-    jz .nogly                   ; sixteen bytes for eight of glyph for the
-    add bx, 16                  ; multiple-of-16 reason above
-.nogly:
-    test al, 0x10               ; bit 4 says which format (SPEC.md 20.13): the
-    mov al, LZ_LZ4              ; decoder wants 0 or 1, and CX - the file's
-    jz .fmt                     ; length - is not a register to shift by
-    mov al, LZ_LZB
-.fmt:
-    xor di, di
-    push ax                     ; ...the format, across the copy
-    push cx
-    mov cx, bx
-    cld
-    rep movsb                   ; the prefix, down to offset 0 - and this
-                                ; leaves SI on the compressed body, and CX
-                                ; spent, which is when it can be a shift count
-    mov cl, 4
-    mov ax, bx
-    shr ax, cl                  ; the prefix in PARAGRAPHS...
-    mov cx, es
-    add ax, cx                  ; ...is where the body's segment starts
-    pop cx
-    sub cx, bx                  ; the body's length
-    sub dx, bx                  ; ...and what it must produce
-    mov es, ax
-    xor di, di
-    xor bx, bx                  ; BX:DX is the expected output (SPEC.md 20.14.5)
-                                ; and an image is 16 bits by ld_check_hdr
-    pop ax                      ; AL = the format
-    call lz_decomp_x
-    pop ds
-    mov es, [ld_base]           ; ES BACK TO THE REGION'S BASE. The destination
-                                ; above is a segment `prefix/16` paragraphs
-                                ; along, and step 6's disk-swap re-check reads
-                                ; the header at ES:0 - which without this is 96
-                                ; bytes into the image, and every launch of a
-                                ; compressed package answers "Bad package".
-                                ; `mov` leaves the flags alone, so the CF
-                                ; lz_decomp_x set is still the answer
-    ret
+; (THE CODE IS ld_run_body_x's step 6a since size pass 9, its one caller.)
 
 ; -----------------------------------------------------------------------------
 ; ld_hdr_size - the IMAGE, BSS and ENTRY a .o88 header declares, bounded
@@ -958,16 +898,76 @@ ld_run_body_x:
     ; --- 6a. expand it, if it came compressed (SPEC.md 20.13) -----------------
     cmp byte [ld_cfmt], 0
     je .expanded
-    call ld_expand
-    jnc .expanded
+                                ; LD_EXPAND, inlined (its header, above, is
+                                ; the account of both moves)
+    push ds
+    mov si, [ld_roff]           ; every kernel variable this needs is read
+    mov cx, [ld_fsz]            ; while DS is still KERNEL_SEG
+    mov dx, [ld_img]
+    mov ax, [ld_base]           ; (the format comes off the header itself,
+    mov es, ax                  ; below, once DS reaches it)
+    mov ds, ax                  ; source and destination are one region
+    mov al, [si+LD_H_FLAGS]     ; the CLEAR prefix, off the header the file
+    mov bx, LD_HDR_SIZE         ; carries at R: what the mount reads out of
+    test al, 1                  ; the first sector and must never have to
+    jz .noico                   ; decompress to get (SPEC.md 20.13.1) - the
+    add bx, 64                  ; header, the icon, the association block,
+.noico:                         ; the document glyph. At most 128, and ALWAYS
+    test al, 2                  ; a multiple of 16, which is what lets the
+    jz .noasc                   ; body's destination be a SEGMENT below
+    add bx, 16
+.noasc:
+    test al, LD_HF_GLYPH        ; ...and the document glyph (SPEC.md 54.3.2),
+    jz .nogly                   ; sixteen bytes for eight of glyph for the
+    add bx, 16                  ; multiple-of-16 reason above
+.nogly:
+    test al, 0x10               ; bit 4 says which format (SPEC.md 20.13): the
+    mov al, LZ_LZ4              ; decoder wants 0 or 1, and CX - the file's
+    jz .fmt                     ; length - is not a register to shift by
+    mov al, LZ_LZB
+.fmt:
+    xor di, di
+    push ax                     ; ...the format, across the copy
+    push cx
+    mov cx, bx
+    cld
+    rep movsb                   ; the prefix, down to offset 0 - and this
+                                ; leaves SI on the compressed body, and CX
+                                ; spent, which is when it can be a shift count
+    mov cl, 4
+    mov ax, bx
+    shr ax, cl                  ; the prefix in PARAGRAPHS...
+    mov cx, es
+    add ax, cx                  ; ...is where the body's segment starts
+    pop cx
+    sub cx, bx                  ; the body's length
+    sub dx, bx                  ; ...and what it must produce
+    mov es, ax
+    xor di, di
+    xor bx, bx                  ; BX:DX is the expected output (SPEC.md 20.14.5)
+                                ; and an image is 16 bits by ld_check_hdr
+    pop ax                      ; AL = the format
+    call lz_decomp_x
+    pop ds
+    mov es, [ld_base]           ; ES BACK TO THE REGION'S BASE. The destination
+                                ; above is a segment `prefix/16` paragraphs
+                                ; along, and step 6's disk-swap re-check reads
+                                ; the header at ES:0 - which without this is 96
+                                ; bytes into the image, and every launch of a
+                                ; compressed package answers "Bad package".
+                                ; `mov` leaves the flags alone, so the CF
+                                ; lz_decomp_x set is still the answer
+    jnc .expanded               ; (no flag is written after lz_decomp_x)
     mov al, LD_EBAD             ; a stream that does not decode is BAD DATA and
-    jmp .ret2                   ; not a disk error - the same class as a
-                                ; corrupt chain, and the same status
+.ret2j:                         ; not a disk error - the same class as a
+    jmp .ret2                   ; corrupt chain, and the same status (and
+                                ; ld_check_hdr's refusal below rides this
+                                ; jump, .ret2 being out of its short reach)
 .expanded:
 
     xor si, si                  ; re-check against the in-region header - the
     call ld_check_hdr           ; disk could have been swapped between the
-    jc .ret2                    ; peek and the read. ES IS STILL [ld_base]:
+    jc .ret2j                   ; peek and the read. ES IS STILL [ld_base]:
                                 ; dsk_read_chain_x is "everything else
                                 ; preserved", so the header is read where the
                                 ; read just put it. This used to stage 32
@@ -1213,11 +1213,13 @@ ld_start:
     ; any path that does not draw (SPEC.md 20.2/25). So there is nothing here
     ; but a flag test, and no reason for it to be a routine that sets up the
     ; ES the line above already has.
-    xor ax, ax                  ; ...decided in AX and stored ONCE: the pair of
-    test byte [es:LD_H_FLAGS], 1 ; `mov word [di+I_ICON], imm` this replaces
-    jz .noico                   ; wrote the field twice on the arm that has an
-    mov ax, I_ICO_PKG           ; icon, and AX is free here (its last reader was
-.noico:                         ; I_SIZE, four instructions up)
+%if I_ICO_PKG != 1
+  %error "loader step 9 takes I_ICON straight off header flag bit 0: I_ICO_PKG must be 1"
+%endif
+    mov al, [es:LD_H_FLAGS]     ; ...decided in AX and stored ONCE: bit 0 says
+    and ax, 1                   ; the image carries an icon, and I_ICO_PKG IS
+                                ; 1, so the bit is the field (AX is free here:
+                                ; its last reader was I_SIZE, just up)
     mov [di+I_ICON], ax
     pop es
     mov bp, inst_bind_win
@@ -1864,11 +1866,8 @@ osapi_pkg_rehome_x:
     jz .no                      ; and can never be a part's base
     mov [ld_rehome], dx
     mov [ld_rehsz], ax
-    pop bx
-    retf
-.no:
-    pop bx                      ; `pop` writes no flag, so the refusal survives
-    stc
+    CLC_OR_STC .no              ; CF = 0 recorded, or (.no) CF = 1 refused
+    pop bx                      ; `pop` writes no flag, so the answer survives
     retf
 %else
 ; No re-homing loader ships on kern_small: the only two callers of the slot -

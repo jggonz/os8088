@@ -131,6 +131,12 @@ INCLUDES = [
      "IEEE-754 double arithmetic in software, with an 8087 path chosen at run "
      "time. Parse, format, add, subtract, multiply, divide, compare, sqrt, "
      "trunc, floor, round."),
+    ("os88lzw.inc", "106.18",
+     "LZW DECODE, GIF's flavour: Paint's reader with Paint taken out - a code "
+     "past the table or a non-root after a Clear is refused, a chain cannot "
+     "cycle - over the includer's 18 KB table segment, input appended by "
+     "`LZW_FILL`, strings handed to `LZW_RUN`. PiXEL's GIF part first; "
+     "TIFF's reader, the GIF encoder and Paint are to share it as source."),
     ("os88img.inc", "93",
      "Picture decoders: .PIX, .BMP and .PCX into the packed 4bpp that "
      "OSAPI_GFX_BLIT4 takes. Owns no state - the caller passes a block "

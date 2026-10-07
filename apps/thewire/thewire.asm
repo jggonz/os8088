@@ -2835,10 +2835,28 @@ wr_saved:
     mov [wr_need], bx                   ; **OSAPI_FILE_DFREE WRITES BX** (it is
     mov bx, [es:si+WC_TOTAL+2]          ; the sectors-per-cluster output), so a
     mov [wr_need+2], bx                 ; total held there is compared against
-    push ds                             ; 1, 2, 4 or 8 and the check never
-    pop es                              ; fires - which is exactly the
-    call OSAPI_FILE_DFREE               ; nearly-full disk it exists for
-    jc .noroom                          ; DX:AX = free bytes
+    mov bl, [es:si+WC_NSIDE]            ; 1, 2, 4 or 8 and the check never
+    mov bh, 0                           ; fires - which is exactly the
+    inc bx                              ; nearly-full disk it exists for. And
+    push bx                             ; how many FILES it writes: each one
+    push ds                             ; ends in a part cluster
+    pop es
+    call OSAPI_FILE_DFREE
+    pop cx                              ; (pop leaves CF)
+    jc .noroom                          ; DX:AX = free bytes, BX = spc
+    push dx                             ; THE BYTE SUM IS NOT WHAT THE DISK
+    push ax                             ; GIVES: every file rounds up to a
+    xchg ax, cx                         ; whole cluster, so up to a cluster a
+    mul bx                              ; file more - 33 with 32 sidecars
+    mov dx, ax                          ; (SPEC.md 92.2). AX = files * spc
+    mov cl, 9                           ; < 2^13, so that * 512 is AX << 9
+    shl ax, cl                          ; with AX >> 7 the high word
+    mov cl, 7
+    shr dx, cl
+    add [wr_need], ax
+    adc [wr_need+2], dx
+    pop ax
+    pop dx
     cmp dx, [wr_need+2]
     ja .room
     jb .noroom

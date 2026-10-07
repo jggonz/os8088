@@ -210,6 +210,12 @@ make live                             # os8088-usb.img + os8088.iso -- the live
                                       # USB image and the live CD (SPEC.md 80).
                                       # Needs the fetch on the line above and
                                       # the C toolchain, like allapps
+make usb-emu                          # os8088-emu-usb.img -- THE WEBSITE'S DEMO
+                                      # DISK (SPEC.md 80.7), the same volume on
+                                      # kern_emu with VMMOUSE.DRV wanted. Not
+                                      # in the zip; the web repo's release.py
+                                      # publishes it, and skipping it leaves
+                                      # the demo on last release's build
 ```
 
 Offer these, do not assume them. If `tools/setup-cc.sh` cannot run -- no

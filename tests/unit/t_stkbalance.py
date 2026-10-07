@@ -258,6 +258,37 @@ sb_tail:
     pop ax
     ret
 """},
+
+    "a `%define` alias is not an address taken (kernel/fdlg.inc's fdk_di)": {
+        # kern_big spells fdlg.inc's epilogue `%define fdk_di kretc_di`. Read
+        # as a mention it made BOTH names entries at depth 0, and each reported
+        # the ladder's pops as `ret at depth -2` here.
+        # The shape is the real one: the alias names a label that also EXISTS
+        # (the module image's own ladder), and its target is also jumped to
+        # directly by the rest of the kernel.
+        "a.inc": """
+%ifndef AL_MOD
+%define al_out al_ladder
+%endif
+al_body:
+    push ax
+    push bx
+    jmp al_out
+al_other:
+    push ax
+    push bx
+    jmp al_ladder
+al_ladder:
+    pop bx
+    pop ax
+    ret
+%ifdef AL_MOD
+al_out:
+    pop bx
+    pop ax
+    ret
+%endif
+"""},
 }
 
 

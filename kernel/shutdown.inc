@@ -12,7 +12,8 @@ modc_e_shutdown:
     jne .out                   ; the existing settings toast explains failure
     call COLD_SEG:drv_shutdown_x ; workers must still be able to yield here
     call KERNEL_SEG:cw_gfx_lock ; no GUI drawing after this point
-    mov byte [cur_barok], 0     ; the final wipe also covers the pointer, not just the bar
+    CURBAR_OFF                  ; the final wipe also covers the pointer, not just the bar
+                                ; (mouse.inc's macro: nothing under NOCURDISK=1, which has no [cur_barok])
     mov bp, cur_unlazy          ; restore the cursor BEFORE wiping its background
     call KERNEL_SEG:cw_mem_disp
     mov bp, sched_stop

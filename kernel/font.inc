@@ -388,15 +388,15 @@ section .text
 ; display and no machine with one card ever arrives at either.
 ; -----------------------------------------------------------------------------
 font_ch_hi:                     ; AL is past FONT_LAST - normally nothing to
-    cmp al, FONT_SEAM_A         ; draw, and still nothing unless the cut is the
-    jb font_ch_drop             ; caller. The counter is what keeps the two
-    cmp al, FONT_SEAM_B         ; codes PRIVATE, so OSAPI_FONT_CHAR with 128
-    ja font_ch_drop             ; draws what it has always drawn
-    cmp byte [font_ch_on], 0
-    je font_ch_drop
+    cmp byte [font_ch_on], 0    ; draw, and still nothing unless the cut is the
+    je font_ch_drop             ; caller. The counter is what keeps the two
+                                ; codes PRIVATE, so OSAPI_FONT_CHAR with 128
+                                ; draws what it has always drawn
     cmp al, FONT_SEAM_A         ; the part that IS here, masked in both axes -
     je font_char.edgeok         ; so the edge tests have nothing left to say
-    jmp font_char.chok          ; and are stepped over; the spill is tested
+    cmp al, FONT_SEAM_B         ; and are stepped over; the spill is tested
+    je font_char.chok
+    jmp short font_ch_drop      ; any other code past FONT_LAST: nothing
 
 font_ch_spill:                  ; the cell runs off this display's edge
     call font_ch_cut
@@ -819,24 +819,18 @@ font_ch_cut:
     shr al, cl                  ; nothing, and a glyph with no ink past the
     not al                      ; seam leaves AL zero after the renderers' own
     mov ah, al                  ; shift - which their `or al, al / jz` skips
-    mov cx, bp                  ; already. k = 8 shifts the byte away and `not`
+    mov cx, 8                   ; already. k = 8 shifts the byte away and `not`
 .par:                           ; brings back FF, so no mask is no work
     mov al, [es:si]
-    and al, ah
-    mov [ss:di], al
     inc si
+    and al, ah
+    dec bp                      ; ONE loop over all eight rows: the first n
+    jns .pkeep                  ; (BP = n, 1..8, counted down to -1) keep
+    xor al, al                  ; their columns and the rest are zeroed - what
+.pkeep:                         ; two loops and a `jz` around the second did.
+    mov [ss:di], al             ; BP is spent; the ladder gives it back
     inc di
-    loop .par                   ; CX = bp, 1..8
-    mov cx, 8
-    sub cx, bp
-    jz .pdone
-    xor al, al
-.paz:
-    mov [ss:di], al
-    inc di
-    loop .paz                   ; CX = 8 - bp, and the `jz .pdone` above is
-                                ; what keeps it off zero
-.pdone:
+    loop .par
     clc                         ; POP leaves the flags alone, so the answer
     jmp kret_bp
 %endif
@@ -2248,15 +2242,13 @@ font_run_scell:
                                 ; pixel and font_char masks the columns
     push ax                     ; bank the cell's own origin - the fill wants
     push bx                     ; the band, font_char wants the cell
-    push cx
-    mov ch, 0
-    mov cl, [wm_clip_r0]
-    add bx, cx                  ; BX = the band's first row...
-    mov cl, [wm_clip_rn]
-    mov dx, bx
-    add dx, cx
+    mov dx, [wm_clip_r0]        ; DL = r0, DH = rn: ONE load, the pair being
+    add bl, dl                  ; adjacent (wm.inc's %if says so)
+    adc bh, 0                   ; BX = the band's first row...
+    mov dl, dh
+    mov dh, 0
+    add dx, bx
     dec dx                      ; ...and DX its last
-    pop cx
     call gfx_fill               ; the BAND, not the cell: the erase has to
                                 ; cover what the glyph is about to letter and
                                 ; nothing else, or the two disagree again

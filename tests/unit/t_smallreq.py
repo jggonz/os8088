@@ -119,6 +119,18 @@ FORBIDDEN = {
                     "loader fetches and a shadow claim of 16KB (6.4KB of it "
                     "composed today), against a 52.5KB arena whose largest "
                     "run is 17.5-20KB (SPEC.md 24.5, 97.9)",
+    # DRMARCO rode every small floppy from #207 to 2026-10-04 with this ground
+    # already written in the Makefile: $(SMALLOMIT_GAMES) was a `:=` naming
+    # $(DM_SHIP) a thousand lines before $(DM_SHIP) existed, so the filter
+    # matched nothing - the silent no-op this table exists to catch, and it
+    # had no row
+    "DRMARCO.O88":  "the loader cannot place it: image 49,685 + bss 6,648 is "
+                    "56,333 bytes in ONE claim against a 53,760-byte arena, so "
+                    "it is `Load failed` before it can refuse in its own words "
+                    "(SPEC.md 24.5, 100)",
+    "DRMARCO.VGA":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
+    "DRMARCO.HRC":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
+    "DRMARCO.CGA":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
     # DOTDEL.O88 IS NOT A ROW. It was omitted beside SKIES on a ground that
     # SPEC.md 5.4.2.5.1 withdrew (kern_small has a `gfx_blit1` body now), and
     # SPEC.md 24.5.5 is the measurement that put it back on the floppy. A name

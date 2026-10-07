@@ -984,14 +984,17 @@ task_spawn:
                                 ; spawn argument, ES:DI = the frame - and
                                 ; sch_wk_restart builds the identical twelve
                                 ; words when it throws a worker's stack away
-    mov [bx+T_INST], dl         ; owning instance (0xFF = none)
-    mov byte [bx+T_FLAGS], 0    ; TF_SERVICE is the driver cell's to set
+%if T_FLAGS != T_INST + 1
+  %error "task_spawn writes T_INST and T_FLAGS as one word"
+%endif
+    xor dh, dh                  ; (DX is the caller's again at the pop)
+    mov [bx+T_INST], dx         ; owning instance (0xFF = none), and T_FLAGS
+                                ; = 0: TF_SERVICE is the driver cell's to set
                                 ; (SPEC.md 53.2), never inherited
 
-    mov ax, cx                  ; zero the slot's cycle counter before the
-    shl ax, 1                   ; publish, so a reused slot never inherits
-    shl ax, 1                   ; a dead task's total (SPEC.md 8.1)
-    mov di, ax
+    mov di, cx                  ; zero the slot's cycle counter before the
+    shl di, 1                   ; publish, so a reused slot never inherits
+    shl di, 1                   ; a dead task's total (SPEC.md 8.1)
     xor ax, ax                  ; through AX: mov [m],ax is 4 bytes where
     mov [di+sch_cycles], ax     ; mov word [m],0 is 6, and AX is free here
     mov [di+sch_cycles+2], ax   ; (it held the FLAGS word, dead, and is
@@ -2369,9 +2372,10 @@ sch_isr:
 .wake:
     cmp byte [bx+T_STATE], 2
     jne .next
-    mov ax, dx
-    sub ax, [bx+T_WAKE]         ; wrap-safe: sign of the difference decides
-    js .next                    ; still in the future
+    cmp dx, [bx+T_WAKE]         ; wrap-safe: sign of the difference decides
+    js .next                    ; still in the future. A `cmp` and not `mov
+                                ; ax, dx / sub`: the same SF, 2 bytes and ~8
+                                ; cycles less per sleeper (size pass 9)
     mov byte [bx+T_STATE], 1
 .next:
     add bx, T_SIZE
@@ -2424,8 +2428,9 @@ sch_switch:
     mov byte [sch_hold], SCH_WD_TICKS
                                 ; the outgoing task reached the switch path,
                                 ; so its watchdog budget is full again
-    mov bl, [sch_cur]           ; park the outgoing task's SP
-    xor bh, bh
+    mov dl, [sch_cur]           ; DL = the slot, for the park AND the scan
+    mov bl, dl                  ; below: one load of [sch_cur] where there
+    xor bh, bh                  ; were two (-2 bytes, ~8 cycles; size pass 9)
     mov cl, 3                   ; T_SIZE = 8: ***CL = 3 FROM HERE TO .pick***
     shl bx, cl                  ; (see below)
     mov [bx+sch_tasks+T_SP], sp
@@ -2455,9 +2460,9 @@ sch_switch:
                                 ; that check ever used CL again; it does not,
                                 ; and size pass 6 took the reload (-2). Past
                                 ; .pick, `call sch_account` clobbers CX and
-                                ; nothing reads CL again.
-    mov dl, [sch_cur]           ; scan cur+1, cur+2, ... (cur itself last)
-    mov dh, MAX_TASKS
+                                ; nothing reads CL again. DL = [sch_cur] from
+                                ; the park, and nothing between writes DX
+    mov dh, MAX_TASKS           ; scan cur+1, cur+2, ... (cur itself last)
 .scan:
     inc dl
     cmp dl, MAX_TASKS
@@ -2625,11 +2630,12 @@ sch_stkdie:
 ; to have left it:
 ;
 ;   * **A STACK THAT IS NOT THE DEAD ONE.** SP is currently somewhere below the
-;     dead slice's canary, scribbling on the slot underneath. So the evidence -
-;     the slot, its parked SP, its instance - is read into REGISTERS FIRST, in
-;     seven instructions on the stack we arrived on, and only then is SP moved
-;     (and the evidence pushed onto the new one; it was banked in four bytes
-;     of `.bss` until kernel size pass 8).
+;     dead slice's canary, scribbling on the slot underneath. So SP moves
+;     FIRST, before anything is called or pushed, and the evidence - the slot,
+;     its parked SP, its instance - is read out of the task TABLE into
+;     registers and pushed onto the new stack (it was banked in four bytes of
+;     `.bss` until kernel size pass 8; the read preceded the move until pass
+;     9, which buys sch_currec's call nothing on the dead stack).
 ;     It moves to task 0's, the largest in the machine and, at IF = 0 for ever,
 ;     owned by nobody: if task 0 is itself the corpse then its contents are
 ;     already banked and overwriting them costs the panel nothing.
@@ -2656,15 +2662,16 @@ SDP_Y       equ 24              ; no geometry: it fits 720, 640 and 640 alike.
                                 ; advance, and this has a byte budget
 
 sch_diepanel:
-    mov bl, [sch_cur]           ; --- read the evidence, still on the dead
-    mov dl, bl                  ;     stack, into REGISTERS: after this nothing
-    xor bh, bh                  ;     here reads a task record, so nothing here
-    mov cl, 3                   ;     cares that the table is suspect. DL = the
-    shl bx, cl                  ;     slot, DH = its instance, AX = its parked
-    mov ax, [bx+sch_tasks+T_SP] ;     SP - and registers survive the move of
-    mov dh, [bx+sch_tasks+T_INST] ;   SP, so they go on the NEW stack below
-
-    mov sp, STK0_TOP            ; ...and OFF it (see the header)
+    mov sp, STK0_TOP            ; OFF the dead stack first (see the header):
+                                ; the evidence is in the task TABLE, not on
+                                ; any stack, so the order of these two steps
+                                ; is free - and with SP moved, sch_currec's
+                                ; call lands on task 0's stack, not the corpse
+    call sch_currec             ; --- read the evidence into REGISTERS: after
+    mov dl, [sch_cur]           ;     this nothing here reads a task record, so
+    mov ax, [bx+sch_tasks+T_SP] ;     nothing cares that the table is suspect.
+    mov dh, [bx+sch_tasks+T_INST] ;   DL = the slot, DH = its instance, AX =
+                                ;     its parked SP
     push dx                     ; the instance, for the last field...
     push ax                     ; ...the SP...
     push dx                     ; ...and the slot, popped in the order drawn
@@ -2686,11 +2693,8 @@ sch_diepanel:
     xchg al, ah                 ; AL = the instance
     cmp al, 0xFF
     je .name
-    xor ah, ah                  ; ...and any other slot names its own
-    mov cl, 5                   ; I_RECSZ = 32
-    shl ax, cl
-    add ax, inst_tab + I_NAME
-    xchg ax, si
+    call inst_ptr               ; ...and any other slot names its own
+    lea si, [di+I_NAME]
 .name:
     call sch_dpstr
 .hang:                          ; sch_stkdie's promise, kept HERE: SP is task
@@ -2704,9 +2708,7 @@ sch_dpstr:
     mov ax, 0x0F00              ; AL = 0 ink on AH = 15 ground: BLACK ON WHITE,
                                 ; which is the one pair that reads on all three
                                 ; adapters and on any desktop pattern under it
-    push ds
-    pop es                      ; font_run_x takes the string at ES:SI
-    call font_run
+    call font_run               ; (it points ES at DS itself, for font_run_x)
 .adv:
     lodsb                       ; the pen moves by what was actually drawn, so
     or al, al                   ; no caller ever counts a string's length

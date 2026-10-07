@@ -303,6 +303,66 @@ def main():
     for lab, (sect, _d, _k) in pasted.items():
         where[lab] = sect
 
+    # ...AND WHAT A MACRO EXPANDS TO. The loop below skips every %macro body,
+    # for the reason the near-call scan above gives - a body's own section is
+    # wherever the macro happens to be WRITTEN - and so a body expanded INTO
+    # the core was read by nothing: `call cp_fdbs` inside CFG_SAVE, expanded
+    # as `CFG_SAVE cpc` in `.modc`, named a `.modu` routine and passed (SPEC.md
+    # 31.14's first cut). So every macro's body is kept, and at each expansion
+    # line it is expanded - `%1 %+ _x` pasted, `%n` substituted, `%%local`s
+    # dropped, nested expansions followed - and judged exactly as lines
+    # written there would be: by the near-call scan below for a pasted call
+    # target (`call %1 %+ _fdbs`), which mbody cannot hold because the name
+    # does not exist until the expansion, and by the core check after it for
+    # any word at all.
+    mlines = {}                      # %macro -> its body, comments stripped
+    for f in files:
+        macro = None
+        for _sect, _n, line in sections(f):
+            m = MACRO_D.match(line)
+            if m:
+                macro = m.group(1)
+                mlines[macro] = []
+                continue
+            if ENDMACRO_B.match(line):
+                macro = None
+                continue
+            if macro:
+                mlines[macro].append(line)
+    PASTE = re.compile(r'%(\d+)\s*%\+\s*(\w+)')
+    PARAM = re.compile(r'%(\d+)')
+
+    def mexpand(name, args, depth=0):
+        """The lines `name args` expands to, nested macros expanded too."""
+        out = []
+        if depth > 8:
+            return out
+
+        def arg(i):
+            i = int(i)
+            return args[i - 1] if 0 < i <= len(args) else ''
+        for body in mlines.get(name, ()):
+            body = PASTE.sub(lambda mm: arg(mm.group(1)) + mm.group(2), body)
+            body = re.sub(r'%%\w+', ' ', body)
+            body = PARAM.sub(lambda mm: arg(mm.group(1)), body)
+            if body.lstrip().startswith('%'):
+                continue             # a preprocessor line: %if, %error, ...
+            mm = re.match(r'^\s*(\w+)\b(.*)$', body)
+            if mm and mm.group(1) in mlines:
+                sub = [x.strip() for x in mm.group(2).split(',') if x.strip()]
+                out += mexpand(mm.group(1), sub, depth + 1)
+                continue
+            out.append(body)
+        return out
+
+    def mexp_at(code):
+        """A line that IS a macro expansion: its expanded lines, else []."""
+        mm = re.match(r'^\s*(\w+)\b(.*)$', code)
+        if not mm or mm.group(1) not in mlines:
+            return mm and mm.group(1), []
+        args = [x.strip() for x in mm.group(2).split(',') if x.strip()]
+        return mm.group(1), mexpand(mm.group(1), args)
+
     bad = []
     for f in files:
         inmacro = False
@@ -328,6 +388,10 @@ def main():
             m = MEXP.match(line)
             if m and m.group(1) in mbody:
                 hits += [(None, t) for t in mbody[m.group(1)]]
+            if m and m.group(1) in mlines:
+                for body in mexp_at(line)[1]:
+                    hits += [(c.group(1), c.group(2)) for c in CALL.finditer(body)
+                             if c.group(2) in pasted]
             m = CELL.match(line)
             if m:
                 hits.append((None, m.group(1)))
@@ -388,6 +452,11 @@ def main():
                 if where.get(w) == '.modu':
                     bad.append((f, n, 'settings core -> panel (.modc -> '
                                 '.modu)', w))
+            name, lines = mexp_at(code)
+            for w in [w for body in lines for w in WORD.findall(body)]:
+                if where.get(w) == '.modu':
+                    bad.append((f, n, 'settings core -> panel (.modc -> '
+                                '.modu), in the expansion of %s' % name, w))
     for f, n, why, tgt in bad:
         print("%s:%d: %s: %s" % (f, n, why, tgt), file=sys.stderr)
     if bad:

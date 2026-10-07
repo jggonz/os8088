@@ -1211,6 +1211,45 @@ FAST = [
         "say - the expectations are GENERATED, and a generated file with no "
         "staleness gate describes a corpus that has moved out from under it "
         "(SPEC.md 93.3)"),
+    Row("pixsamples", "fast", py("tools/pixsamples.py", "--check"), 0.2,
+        "PiXEL's sample gallery (SPEC.md 106.7) is the committed one: every "
+        "picture under apps/pixel/samples/ against its pinned SHA-256, no "
+        "stray file there, and the Makefile's three gallery lists "
+        "(PX_SAMPLES, _720, _360) the same as the tool's - a list edited in "
+        "one place and not the other would ship a disk short of a picture"),
+    Row("pixelsim", "fast", py("tools/pixelsim.py", "--selfcheck"), 0.2,
+        "PiXEL's reference (SPEC.md 106.13) holds to its own invariants - the "
+        "cube's levels invert, each desktop colour is its own plan, every "
+        "plan's t in 0..64, a view's DDA never leaves the master, the "
+        "statistics of a two-bin histogram - and apps/pixel/pxplans.inc, the "
+        "CUBE's and GREY's shipped plans, is exactly what its search answers "
+        "today: a plan search changed in one place and not the other fails "
+        "the build rather than putting a different picture on the glass"),
+    Row("pixart", "fast", py("tools/pixart.py", "--selfcheck"), 0.3,
+        "PiXEL's colour faces (SPEC.md 106.16): tools/pixart.py draws the "
+        "toolbar's and the tool column's pictures out of pxicons.inc's own "
+        "art, every face whole bytes for the planar blit, every toolbar "
+        "face's gap chrome and every tool face's last column the column's "
+        "rule (a negative control proves the gap check can fail), each "
+        "caption with air in its button, and two builds byte-identical; "
+        "the Makefile's --check-asm then holds pixel.asm's numbers to it"),
+    Row("pixcorpus", "fast", py("tools/pixcorpus.py", "--check"), 0.4,
+        "PiXEL's fixtures (SPEC.md 106.13) - every depth, type, orientation "
+        "and packing of BMP, PCX, TGA, PNM and PIX, of TIFF, ICO, IFF and "
+        "MacPaint and the animated GIFs (106.25), and a hostile half - each "
+        "get the verdict SPEC.md 106.10 promises from tools/pixelsim.py, and "
+        "the same picture through five different readers is ONE master "
+        "(the agreement groups): the reference and the corpus are two "
+        "readings of one section, and tests/pxdecode.py then holds the "
+        "guest to the reference"),
+    Row("pixjpeg", "fast", py("tools/pixjpeg.py", "--check"), 0.1,
+        "PiXEL's JPEG fixtures (SPEC.md 106.19) are the committed ones: the "
+        "34 files under tests/pixel/ that Pillow and cjpeg made once - every "
+        "sampling, restarts, 16-bit tables, progressive scripts, the eight "
+        "EXIF orientations, the refused-by-name kinds - each against its "
+        "pinned SHA-256, and the list the same as the pins. A pure-Python "
+        "JPEG decode is too slow for this tier: soak's `pixjpegref` decodes "
+        "them"),
     Row("checkreadme", "fast", py("tools/checkreadme.py", "readme.txt"), 0.1,
         "README.TXT's width and size rules - Note Pad refuses a file one byte "
         "too long and shows nothing at all"),
@@ -2070,7 +2109,7 @@ SOAK = [
         "TITLE, read out of the package's segment rather than off the glass. "
         "MEASURED with the kernel's bit-2 exception disabled: ld_status 2, "
         "`Bad package`. Needs `make mseg`.",
-        needs=("marty",), serial=True, wants=("build/mseg360.img",)),
+        needs=("marty",), serial=True, wants=("build/mseg.img",)),
     Row("mseg360", "soak", py("tests/multiseg.py", "360"), 40.0,
         "...and the same package off a 360KB disk, where it is NOT a "
         "duplicate. A part begins on a 512-byte boundary in the FILE and "
@@ -2113,6 +2152,34 @@ SOAK = [
         "everything else is tested on, and a walk that ignored it would pass "
         "at 1.44MB and put every part 512 bytes low here. Needs `make msegz`.",
         needs=("marty",), serial=True, wants=("build/msegz360.img",)),
+    Row("msegw", "soak", py("tests/multiseg.py", "1440", "--wide"), 60.0,
+        "SPEC.md 20.12.11: the CARVE PASSES 64KB. MSEG's own primary with "
+        "parts 1 and 2 padded by tests/multiseg/mkwide.py, so the eager run "
+        "is 179 sectors - past the 128 op_size and the packer used to refuse "
+        "- and every per-part proof the rows above make has to come out "
+        "unchanged across 92KB of claim. The row also asserts op_secs and "
+        "op_usecs are both past 128, so a padding that shrank cannot pass it "
+        "on a carve the old bound allowed. MEASURED against the loader before "
+        "20.12.11: the same file is refused at launch, ld_status 4 (the "
+        "package refusing itself). Needs `make msegw`.",
+        needs=("marty",), serial=True, wants=("build/msegw.img",)),
+    Row("msegw360", "soak", py("tests/multiseg.py", "360", "--wide"), 60.0,
+        "...and off a 360KB disk, where the head slack is 512 and the 32-bit "
+        "op_want and op_bend have it added in; mseg360's argument for the "
+        "carve past 64KB. Needs `make msegw`.",
+        needs=("marty",), serial=True, wants=("build/msegw360.img",)),
+    Row("msegwz", "soak", py("tests/multiseg.py", "1440", "--comp", "--wide"),
+        60.0,
+        "...and with parts 0 and 2 COMPRESSED, so the carve is past 64KB at "
+        "BOTH ends - 146 sectors read, 179 unpacked - and op_unpack walks the "
+        "packed run R paragraphs up a claim bigger than a segment, R now "
+        "being cut from two sector counts. Needs `make msegw`.",
+        needs=("marty",), serial=True, wants=("build/msegwz.img",)),
+    Row("msegwz360", "soak", py("tests/multiseg.py", "360", "--comp",
+                                "--wide"), 60.0,
+        "...and that off a 360KB disk, with the head slack. Needs `make "
+        "msegw`.",
+        needs=("marty",), serial=True, wants=("build/msegwz360.img",)),
     Row("msegnomem", "soak", py("tests/msegnomem.py"), 40.0,
         "SPEC.md 20.12.3: a package that cannot fit is refused BEFORE IT "
         "READS ANYTHING, and this row measures that rather than asserting it. "
@@ -2220,6 +2287,31 @@ SOAK = [
         "of the row itself and that is still 0. Presence is what the package "
         "was told; the carve is what the disk did. Needs `make mseg`.",
         needs=("marty", "nasm"), serial=True, wants=("build/mseg.img",)),
+    Row("mseglzslack", "soak", py("tests/mseglzslack.py"), 50.0,
+        "SPEC.md 88.10.4.1, 20.12.7.4: a fetched OP_COMP | OP_LAZY part "
+        "keeps ITS OWN LENGTH and nothing of the volume's. op_fetch claims R "
+        "plus the packed read rounded to whole clusters, and a read may only "
+        "begin on a cluster boundary, so the part's bytes start a HEAD SLACK "
+        "up the claim - up to 31.5KB on a 32KB-cluster hard disk. It expands "
+        "onto the claim's BASE and shrinks the claim to `len` rounded to a "
+        "KB; it used to expand past the slack, where a shrink (which only "
+        "takes the tail) could not reach it. SOAK and not full because it "
+        "is a MartyPC launch plus two keys, and because the floppies every "
+        "other row boots cannot show it: their slack is at most 512 bytes "
+        "and the two layouts round to the same KB. The fixture is MSEG built "
+        "-DMSEG_LZC (OP_COMP on its lazy part 6 alone) on a 1.44MB disk "
+        "built --fatcap 1, whose clusters are 8KB, so part 6 starts 3KB into "
+        "one. FOUR ASSERTIONS: the fixture's slack is non-zero; the key "
+        "fetches the part and MSEG's own three checks pass on it (`MSEG 7/7 "
+        "OK`); a live claim BEGINS at op_seg's answer and is `len` rounded "
+        "to a KB in paragraphs; and a second key leaves the claim table "
+        "byte-for-byte as it was, which is the only thing that sees a wrong "
+        "op_drop free - OSAPI_MEM_FREE matches a base exactly and nobody "
+        "reads its CF. VERIFIED TO FAIL on the shrink-past-the-slack "
+        "op_fetch: no claim at the part's segment, and the holder 6KB where "
+        "the part is 3KB. Needs `make mseglz`.",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/mseglz.img", "build/mseglz.bin")),
     Row("msegxms", "soak", py("tests/msegxms.py"), 50.0,
         "SPEC.md 20.12.4: an OP_XMS part really goes ABOVE 1MB. Every MartyPC "
         "row proves the FALLBACK - an 8088 has nothing up there, so the part "
@@ -2471,8 +2563,9 @@ SOAK = [
         "Does a capsule the blit REFUSED leave a streak behind it? (SPEC.md "
         "44.10.6.2). VGA on purpose - on CGA ARK_PUFALL floors to 1 and the "
         "one vacated row is the capsule's BLACK top edge on a BLACK playfield, "
-        "so the broken build scores zero. `--small --img build/small360.img` "
-        "is trigger A, and wants `make small` first.",
+        "so the broken build scores zero. kern_big has DRAWN an off-grid x "
+        "since SPEC.md 5.4.2.8, so the row re-arms trigger B by sending "
+        "gfx_blit1_x's `.offg` to `.refuse` in the running kernel.",
         needs=("marty",), serial=True),
     Row("gfxewalk", "soak", py("tests/gfxewalk.py"), 90.0,
         "SPEC.md 5.12.5: Cyclone's warp and Missile's trails step the"
@@ -5255,32 +5348,6 @@ SOAK = [
         "no I/O at all' measured rather than quoted. Reads 3/0/0 here.",
         needs=("marty",), serial=True,
         wants=("build/pathtest360.img",)),
-    Row("fdlgstore", "soak", py("tests/fdlgstore.py"), 90.0,
-        "THE FILE DIALOG LISTS INTO ITS OWN STORE "
-        "(docs/plans/LISTING-HOME-PLAN.md 13). A listing has no home of its "
-        "own any more - a mount writes where its CALLER keeps a store - and "
-        "the Standard File dialog claims one at fdlg_open and frees it at "
-        "fdlg_close, which is what lets disk_dir leave `.lowbss` entirely. "
-        "THE FAILURE IS SILENT AND THAT IS THE WHOLE REASON FOR THE ROW: "
-        "fdlg_vclaim falls back to the floor listing when the claim is "
-        "refused, and a dialog reading the floor looks EXACTLY like one "
-        "reading its own store - same rows, same icons, same pixels - so "
-        "every other fdlg* row stays green with the feature doing nothing, "
-        "and stays green after the floor is deleted and the fallback "
-        "becomes a blank list. Four things, none visible on the glass: "
-        "[fdlg_vseg] is 0 with no dialog up, because the store is TRANSIENT "
-        "and a desktop pays nothing for it; with one up it names a real "
-        "claim and [dsk_dseg] IS that claim, so the mount was aimed at it "
-        "and not at LOW_SEG; entry 0 read straight out of the claim is a "
-        "real name, so something actually wrote there; and after Cancel "
-        "both words are back, because a .bss word left naming a freed block "
-        "is the next loud mount writing a listing into whatever took its "
-        "place - and this one is MOVABLE on kern_big and PURGEABLE on "
-        "kern_small. VERIFIED TO FAIL by forcing fdlg_vclaim down its "
-        "`.floor` arm: it reads `fdlg_vseg=0000 dsk_dseg=1940` and names "
-        "the refusal.",
-        needs=("marty",), serial=True,
-        wants=("build/muptest.img",)),
     Row("ldcost", "soak", py("tests/ldcost.py"), 120.0,
         "A LAUNCH READS THE POSTER'S OWN CACHE, AND THE COST IS THE "
         "ASSERTION (docs/plans/LISTING-HOME-PLAN.md wave 1). loader_run_x is "
@@ -6962,15 +7029,24 @@ SOAK = [
         "size pass 8 - must letter. Red with the staging copy skipped."
         "Measured 20s",
         needs=("marty",), serial=True),
-    Row("fddpage", "soak", py("tests/fddpage.py"), 20.0,
-        "SPEC.md 31.14: does the Control Panel's Floppy page override the"
-        "drive detection? Four drop-down picks by a real left-press gesture"
-        "(menu_popup, 12.4), the panel's close writes 'FD', and a second boot"
-        "of the written disk reads what ovl_fdd_apply made of dsk_vtab and the"
-        "read bound - A: forced 5.25 with no guess, B: hidden with its row"
-        "kept, a third unit given a row at D:, the canary's finding reversed."
-        "Measured 15s",
-        needs=("marty",), serial=True),
+    Row("fddpage", "soak", py("tests/fddpage.py"), 120.0,
+        "SPEC.md 31.14: does the Control Panel's Floppy page override the "
+        "drive detection? Four drop-down picks by a real left-press gesture "
+        "(menu_popup, 12.4), the panel's close writes 'FD', and a second boot "
+        "of the written disk reads what ovl_fdd_apply made of dsk_vtab and the "
+        "read bound - A: forced 5.25 with no guess, B: hidden with its row "
+        "kept, a third unit given a row at D:, the canary's finding reversed. "
+        "Then a fifth pick, Cylinder, on a boot that did not cross a head: "
+        "the save TESTS it with one cylinder run (counted at the int 13h "
+        "gate), and a second save whose run is given an EOT-short ROM's "
+        "answer comes back Auto with the toast said. The close writes boot "
+        "sector byte 509, "
+        "and the disk boots on QEMU (a 286 and up) with the byte - the gate "
+        "opens and the canary turns the run ON - and without it, where "
+        "SYSTEM.CFG alone must force nothing; and on the 5150 with KSIG "
+        "broken so the canary FAILS (it must stay off), witnessed by the same "
+        "patch on the Auto disk reading boot_cylrun 0",
+        needs=("marty", "qemu"), serial=True, builds=True),
     Row("dispreboot", "soak", py("tests/dispreboot.py"), 100.0,
         "WHO WRITES ui_rebootq? (docs/plans/completed/DUAL-DISPLAY-VGA.md 8(11))",
         needs=("marty",), serial=True),
@@ -7330,7 +7406,7 @@ SOAK = [
         "set's SET.002 on the second disk and the row goes red. 90s "
         "measured",
         needs=("marty",), wants=("build/os8088.img",)),
-    Row("czdos", "soak", py("tests/czdos.py"), 10.0,
+    Row("czdos", "soak", py("tests/czdos.py"), 11.0,
         "SPEC.md 20.17.4: OS88CZ.COM under a real DOS (DOSBox, headless, "
         "one session running every leg from a batch file). What DOS splits, "
         "os88cz.py must join - text, text-and-noise and a /S store - and "
@@ -7338,7 +7414,8 @@ SOAK = [
         "property a host decoder cannot see and the machine depends on "
         "(20.13.7). What os88cz.py splits - LZ4, LZB, mixed, several parts "
         "- DOS must join byte for byte, and U must expand a 'CZ' file in "
-        "each format. A damaged stored byte, a part from another set and a "
+        "each format, at 40KB and with a stream past 64KB (20.14.5.2: the "
+        "old decoder refused the LZ4 one). A damaged stored byte, a part from another set and a "
         "missing part answered with Esc through redirected stdin must each "
         "refuse and leave nothing behind. `--break` hands J the damaged "
         "set as a good one and goes red",
@@ -7413,6 +7490,19 @@ SOAK = [
         "one on both arms now, so neither builds anything",
         needs=("marty",), serial=True,
         wants=("build/lzmodlzb360.img",)),
+    Row("lzmod-lz4big", "soak", py("tests/lzmod.py", "--fmt", "lz4big"), 40.0,
+        "SPEC.md 20.14.5.2: an LZ4 file PAST 64KB PACKED, through the "
+        "transparent read. BEVERLY.MOD with 30,000 bytes of noise and 30,000 "
+        "of text after it - 176,085 bytes that pack to 92,508 - so the "
+        "decoder's LZ4 source slides DS at its checkpoint and the noise, one "
+        "~30KB literal run, is copied in 16KB pieces with lz_at between "
+        "them. Nothing shipped packs past 64KB in LZ4, so nothing else on a "
+        "machine runs either. The row asserts the fixture really is LZ4 and "
+        "past 64KB, and compares all 176,085 bytes in Tracker's claim. "
+        "MEASURED on the decoder before 20.14.5.2: Tracker opens holding no "
+        "module, status `trk_s_ioerr` - FERR_IO, the LZ4 refusal at entry",
+        needs=("marty",), serial=True,
+        wants=("build/lzmodbig360.img",)),
     Row("lzship", "soak", py("tests/lzship.py", "--fmt", "lz4"), 80.0,
         "THE WHOLE SHIPPED SET, COMPRESSED (`make zset ZFMT=lz4`): every "
         "shipped package, every shipped driver and every data file on both "
@@ -7504,18 +7594,24 @@ SOAK = [
         "back when the view moves.",
         needs=("marty",), serial=True),
     Row("fdlggrey", "soak", py("tests/fdlggrey.py"), 60.0,
-        "The file dialog's default button: REDRAWN IN PLACE must equal"
-        "FRESHLY PAINTED.",
-        needs=("marty",), serial=True,
-        wants=("build/muptest.img",)),
+        "SPEC.md 38.3/38.8: the chooser's default button (Open form, greyed "
+        "with nothing selected). Each state is reached by a PARTIAL redraw - "
+        "a row click (FDH_SEL -> fdlg_drawbtn), a click on empty list, and "
+        "Down, whose FDH_SEL does not flip the greying and so draws nothing "
+        "(38.8) - and must be pixel-identical to the same state after a FULL "
+        "repaint "
+        "(V twice; a move would replay, not repaint, SPEC.md 11.96.12). "
+        "Greyed must carry less ink than live. Red when the state moves "
+        "without the button being redrawn (171 px).",
+        needs=("marty",), serial=True),
     Row("fdlgsmall", "soak",
         ["env", "OS88_DEFINES=KERN_SMALL", "OS88_BUILD=build/smallk",
          "OS88_SYSIMG=build/small360.img"] + py("tests/fdlggrey.py"), 300.0,
-        "...and the SAME drive against kern_small, where the WHOLE dialog is "
-        "an on-demand module (SPEC.md 38.0, docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md "
-        "9.2.6) rather than resident code. It is `fcpsmall`'s argument one "
-        "feature along and a bigger engine: seven entries with two exit "
-        "conventions, every call out of the image a far one through an `xd_` "
+        "...and the SAME drive against kern_small, where the chooser's glue "
+        "is the on-demand module FDLG.DRV (SPEC.md 38.0) rather than resident "
+        "code. It is `fcpsmall`'s argument one feature along: five entries "
+        "with two exit conventions, the button column drawn by the image "
+        "itself, every call out of the image a far one through an `xd_` "
         "entry, the register epilogues copied inside the image, and mod_need "
         "reading it off the disk on fdlg_open with mod_drop giving it back in "
         "fdlg_reap. NONE of that is exercised by the row above, which runs "
@@ -7528,14 +7624,16 @@ SOAK = [
         # A `wants=` that names a different artefact from the command is a row
         # that cannot run anywhere but a checkout where somebody has already
         # typed `make small` by hand (docs/WRITING-TESTS.md 4).
-        wants=("build/muptest.img", "build/small360.img",
-               "build/small.img", "build/smallapps.img")),
+        wants=("build/small360.img",)),
     Row("fdlgdrop", "soak", py("tests/fdlgdrop.py"), 80.0,
         "...and the module comes BACK on every route a dialog ends by "
         "(SPEC.md 38.0.1). The row above drives the dialog and never asks "
-        "what happened to its image; three of the four dismissals - Open, "
-        "Cancel, Escape - clear [fdlg_win] from inside the image's own "
-        "W_ONCLICK, and mod_drop sat behind three separate compares of that "
+        "what happened to its image. Today the commit and the two cancels "
+        "POST from inside the chooser's own callbacks (SPEC.md 38.6) and the "
+        "close box is found by fdlg_gate - two roads to fdlg_reap's mod_drop. "
+        "When this row was written three of the four dismissals cleared "
+        "[fdlg_win] from inside the image's own W_ONCLICK, and mod_drop sat "
+        "behind three separate compares of that "
         "same word, so the pass that should have collected the claim was "
         "turned away by the very store it was meant to notice. A 16KB claim "
         "held for the rest of the session on the machine with 128KB in it, "
@@ -7552,10 +7650,57 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/muptest.img", "build/small360.img")),
     Row("fdlgup", "soak", py("tests/fdlgup.py"), 60.0,
-        "SPEC.md 13.8.3: the Standard File dialog's buttons fire on the"
-        "RELEASE.",
+        "SPEC.md 13.8.3/38.3: the chooser's column buttons are ids 3..5 of "
+        "the Disk window's own button set and fire on RELEASE: a press draws "
+        "Cancel down ([fm_dbtn]), sliding off lets it up, a slide-off release "
+        "or a release on Drive fires nothing (chooser up, FS_DRV unmoved), "
+        "Drive held does not fire and its release does, and press+release on "
+        "Cancel closes.",
         needs=("marty",), serial=True,
         wants=("build/muptest.img",)),
+    Row("fmarrows", "soak", py("tests/fmarrows.py"), 20.0,
+        "SPEC.md 22.26: in a Disk window the arrows move a SELECTION on "
+        "kern_big - with nothing selected Down still scrolls; a click on row "
+        "0 then Down past the view moves FS_SEL and FS_SCRL follows to make "
+        "it the last visible row; PgUp moves a page and Up stops at the top. "
+        "After each walk exactly ONE row band is inverted on the glass and it "
+        "is the selected row's, which is what catches a band left behind by "
+        "the follow-scroll. VERIFIED RED with the old band's fm_sel_bar taken "
+        "out of .selmove (five inverted rows). Then click row 1, Down, click "
+        "row 2, stepped inside the 9-tick double-click window: nothing may "
+        "open, because a move shuts that window. VERIFIED RED with .selmove's "
+        "FS_CLKT store taken out (the Audio Player launched on one click).",
+        needs=("marty",), serial=True),
+    Row("fdlgchoose", "soak", py("tests/fdlgchoose.py"), 40.0,
+        "SPEC.md 38: the Standard File chooser end to end, through Note "
+        "Pad's own File > Open and Save As - a first Open on MEDIA (38.10) "
+        "captioned Open with the default button greyed until a row is "
+        "selected, the arrows SELECTING where a Disk window's scroll "
+        "(38.4), Save As holding the document, Down filling the box from the "
+        "next row, and committing a typed name "
+        "that is then in the folder, Escape / the Cancel button / the close "
+        "box each cancelling - and a drive double-click queued in the close "
+        "box's own drain swallowed rather than launched into the dead "
+        "chooser's slot and adopted (38.2) - Down with nothing selected "
+        "scrolling a folder that pages (22.26), Drive leaving the floppy "
+        "(38.11), and the "
+        "chooser still opening with four of the user's Disk windows up - "
+        "the fifth pool block is its own (38.1). Every step confirmed off "
+        "[fdlg_win], the chooser's own block and fm_ebuf. VERIFIED TO FAIL "
+        "on `make NOFDMEDIA=1`, whose first Open lands on B:\\APPS.",
+        needs=("marty",), serial=True),
+    Row("fdlgchsmall", "soak",
+        ["env", "OS88_DEFINES=KERN_SMALL", "OS88_BUILD=build/smallk",
+         "OS88_SYSIMG=build/small360.img", "OS88_NP=A:/APPS/NOTEPAD.O88"]
+        + py("tests/fdlgchoose.py"), 40.0,
+        "...and the same drive on kern_small, where the glue is FDLG.DRV "
+        "(SPEC.md 38.0): every hook crosses into the image through "
+        "fdlg_hook's far call, and the button column is drawn and fired by "
+        "the image itself on its own W_ONMOUSEUP (38.3) because this "
+        "build's Disk window has none. The small system disk carries the "
+        "apps, so Note Pad is opened off A:.",
+        needs=("marty",), serial=True,
+        wants=("build/small360.img",)),
     Row("fmthumb", "soak", py("tests/fmthumb.py"), 30.0,
         "SPEC.md 13.10.5: the Disk window's scroll-bar THUMB is dragged, and"
         "x is never read.",
@@ -7575,10 +7720,6 @@ SOAK = [
         "kernel case instead of quietly asserting the shipped numbers "
         "against another tree.",
         needs=("marty",), serial=True),
-    Row("fdlgthumb", "soak", py("tests/fdlgthumb.py"), 50.0,
-        "SPEC.md 13.10.5: ...and the Standard File dialog's, which is the"
-        "second bar one gesture record has to tell apart (13.10.5.10).",
-        needs=("marty",), serial=True, builds=True),
     Row("regrowshed", "soak", py("tests/regrowshed.py"), 70.0,
         "SPEC.md 50.6.2.1 and 27.6.1: a GROW is not refused over a cache, "
         "and 'Too big' is not said about memory. Reported from the field as "
@@ -7833,6 +7974,223 @@ SOAK = [
         "Measured at 20.4s.",
         needs=("marty",), serial=True,
         wants=("build/word.o88", "build/word.p1.bin", "build/WELCOME.DOC")),
+    Row("pxparts", "soak", py("tests/pxparts.py"), 60.0,
+        "SPEC.md 106.5: PiXEL far-calls LAZY code parts - the first assembly "
+        "package to - and every decoder will stand on the boundary, so wave 1 "
+        "proves it with the keyboard card before anything depends on it. A: "
+        "launched with no part fetched and no claim but the region; B: F1 "
+        "fetches once, far-calls INIT and INFO, INIT answers PXP_PROBE (a "
+        "number only the part computes), the card's lines are pxhelp.asm's "
+        "byte for byte and the part held exactly one claim of PiXEL's while it "
+        "was here; C: dropped - the row clear, the heap as it was, and the "
+        "row's zkb the PACKED length again out of its shadow word; D: F1 "
+        "again FETCHES AGAIN - the part is OP_COMP|OP_LAZY, which before "
+        "20.12.7.4.1's shadow was spent once dropped; E, the negative "
+        "control: the row aimed at sector 0, the package's own header, is "
+        "REFUSED and its claim still given back",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pixjpegref", "soak", ["sh", "-c", "python3 tools/pixjpeg.py "
+                               "--verify && python3 tools/pixcorpus.py "
+                               "--check --jpeg"],
+        1.5,
+        "SPEC.md 106.19's reference against its fixtures, on the host: every "
+        "committed JPEG through tools/pixelsim.py at every scale it can be "
+        "shown at - 1/1, 1/2, 1/4, 1/8, a progressive one from 1/4 - with "
+        "the verdict pixjpeg.py names, and each decode against Pillow's own "
+        "(box-averaged below 1/1, its EXIF orientation applied) above 30 dB; "
+        "then pixcorpus's hostile JPEGs, each refused with its number. "
+        "Without Pillow the PSNR half SKIPS and says so - the verdicts, which "
+        "are what the guest is held to, need nothing but Python"),
+    Row("pxextraemu", "soak", py("tests/pxextraemu.py"), 5.0,
+        "SPEC.md 106.25's EXTRAS part (build/pxextra.bin) on the HOST, under "
+        "Unicorn (tests/pxpartemu.py): every TIFF, ICO, IFF and MacPaint "
+        "fixture tools/pixcorpus.py makes through HEAD - its own next heads "
+        "read through a faked OSAPI_FILE_READ_AT, whole clusters at a "
+        "cluster's offset - and DECODE over a ring of windows K_RING hands "
+        "out: the verdict, the heads counted, the palette and every row K_EMIT "
+        "is given equal tools/pixelsim.py's, and a PNG inside an ICO answers "
+        "PXD_REDIR with the head moved down and [px_sbase] at it. The fast "
+        "loop; pxdecode holds the same part inside the package on MartyPC. "
+        "Without Unicorn it SKIPS and says so",
+        needs=("nasm",), wants=("build/pixel.o88",)),
+    Row("pxanimemu", "soak", py("tests/pxanimemu.py"), 3.0,
+        "SPEC.md 106.25's GIF that plays, on the HOST under Unicorn: the GIF "
+        "part decodes frame 0 into a 1/1 master, AV_INIT reads the "
+        "animation's facts out of that decode, and the worker's frame job "
+        "(JOB_ANIM) runs with this script as the UI - at every frame it says "
+        "is ready the master, the rect it leaves owed and its delay equal "
+        "tools/pixelsim.py's gif_anim's; a job asking for more backup gets "
+        "it; AV_WAKE ends the pass for real, and the second pass's frame 0 "
+        "is gif_restart's. Without Unicorn it SKIPS and says so",
+        needs=("nasm",), wants=("build/pixel.o88",)),
+    Row("pxdecode", "soak", py("tests/pxdecode.py"), 420.0,
+        "SPEC.md 106.13: every fixture tools/pixcorpus.py makes, decoded by "
+        "PIXEL.O88 itself through File > Revert, against tools/pixelsim.py "
+        "BYTE FOR BYTE - the master and the palette of each good one (BMP "
+        "1/4/8/16/24/32, bit fields, RLE8/RLE4, OS/2 and v4 headers; PCX "
+        "1x1, 1x4, 8x1 with and without a palette, 8x3; TGA 1/2/3/9/10/11; "
+        "PNM P1-P6 with 16-bit samples; PIX; a neutral-grey ramp through the "
+        "cube's four greys), each hostile one refused with SPEC.md 106.10's "
+        "number with the shown picture still shown and PiXEL's claims "
+        "exactly as before, and two pictures at 1/2 when memory is capped "
+        "(the box filter, and an 8-bit source averaged into the cube); since "
+        "wave 4 every JPEG fixture too (SPEC.md 106.19) - baseline, "
+        "progressive, every sampling and orientation, restarts, the hostile "
+        "half - and JPEGs at each DCT scale memory can be made to choose; "
+        "since wave 8 (SPEC.md 106.25) TIFF, ICO and CUR (a PNG inside one "
+        "included), IFF and MacPaint, and nine animated GIFs PLAYED - every "
+        "frame's master and delay tools/pixelsim.py's gif_anim, read with "
+        "the guest stopped at px_antick while a frame is on the glass. "
+        "On the 1.44 MB VGA XT: the corpus outgrew a 360 KB disk",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088.img")),
+    Row("pxopen", "soak", py("tests/pxopen.py"), 90.0,
+        "SPEC.md 106.11/106.13 on a VGA: a picture opened by its association "
+        "is drawn as tools/pixelsim.py renders it - the zoom is pixelsim's "
+        "Fit and the steps its View's; every canvas pixel at Fit, after two "
+        "zoom steps, after a vertical OSAPI_GFX_SCROLL and its strip, and "
+        "after a horizontal SAVE/REST shift and its strip is pixelsim's; and "
+        "a bottom-up 24-bit BMP painted AS IT DECODED, with no render after, "
+        "is pixelsim's too",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxopenpng", "soak", py("tests/pxopen.py", "--picture",
+                                "apps/pixel/samples/BALLOONS.PNG", "--second",
+                                "apps/pixel/samples/CAT.GIF"), 120.0,
+        "pxopen for the decoder PARTS on a VGA (SPEC.md 106.18): a palette "
+        "PNG opened by its association - whose palette is known only in the "
+        "stream, so its 256 plans must be searched for the PLTE's entries "
+        "(the first build searched none and drew it black) - then an "
+        "interlaced GIF painted as its passes came: every canvas pixel "
+        "pixelsim's, at Fit, zoomed, scrolled and shifted",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxopencga", "soak", py("tests/pxopen.py", "--machine",
+                                "os8088_5150_cga_gla"), 90.0,
+        "pxopen on a 1bpp display (SPEC.md 106.11): the CGA's 5/12 pixel "
+        "aspect in the Fit and the steps, the luma thresholds and the Bayer "
+        "bit tables, BLIT1 - the same six legs, every bit against pixelsim",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxpaint", "soak", py("tests/pxpaint.py"), 90.0,
+        "SPEC.md 106.14's budget: the primitive calls of an open, a zoom "
+        "step (the canvas and the Navigator's frame, not the panels), a pan "
+        "down (ONE scroll and the strip), a pan across (SAVE/REST and the "
+        "columns), a tool (two buttons) and a status field (one run of the "
+        "cells that moved) - counted "
+        "at the API cells; a change that repaints more than it changed "
+        "fails with the counts beside the budget",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
+    Row("pxdraw", "soak", py("tests/pxdraw.py"), 200.0,
+        "PiXEL's redraw priced in drawing calls (SPEC.md 106.15), on the "
+        "Hercules face: every far call into a drawing cell of the API table "
+        "that RETURNS INTO PIXEL (the planar blit's own clip walk re-enters "
+        "its cell from .cold and is not a call of ours), per gesture - a "
+        "tool, a zoom step each way, a pan each way, Fit, the panels "
+        "hidden and shown, the key card, a status field, an open, Next and "
+        "Prev - "
+        "each under a ceiling a repaint blows through, named by the routine "
+        "that made it; and the picture the records drew pixel-identical to "
+        "a forced full repaint; then the gallery's BOUNCE.GIF playing "
+        "(106.25): a frame's calls under 12, and the stopped frame's glass "
+        "identical to a repaint",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
+    Row("pxdrawvga", "soak", py("tests/pxdraw.py", "--machine",
+                                "os8088_xt_vga"), 200.0,
+        "pxdraw on the VGA XT, the COLOUR face (SPEC.md 106.16): the "
+        "toolbar's and tools' faces one planar blit each, the panes, the "
+        "same ceilings and the same incremental-equals-repaint identity, "
+        "compared as the card rasterised it in colour",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
+    Row("pxfolder", "soak", py("tests/pxfolder.py"), 300.0,
+        "SPEC.md 106.21 on the VGA XT with a 720 KB B:: a folder of seven "
+        "pictures opened by its ASSOCIATION from a subfolder of B: - with "
+        "ANOTHER window in front (106.25, review-w5 F13) no hidden decode is "
+        "begun for 20 s and no PiXEL callback holds the UI task 0.25 s, "
+        "timed in guest cycles entry to return; the folder list is the "
+        "document's folder, the open picture at its place; a slideshow of "
+        "three slides with its button latched, stopped by Esc on the slide "
+        "shown, no decode's claim left; and twenty Next and Prev ending "
+        "with PiXEL's claims as they were and the largest free run too. "
+        "What survived of pxthumb when the filmstrip, its thumbnails and "
+        "PIXEL.THC were withdrawn (2026-10-06)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
+    Row("pxfsx", "soak", py("tests/pxfsx.py"), 1500.0,
+        "SPEC.md 106.23, PiXEL's full screen, on MartyPC's VGA XT, CGA 5150 "
+        "and Hercules 5150: every mode each display offers (Mode X, 13h and "
+        "640x480's adaptive sixteen; C160, 320x200's chosen four and "
+        "640x200; 720x348) entered with F, the part's tables - the median "
+        "cut, every used entry's plan, the CGA's chosen set - pixelsim's "
+        "FsPic, the DAC read back, and every pixel of the mode pixelsim's "
+        "frame at Fit; Esc (Alt+Enter once) puts the desktop's mode, its DAC, "
+        "its pixels and PiXEL's claims back as they were; the EGA's same-mode "
+        "Desktop bracket driven on the VGA's 12h; N decodes the next picture "
+        "hidden with the worker kept, commits it and shows it, and the window "
+        "has it after; S runs a slideshow of two slides, a key stops it. Each "
+        "mode's colours and whole render are timed by the guest's cycle "
+        "counter and printed",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
+    Row("pxedit", "soak", py("tests/pxedit.py"), 600.0,
+        "SPEC.md 106.24, PiXEL's editing: the EDIT part on the host under "
+        "Unicorn (tests/pxpartemu.py; the leg skips without it) - 63 palette "
+        "cases and 546 pixel cases over seven sizes, three palettes and both "
+        "destinations against tools/pixelsim.py, the histogram counts too; "
+        "then on MartyPC's VGA XT, CITY.PCX: every Image and Effects "
+        "operation from its menu or card against pixelsim, Undo putting the "
+        "master, palette, mode and saved state back with PiXEL's claims as "
+        "they were (and Redo's kept master), Redo, a chain through an edited "
+        "cube, Revert, Esc in Blur, and the six tools' gestures - a "
+        "Marquee drag's rect, a nudge and Esc, the Crop tool and Enter, a "
+        "Zoom click, the Eyedropper's pin in Image Info, the Rotate tool. "
+        "Each operation's guest time is printed",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX", "build/os8088.img")),
+    Row("pxsave", "soak", py("tests/pxsave.py"), 600.0,
+        "SPEC.md 106.24, PiXEL's Save As: the WRITE part on the host under "
+        "Unicorn - 336 files over every format, seven sizes, three pictures "
+        "and the three palette modes, five ring shapes and four Copy rects, "
+        "each tools/pixelsim.py's write_as to the byte; then on MartyPC's VGA "
+        "XT a save in each of PNG, GIF, BMP, PCX and PIX through the card "
+        "and the Standard File dialog, read back off the floppy - pixelsim's "
+        "bytes, decoded to the master and palette shown - and BMP 24 from "
+        "the card's drop-down; Replace No and Yes; Esc in a PNG's save (no "
+        "file, no PXSAVE.TMP, claims as before); Save changes? Cancel, "
+        "Discard and Save on Next and Cancel on the close box; Copy refused "
+        "over 32K and a selection's BMP on the clipboard; and a disk too "
+        "full for the save, which leaves the old file and no temporary",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX", "build/os8088.img")),
+    Row("pxbench", "soak", py("tests/pxbench.py"), 700.0,
+        "SPEC.md 106.17 on the 5150 with a CGA: the TIME, in guest cycles from "
+        "breakpoints, of opening MOUNTAIN.BMP (24-bit: the cube's ordered "
+        "dither), CITY.PCX (8-bit RLE) and a 640x480 8-bit BMP made by the "
+        "row (308 KB: the disk's share) - to the end and to the first rows - "
+        "and of a zoom step with the canvas covered, a pan step and Fit; "
+        "the GIF and PNG parts; and wave 4's JPEGs (SPEC.md 106.19) - "
+        "VACATION.JPG at 1/8, 1/2, 1/1 and by fast open, ROOM.JPG "
+        "progressive, the Huffman and IDCT in cycles a pixel; each "
+        "held to a ceiling of the recorded figure plus a margin, so a change "
+        "that makes PiXEL slower on the target fails here",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxbenchvga", "soak", py("tests/pxbench.py", "--machine",
+                                 "os8088_xt_vga"), 760.0,
+        "pxbench on the XT with a VGA (SPEC.md 106.17): the same figures where "
+        "a PAL picture's 256 mixing plans are searched before its first row "
+        "and the composer turns lanes into four planes for BLITP",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
     Row("wdpen", "soak", py("tests/wdpen.py"), 60.0,
         "SPEC.md 68.2.5: [gfx_dis] is ONE KERNEL BYTE whose lifetime is one "
         "gfx-lock hold, and 12.8.3 takes that lock around the WHOLE event "
@@ -8234,16 +8592,68 @@ SOAK = [
         needs=("marty",), timeout=600),
     Row("deskclip", "soak", py("tests/deskclip.py"), 100.0,
         "SPEC.md 11.91.6: on kern_big a desktop cell is drawn only where the "
-        "damage pass reveals it - zone AND damage minus every window's "
-        "frame, a fragment at a time, ico_clip cutting the picture's rows "
-        "and columns (11.3.5) - so a window lying on the cell is NOT owed a "
+        "damage pass reveals it - into wm_dmg_gray's own region, the damage "
+        "minus every window's frame and shadow L, its pictures gfx_blit1 "
+        "bands cut exactly (26.9.9) - so a window lying on the cell is NOT owed a "
         "repaint; and an in-place cell repaint uncovered nothing and "
         "promotes nobody. Three gestures (cell, close, drag) on Hercules and "
         "VGA: the window over the cell is not redrawn and its pixels there "
-        "match a whole repaint. Red without the frame subtraction (495 px), "
-        "without ico_clip's column masks (32 px) and without the "
+        "match a whole repaint. Red without the frame subtraction (495 px, "
+        "measured on the first build's per-zone region) and without the "
         "nothing-uncovered stores (the window redrawn, a title promoted).",
         needs=("marty",), serial=True, timeout=900),
+    Row("deskflash", "soak", py("tests/deskflash.py"), 85.0,
+        "SPEC.md 26.9.9: a desktop cell is drawn ONCE, and only where it "
+        "shows. On VGA and CGA, frame by frame: an in-place cell repaint "
+        "(plain and selected) changes and flashes nothing; a Disk window "
+        "dragged half over the drive column draws NO cell (desk_draw_zone "
+        "never entered); dragged back 8 and 24 px it changes the revealed "
+        "sliver and flashes nothing, and the column matches a whole "
+        "repaint. Red without wm_occl_l (2 cells drawn), without gfx_blit1's "
+        "head piece (SPEC.md 5.4.2.8: 204 px stale) and without desk_zones_r "
+        "taking each drawn cell out of the dither's region (243 px "
+        "flashed). About one run in six reads 3 alternating CGA pixels "
+        "flashing on one row - on the kernel before as well (tests/"
+        "deskflash.py's note).",
+        needs=("marty",), timeout=600),
+    Row("deskzoom", "soak", py("tests/deskzoom.py"), 72.0,
+        "SPEC.md 11.91.6: two gestures that used to overflow wm_dmg_gray's "
+        "region in its Ls and zones and take `.whole`, on Hercules and VGA, "
+        "each against a whole repaint: a zoomed Disk window's RESTORE (the "
+        "field's maximize-and-restore report, 39,565 px stale on Hercules "
+        "with desk_dmg_zones_x below .whole's pops) and a DRAG with 11.91.2's "
+        "vacated rect armed (1,019 / 1,588 px without .whole's stwin clear). "
+        "Since 26.9.9 neither reaches .whole - one cell is refused on each "
+        "instead - and red is any pixel that differs from the whole repaint; "
+        "deskwhole is .whole's own gate now.",
+        needs=("marty",), timeout=600),
+    Row("deskwhole", "soak", py("tests/deskwhole.py"), 215.0,
+        "SPEC.md 11.91.6/26.9.9: wm_dmg_gray's `.whole`, the one fallback "
+        "left once the Ls and the zones stopped overflowing the region, "
+        "reached ON PURPOSE: six windows cascaded down the screen so the "
+        "FRAMES alone need 26 of WM_CLIP_MAX's 16 fragments (the row replays "
+        "wm_clip_split over the live records and refuses a layout that does "
+        "not overflow), a seventh dragged across them and then zoomed and "
+        "restored. Asserted per gesture on Hercules and VGA: a breakpoint "
+        "on .whole hit, with neither wm_occl_l nor .frames before it; every "
+        "window in the damage drawn; the screen equal to a whole repaint. "
+        "Red without .whole's `mov word [wm_dmg_stwin], 0` (the drag: no "
+        "parked window redrawn, 30,907 px on Hercules, 31,135 on VGA) and "
+        "without its re-seed of the bands (the restore: 1,214 / 220 px of "
+        "the zoomed window left beside the mover). Red on a SETUP line if "
+        "the layout stops overflowing, never green.",
+        needs=("marty",), timeout=900),
+    Row("deskpen", "soak", py("tests/deskpen.py"), 31.0,
+        "SPEC.md 5.4.2.2.2: the gfx_blit1 pen is scoped to a CALLBACK, not "
+        "to a lock hold, which is wider than one caller - a repaint pass "
+        "calls several packages' paints in one and a drag holds it from "
+        "press to release. A pen poked into the hold as a package would "
+        "leave it: at desk_draw_zone during a zoom's restore the cells must "
+        "match a whole repaint, and at wm_pkgcall before a package's "
+        "W_ONKEY its dispatcher must see the resting pen. VGA, the one "
+        "adapter that reads the pen. Red without either bank: 1,596 px in "
+        "the two drive cells, and the poked 0100 at the dispatcher.",
+        needs=("marty",), timeout=300),
     Row("deskclipsmall", "soak", py("tests/deskclip.py", "--small"), 50.0,
         "SPEC.md 11.91.6, kern_small's half: a cell the pass reveals NONE "
         "of is not drawn and marks nobody, and an in-place cell repaint "
@@ -10751,9 +11161,14 @@ SOAK = [
         "38.6.2 every image was 'Not a disk image' (5 of 10 checks, 691 "
         "sectors untouched), and before 18.99.7's carry fix the failed "
         "write said NOTHING (1 of 17). Between them, Clone Disk... with "
-        "the IMAGE as its target: the Save As box CLONE.DRV opens itself "
-        "since size pass 8 (fdf_fdlg_open, fm_img_done_x as the proc) must "
-        "be up on DISK.IMG with the pick prompt armed under it, and its "
+        "the IMAGE as its target: the Save As CHOOSER CLONE.DRV opens itself "
+        "(fdf_fdlg_open, fm_img_done_x as the proc) must be up on DISK.IMG - "
+        "fdlg_name and the mode-8 box both - with the requester Disk "
+        "window's pick prompt (mode 7) STILL ARMED under it while the "
+        "chooser's Drive button walks it to B: (SPEC.md 38.5: a click in a "
+        "chooser ends only the chooser's own prompt - it ended the clone's "
+        "and freed its claim when this row first ran against the chooser), "
+        "and its "
         "commit must reach clo_saved on the clone's claim - the name in "
         "clo_fnbuf, refused 'Disk full' by clo_froom (B: has 706 of the 720 "
         "sectors). VERIFIED RED with clo_saved's clo_fnget taken out (the "
@@ -10891,7 +11306,11 @@ SOAK = [
         "SPEC.md 13.10: the shared scroll bar, and the two kernel bars are"
         "one now.",
         needs=("marty",), serial=True,
-        wants=("build/muptest.img",)),
+        wants=()),
+    Row("sbardlg", "soak", py("tests/sbar.py", "dlg"), 60.0,
+        "SPEC.md 13.10/38.3: the chooser's bar at the list's right edge "
+        "narrowed by FM_CHCOLW, its arrow scrolling the chooser's own block.",
+        needs=("marty",), serial=True),
     Row("sizesnap", "soak", py("tests/sizesnap.py"), 20.0,
         "the SIZE snap aligns a content width WITHOUT shrinking the zoom "
         "(SPEC.md 11.94.5) - a maximized window must stay x=0, w=[vid_pw]",

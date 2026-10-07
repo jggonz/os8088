@@ -75,6 +75,8 @@ FS_EDIT = os88sym.equates()["FS_EDIT"]
 CL_STEP = 2
 CLS_JOIN = 0x80
 HDR_K = 16 + 8                  # CMZ_JST + cmz_jk's place in cmz_jst
+STILL = 0.2 * os88marty.GUEST_PACE  # guest s a reading must hold: two
+                                     # 0.2s polls on an idle box
 
 
 def say(*a):
@@ -209,9 +211,19 @@ def main():
                 # freed - so one poll can land between the two and read a
                 # prompt that is being left. A paused prompt and a finished
                 # join both hold still; that moment does not
+                #
+                # And STILL IS A GUEST INTERVAL, not two host polls: a poll is
+                # 0.2 HOST seconds, and on a loaded box that is a third of the
+                # guest work it is on an idle one - so two polls could both
+                # land inside the join's own toast-then-free window and call
+                # it still. The reading has to hold for STILL guest seconds
+                # (what two polls span on an idle box), whatever the box does
                 now = (claim(), mode(), ui.toast())
+                cyc = int(m.status()["cycles"])
                 if box.get("last") != now:
-                    box["last"] = now
+                    box["last"], box["since"] = now, cyc
+                    return False
+                if (cyc - box["since"]) / os88marty.GUEST_HZ < STILL:
                     return False
                 c = claim()
                 if c and c[0] == CLS_JOIN and mode() == 7:
@@ -220,8 +232,13 @@ def main():
                             (hex(w16("clo_seg")), c, w16("fm_vp"),
                              int(m.status()["cycles"])))
                         return False
+                    # a toast over a STANDING prompt is a re-ask only when
+                    # it says so: 'Missing SET.003'. The join's verdict
+                    # ('Uncompressed', 'Disk error') is said with the claim
+                    # still up too, and is the "said" arm's once it is freed
                     t, on = ui.toast()
-                    if was is None or c[1] != was or (on and t):
+                    if (was is None or c[1] != was
+                            or (on and t.startswith("Missing"))):
                         box["r"] = ("asked", c[1])
                         box["why"] = (t, on, c, mode(),
                                       int(m.status()["cycles"]))

@@ -9,7 +9,7 @@ the filter took most of (45.25.4). On an 8088 that is seconds for a big
 module, so its cost is a number to hold rather than to notice: this opens
 Tracker on the card-less 5150, arms breakpoints at tsp_natural's entry and
 its .done in the package as loaded, loads BEVERLY.MOD through Tracker's own
-L and the file dialog, and reads the cycles between them off MartyPC's
+L and the file chooser, and reads the cycles between them off MartyPC's
 counter - exact, and the guest charged nothing.
 
 What must hold: under BUDGET cycles. MEASURED at the commit that landed it:
@@ -31,7 +31,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build                  # noqa: E402
 import os88geom as geom                              # noqa: E402
-import trkspk, dispcp                                # noqa: E402
+import trkspk                                        # noqa: E402
 
 HZ = 4772727.0
 BUDGET = int(4.4 * HZ)
@@ -60,11 +60,15 @@ def main():
             cyc.setdefault(r.get("addr"), r["cycles"])
         with os88marty.bp_trace(m, a0, a1, on_hit=hit) as tr:
             m.key("KeyL")
-            os88marty.settle(m, limit=120)
-            rows = [r[0] for r in dispcp.snapshot(m, ui._S)]
-            for _ in range(rows.index("BEVERLY.MOD") + 1):
-                m.key("ArrowDown")
-                os88marty.pace(m, 0.2)
+            # The chooser is a Disk window in a chooser role (SPEC.md 38.1):
+            # its rows are its OWN listing, and a click selects (its arrows
+            # scroll, 38.4) - FS_SEL is confirmed before Enter answers with it
+            ch = ui.chooser(limit=120)
+            rows = [r[0] for r in ui.listing(ch)]
+            if "BEVERLY.MOD" not in rows:
+                print("   FAIL: the chooser lists %r" % rows)
+                return 1
+            ui.chooser_select("BEVERLY.MOD", ch)
             m.key("Enter")
             tr.until(lambda: a1 in cyc, "tsp_natural to finish", limit=300.0)
     finally:

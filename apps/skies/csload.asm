@@ -33,10 +33,6 @@
                                 ; Disk window draws this one before the launch
                                 ; and the dock draws the program's after it
 
-%include "csart.inc"            ; ...and the art's own numbers - the offsets
-                                ; the PROGRAM reads, and the two lengths this
-                                ; file needs to expand the stream. One
-                                ; generated include, read by both halves
 %include "os88parts.inc"
 
 CS_PART_BODY equ 0              ; the program - a whole .o88 image (20.12.10)
@@ -59,16 +55,28 @@ LD_H_IMG   equ 8                ; ...and the two header fields it reads them
 LD_H_BSS   equ 10               ; at, which are the FORMAT's and not ours
 
 ; -----------------------------------------------------------------------------
-; csl_art - fetch the title bands and expand them (SPEC.md 88.10.4)
-; out: AX = the segment holding CS_ART_SIZE bytes of bands, or 0
+; csl_art - fetch the title bands (SPEC.md 88.10.4.1)
+; out: AX = the segment holding the expanded bands (csart.inc's
+;      CS_ART_SIZE), or 0
 ; clobbers: BX, CX, DX, SI, DI, ES, flags
 ;
-; THE STREAM IS A LAZY PART and the bands are a claim, so this holds two of
-; MEM_OWNER_MAX's eight for as long as it takes to decode - and gives one
-; straight back. op_drop is what makes lazy a saving rather than a
-; postponement (SPEC.md 20.12.4), and it matters here for a second reason:
-; this image is about to stop existing, so a slot it did not release would be
-; released by the kernel at teardown and held for the whole session.
+; THE BANDS ARE AN OP_COMP | OP_LAZY PART, so op_fetch does all of it: one
+; claim, the packed stream read R paragraphs up it, and the expansion down
+; onto its base (SPEC.md 20.12.7.4). This used to be a plain lazy row of a
+; stream tools/csart.py packed, fetched into one claim and expanded through
+; OSAPI_DECOMP into a second - two of MEM_OWNER_MAX's eight while it ran, a
+; stream and a decoder the package had to keep agreeing with, and the reason
+; given for it, that a lazy row could not be OP_COMP, was withdrawn by
+; 20.12.7.4 a cycle before anybody came back for it.
+;
+; THE CLAIM IS THE BANDS' FOR THE SESSION and it is NOT in the carve: after
+; the re-home it is a slot-owned data claim with no proc, so it never moves,
+; and the program's bare region proc stays right (SPEC.md 66.6.1.1). It is
+; op_lazykb's figure - R plus the read of the packed part - while it expands,
+; and op_fetch, which expands onto the claim's base, then shrinks it in place
+; to the bands alone (88.10.4.1): the same 11KB the old exact-size claim had,
+; on every volume, with no head slack in front. There is no second claim at
+; any point.
 ;
 ; EVERY REFUSAL IS SURVIVABLE and answers 0, which is the plainer title page
 ; the program has always been able to draw - the title lettered in the 8x8
@@ -77,48 +85,14 @@ LD_H_BSS   equ 10               ; at, which are the FORMAT's and not ours
 ; -----------------------------------------------------------------------------
 csl_art:
     mov al, CS_PART_ART
-    call op_fetch                   ; claims and reads the stream (20.12.4)
-    jc .none
+    call op_fetch                   ; claims, reads, expands (20.12.7.4)
+    mov ax, 0                       ; `mov` and not `xor`: CF is the answer
+    jc .out
     mov al, CS_PART_ART
-    call op_seg                     ; AX = where it landed
-    or ax, ax
-    jz .none
-    mov [csl_zseg], ax
-    mov ax, CS_ART_KB
-    call OSAPI_MEM_CLAIM            ; DX = the bands' own claim
-    jc .drop
-    mov [csl_aseg], dx
-    push ds
-    mov es, dx
-    mov ds, [csl_zseg]              ; DS:SI the stream, T word first...
-    xor si, si
-    mov cx, CS_ART_ZLEN
-    xor di, di                      ; ...ES:0 where it goes, and DI = 0 is the
-    xor bx, bx                      ; contract (SPEC.md 20.13.3). BX:DX is the
-    mov dx, CS_ART_SIZE             ; EXACT output, 32 bits, and ours is one
-    mov al, OSAPI_LZ_LZ4            ; word - so BX is zero and DX the size
-    call OSAPI_DECOMP
-    pop ds
-    jc .free
-    mov al, CS_PART_ART             ; the STREAM's claim goes back: the bands
-    call op_drop                    ; are what we hand over, not the bytes they
-    mov ax, [csl_aseg]              ; came out of
-    ret
-.free:
-    mov dx, [csl_aseg]              ; a decode this build cannot do - a kernel
-    call OSAPI_MEM_FREE             ; carrying only LZB would (SPEC.md 20.14.5)
-.drop:
-    mov al, CS_PART_ART
-    call op_drop
-.none:
-    xor ax, ax
+    call op_seg                     ; AX = the bands, at the claim's base
+.out:
     ret
 
-; -----------------------------------------------------------------------------
-; csl_entry - the loader's entry proc (SPEC.md 20.2)
-; in:  DS = CS = our segment, ES = KERNEL_SEG, SI = the name of the file we
-;      came out of, gfx lock NOT held
-; out: BX = 0, CF clear - and the kernel re-homes instead of publishing us
 ; -----------------------------------------------------------------------------
 csl_entry:
     call op_load                    ; FIRST, for SPEC.md 20.2's reason: SI is
@@ -200,36 +174,27 @@ csl_entry:
                                     ;   OP_COMP is what buys the disk back -
                                     ;   13,777 of those bytes are the bss, and
                                     ;   a run of zeros is what LZ4 is best at
-      OS88_PART OP_ASSET, OP_LAZY   ; 1 the title bands as an LZ4 STREAM, and
-                                    ;   two constraints put it in that shape.
-                                    ;   LAZY because THE RUN IS BOUNDED AT 128
-                                    ;   SECTORS (SPEC.md 20.12.7) - one
-                                    ;   segment, op_read's own arithmetic - and
-                                    ;   the program alone unpacks to 111 of
-                                    ;   them, so eager bands would make 131 and
-                                    ;   op_size would refuse the package.
-                                    ;   NOT OP_COMP because a lazy row cannot
-                                    ;   be: the two want the same zkb word, and
-                                    ;   os88parts.inc refuses the pair. So
-                                    ;   tools/csart.py packs the stream and
-                                    ;   csl_art below expands it, which is what
-                                    ;   the image did with the same bytes
-                                    ;   before 88.10.3 moved them out
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP
+                                    ; 1 the title bands, RAW from
+                                    ;   tools/csart.py and packed by
+                                    ;   os88pkg.py. LAZY so a refusal is a
+                                    ;   plainer title page and not a refused
+                                    ;   launch: an EAGER row would fit the
+                                    ;   carve since SPEC.md 20.12.11, but the
+                                    ;   carve is all-or-nothing and the bands
+                                    ;   would become a reason not to fly
+                                    ;   (88.10.4.1)
       ; --- and the WORLDS (SPEC.md 88.10.5): the shared vocabulary, then the
       ;     eight world blobs, each an LZ4 stream tools/csworlds.py packed.
       ;     ALL LAZY, and none of them is ever fetched by THIS image: what the
       ;     program gets is a DIRECTORY of where each one sits in the file, and
       ;     it reads the one it wants with OSAPI_FILE_READ_AT. A lazy row costs
-      ;     nothing until it is fetched and is not in the run, which is what
-      ;     keeps op_size's 128-sector bound clear (88.10.4.1).
+      ;     nothing until it is fetched and is not in the run - and none of
+      ;     them is in the program's way at launch.
       %rep CSH_NDIR
         OS88_PART OP_ASSET, OP_LAZY
       %endrep
     OS88_PARTS_END
 
-    OS88_BSS OP_BSS + CSL_BSS
+    OS88_BSS OP_BSS
     OS88_IMAGE_END
-
-csl_zseg equ os88_image_end + OP_BSS + 0   ; the stream's claim, while it lasts
-csl_aseg equ os88_image_end + OP_BSS + 2   ; ...and the bands', which is what
-CSL_BSS  equ 4                             ; the program is handed

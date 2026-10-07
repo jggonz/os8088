@@ -94,7 +94,6 @@ import os88marty as M                                       # noqa: E402
 import os88geom                                             # noqa: E402
 import os88sym                                              # noqa: E402
 import os88ui                                               # noqa: E402
-import dispcp                                               # noqa: E402
 import dispapps                                             # noqa: E402
 import os88pkg                                               # noqa: E402
 
@@ -199,74 +198,63 @@ with os88ui.boot(_T.img("small360.img"), machine=MACHINE, limit=180) as ui:
         return dict((k, u16(m.readseg(p, NP[k], 2)))
                     for k in ("np_len", "np_cap", "np_capkb", "np_dseg"))
 
-    def dlg():
-        """The dialog is the newest visible window titled Open or Save As.
-        BY TITLE STRING: on kern_small fdlg.inc's data lives inside the
-        FDLG.DRV image, so `fdlg_s_topen` is not a KERNEL_SEG offset and the
-        usual W_TITLE compare answers None for a dialog that is up."""
-        return next((x for x in reversed(
-            [w for w in os88geom.windows(m, S) if w.visible])
-            if x.title in ("Open", "Save As")), None)
-
     def open_file(win, path, tag):
         """File > Open in `win`, then walk to `path` and pick it.
 
         `path` is folder-relative to the VOLUME ROOT ("README.TXT",
         "APPS/PAINT.O88"), and the walk starts by going UP until there is no
-        `..` row - which it has to, because SPEC.md 38.10 opens the dialog on
-        whatever folder this instance last chose. After leg 1 that is the
-        root and before it the launch folder, so a row that assumed either
-        would pick the wrong file on one of the two.
+        `..` row - which it has to, because SPEC.md 38.10 opens the chooser
+        on MEDIA the first time and on whatever folder this instance last
+        chose after that, so a row that assumed either would pick the wrong
+        file on one of the two.
 
-        KEYBOARD, not a click: fdlg_onkey's .move and .enter ARE the dialog's
-        own navigation (arrows select, Enter acts), so no listing geometry is
-        needed and nothing can land on the wrong row. The rows come off the
-        GLOBAL mount snapshot, which is what the dialog itself lists
-        (dispcp.snapshot) and NOT the acting Disk window's cache.
+        KEYBOARD, not a click: in the chooser the arrows MOVE THE SELECTION
+        and Enter acts on it (SPEC.md 38.4 - a folder dives, a file answers),
+        so no listing geometry is needed and nothing can land on the wrong
+        row. The rows are the chooser's OWN listing cache (`ui.listing` with
+        the chooser named), which is what it paints and what FS_SEL indexes.
         """
         ui.raise_window(win)
         ui.menu_pick("File", "Open")
-        M.settle(m, limit=120)
-        if dlg() is None:
-            sys.exit("%s: File > Open put no dialog up" % tag)
+        try:
+            ch = ui.chooser(limit=120)
+        except os88ui.UIError as e:
+            sys.exit("%s: File > Open put no chooser up - %s" % (tag, e))
 
         def rows():
-            return [r[0] for r in dispcp.snapshot(m, S)]
+            return [r[0] for r in ui.listing(ch)]
 
-        def down(n=1):
-            for _ in range(n):          # each key waited for by the
-                was = m.read(S("fdlg_sel"), 2)          # selection it moves
-                m.key("ArrowDown")
-                try:
-                    M.until(m, lambda _m: m.read(S("fdlg_sel"), 2) != was,
-                            "ArrowDown to move the selection", poll=0.05,
-                            guest=10.0)
-                except M.MartyError:
-                    pass                # ...and pick's own check names it
+        def dive():
+            """Enter on the selected FOLDER, waited for by the listing it
+            replaces - a dive re-lists the chooser in place."""
+            was = rows()
+            m.key("Enter")
+            M.until(m, lambda _m: rows() != was, "the chooser to re-list",
+                    poll=0.05, guest=60.0)
+            M.settle(m, limit=120)
 
-        def pick(name):
+        def pick(name, last):
             """Select `name` and press Enter - a dive for a folder, the
-            command for a file. Asserts the SELECTION before committing, so a
+            answer for a file. Asserts the SELECTION before committing, so a
             miss is reported here rather than as the feature under test."""
             rs = rows()
             if name not in rs:
                 sys.exit("%s: %s is not listed here - %r" % (tag, name, rs))
-            idx = rs.index(name)
-            down(idx + 1)               # the selection starts at "none", so
-                                        # the first key lands on row 0
-            got = u16(m.read(S("fdlg_sel"), 2))
-            if got != idx:
-                sys.exit("%s: the dialog selected row %d, wanted %d (%s)"
-                         % (tag, got, idx, name))
+            ui.chooser_select(name, ch) # a click; the arrows scroll a
+                                        # chooser (SPEC.md 38.4)
+            if not last:
+                dive()
+                return
             m.key("Enter")
-            M.settle(m, limit=180)
+            ui.chooser_gone(limit=60)   # the answer is POSTED (SPEC.md 38.6)
+            M.settle(m, limit=180)      # ...and np_load runs after the reap
 
         while rows()[:1] == [".."]:     # up to the volume root
-            down()
-            m.key("Enter")
-            M.settle(m, limit=120)
-        for part in path.split("/"):
-            pick(part)
+            ui.chooser_select("..", ch)
+            dive()
+        parts = path.split("/")
+        for k, part in enumerate(parts):
+            pick(part, k == len(parts) - 1)
         return m.read(S("toast_buf"), 26).split(b"\0")[0].decode(
             "latin-1", "replace")
 

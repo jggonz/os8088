@@ -375,8 +375,8 @@ make emu      # THE THIRD KERNEL (§9.11.7): kern_emu, into build/emuk/, plus
               #   is no resident question an XT could ask and the honest cost
               #   on it is zero. kern_big now measures BYTE-IDENTICAL to its
               #   blessed baseline and kern_emu measures exactly what kern_big
-              #   used to. Its disk is the only one in the tree that ships a
-              #   SYSTEM.CFG (bit 5 set) - every row is not-wanted by default
+              #   used to. Its disk and §80.7's browser image are the only two that
+              #   ship a SYSTEM.CFG (bit 5 set) - every row is not-wanted by default
               #   (§51.3), and a kern_emu machine that must be TOLD to turn on
               #   the one feature it was built for has been given nothing.
               #   Pair it with the SHIPPED build/apps.img: same API table, same
@@ -408,6 +408,12 @@ make live     #   plus the allapps payload on one FAT16 partition that the
               #   write, and §80.3 says what that costs; QEMU boots them with
               #   `-drive file=build/os8088-usb.img,format=raw -boot c` /
               #   `-cdrom build/os8088.iso -boot d`
+              #
+              #   **`make usb-emu`** is the website's: the SAME volume on
+              #   kern_emu with VMMOUSE.DRV wanted (§80.7), which
+              #   os8088.com's demo boots under v86 so the pointer needs no
+              #   capture. One recipe for both images; it is not live media
+              #   and no release zip carries it
               #
               #   **IT IS THE ONE IMAGE WHOSE PREMISE IS COMPLETENESS**
               #   (§80.6), and it carries MORE than the everything-floppy:
@@ -508,6 +514,7 @@ lands on a floppy:
 | `DOSNETCARD=1` | force the DOS box's **cable translation** (SPEC.md §96.26) on a machine that HAS a card, which is the only way it can be driven at all — `net_find` prefers the card and §96.23's raw path is strictly better there, so the translation would otherwise never run anywhere an emulator can reach it. **It is stamped, and it has to be**: a knob with no stamp leaves an up-to-date `dos.bin` from the other arm, so `make ethertest DOSNETCARD=1` after a plain `make` silently ships the STOCK package and the row then tests the card path while reporting on the cable one. That is the standing warning below about knob kernels, one artefact along, and it was walked into on this knob's first use — two runs disagreed about whether an ARP reached the wire and both answers were correct for the build actually on the disk |
 | `LDDIAG=1` | put back the loader's **four failure reasons** - disk error, bad package, too large, refused to start - that a shipped kernel folds into one `Load failed` (kernel size pass 4, `files.inc`'s `fm_stattab`). None of the four is something a user acts on differently, so the shipped kernel spends no bytes telling them apart; this is how a developer does. The Disk window's toast and the Task Manager's then say which. `LD_EBIG` is not a memory verdict - it is a file whose image + bss exceeds `APP_MAX_SIZE`, which no RAM fixes - so only `LD_ENOMEM` reads `Out of memory` on either build |
 | `DRVDIAG=1` | a **diagnostic line** at the top-left of the loading screen, drawn from IRQ0 while the splash is up - for a machine that stops on `Loading Driver n/N`. `Drs cccc:iiii Fffff Mmm Qqqqq Ttttt` is `drv_boot`'s row and `drv_load_row`'s step (1 entry, 2 mounted, 3 found, 4 claimed, 5 read, 6 checked, 8 calling the driver, 9 returned, F done), the CS:IP and FLAGS the tick interrupted, the PIC mask, row 0's segment and the ISR's own count. **One photograph names the step**, says whether the code is in the BIOS, the kernel or the driver image, and - by whether the count still moves - whether IRQ0 is alive. It paints only on the splash, only with `spl_busy` free, and saves the pen; the shipped kernel is byte-identical |
+| `NOFDMEDIA=1` | take **SPEC.md 38.10**'s `MEDIA` default out of the Standard File chooser: an app whose user has never chosen a folder opens it where the app was **LAUNCHED** from instead of in `MEDIA` at its drive's root. The default is a nicety rather than a contract, so it is the part of the dialog whose bytes are easy to take back - this knob is how, `t_buildmatrix` keeps it assembling, and `tests/fdlgchoose.py` is verified to fail on it |
 
 All are stamp-tracked, so changing one rebuilds the kernel. Without that, make
 sees an up-to-date `kernel.bin`, boots the previous configuration, and it reads
@@ -534,7 +541,8 @@ controller, so no XT profile can host one),
 `386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
 `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,
-`xt-weave`, `386-weave`, `xt-weave-256`, `xt-pixelstein`, `xt-pixelstein-herc`;
+`xt-weave`, `386-weave`, `xt-weave-256`, `xt-pixelstein`, `xt-pixelstein-herc`,
+`xt-pixel`, `386-pixel`;
 plus `marty` (MartyPC). **`386-ps2` is the only machine here with a PS/2
 mouse** — every other config is `mouse_type = msserial`, which is why §9.9
 shipped and went untested on anything but QEMU for months; it is a Packard
@@ -573,9 +581,10 @@ reaches the `]` prompt and answers a keystroke and is a machine to look at,
 which is why the Wire record is tier 3; it was 0.41% until APPLE2-SPEC
 section 4.3.1 made the wall slice a duty-cycle controller), and
 `xt-weave`/`386-weave`/`xt-weave-256` the Weave family's
-(WEAVE-SPEC §13.1), and `xt-pixelstein`/`xt-pixelstein-herc` PIXELSTEIN 3D's
-(§97.15) — the twenty that put a dedicated
-floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
+(WEAVE-SPEC §13.1), `xt-pixelstein`/`xt-pixelstein-herc` PIXELSTEIN 3D's
+(§97.15), and `xt-pixel`/`386-pixel` PiXEL's (§106.26: `vm/xt-weave`'s
+640KB VGA XT with `pixel360.img`, `vm/386dx` with `pixel.img`) — the
+twenty-two that put a dedicated floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
 disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
 family on one floppy — so it is where that geometry of it is booted at all,
 and **`xt-weave-256` is the same 4.77MHz XT with 256KB** rather than 640,
@@ -637,7 +646,12 @@ the Excitebike run learned; and an incoming pull request **from a contributor's
 fork** — fetch it, merge `main` into it, review it, fix it, push the fixes
 back to their branch, comment — is `.claude/skills/review-fork-pr`
 (`/review-fork-pr <PR#>`), whose `LESSONS.md` is what seven of those reviews
-learned. `docs/UPSTREAM.md` is the same cycle seen from the fork's side and
+learned. One of the maintainer's OWN PRs gone stale - merge `main` in, decide
+whether it is still valid and still needed against what `main` now holds,
+fix it, gate it, push and (when asked) merge - is
+`.claude/skills/refresh-stale-pr` (`/refresh-stale-pr <PR#>`), whose
+`LESSONS.md` is what refreshing #200 learned: a clean merge is not a valid
+PR. `docs/UPSTREAM.md` is the same cycle seen from the fork's side and
 binds both. Verifying a change **on the glass** before it merges — boot the
 build in QEMU, drive the UI it claims over QMP, screenshot the evidence per
 claim, then (when asked) merge a stacked series in order — is

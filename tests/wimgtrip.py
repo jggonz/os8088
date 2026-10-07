@@ -4,7 +4,7 @@
     python3 tests/wimgtrip.py
 
 SPEC.md 18.99.8 and 38.6.2, and docs/FIELD-NOTES.md 32. `tests/diskclone.py`
-drives the command as far as the dialog and a cancel, and says why it stops
+drives the command as far as the chooser and a cancel, and says why it stops
 there: an image of a 360KB disk is 720 sectors and a 360KB volume's data area
 is 708, so on a machine whose drives are all 360KB there is nowhere to put the
 FILE. This row is the other half, on `os8088_5150_cga_720b_gla` - a 360KB A:
@@ -32,7 +32,6 @@ sys.path.insert(0, "tests/unit")
 import os88marty as M                                     # noqa: E402
 import os88ui                                             # noqa: E402
 import os88build                                          # noqa: E402
-from os88geom import WIN_SIZE, MAX_WIN, W_X, W_Y, W_TITLE, W_FLAGS  # noqa
 from harness import check, done                           # noqa: E402
 
 MACHINE = "os8088_5150_cga_720b_gla"
@@ -59,38 +58,36 @@ CLS_PICK = equ("kernel/clone.inc", "CLS_PICK")
 CL_TGT = equ("kernel/clone.inc", "CL_TGT")
 CLE_IMG = int(re.search(r"^CLE_IMG\s+equ\s+(0x[0-9A-Fa-f]+)",
                         open("kernel/clone.inc").read(), re.M).group(1), 16)
-FD_BX1 = equ("kernel/fdlg.inc", "FD_BX1")
-FD_BX2 = equ("kernel/fdlg.inc", "FD_BX2")
-FD_BY2 = equ("kernel/fdlg.inc", "FD_BY2")
-FD_BH = equ("kernel/fdlg.inc", "FD_BH")
-FD_ROW0 = equ("kernel/fdlg.inc", "FD_ROW0")
-FD_ROWH = equ("kernel/fdlg.inc", "FD_ROWH")
-FD_TEXTX = equ("kernel/fdlg.inc", "FD_TEXTX")
 TITLE_H = 18            # SPEC.md 11: a window's content starts 18 below it
+FS_SEL = equ("kernel/files.inc", "FS_SEL")
+FS_DRV = equ("kernel/files.inc", "FS_DRV")
 
 
 def u16(b, o=0):
     return b[o] | (b[o + 1] << 8)
 
 
-def dialog(m, title="fdlg_s_topen"):
-    """The Open (or Save As) dialog's (x, y), or None - by its TITLE pointer."""
-    want = m.sym(title) - (M.KERNEL_SEG << 4)
-    blob = m.read(m.sym("wm_wins"), WIN_SIZE * MAX_WIN)
-    for i in range(MAX_WIN):
-        r = blob[i * WIN_SIZE:(i + 1) * WIN_SIZE]
-        if u16(r, W_FLAGS) & 2 and u16(r, W_TITLE) == want:
-            return u16(r, W_X), u16(r, W_Y)
-    return None
+def chooser(ui, form):
+    """The Standard File chooser, or None - it is a Disk window in a chooser
+    role (SPEC.md 38.1), captioned 'Open' or 'Save As' by its form."""
+    try:
+        w = ui.chooser(limit=60)
+    except os88ui.UIError:
+        return None
+    return w if w.title == form else None
 
 
-def edit(m):
-    pool = m.sym("fm_pool")
-    for slot in range(4):
-        b = m.read(pool + slot * FS_SIZE, FS_SIZE)
-        if b[FS_EDIT]:
-            return b[FS_EDIT]
-    return 0
+def chblk(m):
+    """The chooser's own pool block, linear - [fdlg_blk] is a KERNEL_SEG
+    offset (SPEC.md 38.1)."""
+    return (M.KERNEL_SEG << 4) + u16(m.read(m.sym("fdlg_blk"), 2))
+
+
+def edit(ui, dw):
+    """The requester Disk window's OWN edit mode. Its block and not the first
+    non-zero one in fm_pool: with a Save chooser up the chooser's block holds
+    mode 8 (its name box, SPEC.md 38.5) beside the requester's 7."""
+    return ui.m.read(ui._fsblk(dw) + FS_EDIT, 1)[0]
 
 
 def job(m, off, n=1):
@@ -101,35 +98,38 @@ def job(m, off, n=1):
     return b[0] if n == 1 else u16(b)
 
 
-def to_b(ui, m, d):
-    """Walk the dialog's Drive button to B:."""
-    cx, cy = d[0] + 1, d[1] + TITLE_H
+def to_b(ui, m, w):
+    """Walk the chooser's Drive button to B: (SPEC.md 38.11), confirmed on
+    the chooser's OWN volume - FS_DRV of its block, which is what it lists;
+    the globals are put back only at a commit (38.7)."""
+    def drv():
+        return m.read(chblk(m) + FS_DRV, 1)[0]
     for _ in range(4):                  # Drive walks the volumes
-        if m.read(m.sym("disk_drive"), 1)[0] == 1:
+        if drv() == 1:
             break
-        ui.mo.click(cx + (FD_BX1 + FD_BX2) // 2, cy + FD_BY2 + FD_BH // 2)
+        ui.chooser_button(ui.CH_DRIVE, w)
         M.settle(m)
-    check(m.read(m.sym("disk_drive"), 1)[0] == 1,
-          "...and its Drive button reaches B:", "",
-          got=m.read(m.sym("disk_drive"), 1)[0], want=1)
+    check(drv() == 1, "...and its Drive button reaches B:", "",
+          got=drv(), want=1)
 
 
 def pick_image(ui, m):
-    """File > Write Img..., then B: and the image's row in the dialog."""
+    """File > Write Img..., then B: and the image's row in the chooser."""
     ui.menu_pick("File", "Write Img...")
-    M.settle(m)
-    d = dialog(m)
-    check(d is not None, "Write Img... opens the Open dialog",
+    w = chooser(ui, "Open")
+    check(w is not None, "Write Img... opens the Open chooser",
           "fm_c_wimg is fdlg_open_x and nothing else (SPEC.md 22.21.5)")
-    if d is None:
+    if w is None:
         done("wimgtrip")
-    to_b(ui, m, d)
-    cx, cy = d[0] + 1, d[1] + TITLE_H
-    ui.mo.click(cx + FD_TEXTX + 24, cy + FD_ROW0 + FD_ROWH // 2)
+    to_b(ui, m, w)
+    idx = ui.entry(IMGNAME, w)[0]
+    row = ui.scroll_to(idx, win=w)
+    ui.mo.click(*ui.row_xy(w, row))
     M.settle(m)
-    name = bytes(m.read(m.sym("fdlg_name"), 13)).split(b"\0")[0]
-    check(name == IMGNAME.encode(), "a click on the row names the image",
-          "", got=name, want=IMGNAME.encode())
+    sel = u16(m.read(chblk(m) + FS_SEL, 2))
+    check(sel == idx, "a click on the row selects the image",
+          "the Open form's single click is the Disk window's: it selects "
+          "and does not answer (SPEC.md 38.4)", got=sel, want=idx)
 
 
 # PER-PROCESS, for docs/WRITING-TESTS.md 5.5: the runner runs rows side by
@@ -142,7 +142,7 @@ try:
     with os88ui.boot(SYS, apps=FIX, machine=MACHINE) as ui:
         m = ui.m
         print("== %s : Write Img... round trip (SPEC.md 18.99.8) ==" % MACHINE)
-        ui.open_drive("A")
+        dw = ui.open_drive("A")
 
         # --- 1. a write that FAILS must SAY so (SPEC.md 18.99.7) -----------
         # No emulated drive here fails a write on its own, so the fault is
@@ -156,9 +156,9 @@ try:
         pick_image(ui, m)
         m.key("Enter")
         M.settle(m)
-        check(edit(m) == 7 and job(m, CL_STEP) == CLS_WIMG,
+        check(edit(ui, dw) == 7 and job(m, CL_STEP) == CLS_WIMG,
               "Write Img arms its confirmation", "",
-              got=(edit(m), job(m, CL_STEP)), want=(7, CLS_WIMG))
+              got=(edit(ui, dw), job(m, CL_STEP)), want=(7, CLS_WIMG))
         m.breakpoints([{"type": "int", "addr": 0x13}])
         m.key("Enter")
         hit = False
@@ -182,7 +182,7 @@ try:
               "left set the resident caller repacks it as code 83h and "
               "toast_say says nothing (SPEC.md 18.99.7)",
               got=ui.toast()[0], want="Disk error")
-        check(edit(m) == 0 and u16(m.read(m.sym("clo_seg"), 2)) == 0,
+        check(edit(ui, dw) == 0 and u16(m.read(m.sym("clo_seg"), 2)) == 0,
               "...and still ends the mode and gives the claim back", "")
         # FIRST, because it cannot change A: - the write fails at the first
         # chunk and sector 0 goes down last (SPEC.md 18.99.2) - while the round
@@ -214,19 +214,23 @@ try:
               got=job(m, CL_TGT), want=CLE_IMG)
         m.key("Enter")
         M.settle(m)
-        d = dialog(m, "fdlg_s_tsave")
-        check(d is not None, "Enter on IMG opens the Save As box",
+        d = chooser(ui, "Save As")
+        check(d is not None, "Enter on IMG opens the Save As chooser",
               "clo_key's .pickgo: fdf_fdlg_open, with BX = the window the key "
               "came to - a wrong window is refused and nothing opens")
         if d is None:
             done("wimgtrip")
         name = bytes(m.read(m.sym("fdlg_name"), 13)).split(b"\0")[0]
-        check(name == b"DISK.IMG", "...on the default name DISK.IMG",
-              "staged by the image into fm_hdrbuf, which the box copies",
-              got=name, want=b"DISK.IMG")
-        check(edit(m) == 7 and job(m, CL_STEP) == CLS_PICK,
+        box = bytes(m.read(m.sym("fm_ebuf"), 13)).split(b"\0")[0]
+        check((name, box) == (b"DISK.IMG", b"DISK.IMG"),
+              "...on the default name DISK.IMG, in the box",
+              "staged by the image into fm_hdrbuf, which the chooser seeds "
+              "fdlg_name from - and the box on the glass is the status-line "
+              "editor in mode 8, whose buffer is fm_ebuf (SPEC.md 38.5)",
+              got=(name, box), want=(b"DISK.IMG", b"DISK.IMG"))
+        check(edit(ui, dw) == 7 and job(m, CL_STEP) == CLS_PICK,
               "...with the pick prompt still armed under it", "",
-              got=(edit(m), job(m, CL_STEP)), want=(7, CLS_PICK))
+              got=(edit(ui, dw), job(m, CL_STEP)), want=(7, CLS_PICK))
         to_b(ui, m, d)
         m.key("Enter")                          # commit DISK.IMG on B:
         M.settle(m, limit=200)
@@ -238,7 +242,7 @@ try:
               "706 sectors free on B: against 720 - clo_froom, which only a "
               "CLV_SAVED dispatched to clo_saved on the live claim reaches",
               got=ui.toast()[0], want="Disk full")
-        check(edit(m) == 0 and u16(m.read(m.sym("clo_seg"), 2)) == 0,
+        check(edit(ui, dw) == 0 and u16(m.read(m.sym("clo_seg"), 2)) == 0,
               "...and the mode ends and the claim goes back", "")
 
         # --- 2. ...and one that works puts the image down exactly ----------
@@ -257,10 +261,10 @@ try:
               "freed the listing it looks the name up in, so every Open "
               "reported 0:0 and clo_geom_img matched no layout",
               got=ui.toast()[0], want="(anything else)")
-        check(edit(m) == 7 and job(m, CL_STEP) == CLS_WIMG,
+        check(edit(ui, dw) == 7 and job(m, CL_STEP) == CLS_WIMG,
               "...it arms the confirmation instead (CLS_WIMG)",
               "FS_EDIT 7 is the cloner's mode (SPEC.md 22.21.1)",
-              got=(edit(m), job(m, CL_STEP)), want=(7, CLS_WIMG))
+              got=(edit(ui, dw), job(m, CL_STEP)), want=(7, CLS_WIMG))
         check((job(m, CL_TOT, 2), job(m, CL_SPT, 2)) == (720, 9),
               "...with the geometry of a 360KB disk, from the SIZE",
               "clo_geom_img: 368,640 bytes is 720 sectors of 9 a track - "
@@ -271,7 +275,7 @@ try:
         M.settle(m, limit=400)
         check(ui.toast()[0] == "Wrote A:", "Enter writes it: 'Wrote A:'", "",
               got=ui.toast()[0], want="Wrote A:")
-        check(edit(m) == 0 and u16(m.read(m.sym("clo_seg"), 2)) == 0,
+        check(edit(ui, dw) == 0 and u16(m.read(m.sym("clo_seg"), 2)) == 0,
               "...the mode ends and the claim goes back", "")
 
         m.flush(0, flush)

@@ -87,7 +87,6 @@ def main():
                                "MEDIA:" + a.gif)
 
     iw, ih, px = gif_pixels(a.gif)
-    kbase = os88sym.KERNEL_SEG << 4
     print("   %s: %dx%d" % (a.gif, iw, ih))
 
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
@@ -137,7 +136,7 @@ def main():
                                         # canvas is 31 differing pixels that
                                         # belong to nothing
 
-        # --- WHAT THE CACHE IS ASKED FOR, off wm_su_kb's own answer
+        # --- WHAT THE CACHE IS ASKED FOR, off mem_bytes_kb's answer to it
         #
         # `serialise(m)` used to stand here: a monkey-patch wrapping `m.cmd`
         # in a lock of this row's own, because the driving thread and the
@@ -148,20 +147,29 @@ def main():
         # an already-atomic call, and with the pump on bp_trace's own daemon
         # there are no longer two callers of this socket in this row at all.
         # TWO STAGES, AND THE SECOND ADDRESS IS ONLY KNOWABLE AT THE FIRST
-        # STOP: `wm_su_kb` answers in AX at its RETURN, and the return address
+        # STOP: the KB answers in AX at the RETURN, and the return address
         # is on the guest's own stack. So the callback reads it and re-arms on
         # it - the pump resumes into the new set with nothing else arranged -
         # and the cover gesture below runs as ordinary code where it used to
         # be a lambda on a daemon thread.
-        entry, want = m.sym("wm_su_kb"), None
+        #
+        # It was `wm_su_kb`, whose only caller was wm_su_take, until size
+        # pass 9 folded it in (d26f95c) - and the row then died on a KeyError
+        # for a symbol that no longer exists. The sizing is wm_su_take's own
+        # `call mem_bytes_kb` now, which has other callers, so the entry stop
+        # keeps only the call whose return address lies inside wm_su_take.
+        entry, want = m.sym("mem_bytes_kb"), None
+        take = m.sym("wm_su_take")
 
         def kb(mm, rec):
             nonlocal want
             r = rec["regs"]
-            if (r["cs"] << 4) + r["ip"] == entry:
+            cs = r["cs"] << 4
+            if cs + r["ip"] == entry:
                 ret = int.from_bytes(
                     mm.read((r["ss"] << 4) + r["sp"], 2), "little")
-                mm.breakpoints([{"type": "exec", "addr": kbase + ret}])
+                if 0 <= cs + ret - take < 0x200:
+                    mm.breakpoints([{"type": "exec", "addr": cs + ret}])
             else:
                 want = r["ax"]
                 mm.breakpoints([])
@@ -170,9 +178,9 @@ def main():
         with os88marty.bp_trace(m, entry, regs=True, on_hit=kb) as tr:
             _open(m, mo)
             # The cover gesture is confirmed the moment the click is decoded;
-            # wm_su_kb runs inside the raise that FOLLOWS it. Exiting here read
+            # the sizing runs inside the raise that FOLLOWS it. Exiting here read
             # `None` KB on the run that taught this.
-            tr.until(lambda: want is not None, "wm_su_kb to return",
+            tr.until(lambda: want is not None, "wm_su_take's KB to return",
                      limit=120.0, required=False)
         print("   the raise cache asks for %s KB"
               % ("?" if want is None else want))
