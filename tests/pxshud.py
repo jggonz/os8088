@@ -293,8 +293,9 @@ def main():
             g.sim(False)
         g.leave_fsx()
         # --- (h) back in the window: a quiet second draws nothing ------------------
-        ticks(g, 60)                        # (the window's own settling frames)
-        f0 = g.word("px_frames")
+        os88marty.quiesce(g.m, lambda: g.word("px_frames"), guest=0.5,
+                          what="the window's own settling frames")   # were
+        f0 = g.word("px_frames")                                     # 60 ticks
         ticks(g, 18)
         f1 = g.word("px_frames")
         print("   after the bracket, PLAY, a quiet second: %d frame(s), px_cardd %d"

@@ -539,7 +539,7 @@ the first two fails, or naming `C64.ROM` if the file is not there.
   - **slot:** `OSAPI_CPU_INFO` (slot `0x0188`), wrapped
   - **action:** none
 - **need:** fullscreen on Alt+D
-  - **slot:** `OSAPI_FULLSCREEN` (slot `0x0110`, SPEC.md §11.2's latch),
+  - **slot:** `OSAPI_FULLSCREEN` (slot `0x0109`, SPEC.md §11.2's latch),
     wrapped
   - **action:** none; **verify on a real BIOS** that the chord reaches
     `os88_onkey` as ascii 0 / scan `0x20` unconsumed — on `vm/386-c64` and

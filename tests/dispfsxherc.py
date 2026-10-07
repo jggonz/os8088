@@ -53,7 +53,6 @@ arms are two orders of magnitude apart, so the bound is not a tuned number.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -120,12 +119,12 @@ def bracket(m):
 
 
 def wait_bracket(m, want, limit=12.0):
-    end = time.time() + limit
-    while time.time() < end:
-        if bracket(m) == want:
-            return want
-        time.sleep(0.15)
-    return bracket(m)
+    try:                                # the limit is GUEST time
+        os88marty.until(m, lambda _: bracket(m) == want,
+                        "[fsx_cur] = %02X" % want, poll=0.15, limit=limit)
+    except os88marty.MartyError:
+        return bracket(m)               # the caller reads what it is instead
+    return want
 
 
 def wait_restored(m, S, limit=25.0):
@@ -142,12 +141,12 @@ def wait_restored(m, S, limit=25.0):
     read thousands of changed pixels under a four-lane soak, which is
     docs/WRITING-TESTS.md's own warning about a wait sized on an idle box.
     """
-    end = time.time() + limit
-    while time.time() < end:
-        if m.read(S("fsx_vndisp"), 1)[0] == 1:
-            return True
-        time.sleep(0.1)
-    return False
+    try:                                # the limit is GUEST time
+        os88marty.until(m, lambda _: m.read(S("fsx_vndisp"), 1)[0] == 1,
+                        "vid_fsx_unblank", poll=0.1, limit=limit)
+    except os88marty.MartyError:
+        return False
+    return True
 
 
 def main():

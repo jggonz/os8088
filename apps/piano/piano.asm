@@ -1503,7 +1503,7 @@ pn_cstr:                            ; SI=string CX=x DX=y (color set)
 ; the reader left the credits up.
 
 ; -----------------------------------------------------------------------------
-; pn_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; pn_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------

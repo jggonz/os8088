@@ -92,13 +92,17 @@ def main():
     off_done = os88sym.syms()["spl_done"]
     off_total = os88sym.syms()["spl_total"]
     off_bar = os88sym.syms()["spl_l_bar"]
+    # spl_finish's own exit: [spl_done] forced, [spl_live] cleared, and the
+    # guest still INSIDE the blob - see `at_fin` below
+    fin = (blob << 4) + os88sym.syms()["spl_finish.out"]
 
     done, widths, backwards, total = [], [], 0, 0
     with os88marty.launch(IMG, apps=os.path.join(ROOT, "build", "apps360.img"),
                           machine=MACHINE, boot=0) as m:
         started = False
+        m.breakpoints([{"type": "exec", "addr": fin}])
         for _ in range(4000):
-            m.advance(frames=1)
+            at_fin = m.advance(frames=1).get("state") == "breakpoint"
             live = m.read(lin_live, 1)[0]
             if not started:
                 # [spl_live] means nothing until the kernel's own bytes are on
@@ -133,7 +137,20 @@ def main():
             # `bar_width`, which is what used to die on `IndexError` off a
             # blob that had stopped being ours. Reading two words is safe
             # where dereferencing one is not.
-            last = live == 0
+            # ...AND THE TEARDOWN FRAME IS NOT ENOUGH ANY MORE. kmain_o
+            # returns from spl_finish straight into mem_unblob_x, which gives
+            # the blob back AND packs the heap ceiling into it (docs/plans/
+            # REGION-SELF-COMPACT-PLAN.md 3.4.1) - so by the end of that frame
+            # a moved claim can be sitting on these two words, and the row
+            # read `8448 of 8540` off a boot whose bar had reached 178 of 178.
+            # So the last reading is taken STOPPED at spl_finish's own exit,
+            # where the counter is forced and the guest has not left the
+            # blob. A teardown without that stop is spl_finish not having run.
+            last = at_fin
+            if live == 0 and not at_fin:
+                raise SystemExit("splashbar: [spl_live] went to 0 without "
+                                 "spl_finish's exit being reached - the "
+                                 "splash was torn down by something else")
             d = int.from_bytes(m.readseg(blob, off_done, 2), "little")
             t = int.from_bytes(m.readseg(blob, off_total, 2), "little")
             total = max(total, t)       # kept: harmless, and it is what the
@@ -143,6 +160,8 @@ def main():
                     backwards += 1
                 done.append(d)
             if last:
+                m.breakpoints([])
+                m.run()
                 break                   # the counters are read, the layout is
                                         # not: see above
             bar = int.from_bytes(m.readseg(blob, off_bar, 2), "little")

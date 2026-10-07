@@ -44,7 +44,6 @@ pointer clamped so every click after it lands somewhere else.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -64,6 +63,17 @@ S = os88sym.linear
 BAND_KB = 8                 # the band cache measures 3 KB, the whole content 9
 
 
+def idle(m):
+    """Until Paint - or whatever the gesture started - has finished: the
+    drive quiet, the gfx lock free (a canvas operation can hold it for
+    seconds with nothing new on the glass), and then the screen still."""
+    os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                      what="the drive to go quiet")
+    os88marty.until(m, lambda mm: mm.read(S("gfx_lock_flag"), 1)[0] == 0,
+                    "the gfx lock to be free", poll=0.2, limit=60)
+    os88marty.settle(m)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
@@ -77,7 +87,6 @@ def main():
                                "MEDIA:" + a.gif)
 
     iw, ih, px = gif_pixels(a.gif)
-    kbase = os88sym.KERNEL_SEG << 4
     print("   %s: %dx%d" % (a.gif, iw, ih))
 
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
@@ -110,7 +119,7 @@ def main():
             sys.exit("paintsu: the canvas never blitted through %s"
                      % " or ".join(BLITS))
         ox, oy = geom[0], geom[1]
-        time.sleep(6)
+        idle(m)
 
         # --- WHAT IS ON THE GLASS BEFORE ANYTHING IS COVERED ---------------
         # WITHOUT THIS THE ROW BLAMES THE CACHE FOR WHAT THE DRAW GOT WRONG,
@@ -127,7 +136,7 @@ def main():
                                         # canvas is 31 differing pixels that
                                         # belong to nothing
 
-        # --- WHAT THE CACHE IS ASKED FOR, off wm_su_kb's own answer
+        # --- WHAT THE CACHE IS ASKED FOR, off mem_bytes_kb's answer to it
         #
         # `serialise(m)` used to stand here: a monkey-patch wrapping `m.cmd`
         # in a lock of this row's own, because the driving thread and the
@@ -138,20 +147,29 @@ def main():
         # an already-atomic call, and with the pump on bp_trace's own daemon
         # there are no longer two callers of this socket in this row at all.
         # TWO STAGES, AND THE SECOND ADDRESS IS ONLY KNOWABLE AT THE FIRST
-        # STOP: `wm_su_kb` answers in AX at its RETURN, and the return address
+        # STOP: the KB answers in AX at the RETURN, and the return address
         # is on the guest's own stack. So the callback reads it and re-arms on
         # it - the pump resumes into the new set with nothing else arranged -
         # and the cover gesture below runs as ordinary code where it used to
         # be a lambda on a daemon thread.
-        entry, want = m.sym("wm_su_kb"), None
+        #
+        # It was `wm_su_kb`, whose only caller was wm_su_take, until size
+        # pass 9 folded it in (d26f95c) - and the row then died on a KeyError
+        # for a symbol that no longer exists. The sizing is wm_su_take's own
+        # `call mem_bytes_kb` now, which has other callers, so the entry stop
+        # keeps only the call whose return address lies inside wm_su_take.
+        entry, want = m.sym("mem_bytes_kb"), None
+        take = m.sym("wm_su_take")
 
         def kb(mm, rec):
             nonlocal want
             r = rec["regs"]
-            if (r["cs"] << 4) + r["ip"] == entry:
+            cs = r["cs"] << 4
+            if cs + r["ip"] == entry:
                 ret = int.from_bytes(
                     mm.read((r["ss"] << 4) + r["sp"], 2), "little")
-                mm.breakpoints([{"type": "exec", "addr": kbase + ret}])
+                if 0 <= cs + ret - take < 0x200:
+                    mm.breakpoints([{"type": "exec", "addr": cs + ret}])
             else:
                 want = r["ax"]
                 mm.breakpoints([])
@@ -160,13 +178,13 @@ def main():
         with os88marty.bp_trace(m, entry, regs=True, on_hit=kb) as tr:
             _open(m, mo)
             # The cover gesture is confirmed the moment the click is decoded;
-            # wm_su_kb runs inside the raise that FOLLOWS it. Exiting here read
+            # the sizing runs inside the raise that FOLLOWS it. Exiting here read
             # `None` KB on the run that taught this.
-            tr.until(lambda: want is not None, "wm_su_kb to return",
+            tr.until(lambda: want is not None, "wm_su_take's KB to return",
                      limit=120.0, required=False)
         print("   the raise cache asks for %s KB"
               % ("?" if want is None else want))
-        time.sleep(6)
+        idle(m)                         # the panel's open, to its last paint
 
         # --- UNCOVER: is the canvas redrawn?
         wide = None
@@ -186,7 +204,7 @@ def main():
             # the picture back - so a timeout here is an answer, not a failure.
             tr.until(lambda: wide is not None, "a canvas-sized blit",
                      limit=60.0, required=False)
-        time.sleep(8)
+        idle(m)
         mo.to(4, 4)
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)

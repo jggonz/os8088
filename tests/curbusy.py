@@ -41,6 +41,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
+import os88marty                                            # noqa: E402
 import os88ui                                               # noqa: E402
 
 CUR_ARROWSH, CUR_BUSYSH = 0, 2
@@ -121,10 +122,11 @@ def main(argv):
 
         # --- 2. ...AND IT COMES OFF. gfx_unlock is what does it, so the wait
         #        is for a machine that has drawn something since (SPEC.md 7.5).
-        for _ in range(30):
-            if m.read(shape, 1)[0] == CUR_ARROWSH:
-                break
-            time.sleep(0.5)
+        try:
+            os88marty.until(m, lambda _: m.read(shape, 1)[0] == CUR_ARROWSH,
+                            "the arrow back", poll=0.5, limit=15)
+        except os88marty.MartyError:
+            pass                                # the read below reports it
         got = m.read(shape, 1)[0]
         say("once idle again      cur_shape = %d %s" % (got, NAME.get(got, "?")))
         if got != CUR_ARROWSH:
@@ -145,11 +147,29 @@ def main(argv):
 
         th = threading.Thread(target=go, daemon=True)
         th.start()
-        for _ in range(120):
-            if m.stopped():
+        # Bounded in GUEST seconds. Not `until`: the gesture's own `advance`
+        # pauses the guest for a moment, and that wait raises on a pause.
+        #
+        # AT THE BREAKPOINT, and not merely stopped: `stopped()` is also true
+        # for the gesture's own momentary pauses, and a sample taken in one of
+        # those reads the lock flag somewhere other than cur_busy's entry -
+        # which is how this failed under a loaded soak with the clock on the
+        # glass the whole decode ("lock held = 0", CLOCK = 59 below it).
+        c0 = int(m.status().get("cycles", 0))
+        want = m.sym("cur_busy") & 0xFFFFF
+
+        def at_bp():
+            st = m.status()
+            return (st.get("state") == "breakpoint"
+                    and ((st.get("cs", 0) << 4) + st.get("ip", 0)) & 0xFFFFF
+                    == want)
+
+        while not at_bp():
+            if (int(m.status().get("cycles", 0)) - c0) / os88marty.GUEST_HZ \
+                    > 30 * os88marty.GUEST_BUDGET_RATIO:
                 break
             time.sleep(0.25)
-        reached = m.stopped()
+        reached = at_bp()
         held = m.read(m.sym("gfx_lock_flag"), 1)[0] if reached else 0
         say("Paint decoding a BMP OSAPI_CUR_BUSY reached = %s, lock held = %d"
             % (reached, held))

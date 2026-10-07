@@ -203,6 +203,25 @@ KNOBS = [
     # single spender in the sector.
     ("bootmark",    ["BOOTMARK=1"]),
     ("boothalt",    ["BOOTMARK=1", "BOOTHALT=20"]),
+    # ...and BOOTMARK= with a knob that grows the LOADER, which pulls
+    # kernel.asm's OVL_KNOBGIVE the other way: the MARKW sites want it large
+    # and DISKAL=1's 2,491-byte loader wants it small, and 128 is the give
+    # that holds both. boot360.bin, so pass 2's decoder arguments are what is
+    # measured - the loader is one byte longer with them than with pass 1's.
+    ("bootmark-diskal", ["BOOTMARK=1", "DISKAL=1"], "boot360.bin"),
+    # ...and on kern_small, which is a different blob: SPEC.md 2.5.3.3 put
+    # kmain's boot half in it, so every MARKW site is blob bytes, and the
+    # shipped kern_small leaves the blob ~40 of them. What keeps these arms
+    # assembling is 2.5.3.3.1's knob-only room (the mouse probe in the padded
+    # window, the split 96 bytes lower) - and these rows are the only thing
+    # that builds them: `make small` is the product, `covered()` counts
+    # KERN_SMALL as built by it, and no other row pairs it with a knob.
+    # BOOTPROF and MOUDIAG are here for the same reason: both were 14 and 1
+    # bytes over the blob before that room existed.
+    ("bootmark-small", ["KERN_SMALL=1", "BOOTMARK=1"]),
+    ("boothalt-small", ["KERN_SMALL=1", "BOOTMARK=1", "BOOTHALT=20"]),
+    ("bootprof-small", ["KERN_SMALL=1", "BOOTPROF=1"]),
+    ("moudiag-small",  ["KERN_SMALL=1", "MOUDIAG=1"]),
     ("bootstop",    ["BOOTSTOP=2"], "boot360.bin"),
     ("bootstop1",   ["BOOTSTOP=1"], "boot360.bin"),
     ("bootdiag",    ["BOOTDIAG=1"], "boot360.bin"),
@@ -271,6 +290,7 @@ KNOBS = [
     # pass for a configuration nobody assembled.
     ("band",        ["BAND=1"]),
     ("titlesnap",   ["TITLESNAP=1"]),
+    ("fontslow",    ["FONTSLOW=1"]),     # SPEC.md 6.0.1: the copy verdict forced
     # SPLSTARS= is TITLESNAP's sentence one screen along - the loading screen's
     # animation A/B (SPEC.md 15.3.7) - and it carries a second reason this
     # roster is the only thing watching: it is the ONE configuration whose
@@ -336,6 +356,15 @@ KNOBS = [
     ("noattail",    ["NOATTAIL=1"], "artful.o88"),
     ("noatone",     ["NOATONE=1"], "artful.o88"),
     ("noatsu",      ["NOATSU=1"], "artful.o88"),
+    # NOLIVESND= is the Video Player's (SPEC.md 98.3.10.1): Live with sound is
+    # built in and this is the only thing that assembles the silent arm, which
+    # tests/vidsound.py runs as its negative control. A package row, for
+    # ArtfulType's reason.
+    ("nolivesnd",   ["NOLIVESND=1"], "video.o88"),
+    # ...and VPDIAG=, the player's field diagnostic on the info card (SPEC.md
+    # 98.3): four lines a shipped player does not carry, so this is the only
+    # thing that assembles them.
+    ("vpdiag",      ["VPDIAG=1"], "video.o88"),
     # MOUDIAG= is SPEC.md 9.9.6's identify-window table drawn on the finished
     # desktop, and it had NO ROW HERE AT ALL until SPEC.md 2.9.12 - which is
     # how a short jump out of range inside the moved mouse cluster went
@@ -348,6 +377,8 @@ KNOBS = [
     # gate; this row is, and it costs seconds.
     ("moudiag",     ["MOUDIAG=1"]),
     ("nounal",      ["NOUNAL=1"]),
+    ("lddiag",      ["LDDIAG=1"]),
+    ("drvdiag",     ["DRVDIAG=1"]),
     # The three this PR added and nothing else names: NOFLUSHR is SPEC.md
     # 11.95.3's A/B for the right border alone, FATWGATE moves 18.8.2's heap
     # gate, FDDSLOW puts the pre-18.92 floppy timing back. None of them has a
@@ -376,6 +407,9 @@ KNOBS = [
     # NOPLANE's sentence exactly: an A/B that stopped assembling is found at
     # the moment somebody reaches for it to tell a real fix from a null run.
     ("noseamcut",   ["NOSEAMCUT=1"]),
+    # NOFDMEDIA= takes SPEC.md 38.10's MEDIA default out of the Standard File
+    # chooser - kept assembling so the bytes stay one flag away.
+    ("nofdmedia",   ["NOFDMEDIA=1"]),
     # COMPRESS= picks which decompressors the kernel carries
     # (docs/plans/O88-COMPRESSION-PLAN.md 12.7, SPEC.md 20.13.6). `both` SHIPS now,
     # so the rows here are the two SINGLE-format arms, and neither is the same

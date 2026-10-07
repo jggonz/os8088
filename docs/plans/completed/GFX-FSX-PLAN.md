@@ -160,7 +160,7 @@ Hercules does not move it at all but flips bit 7 of 3B8h, and that bit does
 nothing until bit 1 of 3BFh allows it — which `vid_setmode` deliberately
 leaves clear (§39.6).
 
-`fsx_page` (slot 0x04E8) writes the register **and waits for the retrace that
+`fsx_page` (slot 0x03C5) writes the register **and waits for the retrace that
 latches it**, so its contract is one sentence: when it returns, the page named
 is the one being scanned and every other page is yours to draw on. **108 bytes
 of `.text` and one 8-byte slot**; accrued image 153/512 → 261/512, `KERN_SIZE`

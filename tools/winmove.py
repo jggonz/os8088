@@ -85,7 +85,7 @@ def burst(m, names, trigger, first=60.0, limit=4000):
     """
     with os88marty.bp_trace(m, *names, cap=limit) as tr:
         trigger()
-        t0, seen = time.time(), 0
+        c0, seen = m.status()["cycles"], 0
         while tr.n < limit:
             if tr.n != seen:
                 seen = tr.n
@@ -95,8 +95,9 @@ def burst(m, names, trigger, first=60.0, limit=4000):
                 # the host got round this loop.
                 if m.status()["cycles"] - tr.hits[-1]["cycles"] > QUIET:
                     break
-            elif time.time() - t0 > first:
-                break                       # nothing drew at all
+            elif (m.status()["cycles"] - c0) / CLK \
+                    > first * os88marty.GUEST_BUDGET_RATIO:
+                break                       # nothing drew at all (GUEST time)
             time.sleep(0.004)
     return [(h["name"], h["cycles"]) for h in tr.hits]
 
@@ -112,18 +113,28 @@ def main():
                           machine=machine) as m:
         mo = Mouse(marty=m)
         mo.dblclick(*su.zone(m, 1))
-        time.sleep(4)
+        os88marty.until(m, lambda _: [w for w in su.windows(m) if w.visible],
+                        "the drive window", poll=0.3, limit=30)
+        os88marty.settle(m)
         win = [w for w in su.windows(m) if w.visible][0]
+
+        def titled(t):
+            """Wait for a window titled `t`, then answer it."""
+            os88marty.until(m, lambda _: any(w.title.upper().startswith(t)
+                                             for w in su.windows(m)),
+                            "a window titled %r" % t, poll=0.5, limit=60)
+            return su.named(m, t)
         if which == 'sol':
             mo.dblclick(*su.row(win, 0))
-            time.sleep(25)
-            win = su.named(m, 'SOL')
+            win = titled('SOL')
+            os88marty.settle(m)                 # ...and its deal drawn
         elif which == 'frac':
             mo.dblclick(*su.row(win, 0))        # APPS/
-            time.sleep(5)
+            os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                              what="the folder's reads")
+            os88marty.settle(m)
             mo.dblclick(*su.row(win, 2))        # ...FRACTAL.O88
-            time.sleep(30)
-            win = su.named(m, 'FRAC')
+            win = titled('FRAC')
         if which == 'sol':
             # THE DEAL IS RANDOM (tools/solcheck.py says so in capitals), so
             # two runs of one binary lay out different cards and a pixel diff
@@ -133,24 +144,37 @@ def main():
             sc.pclick(mo, win.x + win.w // 2, win.y + win.h - 30)
             os88marty.settle(m)
             m.write(m.sym('osapi_seed'), struct.pack('<H', 0x2A17))
-            m.key('KeyN')
-            time.sleep(3)
-        os88marty.settle(m)
+            m.key('KeyN')                   # the settle's stillness window
+        os88marty.settle(m)                 # outlasts a key's latency
         win = [w for w in su.windows(m) if w.visible and w.i == win.i][0]
         print('dragging %r by its title bar' % (win,))
 
         p = sc.titlebar(m, win)
-        mo.to(*p)
-        time.sleep(0.4)
+        mo.to(*p)                           # `to` proves the arrow is there
+        os88marty.guest_sleep(m, 0.1)
         mo._edge(True)
         mo.to(p[0] + ddx, p[1] + ddy, l=True)
-        time.sleep(1.0)
+        # the drag's outline caught up with the pointer: `ui_drag_step` has
+        # put it at orig + (mouse - start), which is exactly the window's
+        # rect moved by what `to` just proved the pointer moved. The outline
+        # is redrawn every pass whether it moved or not, so there is no
+        # stillness to wait for - only this
+        want = (win.x + ddx, win.y + ddy)
+        os88marty.until(m, lambda _: (su.word(m, 'ui_curx'),
+                                      su.word(m, 'ui_cury')) == want,
+                        'the drag outline to reach %r' % (want,), poll=0.05,
+                        limit=30)
 
         # The release is what starts the repaint, and it goes INSIDE the
         # block - the pump is armed and watching before the trigger is pulled.
         hits = burst(m, PRIMS, lambda: mo._pk(l=False))
-        time.sleep(1.5)
-        now = [w for w in su.windows(m) if w.i == win.i][0]
+        # the burst ends on 0.4 guest seconds of no drawing, so the move is
+        # done: the record holding still is only the read below being safe
+        def rec():
+            return [w for w in su.windows(m) if w.i == win.i][0]
+        os88marty.quiesce(m, lambda: (rec().x, rec().y), guest=0.25,
+                          what="the window record")
+        now = rec()
         print('moved (%d,%d) -> (%d,%d): dx=%d (dx&7=%d) dy=%d'
               % (win.x, win.y, now.x, now.y, now.x - win.x,
                  (now.x - win.x) & 7, now.y - win.y))
@@ -176,7 +200,7 @@ def main():
         if out:
             os88marty.settle(m)
             mo.to(8, 30)                    # the arrow parked off both windows
-            time.sleep(0.6)
+            os88marty.settle(m)
             w, bpp, data = su.fb(m)
             # THE MENU BAR IS DROPPED, subcheck.shot's MASK_Y for its reason:
             # the clock is up there and two runs of an A/B are minutes apart,

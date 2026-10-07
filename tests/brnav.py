@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 sys.path.insert(0, _OS88_ROOT)
 import dispcp                                          # noqa: E402
 from ethernet import (Qemu, u16, S, Mouse, type_url,   # noqa: E402
-                      settle, SOCK)
+                      settle, SOCK, ether_syms)
 from os88geom import MB_ENTSZ                         # noqa: E402
 import os88qemu                                              # noqa: E402
 import os88build                                       # noqa: E402
@@ -185,8 +185,9 @@ def main():
 
     if os.path.exists("build/qemu.pid"):
         try:
-            os.kill(int(open("build/qemu.pid").read().strip()), 15)
-            time.sleep(1.0)
+            pid = int(open("build/qemu.pid").read().strip())
+            os.kill(pid, 15)
+            os88qemu.gone(pid)
         except (OSError, ValueError):
             pass
     for f in ("build/qmp.sock", "build/qemu.pid"):
@@ -203,11 +204,16 @@ def main():
         sys.exit("brnav: make test failed:\n" + r.stdout + r.stderr)
     m = Qemu()
 
-    for _ in range(150):
-        time.sleep(0.4)
-        if u16(m.read(S("drv_tab") + 2 * 16 + 2, 2)):
-            break
-    time.sleep(10)                                  # let DHCP bind
+    # EVERY WAIT IN THIS ROW IS ON THE GUEST'S CLOCK (tests/os88qemu.py): the
+    # driver's row, then DHCP bound in its own image - which is what the ten
+    # host seconds here were a guess at - rather than a sleep that a loaded
+    # box turns into less of the machine.
+    esy = ether_syms()
+    os88qemu.acted(m, lambda: u16(m.read(S("drv_tab") + 2 * 16 + 2, 2)) != 0,
+                   secs=60, what="ETHER.DRV's drv_tab row", poll=0.4)
+    eseg = u16(m.read(S("drv_tab") + 2 * 16 + 2, 2))
+    os88qemu.acted(m, lambda: m.readseg(eseg, esy["dhcp_st"], 1)[0] == 3,
+                   secs=30, what="DHCP bound", poll=0.4)    # DH_BOUND
 
     dispcp.open_drive(m, Mouse(), S, settle, "B")
     wins = dispcp.win_list(m, S)
@@ -223,10 +229,12 @@ def main():
     rw = lambda n: u16(m.readseg(pseg, sy[n], 2))       # noqa: E731
 
     def wait_done(what):
-        for _ in range(80):
-            time.sleep(0.5)
-            if rb("br_nstate") in (6, 7):
-                break
+        # The first half-second is not a poll: it is the time the action this
+        # follows has to LEAVE the finished state it found, which a check made
+        # at once would read as done.
+        os88qemu.pace(m, 0.5)
+        os88qemu.acted(m, lambda: rb("br_nstate") in (6, 7), secs=40,
+                       what=what, poll=0.5)
         st = rb("br_nstate")
         if st != 6:
             fails.append("%s: state %d, not BN_DONE" % (what, st))
@@ -241,24 +249,31 @@ def main():
         lx2 = u16(m.readseg(pseg, sy["br_loc"] + 4, 2))
         ly1 = u16(m.readseg(pseg, sy["br_loc"] + 2, 2))
         Mouse().click(lx2 - 6, ly1 + 7)         # past the text: the caret
-        time.sleep(1.0)                         # lands at its END
-        n = u16(m.readseg(pseg, sy["br_loc"] + 12, 2))
+        os88qemu.pace(m, 1.0)                   # lands at its END
+
+        def barlen():
+            return u16(m.readseg(pseg, sy["br_loc"] + 12, 2))
+        n = barlen()
         if n:
+            # the spacing is the KEYBOARD's (a QEMU device, on the host's
+            # clock); the answer is the bar's own length reaching zero
             subprocess.run(["python3", "tools/qmp.py", SOCK]
                            + ["sendkey backspace", "sleep 0.05"] * n,
                            check=True, capture_output=True)
-            time.sleep(0.5)
+            os88qemu.acted(m, lambda: barlen() == 0, secs=5,
+                           what="the bar emptied", poll=0.1)
         type_url(url)
-        time.sleep(1.0)
+        os88qemu.acted(m, lambda: barlen() == len(url), secs=5,
+                       what="the URL typed", poll=0.1)
         subprocess.run(["python3", "tools/qmp.py", SOCK, "sendkey ret"],
                        check=True, capture_output=True)
 
     def m_type(text):
-        for ch in text:
-            subprocess.run(["python3", "tools/qmp.py", SOCK, "sendkey " + ch],
-                           check=True, capture_output=True)
-            time.sleep(0.12)
-        time.sleep(0.6)
+        cmds = []
+        for ch in text:                 # the GUEST's time between keys
+            cmds += ["sendkey " + ch, "gsleep 0.12"]
+        subprocess.run(["python3", "tools/qmp.py", SOCK] + cmds
+                       + ["gsleep 0.6"], check=True, capture_output=True)
 
     def click_offset(off):
         """Aim from the app's OWN line table, never by eye."""
@@ -430,10 +445,10 @@ def main():
         before_h = len(srv.log)
         subprocess.run(["python3", "tools/mouse.py", SOCK, "down",
                         str(hx), "6"], check=True, capture_output=True)
-        time.sleep(0.5)
+        os88qemu.pace(m, 0.5)
         subprocess.run(["python3", "tools/mouse.py", SOCK, "to",
                         str(hx), "26"], check=True, capture_output=True)
-        time.sleep(0.5)
+        os88qemu.pace(m, 0.5)
         subprocess.run(["python3", "tools/mouse.py", SOCK, "up"],
                        check=True, capture_output=True)
         wait_done("History > Page A")
@@ -491,7 +506,10 @@ def main():
     wait_done("/b.htm again")
     hi0 = rw("br_histi")
     toolbar_click("back")               # ...into the slow entry
-    time.sleep(3.0)
+    # /slow.htm is held open for SLOW_SECS, so a state in flight is what
+    # Back arriving looks like - the guest's answer, not a 3s guess
+    os88qemu.acted(m, lambda: 1 <= rb("br_nstate") <= 5, secs=3,
+                   what="a fetch in flight", poll=0.1)
     inflight = rb("br_nstate")
     print("Back landed on /slow.htm; state = %d" % inflight)
     if not 1 <= inflight <= 5:
@@ -578,30 +596,46 @@ def main():
         nwin = len(dispcp.win_list(m, S))
         subprocess.run(["python3", "tools/mouse.py", SOCK, "down", "134", "8"],
                        check=True, capture_output=True)
-        time.sleep(0.4)
+        os88qemu.pace(m, 0.4)
         subprocess.run(["python3", "tools/mouse.py", SOCK, "to", "134", "62"],
                        check=True, capture_output=True)
-        time.sleep(0.4)
+        os88qemu.pace(m, 0.4)
         subprocess.run(["python3", "tools/mouse.py", SOCK, "up"],
                        check=True, capture_output=True)
-        time.sleep(3)
+        # the DIALOG is a window, so it is its own answer; and half a second
+        # more of the machine before its field is typed into
+        if os88qemu.acted(m, lambda: len(dispcp.win_list(m, S)) > nwin,
+                          secs=10, what="the Save As dialog", poll=0.25):
+            os88qemu.pace(m, 0.5)
         wins_now = dispcp.win_list(m, S)
         print("windows after Save As: %r (was %d)" % (wins_now, nwin))
         if len(wins_now) <= nwin:
             fails.append("File > Save As... opened no dialog")
         type_url(SAVED)
-        time.sleep(1.0)
+        os88qemu.pace(m, 1.0)
         subprocess.run(["python3", "tools/qmp.py", SOCK, "sendkey ret"],
                        check=True, capture_output=True)
-        time.sleep(6)
+        # The dialog going away is the save being taken; the write itself is
+        # the next thing on the same task (br_saved, on the UI task), so the
+        # UI going idle is the write finished - two guest seconds the ceiling
+        os88qemu.acted(m, lambda: len(dispcp.win_list(m, S)) <= nwin,
+                       secs=20, what="the Save As dialog closing", poll=0.25)
+        os88qemu.ui_done(m, S, cap=2.0, what="the save's write")
         st = rb("br_nstate")
         print("state after the save: %d" % st)
         if st != 6:
             fails.append("a save that WORKED reports state %d - a message and "
                          "a failure are different things (BN_DONE is 6)" % st)
 
+    # QEMU has to have EXITED before its image is read on the host - a HOST
+    # wait on a host thing, by the process table rather than a second's guess
+    try:
+        qpid = int(open("build/qemu.pid").read().strip())
+    except (OSError, ValueError):
+        qpid = None
     m.quit()
-    time.sleep(1.0)
+    if qpid:
+        os88qemu.gone(qpid)
     raw = open(os88build.at("build/brtest360.img"), "rb").read()
     if SAVED.encode() not in raw.replace(b".", b""):
         # the 8.3 directory entry is 'SAVED   HTM'

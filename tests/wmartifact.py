@@ -45,7 +45,6 @@ THREE MORE WAYS TO MISS THEM, all of which cost time here:
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -86,11 +85,10 @@ def full_repaint(m):
     """Make the GUEST repaint, and leave the machine paused."""
     m.cmd(cmd="run")
     m.write(S("cp_dirty"), b"\x01")
-    for _ in range(200):
-        time.sleep(0.05)
-        if m.read(S("cp_dirty"), 1)[0] == 0:
-            break
-    else:
+    try:                                # a GUEST-time budget
+        os88marty.until(m, lambda _: m.read(S("cp_dirty"), 1)[0] == 0,
+                        "ui_task to drain [cp_dirty]", poll=0.05, limit=10.0)
+    except os88marty.MartyError:
         raise RuntimeError("ui_task never drained [cp_dirty]")
     os88marty.settle(m)
     m.cmd(cmd="pause")
@@ -221,7 +219,6 @@ def part_shadow(machine):
 
         row = row_of(m, "CALC.O88")
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "CALC.O88")
-        time.sleep(2)
         os88marty.settle(m)
         slot = dispcp.win_list(m, S)[-1]
         hx, hy, hw, hh = dispcp.win_rect(m, S, slot)
@@ -266,7 +263,7 @@ def part_shadow(machine):
         # about whatever happens to be under that spot.
         mo.drag(hx + hw // 2, hy + TITLE_H // 2, hx + hw // 2 + 96,
                 hy + TITLE_H // 2 + 40)
-        time.sleep(1)
+        os88marty.pace(m, 1)
         os88marty.settle(m)
         hx2, hy2, hw2, hh2 = dispcp.win_rect(m, S, slot)
         print("\n   dragged to (%d,%d): its corner is now (%d,%d)"
@@ -282,7 +279,7 @@ def part_shadow(machine):
         # ...and is it still there once the window has gone?
         dispcp.win_rect(m, S, slot)
         mo.click(hx2 + 8, hy2 + TITLE_H // 2)          # the close box
-        time.sleep(1)
+        os88marty.pace(m, 1)
         os88marty.settle(m)
         got3 = diff(m, card, "...after the package was closed")
         if got3:
@@ -296,7 +293,6 @@ def part_shadow(machine):
         row = last_clickable_row(m, wx, wy, skip=row)
         nm2 = name_at(m, row)
         dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, row)
-        time.sleep(2)
         os88marty.settle(m)
         slot = dispcp.win_list(m, S)[-1]
         rx, ry, rw, rh = dispcp.win_rect(m, S, slot)
@@ -329,7 +325,7 @@ def part_seam():
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")
         dispcp.close_panel(m, mo, S, os88marty.settle)
-        time.sleep(1)
+        os88marty.pace(m, 1)
         os88marty.settle(m)
         pw = u16(m.read(S("vid_pw"), 2))
         vw = u16(m.read(S("vid_w"), 2))
@@ -357,7 +353,6 @@ def part_seam():
         print("\n   dragging the Disk window at (%d,%d) %dx%d across the seam"
               % (dx, dy, dw, dh))
         mo.drag(dx + dw // 2, dy + TITLE_H // 2, pw + 210, 60)
-        time.sleep(2)
         os88marty.settle(m)
         dx1, dy1, dw1, dh1 = dispcp.win_rect(m, S, slot)
         print("   it is now at (%d,%d) %dx%d - origin %s the seam"
@@ -376,7 +371,6 @@ def part_seam():
         # one-off.
         dx2, dy2, dw2, dh2 = dispcp.win_rect(m, S, slot)
         mo.drag(dx2 + dw2 // 2, dy2 + TITLE_H // 2, pw - 120, 60)
-        time.sleep(2)
         os88marty.settle(m)
         dx3, dy3, _, _ = dispcp.win_rect(m, S, slot)
         print("\n   dragged back to (%d,%d)" % (dx3, dy3))

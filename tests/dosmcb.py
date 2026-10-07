@@ -38,9 +38,9 @@ read `ask=5FEA cf=1 bx=5236`.
 import os
 import re
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
@@ -65,13 +65,13 @@ def main():
             fail("double-clicking MCB.COM opened no window")
 
         rows = []
-        end = time.time() + 90.0
-        while time.time() < end:
-            rows = m.screen() or []
-            if any("KEY" in r for r in rows):
-                break
-            time.sleep(0.25)
-        else:
+
+        def keyed(_m):
+            rows[:] = m.screen() or []
+            return any("KEY" in r for r in rows)
+        try:
+            os88marty.until(m, keyed, "the KEY prompt", poll=0.25, limit=90)
+        except os88marty.MartyError:
             fail("the probe never reached its KEY prompt; the last screen was "
                  "%r" % ([r.rstrip() for r in rows if r.strip()][-10:],))
 

@@ -1,0 +1,98 @@
+1942 - a standalone native shooter for os8088
+
+Open 1942.O88. Select 1/2 players (or Up/Down), then Enter takes off.
+Click either player option to start. H shows controls. Space/F also starts.
+Arrows: move   Space/Z: fire   X: invulnerable roll (3 per stage)
+P: pause      M: sound        C: cycle CGA palette
+Escape/F: desktop            N: new game
+Enter in the launcher resumes your game and route position.
+N or clicking New Game returns to player selection.
+Enter also advances the mission results screen.
+
+VGA: 320x240 Mode X, centered 256x240 playfield.
+CGA: 320x200 color, 5:4 horizontal and 5:6 vertical scaling.
+C cycles three hardware palette profiles: Ocean, Jungle and Night.
+
+The cartridge build imports all 32 encounter schedules, formation paths and
+small-plane entry positions. A shared entry sequence, cartridge direction
+vectors and per-aircraft speeds reproduce dives, reversals, circular sweeps
+and diagonal attacks. Orange formations follow their turning routes;
+bombers enter on your side of the screen and follow their waypoint routes.
+Offscreen aircraft continue out instead of turning back along unused data.
+Terrain and encounters advance together at the cartridge's 3/4-pixel rate
+per simulation update, on VGA and CGA. Wave timers
+use the cartridge periods and batch sizes, with eight regular enemy slots.
+Fighters use its shared firing counter and only shoot when nearby and aimed
+toward you; orange formations stay unarmed. Eight enemy bullet slots and
+timed bomber bursts keep the scene from filling with simultaneous volleys.
+The giant background bomber appears on played stages 7, 15, 23 and 31.
+Gameplay is capped at 18.2 updates per second by the system clock, so faster
+CPUs do not accelerate it. Busy frames on slower machines can still slow
+play; missed updates are not replayed in a burst.
+
+Destroy a complete orange formation (including its staggered groups) to
+earn a POW: stronger guns, a screen
+clear, two armed wingmen, an extra roll or an extra life. Wingmen can be lost
+to enemy fire or contact. A secret bonus plane appears after enough kills.
+Takeoff and landing bracket each mission. Results award shooting-percentage
+and unused-roll bonuses. Extra lives arrive at 20,000, 80,000 and every further
+80,000 points. Clear 32 stages to complete the mission.
+
+Two players alternate after a death, retaining separate scores, lives,
+weapons and stages; a returning player restarts their current stage.
+High scores last until the application closes. AdLib plays FM music and
+short percussive effects. Sound Blaster DSP 2+ adds recorded gunfire and
+explosions when 1942.SFX is alongside the game and card sound is enabled.
+Effects use 8kHz mono samples and DMA, with no software mixer or refill task;
+explosions take priority over shots. Missing samples or an unsupported card
+fall back to FM; speaker tones remain available. M mutes everything and P
+pauses music and cancels effects. Sound stops on returning to the desktop.
+Gameplay loops a lower, quicker variation of the Game Over melody.
+Music uses note data from 1942.nes in cartridge builds. Richer sound does not
+imply faster XT gameplay. The optional sample bank is omitted from the 360KB
+original-art disk for space, but included on the other game disks.
+Samples: kurt (Gunshots) and Spring Spring (Mechanical Explosion), CC0 1.0,
+from OpenGameArt.org. Source links and edits: apps/1942/sfx/CREDITS.md.
+
+BUILD (NASM and Python 3; no emulator or C compiler):
+  make 1942disk
+If 1942.nes is present in the repository root, its aircraft and complete
+landscape route are imported automatically. Or specify your local file:
+  make 1942disk N1942_ROM=/path/to/1942.nes
+The importer checks the supported cartridge payload before decoding it.
+No cartridge or extracted graphics are downloaded or committed.
+  make 1942disk N1942_ROM=
+This selects the committed original art, with cyclic scrolling scenery.
+
+The resulting build/1942-360.img and build/1942.img are game disks, not
+boot disks. Boot os8088 in A: and mount the game disk in B:. Keep 1942.O88
+and its .GFX, .V42 and .C42 companions together. The cartridge is only a
+build input; the XT runs the compiled native package and graphics files.
+
+GRAPHICS
+The desktop splash uses a native-resolution green and white vector logo on
+VGA, with contour line art on Hercules and monochrome CGA. Hercules can
+display the splash and help; gameplay requires VGA or color CGA hardware.
+The embedded title is independent of cartridge assets and reuses the canvas
+claim outside fullscreen. The title reveals gradually to stay responsive
+on a 4.77MHz XT, caching completed art. Selection redraws only the pointer.
+A loading message appears before graphics I/O. Terrain uses a circular
+cache, hardware scrolling and cached sprites to reduce drawing work.
+The HUD stays fixed. Pause freezes the route; resume retains its position.
+Three 64KB claims hold graphics/canvas storage; the XT target is 640KB RAM.
+
+ARTWORK
+Without a cartridge, apps/1942/art/ supplies the original project artwork.
+With one, tools/1942nes.py decodes NES aircraft assemblies, tile flips,
+palettes, loop/directional animations, wingmen, POWs, projectiles, the title
+and font, all 23 landscape pages and the 32-stage route. VGA colors are an
+NES palette approximation. This remains a native remake with its own combat
+and timing, rather than an emulator or cycle-faithful NES conversion.
+
+TEST
+  make 1942test
+  make 1942soundtest
+Checks desktop artwork, VGA/CGA gameplay, cartridge pacing, combat,
+rewards, stage/player transitions, file validation and desktop restoration
+on 4.77MHz MartyPC. Guest-cycle timing includes drawing and presentation;
+disk loading is separate.

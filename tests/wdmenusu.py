@@ -23,7 +23,7 @@ the menu is down, which is exactly what a refused claim leaves behind, and the
 close must then take `wd_mrepair` and land on the SAME pixels.  One run
 therefore checks both paths against one reference.
 """
-import os, sys, time, subprocess, tempfile, argparse
+import os, sys, subprocess, tempfile, argparse
 
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, "tools")
@@ -34,6 +34,7 @@ from os88mouse import Mouse
 import dispcp
 
 WD_MENU_H = 14
+WD_M_NONE = 0xFF        # [wd_mopen] with nothing open (apps/word/word.asm)
 FAIL = []
 
 
@@ -55,7 +56,7 @@ def pkg_syms(src="apps/word/word.asm", incs=("apps/", "apps/word/")):
         for line in open(mp):
             f = line.split()
             if len(f) == 3 and all(c in "0123456789ABCDEF" for c in f[0]):
-                out[f[2]] = int(f[0], 16)
+                out[f[2]] = int(f[1], 16)   # VIRTUAL: part 1 is assembled at WD_P1ORG
         return out, open(os.path.join(d, "p.bin"), "rb").read()
 
 
@@ -86,7 +87,7 @@ a = ap.parse_args()
 
 syms, image = pkg_syms()
 DISK = "build/wdmenusu.img"
-M.scratch_disk(DISK, "build/word.o88", "build/WORD.OVL", "build/WELCOME.DOC")
+M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC")
 S = lambda n: m.sym(n)
 
 with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
@@ -98,7 +99,8 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     d = dispcp.win_list(m, S)[-1]
     dx, dy = dispcp.win_rect(m, S, d)[:2]
     dispcp.open_named(m, mo, S, M.settle, dx, dy, "WELCOME.DOC")
-    time.sleep(2.5)
+    M.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+              what="Word's open to stop reading")
     M.settle(m)
 
     # the package's base out of the instance table (I_SPTR,
@@ -131,21 +133,35 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     tx, ty = cl + cell * 8 + 16, ct + WD_MENU_H // 2
 
     mo.to(4, 4)                                  # pointer off the content
-    time.sleep(0.8)
+    M.settle(m)
     before = shot(m)
 
+    # A PRESS is timed in GUEST seconds (what the host figures gave an idle
+    # box), and what follows it is waited for: the dropdown's state byte,
+    # then the gfx lock Word draws it under going free.
+    def press(x, y, lead, hold=0.10):
+        mo.to(x, y); M.pace(m, lead)
+        m.mouse(l=True); M.pace(m, hold); m.mouse(l=False)
+
+    def menu(isopen, what):
+        try:
+            M.until(m, lambda mm: (rb("wd_mopen") != WD_M_NONE) == isopen
+                    and mm.read(S("gfx_lock_flag"), 1)[0] == 0,
+                    what, poll=0.1, limit=10)
+        except M.MartyError:
+            pass                                 # ...and the checks say so
+
     def cycle(poke_refuse):
-        mo.to(tx, ty); time.sleep(0.4)
-        m.mouse(l=True); time.sleep(0.10); m.mouse(l=False)
-        time.sleep(1.2)
+        press(tx, ty, 0.4)
+        menu(True, "the dropdown to open")
+        M.settle(m)
         opened = rb("wd_mopen")
         banked = rw("wd_suseg")
         if poke_refuse:                          # what a REFUSED claim leaves
             m.write(P("wd_suseg"), b"\x00\x00")
-        mo.to(tx, ty); time.sleep(0.3)
-        m.mouse(l=True); time.sleep(0.10); m.mouse(l=False)
-        time.sleep(1.5)
-        mo.to(4, 4); time.sleep(0.8)
+        press(tx, ty, 0.3)
+        menu(False, "the dropdown to close")
+        mo.to(4, 4); M.settle(m)
         return opened, banked, shot(m)
 
     op, bk, after = cycle(False)
@@ -171,8 +187,8 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     for i in range(9):
         c = tab[i * 8]
         wid = tab[i * 8 + 6] | (tab[i * 8 + 7] << 8)
-        mo.to(cl + c * 8 + 16, ct + WD_MENU_H // 2); time.sleep(0.35)
-        m.mouse(l=True); time.sleep(0.10); m.mouse(l=False); time.sleep(1.0)
+        press(cl + c * 8 + 16, ct + WD_MENU_H // 2, 0.35)
+        menu(True, "menu %d to open" % i)
         got = rb("wd_mopen")
         r = [rw("wd_mrx1"), rw("wd_mry1"), rw("wd_mrx2"), rw("wd_mry2")]
         why = []
@@ -192,8 +208,8 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
                 why.append("y2 %d past the content (%d)" % (r[3], box[3] - 1))
         if why:
             bad.append("menu %d: %s" % (i, "; ".join(why)))
-        mo.to(cl + 4, ct + 4); time.sleep(0.2)
-        m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(0.7)
+        press(cl + 4, ct + 4, 0.2, hold=0.08)
+        menu(False, "menu %d to close" % i)
     check("every menu's panel rect agrees with wd_mtab", not bad,
           " | ".join(bad[:3]))
 

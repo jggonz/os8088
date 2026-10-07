@@ -41,7 +41,6 @@ import argparse
 import hashlib
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -58,6 +57,17 @@ MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 DISK = "build/regmove360.img"
 u16, claims, uncovered = sheetmove.u16, sheetmove.claims, sheetmove.uncovered
 pkg_seg, park = sheetmove.pkg_seg, sheetmove.park
+
+
+def opened(m, title):
+    """Wait for `title`'s window on the GUEST's clock; a miss is the caller's
+    to name, which it does by finding no window."""
+    try:
+        os88marty.until(m, lambda _m: pkg_seg(m, os88sym.linear, title)[0]
+                        is not None, "the %s window" % title, poll=0.3,
+                        limit=60)
+    except os88marty.MartyError:
+        pass
 
 
 def main():
@@ -90,7 +100,7 @@ def main():
 
         # --- PAINT first: its region takes the ceiling ----------------------
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name="PAINT.O88")
-        time.sleep(6)
+        opened(m, "Paint")
         os88marty.settle(m)
         pt_seg, pt_win = pkg_seg(m, S, "Paint")
         if pt_seg is None:
@@ -104,7 +114,7 @@ def main():
         # --- SHEET under it: the one that has to move -----------------------
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name="SHEET.O88")
-        time.sleep(8)
+        opened(m, "Sheet")
         os88marty.settle(m)
         sh_seg, sh_win = pkg_seg(m, S, "Sheet")
         if sh_seg is None:
@@ -192,7 +202,7 @@ def main():
         # ask on its own.
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name="FILLER.O88")
-        time.sleep(8)
+        opened(m, "Filler")
         os88marty.settle(m)
         fl_seg, fl_win = pkg_seg(m, S, "Filler")
         if fl_seg is None:
@@ -212,7 +222,16 @@ def main():
         os88marty.settle(m)
         for i in range(5):                  # fill, ask, fill, ask...
             m.key("KeyA")
-            time.sleep(6)
+            try:                            # a fill or an ask: the move it
+                os88marty.until(            # forces, bounded by what an idle
+                    m, lambda _: pkg_seg(m, S, "Sheet")[0] != sh_seg,  # box's
+                    "Sheet's region to move", poll=0.25,       # pause gave it
+                    guest=6 * os88marty.GUEST_PACE)
+            except os88marty.MartyError:
+                pass                        # ...press again
+            # ...and the rest of its compaction: the arena holding still
+            os88marty.quiesce(m, lambda: claims(m, S), guest=1.0,
+                              what="the compaction")
             os88marty.settle(m)
             if pkg_seg(m, S, "Sheet")[0] != sh_seg:
                 break

@@ -978,7 +978,7 @@ cal_oncmd:
 ; reader left the credits up.
 
 ; -----------------------------------------------------------------------------
-; cal_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; cal_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD, far-called at our
 ;      segment - a window callback in every respect that matters, so it draws
 ;      directly and repaints itself

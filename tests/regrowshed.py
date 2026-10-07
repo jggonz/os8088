@@ -58,28 +58,21 @@ The toast is read out of `toast_buf` and not off the glass: it expires on a
 tick count (SPEC.md 59), so a settle long enough to be sure a load finished
 is long enough to lose it.
 
-WHY `nomem` EMPTIES THE FIRST NOTE FIRST, because it looks like a detour and
-is the only way the leg can be staged at all. Two 14,336-byte INSTANCES and
-one 16,384-byte document is 45,056 bytes of a 53,760-byte heap and fits; two
-instances with the document ALREADY GROWN does not leave a 14,336-byte RUN
-for the second region, whatever sheds, so the second Note Pad cannot be
-LAUNCHED and the row dies in ui.path with LD_ENOMEM before it reads a toast.
-That is the loader refusing on a full machine, which is honest and is
-tests/small128.py's subject rather than this row's. So File > New gives the
-manual back the way a person would - np_new resizes to NP_KB0 and a shrink
-cannot fail (SPEC.md 50.3.1) - and the 15,360 bytes that returns fund the
-second instance. The refusal then happens where it always did, in np_load's
-grow, against a largest run of about 11KB.
-
-It used to work without that, on 1,024 bytes of address arithmetic: the
-manual's claim landed HIGH (mem_regrow path 3, mem_hifit's highest fitting
-run) and left the low arena contiguous for the second region. It lands LOW
-now - path 2, an extend in place after a shed - because MEM_P_ICO's 2,048
-bytes sit below it and shedding them is what makes the in-place extension
-fit. Both placements are correct; which one happens is arithmetic, and the
-second instance was 1,024 bytes short of funding either way. Measured at
-0286f13b and at the icon store's landing, both maps in
-docs/plans/ICON-IDENTITY-PLAN.md.
+BOTH NOTE PADS ARE OPENED BEFORE ANYTHING IS LOADED, and that is what makes
+the first two legs and the last one about the mechanism rather than about
+this kernel's free-heap figure. A Note Pad INSTANCE is 14,336 bytes of
+region, the manual's claim is 16,384, FDLG.DRV takes 4KB for as long as the
+dialog is up (SPEC.md 38.0), and the 128KB machine's heap is 60.5KB: one
+instance and the dialog leave a 22KB run, so a lone Note Pad's grow FITS and
+sheds nothing - the row read `caches 24576 -> 24576` that way, its nomem leg
+funded the second document and printed a NOTE, and both legs had lost their
+subject the cycle kern_small's heap grew past the 53,760 bytes they were
+staged on. With the second instance standing the largest run is ~1KB, so the
+first grow can be funded only by a shed, and once it has been the second
+instance's grow cannot be funded at all - two regions, one 16KB document and
+the dialog are 49KB of 60.5 before the 16KB the second read wants. The old
+sequence emptied the first note with File > New to make room to LAUNCH the
+second; standing both up first needs no such step.
 
 **How to make it go red** (WRITING-TESTS 1, both re-run at the re-derivation):
 take the `call mem_shed_one` out of `mem_regrow.shed` and `loaded`, `shed`,
@@ -89,7 +82,6 @@ Take np_load's `jae .say` out and `nomem` alone fails reading "Too big".
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
@@ -102,7 +94,6 @@ import os88marty as M                                       # noqa: E402
 import os88geom                                             # noqa: E402
 import os88sym                                              # noqa: E402
 import os88ui                                               # noqa: E402
-import dispcp                                               # noqa: E402
 import dispapps                                             # noqa: E402
 import os88pkg                                               # noqa: E402
 
@@ -207,68 +198,63 @@ with os88ui.boot(_T.img("small360.img"), machine=MACHINE, limit=180) as ui:
         return dict((k, u16(m.readseg(p, NP[k], 2)))
                     for k in ("np_len", "np_cap", "np_capkb", "np_dseg"))
 
-    def dlg():
-        """The dialog is the newest visible window titled Open or Save As.
-        BY TITLE STRING: on kern_small fdlg.inc's data lives inside the
-        FDLG.DRV image, so `fdlg_s_topen` is not a KERNEL_SEG offset and the
-        usual W_TITLE compare answers None for a dialog that is up."""
-        return next((x for x in reversed(
-            [w for w in os88geom.windows(m, S) if w.visible])
-            if x.title in ("Open", "Save As")), None)
-
     def open_file(win, path, tag):
         """File > Open in `win`, then walk to `path` and pick it.
 
         `path` is folder-relative to the VOLUME ROOT ("README.TXT",
         "APPS/PAINT.O88"), and the walk starts by going UP until there is no
-        `..` row - which it has to, because SPEC.md 38.10 opens the dialog on
-        whatever folder this instance last chose. After leg 1 that is the
-        root and before it the launch folder, so a row that assumed either
-        would pick the wrong file on one of the two.
+        `..` row - which it has to, because SPEC.md 38.10 opens the chooser
+        on MEDIA the first time and on whatever folder this instance last
+        chose after that, so a row that assumed either would pick the wrong
+        file on one of the two.
 
-        KEYBOARD, not a click: fdlg_onkey's .move and .enter ARE the dialog's
-        own navigation (arrows select, Enter acts), so no listing geometry is
-        needed and nothing can land on the wrong row. The rows come off the
-        GLOBAL mount snapshot, which is what the dialog itself lists
-        (dispcp.snapshot) and NOT the acting Disk window's cache.
+        KEYBOARD, not a click: in the chooser the arrows MOVE THE SELECTION
+        and Enter acts on it (SPEC.md 38.4 - a folder dives, a file answers),
+        so no listing geometry is needed and nothing can land on the wrong
+        row. The rows are the chooser's OWN listing cache (`ui.listing` with
+        the chooser named), which is what it paints and what FS_SEL indexes.
         """
         ui.raise_window(win)
         ui.menu_pick("File", "Open")
-        M.settle(m, limit=120)
-        if dlg() is None:
-            sys.exit("%s: File > Open put no dialog up" % tag)
+        try:
+            ch = ui.chooser(limit=120)
+        except os88ui.UIError as e:
+            sys.exit("%s: File > Open put no chooser up - %s" % (tag, e))
 
         def rows():
-            return [r[0] for r in dispcp.snapshot(m, S)]
+            return [r[0] for r in ui.listing(ch)]
 
-        def down(n=1):
-            for _ in range(n):
-                m.key("ArrowDown")
-                time.sleep(0.2)
+        def dive():
+            """Enter on the selected FOLDER, waited for by the listing it
+            replaces - a dive re-lists the chooser in place."""
+            was = rows()
+            m.key("Enter")
+            M.until(m, lambda _m: rows() != was, "the chooser to re-list",
+                    poll=0.05, guest=60.0)
+            M.settle(m, limit=120)
 
-        def pick(name):
+        def pick(name, last):
             """Select `name` and press Enter - a dive for a folder, the
-            command for a file. Asserts the SELECTION before committing, so a
+            answer for a file. Asserts the SELECTION before committing, so a
             miss is reported here rather than as the feature under test."""
             rs = rows()
             if name not in rs:
                 sys.exit("%s: %s is not listed here - %r" % (tag, name, rs))
-            idx = rs.index(name)
-            down(idx + 1)               # the selection starts at "none", so
-                                        # the first key lands on row 0
-            got = u16(m.read(S("fdlg_sel"), 2))
-            if got != idx:
-                sys.exit("%s: the dialog selected row %d, wanted %d (%s)"
-                         % (tag, got, idx, name))
+            ui.chooser_select(name, ch) # a click; the arrows scroll a
+                                        # chooser (SPEC.md 38.4)
+            if not last:
+                dive()
+                return
             m.key("Enter")
-            M.settle(m, limit=180)
+            ui.chooser_gone(limit=60)   # the answer is POSTED (SPEC.md 38.6)
+            M.settle(m, limit=180)      # ...and np_load runs after the reap
 
         while rows()[:1] == [".."]:     # up to the volume root
-            down()
-            m.key("Enter")
-            M.settle(m, limit=120)
-        for part in path.split("/"):
-            pick(part)
+            ui.chooser_select("..", ch)
+            dive()
+        parts = path.split("/")
+        for k, part in enumerate(parts):
+            pick(part, k == len(parts) - 1)
         return m.read(S("toast_buf"), 26).split(b"\0")[0].decode(
             "latin-1", "replace")
 
@@ -278,7 +264,11 @@ with os88ui.boot(_T.img("small360.img"), machine=MACHINE, limit=180) as ui:
     # no shed to make. Navigating A: is what claims MEM_P_VIEW and the
     # directory read-ahead, and it is also how a person gets to Note Pad.
     first = ui.path("A:/APPS/NOTEPAD.O88")
-    run, purge = heap("one Note Pad, caches warm")
+    second = ui.path("A:/APPS/NOTEPAD.O88")     # see the docstring: BOTH, first
+    if second.i == first.i:
+        sys.exit("regrowshed: the second launch fronted the first Note Pad "
+                 "instead of starting another - two regions is the staging")
+    run, purge = heap("two Note Pads, caches warm")
     st = npstate(first)
     print("    claim starts at %d bytes (np_capkb=%d)"
           % (st["np_cap"], st["np_capkb"]))
@@ -347,50 +337,21 @@ with os88ui.boot(_T.img("small360.img"), machine=MACHINE, limit=180) as ui:
 
     # 3. A REAL refusal, and what it is allowed to say. Two Note Pads cannot
     #    fund two 16KB documents on a 128KB machine, so the second's grow is
-    #    refused with every cache already shed.
-    #
-    #    FILE > NEW FIRST, AND IT IS NOT A CONVENIENCE - it is what makes this
-    #    leg stageable at all, and the arithmetic is worth writing down because
-    #    it moved under this row once already (the note below is the same
-    #    finding one leg up). A Note Pad INSTANCE is 14,336 bytes of region;
-    #    the manual's claim is another 16,384; and this machine's heap is
-    #    53,760 with ~11KB of it in caches that shed. Two regions and one
-    #    16KB document is 45,056 of it, which fits - two regions and the
-    #    document already grown does not leave a 14,336-byte RUN for the
-    #    second region, whatever sheds. So the second instance cannot be
-    #    launched at all while the first is holding the manual, and the row
-    #    would die in `ui.path` with LD_ENOMEM before it ever read a toast.
-    #
-    #    That is not this row's subject: the LOADER refusing a launch on a
-    #    full machine is honest and is tests/small128.py's ground. So the
-    #    first instance gives the manual back the way a person would - File >
-    #    New, which np_new answers with `np_resize(NP_KB0)` and a shrink that
-    #    cannot fail (SPEC.md 50.3.1) - and the 15,360 bytes that returns are
-    #    what funds the second instance. The refusal this leg is about then
-    #    happens where it always did, in np_load's grow, with the two regions
-    #    standing: the largest run is ~11KB against the 16,384 the read wants,
-    #    which is 5KB of margin rather than the 1KB of address arithmetic the
-    #    old sequence was riding on.
-    ui.raise_window(first)
-    ui.menu_pick("File", "New")
-    M.settle(m, limit=120)
-    st = npstate(first)
-    if st["np_capkb"] != 1:
-        sys.exit("regrowshed: File > New left the first note's claim at %d KB "
-                 "rather than NP_KB0 - the heap this leg needs was never "
-                 "given back (SPEC.md 27.15)" % st["np_capkb"])
-    heap("...the first note emptied")
-    second = ui.path("A:/APPS/NOTEPAD.O88")
-    run, purge = heap("a SECOND Note Pad")
+    #    refused with every cache already shed - which is why both instances
+    #    were opened before the first load (the docstring), and why there is
+    #    nothing to stage here.
+    run, purge = heap("before the second's load")
     t = open_file(second, "README.TXT", "nomem")
     st = npstate(second)
     if st["np_capkb"] >= 16:
-        check("nomem", t != "Too big",
-              "(the claim reached the ceiling after all, so this machine "
-              "COULD fund it - toast %r; the leg asserted only that the "
-              "sentence is not about the file)" % t)
-        print("    NOTE: the second instance was funded, so the refusal "
-              "this leg is about did not happen - largest run %d" % run)
+        # A LEG THAT HAS LOST ITS SUBJECT FAILS (WRITING-TESTS 1), as `toobig`
+        # does. This was a NOTE and a pass, and it stood green for the whole
+        # time the refusal was not happening.
+        check("nomem", False,
+              "(the second document was FUNDED - toast %r, largest run %d "
+              "before it - so no refusal happened for this leg to read; the "
+              "staging in the docstring no longer fills this machine)"
+              % (t, run))
     else:
         check("nomem", t == "No memory",
               "(toast %r with np_capkb=%d short of %d - a refused CLAIM must "

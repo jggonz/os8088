@@ -36,7 +36,6 @@ was measured rather than missed.
 import os
 import struct
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
@@ -115,22 +114,31 @@ def main():
         bad = []
         for line, want in CASES:
             typ(line + "\n")
-            verdict, got = None, None
-            for _ in range(10):
-                time.sleep(1.5)
-                os88marty.settle(m)
-                scr = [y.rstrip() for y in (m.screen() or []) if y.strip()]
+            seen = {}
+
+            def answered(mm):
+                scr = [y.rstrip() for y in (mm.screen() or []) if y.strip()]
                 if any("READY" in y for y in scr):
                     named = [y[5:] for y in scr if y.startswith("ARGS ")]
-                    verdict, got = "ran", (named[-1] if named else "?")
-                    m.type_text("x")
-                    os88marty.settle(m)
-                    break
+                    seen["v"] = ("ran", named[-1] if named else "?")
+                    return True
                 if any("Bad command" in y for y in console()[-3:]):
-                    verdict = "refused"
-                    break
+                    seen["v"] = ("refused", None)
+                    return True
+                return False
+            # the answer is the GUEST's to give, so the deadline is its clock
+            try:
+                os88marty.until(m, answered, "%r to run or be refused"
+                                % line, poll=0.3, limit=35.0)
+            except os88marty.MartyError:
+                pass
+            verdict, got = seen.get("v", (None, None))
+            if verdict == "ran":
+                m.type_text("x")
+                os88marty.settle(m)
             if verdict is None:
-                bad.append("%r: neither ran nor was refused inside 15s" % line)
+                bad.append("%r: neither ran nor was refused inside 105 guest "
+                           "seconds" % line)
             elif want is None and verdict != "refused":
                 bad.append("%r: the console RAN it, and DOSARGS.DAT is the "
                            "same bytes as DOSARGS.COM under a name "

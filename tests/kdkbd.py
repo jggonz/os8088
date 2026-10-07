@@ -50,7 +50,6 @@ import os
 import re
 import sys
 import threading
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -102,7 +101,10 @@ def keyburst(m, stop):
             m.key("KeyA")
         except Exception:
             return
-        time.sleep(0.05)
+        try:
+            os88marty.pace(m, 0.05)     # the key rate is the GUEST's
+        except Exception:
+            return
 
 
 def main():

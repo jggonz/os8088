@@ -39,7 +39,7 @@
 ; GREYING FOLLOWS SPEC.md 47: one predicate per control, shared by the
 ; greying, the click refusal and the explanation; a fact and never a guess;
 ; and the whole control, not just its caption. The pen comes from
-; OSAPI_GFX_PEN (slot 0x0310), so a disabled button carries [gfx_dis] as well
+; OSAPI_GFX_PEN (slot 0x0260), so a disabled button carries [gfx_dis] as well
 ; as CDGRAY and its LABEL dithers on the two 1bpp adapters instead of coming
 ; out solid black next to a dotted frame.
 ; =============================================================================
@@ -114,6 +114,8 @@ hd_page_paint:
                                 ; windows can change the table under it
                                 ; (SPEC.md 52.13)
     mov bp, dx                  ; BP = pane top for the rest of the routine
+    mov [hd_ppx], di            ; ...banked for hd_page_key, whose verb
+    mov [hd_ppy], dx            ; carries no pane origin (hddabi.inc)
 
     mov si, hd_s_page               ; NO PEN: font_run takes the pair in AX and
     mov cx, di                      ; never reads [gfx_color] (SPEC.md 52.12)
@@ -326,83 +328,31 @@ hd_page_paint:
 ; be one that would have worked.
 ; -----------------------------------------------------------------------------
 
-; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
-; A Control Panel page draws its buttons one at a time, so the record is
-; pointed at whichever rect the caller staged. The GESTURE here is the
-; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
-; release-fired; what changed is that the DRAW goes through the control.
-hdp_btlbl: dw 0
-hdp_btflg: dw 0
-    OS88UI_BTNREC hdp_btrec, 0, hdp_btlbl, hdp_btflg, 1
-
 hd_page_button:
     push ax
-    push bx
     push cx
     push dx
-    push si
-    push di
-    push ax
-    push bx
-    push si
-    mov al, cl                  ; ...and PRESSED if it is the one being held.
+    mov dx, ax                  ; the x, while AL asks two questions
+    mov al, cl                  ; PRESSED if it is the one being held.
     inc al                      ; ASKED FIRST, because CL is the button index
     call hd_isdown              ; on the way in and the DIS flag on the way
-    mov dx, 0                   ; out - two meanings, one register, four
-    jne .nodn                   ; instructions apart
-    mov dx, OS88UI_DOWN
+    mov al, cl                  ; out (`mov` keeps ZF)
+    mov cx, 0
+    jne .nodn
+    mov cl, OS88UI_DOWN
 .nodn:
-    mov al, cl
     call hd_btn_ok              ; CF = 1 = this control is disabled, which is
-    mov cx, 0                   ; the shape the shared control's flag takes:
-    adc cx, 0                   ; OS88UI_DIS is 1 and `mov` does not touch CF,
-                                ; so the flag IS the carry, with no test in
-                                ; between. It sets CDGRAY and [gfx_dis]
-                                ; together and colours the FRAME as well as
-                                ; the label - greying half a control is worse
-                                ; than not greying it, and on mono the flag is
-                                ; what stops the label being the half left
-    pop si
-    pop bx
-    pop ax
+    adc cl, 0                   ; the shape the shared control's flag takes:
+                                ; OS88UI_DIS is 1, so the flag IS the carry
+    mov ax, dx
     add ax, di                  ; ...and the rect, in screen coordinates
-    mov [hd_pbrect+0], ax
-    add ax, bx
-    dec ax
-    mov [hd_pbrect+4], ax
-    mov ax, bp
-    add ax, HDP_BY
-    mov [hd_pbrect+2], ax
-    add ax, HDP_BH - 1
-    mov [hd_pbrect+6], ax
-    mov di, cx
-    or di, dx                   ; DIS | DOWN - and DIS outranks it inside the
-                                ; control, so a greyed button never says it
-                                ; will fire (SPEC.md 13.8)
-    mov bx, hd_pbrect           ; OS88UI_FILL: the ground behind this is the
-    or di, OS88UI_FILL          ; pane's white on a full paint and a PRESSED
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [hdp_btlbl], si          ; label and DI its flags, so the record takes
-    mov [hdp_btflg], di          ; all three and the picture is identical
-    mov [hdp_btrec+OS88UI_BT_RECTS], bx
-    mov bx, hdp_btrec
-    mov al, 1
-    call os88ui_btn
-    pop bx
-    pop ax
-                                ; the control leaves the pen live by itself,
-                                ; so the clc/GFX_PEN that used to close this
-                                ; routine is gone
-    pop di
-    pop si
+    lea dx, [bp+HDP_BY]
+    call hd_btn_draw16          ; tool.inc: one tail for the image's four
     pop dx
     pop cx
-    pop bx
     pop ax
     ret
 
-hd_pbrect:  dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
 
 ; --- SPEC.md 13.8.4: this page acts on the RELEASE ---------------------------
 ; THE LADDER IS THE HIT TEST, which is ctrl.inc's own answer (SPEC.md 13.8.3)
@@ -662,6 +612,93 @@ hd_page_drag:
 
 
 ; -----------------------------------------------------------------------------
+; hd_page_key - HDT_KEY, the panel's W_ONKEY one image further out (31.9.2)
+; in:  BL = ASCII, BH = the scan code; the gfx lock is HELD
+; out: CF = 0 we took it; CF = 1 we did not, and the panel drops it
+;
+; Up and Down move the drive highlight, Left and Right the C/H/S field - the
+; two selections a click on this page makes, and nothing that writes: the
+; geometry itself is still changed with - and +, so no keystroke can retype a
+; drive's cylinder count behind the user's back. Every other key is not ours.
+;
+; The pane origin is the one hd_page_paint banked, which is sound for
+; rp_key's reason: a key can only arrive at a page that has been painted, and
+; the panel does not move its pane under one.
+; -----------------------------------------------------------------------------
+HDP_K_UP     equ 0x48
+HDP_K_LEFT   equ 0x4B
+HDP_K_RIGHT  equ 0x4D
+HDP_K_DOWN   equ 0x50
+
+hd_page_key:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call hd_sync                ; the resident's [hd_ndev] and [hd_sel], for
+                                ; hd_page_paint's reason
+    cmp bh, HDP_K_UP
+    je .up
+    cmp bh, HDP_K_DOWN
+    je .down
+    cmp bh, HDP_K_LEFT
+    je .left
+    cmp bh, HDP_K_RIGHT
+    je .right
+    pop bp                      ; not ours
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.up:
+    mov al, [hd_sel]
+    or al, al
+    jz .took                    ; at the top already: taken, and nothing moves
+    dec al
+    jmp short .sel
+.down:
+    mov al, [hd_sel]
+    inc al
+    cmp al, [hd_ndev]
+    jae .took
+.sel:
+    call hd_sel_set             ; both sides, .devrow's reason
+    mov al, HDM_PICK
+    call hd_say
+    jmp short .repaint
+.left:
+    mov al, [hd_field]
+    or al, al
+    jz .took
+    dec byte [hd_field]
+    jmp short .repaint
+.right:
+    cmp byte [hd_field], 2
+    jae .took
+    inc byte [hd_field]
+.repaint:
+    mov di, [hd_ppx]
+    mov bp, [hd_ppy]
+    call hd_page_repaint        ; what a click on a row or a field draws
+.took:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_page_pm - one of the two adjust buttons (module internal)
 ; in:  AX = x, SI = its label, DI/BP = the pane origin
 ;
@@ -679,38 +716,21 @@ hd_page_pm:
     push bx
     push cx
     push dx
-    push si
     push di
-    add ax, di
-    mov [hd_pbrect+0], ax
-    add ax, HDP_BTW - 1
-    mov [hd_pbrect+4], ax
-    mov ax, bp
-    add ax, HDP_EY - 1
-    mov [hd_pbrect+2], ax
-    add ax, HDP_FH + 1
-    mov [hd_pbrect+6], ax
-    mov di, OS88UI_FILL         ; always live, never the default - and it FILLS
-                                ; for the reason hd_page_button does: a
-                                ; release redraws it over a pressed one
-    mov al, cl                  ; CL = the id, set by the caller (nothing here
-    call hd_isdown              ; overwrites CX, unlike hd_page_button)
-    jne .nodn
-    or di, OS88UI_DOWN
+    add ax, di                  ; the rect, in screen coordinates
+    mov bx, HDP_BTW
+    lea dx, [bp+HDP_EY-1]
+    mov di, HDP_FH + 1          ; 13 rows, the editor's field and its frame
+    push ax
+    mov al, cl                  ; CL = the id, set by the caller
+    call hd_isdown
+    mov cx, 0                   ; always live, never the default (`mov` keeps
+    jne .nodn                   ; ZF, and so does the pop)
+    mov cl, OS88UI_DOWN
 .nodn:
-    mov bx, hd_pbrect
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [hdp_btlbl], si          ; label and DI its flags, so the record takes
-    mov [hdp_btflg], di          ; all three and the picture is identical
-    mov [hdp_btrec+OS88UI_BT_RECTS], bx
-    mov bx, hdp_btrec
-    mov al, 1
-    call os88ui_btn
-    pop bx
     pop ax
+    call hd_btn_draw            ; tool.inc's, at 13 rows
     pop di
-    pop si
     pop dx
     pop cx
     pop bx
@@ -896,9 +916,10 @@ hd_page_adjust:
     call hd_geom_ok                 ; whole point of the editor. Bit 1 says
     jc .mark                        ; the USER set it, which is what makes it
     or byte [di+HDD_FLAGS], 1       ; worth a record in the blob (SPEC.md 52.6)
-    mov byte [hd_msgc], HDM_TYPED
     call hd_geom_push               ; ...and the DRIVE is told, or it keeps
                                     ; translating with the one the probe left
+    mov al, HDM_TYPED               ; both sides, for .devrow's reason: the
+    call hd_say                     ; repaint's hd_sync reads the resident's
 .mark:
     call hd_cfg_mark                ; staged on every click and written on
                                     ; none: the panel's teardown spends it
@@ -1016,8 +1037,13 @@ hd_page_ladder:
     div bl
     cmp al, [hd_ndev]
     jae .done
-    mov [hd_sel], al
-    mov byte [hd_msgc], HDM_PICK
+    call hd_sel_set             ; BOTH SIDES, and the resident's is the one that
+    mov al, HDM_PICK            ; counts: the repaint below starts with hd_sync,
+    call hd_say                 ; which copies the RESIDENT's [hd_sel] and
+                                ; [hd_msgc] over ours - so a selection stored
+                                ; only here was undone by the paint it asked
+                                ; for, and the click flashed the page and
+                                ; highlighted the row it started on
     jmp .repaint
 
 .editor:
@@ -1138,10 +1164,12 @@ hd_page_ladder:
 .refused:
     ; A greyed control explains itself (SPEC.md 47 rule 5), so the refusal
     ; says nothing new - it just makes sure the reason is on screen.
-    mov byte [hd_msgc], HDM_NOGEOM
+    mov al, HDM_NOGEOM          ; both sides, for .devrow's reason
     cmp byte [hd_ndev], 0
-    jne .repaint
-    mov byte [hd_msgc], HDM_NODEV
+    jne .say
+    mov al, HDM_NODEV
+.say:
+    call hd_say
 .repaint:
     call hd_page_repaint
 .done:
@@ -1253,6 +1281,8 @@ hd_fldi:     db 0               ; the C/H/S editor's loop index
 hd_fldx:     dw 0
 hd_clx:      dw 0               ; the click being dispatched
 hd_cly:      dw 0
+hd_ppx:      dw 0               ; the pane origin the last paint drew at, which
+hd_ppy:      dw 0               ; is all a KEY has to draw with (hd_page_key)
 
 hd_msg_str:
     push ax
@@ -1337,7 +1367,7 @@ hd_s_mhave:   db 'Already mounted', 0
 hd_s_unmounted: db 'Unmounted', 0
 hd_s_mnotab:  db 'No partition table yet', 0
 hd_s_mfull:   db 'No free volume', 0
-hd_s_mbig:    db 'Partition is over 32MB', 0
+hd_s_mbig:    db 'Partition is over 2GB', 0
 hd_s_nosys:   db 'Need the system disk', 0
 hd_s_notool:  db 'Tool would not open', 0
 

@@ -150,7 +150,9 @@ def main(argv):
                 now = m.status()["cycles"]
                 if now >= nxt:
                     step += 1
-                    mo._pk(dx=3, dy=3, l=True)          # a 45 degree chord
+                    m.mouse(3, 3, l=True)   # a 45 degree chord; the
+                                            # schedule above IS the spacing,
+                                            # so not _pk and its GAP pause
                     nxt = now + NUDGE_MS * HZ / 1000.0
                 time.sleep(0.001)
 

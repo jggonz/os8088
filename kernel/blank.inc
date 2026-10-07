@@ -649,11 +649,11 @@ ss_start_x:
     stc                         ; the refusal, set BEFORE the branch so that
     je .out                     ; the two ways out share one `ret`. `stc`
                                 ; writes no ZF, so the compare still reads
-    call KERNEL_SEG:cw_gfx_lock
+    call ct_cw_gfx_lock
     mov al, SSV_START
     call ss_open
     pushf                       ; the verdict, banked across the unlock, whose
-    call KERNEL_SEG:cw_gfx_unlock   ; contract is "clobbers: flags"
+    call ct_cw_gfx_unlock           ; contract is "clobbers: flags"
     popf
 .out:
     ret
@@ -701,11 +701,12 @@ ss_start_x:
 ss_stop_x:
     mov al, SSV_STOP
     call ss_call
-    call KERNEL_SEG:cw_gfx_lock
+    call ct_cw_gfx_lock
     call KERNEL_SEG:cw_blk_relit
-    call KERNEL_SEG:cw_gfx_unlock
-    jmp short ss_reap_x         ; ...and the image goes back, if nothing else
-                                ; has a use for it (SPEC.md 79.8)
+    call ct_cw_gfx_unlock       ; ...and FALLS INTO ss_reap_x: the image goes
+                                ; back, if nothing else has a use for it
+                                ; (SPEC.md 79.8)
+.fall:
 
 ; -----------------------------------------------------------------------------
 ; ss_reap_x - give the image back if nothing is using it (SPEC.md 79.8)
@@ -733,6 +734,9 @@ ss_stop_x:
 ; outside one.
 ; -----------------------------------------------------------------------------
 ss_reap_x:
+%if ss_reap_x - ss_stop_x.fall != 0
+%error "blank: ss_stop_x falls into ss_reap_x, so nothing may sit between them"
+%endif
     push ax
     push bx
     cmp word [ss_row+DRVR_SEG], 0

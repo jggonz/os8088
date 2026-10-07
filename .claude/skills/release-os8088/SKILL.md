@@ -10,10 +10,11 @@ door along with the notes for its releases page, opens a pull request there,
 and cuts a GitHub release on this repo.
 
 **The GitHub release carries ONE asset: a zip.** `os8088-<version>.zip` holds
-every image, a README that says which two of them a reader needs, and a
-SHA256SUMS covering all of them. Eleven loose `.img` files used to hang off
-the release, and a reader had to know which pair they wanted before they could
-download anything. Step 3a builds it. The website is unchanged -- its download
+every image, a `README.md` that explains every file in it -- grouped by what the
+reader is trying to do, so the pair most people need comes first and each group
+says how to use its own files -- and a SHA256SUMS covering all of them. Eleven
+loose `.img` files used to hang off the release, and a reader had to know which
+pair they wanted before they could download anything. Step 3a builds it. The website is unchanged -- its download
 page still serves the images individually out of `public/disk/`, because the
 browser demo streams them and a table of per-image checksums is the point of
 that page.
@@ -151,30 +152,49 @@ to a fresh branch off `main` and would otherwise sweep unrelated work into it.
 
 ```bash
 cd "$OS_REPO"
-make clean && make
+make clean && make && make emu
 ls -l build/os8088.img build/os8088-120.img build/os8088-720.img \
       build/os8088-360.img \
       build/apps.img build/apps120.img build/apps720.img build/apps360.img \
       build/media360.img \
-      build/office360.img build/network360.img build/games360.img
+      build/office360.img build/network360.img build/games360.img \
+      build/emu.img
 ```
 
-All twelve must exist -- step 3a refuses to pack without them. (Four geometries
-of each pair since SPEC.md 19's 1.2MB disk, plus the 360KB-only media disk and
-SPEC.md 24.6's three 360KB-only category disks -- at that size the spreadsheet
-and the chart viewer ship on the office disk and on NO other.) The build
-enforces its own invariants -- a 512-byte boot sector and a kernel that fits
-under offset 0xA000 -- so a build failure here is a real problem, not
-something to work around. Report the kernel size; if it has
-grown, say by how much and how much headroom is left (the ceiling is 0xA000 =
+All thirteen must exist -- step 3a refuses to pack without them. (Four
+geometries of each pair since SPEC.md 19's 1.2MB disk, plus the 360KB-only media
+disk and SPEC.md 24.6's three 360KB-only category disks -- at that size the
+spreadsheet and the chart viewer ship on the office disk and on NO other.)
+
+The build enforces its own invariants -- a 512-byte boot sector and a kernel
+that fits under offset 0xA000 -- so a build failure here is a real problem, not
+something to work around. Report the kernel size; if it has grown, say by how
+much and how much headroom is left (the ceiling is 0xA000 =
 40,960 bytes for image + bss).
+
+**`make emu` is not optional, though `make` does not run it.** It builds
+`build/emu.img`, the **emulator system disk** (SPEC.md 9.11.7): the `kern_emu`
+kernel -- `kern_big` plus the VMware absolute pointer, `VMMOUSE.DRV` -- with a
+`SYSTEM.CFG` that already switches the driver on. In QEMU, VMware, VirtualBox
+and the v86 browser emulator the pointer then follows the host mouse with no
+grab. It needs nothing a bare `make` does not, which is why `mkzip.py` treats
+it as required rather than on-demand. Three things about it that are decided
+and not to be "fixed" at release time:
+
+- **It pairs with the SHIPPED `apps.img`.** `kern_emu` holds the same API table
+  at the same offsets, so there is no emu software disk and must not be.
+- **It is 1.44MB only.** The driver is 386 code, and no machine that needs a
+  360KB floppy can run it. The Makefile says a 720KB one is `--size 720` if it
+  is ever wanted; that is a Makefile change, not a release step.
+- **Its kernel lives in `build/emuk/`**, never in `build/`, so nothing in the
+  rest of this procedure boots it by accident.
 
 **Then the on-demand disks**, which `make` does not build and the zip carries
 when they exist:
 
 ```bash
 tools/setup-cc.sh                     # SmallerC; needed by cword and allapps
-make allapps                          # apps-all.img -- every program, one disk
+make allapps                          # apps-all-N.img -- every program, a set of disks
 make worddisk cworddisk               # word*.img, cword*.img
 make c64disk                          # c64*.img
 make weavedisk                        # weave*.img -- the Weave family's disk
@@ -183,16 +203,23 @@ make loomdisk                         # loom*.img -- the same family's IDE disk,
                                       # compiled bundles
 make runcpm-src && make runcpmdisk    # runcpm*.img
 make scribedisk paccmandisk           # scribe*.img, paccman*.img
+make 1942disk redlinedisk             # 1942*.img, redline*.img
 make apple2rom && make apple2disk     # apple2*.img -- apple2rom fetches the
                                       # ROM once; `make clean` spares it
 make live                             # os8088-usb.img + os8088.iso -- the live
                                       # USB image and the live CD (SPEC.md 80).
                                       # Needs the fetch on the line above and
                                       # the C toolchain, like allapps
+make usb-emu                          # os8088-emu-usb.img -- THE WEBSITE'S DEMO
+                                      # DISK (SPEC.md 80.7), the same volume on
+                                      # kern_emu with VMMOUSE.DRV wanted. Not
+                                      # in the zip; the web repo's release.py
+                                      # publishes it, and skipping it leaves
+                                      # the demo on last release's build
 ```
 
 Offer these, do not assume them. If `tools/setup-cc.sh` cannot run -- no
-network, no host toolchain -- **release the twelve and say which on-demand disks
+network, no host toolchain -- **release the thirteen and say which on-demand disks
 were skipped**; they are a convenience, and a release that waits on one is a
 release that does not happen. `mkzip.py` prints the ones it did not find, so
 that list is generated rather than remembered. Boot any that were built in step
@@ -207,7 +234,7 @@ two Samplers, Mini-Zork, ZTUU) and authors' own freeware -- and none of the
 Infocom games that were sold. Do not stop to ask about it again.
 
 What still stays out is the story disk as a zip entry. `zork*.img` is not in
-`mkzip.py`'s manifest, and `STORIES=` can add files a user owns but may not
+`mkzip.py`'s `ITEMS`, and `STORIES=` can add files a user owns but may not
 redistribute, so **never run a release build with `STORIES=` set**. If a new
 entry is proposed for the MANIFEST, it has to be free to redistribute, because
 it ships in the next release.
@@ -231,6 +258,22 @@ menu bar across the top with the chip glyph, then Locator, File and Builtins;
 a Disk A and a Disk B icon down the right-hand side; the mouse pointer.
 If the screen is blank or garbled, stop -- do not publish. Delete the two
 scratch files afterwards; `build/` is gitignored, but leave it tidy.
+
+**Then boot the emulator disk** -- `emu.img` with `apps.img`, the README's own
+QEMU line with no mouse on it:
+
+```bash
+python3 .claude/skills/release-os8088/emusmoke.py --shot build/smoke-emu.png
+```
+
+It must print `PASS`. A screenshot alone cannot pass this disk: an emulator disk
+whose driver never attached boots to the same desktop, silently on the serial
+mouse, which is the one failure that matters here. So the script reads the
+answer out of the guest -- the driver attached, the backdoor won the mouse, and
+three absolute positions sent through QMP land where they were sent -- and kills
+only the QEMU it started. **Then look at `build/smoke-emu.png`** the same way as
+`smoke.png`: the same desktop, with the pointer in the middle of the screen,
+where the script left it. Delete it afterwards.
 
 **If `make live` ran, boot both live images the same way** -- the rule is
 per image, and a zip does not exempt the two biggest files in it:
@@ -273,10 +316,12 @@ The script does three things worth knowing about:
 - **Its file list is an allowlist, not a glob.** `build/` also holds the story
   disks and every test gate's scratch image, and a glob ships those the first
   time somebody runs an unrelated target before cutting a release. If a new
-  disk should be in releases, add it to `MANIFEST` in `mkzip.py` -- that is the
-  only place the list lives.
-- **It refuses to pack a partial release.** A missing image that `make` builds
-  stops it; a missing on-demand disk is reported and skipped.
+  disk should be in releases, add it to `ITEMS` in `mkzip.py`, in the group a
+  reader would look for it under -- that is the only place the list lives, and
+  the README's description of it is written there too. A disk that fits no
+  group gets a new entry in `GROUPS`, with the instructions for using it.
+- **It refuses to pack a partial release.** A missing image that `make` or
+  `make emu` builds stops it; a missing on-demand disk is reported and skipped.
 - **The zip is byte-for-byte reproducible.** Timestamps come from the date in
   the version string and the images are already deterministic, so the same
   version from the same commit packs to the same bytes. Do not add anything
@@ -286,16 +331,37 @@ Then look inside it, the same way step 3 makes you look at the screenshot:
 
 ```bash
 cd "$(mktemp -d)" && unzip -q "$OS_REPO/build/os8088-$VERSION.zip"
-cd "os8088-$VERSION" && shasum -a 256 -c SHA256SUMS && cat README.txt
+cd "os8088-$VERSION" && shasum -a 256 -c SHA256SUMS && cat README.md
 ```
 
 **Read the README with the Read tool.** It is written for someone who has never
 seen this project, so "Writing the copy" governs it exactly as it governs the
-release notes. Check the version, the commit and the file list are this
-release's, and that every image listed is one that was actually built. The
-QEMU command line in it is the real one -- if `make run`'s invocation ever
-changes, `README` in `mkzip.py` has to change with it, and the way to know is
-to run the command out of the unpacked directory and see the desktop come up.
+release notes. It is `README.md`: Markdown that reads the same in Notepad as
+on GitHub, generated from two tables in `mkzip.py`:
+
+- **`GROUPS`** -- the situations a reader is in, in the order the README takes
+  them: *Start here* (the system and software pair per disk size, as a table),
+  *Extra disks for a 360KB machine*, *In an emulator or virtual machine* (the
+  emulator disk), *No floppy drive* (the live USB image and CD), *Every program,
+  on a set of disks*, *One program per disk*, and *About this zip* (checksums
+  and licence files). Each carries the instructions for using its own files --
+  the QEMU line, the `dd` line -- so they sit beside the files they are about.
+- **`ITEMS`** -- the things a reader chooses between, each in one group, with
+  the images it comes as and a line saying what it is for. This is also the
+  allowlist of what can go in the zip.
+
+Only what was packed is described, and a group with nothing in this zip is left
+out whole. **Check that every file in the unpacked directory has its own line**
+in the README, that the version and commit are this release's, and that no
+group explains a file that is not there.
+
+The QEMU command lines in it are the real ones -- if `make run`'s invocation
+ever changes, `GROUPS` in `mkzip.py` has to change with it, and the way to know
+is to run the commands out of the unpacked directory and see the desktop come
+up. The emulator group's line is the one `emusmoke.py` boots, and it has **no
+mouse line on purpose**: QEMU answers the absolute pointer by default, and the
+serial mouse beside it would be a second pointing device with the buttons split
+across the two.
 
 ### 4. Publish into the website repo
 
@@ -669,7 +735,10 @@ images a reader actually needs, the packed size, and the sha256 step 3a
 printed. When the zip carries the live media, name them too: a reader with no
 floppy drive needs to hear that `os8088-usb.img` and `os8088.iso` boot a PC
 or an emulator directly, or the two files that serve them best read as
-padding. Someone who wants a per-image checksum finds it in the SHA256SUMS
+padding. Name the emulator disk the same way: someone running os8088 in QEMU,
+VMware, VirtualBox or a browser should hear that `emu.img` goes in drive A in
+place of `os8088.img` and that the pointer then follows their own mouse with no
+click to capture it. Someone who wants a per-image checksum finds it in the SHA256SUMS
 inside the zip, or on the download page, and the notes should say which.
 
 `gh` infers the repository from the checkout's remote, so this works for a
@@ -709,8 +778,10 @@ them in a status line is how they get lost.
   into a zip does not make it booted.
 - **The GitHub release gets the zip and nothing else.** Never attach loose
   images beside it, and never build the zip from a glob of `build/` -- the
-  manifest in `mkzip.py` is the list, and it exists so a story disk or a test
+  `ITEMS` table in `mkzip.py` is the list, and it exists so a story disk or a test
   gate's scratch image cannot ride out with a release.
+- **Never publish an emulator disk whose driver did not attach.** `emusmoke.py`
+  is how step 3 knows, and a desktop screenshot is not.
 - **Never hand-assemble the zip.** `mkzip.py` writes the README, the checksums
   and a reproducible archive; a `zip -r` by hand gets none of those and looks
   identical until somebody checks.

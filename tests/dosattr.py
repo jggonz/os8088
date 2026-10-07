@@ -56,12 +56,12 @@ beside five wrong ones.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
+import os88marty                                           # noqa: E402
 import os88ui                                              # noqa: E402
 
 SYS = os.path.join(ROOT, "build", "os8088-360.img")
@@ -88,16 +88,20 @@ def main():
         if not ui.path(PROG):
             fail("double-clicking %s opened no window" % PROG)
 
-        rows = []
-        end = time.time() + 240.0
-        while time.time() < end:
+        seen = {"rows": []}
+
+        def reported(_):
             rows = [r.rstrip() for r in (m.screen() or []) if r.strip()]
-            if any("ATTRDIR PASS" in r or "ATTRDIR FAIL" in r for r in rows):
-                break
-            time.sleep(0.5)
-        else:
+            seen["rows"] = rows
+            return any("ATTRDIR PASS" in r or "ATTRDIR FAIL" in r
+                       for r in rows)
+        try:                            # a GUEST-time budget
+            os88marty.until(m, reported, "ATTRDIR.COM to report", poll=0.5,
+                            limit=240.0)
+        except os88marty.MartyError:
             fail("ATTRDIR.COM never reported; the last screen was %r"
-                 % rows[:12])
+                 % seen["rows"][:12])
+        rows = seen["rows"]
 
         for r in rows:
             print("  | %s" % r)

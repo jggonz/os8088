@@ -31,7 +31,6 @@ THREE ASSERTIONS, and the third is the one that keeps the fix honest:
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -264,9 +263,8 @@ def main():
         # count is a proxy for.
         m.type_text("HELP\n")
         os88marty.settle(m)
-        time.sleep(2.0)
-        os88marty.settle(m)
-        vt, vr, cy, vis = bx.visible()
+        vt, vr, cy, vis = os88marty.quiesce(m, bx.visible, guest=1.0,
+                                            what="HELP's output to finish")
         first = any("CD [path]" in r for r in vis)
         last = any("cmd > file" in r for r in vis)
         prompt = any(r.rstrip().endswith(">") for r in vis)

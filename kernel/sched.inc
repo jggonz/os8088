@@ -130,9 +130,13 @@ SCH_IDLE_STK    equ 128         ; the idle task. Its own footprint is at most 4
                                 ; interrupt floor, measured at 32 on QEMU and
                                 ; 40-64 on real iron (docs/plans/completed/STACK-SLOTS-PLAN.md
                                 ; 7.1). 128 is 2x the worst of those
-SCH_BUILTIN_STK equ 128         ; a built-in kind's task. Timer and Bounce are
-                                ; the two that take one, and six Bounces at
-                                ; once measured +10..24 over the floor
+SCH_BUILTIN_STK equ 128         ; a built-in kind's task. Bounce is the one
+                                ; that takes one, and six Bounces at once
+                                ; measured +10..24 over the floor. The Timer
+                                ; was the other, sized from Bounce and never
+                                ; measured: half covered it reached 112 of 128
+                                ; on a floor of 32, so 132 on vm/pc5150's 52 -
+                                ; and it has no task at all now (SPEC.md 14.7)
 SCH_DRV_STK     equ 192         ; a driver's worker. The only one in the tree
                                 ; is the sound driver's stream task, whose
                                 ; deepest static chain is 28 bytes
@@ -203,8 +207,13 @@ SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
 %macro SCH_PARTITION 0
     SCH_SLOT 128                ; the sleepers. ONE of these is the idle task's
     SCH_SLOT 128                ; for as long as the machine is up, so two are
-    SCH_SLOT 128                ; really available: a Timer, a Bounce, the
-                                ; sound driver's stream task. NOT a C package
+    SCH_SLOT 128                ; really available, and since SPEC.md 14.7
+                                ; took the Timer's task away Bounce is the one
+                                ; thing that asks for 128 (the sound driver's
+                                ; stream tasks ask SCH_DRV_STK = 192). Trading
+                                ; two of these for one 256 is costed and NOT
+                                ; taken: docs/plans/completed/STACK-SLOTS-PLAN.md
+                                ; 13. NOT a C package
                                 ; whose worker "only sleeps": CWORD's and
                                 ; RUNCPM's close the window from that worker,
                                 ; and wm_destroy repaints what it uncovered
@@ -325,8 +334,17 @@ sched_init:
     loop .clear
 
     mov byte [sch_cur], 0
-    mov byte [sch_lock], 0
-    mov word [ticks], 0
+%ifdef KERN_BIG
+    mov word [sch_rbusy], 0     ; the lock, and FSXF_RATE's re-entry byte
+%else                           ; beside it (53.2.2) in one word: sch_rhook
+    mov byte [sch_lock], 0      ; balances it from here on, so fsx_run need
+%endif                          ; not
+    mov word [ticks], 0         ; .bss: nothing else zeroes it, and the stamp
+                                ; seeded below assumes it (high word = 0).
+                                ; Kernel size pass 5 folded this line into
+                                ; the comment above by accident, which only a
+                                ; machine whose RAM is not zero at power-on
+                                ; could show
     mov byte [sch_fast], 0      ; no sub-tick until a bracket asks (53.8)
     mov byte [sch_coop], 0      ; pre-emptive until the Control Panel says
     mov byte [sch_hold], SCH_WD_TICKS
@@ -488,26 +506,24 @@ sch_fast_on:
     push bx
     cmp al, 2
     jb .out
-    cmp al, 4
-    ja .out
-    mov bl, al
-    xor bh, bh
-    shl bx, 1
-    mov bx, [sch_fdivs + bx - 4] ; BX = 65536/N, tabled: no division in an arm.
-                                ; AL stays N - the index arithmetic is BX's
-                                ; alone, because both are wanted below
+%ifdef KERN_BIG
+    cmp al, SCH_RATE            ; N = 2..4, or SCH_RATE = 5: the caller's own
+%else                           ; divisor (SPEC.md 53.2.2), banked by fsx_run
+    cmp al, 4                   ; as the table's fourth row - and by the same
+%endif                          ; token re-armed by the clip door, which parks
+    ja .out                     ; [sch_fast] and hands it back
+    cbw                         ; AH = 0 (N is 2..5)
+    mov bx, ax
+    shl bx, 1                   ; the row, for the tabled 65536/N below: no
+                                ; division in an arm
     pushf
     cli
-    mov [sch_fcnt], al          ; divide from the first sub-tick, and set the
-    mov [sch_fast], al          ; flag INSIDE the same window as the reprogram
-    push ax
-    mov al, 0x34                ; ch0, lo/hi, mode 2 - the mode is unchanged,
-    out 0x43, al                ; only the divisor (SPEC.md 8.1)
-    mov ax, bx
-    out 0x40, al
-    mov al, ah
-    out 0x40, al
-    pop ax
+    mov ah, al                  ; [sch_fast] and [sch_fcnt] = N, one word
+    mov [sch_fast], ax          ; (adjacent - the %if under the .bss): divide
+                                ; from the first sub-tick, and the flag set
+                                ; INSIDE the same window as the reprogram
+    mov ax, [sch_fdivs + bx - 4] ; the mode is unchanged, only the divisor
+    call sch_pit0               ; (SPEC.md 8.1)
     popf
 .out:
     pop bx
@@ -516,54 +532,123 @@ sch_fast_on:
 
 sch_fast_off:
     push ax
-    push cx
     cmp byte [sch_fast], 0
     je .out
     pushf
     cli
-    mov al, 0x34                ; the BIOS-compatible divisor 0 = 65536 back
-    out 0x43, al
-    xor al, al
-    out 0x40, al
-    out 0x40, al
+    xor ax, ax                  ; the BIOS-compatible divisor 0 = 65536 back
+    call sch_pit0
+    mov [sch_fast], al          ; AL = 0 still: the sub-tick off, in the window
     call sch_pit_now            ; ...and re-seed the accounting stamp, or the
     mov [sch_pit_last], ax      ; first full tick after this charges a whole
     mov [sch_pit_last+2], dx    ; bracket's worth of garbage to somebody.
                                 ; Its own pushf/cli nests inside this one and
                                 ; its popf restores IF=0, which is what we are
-                                ; already in
-    mov byte [sch_fast], 0
+                                ; already in. DX is ITS output and comes back
+                                ; clobbered, as it always has
     popf
 .out:
-    pop cx
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; sch_pit0 - PIT channel 0 to mode 2, lobyte/hibyte, count AX (0 = 65536): the
+; rate generator the scheduler's clock reads (SPEC.md 8.1). The caller holds
+; IF = 0 - an interleaved latch between the two count bytes is undefined on a
+; real 8253. sch_fast_on/off, and the speaker door's open and close (34.11).
+; clobbers: AL (= AH)
+; -----------------------------------------------------------------------------
+sch_pit0:
+    push ax
+    mov al, 0x34
+    out 0x43, al
+    pop ax
+    out 0x40, al
+    mov al, ah
+    out 0x40, al
+    ret
+
 sch_fdivs:  dw 32768, 21845, 16384      ; N = 2, 3, 4
+%ifdef KERN_BIG
+sch_rdiv:   dw 0                        ; N = SCH_RATE: FSXF_RATE's PIT divisor
+%endif                                  ; (SPEC.md 53.2.2), which fsx_run banks
+                                        ; and the ISR's accumulator adds. .text
+                                        ; because it IS the table's next row -
+                                        ; the %if under SCH_RATE in fsx.inc
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; sch_rhook - call FSXF_RATE's hook (SPEC.md 53.2.2), from sch_isr only
+; in:  IF=0, DS = KERNEL_SEG, the EOI already sent, a full ISR frame saved
+; out: nothing; IF=0 (it is 1 across the call while a sample ISR is open)
+; clobbers: every register but DS, which comes back KERNEL_SEG
+;
+; Called the way wm_pkgcall calls a window's callback - DS = the package's
+; segment, ES = KERNEL_SEG, SI = the window, BP = the proc, far through the
+; dispatcher - with AX = the periods since the hook last ran. Three states
+; make it SKIP, and the period stays owed in [sch_rpend] for the next call:
+; the previous call has not come back (it may sti, and a second IRQ0 lands
+; here), the ROM's chain is in progress under us (its stack is sch_chstack,
+; 128 bytes), or SS is not ours (a ROM service on a stack of its own).
+; [sch_lock] is raised across the call so a hook that sti's cannot be
+; switched away from, and the ISR's own tail honours it.
+; -----------------------------------------------------------------------------
+sch_rhook:
+    cmp word [spk_seg], 0       ; UNDER A SAMPLE ISR (SPEC.md 34.11) the hook
+    je .if0                     ; runs with IF = 1, from both of sch_isr's
+    sti                         ; calls: the next IRQ0 is a pulse, K of them
+.if0:                           ; from the next period, and each 864 cycles
+                                ; held at IF = 0 here is one lost
+%ifndef NO_CHAINPRIV
+    cmp word [sch_chbusy], 0    ; [sch_chbusy] and [sch_rbusy] as ONE word:
+%else                           ; adjacent, see the %if under the .bss
+    cmp byte [sch_rbusy], 0
+%endif
+    jne .skip
+    mov ax, ss
+    cmp ax, LOW_SEG
+    jne .skip
+    add word [sch_rbusy], 0x0101 ; [sch_rbusy] and [sch_lock] together, one
+                                ; word (neither is ever 0xFF, so no carry)
+    xor ax, ax
+    xchg ax, [sch_rpend]        ; AX = the periods owed, and none after (IF=0)
+    mov si, [sch_rwin]          ; the window record lives for the bracket
+    mov bp, [sch_rbp]
+    push cs
+    pop es
+    mov ds, [si+W_SEG]          ; the package's own segment...
+    call far [cs:si+W_DISP]     ; ...and its dispatcher, which near-calls BP
+    push cs
+    pop ds
+    cli                         ; the hook may have sti'd
+    sub word [sch_rbusy], 0x0101
+.skip:
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
-; sched_unhook - restore the BIOS int 08h vector, then unhook mouse + sound
-;
-; Used before reboot so the ROM owns the machine again.
+; sched_stop - restore BIOS IRQ0/PIT, then unhook mouse + sound; returns.
+; sched_unhook calls it and continues to floppy parking and reboot.
+; Shutdown calls sched_stop alone so the BIOS clock can drive its animation.
 ;
 ; in:       nothing
 ; out:      nothing
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
-sched_unhook:
-%ifdef NO_FDDPARK
+sched_stop:
     push ax
+    push si
+    push di
     push es
-%endif
 
     xor ax, ax
     mov es, ax
+    mov si, sch_old08           ; the saved vector, word by word, onto 0:20h
+    mov di, 0x20                ; (DF = 0 by SPEC.md 1)
     pushf
     cli
-    mov ax, [sch_old08]
-    mov [es:0x20], ax
-    mov ax, [sch_old08+2]
-    mov [es:0x22], ax
+    movsw
+    movsw
     popf
 
     call mouse_unhook           ; restores int 0Ch, masks IRQ4
@@ -584,16 +669,22 @@ sched_unhook:
     out 0x40, al
     popf
 
-%ifdef NO_FDDPARK
     pop es
+    pop di
+    pop si
     pop ax
+    ret
+
+sched_unhook:
+    call sched_stop
+%ifdef NO_FDDPARK
     ret
 %else
     jmp COLD_SEG:dsk_fdd_park_x ; ...and straight on into SPEC.md 18.100's park
                                 ; and the int 19h at its tail. NEVER RETURNS on
                                 ; this arm: both callers are the reboot path
                                 ; and neither has an instruction after it, so
-                                ; AX/ES need not come back either
+                                ; AX/SI/DI/ES need not come back either
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -717,8 +808,8 @@ sch_idle_start:
     jc .out                       ; driver.inc already needed
     mov [sch_idleslot], al      ; the ONE identifier for the idle task: the
                                 ; scan skips this index and the fallback picks
-                                ; it, and both need the index anyway
-    clc
+                                ; it, and both need the index anyway.
+                                ; CF = 0 already: the jc above was not taken
 .out:
     pop dx
     pop cx
@@ -893,14 +984,17 @@ task_spawn:
                                 ; spawn argument, ES:DI = the frame - and
                                 ; sch_wk_restart builds the identical twelve
                                 ; words when it throws a worker's stack away
-    mov [bx+T_INST], dl         ; owning instance (0xFF = none)
-    mov byte [bx+T_FLAGS], 0    ; TF_SERVICE is the driver cell's to set
+%if T_FLAGS != T_INST + 1
+  %error "task_spawn writes T_INST and T_FLAGS as one word"
+%endif
+    xor dh, dh                  ; (DX is the caller's again at the pop)
+    mov [bx+T_INST], dx         ; owning instance (0xFF = none), and T_FLAGS
+                                ; = 0: TF_SERVICE is the driver cell's to set
                                 ; (SPEC.md 53.2), never inherited
 
-    mov ax, cx                  ; zero the slot's cycle counter before the
-    shl ax, 1                   ; publish, so a reused slot never inherits
-    shl ax, 1                   ; a dead task's total (SPEC.md 8.1)
-    mov di, ax
+    mov di, cx                  ; zero the slot's cycle counter before the
+    shl di, 1                   ; publish, so a reused slot never inherits
+    shl di, 1                   ; a dead task's total (SPEC.md 8.1)
     xor ax, ax                  ; through AX: mov [m],ax is 4 bytes where
     mov [di+sch_cycles], ax     ; mov word [m],0 is 6, and AX is free here
     mov [di+sch_cycles+2], ax   ; (it held the FLAGS word, dead, and is
@@ -994,15 +1088,15 @@ sch_frame:
 ; spends.)
 ; -----------------------------------------------------------------------------
 sch_wk_restart:
-    pushf
-    push ax
-    push bx
-    push cx
+    push ax                     ; kret_es's order, and the flags INSIDE it:
+    push bx                     ; the pops need no IF = 0, so the window ends
+    push cx                     ; before them and the ladder is the exit
     push dx
     push si
     push di
-    push es
     push bp
+    push es
+    pushf
     cli                         ; the frame below is what sch_switch resumes
                                 ; from, so it is built whole or not at all
     xor ah, ah                  ; AX = the slot
@@ -1026,16 +1120,8 @@ sch_wk_restart:
     pop es                      ; ES = LOW_SEG: the frame lives there and DS
     cld                         ; cannot reach it
     call sch_frame              ; ...and the same twelve words task_spawn
-    pop bp                      ; writes, from the same body
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    popf
-    ret
+    popf                        ; writes, from the same body
+    jmp kret_es
 %endif                          ; OS88_COMPACT - SPEC.md 66.6.2's restart is
                                 ; the compactor's only way past a worker's own
                                 ; stack, and kern_small has no compactor
@@ -1377,16 +1463,13 @@ task_debit:
     sub ax, bp                  ; DX:AX = now - start
     sbb dx, di
     test dx, dx                 ; counter regressed: report nothing and leave
-    js .none                    ; the task's tally alone
+    jns .take                   ; the task's tally alone - by taking ZERO off
+    xor ax, ax                  ; it, which is the same store with none of the
+    cwd                         ; branches (AX = 0, so DX = 0)
+.take:
     sub [si+sch_cycles], ax     ; ...and off the task's tally it comes
     sbb [si+sch_cycles+2], dx
     popf
-    jmp .out
-.none:
-    xor ax, ax
-    xor dx, dx
-    popf
-.out:
     pop bp
     pop di
     pop si
@@ -1718,6 +1801,115 @@ khb_paint:
     ret
 %endif
 
+%ifdef DRV_DIAG
+; -----------------------------------------------------------------------------
+; ddg_paint - DRVDIAG=1's line: 'Drs cccc:iiii Fffff Mmm Qqqqq Ttttt'
+;   r = drv_boot's row, s = drv_load_row's step (ddg_step), cccc:iiii the
+;   interrupted CS:IP, ffff its FLAGS, mm the PIC mask, qqqq row 0's DRVR_SEG
+;   and tttt this ISR's own count. From IRQ0 with the splash lock held.
+; -----------------------------------------------------------------------------
+ddg_paint:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    push word [gfx_color]       ; font_run spends the pen; the main line may
+    mov di, ddg_buf             ; be between setting it and using it
+    mov al, 'D'
+    call ddg_put
+    mov al, [ddg_row]
+    call ddg_nib
+    mov al, [ddg_step]
+    call ddg_nib
+    mov al, ' '
+    call ddg_put
+    mov ax, [ddg_cs]
+    call ddg_hex4
+    mov al, ':'
+    call ddg_put
+    mov ax, [ddg_ip]
+    call ddg_hex4
+    mov al, ' '
+    call ddg_put
+    mov al, 'F'
+    call ddg_put
+    mov ax, [ddg_fl]
+    call ddg_hex4
+    mov al, ' '
+    call ddg_put
+    mov al, 'M'
+    call ddg_put
+    in al, 0x21
+    call ddg_hex2
+    mov al, ' '
+    call ddg_put
+    mov al, 'Q'
+    call ddg_put
+    mov ax, [drv_tab+DRVR_SEG]
+    call ddg_hex4
+    mov al, ' '
+    call ddg_put
+    mov al, 'T'
+    call ddg_put
+    mov ax, [ddg_ticks]
+    call ddg_hex4
+    mov byte [di], 0
+    mov cx, 8
+    mov dx, 8
+    mov si, ddg_buf
+    mov ax, (CBLACK << 8) | CWHITE
+    call font_run
+    pop word [gfx_color]
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+ddg_hex4:                       ; AX -> four hex digits at DI
+    push ax
+    mov al, ah
+    call ddg_hex2
+    pop ax
+ddg_hex2:                       ; AL -> two
+    push ax
+    push cx
+    mov cl, 4
+    shr al, cl
+    call ddg_nib
+    pop cx
+    pop ax
+ddg_nib:                        ; AL's low nibble -> one
+    push ax
+    and al, 0x0F
+    add al, '0'
+    cmp al, '9'
+    jbe .d
+    add al, 'A' - '9' - 1
+.d:
+    call ddg_put
+    pop ax
+    ret
+
+ddg_put:
+    mov [di], al
+    inc di
+    ret
+
+section .bss
+ddg_ticks:  resw 1
+ddg_ip:     resw 1
+ddg_cs:     resw 1
+ddg_fl:     resw 1
+ddg_row:    resb 1              ; drv_boot's row (driver.inc)
+ddg_step:   resb 1              ; drv_load_row's step (driver.inc's DDG)
+ddg_div:    resb 1
+ddg_buf:    resb 40
+section .text
+%endif
+
 sch_isr:
     push ax                     ; frame layout documented at top of file
     push cx
@@ -1958,22 +2150,49 @@ sch_isr:
                                 ; routine chooses to publish. Above the
                                 ; sch_fast split for exactly that reason
 
-    cmp byte [sch_fast], 0      ; the fsx sub-tick (SPEC.md 53.2.1). While it is
-    je .full                    ; armed IRQ0 arrives N times a tick and only
-    dec byte [sch_fcnt]         ; the Nth entry IS a tick: everything that
+    mov al, [sch_fast]          ; the fsx sub-tick (SPEC.md 53.2.1). While it is
+    or al, al                   ; armed IRQ0 arrives N times a tick and only
+    je .full                    ; the Nth entry IS a tick...
+%ifdef KERN_BIG
+    cmp al, SCH_RATE            ; ...or at the CALLER's rate (SPEC.md
+    je .rate                    ; 53.2.2), where a carry decides instead
+%endif
+    dec byte [sch_fcnt]         ; AL stays N for .tick: everything that
     jz .tick                    ; counts in ticks stays on that one, so
                                 ; nothing outside this file can tell
     mov al, 0x20                ; ...and a sub-tick owes the EOI itself,
     out 0x20, al                ; because the BIOS handler that normally
                                 ; sends it is only chained on the tick
+.subsw:
+%ifndef NO_CHAINPRIV
+    cmp byte [sch_chbusy], 0    ; NESTED inside the ROM's chain (SPEC.md
+    jne .sres                   ; 53.2.2, 8.5.1): SP is sch_chstack's, and a
+                                ; switch would save it into a task record
+%endif
     cmp byte [sch_lock], 0      ; the lock still bars a switch (a floppy
-    jne sch_resume              ; transfer must not be pre-empted)
+    jne .sres                   ; transfer must not be pre-empted)
     cmp byte [sch_coop], 0      ; cooperative mode: only the watchdog
-    jne sch_resume              ; switches, and it counts TICKS, not these
+    jne .sres                   ; switches, and it counts TICKS, not these
     jmp sch_switch
+%ifdef KERN_BIG
+.rate:
+    inc word [sch_rpend]        ; a period, owed to the hook until it runs
+    mov ax, [sch_rdiv]          ; the accumulator: a carry out of it is a
+    add [sch_racc], ax          ; whole 65536 PIT counts, i.e. a TICK - so
+    jc .full                    ; [ticks] and the BIOS clock stay exact at
+                                ; any divisor. The hook runs after the chain
+    mov al, 0x20                ; ...and otherwise, the sub-tick's own EOI,
+    out 0x20, al                ; then the hook (at IF = 1 under a sample
+    call sch_rhook              ; ISR, its own first test), then its switch
+    cmp word [spk_seg], 0       ; rules - except that UNDER A SAMPLE ISR
+    je .subsw                   ; (SPEC.md 34.11) a period is no quantum:
+                                ; the switch, ~2,200 cycles at IF = 0, rides
+%endif                          ; the tick, as it does outside a bracket
+.sres:                          ; ONE near jump for every refusal above: a
+    jmp sch_resume              ; `jne` that far is five bytes, and a short
+                                ; one to here is two
 .tick:
-    mov al, [sch_fast]
-    mov [sch_fcnt], al
+    mov [sch_fcnt], al          ; AL = [sch_fast], loaded at the split above
 .full:
     ; --- the ROM's chain, on a stack of its own (SPEC.md 8.5) ---------------
     ; This one call is the largest single item in the interrupt floor, and it
@@ -2028,6 +2247,12 @@ sch_isr:
     pushf                       ; chain: BIOS ticks its count and sends EOI
     call far [sch_old08]
 %endif
+%ifdef KERN_BIG
+    cmp byte [sch_fast], SCH_RATE ; a rate entry that carried is a tick AND a
+    jne .nortick                ; period: the hook runs here, after the ROM's
+    call sch_rhook              ; EOI (SPEC.md 53.2.2) - with IF = 1 under a
+.nortick:                       ; sample ISR, as .rate's is (34.11)
+%endif
 %ifdef KFZTRACE
     inc byte [khb_chain]        ; THE CHAIN CAME BACK. khb_beat counts entries
     call khb_paint              ; ...and the strip is painted a SECOND time, or
@@ -2064,6 +2289,37 @@ sch_isr:
                                 ; leaf, gated on snd_live until snd_init
                                 ; publishes; runs every tick in both modes,
                                 ; floppy reads included
+%ifdef DRV_DIAG
+    ; --- DRVDIAG=1's line (Makefile): WHERE a stopped boot is ---------------
+    ; The interrupted frame is sch_isr's nine pushes up: IP at +18, CS +20,
+    ; FLAGS +22. Painted only on the splash, only with the splash lock free
+    ; (the animation's own test) and only on OUR stack - font_run reads its
+    ; glyphs through SS, which a ROM that hops stacks inside int 13h is not.
+    inc word [ddg_ticks]
+    mov bx, sp
+    mov ax, [ss:bx+18]
+    mov [ddg_ip], ax
+    mov ax, [ss:bx+20]
+    mov [ddg_cs], ax
+    mov ax, [ss:bx+22]
+    mov [ddg_fl], ax
+    inc byte [ddg_div]          ; every 4th tick, whatever .bss held: a
+    test byte [ddg_div], 3      ; countdown from an unzeroed byte waited
+    jnz .ddgout                 ; out the whole driver phase
+    cmp byte [spl_live], 0
+    je .ddgout
+    cmp byte [spl_quiet], 0
+    jne .ddgout
+    cmp byte [spl_busy], 0
+    jne .ddgout
+    mov ax, ss
+    cmp ax, LOW_SEG
+    jne .ddgout
+    inc byte [spl_busy]
+    call ddg_paint
+    dec byte [spl_busy]
+.ddgout:
+%endif
 
     ; --- the loading screen's animation (SPEC.md 15.3.8.2) -------------------
     ; snd_tick's shape one line down and for its reason: a gated leaf that runs
@@ -2085,17 +2341,21 @@ sch_isr:
     ; the blob-gone test and the far call.
     cmp byte [spl_live], 0
     je .nospl
-    cmp byte [spl_quiet], 0         ; ...and spl_stepq has the floor (15.3.3.1).
-    jne .nospl                      ; THIS handler is the one that matters for
-                                    ; it: sched_init takes int 08h early in
-                                    ; kmain, so it - not spl_isr - is what fires
-                                    ; during mouse_init's identify window, and
-                                    ; it does not `sti`. A 28.7 ms spinner frame
+    cmp word [spl_busy], 0          ; [spl_busy] AND [spl_quiet], one word
+    jne .nospl                      ; (adjacent in viddet.inc - the %if below):
+                                    ; the lock, and spl_stepq has the floor
+                                    ; (15.3.3.1). THIS handler is the one that
+                                    ; matters for the second: sched_init takes
+                                    ; int 08h early in kmain, so it - not
+                                    ; spl_isr - is what fires during
+                                    ; mouse_init's identify window, and it
+                                    ; does not `sti`. A 28.7 ms spinner frame
                                     ; with IF=0 loses three bytes of a 1200-baud
                                     ; burst the 8250 holds one at a time, which
                                     ; is a mouse on the wire and not detected
-    cmp byte [spl_busy], 0
-    jne .nospl
+%if spl_quiet - spl_busy != 1
+  %error "sch_isr tests [spl_busy] and [spl_quiet] as one word: viddet.inc must keep spl_quiet directly after spl_busy"
+%endif
     cmp word [spl_fseg], COLD_SEG   ; the blob has been given back (2.9.5)
     jbe .nospl
     inc byte [spl_busy]
@@ -2112,9 +2372,10 @@ sch_isr:
 .wake:
     cmp byte [bx+T_STATE], 2
     jne .next
-    mov ax, dx
-    sub ax, [bx+T_WAKE]         ; wrap-safe: sign of the difference decides
-    js .next                    ; still in the future
+    cmp dx, [bx+T_WAKE]         ; wrap-safe: sign of the difference decides
+    js .next                    ; still in the future. A `cmp` and not `mov
+                                ; ax, dx / sub`: the same SF, 2 bytes and ~8
+                                ; cycles less per sleeper (size pass 9)
     mov byte [bx+T_STATE], 1
 .next:
     add bx, T_SIZE
@@ -2122,20 +2383,26 @@ sch_isr:
 
 %ifndef NO_CHAINPRIV
     cmp byte [sch_chbusy], 0    ; a NESTED tick is running on sch_chstack
-    jne sch_resume              ; (8.5.1): it may account and wake, which fit
+    jne .tres                   ; (8.5.1): it may account and wake, which fit
                                 ; there, but it may not park a PRIVATE SP in a
                                 ; task record - the outer tick's frame is the
                                 ; interrupted task's and it is resumed below
 %endif
     cmp byte [sch_lock], 0      ; locked: count ticks but do not switch
-    jne sch_resume
+    jne .tres
     cmp byte [sch_coop], 0
     je .sw                      ; pre-emptive: switch every tick
     dec byte [sch_hold]         ; cooperative: only the watchdog switches.
-    jnz sch_resume              ; DOWN, not up: the decrement's own ZF is the
+    jz .wd                      ; DOWN, not up: the decrement's own ZF is the
                                 ; test, so a second read and a compare go.
                                 ; Same 18 ticks either way - every entry to
                                 ; sch_switch re-arms the budget
+.tres:                          ; ONE near jump for the refusals above and
+    jmp sch_resume              ; sch_switch's own: a `jne` that far is five
+                                ; bytes, a short one to here two - and the
+                                ; common tick (no lock, no coop) now takes no
+                                ; branch at all until .sw
+.wd:
     inc word [sch_wd_hits]      ; forced switch - diagnostic only
 .sw:
     ; fall through into sch_switch
@@ -2149,7 +2416,7 @@ sch_switch:
     ; and inst_task_die, which both reach the switch by a tail jmp.
     mov ax, ss                  ; **ONLY ON A TASK STACK** - the chain swap's
     cmp ax, LOW_SEG             ; test (SPEC.md 8.5), for the same reason: a
-    jne sch_resume              ; ROM that hops stacks for int 16h (SeaBIOS
+    jne sch_isr.tres            ; ROM that hops stacks for int 16h (SeaBIOS
                                 ; does, for AH=01h, which ui_task polls with
                                 ; sch_lock CLEAR) would have its SP parked in
                                 ; the task record and task 0's canary read
@@ -2161,42 +2428,41 @@ sch_switch:
     mov byte [sch_hold], SCH_WD_TICKS
                                 ; the outgoing task reached the switch path,
                                 ; so its watchdog budget is full again
-    mov bl, [sch_cur]           ; park the outgoing task's SP
-    xor bh, bh
-    mov cl, 3
-    shl bx, cl
+    mov dl, [sch_cur]           ; DL = the slot, for the park AND the scan
+    mov bl, dl                  ; below: one load of [sch_cur] where there
+    xor bh, bh                  ; were two (-2 bytes, ~8 cycles; size pass 9)
+    mov cl, 3                   ; T_SIZE = 8: ***CL = 3 FROM HERE TO .pick***
+    shl bx, cl                  ; (see below)
     mov [bx+sch_tasks+T_SP], sp
 
     ; --- the outgoing task's canary (SPEC.md 8), through sch_stkbase above.
     ; SS is LOW_SEG for every task including task 0, so the read needs no
     ; segment set-up beyond the override; the table's own header says why
     ; there is no arithmetic here any more, and why slot 0 needs no branch.
-    mov bl, [sch_cur]
-    xor bh, bh
-    shl bx, 1
-    mov bx, [bx+sch_stkbase]
+    shr bx, 1                   ; BX = slot * 8 from the park: slot * 2 is
+    shr bx, 1                   ; two shifts DOWN, not a reload and a shift
+    mov bx, [bx+sch_stkbase]    ; up (size pass 6: -4 bytes, ~15 cycles)
     cmp word [ss:bx], SCH_MAGIC
     jne sch_stkdie
 
-    mov cl, 3                   ; T_SIZE = 8, so a slot index shifts left 3.
-                                ; ***CL IS LIVE FROM HERE TO .pick*** - the
-                                ; two `shl bx, cl` below share this one load,
-                                ; which also takes it out of the up-to-8
-                                ; iteration scan body. NOTHING ADDED BETWEEN
-                                ; HERE AND .pick MAY WRITE CX: .scan would
-                                ; then shift by a wrong count, .pick would
-                                ; load SP from a mis-strided record and
-                                ; sch_resume would iret into nothing. It is
-                                ; set below the canary check and not above it
-                                ; because that check is free to use CL. It no
-                                ; longer does - sch_stkbase took the multiply
-                                ; out - but the ordering is kept: it costs
-                                ; nothing and it is one fewer thing to get
-                                ; wrong if anything is ever put back there.
-                                ; Past .pick, `call sch_account` clobbers CX
-                                ; and nothing reads CL again.
-    mov dl, [sch_cur]           ; scan cur+1, cur+2, ... (cur itself last)
-    mov dh, MAX_TASKS
+                                ; ***CL IS LIVE FROM THE PARK TO .pick*** -
+                                ; the park's `mov cl, 3` (T_SIZE = 8, so a
+                                ; slot index shifts left 3) is the one load
+                                ; the two `shl bx, cl` below share, which
+                                ; also keeps it out of the up-to-8 iteration
+                                ; scan body. NOTHING ADDED BETWEEN THE PARK
+                                ; AND .pick MAY WRITE CX - the canary check
+                                ; above included: .scan would then shift by a
+                                ; wrong count, .pick would load SP from a
+                                ; mis-strided record and sch_resume would
+                                ; iret into nothing. It used to be loaded a
+                                ; SECOND time here, below the canary, in case
+                                ; that check ever used CL again; it does not,
+                                ; and size pass 6 took the reload (-2). Past
+                                ; .pick, `call sch_account` clobbers CX and
+                                ; nothing reads CL again. DL = [sch_cur] from
+                                ; the park, and nothing between writes DX
+    mov dh, MAX_TASKS           ; scan cur+1, cur+2, ... (cur itself last)
 .scan:
     inc dl
     cmp dl, MAX_TASKS
@@ -2334,19 +2600,20 @@ sch_stkdie:
     jb .skbank
 .nomark:
 %endif
-    cli
-    call sch_diepanel           ; SPEC.md 8.8 - and if anything in there is
-                                ; itself broken, the hang below is still the
-                                ; behaviour this routine promises
-.hang:
-    hlt
-    jmp short .hang
+    cli                         ; ...and FALL INTO the panel (SPEC.md 8.8),
+                                ; which ends in this routine's hang. It was a
+                                ; `call` with the hang here, and the panel
+                                ; moves SP to task 0's stack before it draws -
+                                ; so its closing `ret` popped whatever word
+                                ; sat at STK0_TOP and never reached the hang.
+                                ; Size pass 6 made it a fall-through: the hang
+                                ; is reached now, and it is four bytes shorter
 
 ; -----------------------------------------------------------------------------
 ; sch_diepanel - WHAT DIED, on the glass (SPEC.md 8.8)
 ;
 ; in:  DS = KERNEL_SEG, SS = LOW_SEG, IF = 0, [sch_cur] = the slot that overran
-; out: never usefully returns; every register clobbered
+; out: never returns - the panel, then hlt for ever at IF = 0
 ;
 ; The panel a stack overflow used to print was NOTHING AT ALL. `cli`/`hlt` is
 ; the correct thing to DO and a terrible thing to WATCH: the field reports "it
@@ -2363,9 +2630,12 @@ sch_stkdie:
 ; to have left it:
 ;
 ;   * **A STACK THAT IS NOT THE DEAD ONE.** SP is currently somewhere below the
-;     dead slice's canary, scribbling on the slot underneath. So the evidence -
-;     the slot, its parked SP, its instance - is banked into `.bss` FIRST, in
-;     nine instructions on the stack we arrived on, and only then is SP moved.
+;     dead slice's canary, scribbling on the slot underneath. So SP moves
+;     FIRST, before anything is called or pushed, and the evidence - the slot,
+;     its parked SP, its instance - is read out of the task TABLE into
+;     registers and pushed onto the new stack (it was banked in four bytes of
+;     `.bss` until kernel size pass 8; the read preceded the move until pass
+;     9, which buys sch_currec's call nothing on the dead stack).
 ;     It moves to task 0's, the largest in the machine and, at IF = 0 for ever,
 ;     owned by nobody: if task 0 is itself the corpse then its contents are
 ;     already banked and overwriting them costs the panel nothing.
@@ -2392,43 +2662,44 @@ SDP_Y       equ 24              ; no geometry: it fits 720, 640 and 640 alike.
                                 ; advance, and this has a byte budget
 
 sch_diepanel:
-    mov bl, [sch_cur]           ; --- bank the evidence, still on the dead
-    mov [sch_dpn], bl           ;     stack: after this nothing here reads a
-    xor bh, bh                  ;     task record, so nothing here cares that
-    mov cl, 3                   ;     the table is suspect
-    shl bx, cl
-    mov ax, [bx+sch_tasks+T_SP]
-    mov [sch_dpsp], ax
-    mov al, [bx+sch_tasks+T_INST]
-    mov [sch_dpi], al
-
-    mov sp, STK0_TOP            ; ...and OFF it (see the header)
-    mov word [wm_clip_n], 0     ; nothing may clip the panel away
+    mov sp, STK0_TOP            ; OFF the dead stack first (see the header):
+                                ; the evidence is in the task TABLE, not on
+                                ; any stack, so the order of these two steps
+                                ; is free - and with SP moved, sch_currec's
+                                ; call lands on task 0's stack, not the corpse
+    call sch_currec             ; --- read the evidence into REGISTERS: after
+    mov dl, [sch_cur]           ;     this nothing here reads a task record, so
+    mov ax, [bx+sch_tasks+T_SP] ;     nothing cares that the table is suspect.
+    mov dh, [bx+sch_tasks+T_INST] ;   DL = the slot, DH = its instance, AX =
+                                ;     its parked SP
+    push dx                     ; the instance, for the last field...
+    push ax                     ; ...the SP...
+    push dx                     ; ...and the slot, popped in the order drawn
+    call wm_clip_clear          ; nothing may clip the panel away
     mov word [sch_dpcol], SDP_X
 
     mov si, sch_s_over          ; WHAT happened, WHICH task, WHOSE, and where
     call sch_dpstr              ; its SP was. The slice's BASE and SIZE are
-    mov al, [sch_dpn]           ; deliberately not here: they are
+    pop ax                      ; deliberately not here: they are
     call sch_dphex2             ; sch_stkbase[n] and sch_stksize[n] in the very
     mov si, sch_s_sp            ; binary the reader has open, and the slot
     call sch_dpstr              ; number is the whole of what it takes to look
-    mov ax, [sch_dpsp]          ; them up
+    pop ax                      ; them up. AL = the slot, then AX = the SP
     call sch_dphex4
     mov si, sch_s_in
     call sch_dpstr
-    mov al, [sch_dpi]
-    cmp al, 0xFF                ; the UI task owns no instance record
-    je .ui
-    xor ah, ah
-    mov cl, 5                   ; I_RECSZ = 32
-    shl ax, cl
-    add ax, inst_tab + I_NAME
-    xchg ax, si
-    jmp short .name
-.ui:
-    mov si, sch_s_ui
+    mov si, sch_s_ui            ; the UI task owns no instance record...
+    pop ax
+    xchg al, ah                 ; AL = the instance
+    cmp al, 0xFF
+    je .name
+    call inst_ptr               ; ...and any other slot names its own
+    lea si, [di+I_NAME]
 .name:
-    jmp short sch_dpstr         ; its `ret` is ours
+    call sch_dpstr
+.hang:                          ; sch_stkdie's promise, kept HERE: SP is task
+    hlt                         ; 0's now, so there is no frame to return
+    jmp short .hang             ; through
 
 ; sch_dpstr - the ASCIIZ at DS:SI, at the pen, which then advances past it
 sch_dpstr:
@@ -2437,9 +2708,7 @@ sch_dpstr:
     mov ax, 0x0F00              ; AL = 0 ink on AH = 15 ground: BLACK ON WHITE,
                                 ; which is the one pair that reads on all three
                                 ; adapters and on any desktop pattern under it
-    push ds
-    pop es                      ; font_run_x takes the string at ES:SI
-    call font_run
+    call font_run               ; (it points ES at DS itself, for font_run_x)
 .adv:
     lodsb                       ; the pen moves by what was actually drawn, so
     or al, al                   ; no caller ever counts a string's length
@@ -2667,17 +2936,14 @@ sch_tasks:  resb MAX_TASKS * T_SIZE     ; task records (layout above)
 sch_old08:  resb 4                      ; saved BIOS int 08h vector (off:seg)
 sch_dpcol:  resw 1                      ; the death panel's pen x (SPEC.md
                                         ; 8.8); its y is the constant SDP_Y
-sch_dpsp:   resw 1                      ; ...and the evidence it banks off the
-sch_dpn:    resb 1                      ; dead stack before it leaves it: the
-sch_dpi:    resb 1                      ; parked SP, the slot and its instance
 sch_dphc:   resb 2                      ; one hex digit, as an ASCIIZ string
 %ifndef NO_CHAINPRIV
 sch_chsave: resw 1                      ; the task's SP across the chain...
 sch_chskip: resw 1                      ; ...how many chains a nested tick has
                                         ; skipped (SPEC.md 8.5.1), so the
                                         ; "one transfer in 280" claim is a
-                                        ; reading. STKDIAG publishes it
-sch_chbusy: resb 1                      ; ...and non-zero while the ROM has it
+                                        ; reading. STKDIAG publishes it.
+                                        ; [sch_chbusy] is below, beside the lock
 %endif
 ticks:      resw 1                      ; public tick count, wraps at 65536
 sch_cur:    resb 1                      ; index of the running task. ALWAYS a
@@ -2700,13 +2966,40 @@ fsx_task:   resb 1                      ; the fsx freeze (SPEC.md 53.2):
                                         ; it, sched_init stores the OFF
                                         ; value (0 would mean task 0)
 fsx_worker: resb 1                      ; the kept worker's slot, 0xFF none
+%ifndef NO_CHAINPRIV
+sch_chbusy: resb 1                      ; non-zero while the ROM has the chain
+%endif                                  ; (8.5, sch_chsave above)
+%ifdef KERN_BIG
+sch_rbusy:  resb 1                      ; FSXF_RATE's hook is running (53.2.2)
+%endif
 sch_lock:   resb 1                      ; non-zero: ISR counts but won't switch
+%ifdef KERN_BIG
+%if (sch_lock - sch_rbusy) != 1
+  %error "sch_rhook adds 0x0101 to [sch_rbusy] as ONE word: [sch_lock] must follow it"
+%endif
+%ifndef NO_CHAINPRIV
+%if (sch_rbusy - sch_chbusy) != 1
+  %error "sch_rhook tests [sch_chbusy] and [sch_rbusy] as ONE word: adjacent, chbusy first"
+%endif
+%endif
+%endif
 sch_cycles: resw MAX_TASKS * 2          ; per-task CPU time, PIT cycles, dword
                                         ; each (lo word first); readers snap-
                                         ; shot under pushf/cli (SPEC.md 8.1)
 sch_pit_last: resw 2                    ; last timestamp: phase, then ticks
 sch_fast:   resb 1                      ; fsx sub-tick (SPEC.md 53.2.1): 0 off,
 sch_fcnt:   resb 1                      ; else N, with this counting down
+%if sch_fcnt - sch_fast != 1
+  %error "sch_fcnt must follow sch_fast: sch_fast_on stores both as one word"
+%endif
+%ifdef KERN_BIG
+sch_racc:   resw 1                      ; FSXF_RATE (SPEC.md 53.2.2): the tick
+sch_rpend:  resw 1                      ; accumulator, the periods owed to the
+                                        ; hook, its proc, (the divisor is
+                                        ; sch_rdiv, sch_fdivs' last row)
+sch_rbp:    resw 1                      ; its window. Read only while
+sch_rwin:   resw 1                      ; [sch_fast] is SCH_RATE; the re-entry
+%endif                                  ; byte, [sch_rbusy], is by the lock
 sch_subs:   resw 1                      ; free-running IRQ0 entries, SUB-TICKS
                                         ; included (SPEC.md 53.5.1). The
                                         ; finest clock a task can WAIT on:

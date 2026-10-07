@@ -52,6 +52,13 @@
 1 apps/artful/atui.inc             # the splash's two and the modal's three
 1 apps/audio/apui.inc              # the seven transports, and OS88UI_LATCH's
                                    # first consumer (SPEC.md 20.5.1.4)
+3 apps/midirack/mrui.inc           # fourteen in one record: the playlist's
+                                   # three, five transport PICTURES
+                                   # (OS88UI_IMG), Eject, a latched Loop and
+                                   # the bottom row - and the same record
+                                   # PAGED onto the Settings dialog's OK and
+                                   # Cancel while it is up, drawn by index
+                                   # (SPEC.md 105.9, 105.9.2)
 1 apps/calc/calc.asm               # the keypad, staged one key at a time
 1 apps/paint/paint.asm             # Apply
 1 apps/piano/piano.asm             # its two buttons. The KEYS keep the press
@@ -59,6 +66,11 @@
                                    # prefix action
 1 apps/recorder/recorder.asm       # the transport
 1 apps/texpad/texpad.asm           # the top row, staged one at a time
+1 apps/tracker/trkwin.inc          # the face's transport pictures and its
+                                   # option grid, one record (SPEC.md 45.21)
+1 apps/tracker/trklist.inc         # the PlayList editor's six (45.22)
+1 apps/video/video.asm             # the Preview's four pictures - Open, the
+                                   # key before and after, Play (SPEC.md 98.4)
 1 apps/weave/wdraw.inc             # correct through the C SDK's
                                    # os88_wm_onmouseup
 
@@ -68,9 +80,7 @@
 # package-side W_ONCLICK cannot serve.
 3 drivers/ether/etherui.inc        # Renew, Setup, and the third
 1 drivers/ether/ethcfg.inc
-2 drivers/hdd/cppage.inc
 1 drivers/hdd/tool.inc
-1 drivers/hdd/inst.inc
 1 drivers/net/netui.inc
 1 drivers/ramdisk/page.inc
 1 drivers/saver/svcfg.inc
@@ -102,3 +112,5 @@
 # live count out of a rectangle's coordinates and Date/Time went white.
 1 kernel/ctrl.inc                  # every Control Panel page's buttons
 1 kernel/hiber.inc                 # the hibernate prompt's
+1 apps/redline/ui.inc              # dashboard/view controls; SDK arm/track/release
+1 kernel/shutdown.inc              # modal confirmation; release inside the armed control

@@ -59,6 +59,17 @@ region apps/skies/csload.asm     # NOTHING TO DECLARE: it is the launch image
                                  # acted on. Retired by nothing; this one is
                                  # correct as it stands.
 
+region apps/word/wdload.asm      # THE SAME SHAPE a third time: WORD.O88's
+                                 # raw loader (SPEC.md 68.10), which reads
+                                 # the two parts, hands its identity to part
+                                 # 0 through OSAPI_PKG_REHOME and has its own
+                                 # region freed inside that call. The region
+                                 # that remains is the carve, and word.asm
+                                 # declares it - part 1 is inside the same
+                                 # claim and moves with it, which is why its
+                                 # proc is still a bare `ret`. Retired by
+                                 # nothing; correct as it stands.
+
 region apps/dos/dosload.asm      # THE SAME SHAPE, one package along: the
                                  # four-piece DOS.O88's raw loader image
                                  # (SPEC.md 96.44.5), which reads the parts,

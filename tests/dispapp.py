@@ -80,7 +80,15 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     before_sec = mono(m)                     # the secondary BEFORE Arkanoid
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "ARKANOID.O88",
                       card=pri)
-    import time; time.sleep(3)
+    # a game: it animates, so there is nothing to SETTLE on - its window
+    # appearing and the drive going quiet is its start
+    try:
+        os88marty.until(m, lambda _: len(dispcp.win_list(m, S)) > len(w),
+                        "Arkanoid's window", poll=0.2, limit=30)
+    except os88marty.MartyError:
+        pass
+    os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                      what="Arkanoid's load to finish")
     wins = dispcp.win_list(m, S)
     print("windows now:", [(s,) + dispcp.win_rect(m, S, s) for s in wins])
     ark = wins[-1]

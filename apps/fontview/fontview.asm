@@ -632,7 +632,8 @@ fv_draw_sample:
     mov dl, [ty_rows]
     push cx
     mov cx, FV_SAMPLEW
-    call ty_flush
+    clc                             ; THE CARRY IS AN ARGUMENT (SPEC.md 6.5.4):
+    call ty_flush                   ; a face SAMPLE is never a greyed control
     pop cx
     add si, bp
     sub cx, bp

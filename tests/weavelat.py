@@ -107,7 +107,7 @@ def main(argv):
         bad += uilat.report("idle desktop", uilat.click_latency(m, mo, S))
 
         # WEAVE, open on FORM.WAB. The navigation is weavesmoke's, imported
-        # and not copied - it carries the retry and the two `until` waits.
+        # and not copied - it carries the two `until` waits.
         before, after = weavesmoke._open_bundle(m, mo, S, a.machine)
         new = sorted(after - before)
         if not new:

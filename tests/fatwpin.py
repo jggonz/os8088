@@ -49,7 +49,6 @@ the one whose mount is the most work.
 import os
 import subprocess
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
@@ -187,18 +186,34 @@ def boot(m, defs=()):
     lin_live = os88sym.linear("spl_live", defs)
     lin_entry = os88sym.linear("cold_entry", defs)
     m.run()
-    started, t0 = False, time.time()
-    while time.time() - t0 < 300:
+    seen = {"started": False}
+
+    def desk(_):
         live = m.read(lin_live, 1)[0]
-        if not started:
+        if not seen["started"]:
             if live == 1 and m.read(lin_entry, 1)[0] == 0xE9:
-                started = True
-        elif live == 0:
-            time.sleep(3.0)
-            return
-        time.sleep(0.2)
-    raise SystemExit("fatwpin: never reached a desktop - nothing below would "
-                     "mean what it says")
+                seen["started"] = True
+            return False
+        return live == 0
+    try:                                # a GUEST-time budget
+        os88marty.until(m, desk, "the splash to end", poll=0.2, limit=300)
+    except os88marty.MartyError:
+        raise SystemExit("fatwpin: never reached a desktop - nothing below "
+                         "would mean what it says")
+    os88marty.settle(m)                 # the desktop's first paint
+
+
+def sample(m, defs=()):
+    """A State once the FAT-window world has stopped moving, in GUEST time.
+
+    What the samples wait for is the mount's claims landing, and those words
+    are exactly what State reads - so wait on them rather than on a clock."""
+    def key():
+        st = State(m, defs)
+        return (str(st), tuple(st.ww), tuple(st.fatw_claims))
+    os88marty.quiesce(m, key, guest=1.0,
+                      what="the FAT-window state to stop changing")
+    return State(m, defs)
 
 
 def phase(label, defs, maxheap, expect_move, tree=None):
@@ -228,8 +243,7 @@ def phase(label, defs, maxheap, expect_move, tree=None):
         wins0 = len(dispcp.win_list(m, S))
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle)
-        time.sleep(3.0)
-        after = State(m, defs)
+        after = sample(m, defs)
         wins1 = len(dispcp.win_list(m, S))
         print("  after B: mounts: %s ; windows %d -> %d"
               % (after, wins0, wins1))
@@ -284,8 +298,7 @@ def phase_shed():
         boot(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
-        time.sleep(2.0)
-        before = State(m)
+        before = sample(m)
         print("  B: mounted     : %s" % before)
         check(len(before.fatw_claims) == 1
               and before.fatseg == before.wc[before.drive]
@@ -299,8 +312,14 @@ def phase_shed():
         w = dispcp.win_list(m, S)
         wx, wy, _, _ = dispcp.win_rect(m, S, w[-1])
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "HEAPFRAG.O88")
-        time.sleep(6.0)
-        after = State(m)
+        try:                            # heapfrag's comb, then the shed -
+            os88marty.until(            # bounded by what an idle box's
+                m, lambda _: not State(m).fatw_claims,      # pause gave it
+                "heapfrag's comb to shed the FAT window", poll=0.2,
+                guest=6.0 * os88marty.GUEST_PACE)
+        except os88marty.MartyError:
+            pass                        # ...the first check below says so
+        after = sample(m)
         print("  heap filled    : %s" % after)
 
         check(not after.fatw_claims,

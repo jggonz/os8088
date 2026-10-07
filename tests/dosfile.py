@@ -25,7 +25,6 @@ driver on a real 8088, which is what the layer is over.
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88ui                                                  # noqa: E402
@@ -56,14 +55,13 @@ def main():
         # 4.77MHz 8088, so the wait is generous and the FAILED lines below
         # are what ends it early.
         rows = []
-        end = time.time() + 240.0
-        while time.time() < end:
-            rows = m.screen() or []
-            text = "\n".join(r.rstrip() for r in rows)
-            if "READY" in text:
-                break
-            time.sleep(0.5)
-        else:
+
+        def done(mm):
+            rows[:] = mm.screen() or []
+            return any("READY" in r for r in rows)
+        try:            # a GUEST budget: a loaded box cannot shorten it
+            os88marty.until(m, done, "the program's READY line", poll=0.5, limit=240.0)
+        except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
                  % ([r.rstrip() for r in rows if r.strip()][:12],))
 

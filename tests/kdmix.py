@@ -34,7 +34,6 @@ drives of different types.
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -125,23 +124,27 @@ def main():
             mo.click(*kdhand.alert_button(m, base, dm, 1))    # Proceed
 
         # --- 4. AND THE ASSERTION, which is the mount ------------------------
-        end = time.time() + 150
-        while time.time() < end:
-            rs = [r.rstrip() for r in (m.screen() or [])]
-            if any("could not mount" in r for r in rs):
-                fail("kern_dos refused the 1.44MB disk: %r. That is "
-                     "SPEC.md 96.40.5 - `DSK_FAT_SECS` in kerndos/kdshim.inc "
-                     "is below the NINE sectors a 1.44MB FAT12 floppy "
-                     "declares, so mount rule 10 turns every disk bigger "
-                     "than 360KB away"
-                     % [r for r in rs if "could not mount" in r])
-            if any("READY" in r for r in rs):
-                break
-            time.sleep(0.25)
-        else:
+        seen = {"rs": []}
+
+        def ended(_):
+            seen["rs"] = [r.rstrip() for r in (m.screen() or [])]
+            return any("could not mount" in r or "READY" in r
+                       for r in seen["rs"])
+        try:                            # a GUEST-time budget
+            os88marty.until(m, ended, "the program to mount and reach READY",
+                            poll=0.25, limit=150.0)
+        except os88marty.MartyError:
             fail("the program never reached READY under kern_dos. The last "
                  "screen was %r"
                  % [r for r in (m.screen() or []) if r.strip()][:10])
+        rs = seen["rs"]
+        if any("could not mount" in r for r in rs):
+            fail("kern_dos refused the 1.44MB disk: %r. That is "
+                 "SPEC.md 96.40.5 - `DSK_FAT_SECS` in kerndos/kdshim.inc "
+                 "is below the NINE sectors a 1.44MB FAT12 floppy "
+                 "declares, so mount rule 10 turns every disk bigger "
+                 "than 360KB away"
+                 % [r for r in rs if "could not mount" in r])
 
         rs = [r.rstrip() for r in (m.screen() or [])]
         for want in ("os8088 DOS gate", "DOS version 3.30"):

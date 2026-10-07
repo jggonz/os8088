@@ -42,9 +42,13 @@ comparing two builds:
 
   aligned    the capsule's absolute x on the byte grid - the blit TAKES it,
              the band owns the erase, and the wipe must stay out of the way
-  unaligned  the same capsule one pixel over: `gfx_blit1_x` refuses any x with
-             `test ax, 7` non-zero, which is TRIGGER B - the shipped kernel
-             once the window's content origin stops being 8-aligned
+  unaligned  the same capsule one pixel over: `gfx_blit1_x` refused any x with
+             `test al, 7` non-zero, which is TRIGGER B - the shipped kernel
+             once the window's content origin stopped being 8-aligned. Since
+             SPEC.md 5.4.2.8 kern_big DRAWS such a band instead, so the row
+             puts the refusal back in the running kernel (`refuse_offgrid`) -
+             without it this column takes the blit and the forced one below
+             measures nothing
   forced     the same unaligned drop with `.slow`'s clear of `[ark_puband]`
              patched to a SET in the running image, so both draw paths raise it
              and nothing lowers it - which is exactly what reading `[ark_spok]`
@@ -61,7 +65,7 @@ The playfield is frozen the way cycweb.py freezes the wave - `ark_do_ball`,
 because a ball crossing the capsule's column is the one thing that repaints the
 streak away for free, and the run would then measure the ball.
 """
-import sys, os, time, argparse, tempfile, subprocess
+import sys, os, argparse, tempfile, subprocess
 
 # THIS TREE'S tools, not /home/user/os8088's. Every other test here hard-codes
 # that path, which is right in the checkout it was written in and wrong in a
@@ -209,6 +213,39 @@ def old_flag(m, p, image, on):
     m.write(p.seg * 16 + at + 4, b"\x01" if on else b"\x00")
 
 
+def refuse_offgrid(m, S):
+    """Put TRIGGER B back in the running kernel: an x off the byte grid is
+    REFUSED again.
+
+    SPEC.md 5.4.2.8 retired it on kern_big - `gfx_blit1_x`'s `test al, 7`
+    now branches to `.offg`, which cuts the band at x exactly - so the
+    unaligned capsule is TAKEN, `puband` reads 1 in every column and the
+    forced column has no `.slow` path left to break. The row then went red on
+    "the forced column measured NOTHING", which was true and was about the
+    kernel having moved rather than the package. A refusal can still happen
+    (kern_small refuses every off-grid x, trigger A), so the package's
+    handling of one still wants gating - and the faithful reproduction is the
+    kernel as it was: an x off the grid sent to `.refuse`, which is what the
+    `%else` arm still assembles.
+
+    The row and width checks come FIRST since 5.4.2.8's own refusal fix, so
+    the x test is `test al, 7 / jz .argok` with `.offg` the fall-through:
+    the patch is a `jmp short .refuse` over `.offg`'s first two bytes, which
+    an off-grid band reaches only after the arguments have passed.
+    """
+    at = S("gfx_blit1_x.offg")
+    code = m.read(at - 4, 4)
+    if code[:3] != b"\xA8\x07\x74":
+        raise RuntimeError("gfx_blit1_x.offg does not follow `test al, 7 / "
+                           "jz`: %s" % code.hex())
+    if at + code[3] - 256 * (code[3] > 127) != S("gfx_blit1_x.argok"):
+        raise RuntimeError("gfx_blit1_x's jz is not to .argok")
+    rel = S("gfx_blit1_x.refuse") - (at + 2)
+    if not -128 <= rel <= 127:
+        raise RuntimeError(".refuse is out of a short jump's reach (%d)" % rel)
+    m.write(at, bytes([0xEB, rel & 0xFF]))
+
+
 def run(m, p, frames, steps, stop):
     """Let the capsule fall, and never as far as the paddle."""
     for _ in range(steps):
@@ -308,12 +345,17 @@ def main():
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
         stride = 28 if a.small else os88geom.WIN_SIZE
-        title = seg = box = None
-        for _ in range(20):             # kern_small reads the package off a
-            time.sleep(2)               # 360KB disk and is slower about it
-            title, seg, box = find_win(m, S, "ark", stride)
-            if title:
-                break
+        found = [None, None, None]
+
+        def _up(_):
+            found[:] = find_win(m, S, "ark", stride)
+            return bool(found[0])
+        try:                            # kern_small reads the package off a
+            os88marty.until(m, _up, "the Arkanoid window",   # 360KB disk and
+                            poll=0.5, limit=40)              # is slower
+        except os88marty.MartyError:
+            pass                        # ...and a miss is diagnosed below
+        title, seg, box = found
         if title is None:
             w, h, px = m.fbuf()
             os88marty.write_png_rgb("build/arkfail.png", w, h, px)
@@ -327,7 +369,7 @@ def main():
                                "wm_wins=%#x slots %s"
                                % (os88geom.windows(m, S), S("wm_wins"), slots))
         mo.to(2, 2)                     # the pointer off the playfield
-        time.sleep(1)
+        os88marty.pace(m, 1)
 
         syms, image = pkg_syms(a.src)
         p = Pkg(m, seg, syms)
@@ -337,6 +379,8 @@ def main():
             raise RuntimeError("the ARKANOID.O88 running here is not %s - "
                                "run make" % a.src)
         card = 0
+        if not a.small:
+            refuse_offgrid(m, S)
         ox = p.rw("ark_ox")
         fall = p.rw("ark_pufall")
         freeze(m, p)

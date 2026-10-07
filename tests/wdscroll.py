@@ -36,7 +36,7 @@ which a formatted document always full-repaints (68.6's documented degrade),
 and requires the screen to come back IDENTICAL. So the fast path is checked
 against the slow one on the same document, in one run.
 """
-import os, sys, time, subprocess, tempfile, argparse, functools
+import os, sys, subprocess, tempfile, argparse, functools
 print = functools.partial(print, flush=True)
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, "tools"); sys.path.insert(0, "tests")
@@ -71,7 +71,7 @@ def pkg_syms(src="apps/word/word.asm", incs=("apps/", "apps/word/")):
         out={}
         for L in open(mp):
             f=L.split()
-            if len(f)==3 and all(c in "0123456789ABCDEF" for c in f[0]): out[f[2]]=int(f[0],16)
+            if len(f)==3 and all(c in "0123456789ABCDEF" for c in f[0]): out[f[2]]=int(f[1],16)
         return out, open(os.path.join(d,"p.bin"),"rb").read()
 
 
@@ -123,7 +123,7 @@ ap.add_argument("--machine", default="os8088_5150_cga_gla")
 a = ap.parse_args()
 syms, image = pkg_syms()
 DISK = "build/wdscrollgate.img"
-M.scratch_disk(DISK, "build/word.o88", "build/WORD.OVL", "build/WELCOME.DOC")
+M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC")
 S = lambda n: m.sym(n)
 
 with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
@@ -132,7 +132,9 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     dispcp.open_drive(m, mo, S, M.settle, "B")
     w = dispcp.win_list(m, S)[-1]; dx, dy = dispcp.win_rect(m, S, w)[:2]
     dispcp.open_named(m, mo, S, M.settle, dx, dy, "WELCOME.DOC")
-    time.sleep(2.5); M.settle(m)
+    M.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+              what="Word's open to stop reading")
+    M.settle(m)
 
     raw = m.read(S("inst_tab"), 32*12); seg = None
     for i in range(12):
@@ -145,6 +147,21 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
         sys.exit("could not locate the running package (stale build/word.o88?)")
     base = seg*16; P = lambda n: base + syms[n]
     rw = lambda n: u16(m.read(P(n), 2)); rb = lambda n: m.read(P(n), 1)[0]
+    lock = S("gfx_lock_flag")
+
+    # EVERY GESTURE IS GUEST TIME. A press is paced as an idle box paced it,
+    # and what follows is WAITED FOR rather than slept through: Word scrolls
+    # under the gfx lock, so the work is done when [wd_top] and the lock have
+    # both held still and the lock is free.
+    def quiet():
+        M.quiesce(m, lambda: (rw("wd_top"), m.read(lock, 1)[0]), guest=0.5,
+                  what="Word's scroll to finish")
+        M.until(m, lambda mm: mm.read(lock, 1)[0] == 0,
+                "the gfx lock to be free", poll=0.1, limit=30)
+
+    def tap(y, lead=0.25, hold=0.08):
+        mo.to(sbx, y); M.pace(m, lead)
+        m.mouse(l=True); M.pace(m, hold); m.mouse(l=False)
 
     # THE HEIGHT COUNT MUST BE FINISHED FIRST. [wd_drows] is a lower bound
     # while the background walk is owed (SPEC.md 27.7.2.2/68.6), so the TOTAL
@@ -192,7 +209,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
             m.advance(cycles=STEP_CYCLES)
             d = sum(1 for p, q in zip(ref, vram_cell(m, *barbox)) if p != q)
             worst = max(worst, d); seen += 1 if d else 0
-        m.mouse(0, 0); m.step(1); m.run(); time.sleep(0.6)
+        m.mouse(0, 0); m.step(1); m.run(); quiet()
         after = rw("wd_top")
         print("   %-22s %d samples, %d differ, worst %d byte(s); top %d -> %d"
               % (tag, steps, seen, worst, before, after))
@@ -233,16 +250,14 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
         # own set on the way out, which is what the `if hit: m.run()` below it
         # was standing in for.
         with M.bp_trace(m, P(watch)) as tr:
-            mo.to(sbx, y); time.sleep(0.3)
-            m.mouse(l=True); time.sleep(0.08); m.mouse(l=False)
+            tap(y, 0.3)
             tr.wait(1, limit=12.0)
-        time.sleep(1.3)
+        quiet()
         return tr.n > 0
 
     def down_to(n):
         for _ in range(n):
-            m.run(); mo.to(sbx, (ty+sbb)//2 + (sbb-ty)//4); time.sleep(0.25)
-            m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.3)
+            m.run(); tap((ty+sbb)//2 + (sbb-ty)//4); quiet()
 
     down_to(2)                       # get away from the top so UP can happen
     b43 = rw("wd_top")
@@ -274,9 +289,8 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     def up_to(target):
         for _ in range(14):
             if rw("wd_top") <= target: break
-            m.run(); mo.to(sbx, yup); time.sleep(0.25)
-            m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.3)
-        mo.to(4, 4); time.sleep(1.2); M.settle(m)
+            m.run(); tap(yup); quiet()
+        mo.to(4, 4); quiet(); M.settle(m)
         return rw("wd_top")
 
     up_to(0)
@@ -310,29 +324,26 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
         # reason: `mo.to` polls the published mouse_x, which a guest stopped
         # at wd_paint cannot move.
         with M.bp_trace(m, P("wd_paint")) as tr:
-            mo.to(sbx, y); time.sleep(0.3)
-            m.mouse(l=True); time.sleep(0.08); m.mouse(l=False)
+            tap(y, 0.3)
             tr.wait(1, limit=12.0)
-        time.sleep(1.0)
+        quiet()
         return tr.n > 0
 
     ydn = (ty+sbb)//2 + (sbb-ty)//4
     for _ in range(6):               # back to the top, so page-down can page
         if rw("wd_top") <= 0: break
-        m.run(); mo.to(sbx, yup); time.sleep(0.25)
-        m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.3)
+        m.run(); tap(yup); quiet()
     fulls = [paged(ydn) for _ in range(3)]
     print("   consecutive page-downs entering wd_paint (a FULL repaint): %s" % fulls)
     check("C: a repeated page click still blits", not any(fulls),
           "%d of 3 fell back to a full repaint" % sum(fulls))
 
     # ---- leg B: the pixels. Page down, page back up, require identity -----
-    m.run(); mo.to(4, 4); time.sleep(1.2); M.settle(m)
+    m.run(); mo.to(4, 4); quiet(); M.settle(m)
     top0 = rw("wd_top")
     start = shot(m)
     for _ in range(3):
-        mo.to(sbx, ydn); time.sleep(0.25)
-        m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.3)
+        tap(ydn); quiet()
     mid = rw("wd_top")
     # ...and back to the SAME view, driven by [wd_top] rather than by counting
     # clicks: the track auto-repeats while the button is held, so a click is
@@ -340,9 +351,8 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     for _ in range(12):
         if rw("wd_top") <= top0:
             break
-        mo.to(sbx, yup); time.sleep(0.25)
-        m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.3)
-    mo.to(4, 4); time.sleep(1.2); M.settle(m)
+        tap(yup); quiet()
+    mo.to(4, 4); quiet(); M.settle(m)
     backtop = rw("wd_top")
     end = shot(m)
     print("   round trip: top %d -> %d -> %d" % (top0, mid, backtop))
@@ -352,13 +362,11 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     # repaint of the same view and put both against it.
     keepB = m.read(P("wd_upheight"), 2)
     m.write(P("wd_upheight"), bytes([0xF9, 0xC3]))
-    mo.to(sbx, ydn); time.sleep(0.25)
-    m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.4)
+    tap(ydn); quiet()
     for _ in range(12):
         if rw("wd_top") <= backtop: break
-        mo.to(sbx, yup); time.sleep(0.25)
-        m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.4)
-    mo.to(4, 4); time.sleep(1.2); M.settle(m)
+        tap(yup); quiet()
+    mo.to(4, 4); quiet(); M.settle(m)
     ref = shot(m); reftop = rw("wd_top")
     m.write(P("wd_upheight"), keepB)
     ds = sum(1 for p, q in zip(band(start, box), band(ref, box)) if p != q)
@@ -425,15 +433,22 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     winbox = (rw("wd_cl"), rw("wd_ct"),
               rw("wd_cl") + rw("wd_cw") - 1, rw("wd_ct") + rw("wd_ch") - 1)
 
-    def thumb_drag(steps=6):
-        mo.to(sbx, ty + 12); time.sleep(0.4)
-        mo._edge(True); time.sleep(0.8)
+    def thumb_drag(steps=6, counted=False):
+        mo.to(sbx, ty + 12); M.pace(m, 0.4)
+        mo._edge(True); M.pace(m, 0.8)
         for k in range(1, steps + 1):
-            mo.to(sbx, ty + 12 + k, l=True); time.sleep(0.7)
-        mo._edge(False); time.sleep(1.4)
+            mo.to(sbx, ty + 12 + k, l=True); M.pace(m, 0.7)
+        # under bp_count the guest STOPS at its breakpoint, where `quiet`'s
+        # wait would call a stopped guest dead; bp_count waits the work out
+        # itself, so there the tail is only the old pause
+        mo._edge(False)
+        if counted:
+            M.pace(m, 1.4)
+        else:
+            quiet()
 
     up_to(0)
-    nchrome = M.bp_count(m, P("wd_chrome"), thumb_drag,
+    nchrome = M.bp_count(m, P("wd_chrome"), lambda: thumb_drag(counted=True),
                          quiet=4.0, first=25.0, limit=240.0)
     topG = rw("wd_top")
     check("G: the drag scrolled past a page (the case is arranged)",
@@ -441,7 +456,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     check("G: a thumb drag redraws NO chrome", nchrome == 0,
           "wd_chrome ran %d time(s): the strips are being erased and drawn "
           "again for a scroll that cannot have moved them" % nchrome)
-    mo.to(4, 4); time.sleep(1.2); M.settle(m)
+    mo.to(4, 4); quiet(); M.settle(m)
     fastG = shot(m)
 
     keepS = m.read(P("wd_sigsame"), 2)
@@ -450,7 +465,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     thumb_drag()
     m.write(P("wd_sigsame"), keepS)
     topG2 = rw("wd_top")
-    mo.to(4, 4); time.sleep(1.2); M.settle(m)
+    mo.to(4, 4); quiet(); M.settle(m)
     slowG = shot(m)
 
     check("G: both arms reached the same view (case arranged)", topG == topG2,

@@ -143,14 +143,33 @@ def main(argv):
             return bytes(out)
 
         def settled():
+            """The viewport, STILL - and never a moving one.
+
+            IT USED TO GIVE UP AND HAND BACK THE LAST FRAME ANYWAY, which is
+            the one thing this must not do: every verdict in this row is an
+            XOR between two captures, so an unsettled one measures the SCENE
+            STILL MOVING and reports it as the object being visible. That is
+            how the 2026-09-21 full soak read `the pass hid object 9 ... 3389
+            pixels` and `object 8 ... 3389 pixels` - the SAME count for two
+            different objects, which no pair of objects produces and one
+            moving frame produces every time.
+
+            30 rounds rather than 12, because the budget is guest FRAMES and
+            a loaded box only makes them arrive slower, not fewer - and then
+            it says so, loudly, instead of answering with a number that looks
+            like a finding."""
             prev = None
-            for _ in range(12):
+            for _ in range(30):
                 m.advance(frames=6)
                 cur = viewpx()
                 if cur == prev:
                     return cur
                 prev = cur
-            return prev
+            raise RuntimeError(
+                "skiesocc: the viewport never stopped changing over 180 "
+                "frames, so nothing here can be measured - every verdict is "
+                "an XOR between two captures and a moving one reads as the "
+                "object being visible. This is the SCENE, not the pass")
 
         def pin(port, d, y, side=0, turn=0, drop=()):
             ax = int.from_bytes(m.read(lin + port + CSA_X, 2), "little")

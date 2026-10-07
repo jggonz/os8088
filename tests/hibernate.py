@@ -338,12 +338,14 @@ def _diag(m, mo):
         # same window, so this tells the two apart in one press.
         before = word(m, "hb_resumes")
         m.key("Enter")
-        for _ in range(20):
-            if word(m, "hb_resumes") != before:
-                print("      *** ENTER WORKED where the click did not: the "
-                      "CLICK path is the defect, not the machine ***")
-                return
-            time.sleep(0.5)
+        try:                            # a GUEST-time budget
+            M.until(m, lambda mm: word(mm, "hb_resumes") != before,
+                    "Enter to be acted on", poll=0.5, limit=10.0)
+            print("      *** ENTER WORKED where the click did not: the "
+                  "CLICK path is the defect, not the machine ***")
+            return
+        except M.MartyError:
+            pass
         print("      Enter did nothing either: the machine dispatches no "
               "input at all")
     except Exception as e:
@@ -512,7 +514,7 @@ def pass_resume(driver):
         check(byte(m, "gfx_lock_flag") == 0, "the gfx lock is released",
               got=byte(m, "gfx_lock_flag"), want=0)
         t0 = word(m, "ticks")
-        time.sleep(1.5)
+        M.pace(m, 1.5)                  # guest time: a stopped guest ends it
         check(word(m, "ticks") != t0, "the tick is running after the resume")
         shot(m, "resumed")
         # the menu bar still answers: open and close the System menu

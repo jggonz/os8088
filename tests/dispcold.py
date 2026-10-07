@@ -160,6 +160,9 @@ def video(m):
     return " ".join(out)
 
 
+QUIET = 5.0                 # guest seconds of a free gfx lock that end a watch
+
+
 def pump(m, mo, px, py, secs=30.0):
     """Position, click, and run until either a write into .cold stops the
     machine or the click has plainly finished. Returns the regs dict on a
@@ -167,17 +170,38 @@ def pump(m, mo, px, py, secs=30.0):
     mo.to(px, py)
     os88marty.settle(m, card=0)
     m.mouse(0, 0, l=True)
-    t0 = time.time()
+    # GUEST time on both clocks: the button is held for what 0.6 s gave on an
+    # idle box, and the watch lasts what `secs` did - so a loaded box neither
+    # shortens the press nor watches less of the click's work.
+    # It ends EARLY once the click has plainly finished: the button up and
+    # the gfx lock - which every drawing path holds - free for QUIET guest
+    # seconds on end. What draws into .cold draws, so it holds the lock.
+    hz, rate = os88marty.GUEST_HZ, os88marty.GUEST_PACE or 4.5
+    lock = S("gfx_lock_flag")
+    c0 = last = busy = int(m.status()["cycles"])
+    moved = time.time()
     up = False
-    while time.time() - t0 < secs:
+    while True:
         st = m.status()
-        if st["state"] != "breakpoint":
-            time.sleep(0.01)
-            if not up and time.time() - t0 > 0.6:
-                m.mouse(0, 0, l=False)
-                up = True
-            continue
-        return m.cmd(cmd="regs")
+        if st["state"] == "breakpoint":
+            return m.cmd(cmd="regs")
+        c = int(st["cycles"])
+        g = (c - c0) / hz
+        if g >= secs * rate:
+            break
+        if m.read(lock, 1)[0] or not up:
+            busy = c
+        elif (c - busy) / hz >= QUIET:
+            break
+        if c != last:
+            last, moved = c, time.time()
+        elif time.time() - moved > 30.0:
+            raise os88marty.MartyError("the guest stopped (%r) while a click "
+                                       "was being watched" % st["state"])
+        time.sleep(0.01)
+        if not up and g > 0.6 * rate:
+            m.mouse(0, 0, l=False)
+            up = True
     if not up:
         m.mouse(0, 0, l=False)
     return None
@@ -206,7 +230,7 @@ def main():
         bx, by, bw, bh = dispcp.win_rect(m, S, disk)
         dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "NOTEPAD.O88",
                           card=pri)
-        time.sleep(2)
+        os88marty.settle(m, card=pri)       # its first paint, before the drag
         wins = dispcp.win_list(m, S)
         if len(wins) < 2:
             sys.exit("notepad did not launch")

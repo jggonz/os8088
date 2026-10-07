@@ -31,11 +31,11 @@ says "something opaque is drawn here", which is the actual claim, and it
 cannot be satisfied by a stale fragment being the right total number of
 pixels.
 
-The withdraw half is the reason this row exists.  `wz_withdraw`,
-`desk_zmark`'s delete edge and the extra `inc byte [desk_zhw]` that covers the
-ordinal past the last volume are reached by no other test in the tree, and the
-failure they guard against - the icon staying on the glass after its driver
-has gone - is invisible to every assertion about state.
+The withdraw half is the reason this row exists.  `wz_withdraw` and
+desk_reflow's posting of the cell the item leaves (SPEC.md 26.9) are reached
+by no other test in the tree, and the failure they guard against - the icon
+staying on the glass after its driver has gone - is invisible to every
+assertion about state.
 
 QEMU by name, and not by preference: MartyPC has no network card of any kind,
 so the driver cannot be hosted on it at all (tests/ethernet.py's note).
@@ -57,6 +57,8 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
 import os88sym                                              # noqa: E402
 import os88qemu                                             # noqa: E402
+import dispcp                                               # noqa: E402
+import os88geom as geom                                     # noqa: E402
 import shot                                                 # noqa: E402
 
 SOCK = os.path.join(ROOT, "build", "wirezone.sock")
@@ -65,7 +67,8 @@ PPM = os.path.join(ROOT, "build", "wirezone.ppm")
 
 # kernel/desk.inc and kernel/disk.inc, mirrored - the geometry is derived from
 # the kernel's own published words below and only these constants are copied.
-DESK_ZY0, DESK_ZW, DESK_ZOVER, DESK_COLW = 32, 32, 2, 44
+DESK_ZY0, DESK_ZOVER = 32, 2
+DESK_CW, DESK_PX = geom.DESK_CW, geom.DESK_PX       # SPEC.md 26.9
 DV_FLAGS, DV_SIZE, DVOL_MAX = 2, 16, 8
 
 RUN_DRAWN = 8                   # the longest horizontal run that says "drawn"
@@ -80,8 +83,9 @@ def say(*a):
 def kill_stale():
     if os.path.exists(PIDFILE):
         try:
-            os.kill(int(open(PIDFILE).read().strip()), signal.SIGTERM)
-            time.sleep(1)
+            pid = int(open(PIDFILE).read().strip())
+            os.kill(pid, signal.SIGTERM)
+            os88qemu.gone(pid)
         except Exception:
             pass
     for f in (SOCK, PIDFILE, PPM):
@@ -124,25 +128,27 @@ def word(q, sym):
 
 
 def wait_desktop(q):
-    t0 = time.time()
-    while time.time() - t0 < 120:
+    """In the GUEST's seconds (tests/os88qemu.py), which a loaded box cannot
+    shorten the way it shortens a host sleep."""
+    def up():
         try:
-            if word(q, "vid_w"):
-                break
-        except Exception:
-            pass
-        time.sleep(0.25)
-    time.sleep(8)               # ...and the first paint, plus drv_boot's read
+            return word(q, "vid_w") != 0
+        except Exception:                                   # noqa: BLE001
+            return False
+    os88qemu.acted(q, up, secs=120, what="[vid_w]", poll=0.25)
+    # ...and the first paint, plus drv_boot's read: both on the UI task, so
+    # its going idle is the answer and the old eight seconds the ceiling
+    os88qemu.ui_done(q, os88sym.linear, cap=8.0, what="the first desktop")
 
 
 def zone_rect(q):
-    """The service zone's DRAWN rect, out of the kernel's own words.
+    """The service item's DRAWN rect, out of the kernel's own words.
 
-    desk_zone_rect's arithmetic and desk_ord_xy's wrap, in Python: the zone's
-    ordinal is the number of volumes that have one, columns fill downwards and
-    then wrap LEFT, and the drawn rect is the hit zone plus the caption's 2px
-    overhang each side. Derived rather than written down, so the row still
-    means something on a machine that mounts a different number of volumes.
+    Its cell is its byte of `desk_zslot` (SPEC.md 26.9) - the service item is
+    zone DVOL_MAX - and with no driver registered, where it WOULD go: the
+    first cell after the volumes, which is the count of them when nothing is
+    placed. Cells fill a column downwards and then the next column LEFT, and
+    the drawn rect is the cell plus the caption's 2px overhang each side.
     """
     zx = word(q, "vid_desk_zx")
     step = word(q, "desk_zstep")
@@ -151,11 +157,13 @@ def zone_rect(q):
     vtab = q.read(os88sym.linear("dsk_vtab"), DV_SIZE * DVOL_MAX)
     shown = sum(1 for i in range(DVOL_MAX)
                 if vtab[i * DV_SIZE + DV_FLAGS] & 1)
-    col, row = divmod(shown, rows)          # the service zone's own ordinal
-    x = zx - DESK_COLW * col
+    v = q.read(os88sym.linear("desk_zslot") + DVOL_MAX, 1)[0]
+    cell = v & 0x3F if v < 0x80 else shown
+    col, row = divmod(cell, rows)
+    x = zx - DESK_PX * col
     y = DESK_ZY0 + step * row
     return (x - DESK_ZOVER, y,
-            x + DESK_ZW + DESK_ZOVER - 1, y + zh1), shown
+            x + DESK_CW + DESK_ZOVER - 1, y + zh1), shown
 
 
 def longest_run(q, rect, cga):
@@ -194,18 +202,19 @@ def open_drivers_page(q):
     sys.argv = ["mouse.py", SOCK]
     import mouse                                            # noqa: E402
     mouse.SOCK = SOCK
+    wins = len(dispcp.win_list(q, os88sym.linear, check=False))
     mouse.goto(8, 8)
-    mouse.hmp("mouse_button 1")
-    time.sleep(0.4)
+    mouse.hmp("mouse_button 1", "gsleep 0.4")       # guest time: tools/qmp.py
     mouse.goto(60, 45)                  # 'Control Panel', the second item
-    time.sleep(0.3)
-    mouse.hmp("mouse_button 0")
-    time.sleep(5)
+    mouse.hmp("gsleep 0.3", "mouse_button 0")
+    # The panel is a WINDOW, so its arrival is the guest's own answer - and
+    # then a second for its first paint before the page list is aimed at.
+    os88qemu.acted(q, lambda: len(dispcp.win_list(q, os88sym.linear,
+                                                  check=False)) > wins,
+                   secs=15, what="the Control Panel window", poll=0.25)
+    os88qemu.pace(q, 1)
     mouse.goto(195, 186)                # the page list's 'Drivers'
-    mouse.hmp("mouse_button 1")
-    time.sleep(0.2)
-    mouse.hmp("mouse_button 0")
-    time.sleep(3)
+    mouse.hmp("mouse_button 1", "gsleep 0.2", "mouse_button 0", "gsleep 3")
     return mouse
 
 
@@ -217,9 +226,7 @@ def untick_ethernet(mouse):
     driver let go.
     """
     mouse.goto(267, 229)
-    mouse.hmp("mouse_button 1")
-    time.sleep(0.2)
-    mouse.hmp("mouse_button 0")
+    mouse.hmp("mouse_button 1", "gsleep 0.2", "mouse_button 0")
 
 
 def main():
@@ -257,12 +264,10 @@ def main():
         # --- ...and it leaves with its driver ------------------------------
         m = open_drivers_page(q)
         untick_ethernet(m)
-        t0 = time.time()
-        while time.time() - t0 < 40:
-            if not word(q, "desk_svc_seg"):
-                break
-            time.sleep(1)
-        time.sleep(4)                   # ui_task's pass spends the repaint
+        os88qemu.acted(q, lambda: not word(q, "desk_svc_seg"), secs=40,
+                       what="[desk_svc_seg] = 0", poll=0.25)
+        # ui_task's pass spends the repaint: its going idle is that done
+        os88qemu.ui_done(q, os88sym.linear, cap=4.0, what="the zone's repaint")
         seg2 = word(q, "desk_svc_seg")
         say("after untick:  desk_svc_seg %04X" % seg2)
         if seg2:
@@ -279,9 +284,8 @@ def main():
                 fails.append("STALE PIXELS: the zone's rect still has a "
                              "run of %d after the driver detached, want <= "
                              "%d. The zone is gone from the kernel's state "
-                             "and still on the glass - desk_zmark's delete "
-                             "edge or the `inc byte [desk_zhw]` that covers "
-                             "the ordinal past the last volume (SPEC.md 26.7)"
+                             "and still on the glass - desk_reflow did not "
+                             "post the cell it left (SPEC.md 26.9)"
                              % (run2, RUN_DITHER))
     finally:
         kill_stale()

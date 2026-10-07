@@ -654,7 +654,9 @@ restores it.
 
 **The cell costs 8 bytes and the free list is EMPTY** (SPEC.md §20.3.1):
 0x01F0 and 0x01E8 have both been spent, so this is an append and
-`osapi_table_end` moves.
+`osapi_table_end` moves. *(Written against the uniform 8-byte table; since
+kernel size pass 4 `OSAPI_DECOMP` is a 6-byte far cell and there is no free
+list — SPEC.md §20.3, §20.3.1.)*
 
 **There should be no compression ABI, and that is the "better way".** A
 compressor is 307 bytes and 8 KB of RAM against the decoder's 115 and 0, it

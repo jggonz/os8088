@@ -18,7 +18,7 @@ The verdict is the BIOS tick at 0040:006C. It is the same test 8(8) used and
 it is the only one that distinguishes a freeze from a slow repaint: a frozen
 machine's tick does not advance, and every debug read still answers.
 """
-import sys, time
+import sys
 import os
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
 # checkout it was written in and wrong in a git worktree, which is how parallel
@@ -72,7 +72,7 @@ def ui_passes(m, secs=2.0):
     beside it is read as a rate, and a pass the machine did not make is not
     one."""
     with os88marty.bp_trace(m, {"type": "mem", "addr": S("ui_rebootq")}) as tr:
-        time.sleep(secs)
+        os88marty.pace(m, secs)         # the window is GUEST time
     return tr.n
 
 
@@ -116,7 +116,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     bx, by, bw, bh = dispcp.win_rect(m, S, disk)
     dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "NOTEPAD.O88",
                       card=pri)
-    time.sleep(2)
+    os88marty.ui_done(m, "Note Pad to open")
     wins = dispcp.win_list(m, S)
     print("windows:", [(s,) + dispcp.win_rect(m, S, s) for s in wins])
     if len(wins) < 2:

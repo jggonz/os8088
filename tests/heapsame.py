@@ -20,7 +20,7 @@ It captures the claim map at every step too, for the same reason - the map is
 where a spurious move would show first, and two identical screens over two
 different maps is exactly the state a later boot turns into a wrong pixel.
 """
-import sys, time, argparse, hashlib
+import sys, argparse, hashlib
 import os
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
 # checkout it was written in and wrong in a git worktree, which is how parallel
@@ -87,8 +87,10 @@ def main():
 
         w = dispcp.win_list(m, S)
         wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
+        had = len(dispcp.win_list(m, S))
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "ARTFUL.O88")
-        time.sleep(3)
+        os88marty.until(m, lambda _m: len(dispcp.win_list(m, S)) > had,
+                        "the ARTFUL window", poll=0.3, limit=60)
         os88marty.settle(m)
         step(m, "a package running")
 

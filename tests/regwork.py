@@ -44,7 +44,6 @@ import argparse
 import os
 import struct
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -112,7 +111,13 @@ def main():
         def open_named(name, secs, at):
             before = set(w.i for w in os88geom.windows(m, S) if w.visible)
             dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=name)
-            time.sleep(secs)
+            try:                            # a load freezes the UI, which a
+                os88marty.until(            # screen settle takes for "done"
+                    m, lambda _: any(w.visible and w.i not in before
+                                     for w in os88geom.windows(m, S)),
+                    "%s's window" % name, poll=0.25, limit=secs * 10)
+            except os88marty.MartyError:
+                pass                        # ...reported just below
             os88marty.settle(m)
             new = [w for w in os88geom.windows(m, S)
                    if w.visible and w.i not in before]
@@ -144,7 +149,12 @@ def main():
         bad = 0
         front(pm, "PinMe")
         m.key("KeyR")                       # ...and THIS is the whole difference
-        time.sleep(2)                       # from tests/regpin.py
+        try:                                # from tests/regpin.py
+            os88marty.until(m, lambda _: bss(m, pm_seg, PM_RST, 1)[0] == 1,
+                            "PinMe's restart declaration", poll=0.25,
+                            limit=10)
+        except os88marty.MartyError:
+            pass                            # a refusal: judged below
         os88marty.settle(m)
 
         def slot_of(seg):
@@ -193,7 +203,14 @@ def main():
         front(fl, "the Filler")
         for _ in range(5):
             m.key("KeyA")
-            time.sleep(6)
+            try:                            # the claim, and the move it forces
+                os88marty.until(
+                    m, lambda _: pkg_seg(m, S, "PinMe")[0] not in (pm_seg,
+                                                                   None),
+                    "PinMe's region to move", poll=0.25,
+                    guest=6 * os88marty.GUEST_PACE)
+            except os88marty.MartyError:
+                pass                        # ...press again
             os88marty.settle(m)
             if pkg_seg(m, S, "PinMe")[0] not in (pm_seg, None):
                 break
@@ -224,10 +241,16 @@ def main():
         bad += not nstart1 > nstart0
 
         t0 = u16(bss(m, pm_now, PM_NTICK))
-        time.sleep(4)
+        try:                        # its next loop, or what an idle box's
+            os88marty.until(        # four seconds gave it of none
+                m, lambda _: u16(bss(m, pm_now, PM_NTICK)) > t0,
+                "the worker to loop", poll=0.05,
+                guest=4 * os88marty.GUEST_PACE)
+        except os88marty.MartyError:
+            pass
         t1 = u16(bss(m, pm_now, PM_NTICK))
         print("  5 ...and it is RUNNING     %s"
-              % ("loop %d -> %d over 4s" % (t0, t1) if t1 > t0 else
+              % ("loop %d -> %d" % (t0, t1) if t1 > t0 else
                  "NO (%d -> %d) <-- the frame was rebuilt and the scheduler "
                  "never resumed it: the machine is one worker short and "
                  "nothing else would say so" % (t0, t1)))

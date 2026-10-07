@@ -104,9 +104,10 @@ FORBIDDEN = {
     "FTPD.O88":     "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
     "TELNET.O88":   "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
     "THEWIRE.O88":  "ETHER.DRV is in no small driver set (SPEC.md 24.5, 92)",
-    "MODPLUG.O88":  "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "TRACKER.O88":  "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "AUDIO.O88":    "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
+    "MIDIRACK.O88": "SOUND.DRV is in no small driver set, and its speaker "
+                    "synth is an FSXF_RATE bracket (SPEC.md 24.5, 105)",
     # 24.5 - a claim the floor machine cannot fund, made where it cannot refuse
     "SKIES.O88":    "a 32KB claim inside the fsx bracket - the refusal is a "
                     "black screen (SPEC.md 24.5, 88)",
@@ -118,6 +119,18 @@ FORBIDDEN = {
                     "loader fetches and a shadow claim of 16KB (6.4KB of it "
                     "composed today), against a 52.5KB arena whose largest "
                     "run is 17.5-20KB (SPEC.md 24.5, 97.9)",
+    # DRMARCO rode every small floppy from #207 to 2026-10-04 with this ground
+    # already written in the Makefile: $(SMALLOMIT_GAMES) was a `:=` naming
+    # $(DM_SHIP) a thousand lines before $(DM_SHIP) existed, so the filter
+    # matched nothing - the silent no-op this table exists to catch, and it
+    # had no row
+    "DRMARCO.O88":  "the loader cannot place it: image 49,685 + bss 6,648 is "
+                    "56,333 bytes in ONE claim against a 53,760-byte arena, so "
+                    "it is `Load failed` before it can refuse in its own words "
+                    "(SPEC.md 24.5, 100)",
+    "DRMARCO.VGA":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
+    "DRMARCO.HRC":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
+    "DRMARCO.CGA":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
     # DOTDEL.O88 IS NOT A ROW. It was omitted beside SKIES on a ground that
     # SPEC.md 5.4.2.5.1 withdrew (kern_small has a `gfx_blit1` body now), and
     # SPEC.md 24.5.5 is the measurement that put it back on the floppy. A name
@@ -137,7 +150,7 @@ FORBIDDEN = {
     # 24.5 - the data files, whose readers are all above
     "BROWSER.HTM":  "the Browser's own manual, and nothing else on the machine "
                     "opens a .HTM (SPEC.md 24.5, 71.12)",
-    "BEVERLY.MOD":  "the module for two players that are not on this disk "
+    "BEVERLY.MOD":  "the module for a player that is not on this disk "
                     "(SPEC.md 24.5, 24.4)",
 }
 
@@ -153,7 +166,8 @@ FORBIDDEN = {
 # reads one", never "these are the only documents allowed".
 READERS = {
     "HTM": ("BROWSER.O88",),
-    "MOD": ("MODPLUG.O88", "TRACKER.O88"),
+    "MOD": ("TRACKER.O88",),         # ModPlug is RETIRED (SPEC.md 56.15)
+    "MID": ("MIDIRACK.O88",),        # SPEC.md 105
     "SLK": ("SHEET.O88", "CHART.O88"),
     "DIF": ("SHEET.O88", "CHART.O88"),
     "F88": ("FONTVIEW.O88",),

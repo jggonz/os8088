@@ -12,6 +12,11 @@ so the OS's own share of the time is visible against a real comparison. Every
 finding below is about `kernel/disk.inc` and `kernel/diskw.inc`, and every
 package on the machine pays it.
 
+**§6 is the WRITE side, added later and larger on a big file**: every
+`OSAPI_FILE_APPEND` walks the cluster chain from the front, so a file
+written in chunks costs time quadratic in its length - which is FTPD's
+large-upload slowness - and there is no write-side `READ_SEQ` yet.
+
 ## 1. How it was measured, which matters more than the numbers
 
 The instrument is a **sampling profiler built from outside the guest**.
@@ -204,3 +209,86 @@ none has been:
 
 The 14KB is real on every machine with a sound card, and the same argument
 scales: `ETHER.DRV` is bigger.
+
+## 6. The WRITE side: an append walks the whole chain, every call
+
+**Status: BUILT as SPEC.md 18.4.9 (`OSAPI_FILE_WRITE_SEQ`), and every
+chunked writer in the tree but the DOS box moved onto it; the box is
+docs/plans/completed/DOS-STREAM-PLAN.md.** Written down 2026-09-27 at the owner's
+request, from the VIDDISK work that found it. §3.1 is about READS looking
+a name up again. This is the same shape on the way OUT, and on a large file
+it is the bigger of the two, because it grows with the file.
+
+### 6.1 What happens
+
+`OSAPI_FILE_APPEND` IS `OSAPI_FILE_WRITE_AT` with the file's size for an
+offset (SPEC.md 18.4.7.3), and every call is a complete operation by
+contract. So every call:
+
+1. stats the name (a directory walk, as §3.1's reads do);
+2. **walks the cluster chain from the front to its last cluster** - the
+   walk is bounded by the entry's size (18.4.7.3), so it is exactly as long
+   as the file already is;
+3. allocates, writes the data, and commits: flush the FAT, link, flush
+   again, write the directory sector - four small scattered transfers
+   (PERFORMANCE.md Set 24).
+
+Step 2 is the same walk `OSAPI_FILE_READ_AT` makes, and that one is
+MEASURED: **141.9 ms per MB of offset** on a fixed disk (VIDEO-W0
+2026-09-25; 133 on 86Box's ST11R), the CPU walking the FAT, not the drive.
+SPEC.md 18.4.8 fixed the READ side with `OSAPI_FILE_READ_SEQ`: the caller
+keeps a 16-byte cursor holding the cluster it stands on, and a call steps
+one FAT link past what it read however far into the file that is. **There
+is no write-side equivalent**, so writing a file in chunks is QUADRATIC in
+its length: chunk *k* walks *k* chunks.
+
+Step 3 is the other half and it is per call, not per MB: Set 24 measured the
+same bytes written as 8 KB appends against one write at **2.36x on the
+floppy and 3.81x on the ST-225** - `int 13h` calls 22 -> 126 on the hard
+disk - before any file was large enough for step 2 to matter.
+
+### 6.2 Who pays it
+
+| caller | shape | what it costs (ESTIMATED from the 141.9 ms/MB walk) |
+|---|---|---|
+| FTPD `STOR` (`fd_do_write`, `apps/ftpd/ftpd.asm`) | `OSAPI_FILE_WRITE` then `OSAPI_FILE_APPEND` per 8 KB stage (`FD_STGSZ`) | a 5 MB upload is 640 appends averaging 2.5 MB of walk: **~230 s of walking**, against ~340 s to receive 5 MB at FTP-PERF's ~15 KB/s. By the end each 8 KB commit carries ~0.7 s of walk against ~0.5 s to receive it - which is the "horribly slow on a large file" the owner reports |
+| FTPD `RETR` (`fd_do_read`) | `OSAPI_FILE_READ_AT` per chunk | the READ side of the same thing, and it needs NO kernel change: `OSAPI_FILE_READ_SEQ` already exists (kern_big, which is the only kernel FTPD ships for - there is no NIC on kern_small) |
+| VIDDISK `W` (`tests/vidbench/viddisk.asm`) | 400 x 32 KB appends, 12.5 MB | ~355 s of walking in all, most of it at the end |
+| Tracker's render to disk (docs/plans/completed/SPEAKER-PCM-PLAN.md §9, W5 - NOT BUILT, waiting on this) | a song's speaker counts, one byte a sample: BEVERLY.MOD is 2.6 MB at 5,512 Hz and 3.8 MB at 8,000 | in 16 KB appends ~30 s and ~65 s of walking against a 4-6 minute render on a 5150, growing with the song's length. The owner put THIS fix first: the render is built on `WRITE_SEQ`, not on `APPEND` |
+| the file manager's copy (SPEC.md 22.5), the installer's big files (52.10.11), any package saving more than its buffer | chunked write | as above, per its chunk; the copy's inner path is kernel-side and should be checked rather than assumed |
+
+**VIDDISK's W row is MEASURED now** (docs/reports/VIDDISK-ST225-2026-09-27.md):
+on the owner's ST-225, 12,800 KB in 400 32 KB appends took **700 s, 18.2
+KB/s**, against a read-side stream of 104-110 KB/s off the same disk - and
+the drive's `READ_AT` walk there is 160 ms a MB, not 142, so the walking
+share of those 700 s is ~400. Every other row is still an ESTIMATE: it
+multiplies a measured walk rate by a chunk count. The walk is per CLUSTER, so its rate per MB depends on the volume's
+cluster size - a floppy's 512- or 1,024-byte clusters walk more links per MB
+than a fixed disk's - and it has not been timed on the write path at all.
+`tests/viddisk.py --floppy` prints W's guest seconds, and VIDDISK's
+`VDWRITE.TXT` prints the write rate on any machine, which is the first
+instrument to point at this.
+
+### 6.3 What a fix looks like - the shape, not a design
+
+- **`OSAPI_FILE_WRITE_SEQ`, READ_SEQ's mirror**: the caller's 16-byte cursor
+  holds the volume, the mount generation, the file's LAST cluster and its
+  size; a call writes from there, allocating and linking forward with no
+  walk, and re-seeds from the name exactly as READ_SEQ does after anything
+  that remounts or writes elsewhere. That takes out step 2 whole and turns
+  the quadratic back into a line. It is the cheap half and it keeps the
+  contract that every call is a complete, consistent operation.
+- **Committing once per file rather than once per call** is Set 24's lever
+  (2.4x to 3.8x on every chunked write) and it is the expensive half: the
+  FAT and the directory entry would lag the data between calls, so it
+  needs a close verb and an answer for a floppy taken out mid-file - which
+  is UI-FREEZE-PLAN §3.2's removable-media consistency model, not a detail.
+  `OSAPI_BATCH_BEGIN`/`END` (SPEC.md 18.9.3) is the existing bracket in this
+  area; whether it already defers any of step 3 is the first thing to read.
+- **Package-side, today, with no kernel byte**: FTPD's `RETR` moves to
+  `OSAPI_FILE_READ_SEQ`. Worth doing whenever FTPD is next touched, and it
+  is the half of FTPD's large-file slowness that is already solved.
+
+Measure before building (§1's instrument; PERFORMANCE.md's rule 4): time an
+FTPD upload of 1, 2 and 4 MB and check the per-MB rate falls the way 6.2
+predicts before anybody writes a slot.

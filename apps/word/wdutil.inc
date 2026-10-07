@@ -32,12 +32,7 @@ WDP_WHITE    equ 0x0200         ; '^w' - one or more spaces or tabs
 ;              compile to something that can never occur
 ; -----------------------------------------------------------------------------
 wd_pcomp:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wd_sv6
     mov si, wd_fpat
     xor di, di                      ; DI = compiled elements
     xor cx, cx                      ; CL = raw characters, CH = unescaped '?'
@@ -136,13 +131,7 @@ wd_pcomp:
     jmp short .qq
 .fin:
     mov [wd_fpwn], di
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdisdcba
 
 ; -----------------------------------------------------------------------------
 ; wd_rxpand - expand the replacement's specials into [wd_frx] / [wd_frxn]
@@ -154,12 +143,7 @@ wd_pcomp:
 ; is x, the same rule the pattern uses.
 ; -----------------------------------------------------------------------------
 wd_rxpand:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wd_sv6
     push es
     mov si, wd_frep
     xor di, di
@@ -237,13 +221,7 @@ wd_rxpand:
     clc
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdisdcba
 
 ; =============================================================================
 ; THE SPAN THE THREE COMMANDS OPERATE ON (SPEC.md 68.9)
@@ -326,9 +304,7 @@ wd_uspan:
     mov [cs:wd_us0], ax
     mov [cs:wd_us1], bx
     pop ds
-    pop bx
-    pop ax
-    ret
+    jmp wd_rba
 
 ; -----------------------------------------------------------------------------
 ; wd_plist - the paragraph starts inside the span, into [wd_upst]
@@ -392,10 +368,7 @@ wd_plist:
     stc
 .out:
     pop ds
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rcba
 
 ; -----------------------------------------------------------------------------
 ; wd_scget / wd_scdrop - the transient rebuild scratch
@@ -463,10 +436,7 @@ wd_uput:
 ; wd_uputp - append the document's characters [BX, CX) to the scratch, each
 ; with its own attribute. CF=1 = full. Preserves all registers.
 wd_uputp:
-    push ax
-    push bx
-    push cx
-    push dx
+    call wd_sv4
 .l:
     cmp bx, cx
     jae .ok
@@ -486,11 +456,7 @@ wd_uputp:
 .no:
     stc
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdcba
 
 ; wd_dchb - AL = the CHP byte at document index AX. Preserves all others.
 wd_dchb:
@@ -508,12 +474,7 @@ wd_dchb:
 ; out: CF=1 = refused and nothing changed; preserves all registers
 ; -----------------------------------------------------------------------------
 wd_usplice:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wd_sv6
     push es
     call wd_uclose
     mov ax, [wd_len]                ; will the document hold the result?
@@ -579,13 +540,7 @@ wd_usplice:
     stc
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdisdcba
 
 ; =============================================================================
 ; UTILITIES > SORT (SPEC.md 68.9, Opus/sort.c)
@@ -690,10 +645,7 @@ wd_dosort:
 ; takes the final one off again if the span it replaces had none.
 ; -----------------------------------------------------------------------------
 wd_uemitp:
-    push ax
-    push bx
-    push cx
-    push dx
+    call wd_sv4
     mov bx, ax
     shl bx, 1
     mov cx, [bx+wd_upst+2]          ; where the paragraph ends
@@ -723,11 +675,7 @@ wd_uemitp:
 .no:
     stc
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdcba
 
 ; wd_utail - [wd_utl] = 1 when the span runs to the document's end without a
 ; closing ¶ (so the rebuilt span must not have one either). Preserves all.
@@ -769,21 +717,14 @@ wd_utrim:
     mov [wd_scn], bx
 .out:
     pop es
-    pop bx
-    pop ax
-    ret
+    jmp wd_rba
 
 ; -----------------------------------------------------------------------------
 ; wd_socmp - does paragraph DX sort before paragraph AX?
 ; out: CF=1 = yes; preserves all registers
 ; -----------------------------------------------------------------------------
 wd_socmp:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wd_sv6
     test byte [wd_sopt], WDSO_DESC  ; Descending is the same comparison with
     jz .fwd                         ; its arguments the other way round
     xchg ax, dx
@@ -804,13 +745,7 @@ wd_socmp:
 .num:
     call wd_socmpn
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdisdcba
 
 ; wd_socmpa - alphanumeric: is SI..DI before BX..CX? CF=1 = yes.
 ; Preserves all but the flags.
@@ -852,20 +787,12 @@ wd_socmpa:
 .yes:
     stc
 .out:
-    pop dx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdba
 
 ; wd_socmpn - numeric: is the value in SI..DI below the one in BX..CX?
 ; A field with no number sorts before every field that has one. CF=1 = yes.
 wd_socmpn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wd_sv6
     call wd_sonum                   ; DX = the first key's value, CF = it had
     mov bx, dx                      ; one
     mov al, 0
@@ -895,13 +822,7 @@ wd_socmpn:
 .yes:
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdisdcba
 
 ; -----------------------------------------------------------------------------
 ; wd_sokey - the key field of paragraph AX
@@ -1243,10 +1164,7 @@ wd_isalnum:
 ; out: CF=1 = the scratch is full; preserves all registers
 ; -----------------------------------------------------------------------------
 wd_rnemit:
-    push ax
-    push bx
-    push cx
-    push dx
+    call wd_sv4
     mov bx, wd_rnfmt
     xor dl, dl                      ; DL = the kind, 0 = none seen yet
 .pre:
@@ -1289,19 +1207,12 @@ wd_rnemit:
 .no:
     stc
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdcba
 
 ; wd_rnval - write value AX in kind DL. CF=1 = full. Preserves all.
 wd_rnval:
     ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
-    push ax
-    push bx
-    push cx
-    push dx
+    call wd_sv4
     push si                         ; the roman table walks SI, and the
                                     ; caller is holding a paragraph pointer
     cmp dl, 'I'
@@ -1388,12 +1299,7 @@ wd_rnval:
 .no:
     stc
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rsdcba
 
 ; wd_rnstr - write the NUL string at CS:SI, cased by DL. CF=1 = full.
 wd_rnstr:
@@ -1554,12 +1460,7 @@ wd_dotoc:
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
 wd_tcentry:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wd_sv6
     mov cx, bx                      ; CX = where the paragraph's text ends
 .end:
     cmp cx, [wd_len]
@@ -1632,13 +1533,7 @@ wd_tcentry:
     call wd_tcput
     inc word [wd_tcn]
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdisdcba
 
 ; wd_tclevel - DX = 1 + the left indent of the paragraph at BX, in tab stops,
 ; clamped to 9. Preserves all registers but DX.
@@ -1732,12 +1627,7 @@ wd_tctrim:
 ; ruler can see rather than as spaces in the text.
 ; -----------------------------------------------------------------------------
 wd_tcput:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wd_sv6
     mov bx, dx                      ; the level is BANKED before anything
                                     ; else: the page division below writes
                                     ; DX, and an indent taken from the
@@ -1783,10 +1673,4 @@ wd_tcput:
     mov al, 13
     call wd_uput
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdisdcba

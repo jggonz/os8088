@@ -181,8 +181,7 @@ def _open(m, mo, S, machine, stem):
     """Double-click <stem>.WML in the B: window and answer LOOM's window slot.
 
     IT IS weavesmoke._open_bundle(), UNCHANGED AND NOT A COPY - open drive B,
-    double-click `weavesmoke.BUNDLE`, retry the NAVIGATION up to three times
-    and nothing else. That file's docstring is the argument for every part of
+    double-click `weavesmoke.BUNDLE`. That file's docstring is the argument for every part of
     it, and the only difference here is which file is double-clicked: a `.WML`
     rather than a `.WAB`, so the association that answers is LOOM's rather
     than WEAVE's (WEAVE-SPEC 1.5 step 2).

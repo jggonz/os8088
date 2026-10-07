@@ -43,8 +43,14 @@
 ; =============================================================================
 
 %include "os88drv.inc"
+%include "sndpkg.inc"           ; the package verbs: the FM chip, whole
+                                ; (SPEC.md 34.12)
 
 OS88_DRIVER 'Sound', DRVC_SOUND, snd_entry
+
+OPL_NCH     equ 18              ; channels the allocator knows: an OPL3's
+                                ; two banks of nine, of which an OPL2 has
+                                ; the first
 
 ; =============================================================================
 ; The entry proc: the only thing the kernel calls by offset. Everything else
@@ -143,7 +149,8 @@ snd_entry:
                                 ; now the one entry that releases BOTH - a
                                 ; card with no OPL still has grants and a
                                 ; staging pool to give back
-    or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN
+    or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_EXTBLK
+    call snd_hicap              ; ...and above 22,222 Hz if the DSP can
     or word [snd_services+DSV_TIERS], 1 << SND_RT_SB
                                 ; ...and THIS is the only place that bit is
                                 ; ever set: snd_tier may take the DSP tier
@@ -176,6 +183,13 @@ snd_entry:
                                 ; DSP tier attach?", since nothing else can
                                 ; put that string on the page.
 .nosb:
+    call mpu_probe              ; THE THIRD REASON TO ATTACH (SPEC.md 34.13):
+    jc .nompu                   ; an MPU-401 alone is worth loading for - a
+    cmp byte [drv_up], 0        ; module on the connector is a whole synth
+    jne .nompu                  ; the package reaches through DSV_PKGCALL
+    mov byte [drv_up], 1
+    mov word [snd_services+DSV_NAME], snd_s_mpu
+.nompu:
     cmp byte [drv_up], 0
     je .nohw
     mov si, snd_services
@@ -195,6 +209,25 @@ snd_entry:
 .bug:                           ; carry a DRVE_* now (SPEC.md 51.2) and the
     stc                         ; kernel reads whatever AL holds - so .bug
     ret                         ; joins here with DRVE_TWICE already in AL
+
+; -----------------------------------------------------------------------------
+; snd_hicap - publish SND_CAP_PCM_HI when the attached DSP can stream above
+;             22,222 Hz (SPEC.md 34.2.1). Preserves everything but the flags.
+;
+; THE SAME TEST sbl_v_open refuses on - DSP >= 3.00, the SB Pro's high-speed
+; mode or the SB16's 41h - read the other way round, so a package can grey a
+; rate the card cannot play instead of offering it and taking err 2. An SB 2.0
+; (DSP 2.01) is the card that caught this: Tracker offered 44 kHz on it.
+; -----------------------------------------------------------------------------
+snd_hicap:
+    cmp byte [sbl_verhi], 3
+    jb .out
+    or word [snd_services+DSV_CAPS], SND_CAP_PCM_HI
+    cmp byte [sbl_verhi], 4     ; ...and a DSP 4.xx, whose ADPCM4 is a
+    jb .out                     ; question (SPEC.md 34.5.3.1): a package
+    or word [snd_services+DSV_CAPS], SND_CAP_ADPCM4Q   ; asks the user
+.out:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; snd_tier - DRVV_TIER: how much of ourselves the user wants (SPEC.md 34.8)
@@ -229,7 +262,7 @@ snd_tier:
     je .table                   ; already off
     call sbl_detach             ; cannot fail (SPEC.md 51.2)
     mov word [snd_services+DSV_STREAM], 0
-    and word [snd_services+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN)
+    and word [snd_services+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_PCM_HI | SND_CAP_ADPCM4Q | SND_CAP_EXTBLK)
     cmp word [snd_services+DSV_TONE], 0
     je .table                   ; no OPL2 either: the name stays as it was
     mov word [snd_services+DSV_NAME], snd_s_opl   ; the card is an AdLib now
@@ -241,7 +274,8 @@ snd_tier:
     jc .no                      ; DRVE_* saying which of the two failed
     mov word [snd_services+DSV_STREAM], sbl_stream_op
     mov word [snd_services+DSV_TICK], sbl_tick
-    or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN
+    or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_EXTBLK
+    call snd_hicap
     mov word [snd_services+DSV_NAME], snd_s_sb
 .table:
     mov si, snd_services
@@ -303,6 +337,7 @@ snd_detach:
     push cx
     cmp byte [drv_up], 0
     je .out
+    call mpu_detach             ; a module that was playing, silenced
     call sbl_detach             ; the Sound Blaster FIRST: it is the tier
                                 ; with an interrupt vector and a worker task
                                 ; in it, and neither may outlive this call -
@@ -317,6 +352,16 @@ snd_detach:
     inc cl
     cmp cl, 9
     jb .off
+    cmp byte [opl_kind], SND_OPL3
+    jne .two
+.off1:
+    call opl_keyoff             ; ...and an OPL3's second bank
+    inc cl
+    cmp cl, OPL_NCH
+    jb .off1
+    mov ax, 0x0500              ; 105h <- 0: OPL2 mode, as a cold chip is
+    call opl_wr1
+.two:
     mov ax, 0x0460              ; mask both timers, reset the flags: the
     call opl_wr                 ; state a cold AdLib is in
     mov ax, 0x0480
@@ -361,10 +406,15 @@ snd_services:
     dw 0                        ; DSV_CPPAINT  Sound and Drivers pages the
     dw 0                        ; DSV_CPCLICK  kernel already has are this
                                 ; driver's whole interface (SPEC.md 31.7)
+    times DSV_PKGCALL - ($ - snd_services) db 0
+    dw snd_pkg                  ; DSV_PKGCALL - the FM chip's register writes
+                                ; (SPEC.md 34.12). Static, never cleared: with
+                                ; no chip the verb itself says SNDE_NOFM
     times DSV_SIZE - ($ - snd_services) db 0
 
 snd_s_opl:  db 'AdLib', 0
 snd_s_sb:   db 'Sound Blaster', 0
+snd_s_mpu:  db 'MPU-401', 0
 
 ; =============================================================================
 ; OPL2 geometry and data
@@ -411,23 +461,44 @@ opl_defpatch:
 ; when it is entered at IF=1.
 ; =============================================================================
 opl_wr:
+    push dx
+    mov dx, 0x388               ; bank 0's address port
+    call opl_wrp
+    pop dx
+    ret
+
+; opl_wr1 - the same, into an OPL3's SECOND bank (38Ah/38Bh, SPEC.md 34.12).
+; On an OPL2 nothing answers there, or the decode aliases it onto 388h - which
+; is exactly what opl_probe's OPL3 test reads
+opl_wr1:
+    push dx
+    mov dx, 0x38A
+    call opl_wrp
+    pop dx
+    ret
+
+; opl_wrp - the write, DX = the bank's address port. The delays are status
+; reads at 388h whichever bank is addressed: the status port is bank 0's
+opl_wrp:
     push ax
     push cx
     push dx
     pushf
     cli
-    mov dx, 0x388
     xchg al, ah                 ; AL = register (value parked in AH)
     out dx, al
+    push dx
+    mov dx, 0x388
     mov cx, 6
 .post_addr:                     ; counted status reads: the address window
     in al, dx
     loop .post_addr
+    pop dx
     mov al, ah                  ; the value
-    inc dx                      ; 389h
+    inc dx                      ; 389h / 38Bh
     out dx, al
     popf                        ; the long delay runs at the caller's IF
-    dec dx                      ; 388h
+    mov dx, 0x388
     mov cx, 35
 .post_data:                     ; counted status reads: the data window
     in al, dx
@@ -516,7 +587,8 @@ opl_keyon:
 
 ; -----------------------------------------------------------------------------
 ; opl_keyoff - silence one channel with a single register write (internal)
-; in:       CL = channel 0..8
+; in:       CL = channel 0..17 - 9..17 are an OPL3's second bank, whose B0h
+;           images SNDV_OPLW keeps (SPEC.md 34.12)
 ; out:      nothing
 ; clobbers: nothing (flags)
 ; -----------------------------------------------------------------------------
@@ -530,7 +602,14 @@ opl_keyoff:
     mov [opl_b0+bx], al
     mov ah, 0xB0
     add ah, cl
+    cmp cl, 9
+    jae .b1
     call opl_wr
+    jmp short .out
+.b1:
+    sub ah, 9                   ; B0h + (channel - 9), in bank 1
+    call opl_wr1
+.out:
     pop bx
     pop ax
     ret
@@ -646,7 +725,8 @@ opl_claim:
     push ax
     push bx
     cmp cl, 8
-    jae .bad                    ; 8 is the tone voice; 9+ does not exist
+    jae .bad                    ; 8 is the tone voice; 9..17 are reached only
+                                ; by SND_FM_CLAIM (SPEC.md 34.12), never here
     mov bl, cl
     xor bh, bh
     pushf
@@ -681,7 +761,7 @@ opl_claim:
 opl_owned:
     push ax
     push bx
-    cmp cl, 9
+    cmp cl, OPL_NCH
     jae .no
     mov bl, cl
     xor bh, bh
@@ -706,7 +786,7 @@ opl_owned:
 ; -----------------------------------------------------------------------------
 opl_free:
     push bx
-    cmp cl, 9
+    cmp cl, OPL_NCH
     jae .out
     mov bl, cl
     xor bh, bh
@@ -716,7 +796,7 @@ opl_free:
     ret
 
 ; =============================================================================
-; opl_fm_op - the body behind OSAPI_SND_FM (slot 0x00F8, SPEC.md 34.2)
+; opl_fm_op - the body behind OSAPI_SND_FM (slot 0x00E3, SPEC.md 34.2)
 ;
 ; in:       AL = verb - 0 note-on (CL = channel, BX = Hz), 1 note-off (CL),
 ;           2 patch-load (CL, ES:SI -> 11 bytes ALREADY STAGED BY THE KERNEL
@@ -735,6 +815,10 @@ opl_free:
 ; excluded by ownership, not by cli (SPEC.md 34.1).
 ; =============================================================================
 opl_fm_op:
+    cmp al, SND_FM_INFO         ; the two verbs that ANSWER in AX (SPEC.md
+    je opl_v_info               ; 34.12) leave before the pushes that would
+    cmp al, SND_FM_CLAIM        ; restore it
+    je opl_v_claim
     push ax
     push bx
     push cx
@@ -757,8 +841,10 @@ opl_fm_op:
     call opl_free
 .next:
     inc cl
-    cmp cl, 9
+    cmp cl, OPL_NCH
     jb .all
+    mov al, dh
+    call opl_xrelease           ; ...and the chip, if this requester held it
     jmp .ok
 .on:                            ; --- verb 0: note-on --------------------------
     call opl_owned              ; CF = 1: not yet this requester's, so the
@@ -795,6 +881,283 @@ opl_fm_op:
     pop cx
     pop bx
     pop ax
+    ret
+
+;
+; -----------------------------------------------------------------------------
+; opl_v_info - SND_FM_INFO (SPEC.md 34.12): which chip, and what a claim gives
+; out: CF=0, AL = SND_OPL2 / SND_OPL3, AH = 8 / 17. Reached only while DSV_FM
+;      is published, which is only when a chip answered
+; -----------------------------------------------------------------------------
+opl_v_info:
+    mov al, [opl_kind]
+    mov ah, SND_FM_TONECH       ; 0..7
+    cmp al, SND_OPL3
+    jne .two
+    mov ah, OPL_NCH - 1         ; ...and 9..17
+.two:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; opl_v_claim - SND_FM_CLAIM (SPEC.md 34.12): every melodic channel, or none
+; in:  CL = 0 OPL2 mode / 1 OPL3 mode where the chip has it; DH = the
+;      requester, stamped by the kernel
+; out: CF=0, AL = the mode granted, AH = the channels; CF=1 a channel is
+;      somebody else's, and nothing was claimed
+;
+; The test and the claim are ONE pushf/cli window, opl_claim's rule (SPEC.md
+; 34.3): two tasks asking at once cannot both win. Channel 8 is skipped by
+; both loops - it is the tone voice and no claim ever covers it, which is
+; what keeps the system beep alive under a package that holds the rest.
+; -----------------------------------------------------------------------------
+opl_v_claim:
+    push bx
+    push cx
+    mov ch, cl                  ; CH = the mode asked for
+    mov cl, 9                   ; CL = the channels to take
+    cmp byte [opl_kind], SND_OPL3
+    jne .scan
+    mov cl, OPL_NCH
+.scan:
+    xor bx, bx
+    pushf
+    cli
+.t:
+    cmp bl, SND_FM_TONECH
+    je .tn
+    mov al, [opl_own+bx]
+    cmp al, 0xFF
+    je .tn
+    cmp al, dh
+    jne .busy
+.tn:
+    inc bl
+    cmp bl, cl
+    jb .t
+    xor bl, bl
+.c:
+    cmp bl, SND_FM_TONECH
+    je .cn
+    mov [opl_own+bx], dh
+.cn:
+    inc bl
+    cmp bl, cl
+    jb .c
+    mov [opl_xown], dh
+    popf
+    mov al, SND_OPL2
+    mov ah, SND_FM_TONECH
+    cmp cl, OPL_NCH
+    jne .set                    ; the chip is an OPL2
+    or ch, ch
+    jz .set                     ; ...or OPL2 mode was asked for
+    mov ax, 0x0501              ; 105h <- 1: NEW, the OPL3's own mode -
+    call opl_wr1                ; 18 channels and their L/R bits
+    mov ax, 0x0400              ; 104h <- 0: every channel 2-op
+    call opl_wr1
+    mov ax, 0xC830              ; THE TONE VOICE GOES ON SOUNDING: in NEW
+    call opl_wr                 ; mode a channel with neither L nor R set is
+                                ; silent, and the default patch's C0h is 0
+    mov al, SND_OPL3
+    mov ah, OPL_NCH - 1
+.set:
+    mov [opl_xmode], al
+    pop cx
+    pop bx
+    clc
+    ret
+.busy:
+    popf
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; opl_xrelease - the CHIP given back, if AL holds it (SPEC.md 34.12)
+; in:  AL = an instance slot; its channels are already keyed off and freed
+; out: nothing; every register preserved
+;
+; An OPL3 goes back to OPL2 mode with C8h as the init left it, and the eight
+; low channels get the DEFAULT PATCH back - a package that only ever calls
+; verb 0 must hear on channel 3 what it heard before a player sat on it.
+; -----------------------------------------------------------------------------
+opl_xrelease:
+    cmp byte [opl_xown], 0xFF
+    je .out
+    cmp al, [opl_xown]
+    jne .out
+    push ax
+    push cx
+    push si
+    push es
+    mov byte [opl_xown], 0xFF
+    cmp byte [opl_xmode], SND_OPL3
+    jne .pat
+    mov ax, 0x0500              ; 105h <- 0: OPL2 mode
+    call opl_wr1
+    mov ax, 0xC800
+    call opl_wr
+.pat:
+    push ds
+    pop es                      ; opl_patch reads through ES
+    xor cl, cl
+.p:
+    mov si, opl_defpatch
+    call opl_patch
+    inc cl
+    cmp cl, SND_FM_TONECH
+    jb .p
+    mov byte [opl_xmode], 0
+    pop es
+    pop si
+    pop cx
+    pop ax
+.out:
+    ret
+
+; =============================================================================
+; snd_pkg - DSV_PKGCALL, a package calling us (SPEC.md 20.11, 34.12)
+; in:  BL = the verb (sndpkg.inc), ES = the CALLER's segment, DS = ours
+; out: per verb; CF=1 AX=0 for a verb we do not know
+; =============================================================================
+snd_pkg:
+    cmp bl, SNDV_IDENT
+    jne .n0
+    mov ax, SND_SIG
+    clc
+    ret
+.n0:
+    cmp bl, SNDV_MIDINFO
+    je mpu_v_info
+    cmp bl, SNDV_MIDOPEN
+    je mpu_v_open
+    cmp bl, SNDV_MIDW
+    je mpu_v_write
+    cmp bl, SNDV_MIDCLOSE
+    je mpu_v_close
+    cmp bl, SNDV_OPLW
+    jne .bad
+    mov ax, SNDE_NOFM
+    cmp byte [opl_kind], 0
+    je .err
+    mov ax, SNDE_NOCLAIM
+    cmp byte [opl_xown], 0xFF
+    je .err
+    push bx
+    push cx
+    push si
+    push di
+    pushf
+    cld
+    xor di, di                  ; DI = entries written
+    xor bl, bl                  ; BL = the bank, 0 until an entry says
+    jcxz .done
+.e:
+    es lodsw                    ; AL = the register, AH = the value
+    or al, al
+    jnz .w
+    mov bl, ah                  ; register 0: a BANK SELECT, not a write
+    and bl, 1
+    jmp short .nx
+.w:
+    call opl_regok              ; CF=1: not a claimer's register - skipped
+    jc .nx
+    xchg al, ah                 ; opl_wr's AH = register, AL = value
+    or bl, bl
+    jnz .w1
+    call opl_wr
+    jmp short .sh
+.w1:
+    call opl_wr1
+.sh:
+    cmp ah, 0xB0                ; a B0h write is the KEY-ON register: keep
+    jb .cnt                     ; its image, so the teardown's single-write
+    cmp ah, 0xB8                ; key-off (opl_keyoff) silences the note the
+    ja .cnt                     ; package actually played
+    push bx
+    push ax
+    mov al, ah
+    sub al, 0xB0
+    or bl, bl
+    jz .b0
+    add al, 9
+.b0:
+    xor ah, ah
+    mov bx, ax
+    pop ax
+    mov [opl_b0+bx], al
+    pop bx
+.cnt:
+    inc di
+.nx:
+    loop .e
+.done:
+    mov ax, di
+    popf
+    pop di
+    pop si
+    pop cx
+    pop bx
+    clc
+    ret
+.bad:
+    xor ax, ax
+.err:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; opl_regok - may a claimer write this register? (SPEC.md 34.12)
+; in:  AL = the register, BL = the bank (0/1)
+; out: CF=0 yes; CF=1 no. Every register preserved
+;
+; NO to: the second bank on an OPL2; 00h-1Fh (test, timers, CSM - and 104h/
+; 105h, the OPL3's 4-op and mode registers, in bank 1); D0h-DFh and BDh (the
+; rhythm mode, which would take channels 6..8 and the tone voice with them);
+; and in bank 0, channel 8's A8h/B8h/C8h and its two operators, slots 12h
+; and 15h - the tone voice is the system beep's and no claim covers it.
+; -----------------------------------------------------------------------------
+opl_regok:
+    push ax
+    or bl, bl
+    jz .k
+    cmp byte [opl_kind], SND_OPL3
+    jne .no
+.k:
+    cmp al, 0x20
+    jb .no
+    cmp al, 0xA0
+    jb .op
+    cmp al, 0xE0
+    jae .op
+    cmp al, 0xD0
+    jae .no
+    and al, 0x0F                ; A0h..C8h: the channel is the low nibble
+    cmp al, 8
+    ja .no                      ; (BDh lands here: 0Dh)
+    jb .yes
+    or bl, bl
+    jz .no                      ; channel 8, bank 0: the tone voice
+    jmp short .yes
+.op:
+    and al, 0x1F                ; an operator register: the slot
+    cmp al, 0x15
+    ja .no
+    or bl, bl
+    jnz .yes
+    cmp al, 0x12                ; channel 8's modulator...
+    je .no
+    cmp al, 0x15                ; ...and carrier
+    je .no
+.yes:
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -855,8 +1218,9 @@ opl_release_inst:
     call opl_free
 .next:
     inc cl
-    cmp cl, 9
+    cmp cl, OPL_NCH
     jb .chan
+    call opl_xrelease           ; AL = the instance: the chip too, if it had it
     pop dx
     pop cx
     ret
@@ -870,14 +1234,15 @@ opl_release_inst:
 opl_state_init:
     push bx
     push cx
+    mov byte [opl_xown], 0xFF   ; nobody holds the chip
     mov bx, opl_own
-    mov cx, 9
+    mov cx, OPL_NCH
 .own:
     mov byte [bx], 0xFF
     inc bx
     loop .own
     mov bx, opl_b0
-    mov cx, 9
+    mov cx, OPL_NCH
 .b0:
     mov byte [bx], 0
     inc bx
@@ -931,11 +1296,66 @@ opl_probe:
     and bh, 0xE0
     cmp bh, 0xC0
     jne .absent
+    call opl_kind_probe         ; OPL2 or OPL3 (SPEC.md 34.12)
     call opl_init               ; present: configure FULLY, then say so
     clc
     jmp short .out
 .absent:
+    mov byte [opl_kind], 0
     stc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; opl_kind_probe - OPL2 or OPL3? (SPEC.md 34.12)
+; in:  a chip that has just passed the timer dance, its flags reset
+; out: [opl_kind] = SND_OPL2 / SND_OPL3; every register preserved
+;
+; TWO TESTS, and an OPL3 must pass both. The first is the one every period
+; driver used: an OPL2 reads 1s in status bits 1-2 and an OPL3 0s. It is not
+; enough here, because an EMULATED OPL2 may read 0s there too (one that
+; returns only the flag bits), and a player that then believed in a second
+; bank would send half its voices nowhere. So the second asks the bank
+; directly: timer 1 is programmed through 38Ah. On an OPL3 that is 102h/104h -
+; unused, and the 4-op select, which is zeroed again below - and the timer
+; never runs; on an OPL2 whose decode ALIASES 38Ah onto 388h it is 02h/04h,
+; and it does.
+; -----------------------------------------------------------------------------
+opl_kind_probe:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [opl_kind], SND_OPL2
+    mov dx, 0x388
+    in al, dx
+    test al, 0x06
+    jnz .out                    ; 1s in bits 1-2: an OPL2
+    mov ax, 0x02FF              ; timer 1 through the SECOND bank's ports
+    call opl_wr1
+    mov ax, 0x0421
+    call opl_wr1
+    mov cx, 200                 ; the same >= 80us the presence test waits
+.wait:
+    in al, dx
+    loop .wait
+    in al, dx
+    mov bl, al
+    mov ax, 0x0400              ; 104h <- 0 (or 04h on an alias: unmasked
+    call opl_wr1                ; and stopped, then masked and reset below)
+    mov ax, 0x0200
+    call opl_wr1
+    mov ax, 0x0460
+    call opl_wr
+    mov ax, 0x0480
+    call opl_wr
+    and bl, 0xE0
+    jnz .out                    ; the timer RAN: 38Ah is 388h, an OPL2
+    mov byte [opl_kind], SND_OPL3
 .out:
     pop dx
     pop cx
@@ -967,6 +1387,20 @@ opl_init:
     call opl_wr
     mov ax, 0xBD00              ; BDh <- 0: melodic mode, no drums
     call opl_wr
+    cmp byte [opl_kind], SND_OPL3
+    jne .one
+    mov ah, 0x20                ; an OPL3's SECOND bank too: a warm restart
+.zero1:                         ; inherits whatever the last program left
+    xor al, al                  ; there, and a player's claim reads it as
+    call opl_wr1                ; silence until it writes it (SPEC.md 34.12)
+    inc ah
+    cmp ah, 0xF6
+    jb .zero1
+    mov ax, 0x0400              ; 104h <- 0: 2-op
+    call opl_wr1
+    mov ax, 0x0500              ; 105h <- 0: OPL2 mode until a claim asks
+    call opl_wr1
+.one:
     push es
     push ds
     pop es                      ; opl_patch reads the patch through ES, and
@@ -984,6 +1418,7 @@ opl_init:
     ret
 
 %include "sb.inc"               ; the Sound Blaster half (SPEC.md 34.5/34.6)
+%include "mpu.inc"              ; ...and the MPU-401's MIDI out (SPEC.md 34.13)
 
 %ifdef PICOMEM
 %include "picomem.inc"          ; ...and the PicoMEM's side of getting one to
@@ -998,8 +1433,13 @@ opl_init:
 ; =============================================================================
 
 drv_up:     db 0                ; 1 = attached, so detach knows there is work
-opl_own:    times 9 db 0xFF     ; per-channel owner instance (0xFF = none)
-opl_b0:     times 9 db 0        ; per-channel B0h image: the single-write
+opl_own:    times OPL_NCH db 0xFF   ; per-channel owner instance (0xFF =
+                                ; none). 9..17 are an OPL3's second bank
+opl_b0:     times OPL_NCH db 0  ; per-channel B0h image: the single-write
                                 ; key-off's source (SPEC.md 8.2/34.3)
+opl_kind:   db 0                ; 0 none / SND_OPL2 / SND_OPL3 (opl_probe)
+opl_xown:   db 0xFF             ; the instance holding the CHIP (SND_FM_CLAIM),
+                                ; 0xFF = nobody - SNDV_OPLW's gate
+opl_xmode:  db 0                ; the mode it was granted: SND_OPL2 / SND_OPL3
 
 OS88_DRV_END

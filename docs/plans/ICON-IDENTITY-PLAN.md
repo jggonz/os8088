@@ -627,7 +627,10 @@ number than the code.
   corruption and no wrong picture) but not FREE: an upgraded machine loses its
   declarations until each program's folder has been browsed, which is the
   sentence above, verbatim, about the version that was kept for exactly this
-  reason.
+  reason. **(Kernel size pass 5 has since dropped version 1 on the owner's call** -
+  a v1 `ASSOC.DAT` is now that same cold-cache path, SPEC.md 54.3.2 - and
+  `[asc_rowsz]` is gone, so the ~-16 is taken and a v3 row no longer has a
+  field version to protect; the name-for-stem trade needs re-pricing on that.)
 - **The mount path behind `mod.inc`.** It is the largest lever there is and it
   is illegal: `mod_need` goes to `[dsk_bootvol]` and only there, so a data
   floppy mounted on a one-drive machine would want the system disk back to

@@ -1,0 +1,53 @@
+VIDEO PLAYER - THE HARD DISK'S STREAMING RATE
+=============================================
+
+One question: how fast does the fixed disk stream a
+big file while the player's interrupt takes its share
+of every frame? The encoder guesses 60 KB/s for the
+ST-225 today, and nobody has measured it. This disk
+measures it, and needs no big file copied anywhere:
+it WRITES one on the hard disk and reads it back.
+
+Nothing here touches any file but its own:
+STREAM.DAT in C:'s root, and its two reports on THIS
+floppy. Leave this floppy write-enabled.
+
+HOW
+---
+1. Boot this round's os8088 system floppy (not the
+   kernel installed on the hard disk, which may be
+   older than the streaming read), then mount the hard
+   disk in the Control Panel so that C: is there.
+2. Put this disk in B: and open VIDDISK.O88.
+3. Press W. It writes STREAM.DAT, 12.5 MB, in C:'s
+   root - it checks the room first and says so if
+   there is not enough. The status line counts the
+   KB. It is MINUTES, and slower towards the end:
+   every 32 KB is appended at the end of the file
+   and the end is found again each time. If the
+   machine is reset part way, press W again: it
+   carries on from where it stopped. When it is done
+   its report is saved here as VDWRITE.TXT.
+4. Press R. About two minutes, and the screen stays
+   still for 25 s of it - it is working. The report
+   is saved here as VIDDISK.TXT.
+5. Press D to delete STREAM.DAT and get the 12.5 MB
+   back - or keep it to run R again later.
+
+Bring both .TXT files back (or photograph every page:
+Space / PgDn / PgUp page through the results).
+
+WHAT MATTERS IN VIDDISK.TXT
+---------------------------
+  ceiling, hook 0% .. 75%   KB/s x 10: the stream while
+                            a 30 Hz interrupt holds that
+                            share of every frame. THE
+                            NUMBER THE ENCODER NEEDS.
+  data at 12 MB             ok, or the reads are wrong
+                            and nothing above counts.
+  int13 one track / sector  the controller's own rate.
+
+VIDSND.O88 is here too: the Sound Blaster, and whole
+tracks read while its interrupt burns 0-75% of a
+frame. Press R; it needs no file. With no card it
+says so.

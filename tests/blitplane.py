@@ -53,7 +53,6 @@ import argparse
 import os
 import subprocess
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -73,7 +72,11 @@ def gifpath():
 
 def gifname():
     return os.path.basename(gifpath())
-from os88geom import TITLE_H                                  # noqa: E402
+from os88geom import TITLE_H, top                            # noqa: E402
+
+PARK = (4, 24)      # the desktop's top-left under the menu bar: outside Paint,
+                    # which the harness has at x >= 64, and outside the Disk
+                    # window at (103, 80)
 
 MIN_GAIN = 3.0                  # measured 6.2x even / 4.9x odd (Set 107).
                                 # Three is the floor a REGRESSION has to break
@@ -145,7 +148,17 @@ def shots(image, apps, machine, tree=None):
         # provokes the refusal, so it both selects the rcr pass and is what
         # puts Paint into the mode the rest of this gate needs.
         mo.dblclick(rx, ry)
-        time.sleep(6)
+        # Paint's window, then the drive going quiet, then the glass: the
+        # decoded picture, where this was a blind 20 guest seconds. The
+        # settle cannot go first - a decode holds the screen still
+        try:
+            os88marty.until(m, lambda _: any(w != disk for w in
+                                             dispcp.win_list(m, S)),
+                            "Paint's window", poll=0.2, limit=60)
+        except os88marty.MartyError:
+            pass
+        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                          stable=3, what="the picture to load")
         os88marty.settle(m)
         pw = [w for w in dispcp.win_list(m, S) if w != disk][-1]
         px, py, pwid, _ = dispcp.win_rect(m, S, pw)
@@ -158,10 +171,25 @@ def shots(image, apps, machine, tree=None):
                     x.to_bytes(2, "little"))
             m.run()
             mo.click(dx + 60, dy + 9)                # behind the disk window
-            time.sleep(4)
+            # the Disk window in front (wm_zord), and its repaint finished
+            try:
+                os88marty.until(m, lambda _: top(m, S) == S("wm_wins")
+                                + disk * dispcp.WIN_SIZE, "the Disk window raised",
+                                poll=0.2, limit=20)
+            except os88marty.MartyError:
+                pass
+            os88marty.settle(m)
             cyc, g = _bracket(          # ...and in front
                 m, kbase,
                 lambda: mo.click(x + pwid // 2, py + TITLE_H // 2))
+            # THE POINTER LEAVES BEFORE THE CAPTURE. The raise is a click on
+            # the title bar's centre and the arrow hangs sixteen rows down from
+            # there - its last three into the canvas's first three - and
+            # whether the frame shows it depends on where the capture falls
+            # against the cursor's lazy hide. So one arm carried seventeen
+            # arrow pixels the other did not, in a lane four wide, and the
+            # row reported the DECODER as drawing them.
+            mo.to(*PARK)
             os88marty.settle(m)
             return cyc, g, m.fbuf(card=0)[2]
 

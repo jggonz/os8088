@@ -47,24 +47,40 @@ Exit status is 0 when the box is present, 1 when it is not.
 """
 import os
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import os88marty
+import os88ui
 from os88mouse import Mouse
 from os88geom import drive_pt, row_xy, top, windows, winptr
 
 VOL_B = "B"
-ROW_GAMES = 1               # B: root, sorted: APPS GAMES MEDIA SYSTEM
-ROW_MINES = 3               # GAMES/: `..` is slot 0 (SPEC.md 19.5) and the
-                            # rest sort ARKANOID CYCLONE MINES MISSILE
-                            # SOLITAIR TAMEGRAM. It was 2 and CYCLONE landed
-                            # in front of MINES afterwards, so this launched
-                            # the wrong game and reported "Minesweeper did not
-                            # launch" - a row ORDINAL is exactly what SPEC.md
-                            # 19.4 says nothing may be built on
+# The GAMES folder and MINES in it are found BY NAME in the window's own
+# listing. They were row ordinals (1 and 3), and an ordinal is exactly what
+# SPEC.md 19.4 says nothing may be built on: a package landing in front of
+# MINES made this launch the wrong game and report "Minesweeper did not
+# launch", which it did twice.
+
+
+def up(m, cond, what, limit=60):
+    """Wait for `cond()` on the GUEST's clock. A miss is left to the caller,
+    which names it in its own words. No `settle` after it: once Minesweeper
+    is up its window animates and the screen never stops."""
+    try:
+        os88marty.until(m, lambda _m: cond(), what, poll=0.3, limit=limit)
+    except os88marty.MartyError:
+        pass
+
+
+def row_named(ui, win, name):
+    """The visible row of the entry called `name` (or `name`.EXT) in `win`,
+    or None while the window's listing does not hold it yet."""
+    for i, (nm, _) in enumerate(ui.listing(win)):
+        if nm.upper() == name or nm.upper().split(".")[0] == name:
+            return i - ui.scroll(win)
+    return None
 
 
 def named(m, title):
@@ -133,9 +149,12 @@ def main():
                           apps=os.path.join(imgs, "apps360.img"),
                           machine=machine) as m:
         mo = Mouse(marty=m)
+        ui = os88ui.UI(m, verbose=False, mouse=mo)
 
         # 1. a Disk window on B:
-        mo.dblclick(*drive_pt(m, VOL_B)); time.sleep(4)
+        mo.dblclick(*drive_pt(m, VOL_B))
+        up(m, lambda: named(m, "Disk"), "the Disk window")
+        os88marty.settle(m)             # the reference is pixels, taken next
         disk = named(m, "Disk")
         if not disk:
             print("growraise: no Disk window opened"); return 2
@@ -152,8 +171,15 @@ def main():
               % (rect, sum(1 for p in want if p), len(want)))
 
         # 2. Minesweeper, out of GAMES/, which opens ON TOP of it
-        mo.dblclick(*row_xy(disk, ROW_GAMES)); time.sleep(4)
-        mo.dblclick(*row_xy(slot(m, ds), ROW_MINES)); time.sleep(12)
+        mo.dblclick(*row_xy(disk, row_named(ui, disk, "GAMES")))
+        up(m, lambda: row_named(ui, slot(m, ds), "MINES") is not None,
+           "the GAMES folder's listing")
+        r = row_named(ui, slot(m, ds), "MINES")
+        if r is None:
+            print("growraise: no MINES in %r" % (ui.listing(slot(m, ds)),))
+            return 2
+        mo.dblclick(*row_xy(slot(m, ds), r))
+        up(m, lambda: named(m, "Mines"), "Minesweeper")
         mines = named(m, "Mines")
         if not mines:
             print("growraise: Minesweeper did not launch"); return 2
@@ -165,9 +191,10 @@ def main():
         #    path into wm_draw_win, which has always drawn the grow box.
         disk = slot(m, ds)
         dx = disk.x + disk.w + 8 - mines.x       # clear of the Disk window
+        was = mines.x
         mo.drag(mines.x + mines.w // 2, mines.y + 6,
                 mines.x + mines.w // 2 + dx, mines.y + 6)
-        time.sleep(4)
+        up(m, lambda: slot(m, ms).x != was, "Minesweeper to move")
         disk, mines = slot(m, ds), slot(m, ms)
         print("growraise: moved  %r" % (mines,))
         over = not (mines.x > disk.x + disk.w or mines.x + mines.w < disk.x
@@ -177,7 +204,13 @@ def main():
             return 2
 
         # 4. ...and call the Disk window to the front by its title bar
-        mo.click(disk.x + disk.w // 2, disk.y + 6); time.sleep(3)
+        mo.click(disk.x + disk.w // 2, disk.y + 6)
+        # the raise AND its repaint, which is what the grab below reads: the
+        # z-order first, then the corner itself holding still. Not `settle` -
+        # Minesweeper's clock keeps the rest of the screen moving
+        up(m, lambda: winptr(m, slot(m, ds)) == top(m), "the raise")
+        os88marty.quiesce(m, lambda: grab(pixels(m)[2], rect), guest=0.5,
+                          what="the grow box's corner to repaint")
 
         disk = slot(m, ds)
         if winptr(m, disk) != top(m):

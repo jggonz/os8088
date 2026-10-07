@@ -1,0 +1,74 @@
+diff --git a/crates/marty_core/src/cpu_vx0/cpu.rs b/crates/marty_core/src/cpu_vx0/cpu.rs
+index 01b01f56..2dd2080e 100644
+--- a/crates/marty_core/src/cpu_vx0/cpu.rs
++++ b/crates/marty_core/src/cpu_vx0/cpu.rs
+@@ -121,6 +121,7 @@ impl Cpu for NecVx0 {
+         // Reset into native mode.
+         // Set the mode flag to native (set)
+         self.flags |= CPU_FLAG_MODE;
++        self.md_write_enable = false; // os8088: reset locks MD
+         // Set the cpu type for native disassembly.
+         self.exit_emulation_mode();
+ 
+diff --git a/crates/marty_core/src/cpu_vx0/execute_8080.rs b/crates/marty_core/src/cpu_vx0/execute_8080.rs
+index 5238445a..6ad4df2a 100644
+--- a/crates/marty_core/src/cpu_vx0/execute_8080.rs
++++ b/crates/marty_core/src/cpu_vx0/execute_8080.rs
+@@ -644,6 +644,7 @@ impl NecVx0 {
+                                     Mnemonic::I8080(mnem) if matches!(mnem, Mnemonic8080::RETEM) => {
+                                         self.ret(true);
+                                         self.pop_flags();
++                                        self.md_write_enable = false; // os8088: RETEM closes MD
+                                         // TODO: Does RETEM itself control leaving emulation mode or is it simply the 
+                                         //       status of the MD bit? If the latter, we should probably move enter/exit
+                                         //       emulation mode to pop_flags().
+diff --git a/crates/marty_core/src/cpu_vx0/execute_extended.rs b/crates/marty_core/src/cpu_vx0/execute_extended.rs
+index 96dc1892..fa34f98f 100644
+--- a/crates/marty_core/src/cpu_vx0/execute_extended.rs
++++ b/crates/marty_core/src/cpu_vx0/execute_extended.rs
+@@ -431,6 +431,7 @@ impl NecVx0 {
+                 // It's important to do the interrupt before the mode change, so that the mode 
+                 // flag is preserved.
+                 self.sw_interrupt(irq);
++                self.md_write_enable = true; // os8088: BRKEM opens MD
+                 self.enter_emulation_mode();
+                 jump = true;
+             }
+diff --git a/crates/marty_core/src/cpu_vx0/mod.rs b/crates/marty_core/src/cpu_vx0/mod.rs
+index a59aa98e..a2b67ae6 100644
+--- a/crates/marty_core/src/cpu_vx0/mod.rs
++++ b/crates/marty_core/src/cpu_vx0/mod.rs
+@@ -506,6 +506,11 @@ pub struct NecVx0 {
+     //ip:    u16,
+     flags: u16,
+     emulation_mode: bool,
++    // os8088: the MD flag's write enable. A V20 write-protects MD in native
++    // mode, so POPF and IRET cannot change it; BRKEM opens the protection for
++    // the length of an emulation session (an interrupt taken in 8080 mode
++    // pushes MD=0 and its RETI has to restore it) and RETEM closes it again.
++    md_write_enable: bool,
+ 
+     address_bus: u32,
+     address_latch: u32,
+diff --git a/crates/marty_core/src/cpu_vx0/stack.rs b/crates/marty_core/src/cpu_vx0/stack.rs
+index 255df5e5..8ebdd14b 100644
+--- a/crates/marty_core/src/cpu_vx0/stack.rs
++++ b/crates/marty_core/src/cpu_vx0/stack.rs
+@@ -230,8 +230,17 @@ impl NecVx0 {
+         let int_was_set = self.get_flag(Flag::Interrupt);
+ 
+         // Ensure state of reserved flag bits
++        let md_was = self.flags & CPU_FLAG_MODE;
+         self.flags = result & FLAGS_POP_MASK;
+         self.flags |= CPU_FLAGS_RESERVED_ON;
++        // os8088: MD is write-protected outside a BRKEM session. Without this
++        // the classic 8086/286/386 FLAGS probe (clear bits 12-15, read back)
++        // clears MD, reads 0x7000 and calls a V20 a 386; and any IRET frame
++        // built with bit 15 clear - an 8088 program's `push 0x0202 ... iret`
++        // task frame - drops the CPU into 8080 mode.
++        if !self.md_write_enable {
++            self.flags = (self.flags & !CPU_FLAG_MODE) | md_was;
++        }
+ 
+         // Was interrupt flag just set? Set interrupt inhibit.
+         let int_is_set = self.get_flag(Flag::Interrupt);

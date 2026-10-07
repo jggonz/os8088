@@ -43,6 +43,7 @@ import os88mouse
 import os88sym
 import os88geom
 import heapmap
+from os88pkg import PKG_FMT
 import dispcp
 
 KIND_PKG = 0x80         # kernel/instance.inc - a package instance
@@ -70,7 +71,7 @@ P0_OFF = (LD_IMG + 511) // 512 * 512
 P0_IMG, P0_BSS = struct.unpack_from("<HH", pkg, P0_OFF + 8)
 say("build: loader image %d, part 0 at file+%d, its image %d + bss %d = %d"
     % (LD_IMG, P0_OFF, P0_IMG, P0_BSS, P0_IMG + P0_BSS))
-if pkg[P0_OFF:P0_OFF + 2] != b"O8" or pkg[P0_OFF + 2] != 3:
+if pkg[P0_OFF:P0_OFF + 2] != b"O8" or pkg[P0_OFF + 2] != PKG_FMT:
     sys.exit("rehome: part 0 of build/rehome.o88 is not a v3 package image - "
              "nothing below can run (SPEC.md 20.12.10.4)")
 

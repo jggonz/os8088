@@ -25,10 +25,10 @@ a gap nobody is holding.
 import os
 import re
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88build                                               # noqa: E402
+import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -97,16 +97,18 @@ def main():
         m = ui.m
         if not ui.path("B:/REGS.COM"):
             fail("double-clicking REGS.COM opened no window")
-        rows = []
-        end = time.time() + 180.0
-        while time.time() < end:
-            rows = m.screen() or []
-            if any("REGS READY" in r for r in rows):
-                break
-            time.sleep(0.3)
-        else:
+        seen = {"rows": []}
+
+        def ready(_):
+            seen["rows"] = m.screen() or []
+            return any("REGS READY" in r for r in seen["rows"])
+        try:                            # a GUEST-time budget
+            os88marty.until(m, ready, "REGS.COM to finish", poll=0.3,
+                            limit=180.0)
+        except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
-                 % ([r.rstrip() for r in rows if r.strip()][:20],))
+                 % ([r.rstrip() for r in seen["rows"] if r.strip()][:20],))
+        rows = seen["rows"]
         print("dosregs: the bracket's text screen:")
         for r in rows:
             if r.strip():

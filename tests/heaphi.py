@@ -48,7 +48,6 @@ import argparse
 import os
 import struct
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
@@ -138,10 +137,21 @@ def main():
             mo.click(x0 + 40, y0 + CP_I0Y + n * CP_IROWH + 7)
             quiet(m)
 
+        def floppy_quiet():
+            M.quiesce(m, lambda: m.disk().get("reads"), guest=1.5,
+                      what="the floppy to go quiet")
+
         def drvrow(r):
             mo.click(x0 + CP_RX + 40,
                      y0 + CP_DBY1 + r * CP_DROWH + CP_DROWH // 2)
-            time.sleep(8)                       # the load is a floppy read
+            # the load is a floppy read: the row's segment is written at the
+            # claim, and the load is over when the floppy goes quiet after it
+            try:
+                M.until(m, lambda _: seg(r), "driver row %d to claim" % r,
+                        poll=0.1, limit=20.0)
+                floppy_quiet()
+            except M.MartyError:
+                pass                            # ...the caller's exit says so
             quiet(m)
 
         def seg(r):
@@ -159,7 +169,7 @@ def main():
 
         nst = m.read(m.sym("cp_nst"), 1)[0]     # the driver pages follow the
         item(nst + 1)                           # static rows: HDD then RD
-        time.sleep(10)                          # the first paint READS the
+        floppy_quiet()                          # the first paint READS the
         quiet(m)                                # page image off the floppy
         mp = heapmap.Map(q, sym)
 

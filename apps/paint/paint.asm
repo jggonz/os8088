@@ -12619,7 +12619,7 @@ pt_num:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; pt_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2)
+; pt_about - the OSAPI_ABOUT_SET handler (slot 0x018A, SPEC.md 12.2)
 ; in:  SI = our window; UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ;
@@ -13092,7 +13092,7 @@ pt_qcompose:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1, API 0x0468)
+; pt_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1, API 0x0362)
 ; in:  SI = our window; the UI task, gfx lock HELD
 ; out: CF = 0 close me, CF = 1 not yet
 ;

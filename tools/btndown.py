@@ -19,18 +19,21 @@ a redraw that is undone by an XOR, both leave a button that looks pressed for
 the rest of the session, and both would pass an "it inverts" check.
 
 It navigates rather than being handed a window, so it also happens to be the
-only end-to-end launch test in tools/: drive zone, APPS, CALC.O88.
+only end-to-end launch test in tools/: B:'s drive zone, then CALC.O88 - at the
+root of the office disk it ships on (SPEC.md 24.6), or inside an APPS/ folder
+on a disk that has one, found by name either way.
 """
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import os88marty
+import os88ui
 from os88marty import MartyError
 from os88mouse import Mouse
+from os88geom import drive_pt
 
 W_FLAGS, W_X, W_Y, W_W, W_H = 0, 2, 4, 6, 8
 from os88geom import WIN_SIZE   # NOT a local copy: os88geom is
@@ -40,9 +43,9 @@ from os88geom import WIN_SIZE   # NOT a local copy: os88geom is
                                 # 28 -> 30 on the next run
 
 # The Disk window's list rows: 16px pitch from the first row's centre, which
-# is fm_layout's geometry seen from outside. The root of the system disk sorts
-# APPS first (SPEC.md 19.4), and APPS holds `..` then CALC.O88 (SPEC.md 19.5's
-# synthesized parent is always slot 0).
+# is fm_layout's geometry seen from outside. WHICH row is read BY NAME out of
+# the window's own listing (os88ui.entry) - an ordinal is what SPEC.md 19.4
+# says nothing may be built on.
 ROW0_DY, ROW_H = 46, 16
 
 
@@ -89,7 +92,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--apps", default="build/office360.img",
+                    help="a disk with CALC.O88 on it: the office disk "
+                         "(SPEC.md 24.6) since apps360 stopped carrying it")
     ap.add_argument("--addr", default="127.0.0.1:9001")
     a = ap.parse_args()
 
@@ -103,19 +108,46 @@ def main():
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           addr=a.addr) as m:
         mo = Mouse(marty=m)
+        ui = os88ui.UI(m, verbose=False, mouse=mo)
         vt = m.video()["type"]
         mono = vt in ("cga", "mda", "herc")
         print("machine: %s   card %s" % (a.machine, vt))
 
-        wide = (m.vram()[0] if mono else m.fbuf()[0])
-        mo.dblclick(wide - 44, 46)              # the first drive zone
-        time.sleep(3)
+        def wait(cond, what):
+            os88marty.until(m, lambda _: cond(), what, poll=0.1, limit=60)
+
+        def still(rect):
+            """The rect's pixels once they stop changing - the redraw an
+            edge or a key set off, and not an idle box's seconds of it."""
+            return list(os88marty.quiesce(
+                m, lambda: tuple(Fb(m, mono).bits(*rect)), guest=0.25,
+                what="the pixels to settle"))
+
+        def row(name):
+            return ROW0_DY + ROW_H * (ui.entry(name)[0] - ui.scroll())
+
+        def top_or_0():
+            try:
+                return top_window(m)
+            except MartyError:
+                return 0
+
+        def has(name):
+            return any(n.upper() == name for n, _ in ui.listing())
+
+        mo.dblclick(*drive_pt(m, "B"))          # the apps drive's zone
+        wait(lambda: top_or_0() and ui.listing(), "the Disk window")
         disk = top_window(m)
         dx, dy = _word(m, disk + W_X), _word(m, disk + W_Y)
-        mo.dblclick(dx + 57, dy + ROW0_DY)      # APPS
-        time.sleep(4)
-        mo.dblclick(dx + 57, dy + ROW0_DY + ROW_H)      # CALC.O88
-        time.sleep(9)
+        if not has("CALC.O88"):
+            mo.dblclick(dx + 57, dy + row("APPS"))
+            wait(lambda: has("CALC.O88"), "an APPS folder holding CALC.O88")
+        mo.dblclick(dx + 57, dy + row("CALC.O88"))
+        try:                                    # the launch, then its paint
+            wait(lambda: top_window(m) != disk, "Calculator's window")
+            os88marty.settle(m)
+        except MartyError:
+            pass                                # ...refused just below
 
         rec = top_window(m)
         if rec == disk:
@@ -143,8 +175,7 @@ def main():
         # --- 1. a keypad button draws DOWN under the press -----------------
         mo.to(kx, ky)
         mo._edge(True)
-        time.sleep(1.0)
-        held = Fb(m, mono).bits(*content)
+        held = still(content)
         moved = sum(1 for p, q in zip(before, held) if p != q)
         check("a keypad button changes under the press",
               moved > 100,
@@ -163,8 +194,7 @@ def main():
         # --- 3. the release ON the button leaves it upright ----------------
         mo._edge(False)
         mo.to(*park)
-        time.sleep(2.0)
-        after = Fb(m, mono).bits(*content)
+        after = still(content)
         # The key was pressed, so the DISPLAY has changed - that is the app
         # working. What must be back is the BUTTON, so the comparison is the
         # keypad band only, below the display.
@@ -184,11 +214,9 @@ def main():
         # exactly these three, which is what makes them worth their runtime.
         mo.to(kx, ky)
         mo._edge(True)
-        time.sleep(0.9)
-        down = Fb(m, mono).bits(*content)
+        down = still(content)
         mo.to(cx - 40, ky, l=True)      # off the key, STILL HELD
-        time.sleep(1.2)
-        away = Fb(m, mono).bits(*content)
+        away = still(content)
         check("the pressed key comes UP when the pointer slides off",
               sum(1 for p, q in zip(pre_track, away) if p != q) <
               sum(1 for p, q in zip(pre_track, down) if p != q) // 4,
@@ -196,18 +224,16 @@ def main():
               "it on" % (sum(1 for p, q in zip(pre_track, away) if p != q),
                          sum(1 for p, q in zip(pre_track, down) if p != q)))
         mo.to(kx, ky, l=True)           # ...and back on, STILL HELD
-        time.sleep(1.2)
-        back = Fb(m, mono).bits(*content)
+        back = still(content)
         check("...and goes back DOWN on sliding back on",
               sum(1 for p, q in zip(down, back) if p != q) == 0,
               "%d pixels differ from the first held frame"
               % sum(1 for p, q in zip(down, back) if p != q))
         mo.to(cx - 40, ky, l=True)      # off again, then release: CANCELLED
-        time.sleep(1.0)
+        still(content)
         mo._edge(False)
         mo.to(*park)
-        time.sleep(2.0)
-        endt = Fb(m, mono).bits(*content)
+        endt = still(content)
         check("...and a slide-off release fires nothing",
               endt == pre_track,
               "%d of %d pixels differ from before the gesture"
@@ -222,17 +248,16 @@ def main():
         pre = Fb(m, mono).bits(*content)
         mo.to(kx, ky)
         mo._edge(True)
-        time.sleep(0.8)
+        still(content)
         mo.to(cx - 40, ky, l=True)      # l=True: STILL HELD. A plain `to`
-        time.sleep(1.0)                 # releases and measures the wrong
+        still(content)                  # releases and measures the wrong
                                         # thing. Sideways off the window
                                         # rather than downwards: the CGA
                                         # desktop is 200 rows and a slide
                                         # below the window runs off it
         mo._edge(False)
         mo.to(*park)
-        time.sleep(2.0)
-        post = Fb(m, mono).bits(*content)
+        post = still(content)
         diff = sum(1 for p, q in zip(pre, post) if p != q)
         check("a CANCELLED press leaves the content pixel-identical",
               diff == 0,
@@ -246,8 +271,7 @@ def main():
         # fail. The pointer is parked away from the pad throughout so nothing
         # here can be the mouse arrow.
         mo.to(*park)
-        time.sleep(1.0)
-        idle = Fb(m, mono).bits(*keypad)
+        idle = still(keypad)
         m.key("Digit7", down=True, up=False)
         lit_seen = 0
         for _ in range(6):              # CAL_FLASH is 3 ticks (165ms); sample
@@ -259,8 +283,15 @@ def main():
               lit_seen > 100,
               "%d keypad pixels differed at the peak" % lit_seen)
 
-        # ...and it lets go by itself. A full second is six flash windows.
-        time.sleep(1.5)
+        # ...and it lets go by itself - within what the idle-box pause here
+        # gave it (6.75 guest seconds, forty flash windows), but read the
+        # moment it has
+        try:
+            os88marty.until(m, lambda _: Fb(m, mono).bits(*keypad) == idle,
+                            "the typed key to come back up", poll=0.05,
+                            guest=1.5 * os88marty.GUEST_PACE)
+        except MartyError:
+            pass                        # ...the check below says so
         rested = Fb(m, mono).bits(*keypad)
         check("...and the timer lets it back up with no further input",
               rested == idle,

@@ -286,6 +286,46 @@ def run_once(d, row, timeout=3600):
             time.time() - t0, out[-1500:])
 
 
+# What a row says when it could not RUN, as opposed to running and failing.
+# The distinction is the whole difference between a fact about the tree and a
+# fact about the box, and conflating them is how this tool once answered
+# "minesrc is PRE-EXISTING - not a regression, nothing to bisect" three times
+# running for a row that passes every time it is asked properly: a QEMU
+# orphaned by an earlier run still held the floppy image, so `make test` died
+# in 0.4 s with `Failed to get "write" lock` and the row never booted at all.
+# A confident verdict off a row that never started is worse than no verdict,
+# because the next person believes it and goes looking in the diff.
+CANNOT_RUN = (
+    re.compile(r'Failed to get "write" lock'),
+    re.compile(r"Is another process using the image"),
+    re.compile(r"make test failed"),
+    re.compile(r"cannot create PID file"),
+    re.compile(r"the map describes a DIFFERENT kernel"),
+    re.compile(r"martypc_headless exited at once"),
+    re.compile(r"Address already in use"),
+)
+
+
+def could_not_run(out, secs, row):
+    """Did this run fail, or did it never happen? -> a reason, or None.
+
+    TWO SIGNALS AND EITHER IS ENOUGH. The first is a named harness error
+    above - a held image lock, a stale pidfile, a symbol map describing
+    another kernel, a port somebody else has. The second is the one
+    docs/WRITING-TESTS.md 1 makes about the suite itself: a row that
+    finishes in a few percent of its declared time did not do what it says.
+    An emulator row that is over in under two seconds did not boot a
+    machine, whatever it printed.
+    """
+    for rx in CANNOT_RUN:
+        m = rx.search(out)
+        if m:
+            return m.group(0)
+    if secs < 2.0:
+        return "the row was over in %.1fs - it cannot have booted anything" % secs
+    return None
+
+
 # --------------------------------------------------------------------------
 # 1. RATES - never a side from one run.
 # --------------------------------------------------------------------------
@@ -329,9 +369,43 @@ class Point(object):
         return s
 
 
+def row_wants_alone(row):
+    """Does the registry say this row cannot share the box with itself?
+
+    IT IS ASKED BECAUSE THE ANSWER WAS WRONG WITHOUT IT, and wrong in the one
+    direction that costs a day: `minesrc` came back BAD 3/3 at HEAD *and*
+    3/3 at the base - a confident "PRE-EXISTING, nothing to bisect" - for a
+    row that passes every time it is run by itself. It is `alone=True` in
+    tests/suite.py and the SUITE honours that; this tool did not, so it ran
+    three samples at once. Every QEMU row in this tree opens the same fixed
+    `build/qmp.sock` (tests/ethernet.py), so the three drove ONE machine and
+    all three failed - the exact hazard CLAUDE.md's "a previous session's
+    QEMU may still be running" paragraph is about, manufactured by the
+    instrument rather than found by it.
+
+    So a row that needs the machine to itself gets it here too, and a QEMU
+    row gets it whatever the registry says, because the shared socket is a
+    property of the harness and not of the row.
+    """
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "tests"))
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import suite                                        # noqa: PLC0415
+    except Exception:                                       # noqa: BLE001
+        return False        # no registry, no claim - leave `jobs` alone
+    for r in list(suite.FAST) + list(suite.FULL) + list(suite.SOAK):
+        if r.name == row:
+            return bool(getattr(r, "alone", False)) or "qemu" in r.needs
+    return False
+
+
 def sample_points(row, refs, n, jobs, verbose=False):
     """Build every point, then run every (point, sample) in one pool."""
     pts = [Point(r) for r in refs]
+    if jobs > 1 and row_wants_alone(row):
+        print("os88bisect: %s is alone=True (or a QEMU row, which shares one "
+              "qmp.sock) - sampling ONE at a time, whatever -j says" % row)
+        jobs = 1
     print("os88bisect: %d point(s) x %d run(s) of %s, %d at a time"
           % (len(pts), n, row, jobs))
 
@@ -356,6 +430,15 @@ def sample_points(row, refs, n, jobs, verbose=False):
                 ok, ls, secs, tail = f.result()
             except Exception as e:                       # noqa: BLE001
                 ok, ls, secs, tail = False, ["<ERROR: %s>" % str(e)[:60]], 0, ""
+            why = None if ok else could_not_run(tail, secs, row)
+            if why is not None:
+                # NOT a failure of the row - see CANNOT_RUN above. It is
+                # recorded as the point's error so the verdict reads ERROR
+                # and nothing downstream treats it as a side.
+                p.error = "could not run: %s" % why
+                print("%s  COULD NOT RUN %s%s: %s"
+                      % (RED, p.sha, OFF, why))
+                continue
             p.add(ok, ls)
             if verbose and not ok:
                 print(tail)

@@ -3,7 +3,7 @@
 > **Historical planning document**, kept as the design record for SPEC.md §45.
 > Its two "kernel amendments" — a worker-safe stream and a file read with no
 > 64KB ceiling — both landed, here as well as on the branch it was written for.
-> The second has since been folded away: `dskw_readbig` and slot `0x01E8` are
+> The second has since been folded away: `dskw_readbig` and slot `0x01DF` are
 > retired, and `dskw_read` itself carries the contract this document asked for
 > (SPEC.md §18.4.1). Read every `readbig` below as `dskw_read`.
 > Where it describes memory it describes an arena in paragraphs; this tree has
@@ -33,7 +33,7 @@ file API can deliver a file ≥ 64KB. Both land as SPEC amendments *before* code
   separator-ruled channel columns, position/BPM/speed readouts, instrument list,
   per-channel volume-bar scopes.
 - **Kernel amendment 1 — worker-safe stream verbs + ring mode** (§34/§20.3/§20.6).
-- **Kernel amendment 2 — `dskw_readbig`, API slot 0x01E8** (§18.4/§20.3).
+- **Kernel amendment 2 — `dskw_readbig`, API slot 0x0190** (§18.4/§20.3).
 - **Tooling** — `tools/mkmod.py` (deterministic 5.6KB test MOD), a data-file mode in
   `tools/os88disk.py`, Makefile wiring, `apps/tracker/beverly.mod` (Beverly Hills Cop,
   116,085 bytes, user-supplied) shipped as `BEVERLY.MOD` in the APPS folder.
@@ -95,11 +95,11 @@ hole every few seconds. Ring mode reuses the same three counters as **free-runni
 Estimated delta for 1a+1b+1c: ~200–250 bytes of `.text` (ISR-adjacent; §34.7's section
 rule bars any of it from `.fartext`) against 19,278 bytes of measured `KERN_BUDGET` headroom.
 
-## Kernel amendment 2 — `dskw_readbig` (API slot 0x01E8)
+## Kernel amendment 2 — `dskw_readbig` (API slot 0x0190)
 
 `dskw_read`'s CX is a 16-bit byte count into one ES:BX segment: a file ≥ 65,536 bytes
 is FERR_BIG *unconditionally*, and real-world MODs (BEVERLY.MOD is 116,085 bytes) live
-above it. New op in `kernel/diskw.inc`, reached by packages at slot 0x01E8
+above it. New op in `kernel/diskw.inc`, reached by packages at slot 0x0190
 (`OSAPI_FILE_READBIG`, table becomes 60×8):
 
 - in SI = NUL 8.3 name (marshalled like dskw_read's), **ES = destination base

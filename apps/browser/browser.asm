@@ -2934,7 +2934,7 @@ br_ab3:      db 0                   ; a blank line is a line with no glyphs
 br_ab4:      db 'Contributed by Elendilon', 0
 
 ; -----------------------------------------------------------------------------
-; br_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; br_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; UI task, gfx lock HELD, far-called at our segment
 ; out: nothing; preserves all registers
 ;

@@ -47,8 +47,8 @@
 ASC_HDR      equ 16             ; magic 6 + version + napp + next + 7 reserved
 ASC_ROW      equ 88             ; stem 8 + size 2 + cluster 2 + 4 + icon 64 +
                                 ; the 8-byte document glyph (a VERSION 2 row,
-                                ; SPEC.md 54.3.2 - the kernel reads the
-                                ; 80-byte version 1 too; this writes only 2)
+                                ; SPEC.md 54.3.2 - the only version the
+                                ; kernel reads; version 1 is a cold cache)
 ASC_ROWCLUS  equ 10             ; the DIRECTORY the program lives in
 ASC_ROWICO   equ 16             ; ...the icon's offset inside a row
 ASC_ROWGLY   equ 80             ; ...and the glyph's: all zero = ships none
@@ -337,13 +337,13 @@ hd_ia_row:
 
     ; --- is it a package at all? --------------------------------------------
     ; The same three tests build_assoc makes (tools/os88disk.py): 'O8', version
-    ; 3. Every byte off a disk is hostile (SPEC.md 18.2), and a type-1 entry is
+    ; PKG_FMT. Every byte off a disk is hostile (SPEC.md 18.2), and a type-1 entry is
     ; only the loader's opinion of the NAME and the size.
     push es
     mov es, [hd_iaseg]
     cmp word [es:HIA_SEC], 'O8'
     jne .outes
-    cmp byte [es:HIA_SEC+2], 3
+    cmp byte [es:HIA_SEC+2], PKG_FMT
     jne .outes
     mov al, [es:HIA_SEC+3]
     pop es

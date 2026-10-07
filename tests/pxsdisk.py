@@ -13,16 +13,17 @@ walker - never out of the Makefile's variables, which is the trap SPEC.md
     disks' games (24.5's omission, with 97.9's ground - ASSERTED, since the
     registry's wants= builds build/smallapps360.img for this row), nor on
     combo.img (COMBO_DROP: the 360KB field disk, wants= as well); and
-    apps-all.img, which needs the C toolchain, is checked when it exists;
+    the everything set, which needs the C toolchain, is checked when it exists;
   * the packed file is <= 56KB, the ceiling the Makefile asserts where the
     file is made, read back here off the disk it landed on;
-  * its parts run is under SPEC.md 20.12.7's 128 sectors, decoded out of
-    the package's own part table with tools/os88parts.py - in UNPACKED
-    sectors, which IS the bound (op_load cuts the claim from the unpacked
-    total and refuses at 128 on both sides; OP_COMP does not relieve it):
+  * its parts run is under SPEC.md 20.12.11's OP_SECMAX sectors (128 until
+    the carve passed 64KB), decoded out of the package's own part table with
+    tools/os88parts.py - in UNPACKED sectors, which IS the bound (op_load
+    cuts the claim from the unpacked total and refuses at OP_SECMAX on both
+    sides; OP_COMP does not relieve it):
     68 today where the packed file on the floppy carries ~28, so the figure
     is not the disk's and cannot false-pass. The recipe that makes the
-    file asserts the same (`os88parts.py --run --max-run 128`); this row is
+    file asserts the same (`os88parts.py --run`); this row is
     the read-back off the built tree.
 """
 import os
@@ -85,14 +86,18 @@ def main():
     else:
         print("   (%s not built: `make combo` overflows 354 clusters on main "
               "already, this package dropped; COMBO_DROP names it)" % combo)
-    allimg = "build/apps-all.img"
-    if os.path.exists(allimg):
-        on = has(vol(allimg))
-        check(on and "GAMES" in on[0][0].upper(),
-              "apps-all.img carries %s in GAMES/ (%s)" % (FILE, on))
+    # the everything SET (SPEC.md 19.10): the game is on exactly one disk
+    # of it, in GAMES/, and build/apps-all.list names the disks
+    alllist = "build/apps-all.list"
+    if os.path.exists(alllist):
+        imgs = [l.strip() for l in open(alllist) if l.strip()]
+        ons = [(i, has(vol(i))) for i in imgs]
+        ons = [(i, on) for i, on in ons if on]
+        check(len(ons) == 1 and "GAMES" in ons[0][1][0][0].upper(),
+              "the everything set carries %s in GAMES/ on one disk (%s)"
+              % (FILE, ons))
     else:
-        print("   (%s not built: `make allapps` needs the C toolchain; PLAN 4.4's "
-              "arithmetic: 2,720 + 31 clusters of 2,847)" % allimg)
+        print("   (%s not built: `make allapps` needs the C toolchain)" % alllist)
     # the file itself, and its parts run. THE FILE IS NOT THE IMAGE
     # (CLAUDE.md's PKGZ rule): the 56KB ceiling is about the FILE on the
     # floppy, so `raw` is what it reads; the parts table is decoded out of
@@ -110,7 +115,8 @@ def main():
     run = os88parts.run_sectors(rows)       # the recipe's own reader
     print("   parts: %s" % ", ".join("%d:%s len %d flags %d" % (i, "SEG" if r["kind"] == 0
           else "ASSET", r["len"], r["flags"]) for i, r in enumerate(rows)))
-    check(run < 128, "the eager run is %d UNPACKED sectors, under 128 (20.12.7)" % run)
+    lim = os88parts.EQU["OP_SECMAX"]
+    check(run < lim, "the eager run is %d UNPACKED sectors, under %d (20.12.11)" % (run, lim))
     if FAIL:
         print("pxsdisk: FAIL (%d)" % len(FAIL))
         return 1

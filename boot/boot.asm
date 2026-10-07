@@ -151,6 +151,11 @@ DPT_AT       equ 0x0580         ; 0000:0580 - our copy of the diskette
                                 ; claim reaches it
 
 BPB_END      equ 62             ; where a DOS BPB stops and our code starts
+BS_CYLASK    equ 509            ; SPEC.md 31.14: the Floppy page's Cylinder,
+                                ; one byte in front of the signature. This
+                                ; sector never reads it - stage 2 does, `ss:`,
+                                ; at the 286 gate - and CTRL.DRV writes it.
+                                ; Mirrored in boot/boot2.asm
 
 ; The first 62 bytes are NOT ours. tools/os88disk.py writes a full FAT12 BPB
 ; over them when it builds the image (SPEC.md 19.3), because the OS disk is a
@@ -576,5 +581,9 @@ msg_blob:   db 'Loader checksum', 0
 %endif
 %endif
 
-    times 510 - ($ - $$) db 0
+    times BS_CYLASK - ($ - $$) db 0
+bs_cylask:  db 0                ; 1 = open the 286 gate (SPEC.md 31.14), so
+                                ; the canary decides there too. 0 in every
+                                ; image the build writes; only the Control
+                                ; Panel ever sets it, on the system disk
     dw 0xAA55

@@ -212,6 +212,29 @@ def requirements():
                 "the C packages - Weave, RunCPM, the C64, cword. Eleven rows.",
                 "tools/setup-cc.sh"))
 
+    req.append(("pil", os88build.have_pil(),
+                "pxsshots, which writes PIXELSTEIN 3D's photographs through "
+                "Pillow and used to FAIL on the ImportError.",
+                "make deps      (installs python3-pil)"))
+
+    req.append(("ffmpeg", bool(shutil.which("ffmpeg"))
+                and bool(shutil.which("ffprobe"))
+                and os88build.have_numpy(),
+                "videnc and vencgui, the video encoder's gates (SPEC.md 98.2.1).",
+                "apt-get install -y ffmpeg python3-numpy   (and where python3 "
+                "is not the system one: python3 -m pip install numpy)"))
+
+    req.append(("mtools", bool(shutil.which("mcopy"))
+                and bool(shutil.which("mattrib")),
+                "instkeep, which plants a user's files on the fixture "
+                "partition before a kept install (SPEC.md 52.10.15).",
+                "apt-get install -y mtools"))
+
+    req.append(("dosbox", bool(shutil.which("dosbox")),
+                "czdos, which runs OS88CZ.COM under a real DOS (SPEC.md "
+                "20.17.4).",
+                "apt-get install -y dosbox"))
+
     # THE FOUR DISKS `all` DELIBERATELY DOES NOT BUILD.  This is the item the
     # pass-3 soak found by hand after fifteen runs had skipped on it, and the
     # reason each is absent is a different deliberate decision (SPEC.md 78.9
@@ -794,15 +817,31 @@ def _frozen_targets(a):
                        for f in getattr(r, "wants", ())})
     except Exception:                                       # noqa: BLE001
         arts = []
-    # THE SHIPPED SET IS SPELLED OUT rather than asked for as `all`, because
-    # `all` ends in `checkdocs` and `test-fast` - gates, not artefacts, and
-    # ones that would run against the tree for no reason and fail it for
-    # somebody else's. These are `all`'s own image list (Makefile), which is
-    # every kernel, package and driver the rows read, since each image names
-    # them as prerequisites.
-    shipped = ("os8088.img", "os8088-120.img", "os8088-720.img",
-               "os8088-360.img", "apps.img", "apps120.img", "apps720.img",
-               "apps360.img", "media360.img", "wire.o88")
+    # THE SHIPPED SET IS NAMED rather than asked for as `all`, because `all`
+    # ends in `checkdocs` and `test-fast` - gates, not artefacts, and ones
+    # that would run against the tree for no reason and fail it for somebody
+    # else's. It is the Makefile's own $(SHIPIMGS), which is every kernel,
+    # package and driver the rows read, since each image names them as
+    # prerequisites - READ OUT OF THE MAKEFILE by t_volsig's reader and not
+    # restated. A restated copy went stale here: it stopped at media360.img
+    # when the three category disks (SPEC.md 24.6) joined $(SHIPIMGS), so a
+    # scoped `start -k pxsstate` built a tree with no games360.img and the
+    # row died in launch() on a FileNotFoundError naming the tree - a full
+    # soak never saw it, because some OTHER selected row happened to declare
+    # the disk. The tuple below is the fallback for a Makefile that cannot
+    # be read, not a second authority.
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "tests", "unit"))
+        from t_volsig import ship_images
+        imgs = tuple(ship_images())
+    except Exception:                                       # noqa: BLE001
+        imgs = ()
+    if len(imgs) < 8:
+        imgs = ("os8088.img", "os8088-120.img", "os8088-720.img",
+                "os8088-360.img", "apps.img", "apps120.img", "apps720.img",
+                "apps360.img", "media360.img", "office360.img",
+                "network360.img", "games360.img")
+    shipped = imgs + ("wire.o88",)
     return shipped + tuple(a[len("build/"):] for a in arts
                            if a.startswith("build/"))
 
@@ -941,12 +980,26 @@ def start(a):
     if not a.shared_build:
         sys.path.insert(0, os.path.join(ROOT, "tools"))
         import os88build
+        import buildnum
+        # THE BUILD NUMBER IS PINNED BEFORE THE TREE IS BUILT, and the
+        # tree's own `make` is handed it (tools/buildnum.py reads the pin).
+        # Read afterwards, a commit landing during a cold tree's build - which
+        # is minutes - pinned the run at N+1 against a tree built at N, the
+        # very skew the pin below exists to prevent.
+        num, _ = buildnum.build_number()
+        was = os.environ.get("OS88_BUILDNUM")
+        os.environ["OS88_BUILDNUM"] = str(num)
         try:
             frozen = os88build.tree(targets=_frozen_targets(a))
         except RuntimeError as e:
             print("%sos88soak: could not build the run's own tree:%s\n%s"
                   % (RED, OFF, str(e)[-1200:]), file=sys.stderr)
             return 1
+        finally:
+            if was is None:
+                os.environ.pop("OS88_BUILDNUM", None)
+            else:
+                os.environ["OS88_BUILDNUM"] = was
         # BOTH VARIABLES, and they are not the same claim (os88build's
         # `tree_root`): OS88_BUILD says which kernel a symbol map describes -
         # which three registry rows override with `build/smallk` - and
@@ -955,6 +1008,12 @@ def start(a):
         # `build/smallk`, and five rows died on a missing image the tree had.
         env["OS88_BUILD"] = frozen.dir
         env["OS88_TREE"] = frozen.dir
+        # ...and the BUILD NUMBER it froze at (tools/buildnum.py): a row that
+        # rebuilds a declared artefact in the tree later would otherwise take
+        # the live checkout's commit count, and one commit mid-run put the
+        # tree's kernel.bin a build ahead of its own images. `num` is the
+        # one the tree was just built with, above.
+        env["OS88_BUILDNUM"] = str(num)
         print("os88soak: the run reads %s, so build/ is yours while it runs"
               % os.path.relpath(frozen.dir, ROOT))
     else:

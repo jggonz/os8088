@@ -374,6 +374,13 @@ def main():
             m.write(base + symbols[name] + offset,
                     int(value).to_bytes(size, "little"))
 
+        def fright_trigger():
+            """PMC_T_FRIGHT0's index, read out of pmc_time.c's own enum."""
+            src = open(os.path.join(ROOT, "apps", "paccman", "pmc_time.c")).read()
+            body = src[src.index("enum {\n    PMC_T_INTRO"):]
+            names = re.findall(r"^\s+(PMC_T_\w+)\s*[,=]", body, re.M)
+            return names.index("PMC_T_FRIGHT0")
+
         def unfrozen(limit=40):
             for _ in range(limit):
                 boundary()
@@ -389,6 +396,20 @@ def main():
         # the first, second, third and fourth of a fright; this is the first,
         # so the score must rise by exactly 200 and the ghost must become
         # EYES.
+        #
+        # THE FRIGHT IS STARTED, NOT ONLY NAMED. pmc_ghost_state recomputes a
+        # free ghost's state EVERY tick - FRIGHTENED while its trigger
+        # PMC_T_FRIGHT0 + i is running, scatter or chase otherwise - so a bare
+        # `gstate = 3` lasted exactly until the next state update. Whether the
+        # collision check reached it first depended on where Pac-Man stood
+        # against a tile boundary, which the earlier legs leave wherever the
+        # game happened to be: one run in a soak turned the ghost back to
+        # CHASE on Pac-Man's own tile, he died, the death freeze held every
+        # remaining attempt, and the row reported the SCORING as broken. So
+        # the trigger is fired at the current tick, which is what eating a
+        # pill does (pmc_start(PMC_T_FRIGHT0 + i)), and the ghost is
+        # frightened for the level's whole fright time.
+        fright0 = fright_trigger()
         before = score_of()
         got = None
         for _ in range(12):
@@ -397,6 +418,8 @@ def main():
             put("_pmc_ax", px, offset=2)        # ghost 0 onto Pac-Man's tile
             put("_pmc_ay", py, offset=2)
             put("_pmc_gstate", 3, size=1)       # PMC_GS_FRIGHTENED
+            put("_pmc_trg_lo", read("_pmc_tick_lo", 2), offset=2 * fright0)
+            put("_pmc_trg_hi", read("_pmc_tick_hi", 2), offset=2 * fright0)
             m.advance(frames=20)
             boundary()
             m.bp_exec()

@@ -47,27 +47,41 @@ The machine wants a Sound Blaster in it, which in a container means
 `os8088_5150_sb_gla` - the IBM-ROM `os8088_5150_sb` needs a ROM this tree
 cannot ship.
 """
-import sys, os, re, time, subprocess, argparse
+import sys, os, re, subprocess, argparse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 os.chdir(ROOT)
 import os88marty, os88mouse, os88sym, dispcp                      # noqa: E402
+from os88pkg import PKG_FMT                                       # noqa: E402
+from os88drv import DRV_VER                                       # noqa: E402
 
 GUEST_HZ = 4772728.0
-LST = "/tmp/os88rate.lst"
 RATE_NAME = {0: "5,500 (XT mode's own)", 1: "4,000", 2: "11,000"}
+
+
+# A caller that wants the LISTING itself (tests/trklcd.py reads immediates
+# out of it) names a path here; otherwise each call's listing is private and
+# deleted with its directory.
+LST = None
 
 
 def symbols(defines=("TRKLOG",)):
     """(name -> offset) for labels, and '@name' -> offset for the bss equs."""
-    cmd = ["nasm", "-f", "bin", "-w+error", "-I", "apps/", "-I", "apps/tracker/",
-           "-I", "tests/", "-o", "/tmp/os88rate.bin", "-l", LST]
-    cmd += ["-D" + d for d in defines] + ["apps/tracker/tracker.asm"]
-    subprocess.run(cmd, check=True)
+    # A PRIVATE DIRECTORY PER CALL. Both outputs were fixed /tmp paths, so
+    # two Tracker rows assembling at once in a soak read each other's
+    # half-written listing and died on a KeyError for a symbol that is there.
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="os88rate-") as td:
+        lst = LST or os.path.join(td, "tracker.lst")
+        cmd = ["nasm", "-f", "bin", "-w+error", "-I", "apps/", "-I",
+               "apps/tracker/", "-I", "tests/",
+               "-o", os.path.join(td, "tracker.bin"), "-l", lst]
+        cmd += ["-D" + d for d in defines] + ["apps/tracker/tracker.asm"]
+        subprocess.run(cmd, check=True)
+        lines = open(lst).read().splitlines()
     out, syms, pending, last = {}, [], [], None
-    lines = open(LST).read().splitlines()
     for L in lines:
         m = re.match(r"\s*\d+\s+([0-9A-F]{8})\s", L)
         addr = int(m.group(1), 16) if m else None
@@ -122,9 +136,9 @@ def scan(m):
             continue
         ver, sz = buf[o + 2], int.from_bytes(buf[o + 8:o + 10], "little")
         name = buf[o + 16:o + 32].split(b"\0")[0].decode("latin1").strip()
-        if ver == 3 and name == "TRACKER":
+        if ver == PKG_FMT and name == "TRACKER":
             seg = (0x40000 + o) >> 4
-        elif ver == 4:
+        elif ver == DRV_VER:
             drv.append((name, (0x40000 + o) >> 4, sz))
     return seg, drv
 
@@ -175,7 +189,9 @@ def main():
                          "the reads then land on the wrong words - which reads "
                          "as XT mode being off on a machine that armed it")
     ap.add_argument("--secs", type=float, default=60.0,
-                    help="sampling span per rate, in HOST seconds")
+                    help="sampling span per rate, in seconds of an IDLE "
+                         "box - spent as GUEST time (x os88marty.GUEST_PACE), "
+                         "so a loaded host samples the same span of music")
     ap.add_argument("--rates", default="0,2",
                     help="K indices: 0 = 5,500  1 = 4,000  2 = 11,000")
     ap.add_argument("--fullscreen", action="store_true",
@@ -213,15 +229,23 @@ def main():
         wx, wy, _, _ = dispcp.win_rect(m, S, slot)
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "BEVERLY.MOD")
 
-        seg = None
-        for _ in range(60):
-            time.sleep(2)
-            seg, drv = scan(m)
-            if seg:
-                break
+        try:
+            os88marty.until(m, lambda mm: scan(mm)[0], "Tracker to load",
+                            poll=2, limit=120)
+        except os88marty.MartyError:
+            pass
+        seg, drv = scan(m)
         if not seg:
             print("FAIL: Tracker never loaded"); return 1
-        time.sleep(25)                    # 116KB of module off a 360KB floppy
+        # 116KB of module off a 360KB floppy: its own flag says when, and the
+        # floppy going quiet says it on a listing without one
+        if "@mp_loaded" in P:
+            os88marty.until(m, lambda mm: mm.read(seg * 16 + P["@mp_loaded"],
+                                                  1)[0],
+                            "the module to load", poll=1.0, limit=120)
+        else:
+            os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=2.0,
+                              budget=300.0, what="the module's reads")
         base = seg * 16
         imgend = int.from_bytes(m.read(base + 8, 2), "little")
 
@@ -245,27 +269,51 @@ def main():
                 for _ in range(3):
                     if b("trk_xhi") == want:
                         break
-                    m.key("KeyR"); time.sleep(1.5)
+                    m.key("KeyR")
+                    try:
+                        os88marty.until(m, lambda _: b("trk_xhi") == want,
+                                        "R", poll=0.25,
+                                        guest=1.5 * os88marty.GUEST_PACE)
+                    except os88marty.MartyError:
+                        pass            # ...press again
                 else:
                     raise SystemExit("R never reached trk_xhi %d" % want)
             else:
                 for _ in range(6):        # K is windowed-only: set it FIRST
                     if b("tlog_xr") == ki:
                         break
-                    m.key("KeyK"); time.sleep(1.0)
+                    m.key("KeyK")
+                    try:
+                        os88marty.until(m, lambda _: b("tlog_xr") == ki,
+                                        "K", poll=0.25,
+                                        guest=1.0 * os88marty.GUEST_PACE)
+                    except os88marty.MartyError:
+                        pass            # ...press again
                 else:
                     raise SystemExit("K never reached index %d" % ki)
             if a.fullscreen:
-                m.key("KeyF"); time.sleep(4)
+                m.key("KeyF")
+                os88marty.until(m, lambda _: b("trk_fs"), "the text screen",
+                                poll=0.1, limit=30)
+            was = w("trk_consumed")
             m.key("Enter")                # play
-            time.sleep(12)                # ...past the pre-roll (SPEC.md 45.18)
+            # ...past the pre-roll (SPEC.md 45.18): the card consuming is the
+            # ring having staged it, and two guest seconds more lets the lead
+            # reach its running level before a single sample is taken
+            os88marty.until(m, lambda _: w("trk_consumed") != was,
+                            "the card to start consuming", poll=0.1,
+                            limit=60)
+            os88marty.guest_sleep(m, 2.0)
 
             rate = w("mp_mixrate")
             c0, t0 = w("trk_consumed"), m.cmd(cmd="status")["cycles"]
             hits, tot, leads, wraps, last = {}, 0, [], 0, c0
-            t = time.time()
-            while time.time() - t < a.secs:
-                ip = m.cmd(cmd="status")["flat_ip"]
+            span = a.secs * os88marty.GUEST_PACE * GUEST_HZ
+            while True:
+                st = m.cmd(cmd="status")
+                if st["cycles"] - t0 >= span:
+                    break
+                ip = st["flat_ip"]
                 tot += 1
                 for n, sg, sz in drv:
                     if sg * 16 <= ip < sg * 16 + sz:
@@ -319,9 +367,13 @@ def main():
             print("  ...by symbol:")
             for n, c in sorted(hits.items(), key=lambda kv: -kv[1])[:18]:
                 print("    %-28s %5.1f%%" % (n, 100.0 * c / tot))
-            m.key("Space"); time.sleep(3)         # stop, so K can take effect
+            m.key("Space")                # stop, so K can take effect
+            os88marty.quiesce(m, lambda: w("trk_consumed"), guest=0.5,
+                              what="the card to stop consuming")
             if a.fullscreen:
-                m.key("Escape"); time.sleep(4)    # ...and windowed, so K works
+                m.key("Escape")           # ...windowed, so K works
+                os88marty.until(m, lambda _: not b("trk_fs"),
+                                "the windowed screen", poll=0.1, limit=30)
     return 0
 
 

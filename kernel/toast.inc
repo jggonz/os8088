@@ -6,11 +6,11 @@
 ; applications had each re-rolled their own and no two agreed about where it
 ; went, how long it lived or who erased it.
 ;
-; It is NOT ui_note (SPEC.md 54.4.1). That is a WINDOW, for a failure the user
-; has to acknowledge, and it stays until it is dismissed. This is for an
-; operation that just finished, usually successfully, that nobody needs to
-; acknowledge - so it says its piece and goes away on its own. A notice you
-; can miss is not a notice; a toast you have to dismiss is a dialog.
+; It was NOT ui_note (SPEC.md 54.4.1), the notice WINDOW a failure the user
+; had to acknowledge once raised - and since kernel size pass 4 there is no
+; ui_note: a failed launch (the Task Manager's, the Wire zone's, a document's
+; program not found) is a toast like any other verdict, says its piece and
+; goes away on its own.
 ;
 ; **IT LIVES IN THE MENU BAR, IN THE CLOCK'S FIELD** (SPEC.md 59.8) - and
 ; that placement is the whole design rather than a decoration. Two properties
@@ -147,7 +147,7 @@ toast_scn:   dw 0               ; and how many cells it takes there - 0 meaning
                                 ; drv_boot, before any init routine of ours
 
 ; -----------------------------------------------------------------------------
-; toast_show - say one line in the menu bar for a few seconds (API 0x0380)
+; toast_show - say one line in the menu bar for a few seconds (API 0x02AA)
 ; in:       ES:SI = a NUL string, CX = ticks to live (0 = TOAST_TICKS)
 ; out:      CF = 0 taken, CF = 1 refused - and NOTHING refuses today, the
 ;           widget interlock below having been the only one. The flag stays in
@@ -409,54 +409,6 @@ toast_arm:
     ret
 
 ; -----------------------------------------------------------------------------
-; toast_gapend - the gap's right edge as the EYE sees it: the cell the clock's
-;                first GLYPH lands in (SPEC.md 59.9.1)
-; in:       nothing
-; out:      AX = that cell, in the MENUS segment's coordinates - so it is
-;           [menu_bn] plus however many of the clock field's cells are the
-;           leading spaces menu_draw_clock right-aligns the line with
-; clobbers: nothing but AX (flags)
-;
-; The clock's field is a fixed 25 cells and the line in it is NOT: clk_fmt
-; answers 18..24 glyphs (12-hour mode drops the hour's leading zero, seconds
-; are a setting), which menu_draw_clock right-aligns by leading spaces. So the
-; field's left edge is where the clock's ROOM starts and up to seven cells of
-; white follow it before anything is drawn - and centring a strip on the room
-; puts it visibly left of centre, because the eye measures to the `J` of `Jul`.
-;
-; clk_fmt is cheap enough to ask twice per bar paint: clk_snapshot reads the
-; kernel's own RAM shadows of the clock (IRQ0 keeps those; SPEC.md 37), so
-; there is no port I/O and no chip access here at all.
-; -----------------------------------------------------------------------------
-toast_gapend:
-    push cx                     ; NO `push bx`: this routine's body never names
-    push dx                     ; BX, menu_clkcells is "clobbers: CX (the shift
-    push si                     ; count), flags" and clk_fmt pushes ax/bx/dx and
-                                ; pops all three - so the published contract
-                                ; "clobbers: nothing but AX (flags)" holds
-                                ; without the bank
-    call menu_clkcells          ; the field, in whole cells - menu_draw_clock's
-    mov dx, ax                  ; own arithmetic, and now literally it
-    call clk_fmt                ; SI = the live line, CX = its length (37) -
-                                ; which this used to walk the string for
-    mov ax, dx                  ; AX = the leading spaces = the cells of the
-    sub ax, cx                  ; field that are blank before the first glyph.
-    jns .pad                    ; CLAMP THE RESULT, not the input - toast_place
-    xor ax, ax                  ; makes the identical move on the identical
-.pad:                           ; quantities forty lines down. A line wider
-                                ; than its field cannot happen, but a negative
-                                ; pad would put the gap's end LEFT of the
-                                ; segment. `jns` where the old clamp was
-                                ; unsigned: both operands are cell counts
-                                ; (menu_clkcells <= MENU_CLKC-1, clk_fmt
-                                ; 18..24), so |dx-cx| cannot approach 32768
-    add ax, [menu_bn]
-    pop si
-    pop dx
-    pop cx
-    ret
-
-; -----------------------------------------------------------------------------
 ; toast_place - decide where the strip goes: the GAP, or the clock's field
 ;               (SPEC.md 59.9)
 ; in:       nothing. Called from menu_bar_text after the menus are composed,
@@ -478,7 +430,7 @@ toast_gapend:
 ;
 ; **CENTRED means the strip's MIDPOINT on the gap's midpoint**, not its left
 ; edge at the gap's start - and the gap's right end is the clock's first GLYPH
-; rather than its field (toast_gapend, 59.9.1). Half the slack goes at each
+; rather than its field (.gapend below, 59.9.1). Half the slack goes at each
 ; end; `shr` floors, so an odd cell lands on the right. Left-aligned it reads
 ; as a tail on the menus - another menu title, at the exact pen a fifth one
 ; would have had - and right-aligned it reads as a prefix to the clock. Centred
@@ -523,8 +475,8 @@ toast_place:
                                 ; ONCE: three sites below address it, at 4
                                 ; bytes each against 2 for a register, and BX
                                 ; is free until `mov bx, dx` at `.set` - after
-                                ; the last of them. toast_gapend preserves BX
-                                ; (it does not name it at all)
+                                ; the last of them. the .gapend step keeps BX
+                                ; (.gapend does not name it at all)
     mov dx, [menu_bn]           ; **DX = ONE PAST THE LAST CELL THE STRIP MAY
                                 ; TAKE**, which is the end of the segment -
                                 ; and that already accounts for SPEC.md 12.8's
@@ -551,7 +503,42 @@ toast_place:
                                 ; is still said in full and still covers neither
                                 ; a menu title nor the widget
 
-    call toast_gapend           ; --- and CENTRED on what the EYE sees, which
+    ; --- .gapend: the gap's right edge as the EYE sees it, the cell the
+    ; clock's first GLYPH lands in (SPEC.md 59.9.1) - [menu_bn], which DX
+    ; already holds, plus however many of the clock field's cells are the
+    ; leading spaces menu_draw_clock right-aligns the line with. It was the
+    ; routine toast_gapend until size pass 9, this its one caller; in line it
+    ; banks two registers instead of three and adds [menu_bn] from DX.
+    ;
+    ; The clock's field is a fixed 25 cells and the line in it is NOT: clk_fmt
+    ; answers 18..24 glyphs (12-hour mode drops the hour's leading zero, seconds
+    ; are a setting), which menu_draw_clock right-aligns by leading spaces. So the
+    ; field's left edge is where the clock's ROOM starts and up to seven cells of
+    ; white follow it before anything is drawn - and centring a strip on the room
+    ; puts it visibly left of centre, because the eye measures to the `J` of `Jul`.
+    ;
+    ; clk_fmt is cheap enough to ask twice per bar paint: clk_snapshot reads the
+    ; kernel's own RAM shadows of the clock (IRQ0 keeps those; SPEC.md 37), so
+    ; there is no port I/O and no chip access here at all.
+    push cx                     ; menu_clkcells clobbers CX (the shift count),
+    push dx                     ; and clk_fmt answers SI and CX
+    call menu_clkcells          ; the field, in whole cells - menu_draw_clock's
+    mov dx, ax                  ; own arithmetic, and now literally it
+    call clk_fmt                ; SI = the live line, CX = its length
+    mov ax, dx                  ; AX = the leading spaces = the cells of the
+    sub ax, cx                  ; field that are blank before the first glyph.
+    jns .pad                    ; CLAMP THE RESULT, not the input - the move
+    xor ax, ax                  ; below makes the identical move on the
+.pad:                           ; identical quantities. A line wider than its
+                                ; field cannot happen, but a negative pad would
+                                ; put the gap's end LEFT of the segment. `jns`:
+                                ; both operands are cell counts (menu_clkcells
+                                ; <= MENU_CLKC-1, clk_fmt 18..24), so |dx-cx|
+                                ; cannot approach 32768
+    pop dx
+    pop cx
+    add ax, dx                  ; ...past [menu_bn]
+                                ; --- and CENTRED on what the EYE sees, which
     cmp byte [fpg_on], 0        ; is the clock's first GLYPH and not its field's
     je .eye                     ; left edge (SPEC.md 59.9.1). gapend's answer is
     cmp ax, dx                  ; [menu_bn] PLUS the leading spaces, so clamping

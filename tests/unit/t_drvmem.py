@@ -217,8 +217,8 @@ def main():
     ceil_kb = lambda n: (n + 1023) // 1024
     want = {
         "DRVM_SND": s["DRVM_IMG_SND"]                       # its image...
-                    + s["SBL_DMASZ"] // 1024                # sbl_dma_map
-                    + s["SBL_POOLKB"],                      # sbl_pool_get, top rung
+                    + s["SBL_PLAYKB"],                      # ...and the ring a
+                                                            # player's pool is
         # NO CLAIM AT ALL. This was `+ HD_MAXVOL * HDD_LISTKB`, a 6KB listing
         # buffer per mounted volume, and SPEC.md 22.6 retired the donation -
         # the kernel lists every volume into its own `.lowbss` now. HD_MAXVOL

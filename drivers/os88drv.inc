@@ -87,6 +87,10 @@ DRVC_OVL     equ 0x40           ; NOT A KERNEL CLASS, so it stays here. A
 SND_CAP_FM       equ 02h        ; 9-ch 2-op patch + note-on/off (OPL2 model)
 SND_CAP_PCM_BG   equ 04h        ; self-clocked block PCM out - background-safe
 SND_CAP_PCM_IN   equ 10h        ; block PCM input (recording)
+SND_CAP_PCM_HI   equ 20h        ; ...and PCM_BG above 22,222 Hz: DSP >= 3.00,
+                                ; an SB Pro or SB16 (SPEC.md 34.2.1)
+SND_CAP_ADPCM4Q  equ 40h        ; ...and a DSP 4.xx, whose ADPCM4 is asked
+                                ; for with SND_OPENF_FORCE (SPEC.md 34.5.3.1)
 
 ; --- sound tiers (SPEC.md 34.8): what DRVV_TIER's AH carries -----------------
 ; The kernel's own [snd_route], mirrored here so a driver can compare against
@@ -457,8 +461,9 @@ FSV_SIZE     equ 30
 ; --- DSV_BLK: one driver-backed volume's sectors (SPEC.md 51.8) -------------
 ;   in   AL = 0 read / 1 write
 ;        AH = YOUR volume handle, the one you passed to OSAPI_VOL_ADD
-;        SI = the VOLUME-RELATIVE LBA, 16-bit - the kernel knows nothing
-;             about partitions, so you add your own 32-bit base
+;        SI = the VOLUME-RELATIVE LBA's low word and DI its HIGH word
+;             (SPEC.md 18.7.5) - the kernel knows nothing about partitions,
+;             so you add your own 32-bit base
 ;        CX = sector count
 ;        DX:BX = the buffer. DX and NOT ES, because the buffer is in the
 ;             kernel's low segment, its FAT window or a heap claim and never
@@ -467,9 +472,10 @@ FSV_SIZE     equ 30
 ;   out  CF = 0 done; CF = 1 and AL = an int 13h status byte (03h = write
 ;             protected, anything else = a hard error)
 ;
-; A volume is capped at 65,535 sectors (31.99MB) by the kernel's own BPB
-; rule 8, which is also the DOS 3.3 partition limit these machines ran. More
-; capacity is more partitions, each its own volume and its own drive letter.
+; A volume is capped by FAT16 itself - 65,524 clusters of at most 32KB, just
+; under 2GB (SPEC.md 18.7.5). It was 65,535 sectors (31.99MB) while an LBA was
+; a word. A volume past 32MB is registered with OSAPI_VOL_ADD's CX = 0,
+; 'unknown', because its length does not fit the register.
 
 ; --- the Control Panel page you own (SPEC.md 31.9) --------------------------
 ; Publish DSV_CPNAME and your page appears in the panel's list - and only
@@ -508,7 +514,7 @@ FSV_SIZE     equ 30
 ;      frees your image the moment detach returns, and a worker still on the
 ;      run queue leaves the scheduler holding a stack frame whose CS points
 ;      at memory the next heap claim takes.
-%define OSAPI_DRV_TASK      KERNEL_SEG:0x0248
+%define OSAPI_DRV_TASK      KERNEL_SEG:0x01D9
 
 ; --- volumes a DRVC_DISK driver mounts (SPEC.md 18.7/51.8) -------------------
 ; A volume is a small INDEX - 0 = A:, 1 = B:, 2 = C: - and the desktop zone,
@@ -575,6 +581,12 @@ FSV_SIZE     equ 30
 ; than claiming, testing the address, and claiming again while holding the
 ; block that failed - that pattern can hold four buffers to find one, and
 ; refuse on a machine that had the room all along.
+; A DRIVER FAR-CALLS THE API TABLE TOO, so its format byte moves with it
+; (SPEC.md 20.2.0): 4 until pass 4 renumbered the cells, 7 until two were
+; re-contracted in place, 9 now. Mirrored in kernel/driver.inc and
+; tools/os88drv.py.
+DRV_VER equ 9
+
 ; -----------------------------------------------------------------------------
 ; OS88_DRIVER 'NAME', class, entry - open the driver and emit its 32-byte
 ; header. Emits cpu 8086 / bits 16 / org 0 first, so it must be the first
@@ -586,7 +598,7 @@ FSV_SIZE     equ 30
     bits 16
     org 0
     db 'O', '8'             ; +0  magic (word 0x384F), a package's own
-    db 4                    ; +2  format 4 = DRIVER. A package is 3, so the
+    db DRV_VER              ; +2  the DRIVER format. A package is PKG_FMT, so the
                             ;     application loader refuses this file even
                             ;     if one ever reaches it (SPEC.md 51.1)
     db %2                   ; +3  class: the kernel checks it against the
@@ -646,7 +658,7 @@ FSV_SIZE     equ 30
     bits 16
     org 0
     db 'O', '8'             ; +0  magic
-    db 4                    ; +2  format 4: driver-shaped, not an application
+    db DRV_VER              ; +2  driver-shaped, not an application
     db DRVC_OVL             ; +3  ...but no class the kernel will load
     dw 0                    ; +4  link base: 0
     dw (%3) - $$            ; +6  entry offset

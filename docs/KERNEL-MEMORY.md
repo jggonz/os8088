@@ -40,9 +40,9 @@ binding one; `kernsize` prints both lines now.
 left to decide. Raising it means changing the rule. The assembler sees only
 the static half of rule 3; a claim made at boot and never given back is the
 other half, and `tests/kernresident.py` boots a bare VGA desktop under MartyPC
-and walks `mem_tab` for it. As blessed it reads: kernel span ends 114,176,
-last non-purgeable byte 114,176, limit 131,072 — 16,896 spare, with the
-directory read-ahead (63KB, purgeable) the only claim on the heap.
+and walks `mem_tab` for it. As blessed it reads: kernel span ends 105,984,
+last non-purgeable byte 105,984, limit 131,072 — 25,088 spare, with the
+directory read-ahead (32KB, purgeable) the only claim on the heap.
 
 **`kern_small`'s `KERN_BUDGET` is a literal** — 107,520, in the `%else` arm —
 mirrored as `KERN_SMALL_BUDGET` beside big's so that a big build can report
@@ -62,6 +62,16 @@ five diagnostics were exempted one afternoon each, and the sixth case was a
 `BOOTMARK=1` would not assemble with it — a knob build setting the ceiling
 for the product. `make test-full`'s build matrix is the only thing that
 builds the knob kernels, so a `.text` budget is really spent there.
+
+Confirmed shutdown (§12.3.2) keeps its confirmation, terminal screen and
+shared startup spinner in CTRL.DRV's UI tail (`.modu`). The settings-only
+loader therefore brings in no shutdown code or buffers. Compared with main
+at `343cb176`, the resident change is **75 bytes**: 35 in `.text`, 36 in
+`.cold`, and one 4-byte module entry pointer. Both kernels spend existing
+allocation slack: the rounded big footprint stays **104,448 bytes**, and
+the small footprint stays **67,584 bytes**. No budget or minimum-RAM limit
+changes. Cancelling releases CTRL.DRV when no Control Panel owns it; the
+shutdown screen retains the module only after the OS stops.
 
 ### The three guards
 
@@ -236,71 +246,71 @@ had added.
 ```json
 {
   "big": {
-    "boot2": 2250,
-    "bootmax": 192000,
-    "bss": 6086,
+    "boot2": 2265,
+    "bootmax": 191488,
+    "bss": 5152,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 40411,
-    "coldpara": 2528,
+    "cold": 38652,
+    "coldpara": 2432,
     "fatpara": 288,
-    "imgpara": 3520,
-    "kend": 7040,
+    "imgpara": 3104,
+    "kend": 6336,
     "kseg": 96,
-    "ksize": 111104,
-    "lowbss": 7966,
-    "lowpara": 544,
+    "ksize": 99840,
+    "lowbss": 5598,
+    "lowpara": 384,
     "minramkb": 196,
-    "ovl": 1511,
-    "ovlw": 5084,
+    "ovl": 2470,
+    "ovlw": 5011,
     "stk0": 512,
-    "text": 49817,
-    "vgabuf": 848,
-    "vgabufpara": 64
+    "text": 44304,
+    "vgabuf": 336,
+    "vgabufpara": 32
   },
   "emu": {
-    "boot2": 2250,
-    "bootmax": 192000,
-    "bss": 6086,
+    "boot2": 2265,
+    "bootmax": 191488,
+    "bss": 5150,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 40535,
-    "coldpara": 2560,
+    "cold": 38570,
+    "coldpara": 2432,
     "fatpara": 288,
-    "imgpara": 3520,
-    "kend": 7072,
+    "imgpara": 3136,
+    "kend": 6368,
     "kseg": 96,
-    "ksize": 111616,
-    "lowbss": 7966,
-    "lowpara": 544,
+    "ksize": 100352,
+    "lowbss": 5598,
+    "lowpara": 384,
     "minramkb": 196,
-    "ovl": 1512,
-    "ovlw": 5084,
+    "ovl": 2476,
+    "ovlw": 5011,
     "stk0": 512,
-    "text": 50087,
-    "vgabuf": 848,
-    "vgabufpara": 64
+    "text": 44550,
+    "vgabuf": 336,
+    "vgabufpara": 32
   },
   "small": {
-    "boot2": 2250,
-    "bootmax": 122368,
-    "bss": 4173,
+    "boot2": 2265,
+    "bootmax": 121856,
+    "bss": 3119,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 26310,
-    "coldpara": 1664,
+    "cold": 24428,
+    "coldpara": 1536,
     "fatpara": 64,
-    "imgpara": 2592,
-    "kend": 4736,
+    "imgpara": 2272,
+    "kend": 4192,
     "kseg": 96,
-    "ksize": 74240,
-    "lowbss": 4436,
-    "lowpara": 320,
+    "ksize": 65536,
+    "lowbss": 2868,
+    "lowpara": 224,
     "minramkb": 128,
-    "ovl": 1333,
-    "ovlw": 1910,
+    "ovl": 2086,
+    "ovlw": 1480,
     "stk0": 512,
-    "text": 37226,
+    "text": 32905,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -337,27 +347,27 @@ not a section move.
 
 | rung | segment | size | what it is |
 |---|---|---:|---|
-| image (`.text` 50,892 + `.bss` 6,389) | `KERNEL_SEG` 0x0060 | 57,344 | resident code in the kernel's own segment, its read-only data and its scratch |
-| `.cold` (39,434) | `COLD_SEG` 0x0E60 | 39,936 | resident code with a CS of its own (SPEC.md §2.6): the file system, the Standard File dialog, associations, drivers, the heap, the desktop and the on-demand modules' thunks |
-| FAT window | `FAT_SEG` 0x1820 | 4,608 | `DSK_FAT_SECS` = 9 sectors of the mounted volume's FAT (SPEC.md §18.8); 2 sectors = 1,024 bytes on `kern_small` |
-| `.lowbss` (9,182) + task 0's stack (512) | `LOW_SEG` 0x1940 | 9,728 | the mount-owned disk buffers, every task stack, the two private ISR stacks, and the tables that left the segment |
-| `.vgabuf` (848) | `VGABUF_SEG` 0x1BA0 | 1,024 | `vga_p4tab` and `vga_pbuf`, SPEC.md §5.4.1.3's planar decoder. **The only rung a machine can decline**: `mem_floor_ax` seeds the heap floor UNDER it when `[vid_avail] & VID_A_VGA` is clear, so a mono machine's heap starts 1,024 bytes lower (§39.22). 0 on `kern_small` and on `NOPLANE` builds |
-| **`KERN_SIZE`** | heap at `HEAP_SEG` 0x1BE0 | **112,640** | 111.5 KB on VGA, 110.5 on a 1bpp adapter |
+| image (`.text` 47,333 + `.bss` 5,525) | `KERNEL_SEG` 0x0060 | 53,248 | resident code in the kernel's own segment, its read-only data and its scratch |
+| `.cold` (40,432) | `COLD_SEG` 0x0D60 | 40,448 | resident code with a CS of its own (SPEC.md §2.6): the file system, the Standard File dialog, associations, drivers, the heap, the desktop and the on-demand modules' thunks |
+| FAT window | `FAT_SEG` 0x1740 | 4,608 | `DSK_FAT_SECS` = 9 sectors of the mounted volume's FAT (SPEC.md §18.8); 2 sectors = 1,024 bytes on `kern_small` |
+| `.lowbss` (6,366) + task 0's stack (512) | `LOW_SEG` 0x1860 | 7,168 | the mount-owned disk buffers, every task stack, the two private ISR stacks, and the tables that left the segment |
+| `.vgabuf` (336) | `VGABUF_SEG` 0x1A20 | 512 | `vga_pbuf`, SPEC.md §5.4.1.3's planar decoder's plane rows (`vga_p4tab` is a union with the mono pair tables in `.lowbss` since §39.22.1). **The only rung a machine can decline**: `mem_floor_ax` seeds the heap floor UNDER it when `[vid_avail] & VID_A_VGA` is clear, so a mono machine's heap starts 512 bytes lower (§39.22). 0 on `kern_small` and on `NOPLANE` builds |
+| **`KERN_SIZE`** | heap at `HEAP_SEG` 0x1A40 | **105,984** | 105.0 KB on VGA, 104.0 on a 1bpp adapter, whose heap starts under the `.vgabuf` rung |
 
-`kern_small`'s ladder is `KERNEL 0x0060  COLD 0x0a80  FAT 0x1100  LOW 0x1140
-HEAP 0x1280` — **74,240 bytes, 74.0 KB** — so a 128KB machine has 54.0 KB of
-heap by arithmetic; `tests/small128.py` boots one under MartyPC and reads
-what is actually free after the boot-time claims, and on this tree the two
-AGREE: **55,296 bytes = 54.0 KB, with no pinned claim standing**. The last
-kilobyte of that is SPEC.md 22.6.2's `DSK_NENT` cut, which took `.lowbss`
-5,236 → 4,436 and the low rung two 512-byte steps with it. A 640KB machine
-reporting 639KB has ~528 KB under `kern_big` before any driver or read-ahead
-claim.
+`kern_small`'s ladder is `KERNEL 0x0060  COLD 0x0a00  FAT 0x1060  LOW 0x10a0
+HEAP 0x11c0` — `KERN_SIZE` **71,168 bytes**, the heap starting at 71.0 KB — so
+a 128KB machine has 57.0 KB of heap by arithmetic; `tests/small128.py` boots
+one under MartyPC and reads what is actually free after the boot-time claims,
+and on this tree the two AGREE: **58,368 bytes = 57.0 KB, with no pinned
+claim standing**. It was 54.0 KB at 74,240; the three kilobytes between are
+kernel size pass 4 (docs/reports/KERNEL-BYTES-SINCE-SQUASH-2026-09-25.md).
+A 640KB machine reporting 639KB has ~534 KB under `kern_big` before any
+driver or read-ahead claim.
 
-**Not in the span**: the boot overlay (`.ovl` 1,511 bytes in stage 2's blob,
-`.ovlw` 5,084 bytes loaded onto the FAT window and the mount buffers, both
+**Not in the span**: the boot overlay (`.ovl` 1,964 bytes in stage 2's blob,
+`.ovlw` 5,104 bytes loaded onto the FAT window and `dsk_secbuf`, both
 dead by the first desktop — see below; on `kern_small` the split is a BUILD
-CHOICE and reads 1,333 / 1,910, SPEC.md §2.5.3.2), the on-demand modules (files read
+CHOICE and reads 1,942 / 1,502, SPEC.md §2.5.3.2), the on-demand modules (files read
 into a heap claim when asked for, §2.8), and the menu save-under, which is a
 heap claim taken by `menu_drop` and released before the picked item runs,
 sized from the rect actually dropped (`menu_save_kb`, §12.4; `MENU_SAVE_KB`
@@ -366,17 +376,16 @@ sized from the rect actually dropped (`menu_save_kb`, §12.4; `MENU_SAVE_KB`
 ### What the Task Manager shows
 
 The memory view's `System` row is `KERN_KB` = `(KERN_SIZE + 1023) / 1024`,
-**111** on `kern_big`, with one indented row per span the ladder declares,
+**104** on `kern_big`, with one indented row per span the ladder declares,
 every figure from `OSAPI_SYS_KB` (SPEC.md §20.9) so that a package never
 carries a copy of the ladder:
 
 | row | constant | bytes | shown |
 |---|---|---:|---:|
-| `Code+data` | `SKB_IMG` = the rest | 101,888 | 100 |
+| `Code+data` | `SKB_IMG` = the rest | 98,048 | 96 |
 | `Stacks` | `SKB_STK` + `SKB_STK0` | 2,816 + 512 | 3 |
-| `Disk bufs` | `SKB_DSK` = `DSK_WIN_BYTES` | 3,328 | 3 |
 | `FAT snap` | `SKB_FAT` = `FAT_PARA`·16 | 4,608 | 5 |
-| **`System`** | **`KERN_SIZE`** | **112,640** | **110** |
+| **`System`** | **`KERN_SIZE`** | **105,984** | **104** |
 
 The KB column is rounded **cumulatively** — each running boundary to the
 nearest kilobyte, each row the difference of two boundaries — so the rows
@@ -386,6 +395,17 @@ takes the build's own remainder; it covers the cold segment, the decoder's
 rung and the kernel's own tables in `.lowbss`, all of which are code or
 `.bss`-class data and not buffers. Guard 7 in `kernel.asm` proves that the
 parts sum to `KERN_KB` and that none is a kilobyte from what it measures.
+
+**There was a fourth row, `Disk bufs`, and it is gone (SPEC.md §20.9).** It
+was `SKB_DSK` = `DSK_WIN_BYTES`, the mount's own buffers — and the two
+changes below emptied them down to `dsk_secbuf` alone, 512 bytes. Half a
+kilobyte is not a row under cumulative rounding: it drew as `-` on
+`kern_big` and **1 KB on `kern_small`**, the same buffer reported two ways,
+because a part that small is decided by where the running boundary happens
+to fall. It is accumulated into `Code+data` with the rest of `.lowbss` now.
+Deleting the row alone would not have done — the rows exist to total, so the
+bytes had to move into a term, or the column would have stopped summing on
+exactly the two builds where the row was *not* reading `-`.
 The `HEAP` column beside `System` is the kernel's own claims, drawn in the
 conventional map at their real addresses; package regions are claims too
 (§20.1), at the far right because they are taken from the top of the heap
@@ -529,28 +549,37 @@ mirrored in `apps/os88api.inc` at the larger of the two kernels' values (14),
 because a package sizes its snapshot buffer from it and over-allocating is
 the safe direction; `SS_TSTATE` is `MAX_TASKS` bytes.
 
-### Disk buffers
+### Disk buffers — one sector
 
-Three buffers, `DSK_WIN_BYTES` = **3,328** bytes, the FIRST thing in
-`.lowbss` (`kernel/dskwin.inc`, SPEC.md §2.1.2), written by int 13h through
-ES:BX and read only through `dsk_get_dir` / `dsk_get_icon`, which stage one
-entry at a time back into the kernel segment:
+`DSK_WIN_BYTES` = **512** bytes on every shipped kernel, the FIRST thing in
+`.lowbss` (`kernel/dskwin.inc`, SPEC.md §2.1.2):
 
-- `dsk_secbuf`, 512 B — one sector of scratch. First, because it is the int
-  13h target and takes the rung's 512-aligned base.
-- `disk_dir`, 768 B — the mount-time listing, `DSK_NENT` = 32 synthesized
-  entries at `DSK_DE_STRIDE` = 24 bytes. The 32-entry cap is what sizes it.
-- `disk_icons`, 2,048 B — one harvested 64-byte icon per listed entry (on
-  `kern_small` a POOL of `DSK_ICO_N` bodies plus a one-byte index per entry,
-  §25.8).
+- `dsk_secbuf`, 512 B — one sector of scratch, written by int 13h through
+  ES:BX. First, because it is the int 13h target and takes the rung's
+  512-aligned base.
+- `dsk_ovlpad` — **0 on `kern_big`, `kern_small` and `kern_emu` alike**, and
+  non-zero only under `KERN_KNOB`, where a diagnostic joins `.ovlw` and
+  needs a rung to spill into. It is the boot overlay's landing ground and
+  was never about the mount at all.
 
-They sit immediately above the FAT window because both come alive at the
-same instant — the first mount — and are untouched before it, which makes the
-two together one 7,936-byte region (7,680 readable) that is dead for the
-whole of `kmain`. That is what `.ovlw` is loaded into (below). Since SPEC.md
-§20.9 this is exactly what the Task Manager's `Disk bufs` row reports, and
-guard 7 recomputes it from the three buffers independently rather than from
-`DSK_WIN_BYTES`, so a fourth buffer or a resized one fails the build.
+**It was three buffers and 3,328 bytes.** `disk_dir` (the mount-time
+listing) and `disk_icons` (one harvested body per entry) were here too:
+SPEC.md §25.9 took the icon bodies to one machine-wide purgeable store, and
+docs/plans/LISTING-HOME-PLAN.md §13 took the entries and their reference
+index into the store the mount's *caller* supplies — a Disk window's
+`FS_VSEG` claim, or one the Standard File dialog holds while it is up. Both
+are transient, so a machine sitting on the desktop or inside a fullscreen
+game now pays nothing for either.
+
+What sits immediately above the FAT window is therefore much smaller, and
+the dead-for-the-whole-of-`kmain` region that `.ovlw` is loaded into (below)
+is the FAT window plus this one sector. **The Task Manager no longer has a
+row for it** (SPEC.md §20.9): 512 bytes is below what its KB column can
+report honestly, so the bytes are billed to `Code+data` like every other
+`.lowbss` table. Guard 7 in `kernel.asm` still recomputes the window
+independently of `DSK_WIN_BYTES`, so a fourth buffer or a resized one fails
+the build — and it matters *more* now than it did, because with the row gone
+nothing on the screen would show a mount buffer growing again.
 
 ### FAT window — `DSK_FAT_SECS` × 512
 
@@ -652,70 +681,72 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 32,677 | 36.2% |
-| the window system and its furniture | 24,902 | 27.6% |
-| drawing: adapters, primitives, glyphs, icons | 13,165 | 14.6% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,083 | 10.1% |
-| the kernel proper: API table, heap, scheduler, events | 8,267 | 9.2% |
-| the three built-in kinds | 1,542 | 1.7% |
-| the Control Panel | 592 | 0.7% |
-| **total** | **90,228** | |
+| the file system, end to end | 29,684 | 35.8% |
+| the window system and its furniture | 22,857 | 27.6% |
+| drawing: adapters, primitives, glyphs, icons | 13,225 | 15.9% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,125 | 9.8% |
+| the kernel proper: API table, heap, scheduler, events | 7,262 | 8.8% |
+| the three built-in kinds | 1,443 | 1.7% |
+| the Control Panel | 360 | 0.4% |
+| **total** | **82,956** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |
 |---|---:|---:|---:|---:|---:|---:|
-| `wm.inc` — the window manager (§11) | 11,800 | 141 | **11,941** | 1,092 | — | — |
-| `files.inc` — the Disk window (§22) | 1,078 | 8,266 | **9,344** | 465 | — | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 383 | 6,443 | **6,826** | 832 | — | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 5,533 | 734 | **6,267** | 100 | 526 | — |
-| `fdlg.inc` — the Standard File dialog (§38) | 99 | 4,953 | **5,052** | 168 | — | — |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 82 | 4,874 | **4,956** | 162 | — | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 4,083 | — | **4,083** | 151 | 128 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 3,461 | — | **3,461** | 58 | — | — |
-| `memory.inc` — the claim heap (§50) | 215 | 3,048 | **3,263** | 25 | 324 | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,816 | 177 | **2,993** | 197 | 84 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 563 | 2,092 | **2,655** | 301 | — | — |
-| `assoc.inc` — file type associations (§54) | 482 | 2,146 | **2,628** | 43 | — | — |
-| `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,242 | **2,242** | 160 | — | — |
-| `instance.inc` — instances and the built-in kinds (§29) | 2,040 | 160 | **2,200** | 724 | — | — |
-| `font.inc` — the 8×8 glyph renderer (§6) | 2,178 | — | **2,178** | 215 | 784 | — |
-| `apps.inc` — the three built-in kinds (§14) | 282 | 1,260 | **1,542** | 11 | 240 | — |
-| `sched.inc` — pre-emptive scheduling (§7–8) | 1,410 | — | **1,410** | 207 | 2,944 | — |
-| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,292 | — | **1,292** | 20 | — | — |
-| `loader.inc` — the package loader (§21) | 4 | 1,243 | **1,247** | 46 | — | — |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,157 | — | **1,157** | 74 | — | — |
-| `desk.inc` — the desktop and volume zones (§14/§26.1) | 11 | 1,025 | **1,036** | 79 | — | — |
-| `snd.inc` — the sound layer (§34) | 1,031 | — | **1,031** | 287 | — | — |
-| `fsx.inc` — fullscreen exclusive (§53) | 997 | — | **997** | 9 | — | — |
-| `dock.inc` — the dock strip (§30) | 941 | 45 | **986** | 59 | — | — |
-| `icons.inc` — the icon renderer (§10) | 975 | — | **975** | 281 | — | — |
-| `viddet.inc` — adapter detection and geometry (§39) | 866 | — | **866** | — | 696 | 3 |
-| `fprog.inc` — the file-operation progress widget (§12.8) | 676 | — | **676** | — | — | — |
-| `clock.inc` — the clock ladder (§37) | 606 | — | **606** | 59 | — | — |
-| `ctrl.inc` — the Control Panel (§31) | 351 | 241 | **592** | 28 | — | — |
-| `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 69 | 391 | **460** | 38 | — | — |
-| `toast.inc` — the menu bar's transient message (§59) | 433 | — | **433** | 25 | — | — |
-| `blank.inc` — the idle screen blanker (§64) | 194 | 236 | **430** | — | — | — |
-| `mod.inc` — on-demand kernel modules (§2.8) | 69 | 309 | **378** | 140 | — | — |
-| `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 340 | **340** | — | — | — |
+| `wm.inc` — the window manager (§11) | 9,346 | 140 | **9,486** | 1,132 | — | — |
+| `files.inc` — the Disk window (§22) | 1,094 | 7,839 | **8,933** | 542 | — | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 371 | 6,197 | **6,568** | 415 | — | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 5,391 | 1,097 | **6,488** | 40 | 526 | — |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 5,066 | **5,090** | 178 | — | — |
+| `mouse.inc` — serial mouse and the cursor (§9) | 3,934 | — | **3,934** | 107 | 128 | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,700 | 176 | **2,876** | 197 | 84 | — |
+| `memory.inc` — the claim heap (§50) | 215 | 2,647 | **2,862** | 24 | 324 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,817 | 9 | **2,826** | 56 | — | — |
+| `fdlg.inc` — the Standard File dialog (§38) | 35 | 2,758 | **2,793** | 89 | — | — |
+| `assoc.inc` — file type associations (§54) | 419 | 1,941 | **2,360** | 31 | — | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 377 | 1,886 | **2,263** | 255 | — | — |
+| `font.inc` — the 8×8 glyph renderer (§6) | 2,262 | — | **2,262** | 22 | 16 | — |
+| `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,223 | **2,223** | 160 | — | — |
+| `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 2,034 | **2,057** | 91 | — | — |
+| `instance.inc` — instances and the built-in kinds (§29) | 1,862 | 131 | **1,993** | 722 | — | — |
+| `sched.inc` — pre-emptive scheduling (§7–8) | 1,445 | — | **1,445** | 212 | 2,944 | — |
+| `apps.inc` — the three built-in kinds (§14) | 282 | 1,161 | **1,443** | 11 | 240 | — |
+| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,267 | — | **1,267** | 20 | — | — |
+| `loader.inc` — the package loader (§21) | 4 | 1,215 | **1,219** | 46 | — | — |
+| `icons.inc` — the icon renderer (§10) | 1,113 | — | **1,113** | 288 | — | — |
+| `dock.inc` — the dock strip (§30) | 928 | 45 | **973** | 59 | — | — |
+| `fsx.inc` — fullscreen exclusive (§53) | 961 | — | **961** | 9 | — | — |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 878 | — | **878** | 74 | — | — |
+| `snd.inc` — the sound layer (§34) | 831 | — | **831** | 37 | — | — |
+| `viddet.inc` — adapter detection and geometry (§39) | 791 | — | **791** | — | 696 | 3 |
+| `fprog.inc` — the file-operation progress widget (§12.8) | 642 | — | **642** | — | — | — |
+| `clock.inc` — the clock ladder (§37) | 491 | — | **491** | 59 | — | — |
+| `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 456 | **456** | — | — | — |
+| `blank.inc` — the idle screen blanker (§64) | 200 | 226 | **426** | — | — | — |
+| `toast.inc` — the menu bar's transient message (§59) | 425 | — | **425** | 25 | — | — |
+| `mod.inc` — on-demand kernel modules (§2.8) | 94 | 323 | **417** | — | — | — |
+| `desksc.inc` — desktop shortcuts: the record table, the open by name, the keys and the popup (§26.8), `kern_big` only | 88 | 309 | **397** | 4 | — | — |
+| `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 61 | 301 | **362** | 189 | — | — |
+| `ctrl.inc` — the Control Panel (§31) | 132 | 228 | **360** | 28 | — | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 242 | — | **242** | 22 | — | — |
-| `clip.inc` — the system clipboard (§55) | 179 | — | **179** | 5 | — | — |
-| `events.inc` — the event ring (§10) | 159 | — | **159** | 3 | 128 | — |
+| `clip.inc` — the system clipboard (§55) | 175 | — | **175** | 5 | — | — |
+| `events.inc` — the event ring (§10) | 154 | — | **154** | 3 | 128 | — |
+| `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | 46 | **46** | — | — | — |
 | `clone.inc` — the disk cloner (§18.99) | 15 | 27 | **42** | — | — | — |
-| `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 6 | — | **6** | — | — | — |
-| `splash.inc` — the boot splash (§15) | — | — | **0** | — | — | 1,826 |
-| `dskwin.inc` — the mount-owned window at the bottom of `.lowbss` (§2.1.2) | — | — | **0** | — | 2,112 | — |
+| `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 2 | — | **2** | — | — | — |
+| `splash.inc` — the boot splash (§15) | — | — | **0** | — | — | 1,828 |
+| `dskwin.inc` — the mount-owned window at the bottom of `.lowbss` (§2.1.2) | — | — | **0** | — | 512 | — |
 | `band.inc` — the 1bpp band composer (§5.9), `BAND=1` | — | — | **0** | — | — | — |
-| `mouproto.inc` — **(undescribed)** | — | — | **0** | — | — | — |
+| `mouproto.inc` — the Microsoft serial packet, decoded once and shared as source with `kern_dos` (§9.5) | — | — | **0** | — | — | — |
 | `vmmouse.inc` — the VMware absolute pointer's resident half (§9.11), `kern_emu` only | — | — | **0** | — | — | — |
 | `bootprof.inc` — the boot phase table (§15.5), `BOOTPROF=1` | — | — | **0** | — | — | — |
 | `stkdiag.inc` — what an interrupt costs a task stack (STACK-SLOTS-PLAN §10), `STKDIAG=1` | — | — | **0** | — | — | — |
 | `moudiag.inc` — what the identify window saw (§9.4.6), `MOUDIAG=1` | — | — | **0** | — | — | — |
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
-| `dockmod.inc` — **(undescribed)** | — | — | **0** | — | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,039 | 18 | **3,057** | — | — | 421 |
-| **total** | **49,817** | **40,411** | **90,228** | **6,086** | **7,966** | **2,250** |
+| `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,213 | 171 | **2,384** | — | — | 434 |
+| **total** | **44,304** | **38,652** | **82,956** | **5,152** | **5,598** | **2,265** |
 <!-- END generated table -->
 
 ### Reading it
@@ -799,15 +830,12 @@ did not go, and the reasons stop them being re-proposed:
   the record, and the dock, the menu bar and the Task Manager all letter it
   through DS. This was tried: the build was clean and the machine booted to a
   desktop that could not launch anything.
-- **`snd_xlat` (256 B) is refused on speed.** Two sites, but they are
-  `spk_pcm_run`'s per-sample loop. **And three harnesses now depend on those
-  256 bytes staying idle**: `tests/evqfull.py` and
-  `tools/os88linecost.py` each plant an executable stub in `snd_xlat`
-  *because* it is 256 unused `KERNEL_SEG` `.bss` bytes at a fixed symbol. So
-  the largest single `.bss` item in the kernel is held in place by the test
-  rig as well as by the mixer, and anybody who reclaims it has three rigs to
-  re-home first. That is a reason that could be removed, and writing it down
-  is not the same as endorsing it.
+- **`snd_xlat` (256 B) is GONE** (kernel size pass 8): the PWM clip moved
+  into `apps/os88pcm.inc` (SPEC.md 34.4) and its table with it. The two rigs
+  that parked an executable stub in it were re-homed: `tests/evqfull.py` to
+  `fcp_stack` (36 idle `KERNEL_SEG` `.bss` bytes on kern_big) and
+  `tools/os88linecost.py` to `fsx_caps` (the fullscreen bracket's resident
+  code, which no line measurement reaches - the machine is thrown away after).
 
 **`font_glyphs` needed the ABI amended, and was worth it**: `OSAPI_FONT_GLYPHS`
 answers `DX:SI` now, a recorded one-time amendment to a shipped slot (§20.8
@@ -843,10 +871,31 @@ it is two sections, because the two halves die at different times:
 
 | | bytes | lives until | lands on | reached by |
 |---|---:|---|---|---|
-| `.ovl` | 1,417 | `spl_finish` | stage 2's blob, at `OVL_AT` = 2,624 of `BOOT2_PAD` = 4,096 | `[spl_fseg]`, the pair of §2.9.5.1 |
-| `.ovlw` | 5,037 | **the first mount** | `FAT_SEG`, off the kernel's own contiguous read, spilling through the mount-owned buffers (7,936 bytes, 7,680 readable — SPEC.md §2.1.2) | `call FAT_SEG:`, a constant |
+| `.ovl` | 1,964 | `spl_finish` | stage 2's blob, at `OVL_AT` = 2,624 of `BOOT2_PAD` = 4,608, so **20 bytes** spare (147 until SPEC.md 31.14's `ovl_fdd_apply`, 152 until EXTD.DRV's boot call, SPEC.md 39.19.6) | `[spl_fseg]`, the pair of §2.9.5.1 — or `BLOBCALL` from a caller already in the blob |
+| `.ovlw` | 5,104 | **the first mount** | `FAT_SEG`, off the kernel's own contiguous read, spilling into `dsk_secbuf`, the one mount-owned buffer left (4,608 + 512 = 5,120 bytes, all readable — SPEC.md §2.1.2), so **16 bytes** spare | `call FAT_SEG:`, a constant |
 
-The blob is 8 sectors; whatever the loader is not using below `OVL_AT` the
+Those are kern_big's figures (`tools/kernsize.py --json`). On `kern_small`
+(`--json -DKERN_SMALL`) `.ovl` is 1,942 of the blob's 1,984 (**42 spare** —
+kern_big's 20 is tighter now, SPEC.md 31.14) and `.ovlw` 1,502, against a window of 1,024 (a
+two-sector FAT) + 512 = 1,536, so 34 spare; SPEC.md §2.5.3.2 is why that build
+puts more of the overlay in the blob.
+
+**Most of `kmain` is in there too** (SPEC.md §2.5.3.3): everything from its
+first far call through `spl_finish` is the blob body `kmain_o`, so the part of
+`kmain` that is resident is its prologue, one gate, and the tail after the
+blob's release — 87 bytes on kern_big. That is 334 resident bytes on kern_big
+and 248 on kern_small, with `vid_detect`, `vid_init`, `hb_probe_x`,
+`dsk_ltrtab` and two `desk_init` thunks.
+
+**A KNOB build is given more room than a shipped one, never a longer blob**
+(SPEC.md §2.5.3.3.1): the blob length is one constant for every build because
+the boot canary rests on it, so a knob build's extra room comes from its
+1,024-byte `DSK_OVLPAD` (a kern_small knob build puts the mouse probe there,
+kern_big's arrangement) and from the loader's slack (`.ovl` starts at
+`OVL_BASE` = `OVL_AT` − 96 on a knob build other than `SPLSTARS=1`). Neither
+reaches a shipped byte.
+
+The blob is 9 sectors; whatever the loader is not using below `OVL_AT` the
 overlay can have for the cost of moving that one line, and the two assertions
 at the foot of `kernel.asm` say which half ran out. `.ovlw`'s bound is the
 window: docs/plans/KERN-SMALL-CUT-PLAN.md §7 is why `kern_small`'s two-sector
@@ -942,15 +991,18 @@ the reason rather than a silent one (§47 rule 3).
 
 **An ON-DEMAND MODULE** (§2.8, `kernel/mod.inc`) — kernel code cut out of
 `KERNEL.SYS` into a file, read into a heap claim when the feature is asked
-for and freed when it is done: `CTRL.DRV`, `FORMAT.DRV`, `CLONE.DRV`,
-`HIBER.DRV` (which carries the compressor too, §20.15.3), and on `kern_small`
+for and freed when it is done: `CTRL.DRV`, `FORMAT.DRV`, `CLONE.DRV`
+(which carries the compressor too, §20.15.3), on `kern_big` `HIBER.DRV`,
+`DOCK.DRV` and `EXTD.DRV` (§30.5, §39.19.6 - the second held for as long as
+the desktop is extended rather than for one action), and on `kern_small`
 `FILECP.DRV` and `FDLG.DRV` too. What stays resident is the menu item, the greying predicate and the
-thunks (`MOD_NENT` = 7 far-pointer slots per module). A feature qualifies
+thunks (one 4-byte far-pointer slot per ENTRY the module declares, SPEC.md 2.8.1). A feature qualifies
 when the system disk is already required to use it, or can be required
 without interrupting what the user was doing. **What the mechanism refuses**
 is in docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md: `mod_need`'s own
-transitive cone (assoc had to be GATED, not moved), and a layer with more
-entry points than `MOD_NENT` (diskw). A module's DATA must stay in `.text`,
+transitive cone (assoc had to be GATED, not moved), and a layer with 33 entry
+points called from everywhere (diskw) - which since SPEC.md 2.8.1 is no longer
+a CAP, only 132 bytes of slots and a far call at every site. A module's DATA must stay in `.text`,
 because `DS = KERNEL_SEG` is the whole of how it reaches anything.
 
 **An OVERLAY DRIVER** — the screen saver (§79, `SAVER.DRV`, `DRVC_OVL` like
@@ -1019,6 +1071,7 @@ answer for anything a single driver consumes.
 | `KERN_BUDGET` moves 1–35 | 64 → 119.5 KB (big), → 105 KB (small) | — |
 | kernel size passes 2 and 3 (docs/plans/completed/HANDOFF-KERNEL-SIZE-P2.md, -P4.md) | unchanged | −5,632 (big) |
 | rule 3 makes big's budget DERIVED; `MIN_RAM_KB` per configuration | big 126.5 KB | — |
+| kernel size pass 4 (docs/plans/completed/HANDOFF-KERNEL-SIZE-P5.md): resident sections −4,661 big / −2,646 small, the segment −3,384 big | unchanged | −5,120 (big, 105,984), −3,072 (small, 71,168) |
 | `kern_small` stops supporting VGA, on-demand `FILECP.DRV`/`FDLG.DRV`, the two-sector FAT window (docs/plans/completed/KERN-SMALL-CUT-BUILT.md) | small 105 KB | small 76.5 KB |
 
 **The 35-move ledger of `KERN_BUDGET` lives in `kernel/kernel.asm`**, in the

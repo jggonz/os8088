@@ -57,6 +57,24 @@ KDM_V3      equ 0x2C            ; int 0Ch and int 0Bh (mouse.inc's mou_ivecs)
 KDM_XMAX    equ 639             ; INT 33h's virtual screen (SPEC.md 96.10), and
 KDM_YMAX    equ 199             ; kdentry.inc sets [dos_vw]/[dos_vh] to match
 
+; --- ...AND WHERE THE POINTER STARTS (SPEC.md 96.45.3) -----------------------
+; MEASURED, not halved: CuteMouse 1.9.1 on COM1 in Microsoft mode answers
+; `x=320 y=96` to the first `AX=3` after a reset, and this file used to answer
+; (0,0) because `kdm_x`/`kdm_y` are the zero their `.bss` was born with.
+;
+; 320 is the middle of 0..639 and 96 is NOT the middle of 0..199 - it is 100
+; snapped DOWN to the 8-pixel text cell, which is what a driver that has a
+; character cursor to draw does with it. Copying the measurement rather than
+; the arithmetic is the rule the rest of SPEC.md 96.10 is written to.
+;
+; **THE FIELD FOUND IT AS A CURSOR IN THE CORNER** (docs/FIELD-NOTES.md 56):
+; Battle Chess takes IRQ4 for its own modem link, so its cursor never moves on
+; any DOS - but ours sat at (0,0) where CuteMouse's sat where the game draws
+; nothing, and 468 of the 476 pixels between the two machines' boards were
+; that one difference.
+KDM_X0      equ 320
+KDM_Y0      equ 96
+
 ; -----------------------------------------------------------------------------
 ; kd_mou_start - take the port the kernel settled on (SPEC.md 96.45)
 ; in:  SI -> the launch block; DS = ES = KD_SEG
@@ -84,17 +102,51 @@ kd_mou_start:
     mov [kdm_base], ax
     mov al, [si+KDL_MOULINE]
     mov [kdm_line], al
+    mov word [kdm_x], KDM_X0    ; ...and the pointer starts where a real
+    mov word [kdm_y], KDM_Y0    ; driver's does (SPEC.md 96.45.3)
 
-    ; --- the vector, which the line and not the base decides -----------------
-    ; A card at 2F8 jumpered to IRQ4 is a machine this project has met
-    ; (SPEC.md 9.5.2.1), so the line is carried beside the base rather than
-    ; derived from it - the kernel learned which one actually fires by
-    ; watching packets arrive, and that answer is not reconstructible here.
+    call kd_mou_arm             ; ...and the vector and the hardware, which
+                                ; kd_mou_rearm needs on its own (SPEC.md
+                                ; 96.45.4)
+.none:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; kd_mou_vec - which vector this mouse interrupts on
+; in:  DS = KD_SEG, [kdm_line] set
+; out: BX = the IVT OFFSET of that vector
+; clobbers: BX, flags
+;
+; A card at 2F8 jumpered to IRQ4 is a machine this project has met (SPEC.md
+; 9.5.2.1), so the LINE is carried beside the base rather than derived from
+; it - the kernel learned which one actually fires by watching packets
+; arrive, and that answer is not reconstructible here.
+; -----------------------------------------------------------------------------
+kd_mou_vec:
     mov bx, KDM_V3
-    cmp al, KDM_L4
-    jne .vec
+    cmp byte [kdm_line], KDM_L4
+    jne .out
     mov bx, KDM_V4
-.vec:
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; kd_mou_arm - take the vector, wake the UART, unmask the line
+; in:  DS = KD_SEG, [kdm_base] and [kdm_line] set and the base non-zero
+; out: nothing; AX, BX, CX, DX and ES are the caller's to have spent
+;
+; **IT IS A ROUTINE BECAUSE IT IS RUN TWICE** (SPEC.md 96.45.4): once at
+; start-up, and again whenever a program has taken the vector away from us -
+; which is a thing a DOS program is entitled to do and which Battle Chess
+; does unconditionally.
+; -----------------------------------------------------------------------------
+kd_mou_arm:
+    call kd_mou_vec
     xor ax, ax
     mov es, ax
     pushf
@@ -127,12 +179,6 @@ kd_mou_start:
     and al, cl
     out 0x21, al
     popf
-.none:
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -297,6 +343,13 @@ kd_mou_isr:
 ; presents as a program's own cursor drawing occasionally in the wrong place.
 ; -----------------------------------------------------------------------------
 kd_mou_read:
+    call kd_mou_rearm           ; ...AND TAKE THE PORT BACK IF A PROGRAM HAS
+                                ; TAKEN IT (SPEC.md 96.45.4). Here because
+                                ; this routine is what the core asks on every
+                                ; AX=3 and every key poll, so the recovery
+                                ; costs no hook, no core byte and no
+                                ; CORE_MAX - and lands within one poll of the
+                                ; theft
     pushf
     cli
     mov bl, [kdm_btn]
@@ -304,6 +357,54 @@ kd_mou_read:
     mov cx, [kdm_x]
     mov dx, [kdm_y]
     popf
+    ret
+
+; -----------------------------------------------------------------------------
+; kd_mou_rearm - is the vector still ours? take it back if it is not
+; in:  nothing; DS = KD_SEG
+; out: nothing; every register preserved
+;
+; **A DOS PROGRAM MAY TAKE THE PORT AND A DRIVER TAKES IT BACK** (SPEC.md
+; 96.45.4). Battle Chess installs its own IRQ4 handler unconditionally in
+; early start-up, writing the IVT directly and chaining to nobody, so from
+; that moment `kd_mou_isr` is never called and INT 33h answers the position
+; the pointer had when the theft happened - for ever. CuteMouse gets its
+; vector back on the game's video mode change (measured: `int 0Ch` is the
+; game's at the title and the driver's again in play), and this is the same
+; recovery without an INT 10h hook to hang it on.
+;
+; THE NORMAL CASE IS TWO COMPARES. The base being zero means this machine has
+; no serial mouse at all, and then there is nothing to defend.
+; -----------------------------------------------------------------------------
+kd_mou_rearm:
+    cmp word [kdm_base], 0
+    je .out
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    call kd_mou_vec
+    xor ax, ax
+    mov es, ax
+    cmp word [es:bx], kd_mou_isr
+    jne .take
+    mov ax, cs
+    cmp [es:bx+2], ax
+    je .done
+.take:
+    call kd_mou_arm             ; ...and the HARDWARE with it: a program that
+                                ; took the vector also wrote the UART, and
+                                ; Battle Chess leaves MCR = 08h - DTR and RTS
+                                ; OFF, which is a Microsoft mouse with no
+                                ; power rather than a quiet one
+.done:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
     ret
 
 ; -----------------------------------------------------------------------------

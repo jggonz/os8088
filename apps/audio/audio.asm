@@ -229,6 +229,7 @@ AP_B_NONE  equ 0xFF
     APW ap_la_rd
     APW ap_clu
     APD ap_rd_pos
+    APBUF ap_rd_cur, FSEQ_SIZE     ; the refill's READ_SEQ cursor (os88rseq.inc)
     APW ap_skip
     APW ap_rd_len                  ; bytes the current ap_refill_chunk read pulls
     APD ap_data_off
@@ -298,6 +299,8 @@ AP_B_NONE  equ 0xFF
     APD apw_datoff
     APD apw_datlen
     APW apw_err
+    APB apw_spk                    ; 'o8sp': 1 shaped, 2 counts (SPEC.md 86.21)
+    APBUF ap_cinv, 256             ; ...counts back to samples, on a card (86.21.1)
 
 ; --- shared header window / cluster bounce -----------------------
 ; THE int 13h TARGET, so 512-ALIGNED (CLAUDE.md, SPEC.md 2.4): the loader's
@@ -427,11 +430,7 @@ ap_entry:
     mov ax, ap_onclose
     call OSAPI_WM_ONCLOSE
 
-    mov word [ap_msg], ap_s_ready
-    cmp byte [ap_have_sb], 0
-    jne .m_ok
-    mov word [ap_msg], ap_s_nosb
-.m_ok:
+    mov word [ap_msg], ap_s_ready  ; (no card: the speaker, SPEC.md 86.21)
     mov byte [ap_state], AP_ST_STOP
 
     ; The loader shows the window AFTER the entry proc returns, so the first
@@ -453,12 +452,16 @@ ap_entry:
 ;           the ui, the playlist.
 ; =============================================================================
 %include "apengine.inc"
+%include "os88rseq.inc"
 %include "apwork.inc"
 %include "apcb.inc"
 %include "apwav.inc"
 %include "apdec.inc"
 %include "apui.inc"
 %include "aplist.inc"
+%include "os88spk.inc"
+%include "os88spkfx.inc"
+%include "apspk.inc"
 
 ; =============================================================================
 ; Data: window template, menus, labels, strings
@@ -510,6 +513,11 @@ ap_s_playing: db 'Playing', 0
 ap_s_paused:  db 'Paused', 0
 ap_s_stopped: db 'Stopped', 0
 ap_s_nosb:    db 'No Sound Blaster - playback off', 0
+ap_s_spk:     db 'PC speaker - click or Space to pause', 0
+ap_s_spkpaused: db 'Paused - Space plays on the speaker', 0
+ap_s_spkbusy: db 'The PC speaker is busy', 0
+ap_s_spkfast: db 'Made for a faster machine', 0
+ap_s_spkslow: db 'Too slow for this file on the speaker', 0
 ap_s_nomem:   db 'Out of memory', 0
 ap_s_nofile:  db 'Playlist is empty', 0
 ap_s_loaderr: db 'Cannot play this file', 0

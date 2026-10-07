@@ -63,6 +63,7 @@ import sys
 sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
 import os88marty
+from os88pkg import PKG_FMT
 import os88mouse
 import os88parts
 import os88sym
@@ -104,9 +105,9 @@ def run():
         % (image, len(blob), len(rows), blob[3]))
 
     # --- 2. the package declares parts, and the file is longer -------------
-    if blob[2] != 3:
-        fails.append("APPLE2.O88 says version %d and must say 3: a package "
-                     "carrying parts is a v3 package with one flag bit"
+    if blob[2] != PKG_FMT:
+        fails.append("APPLE2.O88 says version %d and must say PKG_FMT: a package "
+                     "carrying parts is an ordinary package with one flag bit"
                      % blob[2])
     if not blob[3] & 4:
         fails.append("APPLE2.O88's flags are 0x%02X and bit 2 is clear, so "

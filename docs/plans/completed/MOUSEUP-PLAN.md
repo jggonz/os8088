@@ -175,7 +175,7 @@ insensitive to where in the ladder it sits**, because the case that would
 depend on ordering is exactly the case the queue is non-empty in. Put it near
 `kbm_ui`; do not rely on it being there.
 
-`evq_pending` (`events.inc:161`, API 0x0338) already reads that word, and reads
+`evq_pending` (`events.inc:161`, API 0x027A) already reads that word, and reads
 it with no lock for reasons its own header sets out.
 
 ### 4.4 `[ui_click_t]` stays stamped on the DOWN edge only

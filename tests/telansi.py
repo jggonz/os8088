@@ -212,7 +212,7 @@ class Mouse:
 
     def click(self, x, y):
         self.run("click", str(x), str(y))
-        time.sleep(0.4)
+        qmp("gsleep 0.4")               # the GUEST's time (tools/qmp.py)
 
     def dblclick(self, x, y):
         # TWO `click`s ARE NOT A DOUBLE-CLICK (CLAUDE.md): the detectors
@@ -222,9 +222,9 @@ class Mouse:
         subprocess.run([sys.executable, os.path.join(ROOT, "tools", "qmp.py"),
                         SOCK, "mouse_button 1", "sleep 0.08", "mouse_button 0",
                         "sleep 0.12",
-                        "mouse_button 1", "sleep 0.08", "mouse_button 0"],
+                        "mouse_button 1", "sleep 0.08", "mouse_button 0",
+                        "gsleep 0.4"],
                        check=True, capture_output=True, cwd=ROOT)
-        time.sleep(0.4)
 
 
 def wait_desktop(m, letter="A", secs=90):
@@ -240,15 +240,16 @@ def wait_desktop(m, letter="A", secs=90):
     docs/WRITING-TESTS.md's rule: wait on the CONDITION, not the clock. The
     condition is the one open_drive is about to test, so a pass here means the
     next line cannot fail for this reason - and the failure names the machine
-    rather than the feature.
+    rather than the feature. `secs` is the GUEST's (tests/os88qemu.py).
     """
-    for _ in range(int(secs / 0.4)):
+    def zone():
         try:
-            if dispcp.drive_ordinal(m, S, letter) is not None:
-                return
+            return dispcp.drive_ordinal(m, S, letter) is not None
         except Exception:                   # the guest is not answering yet
-            pass
-        time.sleep(0.4)
+            return False
+    if os88qemu.acted(m, zone, secs=secs, what="drive %s's zone" % letter,
+                      poll=0.4):
+        return
     sys.exit("%s: drive %s: had no desktop zone after %ds - the guest never "
              "reached a desktop (a boot failure, not a %s failure)"
              % (os.path.basename(sys.argv[0]), letter, secs,
@@ -256,7 +257,10 @@ def wait_desktop(m, letter="A", secs=90):
 
 
 def settle(m, card=None):
-    time.sleep(2.0)
+    """What a settle was on QEMU - two seconds of the GUEST's time - as a
+    CEILING: it ends when the UI task has finished with what it was given
+    (os88qemu.ui_done), tests/ethernet.py's settle exactly."""
+    os88qemu.ui_done(m, S, cap=2.0)
 
 
 def qmp(*cmds):
@@ -277,7 +281,7 @@ def typetext(text):
             cmds.append("sendkey " + SENDKEY[ch])
         else:
             sys.exit("telansi: no sendkey mapping for %r" % ch)
-        cmds.append("sleep 0.06")
+        cmds.append("gsleep 0.06")      # the guest's time (tools/qmp.py)
     qmp(*cmds)
 
 
@@ -425,8 +429,15 @@ def main():
         # reach the screen with the keyboard, so every key after this is the
         # host's.
         qmp("sendkey tab")
-        time.sleep(0.5)
-        host = m.readseg(pseg, sy["te_hbuf"], 32).split(b"\0")[0]
+
+        # EVERY WAIT BELOW IS ON THE GUEST'S CLOCK (tests/os88qemu.py), and on
+        # the byte the next line reads where there is one.
+        def hbuf():
+            return m.readseg(pseg, sy["te_hbuf"], 32).split(b"\0")[0]
+        os88qemu.acted(m, lambda: hbuf().decode("latin-1") == HOSTLINE,
+                       secs=3, what="the host box", poll=0.1)
+        os88qemu.pace(m, 0.5)           # ...and the Tab behind it
+        host = hbuf()
         say("host box  %r" % host.decode("latin-1"))
         if host.decode("latin-1") != HOSTLINE:
             fails.append("the host box holds %r and not %r - nothing below "
@@ -434,28 +445,43 @@ def main():
                          % (host.decode("latin-1"), HOSTLINE))
 
         def connected(timeout=25.0):
-            end = time.time() + timeout
-            while time.time() < end:
-                if rb("te_state") == TS_UP:
-                    return True
-                time.sleep(0.3)
-            return False
+            return os88qemu.acted(m, lambda: rb("te_state") == TS_UP,
+                                  secs=timeout, what="TS_UP", poll=0.3)
 
-        def quiet(timeout=30.0, still=2.0):
+        def hung_up():
+            """Close is ASKED and the worker does it: the state leaving
+            TS_UP is the guest's answer, and a moment more is the wire."""
+            os88qemu.acted(m, lambda: rb("te_state") != TS_UP, secs=5,
+                           what="the session leaving TS_UP", poll=0.1)
+            os88qemu.pace(m, 0.3)
+
+        def quiet(timeout=30.0, still=2.0, want=None):
             """Wait until the parser has stopped being fed.
 
             The fixture arrives in fragments with a delay between them, so
             "the buffer is empty" is true between two of them; what says the
             stream is over is the STREAM OFFSET standing still - which is the
             same byte `ansisim` counts - with the receive queue drained and no
-            reply owed."""
-            last, since, end = -1, time.time(), time.time() + timeout
-            while time.time() < end:
+            reply owed. Both `timeout` and `still` are GUEST seconds.
+
+            `want` is where the offset ENDS when the caller knows - ansisim's
+            count of the same bytes - and reaching it drained is the stream
+            over, with no stillness to prove. `still` is then only the
+            fallback for a stream that stops short of it, which the caller
+            reports."""
+            clk = os88qemu.Clock(m)
+            last, since = -1, 0.0
+            while True:
+                t = clk.secs()
+                if t >= timeout or clk.stalled():
+                    break
                 off = rw("te_soff")
                 drained = rw("te_rxi") >= rw("te_rxn") and rb("te_pndn") == 0
+                if drained and want is not None and off == want:
+                    return off
                 if off != last:
-                    last, since = off, time.time()
-                elif drained and time.time() - since >= still:
+                    last, since = off, t
+                elif drained and t - since >= still:
                     return off
                 time.sleep(0.25)
             return rw("te_soff")
@@ -483,9 +509,10 @@ def main():
                              "%d) - nothing below it can have been tested"
                              % (name, rb("te_state")))
                 break
-            got_off = quiet()
-            scr = m.readseg(pseg, sy["con_scr"], CON_SCRSZ)
             ref = ansisim.render(data)
+            expect = ref.zmodem_at if ref.zmodem_at is not None else len(data)
+            got_off = quiet(want=expect)
+            scr = m.readseg(pseg, sy["con_scr"], CON_SCRSZ)
             want = ref.raw()
             # **DID THE STREAM FINISH?** `quiet()` returns when [te_soff] has
             # stood still for two seconds with the queue drained - and its own
@@ -499,7 +526,6 @@ def main():
             # the option layer and os88bbs's telnet_escape doubles 0xFF on the
             # way out, so a literal 0xFF costs one offset at each end and the
             # equality holds exactly.
-            expect = ref.zmodem_at if ref.zmodem_at is not None else len(data)
             if got_off != expect:
                 say("%-8s %5d bytes, %d fed  STALLED" % (name, len(data),
                                                          got_off))
@@ -509,10 +535,10 @@ def main():
                              "quiet() can return between two of the server's "
                              "fragments" % (name, got_off, expect))
                 press_connect()
-                time.sleep(1.2)
+                hung_up()
                 srv.stop()
                 logs[name] = srv.log_dict()
-                time.sleep(0.6)
+                time.sleep(0.6)             # the HOST's port (see below)
                 continue
             bad = diff_report(scr, want)
             say("%-8s %5d bytes, %d fed  %s"
@@ -541,10 +567,10 @@ def main():
                 # ...the negotiation and the key table, on the first live
                 # session, before Close takes the wire away.
                 first = False
-                check_keys(qmp, srv, fails)
+                check_keys(qmp, srv, fails, m)
 
             press_connect()                 # Close: the worker owns the wire,
-            time.sleep(1.2)                 # so this asks and does not do
+            hung_up()                       # so this asks and does not do
             srv.stop()
             logs[name] = srv.log_dict()
             time.sleep(0.6)                 # ...before the port is bound again
@@ -567,7 +593,7 @@ def main():
                              % (want, got[:120]))
 
         # --- and the MIRROR, which needs a host asking for something else ---
-        check_mirror(press_connect, connected, fails)
+        check_mirror(press_connect, connected, fails, m, hung_up)
 
         # --- 6: full screen IS the board's own screen -----------------------
         # **WITH A BOARD ON IT.** The first version ran this at the end of the
@@ -579,7 +605,8 @@ def main():
         # hint on it. One more session, one more fixture, and the assertion is
         # over 2,000 cells of a board's own art.
         check_fullscreen(m, pseg, sy, a.shot, fails, press_connect, connected,
-                         quiet, streams.get("art", streams[fixtures[0]]))
+                         quiet, streams.get("art", streams[fixtures[0]]),
+                         hung_up)
 
     finally:
         if not a.keep:
@@ -695,7 +722,11 @@ class MirrorServer(threading.Thread):
             self.join(3.0)
 
 
-def check_mirror(press_connect, connected, fails):
+MIRROR = (("WONT LINEMODE", bytes([IAC, WONT, OPT_LINEMODE])),
+          ("DONT X-DISPLAY-LOCATION", bytes([IAC, DONT, OPT_XDISPLOC])))
+
+
+def check_mirror(press_connect, connected, fails, m, hung_up):
     srv = MirrorServer(PORT)
     srv.start()
     time.sleep(0.3)
@@ -704,12 +735,14 @@ def check_mirror(press_connect, connected, fails):
         srv.stop()
         fails.append("the mirror check never connected")
         return
-    time.sleep(3.0)
+    # the answers arrive at a HOST socket, but it is the GUEST that sends
+    # them - so the budget is the guest's three seconds (tests/os88qemu.py)
+    os88qemu.acted(m, lambda: all(w.hex() in bytes(srv.rx).hex()
+                                  for _n, w in MIRROR), secs=3,
+                   what="the mirror's answers", poll=0.1)
     got = bytes(srv.rx).hex()
     say("mirror    %s" % (got or "nothing"))
-    for name, want in (("WONT LINEMODE", bytes([IAC, WONT, OPT_LINEMODE])),
-                       ("DONT X-DISPLAY-LOCATION",
-                        bytes([IAC, DONT, OPT_XDISPLOC]))):
+    for name, want in MIRROR:
         if want.hex() not in got:
             fails.append("an option this terminal does not implement was not "
                          "answered with %s (%s): the server saw %s. SPEC.md "
@@ -718,7 +751,7 @@ def check_mirror(press_connect, connected, fails):
                          "is an option loop"
                          % (name, want.hex(), got or "nothing"))
     press_connect()
-    time.sleep(1.0)
+    hung_up()
     srv.stop()
 
 
@@ -753,13 +786,20 @@ def check_negotiation(log, fails):
         say("naws      %dx%d" % (naws[0]["cols"], naws[0]["rows"]))
 
 
-def check_keys(sendk, srv, fails):
+def check_keys(sendk, srv, fails, m):
     """SPEC.md 70.10.2, asserted as the BYTES the server saw."""
     before = len(srv.keys)
     for key, _hexs in KEYS:
-        sendk("sendkey " + key, "sleep 0.10")
-    sendk("sendkey ret", "sleep 0.10")
-    time.sleep(2.0)
+        sendk("sendkey " + key, "gsleep 0.10")
+    sendk("sendkey ret", "gsleep 0.10")
+    # every key's bytes and then Enter's CR, at the server - sent by the
+    # GUEST, so budgeted in its seconds (tests/os88qemu.py)
+
+    def arrived():
+        g = bytes(srv.keys[before:]).hex()
+        return all(h in g for _k, h in KEYS) and g.endswith(("0d", "0d0a"))
+    os88qemu.acted(m, arrived, secs=2, what="the keys at the server",
+                   poll=0.1)
     got = bytes(srv.keys[before:]).hex()
     say("keys      %s" % got)
     for key, hexs in KEYS:
@@ -777,7 +817,7 @@ def check_keys(sendk, srv, fails):
 
 
 def check_fullscreen(m, pseg, sy, shot, fails, press_connect, connected, quiet,
-                     stream):
+                     stream, hung_up):
     """SPEC.md 70.8.7: 80x25 onto 80x25, all of it, no status line."""
     srv = os88bbs.BBSServer(port=PORT, fixture=stream, frag=5, fragdelay=0.01,
                             timeout=90.0, once=True)
@@ -788,7 +828,8 @@ def check_fullscreen(m, pseg, sy, shot, fails, press_connect, connected, quiet,
         srv.stop()
         fails.append("full screen: no session to put a board on the screen")
         return
-    quiet()
+    ref = ansisim.render(stream)
+    quiet(want=ref.zmodem_at if ref.zmodem_at is not None else len(stream))
     scr0 = m.readseg(pseg, sy["con_scr"], CON_SCRSZ)
     drawn = sum(1 for i in range(0, CON_SCRSZ, 2) if scr0[i] != 0x20)
     say("fsx       %d of 2,000 cells hold a glyph before ^]" % drawn)
@@ -797,7 +838,12 @@ def check_fullscreen(m, pseg, sy, shot, fails, press_connect, connected, quiet,
                      "below would pass against a renderer that drew nothing"
                      % drawn)
     qmp("sendkey ctrl-bracket_right")
-    time.sleep(3.0)
+    if "te_txm" in sy:                  # the bracket's own byte, then a
+        if os88qemu.acted(m, lambda: m.readseg(pseg, sy["te_txm"], 1)[0],
+                          secs=5, what="[te_txm]", poll=0.1):
+            os88qemu.pace(m, 1)         # ...second for the screen behind it
+    else:
+        os88qemu.ui_done(m, S, cap=3.0)
     txm = m.readseg(pseg, sy["te_txm"], 1)[0] if "te_txm" in sy else 1
     if not txm:
         fails.append("Ctrl+] did not enter the full-screen bracket "
@@ -879,9 +925,14 @@ def check_fullscreen(m, pseg, sy, shot, fails, press_connect, connected, quiet,
         say("fsx cur   saved (%d,%d), live (%d,%d) - both in range after "
             "OSAPI_FSX_MODE" % (sx, sy_, cx0, cy0))
     qmp("sendkey ctrl-bracket_right")
-    time.sleep(3.0)
+    if "te_txm" in sy:
+        if os88qemu.acted(m, lambda: not m.readseg(pseg, sy["te_txm"], 1)[0],
+                          secs=5, what="[te_txm] clear", poll=0.1):
+            os88qemu.pace(m, 1)
+    else:
+        os88qemu.ui_done(m, S, cap=3.0)
     press_connect()                     # ...and the session closes with it
-    time.sleep(1.0)
+    hung_up()
     srv.stop()
 
 

@@ -147,9 +147,10 @@ def sectors(row):
 
 
 def run_sectors(rows_):
-    """The eager read run in UNPACKED sectors - the figure SPEC.md 20.12.7
-    bounds at 128 (os88partsbody.inc's `cmp dx, 128 / jae .bad`, and on the
-    unpacked side `op_usecs` likewise): every filed row that is not LAZY,
+    """The eager read run in UNPACKED sectors - the figure SPEC.md 20.12.11
+    bounds at OP_SECMAX (os88partsbody.inc's `cmp dx, OP_SECMAX / jae .bad`,
+    and on the unpacked side `op_usecs` likewise; it was 128 until the carve
+    passed 64KB): every filed row that is not LAZY,
     at its unpacked `len`, which OP_COMP does not relieve because the CLAIM
     is cut from the unpacked total. A packed part on the floppy is fewer
     sectors than this; the bound is not about the floppy."""
@@ -270,10 +271,11 @@ def pkg_copies(root=None):
 
 def main_run(argv):
     """`os88parts.py --run FILE.o88 [--max-run N]`: print the eager run in
-    unpacked sectors and fail if it is not under N (default 128, SPEC.md
-    20.12.7's bound - a run that reaches it fails at LAUNCH, on the machine,
-    so a package recipe asserts it where the file is made)."""
-    path, limit = None, 128
+    unpacked sectors and fail if it is not under N (default OP_SECMAX, SPEC.md
+    20.12.11's bound - a run that reaches it fails at LAUNCH, on the machine,
+    so a package recipe asserts it where the file is made). A recipe passes a
+    SMALLER N when it has a reason of its own to stay under one."""
+    path, limit = None, EQU["OP_SECMAX"]
     i = 0
     while i < len(argv):
         if argv[i] == "--run":
@@ -295,7 +297,7 @@ def main_run(argv):
             "scratch" if not r["off"] else "sector %3d" % r["off"], r["len"],
             " lazy" if r["flags"] & EQU["OP_LAZY"] else ""))
     ok = run < limit
-    print("os88parts: %s: the eager run is %d unpacked sectors, %s %d (SPEC.md 20.12.7)"
+    print("os88parts: %s: the eager run is %d unpacked sectors, %s %d (SPEC.md 20.12.11)"
           % (path, run, "under" if ok else "NOT UNDER", limit))
     return 0 if ok else 1
 

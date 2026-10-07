@@ -1223,7 +1223,7 @@ list to check yourself against.
 | Double-click a title bar to zoom | `wm_paint_all` both ways: a screen's dither, every drive zone, both strips, every window's `W_PAINT`. Worst transient **23,842 px**, 445 ms of flashing | out: nothing is revealed, so `wm_draw_win` and the chrome — **1,540 px**. Back: the union through `wm_paint_dmg`, with the dither clipped — **1,161 px**, a 20x drop | §11.95.1, §11.91.1 |
 | Retitle a window | full frame repaint | one `TITLE_H` strip | §11.92 |
 | Mount / unmount a volume | `wm_paint_all` | the zone grid — measured **371 glyphs → 182** | §26.3 |
-| Select a covered drive icon | **two** whole-screen repaints per click | one XOR strip, zero repaints; byte-identical output | §26.2 |
+| Select a covered drive icon | **two** whole-screen repaints per click | `kern_small`: one XOR strip, zero repaints; byte-identical output. `kern_big`: the old and new cells repainted through `desk_zones_paint`, each drawn once and only where it shows - nothing flashes, but it is a reveal pass a cell, **47-52 ms** each in place on a 4.77 MHz 8088 (§26.9.9's `cell` row), so about 100 ms a click | §26.2, §26.9.9 |
 | Select a file row (Disk window) | ~130 glyphs + a dozen fills | two XOR bands; **zero** `font_char`, **zero** `gfx_fill` for most cases | §22.2 |
 | Scroll a Disk window one row | `fm_repaint`: header, both buttons, every visible row, the whole scroll bar and the status line. Measured on CGA with `os88marty.py flicker` — **16 frames of visible redraw = 262 ms, 15 of them flashing = 246 ms, worst 2,772 transient pixels**, bounding box the whole window content | one `gfx_scroll`, the row it exposed, two XOR bands and the thumb: **5 frames = 83 ms, 2 flashing = 33 ms, worst 320 px** — and the bounding box is one row and the bar. Framebuffer **byte-identical** to the full repaint on CGA (both byte phases), Hercules and VGA mode 12h, 25 frames each | §22.11 |
 | Scroll the Browser one line, deep in a page | the tier test read the old scroll POSITION rather than the delta, so past one windowful every scroll repainted the whole band, on every page, for the rest of the document. Measured on a cycle-accurate 5150/CGA in a 15-row band, one Down key: **15 `font_run`s and no `gfx_scroll` at all**, **19 frames of visible redraw = 317 ms** | one `gfx_scroll` and the row it exposed, at every depth: **1 `font_run` and 1 `gfx_scroll`**, **5 frames = 83 ms**. Framebuffer **0 differing pixels** against the band repaint on CGA (15 rows) and Hercules (27), 55 scroll steps each | §71.10 |
@@ -1277,6 +1277,7 @@ list to check yourself against.
 | FTPD's Setup page, a click that moves the CARET | `FDD_PAGE`, so `fd_spend` answered a 1px bar with `fd_draw_setup`: `fd_clear_content` and every field, label, tick and help line. Measured on a cycle-accurate 5150/CGA by `tests/ftpdflick.py`, the same scripted session through both builds - within the same field **9 frames = 133.5 ms**, into another field **9 = 133.6 ms**, back onto a character **10 = 150.3 ms**, onto the page background **9 = 133.5 ms**, a tick's release with a field focused **10 = 150.3 ms** - each flashing **~4,300 transient pixels** over a rect that is the whole content box | the two cells the bar leaves and arrives at: one opaque `font_run` of the character it covered (or an 8x8 white fill past the end of the text) and one 1px `gfx_fill`. **1 frame = 0 ms, 15 px changed, 0 transient** for a caret move, and the tick's release is §77.44's box alone at **16.7 ms**. Every transient pixel left is the mouse pointer's own cell (§7.1). The window's rendered pixels after each of six gestures: **0 differing** against the old build | §77.45 |
 | Solitaire stock click | 635 wasted fill runs **every click** | 0 unless the picture changed | §43.7 |
 | Solitaire column redraw | every card, backs included (634 runs each) | buried backs kept; a measured move skips 246 runs | §43.7 |
+| Gorillas skyline repaint | Full-width top-down bands: VGA **3.30/5.92 s**, CGA **2.90/2.34 s**, Hercules **3.00/3.00 s** (window/fullscreen) | Complete buildings left to right, native ink-pair tables, repeated rows and empty-sky fills: VGA **1.39/1.63 s**, CGA **0.36/0.32 s**, Hercules **0.46/0.51 s**. City generation separately **1.54–1.56 → 0.30–0.31 s**. MartyPC cycles at 4.77 MHz; independent pixel and clipping checks, same seeded scene. Budgets: city 400 ms, VGA paint 1800 ms, CGA/Hercules paint 600 ms | §99.4, `tests/gorillascity.py` |
 | Fractal repaint | re-render from row 0 (~115 s) | replay the pass-0 cache, resume refining | §40.1 |
 | Fractal's INTERIOR | escape-time gives a point that never escapes the full `FR_CAP`, so at the default Mandelbrot view **76.9% of the frame's 867,555 iterations** are spent on the 13,894 black pixels — and at zoom 3 it is **100% of 2,611,200**, six minutes to arrive at a uniformly black canvas | `fr_inset`: the main cardioid and the period-2 bulb answered in at most four multiplies instead of 144, gated by their bounding boxes so a view holding neither pays **+1.1%**. Default view **120 → 49.4 s**, zoom 3 **361 → 8.2 s**. Modelled on `tools/frref.py` at 660 execution clocks an iteration — the calibration that reproduces the ~115 s above — and the picture checked on the machine: **0 differing pixels** of 65,448 at zoom 0 and again at zoom 1, against the build before it | §40.5 |
 | Fractal's MIRROR | four of the five types are symmetric and `FT_SYM` said so from the first version, unexploited: every row of the frame computed, including the 84 of 170 that are another row negated | `fr_stepv`'s passes counted from the AXIS ROW rather than row 0, so a row's twin is the row IMMEDIATELY after it and `fr_line` still holds it — no cache read, and `rc = 0` is the pre-phase order exactly. Default view **55.0 → 30.4 s**, zoom 3 **6.5 → 3.3 s**; 1.81x and not 2x because a mirrored row is still emitted and 5.2 s of that frame is drawing calls. Available only where `cy = 0` lands on a canvas row — the default, Reset and both menu zooms. On the machine: **0 differing pixels** at zoom 0 and zoom 1, and Burning Ship (which declares no symmetry) byte-identical | §40.6 |
@@ -1545,6 +1546,49 @@ tier-2 run prints `against the 80386 book` with the 386 column beside every
 row and `shl clk/bit book` at 0.
 
 ---
+
+## Part 8.2 — `sysbench` by memory REGION: ANSWERED by SPKBENCH
+
+**Status: answered 2026-09-29, and the answer is no wait states.** SPKBENCH
+(`tests/spkbench/`, SPEC.md 45.25.1) carries the per-bank row this proposed -
+4 KB of `rep lodsw` in each 64 KB bank, 0 to 9 - and the owner's 5150 reads
+all ten within 0.02% (74,021-74,032 PIT counts), the SixPakPlus banks
+included; so do the T1100 Plus, the 286 and 86Box. The difference below was
+the speaker ISR's own cost (~395 cycles a sample on iron against the 325 the
+predictor assumed), not the memory. The rest of this section is the proposal
+as it was written, kept for why the question came up; a `sysbench` section
+remains unbuilt and is not needed for this.
+
+**The proposal, as written (2026-09-29):** `sysbench`'s
+RAM rows time ONE buffer wherever the package happens to land. The owner's
+5150 (docs/FIELD-MACHINES.md) is 256 KB on the planar and 384 KB on a
+SixPakPlus, and a question came up that the one buffer cannot answer:
+**does the machine run the same code at the same speed in every part of its
+RAM?** Every MartyPC profile here says yes by construction
+(`conventional.wait_states = 0` for the whole 640 KB).
+
+Why it came up (SPEC.md 45.25): Tracker on the PC speaker benches a 5150 at
+95% of the machine on MartyPC for both BEVERLY.MOD and ELYSIUM.MOD and holds
+both - and the owner's 5150 benched ELYSIUM at 101%, and BEVERLY starved
+briefly in its heavy passages (a recording of the speaker line shows the
+carrier exact at 5,524 Hz and the ring running dry for 2-3 ms at a time),
+where MartyPC's never runs dry. A module of 100-130 KB and the speaker's
+17 KB ring are claimed high in the arena, which on that machine is SixPak
+RAM. The SixPakPlus is documented as adding NO wait states, so the
+expectation is that this finds nothing - which is itself the useful answer,
+because it moves the search to the interrupt's own cost on iron.
+
+What the profile would be:
+- the same RAM-bandwidth rows (a `rep movsw`, a `lodsb/stosb` loop, an
+  `xlat` loop - the speaker ISR's and the shaper's shapes) run with the
+  buffer placed at **each 64 KB bank** in turn, 0 to 9, by a claim sized to
+  land there (or a far pointer the package walks);
+- the speaker ISR's cost per pulse (§34.11.7.1's `CYC_SPK_PULSE`) timed
+  with its RING in the low 256 KB and again above it;
+- printed per bank, so a card's wait states show as a step at its base.
+
+It is a `sysbench` section rather than a new package, and a MartyPC run is
+its control: flat across the banks there, by the configuration above.
 
 ## Part 9 — The field reports
 
@@ -4675,6 +4719,16 @@ goes only on the `ibm5150_82_v4` machines, and the GLaBIOS twins keep 1:1.
 > so no config has to distinguish the two ROMs and `os8088_5150_cga_gla`
 > boots `combo.img` in 175 ticks. The ~250 ms abandon is still a fact about
 > GLaBIOS and still the reason not to take a disk number off it.
+>
+> **CORRECTED 2026-09-24: the ~250 ms abandon was never a fact about
+> GLaBIOS.** It was upstream MartyPC raising two IRQ6s for one RECALIBRATE.
+> The spare one left the BDA's working-interrupt flag set, so GLaBIOS's
+> 37-tick IRQ wait returned at once and its 5-tick RESULT wait (~250 ms) is
+> what expired. `tools/martypc/patches/05-fdc-recal-one-interrupt.patch` raises
+> one. With it GLaBIOS completes a 345 ms read first time
+> (docs/MARTYPC-DEBUG.md, *GLaBIOS "gives up..."*). The IBM ROM tolerates the
+> stale flag, which is why it "completed the identical reads". GLaBIOS is still
+> not where a disk NUMBER comes from, for the other reason that section gives.
 
 **And a run must be paced per SECTOR, not charged as one lump.** The first
 version delayed a whole multi-sector run in one silent block, which is not what
@@ -4996,7 +5050,8 @@ to say: go and find out what the machine is *doing*, not just how long it took.
 
 **The GLaBIOS exception.** Set 35 gave 2:1 media only to the IBM-ROM machines,
 because GLaBIOS abandons a floppy operation after ~250 ms and a 2:1 track read
-takes up to 400. At 1:1 no machine needs the exception and every config here
+takes up to 400 (that abandon was MartyPC's double RECALIBRATE interrupt and
+not GLaBIOS, corrected in Set 37's note above). At 1:1 no machine needs the exception and every config here
 carries the same disks; `os8088_5150_cga_gla` boots `combo.img` in 175 ticks.
 
 **"MartyPC's floppy is 1.17x slow."** It is 0.92x, and the sign changed twice
@@ -13706,3 +13761,550 @@ before, so the new money is the *second*, landing on the next tick, which paid
 nothing. A DOT DELIRIUM frame on this adapter is **44.13 ms of a 54.93 ms
 tick**, so 418 µs is **3.9% of the slack**, on a quarter of the ticks. The
 answer to "do we have the headroom" is yes, with the arithmetic attached.
+
+### Set 147 — 1942 desktop splash on the XT (SPEC.md §101.5)
+
+Measured 2026-09-28 by `tests/n1942front.py` on MartyPC's cycle-accurate
+4.77 MHz 8088 models: `os8088_xt_vga`, `os8088_5150_cga_gla` and
+`os8088_5150_herc_gla`, using the full kernel and cartridge game package.
+The test brackets guest calls at the locked keyboard callback and checks
+all reveal steps. Times include the native decoder, clipping and blit.
+
+| operation (ms) | VGA | mono CGA | Hercules |
+| --- | ---: | ---: | ---: |
+| initial black surround and controls | 77.32 | 61.13 | 101.95 |
+| slowest six-row decode/reveal step | 45.87 | 12.39 | 12.19 |
+| complete cached repaint | 239.03 | 91.59 | 162.08 |
+| player selection (pointer only) | 6.52 | 5.98 | 9.33 |
+| slowest help/menu change | 59.40 | 57.85 | 69.13 |
+
+The initial whole-image decoder took 470.93 ms on VGA before drawing. The
+shipped implementation uses the existing window timer to decode and reveal
+one six-row band, then returns. Every step stays below a 55 ms BIOS tick;
+there is no background worker. The completed cache needs no further decode
+until fullscreen reuses it or the window changes adapters. Full window
+repaints are measured separately from selection and help; ordinary selection
+changes only the two aircraft-pointer cells.
+
+Artwork is generated at build time from original vector contours. VGA uses
+native planes through `GFX_BLITP`'s ownership-region walk, with packed fallback
+pixels in each cached band. Monochrome adapters use `GFX_BLIT1` contour bands,
+without per-pixel runtime drawing or dithering. The existing 64 KB canvas
+holds the cache (62,208 bytes for VGA, 8,064 for Hercules, 4,032 for CGA).
+The splash adds no memory claim. Kernels lacking window timers prepare the
+same static cache during entry; the progressive timing figures above apply
+to the full kernel.
+
+The regression compares every logo pixel to its build-time raster on all
+three adapters and checks input, help, About/reveal interaction, dragging,
+mouse launch, resume, new game and desktop restoration. It gates reveal
+steps below 55 ms, selection below 20 ms, menu changes below 100 ms and
+cached repaint below 250 ms. These are guest-cycle measurements, not a
+claim of a hardware field run; package disk loading is outside the brackets.
+
+### Set 148 — Excitebike's scroll engine on the XT, and what a VRAM word really costs (SPEC.md §102.1, §102.6)
+
+Measured 2026-09-29 by `tests/excitebike_perf.py --scroll --governor` on MartyPC's
+cycle-accurate 4.77 MHz 8088 models `os8088_xt_vga` and `os8088_5150_cga_gla`, the
+shipped package on `build/excitebike360.img`, one bike, the first course scrolled at
+3.4 px/step (`xb_tspeed` = 0366h). The counter is MartyPC's; a breakpoint costs the guest
+no cycle; the labels are `xv_t0..t4`, `xc_t0..t5` and `xb_presented`. **Emulator numbers
+only**: a real card's wait states and a real floppy are what
+docs/FIELD-MACHINES.md is for, and nothing here says Excitebike runs at 54.6 Hz on a 5150.
+
+| clocks a frame (150 frames) | VGA 0Dh | CGA 320x200x4 |
+| --- | ---: | ---: |
+| period, mean | **87,381** (54.62 Hz) | **87,819** (54.35 Hz) |
+| governor | n = 1 | n = 1 |
+| erase (VGA: footprints; CGA: in the boxes) | 5,131 | - |
+| entering columns | 9,068 | 7,640 |
+| sprites: draw / boxes in RAM | 13,541 | 9,929 (19.1k a rewrite) |
+| sprites: card write | - | 3,033 (5.9k a rewrite) |
+| HUD | 1,674 | 6,713 |
+| scroll arithmetic + HUD image | - | 2,121 |
+| flip / retrace wait (idle) | 338 | 33,654 |
+| **sprite erase + draw a bike** | **18,672** (gate 20,000) | **12,962** a frame, **26,534** a rewrite (gate 15,000) |
+
+The hard gate (mean period <= 174,763 clocks, 27.3 Hz) is met by a factor of two: a
+sub-tick is 87,381 clocks and the work is ~30k of it. **The plan's per-component table is
+not met and the reasons are measurements, not tuning:**
+
+* **A VRAM word is 2-3x the model.** Latch copies on the VGA are near it (37 clocks a
+  line; `movsb` + `add di,39`), but a VGA sprite (byte, layer) pair is ~130 clocks
+  (plan: 94.6, and 73 for the write-mode-3 loop MartyPC cannot run), and a CGA word
+  written by `rep movsw` is **~86 clocks** where the plan priced 36. The CGA's
+  whole-column write is ~21k clocks (plan 6k).
+* **The skip lists are the art.** With the first art a plain band pair still differed
+  on 103 lines of 128; redrawn in vertical runs it writes 33 in 7 runs, and a run costs
+  ~155 clocks to start (`xv_runs`), so an entering VGA column is ~6.5k clocks (top
+  strip 55 changing lines of 64, band ~2k) against the plan's 2.65k, which assumed ~30
+  lines of 192. The three pages (SPEC.md §102.1: a start address takes effect a CRT
+  frame later, and two pages cannot be proved safe without a retrace spin) make each
+  page bring 3 frames of columns up to date, ~1.4 columns a frame at this speed.
+* **The CGA gate is met a frame and missed a rewrite.** An unchanged bike under a window
+  that did not scroll is skipped, so the scripted scroll (the window moves on ~46% of
+  frames at n = 1) averages 13.0k; a racing bike pays the full 26.5k: RAM box fill 4.9k,
+  the pose over it 10.1k (92 trimmed bytes, ~85 clocks each: `lodsw`, `and`, `or`,
+  `stosb`, `loop`), bookkeeping ~2k, and 5.9k to the card.
+
+The governor test is in the same run: a busy loop of 8 x 17.4k clocks injected into one
+frame raises n from 1 to 3 at the end of THAT frame on both adapters, and n returns to 2
+after exactly 64 quiet frames (work < 0.8 of (n - 1) sub-tick). Engine start inside the
+loading screen (dictionaries, the sprite claim, the course, the palette) is 1.9 s on VGA
+and 1.5 s on CGA; the VGA sprite loader is ~0.5 s, the CGA's ~0.3 s by a 256-word
+expansion table (a per-pixel loop took 2.5 s).
+
+**Set 148 repair (wave 2).** Four changes after independent verification: (1) the
+CGA no longer SKIPS a frame whose retrace missed its boundary - it waits for the next
+retrace (at most two sub-ticks from entry) and commits late; a skip threw away all the
+frame's work and a heavy frame skipped again and again, which made the governor test
+(the burst landed in a "neutral" catch-up frame) and the pixel gate's landing loop
+intermittent; (2) the governor's quiet test is "work, rounded up, fits n - 1 sub-ticks"
+(the 0.8 margin sat inside the CGA's steady 0.83-0.93 and n could never fall from 2);
+(3) CGA HUD: image line 0 (black over black) is not written and the changed cells are a
+list rather than a scan of 20 flags: 6.8k -> 5.3k a frame; (4) VGA: HUD loop end in DX
+(1.67k -> 1.48k) and `xv_col` reuses BP/DI instead of reloading (6.5k -> 6.35k a column).
+Now asserted in `excitebike_perf.py` at +25% of the plan: VGA erase +22%, HUD +23%,
+column write +22% (of the plan's measured full write 5.18k), sprites -15%; CGA HUD +9%.
+CGA sprite: 13.4k a frame (gate met), 27.0k a rewrite (floor: ~110 card words at ~86
+clocks is ~9-10k before any RAM work, so 15k cannot be met by a moving bike here).
+
+**Set 148, wave 6 (the Hercules column, and what the compiled poses did to the other two; SPEC.md §102.7).**
+Measured 2026-09-29 by `tests/excitebike_perf.py --scroll --governor --adapter both` and `tests/excitebike_perf.py
+--herc --scroll --governor` (logs `/tmp/exb-reports/w6f-scroll.log`, `w6f-scroll-herc.log`), same conditions as above (150
+frames, the first course at 3.4 px/step under one bike), on `os8088_xt_vga`, `os8088_5150_cga_gla` and
+`os8088_5150_herc_gla`. "Before" is Set 148 as repaired and Set 150's regression figures. **Emulator numbers only**;
+MartyPC charges the Hercules's bus what it charges the CGA's.
+
+| clocks a frame | VGA before | VGA now | CGA before | CGA now | **Hercules** |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| period, mean | 87,381 | **87,355** (54.64 Hz) | 87,819 | **80,156** (59.54 Hz) | **94,895** (50.29 Hz) |
+| governor n | 1 | 1 | 1 | 1 | 1 |
+| erase (VGA footprints) | 5,183 | 5,183 | - | - | - |
+| entering columns | 9,068 (6,439 a column) | 9,000 (6,441 a column) | 7,640 | 6,771 (0.42 a frame) | 9,624 (0.50 a frame, ~19.2k a column) |
+| sprites: draw / boxes in RAM | 13,541 | **8,650** (-36%) | 9,929 | 9,250 | 10,143 |
+| sprites: card write | - | - | 3,033 | 2,794 | 3,258 |
+| HUD | 1,478 | 1,484 | 5,300 | 4,420 | 5,515 |
+| retrace wait (idle) | - | - | 33,654 | 46,969 | 55,311 |
+| **sprite erase + draw a bike** | 18,951 (gate 20,000) | **13,833** | 14.2-14.6k a frame (gate 15,000) | **12,044** a frame | **13,401** a frame |
+| ...a REWRITE (a racing bike) | - | - | 29.5-30.1k | **24,438** (63 of 151 frames) | **24,138** (73 of 149) |
+
+The Hercules is the CGA engine with another card side (SPEC.md §102.7.1) and costs what the CGA costs to within what its
+geometry changes: **a rewrite 24.1k against 24.4k**, a frame 13.4k against 12.0k because the CRT frame is longer (94.7k clocks
+against 79.6k) so a 3.4-pixel step is 0.50 of a column a frame, not 0.42, and the window scrolls on 49% of the frames instead of
+42%. A column is dearer (19.2k against 16.1k: twelve runs of `movsw / add di,88` over four banks against four, and a `mul` and a
+`div` per run and column for the ring arithmetic) and the HUD 5.5k against 4.4k (it repaints on the scrolling frames, of which
+there are more). The card is otherwise the same: 200 words a column, the boxes a line at a time, ~86 clocks a word.
+
+**The compiled poses** (SPEC.md §102.7.2) are the change behind the sprite rows: `sprites` on the VGA fell 13,541 -> 8,650 and
+the erase + draw of a bike 18,951 -> 13,833; a CGA rewrite 29.5-30.1k -> 24.4k. What they cost is load time, once, inside the
+loading screen: **the engine start went 1.9 s -> 2.27 s on the VGA and 1.5 s -> 1.89 s on the CGA and Hercules**
+(`tests/excitebike_front.py`, `guest time`, log `/tmp/exb-reports/w6-front.log`), 10,299 bytes of code on the CGA/Hercules (18
+pose-phases) and 12,276 on the VGA (12), in the sprite claim (28 KB and 41,389 of 44 KB). The gates: `REWRITE_BUDGET` moves
+31,000 -> 26,000 and the Hercules is held to the CGA's 15,000 a frame.
+
+### Set 149 — Excitebike's rider over a whole course, and a CGA loop that waited twice (SPEC.md §102.3, §102.6)
+
+Measured 2026-09-29 by `tests/excitebike_perf.py --lap` on MartyPC's cycle-accurate 4.77 MHz
+8088 models `os8088_xt_vga` and `os8088_5150_cga_gla`, the shipped package on
+`build/excitebike360.img`: Selection A at turbo, the reference rider (`exbsim.bot_input`,
+closed loop against the model) feeding the guest's script ring, **rendering on**, both laps
+of a course through ramps, hurdles, mud, arrows, crashes and the finish. The frame period is
+the counter between successive `xb_presented` marks and the simulation's price the gap
+between `xm_s0` and `xm_s1`; a breakpoint costs the guest no cycle. **Emulator numbers
+only** (a real card's wait states and a real floppy are docs/FIELD-MACHINES.md's), and they
+say nothing about a 5150 until a field run.
+
+| a whole course, clocks | VGA t1 | VGA t2 | CGA t1 | CGA t2 |
+| --- | ---: | ---: | ---: | ---: |
+| steps / frames | 2,744 / 2,493 | 3,801 / 3,454 | 2,744 / 2,713 | 3,801 / 3,697 |
+| period, mean | **87,379** (54.62 Hz) | 87,380 | **80,354** (59.40 Hz) | 81,673 (58.44 Hz) |
+| period, min / max | 71,284 / 103,011 | 66,586 / 106,683 | 40,172 / 191,187 | 30,124 / 195,446 |
+| period, p99 | **101,016** | 101,448 | **114,886** | 150,152 |
+| game speed (steps a second) | 60.1 | 60.1 | 60.1 | 60.1 |
+| the simulation a step, mean | **3,019** | 2,912 | **3,174** | 3,043 |
+| ...median / p95 / p99 | 2,912 / 4,026 / 4,743 | 2,751 / 4,027 / 4,818 | 2,934 / 4,703 / 8,288 | 2,775 / 4,637 / 8,013 |
+
+Gates (all met): mean period <= 174,763 (27.3 Hz), p99 <= 262,144, the simulation <= 4,500 a
+step (mean; the plan priced 4,500 and the step costs two thirds of that, ~3.0k: the p99 is a
+step an interrupt landed in), the rider reaches the finish. The VGA holds n = 1 for the whole
+lap; the sim is 3.5% of its frame.
+
+**The CGA number is what the wave changed, not what it inherited.** The first lap measured
+178,950 mean, 420,670 p99 and 55 steps a second: 26.7 Hz with frames of 3.6 and 4.5
+sub-ticks. Two causes, both found by putting the per-frame parts of the lap in a table
+(`xc_ts` -> `xc_t1` is RAM work, `xc_t1` -> `xc_t2` the retrace spin, `xc_t2` -> `xc_t5` the
+card):
+
+1. **The sub-tick clock lost a boundary on a wait of n >= 2.** It counts a reload only when
+   the PIT count read is LARGER than the last sample's; a wait samples once a sub-tick, so a
+   task that resumed later in this sub-tick than in the last reads a SMALLER count and the
+   loop waited an extra whole sub-tick. `FSXW_FRAME` returns only after a new IRQ0, so the
+   wait now counts the boundary it proves: 420k -> 273k p99 on its own.
+2. **The CGA spun for the retrace on top of its n-sub-tick wait.** RAM work is ~30k, the
+   card writes ~30k (46k with a second box) and the spin 30-75k idle in between, so the
+   frame overran its sub-tick whatever n said and settled at n = 2. The loop no longer waits
+   n sub-ticks on the CGA: a frame ends when its card writes do, one CRT frame (79.6k
+   clocks) when the work fits and two when it does not (the p99 above is two). Steps a
+   frame are made from the frame's length in PIT counts (start sample to start sample, so
+   nothing is lost between frames): 60.1 steps a second on both adapters, where the first
+   version of the accumulator measured to the end of the wait and ran 2% slow.
+
+What a step costs, by the counter: ~1.9k for a step on the ground (lane, class lookup, heat,
+pitch timer, position, column compare, a speed update on every 4th), +0.9k for a column
+crossing (once every 2.3 steps at turbo), +0.3k a script keyframe, ~0.5k in the air. Nothing
+multiplies or divides. The frame's other rider costs: six `OSAPI_KEY_DOWN` far calls
+(~1.7k) and the HUD compare (~0.6k VGA; on the CGA the changed cells).
+
+Two limits this set found and did not remove: (a) **the CGA composes each bike's box from
+the world alone**, so records whose boxes overlap lose the earlier one's pixels (the rider,
+its shadow and its dust are placed so they cannot overlap; wave 4's opponents can pass each
+other and the back end will have to draw every bike a box meets); (b) **`XB_MAXBIKES` = 4**
+has no room for three opponents and their shadows, and a CGA rewrite is 27-29k a bike
+(a card word ~86 clocks): four racing bikes cost ~110k, over a sub-tick, so the CGA's
+wave-4 loop is the two-CRT-frame one at best.
+
+### Set 150 — Excitebike's opponents: a frame of four bikes, a sub-tick clock that lost time, and a CGA that takes two riders (SPEC.md §102.4, §102.6)
+
+Measured 2026-09-29 by `tests/excitebike_perf.py --selfb` on MartyPC's cycle-accurate 4.77 MHz
+8088 models `os8088_xt_vga` and `os8088_5150_cga_gla`, the shipped package on
+`build/excitebike360.img`: **Selection B**, the rider and the opponents ALL driven by the game's
+own AI (the attract demo's brain, `xb_attract`: a closed loop, so the run is deterministic and needs no
+script), over the whole first course, **rendering on**. The frame period is the counter between
+successive `xb_presented` marks; the on-screen count is read from the bike records every sixth
+frame; game speed is the rider's `xm_stepn` over the guest's seconds. Two runs on the same build
+agree to 0.4%. **Emulator numbers only**, as in Sets 148 and 149.
+
+| Selection B, a whole course | VGA, rider + 3 | CGA, rider + 2 | CGA, rider + 3 (not shipped) |
+| --- | ---: | ---: | ---: |
+| frames | 832 | 780-785 | 537 |
+| period, mean | **246,959** (19.33 Hz) | **248,542-249,226** (19.2 Hz) | 363,930 (13.1 Hz) |
+| period, min / max | 145,749 / 379,450 | 150,552 / 352,209 | 224,448 / 543,672 |
+| period, p99 | **297,518** | **338,832-340,060** | 488,001 |
+| the opponents on the screen (all of them) | 79% | 93% | 74% |
+| game speed (steps a second) | 60.1 | 60.0 | 59.9 |
+| governor n at the end | 2-3 | 3-4 (a report: the CGA is paced by its retrace) | 4 |
+
+Gates (plan G4, all met): mean <= 262,144 (18.2 Hz), p99 <= 349,525 (13.7 Hz), the rider finishes, the
+opponents on the screen on at least half the frames. **The CGA runs two opponents: the plan's recorded
+fallback**, because three measure 364k a frame (four to five CRT frames) and 488k p99, over both gates by 39% and 40%; the
+margin two leave is 5% of the mean and 3% of the p99, which is why the row is a gate and not a claim.
+
+**Where a frame goes, clocks** (`xb_frame_step`, `xa_frame`, the back end's marks; n = 3 on the VGA, a
+243k frame on the CGA):
+
+| | VGA, rider + 3 | CGA, rider + 2 |
+| --- | ---: | ---: |
+| the rider's steps (3.3 a frame on the VGA) | 14.2k | 13.7k |
+| the opponents: swap, steps, records, respawn, collisions | 55.5k | 37.2k |
+| HUD string, records, bookkeeping | 5.4k | 7.1k |
+| erase / RAM boxes (compose) | 26.1k | 103.9k |
+| columns | 23.8k | 19.0k (+26.1k retrace wait) |
+| sprites / HUD / box transfer | 58.1k / 1.8k | 8.7k / 22.4k |
+| work | ~185k | ~217k + the wait |
+
+An opponent's step is 3.1k for `xm_step` (the rider's own routine, the same rules) plus 0.3k typically for
+`xa_input`; the frame adds ~1.2k a swap in and out and ~3k for the collision pass.
+
+**Three defects the wave found by measuring, each a real bug:**
+
+1. **The sub-tick clock lost sub-ticks in a heavy frame, and the game ran at HALF SPEED.** The clock counts a
+   PIT reload only when a sample reads a LARGER count than the last, so two samples more than one sub-tick
+   (87k clocks) apart lose a whole one. Wave 3's frames were 55k of work and never showed it; four bikes are 130-250k,
+   and the first Selection B run measured **30 steps a second** where 60.1 are wanted (the game clock ran at half
+   the time). `xb_clk_sample` (now CS-relative, callable with any DS) is called at the SEAMS of the back ends
+   and the opponents' loop: before every bike but the first, every second footprint, every column of a full window
+   write, every opponent. A lone rider pays nothing - the first cut sampled every column and record and cost the
+   scroll gate 3% (the erase and column bands went over their +25%), so each seam is conditional on there being
+   more than one thing to do. After: 60.0-60.1 steps a second.
+2. **The governor could not come down from n = 3.** It asked "does this frame's work fit n - 1 sub-ticks", but the work
+   was measured at THIS n's step count and the simulation is 40% of a Selection B frame: at n = 3 (3.3 steps) the work
+   is 185k, over two sub-ticks, although a frame of n = 2's 2.2 steps is ~155k and fits. It now predicts
+   `work - simulation / n` (+6%), the simulation timed between the frame start and the render (`xb_swl`); a wrong
+   prediction costs an immediate raise and 64 more quiet frames, and the wave-2 governor test (a burst, no
+   simulation) is unchanged (raised to 3 in the burst's frame, back after exactly 64).
+3. **The opponents' lane look-ahead cost 26k clocks a frame.** The first version asked `exb_ccls` for each lane in
+   turn (300 clocks a column a lane, 16k a look-ahead, every 8 steps). Four 61-byte tables (`xa_tables`, built once at
+   the load) let one pass over the 10 columns sum all four lanes (~165 a column, 1.7k), every 12 steps: the opponents fell from
+   67.7k to 55.5k a frame with density UP (see below). **A second, measured cost: `xc_drawc`.** Compositing overlapping
+   bikes on the CGA drew every neighbour into a box checking every byte (~60 clocks a byte, 50k a box with three riders
+   bunched round the player); it now steps over the bytes outside the box with one ADD and draws only the overlap
+   (~120 a row, ~40 a byte), and `xc_prep` lists the present records once a frame so a lone rider walks one, not six.
+
+**What the wave costs the earlier gates**, all still met: the VGA scroll test measures erase 5,183 (+23.4% of the plan's
+4.2k, limit +25%), columns 6,439 (+24.3% of 5.18k), sprite erase + draw 18,951 (gate 20,000); the CGA rewrite is now
+29.5-30.1k (wave 3: 28.1k; the fence moves 30,000 -> 31,000 with these reasons: the present-record list, six-record loops
+and the clock's seams) and 14.2-14.6k a frame (gate 15,000). The lap gates (`--lap`) are unchanged: VGA n = 1 all lap.
+
+**Opponent density is a tuned rule, not a measurement of the machine.** With the rubber band at +160 / -40 pixels and
+respawn at 330 / 250 the three opponents were on the screen on 23-31% of the frames (the rider, itself the reference
+bot, cannot be caught by a rider of the same speed, so a slower opponent fell off the left edge and stayed there);
+at +110 / -20 with respawns at 260 ahead / 100 behind (from the screen's edge: 110 behind or 215 ahead) they are on
+79% (VGA). That raised the VGA's mean from 203k to 247k - an honest price: more of the frames carry four bikes.
+
+### Set 151 — Excitebike's sound: what one far call costs, and where it is made (SPEC.md §102.5, §102.6)
+
+Measured 2026-09-29 by `tests/excitebike_perf.py --lap --audio-ab` on MartyPC's cycle-accurate 4.77 MHz
+models `os8088_xt_vga` and `os8088_5150_cga_gla` (no sound card: the speaker path, which is the one an XT has),
+the shipped package on `build/excitebike360.img`: the wave-3 lap (Selection A, a whole course, the reference bot
+feeding the steps, rendering on), run **muted** (`xu_mute` poked before the bracket opens) and then **on**. The
+sound's price is read off breakpoints, which cost the guest no cycle: `xu_race_frame` entry to `xb_flushed` (the
+whole of a frame's sound) and the hits on `xu_tonecall` between two `xu_race_frame` entries (calls in a frame).
+**A frame the kernel's IRQ0 tick landed in is dropped from these figures**: the tick's handler is 2-4k clocks
+of the kernel's, and a p99 taken over frames it landed in measures the tick (the CGA's first run read p99 4,731 with
+them in). The tick's phase is a least-squares line through 300 stops at `sch_isr` (+-1.5k of slop), so the CGA drops
+3-4% of its frames and the VGA, whose frame STARTS on the tick, none. **Emulator numbers only**, as in Sets 148-150.
+
+| the wave-3 lap, sound on | VGA | CGA |
+| --- | ---: | ---: |
+| period mean, muted / on | 87,378 / 87,379 | 80,028 / 80,144 |
+| the sound a frame, mean / p50 | 1,593 / 1,218 | 1,622 / 1,220 |
+| ...p95 / p99 / max | 3,712 / 4,543 / 6,349 | 3,700 / 4,405 / 6,326 |
+| frames that made a driver call / most in one frame | 13.4% / 1 | 12.2% / 1 |
+
+**The plan's gate, "audio adds <= 4,000 clk a frame at peak", is NOT met as a p99 of the whole (4.4-4.5k, max 6.3k):
+one `OSAPI_SND_TONE` is ~2.1k clocks** (the far call is 223 of them; the rest is the kernel's dispatcher, the tone
+arbiter and the timer's port writes) and the eighth of the frames that move the engine's pitch pay it, with a cue's
+frame (`xu_events` + `xu_fx`, up to ~2.6k of its own) making the p99. **What it does not do is cost the frame
+anything**: the sound runs after `xb_gov` has measured the work and before the idle wait (`.paused: call xb_gov / call
+xu_race_frame / .wait`), so the governor never sees it and the period does not grow (A/B: +1 clk a frame on the VGA,
++116, 0.14%, on the CGA). On a frame with no slack it would cost its clocks; the VGA and CGA lap frames have tens of
+thousands.
+
+**What the first version cost, and what took it out.** The first cut ran in the frame and measured **2,985 clocks a
+frame, p99 5,396**: memory-operand instructions are ~30 clocks each on an 8088 (four bytes of fetch at 4 clk, plus the
+effective address), and a frame that changes nothing was ~2.4k of them. Now a frame that changes nothing is ~1.2k
+(p50). The changes, in the order they were made (the per-routine figures are the breakpoint profile of the first 900
+steps of the lap, entry to next entry; the item sizes marked ~ are instruction counts, not separate measurements):
+
+1. `xu_race_frame` does not save and restore the eight registers (it ends the frame's tail and loses them anyway): ~-215.
+2. One flag (`xu_run` = live AND racing) for two compares at the top; the checks for an event, an effect and a song
+   are inline, so the common frame calls none of them: measured, the three calls' 335 clocks fell to 6-40.
+3. The frame's step count is `sub-ticks x 282 / 256` - a multiply, 291 clocks - and is `add byte [xu_phase], 26` and
+   a carry when the period is one sub-tick (all but the slowest frames).
+4. The engine's target is `KTAB[speed / 16]`, a 76-byte table in `EXB.SND`, and not `speed x 51 >> 10`: no multiply,
+   no ten-place shift, and a frame whose step is where it should be returns after one compare. Measured: 960 -> 551
+   median clocks. The fifth below (a second table read) is worked out only for FM.
+5. Branches laid out so the common path falls through (a taken jump is 16 clocks, a fall-through 4).
+6. The counters: the first version kept `calls this frame`, `the most in one frame` and `all told` in the guest, ~250
+   clocks on a frame that called. Now the guest counts only `xu_ntone` (one `inc`) and the per-frame count is the
+   harness's, from the breakpoints above.
+7. **The whole sound moved out of the frame's work**, after the governor (the events are captured into `xu_ev` at the
+   end of `xb_sim_frame`, which clears `xm_ev`). Moving only the far call first (a deferred `xu_flush`) took the in-frame
+   p99 from 4,190 to 2,485; moving all of it took the sound out of the governor's `work` altogether.
+8. The engine's tone on the speaker is asked for at most once in three frames while the pitch moves (`XU_HOLD`), at
+   once when the engine starts or stops: the calls fell from 16% of the frames to 13%, and a note that moves a
+   semitone in 40 ms does not need every 18 ms.
+
+**Two defects found by measuring**: a **frozen effect held the speaker** - pausing while a takeoff was sounding left
+its second note on, because a pause froze the effect's clock and the effect kept the speaker (`xu_pause` cancels what
+plays but the start lights, which freeze silent; the ride arm of `tests/excitebike_audio.py` caught it as `xu_sent =
+380`); and **the finish fanfare made two tone calls in one frame** (a tone-off from `xu_silence`, then the lead's
+note): the speaker's silence at a song change is now the next emit's, and the one-call-a-frame gate reads 1.
+
+**What the wave does to the earlier gates.** The lap gates (`--lap`) hold with the sound on (above). **Selection B on
+the VGA is a different matter and is not clean.** The VGA race STARTS at n = 3 (three sub-ticks a frame) and the
+governor comes down to n = 2 only after 64 consecutive quiet frames; a race whose opponents stay near never gets them
+and sits on the **n = 3 plateau, which is 3 x 87,381 = 262,143 clocks**, the wave-4 gate's number (262,144) to the clock.
+With the sound muted, six default-seed runs (and three seeded ones) all dropped to n = 2 at frame ~666 (mean
+244.4-245.2k, opponents on the screen 76%); with it on, **of ten default-seed runs of the shipped build four stayed on
+the plateau** (mean 262,133 / 262,211 / 262,523 / 262,634, opponents 93-94%) and **three of them failed the old gate
+by 67-490 clocks (0.03-0.19%)**; three seeded runs (`--seed`) all dropped. It is chaos, not a cost:
+the sound moves the frame boundaries by a few thousand clocks on a sixth of the frames, which changes the AI's
+trajectory, and the muted trajectory is one deterministic sample of it. **The gate's mean moved 262,144 -> 263,000**
+(the plateau plus 0.33%; a drop to n = 4 is 349k and still fails it): a change to a wave-4 number that is the
+maintainer's to accept or put back - and to fix properly, by letting the governor come down off n = 3 sooner. `--mute`
+and `--seed` are the A/B; the CGA (three sub-ticks, then four) reads 248,677 on / 238,915 muted, both inside it.
+The test also read `xm_fin` while `xa_frame` had an opponent's state block swapped in and reported a finished ride
+as unfinished once; it is read halted at the frame's end now.
+
+### Set 152 — Excitebike on the Hercules: a whole lap, Selection B, and what the compiled poses and a rule about neighbours bought (SPEC.md §102.7, plan gate G6)
+
+Measured 2026-09-29 on MartyPC's cycle-accurate 4.77 MHz 8088 models `os8088_xt_vga`, `os8088_5150_cga_gla` and
+`os8088_5150_herc_gla`, the shipped package on `build/excitebike360.img`, by `tests/excitebike_perf.py` (logs
+`/tmp/exb-reports/w6f-lap-*.log`, `w6f-selfb-*.log`, `w6f-lap2-herc.log`, `w6f-prof-*.log`). **Emulator numbers only**, as in
+Sets 148-151: a real Hercules card's wait states are docs/FIELD-MACHINES.md's.
+
+**Selection A, a whole course at turbo, sound on** (`--lap --audio-ab`, the second block of each log; the Hercules by `--herc
+--lap`, the wave's acceptance):
+
+| a whole course, clocks | VGA | CGA | **Hercules** | Hercules, course 2 |
+| --- | ---: | ---: | ---: | ---: |
+| steps / frames | 2,749 / 2,498 | 2,749 / 2,730 | 2,749 / 2,302 | 3,807 / 3,196 |
+| period, mean | 87,378 (54.62 Hz) | 79,969 (59.68 Hz) | **94,871 (50.31 Hz)** | 94,615 (50.44 Hz) |
+| period, p99 | 101,592 | 113,237 | **148,846** | 132,156 |
+| frames of two CRT frames | 0.00% | 0.40% | 1.56% | 0.88% |
+| the simulation a step | 3,056 | 3,214 | 3,199 | - |
+| the sound, mean / p99 | 1,613 / 3,929 | 1,644 / 3,927 | 1,670 / 3,926 | - |
+| game speed | 60.1 | 60.1 | 60.1 | - |
+
+**Gate G6 (Hercules >= 18.2 Hz = 262,144 clocks): met 2.76x, by a game frame that is one CRT frame.** (Muted, the Hercules's mean is
+94,381: the sound "adds" 490 clocks a frame on a loop whose frame is a whole number of 94.7k CRT frames, i.e. the frames that
+fall on the second CRT frame; the VGA adds 0 and the CGA -88.) The CRT frame is 94.7k clocks (the desktop mode's R4/R5 are
+untouched, ~50.4 Hz) and a lap frame does not fill it: the scroll test's retrace wait alone is 55k of it.
+
+**Selection B** (`--selfb`; the Hercules by `--herc --selfb`), the game's own AI on the rider and the opponents, rendering on:
+
+| whole course 1 | VGA, rider + 3 | CGA, rider + 2 | **Hercules, rider + 2** | Hercules, rider + 1 | Hercules, rider + 3 (not shipped) | Hercules + 2, before the compiled poses |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| frames | 966 | 832 | 883 | 1,102 | 606 | 707 |
+| period, mean | **213,817** (22.32 Hz) | **235,659** (20.25 Hz) | **220,829** (21.61 Hz) | 176,092 (27.10 Hz) | 321,923 (14.83 Hz) | 275,279 (17.34 Hz) |
+| period, p99 | 299,681 | 302,381 | 308,297 | 236,127 | 403,104 | 372,744 |
+| the opponents on the screen (all) | 91% | 100% | 100% | 100% | 91% | 88% |
+| Set 150 / 151 said | 246,959 (p99 297,518) | 248.5-249.2k (p99 338.8-340.1k) | - | - | - | - |
+
+Gates (plan G4): mean <= 263,000 (18.2 Hz is 262,144), p99 <= 349,525. **All three shipped configurations pass, the Hercules with two
+opponents at 16% under the mean gate** (default seed 220,829; `--seed 1` 222.9k, `--seed 2` 222.3k). Three opponents on the
+Hercules measure 321,923 / p99 403,104 and on the CGA 318,651 / 407,304: over both gates, which is why `XB_NAI_CGA` = 2 covers
+both. **Two changes took the Hercules there, and the first was not enough**: the compiled poses (SPEC.md §102.7.2) brought
+275,279 to 252.8-259.7k on three builds - under the gate by 1.3% at worst, and a soak-runner run of that build then read 263,286
+and failed it (a frame is a whole number of 94.7k CRT frames and the work sat between two and three of them) - and **a rule
+about neighbours** (below) brought it to 220.8k, where the seeds no longer decide.
+
+**The rule.** A box (a bike's old and new footprint, composed in RAM) used to draw into itself every OTHER present bike that met
+it, clipped, so two bikes within a word of each other drew each other twice; a bike later in record order lies on top and its
+own box is written after this one, so it carries this bike itself. `xc_comp` now leaves a later record out of an earlier
+record's box whenever the window moved (then `xc_prep` gives every present bike a box: an unchanged bike has none only when
+nothing scrolled, and is drawn into its neighbours as before). Pixel-identical (`excitebikevideoherc`'s overlap arm, 16
+scenes, moving and still), and the negative control - leaving the later bikes out ALWAYS - fails that arm at once ("difference box x 26..52 y
+73..86"). It took the CGA's Selection B 240,786 -> 235,659 and the VGA nothing directly (it has no boxes: 221,544 -> 213,817 is
+trajectory).
+
+**Where a two-opponent Hercules frame goes** (`/tmp/exb-reports/w6/prof_selb.py`, a breakpoint profile of 300 frames of the second
+half of a race, entry to next entry):
+
+| clocks a frame | before the compiled poses | with them | with the neighbour rule |
+| --- | ---: | ---: | ---: |
+| the rider's steps | 15,865 | 15,033 | 11,963 |
+| the opponents: swap, steps, records, respawn, collisions | 41,325 | 39,598 | 33,672 |
+| HUD string, records, flow | 4,284 | 4,208 | 4,253 |
+| scroll arithmetic + HUD image | 2,878 | 2,821 | 2,774 |
+| **the boxes in RAM (fill from the world, poses over it)** | **107,777** | **85,854** | **68,418** |
+| retrace wait (idle) | 44,760 | 53,939 | 31,710 |
+| entering columns (card) | 25,351 | 23,932 | 18,921 |
+| HUD (card) | 9,066 | 8,931 | 8,503 |
+| box transfer (card) | 23,006 | 22,356 | 21,250 |
+| period, mean | 281,799 | 264,101 | 208,898 |
+
+(The three columns are three windows of the same kind of race, not the same frames: the rider and opponent rows differ by what
+the race was doing, which is why they move with the work around them; the box row is the one that moved on purpose.) The RAM boxes
+are still the biggest line: three boxes of 4-6 words x 24 lines (373 words) a frame, each filled from the world at ~7.7k a box
+(`xc_fill`, 23.0k for 2.99 boxes) and drawn over (`xc_draw` 22.3k for 2.97 bike draws, compiled), the clipped neighbours 9.9k for
+0.63 draws a frame (it was 24.7k for 1.9), `xc_geo` 5.0k for 3.2 calls (12.9k for 6.3).
+
+**What was not done.** The Hercules's skip lists (an entering column writes all 200 lines: 18.9k of the frame above, 9% of the
+work; the plan's plain-over-plain lists are for the pair (pitch 40, step one line) and the Hercules's is (45, four)), merging the
+overlapping boxes of two bikes into one (one fill, one transfer: unbuilt, and the neighbour rule already took the biggest part of
+it), a register-only `xc_drawc` (its rows cost ~500 clocks in memory operands), compiling the poses outside the hot nine, and the
+VGA pan (SPEC.md §102.7.5: eight phases are 58,259 bytes against the 44 KB claim, the window would need a 42-column pitch, and the
+compiled poses another ~24 KB).
+
+
+**Set 152, wave 7 (the polish, and what it cost; SPEC.md §102.8).** Same machines, package and test as above, rerun with the
+wave-7 changes in (the banner flash `xb_banner` once a frame, `Art.rows` for the two flat-ground adapters, two bytes of bss);
+logs `/tmp/exb-reports/w7-lap.log`, `w7-lap-herc.log`. A lap of course 1 at turbo with the sound on: **VGA 87,378 clk (54.62 Hz,
+p99 101,986) - byte for byte wave 6's mean; CGA 79,998 (59.66 Hz, p99 112,267) against 79,969; Hercules 94,584 (50.46 Hz, p99
+129,931) against 94,871** - the CGA and Hercules differences are the CRT-frame quantisation of Set 152's own table, not the change.
+The banner flash is priced from the code (not measured): ~80-100 clocks on a quiet frame (about 0.1% of a VGA frame), a few hundred more
+(plus a bounded wait for a blanking interval) on the ~19 frames of a 2.5 second flash that change the DAC. The lane-dash tile change costs nothing at run time: it changes bytes in a tile record, not
+its size. The 28 KB sprite claim that the CGA and Hercules loader now falls back from (SPEC.md §102.8.3) draws the poses
+INTERPRETED; its speed was not measured (`excitebikesmallclaim` proves the pixels, not the rate), and by Set 148's wave-6 block it
+is the ~30k-clock sprite frame the compiled poses replaced, so a machine that refuses the big claim is a slower, not a wrong, game.
+
+### Set 153 — Excitebike's launch: loader entry to a title that takes keys (SPEC.md §102.8)
+
+Measured 2026-09-29 on MartyPC's 4.77 MHz 8088 models `os8088_xt_vga`, `os8088_5150_cga_gla` and `os8088_5150_herc_gla`, the
+shipped package on `build/excitebike360.img`, by `tests/excitebike_load.py` (log `/tmp/exb-reports/close-load.log`): from the
+kernel's `ld_run_body_x` for the double-clicked EXCBIKE.O88 to the splash reveal finishing. **Emulator numbers**, as in Sets
+148-152. The package's sprite-blob build and its art reads are inside the span; the double-click is not.
+
+| adapter | clocks | seconds | of which disk transfer | sectors read |
+| --- | ---: | ---: | ---: | ---: |
+| VGA | 27,762,841 | 5.82 | 1.33 s | 78 |
+| CGA | 35,717,180 | 7.48 | 0.66 s | 52 |
+| Hercules | 38,183,175 | 8.00 | 0.93 s | 62 |
+
+Most of the wait is the CPU, not the floppy: 4.5 s (VGA), 6.8 s (CGA) and 7.1 s (Hercules) are neither transfer nor seek.
+That is the compiled-pose build (SPEC.md §102.7) plus the splash reveal, and it is what a shorter launch would have to attack;
+nothing here is a gate, the row (`excitebikeload`, soak) asserts only that the title comes up on each adapter.
+
+**Set 153, the launch broken into its steps (final audit).** `tests/excitebike_load.py` now walks the launch by breakpoints (the
+loader's `ld_run_body_x` and `ld_start`, the package's `xb_entry`, then from the Enter that starts the game `xb_loading`,
+`xb_gfx_load`, `xb_race_open`, `xs_load_*`, `xs_compile*`, `xu_start`, `xb_game`), each a stop that costs the guest no cycle; log
+`/tmp/exb-reports/c-load.log`. Seconds on the 4.77 MHz machine, cumulative from the loader's entry (step in brackets):
+
+| step | VGA | CGA | Hercules |
+| --- | ---: | ---: | ---: |
+| image read (45 sectors, 3 reads) + lz4-expanded + bss zeroed (`ld_start`) | 2.14 | 2.15 | 2.18 |
+| the window created (`xb_entry`) | 2.20 (0.04) | 2.16 (0.04) | 2.19 (0.04) |
+| **splash reveal done, taking keys** | **5.85 (3.65)** | **3.83 (1.67)** | **4.91 (2.72)** |
+| Enter -> `xb_gfx_load` (full screen, splash bitmap) | +0.5 | +0.4 | +0.4 |
+| tiles/art read (`xb_gfx_load` -> `xb_race_open`) | 1.36 | 1.46 | 1.41 |
+| shifted sprite blobs (`xs_load_*`) | 1.91 | 1.51 | 1.51 |
+| compiled poses + sound start (`xs_compile*` -> `xu_start`) | 0.50 | 0.48 | 0.48 |
+| **title screen up** | **10.67** | **8.28** | **9.30** |
+
+So a double-click to a title you can play from is **8.3-10.7 s** on a 5150-class machine, floppy transfer being 1.1 s (VGA) to
+1.3 s of it (78+32 sectors, 7+4 reads; the rest is 24-80 ms seeks). The two biggest CPU items the package owns are the sprite-blob
+build (1.5-1.9 s) and the art decode/read (1.4 s); the reveal is the splash's own band animation on the window timer, paced by
+the tick and the floppy reads it interleaves, and is a look decision, not a cost. Not changed: shipping the shifted blobs
+pre-built would replace 1.5-1.9 s of CPU with ~28 KB (55 sectors, ~1.0 s) of floppy transfer on a 360 KB disk that has the room
+for neither, so it is a trade and not a cheap win.
+
+### Set 154 — Excitebike, the shipped build: the steady state on the XT (final audit; SPEC.md §102.6)
+
+Measured 2026-09-29 on MartyPC's 4.77 MHz 8088 models `os8088_xt_vga`, `os8088_5150_cga_gla` and `os8088_5150_herc_gla`, the
+shipped package (`build/excbike.o88`, 24,881 bytes) on `build/excitebike360.img`, by `tests/excitebike_perf.py` (logs
+`/tmp/exb-reports/c-scroll.log`, `c-lap.log`, `c-lap-herc.log`, `c-selfb.log`, `c-selfb-herc.log`). Emulator numbers: no real
+VGA/CGA/Hercules card wait states (docs/FIELD-MACHINES.md). Period is the cycle counter between `xb_presented` marks; the game is
+locked to the CRT frame, so **period is quantised to it and is not the work** - the work columns are the honest headroom.
+
+**Riding at speed, a whole course at turbo (jumps, ramps, obstacles, lap change; sound on):**
+
+| course 1, 2,749 steps | VGA | CGA | Hercules |
+| --- | ---: | ---: | ---: |
+| frames | 2,498 | 2,730 | 2,314 |
+| period, mean | 87,378 clk (**54.62 fps**) | 79,969 (**59.68**) | 94,380 (**50.57**) |
+| period, p99 | 101,664 | 112,506 | 129,679 |
+| frames of two CRT frames | 0.00% | 0.40% | 0.56% |
+| simulation a step, mean / p99 | 3,056 / 4,800 | 3,209 / 8,267 | 3,180 / 7,976 |
+| the sound a frame, mean / p99 | 1,615 / 3,929 | 1,641 / 3,911 | 1,659 / 3,934 |
+| game speed (steps a second) | 60.1 | 60.1 | 60.1 |
+
+Every figure is inside Sets 148-152's gates (mean 27.3 Hz, p99 20.5 Hz) by 2-3x, and within 0.1% of wave 7's (VGA's mean is
+87,378 both times).
+
+**Scrolling under one bike, per component** (`--scroll`, 151 frames, 3.4 px a step):
+
+| clocks a frame | VGA | CGA |
+| --- | ---: | ---: |
+| erase / scroll + HUD image | 5,184 | 2,031 |
+| entering columns | 9,041 | 6,573 |
+| bike: erase + draw (RAM boxes on CGA) | 8,649 (VGA sprites) | 9,317 |
+| HUD | 1,484 | 4,508 |
+| flip / box transfer | 392 | 2,805 |
+| **work total** | **24,750** | **25,300** (+ 46,884 idle retrace wait) |
+| sprite erase + draw (gate 20,000 / 15,000) | 13,833 | 12,122 |
+
+That is a **frame of ~25k clocks of work in an 80-87k CRT frame**: 29% (VGA) and 32% (CGA) of the machine, plus 3.4k of
+simulation - the 4.77 MHz XT holds the CRT rate with about 3x to spare.
+
+**Selection B, the game's own AI on the rider and the opponents (the worst frame the game draws), whole course 1:**
+
+| | VGA, rider + 3 | CGA, rider + 2 | Hercules, rider + 2 |
+| --- | ---: | ---: | ---: |
+| frames | 945 | 841 | 910 |
+| period, mean | 220,401 (**21.65 fps**) | 232,550 (**20.52**) | 215,308 (**22.17**) |
+| period, p99 | 317,273 | 262,198 | 305,902 |
+| opponents on screen | 100% | 100% | 94% (at least one 100%) |
+| game speed | 59.9 | 60.1 | 60.1 |
+
+Gates (plan G4: mean <= 263,000, p99 <= 349,525) pass on all three; the governor holds game speed at 60 steps a second by
+dropping drawn frames (n = 2-4 steps a frame). The VGA/CGA figures are 3% and 1.3% above Set 152's, one trajectory apart (a
+different governor history), and the Hercules is 2.5% under it.
+
+**Verdict.** Nothing on a hot path is clearly improvable at a cheap price: the free-running frame is 29-32% of the CRT frame
+(nothing to win at the frame rate the CRT allows), and Selection B's biggest line is Set 152's RAM boxes (68k of a Hercules
+frame), whose remaining ideas are its "what was not done" list (merged boxes, a register-only `xc_drawc`, skip lists) - each a
+rewrite of a pixel-verified path, not a cheap change. No code changed in this audit; the audit added `tests/excitebike_load.py`'s
+timeline.

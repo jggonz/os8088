@@ -122,7 +122,7 @@ class Caller(object):
     and so does the return trap - a near `ret` cannot cross one.
 
     SS IS LEFT ALONE, and that is a requirement rather than an economy:
-    `dskw_stage` reaches `dsk_secbuf` as `push ss / pop es`, so the staging
+    `dskw_wone` reaches `dsk_secbuf` as `push ss / pop es`, so the staging
     this file is about only works with SS = LOW_SEG.
     """
 
@@ -161,7 +161,7 @@ class Caller(object):
         # idle task's slice, which is a better experiment as well as a
         # survivable one.
         #
-        # SS is still LOW_SEG, which is the requirement: `dskw_stage` reaches
+        # SS is still LOW_SEG, which is the requirement: `dskw_wone` reaches
         # `dsk_secbuf` as `push ss / pop es`.  Clobbering task 0's parked frame
         # costs nothing here - `park` clears IF, so from the first call on,
         # nothing but this file's own calls ever executes.
@@ -424,11 +424,21 @@ def run(img, apps, machine, want_bug, verbose):
         # not run, and IRQ6 may still be pending. Everything below then runs
         # `int 13h` with IF clear (see the Caller), so a completion that
         # arrives from the PREVIOUS operation is one this call will never
-        # account for. Five guest seconds is past every motor timeout in the
-        # ROMs here, and the machine spends them halted (SPEC.md 8.1.2), so it
-        # is five seconds of nothing rather than five seconds of work.
+        # account for. So wait for the drive, not for five idle seconds: no
+        # controller traffic for 2.5 guest seconds (past the IBM ROM's
+        # 37-tick motor-off count, which is 2.03), and then the BIOS's own
+        # MOTOR STATUS at 0040:003F with its four drive bits clear, for a ROM
+        # that keeps one - GLaBIOS reads 0 there throughout. Five guest
+        # seconds, what this was as a sleep, bounds the second half.
         m.run()
-        os88marty.guest_sleep(m, 5.0)
+        os88marty.quiesce(m, m.disk, guest=1.25,
+                          what="the floppy controller's traffic")
+        try:
+            os88marty.until(m, lambda _: not (m.read(0x43F, 1)[0] & 0x0F),
+                            "the diskette motors to stop", poll=0.05,
+                            guest=5.0)
+        except os88marty.MartyError:
+            pass
         m.bp_exec(os88sym.linear("sch_idle_body.loop"))
         m.run()
         if m.wait_stop(30.0) is None:

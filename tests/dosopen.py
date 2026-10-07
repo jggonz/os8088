@@ -68,7 +68,6 @@ THE NEGATIVE CONTROLS ARE THE HALF THAT BREAKS SILENTLY:
 import os
 import struct
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
@@ -184,27 +183,34 @@ def main():
             a second rather than the whole limit."""
             to_box()
             typ(line + "\n")
-            end = time.time() + limit
-            while time.time() < end:
+            res = []
+
+            def answered(mm):
                 if any(want in t for t in titles()):
-                    return True
-                if any(r in c for c in console()[-2:] for r in REFUSALS):
-                    return False
-                time.sleep(1.0)
-                os88marty.settle(m)
+                    res.append(True)
+                elif any(r in c for c in console()[-2:] for r in REFUSALS):
+                    res.append(False)
+                return bool(res)
+            try:                # `limit` is budgeted on the GUEST's clock
+                os88marty.until(m, answered, "%r to open %r or be refused"
+                                % (line, want), poll=0.3, limit=limit)
+                return res[-1]
+            except os88marty.MartyError:
+                pass
             return any(want in t for t in titles())
 
         def says(line, want, limit=15.0):
             """Type it and wait for `want` among the last console lines."""
             to_box()
             typ(line + "\n")
-            end = time.time() + limit
-            while time.time() < end:
-                if any(want in c for c in console()[-3:]):
-                    return True
-                time.sleep(1.0)
-                os88marty.settle(m)
-            return False
+            try:                # `limit` is budgeted on the GUEST's clock
+                os88marty.until(m, lambda _: any(want in c
+                                                 for c in console()[-3:]),
+                                "%r on the console" % want, poll=0.3,
+                                limit=limit)
+                return True
+            except os88marty.MartyError:
+                return False
 
         to_box()
         # THE OPENING HINT NAMES HELP, which is how anybody finds it at all.
@@ -369,10 +375,12 @@ def main():
         clear()
         to_box()
         typ("OPEN README.TXT\n")
-        end = time.time() + 25.0
-        while time.time() < end and not any("Note Pad" in t for t in titles()):
-            time.sleep(1.0)
-            os88marty.settle(m)
+        try:
+            os88marty.until(m, lambda _: any("Note Pad" in t
+                                             for t in titles()),
+                            "Note Pad to open", poll=0.3, limit=25.0)
+        except os88marty.MartyError:
+            pass
         if not any("Note Pad" in t for t in titles()):
             fail("the launch for the overdraw check did not happen")
         else:

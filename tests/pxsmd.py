@@ -46,7 +46,6 @@ import argparse
 import os
 import re
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -56,6 +55,7 @@ import dispcp                                                   # noqa: E402
 import os88marty                                                # noqa: E402
 import os88mouse                                                # noqa: E402
 import os88sym                                                  # noqa: E402
+import os88ui                                                   # noqa: E402
 import pxslib                                                   # noqa: E402
 
 FAIL = []
@@ -169,9 +169,10 @@ def main():
               "(a) back: the Hercules' bytes unchanged, the VGA in its desktop mode")
 
         # --- (b) the window on the Hercules: the Hercules bracket, the VGA still -
-        x, y, ww, wh = dispcp.win_rect(m, S, g.win)
-        gx, gy = x + ww // 2, y + 9
-        mo.drag(gx, gy, gx + (640 + 64 - x), gy + (40 - y))
+        # os88ui.move_window: the press confirmed taken as a DRAG (ui_dragwin)
+        # and the frame's arrival read off the window record - mo.drag
+        # confirmed each packet and not the gesture (docs/WRITING-TESTS.md 7.2)
+        os88ui.UI(m, mouse=mo, verbose=False).move_window(g.win, 640 + 64, 40)
         mo.to(630, 30)
         os88marty.settle(m, card=1)
         g.force()

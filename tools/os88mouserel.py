@@ -59,6 +59,7 @@ import sys
 import time
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import os88marty                                                 # noqa: E402
 from os88marty import Marty, MartyError                          # noqa: E402
 
 # Frames, not seconds - `pace="frames"`. 60 frames is ~1 s of guest time on a
@@ -105,7 +106,7 @@ class Rel:
         if self.pace == "frames":
             self.m.advance(frames=frames)
         else:
-            time.sleep(secs)
+            os88marty.pace(self.m, secs)    # free-running, in GUEST time
 
     # --- the transport ------------------------------------------------------
     def packet(self, dx=0, dy=0, l=False, r=False):
@@ -117,7 +118,7 @@ class Rel:
         """
         self.m.mouse(dx, dy, l=l, r=r)
         if self.pace == "wall":
-            time.sleep(GAP)
+            os88marty.pace(self.m, GAP)
         else:
             self.m.advance(frames=2)
 

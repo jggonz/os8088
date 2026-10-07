@@ -83,6 +83,7 @@ file's job because the table belongs on the host, where changing it costs
 nothing on the guest.
 """
 import argparse
+import json
 import os
 import re
 import shutil
@@ -287,6 +288,82 @@ def hmp(*cmds):
                     QMP, *cmds], check=True, capture_output=True)
 
 
+# ---------------------------------------------------------------------------
+# THE GUEST'S CLOCK. `make zhboot` runs QEMU without -icount, so there is no
+# cycle counter; what there is, is the BIOS tick count at 0040:006C, which
+# IRQ0 advances at 18.2 Hz and only by running GUEST code - so a budget in
+# ticks is one a loaded box cannot shorten, where a host deadline hands a
+# starved guest less of the machine and calls it STUCK (TURN_QUIET's own
+# history: 150 host seconds "was not enough under load"). tests/os88qemu.py
+# is the same clock for the tests/ rows; this is its copy for a tool that
+# talks to QMP by itself.
+# ---------------------------------------------------------------------------
+TICK_HZ = 18.2065
+STALL = 60.0            # HOST seconds of a tick count that does not move
+
+
+def gticks():
+    """The low word of the BIOS tick count, over ONE short QMP connection -
+    the socket serves a single client, so nothing may be held open."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(10.0)
+    s.connect(QMP)
+    f = s.makefile("rw")
+
+    def send(obj):
+        f.write(json.dumps(obj) + "\n")
+        f.flush()
+        while True:
+            line = f.readline()
+            if not line:
+                raise RuntimeError("zharness: QMP closed")
+            msg = json.loads(line)
+            if "event" not in msg:
+                return msg
+    try:
+        f.readline()
+        send({"execute": "qmp_capabilities"})
+        r = send({"execute": "human-monitor-command",
+                  "arguments": {"command-line": "xp /1hx 0x46c"}})
+    finally:
+        f.close()
+        s.close()
+    m = re.search(r":\s*0x([0-9a-fA-F]+)", r.get("return", ""))
+    if not m:
+        raise RuntimeError("zharness: xp answered %r" % (r,))
+    return int(m.group(1), 16)
+
+
+class GuestClock:
+    """Guest seconds since construction. A step bigger than 256 ticks was the
+    count being SET (POST, midnight), not run, and counts as one."""
+
+    def __init__(self):
+        self.last = gticks()
+        self.n = 0
+        self.seen = time.monotonic()
+
+    def secs(self):
+        t = gticks()
+        d = (t - self.last) & 0xFFFF
+        if d:
+            self.n += 1 if d > 256 else d
+            self.last, self.seen = t, time.monotonic()
+        return self.n / TICK_HZ
+
+    def stalled(self):
+        return time.monotonic() - self.seen > STALL
+
+
+def gpace(secs):
+    """`secs` of the GUEST's time, rounded up to whole ticks - the wait for
+    a pause with nothing to wait on. A clock that stops ends it."""
+    c = GuestClock()
+    need = (int(secs * TICK_HZ + 0.999) + 1) / TICK_HZ
+    while c.secs() < need and not c.stalled():
+        time.sleep(0.05)
+
+
 def screendump(path):
     """A PNG of the screen, through tools/shot.py.
 
@@ -339,16 +416,29 @@ def dblclick(x, y):
     launching - with nothing anywhere saying so.
     """
     mouse("to", str(x), str(y))
-    for _ in range(2):
-        hmp("mouse_button 1")
-        time.sleep(0.08)
+    for _ in range(2):                  # HOST time inside the pair: it is
+        hmp("mouse_button 1")           # well inside the 9-tick window, and
+        time.sleep(0.08)                # tick rounding would eat into it
         hmp("mouse_button 0")
         time.sleep(0.10)
 
 
 def kill_stale():
-    subprocess.run(["pkill", "-f", "qemu-system-i386"], capture_output=True)
-    time.sleep(0.8)
+    """The instance named by the PIDFILE, and wait for it to have EXITED.
+
+    It was `pkill -f qemu-system-i386` and a 0.8s sleep: the pattern matched
+    every QEMU on the box, other sessions' included, and the sleep was a
+    guess at the one that mattered letting go of the image's write lock.
+    """
+    try:
+        pid = int(open(PIDFILE).read().strip())
+        os.kill(pid, 15)
+        end = time.monotonic() + 10.0
+        while time.monotonic() < end:
+            os.kill(pid, 0)             # raises once it has gone
+            time.sleep(0.05)
+    except (OSError, ValueError):
+        pass
     for p in (PIDFILE, QMP, ZHSOCK):
         try:
             os.remove(p)
@@ -403,13 +493,13 @@ def boot(img):
         time.sleep(0.2)
     else:
         raise RuntimeError("zharness: QEMU never opened its sockets")
-    time.sleep(6.0)                             # to a drawn desktop
+    gpace(6.0)                                  # to a drawn desktop
 
 
 def launch():
     """The GUI walk: Disk B, then the story. os8088 has no other way in."""
     dblclick(*DISK_B)
-    time.sleep(2.5)
+    gpace(2.5)
     dblclick(ROW_X, ROW_Y0 + STORY_ROW * ROW_H)
 
 
@@ -655,10 +745,20 @@ class Wire:
         The wire since the PREVIOUS marker is parsed on the way past, so
         self.snap always describes the moment the caller has just reached -
         which is the moment it is entitled to photograph the screen.
+
+        `timeout` and TURN_CAP are GUEST seconds (GuestClock above), read at
+        most four times a host second; a guest whose clock has STOPPED is
+        stuck whatever the budget says, and is reported so.
         """
-        quiet = time.time() + timeout
-        hard = time.time() + TURN_CAP
-        while time.time() < quiet and time.time() < hard:
+        clk = GuestClock()
+        now = quiet_at = 0.0            # guest seconds: now, last progress
+        look = 0.0                      # host time of the next clock read
+        while True:
+            if time.monotonic() >= look:
+                now, look = clk.secs(), time.monotonic() + 0.25
+                if (now - quiet_at >= timeout or now >= TURN_CAP
+                        or clk.stalled()):
+                    return None
             m = MARK.search(self.buf)
             if m:
                 end = len(self.wire) - len(self.buf) + m.end()
@@ -675,10 +775,9 @@ class Wire:
                     self.prompted = True
                 return name
             if self.pump():
-                quiet = time.time() + timeout   # bytes are progress
+                quiet_at = now                  # bytes are progress
                 if self.refused():
                     return None                 # said so; no need to time out
-        return None
 
     def send_key(self, ch):
         """One raw character, no return, no line in the log.
@@ -727,7 +826,7 @@ def park_pointer():
     about the harness's own cursor.
     """
     mouse("to", "4", "470")
-    time.sleep(0.3)
+    gpace(0.3)
 
 
 # THERE IS NO forced repaint here, and there was one for a day. It sent

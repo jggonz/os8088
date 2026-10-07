@@ -40,3 +40,6 @@ tools/martypc/roms/
 # Third-party format specifications kept locally for reference (docs/BIFF-NOTES.md
 # cites them). Not vendored: this tree is MIT under one licence file.
 docs/excelfileformat.pdf
+
+# User-supplied cartridge; extracted graphics are build outputs only.
+/1942.nes

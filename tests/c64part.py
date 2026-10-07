@@ -62,6 +62,7 @@ sys.path.insert(0, "tests")
 import os88marty
 import os88mouse
 import os88parts
+from os88pkg import PKG_FMT
 import os88sym
 import dispcp
 import os88fixture
@@ -97,9 +98,9 @@ def run():
         % (image, len(blob), len(rows), blob[3]))
 
     # --- 2. the package declares parts, and the file is longer -------------
-    if blob[2] != 3:
-        fails.append("C64.O88 says version %d and must say 3: a package "
-                     "carrying parts is a v3 package with one flag bit, for "
+    if blob[2] != PKG_FMT:
+        fails.append("C64.O88 says version %d and must say PKG_FMT: a package "
+                     "carrying parts is an ordinary package with one flag bit, for "
                      "SPEC.md 54.6's reason" % blob[2])
     if not blob[3] & 4:
         fails.append("C64.O88's flags are 0x%02X and bit 2 is clear, so the "

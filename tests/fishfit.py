@@ -31,7 +31,7 @@ and prices a scale change instead of a move.
 ON A 5150 UNDER MARTYPC, because a pass is a cycle count at 4.77 MHz and QEMU
 cannot time anything (docs/TESTING.md).
 """
-import sys, os, re, time, argparse, subprocess, tempfile, statistics
+import sys, os, re, argparse, subprocess, tempfile, statistics
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -108,9 +108,11 @@ def main():
         m.write(m.sym("ss_secs"), b"\xff")          # one long turn: no re-pick
         m.write(m.sym("ss_idle"), b"\x1c\x00")      # ~1.5s of idle
         m.key("Space")
-        t = time.time()
-        while time.time() - t < 90 and m.read(m.sym("blk_sv"), 1)[0] != 1:
-            time.sleep(0.2)
+        try:
+            os88marty.until(m, lambda mm: mm.read(mm.sym("blk_sv"), 1)[0] == 1,
+                            "the saver to start", poll=0.2, limit=90)
+        except os88marty.MartyError:
+            pass                                    # ...and the next line says so
         if m.read(m.sym("blk_sv"), 1)[0] != 1:
             print("fishfit: the saver never started")
             return 1

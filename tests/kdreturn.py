@@ -76,7 +76,6 @@ import os
 import struct
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -207,12 +206,19 @@ def claims(m):
 
 
 def wait_text(m, want, secs, what):
-    end = time.time() + secs
-    while time.time() < end:
-        rs = rows(m)
+    got = []
+
+    def seen(mm):
+        rs = rows(mm)
         if any(want in r for r in rs):
-            return rs
-        time.sleep(0.25)
+            got.append(rs)
+            return True
+        return False
+    try:                        # `secs` is budgeted on the GUEST's clock
+        M.until(m, seen, "%s: %r" % (what, want), poll=0.25, limit=secs)
+        return got[-1]
+    except M.MartyError:
+        pass
     fail("%s: %r never reached the text screen; the last one held %r"
          % (what, want, [r for r in rows(m) if r.strip()][:10]))
 
@@ -251,16 +257,18 @@ def wait_desktop(m, ui, secs=300, stamp=None):
     and the screen it printed would have been a graphics desktop decoded as
     text, which reads exactly like a crash.
     """
-    end = time.time() + secs
-    while time.time() < end:
+    def graphics(mm):
         try:
-            if not M.video_is_text(m.video() or {}):
-                if stamp is not None:
-                    stamp.append(m.status()["cycles"])
-                return ui.ready(limit=secs)
+            return not M.video_is_text(mm.video() or {})
         except Exception:
-            pass
-        time.sleep(0.2)
+            return False
+    try:                        # `secs` is budgeted on the GUEST's clock
+        M.until(m, graphics, "a graphics desktop", poll=0.2, limit=secs)
+        if stamp is not None:
+            stamp.append(m.status()["cycles"])
+        return ui.ready(limit=secs)
+    except Exception:           # ...as the host loop swallowed them
+        pass
     # EVERY non-blank row, NUMBERED. A failure here is always "the machine
     # stopped with something on the glass", so which ROW a thing is on is half
     # the evidence - the resume stub is staged at OFFSET 0 of the text page, so
@@ -599,7 +607,7 @@ def main():
         # emulator speed (CLAUDE.md, Testing) and is the one clock on the box
         # that the guest cannot influence.
         s0, t0 = m.status()["cycles"], guest_ticks(m)
-        time.sleep(2.0)
+        M.pace(m, 2.0)          # TIME: the rate's window, ~164 ticks
         s1, t1 = m.status()["cycles"], guest_ticks(m)
         hz = ((t1 - t0) & 0xFFFF) * 4772727.0 / (s1 - s0)
         print("kdreturn: IRQ0 is running at %.1f Hz" % hz)

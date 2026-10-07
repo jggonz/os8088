@@ -30,7 +30,7 @@
 ; to a private interface, for the same reason and not by analogy.
 ; =============================================================================
 
-HD_ABI_VER   equ 3              ; bumped whenever a verb changes meaning
+HD_ABI_VER   equ 4              ; bumped whenever a verb changes meaning
 HD_TOOLFILE  equ 0              ; (the name itself is in the resident: a
                                 ; string is not an ABI number)
 
@@ -71,13 +71,17 @@ HDV_DEV      equ 1              ; db: which device row
 HDV_VOL      equ 2              ; db: the kernel's volume index
 HDV_PART     equ 3              ; db: which partition slot (0..3)
 HDV_BASE     equ 4              ; dd: its first LBA on the device
-HDV_SECS     equ 8              ; dw: its length, <= 65,535 by construction
+HDV_SECS     equ 8              ; dw: its length, 0 = past 32MB (SPEC.md 18.7.5)
                                 ; HDV_LSEG WAS HERE - the 6KB listing claim
                                 ; this driver funded for the volume, retired
                                 ; with the donation itself (SPEC.md 22.6)
 HDV_VOLH     equ 10             ; db: OUR handle for it - the row's own index,
                                 ; which is what comes back in DSV_BLK's AH
-HDV_SIZE     equ 12             ; ...and the stride follows it down: hd_vol_row
+HDV_LEN      equ 12             ; dd: its WHOLE length, which hd_blk bounds
+                                ; every transfer by: past 32MB HDV_SECS says
+                                ; 'unknown' and rule 13 checks nothing, so
+                                ; this is the one fence (SPEC.md 18.7.5)
+HDV_SIZE     equ 16             ; ...and the stride follows it down: hd_vol_row
                                 ; reaches a row with `mul ah`, so this has
                                 ; never had to be a power of two
 
@@ -99,13 +103,21 @@ HD_MBRCODE   equ 446            ; the space in front of the table
 HPT_NONE     equ 0x00
 HPT_FAT12    equ 0x01
 HPT_FAT16S   equ 0x04           ; FAT16 under 32MB - what DOS 3.3 wrote, and
-                                ; every partition this driver makes is one
-HPT_FAT16B   equ 0x06           ; FAT16 at or over 32MB, and
-HPT_FAT16L   equ 0x0E           ; ...the LBA-addressed flavour of it. Both are
+                                ; what this driver writes up to 32MB
+HPT_FAT16B   equ 0x06           ; FAT16 at or over 32MB - what it writes past
+                                ; that since SPEC.md 52.3.1 - and
+HPT_FAT16L   equ 0x0E           ; ...the LBA-addressed flavour of it, which is
                                 ; MOUNTABLE even though this driver never
                                 ; writes one: another machine's FDISK did, and
                                 ; the volume inside is the same FAT16
-HP_MAXSEC    equ 65535          ; the kernel's volume ceiling (SPEC.md 18.7)
+HP_MAXHI     equ 0x003F         ; the volume ceiling since SPEC.md 18.7.5 (it
+                                ; was 65,535 sectors while an LBA was a word),
+                                ; the
+HP_MAXLO     equ 0xFED0         ; largest FAT16 there is: 65,524 clusters of
+                                ; 32KB plus the metadata is 4,194,081 sectors,
+                                ; and 4,194,000 (3FFED0h, 2,047.9MB) is that
+                                ; with room for the root and a cylinder trim.
+                                ; hd_part_big asks it of an entry
 
 ; =============================================================================
 ; HDT_* - what the RESIDENT asks the TOOL to do
@@ -142,6 +154,11 @@ HDT_PAINT    equ 5              ; DSV_CPPAINT
 HDT_CLICK    equ 6              ; DSV_CPCLICK, the press
 HDT_UP       equ 7              ; DSV_CPUP, the release
 HDT_DRAG     equ 8              ; DSV_CPDRAG
+HDT_KEY      equ 9              ; DSV_CPKEY: BL = ASCII, BH = scan code (AL
+                                ; being the verb), CF = 0 taken. It carries NO
+                                ; pane origin - the panel's W_ONKEY has a key
+                                ; and nothing else - so the page draws at the
+                                ; origin its last PAINT banked
 HDT_BUSY     equ 4              ; out: CF = 1 = a window of mine is still
                                 ; VISIBLE, so do not unload me. Visible and not
                                 ; merely allocated: closing one of these is a
@@ -200,6 +217,11 @@ HSV_STATE    equ 12             ; out: HRQ_RES = [hd_msgc], HRQ_VOL = a MASK
                                 ; Separate from HSV_SYNC because hd_svc banks
                                 ; BX..ES and AX is spent on that verb's two
                                 ; counts - so a second answer needs the block
+HSV_VOLOF    equ 13             ; in: HRQ_DEV/HRQ_SLOT -> HRQ_RES = the kernel
+                                ; volume index mounted on that partition, 0FFh
+                                ; = none. What lets the installer's State
+                                ; column print a drive LETTER (SPEC.md
+                                ; 52.10.4.2) without a sight of hd_vols
 HSV_CTRS     equ 7              ; SPEC.md 52.10.9's DEVICE counters into
                                 ; HRQ_C0..C2. Implemented only in an INSTBENCH
                                 ; build - the number is allocated here
@@ -228,7 +250,7 @@ HDM_NODEV     equ 5             ; 'No hard disk found'
 HDM_MNOTAB    equ 6             ; 'No partition table yet'
 HDM_MNOFAT    equ 7             ; 'No FAT partition on it'
 HDM_MHAVE     equ 8             ; 'Already mounted'
-HDM_MBIG      equ 9             ; 'Partition is over 32MB'
+HDM_MBIG      equ 9             ; 'Partition is over 2GB'
 HDM_MFULL     equ 10            ; 'No free volume'
 HDM_UNMOUNTED equ 11            ; 'Unmounted'
 HDM_MOUNTED   equ 12            ; ...and 'Mounted N volume(s)', BUILT

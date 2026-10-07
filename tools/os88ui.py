@@ -134,7 +134,8 @@ class _Booted(object):
             ui.up(limit=limit)
             if not self._kw.get("saver", False):
                 os88marty.no_saver(m)
-            ui.settle(limit=limit)
+            if self._kw.get("settle", True):
+                ui.settle(limit=limit)
         except BaseException:
             self._cm.__exit__(*sys.exc_info())
             raise
@@ -145,7 +146,8 @@ class _Booted(object):
 
 
 def boot(image, apps=None, machine="os8088_5150_cga", card=None,
-         saver=False, why_ibm=None, verbose=True, limit=180.0, **kw):
+         saver=False, why_ibm=None, verbose=True, limit=180.0, settle=True,
+         **kw):
     """Launch, boot to a settled desktop, turn the saver off, hand back a UI.
 
     THE THREE LINES 175 SCRIPTS OPEN WITH, and the two things most of them
@@ -161,13 +163,23 @@ def boot(image, apps=None, machine="os8088_5150_cga", card=None,
         that waits on a slow build, or an emulator lane sharing four cores
         with three others, gets there - and what it then compares is a black
         screen. `saver=True` keeps it, for the rows whose subject it is.
+        **A row that never goes five guest minutes without input does not
+        need it off** - pass `saver=True` and it cannot hide behind the
+        opt-out; tests/skiesfleet.py measured 200 guest seconds and a longest
+        input-free stretch of 25.
+      * `settle=False` skips the picture half of `ready`. `up` already waits
+        for the END of the boot ([spl_live] = 0), so a row whose every next
+        step is confirmed off guest state - every os88ui verb is - does not
+        need the screen to stop moving first, and the settle was the one
+        long input-free wait such a row had.
 
     Everything else is `os88marty.launch`'s, passed straight through.
     """
     cm = os88marty.launch(image, apps=apps,
                           machine=os88marty.machine(machine, why_ibm),
                           card=card, **kw)
-    return _Booted(cm, card=card, saver=saver, verbose=verbose, limit=limit)
+    return _Booted(cm, card=card, saver=saver, verbose=verbose, limit=limit,
+                   settle=settle)
 
 
 # =============================================================================
@@ -260,8 +272,21 @@ class UI:
         screens in it and the loading screen between two disk reads is as
         still as a finished desktop. It is what makes the settle safe, and
         the window in between is where the screen saver has to be turned off.
+
+        **AND `[spl_live]` = 0, WHICH IS WHAT MAKES `no_saver` STICK.** The two
+        words go live in kmain_o's `menu_init` and desk setup, BEFORE
+        `drv_boot_x` loads SYSTEM.CFG and runs `ss_mins2idle` - which rewrites
+        `[ss_idle]`. A `no_saver` landing in between was simply undone, and
+        where it landed was decided by host polling against guest progress:
+        on a loaded box the guest is slower per poll, so the gate was seen
+        EARLIER in guest time and the saver came back five guest minutes into
+        the settle that followed (skiesfleet, in the whole soak: "the screen
+        was still changing after 542 GUEST seconds because ... [blk_on] is
+        set"). `spl_finish` is kmain_o's last act, after the settings, so
+        both words live and the splash done is the end of the boot.
         """
-        self._wait(lambda: self._word("desk_rows") and self._word("menu_nbar"),
+        self._wait(lambda: self._word("desk_rows") and self._word("menu_nbar")
+                   and not self._byte("spl_live"),
                    "the kernel to reach the desktop", limit)
         return self
 
@@ -503,12 +528,35 @@ class UI:
         self._grab(w, gx, gy)
         self.mo.to(gx + (x - w.x), gy + (y - w.y), l=True)
         self.mo._edge(False)
+        # ARRIVED *AND THE DRAG IS OVER*, which is two facts and not one.
+        # ui_drag stores the drop and then, still under the gfx lock, has
+        # wm_dc_take (SPEC.md 11.96.12) put the record BACK at the old place
+        # for the length of the pixel save and restore it after. A poll that
+        # saw the new place and returned let the `_refresh` below land inside
+        # that save and answer the window's PRE-drag origin, with nothing
+        # raised: `uilayer` reported "drag +20+12 from (175, 38) -> (175,
+        # 38)" and `deskzoom` double-clicked a title bar that had moved, in
+        # the same soak. ui_drag leaves through gfx_unlock, so the lock being
+        # free with the record at the drop is the drag having finished.
+        lockf = self._S("gfx_lock_flag")
         try:
-            self._wait(lambda: self._rect(w.i)[:2] == want,
+            self._wait(lambda: (self._rect(w.i)[:2] == want
+                                and self.m.read(lockf, 1)[0] == 0
+                                and self._rect(w.i)[:2] == want),
                        "window %r to arrive at (%d,%d)"
                        % ((w.title,) + want), limit)
         except UIError:
             got = self._rect(w.i)[:2]
+            if got == want:
+                # ...and the record says it ARRIVED, so the half of the wait
+                # that timed out is the lock's - a "landed at" naming the
+                # very spot asked for would blame the window manager for a
+                # drag that worked
+                raise UIError(
+                    "window %r arrived at (%d,%d) but gfx_lock_flag never "
+                    "came free within the limit - ui_drag has not finished "
+                    "(SPEC.md 11.96.12's wm_dc_take) or another task holds "
+                    "the gfx lock." % ((w.title,) + want))
             if got == was:
                 raise UIError(
                     "window %r did not move at all: it is still at (%d,%d) "
@@ -990,6 +1038,22 @@ class UI:
         if entry < 0:
             raise UIError("entry %d is not a row" % entry)
 
+        # ON kern_big A SELECTION TAKES THE ARROWS (SPEC.md 22.26): the key
+        # moves [FS_SEL] and [FS_SCRL] only follows once it leaves the view,
+        # so a step that moved the SELECTION is progress too - read as the end
+        # stop, it returned a row below the window (a launched package leaves
+        # its row selected, so the second open() in a window hit it). Walking
+        # the selection keeps the follow honest: Up to the top puts both at 0,
+        # and Down stops the moment the view's first row reaches `entry`.
+        def sel():
+            base = self._fsblk(win) if win is not None else None
+            if base is None:
+                vp = self._word("fm_vp")
+                if not vp:
+                    return 0
+                base = (geom.KERNEL_SEG << 4) + vp
+            return _u16(self.m.read(base + geom.FS_SEL, 2))
+
         def step(key):
             """One arrow, then wait for [FS_SCRL] to move. Did it?
 
@@ -1006,25 +1070,25 @@ class UI:
             these, which used to turn one navigation into half a minute. The
             word is what the answer is computed from anyway.
             """
-            was = self.scroll(win)
+            was = (self.scroll(win), sel())
             self.m.key(key)
             c0 = self.m.status()["cycles"]
             while True:
-                if self.scroll(win) != was:
+                if (self.scroll(win), sel()) != was:
                     return True
                 spent = (self.m.status()["cycles"] - c0) / os88marty.GUEST_HZ
                 if spent >= T_STEP:
                     return False
                 time.sleep(POLL)
 
-        for _ in range(40):                 # to the top first, so the walk
+        for _ in range(200):                # to the top first, so the walk
             if self.scroll(win) == 0:       # below is one-directional and
                 break                       # cannot oscillate
             if not step("ArrowUp"):
                 break
         else:
             raise UIError("the list would not scroll to the top")
-        for _ in range(40):
+        for _ in range(200):                # a selection walks a row a key
             if self.scroll(win) >= entry:
                 break
             if not step("ArrowDown"):       # the END STOP: it clamped, so
@@ -1210,6 +1274,124 @@ class UI:
         return w
 
     # =========================================================================
+    # the Standard File chooser (SPEC.md 38)
+    # =========================================================================
+    # The chooser IS a Disk window (SPEC.md 38.1), so its rows are `open`'s and
+    # `listing`'s with `win=` - what is its own is [fdlg_win], the button
+    # column to the right of the content (38.3) and the Save form's name box,
+    # which is the status-line editor in mode 8 (38.5). Every verb below
+    # confirms through [fdlg_win]: up means a non-zero that is not the 0FFFFh
+    # launch mark, down means 0 - and the ANSWER IS POSTED (38.6), so "down"
+    # is reached one UI pass after the click or key that answered.
+    CH_OPEN, CH_CANCEL, CH_DRIVE = 0, 1, 2
+
+    def chooser(self, limit=T_WINDOW):
+        """Wait for a chooser to be up and return its window."""
+        # [fdlg_win] is published by fm_kinit, BEFORE app_launch lists the
+        # folder and shows the window - a gap the guest's own UI task cannot
+        # see (the launch is synchronous on it) and a harness polling memory
+        # can. So up means the word AND that window visible.
+        box = {}
+
+        def up():
+            ptr = self._word("fdlg_win")
+            if ptr in (0, 0xFFFF):
+                return False
+            i = (ptr - self._S("wm_wins") + (geom.KERNEL_SEG << 4)) \
+                // geom.WIN_SIZE
+            for o in self.windows():
+                if o.i == i and o.visible:
+                    box["w"] = o
+                    return True
+            return False
+        self._wait(up, "the Standard File chooser", limit,
+                   snapshot=self.titles)
+        # ...and VISIBLE IS NOT PAINTED: wm_show sets the flag and then
+        # paints, and the paint's own fm_layout is what arms the Save form's
+        # box and draws the button column (SPEC.md 38.3, 38.5)
+        self.settle()
+        return box["w"]
+
+    def chooser_gone(self, limit=T_NAV):
+        """Wait for the chooser to come down (a commit or a cancel)."""
+        self._wait(lambda: self._word("fdlg_win") == 0,
+                   "the Standard File chooser to close", limit,
+                   snapshot=self.titles)
+
+    def chooser_button_xy(self, k, win=None):
+        """The centre of column button k: CH_OPEN (Open/Save), CH_CANCEL,
+        CH_DRIVE (SPEC.md 38.3) - fm_rgt + 5, 20px apart, off the window."""
+        w = win if win is not None else self.chooser()
+        cx = w.x + 1
+        cy = w.y + geom.TITLE_H + 1
+        rgt = cx + (w.w - 2 - geom.FM_CHCOLW) - 1
+        return (rgt + 5 + geom.FM_BTN_W // 2,
+                cy + 2 + 20 * k + geom.FM_BTN_H // 2)
+
+    def chooser_button(self, k, win=None):
+        """Click column button k. Nothing is confirmed: Open with a folder
+        selected navigates, Drive re-lists, the rest answer - say which."""
+        x, y = self.chooser_button_xy(k, win)
+        self.mo.click(x, y, settle=0)
+
+    def chooser_select(self, name, win=None, limit=T_NAV):
+        """SELECT `name` in the chooser without answering - one click on its
+        row, scrolled into view first - and confirm the chooser's own FS_SEL
+        says so. What a caller that wants Enter (or a button) to answer uses:
+        the arrows SCROLL a chooser as they do every Disk window (SPEC.md
+        38.4), so they cannot be walked to a row."""
+        w = win if win is not None else self.chooser()
+        idx, _ty = self.entry(name, w)
+        row = self.scroll_to(idx, win=w)
+        x, y = self.row_xy(w, row)
+        self.mo.click(x, y, settle=0)
+        at = (geom.KERNEL_SEG << 4) + self._word("fdlg_blk") + geom.FS_SEL
+        self._wait(lambda: _u16(self.m.read(at, 2)) == idx,
+                   "the chooser to select %r (row %d)" % (name, idx), limit,
+                   snapshot=lambda: "FS_SEL = %d"
+                   % _u16(self.m.read(at, 2)))
+        return idx
+
+    def chooser_open(self, spec, limit=None):
+        """Answer an OPEN chooser with `spec` - 'NAME.EXT', or a path of
+        folders below where it opened ('SUB/NAME.EXT', '../X'), each step an
+        `open` - and wait for it to close."""
+        w = self.chooser()
+        parts = [p for p in spec.replace("\\", "/").split("/") if p]
+        for p in parts[:-1]:
+            self.open(p, expect="nav", win=w, limit=limit)
+        self.open(parts[-1], expect=None, win=w)
+        self.chooser_gone(limit if limit is not None else T_NAV)
+        self._say("chooser open %s" % spec)
+
+    def chooser_save(self, name, folders=(), limit=None):
+        """Answer a SAVE chooser: walk `folders`, clear the name box, type
+        `name` and press Enter - and wait for it to close."""
+        w = self.chooser()
+        for p in folders:
+            self.open(p, expect="nav", win=w, limit=limit)
+        for _ in range(13):             # FD_NAMEMAX + 1: the box is empty
+            self.m.key("Backspace")
+        self.m.type_text(name)
+        self.m.key("Enter")
+        self.chooser_gone(limit if limit is not None else T_NAV)
+        self._say("chooser save %s" % name)
+
+    def chooser_cancel(self, how="escape", limit=None):
+        """Cancel the chooser by 'escape', 'button' or 'close' (the box)."""
+        w = self.chooser()
+        if how == "escape":
+            self.m.key("Escape")
+        elif how == "button":
+            self.chooser_button(self.CH_CANCEL, w)
+        elif how == "close":
+            self.close(w)
+        else:
+            raise UIError("how=%r is not escape/button/close" % (how,))
+        self.chooser_gone(limit if limit is not None else T_NAV)
+        self._say("chooser cancel (%s)" % how)
+
+    # =========================================================================
     # the toast strip (SPEC.md 59)
     # =========================================================================
     def toast(self):
@@ -1375,12 +1557,6 @@ class UI:
             raise UIError("no single item %r in the %s menu. It holds %r"
                           % (item, title, [t for t, _ in items]))
         k = idx[0]
-        if not items[k][1]:
-            raise UIError(
-                "%s -> %r is DISABLED (SPEC.md 12's MENU_DIS prefix), so "
-                "menu_hover will not stop on it and a drag would release over "
-                "a neighbour. The menu is %r"
-                % (title, item, [(t, e) for t, e in items]))
 
         bx, by = (x0 + x1) // 2, geom.MBAR_H // 2
         self.mo.to(bx, by)
@@ -1411,6 +1587,21 @@ class UI:
                 % (title, bx, cell, got,
                    ", %r" % (cells[got][0],) if got < len(cells) else "",
                    [(c[0], c[1], c[2]) for c in cells]))
+
+        # **DISABLED is read NOW, with the menu down, and not before the
+        # press.** Locator's items are swapped between a live string and its
+        # MENU_DIS twin by ui_loc_gate ON THE PRESS THAT OPENS THE BAR
+        # (kernel/ui.inc) - Close Window and SPEC.md 26.8.5's Remove Shortcut
+        # both - so the array read above still holds whatever the LAST drop
+        # left in it, and refusing on that refused a live item.
+        items = self.menus()[cell][3]
+        if not items[k][1]:
+            self.mo._edge(False)
+            raise UIError(
+                "%s -> %r is DISABLED (SPEC.md 12's MENU_DIS prefix), so "
+                "menu_hover will not stop on it and a drag would release over "
+                "a neighbour. The menu is %r"
+                % (title, item, [(t, e) for t, e in items]))
 
         y1 = self._word("menu_y1")
         ix = self._word("menu_x1") + 8

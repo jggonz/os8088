@@ -240,12 +240,14 @@ def sites(defines=()):
     os.close(fd)
     r = subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
                         "-I", "apps/skies/", "-I", CSWIDX] + list(defines) +
-                       ["-o", os.devnull, "-l", lst, "apps/skies/skies.asm"],
+                       ["-o", lst + ".bin", "-l", lst, "apps/skies/skies.asm"],
                        capture_output=True, text=True)
     if r.returncode:
         sys.exit("skiesprof: the tree does not assemble:\n" + r.stderr[:400])
     lines = open(lst).read().split("\n")
     os.unlink(lst)
+    if os.path.exists(lst + ".bin"):
+        os.unlink(lst + ".bin")
     rx = re.compile(r"\s*\d+\s+([0-9A-F]{8})\s+([0-9A-F\[\]]+)\s+"
                     r"(?:<\d+>\s*)?(.*)$")
     lab = re.compile(r"\s*\d+\s+(?:[0-9A-F]{8}\s+(?:[0-9A-F()\-\[\]]+\s+)?)?"

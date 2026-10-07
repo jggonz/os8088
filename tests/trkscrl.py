@@ -50,6 +50,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88rate                                              # noqa: E402
 import os88fixture                                       # noqa: E402
 import os88qemu                                              # noqa: E402
+import os88sym                                               # noqa: E402
 
 # Where things are on a 640x480 desktop with build/trkscrl.img in drive B:
 # the B: drive zone, and BEVERLY.MOD's row in the window it opens (it sorts
@@ -116,9 +117,19 @@ class Qmp:
         """(width, rows) of the guest's framebuffer, out of a PPM screendump."""
         p = tempfile.mktemp(suffix=".ppm")
         self.hmp("screendump " + p)
-        time.sleep(0.4)
+        # QEMU writes the file on its side: a HOST wait, on the file being
+        # WHOLE (its header's size) rather than on a 0.4s guess.
+        d = b""
         try:
-            d = open(p, "rb").read()
+            for _ in range(250):
+                if os.path.exists(p):
+                    d = open(p, "rb").read()
+                    f = d.split(b"\n", 3)
+                    if len(f) == 4 and len(f[1].split()) == 2:
+                        w, h = (int(v) for v in f[1].split())
+                        if len(f[3]) >= w * h * 3:
+                            break
+                time.sleep(0.02)
         finally:
             if os.path.exists(p):
                 os.remove(p)
@@ -154,15 +165,15 @@ class Qmp:
             dy -= cy
         for cx, cy in cmds:
             self.hmp("mouse_move %d %d" % (cx, cy))
-            time.sleep(PACE)
-        time.sleep(0.2)
+            time.sleep(PACE)            # the LINE's time: a QEMU device
+        os88qemu.pace(self, 0.2)        # ...and the guest's, to take it
 
     def click(self, x, y):
         self.goto(x, y)
         self.hmp("mouse_button 1")
-        time.sleep(0.15)
+        os88qemu.pace(self, 0.15)
         self.hmp("mouse_button 0")
-        time.sleep(0.15)
+        os88qemu.pace(self, 0.15)
 
 
 SOCK = None
@@ -177,8 +188,9 @@ def boot():
     """`make test` with the bench disk in B: - the minesrc.py idiom."""
     if os.path.exists("build/qemu.pid"):
         try:
-            os.kill(int(open("build/qemu.pid").read().strip()), 15)
-            time.sleep(1.0)
+            pid = int(open("build/qemu.pid").read().strip())
+            os.kill(pid, 15)
+            os88qemu.gone(pid)
         except (OSError, ValueError):
             pass
     for f in ("build/qmp.sock", "build/qemu.pid"):
@@ -207,28 +219,48 @@ def main():
     boot()
 
     q = Qmp(SOCK)
-    time.sleep(6)
+    # EVERY WAIT BELOW IS ON THE GUEST'S CLOCK (tests/os88qemu.py), and on the
+    # thing the next line needs where there is one: drive B's zone, the Disk
+    # window, the player resident, and the bench counters the keys move.
+    import dispcp
+
+    def zone():
+        try:
+            return dispcp.drive_ordinal(q, os88sym.linear, "B") is not None
+        except Exception:                                   # noqa: BLE001
+            return False
+    if not os88qemu.acted(q, zone, secs=90, what="drive B's zone", poll=0.4):
+        raise SystemExit("trkscrl: drive B: never got a desktop zone - the "
+                         "guest did not reach a desktop")
+    os88qemu.pace(q, 1)
     q.screen()                      # ...which is also how SCREEN is learned
     say("trkscrl: a %dx%d desktop, then B: -> BEVERLY.MOD" % tuple(SCREEN))
     q.goto(*DISKB)
+    # the spacing INSIDE the double-click stays host time: it is well inside
+    # the 9-tick window either way, and tick rounding would eat into it
     q.hmp("mouse_button 1"); time.sleep(0.1); q.hmp("mouse_button 0")
     time.sleep(0.2)
     q.hmp("mouse_button 1"); time.sleep(0.1); q.hmp("mouse_button 0")
-    time.sleep(6)
+    if os88qemu.acted(q, lambda: bool(dispcp.win_list(q, os88sym.linear,
+                                                      check=False)),
+                      secs=20, what="the Disk B window", poll=0.3):
+        os88qemu.pace(q, 1)         # ...and its rows painted
     # SELECT, then Enter. A double-click here is the flakiest thing in this
     # file - the window has just been drawn and the second press can land
     # while it still is - and Enter opens the selection just as well.
     q.click(*MODROW)
-    time.sleep(1)
+    os88qemu.pace(q, 1)
     q.key("ret")
-    time.sleep(12)
 
     seg = None
-    for _ in range(20):
+
+    def resident():
+        nonlocal seg
         seg, _drv = os88rate.scan(q)
-        if seg:
-            break
-        time.sleep(2)
+        return bool(seg)
+    # 12s of settling and ten 2s re-scans was the old budget: 52 guest s
+    os88qemu.acted(q, resident, secs=52, what="TRKSCRL.O88 resident",
+                   poll=1.0)
     if not seg:
         raise SystemExit("trkscrl: the player never became resident.")
     P, _ = os88rate.symbols(("TRKDBG",))
@@ -239,8 +271,20 @@ def main():
         d = q.read(base + P["@" + name], n)
         return d[0] if n == 1 else int.from_bytes(d, "little")
 
+    # ...and the module read in behind it: [mp_loaded] is the player's own
+    # answer, and the open's tail (trk_play, the completion repaint) is its
+    # state going still - tests/trkrate.py's pair. This was a blind 4s
+    os88qemu.acted(q, lambda: peek("mp_loaded", 1) == 1, secs=30,
+                   what="[mp_loaded]", poll=0.25)
+    os88qemu.quiesce(q, lambda: tuple(
+        q.read(base + P["@" + n], 2) for n in
+        ("mp_loaded", "mp_playing", "mp_mixrate", "mp_xt", "trk_fs")),
+        secs=0.5, limit=4.0, what="Tracker's open to finish")
+
     q.key("f")                          # into the graphics fullscreen
-    time.sleep(4)
+    if os88qemu.acted(q, lambda: peek("trk_fs", 1) == 1, secs=10,
+                      what="[trk_fs]", poll=0.25):
+        os88qemu.pace(q, 1)             # ...and its first frame
     if peek("trk_fs", 1) != 1:
         raise SystemExit("trkscrl: F did not enter the bracket.")
     if peek("mp_xt", 1) != 0:
@@ -250,7 +294,8 @@ def main():
         if peek("mp_playing", 1) == 0:  # module started depends on whether the
             break                       # machine has a card at all
         q.key("spc")
-        time.sleep(2)
+        os88qemu.acted(q, lambda: peek("mp_playing", 1) == 0, secs=2,
+                       what="playback stopped", poll=0.2)
     if peek("mp_playing", 1) != 0:
         raise SystemExit("trkscrl: could not stop playback; the view would "
                          "move between the two screenshots.")
@@ -259,8 +304,21 @@ def main():
     # build publishes it - tests/trkscrl.inc says why). Everything above it -
     # the readouts, the scopes, the status line - is drawn by other paths on
     # their own schedule and is not what this gate is about.
-    q.key("g")                       # ...which also publishes the bounds
-    time.sleep(1.5)
+    def counters():
+        return (peek("tds_keys"), peek("tui_vrow", 1), peek("tds_scrl"),
+                peek("tds_pat"))
+
+    def answered(key, before):
+        """A key sent, and the bracket's own counters its answer: seen, then
+        still for a second of the machine - which is what 1.5 host seconds
+        were a guess at, and what a loaded box cannot shorten."""
+        q.key(key)
+        os88qemu.acted(q, lambda: peek("tds_keys") != before[0], secs=3,
+                       what="%s at the bracket" % key, poll=0.05)
+        os88qemu.quiesce(q, counters, secs=0.5, stable=2, limit=10,
+                         what="the bench counters", poll=0.05)
+
+    answered("g", counters())        # ...which also publishes the bounds
     y0, y1 = peek("tds_y0"), peek("tds_y1")
     # QEMU line-doubles a 200-row adapter into a 400-row screendump, so the
     # guest's rows and the dump's are not the same rows. The surface height
@@ -274,13 +332,11 @@ def main():
         s0, p0 = peek("tds_scrl"), peek("tds_pat")
         k0 = peek("tds_keys")
         v0 = peek("tui_vrow", 1)
-        q.key(key)
-        time.sleep(1.5)
+        answered(key, (k0, v0, s0, p0))
         v1, s1, p1 = peek("tui_vrow", 1), peek("tds_scrl"), peek("tds_pat")
         k1 = peek("tds_keys")
         w, a = q.screen()
-        q.key("g")                      # the same view, drawn the other way
-        time.sleep(1.5)
+        answered("g", counters())       # the same view, drawn the other way
         _w, b = q.screen()
         bad = [y for y in range(y0, y1) if a[y] != b[y]]
         moved, scrolls, repaints = v1 - v0, s1 - s0, p1 - p0

@@ -63,7 +63,8 @@ the answer. It compares against `_KNOWN` now - mirrored AND derived.
 
 AND A FOURTH TIME, one level down from any of them: **the tree builds TWO
 kernels off one source**, and this module mirrored ONE of them without saying
-so. `WIN_SIZE` is 34 on kern_big and 28 on kern_small (SPEC.md 13.7's
+so. `WIN_SIZE` was 34 on kern_big and 28 on kern_small (72 / 65 since size
+pass 4 folded the side tables in; SPEC.md 13.7's
 W_ONMOUSEUP pair and 13.9's timers are kern_big's), the parser below took the
 FIRST `equ` it saw, and `verify` compared it against that same first `equ` -
 so the guard agreed with itself and every script pointed at kern_small
@@ -138,7 +139,7 @@ _MIRROR = {
     # kernel with the OTHER arm's %ifdef folded out rather than taking the
     # first `equ` in the file - which is what it did, and which made the guard
     # agree with itself while every kern_small script decoded garbage.
-    "WIN_SIZE": ("kernel/wm.inc", {"big": 34, "small": 28}),
+    "WIN_SIZE": ("kernel/wm.inc", {"big": 72, "small": 65}),
     "MAX_WIN": ("kernel/wm.inc", {"big": 12, "small": 6}),
     # kernel/driver.inc - a driver row (SPEC.md 51.2). DRVR_SEG is "is it
     # loaded", which is the only way a host-side script can SEE a driver
@@ -151,6 +152,9 @@ _MIRROR = {
     # gate blob at it, and tests/unit/t_kdapi.py scans the assembled images
     # for far calls carrying it as a segment (SPEC.md 96.44.6).
     "KD_SEG": ("kernel/hiber.inc", 0x0060),
+    # kernel/diskw.inc - the copy engine's "it will not fit" (SPEC.md 22.5.2),
+    # read back out of [fcp_err] by tests/fcpcopy.py and tests/fcproom.py.
+    "FERR_FULL": ("kernel/diskw.inc", 6),
     "DRVR_SEG": ("kernel/driver.inc", 2),
     "W_FLAGS": ("kernel/wm.inc", 0),
     "W_X": ("kernel/wm.inc", 2),
@@ -205,6 +209,15 @@ _MIRROR = {
     "DESK_ZW": ("kernel/desk.inc", 32),
     "DESK_COLW": ("kernel/desk.inc", 44),
     "DESK_ZOVER": ("kernel/desk.inc", 2),
+    # ...and the ONE CELL every desktop item sits in (SPEC.md 26.9), per arm:
+    # kern_small's is the drive zone it always was, kern_big's a shortcut's
+    # twelve-glyph caption wide
+    "DESK_CW": ("kernel/desk.inc", {"big": 96, "small": 32}),
+    "DESK_PX": ("kernel/desk.inc", {"big": 102, "small": 44}),
+    "DSL_SLOT": ("kernel/desk.inc", 0x3F),
+    "DSL_GONE": ("kernel/desk.inc", 0x80),
+    # kernel/desksc.inc - one LINK row, which is OSAPI_DESK_ITEM's record too
+    "SC_REC": ("kernel/desksc.inc", {"big": 128}),   # OS88_SHORTCUTS: big only
     # kernel/disk.inc - the volume table (SPEC.md 18.7)
     # PER ARM (SPEC.md 51.0): kern_small can load no driver, so it can have no
     # DVK_DRV volume, so every volume it will ever have is one of the four
@@ -222,6 +235,7 @@ _MIRROR = {
     # ...and two fields of its per-window state block, which is what lets a
     # harness ask WHERE THE LIST IS SCROLLED TO instead of assuming row 0 is
     # entry 0. That assumption is the one dispcp.open_named exists to end.
+    "FS_SEL": ("kernel/files.inc", 0),
     "FS_SCRL": ("kernel/files.inc", 2),
     # ...and WHICH VOLUME, AT WHICH FOLDER, which is what makes "open drive B"
     # confirmable. FS_CWD == 0 is a ROOT (files.inc says so at its only clear
@@ -284,27 +298,13 @@ _MIRROR = {
     "CUR_GH": ("kernel/mouse.inc", 12),
     "CUR_XHX": ("kernel/mouse.inc", 3),
     "CUR_XHY": ("kernel/mouse.inc", 5),
-    # kernel/fdlg.inc - the Standard File dialog's chrome, content-relative
-    # (SPEC.md 38.4). Two test scripts click these, and a third copy is one
-    # `equ` change away from a row that clicks empty background and reports a
-    # feature broken.
-    "FD_BX1": ("kernel/fdlg.inc", 224),
-    "FD_BX2": ("kernel/fdlg.inc", 286),
-    "FD_BY0": ("kernel/fdlg.inc", 20),
-    "FD_BY1": ("kernel/fdlg.inc", 40),
-    "FD_BY2": ("kernel/fdlg.inc", 60),
-    "FD_BH": ("kernel/fdlg.inc", 13),
-    "FD_LX1": ("kernel/fdlg.inc", 6),
-    "FD_LX2": ("kernel/fdlg.inc", 213),
-    "FD_ROW0": ("kernel/fdlg.inc", 22),
-    "FD_ROWH": ("kernel/fdlg.inc", 16),
-    # FD_TEXTX is deliberately NOT here. apps/ftpd/ftpd.asm defines its own
-    # (8, the Setup page's text pen) and tests/ftpdflick.py carries a THIRD
-    # value, 6 - so registering the kernel's 28 makes the gate compare two
-    # constants that were never the same one. A row that wants to click a
-    # listing entry should take FD_LX1..FD_LX2 and aim at the middle of the
-    # row, which is what the whole row is: less coupled, and it does not need
-    # this name at all.
+    # kernel/files.inc - the Standard File chooser's button column (SPEC.md
+    # 38.3): the chooser is a Disk window whose content is FM_CHCOLW narrower,
+    # its three buttons FM_BTN_W x FM_BTN_H at fm_rgt+5, 20px apart.
+    # tools/os88ui.py's chooser verbs aim at them.
+    "FM_CHCOLW": ("kernel/files.inc", 72),
+    "FM_BTN_W": ("kernel/files.inc", 63),
+    "FM_BTN_H": ("kernel/files.inc", 14),
     # kernel/toast.inc - the strip's message (SPEC.md 59)
     # TOAST_MAX is the TIGHT one by its own comment, so a local copy that is
     # one short truncates exactly the message it was added to read.
@@ -913,42 +913,41 @@ def tile_xy(m, win, sym=None):
 
 
 def drive_ordinal(m, letter="B", sym=None):
-    """Which desktop ZONE does drive `letter` own? None if it has none.
+    """Which desktop CELL is drive `letter` shown in? None if it is not shown.
 
-    NOT the drive number. A zone exists per volume with DV_FLAGS bit 0 set and
-    the ordinal is that volume's POSITION among the shown ones - so a machine
-    whose B: was retired by SPEC.md 18.97's probe, or which mounts a hard
-    disk, numbers them differently. Walking dsk_vtab is the only way to be
-    right, and it turns "no window opened" into "B: has no zone", which is the
-    difference between a test that fails and a test that says why.
+    NOT the drive number, and since SPEC.md 26.9 not a position you can count
+    either: every desktop item - volume, service item, shortcut - is a zone
+    with one byte of `desk_zslot` naming its cell, and a drive packs round
+    whatever is placed in the grid. So the table is read, which also turns
+    "no window opened" into "B: has no cell", the difference between a test
+    that fails and a test that says why. The name stays for its callers.
     """
     want = ord(letter.upper()) - ord("A") if isinstance(letter, str) else letter
-    t = m.read(_sym(m, sym)("dsk_vtab"), DVOL_MAX * DV_SIZE)
-    n = 0
-    for v in range(DVOL_MAX):
-        r = t[v * DV_SIZE:(v + 1) * DV_SIZE]
-        if r[DV_KIND] == DVK_FREE or not (r[DV_FLAGS] & 1):
-            continue
-        if v == want:
-            return n
-        n += 1
-    return None
+    if not 0 <= want < DVOL_MAX:        # a letter no volume row can have: the
+        return None                     # byte past the volumes is the Wire's
+    v = m.read(_sym(m, sym)("desk_zslot") + want, 1)[0]
+    if v >= DSL_GONE:
+        return None
+    return v & DSL_SLOT
 
 
 def drive_xy(m, ordinal, sym=None):
-    """The centre of zone `ordinal`, in virtual screen coordinates.
+    """The centre of cell `ordinal`'s PICTURE, in virtual screen coordinates.
 
-    desk_ord_xy's arithmetic (SPEC.md 26.1): zones fill a column downwards and
-    wrap to a NEW COLUMN ON THE LEFT, and how many fit is [desk_rows] - 2 on a
-    CGA with the tall icon, 4 with SPEC.md 26.4's square one, 4 on Hercules,
-    7 on VGA. The pitch and the zone's height are live words for that reason.
+    desk_cell_xy's arithmetic (SPEC.md 26.9): cell 0 is the top of the
+    rightmost column, [vid_desk_zx]; cells fill a column downwards and then
+    the next column to the LEFT, DESK_PX apart, [desk_rows] to a column. The
+    picture is the 32-wide column in the middle of a DESK_CW cell.
     """
     rows = word(m, "desk_rows", sym)
     step = word(m, "desk_zstep", sym)
     zh1 = word(m, "desk_zh1", sym)
     zx = word(m, "vid_desk_zx", sym)
     col, row = divmod(ordinal, rows)
-    return (zx - col * DESK_COLW + DESK_ZW // 2,
+    # the column on the byte grid (SPEC.md 26.9.9's DESKPIC: the centred x
+    # rounded to the nearest multiple of 8)
+    return (((zx - col * DESK_PX + (DESK_CW - DESK_ZW) // 2 + 4) & ~7)
+            + DESK_ZW // 2,
             DESK_ZY0 + row * step + zh1 // 2)
 
 

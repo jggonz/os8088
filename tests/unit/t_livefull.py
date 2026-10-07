@@ -118,6 +118,9 @@ PKG_FILE = {
     "pixelstein": "PXSTEIN.O88",   # SPEC.md 97.9: $(BUILD)/pxstein.o88 out of
                                    # apps/pixelstein/ - the folder carries the
                                    # game's name, the file its 8.3 one
+    "drmario": "DRMARCO.O88",      # SPEC.md 100: $(BUILD)/drmarco.o88 out of
+                                   # apps/drmario/ - the package was renamed
+                                   # and the source folder kept its name
 }
 
 

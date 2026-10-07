@@ -116,7 +116,7 @@ def main():
             sys.exit("paintdraw: no gfx_blitp as wide as the picture - the "
                      "canvas is not planar, or it fell back to nibbles")
         ox, oy = hit[0], hit[1]
-        time.sleep(6)
+        os88marty.settle(m)         # the rest of the load, off the glass
         pw = [w for w in dispcp.win_list(m, S) if w != disk][-1]
         wx, wy, ww, wh = dispcp.win_rect(m, S, pw)
 
@@ -162,7 +162,8 @@ def main():
         newy = wy + 40
         mo.drag(wx + ww // 2, wy + 9, wx + ww // 2, newy)
         os88marty.settle(m)
-        time.sleep(6)
+        os88marty.quiesce(m, lambda: dispcp.win_rect(m, S, pw), guest=0.5,
+                          what="the moved window")
         mo.to(4, 4)
         os88marty.settle(m)
         wx2, wy2 = dispcp.win_rect(m, S, pw)[:2]

@@ -638,10 +638,10 @@ cs_entry:
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1), and the macro's bare `ret` IS the
     ; proc - because every word that names this region is the kernel's. It
     ; named a cs_reloc for a cycle, on the belief that [cs_artseg] pointed
-    ; INSIDE our carve and had to follow it. It does not: csl_art expands the
-    ; title bands into a claim of their OWN (OSAPI_MEM_CLAIM, CS_ART_KB) and
-    ; hands us THAT segment, the packed stream in the carve being op_dropped
-    ; before the handoff. After mem_reown_x that claim is slot-owned with no
+    ; INSIDE our carve and had to follow it. It does not: the title bands are
+    ; an OP_COMP | OP_LAZY part, and csl_art's op_fetch expands them into a
+    ; claim of their OWN, outside the carve, and hands us THAT segment
+    ; (SPEC.md 88.10.4.1). After mem_reown_x that claim is slot-owned with no
     ; proc, so it never moves - and a proc that added the region's delta to
     ; [cs_artseg] would have pointed the title page at 11KB of whatever the
     ; compactor packed there the first time this region moved. Nothing
@@ -709,10 +709,11 @@ cs_entry:
 ; them and the fsx bracket never does. They used to be an LZ4 stream in the
 ; IMAGE that this expanded into a claim of its own, which cost the package
 ; 4,487 of a 60KB segment (APP_MAX_SIZE) for bytes nothing on a frame's path
-; ever touches. THEY ARE PART 0 NOW: an OP_COMP row that op_load reads and
-; expands into the parts carve before the entry proc does anything else, so
-; the image carries csart.inc's OFFSETS and not one byte of picture, and this
-; routine is the assignment that used to be a claim and a decode.
+; ever touches. THEY ARE A PART NOW (88.10.4.1): an OP_COMP | OP_LAZY row the
+; LOADER fetches, which expands it into a claim of its own and hands this
+; program the segment, so the image carries csart.inc's OFFSETS and not one
+; byte of picture, and this routine is the assignment that used to be a claim
+; and a decode.
 ;
 ; A BAND HOLDS NO POINTER, which is what made both moves free: what was a
 ; label in this segment is an offset into the blob (csart.inc's equs), the
@@ -720,10 +721,10 @@ cs_entry:
 ; any other, and the three blits read ES = [cs_artseg].
 ;
 ; A REFUSAL IS STILL A NORMAL PATH (SPEC.md 20.6, 47) and it is the SAME path:
-; op_seg answers 0 for a part that is not there, and 0 is the page the blit
+; the loader hands over 0 for bands it could not fetch, and 0 is the page the blit
 ; slot's own refusal already drew - the title lettered in the 8x8 face and no
-; aeroplane. Nothing to undo on the way out: the carve is the kernel's to free
-; with the instance, exactly as the claim was.
+; aeroplane. Nothing to undo on the way out: the bands' claim is slot-owned
+; since the re-home, and the kernel frees it with the instance.
 ; -----------------------------------------------------------------------------
 cs_artload:
     push ax
@@ -2353,7 +2354,7 @@ cs_i13:      db 'F1 to F5  step a setting, in flight', 0   ; in the blank
                                                           ; at thirteen lines
 
 ; -----------------------------------------------------------------------------
-; cs_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; cs_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD.  preserves all
 ; -----------------------------------------------------------------------------
 cs_about:

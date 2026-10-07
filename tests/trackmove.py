@@ -38,9 +38,16 @@ Nine assertions. Check 7 is the one no memory dump can make:
   6. All 4 channel `MP_SEG` followed.
   7. The replayer is STILL RUNNING afterwards - `mp_row` advances - which is
      the only check that says the worker came back from its park.
-  8/9. The sound driver's staging pool, where the machine has a card.
+  8/9. The sound driver's staging pool, where the machine has a card - and
+     since SPEC.md 34.5.2 the card PLAYS out of it, so check 8's direct arm
+     asserts it held still under the compaction rather than that it moved.
+     SAID PLAINLY: nothing reaches that arm today. The registered machine has
+     no card, so Tracker plays on the speaker, inside a bracket the script
+     has to STOP before the desktop answers (SPEC.md 45.25) - and with no
+     stream there is no pool. The pin itself is one MC_RLOC word the
+     compactor refuses on sight (mem_can_move's first test).
 """
-import sys, os, time, hashlib, argparse, subprocess, tempfile
+import sys, os, hashlib, argparse, subprocess, tempfile
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
 # checkout it was written in and wrong in a git worktree, which is how parallel
 # work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
@@ -153,7 +160,8 @@ def main():
                           machine=a.machine, boot=False) as m:
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
-        mo = os88mouse.Mouse(marty=m)
+        os88marty.no_saver(m)           # a settle can outlast the saver's
+        mo = os88mouse.Mouse(marty=m)   # delay, and then never ends
 
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         dslot = dispcp.win_list(m, S)[-1]
@@ -168,11 +176,24 @@ def main():
             if pt is None:
                 raise RuntimeError("the Disk window is wholly covered")
             mo.click(*pt)
-            os88marty.settle(m)
+            # NOT A SETTLE: the raise is confirmed by the window manager, which
+            # is the thing that changed - and a screen settle cannot be the
+            # wait once Tracker has a module, its face being a clock
+            os88marty.until(m, lambda _: os88geom.top(m, S)
+                            == os88geom.winptr(m, dslot, S),
+                            "the Disk window to come to the front", limit=20)
+
+        def heap_quiet():
+            # the drive AND the arena still: a load is reads, a compaction
+            # is claims moving with the drive silent
+            os88marty.quiesce(m, lambda: (m.disk().get("reads"),
+                                          sorted(claims(m, S))),
+                              guest=2.0, budget=120.0,
+                              what="heapfrag's load and claims")
 
         # --- heapfrag first, so it owns the floor of the arena --------------
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_HEAPFRAG)
-        time.sleep(22)
+        heap_quiet()
         os88marty.settle(m)
         hf_seg, hf_win = find_win(m, S, "Heap")
         print("heapfrag at %04x" % (hf_seg or 0))
@@ -180,8 +201,17 @@ def main():
         # --- then the module, which OPENS TRACKER through the association ---
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_MOD)
-        time.sleep(30)                       # 116KB off a 360KB floppy
-        os88marty.settle(m)
+
+        def loaded(_):                       # 116KB off a 360KB floppy
+            seg, _w = find_win(m, S, "Tracker")
+            return bool(seg) and u16(m.read(seg * 16 + P["mp_loaded"], 2))
+        try:
+            os88marty.until(m, loaded, "Tracker to load the module",
+                            poll=0.5, limit=60)
+        except os88marty.MartyError:
+            pass                             # ...and the next lines say so
+        # NO SETTLE FROM HERE ON. Every wait below is on the state the step
+        # produces, not on a screen that has stopped changing.
         tk_seg, tk_win = find_win(m, S, "Tracker")
         if tk_seg is None:
             print("FAIL: Tracker never opened a window")
@@ -189,6 +219,32 @@ def main():
 
         def tword(name):
             return u16(m.read(tk_seg * 16 + P[name], 2))
+
+        def tbyte(name):
+            return m.read(tk_seg * 16 + P[name], 1)[0]
+
+        # --- STOP THE PLAY, which is what gives the desktop back ------------
+        #
+        # Tracker PLAYS what it opens, and with no card - this machine - it
+        # plays on the PC speaker INSIDE AN FSXF_RATE BRACKET (SPEC.md 45.25's
+        # imposter window): the UI task is in Tracker's own loop holding the
+        # gfx lock for as long as the play lasts, and the rest of the desktop
+        # WAITS. A click there is not a click on what is under the pointer -
+        # it is the bracket's "pause", and only if a once-a-frame poll of the
+        # buttons happens to see the press - so the dock tile, the close box
+        # and the Disk window below answer nothing at all until it ends. No
+        # compaction can be asked for from inside it either. S is the
+        # bracket's own stop and comes off the BIOS keyboard buffer, so it
+        # cannot be missed; and loaded-and-stopped is the state this row was
+        # written against, a machine with no card having loaded the module
+        # and not played it before 45.25.
+        os88marty.until(m, lambda _: tbyte("tsp_run"),
+                        "Tracker's speaker play to start", limit=60)
+        m.type_text("s")
+        os88marty.until(m, lambda _: not tbyte("tsp_run")
+                        and not tbyte("mp_playing"),
+                        "S to stop the play and give the desktop back",
+                        limit=20)
 
         base = tword("trk_modseg")
         if not base:
@@ -212,14 +268,18 @@ def main():
                      ("drivers/sound/", "drivers/", "apps/"))
         dseg = next((c[0] for c in claims(m, S) if c[2] == MEM_K_DRV), None)
         pool0 = prloc = None
+        direct = 0
         if dseg:
             pool0 = u16(m.read(dseg * 16 + D["sbl_poolseg"], 2))
+            direct = m.read(dseg * 16 + D["sbl_direct"], 1)[0]
             if pool0:
                 pc = [c for c in claims(m, S) if c[0] == pool0]
                 prloc = pc[0][3] if pc else None
-                print("sound driver at %04x, pool %04x %dKB%s"
+                print("sound driver at %04x, pool %04x %dKB%s%s"
                       % (dseg, pool0, (pc[0][1] // 64) if pc else 0,
-                         "  MOVABLE" if prloc else ""))
+                         "  MOVABLE" if prloc else "",
+                         "  DIRECT - the card plays out of it" if direct
+                         else ""))
         if not pool0:
             print("no sound driver / no stream: the pool checks will SKIP")
 
@@ -235,17 +295,30 @@ def main():
         # --- close heapfrag: the floor under the module opens up -------------
         #
         # THROUGH THE DOCK, because Tracker's window covers heapfrag entirely
-        # and no pixel of it is clickable. A tile TOGGLES minimize (SPEC.md
-        # 30), so two clicks hide it and bring it back FRONTMOST - which is
-        # the one way to raise a wholly-covered window that needs no geometry
-        # at all, and the dock is the one strip nothing can cover.
-        tile = os88geom.tile_xy(m, hf_win, S)
-        mo.click(*tile)                                  # minimize
-        os88marty.settle(m)
-        mo.click(*tile)                                  # ...and back, on top
-        os88marty.settle(m)
+        # and no pixel of it is clickable. The tile does whatever its own
+        # mark says is not true (SPEC.md 30.4): heapfrag is neither minimized
+        # nor the active instance, so ONE click fronts it - which is the one
+        # way to raise a wholly-covered window that needs no geometry at all,
+        # and the dock is the one strip nothing can cover. (Two clicks, as
+        # this used to make, is front-then-MINIMIZE: the second click is on
+        # the active tile, and the close box below then hits Tracker.)
+        def hf_state():
+            w = [o for o in os88geom.windows(m, S) if o.i == hf_win.i]
+            return (w[0].visible, os88geom.top(m, S)
+                    == os88geom.winptr(m, hf_win.i, S)) if w else (False, False)
+        if hf_state() != (True, False):
+            print("FAIL: heapfrag is %s before the dock click, where it should "
+                  "be shown and covered" % (hf_state(),))
+            return 1
+        mo.click(*os88geom.tile_xy(m, hf_win, S))        # fronted
+        os88marty.until(m, lambda _: hf_state() == (True, True),
+                        "heapfrag fronted by its dock tile", limit=20)
         mo.click(hf_win.x + 8, hf_win.y + 9)             # now its close box
-        os88marty.settle(m)
+        try:
+            os88marty.until(m, lambda _: not hf_state()[0], "heapfrag closed",
+                            limit=20)
+        except os88marty.MartyError:
+            pass                             # ...and the next line says so
         if any(w.i == hf_win.i and w.visible for w in os88geom.windows(m, S)):
             print("FAIL: heapfrag did not close, so no hole opened")
             return 1
@@ -253,8 +326,7 @@ def main():
         # --- and run it again, whose big claim forces the compaction ---------
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_HEAPFRAG)
-        time.sleep(22)
-        os88marty.settle(m)
+        heap_quiet()
 
         # heapfrag's OWN verdict, so a module that did not move can be told
         # apart from a compaction that never ran
@@ -344,7 +416,11 @@ def main():
         # stop, it plays the wrong bytes, so this is a liveness check and the
         # four above are the correctness ones
         r1 = tword("mp_row")
-        time.sleep(4)
+        try:
+            os88marty.until(m, lambda _: tword("mp_row") != r1,
+                            "the replayer's next row", poll=0.2, limit=4)
+        except os88marty.MartyError:
+            pass
         r2 = tword("mp_row")
         alive = tword("mp_loaded") != 0
         print("  7 replayer alive      %s  (row %d -> %d -> %d, loaded=%s)"
@@ -361,7 +437,21 @@ def main():
             # trapped beneath PINNED claims. So this reports what it saw and
             # does not manufacture a pass. (Closing Tracker to open a hole is
             # self-defeating: it stops the stream, and [sbl_poolseg] goes to 0.)
-            if not pnew:
+            #
+            # A DIRECT STREAM TURNS THIS ROUND (SPEC.md 34.5.2): the 8237 is
+            # reading the ring straight out of the pool, so the driver PINS it
+            # for the stream's life and the right answer is the one this row
+            # could never assert before - a compaction ran under a playing
+            # stream (checks 2-7 are it) and the pool did NOT move.
+            if direct:
+                held = pnew == pool0 and not prloc
+                print("  8 pool held still     %s"
+                      % ("OK - pinned while the card plays it" if held else
+                         "%04x -> %04x, MC_RLOC %04x  <-- moved or movable "
+                         "under a live DMA transfer" % (pool0, pnew,
+                                                         prloc or 0)))
+                bad += not held
+            elif not pnew:
                 print("  8 pool moved          SKIP (the stream closed, so the"
                       " pool was freed)")
             elif pnew != pool0:
@@ -369,7 +459,7 @@ def main():
             else:
                 print("  8 pool moved          NOT EXERCISED (declared=%s;"
                       " nothing was free beneath it)" % bool(prloc))
-            if not prloc:
+            if not direct and not prloc:
                 print("      the pool was never DECLARED movable")
                 bad += 1
             ok8 = (not pnew) or (pnew in live)

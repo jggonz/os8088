@@ -723,7 +723,9 @@ not an optimisation:
 - **`.ovl` is shared with `kern_big`**, which has 473 bytes free there. Keep
   `kern_small` above that and `kern_big` stays the build that binds the blob;
   let it fall below and an `.ovl` addition starts breaking one kernel and not
-  the other, with no cheap way back.
+  the other, with no cheap way back. **(It has fallen below, deliberately:
+  SPEC.md 2.5.3.3 put `kmain`'s boot half in the blob, and kern_small binds it
+  now at 42 bytes free against kern_big's 152.)**
 - **`.ovlw` growing is the self-correcting direction**: the fix is to move
   another body across, and SPEC.md 2.5.3.2's `OVBCALL` is what makes that a
   two-line change. The candidates are sized there; the next-best pair is

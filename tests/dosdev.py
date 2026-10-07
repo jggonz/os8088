@@ -31,7 +31,6 @@ and us refusing (D, E).
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -67,13 +66,14 @@ def main():
             fail("double-clicking %s opened no window" % PROG)
 
         rows = []
-        end = time.time() + 240.0
-        while time.time() < end:
-            rows = [r.rstrip() for r in (m.screen() or []) if r.strip()]
-            if any("CONDEV PASS" in r or "CONDEV FAIL" in r for r in rows):
-                break
-            time.sleep(0.5)
-        else:
+
+        def _seen(_m):
+            rows[:] = [r.rstrip() for r in (m.screen() or []) if r.strip()]
+            return any("CONDEV PASS" in r or "CONDEV FAIL" in r for r in rows)
+        try:                        # GUEST time: `limit` is idle-box seconds
+            M.until(m, _seen, "CONDEV.COM to report", poll=0.5,
+                            limit=240.0)
+        except M.MartyError:
             fail("CONDEV.COM never reported; the last screen was %r"
                  % rows[:12])
 

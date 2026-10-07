@@ -46,7 +46,6 @@ band erase and its six fields.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -116,11 +115,26 @@ def main():
         os88marty.settle(m)
 
         # --- the click, with every drawing call recorded ---------------------
+        pane = wx + 1 + CP_DIVX
+        top = wy + TITLE_H
+
+        def left(tr):
+            return sorted({h["regs"]["dx"] for h in tr.hits if h.get("regs")
+                           and h["regs"]["cx"] < pane
+                           and top <= h["regs"]["dx"] <= top + 1 + CP_I0Y
+                           + len(shown) * CP_IROWH})
+
         with os88marty.bp_trace(m, "font_run_x", regs=True) as tr:
             mo.click(wx + 1 + CP_IX + 30,
                      wy + TITLE_H + 1 + CP_I0Y + target * CP_IROWH
                      + CP_IROWH // 2, settle=0)
-            time.sleep(2.5)
+            # The click's own proof is not its repaint: stay in the block
+            # until the selection has moved and the lettering has stopped,
+            # both counted in guest time.
+            tr.until(lambda: m.read(S("cp_sel"), 1)[0] == shown[target],
+                     "the selection to move", 30, required=False)
+            os88marty.quiesce(m, lambda: left(tr), guest=1.0,
+                              what="the left pane's lettering to stop")
         mo.to(4, 4)
 
         # TWO IDENTICAL CAPTURES, NOT settle(). A settle straight out of a
@@ -132,7 +146,7 @@ def main():
         W = H = None
         last = None
         for _ in range(8):
-            time.sleep(0.5)
+            os88marty.pace(m, 0.5)
             W, H, cur = shot(m)
             if cur == last:
                 break
@@ -141,12 +155,7 @@ def main():
 
         # THE LEFT PANE ONLY: cp_page redraws the whole right-hand pane on a
         # selection and is SUPPOSED to - the page really did all change.
-        pane = wx + 1 + CP_DIVX
-        top = wy + TITLE_H
-        runs = sorted({h["regs"]["dx"] for h in tr.hits if h.get("regs")
-                       and h["regs"]["cx"] < pane
-                       and top <= h["regs"]["dx"] <= top + 1 + CP_I0Y
-                       + len(shown) * CP_IROWH})
+        runs = left(tr)
         print("   left-pane names lettered: %d at y %s" % (len(runs), runs))
         check(len(runs) == 2,
               "EXACTLY TWO rows were lettered - the pane was not redrawn, "
@@ -170,7 +179,7 @@ def main():
         # the whole date-and-time band. Two fields change, so two runs.
         dispcp.open_panel(m, mo, S, os88marty.settle, page=CP_ITIME)
         mo.to(4, 4)
-        time.sleep(1.0)
+        os88marty.pace(m, 1.0)
         wx, wy = dispcp._cp_win(m, S)
         fld = m.read(S("cp_tsel"), 1)[0]
         tgt = 3 if fld != 3 else 0          # a field on the OTHER row
@@ -189,7 +198,10 @@ def main():
         with os88marty.bp_trace(m, "gfx_fill", regs=True) as tr:
             mo.click(wx + 1 + CP_RX + fx + 4,
                      wy + TITLE_H + 1 + fy + 4, settle=0)
-            time.sleep(2.0)
+            tr.until(lambda: m.read(S("cp_tsel"), 1)[0] == tgt,
+                     "the caret to move", 30, required=False)
+            os88marty.quiesce(m, lambda: tr.n, guest=1.0,
+                              what="the field boxes' fills to stop")
         mo.to(4, 4)
         newfld = m.read(S("cp_tsel"), 1)[0]
         pane = wx + 1 + CP_RX

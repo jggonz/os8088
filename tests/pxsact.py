@@ -370,7 +370,12 @@ def main():
                 opened = True
                 break
         check(opened, "Space in front of door 0 opens it (state %d, pos %d)" % (d["state"], d["pos"]))
-        ticks(g, 20)
+        try:                                        # the slide's END, not 20
+            os88marty.until(                        # ticks that stood in for it
+                m, lambda mm: (lambda dd: dd["state"] == OPEN and dd["pos"] == 256)(g.door(0)),
+                "door 0 to slide fully open", poll=0.05, guest=10.0)
+        except os88marty.MartyError as e:
+            print("   (%s)" % str(e).split("\n")[0])
         d = g.door(0)
         check(d["state"] == OPEN and d["pos"] == 256, "...and it slid fully open (state %d, pos %d)"
               % (d["state"], d["pos"]))
@@ -579,7 +584,12 @@ def main():
         m.pause()
         g.actor_poke(2, x=9 * 256 + 128, y=3 * 256 + 128, state=PATROL, dir=0, ang=0)   # in view
         m.run()
-        ticks(g, 30)
+        try:                                        # the frame it OWES, not 30
+            os88marty.until(m, lambda mm: g.word("px_frames") > f1,   # ticks
+                            "a frame for the patroller in view", poll=0.05,
+                            guest=10.0)
+        except os88marty.MartyError as e:
+            print("   (%s)" % str(e).split("\n")[0])
         f2 = g.word("px_frames")
         check(f2 > f1, "...and the same patroller in the corridor ahead owes frames (%d -> %d)"
               % (f1, f2))

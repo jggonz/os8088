@@ -105,8 +105,9 @@ def boot():
     import time
     if os.path.exists(xmcheck.PID):
         try:
-            os.kill(int(open(xmcheck.PID).read().strip()), 15)
-            time.sleep(1.0)
+            pid = int(open(xmcheck.PID).read().strip())
+            os.kill(pid, 15)
+            os88qemu.gone(pid)
         except (OSError, ValueError):
             pass
     for f in (xmcheck.SOCK, xmcheck.PID):
@@ -129,7 +130,7 @@ def boot():
         time.sleep(0.2)
     else:
         raise SystemExit("msegxms: QEMU never opened " + xmcheck.SOCK)
-    time.sleep(12)
+    xmcheck.wait_desktop(xmcheck.SOCK, "msegxms")   # guest time, not 12s
     return xmcheck.SOCK
 
 
@@ -167,7 +168,6 @@ def open_pkg(sock, m):
     one into the other - and it needs the keyboard, which this file's QMP
     driver does not have yet.
     """
-    import time
     slots = dispcp.win_list(m, xmcheck.sym)
     if not slots:
         raise SystemExit("msegxms: drive B: opened no window")
@@ -178,28 +178,15 @@ def open_pkg(sock, m):
     x, y = dispcp.row_xy(wx, wy, row)
     say("%s is row %d, at (%d,%d)" % (PKG, row, x, y))
     xmcheck.dblclick(sock, x, y)
-    time.sleep(9)
+    # MSEG creates its window AFTER its checks, with the verdict already in
+    # the title (tests/multiseg/mseg.asm) - so the window IS the answer, and
+    # it is waited for in GUEST seconds (tests/os88qemu.py).
+    os88qemu.acted(m, lambda: mseg_window(sock)[0] is not None, secs=30,
+                   what="the MSEG window", poll=0.3)
 
 
-def run(sock):
-    import time
-    base = xmcheck.table_base(sock)
-    m = Mem(sock)
-
-    # xmcheck's own wait, and it is not generous: QEMU boots fast and then
-    # reads a floppy at the speed of a floppy.
-    xmcheck.dblclick(sock, *xmcheck.DISKB)
-    time.sleep(7)
-    open_pkg(sock, m)
-
-    st = xmcheck.read_bytes(sock, xmcheck.sym("ld_status"), 1)[0]
-    say("ld_status = %d" % st)
-    if st != 0:
-        raise SystemExit("msegxms: MSEG did not load (ld_status %d) - nothing "
-                         "below can be asked. 4 means op_load refused itself, "
-                         "which on a machine WITH a store means the XMS path "
-                         "failed where the fallback path works" % st)
-
+def mseg_window(sock, show=False):
+    """(segment, title) of the MSEG window, or (None, None)."""
     wins = bytes(xmcheck.read_bytes(sock, xmcheck.sym("wm_wins"),
                                     os88geom.MAX_WIN * os88geom.WIN_SIZE))
     seg = title = None
@@ -210,9 +197,41 @@ def run(sock):
             continue
         t = u16(r, os88geom.W_TITLE)
         txt = bytes(xmcheck.read_bytes(sock, (w << 4) + t, 24)).split(b"\0")[0]
-        say("window %d: seg %04X title %r" % (i, w, txt))
+        if show:
+            say("window %d: seg %04X title %r" % (i, w, txt))
         if txt.startswith(b"MSEG") and not txt.startswith(b"MSEGBIG"):
             seg, title = w, txt.decode("ascii", "replace")
+    return seg, title
+
+
+def run(sock):
+    base = xmcheck.table_base(sock)
+    m = Mem(sock)
+
+    # The Disk window, and MSEG in its listing: the thing open_pkg reads next,
+    # waited for on the GUEST's clock rather than a host `time.sleep(7)`.
+    xmcheck.dblclick(sock, *xmcheck.DISKB)
+
+    def listed():
+        try:
+            return any(r[0].upper() == PKG
+                       for r in dispcp.listing(m, xmcheck.sym))
+        except Exception:                   # noqa: BLE001 - no window yet
+            return False
+    os88qemu.acted(m, lambda: bool(dispcp.win_list(m, xmcheck.sym))
+                   and listed(), secs=20, what="%s listed" % PKG, poll=0.3)
+    os88qemu.pace(m, 1)                     # ...and the rows painted
+    open_pkg(sock, m)
+
+    st = xmcheck.read_bytes(sock, xmcheck.sym("ld_status"), 1)[0]
+    say("ld_status = %d" % st)
+    if st != 0:
+        raise SystemExit("msegxms: MSEG did not load (ld_status %d) - nothing "
+                         "below can be asked. 4 means op_load refused itself, "
+                         "which on a machine WITH a store means the XMS path "
+                         "failed where the fallback path works" % st)
+
+    seg, title = mseg_window(sock, show=True)
     if seg is None:
         raise SystemExit("msegxms: no MSEG window - the launch did not land")
 

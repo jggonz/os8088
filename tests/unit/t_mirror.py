@@ -178,6 +178,8 @@ CDEF = ["apps/c64/c64.c", "apps/c64/c64scr.c",
 PY_MIRROR = {
     "KERNEL_SEG":   ["tools/os88sym.py", "tools/os88marty.py"],
     "APP_MAX_SIZE": ["tools/os88pkg.py"],
+    "PKG_FMT":      ["tools/os88pkg.py"],
+    "DRV_VER":      ["tools/os88drv.py"],
 }
 
 # Names that are DELIBERATELY different between two files. Empty today. A row
@@ -345,11 +347,17 @@ def main():
               got="%s=%s; %s=%s" % (na, a, nb, b), want="one value")
 
     # ...and the Python side, which cannot include anything at all.
-    truth = tables["kernel/kernel.asm"]
+    # THE KERNEL, WHOLE - not kernel.asm alone, for the docstring's reason one
+    # level up: a constant the kernel defines in loader.inc (PKG_FMT) or
+    # driver.inc (DRV_VER) is as much the authority as one in kernel.asm.
+    truth = {}
+    for rel, t in tables.items():
+        if rel.startswith("kernel/"):
+            truth.update(t)
     pychecked = 0
     for name, tools in PY_MIRROR.items():
         if name not in truth:
-            check(False, "%s is defined in kernel/kernel.asm" % name,
+            check(False, "%s is defined in the kernel" % name,
                   "PY_MIRROR names it as the authority; if it moved, point this at "
                   "the new home rather than dropping the check")
             continue

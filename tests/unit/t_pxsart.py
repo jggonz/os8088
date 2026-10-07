@@ -28,6 +28,7 @@ from harness import check, eq, done                         # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+import os88lz                                               # noqa: E402
 import pxsart                                               # noqa: E402
 import pxslevel                                             # noqa: E402
 
@@ -114,11 +115,14 @@ def main():
     eq(len(blob), pxsart.NWALL * pxsart.WALLSZ, "the art claim is 15 x 512 bytes")
     eq(blob[0] >> 4, ms[0][0][0], "the master's first byte: texel 0 in the high nibble")
     eq(blob[0] & 15, ms[0][0][1], "...and texel 1 in the low")
-    z = pxsart.stream(ms)
+    raw = pxsart.art_part(ms)
     whole = len(blob) + len(pxsart.sprite_blob(pxsart.sprites(), pxsart.weapons()))
-    check(0 < len(z) < whole, "the LZ4 stream is smaller than the masters it carries - the "
-          "walls AND the sprites (%d < %d; wave 6's dog took the stream past the walls "
-          "alone, which the first cut compared it with)" % (len(z), whole))
+    eq(len(raw), whole, "the art part is the walls AND the sprites, raw (wave 6's dog took "
+       "it past the walls alone, which the first cut compared it with)")
+    z = os88lz.compress(raw, os88lz.LZ4)
+    check(0 < len(z) < whole, "the art part packs smaller than the masters it carries "
+          "(%d < %d) - it is an OP_COMP row, and os88pkg.py refuses one that does not "
+          "pay, so this is the build failing early and in words" % (len(z), whole))
 
     # the negative controls
     with tempfile.TemporaryDirectory() as d:

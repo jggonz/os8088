@@ -50,7 +50,6 @@ bracket on a CGA primary sends the Hercules arm, which writes constants, and
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -104,12 +103,14 @@ def bracket(m):
 
 
 def wait_bracket(m, want, limit=10.0):
-    """Wait for [fsx_cur] on the GUEST's own state, not a host sleep."""
-    end = time.time() + limit
-    while time.time() < end:
-        if bracket(m) == want:
-            return want
-        time.sleep(0.15)
+    """Wait for [fsx_cur] on the GUEST's own state, not a host sleep - and
+    on the guest's own CLOCK too: `limit` is idle-box seconds, budgeted as
+    guest time by `until`, so a loaded box cannot shorten it."""
+    try:
+        os88marty.until(m, lambda _m: bracket(m) == want,
+                        "[fsx_cur] = %#x" % want, poll=0.15, limit=limit)
+    except os88marty.MartyError:
+        pass
     return bracket(m)
 
 
@@ -127,12 +128,12 @@ def wait_restored(m, S, limit=25.0):
     read thousands of changed pixels under a four-lane soak, which is
     docs/WRITING-TESTS.md's own warning about a wait sized on an idle box.
     """
-    end = time.time() + limit
-    while time.time() < end:
-        if m.read(S("fsx_vndisp"), 1)[0] == 1:
-            return True
-        time.sleep(0.1)
-    return False
+    try:
+        os88marty.until(m, lambda _m: m.read(S("fsx_vndisp"), 1)[0] == 1,
+                        "vid_fsx_unblank's one-shot", poll=0.1, limit=limit)
+    except os88marty.MartyError:
+        return False
+    return True
 
 
 def main():

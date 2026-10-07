@@ -7,7 +7,7 @@
 ; dskw_read, dskw_delete, dskw_rename, dskw_dfree - are the whole surface,
 ; and read and write are ONE routine each: both take a far pointer and a
 ; 32-bit count, so there is no separate big-file entry point any more
-; (SPEC.md 18.4.1; its slot 0x01E8 has since gone to OSAPI_VOL_KIND),
+; (SPEC.md 18.4.1; its slot 0x0190 has since gone to OSAPI_VOL_KIND),
 ; for the OS and for packages alike (they ARE the API cells 0x0120..0x0140,
 ; SPEC.md 20.3): whole files, by name, in the volume's CURRENT directory
 ; (SPEC.md 19.2 - [dsk_cwd], which dsk_chdir moves). No handles, no seek,
@@ -70,6 +70,30 @@ FERR_BIG     equ 10            ; larger than the caller's buffer - or, on a
                                ; count can hold (SPEC.md 18.4.1)
 
 ; --- directory attribute bits + the raw fields disk.inc does not name -------
+%macro DSKW_CLBA_INC 0
+  %ifdef OS88_BIGVOL
+    call dskw_clba_inc
+  %else
+    inc word [dskw_clba]
+  %endif
+%endmacro
+
+%macro DSKW_CLBA_SET 0
+  %ifdef OS88_BIGVOL
+    call dskw_clba_set
+  %else
+    mov [dskw_clba], ax
+  %endif
+%endmacro
+
+; THE 'NO FREE SLOT' SENTINEL: in [dskw_fsec]'s HIGH word where it has one
+; (SPEC.md 18.7.5), because FFFFh is an ordinary low word past 32MB
+%ifdef OS88_BIGVOL
+  %define DSKW_FNONE dskw_fsec+2
+%else
+  %define DSKW_FNONE dskw_fsec
+%endif
+
 DSKW_PROT    equ 0x1F          ; read-only|hidden|system|volume|directory:
                                ; any of them and the entry is untouchable
 DSKW_NPROT   equ 0x0F          ; the RENAME mask (SPEC.md 18.4) - the same
@@ -132,6 +156,10 @@ DSKW_EOC12   equ 0x0FFF        ; end-of-chain marks: >= the spec's EOC floor
 DSKW_EOC16   equ 0xFFFF        ; (0FF8h / 0FFF8h), so a host fsck walks the
                                ; chains exactly the way this kernel does
 
+%ifdef DSK_STREAM                ; WRITE_SEQ's record rides the append body
+%define DSKW_WSEQ                ; (SPEC.md 18.4.9) on kern_big and in
+%endif                           ; kern_dos, whose DOS box streams (96.53.1)
+
 ; the legal short-name symbols, beyond A-Z and 0-9 (SPEC.md 18.4). Spaces,
 ; path separators, wildcards and "+,;=[]:" are absent on purpose.
 dskw_syms:  db '$', '%', 0x27, '-', '_', '@', '~', 0x60
@@ -155,6 +183,12 @@ dskw_batch: db 0                ; 1 = a MULTI-FILE operation is running and
                                 ; A .text `db`, not .bss, for dskw_isdir's
                                 ; reason: -f bin zeroes nothing, and the very
                                 ; first write must not see a garbage flag
+%ifdef DSKW_WSEQ
+dws_hd0:    dw 0xFFFF           ; the HELD volume's dirty FAT range, banked
+dws_hd1:    dw 0                ; while the machine stands elsewhere (SPEC.md
+                                ; 18.8.5); 0xFFFF = none. .text, for this
+                                ; block's reason: the empty value is not 0
+%endif
 dskw_syswr: db 0                ; 1 = dskw_write_sys, not dskw_write: this
                                 ; file is the KERNEL's (SPEC.md 19.6). Here
                                 ; for the same reason again, and with the
@@ -214,7 +248,7 @@ dskw_pmask:
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_write - create or replace a whole file (SPEC.md 18.4, slot 0x0120)
+; dskw_write - create or replace a whole file (SPEC.md 18.4, slot 0x0103)
 ; in:  SI -> NUL-terminated 8.3 name, ES:BX -> the bytes, DX:CX = byte count
 ;      (32-bit, DX high; 0 = an empty file)
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
@@ -246,11 +280,12 @@ dskw_wrp:
     mov [dskw_len], cx
     mov [dskw_lenhi], dx
     call ax                     ; out: CF + AX (pops do not touch flags)
-    call KERNEL_SEG:fpg_end     ; the ONE place the widget is given back,
+    call ct_fpg_end             ; the ONE place the widget is given back,
                                 ; however many ways the body returned - and it
                                 ; preserves CF and AX too (SPEC.md 12.8)
     mov byte [dskw_syswr], 0    ; one shot, cleared here so it can never
-    pop es                      ; leak into the next caller's write
+.pop:                           ; leak into the next caller's write
+    pop es                      ; (dskw_wrap7's pop run as well)
     pop bp
     pop di
     pop si
@@ -282,12 +317,13 @@ dskw_write_sys_x:
     jmp short dskw_write_x      ; ...which clears it again on the way out
 
 ; -----------------------------------------------------------------------------
-; dskw_read - read a whole file by name (SPEC.md 18.4, slot 0x0128)
+; dskw_read - read a whole file by name (SPEC.md 18.4, slot 0x0109)
 ; in:  SI -> name, ES:BX -> destination, DX:CX = its capacity in bytes
 ;      (32-bit, DX high)
 ; out: CF=0, DX:AX = bytes read (the file's 32-bit size); CF=1, AX = FERR_* -
 ;      and on FERR_BIG, decided from the directory entry's 32-bit size BEFORE
-;      any data I/O, the destination is untouched
+;      any data I/O, the destination is untouched and DX = the KB the read
+;      needs, the UNPACKED size where the file is compressed (20.14.6.3)
 ; clobbers: AX/DX (the outputs), CF
 ;
 ; dskw_write's mirror, and the same argument: the destination is normalised
@@ -309,7 +345,7 @@ dskw_read_x:
     mov [dskw_cap], cx
     mov [dskw_caphi], dx
     call dskw_rbody             ; out: CF + DX:AX (pops touch neither)
-    call KERNEL_SEG:fpg_end     ; ...and neither does this (SPEC.md 12.8)
+    call ct_fpg_end             ; ...and neither does this (SPEC.md 12.8)
     pop es
     pop bp
     pop di
@@ -319,7 +355,7 @@ dskw_read_x:
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_delete - delete a file by name (SPEC.md 18.4, slot 0x0130)
+; dskw_delete - delete a file by name (SPEC.md 18.4, slot 0x010F)
 ; in:  SI -> name
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
 ; clobbers: AX (the output), CF
@@ -329,7 +365,7 @@ dskw_delete_x:
     jmp short dskw_wrap7
 
 ; -----------------------------------------------------------------------------
-; dskw_rename - rename a file in place (SPEC.md 18.4, slot 0x0138)
+; dskw_rename - rename a file in place (SPEC.md 18.4, slot 0x0115)
 ; in:  SI -> old name, DI -> new name
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
 ; clobbers: AX (the output), CF
@@ -352,17 +388,10 @@ dskw_wrap7:
     push bp
     push es
     call ax
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp short dskw_wrp.pop      ; the same seven pops, the same order
 
 ; -----------------------------------------------------------------------------
-; dskw_dfree - free space on the mounted volume (SPEC.md 18.4, slot 0x0140)
+; dskw_dfree - free space on the mounted volume (SPEC.md 18.4, slot 0x0118)
 ; in:  nothing
 ; out: CF=0, DX:AX = free bytes, BX = SECTORS per cluster (spc*512 overflows
 ;      16 bits at the SPEC.md 18.2-legal spc = 128); CF=1, AX = FERR_*
@@ -445,43 +474,88 @@ dskw_vstat_x:
 ; clobbers: nothing else
 ; -----------------------------------------------------------------------------
 dskw_mkdir_x:
-    mov ax, dskw_mkbody         ; dskw_wrap7's argument, one push shorter:
-                                ; neither of these two spends BP
-dskw_wrap6:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    call ax
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    mov ax, dskw_mkbody         ; dskw_wrap7's argument. It had a ladder of
+    jmp dskw_wrap7              ; its own one push shorter (neither of these
+                                ; two spends BP); two bytes of stack buy the
+                                ; fifteen of the copy
 
 ; -----------------------------------------------------------------------------
 ; dskw_mounted - the write gate (SPEC.md 18.4): is there a volume to write to?
-; in:  nothing
-; out: CF=0 there is; CF=1 with AX = FERR_NODISK
-; clobbers: AX on the refusal path only, flags
+; dskw_gate / dskw_gate83 - ...and the rest of a name-taking body's opening
+; in:  dskw_mounted: nothing
+;      dskw_gate: SI -> the name, AX = the FSV_* verb a redirected volume is
+;      handed (kern_big; ignored where OS88_REDIR is not built)
+;      dskw_gate83: SI -> the name
+; out: ALL THREE RETURN ONLY TO CONTINUE. dskw_mounted: there is a volume.
+;      dskw_gate and dskw_gate83: that, and it is not a redirected one, and
+;      dskw_n83 holds the 11-byte raw name (DI = its address). Otherwise they
+;      do not come back to the body at all: they drop the body's return
+;      address and answer the BODY'S CALLER with CF=1 and AX = FERR_NODISK /
+;      FERR_NAME, or with the redirected verb's own CF/AX
+; clobbers: dskw_mounted nothing on the way on; the other two AX and DI, and
+;      BP on the redirected arm, as the bodies always did
 ;
-; Every one of the eight operation bodies below opens with this, and every one
-; of them used to spell it out. `call dskw_mounted / jnc .gated / ret` is six
-; bytes where the five instructions were twelve. The local `ret` is not
-; laziness: these bodies are 200-334 bytes long, their `.out` is at the
-; bottom, and the 8086 has no near `jcc`.
+; Every one of the eight operation bodies below opens with the gate, and five
+; of them went on with the same DVK_FILE hand-off and 8.3 parse, differing
+; only in the FSV_* verb: thirty-two bytes a body. `call dskw_gate` is three.
+; The drop is two `inc sp`, which leave the carry alone, so the body's caller
+; sees exactly what the inline `ret`s gave it. A body may call any of the
+; three ONLY while it has pushed nothing since it was entered - the drop is
+; one word deep - which is why dskw_stat_x (a push frame) spells its own.
 ; -----------------------------------------------------------------------------
-dskw_mounted:
+dskw_gate:
+%ifdef DSKW_WSEQ
+    call dws_gate               ; DELETE, MKDIR and RMDIR come in HERE and not
+%endif                          ; through dskw_mounted (SPEC.md 18.4.9.2)
     cmp byte [dsk_mntok], 1
-    je .yes
+    jne dskw_mounted.no
+%ifdef OS88_REDIR
+    cmp byte [dsk_vkind], DVK_FILE
+    jne dskw_gate83
+    xchg ax, bp                 ; BP = the verb; AX was don't-care (the body
+    call dskw_fsop              ; address dskw_wrap6/7 called through)
+    jmp short dskw_mounted.quit ; CF/AX = the driver's answer
+%endif                          ; OS88_REDIR
+dskw_gate83:
+    mov di, dskw_n83
+    call dskw_name83            ; SI -> the 11-byte raw name field
+    jnc dskw_mounted.ret
+    mov ax, FERR_NAME
+    jmp short dskw_mounted.fail
+dskw_mounted:
+%ifdef DSKW_WSEQ
+    call dws_gate
+%endif
+    cmp byte [dsk_mntok], 1
+    je .ret
+.no:
     mov ax, FERR_NODISK
+.fail:
     stc
-.yes:
+.quit:
+    inc sp                      ; the body's return address; CF survives
+    inc sp                      ; `inc`
+.ret:
     ret
+
+%ifdef DSKW_WSEQ
+; dws_gate - A HELD STREAM ENDS BEFORE ANY OTHER WRITE ON ITS VOLUME (SPEC.md
+; 18.4.9) - a delete of its temporary, a rename, anything - so the FAT and the
+; entry that write finds are the ones the disk will hold. Not WRITE_SEQ's own
+; call, and not on another volume: a commit from in here must not move the
+; machine. BOTH gates call it: DELETE, MKDIR and RMDIR open with dskw_gate and
+; never reach dskw_mounted, and until 18.4.9.2 they skipped it - a delete of
+; the held file freed its committed chain and left the hold pending, to link
+; a freed cluster at the next commit. clobbers: nothing
+dws_gate:
+    push ax
+    call dws_ours
+    jne .no
+    call dws_commit
+.no:
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dskw_mkbody - the mkdir pipeline (module-internal)
@@ -503,51 +577,38 @@ dskw_mounted:
 ; could match a name that is not in this directory at all.
 ; -----------------------------------------------------------------------------
 dskw_mkbody:
-    call dskw_mounted
-    jnc .gated
-    ret
-.gated:
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: mkdir's
-    cmp byte [dsk_vkind], DVK_FILE
-    jne .fatmk
-    mov bp, FSV_MKDIR
-    jmp dskw_fsop
+    mov ax, FSV_MKDIR
 %endif                          ; OS88_REDIR
-.fatmk:
-    mov di, dskw_n83
-    call dskw_name83            ; SI -> the 11-byte raw name field
-    jnc .named
-    mov ax, FERR_NAME
-    stc
-    ret
-.named:
+    call dskw_gate              ; returns only with dskw_n83 filled
     call dskw_find              ; CF=0 = the name is already taken
     jnc .exists
     cmp ax, FERR_NOENT
-    jne .fail                   ; FERR_IO: the scan itself failed
-    cmp word [dskw_fsec], 0xFFFF
+    jne dskw_mounted.ret        ; FERR_IO: the scan itself failed (CF = 1, as
+                                ; 2 < 4). The `ret` just above this routine,
+                                ; where .fail's is past short reach (-3)
+    cmp word [DSKW_FNONE], 0xFFFF
     je .dirfull                 ; scanned to the end with no reusable slot
 
     call dskw_alloc             ; AX = cluster, already marked end-of-chain
     jnc .haveclus
     inc ax                      ; 0xFFFF -> 0: the mark could not be written,
-    jz .allocio                 ; which is an I/O failure and not a full disk
-    jmp .nospace
-.allocio:
-    jmp .wfail                  ; ...and it takes the ROLLBACK path, because a
+    jz .wfail                   ; which is an I/O failure and not a full disk
+    jmp .nospace                ; - and it takes the ROLLBACK path, because a
                                 ; half-marked cluster must not survive in RAM
                                 ; to be flushed by a later unrelated write
 .haveclus:
     mov [dskw_first], ax
     call dsk_clus2lba_x ; AX = its first LBA
     jc .badclus
-    mov [dskw_lba], ax
+    DSKW_CLBA_SET               ; ...in the data walk's own cursor, which
+                                ; nothing else is using between here and the
+                                ; commit - all 32 bits of it (SPEC.md 18.7.5)
 
     call dskw_dotents           ; '.' and '..' built in dsk_secbuf
     push ss                     ; ES = LOW_SEG (SPEC.md 2.1), which is what SS names
     pop es
-    mov ax, [dskw_lba]
-    call dsk_wr1_x
+    DSK_WR1D dskw_clba
     jc .wfail
 
     call dskw_zerobuf           ; the cluster's remaining sectors
@@ -555,15 +616,12 @@ dskw_mkbody:
     xor ch, ch
     dec cx
     jcxz .zeroed
-    mov dx, [dskw_lba]
-    inc dx
 .zsec:
+    DSKW_CLBA_INC
     push cx
-    mov ax, dx
-    call dsk_wr1_x
+    DSK_WR1D dskw_clba
     pop cx
     jc .wfail
-    inc dx
     loop .zsec
 .zeroed:
 
@@ -579,14 +637,12 @@ dskw_mkbody:
     call dskw_commit            ; the one-sector commit
     mov byte [dskw_isdir], 0
     jc .rollax
-    call dskw_sync_x            ; coherence by remount (SPEC.md 18.4)
-    xor ax, ax
-    clc
-    ret
+    jmp dskw_relold.flush       ; coherence by remount (SPEC.md 18.4); the
+                                ; FAT is clean, so the flush is AX = 0, CF = 0
 
-.exists:
-    mov ax, FERR_EXIST
-    stc
+.exists:                        ; (these three answer for dskw_nbody,
+    mov ax, FERR_EXIST          ; dskw_wbody and dskw_wdata too: one
+    stc                         ; spelling each)
     ret
 .dirfull:
     mov ax, FERR_DIRFULL
@@ -645,55 +701,63 @@ dskw_zerobuf:
 ; -----------------------------------------------------------------------------
 dskw_dotents:
     push ax
+    push cx
+    push si
     push di
     push es
     call dskw_zerobuf
     call dskw_now               ; [dskw_date] / [dskw_time] (SPEC.md 37)
     push ss
     pop es
-    mov di, dsk_secbuf          ; '.' -> this directory
-    mov ax, [dskw_first]
-    call dskw_dotent
+    ; '.' IS BUILT ONCE AND '..' IS ITS COPY. The two links differ in two
+    ; bytes - the second dot and the cluster - so the slot is written by
+    ; string stores in field order, then moved 32 bytes along and patched.
+    ; It was a per-slot routine called twice, which also zeroed the size a
+    ; zeroed sector already holds.
+    mov di, dsk_secbuf
+    cld
+    mov al, '.'                 ; name[0]...
+    stosb
+    mov al, ' '                 ; ...name[1..10] = spaces
+    mov cx, 10
+    rep stosb
+    mov al, DSKW_DIR            ; +11 the attribute
+    stosb
+    scasw                       ; +12 the compression hint, left 0: `scasw`
+                                ; only to step DI two (it reads, never writes)
+    mov ax, [dskw_time]
+    stosw                       ; +14 create time
+    mov ax, [dskw_date]
+    stosw                       ; +16 create date
+    stosw                       ; +18 last-access date
+    scasw                       ; +20 FstClusHI, 0 - stepped over likewise
+    mov ax, [dskw_time]
+    stosw                       ; +22 last-write time
+    mov ax, [dskw_date]
+    stosw                       ; +24 last-write date; +26 the cluster below,
+                                ; +28 the size, which the sector already holds
+%if DSK_R_ATTR != 11 || DSK_R_CTIME != 14 || DSK_R_CDATE != 16 || DSK_R_ADATE != 18 || DSK_R_WTIME != 22 || DSK_R_WDATE != 24
+  %error "dskw_dotents stores the dot entry's fields IN ORDER from +11: re-derive the stosb/stosw/scasw run"
+%endif
+    push ds
+    push es
+    pop ds                      ; DS = ES = LOW_SEG for the 32-byte copy
+    mov si, dsk_secbuf
     mov di, dsk_secbuf + 32     ; '..' -> the parent
-    mov ax, [dsk_cwd]
-    call dskw_dotent
+    mov cl, 16                  ; (CX = 0 out of the `rep` above)
+    rep movsw
+    pop ds
     mov byte [es:dsk_secbuf+33], '.'   ; the second dot
+    mov ax, [dskw_first]        ; '.' -> this directory
+    mov [es:dsk_secbuf+DSK_R_CLUS], ax
+    mov ax, [dsk_cwd]           ; '..' -> the parent
+    mov [es:dsk_secbuf+32+DSK_R_CLUS], ax
     pop es
     pop di
+    pop si
+    pop cx
     pop ax
     ret
-
-; -----------------------------------------------------------------------------
-; dskw_dotent - write one '.'-style link into a zeroed slot
-; in:  ES:DI -> the 32-byte slot, AX = the cluster it points at
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-dskw_dotent:
-    push ax
-    push bx
-    push cx
-    mov bx, di
-    mov byte [es:bx], '.'
-    push bx
-    inc bx
-    mov cx, 10                  ; name[1..10] = spaces
-.pad:
-    mov byte [es:bx], ' '
-    inc bx
-    loop .pad
-    pop bx
-    mov byte [es:bx+DSK_R_ATTR], DSKW_DIR
-    mov [es:bx+DSK_R_CLUS], ax
-    mov word [es:bx+DSK_R_SIZE], 0
-    mov word [es:bx+DSK_R_SIZE+2], 0
-    mov ax, [dskw_time]
-    mov [es:bx+DSK_R_CTIME], ax
-    mov [es:bx+DSK_R_WTIME], ax
-    mov ax, [dskw_date]
-    mov [es:bx+DSK_R_CDATE], ax
-    mov [es:bx+DSK_R_WDATE], ax
-    mov [es:bx+DSK_R_ADATE], ax
-    jmp kretc_cx
 
 ; -----------------------------------------------------------------------------
 ; dskw_rmdir - remove an EMPTY subdirectory of the current directory (18.6)
@@ -703,7 +767,7 @@ dskw_dotent:
 ; -----------------------------------------------------------------------------
 dskw_rmdir:
     mov ax, dskw_rmbody
-    jmp dskw_wrap6
+    jmp dskw_wrap7
 
 ; -----------------------------------------------------------------------------
 ; dskw_rmbody - the rmdir pipeline (module-internal)
@@ -726,25 +790,14 @@ dskw_rmdir:
 ; on the volume names them any more - there is no fsck answer to that.
 ; -----------------------------------------------------------------------------
 dskw_rmbody:
-    call dskw_mounted
-    jnc .gated
-    ret
-.gated:
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: rmdir's
-    cmp byte [dsk_vkind], DVK_FILE
-    jne .fatrm
-    mov bp, FSV_RMDIR           ; EMPTINESS is the driver's test, exactly as
-    jmp dskw_fsop               ; it is the FAT path's: only the side holding
+    mov ax, FSV_RMDIR           ; EMPTINESS is the driver's test, exactly as
+                                ; it is the FAT path's: only the side holding
                                 ; the directory can answer it
 %endif                          ; OS88_REDIR
-.fatrm:
-    mov di, dskw_n83
-    call dskw_name83            ; '.' and '..' cannot be spelled (18.4), and
-    jnc .named                  ; the root has no entry, so neither can be
-    mov ax, FERR_NAME           ; the target
-    stc
-    ret
-.named:
+    call dskw_gate              ; '.' and '..' cannot be spelled (18.4), and
+                                ; the root has no entry, so neither can be
+                                ; the target
 dskw_rmbody_n83:                ; the same pipeline with dskw_n83 already
                                 ; filled - what dskw_rmtree calls, because it
                                 ; works from raw 11-byte names it read off the
@@ -765,32 +818,53 @@ dskw_rmbody_n83:                ; the same pipeline with dskw_n83 already
     call dskw_isempty           ; CF=1 with AX = FERR_PROT / FERR_IO
     jc .out
 
+.delent:                        ; ...dskw_dbody's commit too, entered with
+                                ; [dskw_oldclus] set as this body has set it
     mov byte [dskw_raw], 0xE5   ; THE commit: one directory sector (18.6)
+.entrel:                        ; ...and the write-at truncate enters here,
+                                ; its entry already changed (18.4.7.5)
     mov byte [dskw_zapnext], 0
     call dskw_ent_store
-    jc .out
-    mov ax, [dskw_oldclus]      ; only now is the chain nobody's
-    call dskw_free_chain
-    call dskw_flush_x
-    jc .lateio                  ; committed, but the free did not land:
-    call dskw_sync_x            ; lost clusters, and the user should know
-    xor ax, ax
-    clc
+    jnc dskw_relold             ; only now is the chain nobody's
     ret
 .prot:
-    mov ax, FERR_PROT
-    stc
-    ret
+    jmp dskw_wbody.prot
 .corrupt:
     mov ax, FERR_IO
     stc
 .out:
     ret
-.lateio:
-    push ax
-    call dskw_sync_x
-    pop ax
-    stc
+
+; -----------------------------------------------------------------------------
+; dskw_relold - the shared TAIL of the three bodies that replace or remove an
+;               entry: the commit has landed, so free the chain it let go of
+; in:  [dskw_oldclus] = that chain's head (0 or garbage = nothing to free);
+;      entered by `jmp`, at the depth the body was called at
+; out: CF=0 AX=0; CF=1 AX = FERR_* when the free did not reach the disk -
+;      committed, but lost clusters, and the user should know. The caches
+;      become a mount snapshot again either way (dskw_sync_x)
+;
+; dskw_rmbody, dskw_wbody and dskw_dbody each spelt this out. A garbage old
+; link (0 included) leaves the FAT alone, and dskw_free_chain is what says so:
+; its first dsk_next_clus_x refuses a cluster outside [2, dsk_maxclus] and the
+; walk ends having changed nothing. The dskw_clok that stood here asked it
+; first, a second asking of a question with one answer.
+; -----------------------------------------------------------------------------
+dskw_relold:
+    mov ax, [dskw_oldclus]
+    call dskw_free_chain
+.flush:                         ; ...but FLUSH EITHER WAY: a commit point
+    call dskw_flush_x           ; leaves the window CLEAN (dsk_fatw_park
+                                ; relies on it - dirt carried across a media
+                                ; change lands on the NEXT disk's FAT), and
+                                ; a truncate at the file's own allocated end
+                                ; has re-marked the last cluster and frees
+                                ; nothing (18.4.7.5). Clean is no I/O, and
+                                ; its answer is already ours: CF=0 AX=0, or
+                                ; CF=1 AX = the FERR_*
+    pushf                       ; dskw_sync_x preserves every register but
+    call dskw_sync_x            ; not the flags, and the answer is CF
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -865,10 +939,7 @@ dskw_rmtree:
 ; in:  SI = the name; out: CF/AX as dskw_rmtree
 ; -----------------------------------------------------------------------------
 dskw_rtbody:
-    call dskw_mounted
-    jnc .gated
-    ret
-.gated:
+    call dskw_mounted           ; returns only when there is a volume
     cmp byte [dsk_vkind], DVK_FILE
     jne .fat                    ; A REDIRECTED VOLUME HAS NO DIRECTORY SECTORS
                                 ; (SPEC.md 62.9) and everything below this line
@@ -934,15 +1005,13 @@ dskw_rtbody:
                                 ; DVK_FILE arm two hundred lines up. It
                                 ; re-runs the [dsk_mntok] gate, which is free
 .protj:                         ; ...and the two attribute refusals below take
-    jmp .prot                   ; this, on a path nothing falls into: NASM
+    jmp dskw_wbody.prot         ; this, on a path nothing falls into: NASM
                                 ; spelt each of them as a five-byte inverted
                                 ; pair, an 8086 having no near `jcc`, and from
                                 ; here they are two bytes each (-3)
-.fsok:
-    clc
-    ret
-.fsno:
+.fsno:                          ; (`or` cleared CF on the way here)
     stc
+.fsok:                          ; ...and CF = 0 is the `jnc`'s
     ret
 .fat:
     mov ax, [dsk_cwd]           ; where we must end up, whatever happens
@@ -951,15 +1020,16 @@ dskw_rtbody:
     call dskw_name83            ; happens back here, and by then the walk has
                                 ; overwritten dskw_n83 many times over
     jnc .named
-    mov ax, FERR_NAME
-    stc
-    ret
+    jmp dskw_nbody.badarg       ; FERR_NAME, spelled once
 .named:
     mov si, dskw_rt_name        ; dskw_find matches through dskw_n83
     mov di, dskw_n83
     call dskw_copy11
     call dskw_find
-    jc .out                     ; AX = FERR_NOENT / FERR_IO already
+    jc .fsok                    ; AX = FERR_NOENT / FERR_IO already - and
+                                ; .fsok is a bare `ret` a hop back (this
+                                ; routine's own, at its foot, was one past
+                                ; short reach, and nothing else reached it)
     mov al, [dskw_raw+DSK_R_ATTR]
     test al, DSKW_NPROT
     jnz .protj                  ; read-only, hidden, system or volume label
@@ -1014,38 +1084,27 @@ dskw_rtbody:
     jc .home
     jmp short .loop
 
-.finish:
-    call dskw_rt_go_home
-    jc .ioerr
-    mov si, dskw_rt_name
-    mov di, dskw_n83
-    call dskw_copy11
-    jmp dskw_rmbody_n83         ; the target itself, from where we began - a
-                                ; tail call, both ends `.cold`
-
-.corrupt_home:
-    call dskw_rt_go_home
+.corrupt_home:                  ; a corrupt link and an I/O error are the same
+.iohome:                        ; answer, so the two pairs are one: go home,
+    call dskw_rt_go_home        ; then FERR_IO
 .corrupt:
-    mov ax, FERR_IO
-    stc
-    ret
-.iohome:
-    call dskw_rt_go_home
 .ioerr:
-    mov ax, FERR_IO
-    stc
-    ret
-.prot:
-    mov ax, FERR_PROT
-    stc
-.out:
-    ret
+    jmp dskw_rdata.corrupt      ; FERR_IO, spelled once
 .home:                          ; a failure part-way down: report it from
     push ax                     ; where the caller left us, not from wherever
     call dskw_rt_go_home        ; the walk happened to stop
     pop ax
     stc
     ret
+
+.finish:                        ; BELOW the shared tail, which it only jumps
+    call dskw_rt_go_home        ; into: above it, it kept the dskw_clok's
+    jc .ioerr                   ; `jc .corrupt` five bytes past short reach
+    mov si, dskw_rt_name
+    mov di, dskw_n83
+    call dskw_copy11
+    jmp dskw_rmbody_n83         ; the target itself, from where we began - a
+                                ; tail call, both ends `.cold`
 
 ; -----------------------------------------------------------------------------
 ; dskw_rt_go_home - put the volume back where dskw_rmtree was called
@@ -1085,16 +1144,13 @@ dskw_chdir_dl:
 ; -----------------------------------------------------------------------------
 dskw_clok:
     cmp ax, 2
-    jb .bad
-    cmp ax, [dsk_maxclus]
-    ja .bad
-    clc
-    ret
-.bad:
-    stc
-    ret
+    jb .out                     ; CF = 1: below the first data cluster
+    cmp [dsk_maxclus], ax       ; CF = 1 exactly when AX is past the last -
+.out:                           ; the compare turned round, so the flag IS
+    ret                         ; the answer and needs no stc/clc arms
 
 %ifndef KD_BUILD                ; ...and the second band of the same pipeline
+
 ; -----------------------------------------------------------------------------
 ; dskw_rt_scan - the first entry of the CURRENT directory that is not '.',
 ;                '..' or free
@@ -1118,39 +1174,21 @@ dskw_rt_scan:
     push ss
     pop es
     mov ax, [dsk_cwd]
-    call dsk_dirw_start_x
-.sector:
-    call dsk_dirw_get_x ; dsk_secbuf = the next sector (19.2.1)
-    jnc .secok
-    or ax, ax
-    jz .none                    ; the chain ended with nothing found
-    jmp short .ioerr
-.secok:
-    mov [dskw_rt_sec], ax
-    mov si, dsk_secbuf
-    mov cx, 16                  ; entries per sector
-.entry:
-    mov al, [es:si]
-    test al, al
-    jz .none                    ; end of directory: nothing past it counts
-    cmp al, 0xE5
-    je .next                    ; a deleted entry
-    cmp al, '.'
-    jne .found
-    mov al, [es:si+1]           ; a dot link's second byte is the other dot
-    cmp al, '.'                 ; or a pad space (SPEC.md 18.6)
-    je .next
-    cmp al, ' '
-    je .next
+    call dskw_scan1             ; the walk is dskw_isempty's, shared
+    jnc .found
+    jz .none
+    mov byte [dskw_rt_ioerr], 1
+.none:
+    stc
+    jmp short .out
 .found:
-    mov di, dskw_raw            ; the WHOLE entry - dsk_copy_in halves the
-    mov cx, 32                  ; count into words, so 11 would drop a byte
-    call dsk_copy_in_x
-    mov ax, si                  ; publish where it is, exactly as dskw_find
-    sub ax, dsk_secbuf          ; does, so dskw_rt_zap can rewrite the slot
-    mov [dskw_doff], ax         ; without a name lookup (dskw_find refuses to
-    mov ax, [dskw_rt_sec]       ; match an LFN entry at all, by design)
-    mov [dskw_dsec], ax
+    mov [dskw_cursec], dx       ; ...and its high word is the walker's
+
+    call dskw_hit               ; the WHOLE entry, and where it is - exactly
+                                ; as dskw_find does, so dskw_rt_zap can
+                                ; rewrite the slot without a name lookup
+                                ; (dskw_find refuses to match an LFN entry at
+                                ; all, by design)
     mov si, dskw_raw
     mov di, dskw_n83
     call dskw_copy11
@@ -1159,23 +1197,9 @@ dskw_rt_scan:
     mov ax, [dskw_raw+DSK_R_CLUS]
     mov [dskw_rt_clus], ax
     clc
-    jmp short .out
-.next:
-    add si, 32
-    loop .entry
-    jmp short .sector
-.ioerr:
-    mov byte [dskw_rt_ioerr], 1
-.none:
-    stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp dskw_find.out           ; the same six pushes in the same order, so
+                                ; dskw_find's pop run is this one's too
 
 ; -----------------------------------------------------------------------------
 ; dskw_rt_byclus - find the subdirectory of the CURRENT directory whose first
@@ -1226,17 +1250,11 @@ dskw_rt_byclus:
 ; near dskw_free_chain with that word would free somebody else's data.
 ; -----------------------------------------------------------------------------
 dskw_rt_zap:
-    mov byte [dskw_raw], 0xE5   ; dskw_rt_scan staged the entry and published
+    and word [dskw_oldclus], 0  ; a delete's commit with NO chain to release:
+    jmp dskw_rmbody_n83.delent  ; dskw_relold's dskw_clok refuses 0. And
+                                ; dskw_rt_scan staged the entry and published
                                 ; [dskw_dsec]/[dskw_doff] with it, so there is
                                 ; nothing here to read back off the disk
-    mov byte [dskw_zapnext], 0
-    call dskw_ent_store
-    jc .out
-    call dskw_sync_x
-    xor ax, ax
-    clc
-.out:
-    ret
 
 ; -----------------------------------------------------------------------------
 ; dskw_isempty - does a subdirectory hold nothing but '.', '..' and free slots?
@@ -1259,53 +1277,73 @@ dskw_rt_zap:
 dskw_isempty:
     push bx
     push cx
+    push dx
     push si
     push es
     push ss
     pop es
     mov ax, [dskw_oldclus]
+    call dskw_scan1             ; the walk is dskw_rt_scan's, shared
+    cmc                         ; CF = 1 now means "something is in it"
+    jnc .none
+    mov ax, FERR_PROT           ; anything that is not '.' or '..'
+    jmp short .out
+.none:
+    jz .out                     ; the chain ended with nothing found: CF = 0
+    call dskw_ioerr             ; AX = FERR_IO / FERR_WPROT, CF = 1
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_scan1 - the first LIVE entry of a directory: not free, not deleted,
+;              not '.' or '..' - the one walk dskw_isempty and dskw_rt_scan
+;              share, so "occupied" there and "nameable" here cannot disagree
+; in:  AX = the directory's first cluster (0 = the root), ES = SS
+; out: CF=0 - ES:SI -> the entry inside dsk_secbuf, DX = that sector's LBA
+;      (the walker holds its high word); CF=1, ZF=1 - there is none;
+;      CF=1, ZF=0 - a sector could not be read ([dsk_ioerr])
+; clobbers: AX, CX, DX, SI, flags
+;
+; A dot link's SECOND byte is the other dot or a pad space. DOS never makes a
+; name like '.XT     TXT', but a foreign disk may carry one, and this module
+; trusts nothing it reads (SPEC.md 18.6) - so such an entry is live.
+; -----------------------------------------------------------------------------
+dskw_scan1:
     call dsk_dirw_start_x
 .sector:
-    call dsk_dirw_get_x ; dsk_secbuf = the next sector (19.2.1)
-    jnc .secok
-    or ax, ax
-    jz .empty                   ; the chain ended with nothing found
-    jmp short .ioerr
-.secok:
+    call dsk_dirw_get_x         ; dsk_secbuf = the next sector (19.2.1)
+    jc .out                     ; ...and ZF says which failure it was
+    xchg dx, ax                 ; DX = its LBA
     mov si, dsk_secbuf
     mov cx, 16                  ; entries per sector
 .entry:
     mov al, [es:si]
     test al, al
-    jz .empty                   ; end of directory: nothing past it counts
+    jz .none                    ; end of directory: nothing past it counts
     cmp al, 0xE5
     je .next                    ; a deleted entry
     cmp al, '.'
-    jne .occupied               ; anything that is not '.' or '..'
-    mov al, [es:si+1]           ; ...and a dot link's SECOND byte is the other
-    cmp al, '.'                 ; dot or a pad space. DOS never makes a name
-    je .next                    ; like '.XT     TXT', but a foreign disk may
-    cmp al, ' '                 ; carry one, and this module trusts nothing
-    jne .occupied               ; it reads (SPEC.md 18.6)
+    jne .live                   ; anything that is not '.' or '..'
+    mov al, [es:si+1]
+    cmp al, '.'
+    je .next
+    cmp al, ' '
+    jne .live
 .next:
     add si, 32
     loop .entry
     jmp short .sector
-.empty:
+.live:
     clc
-    jmp short .out
-.occupied:
-    mov ax, FERR_PROT
-    stc
-    jmp short .out
-.ioerr:
-    call dskw_ioerr             ; AX = FERR_IO / FERR_WPROT
-    stc
+    ret
+.none:
+    stc                         ; ZF = 1 from the `test`, which is the answer
 .out:
-    pop es
-    pop si
-    pop cx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1326,6 +1364,18 @@ dskw_isempty:
 ; which is the whole point of SPEC.md 18.4.1. What replaces it is the sector
 ; count's own ceiling, below.
 ; -----------------------------------------------------------------------------
+%ifdef OS88_REDIR
+; dskw_fsargs - a redirected transfer's buffer and count, as FSV_READ and
+; FSV_WRITE both take them (SPEC.md 51.8's rule): DX:BX = [dskw_seg]:
+; [dskw_src], DI:CX = [dskw_lenhi]:[dskw_len]. Clobbers exactly those four.
+dskw_fsargs:
+    mov bx, [dskw_src]
+    mov dx, [dskw_seg]
+    mov cx, [dskw_len]
+    mov di, [dskw_lenhi]
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; dskw_fsop - run one FSV_* write verb and reconcile (module internal)
 ; in:  BP = the verb, plus whatever that verb's own arguments are
@@ -1354,10 +1404,7 @@ dskw_fsop:
     ret
 
 dskw_wbody:
-    call dskw_mounted
-    jnc .gated
-    ret
-.gated:
+    call dskw_mounted           ; returns only when there is a volume
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: the write's
     cmp byte [dsk_vkind], DVK_FILE
     jne .fatw
@@ -1366,30 +1413,22 @@ dskw_wbody:
                                 ; exactly as a read is
     mov cx, [dskw_len]          ; ...and arm the widget as the FAT arm below
     mov dx, [dskw_lenhi]        ; does (DX:CX = the job in BYTES, SPEC.md
-    call KERNEL_SEG:fpg_begin       ; 12.8.1): the driver steps it from inside
+    call ct_fpg_begin               ; 12.8.1): the driver steps it from inside
                                 ; FSV_WRITE through OSAPI_FS_PROG, and without
                                 ; this that report has nothing to report into.
                                 ; dskw_write_x ends it either way
-    mov bx, [dskw_src]
-    mov dx, [dskw_seg]          ; DX:BX = the bytes (SPEC.md 51.8's rule)
-    mov cx, [dskw_len]
-    mov di, [dskw_lenhi]        ; DI:CX = how many
+    call dskw_fsargs            ; DX:BX = the bytes, DI:CX = how many
     mov bp, FSV_WRITE
     jmp dskw_fsop
 %endif                          ; OS88_REDIR
 .fatw:
-    mov di, dskw_n83
-    call dskw_name83            ; SI -> the 11-byte raw name field
-    jnc .named
-    mov ax, FERR_NAME
-    stc
-    ret
-.named:
+    call dskw_gate83            ; SI -> the 11-byte raw name field
     call dskw_norm              ; the source becomes seg:0..15 + a segment run
 
     ; --- size the job: sectors, and the length of a partial final one -----
     call dskw_size32            ; [dskw_rem] / [dskw_tail]
     jnc .sized
+.big:                           ; (dskw_rbody's refusal too)
     mov ax, FERR_BIG            ; >= 32MB: no volume this kernel mounts can
     stc                         ; hold it, and the count would wrap
     ret
@@ -1403,11 +1442,9 @@ dskw_wbody:
     stc                         ; a read error mid-scan: report it as is
     ret
 .create:
-    cmp word [dskw_fsec], 0xFFFF
+    cmp word [DSKW_FNONE], 0xFFFF
     jne .newslot
-    mov ax, FERR_DIRFULL
-    stc
-    ret
+    jmp dskw_mkbody.dirfull
 .newslot:
     mov byte [dskw_new], 1      ; the slot dskw_find already spotted
     mov word [dskw_oldclus], 0
@@ -1420,8 +1457,9 @@ dskw_wbody:
     call dskw_pmask             ; AL = what may not be replaced here
     test byte [dskw_raw+DSK_R_ATTR], al
     jz .keep
-    mov ax, FERR_PROT           ; read-only, hidden, system, label or dir
-    stc
+.prot:                          ; (dskw_nbody, dskw_wabody and
+    mov ax, FERR_PROT           ; dskw_rmbody_n83 answer here too)
+    stc                         ; read-only, hidden, system, label or dir
     ret
 .keep:
     mov ax, [dskw_raw+DSK_R_CLUS]
@@ -1434,7 +1472,7 @@ dskw_wbody:
 .data:
     mov cx, [dskw_len]          ; arm the progress widget HERE and not up at
     mov dx, [dskw_lenhi]        ; .sized, though the count is known there:
-    call KERNEL_SEG:fpg_begin       ; (DX:CX = the job in BYTES, SPEC.md 12.8.1)
+    call ct_fpg_begin               ; (DX:CX = the job in BYTES, SPEC.md 12.8.1)
                                 ; dskw_find's directory scan sits between the
                                 ; two and its sectors are not part of the job
                                 ; the bar is measuring (SPEC.md 12.8).
@@ -1452,22 +1490,7 @@ dskw_wbody:
     jc .out                     ; rolling back is no longer an option
 
     ; --- 4. release the replaced chain and flush again --------------------
-    mov ax, [dskw_oldclus]
-    call dskw_clok              ; a garbage old link: leave the FAT alone
-    jc .ok
-    call dskw_free_chain
-    call dskw_flush_x
-    jc .lateio                  ; committed, but the free did not land:
-.ok:                            ; lost clusters, and the user should know
-    call dskw_sync_x            ; the caches become a mount snapshot again
-    xor ax, ax
-    clc
-    ret
-.lateio:
-    push ax
-    call dskw_sync_x
-    pop ax
-    stc
+    jmp dskw_relold
 .out:
     ret
 .rollback:
@@ -1524,22 +1547,14 @@ dskw_wdata:
     mov [dskw_wseg], ax         ; the ADVANCING source segment
     cmp word [dskw_rem], 0
     jne .clus
-    clc                         ; an empty file owns no clusters at all
-    ret
-.full:
-    mov ax, FERR_FULL
-    stc
-    ret
-.ioerr:
-    call dskw_ioerr             ; AX = FERR_IO / FERR_WPROT
-    stc
-    ret
+    ret                         ; an empty file owns no clusters at all, and
+                                ; CF = 0 out of the compare with 0
 .clus:
     call dskw_alloc             ; AX = a cluster, already marked EOC
     jnc .haveclus
     inc ax                      ; 0xFFFF -> 0: an I/O failure wearing the
     jz .ioerr                   ; allocator's refusal, and 'Disk full' is the
-    jmp short .full             ; one thing it certainly is not
+    jmp dskw_mkbody.nospace     ; one thing it certainly is not
 .haveclus:
     mov [dskw_cur], ax
     mov dx, ax
@@ -1555,27 +1570,11 @@ dskw_wdata:
 .lba:
     mov ax, [dskw_cur]
     mov [dskw_prev], ax
-    call dsk_clus2lba_x ; AX = the cluster's first LBA
-    jc .ioerr                   ; unreachable: dskw_alloc bounds the cluster
-    mov [dskw_lba], ax
-    mov al, [dsk_spc]           ; take = min(spc, sectors remaining)
-    xor ah, ah
-    cmp ax, [dskw_rem]
-    jbe .take
-    mov ax, [dskw_rem]
-.take:
-    mov [dskw_take], ax
-
-    ; whole sectors of this take, APPENDED TO THE PENDING RUN rather than
-    ; written here - see the header. CX is the count, [dskw_clba] the cursor.
-    mov cx, ax
-    call dskw_last_p            ; ZF=1 if this take ends in a partial sector
-    jnz .whole
-    dec cx                      ; that last sector goes through the stage
-.whole:
-    mov ax, [dskw_lba]          ; the cursor, set BEFORE the count is tested:
-    mov [dskw_clba], ax         ; a take that is nothing but a partial sector
-                                ; skips the walk and .tail still reads it
+    call dskw_take1             ; whole sectors of this take, APPENDED TO THE
+    jc .ioerr                   ; PENDING RUN rather than written here - see
+                                ; the header. CX is the count, [dskw_clba]
+                                ; the cursor. (The carry is unreachable:
+                                ; dskw_alloc bounds the cluster)
 .addrun:
     call dskw_runadd            ; the whole sectors of this take, appended to
     jc .ioerr                   ; the pending run (SPEC.md 18.4.2). CX comes
@@ -1587,36 +1586,23 @@ dskw_wdata:
                                 ; it" - landed on the media-error arm and .stg
                                 ; had no way in at all, from 2e8e292 onwards
 .stg:                           ; one sector the 8237 cannot carry, alone,
-    mov es, [dskw_wseg]         ; through the scratch - which is 512-aligned
-    mov si, [dskw_src]          ; and therefore never straddles. No run can be
-    push cx                     ; pending here: dskw_runmax answered 0, and it
-    mov cx, 512                 ; is only asked with [dskw_rlen] = 0
-    call dskw_stage             ; ES:SI -> LOW_SEG:dsk_secbuf, all 512 of it
-    push ss
-    pop es
-    mov ax, [dskw_clba]
-    call dsk_wr1_x
-    pop cx
+    push cx                     ; through the scratch - which is 512-aligned
+    mov cx, 512                 ; and therefore never straddles. No run can be
+    call dskw_wone              ; pending here: dskw_runmax answered 0, and it
+    pop cx                      ; is only asked with [dskw_rlen] = 0
     jc .jioerr
-    inc word [dskw_clba]
+    DSKW_CLBA_INC
     add word [dskw_wseg], 32    ; 512 bytes = 32 paragraphs on. The source is
-    dec cx                      ; now 1..511 bytes PAST the page edge, so the
-    jz .tail                    ; next dskw_runadd gets the whole 127 back:
-    jmp .addrun                 ; one staged sector per 64KB of source, at most
-.jioerr:                        ; FOUR arms share this one near jump, and it
-    jmp .ioerr                  ; was already here for the first: an 8086 has
-                                ; no near `jcc`, so each of the other three
-                                ; was NASM's five-byte inverted-short-plus-
-                                ; near-jmp before it was aimed here.  -9, with
-                                ; nothing added.  A media error is the coldest
-                                ; arm in the file - and it sits BELOW an
-                                ; unconditional jump now, which is the whole
-                                ; of the fix. All four arms are still 2-byte
-                                ; short jumps; what the move costs is ONE
-                                ; byte, here, because .ioerr is 141 back from
-                                ; the new spot and this `jmp` is near rather
-                                ; than short (SPEC.md 18.4.2.1 prices the
-                                ; alternatives - every one of them is worse)
+    loop .addrun                ; now 1..511 bytes PAST the page edge, so the
+    jmp short .tail             ; next dskw_runadd gets the whole 127 back:
+                                ; one staged sector per 64KB of source, at most
+.ioerr:                         ; THE ERROR ARM ITSELF, here in the middle of
+.jioerr:                        ; the routine below an unconditional jump: the
+    jmp dskw_ioerr              ; arms above and below both reach it short, so
+                                ; the relay that used to stand here (SPEC.md
+                                ; 18.4.2.1) has nothing left to relay to.
+                                ; AX = FERR_IO / FERR_WPROT, CF = 1: a tail
+                                ; call, dskw_ioerr's own `stc / ret`
 
     ; the partial final sector: staged zero-filled, so nothing of the
     ; caller's neighbourhood past EOF ever reaches the disk. The run goes
@@ -1627,15 +1613,9 @@ dskw_wdata:
     jnz .advance
     call dskw_flushrun
     jc .jioerr
-    mov es, [dskw_wseg]
-    mov si, [dskw_src]
     mov cx, [dskw_tail]
-    call dskw_stage             ; ES:SI -> LOW_SEG:dsk_secbuf, rest zeroed
-    push ss
-    pop es
-    mov ax, [dskw_clba]         ; the sector the whole-sector walk stopped at
-    call dsk_wr1_x
-    jc .jioerr
+    call dskw_wone              ; the sector the whole-sector walk stopped at,
+    jc .jioerr                  ; the live bytes and the rest zeroed
 .advance:
     mov ax, [dskw_take]
     sub [dskw_rem], ax
@@ -1644,8 +1624,7 @@ dskw_wdata:
 .done:
     call dskw_flushrun            ; the last run of the file
     jc .jioerr
-    clc
-    ret
+    ret                         ; CF = 0 from the `jc`
 
 ; -----------------------------------------------------------------------------
 ; dskw_runadd - append CX whole sectors at [dskw_clba] to the pending run
@@ -1673,10 +1652,21 @@ dskw_runadd:
 .sect:
     cmp word [dskw_rlen], 0
     je .newrun
+%ifdef OS88_BIGVOL
+    push dx                     ; does this sector continue the pending run?
+    mov ax, [dskw_clba]         ; In 32 bits (SPEC.md 18.7.5): cursor - run
+    sub ax, [dskw_rlba]         ; start == run length, which is a word - so
+    mov dx, [dskw_clba+2]       ; the high half of the difference is 0 and
+    sbb dx, [dskw_rlba+2]       ; its low half is the length. DX is the
+    sub ax, [dskw_rlen]         ; caller's (`mov` leaves the borrow alone)
+    or ax, dx
+    pop dx
+%else
     mov ax, [dskw_rlba]         ; does this sector continue the pending run?
     add ax, [dskw_rlen]
     cmp ax, [dskw_clba]
-    jne .breakrun
+%endif
+    jnz .breakrun
     mov ax, [dskw_rcap]         ; ...and is there room left in it?
     cmp ax, [dskw_rlen]
     ja .append
@@ -1692,6 +1682,10 @@ dskw_runadd:
     mov [dskw_rcap], ax
     mov ax, [dskw_clba]
     mov [dskw_rlba], ax         ; ([dskw_rlen] is already 0)
+%ifdef OS88_BIGVOL
+    mov ax, [dskw_clba+2]
+    mov [dskw_rlba+2], ax
+%endif
 .append:
     mov ax, [dskw_rcap]
     sub ax, [dskw_rlen]         ; room in the run...
@@ -1701,6 +1695,9 @@ dskw_runadd:
 .grow:
     add [dskw_rlen], ax
     add [dskw_clba], ax
+%ifdef OS88_BIGVOL
+    adc word [dskw_clba+2], 0
+%endif
     sub cx, ax
     jnz .sect
 .done:
@@ -1730,7 +1727,12 @@ dskw_flushrun:
     push es
     mov cx, [dskw_rlen]
     jcxz .out
+%ifdef OS88_BIGVOL
+    mov bx, dskw_rlba           ; AX = the run's LBA and its high word armed
+    call dsk_armp               ; for the transfer that is next (18.7.5)
+%else
     mov ax, [dskw_rlba]
+%endif
     mov es, [dskw_wseg]
     mov bx, [dskw_src]
     cmp byte [dskw_fop], 0      ; in: AX=LBA, CX=count, ES:BX
@@ -1740,22 +1742,73 @@ dskw_flushrun:
 .rd:
     call disk_read_x
 .did:
-    jc .err
-    mov ax, [dskw_rlen]
-    mov word [dskw_rlen], 0
+    jc .pop                     ; CF = 1 is the answer, as it arrives
+    xor ax, ax
+    xchg ax, [dskw_rlen]        ; read the run and clear it in one (-3)
     mov cl, 5
     shl ax, cl                  ; sectors -> paragraphs, 32 each
     add [dskw_wseg], ax
 .out:
     clc                         ; the answer first, then ONE pop ladder: a
-    jmp short .pop              ; `pop` writes no flag
-.err:
-    stc
-.pop:
+.pop:                           ; `pop` writes no flag
     pop es
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_clba_inc - the data walk's cursor, one sector on, in 32 bits
+; out: nothing (every register preserved; flags clobbered)
+; DSKW_CLBA_INC is the call, or the plain `inc` it always was on kern_small
+; -----------------------------------------------------------------------------
+%ifdef OS88_BIGVOL
+dskw_clba_inc:
+    add word [dskw_clba], 1
+    adc word [dskw_clba+2], 0
+    ret
+
+; dskw_clba_set - [dskw_clba] = AX:[dsk_c2hi], dsk_clus2lba_x's whole answer.
+; Every register and the flags preserved. DSKW_CLBA_SET is the call, or the
+; plain word store on kern_small
+dskw_clba_set:
+    mov [dskw_clba], ax
+    push word [dsk_c2hi]
+    pop word [dskw_clba+2]
+    ret
+%endif
+
+; -----------------------------------------------------------------------------
+; dskw_take1 - size one cluster's TAKE for the data loops
+; in:  AX = the cluster, [dskw_rem]/[dskw_tail] sized by the caller
+; out: CF=1 the geometry cannot address it; else CF=0, [dskw_take] =
+;      min(spc, sectors remaining), [dskw_clba] = the cluster's first LBA and
+;      CX = the whole sectors of the take (one fewer when it ends in a
+;      partial sector, which goes through the stage)
+; clobbers: AX, CX (an output), flags
+;
+; dskw_wdata and dskw_rdata carried this per-cluster prologue as two copies,
+; identical to the instruction. The cursor is set BEFORE the count is tested:
+; a take that is nothing but a partial sector skips the walk and .tail still
+; reads it. Once a cluster, not once a sector: a call and a return on a loop
+; whose every turn ends in the FAT and the run arithmetic.
+; -----------------------------------------------------------------------------
+dskw_take1:
+    call dsk_clus2lba_x         ; AX = the cluster's first LBA
+    jc .out
+    DSKW_CLBA_SET               ; ...all 32 bits of it (SPEC.md 18.7.5)
+    mov al, [dsk_spc]           ; take = min(spc, sectors remaining)
+    xor ah, ah
+    cmp ax, [dskw_rem]
+    jbe .take
+    mov ax, [dskw_rem]
+.take:
+    mov [dskw_take], ax
+    mov cx, ax
+    call dskw_last_p            ; ZF=1 if this take ends in a partial sector,
+    jnz .out                    ; and CF=0 on both of its answers
+    dec cx                      ; (dec leaves CF alone)
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1800,29 +1853,19 @@ dskw_last_p:
 ; - every byte off the disk is hostile input).
 ; -----------------------------------------------------------------------------
 dskw_rbody:
-    call dskw_mounted
-    jnc .gated
-    ret
-.gated:
+    call dskw_mounted           ; returns only when there is a volume
     cmp byte [dsk_vkind], DVK_FILE
     jne .fatname
     jmp .fsread                 ; a REDIRECTED volume (SPEC.md 62.9): there is
                                 ; no chain to walk and no entry to walk it from
 .fatname:
-    mov di, dskw_n83
-    call dskw_name83
-    jnc .named
-    mov ax, FERR_NAME
-    stc
-    ret
-.named:
+    call dskw_gate83
     call dskw_norm              ; the destination becomes seg:0..15 + a run
     call dskw_find
     jc .out                     ; AX = FERR_NOENT / FERR_IO already
     test byte [dskw_raw+DSK_R_ATTR], 0x18
     jz .isfile
-    mov ax, FERR_PROT           ; a volume label or a subdirectory
-    stc
+    jmp dskw_wbody.prot         ; a volume label or a subdirectory: FERR_PROT
 .out:
     ret
 .isfile:
@@ -1863,12 +1906,11 @@ dskw_rbody:
     mov cl, [dskw_raw+DSK_R_CZM]        ; the hint: the mark LESS its format,
     sub cl, DSK_CZ_MARK                 ; so 0x5A and 0x5B pass and nothing
     cmp cl, LZ_LZB                      ; else (SPEC.md 20.14.1)
-    ja .sizes                           ; a plain file becomes what it is
-    or dx, dx
-    jnz .czbad                          ; P past 64KB cannot be one of ours:
-                                        ; the decoder's source is one segment
-                                        ; (SPEC.md 20.14.5), and a file that
-                                        ; compressed so badly is stored plain
+    ja .sizes                           ; a plain file becomes what it is.
+                                        ; P PAST 64KB IS FINE: the decoder's
+                                        ; source crosses too (SPEC.md
+                                        ; 20.14.5.1), and the hint's U being
+                                        ; bigger than P is checked below
     mov ax, [dskw_raw+DSK_R_CZL]        ; U, 24 bits out of the hint. A hint
     mov dl, [dskw_raw+DSK_R_CZH]        ; no bigger than the file it describes
     mov dh, 0                           ; has drifted from it, and it is caught
@@ -1889,9 +1931,33 @@ dskw_rbody:
     cmp ax, [dskw_cap]
     jbe .fits
 .toobig:                        ; too big for the buffer: nothing is written
-    mov ax, FERR_BIG
-    stc
-    ret
+%ifdef OS88_SHORTCUTS
+    cmp byte [dskw_trunc], 0    ; ...UNLESS the caller asked for the file's
+    je .big                     ; first bytes and no more - mod_need's
+    cmp ax, bx                  ; settings core (SPEC.md 2.8.7) - and the
+    jne .big                    ; file is PLAIN (U = P): a packed stream's
+    mov ax, [dskw_cap]          ; prefix decodes to nothing. P becomes the
+    mov dx, [dskw_caphi]        ; capacity, so the chain walk stops there and
+    mov bx, ax                  ; the answer is what arrived
+    mov [dskw_len], ax
+    mov [dskw_lenhi], dx
+    jmp .fits
+.big:
+%endif
+    cmp dx, 0x3FF               ; 64MB or more SATURATES at 0xFFFF KB, which
+    jb .kb                      ; no claim meets: the shift below would drop
+    mov dx, 0xFFFF              ; U's top bits and the inc would wrap, and a
+    jmp short .kbsaid           ; small wrong figure is a retry that lies
+.kb:
+    mov cl, 10                  ; ...and DX = the KB it WOULD take, rounded
+    shr ax, cl                  ; up (SPEC.md 20.14.6.3). U is in hand here
+    mov cl, 6                   ; and nowhere a caller can reach: a HINTLESS
+    shl dx, cl                  ; compressed file was sized by FIND at what
+    or dx, ax                   ; it OCCUPIES, and only this read's sniff
+    inc dx                      ; knows what it becomes. One over on an
+.kbsaid:
+    jmp dskw_wbody.big          ; exact multiple, which a claim in KB does
+                                ; not mind; CX is dskw_read_x's to restore
 .fits:
     mov cx, ax
     or cx, dx
@@ -1922,7 +1988,7 @@ dskw_rbody:
                                 ; entry is hostile rather than merely large
     mov cx, [dskw_len]          ; the widget's scale, in BYTES (SPEC.md
     mov dx, [dskw_lenhi]        ; 12.8.1) - a 116KB module is a minute of
-    call KERNEL_SEG:fpg_begin       ; frozen screen; dskw_read_x ends it
+    call ct_fpg_begin               ; frozen screen; dskw_read_x ends it
 %ifdef OS88_REDIR
     cmp byte [dsk_vkind], DVK_FILE
     je .fsdata                  ; **THE ONE THING THE TRANSPORT DECIDES**
@@ -1931,7 +1997,8 @@ dskw_rbody:
     mov [dskw_cur], ax              ; capacity refusal, the compressed
     call dskw_rdata             ; walk the chain into the caller's buffer
 .read_done:
-    jc .out
+    jc .ret                     ; (a `ret` a hop on: .out is past short
+                                ; reach, and CF=1 rides through either)
     mov al, [dskw_raw+DSK_R_CZM]    ; ...and if it arrived COMPRESSED, expand
     sub al, DSK_CZ_MARK             ; it before anyone is told it is there.
     cmp al, LZ_LZB                  ; The hint again, dskw_raw being untouched
@@ -1939,19 +2006,16 @@ dskw_rbody:
     call dskw_czexp
     jc .czbad
     mov ax, [dskw_uz]           ; the caller is told the UNPACKED size, which
-    mov dx, [dskw_uzhi]         ; is the whole point (SPEC.md 20.14)
-    clc
+    mov dx, [dskw_uzhi]         ; is the whole point (SPEC.md 20.14) - CF = 0
+.ret:                           ; from the `jc`
     ret
 .plainlen:
     mov ax, [dskw_len]          ; bytes read = the file's size, 32-bit
     mov dx, [dskw_lenhi]
-.empty:
-    clc
-    ret
+.empty:                         ; CF = 0 on both ways in: `ja` is taken only
+    ret                         ; with CF = 0, and .empty's `jz` follows an `or`
 .czbad:
-    mov ax, FERR_IO
-    stc
-    ret
+    jmp dskw_rdata.corrupt      ; the same answer, spelled once
 
     ; --- a REDIRECTED volume: STAT to a handle, then READ (SPEC.md 62.9.1) ---
     ; Reads are BY HANDLE and only FSV_STAT takes a name, so this is `open`
@@ -2012,10 +2076,10 @@ dskw_rbody:
                                 ; until the verb returns
     push bp
     mov ax, [dskw_raw+DSK_R_CLUS]   ; the handle FSV_STAT answered, banked
-    mov bx, [dskw_src]          ; ...and the destination the placement above
-    mov dx, [dskw_seg]          ; has already moved up by R when the file is
-    mov cx, [dskw_len]          ; compressed, which is the whole point of
-    mov di, [dskw_lenhi]        ; joining: P bytes, where P is what the FILE
+    call dskw_fsargs            ; ...and the destination the placement above
+                                ; has already moved up by R when the file is
+                                ; compressed, which is the whole point of
+                                ; joining: P bytes, where P is what the FILE
     mov bp, FSV_READ            ; occupies and never what it becomes
     call drv_fs_call              ; -> DX:AX = bytes read
     pop bp
@@ -2043,37 +2107,13 @@ dskw_rdata:
     mov word [dskw_rlen], 0     ; no data run pending
     mov ax, [dskw_seg]
     mov [dskw_wseg], ax         ; the ADVANCING destination segment
-    jmp short .clus
-.corrupt:
-    mov ax, FERR_IO             ; any link outside [2, maxclus] while bytes
-    stc                         ; remain is corruption (SPEC.md 18)
-    ret
-.ioerr:
-    call dskw_ioerr
-    stc
-    ret
 .clus:
     mov ax, [dskw_cur]
-    call dskw_clok
-    jc .corrupt
-    call dsk_clus2lba_x
-    jc .corrupt
-    mov [dskw_lba], ax
-    mov al, [dsk_spc]           ; take = min(spc, sectors remaining)
-    xor ah, ah
-    cmp ax, [dskw_rem]
-    jbe .take
-    mov ax, [dskw_rem]
-.take:
-    mov [dskw_take], ax
-    mov cx, ax
-    call dskw_last_p            ; ZF=1 if this take ends in a partial sector
-    jnz .whole
-    dec cx                      ; that last sector comes in through the stage
-.whole:
-    mov ax, [dskw_lba]          ; the cursor, set BEFORE the count is tested:
-    mov [dskw_clba], ax         ; a take that is nothing but a partial sector
-                                ; skips the walk and .tail still reads it
+    call dskw_take1             ; CX = whole sectors, [dskw_clba] the cursor -
+    jc .corrupt                 ; and CF=1 for a cluster outside [2,
+                                ; dsk_maxclus], dsk_clus2lba_x being the first
+                                ; thing it asks: a dskw_clok here as well was
+                                ; the same test twice a cluster
 .addrun:
     call dskw_runadd            ; the whole sectors of this take, appended to
     jc .ioerr                   ; the pending run (SPEC.md 18.4.2). CX comes
@@ -2081,27 +2121,24 @@ dskw_rdata:
                                 ; THAT FALLS THROUGH TO .stg, exactly as the
                                 ; write path's does (SPEC.md 18.4.2.1)
 .stg:                           ; one sector the 8237 cannot carry, alone,
-    push ss                     ; through the scratch - which is 512-aligned
-    pop es                      ; and therefore never straddles. No run can be
-    push cx                     ; pending here: dskw_runmax answered 0, and it
-    mov ax, [dskw_clba]         ; is only asked with [dskw_rlen] = 0
-    call dsk_rd1_x
-    pop cx
-    jc .jioerr
-    mov es, [dskw_wseg]
-    mov di, [dskw_src]
-    push cx
-    mov cx, 512
-    call dskw_fetch             ; ...and up to the caller, all 512 of it
-    pop cx
-    inc word [dskw_clba]
+    push cx                     ; through the scratch - which is 512-aligned
+    mov cx, 512                 ; and therefore never straddles. No run can be
+    call dskw_rone              ; pending here: dskw_runmax answered 0, and it
+    pop cx                      ; is only asked with [dskw_rlen] = 0 - and all
+    jc .jioerr                  ; 512 of it goes up to the caller
+    DSKW_CLBA_INC
     add word [dskw_wseg], 32    ; 512 bytes = 32 paragraphs on
-    dec cx
-    jz .tail
-    jmp .addrun
-.jioerr:                        ; ...and the read path's three, the same way -
-    jmp .ioerr                  ; below the loop's own jmp, where nothing can
-                                ; fall into it
+    loop .addrun
+    jmp short .tail
+.corrupt:                       ; (dskw_rbody and dskw_wabody answer here too)
+    mov ax, FERR_IO             ; any link outside [2, maxclus] while bytes
+    stc                         ; remain is corruption (SPEC.md 18)
+    ret
+.ioerr:                         ; ...and the error arms THEMSELVES, below the
+.jioerr:                        ; loop's own jmp where nothing falls into them
+    jmp dskw_ioerr              ; and every arm above and below reaches them
+                                ; short: the write path's shape (dskw_wdata),
+                                ; with no relay and no jump over them at entry
 
     ; the partial final sector: only its live bytes reach the caller. The run
     ; goes first - its bytes come BEFORE these, and flushing it is also what
@@ -2111,15 +2148,9 @@ dskw_rdata:
     jnz .advance
     call dskw_flushrun
     jc .ioerr
-    push ss
-    pop es
-    mov ax, [dskw_clba]         ; the sector the whole-sector walk stopped at
-    call dsk_rd1_x                ; the last sector, whole, into the scratch
-    jc .jioerr
-    mov es, [dskw_wseg]
-    mov di, [dskw_src]
-    mov cx, [dskw_tail]
-    call dskw_fetch             ; ...and only its live bytes to the caller
+    mov cx, [dskw_tail]         ; the sector the whole-sector walk stopped at,
+    call dskw_rone              ; whole, into the scratch - and only its live
+    jc .jioerr                  ; bytes to the caller
 .advance:
     mov ax, [dskw_take]
     sub [dskw_rem], ax
@@ -2132,8 +2163,7 @@ dskw_rdata:
 .rdone:
     call dskw_flushrun            ; the last run of the file
     jc .jioerr
-    clc
-    ret
+    ret                         ; CF = 0 from the `jc`
 
 ; -----------------------------------------------------------------------------
 ; dskw_czexp - expand the compressed file dskw_rdata just delivered
@@ -2152,9 +2182,11 @@ dskw_czexp:
     mov dx, [dskw_uz]           ; every kernel word FIRST, while DS reaches
     mov bx, [dskw_uzhi]         ; them: BX:DX = the 32-bit expected output...
     mov cx, [dskw_len]
-    sub cx, DSK_CZ_HDR          ; ...CX = the stream, past the header (a file
-                                ; shorter than the header wraps CX, and the
-                                ; decoder refuses a source that wraps)...
+    mov ax, [dskw_lenhi]        ; ...AH:CX = the stream, past the header, 24
+    sub cx, DSK_CZ_HDR          ; bits (SPEC.md 20.14.5.1). P is under the
+    sbb al, 0                   ; hint's U, so the top byte is all there is -
+    jc .bad                     ; and a file shorter than the header borrows
+    mov ah, al                  ; out of it and is refused here...
     mov es, [dskw_czseg]        ; ...ES:0 = where it expands: source and
     xor di, di                  ; destination are one buffer, the packed bytes
                                 ; R paragraphs up and the expansion walking
@@ -2166,7 +2198,7 @@ dskw_czexp:
     jne .bad
     mov al, [si+2]              ; the format, which the decoder checks
     add si, DSK_CZ_HDR
-    call lz_decomp_x
+    call lz_decomp_big          ; ...AH being the length's top byte
     pop ds
     ret
 .bad:
@@ -2237,16 +2269,13 @@ dskw_runmax:
     shl ax, cl
     add ax, [dskw_src]          ; AX = the offset within the DMA page
     neg ax                      ; ...so this is the bytes left in it, with 0
-    jz .whole                   ; meaning a whole page rather than none
-    mov cl, 9
-    shr ax, cl
-    jmp short .cap
-.whole:
-    mov ax, 128
-.cap:
-    cmp ax, 127
-    jbe .out
-    mov ax, 127
+    cmc                         ; meaning a whole page rather than none:
+    rcr ax, 1                   ; dsk_runcap's 17-bit negation, CF being the
+    mov cl, 8                   ; 65,536s bit, so AX = whole sectors left in
+    shr ax, cl                  ; the page, 0..128
+    cmp al, 128                 ; ...and 128 only from a page-aligned base,
+    jb .out                     ; which the 127 bound below takes one off
+    dec ax
 .out:
     pop cx
     ret
@@ -2281,10 +2310,9 @@ dskw_size32:
     add ax, 1                   ; ...+ 1 for the partial sector
     adc dx, 0
 .whole:
-    or dx, dx
+    or dx, dx                   ; (`or` clears CF: the answer below)
     jnz .over
     mov [dskw_rem], ax
-    clc
 .out:
     pop dx                      ; (pops do not touch flags)
     pop cx
@@ -2306,58 +2334,24 @@ dskw_size32:
 ; to someone else.
 ; -----------------------------------------------------------------------------
 dskw_dbody:
-    call dskw_mounted
-    jnc .gated
-    ret
-.gated:
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: delete's
-    cmp byte [dsk_vkind], DVK_FILE
-    jne .fatd
-    mov bp, FSV_DELETE
-    jmp dskw_fsop
+    mov ax, FSV_DELETE
 %endif                          ; OS88_REDIR
-.fatd:
-    mov di, dskw_n83
-    call dskw_name83
-    jnc .named
-.badarg:
-    mov ax, FERR_NAME
-    stc
-    ret
-.named:
+    call dskw_gate              ; returns only with dskw_n83 filled
 dskw_dbody_n83:                 ; dskw_n83 already filled (dskw_rmtree)
     call dskw_find
     jc .out
     test byte [dskw_raw+DSK_R_ATTR], DSKW_PROT
     jz .live
-    mov ax, FERR_PROT           ; read-only, hidden, system, label or dir
-    stc
-.out:
+    jmp dskw_wbody.prot         ; read-only, hidden, system, label or dir:
+.out:                           ; FERR_PROT
     ret
 .live:
     mov ax, [dskw_raw+DSK_R_CLUS]
     mov [dskw_oldclus], ax
-    mov byte [dskw_raw], 0xE5   ; the deleted mark (SPEC.md 19's species)
-    mov byte [dskw_zapnext], 0
-    call dskw_ent_store         ; the commit
-    jc .out
-    mov ax, [dskw_oldclus]
-    call dskw_clok
-    jc .done
-    call dskw_free_chain
-    call dskw_flush_x
-    jc .lateio
-.done:
-    call dskw_sync_x
-    xor ax, ax
-    clc
-    ret
-.lateio:
-    push ax
-    call dskw_sync_x
-    pop ax
-    stc
-    ret
+    jmp dskw_rmbody_n83.delent  ; the deleted mark (SPEC.md 19's species),
+                                ; the commit, and the chain it let go of -
+                                ; rmdir's own ending, byte for byte
 
 ; -----------------------------------------------------------------------------
 ; dskw_nbody - the rename pipeline (module-internal)
@@ -2375,10 +2369,7 @@ dskw_dbody_n83:                 ; dskw_n83 already filled (dskw_rmtree)
 ; and SPEC.md 18.4 for why replace and delete may not do the same.
 ; -----------------------------------------------------------------------------
 dskw_nbody:
-    call dskw_mounted
-    jnc .gated
-    ret
-.gated:
+    call dskw_mounted           ; returns only when there is a volume
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: rename's
     cmp byte [dsk_vkind], DVK_FILE
     jne .fatn
@@ -2392,7 +2383,7 @@ dskw_nbody:
     call dskw_name83
     pop si
     jnc .named
-.badarg:
+.badarg:                        ; (dskw_rtbody and dskw_wabody answer here too)
     mov ax, FERR_NAME
     stc
     ret
@@ -2404,9 +2395,7 @@ dskw_nbody:
     pop si
     call dskw_find
     jc .vacant                  ; the new name is free (or the scan failed)
-    mov ax, FERR_EXIST
-    stc
-    ret
+    jmp dskw_mkbody.exists
 .vacant:
     cmp ax, FERR_NOENT
     je .old
@@ -2414,29 +2403,20 @@ dskw_nbody:
     stc                         ; FERR_IO from the scan
     ret
 .old:
-    mov di, dskw_n83            ; now the old name
-    call dskw_name83
-    jc .badarg
+    call dskw_gate83            ; now the old name (nothing is pushed here)
     call dskw_find
     jc .out
     test byte [dskw_raw+DSK_R_ATTR], DSKW_NPROT
     jz .patch                   ; 0x0F, not 0x1F: a FOLDER may be renamed
-    mov ax, FERR_PROT
-    stc
-    ret
+    jmp dskw_wbody.prot
 .patch:
     push si
     mov si, dskw_n83b
     mov di, dskw_raw            ; patch the 11 name bytes in the staged copy
     call dskw_copy11
     pop si
-    mov byte [dskw_zapnext], 0
-    call dskw_ent_store
-    jc .out
-    call dskw_sync_x
-    xor ax, ax
-    clc
-    ret
+    and word [dskw_oldclus], 0  ; the entry store, then dskw_relold's sync -
+    jmp dskw_rmbody_n83.entrel  ; with no chain to free (dskw_clok refuses 0)
 
 ; -----------------------------------------------------------------------------
 ; dskw_sync - make the read-path caches a mount snapshot again (SPEC.md 18.4)
@@ -2451,8 +2431,10 @@ dskw_nbody:
 ; harvested for free. It cannot repaint the Disk window (the caller may
 ; hold the gfx lock) - SPEC.md 22 covers what the user sees.
 ;
-; WHEN that rebuild happens is fmv_gneed's question, and the answer is
-; usually "not now" (SPEC.md 18.4 rule 3). The invariant above is about what
+; WHEN that rebuild happens is never "now" any more (SPEC.md 38.2: the
+; Standard File dialog was the one thing ON SCREEN drawn from the global
+; listing, and it is a Disk window now, painting from its own cache) - it is
+; always the debt (SPEC.md 18.4 rule 3). The invariant above is about what
 ; the snapshot IS, never about how soon: a mount snapshot or nothing at all,
 ; and the empty-listing-plus-debt this leaves is the second of those - the
 ; identical state a quiet mount publishes (18.9), paid by dsk_relist. What
@@ -2469,6 +2451,13 @@ dskw_nbody:
 ; wrong-directory write, not just a display glitch.
 ; -----------------------------------------------------------------------------
 dskw_sync_x:
+%ifdef DSK_STREAM
+    add word [dsk_mgen], 2      ; a write happened: every READ_SEQ cursor and
+                                ; WRITE_SEQ token on the machine goes stale
+                                ; (SPEC.md 18.4.8, 18.4.9) -
+                                ; here, because the remount below may be
+                                ; DEFERRED and the cursor must not wait for it
+%endif
     call fmv_mark               ; every Disk window showing THIS folder now
                                 ; owes a refresh (SPEC.md 22.8) - marked
                                 ; ahead of the batch test, because the folder
@@ -2477,11 +2466,6 @@ dskw_sync_x:
                                 ; the single remount at its end has left
     cmp byte [dskw_batch], 0    ; a tree copy remounts ONCE, when it ends -
     jne .defer                  ; not after every one of its files (22.3)
-    call fmv_gneed              ; is anything ON SCREEN drawn from the global
-    jc dskw_remount_x           ; listing? then rebuild it now, as we always
-                                ; did - the Standard File dialog's New Folder
-                                ; is that case, and it is a write made while
-                                ; the dialog is up
     mov word [disk_nfiles], 0   ; ...otherwise publish the EMPTY listing and
     mov byte [dsk_lstale], 1    ; the debt, exactly the state a quiet mount
                                 ; leaves (18.9): a wrong listing is worse than
@@ -2542,7 +2526,7 @@ dskw_stat_x:
     mov bp, FSV_STAT
     call drv_fs_call              ; -> AX = the handle, DX:CX = size, BL =
     pop bp                          ; a FAT-style attribute byte
-    jc .fsbad
+    jc .out                     ; CF = 1 and the driver's AX, as they arrive
     xchg ax, bx                 ; ...and this cell answers BX = the "first
                                 ; cluster" and AL = the attributes, so ONE
                                 ; instruction puts each where the contract
@@ -2550,11 +2534,7 @@ dskw_stat_x:
                                 ; BX takes the handle. DX:CX is already the
                                 ; size. `mov bx, ax` first would have eaten
                                 ; the attribute byte, BL being where it is
-    clc
-    jmp short .out
-.fsbad:
-    stc
-    jmp short .out
+    jmp short .out              ; (CF = 0 from the `jc`; xchg writes no flag)
 .fat:
     mov di, dskw_n83
     call dskw_name83
@@ -2565,8 +2545,7 @@ dskw_stat_x:
     mov cx, [dskw_raw+DSK_R_SIZE]
     mov dx, [dskw_raw+DSK_R_SIZE+2]
     mov al, [dskw_raw+DSK_R_ATTR]
-    clc
-    jmp short .out
+    jmp short .out              ; (CF = 0 from the `jc .fail`)
 .badname:
     mov ax, FERR_NAME
     jmp short .fail
@@ -2654,9 +2633,15 @@ dskw_read_at_x:
     test ax, ax
     jz .badarg                  ; an unmounted volume has no cluster size
 
+%ifdef DSK_STREAM
+    xor di, di                  ; DI = 0 (it is pushed above, and nothing
+    call dwr_stat               ; below reads it but the walk): BX = first
+                                ; cluster, DX:CX = the size - or a READ_SEQ
+                                ; cursor's, and then DI = 1 (18.4.8)
+%else
     call dskw_stat_x            ; BX = first cluster, DX:CX = the size
+%endif
     jc .err
-    mov [dwr_clus], bx
     mov [dwr_sz], cx
     mov [dwr_sz+2], dx
 
@@ -2713,16 +2698,32 @@ dskw_read_at_x:
     mov dx, [dwr_off+2]
     div word [dwr_clb]          ; AX = clusters to skip
     mov cx, ax
-    mov ax, [dwr_clus]
-    jcxz .atclus
+%ifdef DSK_STREAM
+    or di, di                   ; ...ONE, from a HOT READ_SEQ cursor's
+    jz .walk                    ; cluster, which is the last one the previous
+    mov cx, di                  ; call read (SPEC.md 18.4.8) - so its FAT link
+.walk:                          ; is this walk's, checked as every link is
+%endif
+    mov ax, bx                  ; the walk's start, the stat's BX, which
+    jcxz .atclus                ; nothing above has touched
 .skip:
     call dsk_next_clus_x    ; AX = the next cluster; CF=1 = the
     jc .corrupt                 ; chain ended before the size said it would
-    call dskw_clok
-    jc .corrupt
-    loop .skip
+    loop .skip                  ; ...and a link outside [2, dsk_maxclus] is
+                                ; refused by whatever reads it next: the next
+                                ; pass's dsk_next_clus_x, or dsk_read_chain_x's
+                                ; own range test (FERR_IO either way). It was
+                                ; asked here as well, a dskw_clok a cluster
 .atclus:
-    mov [dwr_clus], ax
+    push ax                     ; THE CLUSTER IS NEVER STORED. It was banked
+                                ; in [dwr_clus], which on kern_big IS the
+                                ; READ_SEQ cursor's +6 - so a read that FAILED
+                                ; handed the caller a cursor whose +6 was
+                                ; already the cluster at +12, under a
+                                ; generation that still matched, and the
+                                ; retry walked one link too far and delivered
+                                ; the wrong cluster with CF=0. +6 is the
+                                ; wrapper's to write, on success (18.4.8)
 
     ; --- and read it ---------------------------------------------------------
     ; dsk_read_chain moves whole SECTORS, so a tail shorter than one is
@@ -2731,18 +2732,16 @@ dskw_read_at_x:
     ; number of sectors.
     mov ax, [dwr_take]
     call dsk_bytes_secs_x       ; DX = sectors
-    mov ax, [dwr_clus]
+    pop ax
     mov bx, [dwr_buf]
     call dsk_read_chain_x
     jc .ioerr
     mov ax, [dwr_take]
-    xor dx, dx
-    clc
+    xor dx, dx                  ; (`xor` clears CF: the answer)
     jmp short .out
 .eof:
     xor ax, ax
     xor dx, dx
-    clc
     jmp short .out
 .badarg:
     mov ax, FERR_NAME           ; a bad ARGUMENT, and FERR_NAME is this API's
@@ -2786,6 +2785,419 @@ dskw_read_at_x:
     stc
     jmp short .out
 
+;
+; -----------------------------------------------------------------------------
+; dskw_read_seq - a streaming read, whose place the CALLER keeps (SPEC.md
+;                 18.4.8, slot OSAPI_FILE_READ_SEQ; kern_big)
+; in:  SI -> a NUL 8.3 name, DX:BX -> the buffer, CX = its capacity (a
+;      cluster multiple), ES:DI -> the 16-byte cursor (zeroed, +12 = where to
+;      start), in any segment
+; out: CF=0 with DX:AX = the bytes delivered (0 = at or past the end) and the
+;      cursor advanced past them; CF=1 with AX = FERR_*, the cursor unmoved
+; clobbers: AX, DX (the outputs), CF
+;
+; READ_AT without the walk. The cursor caches what READ_AT recomputes every
+; call - the stat by name and the chain walk to the offset, 142 ms a MB on the
+; W0 machine - and is TRUSTED ONLY UNDER THE MOUNT GENERATION it was seeded
+; in: every snapshot the kernel builds bumps [dsk_mgen] in disk_mount_x, so a
+; navigation, a media change, a write's remount or another instance moving
+; the volume all make the next call re-seed from the name, silently, at the
+; offset the cursor holds. The token is the caller's, so the copy loop's
+; writes that §18.4.4 kept statelessness for cannot destroy it - they only
+; cost one re-walk.
+; -----------------------------------------------------------------------------
+%ifdef DSK_STREAM
+RSQ_GEN     equ 0               ; the mount generation it was seeded under
+RSQ_VOL     equ 2               ; the volume
+RSQ_CUR     equ 6               ; the cluster holding FSEQ_OFF
+RSQ_SIZE    equ 8               ; the file's size
+FSEQ_OFF    equ 12              ; the offset: the caller's to set (SDK)
+FSEQ_SIZE   equ 16
+%if FSEQ_SIZE != 16
+  %error "disk.inc seeds [dwr_c] as 16 bytes: FSEQ_SIZE is its size"
+%endif
+
+; IT IS READ_AT, with the cursor standing in for READ_AT's two per-call costs:
+; [dwr_seq] makes dskw_read_at's stat come from dwr_stat below, which answers
+; out of a cursor still valid and marks the walk to be skipped, and this
+; wrapper does the bookkeeping READ_AT has no words for - the size, the
+; generation, and the cluster one FAT link past what was read.
+;
+; IT IS ITS OWN FAR ENTRY (SPEC.md 2.6): nothing near-calls it, so the cell
+; reaches it by name and it ends in `retf` - the `call`/`retf` pair a separate
+; dwf_ stub would add is four bytes that buy nothing.
+dwf_dskw_read_seq:
+    push bx
+    push cx
+    push si
+    push di
+    push es                     ; ...the caller's ES:DI, which is ALSO where
+                                ; the cursor goes back to at .out
+    push si                     ; THE CURSOR IS COPIED IN AND OUT, so it can
+    push cx                     ; live anywhere the caller likes and the buffer
+    push ds                     ; can be a segment of its own - a player's ring
+    push es                     ; reads every chunk into a different one
+    pop ds                      ; (SPEC.md 18.4.8). DS = the cursor's segment,
+    pop es                      ; ES = ours; SI is the NAME, which READ_AT
+    mov si, di                  ; still needs, and CX the capacity
+    mov di, dwr_c
+    mov cx, FSEQ_SIZE / 2
+    cld
+    rep movsw
+    push es
+    pop ds                      ; DS = KERNEL_SEG again
+    pop cx
+    pop si
+    mov es, dx                  ; ES:BX = the caller's DX:BX buffer
+    mov ax, [dwr_c+FSEQ_OFF]
+    mov dx, [dwr_c+FSEQ_OFF+2]
+    call dskw_read_at_x         ; DX:AX = the bytes, or CF and FERR_*
+    jc .out
+    add [dwr_c+FSEQ_OFF], ax    ; the cursor moves only when bytes arrived
+    adc [dwr_c+FSEQ_OFF+2], dx
+    cmp byte [dsk_vkind], DVK_FILE
+    je .out                     ; a REDIRECTED volume (SPEC.md 62.9) serves
+                                ; any offset: its cursor is only that. CF=0,
+                                ; the compare having been equal
+    push ax                     ; ...otherwise it is trusted under THIS
+    mov ax, [dsk_chain_end]     ; snapshot, on this volume: the LAST cluster
+    mov [dwr_c+RSQ_CUR], ax     ; read, whose one FAT link is the next call's
+    mov ax, [dsk_mgen]          ; whole walk (READ_AT's own, above). The size
+    mov [dwr_c+RSQ_GEN], ax     ; is already in the cursor: [dwr_sz] IS its
+    mov al, [disk_drive]        ; field on kern_big, stored by READ_AT from
+    mov [dwr_c+RSQ_VOL], al     ; the stat, whichever way it answered. After a
+    pop ax                      ; call that delivered nothing the cluster is
+    clc                         ; stale and unread: READ_AT answers the end
+.out:                           ; before it walks
+    pop es                      ; ...and the cursor goes back where it came
+    pop di                      ; from, success or not - to the caller's own
+    push di                     ; ES:DI, banked at the door. No flag is
+    mov si, dwr_c               ; written from here to the retf, so CF is
+    mov cx, FSEQ_SIZE / 2       ; still the answer
+    cld
+    rep movsw
+    mov [dwr_c+RSQ_GEN], cx     ; ...and the KERNEL's copy is left invalid
+    pop di                      ; (CX = 0 after the rep): dwr_stat consults
+    pop si                      ; it on EVERY READ_AT, and a plain one must
+    pop cx                      ; find no cursor there
+    pop bx
+    retf
+
+; dwr_stat - dskw_read_at's stat: dskw_stat_x's contract (BX = the walk's
+; start, DX:CX = the size), from the READ_SEQ cursor's kernel copy while it is
+; valid (DI 0 -> 1 then says the walk is ONE link, from the last cluster the
+; previous call read), from the name otherwise. A plain READ_AT asks too,
+; and finds [dwr_c]'s generation 0, which [dsk_mgen] never is: the wrapper
+; leaves it so after every call, and it is seeded so in .text
+dwr_stat:
+    mov ax, [dsk_mgen]          ; STILL THE SNAPSHOT IT WAS SEEDED IN, on the
+    cmp ax, [dwr_c+RSQ_GEN]     ; same volume? then its cluster and size mean
+    jne .name                   ; what they meant
+    mov al, [disk_drive]
+    cmp al, [dwr_c+RSQ_VOL]
+    jne .name
+    inc di                      ; hot: DI = 1, one link
+    mov bx, [dwr_c+RSQ_CUR]
+    mov cx, [dwr_c+RSQ_SIZE]
+    mov dx, [dwr_c+RSQ_SIZE+2]
+    ret                         ; CF=0: the cmp above was equal
+.name:
+    jmp dskw_stat_x
+%endif
+
+; -----------------------------------------------------------------------------
+; dskw_write_seq - a streaming append, whose place the KERNEL keeps and the
+;                  caller holds a TOKEN for (SPEC.md 18.4.9, slot
+;                  OSAPI_FILE_WRITE_SEQ; kern_big)
+; in:  SI -> a NUL 8.3 name, ES:BX -> the bytes, CX = the count (a cluster
+;      multiple, but the last), AL = flags (bit 0 = HELD), DI = the token the
+;      last call handed back (0, or anything stale, = none); CX = 0 CLOSES
+; out: CF=0, AX = 0, DI = the token for the next call; CF=1 with AX = FERR_*
+;      and DI as it was. A close touches neither DI nor anything but AX
+; clobbers: AX, DI (the outputs), CF
+;
+; APPEND without the name lookup and without the walk. There is ONE stream
+; record, the kernel's (dws_rec): the entry as the lookup found it, where it
+; lives, the file's last cluster and its volume, written by every successful
+; call. A token is the [dsk_mgen] that call left, and it is the record's
+; only key: every WRITE and every mount that re-reads a boot sector moves
+; [dsk_mgen] on, and so does the first call of a NEW hold (the one kind of
+; call that moves nothing else), so a token equal to it names the stream
+; the record describes and no other. A banked hop inside a batch (18.9.3)
+; moves nothing, so the join's C: -> A: -> C: every block keeps it; the
+; volume is checked as well, the token being the same on either side.
+;
+; HELD (AL bit 0) writes the data and grows an UNREACHABLE chain - never
+; linked to the file, so a FAT flush at any moment puts nothing on the disk a
+; crash could make wrong - and the ONE link, the FAT flush and the entry wait
+; for dws_commit: at a close, before any other write on the volume, before a
+; mount leaves it outside a batch, at a cold call, and at gfx_unlock, which
+; is every way the user can reach the drive (18.9.3). The flag is the
+; STREAM's: a caller keeps one value for a file's whole life.
+;
+; THERE IS NO SECOND BODY. This door decides HOT or COLD and dskw_wabody, the
+; one append/write-at body, reads [dws_flg]: a cold call is an APPEND, a hot
+; one loads the record in place of the lookup and the walk, and HELD changes
+; only what .grow does once the data is down. So everything an append
+; refuses, WRITE_SEQ refuses the same way, and a redirected volume (SPEC.md
+; 62.9) takes it as the append it is.
+; -----------------------------------------------------------------------------
+%ifdef DSKW_WSEQ
+WSQF_HELD   equ 0x01            ; the caller's AL...
+WSQF_SYS    equ 0x02            ; ...and APPEND_SYS's permission (18.4.4):
+                                ; a hidden + system file may be grown
+WSQF_HOT    equ 0x40            ; the door's: the token names the record
+WSQF_IN     equ 0x80            ; ...and inside a call at all
+DWS_REC0    equ dskw_raw + DSK_R_CLUS   ; the record's run: the entry's head
+DWS_RECW    equ 8               ; and size, dskw_dsec, dskw_doff, dskw_prev,
+                                ; dskw_first - ADJACENT for it, and asserted
+                                ; where declared
+
+%ifndef KD_BUILD
+; dwsf_dskw_write_seq - THE CELL's way in (slot 0x0461), and the kernel's
+; writers call the door below it. WSEQF_SYS is APPEND_SYS's permission, so it
+; takes APPEND_SYS's FENCE (api_file_sysc, SPEC.md 19.6.1): drv_owns_seg on
+; the caller's DS, which api_rn banked under the far return api_far built -
+; BP, BX, IP, CS, the caller's SI, the caller's DS. A close reads no flag
+dwsf_dskw_write_seq:
+    jcxz dwf_dskw_write_seq
+    test al, WSQF_SYS
+    jz dwf_dskw_write_seq
+    push bx
+    push bp
+    mov bp, sp
+    mov bx, [bp+10]             ; the caller's DS (SS: the stack's own)
+    call drv_owns_seg_x         ; CF = 0: a loaded driver's segment
+    pop bp
+    pop bx
+    jnc dwf_dskw_write_seq
+    mov ax, FERR_PROT           ; a package: protected, DI as it was
+    retf
+%endif
+dwf_dskw_write_seq:
+    and al, WSQF_HELD | WSQF_SYS    ; the CALLER's bits: WSQF_HOT is the door's
+    or al, WSQF_IN
+    mov [dws_flg], al
+    jcxz .cold                  ; a CLOSE: the commit, and nothing more
+    cmp di, [dsk_mgen]          ; the token still names the record...
+    jne .cold
+    call dws_ours.vol           ; ...on this volume
+    jne .cold
+    or byte [dws_flg], WSQF_HOT
+    jmp short .go
+.cold:
+    call dws_commit             ; a hold ends before a file is looked up
+    jc .out                     ; again: its size IS the lookup's answer - and
+    jcxz .out                   ; a close's answer is the commit's (AX = 0
+.go:                            ; when nothing was held)
+    mov al, [dws_flg]           ; WSQF_SYS is [dskw_syswr], which dskw_wrp
+    and al, WSQF_SYS            ; clears on the way out - set on EVERY call,
+    mov [dskw_syswr], al        ; so none can leak into the next write
+    call dskw_append_x
+    jc .out                     ; DI as it was: the record is untouched too
+    mov di, [dsk_mgen]          ; THE TOKEN: what the call left (`mov`: CF
+.out:                           ; stays the answer)
+    mov byte [dws_flg], 0       ; `mov`: CF stays the answer
+    retf
+
+; dws_load - the record back into what the lookup would have answered: the
+; entry's head and size, [dskw_dsec], [dskw_doff] - the rest of dskw_raw is
+; NOT the entry, which is why a grow stores only its tail (dskw_ent_tail).
+; clobbers: CX, SI, DI, ES - dskw_wrp's banked registers inside the body, and
+; dws_commit's own
+dws_load:
+    mov si, dws_rec
+    mov di, DWS_REC0
+.mv:
+    push ds
+    pop es
+    mov cx, DWS_RECW
+    cld
+    rep movsw
+    ret
+
+; -----------------------------------------------------------------------------
+; dws_commit - end the pending HELD stream: its chain durable, its ONE link,
+;              its size (SPEC.md 18.4.9)
+; in:  nothing; out: CF=0 (or nothing held); CF=1 with AX = FERR_*
+; clobbers: AX, flags - everything else, [disk_drive] and [dsk_cwd] included,
+;           as it was: a commit that had to hop to the held volume hops back
+;
+; It is NOT a second link-and-store: it loads the record and enters the
+; append body at .seal, the same link, flush and entry store an append makes
+; once its data is down (18.4.7.6's single flush included), once per stream
+; instead of once per call. The hold is cleared FIRST, so a failure is not
+; retried at every gate and the remount dskw_sync may run cannot re-enter.
+; -----------------------------------------------------------------------------
+dws_commit:
+    xor ax, ax
+    xchg al, [dws_hold]
+    or al, al
+    jz .none                    ; nothing held: AX = 0, CF = 0
+    add word [dsk_mgen], 2      ; ANY end of a hold stales every token
+                                ; (dws_hlose's rule): a FAILED commit leaves
+                                ; the record's size past the linked chain
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov al, [disk_drive]
+    push ax                     ; where we stood, to hop back to
+    push word [dsk_cwd]
+    mov dl, [dws_vol]
+    cmp dl, al
+    je .here
+    xor ax, ax                  ; the volume's ROOT: the entry is found by
+    call dsk_chdir_q_x          ; its sector, so any folder of the volume will
+    jc .back                    ; do, and inside the batch the hop is banked
+.here:
+    call dws_load               ; the entry, and [dskw_first] the held head
+    mov ax, [dws_hlink]         ; the committed last cluster, 0 = empty...
+    inc ax                      ; ...or 0FFFFh, POISONED (dws_hlose) - before
+    jz .lost                    ; the hop or BY it: the chain never reached
+    dec ax                      ; the disk, so there is only a stream to
+    call dskw_wabody.seal       ; report lost
+    jmp short .back
+.lost:
+    mov ax, FERR_IO
+    stc
+.back:
+    pop dx                      ; [dsk_cwd] as it was
+    pop bx                      ; BL = the volume
+    pushf
+    push ax
+    cmp bl, [disk_drive]
+    je .home
+    xchg ax, dx
+    mov dl, bl
+    call dsk_chdir_q_x          ; ...back where the caller stood
+.home:
+    pop ax
+    popf
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+.none:
+    ret
+
+; dws_ours - ZF=1: a hold is pending on [disk_drive] and no WRITE_SEQ call is
+; running (the word is [dws_hold] = 1 with [dws_flg] = 0 beside it); .vol
+; asks only whether [disk_drive] is the record's volume. clobbers: AL, flags
+dws_ours:
+    cmp word [dws_hold], 1
+    jne .no
+.vol:
+    mov al, [disk_drive]
+    cmp al, [dws_vol]
+.no:
+    ret
+
+; -----------------------------------------------------------------------------
+; THE HELD VOLUME'S DIRTY FAT, BANKED ACROSS A HOP (SPEC.md 18.8.5)
+;
+; The FAT windows are per volume (18.8.1-18.8.4) but the dirty range is one
+; pair, so dsk_fatw_park used to WRITE the outgoing volume's dirt - a seek to
+; the FAT and back per hop. Every writer but a held stream has flushed by the
+; time it returns, so the held volume's is the only dirt a park can meet, and
+; one bank holds it: park keeps it with the window, pick gives it back when
+; the window is reused. What must not happen is the WINDOW going while its
+; dirt is banked, and there are four ways, each answered here:
+;   - a SHED takes the claim, or the PIN is evicted from under it: both
+;     leave the volume's banked sector 0xFFFF (dsk_fatw_demote,
+;     dsk_fatw_evict), so the way back to it is a LOAD, and dws_hload
+;     loses the hold there - before anything could be linked into it,
+;     because the one thing that links, dws_commit, goes back first;
+;   - the volume is RE-READ: the same disk keeps the window and its dirt, a
+;     different one loses the hold (dws_hload);
+;   - a HIBERNATE zeroes the range: it runs from a menu, and gfx_unlock has
+;     committed every hold before any menu can be reached.
+; LOSING the hold POISONS it: the stream is abandoned to its last commit,
+; and because its dirt never reached the disk, nothing links to it. The
+; token goes stale with it, and the cold call that follows meets the poison
+; in dws_commit and answers FERR_IO rather than appending past a hole.
+; -----------------------------------------------------------------------------
+
+; dws_hpark - CF=0 the dirty range was the held volume's and is banked (the
+; live pair cleared); CF=1 = flush it as ever. in: [disk_drive] = the volume
+; being left, DL = the one being mounted. clobbers: AX, flags
+;
+; ONLY WHERE THIS HOP CANNOT TAKE THE WINDOW AWAY. A mounted volume always has
+; a window (18.8.3's "no third state"), but when it is the PIN, the incoming
+; volume may evict it - and on a machine the heap refused, two volumes do
+; that at EVERY hop. So it banks when the incoming volume already has a claim
+; of its own, which cannot take anybody's window; otherwise the flush is
+; today's, and slower and never lost. (A held volume with a claim of its own
+; would be safe to bank either way; it is one test cheaper not to ask, and
+; the join's target is the pin in the case that matters - the system disk.)
+dws_hpark:
+    call dws_ours
+    jne .no
+    push bx                     ; the incoming volume has a claim of its own
+    mov bl, dl                  ; to go to, so it cannot take the held one's
+    call dsk_fatw_slot          ; window whichever it is: the pin or a claim
+    cmp word [bx+DVOL_MAX*2], 0 ; (never the pin, which only one volume holds
+    pop bx                      ; - and if that is the held one, the pin is
+    jnz dws_hswap               ; exactly what must not be taken)
+.no:
+    stc
+    ret
+
+; dws_hload - dsk_fatw_pick is about to RE-READ the window of [disk_drive].
+; The held volume's, with dirt banked: the hold is LOST. Inside the batch a
+; held stream lives in, a hop is a QUIET reuse, so this is a full mount or a
+; different disk, and neither can vouch for the banked bytes. clobbers: AX
+dws_hload:
+    call dws_hmine
+    je dws_hlose
+    ret
+
+; dws_hret - the window of [disk_drive] is live again: the held volume's
+; takes its banked dirt back. out: CF=0. clobbers: AX
+dws_hret:
+    call dws_hmine
+    jne dws_hswap.out
+; dws_hswap - exchange the live dirty pair with the bank: EMPTY (0xFFFF, 0)
+; is what each side is left holding, so one routine banks and restores.
+; out: CF=0. clobbers: AX
+dws_hswap:
+    mov ax, [dsk_fatd0]
+    xchg ax, [dws_hd0]
+    mov [dsk_fatd0], ax
+    mov ax, [dsk_fatd1]
+    xchg ax, [dws_hd1]
+    mov [dsk_fatd1], ax
+.out:
+    clc
+    ret
+
+; dws_hmine - ZF=1 when [disk_drive] is the held volume and dirt is banked
+; for it. clobbers: AX, flags
+dws_hmine:
+    cmp word [dws_hd0], 0xFFFF
+    jne dws_ours.vol
+
+    or al, 1                    ; ZF=0 (AL is anything but zero after it)
+    ret
+
+; dws_hlose - the held stream is POISONED: its banked dirt goes with its
+; window, and every token goes stale. The hold stays pending, so the first
+; commit to meet it - a cold call, a close, the unlock - is the one that
+; answers FERR_IO and clears it; nothing it names ever reached the disk, so
+; there is nothing to undo. clobbers: flags
+dws_hlose:
+    or word [dws_hlink], -1     ; no cluster is 0xFFFF: the poison
+    or word [dws_hd0], -1       ; ...and the bank EMPTY, both halves: a stale
+    and word [dws_hd1], 0       ; top would be swapped into the live range at
+                                ; the next park and widen it past the window
+    add word [dsk_mgen], 2
+    ret
+%endif                          ; DSKW_WSEQ
+
 ; -----------------------------------------------------------------------------
 ; dskw_write_at - write CX bytes at a byte offset: INSIDE what the file has
 ;                 allocated, or exactly AT its end, in which case it grows
@@ -2795,7 +3207,7 @@ dskw_read_at_x:
 ; out: CF=0 with AX=0; CF=1 with AX = FERR_*
 ; clobbers: AX (the output), CF
 ;
-; dskw_append - add CX bytes to the END of a file (SPEC.md 18.4.4, slot 0x0350)
+; dskw_append - add CX bytes to the END of a file (SPEC.md 18.4.4, slot 0x0286)
 ; in:  SI -> a NUL 8.3 name, ES:BX -> the bytes, CX = count (>= 1)
 ; out/clobbers: dskw_write_at's
 ;
@@ -2875,7 +3287,7 @@ dskw_wabody:
     inc ax                      ; FSV_APPEND and no write-at verb to pair
     jnz .prot                   ; with FSV_READAT, so an offset has nothing
                                 ; to be handed to
-    call KERNEL_SEG:fpg_begin       ; CX = the count and DX = 0, both exactly
+    call ct_fpg_begin               ; CX = the count and DX = 0, both exactly
                                 ; as the cell was handed them: arm the widget
                                 ; as the FAT arm does, so a file-manager copy
                                 ; over a cable reports chunk by chunk too
@@ -2884,19 +3296,22 @@ dskw_wabody:
     mov bp, FSV_APPEND          ; three registers this cell was handed
     jmp dskw_fsop
 .prot:
-    mov ax, FERR_PROT
-    stc
-    ret
+    jmp dskw_wbody.prot
 .fat:
-    mov di, dskw_n83
-    call dskw_name83
-    jc .badarg
+    call dskw_gate83
+%ifdef DSKW_WSEQ
+    test byte [dws_flg], WSQF_HOT   ; --- A HOT TOKEN (SPEC.md 18.4.9) ----
+    jz .find                    ; the lookup's three answers, from the record
+    call dws_load               ; (the door decided, and committed any hold a
+    jmp short .args             ; cold call must not look past)
+.find:
+%endif
     call dskw_find
     jc .out                     ; AX = FERR_NOENT / FERR_IO already
     call dskw_pmask             ; AL = what may not be written here
     test byte [dskw_raw+DSK_R_ATTR], al
     jnz .prot
-
+.args:
     call dskw_clbytes           ; --- the arguments, all refused ------------
     mov bx, ax                  ; BX = bytes per cluster for the rest of the
     test ax, ax                 ; arithmetic; nothing between here and the
@@ -2920,9 +3335,15 @@ dskw_wabody:
                                 ; marker leaves it set, and the next entry
                                 ; store would zap the slot after ITS entry
     mov ax, [dskw_len]
+%ifdef KERN_SMALL
     test ax, ax
     jz .badarg                  ; nothing to write is a bad argument here, not
                                 ; a no-op: the caller has miscomputed
+%endif                          ; ...and on kern_big it is THE FILE ENDS HERE
+                                ; (SPEC.md 18.4.7.5), decided at .loose below:
+                                ; a count of 0 makes END the offset, so the
+                                ; compare that follows is the truncate's own
+                                ; "not past the size" test, answered in SI
 
     add ax, [dwr_off]           ; --- END = offset + count, and it DECIDES ---
     mov [dwr_end], ax           ; whether the tail may be rounded and whether
@@ -2942,18 +3363,62 @@ dskw_wabody:
     je .loose                   ; not round: the bytes past the count are the
                                 ; file's own and the caller did not give them
 .badarg:
-    mov ax, FERR_NAME
-    stc
-    ret
+    jmp dskw_nbody.badarg       ; FERR_NAME, spelled once
 .corrupt:
 .ioerr:
-    mov ax, FERR_IO
-    stc
-    ret
+    jmp dskw_rdata.corrupt      ; the same answer, spelled once
+%ifndef KERN_SMALL
+    ; --- A COUNT OF ZERO TRUNCATES (SPEC.md 18.4.7.5) ----------------------
+    ; The file keeps offset/cluster clusters - the offset being a cluster
+    ; multiple, checked above - and takes the offset as its size. The ENTRY is
+    ; written first and the FAT after (18.4, dskw_dbody's order): a crash
+    ; between the two leaks the freed clusters rather than leaving an entry
+    ; that names clusters somebody else may be handed. Only DOWN: a size past
+    ; the file's own is refused, the growing door being the one above.
+.trunc:
+    or si, si                   ; END (the offset) past the size: refused
+    jnz .badarg
+    mov ax, [dwr_off]
+    mov dx, [dwr_off+2]
+    cmp dx, bx                  ; a quotient past 16 bits: only an entry
+    jae .corrupt                ; claiming more than any volume holds
+    mov [dskw_raw+DSK_R_SIZE], ax
+    mov [dskw_raw+DSK_R_SIZE+2], dx
+    div bx                      ; the clusters kept - one div, for .in's reason
+    xchg cx, ax
+    mov ax, [dskw_raw+DSK_R_CLUS]
+    jcxz .tnone                 ; none: the entry gives up its whole chain
+    jmp short .tloop            ; ...else CX - 1 steps, `loop` counting first
+.tskip:
+    call dsk_next_clus_x        ; to the LAST cluster kept. A chain shorter
+    jc .corrupt                 ; than the entry's size says ends in a value
+.tloop:                         ; this refuses on the next step
+    loop .tskip
+.tlast:
+    mov si, ax
+    call dsk_next_clus_x        ; ...the first one freed, or the end mark
+    jc .corrupt
+    xchg ax, si
+    mov dx, 0xFFFF              ; setfat keeps 12 bits of it on FAT12
+    call dskw_setfat            ; the chain ENDS here
+    jc .corrupt
+    jmp short .tstore
+.tnone:
+    mov [dskw_raw+DSK_R_CLUS], cx
+    mov si, ax                  ; SI = the first cluster freed, both arms
+.tstore:
+    mov [dskw_oldclus], si      ; ...which dskw_relold frees once the entry
+    jmp dskw_rmbody_n83.entrel  ; has landed: THE COMMIT, then the tail a
+                                ; delete ends in (an end mark frees nothing)
+%endif
 .up:
     inc si
 .loose:                         ; ...at or past the size, where a rounded tail
                                 ; lands on slack the file already owns
+%ifndef KERN_SMALL
+    cmp word [dskw_len], 0      ; a count of 0 arrives here whatever the
+    je .trunc                   ; offset, its [dskw_tail] being 0 too
+%endif
 
     ; --- what the file OWNS: its size rounded up to a cluster, in bytes -----
     ; ((size - 1) | (clb - 1)) + 1: clb is a power of two under 65,536, so
@@ -2979,10 +3444,22 @@ dskw_wabody:
 .at:
     inc bp                      ; ...1: it starts exactly AT the allocated end
     cmp dx, [dwr_off+2]
-    jne .badarg                 ; past it, or across it: this is not the
+    jne .jbad                   ; past it, or across it: this is not the
     cmp ax, [dwr_off]           ; allocator, and the DOS box never asks
-    jne .badarg
+    jne .jbad
 .in:
+%ifdef DSKW_WSEQ
+    mov ax, [dwr_end]           ; THE NEW SIZE, into the entry now: nothing
+    mov [dskw_raw+DSK_R_SIZE], ax   ; below reads the old one, .size stores
+    mov ax, [dwr_end+2]         ; it only when it moved, and .stamp keeps
+    mov [dskw_raw+DSK_R_SIZE+2], ax ; the entry a HELD call's commit will
+                                ; store - so the copy is made once, here
+    test byte [dws_flg], WSQF_HOT   ; a hot record KNOWS the last cluster: no
+    jz .div                     ; walk at all (BP is 1 - its size is the
+    mov ax, [dws_last]          ; allocated end, as an append's always is)
+    jmp short .atclus
+.div:
+%endif
     mov ax, [dwr_off]           ; clusters to skip. One div is enough: the
     mov dx, [dwr_off+2]         ; offset is under 33MB (SPEC.md 18.7), so its
     div bx                      ; high word is under 512, which is at or below
@@ -2998,9 +3475,9 @@ dskw_wabody:
     jcxz .atclus
 .skip:
     call dsk_next_clus_x
-    jc .corrupt                 ; the chain ended before the entry's size said
+    jc .jcor                    ; the chain ended before the entry's size said
     call dskw_clok              ; it would
-    jc .corrupt
+    jc .jcor
     loop .skip
 .atclus:
 %ifndef KERN_SMALL                 ; kern_small only ever arrives by the append
@@ -3012,8 +3489,19 @@ dskw_wabody:
     mov bx, [dskw_src]
     mov es, [dskw_seg]
     call dsk_write_chain_x
-    jc .ioerr
-    jmp short .size
+    jc .jio                     ; a media error, mapped as one: 03h is
+    jmp short .size             ; FERR_WPROT here as on every other write path
+.jio:
+    cmp al, 1                   ; AL = 2 is the CHAIN ending before the size
+    jne .jcor                   ; said: corruption, not [dsk_ioerr]'s last
+    jmp dskw_ioerr              ; (and possibly stale) transfer status
+.jcor:                          ; TWO RELAYS, here where nothing falls in:
+    jmp dskw_rdata.corrupt      ; .corrupt and .badarg above are out of short
+.jbad:                          ; reach of this arm on kern_big, so its five
+    jmp dskw_nbody.badarg       ; refusals were five-byte inverted pairs (-9)
+%else
+.jcor equ .corrupt              ; ...and in reach on kern_small, which is
+.jbad equ .badarg               ; shorter by the INSIDE arm, so no relay there
 %endif
 
     ; --- AT END: allocate, write, flush, link, flush ----------------------
@@ -3021,26 +3509,61 @@ dskw_wabody:
     push ax                     ; the last cluster the file owns; 0 = none
     mov cx, [dskw_len]          ; arm the widget as dskw_wbody does, so a
     xor dx, dx                  ; file-manager copy reports chunk by chunk
-    call KERNEL_SEG:fpg_begin
+    call ct_fpg_begin
     call dskw_wdata             ; the new sub-chain, allocated and written
     jc .rollback
-    call dskw_flush_x           ; ...and durable
-    jc .rollback
+%ifdef DSKW_WSEQ
+    test byte [dws_flg], WSQF_HELD
+    jnz .held
+%endif
     pop ax
+
+    ; --- THE SEAL: the new sub-chain durable, then linked, then the size ---
+    ; in: AX = the file's last cluster (0 = it was empty), [dskw_first] the
+    ; sub-chain's head, dskw_raw the entry. dws_commit calls in HERE with a
+    ; held stream's, so a commit is exactly this tail and never a copy of it.
+    ;
+    ; **ONE FLUSH WHEN ONE SECTOR IS THE WHOLE UPDATE** (SPEC.md 18.4.7.6).
+    ; The two flushes keep the link off the disk until the chain it points
+    ; into is there - which only a MULTI-sector flush can get wrong. So the
+    ; last cluster's own end mark is stored back unchanged first: that puts
+    ; its sector (both, for a FAT12 straddle) in the dirty range without
+    ; changing a byte, and a range that is still ONE sector holds the link and
+    ; every new entry, which a single write lands whole or not at all.
+    ; Otherwise the chain goes alone, then the link.
+.seal:
     mov si, sp                  ; THE SIZE MOVES, whatever SI said: it always
                                 ; does on this arm, and dskw_wdata has just
                                 ; spent SI on the source (it is module-
                                 ; internal and banks nothing). SP is never 0
+    mov dx, DSKW_EOC16          ; the mark it already holds (setfat keeps 12
+    call dskw_setfat            ; bits), stored back UNCHANGED: its sector -
+                                ; both, for a FAT12 straddle - joins the dirty
+                                ; range, and an empty file's 0 is no store at
+                                ; all. No CF test: it fails only when the
+                                ; window will not load, and .link's store is
+                                ; the same load and answers the same way
     mov dx, [dskw_first]
     or ax, ax
-    jz .sethead                 ; the file was empty: the ENTRY takes the
-    call dskw_setfat            ; head. Otherwise the join: last -> first
-    jc .out2
+    jnz .grown
+    mov [dskw_raw+DSK_R_CLUS], dx   ; the file was empty: the ENTRY takes the
+.grown:                         ; head, stored at .size after the chain
+    mov cx, [dsk_fatd0]         ; **ONE FLUSH WHEN ONE SECTOR IS THE WHOLE
+    cmp cx, [dsk_fatd1]         ; UPDATE** (SPEC.md 18.4.7.6): the link and
+    je .link                    ; every new entry share it, and one write
+                                ; lands them whole or not at all. (A store
+                                ; above that MOVED the window flushed the
+                                ; chain first, leaving the link's sector
+                                ; alone: the same one-sector case.)
+    xchg bx, ax                 ; otherwise the chain alone, durable and
+    call dskw_flush_x           ; unreached, first (dskw_flush_x keeps BX
+    jc .rbdrop                  ; and DX)
+    xchg bx, ax
+.link:
+    call dskw_setfat            ; THE link: last -> first. setfat refuses an
+    jc .lnkio                   ; empty file's 0 with CF = 0: no link
     call dskw_flush_x
     jc .out2
-    jmp short .size
-.sethead:
-    mov [dskw_raw+DSK_R_CLUS], dx
 
     ; --- and the SIZE, if it moved (SPEC.md 18.4.7.2) ---------------------
     ; Only ever UP: a write inside the file leaves the entry alone, and a
@@ -3049,22 +3572,86 @@ dskw_wabody:
 .size:
     or si, si
     jz .same
-    mov ax, [dwr_end]
-    mov [dskw_raw+DSK_R_SIZE], ax
+%ifdef DSKW_WSEQ                 ; (the size was copied in at .in)
+    call dskw_ent_tail          ; the single sector write that makes those
+%else                           ; bytes part of the file (18.4): the head and
+    mov ax, [dwr_end]           ; the size, which are all a grow changes -
+    mov [dskw_raw+DSK_R_SIZE], ax   ; and all a HOT record or a commit has
     mov ax, [dwr_end+2]
     mov [dskw_raw+DSK_R_SIZE+2], ax
-    call dskw_ent_store         ; the single sector write that makes those
-    jc .out2                    ; bytes part of the file (18.4)
+    call dskw_ent_store
+%endif
+    jc .out2
 .same:
     call dskw_sync_x
+%ifdef DSKW_WSEQ
+    test byte [dws_flg], WSQF_IN
+    jnz .stamp                  ; after the sync: the token carries its bump
+%endif
     xor ax, ax                  ; ...and CF=0 with it
     ret
 .rollback:
     pop cx                      ; the banked last cluster, into a dead register
+%ifdef DSKW_WSEQ
+    test byte [dws_flg], WSQF_HELD  ; A FAILED HELD CALL LOSES ITSELF AND
+    jz .rbdrop                  ; NOTHING ELSE (SPEC.md 18.4.9), as a failed
+    push ax                     ; APPEND does. Dropping the window would take
+    mov ax, [dskw_first]        ; **ITS OWN SUB-CHAIN FREED FIRST** (SPEC.md
+    call dskw_free_chain        ; 18.4.9.1): never linked, so it is this
+                                ; call's alone, and a flush of it would leak
+                                ; every cluster it took - on a DISK FULL,
+                                ; every free cluster the volume had left
+    call dskw_flush_x           ; the held chain's unflushed allocations with
+    pop ax                      ; it, and the commit would then link the file
+    jnc .rbkept                 ; into clusters the disk calls free. So FLUSH
+    call dws_hlose              ; it: the held chain is unreachable until the
+                                ; commit; this call's own half-built
+                                ; sub-chain is freed above rather than left
+                                ; as lost clusters. Only a
+                                ; flush that ALSO fails loses the stream: it
+                                ; is POISONED, as a lost bank is, so its next
+                                ; call answers FERR_IO rather than appending
+                                ; past what never reached the disk
+%endif
+.rbdrop:
     call dskw_refat             ; drop the half-built sub-chain; it keeps AX
+.rbkept:
     stc
 .out2:
     ret
+.lnkio:                         ; setfat's CF = 1 is a FAT window that would
+    jmp dskw_ioerr              ; not load, with AX still a CLUSTER: map it
+%ifdef DSKW_WSEQ
+    ; --- HELD: an unreachable chain grows; dws_commit links it -------------
+.held:
+    pop ax                      ; the file's last cluster, or the held tail
+    mov dl, 1
+    xchg dl, [dws_hold]
+    or dl, dl
+    jnz .hmore
+    mov [dws_hlink], ax         ; a NEW hold: the link dws_commit will make,
+    add word [dsk_mgen], 2      ; ...and a token no older one can equal: the
+    jmp short .stamp            ; one call that moves nothing else. Its head
+                                ; is [dskw_first], which the record keeps
+.hmore:
+    mov dx, [dskw_first]        ; the held tail -> the new sub-chain: both
+    call dskw_setfat            ; unreachable, so any flush of it is harmless
+    jc .lnkio                   ; (and no sync: nothing the disk shows moved)
+    mov ax, [dws_hfirst]        ; ...and the record goes on naming the HELD
+    mov [dskw_first], ax        ; chain's head, not this call's
+
+    ; --- THE RECORD, after a WRITE_SEQ call that wrote (SPEC.md 18.4.9) ---
+    ; the entry's head and size, where it lives, the last cluster, and the
+    ; volume; the door hands [dsk_mgen] back as the token
+.stamp:
+    mov al, [disk_drive]
+    mov [dws_vol], al
+    mov si, DWS_REC0
+    mov di, dws_rec
+    call dws_load.mv
+    xor ax, ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dskw_commit - write the directory entry that switches the file over
@@ -3084,7 +3671,9 @@ dskw_commit:
     cmp byte [dskw_new], 0
     je .patch
 
-    ; a fresh entry: 32 zero bytes, the name, ARCHIVE, all three stamps
+    ; a fresh entry: 32 zero bytes, the name, the creation stamps. ARCHIVE is
+    ; .patch's, which ORs it onto every file whatever made it - so it is not
+    ; stored here as well, and neither is the access date .patch writes
     mov di, dskw_raw
     mov cx, 16
     xor ax, ax
@@ -3096,9 +3685,8 @@ dskw_commit:
     mov si, dskw_n83
     mov di, dskw_raw
     call dskw_copy11
-    mov byte [dskw_raw+DSK_R_ATTR], DSKW_ARCH
-    cmp byte [dskw_syswr], 0    ; ...or hidden + system, if the kernel is
-    je .notsys1                 ; making one of its own (SPEC.md 19.6)
+    cmp byte [dskw_syswr], 0    ; hidden + system, if the kernel is making
+    je .notsys1                 ; one of its own (SPEC.md 19.6)
     mov byte [dskw_raw+DSK_R_ATTR], DSKW_SYSAT
 .notsys1:
     cmp byte [dskw_isdir], 0     ; a folder is ATTR_DIRECTORY and
@@ -3109,7 +3697,6 @@ dskw_commit:
     mov [dskw_raw+DSK_R_CTIME], ax
     mov ax, [dskw_date]
     mov [dskw_raw+DSK_R_CDATE], ax
-    mov [dskw_raw+DSK_R_ADATE], ax
     call dskw_take_slot         ; adopt the slot dskw_find spotted
 
 .patch:
@@ -3275,7 +3862,10 @@ dskw_find:
     push si
     push di
     push es
-    mov word [dskw_fsec], 0xFFFF
+    mov word [DSKW_FNONE], 0xFFFF   ; NONE, in the HIGH word: no directory
+                                ; sector's LBA reaches FFFFxxxxh, and a low
+                                ; word of FFFFh is an ordinary one past
+                                ; 32MB (SPEC.md 18.7.5)
     mov byte [dskw_fend], 0
     push ss
     pop es
@@ -3284,11 +3874,13 @@ dskw_find:
 .sector:
     call dsk_dirw_get_x ; dsk_secbuf = the next sector (19.2.1)
     jnc .secok
-    or ax, ax
     jz .noent                   ; the directory ended
     jmp short .ioerr
 .secok:
-    mov [dskw_cursec], ax
+    mov [dskw_cursec], ax       ; ...and its high word is the walker's
+                                ; [dsk_c2hi], which nothing moves before the
+                                ; next sector: dskw_hit and dskw_mark_free
+                                ; read it there (SPEC.md 18.7.5)
     mov si, dsk_secbuf
     mov cx, 16                  ; entries per sector
 .entry:
@@ -3303,16 +3895,11 @@ dskw_find:
     je .next                    ; an LFN entry: never matched, never reused
     call dskw_cmp               ; ES:SI vs dskw_n83
     jne .next
-    mov ax, [dskw_cursec]       ; found
-    mov [dskw_dsec], ax
-    mov ax, si
-    sub ax, dsk_secbuf
-    mov [dskw_doff], ax
-    mov di, dskw_raw            ; ...and TAKE THE ENTRY WHILE IT IS HERE.
-    mov cx, 32                  ; dsk_secbuf holds this very sector - we read
-    call dsk_copy_in_x  ; it two instructions ago - and every
-    clc                         ; caller that succeeds here wanted these 32
-    jmp short .out              ; bytes next. dskw_ent_load used to re-read
+    call dskw_hit               ; found - and TAKE THE ENTRY WHILE IT IS HERE.
+                                ; dsk_secbuf holds this very sector - we read
+    clc                         ; it two instructions ago - and every
+    jmp short .out              ; caller that succeeds here wanted these 32
+                                ; bytes next. dskw_ent_load used to re-read
                                 ; the sector to get them, which on the field
                                 ; machine is a whole REVOLUTION: the trace of
                                 ; a 16KB read showed LBA 5 twice, 199 ms of a
@@ -3323,12 +3910,12 @@ dskw_find:
                                 ; which dsk_secbuf could be reused, so there
                                 ; is no invalidation anybody can forget.
 .free:
-    cmp word [dskw_fsec], 0xFFFF
+    cmp word [DSKW_FNONE], 0xFFFF
     jne .next                   ; an earlier slot already won
     call dskw_mark_free
     jmp short .next
 .endmark:
-    cmp word [dskw_fsec], 0xFFFF
+    cmp word [DSKW_FNONE], 0xFFFF
     jne .noent
     call dskw_mark_free
     mov byte [dskw_fend], 1     ; this slot IS the end-of-directory marker
@@ -3342,31 +3929,77 @@ dskw_find:
     stc
     jmp short .out
 .ioerr:
-    call dskw_ioerr
-    stc
-.out:
-    pop es
-    pop di
-    pop si
+    call dskw_ioerr             ; ...which sets CF itself
+.out:                           ; ...AND FIVE OTHER ROUTINES' POP RUN: the
+    pop es                      ; ones that push this order jump to .out,
+.pdi:                           ; .pdi or .pdx (a `pop` writes no flag, so
+    pop di                      ; each one's CF rides through). kernel.asm's
+    pop si                      ; kretc_* ladder pops AX too, which none of
+.pdx:                           ; these may
     pop dx
     pop cx
     pop bx
     ret
 
 ; -----------------------------------------------------------------------------
+; dskw_hit - a scan's MATCH: publish where the entry is and take its 32 bytes
+; in:  SI -> the entry inside dsk_secbuf, [dskw_cursec] = that sector (and
+;      [dsk_c2hi] its high word, the walker's, SPEC.md 18.7.5)
+; out: [dskw_dsec]/[dskw_doff] = its location, dskw_raw = the whole entry
+; clobbers: AX, CX, DI, flags
+;
+; dskw_find and dskw_rt_scan each carried this. Once a scan, on its hit - not
+; once an entry - so the per-entry loops are exactly as they were. 32 and not
+; 11: dsk_copy_in halves the count into words, so 11 would drop a byte.
+; -----------------------------------------------------------------------------
+dskw_hit:
+    mov di, dskw_dsec
+    call dskw_here
+    mov di, dskw_raw
+    mov cx, 32
+    jmp dsk_copy_in_x
+
+; -----------------------------------------------------------------------------
 ; dskw_mark_free - record the current scan position as the free slot
-; in:  [dskw_cursec], SI -> the entry inside dsk_secbuf
+; in:  [dskw_cursec] and [dsk_c2hi], SI -> the entry inside dsk_secbuf
 ; out: [dskw_fsec] / [dskw_foff]
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 dskw_mark_free:
     push ax
+    push di
+    mov di, dskw_fsec
+    call dskw_here
+    pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_here - store the scan's position as a {sector, offset} record
+; in:  DI -> dskw_dsec or dskw_fsec (each is followed by its offset word),
+;      SI -> the entry inside dsk_secbuf, [dskw_cursec] = that sector and
+;      [dsk_c2hi] its high word - the walker's, which nothing between the
+;      sector's read and here moves (SPEC.md 18.7.5)
+; clobbers: AX, flags
+;
+; dskw_hit and dskw_mark_free each carried this, for the two records
+; dskw_ent_store and dskw_take_slot read
+; -----------------------------------------------------------------------------
+%ifdef OS88_BIGVOL
+DSKW_LBASZ   equ 4             ; bytes of an LBA cell (LBARES)
+%else
+DSKW_LBASZ   equ 2
+%endif
+dskw_here:
     mov ax, [dskw_cursec]
-    mov [dskw_fsec], ax
+    mov [di], ax
+%ifdef OS88_BIGVOL
+    mov ax, [dsk_c2hi]
+    mov [di+2], ax
+%endif
     mov ax, si
     sub ax, dsk_secbuf
-    mov [dskw_foff], ax
-    pop ax
+    mov [di+DSKW_LBASZ], ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3399,9 +4032,9 @@ dskw_cmp:
 ; also makes CX genuinely preserved, where before the sites left it holding
 ; 11 - two of the seven are inside a loop whose counter that was.
 ;
-; A plain byte loop, not movsb: ES belongs to the caller's buffer here and
-; must not be reloaded just to move eleven bytes. disk.inc's dsk_ncopy is the
-; loop, and it is the same body four files each used to carry.
+; ES belongs to the caller's buffer here and is not this routine's to
+; reload; disk.inc's dsk_ncopy banks it around its string move, and it is the
+; same body four files each used to carry.
 ; -----------------------------------------------------------------------------
 dskw_copy11:
     push cx
@@ -3427,6 +4060,10 @@ dskw_copy11:
 dskw_take_slot:
     mov ax, [dskw_fsec]
     mov [dskw_dsec], ax
+%ifdef OS88_BIGVOL
+    mov ax, [dskw_fsec+2]
+    mov [dskw_dsec+2], ax
+%endif
     mov ax, [dskw_foff]
     mov [dskw_doff], ax
     mov al, [dskw_fend]
@@ -3445,23 +4082,53 @@ dskw_take_slot:
 ; other sector. [dskw_zapnext] keeps the end-of-directory marker alive when
 ; the entry being written took its place.
 ; -----------------------------------------------------------------------------
+%ifdef DSKW_WSEQ
+; dskw_ent_tail - dskw_ent_store for the entry's LAST SIX BYTES: its head and
+; its size, which are all a grow changes (SPEC.md 18.4.9) and all WRITE_SEQ's
+; record keeps. Same in, out and clobbers
+dskw_ent_tail:
+    push bx
+    mov bx, 0x0300 + DSK_R_CLUS ; BH = words, BL = where they start
+    jmp short dskw_ent_store.go
+%endif
 dskw_ent_store:
     push bx
+%ifdef DSKW_WSEQ
+    mov bx, 0x1000              ; the whole entry: 16 words from byte 0
+.go:
+%endif
     push cx
     push si
     push di
     push es
     push ss
     pop es
-    mov ax, [dskw_dsec]
-    call dsk_rd1_x
+%ifdef DSKW_WSEQ
+    push bx                     ; (DSK_RD1D names its LBA in BX)
+%endif
+    DSK_RD1D dskw_dsec          ; all 32 bits of it (SPEC.md 18.7.5)
+%ifdef DSKW_WSEQ
+    pop bx                      ; `pop` leaves CF alone
+%endif
     jc .ioerr
+%ifdef DSKW_WSEQ
+    xor cx, cx
+    xchg cl, bh                 ; CX = the words, BX = the byte offset
+    lea si, [bx+dskw_raw]       ; DS = kernel, ES = LOW_SEG: a plain movsw
+    mov di, dsk_secbuf          ; (an OFFSET, the ES side: no lea through
+    add di, bx                  ; a LOW_SEG label - SPEC.md 2.1)
+%else
     mov si, dskw_raw            ; DS = kernel, ES = LOW_SEG: a plain movsw
     mov di, dsk_secbuf
-    add di, [dskw_doff]
     mov cx, 16
+%endif
+    add di, [dskw_doff]
     cld
     rep movsw
+%ifdef DSKW_WSEQ
+    or bl, bl                   ; a TAIL store is never a new slot's: no zap,
+    jnz .write                  ; whatever a failed create left in the flag
+%endif
     cmp byte [dskw_zapnext], 0
     je .write
     mov ax, [dskw_doff]
@@ -3472,14 +4139,11 @@ dskw_ent_store:
     mov di, ax
     mov byte [es:di], 0
 .write:
-    mov ax, [dskw_dsec]
-    call dsk_wr1_x
+    DSK_WR1D dskw_dsec
     jc .ioerr
-    clc
-    jmp short .out
+    jmp short .out              ; CF = 0 from the `jc`
 .ioerr:
-    call dskw_ioerr
-    stc
+    call dskw_ioerr             ; ...which sets CF itself
 .out:
     pop es
     pop di
@@ -3511,12 +4175,11 @@ dskw_alloc:
     dec cx                      ; candidates: clusters 2..maxclus
     mov ax, [dsk_rover]
 .try:
-    cmp ax, 2                   ; wrap the rover into range
-    jae .inrange
-    mov ax, 2
-.inrange:
-    cmp ax, [dsk_maxclus]
-    jbe .check
+    cmp ax, [dsk_maxclus]       ; wrap the rover into range: past the last
+    ja .wrap                    ; cluster or below the first, both are 2
+    cmp ax, 2
+    jae .check
+.wrap:
     mov ax, 2
 .check:
     push ax
@@ -3531,33 +4194,26 @@ dskw_alloc:
     jmp short .nospace
 .got:
     pop ax                      ; AX = the free cluster
-    mov dx, DSKW_EOC16
-    cmp byte [dsk_fattype], 0
-    jne .mark
-    mov dx, DSKW_EOC12
-.mark:
+    mov dx, DSKW_EOC16          ; ...on FAT12 too: dskw_setfat keeps the low
+                                ; 12 bits there, which is DSKW_EOC12 exactly
     call dskw_setfat            ; the EOC mark. A cluster we could not MARK is
     jc .iofail                  ; not a cluster we have taken - reporting it as
                                 ; allocated hands the same one out again on the
                                 ; next call, which is the cross-link the commit
                                 ; order exists to make impossible
-    mov bx, ax
-    inc bx
-    mov [dsk_rover], bx         ; next search starts past it
-    clc
+    inc ax
+    mov [dsk_rover], ax         ; next search starts past it (CF = 0: the
+    dec ax                      ; `jc` above, and inc/mov/dec keep it)
     jmp short .out
 .iofail:
-    mov ax, 0xFFFF              ; ...and say WHICH failure it was
-    stc
-    jmp short .out
+    sbb ax, ax                  ; ...and say WHICH failure it was: 0xFFFF,
+    jmp short .out              ; out of the CF the `jc` arrived with, and
+                                ; CF = 1 still (the borrow)
 .nospace:
     xor ax, ax
     stc
 .out:
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp dskw_find.pdx           ; its pop run is ours (a pop writes no flag)
 
 ; -----------------------------------------------------------------------------
 ; dskw_free_chain - zero every FAT entry of a chain
@@ -3577,17 +4233,13 @@ dskw_free_chain:
     mov si, ax
 .loop:
     mov ax, si
-    call dskw_clok
-    jc .done
-    call dsk_next_clus_x ; AX = the link, before we erase it
-    jc .done
-    mov dx, ax
-    mov ax, si
-    push dx
+    call dsk_next_clus_x        ; AX = the link, before we erase it - and CF=1
+    jc .done                    ; for a cluster outside [2, dsk_maxclus], which
+                                ; is dskw_clok's own test: it was asked here
+                                ; first as well, the same answer twice
+    xchg ax, si                 ; SI = the link, AX = this cluster
     xor dx, dx
-    call dskw_setfat            ; free this one
-    pop dx
-    mov si, dx
+    call dskw_setfat            ; free this one (it preserves AX..SI)
     loop .loop
 .done:
     pop si
@@ -3636,25 +4288,21 @@ dskw_setfat:
                                 ; output and cannot carry it
     call dsk_fat_ofs_x  ; BX = window-relative, DX = abs sector
     jc .out                     ; the window would not load: CF straight out
-    mov cx, [dsk_fatseg]
-    mov es, cx
+    mov es, [dsk_fatseg]
     cmp byte [dsk_fattype], 0
     jne .fat16
-    mov ch, al
-    and ch, 1                   ; CH = the cluster's parity
-    mov ax, [es:bx]             ; the straddling word
     and si, 0x0FFF
-    test ch, ch
-    jz .even
+    test al, 1                  ; the cluster's parity, asked BEFORE AX is
+    mov ax, [es:bx]             ; reloaded with the straddling word - `mov`
+    jz .even                    ; leaves the flags alone
     and ax, 0x000F              ; odd cluster: keep the low nibble
     mov cl, 4
     shl si, cl
-    or ax, si
-    jmp short .store
+    jmp short .or
 .even:
     and ax, 0xF000              ; even cluster: keep the high nibble
+.or:
     or ax, si
-.store:
     mov [es:bx], ax
     jmp short .dirty
 .fat16:
@@ -3680,12 +4328,7 @@ dskw_setfat:
     clc
 .out:
     pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_si
 
 ; -----------------------------------------------------------------------------
 ; dskw_dirty - grow the dirty FAT sector range to include AX
@@ -3730,7 +4373,8 @@ dskw_flush_x:
     push es
     mov ax, [dsk_fatd0]
     cmp ax, 0xFFFF
-    je .clean
+    je .done                    ; clean (and .done's re-store of the empty
+                                ; range is a no-op: d1 is 0 whenever d0 is)
     mov bx, [dsk_fatw0]         ; nothing resident: there is no buffer the
     cmp bx, 0xFFFF              ; dirty range could be read out of, and
     je .stale                   ; writing one anyway is what would corrupt
@@ -3764,11 +4408,9 @@ dskw_flush_x:
     pop ax
     jc .ioerr
 .done:
-    mov word [dsk_fatd0], 0xFFFF
-    mov word [dsk_fatd1], 0
-.clean:
-    xor ax, ax
-    clc
+    xor ax, ax                  ; (CF = 0 with it)
+.reset:                         ; the range is EMPTY now, whichever way out
+    call dskw_fatclean          ; (it leaves CF alone)
     jmp short .out
 .stale:
                                 ; The dirty range and the window have parted -
@@ -3779,14 +4421,11 @@ dskw_flush_x:
                                 ; bytes we cannot vouch for to both FAT copies,
                                 ; and the caller's rollback (dskw_refat) drops
                                 ; the window, which is exactly the right answer
-    mov word [dsk_fatd0], 0xFFFF
-    mov word [dsk_fatd1], 0
     mov ax, FERR_IO
     stc
-    jmp short .out
+    jmp short .reset
 .ioerr:
-    call dskw_ioerr
-    stc
+    call dskw_ioerr             ; ...which sets CF itself
 .out:
     pop es
     pop dx
@@ -3816,46 +4455,56 @@ dskw_flush_x:
 ; -----------------------------------------------------------------------------
 dskw_refat:
     mov word [dsk_fatw0], 0xFFFF
-    mov word [dsk_fatd0], 0xFFFF
-    mov word [dsk_fatd1], 0
-    ret
+dskw_fatclean:                  ; ...the dirty range EMPTY, which is the half
+    mov word [dsk_fatd0], 0xFFFF ; dskw_flush_x ends every way out with and
+    mov word [dsk_fatd1], 0     ; disk_mount_x starts with: `mov` only, so
+    ret                         ; every flag (CF above all) comes back as sent
 
 ; -----------------------------------------------------------------------------
 ; dskw_ioerr - map the last int 13h status to an error code
 ; in:  [dsk_ioerr] (set by the failing dsk_xfer)
-; out: AX = FERR_WPROT if the media is write-protected, else FERR_IO
-; clobbers: AX (the output)
+; out: AX = FERR_WPROT if the media is write-protected, else FERR_IO, and
+;      CF = 1 - so a caller's `call dskw_ioerr / stc / ret` is a `jmp`
+; clobbers: AX (the output), CF
 ; -----------------------------------------------------------------------------
 dskw_ioerr:
     mov ax, FERR_IO
     cmp byte [dsk_ioerr], 0x03
     jne .out
-    mov ax, FERR_WPROT
+    mov al, FERR_WPROT          ; (AH is 0 from the line above)
 .out:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_stage - stage a partial final sector, zero-filled, into dsk_secbuf
-; in:  ES:SI = the caller's remaining bytes, CX = their count (1..512)
-; out: nothing (all registers preserved)
+; dskw_wone / dskw_rone - ONE sector through dsk_secbuf, at [dskw_clba]
+; in:  CX = the live bytes (1..512), at [dskw_wseg]:[dskw_src]
+; out: CF = 1 an I/O error (dskw_ioerr maps it); CX and SI preserved
+; clobbers: AX, BX, DI, ES, flags
 ;
-; DS becomes the caller's buffer segment for the move, so NO kernel
-; variable is readable in the body - the dsk_copy_in discipline (SPEC.md
-; 18). The zero fill is what keeps whatever sits past the caller's buffer
-; off the disk.
+; The staged-sector arm of dskw_wdata and dskw_rdata, and each one's partial
+; final sector: four sites that each loaded the caller's segment and offset,
+; called a copier, set ES back and spelt the one-sector transfer. They were a
+; stager and a fetcher that took ES:SI from the caller; they are the whole
+; step now, which is what all four sites were writing out around them.
+;
+; dskw_wone stages the bytes ZERO-FILLED - so whatever sits past the caller's
+; buffer never reaches the disk - and writes the scratch. DS is the caller's
+; buffer segment for the move, so NO kernel variable is readable between the
+; `mov ds` and the `pop ds`: the dsk_copy_in discipline (SPEC.md 18).
+; dskw_rone reads the scratch and copies only the live bytes up, so no
+; memory past EOF reaches the caller - and there is nothing to zero, the
+; buffer being the caller's.
 ; -----------------------------------------------------------------------------
-dskw_stage:
-    push ax
+dskw_wone:
     push cx
     push dx
     push si
-    push di
     push ds
-    push es
     mov dx, 512
     sub dx, cx                  ; DX = bytes to zero after the copy
-    push es
-    pop ds                      ; DS:SI = the caller's bytes
+    mov si, [dskw_src]          ; (read through the KERNEL's DS, before...)
+    mov ds, [dskw_wseg]         ; ...DS:SI = the caller's bytes
     push ss
     pop es
     mov di, dsk_secbuf
@@ -3864,25 +4513,24 @@ dskw_stage:
     mov cx, dx
     xor al, al
     rep stosb
-    pop es
     pop ds
-    pop di
+    DSK_WR1D dskw_clba          ; ES = LOW_SEG already: the scratch goes out
     pop si
     pop dx
     pop cx
-    pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; dskw_fetch - copy a file's live tail bytes out of dsk_secbuf
-; in:  ES:DI = the caller's destination, CX = byte count (1..512)
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-dskw_fetch:
-    push ax
+dskw_rone:
+    push ss
+    pop es
     push cx
+    DSK_RD1D dskw_clba          ; the sector, whole, into the scratch
+    pop cx
+    jc .out
     push si
-    push di
+    push cx
+    mov es, [dskw_wseg]         ; ES:DI = the caller's destination
+    mov di, [dskw_src]
     push ds
     push ss
     pop ds
@@ -3890,10 +4538,9 @@ dskw_fetch:
     cld
     rep movsb                   ; DS:SI -> ES:DI
     pop ds
-    pop di
-    pop si
     pop cx
-    pop ax
+    pop si                      ; CF = 0 from the `jc`, which nothing since
+.out:                           ; has touched
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3908,34 +4555,30 @@ dskw_now:
     push bx
     push cx
     call KERNEL_SEG:cw_clk_snapshot ; read the fields the SPEC.md 37 way
-    xor ah, ah
-    mov al, [clk_sn_hour]
-    mov cl, 11
-    shl ax, cl
-    mov bl, [clk_sn_min]
-    xor bh, bh
-    mov cl, 5
-    shl bx, cl
-    or ax, bx
+    mov al, [clk_sn_hour]       ; Horner's rule, one field at a time: shift
+    cbw                         ; what is there up by the next field's width
+    mov bl, [clk_sn_min]        ; and OR it in (.pk) - every field is below
+    mov cl, 6                   ; its width, so the OR is an add
+    call .pk                    ; hour:minute
     mov bl, [clk_sn_sec]
-    xor bh, bh
-    shr bx, 1
-    or ax, bx
+    shr bl, 1                   ; FAT keeps seconds in twos
+    dec cx                      ; CL = 5 (.pk leaves CL alone)
+    call .pk
     mov [dskw_time], ax
     mov ax, [clk_sn_year]
     sub ax, 1980
-    mov cl, 9
-    shl ax, cl
     mov bl, [clk_sn_mon]
-    xor bh, bh
-    mov cl, 5
-    shl bx, cl
-    or ax, bx
+    mov cl, 4
+    call .pk
     mov bl, [clk_sn_day]
-    xor bh, bh
-    or ax, bx
+    inc cx                      ; CL = 5
+    call .pk
     mov [dskw_date], ax
     jmp kretc_cx
+.pk:
+    shl ax, cl
+    or al, bl
+    ret
 
 ; -----------------------------------------------------------------------------
 ; dskw_name83 - display name -> the raw 11-byte FAT name field
@@ -3954,7 +4597,8 @@ dskw_name83:
     push ax
     push bx
     push cx
-    push si
+    push dx                     ; DX banked only so the exit is kretc_di's
+    push si                     ; rung: one byte here against six of pops
     push di
     cld
     mov cx, 11                  ; the field starts as eleven spaces
@@ -3968,21 +4612,17 @@ dskw_name83:
 .stem:
     lodsb
     test al, al
-    jz .stem_end
+    jz .ext_end                 ; ...whose test - an empty name - is .ext_end's
     cmp al, '.'
     je .dot
     call dskw_char_x            ; upcase + legality
     jc .bad
     cmp cx, 8
     jae .bad                    ; a ninth stem character
-    mov bx, di
-    add bx, cx
-    mov [bx], al
+    mov bx, cx                  ; [bx+di]: the count IS the column
+    mov [bx+di], al
     inc cx
     jmp short .stem
-.stem_end:
-    jcxz .bad                   ; an empty name
-    jmp short .ok
 .dot:
     jcxz .bad                   ; ".TXT" has no stem
     xor cx, cx
@@ -3994,25 +4634,18 @@ dskw_name83:
     jc .bad                     ; a second '.' lands here too
     cmp cx, 3
     jae .bad
-    mov bx, di
-    add bx, cx
-    mov [bx+8], al
+    mov bx, cx
+    mov [bx+di+8], al
     inc cx
     jmp short .ext
 .ext_end:
-    jcxz .bad                   ; a trailing dot with no extension
-.ok:
-    clc
+    jcxz .bad                   ; a trailing dot with no extension (or, from
+    clc                         ; .stem, no name at all)
     jmp short .out
 .bad:
     stc
 .out:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_di
 
 ; -----------------------------------------------------------------------------
 ; dskw_char - one short-name character: upper-case it, or reject it
@@ -4078,15 +4711,13 @@ dskw_char_x:
 ; SPEC.md 18.96), so nothing a package can name changed and one .o88 still
 ; serves both kernels.
 ;
-; A HIGH-LEVEL format: the boot sector, both FATs and the root directory, and
-; nothing else. int 13h AH=05h - writing sector ID fields - is deliberately
-; absent, and the line is the same one SPEC.md 52.3 draws for the hard disk
-; with a sharper edge here: a surface format is the operation that turns a
-; disk this OS merely cannot read into one NOTHING can read, and every disk
-; this feature exists for is already perfectly readable.
-;
-; So 12 sectors on a 360KB disk and 33 on a 1.44MB one, all of them metadata,
-; and the data area is never touched.
+; Every TRACK is laid down first with int 13h AH=05h (dskw_fmt_low, SPEC.md
+; 18.96.3), and then the boot sector, both FATs and the root directory - 12
+; sectors on a 360KB disk and 33 on a 1.44MB one - over the tracks just laid.
+; It used to be that second half alone, on the argument that a surface format
+; turns a disk this OS cannot read into one nothing can; every disk anybody
+; actually brought to it was one it could not read, so that was the wrong
+; way round.
 ; =============================================================================
 
 ; --- the four standard IBM formats (SPEC.md 18.96) ---------------------------
@@ -4097,15 +4728,25 @@ dskw_char_x:
 ; 1.44MB's FAT is 9 sectors = DSK_FAT_SECS exactly, and SPEC.md 18.2 rule 10
 ; refuses a floppy whose FAT is larger - so the biggest thing this can write
 ; is the biggest thing that can be mounted, by construction.
-DFMT_SPT     equ 0              ; word: sectors per track (the MEDIUM's)
-DFMT_CYL     equ 2              ; word: cylinders (the DRIVE's - see the probe)
-DFMT_TOT     equ 4              ; word: BPB_TotSec16 = spt * 2 * cyl
-DFMT_SPC     equ 6              ; byte: BPB_SecPerClus
-DFMT_MEDIA   equ 7              ; byte: BPB_Media
-DFMT_FATSZ   equ 8              ; word: BPB_FATSz16
-DFMT_ROOTN   equ 10             ; word: BPB_RootEntCnt
-DFMT_KB      equ 12             ; word: the size the confirmation says
+;
+; **A ROW IS THE BPB ITSELF**, bytes 13 to 25 of the boot sector in the boot
+; sector's own order - so dskw_fmt_boot lays a row down with ONE copy where it
+; used to load and store six fields and three constants - plus the cylinder
+; count the BPB does not carry. The size the confirmation says is TOT/2.
+DFMT_SPC     equ 0              ; byte: BPB_SecPerClus
+DFMT_RSVD    equ 1              ; word: BPB_RsvdSecCnt (1, every row)
+DFMT_NFATS   equ 3              ; byte: BPB_NumFATs (2, every row)
+DFMT_ROOTN   equ 4              ; word: BPB_RootEntCnt
+DFMT_TOT     equ 6              ; word: BPB_TotSec16 = spt * 2 * cyl
+DFMT_MEDIA   equ 8              ; byte: BPB_Media
+DFMT_FATSZ   equ 9              ; word: BPB_FATSz16
+DFMT_SPT     equ 11             ; word: BPB_SecPerTrk (the MEDIUM's)
+DFMT_BPB     equ 13             ; ...the BPB span ends here
+DFMT_CYL     equ 13             ; byte: cylinders (the DRIVE's - see the probe)
 DFMT_SIZE    equ 14
+%if DFMT_RSVD != DSK_B_RSVD-DSK_B_SPC || DFMT_NFATS != DSK_B_NFATS-DSK_B_SPC || DFMT_ROOTN != DSK_B_ROOTN-DSK_B_SPC || DFMT_TOT != DSK_B_TOT16-DSK_B_SPC || DFMT_MEDIA != DSK_B_MEDIA-DSK_B_SPC || DFMT_FATSZ != DSK_B_FATSZ-DSK_B_SPC || DFMT_SPT != DSK_B_SPT-DSK_B_SPC || DFMT_BPB != DSK_B_HEADS-DSK_B_SPC
+  %error "a dskw_fmt_tab row is the BPB from BPB_SecPerClus to BPB_SecPerTrk, byte for byte: dskw_fmt_boot copies it whole"
+%endif
 
 DFMT_ROWS    equ 4
 
@@ -4118,7 +4759,6 @@ FME_LINE    equ 3               ; the status line's own composer (SPEC.md
                                 ; swap prompt and the two verdicts letter is
                                 ; in THIS FILE now, read through CS
 FM_NENT     equ 4
-FMFP        equ mod_fp + MOD_FMT * MODFP_STRIDE
 
 %ifndef KD_BUILD                    ; **NO MODULE UNDER kern_dos** (SPEC.md
                                     ; 96.43): `mod_need` is not in that root,
@@ -4141,7 +4781,6 @@ modf_hdr:
     dw modf_e_format            ; is reached by `call far`, so it has to end
     dw modf_e_reach             ; in a retf, and every body below keeps the
     dw modf_e_line              ; near `ret` cold code has always had
-    times MOD_NENT - FM_NENT dw 0
 
 modf_e_probe:   call dskw_fmt_probe_x
             retf
@@ -4169,35 +4808,6 @@ dskw_fmt_ioerr:
 .out:
     ret
 
-section .text                   ; DATA, so back to the kernel segment: cold
-                                ; code reads it through DS (SPEC.md 2.6), and
-                                ; a `dw` left on the cold side of this toggle
-                                ; is read at the wrong segment with NO
-                                ; diagnostic - which is exactly what this
-                                ; table did on its first run, and it showed
-                                ; as a confirmation offering to format a
-                                ; 360KB floppy "as 14594K"
-dskw_fmt_tab:
-    dw 18, 80, 2880
-    db 1, 0xF0
-    dw 9, 224, 1440             ; 1.44MB
-    dw 15, 80, 2400
-    db 1, 0xF9
-    dw 7, 224, 1200             ; 1.2MB
-    dw 9, 80, 1440
-    db 2, 0xF9
-    dw 3, 112, 720              ; 720KB
-    dw 9, 40, 720
-    db 2, 0xFD
-    dw 2, 112, 360              ; 360KB
-
-    ; the caller's live geometry, banked across dskw_fmt_probe_x's reads and put
-    ; back by its .undo. Three words rather than a constant, because the probe
-    ; is no longer only ever run over a volume that failed to mount (see .undo)
-dskw_fmt_bspt:  dw 9
-dskw_fmt_bhds:  dw 2
-dskw_fmt_btot:  dw 0
-section .modf                   ; ...and back to the image
 
 ; -----------------------------------------------------------------------------
 ; dskw_fmt_row_x - a table row's address (module-internal)
@@ -4207,15 +4817,52 @@ section .modf                   ; ...and back to the image
 ; -----------------------------------------------------------------------------
 dskw_fmt_row_x:
     push ax
-    push dx
-    xor ah, ah
-    mov dx, DFMT_SIZE
-    mul dx
-    mov si, dskw_fmt_tab
-    add si, ax
-    pop dx
+    mov ah, DFMT_SIZE
+    mul ah                      ; AX = AL * DFMT_SIZE (AL <= 3)
+    add ax, dskw_fmt_tab
+    xchg si, ax
     pop ax
     ret
+
+; The four standard IBM formats - IN THE IMAGE, and read through CS like its
+; strings (SPEC.md 2.8.6). They were `.text`, 56 resident bytes on every
+; machine, because CLONE.DRV sized a disk image against the same rows; the
+; cloner carries its own four (size, spt) pairs now (clo_geom_img), and
+; nothing but this image reads a row.
+;
+;        SPC RSVD NFATS ROOTN  TOT  MEDIA FATSZ SPT         CYL
+dskw_fmt_tab:
+    db 1
+    dw 1
+    db 2
+    dw 224, 2880
+    db 0xF0
+    dw 9, 18
+    db 80                       ; 1.44MB
+    db 1
+    dw 1
+    db 2
+    dw 224, 2400
+    db 0xF9
+    dw 7, 15
+    db 80                       ; 1.2MB
+    db 2
+    dw 1
+    db 2
+    dw 112, 1440
+    db 0xF9
+    dw 3, 9
+    db 80                       ; 720KB
+    db 2
+    dw 1
+    db 2
+    dw 112, 720
+    db 0xFD
+    dw 2, 9
+    db 40                       ; 360KB
+%if $ - dskw_fmt_tab != DFMT_ROWS * DFMT_SIZE
+  %error "dskw_fmt_tab's rows are DFMT_SIZE bytes"
+%endif
 
 ; =============================================================================
 ; The formatter's own STRINGS and the composer that letters them (SPEC.md
@@ -4301,8 +4948,7 @@ dskw_fmt_sizeable:
     jc .nopop
     cmp byte [bx+DV_UNIT], 2    ; ...on an EXTERNAL drive, and only there
     jb .nopop
-    pop bx
-    clc
+    pop bx                      ; (CF = 0 from the `jb`)
     ret
 .nopop:
     pop bx
@@ -4362,7 +5008,8 @@ dskw_fmt_line_x:
     call dskw_fmt_cat
     mov al, [fm_fmtrow]
     call dskw_fmt_row_x         ; SI = the row it is about to write
-    mov ax, [si+DFMT_KB]
+    mov ax, [cs:si+DFMT_TOT]    ; ...in sectors, so the KB are half of it
+    shr ax, 1
     call COLD_SEG:fmf_fm_utoa   ; the one thing this image does NOT carry: a
                                 ; decimal formatter is real code and a second
                                 ; copy of it is a second thing to be wrong
@@ -4392,8 +5039,7 @@ dskw_fmt_line_x:
 .swap:
     mov si, dskf_s_swap
 .tail:
-    call dskw_fmt_cat
-    mov byte [di], 0
+    call dskw_fmt_cat           ; ...which stores the NUL and leaves DI on it
     pop si
     pop cx
     pop bx
@@ -4443,13 +5089,6 @@ dskw_fmt_probe_x:
     push di
     push es
 
-    ; the three words .try writes, banked before anything is aimed anywhere
-    mov ax, [disk_spt]
-    mov [dskw_fmt_bspt], ax
-    mov ax, [disk_heads]
-    mov [dskw_fmt_bhds], ax
-    mov ax, [dsk_totsec]
-    mov [dskw_fmt_btot], ax
 
     ; --- is it a floppy at all? (SPEC.md 18.7: DV_KIND is the TRANSPORT,
     ;     and a BIOS unit below 80h is the MEDIUM - disk_mount's own test)
@@ -4468,6 +5107,11 @@ dskw_fmt_probe_x:
                                 ; a failed mount - and a fill would cache
                                 ; sectors read under a TRIAL geometry, keyed
                                 ; as if the real one had read them
+    push word [disk_spt]        ; ...and the three words .try writes, banked
+    push word [disk_heads]      ; on the stack until .got2 puts them back -
+    push word [dsk_totsec]      ; the probe leaves NO geometry behind (see
+                                ; there). After the refusals: none of them
+                                ; has aimed anything anywhere yet
 
     ; --- the DRIVE's own idea of itself, before anything is read -----------
     ; DI = its cylinders, SI = its sectors per track. int 13h AH=08h is the
@@ -4500,6 +5144,13 @@ dskw_fmt_probe_x:
     inc ax
     mov di, ax                  ; DI = its cylinders
     jmp short .geom
+.noflop:                        ; (HERE, a hop from the three tests at the top
+    mov ax, FERR_PROT           ; that jump to it, rather than past the whole
+    jmp .stcpop                 ; routine) a hard-disk partition is HDDTOOL's
+                                ; (52.2), refused BEFORE the cache bypass went
+                                ; up - and the probe's ONLY refusal now: a
+                                ; medium that nothing reads is formatted, not
+                                ; refused (SPEC.md 18.96.3)
 .nogeom:
     mov di, 40                  ; no usable answer is a 360KB machine - and
     mov si, 9                   ; these are SET here, not left standing from
@@ -4513,8 +5164,8 @@ dskw_fmt_probe_x:
     ; Starting at the drive's own figure rather than at 18 is what keeps a
     ; 360KB machine - the one this project is calibrated against - from
     ; paying two doomed reads it can never need.
-    mov ax, LOW_SEG
-    mov es, ax
+    push ss                     ; ES = LOW_SEG, which SS always is
+    pop es
     xor cx, cx                  ; CX = the row walker, and the answer
 .row:
     call .try
@@ -4522,9 +5173,25 @@ dskw_fmt_probe_x:
     inc cx
     cmp cx, DFMT_ROWS
     jb .row
-    call .undo                  ; nothing answered: there is no medium here
-    mov ax, FERR_IO             ; that this can read, so there is none it can
-    jmp short .fail             ; safely write either
+    ; NOTHING ANSWERED, and that is not a refusal any more (SPEC.md
+    ; 18.96.3). It used to be FERR_IO - "no medium here this can read, so
+    ; none it can safely write either" - which was true of a formatter that
+    ; only ever rewrote METADATA over sectors that had to exist already. Now
+    ; that every format lays the tracks down itself, an unreadable disk is
+    ; exactly the one it exists for: a 1.44MB disk taped for a 250 kbps
+    ; drive, whose HD recording nothing here can read; a disk whose ID
+    ; fields are damaged; a medium formatted for another machine. What it
+    ; gets is what the DRIVE makes - the same answer DOS's FORMAT gives -
+    ; so the row is chosen from SI (its sectors per track) and, for the
+    ; 9-sector pair, DI (its cylinders) by the code below, exactly as a
+    ; readable 9-sector disk's is.
+    mov cx, 2                   ; the 9-sector pair, 720K or 360K below...
+    cmp si, 15
+    jb .got
+    dec cx                      ; ...1.2MB on the 5.25" HD drive...
+    cmp si, 18
+    jb .got
+    dec cx                      ; ...and 1.44MB on the 3.5" one
 .got:
 
     ; --- the row: how many CYLINDERS? ---------------------------------------
@@ -4558,33 +5225,25 @@ dskw_fmt_probe_x:
     je .got2
     mov al, 2                   ; 720KB
 .got2:
-    push ax
-    call .undo                  ; the probe leaves NO geometry behind
-    pop ax
+    pop word [dsk_totsec]       ; THE PROBE LEAVES NO GEOMETRY BEHIND: .try
+    pop word [disk_heads]       ; wrote these three to aim its reads, and they
+    pop word [disk_spt]         ; go back as they came in (the account is the
+                                ; paragraph below .try)
 .done:
     dec byte [dsk_rah_busy]
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
+.clcpop:                        ; ...and the module's ONE pop run, for
+    clc                         ; dskw_format_x and dskw_fmt_reach_x too:
+    jmp short .pop6             ; they push the same six
 
-.noflop:
-    mov ax, FERR_PROT           ; a hard-disk partition is HDDTOOL's (52.2);
-    jmp short .fail_nb          ; refused BEFORE the cache bypass went up
-.fail:
-    dec byte [dsk_rah_busy]
-.fail_nb:
+.stcpop:
+    stc
+.pop6:                          ; (a pop writes no flag)
     pop es
     pop di
     pop si
     pop dx
     pop cx
     pop bx
-    stc
     ret
 
     ; --- one candidate: can CHS (0,0,spt) be read? -------------------------
@@ -4607,17 +5266,17 @@ dskw_fmt_probe_x:
     mov dx, si                  ; DX = the drive's spt, before SI becomes the
     mov al, cl                  ; row
     call dskw_fmt_row_x
-    mov ax, [si+DFMT_SPT]
+    mov ax, [cs:si+DFMT_SPT]
     cmp ax, dx
     ja .try_no
     mov [disk_spt], ax
     mov word [disk_heads], 2
-    mov dx, [si+DFMT_TOT]       ; §18.95's read-ahead clamps its fill against
+    mov dx, [cs:si+DFMT_TOT]    ; §18.95's read-ahead clamps its fill against
     mov [dsk_totsec], dx        ; the volume's extent, and a failed mount
                                 ; leaves whatever the last good one set. It
                                 ; only ever shortens a fill, so a stale value
                                 ; cannot read wrong bytes - but it can make
-                                ; the probe's own surplus meaningless. .undo
+                                ; the probe's own surplus meaningless. .got2
                                 ; puts the caller's back, and a format's own
                                 ; mount re-derives it from the BPB regardless
     dec ax                      ; LBA spt-1 = CHS (0,0,spt) under this spt
@@ -4635,7 +5294,7 @@ dskw_fmt_probe_x:
     pop ax
     ret
 
-    ; --- put the fallback geometry back ------------------------------------
+    ; --- why the geometry is banked and put back (.got2) ------------------
     ; The probe writes [disk_spt]/[disk_heads] to aim its reads, and it must
     ; not leave them written: its caller may ARM a confirmation and then be
     ; cancelled, and until the next mount those words are what any raw
@@ -4654,16 +5313,6 @@ dskw_fmt_probe_x:
     ; nothing at all to say so. Banking is two words more than the constant was
     ; and it is right whichever way the caller arrived. dskw_format_x sets the
     ; row's geometry itself and owes this nothing.
-.undo:
-    push ax
-    mov ax, [dskw_fmt_bspt]
-    mov [disk_spt], ax
-    mov ax, [dskw_fmt_bhds]
-    mov [disk_heads], ax
-    mov ax, [dskw_fmt_btot]
-    mov [dsk_totsec], ax
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; dskw_format_x - lay a fresh FAT12 volume on the floppy in [disk_drive]
@@ -4699,111 +5348,258 @@ dskw_format_x:
     push di
     push es
 
-    call dskw_fmt_row_x           ; SI = the row, live for the whole routine
-    mov ax, [si+DFMT_SPT]
+    call dskw_fmt_row_x         ; SI = the row, IN THIS IMAGE, live throughout
+    mov ax, [cs:si+DFMT_SPT]
     mov [disk_spt], ax
     mov word [disk_heads], 2
-    mov ax, [si+DFMT_TOT]       ; ...and the extent §18.95's fill clamps to,
+    mov ax, [cs:si+DFMT_TOT]    ; ...and the extent §18.95's fill clamps to,
     mov [dsk_totsec], ax        ; for dskw_fmt_probe_x's reason
 
-    ; --- 1. the boot sector, at LBA 0 --------------------------------------
-    call dskw_fmt_boot
-    xor ax, ax
-    call dskw_fmt_put
+    ; --- 0. every TRACK, laid down fresh (SPEC.md 18.96.3) -----------------
+    call dskw_fmt_low
     jc .ioerr
 
-    ; --- 2. FAT1 and FAT2 ---------------------------------------------------
+    ; --- 1-3. every METADATA sector, in LBA order --------------------------
+    ; The boot sector at 0, FAT1 from 1, FAT2 from BX, the root directory
+    ; after it - ONE walk, each sector zeroed and then given what it holds.
     ; Sector 0 of a FAT is the only one with content in it - the media byte
-    ; and an EOC mark - so it is built once and written to the head of each
-    ; copy, and everything after it is the zeroed scratch.
-    mov di, 1                   ; DI = the LBA walker, past the reserved
-    mov cx, 2                   ; sector. CX = FAT copies left
-.fat:
-    push cx
-    call dskw_fmt_zero
-    push es                     ; dsk_secbuf is .lowbss - LOW_SEG, reached
-    mov ax, LOW_SEG             ; through ES and NEVER through DS (SPEC.md
-    mov es, ax                  ; 2.1). Without the override these three
-    mov al, [si+DFMT_MEDIA]     ; stores land in KERNEL_SEG at the same
-    mov [es:dsk_secbuf+0], al   ; offset, which is kernel code: the FAT went
-    mov byte [es:dsk_secbuf+1], 0xFF    ; out all zeros and three bytes of the
-    mov byte [es:dsk_secbuf+2], 0xFF    ; kernel were overwritten, neither of
-    pop es                      ; which announced itself
-                                ; entry 0 is the media byte then all ones,
-                                ; entry 1 the EOC mark - what a host fsck
-                                ; reads back to identify the volume
-    mov ax, di
-    call dskw_fmt_put
-    pop cx
-    jc .ioerr
-    inc di
-    push cx
-    call dskw_fmt_zero          ; ...and the rest of this copy, all zeros
-    mov cx, [si+DFMT_FATSZ]
-    dec cx                      ; sector 0 is done
-    call dskw_fmt_run
-    pop cx
-    jc .ioerr
-    loop .fat
-
-    ; --- 3. the root directory ----------------------------------------------
-    ; Zeroed whole: 0x00 in a name byte is "this entry and every one after it
-    ; is free", which is what disk_mount's walk stops on.
-    call dskw_fmt_zero
-    mov cx, [si+DFMT_ROOTN]
-    mov ax, cx
+    ; then all ones (entry 0), and entry 1's EOC mark - which is what a host
+    ; fsck reads back to identify the volume. The root is zeroed whole: 0x00
+    ; in a name byte is "this entry and every one after it is free", which is
+    ; what disk_mount's walk stops on. The boot sector going FIRST and the
+    ; root directory LAST is the header's order and is kept by walking up.
+    mov bx, [cs:si+DFMT_FATSZ]
+    inc bx                      ; BX = FAT2's first sector (FAT1's is 1)
+    mov ax, [cs:si+DFMT_ROOTN]
     mov cl, 4
     shr ax, cl                  ; RootDirSectors = RootEntCnt/16, and every
-    mov cx, ax                  ; row here is a multiple of 16 by construction
-    call dskw_fmt_run
-    jc .ioerr
-
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
+    add ax, bx                  ; row here is a multiple of 16 by construction
+    add ax, bx
+    dec ax                      ; 1 + 2*FATSZ + RootDirSectors...
+    xchg dx, ax                 ; ...DX = the first sector past the root
+    xor di, di                  ; DI = the LBA
+.meta:
+    call dskw_fmt_zero          ; ...and ES = LOW_SEG, where dsk_secbuf is
+                                ; (.lowbss, SPEC.md 2.1): every store below is
+                                ; `es:`, and without it one lands in the
+                                ; KERNEL at the same offset - which is exactly
+                                ; how a FAT once went out all zeros
+    or di, di
+    jnz .notboot
+    push bx                     ; --- the boot sector -----------------------
+    mov di, dsk_secbuf          ; Byte for byte what tools/os88disk.py's
+    mov bx, dskw_fmt_jmp        ; boot_sector() writes for a data floppy,
+    mov cx, DFMT_T1             ; which is what makes a formatted disk and a
+    call dskw_fmt_cpy           ; built image the same kind of object: the
+    mov bx, si                  ; jump, 'MSDOS5.0' and BPB_BytsPerSec; the
+    mov cl, DFMT_BPB            ; ROW, which IS the BPB from SecPerClus to
+    call dskw_fmt_cpy           ; SecPerTrk; then the heads, BootSig 0x29 and
+    mov bx, dskw_fmt_t2         ; a volume id, 'FAT12   ' and the
+    mov cl, DFMT_T2             ; not-bootable stub. Every byte past the stub
+    call dskw_fmt_cpy           ; is the zeroed scratch's.
+    mov word [es:dsk_secbuf+510], 0xAA55    ; rule 1's signature, last
     pop bx
-    clc
-    ret
-.ioerr:
-    call dskw_fmt_ioerr             ; AX = FERR_IO / FERR_WPROT
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; dskw_fmt_run - write CX copies of the staged sector from LBA DI up
-; in:  CX = sectors (0 is legal and writes nothing), DI = first LBA,
-;      dsk_secbuf staged
-; out: CF=0 and DI past them; CF=1 = I/O. Clobbers DI, CX, flags
-;
-; One sector per call, because disk_write advances ES:BX per sector and one
-; 512-byte buffer cannot cover a run of identical ones. A 1.44MB format is 33
-; of these and a 360KB one is 12, which is what a format costs.
-; -----------------------------------------------------------------------------
-dskw_fmt_run:
-    jcxz .out
-.next:
-    push cx
+    xor di, di
+    jmp short .put
+.notboot:
+    cmp di, 1
+    je .head                    ; FAT1's first sector...
+    cmp di, bx
+    jne .put                    ; ...or FAT2's
+.head:
+    mov al, [cs:si+DFMT_MEDIA]
+    mov [es:dsk_secbuf], al
+    mov word [es:dsk_secbuf+1], 0xFFFF
+.put:
     mov ax, di
     call dskw_fmt_put
-    pop cx
-    jc .out
+    jc .ioerr
     inc di
-    loop .next
-    clc
+    cmp di, dx
+    jb .meta
+    jmp dskw_fmt_probe_x.clcpop ; the same six pops
+.ioerr:
+    call dskw_fmt_ioerr             ; AX = FERR_IO / FERR_WPROT
+    jmp dskw_fmt_probe_x.stcpop
+
+;-----------------------------------------------------------------------------
+; dskw_fmt_low - lay every track of the row in SI down fresh (SPEC.md 18.96.3)
+; in:  SI = a dskw_fmt_tab row, [disk_drive] = the volume (a BIOS floppy: the
+;      probe refused anything else); UI task, gfx lock held
+; out: CF=0; CF=1 with [dsk_ioerr] = the BIOS status of the call that failed
+; clobbers: AX, flags
+;
+; int 13h AH=05h, one call per track with a four-byte (C, H, R, N) address
+; field per sector - which is what DOS's FORMAT does and what 18.96 once
+; refused to, on the grounds that it can turn a disk this OS merely cannot
+; read into one nothing can. That was the wrong way round for the disks
+; people actually bring to a formatter: every one this OS could not reclaim
+; was a disk it could not READ - HD recording taped for a DD drive, ID
+; fields a failed write had damaged, a foreign filesystem on HD media - and
+; only new tracks reclaim those. Laid at the row's own geometry, the result
+; is a disk this drive reads by construction.
+;
+; **The track's sector count reaches the controller through the DPT**, not
+; AL: the IBM ROM's FORMAT takes SC out of byte 4 (EOT) and the gap and
+; fill out of bytes 7 and 8, so byte 4 is written for this row first, as
+; dsk_xfer writes it before every transfer. On an AT-class BIOS, AH=18h
+; (SET MEDIA TYPE FOR FORMAT) is asked first and its table used instead -
+; that is the call that picks the DATA RATE, and a 720KB format in a 1.44MB
+; drive at the wrong rate is not a 720KB disk. An XT ROM answers it with
+; CF=1 and the kernel's own table stands. Either way the table in force
+; before is put back after: it is int 1Eh's for the rest of the session
+; (18.92).
+;
+; No per-track VERIFY (AH=04h). The IBM ROM checks the whole track's DMA
+; extent against a 64KB page even though a verify moves nothing, and
+; dsk_secbuf is 512 bytes; a buffer that could stand in would be a claim of
+; its own. The metadata writes, the remount and 18.96.2's last-sector test
+; are what check the result.
+; -----------------------------------------------------------------------------
+dskw_fmt_low:
+    push bx
+    push cx
+    push dx
+    push di
+    push bp
+    push es
+    ; STKBALANCE-LOOP: .bank pushes six words a turn at a time and .rest pops the six; the count is in CX
+    mov bx, dsk_dpt+10          ; the table in force, banked whole: DPT_LEN
+    mov cx, 6                   ; is 11, so six words cover it - and the
+.bank:                          ; twelfth byte is fdd_unit's, which nothing
+    push word [bx]              ; on this path writes, so putting it back is
+    dec bx                      ; putting back what was there. A loop and not
+    dec bx                      ; six `push word [mem]`: 12 bytes against 24,
+    loop .bank                  ; and the same again at .out
+%if DPT_LEN > 12
+  %error "dskw_fmt_low banks the DPT as six words"
+%endif
+    cld
+
+    ; --- an AT BIOS picks the data rate for this medium --------------------
+    push si
+    mov ah, 0x18
+    mov ch, [cs:si+DFMT_CYL]
+    dec ch                      ; the LAST cylinder, as AH=18h takes it
+    mov cl, [cs:si+DFMT_SPT]
+    call .i13
+    pop si
+    jc .noset                   ; an XT ROM: the kernel's table stands
+    push si
+    push ds                     ; (the one to put back)
+    push ds
+    push es
+    pop ds                      ; DS:SI = the BIOS's table for this medium...
+    pop es                      ; ...ES:DI = int 1Eh's, which is ours (18.92)
+    mov si, di                  ; - so the BIOS reads it from there
+    mov di, dsk_dpt
+    mov cx, DPT_LEN
+    rep movsb
+    pop ds
+    pop si
+.noset:
+    mov al, [cs:si+DFMT_SPT]    ; SC for the FORMAT command, read from EOT
+    mov [dsk_dpt+4], al
+
+    ; --- the bar: the whole disk, a TRACK a unit (SPEC.md 12.8) -----------
+    mov al, [cs:si+DFMT_CYL]
+    cbw                         ; (a cylinder count is under 128)
+    mov cx, 1024                ; two 512-byte units a cylinder, so .ok
+    mul cx                      ; steps the bar one unit a track
+    xchg ax, cx                 ; DX:CX = that, in bytes
+    call KERNEL_SEG:fpg_begin
+
+    xor bp, bp                  ; BP = the track: cylinder BP/2, head BP&1
+.track:
+    push ss                     ; the address fields go in dsk_secbuf, which
+    pop es                      ; is 512-aligned (SPEC.md 2.1.1) and so
+    mov ax, bp                  ; cannot straddle a DMA page
+    shr ax, 1                   ; AL = C, AH = 0, CF = H...
+    adc ah, 0                   ; ...so AX = C | H<<8: the first half of every
+    push ax                     ; field, and DL/DH for every attempt below
+    mov di, dsk_secbuf
+    mov cx, [cs:si+DFMT_SPT]
+    mov dx, 0x0201              ; R from 1, N = 2: 512 bytes
+.id:
+    stosw                       ; C, H
+    xchg ax, dx
+    stosw                       ; R, N
+    xchg ax, dx
+    inc dx                      ; R never reaches DH: SPT <= 18
+    loop .id
+
+    mov di, 3                   ; attempts at this track
+.try:
+    pop dx                      ; DL = C, DH = H
+    push dx
+    mov ch, dl                  ; CH = the cylinder
+    mov cl, 1                   ; (CL is no diskette FORMAT's, and is set as
+                                ; dsk_xfer would so no ROM sees sector 0)
+    mov bx, dsk_secbuf          ; ES:BX = the address fields
+    mov al, [cs:si+DFMT_SPT]
+    mov ah, 0x05
+    call .i13
+    jnc .ok
+    mov [dsk_ioerr], ah
+    cmp ah, 0x03
+    je .fail                    ; write-protected: retrying cannot help
+    xor ah, ah                  ; reset, and try the track again
+    call .i13
+    dec di
+    jnz .try
+.fail:
+    pop dx
+    stc
+    jmp short .out
+.ok:
+    pop dx
+    mov ax, 512                 ; one unit: this track
+    call KERNEL_SEG:apic_fpg_stepb
+    inc bp
+    mov ax, bp
+    shr ax, 1                   ; AL = the next track's cylinder
+    cmp al, [cs:si+DFMT_CYL]
+    jb .track                   ; ...and CF = 0 falling out of it
 .out:
+    call KERNEL_SEG:fpg_end     ; preserves the flags (fprog.inc)
+    mov bx, dsk_dpt             ; the table back: `mov`, `pop`, `inc` and
+    mov cx, 6                   ; `loop` all leave CF alone
+.rest:
+    pop word [bx]
+    inc bx
+    inc bx
+    loop .rest
+    pop es
+    pop bp
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+    ; --- one int 13h at [disk_drive]'s unit, in dsk_xfer's bracket ---------
+    ; in: AH = the function and its other registers but DL. out: the BIOS's.
+    ; DL is looked up here rather than carried, because it is every call's
+    ; and the BIOS need not give it back. [sch_lock] because nothing switches
+    ; under an int 13h (SPEC.md 18), and CURXFER because the arrow may move
+    ; through it (SPEC.md 7.4) - the reset included, as dsk_xfer's is; `mov`
+    ; and `dec` leave CF alone, so the BIOS's answer reaches the caller
+.i13:
+    push bx
+    mov bl, [disk_drive]
+    call COLD_SEG:dskf_dsk_vol_row
+    mov dl, [bx+DV_UNIT]
+    pop bx
+    inc byte [sch_lock]
+    CURXFER_ON
+    int 0x13
+    CURXFER_OFF
+    dec byte [sch_lock]
     ret
 
 ; -----------------------------------------------------------------------------
 ; dskw_fmt_put - write the staged sector to LBA AX
-; in:  AX = LBA, dsk_secbuf staged
+; in:  AX = LBA, dsk_secbuf staged, ES = LOW_SEG (dskw_fmt_zero leaves it)
 ; out: CF as disk_write; every register but the flags preserved
 ;
 ; dsk_secbuf is the kernel's sector scratch and this is a sector - the same
@@ -4817,33 +5613,26 @@ dskw_fmt_run:
 ; controller's rather than this routine's.
 ; -----------------------------------------------------------------------------
 dskw_fmt_put:
-    push ax
     push bx
     push cx
-    push es
-    push ax
-    mov ax, LOW_SEG
-    mov es, ax
-    pop ax
     mov bx, dsk_secbuf
     mov cx, 1
-    call COLD_SEG:dskf_disk_write
-    pop es
+    call COLD_SEG:dskf_disk_write   ; (which preserves AX: dsk_xfer is KENT)
     pop cx
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; dskw_fmt_zero - blank the staging sector
 ; in:  nothing
-; out: nothing (all registers preserved)
+; out: ES = LOW_SEG, where dsk_secbuf is - and every caller's next store is
+;      into it, so ES is an OUTPUT rather than a register to bank (both callers
+;      bank the caller's ES at their own entry); DF = 0. All else preserved.
 ; -----------------------------------------------------------------------------
 dskw_fmt_zero:
     push ax
     push cx
     push di
-    push es
     mov ax, LOW_SEG
     mov es, ax
     mov di, dsk_secbuf
@@ -4851,7 +5640,6 @@ dskw_fmt_zero:
     mov cx, 256
     cld
     rep stosw
-    pop es
     pop di
     pop cx
     pop ax
@@ -4896,13 +5684,12 @@ dskw_fmt_reach_x:
     push di
     push es
     call dskw_fmt_row_x
-    mov di, [si+DFMT_TOT]
+    mov di, [cs:si+DFMT_TOT]
     dec di                      ; DI = the last sector the BPB now claims
-    call dskw_fmt_zero
-    mov ax, LOW_SEG
-    mov es, ax                  ; dsk_secbuf is .lowbss (SPEC.md 2.1), so the
-    mov word [es:dsk_secbuf+0], 'o8'    ; marker goes in through ES and never
-    mov word [es:dsk_secbuf+2], '8R'    ; through DS - dskw_format_x's own trap
+    call dskw_fmt_zero          ; ...and ES = LOW_SEG: dsk_secbuf is .lowbss
+                                ; (SPEC.md 2.1), so the marker goes in
+    mov word [es:dsk_secbuf+0], 'o8'    ; through ES and never through DS -
+    mov word [es:dsk_secbuf+2], '8R'    ; dskw_format_x's own trap
     mov [es:dsk_secbuf+4], di   ; ...and the LBA, so a seek that landed on a
                                 ; DIFFERENT track cannot match by accident
     mov ax, di
@@ -4921,147 +5708,31 @@ dskw_fmt_reach_x:
     jne .no
     cmp [es:dsk_secbuf+4], di
     jne .no
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
+    jmp dskw_fmt_probe_x.clcpop ; the same six pops
 .no:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; dskw_fmt_boot - build the boot sector for the row in SI
-; in:  SI = a dskw_fmt_tab row
-; out: dsk_secbuf holds it; all registers preserved
-;
-; Byte for byte what tools/os88disk.py's boot_sector() writes for a data
-; floppy, which is what makes a formatted disk and a built image the same
-; kind of object: 'MSDOS5.0' as the OEM name, BS_BootSig 0x29 and a volume id,
-; 'FAT12   ' as the type string, and the not-bootable stub in the code area.
-;
-; Every field it does NOT write is one the zeroed scratch already has right:
-; BPB_HiddSec, BPB_TotSec32, BS_DrvNum and BS_Reserved1 are all 0 on a floppy,
-; and int 13h is told the drive by dsk_xfer rather than by the sector.
-; -----------------------------------------------------------------------------
-dskw_fmt_boot:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    push es
-
-    call dskw_fmt_zero
-    mov ax, LOW_SEG
-    mov es, ax
-
-    mov di, dsk_secbuf                      ; the jump AND BS_OEMName: eleven
-    mov bx, dskw_fmt_jmp                    ; contiguous bytes on the disk, so
-    mov cx, 11                              ; one copy rather than two stores
-    call dskw_fmt_cpy                       ; and a copy
-
-    mov word [es:dsk_secbuf+DSK_B_BPS], 512
-    mov al, [si+DFMT_SPC]
-    mov [es:dsk_secbuf+DSK_B_SPC], al
-    mov word [es:dsk_secbuf+DSK_B_RSVD], 1
-    mov byte [es:dsk_secbuf+DSK_B_NFATS], 2
-    mov ax, [si+DFMT_ROOTN]
-    mov [es:dsk_secbuf+DSK_B_ROOTN], ax
-    mov ax, [si+DFMT_TOT]
-    mov [es:dsk_secbuf+DSK_B_TOT16], ax
-    mov al, [si+DFMT_MEDIA]
-    mov [es:dsk_secbuf+DSK_B_MEDIA], al
-    mov ax, [si+DFMT_FATSZ]
-    mov [es:dsk_secbuf+DSK_B_FATSZ], ax
-    mov ax, [si+DFMT_SPT]
-    mov [es:dsk_secbuf+DSK_B_SPT], ax
-    mov word [es:dsk_secbuf+DSK_B_HEADS], 2
-    ; BPB_HiddSec and BPB_TotSec32 stay 0, and so do BS_DrvNum and
-    ; BS_Reserved1: int 13h is told the drive by dsk_xfer, never by this.
-
-    mov byte [es:dsk_secbuf+38], 0x29       ; BS_BootSig: VolID/Lab/Type follow
-    mov word [es:dsk_secbuf+39], 0x0888     ; BS_VolID, os88disk.py's own -
-    mov word [es:dsk_secbuf+41], 0x8800     ; a fixed serial, so two disks
-                                            ; formatted here are as alike as
-                                            ; two images built here (18.8.2's
-                                            ; accepted residual)
-    mov di, dsk_secbuf+43                   ; BS_VolLab
-    mov bx, dskw_fmt_lab
-    mov cx, 11
-    call dskw_fmt_cpy
-    mov di, dsk_secbuf+54                   ; BS_FilSysType
-    mov bx, dskw_fmt_typ
-    mov cx, 8
-    call dskw_fmt_cpy
-
-    mov di, dsk_secbuf+62                   ; the not-bootable stub
-    mov bx, dskw_fmt_stub
-    mov cx, DFMT_STUB_LEN
-    call dskw_fmt_cpy
-    mov word [es:dsk_secbuf+510], 0xAA55    ; rule 1's signature, last
-
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dskw_fmt_probe_x.stcpop
 
 ; -----------------------------------------------------------------------------
 ; dskw_fmt_cpy - CX bytes from CS:BX to ES:DI (module-internal)
-; in:  BX = source IN THIS IMAGE, ES:DI = destination, CX = count
-; out: nothing (all registers preserved, AX included)
+; in:  BX = source IN THIS IMAGE, ES:DI = destination, CX = count, DF = 0
+; out: BX and DI past the copy, CX = 0 - so the boot sector is three calls
+;      that each start where the last ended; AL clobbered
 ;
-; The source arrives in BX only because SI is the live table row at every call
-; site and is cheaper to bank here than at four of them.
-;
-; IT WAS `rep movsb` FROM `.text`, and the four blocks it copies are now in
-; the image with it (SPEC.md 2.8.6): they are bytes written into a SECTOR and
+; IT WAS `rep movsb` FROM `.text`, and the blocks it copies are now in the
+; image with it (SPEC.md 2.8.6): they are bytes written into a SECTOR and
 ; nothing ever draws them, so the ordering rule has no window to fail in.
 ; What that costs is the instruction: a `cs rep movsb` is refused on this
 ; machine because an 8086 drops the segment prefix if an interrupt lands
 ; mid-`rep` (SPEC.md 5.9), and the rest of a boot sector would then come from
 ; whatever is at that offset in KERNEL_SEG - which assembles, runs, and writes
-; a disk that SPEC.md 18.2 rule 2 will not mount. So it is a byte loop.
+; a disk that SPEC.md 18.2 rule 2 will not mount. So it is a byte loop
+; (kernel/vga12.inc's is the other site that obeys the rule).
 ; -----------------------------------------------------------------------------
 dskw_fmt_cpy:
-    push ax
-    push cx
-    push si
-    push di
-    mov si, bx
-    cld
-.b:
-    mov al, [cs:si]             ; THE SOURCE IS THIS IMAGE (SPEC.md 2.8.6), so
-    inc si                      ; it is read through CS - and a byte loop and
-    stosb                       ; not `cs rep movsb`, because an 8086 LOSES the
-    loop .b                     ; prefix if an interrupt lands mid-`rep` and
-                                ; the rest of the copy would silently come
-                                ; from KERNEL_SEG (SPEC.md 5.9's rule, and
-                                ; kernel/vga12.inc:5223 is the other site that
-                                ; obeys it). ES:DI is LOW_SEG's sector buffer
-                                ; throughout, which `stosb` wants anyway.
-                                ;
-                                ; It costs ~8 bytes of the IMAGE and 4 clocks a
-                                ; byte over `rep movsb` - 97 bytes once per
-                                ; format, against an operation that is minutes
-                                ; of floppy - and takes 97 bytes of `.text`
-                                ; off every machine for ever.
-    pop di
-    pop si
-    pop cx
-    pop ax
+    mov al, [cs:bx]
+    inc bx
+    stosb
+    loop dskw_fmt_cpy
     ret
 
                                 ; DATA, and it STAYS IN THE IMAGE (SPEC.md
@@ -5073,27 +5744,45 @@ dskw_fmt_cpy:
                                 ; only thing that wants them is the format
                                 ; itself. dskw_fmt_cpy above reads them
                                 ; through CS.
+; THE BOOT SECTOR, as two templates either side of the row (dskw_format_x):
+; bytes 0-12 here, 13-25 the dskw_fmt_tab row, and 26 onward the second
+; template - which runs on into the stub, so the boot sector is three copies.
+; Every field NOT written is the zeroed scratch's, and right: nothing past the
+; stub, and nothing a floppy wants non-zero.
 dskw_fmt_jmp: db 0xEB, 0x3C, 0x90   ; jmp short 0x3E / nop - and SPEC.md 18.2
                                 ; rule 2 tests this first byte for 0EBh/0E9h,
                                 ; so a sector without it would not mount the
                                 ; volume this has just finished writing
               db 'MSDOS5.0'     ; interop OEM name, os88disk.py's
-dskw_fmt_lab: db 'NO NAME    '  ; 11 bytes, and DOS's own word for a volume
+              dw 512            ; BPB_BytsPerSec
+DFMT_T1 equ $ - dskw_fmt_jmp
+dskw_fmt_t2:  dw 2              ; BPB_NumHeads: every row is double-sided
+              dd 0, 0           ; BPB_HiddSec, BPB_TotSec32
+              db 0, 0           ; BS_DrvNum, BS_Reserved1: int 13h is told the
+                                ; drive by dsk_xfer, never by this
+              db 0x29           ; BS_BootSig: VolID/Lab/Type follow
+              dw 0x0888, 0x8800 ; BS_VolID, os88disk.py's own - a fixed
+                                ; serial, so two disks formatted here are as
+                                ; alike as two images built here (18.8.2's
+                                ; accepted residual)
+              db 'NO NAME    '  ; BS_VolLab: DOS's own word for a volume
                                 ; nobody has named - which is what this is,
                                 ; since no label ENTRY is written either
-dskw_fmt_typ: db 'FAT12   '
+              db 'FAT12   '     ; BS_FilSysType
 
 ; The not-bootable stub, byte for byte os88disk.py's BOOT_STUB: set up DS,
 ; print the message with int 10h AH=0Eh, wait for a key and int 19h. It is 44
 ; bytes and it is the difference between a machine that says what is wrong
 ; and one that executes a root directory.
-dskw_fmt_stub:
     db 0x31, 0xC0, 0x8E, 0xD8, 0xBE, 0x59, 0x7C, 0xAC
     db 0x08, 0xC0, 0x74, 0x09, 0xB4, 0x0E, 0xBB, 0x07
     db 0x00, 0xCD, 0x10, 0xEB, 0xF2, 0x30, 0xE4, 0xCD
     db 0x16, 0xCD, 0x19
     db 0x0D, 0x0A, 'Not a bootable disk. Press any key.', 0x0D, 0x0A, 0
-DFMT_STUB_LEN equ $ - dskw_fmt_stub
+DFMT_T2 equ $ - dskw_fmt_t2
+%if DFMT_T1 != DSK_B_SPC || DFMT_T1 + DFMT_BPB != DSK_B_HEADS || DFMT_T2 > 255 || DSK_B_HEADS + DFMT_T2 > 510
+  %error "the boot sector is template 1, a dskw_fmt_tab row, then template 2 and the stub - contiguous, and short of the signature"
+%endif
 
 %endif                              ; KD_BUILD
 section .text                   ; ...and back to the kernel segment for what
@@ -5178,8 +5867,42 @@ fm_fmt_drop:
 section .bss
 
 ; --- the located / staged directory entry ------------------------------------
+%ifdef DSKW_WSEQ
+dws_rec:      resb DWS_RECW*2   ; WRITE_SEQ's ONE stream record (18.4.9): the
+                                ; entry's head and size, where the entry is,
+                                ; and the file's last cluster (the held tail),
+                                ; as the stream's last call left them...
+dws_last      equ dws_rec + DWS_RECW*2 - 4
+dws_hfirst    equ dws_rec + DWS_RECW*2 - 2   ; the HELD chain's head: .hmore
+                                ; puts it back in dskw_first after every call
+dws_vol:      resb 1            ; ...and its volume. The held stream's too
+dws_hold:     resb 1            ; 1 = a HELD stream is pending (dws_commit),
+                                ; 0FFh = pending and POISONED (dws_hlose)
+dws_flg:      resb 1            ; inside WRITE_SEQ: WSQF_*. ADJACENT to
+                                ; dws_hold: the gates read one word
+dws_hlink:    resw 1            ; the file's committed last cluster; 0 = empty
+%endif
 dskw_raw:     resb 32           ; one raw 32-byte entry, staged in the kernel
                                 ; segment (the write path's dsk_ent)
+dskw_dsec:    LBARES 1            ; the found entry's sector LBA, 32 bits...
+dskw_doff:    resw 1            ; ...and its offset within that sector
+dskw_prev:    resw 1            ; dskw_wdata: the cluster before the one being
+                                ; written, awaiting its link - and at the end,
+                                ; the chain's LAST...
+dskw_first:   resw 1            ; ...and the new chain's head (0 = empty file).
+                                ; Here and not beside dskw_cur so that dws_rec
+                                ; takes both
+dskw_fsec:    LBARES 1            ; the first reusable slot's, high word FFFFh
+                                ; = none (SPEC.md 18.7.5)
+dskw_foff:    resw 1
+%if dskw_doff - dskw_dsec != DSKW_LBASZ || dskw_foff - dskw_fsec != DSKW_LBASZ
+    %error "each slot's offset must follow its LBA: dskw_here stores both"
+%endif
+%ifdef DSKW_WSEQ
+%if dskw_first + 2 - DWS_REC0 != DWS_RECW*2 || dskw_dsec != dskw_raw + 32
+    %error "dws_load moves the entry's head and size, dskw_dsec, dskw_doff, dskw_prev and dskw_first as ONE run: keep them adjacent"
+%endif
+%endif
 dskw_n83:     resb 11           ; the 11-byte raw name being looked for
 dskw_n83b:    resb 11           ; the rename target's, held across the scan
                                 ; (a dskw_pad was here, for the alignment an
@@ -5189,11 +5912,8 @@ dskw_n83b:    resb 11           ; the rename target's, held across the scan
                                 ; which is a BYTE loop - so no neighbour's
                                 ; store reached into it. Its sibling
                                 ; dskw_pad2 below took a narrowing first)
-dskw_dsec:    resw 1            ; the found entry's sector LBA...
-dskw_doff:    resw 1            ; ...and its offset within that sector
-dskw_fsec:    resw 1            ; the first reusable slot's, FFFFh = none
-dskw_foff:    resw 1
-dskw_cursec:  resw 1            ; dskw_find: the sector being scanned
+dskw_cursec:  resw 1          ; dskw_find: the sector being scanned (its
+                                ; high word is [dsk_c2hi], SPEC.md 18.7.5)
 dskw_fend:    resb 1            ; 1 = that free slot is the 00h terminator
 dskw_new:     resb 1            ; 1 = this write is creating the entry
 dskw_zapnext: resb 1            ; 1 = re-zero the slot after the one written.
@@ -5230,29 +5950,32 @@ dskw_len:     resw 1            ; the file's byte count, low word...
 dskw_lenhi:   resw 1            ; ...and high (the DX:AX answer on a read)
 dskw_cap:     resw 1            ; the destination's capacity, low word...
 dskw_caphi:   resw 1            ; ...and high
+%ifdef OS88_SHORTCUTS
+dskw_trunc:   resb 1            ; 1 = read a PLAIN file's first [dskw_cap]
+                                ; bytes rather than refuse it as too big -
+                                ; mod_need's settings core, for one read
+                                ; (SPEC.md 2.8.7). Zero at boot, like .bss
+%endif
 dskw_rem:     resw 1            ; sectors still to move
 dskw_tail:    resw 1            ; bytes in the partial final sector (0 = none)
-dskw_rlba:    resw 1            ; the pending data run: its first LBA...
+dskw_rlba:    LBARES 1            ; the pending data run: its first LBA, 32
+                                ; bits (SPEC.md 18.7.5)...
 dskw_rlen:    resw 1            ; ...how many sectors are in it (0 = none)...
 dskw_rcap:    resw 1            ; ...and the most it may ever hold
-dskw_clba:    resw 1            ; the whole-sector walk's cursor inside a take
+dskw_clba:    LBARES 1            ; the whole-sector walk's cursor inside a take
 dskw_fop:     resb 1            ; 0 = read, 1 = write, for the ONE flush body
                                 ; the two data walkers share (SPEC.md 18.4.2)
                                 ; - dsk_op's idiom, and for dsk_op's reason:
                                 ; the run arithmetic must not be able to
                                 ; differ between reading and writing
 dskw_take:    resw 1            ; sectors this cluster contributes
-dskw_lba:     resw 1            ; this cluster's first LBA
 dskw_cur:     resw 1            ; the cluster being written / read
-dskw_prev:    resw 1            ; the one before it, awaiting its link
-dskw_first:   resw 1            ; the new chain's head (0 = empty file)
 dskw_rt_home:  resw 1           ; dskw_rmtree: the directory it was called in
 dskw_rt_top:   resw 1           ; ...the folder it was asked to remove
 dskw_rt_clus:  resw 1           ; ...the entry the scan last named
 dskw_rt_guard: resw 1           ; ...iterations left (DSKW_RT_MAX)
 dskw_rt_attr:  resb 1           ; ...that entry's attribute byte
 dskw_rt_ioerr: resb 1           ; ...the scan ended on a read error
-dskw_rt_sec:   resw 1           ; ...the sector the scan is reading
 dskw_rt_name:  resb 12          ; ...the caller's name as 11 RAW bytes (the
                                 ; 12th keeps the buffer even-sized)
 dskw_oldclus: resw 1            ; the replaced chain's head, freed after the
@@ -5272,10 +5995,18 @@ dskw_time:    resw 1            ; ...and time
 ; a transfer holds sch_lock, so nothing can be inside this twice.
 dwr_buf:      resw 1            ; the caller's buffer offset (ES is theirs)
 dwr_cap:      resw 1            ; ...and its capacity in bytes
-dwr_off:      resd 1            ; the byte offset asked for
-dwr_sz:       resd 1            ; the file's size, from its directory entry
+%ifdef DSK_STREAM               ; ...TWO OF THEM ARE READ_SEQ'S CURSOR on
+dwr_off     equ dwr_c + FSEQ_OFF ; kern_big (SPEC.md 18.4.8): the offset and
+dwr_sz      equ dwr_c + RSQ_SIZE ; the size are the cursor's own fields, so
+%else                           ; READ_AT leaves them where the wrapper wants
+dwr_off:      resd 1            ; them. Outside a READ_SEQ call [dwr_c]'s
+dwr_sz:       resd 1            ; generation is 0 and these are plain scratch,
+%endif                          ; which is all READ_AT and WRITE_AT ask. The
+                                ; CLUSTER is not one of them and must never
+                                ; be: +6 is the wrapper's, written on success
+                                ; only, or a FAILED read hands back a cursor
+                                ; already one link on (dskw_read_at's .atclus)
 dwr_clb:      resw 1            ; bytes per cluster on this volume
-dwr_clus:     resw 1            ; the cluster the walk reached
 dwr_take:     resw 1            ; bytes this call will deliver
 dwr_end:      resd 1            ; dskw_write_at: offset + count (SPEC.md
                                 ; 18.4.7.2), which decides both whether the
@@ -5314,7 +6045,20 @@ dwf_dskw_append:        call dskw_append_x
 %ifndef KERN_SMALL
 dwf_dskw_write_at:      call dskw_write_at_x
                     retf
-%else
+%ifdef KERN_BIG
+%ifndef KD_BUILD
+dwsf_commit:            push ax         ; gfx_unlock's (SPEC.md 18.4.9): every
+                        call dws_commit ; register kept, the answer dropped -
+                        pop ax          ; an unlock has nobody to tell
+                    retf
+%endif
+%endif
+%else                           ; (kern_big's READ_SEQ door is its body)
+dwsf_dskw_write_seq:            ; ...and the cell's fenced way in to it
+dwf_dskw_write_seq:             ; SPEC.md 18.4.9: kern_big's alone too
+dwf_dskw_read_seq:  mov ax, FERR_NAME   ; SPEC.md 18.4.8: kern_big's alone, and
+                                        ; the cell is in both kernels (20.8
+                                        ; rule 4) - falling into the refusal
 dwf_dskw_write_at:  stc         ; the DOS box is the one caller (SPEC.md
                     retf        ; 18.4.7.4) and it does not ship on the small
                                 ; disks: the INSIDE arm, dsk_write_chain and

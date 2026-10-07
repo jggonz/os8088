@@ -110,8 +110,11 @@ def _cp_win(m, S):
     return None
 
 
-CP_IVID = 4                     # kernel/ctrl.inc: the Display page's RECORD
+CP_IVID = 3                     # kernel/ctrl.inc: the Display page's RECORD
 CP_ITHM = 5                     # ...and SPEC.md 76.4's Theme page
+CP_IDOCK = 6                    # ...and SPEC.md 31.13's Dock page - which is
+                                # NOT the last row since SPEC.md 31.14.2 put
+                                # Floppy there, so `[cp_nst] - 1` is not it
 
 
 # --- the Control Panel's own verbs, CONFIRMED --------------------------------
@@ -322,44 +325,18 @@ def set_primary(m, mo, S, settle, slot, card=None):
 
 
 def drive_ordinal(m, S, letter="B"):
-    """Which desktop ZONE does drive `letter` own? (SPEC.md 26.1)
+    """Which desktop CELL is drive `letter` shown in? None if it is not.
 
-    NOT the drive number. A zone exists per volume with DV_FLAGS bit 0 set, and
-    the ordinal is that volume's POSITION among the shown ones - so a machine
-    whose B: was retired by SPEC.md 18.97's probe, or which mounts a hard disk,
-    numbers them differently. Walking dsk_vtab is the only way to be right, and
-    it turns "no window opened" into "B: has no zone", which is the difference
-    between a test that fails and a test that says why.
+    os88geom's, with this file's symbol reader: since SPEC.md 26.9 the answer
+    is one byte of the guest's own `desk_zslot`, and two copies of how to read
+    it are one too many.
     """
-    want = ord(letter.upper()) - ord("A")
-    t = m.read(S("dsk_vtab"), DVOL_MAX * DV_SIZE)
-    n = 0
-    for v in range(DVOL_MAX):
-        r = t[v * DV_SIZE:(v + 1) * DV_SIZE]
-        if r[DV_KIND] == DVK_FREE or not (r[DV_FLAGS] & 1):
-            continue
-        if v == want:
-            return n
-        n += 1
-    return None
+    return os88geom.drive_ordinal(m, letter, S)
 
 
 def drive_xy(m, S, ordinal):
-    """The centre of volume `ordinal`'s desktop zone, in VIRTUAL coordinates.
-
-    desk_ord_xy's arithmetic: zones fill a column downwards and wrap LEFT from
-    the drive column, so ordinal 1 is BELOW ordinal 0 until [desk_rows] runs
-    out - which is 2 on a CGA with the tall icon and 4 with the square one.
-    """
-    def w(name):
-        b = m.read(S(name), 2)
-        return b[0] | (b[1] << 8)
-
-    rows, step, zh1, zx = (w("desk_rows"), w("desk_zstep"), w("desk_zh1"),
-                           w("vid_desk_zx"))
-    col, row = divmod(ordinal, rows)
-    return (zx - col * DESK_COLW + DESK_ZW // 2,
-            DESK_ZY0 + row * step + zh1 // 2)
+    """The centre of cell `ordinal`'s picture, in VIRTUAL coordinates."""
+    return os88geom.drive_xy(m, ordinal, S)
 
 
 # --- the general verbs, over tools/os88ui.py ---------------------------------
@@ -617,25 +594,23 @@ def _scroll_to_blind(m, mo, S, settle, entry, card):
 
     Same algorithm: walk with the arrow keys (SPEC.md 22.11) and read
     [FS_SCRL] BACK, so the clamp at the end of a list is computed by the only
-    thing that knows how many rows this window shows. What it cannot do is
-    bound the per-key wait in GUEST time, because a QEMU object has no cycle
-    counter - so this one keeps the host-clock loop, and that is a real
-    difference: on a loaded box a step can be judged an END STOP when the
-    guest simply had not got there. Six
-    rows take this path and every one of them is on docs/TESTING.md's closed
-    list, so there is nowhere better for them to go.
+    thing that knows how many rows this window shows. A QEMU object has no
+    cycle counter, so the per-key wait is bounded by the BIOS TICK COUNT
+    instead (tests/os88qemu.py) - three GUEST seconds, which is what the
+    host-clock loop here allowed on an idle box and which a loaded one cannot
+    shorten, so a step is not judged an END STOP just because the guest had
+    not got there yet. Six rows take this path and every one of them is on
+    docs/TESTING.md's closed list, so there is nowhere better for them to go.
     """
     if entry < 0:
         raise RuntimeError("entry %d is not a row" % entry)
+    import os88qemu
 
     def step(key):
         was = scroll(m, S)
         m.key(key)
-        for _ in range(30):
-            time.sleep(0.1)
-            if scroll(m, S) != was:
-                return True
-        return False
+        return os88qemu.acted(m, lambda: scroll(m, S) != was, secs=3.0,
+                              what="the list to scroll", poll=0.1)
 
     for _ in range(40):
         if scroll(m, S) == 0:

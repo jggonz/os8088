@@ -88,7 +88,7 @@ def listing(small=False):
     os.close(fd)
     r = subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
                         "-I", "apps/tank/"] + (["-DAPP_SMALL"] if small else []) +
-                       ["-o", os.devnull, "-l", lst,
+                       ["-o", lst + ".bin", "-l", lst,
                         "apps/tank/tank.asm"], capture_output=True, text=True)
     if r.returncode:
         sys.exit("tankperf: the tree does not assemble:\n" + r.stderr[:400])
@@ -221,6 +221,7 @@ def main(argv):
     lst = listing(a.small)
     S = sites(lst)
     os.unlink(lst)
+    os.unlink(lst + ".bin")
     ARM = ("-DAPP_SMALL",) if a.small else ()
 
     def off(n):

@@ -182,7 +182,15 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # tm_quiet's unlocked sample lands inside the drop's lock hold, so a
     # second drop settles it. What is NOT retried is CELLS below.
     held = 0
-    for attempt in range(3):
+    # SIX ATTEMPTS AND NOT THREE, and it does not weaken the assertion: each
+    # one is a COMPLETE test of it, so more of them only lowers the chance
+    # that every single sample lands inside the lock hold. Three was enough on
+    # an idle box and was not enough in the 2026-09-21 full soak, where this
+    # read "after 3 drop(s)" with the leg red - and `os88bisect classify` then
+    # put it at 0/3 alone, which is the signature of a race whose odds move
+    # with the box rather than a feature that is broken. What is NOT retried
+    # is CELLS below, which is the half that would hide a real regression.
+    for attempt in range(6):
         w, d = W(slot), W(disk)
         p = Own(m, mo)
         if attempt:
@@ -214,7 +222,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     d, w = W(disk), W(slot)
     whole = (d.x <= w.x and d.y <= w.y
              and d.x + d.w >= w.x + w.w and d.y + d.h >= w.y + w.h)
-    print("QUIET   : dropped over it partially (wholly=%s) after %d drop(s) "
+    print("QUIET   : dropped over it partially (wholly=%s) after %d of 6 drop(s) "
           "- TM holds %04X   cover (%d,%d %dx%d) over (%d,%d %dx%d)"
           % (whole, attempt + 1, held, d.x, d.y, d.w, d.h,
              w.x, w.y, w.w, w.h))

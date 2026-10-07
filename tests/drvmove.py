@@ -39,7 +39,6 @@ import argparse
 import os
 import struct
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
@@ -86,14 +85,21 @@ def main():
             mo.click(x0 + 40, y0 + CP_I0Y + n * CP_IROWH + 7)
             heaphi.quiet(m)
 
-        def drvrow(r):
-            mo.click(x0 + CP_RX + 40,
-                     y0 + CP_DBY1 + r * CP_DROWH + CP_DROWH // 2)
-            time.sleep(8)                       # a load is a floppy read
-            heaphi.quiet(m)
-
         def seg(r):
             return u16(m.read(S("drv_tab") + r * DRVR_SZ + DRVR_SEG, 2))
+
+        # A load is a floppy read, which freezes the UI and so fools a screen
+        # settle: wait for the row's segment to change, mount or unmount.
+        def drvrow(r):
+            was = seg(r)
+            mo.click(x0 + CP_RX + 40,
+                     y0 + CP_DBY1 + r * CP_DROWH + CP_DROWH // 2)
+            try:
+                M.until(m, lambda _: seg(r) != was,
+                        "driver row %d to (un)mount" % r, poll=0.25, limit=60)
+            except M.MartyError:
+                pass                            # ...judged by the caller
+            heaphi.quiet(m)
 
         item(CP_IDRV)
         drvrow(HDD_ROW)
@@ -130,7 +136,12 @@ def main():
         disk = dispcp.win_rect(m, S, dslot)[:2]
         before = set(w.i for w in os88geom.windows(m, S) if w.visible)
         dispcp.open_named(m, mo, S, M.settle, *disk, name="FILLER.O88")
-        time.sleep(8)
+        try:
+            M.until(m, lambda _: any(w.visible and w.i not in before
+                                     for w in os88geom.windows(m, S)),
+                    "the filler's window", poll=0.25, limit=60)
+        except M.MartyError:
+            pass                                # ...reported just below
         M.settle(m)
         new = [w for w in os88geom.windows(m, S)
                if w.visible and w.i not in before]
@@ -144,7 +155,12 @@ def main():
         M.settle(m)
         for _ in range(6):
             m.key("KeyA")
-            time.sleep(6)
+            try:                                # the claim, and the move it
+                M.until(m, lambda _: seg(RD_ROW) not in (rd0, 0),   # forces
+                        "the RAM disk image to move", poll=0.25,
+                        guest=6 * M.GUEST_PACE)
+            except M.MartyError:
+                pass                            # ...press again
             M.settle(m)
             if seg(RD_ROW) not in (rd0, 0):
                 break

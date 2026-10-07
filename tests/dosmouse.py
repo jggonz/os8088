@@ -15,7 +15,7 @@ WHAT IT WOULD CATCH, and three of these were seen failing before it existed:
     (a constant 640x480 rather than OSAPI_VIDEO)       both 1bpp adapters
   - functions 5 and 6 answering a flat 0            -> "PRESS n=0" after a
     (no edge accumulation, SPEC.md 96.10.1)            click that happened
-  - an unsupported function falling through         -> "FN1F ANSWERED"
+  - an unsupported function falling through         -> "FN90 ANSWERED"
     into a handler instead of leaving AX alone         printed by the program
 
 It runs on MartyPC and must: the pointer is moved by driving a real serial
@@ -186,12 +186,14 @@ def run(machine):
         if fields(line).get("n") != "1":
             fail("INT 33h AX=6 answered %r after exactly one click" % line)
 
-        line = wait_line(m, "FN1F")
+        line = wait_line(m, "FN90")
         if "FAILED" in line:
-            fail("INT 33h AX=1Fh CHANGED AX - a function with no "
+            fail("INT 33h AX=0090h CHANGED AX - a function with no "
                  "documented return value must leave it alone (SPEC.md "
                  "96.10.6; 96.10.2's bullet used to say the opposite and "
-                 "this row asserted that)")
+                 "this row asserted that). It asked 1Fh until "
+                 "docs/FIELD-NOTES.md 56 - which DOES document a return "
+                 "value, and which CuteMouse answers")
 
         rows = m.screen() or []
         print("dosmouse: the bracket's text screen:")

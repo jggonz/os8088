@@ -46,7 +46,6 @@ across the Enter press, so the repeat arm is exercised on every leg here.
 """
 import sys
 import os
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -81,12 +80,12 @@ def _settle_bracket(ui, want, limit=8.0):
     measured hands a loaded one 37% less work. This reads the byte that
     answers the question instead.
     """
-    end = time.time() + limit
-    while time.time() < end:
-        got = _bracket(ui)
-        if got == want:
-            return got
-        time.sleep(0.15)
+    try:                                # the budget is GUEST seconds, so a
+        os88marty.until(ui.m, lambda _: _bracket(ui) == want,  # loaded box
+                        "[fsx_cur] to reach %02X" % want,      # cannot cut it
+                        poll=0.15, limit=limit)
+    except os88marty.MartyError:
+        pass                            # the caller reports what it reads
     return _bracket(ui)
 
 
@@ -100,7 +99,8 @@ def leg0_bios(ui):
     def press(fn):
         t0 = tail()
         fn()
-        time.sleep(0.8)
+        os88marty.pace(m, 0.8)          # nothing to wait ON for Alt+Enter,
+                                        # whose whole finding is no change
         return t0, tail()
 
     ok = True
@@ -167,7 +167,7 @@ def main():
                 ok = _fail("leg 2: Alt+Enter in full screen did not come back "
                            "- [fsx_cur] is %02X" % got)
             else:
-                time.sleep(1.5)                 # the bounce takes one ui_task
+                os88marty.pace(m, 1.5)          # the bounce takes one ui_task
                 again = _bracket(ui)            # pass, so LOOK after one
                 if again != FSX_NONE:
                     ok = _fail("leg 2: it came back and then went STRAIGHT IN "
@@ -228,7 +228,7 @@ def main():
                                "and the windowed state is never observed "
                                "(SPEC.md 9.7.1)" % got)
                 else:
-                    time.sleep(1.5)
+                    os88marty.pace(m, 1.5)
                     again = _bracket(ui)
                     if again != FSX_NONE:
                         ok = _fail("leg 4: it left full screen and a "

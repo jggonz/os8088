@@ -44,6 +44,119 @@ MARGIN_MAX = 0           # the loader reserves NOTHING above image - file:
                          # corrupting a neighbour's region
 
 
+def half_text(n, seed=7):
+    """n bytes that pack to about half: words from a small vocabulary with
+    runs of noise between them. Deterministic, and nothing in it matches
+    further back than a window can see."""
+    x, words = seed, []
+    def rnd():
+        nonlocal x
+        x = (x * 1103515245 + 12345) & 0x7FFFFFFF
+        return x >> 16
+    for _ in range(400):
+        words.append(bytes(97 + rnd() % 26 for _ in range(3 + rnd() % 6)))
+    out = bytearray()
+    while len(out) < n:
+        if rnd() % 100 < 35:
+            out += bytes(rnd() & 0xFF for _ in range(1 + rnd() % 5))
+        else:
+            out += words[rnd() % 400] + b" "
+    return bytes(out[:n])
+
+
+def big_lzb():
+    """SPEC.md 20.14.5.1, 20.14.5.2 and 20.15.4: a stream over 64KB is a FILE.
+
+    The decoder's input crosses a segment in BOTH formats now, so cz_wrap must
+    accept a packed form past 64KB in each and round-trip it; and the machine
+    encoder's mirror must round-trip a source that big, with a match longer
+    than its 32KB cap in it so the cap is exercised rather than assumed."""
+    fails = []
+    data = half_text(150000)
+    blob, did = os88lz.cz_wrap(data, os88lz.LZB)
+    if not did or len(blob) <= 0x10000:
+        fails.append("150,000 bytes of half-text: cz_wrap LZB gave %d bytes "
+                     "(%s) - wanted a packed form PAST 64KB, accepted"
+                     % (len(blob), "packed" if did else "refused"))
+    elif os88lz.cz_unwrap(blob) != data:
+        fails.append("the >64KB LZB 'CZ' file does not round-trip")
+    lz4, did4 = os88lz.cz_wrap(data, os88lz.LZ4)
+    if not did4 or len(lz4) <= 0x10000:
+        fails.append("150,000 bytes of half-text: cz_wrap LZ4 gave %d bytes "
+                     "(%s) - wanted a packed form PAST 64KB, accepted "
+                     "(SPEC.md 20.14.5.2)"
+                     % (len(lz4), "packed" if did4 else "refused"))
+    elif os88lz.cz_unwrap(lz4) != data:
+        fails.append("the >64KB LZ4 'CZ' file does not round-trip")
+    run = data[:40000] + b"\x5A" * 70000 + data[40000:100000]
+    for subj, src in (("half-text", data), ("a 70KB run", run)):
+        z = os88lz.lzb_compress_machine(src)
+        if z is None:
+            fails.append("the machine encoder refused %d bytes of %s"
+                         % (len(src), subj))
+            continue
+        try:
+            back = os88lz.lzb_decompress(z, len(src))
+        except ValueError as e:
+            back = None
+            fails.append("machine LZB of %s: %s" % (subj, e))
+        if back is not None and back != src:
+            fails.append("machine LZB of %s does not round-trip" % subj)
+        m = os88lz.in_place_margin(src, os88lz.LZB, packed=z)
+        if m:
+            fails.append("machine LZB of %s needs a margin of %d" % (subj, m))
+        print("t_lzfmt: machine LZB, %s: %d -> %d bytes"
+              % (subj, len(src), len(z)))
+    return fails
+
+
+def lengths():
+    """SPEC.md 20.14.5.3: no length the kernel's decoder cannot count.
+
+    kernel/lz.inc holds a match length - and an LZ4 literal run - in ONE
+    16-bit register. Both encoders once wrote a single match for a run of one
+    byte past 64KB, which the host decoder expanded and the kernel's refused,
+    so the build's round trip passed a file the machine could not read. So:
+    the encoder must split such a run, AND the host decoder must refuse a
+    hand-built stream that does not - the second is the negative control,
+    because a cap that is never tested against an over-length stream is a
+    cap nobody knows the decoder agrees with."""
+    fails = []
+    run = b"\x00" * 70000
+    z = os88lz.compress(run, os88lz.LZ4)
+    try:
+        ok = os88lz.decompress(z, os88lz.LZ4, len(run)) == run
+    except ValueError as e:
+        ok = False
+        fails.append("LZ4 of a 70,000-byte run: %s" % e)
+    if not ok and not fails:
+        fails.append("LZ4 of a 70,000-byte run does not round-trip")
+    # ...and the over-length streams, built by hand: a 70,000-byte match
+    lz4 = bytearray(b"\x05\x00")              # T = 5
+    os88lz._lz4_emit(lz4, b"A", 70000, 1)
+    lz4 += b"AAAAA"
+    w = os88lz._BitOut()
+    w.bit(0)
+    w.byte(0x41)                               # a literal...
+    w.bit(1)
+    w.gamma(70000)                             # ...then a 70,000-byte match
+    w.gamma(2)
+    w.byte(1)                                  # at offset 1
+    lzb = (5).to_bytes(2, "little") + bytes(w.buf) + b"AAAAA"
+    for fmt, blob in ((os88lz.LZ4, lz4), (os88lz.LZB, lzb)):
+        try:
+            os88lz.decompress(bytes(blob), fmt, 70006)
+            fails.append("the host %s decoder accepted a 70,000-byte match: "
+                         "the kernel's counts it in one register and refuses "
+                         "it, so the two disagree (SPEC.md 20.14.5.3)"
+                         % os88lz.NAMES[fmt])
+        except ValueError:
+            pass
+    print("t_lzfmt: a 70KB run: LZ4 %d bytes, and both decoders refuse a "
+          "match past a word" % len(z))
+    return fails
+
+
 def corpus():
     """the awkward cases, then whatever of the real tree happens to be built"""
     yield "empty", b""
@@ -80,11 +193,13 @@ MIRROR = [
     ("kernel/lz.inc", "LZ_LZB", "tools/os88lz.py", "LZB"),
     ("kernel/lz.inc", "LZ_LZ4", "apps/os88api.inc", "OSAPI_LZ_LZ4"),
     ("kernel/lz.inc", "LZ_LZB", "apps/os88api.inc", "OSAPI_LZ_LZB"),
+    ("kernel/lz.inc", "LZ_BIG", "apps/os88api.inc", "OSAPI_LZ_BIG"),
     ("kernel/disk.inc", "DSK_CZ_MARK", "tools/os88disk.py", "CZ_HINT"),
     ("kernel/disk.inc", "DSK_CZ_HDR", "tools/os88lz.py", "CZ_HDR"),
     ("kernel/disk.inc", "DSK_R_CZM", "tools/os88disk.py", "CZ_H_MARK"),
     ("kernel/disk.inc", "DSK_R_CZH", "tools/os88disk.py", "CZ_H_HI"),
     ("kernel/disk.inc", "DSK_R_CZL", "tools/os88disk.py", "CZ_H_LO"),
+    ("apps/os88parts.inc", "OP_SECMAX", "tools/os88pkg.py", "OP_SECMAX"),
 ]
 TUPLE = re.compile(r"^([A-Z_0-9]+(?:\s*,\s*[A-Z_0-9]+)+)\s*=\s*"
                    r"([0-9A-Fa-fxX]+(?:\s*,\s*[0-9A-Fa-fxX]+)+)\s*(?:#|$)",
@@ -177,20 +292,23 @@ def main():
                      os88lz.in_place_margin(plain, os88lz.LZ4),
                      len(plain) >> 16))
 
-    # a packed form at or past 64KB is stored PLAIN, not compressed: the
-    # decoder's source lives in one segment (SPEC.md 20.14.5). Noise is what
-    # makes a big packed form, so this is noise long enough to prove it.
+    # noise does not get smaller, so cz_wrap must store it PLAIN and hand
+    # back the input unchanged. (This used to be the test that an LZ4 packed
+    # form past 64KB was refused for its SIZE; SPEC.md 20.14.5.2 withdrew
+    # that, and big_lzb below now asserts the opposite.)
     x, big = 999, bytearray()
     while len(big) < 200000:
         x = (x * 1103515245 + 12345) & 0x7FFFFFFF
         big.append((x >> 16) & 0xFF)
     blob, did = os88lz.cz_wrap(bytes(big))
     if did:
-        fails.append("a %d-byte packed form was accepted: the decoder reads "
-                     "its source inside ONE segment" % (len(blob) - 8))
+        fails.append("200,000 bytes of noise came back compressed to %d: "
+                     "noise does not get smaller" % (len(blob) - 8))
     elif blob != bytes(big):
         fails.append("a refused cz_wrap did not return the input unchanged")
 
+    fails += big_lzb()
+    fails += lengths()
     fails += mirrors()
 
     print("t_lzfmt: %d subjects x 2 formats, worst in-place margin %d bytes"

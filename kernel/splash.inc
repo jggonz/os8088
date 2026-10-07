@@ -189,12 +189,9 @@ splf_anim:      call spl_anim
                                 ; screen's life, so the animation reaches the
                                 ; blob the same way every other kernel caller
                                 ; does
-splf_fill:      call spl_fill
-                retf            ; ...and SPEC.md 15.5's BOOTMARK beacon, which
-                                ; borrows the splash's byte-granular fill and
-                                ; is `.text`. os88ovlchk found this one: two
-                                ; near calls that were right for as long as
-                                ; both ends were in the same segment
+; (splf_fill, SPEC.md 15.5's BOOTMARK beacon's door into spl_fill, is gone:
+; the marker carries its own mark_fill since it stopped borrowing the blob -
+; kernel.asm says why - and the shim had no caller left)
 
 ; -----------------------------------------------------------------------------
 ; spl_tick - stage 2 calls this after every run it reads (SPEC.md 15).
@@ -520,10 +517,11 @@ spl_reset:
 ;              bp, es
 ; -----------------------------------------------------------------------------
 spl_chrome:
-    call KERNEL_SEG:spw_vid_detect ; the adapter probe happens HERE, before any
-    call KERNEL_SEG:spw_vid_apply ; other kernel module is even resident: the
-    call KERNEL_SEG:spw_vid_setmode; splash owns the first mode set, and kmain's
-                                ; vid_init later re-runs all three (SPEC 39.1)
+    BLOBCALL vid_detect         ; the adapter probe happens HERE, before any
+    mov bp, vid_apply           ; other kernel module is even resident: the
+    call KERNEL_SEG:spw_near    ; splash owns the first mode set, and kmain's
+    mov bp, vid_setmode         ; vid_init later re-runs all three (SPEC 39.1).
+    call KERNEL_SEG:spw_near    ; BP names the routine (viddet.inc's door)
 
 ; ...and the same chrome onto a mode SOMEBODY ELSE has just set. TWO callers
 ; enter here, and neither may re-run the three calls above:
@@ -587,7 +585,7 @@ spl_rechrome:
     loop .lrow
 
     mov ax, bx                  ; AX = the bar row again, for the row base
-    call KERNEL_SEG:spw_gfx_rowbase
+    call spl_rbase
     mov bx, [vid_cw]            ; x = (width - bar) / 2, in whole bytes: 22 at
     sub bx, SPL_BAR_PX          ; 640 (which is what SPL_BAR_ADR always was),
     mov cl, 4                   ; 27 at Hercules' 720
@@ -629,11 +627,25 @@ spl_rechrome:
     jmp spl_text                ; tail call
 
 ; -----------------------------------------------------------------------------
+; spl_rbase - gfx_rowbase from the blob: AX = row in, AX = its framebuffer
+;             offset out; CX and DX clobbered (gfx_rowbase's own contract), BP
+;             preserved. The kernel's one far door (viddet.inc's spw_near)
+;             takes the routine in BP, so the loader wraps it once here
+;             rather than loading BP at six call sites
+; -----------------------------------------------------------------------------
+spl_rbase:
+    push bp
+    mov bp, gfx_rowbase
+    call KERNEL_SEG:spw_near
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
 ; spl_cell - ES:DI = the first byte of a field BX cells wide, centred on the
 ;            screen, with its top on row AX.  clobbers: ax, bx, cx, es
 ; -----------------------------------------------------------------------------
 spl_cell:
-    call KERNEL_SEG:spw_gfx_rowbase
+    call spl_rbase
     push ax
     mov ax, [cs:spl_l_cx]
     mov cl, 2
@@ -653,7 +665,7 @@ spl_setdi:                      ; ...and the tail spl_spinadr shares: AX is a
 ; -----------------------------------------------------------------------------
 spl_spinadr:
     mov ax, [cs:spl_l_spn]
-    call KERNEL_SEG:spw_gfx_rowbase
+    call spl_rbase
     add ax, [cs:spl_l_spx]
     jmp short spl_setdi
 
@@ -919,229 +931,12 @@ spl_kglyph:
 ; ES and not DS: every caller here has the KERNEL's DS and needs to keep it,
 ; and each of them clobbers ES on the way to the framebuffer anyway.
 ; -----------------------------------------------------------------------------
-spl_clock:
-    mov ax, 0x40
-    mov es, ax
-    mov ax, [es:0x6C]
-    ret
-
-; -----------------------------------------------------------------------------
-; spl_spin - one animation step: the "8088" with x scaled by cos(angle), angle
-;            = the WALL CLOCK mod 16 of a revolution (SPEC.md 15.3.6). cos < 0
-;            mirrors the endpoints, so the back face renders itself.
-;            clobbers: ax, bx, cx, dx, si, di, bp, es
-;
-; IT COMPOSES EACH ROW AND STORES IT ONCE (SPEC.md 15.3.4). It used to blank
-; the whole 15x41 box with spl_fill and then stroke nineteen lines into it -
-; the erase-then-letter pair at the largest scale in the tree, 615 bytes
-; cleared to redraw about 370, with the logo ABSENT in between. A boot
-; repaints ~29 times half a second apart, so it is not subliminal: it reads as
-; the logo BLINKING and was reported from the field as exactly that.
-;
-; The shape is what makes the composer cheap: 38 of the 41 rows are the same
-; row - the eight verticals - and only 0, 20 and 40 carry a bar. So two 15-byte
-; buffers hold every row this frame needs, they are built in RAM where a store
-; is a store, and the box is written top to bottom with each byte visited
-; ONCE. No blank, no read-modify-write, no Graphics Controller OUT.
-; -----------------------------------------------------------------------------
-SPL_SPINB   equ 15              ; the spinner box, in bytes
-SPL_SPINR   equ 41              ; ...and its rows. WHERE it is is the layout's
-                                ; (SPEC.md 15.3.5.2): it was SPL_TOP * 80 + 33,
-                                ; a hard stride of 80 that is VGA's and not
-                                ; Hercules' 90
-spl_spin:
+%include "spinner.inc"
 %ifdef SPLSTARS
-    mov word [cs:spl_cos], 64   ; SPEC.md 15.3.7: the logo is STILL and the
-                                ; stars are the animation. It is composed and
-                                ; written every frame all the same - the box
-                                ; is every-pixel-once (15.3.4), so redrawing
-                                ; the same picture is invisible, and both arms
-                                ; of the A/B then pay the identical logo cost
+    OS88_SPINNER spl, 1
 %else
-    call spl_clock              ; SPEC.md 15.3.6: the angle is the WALL CLOCK,
-    mov cl, SPL_SPINSH          ; and [spl_done] drives the BAR alone
-    shr ax, cl
-    and ax, 15
-    mov bx, ax
-    mov al, [cs:spl_cos_tab + bx]  ; the table is signed BYTES; [spl_cos] stays
-    cbw                            ; a word, which spl_xform's imul needs
-    mov [cs:spl_cos], ax
+    OS88_SPINNER spl, 0
 %endif
-
-    mov ax, [vid_rowadd]        ; the row walk's three words, banked into CS
-    mov [cs:spl_radd], ax       ; because everything below runs with DS = CS
-    mov ax, [vid_wrapbit]
-    mov [cs:spl_rwbit], ax
-    mov ax, [vid_wrapfix]
-    mov [cs:spl_rwfix], ax
-    call spl_spinadr            ; ES:DI, through gfx_rowbase like every other
-                                ; row here - so CGA's bank interleave and
-                                ; Hercules' four are SPL_NEXTROW_CS's, as they
-                                ; already are for the bar. BEFORE the DS
-                                ; switch below: it reads [vid_seg], which is
-                                ; the KERNEL's, and pointing DS at CS first
-                                ; read a `.boot2` byte instead and left ES
-                                ; wherever that landed - the spinner vanished
-                                ; on all three adapters
-    push ds
-    mov ax, cs
-    mov ds, ax                  ; ...so the row copy is one `rep movsb`
-
-    xor al, al                  ; ...the plain row: verticals only
-    mov bx, spl_rowa
-    call spl_rowmk
-    mov al, 0x0F                ; ...and every digit's bar, for rows 0 and 40
-    mov bx, spl_rowb
-    call spl_rowmk
-
-    call spl_putrow             ; row 0
-    mov cx, 19
-    call spl_putplain           ; rows 1..19
-    mov al, 0x0D                ; row 20 is the MIDDLE bar, and the second
-    mov bx, spl_rowb            ; digit is a 0 - SPL_DIG0 has no middle
-    call spl_rowmk
-    call spl_putrow             ; row 20
-    mov cx, 19
-    call spl_putplain           ; rows 21..39
-    mov al, 0x0F
-    mov bx, spl_rowb
-    call spl_rowmk
-    call spl_putrow             ; row 40
-    pop ds
-    ret
-
-; -----------------------------------------------------------------------------
-; spl_putplain - CX rows of [spl_rowa].  spl_putrow - one row of [spl_rowb].
-; Both take ES:DI at the row's first byte and leave it at the next row's.
-; clobbers: ax, cx, si
-; -----------------------------------------------------------------------------
-spl_putplain:
-    mov si, spl_rowa
-    call spl_prow
-    loop spl_putplain
-    ret
-spl_putrow:
-    mov si, spl_rowb
-spl_prow:
-    push cx
-    push si
-    push di
-    mov cx, SPL_SPINB
-    rep movsb                   ; DS = CS (spl_spin set it): OPAQUE, and the
-    pop di                      ; only write each of these bytes gets
-    pop si
-    pop cx
-    SPL_NEXTROW_CS
-    ret
-
-; -----------------------------------------------------------------------------
-; spl_rowmk - build a row into the 15-byte buffer at CS:BX: the eight verticals
-;             always, plus the horizontal bar of each digit whose bit is set in
-;             AL.  clobbers: ax, cx, dx, si, bp - and PRESERVES DI
-;
-; A digit's bar runs from its left vertical to its right one, so the two x
-; values a digit needs are the same three ways up. spl_span does a single
-; pixel as the degenerate case (x1 == x2), which is why there is no setpixel.
-; -----------------------------------------------------------------------------
-spl_rowmk:
-    push di                     ; DI IS THE CALLER'S VRAM ROW POINTER. It is
-    mov [cs:spl_rbar], al       ; spent below and spl_spin rebuilds the bar
-    mov di, bx                  ; row twice DURING the walk down the box, so
-    mov cx, SPL_SPINB           ; forgetting this drew the whole spinner into
-    xor al, al                  ; whatever the zero loop left behind - which
-.z:                             ; is a box of nothing, measured
-    mov [cs:di], al             ; (the buffer is CS's, so no rep stosb: that
-    inc di                      ; would address ES, the framebuffer)
-    loop .z
-
-    mov byte [cs:spl_rdig], 0
-.digit:
-    mov al, 28
-    mul byte [cs:spl_rdig]      ; AL = the digit's box-relative x
-    push ax
-    call spl_xform
-    mov bp, ax                  ; BP = one end, screen x
-    pop ax
-    add al, 20
-    call spl_xform              ; AX = the other
-    mov dx, ax
-    mov ax, bp
-    cmp ax, dx                  ; a mirrored frame swaps them
-    jbe .ordered
-    xchg ax, dx
-.ordered:
-    mov cl, [cs:spl_rdig]
-    mov ch, 1
-    shl ch, cl                  ; CH = this digit's bit
-    test [cs:spl_rbar], ch
-    jnz .bar
-    push dx                     ; no bar: the two verticals, a pixel each
-    mov dx, ax
-    call spl_span
-    pop dx
-    mov ax, dx
-.bar:
-    call spl_span
-    inc byte [cs:spl_rdig]
-    cmp byte [cs:spl_rdig], 4
-    jb .digit
-    pop di
-    ret
-
-; -----------------------------------------------------------------------------
-; spl_span - OR the run of screen x from AX to DX (AX <= DX) into the buffer at
-;            CS:BX.  clobbers: ax, cx, dx, si
-; -----------------------------------------------------------------------------
-spl_span:
-    sub ax, [cs:spl_l_spp]      ; box-relative, in pixels
-    sub dx, [cs:spl_l_spp]
-    mov cx, ax
-    and cl, 7
-    mov si, ax
-    mov ax, 0x00FF
-    shr al, cl                  ; AL = the first byte's mask
-    mov cx, dx
-    and cl, 7
-    xor cl, 7
-    mov ah, 0xFF
-    shl ah, cl                  ; AH = the last byte's mask
-    mov cl, 3                   ; ...and ONE shift count for both byte indices:
-    shr si, cl                  ; SI = the first byte, still unshifted here
-    shr dx, cl                  ; DX = the last
-    cmp si, dx
-    jne .multi
-    and al, ah                  ; one byte carries both edges
-    or [cs:bx+si], al
-    ret
-.multi:
-    or [cs:bx+si], al
-    inc si
-.mid:
-    cmp si, dx
-    jae .last
-    mov byte [cs:bx+si], 0xFF
-    inc si
-    jmp short .mid
-.last:
-    or [cs:bx+si], ah
-    ret
-
-; -----------------------------------------------------------------------------
-; spl_xform - coin-flip a spinner x: AL = box-relative x (0..104) ->
-;             AX = 320 + (AL - SPL_HALFW) * cos / 64. clobbers: nothing else
-; -----------------------------------------------------------------------------
-spl_xform:
-    push cx
-    push dx
-    xor ah, ah
-    sub ax, SPL_HALFW
-    imul word [cs:spl_cos]         ; DX:AX = rel * cos; |result| <= 3328
-    mov cl, 6
-    sar ax, cl
-    add ax, [cs:spl_l_cx]       ; ...and NOT 320, which is VGA's centre alone
-    pop dx
-    pop cx
-    ret
 
 %ifdef SPLSTARS
 ; =============================================================================
@@ -1247,7 +1042,7 @@ spl_stars:
 ;               in: DS = KERNEL_SEG (it reads [vid_seg])
 ;               clobbers: ax, bx, cx, dx, di, es - and PRESERVES SI
 ;
-; Through spw_gfx_rowbase like every other row in this module, so CGA's bank
+; Through spl_rbase like every other row in this module, so CGA's bank
 ; interleave and Hercules' four are handled where they already are.
 ; -----------------------------------------------------------------------------
 spl_staradr:
@@ -1255,7 +1050,7 @@ spl_staradr:
     cbw                         ; SIGNED: two of the six sit ABOVE the logo box
     add ax, [cs:spl_l_spn]
     sub ax, SPL_STARCY          ; ...and a box starts five rows above centre
-    call KERNEL_SEG:spw_gfx_rowbase
+    call spl_rbase
     mov bx, ax
     mov al, [cs:spl_stdx]
     cbw                         ; ...signed too: four of the six are LEFT of it
@@ -1498,7 +1293,7 @@ spl_hline:
     mov si, dx                  ; SI = x2 (gfx_rowbase eats CX and DX)
     mov ax, bx                  ; AX = y
     mov bx, cx                  ; BX = x1 - gfx_rowbase preserves it
-    call KERNEL_SEG:spw_gfx_rowbase
+    call spl_rbase
     mov bp, ax                  ; BP = row base
 
     mov ax, bx
@@ -1553,7 +1348,7 @@ spl_hline:
 ;
 ; The same census as spl_hline's, one routine along: spl_rect calls this twice
 ; and needs y1 and y2 to survive between them (BX, and DX which
-; spw_gfx_rowbase eats).  x it reloads from SI, and SI this routine never
+; spl_rbase eats).  x it reloads from SI, and SI this routine never
 ; touches.
 ; -----------------------------------------------------------------------------
 spl_vline:
@@ -1565,7 +1360,7 @@ spl_vline:
     inc di                      ; DI = row count
     push cx                     ; CX = x, and gfx_rowbase eats CX
     mov ax, bx
-    call KERNEL_SEG:spw_gfx_rowbase
+    call spl_rbase
     mov bx, di                  ; BX = row count
     mov di, ax                  ; DI = row base
     pop cx

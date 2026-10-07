@@ -57,7 +57,12 @@ KERNEL_SEG  equ KD_SEG          ; ...and the kernel's own files call it this
 ; because DOS has no such call - AH=3Ah removes an empty directory and refuses
 ; a populated one, which is the strict `dskw_rmdir` arm `dos_k_rmdir` already
 ; takes. 381 bytes of the rung left.
+%ifdef DOSR_MARK                ; SPEC.md 96.49's resume trace is 542 bytes
+KD_IMG_KB   equ 36              ; and the shipped image has 237 of its rung
+%else                           ; left: the KNOB pays the kilobyte, as a DOS
+                                ; program on a trace build, and no shipped one
 KD_IMG_KB   equ 35              ; 34 until SPEC.md 96.11.7's character devices
+%endif
                                 ; raised CORE_MAX by a kilobyte, and this rung
                                 ; reserves the core's block - so a kilobyte
                                 ; there is a kilobyte here, which is a kilobyte

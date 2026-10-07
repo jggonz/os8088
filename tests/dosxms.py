@@ -23,7 +23,6 @@ code. A QEMU twin of this row is what would change that.
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88ui                                                  # noqa: E402
@@ -48,14 +47,17 @@ def main():
         if not ui.path("B:/DOSXMS.COM"):
             fail("double-clicking DOSXMS.COM opened no window")
 
-        rows = []
-        end = time.time() + 120.0
-        while time.time() < end:
-            rows = m.screen() or []
-            if any("READY" in r for r in rows):
-                break
-            time.sleep(0.3)
-        else:
+        seen = {"rows": []}
+
+        def ready(_):
+            seen["rows"] = m.screen() or []
+            return any("READY" in r for r in seen["rows"])
+        try:                            # a GUEST-time budget
+            os88marty.until(m, ready, "DOSXMS.COM to finish", poll=0.3,
+                            limit=120.0)
+            rows = seen["rows"]
+        except os88marty.MartyError:
+            rows = seen["rows"]
             fail("the program never finished - an int 2Fh that does not come "
                  "back is exactly what this row exists to catch. The last "
                  "text screen was %r"

@@ -21,9 +21,9 @@ package is launched off B:.
 import os
 import re
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
@@ -58,13 +58,14 @@ def main():
         if not ui.path("B:/RENREF.COM"):
             fail("double-clicking RENREF.COM opened no window")
         rows = []
-        end = time.time() + 180.0
-        while time.time() < end:
-            rows = m.screen() or []
-            if any("RENREF READY" in r for r in rows):
-                break
-            time.sleep(0.3)
-        else:
+
+        def _seen(_m):
+            rows[:] = m.screen() or []
+            return any("RENREF READY" in r for r in rows)
+        try:                        # GUEST time: `limit` is idle-box seconds
+            os88marty.until(m, _seen, "RENREF.COM to finish", poll=0.3,
+                            limit=180.0)
+        except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
                  % ([r.rstrip() for r in rows if r.strip()][:14],))
         print("dosren: the bracket's text screen:")

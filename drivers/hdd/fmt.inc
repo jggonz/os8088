@@ -18,8 +18,9 @@
 ; The data area is NOT touched, which is what makes a 32MB format a hundred
 ; sector writes instead of 65,000.
 ;
-; The layout is the FAT specification's own arithmetic, and every term of it
-; fits a word because a partition is capped at 65,535 sectors (SPEC.md 18.7):
+; The layout is the FAT specification's own arithmetic. Its terms fitted a
+; word while a partition was capped at 65,535 sectors (SPEC.md 18.7); the
+; sector counts are 32-bit since that cap became FAT16's own (SPEC.md 52.3.1):
 ;
 ;   TmpVal1 = sectors - (reserved + rootsecs)
 ;   TmpVal2 = (256 * SecPerClus) + NumFATs        ; FAT16
@@ -137,20 +138,26 @@ hd_fmt_plan:
 ; out: AX = sectors per cluster, a power of two
 ; clobbers: AX (the output), flags
 ;
-; Microsoft's DskTableFAT16, trimmed to the sizes a 16-bit volume-relative LBA
-; can reach (SPEC.md 18.7 caps a partition at 65,535 sectors = 31.99MB), so
-; only its first two rows are reachable and the rest would be dead code:
+; Microsoft's DskTableFAT16, of which two rows are here:
 ;
 ;   <= 16MB   (32,680 sectors)   2 sectors, 1KB clusters
 ;   <= 32MB   (65,535 sectors)   4 sectors, 2KB clusters
 ;
+; ...and the rest are what hd_fmt_plan's walk arrives at on its own: past a
+; word of sectors it starts at 2KB and doubles until the count is under
+; 65,525, which IS the table's row for every size to 2GB (SPEC.md 52.3.1).
 ; A partition too small for FAT16 at 1KB clusters walks DOWN by way of
 ; hd_fmt_plan's FAT12 branch, which is the same path it always took.
 ; -----------------------------------------------------------------------------
 hd_fmt_spc0:
-    mov ax, 2
-    cmp word [hd_fsecs], 32680
-    jbe .out
+    mov ax, 4
+    cmp word [hd_fsecs+2], 0    ; past 32MB the walk goes on up from 2KB by
+    jne .out                    ; doubling - which lands on DOS's own row for
+    mov ax, 2                   ; every size to 2GB (SPEC.md 18.7.5), so the
+    cmp word [hd_fsecs], 32680  ; table needs no more rows
+    ja .four
+    ret
+.four:
     mov ax, 4
 .out:
     ret
@@ -166,17 +173,13 @@ hd_fmt_layout:
     push bx
     push cx
     push dx
-    mov ax, [hd_fsecs]
-    mov bx, HF_RSVD + HF_ROOTSECS
-    cmp ax, bx
-    jbe .no
-    sub ax, bx                  ; TmpVal1
+    call hd_fmt_tmp1            ; DX:AX = TmpVal1, 32 bits (SPEC.md 18.7.5)
+    jc .no
     mov bx, [hd_fspc]
     mov cl, 8
     shl bx, cl                  ; 256 * SecPerClus (<= 32,768)
     add bx, HF_NFATS            ; TmpVal2
-    xor dx, dx                  ; the ceiling in THIRTY-TWO bits: TmpVal1 is
-    add ax, bx                  ; nearly 65,535 already and TmpVal1+TmpVal2-1
+    add ax, bx                  ; the ceiling in THIRTY-TWO bits: TmpVal1 is
     adc dx, 0                   ; wraps a word for every cluster size there
     sub ax, 1                   ; is - which read as "no layout fits" for
     sbb dx, 0                   ; every partition over about 32MB
@@ -209,11 +212,8 @@ hd_fmt_layout12:
     push bx
     push cx
     push dx
-    mov ax, [hd_fsecs]
-    mov bx, HF_RSVD + HF_ROOTSECS
-    cmp ax, bx
-    jbe .no
-    sub ax, bx
+    call hd_fmt_tmp1
+    jc .no
     mov bx, [hd_fspc]
     mov cl, 9
     shl bx, cl                  ; 512 * SecPerClus
@@ -224,9 +224,7 @@ hd_fmt_layout12:
     div bx                      ; (512 * SecPerClus) / 3 - two FAT12 entries
     mov bx, ax                  ; to three bytes
     add bx, HF_NFATS            ; TmpVal2
-    mov ax, [hd_fsecs]
-    sub ax, HF_RSVD + HF_ROOTSECS
-    xor dx, dx                  ; ...and the same 32-bit ceiling
+    call hd_fmt_tmp1            ; ...and the same 32-bit ceiling
     add ax, bx
     adc dx, 0
     sub ax, 1
@@ -252,6 +250,40 @@ hd_fmt_layout12:
     ret
 
 ; -----------------------------------------------------------------------------
+; hd_fmt_tmp1 - DX:AX = [hd_fsecs] less the reserved sector and the root
+; out: CF = 1 = the partition is not even that long
+; -----------------------------------------------------------------------------
+hd_fmt_tmp1:
+    mov ax, [hd_fsecs]
+    mov dx, [hd_fsecs+2]
+    sub ax, HF_RSVD + HF_ROOTSECS
+    sbb dx, 0
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_fmt_tot - the volume's length into hd_sec0's BPB (SPEC.md 18.7.5)
+; out: nothing (all registers preserved)
+;
+; TotSec16 while it fits a word, and 0 there with TotSec32 holding it when it
+; does not - the FAT spec's rule, and the one the kernel's mount folds back
+; into one staged count. hd_sec0 is zeroed (or a template with zeros there)
+; by every caller, so TotSec32 is already 0 on the small path.
+; -----------------------------------------------------------------------------
+hd_fmt_tot:
+    push ax
+    mov ax, [hd_fsecs]
+    cmp word [hd_fsecs+2], 0
+    je .w16
+    mov [hd_sec0+HF_B_TOT32], ax
+    mov ax, [hd_fsecs+2]
+    mov [hd_sec0+HF_B_TOT32+2], ax
+    xor ax, ax
+.w16:
+    mov [hd_sec0+HF_B_TOT16], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_fmt_clusters - the cluster count the current layout leaves
 ; in:  [hd_fsecs], [hd_fspc], [hd_ffatsz]
 ; out: CF = 0 and [hd_fclus]; CF = 1 = the metadata eats the whole partition
@@ -269,11 +301,13 @@ hd_fmt_clusters:
     add ax, HF_RSVD + HF_ROOTSECS
     jc .no
     mov bx, ax                  ; BX = the first data sector
-    mov ax, [hd_fsecs]
-    cmp ax, bx
-    jbe .no
+    mov ax, [hd_fsecs]          ; ...and what is left, in 32 bits
+    mov dx, [hd_fsecs+2]
     sub ax, bx
-    xor dx, dx
+    sbb dx, 0
+    jc .no
+    cmp dx, [hd_fspc]           ; a quotient past a word is too many clusters
+    jae .no                     ; for FAT16: .no sends the plan to a bigger one
     div word [hd_fspc]
     mov [hd_fclus], ax
     mov [hd_fdata], bx
@@ -484,8 +518,7 @@ hd_fmt_boot:
     mov word [hd_sec0+HF_B_RSVD], HF_RSVD
     mov byte [hd_sec0+HF_B_NFATS], HF_NFATS
     mov word [hd_sec0+HF_B_ROOTN], HF_ROOTENT
-    mov ax, [hd_fsecs]
-    mov [hd_sec0+HF_B_TOT16], ax
+    call hd_fmt_tot             ; TotSec16, or TotSec32 past a word
     mov byte [hd_sec0+HF_B_MEDIA], HF_MEDIA
     mov ax, [hd_ffatsz]
     mov [hd_sec0+HF_B_FATSZ], ax
@@ -561,6 +594,13 @@ hd_fmt_isfat:
     push ds
     pop es
     mov bx, hd_sec0
+    mov word [bx+510], 0        ; the signature, CLEARED first: a transfer
+                                ; that answers success and delivers nothing
+                                ; otherwise leaves the LAST slot's boot
+                                ; sector here to be read as this one's -
+                                ; which the installer's scan, reading all
+                                ; four in a row, would print as a FAT type
+                                ; (SPEC.md 52.10.4.2)
     mov ax, [si+HP_LBA]
     mov dx, [si+HP_LBA+2]
     mov cx, 1

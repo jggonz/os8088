@@ -111,8 +111,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # FDLG.DRV and exist on kern_small alone (FCP_MOD/FDLG_MOD); on kern_big those
 # bodies assemble into `.cold` and are resident by decision (SPEC.md 2.8).
 # `.modh` is HIBER.DRV, which is kern_big's - the 128KB machine has no hard
-# disk to hibernate to (mod.inc).
-MODS = {False: ('.modc', '.modf', '.modl', '.modh'),
+# disk to hibernate to (mod.inc) - and so are `.modk` DOCK.DRV and `.modx`
+# EXTD.DRV (SPEC.md 30.5, 39.19.6), which this list missed until the second.
+MODS = {False: ('.modc', '.modf', '.modl', '.modh', '.modk', '.modx'),
         True:  ('.modc', '.modf', '.modl', '.modp', '.modd')}
 OVLS = ('.ovl', '.ovlw')
 RESIDENT = ('.text', '.bss', '.cold')
@@ -287,7 +288,7 @@ def crosscheck(persec, defines):
 # stop using.  One that it does not is NOT worth publishing for this: a cell is
 # **8 bytes** and a shim is **4**, and the table is contiguous (167 cells in 168
 # positions), so a new slot costs 8 to save 4 - and commits the SDK for ever.
-CELL = re.compile(r'\s*OSAPI_(SLOT|CSLOT|JSLOT|XCELL|CXCELL|NCELL|FARCELL)\s+(\w+)\s*;\s*(0x[0-9A-Fa-f]+)')
+CELL = re.compile(r'\s*OSAPI_(SLOT|CSLOT|JSLOT|XCELL|CXCELL|NCELL|FARCELL|RSLOT|RXCELL|RCXCELL|RNCELL|RCSLOT|JCELL|FCELL)\s+(\w+)\s*;\s*(0x[0-9A-Fa-f]+)')
 SHIMDEF = re.compile(r'^((?:dskf_|dkf_|drvf_|fmf_|mmf_|memf_|cw_|hbk_)\w*|\w*_f):'
                      r'\s*(?:call\s+(?:\w+:)?(\w+))?')
 

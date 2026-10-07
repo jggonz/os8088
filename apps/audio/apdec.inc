@@ -252,8 +252,11 @@ apd_emit:
 ;
 ; NO push/pop for the same reason as apd_emit - ~135 cycles of stack traffic
 ; per sample. The one push/pop kept is the predictor across the index update.
-; The algorithm is unchanged and still byte-identical to ffmpeg's
-; adpcm_ima_wav; the >>2 / >>3 use single shifts so CL is never a divisor.
+; The algorithm is the IMA/DVI specification's shifts - NOT ffmpeg's
+; adpcm_ima_wav, which rounds the step's multiple differently and disagrees
+; by one in ~5% of samples (tests/apspk.py measured 2,799 of 57,148, and
+; carries this arithmetic as its reference, SPEC.md 86.21); the >>2 / >>3
+; use single shifts so CL is never a divisor.
 ; -----------------------------------------------------------------------------
 apd_step_nib:
     xor ah, ah

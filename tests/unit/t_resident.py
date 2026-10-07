@@ -82,7 +82,7 @@ def listing(build):
            "-I", os.path.join(ROOT, "kernel") + os.sep,
            "-I", os.path.join(ROOT, "apps") + os.sep,
            "-I", build + os.sep,
-           "-l", out, "-o", os.devnull,
+           "-l", out, "-o", out + ".bin",
            os.path.join(ROOT, "kernel", "kernel.asm")]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
     if r.returncode != 0:

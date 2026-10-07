@@ -31,7 +31,9 @@
 ;
 ; This module is included BEFORE splash.inc because the boot splash calls
 ; vid_detect/vid_apply/vid_setmode on its first tick, while the rest of the
-; kernel is still coming off the floppy. Everything here therefore obeys the
+; kernel is still coming off the floppy. (vid_detect itself is in the BLOB now,
+; SPEC.md 2.5.3.3 - which is aboard before stage 2 jumps - so the first tick
+; reaches it with no `.text` on the path at all.) Everything here therefore obeys the
 ; splash's rules: it must be resident inside the first SPL_RESIDENT sectors,
 ; and ALL its data lives in .text - never .bss, which is not yet cleared and
 ; holds whatever the machine left there (SPEC.md 15).
@@ -280,7 +282,7 @@ vid_popmax  dw MENU_POPMAX      ; pull-down items that fit under the bar, and
                                 ; because vid_apply overwrote it on the
                                 ; splash's first tick, long before a menu.
                                 ; The %error beside MENU_POPMAX is the guard
-vid_desk_zx dw SCREEN_W-56      ; desktop drive column: the hit zone's left
+vid_desk_zx dw SCREEN_W-DESK_ZXOFF ; the desktop grid's cell 0: its left
                                 ; edge, and the ONLY word of it that is
                                 ; published. The drawn rect either side of it
                                 ; is desk_zone_rect's arithmetic over
@@ -428,7 +430,8 @@ section .text                   ; AND spend KERN_CODE_MAX, which is the guard
 ; escape hatch. The target is period XT hardware, where a real EGA is the
 ; common case this trades for.
 ; -----------------------------------------------------------------------------
-vid_detect:
+section .ovl                    ; IN THE BLOB (SPEC.md 2.5.3.3): BOTH callers are
+vid_detect:                     ; in it - the splash's first tick, and vid_init
     push ax
     push bx
     push cx
@@ -491,8 +494,17 @@ vid_detect:
 %endif
 .set:
     mov [vid_kind], al
-    jmp vid_pop8                ; the shared epilogue - and so this routine's
-                                ; push list is vid_setmode's. See vid_pop8.
+    pop es                      ; its own epilogue: vid_pop8 is `.text`'s
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    retf                        ; BLOBCALL's far frame. It used to `jmp
+section .text                   ; vid_pop8`, the shared epilogue, which is
+                                ; `.text`'s and so out of reach from the blob
 
 ; -----------------------------------------------------------------------------
 ; vid_apply - publish [vid_kind]'s geometry into the live and derived blocks
@@ -556,11 +568,12 @@ vid_depth_set:
                                 ; the tight one). Two bytes could be had by
                                 ; dropping this pair; they are a contract
                                 ; change and are not taken.
-    cmp al, VID_VGA
-    je .colour                  ; **ZF IS THE ANSWER AND IT SURVIVES TO THE
+    cmp al, VID_VGA             ; **ZF IS THE ANSWER AND IT SURVIVES TO THE
 %ifdef GFX_VGA                  ; `jne` BELOW**, and without a VGA renderer
-    cmp al, VID_EGA             ; the first compare is the whole answer.
-%endif                          ; EGA is the same four-plane
+    je .colour                  ; the first compare is the whole answer - so
+    cmp al, VID_EGA             ; the `je` is inside the %ifdef too, or it is
+%endif                          ; a jump onto the next instruction. EGA is the
+                                ; same four-plane
 .colour:                        ; 16-colour depth as VGA - mode 10h, just
                                 ; shorter (SPEC.md 39.24) - so `colour` is
                                 ; `al == VID_VGA || al == VID_EGA`, and the
@@ -684,10 +697,12 @@ vid_apply:
     ; below, which moved down with it.  ES = DS from the prologue, DF is
     ; clear (the vid_tab copy's own `cld`, and nothing sets it after), and
     ; SI, DI and CX are all dead here.
-    mov si, vid_w
-    mov di, vid_pw
-    mov cx, 4
-    rep movsw
+    mov si, vid_w               ; (DI is already vid_pw: the m1/m8 copy above
+    mov cx, 4                   ; ends on vid_wm8, which vid_pw follows - the
+    rep movsw                   ; %error below pins it. Size pass 9)
+%if vid_pw - vid_wm8 != 2
+  %error "vid_pw must follow vid_wm8: vid_apply's second copy starts where the first one's DI stops"
+%endif
 
     mov ax, [vid_pw]            ; ...AND THE CLOCK IS THE PRIMARY'S, because the
     sub ax, MENU_CLK_W + 14     ; MENU BAR is (SPEC.md 39.2.1.2). One subtract:
@@ -708,7 +723,7 @@ vid_apply:
     mov [vid_bankmask], ax      ; which is what makes prevrow a bare subtract
 
     mov ax, [vid_w]             ; --- the desktop's drive column, right-hung.
-    sub ax, 56                  ; ONE word: desk_zone_rect derives the drawn
+    sub ax, DESK_ZXOFF          ; ONE word: desk_zone_rect derives the drawn
     mov [vid_desk_zx], ax       ; rect from it (SPEC.md 26.4). dock_geom moves
                                 ; it in off a right-hand strip (30.5)
 
@@ -725,19 +740,22 @@ vid_apply:
 
     mov al, [vid_kind]          ; --- the renderer's DEPTH, in one place
     call vid_depth_set          ; (see there: a display swap needs it too)
-    xor ax, ax                  ; PLANAR (VGA or EGA): the software renderer
-    cmp byte [vid_mono], 0      ; has no target - 0, because nothing routes
-    je .rend                    ; through it (SPEC.md 39.5/39.24). Keyed on
-    mov ax, [vid_seg]           ; the DEPTH vid_depth_set has just set and not
-.rend:                          ; on the kind - EGA is planar and 0 here too.
-    mov [vid_rseg], ax          ; MONO: the renderer draws straight into the
+    mov ax, [vid_seg]           ; font_run's target, [vid_tseg]: see the block
+    mov [vid_tseg], ax          ; below for why it is the LIVE [vid_seg]
+    cmp byte [vid_mono], 0      ; PLANAR (VGA or EGA): the software renderer
+    jne .rend                   ; has no target - 0, because nothing routes
+    xor ax, ax                  ; through it (SPEC.md 39.5/39.24). Keyed on
+.rend:                          ; the DEPTH vid_depth_set has just set and not
+    mov [vid_rseg], ax          ; on the kind - EGA is planar and 0 here too.
+                                ; MONO: the renderer draws straight into the
                                 ; framebuffer, so its target IS the screen.
                                 ; This set a plane STEP and an exclusive END
                                 ; beside it until both were found to have no
-                                ; reader anywhere (SPEC.md 39.26)
+                                ; reader anywhere (SPEC.md 39.26). [vid_seg] is
+                                ; loaded ONCE for both words (size pass 9)
 
-    ; --- font_run's target (SPEC.md 6.1.10), and it belongs HERE and not one
-    ; line above the block it reads. It IS [vid_seg] on every adapter there
+    ; --- font_run's target (SPEC.md 6.1.10), and it belongs AFTER the vid_tab
+    ; copy and not earlier in vid_apply. It IS [vid_seg] on every adapter there
     ; is - [vid_rseg] three lines up is `mono ? [vid_seg] : 0`, so the
     ; conditional this used to be read `mono ? [vid_seg] : [vid_seg]` - and
     ; the ordering trap the block below records is why it still reads the
@@ -750,9 +768,8 @@ vid_apply:
     ; (It was NOT always [vid_seg]: SPEC.md 32's renderer had an off-screen
     ; target and vidsel.inc's sw_set wrote [vid_rseg] from inside the run.
     ; That renderer is gone, and the cell stays published because font.inc
-    ; reads it once per composed row.)
-    mov ax, [vid_seg]
-    mov [vid_tseg], ax
+    ; reads it once per composed row.) The store itself is at the top of the
+    ; block above, where [vid_seg] is loaded once for [vid_rseg] as well.
 
     ; --- gfx_rowbase's answer, laid down instead of computed (SPEC.md 39.3.1)
     ; Every input to a row's base address - the stride, the bank mask and the
@@ -1013,9 +1030,11 @@ vid_setmode:
     cmp byte [vid_kind], VID_CGA    ; renderer in the build [vid_kind] can only
     jne .nocga                  ; be VID_HERC or VID_CGA and the mono arm
 %endif                          ; branched away above, so .bios IS the CGA
-    mov ax, 0x0040              ; there and the test is dead weight.
+    xor ax, ax                  ; there and the test is dead weight.
     mov es, ax                  ; NO PUSH: this routine banks ES at entry and
-    mov al, [es:0x0065]         ; nothing below reads it - the planar arms and
+    mov al, [es:0x0465]         ; nothing below reads it - the planar arms and
+                                ; (0000:0465 = 0040:0065, segment 0 being a byte
+                                ; cheaper to load - size pass 9)
     mov [vid_cgamode], al       ; vid_wipe each load their own
 .nocga:
 %ifdef GFX_VGA
@@ -1137,13 +1156,14 @@ vid_setmode:
 .done:
     dec byte [spl_busy]         ; ...and the card describes itself again
 
-; vid_pop8 - the eight-register epilogue THREE routines in this file share,
-; and vid_pop7 one label in is a FOURTH with a shorter frame.
-; vid_detect and vid_text jump here rather than
-; carrying their own copy, so **their prologues are now part of THIS routine's
-; contract**: all three push `ax bx cx dx si di bp es` in that order, and a
-; `push` added to any one of them without the other two returns the machine to
-; a wrong address at boot.  vid_apply pushes the same run WITHOUT `bp`, pops
+; vid_pop8 - the eight-register epilogue TWO routines in this file share,
+; and vid_pop7 one label in is a THIRD with a shorter frame.
+; vid_text jumps here rather than carrying its own copy, so **its prologue is
+; now part of THIS routine's contract**: both push `ax bx cx dx si di bp es` in
+; that order, and a `push` added to one of them without the other returns the
+; machine to a wrong address at boot. (vid_detect was a third until SPEC.md
+; 2.5.3.3 moved it into the blob, where `.text`'s epilogue is out of reach; it
+; carries its own pop run and `retf` now.)  vid_apply pushes the same run WITHOUT `bp`, pops
 ; its own `es`, and enters at `vid_pop7` - so it is bound by the SEVEN and not
 ; by the eight, and a `push` added to the other three must not be added to it.
 ; Nothing in the tree checks either; these comments and the ones at the three
@@ -1151,7 +1171,7 @@ vid_setmode:
 ; `dec byte [spl_busy]`, so the splash counter is decremented once.
 ;
 ; IT KEEPS ITS OWN POP RUN, and SPEC.md 15.1.2's ladder may never have it.
-; `jmp kret_es` here BOOTS NOTHING: vid_setmode, vid_detect and vid_text all
+; `jmp kret_es` here BOOTS NOTHING: vid_setmode and vid_text both
 ; run from the splash, whose first tick is gated on SPL_RESIDENT sectors
 ; (splash.inc, 9 = 4,608 bytes), and the ladder is at the far end of `.text` -
 ; ~50,700 bytes in, eleven times past the window the boot sector has read.
@@ -1163,7 +1183,7 @@ vid_setmode:
 vid_pop8:
     pop es
     pop bp
-vid_pop7:                       ; ...AND A FOURTH ENTRY, ONE LABEL IN, WITH A
+vid_pop7:                       ; ...AND A THIRD ENTRY, ONE LABEL IN, WITH A
     pop di                      ; DIFFERENT FRAME. vid_apply pushes the same
                                 ; run WITHOUT bp and pops its own `es`, so it
                                 ; joins here; it is the one arrival that is
@@ -1233,13 +1253,13 @@ vid_wipe:
 vid_cga_equip:
     push ax
     push ds
-    mov ax, 0x0040              ; the BIOS data area
-    mov ds, ax
-    mov al, [0x0010]            ; equipment flag, bits 5:4 = the display
-    and al, 0x30
+    xor ax, ax                  ; the BIOS data area, by segment 0 and the
+    mov ds, ax                  ; LINEAR offset (0040:0010 = 0000:0410, a byte
+    mov al, [0x0410]            ; cheaper than mov ax, 40h - size pass 9):
+    and al, 0x30                ; equipment flag, bits 5:4 = the display
     cmp al, 0x30                ; 11b = monochrome at B000
     jne .out
-    and byte [0x0010], 0xEF     ; 11b -> 10b is "clear bit 4, leave bit 5", and
+    and byte [0x0410], 0xEF     ; 11b -> 10b is "clear bit 4, leave bit 5", and
                                 ; ONE and does it. Correct only because the
                                 ; `cmp al, 0x30 / jne .out` above has already
                                 ; proved the pair IS 11b - relax that guard and
@@ -1270,20 +1290,26 @@ vid_cga_equip:
 ; The probe and the publish still re-run, and must: everything between here
 ; and that paint reads [vid_w]/[vid_h]/[vid_stride] out of them.
 ; -----------------------------------------------------------------------------
-vid_init:
-    call vid_detect
-    call vid_apply
+section .ovl                    ; kmain_o's alone (SPEC.md 2.5.3.3), out through
+vid_init:                       ; the spw_near door the splash already needs
+    BLOBCALL vid_detect
+    push bp                     ; BP names the routine to spw_near, and this
+    mov bp, vid_apply           ; routine clobbers only flags
+    call KERNEL_SEG:spw_near
 %ifdef DOCK_OPT
-    call dock_geom              ; ...and the strip where the user put it
+    call KERNEL_SEG:ovw_dock_geom ; ...and the strip where the user put it
                                 ; (SPEC.md 30.5). HERE and never from
                                 ; vid_apply, which the splash reaches before
                                 ; dock.inc has come off the floppy
 %endif
     cmp byte [spl_live], 0      ; the splash set THIS mode on its first tick
     jne .keep                   ; and is still drawing on it
-    call vid_setmode
+    mov bp, vid_setmode
+    call KERNEL_SEG:spw_near
 .keep:
-    ret
+    pop bp
+    retf
+section .text
 
 ; -----------------------------------------------------------------------------
 ; vid_text - back to a text mode (CMD_REBOOT and fsx's FSXM_TEXT80)
@@ -1526,21 +1552,21 @@ section .text                   ; ...and back, so the next include lands right
 ; WHAT THE SPLASH LEFT BEHIND (SPEC.md 2.9.4)
 ;
 ; The loading screen is stage 2's now, so every call it makes into the kernel
-; is across a segment. These four are that, four bytes each - and they are
+; is across a segment. This is that: ONE far door, `call bp` / `retf`, three
+; bytes, with BP naming the near `.text` routine - vid_apply, vid_setmode or
+; gfx_rowbase. It was three shims of four bytes, one per routine (and
+; spw_vid_detect a fourth until SPEC.md 2.5.3.3 put vid_detect in the blob
+; with its callers); the loader's side pays the BP load, in `.boot2` and
+; `.ovl`, which the machine gives back once it is up. `call`/`retf` touch no
+; flag. It is
 ; HERE, at the end of viddet.inc, rather than in kernel.asm's cw_ block for one
 ; reason: SPL_RESIDENT. The bar cannot move until the routines the first tick
 ; calls are ABOARD, and the cw_ block is at the end of `.text` - the last
-; sector of the image. Here they land in sector 7, which is what SPL_RESIDENT
+; sector of the image. Here it lands in sector 7, which is what SPL_RESIDENT
 ; now measures and why it fell from 9 to that.
 ; =============================================================================
-spw_vid_detect:   call vid_detect
-                  retf
-spw_vid_apply:    call vid_apply
-                  retf
-spw_vid_setmode:  call vid_setmode
-                  retf
-spw_gfx_rowbase:  call gfx_rowbase
-                  retf
+spw_near:   call bp
+            retf
 spw_resident_end:
 
 ; ...and the THREE BYTES of splash.inc that could not go with it. viddet's mode

@@ -122,7 +122,7 @@ def sendkeys(sock, text):
     cmds = []
     for ch in text:
         key = {"-": "minus", ".": "dot", " ": "spc"}.get(ch, ch.lower())
-        cmds += [f"sendkey {key}", "sleep 0.15"]
+        cmds += [f"sendkey {key}", "gsleep 0.15"]    # the guest's time
     qmp(sock, *cmds)
 
 
@@ -155,9 +155,10 @@ def main():
     groups = group_names(com)
     print(f"rczex: {args.program}: {len(groups)} groups")
 
-    subprocess.run(["pkill", "-f", "qemu-system-i386"], stdout=subprocess.DEVNULL,
-                   stderr=subprocess.DEVNULL)
-    time.sleep(1)
+    # BY PIDFILE, never `pkill -f` (tests/os88qemu.py): the pattern matched
+    # every QEMU on the box, other sessions' included, and a sleep stood in
+    # for waiting on the one that mattered
+    os88qemu.kill()
     if os.path.exists(sock):
         os.unlink(sock)
     log = open(os.path.join(args.shots, "rczex-qemu.log"), "w")
@@ -172,14 +173,44 @@ def main():
         if time.time() - t0 > 60:
             print("rczex: QEMU did not come up (build/port-shots/rczex-qemu.log)")
             return 1
-    time.sleep(10)                                   # the desktop
+    # EVERY WAIT FROM HERE IS ON THE GUEST'S CLOCK (tests/os88qemu.py): the
+    # BIOS tick count, read through ethernet.py's QMP reader.
+    import dispcp
+    import ethernet
+    import os88sym
+    m = ethernet.Qemu(sock)
+
+    def zone():
+        try:
+            return dispcp.drive_ordinal(m, os88sym.linear, "B") is not None
+        except Exception:                            # noqa: BLE001
+            return False
+    if not os88qemu.acted(m, zone, secs=90, what="drive B's zone", poll=0.5):
+        print("rczex: drive B: never got a desktop zone")
+        return 1
+    os88qemu.pace(m, 1)                              # the desktop
 
     dclick(sock, 600, 100)                           # Disk B
-    time.sleep(3)
+    if os88qemu.acted(m, lambda: bool(dispcp.win_list(m, os88sym.linear,
+                                                      check=False)),
+                      secs=10, what="the Disk B window", poll=0.3):
+        os88qemu.pace(m, 1)                          # ...and its rows
     dclick(sock, 170, 128 + 16 * package_row(args.image))     # RUNCPM.O88
-    time.sleep(4)
     mouse_to(sock, 620, 470)                         # off the terminal
-    scr = screen(sock, os.path.join(args.shots, "rczex-0.ppm"))
+    # THE BANNER, on the glass: its first row readable and its last one
+    # (the CCP line, printed once the CCP is in) inked - the boot state
+    # machine spans slices, so the UI going idle is not the answer. The old
+    # four guest seconds are the budget, and a miss is reported below
+    scr = None
+
+    def banner():
+        nonlocal scr
+        scr = screen(sock, os.path.join(args.shots, "rczex-0.ppm"))
+        if scr.find_origin(0, BANNER[0])[1] < 30:
+            return False
+        return all(scr.cell(c, 8) != 0
+                   for c, ch in enumerate(BANNER[8]) if ch != " ")
+    os88qemu.acted(m, banner, secs=4, what="the RunCPM banner", poll=0.3)
     (x0, y0), score = scr.find_origin(0, BANNER[0])
     if score < 30:
         print(f"rczex: the banner is not on the glass (best grid {x0},{y0} scored {score})")
@@ -190,7 +221,7 @@ def main():
     glyphs = scr.glyphs
 
     if args.loader:
-        qmp(sock, "sendkey alt-l", "sleep 0.5")
+        qmp(sock, "sendkey alt-l", "gsleep 0.5")
     else:
         # the CCP is at its prompt (the banner's row 9 is 'A>'); the DRI
         # CCP opens NAME.COM through F_OPEN/F_READ, ~24 records a second
@@ -198,11 +229,14 @@ def main():
         pass
     sendkeys(sock, args.program)
     qmp(sock, "sendkey ret")
-    t_start = time.time()
+    # --timeout and every time printed below are GUEST seconds, off the BIOS
+    # tick count - a loaded host hands the guest less of each host second,
+    # and this is the row docs above say is the most sensitive to it
+    clock = os88qemu.Clock(m)
 
     seen, done, fails, learned_groups = [], False, 0, 0
-    last_new = time.time()
-    while time.time() - t_start < args.timeout:
+    last_new = clock.secs()
+    while clock.secs() < args.timeout and not clock.stalled():
         time.sleep(1)                                # the fastest groups finish in well under a second
         scr = screen(sock, os.path.join(args.shots, "rczex-poll.ppm"))
         scr.x0, scr.y0 = x0, y0
@@ -227,19 +261,19 @@ def main():
             if "  OK" in t or "ERROR" in t or "ests complete" in t or "not found" in t:
                 seen.append(t)
                 new += 1
-                print(f"  {int(time.time() - t_start):4d}s  {t}")
+                print(f"  {int(clock.secs()):4d}s  {t}")
                 if "ERROR" in t or "not found" in t:
                     fails += 1
                 if "ests complete" in t:      # (T is not a banner glyph)
                     done = True
         if new:
-            last_new = time.time()
+            last_new = clock.secs()
         if done:
             break
-        if time.time() - last_new > 900:
-            print("rczex: no new result line for 15 minutes")
+        if clock.secs() - last_new > 900:
+            print("rczex: no new result line for 15 guest minutes")
             break
-    elapsed = int(time.time() - t_start)
+    elapsed = int(clock.secs())
     subprocess.run([sys.executable, "tools/shot.py", sock,
                     os.path.join(args.shots, f"rczex-{args.program.lower()}-end.png"),
                     "--crop", "0,38,640,200"], check=False, stdout=subprocess.DEVNULL)

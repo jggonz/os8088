@@ -291,23 +291,26 @@ _cw_ty_putn:
 ; kern_small kernel carries the GFX_BLIT1 slot and not its body (SPEC.md 6.5),
 ; and the caller letters that row in the 8x8 face instead.
 ;
-; THE `clc` IS LOAD-BEARING AND IT COST A ROUND OF TESTING TO FIND. ty_flush
-; opens with `call OSAPI_GFX_PEN` / `jnc .live` / `call ty_gray`, which reads
-; like a QUERY of the disabled pen and is not one: OSAPI_GFX_PEN is a SETTER
-; whose argument IS the carry flag, and the cell preserves every flag, so the
-; carry that comes back is the carry that went in. ty_flush therefore dithers
-; the band whenever its CALLER happened to arrive with CF set - and a compiled
-; C call site arrives with whatever the last instruction of the argument setup
-; left there, which is neither clear nor stable. The symptom is a run of the
-; document drawn as a 50% checkerboard, exactly as a greyed control is (SPEC.md
-; 47), on some runs and not others: it turned up here on a run that was bold
-; AND underlined and on nothing else.
+; THE `clc` IS LOAD-BEARING AND IT COST A ROUND OF TESTING TO FIND. The carry
+; is ty_flush's GREYING ARGUMENT (SPEC.md 6.5.4), and a compiled C call site
+; arrives with whatever the last instruction of the argument setup left there,
+; which is neither clear nor stable. The symptom is a run of the document
+; drawn as a 50% checkerboard, exactly as a greyed control is (SPEC.md 47), on
+; some runs and not others: it turned up here on a run that was bold AND
+; underlined and on nothing else. Document text is never a disabled control,
+; so it is always `clc`.
 ;
-; So the carry is set explicitly, which is what os88api.inc's own note about
-; this slot tells a caller to do - "use `clc` or `stc` first for the
-; unconditional cases". Document text is never a disabled control, so it is
-; always `clc`. apps/word reaches the same routine from assembly and has the
-; same exposure; nothing here can fix that for it.
+; THE DIAGNOSIS HERE WAS RIGHT AND HALF THE DAMAGE WAS MISSED, which is why
+; this paragraph is kept. ty_flush used to open `call OSAPI_GFX_PEN` / `jnc
+; .live`, which reads like a query of the disabled pen and is not one - a
+; package cannot read the pen back (SPEC.md 68.14) - so besides greying the
+; band it ARMED [gfx_dis] for the rest of the lock hold, and everything
+; lettered after it dithered too. This note ended *"apps/word reaches the same
+; routine from assembly and has the same exposure; nothing here can fix that
+; for it"*, and the field duly reported it: Word's status line with its
+; changed field a checkerboard beside solid ones. The call is out of ty_flush
+; now and the carry is documented as the argument it always was, so the trap
+; is gone for every caller rather than described at four of them.
 ; -----------------------------------------------------------------------------
 _cw_ty_flush:
     push bp

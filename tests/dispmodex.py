@@ -110,7 +110,14 @@ def launch(m, mo, disk, card, up=False):
         row(m, mo, disk, card, "..")       # SPEC.md 19.5's synthesized parent
     row(m, mo, disk, card, GAMES_DIR)
     row(m, mo, disk, card, MISSILE_PKG)
-    time.sleep(3)
+    # the package up, then its caps settled: the worker writes them when it
+    # next calls fsx_caps, and a launch onto the "wrong" display is corrected
+    # after that, so the words are waited on over GUEST seconds (move_to's
+    # reason) and not a host sleep
+    os88marty.until(m, lambda _m: facts(m) is not None, "MISSILE to be up",
+                    poll=0.3, limit=60)
+    os88marty.quiesce(m, lambda: facts(m), guest=1.0, stable=3, budget=90.0,
+                      what="MISSILE's caps to settle after the launch")
 
 
 def game_win(m, disk):

@@ -55,7 +55,6 @@ the first build did, con_open having not called con_font.
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -135,6 +134,18 @@ class Box(object):
     def type(self, s):
         self.m.type_text(s)
         os88marty.settle(self.m)
+
+
+def waited(m, cond, what, limit):
+    """`until` on the GUEST's clock - `limit` idle-box seconds, budgeted as
+    guest time - answering True/False so each caller keeps its own diagnosis.
+    These were `for _ in range(N): sleep(p)` loops, a HOST deadline for a
+    guest event, which a loaded box shortens."""
+    try:
+        os88marty.until(m, lambda _m: cond(), what, poll=0.25, limit=limit)
+        return True
+    except os88marty.MartyError:
+        return False
 
 
 def band_ink(m, bx):
@@ -352,19 +363,12 @@ def main():
         # (SPEC.md 96.34). With it removed the band still holds the prompt's
         # own history and not one of these lines, which is what makes this a
         # test rather than a description.
-        for _ in range(120):
-            if any("READY" in r for r in (m.screen() or [])):
-                break
-            time.sleep(0.25)
-        else:
+        if not waited(m, lambda: any("READY" in r for r in (m.screen() or [])),
+                      "READY", 30):
             fail("%s.COM never reached its READY prompt inside the bracket"
                  % BARE)
         m.type_text("x")                     # ...which is how it exits, 042
-        for _ in range(120):
-            time.sleep(0.4)
-            if not bx.b("dos_inbr"):
-                break
-        else:
+        if not waited(m, lambda: not bx.b("dos_inbr"), "the bracket down", 48):
             fail("the bracket never came down after %s.COM took a key" % BARE)
         os88marty.settle(m)
         rows = bx.live()
@@ -454,7 +458,11 @@ def main():
         # translation (70.8.7). A screenshot could not tell that from a
         # translation that happened to work.
         ui.menu_pick("Program", "Full Screen")
-        time.sleep(2.0)
+        if waited(m, lambda: bx.b("dos_fsxup"), "[dos_fsxup]", 10):
+            # ...and then the move into VRAM finished, which is what is read
+            os88marty.quiesce(m, lambda: (bx.w("con_tseg"), m.read(
+                (bx.w("con_tseg") & 0xF800) << 4, 80 * 25 * 2)),
+                guest=0.5, what="the full screen's text VRAM")
         if not bx.b("dos_fsxup"):
             fail("Program > Full Screen did not take the screen: [dos_fsxup] "
                  "is 0 (SPEC.md 96.33.5)")
@@ -513,13 +521,9 @@ def main():
         # wrote it: fullscreen -> the program's OWN bracket -> fullscreen
         # again, which is [dos_fsxup] 1, 0, 1 with [dos_inbr] 0, 1, 0.
         m.type_text("%s:\n" % other)                   # DOSHELLO.COM is there
-        time.sleep(1.0)
+        os88marty.pace(m, 1.0)
         m.type_text("%s\n" % BARE)
-        for _ in range(40):
-            time.sleep(0.5)
-            if bx.b("dos_inbr"):
-                break
-        else:
+        if not waited(m, lambda: bx.b("dos_inbr"), "[dos_inbr]", 20):
             fail("%s never started from the FULL SCREEN console: state=%d, "
                  "[dos_inbr]=0. The wake dos_con_prog posts cannot be "
                  "dispatched while the UI task is inside the bracket, so the "
@@ -529,11 +533,8 @@ def main():
             fail("the console's bracket is STILL up with the program's own "
                  "bracket inside it - they are two brackets and the first "
                  "ends before the second starts (SPEC.md 96.33.16)")
-        for _ in range(120):
-            if any("READY" in r for r in (m.screen() or [])):
-                break
-            time.sleep(0.25)
-        else:
+        if not waited(m, lambda: any("READY" in r for r in (m.screen() or [])),
+                      "READY", 30):
             fail("%s.COM never reached READY inside its own bracket, launched "
                  "from the full screen" % BARE)
         m.type_text("x")
@@ -546,14 +547,17 @@ def main():
         # second, so this failed at --marty-jobs 3 and passed alone, looking
         # exactly like the feature being broken. The two diagnoses stay
         # separate because they are different defects.
-        back = seen = False
-        for _ in range(40):
-            time.sleep(0.5)
-            if not back and not bx.b("dos_inbr") and bx.b("dos_fsxup"):
-                back = True
-            if back and any("exit code 042" in r for r in (m.screen() or [])):
-                seen = True
-                break
+        st = {"back": False, "seen": False}
+
+        def _home():
+            if not st["back"] and not bx.b("dos_inbr") and bx.b("dos_fsxup"):
+                st["back"] = True
+            if st["back"] and any("exit code 042" in r
+                                  for r in (m.screen() or [])):
+                st["seen"] = True
+            return st["seen"]
+        waited(m, _home, "the exit line on the full screen", 20)
+        back, seen = st["back"], st["seen"]
         if not back:
             fail("the full-screen console did not come back after %s.COM: "
                  "[dos_fsxup]=%d [dos_inbr]=%d. dos_run's exit re-enters it "
@@ -567,7 +571,7 @@ def main():
               "OWN bracket and hands the screen back")
 
         m.key("Escape")
-        time.sleep(2.0)
+        waited(m, lambda: not bx.b("dos_fsxup"), "[dos_fsxup] clear", 10)
         if bx.b("dos_fsxup"):
             fail("Esc did not leave the full screen: [dos_fsxup] is still set. "
                  "It is OURS only while the console has the screen - a running "

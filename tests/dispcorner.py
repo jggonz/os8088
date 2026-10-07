@@ -539,7 +539,16 @@ def launch_subject(m, mo, pri):
     bx, by = dispcp.win_rect(m, S, disk)[:2]
     dispcp.open_named(m, mo, S, os88marty.settle, bx, by, SUBJECT_FILE,
                       card=pri)
-    time.sleep(4)
+    # THE WINDOW, NOT A PAUSE: a launch reads the package and draws nothing
+    # while it does, so the answer is the window list and the wait is the
+    # guest's. It was a 4-second host sleep.
+    try:
+        os88marty.until(m, lambda mm: [x for x in dispcp.win_list(mm, S)
+                                       if x != disk],
+                        "%s's window" % SUBJECT_FILE, poll=0.2, limit=30.0)
+    except os88marty.MartyError:
+        pass
+    os88marty.settle(m, card=pri)
     other = [x for x in dispcp.win_list(m, S) if x != disk]
     if not other:
         sys.exit("%s did not launch out of %s" % (SUBJECT_FILE, SUBJECT_DIR))

@@ -36,7 +36,6 @@ bracket and every counter below stays 0.
 import os
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -73,8 +72,9 @@ def main():
 
     if os.path.exists("build/qemu.pid"):
         try:
-            os.kill(int(open("build/qemu.pid").read().strip()), 15)
-            time.sleep(1.0)
+            pid = int(open("build/qemu.pid").read().strip())
+            os.kill(pid, 15)
+            os88qemu.gone(pid)
         except (OSError, ValueError):
             pass
     for f in ("build/qmp.sock", "build/qemu.pid"):
@@ -93,14 +93,13 @@ def main():
     mouse = eth.Mouse()
     try:
         # --- the card, before anything is asked of it ----------------------
-        seg = 0
-        for _ in range(150):
-            time.sleep(0.4)
-            row = m.read(eth.S("drv_tab") + eth.ETH_ROW * eth.DRVR_SZ
-                         + eth.DRVR_SEG, 2)
-            seg = eth.u16(row)
-            if seg:
-                break
+        # Every wait in this row is in the GUEST's seconds (tests/os88qemu.py).
+        def drvseg():
+            return eth.u16(m.read(eth.S("drv_tab") + eth.ETH_ROW * eth.DRVR_SZ
+                                  + eth.DRVR_SEG, 2))
+        os88qemu.acted(m, lambda: drvseg() != 0, secs=60,
+                       what="ETHER.DRV's drv_tab row", poll=0.4)
+        seg = drvseg()
         if not seg:
             fail("ETHER.DRV never attached - no card was found, or SYSTEM.CFG "
                  "did not ask for it")
@@ -128,14 +127,11 @@ def main():
         dispcp.open_named(m, mouse, eth.S, eth.settle, wx, wy, "DOSPKT.COM")
         say("dospkt: launched; the probe holds the screen on int 16h")
 
-        # it sends, then waits ~3s of BIOS ticks for the reply
-        deadline = time.time() + 60.0
-        nrx = ntx = 0
-        while time.time() < deadline:
-            time.sleep(1.0)
-            ntx, nrx = dw("eth_nrawtx"), dw("eth_nraw")
-            if ntx and nrx:
-                break
+        # it sends, then waits ~3s of BIOS ticks for the reply - so the
+        # budget is the same clock's: 60 guest seconds, not host ones
+        os88qemu.acted(m, lambda: dw("eth_nrawtx") and dw("eth_nraw"),
+                       secs=60, what="a raw frame each way", poll=0.5)
+        ntx, nrx = dw("eth_nrawtx"), dw("eth_nraw")
 
         say("dospkt: raw frames out %d, in %d, claim held %d"
             % (ntx, nrx, db("eth_raw")))
@@ -156,10 +152,8 @@ def main():
         # reported as `dos_pkt_shut did not run on that path`, about a path
         # that runs perfectly. So: poll the byte the assertion is about.
         m.hmp("sendkey ret")
-        for _ in range(60):
-            time.sleep(0.5)
-            if not db("eth_raw"):
-                break
+        os88qemu.acted(m, lambda: not db("eth_raw"), secs=30,
+                       what="the raw claim released", poll=0.5)
 
         fails = []
         if not ntx:

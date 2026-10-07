@@ -44,7 +44,7 @@ TWELVE ASSERTIONS.
    band INVERTED so that one `gfx_blit1` is correct on all three adapters, and
    an inversion that went the wrong way draws a perfectly plausible picture in
    negative.
-7. ADD TO DISK WRITES BOTH FILES, BYTE-IDENTICAL. The Save dialog's default
+7. ADD TO DISK WRITES BOTH FILES, BYTE-IDENTICAL. The Save chooser's default
    button is clicked, the chain runs, and after `quit` the B: image is read on
    the HOST by an independent FAT12 reader (`tools/os88disk.py --verify`, then
    the directory walked here) and both files are compared with what the server
@@ -108,7 +108,7 @@ so the ethertest-shaped disk that already asks for the driver has the icon on
 it, and this file double-clicks the icon rather than a row in a Disk window.
 Three things follow from that and all three are handled below: the zone
 launches out of the BOOT volume's `SYSTEM/`, so the instance's current
-directory is **A:** and `WIRE.CFG` is read off A:; and the Save dialog
+directory is **A:** and `WIRE.CFG` is read off A:; and the Save chooser
 therefore opens on A: and has to be walked to B: with its Drive button before
 the write.
 """
@@ -148,8 +148,9 @@ WS_DONE, WS_FAIL = 7, 8                 # thewire.asm's WS_*, and WS_PAUSE
                                         # up. Named here rather than read out
                                         # of the source, so the reason travels
 TITLE_H = 18
-FD_BX1, FD_BX2, FD_BH = 224, 286, 13    # kernel/fdlg.inc's button column
-FD_BY0, FD_BY2 = 20, 60                 # ...Save, and Drive two rows down
+CH_SAVE, CH_DRIVE = 0, 2                # the chooser's button column, top
+                                        # down: Save, Cancel, Drive (SPEC.md
+                                        # 38.3) - os88ui's CH_OPEN/CH_DRIVE
 VOL_B = ord("B") - ord("A")             # a VOLUME INDEX, which is what
                                         # [disk_drive] holds since SPEC.md 52
 DVK_FILE = 2                            # kernel/disk.inc: a REDIRECTED volume,
@@ -166,9 +167,16 @@ FIXTURE = {
         {"stem": "MINES", "title": "Minesweeper", "kind": "game", "tier": 0,
          "files": ["mines.o88"],
          "description": "The 1990 game, in assembly."},
+        # ELEVEN SIDECARS, which is more than the eight WIRE_SCMAX was until
+        # v1.0.20261002.1 (SPEC.md 92.2) - so the Add chain is walked past the
+        # old bound on the machine and not only in the host's packer. The ten
+        # extra names are TWELVE characters, a full 8.3 with no NUL in its
+        # slot (SPEC.md 92.2), so assertion 7's byte-for-byte compare is the
+        # machine's proof that the Add chain takes one.
         {"stem": "BIGONE", "title": "Needs a disk", "kind": 0, "tier": 3,
-         "files": ["hello.o88", "mines.o88"],
-         "description": "Two files, so Load Program refuses it."},
+         "files": ["hello.o88", "mines.o88"] + ["wiresc%02d.dat" % j
+                                               for j in range(1, 11)],
+         "description": "Twelve files, so Load Program refuses it."},
         # THE ARCHIVE (SPEC.md 92.13). Tier 0 so the 8088/8086 filter keeps
         # it: assertion 4 counts what that filter shows, and a tier-3 archive
         # would leave the two assertions reading each other's fixture.
@@ -186,6 +194,8 @@ ARC_PROG = "MSEG.O88"                   # ...and the entry that carries
                                         # about (see fixture_tree)
 SIDECAR = "MINES.O88"                   # what BIGONE's second file is called
                                         # in /wire/pkg/ and on the disk
+XSIDE = {"WIRESC%02d.DAT" % j: (b"sidecar %02d " % j) * (20 + 7 * j)
+         for j in range(1, 11)}         # BIGONE's other ten, distinct bytes
 PICX, PICY = 208, 21                    # WR_PICX and the picture's y in the
                                         # detail pane, both content-relative
 
@@ -346,23 +356,17 @@ def bss_offsets():
 
 
 # =============================================================================
-# THE DESKTOP SERVICE ZONE (SPEC.md 26.7)
+# THE DESKTOP SERVICE ITEM (SPEC.md 26.7, 26.9)
 #
-# Its ordinal is one past the last VOLUME zone - `DESK_SVZ` is `DVOL_MAX` and
-# `desk_ord` hands it the count the volume walk just finished - so it is the
-# same walk `dispcp.drive_ordinal` does, without stopping at a letter.
-# dispcp.drive_xy then turns an ordinal into a point, which is the one place
-# the column-and-wrap arithmetic lives.
+# Its CELL is its byte of `desk_zslot` - the service item is zone DVOL_MAX -
+# which the kernel wrote when it placed it after the volumes. Read, not
+# re-derived: dispcp.drive_xy then turns the cell into a point.
 # =============================================================================
 def svc_ordinal(m):
-    t = m.read(S("dsk_vtab"), dispcp.DVOL_MAX * dispcp.DV_SIZE)
-    n = 0
-    for v in range(dispcp.DVOL_MAX):
-        r = t[v * dispcp.DV_SIZE:(v + 1) * dispcp.DV_SIZE]
-        if r[dispcp.DV_KIND] == dispcp.DVK_FREE or not (r[dispcp.DV_FLAGS] & 1):
-            continue
-        n += 1
-    return n
+    v = m.read(S("desk_zslot") + dispcp.DVOL_MAX, 1)[0]
+    if v >= 0x80:
+        raise RuntimeError("the Wire's service item has no cell (%#x)" % v)
+    return v & 0x3F
 
 
 def live_vols(m):
@@ -432,7 +436,7 @@ def clip_check(m, mo, slot, shot, no, say):
         # (300, 440) is desktop: below the Wire's frame and left of the zone
         # column.
         mo.run("to", "300", "440")
-        time.sleep(0.6)
+        os88qemu.pace(m, 0.6)           # the GUEST's time (os88qemu.py)
         png = os.path.join(tempfile.mkdtemp(), tag + ".png")
         subprocess.run(["python3", "tools/shot.py", SOCK, png],
                        check=True, capture_output=True)
@@ -449,14 +453,19 @@ def clip_check(m, mo, slot, shot, no, say):
     for dx in (8, -8):                  # out and back: two clean W_PAINTs
         mo.run("to", str(bar[0]), str(bar[1]))
         subprocess.run(["python3", "tools/qmp.py", SOCK, "mouse_button 1",
-                        "sleep 0.15"], check=True, capture_output=True)
+                        "gsleep 0.15"], check=True, capture_output=True)
         mo.run("to", str(bar[0] + dx), str(bar[1]))
-        time.sleep(0.4)
+        os88qemu.pace(m, 0.4)
+        wx0 = dispcp.win_rect(m, S, slot)[0]
         subprocess.run(["python3", "tools/qmp.py", SOCK, "mouse_button 0"],
                        check=True, capture_output=True)
-        time.sleep(1.5)
+        # the drop is the window MOVING, which is the guest's own answer;
+        # then the repaint it owes, in guest time
+        os88qemu.acted(m, lambda: dispcp.win_rect(m, S, slot)[0] != wx0,
+                       secs=5, what="the window moving", poll=0.1)
+        os88qemu.pace(m, 1.5)
         bar = (bar[0] + dx, bar[1])
-    time.sleep(1.5)
+    os88qemu.pace(m, 1.5)
     nx, ny, nw, nh = content(slot)
     px1 = grab("clip-b")
     shot("09-clip-b")
@@ -577,7 +586,7 @@ class Mouse:
 
     def click(self, x, y):
         self.run("click", str(x), str(y))
-        time.sleep(0.4)
+        gsleep(0.4)
 
     def dblclick(self, x, y):
         # TWO `click`s ARE NOT A DOUBLE-CLICK (CLAUDE.md): the detectors
@@ -587,13 +596,19 @@ class Mouse:
         subprocess.run(["python3", "tools/qmp.py", SOCK,
                         "mouse_button 1", "sleep 0.08", "mouse_button 0",
                         "sleep 0.12",
-                        "mouse_button 1", "sleep 0.08", "mouse_button 0"],
+                        "mouse_button 1", "sleep 0.08", "mouse_button 0",
+                        "gsleep 0.4"],
                        check=True, capture_output=True)
-        time.sleep(0.4)
 
 
-def settle(m, card=None):
-    time.sleep(2.0)
+def gsleep(secs):
+    """`secs` of the GUEST's clock for a caller holding no Qemu: tools/qmp.py's
+    `gsleep`, which counts BIOS ticks (tests/os88qemu.py's reason - a loaded
+    box cannot shorten it the way it shortens a host sleep). The spacing
+    INSIDE a double-click stays host time: it is well inside the 9-tick
+    window either way, and tick rounding would eat into it."""
+    subprocess.run(["python3", "tools/qmp.py", SOCK, "gsleep %s" % secs],
+                   check=True, capture_output=True)
 
 
 def u16(b, i=0):
@@ -768,6 +783,8 @@ def main():
                  "- without that the dword Content-Length and the 32-bit "
                  "byte count are never read with a high word in them"
                  % len(wpk))
+    for name, data in XSIDE.items():    # the packer sizes them out of build/
+        open(os.path.join("build", name.lower()), "wb").write(data)
     try:
         cat = os88wire.pack(json.load(open(man)), "build", pics)
     except os88wire.Refused as e:
@@ -778,6 +795,7 @@ def main():
               "/wire/pkg/HELLO.O88": hello,
               "/wire/pkg/MINES.O88": mines,
               "/wire/pkg/BIGONE.O88": hello,
+              **{"/wire/pkg/" + n: d for n, d in XSIDE.items()},
               "/wire/pkg/%s.WPK" % ARC_STEM: wpk,
               "/wire/pic/HELLO.PIC": pic}
     srv = Server(served)
@@ -791,8 +809,9 @@ def main():
     # with `pkill -f qemu`, whose pattern matches the calling shell.
     if os.path.exists("build/qemu.pid"):
         try:
-            os.kill(int(open("build/qemu.pid").read().strip()), 15)
-            time.sleep(1.0)
+            pid = int(open("build/qemu.pid").read().strip())
+            os.kill(pid, 15)
+            os88qemu.gone(pid)      # a HOST wait: the process, not a guess
         except (OSError, ValueError):
             pass
     for f in ("build/qmp.sock", "build/qemu.pid"):
@@ -820,12 +839,13 @@ def main():
         # also the proof that the driver attached at all - and the caption and
         # the file are read back because a zone that launched something else
         # would open a window this test would then measure.
-        seg = 0
-        for _ in range(60):
-            seg = u16(m.read(S("desk_svc_seg"), 2))
-            if seg:
-                break
-            time.sleep(0.5)
+        #
+        # EVERY WAIT BELOW IS ON THE GUEST'S CLOCK (tests/os88qemu.py) - the
+        # BIOS tick count - and on the bss byte the next line reads wherever
+        # there is one. The budgets are what the host loops allowed idle.
+        os88qemu.acted(m, lambda: u16(m.read(S("desk_svc_seg"), 2)) != 0,
+                       secs=30, what="[desk_svc_seg]", poll=0.5)
+        seg = u16(m.read(S("desk_svc_seg"), 2))
         cap = zstr(m, "desk_svc_cap", 12)
         fil = zstr(m, "desk_svc_file", 13)
         say("service zone: driver %04X, caption %r, launches %r"
@@ -843,7 +863,8 @@ def main():
         zx, zy = dispcp.drive_xy(m, S, svc_ordinal(m))
         say("double-clicking the Wire zone at (%d, %d)" % (zx, zy))
         mo.dblclick(zx, zy)
-        settle(m)
+        os88qemu.acted(m, lambda: len(dispcp.win_list(m, S)) > len(wins),
+                       secs=15, what="the Wire's window", poll=0.25)
         wins2 = dispcp.win_list(m, S)
         if len(wins2) <= len(wins):
             shot("00-zone")
@@ -861,12 +882,9 @@ def main():
             return u16(b(name, 2))
 
         # --- 1: the catalog arrives and is understood -----------------------
-        state = n = 0
-        for _ in range(80):
-            time.sleep(0.5)
-            state, n = b("wr_state")[0], w("wr_n")
-            if n or state == WS_FAIL:
-                break
+        os88qemu.acted(m, lambda: w("wr_n") or b("wr_state")[0] == WS_FAIL,
+                       secs=40, what="the catalog", poll=0.5)
+        state, n = b("wr_state")[0], w("wr_n")
         say("wr_state = %d, wr_n = %d, wr_nodrv = %d, wr_catseg = %04X"
             % (state, n, b("wr_nodrv")[0], w("wr_catseg")))
         shot("01-catalog")
@@ -922,7 +940,8 @@ def main():
 
         # --- 4: the filter filters ------------------------------------------
         mo.click(ox + 96 + 6, oy + 2 + 6)        # the `8088/8086` radio
-        time.sleep(1.0)
+        os88qemu.acted(m, lambda: b("wr_filter")[0] == 1 and shown() == 3,
+                       secs=3, what="the filter", poll=0.1)
         shot("02-filter")
         say("wr_filter = %d, the list shows %d" % (b("wr_filter")[0], shown()))
         if b("wr_filter")[0] != 1:
@@ -933,7 +952,8 @@ def main():
                "tier-0 entries" % shown())
 
         mo.click(ox + 48 + 6, oy + 2 + 6)        # ...and back to All
-        time.sleep(1.0)
+        os88qemu.acted(m, lambda: shown() == 4, secs=3, what="All",
+                       poll=0.1)
         if shown() != 4:
             no("back on All the list shows %d rows" % shown())
 
@@ -962,22 +982,18 @@ def main():
             flight - correctly. A gate that clicks before it lands is testing
             the refusal, and quietly.
             """
-            for _ in range(80):
-                if (b("wr_state")[0] in (0, WS_DONE, WS_FAIL)
-                        and b("wr_job")[0] == 0):
-                    return True
-                time.sleep(0.5)
-            return False
+            return os88qemu.acted(
+                m, lambda: (b("wr_state")[0] in (0, WS_DONE, WS_FAIL)
+                            and b("wr_job")[0] == 0),
+                secs=40, what="no transfer in flight", poll=0.5)
 
         # --- 6: the picture, pixel for pixel --------------------------------
         # HELLO is row 0 and carries WF_PIC, so selecting it starts a second
         # transfer of its own - which is also the one place the generation
         # counter is exercised by an ordinary click (SPEC.md 92.5).
         mo.click(ox + 40, oy + 19 + 8)
-        for _ in range(40):
-            time.sleep(0.5)
-            if b("wr_picok")[0]:
-                break
+        os88qemu.acted(m, lambda: b("wr_picok")[0], secs=20,
+                       what="[wr_picok]", poll=0.5)
         say("wr_picok = %d after selecting HELLO" % b("wr_picok")[0])
         if not b("wr_picok")[0]:
             no("the picture never arrived: WF_PIC is set on HELLO and "
@@ -986,7 +1002,7 @@ def main():
                 "latin1", "replace"):
             no("the host was never asked for /wire/pic/HELLO.PIC")
         else:
-            time.sleep(1.0)
+            os88qemu.pace(m, 1.0)           # ...and drawn: nothing says so
             shot("06-picture")
             png = os.path.join(tempfile.mkdtemp(), "pic.png")
             subprocess.run(["python3", "tools/shot.py", SOCK, png],
@@ -1013,7 +1029,9 @@ def main():
         # Row 2 is BIGONE: tier 3, two files, so WF_DISK. Load Program must
         # refuse with 'Needs its files on a disk' and Add to Disk must not.
         mo.click(ox + 40, oy + 19 + 2 * 16 + 8)
-        time.sleep(2.0)
+        os88qemu.acted(m, lambda: w("wr_sel") == 2, secs=4, what="[wr_sel]",
+                       poll=0.1)
+        os88qemu.pace(m, 1.0)               # ...and the predicate behind it
         shot("03-selected")
         sel, grey = w("wr_sel"), b("wr_grey")[0]
         say("wr_sel = %d, wr_grey = %d" % (sel, grey))
@@ -1027,47 +1045,91 @@ def main():
             no("Add to Disk is greyed on a WF_DISK record, and Add to Disk is "
                "exactly what such a record is FOR (wr_grey = %d)" % grey)
 
-        def save_to_b(tag, base):
-            """Add to Disk..., walk the Save dialog to B:, and press Save.
+        def chooser_slot():
+            """The chooser's window SLOT, or None. [fdlg_win] is its window
+            pointer (SPEC.md 38.1) - 0 when none, 0FFFFh while it launches."""
+            ptr = u16(m.read(S("fdlg_win"), 2))
+            if ptr in (0, 0xFFFF):
+                return None
+            return (ptr + (os88geom.KERNEL_SEG << 4) - S("wm_wins")) \
+                // dispcp.WIN_SIZE
 
-            THE DIALOG OPENS ON THE VOLUME THE WIRE WAS LAUNCHED FROM, which
-            since the zone landed is A: - the boot disk, whose SYSTEM/ the
-            zone reads the package out of. Its Drive button steps to the next
-            LIVE volume and wraps (SPEC.md 38.11), so this walks rather than
+        def chooser_drv():
+            """The volume the CHOOSER lists: its own pool block's FS_DRV. The
+            globals are put back where it stood only at a commit (SPEC.md
+            38.7), so [disk_drive] is not the question while it is up."""
+            blk = u16(m.read(S("fdlg_blk"), 2))
+            return m.read((os88geom.KERNEL_SEG << 4) + blk
+                          + os88geom.FS_DRV, 1)[0]
+
+        def chooser_btn(slot, k):
+            """The centre of column button k - os88ui.chooser_button_xy's
+            arithmetic, which this QEMU row cannot import: fm_rgt + 5, 20px
+            apart, the list's content being the window's less FM_CHCOLW."""
+            x, y, wd = dispcp.win_rect(m, S, slot)[:3]
+            cx, cy = x + 1, y + TITLE_H + 1
+            rgt = cx + (wd - 2 - os88geom.FM_CHCOLW) - 1
+            return (rgt + 5 + os88geom.FM_BTN_W // 2,
+                    cy + 2 + 20 * k + os88geom.FM_BTN_H // 2)
+
+        def save_to_b(tag, base):
+            """Add to Disk..., walk the Save chooser to B:, and press Save.
+
+            The chooser is a Disk window in a chooser role (SPEC.md 38.1), and
+            where it OPENS is SPEC.md 38.10's: MEDIA on the volume The Wire
+            was launched from - A:, the boot disk, whose SYSTEM/ the zone
+            reads the package out of - the first time, and where the user
+            left it after that. Its Drive button steps to the next LIVE
+            volume and wraps (SPEC.md 38.11), so this walks rather than
             assuming one click is enough: a machine that mounted a hard disk
-            would need two, and [disk_drive] is the machine's own answer. The
-            second call finds it already on B:, which the loop reads and
-            leaves alone.
+            would need two, and the chooser's own FS_DRV is the machine's
+            answer. The second call finds it already on B:, which the loop
+            reads and leaves alone.
             """
             settled()
             press("wr_rb")                       # Add to Disk...
-            time.sleep(2.0)
+            if os88qemu.acted(m, lambda: chooser_slot() is not None,
+                              secs=10, what="the Save chooser", poll=0.25):
+                os88qemu.pace(m, 1.0)           # ...and its first paint
             shot(tag + "-savedlg")
-            wins = dispcp.win_list(m, S)
-            if len(wins) <= len(base):
-                no("Add to Disk... put up no Save dialog")
+            slot = chooser_slot()
+            if slot is None:
+                no("Add to Disk... put up no Save chooser")
                 return False
-            dx, dy = dispcp.win_rect(m, S, wins[-1])[:2]
-            bx = dx + 1 + (FD_BX1 + FD_BX2) // 2
             for _ in range(dispcp.DVOL_MAX):
-                if m.read(S("disk_drive"), 1)[0] == VOL_B:
+                was = chooser_drv()
+                if was == VOL_B:
                     break
-                mo.click(bx, dy + TITLE_H + FD_BY2 + FD_BH // 2)
-                time.sleep(1.2)
-            vol = m.read(S("disk_drive"), 1)[0]
-            say("the Save dialog is on volume %d (B: is %d)" % (vol, VOL_B))
+                mo.click(*chooser_btn(slot, CH_DRIVE))
+                if os88qemu.acted(m, lambda: chooser_drv() != was, secs=6,
+                                  what="the chooser's FS_DRV", poll=0.2):
+                    os88qemu.pace(m, 0.5)       # ...and the listing behind it
+            vol = chooser_drv()
+            say("the Save chooser is on volume %d (B: is %d)" % (vol, VOL_B))
             shot(tag + "-onB")
             if vol != VOL_B:
-                no("the Save dialog would not walk to B:, so the write below "
+                no("the Save chooser would not walk to B:, so the write below "
                    "is about the wrong disk")
                 return False
-            mo.click(bx, dy + TITLE_H + FD_BY0 + FD_BH // 2)
-            time.sleep(2.0)
-            for _ in range(240):
-                time.sleep(0.5)
-                if b("wr_job")[0] == 0 and b("wr_state")[0] in (WS_DONE,
-                                                               WS_FAIL):
-                    break
+            nasked = len(srv.asked)
+            mo.click(*chooser_btn(slot, CH_SAVE))
+            # Save POSTS the answer (SPEC.md 38.6): the chooser closes on the
+            # next UI pass and its completion starts the chain, so the
+            # chooser going is the first answer; the chain GETTING GOING is
+            # the second, before "settled" can mean FINISHED rather than NOT
+            # YET STARTED - [wr_state] reads WS_DONE either way. Its first
+            # act is a request to the host, which the server saw or did not;
+            # the two guest seconds this used to sleep are the bound.
+            os88qemu.acted(m, lambda: chooser_slot() is None
+                           and u16(m.read(S("fdlg_win"), 2)) == 0,
+                           secs=10, what="the Save chooser closing",
+                           poll=0.25)
+            os88qemu.acted(m, lambda: len(srv.asked) > nasked
+                           or b("wr_job")[0] != 0, secs=2.0,
+                           what="the Add chain to start", poll=0.1)
+            os88qemu.acted(m, lambda: b("wr_job")[0] == 0
+                           and b("wr_state")[0] in (WS_DONE, WS_FAIL),
+                           secs=120, what="the Add chain", poll=0.5)
             shot(tag + "-added")
             say("after the chain: wr_job = %d, wr_state = %d, wr_msg = %04X"
                 % (b("wr_job")[0], b("wr_state")[0], w("wr_msg")))
@@ -1085,12 +1147,20 @@ def main():
             be swallowed by the very window it exists to get out from under.
             """
             mo.click(ox + 4, oy + 4)
-            time.sleep(1.0)
+            wptr = S("wm_wins") + ww * dispcp.WIN_SIZE
+            os88qemu.acted(m, lambda: os88geom.top(m, S) == wptr, secs=3,
+                           what="the Wire raised", poll=0.1)
+            os88qemu.pace(m, 0.5)               # ...and repainted on top
 
         def pick(row):
             raise_wire()
             mo.click(ox + 40, oy + 19 + row * 16 + 8)
-            time.sleep(1.5)
+            # the selection is the guest's answer; the second after it is
+            # what a picture fetch the change starts has to get going, so
+            # settled() is not satisfied by the state BEFORE it
+            os88qemu.acted(m, lambda: w("wr_sel") == row, secs=4,
+                           what="[wr_sel] = %d" % row, poll=0.1)
+            os88qemu.pace(m, 1.0)
             settled()
 
         # --- 6: Add to Disk writes both files -------------------------------
@@ -1099,7 +1169,9 @@ def main():
         # --- 8: Load Program, out of memory (SPEC.md 21.5, 92.8) -----------
         if have_pkg_run():
             mo.click(ox + 40, oy + 19 + 0 * 16 + 8)   # HELLO: tier 0, one
-            time.sleep(1.5)                           # file, so both allowed
+            os88qemu.acted(m, lambda: w("wr_sel") == 0, secs=4,   # file, so
+                           what="[wr_sel] = 0", poll=0.1)          # both allowed
+            os88qemu.pace(m, 1.0)       # ...and the picture fetch it starts
             if not settled():
                 no("the picture fetch that selecting HELLO starts never "
                    "settled, so Load Program would refuse with 'A transfer "
@@ -1112,10 +1184,9 @@ def main():
                    "file and no WF_DISK - the click below would be refused")
             before = dispcp.win_list(m, S)
             press("wr_ra")                            # Load Program
-            for _ in range(60):
-                time.sleep(0.5)
-                if len(dispcp.win_list(m, S)) > len(before):
-                    break
+            os88qemu.acted(m, lambda: len(dispcp.win_list(m, S))
+                           > len(before), secs=30, what="HELLO's window",
+                           poll=0.5)
             after = dispcp.win_list(m, S)
             # **AND SAY WHICH SIDE FAILED.** [wr_job] still WJ_LOAD with the
             # transfer settled and the claim still held means the UI task went
@@ -1205,15 +1276,20 @@ def main():
         nasked0 = len(srv.asked)        # what the host had been asked BEFORE
                                         # this step - see the check below
         press("wr_ra")                            # Load Program
-        t0 = time.time()
-        settled = False
-        for _ in range(240):
-            time.sleep(0.5)
-            if (b("wr_job")[0] == 0
-                    and b("wr_state")[0] in (WS_DONE, WS_FAIL)):
-                settled = True
-                break
-        time.sleep(2.0)
+        # GUEST seconds from here (tests/os88qemu.py), and the half-second
+        # first is the old loop's own: [wr_state] reads WS_DONE before the
+        # chain has started as well as after it has finished
+        clk = os88qemu.Clock(m)
+        os88qemu.pace(m, 0.5)
+        settled = os88qemu.acted(
+            m, lambda: (b("wr_job")[0] == 0
+                        and b("wr_state")[0] in (WS_DONE, WS_FAIL)),
+            secs=120, what="the archive chain", poll=0.5)
+        # ...and the LAUNCH at its end: a window, if there is going to be one
+        if settled and os88qemu.acted(
+                m, lambda: len(dispcp.win_list(m, S)) > len(before), secs=10,
+                what="the archive's window", poll=0.25):
+            os88qemu.pace(m, 1.0)       # ...and the status cell behind it
         shot("08-fromram")
         after = dispcp.win_list(m, S)
         vols1 = live_vols(m)
@@ -1310,7 +1386,9 @@ def main():
                        ww, own))
                 for pas in (0, 1):
                     if pas:
-                        time.sleep(30)
+                        # TIME, on purpose: pass 1 asks whether the socket's
+                        # timer MOVES over 30 guest seconds, so nothing ends it
+                        os88qemu.pace(m, 30)
                     r = m.readseg(dseg, es["sk_tab"], 48)
                     tmo = r[34] | (r[35] << 8)
                     suna = r[10] | (r[11] << 8) | (r[12] << 16) | (r[13] << 24)
@@ -1330,7 +1408,7 @@ def main():
                "with the socket opened and sitting in the connect (WS_WAIT = "
                "%d), which is the wire and not the launch. Nothing below "
                "this line is evidence about OSAPI_PKG_START."
-               % (time.time() - t0, b("wr_state")[0], b("wr_job")[0],
+               % (clk.secs(), b("wr_state")[0], b("wr_job")[0],
                   WS_DONE, WS_FAIL, len(srv.asked) - nasked0,
                   srv.is_alive(), 2))
         # **A NEW REQUEST, not any request.** This asserted that the path
@@ -1430,8 +1508,15 @@ def main():
                    "<title> from the Wire`" % msg)
     finally:
         if not a.keep:
+            # ...and QEMU GONE before the data disk is read back on the host:
+            # a host wait, on the process, rather than a second and a half
+            try:
+                qpid = int(open("build/qemu.pid").read().strip())
+            except (OSError, ValueError):
+                qpid = None
             m.quit()
-            time.sleep(1.5)
+            if qpid:
+                os88qemu.gone(qpid, 1.5)
 
     # --- assertion 6's other half, on the host ------------------------------
     r = subprocess.run(["python3", "tools/os88disk.py", "--verify", DATIMG],
@@ -1448,7 +1533,8 @@ def main():
     # Wire owes is that both files went to the SAME folder under the right
     # names with the right bytes.
     where = None
-    for name, want in (("BIGONE.O88", hello), (SIDECAR, mines)):
+    for name, want in [("BIGONE.O88", hello), (SIDECAR, mines)] + \
+            sorted(XSIDE.items()):
         hit = [k for k in got if k.split("/")[-1] == name]
         if not hit:
             no("%s is nowhere on B: - Add to Disk did not write it" % name)

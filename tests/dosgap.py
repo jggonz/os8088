@@ -37,12 +37,12 @@ being right.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
+import os88marty                                            # noqa: E402
 import os88ui                                              # noqa: E402
 
 SYS = os.path.join(ROOT, "build", "os8088-360.img")
@@ -72,13 +72,13 @@ def main():
             fail("double-clicking %s opened no window" % PROG)
 
         rows = []
-        end = time.time() + 240.0
-        while time.time() < end:
-            rows = [r.rstrip() for r in (m.screen() or []) if r.strip()]
-            if any("WRGAP PASS" in r or "WRGAP FAIL" in r for r in rows):
-                break
-            time.sleep(0.5)
-        else:
+
+        def done(mm):
+            rows[:] = [r.rstrip() for r in (mm.screen() or []) if r.strip()]
+            return any("WRGAP PASS" in r or "WRGAP FAIL" in r for r in rows)
+        try:
+            os88marty.until(m, done, "WRGAP's verdict", poll=0.5, limit=240.0)
+        except os88marty.MartyError:
             fail("WRGAP.COM never reported; the last screen was %r"
                  % rows[:12])
 

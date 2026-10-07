@@ -33,7 +33,7 @@
 ; The tick model counts UP: tick 0 reads the row and runs tick-0 effects,
 ; ticks 1..speed-1 run the per-tick effects, the row advances when the
 ; count wraps. Mixing is per-channel accumulate into a 16-bit chunk
-; buffer through the 65x256 volume table (built at load), then one
+; buffer through the volume table (built at load), then one
 ; conversion pass: out = 128 + (sum >> 2).
 ; =============================================================================
 
@@ -41,6 +41,9 @@ MP_MAXSMP  equ 60000            ; per-sample play-length cap, bytes: keeps
                                 ; off + pos + step*chunk < 65536 in the mixer
                                 ; even at a 4000 Hz mix rate (step int <= 7)
 MP_CHUNK   equ 512              ; mix chunk cap, samples (mp_mixbuf = 2x)
+MP_VROWS   equ 64 >> TRK_VSH    ; volume-table rows, SILENCE NOT STORED:
+                                ; mp_volsel answers ZF for it, and the mixers
+                                ; skip the channel (TRK_VSH: tracker.asm)
 
 ; --- the position stamps (SPEC.md 45.15): what the LISTENER is hearing ---------
 ; Every mp_* readout above is the position being MIXED, and the mixer runs a
@@ -119,6 +122,47 @@ mp_init:
     mov byte [mp_speed], 6
     mov byte [mp_bpm], 125
     mov word [mp_mixrate], 11000
+    mov byte [mp_master], 64        ; unity: the master volume is an
+    ret                             ; ATTENUATOR, never a gain (mp_volsel)
+
+; =============================================================================
+; mp_volsel - a channel's output volume, through the MASTER volume, as the
+;             volume table slice the mixer xlats through
+; in:  AL = the channel's output volume 0..64
+; out: AX = mp_voltab + vol' * 256, ZF = 0; or ZF = 1 when vol' is 0 and the
+;      channel is silent this chunk. Preserves everything else.
+;
+; THE VOLUME TABLE IS NOT REBUILT, and that is the whole design (it is the
+; one ModPlug's mixer had, SPEC.md 56.3): the master scales which of the 65
+; slices a channel reads, so it costs ONE multiply per channel per CHUNK -
+; up to 512 samples - where scaling the output would cost one per sample, and
+; a rebuild would be 16,640 imuls every time a slider moved. At unity the
+; multiply is skipped altogether, so the default path pays a compare.
+; =============================================================================
+mp_volsel:
+    push cx
+    mov ah, [mp_master]
+    cmp ah, 64
+    jae .unity
+    mul ah                          ; AX = vol * master, <= 64 * 63
+    mov cl, 6
+    shr ax, cl                      ; AL = vol * master / 64
+.unity:
+    xor ah, ah
+%if TRK_VSH                         ; the nearest ROW: vol' rounded to a
+    add al, 1 << (TRK_VSH - 1)      ; multiple of 1 << TRK_VSH, once per
+  %rep TRK_VSH                      ; channel per chunk and never per sample
+    shr al, 1
+  %endrep
+%endif
+    or al, al
+    jz .out                         ; ZF = 1: silence
+    mov cl, 8
+    shl ax, cl
+    add ax, mp_voltab - 256         ; row 1 is the table's first: never 0,
+                                    ; so ZF = 0
+.out:
+    pop cx
     ret
 
 ; =============================================================================
@@ -392,7 +436,7 @@ mp_load:
 .smdone:
     push ds
     pop es
-    call mp_vtbuild             ; the 65x256 volume table, in the current
+    call mp_vtbuild             ; the volume table, in the current
                                 ; mode's format (SPEC.md 45.9)
     ; -- done ----------------------------------------------------------------
     mov byte [mp_songpos], 0
@@ -405,7 +449,8 @@ mp_load:
     ret
 
 ; -----------------------------------------------------------------------------
-; mp_vtbuild - the 65x256 volume table for the current mode (SPEC.md 45.9):
+; mp_vtbuild - the volume table for the current mode (SPEC.md 45.9, 45.4.1):
+;   MP_VROWS rows of 256, row r being vol = r << TRK_VSH, r = 1..MP_VROWS
 ;   default: vt[vol][b] = (int8)b * vol >> 6 (+/-127; 16-bit accumulate,
 ;            out = 128 + (sum >> 2))
 ;   XT:      vt[vol][b] = (int8)b * vol >> 8 (+/-31; four channels sum in
@@ -414,7 +459,7 @@ mp_load:
 ; -----------------------------------------------------------------------------
 mp_vtbuild:
     mov di, mp_voltab
-    mov byte [mp_tvol], 0
+    mov byte [mp_tvol], 1 << TRK_VSH    ; row 1: silence is not stored
     mov cl, 6
     cmp byte [mp_xt], 0
     je .vt_v
@@ -429,7 +474,11 @@ mp_vtbuild:
     inc di
     inc bl
     jnz .vt_b
+%if TRK_VSH
+    add byte [mp_tvol], 1 << TRK_VSH    ; one row per 1 << TRK_VSH volumes
+%else
     inc byte [mp_tvol]
+%endif
     cmp byte [mp_tvol], 65
     jb .vt_v
     ret
@@ -437,8 +486,8 @@ mp_vtbuild:
 ; -----------------------------------------------------------------------------
 ; mp_setxt - set XT mode (AL = 0/1; SPEC.md 45.9) and rebuild the volume
 ; table to the mode's format when a module is loaded. UI context, playback
-; stopped by the caller: the 16,640-imul rebuild is a deliberate sub-second
-; freeze on the machines the mode exists for. Clobbers AX/BX/CX/DI.
+; stopped by the caller: the MP_VROWS * 256-imul rebuild (4,096 as shipped)
+; is a deliberate short freeze on the machines the mode exists for. Clobbers AX/BX/CX/DI.
 ; -----------------------------------------------------------------------------
 mp_setxt:
     mov [mp_xt], al
@@ -517,6 +566,8 @@ mp_start:
                                 ; over all 128), so the mask is safe
     mov al, [mp_orders + bx]
     mov [mp_pattern], al
+    mov [mp_curpos], bl         ; the position this row is IN (mp_nextrow)
+    mov byte [mp_songend], 0
     call mp_calc_spt
     mov ax, [mp_spt]
     mov [mp_tickrem], ax
@@ -540,6 +591,22 @@ mp_stop:
     ret
 
 ; =============================================================================
+; mp_setposn - AL = an ABSOLUTE order position, clamped to 0..songlen-1
+;
+; The scrubber's (SPEC.md 45.21): a click or a drag names a position, and
+; expressing it as a delta would mean computing `target - current` from a
+; [mp_songpos] the worker moves underneath it. It shares mp_setpos's tail, so
+; the two cannot disagree about what a seek resets.
+; =============================================================================
+mp_setposn:
+    cmp byte [mp_loaded], 0
+    je mp_setpos.out
+    mov ah, al
+    cmp ah, [mp_songlen]
+    jb mp_setpos.have
+    jmp short mp_setpos.top
+
+; =============================================================================
 ; mp_setpos - AL = signed delta to song position, clamped to 0..songlen-1
 ; =============================================================================
 mp_setpos:
@@ -561,6 +628,7 @@ mp_setpos:
                                 ; songlen-1, not position 0
 .have:
     mov [mp_songpos], ah
+    mov [mp_curpos], ah         ; a seek is a new place to END from, too
     mov bl, ah
     xor bh, bh
     mov al, [mp_orders + bx]
@@ -572,6 +640,127 @@ mp_setpos:
     jne .out                    ; playing: the row chain continues there
     mov byte [mp_row], 0
 .out:
+    ret
+
+; =============================================================================
+; mp_timeat - AL = an order position -> DX:AX = stream samples, at the current
+; [mp_mixrate], from the top of the song to that position's first row; and
+; [mp_speed]/[mp_bpm]/[mp_spt] left as they stand there, so a resume (mp_start
+; mode 2) plays at the tempo the clock was priced at. The ORDER LIST is walked
+; in sequence, every row priced speed * spt, an Fxx changing the tempo on its
+; own row and a Dxx (or a Bxx, as a break to row 0) ending the pattern. The
+; walk follows the order list and not the jump, and E6x/EEx are not modelled:
+; exact for a song that plays its orders in order, an estimate for one that
+; loops inside itself. Preserves all but AX, DX.
+; =============================================================================
+mp_timeat:
+    push bx
+    push cx
+    push di
+    push es
+    mov [mp_tpos], al
+    xor ax, ax
+    mov [mp_tacc], ax
+    mov [mp_tacc + 2], ax
+    mov byte [mp_speed], 6
+    mov byte [mp_bpm], 125
+    call mp_calc_spt
+    xor bx, bx                  ; BL = the order, BH = the row it starts on
+.ord:
+    cmp bl, [mp_tpos]
+    jae .done
+    push bx
+    xor bh, bh
+    mov al, [mp_orders + bx]
+    xor ah, ah
+    cmp ax, [mp_npat]           ; mp_readrow's guard, for the same reason
+    jb .pok
+    xor ax, ax
+.pok:
+    mov cl, 6
+    shl ax, cl
+    add ax, 67
+    add ax, [mp_blobseg]
+    mov es, ax
+    pop bx
+    mov al, bh
+    mov bh, 0FFh                ; no break seen in this pattern yet
+.row:
+    push ax
+    xor ah, ah
+    mov cl, 4
+    shl ax, cl
+    add ax, 12
+    mov di, ax                  ; ES:DI = the row's first cell
+    mov ch, 4
+.cell:
+    mov al, [es:di + 2]
+    and al, 0Fh
+    mov cl, [es:di + 3]
+    cmp al, 0Fh
+    jne .nf
+    or cl, cl
+    jz .next                    ; F00 is a stop, not a tempo
+    cmp cl, 20h
+    jae .bpm
+    mov [mp_speed], cl
+    jmp short .next
+.bpm:
+    mov [mp_bpm], cl
+    push bx
+    call mp_calc_spt
+    pop bx
+    jmp short .next
+.nf:
+    cmp al, 0Bh
+    jne .nd
+    cmp bh, 0FFh
+    jne .next
+    mov bh, 0
+    jmp short .next
+.nd:
+    cmp al, 0Dh
+    jne .next
+    mov al, cl                  ; BCD row, as mp_readrow's .fD
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    mov ah, 10
+    mul ah
+    and cl, 0Fh
+    add al, cl
+    cmp al, 63
+    jbe .dok
+    xor al, al
+.dok:
+    mov bh, al
+.next:
+    add di, 4
+    dec ch
+    jnz .cell
+    mov al, [mp_speed]          ; the row, at the tempo it set
+    xor ah, ah
+    mul word [mp_spt]
+    add [mp_tacc], ax
+    adc [mp_tacc + 2], dx
+    pop ax
+    cmp bh, 0FFh
+    jne .brk
+    inc al
+    cmp al, 64
+    jb .row
+    mov bh, 0
+.brk:
+    inc bl
+    jmp .ord
+.done:
+    mov ax, [mp_tacc]
+    mov dx, [mp_tacc + 2]
+    pop es
+    pop di
+    pop cx
+    pop bx
     ret
 
 ; =============================================================================
@@ -774,19 +963,29 @@ mp_insname:
     ret
 
 ; =============================================================================
-; mp_cell2txt - in AL = row 0..63, AH = channel 0..3, DI = pattern number;
-; fills mp_celltxt with 'C-2 01 A0F' + NUL. CF=1 no module / out of range.
+; mp_cellptr - in AL = row 0..63, AH = channel 0..3, DI = pattern number;
+;              out ES:SI = that cell's four bytes, CF = 1 no module or out of
+;              range. BX, CX clobbered. The face's spectrum reads the note the
+;              listener is hearing through it (SPEC.md 45.21.5)
 ; =============================================================================
-mp_cell2txt:
+mp_cellptr:
     cmp byte [mp_loaded], 0
     je .no
     cmp al, 63
     ja .no
     cmp ah, 3
     ja .no
-    cmp di, [mp_npat]           ; DI = pattern number against the WORD count
+    cmp di, [mp_npat]
     jae .no
-    ; ES = pattern segment, SI = cell offset
+    call mp_cellp
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; mp_cellp - the address arithmetic, unchecked (both callers have checked)
+mp_cellp:
     mov bx, di
     mov cl, 6
     shl bx, cl                  ; pattern * 64 paragraphs
@@ -804,6 +1003,22 @@ mp_cell2txt:
     shl bx, 1                   ; ch * 4
     add si, bx
     add si, 12
+    ret
+
+; =============================================================================
+; mp_cell2txt - in AL = row 0..63, AH = channel 0..3, DI = pattern number;
+; fills mp_celltxt with 'C-2 01 A0F' + NUL. CF=1 no module / out of range.
+; =============================================================================
+mp_cell2txt:
+    cmp byte [mp_loaded], 0
+    je .no
+    cmp al, 63
+    ja .no
+    cmp ah, 3
+    ja .no
+    cmp di, [mp_npat]           ; DI = pattern number against the WORD count
+    jae .no
+    call mp_cellp               ; ES:SI = the cell
     ; decode
     mov al, [es:si]             ; b0
     mov ah, [es:si+1]           ; b1
@@ -938,8 +1153,13 @@ mp_pfind:
 ; =============================================================================
 ; mp_gen - render CX bytes (even, <= 2048) of unsigned 8-bit mono into
 ; mp_outbuf and advance the replayer. Silence when not playing.
+; mp_genc - the same, CONTINUING at [mp_outp] rather than at the buffer's
+; start: a half mixed in several pieces (SPEC.md 45.16.7), each stamped
+; against the one [mp_stampbase] the first piece set. CX <= what is left.
 ; =============================================================================
 mp_gen:
+    mov word [mp_outp], mp_outbuf
+mp_genc:
     cld
     push bp                     ; mp_mixch_xt keeps the frac step in BP
     push ds
@@ -953,7 +1173,6 @@ mp_gen:
     mov cx, 2048
 .cxok:
     mov [mp_need], cx
-    mov word [mp_outp], mp_outbuf
 .big:
     mov cx, [mp_need]
     or cx, cx
@@ -1070,15 +1289,8 @@ mp_mixch:
     cmp byte [mp_mute + bx], 0
     jne .silent
     mov al, [si+MP_OVOL]
-    or al, al
-    jz .silent
-    ; BX = volume table slice
-    xor ah, ah
-    push cx
-    mov cl, 8
-    shl ax, cl
-    pop cx
-    add ax, mp_voltab
+    call mp_volsel              ; AX = the table slice, through the master
+    jz .silent                  ; volume; ZF = 1 when it rounds to silence
     mov bx, ax
     ; the inner loop
     mov es, [si+MP_SEG]
@@ -1169,14 +1381,12 @@ mp_mixch:
 ; never a memory base, so SS != DS cannot bite.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; MIXSAMP - one channel-sample of the XT mixer (PERFORMANCE.md Set 20)
-;
-;   %1 = 0  the STORE pass: this is the first live channel, so it writes
-;   %1 = 1  the ADD pass: every channel after it accumulates
-;   %2      this copy's PATCHED step immediate - a LOCAL label
+; MIXADD - one channel-sample of the XT mixer's ADD pass (PERFORMANCE.md Set
+;          20, SPEC.md 45.9.4). %1 is this copy's PATCHED step immediate - a
+;          LOCAL label. The STORE pass is MIXSTORE, below.
 ;
 ; in:  ES:SI = the sample, DS:BX = the volume-table slice (xlat), DI = the
-;      output, DX = the fractional position, BP = the fractional step.
+;      output, DX = the fractional position, BP = the fractional step, DF = 0.
 ;      Advances SI, DI and DX; leaves CX alone, so the caller owns the loop.
 ;
 ; WHY THE STEP IS AN IMMEDIATE AND NOT A MEMORY OPERAND. On an 8088 the bus is
@@ -1186,43 +1396,77 @@ mp_mixch:
 ; 6 data bytes = 21 = 84 clocks, and 84 x 4 channels x 5,500 Hz is 38.7% of a
 ; 4.77MHz machine, which is what PERFORMANCE.md Set 20 profiled. The integer
 ; step is LOOP-INVARIANT and cost 2 of those data bytes as
-; `adc si, [mp_cstepi]`; as an immediate it is the same four instruction bytes
-; and no read at all.
+; `adc si, [mp_cstepi]`; as an immediate it cost no read at all. SPEC.md
+; 45.9.4 took it to 11 instruction bytes and 4 data bytes: `es lodsb` loads
+; and steps SI in 2 bytes where `mov al, [es:si]` was 3, and the step is a
+; sign-extended BYTE (at most 31,388 Hz / the mix rate - 5 at 5,500), patched
+; as the step LESS ONE because lodsb has moved SI one already.
 ;
-; mp_stepi_set patches every copy, once per channel per chunk - thousands of
+; mp_stepi_set patches every copy, once per channel per chunk - hundreds of
 ; samples before the prefetch queue could be holding a stale one, which is the
 ; only thing that makes self-modifying code delicate on this CPU.
 ; -----------------------------------------------------------------------------
-%macro MIXSAMP 2
-    mov al, [es:si]
+%macro MIXADD 1
+    es lodsb                        ; `mov al, [es:si]` in 2 bytes, not 3
     xlat
-%if %1 == 0
-    add al, 0x80
-    mov [di], al
-%else
     add [di], al
-%endif
     inc di
     add dx, bp
-    db 0x81, 0xD6                   ; adc si, imm16 - the immediate is DATA,
-%2: dw 0                            ; patched by mp_stepi_set
+    db 0x83, 0xD6                   ; adc si, imm8 (sign-extended): the step
+%1: db 0                            ; less one, patched by mp_stepi_set
 %endmacro
 
 ; -----------------------------------------------------------------------------
-; mp_stepi_set - AX = the integer step, into every MIXSAMP copy
-;                Preserves every register.
+; MIXSTORE - the STORE pass, with the segments SWAPPED (SPEC.md 45.9.4)
+;
+; in:  DS:SI = the sample, ES:BX = the volume-table slice, ES:DI = the
+;      output, DX/BP as MIXADD; DF = 0. %1 is this copy's patched step,
+;      which is the integer step LESS ONE: lodsb has already moved SI by one.
+;
+; The first audible channel WRITES, and a write is what the string
+; instructions are for: `lodsb` is the old `mov al, [es:si]` in 1 byte
+; instead of 3, and `stosb` is its `mov [di], al` / `inc di` in 1 instead of
+; 3, against `es xlat` costing one byte more than a plain one. 11 instruction
+; bytes and 3 data bytes a sample where the old store was 14 and 3: ~56 clocks
+; against ~68 on an 8-bit bus. The ADD pass gains nothing from the same swap
+; - `add [es:di], al` pays the byte `mov` saved - so MIXADD keeps DS ours.
+; -----------------------------------------------------------------------------
+%macro MIXSTORE 1
+    lodsb
+    es xlatb
+    add al, 0x80
+    stosb
+    add dx, bp
+    db 0x83, 0xD6                   ; adc si, imm8 (sign-extended): the
+%1: db 0                            ; step less one, patched by mp_stepi_set
+%endmacro
+
+; -----------------------------------------------------------------------------
+; mp_stepi_set - AL = the integer step (< 128, see MIXADD), into every
+;                MIXADD and MIXSTORE copy LESS ONE, because both load with
+;                a lodsb that steps one itself. Preserves every register.
 ; -----------------------------------------------------------------------------
 mp_stepi_set:                       ; STRAIGHT LINE, not a table walk: this runs
-    mov [mp_mixch_xt.ps0], ax       ; once per channel per chunk and the loop it
-    mov [mp_mixch_xt.ps1], ax       ; replaces profiled at 3.1% of the whole
-    mov [mp_mixch_xt.ps2], ax       ; machine. `mov [imm16], ax` is the
-    mov [mp_mixch_xt.ps3], ax       ; accumulator-direct form - 3 instruction
-    mov [mp_mixch_xt.ps4], ax       ; bytes and a 2-byte write, 20 clocks - so
-    mov [mp_mixch_xt.pa0], ax       ; ten of them are 200 against the loop's
-    mov [mp_mixch_xt.pa1], ax       ; ~480, and it touches no register but AX,
-    mov [mp_mixch_xt.pa2], ax       ; so the three pushes go too
-    mov [mp_mixch_xt.pa3], ax
-    mov [mp_mixch_xt.pa4], ax
+    dec ax                          ; once per channel per chunk (up to 512
+    mov [mp_mixch_xt.pa0], al       ; samples) and the loop it replaced profiled
+    mov [mp_mixch_xt.pa1], al       ; at 3.1% of the whole machine. `mov
+    mov [mp_mixch_xt.pa2], al       ; [imm16], al` is the accumulator-direct
+    mov [mp_mixch_xt.pa3], al       ; form - 3 instruction bytes and a 1-byte
+    mov [mp_mixch_xt.pa4], al       ; write, 14 clocks - so eighteen of them are
+    mov [mp_mixch_xt.pa5], al       ; ~250, and it touches no register but AX,
+    mov [mp_mixch_xt.pa6], al       ; which the inc gives back
+    mov [mp_mixch_xt.pa7], al
+    mov [mp_mixch_xt.par], al
+    mov [mp_mixch_xt.ps0], al
+    mov [mp_mixch_xt.ps1], al
+    mov [mp_mixch_xt.ps2], al
+    mov [mp_mixch_xt.ps3], al
+    mov [mp_mixch_xt.ps4], al
+    mov [mp_mixch_xt.ps5], al
+    mov [mp_mixch_xt.ps6], al
+    mov [mp_mixch_xt.ps7], al
+    mov [mp_mixch_xt.psr], al
+    inc ax
     ret
 
 mp_mixch_xt:
@@ -1236,7 +1480,7 @@ mp_mixch_xt:
     mov [mp_cloopl], ax
     mov ax, [si+MP_STEPI]
     mov [mp_cstepi], ax
-    call mp_stepi_set           ; ...and into every MIXSAMP copy, once per
+    call mp_stepi_set           ; ...and into every MIXADD/MIXSTORE copy, once per
     mov ax, [si+MP_STEPF]       ; channel rather than once per sample
     mov [mp_cstepf], ax
     mov bl, [mp_curc]
@@ -1244,12 +1488,8 @@ mp_mixch_xt:
     cmp byte [mp_mute + bx], 0
     jne mp_mixch.silent         ; the shared advance-only path: same scratch,
     mov al, [si+MP_OVOL]        ; same [mp_crec] in SI, ends in ret
-    or al, al
+    call mp_volsel
     jz mp_mixch.silent
-    xor ah, ah
-    mov cl, 8
-    shl ax, cl
-    add ax, mp_voltab
     mov bx, ax                  ; BX = the volume table slice (xlat)
     mov es, [si+MP_SEG]
     mov dx, [si+MP_POSF]
@@ -1280,40 +1520,60 @@ mp_mixch_xt:
     sub cx, ax
     xchg cx, ax                 ; CX = run length, AX = remaining
     push ax
-    mov ax, cx                  ; the run is walked FOUR samples at a time and
-    shr cx, 1                   ; then the 0..3 that are left, which amortises
-    shr cx, 1                   ; `loop` from 2 bytes a sample to half of one
-    and ax, 3                   ; (PERFORMANCE.md Set 20: on an 8-bit bus the
-    mov [mp_crem], ax           ; byte count IS the cost)
+    mov ax, cx                  ; the run is walked EIGHT samples at a time
+    shr cx, 1                   ; and then the 0..7 that are left, which
+    shr cx, 1                   ; amortises `loop` - 17 clocks and a flushed
+    shr cx, 1                   ; prefetch queue - over eight (SPEC.md
+    and ax, 7                   ; 45.9.4; it was four, PERFORMANCE.md Set
+    mov [mp_crem], ax           ; 20: on an 8-bit bus the bytes ARE the cost)
+    cld                         ; both passes load with lodsb
     cmp byte [mp_first], 0
     je .addq
+    push ax                     ; the 0..7 remainder, off the stack below:
+    push ds                     ; nothing of ours is readable once the
+    push es                     ; segments swap (SPEC.md 45.9.4) - DS the
+    pop ds                      ; sample for lodsb, ES us for the table and
+    pop es                      ; for stosb
     jcxz .strem
 .stq:
-    MIXSAMP 0, .ps0           ; store pass: out = 128 + vt[b]
-    MIXSAMP 0, .ps1
-    MIXSAMP 0, .ps2
-    MIXSAMP 0, .ps3
+    MIXSTORE .ps0             ; store pass: out = 128 + vt[b]
+    MIXSTORE .ps1
+    MIXSTORE .ps2
+    MIXSTORE .ps3
+    MIXSTORE .ps4
+    MIXSTORE .ps5
+    MIXSTORE .ps6
+    MIXSTORE .ps7
     loop .stq
 .strem:
-    mov cx, [mp_crem]
-    jcxz .rejoin
+    pop cx
+    jcxz .stx
 .stl:
-    MIXSAMP 0, .ps4
+    MIXSTORE .psr
     loop .stl
+.stx:
+    push ds                     ; ...and back: DS us, ES the sample, which
+    push es                     ; is what .runs, .edge and .fin read
+    pop ds
+    pop es
     jmp .rejoin
 .addq:
     jcxz .addrem
 .addq1:
-    MIXSAMP 1, .pa0           ; add pass: out += vt[b]
-    MIXSAMP 1, .pa1
-    MIXSAMP 1, .pa2
-    MIXSAMP 1, .pa3
+    MIXADD .pa0           ; add pass: out += vt[b]
+    MIXADD .pa1
+    MIXADD .pa2
+    MIXADD .pa3
+    MIXADD .pa4
+    MIXADD .pa5
+    MIXADD .pa6
+    MIXADD .pa7
     loop .addq1
 .addrem:
     mov cx, [mp_crem]
     jcxz .rejoin
 .addl:
-    MIXSAMP 1, .pa4
+    MIXADD .par
     loop .addl
 .rejoin:
     pop cx                      ; CX = remaining
@@ -1399,6 +1659,14 @@ mp_dotick:
     jmp .upd                    ; held row: no note re-read
 .advance:
     call mp_nextrow
+    cmp byte [mp_songend], 0    ; the order list went back (mp_nextrow): with
+    je .onrow                   ; [mp_endstop] set that is F00's exit - the
+    mov byte [mp_songend], 0    ; replayer stops, mp_gen pads silence and the
+    cmp byte [mp_endstop], 0    ; worker latches trk_ended once the card has
+    je .onrow                   ; played the tail - and without it the song
+    mov byte [mp_playing], 0    ; loops as it always did (SPEC.md 45.21.3)
+    ret
+.onrow:
     mov al, [mp_songpos]        ; BEFORE the effects: a Bxx parks songpos at
     mov [mp_pendpos], al        ; target-1 for the rest of its row (mp_start's
     mov al, [mp_pattern]        ; note), and a stamp taken after mp_readrow
@@ -1445,6 +1713,11 @@ mp_nextrow:
     mov ah, [mp_restart]
     mov [mp_songpos], ah
 .pat:
+    cmp ah, [mp_curpos]         ; THE SONG IS OVER when the order list goes
+    ja .fwd                     ; BACK - the wrap to the restart position
+    mov byte [mp_songend], 1    ; above, or a Bxx to where we already are or
+.fwd:                           ; were. A replayer that only knew F00 never
+    mov [mp_curpos], ah         ; ended at all, and a playlist hangs off this
     push ax
     mov bl, [mp_songpos]
     xor bh, bh
@@ -2186,6 +2459,16 @@ mp_arp:
 ; #DE guard) and publish the UI-visible volume/period.
 ; -----------------------------------------------------------------------------
 mp_chupd:
+    mov ax, [mp_mixrate]        ; THE STEP IS CACHED (SPEC.md 45.9.4): it is a
+    cmp ax, [mp_chrate]         ; function of the clamped period and the rate
+    je .rate                    ; and nothing else, and [mp_chper] is last
+    mov [mp_chrate], ax         ; tick's period - so a new rate invalidates
+    xor ax, ax                  ; every slot, and 0 is never a clamped period
+    mov [mp_chper], ax
+    mov [mp_chper + 2], ax
+    mov [mp_chper + 4], ax
+    mov [mp_chper + 6], ax
+.rate:
     mov word [mp_crec], mp_chans
     mov byte [mp_curc], 0
 .ch:
@@ -2198,8 +2481,14 @@ mp_chupd:
     call mp_pclamp
     push bx
     shl bx, 1
-    mov [mp_chper + bx], ax     ; word slot
+    cmp ax, [mp_chper + bx]     ; the same period as last tick...
+    mov [mp_chper + bx], ax     ; word slot (mov and pop keep the flags)
     pop bx
+    jne .calc
+    mov dx, [di+MP_STEPI]       ; ...and a step already worked out for it -
+    or dx, [di+MP_STEPF]        ; mp_start zeroes the records, and no clamped
+    jnz .pubv                   ; period has a step of 0 - costs no DIVs
+.calc:
     push bx
     mov bx, ax
     mov dx, 0x0036
@@ -2212,6 +2501,7 @@ mp_chupd:
     div word [mp_mixrate]
     mov [di+MP_STEPF], ax
     pop bx
+.pubv:
     ; publish volume: 0 when muted, else the tick's output volume
     cmp byte [mp_mute + bx], 0
     jne .quietv
@@ -2299,6 +2589,7 @@ mpe_song:   db 'Bad song data', 0
                                     ; last stamp (SPEC.md 45.12.1) - mp_trig
                                     ; sets, mp_stamp_at reads and clears
     TRKBUF mp_chper, 8              ; current playing periods (0 = silent)
+    TRKW mp_chrate                  ; the rate mp_chupd's cached steps are for
     TRKBUF mp_title, 21             ; module title, NUL-terminated
     TRKBUF mp_outbuf, 2048          ; mp_gen's rendered output
 
@@ -2322,6 +2613,13 @@ mpe_song:   db 'Bad song data', 0
 ; --- replayer internals --------------------------------------------------------
     TRKB mp_restart                 ; validated restart position
     TRKB mp_ploop                   ; 1 = pattern-loop mode (P key)
+    TRKB mp_master                  ; master volume 0..64, 64 = unity (mp_volsel)
+    TRKB mp_curpos                  ; the order position the current row is in
+    TRKB mp_tpos                    ; mp_timeat's target position
+    TRKBUF mp_tacc, 4               ; ...and its sum (32-bit)
+    TRKB mp_songend                 ; mp_nextrow saw the order list go BACK
+    TRKB mp_endstop                 ; ...and 1 = that stops the replayer (the
+                                    ; app's Repeat setting, SPEC.md 45.21.3)
     TRKB mp_tick                    ; tick 0..speed-1
     TRKB mp_patdel                  ; EEx pending delay
     TRKB mp_patdel2                 ; ...and the held-row counter
@@ -2357,4 +2655,4 @@ mpe_song:   db 'Bad song data', 0
     TRKBUF mp_smptab, MS_SZ * 31    ; the validated sample table
     TRKBUF mp_chans, MP_CHSZ * 4    ; the four channel records
     TRKBUF mp_mixbuf, MP_CHUNK * 2  ; 16-bit accumulator
-    TRKBUF mp_voltab, 65 * 256      ; vt[vol][byte] = (int8)byte * vol >> 6
+    TRKBUF mp_voltab, MP_VROWS * 256    ; vt[row-1][byte] = (int8)byte * vol >> 6

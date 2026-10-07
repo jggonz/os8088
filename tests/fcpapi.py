@@ -33,11 +33,11 @@ import shutil
 import struct
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88build                                               # noqa: E402
 import os88fat                                                 # noqa: E402
+import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
@@ -137,7 +137,14 @@ def main():
         except Exception as e:
             print("fcpapi: note: the window did not arrive (%s)"
                   % str(e).splitlines()[0][:70])
-        time.sleep(6)
+        # ...then the rest of its drive traffic, before the image is flushed
+        try:
+            os88marty.quiesce(ui.m, lambda: (ui.m.disk().get("reads"),
+                                             ui.m.disk().get("writes")),
+                              guest=2.0, budget=180.0,
+                              what="the package's disk traffic to stop")
+        except os88marty.MartyError as e:
+            print("fcpapi: note: %s" % str(e).splitlines()[0][:70])
         # ...AND THE VOLUME COMES BACK OFF THE GUEST, not off SCRATCH. Every
         # instance boots its OWN clone of the image (which is what makes
         # --marty-jobs safe), so the file on this host was never written to

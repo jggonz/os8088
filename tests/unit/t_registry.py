@@ -38,15 +38,8 @@ import suite                                              # noqa: E402
 # otherwise ask for it to be dropped. Same rule as UNREGISTERED: the reason is
 # the point, and an unexplained entry is how a stale flag survives.
 BUILDS_WITHOUT_MAKE = {
-    "fdlgthumb": "a KNOB gate, so it may not call the fixture helper at all - "
-                 "that runs `make`, and the Makefile's VIDSTAMP rule removes "
-                 "build/kernel.bin whenever the knob set differs, which would "
-                 "delete the very kernel the row is about to test. It builds "
-                 "fdthumb.img with nasm and os88pkg.py directly instead, "
-                 "which is still writing the tree the run is reading - "
-                 "through os88build.at, so it writes where it reads "
-                 "(docs/plans/SOAK-PARALLEL.md 14.2), but into a shared directory "
-                 "either way",
+    # (fdlgthumb was the one entry: the old Standard File dialog's own
+    # scroll bar, retired with it - SPEC.md 38.4.1)
 }
 
 # Not registered, and why. Keep the reason specific and true.
@@ -72,6 +65,9 @@ UNREGISTERED = {
                    "(docs/WRITING-TESTS.md 2.1)",
 
     # --- library and support code, not tests ---
+    "mrprobe.py": "MIDIRack's guest reader (SPEC.md 105.11) - the running "
+                  "package's variables by NAME, for tests/midirack.py; "
+                  "library, not a test",
     "dispcells.py": "the CELLS-not-calls counter two gates share (SPEC.md "
                     "11.3.3), not a test",
     "pxslib.py": "PIXELSTEIN 3D's guest reader (SPEC.md 97.12) - the "
@@ -106,6 +102,10 @@ UNREGISTERED = {
     "trklog.inc": "tracker's logging build, %included by apps/tracker",
     "trkscrl.inc": "tracker's scroll-gate build, %included by apps/tracker",
     "npbench.inc": "a benchmark body, %included",
+    "fatdel.py": "deletes one file anywhere in a FAT12 image, a sub-folder "
+                 "too, which tools/os88fat.py's `del` refuses - imported by "
+                 "assocstale.py to take a program out from under the "
+                 "ASSOC.DAT that names it; library, not a test",
     "harness.py": "tests/unit/'s check library - check(), eq(), done() - "
                   "imported by every t_*.py there, not a test",
     "mkclick.py": "a GENERATOR, not a test: it writes build/click.mod - a "
@@ -167,9 +167,6 @@ UNREGISTERED = {
     "brreload.py": "needs `make browsertest` (build/brtest360.img)",
     "brtest.py": "needs `make browsertest` (build/brtest360.img)",
     "brtoolbar.py": "needs `make browsertest` (build/brtest360.img)",
-    "ethernet.py": "needs `make ethertest` and QEMU - MartyPC has no NIC "
-                   "(SPEC.md 72.9)",
-    "ethcfg.py": "needs `make ethertest` and QEMU",
     "netprof.py": "needs QEMU, and it leaves ETHPROF=1 KNOB builds of "
                   "ether.drv and the ethertest disk in build/ - a suite row "
                   "running before the next `make` would test the wrong "
@@ -287,9 +284,8 @@ def _private_build(path):
     # not building anything: `os88build.at()` is a PATH RESOLVER and rows
     # import it to spell `build/x.img` correctly under a frozen run
     # (docs/plans/SOAK-PARALLEL.md 14.2) - eight of them do, and none of those
-    # builds a tree. Keying on the import therefore told `fdlgthumb` to drop
-    # a flag it genuinely needs: that row builds its fixture with nasm and
-    # os88disk directly and writes whichever tree the run reads.
+    # builds a tree. Keying on the import would tell a row that builds its fixture with
+    # nasm and os88disk directly to drop a flag it genuinely needs.
     return bool(re.search(r'\bos88build\.tree\s*\(', body)
                 or re.search(r'\b_B\.tree\s*\(', body)
                 or "BUILD=" in body)
@@ -329,6 +325,21 @@ def main():
         for part in r.cmd:
             if part.startswith("tests/") and part.endswith(".py"):
                 reg[os.path.basename(part)] = r.name
+
+    # ONE NAME, ONE ROW, across every tier. `tools/os88soak.py` journals a
+    # run BY NAME and `--resume` excludes by name, so two rows sharing one
+    # made the second's verdict vanish: the fast `paccman` reported ok in
+    # 0.0s, the soak `paccman` FAILED an hour later, and `status` and
+    # done.txt both said ok - the failure was only in run.log's tail.
+    seen = {}
+    for r in suite.rows():
+        if r.name in seen:
+            check(False, "row name %r is registered twice (%s and %s)"
+                  % (r.name, seen[r.name], r.tier),
+                  "the soak journals and resumes BY NAME, so the second "
+                  "row's verdict is lost - rename one",
+                  got="two rows", want="one")
+        seen[r.name] = r.tier
 
     # BOTH directories. This walked the top level only, so a t_*.py added to
     # tests/unit/ with no row was invisible to the one gate meant to see it -

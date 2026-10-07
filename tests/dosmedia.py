@@ -45,7 +45,6 @@ Break it on purpose: take `FCPX dsk_media_ok` out of `fcp_goto` and assertion
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -58,7 +57,7 @@ APPS = "build/doscom360.img"
 BOX = "A:/APPS/DOS.O88"
 
 # The motor-off countdown is `dsk_dpt` byte 2 = 0x25 = 37 ticks = 2.03s
-# (SPEC.md 18.9.1). Four is comfortably past it and still cheap.
+# (SPEC.md 18.9.1). Four GUEST seconds is comfortably past it and still cheap.
 SPUNDOWN = 4.0
 # One sector is the boot sector. A root directory is seven of them on a 720KB
 # disk and the FAT is three, so anything at or above this is the cache gone.
@@ -86,7 +85,7 @@ def main():
                  % bx.b("dos_vol"))
 
         # --- 1 and 2: a DIR with the motor stopped ------------------------
-        time.sleep(SPUNDOWN)
+        os88marty.guest_sleep(m, SPUNDOWN)
         m.disk(reset=True)
         bx.type("DIR\n")
         d = m.disk()
@@ -115,9 +114,13 @@ def main():
         # byte is sampled while a DIR is actually running.
         seen = {}
         m.type_text("DIR\n")
-        t0 = time.time()
-        while time.time() - t0 < 6.0:
+        # sampled over GUEST time - what 6s gave on an idle box - and ended
+        # early by the answer, which is all the assertion asks for
+        c0, span = m.status()["cycles"], 6.0 * (os88marty.GUEST_PACE or 4.5)
+        while (m.status()["cycles"] - c0) / os88marty.GUEST_HZ < span:
             seen[m.read(0x400 + 0x3F, 1)[0]] = 1
+            if 2 in seen:
+                break
         os88marty.settle(m)
         if 2 not in seen:                    # bit 1 = drive 1 = B:
             fail("0040:003F never showed B:'s motor bit while a DIR ran - it "

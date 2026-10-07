@@ -52,7 +52,6 @@ planes behind the Graphics Controller), so there `fbuf` is the only route.
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -188,7 +187,14 @@ def main():
             print("no window on the desktop - opening drive zone (%d,%d)"
                   % (zx, zy))
             mo.dblclick(zx, zy)
-            time.sleep(3)
+
+            def up(_m):
+                try:
+                    return front_window(m)
+                except MartyError:
+                    return None
+            os88marty.until(m, up, "the drive window", poll=0.3, limit=30)
+            os88marty.settle(m)
             rec = front_window(m)
 
         close, mini = boxes(m, rec)
@@ -207,7 +213,7 @@ def main():
         cx, cy = centre(close)
         mo.to(cx, cy)
         mo._edge(True)
-        time.sleep(0.6)
+        os88marty.settle(m)                 # the next read is PIXELS
         held = Fb(m, mono)
         down_close = held.lit(*close)
         lit_flag = _byte(m, armlit)
@@ -224,7 +230,7 @@ def main():
         # --- 2. it comes back up when the pointer SLIDES OFF, still held ----
         # THE HALF THAT MATTERS. A static invert passes case 1 and fails here.
         mo.to(cx + 60, cy + 40, l=True)     # l=True: STILL HELD
-        time.sleep(1.2)
+        os88marty.settle(m)
         off = Fb(m, mono)
         check("...and comes back UP when the pointer slides off",
               off.lit(*close) == up_close and
@@ -235,7 +241,7 @@ def main():
 
         # --- 3. ...and DOWN AGAIN on the way back in -----------------------
         mo.to(cx, cy, l=True)
-        time.sleep(1.2)
+        os88marty.settle(m)
         back = Fb(m, mono)
         check("...and down again on sliding back in",
               back.lit(*close) < area // 5 and _byte(m, armlit) == 1,
@@ -248,7 +254,7 @@ def main():
         # will not happen.
         mx, my = centre(mini)
         mo.to(mx, my, l=True)
-        time.sleep(1.2)
+        os88marty.settle(m)
         other = Fb(m, mono)
         # The minimize box now has the ARROW on it, so it cannot be compared
         # to its own upright count; what has to be true is that it did not
@@ -270,7 +276,7 @@ def main():
         # tree a "text flash" that was the cursor.
         mo._edge(False)
         mo.to(*park)
-        time.sleep(1.5)
+        os88marty.settle(m)
         after = Fb(m, mono)
         check("the release leaves both boxes upright",
               after.lit(*close) == up_close and after.lit(*mini) == up_mini
@@ -296,16 +302,16 @@ def main():
         # --- 7. the minimize box does the same thing -----------------------
         mo.to(mx, my)
         mo._edge(True)
-        time.sleep(0.6)
+        os88marty.settle(m)
         mheld = Fb(m, mono)
         check("minimize box inverts while held",
               mheld.lit(*mini) != up_mini,
               "lit %d -> %d" % (up_mini, mheld.lit(*mini)))
         mo.to(mx, my + 50, l=True)      # slide off and release: cancelled, so
-        time.sleep(1.2)                 # the window must still be there
+        os88marty.pace(m, 1.2)          # the window must still be there
         mo._edge(False)
         mo.to(*park)
-        time.sleep(1.5)
+        os88marty.settle(m)
         end = Fb(m, mono)
         check("...and a cancelled minimize leaves it up and the window open",
               end.lit(*mini) == up_mini and
@@ -319,9 +325,15 @@ def main():
         # the feature did not eat the feature it decorates.
         mo.to(cx, cy)
         mo._edge(True)
-        time.sleep(0.6)
+        os88marty.pace(m, 0.6)
         mo._edge(False)
-        time.sleep(2.0)
+        try:                            # an idle box's 2 s, in GUEST time
+            os88marty.until(m, lambda _: (_word(m, rec + W_FLAGS) & 2) == 0
+                            and _byte(m, armlit) == 0, "the window to close",
+                            poll=0.2, limit=2.0 * os88marty.GUEST_PACE
+                            / os88marty.GUEST_BUDGET_RATIO)
+        except MartyError:
+            pass                        # the check says what it is instead
         check("...and a press-and-release ON the box still closes it",
               (_word(m, rec + W_FLAGS) & 2) == 0 and _byte(m, armlit) == 0,
               "W_FLAGS = %04X, [ui_armlit] = %d"

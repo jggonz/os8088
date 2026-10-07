@@ -145,10 +145,11 @@ gfx_rect_setup:
 .offs:
     mov ax, [gfx_ry1]            ; this one call re-bases every rect primitive
     call gfx_rowbase            ; in BOTH renderers - on VGA it is still just
-    add ax, bx                   ; y1 * 80 (SPEC.md 39.3)
-    mov [gfx_roff], ax
-    clc
-    ret
+    add ax, bx                   ; y1 * 80 (SPEC.md 39.3) - AND CF = 0: a
+    mov [gfx_roff], ax           ; row base plus a byte column is inside one
+    ret                          ; framebuffer (under 0x9660 on every adapter
+                                 ; there is), so the ADD cannot carry and the
+                                 ; clc that followed it restated its answer
 .empty:
     stc
     ret
@@ -478,7 +479,7 @@ sw_plane_op:
     xor ah, [sw_altm]           ; gray alternates, solid stays
     dec si
     jnz .irow
-    jmp .out
+    ret
 .xrow:
     mov cx, bp
 .xbyte:
@@ -632,49 +633,44 @@ sw_pairbuild:
     push dx
     push si
     push di
-    xor bx, bx
+    xor bx, bx                  ; BH stays 0: the loop runs BL round once
 .byte:
-    mov ax, bx                  ; AL = the byte; SI = its high nibble...
-    mov cl, 4
-    shr al, cl
-    xor ah, ah
-    mov si, ax
-    mov ax, bx                  ; ...and DI its low one
-    and al, 15
-    xor ah, ah
-    mov di, ax
+    mov si, bx                  ; SI = the byte's high nibble (the LEFT
+    mov cl, 4                   ; pixel)...
+    shr si, cl
+    mov di, bx                  ; ...and DI its low one
+    and di, 15
     xor dh, dh                  ; --- tab0: hi at parity 0, lo at parity 1
-    call sw_pbit
-    shl al, 1
-    mov dl, al
-    push si
-    mov si, di
-    mov dh, 1
-    call sw_pbit
-    pop si
-    or dl, al
+    call .pair
     mov [ss:bx + gfx_pairtab0], dl
     mov dh, 1                   ; --- tab1: the other way round
+    call .pair
+    mov [ss:bx + gfx_pairtab1], dl
+    inc bl
+    jnz .byte                   ; 256 entries: BL wraps to 0 after 255
+%ifdef GFX_PLANE
+    mov word [gfx_pairbuilt], 0x0001 ; built - and vga_p4built = 0, UNION: the
+                                ; pair tables overwrote it (one word store,
+                                ; the pair adjacent under vga12.inc's %error)
+%else
+    mov byte [gfx_pairbuilt], 1
+%endif
+    jmp kret_di                 ; once a boot: the shared epilogue, not six
+                                ; pops of its own
+
+; one table entry: DL = sw_pbit(SI, parity DH) << 1 | sw_pbit(DI, parity
+; DH ^ 1). DH, SI and DI come back as they went in (size pass 9: the two
+; table halves were this sequence written out twice)
+.pair:
     call sw_pbit
     shl al, 1
     mov dl, al
-    push si
-    mov si, di
-    xor dh, dh
+    xchg si, di
+    xor dh, 1
     call sw_pbit
-    pop si
+    xor dh, 1
+    xchg si, di
     or dl, al
-    mov [ss:bx + gfx_pairtab1], dl
-    inc bx
-    cmp bx, 256
-    jb .byte
-    mov byte [gfx_pairbuilt], 1
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1163,12 +1159,7 @@ sw_xfer:
                                 ; gfx_save between the arm and the restore
                                 ; would disarm it - and wm_su_edge is exactly
                                 ; that, twice
-    pop bp
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp gfx_xor_rect_d.pops     ; the same five pops (bp dx cx bx ax) and ret
 
 ; -----------------------------------------------------------------------------
 section .bss

@@ -162,8 +162,8 @@ SC_SBIDLE   equ SB_IDLE
 
 ; --- NO ASSOCIATION BLOCK, AND THAT IS THE POINT (SPEC.md 54/68.4/88.2) ------
 ; Word declares .DOC. If SCRIBE declared it too, the winner on a disk holding
-; both would be whichever registered LAST: kernel/assoc.inc's assoc_ext_new
-; path ends in `mov [bx+3], dl`, which OVERWRITES the row's app index rather
+; both would be whichever registered LAST: kernel/assoc.inc's assoc_point
+; ends in `mov [bx+3], dl`, which OVERWRITES the row's app index rather
 ; than refusing the second claim. So the owner of a double-click would be
 ; decided by directory order, silently, and would move when a disk was
 ; rebuilt. An extension has one owner.
@@ -5082,6 +5082,10 @@ sc_bandrun:
     mov ax, [sc_bx0]
     mov bx, [sc_rby]
     mov dx, [sc_gh]
+    clc                             ; THE CARRY IS AN ARGUMENT (SPEC.md 6.5.4):
+                                    ; document text is never greyed. The `and`
+                                    ; above happens to clear it, which is luck
+                                    ; and not a contract
     call ty_flush                   ; CF=1 = the kernel has no band blit, and
                                     ; the row is simply not drawn in the face.
                                     ; Not worth a fallback here: the machine

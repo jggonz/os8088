@@ -54,7 +54,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -108,12 +107,17 @@ def rows(m):
 
 
 def wait_text(m, want, secs=240, what=""):
-    end = time.time() + secs
-    while time.time() < end:
-        rs = rows(m)
-        if any(want in r for r in rs):
-            return rs
-        time.sleep(0.25)
+    """`secs` is an idle-box figure, spent as a GUEST budget."""
+    got = []
+
+    def there(mm):
+        got[:] = rows(mm)
+        return any(want in r for r in got)
+    try:
+        os88marty.until(m, there, what or want, poll=0.25, limit=secs)
+        return got
+    except os88marty.MartyError:
+        pass
     fail("%s: %r never appeared. The last screen was %r"
          % (what or want, want, [r for r in rows(m) if r.strip()][:10]))
 

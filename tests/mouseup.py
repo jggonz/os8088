@@ -18,13 +18,14 @@ it. muptest's second window does exactly that with OSAPI_WM_DESTROY.
 
   python3 tests/mouseup.py [machine]
 """
-import sys, struct, time
+import sys, struct
 sys.path.insert(0, "tools")
 import os88marty as M
 from os88mouse import Mouse
 from os88fixture import need
 
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
+import os88geom                                              # noqa: E402
 from os88geom import WIN_SIZE, MAX_WIN   # NOT a local copy: this one
                                         # moved 28 -> 30 with SPEC.md
                                         # 13.8.2's W_ONDRAG, and a stale
@@ -63,19 +64,6 @@ def check(name, cond, note=""):
         fails.append(name)
 
 
-def drive_y(m, n=1):
-    """The middle of drive zone n, read from the KERNEL rather than assumed.
-
-    The zone pitch is [desk_zstep] and SPEC.md 26.4 made it adapter-dependent
-    - 60 rows with the 32-row icon, 34 with the CGA's short one - so a
-    hard-coded y that worked on every adapter for months silently started
-    landing one zone out.
-    """
-    step = int.from_bytes(m.read(m.sym("desk_zstep"), 2), "little")
-    h1 = int.from_bytes(m.read(m.sym("desk_zh1"), 2), "little")
-    return 32 + n * step + h1 // 2
-
-
 def wins(m):
     blob = m.read(m.sym("wm_wins"), WIN_SIZE * MAX_WIN)
     out = []
@@ -105,11 +93,10 @@ with M.launch("build/os8088-360.img", apps="build/muptest.img",
               machine=MACHINE) as m:
     M.settle(m)
     mo = Mouse(marty=m)
-    vw = int.from_bytes(m.read(m.sym("vid_w"), 2), "little")
     print(f"== {MACHINE} : SPEC 13.7 + os88ui.inc + MOUSEUP-PLAN 4.2 ==")
 
     if not disk_win(m):
-        mo.dblclick(vw - 40, drive_y(m))
+        mo.dblclick(*os88geom.drive_pt(m, "B"))  # the zone BY LETTER, off desk_zslot (SPEC.md 26.9)
         M.settle(m)
     d = disk_win(m)
     if d is None:
@@ -153,7 +140,12 @@ with M.launch("build/os8088-360.img", apps="build/muptest.img",
         # could be read.
         mo.to(vx, vy)
         mo._pk(l=True)
-        time.sleep(1.2)
+        try:                               # the press's own work, in GUEST time
+            M.until(m, lambda mm: armw(mm) != 0 and find(mm, VAN) is None,
+                    "the press to arm a release and destroy the window",
+                    poll=0.1, limit=10.0)
+        except M.MartyError:
+            pass                           # ...the checks below say which half
         armed = armw(m)                    # mu_vclick has run and destroyed
         gone = find(m, VAN) is None        # the window; the arm points at it
         mid = find(m, MUP)
@@ -164,7 +156,11 @@ with M.launch("build/os8088-360.img", apps="build/muptest.img",
         check("the window really went away (the record is FREED)", gone)
 
         mo._pk()                           # ...and now the release
-        time.sleep(1.5)
+        try:                               # [ui_armw] is spent by the release
+            M.until(m, lambda mm: armw(mm) == 0, "the release to spend the arm",
+                    poll=0.1, limit=10.0)
+        except M.MartyError:
+            pass
         M.settle(m)
         w2 = find(m, MUP)
         # The caption is the signal. mu_vup would move it to 'GuardFailed',

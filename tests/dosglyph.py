@@ -170,14 +170,12 @@ def break_store_row(m):
     compares the same two things - so breaking the SIZE half of the
     (name, size) key is the same staging against the thing that now answers.
 
-    The cache's VERSION is still asserted, out of [asc_rowsz]: asc_drop
-    clears the segment and the counts and deliberately leaves the stride, so
-    it still reports what the last volume's ASSOC.DAT was.
+    The cache's VERSION is no longer readable off the machine: kernel size
+    pass 5 dropped version 1 and the `asc_rowsz` stride with it, so version 2
+    is the seventh byte of the magic and any other cache is simply not
+    absorbed - which the store being EMPTY below would say. Every shipped
+    ASSOC.DAT being version 2 is tests/unit/t_docglyph.py's, host-side.
     """
-    rowsz = int.from_bytes(m.read(S("asc_rowsz"), 2), "little")
-    if rowsz != 88:
-        fails.append("the last cache's row stride is %d, not 88 - the "
-                     "system disk's ASSOC.DAT is not version 2" % rowsz)
     if int.from_bytes(m.read(S("asc_seg"), 2), "little"):
         fails.append("MEM_K_ASC is still claimed after a mount - SPEC.md "
                      "54.7.4 frees it, and tests/ascabsorb.py is the row "
@@ -186,8 +184,7 @@ def break_store_row(m):
     n = m.read(S("ico_n"), 1)[0]
     eq = os88sym.equates()
     stride, r_size = eq["ICO_ROW"], eq["ICO_R_SIZE"]
-    say("store at %04X, %d rows of %d bytes (cache was v%d)"
-        % (seg, n, stride, 1 if rowsz == 80 else 2))
+    say("store at %04X, %d rows of %d bytes" % (seg, n, stride))
     if not seg or not n:
         sys.exit("dosglyph: the store is empty, so a miss cannot be staged")
     # WHAT NAMES THE PACKAGE is the kernel's, not this file's (SPEC.md 25.9.4):

@@ -12,7 +12,7 @@
 ;   is correct for one task only). Every byte in this file runs on the worker,
 ;   eighteen times a second. So the overlay tenant list is not spent here, it
 ;   is INAPPLICABLE - and the answer is CLAUDE.md's own hard rule read through
-;   SPEC.md 68.10's WORD.OVL and C64.ROM's lifecycle: a module beside the
+;   SPEC.md 68.10's former WORD.OVL and C64.ROM's lifecycle: a module beside the
 ;   package, read ONCE at open and only when the bundle declares a <canvas>,
 ;   resident until the instance closes.
 ;

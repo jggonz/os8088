@@ -2409,7 +2409,8 @@ tz_dcancel:
 ; tz_commit - [tz_un] bytes of half [tz_uh] onto the disk
 ;
 ; The FIRST chunk is OSAPI_FILE_WRITE, which creates or replaces; every later
-; one is OSAPI_FILE_APPEND, whose precondition is that the file's current size
+; one is a PLAIN OSAPI_FILE_WRITE_SEQ - APPEND's rule and APPEND's commit, with
+; no lookup and no walk (SPEC.md 18.4.9) - whose precondition is that the file's current size
 ; is a whole number of clusters - which is exactly what tz_dlgopen's chunk
 ; arithmetic keeps true (SPEC.md 18.4.4). The last chunk is whatever is left,
 ; which is that rule's own exception.
@@ -2435,9 +2436,19 @@ tz_commit:
     call OSAPI_FILE_WRITE           ; DX:CX = the count, and it CREATES or
     jc .err                         ; REPLACES, which is what a Save dialog
     mov byte [tz_made], 1           ; means everywhere else on this system
+    mov word [tz_wtok], 0           ; ...and a NEW file: no older token is hot
     jmp short .ok
 .append:
-    call OSAPI_FILE_APPEND
+    push di                         ; A STREAMING APPEND (SPEC.md 70.11.7), FTPD's
+    mov di, [tz_wtok]               ; shape (77.49): no lookup of the name and no
+    xor al, al                      ; walk of the chain from its front per 4 KB
+    call OSAPI_FILE_WRITE_SEQ       ; chunk, which made a download QUADRATIC in
+    mov [tz_wtok], di               ; its length. PLAIN: every chunk the sender
+    pop di                          ; is told was received is on the disk
+    jnc .ok
+    cmp ax, FERR_NAME               ; kern_small's cell answers this - and so
+    jne .err                        ; does APPEND for the arguments it would
+    call OSAPI_FILE_APPEND          ; refuse, so asking it is exact
     jc .err
 .ok:
     mov ax, [tz_un]

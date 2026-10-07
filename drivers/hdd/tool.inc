@@ -59,14 +59,27 @@
 ; =============================================================================
 
 HTW_W        equ 300
-HTW_H        equ 150
+HTW_H        equ 178            ; 150 before the map (SPEC.md 52.2.8), and
+                                ; taller than CGA's desktop band: wm_fit pins
+                                ; it under the menu bar over the dock
 HTW_LX       equ 4
 HTW_HY       equ 6              ; the header row
 HTW_R0Y      equ 22             ; the first slot row, content-relative
 HTW_ROWH     equ 12
-HTW_BY       equ 96             ; the button row
+HTW_MAPY     equ 71             ; the drive map (SPEC.md 52.2.8): its frame,
+HTW_MAPH     equ 8              ; ...its inner height - one glyph cell, so a
+                                ; slot's digit fills its column exactly and no
+                                ; pixel of the bar is written twice
+HTW_MAPW     equ 280            ; ...its inner width, the whole drive
+HTW_FRY      equ 88             ; the free-space line under it
+HTW_BY       equ 124            ; the button row
 HTW_BH       equ 16
-HTW_CAPY     equ 120
+HTW_CAPY     equ 148
+HTW_SZY      equ 106            ; the size line (SPEC.md 52.2.7), between the
+                                ; map and the buttons
+HTW_SZBX     equ 38             ; ...its BOX: the frame's left edge,
+HTW_SZBW     equ 46             ; its width - five cells and a 3px margin
+                                ; each side (four digits and the caret)
 HTW_CFORMAT  equ 1              ; control ids (SPEC.md 13.8.4), 1-based so 0
 HTW_CDELETE  equ 2              ; can mean "nothing is down"
 HTW_CCLOSE   equ 3
@@ -90,8 +103,8 @@ HTA_DELETE   equ 1
 HTS_FREE     equ 0              ; nothing in this slot
 HTS_RAW      equ 1              ; a FAT-typed extent with no volume in it
 HTS_VOL      equ 2              ; a volume
-HTS_ALIEN    equ 3              ; foreign type, or over the 65,535-sector
-                                ; ceiling (SPEC.md 18.7) - either way this
+HTS_ALIEN    equ 3              ; foreign type, or over FAT16's 2GB
+                                ; ceiling (SPEC.md 18.7.5) - either way this
                                 ; kernel will never mount it
 HTS_GEOM     equ 5              ; a FAT-typed extent whose OWN CHS does not
                                 ; correspond to its LBA at this device's
@@ -109,7 +122,7 @@ HTS_LIVE     equ 4              ; ...and the volume THIS MACHINE BOOTED FROM,
                                 ; important thing about that slot and the row
                                 ; is where a user looks for it
 
-hd_ttpl:    dw 90, 90, HTW_W, HTW_H, hd_s_ttitle, hd_tw_paint, 0, hd_tw_click
+hd_ttpl:    dw 90, 90, HTW_W, HTW_H, hd_s_ttitle, hd_tw_paint, hd_tw_key, hd_tw_click
 hd_s_ttitle: db 'Format', 0
 
 ; -----------------------------------------------------------------------------
@@ -135,6 +148,7 @@ hd_tw_open:
     pop di
     call hd_tw_scan
     mov byte [hd_tsel], 0
+    call hd_tw_szmax
     mov byte [hd_tarm], 0
     mov word [hd_tmsg], hd_s_tready
     cmp byte [hd_mbrok], HMB_BAD    ; the read FAILED. hd_mbr is a blank we
@@ -148,6 +162,11 @@ hd_tw_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [hd_twin], bx
+    mov al, 1                   ; a FIXED layout (SPEC.md 11.93): on CGA the
+    call OSAPI_WM_KEEPH         ; 178 rows hang over the dock whole, rather
+                                ; than the frame being cut at it with the
+                                ; buttons drawn on through it and a press on
+                                ; them falling to the dock (52.2.8)
     mov ax, hd_tw_up            ; SPEC.md 13.7/13.8.1: not template words, so
     call OSAPI_WM_ONMOUSEUP     ; a window installs them itself after create
     mov ax, hd_tw_drag
@@ -173,7 +192,7 @@ hd_tw_open:
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
 ; hd_tw_geomok - does this entry's own CHS agree with its LBA? (internal)
-; in:       SI = the partition entry
+; in:       SI = the partition entry, DI = the device row it is on
 ; out:      CF = 0 they agree, or the entry declines to say; CF = 1 they differ
 ; clobbers: flags
 ;
@@ -200,13 +219,15 @@ hd_tw_open:
 hd_tw_geomok:
     push ax
     push dx
-    push di
     mov al, [si+HP_SSEC]
     and al, 0x3F                ; the sector, 1-based: 0 = no CHS claimed
     jz .ok
-    mov al, [hd_tdev]           ; hd_tdev and never [hd_sel] - the panel
-    call hd_dev_row             ; underneath stays clickable (52.10.4.1)
-    mov ax, [si+HP_LBA]
+    mov ax, [si+HP_LBA]         ; at the geometry of the row in DI, which is
+                                ; the CALLER's device - hd_tdev for the tool,
+                                ; hd_idev for the installer (SPEC.md
+                                ; 52.10.4.2). It read [hd_tdev] itself, which
+                                ; is right for one of the two and wrong for
+                                ; the other
     mov dx, [si+HP_LBA+2]
     call hd_lba_chs             ; [hd_cyl]/[hd_head]/[hd_sec] at OUR geometry
     call hd_chs_pack            ; AL = sector|cyl-high, AH = cyl-low
@@ -218,13 +239,11 @@ hd_tw_geomok:
     cmp al, [si+HP_SHEAD]
     jne .bad
 .ok:
-    pop di
     pop dx
     pop ax
     clc
     ret
 .bad:
-    pop di
     pop dx
     pop ax
     stc
@@ -242,8 +261,8 @@ hd_tw_scan:
     call hd_part_used
     jc .store
     mov al, HTS_ALIEN
-    cmp word [si+HP_SECS+2], 0
-    jne .store                  ; over 65,535 sectors (SPEC.md 18.7)
+    call hd_part_big
+    jc .store                   ; longer than any FAT16 (SPEC.md 18.7.5)
     call hd_part_isfat
     jc .store                   ; a type this driver does not mount
     call hd_tw_geomok           ; ...and BEFORE the read, because the read is
@@ -354,6 +373,8 @@ hd_tw_paint:
     inc cl
     cmp cl, 4
     jb .row
+    call hd_tw_map
+    call hd_tw_szdraw
 
     mov si, hd_s_tfmt           ; the shared control takes the pen itself and
     mov ax, HTW_B0X             ; leaves it live, so there is no CBLACK to set
@@ -424,61 +445,72 @@ hd_tw_paint:
 ; buttons.
 ; -----------------------------------------------------------------------------
 
-; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
-; A Control Panel page draws its buttons one at a time, so the record is
-; pointed at whichever rect the caller staged. The GESTURE here is the
-; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
-; release-fired; what changed is that the DRAW goes through the control.
-hdt_btlbl: dw 0
-hdt_btflg: dw 0
-    OS88UI_BTNREC hdt_btrec, 0, hdt_btlbl, hdt_btflg, 1
-
 hd_tw_button:
+    push ax
+    push cx
+    push dx
+    add ax, di                  ; the rect's left, in screen coordinates
+    lea dx, [bp+HTW_BY]
+    cmp ch, [hd_tdown]          ; CH = the control's id (SPEC.md 13.8.4)
+    mov ch, 0                   ; CX = CL, the DIS flag (`mov` keeps ZF)
+    jne .up
+    or cl, OS88UI_DOWN          ; DIS outranks it inside the control, so a
+.up:                            ; greyed button never says it will fire
+    call hd_btn_draw16
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_btn_draw - one standard button, for all THREE of this image's windows
+; in:  AX = left, DX = top (screen), BX = width, SI = the label, CX = the
+;      caller's OS88UI_DIS | OS88UI_DOWN, and at hd_btn_draw DI = the height
+;      less one (hd_btn_draw16 is every 16-high one); the lock is held
+; out: nothing (all registers preserved)
+;
+; The Format window, the installer and the Control Panel page each carried
+; this tail - the page twice, for its +/- pair - and a record, a rect and two
+; staging words of their own for it: four copies of one thing, and the only
+; differences were the row, which is DX now, and the +/- pair's 13 rows.
+; OS88UI_FILL because a RELEASE redraws a button over a pressed one, and on a
+; full paint the ground behind it is white anyway.
+; -----------------------------------------------------------------------------
+hd_btn_draw16:
+    push di
+    mov di, 15
+    jmp short hd_btn_body
+hd_btn_draw:
+    push di
+hd_btn_body:
     push ax
     push bx
     push cx
     push dx
-    push si
-    push di
-    add ax, di                  ; the rect, in screen coordinates
-    mov [hd_tbrect+0], ax
+    mov [hd_brect+0], ax
     add ax, bx
     dec ax
-    mov [hd_tbrect+4], ax
-    mov ax, bp
-    add ax, HTW_BY
-    mov [hd_tbrect+2], ax
-    add ax, HTW_BH - 1
-    mov [hd_tbrect+6], ax
-    mov dl, cl                  ; CL = the flag word; DI is about to be it
-    xor dh, dh
-    mov di, dx
-    mov al, ch                  ; CH = the control's id (SPEC.md 13.8.4)
-    cmp al, [hd_tdown]
-    jne .nodn
-    or di, OS88UI_DOWN          ; DIS outranks it inside the control, so a
-.nodn:                          ; greyed button never says it will fire
-    mov bx, hd_tbrect           ; OS88UI_FILL because a RELEASE redraws this
-    or di, OS88UI_FILL          ; button over a pressed one; on a full repaint
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [hdt_btlbl], si          ; label and DI its flags, so the record takes
-    mov [hdt_btflg], di          ; all three and the picture is identical
-    mov [hdt_btrec+OS88UI_BT_RECTS], bx
-    mov bx, hdt_btrec
+    mov [hd_brect+4], ax
+    mov [hd_brect+2], dx
+    add dx, di
+    mov [hd_brect+6], dx
+    mov [hd_btlbl], si          ; THE ONE CONTROL (SPEC.md 20.5.1.3)
+    or cl, OS88UI_FILL
+    mov [hd_btflg], cx
+    mov bx, hd_btrec
     mov al, 1
     call os88ui_btn
-    pop bx
-    pop ax
-    pop di
-    pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    pop di
     ret
 
-hd_tbrect:  dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
+hd_btlbl:   dw 0
+hd_btflg:   dw 0
+    OS88UI_BTNREC hd_btrec, hd_brect, hd_btlbl, hd_btflg, 1
+hd_brect:   dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
 
 ; -----------------------------------------------------------------------------
 ; hd_tw_rowtext - one slot's line, into hd_line (module internal)
@@ -623,14 +655,23 @@ hd_tw_click:
     cmp dx, HTW_BY
     jge .buttons
 
+    mov ax, dx                  ; the map? Its frame and the underline under
+    sub ax, HTW_MAPY            ; it, as one unsigned range
+    cmp ax, HTW_MAPH + 5
+    jae .rows
+    call hd_map_hit             ; AL = the slot there, 4 = none
+    jmp short .slot
+.rows:
     mov ax, dx                  ; a slot row?
     sub ax, HTW_R0Y
     jl .done
     mov bl, HTW_ROWH
     div bl                      ; AL = the row, AH = the remainder
+.slot:
     cmp al, 4
     jae .done
     mov [hd_tsel], al
+    call hd_tw_szmax            ; ...and a different extent to size
     mov byte [hd_tarm], 0       ; a different row is a different question
     mov word [hd_tmsg], hd_s_tready
     jmp short .repaint
@@ -928,6 +969,7 @@ hd_tw_format:
     mov al, [hd_tsel]
     call hd_slot_extent         ; -> [hd_fbase] / [hd_fsecs] (SPEC.md 52.2.1)
     jc .noroom
+    call hd_tw_cap              ; ...no longer than the size typed (52.2.7)
     call hd_fmt_plan            ; -> the cluster size and the FAT type
     jc .nofit
 
@@ -938,19 +980,7 @@ hd_tw_format:
 
     mov al, [hd_tsel]           ; the entry: the extent, the type the plan
     call hd_part_ent            ; chose, and the CHS halves DOS reads
-    mov ax, [hd_fbase]
-    mov [si+HP_LBA], ax
-    mov ax, [hd_fbase+2]
-    mov [si+HP_LBA+2], ax
-    mov ax, [hd_fsecs]
-    mov [si+HP_SECS], ax
-    mov word [si+HP_SECS+2], 0
-    mov byte [si+HP_TYPE], HPT_FAT16S
-    cmp byte [hd_ftype], 0
-    jne .type
-    mov byte [si+HP_TYPE], HPT_FAT12
-.type:
-    mov byte [si+HP_STATUS], 0
+    call hd_ent_fill            ; (SPEC.md 18.7.5: 32 bits, and the type)
     mov al, [hd_tdev]
     call hd_dev_row
     call hd_part_chs
@@ -979,6 +1009,7 @@ hd_tw_format:
     mov al, [hd_tdev]            ; the states again, which re-reads the boot
     call hd_dev_row             ; sector we just wrote: the row is what the
     call hd_tw_scan             ; DISK says and not what we hoped
+    call hd_tw_szmax            ; ...and the slot's extent is its own now
 .out:
     pop di
     pop si
@@ -1071,6 +1102,7 @@ hd_tw_delete:
     mov al, [hd_tdev]            ; the states again, off the disk rather than
     call hd_dev_row             ; off what we hoped we wrote
     call hd_tw_scan
+    call hd_tw_szmax
     jmp short .out
 .notable:
     mov byte [hd_tarm], 0
@@ -1239,6 +1271,554 @@ hd_tw_arm:
     ret
 
 ; -----------------------------------------------------------------------------
+; THE SIZE LINE (SPEC.md 52.2.7) - how much of the slot's extent Format takes
+;
+; Format used to take the whole extent hd_slot_extent found - the largest hole,
+; or the slot's own entry - up to FAT16's ceiling, with no way to ask for less.
+; On a 40MB XT disk that is what anybody wants; on a 500MB drive it is one
+; volume where the user wanted two. So the line under the rows names the
+; extent in MB and the user TYPES a smaller one: digits and Backspace, while
+; this window is in front. 0 is 'all', which is the old behaviour to the byte,
+; so a user who never types gets exactly what Format always did.
+;
+; A digit that would pass the extent is refused rather than clamped - the
+; figure on the line is always one Format will honour - and a leading 0 is
+; refused because it means nothing. The number resets to 'all' whenever the
+; extent it was typed against changes: another row, a Format, a Delete.
+;
+; What the number becomes is a LENGTH rounded UP to the cylinder its end falls
+; in, then the smaller of that and the extent (hd_tw_cap). Up, because
+; hd_cyl_trim's rounding down would turn a 1MB ask on a 255-head drive into
+; nothing at all; and the extent is already cylinder-trimmed, so the smaller
+; of two boundaries is still a boundary (52.2.5).
+; -----------------------------------------------------------------------------
+
+; --- hd_tw_szmax - [hd_tsmax] = the selected slot's extent, whole MB --------
+; in: [hd_tdev], [hd_tsel]; out: [hd_tsize] = 0 (all); all registers preserved
+; No I/O: hd_slot_extent reads the table in RAM and the device row.
+; It measures the MAP as well (SPEC.md 52.2.8), and HERE rather than in the
+; painter because both measurements are hd_slot_extent, which writes
+; [hd_fbase]/[hd_fsecs] - and a paint can come at any moment, the installer's
+; copy included, where those two words are the partition being written. This
+; runs only on the tool's own clicks, which is where it always wrote them.
+hd_tw_szmax:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    xor ax, ax
+    mov [hd_tsize], ax
+    mov [hd_tsmax], ax
+    mov [hd_mlarge], ax
+    mov [hd_mlarge+2], ax
+    dec ax
+    mov [hd_mux+2], ax          ; no underline until an extent says where
+    mov al, [hd_tdev]
+    call hd_dev_row
+    call hd_dev_secs            ; the whole drive is the map's width, and a
+                                ; sector count to a column is x * W / total:
+                                ; shifted until the total fits a word, so the
+    xor cl, cl                  ; product fits a dword and the quotient a word
+.norm:
+    or dx, dx
+    jz .normd
+    shr dx, 1
+    rcr ax, 1
+    inc cl
+    jmp short .norm
+.normd:
+    or ax, ax
+    jnz .t16
+    inc ax                      ; no geometry: every column is 0, not a fault
+.t16:
+    mov [hd_mk], cl
+    mov [hd_mt16], ax
+    mov al, [hd_tsel]
+    call hd_slot_extent
+    jc .hole                    ; no room: the line says 'all' and no digit
+    mov ax, [hd_fsecs]          ; is accepted, and Format says why
+    mov dx, [hd_fsecs+2]
+    mov cl, 11                  ; sectors -> MB. DX <= 3Fh under the ceiling
+    shr ax, cl                  ; (SPEC.md 18.7.5), so DX << 5 fits a word
+    mov cl, 5
+    shl dx, cl
+    or ax, dx
+    mov [hd_tsmax], ax
+    mov si, hd_fbase - HP_LBA   ; the underline: WHERE that extent is, which
+    call hd_map_span            ; for a free slot is the hole Format will take
+    mov [hd_mux], ax
+    mov [hd_mux+2], cx
+.hole:
+    call hd_slot_hole           ; ...and the free space with no slot excused:
+    mov ax, [hd_xsum]           ; every hole, and the largest a Format of any
+    mov [hd_mfree], ax          ; free slot would make of it
+    mov ax, [hd_xsum+2]
+    mov [hd_mfree+2], ax
+    jc .out
+    mov ax, [hd_fsecs]
+    mov [hd_mlarge], ax
+    mov ax, [hd_fsecs+2]
+    mov [hd_mlarge+2], ax
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; THE DRIVE MAP (SPEC.md 52.2.8) - where on the drive each slot IS
+;
+; The rows say what a slot holds and how big it is, and nothing said where.
+; That is the question a user with two 32MB partitions in the MIDDLE of a
+; 128MB drive cannot answer from the rows: 63MB is free, it is two holes, and
+; Format offers 31 because it takes the larger of them (52.2.1). So under the
+; rows is one bar, the whole drive to scale, and a line of text under it:
+;
+;   [1###|2###            ]       a slot is its digit and a fill - black for a
+;         ====                    volume, 50% grey for anything else in the
+;   Free 63M, largest 31M         table - and free space is the white between;
+;                                 the underline is the selected slot's extent,
+;                                 which for a FREE slot is the hole Format
+;                                 will take. A click on the bar picks the slot
+;                                 there, or the first free one on white.
+;
+; Every column is written once: the content is white (a full paint), the digit
+; is one cell at the segment's left and exactly the bar's height, the fill
+; starts after it, and a white column is left at each segment's end so two
+; neighbours read as two (PERFORMANCE.md rule 2). At most four cells, four
+; fills, the frame and the underline: ten calls, and the line is one run.
+; -----------------------------------------------------------------------------
+
+; --- hd_tw_map - the bar, the underline and the free line -------------------
+; in: DI = content left, BP = content top; the lock is held, the content white
+; out: nothing (all registers preserved)
+hd_tw_map:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov al, CBLACK              ; the frame, and the pen every fill below
+    call OSAPI_SET_COLOR        ; takes (font_run takes its pair in AX)
+    add di, HTW_LX + 1          ; DI = the bar's first inner column, from here
+    lea ax, [di-1]
+    mov bx, bp
+    add bx, HTW_MAPY
+    lea cx, [di+HTW_MAPW]
+    mov dx, bx
+    add dx, HTW_MAPH + 1
+    call OSAPI_GFX_FRAME
+    xor bx, bx                  ; BL = the slot, BH = 0 to index hd_tstate
+.slot:
+    mov al, bl
+    call hd_part_ent
+    call hd_part_used
+    jc .next
+    call hd_map_span            ; AX..CX, bar-relative
+    push bx
+    mov dl, [bx+hd_tstate]      ; HTS_VOL and HTS_LIVE are the two evens a
+    and dx, 1                   ; used slot can have: SI = 0 solid, 1 grey
+    mov si, dx
+    add ax, di
+    add cx, di
+    mov dx, cx
+    sub dx, ax
+    cmp dx, 8                   ; the digit and at least one column after it
+    jb .fill
+    push ax
+    push cx
+    push si
+    mov cx, ax                  ; the digit's cell, at the segment's left
+    lea dx, [bp+HTW_MAPY+1]
+    add bl, '1'
+    mov [hd_mdig], bl
+    mov si, hd_mdig
+    mov ax, (CBLACK << 8) | CWHITE
+    call OSAPI_FONT_RUN
+    pop si
+    pop cx
+    pop ax
+    add ax, 8
+.fill:
+    lea bx, [bp+HTW_MAPY+1]
+    lea dx, [bx+HTW_MAPH-1]
+    or si, si
+    jnz .grey
+    call OSAPI_GFX_FILL
+    jmp short .filled
+.grey:
+    call OSAPI_GFX_FILL_GRAY
+.filled:
+    pop bx
+.next:
+    inc bl
+    cmp bl, 4
+    jb .slot
+
+    mov ax, [hd_mux]            ; the underline, when an extent was found
+    mov cx, [hd_mux+2]
+    cmp cx, ax
+    jl .line
+    add ax, di
+    add cx, di
+    lea bx, [bp+HTW_MAPY+HTW_MAPH+3]
+    lea dx, [bx+1]
+    call OSAPI_GFX_FILL
+
+.line:
+    mov di, hd_line             ; 'Free 63M, largest 31M'
+    mov si, hd_s_mfree
+    call hd_scat
+    mov si, hd_mfree - HP_SECS
+    call hd_part_mb
+    call hd_utoa
+    mov si, hd_s_mlarge
+    call hd_scat
+    mov si, hd_mlarge - HP_SECS
+    call hd_part_mb
+    call hd_utoa
+    mov si, hd_s_mb
+    call hd_scat
+    mov byte [di], 0
+    pop di
+    push di
+    mov si, hd_line
+    lea cx, [di+HTW_LX]
+    lea dx, [bp+HTW_FRY]
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- hd_map_span - an extent's columns on the bar ---------------------------
+; in:  SI = an entry, or anything with a dword LBA at +HP_LBA and a dword
+;      length at +HP_SECS (hd_fbase - HP_LBA is one)
+; out: AX = the first column, CX = the last, bar-relative, CX >= AX
+; clobbers: AX, CX (the outputs), flags
+;
+; The last column is the one BEFORE the extent's end column, so a neighbour
+; that starts where this one ends has a white column between them.
+hd_map_span:
+    push dx
+    mov ax, [si+HP_LBA]
+    mov dx, [si+HP_LBA+2]
+    call hd_map_x
+    mov cx, ax
+    mov ax, [si+HP_LBA]
+    mov dx, [si+HP_LBA+2]
+    add ax, [si+HP_SECS]
+    adc dx, [si+HP_SECS+2]
+    call hd_map_x               ; the end, exclusive
+    xchg ax, cx
+    dec cx
+    dec cx
+    cmp ax, HTW_MAPW            ; an extent starting at or past the end of the
+    jb .in                      ; drive - a foreign table is input - is its
+    dec ax                      ; last column rather than the frame
+.in:
+    cmp cx, ax
+    jge .out
+    mov cx, ax
+.out:
+    pop dx
+    ret
+
+; --- hd_map_x - DX:AX sectors to a column, 0..HTW_MAPW ----------------------
+; in: DX:AX; out: AX; everything else preserved
+; Past the end of the drive is the end, asked AFTER the shift - x > total
+; exactly when x >> k passes total >> k or overflows a word - so the product
+; cannot pass the divisor's range and the divide cannot fault on a hostile
+; table.
+hd_map_x:
+    push cx
+    push dx
+    mov cl, [hd_mk]
+    or cl, cl
+    jz .fit
+.shift:
+    shr dx, 1
+    rcr ax, 1
+    dec cl
+    jnz .shift
+.fit:
+    or dx, dx
+    jnz .cap
+    cmp ax, [hd_mt16]
+    jbe .scale
+.cap:
+    mov ax, [hd_mt16]
+.scale:
+    mov cx, HTW_MAPW
+    mul cx
+    div word [hd_mt16]
+    pop dx
+    pop cx
+    ret
+
+; --- hd_map_hit - the slot under a click on the bar -------------------------
+; in:  CX = content-relative x
+; out: AL = the slot whose segment it is in, else the first free slot, else 4
+; clobbers: AX, flags
+hd_map_hit:
+    push bx
+    push cx
+    push dx
+    push si
+    mov dx, cx
+    sub dx, HTW_LX + 1          ; DX = bar-relative
+    mov bx, 0x0400              ; BL = the slot, BH = the first free (4: none)
+.slot:
+    mov al, bl
+    call hd_part_ent
+    call hd_part_used
+    jc .free
+    call hd_map_span
+    cmp dx, ax
+    jl .next
+    cmp dx, cx
+    jg .next
+    mov bh, bl                  ; on this one
+    jmp short .out
+.free:
+    cmp bh, 4
+    jne .next
+    mov bh, bl
+.next:
+    inc bl
+    cmp bl, 4
+    jb .slot
+.out:
+    mov al, bh
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; --- hd_tw_cap - [hd_fsecs] no longer than the size typed -------------------
+; in: [hd_tsize], [hd_fbase]/[hd_fsecs] from hd_slot_extent, DI = the device
+; row; out: nothing (all registers preserved)
+hd_tw_cap:
+    push ax
+    push cx
+    push dx
+    mov ax, [hd_tsize]
+    or ax, ax
+    jz .out                     ; 'all': the extent as it stands
+    mov dx, ax
+    mov cl, 5                   ; DX:AX = MB * 2,048 sectors
+    shr dx, cl
+    mov cl, 11
+    shl ax, cl
+    add ax, [hd_fbase]          ; the END, rounded up to its cylinder...
+    adc dx, [hd_fbase+2]
+    call hd_cyl_up
+    sub ax, [hd_fbase]          ; ...back to a length
+    sbb dx, [hd_fbase+2]
+    call hd_fsecs_min
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; --- hd_tw_szdraw - the size line: label, box, and what to do ---------------
+; in: DI = content left, BP = content top; the lock is held, the content is
+;     white under the line (a full paint)
+; out: nothing (all registers preserved)
+;
+; `Size [ 321 ] MB of 321 - type a number`. It was one sentence, `Size: all
+; 321M - type MB to change`, and a tester typed M and B: an instruction
+; inside a sentence reads as the thing to type. A BOX with the number in it
+; is the control everybody already knows, and the sentence after it only has
+; to name the unit and the limit.
+hd_tw_szdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, hd_s_tsz0           ; 'Size'
+    mov cx, di
+    add cx, HTW_LX
+    mov dx, bp
+    add dx, HTW_SZY
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    mov al, CBLACK              ; the box
+    call OSAPI_SET_COLOR
+    mov ax, di
+    add ax, HTW_SZBX
+    mov bx, bp
+    add bx, HTW_SZY - 3
+    mov cx, ax
+    add cx, HTW_SZBW - 1
+    mov dx, bx
+    add dx, 13
+    call OSAPI_GFX_FRAME
+    call hd_tw_szbox            ; what is in it
+    push di
+    mov di, hd_line             ; the row painter's buffer, and free: every
+    mov ax, [hd_tsmax]          ; row has been drawn by the time this runs
+    mov si, hd_s_tszall         ; under a megabyte: nothing to type
+    or ax, ax
+    jz .hint
+    mov si, hd_s_tszof          ; 'MB of 321 - type a number'
+    call hd_scat
+    call hd_utoa
+    mov si, hd_s_tszty
+.hint:
+    call hd_scat
+    mov byte [di], 0
+    pop di
+    mov si, hd_line
+    mov cx, di
+    add cx, HTW_SZBX + HTW_SZBW + 4
+    mov dx, bp
+    add dx, HTW_SZY
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- hd_tw_szbox - the number inside the box, and nothing else --------------
+; in: DI = content left, BP = content top; the lock is held
+; out: nothing (all registers preserved)
+;
+; Nothing typed: the extent's own MB, INVERTED - the look of selected text,
+; which is what the first digit replaces. Typed: the figure in plain ink and
+; a caret after it. Two opaque runs covering the box's five cells, so a
+; keystroke redraws this and not the window (PERFORMANCE.md rule 2).
+hd_tw_szbox:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov cx, di
+    add cx, HTW_SZBX + 3        ; CX = the pen, DX = the line
+    mov dx, bp
+    add dx, HTW_SZY
+    mov di, hd_line
+    mov bx, (CWHITE << 8) | CBLACK
+    mov ax, [hd_tsize]
+    or ax, ax
+    jnz .num
+    mov bx, (CBLACK << 8) | CWHITE  ; 'all': white on black, as selected
+    mov ax, [hd_tsmax]
+    or ax, ax
+    jz .none                    ; under a megabyte: an empty box
+.num:
+    call hd_utoa
+.none:
+    mov byte [di], 0
+    mov si, hd_line
+    mov ax, bx
+    call OSAPI_FONT_RUN
+    mov ax, di                  ; AX = the digits drawn,
+    sub ax, hd_line
+    mov bx, ax
+    shl bx, 1                   ; ...and the pen past them
+    shl bx, 1
+    shl bx, 1
+    add cx, bx
+    mov di, hd_line + 8         ; the tail, behind the digits' NUL
+    cmp word [hd_tsize], 0
+    je .pad
+    mov byte [di], '_'          ; typed: the caret
+    inc di
+    inc ax
+.pad:
+    cmp ax, 5
+    jae .run
+    mov byte [di], ' '
+    inc di
+    inc ax
+    jmp short .pad
+.run:
+    mov byte [di], 0
+    mov si, hd_line + 8
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tw_key - W_ONKEY: AL = ascii, AH = scan, SI = the window; lock held
+; Digits and Backspace edit [hd_tsize]; everything else is not ours.
+; -----------------------------------------------------------------------------
+hd_tw_key:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov bl, al
+    mov ax, [hd_tsize]
+    mov cx, 10
+    xor dx, dx
+    cmp bl, 8
+    je .bs
+    sub bl, '0'
+    cmp bl, 9
+    ja .out                     ; not a digit (the subtract wraps below '0')
+    mul cx
+    xor bh, bh
+    add ax, bx
+    jz .out                     ; a leading 0 says nothing
+    cmp ax, [hd_tsmax]          ; DX = 0: 2,047 * 10 + 9 fits a word
+    ja .out                     ; past the extent: refused, not clamped
+    jmp short .set
+.bs:
+    div cx
+.set:
+    cmp ax, [hd_tsize]
+    je .out                     ; Backspace on 'all': nothing changed
+    mov [hd_tsize], ax
+    cmp byte [hd_tarm], 0       ; an armed Format asked about the OLD size:
+    je .line                    ; disarm it, and the caption with it
+    mov byte [hd_tarm], 0
+    mov word [hd_tmsg], hd_s_tready
+    call hd_tw_repaint
+    jmp short .out
+.line:
+    mov bx, si
+    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
+    mov di, ax
+    mov bp, dx
+    call hd_tw_szbox            ; the BOX, not the window (PERFORMANCE.md)
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_tw_repaint - redraw the tool's content (module internal)
 ; in:  nothing; the lock is held
 ; out: nothing (all registers preserved)
@@ -1266,6 +1846,12 @@ hd_tw_repaint:
     ret
 
 hd_s_kb:      db 'K', 0
+hd_s_tsz0:    db 'Size', 0
+hd_s_tszof:   db 'MB of ', 0
+hd_s_tszall:  db 'all of it - under 1 MB', 0
+hd_s_tszty:   db ' - type a number', 0
+hd_s_mfree:   db 'Free ', 0
+hd_s_mlarge:  db 'M, largest ', 0
 hd_s_thdr:    db 'Slot  Size   State', 0
 hd_s_four:    db '     ', 0     ; slot digit -> size column
 hd_s_nosize:  db '     ', 0     ; ...and the size column when nothing claims it
@@ -1317,6 +1903,16 @@ hd_tdropv:   db 0xFF            ; the last kernel volume index an unmount took,
 hd_tdrop:    db 0               ; a Delete unmounted a volume, so the caption
                                 ; says so and the mounted set is re-staged
 hd_tmsg:     dw 0               ; ...and its caption
+hd_tsize:    dw 0               ; the size typed on the size line, MB; 0 =
+                                ; all of the extent (SPEC.md 52.2.7)
+hd_tsmax:    dw 0               ; ...and the extent it may not pass, MB
+hd_mt16:     dw 0               ; the drive map (SPEC.md 52.2.8): the drive's
+                                ; sectors shifted right until they fit a word,
+hd_mk:       db 0               ; ...by this many
+hd_mux:      dw 0, -1           ; the underline's columns; last < first = none
+hd_mfree:    dd 0               ; every hole's sectors,
+hd_mlarge:   dd 0               ; ...and the largest Format would make of one
+hd_mdig:     db '1', 0          ; a segment's digit
 hd_tstate:   times 4 db 0       ; HTS_* per slot, worked out when the tool
                                 ; opens and after every format
 hd_ask:      times 40 db 0      ; the confirm question, built into a buffer of

@@ -237,11 +237,27 @@ hd_probe:
     ; int 13h AH=08h on 80h and 81h. DL comes back as the NUMBER of fixed
     ; disks the BIOS knows, which is the honest bound - and a card whose ROM
     ; hooked int 13h is exactly as authoritative here as an AT BIOS.
+    ;
+    ; **AND THE BOUND IS NOW USED.** The comment above was all there was of
+    ; it: 81h was asked whatever 80h had said, and an AT BIOS answers AH=08h
+    ; for a drive it does not have with CF CLEAR and the geometry of CMOS
+    ; drive type 1 - 305 x 4 x 17, a phantom 10MB `BIOS1` under the real
+    ; disk. MR BIOS on a one-drive 286 does exactly that. So 81h is asked
+    ; only when 80h answered and counted two; a BIOS that does not answer
+    ; for 80h has no fixed disk to number from, and rung 1 finds an IDE one.
     mov byte [hd_pdl], 0x80     ; the drive number lives in MEMORY across
-.bios:                          ; the probe: hd_bios_geom answers in AX, CX
-    mov dl, [hd_pdl]            ; and DX, so there is no register free to
-    call hd_bios_geom           ; hold it and the stack would have to be
-    jc .bios_next               ; unwound on two paths
+    mov byte [hd_pcnt], 0       ; the probe: hd_bios_geom answers in AX, CX
+.bios:                          ; and DX, so there is no register free to
+    mov dl, [hd_pdl]            ; hold it and the stack would have to be
+    cmp dl, 0x80                ; unwound on two paths
+    je .ask
+    mov al, dl
+    sub al, 0x80                ; AL = this drive's ordinal...
+    cmp al, [hd_pcnt]           ; ...against 80h's count, 0 if it did not
+    jae .ide                    ; answer at all
+.ask:
+    call hd_bios_geom
+    jc .bios_next
     call hd_dev_new             ; DI = a fresh row, CF = 1 = table full
     jc .ide
     mov byte [di+HDD_KIND], HDK_BIOS
@@ -303,6 +319,8 @@ hd_bios_geom:
     mov ah, 0x08
     int 0x13
     jc .no
+    mov [hd_pcnt], dl           ; the BIOS's fixed-disk COUNT, which hd_probe
+                                ; bounds 81h by - banked before DX is spent
     ; CH = cyl low, CL bits 6-7 = cyl high, CL bits 0-5 = sectors,
     ; DH = max head
     mov al, cl
@@ -519,14 +537,17 @@ hd_geom_store:
 
 ; -----------------------------------------------------------------------------
 ; hd_blk - DSV_BLK
-; in:  AL = 0 read / 1 write, AH = our volume handle, SI = the VOLUME-RELATIVE
-;      LBA, CX = sectors, DX:BX = the buffer
+; in:  AL = 0 read / 1 write, AH = our volume handle, DI:SI = the
+;      VOLUME-RELATIVE LBA (DI the high word, SPEC.md 18.7.5), CX = sectors,
+;      DX:BX = the buffer
 ; out: CF = 0 done; CF = 1 and AL = an int 13h status byte
 ; clobbers: AX (the output), flags
 ;
 ; The whole of what "partitions" means to os8088 is the addition below: the
-; kernel hands a 16-bit volume-relative LBA and this adds the partition's
-; 32-bit base. Everything above it - the FAT, the directory, the write path -
+; kernel hands a volume-relative LBA and this adds the partition's 32-bit
+; base. The LBA was 16 bits until SPEC.md 18.7.5, and a kernel that predates
+; it leaves DI = the low word - which this must never meet, the two shipping
+; together. Everything above it - the FAT, the directory, the write path -
 ; is the floppy's code, unchanged.
 ; -----------------------------------------------------------------------------
 hd_blk:
@@ -539,7 +560,8 @@ hd_blk:
     push di
     push bp
     push es
-
+    mov bp, di                  ; the LBA's high word (SPEC.md 18.7.5), before
+                                ; DI becomes the volume row below
     mov [hd_bseg], dx
     mov [hd_bofs], bx
     mov [hd_bcnt], cx
@@ -550,9 +572,20 @@ hd_blk:
     jc .bad
     mov di, bx
 
-    mov ax, si                  ; the 32-bit LBA: base + volume-relative
-    xor dx, dx
-    add ax, [di+HDV_BASE]
+    mov ax, si                  ; the transfer's END, volume-relative, against
+    mov dx, bp                  ; the partition's length: past 32MB the kernel
+    add ax, cx                  ; was told 'unknown' and its rule 13 bounds
+    adc dx, 0                   ; nothing, so a BPB that overstates its size
+    jc .bad                     ; would reach the NEXT partition - this is the
+    cmp dx, [di+HDV_LEN+2]      ; one party that knows where it ends
+    ja .bad                     ; (SPEC.md 18.7.5)
+    jb .inlen
+    cmp ax, [di+HDV_LEN]
+    ja .bad
+.inlen:
+    mov ax, si                  ; the 32-bit LBA: base + volume-relative, whose
+    mov dx, bp                  ; HIGH word the kernel hands in DI (SPEC.md
+    add ax, [di+HDV_BASE]       ; 18.7.5) - banked in BP at the top
     adc dx, [di+HDV_BASE+2]
     mov [hd_lba], ax
     mov [hd_lba+2], dx
@@ -572,7 +605,8 @@ hd_blk:
     jmp short .out
 .bad:
     mov al, 0x04                ; "sector not found": the honest answer for a
-.fail:                          ; handle that names no volume
+.fail:                          ; handle that names no volume, and for a
+                                ; sector past the partition's end
     stc
 .out:
     pop es
@@ -1265,8 +1299,9 @@ hd_services:
     dw hd_tool_reap             ; DSV_CPCLOSE - the panel has gone, so the disk
                                 ; tool's 11KB goes with it (SPEC.md 52.11.7)
     dw 0                        ; DSV_FS      - a file redirector's, not ours
-    dw 0                        ; DSV_CPKEY   - this page takes no keys: its
-                                ; geometry is typed with - and + (SPEC.md 52.4)
+    dw hd_cp_key                ; DSV_CPKEY   - the arrows move the drive
+                                ; highlight and the C/H/S field; the geometry
+                                ; itself is still set with - and + (52.4)
     dw hd_cp_up                 ; DSV_CPUP    - the page acts on the RELEASE
     dw hd_cp_drag               ; DSV_CPDRAG  - ...and follows the pointer
                                 ;               between the edges (13.8.4)
@@ -1301,6 +1336,7 @@ hd_bop:      db 0
 hd_run:      dw 0               ; sectors in the transfer being issued
 hd_status:   db 0
 hd_pdl:      db 0               ; hd_probe's int 13h drive number
+hd_pcnt:     db 0               ; ...and how many the BIOS said it has
 hd_dupd:     db 0               ; bit n = rung 0's row n is the same drive as
                                 ; an IDE unit rung 1 has already seen, so it
                                 ; can pair with no other (hd_ide_dup)

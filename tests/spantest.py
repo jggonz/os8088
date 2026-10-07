@@ -70,7 +70,7 @@ def moff(name):
         open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
         subprocess.check_call(["nasm", "-f", "bin", "-I",
                                os.path.join(ROOT, "apps") + os.sep,
-                               "-o", "/dev/null", tmp])
+                               "-o", tmp + ".bin", tmp])
         for ln in open(mp):                 # "<vaddr> <raddr> <name>", HEX
             f = ln.split()
             if len(f) == 3:

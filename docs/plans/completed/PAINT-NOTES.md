@@ -519,7 +519,7 @@ Two things worth knowing before adding another message here:
 ## The background is ours now (SPEC.md §11.90.1)
 
 `wm_draw_win` white-filled the whole content before every `W_PAINT`, and Paint
-sets **`WF_OWNBG`** (`OSAPI_WM_OWNBG`, slot 0x03A8) to stop it. The flag says
+sets **`WF_OWNBG`** (`OSAPI_WM_OWNBG`, slot 0x02C5) to stop it. The flag says
 *I paint every pixel of my content myself*, and Paint can, in four parts that
 already existed: `pt_fsbed` lays the tool column's bed and any band right of the
 canvas, `pt_draw_pal` and `pt_draw_strip` draw their own beds, `pt_cfill` draws

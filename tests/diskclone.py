@@ -27,8 +27,9 @@ twenty:
 
   4. **`Write Img...`** as far as this machine can take it (SPEC.md 18.99.8).
      The round trip is NOT here: a 360KB disk's image is 720 sectors and a
-     360KB volume's data area is 708, so on the only floppy geometry MartyPC's
-     os8088 machines have there is nowhere to put one.  Everything up to the
+     360KB volume's data area is 708, so on this machine's two 360KB drives
+     there is nowhere to put one. `tests/wimgtrip.py` is the round trip, on
+     a machine with a 720KB B:.  Everything up to the
      transfer is here - the item, the dialog, and that a CANCEL puts the
      machine back exactly as it found it, which is the half SPEC.md 22.21.5
      says the command is built around.
@@ -46,6 +47,8 @@ sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
 sys.path.insert(0, "tests/unit")
 import os88marty as M                                     # noqa: E402
+import os88geom                                           # noqa: E402
+import os88ui                                             # noqa: E402
 from os88mouse import Mouse                               # noqa: E402
 import dispcp                                             # noqa: E402
 from harness import check, done                           # noqa: E402
@@ -74,7 +77,6 @@ def equ(path, name):
 
 
 FS_EDIT = equ("kernel/files.inc", "FS_EDIT")
-FS_SIZE = equ("kernel/files.inc", "FS_SIZE")
 FM_ICLONE = equ("kernel/files.inc", "FM_ICLONE")
 FM_IWIMG = equ("kernel/files.inc", "FM_IWIMG")
 CL_STEP = equ("kernel/clone.inc", "CL_STEP")
@@ -106,16 +108,33 @@ class Probe:
 
     def __init__(self, m):
         self.m = m
+        self.ui = os88ui.UI(m, verbose=False)
         self.pool = m.sym("fm_pool")
         self.clo_seg = m.sym("clo_seg")
         self.mod_tab = m.sym("mod_tab")
 
     def edit(self):
-        """The FS_EDIT of the first window that has one armed (0 = none)."""
-        for slot in range(4):
-            b = self.m.read(self.pool + slot * FS_SIZE, FS_SIZE)
-            if b[FS_EDIT]:
-                return b[FS_EDIT]
+        """The FS_EDIT of the first window that has one armed (0 = none).
+
+        EACH WINDOW'S OWN BLOCK, by the kernel's route (window -> instance
+        -> I_SPTR, os88ui's `_fsblk`), and not fm_pool at a stride. The
+        stride was `equ(FS_SIZE)`, whose first DECIMAL definition in
+        files.inc is kern_small's 24 - kern_big's is 61, an expression - so
+        this read slot 1's FS_SEL as slot 2's FS_EDIT. It was harmless while
+        only the user's first Disk window was open, and read 255 the moment
+        the Standard File chooser took a pool block of its own with nothing
+        selected (SPEC.md 38.1).
+        """
+        for w in os88geom.windows(self.m):
+            blk = self.ui._fsblk(w)
+            # ...and only a block IN THE DISK POOL: a package's instance has
+            # an I_SPTR of its own kind. Five blocks (FM_NSLOT), each well
+            # under 64 bytes on either build.
+            if blk is None or not 0 <= blk - self.pool < 5 * 64:
+                continue
+            e = self.m.read(blk + FS_EDIT, 1)[0]
+            if e:
+                return e
         return 0
 
     def claim(self):
@@ -287,10 +306,10 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
           "...and the machine is still answering afterwards", "")
 
     # --- 5. Write Img..., and what it refuses (SPEC.md 18.99.8) -------------
-    # THE ROUND TRIP IS NOT TESTED HERE AND CANNOT BE: an image of a 360KB
-    # disk is 720 sectors and a 360KB volume's data area is 708, so on the
-    # only floppy geometry MartyPC's machines have (`pcxt_2_360k_floppies`,
-    # every os8088 config in ibm5150.toml) there is nowhere to put one. What
+    # THE ROUND TRIP IS NOT TESTED HERE: an image of a 360KB disk is 720
+    # sectors and a 360KB volume's data area is 708, so on this machine's
+    # `pcxt_2_360k_floppies` there is nowhere to put one. tests/wimgtrip.py
+    # is the round trip, on os8088_5150_cga_720b_gla's 720KB B:. What
     # IS on this machine is every part of the command up to the transfer -
     # the menu item, the resident thunk, fdlg_open's fence, the completion
     # proc, the module load and the geometry table - and the refusal exercises

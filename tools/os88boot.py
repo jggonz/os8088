@@ -57,7 +57,17 @@ KERNEL_SEG = 0x0060
 
 
 def callsites(defines=("KERN_BIG",), build="build"):
-    """[(return address, what it called)] for every `call` in `kmain`.
+    """[(return address, what it called)] for every `call` in `kmain`, as
+    FLAT addresses a breakpoint can be armed on.
+
+    **AND IN `kmain_o`, SPLICED IN WHERE kmain CALLS IT** (SPEC.md 2.5.3.3):
+    kmain's boot half is a blob body now, so kmain itself makes one gated call
+    and then the tail after the blob's release. Read as kmain alone, the whole
+    boot from `dsk_boot_from_x` to `spl_finish` would be ONE row named after
+    the gate - the failure the paragraph below calls invisible, one level up.
+    So kmain_o's own call sites are read too, and their return addresses are
+    in the BLOB, which stage 2 lands at `HEAP_SEG` and holds until
+    `mem_unblob_x`: `HEAP_SEG*16` plus the label's offset out of the map.
 
     The RETURN address and not the call's own, because that is the address
     reached exactly once, after the phase has finished - a breakpoint on the
@@ -122,17 +132,21 @@ def callsites(defines=("KERN_BIG",), build="build"):
     # booked to `thm_set` - two instructions of palette resolve that does no
     # I/O at all. It reads as a phase list, not as a broken one, which is why
     # it survived: nothing about the output says a row is missing.
-    emit = []
-    inmain = False
-    row = re.compile(r"^\s*\d+\s+([0-9A-F]{8})\s+([0-9A-F]{2}[0-9A-F <>\[\]-]*?)\s{2,}(\S.*)$")
+    bodies = {"kmain": [], "kmain_o": []}
+    body = None
+    # `(...)` is how nasm lists an operand it will fix up across sections -
+    # `E8(0300)`, kmain_o's near call to a `.boot2` label - and without it in
+    # the class every BLOBCALL into the loading screen vanished from the list
+    row = re.compile(r"^\s*\d+\s+([0-9A-F]{8})\s+([0-9A-F]{2}[0-9A-F <>\[\]()-]*?)\s{2,}(\S.*)$")
     quiet = re.compile(r"^\s*\d+\s{2,}(\S.*)$")     # a line that emitted nothing
     deep = re.compile(r"^<\d+>\s*")                  # nasm's expansion marker
     macro = None                                      # the invocation in force
     for L in lines:
-        if re.match(r"^\s*\d+\s+kmain:", L):
-            inmain = True
+        lab = re.match(r"^\s*\d+\s+(kmain|kmain_o):", L)
+        if lab:
+            body, macro = bodies[lab.group(1)], None
             continue
-        if not inmain:
+        if body is None:
             continue
         m = row.match(L)
         if not m:
@@ -152,24 +166,52 @@ def callsites(defines=("KERN_BIG",), build="build"):
         text = deep.sub("", text).split(";")[0].strip()
         if expanded and macro:
             text = text.replace("%1", macro)
-        emit.append((int(m.group(1), 16), text, macro if expanded else None))
-        if text.startswith("jmp ui_task"):
-            break
+        body.append((int(m.group(1), 16), text, macro if expanded else None))
+        # Each body ends at its own exit: kmain jumps into the scheduler and
+        # never returns, kmain_o's one unexpanded `retf` is its last line.
+        if text.startswith("jmp ui_task") or (body is bodies["kmain_o"]
+                                              and text == "retf"
+                                              and not expanded):
+            body = None
 
-    out = []
-    for i, (addr, text, arg) in enumerate(emit):
-        if not text.startswith("call "):
-            continue
-        if i + 1 >= len(emit):
-            break
-        # THE MACRO'S OWN ARGUMENT BEATS THE BODY'S TEXT. SPLGATE1 and
-        # OVLGATE1 both end in a bare `call spl_gate`, so the body cannot tell
-        # drv_boot_x from xm_boot_x and the invocation can. A numeric argument
-        # is not a name - MARK and BPMARK take an index - so those fall back.
-        name = arg if (arg and not arg.isdigit()) else None
-        if name is None:
-            name = text[5:].strip().split(":")[-1]  # `FAT_SEG:ovl_clk_init`
-        out.append((emit[i + 1][0], name))
+    def sites(emit, base):
+        out = []
+        for i, (addr, text, arg) in enumerate(emit):
+            if not text.startswith("call "):
+                continue
+            if i + 1 >= len(emit):
+                break
+            # THE MACRO'S OWN ARGUMENT BEATS THE BODY'S TEXT. SPLGATE1 and
+            # OVLGATE1 both end in a bare `call spl_gate`, so the body cannot
+            # tell drv_boot_x from xm_boot_x and the invocation can. A numeric
+            # argument is not a name - MARK and BPMARK take an index - so
+            # those fall back.
+            name = arg if (arg and not arg.isdigit()) else None
+            if name is None:
+                name = text[5:].strip().split(":")[-1]  # `FAT_SEG:ovl_clk_init`
+            # ...and a FAR SHIM is named for what it forwards to: kmain_o
+            # reaches `.text` through `cw_`/`ovw_` cells (`call
+            # KERNEL_SEG:cw_thm_set`), and the phase is still thm_set's.
+            name = re.sub(r"^(?:cw|ovw|spw)_", "", name)
+            out.append((base(emit[i + 1][0]), name))
+        return out
+
+    import os88sym
+    out = sites(bodies["kmain"], lambda a: KERNEL_SEG * 16 + a)
+    if bodies["kmain_o"]:
+        # The listing's address is SECTION-relative (os88sym's header); the
+        # label's own value out of the map is the blob offset, and the first
+        # byte kmain_o emits is at that label.
+        heap = os88sym.equates(defines)["HEAP_SEG"]   # splash_entry's reason
+        lab = os88sym.syms(defines)["kmain_o"]
+        first = bodies["kmain_o"][0][0]
+        inner = sites(bodies["kmain_o"],
+                      lambda a: heap * 16 + lab + (a - first))
+        at = [i for i, (_, n) in enumerate(out) if n == "kmain_o"]
+        if len(at) != 1:
+            raise SystemExit("os88boot: kmain calls kmain_o %d times - "
+                             "expected exactly once" % len(at))
+        out[at[0]:at[0] + 1] = inner
     if not out:
         raise SystemExit("os88boot: no calls found in kmain - listing format?")
     return out
@@ -292,8 +334,8 @@ def profile(image, apps=None, machine="os8088_5150_cga", defines=("KERN_BIG",),
     sites = collapse(callsites(defines, build))
     kmain = KERNEL_SEG * 16 + os88sym.syms(defines)["kmain"]
     splash = splash_entry(defines)
-    tail = [(name if n == 1 else "%s x%d" % (name, n), KERNEL_SEG * 16 + addr)
-            for addr, name, n in sites]
+    tail = [(name if n == 1 else "%s x%d" % (name, n), addr)
+            for addr, name, n in sites]     # FLAT already: callsites()
 
     rows, prev, pdisk = [], 0, None
 

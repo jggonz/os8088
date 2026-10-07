@@ -41,7 +41,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -139,19 +138,24 @@ def main():
             fail("nasm's map has no `%s`" % want)
     with M.launch(DISK_A, apps=DISK_B, machine="os8088_5150_cga_gla",
                   boot=2) as m:
-        end = time.time() + 120
-        text = ""
-        while time.time() < end:
+        seen = {"text": ""}
+
+        def said(_):
             rows = m.screen() or []
-            text = "\n".join(r.rstrip() for r in rows)
+            text = seen["text"] = "\n".join(r.rstrip() for r in rows)
             # THE WAIT ENDS ON THE LAST THING THE MACHINE SAYS, and getting
             # that wrong costs the row's whole timeout rather than failing:
             # when the gate stopped printing `kern_dos: done` this loop sat
             # out its 120 seconds and the runner killed it at 60, reporting a
             # TIMEOUT for a run that had finished in four.
-            if "restart" in text or "kern_dos: " in text or "FAILED" in text:
-                break
-            time.sleep(0.4)
+            return ("restart" in text or "kern_dos: " in text
+                    or "FAILED" in text)
+        try:                            # a GUEST-time budget; a miss is
+            M.until(m, said, "kern_dos to report", poll=0.4,  # judged on
+                    limit=120.0)                              # the text below
+        except M.MartyError:
+            pass
+        text = seen["text"]
         print("kdos: the guest's screen:")
         for r in text.splitlines():
             if r.strip():

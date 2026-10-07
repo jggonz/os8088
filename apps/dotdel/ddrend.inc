@@ -320,6 +320,11 @@ dd_text:
 ;      swallowed, because the honest degrade for a moving sprite is to leave
 ;      the frame alone rather than letter something in its place.
 ; -----------------------------------------------------------------------------
+dd_blitp:                           ; ...the same clip, and SI = plane 0 of
+    mov byte [dd_bplan], 1          ; FOUR, [dd_pn] apart (SPEC.md 93.5.19).
+    call dd_blit                    ; out CF = 1: gfx_blitp refused, and
+    mov byte [dd_bplan], 0          ; nothing was drawn. A MOV writes no flag
+    ret
 dd_blit:
     push ax
     push bx
@@ -329,16 +334,16 @@ dd_blit:
     push di
     push bp
     or cx, cx
-    jle .out
+    jle .none
     or dx, dx
-    jle .out
+    jle .none
     ; --- clip to the board in x, by whole byte columns -----------------------
     or ax, ax
     jge .noleft
     mov di, ax
     neg di                          ; DI = pixels off the left
     add cx, ax
-    jle .out
+    jle .none
     push cx
     mov cl, 3
     shr di, cl
@@ -352,7 +357,7 @@ dd_blit:
     jbe .noright
     mov cx, [dd_mw]
     sub cx, ax
-    jle .out
+    jle .none
 .noright:
     ; --- clip to the board in y ---------------------------------------------
     ; ...against [dd_clipy0] and not against zero: the attract screen shows a
@@ -363,7 +368,7 @@ dd_blit:
     mov di, [dd_clipy0]
     sub di, bx                      ; rows above the slice
     sub dx, di
-    jle .out
+    jle .none
     push ax
     push dx                         ; ...and MUL writes DX, which is the ROW
     mov ax, di                      ; COUNT: without saving it the band arrives
@@ -379,7 +384,7 @@ dd_blit:
     jbe .nobot
     mov dx, [dd_mh]
     sub dx, bx
-    jle .out
+    jle .none
 .nobot:
     cmp dx, 255
     jbe .hok
@@ -387,7 +392,16 @@ dd_blit:
 .hok:
     add ax, [dd_bdx]                ; ...and only now into screen coordinates
     add bx, [dd_bdy]
+    cmp byte [dd_bplan], 0
+    jne .planes
     call OSAPI_GFX_BLIT1
+    jmp short .out
+.planes:
+    mov di, [dd_pn]                 ; the plane step
+    call OSAPI_GFX_BLITP            ; ...whose CF is the answer: the pops
+    jmp short .out                  ; below write no flag
+.none:
+    clc                             ; clipped away is DRAWN, not refused
 .out:
     pop bp
     pop di
@@ -939,8 +953,38 @@ dd_tile_put:
     mov [dd_bx0], ax
     mov ax, [dd_gy]
     mov [dd_by0], ax
+    mov byte [dd_bgnd], 0
     cmp word [dd_bdseg], 0          ; no picture claimed yet: black is all
     je .black                       ; there is to put back
+    ; --- A CORNER BLOCK IN A CORRIDOR IS A PLANE OF ITS OWN (SPEC.md 93.5.19)
+    ; ...when gfx_blitp may be asked. The tile then goes down ONCE, the dot in
+    ; the dot's pen and the block in the wall's, where the one-pen band below
+    ; put the block down white and blitted its rows again blue: a white corner
+    ; for the length of a far call, every time a pellet on one blinked.
+    cmp byte [dd_pok], 0
+    je .walls
+    mov al, [dd_gt]
+    cmp al, TT_WALL                 ; a WALL or a DOOR is one pen already
+    je .walls
+    cmp al, TT_DOOR
+    je .walls
+    push cx
+    mov cl, [dd_gc]
+    mov ch, [dd_gr]
+    call dd_ink_ck
+    pop cx
+    jnc .walls
+    mov [dd_pn], cx                 ; CX = the band's bytes, and a tile is far
+    mov byte [dd_bgnd], 1           ; under DD_PBMAX
+    push cx
+    mov di, cx
+    shl di, 1
+    add di, cx
+    add di, dd_pb                   ; plane 3's slot holds the ground...
+    call dd_band_walls_di
+    pop cx
+    jmp short .black                ; ...and the band itself starts empty
+.walls:
     call dd_band_walls              ; ...and otherwise the PICTURE, whatever
     jmp short .item                 ; the tile is (93.2.3.2)
 .black:
@@ -983,6 +1027,18 @@ dd_tile_put:
     mov dx, [dd_pilh]
     call dd_band_rect
 .emit:
+    cmp byte [dd_bgnd], 1
+    jne .onepen
+    mov byte [dd_pink], DD_INKDOT
+    mov ax, [dd_gx]
+    mov bx, [dd_gy]
+    mov cx, [dd_tw]
+    mov dx, [dd_bh]
+    call dd_emit_planar
+    jnc .done                       ; drawn, block and all
+    mov byte [dd_pok], 0            ; refused: the one-pen road, repair and all
+    call dd_gnd_fold
+.onepen:
     mov al, DD_INKDOT               ; THE PEN THE TILE'S CONTENT WANTS. It was
     mov ah, [dd_gt]                 ; always the dot's, which was true while
     cmp ah, TT_WALL                 ; the only caller was the pellet blink -
@@ -1292,12 +1348,19 @@ dd_rep_vacated:
     jbe .next
 .push:
     call dd_tile                    ; AN EMPTY TILE IS BLACK IN EVERY PEN, so
-    cmp al, TT_EMPTY                ; it owes nothing - and that is most of
-    jne .owed                       ; them: it is exactly the tiles Smiles has
-    call dd_ink_ck                  ; just EATEN, so his own trail is free.
-    jnc .next                       ; ...UNLESS 93.2.3's concave round put a
-.owed:                              ; CORNER BLOCK in it (93.2.3.2), which the
-    call dd_rep_push                ; ghost house is ringed with
+    cmp al, TT_DOT                  ; it owes nothing - and that is most of
+    je .owed                        ; them: it is exactly the tiles Smiles has
+    cmp al, TT_PILL                 ; just EATEN, so his own trail is free.
+    je .owed                        ; ...UNLESS 93.2.3's concave round put a
+    cmp al, TT_EMPTY                ; CORNER BLOCK in it (93.2.3.2), which the
+    jne .ground                     ; ghost house is ringed with
+    call dd_ink_ck
+    jnc .next
+.ground:                            ; A WALL, A DOOR OR A CORNER BLOCK owes
+    cmp byte [dd_qgk + si], 0       ; nothing when the band that left it drew
+    jne .next                       ; it in the wall's pen (93.5.19)
+.owed:
+    call dd_rep_push
 .next:
     inc cl
     cmp cl, [dd_qc1 + bx]
@@ -1314,6 +1377,8 @@ dd_rep_vacated:
     mov [dd_qr0 + bx], al
     mov al, [dd_nr1 + bx]
     mov [dd_qr1 + bx], al
+    mov al, [dd_bok]
+    mov [dd_qgk + si], al
     mov byte [dd_qok + si], 1
     pop si
 .none:
@@ -1558,6 +1623,7 @@ dd_actor_emit:
     cmp byte [dd_uok + si], 0
     je .gone
     mov byte [dd_drewany], 1
+    mov byte [dd_bok], 1            ; ...until a band puts a wall in its pen
     cmp byte [dd_utel + si], 0
     je .main
     mov byte [dd_utel + si], 0
@@ -1758,6 +1824,8 @@ dd_band_actor:
 dd_split_ck:
     cmp byte [dd_bpp], 1
     jbe .no
+    cmp byte [dd_pok], 0            ; ...and a band whose walls are a plane of
+    jne .no                         ; their own draws them blue (93.5.19)
     mov ax, [dd_c1]
     cmp ax, [dd_c0]
     jbe .no
@@ -1839,6 +1907,7 @@ dd_band_build:
     ; where that one was. A degenerate rectangle becomes a zero here and the
     ; guards below refuse the zero, which is what the old tile arithmetic did
     ; by construction and this has to do on purpose.
+    mov byte [dd_bgnd], 0           ; no ground until dd_band_ground says so
     mov ax, [dd_ux0]
     and ax, ~7                      ; ...out to the byte column each side
     mov [dd_bx0], ax
@@ -1913,7 +1982,22 @@ dd_band_build:
 ; -----------------------------------------------------------------------------
 dd_band_ground:
     call dd_rect_wall
-    jc dd_band_walls
+    jnc .zero
+    mov byte [dd_bgnd], 2           ; ...folded into the band, in one pen
+    cmp byte [dd_pok], 0
+    je dd_band_walls
+    mov ax, [dd_rb]                 ; ...or, when gfx_blitp may be asked, in a
+    mul word [dd_bh]                ; PLANE OF ITS OWN (SPEC.md 93.5.19), so it
+    cmp ax, DD_PBMAX                ; goes down in the wall's pen in the same
+    ja dd_band_walls                ; write as the actor goes down in its own
+    mov [dd_pn], ax
+    mov byte [dd_bgnd], 1
+    mov di, ax
+    shl di, 1
+    add di, ax
+    add di, dd_pb                   ; plane 3's slot: composed LAST, so it can
+    call dd_band_walls_di           ; hold the ground until then
+.zero:
     mov ax, [dd_rb]
     mul word [dd_bh]
     mov cx, ax
@@ -1977,19 +2061,23 @@ dd_rect_wall:
 ; dd_band_walls - the wall picture's own bytes for the band's rectangle
 ; The band is on the tile grid and a tile is a multiple of 8 wide, so this is a
 ; row-by-row copy and never a shift. Clobbers everything but SI.
+;
+; dd_band_walls_di is the same into DI rather than dd_band, which is how the
+; planar band puts its GROUND in a plane of its own (SPEC.md 93.5.19).
 ; -----------------------------------------------------------------------------
 dd_band_walls:
+    mov di, dd_band
+dd_band_walls_di:
     cmp word [dd_bh], 0             ; belt and braces: `dec dx / jnz` on a zero
     je .none                        ; count is 65,536 rows (see dd_band_build)
     push si
-    mov ax, [dd_by0]
+    mov ax, [dd_by0]                ; (nothing from here to the copy writes DI)
     mul word [dd_sb]
     mov si, ax
     mov ax, [dd_bx0]
     mov cl, 3
     shr ax, cl
     add si, ax                      ; SI = the picture byte the rectangle is at
-    mov di, dd_band
     mov dx, [dd_bh]
     mov bx, [dd_rb]
     mov ax, [dd_bdseg]
@@ -2364,6 +2452,25 @@ dd_band_one:
 ; dd_band_emit - AL = the pen, then the band
 ; -----------------------------------------------------------------------------
 dd_band_emit:
+    cmp byte [dd_bgnd], 0
+    je .one
+    cmp byte [dd_bgnd], 1
+    jne .lost                       ; 2: the walls are in the band, in AL's pen
+    mov [dd_pink], al               ; 1: THE GROUND IS A PLANE OF ITS OWN
+    push ax                         ; (SPEC.md 93.5.19), so the band and the
+    mov ax, [dd_bx0]                ; walls under it go down in one write, each
+    mov bx, [dd_by0]                ; in its own pen
+    mov cx, [dd_bw]
+    mov dx, [dd_bh]
+    call dd_emit_planar
+    pop ax
+    jnc .out
+    mov byte [dd_pok], 0            ; refused: say so once, not every band
+    call dd_gnd_fold                ; ...and put the walls in the band after all
+    mov al, [dd_pink]               ; (the fold took AL: the pen is the band's)
+.lost:
+    mov byte [dd_bok], 0            ; a wall or a corner went down in AL's pen
+.one:
     call dd_pen
     push ds
     pop es
@@ -2375,6 +2482,128 @@ dd_band_emit:
     mov cx, [dd_bw]
     mov dx, [dd_bh]
     call dd_blit
+    pop si
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; dd_emit_planar - compose the band and its GROUND into four planes and put
+;                  them down with ONE gfx_blitp (SPEC.md 93.5.19)
+; in:  [dd_pink] = the band's ink, AX/BX = board x (a multiple of 8) and y,
+;      CX/DX = width and rows, [dd_rb] the stride, [dd_pn] one plane's bytes,
+;      dd_band the band and plane 3's slot of dd_pb the ground.
+; out: CF = 1 refused and NOTHING drawn - the caller still has the band, but
+;      NOT the ground: plane 3 was composed over it (dd_gnd_fold rebuilds it).
+;      Clobbers everything but SI.
+;
+; A BAND IS ONE PEN, AND A PEN IS A PROPERTY OF THE WRITE. gfx_blit1 says
+; which colour a set bit is once for the whole band, so a wall pixel in an
+; actor's band came out in the actor's colour for as long as the actor was
+; there - 93.2.3.2's corner block most of all, because it sits inside the
+; corridor tile an actor turns on. Four planes is what a colour IS on this
+; card, so this band says each pixel's colour itself: the actor's ink where
+; the band is set, the wall's where the ground is set and the band is not,
+; black elsewhere. Every pixel is written once, in the colour it ends up.
+;
+;   plane k = (ink has k ? band : 0) | (wall has k ? ground & ~band : 0)
+;
+; which is one of four loops a plane, the band winning where the two overlap
+; exactly as it did when the walls were OR'd into it. Plane 3 holds the
+; ground until it is composed and is composed LAST, byte for byte in place.
+;
+; IT WAS TWENTY POINTS OF THE TICK until SPEC.md 5.4.3.5. gfx_blitp priced a
+; colour per ROW - ~2,400 cycles a row against gfx_blit1's ~100 - so a whole
+; band this way was 28,600 cycles against 6,200 and windowed VGA fell from 96%
+; of the tick to 76%. The kernel now copies a block with nothing to decide per
+; row plane-major, and a band here is ~8,500 against ~6,000: cheaper than the
+; split it retires, which is why the windowed frame came out FASTER.
+; -----------------------------------------------------------------------------
+dd_emit_planar:
+    push si
+    push ax
+    push bx
+    push cx
+    push dx
+    push ds                         ; ES = DS from here on: the stores below,
+    pop es                          ; and the planes are ours for the blit
+    cld
+    mov cx, [dd_pn]
+    mov bx, cx
+    shl bx, 1
+    add bx, cx
+    add bx, dd_pb - dd_band         ; BX = the ground, as an offset from a
+                                    ; band byte: [bx+si-1] after a lodsb
+    mov dl, [dd_pink]
+    mov dh, DD_INKWALL
+    mov di, dd_pb
+    mov ah, 1                       ; this plane's bit
+.pl:
+    mov si, dd_band
+    mov cx, [dd_pn]
+    test dl, ah
+    jnz .ink
+    test dh, ah
+    jnz .gnd
+    xor al, al                      ; neither: black
+    rep stosb
+    jmp short .nx
+.ink:
+    test dh, ah
+    jnz .both
+    rep movsb                       ; the ink's alone: the band as it stands
+    jmp short .nx
+.both:
+    lodsb                           ; both: wherever either is set
+    or al, [bx+si-1]
+    stosb
+    loop .both
+    jmp short .nx
+.gnd:
+    lodsb                           ; the wall's alone: the ground the band
+    not al                          ; does not cover
+    and al, [bx+si-1]
+    stosb
+    loop .gnd
+.nx:
+    shl ah, 1
+    cmp ah, 16
+    jb .pl
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    mov si, dd_pb
+    mov bp, [dd_rb]
+    call dd_blitp
+    pop si
+    ret
+
+; dd_gnd_fold - OR the ground back into the band: a refused planar band goes
+; down in one pen after all, which is the picture it always was. The ground is
+; BUILT AGAIN first: plane 3's slot is where it was parked and plane 3 is
+; composed in place over it before gfx_blitp is asked, so by a refusal the slot
+; holds the band or nothing - and a fold of that put the band down with no
+; walls. [dd_bx0]/[dd_by0]/[dd_bh]/[dd_rb] still describe the band on both
+; callers' paths. Clobbers everything but SI.
+dd_gnd_fold:
+    push si
+    mov di, [dd_pn]
+    mov ax, di
+    shl di, 1
+    add di, ax
+    add di, dd_pb                   ; plane 3's slot, the ground's again
+    call dd_band_walls_di
+    mov cx, [dd_pn]
+    mov bx, cx
+    shl bx, 1
+    add bx, cx
+    add bx, dd_pb - dd_band
+    mov si, dd_band
+.b:
+    mov al, [bx+si]
+    or [si], al
+    inc si
+    loop .b
     pop si
     ret
 
@@ -2388,8 +2617,14 @@ dd_band_emit:
 ; already held for the whole session and there is no clip to arm.
 ; -----------------------------------------------------------------------------
 dd_render:
+    mov byte [dd_pok], 0
     cmp byte [dd_inbr], 0
-    jne .draw
+    je .win
+    cmp byte [dd_bpp], 1            ; the bracket arms no region, so a colour
+    jbe .draw                       ; surface may take four planes (93.5.19)
+    mov byte [dd_pok], 1
+    jmp short .draw
+.win:
     call OSAPI_GFX_LOCK
     mov ax, KERNEL_SEG              ; A WORKER MUST LOAD ES ITSELF - only a
     mov es, ax                      ; CALLBACK arrives with ES = KERNEL_SEG
@@ -2398,6 +2633,7 @@ dd_render:
     jz .skip
     call OSAPI_WM_CLIP_SET
     jc .skip                        ; not one pixel of us is showing
+    call dd_pok_win                 ; ...and is anything OVER us? (93.5.19)
     ; --- WHERE ARE WE? ASKED EVERY FRAME (SPEC.md 93.3.4.2) ----------------
     ; NOTHING TELLS A PACKAGE ITS WINDOW MOVED. The kernel's drag cache banks
     ; the window's pixels and replays them at the new position (SPEC.md
@@ -2418,17 +2654,43 @@ dd_render:
     mov byte [dd_drawing], 1        ; SPEC.md 93.5.17: a board walk waits for
     call dd_draw                    ; this to clear before it starts
     mov byte [dd_drawing], 0
+    mov byte [dd_pok], 0            ; a W_PAINT's region is not ours to lift
     cmp byte [dd_inbr], 0
     jne .out
     call OSAPI_GFX_UNLOCK
     jmp short .out
 .skip:
+    mov byte [dd_pok], 0
     ; the step ran and the glass did not follow, so every "where it is drawn"
     ; word is now a claim about pixels nobody can see: the next frame that CAN
     ; draw owes a whole one
     mov byte [dd_full], 1
     call dd_forget
     call OSAPI_GFX_UNLOCK
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; dd_pok_win - [dd_pok] for a WINDOWED draw, after OSAPI_WM_CLIP_SET has armed
+;              the region. in: BX = the window. Preserves every register.
+;
+; gfx_blitp refuses ANY armed region - a plane byte carries eight x's, so it
+; cannot honour a fragment edge (SPEC.md 5.4.3) - and a windowed draw always
+; arms one. When nothing at all is over the window the region IS the content
+; rect, which this program never draws outside, so disarming it changes no
+; pixel and lets the walls have their own pen (SPEC.md 93.5.19). CLIP_SET has
+; already done the rest of its job - the raise cache and the pointer's deferred
+; hide - and disarming undoes neither. One far call, and only on a colour
+; surface: one plane has no pen to get wrong.
+; -----------------------------------------------------------------------------
+dd_pok_win:
+    mov byte [dd_pok], 0
+    cmp byte [dd_bpp], 1
+    jbe .out
+    call OSAPI_WM_OBSCURED          ; covered, or the open dock is over it:
+    jc .out                         ; the region binds, and so does the pen
+    call OSAPI_WM_CLIP_CLEAR
+    mov byte [dd_pok], 1
 .out:
     ret
 

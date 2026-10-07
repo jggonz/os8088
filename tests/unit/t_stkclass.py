@@ -198,11 +198,14 @@ def depth(asm, root):
     # what a package includes; this list has to keep up with it, and the
     # failure when it does not is "nasm failed: unable to open include file",
     # which this gate reports rather than skipping (a package whose depth
-    # cannot be measured is one the gate is not watching).
+    # cannot be measured is one the gate is not watching). drivers/sound is
+    # MIDIRack's: sndpkg.inc is SOUND.DRV's FM verbs (SPEC.md 34.12), the
+    # same shape as netpkg.inc.
     r = subprocess.run([sys.executable, TOOL, asm, "-I", os.path.join(ROOT, "apps"),
                         "-I", BUILD, "-I", os.path.dirname(asm),
                         "-I", os.path.join(ROOT, "drivers", "net"),
                         "-I", os.path.join(ROOT, "drivers", "ramdisk"),
+                        "-I", os.path.join(ROOT, "drivers", "sound"),
                         "--from", root],
                        capture_output=True, text=True, cwd=ROOT, timeout=900)
     m = re.search(r"^== %s: (\d+) bytes ==" % re.escape(root), r.stdout, re.M)

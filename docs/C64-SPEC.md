@@ -2185,9 +2185,9 @@ already publishes.
 
 | thunk | slot | the fact that needed it |
 |---|---|---|
-| `os88_key_down` | `OSAPI_KEY_DOWN` `0x03F0` | §15.1 — the level keyboard |
-| `os88_wm_close` | `OSAPI_WM_CLOSE` `0x0470` | §15.2 — the worker idiom closes the WINDOW, not the APP |
-| `os88_clip_put_seg`, `os88_clip_get_seg` | `OSAPI_CLIP_PUT` `0x0320` / `OSAPI_CLIP_GET` `0x0328` | §7.7 — clipboard staging in a CLAIM rather than in bss; both slots already take `ES:SI` / `ES:DI`, so the thunk loads `ES` from its argument instead of from `DS` |
+| `os88_key_down` | `OSAPI_KEY_DOWN` `0x02FC` | §15.1 — the level keyboard |
+| `os88_wm_close` | `OSAPI_WM_CLOSE` `0x0368` | §15.2 — the worker idiom closes the WINDOW, not the APP |
+| `os88_clip_put_seg`, `os88_clip_get_seg` | `OSAPI_CLIP_PUT` `0x0268` / `OSAPI_CLIP_GET` `0x026E` | §7.7 — clipboard staging in a CLAIM rather than in bss; both slots already take `ES:SI` / `ES:DI`, so the thunk loads `ES` from its argument instead of from `DS` |
 
 ### 15.1 `os88_key_down` — the level keyboard's state
 
@@ -2202,16 +2202,16 @@ already publishes.
 
 | need | slot | note |
 |---|---|---|
-| a slice loop on the UI task, no blocking, file slots legal | `OSAPI_WM_WAKE` `0x0450` / `OSAPI_WM_ONWAKE` `0x0458` (`CC_HAS_ONWAKE`) | used exactly as RUNCPM does (SPEC.md §74.1); `os88_main` posts the first kick itself, because `os88_wm_onwake` installs the handler and does not post |
+| a slice loop on the UI task, no blocking, file slots legal | `OSAPI_WM_WAKE` `0x034F` / `OSAPI_WM_ONWAKE` `0x0357` (`CC_HAS_ONWAKE`) | used exactly as RUNCPM does (SPEC.md §74.1); `os88_main` posts the first kick itself, because `os88_wm_onwake` installs the handler and does not post |
 | a time base for the flush and the speed widget | `os88_ticks()` — the 18.2 Hz tick | the machine's own clock is emulated cycles (§4.2); `OSAPI_WM_TIMER` stays unwrapped, the wake is the re-post |
-| the CPU tier that seeds the wall slice and the tier table | `OSAPI_CPU_INFO` `0x0188` | §4.4, §9.8 |
-| fullscreen on Alt+D | `OSAPI_FULLSCREEN` `0x0110` | §9.8 |
-| a scroll moved, not redrawn | `OSAPI_GFX_SCROLL` `0x01F8` | §9.4; falls back to spans on −1 |
-| a composed span down in one call | `OSAPI_GFX_BLIT1` `0x0418` | §9.5; glyphs come from CHARGEN or the RAM charset, not `OSAPI_FONT_GLYPHS` |
-| voice 1 | `OSAPI_SND_TONE` `0x00E8`, `OSAPI_SND_CAPS` `0x00E0` | §11.4 |
-| a self-close for Exit emulator | `OSAPI_WM_CLOSE` `0x0470`, wrapped as `void os88_wm_close(void *win)` | the worker idiom every other C package uses — `os88_wm_destroy` under the lock, then `os88_task_alive` outside it — **closes the WINDOW and does not close the APP**: `wm_destroy` frees the record and nothing repaints the dock, so Alt+Q left a dead tile on the dock strip. The close BOX was always clean because it goes through the kernel's own `app_close_win`, which is the path this slot asks for. The package has no worker and no task slot. It is spent from the WAKE and not from `os88_oncmd`: the contract is *call it and RETURN, do not draw afterwards*, and `os88_oncmd`'s own tail kicks a wake that would flush into a window that is going away |
+| the CPU tier that seeds the wall slice and the tier table | `OSAPI_CPU_INFO` `0x0155` | §4.4, §9.8 |
+| fullscreen on Alt+D | `OSAPI_FULLSCREEN` `0x00F7` | §9.8 |
+| a scroll moved, not redrawn | `OSAPI_GFX_SCROLL` `0x019C` | §9.4; falls back to spans on −1 |
+| a composed span down in one call | `OSAPI_GFX_BLIT1` `0x0320` | §9.5; glyphs come from CHARGEN or the RAM charset, not `OSAPI_FONT_GLYPHS` |
+| voice 1 | `OSAPI_SND_TONE` `0x00D3`, `OSAPI_SND_CAPS` `0x00CD` | §11.4 |
+| a self-close for Exit emulator | `OSAPI_WM_CLOSE` `0x0368`, wrapped as `void os88_wm_close(void *win)` | the worker idiom every other C package uses — `os88_wm_destroy` under the lock, then `os88_task_alive` outside it — **closes the WINDOW and does not close the APP**: `wm_destroy` frees the record and nothing repaints the dock, so Alt+Q left a dead tile on the dock strip. The close BOX was always clean because it goes through the kernel's own `app_close_win`, which is the path this slot asks for. The package has no worker and no task slot. It is spent from the WAKE and not from `os88_oncmd`: the contract is *call it and RETURN, do not draw afterwards*, and `os88_oncmd`'s own tail kicks a wake that would flush into a window that is going away |
 | the ROM | `os88_part_seg(0)` — `op_seg` in `apps/os88parts.inc`, package code and no slot (SPEC.md §20.12) | §1.4 |
-| a `.PRG` read to an arbitrary address | `OSAPI_FILE_READ_AT` `0x0358` exists unwrapped | **no new slot**: §11.3 does it with a scratch claim and `c64_zzcopy_in` |
+| a `.PRG` read to an arbitrary address | `OSAPI_FILE_READ_AT` `0x028C` exists unwrapped | **no new slot**: §11.3 does it with a scratch claim and `c64_zzcopy_in` |
 
 ### 15.3 The slot that is NOT added
 

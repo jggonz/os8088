@@ -238,7 +238,11 @@ mknod /dev/null.new c 1 3 && chmod 666 /dev/null.new \
 wrong on the container this was found on — `zero`, `full`, `random`,
 `urandom`, `tty` and the loop devices were all correct character or block
 nodes carrying the image's build date, so the node had been *replaced*
-during the session rather than shipped broken. A regular-file `/dev/null`
+during the session rather than shipped broken. **What replaced it was nasm
+itself**, run by this repo's tests as root: nasm unlinks a FAILED `-o` target
+and replaces a `-l` target even on success, and `tests/kerndos.py` passed
+`-l /dev/null` on every soak (docs/plans/SOAK-PARALLEL.md 16 has the
+measurement; `tests/unit/t_nulldev.py` now refuses the argument). A regular-file `/dev/null`
 silently accumulates everything redirected into it, gives the wrong answer
 to `diff`, `cmp` and `test -s` against it, feeds junk to anything reading
 `< /dev/null` instead of EOF, and at mode 0644 refuses non-root writers
@@ -412,6 +416,27 @@ whose top band is genuinely lit. Measured from reset, field / rule / dock:
 | CGA desktop | 0.93 | 0.00 | 0.96 |
 | Hercules desktop | 0.94 | 0.00 | 0.96 |
 | VGA desktop | 1.00 | 0.00 | 0.96 |
+
+**The window is SHORT when the UI task says there is nothing left to draw.**
+At `GUEST_PACE` two `quiet` intervals are nine guest seconds of still
+screen, and that floor exists for the case where stillness proves nothing -
+a handler mid-load holding the lock, a repaint with a gap in it. When
+`os88marty.ui_idle(m)` reads ui_task ASLEEP (task 0's `T_STATE` is 2) with
+`evq_count`, `sch_uiwake` and `gfx_lock_flag` all zero and the BIOS key ring
+empty, and the drive's read count has not moved across the interval, that
+case is excluded by reading it, and the interval is `SETTLE_UI_QUIET` = 0.2
+guest seconds. A capture only counts as "the same" if the UI was still idle
+and the drive still unmoved at its end, so a short interval cannot be the
+one that hides a load. `ui_done(m)` is the same predicate as a wait of its
+own - held for about one tick with no disk read - and it is what
+`os88mouse`'s verbs end in by DEFAULT now: `click`, `dblclick`, `menu`,
+`rmenu` and `drag` wait for the UI to finish with the gesture, CAPPED at the
+fixed pause they used to spend (6.75 and 9 guest seconds), so no call ever
+waits longer than it did and a game whose worker keeps the lock busy gets
+exactly the old pause. A caller passing `settle=<n>` keeps its fixed pause.
+`OS88_SETTLE_UI=0` restores both halves for an A/B, and `make NOUIBLOCK=1`
+kernels never read idle (ui_task spins there) and so always take the full
+window.
 
 **The gate and the stillness test read the screen ONCE, together.** The
 emulator runs the guest several times faster than real time, so a round trip
@@ -961,8 +986,8 @@ print(m.disk())
 
 What to read in it: **`longest_run` near the track length** is a kernel
 batching properly; **`read_sectors` far above the payload** is §18.91's
-shape; **`resets`** is a BIOS giving up, which is how GLaBIOS's 250 ms limit
-was found.
+shape; **`resets`** is a BIOS giving up. It is how the "GLaBIOS 250 ms limit" was
+found, and that turned out to be this emulator's defect (below).
 
 ### Where a whole BOOT goes: `tools/os88boot.py`
 
@@ -1002,7 +1027,22 @@ twin boots faster than any 5150 ever did, and only the IBM-ROM machines
 answer for the field machine. The mechanical column does not move with the
 ROM.
 
-### GLaBIOS gives up on a floppy op after ~250 ms
+### GLaBIOS "gives up on a floppy op after ~250 ms": it was MartyPC's FDC
+
+**CORRECTED 2026-09-24, and `tools/martypc/patches/05-fdc-recal-one-interrupt.patch`
+is the fix.** GLaBIOS waits 37 ticks (two seconds) for IRQ6, as IBM does. The
+~250 ms was its **5-tick RESULT-phase** wait, and it only reached that early
+because upstream MartyPC raises TWO IRQ6s for one RECALIBRATE: one when the
+command is taken, one at completion. The spare one leaves `0040:003E` bit 7
+set, so the next `int 13h`'s wait returns at once and the BIOS polls for
+results mid-transfer. A reset clears the calibrated bits, so every retry
+recalibrates and is poisoned the same way: three strikes, status 80. Found as
+~800 ms of retries on B:'s first 8-sector FAT read. `bp_trace` on
+`int 13h`, IRQ6's `F000:EF57` and a read of `0040:003E` shows the flag already
+`83` on entry. With the patch the same read takes 345 ms on GLaBIOS and
+completes first time. The IBM ROM sees the same stale flag and survives it
+(it seeks first, and its result wait outlasts a revolution). What follows is
+the original account, whose three observations are all still true:
 
 That BIOS abandons a floppy operation after ~250 ms and resets the
 controller, three times in a row, after which the boot sector prints `DSK`
@@ -1169,6 +1209,7 @@ this tree), `glabios_pc`/`glabios_xt` are bundled with MartyPC.
 | `os8088_xt_vga_mda` / `os8088_xt_vga_herc` | a VGA beside an MDA / a Hercules — the other period two-card pair (docs/plans/completed/DUAL-DISPLAY-VGA.md). The apertures are disjoint (A0000+B8000 against B0000) so no patch is needed and block order decides nothing. The VGA is declared first, so it is MartyPC's card 0 |
 | `os8088_5150_sb` / `_sb_gla` | an AdLib **and** a Sound Blaster (DSP 2.01, 0x220, IRQ 7). `_sb_gla` is the one a container can run; not a disk instrument |
 | `os8088_5150_sbonly` | a DSP at 0x220 and **nothing at 0x388** — SPEC.md §51.3.1's jumpered-off-FM case; `_sb`/`_sbonly` are one pair with `make SNDSNIFF=sb` between them |
+| `os8088_5150_herc_mpu_720_gla` | a Hercules 5150 whose ONLY card is an **MPU-401** at 330h — patch 09's recording one, which keeps every byte it is sent for the debug server's `midi` command (`{"cmd": "midi", "reset": true}` answers `bytes` in hex, `us` per byte and `uart`). SOUND.DRV attaches on it alone (SPEC.md §34.13); boot `make miditest`'s disk, whose SYSTEM.CFG asks for the driver the kernel's boot sniff cannot see a reason to load |
 | `os8088_5150_sb_128k` / `_sb_256k` | `_sb` at 128 KB and 256 KB: SPEC.md §34.6's two claims are sized against the small one; Tracker cannot run at 128 KB at all, so the 256 KB one decides whether a MOD player's grants fit. IBM ROM, so neither boots in a container |
 | `os8088_5150_cga_128k` | **the 128 KB floor machine** — `kern_small`'s own (`make small && python3 tests/small128.py`). GLaBIOS |
 | `os8088_5150_cga_gla_256k` | 256 KB on GLaBIOS: the Weave family's floor (WEAVE-SPEC §1.4, `tests/weaveone.py`) |
@@ -1509,7 +1550,12 @@ It models the reset handshake, `0xE1` version, `0xF2` forced IRQ (how a
 driver *finds* its line), `0x40` time constant, `0x48` block length,
 `0x14`/`0x24` single-cycle and `0x1C`/`0x2C` auto-init in both directions,
 `0xD0`/`0xD4` pause and continue, `0xD1`/`0xD3` speaker and `0xDA`
-exit-at-the-block-boundary. Reading base+0xE acknowledges the 8-bit IRQ, and
+exit-at-the-block-boundary - and, since patch 06, **`0x7D` auto-init 4-bit
+ADPCM with a reference byte**, decoded with DOSBox's tables, which are the
+ones `tools/os88vid.py` encodes against (SPEC.md 98.1.1.1). That makes the
+Video Player's ADPCM4 path testable here (`tests/vidsound.py --audio
+adpcm4`), but only against itself: 86Box's card and a real one are the
+independent check of the tables. Reading base+0xE acknowledges the 8-bit IRQ, and
 a block completing while the previous interrupt is still unacknowledged is
 counted as a **missed ack** rather than hidden. It pulls bytes through the
 real 8237 (`do_dma_read_u8`, the FDC's call) and resamples through a carried

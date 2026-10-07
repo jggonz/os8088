@@ -1,97 +1,71 @@
 #!/usr/bin/env python3
-"""The Sound Blaster's DMA RING moves while the chip is idle (SPEC.md 66.6.4).
+"""The Sound Blaster driver's IMAGE moves while the card is idle (SPEC.md 66.6.3).
 
     make && make build/sndmove360.img && python3 tests/sndmove.py
 
-THE LAST PINNED CLAIM. §66.4.2 established that `MC_DMA` says where a
-claim may LAND and not whether it may move, and three of the four such claims
-in the tree have no bus master on them at all. The fourth does: the 8KB ring is
-programmed into the 8237's page and offset registers, and no relocation proc
-can rewrite those mid-transfer.
+SOUND.DRV is the only driver that hooks an interrupt vector, so its image is
+the one a compaction has to follow into the IVT (SPEC.md 66.6.3.1) - and an
+idle card is the state that has to be safe, because the vector stays hooked
+from the first stream open until `snd_unhook`.
 
-`[drv_wcnt]` is the kernel's handle on that and it is exact in the direction
-that matters - a stream lives only while its refill or drain task does
-(§34.5), the chip is armed only while a stream is open, so zero means nothing
-is armed. `mem_can_move` refuses any `MC_DMA` claim while it is non-zero.
-
-WHAT THE DRIVER HAD TO ADD IS THREE WORDS AND THEY WERE ALREADY WRITTEN.
-`sbl_ring_reloc` stores the new base and falls through into `sbl_dma_derive` -
-the tail of `sbl_dma_map`, factored rather than copied - which recomputes
-`[sbl_dmaoff]` and `[sbl_page]`, both a function of the base.
+THIS ROW USED TO BE ABOUT THE RING. An 8KB `MC_DMA` claim was taken at attach
+and held for the session, and the row moved it and checked `[sbl_seg]`,
+`[sbl_dmaoff]` and `[sbl_page]` followed. SPEC.md 34.5.2 retired that claim: a
+ring stream the card can reach is played straight out of the staging pool, and
+the double buffer is claimed per stream and freed with it. So an idle card
+holds NOTHING but its image, and assertion 1 says exactly that - a claim still
+owned by the driver after the stream closed is a leak. The refusal arm (the
+pool does not move while the card is playing out of it) needs a playing stream
+and a compaction under it, which is `tests/trackmove.py` checks 8 and 9.
 
 IT WANTS A SOUND BLASTER, which in a container means `os8088_5150_sb_gla`;
 MartyPC models one, so this is not on CLAUDE.md's QEMU list.
 
-THE ARENA IS BUILT OUT OF THE DRIVERS, and it has to be. Loaded at boot the
-image sits at the ceiling with the ring packed under it, which is where it
-belongs - so a correct compaction moves neither and a run would prove nothing.
-So the row drops the sound driver, mounts the RAM disk into the ceiling,
-brings sound back UNDERNEATH it and drops the RAM disk again, which is
-docs/plans/HEAP-UNPIN-PLAN.md 2.0's own defect performed on purpose:
+THE ARENA IS BUILT, and it has to be. Loaded at boot the image sits at the
+ceiling, which is where it belongs - so a correct compaction moves nothing and
+a run would prove nothing. So the row drops the sound driver, opens SBTEST
+into the ceiling it left (a package region is claimed top-down), brings sound
+back UNDERNEATH it and closes SBTEST again, which is
+docs/plans/HEAP-UNPIN-PLAN.md 2.0's own defect performed on purpose. It was
+the RAM disk until the 8KB ring stopped being claimed at attach: the image
+alone leaves a 7KB hole, and the RAM disk's 9KB image then lands lower:
 
-  [ low claims ][ filler's fill ][ 8K ][ ring ][ img ][ 21K hole ][ FILLER ]
+  [ low claims ][ filler's fill ][ img ][ hole ][ FILLER ]
 
-...and the ring and image are then the ONLY thing between two free runs, so a
-forcing ask bigger than either one and smaller than their sum can be answered
-only by moving them. NO SPACER PACKAGE: the first version opened Paint the way
-tests/regmove.py does, and Paint's region is claimed top-down, so it landed in
-that same ceiling run and walled the ring off from the low arena - measured,
-with a correct kernel moving nothing. And the filler is pressed with 'S',
-which asks WITHOUT filling first: its fill is first fit ascending, so it lands
-in that hole and pins it shut against the very block the ask needs moved.
+...and a forcing ask can then be answered only by moving the image. The
+filler is pressed with 'S', which asks WITHOUT filling first: its fill is first
+fit ascending, so it would land in that hole and pin it shut.
 
-SIX ASSERTIONS:
+FIVE ASSERTIONS:
 
-  1. the ring is there at all - one claim, owned by the driver's own segment,
-     carrying a non-zero `MC_DMA` head;
-  2. it is DECLARED movable - `MC_RLOC` out of the kernel's table, because a
-     declaration the owner fence refused is silent from inside the driver;
-  3. `[drv_wcnt]` is 0, so the chip is idle and the kernel may act on it - this
-     is stated rather than assumed, because if a worker were live the refusal
-     below would be the right answer and assertion 4 would prove nothing;
-  4. THE RING MOVED, and 4b the IMAGE under it moved too - which is the IVT
-     patch and `drv_tab` following, since the ring cannot outrun the image
-     whose segment owns it;
-  5. ...and `[sbl_seg]`, `[sbl_dmaoff]` and `[sbl_page]` inside the image
-     agree with the base the kernel granted. THIS IS THE ONE THAT TESTS THE
-     DRIVER: without `sbl_ring_reloc` every check above still passes and the
-     next Play programs the 8237 from a stale page. Measured, with the proc
-     storing the old base: 1 to 4b green, 5 red;
+  1. an idle card holds no claim but its image - the lazy buffer and the pool
+     both went with the stream and the app that held them (SPEC.md 34.5.2);
+  3. `[drv_wcnt]` is 0 - no worker, so nothing pins the image;
+  4b. THE IMAGE MOVED, so `drv_tab` followed;
   5b. ...and no interrupt vector still names the old image, with as many
-     naming the new one as named the old. That is the kernel's half of the
-     same silence - a vector nobody patched is fine until the card raises its
-     IRQ, and then the CPU is running bytes the compactor has re-let;
+     naming the new one as named the old. A vector nobody patched is fine
+     until the card raises its IRQ, and then the CPU is running bytes the
+     compactor has re-let;
   6. the machine still draws afterwards.
 
+The numbering keeps the old row's, so a log from either reads the same.
+
 AND IT HAS TO EARN ITS VECTOR. SOUND.DRV hooks its IRQ at the FIRST STREAM
-OPEN and not at attach (`sbl_f_irqdisc`), and it stays hooked until
-`snd_unhook` - so on a machine that has never made a sound nothing points into
-the image and 5b would be vacuous. `SBTEST.O88` rides on the disk to open and
-close one stream, AFTER the driver shuffle, an unmount being what unhooks.
+OPEN and not at attach (`sbl_f_irqdisc`) - so on a machine that has never made
+a sound nothing points into the image and 5b would be vacuous. `SBTEST.O88`
+rides on the disk to open and close one stream, AFTER the driver shuffle, an
+unmount being what unhooks.
 
-WHAT FORCES THE MOVE CHANGED UNDER THIS ROW, and the row is written for the
-new one. It used to be the 'S' presses: the filler's fill took the low arena
-down, the ceiling hole stayed open, and the ask was what packed the ring and
-image up into it. Since SPEC.md 66.4.3.1 the FILL itself is the forcing event -
-`fl_fill` claims `OSAPI_MEM_AVAIL`, `mem_avail` plans BOTH passes now, and
-`mem_claim` delivers both - so the pack has already happened by the time the
-first key is pressed. That is the kernel telling the truth rather than a
-defect, and it cost this row one line: `vec0` was read after the filler
-launched, which named a segment nothing pointed into any more, and 5b reported
-"nothing pointed into the image, so this proves nothing" while every other
-check passed. It is read beside `sndseg` now, which was the pre-move base all
-along. RE-READING `sndseg` INSTEAD is the fix that looks right and is not - it
-fixes 5b and moves the failure to 4b, because the image has then already
-reached its packed position and does not move again.
-
-WHAT IT DOES NOT COVER, said plainly: the refusal arm - that the ring does NOT
-move while a stream is playing - needs a playing stream, which is Tracker's
-harness (`tests/trkrate.py`) and not this one's.
+WHAT FORCES THE MOVE is the filler's own fill: `fl_fill` claims
+`OSAPI_MEM_AVAIL`, `mem_avail` plans both passes (SPEC.md 66.4.3.1) and
+`mem_claim` delivers both, so the pack has usually happened before the first
+key. That is why `vec0` is read before the filler launches, paired with
+`sndseg`, the pre-move base - read after, it names a segment nothing points
+into any more and 5b reports a pass that proves nothing.
 """
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -104,7 +78,6 @@ from os88mouse import Mouse                             # noqa: E402
 import dispcp                                           # noqa: E402
 import heaphi                                           # noqa: E402
 import sheetmove                                        # noqa: E402
-import trackmove                                        # noqa: E402
 
 u16, claims, uncovered = sheetmove.u16, sheetmove.claims, sheetmove.uncovered
 DISK = "build/sndmove360.img"
@@ -154,57 +127,73 @@ def main():
               % seg(SND_ROW))
 
         # ...AND THAT IS WHY THE ROW HAS TO REBUILD THE ARENA. Loaded at boot,
-        # the image sits at the ceiling with the ring packed immediately under
-        # it: nothing is out of place, so a compaction correctly moves neither
-        # and the run would prove nothing. So put something ABOVE them - drop
-        # the sound driver, mount the RAM disk into the ceiling, bring sound
-        # back underneath it, then drop the RAM disk again:
+        # the image sits at the ceiling: nothing is out of place, so a
+        # compaction correctly moves nothing and the run would prove nothing.
+        # So put something ABOVE it - drop the sound driver, open SBTEST into
+        # the ceiling it left (a package REGION is claimed top-down), bring
+        # sound back underneath, then close SBTEST:
         #
-        #   ceiling [ SND img ][ ring ] ...........   as it boots
-        #   ceiling [ RAMDISK ][ SND img ][ ring ]    after the shuffle
-        #   ceiling [  hole   ][ SND img ][ ring ]    ...and the hole to close
-        mo.menu(8, 8, 8, 40)                    # chip menu -> Control Panel
-        heaphi.quiet(m)
-        cp = [w for w in heaphi.wins(m) if w[3] >= 280 and w[4] >= 100]
-        if not cp:
-            print("FAIL: no Control Panel")
-            return 1
-        cp = cp[-1]
-        x0, y0 = cp[1] + 1, cp[2] + 18
-        mo.click(x0 + 40,
-                 y0 + heaphi.CP_I0Y + heaphi.CP_IDRV * heaphi.CP_IROWH + 7)
-        heaphi.quiet(m)
+        #   ceiling [ SND img ] ...........   as it boots
+        #   ceiling [ SBTEST  ][ SND img ]    after the shuffle
+        #   ceiling [  hole   ][ SND img ]    ...and the hole to close
+        #
+        # It was the RAM disk, and that stopped working the day the driver's
+        # 8KB ring stopped being claimed at attach (SPEC.md 34.5.2): the image
+        # alone leaves a 7KB hole, the RAM disk's image is 9KB and lands lower,
+        # and sound then goes straight back to the ceiling it came from.
+        # SBTEST fits, and it is on the disk anyway to hook the vector.
+        def panel():
+            mo.menu(8, 8, 8, 40)                # chip menu -> Control Panel
+            heaphi.quiet(m)
+            cps = [w for w in heaphi.wins(m) if w[3] >= 280 and w[4] >= 100]
+            if not cps:
+                print("FAIL: no Control Panel")
+                raise SystemExit(1)
+            cp = cps[-1]
+            x0, y0 = cp[1] + 1, cp[2] + 18
+            mo.click(x0 + 40,
+                     y0 + heaphi.CP_I0Y + heaphi.CP_IDRV * heaphi.CP_IROWH + 7)
+            heaphi.quiet(m)
+            return cp, x0, y0
 
         def drvrow(r):
+            cp, x0, y0 = panel()
+            was = seg(r)
             mo.click(x0 + heaphi.CP_RX + 40,
                      y0 + heaphi.CP_DBY1 + r * heaphi.CP_DROWH
                      + heaphi.CP_DROWH // 2)
-            time.sleep(8)
+            try:                                # a load is a floppy read,
+                M.until(m, lambda _: seg(r) != was,     # which a screen
+                        "driver row %d to (un)mount" % r,   # settle takes
+                        poll=0.25, limit=60)                # for "done"
+            except M.MartyError:
+                pass                            # ...judged by the caller
+            heaphi.quiet(m)
+            try:
+                mo.click(cp[1] + 8, cp[2] + 9)  # close the panel: CTRL.DRV is
+            except M.MartyError:                # a module and would be a wall
+                # A pointer that stops taking packets here has been seen once
+                # in a soak (right after the re-mount) and not in 14 runs
+                # since, so say what the machine was doing rather than only
+                # that the arrow did not move: an IMR with bit 4 set is the
+                # serial mouse's IRQ left masked by the driver's attach.
+                st = m.status()
+                print("  pointer stuck: %04X:%04X ui_idle=%s imr=%02X "
+                      "lock=%d evq=%d btn=%d ticks=%d xy=%s sound at %04x"
+                      % (st["cs"], st["ip"], M.ui_idle(m), m.inb(0x21),
+                         m.read(S("gfx_lock_flag"), 1)[0],
+                         m.read(S("evq_count"), 1)[0],
+                         m.read(S("mouse_btn"), 1)[0], M._ktick(m),
+                         mo.where(), seg(r)), flush=True)
+                raise
             heaphi.quiet(m)
 
         drvrow(SND_ROW)                         # unmount sound
         if seg(SND_ROW):
             print("FAIL: the sound driver did not unmount")
             return 1
-        drvrow(heaphi.RD_ROW)                   # the RAM disk takes the ceiling
-        if not seg(heaphi.RD_ROW):
-            print("FAIL: the RAM disk did not mount")
-            return 1
-        drvrow(SND_ROW)                         # ...and sound comes back under
-        sndseg = seg(SND_ROW)
-        if not sndseg:
-            print("FAIL: the sound driver did not come back")
-            return 1
-        drvrow(heaphi.RD_ROW)                   # ...and the hole opens above it
-        if seg(heaphi.RD_ROW):
-            print("FAIL: the RAM disk did not unmount, so no hole opened")
-            return 1
-        mo.click(cp[1] + 8, cp[2] + 9)          # close the panel: CTRL.DRV is
-        heaphi.quiet(m)                         # a module and would be a wall
-        print("re-mounted under the RAM disk, which is now gone: sound at %04x"
-              % sndseg)
 
-        # --- force ------------------------------------------------------------
+        # --- SBTEST into the ceiling -----------------------------------------
         dispcp.open_drive(m, mo, S, M.settle, "B")
         dslot = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, dslot)
@@ -215,7 +204,12 @@ def main():
         def open_named(name, secs):
             before = set(w.i for w in os88geom.windows(m, S) if w.visible)
             dispcp.open_named(m, mo, S, M.settle, *disk, name=name)
-            time.sleep(secs)
+            try:
+                M.until(m, lambda _: any(w.visible and w.i not in before
+                                         for w in os88geom.windows(m, S)),
+                        "%s's window" % name, poll=0.25, limit=secs * 10)
+            except M.MartyError:
+                pass                            # ...reported just below
             M.settle(m)
             new = [w for w in os88geom.windows(m, S)
                    if w.visible and w.i not in before]
@@ -224,6 +218,13 @@ def main():
                 raise SystemExit(1)
             return new[0]
 
+        sbw = open_named("SBTEST.O88", 8)
+        drvrow(SND_ROW)                         # ...and sound comes back under
+        if not seg(SND_ROW):
+            print("FAIL: the sound driver did not come back")
+            return 1
+        print("re-mounted under SBTEST: sound at %04x" % seg(SND_ROW))
+
         # --- ONE STREAM, OPENED AND CLOSED (for assertion 5b) ----------------
         # SOUND.DRV hooks its IRQ at the FIRST STREAM OPEN and not at attach
         # (sbl_f_irqdisc), and it stays hooked until snd_unhook - so a machine
@@ -231,15 +232,31 @@ def main():
         # vector check below would be vacuous on it. This is the state the IVT
         # patch actually exists for: a card that has played and is now idle.
         # It has to come AFTER the driver shuffle, because an unmount unhooks.
-        sbw = open_named("SBTEST.O88", 8)
+        def snd_held():
+            """Heap claims the sound driver owns - its ring, its grant."""
+            MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
+            raw = m.read(S("mem_tab"), MEM_MAX * MC_SIZE)
+            return [i for i in range(MEM_MAX)
+                    if u16(raw, i * MC_SIZE) and
+                    u16(raw, i * MC_SIZE + 4) == seg(SND_ROW)]
+
         mo.click(sbw.x + sbw.w // 2, sbw.y + sbw.h - 20)     # open the stream
-        time.sleep(6)
-        M.settle(m)
+        try:        # the open hooks the card's vector (sbl_f_irqdisc)...
+            M.until(m, lambda _: ivt_names(seg(SND_ROW)),
+                    "the stream to open", poll=0.1, limit=30)
+        except M.MartyError:
+            pass                        # ...5b below says so
+        M.guest_sleep(m, 2.5)           # ...and SBTEST's tone is 2 s: played
         mo.click(sbw.x + sbw.w // 2, sbw.y + sbw.h - 20)     # ...and close it
-        time.sleep(4)
-        M.settle(m)
-        mo.click(sbw.x + 8, sbw.y + 9)                       # ...and the app
-        M.settle(m)
+        try:        # the close frees the grant and the ring, and the stream's
+            M.until(m, lambda _: not snd_held()          # task goes (1 and 3
+                    and not m.read(S("drv_wcnt"), 1)[0],  # below read them;
+                    "the stream to close", poll=0.1,     # an idle box's
+                    guest=4 * M.GUEST_PACE)              # pause is the bound)
+        except M.MartyError:
+            pass
+        mo.click(sbw.x + 8, sbw.y + 9)                       # ...and the app:
+        M.settle(m)                                          # the hole opens
         sndseg = seg(SND_ROW)                   # a claim of sbtest's could
         if not sndseg:                          # have moved the image already
             print("FAIL: the sound driver is gone after SBTEST")
@@ -265,39 +282,32 @@ def main():
               % (len(vec0), sndseg))
 
         bad = 0
-        # sheetmove.claims() gives (base, para, own, rloc) and the DMA head is
-        # what tells the ring from the staging pool, so the record is read here
-        # rather than through it.
+        # --- 1: AN IDLE CARD HOLDS NOTHING BUT ITS IMAGE (SPEC.md 34.5.2) ----
+        # This assertion used to be "the ring is there": an 8KB MC_DMA claim
+        # taken at attach and held for the session, and the row moved it. The
+        # ring is claimed per double-buffered stream now and freed with it, and
+        # a ring stream the card can reach is played straight out of the pool -
+        # so a card that has played and gone quiet holds NO claim at all, and
+        # a stray one here is the lazy buffer or the pool leaking past a close.
         MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
-        MC_DMA = os88geom.MC_DMA
         raw = m.read(S("mem_tab"), MEM_MAX * MC_SIZE)
-        rings = []
+        held = []
         for i in range(MEM_MAX):
             r = raw[i * MC_SIZE:(i + 1) * MC_SIZE]
             base, para, own = u16(r, 0), u16(r, 2), u16(r, 4)
-            if base and own == sndseg and u16(r, MC_DMA):
-                rings.append((base, para, u16(r, 8), u16(r, MC_DMA)))
-        print("  1 the ring is there        %s"
-              % (", ".join("%04x %dKB dma-head %d para" % (b, p // 64, d)
-                           for b, p, _, d in rings) if rings else
-                 "NO claim owned by %04x carries an MC_DMA head" % sndseg))
-        bad += not rings
-        if not rings:
-            print("VERDICT: 1 PROBLEM(S)")
-            return 1
-        base0, _, rloc, _ = rings[0]
-
-        print("  2 declared movable         %s"
-              % ("MC_RLOC=%04x" % rloc if rloc else
-                 "NO  <-- OSAPI_MEM_MOVABLE was refused and the driver "
-                 "cannot tell (SPEC.md 66.5.6.2)"))
-        bad += not rloc
+            if base and own == sndseg:
+                held.append((base, para))
+        print("  1 idle, nothing held       %s"
+              % ("OK" if not held else
+                 ", ".join("%04x %dKB" % (b_, p_ // 64) for b_, p_ in held)
+                 + "  <-- still owned by the driver after the stream closed"))
+        bad += bool(held)
 
         wcnt = m.read(S("drv_wcnt"), 1)[0]
         print("  3 the chip is idle         %s"
               % ("drv_wcnt=0" if wcnt == 0 else
-                 "drv_wcnt=%d <-- a stream is open, so a REFUSAL is the right "
-                 "answer and assertion 4 would prove nothing" % wcnt))
+                 "drv_wcnt=%d <-- a worker is alive, so the image is PINNED "
+                 "and assertion 4b would prove nothing" % wcnt))
         bad += wcnt != 0
 
         # NO SPACER PACKAGE, and that is the correction rather than an
@@ -321,20 +331,6 @@ def main():
             return 1
         mo.click(*pt)
         M.settle(m)
-
-        # THE RING IS FOUND BY THE IMAGE'S CURRENT SEGMENT, never by the one
-        # it booted at, and that is a real property rather than a convenience:
-        # a claim's MC_OWN is the holder's segment, so when the image moves
-        # `mem_region_reloc` rewrites the owner of every claim it held - the
-        # ring included. Looking it up by the boot segment reported the ring
-        # GONE on the run that first moved it.
-        def ringbase(own):
-            raw = m.read(S("mem_tab"), MEM_MAX * MC_SIZE)
-            for i in range(MEM_MAX):
-                r = raw[i * MC_SIZE:(i + 1) * MC_SIZE]
-                if u16(r, 0) and u16(r, 4) == own and u16(r, MC_DMA):
-                    return u16(r, 0)
-            return None
 
         def dump(tag):
             base = u16(m.read(S("mem_base"), 2))
@@ -368,54 +364,25 @@ def main():
             # lowest run big enough, so a fill would seal it - pinned, and
             # against the very block the ask needs moved (tests/filler).
             m.key("KeyS")
-            time.sleep(6)
+            try:
+                M.until(m, lambda _: seg(SND_ROW) not in (sndseg, 0),
+                        "the sound image to move", poll=0.25,
+                        guest=6 * M.GUEST_PACE)
+            except M.MartyError:
+                pass                            # ...ask again
             M.settle(m)
-            if ringbase(seg(SND_ROW)) not in (base0, None):
+            if seg(SND_ROW) not in (sndseg, 0):
                 break
         dump("after")
 
         img = seg(SND_ROW)
-        now = ringbase(img)
-        moved = now is not None and now != base0
-        print("  4 the ring MOVED           %s"
-              % ("%04x -> %04x" % (base0, now) if moved else
-                 "NO (%s) <-- the run proves nothing"
-                 % ("%04x" % now if now else "no claim owned by %04x carries "
-                    "an MC_DMA head" % img)))
-        bad += not moved
-
         imoved = img and img != sndseg
-        print("  4b ...and so did the IMAGE %s"
+        print("  4b the IMAGE moved         %s"
               % ("%04x -> %04x, so the IVT patch ran and drv_tab followed"
                  % (sndseg, img) if imoved else
-                 "NO (%s) <-- the ring cannot outrun the image it sits under"
+                 "NO (%s) <-- the run proves nothing"
                  % ("%04x" % img if img else "GONE")))
         bad += not imoved
-
-        # --- 5: THE DRIVER'S OWN THREE WORDS --------------------------------
-        # The kernel moving the bytes is half the job; the other half is
-        # `sbl_ring_reloc`, and nothing above would notice its absence - the
-        # ring would sit at its new base with [sbl_seg] naming the old one,
-        # silent until the next Play programmed the 8237 with a stale page and
-        # offset and the card DMA'd out of somebody else's claim. So the three
-        # words are read out of the image and checked against the base the
-        # kernel actually granted, by the same arithmetic sbl_dma_derive does.
-        D = trackmove.pkg_syms("drivers/sound/sound.asm",
-                               ("drivers/sound/", "drivers/", "apps/"))
-
-        def dw(n):
-            return u16(m.read(img * 16 + D[n], 2))
-
-        want = (now, (now & 0x0FFF) << 4, now >> 12) if now else None
-        got = (dw("sbl_seg"), dw("sbl_dmaoff"),
-               m.read(img * 16 + D["sbl_page"], 1)[0]) if img else None
-        print("  5 the 8237's words followed %s"
-              % ("sbl_seg=%04x dmaoff=%04x page=%02x" % got if got == want else
-                 "STALE: %s, want %s  <-- sbl_ring_reloc did not run, and the "
-                 "next Play would DMA out of somebody else's claim"
-                 % (["%04x" % v for v in got] if got else got,
-                    ["%04x" % v for v in want] if want else want)))
-        bad += got != want
 
         # --- 5b: THE INTERRUPT VECTOR TABLE ---------------------------------
         # The fourth address space, and the only one outside the kernel. It is

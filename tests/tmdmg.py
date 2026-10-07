@@ -48,7 +48,7 @@ THREE THINGS THIS GATE HAS TO GET RIGHT, each of which cost a run:
   - so the saving here is the Y half of the band, the rows below the cover;
   the X half pays where the damage really is a vertical strip, which is a
   window closing or minimizing off one side.
-* **`font_run_x` reached through the X cell at slot 0x0258.** That cell goes
+* **`font_run_x` reached through the X cell at slot 0x01E5.** That cell goes
   straight to `font_run_x`, so a breakpoint on the kernel's own
   `font_run` counts 2 calls for a whole repaint of this window; and the
   return address - inside SPEC.md 20.3's shared `api_x` body - is what

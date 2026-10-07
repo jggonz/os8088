@@ -18,7 +18,7 @@ means.
 
 `Cells` is a breakpoint pump: it services `font_run_x` and `gfx_fill`,
 attributes each to the package or the kernel by its RETURN ADDRESS (slot
-0x0258 is an X cell and slot 0x0038 a plain one, so the kernel's own drawing
+0x01E5 (font_run) is an X cell and slot 0x0038 a plain one, so the kernel's own drawing
 is told apart from an app's), and counts the cells the region would let
 through. Drive the mouse with its own `to`/`edge`/`click`/`drag`, not
 os88mouse's: those wait on the guest's published `mouse_btn`, and a guest

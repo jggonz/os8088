@@ -73,19 +73,28 @@ CMD_SEP     equ 4               ; the RULE above Hibernate. It is a MENU_DIS
 %ifdef KERN_BIG
 CMD_HIBER   equ 5               ; Hibernate... (SPEC.md 87), kern_big only:
 CMD_REBOOT  equ 6               ; kern_small's menu has no such item and its
-CMD_CLOSE   equ 7               ; ids stay one lower
-CMD_TIMER   equ 8               ; --- Locator: Builtins (SPEC.md 12.3.1) ---
-CMD_BOUNCE  equ 9
-CMD_FILES   equ 10
+CMD_SHUTDOWN equ 7
+CMD_CLOSE   equ 8               ; ids stay one lower
+%ifdef OS88_SHORTCUTS
+CMD_SCDEL   equ 9               ; Locator: File > Remove Shortcut (SPEC.md 26.8.5)
+CMD_TIMER   equ 10              ; --- Locator: Builtins (SPEC.md 12.3.1) ---
+CMD_BOUNCE  equ 11
+CMD_FILES   equ 12
+%else
+CMD_TIMER   equ 9               ; --- Locator: Builtins (SPEC.md 12.3.1) ---
+CMD_BOUNCE  equ 10
+CMD_FILES   equ 11
+%endif
 %else
 CMD_REBOOT  equ 5
-CMD_CLOSE   equ 6               ; --- Locator: File ---
+CMD_SHUTDOWN equ 6
+CMD_CLOSE   equ 7               ; --- Locator: File ---
                                 ; SPEC.md 14.6: no Builtins menu here, so no
                                 ; CMD_TIMER and no CMD_BOUNCE - and CMD_FILES
                                 ; survives only because ui_cmd still needs the
                                 ; id: a Disk window is opened from the desktop
                                 ; zone (SPEC.md 26.1), which posts it
-CMD_FILES   equ 7
+CMD_FILES   equ 8
 %endif
 
 ; --- app menu set layout (SPEC.md 12.2; mirrored in apps/os88api.inc) --------
@@ -293,8 +302,9 @@ menu_init:
     push ax
     push bx
     push dx
-    mov byte [menu_bovr], 1     ; .bss is not zeroed at boot (-f bin), and the
-    mov byte [menu_bdirty], 1   ; furniture has never been drawn: menu_force's
+    mov word [menu_bdirty], 0x0101 ; [menu_bovr] too. .bss is not zeroed at
+                                ; boot (-f bin), and the
+                                ; furniture has never been drawn: menu_force's
                                 ; whole body, and the second store is the one
                                 ; this routine used to make before calling it
     xor bx, bx
@@ -325,8 +335,7 @@ section .text
 ; time it finished.
 ; -----------------------------------------------------------------------------
 menu_force:
-    mov byte [menu_bovr], 1
-    mov byte [menu_bdirty], 1
+    mov word [menu_bdirty], 0x0101  ; [menu_bovr] too: adjacent, asserted
     ret
 
 ; -----------------------------------------------------------------------------
@@ -392,7 +401,9 @@ menu_activate:
     je .same
     mov [menu_win], bx
     mov byte [fm_fchk], 1       ; the active application changed, so a Disk
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13): tested
+                                ; zero/non-zero and swept every tick, so a
+                                ; count is as good as a 1
                                 ; window may have just gained the focus with
                                 ; a refresh owing (SPEC.md 22.8). This is the
                                 ; catch-all rather than the main path -
@@ -401,6 +412,10 @@ menu_activate:
                                 ; focus change passes, including the one no
                                 ; raise reaches: losing the front window
                                 ; promotes the window under it (menu_check)
+    or bx, bx                   ; ...and for the same reason the DESKTOP'S
+    jz .loc                     ; selection is let go here when a window
+    call COLD_SEG:desk_unsel_x  ; takes the bar (SPEC.md 26.9.5)
+.loc:
     call menu_relayout
     stc
     ret
@@ -409,7 +424,7 @@ menu_activate:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_owner - who is the ACTIVE APPLICATION? (API 0x02B8, SPEC.md 12/12.6)
+; OSAPI_MENU_OWNER - who is the ACTIVE APPLICATION? (SPEC.md 12/12.6)
 ; in:  nothing
 ; out: BX = the window owning the menu bar, 0 = Locator. Every other
 ;      register, and FLAGS, preserved.
@@ -424,13 +439,13 @@ menu_activate:
 ; frame, exactly like wm_top. It is a plain word read: [menu_win] is written
 ; only by menu_activate on the UI task, and the 8086 recognises interrupts
 ; only at instruction boundaries, so it cannot be torn.
+;
+; AN INLINE CELL (SPEC.md 20.3): the cell is `mov bx, [cs:menu_win] / retf`
+; and there is no body - which is also what makes the per-frame poll cheap.
 ; -----------------------------------------------------------------------------
-menu_owner:
-    mov bx, [menu_win]
-    ret
 
 ; -----------------------------------------------------------------------------
-; menu_win_set - attach an app menu set to a window (API 0x0148, SPEC 12.2)
+; menu_win_set - attach an app menu set to a window (API 0x011E, SPEC 12.2)
 ; in:  BX = window ptr, SI = menu set ptr (0 = no menus of its own)
 ; out: nothing (all registers preserved, FLAGS INCLUDED)
 ;
@@ -514,13 +529,10 @@ menu_relayout:
     mov bx, [menu_win]
     or bx, bx
     jnz .app
-    mov word [menu_seg], 0      ; no window owns the bar: Locator does, and
-    push cs                     ; its set is kernel data
-    pop es
-    mov si, menu_loc_set
-    mov [menu_set], si
-    mov si, [es:si + AM_NAME]
-    jmp .name_done
+    mov si, menu_loc_set        ; no window owns the bar: Locator does, and
+    mov [menu_set], si          ; its set is kernel data - so its name is
+    mov si, [cs:si + AM_NAME]   ; read through CS and .kseg below makes the
+    jmp short .kseg             ; label's segment ours (it is never 0)
 
 .app:
     push di                     ; the owner's segment, once, for every read
@@ -545,12 +557,8 @@ menu_relayout:
     call inst_win_owner         ; DI = owning instance record, 0 = unowned
     or di, di
     jz .from_title
-    mov si, di
-    add si, I_NAME              ; the 16-byte inline name field - KERNEL data,
-    mov word [menu_seg], 0      ; so the label's segment is ours after all
-    push cs
-    pop es
-    jmp .name_done
+    lea si, [di + I_NAME]       ; the 16-byte inline name field - KERNEL data,
+    jmp short .kseg             ; so the label's segment is ours after all
 .from_title:
     mov si, [bx + W_TITLE]
 
@@ -558,22 +566,26 @@ menu_relayout:
     or si, si                   ; a nameless window still gets a label
     jnz .have_name
     mov si, menu_loc_name
-    mov word [menu_seg], 0
-    push cs
+.kseg:                          ; ...the ONE place the three kernel-data
+    mov word [menu_seg], 0      ; names set the segment (kernel size pass 9:
+    push cs                     ; it was written out three times)
     pop es
 .have_name:
     mov [menu_namep], si
 
     ; --- cell 0: the System menu, fixed in every application ---------------
-    mov di, menu_bar
-    mov word [ss:di + MB_TITLE], 0 ; 0 = draw the logo glyph
-    mov word [ss:di + MB_ITEMS], menu_items_logo
-    mov word [ss:di + MB_NITEM], MENU_LOGO_N
-    mov word [ss:di + MB_XL], 0
-    mov word [ss:di + MB_XR], MENU_SYS_XR
-    mov word [ss:di + MB_SEG], 0   ; the System menu is the kernel's, always
+    push es                     ; ES:SI is the name, wanted below
+    push si
+    push ss                     ; menu_bar is .lowbss, so SS - and the six
+    pop es                      ; words are menu_cell0's, a fixed record in
+    mov si, menu_cell0          ; .text: one rep movsw where six immediate
+    mov di, menu_bar            ; stores through an SS override were 41
+    mov cx, MB_ENTSZ / 2        ; bytes with the `add di` after them; DI
+    cld                         ; ends one entry on, which is the add
+    rep movsw                   ; (kernel size pass 9)
+    pop si
+    pop es
     mov word [menu_nbar], 1
-    add di, MB_ENTSZ
 
     ; --- the app's own menus, left to right after the name label -----------
     call font_width_x           ; SI = the name at ES:SI; AX = its width
@@ -637,13 +649,7 @@ menu_relayout:
 .done:
     call menu_ab_cell           ; the NAME cell goes LAST (DI = next slot)
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_di
 
 ; -----------------------------------------------------------------------------
 ; menu_ab_cell - turn the app-name label into a bar cell (SPEC.md 12.7)
@@ -739,10 +745,7 @@ menu_ab_cell:
     pop es
     pop di
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_cx
 
 ; -----------------------------------------------------------------------------
 ; menu_ab_cat - append a NUL string to a buffer (internal to menu_ab_cell)
@@ -776,7 +779,7 @@ menu_ab_cat:
 ; -----------------------------------------------------------------------------
 ; menu_es - point ES at the segment the active menu set's data lives in
 ; in:  nothing ([menu_seg] is the answer, 0 = the kernel's own)
-; out: ES; nothing else (flags untouched)
+; out: ES; nothing else (flags clobbered)
 ;
 ; Every string and every word of an app menu set is an offset in the OWNING
 ; package's segment (SPEC.md 12.2/20.1). One window owns the bar at a time,
@@ -784,27 +787,27 @@ menu_ab_cat:
 ; menu_bar, and there does not need to be.
 ; -----------------------------------------------------------------------------
 menu_es:
-    push cs
-    pop es
-    cmp word [menu_seg], 0
-    je .out
-    mov es, [menu_seg]
-.out:
+    push ax
+    mov ax, [menu_seg]
+.seg:                           ; ...menu_des joins here with its own word
+    or ax, ax
+    jnz .set
+    mov ax, cs                  ; 0 = the kernel's own (.text: CS is it)
+.set:
+    mov es, ax
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; menu_des - point ES at the segment the DROPPED menu's items live in
 ; in:  nothing ([menu_dseg], set by menu_track from the cell / menu_popup)
-; out: ES; nothing else (flags untouched)
+; out: ES; nothing else (flags clobbered)
 ; -----------------------------------------------------------------------------
 menu_des:
-    push cs
-    pop es
-    cmp word [menu_dseg], 0
-    je .out
-    mov es, [menu_dseg]
-.out:
-    ret
+    push ax
+    mov ax, [menu_dseg]
+    jmp short menu_es.seg       ; one body for the two words (kernel size
+                                ; pass 9, -8)
 
 ; -----------------------------------------------------------------------------
 ; menu_draw_bar - bring the menu bar up to date: the white field, the black
@@ -933,11 +936,7 @@ menu_furniture:
     mov byte [menu_bdirty], 1
 
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_dx
 
 ; -----------------------------------------------------------------------------
 ; menu_bar_text - the menus segment: compose it, diff it, emit what moved
@@ -1123,13 +1122,7 @@ menu_bar_text:
     jbe .piece
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_di
 
 ; -----------------------------------------------------------------------------
 ; menu_bemit - letter cells BX..DX of the menus segment in one font_run
@@ -1665,13 +1658,7 @@ menu_draw_clock:
     call thm_ink                   ; the documented parting state, on both
                                    ; paths - font_run leaves its own
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_di
 
 ; -----------------------------------------------------------------------------
 ; menu_track - run one full BAR menu interaction. Finds the title under the
@@ -1737,19 +1724,9 @@ menu_track:
     call menu_widest            ; AX = widest item text, px (BX/CX in)
     add ax, 16
     mov bx, [ss:si + MB_XL]        ; the pull-down hangs off the title's left
-    mov [menu_x1], bx
-    add bx, ax
-    dec bx
-    mov [menu_x2], bx           ; x2 = x1 + width - 1
-    mov word [menu_y1], MBAR_H  ; it always hangs from the bar
-    mov ax, [menu_cnt]
-    mov cl, 4
-    shl ax, cl                  ; count * 16
-    add ax, MBAR_H + 1          ; + top frame row; bottom frame is y2 itself
-    mov [menu_y2], ax
-    mov byte [menu_btn], 1      ; the LEFT button keeps a bar menu open
-
-    call menu_drop              ; AX = item index, or 0xFFFF
+    mov dx, MBAR_H              ; it always hangs from the bar
+    mov cl, 1                   ; the LEFT button keeps a bar menu open
+    call menu_pull              ; AX = item index, or 0xFFFF
     call menu_title_xor         ; un-highlight the title (self-inverting)
     cmp ax, 0xFFFF
     je .out
@@ -1764,8 +1741,8 @@ menu_track:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_popup - drop a menu anywhere on screen and track it under the right
-;              button (SPEC.md 12.4)
+; menu_popup - drop a menu anywhere on screen and track it while a button
+;              is held (SPEC.md 12.4)
 ; in:  CX = anchor x, DX = anchor y (absolute screen), BX = array of near
 ;      pointers to NUL item strings, AX = item count. Caller holds the gfx
 ;      lock.
@@ -1817,35 +1794,35 @@ menu_popup:
     jns .x_lo                   ; than the screen cannot happen, but the
     xor bx, bx                  ; floor costs 4 bytes and removes the doubt)
 .x_lo:
-    mov [menu_x1], bx
-    add bx, ax
-    dec bx
-    mov [menu_x2], bx
 
     ; --- height, and the upward shift off the bottom edge --------------------
+    mov si, ax                  ; the width, across the height's arithmetic
     mov ax, [menu_cnt]
     mov cl, 4
     shl ax, cl                  ; count * 16 ...
     inc ax                      ; ... + the top and bottom frame rows
     inc ax
-    mov bx, dx                  ; BX = candidate y1 (DX = anchor y)
-    mov cx, [vid_ph]
+    mov cx, [vid_ph]            ; DX = candidate y1 (the anchor y)
     sub cx, ax                  ; CX = lowest y1 that still fits
-    cmp bx, cx
+    cmp dx, cx
     jle .y_hi
-    mov bx, cx
+    mov dx, cx
 .y_hi:
-    cmp bx, MBAR_H              ; never over the menu bar: it is the one
+    cmp dx, MBAR_H              ; never over the menu bar: it is the one
     jge .y_lo                   ; surface no window may cover either
-    mov bx, MBAR_H
+    mov dx, MBAR_H
 .y_lo:
-    mov [menu_y1], bx
-    add bx, ax
-    dec bx
-    mov [menu_y2], bx
+    xchg ax, si                 ; AX = the width again
 
-    mov byte [menu_btn], 2      ; the RIGHT button keeps a popup open
-    call menu_drop              ; AX = item index, or 0xFFFF
+    mov cl, 3                   ; EITHER button keeps a popup open. It was
+                                ; 2, the right, when every popup was a
+                                ; right-click's; the Floppy page's drop-downs
+                                ; (SPEC.md 31.14) open on a LEFT press held
+                                ; exactly as a bar menu's is, and 3 serves
+                                ; both for the same five bytes. A right-click
+                                ; menu is unchanged unless the left is ALSO
+                                ; held, when it stays up until both are let go
+    call menu_pull              ; AX = item index, or 0xFFFF
     cmp ax, 0xFFFF
     je .none
     clc
@@ -1854,12 +1831,8 @@ menu_popup:
     mov ax, 0xFFFF
     stc
 .out:
-    pop di                      ; pop does not touch the flags
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp short menu_track.out    ; pop does not touch the flags, and the five
+                                ; pops are menu_track's, in its order
 
 ; -----------------------------------------------------------------------------
 ; menu_drop - the tracker both menus share (SPEC.md 12.4): save the pixels
@@ -1972,7 +1945,36 @@ menu_reloc:
     ret
 %endif                          ; OS88_COMPACT
 
+; -----------------------------------------------------------------------------
+; menu_pull - lay out the dropped rect and run menu_drop over it
+; in:  BX = x1, AX = width, DX = y1, CL = the [menu_btn] mask; [menu_cnt] set
+; out: menu_drop's: AX = item index, or 0xFFFF
+; clobbers: BX, CX (both callers have them banked)
+;
+; menu_track's and menu_popup's last eleven lines were one sum written twice:
+; x2 = x1 + width - 1, y2 = y1 + count * 16 + 1 (the frame's top row; the
+; bottom one is y2 itself), the button, and the call. FALLS INTO menu_drop
+; (the %if under its body), so the call is the caller's.
+; -----------------------------------------------------------------------------
+menu_pull:
+    mov [menu_btn], cl
+    mov [menu_x1], bx
+    add bx, ax
+    dec bx
+    mov [menu_x2], bx
+    mov [menu_y1], dx
+    mov ax, [menu_cnt]
+    mov cl, 4
+    shl ax, cl                  ; count * 16
+    inc ax                      ; + the top frame row
+    add ax, dx
+    mov [menu_y2], ax
+.fall:
+
 menu_drop:
+%if menu_drop - menu_pull.fall != 0
+  %error "menu_pull falls into menu_drop: nothing may sit between them"
+%endif
     push bx
     push cx
     push dx
@@ -1984,14 +1986,14 @@ menu_drop:
     mov word [menu_sseg], 0
     call menu_save_kb           ; AX = what THIS menu's rect needs, not the
                                 ; worst case any menu could
-    mov bx, MEM_K_SAVE
+    mov bx, MEM_P_MSAVE         ; TRIVIAL-purgeable (SPEC.md 12.4.2)
     call mem_claim
     jc .noclaim                 ; refused: the restore repaints instead
     mov [menu_sseg], dx
 %ifdef OS88_COMPACT
     push ax                     ; ...and MOVABLE (SPEC.md 66.5.6). It is only
     mov ax, menu_reloc          ; 20KB and only lives for one menu - but that
-    mov bx, MEM_K_SAVE          ; is 20KB sitting mid-arena at exactly the
+    mov bx, MEM_P_MSAVE         ; is 20KB sitting mid-arena at exactly the
     call COLD_SEG:mmf_mem_movable ; moment a MENU COMMAND claims, which is one of
     pop ax                      ; the commonest ways a claim happens at all
 %endif                          ; ...and on kern_small nothing moves (SPEC.md
@@ -2005,10 +2007,8 @@ menu_drop:
     jz .nosave                  ; no buffer: the restore repaints instead
     mov es, ax
     xor di, di
-    mov ax, [menu_x1]
-    mov bx, [menu_y1]
-    mov cx, [menu_x2]
-    mov dx, [menu_y2]
+    call rect_get               ; the rect -> AX..DX, four adjacent words
+    dw menu_x1
     call gfx_save
 .nosave:
 
@@ -2028,16 +2028,12 @@ menu_drop:
 %endif
     ; --- draw the menu: the chrome's ground, its frame, items 8px in ---------
     call thm_bg
-    mov ax, [menu_x1]
-    mov bx, [menu_y1]
-    mov cx, [menu_x2]
-    mov dx, [menu_y2]
+    call rect_get               ; the rect -> AX..DX, four adjacent words
+    dw menu_x1
     call gfx_fill
     call thm_ink
-    mov ax, [menu_x1]
-    mov bx, [menu_y1]
-    mov cx, [menu_x2]
-    mov dx, [menu_y2]
+    call rect_get               ; the rect -> AX..DX, four adjacent words
+    dw menu_x1
     call gfx_frame
 
     mov bx, [menu_iptr]
@@ -2138,10 +2134,8 @@ menu_drop:
     jz .repaint
     mov es, ax
     xor si, si
-    mov ax, [menu_x1]
-    mov bx, [menu_y1]
-    mov cx, [menu_x2]
-    mov dx, [menu_y2]
+    call rect_get               ; the rect -> AX..DX, four adjacent words
+    dw menu_x1
     call gfx_restore
     jmp short .sel
 .repaint:                       ; no buffer: put back what the MENU covered,
@@ -2169,16 +2163,16 @@ menu_drop:
                                 ; is refused every time, so this WAS the
                                 ; normal path there and every menu after the
                                 ; first left its title inverted.
-    mov ax, [menu_x1]           ; which is the rect it drew and nothing else -
-    mov bx, [menu_y1]           ; gfx_save captures exactly this, there is no
-    mov cx, [menu_x2]           ; shadow outside it, and everything beyond it
-    mov dx, [menu_y2]           ; is still correct on screen (SPEC.md 11.91)
+    call rect_get               ; which is the rect it drew and nothing else -
+    dw menu_x1                  ; gfx_save captures exactly this, there is no
+                                ; shadow outside it, and everything beyond it
+                                ; is still correct on screen (SPEC.md 11.91)
     call wm_paint_dmg
 .sel:
     mov dx, [menu_sseg]         ; the menu is off the screen: hand the buffer
     or dx, dx                   ; back rather than hold 20KB until the next
     jz .nofree                  ; one (SPEC.md 12.4/50.2)
-    mov bx, MEM_K_SAVE
+    mov bx, MEM_P_MSAVE
     call mem_free
     mov word [menu_sseg], 0
 .nofree:
@@ -2326,7 +2320,7 @@ menu_kbnav:
     mov [mouse_x], ax           ; two-display seam is honoured by construction
     mov [mouse_y], bx           ; rather than by a rectangle known here
     mov byte [cur_shchk], 1     ; ...and the pointer MOVED (SPEC.md 7.2.1.1)
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
     pop di
     pop si
     pop dx
@@ -2389,7 +2383,7 @@ menu_hover:
 ; -----------------------------------------------------------------------------
 ; menu_item_dis - is item AX of the dropped menu disabled? (SPEC.md 12.2)
 ; in:  AX = item index (< [menu_cnt])
-; out: CF = 1 if its string starts with MENU_DIS
+; out: CF = 1 if its string starts with MENU_DIS (or is empty)
 ; clobbers: nothing else (flags)
 ; -----------------------------------------------------------------------------
 menu_item_dis:
@@ -2401,13 +2395,15 @@ menu_item_dis:
     add bx, [menu_iptr]
     call menu_des               ; ES = the dropped cell's segment
     mov si, [es:bx]
-    cmp byte [es:si], MENU_DIS
-    jne .no
-    stc
-    jmp short .out
-.no:
-    clc
-.out:
+    cmp byte [es:si], MENU_DIS + 1  ; CF = 1 for a first byte BELOW 2: the
+                                ; MENU_DIS mark, or an EMPTY item, which is a
+                                ; blank row nothing could mean picking - so it
+                                ; is skipped as a greyed one is, and the
+                                ; stc/clc ladder this was goes (kernel size
+                                ; pass 9; it is hover's, per pointer move)
+%if MENU_DIS != 1
+  %error "menu_item_dis tests MENU_DIS by `cmp ..., MENU_DIS + 1`: it must be 1, the smallest non-NUL byte"
+%endif
     pop es
     pop si
     pop bx
@@ -2631,6 +2627,9 @@ menu_s_bounce   equ app_ttl_bounce
 menu_s_disk     equ fm_s_root           ; the Disk window's title at the root
 menu_s_closex   db MENU_DIS     ; ...with nothing to close; ui_loc_gate points
 menu_s_close    db 'Close Window', 0    ; the item at one or the other before
+%if menu_s_close - menu_s_closex != 1
+  %error "ui_loc_gate reaches menu_s_closex as menu_s_close - 1 (a `dec ax`)"
+%endif
                                 ; the menu can drop (SPEC.md 47). Two labels
                                 ; over one `db`, fm_s_clonex's idiom: a
                                 ; disabled item is MENU_DIS then the string,
@@ -2638,6 +2637,7 @@ menu_s_close    db 'Close Window', 0    ; the item at one or the other before
                                 ; one
 menu_s_tasks    equ ui_s_tmttl          ; the Task Manager's window title
 menu_s_restart  db 'Restart', 0
+menu_s_shutdown db 'Shut Down...', 0
 %ifdef KERN_BIG
 menu_s_hiber    db 'Hibernate...', 0        ; SPEC.md 87.2: ui_loc_gate points
 menu_s_hibernh  db MENU_DIS, 'Hibernate (No HD)', 0  ; item 4 at one of the
@@ -2666,6 +2666,16 @@ menu_s_appclose db 'Close', 0
 ; exactly why Restart lives here now: it is the one command every app should
 ; be able to reach, and it used to be reachable only from Locator's own bar
 ; and from a Disk window's (SPEC.md 12.3.1).
+menu_cell0:                     ; cell 0, copied whole by menu_relayout -
+    dw 0                        ; MB_TITLE: 0 = draw the logo glyph
+    dw menu_items_logo          ; MB_ITEMS
+    dw MENU_LOGO_N              ; MB_NITEM
+    dw 0                        ; MB_XL
+    dw MENU_SYS_XR              ; MB_XR
+    dw 0                        ; MB_SEG: the System menu is the kernel's
+%if ($ - menu_cell0) != MB_ENTSZ || MB_TITLE != 0 || MB_ITEMS != 2 || MB_NITEM != 4 || MB_XL != 6 || MB_XR != 8 || MB_SEG != 10
+  %error "menu_cell0 is one MB_* record in field order: menu_relayout copies it with rep movsw"
+%endif
 menu_items_logo:
     dw menu_s_about
     dw menu_s_ctrl
@@ -2674,15 +2684,23 @@ menu_items_logo:
 %ifdef KERN_BIG
     dw menu_s_hiber             ; item 4, swapped by ui_loc_gate (SPEC.md 87.2)
     dw menu_s_restart
-MENU_LOGO_N equ 6               ; ...and menu_relayout stamps this into cell
+    dw menu_s_shutdown
+MENU_LOGO_N equ 7               ; ...and menu_relayout stamps this into cell
 %else
     dw menu_s_restart
-MENU_LOGO_N equ 5               ; ...and menu_relayout stamps this into cell
+    dw menu_s_shutdown
+MENU_LOGO_N equ 6               ; ...and menu_relayout stamps this into cell
 %endif
                                 ; 0's MB_NITEM. It was a literal 3 there, in
                                 ; a different file from the list it counts
 menu_items_file:
     dw menu_s_close
+%ifdef OS88_SHORTCUTS
+    dw sc_s_remx                ; item 1, swapped by ui_loc_gate (SPEC.md 26.8.5)
+MENU_FILE_N equ 2
+%else
+MENU_FILE_N equ 1
+%endif
 %ifdef KERN_BIG
 menu_items_builtin:
     dw menu_s_timer
@@ -2701,7 +2719,7 @@ menu_loc_set:
     dw 0                        ; AM_ONCMD: kernel-dispatched
 %ifdef KERN_BIG
     dw 2                        ; AM_COUNT
-    dw menu_s_file,    menu_items_file,    1
+    dw menu_s_file,    menu_items_file,    MENU_FILE_N
     dw menu_s_builtin, menu_items_builtin, 3
 %else
     dw 1                        ; AM_COUNT: File alone (SPEC.md 14.6). The
@@ -2738,11 +2756,15 @@ menu_nbar:  resw 1              ; live cells in menu_bar (>= 1: the System
                                 ; menu is always cell 0)
 menu_ent:   resw 1              ; -> bar cell being tracked
 menu_cell:  resb 1              ; its index (the AH half of menu_track's out)
-menu_x1:    resw 1              ; dropped menu rect, left
-menu_x2:    resw 1              ; dropped menu rect, right
-menu_y1:    resw 1              ; dropped menu rect, top - MBAR_H from the
+menu_x1:    resw 1              ; dropped menu rect, left. IN RECT ORDER
+menu_y1:    resw 1              ; (x1,y1,x2,y2) since size pass 4, so menu_drop
+                                ; reads it with rect_get: top - MBAR_H from the
                                 ; bar, the shifted anchor from a popup (12.4)
+menu_x2:    resw 1              ; dropped menu rect, right
 menu_y2:    resw 1              ; dropped menu rect, bottom
+RECT4 menu_x1, menu_y1, menu_x2, menu_y2 ; wm.inc's rect_get assertion, here
+                                ; and not at wm.inc's foot: menu.inc is
+                                ; included after it, so there these are forward
 menu_cnt:   resw 1              ; item count of the tracked menu
 menu_iptr:  resw 1              ; its array of near item-string pointers
 menu_btn:   resb 1              ; mouse_btn mask that keeps it open: 1 = the
@@ -2766,6 +2788,9 @@ menu_bovr:  resb 1              ; ...and somebody painted OVER the bar, so the
                                 ; A different question from the one above and
                                 ; a far rarer one: this is the only flag that
                                 ; erases anything (SPEC.md 12.9)
+%if menu_bovr - menu_bdirty != 1  ; ADJACENT: menu_force and menu_init
+%error "menu_bovr must follow menu_bdirty - menu_force sets both with one word store"
+%endif
 menu_bcell: resb MENU_BCMAX + 1 ; the menus segment as it is ON THE GLASS, one
                                 ; byte per 8px cell - composed into, diffed
                                 ; against and emitted from. The spare cell is

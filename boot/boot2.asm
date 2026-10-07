@@ -51,7 +51,10 @@ DPT_AT      equ 0x0580          ; 0000:0580 - our copy of the diskette
                                 ; KERNEL_SEG, so nothing the kernel or its heap
                                 ; can claim reaches it and it needs no restore
 B2_STACK    equ 0x7C00          ; stage 1's STACK_TOP, which is still ours
-KSIG_OFF    equ 6144            ; SPEC.md 18.93.1's probe, as a MEMORY offset
+BS_CYLASK   equ 509             ; boot/boot.asm's: the Floppy page's Cylinder
+                                ; byte in the boot sector, which stage 1's
+                                ; relocated copy still holds at SS:7C00 here
+KSIG_OFF    equ 5632            ; SPEC.md 18.93.1's probe, as a MEMORY offset
                                 ; from KERNEL_SEG - the Makefile reads the same
                                 ; bytes out of the file at KSIG_OFF + BOOT2_PAD,
                                 ; which is FILE SECTOR 21 and has to be: the
@@ -62,7 +65,8 @@ KSIG_OFF    equ 6144            ; SPEC.md 18.93.1's probe, as a MEMORY offset
                                 ; twice; that row checks they agree.
                                 ;
                                 ; IT MOVES WITH BOOT2_SECS, and has had three
-                                ; values for that reason: 11776 while the
+                                ; values for that reason (6144 -> 5632 when
+                                ; SPEC.md 6.0.1 took the blob 9 -> 10): 11776 while the
                                 ; blob was 13 sectors, 8704 when SPEC.md 2.9.12
                                 ; grew it to 19, and 14336 when 2.5.3's split
                                 ; took it back to 8. The number that has to
@@ -166,6 +170,10 @@ boot2_entry:
     mov [b2_lba0], si
     mov [b2_ksig], di
     mov [b2_t0], bp
+    dec byte [b2_cylok]         ; FF -> FE: a FLOPPY boot, not yet known to
+                                ; cross a head (SPEC.md 31.14). The canary's
+                                ; pass takes it back; a hard-disk boot never
+                                ; comes this way and keeps FF
 
     ; --- the text screen stage 1 used to set (SPEC.md 2.9.8) ----------------
     ; It was in the sector, and the sector spent its last bytes on SPEC.md
@@ -272,12 +280,19 @@ boot2_entry:
     ; gate buys is that a 286 never PAYS for the discovery: it takes the track
     ; bound from the start instead of loading the whole kernel wrong and then
     ; loading it again.
+    ;
+    ; ...UNLESS THE USER SAID OTHERWISE (SPEC.md 31.14). The Floppy page's
+    ; Cylinder sets one byte of the boot sector, and stage 1's copy of it is
+    ; still at SS:7C00 - we run on its stack. A 286 that is asked takes the
+    ; cylinder bound too, and the canary below decides exactly as it does on
+    ; an 8088: a ROM that cannot cross a head pays one reload and is told so.
     push sp
     pop ax
-    cmp ax, sp
-    je .trkbound                ; 286 and up: leave it at the TRACK
-    mov al, [b2_heads]          ; 8086/8088: the CYLINDER, which is what the
-    xor ah, ah                  ; canary below then has something to verify.
+    sub ax, sp                  ; 0 on a 286 and up, FFFE on an 8086/8088
+    or al, [ss:0x7C00 + BS_CYLASK]
+    jz .trkbound                ; 286 and up, not asked: the TRACK
+    mov al, [b2_heads]          ; 8086/8088, or asked: the CYLINDER, which is
+    cbw                         ; what the canary below then has to verify.
     mul word [b2_spt]           ; COMPUTED HERE and not above, because this is
     mov [b2_runmax], ax         ; the only branch that wants it - b2_run was a
 .trkbound:                      ; word that carried it ten instructions, and
@@ -432,6 +447,7 @@ boot2_entry:
     cmp [es:KSIG_OFF], bx
 %endif
     jne .rerun
+    inc byte [b2_cylok]         ; FE -> FF: this boot SAW a head crossed right
     mov [es:0x0004], ax         ; ...and tell the kernel what we learned, so
                                 ; dsk_xfer needs no probe of its own. Written
                                 ; ONLY here, on the one path that has seen a
@@ -618,7 +634,7 @@ kz_expand:
     mov bl, al                  ; match length - 4 in the low one
     mov cl, 4
     shr al, cl
-    xor ah, ah
+    cbw                         ; AL <= 15, so AH = 0 in one byte
     mov cx, ax
     cmp al, 15
     jne .lits
@@ -636,7 +652,7 @@ kz_expand:
     mov bp, ax                  ; ...banked while its length is read, which
     mov al, bl                  ; comes out of the SOURCE and so has to happen
     and al, 0x0F                ; before DS stops being the source
-    xor ah, ah
+    cbw                         ; AL <= 15: AH = 0
     mov cx, ax
     cmp al, 15
     jne .mat
@@ -829,6 +845,19 @@ b2_lba:      dw 0
 b2_left:     dw 0
 b2_dest:     dw 0
 b2_ksig:     dw 0
+b2_cylok:    db 0xFF            ; SPEC.md 31.14: FF = Cylinder may apply. A
+                                ; floppy boot takes it to FE on entry and the
+                                ; canary's PASS takes it back, so it is FE on
+                                ; a fallback AND on a 286 that never looked -
+                                ; boot_cylrun's 0 cannot tell those from each
+                                ; other, and neither may be forced. A hard-disk
+                                ; boot calls only KZ_HD here, never
+                                ; boot2_entry, so it keeps FF and Cylinder is
+                                ; the user's word there. A MASK, so
+                                ; ovl_fdd_apply reads it `cs:` - the blob is
+                                ; one segment until mem_unblob - with one AND.
+                                ; In the blob and not the image, because
+                                ; .rerun's second load overwrites the image
 b2_t0:       dw 0
 %ifdef BOOT_DIAG
 b2_diag:     db 0

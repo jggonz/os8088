@@ -29,11 +29,11 @@ import shutil
 import struct
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88build                                               # noqa: E402
 import os88fat                                                 # noqa: E402
+import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
@@ -118,20 +118,25 @@ def main():
         # The probe exits by itself; what is waited for is the WINDOW coming
         # back, which is the bracket ending.
         rows = []
-        end = time.time() + 240.0
-        while time.time() < end:
-            rows = m.screen() or []
-            if any("SHELLREF DONE" in r for r in rows):
-                break
-            time.sleep(0.5)
-        else:
+
+        def done(mm):
+            rows[:] = mm.screen() or []
+            return any("SHELLREF DONE" in r for r in rows)
+        try:            # a GUEST budget: a loaded box cannot shorten it
+            os88marty.until(m, done, "the probe's DONE marker", poll=0.5,
+                            limit=240.0)
+        except os88marty.MartyError:
             print("dosshell: note: no DONE marker; the last text screen was %r"
                   % ([r.rstrip() for r in rows if r.strip()][:12],))
         print("dosshell: the bracket's text screen:")
         for r in (rows or [])[:12]:
             if r.strip():
                 print("      | %s" % r.rstrip())
-        time.sleep(2)
+        # ...and the probe's last writes on the drive before the image is
+        # flushed to the host and read
+        os88marty.quiesce(m, lambda: (m.disk().get("writes"),
+                                      m.disk().get("write_sectors")),
+                          guest=2.0, what="the floppy's writes to stop")
         m.flush(1, os.path.abspath(SCRATCH))   # ABSOLUTE: every instance boots
                                                # its own clone, so the file on
                                                # this host was never written

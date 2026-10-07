@@ -61,7 +61,7 @@ sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import os88fixture                                       # noqa: E402
 import os88build                                         # noqa: E402
-import os88ui, os88geom, os88marty as M, dispcp          # noqa: E402
+import os88ui, os88geom, os88marty as M                  # noqa: E402
 from trackmove import pkg_syms, u16                      # noqa: E402
 from heapcheck import claims                             # noqa: E402
 
@@ -243,35 +243,37 @@ def main():
         # --- 8. open the 397KB module ---------------------------------------
         ui.raise_window(tw)
         m.key("KeyL")                           # Tracker's own Load... key
-        M.settle(m, limit=120)
-        if not [w for w in os88geom.windows(m, S)
-                if w.visible and w.title in ("Open", "Save As")]:
-            print("FAIL: 'L' put no file dialog up")
+        # The chooser is a Disk window in a chooser role (SPEC.md 38.1): its
+        # rows are its OWN cache, `ui.listing(dlg)`, and the selection the
+        # arrows move (38.4) is its pool block's FS_SEL - [fdlg_blk] names
+        # the block, a KERNEL_SEG offset
+        try:
+            dlg = ui.chooser(limit=60)
+        except os88ui.UIError as e:
+            print("FAIL: 'L' put no file chooser up - %s" % e)
             return 1
-        rows = [r[0] for r in dispcp.snapshot(m, S)]
+        rows = [r[0] for r in ui.listing(dlg)]
         if MOD not in rows:
             print("FAIL: %s is not listed - %r" % (MOD, rows))
             return 1
-        for _ in range(rows.index(MOD) + 1):
-            m.key("ArrowDown")
-            time.sleep(0.2)
-        got = u16(m.read(S("fdlg_sel"), 2))
-        if got != rows.index(MOD):
-            print("FAIL: dialog selected row %d, wanted %d"
-                  % (got, rows.index(MOD)))
-            return 1
+        ui.chooser_select(MOD, dlg)     # a click selects (SPEC.md 38.4)
         m.key("Enter")
 
-        posted = said = False
-        for _ in range(600):                    # the flag is up for the whole
+        seen = {"posted": False, "said": False}
+
+        def both(mm):                           # the flag is up for the whole
             at = wseg()                         # pass AND the 397KB read
-            if m.read(at * 16 + P["trk_cpq"], 1)[0]:
-                posted = True
-            if u16(m.read(at * 16 + P["tui_msgp"], 2)) == P["trk_s_cpq"]:
-                said = True
-            if posted and said:
-                break
-            time.sleep(0.05)
+            if mm.read(at * 16 + P["trk_cpq"], 1)[0]:
+                seen["posted"] = True
+            if u16(mm.read(at * 16 + P["tui_msgp"], 2)) == P["trk_s_cpq"]:
+                seen["said"] = True
+            return seen["posted"] and seen["said"]
+        try:
+            M.until(m, both, "Tracker to post and say so", poll=0.05,
+                    limit=30.0)
+        except M.MartyError:
+            pass                                # ...judged by check 4
+        posted, said = seen["posted"], seen["said"]
         # **THE BYTE AND NOT THE SCREEN** (docs/plans/SOAK-PARALLEL.md 11,
         # docs/WRITING-TESTS.md 11). This waited for the screen to stop
         # changing and then polled `mp_loaded` anyway - so the settle was

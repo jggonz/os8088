@@ -42,6 +42,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
+from os88pkg import PKG_FMT                                # noqa: E402
+from os88drv import DRV_VER                                # noqa: E402
 import os88build                                       # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
@@ -96,9 +98,9 @@ def compressed(img):
                                                     # format (SPEC.md 20.14.1)
                 seen[0] += 1
             elif len(hdr) >= 12 and hdr[:2] == b"O8":
-                if hdr[2] == 3 and hdr[3] & 0x08:   # a package
+                if hdr[2] == PKG_FMT and hdr[3] & 0x08:   # a package
                     seen[0] += 1
-                elif hdr[2] == 4 and struct.unpack_from("<H", hdr, 8)[0] > size:
+                elif hdr[2] == DRV_VER and struct.unpack_from("<H", hdr, 8)[0] > size:
                     seen[0] += 1                    # a driver
             del name
     scan(root, nent)
@@ -245,24 +247,45 @@ def main():
         # module sits in the same folder it does on the roomier geometries
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MEDIA")
         os88marty.settle(m)
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "BEVERLY.MOD")
-        try:
-            os88marty.until(m, lambda mm: find_win(mm, S, "Tracker")[0],
-                            "Tracker's window", poll=0.2, guest=60.0)
-            # ...AND THEN THE CLAIM, which is what the twenty-second sleep
-            # here was standing in for. [trk_modseg] going non-zero IS "the
-            # 116KB expanded and Tracker holds it", so this costs what the
-            # decode costs on this box and waits longer on a loaded one.
-            def claimed(mm):
-                seg = find_win(mm, S, "Tracker")[0]
-                return seg and int.from_bytes(
-                    mm.readseg(seg, P["trk_modseg"], 2), "little")
+        # THE MODULE IS READ AT mp_load's ENTRY, WITH THE GUEST STOPPED.
+        # That is the one moment the claim holds exactly what the transparent
+        # read expanded: mp_load is what parses it, and with no sound card
+        # Tracker then filters every sample for the speaker IN PLACE
+        # (tsp_natural, SPEC.md 45.25) - so a compare made afterwards reads
+        # 83,267 of 116,085 bytes "wrong" off a decoder that is right. The
+        # package segment is not known until Tracker's window exists, so the
+        # trace stops on wm_show, and the first stop with a Tracker window
+        # re-arms on that package's mp_load (bp_trace's documented re-arm).
+        # Tracker loads in its first WAKE, after the window is up, so the
+        # re-arm is always ahead of the read and there is no race in it.
+        cap = {"got": None, "seg": 0}
 
-            os88marty.until(m, claimed, "Tracker to claim the module",
-                            poll=0.2, guest=90.0)
-        except os88marty.MartyError:
-            pass
-        os88marty.settle(m)
+        def on_hit(mm, rec):
+            seg = find_win(mm, S, "Tracker")[0]
+            if rec["addr"] == show_at:
+                if seg:
+                    mm.breakpoints([{"type": "exec",
+                                     "addr": (seg << 4) + P["mp_load"]}])
+                return None
+            ms = int.from_bytes(mm.readseg(seg, P["trk_modseg"], 2), "little")
+            got = b""
+            while ms and len(got) < len(plain):
+                k = min(0x8000, len(plain) - len(got))
+                got += mm.readseg(ms + (len(got) >> 4), 0, k)
+            cap["got"], cap["seg"] = got, ms
+            mm.breakpoints([])
+            return None
+
+        show_at = m.sym("wm_show") & 0xFFFFF
+        with os88marty.bp_trace(m, show_at, on_hit=on_hit) as tr:
+            dispcp.open_named(m, mo, S, os88marty.settle, wx, wy,
+                              "BEVERLY.MOD")
+            tr.until(lambda: cap["got"] is not None, "Tracker's mp_load",
+                     limit=120.0, required=False)
+        # NO SETTLE AFTER IT. Tracker PLAYS what it opens and draws while it
+        # plays, so the screen never stops changing and a settle here spent
+        # its whole 360-guest-second budget on a module that had loaded.
+        #
         # BY TITLE, and not by slot: CALC is open above, the Disk window has
         # been raised again, and wm_wins' last slot is whichever index the
         # window manager reused - not the newest window. Reading trk_modseg
@@ -275,11 +298,7 @@ def main():
                          "the media disk (SPEC.md 24.4), which is the whole "
                          "reason this set exists")
         else:
-            seg = int.from_bytes(m.readseg(pseg, P["trk_modseg"], 2), "little")
-            got = b""
-            while seg and len(got) < len(plain):
-                k = min(0x8000, len(plain) - len(got))
-                got += m.readseg(seg + (len(got) >> 4), 0, k)
+            seg, got = cap["seg"], cap["got"] or b""
             if got == plain:
                 say("  module     ok  (all %d bytes, out of MEDIA/ on the "
                     "APPS disk)" % len(plain))
@@ -292,7 +311,8 @@ def main():
                 fails.append("Tracker opened and holds no module - its own "
                              "error is in %s" % shot)
             else:
-                bad = [i for i in range(len(plain)) if got[i] != plain[i]]
+                bad = [i for i in range(len(plain))
+                       if i >= len(got) or got[i] != plain[i]]
                 fails.append("%d of %d module bytes differ, first at %d - "
                              "which is %s the 64KB boundary"
                              % (len(bad), len(plain), bad[0],

@@ -518,7 +518,7 @@ when the default went back:
 2. **`band_emit_x`, 18,776 cycles a bar.** That is `gfx_blit1_x`, whose 603
    bytes of which 78 do the blitting are this document's subject. It came OFF
    the shipped path with §5.9.6's flip, so the caller that cared is a knob
-   build now — but `gfx_blit1` is API 0x0418 as well, and every package that
+   build now — but `gfx_blit1` is API 0x0320 as well, and every package that
    composes a band (docs/plans/completed/TEXT-PLAN.md, apps/os88type.inc) is still that caller.
 
 > **No longer available** (SPEC.md §5.9.6): while the composer was the default

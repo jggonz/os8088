@@ -33,7 +33,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -134,14 +133,20 @@ def main():
                                                 dispcp.row_of(m, S,
                                                               "GLYPHBN.O88")))
         mo.dblclick(rx, ry)
-        t0 = time.time()
         seg = None
-        while time.time() - t0 < 120 and not seg:
+
+        def launched(_):
+            nonlocal seg
             for w in os88geom.windows(m, S):
                 if w.title.startswith("GlyphBench"):
                     seg = u16(m.read(os88geom.winptr(m, w.i, S)
                                      + os88geom.W_SEG, 2))
-            time.sleep(0.3)
+            return bool(seg)
+        try:
+            os88marty.until(m, launched, "GlyphBench's window", poll=0.3,
+                            limit=120)
+        except os88marty.MartyError:
+            pass                        # ...and the next line says so
         if not seg:
             sys.exit("glyphcost: GLYPHBN did not launch")
         p = Pkg(m, seg, syms)

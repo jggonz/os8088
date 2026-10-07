@@ -43,7 +43,6 @@ import subprocess
 import sys
 import hashlib
 import tempfile
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -195,14 +194,18 @@ def main():
                                                 dispcp.row_of(m, S,
                                                               "MCBENCH.O88")))
         mo.dblclick(rx, ry)
-        t0 = time.time()
-        seg = None
-        while time.time() - t0 < 180 and not seg:
+        def missile():
             for w in os88geom.windows(m, S):
                 if w.title.startswith("Missile"):
-                    seg = u16(m.read(os88geom.winptr(m, w.i, S)
-                                     + os88geom.W_SEG, 2))
-            time.sleep(0.3)
+                    return u16(m.read(os88geom.winptr(m, w.i, S)
+                                      + os88geom.W_SEG, 2))
+            return None
+        try:
+            os88marty.until(m, lambda _: missile(), "MCBENCH's window",
+                            poll=0.3, limit=180)
+        except os88marty.MartyError:
+            pass                            # the check below says so
+        seg = missile()
         if not seg:
             sys.exit("mcperf: MCBENCH did not launch")
         p = Pkg(m, seg, syms)

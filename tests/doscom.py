@@ -26,7 +26,6 @@ code, and the bracket sets a text mode the harness reads with `screen()`.
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88ui                                                  # noqa: E402
@@ -55,12 +54,14 @@ def main():
 
         # --- 1. the program's own output, inside the bracket -----------------
         rows = []
-        for _ in range(80):
-            rows = m.screen() or []
-            if any("READY" in r for r in rows):
-                break
-            time.sleep(0.2)
-        else:
+
+        def ready(mm):
+            rows[:] = mm.screen() or []
+            return any("READY" in r for r in rows)
+        # the prompt is the guest's to reach, so the deadline is its clock
+        try:
+            os88marty.until(m, ready, "the READY prompt", poll=0.2, limit=16.0)
+        except os88marty.MartyError:
             fail("the program never reached its READY prompt; the last text "
                  "screen was %r" % ([r.rstrip() for r in rows][:8],))
 

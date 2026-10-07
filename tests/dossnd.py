@@ -25,7 +25,6 @@ line, and a BLASTER= naming the wrong one is worse than one naming none.
 import os
 import struct
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88geom                                                # noqa: E402
@@ -66,13 +65,14 @@ def main():
             fail("double-clicking DOSSND.COM opened no window")
 
         rows = []
-        end = time.time() + 180.0
-        while time.time() < end:
-            rows = m.screen() or []
-            if any("READY" in r for r in rows):
-                break
-            time.sleep(0.3)
-        else:
+
+        def _seen(_m):
+            rows[:] = m.screen() or []
+            return any("READY" in r for r in rows)
+        try:                        # GUEST time: `limit` is idle-box seconds
+            os88marty.until(m, _seen, "DOSSND.COM to finish", poll=0.3,
+                            limit=180.0)
+        except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
                  % ([r.rstrip() for r in rows if r.strip()][:12],))
 

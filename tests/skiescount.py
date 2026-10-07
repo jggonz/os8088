@@ -402,7 +402,7 @@ def main(argv):
         subprocess.run(["nasm", "-f", "bin", "-w+error", "-DCSPROBE",
                         "-I", "apps/", "-I", "apps/skies/",
                         "-I", os.path.join(ROOT, PROBE) + os.sep,
-                        "-o", os.devnull,
+                        "-o", lst[1] + ".bin",
                         "-l", lst[1], "apps/skies/skies.asm"], check=True)
         import re
         rx = re.compile(r"\s*\d+\s+([0-9A-F]{8})\s+([0-9A-F\[\]]+)\s+"
@@ -423,6 +423,7 @@ def main(argv):
                         bytes.fromhex(mm.group(2).replace("[", "").replace("]", "")))
                 break
         os.unlink(lst[1])
+        os.unlink(lst[1] + ".bin")
         if wait is None:
             sys.exit("skiescount: no OSAPI_FSX_WAIT site in cs_steps")
         m.pause()

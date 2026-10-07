@@ -85,15 +85,17 @@ def wait_toast_changes(m, was, limit):
 
     None on a timeout. The buffer is not cleared when a toast expires - only
     [toast_on] is - so this cannot answer early on a message going away.
+    `limit` is converted to GUEST time by `until`, so a loaded box cannot cut
+    the decode's allowance short.
     """
-    import time
-    t0 = time.time()
-    while time.time() - t0 < limit:
-        now = m.read(S("toast_buf"), 24).split(b"\0")[0]
-        if now != was:
-            return now
-        time.sleep(0.25)
-    return None
+    def now():
+        return m.read(S("toast_buf"), 24).split(b"\0")[0]
+    try:
+        os88marty.until(m, lambda _: now() != was, "toast_buf to change",
+                        poll=0.25, limit=limit)
+    except os88marty.MartyError:
+        return None
+    return now()
 
 
 def dbl_at_bp(m, mo, wx, wy, name, sym):
@@ -150,7 +152,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
 
     # --- 1. the window is on the glass BEFORE the document is read ----------
     try:
-        state = dbl_at_bp(m, mo, wx, wy, DOC, "assoc_handover")
+        state = dbl_at_bp(m, mo, wx, wy, DOC, "assoc_run_x.handover")  # inlined, size pass 9
         if state is None:
             m.bp_exec()
             m.run()

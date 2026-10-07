@@ -270,6 +270,51 @@ hf_worker:
 ; its holder is the failure that leaves a package reading its old address, and
 ; from inside the package that is indistinguishable from not having moved.
 ; -----------------------------------------------------------------------------
+; hf_availp - OSAPI_MEM_AVAIL with every block this suite holds PINNED, and
+; the declarations given back after (SPEC.md 66.4.3.5). Three checks size a
+; claim at one KB past the largest run so that only a MERGE can fund it, and
+; that run has to be measured without the merge: mem_avail answers what a
+; claim would be handed, a claim parks this package's worker and then moves
+; these blocks, so asked with them movable it answers the merged figure and
+; the +1 is a claim the contract says must fail. Out: AX, BX as the slot.
+hf_availp:
+    push ax
+    xor ax, ax
+    call hf_setrloc             ; AX = 0 pins every block held
+    pop ax
+    call OSAPI_MEM_AVAIL
+    push ax
+    mov ax, hf_reloc
+    call hf_setrloc             ; ...and movable again, bar HF_PIN
+    pop ax
+    ret
+
+; hf_setrloc - AX = the relocation proc to declare on every block still held -
+; the comb and the slot past it that checks 13 and 14 ride in - (0 = pin it),
+; HF_PIN excepted: that one stays pinned whatever is asked. Preserves all.
+hf_setrloc:
+    push bx
+    push dx
+    push di
+    xor di, di
+.lp:
+    cmp di, [hf_pin]
+    je .nx
+    mov bx, di
+    shl bx, 1
+    mov dx, [bx+hf_base]
+    or dx, dx
+    jz .nx                      ; one step 5 freed
+    call OSAPI_MEM_MOVABLE
+.nx:
+    inc di
+    cmp di, HF_N
+    jbe .lp
+    pop di
+    pop dx
+    pop bx
+    ret
+
 hf_reloc:
     push ax
     push cx
@@ -443,7 +488,15 @@ hf_run:
     ; proves nothing at all. THE ASSERTION IS THAT THE ANSWER IS NO before it
     ; is yes.
 .frag:
-    call OSAPI_MEM_AVAIL        ; AX = largest run, BX = total free
+    ; MEASURED WITH THE COMB PINNED (SPEC.md 66.4.3.5). OSAPI_MEM_AVAIL answers
+    ; what a claim would be handed, and a claim PARKS this package's worker and
+    ; then moves the comb - so asked with the comb movable it answers the
+    ; COMPACTED run, want = L1 + 1 is a claim the contract says must fail, and
+    ; this suite proves nothing. It used to be pinned by accident: the plan
+    ; asked about the worker as it stood, found it running, and walled the comb
+    ; in. The question this check asks is "the biggest run without moving MY
+    ; blocks", so it says so - pin, measure, and give the declaration back.
+    call hf_availp              ; AX = largest run, BX = total free
     mov [hf_l1], ax
     mov [hf_tot], bx
     inc ax                      ; ONE KB MORE THAN THE BIGGEST HOLE ANYWHERE,
@@ -602,7 +655,7 @@ hf_run:
     mov dx, [hf_hia]
     call OSAPI_MEM_FREE         ; the hole above it exists from here
     mov word [hf_hia], 0
-    call OSAPI_MEM_AVAIL        ; ...and the run below it is the largest thing
+    call hf_availp              ; ...and the run below it is the largest thing
     inc ax                      ; on the machine, so one KB more than it can
     call OSAPI_MEM_CLAIM        ; only come from the two being MERGED - which
     jc .ceilnoc                 ; needs the block between them to pack up
@@ -686,7 +739,7 @@ hf_run:
     mov dx, [hf_bigseg]         ; ...and NOW open the hole under it
     call OSAPI_MEM_FREE
     mov word [hf_bigseg], 0
-    call OSAPI_MEM_AVAIL
+    call hf_availp
     inc ax                      ; one KB more than the largest single run, so
     call OSAPI_MEM_CLAIM        ; only a merge can fund it - and the block in
     jc .dmapop                  ; the way is the page-constrained one

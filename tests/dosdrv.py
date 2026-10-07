@@ -27,10 +27,10 @@ the only way to exercise the steal across volumes.
 import os
 import re
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88fat                                                 # noqa: E402
+import os88marty                                                # noqa: E402
 import os88ui                                                  # noqa: E402
 
 SYS = "build/dosdrvsys.img"
@@ -77,13 +77,13 @@ def main():
             fail("double-clicking DRVNAME.COM opened no window")
 
         rows = []
-        end = time.time() + 180.0
-        while time.time() < end:
-            rows = m.screen() or []
-            if any("DRVNAME READY" in r for r in rows):
-                break
-            time.sleep(0.3)
-        else:
+
+        def ready(mm):
+            rows[:] = mm.screen() or []
+            return any("DRVNAME READY" in r for r in rows)
+        try:
+            os88marty.until(m, ready, "DRVNAME READY", poll=0.3, limit=180.0)
+        except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
                  % ([r.rstrip() for r in rows if r.strip()][:14],))
 

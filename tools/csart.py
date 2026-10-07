@@ -34,9 +34,6 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
-import os88lz                      # the packer both the kernel and
-                                   # os88pkg.py read (SPEC.md 20.13)
-sys.path.insert(0, os.path.join(ROOT, "tools"))
 import shot                                     # noqa: E402  (the PNG writer)
 
 
@@ -633,13 +630,16 @@ def title_art():
 
 
 def emit(path, title, planes):
-    """Write the include: ONE LZ4 STREAM and the offsets into what it expands
-    to (SPEC.md 88.10.2).
+    """Write the include - the offsets into the bands - and return the bands
+    themselves, RAW (SPEC.md 88.10.2, 88.10.4.1).
 
     The six bands are 10,480 bytes of a 60KB segment and they are the largest
     block in the package that no frame ever reads - the title page draws them
-    and the fsx bracket never does. So they are stored PACKED and the package
-    expands them once, at launch, into a heap claim (skies.asm's cs_artload).
+    and the fsx bracket never does. So they are a PART, OP_COMP | OP_LAZY:
+    os88pkg.py packs them and op_fetch expands them, once, at launch, into a
+    claim of their own. This script used to pack them itself and csload.asm
+    to expand them itself, and the two had to agree about the format for
+    ever; ONE COMPRESSOR now, the standard's.
     A band is a bitmap and holds no pointer, so nothing needs relocating: what
     was a label is an offset into the blob, and `dw cs_art_c172` in a plane
     record goes on assembling because an equ is a constant like any other.
@@ -657,11 +657,12 @@ def emit(path, title, planes):
              "; the one it is drawn from in CSP_ART (SPEC.md 88.10.1).",
              ";",
              "; THE BANDS ARE NOT IN THIS FILE (SPEC.md 88.10.3). They are a PART",
-             "; of SKIES.O88 - the LZ4 stream this same script writes with",
-             "; --stream - so the program's image carries the offsets and nothing",
-             "; else. apps/skies/csload.asm fetches that part, expands it into a",
-             "; claim and hands the segment over, and every blit reads",
-             "; [cs_artseg]:offset exactly as it did when the stream was in the",
+             "; of SKIES.O88 - the raw bands this same script writes with --raw,",
+             "; which os88pkg.py packs into an OP_COMP | OP_LAZY row - so the",
+             "; program's image carries the offsets and nothing else.",
+             "; apps/skies/csload.asm op_fetches that part, which expands it into",
+             "; a claim of its own, and hands the segment over; every blit reads",
+             "; [cs_artseg]:offset exactly as it did when the bands were in the",
              "; image. The names below are OFFSETS INTO THAT BLOB and not labels",
              "; in this segment.",
              ""]
@@ -680,13 +681,6 @@ def emit(path, title, planes):
     frames = set((c.w, c.h) for _, c in planes)
     assert len(frames) == 1, "the aircraft bands share one frame: %r" % (frames,)
 
-    z = os88lz.compress(blob, os88lz.LZ4)
-    # The gate every generated stream owes its reader: it is not enough that
-    # the compressor ran, the bytes have to come back (SPEC.md 88.10.2).
-    assert os88lz.decompress(z, os88lz.LZ4, len(blob)) == blob, \
-        "csart: the stream does not expand to the bands that made it"
-    assert len(z) < len(blob), "csart: the stream is not smaller than the bands"
-
     lines.append("cs_art_title_w equ %d" % title[1].w)
     lines.append("cs_art_title_h equ %d" % title[1].h)
     lines.append("cs_art_plane_w equ %d" % planes[0][1].w)
@@ -695,17 +689,13 @@ def emit(path, title, planes):
     for name, off in offs:
         lines.append("%-16s equ %d" % (name, off))
     lines.append("")
-    lines.append("CS_ART_SIZE equ %d        ; the bands, UNPACKED - what the"
+    lines.append("CS_ART_SIZE equ %d        ; the bands, UNPACKED - part 1's"
                  % len(blob))
-    lines.append("                             ; loader claims and decodes into")
-    lines.append("CS_ART_ZLEN equ %d         ; ...out of this many, T word in -"
-                 % len(z))
-    lines.append("                             ; which is part 1's whole length")
-    lines.append("CS_ART_KB   equ %d            ; ...into a claim of this many KB"
-                 % ((len(blob) + 1023) // 1024))
+    lines.append("                             ; whole length once op_fetch has")
+    lines.append("                             ; expanded it")
     lines.append("")
     open(path, "w").write("\n".join(lines))
-    return z
+    return blob
 
 
 def main(argv):
@@ -713,9 +703,9 @@ def main(argv):
     ap.add_argument("-o", "--out", default=os.path.join(ROOT, "apps", "skies", "csart.inc"))
     ap.add_argument("--preview", help="write PNG previews into this directory")
     ap.add_argument("--zoom", type=int, default=4)
-    ap.add_argument("--stream", help="write the PACKED bands here - the bytes "
-                                     "os88pkg.py appends as SKIES.O88's art "
-                                     "part, which csload.asm expands")
+    ap.add_argument("--raw", help="write the RAW bands here - the bytes "
+                                  "os88pkg.py packs into SKIES.O88's OP_COMP "
+                                  "| OP_LAZY art part (SPEC.md 88.10.4.1)")
     a = ap.parse_args(argv)
     title = ("cs_art_title", title_art())
     planes = [("cs_art_c172", plane_art(art_c172)),      # in cs_planes' order,
@@ -728,14 +718,13 @@ def main(argv):
         os.makedirs(a.preview, exist_ok=True)
         for name, canvas in bands:
             canvas.png(os.path.join(a.preview, name + ".png"), a.zoom)
-    z = emit(a.out, title, planes)
-    if a.stream:
-        # THE PART'S OWN BYTES. The row is LAZY, and a lazy row cannot also be
-        # OP_COMP - the two want the same zkb word (apps/os88parts.inc says so
-        # and refuses) - so the stream is packed HERE and csload.asm expands
-        # it, which is what the image used to do with the same bytes.
-        with open(a.stream, "wb") as f:
-            f.write(z)
+    blob = emit(a.out, title, planes)
+    if a.raw:
+        # THE PART'S OWN BYTES, unpacked: os88pkg.py compresses the OP_COMP
+        # row, and refuses a row that does not pay, which is the check this
+        # script used to make on a stream of its own
+        with open(a.raw, "wb") as f:
+            f.write(blob)
     print("csart: %s (%s)" % (a.out, ", ".join("%s %dx%d" % (n, c.w, c.h) for n, c in bands)))
 
 

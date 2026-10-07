@@ -42,26 +42,20 @@ HBE_KINIT   equ 4
 HBE_PERFORM equ 5
 HBE_OPEN    equ 6
 HB_NENT     equ 7
-%if HB_NENT > MOD_NENT
-  %error "hiber: more entries than mod_fp has slots for"
-%endif
 ; --- the two verbs OSAPI_DRV_SUSPEND adds to hbm_perform (SPEC.md 51.11) ----
 ; The slot's AL is 0 resume / 1 suspend / 2 handoff. drv_suspend_x adds
 ; HB_P_RESUME to the first two so the module's perform entry tells them from
-; the UI_RBQ_* it already dispatches, and the module gains no eighth entry -
-; MOD_NENT is 7 and HB_NENT is 7. The handoff never enters the module at all.
+; the UI_RBQ_* it already dispatches, and the module gains no eighth entry.
+; The handoff never enters the module at all.
 HB_P_RESUME  equ UI_RBQ_DOSRUN + 1
 HB_P_SUSPEND equ UI_RBQ_DOSRUN + 2
-%ifdef KERN_BIG
-HBFP        equ mod_fp + MOD_HIBER * MODFP_STRIDE
-%endif
 
 ; --- API cells the module calls (SPEC.md 20.3); the kernel has no copy of
 ; --- apps/os88api.inc, so the four it needs are named here ------------------
-HB_API_FILL   equ 0x0038        ; AX=x1, BX=y1, CX=x2, DX=y2 in [gfx_color]
-HB_API_FONTX  equ 0x0068        ; CX=x, DX=y, the string at the CALLER's DS:SI
-HB_API_COLOR  equ 0x00C0        ; AL -> [gfx_color]
-HB_API_XCAPS  equ 0x0190        ; out BL = free block-table entries (SPEC.md 41)
+HB_API_FILL   equ apic_gfx_fill        ; AX=x1, BX=y1, CX=x2, DX=y2 in [gfx_color]
+HB_API_FONTX  equ apic_font_str        ; CX=x, DX=y, the string at the CALLER's DS:SI
+HB_API_COLOR  equ apic_osapi_set_color        ; AL -> [gfx_color]
+HB_API_XCAPS  equ apic_xm_caps        ; out BL = free block-table entries (SPEC.md 41)
 
 ; --- the pointer file, HIBERNAT.PTR (SPEC.md 87.3) ---------------------------
 HBP_MAGIC   equ 0               ; 'HIB1'
@@ -216,7 +210,7 @@ KDB_AKB     equ 6               ; dw ...and the arena it was given, in KB
 
 section .text
 ; --- resident data: the template and the title (read through DS by wm) -----
-hb_tpl:     dw 160, 150, 320, 100, hb_ttl, hb_paint, hb_onkey, hb_onclick
+hb_tpl:     dw 160, 150, 320, 100, hb_ttl, hbf_paint, hbf_onkey, hbf_onclick
 hb_ttl:     db 'Hibernate', 0
 hb_s_ptr:   db 'HIBERNAT.PTR', 0    ; THE ONE name (SPEC.md 87.3). The two
 HB_S_EXT    equ hb_s_ptr + 9        ; files differ in three bytes, so the
@@ -226,15 +220,10 @@ HB_S_EXT    equ hb_s_ptr + 9        ; files differ in three bytes, so the
                                     ; one reader that does not, and it runs at
                                     ; boot before any module can have stamped
 
-; --- the .text thunks: a kernel window's callbacks are near procs here ------
-hb_paint:   call COLD_SEG:hbf_paint
-            ret
-hb_onclick: call COLD_SEG:hbf_onclick
-            ret
-hb_onup:    call COLD_SEG:hbf_onup
-            ret
-hb_onkey:   call COLD_SEG:hbf_onkey
-            ret
+; --- the .text thunk: KD_INIT is called near in KERNEL_SEG by inst_launch ---
+; ...and ONLY that one. The window's own callbacks are the cold hbf_ entries,
+; which hb_tpl and hbm_kinit name directly: wm_pkgcall dispatches a kernel
+; window's callbacks near in `.cold` (SPEC.md 2.6.3).
 hb_kinit:   call COLD_SEG:hbf_kinit     ; KD_INIT: preserves every register
             ret
 
@@ -244,7 +233,6 @@ section .bss
 hb_mode:    resb 1              ; HB_M_*
 hb_vol:     resb 1              ; the volume the image is (or will be) on
 hb_down:    resb 1              ; the button the press armed, 1/2, 0 = none
-hb_pad:     resb 1
 hb_drvmask: resw 1              ; drv_tab rows detached before the image
 hb_sp:      resw 1              ; hbm_perform's entry SP (SPEC.md 87.4)
 hb_wakep:   resw 2              ; hbm_wake as off:seg, in the image's module
@@ -306,6 +294,9 @@ section .cold
 ; machine pays eight compares and no I/O; a machine with a hard disk pays
 ; one quiet mount of its root.
 ; -----------------------------------------------------------------------------
+section .ovl                    ; IN THE BLOB (SPEC.md 2.5.3.3): kmain_o is its
+                                ; one caller, after drv_boot and before its own
+                                ; BLOBCALL spl_finish
 hb_probe_x:
     push ax
     push dx
@@ -331,25 +322,26 @@ hb_probe_x:
     call COLD_SEG:hb_pick_x     ; AL = the volume
     jc .out
     mov [hb_vol], al
-    call drv_vol_bank
+    call COLD_SEG:drvf_drv_vol_bank
     mov dl, al
     xor ax, ax                  ; the root
-    call dsk_chdir_q_x
+    call COLD_SEG:dkf_dsk_chdir_q
     jc .back
     mov si, hb_s_ptr
-    call drv_find               ; the directory sectors themselves
+    call COLD_SEG:drvf_drv_find ; the directory sectors themselves
     jc .back
     mov byte [ui_rebootq], UI_RBQ_ASK
 .back:
-    call drv_vol_back
+    call COLD_SEG:drvf_drv_vol_back
 .out:
     pop si
     pop dx
     pop ax
     retf
+section .cold
 
 ; -----------------------------------------------------------------------------
-; drv_suspend_x - slot 0x0550's three verbs (SPEC.md 51.11): THE MACHINE, OUT
+; drv_suspend_x - slot 0x0419's three verbs (SPEC.md 51.11): THE MACHINE, OUT
 ;                 OF MY WAY. Entered from kernel.asm's thunk under api_x, so
 ;                 ES = the caller's DS and DS = KERNEL_SEG
 ; in:  AL = 1 suspend the hardware drivers, ES:DI = a DQ_SIZE-record buffer
@@ -419,8 +411,9 @@ osapi_dos_handoff_x:
     mov [hb_dosoff], si
     mov byte [ui_rebootq], UI_RBQ_DOSRUN
     mov byte [sch_uiwake], 1    ; ui_task blocks (SPEC.md 8.1.2), so the post
-    clc                         ; has to wake it or the handoff waits for
-    retf                        ; whatever else happens to
+                                ; has to wake it or the handoff waits for
+                                ; whatever else happens to. CF = 0 still:
+    retf                        ; the cmp found nothing posted
 .no:                            ; ...shared with the verbs above: a `stc`/`retf`
     stc                         ; is a `stc`/`retf`
     retf
@@ -465,10 +458,7 @@ hb_pick1:                       ; is volume CL one? out: CF = 0 and AL = CL
     cmp ah, DVK_FILE
     je .no
     mov al, cl
-    clc
-    ret
-.no:
-    stc
+    CLC_OR_STC .no              ; CF = 0 AL = CL, or (.no) CF = 1
     ret
 
 ; -----------------------------------------------------------------------------
@@ -530,10 +520,10 @@ hb_ok_x:
 
 ; --- far entries for the module (SPEC.md 2.6): cold bodies that end in a near
 ; --- ret, reached from a segment of their own. Four bytes each.
-hbk_bp:             call bp             ; cw_mem_disp's shape one segment
-                    retf                ; along: ONE cold far entry for every
-                                        ; cold body the module calls with BP
-                                        ; free, which is nine of its ten
+; The nine bodies the module calls with BP free go through wm.inc's `wm_cbd`,
+; which is `call bp / retf` - cw_mem_disp's shape one segment along, and the
+; entry wm_pkgcall dispatches a kernel window's cold callbacks through
+; (SPEC.md 2.6.3). This file had its own copy until then.
 hbk_drv_blk_call:   call drv_blk_call_x ; ...and the tenth, which cannot use
                     retf                ; it: BP IS drv_blk_call's verb cell
 
@@ -548,19 +538,21 @@ hbf_need:
     ret
 
 ; --- the thunks that load the module and call in (SPEC.md 2.8, cpf_'s shape)
+; The four window callbacks are NEAR: hb_tpl and hbm_kinit name them, and
+; wm_pkgcall calls a kernel window's callbacks near in `.cold` (SPEC.md 2.6.3).
 hbf_paint:
     call hbf_need
     jc .gone
     call far [HBFP + HBE_PAINT*4]
 .gone:
-    retf
+    ret
 
 hbf_onclick:
     call hbf_need
     jc .gone
     call far [HBFP + HBE_ONCLICK*4]
 .gone:
-    retf
+    ret
 
 hbf_onup:                       ; a release can only follow a press this
     push ax                     ; window took, so mod_live, not mod_need
@@ -569,17 +561,19 @@ hbf_onup:                       ; a release can only follow a press this
     pop ax
     jc .gone
     call far [HBFP + HBE_ONUP*4]
-    call hbf_dropck
+    jmp short hbf_dropck        ; a tail call: its ret is ours (.gone
+                                ; stays, for the refusal above)
 .gone:
-    retf
+    ret
 
 hbf_onkey:
     call hbf_need
     jc .gone
     call far [HBFP + HBE_ONKEY*4]
-    call hbf_dropck
+    jmp short hbf_dropck        ; a tail call: its ret is ours (.gone
+                                ; stays, for the refusal above)
 .gone:
-    retf
+    ret
 
 hbf_kinit:
     call hbf_need
@@ -597,8 +591,7 @@ hbf_open:
     call far [HBFP + HBE_OPEN*4]
     retf
 .no:
-    call hbf_nodisk
-    retf
+    jmp short hbf_perform.toast ; the toast and the retf, hbf_perform's
 
 hbf_nodisk:
     push ax
@@ -607,11 +600,8 @@ hbf_nodisk:
     mov al, 1
     mov bx, cp_opentab
     mov cx, CP_NOPEN
-    call KERNEL_SEG:toast_say
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call ct_toast_say
+    jmp kretc_cx                ; pop cx, bx, ax and ret
 
 ; hbf_perform - a posted UI_RBQ_HIBER / UI_RBQ_RESUME / UI_RBQ_ASK, spent by
 ;               ui_task with nothing held (SPEC.md 87.4, 87.5)
@@ -633,7 +623,8 @@ hbf_perform:
     mov word [hb_dosseg], 0
     cmp al, UI_RBQ_ASK          ; a question that cannot be asked is not
     je .quiet                   ; worth a toast: the pointer stays for a
-    call hbf_nodisk             ; boot that has the system disk in
+.toast:                         ; boot that has the system disk in (and
+    call hbf_nodisk             ; hbf_open's refusal is this toast too)
 .quiet:
     retf
 
@@ -660,10 +651,7 @@ hbf_closed:
     cmp byte [hb_mode], HB_M_GONE
     je .out
     mov byte [hb_mode], HB_M_GONE
-    push ax
-    mov al, MOD_HIBER
-    call mod_drop
-    pop ax
+    call hbf_dropck             ; ...which now finds it GONE and drops
 .out:
     retf
 
@@ -690,7 +678,6 @@ modh_hdr:
     dw modh_e_kinit             ; HBE_KINIT
     dw modh_e_perform           ; HBE_PERFORM
     dw modh_e_open              ; HBE_OPEN
-    times MOD_NENT - HB_NENT dw 0
 
 modh_e_paint:   call hbm_paint
                 retf
@@ -831,7 +818,7 @@ hbm_btnrect:
     cmp byte [hb_mode], HB_M_RESUME
     jne .out
     mov si, hbm_s_bres
-    jmp short .out
+    ret                         ; (.out is a bare `ret`)
 .two:
     add cx, HBW_B2X
     mov [bx], cx
@@ -1033,8 +1020,7 @@ hbm_win:
     or si, si
     jz .no
     pop di
-    pop ax
-    clc
+    pop ax                      ; (CF = 0: the `or`'s, which `jz` left)
     ret
 .no:
     pop di
@@ -1167,7 +1153,7 @@ hbm_root:
     mov dl, [hb_vol]
     xor ax, ax                  ; the root: both files live in it (87.3)
     mov bp, dsk_chdir_x         ; ...through the one far entry (SPEC.md 2.6)
-    call COLD_SEG:hbk_bp
+    call COLD_SEG:wm_cbd
     pop dx                      ; ...and a pop does not touch the chdir's CF
     ret
 
@@ -1192,7 +1178,7 @@ hbm_root:
 hbm_findimg:
     call hbm_nimg               ; SI = the name - this build has ONE, and the
     mov bp, dskw_stat_x         ; extension is stamped on (SPEC.md 87.3)
-    call COLD_SEG:hbk_bp
+    call COLD_SEG:wm_cbd
     ret                         ; CF, BX and DX:CX are all its answer
 
 ; -----------------------------------------------------------------------------
@@ -1228,7 +1214,7 @@ hbm_forget:
 hbm_kinit:
     push ax
     mov byte [hb_down], 0
-    mov ax, hb_onup
+    mov ax, hbf_onup            ; a COLD offset (SPEC.md 2.6.3)
     call KERNEL_SEG:cw_wm_onmouseup
     mov al, 1
     call KERNEL_SEG:cw_wm_snap  ; text on cell boundaries (SPEC.md 11.94)
@@ -1493,8 +1479,7 @@ hbm_wrimg:
     mov cx, HBP_SIZE
     call COLD_SEG:dwf_dskw_write
     jc .no
-    pop ax
-    clc
+    pop ax                      ; (CF = 0 from the `jc`)
     ret
 .no:
     pop ax
@@ -1952,20 +1937,24 @@ hbm_imgsize:
     pop cx
     ret
 
+hbm_res_f:                      ; hbm_res's two first refusals, whose .fail
+    jmp hbm_res.fail            ; is past short reach: one trampoline behind
+                                ; the `ret` above for two 5-byte jccs
+
 ; -----------------------------------------------------------------------------
 ; hbm_res - put the image back (SPEC.md 87.5): the extents, then the stub
 ; in:  the question was answered Resume; no lock held
 ; -----------------------------------------------------------------------------
 hbm_res:
     call hbm_enter              ; where the user stands, for a refusal
-    jc .fail
+    jc hbm_res_f
     call hbm_findimg            ; BX = its first cluster
-    jc .fail
+    jc hbm_res_f
     push bx
     call hbm_xcap               ; 2. sized for THIS volume, not the worst one
     mov bx, MEM_K_HIB
     mov bp, mem_claim_x
-    call COLD_SEG:hbk_bp ; DX = its segment
+    call COLD_SEG:wm_cbd ; DX = its segment
     pop ax
     jc .fail
     mov [hb_xseg], dx
@@ -2042,7 +2031,7 @@ hbm_res:
     mov dx, [hb_xseg]
     mov bx, MEM_K_HIB
     mov bp, mem_free_x
-    call COLD_SEG:hbk_bp
+    call COLD_SEG:wm_cbd
     mov word [hb_xseg], 0
 .fail:
     call COLD_SEG:drvf_drv_vol_back
@@ -2102,7 +2091,7 @@ hbm_dosrun:
     mov ax, [cs:hbm_dosrec + KDH_DIR]   ; the user stands, then stand where
     mov dl, [cs:hbm_dosrec + KDH_VOL]   ; DOS.O88 is - a FOLDER cluster, not
     mov bp, dsk_chdir_x                 ; hbm_root's zero, because a package
-    call COLD_SEG:hbk_bp                ; lives in APPS/ and not in the root
+    call COLD_SEG:wm_cbd                ; lives in APPS/ and not in the root
     jc .b2
     ; **THE NAME HAS TO BE IN KERNEL_SEG**, which is not what ES says: the
     ; compare underneath is `dsk_streq`, and that reads DS:SI against DS:DI
@@ -2123,7 +2112,7 @@ hbm_dosrun:
     loop .nm
     mov si, api_name
     mov bp, dskw_stat_x         ; ...and BY NAME off the directory (SPEC.md
-    call COLD_SEG:hbk_bp        ; 18.4), not out of the global listing: one
+    call COLD_SEG:wm_cbd        ; 18.4), not out of the global listing: one
     jc .b3                      ; far call where find-then-stage was two, and
     mov [cs:hbm_dosclus], bx    ; BX is the entry's first cluster - NOT the
                                 ; FAT record's own 26 (SPEC.md 96.37.1 item 4)
@@ -2135,7 +2124,7 @@ hbm_dosrun:
     call hbm_xcap               ; a claim big enough for the worst case
     mov bx, MEM_K_HIB
     mov bp, mem_claim_x
-    call COLD_SEG:hbk_bp        ; DX = its segment
+    call COLD_SEG:wm_cbd        ; DX = its segment
     jc .b5
     mov [hb_xseg], dx
     ; **ONE RUN COVERS BOTH PARTS** (SPEC.md 96.44.5.4). The core is part 1 and
@@ -2682,16 +2671,17 @@ hbm_extat:
     cmp [cs:hbm_xskip], dx
     jb .here                    ; the part starts inside this cluster
     sub [cs:hbm_xskip], dx      ; ...or past it: step over, reading nothing
-    jmp short .next
-.here:
+    jmp .next                   ; (near: SPEC.md 18.7.5's high word took the
+.here:                          ; short one out of reach)
     mov ax, si
     mov bp, dsk_clus2lba_x
-    call COLD_SEG:hbk_bp        ; AX = its first LBA, volume-relative
+    call COLD_SEG:wm_cbd        ; AX = its first LBA, volume-relative
     jc .bad
     add ax, [cs:hbm_xskip]      ; ...plus however far in the part starts
+    mov bx, [dsk_c2hi]          ; ...in 32 bits: the volume-relative LBA's own
+    adc bx, 0                   ; high word (SPEC.md 18.7.5)
     sub dx, [cs:hbm_xskip]      ; DX = sectors of this cluster we want
     mov word [cs:hbm_xskip], 0
-    xor bx, bx
     add ax, [hb_base]           ; DX:AX would be the absolute LBA, and the
     adc bx, [hb_base + 2]       ; high half is BX because DX is in use
     cmp dx, [cs:hbm_xtake]
@@ -2724,10 +2714,10 @@ hbm_extat:
 .next:
     mov ax, si
     mov bp, dsk_next_clus_x
-    call COLD_SEG:hbk_bp        ; AX = the next cluster; CF = outside the
+    call COLD_SEG:wm_cbd        ; AX = the next cluster; CF = outside the
     jc .bad                     ; volume's [2, dsk_maxclus]
     mov si, ax
-    jmp .clus                   ; near: hbk_bp made the walk longer
+    jmp .clus                   ; near: wm_cbd made the walk longer
 .done:
     clc
     jmp short .out
@@ -2825,9 +2815,9 @@ hbm_extents:
 .clus:
     mov ax, si
     mov bp, dsk_clus2lba_x
-    call COLD_SEG:hbk_bp  ; AX = its first LBA, volume-relative
+    call COLD_SEG:wm_cbd  ; AX = its first LBA, volume-relative
     jc .bad
-    xor dx, dx
+    mov dx, [dsk_c2hi]          ; ...and its high word (SPEC.md 18.7.5)
     add ax, [hb_base]
     adc dx, [hb_base + 2]       ; DX:AX = absolute
     mov bl, [dsk_spc]
@@ -2861,10 +2851,10 @@ hbm_extents:
     jz .done
     mov ax, si
     mov bp, dsk_next_clus_x
-    call COLD_SEG:hbk_bp ; AX = the next
+    call COLD_SEG:wm_cbd ; AX = the next
     jc .bad
     mov si, ax
-    jmp .clus       ; near: hbk_bp made the walk longer
+    jmp .clus       ; near: wm_cbd made the walk longer
 .done:
     clc
     jmp short .out
@@ -3068,7 +3058,7 @@ hbm_wake:
 .drop:
     push ax
     mov bp, dsk_fatw_drop
-    call COLD_SEG:hbk_bp
+    call COLD_SEG:wm_cbd
     pop ax
     inc al
     cmp al, DVOL_MAX
@@ -3082,8 +3072,11 @@ hbm_wake:
     mov byte [dskw_syswr], 0
     mov byte [dskw_isdir], 0
     mov bp, dsk_rah_flush
-    call COLD_SEG:hbk_bp
+    call COLD_SEG:wm_cbd
     mov word [mem_pinseg], 0    ; dsk_xfer's pin, mid-transfer in the image
+%ifdef OS88_BIGVOL
+    mov word [dsk_lbahi], 0     ; ...and its LBA's high word, which only its
+%endif                          ; .out spends (SPEC.md 18.7.5)
     ; ...AND THE EXTENT LIST THE PICTURE WAS TAKEN OVER (SPEC.md 87.6.1).
     ; `mem_pinseg` one level up: a word that was true of the machine that
     ; wrote the image and is meaningless in the machine that reads it - except
@@ -3106,7 +3099,7 @@ hbm_wake:
     jz .noxs
     mov bx, MEM_K_HIB
     mov bp, mem_free_x
-    call COLD_SEG:hbk_bp
+    call COLD_SEG:wm_cbd
     mov word [hb_xseg], 0
 .noxs:
     call KERNEL_SEG:fpg_end     ; ...and the progress widget it had up
@@ -3228,6 +3221,35 @@ hbm_wake:
     ;    any disk work, so the progress widget has a graphics mode to draw in
     mov bp, vid_setmode
     call KERNEL_SEG:cw_mem_disp
+%ifndef BAKED_FONT
+    ; 4a. ...AND THE GLYPH TABLE, which the image names BY ADDRESS (SPEC.md
+    ;     6.0.1). The renderers read [font_seg]:[font_base] in a ROM, and the
+    ;     image carries the pointer the WRITING machine's boot chose - so
+    ;     this asks the reading machine the same question, with the same
+    ;     body (FONT_PICK). A heap copy is refilled in place, since its claim
+    ;     came back with the image; a ROM pointer is simply replaced. No
+    ;     claim is made here: an option ROM found slow only at a resume is
+    ;     read in place, which is slower and never wrong. The same TIMED
+    ;     pick, so the fastest candidate is still the one taken. Nothing is live across
+    ;     it - every register below is reloaded before it is read.
+    FONT_PICK hbf               ; DX:BP = this machine's fastest table
+    mov ax, [font_seg]
+    cmp ax, 0xA000              ; a ROM (C000 up) or the image's heap copy
+    jae .fptr
+    push ds
+    mov es, ax
+    mov ds, dx
+    mov si, bp
+    xor di, di
+    mov cx, FONT_BYTES / 2
+    rep movsw
+    pop ds
+    jmp short .fdone
+.fptr:
+    mov [font_seg], dx
+    mov [font_base], bp
+.fdone:
+%endif
     mov byte [hb_mode], HB_M_GONE   ; before the close: app_close_win's hook
     call hbm_win                ; leaves a GONE window's image to the thunk
     jc .nowin                   ; (SPEC.md 87.1), and this code IS the image
@@ -3335,6 +3357,9 @@ hbm_wake:
                                 ; from that is a machine that never switches
     mov sp, [hb_sp]
     ret
+%ifndef BAKED_FONT
+    FONT_TIMERS hbf             ; step 4a's clock (kernel/font.inc)
+%endif
 
 ; =============================================================================
 ; THE STUB (SPEC.md 87.5). Copied to HS_CODE in the text framebuffer and

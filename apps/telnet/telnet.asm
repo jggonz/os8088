@@ -1792,7 +1792,7 @@ te_show:
     ret
 
 ; =============================================================================
-; te_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2)
+; te_about - the OSAPI_ABOUT_SET handler (slot 0x018A, SPEC.md 12.2)
 ; in:  SI = our window; UI task, gfx lock HELD, far-called at our segment
 ; out: nothing; preserves all registers
 ;
@@ -2227,7 +2227,9 @@ tz_dbl      equ tz_half + 1           ; byte: double-buffered (a cluster of
                                       ; 4,096 or less)
 tz_made     equ tz_dbl + 1            ; byte: the file exists, so the next commit
                                       ; is an APPEND and not a WRITE
-tz_req      equ tz_made + 1           ; byte: TZ_* - **THE WHOLE HANDSHAKE**,
+tz_wtok     equ tz_made + 1           ; word: the file's WRITE_SEQ token
+                                      ; (SPEC.md 18.4.9, 70.11.7)
+tz_req      equ tz_wtok + 2           ; byte: TZ_* - **THE WHOLE HANDSHAKE**,
                                       ; written last by the worker and cleared
                                       ; last by the UI task (SPEC.md 70.11.3)
 tz_rst      equ tz_req + 1            ; byte: TZR_*, the UI task's answer

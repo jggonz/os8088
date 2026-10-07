@@ -28,7 +28,7 @@ what OSAPI_WM_ONRESIZE is for, and it is what this measures:
   * and a forced wm_paint_all must find nothing to correct - on BOTH cards,
     because "it drew past its own frame" shows up on the other monitor.
 """
-import os, sys, time
+import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty, os88mouse, os88sym, dispcp
@@ -64,12 +64,8 @@ def full_repaint(m):
     what parking the CPU on a stub cost before it)."""
     m.cmd(cmd="run")
     m.write(S("cp_dirty"), b"\x01")
-    for _ in range(200):
-        time.sleep(0.05)
-        if m.read(S("cp_dirty"), 1)[0] == 0:
-            break
-    else:
-        raise RuntimeError("ui_task never drained [cp_dirty]")
+    os88marty.until(m, lambda mm: mm.read(S("cp_dirty"), 1)[0] == 0,
+                    "ui_task to drain [cp_dirty]", poll=0.05, limit=10.0)
     os88marty.settle(m)
     m.cmd(cmd="pause")
 
@@ -148,7 +144,7 @@ PLAIN = {".": "Period", "/": "Slash", "-": "Minus", "=": "Equal",
 def typed(m, text):
     for ch in text:
         m.key(PLAIN[ch]) if ch in PLAIN else m.type_text(ch)
-        time.sleep(0.15)
+        os88marty.pace(m, 0.15)
     os88marty.settle(m)
 
 
@@ -166,7 +162,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "CALC.O88")
-    time.sleep(2)
+    os88marty.ui_done(m, "the Calculator to open")
     slot = dispcp.win_list(m, S)[-1]
     r = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
     seg = u16(r, 22)
@@ -177,7 +173,6 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     typed(m, "c7+7=")
     typed(m, "c9/2=")
     typed(m, "h")                           # ...and fold it down
-    time.sleep(2)
     os88marty.settle(m)
     cx, cy, cw, ch = check(m, seg, cal, slot, "on the primary, folded down")
     both_diff(m, "folded down", (cx, cy + ch))
@@ -187,10 +182,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     dispcp.open_panel(m, mo, S, os88marty.settle)
     row = dispcp.adapter_row(avail, VID_CGA)
     dispcp.set_primary(m, mo, S, os88marty.settle, row)
-    time.sleep(2)
+    os88marty.ui_done(m, "the adapter change")
     os88marty.settle(m)
     dispcp.close_panel(m, mo, S, os88marty.settle)
-    time.sleep(1)
+    os88marty.pace(m, 1)
     os88marty.settle(m)
     dock = u16(m.read(S("vid_dock_y0"), 2))
     cx, cy, cw, ch = check(m, seg, cal, slot, "after the adapter changed")
@@ -205,10 +200,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     dispcp.open_panel(m, mo, S, os88marty.settle)
     dispcp.set_primary(m, mo, S, os88marty.settle,
                        dispcp.adapter_row(avail, VID_HERC))
-    time.sleep(2)
+    os88marty.ui_done(m, "the adapter change back")
     os88marty.settle(m)
     dispcp.close_panel(m, mo, S, os88marty.settle)
-    time.sleep(1)
+    os88marty.pace(m, 1)
     os88marty.settle(m)
     cx, cy, cw, ch = check(m, seg, cal, slot, "back on the tall adapter")
     both_diff(m, "back on the tall adapter", (cx, cy + ch))
@@ -218,7 +213,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     dispcp.open_panel(m, mo, S, os88marty.settle)
     dispcp.set_mode(m, mo, S, os88marty.settle, "right")
     dispcp.close_panel(m, mo, S, os88marty.settle)
-    time.sleep(1)
+    os88marty.pace(m, 1)
     os88marty.settle(m)
     pw = u16(m.read(S("vid_pw"), 2))
     vw = u16(m.read(S("vid_w"), 2))
@@ -228,7 +223,6 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # ...drag the title bar well past the seam, so the ORIGIN is on the CGA
     tx, ty = cx + cw // 2, cy + TITLE_H // 2
     mo.drag(tx, ty, pw + 200, 40)
-    time.sleep(2)
     os88marty.settle(m)
     cx, cy, cw, ch = check(m, seg, cal, slot, "dragged onto the CGA")
     if cx < pw:
@@ -254,7 +248,6 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     os88marty.settle(m)
     dx0, dy0, dw0, dh0 = dispcp.win_rect(m, S, dw)
     mo.drag(dx0 + dw0 // 2, dy0 + TITLE_H // 2, pw + 210, 60)
-    time.sleep(2)
     os88marty.settle(m)
     dx1, dy1, dw1, dh1 = dispcp.win_rect(m, S, dw)
     print("   the Disk window is now at (%d,%d) %dx%d" % (dx1, dy1, dw1, dh1))

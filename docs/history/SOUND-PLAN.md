@@ -729,12 +729,12 @@ kernel image changes even when nothing sound-side ships on disk).
   `screendump` unchanged elsewhere.
 - **Phase 2 — speaker PCM + Control Panel page.** `spk_pcm_run` (ch0-latch pacer,
   sch_lock window, resync rule, release-folding click-abort + event drain), far xlat
-  builder, slot 0x0080 live, CP Sound page (route radio, excl checkbox, Test button),
+  builder, slot 0x007C live, CP Sound page (route radio, excl checkbox, Test button),
   `snd_excl_ok` policy.  (It shipped with `snd_pcm_emitted`/`snd_pcm_resync`
   debug counters too; nothing could ever read either — SPEC.md §34.4 said a
   gate did and the page it named was retired — and they are gone.)
   *Test*: the CP Test button synthesises a 1.5 s 1 kHz sine into SND_SEG and plays
-  it at 8,000 Hz (N = 149) through slot 0x0080. **Measured QEMU reality (11.0.2,
+  it at 8,000 Hz (N = 149) through slot 0x007C. **Measured QEMU reality (11.0.2,
   worse than "imperfectly")**: the pcspk backend emits *zero* frames while ch2 is
   in mode 0 — the wav capture stays empty for the whole clip, so no WAV assertion
   about the clip is possible in QEMU at all. The WAV harness instead proves the

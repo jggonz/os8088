@@ -5,21 +5,26 @@
 ; and Bounce. Nothing is created at boot - instances are launched on demand
 ; by app_launch (SPEC.md 29), which allocates a state block from the kind's
 ; pool, creates the window from the kind's template, and spawns the kind's
-; task (Timer/Bounce run one task per instance). Closing an instance frees
-; all of it: the UI task sets the die flag (I_STATE=2) and hides the window;
-; the task notices at its next wake and tears down via inst_task_die.
+; task if it has one (Bounce runs one task per instance; the Timer has NONE
+; since SPEC.md 14.7 - it keeps time and draws from its window's one-shot
+; timer, SPEC.md 13.9, on the UI task). Closing an instance frees all of it:
+; a task-less kind goes at once, and for Bounce the UI task sets the die flag
+; (I_STATE=2) and hides the window; the task notices at its next wake and
+; tears down via inst_task_die.
 ;
-; Paint procs and key handlers run with the gfx lock already held by the
-; caller (SPEC.md 11), find their instance state via inst_of_win + I_SPTR,
-; and never lock, block or spawn; the Timer/Bounce tasks take the lock
-; themselves and arm a clip region under it (SPEC.md 11.3) before touching
-; the screen. Background tasks use only os8088 primitives and [ticks] - no
-; BIOS calls (SPEC.md 7).
+; Paint procs, key handlers and W_ONTIMER run with the gfx lock already held
+; by the caller (SPEC.md 11), find their instance state via inst_of_win +
+; I_SPTR, and never lock, block or spawn; the Bounce task takes the lock
+; itself, and it and the Timer's W_ONTIMER both arm a clip region under it
+; (SPEC.md 11.3) before touching the screen. Background tasks use only os8088
+; primitives and [ticks] - no BIOS calls (SPEC.md 7).
 ;
 ; app_bounce_task below is the REFERENCE IMPLEMENTATION for a package's
-; worker task (SPEC.md 20.6): sleep, take the lock, wm_clip_set under it,
-; draw briefly, release, check the die flag. Keep its shape - the author
-; rules point at it.
+; worker task (SPEC.md 20.6): sleep, check the die flag, take the lock,
+; wm_clip_set under it, draw briefly, release. Keep its shape - the author
+; rules point at it. It is written INLINE, as a package writes it: the three
+; app_kind_* steps it used to call existed so the Timer's task and this one
+; did not carry the sequence twice, and SPEC.md 14.7 left this one alone.
 ; =============================================================================
 
 ; --- geometry ----------------------------------------------------------------
@@ -61,6 +66,9 @@ APP_TMR_BX   equ (APP_TMR_CW - APP_TMR_NB * APP_TMR_BW \
                   - (APP_TMR_NB - 1) * APP_TMR_BGAP) / 2   ; = 4, the left inset
 APP_TMR_LT   equ (APP_TMR_BH - 8) / 2       ; a label's top within its button
 
+APP_TMR_TICKS equ 9             ; the clock's period (SPEC.md 14.7): just under
+                                ; half a second, so a displayed second is never
+                                ; more than one firing late
 APP_TMR_START equ 0             ; button indices - the order they are drawn,
 APP_TMR_STOP  equ 1             ; hit-tested and dispatched in
 APP_TMR_RESET equ 2
@@ -87,13 +95,16 @@ BAL_VX    equ 4
 BAL_VY    equ 6                 ; stride 8
 
 ; --- window templates: {x, y, w, h, title, paint, onkey, onclick} words ------
+; The callbacks are the `.cold` BODIES: a kernel window's callbacks are
+; dispatched into the cold segment by wm_pkgcall (SPEC.md 2.6.3), so they need
+; no resident thunk and none has one.
 ; The Timer's x keeps its whole cap-10 cascade (+16 per pool slot, SPEC.md
 ; 29.4) on a 640px screen: 330 + 144 + 160 = 634.
-app_tpl_about:  dw 170, 140, 300, 120, app_ttl_about,  app_about_paint,  0, 0
+app_tpl_about:  dw 170, 140, 300, 120, app_ttl_about,  app_about_paint_x, 0, 0
 %ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
-app_tpl_timer:  dw 330,  60, APP_TMR_W, APP_TMR_H, app_ttl_timer, app_tmr_paint
-                dw 0, app_tmr_onclick
-app_tpl_bounce: dw 300, 150, 150, 130, app_ttl_bounce, app_bounce_paint, 0, 0
+app_tpl_timer:  dw 330,  60, APP_TMR_W, APP_TMR_H, app_ttl_timer, app_tmr_paint_x
+                dw 0, app_tmr_onclick_x
+app_tpl_bounce: dw 300, 150, 150, 130, app_ttl_bounce, app_bounce_paint_x, 0, 0
 %endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
 
 app_ttl_about:  db 'About os8088', 0
@@ -109,7 +120,7 @@ app_tmr_s_reset: db 'Reset', 0
 app_tmr_lbl:     dw app_tmr_s_start, app_tmr_s_stop, app_tmr_s_reset
 
 ; The wrap limit of each clock field, INDEXED BY THAT FIELD'S OWN OFFSET, so
-; app_tmr_task's carry walk is one loop rather than three copies of it.
+; app_tmr_tick's carry walk is one loop rather than three copies of it.
 %if TMR_HRS != 0 || TMR_MIN != 1 || TMR_SEC != 2
 %error "app_tmr_lim is indexed by TMR_HRS/MIN/SEC and needs them at 0/1/2"
 %endif
@@ -222,11 +233,15 @@ app_tmr_kinit_x:
                                 ; previous instance's cells are sitting there
                                 ; describing a window that has been destroyed
 %ifdef KERN_BIG
-    mov ax, app_tmr_onup        ; SPEC.md 13.7/13.8.1: the two edges the three
+    mov ax, app_tmr_onup_x      ; SPEC.md 13.7/13.8.1: the two edges the three
     call KERNEL_SEG:cw_wm_onmouseup           ; buttons fire and track on. Not template
-    mov ax, app_tmr_ondrag      ; words, so a KD_INIT is where a kernel window
+    mov ax, app_tmr_ondrag_x    ; words, so a KD_INIT is where a kernel window
     call KERNEL_SEG:cw_wm_ondrag              ; installs them - and a REUSED pool slot must
     mov byte [app_tmr_down], 0  ; not hand a pressed button to its successor
+    mov word [bx+W_ONTIMER], app_tmr_tick_x   ; SPEC.md 14.7: THE CLOCK. The
+    mov ax, APP_TMR_TICKS       ; install is one store made in place, as
+    call KERNEL_SEG:cw_wm_timer ; wm_ontimer's own body is (13.9); the arm
+                                ; needs the routine, which sets [wm_tarm]
 %endif
     mov al, 1                   ; the content origin onto a multiple of 8, so
     call KERNEL_SEG:cw_wm_snap                ; every digit run takes font_run's single-store
@@ -243,21 +258,20 @@ app_tmr_kinit_x:
     retf
 
 ; ---- app_bounce_kinit - fresh Bounce: ball at (4,4), velocity (3,2) ----------
-app_bounce_kinit_x:
-    mov word [ss:di+BAL_X], 4
-    mov word [ss:di+BAL_Y], 4
-    mov word [ss:di+BAL_VX], APP_BAL_VX0
-    mov word [ss:di+BAL_VY], APP_BAL_VY0
+%if APP_BAL_VX0 != 3 || APP_BAL_VY0 != 2
+  %error "app_bounce_kinit_x counts DOWN from the start position 4 to VX0 and then VY0"
+%endif
+app_bounce_kinit_x:             ; AX is free here: app_launch called through
+    mov ax, 4                   ; it and reloads it after
+    mov [ss:di+BAL_X], ax
+    mov [ss:di+BAL_Y], ax
+    dec ax
+    mov [ss:di+BAL_VX], ax      ; APP_BAL_VX0
+    dec ax
+    mov [ss:di+BAL_VY], ax      ; APP_BAL_VY0
     retf
 %endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
 
-; --- apf_app_about_center - the far side of app_about_center's thunk --------
-; A PAD rather than SPEC.md 2.6.1's retf body, because app_about_paint_x near-
-; calls the body four times from in here. One of the two shapes has to give,
-; and four near calls are worth more than the pad's four bytes.
-apf_app_about_center:
-    call app_about_center_x
-    retf
 %ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
 
 ; -----------------------------------------------------------------------------
@@ -267,8 +281,8 @@ apf_app_about_center:
 ;      (DI undefined, BX still SI)
 ; clobbers: BX, DI, flags
 ;
-; Five event entries (W_PAINT x2, W_ONCLICK, W_ONMOUSEUP, W_ONDRAG) opened
-; with the identical four instructions. inst_of_win documents BX as preserved
+; Six event entries (W_PAINT x2, W_ONCLICK, W_ONMOUSEUP, W_ONDRAG and the
+; Timer's W_ONTIMER) open with the identical four instructions. inst_of_win documents BX as preserved
 ; (SPEC.md 29), which is what lets this leave the window in BX for
 ; app_tmr_hit / app_tmr_setdown / app_tmr_btn / app_ball_fill - and the two
 ; second `mov bx, si` reloads that relied on it implicitly are gone with it.
@@ -282,53 +296,6 @@ app_state_of:
 .no:
     ret
 
-; =============================================================================
-; The per-instance task spine (SPEC.md 14, 20.6, 29.3). Timer and Bounce run
-; the identical loop - open, wait, die on request, take the lock and arm the
-; clip - and differ only in what they draw inside it. These three are the
-; steps by name; a PACKAGE author writes them inline, because they are kernel-
-; private, and SPEC.md 20.6 rule 5 names the sequence app_kind_arm holds.
-; =============================================================================
-
-; ---- app_kind_open - the spawn prologue -------------------------------------
-; in:  DX = the spawn argument (the instance index)
-; out: BP = instance record, SI = state block; DI = record, AL = index
-app_kind_open:
-    mov al, dl
-    call KERNEL_SEG:cw_inst_ptr ; DI = our instance record
-    mov bp, di                  ; BP = record for life
-    mov si, [ds:bp+I_SPTR]      ; SI = state for life (ds: override: BP
-    ret                         ; addresses SS by default, SPEC.md 1)
-
-; ---- app_kind_wait - sleep, then honour a close request ---------------------
-; in:  AX = ticks to sleep, BP = instance record
-; out: returns only if the instance is still wanted; NEVER RETURNS otherwise
-;
-; inst_task_die ends in task_exit, so the return address this leaves on the
-; task stack is freed with the stack itself.
-app_kind_wait:
-    call KERNEL_SEG:cw_task_sleep
-    cmp byte [ds:bp+I_STATE], 2 ; close requested?
-    jne .on
-    mov di, bp
-    call KERNEL_SEG:cw_inst_task_die           ; never returns
-.on:
-    ret
-
-; ---- app_kind_arm - lock, re-check visibility, arm the clip -----------------
-; in:  BP = instance record
-; out: THE LOCK IS HELD ON BOTH EXITS. CF = 0, BX = window ptr, clip armed;
-;      CF = 1 = not one visible pixel, draw nothing this frame (SPEC.md 11.3)
-app_kind_arm:
-    call KERNEL_SEG:cw_gfx_lock
-    mov bx, [ds:bp+I_WIN]
-    test byte [bx+W_FLAGS], 2   ; re-check under the lock (SPEC.md 14)
-    jz .no
-    call KERNEL_SEG:cw_wm_clip_set            ; CF = 1: not one visible pixel (SPEC 11.3)
-    ret
-.no:
-    stc
-    ret
 %endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
 
 ; =============================================================================
@@ -346,11 +313,8 @@ app_kind_arm:
 ; re-measures every string, so unequal lengths are fine.
 ; -----------------------------------------------------------------------------
 app_about_paint_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call kentc_di               ; KENT: push ax..di (DI rides along for the
+                                ; ladder; it is not touched)
 
                                 ; ...and no pen: app_about_center is an
                                 ; OPAQUE run now (SPEC.md 6.6.5) and nothing
@@ -380,7 +344,7 @@ app_about_paint_x:
     mov si, [si + app_about_vid]   ; wants. cbw is safe because [vid_kind] is
     call app_about_center_x        ; 0, 1 or 2 (kernel/viddet.inc)
 
-    jmp kretfc_si
+    jmp kretc_di
 
 ; -----------------------------------------------------------------------------
 ; app_about_center - draw one string centered horizontally in a window
@@ -389,7 +353,7 @@ app_about_paint_x:
 ; clobbers: AX, CX (internal helper)
 ; -----------------------------------------------------------------------------
 app_about_center_x:
-    call KERNEL_SEG:font_width             ; AX = string width, px
+    call ct_font_width                     ; AX = string width, px
     mov cx, [bx+W_W]
     dec cx                      ; content width, two bytes rather than three
     dec cx
@@ -398,8 +362,7 @@ app_about_center_x:
     add cx, [bx+W_X]
     inc cx                      ; content left = W_X + 1
     mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground:
-    call KERNEL_SEG:cw_font_run               ; W_PAINT arrives white-filled (6.6.5)
-    ret
+    jmp ct_cw_font_run                        ; W_PAINT arrives white-filled (6.6.5)
 %ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
 
 ; =============================================================================
@@ -407,77 +370,88 @@ app_about_center_x:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; app_tmr_task - per-instance task: keep time, redraw HH:MM:SS twice a
-;                second, die on request
-; in:  DX = instance index (the spawn argument, SPEC.md 8); never returns
+; app_tmr_tick - W_ONTIMER for a Timer window (SPEC.md 13.9, 14.7): keep time,
+;                redraw HH:MM:SS twice a second, re-arm
+; in:  SI = window ptr, CX = DX = 0 (a timer has no point); the UI task, gfx
+;      lock held - W_ONCLICK's environment exactly
+; out: nothing
+; clobbers: nothing (flags only)
+;
+; THIS WAS A TASK, and SPEC.md 14.7 is why it is not. The body below is the
+; old app_tmr_task's loop minus its three spine calls: the sleep is the
+; one-shot re-armed here, the die check is gone because a task-less kind closes
+; at once (wm_destroy zeroes W_FLAGS, and ui_timer_pass never fires a dead
+; record), and the lock is ui_timer_pass's. What it buys is the stack: the
+; drawing below takes font_run's per-cell path whenever a window cuts the
+; digit line (SPEC.md 14.4), 90 bytes down, and an IRQ0 on top of that went
+; through a 128-byte slice on the machine the field runs. The UI task's stack
+; is not a slice.
+;
 ; The accumulator design is binding (SPEC.md 14): delta ticks since the last
 ; sample (wrap-safe subtraction) are added to TMR_ACC in tenths of a tick;
 ; every 182 tenths (18.2 ticks) advances one second with carries. The tick is
-; SAMPLED every iteration whether the timer runs or not - a stopped interval
-; is discarded rather than banked, which is the whole of what Stop means -
-; and only a running timer accumulates it. Only the drawing is conditional,
-; on the window being visible and on wm_clip_set finding any of it uncovered,
-; both under the gfx lock (SPEC.md 11.3). A half-covered Timer redraws the
-; half you can see instead of freezing. I_STATE = 2 at wake = close
-; requested: tear down via inst_task_die (SPEC.md 29).
+; SAMPLED every firing whether the timer runs or not - a stopped interval is
+; discarded rather than banked, which is the whole of what Stop means - and
+; only a running timer accumulates it. A long UI stall (a held-open menu) is
+; one late firing owing many seconds, which the 32-bit multiply below was
+; already written for.
 ;
-; The task draws the DIGITS and nothing else. The three buttons change only
-; when they are clicked, so they are drawn by W_PAINT and by the click path,
-; both of which run unclipped - see app_tmr_btn.
-;
-; And it usually draws nothing at all: it wakes every 9 ticks, which is just
-; under half a second, so on roughly every other wake the displayed second has
-; not moved and app_tmr_render returns having touched no pixel. When it has
-; moved it is normally ONE cell. See that routine's banner.
+; It fires whether or not the window can be seen (13.9: USED, not visible), so
+; a minimized Timer keeps time; wm_clip_set's CF = 1 is what skips the drawing
+; (SPEC.md 11.3), and a half-covered Timer redraws the half you can see. The
+; handler draws the DIGITS and nothing else - the buttons change only when
+; they are clicked - and usually not even those: every other firing lands in
+; the same second and app_tmr_render touches no pixel.
 ; -----------------------------------------------------------------------------
-app_tmr_task_x:
-    call app_kind_open          ; BP = record, SI = time state, both for life
-.loop:
-    mov ax, 9
-    call app_kind_wait          ; ...and never returns if the close is in
+app_tmr_tick_x:
+    call kentc_di               ; KENT: push ax..di
+    call app_state_of           ; BX = window, DI = time state
+    jc .out
+    mov ax, APP_TMR_TICKS       ; ONE-SHOT, disarmed before we were called, so
+    call KERNEL_SEG:cw_wm_timer ; the repeat is ours to ask for (13.9)
 
-    ; --- time-keeping, every iteration ---
+    ; --- time-keeping, every firing ---
     mov ax, [ticks]
     mov dx, ax
-    sub ax, [ss:si+TMR_LAST]       ; delta, safe across the 65536 wrap
-    mov [ss:si+TMR_LAST], dx       ; sampled even while stopped, so a stop
+    sub ax, [ss:di+TMR_LAST]       ; delta, safe across the 65536 wrap
+    mov [ss:di+TMR_LAST], dx       ; sampled even while stopped, so a stop
                                    ; costs its interval instead of banking it
-    cmp byte [ss:si+TMR_RUN], 0
+    cmp byte [ss:di+TMR_RUN], 0
     je .draw                       ; stopped: the delta goes nowhere
     mov dx, 10
     mul dx                      ; DX:AX = delta * 10 (tenths of a tick) - keep
-    add ax, [ss:si+TMR_ACC]        ; the high half: one long gfx_lock starvation
-    adc dx, 0                   ; (a held-open menu) can owe > 65535 tenths
+    add ax, [ss:di+TMR_ACC]        ; the high half: one long UI stall (a
+    adc dx, 0                   ; held-open menu) can owe > 65535 tenths
     mov cx, 182
     div cx                      ; AX = whole seconds owed, DX = leftover
-    mov [ss:si+TMR_ACC], dx        ; (quotient <= 3602, so DIV cannot fault)
+    mov [ss:di+TMR_ACC], dx        ; (quotient <= 3602, so DIV cannot fault)
     mov cx, ax
 .adv:
     jcxz .draw
     dec cx
     mov bx, TMR_SEC             ; + 1 second, with carries: one walk from SEC
 .carry:                         ; back to HRS over three ADJACENT, DESCENDING
-    mov al, [ss:bx+si]          ; fields, each with its own wrap limit read
+    mov al, [ss:bx+di]          ; fields, each with its own wrap limit read
     inc al                      ; out of app_tmr_lim by the same offset
-    mov [ss:bx+si], al
+    mov [ss:bx+di], al
     cmp al, [bx+app_tmr_lim]    ; DS = KERNEL_SEG in .cold, so the table in
     jb .adv                     ; .text is reachable by name (SPEC.md 2.6)
-    mov byte [ss:bx+si], 0
+    mov byte [ss:bx+di], 0
     dec bx                      ; 2 -> 1 -> 0 -> -1, and the sign is what ends
     jns .carry                  ; the ladder after hours wrap
     jmp short .adv
 
-    ; --- drawing, only when the window can actually be seen ---
+    ; --- drawing, only where the window can actually be seen ---
 .draw:
-    call app_kind_arm           ; lock, re-check visibility, arm the clip
-    jc .skip
-    mov di, si                  ; DI = time state for the renderer
+    mov bx, si                  ; the window again: the carry walk spent BX
+    call KERNEL_SEG:cw_wm_clip_set  ; CF = 1: not one visible pixel (SPEC
+    jc .out                         ; 11.3), and hidden counts. The clip dies
+                                    ; at ui_timer_pass's gfx_unlock
     call app_tmr_digits         ; black HH:MM:SS on white - the background is
                                 ; erased per glyph cell in there, NOT as one
                                 ; 64x8 rect (SPEC.md 11.3)
-.skip:
-    call KERNEL_SEG:cw_gfx_unlock
-    jmp .loop
+.out:
+    jmp app_tmr_edge_out
 
 ; -----------------------------------------------------------------------------
 ; app_tmr_paint - W_PAINT for a Timer window
@@ -486,12 +460,12 @@ app_tmr_task_x:
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
 app_tmr_paint_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
 
     call app_state_of           ; BX = window, DI = time state
     jc .done
@@ -500,10 +474,15 @@ app_tmr_paint_x:
                                 ; showing is gone and the incremental redraw
                                 ; below must letter all eight of them
     call app_tmr_digits         ; digits FIRST: a button may leave the pen
-    call app_tmr_btns           ; disabled, and app_tmr_render's own
+                                ; disabled, and app_tmr_render's own
                                 ; gfx_pen_live is what makes the order not
                                 ; matter
-
+    mov al, APP_TMR_START       ; ...then all three buttons (this was
+.btn:                           ; app_tmr_btns, with this one caller - inline
+    call app_tmr_btn            ; since size pass 9; AX is banked by the KENT)
+    inc ax
+    cmp al, APP_TMR_NB
+    jb .btn
 .done:
     jmp app_tmr_edge_out
 
@@ -520,12 +499,12 @@ app_tmr_paint_x:
 ; letter freely (the SPEC.md 22.2 argument, one module over).
 ; -----------------------------------------------------------------------------
 app_tmr_onclick_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
 
     call app_state_of           ; BX = window, DI = time state
     jc app_tmr_edge_out
@@ -558,7 +537,7 @@ app_tmr_onclick_x:
 ; failure - loud, not silent - if anything is ever inserted between them.
 ; -----------------------------------------------------------------------------
 app_tmr_edge_out:
-    jmp kretfc_di
+    jmp kretc_di
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
@@ -609,12 +588,12 @@ app_tmr_track:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 app_tmr_onup_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     call os88ui_fire ; AX = what the press armed, and it is CLEARED
     call app_tmr_track
     jc app_tmr_edge_out
@@ -631,12 +610,12 @@ app_tmr_onup_x:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 app_tmr_ondrag_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     call os88ui_armed ; PEEK: the arm is the release's to spend
     call app_tmr_track
     jc app_tmr_edge_out
@@ -681,12 +660,12 @@ app_tmr_setdown:
 ; kern_small from the press, and neither has an opinion the other does not.
 ; -----------------------------------------------------------------------------
 app_tmr_act:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     call app_tmr_bok            ; a greyed control explains itself, so a
     jc .done                    ; refused click says nothing more (SPEC.md 47
                                 ; rule 6) - no beep, no notice
@@ -702,16 +681,15 @@ app_tmr_act:
 
 .start:
     call app_tmr_stamp          ; the stopped interval is discarded here as
-    mov al, 1                   ; well as in the task: up to 9 ticks of it can
-    jmp short .run              ; be sitting unsampled at the moment of a click
+                                ; well as in app_tmr_tick: up to 9 ticks of it
+                                ; can be sitting unsampled at a click
 .stop:
-    xor al, al
-.run:
-    mov [ss:di+TMR_RUN], al     ; AL is reloaded at .pens immediately below
-.pens:
+    xor al, 1                   ; Start (0) runs it, Stop (1) stops it - the
+    mov [ss:di+TMR_RUN], al     ; 0/1 app_tmr_bok asserts. AL is reloaded at
+.pens:                          ; .pens immediately below
     mov al, APP_TMR_START       ; Start and Stop just traded pens; Reset did
     call app_tmr_btn            ; not move, and the digits did not either
-    mov al, APP_TMR_STOP
+    inc ax                      ; APP_TMR_STOP (app_tmr_btn ignores AH)
     call app_tmr_btn
 .done:
     jmp kretc_di
@@ -735,32 +713,12 @@ app_tmr_act:
 %endif
 app_tmr_bok:
     push ax
-    xor al, [ss:di+TMR_RUN]
-    cmp al, 1
+    xor al, [ss:di+TMR_RUN]     ; 1 exactly for the greyed button...
+    dec al                      ; ...which is 0 here...
+    cmp al, 1                   ; ...and the only value below 1: CF = greyed
     pop ax                      ; pop touches no flag, which is what preserves
-    je .no                      ; AX *and* the answer
-    clc
-    ret
-.no:
-    stc
-    ret
+    ret                         ; AX *and* the answer
 
-; -----------------------------------------------------------------------------
-; app_tmr_btns - draw all three buttons
-; in:  BX = window ptr, DI = time state ptr (gfx lock held)
-; out: nothing
-; clobbers: flags (internal helper)
-; -----------------------------------------------------------------------------
-app_tmr_btns:
-    push ax
-    mov al, APP_TMR_START
-.next:
-    call app_tmr_btn
-    inc al
-    cmp al, APP_TMR_NB
-    jb .next
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; app_tmr_btn - draw ONE button: erase, frame, centred label, all in the pen
@@ -779,21 +737,31 @@ app_tmr_btns:
 ; call from anywhere.
 ; -----------------------------------------------------------------------------
 app_tmr_btn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentc_bp               ; KENT: push ax..bp
+
+
+
+
+
+
 
     xor ah, ah
     mov bp, ax                  ; BP = the index for the whole routine, and a
                                 ; VALUE rather than an address (SS is not DS,
                                 ; SPEC.md 1 rule 3) - AX, BX, CX and DX are
                                 ; all about to be rect corners
-    call app_tmr_brect          ; AX,BX,CX,DX = its inclusive screen rect
-    call KERNEL_SEG:cw_wm_clip_test
+    mov cl, APP_TMR_BW + APP_TMR_BGAP ; --- its inclusive screen rect in
+    mul cl                      ; AX,BX,CX,DX (this was app_tmr_brect, and
+    mov cx, ax                  ; this its one caller - inline since size pass
+    call ct_cw_wm_content       ; 9). AX = index * pitch (both fit a byte);
+    add cx, ax                  ; then AX = content left, DX = content top
+    add cx, APP_TMR_BX          ; CX = the button's x, DX = its y
+    add dx, APP_TMR_BY
+    mov ax, cx
+    mov bx, dx
+    add cx, APP_TMR_BW - 1
+    add dx, APP_TMR_BH - 1
+    call ct_cw_wm_clip_test
     jc .out
     call ui_krect4              ; the rect, staged whole - fdlg.inc's, `.cold`
                                 ; like this, so the call is near
@@ -829,25 +797,7 @@ app_tmr_btn:
 .out:
     jmp kretc_bp
 
-; -----------------------------------------------------------------------------
-; app_tmr_brect - one button's inclusive screen rect
-; in:  AL = button index, BX = window ptr
-; out: AX = x1, BX = y1, CX = x2, DX = y2
-; clobbers: AX, BX, CX, DX (internal helper)
-; -----------------------------------------------------------------------------
-app_tmr_brect:
-    mov cl, APP_TMR_BW + APP_TMR_BGAP
-    mul cl                      ; AX = index * pitch (both fit a byte)
-    mov cx, ax
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
-    add cx, ax
-    add cx, APP_TMR_BX          ; CX = the button's x, DX = its y
-    add dx, APP_TMR_BY
-    mov ax, cx
-    mov bx, dx
-    add cx, APP_TMR_BW - 1
-    add dx, APP_TMR_BH - 1
-    ret
+
 
 ; -----------------------------------------------------------------------------
 ; app_tmr_hit - which button is under a click? (SPEC.md 14)
@@ -855,7 +805,7 @@ app_tmr_brect:
 ; out: AL = button index, CF = 0; CF = 1 = no button (AL undefined)
 ; clobbers: AX, flags (internal helper)
 ;
-; Derived from the same constants app_tmr_brect draws from, so the hit-test
+; Derived from the same constants app_tmr_btn's rect draws from, so the hit-test
 ; and the pixels cannot part company - the fm_hit argument (SPEC.md 22.2).
 ; -----------------------------------------------------------------------------
 app_tmr_hit:
@@ -864,7 +814,7 @@ app_tmr_hit:
     push dx
     push si
     mov si, dx                  ; SI = click y (wm_content wants DX)
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
+    call ct_cw_wm_content                     ; AX = content left, DX = content top
     sub cx, ax                  ; CX = content-relative x
     sub si, dx                  ; SI = content-relative y
     cmp si, APP_TMR_BY
@@ -899,8 +849,8 @@ app_tmr_hit:
 ; app_tmr_digits - position and draw the HH:MM:SS line
 ; in:  BX = window ptr, DI = time state ptr (gfx lock held)
 ; out: nothing
-; clobbers: flags (SI is preserved - the timer task keeps its state ptr there
-;           for life, so a clobber would scramble the state)
+; clobbers: flags (SI is preserved - every caller is a W_* edge entered with
+;           the window there, and SPEC.md 13 promises it back)
 ;
 ; The top-left of the 64x8 "HH:MM:SS" rect is APP_TMR_DX across the content
 ; and APP_TMR_DY down it. The x used to be centred arithmetically, from
@@ -911,18 +861,95 @@ app_tmr_hit:
 ; 14).
 ; -----------------------------------------------------------------------------
 app_tmr_digits:
-    push ax
-    push cx
-    push dx
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
+    call kentc_di               ; KENT: push ax..di. (app_tmr_render and
+                                ; app_tmr_span below were this routine's one
+                                ; callee each and are inline since size pass
+                                ; 9 - one frame where there were three; their
+                                ; notes are below)
+    call ct_cw_wm_content                     ; AX = content left, DX = content top
     mov cx, ax
     add cx, APP_TMR_DX          ; CX = string x, DX = string y
     add dx, APP_TMR_DY
-    call app_tmr_render
-    pop dx
-    pop cx
-    pop ax
-    ret
+    ; --- app_tmr_render: format "HH:MM:SS", draw the cells that CHANGED ---
+    mov si, di                  ; one walk over the three ADJACENT fields,
+    mov bx, app_tmr_str         ; writing "HH:MM:SS:" ...
+.fmt:
+    mov al, [ss:si]             ; the source is SS-relative; the destination is
+    call KERNEL_SEG:cw_clk_put2 ; .bss, and clk_put2 writes [bx] through DS,
+                                ; which is KERNEL_SEG in .cold too. SPEC.md
+                                ; 37's own two-digit pair rather than a second
+                                ; copy of it - the `aam / add ax,0x3030 /
+                                ; leading zero for free` idiom and its COMMENT
+                                ; were written out identically in both files.
+                                ; BX comes back advanced by 2, which is what
+                                ; makes the loop bound below work unchanged
+    mov byte [bx], ':'
+    inc bx
+    inc si
+    cmp bx, app_tmr_str + 9
+    jb .fmt
+    mov byte [app_tmr_str+8], 0 ; ...and the third colon IS the NUL cell
+
+    mov ax, cx                  ; the whole line's inclusive rect: AX = x1,
+    mov bx, dx                  ; BX = y1, CX = x2, DX = y2
+    add cx, APP_TMR_DW - 1
+    add dx, 7
+    call ct_cw_wm_clip_test                   ; preserves all four (and answers "free" when
+    mov cx, ax                  ; nothing is armed, which is every W_PAINT and
+    mov dx, bx                  ; every click)
+    jc .whole
+
+    ; --- app_tmr_span: which cells differ, and TMR_SHOWN adopts the new
+    ; line (CX is the run's x and is banked across it; BX is free)
+    push cx
+    mov ch, 0xFF                ; no cell has differed yet
+    xor bx, bx
+.cell:
+    mov al, [app_tmr_str+bx]
+    cmp al, [ss:bx+di+TMR_SHOWN]
+    je .next
+    mov [ss:bx+di+TMR_SHOWN], al
+    cmp ch, 0xFF
+    jne .last
+    mov ch, bl
+.last:
+    mov cl, bl                  ; kept overwritten: the last one to get here
+.next:                          ; is the far end of the span
+    inc bx
+    cmp bx, 8
+    jb .cell
+    cmp ch, 0xFF                ; CF = 0 exactly when CH is still 0xFF...
+    cmc                         ; ...so CF = 1 exactly when nothing differed:
+    mov ax, cx                  ; it already showed it. AH = the first
+    pop cx                      ; differing cell, AL = the last (mov and pop
+    jc .out                     ; touch no flag)
+    mov bl, al                  ; AL = the LAST cell that changed
+    xor bh, bh
+    mov byte [app_tmr_str+1+bx], 0  ; terminate after the last changed cell.
+                                    ; The scratch is rebuilt on every call, so
+                                    ; nothing has to put the byte back
+    mov bl, ah                  ; AH = the FIRST
+    mov si, bx
+    add si, app_tmr_str         ; SI = the run...
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1                   ; ...and its x, cell * 8 (8086: no shl by an
+    add cx, bx                  ; immediate other than 1 - SPEC.md 1 rule 2)
+    jmp short .draw
+.whole:
+    call app_tmr_forget         ; some of these cells are about to be refused,
+    mov si, app_tmr_str         ; so nothing may be remembered about any of them
+.draw:
+    call KERNEL_SEG:cw_gfx_pen_live           ; a button drawn just before may have left
+                                ; [gfx_dis] set, which is both a checkerboard
+                                ; glyph and font_run's slow path (SPEC.md 47
+                                ; rule 1) - and font_run takes its colours in
+                                ; AL/AH, so this is here for the FLAG
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = ground - the form
+                                    ; app_about_center_x uses, one byte shorter
+    call ct_cw_font_run
+.out:
+    jmp kretc_di
 
 ; -----------------------------------------------------------------------------
 ; app_tmr_render - format an instance's time as "HH:MM:SS" and put the cells
@@ -931,9 +958,9 @@ app_tmr_digits:
 ; out: nothing
 ; clobbers: AX, CX, DX, flags. THOSE THREE BELONG TO app_tmr_digits, which is
 ;           its only caller and banks all three at its own entry; BX and DI are
-;           saved here because app_tmr_paint_x calls app_tmr_btns straight
+;           saved here because app_tmr_paint_x draws the buttons straight
 ;           after and needs the window and the state. SI is preserved because
-;           the timer task keeps its state ptr there for life.
+;           every caller holds the window in it (a W_* edge's SI).
 ;
 ; Two things here are the whole of SPEC.md 14's redraw story, and both are
 ; about the glass rather than about work.
@@ -967,71 +994,7 @@ app_tmr_digits:
 ; everything again: SPEC.md 28.2's rule, that a run which took that path was
 ; by definition not drawn whole.
 ; -----------------------------------------------------------------------------
-app_tmr_render:
-    push bx
-    push si
-    push di
-
-    mov si, di                  ; one walk over the three ADJACENT fields,
-    mov bx, app_tmr_str         ; writing "HH:MM:SS:" ...
-.fmt:
-    mov al, [ss:si]             ; the source is SS-relative; the destination is
-    call KERNEL_SEG:cw_clk_put2 ; .bss, and clk_put2 writes [bx] through DS,
-                                ; which is KERNEL_SEG in .cold too. SPEC.md
-                                ; 37's own two-digit pair rather than a second
-                                ; copy of it - the `aam / add ax,0x3030 /
-                                ; leading zero for free` idiom and its COMMENT
-                                ; were written out identically in both files.
-                                ; BX comes back advanced by 2, which is what
-                                ; makes the loop bound below work unchanged
-    mov byte [bx], ':'
-    inc bx
-    inc si
-    cmp bx, app_tmr_str + 9
-    jb .fmt
-    mov byte [app_tmr_str+8], 0 ; ...and the third colon IS the NUL cell
-
-    mov ax, cx                  ; the whole line's inclusive rect: AX = x1,
-    mov bx, dx                  ; BX = y1, CX = x2, DX = y2
-    add cx, APP_TMR_DW - 1
-    add dx, 7
-    call KERNEL_SEG:cw_wm_clip_test           ; preserves all four (and answers "free" when
-    mov cx, ax                  ; nothing is armed, which is every W_PAINT and
-    mov dx, bx                  ; every click)
-    jc .whole
-
-    call app_tmr_span           ; the differing cells, and TMR_SHOWN adopts
-    jc .out                     ; the new line; CF = 1 = it already showed it
-    mov bl, al                  ; AL = the LAST cell that changed
-    xor bh, bh
-    mov byte [app_tmr_str+1+bx], 0  ; terminate after the last changed cell.
-                                    ; The scratch is rebuilt on every call, so
-                                    ; nothing has to put the byte back
-    mov bl, ah                  ; AH = the FIRST
-    mov si, bx
-    add si, app_tmr_str         ; SI = the run...
-    shl bx, 1
-    shl bx, 1
-    shl bx, 1                   ; ...and its x, cell * 8 (8086: no shl by an
-    add cx, bx                  ; immediate other than 1 - SPEC.md 1 rule 2)
-    jmp short .draw
-.whole:
-    call app_tmr_forget         ; some of these cells are about to be refused,
-    mov si, app_tmr_str         ; so nothing may be remembered about any of them
-.draw:
-    call KERNEL_SEG:cw_gfx_pen_live           ; a button drawn just before may have left
-                                ; [gfx_dis] set, which is both a checkerboard
-                                ; glyph and font_run's slow path (SPEC.md 47
-                                ; rule 1) - and font_run takes its colours in
-                                ; AL/AH, so this is here for the FLAG
-    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = ground - the form
-                                    ; app_about_center_x uses, one byte shorter
-    call KERNEL_SEG:cw_font_run
-.out:
-    pop di
-    pop si
-    pop bx
-    ret
+; (the code is inline in app_tmr_digits above, size pass 9)
 
 ; -----------------------------------------------------------------------------
 ; app_tmr_span - which cells differ from what this window is showing, and
@@ -1048,34 +1011,7 @@ app_tmr_render:
 ; here having established that the whole line is drawable. A cut line does not
 ; come through here at all - it goes to app_tmr_forget instead.
 ; -----------------------------------------------------------------------------
-app_tmr_span:
-    push bx
-    push cx
-    mov ch, 0xFF                ; no cell has differed yet
-    xor bx, bx
-.cell:
-    mov al, [app_tmr_str+bx]
-    cmp al, [ss:bx+di+TMR_SHOWN]
-    je .next
-    mov [ss:bx+di+TMR_SHOWN], al
-    cmp ch, 0xFF
-    jne .last
-    mov ch, bl
-.last:
-    mov cl, bl                  ; kept overwritten: the last one to get here
-.next:                          ; is the far end of the span
-    inc bx
-    cmp bx, 8
-    jb .cell
-    cmp ch, 0xFF
-    mov ax, cx                  ; neither mov nor pop touches a flag, which is
-    pop cx                      ; what lets both answers share the epilogue
-    pop bx
-    stc
-    je .out
-    clc
-.out:
-    ret
+; (the code is inline in app_tmr_digits above, size pass 9)
 
 ; -----------------------------------------------------------------------------
 ; app_tmr_forget - this window is no longer showing anything we know about
@@ -1121,11 +1057,26 @@ app_tmr_forget:
 ; used to look frozen.) Edges: content w = 148, h = 111.
 ; -----------------------------------------------------------------------------
 app_bounce_task_x:
-    call app_kind_open          ; BP = record, SI = ball state, both for life
-.loop:
+    mov al, dl                  ; the spawn argument is our instance index
+    call KERNEL_SEG:cw_inst_ptr ; DI = our instance record
+    mov bp, di                  ; BP = record for life
+    mov si, [ds:bp+I_SPTR]      ; SI = ball state for life (ds: override: BP
+.loop:                          ; addresses SS by default, SPEC.md 1)
     mov ax, 2
-    call app_kind_wait          ; ...and never returns if the close is in
-    call app_kind_arm           ; lock, check visibility, arm the clip
+    call KERNEL_SEG:cw_task_sleep
+    cmp byte [ds:bp+I_STATE], 2 ; close requested?
+    jne .live
+    mov di, bp
+    call KERNEL_SEG:cw_inst_task_die  ; never returns - and the return address
+                                      ; this leaves goes with the stack
+.live:
+    call ct_cw_gfx_lock         ; SPEC.md 20.6 rule 5's sequence, in the order
+    mov bx, [ds:bp+I_WIN]       ; it names it: lock, re-check visibility under
+    test byte [bx+W_FLAGS], 2   ; the lock, arm the clip. wm_clip_set would
+    jz .blind                   ; answer CF = 1 for a hidden window as well
+                                ; (11.3.1), but this is the REFERENCE a package
+                                ; is pointed at and the rule names the test
+    call KERNEL_SEG:cw_wm_clip_set  ; CF = 1: not one visible pixel (SPEC 11.3)
     jc .blind
 
     mov di, si                  ; DI = ball state for app_ball_fill
@@ -1142,7 +1093,7 @@ app_bounce_task_x:
 .blind:
     call app_ball_step          ; nothing on screen to keep in step with
 .skip:
-    call KERNEL_SEG:cw_gfx_unlock             ; ...which also disarms the clip (SPEC 11.3)
+    call ct_cw_gfx_unlock                     ; ...which also disarms the clip (SPEC 11.3)
     jmp .loop
 
 ; -----------------------------------------------------------------------------
@@ -1173,13 +1124,13 @@ app_bounce_task_x:
 %endif
 
 app_ball_wipe:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentc_bp               ; KENT: push ax..bp
+
+
+
+
+
+
 
     mov si, [ss:di+BAL_X]
     sub si, cx                  ; SI = ddx, new - old
@@ -1191,7 +1142,7 @@ app_ball_wipe:
 
     push cx                     ; wm_content answers in AX and DX, which is
     push dx                     ; where the old position is
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
+    call ct_cw_wm_content                     ; AX = content left, DX = content top
     pop cx
     add cx, dx
     mov [app_bwy], cx           ; the old square, ABSOLUTE
@@ -1223,7 +1174,7 @@ app_ball_wipe:
     mov bx, [app_bwy]
     mov dx, bx
     add dx, 7
-    call KERNEL_SEG:cw_gfx_fill
+    call ct_cw_gfx_fill
 
 .rows:
     or bp, bp                   ; --- the row strip, over the SHARED columns -
@@ -1251,7 +1202,7 @@ app_ball_wipe:
     add dx, bp                  ; moved down: from the old top edge
     dec dx
 .rowgo:
-    call KERNEL_SEG:cw_gfx_fill
+    call ct_cw_gfx_fill
 .out:
     jmp kretc_bp
 
@@ -1313,7 +1264,7 @@ app_bounce_paint_x:
 .done:
     pop di
     pop bx
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; app_ball_fill - fill the 8x8 square at an instance's ball position
@@ -1327,14 +1278,14 @@ app_ball_fill:
     push cx
     push dx
 
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
+    call ct_cw_wm_content                     ; AX = content left, DX = content top
     add ax, [ss:di+BAL_X]          ; AX = x1
     add dx, [ss:di+BAL_Y]
     mov bx, dx                  ; BX = y1
     mov cx, ax
     add cx, 7                   ; CX = x2
     add dx, 7                   ; DX = y2
-    call KERNEL_SEG:cw_gfx_fill
+    call ct_cw_gfx_fill
 
     jmp kretc_dx
 

@@ -282,6 +282,9 @@ kd_entry:
     mov word [dos_vh], 200      ; asks OSAPI_VIDEO; there is no kernel here to
                                 ; ask, and a text-mode machine's is the 80x25
                                 ; cell grid's
+    call dos_m33_wall           ; ...and the INT 33h window opens onto all of
+                                ; it (96.10.7), for a program that polls 03h
+                                ; without resetting first
     ; --- THE MOUSE, AND IT GOES IN BEFORE THE BANK (SPEC.md 96.45) ----------
     ; `dos_restore_machine` puts the WHOLE IVT back out of `dos_save_machine`'s
     ; copy, so a vector taken after the bank is one the program's own exit
@@ -332,6 +335,9 @@ kd_entry:
     mov ax, ss
     mov [dos_sv_ss], ax
     mov [dos_sv_sp], sp
+    mov [dos_dstk], sp              ; ...and the INT 21h gate's own mark, which
+                                    ; is an offset into that same stack
+                                    ; (SPEC.md 96.7.2)
     call dos_prog_enter
 .back:
     mov al, [dos_exit]
@@ -743,7 +749,8 @@ kd_leave:
 ; cheapest answer to the plan's own open question 3
 ; (docs/plans/KERN-DOS-PLAN.md 8.2). `0040:00F0` is sixteen bytes the BIOS sets
 ; up at POST and never touches again, `int 19h` is the BOOTSTRAP and not POST,
-; and os8088's own boot writes nothing below 0x0600 - measured on the machine,
+; and os8088's own boot writes nothing below 0x0600 but 0040:00F8..00FF (the
+; font clock's record, SPEC.md 6.0.1 - the other half) - measured on the machine,
 ; byte for byte, at a settled desktop.
 ;
 ; Only when the kernel said it wrote an image (`KDLF_HIBER`). A record left by

@@ -572,6 +572,8 @@ fd_layout:
 ; --- fd_paint - W_PAINT: SI = window, gfx lock held --------------------------
 %include "os88pit.inc"              ; pit_now - the clock SPEC.md 72.15.1 built
                                     ; for the driver, shared (SPEC.md 77.32)
+%include "os88rseq.inc"             ; os88_rseq - READ_AT's registers on
+                                    ; READ_SEQ's walk (SPEC.md 18.4.8.1)
 
 ; =============================================================================
 ; THE SPLIT - where a transfer's time goes ABOVE the driver (SPEC.md 77.32)
@@ -4289,6 +4291,10 @@ fd_c_retr:
     mov word [fd_sfill], 0
     mov word [fd_sout], 0
     mov byte [fd_lmore], 0
+    push di
+    mov di, fd_rcur                 ; a new file: the cursor names none
+    call os88_rseq_new
+    pop di
     call fd_keepname                ; **THE NAME IS BANKED HERE TOO.** A RETR
                                     ; runs for as long as the download takes
                                     ; and the control buffer is reused by the
@@ -5919,10 +5925,14 @@ fd_do_rdchk:
 ; -----------------------------------------------------------------------------
 ; fd_do_read - one chunk of the file at [fd_foff] into the stage
 ;
-; OSAPI_FILE_READ_AT is STATELESS - the offset is the whole argument, there is
-; no handle and no cursor - which is exactly what this loop needs, because
-; between two of these the worker has been out on the wire and anything at all
-; may have walked a directory (SPEC.md 18.4.4).
+; OSAPI_FILE_READ_SEQ through os88_rseq (SPEC.md 18.4.8.1): the offset is
+; still the whole argument and the name still goes in on every call, which is
+; what this loop needs, because between two of these the worker has been out
+; on the wire and anything at all may have walked a directory (SPEC.md 18.4.4)
+; - the cursor is only a cache of the walk, and a mount or a write in between
+; makes the kernel re-seed it from the name. What it buys is the walk: READ_AT
+; re-walked the chain from the front on every chunk, so a RETR's CPU grew
+; with the square of the file.
 ;
 ; **THE OFFSET AND THE CAPACITY MUST BOTH BE CLUSTER MULTIPLES** or the slot
 ; answers FERR_NAME and reads nothing. fd_chunk is rounded for this volume and
@@ -5952,7 +5962,9 @@ fd_do_read:
     mov cx, [fd_chunk]
     mov ax, [fd_foff]
     mov dx, [fd_foff+2]
-    call OSAPI_FILE_READ_AT         ; out DX:AX = bytes delivered, 0 = the end
+    mov di, fd_rcur                 ; one FAT link a chunk rather than a walk
+    call os88_rseq                  ; from the front (SPEC.md 18.4.8.1): out
+                                    ; DX:AX = bytes delivered, 0 = the end
     jc .no
     mov [fd_sfill], ax
     mov word [fd_sout], 0
@@ -6031,10 +6043,23 @@ fd_do_write:
     call OSAPI_FILE_WRITE           ; creates or REPLACES, which is what STOR
     jc .no                          ; means
     mov byte [fd_created], 1
+    mov word [fd_wtok], 0           ; a NEW file: no older token may be hot
     jmp short .ok
 .append:
     jcxz .ok                        ; an empty tail needs no append at all -
                                     ; and APPEND's own contract wants CX >= 1
+    cmp byte [fd_noseq], 0          ; A STREAMING APPEND (SPEC.md 77.49): the
+    jne .app                        ; kernel keeps the file's entry and last
+    mov di, [fd_wtok]               ; cluster under this token, so a chunk is
+    xor al, al                      ; no lookup and no walk of the chain from
+    call OSAPI_FILE_WRITE_SEQ       ; its front - which made a long STOR
+    mov [fd_wtok], di               ; QUADRATIC. PLAIN, not HELD: a wake
+    jnc .ok                         ; commits one chunk and the unlock after
+                                    ; it would commit a hold anyway
+    cmp ax, FERR_NAME               ; kern_small's cell answers this - and so
+    jne .no                         ; does APPEND, for the arguments it would
+    mov byte [fd_noseq], 1          ; refuse, so falling back to it is exact
+.app:
     call OSAPI_FILE_APPEND
     jc .no
 .ok:
@@ -8943,6 +8968,11 @@ fd_cfgb     equ fd_rclus + 2                    ; FD_CFGSZ: FTPD.CFG, whole
 fd_dbclus   equ fd_cfgb + FD_CFGSZ              ; word: the banked folder
 fd_dbdrv    equ fd_dbclus + 2                   ; byte: ...and its drive
 fd_cfgn     equ fd_dbdrv + 1                    ; word: bytes read
+fd_wtok     equ fd_cfgn + 2                     ; word: STOR's WRITE_SEQ token
+                                     ; (SPEC.md 77.49), PLAIN: every chunk
+                                     ; committed, as APPEND's were
+fd_noseq    equ fd_wtok + 2                    ; byte: the kernel has no
+                                     ; WRITE_SEQ (kern_small): APPEND instead
 ; -----------------------------------------------------------------------------
 ; THE TWO RECT TABLES - CONTIGUOUS, because os88ui_bfind strides an array
 ;
@@ -8957,7 +8987,9 @@ fd_cfgn     equ fd_dbdrv + 1                    ; word: bytes read
 ; the four Setup fields keep the press, because focusing a field is
 ; SELECTING and SPEC.md 13.8.8 keeps the press for exactly that.
 ; -----------------------------------------------------------------------------
-fd_rects    equ fd_cfgn + 2                     ; 24: the LOG page's three
+fd_rcur     equ fd_noseq + 1                    ; FSEQ_SIZE: RETR's READ_SEQ
+                                     ; cursor (SPEC.md 18.4.8.1)
+fd_rects    equ fd_rcur + FSEQ_SIZE              ; 24: the LOG page's three
 fd_btn      equ fd_rects + 0                    ; ...Start/Stop
 fd_rob      equ fd_rects + 8                    ; ...the Read Only box
 fd_setb     equ fd_rects + 16                   ; ...and Setup

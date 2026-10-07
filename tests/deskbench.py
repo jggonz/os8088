@@ -100,7 +100,6 @@ import argparse
 import json
 import os
 import sys
-import time
 import traceback
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -461,15 +460,18 @@ def new_window(m, before, what, via, limit=90.0):
     the whole question is how long it takes, so a fixed wait either truncates
     the slow case or pads the fast one.
     """
-    t = time.time()
-    while time.time() - t < limit:
+    # THE BUDGET IS GUEST TIME: `limit` idle-box seconds at the harness's
+    # GUEST_BUDGET_RATIO, spent in whole second-long advances. It was a host
+    # deadline around the same loop, so a busy box got fewer advances.
+    for _ in range(int(limit * os88marty.GUEST_BUDGET_RATIO) + 1):
         now = [w for w in dispcp.win_list(m, S) if w not in before]
         if now:
             return now[-1]
         m.advance(frames=60)
         m.run()
-    raise RuntimeError("%s did not open on %s's association in %.0fs "
-                       "(SPEC.md 54)" % (what, via, limit))
+    raise RuntimeError("%s did not open on %s's association in %.0f guest "
+                       "seconds (SPEC.md 54)"
+                       % (what, via, limit * os88marty.GUEST_BUDGET_RATIO))
 
 
 def check(m, sc, say):

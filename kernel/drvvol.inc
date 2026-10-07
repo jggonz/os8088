@@ -210,18 +210,14 @@ drv_find:
 .plain:
     test dx, dx
     jnz .no
-    mov ax, cx
+    mov ax, cx                  ; CF = 0 from the `test`, which `mov` keeps
+.out:
     pop si
     pop dx
     pop cx
     pop bx
-    clc
     ret
 .no:
-    pop si
-    pop dx
-    pop cx
-    pop bx
     stc
-    ret
+    jmp short .out
 section .text                   ; SPEC.md 1: every file ends where it began

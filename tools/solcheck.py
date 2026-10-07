@@ -49,7 +49,6 @@ import os
 import re
 import struct
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -79,6 +78,7 @@ def solsyms():
     src = open(os.path.join(ROOT, "apps/solitaire/solitaire.asm")).read()
     blk = src[src.index("%assign SOL_BSS 0"):]
     off, syms = 0, {}
+    equs = dict(re.findall(r"(?m)^([A-Za-z_]\w*)\s+equ\s+(\d+)\b", src))
     for line in blk.splitlines():
         m = re.match(r"^(SWORD|SBYTE|SBUF)\s+([A-Za-z_]\w*)\s*(?:,\s*(.+))?$",
                      line.split(";")[0].strip())
@@ -93,6 +93,11 @@ def solsyms():
         else:
             for k, v in SOLCONST.items():
                 arg = arg.replace(k, str(v))
+            # ...and any plain `NAME equ <number>` the list above does not
+            # carry, BY NAME out of the source: SOL_ICROWS arrived after the
+            # list was written and the walk died on it
+            arg = re.sub(r"\b[A-Za-z_]\w*\b", lambda t: equs.get(
+                t.group(0), t.group(0)), arg)
             off += eval(arg)
     img = os.path.getsize(os.path.join(ROOT, "build/solitair.bin"))
     syms = {k: img + v for k, v in syms.items()}
@@ -107,8 +112,8 @@ def solsyms():
     for n in os.listdir(os.path.join(ROOT, "build")):
         if n.startswith(".sol-"):
             defs = stamps.get(n[len(".sol-"):], "")
-    os.system("nasm -f bin -w+error %s -I %s/apps/ -o /dev/null -l %s %s/apps/"
-              "solitaire/solitaire.asm" % (defs, ROOT, lst, ROOT))
+    os.system("nasm -f bin -w+error %s -I %s/apps/ -o %s.bin -l %s %s/apps/"
+              "solitaire/solitaire.asm" % (defs, ROOT, lst, lst, ROOT))
     txt = open(lst).read()
     i = txt.index("mov cl, [sol_pcnt+bx]")
     enc = re.search(r"\[([0-9A-F]{4})\]", txt[txt.rindex("\n", 0, i):i])
@@ -282,7 +287,9 @@ def shot(m, win, path, tag, mo=None):
     if mo is not None:
         px = win.x - 40 if win.x >= 40 else win.x + win.w + 24
         mo.to(max(0, px), max(su.DESK_ZY0 // 2, win.y + 60))
-        time.sleep(0.5)
+        # `to` proved the arrow arrived, and the mouse ISR draws it itself
+        # (SPEC.md 8.1.2): a few frames is only the frame the grab reads
+        os88marty.guest_sleep(m, 0.1)
     w, bpp, data = su.fb(m)
     h = len(data) // (w * bpp)
     x1, y1 = max(0, win.x), max(0, win.y)
@@ -312,12 +319,21 @@ def capture(outdir, img, machine):
         mo = Mouse(marty=m)
         print("machine %s / %s -> %s" % (machine, img, outdir))
         mo.dblclick(*su.zone(m, 1))
-        time.sleep(4)
+        os88marty.until(m, lambda _: any(w.visible for w in su.windows(m)),
+                        "the Disk window", poll=0.1, limit=60)
         disk = [w for w in su.windows(m) if w.visible][0]
         mo.dblclick(*su.row(disk, 0))
-        time.sleep(30)
-        sol = [w for w in su.windows(m) if w.visible
-               and w.title.upper().startswith("SOL")]
+
+        def solwins():
+            return [w for w in su.windows(m) if w.visible
+                    and w.title.upper().startswith("SOL")]
+        try:                            # the launch, then its first paint
+            os88marty.until(m, lambda _: solwins(), "Solitaire's window",
+                            poll=0.1, limit=60)
+            os88marty.settle(m)
+        except os88marty.MartyError:
+            pass                        # ...refused below, in its own words
+        sol = solwins()
         if not sol:
             raise SystemExit("solcheck: Solitaire did not launch off %s" % img)
         sol = sol[0]
@@ -328,9 +344,8 @@ def capture(outdir, img, machine):
         sc.pclick(mo, sol.x + sol.w // 2, sol.y + sol.h - 30)
         os88marty.settle(m)
         m.write(m.sym("osapi_seed"), struct.pack("<H", SEED))
-        m.key("KeyN")
-        time.sleep(3)
-        os88marty.settle(m)
+        m.key("KeyN")                   # the settle's own stillness window
+        os88marty.settle(m)             # is far wider than a key's latency
         s = [w for w in su.windows(m) if w.visible and w.i == sol.i][0]
         shot(m, s, os.path.join(outdir, "deal.raw"), "deal", mo)
 
@@ -347,7 +362,6 @@ def capture(outdir, img, machine):
         # ...and once more in place, so a pile left inside another pile's slot
         # is compared against the same position drawn a second time
         m.key("KeyR")                       # Restart Deal: the SAME deal
-        time.sleep(3)
         os88marty.settle(m)
         s = [w for w in su.windows(m) if w.visible and w.i == sol.i][0]
         shot(m, s, os.path.join(outdir, "restart.raw"), "restart", mo)
@@ -383,7 +397,6 @@ def capture(outdir, img, machine):
                 # nothing to play: deal. The stock is 24 cards, so a dead game
                 # needs a full cycle of it before the session gives up
                 m.key("Space")
-                time.sleep(2)
                 os88marty.settle(m)
                 b.reload()
                 dry += 1
@@ -411,9 +424,8 @@ def capture(outdir, img, machine):
         # Auto Finish: every card that will go to a foundation, a move a tick
         # (§43.6) - a long run of sol_domove with no drag in it at all, which
         # is the other way a column empties
-        m.key("KeyA")
-        time.sleep(6)
-        os88marty.settle(m)
+        m.key("KeyA")                   # a move a tick redraws every tick,
+        os88marty.settle(m)             # so the settle outlasts the run
         s = [w for w in su.windows(m) if w.visible and w.i == sol.i][0]
         shot(m, s, os.path.join(outdir, "play98_auto.raw"), "auto", mo)
 

@@ -19,7 +19,6 @@ is the other half of the same defect and the half a screenshot cannot show.
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
@@ -69,7 +68,6 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
     wx, wy, ww, wh = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "FTPD.O88")
-    time.sleep(2)
     os88marty.settle(m)
     wx, wy, ww, wh = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])
     ox, oy, cw = wx + 1, wy + os88geom.TITLE_H, ww - 2
@@ -81,13 +79,13 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
 
     def enter():
         mo.click(*setb)
-        time.sleep(1.5)
+        os88marty.pace(m, 1.5)
         mo.to(*park)
         os88marty.settle(m)
 
     def leave():
         mo.click(*done)                 # Done is what COMMITS (SPEC.md 77.17)
-        time.sleep(1.5)
+        os88marty.pace(m, 1.5)
         mo.to(*park)
         os88marty.settle(m)
 
@@ -97,7 +95,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     first = crop(m, wx, wy, ww, wh)
 
     mo.click(ox + FD_FLDX + 40, oy + FD_SETY + 7)        # into PASV addr
-    time.sleep(1.0)
+    os88marty.pace(m, 1.0)
     mo.to(*park)
     os88marty.settle(m)
     n = ndiff(first, crop(m, wx, wy, ww, wh))
@@ -113,7 +111,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
 
     before = crop(m, wx, wy, ww, wh)
     m.type_text("ZZZ")                  # nothing is focused, so this must
-    time.sleep(1.5)                     # reach nothing at all
+    os88marty.pace(m, 1.5)              # reach nothing at all
     os88marty.settle(m)
     n = ndiff(before, crop(m, wx, wy, ww, wh))
     check("typing with nothing focused changes nothing", n == 0, "(%d px)" % n)

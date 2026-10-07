@@ -25,7 +25,6 @@ run there, and they are DEEPER than the worker (114 and 102 against 96).
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88marty as M                                        # noqa: E402
@@ -138,7 +137,7 @@ with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
                      "HALF the one SPEC.md 8.7 sizes against (SPEC.md 8.7.4)"
                      % (label, n, u, z, 100 * p, 100 * BAR))
         a = m.status()
-        time.sleep(2)
+        M.pace(m, 0.5)          # TIME: is it retiring instructions at all?
         if m.status()["instructions"] == a["instructions"]:
             fail("%s: the guest retired no instructions - a cli/hlt, which is "
                  "sch_stkdie (SPEC.md 8.8 draws the panel that says so)" % label)
@@ -154,7 +153,7 @@ with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
         mo.click(vw // 2 - 60, vh - 60); tick(m, 60)
     step("heap page")
 
-    mo.dblclick(vw - 30, 45); tick(m, 240)                   # drive A
+    mo.dblclick(*os88geom.drive_pt(m, "A")); tick(m, 240)    # drive A, by letter
     step("disk window")
     # **BY NAME, NOT BY ROW** (docs/WRITING-TESTS.md 6). These were
     # `mo.dblclick(140, 178)` and `mo.dblclick(160, 146)` - the pixel a row

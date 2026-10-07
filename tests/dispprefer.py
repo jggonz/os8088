@@ -38,8 +38,8 @@ THREE LEGS, and the third is the one that is not about browser at all:
      68.5, 61.9) - so those two legs run only when the package is on whatever
      `--apps` mounted, and say so when it is not:
 
-         python3 tests/os88disk.py ... build/word.o88 build/WORD.OVL \
-                                       build/frotz.o88 -o build/wz360.img
+         python3 tests/os88disk.py ... build/word.o88 build/frotz.o88 \
+                                       -o build/wz360.img
          python3 tests/dispprefer.py --apps build/wz360.img
 
   E  `apps/texpad`, which is the third shape again: a per-adapter WIDTH (the

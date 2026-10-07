@@ -45,7 +45,7 @@
 ; cpu_detect is BOOT OVERLAY (SPEC.md 2.5): it runs once from kmain, first
 ; thing, before sched_init hooks an ISR and before anything may key off the
 ; tier, and is then written over by the first mount's FAT. Only cpu_info stays
-; in .text: it is API slot 0x0188 and answers all session. Both are plain 8086
+; in .text: it is API slot 0x0155 and answers all session. Both are plain 8086
 ; code - cpu_detect by necessity, since it runs before the tier it publishes
 ; is known.
 ; =============================================================================
@@ -104,7 +104,7 @@ cpu_feat        db 0            ; CPU_F_* - what actually verified, as
 section .ovlw                   ; the boot overlay (SPEC.md 2.5): runs once from
                                 ; kmain and is written over by the first
                                 ; mount. cpu_info stays resident below: it is
-                                ; API slot 0x0188 and answers all session
+                                ; API slot 0x0155 and answers all session
                                 ; long. Nothing here calls out of the overlay
                                 ; and nothing here has data of its own -
                                 ; cpu_tier and cpu_feat are .text, written
@@ -218,7 +218,7 @@ cpu_detect:
 
 
 ; -----------------------------------------------------------------------------
-; cpu_info - the published tier and feature bits (osapi slot 0x0188's body)
+; OSAPI_CPU_INFO - the published tier and feature bits
 ;
 ; in:       -
 ; out:      AL = CPU_8086 / CPU_286 / CPU_386, AH = feature bits (CPU_F_*)
@@ -227,13 +227,11 @@ cpu_detect:
 ; Callable from any context, gfx lock held or not - it reads two bytes and
 ; touches no hardware. A package must branch on the KB figure from
 ; xm_caps, never on this tier byte (SPEC.md 41.8).
+;
+; AN INLINE CELL (SPEC.md 20.3), and there is no body here: the cell is
+; `mov ax, [cs:cpu_tier] / retf`, ONE word read that little-endian splits
+; into [cpu_tier] in AL and [cpu_feat] in AH - the documented output byte for
+; byte, which is why the %if beside the declarations keeps the pair adjacent.
+; An unaligned word read is legal on the 8086.
 
 section .text
-; -----------------------------------------------------------------------------
-cpu_info:
-    mov ax, [cpu_tier]          ; ONE word: little-endian puts [cpu_tier] in
-    ret                         ; AL and [cpu_feat] in AH, which is the
-                                ; documented output byte for byte. The %if
-                                ; beside the declarations is what keeps the
-                                ; pair adjacent. An unaligned word read is
-                                ; legal on the 8086 and this is not hot.

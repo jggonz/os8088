@@ -39,8 +39,8 @@ def check_basic(m, cfg):
     eq = os88sym.equates()
     off = os88sym.syms()["mod_gone"]
     expected = off.to_bytes(2, "little") + eq["COLD_SEG"].to_bytes(2, "little")
-    base = S("mod_fp") + eq["MOD_DOCK"] * eq["MODFP_STRIDE"]
-    assert m.read(base, eq["MODFP_STRIDE"]) == expected * eq["MOD_NENT"], \
+    base = S("DKFP")
+    assert m.read(base, eq["DK_NENT"] * 4) == expected * eq["DK_NENT"], \
         "an unloaded callback still points into module memory"
     # ...and the same question about the OPERATIONS (SPEC.md 30.5): every
     # slot of dkv must rest on this kernel's own body. A fallback that left
@@ -81,10 +81,8 @@ def run(fault, saved):
             check_basic(m, 0)
             assert word(m, "mod_tab") == 0, "boot loaded Control Panel"
             mo = os88mouse.Mouse(marty=m)
-            dispcp.open_panel(m, mo, S, os88marty.settle, page=None)
-            wx, wy = dispcp._cp_win(m, S)
-            row = m.read(S("cp_nst"), 1)[0] - 1
-            mo.click(wx + 37, wy + 19 + 6 + row * 14 + 7, settle=0)
+            dispcp.open_panel(m, mo, S, os88marty.settle,
+                              page=dispcp.CP_IDOCK)
             os88marty.settle(m)
             for _ in range(2):
                 dockpos.click_row(m, mo, dockpos.CPK_R0Y + dockpos.CPK_ROWH)

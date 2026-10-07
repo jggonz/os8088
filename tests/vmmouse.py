@@ -215,12 +215,8 @@ def main():
         # vmm_boot_x runs inside kmain, after drv_boot_x has read the image
         # off the floppy; [vmm_on] settling is the signal, and it is written
         # last on purpose.
-        t0, on = time.time(), 0
-        while time.time() - t0 < 90:
-            on = byte(q, "vmm_on")
-            if on == 1:
-                break
-            time.sleep(0.25)
+        os88qemu.acted(q, lambda: byte(q, "vmm_on") == 1, 90.0, "vmm_on")
+        on = byte(q, "vmm_on")
 
         tier = byte(q, "cpu_tier")
         if tier != 2:
@@ -260,7 +256,9 @@ def main():
             for px, py in ((0, 0), (w - 1, h - 1),
                            (w // 2, h // 2), (40, 40), (w - 40, h - 30)):
                 abs_to(px, py, w, h)
-                time.sleep(0.4)
+                os88qemu.acted(q, lambda: abs(word(q, "mouse_x") - px) <= TOL
+                               and abs(word(q, "mouse_y") - py) <= TOL, 1.0,
+                               "the pointer")
                 gx, gy = word(q, "mouse_x"), word(q, "mouse_y")
                 if abs(gx - px) > TOL or abs(gy - py) > TOL:
                     fails.append("pointer at %d,%d, want ~%d,%d (+-%d) - a miss "
@@ -286,26 +284,32 @@ def main():
         # it for every such loop (SPEC.md 9.11.3); if that stops working the
         # machine wedges here with [mouse_btn] stuck at 1.
         if not fails:
-            t0 = word(q, "ticks")
+            t0, clk = word(q, "ticks"), os88qemu.Clock(q)
             abs_to(200, 200, w, h)
-            time.sleep(0.3)
+            os88qemu.acted(q, lambda: (word(q, "mouse_x"), word(q, "mouse_y"))
+                           == (200, 200), 1.0, "the pointer")
             btn(True)
-            time.sleep(0.2)
+            os88qemu.acted(q, lambda: byte(q, "mouse_btn") == 1, 1.0, "press")
             if byte(q, "mouse_btn") != 1:
                 fails.append("press not seen: mouse_btn 0 after btn-down")
             for yy in range(200, 280, 8):        # drag it
                 abs_to(200, yy, w, h)
                 time.sleep(0.05)
+            os88qemu.acted(q, lambda: word(q, "mouse_y") >= 250, 1.0, "drag")
             gy = word(q, "mouse_y")
             if gy < 250:
                 fails.append("pointer did not track while held: y=%d, want "
                              ">=250 - the drag-loop poll (task_yield) stalled" % gy)
             btn(False)
-            time.sleep(0.3)
+            os88qemu.acted(q, lambda: byte(q, "mouse_btn") == 0, 1.0,
+                           "release")
             if byte(q, "mouse_btn") != 0:
                 fails.append("RELEASE NEVER ARRIVED: mouse_btn stuck at 1 - a "
                              "spin loop that does not pump vmmouse (SPEC.md "
                              "9.11.3), the freeze this test exists for")
+            # ~1.5 s of the MACHINE's time since t0, whatever the waits above
+            # took: the question is whether the kernel's clock kept up with it
+            os88qemu.pace(q, max(0.0, 1.5 - clk.secs()))
             t1 = word(q, "ticks")
             if (t1 - t0) & 0xFFFF < 10:
                 fails.append("clock barely moved (%d ticks in ~1.5s) - the "
@@ -323,7 +327,9 @@ def main():
             tail0 = before[2] | (before[3] << 8)
             for k in "abcdef":
                 q.hmp("sendkey " + k)
-            time.sleep(1.0)
+            # a second of the guest's clock, as the fixed sleep was, for the
+            # stray byte this looks for to land too
+            os88qemu.pace(q, 1.0)
             after = q.read(KBHEAD, 4)
             tail1 = after[2] | (after[3] << 8)
             if (tail1 - tail0) & 0xFFFF != 12:

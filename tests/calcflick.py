@@ -24,7 +24,7 @@ would have flashed:
 which a digit is entitled to have. `settled` must be true or every count was
 measured against a moving target.
 """
-import os, sys, time
+import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty, os88mouse, os88sym, dispcp
@@ -65,7 +65,7 @@ def press(m, ch):
 def typed(m, text):
     for ch in text:
         press(m, ch)
-        time.sleep(0.15)
+        os88marty.pace(m, 0.15)         # keystroke spacing, in guest time
     os88marty.settle(m)
 
 
@@ -80,7 +80,8 @@ with os88marty.launch("build/os8088-360.img", apps=APPS,
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG)
-    time.sleep(2)
+    os88marty.settle(m)                 # open_named saw the window; this is
+                                        # its first paint finishing
     slot = dispcp.win_list(m, S)[-1]
     print("CALC%s at %s on %s\n"
           % (" (no-scroll reference)" if REF else "",
@@ -161,7 +162,7 @@ with os88marty.launch("build/os8088-360.img", apps=APPS,
     # 588 transient px, exactly as a digit does. Q, R and % really have none.
     measure("sqrt: no pad key", "q")
     typed(m, "h")                       # ...and again with the pane open
-    time.sleep(1.5)
+    os88marty.pace(m, 1.5)
     os88marty.settle(m)
     mo.to(*park)
     os88marty.settle(m)
