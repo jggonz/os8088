@@ -366,8 +366,8 @@ make emu      # THE THIRD KERNEL (§9.11.7): kern_emu, into build/emuk/, plus
               #   is no resident question an XT could ask and the honest cost
               #   on it is zero. kern_big now measures BYTE-IDENTICAL to its
               #   blessed baseline and kern_emu measures exactly what kern_big
-              #   used to. Its disk is the only one in the tree that ships a
-              #   SYSTEM.CFG (bit 5 set) - every row is not-wanted by default
+              #   used to. Its disk and §80.7's browser image are the only two that
+              #   ship a SYSTEM.CFG (bit 5 set) - every row is not-wanted by default
               #   (§51.3), and a kern_emu machine that must be TOLD to turn on
               #   the one feature it was built for has been given nothing.
               #   Pair it with the SHIPPED build/apps.img: same API table, same
@@ -399,6 +399,12 @@ make live     #   plus the allapps payload on one FAT16 partition that the
               #   write, and §80.3 says what that costs; QEMU boots them with
               #   `-drive file=build/os8088-usb.img,format=raw -boot c` /
               #   `-cdrom build/os8088.iso -boot d`
+              #
+              #   **`make usb-emu`** is the website's: the SAME volume on
+              #   kern_emu with VMMOUSE.DRV wanted (§80.7), which
+              #   os8088.com's demo boots under v86 so the pointer needs no
+              #   capture. One recipe for both images; it is not live media
+              #   and no release zip carries it
               #
               #   **IT IS THE ONE IMAGE WHOSE PREMISE IS COMPLETENESS**
               #   (§80.6), and it carries MORE than the everything-floppy:
@@ -629,7 +635,12 @@ the Excitebike run learned; and an incoming pull request **from a contributor's
 fork** — fetch it, merge `main` into it, review it, fix it, push the fixes
 back to their branch, comment — is `.claude/skills/review-fork-pr`
 (`/review-fork-pr <PR#>`), whose `LESSONS.md` is what seven of those reviews
-learned. `docs/UPSTREAM.md` is the same cycle seen from the fork's side and
+learned. One of the maintainer's OWN PRs gone stale - merge `main` in, decide
+whether it is still valid and still needed against what `main` now holds,
+fix it, gate it, push and (when asked) merge - is
+`.claude/skills/refresh-stale-pr` (`/refresh-stale-pr <PR#>`), whose
+`LESSONS.md` is what refreshing #200 learned: a clean merge is not a valid
+PR. `docs/UPSTREAM.md` is the same cycle seen from the fork's side and
 binds both. Verifying a change **on the glass** before it merges — boot the
 build in QEMU, drive the UI it claims over QMP, screenshot the evidence per
 claim, then (when asked) merge a stacked series in order — is

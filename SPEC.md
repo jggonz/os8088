@@ -15239,7 +15239,7 @@ baseline of its own in docs/KERNEL-MEMORY.md, blessable by
 |---|---|
 | build | `make emu` → `build/emuk/kernel.bin`, `build/emu.img` (1.44MB) |
 | drivers | `$(EMUDRIVERS)` = `$(DRIVERS)` **plus** `VMMOUSE.DRV` — an addition, where `$(SMALLDRIVERS)` is a restatement from nothing |
-| `SYSTEM.CFG` | **shipped on this disk and on no other**, bit 5 set. Every row is not-wanted by default (§51.3), and a `kern_emu` machine that must be told to enable the one feature it was built for has been given nothing |
+| `SYSTEM.CFG` | **shipped on this disk and on §80.7's browser image, and on no other**, bit 5 set. Every row is not-wanted by default (§51.3), and a `kern_emu` machine that must be told to enable the one feature it was built for has been given nothing |
 | apps disk | the **shipped** `build/apps.img`, unchanged — `kern_emu` defines `KERN_BIG`, so it holds the same API table at the same offsets |
 | `DRV_MAX` | 7 here, 6 on `kern_big` (both counting §9.12's USB mouse), 4 on `kern_small` |
 | geometry | 1.44MB only. 360KB exists for real period hardware, and no machine that needs a 360KB floppy can execute a 386 instruction |
@@ -117702,6 +117702,25 @@ menu row says so and does nothing, §47's shape), `hdiutil burn` to burn and
 verify. macOS only, and it says so: on Linux the same job is `lsblk` and
 `dd`, and a guide pretending to cover both would test as neither.
 
+**Re-imaging keeps Control Panel settings on request.** For USB/CompactFlash,
+the imager asks `Save and restore SYSTEM.CFG settings? [Y/n/q]` before the
+target identifier confirmation; Enter keeps settings, `n` selects defaults,
+and `q` cancels. After unmounting and revalidating the device, it reads the
+active FAT16 partition's root `SYSTEM.CFG` (§51.5) — type 04h, 06h or 0Eh,
+the three the kernel mounts, because a card os8088's own installer laid out
+at 32MB or over is 06h (§52.10) — saves a private recovery
+copy in `/var/tmp` (the path is printed and retained), and inserts the bytes
+into the new image in memory. Both FAT copies and the root entry are updated;
+the source image is unchanged. Geometry retargeting and settings restoration
+are covered by the final image's SHA-256 read-back. FAT copies that
+disagree only off the settings chain (an interrupted flush) still yield the
+settings; a chain the two copies disagree on does not. Missing or unreadable
+settings, a disputed chain, backup failure, or lack of destination space
+abort before any device write. A blank card must use `n`. Only `SYSTEM.CFG`
+is preserved; other files are replaced, and floppy/CD workflows are unchanged.
+`tests/unit/t_imager.py` covers the prompt, backup, fragmented chains,
+replacement, corruption/space refusals, and verified restored bytes.
+
 ### 80.5 A period ROM reports the card's own geometry — the image is retargeted as it is written
 
 §80.1's 16 × 63 is right for the consumer it was chosen for and wrong for
@@ -117896,6 +117915,55 @@ decision about the program rather than about the folder. A package leaves the
 live media by being written down, which cannot be done by accident; and an
 exemption naming a directory that no longer exists fails too, because an
 exception excusing nothing is how an exception list rots.
+
+### 80.7 The browser's image is the same volume on `kern_emu`
+
+os8088.com's live demo boots the live volume under **v86**, and v86 answers
+§9.11's VMware backdoor — so the one machine every visitor meets is the one
+machine where the pointer can track the visitor's own with **no capture**: no
+click to grab it, no `Esc` to get it back, an arrow that leaves the canvas when
+the hand does and is where the hand is when it comes back. The shipped image
+cannot give it that. `os8088-usb.img` is `kern_big`, and §9.11.7 took every
+resident line of the backdoor out of `kern_big` on purpose.
+
+**So `make usb-emu` writes `build/os8088-emu-usb.img`**, which is
+`os8088-usb.img` with three things changed and nothing else:
+
+| | `os8088-usb.img` | `os8088-emu-usb.img` |
+|---|---|---|
+| kernel, `mbr.bin`, `boothd.bin` | `build/` — `kern_big` | `build/emuk/` — `kern_emu` (§9.11.7) |
+| drivers | `$(DRIVERS)` | `$(EMUDRIVERS)`: the same plus `VMMOUSE.DRV`, the on-demand kernel modules cut out of `kern_emu` |
+| `SYSTEM.CFG` | none | `make emu`'s, bit 5 set — the absolute pointer wanted from the first boot |
+| the rest of the payload | `$(LIVEREST)` | `$(LIVEREST)`, the same expansion |
+
+**One recipe, not two.** Both images are built by the one rule, parameterised
+by target-specific variables (`LIVEKDIR`, `LIVEDRVS`, `LIVESUB`), and
+`$(LIVEARGS)` is split at the drivers into `$(DRIVERS) $(LIVEREST)` so the
+emu half can put its own drivers in front of the same rest. §80.6's premise is
+the payload; a second recipe would be a second payload by the next release,
+and `t_livefull` reads only the first.
+
+**It is not a live medium and is never released as one.** The stick and the
+CD boot real PCs, and an XT pays nothing for `kern_emu`'s 385 bytes only
+because it never boots `kern_emu` (§9.11.7). On anything below a 386 the image
+still boots — `vmm_boot_x` refuses at its `[cpu_tier]` compare, the bit is
+ignored, and the machine keeps whatever mouse `mouse_init` found — but that is
+a property worth having, not a reason to ship it. `make live` does not build
+it, the release zip does not carry it, and the website's `tools/release.py`
+publishes it in place of `os8088-usb.img` as the demo's hard disk.
+
+**The page's half is the website's.** v86 delivers `mouse-absolute` events to
+the backdoor only through its own mouse adapter, so the demo stops passing
+`disable_mouse`; and v86 starts delivering at all only once the guest enables
+the PS/2 stream, which `VMMOUSE.DRV` does at attach (§9.11.2's `0xF4`/`0xF5`).
+The page keeps its synthesised serial mouse on COM1 and its capture button as
+the fallback: a session in which the driver does not attach — turned off in the
+Control Panel, or the kern_big image the page booted before this one — gets a
+relative mouse, whichever of that serial mouse and v86's PS/2 one `mouse_init`
+settles on. Once the driver does attach, `mou_lockon` retires both (§9.11.2) and
+the page hides the button. A button released outside the screen never reaches
+v86's adapter, so the page replays that release onto the screen; without it a
+drag that ends outside leaves `[mouse_btn]` held.
 
 ## 81. SHEET — the spreadsheet (`apps/sheet/sheet.asm`)
 
