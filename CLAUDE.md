@@ -633,7 +633,12 @@ the Excitebike run learned; and an incoming pull request **from a contributor's
 fork** — fetch it, merge `main` into it, review it, fix it, push the fixes
 back to their branch, comment — is `.claude/skills/review-fork-pr`
 (`/review-fork-pr <PR#>`), whose `LESSONS.md` is what seven of those reviews
-learned. `docs/UPSTREAM.md` is the same cycle seen from the fork's side and
+learned. One of the maintainer's OWN PRs gone stale - merge `main` in, decide
+whether it is still valid and still needed against what `main` now holds,
+fix it, gate it, push and (when asked) merge - is
+`.claude/skills/refresh-stale-pr` (`/refresh-stale-pr <PR#>`), whose
+`LESSONS.md` is what refreshing #200 learned: a clean merge is not a valid
+PR. `docs/UPSTREAM.md` is the same cycle seen from the fork's side and
 binds both. Verifying a change **on the glass** before it merges — boot the
 build in QEMU, drive the UI it claims over QMP, screenshot the evidence per
 claim, then (when asked) merge a stacked series in order — is
