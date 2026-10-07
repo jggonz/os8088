@@ -73,9 +73,10 @@ LD_H_BSS   equ 10               ; at, which are the FORMAT's and not ours
 ; the re-home it is a slot-owned data claim with no proc, so it never moves,
 ; and the program's bare region proc stays right (SPEC.md 66.6.1.1). It is
 ; op_lazykb's figure - R plus the read of the packed part - while it expands,
-; and op_fetch then shrinks it in place to the head slack plus the bands
-; (88.10.4.1), the same 11KB the old exact-size claim had on a floppy. There
-; is no second claim at any point.
+; and op_fetch, which expands onto the claim's base, then shrinks it in place
+; to the bands alone (88.10.4.1): the same 11KB the old exact-size claim had,
+; on every volume, with no head slack in front. There is no second claim at
+; any point.
 ;
 ; EVERY REFUSAL IS SURVIVABLE and answers 0, which is the plainer title page
 ; the program has always been able to draw - the title lettered in the 8x8
@@ -89,7 +90,7 @@ csl_art:
     jc .out
     mov al, CS_PART_ART
     call op_seg                     ; AX = the bands, at the claim's base
-.out:                               ; plus its head slack
+.out:
     ret
 
 ; -----------------------------------------------------------------------------

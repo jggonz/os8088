@@ -1211,6 +1211,45 @@ FAST = [
         "say - the expectations are GENERATED, and a generated file with no "
         "staleness gate describes a corpus that has moved out from under it "
         "(SPEC.md 93.3)"),
+    Row("pixsamples", "fast", py("tools/pixsamples.py", "--check"), 0.2,
+        "PiXEL's sample gallery (SPEC.md 106.7) is the committed one: every "
+        "picture under apps/pixel/samples/ against its pinned SHA-256, no "
+        "stray file there, and the Makefile's three gallery lists "
+        "(PX_SAMPLES, _720, _360) the same as the tool's - a list edited in "
+        "one place and not the other would ship a disk short of a picture"),
+    Row("pixelsim", "fast", py("tools/pixelsim.py", "--selfcheck"), 0.2,
+        "PiXEL's reference (SPEC.md 106.13) holds to its own invariants - the "
+        "cube's levels invert, each desktop colour is its own plan, every "
+        "plan's t in 0..64, a view's DDA never leaves the master, the "
+        "statistics of a two-bin histogram - and apps/pixel/pxplans.inc, the "
+        "CUBE's and GREY's shipped plans, is exactly what its search answers "
+        "today: a plan search changed in one place and not the other fails "
+        "the build rather than putting a different picture on the glass"),
+    Row("pixart", "fast", py("tools/pixart.py", "--selfcheck"), 0.3,
+        "PiXEL's colour faces (SPEC.md 106.16): tools/pixart.py draws the "
+        "toolbar's and the tool column's pictures out of pxicons.inc's own "
+        "art, every face whole bytes for the planar blit, every toolbar "
+        "face's gap chrome and every tool face's last column the column's "
+        "rule (a negative control proves the gap check can fail), each "
+        "caption with air in its button, and two builds byte-identical; "
+        "the Makefile's --check-asm then holds pixel.asm's numbers to it"),
+    Row("pixcorpus", "fast", py("tools/pixcorpus.py", "--check"), 0.4,
+        "PiXEL's fixtures (SPEC.md 106.13) - every depth, type, orientation "
+        "and packing of BMP, PCX, TGA, PNM and PIX, of TIFF, ICO, IFF and "
+        "MacPaint and the animated GIFs (106.25), and a hostile half - each "
+        "get the verdict SPEC.md 106.10 promises from tools/pixelsim.py, and "
+        "the same picture through five different readers is ONE master "
+        "(the agreement groups): the reference and the corpus are two "
+        "readings of one section, and tests/pxdecode.py then holds the "
+        "guest to the reference"),
+    Row("pixjpeg", "fast", py("tools/pixjpeg.py", "--check"), 0.1,
+        "PiXEL's JPEG fixtures (SPEC.md 106.19) are the committed ones: the "
+        "34 files under tests/pixel/ that Pillow and cjpeg made once - every "
+        "sampling, restarts, 16-bit tables, progressive scripts, the eight "
+        "EXIF orientations, the refused-by-name kinds - each against its "
+        "pinned SHA-256, and the list the same as the pins. A pure-Python "
+        "JPEG decode is too slow for this tier: soak's `pixjpegref` decodes "
+        "them"),
     Row("checkreadme", "fast", py("tools/checkreadme.py", "readme.txt"), 0.1,
         "README.TXT's width and size rules - Note Pad refuses a file one byte "
         "too long and shows nothing at all"),
@@ -2248,6 +2287,31 @@ SOAK = [
         "of the row itself and that is still 0. Presence is what the package "
         "was told; the carve is what the disk did. Needs `make mseg`.",
         needs=("marty", "nasm"), serial=True, wants=("build/mseg.img",)),
+    Row("mseglzslack", "soak", py("tests/mseglzslack.py"), 50.0,
+        "SPEC.md 88.10.4.1, 20.12.7.4: a fetched OP_COMP | OP_LAZY part "
+        "keeps ITS OWN LENGTH and nothing of the volume's. op_fetch claims R "
+        "plus the packed read rounded to whole clusters, and a read may only "
+        "begin on a cluster boundary, so the part's bytes start a HEAD SLACK "
+        "up the claim - up to 31.5KB on a 32KB-cluster hard disk. It expands "
+        "onto the claim's BASE and shrinks the claim to `len` rounded to a "
+        "KB; it used to expand past the slack, where a shrink (which only "
+        "takes the tail) could not reach it. SOAK and not full because it "
+        "is a MartyPC launch plus two keys, and because the floppies every "
+        "other row boots cannot show it: their slack is at most 512 bytes "
+        "and the two layouts round to the same KB. The fixture is MSEG built "
+        "-DMSEG_LZC (OP_COMP on its lazy part 6 alone) on a 1.44MB disk "
+        "built --fatcap 1, whose clusters are 8KB, so part 6 starts 3KB into "
+        "one. FOUR ASSERTIONS: the fixture's slack is non-zero; the key "
+        "fetches the part and MSEG's own three checks pass on it (`MSEG 7/7 "
+        "OK`); a live claim BEGINS at op_seg's answer and is `len` rounded "
+        "to a KB in paragraphs; and a second key leaves the claim table "
+        "byte-for-byte as it was, which is the only thing that sees a wrong "
+        "op_drop free - OSAPI_MEM_FREE matches a base exactly and nobody "
+        "reads its CF. VERIFIED TO FAIL on the shrink-past-the-slack "
+        "op_fetch: no claim at the part's segment, and the holder 6KB where "
+        "the part is 3KB. Needs `make mseglz`.",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/mseglz.img", "build/mseglz.bin")),
     Row("msegxms", "soak", py("tests/msegxms.py"), 50.0,
         "SPEC.md 20.12.4: an OP_XMS part really goes ABOVE 1MB. Every MartyPC "
         "row proves the FALLBACK - an 8088 has nothing up there, so the part "
@@ -7841,6 +7905,223 @@ SOAK = [
         "Measured at 20.4s.",
         needs=("marty",), serial=True,
         wants=("build/word.o88", "build/word.p1.bin", "build/WELCOME.DOC")),
+    Row("pxparts", "soak", py("tests/pxparts.py"), 60.0,
+        "SPEC.md 106.5: PiXEL far-calls LAZY code parts - the first assembly "
+        "package to - and every decoder will stand on the boundary, so wave 1 "
+        "proves it with the keyboard card before anything depends on it. A: "
+        "launched with no part fetched and no claim but the region; B: F1 "
+        "fetches once, far-calls INIT and INFO, INIT answers PXP_PROBE (a "
+        "number only the part computes), the card's lines are pxhelp.asm's "
+        "byte for byte and the part held exactly one claim of PiXEL's while it "
+        "was here; C: dropped - the row clear, the heap as it was, and the "
+        "row's zkb the PACKED length again out of its shadow word; D: F1 "
+        "again FETCHES AGAIN - the part is OP_COMP|OP_LAZY, which before "
+        "20.12.7.4.1's shadow was spent once dropped; E, the negative "
+        "control: the row aimed at sector 0, the package's own header, is "
+        "REFUSED and its claim still given back",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pixjpegref", "soak", ["sh", "-c", "python3 tools/pixjpeg.py "
+                               "--verify && python3 tools/pixcorpus.py "
+                               "--check --jpeg"],
+        1.5,
+        "SPEC.md 106.19's reference against its fixtures, on the host: every "
+        "committed JPEG through tools/pixelsim.py at every scale it can be "
+        "shown at - 1/1, 1/2, 1/4, 1/8, a progressive one from 1/4 - with "
+        "the verdict pixjpeg.py names, and each decode against Pillow's own "
+        "(box-averaged below 1/1, its EXIF orientation applied) above 30 dB; "
+        "then pixcorpus's hostile JPEGs, each refused with its number. "
+        "Without Pillow the PSNR half SKIPS and says so - the verdicts, which "
+        "are what the guest is held to, need nothing but Python"),
+    Row("pxextraemu", "soak", py("tests/pxextraemu.py"), 5.0,
+        "SPEC.md 106.25's EXTRAS part (build/pxextra.bin) on the HOST, under "
+        "Unicorn (tests/pxpartemu.py): every TIFF, ICO, IFF and MacPaint "
+        "fixture tools/pixcorpus.py makes through HEAD - its own next heads "
+        "read through a faked OSAPI_FILE_READ_AT, whole clusters at a "
+        "cluster's offset - and DECODE over a ring of windows K_RING hands "
+        "out: the verdict, the heads counted, the palette and every row K_EMIT "
+        "is given equal tools/pixelsim.py's, and a PNG inside an ICO answers "
+        "PXD_REDIR with the head moved down and [px_sbase] at it. The fast "
+        "loop; pxdecode holds the same part inside the package on MartyPC. "
+        "Without Unicorn it SKIPS and says so",
+        needs=("nasm",), wants=("build/pixel.o88",)),
+    Row("pxanimemu", "soak", py("tests/pxanimemu.py"), 3.0,
+        "SPEC.md 106.25's GIF that plays, on the HOST under Unicorn: the GIF "
+        "part decodes frame 0 into a 1/1 master, AV_INIT reads the "
+        "animation's facts out of that decode, and the worker's frame job "
+        "(JOB_ANIM) runs with this script as the UI - at every frame it says "
+        "is ready the master, the rect it leaves owed and its delay equal "
+        "tools/pixelsim.py's gif_anim's; a job asking for more backup gets "
+        "it; AV_WAKE ends the pass for real, and the second pass's frame 0 "
+        "is gif_restart's. Without Unicorn it SKIPS and says so",
+        needs=("nasm",), wants=("build/pixel.o88",)),
+    Row("pxdecode", "soak", py("tests/pxdecode.py"), 420.0,
+        "SPEC.md 106.13: every fixture tools/pixcorpus.py makes, decoded by "
+        "PIXEL.O88 itself through File > Revert, against tools/pixelsim.py "
+        "BYTE FOR BYTE - the master and the palette of each good one (BMP "
+        "1/4/8/16/24/32, bit fields, RLE8/RLE4, OS/2 and v4 headers; PCX "
+        "1x1, 1x4, 8x1 with and without a palette, 8x3; TGA 1/2/3/9/10/11; "
+        "PNM P1-P6 with 16-bit samples; PIX; a neutral-grey ramp through the "
+        "cube's four greys), each hostile one refused with SPEC.md 106.10's "
+        "number with the shown picture still shown and PiXEL's claims "
+        "exactly as before, and two pictures at 1/2 when memory is capped "
+        "(the box filter, and an 8-bit source averaged into the cube); since "
+        "wave 4 every JPEG fixture too (SPEC.md 106.19) - baseline, "
+        "progressive, every sampling and orientation, restarts, the hostile "
+        "half - and JPEGs at each DCT scale memory can be made to choose; "
+        "since wave 8 (SPEC.md 106.25) TIFF, ICO and CUR (a PNG inside one "
+        "included), IFF and MacPaint, and nine animated GIFs PLAYED - every "
+        "frame's master and delay tools/pixelsim.py's gif_anim, read with "
+        "the guest stopped at px_antick while a frame is on the glass. "
+        "On the 1.44 MB VGA XT: the corpus outgrew a 360 KB disk",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088.img")),
+    Row("pxopen", "soak", py("tests/pxopen.py"), 90.0,
+        "SPEC.md 106.11/106.13 on a VGA: a picture opened by its association "
+        "is drawn as tools/pixelsim.py renders it - the zoom is pixelsim's "
+        "Fit and the steps its View's; every canvas pixel at Fit, after two "
+        "zoom steps, after a vertical OSAPI_GFX_SCROLL and its strip, and "
+        "after a horizontal SAVE/REST shift and its strip is pixelsim's; and "
+        "a bottom-up 24-bit BMP painted AS IT DECODED, with no render after, "
+        "is pixelsim's too",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxopenpng", "soak", py("tests/pxopen.py", "--picture",
+                                "apps/pixel/samples/BALLOONS.PNG", "--second",
+                                "apps/pixel/samples/CAT.GIF"), 120.0,
+        "pxopen for the decoder PARTS on a VGA (SPEC.md 106.18): a palette "
+        "PNG opened by its association - whose palette is known only in the "
+        "stream, so its 256 plans must be searched for the PLTE's entries "
+        "(the first build searched none and drew it black) - then an "
+        "interlaced GIF painted as its passes came: every canvas pixel "
+        "pixelsim's, at Fit, zoomed, scrolled and shifted",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxopencga", "soak", py("tests/pxopen.py", "--machine",
+                                "os8088_5150_cga_gla"), 90.0,
+        "pxopen on a 1bpp display (SPEC.md 106.11): the CGA's 5/12 pixel "
+        "aspect in the Fit and the steps, the luma thresholds and the Bayer "
+        "bit tables, BLIT1 - the same six legs, every bit against pixelsim",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxpaint", "soak", py("tests/pxpaint.py"), 90.0,
+        "SPEC.md 106.14's budget: the primitive calls of an open, a zoom "
+        "step (the canvas and the Navigator's frame, not the panels), a pan "
+        "down (ONE scroll and the strip), a pan across (SAVE/REST and the "
+        "columns), a tool (two buttons) and a status field (one run of the "
+        "cells that moved) - counted "
+        "at the API cells; a change that repaints more than it changed "
+        "fails with the counts beside the budget",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
+    Row("pxdraw", "soak", py("tests/pxdraw.py"), 200.0,
+        "PiXEL's redraw priced in drawing calls (SPEC.md 106.15), on the "
+        "Hercules face: every far call into a drawing cell of the API table "
+        "that RETURNS INTO PIXEL (the planar blit's own clip walk re-enters "
+        "its cell from .cold and is not a call of ours), per gesture - a "
+        "tool, a zoom step each way, a pan each way, Fit, the panels "
+        "hidden and shown, the key card, a status field, an open, Next and "
+        "Prev - "
+        "each under a ceiling a repaint blows through, named by the routine "
+        "that made it; and the picture the records drew pixel-identical to "
+        "a forced full repaint; then the gallery's BOUNCE.GIF playing "
+        "(106.25): a frame's calls under 12, and the stopped frame's glass "
+        "identical to a repaint",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
+    Row("pxdrawvga", "soak", py("tests/pxdraw.py", "--machine",
+                                "os8088_xt_vga"), 200.0,
+        "pxdraw on the VGA XT, the COLOUR face (SPEC.md 106.16): the "
+        "toolbar's and tools' faces one planar blit each, the panes, the "
+        "same ceilings and the same incremental-equals-repaint identity, "
+        "compared as the card rasterised it in colour",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
+    Row("pxfolder", "soak", py("tests/pxfolder.py"), 300.0,
+        "SPEC.md 106.21 on the VGA XT with a 720 KB B:: a folder of seven "
+        "pictures opened by its ASSOCIATION from a subfolder of B: - with "
+        "ANOTHER window in front (106.25, review-w5 F13) no hidden decode is "
+        "begun for 20 s and no PiXEL callback holds the UI task 0.25 s, "
+        "timed in guest cycles entry to return; the folder list is the "
+        "document's folder, the open picture at its place; a slideshow of "
+        "three slides with its button latched, stopped by Esc on the slide "
+        "shown, no decode's claim left; and twenty Next and Prev ending "
+        "with PiXEL's claims as they were and the largest free run too. "
+        "What survived of pxthumb when the filmstrip, its thumbnails and "
+        "PIXEL.THC were withdrawn (2026-10-06)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
+    Row("pxfsx", "soak", py("tests/pxfsx.py"), 1500.0,
+        "SPEC.md 106.23, PiXEL's full screen, on MartyPC's VGA XT, CGA 5150 "
+        "and Hercules 5150: every mode each display offers (Mode X, 13h and "
+        "640x480's adaptive sixteen; C160, 320x200's chosen four and "
+        "640x200; 720x348) entered with F, the part's tables - the median "
+        "cut, every used entry's plan, the CGA's chosen set - pixelsim's "
+        "FsPic, the DAC read back, and every pixel of the mode pixelsim's "
+        "frame at Fit; Esc (Alt+Enter once) puts the desktop's mode, its DAC, "
+        "its pixels and PiXEL's claims back as they were; the EGA's same-mode "
+        "Desktop bracket driven on the VGA's 12h; N decodes the next picture "
+        "hidden with the worker kept, commits it and shows it, and the window "
+        "has it after; S runs a slideshow of two slides, a key stops it. Each "
+        "mode's colours and whole render are timed by the guest's cycle "
+        "counter and printed",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX",
+               "build/os8088-360.img")),
+    Row("pxedit", "soak", py("tests/pxedit.py"), 600.0,
+        "SPEC.md 106.24, PiXEL's editing: the EDIT part on the host under "
+        "Unicorn (tests/pxpartemu.py; the leg skips without it) - 63 palette "
+        "cases and 546 pixel cases over seven sizes, three palettes and both "
+        "destinations against tools/pixelsim.py, the histogram counts too; "
+        "then on MartyPC's VGA XT, CITY.PCX: every Image and Effects "
+        "operation from its menu or card against pixelsim, Undo putting the "
+        "master, palette, mode and saved state back with PiXEL's claims as "
+        "they were (and Redo's kept master), Redo, a chain through an edited "
+        "cube, Revert, Esc in Blur, and the six tools' gestures - a "
+        "Marquee drag's rect, a nudge and Esc, the Crop tool and Enter, a "
+        "Zoom click, the Eyedropper's pin in Image Info, the Rotate tool. "
+        "Each operation's guest time is printed",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX", "build/os8088.img")),
+    Row("pxsave", "soak", py("tests/pxsave.py"), 600.0,
+        "SPEC.md 106.24, PiXEL's Save As: the WRITE part on the host under "
+        "Unicorn - 336 files over every format, seven sizes, three pictures "
+        "and the three palette modes, five ring shapes and four Copy rects, "
+        "each tools/pixelsim.py's write_as to the byte; then on MartyPC's VGA "
+        "XT a save in each of PNG, GIF, BMP, PCX and PIX through the card "
+        "and the Standard File dialog, read back off the floppy - pixelsim's "
+        "bytes, decoded to the master and palette shown - and BMP 24 from "
+        "the card's drop-down; Replace No and Yes; Esc in a PNG's save (no "
+        "file, no PXSAVE.TMP, claims as before); Save changes? Cancel, "
+        "Discard and Save on Next and Cancel on the close box; Copy refused "
+        "over 32K and a selection's BMP on the clipboard; and a disk too "
+        "full for the save, which leaves the old file and no temporary",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/PIXEL.GFX", "build/os8088.img")),
+    Row("pxbench", "soak", py("tests/pxbench.py"), 700.0,
+        "SPEC.md 106.17 on the 5150 with a CGA: the TIME, in guest cycles from "
+        "breakpoints, of opening MOUNTAIN.BMP (24-bit: the cube's ordered "
+        "dither), CITY.PCX (8-bit RLE) and a 640x480 8-bit BMP made by the "
+        "row (308 KB: the disk's share) - to the end and to the first rows - "
+        "and of a zoom step with the canvas covered, a pan step and Fit; "
+        "the GIF and PNG parts; and wave 4's JPEGs (SPEC.md 106.19) - "
+        "VACATION.JPG at 1/8, 1/2, 1/1 and by fast open, ROOM.JPG "
+        "progressive, the Huffman and IDCT in cycles a pixel; each "
+        "held to a ceiling of the recorded figure plus a margin, so a change "
+        "that makes PiXEL slower on the target fails here",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
+    Row("pxbenchvga", "soak", py("tests/pxbench.py", "--machine",
+                                 "os8088_xt_vga"), 760.0,
+        "pxbench on the XT with a VGA (SPEC.md 106.17): the same figures where "
+        "a PAL picture's 256 mixing plans are searched before its first row "
+        "and the composer turns lanes into four planes for BLITP",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/pixel.o88", "build/os8088-360.img")),
     Row("wdpen", "soak", py("tests/wdpen.py"), 60.0,
         "SPEC.md 68.2.5: [gfx_dis] is ONE KERNEL BYTE whose lifetime is one "
         "gfx-lock hold, and 12.8.3 takes that lock around the WHOLE event "

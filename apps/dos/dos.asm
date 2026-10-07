@@ -14588,7 +14588,7 @@ dos_pkt_name: db 'os8088 ETHER', 0
 ; is the one thing in this file a reader cannot check by eye.
 ; -----------------------------------------------------------------------------
 dos_pkt_entry:
-    jmp near dos_pkt_go
+    jmp strict near dos_pkt_go
 dos_pkt_sig:
     db 'PKT DRVR', 0
 %if dos_pkt_sig - dos_pkt_entry != 3

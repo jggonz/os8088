@@ -137,7 +137,9 @@ OP_FETCHED    equ 32            ; **A RUNTIME FLAG, never in the file** - set by
                                 ; nothing. os88pkg.py refuses the bit in a
                                 ; file, so a row always begins clear
 OP_SPENT      equ 0xFFFF        ; ...and what op_drop leaves in a dropped
-                                ; OP_COMP|OP_LAZY row, because the packed
+                                ; OP_COMP|OP_LAZY row whose shadow word is 0
+                                ; (SPEC.md 20.12.7.4.1 - it never is once
+                                ; op_fetch has banked one), because the packed
                                 ; length it would need to be read again is the
                                 ; word the segment was banked in. 0 would mean
                                 ; `not fetched` and a second op_fetch would
@@ -195,6 +197,9 @@ OP_CHUNK      equ 32768         ; bytes a read moves at a time: a multiple of
 %assign OP_HAS_OPT  0
 %assign OP_HAS_LAZY 0
 %assign OP_HAS_COMP 0
+%assign OP_HAS_ZLAZY 0              ; ...and a sixth, derived like them: a row
+                                    ; that is BOTH, which is what earns the
+                                    ; shadow words below (SPEC.md 20.12.7.4.1)
 
 %macro OS88_PARTS_BEGIN 1
     %assign OS88_PART_N 0
@@ -264,6 +269,9 @@ op_t_n:
     %if ((%2) & OP_COMP)
         %assign OP_HAS_COMP 1
     %endif
+    %if ((%2) & OP_COMP) && ((%2) & OP_LAZY)
+        %assign OP_HAS_ZLAZY 1
+    %endif
     db %1                       ; +0 kind
     db %2                       ; +1 flags
     dw 0                        ; +2 off, in 512-byte units - the packer's
@@ -284,6 +292,18 @@ op_t_n:
     %endif
     %if ($ - op_table) != OP_T_ROWS + OP_ROW * OS88_PART_N
         %error "the part table is 10 bytes plus 8 per part - write nothing else between the brackets"
+    %endif
+    ; THE SHADOW (SPEC.md 20.12.7.4.1): a word a row, after the rows and so
+    ; outside what os88pkg.py walks, for a table with an OP_COMP|OP_LAZY row
+    ; ONLY - every other package assembles to the byte it did. op_fetch copies
+    ; a compressed lazy row's PACKED length here before the segment overwrites
+    ; it in zkb, and op_drop puts it back, so a dropped compressed part can be
+    ; fetched again. It is the package's own data, in its own segment (a C
+    ; package's `.data`, where this macro is expanded), so it needs no format
+    ; change and no kernel byte.
+    %if OP_HAS_ZLAZY
+op_zshadow:
+        times OS88_PART_N dw 0
     %endif
 %endmacro
 
