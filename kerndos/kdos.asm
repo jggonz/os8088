@@ -38,15 +38,16 @@ section .text
 kd_text_start:
 ; --- THE FIXED HEADER (kdlayout.inc) ----------------------------------------
 ; The stub arrives with no symbol table and jumps to KD_SEG:0000, so the first
-; eight bytes are a contract: a NEAR jump (`near` spelled out, because nasm
-; would shrink a resolved short one and move everything after it) and the two
-; words that say where the launch block goes.
+; eight bytes are a contract: a NEAR jump (`strict near` spelled out, because
+; nasm would shrink a resolved short one - nasm 3.01 even when it says `near` -
+; and move everything after it) and the two words that say where the launch
+; block goes.
 %ifdef KD_GATE
     %define kd_head_entry kd_dos_entry
 %else
     %define kd_head_entry kd_entry
 %endif
-    jmp near kd_head_entry          ; KD_H_JMP
+    jmp strict near kd_head_entry   ; KD_H_JMP
     db 0
 kd_lbp:  dw kd_lblock               ; KD_H_LBP
 kd_lbsz: dw KDL_SIZE                ; KD_H_LBSZ

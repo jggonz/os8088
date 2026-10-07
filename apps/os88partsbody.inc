@@ -1636,6 +1636,17 @@ op_fetch:
     pop si                      ; the row
     pop dx                      ; the claim
     jc .zbad
+%if OP_HAS_ZLAZY
+    ; THE SHADOW (SPEC.md 20.12.7.4.1): the packed length, one store before
+    ; the segment takes its word, into the row's own shadow - op_drop's to
+    ; put back, so a dropped part is a never-fetched one and not a spent one
+    mov bx, si
+    sub bx, op_table + OP_T_ROWS
+    shr bx, 1
+    shr bx, 1                   ; the row x 2: rows are 8 bytes, shadows 2
+    mov cx, [si+OP_R_ZKB]
+    mov [op_zshadow + bx], cx
+%endif
     ; --- AND KEEP THE PART AND NOTHING ELSE (SPEC.md 88.10.4.1) ------------
     ; The claim is op_lazykb's: R plus the packed read rounded to whole
     ; clusters, which is room for the stream to sit above its output and, on
@@ -1721,8 +1732,9 @@ op_drop:
     test byte [si+OP_R_FLAG], OP_FETCHED
     jz .out                     ; NOT HERE, and the flag is what says so: on
                                 ; an OP_COMP row zkb is the PACKED LENGTH until
-                                ; the fetch and OP_SPENT after a drop, both
-                                ; non-zero, so `zkb != 0` spent an unfetched
+                                ; the fetch and again after a drop (out of the
+                                ; shadow, SPEC.md 20.12.7.4.1, or OP_SPENT),
+                                ; never zero, so `zkb != 0` spent an unfetched
                                 ; part and freed its length as a segment - the
                                 ; no-op promised above was op_fetch's old
                                 ; question asked here (os88parts.inc OP_FETCHED)
@@ -1735,6 +1747,15 @@ op_drop:
     xor ax, ax
     test byte [si+OP_R_FLAG], OP_COMP
     jz .plaindrop
+  %if OP_HAS_ZLAZY
+    mov bx, si                  ; ...UNLESS IT HAS A SHADOW (SPEC.md
+    sub bx, op_table + OP_T_ROWS    ; 20.12.7.4.1): the packed length
+    shr bx, 1                   ; op_fetch kept goes back, and the row is a
+    shr bx, 1                   ; never-fetched one again. BX is free: the
+    mov ax, [op_zshadow + bx]   ; frame below restores it
+    or ax, ax
+    jnz .plaindrop
+  %endif
     mov ax, OP_SPENT
 .plaindrop:
     mov [si+OP_R_ZKB], ax       ; CLEARED FIRST: op_seg must never answer a
@@ -1742,8 +1763,9 @@ op_drop:
     or ax, ax                   ; ...and a COMPRESSED row's banked word IS its
     jnz .free                   ; claim: op_fetch expands it onto the claim's
                                 ; base (SPEC.md 88.10.4.1), so there is no
-                                ; slack to take off. AX is OP_SPENT exactly
-                                ; when the row is OP_COMP
+                                ; slack to take off. AX is non-zero exactly
+                                ; when the row is OP_COMP: the shadow's packed
+                                ; length, or OP_SPENT
 %else
     mov word [si+OP_R_ZKB], 0   ; CLEARED FIRST: op_seg must never answer a
                                 ; segment that is on its way back to the heap

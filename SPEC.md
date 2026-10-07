@@ -15239,7 +15239,7 @@ baseline of its own in docs/KERNEL-MEMORY.md, blessable by
 |---|---|
 | build | `make emu` → `build/emuk/kernel.bin`, `build/emu.img` (1.44MB) |
 | drivers | `$(EMUDRIVERS)` = `$(DRIVERS)` **plus** `VMMOUSE.DRV` — an addition, where `$(SMALLDRIVERS)` is a restatement from nothing |
-| `SYSTEM.CFG` | **shipped on this disk and on no other**, bit 5 set. Every row is not-wanted by default (§51.3), and a `kern_emu` machine that must be told to enable the one feature it was built for has been given nothing |
+| `SYSTEM.CFG` | **shipped on this disk and on §80.7's browser image, and on no other**, bit 5 set. Every row is not-wanted by default (§51.3), and a `kern_emu` machine that must be told to enable the one feature it was built for has been given nothing |
 | apps disk | the **shipped** `build/apps.img`, unchanged — `kern_emu` defines `KERN_BIG`, so it holds the same API table at the same offsets |
 | `DRV_MAX` | 7 here, 6 on `kern_big` (both counting §9.12's USB mouse), 4 on `kern_small` |
 | geometry | 1.44MB only. 360KB exists for real period hardware, and no machine that needs a 360KB floppy can execute a 386 instruction |
@@ -40828,41 +40828,82 @@ second answers no in advance, and the third answers 0 — *not here* — rather
 than a segment. It is safe as a sentinel because it is not a segment any claim
 can have: `0xFFFF:0000` is sixteen bytes below the 1MB wrap.
 
-**A compressed lazy part is therefore fetch-once.** That is a real capability
-lost and it is the right trade *today*: nothing in the tree has ever
-re-fetched a dropped part, and lazy exists precisely so a part is read when it
-is wanted — usually once — rather than at load.
+**It was fetch-once, and is not any more: THE SHADOW.** A table with an
+`OP_COMP|OP_LAZY` row (§20.12.9 derives the flag, `OP_HAS_ZLAZY`, from the
+rows) carries one more word a row, `op_zshadow`, emitted by
+`OS88_PARTS_END_TABLE` right after the rows - so it is the package's own data
+in its own segment (a C package's `.data`, where that macro is expanded), and
+`os88pkg.py`, which walks exactly `count` rows, never sees it. `op_fetch`
+copies a compressed row's PACKED length into its shadow one store before the
+segment takes the word, and `op_drop` puts it back instead of `OP_SPENT`. The
+row is then indistinguishable from one never fetched, and the next `op_fetch`
+reads and expands it again.
 
-**BUT THE USE CASE IS REAL AND SHOULD NOT BE ARGUED AWAY.** Take an RPG whose
-world is one map per part, each far bigger than the machine: walking east and
-then back west is fetch, drop, fetch the first one again — and that is the
-shape lazy parts are *for*, not an abuse of them. Two workarounds exist and
-both are worse than a fix. A package can carry its own loader that never
-re-homes, keeping the table (and so the packed lengths) alive for the session
-— which is `apps/skies/csload.asm` plus the 2 KB it exists to give back. Or it
-can keep its own copy of the lengths, which does not actually work: `op_fetch`
-reads a non-zero `zkb` as *already here*, so a restored length is
-indistinguishable from a banked segment.
+**What made it this simple is `OP_FETCHED`.** The fix this section first
+costed was the other way round - a word a row for the SEGMENT, so `zkb` would
+never move - because a restored length used to read as *already here*:
+`op_fetch` asked `zkb != 0`. Since the runtime flag answers that question
+(§20.12.4), a packed length in `zkb` means only what it says, and putting it
+back is all a re-fetch needs: two stores and ~35 bytes of code, at the two
+sites that touch the word, and no change to `op_seg` or `op_lazyok`.
+`OP_SPENT` stays as the guard for a shadow of 0, which a fetched row cannot
+have. **`op_drop` asks the flag too** (PiXEL wave 3, the speed review's F1):
+it used to take `zkb != 0` for "here", which on a compressed lazy row is the
+packed length before a fetch and after a drop - so dropping a part that a
+failed fetch never brought (a caller unwinding, as PiXEL's F1 card does)
+wrote `OP_SPENT` over the row and freed a segment nobody owned, and the part
+was gone for the instance. Under `%if OP_HAS_ZLAZY` a row without
+`OP_FETCHED` is now not here, whatever its `zkb` says: six bytes.
 
-**The fix, when somebody needs it, is a `%if OP_HAS_COMP && OP_HAS_LAZY` bss
-array**: one word per part holding the banked segment, so `zkb` stays the
-packed length for the life of the package and nothing is shared at all.
-`op_seg`, `op_fetch`, `op_lazyok` and `op_drop` are the five sites; the row
-index is `(SI − op_table − OP_T_ROWS) >> 2` as a word offset. It was
-costed here at roughly **60 bytes of code and two of bss per part**, against
-the ~24 bytes the sentinel takes — worth paying the day a package wants to go
-back and forth, and not before. `OP_SPENT` is what makes waiting safe: until
-then a re-fetch is a REFUSAL that names itself, not a silent wrong answer.
+The use case is the one the paragraph above this used to argue was real:
+PiXEL's decoders are lazy parts used fetch, call, drop and fetch again
+(§106.5), and an RPG walking east and back west is the same shape.
+`tests/pxparts.py` is the gate: a compressed part fetched, far-called,
+dropped - its `zkb` the packed length again, out of the shadow - and fetched
+again, the claims as they were.
 
 ###### 20.12.7.4.2 What it costs
 
-**+176 bytes** of `apps/skies/csload.asm`, measured — the only shipped image
-carrying both flags today. It is a loader, freed the moment it re-homes
-(§20.12.10), so those bytes are transient RAM and 176 of disk; and Clear Skies
-can now give back more than that by deleting its own packer and expander. A
-package with lazy rows and no compressed one, or the other way round, pays
-**zero**: every line of it is behind `%if OP_HAS_COMP && OP_HAS_LAZY`, which
-§20.12.9's rule derives from the table rather than from an opinion.
+**Every line of the shadow is behind `%if OP_HAS_ZLAZY`** - a table with a row
+that carries BOTH `OP_COMP` and `OP_LAZY`, which §20.12.9 derives from the
+table rather than from an opinion; the expansion itself is behind `%if
+OP_HAS_COMP && OP_HAS_LAZY`, as it was. A package with lazy rows and no
+compressed one, or the other way round, pays **zero** for either, and so does
+every C package: none has such a row.
+
+Since §88.10.4.1 moved Clear Skies' bands and Pixelstein's art masters into
+the standard, three loaders carry such a row besides PiXEL, and the shadow,
+its two stores and `op_drop`'s `OP_FETCHED` test cost each of them, measured
+against the same source without it: `apps/pixelstein/pxstein.asm` **2,866 →
+2,917** (five rows), `apps/skies/csload.asm` **2,246 → 2,309** (three) and
+`apps/dos/dosload.asm` **2,249 → 2,296** (three). None of the three ever
+drops a part today, so for them it is the guard and not the use; it is paid
+rather than gated a second time because a re-fetch that works is the
+standard's answer, and a package that discovers it wants one should not have
+to discover a flag as well. PiXEL's decoder-and-card parts are the ones that
+use it (§106.5, §106.18).
+
+###### 20.12.7.4.3 Where the stream is read to, and the claim around it
+
+PiXEL's wave 4 found both halves of this independently of §88.10.4.1, and
+shipped its own fix for a cycle - `op_zrseg`, which rounded the READ up to a
+32-paragraph boundary, and `op_zkb`, which priced the claim as R plus that
+rounding plus the read. **Both are withdrawn** in favour of the standard's
+own answer, which reached `main` first and covers every caller:
+
+- **The claim.** `op_lazykb` prices a compressed row as R plus the packed read
+  in whole clusters (§20.12.7.4), so `op_fetch`'s claim, `op_lazyok`'s answer
+  and a package's own precheck are one figure - which is all `op_zkb`
+  existed to make true - and `op_fetch` gives back what only the expansion
+  needed with an in-place shrink afterwards (§88.10.4.1).
+- **The alignment.** R is rounded to a sector, and a read that still lands
+  mid-sector across a 64KB physical page - `mem_claim` is only paragraph
+  aligned (§22.5) - is no longer an error at all: `dsk_xfer` sends that one
+  sector through `dsk_secbuf` (§18.91.4). PiXEL's case, its simple part
+  fetched again at `2EA0h` with R = `69h` and read to `2F09h:0`, stopped at
+  the sector over `30000h` with int 13h's 09h; the kernel now bounces exactly
+  that sector, for this read and for every other unaligned one, so the
+  package-side rounding bought nothing the kernel does not.
 
 #### 20.12.9 The standard takes only what the table asks for
 
@@ -69484,7 +69525,8 @@ allow, from 32x16 up, and everything else follows from that:
   dimensions are capped at `PT_GDIM_MAX` so a header claiming 60,000 rows is
   refused rather than decoded into nothing for a very long time.
   **The writer stops at 11-bit codes**, which halves its tables, and the one
-  place the two directions are not mirror images is documented at `pt_gadd`: a
+  place the two directions are not mirror images was documented at `pt_gadd`
+  (the writer is `apps/os88lzw.inc`'s encoder now, §42.21.4): a
   writer defines its new string as it emits the code before it, a reader cannot
   until it has seen the code after it, so the reader's table runs one entry
   behind and the two code-width rules are deliberately off by one to compensate
@@ -72067,6 +72109,38 @@ And **`pt_gbits`**, at roughly 550 cycles a code, is 18 cycles a pixel at this
 picture's 30-pixel average string — it is worth having only for a picture that
 compresses badly, where the strings are short and every code is paid for over
 fewer pixels.
+
+#### 42.21.4 The WRITER is `apps/os88lzw.inc`'s; the reader stays here, for want of one cluster
+
+PIXEL-PLAN decision 11 put Paint on the shared include if its GIFs stayed
+byte-identical. `pt_genc` is now a thin caller of `lzw_enc_init` /
+`lzw_enc_run` / `lzw_enc_end` (§106.24) with `pt_gbo` as `LZW_PUTB`, and
+`pt_gput`, `pt_gtclr`, `pt_gfind` and `pt_gadd` are gone. Three options of
+the include are Paint's and no PiXEL part assembles them: `LZW_EMAXC = 2047`
+keeps the 11-bit writer; `LZW_ENARROW` keeps the End code at the last
+string's width where the table has just reached a power of two (giflib
+writes it one bit wider - a trailing `00` byte one time in eight, 2 pictures
+in 6,000 random ones); and `LZW_EHSIZE = 3271` fits the hash in the same
+16KB `PT_LZW_KB`. Every GIF Paint saves is the same file to the byte: 12,353
+pictures through both encoders, the real binaries under Unicorn. +46 bytes.
+
+**The READER was switched as well and measured, and is not shipped.** It
+placed the same rows and the same refusals for every GIF fixture
+`tools/pixcorpus.py` makes, `OS8088.GIF` among them, and ran the LZW loop at
+184 cycles a pixel against 205 - with a fourth option, `LZW_MAP = pt_pmap`,
+which keeps §42.21.2's once-per-string palette. What it cost was **289 bytes
+of image, 308 of the packed file**: the include's reader carries an input
+buffer and its refill, where Paint's whole stream is already flattened in
+memory. That is `PAINT.O88` 22,390 → 22,698 bytes, **22 clusters of 1,024
+→ 23**, and `apps720.img` was 713 of 713 at the time - so `make` refused
+with `packages need 714 clusters; disk holds 713`. It is a cluster, not a
+design objection: the day the 720KB apps disk has one, the reader can follow
+(`PT_LZW_KB` 16 → 18 with it, the include's `LZW_KB`). One behaviour would
+change when it does, on files with **no End code** whose last byte holds the
+start of a code: `pt_gbits` reads that code anyway from the bytes past the
+stream - after `pt_gdeblk`'s in-place flatten, a stale copy of the stream's
+last byte and the block terminator - and places its string, where the
+include stops at the last whole code (24 of 3,000 fuzzed files).
 
 ### 42.13 The canvas is stored the way the CARD wants it
 
@@ -117653,6 +117727,25 @@ menu row says so and does nothing, §47's shape), `hdiutil burn` to burn and
 verify. macOS only, and it says so: on Linux the same job is `lsblk` and
 `dd`, and a guide pretending to cover both would test as neither.
 
+**Re-imaging keeps Control Panel settings on request.** For USB/CompactFlash,
+the imager asks `Save and restore SYSTEM.CFG settings? [Y/n/q]` before the
+target identifier confirmation; Enter keeps settings, `n` selects defaults,
+and `q` cancels. After unmounting and revalidating the device, it reads the
+active FAT16 partition's root `SYSTEM.CFG` (§51.5) — type 04h, 06h or 0Eh,
+the three the kernel mounts, because a card os8088's own installer laid out
+at 32MB or over is 06h (§52.10) — saves a private recovery
+copy in `/var/tmp` (the path is printed and retained), and inserts the bytes
+into the new image in memory. Both FAT copies and the root entry are updated;
+the source image is unchanged. Geometry retargeting and settings restoration
+are covered by the final image's SHA-256 read-back. FAT copies that
+disagree only off the settings chain (an interrupted flush) still yield the
+settings; a chain the two copies disagree on does not. Missing or unreadable
+settings, a disputed chain, backup failure, or lack of destination space
+abort before any device write. A blank card must use `n`. Only `SYSTEM.CFG`
+is preserved; other files are replaced, and floppy/CD workflows are unchanged.
+`tests/unit/t_imager.py` covers the prompt, backup, fragmented chains,
+replacement, corruption/space refusals, and verified restored bytes.
+
 ### 80.5 A period ROM reports the card's own geometry — the image is retargeted as it is written
 
 §80.1's 16 × 63 is right for the consumer it was chosen for and wrong for
@@ -117847,6 +117940,55 @@ decision about the program rather than about the folder. A package leaves the
 live media by being written down, which cannot be done by accident; and an
 exemption naming a directory that no longer exists fails too, because an
 exception excusing nothing is how an exception list rots.
+
+### 80.7 The browser's image is the same volume on `kern_emu`
+
+os8088.com's live demo boots the live volume under **v86**, and v86 answers
+§9.11's VMware backdoor — so the one machine every visitor meets is the one
+machine where the pointer can track the visitor's own with **no capture**: no
+click to grab it, no `Esc` to get it back, an arrow that leaves the canvas when
+the hand does and is where the hand is when it comes back. The shipped image
+cannot give it that. `os8088-usb.img` is `kern_big`, and §9.11.7 took every
+resident line of the backdoor out of `kern_big` on purpose.
+
+**So `make usb-emu` writes `build/os8088-emu-usb.img`**, which is
+`os8088-usb.img` with three things changed and nothing else:
+
+| | `os8088-usb.img` | `os8088-emu-usb.img` |
+|---|---|---|
+| kernel, `mbr.bin`, `boothd.bin` | `build/` — `kern_big` | `build/emuk/` — `kern_emu` (§9.11.7) |
+| drivers | `$(DRIVERS)` | `$(EMUDRIVERS)`: the same plus `VMMOUSE.DRV`, the on-demand kernel modules cut out of `kern_emu` |
+| `SYSTEM.CFG` | none | `make emu`'s, bit 5 set — the absolute pointer wanted from the first boot |
+| the rest of the payload | `$(LIVEREST)` | `$(LIVEREST)`, the same expansion |
+
+**One recipe, not two.** Both images are built by the one rule, parameterised
+by target-specific variables (`LIVEKDIR`, `LIVEDRVS`, `LIVESUB`), and
+`$(LIVEARGS)` is split at the drivers into `$(DRIVERS) $(LIVEREST)` so the
+emu half can put its own drivers in front of the same rest. §80.6's premise is
+the payload; a second recipe would be a second payload by the next release,
+and `t_livefull` reads only the first.
+
+**It is not a live medium and is never released as one.** The stick and the
+CD boot real PCs, and an XT pays nothing for `kern_emu`'s 385 bytes only
+because it never boots `kern_emu` (§9.11.7). On anything below a 386 the image
+still boots — `vmm_boot_x` refuses at its `[cpu_tier]` compare, the bit is
+ignored, and the machine keeps whatever mouse `mouse_init` found — but that is
+a property worth having, not a reason to ship it. `make live` does not build
+it, the release zip does not carry it, and the website's `tools/release.py`
+publishes it in place of `os8088-usb.img` as the demo's hard disk.
+
+**The page's half is the website's.** v86 delivers `mouse-absolute` events to
+the backdoor only through its own mouse adapter, so the demo stops passing
+`disable_mouse`; and v86 starts delivering at all only once the guest enables
+the PS/2 stream, which `VMMOUSE.DRV` does at attach (§9.11.2's `0xF4`/`0xF5`).
+The page keeps its synthesised serial mouse on COM1 and its capture button as
+the fallback: a session in which the driver does not attach — turned off in the
+Control Panel, or the kern_big image the page booted before this one — gets a
+relative mouse, whichever of that serial mouse and v86's PS/2 one `mouse_init`
+settles on. Once the driver does attach, `mou_lockon` retires both (§9.11.2) and
+the page hides the button. A button released outside the screen never reaches
+v86's adapter, so the page replays that release onto the screen; without it a
+drag that ends outside leaves `[mouse_btn]` held.
 
 ## 81. SHEET — the spreadsheet (`apps/sheet/sheet.asm`)
 
@@ -148925,12 +149067,14 @@ neither lands anywhere different.
 
 **And the core's ROW is banked before the loader spends it.** `dsl_core`
 `op_fetch`es that row and `op_drop`s it, and a dropped compressed row's `zkb`
-is `OP_SPENT` rather than its packed length (§20.12.7.4) — which is right over
-there and fatal here, because the handoff needs that exact figure to expand
-the core with no file layer left to ask. So `dsl_entry` copies the row into
-the loader's own bss *before* `dsl_core` runs and hands the box that copy.
-Read afterwards it is `0xFFFF`, and the stub expands 64 KB of rubble into the
-image it is about to jump into.
+was `OP_SPENT` rather than its packed length (§20.12.7.4) — which was right
+over there and fatal here, because the handoff needs that exact figure to
+expand the core with no file layer left to ask. So `dsl_entry` copies the row
+into the loader's own bss *before* `dsl_core` runs and hands the box that
+copy. Read afterwards it was `0xFFFF`, and the stub expanded 64 KB of rubble
+into the image it was about to jump into. (§20.12.7.4.1's shadow now puts
+the packed length back on a drop, so the row read afterwards is right too;
+the copy stays, because it is taken before anything can move the row.)
 
 **MEASURED, on `os8088_5150_cga_gla`**: the program is handed **585 KB above
 its PSP** against 431 windowed, the exit code comes back through §96.41's
@@ -162636,3 +162780,3258 @@ General MIDI level 2, SysEx, aftertouch, the OPL's rhythm mode and four-op
 voices; and seeking inside a song (the bar is a display). A MIDI port was on
 this list until §105.8.5 and §34.13 built one: MIDIRack drives an MPU-401 in
 UART mode, so "no MPU-401 in this machine's world" is no longer true.
+
+## 106. PiXEL — an image viewer and editor (`apps/pixel/`)
+
+PiXEL.O88 views and edits pictures on all three adapters. It reads JPEG, PNG,
+GIF, BMP, PCX, TIFF, TGA, PIX, PNM, ICO, IFF/ILBM and MacPaint files into one
+8-bit indexed MASTER (a source palette, a 6x7x6 colour cube plus four greys
+for truecolour, or 256 greys). It dithers that master to the desktop's sixteen
+colours or to 1bpp, and offers a full-screen view in the richest mode the
+display has. The design record is `docs/plans/PIXEL-PLAN.md`. This section is
+the contract, and it is written wave by wave, each subsection landing BEFORE
+the code it describes. Until a subsection exists, nothing it would describe is
+built.
+
+**PiXEL departs from §94.1 for itself only.** §94.1 says 8-bit pictures are
+refused and that quantising belongs on the host. PiXEL quantises and dithers
+on the machine, because a viewer whose formats are JPEG and PNG has no host to
+defer to. `apps/os88img.inc` and its consumers keep §94.1 unchanged, and PiXEL
+does not grow that include (§94's contract is a whole file under 64KB in and
+one 4bpp segment out; PiXEL's is a stream in and rows out).
+
+### 106.1 The window and its layout tiers (wave 1)
+
+One sizable window (`OSAPI_WM_SIZABLE`), `OSAPI_WM_OWNBG` (every content
+pixel is PiXEL's), content snapped to the byte grid (`OSAPI_WM_SNAP`, §11.94),
+`OSAPI_WM_PREFER` asking for the whole width of each card and as much height
+as the desktop band gives (640x480 / 720x348 / 640x200 frames, clamped by the
+kernel), and a minimum of 336x150. **Nothing about the layout is kept across
+a paint:** `px_layout` reads `OSAPI_WM_CONTENT`, `OSAPI_WM_GEOM` and
+`OSAPI_WM_DISPLAY` and recomputes every rect, on every paint, every press and
+every incremental draw — a move does not call `W_PAINT` (§11.96.12), and the
+display a window is on can change under it (§39.16.4), so `W_ONRESIZE` has
+nothing to re-derive.
+
+The regions, top to bottom: the **toolbar**, then the **tool column**, the
+**canvas** and the **panel column** side by side - the MIDDLE BAND, which
+runs down to - the **status bar**. Two tiers, chosen from the live content
+height:
+
+| | FULL (content ≥ 240 rows: VGA, Hercules) | COMPACT (shorter: CGA) |
+|---|---|---|
+| toolbar | 16x16 pictures with captions underneath | pictures only |
+| panels | Navigator, Histogram, Image Info stacked, no title strips (106.15) | ONE panel; Tab, or a press on it that no control takes, turns to the next |
+
+**There is no filmstrip.** Waves 1 to 9 had one between the middle band and
+the status bar - the folder's pictures as cards with thumbnails, cached in
+`PIXEL.THC` - and it was withdrawn at the owner's request on 2026-10-06
+(106.21): the middle band takes its rows, the folder is walked by Prev and
+Next, and the status bar's `n of N` says where in it the picture is.
+
+The captions also need a content width of 616 pixels; a narrower full-tier
+window drops them. A window too narrow for a 160-pixel canvas beside the
+panels drops the panel column. Inside the column a panel that does not fit is
+dropped from the bottom up — Image Info, then Histogram, then Navigator — and
+only Image Info may be cut short (a picture well or a column of buttons cut
+in half is neither); on the full tier, Image Info open and last takes the
+rows left under it, down to the status bar, so the column reads as one
+stack. **A panel is its
+body:** there is no title strip and no collapse box (the owner's call: they
+cost rows, and the panels are not minimised), so the Navigator's picture,
+the Histogram's graph and its Luminosity drop-down and Image Info's labelled
+lines say what each panel is. Two panels are parted by one rule row on the
+plain face and are framed panes on the colour face (106.16); the rows the
+strips had went to the bodies — the Navigator's is 100 / 64 / 48 rows (VGA /
+Hercules and EGA / CGA, `px_k_nav`) where it was 60 / 46 / 40, the
+Histogram's 84 / 56 / 58 (`px_k_hist`), and Image Info shows six lines on a
+Hercules where it showed four. Showing and hiding them stays View > Hide
+Panels. The tool column drops its last tools the same way when the middle
+band is short - only a window dragged down towards its 150-row minimum: every
+display's window, the CGA's included, shows all six since the filmstrip went
+(the CGA with the filmstrip shown kept four); their letters still choose
+them.
+
+**The display decides two things the size does not.** The palette is chosen
+by DEPTH (`OSAPI_WM_DISPLAY`'s DH): on 4bpp the chrome is light grey, the
+panel bodies white, the highlight blue, the canvas dark grey; on 1bpp
+everything is black on white, because a grey is a dither there (§39.4) and
+text on a dither cannot be read. And on a **CGA** every picture is drawn at
+half height: a CGA pixel is 2.4 times as tall as it is wide, so `px_halfinit`
+ORs each pair of icon rows into one at launch (every one-pixel stroke
+survives) and the CGA's buttons are 12 rows rather than 20. The picture
+heights in the panels follow the pixel's aspect the same way; EGA takes
+Hercules' row of every table. A 4bpp display with the
+full tier and a content box at least 560 x 260 is drawn as the COLOUR FACE
+(106.16).
+
+### 106.2 Menus, About and keys (wave 1)
+
+The bar is **File / Edit / Image / Effects / View** — `MENU_APPMAX`'s five —
+and there is **no Help menu**: About PiXEL is the app-name cell's item
+(`OSAPI_ABOUT_SET`, §12.7, the `OS88UI_ABOUT` card), and the key card is
+View > Keyboard Help (F1). The items are PIXEL-PLAN.md's section 1.3 list. An item that
+needs a picture is greyed (`MENU_DIS`) for that fact (§47); in this build no
+picture is ever decoded, so they are always grey, and the status bar's first
+field says `No picture`. Live from the start: File > Open, View > Dither
+(Ordered / Diffusion — a setting, stored now and applied by the renderer
+that arrives with wave 2), View > Hide/Show Panels, and View > Keyboard
+Help. (View > Hide/Show Filmstrip went with the filmstrip, 106.21.)
+
+Keys: Ctrl+O opens; F1 or `?` shows the key card; H Z M C E R pick the Hand,
+Zoom, Marquee, Crop, Eyedropper and Rotate tools; Tab turns the compact
+layout's panel (and so does a press on that panel which no control takes). Any key or click takes a card down and does nothing else.
+
+### 106.3 Toolbar, tools, panels, status bar (wave 1)
+
+**Every control is one `os88ui_btn` record** (`OS88UI_BIMG`, §13.8.9, and
+`OS88UI_BOWN`, §13.8.10, for the colour face) — 21 buttons: ten on the
+toolbar, six tools, the Navigator's `+` `-` `Fit` and the status bar's `<`
+`>` (and six of a parameter card's, 106.24). (Wave 1's four boxes, one on
+each panel's strip and one on the filmstrip's, went with the strips: 106.1;
+the filmstrip's own `<` `>` went with it: 106.21.) One record, because `os88ui_btnclick` finds a window's
+record by walking the package's list and takes the first. A button not laid
+out this pass keeps the rect {1,1,0,0}, which `os88ui_bhit` (signed) never
+matches. The library arms and fires on geometry alone, so `px_bfire` tests
+`OS88UI_DIS` itself before acting.
+
+- **Toolbar.** Open, Save | Prev, Next | Zoom In, Zoom Out, Fit, 1:1 |
+  Rotate, Slideshow. Every item is a whole number of 8-pixel cells; its
+  button is centred over its cell and its caption centred in it, so the whole
+  caption row is ONE aligned opaque run. A separator is one cell with a
+  1-pixel rule in the middle of the button row.
+- **Tool column.** Six pictures; the active tool is `OS88UI_LATCH`. Picking
+  one redraws exactly two buttons.
+- **Panels.** A body each, no title strip (106.1): Navigator's picture well
+  and its three zoom buttons; Histogram's graph well, its channel's
+  drop-down and Mean, Std Dev, Min, Max; Image Info's File, Folder, Size,
+  Format, Pixels, Depth, Packing, Palette.
+- **Status bar.** Eight fields — name, dimensions, format, zoom, colours,
+  bytes, `Memory: 412K` (`OSAPI_MEM_AVAIL`'s total free, looked at every five
+  seconds by `OSAPI_WM_TIMER`) and `n of N` — each ONE run on the 8-pixel
+  grid, a cell of margin before the first and an 8-pixel separator cell with
+  its 1-pixel rule inside between two (the wave-1 review's MIN-6: a bare rule
+  between two runs put every field after the first off the grid, on
+  `font_run`'s slower unaligned path). A field is redrawn when, and only
+  when, its value changed (`px_sval` marks it), and then only the cells that
+  changed (106.15). A bar too narrow for all eight drops colours, then bytes, then memory,
+  then format, zoom, dimensions and place, in that order; the name stays.
+  The bar's arrows end 24 pixels short of the right edge — the grow box's
+  13 columns (§11.1.1) and air enough that the arrows do not read as part of
+  it — and the text stops short of the arrows. A self-initiated draw of the
+  status bar ends with `OSAPI_WM_GROW`; on the CGA, whose 11-row bar is
+  shorter than the 13-row box, so does one of a region above it.
+
+### 106.4 What a repaint costs (wave 1)
+
+`W_PAINT` asks `OSAPI_WM_DAMAGE` and draws only the regions the rect meets,
+each whole and **every pixel once**: a text band is one opaque run padded
+with spaces to the band's whole cells (`px_tband`), ground beside a control
+is filled in strips that stop at the control's edge, and a button draws its
+own interior (`os88ui_bdraw1`). A full repaint of the empty window, counted
+by tracing the API cells, is **297 primitive calls on VGA** (205 fills, 29
+frames, 35 runs, 16 icons, 12 lines), **293 on Hercules** and **191 on CGA** —
+about 225 ms at CLAUDE.md's 756 us a call's fixed part on a 4.77 MHz XT. Two thirds of the
+fills are the buttons' own rings. The incremental paths: a tool change is
+two buttons, a status field one run, a panel collapse the panel column, the
+card going down a full repaint. Wave 2's `pxpaint` row makes these numbers a
+gate. (These are wave 1's numbers, with title strips; 106.15 has what a
+command costs since, and 106.16 the colour face's full repaint.)
+
+### 106.5 The part ABI: far-called lazy code parts (wave 1)
+
+PIXEL.O88 carries a parts table (§20.12). Every row is `OP_SEG|OP_COMP|
+OP_LAZY` (below: the compression came back with the speed wave's shadow):
+a flat binary at org 0, appended by `os88pkg.py --part`, fetched into a
+claim of its own when first wanted and dropped after. The header every part
+opens with (`apps/pixel/pxpart.inc`):
+
+```
++0  dw 'PX'        signature
++2  db 4           ABI version (1 until wave 3 added +12, 2 until wave 4's context, 3 until +14)
++3  db 5           vectors that follow
++4  dw 0           the package's segment - stamped by the resident before EVERY call
++6  dw init        out AX = PXP_PROBE
++8  dw decode      a decoder's body, on the WORKER (106.18); PXE_NOTSUP from a part that is not one
++10 dw info        ES:DI = a buffer, CX = its size: the part's text or facts
++12 dw head        a decoder's header parse, on the UI task (106.18); PXE_NOTSUP otherwise
++14 dw plans       a decoder's mixing plans, [px_plan], on either task (106.20)
+```
+
+`px_pcall` (AL = part, BL = vector) fetches the part if it is not here,
+checks the signature, the version and the vector count, stamps `+4`, and
+`call far`s the vector with DS = the package. It answers the vector's CF/AX,
+or CF = 1 with `PXE_PART` (the fetch failed; `op_fetch` has toasted why) or
+`PXE_BADPART` (what was fetched is not a PiXEL part of this ABI; the caller
+says so). A part obeys §95.8's module rules: its own tables through `CS:`;
+the package through DS as it arrived, or `[cs:PXP_PKG]` if it repoints DS —
+never `push cs / pop ds`, and never a copy kept past the call, because the
+region may move between calls (§66); it never speaks; it answers in CF/AX.
+
+**A fetch goes home first.** A part is read out of PIXEL.O88, and File > Open
+leaves the instance standing in the picture's folder (§38.10), so
+`px_pfetch` banks `OSAPI_FILE_HERE`, goes to the folder the package was
+launched from, fetches, and goes back — SCRIBE's bracket (§95.8.6).
+
+**The parts are `OP_COMP`.** A dropped `OP_COMP|OP_LAZY` row used to be
+SPENT (§20.12.7.4): the word that held its packed length holds the segment
+while it is here, and `op_drop` left `OP_SPENT` so a second fetch refused
+rather than read nothing - and PiXEL's whole use of a part is fetch, use,
+drop and fetch again, so wave 1 shipped its rows plain. §20.12.7.4.1's
+SHADOW is the fix: a word a row in the package's own data, which `op_fetch`
+fills with the packed length and `op_drop` puts back, so a dropped compressed
+part is a never-fetched one again. It is the plan's decision 8 as written.
+The image itself is not compressed (`os88pkg.py` declines `--compress`
+beside parts), so the package still costs its full size on the disk; its
+parts do not.
+
+The one part in wave 1 is **the keyboard card** (`apps/pixel/pxhelp.asm`):
+F1 fetches it, calls INIT and INFO, copies its nine lines into the package,
+drops it and puts the card up with `os88ui_about`. `tests/pxparts.py` is the
+gate: no part fetched at launch, the row compressed and lazy; F1 fetches
+once, far-calls twice, INIT answers `PXP_PROBE` and the lines are the part's
+byte for byte, one claim held while it is here and none after, and the row's
+`zkb` the packed length again; F1 again fetches again - the leg a compressed
+part could not pass before the shadow; and a row aimed at the package's own
+header is refused with its claim still given back.
+
+### 106.6 Opening a file before there is a decoder (wave 1)
+
+File > Open runs the Standard File dialog (§38); a document launch (JPG,
+PNG, PCX, TIF and PIX are PiXEL's associations; BMP and GIF stay Paint's
+built-in rows) is banked in the entry proc and opened from `W_ONWAKE`
+(§54.10). Either way `px_examine` walks the folder with `OSAPI_FILE_FIND` —
+the pictures PiXEL names by extension, where this one sorts among them, its
+size — and reads the file's FIRST CLUSTER (`OSAPI_FILE_READ_AT` into a
+DMA-safe claim of one cluster, freed at once). Its bytes name the format,
+and win over the extension — so the walk compares EVERY file's name with the
+one chosen, and the extension only decides whether a file counts among the
+folder's pictures: JPEG, PNG, GIF, BMP, PCX (only under its own name: two
+bytes are too common a signature), TIFF, TGA, PIX, PNM, ICO and CUR, IFF and
+MacPaint, and a `CZ` wrapper - the exact rule, every signature and its order,
+is 106.25's. **The
+sniff names the format and nothing else since wave 5** (106.21): wave 1 also
+read each format's dimensions and depth out of its signature's header — a
+JPEG's frame header by walking the markers — and since wave 4 every format's
+decoder part reads them again in HEAD and checks every one, so the sniff's
+copies were dead, 446 bytes of them. A volume whose cluster is 32 KB (a 2 GB
+FAT16) reads the whole file into memory instead, as a packed one is: its
+head and the spare cluster beside it would be 64 KB, which no word holds
+(the wave-4 review's F4). The window then
+shows what it knows — Image Info, the status fields, the canvas's second
+line, `Images (N)`, and `PiXEL - NAME.EXT` in the title — and decodes
+nothing. A header that lies is not believed: every offset is checked against
+the bytes read.
+
+### 106.7 Disks, the gallery and kern_small (wave 1)
+
+- **Where it ships:** `APPS_TOOLS`, so `apps.img` (1.44MB), `apps120.img`,
+  the everything set and the live media — whose `MEDIA/` gets `LAKE.JPG` too,
+  by way of `MEDIA_EXTRA`; `office360.img` with
+  `LAKE.JPG` in `MEDIA/` (§24.6.2: the gallery's smallest picture, 18 KB,
+  where `VACATION.JPG` would have taken 85 of that disk's 181 free clusters); and `make pixeldisk` in all four
+  geometries — the package at the root, the gallery in `PICTURES/`,
+  `SYSTEM/APPDATA/` made.
+- **Off `apps360.img` and `apps720.img`**, by §24.6.1's dated decision,
+  taken 2026-10-02 with the plan: those disks had 25 and 37 clusters free,
+  and PiXEL is ~16 KB on arrival and grows by a decoder a wave. The 720KB
+  filter joins MIDIRack's (§105.10) in `APPSARGS720`, and its prerequisites
+  (`APPS720`) and its recipe are filtered together.
+- **The gallery** (`apps/pixel/samples/`, 731,401 bytes): ten ORIGINAL
+  pictures made for this project, nine reduced and re-encoded once by
+  `tools/pixsamples.py` — baseline JPEG at 4:2:0 and 4:4:4, a progressive and
+  a greyscale JPEG, a 256-colour GIF, an 8-bit and a truecolour PNG, a 24-bit
+  BMP and an 8-bit PCX — and `BOUNCE.GIF`, an animated GIF its `bounce()`
+  draws (106.25). Committed and pinned by SHA-256; `pixsamples --check`
+  is a fast-tier row and also compares the Makefile's three lists with its
+  own. The 720KB pixeldisk leaves out `HOUSE.PNG` (the whole gallery does
+  not fit), the 360KB one carries five. Every picture is shipped PLAIN: it
+  is compressed already, and PiXEL reads in chunks (§20.14.3).
+- **kern_small: `SMALLOMIT`**, a requirement omission of Sheet's kind
+  (§24.5): a picture decodes into an 8-bit master of W x H bytes — 75 KB at
+  half of a 640x480 photo — beside its decoder's claims, against a 52.5 KB
+  arena whose largest run is 17.5–20 KB. It would open a window and refuse
+  every picture it was shown.
+
+### 106.8 The image model: master, palette, scale (wave 2)
+
+**The MASTER is one heap claim of `mw x mh` bytes, one byte a pixel, an
+index into a 256-entry RGB palette** (768 bytes of PiXEL's bss). It may be
+larger than 64KB: row `y` is reached by segment arithmetic, `seg = base +
+(y*mw >> 4)`, `off = (y*mw) & 15`, so a row never straddles its segment
+(`mw` is at most 8,192). The claim is **movable** (§66): its relocation proc
+re-bases `[px_mseg]` and nothing else, because nothing else derives a segment
+from it between two reads — the worker re-reads it after every
+`OSAPI_TASK_ALIVE` and every row, and the renderer at every row. It is never
+the buffer of a file call, so §66.5.7.1 never pins it.
+
+**Three palette MODES**, chosen at the header by the source's kind:
+
+| mode | palette | what goes in |
+|---|---|---|
+| PAL | the file's own, `npal` <= 256 entries (the rest black) | 1/4/8-bit BMP, 1-bit and 4-plane PCX, 8-bit PCX, TGA types 1/9, PNM P1/P4 (white, black), PIX (os8088's sixteen) |
+| CUBE | **6x7x6 colour cube + 4 greys**: index `(r*7+g)*6+b` holds `(51r, R7[g], 51b)` with `R7 = 0,43,85,128,170,213,255`; 252..255 hold the greys 51, 102, 153, 204 | 16/24/32-bit BMP, 24-bit PCX, TGA types 2/10 (15/16/24/32), PNM P3/P6 |
+| GREY | 256 greys, index = level | 8-bit PCX without a palette, TGA types 3/11, PNM P2/P5 |
+
+**Truecolour reaches the cube through an ORDERED dither**: a 16x16
+blue-noise threshold matrix (void-and-cluster ranks, Ulichney's construction
+with a Gaussian of sigma 1.5 on the torus; `tools/pixelsim.py`'s `BLUE16` is
+the constant) cut to sixteen classes, `k = rank >> 4`, with ONE threshold a
+pixel shared by its three channels. A level is the threshold's floor,
+`q6 = (5v + T16[k]) div 255`, `q7 = (6v + T16[k]) div 255`, `T16[k] =
+(255 (2k + 1)) div 32`, and the index is `(q6r*7 + q7g)*6 + q6b`. The
+matrix row is the MASTER row (and the column the master column), so a
+bottom-up file dithers as a top-down one and the same picture read by eleven
+different readers is one master (106.13). **The four NEUTRAL codes**
+`(k, G[k], k)` for `k` in 1..4 (`G = 0,1,2,4,5,6`: 49, 98, 153, 202) hold
+the exact greys `51k` in the palette rather than `(51k, R7[G[k]], 51k)`, so
+a grey that lands on one is grey with no test of its own; 252..255 keep the
+same four greys and nothing maps to them.
+
+**Why ordered, and why blue noise** (106.17 has the measurements): the master
+is dithered once and shown through a second dither, the window's Bayer
+(106.11), which at 100% is phase-locked to it. The window's own 8x8 Bayer in
+the master renders a tone between two cube levels as `max(t0, 64f)` rather
+than `t0 + f (t1 - t0)` - flat, then steep - and blows out a sky on a 1bpp
+display; a 3x3 matrix beats against the period 8 in diagonal hatching. Blue
+noise has period 16, a multiple of 8, so nothing beats, and its classes are
+near-independent of Bayer's, so the second dither sees the right tone: on a
+grey ramp through a 1bpp display it errs by 1.9% of white against
+Floyd–Steinberg's 1.2%, and through VGA the two are hard to tell apart. It
+costs an 8088 **139 cycles a pixel against Floyd–Steinberg's 1,361**, which
+is why there is no Floyd–Steinberg, and no Settings > Fast decode to turn it
+off.
+
+**The guest does it with 48 `xlat` pages** (`px_quant`, `px_qtabs`): a page
+per class and channel holding that channel's part of the index - `42 q`,
+`6 q` or `q`, in the ROW's byte order (`[px_bgr]`: a 24-bit BMP's or raw
+TGA's B, G, R rows are read in that order, never swapped) - built per decode
+a run at a time at the work claim's base, under the row, so a pixel is three
+`lodsb; xlatb` and two adds. A column's class is an arbitrary page, so the
+sixteen-pixel unrolled loop is PATCHED, sixteen `mov bh, imm8` a row (the
+Tracker's mixer is the precedent, §45), and entered part-way, Duff's way,
+with the immediates rotated to match, so no pixel tests a count. Any width's
+row shares one segment with the 12 KB of pages (3 x 8,192 + 12 KB < 64 KB).
+
+**THE SCALE is decided by memory, before a byte is read.** The master is the
+largest of 1/1, 1/2, 1/4 and 1/8 of the source whose `mw*mh` (`mw = sw >>
+s`, `mh = sh >> s`: the at most `2^s - 1` columns and rows past the last
+whole block are dropped) fits `OSAPI_MEM_AVAIL`'s largest run less an 8 KB
+reserve, and whose master, work claim and ring together fit the total.
+**The total is not a run**: with the master in the largest run, the work
+claim and the ring can still find every run left too short - a cache, the
+old master and the stack between them (wave 4 met it on a 640 KB XT:
+VACATION.JPG at 1/1 after ROOM.JPG, 92 KB free and no run 51 KB long). So a
+claim that fails after the master frees the old master, if one is still
+held, and claims again at the same scale; then takes the NEXT scale down;
+and only the coarsest refuses. A smaller scale BOX-FILTERS: `2^s` source rows of `2^s`-pixel sums are
+accumulated in words (at most 16,320) and shifted right by `2s`. A PAL
+source at a scale below 1/1 is averaged through its palette in RGB and
+quantised into the CUBE, because an average of two indices is not a colour.
+The Info panel says so: `1600x1200 at 1/4`. **Dimensions are refused above
+8,192 on either axis before any arithmetic**, so every product above fits the
+32 bits it is computed in.
+
+**Keeping the previous picture.** A new picture decodes into a NEW master
+while the old one is still held, so a cancelled open (106.9) puts the old
+picture back. The only exception is memory: when freeing the old master
+first would buy a better scale for the new one (the scale computed with the
+old master's KB added to the largest run is finer), it is freed first, and
+a cancel then leaves the canvas empty.
+
+**...and only when its claims fit beside it (2026-10-06).** Keeping the old
+master was decided on the scale alone: the new master in the largest run,
+its work claim and its ring in the TOTAL. So an open that kept it could find
+no run for the work claim or the ring, and learn so the dear way -
+`mem_claim` compacting and shedding the kernel's caches (§66.4, §50.6.2) on
+each claim that failed, then the fallback above freeing the old master and
+claiming again. `pxbench` caught it once the resident package was 4.7 KB
+smaller (106.21): FAST OPEN of VACATION.JPG straight after its 1/1 open, on
+the 5150, kept the 1/1 master, compacted three times, rolled back, and put
+its first rows on the glass in 5.05 s where it had 2.84. Now `px_keepok`
+keeps the old master only when the new master, its work claim and the ring
+(`PX_RINGKB`, the floor the scale is decided against) fit, with the 8 KB
+reserve, in `OSAPI_MEM_AVAIL`'s largest run TOGETHER, computed with the old
+master standing - the one run the package can see, and the run `mem_claim`
+leaves after its own compaction (§66.10.3). Otherwise the old master is freed
+before anything is claimed, as the fallback would have ended up doing, and
+the scale is asked again without it. What changes is which claims are held
+while a picture decodes, never how a master is made (`pxdecode`). It costs
+52 bytes of image (41,299 -> 41,351), and the same FAST OPEN puts its first
+rows up in 2.84 s again, its whole open 45.54 s; the 1/1 open beside it is
+115.47 s, no slower.
+The windowed slideshow's hidden decode masks the shown picture's `HAVE`
+(106.21), so it never reaches this decision: px_claims still never frees the
+picture on the glass for a slide.
+
+**Claims** (at most eight an owner, §50.2; since wave 4 a master's claim is
+2 KB longer, the histogram's counts at its tail, 106.20): the face
+(106.16), the master, the VIEW
+claim (106.11), and — only while a picture decodes — the old master, the
+RING and the WORK claim (106.9), and a drop-down's bank (13.14.1) while its
+list is open. Seven at the worst moment. (Wave 3 adds a decoder PART and
+frees the head before the claims are made: still seven, 106.18.)
+
+### 106.9 The decode pipeline: a worker, and the UI task as its file pump (wave 2)
+
+**Decoding runs on PiXEL's WORKER** (§20.6). A worker may not touch a file,
+claim memory or fetch a part (§20.6 rule 7, §77.2), so the UI task does all
+three and the worker does only arithmetic:
+
+1. **The UI task opens** (`px_open`, from the dialog's completion or the
+   launch document's wake): walks the folder, reads the file's HEAD (the
+   first 2 KB or one cluster, whichever is larger) with
+   `OSAPI_FILE_READ_AT`, sniffs the format (106.6) and parses the header
+   there — dimensions, depth, palette, where the pixels start. A PCX's
+   256-colour palette is the file's last 769 bytes and is read from its tail.
+   Every refusal is a NUMBER (106.10) and nothing has been claimed yet.
+2. It chooses the scale, claims the master, the ring and the work claim
+   (106.8), points the view at the new picture at Fit, and hands the worker
+   the job by writing `[px_job]` LAST.
+3. **The worker** builds the display tables if the palette needs it (106.11),
+   then runs the format's row decoder, which reads its bytes out of the RING
+   and hands each source row to the ONE row emitter (scale, quantise, write
+   — the only code that writes the master, and it writes row `r` only for
+   `r < mh`, `mw` bytes at most). Then it counts the histogram (106.12),
+   writes its answer to `[px_wres]`, clears `[px_job]` LAST and wakes the UI.
+
+**The ring is two slots of 16 KB** - two of 8 KB when the heap will not
+give 33, and one cluster where a cluster is larger, which is then the only
+slot; the volume is asked its cluster once an open - in a claim made with
+`OSAPI_MEM_CLAIM_DMA` and rounded up to a 512-byte base by hand (§2.1.1; the
+claim is one KB larger for it). The SCALE (106.8) is decided against the
+8 KB ring, so a bigger ring never changes which scale a picture gets. It is
+pinned: it is the target of every read. **A read is priced per `int 13h`,
+not per sector** (CLAUDE.md), and a 16 KB one crosses a cylinder about half
+as often a sector as an 8 KB one; and when BOTH slots are empty - the first
+fill, or a worker that drained the two - `px_pumpfill` reads them as ONE
+`READ_SEQ`, since they are adjacent, which is one rotational wait the disk
+does not spend. **The open's first read is 8 KB**, the first rows' wait;
+and until a row is painted the ring is filled only when the worker has run
+DRY, and the first wake that finds rows ready fills nothing and wakes again
+(once an open) - because `px_onwake` fills before it paints, which is right
+for throughput (the worker decodes while the UI paints) and was a 16 KB read
+queued in front of the first paint, seconds of first rows on an XT. **The handshake is
+the Audio Player's** (§86.5, §77.1): a slot the worker has emptied has its
+`full` byte cleared and the request byte set LAST, then `OSAPI_WM_WAKE`;
+`px_onwake`, on the UI task and without the lock, fills every empty slot in
+stream order with `OSAPI_FILE_READ_SEQ` through `apps/os88rseq.inc` (a slot
+of 0 bytes is the end of the file), sets each `full` byte, and clears the
+request byte LAST. The worker sleeps a tick at a time while its next slot is
+empty, calling `OSAPI_TASK_ALIVE` each time round — which is also where a
+compaction may move the master (§66.5).
+
+**A `CZ`-wrapped file** (§20.14; `READ_SEQ` hands it over raw) is read whole
+with `OSAPI_FILE_READ`, which expands it, into one claim the size of the
+unpacked file; the ring is then that buffer, presented to the worker 32 KB
+at a time, and the header is parsed from it. A wrapped file whose unpacked
+size does not fit is refused (`too big to unpack`).
+
+**Progress** is the status bar's NAME field, `Opening 42%` (rows emitted over
+rows wanted), redrawn as its one run only when the number changes and at
+most once a tick. **The canvas fills as rows arrive**: the worker wakes the
+UI every 8 rows and at least a tick apart, and the wake paints exactly the
+screen rows whose master rows are now complete (106.11); rows not yet
+decoded are the canvas's ground. Every wake lays the window out and paints on
+the UI task, which is CPU the decode is not getting, so the PROGRESS wake is
+at most every three ticks; a refill's wake is at once. A render of the whole
+canvas banks the span of complete rows it used, and only that: a partial
+repaint, or a count the worker has moved on since, would mark rows painted
+that are not.
+
+**Cancel** is Esc, or the toolbar's first button, which is `Stop` while a
+picture decodes (its picture and caption change; `Open` otherwise). It sets
+`[px_abort]`; the worker checks it at every refill and every row and
+answers `aborted`; the wake frees the new master, the ring and the work
+claim and puts the previous picture back (106.8). A second Open while one
+decodes is refused with a toast. Claims are counted by `pxdecode` (106.13)
+before and after every refusal and every cancel.
+
+### 106.10 The simple formats (wave 2)
+
+A header parser per format, run on the UI task from the head bytes, and a
+row decoder per format, run on the worker - resident in `pxsimple.inc` until
+wave 4, and since then part 4, `apps/pixel/pxsimp.asm`, a part LINKED
+against the package (106.20) and otherwise the same code. **The
+CONTENT names the format** (106.6) and the extension only breaks a tie
+(PCX's two-byte signature, TGA's lack of one: a file is read as TGA only
+under that name, and then only if its header is self-consistent).
+
+| format | read | refused by name |
+|---|---|---|
+| BMP | info headers of 12 (OS/2 v1), 40, 52, 56, 64, 108 and 124 bytes; 1/4/8 bpp (PAL), 16 bpp (5:5:5, or bit fields), 24, 32 (BGRx, or bit fields) (CUBE); `BI_RLE8` and `BI_RLE4` (bottom-up only, deltas and early ends leave index 0); bottom-up and top-down | 2 bpp, JPEG/PNG-in-BMP, top-down RLE, a bit-field mask wider than 8 bits or with a hole |
+| PCX | RLE; 1 bit x 1 plane (black, white), 1 bit x 4 planes (the header's sixteen; version 3 has none and takes os8088's), 8 bits x 1 plane (the 769-byte tail palette, or GREY without one), 8 bits x 3 planes (CUBE). Runs may cross planes and lines | 2/4-bit single planes, 4-plane 8-bit, encoding 0 |
+| TGA | types 1, 2, 3, 9, 10, 11; colour map entries of 15/16/24/32 bits, indices of 8; pixels of 8 (grey or index), 15/16 (5:5:5), 24, 32 (BGRA, alpha ignored); both vertical origins; RLE packets may cross lines | right-to-left, 16-bit indices or grey |
+| PNM | P1-P6, comments, any maxval to 65,535 (scaled `v*255 + maxval/2` over maxval; two bytes a sample above 255) | |
+| PIX | os8088's own archive (§61.7, `tools/os88pix.py`): the FIRST picture, already os8088's sixteen colours, so PAL with that palette | a format version other than 1 |
+
+**Hostile input.** Every length, offset, dimension and index is checked
+against the header's own rules and the bytes there are before it is used:
+a dimension of 0 or above 8,192 is refused before any multiplication; a
+palette that runs past the head is `bad header`; a data offset past the
+file's size is `cut short`; an RLE run that would pass the row's end is
+clipped to it and the row ends (`damaged` when it would also pass the
+picture's last row); a file that ends early leaves its remaining rows at
+index 0 and answers `cut short` — the picture is not shown half-written as
+if whole. The decoders never loop on their input: every loop advances the
+ring or ends the row. **The answers are numbers** (`PXD_*`), and the
+resident caller words them as `FORMAT: reason` in one toast of at most 24
+characters: `bad header`, `size not valid`, `depth not read`, `packing not
+read`, `cut short`, `damaged`, `not enough memory`, `disk read failed`,
+`right-to-left`, `not read yet` (JPEG, TIFF and the rest, whose
+decoders are later waves; GIF and PNG are read since wave 3, 106.18), `too
+big to unpack`. Two say it without a format:
+`Not a file here` and `Not a picture` (neither its bytes nor its extension
+name one). A file whose extension PiXEL does not list is opened by its bytes
+like any other (106.6). The refusal's words also stand in the empty canvas
+until a picture is shown.
+
+### 106.11 The renderer: mixing plans, Bayer, the composer, zoom and pan (wave 2)
+
+**Per palette entry, a PLAN `(c1, c2, t)`**: draw `c2` where the 8x8 Bayer
+threshold is below `t` (0..64), else `c1`. On a 4bpp display the two are
+desktop colours (the EGA sixteen of `apps/os88api.inc`) found by an integer
+search, weights `(3, 6, 1)`: `c1` is the nearest single colour, then every
+`c2` is tried with its own best ratio (the projection of the target onto
+`c2 - c1`, in 64ths, rounded), and a pair's error carries a penalty of
+`1,849,600 K >> 5` for its contrast `K` so that a near-flat mix beats a noisy
+one. The CUBE's and GREY's plans never change, so they are SHIPPED
+(`apps/pixel/pxplans.inc`, generated by `tools/pixelsim.py --gen` and checked
+by its `--selfcheck`; since wave 4 every decoder part's, 106.20); a PAL
+palette's are built on the worker before its
+first row, by a search that reaches the same answer with less work
+(pixelsim's `plan_fast`, held equal to `plan_for` by `--selfcheck` over a
+grid of colours): `c1` from twelve weighted squares a target and three
+lookups a candidate; then each `c2` in order of its `K` (the order, the `K`s
+and each pair's `k` ship in `pxplans.inc`), the penalty `57,800 K` being a
+floor under the pair's error, so the first `K` whose penalty exceeds the best
+error ends the search - about four pairs reach a division rather than
+fifteen; a pair's error summed G, R, B and dropped once past the best; and a
+tie to the LOWER `c2`, which is `plan_for`'s strict `<` in index order. 256
+plans: 3.96 s on an XT before, 2.28 s now (106.17). On a 1bpp display the plan is a threshold of luma, `Y = (77R +
+150G + 29B) >> 8`, through a gamma halfway between linear and square, `L =
+(Y + (Y^2 + 127) div 255) >> 1`, and `t = (64L + 127) div 255`: lit (`c2`)
+or dark.
+
+**The dither tables** expand the plans into one 256-byte `xlat` table for
+each of the 64 Bayer cells — 16 KB, rebuilt when the palette or the
+display's depth changes. On 4bpp a table holds a LANE half: colour `c`'s
+bits 3..0 at bits 7, 5, 3, 1 in an even column's table and at 6, 4, 2, 0 in
+an odd one's, so two lookups and an `or` are a lane - two pixels with their
+bits interleaved, a 4x8 transpose already two stages done (the composer
+below finishes it); on 1bpp a table holds the cell's own bit or 0. **They are
+built by threshold, not by cell**: walked in Bayer order `b = 0..63`, entry
+`i` changes exactly once, from `c2` to `c1` at `b = t_i`, so one state row is
+kept, the entries whose `t` is `b` are switched (a list per `t`), and the cell
+whose threshold is `b` is a copy of the state - 64 block moves and 256
+switches where comparing every entry of every table was 16,384 compares and a
+second of an 8088 on every open. **The x phase is the SCREEN column**
+(every band starts on the byte grid, so it is `x & 7`) and **the y phase is
+the IMAGE row** (`(y - image top) & 7`), so a vertical scroll moves the
+pattern with the picture and a strip rendered under it matches.
+
+**The composer** renders a screen rect a band of at most 16 rows at a time.
+Per row it finds the master row by the vertical step and walks the columns
+by a 16.16 DDA (`lodsb; add dx, frac; adc si, int - 1`), then: on 4bpp, two
+pixels a lane, and the row of lanes turned into four planes by a BUTTERFLY in
+registers - nibbles swapped between lanes 0/2 and 1/3, then 2-bit fields
+between 0/1 and 2/3, and the four bytes are the planes (`OSAPI_GFX_BLITP`,
+DI bit 14 set so an armed clip is walked); when BLITP refuses (CF), the lanes
+are made packed pairs through a 256-byte table and go to `OSAPI_GFX_BLIT4`
+instead; on 1bpp, eight pixels a byte straight to `OSAPI_GFX_BLIT1`. The
+image's left edge is always on the byte grid: the canvas starts on it (the
+tool column is 32 pixels) and the horizontal pan moves in steps of 8. At
+exactly one master pixel a screen pixel (a picture at 100%) the DDA is left
+out of the loop and CX counts the groups. **What it costs on an 8088**
+(106.17): on VGA, 137 cycles a pixel zoomed in (the DDA) and 116 at 100%,
+where it was 160 and 145 - composing 77 / 54, turning 45 (a 4 KB table cost
+70), BLITP 12; on the CGA 81 and 55, where it was 81 and 65. The 8088's 8-bit
+bus and its fetch queue set that: a pixel is at least a `lodsb`, an
+`es xlatb` and a combine, nine bus bytes, and MartyPC measures such code at
+about 1.4 times its bus-byte count. The plan's 25 a pixel is not reachable
+for planar 4bpp from an indexed master on this CPU.
+
+**The VIEW claim** holds the 16 KB of tables, the 256-byte unspread table
+(4bpp), a row of lanes, the band and the Navigator's banked thumbnail,
+which is LAST in the claim and `PX_THMW / 2 x PX_THMH` bytes on a colour
+display, `PX_THMW / 8 x PX_THMH` on a 1bpp one: 30 KB and 20 KB since
+106.15 gave the Navigator the rows its title strip had (`PX_THMH` 96,
+where it was 64: 28 KB and 19 KB; 32 KB before 106.17 retired the 4 KB
+plane table).
+
+**Pixel aspect and zoom.** A zoom is a 16.16 factor `Z` of screen pixels per
+SOURCE pixel across; down the screen it is `Z * a`, with `a` = 1 on VGA,
+35/48 on EGA's 640x350, 29/45 on Hercules and 5/12 on the CGA's 640x200, so a
+photograph has its own shape on every adapter. The steps are 1/8, 1/6, 1/4,
+1/3, 1/2, 2/3, 1, 2, 3, 4, 6, 8; **Fit** is the largest `Z` up to 1 that shows
+the whole picture, and a new picture opens at Fit - in closed form since
+106.23, `Z = (2^32 div max(ceil(mw 2^16 / w), ceil(ceil(mh 2^16 / h) an /
+ad))) >> s`, the largest the floored steps below keep inside the canvas
+(until then a minimum of two ratios, whose picture could come out a row
+taller than the canvas, so the master's last row never showed at Fit). The steps in master
+pixels a screen pixel are `hstep = 2^32 / (Z << s)` and `vstep = hstep / a`,
+both floored, and the picture's screen size is `ceil(mw * 2^16 / hstep)` by
+`ceil(mh * 2^16 / vstep)`, which keeps every DDA inside the master; a zoom
+that would make either side larger than 32,767 is not offered.
+
+**Pan** keeps the picture's offset in the canvas; a side smaller than the
+canvas is centred (across, on the byte grid), a larger one is clamped so the
+canvas stays covered. Arrow keys pan by 32 pixels, PgUp/PgDn by the canvas
+less 16 rows, the Hand tool by dragging (applied at most once a tick), the
+Navigator by a press or drag in its picture. A vertical pan moves the pixels
+with `OSAPI_GFX_SCROLL` and renders only the exposed rows; a horizontal pan
+moves them band by band with `OSAPI_GFX_SAVE`/`OSAPI_GFX_REST` through the
+band buffer, by a multiple of 8, and renders the exposed columns. Either
+falls back to rendering the canvas when the slot refuses (a covered window,
+a straddle) or the pan is wider than the canvas.
+
+### 106.12 Panels and the status bar, live (wave 2)
+
+- **Navigator.** The picture at its own Fit in the well, rendered ONCE per
+  picture, size and depth into the view claim and blitted from there; the
+  part of the picture the canvas shows is an `OSAPI_GFX_XOR_RECT` frame, so
+  a pan or a zoom moves the frame and never re-renders the thumbnail, and a
+  zoom repaints the canvas, the frame and the zoom field and not the panels.
+  `+`, `-` and `Fit` zoom; a press or drag in the picture pans. While a
+  picture decodes the well, and the Histogram's, are the well's grey.
+- **Histogram.** The worker counts the master's indices into 256 dwords
+  after the last row - one `inc byte` a pixel into three byte planes (a low
+  byte that wraps carries into the next; the master is under 2^24 pixels),
+  joined into the dwords at the end, 92 cycles a pixel where a word count
+  with a doubled index was 120; the UI folds them through the palette into 256 bins of
+  Luminosity (the luma above), Red, Green or Blue — an `OS88UI_DROP` picks —
+  and from the bins: Mean `floor(S1/N)`, Std Dev `isqrt(floor(sum n_v (v -
+  mean)^2 / N))` (48-bit sums), Min and Max the first and last non-empty bin.
+  The graph is one 1bpp band (`apps/os88gfx.inc`'s `GFXE_BAND`), one column
+  per `256/width` bins scaled to the tallest, put up with
+  `OSAPI_GFX_BLIT1_PEN` black on white — on the colour face (106.16) in the
+  channel's own colour on white: dark grey, red, green or blue.
+- **Image Info.** File, Folder, Size, Format, Pixels (`at 1/n` when scaled),
+  Depth, Packing (`None`, `RLE`, `RLE8`, `RLE4`, `Bit fields`) and Palette
+  (`Own, 256`, `Cube`, `Grey`). File > Image Info... shows the same lines
+  as a card, for the compact layout's sake.
+- **Status bar.** Every field is live and redrawn alone when it changes: the
+  name (or `Opening 42%`), the master's source dimensions, the format, the
+  zoom (`100%`, `Fit 47%`), the colours, the bytes, the free memory and the
+  place. Its `<` `>` sit clear of the grow box.
+- **What is live in this wave**: Open/Stop, Zoom In, Zoom Out, Fit and 1:1 on
+  the toolbar, the Navigator and View; File > Revert (Ctrl+R) and Image
+  Info...; the tools (Hand pans; the others are wave 7's and only latch).
+  Save, Rotate, Edit, Image, Effects and Full Screen stay grey (Prev, Next,
+  the Slideshow and the four arrows came with 106.21). A press on a grey
+  toolbar button says why in a toast: `No picture open` or `Not in this
+  build yet`.
+- **The filmstrip** showed the folder's pictures as CARDS — the format's
+  name in a framed card, the file's name under it, the open picture's card
+  in the highlight's colours — around the open one, from the sorted list
+  `px_walk` keeps. It was withdrawn on 2026-10-06 (106.21); the list stays,
+  and Prev, Next and the slideshow walk it.
+
+### 106.13 Tests for the image core (wave 2)
+
+- **`tools/pixelsim.py`** is the reference: the five formats' decoders, the
+  emitter (scale, the cube's ordered dither), the plan search, the dither
+  tables, the composer (4bpp packed and planar, 1bpp) under any zoom, pan
+  and aspect, and the histogram's statistics — pure Python, no Pillow.
+  `--selfcheck` is a FAST row (`pixelsim`): its own invariants, the guest's
+  pruned plan search (`plan_fast`) equal to `plan_for` over a grid of
+  colours and both shipped palettes (150,000 random colours agreed off-line), and `apps/pixel/pxplans.inc` regenerated
+  and compared.
+- **`tools/pixcorpus.py`** generates the fixtures deterministically: every
+  depth, type, orientation and packing above, and a HOSTILE set — truncated,
+  lying lengths, 65,535 x 65,535 and zero dimensions, palettes past the head,
+  RLE runs past the row and past the picture, offsets past the end, a JPEG
+  whose length walks the sniff to the edge of 64K, a file that is not a
+  picture - and a picture under a name PiXEL does not list. `--check` is the
+  FAST row `pixcorpus`: every verdict pixelsim's, and the same picture read
+  by five different readers - eleven files, bottom-up and top-down alike,
+  since the cube's dither is a function of the master row - one master.
+- **`pxdecode`** (soak, MartyPC): a scratch disk of the corpus, in two
+  folders (a directory lists 64); PiXEL opens each through File > Revert with
+  the name poked in, and the master and palette are compared with pixelsim's
+  byte for byte; each hostile file must be refused with its number, the shown
+  picture still shown and PiXEL's claims as they were; two more at 1/2 with
+  the largest run capped (`[px_mcap]`, a test's word). `[px_ndone]` counts
+  opens ended, which is what the row waits on.
+- **`pxopen`** / **`pxopencga`** (soak, MartyPC, VGA and the CGA 5150; it also
+  passes on Hercules): a picture opened through the association; the view's
+  arithmetic is pixelsim's, and the canvas's framebuffer equals pixelsim's
+  render at Fit, after two zoom steps, after a scroll and after a shift, and
+  for a bottom-up file painted as it decoded.
+- **`pxpaint`** (soak, MartyPC): the primitive calls of open, a pan step, a
+  zoom step, a tool and a status update, counted at the API cells and held
+  to the budget in 106.14.
+- **`pxdraw`** / **`pxdrawvga`** (soak, MartyPC, Hercules and the VGA's
+  colour face): every gesture's calls per routine under 106.15's ceilings,
+  and the identity assertion; **`pixart`** (fast) is 106.16's pictures'
+  own checks.
+- **`pxbench`** / **`pxbenchvga`** (soak, MartyPC, the 5150 with CGA and the
+  XT with VGA): the TIME of an open (three pictures, to the end and to the
+  first rows), a zoom step, a pan step and Fit, in guest cycles from
+  breakpoints, each held to a ceiling of 106.17's figure plus a margin - the
+  row that fails when a change makes PiXEL slower on the target.
+
+### 106.14 What it costs (wave 2)
+
+Measured on MartyPC by its cycle counter: the IBM 5150 (4.77 MHz 8088, CGA)
+and the XT with VGA at the same clock, from the key that opens a picture to
+the end of its decode, every disk read included.
+
+| picture | 5150, CGA | XT, VGA | first rows on the glass |
+|---|---|---|---|
+| MOUNTAIN.BMP, 256x192 24-bit (the cube, Floyd–Steinberg) | 34.1 s | 38.1 s | 3.1 / 3.9 s |
+| CITY.PCX, 320x240 8-bit RLE (its own palette) | 16.6 s | 22.3 s | 3.6 / 7.3 s |
+| a 640x480 8-bit BMP, 308 KB | 40.3 s | 47.9 s | 4.6 / 6.8 s |
+
+Of MOUNTAIN.BMP's open about a third was the disk and nearly half the
+quantiser, whose three passes cost 1,361 cycles a pixel; a PAL picture on VGA
+waited for its 256 plans before its first row (about 4 s). A full render of
+the canvas: **4.8 s** on VGA for 432x293 (zoomed in), **2.1-2.9 s** at Fit
+for a 320x240 picture, **1.4 s** on the CGA. **These are wave 2's figures,
+taken by polling; 106.17 has what the speed wave made of them, measured by
+breakpoints, and is the table `pxbench` holds the package to.**
+
+`pxpaint`'s calls on VGA, held as a budget (`tests/pxpaint.py`):
+
+| operation | calls | of which |
+|---|---|---|
+| open (a 320x240 PCX, decode included) | 751 | 115 BLITP bands, 409 fills, 112 runs |
+| zoom step | 42 | the canvas's bands, the frame, the zoom field |
+| pan down | 8 | ONE scroll, the strip's bands, the frame |
+| pan across | 79 | 19 SAVE + 19 REST, the strip's bands |
+| panel collapse | 98 | the panel column |
+| status field | 1 | one run |
+
+**Since 106.15 and 106.16** the open is **180** (113 BLITP hits, 45 runs, 9
+fills - the canvas and what the records found moved), and the panel
+collapse is gone with the panels' boxes: its row is a **tool** by its letter,
+**4** - the two faces' planar blits. `pxpaint` counts every hit of a cell,
+so a planar blit that walks a clip region is TWO hits (the kernel's walk
+far-calls the cell again for its fragment, from `.cold`, SPEC.md 5.4.3.6);
+`pxdraw` (106.15) counts PiXEL's own calls, which is why its numbers for the
+same gestures are smaller.
+
+**Since 106.21** the canvas has the withdrawn filmstrip's rows - 367 tall on
+the VGA where it was 290 - and what covers it is a band of it more often: a
+pan across is a SAVE and a REST a band, **95** calls with 23 of each where it
+was 79 with 19, and a zoom step **49** with 47 BLITP where it was 41 with 39
+(`pxpaint` at `f0957d53` and after). Its budgets are 105 (26 SAVE, 26 REST)
+and 60 (55 BLITP).
+
+### 106.15 A command draws what it changed — the records
+
+Waves 1 and 2 drew a command by REGION: an open ended by repainting the
+toolbar, the panel column, the filmstrip and the status bar whole, because
+each of them had something on it that might have changed. **Measured on
+MartyPC** (`tests/pxdraw.py`: a breakpoint on every drawing cell of the API
+table, each hit counted only when its far return address is PiXEL's - the
+planar blit's clip walk re-enters its own cell from `.cold` - and named by
+the routine that made it), an open of CITY.PCX was 597 drawing calls on
+the Hercules face and 660 on the VGA - 216 of them the twenty-odd buttons
+drawing their rings again over buttons that had not moved.
+
+**A region painter now draws its region whole and RECORDS what it drew**, and
+`px_usync` walks the window comparing the state with the record, drawing what
+moved and nothing else:
+
+| on the glass | the record | drawn when |
+|---|---|---|
+| a button | its flags and its picture as drawn (`px_bkey`) | either moved: a tool latched, Open becoming Stop, a button ungreyed |
+| a line of text - each status field, each of Image Info's lines, the Histogram's four statistics, the toolbar's caption row | a SLOT: its cells, where, and in what colours (`px_slots`) | the run from the first cell that differs to the last, ONE `font_run`; nothing at all when nothing moved |
+| the Histogram's graph | counted, channel, picture, face, well (`px_kg`) | any of them moved |
+| its drop-down | counted, channel (`px_kd`) | ditto |
+| the Navigator's picture | picture, depth, face, well (`px_kn`) | ditto; otherwise only its frame follows the view, and not even that when the view did not move |
+
+Every record keeps its place RELATIVE to the content's corner: a window that
+moves is not repainted (SPEC.md 11.96.12), its pixels go with it, and so must
+what the records say about them. For the same reason the Navigator's frame,
+its well, the Histogram's well and its drop-down are laid out with the rest
+of the window (`px_lay_bodies`, `px_navplace`), where wave 2 banked them at
+the last paint - so a press in a Navigator that had moved went to where it
+used to be.
+
+(A filmstrip card was a record too, `px_kcard` out of a sum of the folder's
+names, until the filmstrip was withdrawn: 106.21.)
+
+`px_regdraw` decides which way a command draws. A command that MOVES a region
+- a panel shown or turned, the panels hidden or shown, a card taken down, a drop-down's list closed over the content - sets
+`[px_geo]` (`px_regpaint`) and its regions are drawn whole, as `W_PAINT`
+draws them; every other caller gets the canvas rendered when it asked for it
+(the picture is the renderer's, not a record's) and the walk for the rest.
+`W_PAINT` and a whole region forget that region's records first (`px_owe`),
+so a damaged region is drawn whole whatever they said. The wave-2 callers -
+the end of a decode, a refusal, a zoom - needed no change: they already
+named regions, and the regions now go through the records.
+
+| gesture | Hercules before | after | VGA before | after |
+|---|---:|---:|---:|---:|
+| a tool, by its letter | 12 | 12 | 12 | 2 |
+| a zoom step in | 14 | 14 | 22 | 22 |
+| a pan down | 5 | 5 | 6 | 6 |
+| a pan across | 38 | 38 | 60 | 60 |
+| Fit | 15 | 15 | 21 | 21 |
+| Show Panels | 120 | 98 | 140 | 136 |
+| Show Filmstrip (withdrawn, 106.21) | 213 | 182 | 232 | 191 |
+| a status field (free memory) | 1 (14 cells) | 1 (1 cell) | 1 (14 cells) | 1 (1 cell) |
+| an open (Revert of CITY.PCX, the decode included) | 597 | 125 | 660 | 141 |
+| the key card down: a FULL repaint, the yardstick | 326 | 308 | 343 | 261 |
+
+A status field that changes draws the CELLS that changed - `Memory: 412K`
+becoming `411K` is one cell where it was fourteen, and a glyph cell is about
+0.9 ms on a 4.77 MHz 8088. Showing the panels is a repaint of the regions
+that moved and stays the dearest gesture; it is also the rarest.
+
+**THE IDENTITY ASSERTION is what makes the records trustworthy.** After a run
+of gestures - a tool, a zoom each way, a pan each way, the panels hidden and
+shown (the filmstrip until 106.21 withdrew it) - `pxdraw` captures the content, forces a full repaint (the key
+card up and down) and captures again, and the two must be identical to the
+pixel, on the Hercules face (`pxdraw`) and on the VGA's colour face
+(`pxdrawvga`). Each gesture is also held under a ceiling a repaint of what it
+touches would blow through (`CEIL` in the test), so a caller that goes back
+to repainting regions fails by name.
+
+### 106.16 The colour face
+
+On a 4bpp display - the one the window is ON (`OSAPI_WM_DISPLAY`'s DH, laid
+out on every pass, §39.16.4) - with the full tier and a content box at least
+**560 x 260** (a VGA's is 640 x 416; an EGA's is about 640 x 284, the 350
+lines less the menu bar, the title and the dock), PiXEL is drawn as a COLOUR
+FACE. Below that gate, and on every 1bpp display, it is the plain face of
+106.1 - which is a complete face, not a degraded one. Content is the
+application's (§76) and the canvas the picture's; colour goes where it
+carries meaning:
+
+- **Buttons are pictures with their captions inside them.** Every button is
+  painted by PiXEL (`OS88UI_BOWN`, §13.8.10; `px_lab_col` points every label
+  at `px_bpaint`), so the library's press, drag-off and release redraw this
+  face and not the standard one. The toolbar's ten and the tool column's six
+  are **`PIXEL.GFX`'s pictures, one `OSAPI_GFX_BLITP` each**: a black frame
+  with its corners left as chrome, a white top-left and a grey bottom-right
+  bevel, the icon over its caption (the toolbar's) or alone (the tools'); up,
+  pressed (one grey line in at the top and the left, the contents a pixel
+  down and right) and greyed (embossed: the ink grey with white a pixel down
+  and right). A greyed button's caption greys with it, which the plain
+  face's one-run caption row cannot do (the wave-1 review's NIT 2). The
+  latched tool is pressed AND white inside, because it has to read from
+  across the window and not only under the pointer. The Navigator's `+ - Fit`
+  and the arrows are bevelled in code (`px_bevel`), their label opaque on the
+  grey with the grey ringed round it - every pixel once.
+- **Panes**: each panel is a dark-grey frame round its white body, four rows
+  of chrome round and between them; the column is 16 pixels wider than the
+  plain face's so a line keeps its 22 cells. No title strip (106.1).
+- **The Histogram's graph is drawn in its channel's colour**: dark grey for
+  Luminosity, then red, green and blue - the drop-down says which, and the
+  graph agrees with it.
+- **Highlight**: blue with white text - the open picture's filmstrip card
+  wore it until the filmstrip was withdrawn (106.21).
+
+**The toolbar's layout is the faces'**: each a multiple of 8 wide (40, 48,
+56 or 64 pixels, `PXA_TABLES`), 30 rows, the button the face less its two
+columns of chrome at the right - so faces laid edge to edge on the grid are
+buttons with a gap and need no ground between them - with an 8-pixel
+separator cell between groups. A tool's face is the tool column's whole
+width, its rule included, 24 rows, edge to edge from two rows under the
+toolbar. A full repaint of the toolbar is ten planar blits, three
+separators, a margin and a tail, two rows of air each side and the rule:
+**~22 calls where the plain face's is ~60.**
+
+**`tools/pixart.py` draws the pictures** - in code, nothing hand-painted: the
+icons are pxicons.inc's own 16x16 art read out of the asm (so the two faces
+cannot drift apart), each icon's INSIDE - every paper pixel the cell's edge
+cannot reach - in an accent colour (the folder yellow, a lens cyan, the stop
+sign's octagon red with a white cross), the captions SET IN THE SYSTEM'S OWN
+HELVETICA (`faces/helv.t88`, §6.4) letter by letter on the ink with a
+one-pixel gap, as MIDIRack's are (§105.9.5). Planar, plane 0 first; 45 faces,
+**27,648 bytes**, `--selfcheck` a fast row (`pixart`) and `--check-asm` the
+Makefile's guard that `pixel.asm`'s `PXA_*` numbers and widths are the art's.
+
+**They are a file beside the package, `PIXEL.GFX`** (5,537 bytes LZ-wrapped
+on the disk; 6 clusters at 360 KB), read at entry - after the window is
+made, so a failed entry holds no claim - into a claim of its own, **only on
+a colour primary**: a Hercules or a CGA machine never reads a byte of it. A
+sidecar and not a part for MIDIRack's reason (§105.9.5: `os88pkg.py` will not
+compress an image with parts), and one more of PiXEL's own: **a picture's
+master is sized from the heap** (106.8), and a 27 KB claim can be the
+difference between 1/1 and 1/2. So the claim goes straight back, and every
+button is the code-drawn bevel, when the heap has less than **256 KB**
+(`PXA_MINFREE`) free beside it; a disk without the file, and a block the card
+refuses (a window straddling two displays, an origin off the grid), draw the
+same bevel. The VGA XT with PiXEL open and no picture reads 455 KB free with
+the pictures held and 482 KB without them (486 KB before this change: the
+records and the face's code are the other 4 KB).
+
+`PIXEL.GFX` rides beside `PIXEL.O88` wherever it ships: the 1.44 MB and
+1.2 MB apps disks, `office360`, every `pixeldisk`, the everything set and the
+live media.
+
+**EGA has no MartyPC profile**, so its face is ARITHMETIC here and not a
+picture: a content box of about 640 x 284 passes the gate; the toolbar is 35
+rows and the status bar 14, which leaves a middle band of about 235 rows
+(179 while the filmstrip's 56 were under it, 106.21) - the six tool faces
+need 146, and the column holds the Navigator (64 + its frame), the
+Histogram (56 + its frame) and all of Image Info's lines.
+
+### 106.17 The speed wave: what an 8088 pays, before and after
+
+The package was made fast on the machine it is calibrated against: the 5150
+with a CGA and the XT with a VGA, both a 4.77 MHz 8088, under MartyPC's cycle
+counter. `tests/pxbench.py` is the instrument (106.13): a figure is the guest
+cycles between two instructions - the key that opens and the one that counts
+an open ended, a routine's entry and its return - so a loaded host measures
+the same numbers as an idle one. "Before" is the same bench run against the
+image core as wave 2 left it.
+
+| | 5150, CGA: before | after | XT, VGA: before | after |
+|---|---|---|---|---|
+| open MOUNTAIN.BMP, 256x192 24-bit | 34.55 s | **18.23 s** | 37.68 s | **19.96 s** |
+| ...its first rows on the glass | 2.97 s | 3.08 s | 3.52 s | 3.18 s |
+| open CITY.PCX, 320x240 8-bit RLE | 15.61 s | **12.78 s** | 21.64 s | **16.62 s** |
+| ...its first rows on the glass | 3.33 s | **2.69 s** | 6.99 s | **4.60 s** |
+| open a 640x480 8-bit BMP, 308 KB | 39.84 s | **35.23 s** | 47.61 s | **41.00 s** |
+| ...its first rows on the glass | 4.20 s | **1.52 s** (never reproduced: 106.18; **1.34 s** since 106.22) | 6.35 s | **4.49 s** (2.95 s since 106.22) |
+| zoom step, the canvas covered | 0.87 s | 0.87 s | 4.31 s | **3.71 s** |
+| Fit, from there | 0.52 s | 0.46 s | 2.41 s | **1.95 s** |
+| pan step, an arrow | 0.29 s | 0.29 s | 0.56 s | 0.49 s |
+
+What moved them, each measured entry to return on its own routine:
+
+| | before | after | how (section) |
+|---|---|---|---|
+| the cube's quantiser, a pixel | 1,361 cycles | **139** | Floyd–Steinberg's three error passes, replaced by the blue-noise ordered dither: three `xlatb` and two adds (106.8) |
+| the disk, MOUNTAIN.BMP's 147 KB | 18 reads of 8 KB, ~12 s | 10 of 16 KB, ~11 s | 16 KB slots, both empty slots in one `READ_SEQ`, the first paint ahead of the second read (106.9) |
+| 256 mixing plans, CITY.PCX (VGA) | 18.9 M cycles, 3.96 s | **10.9 M, 2.28 s** | pairs in `K` order, the penalty a floor, terms dropped past the best (106.11) |
+| the 64 dither tables (VGA) | 4.76 M cycles, 1.00 s | **0.70 M, 0.15 s** | built by threshold: 64 block copies, 256 switches (106.11) |
+| the 64 tables + 1bpp thresholds (CGA) | 3.20 M cycles | 1.74 M | the same |
+| turning a row into planes, a pixel | 70 cycles | **45** | a register butterfly on lanes, no 4 KB table (106.11) |
+| composing at 100%, a pixel | 62 (4bpp) / 58 (1bpp) | 54 / 49 | CX counts the groups; 1bpp's ends folded |
+| the histogram, a pixel | 120 cycles | 92 | one `inc byte` into three byte planes (106.12) |
+| PCX runs, CITY.PCX's 240 lines | 38.7 M cycles | 18.4 M | a literal byte is four instructions (106.10) |
+
+**What did not move, and why.** A colour pixel through the composer is still
+over a hundred cycles - 137 zoomed, 116 at 100% - against the plan's 25: a
+pixel is at least a `lodsb`, an `es xlatb` and a combine, nine bus bytes, and
+MartyPC measures this code at about 1.4 times its bus-byte count (the 8088
+fetches a byte every four clocks, and its 4-byte queue runs dry on code this
+dense). The DDA, a zoom's per-pixel step, is four more bytes. The CGA's zoom
+step is its 1bpp DDA and stands where it was. And a PAL picture on a colour
+display still waits about two seconds for its plans before its first row:
+the search is exact, `plan_for`'s answer to the bit, and that is what it
+costs; a coarse lookup grid would have been faster and approximately right,
+which this package does not ship (a 16-level grid settles `c1` alone in 65%
+of its cells). **A first-rows figure can move by a few tenths** from run to
+run - it is where in its tick and in its disk revolution the key landed - so
+the bench holds it to a wider ceiling than the rest.
+
+### 106.18 GIF and PNG: the decoder parts, the shared LZW, inflate (wave 3)
+
+GIF and PNG are read by two lazy compressed PARTS of PIXEL.O88 - part 1
+`apps/pixel/pxgif.asm`, part 2 `apps/pixel/pxpng.asm`, both `OP_SEG |
+OP_COMP | OP_LAZY` (106.5, §20.12.7.4.1) - so the resident package grows by
+the plumbing alone. **A part does what 106.10's two halves do**: its HEAD
+vector parses the header out of the head on the UI task, and its DECODE
+vector runs on the WORKER and reads the stream, emits rows and answers a
+`PXD_*`. It never speaks, never draws, never touches a file and never claims
+(§20.6 rule 7); the five things it needs the package for are services.
+
+**The CONTEXT** (`PXK_*`, `apps/pixel/pxpart.inc`) is one block of package
+bss whose offset both vectors are handed in DI. HEAD reads the head's
+segment and length from it and answers the source's width and height, its
+row format (`RF_IDX`, `RF_GREY`, `RF_RGB`, 106.8), bits, packing, palette
+entries, and the paragraphs of DECODER SCRATCH it needs. DECODE reads the
+scale, the master's size, the row buffer's segment, the scratch's segment,
+the source palette's offset and the services' offsets, and answers packing,
+palette entries and bits as the stream told them, and `PXK_RBLK` (below).
+**The services** are near procs of the package behind far thunks, which set
+DS to the package themselves - so a part calls `call far` with its own
+registers and nothing to restore:
+
+| service | does |
+|---|---|
+| `K_NEXT` | the rest of the worker's ring window, or the next one: ES:SI and CX; CF = 1 at the end of the file, a cancel or a read error (the part answers `cut short`; `px_wjob` says which it was) |
+| `K_EMIT` | `px_emit` (106.8) on source row AX, whose pixels the part has put in the row buffer; BX, when not FFFFh, is then the count of master rows complete from the top, and DX the decode's progress in source rows |
+| `K_SCAT` | at 1/1 only: the row buffer's pixels at columns `CL + k CH` into master row AX - quantised whole into the cube first when the picture is truecolour, which is exact because the cube's dither is a function of a pixel's place (106.8); BX and DX as `K_EMIT` |
+| `K_TICK` | progress without a row: AX source rows; the cancel and the liveness `px_progress` already does |
+| `K_PAL` | the palette is known: `[px_spal]` becomes `[px_pal]` on a PAL picture, the display tables are built (`px_tables`) and the UI is woken, which `px_wjob` does before the first row of a resident format. A part's palette can come after the head (a GIF's local table, a PNG's PLTE), so it calls this before its first row, and `K_EMIT` calls it if a part did not |
+| `K_COLS`, `K_RING` | wave 4's: a block of master columns (106.19), and the ring's next window for the linked simple part (106.20) |
+
+Every service checks what it is handed - a row past the master, a column
+step of 0 or above 8 - and does nothing with it rather than trust a part.
+`px_wcall` is the worker's far call: no fetch (the part is here, because the
+UI task fetched it to call HEAD and does not drop it while a decode runs),
+`op_seg` being a lookup and nothing more; it stamps `PXP_PKG` and calls.
+
+**One decoder part at a time, kept while pictures are of its kind** (plan
+3.2): the open that needs a part drops whichever other decoder part is held
+and fetches its own before HEAD; a successful decode keeps it, so a folder
+of PNGs reads the part once; a refusal or a cancel that leaves a picture of
+another kind showing (or none) drops it. The HEAD's fetch goes home and
+back (106.5), and the head is freed straight after the header parse, before
+the claims - so an open holds at most the face (`PIXEL.GFX`'s pictures,
+106.16), the view, the previous master, the part, the new master,
+the work claim and the ring: **seven**, and a drop-down's bank or F1's card
+eight. (The REGION is not among them: its owner word is not the package's
+segment, so it never counts against §50.2's eight - measured on MartyPC by
+the wave-3 review, which this list corrects.) The decoder scratch is not a claim of its own:
+it is the WORK claim's last region (`[px_wo_dec]`), so the scale (106.8)
+prices it with the rest, and it shares the claim's fate on a cancel.
+
+#### `apps/os88lzw.inc`: the shared LZW (plan decision 11)
+
+GIF-flavoured LZW DECODE, lifted from Paint's `pt_gdec` (§42.21) with its
+two guarantees kept: **a code above the next free code - and a first code
+after a Clear that is not a root - is refused**, and **an entry whose prefix
+is not below its own index is never added**, so a chain strictly descends,
+cannot cycle, and a string is at most 4,092 characters into a 4,096-byte
+stack - no character of the walk is counted. The includer gives it state
+(`LZW_BSS`, `LZW_BSSSZ` bytes, DS-relative), a table segment in ES of
+`LZW_KB` = 18 KB (prefixes, suffixes, the string stack and a 2 KB input
+buffer), and two near routines: `LZW_FILL` appends input to the buffer (0
+bytes is the end of the input - a GIF's block terminator, or the file's end)
+and `LZW_RUN` takes each decoded string as ES:SI and CX, forwards, and
+answers CF = 1 to stop - keeping DX and BP, the code reader's registers
+since 106.22 - and, optionally, `LZW_RUN1` a one-character string (a root
+code's) in AL, keeping SI (the next free code) as well. `lzw_decode` (AL = the minimum code size, 2..8)
+answers CF = 0 at the End code or the input's end, or CF = 1 with
+`LZW_EBAD` (the includer's number) or the run's own answer. Codes are read
+LSB first a whole code at a time from the buffer, which is refilled when
+fewer than three bytes remain; a code that would need bits past the input's
+end is the end. The code size grows after the code that fills a power of
+two, to twelve bits, and a full table adds nothing until a Clear (the
+DEFERRED clear). TIFF's LZW (106.25) adds `LZW_MSB`, codes read MSB first,
+beside `LZW_EARLY`, the early change - and fixed the root path WITHOUT
+`LZW_RUN1`, which clobbered SI, the next free code (no includer had taken
+that path since 106.22 gave SI that job); the GIF ENCODER (wave 7) joins the same file;
+Paint moves onto it in wave 9, and only if its rows stay byte-identical.
+
+#### GIF
+
+- **The picture is the LOGICAL SCREEN** (its size is in the 13-byte header,
+  so it is in every head): 1..8,192 each way, else `size not valid`; a head
+  under 13 bytes is `bad header`. Its FIRST image is placed in it at (left,
+  top), clipped at the screen's edges, and every pixel of the screen it does
+  not cover is the BACKGROUND index - the transparent index when the image
+  has one, else the screen's background colour index. Later images are not
+  part of the picture it opens as: 106.25 PLAYS them. PAL at 1/1, the cube
+  below.
+- **The blocks before the image**: an extension (`21h`) has its sub-blocks
+  skipped by their lengths - a Graphic Control Extension's first sub-block
+  of four bytes or more sets (or clears) the transparent index; an image
+  descriptor (`2Ch`) ends the walk; any other byte, the trailer included,
+  is `damaged`. The file ending is `cut short`.
+- **The palette** is the image's local table, else the global one; neither
+  is `damaged`. It is padded with black to 256, and the transparent index's
+  entry becomes the view background `(85, 85, 85)` - the canvas's own dark
+  grey - so transparency costs no pixel anything. A transparent index PAST
+  the colour table (old encoders write one) is still that colour: NPAL is
+  raised to cover it, or the 1/1 plans would draw it black (wave-3 review F2).
+- **An image of 0 by anything is `damaged`; a minimum code size outside 2..8
+  is `damaged`** - including 1, which GIF89a forbids and some browsers take
+  for a bilevel picture; this reader does not. The sub-blocks are the code stream; a code past the table
+  is `damaged`; the stream ending (End code, block terminator or the file)
+  before the image's last pixel is `cut short`; nothing after the last pixel
+  is read. Rows go to the emitter in the order the screen needs them: the
+  rows above the image, the image's rows in the stream's order - an
+  interlaced image's at their final y, pass by pass - and the rows below.
+- **Progressive painting of an interlaced image** at 1/1 shows only rows
+  complete from the top (`K_EMIT`'s BX): the row at the image's top after
+  the first pass, then two at a time as the fourth pass fills the odd rows.
+
+#### PNG
+
+- **The header** (the head's first 33 bytes: the signature and IHDR, of
+  length 13, first): `bad header` otherwise; width and height 1..8,192
+  (`size not valid`); a colour type and depth PNG defines - 0 (grey) at
+  1/2/4/8/16, 2 (RGB) at 8/16, 3 (palette) at 1/2/4/8, 4 (grey and alpha)
+  and 6 (RGBA) at 8/16 - or `depth not read`; compression and filter
+  method 0 and interlace 0 or 1, or `packing not read`; and a row of at most
+  **32,760 bytes**, two of which and their guards fit one segment, or `too
+  big to unpack` (8,192 RGBA pixels is 32,768). Type 3 is `RF_IDX` (PAL at
+  1/1), 0 and 4 `RF_GREY`, 2 and 6 `RF_RGB` (the cube).
+- **The chunks before the first IDAT** are walked by their lengths: a
+  length of 2^31 or more is `damaged`, IEND is `damaged`, the file ending
+  is `cut short`. PLTE (type 3 only; 1..256 entries, a multiple of three, or
+  `damaged`; the last one wins) and tRNS (256 bytes or fewer) are kept; any
+  other chunk, ancillary or critical, is skipped. A type 3 picture without
+  PLTE at its first IDAT is `damaged`.
+- **The image data** is the IDATs that follow one another, zero-length ones
+  included; any other chunk, a length of 2^31 or more, or the file's end ends
+  it. **No CRC is read and Adler-32 is not computed**: an 8088 would pay a
+  table lookup and a dozen instructions a byte for each, and the deflate
+  stream's own structure is checked to the bit - so a file whose CRC is
+  wrong and whose data is right opens (the corpus has one, `PCRC.PNG`).
+- **zlib**: CM 8, CINFO 7 or less, the check bits, no preset dictionary -
+  or `damaged`. **Inflate**: stored, fixed and dynamic blocks; block type 3,
+  a stored length whose complement is wrong, more than 286 length or 30
+  distance codes, a code-length code over-subscribed or incomplete, a repeat
+  with nothing before it or past the end, a literal/length set without an
+  end-of-block code, a literal/length or distance set over-subscribed, or
+  incomplete other than empty or a single code of one bit (zlib's rule),
+  a length symbol 286/287, a distance symbol 30/31, a distance reaching
+  before the stream's first byte, and a code no set contains - each is
+  `damaged`. The stream ending before the last row is `cut short`.
+  **Huffman decoding** is two levels of table. The PRIMARY has 512 entries
+  indexed by the next nine bits, symbol and length in one word: a literal is
+  `AH` > 0 - its length, so its write and its shift take no test of the
+  symbol's range - a length symbol or the block's end `80h | length`, and a
+  code longer than nine bits `C0h` with `AL` naming its SUB-TABLE: 64
+  entries indexed by the six bits after the nine (15 - 9), filled for every
+  long code that shares the prefix. There are 64 sub-tables for the
+  literal/length code and 16 for the distances (10 KB); a set that would
+  need more, and an entry no code fills, go to the CANONICAL WALK (count and
+  symbol arrays, a bit at a time from the first bit, puff's loop), which is
+  also what refuses a code no set contains - after the fifteen bits the walk
+  reads, so the guest consumes what the reference does. (The first build
+  walked every long code: 18% of HOUSE.PNG's instructions were the walk.)
+  The tables are built per dynamic block, in the scratch above the window.
+- **The window is 32 KB** at the scratch's base; a distance is checked
+  against the bytes written so far until 32 KB have been. Scanlines are
+  EXTRACTED from it in batches of at most 4,096 bytes (fewer when fewer are
+  still wanted), so decoding stops after the symbol that produced the last
+  byte the last row needs and nothing past it is read. **Past the end of
+  the image data the stream reads as zero bytes**, at most four; a decode
+  that has USED one of them - by finishing, refusing or asking for a fifth -
+  is `cut short`, which is exactly where a reader that stops at the end
+  would have stopped.
+- **Filters**: None, Sub, Up, Average, Paeth (the specification's
+  predictor order, in registers), two scanline buffers in the scratch with
+  eight zero bytes before each, so a left neighbour off the row's start is
+  read as 0 without a test; a row's first pass and a pass's first row read
+  a zeroed previous row. **A filter type above 4 is `damaged`**, said when
+  the last row is in, so that a stream error anywhere before it is the
+  answer instead, as it is in the reference.
+- **Pixels**: a 1/2/4-bit grey is scaled by 255, 85 or 17; 16-bit samples
+  take their high byte; a palette's tRNS alphas are composited into the
+  palette, so they cost no pixel anything; a grey or RGB tRNS key compares
+  the WHOLE sample (16 bits for a 16-bit picture) and makes the pixel the
+  view background; alpha (types 4 and 6) is composited over it, `c' = (t +
+  (t >> 8)) >> 8` with `t = a c + (255 - a) 85 + 128` - exact rounding of
+  `(a c + (255 - a) 85) / 255`, and an alpha of 255 or 0 takes the colour or
+  the background without a multiply.
+- **Adam7**: at 1/1 each pass's rows are placed at their final coordinates
+  (`K_SCAT`) and the rows complete from the top are shown as the seventh
+  pass fills them. Until then no row can be painted, so 106.9's pump does
+  not hold the disk back for a first paint - it does that only when rows
+  are complete (`px_pumpfill`: rows decoded and none showable fills ahead
+  of the worker, as after the first paint).
+
+**An interlaced picture below 1/1** - a GIF's interlaced image, a PNG's
+Adam7 - cannot be box-filtered as it arrives: a block's rows come in
+different passes, and keeping every block open until its last row is an
+accumulator the size of six masters. So it is built from the rows of ONE
+PARITY, the parity its LAST pass carries whole (a PNG's odd rows; a GIF's
+image rows `top + 1, top + 3, ...` and the screen rows of that parity
+around it): each master row is the average of its block's 2^(s-1) such rows
+across its 2^s columns (`PXK_RBLK` = 2^(s-1), the shift 2s - 1). The other
+rows are decoded, because the stream cannot be skipped, and not emitted.
+`tools/pixelsim.py`'s `emit` takes the same rows (`Pic.par`). Two
+consequences, kept on purpose (the wave-3 review checked the rule and
+recommended keeping it): a ONE-ROW interlaced frame contributes no row below
+1/1 - its only row has the other parity - so it is all background there; and
+a thin horizontal line on the other parity vanishes below 1/1, which a box
+filter over every row would have greyed instead.
+
+**What PiXEL refuses is checked before it is used, and nothing loops**:
+every length, code, distance, table, chunk and dimension above; every
+decoding loop consumes a bit, a byte or a row; a skip is bounded by the
+file; and the only code that writes the master is the emitter and
+`K_SCAT`, both of which clip to it.
+
+**What it costs** (as wave 3 left it - 106.22 has the decoder speed pass's
+figures; MartyPC's cycle counter, `tests/pxbench.py`, 4.77 MHz; the key that
+opens to the open's end, every disk read included):
+
+| picture | 5150, CGA | its first rows | XT, VGA | its first rows |
+|---|---|---|---|---|
+| CAT.GIF, 320x240, 256 colours, interlaced, 70 KB | 31.78 s | 2.80 s | 35.73 s | 4.21 s |
+| BALLOONS.PNG, 320x240, a palette, 41 KB | 16.73 s | 3.98 s | 20.57 s | 5.63 s |
+| HOUSE.PNG, 320x240 RGB, 160 KB | 49.45 s | 2.34 s | 52.63 s | 2.23 s |
+
+(A palette picture's first rows on the VGA wait for its 256 plans, 106.11.)
+
+HOUSE.PNG's DECODE (`px_dpart`, entry to return) is 42.9 s of it, of which
+**inflate is 19.2 s: 396 cycles a byte it writes** (421 on the VGA XT,
+whose UI task paints more of the progress), the scanlines 12.1 s (filters,
+pixels, the cube's dither, the emitter) and the worker's waits for the disk
+the rest - with the canvas's progressive painting held off for the
+measurement, which is what makes the pump read only when the worker runs
+dry (106.9). The plan's 30-40 cycles a byte is not an 8088's: a literal is a
+table lookup, a variable shift of the bit buffer (8 + 4n cycles), a byte's
+refill most times and a masked store - about 25 instructions, most of them
+fetch-bound - and the speed pass inside this wave (two-level tables, the
+literal's entry its own length, Average as `add`/`rcr`, Paeth on 8-bit
+magnitudes) took the same picture from 65.3 s to 49.5 s and the GIF from
+35.5 s to 31.8 s; the next steps were 106.22's (and 106.26's for PNG). **BIG.BMP's first rows on
+the 5150 measure 4.05 s at this wave's base (58a75ef8) and 3.96 s with it,
+not 106.17's 1.52 s**: the bench's ceiling follows the measurement, and the
+cause - before this wave - is wave 9's to find. (Found and fixed by the
+decoder speed pass, 106.22: the wake's deferral counted a row as painted
+that the canvas clipped.)
+
+**Sizes.** The resident package grows by the plumbing alone: image 41,589
+-> **42,456** bytes and bss 14,144 -> **14,196**, so **56,652 of 61,440**;
+the GIF part is 2,038 bytes (1,885 packed), the PNG part 5,874 (4,887
+packed), and PIXEL.O88 is 49,943 bytes on the disk. The decoder scratch
+is the work claim's: 18 KB for a GIF (the LZW's tables and its input
+buffer), 46 KB and two scanlines for a PNG (the window, two 1 KB primaries,
+10 KB of sub-tables, the counts and symbols, since 106.22 the 1 KB clean
+input, two rows with their guards).
+
+**Tests.** `tools/pixelsim.py` decodes both formats independently of the
+guest - its own LZW and its own inflate, held to zlib's at four levels and
+to the corpus by `--selfcheck` - and `tools/pixcorpus.py` makes their
+fixtures from nothing: every colour type and depth, Adam7 on each kind, a
+1x1 and a 3x2 interlaced picture (empty passes), every transparency, many
+and zero-length IDATs, stored, fixed and three-block dynamic streams, a
+tree with 13-bit codes and no distances, a single one-bit distance code,
+chunks past the head, a wrong CRC; GIF 87a and 89a at 1, 2, 4 and 8 bits,
+local, global and both tables, transparency, an image smaller than the
+screen and one hanging off it with an odd top, extensions and a second
+frame, Clear at a full table and the deferred clear; and a hostile set of
+48 (13 GIF, 35 PNG - the last two 106.22's) - each verdict pixelsim's, and the same picture through
+BMP, GIF and PNG one master (AGREE). `pxdecode` holds the guest to all of
+them byte for byte, the hostile ones refused with their number and PiXEL's
+claims as they were - other than a decoder part the refused picture
+fetched, which is dropped when the picture left showing is of another kind
+(above), so the row checks that what PiXEL holds besides is the part of the
+shown picture's kind or none. `pxparts` adds the go-home leg (MIN-10 of the
+wave-1 review): a PNG opened from a folder PiXEL was not launched from
+decodes, its part fetched from PIXEL.O88's own folder and the stream then
+read from the picture's, the part kept after it and dropped by a PCX; and a
+leg for 20.12.7.4.1's `op_drop` fix - a fetch that fails before any has
+succeeded leaves the row fetchable (red without the fix: `zkb` FFFFh).
+`pxopenpng` is `pxopen` for the parts: BALLOONS.PNG by its association on
+the VGA - every canvas pixel pixelsim's at Fit, zoomed, scrolled and
+shifted, which is what caught a palette's plans searched for none of its
+entries - and the interlaced CAT.GIF painted as its passes came.
+`pxbench` holds the three gallery opens and inflate's cycles a byte to
+ceilings.
+
+### 106.19 JPEG: the decoder part, decoded to a scale (wave 4)
+
+JPEG is read by part 3 of PIXEL.O88, `apps/pixel/pxjpeg.asm` (`OP_SEG |
+OP_COMP | OP_LAZY`, 106.5), with 106.18's shape: a HEAD on the UI task, a
+DECODE on the worker, the five services and a sixth (below), one decoder
+part held at a time. **What is read**: baseline (SOF0) and extended
+sequential (SOF1) Huffman, and progressive Huffman (SOF2), 8-bit samples,
+one component (grey) or three (YCbCr, or RGB by libjpeg's rule below), the
+samplings 4:4:4, 4:2:2, 4:2:0, 4:1:1 and 4:4:0 (Y's factors 1x1, 2x1, 2x2,
+4x1 or 1x2, Cb's and Cr's 1x1), 8- and 16-bit quantisation tables, restart
+markers, any size up to 8,192 each way, and the eight EXIF orientations.
+**Refused by name**: lossless, hierarchical and arithmetic coding (SOF3,
+SOF5-7, SOF9-15) and a baseline picture whose components arrive in more
+than one scan are `packing not read`, as is any other sampling; a precision
+other than 8 bits and a component count other than 1 or 3 (CMYK, Adobe's
+four) are `depth not read`. `tools/pixelsim.py`'s JPEG section is this
+part in Python, check for check, and SPEC's words below are its arithmetic.
+
+#### The header walk, and heads past the first
+
+HEAD walks the markers from the SOI in the head (106.9) to the first frame
+header. A marker is read as four bytes (FF, its code, a length): FF FF is
+fill, RSTn and TEM stand alone, SOI and EOI before a frame are `bad header`,
+a byte that is not FF is `bad header`, a length below 2 is `bad header`.
+**A marker the head does not hold whole** - its four bytes, or a frame
+header's whole segment - is read in a NEW head of 2,048 bytes at that
+marker: HEAD answers `PXD_MORE` with the marker's file offset in the
+context, and `px_hpart` reads there (`OSAPI_FILE_READ_AT`, or a pointer
+moved inside an in-memory file) and calls HEAD again. So a camera's 30 KB
+EXIF thumbnail costs one more read, not a refusal. Sixteen heads at most,
+and then `bad header`; a marker the FILE does not hold is `cut short`; a
+frame header longer than a head is `bad header`.
+
+The frame header's checks, in order: its length at least 8 (else `bad
+header`), precision 8 (`depth not read`), height and width 1..8,192 (`size
+not valid` - a height of 0, which asks for a DNL marker, among them),
+components 1 or 3 (`depth not read`), the length `8 + 3 Nf` (`bad
+header`), each component's factors 1..4, its table 0..3 and its id not
+repeated (`bad header`), and the sampling (`packing not read`). A single
+component's factors are ignored - its MCU is one block, as the standard
+says.
+
+Before the frame header HEAD also reads, from the bytes the head holds:
+**JFIF** (an APP0 of at least 14 bytes starting `JFIF\0`), **Adobe** (an
+APP14 of at least 12 starting `Adobe`, its transform byte 11) and the first
+**EXIF** APP1 (`Exif\0\0`, a TIFF header `II*\0` or `MM\0*`, IFD0's entries
+for tag 274 of type SHORT and count 1). A value outside 1..8, an offset
+past what the head holds of the segment, or no tag is orientation 1: EXIF
+that lies is ignored, never refused. **Three components are YCbCr** unless
+(libjpeg's rule) there is no JFIF marker and an Adobe one says transform 0,
+or neither marker and the components are named R, G, B (82, 71, 66) - then
+they are R, G and B as they stand and need no conversion.
+
+#### The orientation is applied to the MASTER
+
+The decode writes the picture upright, so every later step - the view,
+zoom, the Navigator, the histogram, the editing tools and the writers of
+waves 6-7 - sees one picture and needs no orientation of its own; the
+renderer stays a row walker, which a rotated VIEW would not be. Orientations
+2-4 are row orders and row reversals: 3 and 4 arrive bottom-up and paint
+from the bottom (`[px_dtop]` 0, as a bottom-up BMP does). Orientations 5-8
+turn rows into COLUMNS, so a band of the stored picture is a block of the
+master's columns, written by the sixth service:
+
+| service | does |
+|---|---|
+| `K_COLS` | ES:SI = a block of BX master rows of DX pixels each (DX x 3 bytes a row for truecolour), its top-left at master row AX, column CX: each row quantised into the cube with ITS row and columns' dither when truecolour, copied when grey, clipped to the master. DI, when not FFFFh, is the master rows complete from the top |
+
+A transposed picture has no row complete until its last band, so it is
+painted when it is whole; the pump fills ahead of it (106.18's rule for
+rows decoded that none can show).
+
+#### The decode, on the worker
+
+The walk from the SOI again, on the stream: DQT (precision 0 or 1, table
+0..3, 64 values none of them 0, inside the segment - else `damaged`), DHT
+(class 0 or 1, table 0..3, counts summing to at most 256 and inside the
+segment, the canonical codes checked as jdhuff.c checks them - a length's
+codes running past it, all-ones included, is `damaged` - and a DC symbol
+above 15 `damaged`), DRI (length 4), the frame header again (a second one
+is `damaged`), SOS, APPn and COM skipped; a byte that is not a marker is
+`damaged` and the file ending is `cut short`. **SOS**: 1..Nf components
+each framed once, length `6 + 2 Ns`, tables 0..3 present when the scan
+needs them, the quantisation tables of its components present and LATCHED
+at a component's first scan; a baseline scan must carry every component
+(else `packing not read`); a progressive scan follows jdphuff.c's rules - a
+DC scan has Se 0, an AC scan Ss <= Se <= 63 and one component, a
+refinement Al = Ah - 1, and Al at most 13 - else `damaged`.
+
+**The entropy-coded data** is DE-STUFFED into a clean buffer in the
+scratch (FF 00 is FF; FF FF is fill; FF and anything else is the marker
+that ends the segment, and so is the file's end), so the bit reader's hot
+path tests no byte for FF. Past the segment's end the bits are zeros; a
+decode that TAKES one is `cut short`, checked at the end of every MCU,
+every restart interval and before any refusal - exactly where a reader that
+stops at the end would have stopped (106.18's rule for inflate). A restart
+interval's end discards what is left of the segment and wants RSTm, m the
+interval's count mod 8: any other marker is `damaged`, the file's end `cut
+short`. A baseline picture is done at its last MCU; nothing after it is
+read, an EOI included. A progressive one must reach its EOI (`cut short`
+otherwise).
+
+**Huffman decoding** takes a symbol from a 256-entry table on the next
+eight bits - its length and symbol, and for an AC code whose length and
+magnitude bits together are at most eight, the coefficient's value and run
+already made - and a longer code from the canonical walk by length (Annex
+C's maxcode), from its ninth bit with the first eight in hand (106.22),
+which is also what refuses a code no table holds: after sixteen bits, so
+the guest consumes what the reference does.
+A coefficient past the 63rd is `damaged`; a zero run past it ends the
+block.
+
+#### Dequantise and the IDCT, at the scale
+
+**The scale is the IDCT's**: at 1/1 an 8x8 IDCT, at 1/2 a 4x4 from the
+coefficients `u, v < 4`, at 1/4 a 2x2 from `u, v < 2`, at 1/8 the DC alone
+- the Huffman stream is read whole at every scale, and the coefficients a
+scale does not use are read and not kept (a natural index `i` is kept when
+`i & K` is 0, `K` = 00h, 24h, 36h, 3Fh). Rows go to the emitter AT THE
+MASTER'S SCALE (`PXKF_DCT`): no box filter, each a master row.
+
+Every operation is **16-bit two's complement**, as the guest computes it:
+
+- A component's multipliers, latched at its first scan: `M = min((q P +
+  2048) >> 12, 32767)` per kept position, `P` the scale's prescale (2^17
+  `p(u) p(v)`; at 1/1 jidctfst.c's `aanscales`; at 1/2 `p(u) = C(u)/2
+  cos(u pi/16)` times 1, `cos pi/8`, `1/sqrt 2`, `cos pi/8`; at 1/4 `C(u)/2`
+  times 1, 0.640729 - the 8-point basis averaged over two and four pixels;
+  at 1/8 16,384). A coefficient's value is `s16(coef M)`, and the DC's then
+  gains `(128 << 5) + 16`, the level shift and the final rounding.
+- **1/1**: jidctfst.c's two passes, columns then rows, with `MUL(x, K) =
+  s16((x K) >> 8)` - by table since 106.22, the same value - and `K` 362,
+  473, 277, -669; an all-zero AC column or row is the DC copied, which the
+  butterflies would give exactly. **1/2**: per pass `ea = d0 + d2`, `eb =
+  d0 - d2`, `oa = d1 + MUL(d3, 106)`, `ob = MUL(d1, 106) - d3`, out `ea +
+  oa, eb + ob, eb - ob, ea - oa`. **1/4**: `d0 + d1, d0 - d1`. **1/8**: the
+  DC.
+- A pixel is the sum `>> 5` (arithmetic), clamped to 0..255.
+- **Colour**: jdcolor.c's tables exactly - `R = Y + (91,881 (Cr-128) +
+  32,768) >> 16`, `B = Y + (116,130 (Cb-128) + 32,768) >> 16`, `G = Y +
+  (-22,554 (Cb-128) - 46,802 (Cr-128) + 32,768) >> 16`, each clamped - and
+  chroma by REPLICATION, a chroma pixel serving `Hmax x Vmax` luma pixels.
+  **Fancy upsampling is declined on every CPU**: the master is pixelsim's
+  byte for byte on any machine, and a 286's own master would be another.
+- Grey is the GREY mode (106.8) with no colour work at all; truecolour
+  goes through the emitter's ordered cube (106.8) like every other.
+- The master keeps the picture's whole pixels at the scale, `W >> s` by `H
+  >> s`, as every format does (106.8); the partial block's last pixels are
+  dropped.
+
+Against Pillow's decode (box-averaged below 1/1, its orientation applied)
+every committed fixture and the gallery are above 30 dB at every scale they
+can be shown at: the gallery 45-56 dB at 1/1, the replicated chroma the
+largest share of the rest.
+
+#### Progressive, at 1/4 or 1/8
+
+A progressive picture's coefficients for the whole image do not fit (a
+640x480 4:2:0 is 7,200 blocks), so it is decoded at **1/4 at the finest**
+(`PXK_DSC`'s 1/1 and 1/2 are "not usable") into a STORE in the scratch: a
+paragraph a block, its four coefficients `zigzag 0, 1, 2, 4` (the 2x2 the
+1/4 IDCT reads) and a 64-bit map of the positions that have ever been
+nonzero - which an AC REFINEMENT scan must know to be read at all, whether
+or not the position is kept. At **1/8** the store is a word a block, the
+DC alone, and every AC scan is SKIPPED to its next marker that is not an
+RSTn, unread. DC first and refinement scans (interleaved or not), AC first
+scans with EOB runs and AC refinements (jdphuff.c's `decode_mcu_AC_refine`,
+on the map) are read as libjpeg reads them; after the EOI the store goes
+through the reduced IDCT MCU row by MCU row, as a baseline picture's
+blocks do. 640x480 4:2:0 is 115 KB at 1/4 and 14 KB at 1/8; memory takes
+the finest that fits, so "DC-only at 1/8 when memory is short" is the
+scale choice's own answer. The Info panel says `Progressive` on its
+Packing line and `640x480 at 1/4` on its Pixels line - the compact form
+whenever the picture is shown smaller, because the value column is fourteen
+characters and `640 x 480 at 1/4` and `JPEG, progressive` were both cut.
+
+#### The scale: memory, and FAST OPEN on an 8088
+
+HEAD answers the decoder scratch for each scale, `PXK_DSC` (four words,
+FFFFh where the scale is not usable): the tables, the de-stuffed buffer
+and the colour tables, the MCU row's component planes at the scale, the
+transposed block for orientations 5-8, and a progressive picture's store.
+The planes and the tables must fit one segment, which is what makes 1/1
+not usable for a very wide picture. `px_pickscale` (106.8) reads it per
+scale, so the work claim is priced with the scratch the scale needs.
+
+**Fast open**: on an 8088 (`OSAPI_CPU_INFO` answering `CPU_8086`) a JPEG
+opens at no finer a scale than the coarsest the canvas shows at Fit
+magnified by at most 4/3 - the largest `s` with `2^-s >= 3/4 Z_fit` - and
+memory may make it coarser still. The record keeps that floor
+(`PXR_FAST`). **The third is the plan's own example and the measurement's
+verdict**: a 640x480 picture in this layout's canvas is `Z_fit` about 0.6 on
+the VGA and the CGA alike (the CGA's 640 columns), so a strict cover
+(`2^-s >= Z_fit`) took 1/1 on both - VACATION.JPG 150 s on the 5150 - where
+1/2 is 63 s and shows the picture 1.2x magnified at Fit. **Zooming past it
+re-decodes**: a zoom, 1:1 or Actual Size whose `3/4 Z` is above `2^-s`
+while the floor was fast open's starts a decode of the same file at the
+coarsest scale with `2^-s >= 3/4 Z` - on the worker, with progress and Stop like any open, the zoom
+and the pan kept, the coarse picture shown until the finer one replaces it
+and put back by a cancel. **So a re-decode never frees the picture it is
+finer than** (106.8's "free the old master for a better scale" does not
+apply to it), and when memory would leave it no finer than the scale shown
+it is refused before a byte is read - `not enough memory`, the picture and
+the zoom kept - rather than spending a minute of the 8088's on the same
+scale again (wave 4 met it on the 640 KB VGA XT: VACATION.JPG at 1/2, then
+Actual Size, where a fragmented heap holds no run for 1/1's master and its
+work claim together). A 286 or better opens at the finest scale memory
+allows, as every other format does.
+
+#### Sizes
+
+The JPEG part is **14,507 bytes (11,545 packed)** with the plans every
+decoder part now carries (106.20); the GIF part 6,673 (5,417), the PNG part
+10,543 (8,439), the SIMPLE part 9,525 (7,853), the F1 card 284 (260); and
+PIXEL.O88 is **69,805 bytes** on the disk - 68 clusters of a 360 KB volume,
+which is why pxbench's BIG.BMP disk is 720 KB now.
+
+#### What it costs
+
+As wave 4 left it - **106.22 has the figures since the decoder speed pass**
+(VACATION.JPG at 1/2 46.1 s on the 5150, ROOM.JPG 62.4 s). MartyPC's cycle
+counter, `tests/pxbench.py`'s fifth session, 4.77 MHz, the key that opens to
+the open's end with every disk read in it. VACATION.JPG is 640x480 4:2:0,
+86,957 bytes; ROOM.JPG the same size progressive.
+
+| open | 5150, CGA | its first rows | XT, VGA | its first rows |
+|---|---|---|---|---|
+| VACATION.JPG at 1/8 | 31.4 s | 4.8 s | 34.3 s | 4.4 s |
+| VACATION.JPG at 1/2 | 63.2 s | 3.4 s | 67.4 s | 4.3 s |
+| VACATION.JPG at 1/1 | 151.5 s | 6.6 s | 154.7 s | 6.7 s |
+| VACATION.JPG by fast open (1/2 on both) | 65.2 s | 4.0 s | 67.4 s | 3.2 s |
+| ROOM.JPG, progressive at 1/4 | 127.8 s | 115.1 s | 131.3 s | 115.2 s |
+
+**Where it goes** (the same session, the 5150; routine entry to return):
+at 1/8 the decode is 27.2 s, of which the Huffman decode is **18.1 s** - a
+baseline stream has to be entropy-decoded whole whatever the scale keeps,
+so this is the floor of every open - the DC-only put 3.7 s, the colour 0.6
+and the rows out 1.9; at 1/2 it is 59.4 s: Huffman 16.0, dequantise and the
+4x4 IDCT **27.6**, the colour 8.8, the rows out 4.3. The ring never made the
+decode wait (0.00 s in K_NEXT): the disk is read ahead of the worker. On
+LAKE.JPG (320x240 grey) at 1/1 the Huffman decode is **184 cycles a pixel**
+and dequantise + the 8x8 IDCT **934** (`huffman` and `idct`, the bench's
+ceilings 15% above them). A progressive picture's first rows are its whole
+store's decode: they come after the last scan.
+
+**Against the plan's estimates (PIXEL-PLAN 3.4: 4-6 s at 1/8, ~20 s at 1/2,
+45-60 s at 1/1) these were three to five times slower.** The reason this
+paragraph first gave - that most coefficients need more than the fast
+table's eight bits and take the canonical path - was wrong (wave-4 review
+F9): 89% of VACATION.JPG's symbols are WHOLE fast entries and 2.3% take the
+walk, and the cost was the loop around the table, the per-block clear and
+walk of the zigzag coefficients, three `mul`s a block to place it, and the
+16-bit AAN pass's `imul`s and memory temporaries (~2,300 cycles on the
+8088). The decoder speed pass (106.22) took them; its figures replace these.
+
+#### What PiXEL refuses is checked before it is used, and nothing loops
+
+Every marker length, table, count, factor, code, run and coefficient
+index above; every loop consumes a bit, a byte, a block or a scan; a skip
+is bounded by the file; the planes are written at block offsets inside
+the MCU row and rows reach the master only through the emitter and
+`K_COLS`, both of which clip.
+
+#### Tests
+
+- **`tests/pixel/`**: 34 committed fixtures made once by Pillow and
+  libjpeg-turbo's cjpeg (`tools/pixjpeg.py --regen`) and pinned by SHA-256
+  (`--check`, the FAST row `pixjpeg`): 4:4:4, 4:2:2, 4:2:0, 4:1:1, 4:4:0,
+  grey, odd sizes, restart markers by block and by row, a 16-bit DQT
+  (SOF1), quality 100, optimised tables, an RGB JPEG, progressive scripts
+  with refinement scans (colour, grey, odd 4:4:4, with restarts, 128x96),
+  the eight EXIF orientations, a frame header past a 6 KB EXIF, and the
+  four refused-by-name kinds (arithmetic, 12-bit, lossless, three scans).
+- **`tools/pixcorpus.py`** derives 50 more from them in pure Python: the
+  hostile set - cut short in the header, the frame, the data, between and
+  inside progressive scans; over-subscribed, overlong and short Huffman
+  tables, a DC symbol of 16, a class of 2, a scan with no table; a
+  quantiser of 0, a precision of 2, a missing table; every frame field out
+  of range; lengths that lie past the file or below 2; seventeen heads; a
+  scan before the frame, two frames, an EOI with no scan; wrong, missing
+  and renumbered RST markers; bad Ss, Se, Ah and Al - and good ones that
+  must open: three heads of segments, lying EXIF, big-endian EXIF, fill
+  bytes. `pixcorpus --check --jpeg` holds pixelsim to every verdict.
+- **`pixjpegref`** (soak, host): every fixture through pixelsim at every
+  scale it may be shown at, and against Pillow at more than 30 dB - a row
+  that SKIPS that half with its reason when Pillow is not installed.
+- **`pxdecode`** holds the guest's master and palette to pixelsim's byte for
+  byte on every one of them at the scale the guest chose; then every GOOD
+  JPEG again at each of 1/2, 1/4 and 1/8 it can be shown at, asked for
+  through the re-decode's floor (`[px_zreq]`, as a zoom sets it); and JBIG
+  with memory capped until it takes 1/2 and 1/4. **`pxbench`** times them
+  (below).
+
+### 106.20 The resident budget: what wave 4 moved out, and the room for waves 5-7
+
+`APP_MAX_SIZE` is 61,440 bytes of image + bss. Wave 3 left PiXEL at 56,652
+(4,788 to spare) and wave 4's JPEG plumbing - the part protocol's heads
+and flags, K_COLS, fast open and the re-decode - would have made it 57,640.
+Wave 4 takes it to **46,481: image 34,875 + bss 11,606, 14,959 to spare**
+(the 171 bytes over the first count being 20.12.7.4.3's aligned read, the
+claims' retry, the re-decode's rules and the review's fixes), by moving what is not on the hot path into the lazy parts
+and out of the bss:
+
+| moved | bytes | where to |
+|---|---:|---|
+| the simple formats' header parsers and row decoders, and the ring's byte readers (`px_rb`, `px_rdn`, `px_rskip`) | 4,513 | part 4, `apps/pixel/pxsimp.asm`, LINKED (below) |
+| the mixing plans: the CUBE's and GREY's shipped, the PAL search and its tables, its 136 bytes of scratch | 4,166 | every decoder part, as shared source (`apps/pixel/pxplan.inc`) |
+| the histogram's counts and bins | 2,048 | a 2 KB tail of each master's own claim |
+| the PCX tail's 769 bytes | 770 | shares the plans' bytes: the UI task's, when no table is being built |
+| dead bss (fifteen words of an older plan search) and two dead tables | 160 | gone |
+
+Less what the moves cost: `px_pplan` (768, below), K_RING and the head
+claim's spare cluster.
+
+**A LINKED PART.** A part assembled on its own cannot know where the
+package's variables are, and the simple decoders read and write dozens of
+them - the record, the ring's window, the row buffer's segment, the palette
+- as wave 2 wrote them. `tools/pxlink.py` assembles pixel.asm again with a
+NASM symbol map, refuses unless the result is byte-identical to the
+`build/pixel.bin` it links against, and writes `build/pxlink.inc`: every
+symbol at or past the image's end - the package's BSS, and nothing else,
+so a call into the package's code is an assembly error rather than a near
+call into the part's own segment. 106.5's rule 2 already let a part read
+the package through DS; this tells it where. The part's own tables and
+scratch are reached through CS (rule 1), and moving the code found the two
+places it had reached the package through CS while DS pointed elsewhere.
+**The stamp**: the image and bss sizes in the package's header, as the map
+saw them, are checked by the part at every call; another build's part
+answers `PXD_LINK`, which the resident toasts as a bad part. What the
+simple decoders need of the package's code is two thunks, K_EMIT and a
+seventh service, **K_RING** (`px_rnext`: the worker's ring window on). A PCX's
+769-byte tail is a file read, so the resident's: the part answers
+`PXD_TAIL`, and `px_hpart` reads it (into the head claim's spare cluster,
+past the head the part parses again) and calls HEAD once more. (Since 106.25
+the SIMPLE part reads the tail itself, `ps_tail`, and `PXD_TAIL` is gone -
+as the JPEG part reads its own next head.)
+
+**THE PLANS ARE THE PARTS'.** `px_tables` at 4bpp asks for `[px_plan]`
+through a fifth vector, **PXV_PLANS** (ABI 4): on the worker the part a
+decode holds (`px_wcall`, no fetch), on the UI task the shown picture's part,
+fetched if it must be (a window dragged onto a 4bpp display). Every decoder
+part includes `pxplan.inc` and the generated `pxplans.inc` (and the
+quantiser's classes, which the emitter needs, are `pxqtab.inc`, still
+resident). **The shown picture's plans are BANKED** across an open
+(`px_pplan`, with `px_ppvalid`) and put back by a restore, so a cancel or a
+refusal never needs a part to rebuild the tables; `px_pvalid` says
+`[px_plan]` is `[px_pal]`'s, and everything that changes the palette or
+writes those bytes (`px_setpal`, `px_kpal1`, the PCX tail, the name sort's
+swap) clears it. A table build that would need a part the worker cannot
+fetch leaves the tables to `px_tabsync` on the UI task.
+
+**The histogram's tail**: the worker counts into the last 2 KB of the
+master's claim (`px_htail`: the master's segment past its pixels, re-read
+because the master moves), so the counts move with the master, a cancel's
+restored master brings its own back, and the claim's size (106.8) includes
+them.
+
+**The budget for waves 5-7** (spare now 14,959 bytes; keep at least 3 KB
+spare at every wave's end, for the fixes the review after it brings):
+
+| wave | resident at most | what goes where |
+|---|---:|---|
+| 5, the folder | 3,000 | Prev/Next, the filmstrip's thumbnail cards and the slideshow's timer resident; a thumbnail is any decoder part's DECODE at 1/8 into a claim of its own; the cache file's reading and writing a FOLDER part, fetched by the UI task for the walk and dropped. **Measured: +2,996** (106.21), 11,963 to spare |
+| 6, full screen | 1,500 | the entry, the exit and the restoring of the desktop resident; every mode's renderer and the palette choosers (median cut, the error diffusion) one FULL-SCREEN part, held while the screen is PiXEL's and dropped on the way out. **Measured: +1,481**, and +67 of fixes to earlier waves (106.23), 10,369 to spare |
+| 7, editing | 4,500 | the tools' gestures, the menus' handlers, undo's bookkeeping and the palette operations (each a 768-byte edit) resident; the pixel operations (blur, sharpen, resize, rotate) an EFFECTS part on the worker; Save As a WRITERS part. **Measured: +6,102, 4,267 to spare** - 1,602 over this line and inside the 3 KB rule; the palette operations went to the EDIT part with the pixel ones, and the cards and Save As's flow behind a service gate (106.24) |
+
+Measured leftover candidates, should a wave need them: the sniff's
+per-format dimensions (about 450 bytes), the CGA's half-height icon copies
+(544 bytes of bss, computed at launch), the folder's 128 names at 11 bytes
+rather than 13 (256 bytes).
+
+### 106.21 The folder: Prev/Next and the slideshow (wave 5; the filmstrip withdrawn 2026-10-06)
+
+**The folder list.** `px_walk` (106.6) keeps every picture `OSAPI_FILE_FIND`
+names in the picture's folder as an 18-byte record - the 8.3 name, a flags
+byte (bit 0: packed on the disk) and the file's size - sorted by name, the
+open one at `[px_ncur]`. **At most 64** - the first 64 `OSAPI_FILE_FIND`
+names, in directory order. FILE_FIND itself has no cap (the wave-5 review's
+F4); what has one is every way a user picks a picture - the Disk window
+lists `DSK_NENT` = 64 entries - so no picture a user can open is past the
+list, Prev and Next simply stop at the 64th found, and 106.12's 128 names
+were half of them never fillable. The folder walked is banked
+(`[px_nfdir]`, `[px_nfvol]`): Prev, Next and the slideshow act in IT,
+wherever a File > Open dialog that was cancelled has left the instance.
+(The record was 20 bytes while it also carried the file's first cluster,
+which only the thumbnail cache's key read.)
+
+**Prev and Next** - the toolbar's pair, the status bar's `<` `>`, File >
+Previous Image and Next Image, **Space** and **Backspace** - open the
+neighbour by name through `px_open`, exactly as File > Open would, wrapping
+at either end; **Home** and **End** open the first and the last. Every one
+goes through **`px_navto`** - which is NOT the only place a picture is left
+(the wave-5 review's F14): File > Open, Revert, a document handed to a
+running instance and the slideshow's commit (`px_hcommit`) leave it too,
+and 106.24's `px_gate` is asked at each of them that can lose an edit. They
+are greyed while the folder holds fewer than two pictures or the open one is
+not among them (a misnamed picture); a press on a greyed one says `No other
+picture here`. The status bar's `n of N` (106.3) says where in the folder
+the picture is.
+
+**The slideshow (windowed).** File > Slideshow or the toolbar's Slideshow
+button, which stays latched while it runs and whose menu item then reads
+`Stop Slideshow`: the next picture in the folder, wrapping, **5 seconds**
+(`PX_SLIDE`, fixed - no settings card in this wave) after the one before it
+is whole on the glass, at Fit. The next one is decoded HIDDEN while the
+current one shows, beside it, when memory gives it a master there; at the
+deadline it REPLACES the shown one - the old master freed, the tables built
+for its palette, the canvas rendered whole, the window composed. When memory
+does not (or the hidden open refuses for any reason) it is opened at the
+deadline as any open is: the canvas fills as rows arrive, the name field says
+`Opening 42%`. **Any key or press stops it and does nothing else; a menu
+command stops it and then runs.** Full screen's slideshow (106.23) runs the
+same hidden decode from the bracket's own loop.
+
+**The HIDDEN DECODE** (`px_hopen`, `[px_hmode]` 2 while it runs, 3 when the
+slide is decoded and waiting) is the decode pipeline of 106.9 run on the
+next picture with the shown one banked as the previous picture (`px_prev`,
+106.8) - but with its `HAVE` byte masked, so `px_claims` never frees it for
+a better scale, and `px_mreloc` still follows its master (full screen's is
+unmasked: 106.23). The display tables are not touched (`px_tables` returns
+at once while `[px_hmode]` says so), nothing is painted and nothing is
+composed; a refusal or a stop puts the picture shown back by `px_restore`
+exactly as a cancel would, with no tables to rebuild. **Every callback that
+could draw or act** - a paint, a key, a press, a drag, a release, a menu
+command, About, the close - first stops one (`px_hstop`: the cancel byte,
+then a yield until the worker answers, at most one of its rows; on a 4.77
+MHz 8088 a JPEG's row of blocks is about 0.6 s), and the window is then
+exactly as it was.
+
+**The timer.** One `OSAPI_WM_TIMER`, re-armed by its own handler: every 91
+ticks for the free memory (106.3) when nothing else is pending, every 9 while
+the slideshow runs (`PX_TQ`), every tick while a GIF plays in front (106.25).
+A hidden decode's progress and its end arrive through `W_ONWAKE` as an
+open's do, and paint nothing.
+
+**Associations and a document launch** are wave 1's (106.6): JPG, PNG, PCX,
+TIF and PIX; the document's folder is the instance's before the open, so the
+folder list is the document's - in a subfolder and on B: alike.
+
+**WITHDRAWN 2026-10-06, AT THE OWNER'S REQUEST: THE FILMSTRIP, ITS
+THUMBNAILS AND `PIXEL.THC`.** *"The bottom file strip on the UI is no longer
+needed."* Waves 5 to 9 had a FILMSTRIP between the middle band and the
+status bar - the folder's pictures as cards, each with a 72 x 54 thumbnail
+(8bpp indices into 106.8's colour cube), made from the open picture's master
+or by a HIDDEN DECODE of the others in idle time (106.25, 106.26's engine),
+held in a 31 KB store and cached in `SYSTEM/APPDATA/PIXEL.THC` by the
+FOLDER part. All of it is gone:
+
+- the strip region and its rule, its cards, its `<` `>` pagers, a card
+  pressed (`PX_PR_CARD`), View > Hide/Show Filmstrip and its label;
+- the thumbnail engine (`px_thstep`, two seconds of stillness `PX_THIDLE`
+  and the pointer's own idle test, review-w8 E2), the 31 KB store
+  (`PX_TSLOTS`, `px_tgive`), thumbnails made from the master or by a hidden
+  decode (`[px_hmode]` 1), and the cube's plans and thresholds kept for them;
+- **the FOLDER part** (`apps/pixel/pxfold.asm`, `apps/pixel/pxthc.inc`, the
+  `PF_*` verbs): the cache's reading and writing and a thumbnail's making.
+  It was part 5, so the parts after it are one lower: full screen 5, EDIT 6,
+  WRITE 7, the extras 8, and `PX_NPARTS` is 9;
+- **`SYSTEM/APPDATA/PIXEL.THC`**: never read or written now. One an earlier
+  build left on a disk is a file nothing opens, and the user may delete it;
+- `[px_thoff]`, the tests' byte that kept the thumbnails out of what they
+  measured, and `tests/pxthumb.py`, whose surviving legs are `pxfolder`'s.
+
+What it bought back, measured: the resident **image 45,604 -> 41,299**
+(-4,305) and **bss 11,845 -> 11,473** (-372) - **4,677 bytes**, so 52,772
+of `APP_MAX_SIZE`'s 61,440 with 8,668 to spare (`f0957d53` against this
+change); PIXEL.O88 loses part 5, the
+FOLDER part's 2,605 bytes (2,294 packed), and is **121,852 -> 114,684**
+bytes on the disk; and **the heap's 31 KB store is never claimed**, and no
+decode runs while the user is idle, so the claims at the worst moment of a
+windowed slideshow are seven of §50.2's eight - the face, the master, the
+view claim, the hidden master, the work claim, the ring and the decoder
+part - and eight beside a shown GIF's animation claim, which the store
+used to make nine (106.26's F16). The middle band takes the strip's rows:
+the tool column shows all six tools on every display, and Image Info, open and last on the full tier,
+runs down to the status bar (106.1). Drawing (`pxdraw`, PiXEL's own calls,
+Hercules / the VGA's colour face, the same run of gestures at `f0957d53`
+and at this change): **a full repaint, the yardstick, 279 / 220** where it
+was 363 / 310 with the strip's seven thumbnailed cards; **Next 63 / 52 and
+Prev 116 / 114** where they were 83 / 138 and 129 / 196 - the strip's two
+cards whose highlight moved, and on the colour face their thumbnails, are
+no longer in them; an open (Revert of CITY.PCX) 103 / 107 (107 / 109). The
+canvas is taller by the strip's rows (56 on a Hercules, 77 on a VGA), so
+what covers it costs a few composer bands more: a zoom step in 17 / 26
+(14 / 22), a pan across 47 / 72 (38 / 60); and Show Panels is 107 / 140
+(98 / 136), Image Info now running down to the status bar. The gestures
+`pxdraw` measures add up to 1,216 / 1,173 calls where they were 1,986 /
+2,092 with the strip's four.
+
+**What wave 5 cost, the filmstrip included** (history: the withdrawal
+below has the numbers that stand). Resident **+2,996 bytes** - image 34,875 → 38,134, bss
+11,606 → 11,343 - against the 3,000 106.20 set: `pxfolder.inc`'s 3,159
+bytes of code, the callbacks, keys and menus 546, less the sniff's 446
+(106.6) and 263 of bss (the folder list's 64 records of 20 bytes where 128
+of 13 were). **11,963 to spare.** The store is 31 KB of heap while a strip
+is shown; a hidden decode adds, for its length, its master, the work claim
+and the ring - claims at the worst moment the face, the master, the view
+claim, the store, the hidden master, the work claim, the ring and the
+decoder part: eight, §50.2's limit (the FOLDER part is dropped before a
+hidden decode claims, and fetched again only after its ring and work claim
+are given back). Drawing (`pxdraw`, PiXEL's own calls, Hercules / the VGA's
+colour face): Next **83 / 135** and Prev **132 / 195** (an open each, the
+decode included: G8.GIF and CITY.PCX), a strip page **109 / 115** - the
+cards that changed, each a frame, four strips of ground and one band, and
+the two pagers - and Show Filmstrip **237 / 240**. A full repaint, the
+yardstick, is **363 / 310** where it was 308 / 261: `pxdraw`'s folder holds
+seven pictures now where it held one, so the strip is seven named cards
+with their thumbnails where it was one named card and blank ones.
+
+**Tests.** `pxdraw` / `pxdrawvga` (106.15) measure Next and Prev among their
+gestures, each under a ceiling, and the identity assertion runs the panels
+hidden and shown where it ran the filmstrip; every gesture is measured from
+STILL - no hidden decode. **`pxfolder`** (soak, MartyPC, the VGA XT with a
+720 KB B:) is what survived of wave 5's `pxthumb`: a folder of seven
+pictures opened by its association from a subfolder of B:; BEHIND another
+window no hidden decode is begun and no callback of PiXEL's holds the UI
+task 0.25 s; in front the folder list is the document's folder; a slideshow
+of three slides with its button latched, stopped by Esc on the slide shown,
+no decode's claim left behind; and twenty Next and Prev end with PiXEL's
+claims as they were and the largest free run as it was.
+
+### 106.22 The decoder speed pass: what an 8088 pays to read a picture, before and after
+
+The decoders were made as fast as an 8088 allows without changing a single
+byte of a master: every picture is pixelsim's still, so `tools/pixelsim.py`
+did not move and `pxdecode` is the proof, byte for byte, as it was. The
+method is 106.17's - MartyPC's cycle counter on the 5150 with a CGA and the
+XT with a VGA, both 4.77 MHz - and a second instrument for the iterating:
+each part alone under Unicorn with an 8088 cost per instruction (the larger
+of the 8088 table's clocks and four a byte fetched or moved), which reads
+within ten to thirty per cent of MartyPC on this code and is only ever used
+to rank and A/B. Wave 4's harness held the JPEG part to pixelsim after every
+change at every scale and at ring windows of 1 to 16,384 bytes, and the
+wave-4 review's fenced harness and its fuzzers ran on the result (below).
+
+**What it costs now** (`tests/pxbench.py`, the key to the open's end, every
+disk read in it; "before" is the same bench at 45763b72):
+
+| open | 5150, CGA: before | after | its first rows | XT, VGA: before | after | its first rows |
+|---|---|---|---|---|---|---|
+| VACATION.JPG at 1/8 | 31.4 s | **23.8 s** | 4.6 s | 34.3 s | **27.3 s** | 4.5 s |
+| VACATION.JPG at 1/2 | 63.2 s | **46.1 s** | 2.8 s | 67.4 s | **50.0 s** | 3.9 s |
+| VACATION.JPG at 1/1 | 151.5 s | **116.1 s** | 6.2 s | 154.7 s | **119.9 s** | 6.3 s |
+| VACATION.JPG by fast open (1/2) | 65.2 s | **47.4 s** | 3.7 s | 67.4 s | **50.0 s** | 2.8 s |
+| ROOM.JPG, progressive at 1/4 | 127.8 s | **62.4 s** | 55.7 s (was 115.1) | 131.3 s | **66.1 s** | 55.9 s |
+| CAT.GIF, 320x240, 256 colours | 31.8 s | **25.2 s** | 3.1 s | 35.7 s | **29.6 s** | 4.8 s |
+| BALLOONS.PNG, 320x240 palette | 16.7 s | **15.9 s** | 4.3 s | 20.6 s | **20.6 s** | 6.4 s |
+| HOUSE.PNG, 320x240 RGB | 49.5 s | **45.7 s** | 2.3 s | 52.6 s | **48.4 s** | 2.1 s |
+| BIG.BMP, 640x480 8-bit: its first rows | 3.64 s | **1.34 s** | | 3.09 s | **2.95 s** | |
+
+Inside them (the same bench): LAKE.JPG at 1/1, 320x240 grey, was 184 cycles
+a pixel of Huffman and 934 of dequantise + IDCT - **1,118** - and is 300 of
+entropy decode WITH its dequantising and 533 of IDCT - **833** (VGA XT 313 +
+552); inflate on HOUSE.PNG was 396 cycles a byte it writes and is **323**
+(the VGA XT's figure, 421 -> 402, carries more of the UI task's painting) -
+since wave 6's disk layout the same decoder reads 344.7 / 340.5, and wave 9
+took it to **240.3 / 239.1** (106.26).
+VACATION.JPG at 1/2: the IDCT 10.0 s, the colour 7.5 s, the rows out 3.2 s
+and the entropy decode and dequantising 19.6 s - that last with the UI
+task's disk reads inside it, which pre-empt the worker (6.1 s of them).
+
+**Where the time was, measured first.** VACATION.JPG is 126,227 Huffman
+symbols in 7,200 blocks - 17.5 a block - and 89% of them have their code
+and magnitude within eight bits (wave-4 review F9: 106.19's "most of its
+coefficients need more than the eight-bit fast table's bits" was wrong; the
+cost was the loop around the table, not the table). The decode itself, at
+1/2, was 208 M cycles by the model: the dequantise walk and the block's
+clears 54 M, the 4x4 IDCT 52 M, the AC loop 37 M, the colour 31 M, the
+canonical walks, EXTEND and the bit fetches 12 M, three `mul`s a block to
+place it 5.5 M. The disk is 6.1 s of every VACATION.JPG open (87 KB, 70 ms a
+KB) and HOUSE.PNG's 12.4 s (165 KB): a cylinder an `int 13h` and a lost
+revolution between cylinders, which is near the drive's own floor, so the
+ring was not changed.
+
+#### JPEG
+
+- **A bit POSITION, not a window.** The entropy data is already de-stuffed
+  into a clean buffer with 300 bytes ahead of every block (106.19), so the
+  reader keeps no bits at all: SI is the byte holding the next bit and CL how
+  many of its bits are taken, the next eight bits are AH after `mov ax,[si]`
+  / `xchg al,ah` / `shl ax,cl` (nine or more of the sixteen are real), and
+  taking n bits is `add cl, n` and a byte on at 8. Nothing is ever refilled.
+  A short code read where fewer than eight real bits remain is still the
+  right one - the bits it covers are real - and a longer one goes to the
+  canonical walk, which now starts at the ninth bit with the first eight in
+  hand (a code no table holds is still refused after sixteen bits). The
+  cut-short test is the same rule on the position: the bits taken past the
+  segment's end, less the [pj_gb] a WHOLE entry gives back.
+- **A loop per scale, the entry one test.** A fast entry is its LEN (the
+  bits it takes) and, a page up, ADV - k's step x 2 for a WHOLE entry, else
+  C0h. k is kept as `2k - 128`, so the loop's end is the sign, and anything
+  that is not a coefficient inside the scale's range - EOB, ZRL, a code
+  alone, a long code, a coefficient past 63 (`damaged`, its magnitude given
+  back) - lands past the test and is sorted out of line. 1/8 runs only the
+  SKIP loop (decode, keep nothing: ~160 cycles a symbol); 1/4, 1/2 and 1/1
+  run a VALUE loop to the scale's last kept k (4, 24, 63) that DEQUANTISES a
+  kept coefficient as it is read - `imul` by the component's multiplier into
+  D at its natural place, the multipliers' displacement patched per
+  component (px_quant's precedent) - and then the skip loop. The old
+  per-block clear of 64 zigzag words, the walk over them and the written
+  list are gone; D's columns that held anything are zeroed after the IDCT.
+- **The MCU as a program of blocks.** A scan's blocks - component, place in
+  its plane, plane stride - are listed once (`pj_bprog`), and a block's place
+  moves on by H N an MCU: no `mul` a block (three before).
+- **The IDCT's multiplies by table.** jidctfst.c's constants are each 256 m +
+  c with c under 256 (362 = 256 + 106, 473 = 256 + 217, 277 = 256 + 21, -669
+  = -768 + 99), and for x = 256 xh + xl, `(x K) >> 8` is exactly `m x + xh c
+  + ((xl c) >> 8)` - so MUL is a byte lookup on xl, a word lookup on xh and
+  an add, where `imul` was ~140 cycles and took DX. Three pages a constant,
+  in the scratch at fixed pages: twelve at 1/1, three at 1/2. The passes keep
+  their values in registers and on the stack (`push`/`pop` are the 8088's
+  cheapest temporaries) instead of eleven words of memory. The arithmetic is
+  pixelsim's to the bit; 106.19's shortcuts (a column with nothing below its
+  DC, a block whose columns past the first are empty) stand.
+- **Colour.** Cr->R and Cb->B are clamp-table PLACES (the base folded in),
+  G's two 32-bit terms split into low and high words added with the carry;
+  the chroma pointer rides on the stack, Cr's displacement from Cb is patched
+  a row, and 4:2:x, 4:4:x and 4:1:1 have a loop each.
+- **Progressive.** The same reader and fast table. An AC refinement scan
+  reads a correction bit for every position with nonzero history, but only
+  1/4's three kept ones (k 1, 2, 4) need its value: past the first byte of
+  the history the bits are COUNTED - a byte of history at a time, by a
+  256-byte popcount in the part - and taken whole; the zero run is walked a
+  history byte at a time too. An AC first scan's block inside an EOB run is
+  one decrement; an interleaved scan has an MCU program; the output pass
+  dequantises the store's four words straight into D (no zigzag buffer).
+- **Measured against wave 4 by the model** (the decode alone): VACATION.JPG
+  1/8 83.1 -> 50.6 M cycles, 1/2 208 -> 135 M, 1/1 511 -> 366 M; LAKE.JPG 1/1
+  74.2 -> 53.6 M; ROOM.JPG 1/4 464 -> 206 M.
+
+The wave-4 review's findings in this part are fixed here: **F5** (a picture
+of 65,536 MCUs or more with restart markers was refused `cut short`: the
+unit counts are 32 bits), **F6** (a progressive component of more than
+65,536 blocks decoded wrong at 1/8: the block index is 32 bits), **F1** (a
+file changed between HEAD's read and DECODE's could lay the planes out past
+the scratch: HEAD banks the frame - size, components, their sampling,
+progressive - in PXK_PRIV and DECODE refuses `damaged` unless its frame is
+that one), **F2** (256 scans wrapped a byte) and **F3** (a scale 0 wide or
+high is not offered). A refusal's give-back ([pj_gb]) is also reset at each
+decode - it lived in the part, which stays fetched, and a refusal's value
+could leak into the next file's cut-short test.
+
+#### PNG
+
+- **The image data, de-chunked.** pz_cfill copies the IDATs' bytes out of
+  the ring into a clean 1 KB buffer in the scratch (their CRCs and headers
+  stepped over, the ring's windows taken), and inflate reads it by the same
+  bit position (LSB first: `mov bx,[si]` / `shr bx,cl` / `and bh,1` is the
+  primary's index). The fast path tests no window, no chunk and no count;
+  the buffer is refilled when SI reaches DX, 16 bytes short of its data.
+  Past the image data's end it reads as zeros, and taking a bit of them is
+  `cut short` when the decode finishes, refuses or reaches the fifth zero
+  byte - 106.18's rule, the limit now the fifth byte.
+- The length's and the distance's extra bits are read inline (a word at the
+  position holds nine), not by a call; the unfilter loops do two bytes a
+  turn.
+- HOUSE.PNG (by the model): 124 -> 108 M cycles - inflate 78 -> 63 M, the
+  rest the scanlines. A literal is still ~230 cycles: its table lookup, the
+  position's step and the window's store and wrap are ~45 bytes of code,
+  fetched at four cycles a byte; Paeth is ~250 cycles a byte and was left.
+  (106.26 took both on: 107.4 -> 81.6 M by the model, a byte of inflate 290
+  -> 213 and of Paeth 251 -> 194.)
+
+#### GIF
+
+`apps/os88lzw.inc` keeps its code reader in registers - BP the input byte,
+DL the bit, DH the code size - with the next power of two kept beside the
+mask ([lzw_lim], review-w3's (a)), the fast reader's bound precomputed
+([lzw_ie2], (c)), a root code (62% of CAT.GIF's) handled first and handed to
+an optional `LZW_RUN1` with its one character (b), the next free code in
+SI; LZW_RUN's contract now also keeps DX and BP, LZW_RUN1's SI as well.
+pxgif's run takes a string inside the row and the screen with one compare
+against [pg_flim]. CAT.GIF (by the model): 79.6 -> 53.3 M cycles.
+
+#### BIG.BMP's first rows (106.18's open question)
+
+They were 3.6-4.1 s on the 5150 against 106.17's 1.52, and the cause is a
+race between the wake's paint and its deferral (106.9). `px_pumpfill` holds
+the disk off until a row has been painted, judging "painted" by the counters
+the paint moves, [px_ypaint] and [px_ypbot] - which px_paintrows moves BEFORE
+it clips the span to the canvas. At Fit the picture's last screen row can be
+one row past the canvas's last ([px_midy2]), so a first wake that found only
+that row complete counted it painted, drew nothing, and the next wake read
+both 16 KB slots (2.5 s) in front of the first row that did reach the glass.
+The deferral now asks whether the painted rows REACH the canvas
+(`px_onglass`, pxpump.inc): **1.34 s** on the 5150 (VGA XT 2.95, which waits
+for the palette's plans first). The paint's own counters are pxview.inc's
+and were left as they are; the one-row overhang at Fit is noted for the
+view's owner.
+
+#### What did not move, and what an 8088 cannot do
+
+- **The Huffman floor.** A symbol is a peek, two table bytes, a shift and a
+  test - ~25 bytes of code at four cycles a byte - so 126,227 symbols are
+  ~20 M cycles, ~4 s, at EVERY scale: 1/8 is now mostly that and the disk.
+- **Dequantising** a kept coefficient is an `imul` (~150 cycles): 9 a block
+  at 1/2 on VACATION.JPG, 65,000 of them, 2 s. A table of small multiples
+  was weighed and not built: the kept coefficients are the large ones
+  (|v| = 1 is 32% of them, against 46% of all).
+- **Colour + the cube in one pass** would save ~270 cycles a pixel (4 s at
+  1/2, 17 s at 1/1 on a 640x480): a table per dither class and channel
+  indexed by Y plus the chroma's delta, the clamp folded in - but that is
+  sixteen classes x three channels x ~700 bytes, 34 KB more scratch, which
+  would push 1/1 off the 640 KB machine for the pictures that need it most.
+  Not built; the owner's call.
+- **A 64 KB inflate window** (review-w3's second proposal) would take the
+  window's wrap (`and di, 7FFFh`) off every literal and every copy's split -
+  ~4% of HOUSE.PNG - for 32 KB more scratch on every PNG; not taken, for the
+  same reason. Nor was unfiltering fused into the extraction: the filters
+  are 30% of HOUSE.PNG's decode, but the copy it would save is 5%.
+- **The disk**, above, and the UI task's histogram count after the decode
+  (`px_hcount`, 92 cycles a pixel: 5.8 s of a 640x480 at 1/1, pxview.inc).
+
+**Sizes.** The JPEG part is 14,507 -> **17,704** bytes (11,545 -> 12,896
+packed: the unrolled passes, the per-scale loops, a 256-byte popcount), the
+PNG part 10,543 -> 10,785 (8,439 -> 8,592), the GIF part 6,673 -> 6,759
+(5,417 -> 5,488); PIXEL.O88 was 71,342 bytes then (120,812 at wave 8's end,
+four parts later - 106.26 has the sizes that stand). The resident package grows by
+`px_onglass` alone: image 34,875 -> **34,921**, bss 11,606, so **46,527 of
+61,440** - 14,913 to spare. The JPEG scratch grows by the multiply pages and
+the zigzag-to-place words: VACATION.JPG's 1/1 2,268 -> 2,472 paragraphs,
+1/2 1,488 -> 1,548, 1/4 and 1/8 +12; the PNG scratch by the clean buffer,
+1,088 bytes.
+
+**Tests.** `pxdecode` unchanged and green (every fixture byte for byte at
+every scale it is shown at), and `tools/pixcorpus.py` adds two PNGs it now
+holds the guest to: a STORED block whose length runs past the image data,
+far past it (HP34.PNG) and by three bytes, the rows complete inside the zeros
+(HP35.PNG) - both `cut short`. The first is what the wave-3 review's PNG
+fuzzer found in this pass's first build: the clean buffer's limit was moved
+on at the fifth zero byte instead of refusing there, and a stored copy walked
+the reader out past the buffer's guard. `pxbench`'s JPEG breakdown now times
+`pj_blk` (the entropy decode with its dequantising, and the IDCT it calls)
+and the IDCT alone (`pj_id8`, `pj_id4`, `pj_id1`), so its `huffman` figure
+is the block less its IDCT and `idct` the IDCT alone; its ceilings are this
+section's figures plus the same margins. Off the tree (the method above):
+the wave-4 review's fenced harness on the new part - the 85 JPEG fixtures at
+every scale, 54,000 mutated and progressive JPEGs, every truncation of
+JPROGR, JRST, JEXBIG, JPROG444 and JRSTG (10,658) - and the wave-3 review's
+on the GIF and PNG parts - their 106 fixtures at four ring shapes and 19,000
+generated and mutated pictures - with 0 out-of-region accesses, 0 runaways
+and 0 disagreements with pixelsim; and the wave-4 review's two hand-built
+pictures (F5, F6) now decode as pixelsim decodes them.
+
+### 106.23 Full screen: more colours where the card has them (wave 6)
+
+The desktop has sixteen colours on a VGA or an EGA and two on a CGA or a
+Hercules, and the window dithers a picture to those (106.11). **Full screen
+takes the machine** (§53) and shows the picture in the richest mode the
+display the window is on can be put in - 256 colours on a VGA, sixteen
+chosen for the picture at 640x480, sixteen at 160x100 on a CGA - or, where
+the card has nothing richer, at the whole display's size in the desktop's
+own colours.
+
+**The way in** is View > Full Screen, **F** (either case) and **Alt+Enter**
+(§11.2.1, §11.2.1.1: `OS88_ALTENTER_ARM` in the entry proc, `KEY_ALTENTER`
+in `W_ONKEY`). It is greyed - and the keys say why in a toast - while there
+is no picture, while one is opening, and on a display that offers no mode
+below. A running slideshow (106.21) is carried in rather than stopped: the
+three doors are the one command a slideshow survives besides its own.
+
+**The modes are chosen by what the display offers** - `OSAPI_FSX_CAPS` with
+PiXEL's own window, asked when the menu is built and again on the way in
+(§39.18.2), tested BY MODE BIT - in the first family the bits hold:
+
+| PiXEL's mode | on a display whose caps hold | screen | colours | how |
+|---|---|---|---|---|
+| **320x240, 256** (the VGA's default) | `FSXM_MODEX` | Mode X, square pixels | the master's own 256 | DAC = the palette's six bits |
+| 320x200, 256 | `FSXM_VGA13` | 13h, a pixel 5/6 as wide as tall | the master's own 256 | the same |
+| 640x480, 16 | `FSXM_VGA12` | 12h, square | sixteen CHOSEN for the picture | identity attribute map + 16 DAC entries, then the plan diffuser |
+| **Desktop, 16** (the EGA's default) | no VGA bit, and a 4bpp display | the display's own mode, a SAME-MODE bracket | os8088's sixteen | the plan diffuser, put up with `OSAPI_GFX_BLITP` |
+| **160x100, 16** (the CGA's default) | no VGA bit, `FSXM_TEXT80`, and DL = `VID_CGA` | C160, a pixel 5/6 | the CGA's sixteen | Clear Skies' retime (§88.15), the plan diffuser |
+| 320x200, 4 | no VGA bit, `FSXM_CGA320` | mode 4, 5/6 | four CHOSEN of the CGA's sets | the BIOS's `AH=0Bh`, the plan diffuser |
+| 640x200, 2 | no VGA bit, `FSXM_CGA640` | mode 6, 5/12 | black, white | the luma diffuser |
+| **720x348, 2** | `FSXM_HERC` | the Hercules' page 0, 29/45 | black, green | the luma diffuser |
+
+C160 is the one row that asks the KIND as well as a bit, and for the reason
+§98.3.12 and §88.15.7 give: an EGA's 80-column text is 350 lines, where the
+retime's arithmetic needs 200; and a VGA, which could run it, has three
+richer modes. **The EGA's default is a same-mode bracket and not the §11.2
+latch**: the same loop, keys, lettering and slideshow as every other mode and
+no third layout of the window, and the sixteen colours at 640x350, diffused,
+beat 320x200's four on every picture of the gallery (the host's renders,
+`tools/pixelsim.py --fsrender`). The CGA's two 320- and 640-wide modes stay on
+its list. View > `Screen: 320x240, 256` names the mode the display the window
+is on will get, and choosing it turns to the next one that display offers
+(`M` does the same inside full screen); a choice another display does not
+offer falls back to that display's default. With one mode, a Hercules, the
+item is greyed. **C160 snows on a genuine IBM CGA**: it writes `B800`
+during active display for the whole render and every caption band, which
+§88.15 accepted for Clear Skies and this inherits with the retime.
+
+**Inside**, everything is the FULL-SCREEN PART's (`apps/pixel/pxfull.asm`,
+part 6 - part 5 since the FOLDER part was withdrawn, 106.21 - LINKED like
+the SIMPLE and FOLDER parts, 106.20): fetched before
+`OSAPI_FSX_RUN` (`FSXF_KEEPWORKER`), held while the screen is PiXEL's and
+dropped on the way out. Its one vector, DECODE, takes a verb: `FSV_ENTER` (the
+mode set, its colours, the picture whole, the captions), `FSV_SHOW` (another
+picture, its colours chosen again), `FSV_POLL` (one pass of the keys, the
+mouse and Alt+Enter, a zoom or a pan done there, a slice of any render owed;
+it answers a verb for the resident: leave, next, previous, first, last, the
+slideshow, the next mode, or the slideshow stopped), `FSV_PROG` (the
+progress line) and `FSV_MSG` (a line of the resident's, for two seconds) -
+`apps/pixel/pxfs.inc` holds the numbers both sides read. The part
+draws into the mode's memory directly - §53.7 gives a foreign mode's card to
+the app and forbids every drawing slot after the first `fsx_mode` - and
+letters from `OSAPI_FONT_GLYPHS`. In the same-mode Desktop bracket it draws
+with `OSAPI_GFX_BLITP` instead, which §53.7 allows until a mode is set and
+which needs nothing put back.
+
+**The keys** (§11.2.1, both cases; Alt+Enter is `apps/os88alt.inc`'s edge,
+seeded at the top and kept in the part, since a part cannot call the
+package's copy):
+
+| key | does |
+|---|---|
+| F, Esc, Alt+Enter | leave full screen (a slideshow stops with it) |
+| Space, N, the left button | the next picture in the folder, wrapping |
+| Backspace, P, the right button | the previous one |
+| Home, End | the first, the last |
+| + (=), - | zoom a step in, out (106.11's steps); 0 Fit, 1 one master pixel a screen pixel |
+| the arrows | pan, an eighth of the screen, when the picture is larger than it |
+| S | the slideshow, from full screen |
+| M | the next mode the display offers: one the kernel sets is entered in place; the Desktop, from a mode it set, only by a bracket anew (the desktop flashes past) |
+
+While a slideshow runs any key but the three doors stops it and does nothing
+else, as in the window (106.21).
+
+**The view.** A zoom `Z` is screen pixels a MASTER pixel across (the window's
+is a source pixel's), and the mode's own pixel aspect `a` gives the steps:
+`hs = 2^32 div Z`, `vs = hs x ad div an`, the picture `ceil(mw 2^16 / hs)` by
+`ceil(mh 2^16 / vs)`. **Fit is in closed form** - the largest `Z` with `hs >=
+ceil(mw 2^16 / W)` and `vs >= ceil(mh 2^16 / H)`, `Z = 2^32 div max(ceil(mw
+2^16 / W), ceil(ceil(mh 2^16 / H) an / ad))` - so the whole master shows and
+no row hangs past the screen; it is NOT capped at 1, because a 320x240 master
+belongs on all of a 640x480 screen. A side that fits is centred; a larger one
+is clamped to keep the screen covered. A screen pixel `(x, y)` inside the
+picture shows master pixel `((x - ox) hs >> 16, (y - oy) vs >> 16)`, nearest,
+by a DDA; outside it is the mode's GROUND.
+
+**The colours a mode shows** (`tools/pixelsim.py`'s `FsPic`, every rule here
+its line):
+
+- **256.** The DAC is the palette, each channel `v >> 2`. The GROUND is the
+  darkest entry (`77 r + 150 g + 29 b` of its six bits, the lowest index on a
+  tie) and the lettering's ink the lightest.
+- **The adaptive sixteen (640x480).** A MEDIAN CUT over the palette's used
+  entries, weighted by the histogram the worker counted (106.12) - each count
+  shifted right until the picture's pixels would be under 32,768, and at
+  least 1 - so the weights sum below 2^16: the box with the largest weight x
+  weighted range (106.11's `(3, 6, 1)`) is cut on that channel at its
+  weighted MEAN, the entries at or below it first, until there are sixteen
+  or nothing can be cut; a box's colour is its weighted mean, rounded.
+  Cutting at the mean rather than the median was measured: the weighted
+  squared error over the gallery fell by a third, and the median lost the
+  balloon picture's sky from the sixteen altogether. Then **the identity
+  attribute map and the sixteen DAC entries** (Gorillas' recipe, §53's
+  `FSXM_VGA12` set even though the desktop is already 12h, which is what
+  makes the exit's mode set put the desktop's palette back).
+- **The CGA's four (320x200).** The same cut, then every background x
+  {palette 1, palette 0, mode 5's cyan-red-white} x {high, low} - 96 sets -
+  scored against the cut's colours: each colour's weight x (its best plan's
+  error over the four `>> 8`), the lowest sum, the first in that order on a
+  tie. Set through the BIOS (`AH=0Bh` twice: background and intensity, then
+  the palette), Clear Skies' portable way and never port 3D9h; mode 5's red
+  is the CGA's `3D8h = 0Eh` and an EGA's palette register 2 (`AX=1000h`,
+  4 or 14h), the Video Player's (§98.3.12).
+- **The fixed sixteen** (C160 and the Desktop): the CGA's RGBI colours, which
+  are os8088's, brown included.
+- **Two** (640x200, Hercules): black and white.
+
+**THE PLAN DITHER.** Every used palette entry gets 106.11's plan `(c1, c2,
+t)` against the mode's colours, searched in the DAC's six bits (`plan6`):
+`c1` the nearest by the weights `(3, 6, 1)`; each other colour `c2` tried by
+the projection of the entry on `c2 - c1`, `t = round(64 S / K)` clipped to 64,
+its error `sum w (64 d - D t)^2 + 128 K` - 106.11's own error and contrast
+penalty scaled to six bits - and the strictly lowest kept. Six bits keep
+every term in 32 bits on an 8088: `K` under 2^16, so `t` is one `div`. The
+part expands the error rather than summing it - `sum w (64 d - D t)^2 =
+4096 sum w d^2 - 128 t S + t^2 K` exactly, with the `S` and `K` the
+projection needs anyway - and skips a pair whose penalty `128 K` alone
+already reaches the best error (`plan_fast`'s floor, 106.11): the same
+answers, a third of the work.
+On a mono mode an entry's level is the window's 1bpp luma (106.11's `L`),
+between black and white.
+
+**THE DIFFUSER** turns those into pixels, View > Dither's DIFFUSION - now
+the item's default and full screen's alone, since the window always orders
+(106.11's reason: a pan would re-render the canvas). Each entry's target is
+`T = (255 t + 32) >> 6` (or `L`), and a screen row is walked left to right
+across the picture: `v = T + e_in[x] + carry`; `c2` (lit) when `v >= 128`,
+else `c1`; the error `e = v - 255` or `v`; `q = e >> 2` (arithmetic) to the
+pixel below-left and the one below, `carry = e - 2q` to the right - Frankie
+Sierra's "Filter Lite" (2/4, 1/4, 1/4), whose total error is exact. Rows
+start the picture at zero; an error past the picture's sides is dropped. It
+diffuses the plan's ONE number where a colour Floyd-Steinberg diffuses three
+and searches the sixteen for each pixel - and on the host's prototypes it
+looked the better of the two, because a cube-quantised master re-diffused in
+RGB turns the cube's blue noise into coloured speckle. **ORDERED** is the
+window's rule on the screen's coordinates: `c2` where `bayer(y & 7, x & 7) <
+t`.
+
+**The captions** are lettered into the rows as they are made, from
+`OSAPI_FONT_GLYPHS`, on BANDS of ten rows in the ground colour with the
+lightest colour's ink: the top band, on the way in, the keys (three
+wordings, the longest that fits the width); the bottom band the picture's
+name and `3 of 9`, at every new picture, or a line of the resident's (a
+refusal, `GIF: not enough memory`, the toast's words). Each comes down after **two
+seconds**, by rendering its rows again - the diffuser's state where the
+bottom band starts is KEPT by the full render, so the band comes back the
+same pixels it would have been. While another picture decodes, the bottom
+row is a progress line, `pct` of the width in the ink - the worker's rows
+emitted over the picture's, 106.9's percent - over everything else there.
+
+**What a change redraws.** A render is resumable: `PF_POLL` renders until it
+is done or a key is waiting, and the next poll goes on from that row, so
+Esc in the middle of a 640x480 render leaves at once. In the two 256-colour
+modes a pan MOVES what stays - Mode X by the latches, four pixels an
+address (write mode 1), 13h a byte at a time - and renders only the strip it exposed, the
+dither being no part of them; a master row shown on several screen rows is
+sampled once. Every dithered mode renders whole on a pan or a zoom: the
+diffuser's error runs from the top-left, so no strip of it stands alone.
+
+**Another picture inside** - Next, Prev, Home, End and the slideshow - is a
+HIDDEN DECODE (106.21) on the kept worker, and the UI task, in the bracket's
+loop, is its pump: `px_pumpfill` when the request byte asks, `px_hdone` when
+the worker answers - the two things `W_ONWAKE` does, which no event reaches
+inside a bracket. Unlike the window's, it may give the SHOWN picture's master
+back when that buys the next one a finer scale (106.8's rule): the glass
+keeps showing it, so nothing is lost but a zoom or a pan while the next one
+decodes, which wait. The answer is COMMITTED at once (or at the slideshow's
+deadline, `PX_SLIDE` after the last slide was whole): the old master goes,
+the new one is shown, and `PF_SHOW` chooses its colours. A refusal is said in
+the bottom band and the picture shown stays; a refusal that leaves no master
+at all (the shown one given back) leaves full screen.
+
+**The way out** is the bracket's: §53.6 sets the desktop's mode and repaints
+every window. PiXEL gives the VIEW claim back on the way in - 30 KB, and a
+claim of §50.2's eight while a hidden decode holds three - so the repaint
+claims it again and builds the tables (106.11); a picture changed inside
+leaves the window at Fit, its canvas ground until the worker's tables job
+ends, exactly as the windowed slideshow's commit does. The timer, whose
+event the bracket's exit drained, is armed again, and a slideshow running
+inside stops with the full screen.
+
+**What it costs** on the machines PiXEL is calibrated against, a 4.77 MHz
+8088 under MartyPC's cycle counter (`tests/pxfsx.py`, from the bracket's
+entry to the part's render starting - the mode set and its COLOURS - and on
+to the picture whole), BALLOONS.PNG (320x240, its own 256 colours):
+
+| machine | mode | its colours | the picture whole | a pixel |
+|---|---|---:|---:|---:|
+| XT, VGA | 320x240, 256 | 0.37 s | **1.85 s** | 115 cycles |
+| | 320x200, 256 | 0.27 s | 1.55 s | 116 |
+| | 640x480, 16 | 2.81 s | 26.4 s | 410 |
+| 5150, CGA | 160x100, 16 | 2.74 s | **1.38 s** | 410 |
+| | 320x200, 4 | 3.44 s | 5.25 s | 390 |
+| | 640x200, 2 | 0.15 s | 8.83 s | 330 |
+| 5150, Hercules | 720x348, 2 | 0.19 s | 16.1 s | 310 |
+
+The two 256-colour modes are the sampling and a copy; every dithered pixel
+is the diffuser's ~250 cycles (the 640x480 mode's planes another ~95), and
+an 8088 fetches its ~45 bytes of loop at four cycles a byte: the 8088's
+floor, not a slow path left in. **Measured while it was built**: the error
+row was a pair swapped a row and written read-modify-write - the in-place
+row above took 640x200 from 11.4 s to 9.96, the two-colour arm (an `xlat`
+and an immediate where a plan's two lookups were) to 8.83; the plan search
+expanded and pruned by its penalty, 160x100's colours from 3.79 s to 2.74;
+and the CGA's chooser, its targets heaviest first and a candidate abandoned
+once past the best, from 7.88 s to 3.44. Ordered is not a fast path here -
+a compare a pixel where the diffuser is an add - and is there for its look.
+On a 286 every figure is a fifth or less.
+
+**The resident's share** (106.20's budget for this wave, 1,500): **+1,481
+bytes** - the doors and View > Screen, the modes a display offers, the
+bracket's loop with its pump, commit and slideshow, the toasts held off the
+glass inside it - and **+67** of fixes to earlier waves, below: 51,071 of
+61,440, **10,369 to spare**. The FULL-SCREEN part is 23,290 bytes, 6,604
+packed (7,794 of code and tables; its scratch is zeroes): a claim of its own while the
+screen is PiXEL's. **Claims at the worst moment**, a next picture decoding:
+the face, the shown master, the store, the full-screen part, the decoder
+part, the hidden master, the work claim and the ring - eight, §50.2's limit,
+which is why the view claim is given back on the way in.
+
+**Tests.** `tools/pixelsim.py`'s `FsView`, `FsPic`, `fs_mediancut`, `plan6`
+and `fs_cgapick` are the reference, `--fsrender` a PNG of any mode for
+looking, and `--selfcheck` holds a few of their invariants (Fit inside every
+screen, a colour its own plan, the cut of two colours). **`pxfsx`** (soak,
+MartyPC: the VGA XT, the CGA 5150 and the Hercules 5150) enters every mode
+each display offers and holds the part's tables, the DAC read back and EVERY
+PIXEL of the mode to pixelsim's - the CGA's and the Hercules' memory read
+straight, the VGA's out of MartyPC's whole field (its display apertures stop
+at 400 lines; Mode X has 480) through the DAC's widening - then leaves and
+holds the desktop's mode, its DAC, its pixels and PiXEL's claims to what
+they were; holds View > Dither's ordered rule the same way on each machine's first
+dithered mode; zooms Mode X and 13h two steps in and pans them three ways,
+each pan's moved screen and rendered strip held to pixelsim's view; drives
+the EGA's same-mode Desktop on the VGA's own 12h (no MartyPC machine has an
+EGA); and takes a next picture and a slideshow of two in full screen. It
+prints the table above. **`pxbench`'s third disk is 720 KB now**: PIXEL.O88
+no longer fits a 360 KB volume beside its three pictures, and in the 720 KB
+drive HOUSE.PNG's first rows measure 3.20 s (5150) and 2.89 s (VGA XT), its
+ceilings re-based on those; and the 5150's `inflate` takes the VGA XT's
+ceiling, because that figure moves with where the UI task's reads land - in
+K_NEXT's waits or in inflate's time - which the package's growth moved on the
+disk: 404 cycles a byte against 323 at the same 38.98 s decode.
+
+**Fixed in this wave, in earlier waves' code:**
+
+- **Fit** (106.11): the closed form above. The decoder speed pass had seen
+  the symptom - rows counted painted past the canvas - and the cause was the
+  view's own rounding.
+- **`[px_onworker]` was never set**, so on the worker `px_plans` took the UI
+  task's branch: `px_kneed` and `px_pcall`, which could FETCH a part on the
+  worker (§20.6's rule 7) and shared the UI task's far pointer, and the plan
+  search never polled the cancel. `px_wjob` sets it for a job's length;
+  `px_tabpoll`, which nothing called, is gone.
+- **The Navigator's well** recorded a picture as drawn when it had drawn the
+  well grey while the worker built its tables - after a commit, or full
+  screen's way out - and so never drew it; its key now holds no picture
+  while `[px_busy]` is set.
+- **The wave-5 review's F1**: the cache's header was read into the store at
+  offset 0, so its 4 KB put the FILE's bytes over the cube's plans and
+  thresholds; it is read into the buffer and the header's own 2,080 bytes
+  copied down, and written from there with zeroes after them. **F2**: a
+  refused open's walk left `[px_ncur]` on the refused file, and the idle
+  engine made that file's thumbnail from the shown picture's master;
+  `px_restore` puts the list's place back (`px_ncfind`: FFFFh when the
+  shown picture is not in the list walked). **F3**: a short, empty or
+  foreign `PIXEL.THC` is taken as none, so the writer makes it anew whole
+  rather than write at an offset the file has not got.
+
+**Left as it is, and why.** A part that cannot be fetched inside full screen
+(PiXEL's disk taken out between two pictures) is `op_fetch`'s own toast,
+which draws the menu bar into the foreign mode - PiXEL's own toasts are held
+off the glass there, the shared parts code's are not. MartyPC rasterises a
+Hercules page 704 columns wide; its memory, which the row checks, holds all
+720. And **wave 7's `OS88UI_ASAVE`** must also stand in front of
+`px_fsstart`: full screen leaves a picture by its own commit, not by
+`px_navto`.
+
+### 106.24 Editing: tools, palette and pixel operations, undo, Save As (wave 7)
+
+**Two more LINKED parts** (106.20's mechanism; one lower each since the
+FOLDER part was withdrawn, 106.21, so 6 and 7): part 7 **EDIT**
+(`apps/pixel/pxedit.asm`, 11,291 bytes, 7,753 packed) - every palette
+operation, every pixel operation, the parameter cards, the XMS copy and the
+operations' own start, commit and undo; and part 8 **WRITE**
+(`apps/pixel/pxwrite.asm`, 47,908 bytes of which 42 KB is scratch, 4,974
+packed) - the five writers and Save As's names, start, pump and end, and
+Copy (Copy Info's line since 106.25). `apps/pixel/pxed.inc` is the verbs, formats and classes both halves
+read, so a verb cannot mean two things.
+
+**A part calls the resident through ONE far gate** (`apps/pixel/pxsvc.inc`):
+`pxlink.inc` names the package's bss and nothing else (106.20), so a part
+cannot name a routine; it puts a service's number in `[px_svi]` and far-calls
+`[cs:pv_sv]`, which every entry sets from `[px_svgp]` (the resident's
+`px_svgate`) and `[cs:PXP_PKG]`. The gate calls the routine with the part's
+registers, **ES = DS** (the first version passed a completion's ES =
+`KERNEL_SEG` through, and `OSAPI_FILE_FIND` wrote PiXEL's find record over
+the kernel's task table), and answers its flags. Thirty-two services: the
+text band, a button, the rect helpers, the string helpers, flags, paint,
+layout, the toast, the ring, the worker's spawn, the walk, the alert, the
+parts' keep and need, the palette, the view. A UI verb (CL bit 6) takes its
+argument in `[px_earg]`, because AL carries the part's number to `px_pcall`.
+
+**Menus** (106.2's five, each within 11 items of 24 characters):
+
+| menu | items |
+|---|---|
+| File | Open... Ctrl+O, Save As..., Revert Ctrl+R, Previous/Next Image, Slideshow, Play / Stop Animation A (106.25), Image Info... |
+| Edit | Undo NAME / Redo NAME, Copy Info (106.25), Select All, Deselect, Crop to Selection |
+| Image | Rotate 90 CW, Rotate 90 CCW, Rotate 180, Flip Horizontal, Flip Vertical, Resize..., Auto Levels, Brightness/Contrast..., Greyscale, Invert |
+| Effects | Blur, Sharpen, Edge Detect, Emboss, Pixelate, Sepia, Posterize..., Threshold..., Gamma... |
+
+Keys: Ctrl+S Save As, Ctrl+Z Undo, Ctrl+C Copy Info, Ctrl+A Select All,
+Ctrl+R Revert, A Play / Stop Animation (106.25); Enter crops to the selection; the arrows nudge a selection a master
+pixel (and pan without one); Esc stops an operation or a save, else drops
+the selection. Every item that needs a picture, a selection, room or an idle
+worker is greyed for that fact (§47); Undo's label is the operation's name,
+cached in `[px_ulkey]` so a `MENU_SET` is spent only when it changes.
+
+**The tools** (106.3's column): **Hand** pans; **Zoom** steps in about the
+click, Shift or the right button out, a drag zooms to the rect;
+**Marquee** drags a selection in MASTER pixels, drawn as an XOR outline
+(four `OSAPI_GFX_XOR_FILL`s clipped to the canvas) that every canvas paint
+takes off first and puts back last (`px_mqhide`/`px_mqshow`, nested by
+`[px_mqhold]` across a pan); **Crop** drags the same and Enter or a
+double-click crops; **Eyedropper** reads the pixel under the pointer every
+other tick while the window is in front - `x,y`, `#RRGGBB` and the index in
+the status bar's fields (the zoom field is the readout's while it reads) -
+and a click pins it as Image Info's ninth line, **Picked**, which File >
+Image Info always shows and the panel shows when its height has room; **Rotate** turns the picture clockwise on a click and anticlockwise
+on the right button (`OSAPI_WM_ONRCLICK`).
+
+**Palette operations** - Invert, Greyscale, Sepia, Brightness/Contrast,
+Gamma, Posterize, Threshold, Auto Levels - run on the UI task over the 768
+bytes of `[px_pal]` and nothing else: the master is not touched and the mode
+becomes PAL with 256 entries (an edited cube or grey is a palette like any
+other). On a 1bpp display the new tables are thresholds and are made at once;
+on a 4bpp one the palette's 256 plans are a SEARCH, 2.28 s on an XT (106.17),
+so the WORKER makes them (`JOB_TABLES`, `[px_busy]` 2, the way a restored
+picture's are) and the picture shown stays on the glass until they are done
+and drawn - the first build made them on the UI task, and the window took
+no key for those two seconds. Undo is an EXCHANGE with the banked palette
+and plans (`px_ppal`/`px_pplan`, 106.20's bank), so Undo and Redo are each a
+swap and instant; a turn, a flip or a crop keeps the palette and its plans
+(`[px_pvalid]`). Brightness is `b x 51/20` added;
+contrast `25600/(100-c)` (c >= 0) or `256(100+c)/100` as an 8.8 factor about
+128; gamma is fifteen curves of 33 points (`apps/pixel/pxgam.inc`, written by
+`tools/pixelsim.py --gen` and held by its `--selfcheck`) interpolated; Auto
+Levels stretches the master's histogram's 1% and 99% points to 0 and 255;
+Sepia is a fixed 3x3 matrix in sevenths of 128. Four take a CARD - a box
+over the canvas with one or two `- value +` rows, OK and Cancel, in the
+window's own button record (six more: 29 records), the arrows stepping its
+rows and Enter and Esc its buttons. A card going up draws itself and nothing
+else (the buttons under it are put out of reach by the layout, not
+repainted); going down repaints, as the key card's does.
+
+**Pixel operations** run on the WORKER (`JOB_EDIT`, `[px_busy]` = 3), a row
+at a time with the progress field and Esc, from the shown master into a
+destination, by class:
+
+| class | operations | the destination | undo |
+|---|---|---|---|
+| FLIP | Rotate 180, Flip Horizontal, Flip Vertical | in place | the same operation again |
+| DEST | Rotate 90 CW/CCW, Resize | a second master | the old master, kept (an exchange) |
+| EITHER | Crop, Blur, Sharpen, Edge Detect, Emboss, Pixelate | a second master when there is room; else in place over a copy of the old one ABOVE 1 MB (`OSAPI_XMEM_*`, a 286 with a pool) | the master exchange, or the copy back |
+
+An operation with no room is REFUSED BEFORE IT STARTS with the arithmetic
+(`Blur needs 302K; 120K free`). Resize offers 1/4, 1/3, 1/2, 2/3, 3/4, 3/2,
+2x, 3x and 4x - a box filter down, bilinear in 8.8 up - capped at the master's
+`PX_DIMMAX`. The kernels are 3x3 on the palette's RGB with the edges
+clamped; Pixelate averages blocks of 8. **A result that is not the old
+picture's indices is re-quantised**: to GREY when every palette entry is
+grey, else to the CUBE through the ordered blue-noise rule (the part's own
+copy of `pxqtab.inc`), so the mode the operation leaves is one the renderer
+has tables for without a search. The part counts the new master's histogram
+into its tail (106.20). An operation REFUSED leaves undo as it was - but
+for an undo that holds a master, which is given back first because it is
+the room the operation is judged against; one that STARTS has given undo up,
+so Esc in it leaves the picture and its claims as they were and no undo (the
+wave-7 review's F11: this sentence said undo too, and the code never did).
+
+**One level of undo**, and the kinds are what it holds: the other palette,
+nothing (a flip), the other master's claim (whose segment `px_mreloc`
+follows, as it follows the shown one), or the copy above 1 MB. A new
+operation forgets the old undo first; opening another picture forgets it.
+
+**Save As** is a card (the format: PNG, GIF, BMP, PCX, PIX, and BMP 24-bit on
+a CUBE master only), then the Standard File dialog (§38) for the folder and
+the name. The name's own extension wins when it is one PiXEL writes, else
+the card's is put on it. A name that is taken asks **"Replace NAME?"**
+(`OS88UI_AYESNO`, whose message is a buffer of its own, `[px_aq]`, because the
+alert reads it at every paint, and whose caller sets ES = `KERNEL_SEG`,
+because it reads the caption through it). The WORKER encodes into the ring's
+two slots (`JOB_SAVE`, `[px_busy]` = 4) and sleeps between them
+(`OSAPI_TASK_SLEEP`, not `ALIVE`, so the master it reads cannot move); the UI
+task writes each full one from `W_ONWAKE` into **`PXSAVE.TMP` in the target
+folder** (the worker may not touch a file, §20.6 rule 7); only when the last
+is down is the target deleted and the temporary renamed to it. So **a full
+disk, a write-protected one or Esc leaves the old file as it was and no half
+file under the user's name** - `Disk full: not saved`, `Disk is
+write-protected`, `Not saved: disk error`, `Not saved`. A saved picture takes
+its new name, folder and format in the record, the title and the folder
+list.
+
+| format | what is written |
+|---|---|
+| PNG | 8-bit indexed (type 3, PLTE) or grey (type 0 when the mode is GREY); one zlib stream of FIXED-Huffman deflate - a 16 KB window slid by 8 KB, a 4,096-entry hash of three bytes, chains of 8, a match of 32 good enough - in IDAT chunks of 8,192; CRC-32 and Adler-32 |
+| GIF | GIF87a, the 256-colour table, LZW through `apps/os88lzw.inc`'s ENCODER (`LZW_ENCODE`; the decoder is `LZW_NODECODE`'s other half) - compress's 5,003-entry hash, a clear code when the table is full |
+| BMP | 8-bit, bottom-up, a 1,024-byte palette |
+| BMP 24 | 24-bit, the cube's colours |
+| PCX | version 5, 8-bit RLE, the 769-byte tail |
+| PIX | §61.7's block, nearest of the sixteen; refused when the block would pass one segment |
+
+`tools/pixelsim.py` has every writer (`write_as`), and the part's output is
+pixelsim's to the byte.
+
+**Unsaved edits are asked about** (`OS88UI_ASAVE`: Save / Discard / Cancel)
+wherever the picture would be LEFT: `px_navto` (Prev, Next, Home, End, a
+strip card), File > Open, the slideshow, and the window's close
+(`OSAPI_WM_ONCLOSE`, §75.1; a save still running refuses the close). A
+document opened from the Disk window is a new instance and leaves nothing.
+`px_gate` banks what was asked for and `px_lvdo` does it once the
+answer allows. Save writes over the file itself when PiXEL writes its format
+and the master is the whole picture, else goes through Save As, and the
+banked action waits for the save's end. **Full screen does not ask**: its
+glass has no room for an alert, so its Next and Prev say `Save the edit
+first` and do nothing.
+
+**Copy Info** (Ctrl+C; it was Copy, and 106.25 renamed it) puts ONE LINE OF
+TEXT on the system clipboard (§55): the picture's name, its size, its format,
+the selection when there is one and the Eyedropper's pinned pixel when
+there is one - `CITY.PCX 320x240 PCX; selection 0,0-0,0; pixel 12,34
+#A0B0C0 17`, the values Image Info shows - written by the WRITE part
+(`pu_copy`) and put with `OSAPI_CLIP_PUT`. **A decision on §55.1's ground**:
+the clipboard is text by contract, with no type tag and no registry, and
+"the day something else in this tree can use a picture is the day the second
+buffer becomes worth specifying". Wave 7 put a whole BMP file there, which
+nothing in the tree could paste and every text paste would have shown as
+binary; that code, its rect path in the encoder and its 11 bytes of bss are
+gone. A picture's way out of PiXEL is Save As.
+
+**Claims.** A save holds the face, the master, the view, the store, undo's
+master, the WRITE part and the ring - seven, inside §50.2's eight; the
+decoder and EDIT parts are given back first (`px_wgo`). An operation holds
+the destination and the work claim beside the EDIT part. Full screen drops
+the EDIT part on its way in.
+
+**What it cost the resident**: image 45,382 + bss 11,791 = **57,173, +6,102
+on wave 6 and 4,267 to spare** - over 106.20's 4,500 line by 1,602, inside
+its keep-3-KB rule. The first build was +9,733 (588 spare); the cards, the
+XMS copy, the operations' start, commit and undo, and Save As's names, start,
+pump, end and Copy went to the two parts behind the service gate. What stays
+resident is the tools' gestures and the marquee (2,141 bytes), the menus'
+handlers and undo's labels (1,026), the cards' and Save As's thin halves
+(939), ASAVE's gate and the window's routing.
+
+**Tests.** `tests/pxpartemu.py` runs a LINKED part on the host under Unicorn
+(a faked package at `pxlink.inc`'s addresses, every API cell a `retf`, the
+clock and `TASK_ALIVE`/`TASK_SLEEP` hooked; a test without Unicorn skips that
+leg and says so). **`pxedit`** (soak, MartyPC VGA XT): the EDIT part on the
+host against pixelsim - 63 palette cases and 546 pixel cases (seven sizes,
+three palettes, both destinations), the counts too; then on the machine
+every menu operation and card on CITY.PCX against pixelsim, Undo restoring
+the master, palette, mode and saved state with PiXEL's claims as before (and
+Redo's kept master), Redo, a chain (Blur, Invert, Sharpen), Revert, Esc in
+Blur, and the tools: a Marquee drag's rect, a nudge, Esc; the Crop tool and
+Enter; the Zoom tool; the Eyedropper's pin; the Rotate tool. **`pxsave`**
+(soak): the WRITE part on the host - 336 files over formats, sizes, pictures
+and modes, five ring shapes and four Copy rects, each pixelsim's to the
+byte; then on the machine a save in every format read back off the floppy
+(pixelsim's bytes, and decoded to the master and palette shown), BMP 24 from
+the card's drop-down, Replace No and Yes, Esc in a PNG's save (no file, no
+temporary, claims as before), Save changes? Cancel, Discard and Save on
+Next and Cancel on the close box, Copy refused and Copy of a selection, and a
+disk too full for the save (the old file as it was, no temporary).
+`tools/pixelsim.py --editcheck` reads every writer back through pixelsim's
+decoders and Pillow.
+
+**Fixed in this wave, in earlier waves' code** (the wave-6 review):
+**F1** a render owed no longer samples a master the hidden decode gave
+back (`pxf_poll`); **F2** the view claim is given back at every entry to
+the bracket, `M` back from the Desktop included; **F3** an Esc in a Next
+whose decode had given the shown master back opens the picture the window
+still names rather than leaving it empty; **F4** the bands' two seconds
+count from the end of the render that letters them; **F5** View > Screen
+follows a window dragged to another display within five seconds, the memory
+field's look calling `px_menulive` (a `MENU_SET` from inside a painter -
+`px_layout`, the first fix - drew the menu bar mid-paint and left the
+window's grow box overdrawn on the CGA); **N1** the view claim goes
+before the part's fetch; **N2** C160 snows on a genuine IBM CGA (106.23).
+The wave-6 review's note on an Esc leaving one claim fewer is the decoder
+part `px_kkeep` declines to keep, and a test that counts claims across an
+Esc leaves the decoder parts out - and so does `pxthumb`'s largest free run
+now: a part is fetched into the hole the picture it came after left, so its
+place is that neighbour's size and not a leak (the wave's growth moved
+LAKE.JPG's 1,216-paragraph part 224 paragraphs up after the browse, with
+every claim as it was).
+
+**What an operation costs** (the wave's build, MartyPC's 4.77 MHz VGA XT,
+guest seconds with the menu pick included, CITY.PCX 320 x 240): rotate or
+flip 9-12 s, Crop 14 s, Pixelate and Resize 1/2 34 s, Sharpen 38 s, Emboss
+42 s, Edge 48 s, Blur 49 s; Save As with its card and dialog, PIX 29 s, BMP
+33 s, PCX 37 s, GIF 56 s, PNG 113 s. Drawing (`pxdraw`, Hercules / VGA):
+Invert 23 / 30 calls, its Undo 22 / 28, a parameter card going up 28 / 40
+where it was a full repaint's 391 / 350. (Written here in wave 9, from the
+wave-7 build's log, so PERFORMANCE.md Part 5's rows cite a section.)
+
+### 106.25 TIFF, ICO, IFF, MacPaint; a GIF that plays; the idle engine yields (wave 8)
+
+Wave 8 adds the last four formats of 106.1's list as ONE decoder part, plays
+an animated GIF in the window, and answers the wave-5 review's F13 - the
+thumbnail engine held the desktop's one UI task for seconds at a time while
+the user worked in another window. `tools/pixelsim.py` is the reference for
+every rule below that makes a pixel, and `tools/pixcorpus.py` holds 453
+fixtures (194 new: 179 TIFF, ICO, IFF and MacPaint pictures, 106 of them
+hostile, and 15 animated GIFs).
+
+#### The EXTRAS part: TIFF, ICO, IFF, MacPaint
+
+Part 9 of PIXEL.O88 (part 8 since the FOLDER part was withdrawn, 106.21), `apps/pixel/pxextra.asm`, `OP_SEG | OP_COMP | OP_LAZY`,
+LINKED (106.20): TIFF (`PXF_TIFF`), ICO and CUR (`PXF_ICO`), IFF ILBM and PBM
+(`PXF_LBM`) and MacPaint (`PXF_MAC`). HEAD on the UI task, DECODE on the
+worker, 106.18's services, as every decoder part; the rows reach the emitter
+through `K_EMIT`, which does every scale and the cube. **ASSOCIATIONS DO NOT
+CHANGE**: PiXEL's stay JPG, PNG, PCX, TIF and PIX (106.6) - an ICO, an LBM or
+a MAC is opened from File > Open, or reached by Prev and Next.
+
+**The sniff, said exactly** (106.6; `px_sniffbuf` and pixelsim's `sniff` are
+the same rule):
+
+1. the EXTENSION first: JPG and JPE a JPEG; PNG, GIF, BMP, PCX, TGA and PIX
+   their own; TIF a TIFF; PBM, PGM, PPM and PNM a PNM; ICO and CUR an ICO;
+   LBM and IFF an LBM; MAC a MacPaint; any other names nothing;
+2. then, when the head holds at least 32 bytes, the CONTENT wins, first match
+   in this order: `FF D8 FF` JPEG; `89 'PNG'` PNG; `'GIF8'` GIF; `'BM'` BMP;
+   `0A ?? 01` PCX *only when the extension said PCX*; `'II' 2A 00` or `'MM' 00
+   2A` TIFF; `'O8PI'` PIX; `'P' '1'..'6'` PNM; `'FORM'` with `'ILBM'` or
+   `'PBM '` at 8 LBM; ICO: word 0 zero, word 2 1 or 2, word 4 1..255, byte 9
+   zero; MacBinary MacPaint: byte 0 zero and `'PNTG'` at 65 (only when the
+   head holds 69 bytes); `'CZ'` packed;
+3. nothing: `Not a picture`. A format named and then refused is refused by
+   its part's HEAD - a `.TIF` whose bytes are no TIFF's is `TIFF: bad header`.
+
+**Common rules.**
+
+- **The head walk**: HEAD reads past the first head as 106.19's JPEG does,
+  but the part reads its own next head (`pxhmore.inc`, the JPEG part's too
+  since this wave, `px_hmore` gone from the resident): the next head holds
+  the 2,048 bytes from the file offset asked for, or to the file's end. A
+  STRUCTURE
+  (`ex_need`) is used from the current head when it holds it whole, else from
+  a new head at its offset - `cut short` when the file does not hold it,
+  checked before the head is counted; a BYTE RUN (`ex_run`, the strip tables
+  and the AND mask) copies what the current head holds and takes a new head
+  at the next byte wanted. **At most 16 heads** a header, the first included,
+  then `bad header` (`FHEAD16.TIF` and `LHEAD16.LBM` open on exactly 16;
+  `HF42.TIF` and `HL18.LBM` are one more).
+- **The TABLE**: 8,192 bytes of the part's own memory, filled by HEAD and
+  read by DECODE - TIFF's strips (a dword offset and count each: at most
+  1,024) or ICO's AND mask (at most 8,192 bytes); more is `too big to
+  unpack`.
+- Every dimension 1..8,192 or `size not valid`, before any arithmetic. The
+  view background is 106.18's (85, 85, 85); alpha is composited over it with
+  PNG's arithmetic. Rows go to the emitter as the file holds them: top-down,
+  or bottom-up for ICO (`PXKF_UP`). Image Info's Packing: `None`, `RLE`
+  (PackBits, ByteRun1) or `LZW`.
+- **One run-length routine** (`ex_rle`) for TIFF's PackBits, IFF's ByteRun1
+  and MacPaint: a control byte `n`, 0..127 is `n + 1` literal bytes, 129..255
+  the next byte `257 - n` times, 128 nothing. The stream is CONTINUOUS - a
+  run may cross a row - and stops the moment the last byte wanted is made: a
+  literal's unneeded bytes are not read.
+- **One planar converter** (`ex_planar`): bit `7 - (x & 7)` of plane `p`'s
+  byte `x >> 3` is bit `p` of pixel `x`.
+
+**TIFF** (`.TIF`). HEAD: `II` or `MM`, 42, IFD0's offset (below 8: `bad
+header`); only the first IFD, its count 1..170, the whole IFD from one head.
+**The scan**, in IFD order: an entry of a tag read (256 257 258 259 262 266
+273 277 278 279 284 317 320 338) whose type is not SHORT or LONG, or whose
+count is 0, is `bad header`; a later entry of a tag replaces an earlier;
+322-324 only mark the picture TILED. **The values**: each tag's first value,
+in its 4 bytes or at its offset. **The checks, in this order**: no width or
+height `bad header`; either outside 1..8,192 `size not valid`; tiled `packing
+not read`; Compression not 1, 5 (LZW) or 32773 (PackBits) `packing not read`
+(JPEG, Deflate and CCITT among them); no Photometric `bad header`, above 3
+`depth not read` (CMYK, YCbCr, Lab); FillOrder not 1 `packing not read`; no
+StripOffsets or StripByteCounts `bad header`; RowsPerStrip 0 `bad header`
+(absent or above the height: the height); PlanarConfiguration not 1 (2 with
+one sample is 1) `packing not read`; Predictor not 1 and not 2 on 8-bit
+samples `packing not read`; the KIND - grey (0, 1) or palette (3) of one
+sample of 1, 2, 4 or 8 bits, RGB (2) of three 8-bit samples or four whose
+fourth is alpha when ExtraSamples says 1 or 2 (else ignored) - else `depth
+not read`; a palette's ColorMap absent, not SHORT or not `3 x 2^bits` long
+`bad header` (R's, then G's, then B's, the high byte of each); `ceil(height /
+RowsPerStrip)` strips, more than 1,024 `too big to unpack`, the two arrays
+shorter than that `bad header`; and the strips must lie in FILE ORDER,
+`offset[i] >= offset[i-1] + count[i-1]` (a sum that carries out of 32 bits
+refuses), else `packing not read` - the ring reads a file forwards only
+(106.9). Grey levels are scaled by 255, 85, 17 or 1, WhiteIsZero inverted.
+DECODE, a strip at a time: skipped to its offset, its rows made from its
+bytes and nothing past them (running out is `cut short`): none - the bytes as
+they stand; **PackBits - one continuous stream a strip** (libtiff's reading:
+runs cross rows); **LZW - one stream a strip** through `apps/os88lzw.inc`
+with `LZW_MSB` (codes MSB first) and `LZW_EARLY` (the size grows when the
+next free code plus one reaches a power of two), a strip starting in the
+after-Clear state (a first code that is a root is taken, one of 258 or more
+is `damaged`), ending when its rows are whole; Predictor 2 adds each byte to
+the one `samples` before it, after the row is whole.
+
+**ICO and CUR** (`.ICO`, `.CUR`). HEAD: the reserved word 0, the type 1 or
+2, the count 1..127 (`bad header`), the directory in the file (`cut short`).
+THE IMAGE is the entry with the largest `w x h` (a byte of 0 is 256), then
+the larger bit count (a CUR's is its hotspot and counts as 0), then the
+first. Its offset inside the directory is `bad header`, past the file `cut
+short`.
+- **A PNG inside** (`89 'PNG'` at the image's offset) is read by the PNG
+  part (106.18), from that offset as if it were the file: the EXTRAS HEAD
+  moves the head down so the PNG starts at its byte 0, sets the STREAM'S
+  BASE (`[px_sbase]`) and answers `PXD_REDIR`; the resident marks the record
+  (`PXR_PROG` = 2), so `px_fpart` names the PNG part for that picture from
+  then on - its HEAD, its DECODE, its plans, `px_kkeep` - and calls the PNG
+  HEAD. The ring starts at the base's CLUSTER (READ_SEQ's rule) and its
+  first window drops the bytes before the base (`[px_rdrop]`). Its refusals
+  are PNG's words; Image Info still says ICO. A file read whole into memory
+(a packed one, or any on a volume of 32 KB clusters - the wave-8 review's
+X2) has no
+  base: `packing not read`.
+- **A DIB**: the header 40, 108 or 124 bytes (`bad header`; one the file cuts
+  is `cut short` before any field is read); width 1..8,192 (`size not
+  valid`); the height positive and even (`bad header`), its half 1..8,192;
+  planes 0 or 1 (`bad header`); 1, 4, 8, 24 or 32 bits (`depth not read`);
+  compression 0 (`packing not read`); for 1..8 bits `n` = ClrUsed or
+  `2^bits`, more than `2^bits` `bad header`. The AND mask after the XOR
+  bitmap, but for 32 bits, at most 8,192 bytes, into the TABLE. Fewer than
+  256 entries: `RF_IDX` with the view background as entry `n`, a masked
+  pixel `n`, an index past `n` passed through (it shows black); 256 entries,
+  24 bits: RGB, masked the background; 32 bits: BGRA composited, the mask
+  not read. DECODE emits the XOR rows bottom-up.
+
+**IFF ILBM and PBM** (`.LBM`, `.IFF`). HEAD: `'FORM'`, a size never read,
+`'ILBM'` or `'PBM '`; the chunks from 12, each through a head of its own
+when the current one does not hold it: `BMHD` (under 20 bytes `bad header`;
+the size checked there), `CMAP` (`min(size / 3, 256)` entries; under 3 bytes
+is a CMAP of none: every entry black), `CAMG` (4 bytes or more: EHB, HAM),
+`BODY` (`bad header` before a BMHD; the walk ends); any other skipped; a later
+BMHD, CMAP or CAMG replaces an earlier. Then: compression 0 or 1 (`packing
+not read`); ILBM 1..8 planes and not HAM, PBM 8 (`depth not read`). The
+palette: `2^planes` entries from CMAP, black past it, or with no CMAP a grey
+ramp; EHB with 6 planes doubles it to 64, each channel halved. DECODE: BODY's
+bytes as ONE stream (ByteRun1 or plain) filling every row's plane rows -
+`((w + 15) >> 4) x 2` bytes each, one more plane when masking is 1 (read and
+dropped) - or a PBM row's `w` bytes rounded to even.
+
+**MacPaint** (`.MAC`). The data starts at 128 when byte 0 is 0 and `'PNTG'`
+is at 65 (MacBinary), else at 0; a file shorter than that plus 512 is `cut
+short`. 576 x 720, 1 bit, white and black. DECODE: the 512-byte header
+skipped, one PackBits stream to the file's end making 720 rows of 72 bytes.
+
+**What it costs.** The part is 20,584 bytes (10,220 packed in
+PIXEL.O88), its 8 KB table included. Resident: `px_fpart` (a table now, the
+PNG-in-ICO rule in it), the sniff's three, `PXD_REDIR` and the stream's base
+in the ring.
+
+#### A GIF that plays
+
+The picture a GIF opens as is 106.18's: its first image on the logical
+screen. Wave 8 plays the images after it **in the window** - the first
+decode reads on past the first image after its last row (`pa_peek`, never a
+refusal and never a change to the first picture) and marks the GIF ANIMATED
+when it meets a second image descriptor with only extensions before it.
+
+**The rules** (`gif_anim`, `gif_animated` and `gif_restart` in
+`tools/pixelsim.py`; the guest is held to them frame by frame):
+
+- **Plays only at 1/1** (PAL, 106.18), from a file on a disk (not a packed
+  one in memory), on a master that is the file's: a GIF too big for 1/1
+  shows its first image only.
+- **A frame's GCE** is the last `21 F9` between the previous image and its
+  descriptor (fields reset after every image): disposal `(packed >> 2) & 7`,
+  the transparent index when bit 0 is set, the delay. **The delay in ticks**:
+  `d` hundredths, `d < 2` taken as 10 (what browsers do), `max(1, (d x 182 +
+  500) div 1000)`.
+- **NETSCAPE2.0** (`21 FF 0B 'NETSCAPE2.0'`, a sub-block `01 lo hi`) before
+  frame 0, the last one wins: `n` = 0 plays for ever, else `n` passes AFTER
+  the first; without one it plays once. A pass begins at frame 0 with the
+  whole screen disposed to the background index first; after the last pass
+  the last frame stays.
+- **Its colours**: a frame whose table is the global one, when frame 0's was
+  too, writes its indices as they are; any other frame's table (padded black
+  to 256) is MAPPED, each entry to the nearest of the master's first `NPAL`
+  by 106.11's weights `3 dR^2 + 6 dG^2 + dB^2`, the lowest index on a tie.
+- **Its pixels** at (left, top), clipped to the screen; a pixel equal to its
+  transparent index leaves the master; rows written when whole, at their
+  final y (an interlaced frame's pass by pass).
+- **Disposal** before the next frame: 2 fills the frame's clipped rect with
+  the background index, 3 puts back what it held before the frame (frame 0's
+  3 is the background, which is what a new pass starts from), every other
+  value leaves it.
+- **What cannot be read ENDS THE PASS** (never a refusal): a frame with no
+  table, a minimum code size outside 2..8, a damaged or short code stream -
+  the frame's whole rows stay. A frame of zero width or height is skipped.
+- **The DIRTY RECT** of a frame is the union of the previous frame's disposal
+  rect (2 or 3) and its own, both clipped.
+
+**The engine.** A frame is a WORKER job (`JOB_ANIM`, 5) in the GIF part:
+from `[px_anpos]` - the stream's base, so the ring starts there - the
+blocks walked, the previous frame's disposal applied, the frame decoded with
+the part's own LZW onto the MASTER in place, its rect noted; then it waits
+(`[px_anrun]` 2) for the UI task. The UI half is four verbs on the GIF
+part's `PXV_INFO` vector - `AV_INIT` (after the first decode), `AV_TICK`
+(the timer), `AV_WAKE` (the worker's wake) and `AV_TOGGLE` - so the resident
+holds only the hooks: `px_antick`, `px_antog`, `px_anfree`, the wake's and
+the timer's branch, and 50 bytes of state. The UI task paints a ready frame
+- its dirty rect, mapped through the view to the canvas, rendered by the
+canvas's own renderer through a new UI service (`SV_RIMG`, with the
+marquee's hide and show round it) - starts its delay, and at the delay's end
+lets the next one go. The timer runs **every tick** while a GIF plays.
+
+**Memory, honestly.** The ANIMATION'S CLAIM: 1 KB for the global table (a
+frame whose table is the global, after a frame 0 with its own, needs it) and
+the disposal-3 backup, grown when a frame asks (`PXD_MEM` with
+`[px_anneed]`; a claim that cannot grow says `Animation: not enough memory`
+once, and the animation stops where it is). The JOB holds the ring and a
+work claim (the LZW's tables and a row) from a pass's first frame to its
+end, waiting between frames rather than ending - a job a frame would read
+the ring's first slot again every frame - and gives them back at the pass's
+end, at a stop, and the moment another window comes in front; a stopped
+animation holds its 1 KB and nothing else.
+
+**What stops it, and what it costs then.** **Another window in front, or
+PiXEL minimised**: the next timer call stops the job (`px_hstop`: the
+cancel, the worker's answer, its claims back), nothing is drawn, and the
+timer drops to `PX_TQ`'s pace - the frame goes on from where it was
+when PiXEL is in front again. **Any command** stops a frame being made, as it
+stops a hidden decode. **An edit** makes it a still for good (its master is
+not the file's any more). **File > Stop Animation / Play Animation** (and the
+**A** key) stops it and starts it again; one whose passes have all played
+starts from frame 0. **Full screen shows the frame on the master as a still**
+(106.23's bracket owns the UI task, so no timer call reaches the animation
+until it ends), and **so does a slideshow**: a frame job holds the worker
+from the first frame to the pass's end, and the next slide's hidden decode
+needs it, so `AV_TICK` stops the job while one runs and starts none. A
+frame does not redraw the Navigator, which shows the master as it was when
+it was last drawn. (The thumbnail engine waited while a GIF played, until
+the filmstrip was withdrawn: 106.21.)
+
+**What a frame costs**: `pxdraw` plays the gallery's `BOUNCE.GIF` and counts
+**2.8 calls a frame** on Hercules and **4.5** on the VGA - the dirty
+rect's composer bands (`px_rimg`, 16 rows a band) and nothing of the chrome,
+under a ceiling of 12 - and then holds the stopped frame's glass to a
+repaint from nothing. That identity was added for **the one defect the
+masters could not show**, which the wave's VGA screenshot did: `AV_TICK`
+painted what was owed the glass on every tick, and a frame's rect is
+unioned before its rows are in, so a tick that fell mid-frame spent the
+rect on the old pixels and the frame's own paint then found nothing - the
+ball's old places left on the sand. It paints only between frames now.
+
+**The gallery's tenth picture**, `BOUNCE.GIF` (2,327 bytes, 96 x 72, ten
+frames of a tenth of a second, looping): drawn by `tools/pixsamples.py`'s
+`bounce()` rather than reduced from a scene, pinned like the nine, and on
+all four pixeldisks. **LAKE.TIF is not shipped**: a 320 x 240 grey TIFF is
+67,380 bytes with LZW (65,552 PackBits), and the 720KB pixeldisk has 30
+clusters free and the 360KB one 13 - the rule was "on every disk the gallery
+rides, or not at all".
+
+#### The idle engine yields (review-w5 F13)
+
+*(Withdrawn 2026-10-06 with the filmstrip, 106.21: the thumbnail engine,
+its store and `PIXEL.THC` are gone, and what follows is the record of what
+was built and measured. The hidden decode it describes is the slideshow's
+now, and only the slideshow's.)*
+
+Every step of the thumbnail engine runs in a callback on the ONE UI task -
+the timer's under the gfx lock - so while one runs nothing else on the
+desktop is answered. The wave-5 review measured a cache write holding it
+**10.63 s** and decodes beginning and ending at 0.75-2.75 s each, twenty
+seconds after the user had gone to type in another window, because the idle
+test was PiXEL's own input and nobody else's. Now:
+
+- **PiXEL in front only.** The timer asks `OSAPI_WM_TOP` once a call
+  (`[px_behind]`, 0 while the top window is ours): with another window in
+  front the engine begins nothing, a thumbnail's hidden decode RUNNING is
+  stopped at the next tick (its worker took the CPU from the program the
+  user is in), and a GIF stops. `PX_THIDLE` measures the user's last act IN
+  PiXEL, so with the front test it only has to keep the engine off a user
+  who is still looking - and it is raised from 18 ticks to 36, because a
+  step is up to ~2.6 s (below) and a pause shorter than a step should not
+  start one.
+- **The cache is written only when there is a reason**: when the strip's
+  folder is not the one its new thumbnails were made in (the user has gone
+  to another folder), when the strip goes, or when the window CLOSES - never
+  while the folder is still on show, so a user browsing a folder pays no
+  write at all until they leave it. `PF_WRITE` is a STEP: one entry a timer
+  call (the header read, the hits stamped and the file made on the first),
+  the header LAST (`AX` = 2 says more); `PF_WALL` is the whole of it in one
+  call, the close's (`OSAPI_WM_ONCLOSE`), the one write that cannot be
+  spread because there are no more timer calls.
+- **Measured** (`pxthumb`, the 4.77 MHz VGA XT with a 720KB B:, guest
+  cycles from a breakpoint at `px_ontimer` / `px_onwake` to their return):
+  **behind another window**, the open finishing there and 20 s after it -
+  40 callbacks, 0.39 s of the UI task, the longest **0.127 s** (the
+  free-memory field's look) and no thumbnail begun; **in front, cold** -
+  41 callbacks, 18.9 s of the UI task in 29.4 s, the longest **2.60 s**
+  where the review measured 10.63 (the first build of this wave had a visit
+  and a make in one call, 4.32 s: two steps now); **the close** - 15.0 s from the click to the window's going, five new
+  entries written whole: 11 reads and 32 writes of the floppy (74 sectors
+  written, 25 seeks), most of the writes the FAT and the directory entry
+  the kernel writes through after every `WRITE_AT`. That is the price of
+  writing nothing while a folder is on show, and the close is the one call
+  that cannot be spread over timer calls.
+- **Half a second a call is NOT reached**, and this is why. Every step is
+  at least one floppy access, ~0.4 s an `int 13h`, and most are several: a
+  part read out of PIXEL.O88 is a `FILE_GOTO` to PiXEL's own folder, the
+  read and a `FILE_GOTO` back (106.18's bracket), 0.4-1.2 s before the part
+  does anything; a hidden decode's start walks the folder, reads the head,
+  fetches the decoder part and reads the first slot; its end fetches the
+  FOLDER part to make the thumbnail. Each step is ONE of those actions now;
+  making them smaller would mean holding the FOLDER part across steps, and a
+  hidden decode's eight claims (§50.2) leave no room for it. What the user
+  meets is bounded instead: nothing while they are in another window, and
+  in PiXEL a step starts only after two seconds of stillness (`PX_THIDLE`,
+  raised from one for this), so a press waits at most for one step.
+
+#### Fixed in this wave, in earlier waves' code
+
+The wave-5 review: **F5** the 31 KB store is given back when the strip goes,
+and when its 31 KB would buy the shown picture a finer scale (`px_tgive` in
+`px_claims`); **F6** the folder's walk for a hidden decode goes through
+`OSAPI_FILE_GOTO_QM`, and a folder that will not list ends the thumbnails
+until it is walked again; **F7** a cache hit no longer asks for a write;
+**F8** a re-decode that keeps the view (106.19) reads ahead from its start -
+the first-paint deferral is an open's; **F11** a store filled on a 1bpp
+display gets the cube's plans the first idle step after the window reaches a
+colour one; **F12** an entry the visit refuses has its header key forgotten,
+so the thumbnail made for it is written over it; **F13** above. **F4, F9,
+F10, F14 are wording**, in 106.21. The wave-7 review: **F1** Save As writes
+through a temporary named for the INSTANCE (`PX` + four hex digits of the
+package's segment + `.TMP`), so two PiXELs saving into one folder never
+share it; **F2** Save of a picture whose master is not the whole file at 1/1
+- a decode at a scale, or a full-screen rendering's - goes through Save As;
+**F3** a rename that fails leaves the temporary and says `Saved as
+PXnnnn.TMP`; **F4** a save into a read-only folder or file says `Not saved:
+read-only` and leaves the edit unsaved; **F5** Save As from the Save changes?
+alert carries the banked action; **F6** the saved file's record is the
+saved master's (1/1, 8 or 24 bits); **F7** the Resize and Canvas Size cards
+refuse a size whose sum overflows instead of wrapping; **F8** a Save whose
+format PiXEL cannot write at the shown depth asks Save As; **F9** Prev/Next
+and Revert clear the selection and undo with the picture; **F10** Discard
+lets the banked action go ahead once (`[px_lvok]`); **F11** an operation
+REFUSED keeps undo as it was (the undo slot is freed only for an operation
+that will run) - and an Esc in a running Blur still gives undo up, which
+106.24 now says; **F12** the room an operation needs counts undo's master
+when undo holds one; and the histogram's statistics are the part's
+(below). (This paragraph first named that last one F14; the wave-7 review's
+F14 is the first palette operation after a save, fixed in 106.26.) F13 (the card going down repaints the window: a card may overlap the
+buttons, and the full repaint is what keeps them right) and the two NITs are
+declined. **And one this wave's tests found in wave 7's code**: a save that
+ended a "Save changes?" on Next started the next picture's decode (`SV_LVDO`)
+and THEN let `px_kkeep` judge the parts - with nothing decoded yet it named
+none, and the decoder part was dropped under the worker decoding in it. It
+read as `PCX: damaged` once the freed memory was reused, which this wave's
+part calls made happen; the save's end now keeps the part first and acts
+second. `px_clbytes` also keeps BX now (`OSAPI_VOL_STAT` writes the free
+clusters there; no caller had held a value across it until 106.25's ring
+base).
+
+#### Resident
+
+THE RULE WAS NEUTRAL OR BETTER, and it is: **image 45,337 + bss 11,834 =
+57,171, against wave 7's 57,173** - 4,269 to spare of `APP_MAX_SIZE`. The features cost 872 bytes on the first
+build; what paid for them went OUT to the parts: the histogram's statistics
+and its counts (`px_hstats`' sums, the square root and `px_hcount`, now
+`pxplan.inc`'s `pl_stats` and `pl_hcount`, `PXV_PLANS` with `CL` = 1 and 2 -
+every decoder part has them), the PCX tail's read (the SIMPLE part's own,
+`PXD_TAIL` gone), the JPEG's next head (`pxhmore.inc`, `PXD_MORE` the part's
+own read), Copy's BMP and its rect path; then the small ones - one
+abort-and-wait loop where `px_hstop` had two (`px_await`), `px_fpart` a
+table, the front test made once a timer call (`[px_behind]`, read by the
+engine, the animation and the timer's pace), the three animation bytes
+cleared by a word and a byte.
+
+#### Tests
+
+- **`pxextraemu`** (soak, host, Unicorn): the EXTRAS part's HEAD and DECODE
+  on all 179 TIFF, ICO, IFF and MacPaint fixtures - every verdict, head
+  count, palette and row pixelsim's - at ring windows of 1, 3, 255, 1,000
+  and 16,384 bytes and clusters of 512, 1,024 and 4,096.
+- **`pxanimemu`** (soak, host, Unicorn): the GIF part's animation job on all
+  30 GIFs - the animated flag, every frame's master, dirty rect and delay,
+  the loop count and a second pass's frame 0 - at windows of 1, 7, 300 and
+  16,384.
+- **`pxdecode`** adds the four formats (every fixture opened on the machine
+  and its master and palette pixelsim's to the byte, PNG-in-ICO included)
+  and a leg that plays GA1-GA8 and GX on the machine, every frame's master
+  and delay `gif_anim`'s - read with the guest stopped at `px_antick` while
+  a frame is on the glass. `[px_anoff]` is a test's byte that keeps the
+  other legs' GIFs still.
+- **`pxthumb`** (retired with the filmstrip, 106.21: BEHIND is `pxfolder`'s now) gains BEHIND - the open finishing with another window in
+  front, 20 s of guest time with no thumbnail begun and no callback over
+  0.25 s - and the callback profile of COLD under 3 s; the cache is
+  checked NOT written while its folder is on show, then written whole at the
+  close and read back off the floppy.
+- **`pxdraw`** / **`pxdrawvga`** gain the animation frame's ceiling and the
+  stopped frame's glass against a repaint.
+- **`pxsave`**: Copy Info's line on the host (four cases) and on the machine.
+
+### 106.26 The finish: the cache written ahead, callbacks sliced, PNG faster, the budget rows (wave 9)
+
+Wave 9 is the plan's last (PIXEL-PLAN.md §10 item 9): what the wave-8 build
+and its review left priced too high on the XT, the decoder the profiles
+still indicted, PiXEL's rows in PERFORMANCE.md Part 5, Paint onto the shared
+LZW where it is byte for byte, two 86Box machines, and a functional check on
+the glass of every feature on VGA, CGA and Hercules - which found one defect
+that had shipped since wave 2.
+
+#### The cache is written AHEAD, so the close has nothing left
+
+*(Withdrawn 2026-10-06 with the filmstrip, 106.21: the thumbnail engine,
+its store and `PIXEL.THC` are gone, and what follows is the record of what
+was built and measured. The hidden decode it describes is the slideshow's
+now, and only the slideshow's.)*
+
+106.25 wrote `PIXEL.THC` only when the strip's folder changed, the strip went
+or the window closed, and the close wrote it whole: **15.0 s** on the XT for
+five entries, the desktop held for all of it with the pointer an arrow (the
+wave-8 review's E1). Now the engine (`px_thstep`) writes as soon as it has
+nothing else to do in the folder on show:
+
+- **When.** Under exactly the gates a hidden decode starts under - PiXEL in
+  front, `PX_THIDLE` of stillness, no press, no drop-down, no open, no
+  slideshow - and when NO card on show lacks a thumbnail (or thumbnails are
+  off for the folder): the state in which 106.25's engine went idle with new
+  thumbnails owed. The evidence a 2.6 s decode starts on is the evidence an
+  entry is written on.
+- **A step is one entry**, as 106.25's `PF_WRITE` was: the header read again
+  on the first (another PiXEL may have written), each new thumbnail to its
+  entry, the header LAST. **A write under way goes before anything else** -
+  a visit for a newly paged strip would read the very header the write is
+  building and lose the entries already put.
+- **The FOLDER part is KEPT between write steps** (`[px_fkept]`): 106.21
+  drops it after every call because a hidden decode's eight claims (§50.2)
+  leave no room for it, and a fetch is a `FILE_GOTO` home, a read and a
+  `FILE_GOTO` back - most of a step. No hidden decode runs during a write, so
+  `px_fcall` keeps it while `[px_cwip]` says more is to come, and
+  `px_fpdrop` lets it go before anything that claims: `px_hstop` (every
+  key, press, release and menu command passes it), `px_hopen` and `px_open`.
+- **The disk's free room is asked once a write** (`OSAPI_FILE_DFREE` scans
+  the FAT) and counted down 4 KB for each entry it grows by.
+- **The close** (`px_cfinal`, from the close negotiator AND from "Save
+  changes?"'s own close - review-w8 E4: `OSAPI_WM_CLOSE` retires the
+  negotiator, so a close through Save or Discard wrote nothing at all, and
+  with the cache written only at the close that was the whole session's
+  thumbnails) normally finds nothing owed; what the last two seconds made is
+  written whole as before, with `OSAPI_CUR_BUSY` putting the clock up first
+  (§7.5).
+- **Measured** (`pxthumb`, the 4.77 MHz VGA XT with a 720KB B:): **the close
+  is 3.48 s from the click with NO access of the floppy at all** - the
+  window's teardown and the desktop's repaint under it - where 106.25's was
+  15.0 s (11 reads and 32 writes). The write moved into the idle time that
+  follows the strip's last thumbnail: seven steps for five entries (the
+  header read, five entries, the header), 1.32 to 1.96 s each, 11.7 s of
+  the UI task spread over steps two seconds of stillness apart - and none
+  of it while PiXEL is behind another window. COLD is now 57 callbacks,
+  30.7 s of the UI task in 46.9 s (41, 18.9 s in 29.4 s before: the
+  difference is the write, moved out of the close).
+
+The wave-8 rule "never while the folder is on show" kept the write off a
+user BROWSING; the complete strip and two seconds of stillness say the user
+is not, and a step is no longer than the decodes the same gates already let
+start. **The pointer moving is activity too** (review-w8 E2): with PiXEL in
+front the timer reads `OSAPI_MOUSE` once a call and a pointer that moved
+since the last call counts as the user's, so a step never starts under a
+user who is pointing at the strip rather than clicking it.
+
+#### Long callbacks with PiXEL in front
+
+*(Withdrawn 2026-10-06 with the filmstrip, 106.21: the thumbnail engine,
+its store and `PIXEL.THC` are gone, and what follows is the record of what
+was built and measured. The hidden decode it describes is the slideshow's
+now, and only the slideshow's.)*
+
+Every step of the engine runs on the ONE UI task. A floppy access is ~0.4 s
+an `int 13h` and one a slice is the floor; what could be sliced is:
+
+- **A thumbnail's hidden decode reads its FIRST slot at the worker's first
+  wake**, not inside the step that starts it (the open's `px_pumpone` is
+  for an open's first rows, and nobody waits on a thumbnail's), and **one
+  slot a wake after that** (`px_pumpn` with `AL` = 2: one whole slot), where
+  106.21's wake filled both - a 32 KB read in one callback.
+- **The cache's steps lose their part fetch** (above).
+- What is NOT sliced, and why: a decode's start is the folder's walk, the
+  head and the decoder part's fetch (`FILE_GOTO`, read, `FILE_GOTO` back) -
+  the part must be here before HEAD can run, and HEAD's answer is what the
+  claims are sized by; its end fetches the FOLDER part to make the thumbnail
+  from the hidden master, which cannot be held across steps beside the
+  decode's claims. A visit is the walk to `SYSTEM/APPDATA` and back around
+  its reads. Each is one action already.
+
+**The worst callback of each kind, measured** (`pxthumb`'s COLD, the VGA XT, guest cycles from each callback's entry to its return): a **visit** of the cache (the header and the
+cards' entries) **1.98 s**; the open picture's thumbnail made from its master
+**2.23 s** (the FOLDER part fetched); a hidden decode's **start 2.17-2.23 s**
+(2.10-2.60 s in 106.25, its first slot now a wake of its own: **0.38-0.39 s**);
+its **end**, the thumbnail made, **1.12-2.42 s** - the worst callback in
+front, and the reason `pxthumb`'s ceiling stays 3 s; a **cache write step
+1.32-1.96 s** (the first, with the header's read, the 1.96).
+Behind another window nothing is begun and the longest callback is the
+free-memory field's look, **0.127 s** (40 callbacks, 0.39 s of the UI task in 20 s).
+
+#### PNG: inflate and the filters, again
+
+106.22 did the wave-3 review's first two proposals and declined the third;
+the profile still put **43%** of HOUSE.PNG's decode in inflate's literal
+path (~233 cycles a literal) and **18.5%** in Paeth (~250 a byte). The part
+(`apps/pixel/pxpng.asm`) now runs:
+
+- **The literal loop on ONE budget counter**: `BP` = the least of the
+  extraction's room, the window's room to its wrap and half the clean bytes
+  before the refill point, so a literal tests nothing but its count; the
+  table entry holds the code's length LESS 8, so one `add cl, ah` both steps
+  the position and branches; two literals a turn.
+- **A match inline**: the length and distance codes' long lookups and their
+  extra bits read in place, and the copy itself inline rather than called;
+  the stored and long block copies a word at a time.
+- **Paeth without pa, pb, pc**: with lo and hi the smaller and larger of a
+  and b, c at or above hi predicts lo, c at or below lo predicts hi, and
+  between them lo when 2(hi - c) <= c - lo - the same choice, Paeth's own
+  tie order kept; checked against every one of the 16,777,216 (a, b, c)
+  triples on the built loop, both phases. Two bytes a turn, as Sub, Up and
+  Average (now `lodsb`/`stosb`) do.
+
+| HOUSE.PNG (320x240 RGB) | 5150, CGA | XT, VGA |
+|---|---|---|
+| open, before -> after | 45.98 -> **39.80 s** | 48.35 -> **42.20 s** |
+| inflate, cycles a byte it writes | 344.7 -> **240.3** | 340.5 -> **239.1** |
+| BALLOONS.PNG (palette) open | 16.43 -> **15.24 s** | 20.98 -> **19.78 s** |
+
+By the 8088 model (106.22's method): HOUSE.PNG's decode 107.4 -> 81.6 M
+cycles, a byte of inflate 290 -> 213 model cycles, Paeth 251 -> 194, Average
+85 -> 74, Sub 57 -> 52. Every master is pixelsim's still - `pxdecode` on the
+machine, and the wave-3 review's harness on 24,000 generated and mutated
+PNGs and 60 large ones: 0 disagreements, 0 accesses outside their regions.
+The part is 11,525 -> **11,949** bytes (9,261 -> 9,536 packed), no scratch
+added. Not taken: 9-bit literal codes off the fast path (~1% of HOUSE.PNG
+and a loss on BALLOONS.PNG, whose literals are 43% 9-bit codes), and the
+literal table at offset 0 (a second segment register through all of
+inflate). The disk is still 11-12 s of HOUSE.PNG's open.
+
+#### Paint onto `apps/os88lzw.inc` (decision 11): the writer, not the reader
+
+The plan's rule was "only if byte-identical", and it is applied per half.
+**Paint's GIF WRITER is the include's encoder now**: three encoder options,
+each defaulting to what PiXEL assembles (its three parts are byte-identical
+before and after) - `LZW_EMAXC` 2,047 (Paint's writer clears at 11 bits),
+`LZW_ENARROW` (Paint's End code at the last string's width - giflib widens
+it when the next code has just reached a power of two, a trailing 00 on 2
+pictures in 6,000) and `LZW_EHSIZE` 3,271 (the hash in Paint's 16 KB
+claim). 12,353 of 12,353 encodes - 353 fixed pictures and 12,000 random ones,
+the real `paint.bin` under Unicorn before and after - are the same bytes;
+PAINT.O88 is +80 bytes, still 22 clusters; the small build is byte for byte
+the same; every `paint*` row passes. It costs a save 3% (flat pictures) to
+11% (noise) and ~10 ms a Clear (3,271 hash words zeroed where Paint zeroed
+18). **The READER stays Paint's**: it too decodes every fixture byte for
+byte (with a fourth option, `LZW_MAP`, Paint's palette map applied as a
+string enters the table) and faster - 184 cycles a pixel against 205 - but
+it is **308 bytes more**, PAINT.O88's 23rd cluster, and `apps720.img` is at
+713 of 713 (`make` refuses: "packages need 714 clusters"). It is §42.21.4's
+to take when that disk has room. (One difference it would also make: on 24
+of 3,000 fuzzed streams with no End code whose last byte holds the start of
+a code, Paint reads that code from bytes past the stream and the include
+stops at the last whole one.)
+
+#### The Navigator's frame, which had never been drawn
+
+The functional check found the Navigator's frame missing on all three
+adapters - "the well's pixels byte-identical at Fit, 67%, 100%, 200% and
+every pan". `px_s2t` and `px_s2tv` take a canvas offset to the thumbnail
+through the master: `px_mulx` makes the master's x in 16.16 (`BX:DX:AX`),
+and the result is that over the thumbnail's own 16.16 step - but since wave
+2 they divided `DX:AX`'s WHOLE part, 2^16 short, so every frame was ONE
+PIXEL at the thumbnail's top-left corner. Every gate counted the
+`OSAPI_GFX_XOR_RECT` it made (`pxdraw`: zoom in "xor 1"), and `pxdraw`'s
+identity held the one-pixel frame to a repaint's one-pixel frame. Fixed;
+the frame follows a zoom and a pan (`final/w9-cga-navframe.png`).
+
+#### Fixed from the wave-8 review
+
+- **A1** (BLOCKER) a disposal-3 frame's backup of 63,745..64,767 bytes - a
+  320 x 200 whole-screen frame is 64,000 - made a claim size whose 16-bit sum
+  carried and read **0 KB**, and ~63 KB were copied past the 1 KB claim. The
+  sum is 17 bits now: a 64,000-byte backup asks for 64 KB, which a segment
+  holds, and plays. `GA14.GIF` (pixcorpus) is that shape, and `pxanimemu`
+  lays a fence after every animation claim, starting from av_start's own 1
+  KB - the old part fails it ("a write past the animation's claim").
+- **A2** (MAJOR) a RELEASE that acts while a GIF plays: the press stopped
+  the frame job, a tick started it again, and the release's action - a
+  card's OK, the Rotate tool, the toolbar's Rotate, Save As's OK, the empty
+  canvas's Open - ran beside it (a palette edit set `[px_job]` over the
+  running job and PiXEL stayed busy for good; the Rotate tool was refused
+  "needs 9K; 241K"). `px_onup` stops the job first, as every other input
+  does; the timer starts or lets go no frame while a card is up or a press
+  is held; and an edit's still (`AV_TICK`) stops a running job before the
+  claim is freed, never under it. `pxdraw` clicks the Rotate tool while
+  BOUNCE.GIF plays and holds it to a turn made.
+- **A3** an abort was read as the end of the stream, so any input in a
+  frame job's first wait ended the pass (a looping GIF jumped to frame 0, a
+  play-once one stopped for good). A read refused by the cancel is the
+  cancel now (`PXD_ABORT`), in the walk, the global table's read and after a
+  frame's sub-blocks; the frame begins again from its start.
+- **A4** a frame with a 256-entry table of its own was **~5.8 s** of
+  `pa_mkmap` (256 x 256 distances) EVERY frame, never polling the cancel - so
+  every key waited for it. The map is now kept with the table, the
+  picture's serial and the palette's size it was made for, and a frame whose
+  three match reuses it (a frame's own copy of the same colours, or the
+  global table after a frame 0 with its own: the common shapes); an entry
+  that repeats the one before takes its map (the black padding); a candidate
+  is dropped the moment its partial sum passes the best; the cancel is
+  polled an entry at a time. By the reviewer's cycle harness: **3.0 s** the
+  first time, **2 ms** after.
+- **A5** Save As of a playing GIF left the frame job walking the NEW file at
+  the GIF's offsets: a save frees the animation (a saved file is one
+  picture). And the saved record's depth and packing are the written
+  file's - Image Info said `Packing None` for a GIF, PNG or PCX just saved
+  and `8-bit` for a PIX (the functional check's F2, the review's A5 MINOR).
+- **A6** the A key fetched the GIF part for any picture: `px_antog` asks
+  `[px_anim]` first.
+- **E1, E2, E4** above.
+- **N1** "Save changes? > Save" wrote an ANIMATED GIF back as one image
+  (2,327 bytes, ten frames -> 1,127, one). `PXR_KEEP` (a new record byte)
+  says the file holds what a master cannot - more frames (AV_INIT), a
+  transparent index (any GCE's), alpha or a tRNS (the PNG part) - and a Save
+  over such a file goes through Save As and its "Replace?".
+- **X1** a short `READ_AT` (a FAT chain shorter than the file's size) left a
+  next head's window over bytes no read had put there: `ph_more` answers
+  `cut short` when the read stops before the byte asked for, and an
+  in-memory file's head past its end does the same.
+- **X2** wording (above, 106.25): "a file read whole into memory", which a
+  32 KB-cluster volume's every file is.
+- **Image Info's two leftovers**: a PAL picture saved as PNG, GIF, BMP or
+  PCX reads the 256 entries those writers put in the file (it read the
+  source's count - "Own, 8" for a PCX); and a picture edited at a scale
+  reads its size at the FILE's scale (an 800 x 600 turned at 1/2 read 300 x
+  400 as if the file were that; 600 x 800 now - Copy Info likewise).
+- **N2** was the probe's: `tests/pxsyms.py`'s `instance()` matched a CLOSED
+  record whose region still held the image; it asks the record's state now.
+
+Two of the **wave-5 review's** last: **F15** a slide decoded beside the
+shown master took whatever scale memory left - so on the 640 KB machine
+large slides alternated, 1/1 then 1/2 then 1/1, every other one softer at
+Fit. A WINDOWED slide of any format now takes fast open's floor, the
+coarsest scale the canvas shows at Fit magnified by at most 4/3 (106.19's
+rule, which only a JPEG on an 8088 had), and `PXR_FAST` says so, so a zoom
+past it reads the file again finer; full screen's slides keep their own
+screen's choice. **F16** a hidden decode holds exactly §50.2's eight claims
+(the face, the shown master, the view, the store, the hidden master, the
+work claim, the ring, the decoder part), so a NINTH held while PiXEL is idle
+made every thumbnail refuse `PXD_MEM` and marked every name - silently. The
+ninth that ships is a shown GIF's animation claim (1 KB, held while it plays
+AND while it is stopped): no hidden decode begins while it is held (the
+cache's visits, the open picture's own thumbnail and the writes go on). Any
+other is caught where it bites: a hidden decode refused `PXD_MEM` while 64
+KB or more are free is the claims and not the bytes, so no name is marked,
+the thumbnails wait until the folder is walked again, and the toast says
+`Thumbnails wait: all claims in use` once. (Since the filmstrip was
+withdrawn, 106.21, there is no store and no idle decode: a windowed
+slideshow's hidden decode beside a shown GIF's animation claim is exactly
+eight, and fits.)
+
+And the **wave-7 review's F14**, which 106.25 named and did not fix: after a
+save had given the decoder part back, the next palette operation's plans
+fell to the UI task (a worker cannot fetch) - the 2.3 s search 106.24 had
+moved off it. `px_eshow` fetches the part on the UI task first now.
+
+Declined, with reasons: A6's torn frame on a Stop (the frame is redrawn
+whole when play resumes; a Save or an edit of a stopped animation takes the
+master as it stands, which is what was shown), the marquee XOR'd per frame,
+a pass's restart repainting the canvas whole (and so a looping GIF whose
+only later frame cannot be read restarting for ever, in front and playing), `av_wake`'s owed rect on its
+two failure paths (MINORs whose fixes cost resident bytes against no
+measured harm); X3 (an in-memory leg in `pxextraemu`, a NIT); E3 (a pending
+entry follows the drive, not the disk: its key makes a false hit
+improbable, and nothing but the cache is written).
+
+#### The functional check on the glass
+
+The repo's `functional-check` method on the build at 1a0cf801; the fixes
+above are then held on the machine by the rows named with them (`pxdraw`'s
+A2 and N1 legs, `pxsave`'s Image Info, `pxthumb`) and by screenshots of the
+Navigator's frame and the key card on the CGA and the Hercules. On VGA (QEMU) every feature:
+every gallery format and every fixture format opened (BOUNCE.GIF playing),
+zoom, Fit, Actual, pan by arrows, Hand and Navigator press, the three
+panels and the Histogram's channels, Prev / Next / Home / End and the
+filmstrip's pages and cards, the windowed slideshow, every full-screen mode
+(Mode X, 13h, the adaptive sixteen) and its exit to the desktop's palette,
+Invert / Flip / Rotate with their Undo pixel-identical, Save As in all five
+formats re-opened pixel-identical, "Save changes?" Save / Discard / Cancel
+on Next and on the close, play / stop by the menu and A, a document opened
+by double-click (and a second into a running PiXEL), and the key card. CGA
+and Hercules (MartyPC for Hercules: QEMU's relocated Hercules framebuffer
+is ordinary RAM PiXEL's claims land in) for the display-sensitive ones:
+every format dithered, the compact column's Tab, the strip, C160 /
+320x200x4 / 640x200 and 720x348 full screen, the animation, the card.
+**Three failures**: the Navigator's frame (above), Image Info after a save
+(A5), and the key card cut by the CGA's window - twelve lines of 12 pixels;
+it is ten now, A listed (`Play/Stop a GIF`). Screenshots:
+`/tmp/pixel-reports/final/`.
+
+#### The 86Box machines
+
+`make xt-pixel` - `vm/xt-weave`'s 640KB VGA XT (vm/xt on the `ibmxt86`
+board: the bend that machine already carries, since a 256KB XT holds no
+master worth showing) with `pixel360.img` in B: - and `make 386-pixel` -
+`vm/386dx` with `pixel.img`. Copies with `fdd_02_fn` and the uuid changed
+and nothing else; 86Box asserts nothing (docs/TESTING.md), so they are
+where a person looks, and every number here is MartyPC's.
+
+#### The standing budget
+
+PiXEL's rows are in PERFORMANCE.md Part 5 beside Paint's: the full repaint
+it is held against, an open per format and scale, pan, zoom, Fit, a panel,
+a status field, a strip page, Next and Prev, full screen per mode, an
+animation frame, a palette operation, Blur, Save BMP and PNG, the close and
+the longest callback. A full repaint reintroduced by any later change is a
+regression against one of those numbers.
+
+#### Resident
+
+Image **45,640** + bss **11,845** = **57,485** of 61,440, 3,955 to spare:
+**+314** on wave 8's 57,171, every byte a fix (F15's floor, F16's test and
+its toast among them) - the pointer's look (E2),
+`px_fpdrop` and `px_cfinal` and the kept part's test, the release's stop
+and the timer's gate (A2), the A key's guard, the thumbnail decode's
+first-slot and one-slot reads, `PXR_KEEP`'s two tests, the palette part's
+fetch in `px_eshow` (review-w7 F14); the bss is `[px_fkept]`, `[px_mxy]` and
+`PXR_KEEP` twice in each of the three records (`PXR_SZ` 50 -> 52). PIXEL.O88 is **121,340** bytes: the PNG part 11,971, the GIF
+part 13,629 (its map kept: 768 bytes of table), the HELP part 389.
+
+#### Tests
+
+- `pxthumb` (retired with the filmstrip, 106.21; its folder, slideshow and heap legs are `pxfolder`'s): COLD asserts the cache WRITTEN AHEAD (one write, nothing owed,
+  the part let go) and every callback under 3 s; CLOSE is now under 3 s
+  with no write of the floppy's at all.
+- `pxanimemu`: a fence after every animation claim, av_start's 1 KB first;
+  `GA14.GIF` among the 31 GIFs.
+- `pxdraw` / `pxdrawvga`: the Rotate tool clicked while BOUNCE.GIF plays
+  turns the picture and ends the animation.
+- `pxsave`: after each Save As, Image Info's depth and packing are the
+  written file's.
+- `pxdraw`: an N1 leg - File > Open on the edited BOUNCE.GIF asks "Save
+  changes?", and its Save is Save As's card, the file untouched.
+- `pxbench`: the JPEG breakdown's gate is the BLOCK (entropy and IDCT
+  together), not each alone - the IDCT is called from inside the block, so
+  where the UI task's disk reads land moves cycles between the two figures
+  (LAKE.JPG at 1/1 read 364 + 473 cycles a pixel against 300 + 533 with the
+  JPEG part byte for byte the same, the sum 837 against 833); each alone
+  over its old ceiling is still printed.
+- `tools/pixcorpus.py`: 454 fixtures (`GA14.GIF`).
+- `pxfsx`'s one wave-8 failure inside a shared soak: it failed once in four full runs here, on the 5150's
+CGA, all three modes alike - "59 pixels differ" between every exit's repaint
+and the ONE baseline picture `pxfsx` takes before its first F, and passed
+the other three and five more CGA-only runs. A baseline every comparison
+disagrees with identically is the baseline's: it was taken the moment the
+open went still, inside the status bar's five-second memory look, and every
+exit repaints the look that followed. `pxfsx` now takes it when two pictures
+a look apart agree, and says so when they did not - and in five runs alone
+afterwards it said so in every one, the pixels that moved the status bar's
+`Memory:` digits (the CGA's 368-390 x 165-171, the VGA's 464-486 x 475-481)
+and the menu bar's clock: the cause, seen. All five passed.
