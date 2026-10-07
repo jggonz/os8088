@@ -13,9 +13,10 @@
 ; the host does not include. What it can know is where the core BEGINS, and
 ; the first bytes of the core are this table.
 ;
-; `jmp near` IS SPELLED OUT, and it has to be. nasm shrinks a resolved short
-; jump, which would make the entries two bytes instead of three and move every
-; slot after the first backward branch - in a build where the two halves are
+; `jmp strict near` IS SPELLED OUT, and it has to be. nasm shrinks a resolved
+; short jump (nasm 3.01 shrinks one written `jmp near` too; only `strict`
+; stops it), which would make the entries two bytes instead of three and move
+; every slot after the first short one - in a build where the two halves are
 ; assembled separately and the host would simply call the wrong routine.
 ; `kerndos/kdos.asm`'s fixed header carries the same instruction for the same
 ; reason.
@@ -130,7 +131,7 @@ CORE_BSS_AT equ CORE_ORG + CORE_MAX
 ; be still fits it.
 DVOL_CAP    equ 8
 
-DOSC_STRIDE equ 3               ; a `jmp near` - see the header
+DOSC_STRIDE equ 3               ; a `jmp strict near` - see the header
 
 %ifdef DOS_EXTCORE
 ; --- A HOST: every name becomes its slot ------------------------------------
@@ -175,7 +176,7 @@ DOSC_NDAT equ DOSC_DN
 DOSC_TAB:
     %assign DOSC_N 0
     %macro DOSC_E 1
-        jmp near %1
+        jmp strict near %1
         %assign DOSC_N DOSC_N + 1
     %endmacro
     %macro DOSC_D 1

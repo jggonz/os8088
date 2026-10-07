@@ -304,21 +304,11 @@ PT_GD_PREF  equ 0                   ; read: prefix[4096] words
 PT_GD_SUFF  equ 8192                ; read: suffix[4096] bytes
 PT_GD_STK   equ 12288               ; read: the output stack, 4096 bytes
 PT_GD_END   equ 16384
-PT_GE_CHILD equ 0                   ; write: child[2048] words, 0xFFFF = none
-PT_GE_SIB   equ 4096                ; write: next-sibling[2048] words
-PT_GE_SUF   equ 8192                ; write: suffix[2048] bytes
-PT_GE_END   equ 10240
-PT_GE_MAXC  equ 2047                ; the writer's code ceiling: 11 bits, minus
-                                    ; one so the READER never crosses 2048 either
-                                    ; (see pt_gadd - its table runs one behind)
 PT_GDIM_MAX equ 4096                ; a GIF bigger than this in either axis is
                                     ; refused, not decoded row by row to nowhere
 PT_LZW_KB   equ 16                  ; the claim both directions run in
 %if PT_GD_END > PT_LZW_KB * 1024
 %error "the GIF read tables no longer fit PT_LZW_KB"
-%endif
-%if PT_GE_END > PT_LZW_KB * 1024
-%error "the GIF write tables no longer fit PT_LZW_KB"
 %endif
 
 ; --- canvas geometry -----------------------------------------------------------
@@ -1545,7 +1535,8 @@ pt_free_undo:
 ;
 ; Taken at the top of a GIF and released at the bottom, so a Paint that is not
 ; converting a GIF holds none of it. 16KB is the READ direction's need; the
-; write direction uses 10KB of the same block.
+; write direction is apps/os88lzw.inc's encoder, whose hash fits the same
+; block (LZW_EHSIZE at pt_genc).
 %ifdef PTF_CLIP
 ; -----------------------------------------------------------------------------
 %ifdef PTF_GIF
@@ -15043,9 +15034,10 @@ pt_setext:
 ;   READ   the staged file is in the undo image, exactly as the BMP reader's is.
 ;          prefix[4096] words + suffix[4096] bytes + a 4096-byte output stack
 ;          fill the clipboard's reserved floor to the byte.
-;   WRITE  child/sibling/suffix for 2048 codes (10KB) go in the clipboard, the
-;          GIF being built goes in the undo image, and the canvas is read one
-;          row at a time into pt_line.
+;   WRITE  apps/os88lzw.inc's encoder (PIXEL-PLAN decision 11, SPEC.md
+;          106.24): its hash goes in the same claim, the GIF being built in
+;          the staging claim, and the canvas is read one row at a time into
+;          pt_line.
 ;
 ; What decides those placements is that DS must stay on the kernel segment for
 ; the bss, so ES is the only far pointer there is and no inner loop may need
@@ -15053,10 +15045,11 @@ pt_setext:
 ; back; the writer's output goes through a 255-byte block in bss, flushed once
 ; per GIF sub-block - which is the shape the format wants anyway.
 ;
-; The writer stops growing codes at 11 bits rather than the format's 12. That
-; halves its tables and costs a Clear code every 2030 strings, which for
-; flat-shaded drawings is nothing. The READER is full 12-bit: it has to take
-; whatever a host tool wrote.
+; The writer stops growing codes at 11 bits rather than the format's 12
+; (LZW_EMAXC = 2047). That costs a Clear code every 2029 strings, which for
+; flat-shaded drawings is nothing, and it is what every GIF Paint has ever
+; written looks like - so it is what it still writes, to the byte. The READER
+; is full 12-bit: it has to take whatever a host tool wrote.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -15970,180 +15963,11 @@ pt_gflush:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_gput - one code into the bit stream, [pt_gcsize] bits wide
-; in:  AX = the code; out: nothing; preserves all registers
-;
-; Up to 7 pending bits plus a 12-bit code is 19, so the accumulator is a word
-; and a spill word shifted down as a pair - two iterations at most.
-; -----------------------------------------------------------------------------
-pt_gput:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov dx, ax                      ; DX = the code
-    xor ch, ch
-    mov cl, [pt_gaccn]
-    mov ax, dx
-    shl ax, cl                      ; the low sixteen bits of code << pending
-    or ax, [pt_gacc]
-    mov bx, dx
-    neg cl
-    add cl, 16
-    shr bx, cl                      ; and whatever spilled past them
-    mov cl, [pt_gaccn]
-    add cl, [pt_gcsize]             ; CL = bits now held
-.byte:
-    cmp cl, 8
-    jb .rest
-    push cx
-    call pt_gbo                     ; AL goes out
-    pop cx
-    mov al, ah                      ; BX:AX >>= 8
-    mov ah, bl
-    mov bl, bh
-    mov bh, 0
-    sub cl, 8
-    jmp short .byte
-.rest:
-    mov [pt_gacc], ax
-    mov [pt_gaccn], cl
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; pt_gtclr - the writer's roots back to childless
-; out: nothing; preserves all registers
-;
-; Only the eighteen initial codes need clearing, however full the table got:
-; every code above them has its child word written when it is created. That is
-; what makes a Clear cheap enough to do as often as an 11-bit ceiling asks for.
-; -----------------------------------------------------------------------------
-pt_gtclr:
-    push ax
-    push bx
-    push cx
-    xor bx, bx
-    mov cx, 18
-    mov ax, 0xFFFF
-.z:
-    mov [es:bx+PT_GE_CHILD], ax
-    inc bx
-    inc bx
-    loop .z
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; pt_gfind - the child of [pt_gent] whose suffix is BL
-; in:  BL = the suffix, ES = the tables
-; out: CF=0 with AX = that code, CF=1 if there is none; preserves all others
-;
-; A sibling chain, not a hash table: with a 4-bit minimum code size a node has
-; at most sixteen children, so the walk is bounded by sixteen byte compares and
-; needs no probe sequence, no load factor and no third array of codes.
-; -----------------------------------------------------------------------------
-pt_gfind:
-    push bx
-    push dx
-    mov dl, bl
-    mov bx, [pt_gent]
-    add bx, bx
-    mov ax, [es:bx+PT_GE_CHILD]
-.walk:
-    cmp ax, 0xFFFF
-    je .none
-    mov bx, ax
-    cmp [es:bx+PT_GE_SUF], dl
-    je .found
-    add bx, bx
-    mov ax, [es:bx+PT_GE_SIB]
-    jmp short .walk
-.found:
-    pop dx
-    pop bx
-    clc
-    ret
-.none:
-    pop dx
-    pop bx
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; pt_gadd - give [pt_gent] a child for suffix BL, or start the table over
-; in:  BL = the suffix, ES = the tables
-; out: nothing; preserves all registers
-;
-; The one place where writing and reading LZW are NOT mirror images, and the
-; only place it matters. A writer defines its new string as it emits the code
-; before it; a reader cannot define that string until it has seen the code
-; AFTER it (which is what the KwKwK case in pt_gdec covers). So the reader's
-; table is permanently one entry behind the writer's, and the two rules that
-; decide the code WIDTH have to be off by one to compensate: the writer widens
-; when free passes 1<<size, the reader when free reaches it. Both then widen
-; before the same code, which is the only thing that has to be true.
-;
-; The same offset is why PT_GE_MAXC is 2047 and not 2048: the writer must Clear
-; one string early, or the reader's trailing entry lands on 2048 and it widens
-; to twelve bits for a Clear code the writer emitted in eleven. Verified by
-; round-tripping flat, banded, striped and pure-noise pictures through a host
-; decoder - noise is what fills the table fast enough to reach a Clear at all.
-; -----------------------------------------------------------------------------
-pt_gadd:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    mov al, bl                      ; AL = the suffix, BX is about to be an index
-    mov di, [pt_gfree]
-    cmp di, PT_GE_MAXC
-    jae .full
-    mov bx, di
-    mov [es:bx+PT_GE_SUF], al
-    mov si, di
-    add si, si
-    mov word [es:si+PT_GE_CHILD], 0xFFFF
-    mov bx, [pt_gent]
-    add bx, bx
-    mov cx, [es:bx+PT_GE_CHILD]
-    mov [es:si+PT_GE_SIB], cx       ; the parent's old first child...
-    mov [es:bx+PT_GE_CHILD], di     ; ...now hangs off us
-    inc di
-    mov [pt_gfree], di
-    cmp byte [pt_gcsize], 12
-    jae .out
-    xor ch, ch
-    mov cl, [pt_gcsize]
-    mov ax, 1
-    shl ax, cl
-    cmp di, ax                      ; STRICTLY greater: see the note above
-    jbe .out
-    inc byte [pt_gcsize]
-    jmp short .out
-.full:
-    mov ax, 16                      ; Clear, and everything starts again
-    call pt_gput
-    call pt_gtclr
-    mov word [pt_gfree], 18
-    mov byte [pt_gcsize], 5
-.out:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; pt_genc - the writer's LZW loop, one canvas row at a time
 ; out: nothing; preserves all registers
+;
+; The encoder is apps/os88lzw.inc's (SPEC.md 106.24); every code byte it
+; makes goes through pt_gbo, which stages GIF's 255-byte sub-blocks.
 ; -----------------------------------------------------------------------------
 pt_genc:
     push ax
@@ -16152,70 +15976,30 @@ pt_genc:
     push dx
     push si
     push di
+    push bp
     push es
     mov ax, [pt_lzwseg]
     mov es, ax                      ; the tables, for the whole loop
-    xor ax, ax                      ; ...and the writer's, the same way
-    mov [pt_gbn], al
-    mov [pt_gacc], ax
-    mov [pt_gaccn], al
-    mov ax, 18
-    mov [pt_gfree], ax
-    mov al, 5
-    mov [pt_gcsize], al
-    call pt_gtclr
-    mov word [pt_gent], 0xFFFF
-    mov ax, 16                      ; a leading Clear, as every writer emits
-    call pt_gput
+    mov byte [pt_gbn], 0
+    mov al, 4                       ; LZW minimum code size: sixteen colours
+    call lzw_enc_init
     xor di, di
 .row:
     cmp di, [pt_ch]
     jae .last
     call pt_line_get
-    xor si, si
-.px:
-    cmp si, [pt_cw]
-    jae .nextrow
-    xor bh, bh
-    mov bl, [pt_line+si]
-    and bl, 0x0F
-    cmp word [pt_gent], 0xFFFF
-    jne .have
-    mov [pt_gent], bx               ; the picture's first pixel
-    jmp short .adv
-.have:
-    call pt_gfind
-    jc .miss
-    mov [pt_gent], ax               ; the string grows by one
-    jmp short .adv
-.miss:
-    mov ax, [pt_gent]               ; the longest match goes out...
-    call pt_gput
-    call pt_gadd                    ; ...and gains a child for this pixel
-    mov [pt_gent], bx
-.adv:
-    inc si
-    jmp short .px
-.nextrow:
+    push di
+    mov si, pt_line
+    mov cx, [pt_cw]
+    call lzw_enc_run
+    pop di
     inc di
     jmp short .row
 .last:
-    cmp word [pt_gent], 0xFFFF
-    je .eoi
-    mov ax, [pt_gent]
-    call pt_gput
-.eoi:
-    mov ax, 17                      ; End Of Information
-    call pt_gput
-    cmp byte [pt_gaccn], 0          ; the last partial byte...
-    je .blk
-    mov al, [pt_gacc]
-    call pt_gbo
-    mov word [pt_gacc], 0
-    mov byte [pt_gaccn], 0
-.blk:
-    call pt_gflush                  ; ...and the block holding it
+    call lzw_enc_end
+    call pt_gflush                  ; the block holding the last bytes
     pop es
+    pop bp
     pop di
     pop si
     pop dx
@@ -16223,6 +16007,23 @@ pt_genc:
     pop bx
     pop ax
     ret
+
+%define LZW_NODECODE                ; the READER is still pt_gdec (SPEC.md
+                                    ; 42.21.4 says why)
+%define LZW_ENCODE
+%define LZW_PUTB pt_gbo
+%define LZW_EMAXC 2047              ; eleven-bit codes, a Clear every 2,029
+                                    ; strings: what Paint has always written
+%define LZW_ENARROW 1               ; ...and its End code as wide as the last
+                                    ; string, which is one bit short when the
+                                    ; table ends on a power of two
+%define LZW_EHSIZE 3271             ; a prime past every (c << 4) ^ prefix of a
+                                    ; 16-colour picture under 2,047 codes, so
+                                    ; the hash fits PT_LZW_KB
+%include "os88lzw.inc"
+%if LZW_EKB > PT_LZW_KB
+%error "the shared LZW encoder's tables no longer fit PT_LZW_KB"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; pt_gif_out - write the canvas as a GIF under the name in SI
@@ -17118,9 +16919,6 @@ pt_ic_text:
     PTBYTE pt_gilace                ; non-zero if interlaced
     PTBYTE pt_gdone                 ; every row placed
     PTBYTE pt_ghavp                 ; a colour table was found
-    PTWORD pt_gent                  ; the writer's longest match so far
-    PTWORD pt_gacc                  ; its bit accumulator...
-    PTBYTE pt_gaccn                 ; ...and how many bits are in it
     PTWORD pt_gout                  ; the write cursor in the undo image
     PTWORD pt_gcap                  ; and what it may not pass
     PTBYTE pt_govf                  ; it tried to

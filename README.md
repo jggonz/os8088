@@ -161,6 +161,11 @@ make 286-525-cword#   -z -word -cword -runcpm -c64 -weave -loom -all. The
 make 286-525-all  #   ONLY machines that read a 1.2MB disk (an XT cannot)
 make redlinedisk # REDLINE CPU/graphics lab, four disk sizes; R runs, S saves
 make redline-profile # record the cycle-accurate 4.77 MHz MartyPC reference
+make pixeldisk # PiXEL, the image viewer, with its sample gallery in PICTURES/,
+              # four disk sizes
+make xt-pixel # 86Box: the 4.77MHz 640KB VGA XT with the 360KB pixeldisk in
+              # B: (double-click PIXEL.O88, or a picture in PICTURES/)
+make 386-pixel # 86Box: the 386DX/25 with the 1.44MB pixeldisk in B:
 make allapps  # every program on a set of floppies - both word processors,
               # Frotz, RunCPM, the Commodore 64, PaccMan and the Weave
               # family included - apps-all-1.img, -2.img, ... at 1.44MB and
@@ -528,6 +533,22 @@ three graphics tiers in a canvas that doubles in height when it fits.
 VGA bars use color and share a highest-score-plus-5x scale; CGA/Hercules/VGA have measured
 4.77 MHz references. R runs and S saves `REDLINE.TXT`. See [the research, CPU/MHz detection limits
 and reproducible baseline](docs/REDLINE.md).
+
+**PiXEL** is the image viewer and editor, laid out like a modern photo tool -
+a toolbar, a tool column, the canvas, Navigator / Histogram / Image Info
+panels and a status bar - on VGA, Hercules and CGA alike (SPEC.md
+106, [the design record](docs/plans/PIXEL-PLAN.md)). It opens JPEG (baseline
+and progressive, decoded straight to 1/2, 1/4 or 1/8 when memory or speed
+asks), PNG, GIF (and plays an animated one), BMP, PCX, TGA, PNM, TIFF, ICO,
+IFF/LBM, MacPaint and os8088's own PIX, dithering them to the desktop's 16
+or 2 colours, and shows them full screen in more where the card has them -
+256 on a VGA, 16 adaptive, the CGA's four and its 160x100x16. Prev/Next walk
+the folder, with a slideshow. It edits - six tools, palette
+and pixel operations, undo - and saves as BMP, PCX, GIF, PNG or PIX. Every
+heavy decoder is a compressed part loaded only when a picture needs it, and
+the whole thing is priced against a 4.77 MHz XT (SPEC.md 106.26 has the
+numbers). `make pixeldisk` builds its floppy with a gallery of original
+sample pictures; `make xt-pixel` / `make 386-pixel` boot it on 86Box.
 
 Programs live on a **FAT12** software floppy (drive B:) — and, once os8088 is
 installed on one, on a hard-disk partition. Either way it is an ordinary

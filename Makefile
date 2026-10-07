@@ -264,6 +264,12 @@ VM386PACCMAN := $(CURDIR)/vm/386-paccman
 # (tests/pxs256.py, SPEC.md 97.9)
 VMXTPXS := $(CURDIR)/vm/xt-pixelstein
 VMXTPXSHERC := $(CURDIR)/vm/xt-pixelstein-herc
+# The PiXEL machines (SPEC.md 106.26): vm/xt-weave's 640KB VGA XT (vm/xt on
+# the ibmxt86 board, the bend that machine already carries: 256KB holds no
+# master worth showing) and vm/386dx, each with only B: - the pixeldisk its
+# drive takes - and the uuid changed
+VMXTPIXEL := $(CURDIR)/vm/xt-pixel
+VM386PIXEL := $(CURDIR)/vm/386-pixel
 
 # The RUNCPM machines (SPEC.md 74.5, 74.6): one per FLOPPY GEOMETRY, because
 # the three RUNCPM disks do not carry the same software and the machines that
@@ -2049,10 +2055,10 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         scribe scribedisk \
         cc-note chello covl pkgrun pkgbig pkgfmt cword cworddisk 386-c-word runcpm runcpmdisk \
         paccman paccmandisk pmcbandbench xt-paccman 386-paccman \
-        xt-pixelstein xt-pixelstein-herc \
+        xt-pixelstein xt-pixelstein-herc xt-pixel 386-pixel \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
-        allapps usb iso live burn rcbandbench \
+        allapps usb usb-emu iso live burn rcbandbench \
         paccman paccmandisk pmcbandbench xt-paccman \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         apple2 apple2disk apple2rom a2bandbench a2memtest a2cputest 386-apple2 \
@@ -6267,7 +6273,7 @@ $(BUILD)/fractal.o88: $(BUILD)/fractal.bin tools/os88pkg.py $(PKGZSTAMP)
 # memory for its canvas (int 12h decides; a smaller machine gets a notice
 # window instead), so `make run-640` is the way to exercise it.
 $(BUILD)/paint.bin: apps/paint/paint.asm apps/os88api.inc apps/os88ui.inc \
-                    apps/os88alt.inc | $(BUILD)
+                    apps/os88alt.inc apps/os88lzw.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/paint/paint.asm
 	@echo "paint:  $(call FILESIZE,$@) bytes"
 
@@ -7629,6 +7635,37 @@ $(BUILD)/msegz360.img: $(BUILD)/msegzd/MSEG.O88 $(BUILD)/msegbig.o88 \
 
 .PHONY: msegz
 msegz: $(BUILD)/msegz.img $(BUILD)/msegz360.img
+
+# ...AND WITH ITS LAZY PART COMPRESSED, on a disk whose CLUSTERS ARE 8KB
+# (SPEC.md 88.10.4.1, 20.12.7.4). `-DMSEG_LZC` puts OP_COMP on part 6 and on
+# nothing else, and `--fatcap 1` raises the 1.44MB disk's sectors-per-cluster
+# until its FAT is one sector - which is 16 - so the fetch's read starts up to
+# 7.5KB BELOW the part, the way it does by up to 31.5KB on a FAT16 hard disk.
+# tests/mseglzslack.py measures the claim the fetch leaves behind: the part's
+# own length rounded to a KB, at the part's own segment, and none of that
+# head slack in front of it.
+$(BUILD)/mseglz.bin: tests/multiseg/mseg.asm apps/os88api.inc \
+                     apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DMSEG_LZC -I apps/ -I tests/multiseg/ -o $@ $<
+
+$(BUILD)/mseglzd/MSEG.O88: $(BUILD)/mseglz.bin $(BUILD)/msegp0.bin \
+                           $(BUILD)/msegp1.bin $(BUILD)/msegp2.bin \
+                           $(BUILD)/msegp3.bin $(BUILD)/msegp4.bin \
+                           tools/os88pkg.py tools/os88lz.py apps/os88parts.inc \
+                           apps/os88partsbody.inc apps/os88rseq.inc
+	@mkdir -p $(BUILD)/mseglzd
+	python3 tools/os88pkg.py $(BUILD)/mseglz.bin -o $@ \
+		--part-compress lz4 \
+		--part $(BUILD)/msegp0.bin --part $(BUILD)/msegp1.bin \
+		--part $(BUILD)/msegp2.bin --part $(BUILD)/msegp3.bin \
+		--part $(BUILD)/msegp4.bin
+
+$(BUILD)/mseglz.img: $(BUILD)/mseglzd/MSEG.O88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 --fatcap 1 $<
+	@python3 tools/os88disk.py --verify $@
+
+.PHONY: mseglz
+mseglz: $(BUILD)/mseglz.img
 
 # --- MSEGW: the same package with a carve PAST 64KB (SPEC.md 20.12.11) ------
 # Parts 1 and 2 padded by tests/multiseg/mkwide.py: part 1 (plain) with noise,
@@ -10686,14 +10723,20 @@ SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
              $(BUILD)/thewire.o88 \
              $(BUILD)/tracker.o88 \
              $(BUILD)/audio.o88 $(BUILD)/sheet.o88 $(BUILD)/video.o88 \
-             $(BUILD)/midirack.o88
+             $(BUILD)/midirack.o88 $(BUILD)/pixel.o88
 # MIDIRACK (SPEC.md 105) is the AUDIO row's omission three times over: its FM
 # and Sound Blaster outputs are SOUND.DRV's and kern_small loads no driver,
 # and its speaker synth is an FSXF_RATE bracket, kern_big's alone. What would
 # be left is the one-voice tone, and a MIDI player that can only whistle the
 # melody is not the program the disk would be offering. Its songs are not in
 # $(APPS_DATA), so they leave the small disks with it.
-# VIDEO (SPEC.md 98.3) is a REQUIREMENT omission of the SOUND rows' kind: it
+# PIXEL (SPEC.md 106.7) is a REQUIREMENT omission of SHEET's kind: a picture
+# decodes into an 8-bit master of W x H bytes (PIXEL-PLAN 2.1) - 75KB at half
+# of a 640x480 photo, 19KB at an eighth - beside a 32KB inflate window or a
+# JPEG decoder's claims, against a 52.5KB arena whose largest run is
+# 17.5-20KB once the caches are shed (SKIES' and PIXELSTEIN's ground below).
+# It would open a window and then refuse every picture it was shown.
+## VIDEO (SPEC.md 98.3) is a REQUIREMENT omission of the SOUND rows' kind: it
 # plays through FSXF_RATE (53.2.2) and OSAPI_FILE_READ_SEQ (18.4.8), and both
 # are kern_big's alone by the owner's decision (VIDEO-PLAN 4). On kern_small
 # the bracket refuses the flag and the read answers FERR_NAME, so the package
@@ -11780,7 +11823,7 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
-              $(BUILD)/video.o88 $(BUILD)/midirack.o88
+              $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88
 # MODPLUG.O88 IS RETIRED too (SPEC.md 56.15): Tracker's windowed face
 # (SPEC.md 45.21) is ModPlug's player done to the tree's standards, with the
 # playlist, the Repeat modes and the per-adapter faces carried over, so two
@@ -11964,7 +12007,8 @@ APPS_DATA_360   := $(filter-out $(MEDIA_DISK_DATA),$(APPS_DATA))
 # is a subject the user chose, and the faces are on A: either way.
 OFFICE_DATA := apps/texpad/PAPER.TEX apps/texpad/GUIDE.TEX \
                apps/sheet/SALES.SLK apps/artful/WRITING.MD \
-               $(BUILD)/WELCOME.DOC $(BUILD)/SAMPLE.BMP
+               $(BUILD)/WELCOME.DOC $(BUILD)/SAMPLE.BMP \
+               apps/pixel/samples/LAKE.JPG
 NETWORK_DATA := apps/browser/browser.htm
 
 # ...UNLESS THE DISK IS COMPRESSED, and this is the single most visible thing
@@ -12016,7 +12060,11 @@ MEDIA_DISK_DATA := $(ZDATA)/BEVERLY.MOD
 # to them, so a list defined only in the plain arm ships uncompressed
 # alongside eleven packed files and nothing says so.
 OFFICE_DATA  := $(ZDATA)/PAPER.TEX $(ZDATA)/GUIDE.TEX $(ZDATA)/SALES.SLK \
-                $(ZDATA)/WRITING.MD $(ZDATA)/WELCOME.DOC $(ZDATA)/SAMPLE.BMP
+                $(ZDATA)/WRITING.MD $(ZDATA)/WELCOME.DOC $(ZDATA)/SAMPLE.BMP \
+                apps/pixel/samples/LAKE.JPG
+# ...the picture PLAIN in both arms, deliberately: a JPEG is compressed
+# already, cz_wrap would refuse it as unshrinkable, and PiXEL reads it in
+# chunks, which SPEC.md 20.14.3 makes the reason a file must not be wrapped
 NETWORK_DATA := $(ZDATA)/BROWSER.HTM
 endif
 
@@ -12046,8 +12094,10 @@ MIDISONGARGS := $(addprefix MEDIA/MIDI:,$(MIDISONGS))
 MIDISONGARGS720 := $(addprefix MEDIA/MIDI:,$(MIDISONGS720))
 ifneq ($(PKGZ),)
 MRGFX := $(ZDATA)/MIDIRACK.GFX
+PXGFX := $(ZDATA)/PIXEL.GFX
 else
 MRGFX := $(BUILD)/MIDIRACK.GFX
+PXGFX := $(BUILD)/PIXEL.GFX
 endif
 
 $(ZDATA)/MIDIRACK.GFX: $(BUILD)/MIDIRACK.GFX tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
@@ -12111,8 +12161,9 @@ $(ZDATA)/SAMPLE.BMP: $(BUILD)/SAMPLE.BMP tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
 # two .TEX files $(APPS_DATA) already names and the welcome document, which
 # is in WORD/ beside the program that opens it and would be a second copy
 # here. What is left is SALES.SLK (Sheet's, and CHART'S ONLY LAUNCH PATH -
-# it declares no association and File > Open is all it has), WRITING.MD and
-# SAMPLE.BMP. The %WELCOME.DOC pattern matches $(BUILD)/ and $(ZDATA)/ alike,
+# it declares no association and File > Open is all it has), WRITING.MD,
+# SAMPLE.BMP and LAKE.JPG (PiXEL's, SPEC.md 106.7 - so the live media's
+# MEDIA/ has a picture for it too). The %WELCOME.DOC pattern matches $(BUILD)/ and $(ZDATA)/ alike,
 # so this line is right in the plain arm and the packed one without being
 # written twice - which is the defect the PKGZ block above carries a whole
 # paragraph about.
@@ -12172,7 +12223,7 @@ os88cz: $(BUILD)/os88cz.com
 .PHONY: os88cz
 
 APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
-        $(APPS_DOSCZ) $(MIDISONGS) $(MRGFX)
+        $(APPS_DOSCZ) $(MIDISONGS) $(MRGFX) $(PXGFX)
 # ...and the 360KB disk's list, which is that one less what the media disk
 # carries. Kept as its own variable rather than reusing $(APPS): a rule whose
 # prerequisites name a file that is not on the disk it builds is a dependency
@@ -12243,12 +12294,20 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
 #     office one. Every other geometry carries the full list, and
 #     `make smallapps` is untouched.
 #
+# --- AND PIXEL IS NOT ON apps360.img (SPEC.md 106.7; 24.6.1's dated decision,
+#     taken 2026-10-02 with the plan - docs/plans/PIXEL-PLAN.md decision 12).
+#     That disk had 25 of its 354 clusters free and PiXEL is ~16 of them on
+#     the day it arrives, growing with every decoder wave; a viewer is also a
+#     program whose subject is FILES, and on this geometry the files are
+#     elsewhere. It rides office360.img with a sample picture, and its own
+#     pixeldisk at 360KB with a gallery subset. Remade, like every row here,
+#     the next time this geometry runs out.
 #     MIDIRACK IS NOT CURATED ONTO IT EITHER (SPEC.md 105.10, 24.6.1's rule,
 #     dated 2026-10-02): that disk had 12 clusters spare and the player with
 #     its songs is ~50. It rides the MEDIA DISK instead (MEDIAARGS360) - the
 #     floppy whose subject is music already - at its root, songs in MEDIA/MIDI.
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
-                    $(BUILD)/midirack.o88,$(APPS_TOOLS))
+                    $(BUILD)/midirack.o88 $(BUILD)/pixel.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
@@ -12267,7 +12326,7 @@ APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(AP
 # taking a value in the MIDDLE of a positional list stops the list being
 # collected, so os88disk.py answered "unrecognized arguments: SYSTEM/DOS:..."
 # for the packages that followed it.
-APPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(MRGFX)) \
+APPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(MRGFX) $(PXGFX)) \
             $(addprefix GAMES:,$(APPS_GAMES)) \
             $(addprefix MEDIA:,$(APPS_DATA)) $(LOGOVIDARG) \
             $(MIDISONGARGS) \
@@ -12278,12 +12337,22 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(MRGFX)) \
 # and WITHOUT MIDIRACK.GFX (SPEC.md 105.10): the pictures are 2 clusters and
 # the disk had 3 - a VGA machine booting it draws the transport's buttons in
 # code, which is a complete face and not a broken one
+#
+# --- AND 720KB LEAVES PIXEL OFF (SPEC.md 106.7; 24.6.1's rule, the same dated
+#     decision as the 360KB filter above, 2026-10-02). apps720.img had 37 of
+#     713 clusters free and the decoders to come are tens of KB; the 720KB
+#     pixeldisk carries PiXEL and eight of the gallery's nine pictures. The
+#     warning above binds it: the prerequisites ($(APPS720)) and the recipe
+#     ($(APPSARGS720)) are filtered together or the private-tree build names a
+#     file nothing made.
 # ...AND WITHOUT DRMARCO (SPEC.md 24.6.1's rule, the owner's decision of
 # 2026-10-04, "for now"): main's own 720KB disk built at 713 of 713 clusters
 # after MIDIRack, and elendilon's OS88CZ.COM crossed a cluster on top of it.
 # DrMarco is the package and its three front screens, and its own disk
 # (`make drmarcodisk`) and every other geometry's apps disk still carry it.
+APPS720 := $(filter-out $(BUILD)/pixel.o88 $(PXGFX),$(APPS))
 APPSARGS720 := $(filter-out $(MIDISONGARGS) APPS:$(MRGFX) \
+                 APPS:$(BUILD)/pixel.o88 APPS:$(PXGFX) \
                  $(addprefix GAMES:,$(DM_SHIP)),$(APPSARGS))
 APPSARGS720 := $(filter-out $(APPDATAFOLDER),$(APPSARGS720)) \
                $(MIDISONGARGS720) $(APPDATAFOLDER)
@@ -12325,7 +12394,7 @@ $(APPSIMG): $(APPS) $(LOGOVID) tools/os88disk.py
 $(APPSIMG120): $(APPS) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS)
 
-$(APPSIMG720): $(APPS) $(LOGOVID) tools/os88disk.py
+$(APPSIMG720): $(APPS720) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(APPSARGS720)
 
 $(APPSIMG360): $(APPS360) tools/os88disk.py
@@ -12402,11 +12471,17 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) $(BUILD)/midirack.o88 \
 # spreadsheet on it wants next - and NOTEPAD is deliberately NOT (the owner's
 # call): ArtfulType and TeXPad and Word are three writers already, and a
 # fourth that is none of them is the row this disk would drop first.
+#
+# PIXEL rides here too (SPEC.md 106.7): the 360KB machine's home for it, off
+# apps360.img by the dated decision at APPS_TOOLS_360, with LAKE.JPG in
+# MEDIA/ as its one sample (24.6.2) - the picture its File dialog opens on,
+# and the gallery's smallest (18KB, greyscale): VACATION.JPG would have been
+# 85 of this disk's 181 free clusters.
 OFFICE_PKGS := $(BUILD)/artful.o88 $(BUILD)/calc.o88 $(BUILD)/chart.o88 \
                $(BUILD)/fontview.o88 $(BUILD)/paint.o88 $(BUILD)/sheet.o88 \
-               $(BUILD)/texpad.o88 $(BUILD)/word.o88
-OFFICE360 := $(OFFICE_PKGS) $(OFFICE_DATA)
-OFFICEARGS360 := $(OFFICE_PKGS) \
+               $(BUILD)/texpad.o88 $(BUILD)/word.o88 $(BUILD)/pixel.o88
+OFFICE360 := $(OFFICE_PKGS) $(PXGFX) $(OFFICE_DATA)
+OFFICEARGS360 := $(OFFICE_PKGS) $(PXGFX) \
                  $(addprefix MEDIA:,$(OFFICE_DATA)) \
                  $(MEDIAFOLDER) $(APPDATAFOLDER)
 
@@ -12634,7 +12709,7 @@ ALLAPPS := $(ALLAPPSFILES) $(BUILD)/runcpm-src.stamp tools/getruncpm.py
 # priced with it; the LOOM=32 directory slots below are priced too.
 
 ALLAPPSARGS := APPS:$(BUILD)/redline.o88 $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
-                                 $(BUILD)/frotz.o88 $(MRGFX) \
+                                 $(BUILD)/frotz.o88 $(MRGFX) $(PXGFX) \
                                  $(BUILD)/MIDIRACK.BNK) \
                $(addprefix GAMES:,$(APPS_GAMES)) \
                $(addprefix MEDIA:,$(APPS_DATA)) \
@@ -12759,7 +12834,8 @@ LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS)))
 # of the name WORD/ already carries, which only separate folders allow.
 #
 # $(MEDIA_EXTRA) is the category disks' documents (SPEC.md 24.6.2): SALES.SLK,
-# WRITING.MD and SAMPLE.BMP, so that Sheet, Chart, ArtfulType and Paint do not
+# WRITING.MD, SAMPLE.BMP and LAKE.JPG, so that Sheet, Chart, ArtfulType, Paint
+# and PiXEL do not
 # open their File dialog on a folder with nothing they can read (SPEC.md
 # 38.10). Chart is the sharp case - it declares no association, so File > Open
 # is its ONLY launch path and a spreadsheet on the volume is the one thing it
@@ -12806,8 +12882,13 @@ $(BUILD)/zcat/live/CATALOG.TXT: tools/getstories.py
 # disks carry it, so the Memory page's `Give DOS the whole machine` arm
 # (SPEC.md 96.36) is live on the live media too - a 26MB partition has none of
 # the 360KB cluster argument that made that a decision.
-LIVEARGS := $(DRIVERS) $(SYSDOC) $(SYSLOGOARG) $(LOGOVIDARG) $(FACESARG) $(ALLAPPSARGS) \
+#
+# SPLIT AT THE DRIVERS, and only so the browser's image below can put its own
+# in front of the same rest (SPEC.md 80.7): $(LIVEARGS) is still what it was,
+# byte for byte, and build/livepayload.txt still prints it.
+LIVEREST := $(SYSDOC) $(SYSLOGOARG) $(LOGOVIDARG) $(FACESARG) $(ALLAPPSARGS) \
             $(LIVESYSARGS) $(LIVEPKGARGS) $(LIVESTORYARGS) $(SYSROOTARG)
+LIVEARGS := $(DRIVERS) $(LIVEREST)
 
 # ...and the live volume's own FOLDER COUNT.
 # getruncpm.py --folders prices every folder directory at a cluster, and the
@@ -12834,6 +12915,42 @@ usb: $(USBIMG)
 iso: $(LIVEISO)
 live: $(USBIMG) $(LIVEISO)
 
+# --- THE BROWSER'S IMAGE: THE SAME VOLUME ON kern_emu (SPEC.md 80.7) ----------
+# build/os8088-emu-usb.img is $(USBIMG) with three things changed and nothing
+# else: the kernel and its two boot sectors are $(EMUDIR)'s, the drivers are
+# $(EMUDRIVERS) - $(DRIVERS) plus VMMOUSE.DRV, with the on-demand kernel
+# modules cut out of THAT kernel - and the root carries `make emu`'s SYSTEM.CFG
+# with bit 5 set, so the absolute pointer is wanted from the first boot. It is
+# what os8088.com's live demo boots (the website's tools/release.py publishes
+# it), because v86 answers SPEC.md 9.11's backdoor and the pointer then tracks
+# the visitor's with no capture at all.
+#
+# IT IS NOT A LIVE MEDIUM AND NEVER SHIPS AS ONE. The stick and the CD stay
+# kern_big: they boot real PCs, and an XT carries none of kern_emu's 385 bytes
+# for the reason SPEC.md 9.11.7 gives. So `live` does not build this and the
+# release zip does not carry it; `make usb-emu` is the website's target.
+#
+# ONE RECIPE FOR BOTH, through the target-specific variables below, rather
+# than a second copy of the one above: the payload is the whole point of the
+# live volume (SPEC.md 80.6) and two recipes are two payloads by the next
+# release. The emu half reaches its kernel through a sub-make, `make emu`'s
+# shape, and names the kernel sources as prerequisites for the vmmouse gate
+# disk's reason - without them a kernel edit leaves this image up to date.
+EMUUSBIMG := $(BUILD)/os8088-emu-usb.img
+
+usb-emu: $(EMUUSBIMG)
+
+$(USBIMG): LIVEKDIR := $(BUILD)
+$(USBIMG): LIVEDRVS = $(DRIVERS)
+$(USBIMG): LIVESUB :=
+$(EMUUSBIMG): KMODDIR := $(EMUDIR)
+$(EMUUSBIMG): LIVEKDIR := $(EMUDIR)
+$(EMUUSBIMG): LIVEDRVS = $(EMUDRIVERS) $(BUILD)/vmmcfg/system.cfg
+$(EMUUSBIMG): LIVESUB = $(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 \
+                        $(EMUDIR)/mbr.bin $(EMUDIR)/boothd.bin $(EMUDIR)/boot.bin
+$(EMUUSBIMG): $(KERNEL_SRC) $(KERNEL_INC) $(BUILD)/vmmouse.drv \
+              $(BUILD)/vmmcfg/system.cfg
+
 # THE SELECTIONS ARE "hdd" AND NOT 1440 (SPEC.md 80.6). Both fetch tools
 # price their fill in the target geometry's clusters, and this volume is
 # 16,324 of 2,048 bytes against a 1.44MB floppy's 2,847 of 512 - so asking
@@ -12844,12 +12961,13 @@ live: $(USBIMG) $(LIVEISO)
 # "hdd" arm of each tool carries everything and leaves a megabyte to save
 # into. The GAMES are priced first and the master disk fills what is left,
 # which is RUNCPMIMG's order and is here for its reason.
-$(USBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
+$(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
            $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(LOGOVID) $(FACES) $(FACELIC) \
            $(SYSAPPS) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
            $(BUILD)/zcat/live/CATALOG.TXT $(BUILD)/cpmsw.stamp \
            tools/getcpmsw.py tools/getstories.py \
            $(ALLAPPS) tools/os88disk.py
+	$(if $(LIVESUB),@$(LIVESUB))
 	gsel="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --select hdd | sed 's,^,RUNCPM/,')"; \
 	gcost="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --cost hdd)"; \
 	gslot="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --slots hdd | sed 's,--dir-slots ,--dir-slots RUNCPM/,g')"; \
@@ -12859,16 +12977,21 @@ $(USBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select hdd --dir-slots $(RUNCPMSLOTS) --folders $(LIVEFOLDERS) --reserve-clusters $$gcost --reserve $(ALLAPPSFILES) $(LIVEPKGDEPS) $(SYSAPPS) | sed 's,^,RUNCPM/A/0:,')"; \
 	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select hdd chose nothing"; exit 1; }; \
 	python3 tools/os88disk.py -o $@ --hdd \
-		--mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
-		--kernel $(KERNFILE) \
+		--mbr $(LIVEKDIR)/mbr.bin --boot $(LIVEKDIR)/boothd.bin \
+		--kernel $(LIVEKDIR)/$(KERNNAME) \
 		--deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) $$gslot \
 		--folder DOCS $(APPDATAFOLDER) $(LIVESTORYDIRS) \
-		$(LIVEARGS) $$sel $$gsel $$zsel $(CPMSW) $(STORIES)
+		$(LIVEDRVS) $(LIVEREST) $$sel $$gsel $$zsel $(CPMSW) $(STORIES)
 	@python3 tools/os88disk.py --verify-hdd $@
-	@echo "usb:    $@ - the live USB image (SPEC.md 80.1). Write it raw"
-	@echo "        to a stick and boot a legacy-BIOS machine from it; the"
-	@echo "        partition mounts as C:. QEMU: qemu-system-i386 -drive"
-	@echo "        file=$@,format=raw -boot c"
+	@$(if $(LIVESUB),$(LIVENOTE_EMU),$(LIVENOTE_USB))
+
+LIVENOTE_USB = echo "usb:    $@ - the live USB image (SPEC.md 80.1). Write it raw"; \
+	echo "        to a stick and boot a legacy-BIOS machine from it; the"; \
+	echo "        partition mounts as C:. QEMU: qemu-system-i386 -drive"; \
+	echo "        file=$@,format=raw -boot c"
+LIVENOTE_EMU = echo "usb-emu: $@ - the browser's image (SPEC.md 80.7):"; \
+	echo "         the live volume on kern_emu with VMMOUSE.DRV wanted. It"; \
+	echo "         is not a live medium: os8088.com's demo boots it in v86."
 
 $(LIVEISO): $(USBIMG) $(SYSDOCRAW) tools/os88iso.py
 	python3 tools/os88iso.py -o $@ --boot-image $(USBIMG) \
@@ -14381,3 +14504,155 @@ $(BUILD)/redline360.img: $(BUILD)/redline.o88 apps/redline/README.TXT tools/os88
 	python3 tools/os88disk.py --size 360 -o $@ $< apps/redline/README.TXT
 redline-profile: redlinedisk $(IMG360)
 	python3 tools/redline_profile.py
+
+# PiXEL, the image viewer and editor (SPEC.md 106, docs/plans/PIXEL-PLAN.md).
+# ONE FILE, SEVERAL BINARIES: pixel.asm is the resident package, and every
+# lazy code PART is assembled on its own at org 0 and appended by os88pkg.py
+# --part in the part table's order (SPEC.md 106.5): the keyboard card, the GIF
+# decoder and the PNG decoder (106.18). os88pkg.py declines --compress beside
+# parts - a part's offset is measured from the start of the file and lives
+# inside the image - so PKGZ leaves the IMAGE plain; the PARTS are packed
+# (OP_COMP), and since 20.12.7.4.1's shadow a dropped one fetches again.
+# Every %include is a prerequisite (tests/unit/t_pkgdeps.py).
+# apps/pixel/pxplans.inc and pxqtab.inc are GENERATED by tools/pixelsim.py
+# --gen and COMMITTED;
+# the fast row `pixelsim` fails the build when it is not that search's answer.
+PIXEL_SRC := apps/pixel/pixel.asm apps/pixel/pxui.inc apps/pixel/pxicons.inc \
+             apps/pixel/pxappico.inc apps/pixel/pxpart.inc apps/os88api.inc \
+             apps/os88ui.inc apps/os88parts.inc apps/os88partsbody.inc \
+             apps/os88rseq.inc apps/os88gfx.inc apps/pixel/pxmaster.inc \
+             apps/pixel/pxpump.inc apps/pixel/pxsimple.inc \
+             apps/pixel/pxview.inc apps/pixel/pxqtab.inc apps/pixel/pxrec.inc \
+             apps/pixel/pxfolder.inc \
+             apps/pixel/pxfull.inc apps/pixel/pxfs.inc \
+             apps/pixel/pxed.inc apps/pixel/pxedit.inc apps/pixel/pxtools.inc \
+             apps/pixel/pxcard.inc apps/pixel/pxsave.inc apps/pixel/pxsvc.inc \
+             apps/pixel/pxanim.inc
+.PHONY: pixel pixeldisk
+pixel: $(BUILD)/pixel.o88
+$(BUILD)/pixel.bin: $(PIXEL_SRC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -o $@ apps/pixel/pixel.asm
+$(BUILD)/pxhelp.bin: apps/pixel/pxhelp.asm apps/pixel/pxpart.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/pixel/ -o $@ apps/pixel/pxhelp.asm
+# EVERY DECODER PART IS LINKED since wave 4 (SPEC.md 106.20): each carries
+# the mixing plans (apps/pixel/pxplan.inc, shared source, with the generated
+# pxplans.inc), which read and write the package's palette and plans by name
+PIXEL_PLANS := apps/pixel/pxplan.inc apps/pixel/pxplans.inc \
+               apps/pixel/pxrec.inc apps/os88api.inc $(BUILD)/pxlink.inc
+$(BUILD)/pxgif.bin: apps/pixel/pxgif.asm apps/pixel/pxpart.inc apps/os88lzw.inc \
+                    apps/pixel/pxanim.inc apps/pixel/pxed.inc \
+                    apps/pixel/pxsvc.inc $(PIXEL_PLANS) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxgif.asm
+$(BUILD)/pxpng.bin: apps/pixel/pxpng.asm apps/pixel/pxpart.inc $(PIXEL_PLANS) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxpng.asm
+$(BUILD)/pxjpeg.bin: apps/pixel/pxjpeg.asm apps/pixel/pxpart.inc \
+                     apps/pixel/pxhmore.inc $(PIXEL_PLANS) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxjpeg.asm
+# THE SIMPLE PART IS LINKED against the package (SPEC.md 106.20): it reads the
+# package's variables by name, out of build/pxlink.inc, which tools/pxlink.py
+# writes from a symbol map of THIS build/pixel.bin - refusing when a fresh
+# assembly of pixel.asm is not byte-identical to it - and which names the
+# package's bss and nothing below it, so a call into the package's code cannot
+# assemble. The part checks the stamp (the header's image and bss sizes) at
+# every call.
+$(BUILD)/pxlink.inc: $(BUILD)/pixel.bin tools/pxlink.py
+	python3 tools/pxlink.py $(BUILD)/pixel.bin -o $@
+$(BUILD)/pxsimp.bin: apps/pixel/pxsimp.asm apps/pixel/pxpart.inc \
+                     $(PIXEL_PLANS) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxsimp.asm
+# THE FULL-SCREEN PART (SPEC.md 106.23), linked the same way: every full-
+# screen mode's renderer and colours, held only while the screen is PiXEL's
+$(BUILD)/pxfull.bin: apps/pixel/pxfull.asm apps/pixel/pxpart.inc \
+                     apps/pixel/pxfs.inc apps/pixel/pxrec.inc \
+                     apps/os88api.inc $(BUILD)/pxlink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxfull.asm
+# THE EDIT AND WRITE PARTS (SPEC.md 106.24), linked the same way: Image's
+# and Effects' arithmetic (the palette operations on the UI task, the pixel
+# operations on the worker), and Save As's five writers - the GIF encoder
+# out of apps/os88lzw.inc, the gamma curves out of apps/pixel/pxgam.inc,
+# which tools/pixelsim.py --gen writes and its --selfcheck holds
+$(BUILD)/pxedit.bin: apps/pixel/pxedit.asm apps/pixel/pxpart.inc \
+                     apps/pixel/pxed.inc apps/pixel/pxrec.inc \
+                     apps/pixel/pxqtab.inc apps/pixel/pxgam.inc \
+                     apps/pixel/pxsvc.inc apps/os88api.inc \
+                     $(BUILD)/pxlink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxedit.asm
+$(BUILD)/pxwrite.bin: apps/pixel/pxwrite.asm apps/pixel/pxpart.inc \
+                      apps/pixel/pxed.inc apps/pixel/pxrec.inc \
+                      apps/pixel/pxsvc.inc apps/os88lzw.inc apps/os88api.inc \
+                      $(BUILD)/pxlink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxwrite.asm
+# THE EXTRAS PART (SPEC.md 106.25), linked the same way: TIFF (its LZW out
+# of apps/os88lzw.inc, MSB-first with the early change), ICO and CUR, IFF's
+# ILBM and PBM, and MacPaint - HEAD a state machine over heads, the strips'
+# and the AND mask's table in the part's own memory
+$(BUILD)/pxextra.bin: apps/pixel/pxextra.asm apps/pixel/pxpart.inc \
+                      apps/pixel/pxhmore.inc apps/os88lzw.inc \
+                      $(PIXEL_PLANS) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -o $@ apps/pixel/pxextra.asm
+PIXEL_PARTS := $(BUILD)/pxhelp.bin $(BUILD)/pxgif.bin $(BUILD)/pxpng.bin \
+               $(BUILD)/pxjpeg.bin $(BUILD)/pxsimp.bin $(BUILD)/pxfull.bin \
+               $(BUILD)/pxedit.bin $(BUILD)/pxwrite.bin $(BUILD)/pxextra.bin
+$(BUILD)/pixel.o88: $(BUILD)/pixel.bin $(PIXEL_PARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/pixel.bin -o $@ $(addprefix --part ,$(PIXEL_PARTS))
+
+# THE COLOUR FACE'S PICTURES (SPEC.md 106.16): the toolbar's eleven faces and
+# the tool column's six, drawn by tools/pixart.py out of pxicons.inc's own art
+# - which first holds the package's numbers to its own (--check-asm) - and
+# shipped BESIDE the package as PIXEL.GFX, LZ-wrapped like any data file
+# (27,648 bytes, 5,537 packed). A sidecar and not a part for MIDIRACK.GFX's
+# reason (SPEC.md 105.9.5); PXGFX is what the disk lists name, and its
+# variable is set with MRGFX's, above the lists that use it.
+$(BUILD)/PIXEL.GFX: tools/pixart.py tools/os88face.py faces/helv.t88 \
+                    apps/pixel/pxicons.inc apps/pixel/pixel.asm | $(BUILD)
+	python3 tools/pixart.py --check-asm apps/pixel/pixel.asm -o $@
+$(ZDATA)/PIXEL.GFX: $(BUILD)/PIXEL.GFX tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
+	@mkdir -p $(ZDATA)
+	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
+
+# THE GALLERY (SPEC.md 106.7). Committed, and pinned by tools/pixsamples.py
+# --check, which also compares these three lists with its own - so a picture
+# added here and not there, or there and not here, fails the build. PLAIN on
+# every disk: a JPEG, a GIF and a PNG are compressed already, and PiXEL reads
+# in chunks, which SPEC.md 20.14.3 makes the reason not to wrap a file.
+PXS := apps/pixel/samples
+PX_SAMPLES := $(PXS)/VACATION.JPG $(PXS)/FLOWER.JPG $(PXS)/ROOM.JPG \
+              $(PXS)/LAKE.JPG $(PXS)/CAT.GIF $(PXS)/BALLOONS.PNG \
+              $(PXS)/HOUSE.PNG $(PXS)/MOUNTAIN.BMP $(PXS)/CITY.PCX \
+              $(PXS)/BOUNCE.GIF
+PX_SAMPLES_720 := $(PXS)/VACATION.JPG $(PXS)/FLOWER.JPG $(PXS)/ROOM.JPG \
+                  $(PXS)/LAKE.JPG $(PXS)/CAT.GIF $(PXS)/BALLOONS.PNG \
+                  $(PXS)/MOUNTAIN.BMP $(PXS)/CITY.PCX $(PXS)/BOUNCE.GIF
+PX_SAMPLES_360 := $(PXS)/VACATION.JPG $(PXS)/LAKE.JPG $(PXS)/CAT.GIF \
+                  $(PXS)/BALLOONS.PNG $(PXS)/BOUNCE.GIF
+
+# `make pixeldisk`: PiXEL and its gallery, in all four geometries, REDLINE's
+# shape. The package and PIXEL.GFX at the root, the pictures in PICTURES/ - the folder
+# Prev, Next and the slideshow walk - and SYSTEM/APPDATA/ made (SPEC.md 19.9). On
+# demand, like every application floppy.
+pixeldisk: $(BUILD)/pixel.img $(BUILD)/pixel720.img $(BUILD)/pixel120.img $(BUILD)/pixel360.img
+$(BUILD)/pixel.img: $(BUILD)/pixel.o88 $(PXGFX) $(PX_SAMPLES) tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $< $(PXGFX) $(addprefix PICTURES:,$(PX_SAMPLES)) --folder SYSTEM/APPDATA
+$(BUILD)/pixel120.img: $(BUILD)/pixel.o88 $(PXGFX) $(PX_SAMPLES) tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ $< $(PXGFX) $(addprefix PICTURES:,$(PX_SAMPLES)) --folder SYSTEM/APPDATA
+$(BUILD)/pixel720.img: $(BUILD)/pixel.o88 $(PXGFX) $(PX_SAMPLES_720) tools/os88disk.py
+	python3 tools/os88disk.py --size 720 -o $@ $< $(PXGFX) $(addprefix PICTURES:,$(PX_SAMPLES_720)) --folder SYSTEM/APPDATA
+$(BUILD)/pixel360.img: $(BUILD)/pixel.o88 $(PXGFX) $(PX_SAMPLES_360) tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $< $(PXGFX) $(addprefix PICTURES:,$(PX_SAMPLES_360)) --folder SYSTEM/APPDATA
+
+# ...and the two machines to LOOK at it on (SPEC.md 106.26): `xt-pixel` the
+# 4.77MHz 640KB XT with a VGA and the 360KB pixeldisk in B: - the machine
+# every figure in SPEC.md 106 is about, so the opens, Prev and Next and the
+# slideshow are felt at their real length - and `386-pixel` the
+# 386DX/25 with the 1.44MB one, where the same gallery opens in seconds.
+# Copies of vm/xt-weave and vm/386dx with fdd_02_fn and the uuid changed and
+# nothing else, for the standing reason. 86Box cannot ASSERT anything
+# (docs/TESTING.md): the gates are MartyPC's (tests/px*.py); these are where
+# a human looks. $(UNPROTECT) for the standing reason: Save As writes to B:
+xt-pixel: $(IMG360) $(BUILD)/pixel360.img
+	@$(UNPROTECT) $(VMXTPIXEL)/86box.cfg
+	$(BOX) -P $(VMXTPIXEL) -N
+
+386-pixel: $(IMG) $(BUILD)/pixel.img
+	@$(UNPROTECT) $(VM386PIXEL)/86box.cfg
+	$(BOX) -P $(VM386PIXEL) -N
