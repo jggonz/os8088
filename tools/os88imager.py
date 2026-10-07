@@ -317,6 +317,9 @@ def retargeted(path, geometry):
     return io.BytesIO(data), len(data), hashlib.sha256(data).hexdigest()
 
 
+FAT16_TYPES = (0x04, 0x06, 0x0E)   # hddabi.inc HPT_FAT16S/B/L
+
+
 class SettingsVolume:
     """Bounded FAT16 root access; raw-device reads stay sector aligned.
 
@@ -330,8 +333,14 @@ class SettingsVolume:
         mbr = self.read(0, 512)
         entries = [mbr[o:o + 16] for o in range(446, 510, 16)
                    if mbr[o] == 0x80]
-        if mbr[510:] != b'\x55\xaa' or len(entries) != 1 or entries[0][4] != 4:
-            raise ImagerError('Settings require one active type-04 FAT16 partition.')
+        # The kernel mounts all three FAT16 types (drivers/hdd/hdcom.inc
+        # hd_part_isfat), and os8088's own installer writes 06h at 32MB and
+        # over (partw.inc) - so a card installed in the machine rather than
+        # by this imager is still one whose settings can be kept.
+        if (mbr[510:] != b'\x55\xaa' or len(entries) != 1 or
+                entries[0][4] not in FAT16_TYPES):
+            raise ImagerError('Settings require one active FAT16 partition '
+                              '(type 04h, 06h or 0Eh).')
         start, count = struct.unpack_from('<II', entries[0], 8)
         if not start or not count or (start + count) * 512 > size:
             raise ImagerError('Settings partition is outside the medium.')
@@ -348,8 +357,11 @@ class SettingsVolume:
         if not 4085 <= lay.nclus < 65525 or (lay.nclus + 2) * 2 > fatsz * 512:
             raise ImagerError('Invalid FAT16 cluster bounds.')
         self.fat = bytearray(self.read(self.base + lay.fat_lba * 512, fatsz * 512))
-        if self.fat != self.read(self.base + (lay.fat_lba + fatsz) * 512, fatsz * 512):
-            raise ImagerError('Settings volume FAT copies disagree.')
+        # The kernel writes both copies from one buffer (diskw.inc dskw_flush),
+        # so they disagree only after an interrupted flush - which is exactly
+        # when someone re-images a card. Reading needs only the settings
+        # chain to agree in both; restore() still demands the whole FAT.
+        self.fat2 = self.read(self.base + (lay.fat_lba + fatsz) * 512, fatsz * 512)
         self.root = bytearray(self.read(self.base + lay.root_lba * 512, lay.root_secs * 512))
         self.slot = self.free_slot = None
         for offset in range(0, roots * 32, 32):
@@ -386,7 +398,10 @@ class SettingsVolume:
                 raise ImagerError('Broken SYSTEM.CFG cluster chain.')
             seen.add(cluster)
             chain.append(cluster)
-            cluster = os88disk.fat_get(self.fat, False, cluster)
+            nxt = os88disk.fat_get(self.fat, False, cluster)
+            if nxt != os88disk.fat_get(self.fat2, False, cluster):
+                raise ImagerError('Settings volume FAT copies disagree on SYSTEM.CFG.')
+            cluster = nxt
         if len(chain) != need or (need and cluster < 0xfff8):
             raise ImagerError('Incomplete SYSTEM.CFG cluster chain.')
         return chain
@@ -403,6 +418,8 @@ class SettingsVolume:
 
     def restore(self, data):
         """Only called on the in-memory NEW image, before any device writes."""
+        if self.fat != self.fat2:
+            raise ImagerError('New image FAT copies disagree.')
         slot = self.slot if self.slot is not None else self.free_slot
         if slot is None:
             raise ImagerError('New image has no root directory slot for SYSTEM.CFG.')
@@ -426,6 +443,7 @@ class SettingsVolume:
         for i in range(self.lay.nfats):
             self.stream.seek(self.base + (self.lay.fat_lba + i * self.lay.fatsz) * 512)
             self.stream.write(self.fat)
+        self.fat2 = bytes(self.fat)
         self.stream.seek(self.base + self.lay.root_lba * 512)
         self.stream.write(self.root)
 

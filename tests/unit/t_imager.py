@@ -359,10 +359,36 @@ class ImagerTests(unittest.TestCase):
                 broken.write(struct.pack('<H', value))
             with self.assertRaises(imager.ImagerError):
                 imager.SettingsVolume(broken, len(data)).settings()
+        # An interrupted flush off the settings chain does not cost the
+        # settings, but the copies must agree before a restore writes both.
+        torn = io.BytesIO(good)
+        torn.seek(vol.base + vol.lay.fat_lba * 512 + 2 * 100)
+        torn.write(b'\xff\xff')
+        self.assertEqual(imager.SettingsVolume(torn, len(data)).settings(), b'settings')
+        with self.assertRaisesRegex(imager.ImagerError, 'FAT copies disagree'):
+            imager.SettingsVolume(torn, len(data)).restore(b'x')
         src.seek(vol.base + vol.lay.fat_lba * 512 + 4)
         src.write(b'\0\0')
         with self.assertRaisesRegex(imager.ImagerError, 'FAT copies disagree'):
-            imager.SettingsVolume(src, len(data))
+            imager.SettingsVolume(src, len(data)).settings()
+
+    def test_settings_on_every_fat16_partition_type(self):
+        # 06h is what os8088's installer writes at 32MB and over, 0Eh the LBA
+        # flavour; the kernel mounts all three (hdcom.inc hd_part_isfat).
+        data = fat16(self.root / 'live.img').read_bytes()
+        good = io.BytesIO(data)
+        imager.SettingsVolume(good, len(data)).restore(b'kept')
+        for ptype, ok in ((0x04, True), (0x06, True), (0x0E, True),
+                          (0x0B, False), (0x05, False)):
+            card = bytearray(good.getvalue())
+            card[446 + 4] = ptype
+            with self.subTest(ptype=ptype):
+                if ok:
+                    self.assertEqual(imager.SettingsVolume(
+                        io.BytesIO(card), len(card)).settings(), b'kept')
+                else:
+                    with self.assertRaisesRegex(imager.ImagerError, 'FAT16 partition'):
+                        imager.SettingsVolume(io.BytesIO(card), len(card))
 
     def test_restore_refuses_full_root_and_full_volume(self):
         path = fat16(self.root / 'live.img')

@@ -117632,12 +117632,16 @@ verify. macOS only, and it says so: on Linux the same job is `lsblk` and
 the imager asks `Save and restore SYSTEM.CFG settings? [Y/n/q]` before the
 target identifier confirmation; Enter keeps settings, `n` selects defaults,
 and `q` cancels. After unmounting and revalidating the device, it reads the
-active FAT16 partition's root `SYSTEM.CFG` (§51.5), saves a private recovery
+active FAT16 partition's root `SYSTEM.CFG` (§51.5) — type 04h, 06h or 0Eh,
+the three the kernel mounts, because a card os8088's own installer laid out
+at 32MB or over is 06h (§52.10) — saves a private recovery
 copy in `/var/tmp` (the path is printed and retained), and inserts the bytes
 into the new image in memory. Both FAT copies and the root entry are updated;
 the source image is unchanged. Geometry retargeting and settings restoration
-are covered by the final image's SHA-256 read-back. Missing or unreadable
-settings, inconsistent FATs, backup failure, or lack of destination space
+are covered by the final image's SHA-256 read-back. FAT copies that
+disagree only off the settings chain (an interrupted flush) still yield the
+settings; a chain the two copies disagree on does not. Missing or unreadable
+settings, a disputed chain, backup failure, or lack of destination space
 abort before any device write. A blank card must use `n`. Only `SYSTEM.CFG`
 is preserved; other files are replaced, and floppy/CD workflows are unchanged.
 `tests/unit/t_imager.py` covers the prompt, backup, fragmented chains,

@@ -66,7 +66,8 @@ The target identifier confirmation still follows. This option preserves only
 the Control Panel's root `SYSTEM.CFG`; other files are replaced by the image.
 
 After unmounting and checking the target again, the imager reads the existing
-active FAT16 partition and saves a private recovery copy to
+active FAT16 partition (type 04h, 06h or 0Eh, so a card os8088's own installer
+set up is covered too) and saves a private recovery copy to
 `/var/tmp/os8088-SYSTEM-*.CFG`, printing its exact path. It keeps that copy
 after success or failure. The invoking user owns it when run through `sudo`.
 The settings are inserted into the new image in memory before any disk write;
@@ -75,7 +76,9 @@ geometry changes and restored settings together. The source image stays
 unchanged. The next boot loads the saved settings using the OS's normal
 settings compatibility rules (unknown or changed settings use defaults).
 
-Missing settings, an unsupported or damaged old filesystem, a backup failure,
+A card whose two FAT copies disagree somewhere other than the settings file -
+what an interrupted write leaves - still gives its settings up. Missing
+settings, an unsupported or damaged old filesystem, a backup failure,
 or insufficient space in the new image stops the operation before overwriting
 the card. A new/blank card has no settings to preserve: select `n` when imaging
 it. Floppy and CD workflows do not ask this question.
