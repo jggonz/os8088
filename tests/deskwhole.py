@@ -82,6 +82,9 @@ has drawn a zone or cleared a bit, so the mask it rebuilds is the one
 wm_paint_dmg built a few instructions earlier. It is load-bearing only for
 an overflow AFTER the zones, which desk_zones_r's own count (SPEC.md 26.9.9)
 made unreachable - the `jc .whole` after it can no longer be taken either.
+It is KEPT as a guard for that entry (SPEC.md 26.9.9 says why), and this
+row cannot be its gate: a layout that overflows after the zones is exactly
+what the pre-count forbids.
 """
 import argparse
 import os

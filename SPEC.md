@@ -50694,6 +50694,22 @@ cleared a bit, and `desk_zones_r`'s own count keeps its `jc .whole` from
 ever being taken, so the call rebuilds the mask `wm_paint_dmg` built a few
 instructions earlier.
 
+**The re-owe stays, as a GUARD.** Of `.whole`'s three entries - the frames'
+overflow, `.frames`' second one, and `desk_zones_r`'s - only the last
+arrives with cells already drawn and their bits gone from `[desk_dmgm]`, and
+it is unreachable because `desk_zones_r`'s pre-count is a second copy of
+`wm_clip_split`'s rule (the same overlap test, the same four pieces, growth
+only) and admits a subtraction only when the bound is at most
+`WM_CLIP_MAX`. Three edits would make that entry live: a pre-count loosened
+or a split changed without it, a new subtraction after the zones that
+overflows to `.whole`, or a second caller of `wm_dmg_gray` that did not
+build the mask first. Without the call, each would dither over the cells
+already drawn and leave them gone until the next repaint there - and
+`tests/deskwhole.py` could not see it, because its frames overflow first.
+That insurance is 5 bytes of kern_big `.text` (one far call) and a walk of
+the zones on a path that takes six cascaded windows to reach. A change that
+wants those bytes back removes the guard deliberately, and says so here.
+
 **A window's DROP-SHADOW L is no part of the region** (`wm_occl_l`): the
 frame moved (1,1) covers the L in one rect and leaves the two corners no
 window draws. It is `wm_dmg_occl`'s own walk with a second subtract

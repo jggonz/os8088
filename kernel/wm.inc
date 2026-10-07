@@ -6231,7 +6231,14 @@ wm_dmg_gray:
     jc .frames                  ; window pass draws; then every touched ZONE,
     call COLD_SEG:desk_zones_r_x    ; DRAWN into what is left and taken out
     jc .whole                   ; of it - a cell lays its own ground, and is
-%endif                          ; drawn only where it shows (SPEC.md 11.91.6)
+                                ; drawn only where it shows (SPEC.md 11.91.6).
+                                ; UNREACHABLE while desk_zones_r's pre-count
+                                ; matches wm_clip_split; the ONE entry to
+                                ; .whole after cells are drawn, which is what
+                                ; .whole's re-owe guards (SPEC.md 26.9.9). A
+                                ; new subtraction past here that overflows
+                                ; to .whole leans on that guard too
+%endif
 .cmpn:
     cmp word [wm_clip_n], 0
     je .out                     ; wholly covered: not one pixel is revealed
@@ -6266,6 +6273,10 @@ wm_dmg_gray:
 %ifdef OS88_SHORTCUTS
     call COLD_SEG:desk_dmg_zones_x  ; every touched zone owed again: desk_zones_r
 %endif                          ; may have drawn some that this dithers over.
+                                ; A GUARD: no entry today reaches here with
+                                ; the mask changed, so it rebuilds the same
+                                ; one - kept for an overflow AFTER the zones
+                                ; (SPEC.md 26.9.9), which nothing would see.
                                 ; HERE, above the pops: it spends AX, and AX
                                 ; is the damage's x1 the bands are re-seeded
                                 ; from - called below them it cut the whole
