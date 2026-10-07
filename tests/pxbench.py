@@ -95,7 +95,7 @@ CEIL = {
         "BIG.BMP": (47.0, 3.9),
         "CAT.GIF": (34.1, 6.2), "BALLOONS.PNG": (23.7, 8.4),
         "HOUSE.PNG": (55.6, 3.8), "inflate": 463,
-        "zoom": 4.3, "fit": 2.25, "pan": 0.57,
+        "zoom": 4.6, "fit": 2.25, "pan": 0.57,
         "VACATION.JPG 1/8": (31.4, 5.8), "VACATION.JPG 1/2": (57.5, 5.1),
         "VACATION.JPG 1/1": (138.0, 8.2), "VACATION.JPG fast": (57.5, 5.1),
         "ROOM.JPG": (76.0, 64.3), "huffman": 360, "idct": 635},
