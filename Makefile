@@ -13857,7 +13857,29 @@ xt-sound: $(IMG360) $(APPSIMG360)
 # for Tracker (BEVERLY.MOD rides media360.img), Audio and the Video Player.
 # A machine to LISTEN to: the gates are MartyPC's (tests/covox.py and each
 # package's --covox leg), whose own Covox is patches/10-covox-lpt-dac.patch.
-xt-covox: $(BUILD)/covoxsys360.img $(BUILD)/midirack360.img $(APPSIMG360)
+#
+# B: IS A 720KB 3.5" DRIVE (`fdd_02_type = 35_2dd`, xt-z's shape) carrying
+# covoxlisten720.img: every player that sounds a Covox and something for each
+# to play, so listening needs no disk swap. Not 1.44MB: an XT's controller
+# runs at 250 kbps and cannot read a high-density disk at all. MIDIRack and
+# the ten songs at the root as on its own disk, less MIDIRACK.BNK (206
+# clusters of a Sound Blaster's wavetable bank, which the Covox synth never
+# reads); Tracker with BEVERLY.MOD; Audio with FURELISE.WAV, which
+# tools/os88tunewav.py writes at 8,000 Hz - the rate an 8088 plays 1:1, so
+# Audio neither resamples it nor steps a rung down for it (SPEC.md 86.21).
+# Built on demand and shipped nowhere.
+$(BUILD)/FURELISE.WAV: tools/os88tunewav.py | $(BUILD)
+	python3 tools/os88tunewav.py -o $@
+$(BUILD)/covoxlisten720.img: $(BUILD)/midirack.o88 $(MRGFX) $(MIDISONGS) \
+                            $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
+                            $(MEDIA_DISK_DATA) $(BUILD)/FURELISE.WAV \
+                            tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 \
+	    $(BUILD)/midirack.o88 $(MRGFX) $(MIDISONGARGS) \
+	    APPS:$(BUILD)/tracker.o88 APPS:$(BUILD)/audio.o88 \
+	    $(addprefix MEDIA:,$(MEDIA_DISK_DATA)) MEDIA:$(BUILD)/FURELISE.WAV \
+	    --folder SYSTEM/APPDATA
+xt-covox: $(BUILD)/covoxsys360.img $(BUILD)/covoxlisten720.img
 	@$(UNPROTECT) $(VMXTCOVOX)/86box.cfg
 	$(BOX) -P $(VMXTCOVOX) -N
 

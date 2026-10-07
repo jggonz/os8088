@@ -62093,7 +62093,12 @@ and `make covoxtest`'s 720KB disk asks for SOUND.DRV with the tier at LPT2.
 Each package's own leg plays its subject through the DAC and is judged off
 the `covox` capture (§105.11's `--arm covox` for MIDIRack). `vm/xt-covox` is
 the machine to LISTEN to: 86Box's XT with its own `lpt_dac` on LPT1 and
-`make covoxtest`'s 360KB disk, whose tier is LPT1.
+`make covoxtest`'s 360KB disk, whose tier is LPT1. Its B: is a 720KB drive
+(an XT's controller cannot read a 1.44MB disk) with `covoxlisten720.img`:
+MIDIRack and its ten songs, Tracker and BEVERLY.MOD, and Audio with an
+8,000 Hz FURELISE.WAV that `tools/os88tunewav.py` writes - the rate an 8088
+plays 1:1 (§86.21), so the one file that would otherwise make Audio resample
+and step down a rung does not.
 
 **Stereo-on-1 and the Disney Sound Source are not this.** The first is two
 ladders selected by the strobe line, the second a 16-byte FIFO clocked at a

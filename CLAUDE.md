@@ -526,7 +526,8 @@ and hibernate on; `build/mfm20.img` is created blank and kept),
 `xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-sound`,
 `xt-sound-1.44`, `xt-covox` (an XT with no card and 86Box's `lpt_dac` on
 LPT1, booting `make covoxtest`'s 360KB disk - SPEC.md §34.14's machine to
-listen to), `xt-midirack` and `386-midirack` (MIDIRack's, SPEC.md
+listen to - with a 720KB B: drive carrying MIDIRack, Tracker and Audio and a
+song, a module and a WAV for each; an XT cannot read a 1.44MB disk), `xt-midirack` and `386-midirack` (MIDIRack's, SPEC.md
 §105.11: `xt-sound`'s XT plus a standalone MPU-401, and `386-sound`'s 386
 whose SB16 carries one, each sending MIDI to 86Box's FluidSynth with the
 GeneralUser GS soundfont `make midibank` fetches, and each with `make
