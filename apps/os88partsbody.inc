@@ -1729,6 +1729,7 @@ op_drop:
     test byte [si+OP_R_FLAG], OP_LAZY
     jz .out
     mov dx, [si+OP_R_ZKB]
+%if OP_HAS_ZLAZY
     test byte [si+OP_R_FLAG], OP_FETCHED
     jz .out                     ; NOT HERE, and the flag is what says so: on
                                 ; an OP_COMP row zkb is the PACKED LENGTH until
@@ -1738,6 +1739,11 @@ op_drop:
                                 ; part and freed its length as a segment - the
                                 ; no-op promised above was op_fetch's old
                                 ; question asked here (os88parts.inc OP_FETCHED)
+%else
+    or dx, dx                   ; ...and on a table with no compressed lazy
+    jz .out                     ; row the word and the flag always agree, so
+                                ; the two bytes shorter question is asked
+%endif
     and byte [si+OP_R_FLAG], ~OP_FETCHED & 0xFF  ; not here any more
 %if OP_HAS_COMP
     ; **A COMPRESSED ROW IS SPENT, NOT EMPTY** (SPEC.md 20.12.7.4): the packed
@@ -1760,12 +1766,15 @@ op_drop:
 .plaindrop:
     mov [si+OP_R_ZKB], ax       ; CLEARED FIRST: op_seg must never answer a
                                 ; segment that is on its way back to the heap
+  %if OP_HAS_ZLAZY
     or ax, ax                   ; ...and a COMPRESSED row's banked word IS its
     jnz .free                   ; claim: op_fetch expands it onto the claim's
                                 ; base (SPEC.md 88.10.4.1), so there is no
                                 ; slack to take off. AX is non-zero exactly
                                 ; when the row is OP_COMP: the shadow's packed
-                                ; length, or OP_SPENT
+                                ; length, or OP_SPENT. Without such a row
+                                ; every lazy row here is plain and AX is 0
+  %endif
 %else
     mov word [si+OP_R_ZKB], 0   ; CLEARED FIRST: op_seg must never answer a
                                 ; segment that is on its way back to the heap

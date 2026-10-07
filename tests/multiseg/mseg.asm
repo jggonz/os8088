@@ -63,8 +63,9 @@ MS_OPT_KB  equ 600                  ; chosen so NOTHING here can grant it: a
 ; (SPEC.md 20.12.7.4) - the fixture for tests/mseglzslack.py, which fetches it
 ; off a volume whose clusters are bigger than a sector and measures what the
 ; session keeps (SPEC.md 88.10.4.1). A separate define and not MSEG_COMP's,
-; because MSEG_COMP's rows re-fetch part 6 after dropping it and a dropped
-; compressed lazy part refuses that by design (SPEC.md 20.12.7.4.1).
+; so MSEG_COMP's rows keep testing a PLAIN lazy part 6 - fetch, drop, fetch
+; again - beside their compressed eager ones; a compressed lazy part's re-fetch
+; is the shadow's (SPEC.md 20.12.7.4.1) and tests/pxparts.py is its gate.
 %ifdef MSEG_LZC
   %define MS_LF OP_COMP
 %else

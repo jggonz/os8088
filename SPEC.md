@@ -40806,14 +40806,6 @@ media's 2KB clusters and **31.5KB on a FAT16 hard disk with 32KB clusters** —
 and expanded past it, as this first shipped, it was the one thing in the claim
 a shrink could not reach, because a shrink only ever takes the tail.
 
-**`op_drop` asks `OP_FETCHED` whether there is anything to give back, not the
-word.** It asked `zkb != 0`, which is the question `op_fetch` stopped asking
-when this section made the word the packed length before a fetch — so dropping
-a compressed part that had never been fetched, which the routine promises is a
-no-op for a caller unwinding, wrote `OP_SPENT` over its length and freed that
-length as a segment. Nothing in the tree drops before it fetches, so no
-package met it; it is two bytes.
-
 ###### 20.12.7.4.1 What `op_drop` leaves behind, and why it is not zero
 
 A dropped row cannot simply go back to 0. On an uncompressed lazy row 0 means
@@ -40853,7 +40845,11 @@ packed length before a fetch and after a drop - so dropping a part that a
 failed fetch never brought (a caller unwinding, as PiXEL's F1 card does)
 wrote `OP_SPENT` over the row and freed a segment nobody owned, and the part
 was gone for the instance. Under `%if OP_HAS_ZLAZY` a row without
-`OP_FETCHED` is now not here, whatever its `zkb` says: six bytes.
+`OP_FETCHED` is now not here, whatever its `zkb` says. The flag test REPLACES
+the `zkb != 0` one rather than preceding it (§88.10.4.1's refresh): two bytes
+more than `or dx, dx`, where it first shipped as six in front of it. A table
+with no compressed lazy row keeps the word test, because there the word and
+the flag always agree, and assembles to the byte it did.
 
 The use case is the one the paragraph above this used to argue was real:
 PiXEL's decoders are lazy parts used fetch, call, drop and fetch again
@@ -40876,7 +40872,10 @@ the standard, three loaders carry such a row besides PiXEL, and the shadow,
 its two stores and `op_drop`'s `OP_FETCHED` test cost each of them, measured
 against the same source without it: `apps/pixelstein/pxstein.asm` **2,866 →
 2,917** (five rows), `apps/skies/csload.asm` **2,246 → 2,309** (three) and
-`apps/dos/dosload.asm` **2,249 → 2,296** (three). None of the three ever
+`apps/dos/dosload.asm` **2,249 → 2,296** (three). §88.10.4.1's expansion
+onto the claim's base then took **15 bytes** back off each - `op_fetch` −15,
+`op_drop` even - to **2,902**, **2,294** and **2,281**, and PiXEL's
+`pixel.bin` from 41,351 to 41,336. None of the three ever
 drops a part today, so for them it is the guard and not the use; it is paid
 rather than gated a second time because a re-fetch that works is the
 standard's answer, and a package that discovers it wants one should not have
