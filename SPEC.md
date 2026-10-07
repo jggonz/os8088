@@ -42793,14 +42793,9 @@ again and writes, and the two must agree block for block. It costs the parse
 twice. The alternative, patching part 1's header at the end, needs part 1's
 disk back in the drive.
 
-**`OS88CZ.COM` ships in `SYSTEM/DOS/` beside `OS88NET.COM`** on the 1.2MB
-and 1.44MB apps disks and the everything disk (§19.10). The 360KB apps disk
-is at 352 of 354 clusters and this program is five. **The 720KB one carried
-it until the Covox** (§34.14): that disk was at 713 of 713, the Covox took
-MIDIRack and Audio over a cluster each, and of everything on it this was
-the one thing two larger disks still carry - a §24.6.1 decision, with its
-date, and the first thing to put back when the disk has five clusters
-again.
+**`OS88CZ.COM` ships in `SYSTEM/DOS/` beside `OS88NET.COM`** on the 720KB,
+1.2MB and 1.44MB apps disks and the everything disk (§19.10). The 360KB apps
+disk is at 352 of 354 clusters and this program is five.
 
 ## 21. loader.inc
 

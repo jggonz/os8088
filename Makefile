@@ -12250,8 +12250,7 @@ APPS_DOS := $(BUILD)/os88net.com
 # OS88CZ.COM (SPEC.md 20.17.4): the split set's DOS end - join a set off a
 # pile of floppies onto a hard disk, split a file for them, expand a 'CZ'
 # file. Beside OS88NET.COM on every apps disk it FITS, which is not the 360KB
-# one (352 of 354 clusters, and this is five) and since the Covox (SPEC.md
-# 34.14) not the 720KB one either: that disk was at 713 of 713. Its decoder is
+# one: that disk is at 352 of 354 clusters and this is five. Its decoder is
 # kernel/lz.inc, included as it is - one decoder, three hosts.
 APPS_DOSCZ := $(BUILD)/os88cz.com
 $(BUILD)/os88cz.com: dostools/os88cz.asm kernel/lz.inc | $(BUILD)
