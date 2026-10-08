@@ -821,6 +821,9 @@ os88spk_pstop:
     mov cx, [cs:os88spk_powed]
     mov word [cs:os88spk_powed], 0
     jcxz .out
+    ; STKBALANCE-OK: pushf / call far fabricates the interrupt frame the
+    ; kernel's IRQ0 returns through - its iret pops the flags the pushf put
+    ; there, so the loop is balanced at every turn (sched.inc's own idiom)
 .pay:
     pushf
     cli

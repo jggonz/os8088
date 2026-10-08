@@ -3059,10 +3059,22 @@ SOAK = [
     Row("midirackcovox", "soak", py("tests/midirack.py", "--arm", "covox"),
         60.0,
         "MIDIRack's synth on a COVOX (SPEC.md 105.8.7, 34.14) on MartyPC's "
-        "Covox machine (patches/10-covox-lpt-dac.patch, the DAC on LPT2): the "
+        "Covox machine (patches/10-covox-lpt-dac.patch, the DAC on LPT2), "
+        "Automatic: the ISR's road at 6,214 Hz on this 5150 (34.14.3) - the "
         "ring's table the identity, IRQ0 at os88spk_isrd, the speaker arm's "
         "ring checks, the reference sequencer's pitch classes in the DAC's "
         "own capture, and the PC speaker's capture SILENT. --break must fail",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/covoxsys720.img", "build/apps720.img")),
+    Row("midirackcovoxpoll", "soak",
+        py("tests/midirack.py", "--arm", "covoxpoll"), 75.0,
+        "SPEC.md 34.14.3: MIDIRack's POLLED Covox play - a rate chosen in "
+        "Settings on an XT. No ISR a sample: IRQ0 is os88spk_ptick, owing "
+        "the kernel's tick; 6,520 Hz played at 100% of the rate by the "
+        "guest's CYCLES with the BIOS tick held still; a pause PAYS the "
+        "ticks (the BIOS clock caught up to within a tick a second); Space "
+        "resumes; the pitch classes in the DAC's capture and the speaker "
+        "silent. --break must fail",
         needs=("marty", "nasm"), serial=True,
         wants=("build/covoxsys720.img", "build/apps720.img")),
     Row("trkspkcovox", "soak", py("tests/trkspk.py", "--leg", "covox"), 90.0,
@@ -9878,6 +9890,17 @@ SOAK = [
         needs=("marty",),
         wants=("build/tracker.o88", "build/kernel.sys", "build/boothd.bin",
                "build/mbr.bin")),
+    Row("covbench", "soak", py("tests/covbench.py"), 45.0,
+        "SPEC.md 34.14.3: COVBENCH, what feeding a Covox costs a machine, on "
+        "MartyPC's Covox 5150: Tracker's mix step timed shut and then beside "
+        "the shipped ISR, the least ISR, a level poll of channel 2 every 2 "
+        "and 4 steps and the latched clock that ships, at 5,512/8,000/11,025 "
+        "Hz - every share rising with the rate, the polled rows within 5% "
+        "missed, the latched clock missing none. It checks that the bench "
+        "RAN; the numbers are the field run's. Broken on purpose (POLL's "
+        "write taken out) it FAILS",
+        needs=("marty",),
+        wants=("build/covbench720.img", "build/covoxsys720.img")),
     Row("spkbench", "soak", py("tests/spkbench.py"), 20.0,
         "SPEC.md 45.25.1: SPKBENCH, the field bench for what the PC speaker's "
         "sample ISR costs a machine, runs on MartyPC's Hercules 5150: the "

@@ -62105,6 +62105,102 @@ ladders selected by the strobe line, the second a 16-byte FIFO clocked at a
 fixed 7 kHz whose FIFO-full line is the one Covox-family device a program
 CAN detect. Both are a verb and an ISR beside this one, and neither is built.
 
+#### 34.14.3 Faster on an XT: the bench, the polled Covox, and what each bought
+
+**The question was the owner's: can an XT play MIDI and a MOD through a
+Covox at 11 kHz, or 8?** A Covox has no FIFO, so the CPU writes every
+sample. Through §34.14.1 that is an interrupt a sample, and on a 4.77 MHz
+8088 the interrupt is most of the budget: an 11,025 Hz sample is 433 cycles
+and `os88spk_isrd` takes ~425 of them.
+
+**COVBENCH measured the alternatives** (`tests/covbench/`, `make covbench`,
+`tests/covbench.py`, spkbench's shape: a fixed workload - Tracker's own mix
+step, `MIXADD` to the instruction - run with the output shut and then
+beside each way of feeding the DAC, the share lost being that way's cost).
+On MartyPC's Covox 5150, in 4.77 MHz cycles a sample and samples missed:
+
+| feeding the DAC | 5,512 Hz | 8,000 Hz | 11,025 Hz | missed |
+|---|---|---|---|---|
+| `os88spk_isrd`, as ships | 429 | 433 | 420 (97% of the machine) | - |
+| the least ISR a sample can be | 422 | 421 | 420 | - |
+| a level poll of channel 2 every 2 mix steps | 375 | 313 | 271 | 0 / 0.6% / 2.9% |
+| ...every 4 | 308 | 270 | 137 | 0 / 1.4% / **58%** |
+| **the latched clock every 4 (what ships)** | 543 | 418 | 342 | **0 / 0 / 0** |
+
+A **lean ISR buys nothing**: the cost is the interrupt's own entry, EOI and
+`iret`, not the body. A **level poll** - channel 2 a square wave whose output
+changes once a sample, read at port 62h bit 5 - is cheap but sees only that
+the output CHANGED: two changes between polls look like none and both
+samples are lost, so every gap longer than a sample loses two. In MIDIRack's
+real loops that lost 39% at 11 kHz and 18% at 8. So **the clock that ships is
+channel 0's count**: channel 0 runs a whole tick (divisor 0), its count
+latched and negated is a free-running 16-bit time, a sample is due when that
+passes `[os88spk_pdue]`, and a poll writes **every** sample due since the
+last. A late poll makes samples late, never lost. The price is the poll
+itself, ~100 cycles (three port accesses on an 8-bit bus), which is why the
+last row is dearer than the interrupt at 5.5 kHz and cheaper only above ~8.
+
+**The polled half of `apps/os88spk.inc`** (`OS88SPK_POLL`; the package names
+a ring in its own segment): `os88spk_pgo` opens §34.11.1's door - channel 2
+taken and silenced, so a beep still cannot sound over the play - then points
+IRQ0 at `os88spk_ptick` and runs channel 0 at a whole tick. **IRQ0 OWES the
+kernel's tick** rather than chaining it: the kernel's period entry is ~1,300
+cycles, three samples late eighteen times a second, so it is counted and
+`os88spk_pstop` pays it through the kernel's own vector, one entry a tick,
+when the play stops or pauses (~1,300 cycles each, ~0.3 s a minute of play).
+`[ticks]` and 0040:006C are exact again afterwards and the wall clock never
+misses (`clk_tick` takes deltas). Because the ROM's floppy motor countdown
+runs on that tick, `pgo` turns a running motor off first. A lateness past
+~20 ms is dropped rather than repaid (`OS88SPK_LATE`), since past 27 ms the
+16-bit difference would read as early. **No kernel byte**: the door is
+§34.11.1's, unchanged. A polled play draws nothing and never `FSX_WAIT`s, a
+kernel call being a stretch that cannot poll.
+
+**What it bought, measured, MIDIRack** (BATTLE1, drums and all, MartyPC's
+Covox 5150): the synth with its polls costs ~300 cycles a sample, and the
+write ~150-250 more, so polling is a modest gain and not the doubling the
+first estimate claimed.
+
+| MIDIRack on an XT's Covox | plays | ring, never under |
+|---|---|---|
+| the ISR at 5,523 Hz (what shipped) | 98% (the ISR's 2% lost pulses, 34.11.4) | full |
+| **the ISR at 6,214 Hz - Automatic now** | 98% | ~2,800 of 4,096 |
+| the ISR at 6,520 Hz | 98% | 114 - the edge |
+| **polled at 6,520 Hz - a rate chosen in Settings** | 100% | ~590 of 2,048 |
+| polled at 7,018 / 8,007 Hz | 95.6% / 81% | drained |
+
+So the shipped interrupt was holding back mostly by DEFAULT: §105.7.1's
+5,512 Hz was the speaker's figure applied to the Covox, and the ISR holds
+6,214 with the window live. **Automatic on an XT's Covox is now 6,214 Hz on
+the ISR**, and **a rate chosen in Settings asks for the most the XT can do:
+the polled play at 6,520 Hz**, its window still (the status line says
+`Covox, polled`), every choice in the list being past what an 8088 holds
+(`MRK_PNMIN` = 183 counts). A machine where `os88spk_pgo` refuses says so
+and plays the ISR at the next Play.
+
+**Tracker gets nothing from it, measured, and stays on the ISR.** Its XT
+mixer is ~356 cycles a sample for four channels before any output (§45.25),
+so a polled Tracker - built, a poll every 2, 4 and then 8 mix steps - fell a
+rung below its 5,966 Hz start every time and held 5,512, the ISR's own rung,
+for a frozen window and ~2 KB. A MOD at 11 kHz is past a 4.77 MHz 8088 by
+any output: the mix alone is 82% of the machine there.
+
+**Not the speaker.** The mechanism carries over (a sample is an `out 42h`,
+no DX), but the speaker's carrier IS the sample clock, and a polled write
+lands late by up to a poll's gap with catch-up bursts back to back - jitter
+in the pulse train that the cone plays as noise, on a path already fighting
+its carrier (§34.11.9). The gain would be the same few percent.
+
+**Cost**: MIDIRack's image 36,944 -> 38,400 bytes, its bss +2,051 (the 2 KB
+ring), its packed file +939. Audio, the Video Player and Tracker assemble
+none of it. **The gates**: `tests/covbench.py` (every share rising with the
+rate, the polled rows within 5% missed, the latched clock missing none) and
+`tests/midirack.py --arm covox` (Automatic, the ISR at 6,214) and `--arm
+covoxpoll` (the polled play: IRQ0 at `os88spk_ptick`, 6,520 Hz by the
+GUEST'S CYCLES - the BIOS tick is owed while it plays, and the row checks it
+does not move - then a pause that must pay the ticks to within a tick a
+second, a resume, and the pitch-class agreement on the DAC's capture).
+
 ## 35. Recorder — the sound layer's recording client
 
 `apps/recorder` needs `SND_CAP_PCM_IN` (a Sound Blaster) to record and
@@ -79331,6 +79427,11 @@ so the shaper's share falls by more than `TSP_CSD` adds. On MartyPC's Covox
 predicted 79%**, where the speaker's own leg takes 4,800 at 91% - and holds
 it: 3,000 samples on 378h at 5,427 Hz, the ring never dry, not one write to
 42h, and the DAC's capture sounding while the speaker's is flat.
+
+**Polling instead of the ISR was built for Tracker and measured, and buys
+it nothing** (§34.14.3): its mixer is most of a sample by itself, and the
+polled play held the ISR's own 5,512 Hz rung for a frozen window, so it was
+not kept.
 
 It costs Tracker **189 bytes of image** (34,180 -> 34,369), 2 of bss and 140
 of the packed file; no kernel byte.
@@ -162807,7 +162908,8 @@ three colours (snare, hats, cymbals).
 
 | | 8088 | 286 | 386+ |
 |---|---|---|---|
-| speaker or Covox (bracket) | **5,512 Hz** (5,523 played), 4 voices | 16,000 (16,124 played), 6 | the same, 6 |
+| speaker (bracket) | **5,512 Hz** (5,523 played), 4 voices | 16,000 (16,124 played), 6 | the same, 6 |
+| Covox (bracket) | **6,214 Hz** on the ISR, 4 voices; a rate chosen in Settings: **polled, 6,520** (§34.14.3) | 16,000 (16,124 played), 6 | the same, 6 |
 | Sound Blaster | 8,000 Hz, 6 voices | 16,000, 8 | 22,050, 8 |
 
 **Settings chooses any of 8,000, 11,025, 16,000, 22,050, 32,000 and 44,100
@@ -162963,12 +163065,17 @@ gets SI = 0, the card's case, and the ring holds the soft-clipped unsigned
 bytes the DSP would have been sent; the ISR puts each on the port's data
 lines. Everything else is §105.8.3's - the imposter window, the 4 KB ring,
 the keys, the pause to the desktop, the rate and voices of §105.7.1's
-speaker row. **The rate policy is the speaker's on purpose**: on an 8088 its
-5.5 kHz and 149-count floor are the cost of an interrupt a sample, which a
-Covox pays three instructions dearer, and past an 8088 the 24.8 kHz ceiling
-is a count of 48, the door's own floor. A DAC holds its level, so nothing a
-pulse width needs - the carrier, the pre-emphasis - is wanted, and none is
-built.
+speaker row. **The rate on an 8088 is the Covox's own, measured** (§34.14.3): the
+speaker's 5.5 kHz was applied to the Covox when it shipped, and the ISR
+holds 6,214 Hz with the window live, so that is Automatic. A rate chosen in
+Settings asks for the most the XT can do - **the polled play, 6,520 Hz**,
+`mrk_pmain` in place of `mrk_main`: no ISR, the synth's loops polling
+channel 0's clock and writing every sample due (`MRY_POLL`, `mry_mixp`, a
+poll an event and a note-on), and the window still while it plays (the
+status line says `Covox, polled`). Past an 8088 the 24.8 kHz ceiling is a
+count of 48, the door's own floor, and the ISR plays. A DAC holds its level,
+so nothing a pulse width needs - the carrier, the pre-emphasis - is wanted,
+and none is built.
 
 **A Covox is announced, never detected** (§34.14): it is a row in Settings
 and a choice for Automatic only while the Sound page's tier is Covox and
