@@ -12,7 +12,7 @@
 ;   make covbench           -> build/covbench{360,720,144}.img, COVBENCH.O88
 ;                              alone
 ;
-; Double-click it, press R (or click the window), and wait ~25 seconds with
+; Double-click it, press R (or click the window), and wait ~30 seconds with
 ; your hands off the mouse. The report is saved as COVBENCH.TXT beside it.
 ;
 ;   SHUT    the workload alone, for CB_TICKS ticks: the machine's own speed
@@ -29,6 +29,12 @@
 ;           IRQ0 is a five-instruction counter for the row: the kernel's
 ;           tick is OWED, not taken, and paid back when the row ends, so no
 ;           1,300-cycle period entry lands inside the play.
+;   PIT4    WHAT SHIPS (apps/os88spk.inc's polled half): the clock is
+;           channel 0's COUNT, latched, and a poll every 4 mix steps writes
+;           EVERY sample due since the last - so a late poll makes samples
+;           late and never loses them, where POLL2/POLL4 above see only that
+;           channel 2's output changed and lose two samples to every gap
+;           longer than one. Channel 0 runs a whole tick, IRQ0 owing it.
 ;   POLL2L  POLL2 with the kernel's tick LIVE (IRQ0 the kernel's, once a
 ;           rate period): what deferring the tick buys.
 ;
@@ -97,6 +103,25 @@ CB_RL       equ 16384
     pop dx
     pop bx
     inc word [cs:cb_outs]
+%%n:
+%endmacro
+
+; -----------------------------------------------------------------------------
+; PITPOLL - os88spk's poll (OS88SPK_PNOW, then the due test): the time is
+; channel 0's count, latched and negated, and a sample is due once it passes
+; [cb_due]. AX spent
+; -----------------------------------------------------------------------------
+%macro PITPOLL 0
+    xor al, al
+    out 0x43, al
+    in al, 0x40
+    mov ah, al
+    in al, 0x40
+    xchg al, ah
+    neg ax
+    sub ax, [cs:cb_due]
+    js %%n
+    call cb_pitout
 %%n:
 %endmacro
 
@@ -481,6 +506,9 @@ cb_brk:
     call cb_row_poll
     mov [di+8], ax
     mov [di+10], dx
+    call cb_row_pit
+    mov [di+12], ax
+    mov [di+14], dx
     add bx, 2
     jmp short .r
 .live:
@@ -555,7 +583,8 @@ cb_spans_ticks:
 ; a POLL every 2 / 4 steps. AH is the poll's level, kept in [cb_lvl] across
 ; spans. ES = DS = CS
 ; -----------------------------------------------------------------------------
-%macro CB_WORK 2                    ; %1 the label, %2 steps a poll (0: none)
+%macro CB_WORK 3                    ; %1 the label, %2 steps a poll (0: none),
+                                    ; %3 the poll (POLL or PITPOLL)
 %1:
     push ax
     push bx
@@ -580,7 +609,7 @@ cb_spans_ticks:
 %assign %%i %%i + 1
 %if %2 > 0
 %if (%%i % %2) == 0
-    POLL
+    %3
 %endif
 %endif
 %endrep
@@ -599,9 +628,34 @@ cb_spans_ticks:
     ret
 %endmacro
 
-    CB_WORK cb_w0, 0
-    CB_WORK cb_w2, 2
-    CB_WORK cb_w4, 4
+    CB_WORK cb_w0, 0, POLL
+    CB_WORK cb_w2, 2, POLL
+    CB_WORK cb_w4, 4, POLL
+    CB_WORK cb_wp4, 4, PITPOLL
+
+; cb_pitout - AX = the lateness: every sample due written (os88spk_pout's
+; shape, the bench's ring and count)
+cb_pitout:
+    push bx
+    push cx
+    push dx
+    mov cx, ax
+    mov dx, [cs:cb_port]
+.one:
+    mov ax, [cs:cb_nn]
+    add [cs:cb_due], ax
+    mov bx, [cs:cb_rp]
+    mov al, [cs:bx]
+    inc bl
+    mov [cs:cb_rp], bx
+    out dx, al
+    inc word [cs:cb_outs]
+    sub cx, [cs:cb_nn]
+    jns .one
+    pop dx
+    pop cx
+    pop bx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; cb_row_isr - the library's own Covox ISR at [cb_cur]. out: AX = spans, 0
@@ -883,6 +937,89 @@ cb_tisrl:                           ; ...and while it is LIVE: counted, then
     jmp far [cs:cb_chain]
 
 ; -----------------------------------------------------------------------------
+; cb_row_pit - WHAT SHIPS, at [cb_cur]: channel 0 a whole tick (65,536) with
+; IRQ0 owing it, the workload polling the latched count every 4 steps and
+; writing every sample due. out: AX = spans (the row's ticks ARE 65,536
+; counts), DX = missed per mille (due less written); AX = 0 refused
+; -----------------------------------------------------------------------------
+cb_row_pit:
+    push bx
+    push cx
+    push si
+    mov word [cb_body], cb_wp4
+    xor ax, ax                      ; channel 0: divisor 0, 65,536 counts
+    mov si, cb_tisr
+    call cb_open
+    jc .no
+    pushf
+    cli
+    xor al, al                      ; the first sample due a sample from now
+    out 0x43, al
+    in al, 0x40
+    mov ah, al
+    in al, 0x40
+    xchg al, ah
+    neg ax
+    add ax, [cb_nn]
+    mov [cb_due], ax
+    mov word [cb_outs], 0
+    mov word [cb_owed], 0
+    popf
+    xor cx, cx
+.l:
+    call [cb_body]
+    inc cx
+    cmp word [cb_owed], CB_TICKS
+    jb .l
+    pushf
+    cli
+    mov ax, [cb_outs]
+    mov [cb_wrote], ax
+    popf
+    call cb_close
+    mov si, [cb_owed]               ; the ticks paid
+.pay:
+    or si, si
+    jz .rep
+    pushf
+    cli
+    call far [cb_chain]
+    dec si
+    jmp short .pay
+.rep:
+    push cx
+    mov dx, [cb_owed]               ; DUE: owed x 65,536 / N
+    xor ax, ax
+    div word [cb_nn]
+    mov bx, ax
+    sub ax, [cb_wrote]
+    jnc .pos
+    xor ax, ax
+.pos:
+    mov cx, 1000
+    mul cx
+    or bx, bx
+    jz .z
+    cmp dx, bx
+    jae .z
+    div bx
+    mov dx, ax
+    jmp short .m
+.z:
+    xor dx, dx
+.m:
+    pop ax                          ; spans
+    jmp short .out
+.no:
+    xor ax, ax
+    xor dx, dx
+.out:
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; cb_report - the rows as lines
 ; -----------------------------------------------------------------------------
 cb_report:
@@ -941,6 +1078,13 @@ cb_report:
     mov ax, [di+10]
     xor dx, dx
     mov si, cb_l_miss4
+    call cb_kv
+    mov ax, [di+12]
+    mov si, cb_l_pit4
+    call cb_share_lines
+    mov ax, [di+14]
+    xor dx, dx
+    mov si, cb_l_misp4
     call cb_kv
     add bx, 2
     jmp .r
@@ -1059,7 +1203,7 @@ cb_rates:   dw 5512, 8000, 11025, 0
 
 cb_f_out:   db 'COVBENCH.TXT', 0
 cb_l_title: db 'COVBENCH - what feeding a Covox costs this machine (SPEC.md 34.14.3)', 0
-cb_l_hint1: db 'R (or a click) runs it: ~25 s, hands off the mouse. Silent: the', 0
+cb_l_hint1: db 'R (or a click) runs it: ~30 s, hands off the mouse. Silent: the', 0
 cb_l_hint2: db 'DAC holds its middle. The report is saved as COVBENCH.TXT.', 0
 cb_l_cpu:   db 'CPU tier', 0
 cb_l_cpu8086: db '8086/8088 class', 0
@@ -1089,13 +1233,16 @@ CB_LW       equ 24
     CBL cb_l_poll2c, '  poll2 cycles a sample'
     CBL cb_l_poll4,  '  poll4 share, p.m.'
     CBL cb_l_poll4c, '  poll4 cycles a sample'
+    CBL cb_l_pit4,   '  pit4 share, p.m.'
+    CBL cb_l_pit4c,  '  pit4 cycles a sample'
     CBL cb_l_poll4l, '  poll2L share, p.m.'
     CBL cb_l_poll4lc,'  poll2L cycles a sampl'
 cb_l_miss2: db '  poll2 missed, p.m.', 0
+cb_l_misp4: db '  pit4 missed, p.m.', 0
 cb_l_miss4: db '  poll4 missed, p.m.', 0
 cb_l_miss4l: db '  poll2L missed, p.m.', 0
 cb_l_end:   db 'done - saved as COVBENCH.TXT', 0
-cb_p_run:   db 'running: eleven rows (~25 s)...', 0
+cb_p_run:   db 'running: fourteen rows (~30 s)...', 0
 
 ; the poll's and the lean ISR's shared state: in the IMAGE, because both are
 ; read and written through CS by code that may run with any DS
@@ -1104,6 +1251,7 @@ cb_rp:      dw cb_ring              ; the output page's next byte (low byte
 cb_port:    dw 0x0378
 cb_outs:    dw 0                    ; samples a polled row wrote
 cb_owed:    dw 0                    ; rate periods owed the kernel
+cb_due:     dw 0                    ; PIT4: the next sample's due time
 cb_k:       dw 0                    ; K, samples a rate period
 cb_kc:      dw 0                    ; the lean ISR's count to the chain
 cb_chain:   dw 0, 0                 ; the kernel's IRQ0, far

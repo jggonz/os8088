@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """COVBENCH on MartyPC's Covox 5150 - the reference the field is read against.
 
-    make covbench covoxtest && python3 tests/covbench.py [--jitter]
+    make covbench covoxtest && python3 tests/covbench.py
 
 Boots `make covoxtest`'s 720 KB disk (SOUND.DRV wanted, the tier a Covox on
 LPT2 = 378h) with build/covbench720.img in B:, opens COVBENCH.O88, presses R
@@ -14,18 +14,12 @@ What must hold (a machine that ran the bench at all - SPEC.md 34.14.3):
      workload that never did;
   2. each output's share RISES with the rate - it costs once a sample, so a
      share that does not rise measured something else;
-  3. POLL2 with the tick OWED misses fewer than 5% of its samples at every
-     rate, and POLL4 at 5,512 and 8,000: the polling is what the row prices,
+  3. POLL2 and PIT4 (what ships) with the tick OWED miss fewer than 5% of
+     their samples at every rate, and POLL4 at 5,512 and 8,000: the polling is what the row prices,
      and a row that missed more priced less output than the rate asks for.
      POLL4 at 11,025 is NOT held to it - a poll every four steps plus the
      write is longer than an 11 kHz sample, so it loses edges by design, and
      the row is there to show that cliff.
-
---jitter adds the timing the report cannot see: an io breakpoint on 378h
-over one POLL4 row at 11,025 Hz, every write's cycle stamped, and the gaps'
-spread printed against the ideal 433 cycles. (MartyPC's covox capture holds
-the last byte at 44.1 kHz, so it cannot show jitter under ~23 us; the
-breakpoint can.)
 
 Broken on purpose - POLL's write taken out - every polled row
 writes nothing and 3 FAILS.
@@ -102,24 +96,25 @@ def main():
     rates = (5512, 8000, 11025)
     if not n0:
         bad.append("1: the workload did not run with the output shut")
-    for kind in ("isr", "lean", "poll2"):
+    for kind in ("isr", "lean", "poll2", "pit4"):
         sh = [rows.get((kind, r)) for r in rates]
         if any(x is None or not 20 <= x <= 990 for x in sh):
             bad.append("1: %s's shares %s" % (kind, sh))
         elif not sh[0] < sh[1] < sh[2]:
             bad.append("2: %s's share does not rise with the rate: %s"
                        % (kind, sh))
-    for kind, rs in (("poll2", rates), ("poll4", rates[:2])):
+    for kind, rs in (("poll2", rates), ("poll4", rates[:2]),
+                     ("pit4", rates)):
         for r in rs:
             mm = miss.get((kind, r))
             if mm is None or mm >= 50:
                 bad.append("3: %s at %d missed %s p.m." % (kind, r, mm))
     print("   shares p.m. (5512/8000/11025): " + "; ".join(
         "%s %s" % (k, [rows.get((k, r)) for r in rates])
-        for k in ("isr", "lean", "poll2", "poll4")))
+        for k in ("isr", "lean", "poll2", "poll4", "pit4")))
     print("   missed p.m.: " + "; ".join(
         "%s %s" % (k, [miss.get((k, r)) for r in rates])
-        for k in ("poll2", "poll4")) + "; poll2L %s"
+        for k in ("poll2", "poll4", "pit4")) + "; poll2L %s"
         % miss.get(("poll2L", 11025)))
     for b in bad:
         print("   FAIL " + b)

@@ -60,30 +60,28 @@
 ;
 ; THE POLLED COVOX (SPEC.md 34.14.3), assembled only where the package
 ; defines OS88SPK_POLL - and OS88SPK_PRING / OS88SPK_PRL, the address and the
-; power-of-two size of a ring in ITS OWN SEGMENT. No interrupt a sample: an
-; 8088's IRQ0 costs ~425 cycles a sample, all of an 11,025 Hz sample's 433,
-; and what it leaves is what COVBENCH measures. Channel 2 runs as a square
-; wave whose output changes once a sample (mode 3 at 2N), the 8255 shows it
-; at port 62h bit 5 on a PC or XT, and the PRODUCER's own loops look at it
-; (OS88SPK_POLLAH / OS88SPK_POLLM) and write the next ring byte at each
-; change (os88spk_pout). IRQ0 meanwhile counts the kernel's ticks and OWES
-; them - its 1,300-cycle period entry would be three samples late eighteen
-; times a second - and os88spk_pstop pays them. The price is the producer's:
-; every stretch of it longer than a sample must hold a poll, so a polled play
-; draws nothing (a kernel call cannot poll) and must not FSX_WAIT.
+; power-of-two size of a ring in ITS OWN SEGMENT. No interrupt a sample: the
+; PRODUCER's own loops ask the time (channel 0's count, latched) and write
+; every sample that is due (OS88SPK_POLLM, os88spk_pout), so a stretch with
+; no poll makes samples late and never loses them. IRQ0 meanwhile counts the
+; kernel's ticks and OWES them - its period entry would be three samples late
+; eighteen times a second - and os88spk_pstop pays them. The price is the
+; producer's: every stretch of it must hold a poll, a polled play draws
+; nothing (a kernel call cannot poll) and must not FSX_WAIT. What it buys on
+; a 4.77 MHz 8088 is MEASURED, and modest: MIDIRack 5,523 -> 6,520 Hz, and
+; nothing for Tracker, whose mixer is most of a sample by itself (34.14.3).
 ;
 ;   os88spk_pgo   DX = the rate. The Covox's port must be named
 ;                 (os88spk_lpt). Plays the ring from os88spk_pcons up to
 ;                 os88spk_ptot. INSIDE YOUR OWN FSXF_RATE BRACKET, on a PC or
-;                 XT only (OSAPI_CPU_INFO = CPU_8086: an AT shows channel 2
-;                 elsewhere, and is fast enough for the ISR). CF=1: not here
-;                 - play os88spk_go instead
+;                 XT only (OSAPI_CPU_INFO = CPU_8086: an AT is fast enough
+;                 for the ISR). CF=1: not here - play os88spk_go instead
 ;   os88spk_pstop it stops where it is; the kernel's ticks paid. Harmless
 ;                 when stopped
-;   os88spk_pout  one sample to the port (or, the ring empty, the last one
-;                 held). The POLL macros' call; AL spent
-;   os88spk_ppoll a poll that preserves everything, for code too cold for
-;                 the macros
+;   OS88SPK_POLLM a poll in line: AX and the flags spent
+;   os88spk_pout  AX = the lateness: every sample due out of the port (or,
+;                 the ring empty, the level held and the time kept)
+;   os88spk_ppoll a poll that preserves everything, flags included
 ;   os88spk_pspin AX = a depth: polls until the ring holds no more than it
 ;   os88spk_ptot  the producer's TOTAL (bytes made, free-running), and
 ;   os88spk_pcons the samples played: both words in your image
@@ -644,12 +642,16 @@ os88spk_pout:
 .port:
     dw 0x0378                       ; (the port, patched in by os88spk_pgo)
 
-; os88spk_ppoll - a poll that preserves everything, for code too cold for
-; the macro
+; os88spk_ppoll - a poll that preserves everything, THE FLAGS INCLUDED, for
+; code too cold for the macro - it goes between a test and its jump as
+; easily as anywhere (Tracker's first one sat between int 16h's ZF and its
+; jz, and read a key that was never pressed)
 os88spk_ppoll:
+    pushf
     push ax
     OS88SPK_POLLM
     pop ax
+    popf
     ret
 
 ; os88spk_pspin - AX = a depth: polls until TOTAL - CONS is no more than it.

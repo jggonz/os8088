@@ -379,10 +379,12 @@ MRY_NSITE   equ 4
 ; mry_pp - a poll where a polled play is on; nothing otherwise (every
 ; register kept)
 mry_pp:
+    pushf
     cmp byte [mry_pol], 0
     je .out
     call os88spk_ppoll
 .out:
+    popf
     ret
 
 ; -----------------------------------------------------------------------------

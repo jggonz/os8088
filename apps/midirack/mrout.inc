@@ -41,7 +41,9 @@ MRK_PNMIN   equ 183                 ; a polled Covox's shortest sample, in
                                     ; (99.8% of the rate, never under 588
                                     ; queued; 7,018 Hz played 95.6%, 8,007
                                     ; 81% - SPEC.md 34.14.3)
-MRK_PRATE   equ 6520                ; ...and the rate Automatic asks for
+MRK_PRATE   equ 6520                ; ...and the rate it plays
+MRK_LRATE   equ 6214                ; A COVOX's Automatic on an XT, by its
+                                    ; ISR: the window live, the ring full
 MRW_URATE   equ 18643               ; FM / tone units a second: PIT / 64
 MRW_TAIL    equ 18                  ; ticks a finished song rings on (~1 s)
 
@@ -1039,8 +1041,9 @@ mrb_close:
 ; mrb_rate_for / mrk_rate_for - AX = the rate a synth play asks for: the one
 ; Settings chose ([mr_rate], an index into mr_rates), else the CPU's own -
 ; the card 8,000 on an 8088, 16,000 on a 286, 22,050 past it; the speaker
-; 5,512 on an 8088 (its pulses are half the machine, SPEC.md 105.7.1) and
-; 16,000 past it. The speaker clamps what it is given (mrk_start)
+; 5,512 on an 8088 (its pulses are half the machine, SPEC.md 105.7.1), a
+; Covox 6,214 there (34.14.3), and 16,000 past it. The speaker clamps what
+; it is given (mrk_start)
 ; -----------------------------------------------------------------------------
 mr_rates:   dw 0, 8000, 11025, 16000, 22050, 32000, 44100
 MR_NRATE    equ 7
@@ -1058,14 +1061,20 @@ mrb_rate_for:
 .r:
     ret
 
-mrk_rate_for:
+mrk_rate_for:                       ; (AL = the output, MRO_*)
+    push bx
+    mov bl, al
     call mr_rate_user
     jnc .r
-    mov ax, 5512
-    cmp byte [mr_cpu], CPU_8086
-    je .r
     mov ax, 16000
-.r:
+    cmp byte [mr_cpu], CPU_8086
+    jne .r
+    mov ax, 5512
+    cmp bl, MRO_LPT                 ; A COVOX ON AN XT: its ISR holds 6,214
+    jne .r                          ; with BATTLE1's drums, the ring never
+    mov ax, MRK_LRATE               ; under 3,000 of 4,096 (SPEC.md 34.14.3),
+.r:                                 ; where 5,512 was the speaker's figure
+    pop bx
     ret
 
 ; mrk_real - AX = a rate asked of the speaker -> AX = the rate it plays.
@@ -1240,6 +1249,7 @@ mrk_start:
     jc .no
     mov [mrk_seg], dx
 .have:
+    mov al, [mr_out]
     call mrk_rate_for               ; AX = the rate asked for
     mov cl, 4                       ; four voices on an 8088, six past it
     cmp byte [mr_cpu], CPU_8086
@@ -1495,8 +1505,10 @@ mrk_patch:
     ret
 
 ; mrk_canpoll - AL = the output: CF = 0 a play on it would be a POLLED
-; Covox's - the Covox, on a PC or XT (the 8255 shows channel 2 there, and an
-; AT is fast enough for the ISR), on a machine that has not refused one
+; Covox's (SPEC.md 34.14.3) - the Covox, on a PC or XT (an AT is fast enough
+; for the ISR), on a machine that has not refused one, and ASKED FOR: a rate
+; chosen in Settings. Automatic is the ISR's 6,214 Hz with the window live;
+; a chosen rate is the most the XT can do, 6,520 Hz with the window still
 mrk_canpoll:
     cmp al, MRO_LPT
     jne .no
@@ -1504,16 +1516,20 @@ mrk_canpoll:
     jne .no
     cmp byte [mrk_nopoll], 0
     jne .no
+    push ax
+    call mr_rate_user
+    pop ax
+    jc .no
     clc
     ret
 .no:
     stc
     ret
 
-; mrk_prate - AX = the polled Covox's rate: Settings' choice, or MRK_PRATE
-; on Automatic, N held to MRK_PNMIN..255 counts - so a faster choice plays at
-; 6,520 Hz, the most a 4.77 MHz 8088 holds with the synth beside the writes
-; (SPEC.md 34.14.3); the status line says the rate it plays
+; mrk_prate - AX = the polled Covox's rate: Settings' choice held to
+; MRK_PNMIN..255 counts - every choice the list has is past it, so the play
+; is 6,520 Hz, the most a 4.77 MHz 8088 holds with the synth beside the
+; writes (SPEC.md 34.14.3); the status line says the rate it plays
 mrk_prate:
     push bx
     push dx
