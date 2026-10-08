@@ -38,6 +38,43 @@ MRY_LMAX    equ 49024               ; the longest half-period: 383 samples -
                                     ; is at most one half past the span), and
                                     ; at 44.1 kHz that is down to 57 Hz
 MRY_LMIN    equ 160                 ; ...and the shortest: past ~Nyquist, mute
+MRY_CLRN    equ 10                  ; words a polled clear does between polls
+%if (MRY_SPAN + 2) % MRY_CLRN
+%error "a polled clear's pieces must tile the delta buffer"
+%endif
+
+; MRY_POLL site - os88spk's poll in the synth's loops, where DS is our own
+; segment (no CS override) and AX and BX are free. ONE sample due - the
+; common case - is written in line, ~180 cycles; a backlog goes to
+; os88spk_pout, which writes all of it. os88spk_pout alone was ~480 cycles a
+; sample measured (its state is all CS-relative words, on an 8-bit bus) and
+; held MIDIRack to 5.7 kHz; one in-line write a poll and no more let a dense
+; passage owe until the guard threw samples away. SITE names the port's
+; immediate, which mrk_patch writes
+%macro MRY_POLL 1
+    OS88SPK_PNOW
+    sub ax, [os88spk_pdue]
+    js %%n
+    cmp ax, [os88spk_pn]
+    jae %%many                      ; two or more due: the burst
+    mov ax, [os88spk_pn]
+    add [os88spk_pdue], ax
+    mov bx, [os88spk_pcons]
+    cmp bx, [os88spk_ptot]
+    je %%n
+    inc word [os88spk_pcons]
+    and bx, OS88SPK_PRL - 1
+    mov al, [bx+OS88SPK_PRING]
+    push dx
+%1:
+    mov dx, 0x0378
+    out dx, al
+    pop dx
+    jmp short %%n
+%%many:
+    call os88spk_pout
+%%n:
+%endmacro
 
     MRW mry_rate                    ; the sample rate the pitches are for
     MRB mry_nv                      ; voices
@@ -48,6 +85,9 @@ MRY_LMIN    equ 160                 ; ...and the shortest: past ~Nyquist, mute
     MRW mry_slo                     ; the span's first sample, 32 bits
     MRW mry_shi
     MRW mry_pos                     ; where the voices have been rendered to
+    MRB mry_pol                     ; 1: a POLLED Covox play (SPEC.md 34.14.3)
+                                    ; - every stretch longer than a sample
+                                    ; holds a poll of channel 2 (mry_pp)
     MRBUF mry_t, MRY_MAXV * 2       ; per voice: the next edge (1/128 sample)
     MRBUF mry_l0, MRY_MAXV * 2      ; ...the half-length after it
     MRBUF mry_l1, MRY_MAXV * 2      ; ...and the one after that (a noise
@@ -170,10 +210,23 @@ mry_span:
     push ds
     pop es
     mov di, mry_dbuf                ; the deltas, cleared
-    mov cx, MRY_SPAN + 2
     xor ax, ax
     cld
+    cmp byte [mry_pol], 0
+    jne .pclr
+    mov cx, MRY_SPAN + 2
     rep stosw
+    jmp short .clr
+.pclr:                              ; POLLED: 1,830 cycles is four samples,
+    mov bp, (MRY_SPAN + 2) / MRY_CLRN   ; so in pieces with a poll between
+.pc:
+    mov cx, MRY_CLRN
+    xor ax, ax
+    rep stosw
+    MRY_POLL ..@mry_site_clr
+    dec bp
+    jnz .pc
+.clr:
     mov word [mry_pos], 0           ; (an envelope's step lands at 0)
     dec byte [mry_ecnt]             ; the envelopes, every [mry_ediv] spans
     jnz .ev
@@ -201,6 +254,7 @@ mry_span:
     call mry_render                 ; the voices up to the event
 .play:
     call mrq_step                   ; ...and every event at its tick
+    call mry_pp
     jmp short .ev
 .rest:
     mov ax, MRY_SPAN
@@ -224,10 +278,15 @@ mry_span:
     pop es                          ; ES:DI = where the span goes
     mov si, mry_dbuf
     mov dx, [mry_lev]
+    mov bp, mry_mix                 ; (the POLLED pass on a polled play)
+    cmp byte [mry_pol], 0
+    je .pm
+    mov bp, mry_mixp
+.pm:
     cmp cx, MRY_SPAN
     jae .one
     push cx
-    call mry_mix                    ; up to the ring's end...
+    call bp                         ; up to the ring's end...
     pop ax
     mov cx, MRY_SPAN
     sub cx, ax
@@ -237,7 +296,7 @@ mry_span:
     jbe .m
     mov cx, MRY_SPAN
 .m:
-    call mry_mix
+    call bp
     mov [mry_lev], dx
     add word [mry_slo], MRY_SPAN
     adc word [mry_shi], 0
@@ -280,6 +339,52 @@ mry_mix:
 .out:
     ret
 
+; mry_mixp - mry_mix with a POLL every two samples: two samples of the pass
+; are ~120 cycles, and a poll writes every sample due (os88spk_pout), so the
+; lateness the pass adds is that and no more
+mry_mixp:
+    jcxz .out
+    cld
+    shr cx, 1
+    jnc .two
+    lodsw                           ; (an odd count: one first)
+    add dx, ax
+    mov bx, dx
+    mov al, [mry_otab+bx]
+    stosb
+    jcxz .out
+.two:
+    lodsw
+    add dx, ax
+    mov bx, dx
+    mov al, [mry_otab+bx]
+    stosb
+    lodsw
+    add dx, ax
+    mov bx, dx
+    mov al, [mry_otab+bx]
+    stosb
+    MRY_POLL ..@mry_site_mix
+    loop .two
+.out:
+    ret
+
+
+
+; mrk_patch's list: every port immediate of the synth's in-line writes
+mry_sites:  dw ..@mry_site_clr + 1, ..@mry_site_mix + 1, ..@mry_site_ep + 1
+            dw ..@mry_site_nep + 1
+MRY_NSITE   equ 4
+
+; mry_pp - a poll where a polled play is on; nothing otherwise (every
+; register kept)
+mry_pp:
+    cmp byte [mry_pol], 0
+    je .out
+    call os88spk_ppoll
+.out:
+    ret
+
 ; -----------------------------------------------------------------------------
 ; mry_render - every sounding voice from [mry_pos] up to sample AX
 ; -----------------------------------------------------------------------------
@@ -299,6 +404,7 @@ mry_render:
     cmp byte [mry_stage+bx], 0
     je .n
     call mry_voice
+    call mry_pp
 .n:
     inc bx
     jmp short .v
@@ -337,6 +443,8 @@ mry_voice:
     cmp byte [mry_kind+si], 0
     jne .noise
     xor si, si                      ; SI = the edges, for their parity
+    cmp byte [mry_pol], 0
+    jne .ep
 .e:
     mov bx, bp                      ; (t >> 7) x 2
     shl bx, 1
@@ -350,6 +458,7 @@ mry_voice:
     xor si, 1
     cmp bp, cx
     jb .e
+.edone:
     mov bx, [mry_cur]
     mov ax, si
     xor [mry_hi+bx], al             ; an odd count turned it over
@@ -360,6 +469,8 @@ mry_voice:
     jmp short .out
 .noise:
     mov si, [mry_lfsr]
+    cmp byte [mry_pol], 0
+    jne .nep
 .ne:
     mov bx, bp
     shl bx, 1
@@ -378,6 +489,7 @@ mry_voice:
     add bp, dx
     cmp bp, cx
     jb .ne
+.nedone:
     mov [mry_lfsr], si
     mov bx, [mry_cur]
     mov byte [mry_hi+bx], 0         ; (a noise voice's sign is in its delta)
@@ -395,6 +507,64 @@ mry_voice:
     pop cx
     pop bx
     pop ax
+    ret
+.ep:                                ; THE EDGES, POLLED: a poll every two
+    push ax                         ; edges (a late poll catches up), AX
+    MRY_POLL ..@mry_site_ep         ; (the delta) kept around it
+    pop ax                          ; until the edge's own index
+    mov bx, bp
+    shl bx, 1
+    mov bl, bh
+    xor bh, bh
+    shl bx, 1
+    add [mry_dbuf+bx], ax
+    neg ax
+    add bp, dx
+    xchg dx, di
+    xor si, 1
+    cmp bp, cx
+    jae .epx
+    mov bx, bp
+    shl bx, 1
+    mov bl, bh
+    xor bh, bh
+    shl bx, 1
+    add [mry_dbuf+bx], ax
+    neg ax
+    add bp, dx
+    xchg dx, di
+    xor si, 1
+    cmp bp, cx
+    jb .ep
+.epx:
+    jmp .edone
+.nep:
+    push ax
+    MRY_POLL ..@mry_site_nep
+    pop ax
+    call .ne1
+    jae .nepx
+    call .ne1
+    jb .nep
+.nepx:
+    jmp .nedone
+.ne1:                               ; one noise edge; CF = 1 another is due
+    mov bx, bp                      ; before the limit
+    shl bx, 1
+    mov bl, bh
+    xor bh, bh
+    shl bx, 1
+    add [mry_dbuf+bx], ax
+    neg ax
+    shr si, 1
+    jnc .nnx
+    xor si, 0xB400
+.nnx:
+    mov dx, si
+    and dx, di
+    add dx, 128
+    add bp, dx
+    cmp bp, cx
     ret
 
     MRW mry_cur
@@ -464,6 +634,7 @@ mry_etick:
     mov byte [mry_stage+bx], 0      ; ...and the voice free
     mov byte [mrv_st+bx], MRV_FREE
 .n:
+    call mry_pp
     inc bx
     jmp .v
 .out:
@@ -589,6 +760,7 @@ mry_on:
     pop cx
     call mry_vel                    ; vamp from DL and channel SI
     call mry_tune                   ; the lengths from the key (AH), the bend
+    call mry_pp                     ; (a polled Covox: tuning is two divides)
     mov al, [mry_atk+bx]
     mov cl, al
     cmp al, 255
@@ -637,6 +809,7 @@ mry_on:
     mov ah, cl                      ; a pitched drum: its note, no bend
     mov si, 0xFFFF
     call mry_tune
+    call mry_pp
     push bx
     shl bx, 1
     mov ax, [mry_l0+bx]             ; ...falling an eighth of itself a step

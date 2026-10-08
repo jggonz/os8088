@@ -600,7 +600,8 @@ mrq_step:
     cmp dx, [mrq_tickhi]
     jne .n
     call mrq_event                  ; one event, and the next delta
-    jmp short .again
+    call mry_pp                     ; (a polled Covox: a chord's ten notes are
+    jmp short .again                ; ~25 ms, which a poll a note breaks up)
 .n:
     inc bx
     jmp short .t

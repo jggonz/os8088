@@ -251,6 +251,13 @@ mr_entry:
     ret
 
 ; =============================================================================
+; THE POLLED COVOX (SPEC.md 34.14.3, 105.8.7): os88spk.inc's polled half, its
+; ring a 2 KB page of our own bss (mrout.inc's mrk_pring) - and the library
+; FIRST, because the synth's loops use its poll macros
+%define OS88SPK_POLL
+OS88SPK_PRL     equ 2048
+OS88SPK_PRING   equ mrk_pring
+%include "os88spk.inc"
 %include "mrseq.inc"
 %include "mrchan.inc"
 %include "mrfm.inc"
@@ -263,7 +270,6 @@ mr_entry:
 %include "mrcb.inc"
 %include "mrtab.inc"
 %include "os88pit.inc"
-%include "os88spk.inc"
 
 ; =============================================================================
 ; data: the window, the menus, strings
@@ -339,6 +345,8 @@ mr_s_spkplay:   db 'PC speaker - click or Space to pause', 0
 mr_s_spkslow:   db 'The speaker cannot play at this rate here', 0
 mr_s_lptpaused: db 'Paused - Space plays on the Covox', 0
 mr_s_lptplay:   db 'Covox - click or Space to pause', 0
+mr_s_lptpoll:   db 'Covox, polled - click or Space to pause', 0
+mr_s_lptnopoll: db 'The Covox could not be polled - Play again', 0
 mr_s_nolpt:     db 'No Covox: pick it on the Sound page (Control Panel)', 0
 mr_s_full:      db 'The playlist is full', 0
 mr_s_added:     db 'Added to the playlist', 0

@@ -6968,6 +6968,35 @@ $(BUILD)/spkbench144.img: $(BUILD)/spkbench.o88 tools/os88disk.py
 spkbench: $(BUILD)/spkbench360.img $(BUILD)/spkbench720.img \
           $(BUILD)/spkbench144.img
 
+# COVBENCH (tests/covbench): what feeding a COVOX costs THIS machine - the
+# shipped sample ISR, the least an ISR a sample can be, and NO interrupt a
+# sample (the workload polling channel 2's output, port 62h bit 5, every 2 or
+# 4 of Tracker's mix steps), each at 5,512, 8,000 and 11,025 Hz against one
+# fixed workload (SPEC.md 34.14.3). spkbench's shape and for the same
+# reader: the owner's 5150 and an 86Box XT. On demand: nothing here ships.
+$(BUILD)/covbench.bin: tests/covbench/covbench.asm tests/benchlib.inc \
+                       apps/os88api.inc apps/os88spk.inc \
+                       tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/covbench/covbench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/covbench/covbench.asm
+	@echo "covbench: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/covbench.o88: $(BUILD)/covbench.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/covbench.bin -o $@
+
+$(BUILD)/covbench360.img: $(BUILD)/covbench.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/covbench.o88
+
+$(BUILD)/covbench720.img: $(BUILD)/covbench.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/covbench.o88
+
+$(BUILD)/covbench144.img: $(BUILD)/covbench.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/covbench.o88
+
+.PHONY: covbench
+covbench: $(BUILD)/covbench360.img $(BUILD)/covbench720.img \
+          $(BUILD)/covbench144.img
+
 # tests/filler is an instrument with no assertions of its own: it takes the
 # arena down to a few tens of KB and, on a keypress, asks for one KB more than
 # the largest run. tests/heapfrag cannot do that job - its comb is sized from

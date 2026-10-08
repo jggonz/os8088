@@ -3365,10 +3365,11 @@ mru_mkdev:
 .kc:
     call mru_cat
     cmp [mr_out], al                ; AL = the output shown: OPEN, its rate;
-    mov ax, [mrk_rate]              ; else what a Play would ask the pulses
-    je .kr                          ; for now (a mov leaves the flags)
-    call mrk_rate_for
-    call mrk_real
+    je .kopen                       ; else what a Play on it would play now -
+    call mrk_rate_show              ; a polled Covox's, or the pulses'
+    jmp short .kr
+.kopen:
+    mov ax, [mrk_rate]
 .kr:
     call mru_decc
     mov si, mru_d_hz
@@ -3908,7 +3909,7 @@ mru_sho:    db 'Output device', 0
 mru_shr:    db 'Synth sample rate', 0
 mru_l_bgd:  db 'Speaker: play the melody in the background', 0
 mru_snote:  db 'Above 22,050 Hz needs an SB Pro or SB16. Speaker and', 0
-mru_snote2: db 'Covox: 24.8 kHz (8 kHz on an 8088). FM, MIDI: no rate.', 0
+mru_snote2: db 'Covox: 24.8 kHz (6.5 kHz on an XT). FM, MIDI: no rate.', 0
 mru_sfnd:   db 'Found: ', 0
 mru_f_opl2: db 'OPL2  ', 0
 mru_f_opl3: db 'OPL3  ', 0

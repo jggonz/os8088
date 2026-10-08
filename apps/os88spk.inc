@@ -58,6 +58,36 @@
 ;                 Covox and SOUND.DRV found a port (SND_CAP_LPTDAC, then its
 ;                 SNDV_DACINFO). CF = 1 none. UI task or worker
 ;
+; THE POLLED COVOX (SPEC.md 34.14.3), assembled only where the package
+; defines OS88SPK_POLL - and OS88SPK_PRING / OS88SPK_PRL, the address and the
+; power-of-two size of a ring in ITS OWN SEGMENT. No interrupt a sample: an
+; 8088's IRQ0 costs ~425 cycles a sample, all of an 11,025 Hz sample's 433,
+; and what it leaves is what COVBENCH measures. Channel 2 runs as a square
+; wave whose output changes once a sample (mode 3 at 2N), the 8255 shows it
+; at port 62h bit 5 on a PC or XT, and the PRODUCER's own loops look at it
+; (OS88SPK_POLLAH / OS88SPK_POLLM) and write the next ring byte at each
+; change (os88spk_pout). IRQ0 meanwhile counts the kernel's ticks and OWES
+; them - its 1,300-cycle period entry would be three samples late eighteen
+; times a second - and os88spk_pstop pays them. The price is the producer's:
+; every stretch of it longer than a sample must hold a poll, so a polled play
+; draws nothing (a kernel call cannot poll) and must not FSX_WAIT.
+;
+;   os88spk_pgo   DX = the rate. The Covox's port must be named
+;                 (os88spk_lpt). Plays the ring from os88spk_pcons up to
+;                 os88spk_ptot. INSIDE YOUR OWN FSXF_RATE BRACKET, on a PC or
+;                 XT only (OSAPI_CPU_INFO = CPU_8086: an AT shows channel 2
+;                 elsewhere, and is fast enough for the ISR). CF=1: not here
+;                 - play os88spk_go instead
+;   os88spk_pstop it stops where it is; the kernel's ticks paid. Harmless
+;                 when stopped
+;   os88spk_pout  one sample to the port (or, the ring empty, the last one
+;                 held). The POLL macros' call; AL spent
+;   os88spk_ppoll a poll that preserves everything, for code too cold for
+;                 the macros
+;   os88spk_pspin AX = a depth: polls until the ring holds no more than it
+;   os88spk_ptot  the producer's TOTAL (bytes made, free-running), and
+;   os88spk_pcons the samples played: both words in your image
+;
 ; All preserve every register but their outputs. Labels os88spk_; the
 ; state is in the including package's own image, reached through CS.
 ; =============================================================================
@@ -522,3 +552,287 @@ os88spk_pp:     db 1                ; pulses a sample (34.11.7)
 os88spk_pin:    db 0                ; ...as init was handed it
 os88spk_lptp:   dw 0                ; a Covox's data port, 0 = the speaker
                                     ; (os88spk_lpt, SPEC.md 34.14)
+
+%ifdef OS88SPK_POLL
+; =============================================================================
+; THE POLLED COVOX (SPEC.md 34.14.3)
+;
+; THE CLOCK IS CHANNEL 0's COUNT. Channel 0 runs a whole tick (divisor 0,
+; 65,536 counts) with IRQ0 OWING it (os88spk_ptick), so its count, latched and
+; negated, is a free-running 16-bit time in PIT counts. A sample is DUE when
+; that time has passed [os88spk_pdue], and a write moves pdue on by N. A poll
+; that comes late finds the time further past pdue and the samples it owes
+; go out one a poll until it has caught up: a stretch of the producer that
+; holds no poll makes samples LATE, never lost - which a level poll of
+; channel 2's output could not promise (it sees that the output changed, not
+; how often, so two changes between polls lost both samples and slowed the
+; play by a fifth on MIDIRack's 5150). Sixteen bits of PIT counts is 55 ms of
+; lateness before the sign is wrong, and no stretch of a player is that long.
+; =============================================================================
+%if (OS88SPK_PRL & (OS88SPK_PRL - 1)) != 0
+%error "OS88SPK_PRL is a power of two: the ring's index is a mask"
+%endif
+
+; THE LATENESS GUARD: a poll that finds the play this late (PIT counts, ~20
+; ms) drops what it owes and starts again from now - one audible gap, where
+; lateness past 32,767 would read as EARLY and hold the play ~25 ms for every
+; time it happened (measured: MIDIRack at 11 kHz, before this, played 57%)
+OS88SPK_LATE    equ 0x6000
+
+; OS88SPK_PNOW - AX = the time: channel 0 latched, its count negated. ~60
+; cycles, every register but AX kept (flags spent)
+%macro OS88SPK_PNOW 0
+    xor al, al
+    out 0x43, al
+    in al, 0x40
+    mov ah, al
+    in al, 0x40
+    xchg al, ah
+    neg ax
+%endmacro
+
+; OS88SPK_POLLM - a poll: the next sample written if it is due. AX and the
+; flags spent. (One name for every caller: there is no level to hold now)
+%macro OS88SPK_POLLM 0
+    OS88SPK_PNOW
+    sub ax, [cs:os88spk_pdue]
+    js %%n
+    call os88spk_pout               ; (AX = the lateness)
+%%n:
+%endmacro
+%define OS88SPK_POLLAH OS88SPK_POLLM
+
+; -----------------------------------------------------------------------------
+; os88spk_pout - AX = the lateness (now - due, >= 0): EVERY sample due goes
+; out of the port, the ring at CONS, CONS and the due time advanced each. A
+; poll that comes late writes what it owes in a burst - one a poll let a
+; dense passage, where the ring is never full enough to spin, owe more and
+; more until the guard threw it away (MIDIRack at 8 kHz: 20 throws, 5% of
+; the play, in 8 s). Past the guard the owed samples are dropped and the
+; time starts again from now. A ring with nothing queued plays nothing - the
+; DAC holds what it had - but the time moves on, so a late producer costs
+; held levels and the play keeps its time. AX spent
+; -----------------------------------------------------------------------------
+os88spk_pout:
+    cmp ax, OS88SPK_LATE
+    jb .go
+    add [cs:os88spk_pdue], ax       ; too late: from now
+    xor ax, ax
+.go:
+    push bx
+    push dx
+    push cx
+    mov cx, ax
+    mov dx, [cs:os88spk_pout.port]
+.one:
+    add word [cs:os88spk_pdue], strict word 0
+.n:                                 ; (N, patched in by os88spk_pgo)
+    mov bx, [cs:os88spk_pcons]
+    cmp bx, [cs:os88spk_ptot]
+    je .dry
+    inc word [cs:os88spk_pcons]
+    and bx, OS88SPK_PRL - 1
+    mov al, [cs:bx+OS88SPK_PRING]
+    out dx, al
+.dry:
+    sub cx, [cs:os88spk_pn]         ; another due?
+    jns .one
+    pop cx
+    pop dx
+    pop bx
+    ret
+.port:
+    dw 0x0378                       ; (the port, patched in by os88spk_pgo)
+
+; os88spk_ppoll - a poll that preserves everything, for code too cold for
+; the macro
+os88spk_ppoll:
+    push ax
+    OS88SPK_POLLM
+    pop ax
+    ret
+
+; os88spk_pspin - AX = a depth: polls until TOTAL - CONS is no more than it.
+; The one loop with every register to itself - the due time, CONS, the port
+; and N in registers - and the one most samples go out from, the producer
+; being ahead
+os88spk_pspin:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov cx, ax
+    mov dx, [cs:os88spk_pout.port]
+    mov bx, [cs:os88spk_pcons]
+    mov di, [cs:os88spk_pdue]
+    mov bp, [cs:os88spk_pn]
+.l:
+    OS88SPK_PNOW
+    sub ax, di
+    js .chk
+    cmp ax, OS88SPK_LATE            ; (the guard: too late, start from now)
+    jb .t
+    add di, ax
+.t:
+    add di, bp                      ; due: the time moves on...
+    cmp bx, [cs:os88spk_ptot]
+    je .chk                         ; ...and with nothing queued, the level
+    mov si, bx                      ; is held
+    and si, OS88SPK_PRL - 1
+    mov al, [cs:si+OS88SPK_PRING]
+    out dx, al
+    inc bx
+    jmp short .l                    ; (another may be due: a late turn owes
+.chk:                               ; more than one)
+    mov si, [cs:os88spk_ptot]
+    sub si, bx
+    cmp si, cx
+    ja .l
+    mov [cs:os88spk_pcons], bx
+    mov [cs:os88spk_pdue], di
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; os88spk_ptick - IRQ0 while a polled play holds it: the kernel's tick OWED.
+; Channel 0 runs a whole tick, so an entry IS a tick
+; -----------------------------------------------------------------------------
+os88spk_ptick:
+    inc word [cs:os88spk_powed]
+    push ax
+    mov al, 0x20
+    out 0x20, al
+    pop ax
+    iret
+
+; -----------------------------------------------------------------------------
+; os88spk_pgo - DX = the rate: the polled play, from CONS. CF = 1 it cannot be
+; here (no Covox named, not a PC or XT, a rate outside 74..255 counts, or the
+; door refused) - play os88spk_go instead
+; -----------------------------------------------------------------------------
+os88spk_pgo:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    cmp word [cs:os88spk_lptp], 0
+    je .no
+    mov ax, [cs:os88spk_lptp]
+    mov [cs:os88spk_pout.port], ax
+    push dx
+    call OSAPI_CPU_INFO
+    pop dx
+    cmp al, CPU_8086
+    jne .no
+    mov bx, dx                      ; N = 1,193,182 / rate
+    mov dx, 0x0012
+    mov ax, 0x34DE
+    div bx
+    cmp ax, 74
+    jb .no
+    cmp ax, 255
+    ja .no
+    mov [cs:os88spk_pn], ax
+    mov [cs:os88spk_pout.n-2], ax   ; the add's immediate
+    mov ax, 0x0040                  ; THE FLOPPY MOTOR OFF FIRST: the ROM's
+    mov es, ax                      ; countdown runs on the very tick this
+    test byte [es:0x3F], 0x0F       ; play owes, so a motor the song's load
+    jz .door                        ; left on would spin to the end of it.
+    mov byte [es:0x40], 1           ; One tick from now, and that tick
+    mov al, FSXW_TICK               ; waited for (the door is not open yet)
+    call OSAPI_FSX_WAIT
+    mov al, FSXW_TICK
+    call OSAPI_FSX_WAIT
+.door:
+    pushf
+    cli
+    mov dx, [cs:os88spk_pn]
+    mov bx, cs
+    xor al, al
+    call OSAPI_FSX_SPK              ; AX = K; BX and DX spent. Channel 2 is
+    jc .refused                     ; the door's: taken, and only silenced
+    push ds
+    xor ax, ax
+    mov ds, ax
+    mov ax, os88spk_ptick           ; IRQ0 OWES the tick; what it was is the
+    xchg ax, [0x20]                 ; chain the owed ticks are paid through
+    mov [cs:os88spk_chain], ax
+    mov ax, cs
+    xchg ax, [0x22]
+    mov [cs:os88spk_chain+2], ax
+    pop ds
+    mov word [cs:os88spk_powed], 0
+    mov al, 0x34                    ; channel 0: a whole tick, mode 2 - the
+    out 0x43, al                    ; clock's period is its sixteen bits
+    xor al, al
+    out 0x40, al
+    out 0x40, al
+    in al, 0x61                     ; the SPEAKER off
+    and al, 0xFC
+    out 0x61, al
+    OS88SPK_PNOW                    ; the first sample due a sample from now
+    add ax, [cs:os88spk_pn]
+    mov [cs:os88spk_pdue], ax
+    mov byte [cs:os88spk_pon], 1
+    popf
+    clc
+    jmp short .out
+.refused:
+    popf
+.no:
+    stc
+.out:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; os88spk_pstop - the polled play stopped where it is, the door shut (the
+; vector, channel 0 and channel 2 put back), and THE TICKS PAID: the kernel's
+; IRQ0 entered once a tick owed, as the interrupt would have entered it -
+; ~1,300 cycles each, so ~0.3 s for a minute of play
+; -----------------------------------------------------------------------------
+os88spk_pstop:
+    push ax
+    push cx
+    cmp byte [cs:os88spk_pon], 0
+    je .out
+    pushf
+    cli
+    mov byte [cs:os88spk_pon], 0
+    mov al, 1
+    call OSAPI_FSX_SPK
+    popf
+    mov cx, [cs:os88spk_powed]
+    mov word [cs:os88spk_powed], 0
+    jcxz .out
+.pay:
+    pushf
+    cli
+    call far [cs:os88spk_chain]
+    loop .pay
+.out:
+    pop cx
+    pop ax
+    ret
+
+os88spk_ptot:   dw 0                ; the producer's TOTAL
+os88spk_pcons:  dw 0                ; ...and the samples played
+os88spk_pdue:   dw 0                ; the next sample's due time
+os88spk_pon:    db 0                ; a polled play is open
+os88spk_powed:  dw 0                ; the kernel's ticks owed
+os88spk_pn:     dw 0                ; N
+%endif

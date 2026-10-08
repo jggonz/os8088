@@ -24,11 +24,18 @@ on what came out of the machine:
         105.7.1), CONS advancing at the rate, the agreement on the low-passed
         capture
   covox no card, a Covox on LPT2 (MartyPC's Covox machine, `make
-        covoxtest`'s disk - SPEC.md 34.14, 105.8.7): spk's checks on the
-        ring, the IRQ0 vector the Covox's ISR and the ring's table the
-        identity, then the agreement on the DAC's OWN capture - and the
-        speaker's capture silent, so the play went to the ladder and not
-        the cone
+        covoxtest`'s disk - SPEC.md 34.14, 105.8.7) - and this machine is a
+        5150, so the play is the POLLED one (SPEC.md 34.14.3): no ISR, IRQ0
+        the owed-tick counter os88spk_ptick, 6,520 Hz, the polled ring
+        never starved and played at the rate by the GUEST'S CYCLES (the BIOS
+        tick is owed while it plays, so it cannot be the clock); then a
+        pause, which must PAY the ticks - the BIOS clock caught up with the
+        cycles to within a tick a second - and a resume; then the agreement
+        on the DAC's OWN capture, and the speaker's capture silent
+  covoxisr  the same machine with [mrk_nopoll] set first, as a machine that
+        refused polling leaves it: the ISR's road (os88spk_isrd, the
+        speaker's ring and its identity table, the 149-count floor), spk's
+        checks on that ring, the same agreement
   tone  no card, "Play in Background": one square wave on the desktop, its
         frequency always the highest melodic note the reference has sounding
   end   the AdLib profile: INTRO looped (Loop on - the same song again, from
@@ -72,6 +79,7 @@ ARMS = {
     "mpu": ("os8088_5150_herc_mpu_720_gla", None),
     "wt": ("os8088_5150_herc_sb_720_gla", "sound_blaster"),
     "covox": ("os8088_5150_herc_covox_720_gla", "covox"),
+    "covoxisr": ("os8088_5150_herc_covox_720_gla", "covox"),
 }
 OUT_MIDI, MRO_MIDI = 5, 5
 OUT_WT, MRO_WT = 6, 6
@@ -166,7 +174,8 @@ def session(arm, cap, brk):
     # the MPU-only machine boots `make miditest`'s disk: SOUND.DRV wanted by
     # its SYSTEM.CFG, since the kernel's boot sniff finds no FM chip there
     img = {"mpu": "build/midisys720.img",
-           "covox": "build/covoxsys720.img"}.get(arm, IMG)
+           "covox": "build/covoxsys720.img",
+           "covoxisr": "build/covoxsys720.img"}.get(arm, IMG)
     # ...and the wavetable's, `make mrwttest`'s apps disk: the synthetic bank
     # beside the package
     apps = "build/mrwt720.img" if arm == "wt" else APPS
@@ -191,19 +200,22 @@ def session(arm, cap, brk):
             fail("wt: MIDIRack found no MIDIRACK.BNK beside it")
         p.put("mr_want", bytes([{"fm": OUT_OPL2, "sb": OUT_SB,
                                  "wt": OUT_WT,
-                                 "covox": OUT_LPT}.get(arm, OUT_SPK)]))
+                                 "covox": OUT_LPT,
+                                 "covoxisr": OUT_LPT}.get(arm, OUT_SPK)]))
+        if arm == "covoxisr":
+            p.put("mrk_nopoll", b"\x01")       # a machine that refused one
         if arm == "tone":
             p.put("mr_bg", b"\x01")
         if RATE:
             p.put("mr_rate", bytes([RATE]))     # Settings' rate, by index
         ui.menu_pick("Play", "Play")
         want = {"fm": MRO_FM, "sb": MRO_SB, "spk": MRO_SPK, "tone": MRO_TONE,
-                "wt": MRO_WT, "covox": MRO_LPT}
+                "wt": MRO_WT, "covox": MRO_LPT, "covoxisr": MRO_LPT}
         M.until(ui.m, lambda _: p.b("mr_out") == want[arm], "the output open",
                 poll=.1, limit=10)
         return {"fm": arm_fm, "sb": arm_sb, "spk": arm_spk,
                 "tone": arm_tone, "wt": arm_wt,
-                "covox": arm_covox}[arm](ui, p)
+                "covox": arm_covox, "covoxisr": arm_covoxisr}[arm](ui, p)
 
 
 def arm_fm(ui, p):
@@ -313,7 +325,89 @@ def arm_spk(ui, p):
     return 5.0
 
 
+GUEST_HZ = 4772727.0
+
+
+def cycles(m):
+    return m.status()["cycles"]
+
+
 def arm_covox(ui, p):
+    """THE POLLED COVOX (SPEC.md 34.14.3, 105.8.7): no ISR a sample - IRQ0 is
+    os88spk_ptick, owing the kernel's tick - so the clock is the guest's
+    cycle counter, and the BIOS tick is checked only after a pause has paid
+    it"""
+    if p.b("mr_haslpt") != 1 or p.w("mr_lptport") != 0x378:
+        fail("covox: MIDIRack has no Covox (haslpt %d, port %03X) - the "
+             "Sound page's tier on this disk is LPT2 at 378h"
+             % (p.b("mr_haslpt"), p.w("mr_lptport")))
+    M.until(ui.m, lambda _: p.b("os88spk_pon") == 1
+            and p.w("os88spk_pcons") > 0, "the polled play", poll=.05,
+            limit=30)
+    if p.b("mrk_pol") != 1:
+        fail("covox: the play is not the polled one on a 5150")
+    rate = p.w("mrk_rate")
+    if rate != 6520:
+        fail("covox: the polled play is at %d Hz, want 6,520 (N = 183)"
+             % rate)
+    vec = ui.m.read(0x20, 4)
+    off, seg = vec[0] | vec[1] << 8, vec[2] | vec[3] << 8
+    if (seg, off) != (p.seg, p.s["os88spk_ptick"]):
+        fail("covox: IRQ0 is %04X:%04X, not os88spk_ptick at %04X:%04X"
+             % (seg, off, p.seg, p.s["os88spk_ptick"]))
+
+    def q():
+        return (p.w("os88spk_ptot") - p.w("os88spk_pcons")) & 0xFFFF
+    M.guest_sleep(ui.m, 1.0)
+    c0, y0, k0 = p.w("os88spk_pcons"), cycles(ui.m), bios(ui.m)
+    owed0 = p.w("os88spk_powed")        # ticks owed since the play began
+    low, played = 2048, 0
+    prev = c0
+    for _ in range(10):
+        low = min(low, q())
+        M.guest_sleep(ui.m, .5)
+        c = p.w("os88spk_pcons")
+        played += (c - prev) & 0xFFFF
+        prev = c
+    secs = (cycles(ui.m) - y0) / GUEST_HZ
+    if low < 128:
+        fail("covox: the polled ring fell to %d - the synth is behind the "
+             "DAC" % low)
+    if not (0.95 * secs * rate < played < 1.02 * secs * rate):
+        fail("covox: %d samples played in %.2f s of guest cycles at %d Hz "
+             "(%.1f%%)" % (played, secs, rate, 100.0 * played / (secs * rate)))
+    if bios(ui.m) != k0:
+        fail("covox: the BIOS tick moved while the polled play held IRQ0 - "
+             "the tick is not being owed")
+    print("PASS covox: polled, %d Hz, IRQ0 at os88spk_ptick, the ring never "
+          "under %d, %d played in %.2f s (%.1f%% of the rate), the BIOS "
+          "tick held" % (rate, low, played, secs,
+                         100.0 * played / (secs * rate)), flush=True)
+    # A PAUSE PAYS THE TICKS: Space, and the BIOS clock must have moved by
+    # what the play owed when k0 was read plus the guest's own cycles since,
+    # to within one tick a second
+    ui.m.type_text(" ")
+    M.until(ui.m, lambda _: p.b("mr_state") == 2, "the pause", poll=.1,
+            limit=30)
+    secs = (cycles(ui.m) - y0) / GUEST_HZ
+    ticks = (bios(ui.m) - k0) & 0xFFFF
+    want = owed0 + secs * 18.2065
+    if abs(ticks - want) > max(2.0, secs):
+        fail("covox: after the pause the BIOS tick moved %d in %.2f s (want "
+             "%.0f) - the owed ticks were not paid" % (ticks, secs, want))
+    if p.b("os88spk_pon") != 0:
+        fail("covox: the polled play is still open after the pause")
+    print("PASS covox: the pause paid the ticks - %d in %.2f s of cycles "
+          "(%.1f expected)" % (ticks, secs, want), flush=True)
+    ui.m.type_text(" ")                         # ...and a resume plays on
+    M.until(ui.m, lambda _: p.b("os88spk_pon") == 1, "the resume",
+            poll=.05, limit=30)
+    print("PASS covox: Space resumed the polled play", flush=True)
+    M.guest_sleep(ui.m, 5.0)
+    return 5.0
+
+
+def arm_covoxisr(ui, p):
     """THE COVOX (SPEC.md 105.8.7, 34.14): the speaker's bracket and ring,
     with the port named - so the ring's table is the identity and IRQ0 is
     os88spk_isrd - and then arm_spk's own checks on the ring."""
@@ -517,7 +611,8 @@ def main():
         ref = spans(SONG, 6 if a.brk else 0)
         box, dec = (9, 4) if a.arm == "spk" else (1, 2)
         hit, n = agreement(wav, ref, tail + 2.0, box, dec)
-        need = {"fm": 6, "sb": 8, "spk": 5, "wt": 7, "covox": 7}[a.arm]
+        need = {"fm": 6, "sb": 8, "spk": 5, "wt": 7, "covox": 7,
+                "covoxisr": 7}[a.arm]
         print("%s %s: %d of %d half-seconds' strongest pitch class sounding "
               "in the reference (need %d)" % ("PASS" if hit >= need else
                                               "FAIL", a.arm, hit, n, need),
@@ -533,7 +628,7 @@ def main():
             return 1
         print("PASS %s: the transposed reference scores %d (must stay under "
               "%d)" % (a.arm, bad, need), flush=True)
-        if a.arm == "covox":
+        if a.arm.startswith("covox"):
             # ...AND THE CONE SILENT: the door turned the speaker on for a
             # PWM nobody writes, and os88spk_go turns it off again
             rate, s, _ = sndcheck.load(cap + ".pc_speaker.wav")
