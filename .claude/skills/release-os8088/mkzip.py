@@ -306,6 +306,15 @@ ITEMS = [
      "everything set and the live media carry them.",
      [("midirack.img", "1.44MB", ""), ("midirack120.img", "1.2MB", ""),
       ("midirack720.img", "720KB", ""), ("midirack360.img", "360KB", "")]),
+    ("progs", "PiXEL", False,
+     "An image viewer and editor. It opens JPEG, PNG, GIF, BMP, PCX, TIFF "
+     "and six more formats, shows them dithered to the desktop's colours "
+     "or full screen in the best mode the card has, and can crop, rotate, "
+     "adjust and save them. The disk carries a gallery of sample pictures "
+     "in PICTURES -- ten on the 1.44MB and 1.2MB disks, nine on the 720KB "
+     "disk and five on the 360KB one.",
+     [("pixel.img", "1.44MB", ""), ("pixel120.img", "1.2MB", ""),
+      ("pixel720.img", "720KB", ""), ("pixel360.img", "360KB", "")]),
     ("progs", "Weave", False,
      "Web-style programs -- markup, script and formulas -- compiled into one "
      "bundle file and run natively. Carries the runtime, three demo "
