@@ -58,6 +58,16 @@ full screen, the card paused as the worker stops and resumed by the
 bracket - and F again once ten frames have been drawn there, back to the
 desktop Live. The capture must still hold the whole sound in order.
 
+--ahead A carries the clip's sound A frames ahead of its picture (98.1.8):
+every point above holds unchanged, from the start, a seek, F and a seam -
+the player queuing each start's lead before the stream's records.
+
+--dsp4 --soft is the same card on a 286 (SPEC.md 98.3.17.1): the kernel's
+[cpu_tier] made to answer CPU_286 as well, so the PLAYER decodes the
+ADPCM4 into a PCM8 stream the card plays - not muted, the card's block
+PCM8's, and point 4 holds the capture to the stream decoded by
+tools/os88vid.py's adpcm4_decode, sample for sample, from a seek too.
+
 --audio adpcm4 plays the same clip's sound as Creative 4-bit ADPCM, which
 the card decodes (DSP 7Dh); MartyPC's does it with the tables
 tools/os88vid.py encodes against (tools/martypc/patches/06), so point 4 then
@@ -92,7 +102,8 @@ def u16(b, i=0):
     return struct.unpack_from("<H", b, i)[0]
 
 
-def clip(tmp, nf, afmt, loop=None, resident=None, live=False):
+def clip(tmp, nf, afmt, loop=None, resident=None, live=False, ahead=0,
+         burst=0, bsize=12288):
     """nf canvases 80 x 200 in the Hercules layout, and 22,050 Hz of
     pseudo-random PCM8 for them - or, LIVE, 20 x 60 on LIN80"""
     rnd = random.Random(4242)
@@ -110,6 +121,11 @@ def clip(tmp, nf, afmt, loop=None, resident=None, live=False):
             for _ in range(200):
                 a = rnd.randrange(wb * h - 8)
                 cv[a:a + 8] = bytes(rnd.getrandbits(8) for _ in range(8))
+        if burst and f % 60 >= 60 - burst:
+            # A BURST (--burst): frames that each rewrite bsize bytes, the
+            # stream's rate far past the disk's for burst / 30 of a second
+            a = rnd.randrange(wb * h - bsize)
+            cv[a:a + bsize] = bytes(rnd.getrandbits(8) for _ in range(bsize))
         p = os.path.join(tmp, "f%04d.pbm" % f)
         vid._write_pbm(p, wb, h, bytes(cv))
         paths.append(p)
@@ -120,7 +136,7 @@ def clip(tmp, nf, afmt, loop=None, resident=None, live=False):
     vid.encode_frames(paths, out, FPS, wav, "lin80" if live else "herc",
                       "vidsound clip", audio_fmt=afmt, loop=loop,
                       repeat=loop is not None, resident=resident,
-                      live="herc" if live else None)
+                      live="herc" if live else None, ahead=ahead)
     vid.verify_v88(out)
     return out
 
@@ -271,11 +287,33 @@ def main():
                     help="with --dsp4: M before the play - it must then play "
                     "the sound whole, the open FORCED past the driver's "
                     "DSP 4.xx refusal")
+    ap.add_argument("--soft", action="store_true",
+                    help="with --dsp4: the machine made to answer CPU_286, "
+                    "so the player decodes the ADPCM4 itself and plays it "
+                    "as PCM8 (98.3.17.1) - not muted, and the capture the "
+                    "stream decoded")
     ap.add_argument("--button", action="store_true",
                     help="THE MUTE BUTTON (SPEC.md 98.3.17): clicked on the "
                     "desktop, on and off; then in a window play - the sound "
                     "off at once and the play going on, and again, the play "
                     "started again in the window WITH its sound")
+    ap.add_argument("--inline-leads", action="store_true",
+                    help="with --ahead, the keys' leads as every file before "
+                    "SPEC.md 98.1.8.1 kept them, their entries' tails - "
+                    "such a file must still seek; else apart, the default")
+    ap.add_argument("--ahead", type=int, default=0, metavar="A",
+                    help="SOUND AHEAD (SPEC.md 98.1.8): the clip's sound "
+                    "carried A frames ahead of its picture - every point "
+                    "above the same, the leads queued at each start")
+    ap.add_argument("--bigblk", action="store_true",
+                    help="SOUND.DRV's caps without SND_CAP_EXTBLK, so the "
+                    "player plays 2,048-byte blocks as on a driver before "
+                    "34.5.3 - the old player's 0.19 s at 11 kHz, the shape "
+                    "of the owner's 286 pauses (VIDEO-PLAN 15.12)")
+    ap.add_argument("--burst", type=int, default=0, metavar="N",
+                    help="every 2 s, N frames that each rewrite --bsize "
+                    "bytes of the canvas: a stream that bursts past the disk")
+    ap.add_argument("--bsize", type=int, default=12288)
     ap.add_argument("--rate", type=int,
                     help="the sound's rate (default 22,050; 11,025 Live) - "
                     "5512 is the encoder's half-size option (98.1.7.2)")
@@ -294,11 +332,19 @@ def main():
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
         afmt = vid.AUD_BY_NAME[a.audio]
+        vid.KLEADS_APART = not a.inline_leads   # (98.1.8.1)
         v88 = clip(tmp, nf, afmt, a.loop,
-                   vid.PK_LZB if a.resident else None, a.live)
+                   vid.PK_LZB if a.resident else None, a.live, a.ahead,
+                   a.burst, a.bsize)
+        if a.ahead and vid.Reader(v88).ahead != a.ahead:
+            sys.exit("vidsound: the clip was not made %d frames ahead"
+                     % a.ahead)
+        if a.ahead and bool(vid.Reader(v88).kleadat) == a.inline_leads:
+            sys.exit("vidsound: the clip's key leads are not %s"
+                     % ("inline" if a.inline_leads else "apart"))
         r = vid.Reader(v88)
         base0 = r.keys[a.seek][0] + 1 if a.seek else 0
-        audio = b"".join(rec[-r.abytes:] for rec, _, _ in r.records())
+        audio = b"".join(r.sound(f) for f in range(r.frames))
         laps = 2 if a.loop is not None else 0
         if laps:                        # every lap after the first: frame
             audio += audio[a.loop * r.abytes:] * laps   # L's sound on
@@ -332,6 +378,11 @@ def main():
                 m.write(dseg + snd_sym("sbl_verhi"), b"\x04")  # row 0, and
                 cp_ = m.sym("drv_svc")      # the caps the kernel answers with
                 m.write(cp_, struct.pack("<H", u16(m.read(cp_, 2)) | 0x40))
+                if a.soft:              # ...on a 286: OSAPI_CPU_INFO's tier
+                    m.write(m.sym("cpu_tier"), b"\x01")
+            if a.bigblk:                # no smaller block on offer
+                cp_ = m.sym("drv_svc")
+                m.write(cp_, struct.pack("<H", u16(m.read(cp_, 2)) & ~0x80))
             w = ui.path("C:/CLIP.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
@@ -348,7 +399,12 @@ def main():
                             guest=30.0)
             if rb("vp_ok") != 1:
                 sys.exit("vidsound: the player will not play the clip here")
-            if a.dsp4:                  # DEFAULTED TO MUTED, for the reason
+            if a.dsp4 and a.soft:       # A 286 DECODES IT: not muted
+                print("   DSP 4.xx on a 286: muted %d, why %d"
+                      % (rb("vp_mute"), rb("vp_mwhy")))
+                if (rb("vp_mute"), rb("vp_mwhy")) != (0, 0):
+                    bad.append("a 286 muted the play it can decode")
+            elif a.dsp4:                # DEFAULTED TO MUTED, for the reason
                 print("   DSP 4.xx: muted %d, why %d (1 = ADPCM4 on a DSP "
                       "4.xx)" % (rb("vp_mute"), rb("vp_mwhy")))
                 if (rb("vp_mute"), rb("vp_mwhy")) != (1, 1):
@@ -473,13 +529,14 @@ def main():
             st["vp_snd"] = rb("vp_snd")
             st["vp_err"] = rb("vp_err")
             st["vp_aend"] = rb("vp_aend")
+            st["vp_sadp"] = rb("vp_sadp")
         finally:
             m.close()
             os.environ.pop("MARTYPC_WAV", None)
         allcaps = sorted(glob.glob(cap + "*.wav"))
         caps = [c for c in allcaps if "blaster" in c.lower()
                 or ".sb" in c.lower()]
-        if a.dsp4 and not a.unmute:     # MUTED: the picture whole, and no
+        if a.dsp4 and not a.unmute and not a.soft:     # MUTED: the picture whole, and no
             heard = False               # sound run at all
             if caps:
                 got, _ = captured_bytes(caps[0])
@@ -501,6 +558,8 @@ def main():
         # there can overshoot by seconds of guest time)
         real = 1000000.0 / (256 - (256 - 1000000 // RATE))   # the card's rate
         bps = r.abytes / float(r.spf)                   # bytes a sample
+        if a.soft:                      # (the ring holds the decoded PCM8)
+            bps = 1.0
         nplay = nf - base0 + laps * (nf - (a.loop or 0))   # every lap's
         want_s = (r.spf * nplay) / real + st["vp_blk"] / bps / real  # ...and the
                                                         # drain, to a block's end
@@ -530,7 +589,13 @@ def main():
                 bad.append("only %d ticks counted as paused" % st["vp_ptk"])
         if not st["vp_snd"]:
             bad.append("the play was SILENT: the card was not opened")
-        blk = venc.audio_block(afmt, RATE)  # THE CARD'S BLOCK (98.3.1,
+        if a.soft:
+            print("   the player decoded: %d" % st["vp_sadp"])
+            if st["vp_sadp"] != 1:
+                bad.append("the player did not decode the ADPCM4 itself")
+        blk = venc.SND_HALF if a.bigblk else \
+            venc.audio_block(vid.AUD_PCM8 if a.soft else afmt,
+                             RATE)          # THE CARD'S BLOCK (98.3.1,
         print("   the card's block: %d bytes (want %d)" % (st["vp_blk"], blk))
         if st["vp_blk"] != blk:             # 34.5.3): the rate's, which the
             bad.append("the card's block was %d bytes, not %d"  # driver

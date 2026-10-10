@@ -72,16 +72,22 @@ def u16(b, i=0):
     return struct.unpack_from("<H", b, i)[0]
 
 
-def clip(tmp, layout):
-    """150 canvases 80 x 200, and the .V88 made of them."""
+def clip(tmp, layout, big=False):
+    """150 canvases 80 x 200, and the .V88 made of them. BIG (98.1.4.1):
+    super-packets packed to 127 sectors - and on lin80 the canvas is the
+    screen's 480 rows and its noise frames are WHOLE, 38,400-byte records,
+    so a record can straddle two chunks from slot K-1 into the mirror's
+    second slot"""
     rnd = random.Random(9898)
-    wb, h = 80, 200
+    wb, h = 80, (480 if big and layout == "lin80" else 200)
     cv = bytearray(wb * h)
     paths = []
     for f in range(NF):
         k = f % 25
         if k == 0:
             cv = bytearray(b"\xff" * (wb * h)) if f % 50 else bytearray(wb * h)
+        elif k in (5, 6, 7, 8, 9) and h == 480:
+            cv = bytearray(rnd.getrandbits(8) for _ in range(wb * h))
         elif k in (5, 6, 7, 8, 9):
             # noise: long slices, ~3 KB a frame. NOT 16 KB: that is ~67 ms of
             # decode against a 33 ms period, and the encoder that would budget
@@ -106,17 +112,19 @@ def clip(tmp, layout):
     vid._write_wav(wav, 8040, bytes(rnd.getrandbits(8)
                                     for _ in range(int(8040 * NF / FPS))))
     out = os.path.join(tmp, "CLIP.V88")
-    vid.encode_frames(paths, out, FPS, wav, layout, "vidplay clip")
+    vid.encode_frames(paths, out, FPS, wav, layout, "vidplay clip",
+                      spcap=vid.SP_BIG if big else vid.SP_MAX)
     vid.verify_v88(out)
     return out
 
 
-def mirror_frames(r, clb, k=2):
+def mirror_frames(r, clb, k=2, slot=0):
     """The frames whose VIDEO part straddles slot K-1 into the mirror when the
     stream is read from the cluster boundary under its start (SPEC.md 98.3) -
     the only records a broken mirror copy can spoil. The audio at a record's
     end is skipped by a silent player, so a straddle that is only audio
-    proves nothing and is not counted."""
+    proves nothing and is not counted. `slot` 1: the frames that run on
+    into the mirror's SECOND slot, a BIGSP record past 32 KB (98.1.4.1)"""
     base = r.sp0 - r.sp0 % clb
     out, f = [], 0
     at, n = r.sp0, r.sp0n
@@ -128,7 +136,8 @@ def mirror_frames(r, clb, k=2):
             ln = struct.unpack_from("<H", sp, o)[0]
             s = at - base + o
             e = s + ln - r.abytes
-            if s // 32768 != (e - 1) // 32768 and (s // 32768) % k == k - 1:
+            c0, c1 = s // 32768, (e - 1) // 32768
+            if c1 > c0 and c0 % k + (c1 - c0) >= k + slot:
                 out.append(f)
             o += ln
             f += 1
@@ -146,37 +155,56 @@ def main():
                     help="play on this layout's machine: the shadow path")
     ap.add_argument("--machine")
     ap.add_argument("--stops", help="comma-separated holds (a diagnosis)")
-    ap.add_argument("--k1", type=int, default=2,
+    ap.add_argument("--big", action="store_true",
+                    help="BIGSP (SPEC.md 98.1.4.1): super-packets to 127 "
+                    "sectors, the first play's ring 3 slots, and on --layout "
+                    "lin80 records past 32 KB into the mirror's second slot; "
+                    "not timed")
+    ap.add_argument("--ring", type=int, default=8,
+                    help="the ring the clip's header asks (SPEC.md "
+                    "98.2.1.3.1: 2 to 15 slots, any count); the second play "
+                    "may take that many and must, and must not say Low "
+                    "memory. Default 8")
+    ap.add_argument("--k1", type=int, default=None,
                     help="the first play's ring, in slots (default 2, the "
                     "tightest; 3 wraps a ring that is NOT a power of two, "
                     "SPEC.md 98.3's chunk mod K)")
     a = ap.parse_args()
+    if a.k1 is None:
+        a.k1 = 3 if a.big else 2
     global STOPS
     if a.stops:
         STOPS = tuple(int(x) for x in a.stops.split(","))
     screen = a.screen or a.layout
     shadow = screen != a.layout
     machine = a.machine or MACHINE[screen]
+    # a BIG lin80 clip is ~1.2 MB: the 1.44MB VGA XT and its disks
+    big144 = a.big and a.layout == "lin80" and not a.machine
+    if big144:
+        machine = "os8088_xt_vga_144"
     os.chdir(ROOT)
     syms, image = pkg_syms("apps/video/video.asm", ("apps/",))
     pkg = os88build.at("build/video.o88")
     if not os.path.exists(pkg):
         sys.exit("vidplay: no build/video.o88 - run `make`")
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
-        v88 = clip(tmp, a.layout)
+        v88 = clip(tmp, a.layout, a.big)
+        if a.big and not vid.Reader(v88).spcap > vid.SP_MAX:
+            sys.exit("vidplay: --big made no super-packet past 64 sectors")
         if a.comp:                  # CGACOMP: the same bytes, read as
             with open(v88, "r+b") as f:     # composite colours (98.1.1)
                 f.seek(192)
                 f.write(bytes([2]))
         with open(v88, "r+b") as f:     # ITS BURSTS ASSUME 8 SLOTS (98.1.1,
             f.seek(vid.H_RING)          # 98.2.1.3), so the play held to 2
-            f.write(bytes([8]))         # says so and the play at 8 does not
+            f.write(bytes([a.ring]))    # says so and the play at 8 does not
         r = vid.Reader(v88)
         g = r.g
         size = os.path.getsize(v88)
         disk = os.path.join(tmp, "vidplay.img")
         subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
-                        "--size", "360", pkg, v88], check=True,
+                        "--size", "1440" if big144 else "360", pkg, v88],
+                       check=True,
                        capture_output=True)
         # the origin the player centres to (SPEC.md 98.1.2)
         # where each canvas row lands on the SCREEN: the file's own layout at
@@ -187,7 +215,8 @@ def main():
         tx0 = (tg.stride - g.wb) // 2
         rows_at = [tg.base[y + ty0] + tx0 for y in range(g.h)]
         bad = []
-        with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
+        with os88ui.boot(os88build.at("build/os8088.img" if big144 else
+                                      "build/os8088-360.img"), apps=disk,
                          machine=machine) as ui:
             m = ui.m
             w = ui.path("B:/CLIP.V88")
@@ -218,8 +247,14 @@ def main():
             # a hold straight after every frame that runs into the mirror, or
             # the row would pass with the mirror copy deleted
             mf = mirror_frames(r, rw("vp_clsec") * 512, a.k1)
+            mf2 = mirror_frames(r, rw("vp_clsec") * 512, a.k1, 1)
             stops = tuple(sorted(set(STOPS) | {f + 1 for f in mf}))
             print("   frames whose video runs into the mirror slot: %s" % mf)
+            if a.big:
+                print("   ...on into its SECOND slot (BIGSP): %s" % mf2)
+                if a.layout == "lin80" and not mf2:
+                    bad.append("no record runs into the mirror's second "
+                               "slot, so BIGSP's is untested")
             if not mf and not a.stops and a.layout in VSEG:
                 bad.append("the clip never runs a frame into the mirror, so "
                            "the ring's wrap is untested")
@@ -283,7 +318,7 @@ def main():
             done1, err1 = rw("vp_done"), rb("vp_err")
             k1 = rw("vp_k")
             # --- 2: on time, the ring big enough for the whole clip
-            ww("vp_kmax", 8)
+            ww("vp_kmax", a.ring)
             m.write(base + syms["vp_played"], b"\0")
             m.type_text("p")
             os88marty.until(m, lambda mm: rb("vp_ready") == 1,
@@ -318,14 +353,19 @@ def main():
     if toast1 != 7:
         bad.append("a ring of 2 slots against the stream's 8 said nothing")
     if toast2 == 7:
-        bad.append("a ring of 8 slots said it was short of memory")
+        bad.append("a ring of %d slots said it was short of memory" % k2)
+    if k2 != a.ring:
+        bad.append("the second play took %d slots, where the header asks %d "
+                   "and the machine has them" % (k2, a.ring))
     if done1 != NF or err1:
         bad.append("the first play drew %d of %d (error %d)"
                    % (done1, NF, err1))
     if done2 != NF or err2:
         bad.append("the second play drew %d of %d (error %d)"
                    % (done2, NF, err2))
-    if stall or late:
+    if a.big:
+        print("   (BIGSP: not timed - whole-screen noise runs late here)")
+    elif stall or late:
         bad.append("a clip read whole first stalled %d and was late %d"
                    % (stall, late))
     # the SHADOW's copy holds the hook off for a full-screen band (~6 periods
@@ -340,9 +380,9 @@ def main():
             bad.append("the colour burst was %s" % ("on" if burst else "off"))
     tol = 4 if shadow else 2
     print("   the hook was held off at most %d periods" % gap)
-    if abs(dt - want_t) > tol:
+    if abs(dt - want_t) > tol and not a.big:
         bad.append("%d ticks for %.1f s of video" % (dt, NF / FPS))
-    if abs(secs - NF / FPS) > 0.1 * NF / FPS:
+    if abs(secs - NF / FPS) > 0.1 * NF / FPS and not a.big:
         bad.append("the guest's clock says %.2f s" % secs)
     for b in bad:
         print("   FAIL: %s" % b)

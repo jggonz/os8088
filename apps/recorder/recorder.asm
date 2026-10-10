@@ -1380,6 +1380,8 @@ rc_sine:
 
 ; --- the shared controls (SPEC.md 47 rule 1 in one place) -------------------
 %define OS88UI_ABOUT            ; ...and the standard About card beside the
+%define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
+%define OS88UI_NOGEST           ; presses routed by hand: no gesture install (SPEC.md 20.5.1.3.4)
 %include "os88ui.inc"           ; buttons this already drew
 %include "os88pcm.inc"          ; the PWM clip player (SPEC.md 34.4)
 

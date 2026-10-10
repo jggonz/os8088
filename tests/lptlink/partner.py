@@ -38,8 +38,13 @@ number comes off two period boxes and PERFORMANCE.md Set 39 already has it.
 """
 
 import errno
+import os
 import select
 import socket
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from asmequ import equ                                    # noqa: E402
 
 MAGIC_Q = b'O88?'                # master -> slave
 MAGIC_R = b'O88!'                # slave -> master, then a version byte
@@ -49,8 +54,10 @@ MAGIC_R = b'O88!'                # slave -> master, then a version byte
 # eight-nibble window holds 0xF48383F3 - NOT 0x4F38383F. linksim.py calls this
 # MAGQ and the real slave compares against exactly it; deriving it from the
 # byte order instead is a window that can never match, on a wire that is
-# working perfectly.
-MAGQ = 0xF48383F3
+# working perfectly. It is READ from lplink.inc's two halves, which is the
+# same number by the same definition and cannot drift from it.
+MAGQ = (equ("drivers/net/lplink.inc", "MAGQ_HI") << 16
+        | equ("drivers/net/lplink.inc", "MAGQ_LO"))
 
 # How many emulator steps to let the guest run between our pokes. One nibble
 # is a few `in`/`out`s, so this only has to be enough to get from one poll to
@@ -90,24 +97,47 @@ TURN = 40
 
 
 # --- the socket half (SPEC.md 62.11, drivers/net/netpkg.inc) -----------------
-# Mirrored from netpkg.inc and netsock.inc. They are the contract and this is
-# the second copy - there is no way for a Python far end to include an asm
-# header, which is exactly why every one of these carries its name from there.
-NET_VER_SOCK = 2                 # the version byte that says "I speak sockets"
-NET_VER_ADDR = 3                 # ...and this one adds NW_ADDR (nwire.inc). A
-                                 # version is a FLOOR, not a set: NET.DRV
-                                 # compares with `jb`, so 3 implies 2
-NET_HOSTMAX = 64                 # the fixed host field on the wire
-NET_SOCKS = 4                    # simultaneous handles
-NET_SKMAX = 1024                 # the most one SEND or RECV moves
+# READ FROM netpkg.inc and nwire.inc, not typed out (tests/lptlink/asmequ.py).
+# They are the contract; this was a second copy with each name carried from
+# there, and a copy is what drifts: NET_SOCKS said 4 here for as long as the
+# driver said 8, and socktest failed on a driver doing exactly the right thing.
+NET_VER_SOCK, NET_VER_ADDR = equ("drivers/net/nwire.inc",
+                                 "NET_VER_SOCK",  # "I speak sockets"
+                                 "NET_VER_ADDR")  # ...and NW_ADDR. A version
+                                 # is a FLOOR, not a set: NET.DRV compares
+                                 # with `jb`, so 3 implies 2
+_PKG = "drivers/net/netpkg.inc"
+NET_HOSTMAX = equ(_PKG, "NET_HOSTMAX")      # the fixed host field on the wire
+NET_SOCKS = equ(_PKG, "NET_SOCKS")          # simultaneous handles
+NET_SKMAX = equ(_PKG, "NET_SKMAX")          # the most one SEND or RECV moves
 
-NSK_FREE, NSK_CONNECT, NSK_UP = 0, 1, 2
-NSK_CLOSING, NSK_CLOSED, NSK_FAILED, NSK_LISTEN = 3, 4, 5, 6
+NSK_FREE, NSK_CONNECT, NSK_UP = equ(_PKG, "NSK_FREE", "NSK_CONNECT", "NSK_UP")
+NSK_CLOSING, NSK_CLOSED, NSK_FAILED, NSK_LISTEN = equ(
+    _PKG, "NSK_CLOSING", "NSK_CLOSED", "NSK_FAILED", "NSK_LISTEN")
 
-NSTF_PORT, NSTF_LINK, NSTF_SOCK = 0x01, 0x02, 0x04
+NSTF_PORT, NSTF_LINK, NSTF_SOCK = equ(_PKG, "NSTF_PORT", "NSTF_LINK",
+                                      "NSTF_SOCK")
 
-NETE_OK, NETE_NOLINK, NETE_BUSY, NETE_HANDLE = 0, 1, 2, 3
-NETE_FULL, NETE_IO, NETE_REFUSED, NETE_VERB = 4, 5, 6, 7
+NETE_OK = 0                      # the far end's "done": netpkg.inc spells 0
+                                 # NETE_NODRV, the KERNEL's refusal, which no
+                                 # far end can ever answer
+NETE_NOLINK, NETE_BUSY, NETE_HANDLE = equ(_PKG, "NETE_NOLINK", "NETE_BUSY",
+                                          "NETE_HANDLE")
+NETE_FULL, NETE_IO, NETE_REFUSED, NETE_VERB = equ(
+    _PKG, "NETE_FULL", "NETE_IO", "NETE_REFUSED", "NETE_VERB")
+
+# --- the command letters: net.asm's NC_/NF_ and nwire.inc's NW_ ---------------
+NC_INFO, NC_BYE = equ("drivers/net/net.asm", "NC_INFO", "NC_BYE")
+(NF_LIST, NF_ENUM, NF_RMTREE, NF_COPY, NF_CHDIR, NF_STAT, NF_READ, NF_READAT,
+ NF_WRITE, NF_APPEND, NF_DELETE, NF_RENAME, NF_MKDIR, NF_RMDIR,
+ NF_DFREE) = equ("drivers/net/net.asm",
+                 "NF_LIST", "NF_ENUM", "NF_RMTREE", "NF_COPY", "NF_CHDIR",
+                 "NF_STAT", "NF_READ", "NF_READAT", "NF_WRITE", "NF_APPEND",
+                 "NF_DELETE", "NF_RENAME", "NF_MKDIR", "NF_RMDIR", "NF_DFREE")
+(NW_OPEN, NW_LISTEN, NW_ACCEPT, NW_STAT, NW_SEND, NW_RECV, NW_CLOSE,
+ NW_ADDR) = equ("drivers/net/nwire.inc",
+                "NW_OPEN", "NW_LISTEN", "NW_ACCEPT", "NW_STAT", "NW_SEND",
+                "NW_RECV", "NW_CLOSE", "NW_ADDR")
 
 
 class LinkTimeout(Exception):
@@ -542,7 +572,7 @@ class Partner(object):
             self.send_word(arg)
 
     def mst_bye(self):
-        self.send_byte(ord('X'))
+        self.send_byte(NC_BYE)
 
     def mst_list(self, handle):
         """NF_LIST -> (status, [32-byte entry]). The count is on the wire
@@ -772,7 +802,7 @@ class Partner(object):
                                             # master mid-transmission, which
                                             # is a different bug wearing this
                                             # one's clothes
-            if c == ord('X'):               # NC_BYE ENDS THE SESSION, exactly
+            if c == NC_BYE:   # NC_BYE ENDS THE SESSION, exactly
                 return seen                 # as `serve` does on the real far
                                             # end - it leaves its command loop
                                             # and goes back to hunting for the
@@ -786,12 +816,12 @@ class Partner(object):
                                             # that is kinder than the thing it
                                             # stands in for hides precisely the
                                             # bugs it exists to find
-            if c == ord('I'):               # NC_INFO
+            if c == NC_INFO:
                 self.send_byte(0)           # status
                 self.send_word(0)           # sectors: NONE. A redirected
                                             # volume has none at all
                 self.send_byte(0)           # flags: bit 0 = read-only
-            elif c == ord('L'):             # NF_LIST: handle -> count, entries
+            elif c == NF_LIST:   # NF_LIST: handle -> count, entries
                 h = self.recv_word()
                 ents = tree.list(h)
                 self.log.append('LIST folder=%d -> %d entries' % (h, len(ents)))
@@ -799,7 +829,7 @@ class Partner(object):
                 self.send_word(len(ents))
                 for e in ents:
                     self.send(e)
-            elif c == ord('E'):             # NF_ENUM: handle + ordinal -> ONE
+            elif c == NF_ENUM:   # NF_ENUM: handle + ordinal -> ONE
                 h = self.recv_word()        # entry, for a folder COPY
                 n = self.recv_word()
                 e = tree.enum(h, n)
@@ -815,7 +845,7 @@ class Partner(object):
                 self.send_byte(st)
                 self.send(e)                # ...ALWAYS 32 bytes: the frame is
                                             # fixed whatever the status said
-            elif c == ord('T'):             # NF_RMTREE: a folder AND its
+            elif c == NF_RMTREE:   # NF_RMTREE: a folder AND its
                 fold = self.recv_word()     # contents, walked by the far side
                 name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
                 st = tree.rmtree(fold, name)
@@ -823,7 +853,7 @@ class Partner(object):
                                 % (fold, name,
                                    'ok' if st == 0 else 'FERR %d' % st))
                 self.send_byte(st)
-            elif c == ord('Y'):             # NF_COPY: both ends are the far
+            elif c == NF_COPY:   # NF_COPY: both ends are the far
                 src = self.recv_word()      # side's, so no body crosses
                 dst = self.recv_word()
                 name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
@@ -832,7 +862,7 @@ class Partner(object):
                                 % (src, dst, name,
                                    'ok' if st == 0 else 'FERR %d' % st))
                 self.send_byte(st)
-            elif c == ord('C'):             # NF_CHDIR: handle -> parent
+            elif c == NF_CHDIR:   # NF_CHDIR: handle -> parent
                 h = self.recv_word()
                 par = tree.parent(h)
                 self.log.append('CHDIR handle=%d -> parent %s' % (h, par))
@@ -841,7 +871,7 @@ class Partner(object):
                     continue
                 self.send_byte(0)
                 self.send_word(par)
-            elif c == ord('S'):             # NF_STAT: folder + name -> handle
+            elif c == NF_STAT:   # NF_STAT: folder + name -> handle
                 fold = self.recv_word()
                 name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
                 h = tree.find(fold, name)
@@ -855,7 +885,7 @@ class Partner(object):
                 self.send_word(h)
                 self.send_dword(len(tree.data(h)))
                 self.send_byte(0x10 if tree.meta[h][1] == FileTree.T_DIR else 0)
-            elif c == ord('G'):             # NF_READ: handle + cap -> bytes
+            elif c == NF_READ:   # NF_READ: handle + cap -> bytes
                 h = self.recv_word()
                 cap = self.recv_dword()
                 if h not in tree.meta:
@@ -868,7 +898,7 @@ class Partner(object):
                 self.send_byte(0)           # oversized file is short at the
                 self.send_dword(len(d))     # source rather than sent and
                 self.send_body(d)           # thrown away
-            elif c == ord('A'):             # NF_READAT: a window
+            elif c == NF_READAT:   # NF_READAT: a window
                 h = self.recv_word()
                 off = self.recv_dword()
                 cap = self.recv_word()
@@ -882,10 +912,10 @@ class Partner(object):
                 self.send_byte(0)
                 self.send_word(len(d))      # ...ZERO past the end, which is
                 self.send_body(d)           # the contract and not an error
-            elif c in (ord('U'), ord('P')):     # NF_WRITE / NF_APPEND
+            elif c in (NF_WRITE, NF_APPEND):     # NF_WRITE / NF_APPEND
                 fold = self.recv_word()
                 name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
-                n = (self.recv_dword() if c == ord('U') else self.recv_word())
+                n = (self.recv_dword() if c == NF_WRITE else self.recv_word())
                 self.arm_ack()                  # ...AND HERE IS WHERE THE FAR
                                                 # MACHINE CREATES THE FILE. The
                                                 # length is off the wire and
@@ -896,13 +926,13 @@ class Partner(object):
                 d = self.recv(n)                # THE RUN IS TAKEN WHATEVER we
                                                 # do with it: the length is on
                                                 # the wire ahead of the bytes
-                st = tree.put(fold, name, d, append=(c == ord('P')))
+                st = tree.put(fold, name, d, append=(c == NF_APPEND))
                 self.log.append('%s folder=%d %r %d bytes -> %s'
-                                % ('WRITE' if c == ord('U') else 'APPEND',
+                                % ('WRITE' if c == NF_WRITE else 'APPEND',
                                    fold, name, n,
                                    'ok' if st == 0 else 'FERR %d' % st))
                 self.send_byte(st)
-            elif c == ord('D'):             # NF_DELETE
+            elif c == NF_DELETE:
                 fold = self.recv_word()
                 name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
                 st = tree.remove(fold, name, want_dir=False)
@@ -910,7 +940,7 @@ class Partner(object):
                                 % (fold, name,
                                    'ok' if st == 0 else 'FERR %d' % st))
                 self.send_byte(st)
-            elif c == ord('N'):             # NF_RENAME
+            elif c == NF_RENAME:
                 fold = self.recv_word()
                 old = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
                 new = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
@@ -919,7 +949,7 @@ class Partner(object):
                                 % (fold, old, new,
                                    'ok' if st == 0 else 'FERR %d' % st))
                 self.send_byte(st)
-            elif c == ord('M'):             # NF_MKDIR
+            elif c == NF_MKDIR:
                 fold = self.recv_word()
                 name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
                 st = tree.mkdir(fold, name)
@@ -927,7 +957,7 @@ class Partner(object):
                                 % (fold, name,
                                    'ok' if st == 0 else 'FERR %d' % st))
                 self.send_byte(st)
-            elif c == ord('K'):             # NF_RMDIR
+            elif c == NF_RMDIR:
                 fold = self.recv_word()
                 name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
                 st = tree.remove(fold, name, want_dir=True)
@@ -935,7 +965,7 @@ class Partner(object):
                                 % (fold, name,
                                    'ok' if st == 0 else 'FERR %d' % st))
                 self.send_byte(st)
-            elif c == ord('F'):             # NF_DFREE: free bytes, granule
+            elif c == NF_DFREE:   # NF_DFREE: free bytes, granule
                 self.send_byte(0)
                 self.send_word(tree.free & 0xFFFF)
                 self.send_word((tree.free >> 16) & 0xFFFF)
@@ -947,25 +977,25 @@ class Partner(object):
             # partner built before sockets looks like - it never gets here,
             # because such a partner answers version 1 and NET.DRV refuses
             # NETV_* without sending a letter at all (netsock.inc).
-            elif c == ord('o'):             # NW_OPEN: port, 64-byte host
+            elif c == NW_OPEN:   # NW_OPEN: port, 64-byte host
                 port = self.recv_word()
                 host = self.recv(NET_HOSTMAX).split(b'\0')[0]
                 st, h = ((NETE_REFUSED, 0) if sox is None else
                          sox.open(host.decode('ascii', 'replace'), port))
                 self.send_byte(st)
                 self.send_byte(h)           # ...ALWAYS: the frame is fixed
-            elif c == ord('l'):             # NW_LISTEN: port
+            elif c == NW_LISTEN:   # NW_LISTEN: port
                 port = self.recv_word()
                 st, h = ((NETE_REFUSED, 0) if sox is None else
                          sox.listen(port))
                 self.send_byte(st)
                 self.send_byte(h)
-            elif c == ord('a'):             # NW_ACCEPT: a listening handle
+            elif c == NW_ACCEPT:   # NW_ACCEPT: a listening handle
                 h = self.recv_byte()
                 st, n = ((NETE_REFUSED, 0) if sox is None else sox.accept(h))
                 self.send_byte(st)
                 self.send_byte(n)           # 0 = nobody yet, which is ordinary
-            elif c == ord('s'):             # NW_STAT: handle
+            elif c == NW_STAT:   # NW_STAT: handle
                 h = self.recv_byte()
                 if sox is None:
                     st, state, rdy = NETE_REFUSED, NSK_FREE, 0
@@ -974,7 +1004,7 @@ class Partner(object):
                 self.send_byte(st)
                 self.send_byte(state)
                 self.send_word(rdy)
-            elif c == ord('w'):             # NW_SEND: handle, len, bytes
+            elif c == NW_SEND:   # NW_SEND: handle, len, bytes
                 h = self.recv_byte()
                 n = self.recv_word()
                 body = self.recv(n)
@@ -982,7 +1012,7 @@ class Partner(object):
                             sox.send(h, body))
                 self.send_byte(st)
                 self.send_word(took)
-            elif c == ord('r'):             # NW_RECV: handle, cap
+            elif c == NW_RECV:   # NW_RECV: handle, cap
                 h = self.recv_byte()
                 cap = self.recv_word()
                 st, body = ((NETE_REFUSED, b'') if sox is None else
@@ -990,11 +1020,11 @@ class Partner(object):
                 self.send_byte(st)
                 self.send_word(len(body))
                 self.send(body)
-            elif c == ord('c'):             # NW_CLOSE: handle
+            elif c == NW_CLOSE:   # NW_CLOSE: handle
                 h = self.recv_byte()
                 st = NETE_REFUSED if sox is None else sox.close(h)
                 self.send_byte(st)
-            elif c == ord('i'):             # NW_ADDR: nothing in
+            elif c == NW_ADDR:   # NW_ADDR: nothing in
                 # FOUR BYTES WHATEVER THE STATUS SAYS - the fixed frame, and
                 # the refusal path is the one nothing exercises. A real slave
                 # answers with the DOS box's own address, because that is the
@@ -1029,7 +1059,7 @@ class Partner(object):
 # The first draft of this laid it out as the FAT-ish 11/1/4/2 the on-disk
 # entry uses, which is a different structure that happens to be the same
 # length - so every field was in the wrong place and nothing could say so.
-DE_SIZE = 32
+DE_SIZE = equ("kernel/dskwin.inc", "DSK_DE_SIZE")
 
 
 class SocketBox(object):
@@ -1260,7 +1290,9 @@ class FileTree(object):
         self.blobs = {}                 # handle -> real bytes, when it matters
         self._next = 1
 
-    T_FILE, T_PKG, T_DIR = 0, 1, 2      # OSAPI_FS_ENT's, and 3 is not ours
+    T_FILE, T_PKG, T_DIR = equ("apps/os88api.inc", "OSAPI_FT_FILE",
+                               "OSAPI_FT_PKG", "OSAPI_FT_DIR")
+                                        # OSAPI_FS_ENT's, and 3 is not ours
 
     def add(self, parent, name, size=0, typ=T_FILE, content=None):
         h = self._next
@@ -1303,7 +1335,9 @@ class FileTree(object):
     # 4 no such thing, 5 exists, 8 protected. They are apps/os88api.inc's
     # numbers and NOT the block protocol's int 13h codes, which are a
     # different numbering that happens to use small integers too.
-    F_OK, F_NAME, F_NOENT, F_EXIST, F_PROT = 0, 3, 4, 5, 8
+    F_OK, F_NAME, F_NOENT, F_EXIST, F_PROT = equ(
+        "apps/os88api.inc", "FERR_OK", "FERR_NAME", "FERR_NOENT", "FERR_EXIST",
+        "FERR_PROT")
 
     def put(self, folder, name, data, append=False):
         if folder not in self.nodes:

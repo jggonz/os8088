@@ -167,11 +167,13 @@ rd_entry:
 ; store used to be claimed at DRVV_READY and the volume mounted there with it;
 ; both are the page's now (SPEC.md 62.9.13), because the size and the location
 ; are questions that can only be answered before the store is claimed.
+;
+; AND THERE IS NO DIRECTORY TO CLEAR. It lives in the chain table's claim
+; (SPEC.md 62.9.13.1), which does not exist until Mount - so the image this
+; attach runs in is 2,304 bytes smaller than the one that carried it, and
+; [rd_cwd] is 0 because the image was loaded a moment ago.
 ; -----------------------------------------------------------------------------
 rd_attach:
-    mov byte [rd_cwd], 0
-    call rd_dir_clear
-    call rd_ext_clear
     mov si, rd_svc
     clc
     ret
@@ -303,15 +305,15 @@ RD_NSEED    equ (rd_seed_end - rd_seed) / RDE_SZ
   %error "ramdisk: the seeded package does not fit the smallest store"
 %endif
 
-; Every row starts free (rd_dir_clear ran first), then the seeds are laid in
-; ORDER so that row i is seed i and the handles the seed table's parent column
-; names come out right.
+; Every row starts free (rd_dir_clear ran first, and left ES on the
+; directory), then the seeds are laid in ORDER so that row i is seed i and the
+; handles the seed table's parent column names come out right.
 rd_seed_all:
     push si
     push di
     push cx
     mov si, rd_seed
-    mov di, rd_dir
+    xor di, di                  ; row 0, at the top of the directory's claim
     mov cx, RD_NSEED
 .one:
     push cx
@@ -325,24 +327,26 @@ rd_seed_all:
     pop si
     ret
 
-; rd_seed_one - SI = a seed row, DI = its directory row
+; rd_seed_one - SI = a seed row (ours), ES:DI = its directory row
 rd_seed_one:
     push ax
     push bx
     push cx
     push dx
+    push si
     mov al, [si+RDE_PAR]
-    mov [di+RDE_PAR], al
+    mov [es:di+RDE_PAR], al
     mov al, [si+RDE_TYPE]
-    mov [di+RDE_TYPE], al
-    mov word [di+RDE_EXT], RD_NOEXT     ; a WORD now, and RD_NOEXT is 0xFFFF
-    mov word [di+RDE_SIZE], 0
-    mov word [di+RDE_SIZE+2], 0
+    mov [es:di+RDE_TYPE], al
+    mov word [es:di+RDE_EXT], RD_NOEXT  ; a WORD now, and RD_NOEXT is 0xFFFF
+    mov word [es:di+RDE_SIZE], 0
+    mov word [es:di+RDE_SIZE+2], 0
     push si
     push di
     add si, RDE_NAME
     add di, RDE_NAME
-    call rd_ncopy               ; DS:SI -> DS:DI, NUL and all
+    mov cx, 15
+    call rd_scopy               ; DS:SI -> ES:DI, NUL and all
     pop di
     pop si
     mov cx, [si+RDS_SIZE]       ; the SEED's offsets, not a live row's
@@ -355,22 +359,20 @@ rd_seed_one:
     pop si
     jc .out                     ; a seed that will not fit simply is not
                                 ; there, which is better than half there
-    mov [di+RDE_SIZE], cx
-    mov byte [rd_io_dir], 1     ; caller -> store, and rd_io takes its nine
-    mov ax, [di+RDE_EXT]        ; words in MEMORY (SPEC.md 62.9.10) - the
-    mov [rd_io_ext], ax         ; extent read back AFTER rd_chain_fit set it
-    mov word [rd_io_off], 0
-    mov word [rd_io_off+2], 0
-    mov [rd_io_len], cx
-    mov word [rd_io_len+2], 0
-    push cs
-    pop ax
-    mov [rd_io_seg], ax         ; the content, in this image
+    mov [es:di+RDE_SIZE], cx
+    mov [rd_n], cx              ; rd_io takes its words in MEMORY (SPEC.md
+    xor ax, ax                  ; 62.9.10): this many bytes, from the top of
+    mov [rd_n+2], ax            ; the file...
+    mov [rd_off], ax
+    mov [rd_off+2], ax
+    mov [rd_bufs], cs           ; ...out of this image
     mov ax, [si+RDS_DATA]
-    mov [rd_io_ofs], ax
-    mov byte [rd_io_prog], 0
+    mov [rd_bufo], ax
+    mov si, di                  ; the ROW, whose extent rd_chain_fit just set
+    mov ax, 0x0001              ; caller -> store, no reports
     call rd_io
 .out:
+    pop si
     pop dx
     pop cx
     pop bx
@@ -410,26 +412,21 @@ rd_pkg:
 .upcase:                        ; RDPV_UPCASE: ES:SI, CX -> AX, in place
     push si
     push cx
-    xor ax, ax
+    mov dx, si                  ; where it starts, so AX is end - start
     jcxz .done
 .walk:
-    mov dl, [es:si]             ; ...THROUGH ES, and that is the whole test:
-    or dl, dl                   ; this is the package's memory, not ours
+    mov al, [es:si]             ; ...THROUGH ES, and that is the whole test:
+    or al, al                   ; this is the package's memory, not ours
     jz .done
-    cmp dl, 'a'
-    jb .keep
-    cmp dl, 'z'
-    ja .keep
-    sub dl, 32
-    mov [es:si], dl
-.keep:
+    call rd_upper
+    mov [es:si], al
     inc si
-    inc ax
     loop .walk
 .done:
-    pop cx
+    xchg ax, si
+    sub ax, dx                  ; the length it found, and CF = 0: SI only
+    pop cx                      ; ever moved forward
     pop si
-    clc
     ret
 .none:
     xor ax, ax
@@ -530,25 +527,36 @@ rd_pkg:
 ; heap claim in it.
 ; =============================================================================
 ; --- the settings, and the blob they ride in ---------------------------------
+; THESE SIX ARE THE BLOB'S OWN LAYOUT, RDC_KB to the end of RDC_NAME, so
+; rd_cfg_load and rd_cfg_mark are one block copy each way rather than a field
+; at a time. The %if below is what keeps the two from drifting.
 rd_kb:      dw RD_DEFKB         ; the store's size. The DEFAULT lives here and
                                 ; not in rd_cfg_load, so a machine with no
                                 ; SYSTEM.CFG at all gets it
 rd_loc:     db RDL_CONV
 rd_flags:   db 0                ; RDCF_*
-rd_iname:   times 13 db 0       ; the preserved image: its name...
-rd_idrv:    db 0                ; ...the volume it is on...
-rd_icwd:    dw 0                ; ...and its folder's first cluster
+rd_idrv:    db 0                ; the preserved image: the volume it is on...
+rd_icwd:    dw 0                ; ...its folder's first cluster...
+rd_iname:   times 13 db 0       ; ...and its name
+rd_cfg_end:
+%if rd_loc - rd_kb != RDC_LOC - RDC_KB || rd_flags - rd_kb != RDC_FLAGS - RDC_KB || rd_idrv - rd_kb != RDC_DRV - RDC_KB || rd_icwd - rd_kb != RDC_CWD - RDC_KB || rd_iname - rd_kb != RDC_NAME - RDC_KB || rd_cfg_end - rd_kb != RDC_SZ - RDC_KB
+  %error "ramdisk: the live settings no longer mirror the RDC_* blob layout"
+%endif
 rd_blob:    times DRV_RBLOB_SZ db 0
 
 ; --- the store ---------------------------------------------------------------
 rd_have:    db 0                ; 1 = there is a store
 rd_arena:   dw 0                ; conventional: its segment
 rd_bounce:  dw 0                ; extended: the one-extent conventional bounce
-rd_xbase:   dw 0, 0             ; ...and the block's 32-bit linear base
-rd_ctab:    dw 0                ; the CHAIN TABLE's claim (SPEC.md 62.9.10) -
-                                ; a word per extent, and a claim rather than an
-                                ; array in this image because an array is what
-                                ; capped the whole store at 224KB
+rd_dtab:    dw 0                ; the DIRECTORY AND CHAIN TABLE's claim
+                                ; (SPEC.md 62.9.10, 62.9.13.1): RD_DIRB bytes of
+                                ; rows, then a word per extent. A claim rather
+                                ; than arrays in this image because the chain
+                                ; array is what capped the store at 224KB and
+                                ; the rows were 2,304 bytes every loaded driver
+                                ; paid for with nothing mounted. THESE THREE
+                                ; ARE ADJACENT for rd_reloc, which walks them
+rd_xbase:   dw 0, 0             ; the extended block's 32-bit linear base
 rd_sext:    dw RD_NOEXT         ; which extent the bounce is holding
 rd_xerr:    db 0                ; ONE operation's verdict: the extended store
                                 ; refused a stage, so what is in the bounce is
@@ -572,25 +580,22 @@ rd_err:     db 0                ; the last RDERR_*, for the page to report
 rd_n:       dw 0, 0             ; bytes this operation is about to move,
                                 ; banked across the copy that spends CX. A
                                 ; DWORD now: a file is bounded by the volume
-rd_off:     dw 0, 0             ; FSV_READAT's 32-bit offset, and APPEND's
-rd_cap:     dw 0                ; ...and READAT's capacity, which stays a word
-rd_end:     dw 0, 0             ; an append's new length
-rd_fitlo:   dw 0                ; rd_fits' low half, CL being spent on shifts
+rd_off:     dw 0, 0             ; where rd_io starts: READAT's offset, APPEND's
+                                ; old length, 0 for READ and WRITE
+rd_fitlo:   dw 0                ; rd_fits' low half
 rd_bufo:    dw 0                ; the kernel's buffer, banked across a lookup
 rd_bufs:    dw 0
-rd_nameo:   dw 0                ; a name in KERNEL_SEG, likewise
 rd_want:    dw 0                ; rd_chain_fit's arithmetic, and rd_load's
 rd_hasn:    dw 0                ; banked image size
-rd_need:    dw 0
 rd_head:    dw 0                ; the private list a grow builds before it
                                 ; links any of it on
-rd_io_dir:  db 0                ; rd_io's walk, which takes its arguments in
-rd_io_prog: db 0                ; MEMORY: two 32-bit quantities, a far pointer,
-rd_io_ext:  dw 0                ; an extent and two flags is nine words, and
-rd_io_off:  dw 0, 0             ; threading that through an 8086's registers
-rd_io_len:  dw 0, 0             ; costs every caller more than it saves
-rd_io_seg:  dw 0
-rd_io_ofs:  dw 0
+rd_io_dir:  db 0                ; rd_io's walk, which takes the rest of its
+rd_io_prog: db 0                ; arguments in [rd_off], [rd_n] and
+rd_io_ext:  dw 0                ; [rd_bufs]:[rd_bufo] - the words every verb
+rd_io_len:  dw 0, 0             ; banks them in anyway
+%if rd_io_prog - rd_io_dir != 1
+  %error "ramdisk: rd_io stores AL/AH into rd_io_dir/rd_io_prog as one word"
+%endif
 rd_io_o:    dw 0                ; the offset inside the current extent
 rd_io_n:    dw 0                ; ...and how much of it this piece moves
 rd_pos:     dw 0, 0             ; how far a preserve or a load has got
@@ -608,12 +613,24 @@ rd_dlgmode: db 0                ; FDLG_OPEN / FDLG_SAVE, across the dialog
 rd_dlgname: times 14 db 0       ; ...and its default name, staged out of the
                                 ; page's segment into ours
 
-; --- the volume's own tables -------------------------------------------------
-rd_ent:     times 32 db 0       ; the staged SPEC.md 19.1 entry, ours to fill
-rd_dir:     times RD_MAXENT * RDE_SZ db 0   ; ...and the directory, which STAYS
-                                    ; in the image: it is bounded by a row
-                                    ; count rather than by the store's size,
-                                    ; so it does not scale and does not need to
-                                    ; be a claim
+; --- the volume's own scratch -----------------------------------------------
+rd_ent:     times 32 db 0       ; the staged SPEC.md 19.1 entry, ours to fill -
+rd_nbuf     equ rd_ent          ; ...and a name verb's NAME, staged out of
+                                ; KERNEL_SEG so ES is free to be the directory
+                                ; (rdfsv.inc's rd_vlook). The two never meet:
+                                ; only FSV_LIST and FSV_ENUM stage an entry, and
+                                ; neither takes a name
+; THE DIRECTORY IS NOT HERE (SPEC.md 62.9.13.1). It is the first RD_DIRB bytes
+; of [rd_dtab]'s claim, read through ES, and it exists only while a store does.
+%if RD_DIRB != RD_MAXENT * RDE_SZ || RD_DIRB & 1
+  %error "ramdisk: the chain table starts at RD_DIRB, which is the directory's size and a word boundary"
+%endif
+
+%if rd_bounce - rd_arena != 2 || rd_dtab - rd_bounce != 2
+  %error "ramdisk: rd_reloc walks rd_arena, rd_bounce and rd_dtab as three adjacent words"
+%endif
+%if rd_icwd - rd_idrv != 1 || rd_bcwd - rd_bdrv != 1 || rd_pcwd - rd_pvol != 1 || rd_pcsav - rd_pvsav != 1
+  %error "ramdisk: a (volume, folder) pair is no longer a byte and its word"
+%endif
 
     OS88_DRV_END

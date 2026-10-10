@@ -73,7 +73,7 @@ ROWS = ("READ_AT 32K @0 MB", "READ_AT 32K @3 MB", "READ_AT 32K @6 MB",
         "READ_SEQ 16K @12 MB", "READ_SEQ 8K @12 MB")
 SIZES = (32768,) * 5 + (None, 512) + (32768,) * 4 + (16384, 8192)
 CEIL = ("hook 0%", "hook 25%", "hook 50%", "hook 75%", "hook 50%, ints off")
-NRES = 20                       # VK_NRES
+NRES = 21                       # VK_NRES (19, 20: vk_mh's timing)
 HZ = 4772727.0
 
 
@@ -294,8 +294,9 @@ def main():
                     "every chunk before it")
     ap.add_argument("--wmode", choices=("append", "seq", "held", "unclosed",
                                         "inter", "deleted", "full"),
-                    default="append", help="W's writer: OSAPI_FILE_APPEND, "
-                    "or OSAPI_FILE_WRITE_SEQ plain or HELD (SPEC.md 18.4.9)")
+                    default="append", help="the writer: A, OSAPI_FILE_APPEND; P, "
+                    "OSAPI_FILE_WRITE_SEQ plain; W (and H), HELD (SPEC.md "
+                    "18.4.9) - W was APPEND until 2026-10-07")
     ap.add_argument("--floppy", action="store_true",
                     help="the field floppy's path: the bench in B: off "
                     "build/viddisk360.img, no stream on C:, then W, R and D")
@@ -365,7 +366,7 @@ def main():
         try:
             base, rw = opened(m)
             if a.floppy:
-                m.type_text({"append": "w", "seq": "p", "held": "h",
+                m.type_text({"append": "a", "seq": "p", "held": "w",
                              "unclosed": "u", "inter": "i",
                              "deleted": "k", "full": "f"}[a.wmode])
                 if a.cut:
@@ -550,6 +551,40 @@ def main():
         bad.append("VIDDISK.TXT is not the whole report")
     else:
         print("\n   VIDDISK.TXT saved: %d lines" % len(txt.splitlines()))
+        # ONE int 13h ACROSS A HEAD (the bench's vk_mh): XT-IDE's ROM hands
+        # the count to a drive that walks its own geometry, so here both
+        # crossings must read the truth and one call must not be the slower
+        # - which is the row's mechanics checked, not the ST11M's answer
+        xs = [l for l in txt.splitlines() if l.startswith((
+            "one call across", "sectors timed", "N sectors", "...the ROM",
+            "kernel shapes", "...WRONG", "...refused", "first wrong",
+            "...head", "...from sector", "...sectors"))]
+        for l in xs:
+            print("   " + l.rstrip())
+        for what in ("one call across a head", "one call across a cyl"):
+            if not any(l.startswith(what) and "ok - the same bytes" in l
+                       for l in xs):
+                bad.append("%s: not the same bytes on XT-IDE" % what)
+        # ...and the KERNEL'S OWN SHAPES (vk_msweep): runs from mid-track to
+        # the cylinder's end, which the two rows above never issue - the
+        # ST11M passed them and failed these
+        def num(lab):
+            for l in xs:
+                if l.startswith(lab):
+                    return int(l[len(lab):].split()[0])
+            return None
+        nsh, nbad, nref = (num("kernel shapes read"), num("...WRONG BYTES"),
+                           num("...refused"))
+        if not nsh or nbad != 0 or nref != 0:
+            bad.append("the kernel's shapes: %s read, %s wrong, %s refused "
+                       "on XT-IDE" % (nsh, nbad, nref))
+        tsp = val(19) / 100.0           # hundredths of a us, as vk_bank
+        ton = val(20) / 100.0           # keeps every row
+        print("   one call against a call a track: %.1f ms against %.1f"
+              % (ton / 1000.0, tsp / 1000.0))
+        if not ton or ton > tsp * 1.1:     # (tick-timed: ~5 ms a row)
+            bad.append("one call across the heads was not timed, or was "
+                       "slower than a call a track")
     for b in bad:
         print("   FAIL: %s" % b)
     return 1 if bad else 0

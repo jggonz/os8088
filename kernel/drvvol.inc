@@ -191,27 +191,62 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; expand it into the claim, and the claim has to be cut from the size the
 ; read is going to deliver. That is the directory hint's whole purpose
 ; (SPEC.md 20.14.1), and dskw_stat_x has just left the raw entry in dskw_raw
-; - so the hint costs a compare and two loads, and no I/O.
+; - so the hint costs a compare and two loads, and no I/O. A file with NO
+; hint - a driver a host tool copied on - is asked itself (dskw_czknow): one
+; sector, the one the read is about to want, out of SPEC.md 18.95's cache.
 ; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+; dskw_czsize - DX:CX = the size the READ will deliver, for dskw_raw's entry
+; in:  DX:CX = the size it OCCUPIES (dskw_stat's answer), dskw_raw its entry
+; out: DX:CX = the UNPACKED size when it is compressed (SPEC.md 20.14.6:
+;      the hint, or the file's own header when the hint is absent), else as
+;      it came in
+; clobbers: AX, BX and ES when it sniffs (dskw_czknow), flags
+;
+; drv_find's question and the Standard File dialog's (fdlg_reap's commit,
+; SPEC.md 38.6.1) are the same question, and it was asked twice - the
+; dialog's copy without the sniff, so a hintless compressed file reported
+; the size it OCCUPIES and the read then delivered more. kern_big's alone:
+; on kern_small the dialog is FDLG.DRV's image and drv_find keeps it in line.
+dskw_czsize:
+    push cx
+    push dx
+    call dskw_czknow            ; BE: compressed, and the hint holds U
+    pop dx
+    pop cx
+    ja .r
+    mov cx, [dskw_raw+DSK_R_CZL]
+    mov dl, [dskw_raw+DSK_R_CZH]
+    mov dh, 0
+.r: ret
+%endif
 drv_find:
     push bx
     push cx
     push dx
     push si
+    push es                     ; ...which a sniff spends
     call dskw_stat_x              ; AL = attribute, BX = first cluster,
     jc .no                      ; DX:CX = the size it OCCUPIES...
-    mov al, [dskw_raw+DSK_R_CZM]    ; ...and the hint says what it BECOMES:
-    sub al, DSK_CZ_MARK             ; the mark less its format (SPEC.md
-    cmp al, LZ_LZB                  ; 20.14.1), 0x5A and 0x5B pass
-    ja .plain
+%ifdef KERN_BIG
+    call dskw_czsize            ; ...and what it BECOMES (below)
+%else                           ; (kern_small: in line - its one other
+    push cx                     ; caller is FDLG.DRV's image, which carries
+    push dx                     ; its own, so a shared routine would be four
+    call dskw_czknow            ; resident bytes for nothing there)
+    pop dx                      ; ...and the hint says what it BECOMES - or,
+    pop cx                      ; when a host tool's copy left none, the
+    ja .plain                   ; file's own header does (SPEC.md 20.14.6)
     mov cx, [dskw_raw+DSK_R_CZL]
     mov dl, [dskw_raw+DSK_R_CZH]
     mov dh, 0
 .plain:
+%endif
     test dx, dx
     jnz .no
     mov ax, cx                  ; CF = 0 from the `test`, which `mov` keeps
 .out:
+    pop es
     pop si
     pop dx
     pop cx

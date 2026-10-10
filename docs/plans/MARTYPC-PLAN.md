@@ -70,27 +70,52 @@ attribute controller, and leave the EGA's own copy of this code alone.
 read a brown pixel off `fbuf`: it must be the DAC's entry 0x14 (2A,15,00),
 not red. A real VGA and 86Box draw brown already.
 
-## 2. A key press lost now and then under parallel load
+## 2. A key press lost now and then under parallel load - FIXED (`patches/11-keyboard-hold-scancode.patch`)
 
-**Symptom.** A key sent with `Marty.key` never reaches the guest: no
-keyboard interrupt, no make and no break. It happens about one run in five
-when four emulators run at once, and when the guest is busy (the Mode X page
-flipper). It has not been seen with one instance on an idle box.
+**Symptom, as it stood.** A key sent with `Marty.key` never reached the
+guest, about one run in five with four emulators at once and a busy guest
+(the Mode X page flipper); and a held key's RELEASE was lost now and then,
+leaving the kernel's map (`kbd_dnmap`) reading the key down -
+`tests/pixelstein.py`'s heading spinning through every pose, `pxsact`'s leg
+(j) waiting out 180 guest seconds.
 
-**What is shaped round it.** `tests/vidfskeys.py`'s `press()` sends a key
-again, up to three times, when what it does never happens. It PRINTS how
-many it resent, so the count cannot hide. `vidpreview`'s lost Esc at a
-bracket's teardown (VIDEO-PLAN 15.7) may be the same thing or may be the
-guest's. The owner's word on that one: not a concern for a person, who is
-waiting for the full screen to close.
+**Where it came from - MartyPC, and not the harness or the ISR.** Upstream
+gives the keyboard a one-byte buffer that OVERWRITES, and then
+`process_keyboard_input` pops that byte and hands it to the PPI whether or
+not the PPI can take it. `Ppi::send_keyboard` latches a scancode only when
+`ksr_cleared` - the ISR has acknowledged the last one with its PB7 pulse -
+and otherwise **drops it silently**, while the bus pulses IRQ1 anyway (so the
+ISR reads the OLD byte a second time). Any byte that arrives inside the
+ISR's latency after another is therefore gone. A held key makes that window
+a regular one: typematic repeats every 100 ms, and a release landing between
+a repeat's latch and its acknowledge lost the break. A real 83-key keyboard
+has a 16-character buffer and holds a byte until the system takes it.
 
-**Where it comes from - NOT KNOWN.** It is either the harness, meaning
-`Marty.key`'s make/break timing against a guest that is not polling, or
-MartyPC's keyboard: its PPI and 8255 shift register, and what happens to a
-scancode that arrives while one is still unread. VIDEO-PLAN 15.7 puts the
-diagnosis in **the next full soak pass**, which is the owner's call to run
-(CLAUDE.md, Testing). Counting keyboard interrupts against keys sent,
-across a soak, answers which side drops it.
+**The proof is deterministic, not a rate.** Hold ArrowRight in PIXELSTEIN
+until typematic is running, stop at an `int 9` breakpoint - a repeat
+latched and not yet acknowledged - send the release, run 30 frames, read
+`kbd_dnmap`: upstream lost the break **10 times of 10**, the patched build
+**0 of 10**. Released at random points on the patched build, 0 of 120 on
+CGA and Hercules, windowed and inside the fsx bracket.
+
+**The patch.** The keyboard keeps a 16-byte FIFO (`kb_buffer_size` 16;
+upstream's own >1 path flagged an overflow and never queued at all), and
+the bus asks `Ppi::kb_ready()` - `send_keyboard`'s own test - before taking
+a byte out of it, so an unready PPI leaves it queued and the keyboard offers
+it again at its next update (`KB_UPDATE_RATE`, 5 ms). A typematic repeat is
+not queued behind a byte the system has yet to take. Reset and overflow
+bytes are delivered exactly as before.
+
+**What is shaped round it, and is now belt and braces.**
+`tests/vidfskeys.py`'s `press()` resends a key whose effect never happens
+and prints how many; `tests/pxslib.py`'s `key_edge` resends an edge the
+kernel's map has not turned over on and `release_held` names a key still
+read down. All three still run and should now report nothing: a resend
+printed by any of them is a new finding, not this one.
+`vidpreview`'s Esc lost at a bracket's teardown (VIDEO-PLAN 15.7, not a
+concern for a person) was kept beside this in case it was the same thing.
+It plausibly was - an Esc landing inside the ISR's latency after another
+byte - and one seen on a patched build is the guest's.
 
 ## 3. The fixed disk is XT-IDE only, and takes no 15-head geometry
 

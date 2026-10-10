@@ -463,7 +463,14 @@ rather than as *there is no bleed* (SPEC.md 88.13.4.1). A band named in the
 guest's coordinates is off by exactly two bytes here, which is the size of a
 plausible bug. **On the 1bpp adapters read `m.vram()`** — the card's memory,
 byte for byte the arithmetic in `tools/hercshot.py` — and keep `fbuf` for
-VGA, where it is the only route.
+VGA, where it is the only route. `m.vram()` with no `kind` REFUSES a VGA now;
+it used to send it down the Hercules arm and hand back an unmapped 0xB0000 as
+a screen with nothing lit, which `tests/saver.py`'s boot gate read as *"0 lit
+... that is not a desktop"*. For the card's MEMORY on a VGA (a blanker gates
+the signal, so the glass of a correct one is black), the debugger's `read`
+of 0xA0000 is a side-effect-free peek that answers **plane 0 whatever Read
+Map Select holds** — `cpu_peek_u8` passes plane 0 — so writing GC4 before a
+`read` changes nothing it returns.
 
 **`card=` is not optional on a two-card machine.** `settle`, `launch` and the
 screen probe ask `video` with no card by default, which answers MartyPC's

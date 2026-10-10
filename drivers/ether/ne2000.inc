@@ -390,26 +390,19 @@ ne_probe:
     loop .settle
     jmp .none
 .up:
-    mov ax, (NE_STP | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
-    mov ax, 0x48 << 8 | NE_DCR          ; BYTE-WIDE (see the header)
-    call ne_out
-    mov ax, 0x00 << 8 | NE_RBCR0
-    call ne_out
-    mov ax, 0x00 << 8 | NE_RBCR1
-    call ne_out
-    mov ax, 0x20 << 8 | NE_RCR          ; monitor: accept nothing yet
-    call ne_out
-    mov ax, 0x02 << 8 | NE_TCR          ; internal loopback while we set up
-    call ne_out
+    mov si, ne_t_setup                  ; stopped, byte-wide, monitoring
+    call ne_outs                        ; and in loopback (ne_t_setup)
 
     mov ax, 32                          ; the PROM: 32 bytes at card address 0
-    mov bx, 0
-    mov di, eth_prom
+    xor bx, bx
+    mov di, eth_rxb             ; (the receive frame as SCRATCH: nothing is
+                                ; received before the card is found, and the
+                                ; PROM is wanted only long enough to read
+                                ; the address out of it)
     call ne_dma_read
 
     mov byte [eth_word], 1              ; ...16-bit until a pair disagrees
-    mov si, eth_prom
+    mov si, eth_rxb
     mov cx, 16
 .pair:
     mov al, [si]
@@ -420,7 +413,7 @@ ne_probe:
     add si, 2
     loop .pair
 
-    mov si, eth_prom                    ; the address, doubled or not
+    mov si, eth_rxb                     ; the address, doubled or not
     mov di, eth_mac
     mov cx, 6
 .mac:
@@ -456,21 +449,10 @@ ne_probe:
     or  bl, bl
     jz  .none                           ; all zero: nothing there
     cmp bh, 6
-    jne .ok
-    jmp .none                           ; all ones: a floating bus
-.ok:
-    clc
-    jmp short .out
-.none:
-    stc
+    je  .none                           ; all ones: a floating bus
+    CLC_OR_STC .none
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_di
 
 ; -----------------------------------------------------------------------------
 ; ne_init - bring the card up and start receiving
@@ -495,18 +477,8 @@ ne_init:
     mov [eth_pstart], ah
     mov [eth_pstop], ch
 
-    mov ax, (NE_STP | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
-    mov ax, 0x48 << 8 | NE_DCR
-    call ne_out
-    mov ax, 0x00 << 8 | NE_RBCR0
-    call ne_out
-    mov ax, 0x00 << 8 | NE_RBCR1
-    call ne_out
-    mov ax, 0x20 << 8 | NE_RCR          ; monitor while the ring is being set
-    call ne_out
-    mov ax, 0x02 << 8 | NE_TCR          ; internal loopback, likewise
-    call ne_out
+    mov si, ne_t_setup                  ; ne_probe's six: stopped, monitoring
+    call ne_outs                        ; and in loopback while the ring is set
     mov al, NE_TPSR
     mov ah, [eth_txpg]
     call ne_out
@@ -522,13 +494,8 @@ ne_init:
     mov ah, [eth_pstart]
     inc ah
     mov [eth_next], ah
-    mov ax, 0xFF << 8 | NE_ISR
-    call ne_out
-    mov ax, 0x00 << 8 | NE_IMR          ; NO INTERRUPTS: SPEC.md 72.2.1
-    call ne_out
-
-    mov ax, (NE_PAGE1 | NE_STP | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
+    mov si, ne_t_quiet                  ; every cause cleared, NO INTERRUPTS
+    call ne_outs                        ; (SPEC.md 72.2.1), and page 1
     mov si, eth_mac                     ; our address, six registers
     mov cl, NE_PAR0
     mov ch, 6
@@ -553,14 +520,8 @@ ne_init:
     mov ah, [eth_next]
     call ne_out
 
-    mov ax, (NE_STA | NE_RD_ABORT) << 8 | NE_CR     ; page 0 again, and GO
-    call ne_out
-    mov ax, 0x00 << 8 | NE_TCR          ; out of loopback
-    call ne_out
-    mov ax, 0x04 << 8 | NE_RCR          ; ours and broadcast; no promiscuous,
-    call ne_out                         ; no multicast
-    mov ax, 0xFF << 8 | NE_ISR
-    call ne_out
+    mov si, ne_t_go                     ; page 0 again, GO, out of loopback,
+    call ne_outs                        ; ours and broadcast only
     pop si
     pop cx
     pop ax
@@ -570,15 +531,65 @@ ne_init:
 ; ne_stop - silence the card (DRVV_DETACH's half, and it cannot fail)
 ; -----------------------------------------------------------------------------
 ne_stop:
+    push si
+    mov si, ne_t_stop
+    call ne_outs
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; ne_outs - a table of register writes: SI = a count byte, then that many
+; (register, value) pairs, written in order on whatever page the card is on
+; -----------------------------------------------------------------------------
+ne_outs:
     push ax
-    mov ax, (NE_STP | NE_RD_ABORT) << 8 | NE_CR
+    push cx
+    push si
+    mov cl, [si]
+    xor ch, ch
+.l:
+    inc si
+    mov ax, [si]                ; AL = the register, AH = the value: ne_out's
+    inc si                      ; own two arguments, as one word
     call ne_out
-    mov ax, 0x00 << 8 | NE_IMR
-    call ne_out
-    mov ax, 0xFF << 8 | NE_ISR
-    call ne_out
+    loop .l
+    pop si
+    pop cx
     pop ax
     ret
+
+; the tables. Each pair is `db register, value`, which a word load hands to
+; ne_out as AL and AH.
+ne_t_setup: db 6
+            db NE_CR,    NE_STP | NE_RD_ABORT   ; stopped
+            db NE_DCR,   0x48                   ; BYTE-WIDE (see the header)
+            db NE_RBCR0, 0x00
+            db NE_RBCR1, 0x00
+            db NE_RCR,   0x20                   ; monitor: accept nothing yet
+            db NE_TCR,   0x02                   ; internal loopback
+ne_t_quiet: db 3
+            db NE_ISR,   0xFF
+            db NE_IMR,   0x00                   ; NO INTERRUPTS: SPEC.md 72.2.1
+            db NE_CR,    NE_PAGE1 | NE_STP | NE_RD_ABORT
+ne_t_go:    db 4
+            db NE_CR,    NE_STA | NE_RD_ABORT   ; page 0 again, and GO
+            db NE_TCR,   0x00                   ; out of loopback
+            db NE_RCR,   0x04                   ; ours and broadcast; no
+                                                ; promiscuous, no multicast
+            db NE_ISR,   0xFF
+ne_t_stop:  db 3
+            db NE_CR,    NE_STP | NE_RD_ABORT
+            db NE_IMR,   0x00
+            db NE_ISR,   0xFF
+ne_t_ovw1:  db 4                                ; ne_overflow, once stopped:
+            db NE_RBCR0, 0x00
+            db NE_RBCR1, 0x00
+            db NE_TCR,   0x02                   ; loopback while the ring moves
+            db NE_CR,    NE_STA | NE_RD_ABORT
+ne_t_ovw2:  db 3                                ; ...and once the ring has
+            db NE_CR,    NE_STA | NE_RD_ABORT   ; moved: page 0, OVW cleared,
+            db NE_ISR,   NE_OVW                 ; out of loopback
+            db NE_TCR,   0x00
 
 ; -----------------------------------------------------------------------------
 ; ne_curr - what page the CARD will write next (page 1's CURR)
@@ -744,14 +755,9 @@ ne_overflow:
     jnz .go
     loop .stopped
 .go:
-    mov ax, 0x00 << 8 | NE_RBCR0
-    call ne_out
-    mov ax, 0x00 << 8 | NE_RBCR1
-    call ne_out
-    mov ax, 0x02 << 8 | NE_TCR              ; loopback while the ring moves
-    call ne_out
-    mov ax, (NE_STA | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
+    push si
+    mov si, ne_t_ovw1
+    call ne_outs
     mov al, NE_BNRY
     mov ah, [eth_pstart]
     call ne_out
@@ -763,12 +769,9 @@ ne_overflow:
     mov al, NE_CURR
     mov ah, [eth_next]
     call ne_out
-    mov ax, (NE_STA | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
-    mov ax, NE_OVW << 8 | NE_ISR
-    call ne_out
-    mov ax, 0x00 << 8 | NE_TCR
-    call ne_out
+    mov si, ne_t_ovw2
+    call ne_outs
+    pop si
     inc word [eth_novw]
     pop cx
     pop ax

@@ -106,12 +106,6 @@ SV_NODRAW   equ 08000h          ; sv_spx: this star is not on the glass
 ; together and the screen empties and refills once every two seconds.
 ; -----------------------------------------------------------------------------
 sv_star_init:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-
     mov ax, [sv_w]              ; the vanishing point starts in the middle and
     shr ax, 1                   ; drifts from there
     mov [sv_sox], ax
@@ -139,11 +133,6 @@ sv_star_init:
     dec cx
     jnz .one
 
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -198,13 +187,6 @@ sv_abs:
 ; in:  the gfx lock is HELD
 ; -----------------------------------------------------------------------------
 sv_star_step:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
     call sv_star_drift
 
     ; --- PASS 1: fly every star and project it. NOTHING IS DRAWN HERE -------
@@ -245,13 +227,6 @@ sv_star_step:
     ; --- PASS 3: ...and only now the erases ---------------------------------
     call sv_star_erase
 
-    mov byte [sv_shown], 1
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -502,24 +477,29 @@ sv_star_proj:
 ; sv_star_emit commits it; what was 56 arrivals is 3.
 ; -----------------------------------------------------------------------------
 
-sv_sox:     dw 0                ; the vanishing point, and its drift
-sv_soy:     dw 0
-sv_sovx:    dw 0
-sv_sovy:    dw 0
-sv_sodn:    db SV_ODRIFT
+; The mode's state is a macro emitted into saver.asm's mode union (see
+; SV_CUBE_STATE): sv_star_init writes sv_sox..sv_sodn and every star's
+; sv_spx/sv_sx/sv_sy/sv_sz, and each frame writes sv_opx/opy/ow from those
+; before the erase reads them, so nothing here needs a load-time value.
+%macro SV_STAR_STATE 0
+sv_sox:     resw 1              ; the vanishing point, and its drift
+sv_soy:     resw 1
+sv_sovx:    resw 1
+sv_sovy:    resw 1
+sv_sodn:    resb 1
 
 ; SPEC.md 79.5.11: WHERE EACH STAR WAS, for the erase pass. The per-star order
 ; needed one banked blot at a time (sv_sex/sey/sew, which is what these
 ; replace); a batched frame draws the whole field before it erases any of it,
-; so the whole field's previous blot has to survive pass 1. 168 bytes of an
-; OVERLAY - disk and a heap claim while the saver runs, never resident.
-sv_opx:     times SV_NSTAR dw SV_NODRAW
-sv_opy:     times SV_NSTAR dw 0
-sv_ow:      times SV_NSTAR dw 0
+; so the whole field's previous blot has to survive pass 1.
+sv_opx:     resw SV_NSTAR
+sv_opy:     resw SV_NSTAR
+sv_ow:      resw SV_NSTAR
 
-sv_sx:      times SV_NSTAR dw 0 ; the model
-sv_sy:      times SV_NSTAR dw 0
-sv_sz:      times SV_NSTAR dw 0
-sv_spx:     times SV_NSTAR dw SV_NODRAW  ; ...and what is on the glass
-sv_spy:     times SV_NSTAR dw 0
-sv_sw:      times SV_NSTAR dw 0          ; 0 = a pixel, 1 = a 2x2 block
+sv_sx:      resw SV_NSTAR       ; the model
+sv_sy:      resw SV_NSTAR
+sv_sz:      resw SV_NSTAR
+sv_spx:     resw SV_NSTAR       ; ...and what is on the glass
+sv_spy:     resw SV_NSTAR
+sv_sw:      resw SV_NSTAR       ; 0 = a pixel, 1 = a 2x2 block
+%endmacro

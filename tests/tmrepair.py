@@ -66,6 +66,7 @@ for i, a in enumerate(sys.argv):
         MACHINE = sys.argv[i + 1]
 
 S = os88sym.linear
+EQ = os88sym.equates()
 KERNEL_SEG = 0x60
 TITLE_H = 18
 POLLS = 8                               # TM_INT is 9 ticks, ~0.5 s each
@@ -159,8 +160,36 @@ def serve(m, at, di, hits, names=None, trace=None):
             hits[0] += 1
         if names is not None and ip in names and trace is not None:
             trace.append(names[ip])
+            detail(m, names[ip], r)
     m.run()
     return True
+
+
+# WHICH OF wm_su_ck's FOUR REFUSALS, read at the stops themselves. The path
+# names the GATE; wm_su_ck alone has four reasons to answer CF - no claim in
+# the window's wm_su_segs word, the promise gone (wm_dc_ok: WF_SAVEU clear),
+# a header that does not match the rect laid out now, or (kern_small) the
+# depth - and they want four different fixes. The 2026-10-04 soak stopped at
+# `wm_su_ck -> wm_su_tno` once and passed 3 alone and 8 at a lane of four,
+# so the next failure has to say which.
+DETAIL = []
+
+
+def detail(m, name, r):
+    di = r["di"] & 0xFFFF
+    base = os88geom.KERNEL_SEG << 4
+    slot = (di - (S("wm_wins") - base)) // os88geom.WIN_SIZE
+    flags = int.from_bytes(m.read(base + di + os88geom.W_FLAGS, 2), "little")
+    claim = int.from_bytes(m.read(S("wm_su_segs") + 2 * slot, 2), "little")
+    if name == "wm_su_ck":
+        DETAIL.append("ck: claim %04x, flags %04x (SAVEU %d, STALE %d)"
+                      % (claim, flags, bool(flags & EQ["WF_SAVEU"]),
+                         bool(flags & EQ["WF_STALE"])))
+    elif name == "wm_su_tno":
+        n = 2 * EQ["WSU_HDRW"]
+        now = m.read(S("wm_su_x1"), n).hex()
+        hdr = m.read(claim << 4, n).hex() if claim else "-"
+        DETAIL.append("tno: header laid out %s, claim's %s" % (now, hdr))
 
 
 def pump(m, at, di, hits, rounds=24, frames=8, names=None, trace=None):
@@ -415,6 +444,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
                      "%s, so the refusal is %s"
                      % (" -> ".join(path) or "EMPTY",
                         why or "before wm_su_try was entered at all"))
+        for d in DETAIL:
+            print("REPAIR  : %s" % d)
     if diff:
         fails.append("REPAIR: %d subpixels differ - tm_update did not replay "
                      "everything that moved while it was covered" % diff)

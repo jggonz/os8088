@@ -97,8 +97,9 @@ vmm_on      db 0                ; THE GATE. 1 = the image is attached and the
                                 ; compares this byte and nothing else, so a
                                 ; machine without the file pays one compare
 vmm_busy    db 0                ; vmm_poll's re-entrancy guard: task_yield is a
-                                ; caller, so two task slices can race the
-                                ; image's scratch
+                                ; caller, so two task slices can race one
+                                ; drain - the host's one queue, and the one
+                                ; vmm_drn below (SPEC.md 9.11.3)
 vmm_drn     db 0                ; ...and its drain counter. A byte and not a
                                 ; register, because the apply path spends SI.
                                 ; Live only inside one poll
@@ -171,11 +172,17 @@ vmm_poll:
     mov al, 1                   ; RE-ENTRANCY GUARD (xchg is atomic on 8086):
     xchg al, [vmm_busy]         ; task_yield is a caller, so an IF=1 window in
     or  al, al                  ; the drain can be preempted into another task
-    jz  .go                     ; that yields and also polls - and the image's
-    ret                         ; scratch is one buffer. The other slice will
-                                ; drain it; skip. AL and the flags are spent
-                                ; on this path, which is why the header says
-                                ; "all registers preserved" only below
+    jz  .go                     ; that yields and also polls. The IMAGE has
+    ret                         ; no scratch to race any more - each read is
+                                ; atomic under vmm_atom's cli - but a report
+                                ; is READ and APPLIED under two separate
+                                ; cli's, so a second drainer in the gap
+                                ; would apply the next report before this
+                                ; one, and vmm_drn is one counter. The other
+                                ; slice will drain it; skip. AL and the flags
+                                ; are spent on this path, which is why the
+                                ; header says "all registers preserved" only
+                                ; below
 .go:
     push ax
     push bx

@@ -66,6 +66,35 @@ boot and a restore at the desktop.  The field reported exactly that and this
 row is what would have caught it - the LIVE_MAX cycle bound below goes red on
 the fallback, which is the whole reason it is a bound and not a screen read.
 
+**`--compact extent` / `--compact module` MOVE THE BOX UNDER THE HANDOFF**
+(SPEC.md 96.40.8).  The post is a far pointer, `[hb_dosseg]`, and the DOS
+box's region is MOVABLE - so a claim between the post and the picture that
+has to compact can carry the region away from the word that names it.  Two
+claims in that window are the handoff's own: `HIBER.DRV`'s image, loaded by
+`hbf_perform` before step 1 reads the record, and step 3's extent list, taken
+after it.  The row stops at `hbf_perform` - the post made, nothing loaded -
+and shapes the heap so that exactly one of the two can only be met by moving
+the region a few KB:
+
+  module  holes of 3KB under and over the region and a 2KB one at the floor,
+          so the 6KB image needs the region to move and the list does not
+  extent  a hole the image fits exactly, and 1KB under and over the region,
+          so the image needs nothing and the 2KB list needs the move
+
+Everything else is filled with PINNED claims under a tombstone tag, and the
+two caches are retagged pinned and unpurgeable too - a compaction DROPS a
+cache before it moves anything, so a heap that still has one never needs the
+region to move.  They stand in for any other program's claims.  A ceiling
+wall is placed before the box opens and taken away at the stop, because a
+region claimed top-down packs to the ceiling and there must be ground on BOTH
+sides of it.  The heap and the window's own state are then left to the
+ordinary assertions above, unchanged.
+
+**VERIFIED RED** on the kernel before 96.40.8, both arms: `extent` came home
+with `[dos_exit]` 0 and the code `002A` written a kilobyte under the record,
+INTO THE BOX'S OWN CODE, and `module` was refused outright - step 1 read the
+record from where the region used to be and the magic did not match.
+
 The fixture is the SHIPPED 360KB system disk with one file added: a SYSTEM.CFG
 asking for the hard-disk driver.  Nothing loads unless SYSTEM.CFG asks (SPEC.md
 51.3), so without it the machine has no C:, `hb_pick` refuses, and the row would
@@ -85,6 +114,7 @@ import os88sym                                                 # noqa: E402
 import os88marty as M                                          # noqa: E402
 import os88mouse                                               # noqa: E402
 import os88build                                               # noqa: E402
+import os88drv                                                 # noqa: E402
 import os88ui                                                  # noqa: E402
 
 # --tree "<make args>" builds a PRIVATE tree and drives that instead, so a knob
@@ -205,6 +235,78 @@ def claims(m):
     return out
 
 
+# --- --compact: the heap shaped so the handoff's own claim moves the box ----
+# MEM_K_ICO_UNUSED: a TOMBSTONE tag nothing claims or frees under
+# (kernel/memory.inc), so a wall written with it is pinned, unpurgeable and
+# nobody's to give back.
+WALL = 0xFF0E
+
+
+def word(m, name):
+    return int.from_bytes(bytes(m.read(os88sym.linear(name), 2)), "little")
+
+
+def wall(m, base, para):
+    """A pinned claim written straight into a free `mem_tab` row; its index.
+
+    The base goes in LAST, because a non-zero `MC_SEG` is what makes a row
+    live and the rest has to be true by then.
+    """
+    tab = os88sym.linear("mem_tab")
+    raw = bytes(m.read(tab, os88geom.MEM_MAX * os88geom.MC_SIZE))
+    for i in range(os88geom.MEM_MAX):
+        if struct.unpack_from("<H", raw, i * os88geom.MC_SIZE)[0] == 0:
+            at = tab + i * os88geom.MC_SIZE
+            m.write(at + 2, struct.pack("<HHHH", para, WALL, 0, 0))
+            m.write(at, struct.pack("<H", base))
+            return i
+    fail("no free mem_tab row for a wall")
+
+
+def unwall(m, i):
+    m.write(os88sym.linear("mem_tab") + i * os88geom.MC_SIZE, bytes(2))
+
+
+def shape(m, arm, seg):
+    """Fill the heap so that `arm`'s claim can only be met by moving `seg`.
+
+    Called with the guest stopped at `hbf_perform`: the post is made and
+    nothing of the handoff has claimed yet. Every free run but the holes the
+    arm needs is walled, and both caches become walls (a compaction drops a
+    cache before it moves a region, so a heap with one never needs the move).
+    """
+    mod_kb = -(-len(os88drv.image_unwrap(
+        open(os88build.at("build/hiber.drv"), "rb").read())) // 1024)
+    tab = os88sym.linear("mem_tab")
+    raw = bytes(m.read(tab, os88geom.MEM_MAX * os88geom.MC_SIZE))
+    for i in range(os88geom.MEM_MAX):
+        b, _, own, _, _ = struct.unpack_from("<HHHHH", raw,
+                                             i * os88geom.MC_SIZE)
+        if b and 0xF000 <= own < 0xFF00:        # MEM_P_*: a purgeable cache
+            m.write(tab + i * os88geom.MC_SIZE + 4,
+                    struct.pack("<HHH", WALL, 0, 0))
+    cl = sorted(claims(m))
+    region = [c for c in cl if c[0] == seg]
+    if not region:
+        fail("no claim is based at the box's segment %04X" % seg)
+    under = max(c[0] + c[1] for c in cl if c[0] < seg)
+    end = seg + region[0][1]
+    over = min([c[0] for c in cl if c[0] > seg] + [word(m, "mem_top")])
+    if any(c[0] < under and c[0] + c[1] > under for c in cl):
+        fail("the heap under the box is not one free run")
+    K = 0x40                                    # a KB, in paragraphs
+    if arm == "module":
+        h, floor = 3 * K, 2 * K                 # 3+3 for the image, 2 for
+    else:                                       # the extent list
+        h, floor = K, mod_kb * K                # 1+1 for the list, the
+    if over - end < h + 1 or seg - under < h + floor + 1:   # image's own hole
+        fail("not enough heap round the box to shape: %04X..%04X under, "
+             "%04X..%04X over" % (under, seg, end, over))
+    wall(m, under + floor, seg - h - (under + floor))
+    wall(m, end + h, over - (end + h))
+    return mod_kb
+
+
 def wait_text(m, want, secs, what):
     got = []
 
@@ -312,6 +414,11 @@ def main():
         prog = "DOSGFX.COM"
     elif "--pit" in sys.argv:
         prog = "DOSPIT.COM"
+    compact = None
+    if "--compact" in sys.argv:
+        compact = sys.argv[sys.argv.index("--compact") + 1]
+        if compact not in ("module", "extent"):
+            fail("--compact takes `module` or `extent`, not %r" % compact)
     fixture(prog)
     boot = None
     if from_floppy:
@@ -358,6 +465,13 @@ def main():
         print("kdreturn: the guest's clock reads %02d:%02d:%02d %02d/%02d/%d"
               % (before[0], before[1], before[2], before[3], before[4],
                  before[5]))
+        ceiling = None
+        if compact:
+            # THE CEILING WALL: a region is claimed top-down and packs to the
+            # ceiling, so without ground over it there is nothing to move it
+            # INTO. 4KB, pinned, taken away again at the stop.
+            top = word(m, "mem_top")
+            ceiling = wall(m, top - 0x100, 0x100)
         win = ui.path("B:/" + prog)
         if not win:
             fail("double-clicking %s on the floppy opened no window" % prog)
@@ -381,7 +495,47 @@ def main():
         m.write((pseg << 4) + dm["dos_akb"], bytes([0, 0]))
         m.write((pseg << 4) + dm["dos_state"], bytes([0]))
         m.write((pseg << 4) + dm["dos_keepc"], bytes([1, 0]))
+        if compact:
+            m.bp_exec("hbf_perform")
         mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"))
+        if compact:
+            # --- THE BOX MOVES UNDER THE HANDOFF (SPEC.md 96.40.8) -----------
+            if not m.wait_stop(60.0):
+                fail("the post was never spent: hbf_perform was not reached")
+            unwall(m, ceiling)
+            posted = dosmap.instance(m)
+            if word(m, "hb_dosseg") != posted:
+                fail("the post names %04X and the box is at %04X before "
+                     "anything has claimed" % (word(m, "hb_dosseg"), posted))
+            mod_kb = shape(m, compact, posted)
+            m.breakpoints([{"type": "mem",
+                            "addr": os88sym.linear("hb_xseg")}])
+            mark = m.go()
+            if not m.wait_stop(60.0, since=mark):
+                fail("the handoff never reached its extent-list claim with "
+                     "the box at %04X when it was posted: hbm_dosrun "
+                     "REFUSED, which is step 1 reading the record from where "
+                     "the region used to be - the module's own load moved it "
+                     "and [hb_dosseg] did not follow (SPEC.md 96.40.8)"
+                     % posted)
+            now, named = dosmap.instance(m), word(m, "hb_dosseg")
+            xseg = word(m, "hb_xseg")
+            m.breakpoints([])
+            print("kdreturn: --compact %s - the box was posted at %04X, is at "
+                  "%04X with the extent list at %04X, and [hb_dosseg] says "
+                  "%04X" % (compact, posted, now, xseg, named))
+            if now == posted:
+                fail("the box did not move: the shaped heap (a %dKB image, "
+                     "the holes round %04X) no longer forces a compaction "
+                     "inside the handoff, so this arm proves nothing. "
+                     "Re-derive the holes from what hbm_dosrun claims now"
+                     % (mod_kb, posted))
+            if named != now:
+                fail("[hb_dosseg] still names %04X and the box is at %04X: "
+                     "the image about to be written carries a STALE segment, "
+                     "and the wake will put the exit code into whatever is "
+                     "there now (SPEC.md 96.40.8)" % (named, now))
+            m.go()
 
         rs = wait_text(m, "READY", 300, "the run under kern_dos")
         kd_kb = topmem(rs)

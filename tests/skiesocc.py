@@ -158,15 +158,23 @@ def main(argv):
             a loaded box only makes them arrive slower, not fewer - and then
             it says so, loudly, instead of answering with a number that looks
             like a finding."""
-            prev = None
-            for _ in range(30):
-                m.advance(frames=6)
+            # THREE identical readings at gaps of 5, 7 and 11 frames, not
+            # two at 6: something in a paused Clear Skies moves on a period
+            # of its own, and two captures one period apart are identical
+            # while the scene is anything but still - which is how the
+            # 2026-10-04 soak read the same 3389 px for objects 8 and 9
+            # again, after the fix below the docstring. Coprime gaps cannot
+            # all land on one phase of a periodic animation.
+            prev, run = None, 0
+            for k in range(45):
+                m.advance(frames=(5, 7, 11)[k % 3])
                 cur = viewpx()
-                if cur == prev:
+                run = run + 1 if cur == prev else 0
+                if run >= 2:
                     return cur
                 prev = cur
             raise RuntimeError(
-                "skiesocc: the viewport never stopped changing over 180 "
+                "skiesocc: the viewport never stopped changing over 345 "
                 "frames, so nothing here can be measured - every verdict is "
                 "an XOR between two captures and a moving one reads as the "
                 "object being visible. This is the SCENE, not the pass")
@@ -275,8 +283,27 @@ def main(argv):
             for i in said[v]:
                 keep = int.from_bytes(m.read(lin + objs + i * CSO_SIZE
                                              + CSO_RANGE, 2), "little")
-                pin(port, *v, drop=(i,))
-                now = settled()
+                # A DIFFERENCE HAS TO BE THE OBJECT'S AND HAS TO REPEAT. On a
+                # mismatch the object goes back and the scene is captured
+                # again: if THAT differs from `was` too, it is the scene that
+                # moved and the reading is taken again - up to three times -
+                # rather than charged to the object. A hidden object that is
+                # really on the glass differs every time, with the object back
+                # matching `was` every time, so --clobber-occ still goes red.
+                for _ in range(3):
+                    pin(port, *v, drop=(i,))
+                    now = settled()
+                    if now == was:
+                        break
+                    m.pause()               # the object back, then the
+                    m.write(lin + objs + i * CSO_SIZE + CSO_RANGE,
+                            keep.to_bytes(2, "little"))
+                    m.run()                 # same view without the drop
+                    pin(port, *v)
+                    back = settled()
+                    if back == was:
+                        break               # reproducible: the object's
+                    was = back              # the scene's: measure again
                 if now == was:
                     blind += 1
                 else:

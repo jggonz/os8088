@@ -307,10 +307,7 @@ pm_cmd:
     in al, dx
     mov bh, al
     mov ax, bx                  ; ...into AX before BX is given back
-    clc
-    jmp short .out
-.no:
-    stc
+    CLC_OR_STC .no
 .out:
     pop si
     pop dx

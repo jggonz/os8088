@@ -117,8 +117,14 @@ def run_format(m):
 tmp = "build/fmtlow-%d" % os.getpid()
 FIX = os88build.at(tmp + ".img")
 OUT = os.path.abspath(os88build.at(tmp + ".out"))
-open(FIX, "wb").write(os.urandom(368640))    # a foreign format, as far as
-                                             # anything can tell
+_img = bytearray(os.urandom(368640))         # a foreign format, as far as
+_img[11:36] = bytes(25)                      # anything can tell - with NO
+open(FIX, "wb").write(_img)                  # BPB: MartyPC's raw flush sizes
+                                             # the file from the BPB fluxfox
+                                             # parsed at MOUNT, and a random
+                                             # media byte it recognises (6 in
+                                             # 256) mis-sizes or refuses the
+                                             # capture (tests/fmtreach.py)
 try:
     with os88ui.boot(SYS, apps=FIX, machine=MACHINE) as ui:
         m = ui.m

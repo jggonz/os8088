@@ -89,13 +89,11 @@ ip_parse:
     inc ch
     cmp ch, 3
     ja  .no
-    push dx
-    mov dx, bx
-    shl bx, 1
+    mov dx, bx                  ; (DX is this routine's own: saved at the
+    shl bx, 1                   ; top and used for nothing else)
     shl bx, 1
     add bx, dx
     shl bx, 1                   ; bx = bx * 10, without touching AX
-    pop dx
     sub al, '0'
     xor ah, ah
     add bx, ax
@@ -121,13 +119,7 @@ ip_parse:
 .no:
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_di
 
 ; =============================================================================
 ; DHCP
@@ -137,56 +129,59 @@ ip_parse:
 ; dhcp_frame - the fixed part of a BOOTP request, in eth_txb's UDP payload
 ; out: DI = where the options go
 ; -----------------------------------------------------------------------------
+%define DH_BP (eth_txb + IP_PAY + UD_HLEN)  ; the BOOTP record we build
+
 dhcp_frame:
-    push ax
     push cx
     push si
-    mov di, eth_txb + IP_PAY + UD_HLEN
+    mov di, DH_BP
     mov cx, BP_OPTS
-    call mem_zero
-    mov di, eth_txb + IP_PAY + UD_HLEN
-    mov byte [di+BP_OP], 1              ; BOOTREQUEST
-    mov byte [di+BP_HTYPE], 1           ; Ethernet
+    call mem_zero               ; ...so every field not named below is zero,
+                                ; the low byte of BP_FLAGS among them
+    mov word [di+BP_OP], 0x0101         ; BOOTREQUEST, and Ethernet
     mov byte [di+BP_HLEN], 6
-    mov si, dhcp_xid
-    push di
-    add di, BP_XID
-    mov cx, 4
-    call mem_copy
-    pop di
     mov byte [di+BP_FLAGS], 0x80        ; BROADCAST, big-endian: we have no
-    mov byte [di+BP_FLAGS+1], 0         ; address yet, so a unicast reply is one
+                                        ; address yet, so a unicast reply is one
                                         ; we could not receive
+    mov word [di+BP_MAGIC], 0x8263      ; the magic cookie, 63 82 53 63, as
+    mov word [di+BP_MAGIC+2], 0x6353    ; two little-endian words
+    mov si, dhcp_xid
+    mov di, DH_BP + BP_XID
+    call mem_cp4
     mov si, eth_mac
-    push di
-    add di, BP_CHADDR
-    mov cx, 6
-    call mem_copy
-    pop di
-    mov byte [di+BP_MAGIC], 99          ; the magic cookie, 63 82 53 63
-    mov byte [di+BP_MAGIC+1], 130
-    mov byte [di+BP_MAGIC+2], 83
-    mov byte [di+BP_MAGIC+3], 99
-    add di, BP_OPTS
+    mov di, DH_BP + BP_CHADDR
+    call mem_cp6
+    mov di, DH_BP + BP_OPTS
     pop si
     pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; dhcp_params - the parameter request list and the end marker at DS:DI
-; out: DI advanced
+; dh_emit - the option bytes at DS:SI onto DS:DI, and DI stepped past them
+; in:  SI = a COUNTED string (one length byte, then the bytes)
+; clobbers: CX, SI
+;
+; **mem_copy PRESERVES DI**, so it is this routine that owns the advance. The
+; open-coded version once left two `add di, cx` out: the next option was
+; written OVER the address and the one after it over that, the server saw a
+; REQUEST asking for `36 04 37 03` and answered NAK, for ever.
 ; -----------------------------------------------------------------------------
-dhcp_params:
-    mov byte [di], 55                   ; what we want to be told
-    mov byte [di+1], 3
-    mov byte [di+2], 1                  ; the subnet mask
-    mov byte [di+3], 3                  ; the router
-    mov byte [di+4], 6                  ; the name servers
-    add di, 5
-    mov byte [di], 255                  ; END
-    inc di
+dh_emit:
+    mov cl, [si]
+    xor ch, ch
+    inc si
+dh_emitn:                       ; ...or CX bytes at SI, uncounted
+    call mem_copy
+    add di, cx
     ret
+
+dh_o_disc:  db 3, 53, 1, 1              ; message type: DISCOVER
+dh_o_req:   db 5, 53, 1, 3, 50, 4       ; REQUEST, and the address we were
+                                        ; offered follows
+dh_o_sid:   db 2, 54, 4                 ; ...and whose offer it was, because a
+                                        ; network with two servers offers twice
+dh_o_parm:  db 6, 55, 3, 1, 3, 6, 255   ; what we want to be told - the mask,
+                                        ; the router, the name servers - and END
 
 ; -----------------------------------------------------------------------------
 ; dhcp_bcast - send the frame at eth_txb's UDP payload, DI bytes past its start
@@ -225,26 +220,17 @@ dhcp_begin:
 dhcp_start:
     push ax
     push cx
+    push si
     push di
     call OSAPI_RAND                     ; a fresh transaction: a reply to the
     mov [dhcp_xid], ax                  ; PREVIOUS one must not be mistaken for
     call OSAPI_RAND                     ; an answer to this
     mov [dhcp_xid+2], ax
     call dhcp_frame
-    mov byte [di], 53                   ; message type: DISCOVER
-    mov byte [di+1], 1
-    mov byte [di+2], 1
-    add di, 3
-    call dhcp_params
-    call dhcp_bcast
-    mov byte [dhcp_st], DH_DISCOVER
-    call OSAPI_GET_TICKS
-    add ax, DHCP_TMO
-    mov [dhcp_tmo], ax
-    pop di
-    pop cx
-    pop ax
-    ret
+    mov si, dh_o_disc
+    call dh_emit
+    mov al, DH_DISCOVER
+    jmp short dhcp_send
 
 ; -----------------------------------------------------------------------------
 ; dhcp_request - we have an offer: ask for it by name
@@ -255,33 +241,27 @@ dhcp_request:
     push si
     push di
     call dhcp_frame
-    mov byte [di], 53
-    mov byte [di+1], 1
-    mov byte [di+2], 3                  ; REQUEST
-    add di, 3
-    mov byte [di], 50                   ; the address we were offered
-    mov byte [di+1], 4
-    add di, 2
+    mov si, dh_o_req
+    call dh_emit
     mov si, dhcp_off
     mov cx, 4
-    call mem_copy
-    add di, cx                          ; **mem_copy PRESERVES DI**, so the
-                                        ; caller owns the advance. Without
-                                        ; these two the next option is written
-                                        ; OVER the address and the one after it
-                                        ; over that: the server saw a REQUEST
-                                        ; asking for `36 04 37 03` and answered
-                                        ; NAK, for ever
-    mov byte [di], 54                   ; ...and whose offer it was, because a
-    mov byte [di+1], 4                  ; network with two servers offers twice
-    add di, 2
+    call dh_emitn
+    mov si, dh_o_sid
+    call dh_emit
     mov si, dhcp_srv
     mov cx, 4
-    call mem_copy
-    add di, cx
-    call dhcp_params
+    call dh_emitn
+    mov al, DH_REQUEST
+    ; ...and fall through
+
+; --- dhcp_send - the shared tail: the parameter list, the frame, the state
+;     AL names, and the retry deadline. Entered with dhcp_start's and
+;     dhcp_request's four registers on the stack
+dhcp_send:
+    mov si, dh_o_parm
+    call dh_emit
     call dhcp_bcast
-    mov byte [dhcp_st], DH_REQUEST
+    mov [dhcp_st], al
     call OSAPI_GET_TICKS
     add ax, DHCP_TMO
     mov [dhcp_tmo], ax
@@ -351,6 +331,20 @@ dhcp_opt:
     ret
 
 ; -----------------------------------------------------------------------------
+; dh_opt4 - option AL of the reply, when it carries at least an address
+; out: CF=1 = absent or shorter than four bytes; else SI = its data and the
+;      flags of `cmp cl, 4`, so ZF=1 = EXACTLY four (the mask's question)
+; clobbers: CX
+; -----------------------------------------------------------------------------
+dh_opt4:
+    mov cx, [eth_udplen]
+    call dhcp_opt
+    jc  .out
+    cmp cl, 4                   ; CF=1 below four, ZF=1 at it
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; dhcp_in - a datagram arrived on port 68; CX = the UDP payload length
 ; -----------------------------------------------------------------------------
 dhcp_in:
@@ -364,24 +358,11 @@ dhcp_in:
     mov si, eth_rxb + IP_PAY + UD_HLEN
     cmp byte [si+BP_OP], 2              ; BOOTREPLY
     jne .out
-    mov di, dhcp_xid                    ; ...to OUR transaction
-    push si
-    add si, BP_XID
-    mov bx, 4
-.xid:
-    mov al, [si]
-    cmp al, [di]
-    jne .xno
-    inc si
-    inc di
-    dec bx
-    jnz .xid
-    pop si
-    jmp short .xok
-.xno:
-    pop si
-    jmp .out
-.xok:
+    mov di, dhcp_xid                    ; ...to OUR transaction: four bytes,
+    add si, BP_XID                      ; which is ip_eq's question
+    call ip_eq
+    jne .out
+    sub si, BP_XID                      ; (ip_eq preserves SI)
     cmp byte [si+BP_MAGIC], 99
     jne .out
     mov cx, [eth_udplen]
@@ -405,23 +386,18 @@ dhcp_in:
     jne .out
     mov si, eth_rxb + IP_PAY + UD_HLEN + BP_YIADDR
     mov di, dhcp_off
-    mov cx, 4
-    call mem_copy
-    mov cx, [eth_udplen]
+    call mem_cp4
     mov al, 54
-    call dhcp_opt
+    call dh_opt4
     jc  .srvsi
-    cmp cl, 4
     jne .srvsi
     mov di, dhcp_srv
-    mov cx, 4
-    call mem_copy
+    call mem_cp4
     jmp short .req
 .srvsi:
     mov si, eth_rxb + IP_PAY + UD_HLEN + BP_SIADDR
     mov di, dhcp_srv
-    mov cx, 4
-    call mem_copy
+    call mem_cp4
 .req:
     call dhcp_request
     jmp short .out
@@ -430,47 +406,32 @@ dhcp_in:
     jne .out
     mov si, eth_rxb + IP_PAY + UD_HLEN + BP_YIADDR
     mov di, eth_ip
-    mov cx, 4
-    call mem_copy
-    mov cx, [eth_udplen]
-    mov al, 1                           ; the subnet mask
-    call dhcp_opt
+    call mem_cp4
+    mov al, 1                           ; the subnet mask, exactly four
+    call dh_opt4
     jc  .nomask
-    cmp cl, 4
     jne .nomask
     mov di, eth_mask
-    mov cx, 4
-    call mem_copy
+    call mem_cp4
 .nomask:
-    mov cx, [eth_udplen]
     mov al, 3                           ; the router - the FIRST of however
-    call dhcp_opt                       ; many it names
+    call dh_opt4                        ; many it names
     jc  .nogw
-    cmp cl, 4
-    jb  .nogw
     mov di, eth_gw
-    mov cx, 4
-    call mem_copy
+    call mem_cp4
 .nogw:
-    mov cx, [eth_udplen]
     mov al, 6                           ; ...and the first name server
-    call dhcp_opt
+    call dh_opt4
     jc  .nodns
-    cmp cl, 4
-    jb  .nodns
     mov di, eth_dns
-    mov cx, 4
-    call mem_copy
+    call mem_cp4
 .nodns:
     mov byte [dhcp_st], DH_BOUND
     mov word [dhcp_tmo], 0
 .out:
     pop di
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_cx
 
 ; -----------------------------------------------------------------------------
 ; dhcp_timer
@@ -504,16 +465,9 @@ dhcp_timer:
     cmp byte [dhcp_st], DH_REQUEST
     je  .rereq
     call dhcp_start
-    jmp short .keep
+    jmp short .out
 .rereq:
     call dhcp_request
-.keep:
-    pop di
-    pop si
-    pop dx
-    pop bx
-    pop ax
-    ret
 .out:
     pop di
     pop si
@@ -639,25 +593,15 @@ dns_send:
     mov di, eth_txb + IP_PAY + UD_HLEN
     mov ax, [dns_id]
     call be_put                         ; the transaction
-    mov word [di+2], 0x0001             ; flags: RECURSION DESIRED, and it is
-                                        ; 0x0100 on the wire - a plain word
-                                        ; store of a big-endian constant is
-                                        ; the one place this file swaps by hand
-    mov byte [di+4], 0
-    mov byte [di+5], 1                  ; one question
-    mov word [di+6], 0
-    mov word [di+8], 0
-    mov word [di+10], 0
-    add di, 12
-    mov si, bx
-    add si, SKO_HOST
+    inc di
+    inc di
+    mov si, dn_o_hdr
+    call dh_emit
+    lea si, [bx+SKO_HOST]
     call dns_qname
     jc  .no
-    mov byte [di], 0                    ; QTYPE = A
-    mov byte [di+1], 1
-    mov byte [di+2], 0                  ; QCLASS = IN
-    mov byte [di+3], 1
-    add di, 4
+    mov si, dn_o_q
+    call dh_emit
     mov cx, di
     sub cx, eth_txb + IP_PAY + UD_HLEN
     mov si, eth_dns
@@ -669,14 +613,14 @@ dns_send:
 .no:
     stc
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_bp
+
+; the rest of the header, after the transaction: flags RECURSION DESIRED
+; (0x0100 on the wire), ONE question, and no answer, authority or additional
+; records - and the question's tail, QTYPE = A and QCLASS = IN. Counted
+; strings for dh_emit, which is DHCP's option writer one protocol over
+dn_o_hdr:   db 10, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0
+dn_o_q:     db 4, 0, 1, 0, 1
 
 ; -----------------------------------------------------------------------------
 ; dns_in - a reply on our source port; CX = the UDP payload length
@@ -715,8 +659,8 @@ dns_in:
     mov dl, [si+7]                      ; the answer count, low byte - a reply
     or  dl, dl                          ; with more than 255 answers is not one
     jz  .fail                           ; we need
-    mov cx, 0
-    mov cl, [si+5]                      ; the question count
+    mov cl, [si+5]                      ; the question count (CL alone is
+                                        ; ever read)
     add si, 12
 .q:
     or  cl, cl
@@ -733,39 +677,25 @@ dns_in:
     jz  .fail
     call dns_skip
     jc  .out
-    mov ax, si
-    add ax, 10
+    lea ax, [si+10]
     cmp ax, bx
     ja  .out
-    mov al, [si]                        ; TYPE, big-endian
-    or  al, al
-    jnz .next
-    cmp byte [si+1], 1                  ; ...A?
+    cmp word [si], 0x0100               ; TYPE A, big-endian 00 01, as a
+    jne .next                           ; little-endian word...
+    cmp word [si+2], 0x0100             ; ...and CLASS IN the same
     jne .next
-    cmp byte [si+2], 0                  ; CLASS IN?
-    jne .next
-    cmp byte [si+3], 1
-    jne .next
-    mov al, [si+8]                      ; RDLENGTH
-    or  al, al
-    jnz .next
-    cmp byte [si+9], 4
+    cmp word [si+8], 0x0400             ; RDLENGTH 4
     jne .next
     add si, 10
-    mov ax, si
-    add ax, 4
+    lea ax, [si+4]
     cmp ax, bx
     ja  .out
     mov al, [dns_sk]                    ; ...and there it is
     call sk_ptr
-    mov di, bx
-    add di, SKO_RIP
-    mov cx, 4
-    call mem_copy
-    and byte [bx+SKO_FL], ~SKF_RES
+    lea di, [bx+SKO_RIP]
+    call mem_cp4
+    call dns_unres              ; ...it is resolved, and the resolver is free
     call tcp_syn
-    mov byte [dns_sk], 0xFF
-    mov word [dns_lport], 0
     jmp short .out
 .next:
     mov ah, [si+8]                      ; RDLENGTH, big-endian, into a step
@@ -784,13 +714,7 @@ dns_in:
 .fail:
     call dns_fail
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_di
 
 ; -----------------------------------------------------------------------------
 ; dns_fail - the name did not resolve: the socket says so
@@ -802,15 +726,33 @@ dns_fail:
     je  .out
     mov al, [dns_sk]
     call sk_ptr
-    and byte [bx+SKO_FL], ~SKF_RES
+    call dns_unres
     mov al, NSK_FAILED
     call tcp_abort
     mov byte [eth_lasterr], NETE_REFUSED
-    mov byte [dns_sk], 0xFF
-    mov word [dns_lport], 0
 .out:
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dns_unres - socket BX is no longer being looked up: its flag goes, and the
+; resolver lets go of it if it is the one in flight
+; clobbers: AH, flags
+;
+; [dns_sk] lives OUTSIDE the record, so sk_alloc's mem_zero cannot reach it:
+; a slot closed mid-lookup that kept it would have the reply land on whoever
+; the slot went to next - dns_in writes SKO_RIP and calls tcp_syn on it.
+; -----------------------------------------------------------------------------
+dns_unres:
+    and byte [bx+SKO_FL], ~SKF_RES
+    mov ah, [bx+SKO_IDX]
+    cmp ah, [dns_sk]
+    jne dns_dropr
+dns_drop:                       ; the resolver is idle again
+    mov byte [dns_sk], 0xFF
+    mov word [dns_lport], 0
+dns_dropr:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -879,9 +821,9 @@ dns_timer:
     jmp short .out
 .give:
     call dns_fail
-.out:
-    pop di
-    pop si
+.out:                           ; ...its OWN pops and not the ladder's jump:
+    pop di                      ; this runs on every pump (eth_ptimers), and
+    pop si                      ; the ladder is for cold routines only
     pop dx
     pop cx
     pop bx

@@ -17,6 +17,12 @@ store - and the exception, the size box taking the caret, is exactly SPEC.md
   B  ...and it comes back UP when the pointer slides off it, still held
   A  a slide-off release does NOT change the size
   C  press-and-release ON it DOES
+  G  Load puts the Open dialog up, and after Esc the button is UP again
+  H  ...and so does Preserve As, with the Save dialog
+
+G and H compare the button as a BITMAP against its own upright picture. They
+were red before rp_a_up: the panel's raise cache (SPEC.md 11.96) banked the
+pane with the button PRESSED as the dialog went over it, and Esc put that back.
 
 C is the one that says the conversion did not eat the feature: a page that had
 simply stopped dispatching would pass P, D, B and A.
@@ -176,10 +182,15 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     # `rd_s_nopage` message RAMPAGE.DRV's absence draws would light this rect
     # too (drivers/ramdisk/rdpage.inc). A row that compares pixels should be
     # able to hand over the picture it compared.
-    if os.environ.get("RDUP_SHOT"):
-        M.write_png(os.environ["RDUP_SHOT"], *m.vram()) if mono else \
-            m.shot(os.environ["RDUP_SHOT"], rendered=True)
-        print("  shot: %s" % os.environ["RDUP_SHOT"])
+    def shot(tag=""):
+        if not os.environ.get("RDUP_SHOT"):
+            return
+        s = os.environ["RDUP_SHOT"].replace(".png", tag + ".png")
+        M.write_png(s, *m.vram()) if mono else \
+            M.write_png_rgb(s, *m.fbuf())
+        print("  shot: %s" % s)
+
+    shot()
 
     # --- D: the press draws it DOWN ---------------------------------------
     # The INTERIOR and a HALVING, not a difference: a pressed 18x12 cell turns
@@ -241,6 +252,54 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     mo._edge(False)
     quiet(m)
 
+    # --- G/H: a button that opens a DIALOG comes back UP after a Cancel ----
+    # Load and Preserve As put the Standard File dialog up from the release.
+    # The window takes down by putting back what was under it, so whatever
+    # the button looked like at the moment the dialog went UP is what Esc
+    # restores: it was left drawn PRESSED for the rest of the session until
+    # rp_a_up drew it upright first. Compared as a BITMAP against the same
+    # button's own upright picture, the pointer parked off it both times.
+    park = (x0 + CP_RX + 110, y0 + 4)
+
+    def dlg_up():
+        return int.from_bytes(m.read(m.sym("fdlg_win"), 2),
+                              "little") not in (0, 0xFFFF)
+
+    def dlg_cancel(tag, rect, what):
+        mo.to(*park)
+        quiet(m)
+        upright = bmp(rect)
+        mo.to((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
+        mo._edge(True)
+        quiet(m)
+        mo._edge(False)
+        try:
+            M.until(m, lambda _: dlg_up(), f"{what}'s dialog", poll=0.2,
+                    guest=40.0)
+        except M.MartyError:
+            pass
+        quiet(m, 20.0)
+        up = dlg_up()
+        check(f"{tag}: {what} put a file dialog up", up)
+        if not up:
+            return
+        m.key("Escape")
+        try:
+            M.until(m, lambda _: not dlg_up(), "the dialog to go",
+                    poll=0.2, guest=40.0)
+        except M.MartyError:
+            pass
+        mo.to(*park)
+        quiet(m, 20.0)
+        now = bmp(rect)
+        shot("-" + tag)
+        diff = sum(1 for a, b in zip(now, upright) if a != b)
+        check(f"{tag}: {what} is UP again after Esc", now == upright,
+              f"({diff} of {len(now)} pixels differ from its upright picture)")
+
+    load = (x0 + CP_RX + 152, y0 + 52, x0 + CP_RX + 152 + 63, y0 + 52 + 15)
+    dlg_cancel("G", load, "Load")
+
     # --- F: Mount, which is the control the release was worth having for ---
     # It puts a whole volume up, so a mis-aimed press was the expensive one.
     cap = (x0 + CP_RX + 2, y0 + 96, x0 + CP_RX + 2 + 27 * 8 - 1, y0 + 96 + 7)
@@ -261,6 +320,10 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     quiet(m, 25.0)
     check("press-and-release on Mount DOES", bmp(cap) != was,
           "(the 'Mounted D: ...' caption row)")
+
+    # --- H: Preserve As, live now there is a volume to preserve -----------
+    presa = (x0 + CP_RX + 2, y0 + 72, x0 + CP_RX + 2 + 95, y0 + 72 + 15)
+    dlg_cancel("H", presa, "Preserve As")
 
 print()
 if fails:

@@ -881,7 +881,12 @@ def release_held(m, names, why=""):
     run spun the heading through every pose while it was POKED (review, wave
     6 r2), and tests/pxsact.py's leg (j) waited 180 guest seconds on a card's
     hold that re-arms every step while Space or Enter reads down (px_timers,
-    97.13; wave 6's verification). One guard, here, for every row."""
+    97.13; wave 6's verification). One guard, here, for every row.
+
+    The cause was MartyPC's and is patched (docs/plans/MARTYPC-PLAN.md 2:
+    its PPI dropped a byte that arrived before the ISR acknowledged the last,
+    so a release landing just after a typematic repeat vanished). The guard
+    stays, and a key it names now is a NEW finding."""
     base = os88sym.linear("kbd_dnmap")
     held = []
     for name in names:

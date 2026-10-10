@@ -37,7 +37,10 @@
 ; VIDBENCH.TXT beside the bench when the run ends.
 ;
 ; ...and four raw rows first: 8,000 bytes by rep movsb and by rep movsw, to
-; the screen and to RAM, which is wave 0 (d).
+; the screen and to RAM, which is wave 0 (d) - and two more since 2026-10-06,
+; for the flipped player's latch copy (SPEC.md 98.3.8.1): 8,000 bytes READ
+; from the screen into RAM, and on a VGA 8,000 copied screen to screen in
+; write mode 1, each a byte of all four planes.
 ;
 ; THE PICTURE IS CHECKED BEFORE ANYTHING IS TIMED. Each frame is applied to a
 ; BLACK RAM canvas two ways - XDC's program and vd_native - and each canvas is
@@ -199,6 +202,54 @@ vb_b_mw:
     mov cx, VB_RAWB / 2
     cld
     rep movsw
+    pop es
+    pop ds
+    ret
+
+; VB_RAWB bytes READ from the screen into RAM: what the VGA's reads cost,
+; which a latch copy pays as well as its stores (SPEC.md 98.3.8.1)
+vb_b_rd:
+    push ds
+    push es
+    mov es, [vb_rseg]
+    mov ds, [vb_sseg]
+    xor si, si
+    xor di, di
+    mov cx, VB_RAWB
+    cld
+    rep movsb
+    pop es
+    pop ds
+    ret
+
+; VB_RAWB bytes of the screen copied onto itself through the LATCHES, as the
+; Video Player's flipped back page is (vp_lcopy, SPEC.md 98.3.8.1): Map Mask
+; 0Fh and write mode 1, so each byte moved is that byte of all four planes
+; - 4 x VB_RAWB bytes of picture. From offset 0 to VB_RAWB*2, VGA only
+vb_b_lc:
+    push ds
+    push es
+    mov dx, 0x3C4
+    mov ax, 0x0F02
+    out dx, ax
+    mov dx, 0x3CE
+    mov al, 5
+    out dx, al
+    inc dx
+    in al, dx
+    mov bl, al
+    and al, 0xFC
+    or al, 1
+    out dx, al
+    mov es, [vb_sseg]
+    mov ds, [vb_sseg]
+    xor si, si
+    mov di, VB_RAWB * 2
+    mov cx, VB_RAWB
+    cld
+    rep movsb
+    mov al, bl
+    out dx, al
     pop es
     pop ds
     ret
@@ -515,6 +566,49 @@ vb_fsx:
     call bl_run
     mov bx, 3
     call vb_bank
+    mov word [bl_body], vb_b_rd     ; ...a READ of the screen, and on a VGA
+    mov si, vb_r_rd                 ; the LATCH copy the flipped player's
+    xor al, al                      ; back page takes (98.3.8.1)
+    call bl_run
+    mov bx, 4
+    call vb_bank
+    cmp byte [vb_vkind], VID_HERC   ; THE PLANAR ROWS, on a VGA (or EGA): in
+    je .nolc                        ; mode 12h for them alone, the bracket's
+    cmp byte [vb_vkind], VID_CGA    ; own mode back after - a store as Mode X
+    je .nolc                        ; and 16 colours make one, and the latch
+    push word [vb_sseg]             ; copy (98.3.8.1)
+    push ds
+    pop es
+    mov al, FSXM_VGA12
+    mov di, vb_fsi
+    call OSAPI_FSX_MODE
+    jc .nopl
+    mov ax, [vb_fsi + FSI_SEG]
+    mov [vb_sseg], ax
+    mov [vb_tseg], ax
+    mov dx, 0x3C4                   ; every plane
+    mov ax, 0x0F02
+    out dx, ax
+    mov word [bl_body], vb_b_mb
+    mov si, vb_r_m12
+    xor al, al
+    call bl_run
+    mov bx, 6
+    call vb_bank
+    mov word [bl_body], vb_b_lc
+    mov si, vb_r_lc
+    xor al, al
+    call bl_run
+    mov bx, 5
+    call vb_bank
+.nopl:
+    pop word [vb_sseg]
+    push ds
+    pop es
+    mov al, [vb_fsxm]               ; (and the bracket's mode again)
+    mov di, vb_fsi
+    call OSAPI_FSX_MODE
+.nolc:
 
     ; --- (a) every frame, three ways ------------------------------------------
     mov si, vb_s_hdrf
@@ -761,6 +855,9 @@ vb_r_mbs:     db 'movsb 8000 to screen', 0
 vb_r_mws:     db 'movsw 8000 to screen', 0
 vb_r_mbr:     db 'movsb 8000 to RAM', 0
 vb_r_mwr:     db 'movsw 8000 to RAM', 0
+vb_r_rd:      db 'movsb 8000 screen->RAM', 0
+vb_r_lc:      db 'latch copy 8000 (VGA)', 0
+vb_r_m12:     db 'movsb 8000 to VGA 12h', 0
 vb_r_mode:    db 'bracket mode (FSXM)', 0
 vb_r_kind:    db 'adapter kind (VID)', 0
 

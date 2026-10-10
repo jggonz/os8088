@@ -1192,6 +1192,7 @@ AT_BSS_TOTAL equ (at_bss_end - at_bss_base)
 %define OS88UI_ALERT 1          ; SPEC.md 46.7.1: os88ui_ask, for the ONE
                                 ; question that has to be asked when this app
                                 ; has no surface of its own to ask it on
+%define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
 %include "os88ui.inc"           ; buttons this already drew
 
     OS88_BSS AT_BSS_TOTAL

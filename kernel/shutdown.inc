@@ -15,9 +15,9 @@ modc_e_shutdown:
     CURBAR_OFF                  ; the final wipe also covers the pointer, not just the bar
                                 ; (mouse.inc's macro: nothing under NOCURDISK=1, which has no [cur_barok])
     mov bp, cur_unlazy          ; restore the cursor BEFORE wiping its background
-    call KERNEL_SEG:cw_mem_disp
+    call sd_disp
     mov bp, sched_stop
-    call KERNEL_SEG:cw_mem_disp ; BIOS IRQ0, PIT, mouse and speaker restored
+    call sd_disp                ; BIOS IRQ0, PIT, mouse and speaker restored
     cli
     mov al, 0xFE               ; only the BIOS timer may interrupt the halt
     out 0x21, al
@@ -31,10 +31,11 @@ modc_e_shutdown:
     out dx, al
     sti
     mov bp, vid_setmode
-    call KERNEL_SEG:cw_mem_disp ; clear the display and reset planar state
+    call sd_disp                ; clear the display and reset planar state
     mov ax, [vid_cw]
     shr ax, 1
     mov [cs:sd_l_cx], ax
+    mov bx, ax                  ; ...and kept, for the line's x below
     sub ax, SPL_SPINB*4
     and ax, 0xFFF8
     mov [cs:sd_l_spp], ax
@@ -47,8 +48,7 @@ modc_e_shutdown:
     mov [cs:sd_l_spn], ax
     add ax, 58
     mov dx, ax
-    mov cx, [cs:sd_l_cx]
-    sub cx, 140
+    lea cx, [bx-140]
     mov si, sd_safe
     mov ax, 0x000F             ; startup splash's white on black
     call sd_text
@@ -83,31 +83,24 @@ sd_confirm:
     mov [cs:sd_top], bx
     mov cx, ax
     add cx, 319
-    mov dx, bx
-    add dx, 95
+    lea dx, [bx+95]
     mov byte [gfx_color], CWHITE
     call KERNEL_SEG:cw_gfx_fill
     mov byte [gfx_color], CBLACK
-    call KERNEL_SEG:cw_gfx_frame
-    mov cx, [cs:sd_left]
+    call KERNEL_SEG:cw_gfx_frame ; ...which, like the fill, keeps AX = left
+    mov cx, ax                  ; and BX = top (gfx_* clobber the flags alone)
     add cx, 16
-    mov dx, [cs:sd_top]
-    add dx, 16
+    lea dx, [bx+16]
     mov si, sd_question
     mov ax, (CWHITE << 8) | CBLACK
     call sd_text
     add dx, 16
     mov si, sd_save
     call sd_text
-    mov byte [cs:sd_down], 0
-    mov byte [cs:sd_arm], 0
-    mov byte [cs:sd_prev], 0
-    mov al, 1
-    call sd_button
-    mov al, 2
-    call sd_button
-    mov bp, cursor_show
-    call KERNEL_SEG:cw_mem_disp
+    xor ax, ax
+    mov [cs:sd_arm], ax         ; sd_arm and sd_down, one store (%if below)
+    mov [cs:sd_prev], al
+    call sd_rebuttons.draw      ; both buttons, then the pointer on
     mov byte [cs:sd_active], 1
 .poll:
     ; Redraw the pointer only when its hotspot actually moved.
@@ -119,7 +112,7 @@ sd_confirm:
     je .key
 .move:
     mov bp, cur_move
-    call KERNEL_SEG:cw_mem_disp
+    call sd_disp
 .key:
     mov ah, 1
     int 0x16
@@ -139,8 +132,8 @@ sd_confirm:
     or al, al
     jz .release
     call sd_hit
-    mov [cs:sd_arm], al
-    mov [cs:sd_down], al
+    mov ah, al
+    mov [cs:sd_arm], ax         ; ...and sd_down, the byte after it
     call sd_rebuttons
     jmp .yield
 .release:
@@ -152,8 +145,7 @@ sd_confirm:
     cmp al, 2
     je .cancel
 .clear:
-    mov byte [cs:sd_arm], 0
-    mov byte [cs:sd_down], 0
+    mov word [cs:sd_arm], 0     ; and sd_down
     call sd_rebuttons
 .track:
     cmp byte [cs:sd_prev], 0
@@ -178,10 +170,10 @@ sd_confirm:
 .done:
     push ax
     mov bp, cursor_hide
-    call KERNEL_SEG:cw_mem_disp
+    call sd_disp
     mov di, ui_ev
     mov bp, evq_drain           ; modal clicks consumed, package wakes owed
-    call KERNEL_SEG:cw_mem_disp
+    call sd_disp
     call KERNEL_SEG:cw_wm_paint_all
     call KERNEL_SEG:cw_gfx_unlock
     mov byte [cs:sd_active], 0
@@ -190,13 +182,14 @@ sd_confirm:
 
 sd_rebuttons:
     mov bp, cursor_hide
-    call KERNEL_SEG:cw_mem_disp
+    call sd_disp
+.draw:                          ; sd_confirm's first paint: the pointer is off
     mov al, 1
     call sd_button
     mov al, 2
     call sd_button
     mov bp, cursor_show
-    call KERNEL_SEG:cw_mem_disp
+    call sd_disp
     ret
 
 ; Both paint and hit-testing use the shared control rectangle.
@@ -257,19 +250,26 @@ sd_hit:
 .out:
     ret
 
+; sd_disp - cw_mem_disp, near: BP = a KERNEL_SEG routine, called with every
+; register as it stands. Ten sites spent five bytes each on the far call
+; (CTRL.DRV size pass 1)
+sd_disp:
+    call KERNEL_SEG:cw_mem_disp
+    ret
+
 sd_text:
     push es
     push cs
     pop es
     mov bp, font_run_x         ; ES:SI is the module string; DS stays KERNEL_SEG
-    call KERNEL_SEG:cw_mem_disp
+    call sd_disp
     pop es
     ret
 
 sd_spinadr:
     mov ax, [cs:sd_l_spn]
     mov bp, gfx_rowbase
-    call KERNEL_SEG:cw_mem_disp
+    call sd_disp
     add ax, [cs:sd_l_spx]
     mov di, ax
     mov es, [vid_seg]
@@ -286,7 +286,10 @@ sd_left     dw 0
 sd_top      dw 0
 sd_active   db 0
 sd_arm      db 0
-sd_down     db 0
+sd_down     db 0                ; THE BYTE AFTER sd_arm: written as one word
+%if sd_down - sd_arm != 1
+%error "shutdown: sd_arm and sd_down are cleared and set with one word store"
+%endif
 sd_prev     db 0
 sd_last     db 0
 sd_l_cx     dw 0

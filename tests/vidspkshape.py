@@ -41,7 +41,7 @@ def levels(path):
     """(the 60 Hz bass, the 880 Hz line) in dB of full-scale power, off the
     counts the file carries"""
     r = vid.Reader(path)
-    c = b"".join(rec[-r.abytes:] for rec, _, _ in r.records())
+    c = b"".join(r.sound(f) for f in range(r.frames))
     s = np.frombuffer(vid.spk_samples(c, r.rate), dtype=np.uint8) \
         .astype(float) - 128
     X = np.abs(np.fft.rfft(s)) ** 2

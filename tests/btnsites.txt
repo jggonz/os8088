@@ -44,7 +44,7 @@
 3 apps/ftpd/ftpd.asm               # Stop, Setup, Done
 2 apps/word/word.asm               # staged N=1: entries in its own WDD list
 2 apps/scribe/scribe.asm           # Word's shape, same lineage
-2 apps/thewire/thewire.asm         # Load Program, Add to Disk
+1 apps/thewire/thewire.asm         # Load Program and Add to Disk, one loop
 2 apps/skies/skies.asm             # Fly, Done
 1 apps/browser/browser.asm         # one call, three toolbar buttons
 1 apps/telnet/telnet.asm           # Connect, with a dynamic caption
@@ -78,8 +78,10 @@
 # cp_ctl/cp_pgprobe is already release-fired, so what converted here is the
 # DRAW; the press half stays the panel's, which is the one mechanism a
 # package-side W_ONCLICK cannot serve.
-3 drivers/ether/etherui.inc        # Renew, Setup, and the third
-1 drivers/ether/ethcfg.inc
+1 drivers/ether/etherui.inc        # eth_btn: ONE staging for all five -
+                                   # the page's Renew, Setup and buffer
+                                   # buttons and the Setup window's Ok and
+                                   # Cancel (ethcfg.inc reaches it by name)
 1 drivers/hdd/tool.inc
 1 drivers/net/netui.inc
 1 drivers/ramdisk/page.inc
@@ -88,12 +90,13 @@
 # --- the kernel: its own arm (SPEC.md 13.8.3), through os88ui_kbtn ----------
 1 kernel/apps.inc                  # the Timer's Start/Stop (SPEC.md 13.8.5)
 1 kernel/files.inc                 # the Disk window's (SPEC.md 22.18)
-2 kernel/fdlg.inc                  # the Standard File dialog's column
-                                   # (SPEC.md 38) - the FDX call site and the
-                                   # FDXF thunk that serves it on kern_small.
+1 kernel/fdlg.inc                  # the Standard File dialog's column
+                                   # (SPEC.md 38) - kern_small's image, which
+                                   # far-calls os88ui_btn_f (os88ui_kbtn's own
+                                   # far entry) since its xd_ thunk went.
                                    # IT WAS IN NEITHER LIST UNTIL IT BROKE:
                                    # `FDX <name>` is `call <name>` on kern_big
-                                   # and `call COLD_SEG:xd_<name>` on
+                                   # and `call fdx_go`/`dw <name>` on
                                    # kern_small, so no spelling of this call
                                    # contains `call os88ui_btn` and the grep
                                    # walked straight past the file. It named

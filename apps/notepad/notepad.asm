@@ -11161,6 +11161,7 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                                 ; PACKAGE's and not the kernel's - a windowed
                                 ; dialog has a floor of ~800 bytes wherever it
                                 ; lives, and this is where that is affordable
+%define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
 %include "os88ui.inc"
 
 ; ...and it is ABOVE the bss counter below because that block sizes a field

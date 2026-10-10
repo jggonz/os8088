@@ -34,6 +34,23 @@
 %ifdef KERN_BIG
 %define DSK_STREAM
 %endif
+; DSK_HCYL: a FIXED disk's reads run to the cylinder's end (SPEC.md 18.91.5)
+; - kern_big's; kern_small is on a diet and kern_dos boots nothing. ON BY
+; DEFAULT AND UNASKED for now, at the owner's word, to go wide and see:
+; every ROM measured carries it. `make NOHDCYL=1` is the A/B (the track, as
+; before), and `make HDCYLPROBE=1` the CHECKED arm - the boot disk's ROM
+; asked first (dsk_hcyl_probe), which does not fit the shipped boot overlay
+; yet (184 bytes against its 109) and does fit a knob build's
+%ifdef KERN_BIG
+%ifndef NO_HDCYL
+%ifndef KD_BUILD
+%define DSK_HCYL
+%ifdef HD_CYLPROBE
+%define DSK_HCYLPROBE
+%endif
+%endif
+%endif
+%endif
 %ifdef KD_BUILD
 %define DSK_STREAM
 %endif
@@ -374,6 +391,15 @@ dsk_cylrun:  db 0                ; may a transfer run cross a HEAD on this
                                  ; the boot sector's canary; 0 until then, so
                                  ; the cautious answer is the one in force
                                  ; before anybody has asked
+%ifdef DSK_HCYLPROBE
+dsk_hcyl:    db 0                ; ...and on the BOOT disk's ROM, 1 when
+                                 ; dsk_hcyl_probe saw one int 13h carry a run
+                                 ; across a head and bring back the bytes two
+                                 ; calls did (SPEC.md 18.91.5). The boot
+                                 ; partition is the only fixed disk dsk_xfer
+                                 ; reaches - every other is HDD.DRV's - so one
+                                 ; byte is the whole state
+%endif
 disk_nfiles: dw 0                ; file count, valid after a good mount
 
 ; The diskette parameter table (SPEC.md 18.92) - int 1Eh's, ours from
@@ -1570,6 +1596,20 @@ dsk_xfer:
     ; the head and CH the cylinder, so both are banked across the sum.
     push ax                     ; the head, wanted for DH below
 %ifndef TRACK_RUN
+%ifdef DSK_HCYL
+    cmp byte [dsk_op], 0x02     ; A FIXED DISK'S READS go to the cylinder's
+    jne .runtrk_only            ; end (SPEC.md 18.91.5) - unasked by default,
+    test byte [dsk_unit], 0x80  ; or when HDCYLPROBE's boot probe saw the ROM
+%ifdef DSK_HCYLPROBE            ; carry one call across a head right. Writes
+    jz .flop                    ; keep the track. The SAME three tests as the
+    cmp byte [dsk_hcyl], 0      ; floppy's below, in another order - zero
+    je .runtrk_only             ; bytes on the default arm
+    jmp short .runcyl
+.flop:
+%else
+    jnz .runcyl
+%endif
+%endif
     cmp byte [dsk_cylrun], 0    ; ...but ONLY on a machine whose FDC was seen
     je .runtrk_only             ; to do it (SPEC.md 18.93.1). The boot sector
                                 ; settled that with a canary before we ran, so
@@ -1606,10 +1646,14 @@ dsk_xfer:
     ; disk cloner - SPEC.md 18.99, the one thing in the system that writes
     ; hundreds of sectors in long runs - and the verification that landed the
     ; cylinder bound was KERNEL.SYS and TRACKER.O88, both READS.
+%ifndef DSK_HCYL
     cmp byte [dsk_op], 0x02
     jne .runtrk_only
     test byte [dsk_unit], 0x80
     jnz .runtrk_only
+%else
+.runcyl:
+%endif
     push dx                     ; the sector index: mul is about to take DX
     mov bp, [disk_heads]
     sub bp, ax                  ; BP = heads left on this cylinder (>= 1: the
@@ -2097,6 +2141,9 @@ dsk_boot_from_x:
     pop di
     pop dx
     pop cx
+%ifdef DSK_HCYLPROBE
+    call dsk_hcyl_probe         ; may one call cross a head? (18.91.5)
+%endif
 
     mov bx, dsk_vtab + 2*DV_SIZE    ; the row walks, as dsk_vol_add's does -
                                 ; and from row 2, which at THIS point in kmain
@@ -2189,6 +2236,136 @@ dsk_bootltr:
                                 ; first store stamps both and there is no sixth
     pop ax
     ret
+
+%ifdef DSK_HCYLPROBE
+; -----------------------------------------------------------------------------
+; dsk_hcyl_probe - may ONE int 13h carry a read across a head on the boot
+; disk? (SPEC.md 18.91.5)
+; in:  DL = the unit, SI:CX = the partition's first LBA (low:high),
+;      [dsk_bootspt]/[dsk_boothds] the drive's geometry
+; out: [dsk_hcyl] = 1 when it may; every register preserved
+;
+; A ROM that does not walk the head answers a wrong read with CF = 0, so the
+; question is asked of the DATA: the partition's own boot sector and the
+; sector before it - the last of the previous head - read a sector a call
+; (the truth) and then in ONE call, into a buffer whose second half was
+; filled first, and compared. The boot sector is the partition's first
+; sector, never blank and never the MBR, so a call that stayed on the old
+; head, started the new one in the wrong place or stopped short brings back
+; other bytes. Measured on the owner's 5150 (ST-225, ST11M) and in 86Box,
+; MartyPC and QEMU, every ROM so far carries it; this is for the one that
+; does not. Asked only when the partition starts a track on head 1 or above,
+; which is every layout this tree writes (cylinder 0, head 1, sector 1); any
+; other answers "no", the track, which is what shipped before.
+;
+; THE BUFFER is 2 KB above the blob, 1 KB-aligned so no read straddles a DMA
+; page: this runs as kmain's first act, before mem_init, and nothing has
+; been put above the blob yet. Boot code, so it is in `.ovlw` and gone with
+; the window at the first mount.
+; -----------------------------------------------------------------------------
+DSK_HCYLSEG equ ((HEAP_SEG + BOOT2_SECS * 32 + 0x3F) / 0x40) * 0x40
+dsk_hcyl_probe:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    push ds
+    mov di, dx                  ; DI = the unit, across the divides
+    mov ax, [dsk_bootspt]
+    mul word [dsk_boothds]      ; AX = spt x heads (<= 16,065, DX = 0)
+    xchg ax, si                 ; DX:AX = the base, SI = the divisor
+    mov dx, cx
+    cmp dx, si
+    jae .out                    ; (a quotient past a word: not CHS's)
+    div si                      ; AX = cylinder, DX = the rest
+    xchg ax, dx
+    mov bp, dx                  ; BP = cylinder
+    xor dx, dx
+    div word [dsk_bootspt]      ; AX = head, DX = sector - 1
+    or dx, dx
+    jnz .out                    ; the partition does not start a track
+    dec ax
+    js .out                     ; ...or starts head 0: no head before it
+    mov dh, al                  ; DH = the head before the boot sector's
+    mov ax, bp
+    mov ch, al                  ; CH = cylinder low 8, CL bits 6-7 = 8-9
+    mov cl, ah
+    ror cl, 1
+    ror cl, 1
+    or cl, [dsk_bootspt]        ; ...and the LAST sector of that head
+    mov ax, di
+    mov dl, al                  ; DL = the unit again
+    mov ax, DSK_HCYLSEG
+    mov es, ax
+    xor bx, bx                  ; THE TRUTH: that sector to ES:0...
+    mov ax, 0x0201
+    call .i13
+    jc .out
+    push cx
+    push dx
+    and cl, 0xC0                ; ...and sector 1 of the next head, the boot
+    inc cx                      ; sector, to ES:512
+    inc dh
+    mov bx, 512
+    mov ax, 0x0201
+    call .i13
+    pop dx
+    pop cx
+    jc .out
+    push cx
+    mov di, 1024 + 512          ; the one call's second sector, PATTERNED: a
+    mov ax, 0xE5A6              ; read that stops short leaves this
+    mov cx, 256
+    cld
+    rep stosw
+    pop cx
+    mov bx, 1024                ; THE QUESTION: both, in one call, to ES:1024
+    mov ax, 0x0202
+    call .i13
+    jc .out
+    push es
+    pop ds
+    xor si, si                  ; the two truth sectors must DIFFER, or the
+    mov di, 512                 ; comparison below proves nothing
+    mov cx, 256
+    repe cmpsw
+    je .out
+    xor si, si                  ; ...and the one call must equal them
+    mov di, 1024
+    mov cx, 512
+    repe cmpsw
+    jne .out
+    pop ds
+    push ds
+    mov byte [dsk_hcyl], 1
+.out:
+    pop ds
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.i13:                           ; one int 13h, CX and DX kept; on a failure
+    push cx                     ; the controller is reset, as dsk_xfer's
+    push dx                     ; retry would, and the answer is CF = 1
+    int 0x13
+    jnc .ok
+    xor ah, ah
+    int 0x13
+    stc
+.ok:
+    pop dx
+    pop cx
+    ret
+%endif
 %endif                              ; KD_BUILD
 section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; segment of its own. DS is still KERNEL_SEG,

@@ -102,45 +102,79 @@ be_put:
 ; -----------------------------------------------------------------------------
 ; mem_copy - CX bytes from DS:SI to DS:DI
 ;
-; A LOOP AND NOT `rep movsb`, because movsb writes through ES and this driver
-; is called with ES meaning three different things: KERNEL_SEG from a service
+; `rep movsb` UNDER A BORROWED ES. movsb writes through ES and this driver is
+; called with ES meaning three different things: KERNEL_SEG from a service
 ; call, the CALLER's segment from the package door (SPEC.md 20.11), and
-; whatever the last kernel API left. Everything internal here addresses one
-; segment and says so.
+; whatever the last kernel API left - so ES is set to DS for the one
+; instruction and given back. It used to be a byte loop for that reason, at
+; ~51 cycles a byte where the string move is 17, and five bytes longer.
+;
+; mem_cp4 is the commonest length as an ENTRY: it leaves CX = 4 on the way
+; out exactly as `mov cx, 4 / call mem_copy` did, so every call site that
+; reads CX afterwards reads the same thing. It costs the caller nothing - the
+; same `mov` runs, in here rather than there - and saves three bytes a site.
 ; -----------------------------------------------------------------------------
+mem_cp6:                        ; ...and six, a MAC, for the cold callers
+    mov cx, 6                   ; only: the jump is ~15 cycles, which is why
+    jmp short mem_copy          ; ip_start's two per frame keep the long form
+mem_cp4:
+    mov cx, 4
 mem_copy:
-    push ax
     push cx
     push si
     push di
-    jcxz .out
-.l:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    loop .l
-.out:
+    push es
+    push ds
+    pop es
+    cld
+    rep movsb
+    pop es
     pop di
     pop si
     pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; mem_zero - CX bytes at DS:DI
+; ep_* - THE SHARED EPILOGUE LADDER. A routine that saved some tail of
+; AX BX CX DX SI DI BP, in that order, ends with `jmp ep_<the last one it
+; pushed>` instead of its own run of pops and a `ret`: three bytes where it
+; was up to eight. Neither `pop` nor `ret` writes a flag, so a CF answer set
+; before the jump arrives intact.
+;
+; **COLD ROUTINES ONLY.** The jump is ~15 cycles on an 8088, so nothing on
+; the per-frame or per-segment path takes it - the Control Panel page, the
+; Setup window, DHCP, DNS, ARP and attach/detach do. A stack walker follows
+; the jump (tools/stkbalance.py, tools/stkdepth.py), so the routine is still
+; checked as balanced at its own `ret`.
+; -----------------------------------------------------------------------------
+ep_bp:
+    pop bp
+ep_di:
+    pop di
+ep_si:
+    pop si
+ep_dx:
+    pop dx
+ep_cx:
+    pop cx
+    pop bx                      ; (no ep_bx / ep_ax: nothing here saves so few,
+    pop ax                      ; and a label nothing jumps to reads to a stack
+    ret                         ; walker as an entry that returns unbalanced)
+
+; -----------------------------------------------------------------------------
+; mem_zero - CX bytes at DS:DI (the same borrowed ES)
 ; -----------------------------------------------------------------------------
 mem_zero:
     push ax
     push cx
     push di
+    push es
+    push ds
+    pop es
     xor al, al
-    jcxz .out
-.l:
-    mov [di], al
-    inc di
-    loop .l
-.out:
+    cld
+    rep stosb
+    pop es
     pop di
     pop cx
     pop ax
@@ -251,27 +285,14 @@ ip_cksum:
 ; out: ZF=1 = yes. clobbers: flags
 ; -----------------------------------------------------------------------------
 ip_eq:
-    push ax
-    push cx
-    push si
-    push di
-    mov cx, 4
-.l:
-    mov al, [si]
-    cmp al, [di]
-    jne .no
-    inc si
-    inc di
-    loop .l
-    xor al, al                  ; ZF=1
-    jmp short .out
-.no:
-    or  al, 1                   ; ZF=0, whatever AL was
+    push ax                     ; TWO WORD COMPARES. An address is four bytes
+    mov ax, [si]                ; and a byte loop spent ~200 cycles saying so
+    cmp ax, [di]                ; on every frame eth_frame checks and every
+    jne .out                    ; segment tcp_match walks
+    mov ax, [si+2]
+    cmp ax, [di+2]
 .out:
-    pop di
-    pop si
-    pop cx
-    pop ax
+    pop ax                      ; ...and `pop` writes no flags
     ret
 
 ; -----------------------------------------------------------------------------
@@ -280,11 +301,8 @@ ip_eq:
 ; -----------------------------------------------------------------------------
 ip_zero:
     push ax
-    mov al, [si]
-    or  al, [si+1]
-    or  al, [si+2]
-    or  al, [si+3]
-    or  al, al
+    mov ax, [si]
+    or  ax, [si+2]
     pop ax
     ret
 
@@ -379,8 +397,7 @@ arp_put:
     shl di, 1
     add di, arp_ip
     push cx
-    mov cx, 4
-    call mem_copy               ; the address into the slot
+    call mem_cp4                    ; the address into the slot
     pop cx
     mov di, dx                  ; ...and now DI = the MAC slot, entry * 6
     shl di, 1
@@ -389,15 +406,8 @@ arp_put:
     add di, arp_ha
 .store:
     mov si, bx                  ; DI is the MAC slot either way
-    mov cx, 6
-    call mem_copy
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call mem_cp6
+    jmp ep_di
 
 ; -----------------------------------------------------------------------------
 ; arp_req - ask who has the IP at DS:SI
@@ -408,53 +418,56 @@ arp_req:
     push si
     push di
     push si
-    mov di, eth_txb             ; broadcast
-    mov cx, 6
-    mov al, 0xFF
-.bc:
-    mov [di], al
-    inc di
-    loop .bc
-    mov si, eth_mac
-    mov cx, 6
-    call mem_copy
-    mov di, eth_txb + EH_TYPE
-    mov ax, ETY_ARP
-    call be_put
-
-    mov di, eth_txb + EH_SIZE
-    mov ax, 0x0001
-    call be_put                 ; hardware type: Ethernet
-    add di, 2
-    mov ax, ETY_IP
-    call be_put                 ; protocol type
-    mov byte [eth_txb+EH_SIZE+AR_HLEN], 6
-    mov byte [eth_txb+EH_SIZE+AR_PLEN], 4
-    mov di, eth_txb + EH_SIZE + AR_OPER
-    mov ax, ARP_REQ
-    call be_put
-    mov si, eth_mac
-    mov di, eth_txb + EH_SIZE + AR_SHA
-    mov cx, 6
-    call mem_copy
-    mov si, eth_ip
-    mov di, eth_txb + EH_SIZE + AR_SPA
-    mov cx, 4
-    call mem_copy
+    mov si, eth_bcmac           ; broadcast
+    mov di, eth_txb + EH_DST
+    call mem_cp6
     mov di, eth_txb + EH_SIZE + AR_THA
-    mov cx, 6
+    mov cx, 6                   ; the address we are asking for
     call mem_zero
     pop si
     mov di, eth_txb + EH_SIZE + AR_TPA
-    mov cx, 4
-    call mem_copy
-    mov cx, EH_SIZE + AR_SIZE
-    call ne_tx
+    call mem_cp4
+    mov al, ARP_REQ
+    call arp_send
     pop di
     pop si
     pop cx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; arp_send - send the ARP frame in eth_txb as operation AL (ARP_REQ/ARP_REPLY)
+; in:  the caller has written the three fields that differ - the Ethernet
+;      destination, THA and TPA. Everything else is written here, and it is
+;      the same for a request and a reply: our MAC twice, the type, the fixed
+;      header, the operation and our address.
+; clobbers: CX, SI, DI
+; -----------------------------------------------------------------------------
+arp_send:
+    mov si, eth_mac
+    mov di, eth_txb + EH_SRC
+    call mem_cp6
+    mov di, eth_txb + EH_SIZE + AR_SHA
+    call mem_cp6                ; (mem_copy preserves SI)
+    mov si, arp_hdr
+    mov di, eth_txb + EH_TYPE
+    mov cx, arp_hdr_end - arp_hdr
+    call mem_copy
+    mov [eth_txb+EH_SIZE+AR_OPER+1], al ; the operation's low byte; the high
+                                        ; one is the template's zero
+    mov si, eth_ip
+    mov di, eth_txb + EH_SIZE + AR_SPA
+    call mem_cp4
+    mov cx, EH_SIZE + AR_SIZE
+    jmp ne_tx
+
+; the wire bytes from EH_TYPE to AR_OPER's high byte, big-endian as sent:
+; ARP over Ethernet, hardware type 1 (Ethernet), protocol IP, six and four
+arp_hdr:    db 0x08, 0x06, 0x00, 0x01, 0x08, 0x00, 6, 4, 0
+arp_hdr_end:
+%if ETY_ARP != 0x0806 || ETY_IP != 0x0800 || ARP_REQ > 255 || ARP_REPLY > 255
+  %error "arp_hdr spells the ethertypes and the operation by hand"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; arp_in - an ARP frame is in eth_rxb
@@ -498,43 +511,17 @@ arp_in:
     ; --- the reply, built from the request -----------------------------------
     mov si, eth_rxb + EH_SRC
     mov di, eth_txb + EH_DST
-    mov cx, 6
-    call mem_copy
-    mov si, eth_mac
-    mov di, eth_txb + EH_SRC
-    mov cx, 6
-    call mem_copy
-    mov di, eth_txb + EH_TYPE
-    mov ax, ETY_ARP
-    call be_put
-    mov si, eth_rxb + EH_SIZE
-    mov di, eth_txb + EH_SIZE
-    mov cx, AR_SIZE
-    call mem_copy
-    mov di, eth_txb + EH_SIZE + AR_OPER
-    mov ax, ARP_REPLY
-    call be_put
+    call mem_cp6
     mov si, eth_rxb + EH_SIZE + AR_SHA      ; their address becomes the target
     mov di, eth_txb + EH_SIZE + AR_THA
     mov cx, 10                              ; SHA and SPA in one copy
     call mem_copy
-    mov si, eth_mac
-    mov di, eth_txb + EH_SIZE + AR_SHA
-    mov cx, 6
-    call mem_copy
-    mov si, eth_ip
-    mov di, eth_txb + EH_SIZE + AR_SPA
-    mov cx, 4
-    call mem_copy
-    mov cx, EH_SIZE + AR_SIZE
-    call ne_tx
+    mov al, ARP_REPLY
+    call arp_send
 .out:
     pop di
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_cx
 
 ; =============================================================================
 ; IP
@@ -584,17 +571,14 @@ ip_start:                       ; STKDEPTH-NOSAVE: bx
     push si
     mov [eth_pr], al
     mov di, eth_dip                     ; bank the real destination: the route
-    mov cx, 4                           ; below may hand us the gateway's
-    call mem_copy
+    call mem_cp4                    ; below may hand us the gateway's
     mov si, eth_dip
-    cmp byte [si], 0xFF                 ; A BROADCAST HAS NO ARP, and DHCP is
-    jne .unicast                        ; sent before we have an address at all
-    cmp byte [si+1], 0xFF               ; - so a stack that tried to resolve it
-    jne .unicast                        ; could never acquire one
-    cmp byte [si+2], 0xFF
-    jne .unicast
-    cmp byte [si+3], 0xFF
-    jne .unicast
+    mov ax, [si]                        ; A BROADCAST HAS NO ARP, and DHCP is
+    and ax, [si+2]                      ; sent before we have an address at all
+    inc ax                              ; - so a stack that tried to resolve it
+    jnz .unicast                        ; could never acquire one. All four
+                                        ; bytes 0xFF is the two words ANDed
+                                        ; being 0xFFFF, which `inc` makes zero
     mov di, eth_bcmac
     jmp short .have
 .unicast:
@@ -636,12 +620,10 @@ ip_start:                       ; STKDEPTH-NOSAVE: bx
     pop di
     mov si, eth_ip
     mov di, eth_txb + IP_OFF + IPO_SRC
-    mov cx, 4
-    call mem_copy
+    call mem_cp4
     mov si, eth_dip
     mov di, eth_txb + IP_OFF + IPO_DST
-    mov cx, 4
-    call mem_copy
+    call mem_cp4
     mov di, eth_txb + IP_PAY
     pop si
     pop cx
@@ -749,10 +731,7 @@ icmp_in:
 .out:
     pop di
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_cx
 
 ; =============================================================================
 ; UDP - two ports, and both of them are ours
@@ -845,10 +824,7 @@ udp_send:
 .out:
     pop di
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_cx
 
 ; =============================================================================
 ; THE RECEIVE PATH
@@ -896,15 +872,10 @@ eth_frame_i:                    ; STKDEPTH-NOSAVE: bx
     mov di, eth_ip
     call ip_eq
     je  .mine
-    mov si, eth_rxb + IP_OFF + IPO_DST  ; ...or a broadcast, which is what a
-    cmp byte [si], 0xFF                 ; DHCP offer arrives as before we have
-    jne .drop                           ; an address at all
-    cmp byte [si+1], 0xFF
-    jne .drop
-    cmp byte [si+2], 0xFF
-    jne .drop
-    cmp byte [si+3], 0xFF
-    jne .drop
+    mov ax, [si]                        ; ...or a broadcast, which is what a
+    and ax, [si+2]                      ; DHCP offer arrives as before we have
+    inc ax                              ; an address at all (SI is still the
+    jnz .drop                           ; destination: ip_eq preserves it)
 .mine:
     mov si, eth_rxb + IP_OFF + IPO_LEN  ; the wire length, which is what the
     call be_get                         ; payload length must come from: the

@@ -28,11 +28,18 @@
 ; one-display answer - and the kernel calls the slot straight, with EXTCALL:
 ; no thunk, no mod_need on the path, nothing to hook or unhook.
 ;
-; DS = KERNEL_SEG throughout. Kernel routines are reached through the exk_*
-; stubs at the foot: `push cs` + a near call builds the far frame, and the
+; DS = KERNEL_SEG throughout. Kernel routines are reached through `EXK name`,
+; five bytes a site and nothing per routine: exk_go at the foot reads the
+; target out of the word after the call and builds the far frame, and the
 ; routine's own near `ret` lands on cw_kretf - dockmod.inc's device, so the
-; image costs no resident shim. os88ovlchk refuses a near call either way
-; across the boundary (its MODS list names `.modx`).
+; image costs no resident shim. The two kernel routines that are a pointer
+; walk (vid_ctx_ptr, vid_kind_of) have a near copy here instead, and the ones
+; that have a resident far shim (cw_thm_desk, cw_dock_band,
+; cw_vid_ctx_capture, and cw_vid_disp_of for the one on OSAPI_WM_DISPLAY's
+; path) or a cell of their own (apic_wm_top) are far-called through it, at
+; the same five bytes as an EXK and without exk_go's work. os88ovlchk
+; refuses a near call either way across the boundary (its MODS list names
+; `.modx`).
 ; =============================================================================
 %ifdef KERN_BIG
 section .cold
@@ -77,23 +84,32 @@ exf_sync:
     retf
 
 section .modx
+; EXK name - far-call the KERNEL routine `name` (a near proc in .text) from the
+; image: the target rides in the word after the call and exk_go builds the
+; frame. Five bytes a site where `push cs` + a ten-byte stub per routine was
+; four, so it wins from the second routine on, and it preserves every
+; register and the flags both ways exactly as the stubs did.
+%macro EXK 1
+    call exk_go
+    dw %1
+%endmacro
 EXT_NENT    equ 12
 modx_hdr:
     dw 0x384F                   ; MOD_H_MAGIC
     db MOD_VER, MOD_EXT         ; MOD_H_VER, MOD_H_ID
     dw BUILD_NUM, MOD_STAMP     ; MOD_H_BUILD, MOD_H_STAMP (SPEC.md 2.8.2)
     dw modx_end, EXT_NENT       ; MOD_H_IMG, MOD_H_NENT
-    dw ext_e_extend             ; EXT_EXTEND
-    dw ext_e_land               ; EXT_LAND
-    dw ext_e_strads             ; EXT_STRADS
-    dw ext_e_apply              ; EXT_APPLY
-    dw ext_e_fitbox             ; EXT_FITBOX
-    dw ext_e_kindnow            ; EXT_KINDNOW
+    dw ext_extend_b             ; EXT_EXTEND - far procs, the six whose only
+    dw ui_drag_size             ; EXT_LAND     caller is their slot (or a
+    dw ext_e_strads             ; EXT_STRADS   `push cs` + call in here) and
+    dw ext_e_apply              ; EXT_APPLY    so end in their own retf
+    dw wm_fit_box               ; EXT_FITBOX   rather than behind a
+    dw ext_e_kindnow            ; EXT_KINDNOW  call/retf trampoline
     dw ext_e_fsx                ; EXT_FSX
     dw ext_e_display            ; EXT_DISPLAY
-    dw ext_e_span               ; EXT_SPAN
+    dw wm_disp_span             ; EXT_SPAN
     dw ext_e_fsrect             ; EXT_FSRECT
-    dw ext_e_desk               ; EXT_DESK
+    dw vid_disp_desk            ; EXT_DESK
     dw ext_e_ylow               ; EXT_YLOW
 
 ; THE TWO KINDS OF CALL SITE (SPEC.md 39.19.6). Two entries are GATED - reached
@@ -116,14 +132,6 @@ modx_hdr:
 ; per frame inside a bracket; ui_drag_dead and ui_drag_phase, on the drag; and
 ; the two secondary-click tests in ui_task, six bytes each on every press.
 
-ext_e_extend:                   ; EXT_EXTEND: vid_disp_init's Extend arm.
-    call ext_extend_b           ; mod_gone's CF = 1 is that routine's
-    clc                         ; `jc .single`, which is the refusal path
-    retf
-ext_e_land:                     ; EXT_LAND: ui_drag_size with CF INVERTED -
-    call ui_drag_size           ; CF = 1 NOT moved, so the resident `cmc`
-    cmc                         ; after the call reads mod_gone's CF = 1 as
-    retf                        ; "not moved" and the drag cache survives
 ext_e_strads:                   ; EXT_STRADS: CF = 1 not straddling, which is
     call wm_strads              ; also mod_gone's answer and the one-display
     retf                        ; one
@@ -133,38 +141,17 @@ ext_e_apply:                    ; EXT_APPLY: wm_apply_wh's straddle arm, the
     call wm_strad_fit
     clc
 .r: retf
-ext_e_fitbox:                   ; EXT_FITBOX: wm_fit's box. Not loaded, the
-    call wm_fit_box             ; registers come back untouched, which is the
-    retf                        ; primary's box and the one-display answer
 ext_e_kindnow:                  ; EXT_KINDNOW: wm_kind_now, UNGATED. The caller
-    cmp byte [vid_ndisp], 1     ; has loaded AL = [vid_kind], so one display -
-    jbe .r                      ; mod_gone, or this image over a collapsed
-    call ext_kind_now           ; desktop - keeps the primary's kind
-.r: retf
-ext_e_fsx:                      ; EXT_FSX: AH = EXTF_*, fsx.inc's five. The
-    cmp ah, EXTF_LEAVE          ; bracket's three read no flags and are no-ops
-    jb .e                       ; on one display; the two queries are UNGATED
-    je .l                       ; and answer mod_gone's way there
-    cmp ah, EXTF_KIND
-    jb .u
-    je .k
-    call ext_fsx_caps           ; EXTF_CAPS
-    retf
-.e: call vid_fsx_enter
-    retf
-.l: call vid_fsx_leave
-    retf
-.u: call vid_fsx_unblank
-    retf
-.k: cmp byte [vid_ndisp], 1     ; EXTF_KIND: BL kept = the caller's [vid_kind]
-    jbe .r
-    push ax
-    mov al, [fsx_wdisp]
-    push cs
-    call exk_vid_kind_of        ; (banks DI itself)
-    mov bl, al
-    pop ax
-.r: retf
+    call ext_one                ; has loaded AL = [vid_kind], so one display -
+    jb .r                       ; mod_gone, or this image over a collapsed
+    call wm_disp_now            ; desktop - keeps the primary's kind. The
+    call ext_kind_of            ; display wm_disp_now names and not
+.r: retf                        ; wm_disp_of's: this decides which size a
+                                ; frame is clamped against, a question about
+                                ; the corner the clamps are written from, and
+                                ; wm_display asks wm_disp_now too - so a
+                                ; window is sized for exactly the display it
+                                ; is then told it is on
 ext_e_display:                  ; EXT_DISPLAY: wm_display's second arm, behind
     push di                     ; its gate. CF = 1: the window is on display
     call wm_disp_now            ; 0, whose numbers the caller loads itself
@@ -182,81 +169,103 @@ ext_e_display:                  ; EXT_DISPLAY: wm_display's second arm, behind
     mov dl, [di+VID_CTX_KIND]   ; (and the xor cleared CF)
 .p: pop di
     retf
-ext_e_span:                     ; EXT_SPAN: wm_disp_span, UNGATED (wm_zoom)
-    call wm_disp_span
-    retf
 ext_e_fsrect:                   ; EXT_FSRECT: wm_fs_setrect's arm, UNGATED.
-    cmp byte [vid_ndisp], 1     ; CF = 1: one display, and the caller writes
-    jbe .one                    ; the primary's rect itself
+    call ext_one                ; CF = 1: one display, and the caller writes
+    jb ext_e_apply.r            ; the primary's rect itself (a bare retf)
     push ax
+    push si
     push di
-    push cs
-    call exk_wm_disp_of
-    push cs
-    call exk_vid_ctx_ptr
-    mov ax, [di+VID_CTX_VX]
-    mov [bx+W_X], ax
-    mov ax, [di+VID_CTX_VY]
-    mov [bx+W_Y], ax
-    mov ax, [di+VID_CTX_CW]
-    mov [bx+W_W], ax
-    mov ax, [di+VID_CTX_CH]
-    mov [bx+W_H], ax
+    push es
+    call ext_wctx               ; DI = the record of the display it is on
+    lea si, [di+VID_CTX_VX]     ; the record's VX, VY...
+    lea di, [bx+W_X]            ; ...into W_X, W_Y
+    push ds
+    pop es
+    cld
+    movsw
+    movsw
+    sub si, VID_CTX_VX+4-VID_CTX_CW
+    movsw                       ; ...and its CW, CH into W_W, W_H
+    movsw
+    pop es
     pop di
+    pop si
     pop ax
     clc
-    retf
-.one:
-    stc
-    retf
-ext_e_desk:                     ; EXT_DESK: vid_disp_desk, UNGATED - a whole
-    call vid_disp_desk          ; desktop repaint, where one far call is noise
     retf
 ext_e_ylow:                     ; EXT_YLOW: ui_ylow's arm, behind its caller's
     push ax                     ; gate - ui_drag's release, the drag path
     push bx
-    push di
     mov ax, [ui_curx]           ; the drag's PROPOSED x, not W_X
     mov bx, MBAR_H              ; any row the primary's band contains, so a
                                 ; point on display 0 resolves to it
-    push cs
-    call exk_vid_disp_of
+    call KERNEL_SEG:cw_vid_disp_of
     or al, al
     jz .done                    ; display 0 keeps the chrome's floor, which
-    push cs                     ; the caller loaded into SI
-    call exk_vid_ctx_ptr
-    mov si, [di+VID_CTX_VY]
+                                ; the caller loaded into SI. Anything else is
+                                ; display 1, there being two at most (below)
+    mov si, [vid_ctx + VID_CTX_SZ + VID_CTX_VY]
 .done:
-    pop di
     pop bx
     pop ax
     retf
 
-; ==== which display, from wm.inc, fsx.inc and vidsel.inc ===================
-%if VID_NDISP_MAX != 2
-  %error "ext_e_display names display 1's record in line: one secondary"
-%endif
-; -----------------------------------------------------------------------------
-; ext_kind_now - AL = the adapter kind window BX is standing on (wm_kind_now's
-;                two-display half)
-; in:  BX = window ptr; [vid_ndisp] > 1
-; out: AL = a VID_* kind; every other register preserved
+; ==== the fsx bracket (SPEC.md 39.18), from fsx.inc ========================
+; ext_e_fsx - EXT_FSX: AH = EXTF_*, fsx.inc's five. The bracket's three read
+; no flags and are no-ops on one display; the two queries are UNGATED and
+; answer mod_gone's way there. ENTER is a far proc of its own, reached by the
+; jcc straight from here; LEAVE and UNBLANK share the one test that makes
+; them no-ops ([fsx_vndisp] <= 1: no bracket collapsed two displays) and the
+; AX they bank, so LEAVE's body is in line below and UNBLANK's is entered
+; with AX already pushed.
 ;
-; The display wm_disp_now names and not wm_disp_of's, because this decides
-; which size a frame is clamped against - a question about the corner the
-; clamps are written from - and because wm_display asks wm_disp_now too, so a
-; window is sized for exactly the display it is then told it is on.
+; vid_fsx_leave - the desktop's geometry back (SPEC.md 39.18)
+; in:       nothing
+; out:      the union, the primary's chrome, the records unchanged
+; clobbers: flags
+;
+; The records were never written inside the bracket, so this is vid_apply on
+; the desktop's own adapter plus 39.16's union - and NOT an unblank, which
+; owes the repaint first (39.18.1).
 ; -----------------------------------------------------------------------------
-ext_kind_now:
-    push di                     ; round wm_disp_now, whose callees name DI -
-    call wm_disp_now            ; vid_kind_of banks its own
-    push cs
-    call exk_vid_kind_of
-    pop di
-    ret
+ext_e_fsx:
+    cmp ah, EXTF_LEAVE
+    jb vid_fsx_enter
+    cmp ah, EXTF_KIND
+    jae .query
+    cmp byte [fsx_vndisp], 1    ; LEAVE and UNBLANK: nothing to undo unless a
+    jbe .r                      ; bracket collapsed two displays
+    push ax
+    cmp ah, EXTF_LEAVE
+    jne vid_fsx_unblank         ; (AX banked: its pop is there)
+    mov al, [fsx_vkind]         ; --- vid_fsx_leave ---
+    call ext_kapply_eq          ; 40:10 BACK TO THE PRIMARY'S KIND, because a
+                                ; bracket on a COLOUR second display left it
+                                ; saying colour: vid_text's own arm flips it so
+                                ; that the ROM's mode set - and SPEC.md 96.33's
+                                ; teletype under it - reach the card the app is
+                                ; on (SPEC.md 39.19.4.1). ext_extend_b is this
+                                ; same three-call pattern for the same reason,
+                                ; and leaving the flag is what SPEC.md 39.20's
+                                ; Restart then reads
+    call ext_two                ; [fsx_vndisp] > 1 is 2, two at most
+    call KERNEL_SEG:cw_dock_band ; ...and the strip where the user put it (30.5)
+    pop ax
+.r: retf
 
-; -----------------------------------------------------------------------------
-; ext_fsx_caps - fsx_caps' second-display half (SPEC.md 53.8, 39.18.2)
+.query:
+    call ext_one                ; ...both queries: one display keeps BL/DL,
+    jb .r                       ; the caller's [vid_kind]
+    push ax
+    cmp ah, EXTF_KIND
+    jne .caps
+    mov al, [fsx_wdisp]         ; EXTF_KIND: BL = the bracket display's kind
+    call ext_kind_of
+    mov bl, al
+    pop ax
+    retf
+
+; EXTF_CAPS - fsx_caps' second-display half (SPEC.md 53.8, 39.18.2)
 ; in:  BX = the window to ask ABOUT, or 0 for the frontmost; DL = [vid_kind]
 ; out: DL = the kind of the display that window is on; everything else kept
 ;
@@ -266,28 +275,156 @@ ext_kind_now:
 ; collapse, correctly falls through and answers about the window it was
 ; handed. BX = 0 is an entry proc, or a caller that has no window: the
 ; frontmost, and the primary if nothing is visible at all.
-; -----------------------------------------------------------------------------
-ext_fsx_caps:
-    cmp byte [vid_ndisp], 1
-    jbe .out
-    push ax
+.caps:
     push bx
     or bx, bx
     jnz .win
-    push cs
-    call exk_wm_top
-    or bx, bx
+    call KERNEL_SEG:apic_wm_top ; OSAPI_WM_TOP's own cell is the door: the
+    or bx, bx                   ; same five bytes as an EXK and no exk_go
     jz .notop
-.win:
-    push cs
-    call exk_wm_disp_of         ; the CENTRE, then the origin, then the
-    push cs                     ; primary (SPEC.md 39.17) - so a straddling
-    call exk_vid_kind_of        ; window belongs to the display holding more
-    mov dl, al                  ; of it, the same rule both fullscreens and
-.notop:                         ; wm_zoom ask
+.win:                           ; (NOT ext_wctx: that needs DI banked
+    EXK wm_disp_of              ; round it, and this is the one entry a
+    call ext_kind_of            ; WORKER reaches - four bytes deeper on its
+    mov dl, al                  ; slice for two bytes of image. The CENTRE,
+                                ; then the origin, then the primary (SPEC.md
+                                ; 39.17) - so a straddling window belongs to
+                                ; the display holding more of it, the same
+.notop:                         ; rule both fullscreens and wm_zoom ask
     pop bx
     pop ax
+    retf
+
+; -----------------------------------------------------------------------------
+; vid_fsx_unblank - the dark monitor back, AFTER the repaint (SPEC.md 39.18.1)
+; in:       nothing; ENTERED FROM ext_e_fsx with AX pushed and [fsx_vndisp]
+;           already known to be 2
+; out:      every card lit again; [fsx_vndisp] spent
+; clobbers: flags
+;
+; AFTER wm_paint_all AND NOT BEFORE IT. Blanking gates the video SIGNAL and
+; not memory, so a blanked card's framebuffer still holds the desktop as it
+; was when the bracket started - minutes stale, on a monitor the user has not
+; been looking at. Unblanking first shows that frame and then paints over it;
+; repainting first means the card is only ever shown what is current.
+;
+; NOT A LOOP: [fsx_vndisp] > 1 is 2 (VID_NDISP_MAX, the %if below), so the
+; one card that is not the bracket's is display ([fsx_vdisp] xor 1).
+; -----------------------------------------------------------------------------
+vid_fsx_unblank:                ; (no DI: ext_kind_of banks it and the blank
+    dec byte [fsx_vndisp]       ; 2 -> 1, one-shot: a bracket that set no mode and a
+    call ext_okind              ; second restore must not write these ports
+    EXK vid_unblank_kind        ; pair never names it)
+    pop ax
+    retf
+
+; -----------------------------------------------------------------------------
+; vid_fsx_enter - one display, and the other dark (SPEC.md 39.18)
+;
+; in:       AL = the display the bracket runs on
+; out:      the machine describes itself as having ONE display, that one, at
+;           the virtual origin; the other card is blanked
+; clobbers: flags
+;
+; INSIDE A BRACKET THE MACHINE IS SINGLE-DISPLAY AGAIN, and that is the whole
+; design: every SPEC.md 53 contract - fsx_mode, the FSI block, fsx_wait,
+; FSXF_KEEPWORKER, FSXF_FASTTICK - is then exactly what it is today, and no
+; fsx app needs a line.
+;
+; [vid_kind] MOVES TO THAT DISPLAY'S ADAPTER, which is what makes it work
+; rather than merely look right: fsx_caps, fsx_mode and vid_setmode all read
+; it, and vid_apply then republishes the live block, the desktop words and
+; 39.16's chrome extent from vid_tab - one call, no second opinion.
+;
+; The other is BLANKED because nothing can maintain it: the kernel does not
+; run inside the bracket (53.1), so what a live card would show is a frozen
+; desktop. 39.11.4's argument, unchanged. Two displays at most, so "every card
+; but the bracket's" is display (AL xor 1) and no loop.
+; -----------------------------------------------------------------------------
+vid_fsx_enter:
+    call ext_one
+    jb .out                     ; one display: nothing here applies
+    push ax                     ; (no DI, as vid_fsx_unblank)
+    mov [fsx_vdisp], al         ; [fsx_vdisp] = AL, and in ONE word store
+    mov ah, 2                   ; [fsx_vkind] = the DESKTOP's adapter, to come
+    mov al, [vid_kind]          ; back to, and [fsx_vndisp] = 2 = [vid_ndisp]:
+    mov [fsx_vkind], ax         ; more than one, and two at most
+
+    call ext_okind              ; ...dark the card that is not the bracket's
+    EXK vid_blank_kind
+
+    mov al, [fsx_vdisp]
+    call ext_kind_of            ; ...and become that one: the live block, the
+    call ext_kapply             ; desktop words and the chrome, all of it that
+                                ; display's
+    xor ax, ax                  ; consistent with the lie: at the virtual
+    mov [vid_ox], ax            ; origin, one display, display 0 current (the
+    mov [vid_oy], ax            ; pair is one word, vidsel.inc's %error)
+    inc ax
+    mov [vid_ndisp], ax
+    pop ax
 .out:
+    retf
+
+; ==== which display, from wm.inc, fsx.inc and vidsel.inc ===================
+%if VID_NDISP_MAX != 2
+  %error "ext_e_display names display 1's record in line: one secondary"
+%endif
+%if fsx_vndisp - fsx_vkind != 1
+  %error "vid_fsx_enter banks [fsx_vkind] and [fsx_vndisp] in ONE word store"
+%endif
+; -----------------------------------------------------------------------------
+; ext_kind_of - AL = the adapter kind of display AL (vid_kind_of's near copy)
+; ext_ctx_ptr - DI = the record of display AL (vid_ctx_ptr's), AX and DX kept
+; in:       AL = display index, 0 or 1
+; clobbers: flags; ext_kind_of banks DI, as vid_kind_of does
+;
+; NEAR COPIES of two kernel routines rather than far hops to them: each is a
+; pointer walk shorter than the frame a hop builds, with seventeen sites here
+; between them, and the copy is what keeps OSAPI_WM_DISPLAY's path (EXT_DISPLAY
+; -> wm_disp_now -> wm_strads, wm_disp_rest) free of a far frame per display.
+; -----------------------------------------------------------------------------
+; ext_one - CF = 1 when there is ONE display ([vid_ndisp] < 2); every register
+; kept. The test the entries open with, at two bytes a site less than the
+; compare it stands for; wm_strads, on OSAPI_WM_DISPLAY's path, keeps its own.
+ext_one:
+    cmp byte [vid_ndisp], 2
+    ret
+
+; ext_okind - AL = the kind of the display that is NOT the bracket's
+; ([fsx_vdisp] xor 1, two displays at most): vid_fsx_enter's blank and
+; vid_fsx_unblank's unblank, falling into ext_kind_of
+ext_okind:
+    mov al, [fsx_vdisp]
+    xor al, 1
+ext_kind_of:
+    push di
+    call ext_ctx_ptr
+    mov al, [di+VID_CTX_KIND]
+    pop di
+    ret
+; ext_wctx - DI = the record of the display window BX is on, and AL = that
+; display (wm_disp_of, then ext_ctx_ptr fallen into); clobbers AX and flags
+ext_wctx:
+    EXK wm_disp_of
+ext_ctx_ptr:
+    mov di, vid_ctx             ; two displays (the %if above): the index is
+    or al, al                   ; 0 or 1, so the multiply is a branch
+    jz .out
+    add di, VID_CTX_SZ
+.out:
+    ret
+
+; ext_org_disp - AL = the display window BX's ORIGIN is on (vid_disp_of of
+; W_X, W_Y), and ZF = 1 when that is the primary; every other register
+; preserved. The question wm_fit_box, wm_sf_lim and wm_disp_now's
+; one-display arm all ask.
+ext_org_disp:
+    push bx
+    mov ax, [bx+W_X]
+    mov bx, [bx+W_Y]
+    call KERNEL_SEG:cw_vid_disp_of
+    pop bx
+    or al, al
     ret
 
 ; -----------------------------------------------------------------------------
@@ -298,14 +435,11 @@ ext_fsx_caps:
 ;           wm_fit's drop-shadow rule)
 ; clobbers: AX, CX, SI, DX, flags
 ; -----------------------------------------------------------------------------
-wm_disp_span:
-    cmp byte [vid_ndisp], 1
-    jbe .out                    ; one display: the caller's numbers stand
+wm_disp_span:                   ; (far: EXT_SPAN is its only caller)
+    call ext_one
+    jb .out                     ; one display: the caller's numbers stand
     push di
-    push cs
-    call exk_wm_disp_of
-    push cs
-    call exk_vid_ctx_ptr
+    call ext_wctx
     or al, al                   ; (the movs leave the flags for the jz)
     mov ax, [di+VID_CTX_VX]
     mov cx, [di+VID_CTX_CW]
@@ -317,7 +451,7 @@ wm_disp_span:
 .prim:
     pop di
 .out:
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; vid_disp_desk - the desktop ground of every display but the primary
@@ -347,8 +481,8 @@ wm_disp_span:
 ; virtual and local are the same numbers (39.14.4).
 ; -----------------------------------------------------------------------------
 vid_disp_desk:
-    cmp byte [vid_ndisp], 1
-    jbe .one
+    call ext_one
+    jb .r                       ; CF = 1: one display
     push ax
     push bx
     push cx
@@ -359,10 +493,8 @@ vid_disp_desk:
                                 ; returned for [vid_ndisp] <= 1, and display 0
                                 ; is wm_paint_all's own - so the general loop
                                 ; ran exactly once by construction
-    push cs
-    call exk_vid_ctx_rect       ; AX/BX/CX/DX = its inclusive virtual rect
-    push cs
-    call exk_thm_desk           ; the THEME's ground (SPEC.md 76.2), not a
+    EXK vid_ctx_rect            ; AX/BX/CX/DX = its inclusive virtual rect
+    call KERNEL_SEG:cw_thm_desk ; the THEME's ground (SPEC.md 76.2), not a
                                 ; hard-coded dither
     pop di
     pop dx
@@ -370,25 +502,40 @@ vid_disp_desk:
     pop bx
     pop ax
     clc
-    ret
-.one:
-    stc
-    ret
+.r: retf                        ; (far: EXT_DESK is its only caller)
 
-; ==== the landing and the straddle (SPEC.md 39.16.3), from wm.inc =========
+; ==== the drop, the landing and the straddle (SPEC.md 11.100.3/.4, 39.16.3) ==
 ; -----------------------------------------------------------------------------
-; wm_land_fit - the window has been PUT DOWN: has the adapter under it changed,
-;               and if so what size does it want here? (SPEC.md 39.16.3.3)
-; in:       BX = the window, its rect already where the user left it
-; out:      nothing; every register preserved, FLAGS INCLUDED
+; ui_drag_size - EXT_LAND: what size should a dropped window have, and has the
+;                adapter under it changed? (SPEC.md 11.100.3/.4, 39.16.3.3)
+; in:       BX = the window, W_X/W_Y already clamped to where it was dropped
+; out:      CF = 0 if W_X, W_Y, W_W or W_H changed, CF = 1 if none did - the
+;           INVERSE of the natural sense, so that mod_gone's CF = 1 reads as
+;           "not moved" and ui_drag's `cmc` after the EXTCALL turns it back.
+;           Every register preserved. (Far: EXT_LAND is its only caller.)
+;
+; It is what was wm_land_fit (with wm_apply_size_wh and wm_land_snap) inside
+; the comparison ui_drag_size made round it, in one body: the four words the
+; answer compares against are on the stack, so every register is free.
+;
+; TWO THINGS, and they are for the two halves of the tree. Every window gets
+; 11.100.3: the size it WANTS comes back out of the natural bank, so the clamps
+; below re-derive from that rather than from whatever the last drag's clamp
+; left behind - which is what makes a walk across the seam and home again
+; reversible instead of costing sixty rows a trip.
+;
+; A window WITHOUT a grow box also gets 11.100.4: landing wholly on a display of
+; a different adapter takes its own declared size for that adapter. One WITH a
+; grow box does not, and that is the rule rather than an optimisation - its
+; size is one the user chose, and a user outranks an application.
 ;
 ; **THE RULE IS ABOUT ADAPTER IDENTITY AND NOT ABOUT GEOMETRY**, which is the
-; whole of docs/plans/completed/WINDOW-SIZING-PLAN.md 12 and the correction of everything
-; above it. What a window wants is not "a size that fits the box the drag left
-; me in" but "my size for adapter kind Y, and I am standing on adapter kind
-; Y" - so the TRIGGER is a change of kind and nothing else. A move within one
-; adapter changes no size at all, however far it goes and however much of the
-; frame ends up past the bottom of the screen.
+; whole of docs/plans/completed/WINDOW-SIZING-PLAN.md 12 and the correction of
+; everything above it. What a window wants is not "a size that fits the box the
+; drag left me in" but "my size for adapter kind Y, and I am standing on
+; adapter kind Y" - so the TRIGGER is a change of kind and nothing else. A move
+; within one adapter changes no size at all, however far it goes and however
+; much of the frame ends up past the bottom of the screen.
 ;
 ; Three separate mechanisms used to share this job and each produced its own
 ; defect. ui_drag restored the NATURAL BANK on every release, so a drag from
@@ -400,10 +547,12 @@ vid_disp_desk:
 ; union's BOUNDING BOX, which reads rows no display has as a hole in the
 ; desktop.
 ;
-; wm_kind_now answers the question - including the straddle, where it is the
-; MORE RESTRICTIVE of the two displays, which is what makes a Hercules-to-CGA
-; round trip exactly two resizes instead of four: one entering the straddle
-; and one leaving it on the far side.
+; wm_kind_now's answer decides - including the straddle, where it is the MORE
+; RESTRICTIVE of the two displays, which is what makes a Hercules-to-CGA round
+; trip exactly two resizes instead of four: one entering the straddle and one
+; leaving it on the far side. The straddle test is why this is not simply
+; "the kind changed": a frame still over both cards belongs to 39.16.3, and a
+; preference applied there would be cut by it in the same breath.
 ;
 ; THE SNAP AND THE HANG ARE THE SAME MECHANISM SEEN FROM TWO SIDES (12.4). A
 ; window whose floor beats the room has its origin moved up until the frame
@@ -420,52 +569,94 @@ vid_disp_desk:
 ; canvas state rather than the record, which is why the ask can follow the
 ; write instead of having to precede it.
 ; -----------------------------------------------------------------------------
-wm_land_fit:
-    pushf
+ui_drag_size:
+    call ext_one                ; one display - mod_gone's case, or this image
+    jb vid_disp_desk.r          ; over a collapsed desktop: a drag can never
+                                ; change a kind, and CF = 1 is "not moved"
     push ax
+    push cx
     push dx
-    cmp byte [vid_ndisp], 1
-    jbe .out                    ; one display: a drag can never change a kind
-    push ax                     ; **THE DISPLAY IS DECIDED ONCE, HERE** (SPEC.md
-    call wm_disp_now            ; 39.16.4.2). Armed before the first question is
-    mov [wm_lf_disp], al        ; asked and spent at .fin, so the resize this
-    mov [wm_lf_win], bx         ; routine applies cannot change the answer under
-    pop ax                      ; the steps that follow it
-    call ext_kind_now           ; **NEITHER OF THESE MAY BE BANKED IN AH.**
-    mov dl, al                  ; wm_kind_was goes through wm_ptr2idx, which
-    call wm_kind_was            ; answers AL = index and AH = 0, so `mov ah,al`
-    cmp al, dl                  ; before it compared the banked kind against
-    je .fin                     ; VID_VGA - and `push ax`/`pop ax` around it
-                                ; restores AH along with AL, which is the same
-                                ; bug wearing the fix's clothes. Both shipped;
-                                ; the first is why a drag from one place to
-                                ; another INSIDE one adapter still re-derived a
-                                ; size, and the second is why a drag STRAIGHT
-                                ; from one card to the other did nothing at all
-                                ; (measured: AX = 0x0202 against a banked
-                                ; 0x0001). DL survives both calls
+    push si
+    push di
+    push word [bx+W_H]          ; what it had, so the answer is a comparison
+    push word [bx+W_W]          ; rather than a promise - the ORIGIN too,
+    push word [bx+W_Y]          ; because the snap below can move a window
+    push word [bx+W_X]          ; that kept its size
+    call wm_disp_now            ; **THE DISPLAY IS DECIDED ONCE, HERE** (SPEC.md
+    mov [wm_lf_disp], al        ; 39.16.4.2). Armed before the first question is
+    mov [wm_lf_win], bx         ; asked and spent at .fin, so the resize this
+                                ; routine applies cannot change the answer under
+                                ; the steps that follow it
+    call ext_kind_of            ; the kind it stands on now (wm_kind_now's own
+    cmp al, [bx+W_PKIND]        ; answer, the latch being armed) against the
+    je .fin                     ; kind it was last SIZED for
     call wm_strads
     jc .land
     call wm_strad_fit           ; ...across the seam: the constrained axis
     jmp short .ask              ; ONLY, or wm_fit's x clamp would yank the frame
-.land:                          ; wholly onto one display and undo the drag
-    call wm_apply_size_wh
+                                ; wholly onto one display and undo the drag
+
+    ; --- landed on one display: the size half of wm_apply_size -------------
+    ; wm_apply_size restores the natural rect WHOLE, which is right when the
+    ; screen changed under a window nobody has touched and wrong the moment a
+    ; hand is on it: the origin is the user's and only the size is in
+    ; question. The third row of 12.5's table is here rather than in wm_fit -
+    ; a window that is not sizable and has published nothing for this adapter
+    ; is left ALONE, because the kernel cannot see a layout and shortening a
+    ; fixed one buys nothing and costs a rect nothing will repaint (39.16.3.1)
+.land:
+    call ext_wants              ; the size it ASKED for, not what a clamp left,
+    jnc .fit                    ; or the one it published for this adapter
+    call wm_reflows
+    jnc .ask
+.fit:
+    EXK wm_fit
 .ask:
-    push cx
-    push dx
     mov cx, [bx+W_W]
     mov dx, [bx+W_H]
-    push cs
-    call exk_wm_ask_size        ; the window's own veto (SPEC.md 11.1)
+    EXK wm_ask_size             ; the window's own veto (SPEC.md 11.1)
     mov [bx+W_W], cx
     mov [bx+W_H], dx
-    pop dx
-    pop cx
-    call wm_land_snap           ; ...and the origin follows whatever it ended
-    push cs
-    call exk_wm_kind_bank       ; up with
-    push cs
-    call exk_wm_sz_notify       ; TOLD EVEN IF THE BOX DID NOT MOVE: the ADAPTER
+
+    ; --- ...and the origin follows whatever it ended up with ---------------
+    ; The floor outranks the box (11.100.2), so a window whose minimum is
+    ; taller than the room left below the pointer cannot honour both - and
+    ; this is the half that keeps it whole: pos = min(pos, limit - size),
+    ; floored at the near edge of the band. A frame too big for the band at
+    ; all lands at the near edge and hangs from there, which is the best
+    ; available answer for a window that REFUSED to shrink (apps/paint with a
+    ; picture in it): nothing is cropped and as much of it as the display has
+    ; is on screen. The limit is the nearer of the two far edges while the
+    ; frame straddles and the landing display's own otherwise (wm_sf_lim);
+    ; wm_fit already did this once with the pre-ask size, and it is done again
+    ; because the ask may have given the size back. ui_ylow answers the same
+    ; question and may not be used: it reads the DRAG's proposed x, which is
+    ; meaningless on the ui_grow path.
+    mov ax, [vid_band_x0]       ; the NEAR edges of the display it is on -
+    mov si, MBAR_H              ; the primary's band, unless wm_fit_box says
+    BLOBCALL wm_fit_box         ; the origin is on the other card, whose own
+                                ; vx/vy they are then (39.16.2). BLOBCALL is
+                                ; `push cs` + a near call - the far frame its
+                                ; RETF wants, in the spelling os88ovlchk reads
+    mov cx, si                  ; (the y0, across the limit)
+    call wm_sf_lim              ; DL = the axis, SI = one past the last row
+                                ; (column) available, DI = the record moved
+                                ; on to the y words for the y axis (W_Y =
+    jz .sx                      ; W_X+2, W_H = W_W+2), and AX = that axis's
+    mov ax, cx                  ; near edge
+.sx:
+    mov cx, si
+    sub cx, [di+W_W]
+    cmp [di+W_X], cx
+    jle .sfl
+    mov [di+W_X], cx            ; may go NEGATIVE for a frame bigger than the
+.sfl:                           ; band, and the floor below takes it straight
+    cmp [di+W_X], ax            ; back - which is the REFUSAL case landing at
+    jge .snapped                ; the near edge and hanging from there
+    mov [di+W_X], ax
+.snapped:
+    EXK wm_kind_bank
+    EXK wm_sz_notify            ; TOLD EVEN IF THE BOX DID NOT MOVE: the ADAPTER
                                 ; did, and half the tree caches facts about it
                                 ; (SPEC.md 11.98). wm_refit has always done this
                                 ; and the drag path never did. IT IS INSIDE THE
@@ -473,119 +664,31 @@ wm_land_fit:
                                 ; has to be told the card the kernel just sized
                                 ; it for, not the one its new frame sits on
 .fin:
-    mov word [wm_lf_win], 0     ; ...and 0 is no window, wm_wins starting well
-.out:                           ; above it
-    pop dx
-    pop ax
-    popf
-    ret
-
-; -----------------------------------------------------------------------------
-; wm_apply_size_wh - the size half of wm_apply_size, for a window the USER has
-;                    just placed (SPEC.md 39.16.3.3)
-; in:       BX = the window
-; out:      nothing; every register preserved, FLAGS INCLUDED
-;
-; wm_apply_size restores the natural rect WHOLE, which is right when the screen
-; changed under a window that nobody has touched and wrong the moment a hand is
-; on it: the origin is the user's and only the size is in question. The third
-; row of 12.5's table is here rather than in wm_fit - a window that is not
-; sizable and has published nothing for this adapter is left ALONE, because the
-; kernel cannot see a layout and shortening a fixed one buys nothing and costs
-; a rect nothing will repaint (39.16.3.1).
-; -----------------------------------------------------------------------------
-wm_apply_size_wh:
-    pushf
-    push ax
-    push cs
-    call exk_wm_nat_take_wh     ; the size it ASKED for, not what a clamp left
-    push cs
-    call exk_wm_pref_now        ; ...or the one it published for this adapter
-    jnc .fit
-    call wm_reflows
-    jnc .done
-.fit:
-    push cs
-    call exk_wm_fit
-.done:
-    pop ax
-    popf
-    ret
-
-; -----------------------------------------------------------------------------
-; wm_land_snap - the origin follows the size, so a frame that will not fit from
-;                where it was dropped ends ON the display's last row
-; in:       BX = the window
-; out:      nothing; every register preserved, FLAGS INCLUDED
-;
-; The floor outranks the box (11.100.2), so a window whose minimum is taller
-; than the room left below the pointer cannot honour both - and this is the
-; half that keeps it whole: y = min(y, limit - h), floored at the top of the
-; band. A frame too tall for the band at all lands at the top and hangs down
-; from there, which is the best available answer for a window that REFUSED to
-; shrink (apps/paint with a picture in it): nothing is cropped and as much of
-; it as the display has is on screen.
-;
-; The limit is the nearer of the two far edges while the frame straddles, and
-; the landing display's own otherwise. wm_fit already did this once with the
-; pre-ask size; it is done again because the ask may have given the height
-; back.
-; -----------------------------------------------------------------------------
-wm_land_snap:
-    pushf
-    push ax
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-%ifdef DOCK_OPT
-    mov ax, [vid_band_x0]       ; the NEAR edges of the display it is on -
-    mov cx, [vid_band_xe]       ; MBAR_H on the primary and the card's own vy
-%else
-    xor ax, ax                  ; the NEAR edges of the display it is on -
-    mov cx, [vid_pw]            ; MBAR_H on the primary and the card's own vy
-%endif
-    mov si, MBAR_H              ; anywhere else, since nothing but the primary
-    mov di, [vid_dock_y0]       ; has a menu bar (39.16.2). ui_ylow answers the
-    mov dx, [vid_ph]            ; same question and may not be used: it reads
-    call wm_fit_box             ; the DRAG's proposed x, which is meaningless
-    mov bp, si                  ; on the ui_grow path
-    push ax                     ; ...both banked, DX being about to be the axis
-    call wm_sf_axis             ; DL = the constrained axis
-    call wm_sf_lim              ; SI = one past the last row (column) available
-    pop ax
-    or dl, dl
-    jz .x
-    mov cx, si
-    sub cx, [bx+W_H]
-    cmp [bx+W_Y], cx
-    jle .yfl
-    mov [bx+W_Y], cx            ; may go NEGATIVE for a frame taller than the
-.yfl:                           ; band, and the floor below takes it straight
-    cmp [bx+W_Y], bp            ; back - which is the REFUSAL case landing at
-    jge .done                   ; the top and hanging down from there
-    mov [bx+W_Y], bp
-    jmp short .done
-.x:
-    mov cx, si
-    sub cx, [bx+W_W]
-    cmp [bx+W_X], cx
-    jle .xfl
-    mov [bx+W_X], cx
-.xfl:
-    cmp [bx+W_X], ax
-    jge .done
-    mov [bx+W_X], ax
-.done:
-    pop bp
+    xor ax, ax                  ; ...and 0 is no window, wm_wins starting well
+    mov [wm_lf_win], ax         ; above it
+    push es                     ; ZF = 1 exactly when all four words are what
+    push ss                     ; they were: the four on the stack (X lowest,
+    pop es                      ; the record's own order) against the record
+    mov di, sp
+    cld                         ; BEFORE the scasw, which steps DI by DF too
+    scasw                       ; (DI past the ES just banked; AX = 0 is not
+    lea si, [bx+W_X]            ; read for anything)
+    mov cx, 4
+    repe cmpsw
+    pop es
+    pop cx                      ; the four words, spent (pop touches no flag)
+    pop cx
+    pop cx
+    pop cx
     pop di
     pop si
     pop dx
     pop cx
     pop ax
-    popf
-    ret
+    stc                         ; CF = 1: NOT moved
+    jz .r
+    clc
+.r: retf
 
 ; -----------------------------------------------------------------------------
 ; wm_sf_axis - DL = 1 the displays tile SIDE BY SIDE (y is what has to come
@@ -596,63 +699,69 @@ wm_land_snap:
 ; Side by side (39.19.2's Right) they are contiguous in x and overlap in y - so
 ; spanning x is the whole point of extending and must stay free, while y is
 ; what has to come in. Stacked (Below) it is the other way round. The test is
-; geometric rather than a read of [vid_dlay]: display 1's VY against display
-; 0's height, display 0 being at the virtual origin by construction.
+; geometric rather than a read of [vid_dlay]: display 0 is at the virtual
+; origin by construction, and ext_extend_b - the only writer of display 1's
+; VX/VY - puts display 1 at VX = 0 exactly when it is Below (and at VY =
+; display 0's height, which is what this compared until it compared VX with
+; one instruction instead of three).
 ; -----------------------------------------------------------------------------
 wm_sf_axis:
-    push ax
-    mov ax, [vid_ctx + VID_CTX_SZ + VID_CTX_VY]
-    cmp ax, [vid_ctx + VID_CTX_CH]
-    mov dl, 1                   ; the MOV writes no flags, so the cmp decides
-    jb .out
-    xor dl, dl
-.out:
-    pop ax
+    cmp word [vid_ctx + VID_CTX_SZ + VID_CTX_VX], 1
+    sbb dl, dl                  ; DL = -1 Below (VX = 0), 0 Right...
+    inc dl                      ; ...so 0 Below and 1 Right
     ret
 
 ; -----------------------------------------------------------------------------
 ; wm_sf_lim - SI = one past the last row (column) BOTH displays have
-; in:       DL = the axis, from wm_sf_axis; BX = the window
-; out:      SI; every other register preserved
-; clobbers: SI, flags
+; in:       BX = the window
+; out:      SI; DL = the axis (it calls wm_sf_axis itself, which both its
+;           callers wanted first); DI = the window's record, moved on two
+;           bytes for the y axis (W_Y = W_X+2, W_H = W_W+2), and ZF = 1 for
+;           the x axis - the pointer and the test BOTH callers made next;
+;           every other register preserved
+; clobbers: SI, DL, DI, flags
 ;
 ; The nearer of the two far edges while the frame straddles, and the display
 ; the window is ON otherwise - so this one routine bounds a straddle and a
-; landing alike.
+; landing alike. A record's far edge is VX + CW, or VY + CH for the y axis -
+; and VY = VX+2, CH = CW+2, so DI is moved on two bytes and one pair of
+; instructions reads either.
 ; -----------------------------------------------------------------------------
+%if VID_CTX_VY != VID_CTX_VX+2 || VID_CTX_CH != VID_CTX_CW+2
+  %error "wm_sf_lim reads a record's y words two bytes past its x words"
+%endif
 wm_sf_lim:
+    call wm_sf_axis             ; DL = the axis
     push ax
-    push di
+    mov di, vid_ctx
+    or dl, dl
+    jz .ax
+    inc di
+    inc di
+.ax:
+    mov ax, [di+VID_CTX_SZ+VID_CTX_VX] ; the nearer of the two far edges, if
+    add ax, [di+VID_CTX_SZ+VID_CTX_CW] ; it straddles (wm_strads keeps AX)
     call wm_strads
-    jc .own
-    xor al, al
-    push cs
-    call exk_vid_ctx_ptr
-    call wm_sf_far
-    mov si, ax
-    mov al, 1
-    push cs
-    call exk_vid_ctx_ptr
-    call wm_sf_far
+    jnc .edge
+    call ext_org_disp           ; not straddling: the display its origin is on
+    jz .one
+    add di, VID_CTX_SZ
+.one:
+    mov ax, -1                  ; ...and nothing to be nearer than
+.edge:
+    mov si, [di+VID_CTX_VX]
+    add si, [di+VID_CTX_CW]
     cmp ax, si
     jae .out
     mov si, ax
-    jmp short .out
-.own:
-    push bx
-    mov ax, [bx+W_X]
-    mov bx, [bx+W_Y]
-    push cs
-    call exk_vid_disp_of
-    pop bx
-    push cs
-    call exk_vid_ctx_ptr
-    call wm_sf_far
-    mov si, ax
 .out:
-    pop di
     pop ax
-    ret
+    mov di, bx                  ; ...and the record, at that axis's words
+    or dl, dl
+    jz .r                       ; ZF = 1: x
+    inc di                      ; ZF = 0: a record pointer plus two is never
+    inc di                      ; zero
+.r: ret
 
 ; -----------------------------------------------------------------------------
 ; wm_strads - does this window's frame reach BOTH displays?
@@ -664,32 +773,24 @@ wm_sf_lim:
 wm_strads:
     push ax
     push di
-    cmp byte [vid_ndisp], 1
-    jbe .no
-    xor al, al
-    push cs
-    call exk_vid_ctx_ptr
+    mov di, vid_ctx             ; (a MOV: the cmp below decides the flags)
+    cmp byte [vid_ndisp], 2     ; (its own compare and not ext_one: this is
+    jb .out                     ; OSAPI_WM_DISPLAY's path. CF = 1: one display
     call wm_sf_reach
-    jc .no
-    mov al, 1
-    push cs
-    call exk_vid_ctx_ptr
+    jc .out
+    add di, VID_CTX_SZ
     call wm_sf_reach
-    jc .no
+.out:
     pop di
     pop ax
-    ret
-.no:
-    pop di
-    pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
 ; wm_strad_fit - a window across the seam takes the size for the MORE
 ;                RESTRICTIVE of the two displays (SPEC.md 39.16.3)
 ; in:       BX = the window, known to straddle and known to have changed kind
-; out:      nothing; every register preserved, FLAGS INCLUDED
+; out:      nothing; every register preserved
+; clobbers: flags (its two callers set their own CF after it)
 ;
 ; WHAT IS WRONG WITH A STRADDLING WINDOW is not the straddle - SPEC.md 39.14's
 ; split draws one fragment per display and that works. It is that the virtual
@@ -707,9 +808,9 @@ wm_strads:
 ; size or the published preference is taken FIRST, and the clamp is what stops
 ; the answer reaching into the dead zone.
 ;
-; IT NEVER MOVES THE ORIGIN - wm_land_snap owns that, after the window has had
-; its say about the size. "The more restrictive size" is a statement about
-; size.
+; IT NEVER MOVES THE ORIGIN - ui_drag_size's snap owns that, after the window
+; has had its say about the size. "The more restrictive size" is a statement
+; about size.
 ;
 ; AND IT ONLY SHORTENS A WINDOW THAT WILL LAY ITSELF OUT AGAIN (39.16.3.1).
 ; The frame is not the pixels: the gfx primitives clip to the SCREEN and not
@@ -722,25 +823,25 @@ wm_strads:
 ; 11.98 handler means "tell me when my box moved", not "you may pick any box
 ; for me" (12.5), so a non-sizable window opts in by PUBLISHING A PREFERENCE
 ; instead - a promise about three boxes rather than about every box.
+;
+; ONE CLAMP FOR BOTH AXES: DI is the record, moved on two bytes for y (W_Y =
+; W_X+2, W_H = W_W+2), and wm_min_ax reads the axis out of DL itself.
 ; -----------------------------------------------------------------------------
+%if W_Y != W_X+2 || W_H != W_W+2
+  %error "ui_drag_size and wm_strad_fit read a record's y words two bytes on"
+%endif
 wm_strad_fit:
-    pushf
     push ax
-    push bx
     push cx
     push dx
     push si
     push di
 
-    push cs
-    call exk_wm_nat_take_wh     ; the size it ASKED for...
-    push cs
-    call exk_wm_pref_now        ; ...or the one it published for this adapter
-%ifndef NOSIZESNAP
+    call ext_wants              ; the size it ASKED for, or the one it
+%ifndef NOSIZESNAP              ; published for this adapter
     pushf                       ; ...AND BACK ONTO A BYTE BOUNDARY (SPEC.md
     mov ax, [bx+W_W]            ; 39.16.3.4). Both calls above hand back an ASK
-    push cs
-    call exk_wm_snap_w          ; - a bank holds what the window wanted, never
+    EXK wm_snap_w               ; - a bank holds what the window wanted, never
     mov [bx+W_W], ax            ; a snap - so the width that arrives here is
     popf                        ; 11.94.5-unrounded. Every other path that
 %endif                          ; settles a size ends in wm_snap_win; this one
@@ -758,104 +859,74 @@ wm_strad_fit:
     jnc .done                   ; which is exactly what 39.16.3.1 reports
 %endif                          ; rather than an imitation of it
 .clamp:
-    call wm_sf_axis             ; DL = the axis that has to come in
-    call wm_sf_lim              ; SI = one past the last row (column) both
-                                ; displays have
-    or dl, dl
-    jz .limx
-
-    ; --- y: the rows available from where the window stands -----------------
-    mov cx, si
-    sub cx, [bx+W_Y]
-    jg .yroom
+    call wm_sf_lim              ; DL = the axis that has to come in, SI = one
+                                ; past the last row (column) both displays
+                                ; have, DI = the record at that axis's words
+    mov ax, si                  ; AX = the floor's cap: the limit less the
+                                ; TOP OF THE BAND on y rather than less W_Y,
+    jz .x                       ; which is what makes it provable - a frame
+                                ; that big can only start at the top, and the
+                                ; snap floors it there. On x, the limit
+    sub ax, MBAR_H
+.x:
+    mov cx, si                  ; the room from where the window stands...
+    sub cx, [di+W_X]
+    jg .room
     xor cx, cx
-.yroom:
-    cmp [bx+W_H], cx
-    jbe .yfl
-    mov [bx+W_H], cx
-.yfl:
-    mov ax, si                  ; ...and the floor cannot be cut through. The
-    sub ax, MBAR_H              ; cap is the limit less the TOP OF THE BAND
-    push cs
-    call exk_wm_min_ax          ; rather than less W_Y, which is what makes it
-    cmp [bx+W_H], ax            ; provable: a frame that big can only start at
-    jae .done                   ; the top, and wm_land_snap floors it there
-    mov [bx+W_H], ax
-    jmp short .done
-
-    ; --- x: the same, for displays that tile vertically ---------------------
-.limx:
-    mov cx, si
-    sub cx, [bx+W_X]
-    jg .xroom
-    xor cx, cx
-.xroom:
-    cmp [bx+W_W], cx
-    jbe .xfl
-    mov [bx+W_W], cx
-.xfl:
-    mov ax, si
-    push cs
-    call exk_wm_min_ax
-    cmp [bx+W_W], ax
+.room:
+    cmp [di+W_W], cx
+    jbe .fl
+    mov [di+W_W], cx
+.fl:
+    EXK wm_min_ax               ; ...and the floor cannot be cut through
+    cmp [di+W_W], ax
     jae .done
-    mov [bx+W_W], ax
+    mov [di+W_W], ax
 .done:
     pop di
     pop si
     pop dx
     pop cx
-    pop bx
     pop ax
-    popf
     ret
 
-; -----------------------------------------------------------------------------
-; wm_sf_far - DI = a display record: one past its last row, or column
-; in:       DI = the record, DL != 0 = the y axis / 0 = the x axis
-; out:      AX = the far edge, in VIRTUAL coordinates
-; clobbers: AX, flags
-; -----------------------------------------------------------------------------
-wm_sf_far:
-    or dl, dl
-    jz .x
-    mov ax, [di+VID_CTX_VY]
-    add ax, [di+VID_CTX_CH]
-    ret
-.x:
-    mov ax, [di+VID_CTX_VX]
-    add ax, [di+VID_CTX_CW]
+; ext_wants - wm_nat_take_wh then wm_pref_now: the size the window ASKED for,
+; or the one it published for the adapter it stands on; CF as wm_pref_now's.
+; The pair both the landing and the straddle start from.
+ext_wants:
+    EXK wm_nat_take_wh
+    EXK wm_pref_now
     ret
 
 ; -----------------------------------------------------------------------------
 ; wm_sf_reach - does window BX's frame overlap the display DI describes?
 ; in:       BX = the window, DI = the display record
 ; out:      CF = 0 it overlaps, CF = 1 it does not
-; clobbers: AX, flags - CX and DX are LIVE in the caller
+; clobbers: AX, flags - CX and DX are LIVE in the caller, and AX is the one
+;           register each test needs: the window's far edge against the
+;           record's near one, then the record's far edge against the
+;           window's near one
 ; -----------------------------------------------------------------------------
 wm_sf_reach:
-    push cx
-    mov ax, [di+VID_CTX_VX]
-    mov cx, [bx+W_X]
-    add cx, [bx+W_W]
-    cmp cx, ax
+    mov ax, [bx+W_X]
+    add ax, [bx+W_W]
+    cmp ax, [di+VID_CTX_VX]
     jbe .no                     ; wholly left of it
+    mov ax, [di+VID_CTX_VX]
     add ax, [di+VID_CTX_CW]
     cmp [bx+W_X], ax
     jae .no                     ; wholly right of it
-    mov ax, [di+VID_CTX_VY]
-    mov cx, [bx+W_Y]
-    add cx, [bx+W_H]
-    cmp cx, ax
+    mov ax, [bx+W_Y]
+    add ax, [bx+W_H]
+    cmp ax, [di+VID_CTX_VY]
     jbe .no                     ; wholly above it
+    mov ax, [di+VID_CTX_VY]
     add ax, [di+VID_CTX_CH]
     cmp [bx+W_Y], ax
     jae .no                     ; wholly below it
-    pop cx
     clc
     ret
 .no:
-    pop cx
     stc
     ret
 
@@ -890,68 +961,50 @@ wm_reflows:
                                 ; FIRST test for browser's sake, which is
                                 ; sizable AND keeps its height
     test byte [bx+W_FLAGS], WF_SIZABLE
-    jz .no
+    jz .no                      ; (TEST clears CF: .no is CF = 0 already)
     stc
-    ret
 .no:
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_fit_box - the box for the display this window's ORIGIN is on
+; wm_fit_box - EXT_FITBOX: the box for the display this window's ORIGIN is on
 ;              (SPEC.md 39.16.1)
 ; in:       BX = the window; AX/CX/SI/DI/DX = the primary's box and hard floor
 ; out:      the same five, for that display
-; clobbers: AX, CX, DX, SI, DI, flags
+; clobbers: AX, CX, DX, SI, DI, flags. FAR: its slot and ui_drag_size's
+;           `push cs` + call are its callers.
 ;
 ; The ORIGIN and not the centre, deliberately: wm_disp_of's centre test is for
-; deciding which monitor an app OWNS (docs/plans/completed/DUAL-DISPLAY-PLAN.md 6.5.1), and
-; this is deciding which edges a frame may not pass - which is a question
-; about the corner the clamps are written from. A window whose origin is in
-; the dead zone gets the primary, the only answer that cannot leave it
+; deciding which monitor an app OWNS (docs/plans/completed/DUAL-DISPLAY-PLAN.md
+; 6.5.1), and this is deciding which edges a frame may not pass - which is a
+; question about the corner the clamps are written from. A window whose origin
+; is in the dead zone gets the primary, the only answer that cannot leave it
 ; unreachable.
 ;
-; DX IS AN OUTPUT TOO (SPEC.md 11.93), and it is the reason the display index
-; is banked on the stack rather than kept in DL: this used to preserve DX, and
-; the caller's fifth number is the bottom a window that will not fit the band
-; may hang down to. On a secondary that IS ye, there being no dock to hang
-; over; on the primary it is [vid_ph], the number already loaded.
+; ON THE PRIMARY THE CALLER'S FIVE ARE THE ANSWER, and it is handed them back
+; untouched: menu bar to dock, the band's x extent a side strip narrows
+; (SPEC.md 30.5) and its own height as the floor. A secondary has no menu bar
+; and no dock, so its whole extent is desktop, and DX IS AN OUTPUT TOO (SPEC.md
+; 11.93) - the bottom a window that will not fit the band may hang down to,
+; which there IS ye. Two displays at most, so "not the primary" is display 1.
 ; -----------------------------------------------------------------------------
 wm_fit_box:
-    cmp byte [vid_ndisp], 1
-    jbe .out
-    push bx
-    mov ax, [bx+W_X]
-    mov bx, [bx+W_Y]
-    push cs
-    call exk_vid_disp_of        ; AL = the display holding the origin
-    push ax                     ; ...banked: DX is an output now
-    mov dl, al
-    push cs
-    call exk_vid_ctx_ptr        ; DI = its record
-    mov ax, [di+VID_CTX_VX]
-    mov cx, ax
-    add cx, [di+VID_CTX_CW]
-    mov si, [di+VID_CTX_VY]
-    add si, [di+VID_CTX_CH]     ; ...ye first, while DI is still the record
-    push si
-    mov si, [di+VID_CTX_VY]
-    pop di                      ; DI = ye, SI = y0
-    mov dx, di                  ; a secondary's hard floor is its own bottom
+    push ax                     ; (NO ext_one: with one display - a collapsed
+    call ext_org_disp           ; desktop under this image - vid_disp_of asks
+                                ; display 0 alone and answers 0 either way, so
+                                ; the test bought nothing but its five bytes on
+                                ; a fit). ZF = the origin is on the primary
     pop ax
-    or al, al
-    jnz .done                   ; a secondary has no menu bar and no dock, so
-    mov si, MBAR_H              ; its whole height is desktop
-    mov di, [vid_dock_y0]
-    mov dx, [vid_ph]            ; ...and the primary's floor is its own height
-%ifdef DOCK_OPT
-    mov ax, [vid_band_x0]       ; ...and its band's x extent, which a strip on
-    mov cx, [vid_band_xe]       ; a side narrows (SPEC.md 30.5)
-%endif
-.done:
-    pop bx
+    jz .out                     ; display 0: the primary's, as loaded
+    mov ax, [vid_ctx + VID_CTX_SZ + VID_CTX_VX]
+    mov cx, ax
+    add cx, [vid_ctx + VID_CTX_SZ + VID_CTX_CW]
+    mov si, [vid_ctx + VID_CTX_SZ + VID_CTX_VY]
+    mov di, si
+    add di, [vid_ctx + VID_CTX_SZ + VID_CTX_CH]
+    mov dx, di
 .out:
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; wm_disp_now - WHICH DISPLAY IS THIS WINDOW'S? (SPEC.md 39.16.4.1)
@@ -971,32 +1024,19 @@ wm_fit_box:
 ; -----------------------------------------------------------------------------
 wm_disp_now:
     cmp [wm_lf_win], bx         ; **A LANDING DECIDES THIS ONCE** (SPEC.md
-    jne .ask                    ; 39.16.4.2): wm_land_fit arms the latch with
+    jne .ask                    ; 39.16.4.2): ui_drag_size arms the latch with
     mov al, [wm_lf_disp]        ; the answer it acted on, because the RESIZE it
     ret                         ; then applies can stop the straddle being
 .ask:                           ; true - and every step after it re-derived
-    push bx                     ; the answer from the new geometry
-    push dx
+    push dx                     ; the answer from the new geometry
     call wm_strads
-    jc .one
-    call wm_sf_axis             ; DL = the axis they tile on
-    call wm_disp_rest           ; ...and AL = the MORE RESTRICTIVE of the two
-    jmp short .out
-.one:
-    mov ax, [bx+W_X]
-    mov bx, [bx+W_Y]
-    push cs
-    call exk_vid_disp_of
-.out:
-    pop dx
-    pop bx
+    jnc .rest                   ; (taken only when it straddles: the common
+    call ext_org_disp           ; case falls through, where the `jc .one`
+    pop dx                      ; this replaced was a taken branch)
     ret
 
-; -----------------------------------------------------------------------------
-; wm_disp_rest - which of the two displays is the MORE RESTRICTIVE?
-; in:       DL = the axis, from wm_sf_axis
-; out:      AL = 0 or 1, the display index; every other register preserved
-; clobbers: AX, flags
+; wm_disp_rest, IN LINE (its one caller is the line above) - which of the two
+; displays is the MORE RESTRICTIVE? out AL = 0 or 1, the display index.
 ;
 ; A STRADDLING WINDOW READS AS THE SMALLER CARD, which is what makes the seam
 ; one transition in each direction rather than two: dragging on from the
@@ -1007,154 +1047,63 @@ wm_disp_now:
 ; primary carries the menu bar and the dock and a secondary carries neither -
 ; a 348-row Hercules primary offers 304 rows where a 348-row secondary would
 ; offer 348. A tie goes to the primary, which is where windows are born.
-; -----------------------------------------------------------------------------
-wm_disp_rest:
+.rest:
+    call wm_sf_axis             ; DL = the axis they tile on
     push cx
-    push di
-    mov al, 1
-    push cs
-    call exk_vid_ctx_ptr        ; (preserves AX and DX)
     or dl, dl
     jz .x
     mov cx, [vid_dock_y0]
     sub cx, MBAR_H
-    cmp [di+VID_CTX_CH], cx
-    jb .one
-    jmp short .zero
+    cmp [vid_ctx + VID_CTX_SZ + VID_CTX_CH], cx
+    jmp short .cmp
 .x:
-%ifdef DOCK_OPT
     mov cx, [vid_band_xe]       ; the primary's USABLE width (SPEC.md 30.5)
     sub cx, [vid_band_x0]
-%else
-    mov cx, [vid_pw]
-%endif
-    cmp [di+VID_CTX_CW], cx
-    jb .one
-.zero:
-    xor al, al
-    jmp short .out
-.one:
-    mov al, 1
-.out:
-    pop di
+    cmp [vid_ctx + VID_CTX_SZ + VID_CTX_CW], cx
+.cmp:
+    sbb al, al                  ; AL = -1 display 1 is SMALLER, 0 a tie or
+    neg al                      ; better (the primary) - so 1 or 0
     pop cx
+    pop dx
     ret
 
-; -----------------------------------------------------------------------------
-; wm_kind_was - AL = the adapter kind this window was last SIZED for
-; in:  BX = window ptr
-; out: AL = a VID_* kind; every other register preserved
-; clobbers: AX, flags
-; -----------------------------------------------------------------------------
-wm_kind_was:
-    mov al, [bx+W_PKIND]
-    ret
-; ==== the drop (SPEC.md 11.100.3/.4), from ui.inc =========================
-; -----------------------------------------------------------------------------
-; ui_drag_size - what size should a dropped window have? (SPEC.md 11.100.3/.4)
-; in:       BX = the window, W_X/W_Y already clamped to where it was dropped
-; out:      CF = 1 if W_W or W_H changed, CF = 0 if neither did. Every register
-;           preserved. (EXT_LAND hands the kernel the INVERSE - see ext_e_land.)
-;
-; TWO THINGS, and they are for the two halves of the tree. Every window gets
-; 11.100.3: the size it WANTS comes back out of the natural bank, so the clamps
-; below re-derive from that rather than from whatever the last drag's clamp
-; left behind - which is what makes a walk across the seam and home again
-; reversible instead of costing sixty rows a trip.
-;
-; A window WITHOUT a grow box also gets 11.100.4: landing wholly on a display of
-; a different adapter takes its own declared size for that adapter. One WITH a
-; grow box does not, and that is the rule rather than an optimisation - its
-; size is one the user chose, and a user outranks an application.
-;
-; The straddle test is why this is not simply "the kind changed": a frame still
-; over both cards belongs to 39.16.3, and a preference applied there would be
-; cut by it in the same breath.
-; -----------------------------------------------------------------------------
-ui_drag_size:
-    push ax
-    push cx
-    push dx
-    mov cx, [bx+W_W]            ; what it had, so the answer is a comparison
-    mov dx, [bx+W_H]            ; rather than a promise
-    push si
-    push di
-    mov si, [bx+W_X]            ; ...and the ORIGIN too, because wm_land_snap
-    mov di, [bx+W_Y]            ; can move a window that kept its size
-    call wm_land_fit            ; ONE question: has the adapter changed, and if
-                                ; so what size does this window want here?
-                                ; (docs/plans/completed/WINDOW-SIZING-PLAN.md 12)
-    cmp si, [bx+W_X]
-    jne .moved2
-    cmp di, [bx+W_Y]
-.moved2:
-    pop di
-    pop si
-    jne .moved
-    cmp cx, [bx+W_W]
-    jne .moved
-    cmp dx, [bx+W_H]
-    jne .moved
-    pop dx
-    pop cx
-    pop ax
-    clc
-    ret
-.moved:
-    pop dx
-    pop cx
-    pop ax
-    stc
-    ret
 ; ==== bringing display 1 up (SPEC.md 39.13, 39.19), from vidsel.inc ========
 ; -----------------------------------------------------------------------------
-; ext_extend_b - vid_disp_init's Extend arm: set the second card's mode, bank
-;                it as display 1, place it Right or Below, and make the
-;                desktop the union
+; ext_extend_b - EXT_EXTEND: vid_disp_init's Extend arm: set the second card's
+;                mode, bank it as display 1, place it Right or Below, and make
+;                the desktop the union
 ; in:  AL = the other display's adapter kind, AH = the primary's (vid_disp_init
 ;      .paired's registers, which the far call leaves as they were)
-; out: [vid_ndisp] = 2. The ONLY place it becomes 2 - the invariant this image
-;      exists on (see the top of this file)
+; out: CF = 0 and [vid_ndisp] = 2 - the ONLY place it becomes 2, the invariant
+;      this image exists on (see the top of this file). mod_gone's CF = 1 is
+;      the caller's `jc .single`, which is the refusal path. Clobbers AX
+;      (the caller banks it). Far: its slot is its only caller.
 ; -----------------------------------------------------------------------------
 ext_extend_b:
-    mov [vid_kind], al
-    push cs
-    call exk_vid_apply          ; the live block is the SECONDARY's now...
-    push cs
-    call exk_vid_setmode        ; ...which is what points this at the right
+    call ext_kapply             ; the live block is the SECONDARY's now...
+    EXK vid_setmode             ; ...which is what points this at the right
                                 ; card, and what makes its 32KB/16KB clear
                                 ; land on the right memory
     mov al, 1
-    push cs
-    call exk_vid_ctx_capture    ; bank it as display 1
+    call KERNEL_SEG:cw_vid_ctx_capture ; bank it as display 1
 
-    mov [vid_kind], ah          ; ...and back. No vid_setmode: the primary is
-    push cs
-    call exk_vid_apply          ; already in its mode with the splash on it
-    push cs
-    call exk_vid_equip          ; 40:10 back to the primary's KIND, because
+    mov al, ah                  ; ...and back. No vid_setmode: the primary is
+    call ext_kapply_eq          ; already in its mode with the splash on it;
+                                ; 40:10 back to the primary's KIND, because
                                 ; vid_setmode's CGA path flipped it to colour
                                 ; and nothing else ever would (SPEC.md 39.11.2)
     xor al, al
-    push cs
-    call exk_vid_ctx_capture    ; a no-op today - vid_apply has just republished
+    call KERNEL_SEG:cw_vid_ctx_capture ; a no-op today - vid_apply has just republished
                                 ; what vid_ctx_init banked - and 39.12's rule
                                 ; followed mechanically rather than reasoned
                                 ; about one instance at a time
 
-    mov al, 1                   ; --- and WHERE display 1 sits (SPEC.md 39.19.2)
-    push cs
-    call exk_vid_ctx_ptr        ; The primary is at the origin either way, so
-                                ; one of the two words is 0 and the other is
-                                ; the primary's own extent - which vid_apply
-                                ; has just republished into the live block.
-                                ; Each arm writes BOTH words, so there is no
-                                ; pre-zero: the RIGHT arm overwrote it in both
-    cmp byte [vid_dlay], VID_L_BELOW
-    je .below
-    mov ax, [vid_cw]
-    mov [di+VID_CTX_VX], ax
-    mov ax, MBAR_H                    ; ...AND ITS TOP ROW IS THE DESKTOP'S,
+    ; --- and WHERE display 1 sits (SPEC.md 39.19.2). The primary is at the
+    ; origin either way, so one of the two words is 0 and the other is the
+    ; primary's own extent - which vid_apply has just republished into the
+    ; live block. Each arm writes BOTH words, so there is no pre-zero
+    mov ax, [vid_cw]                  ; RIGHT: x = the primary's width...
+    mov di, MBAR_H                    ; ...AND ITS TOP ROW IS THE DESKTOP'S,
                                       ; not the screen's (SPEC.md 39.19.3).
                                       ; The second monitor carries no menu
                                       ; bar, so aligning its row 0 with the
@@ -1169,260 +1118,71 @@ ext_extend_b:
                                       ; written against the union rather than
                                       ; against a rectangle (39.15.4), and
                                       ; ui_ylow already reads this very word
-    jmp short .placed
-.below:
-    mov word [di+VID_CTX_VX], 0
-    mov ax, [vid_ch]
+    cmp byte [vid_dlay], VID_L_BELOW
+    jne .placed
+    xor ax, ax                        ; BELOW: x = 0, y = the primary's height
+    mov di, [vid_ch]
 .placed:
-    mov [di+VID_CTX_VY], ax
+    mov [vid_ctx + VID_CTX_SZ + VID_CTX_VX], ax
+    mov [vid_ctx + VID_CTX_SZ + VID_CTX_VY], di
 
-    mov byte [vid_cur], 0       ; the live block is display 0's again
-    mov byte [vid_ndisp], 2
-    push cs
-    call exk_vid_desk_union     ; ...and the DESKTOP is both of them now
+    call ext_two                ; the live block is display 0's again, and
+    clc                         ; the DESKTOP is both of them now
+    retf
+
+; ext_kapply_eq - [vid_kind] = AL, vid_apply, and 40:10 back to that kind
+; ext_kapply    - [vid_kind] = AL and vid_apply
+; ext_two       - two displays, display 0 current, and the union
+; The three sequences the Extend arm and the bracket's restore both make.
+ext_kapply_eq:
+    call ext_kapply
+    EXK vid_equip
     ret
-; ==== the fsx bracket (SPEC.md 39.18), from vidsel.inc =====================
-; -----------------------------------------------------------------------------
-; vid_fsx_enter - one display, and the others dark (SPEC.md 39.18)
-;
-; in:       AL = the display the bracket runs on
-; out:      the machine describes itself as having ONE display, that one, at
-;           the virtual origin; every other card is blanked
-; clobbers: flags
-;
-; INSIDE A BRACKET THE MACHINE IS SINGLE-DISPLAY AGAIN, and that is the whole
-; design: every SPEC.md 53 contract - fsx_mode, the FSI block, fsx_wait,
-; FSXF_KEEPWORKER, FSXF_FASTTICK - is then exactly what it is today, and no
-; fsx app needs a line.
-;
-; [vid_kind] MOVES TO THAT DISPLAY'S ADAPTER, which is what makes it work
-; rather than merely look right: fsx_caps, fsx_mode and vid_setmode all read
-; it, and vid_apply then republishes the live block, the desktop words and
-; 39.16's chrome extent from vid_tab - one call, no second opinion.
-;
-; The others are BLANKED because nothing can maintain them: the kernel does
-; not run inside the bracket (53.1), so what a live card would show is a
-; frozen desktop. 39.11.4's argument, unchanged.
-; -----------------------------------------------------------------------------
-vid_fsx_enter:
-    cmp byte [vid_ndisp], 1
-    jbe .out                    ; one display: nothing here applies
-    push ax
-    push cx
-    push di
-    mov [fsx_vdisp], al
-    mov cl, [vid_kind]
-    mov [fsx_vkind], cl         ; the DESKTOP's adapter, to come back to
-    mov cl, [vid_ndisp]
-    mov [fsx_vndisp], cl
-
-    xor ch, ch                  ; ...dark every card but the bracket's
-.blank:
-    cmp ch, al
-    je .bnext
-    push ax
-    mov al, ch
-    push cs
-    call exk_vid_kind_of
-    push cs
-    call exk_vid_blank_kind
-    pop ax
-.bnext:
-    inc ch
-    cmp ch, cl
-    jb .blank
-
-    push cs
-    call exk_vid_kind_of        ; ...and become that one
+ext_kapply:
     mov [vid_kind], al
-    push cs
-    call exk_vid_apply          ; the live block, the desktop words and the
-                                ; chrome, all of it that display's
-    xor ax, ax                  ; consistent with the lie: one display, and
-    mov [vid_cur], al           ; it is at the virtual origin. Through AX: the
-    mov [vid_ox], ax            ; accumulator forms are 3 bytes where
-    mov [vid_oy], ax            ; `mov byte [m],imm8` is 5 and
-    inc ax                      ; `mov word [m],imm16` is 6. AL is spent - its
-    mov [vid_ndisp], al         ; last reader was the vid_kind_of above and the
-    pop di                      ; caller's AX is on the stack
-    pop cx
-    pop ax
-.out:
+    EXK vid_apply
+    ret
+ext_two:
+    mov word [vid_ndisp], 2     ; ndisp = 2, cur = 0: one word (vidsel.inc)
+    EXK vid_desk_union
     ret
 
-; -----------------------------------------------------------------------------
-; vid_fsx_leave - the desktop's geometry back (SPEC.md 39.18)
-; in:       nothing
-; out:      the union, the primary's chrome, the records unchanged
-; clobbers: flags
+; ==== the way back into the kernel ==========================================
+; exk_go - the far call EXK names, built by hand (dockmod.inc's dkk_* device
+; made generic): the call left the address of `dw target` on the stack, and
+; this turns that one word into a far return to just past it with cw_kretf's
+; near return on top - the frame `push cs` + a near call to a per-routine stub
+; used to build - and then RETFs into KERNEL_SEG:target, whose near `ret` lands
+; on cw_kretf and its `retf` back here. Every register and the flags are
+; preserved both ways (no ADD and no INC: LEA), so a kernel routine sees exactly
+; what the site handed it.
 ;
-; The records were never written inside the bracket, so this is vid_apply on
-; the desktop's own adapter plus 39.16's union - and NOT an unblank, which
-; owes the repaint first (39.18.1).
+; It is the cost of a COLD path: ~300 cycles a hop more than a stub, which is
+; ~60 us on a 4.77MHz 8088 and a few dozen of them on a drag release that then
+; repaints for tens of milliseconds. The two hops that are not cold do not come
+; here: vid_ctx_ptr and vid_kind_of are near copies above, and vid_disp_of,
+; which wm_disp_now's one-display arm makes on OSAPI_WM_DISPLAY's path, is
+; far-called through its resident shim, cw_vid_disp_of. Its stack peak is 16
+; bytes above the call, and every routine reached through it goes at least
+; that deep once it is entered.
 ; -----------------------------------------------------------------------------
-vid_fsx_leave:
-    cmp byte [fsx_vndisp], 1
-    jbe .out
-    push ax
-    mov al, [fsx_vkind]
-    mov [vid_kind], al
-    push cs
-    call exk_vid_apply
-    push cs
-    call exk_vid_equip          ; 40:10 BACK TO THE PRIMARY'S KIND, because a
-                                ; bracket on a COLOUR second display left it
-                                ; saying colour: vid_text's own arm flips it so
-                                ; that the ROM's mode set - and SPEC.md 96.33's
-                                ; teletype under it - reach the card the app is
-                                ; on (SPEC.md 39.19.4.1). vid_disp_init's
-                                ; .extend arm is this same three-call pattern
-                                ; for the same reason, and leaving the flag is
-                                ; what SPEC.md 39.20's Restart then reads
-    mov al, [fsx_vndisp]
-    mov [vid_ndisp], al
-    mov byte [vid_cur], 0
-    push cs
-    call exk_vid_desk_union
-%ifdef DOCK_OPT
-    push cs
-    call exk_dock_band          ; ...and the strip where the user put it (30.5)
-%endif
-    pop ax
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; vid_fsx_unblank - the dark monitors back, AFTER the repaint (SPEC.md 39.18.1)
-; in:       nothing
-; out:      every card lit again; [fsx_vndisp] spent
-; clobbers: flags
-;
-; AFTER wm_paint_all AND NOT BEFORE IT. Blanking gates the video SIGNAL and
-; not memory, so a blanked card's framebuffer still holds the desktop as it
-; was when the bracket started - minutes stale, on a monitor the user has not
-; been looking at. Unblanking first shows that frame and then paints over it;
-; repainting first means the card is only ever shown what is current.
-; -----------------------------------------------------------------------------
-vid_fsx_unblank:
-    cmp byte [fsx_vndisp], 1
-    jbe .out
-    push ax
-    push cx
-    push di
-    mov cl, [fsx_vndisp]
-    mov byte [fsx_vndisp], 1    ; one-shot: a bracket that set no mode and a
-    xor ch, ch                  ; second restore must not write these ports
-.d:
-    cmp ch, [fsx_vdisp]
-    je .next
-    mov al, ch
-    push cs
-    call exk_vid_kind_of
-    push cs
-    call exk_vid_unblank_kind
-.next:
-    inc ch
-    cmp ch, cl
-    jb .d
-    pop di
-    pop cx
-    pop ax
-.out:
-    ret
-
-; kernel routines this image calls (dockmod.inc's dkk_* device)
-exk_kretf: dw cw_kretf
-exk_dock_band:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:dock_band
-exk_vid_apply:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:vid_apply
-exk_vid_blank_kind:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:vid_blank_kind
-exk_vid_ctx_capture:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:vid_ctx_capture
-exk_vid_ctx_rect:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:vid_ctx_rect
-exk_vid_ctx_ptr:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:vid_ctx_ptr
-exk_vid_desk_union:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:vid_desk_union
-exk_vid_disp_of:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:vid_disp_of
-exk_vid_equip:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:vid_equip
-exk_vid_kind_of:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:vid_kind_of
-exk_vid_setmode:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:vid_setmode
-exk_thm_desk:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:thm_desk
-exk_vid_unblank_kind:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:vid_unblank_kind
-exk_wm_ask_size:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:wm_ask_size
-exk_wm_disp_of:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:wm_disp_of
-exk_wm_fit:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:wm_fit
-exk_wm_kind_bank:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:wm_kind_bank
-exk_wm_top:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:wm_top
-exk_wm_min_ax:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:wm_min_ax
-exk_wm_nat_take_wh:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:wm_nat_take_wh
-exk_wm_pref_now:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:wm_pref_now
-exk_wm_snap_w:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:wm_snap_w
-exk_wm_sz_notify:
-    ; STKBALANCE-NET: -1
-    push word [cs:exk_kretf]
-    jmp KERNEL_SEG:wm_sz_notify
+exk_go:                         ; ovlchk: builds its own far frame
+    push ax                     ; STKBALANCE-OK: a far frame built by hand, its
+    push ax                     ; four slots spent by the RETF below and by the
+    push ds                     ; target's own return through cw_kretf. The
+    push ax                     ; segment slot is PUSHED: DS is KERNEL_SEG
+    push bp                     ; throughout the image
+    mov bp, sp                  ; [bp+2] offset, [bp+4] segment, [bp+6] the
+    push bx                     ; near return, [bp+8] the far return's offset
+    mov bx, [bp+10]             ; and [bp+10] the call's own return, which
+    mov [bp+10], cs             ; becomes the far return's CS
+    mov word [bp+6], cw_kretf
+    lea bx, [bx+2]              ; past the `dw`
+    mov [bp+8], bx
+    mov bx, [cs:bx-2]           ; ...which names the target
+    mov [bp+2], bx
+    pop bx
+    pop bp
+    retf
 section .text
 %endif

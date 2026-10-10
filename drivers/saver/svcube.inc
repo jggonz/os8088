@@ -71,11 +71,6 @@ SV_CBHY     equ SV_CBH / 2
 ; in:  the gfx lock is HELD and the screen has just been cleared
 ; -----------------------------------------------------------------------------
 sv_cube_init:
-    push ax
-    push bx
-    push cx
-    push dx
-
     call OSAPI_RAND             ; the two angles, so a re-pick is not the same
     mov [sv_ca], al             ; cube in the same attitude
     mov [sv_cb], ah
@@ -102,10 +97,6 @@ sv_cube_init:
     jz .sy
     neg word [sv_cvy]
 .sy:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -113,14 +104,6 @@ sv_cube_init:
 ; in:  the gfx lock is HELD
 ; -----------------------------------------------------------------------------
 sv_cube_step:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-
     call sv_cube_move
     call sv_cube_proj
 
@@ -134,39 +117,10 @@ sv_cube_step:
                                 ; width and the rows are SV_CBW and SV_CBH,
                                 ; constants of 128. kern_small carries the body
                                 ; too since SPEC.md 5.4.2.5.1, so there is no
-                                ; machine left where the insurance can fire
-    mov si, sv_cpx              ; the frame now on the glass is the one to
-    mov di, sv_cex              ; erase next time
-    mov cx, SV_CNV * 2
-    call sv_cube_copy
-    mov si, sv_cpy
-    mov di, sv_cey
-    mov cx, SV_CNV * 2
-    call sv_cube_copy
-    mov byte [sv_shown], 1
-.out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; sv_cube_copy - CX bytes from DS:SI to DS:DI. `movsb` writes through ES and ES
-; is the KERNEL'S here (SPEC.md 20.1), so this is a plain loop and not a string
-; op - the same trap a C package's struct assignment falls into (SPEC.md 73).
-sv_cube_copy:
-    push ax
-.b:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    dec cx
-    jnz .b
-    pop ax
+                                ; machine left where the insurance can fire.
+                                ; The copy of this frame's vertices that
+                                ; followed it fed THAT path's erase and
+                                ; nothing else, so it went with it
     ret
 
 ; -----------------------------------------------------------------------------
@@ -489,26 +443,29 @@ sv_cube_e:
     db 4,5,  5,6,  6,7,  7,4    ; the front
     db 0,4,  1,5,  2,6,  3,7    ; ...and the four that join them
 
-sv_ca:      db 0                ; the two angles, 256 to the turn
-sv_cb:      db 0
-sv_ccx:     dw 0                ; the centre, and where it is going
-sv_ccy:     dw 0
-sv_cvx:     dw 0
-sv_cvy:     dw 0
-sv_cpx:     times SV_CNV dw 0   ; this frame's screen coordinates...
-sv_cpy:     times SV_CNV dw 0
-sv_cbx0:    dw 0                ; the band's origin on the glass
-sv_cby0:    dw 0
-sv_cmx1:    dw 0                ; sv_cml's endpoints, in the mask
-sv_cmy1:    dw 0
-sv_cmx2:    dw 0
-sv_cmy2:    dw 0
-sv_cmdx:    dw 0
-sv_cmdy:    dw 0
-sv_cmsy:    dw 0                ; the row step, which carries the sign
-sv_cme1:    dw 0
-sv_cme2:    dw 0
-sv_cmask:   times SV_CBSZ db 0  ; the band itself
-
-sv_cex:     times SV_CNV dw 0   ; ...and the ones on the glass
-sv_cey:     times SV_CNV dw 0
+; THE MODE'S STATE IS A MACRO, emitted once at the end of saver.asm into the
+; mode UNION: only one mode runs at a time and every byte below is written by
+; sv_cube_init or by the frame before it is read, so the four modes share one
+; block of bss rather than carrying one each (saver.asm, "The mode union").
+%macro SV_CUBE_STATE 0
+sv_ca:      resb 1              ; the two angles, 256 to the turn
+sv_cb:      resb 1
+sv_ccx:     resw 1              ; the centre, and where it is going
+sv_ccy:     resw 1
+sv_cvx:     resw 1
+sv_cvy:     resw 1
+sv_cpx:     resw SV_CNV         ; this frame's screen coordinates
+sv_cpy:     resw SV_CNV
+sv_cbx0:    resw 1              ; the band's origin on the glass
+sv_cby0:    resw 1
+sv_cmx1:    resw 1              ; sv_cml's endpoints, in the mask
+sv_cmy1:    resw 1
+sv_cmx2:    resw 1
+sv_cmy2:    resw 1
+sv_cmdx:    resw 1
+sv_cmdy:    resw 1
+sv_cmsy:    resw 1              ; the row step, which carries the sign
+sv_cme1:    resw 1
+sv_cme2:    resw 1
+sv_cmask:   resb SV_CBSZ        ; the band itself
+%endmacro

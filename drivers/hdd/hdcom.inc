@@ -48,6 +48,10 @@ hd_msgc:     db HDM_PICK        ; the page's caption, as an HDM_* code and
                                 ; in the image that letters it
 hd_nmnt:     db 0               ; ...how many volumes the last mount click
                                 ; mounted, which is what HDM_MOUNTED counts
+%ifdef HD_TOOL                 ; the PAGE's alone, and the page is in the
+                                ; tool image (SPEC.md 52.13): the resident
+                                ; letters nothing but one refusal, through
+                                ; OSAPI_FONT_RUN, so it carries none of these
 hd_mntmask:  db 0               ; ...and bit n = device n has a mounted volume.
                                 ; It replaces a walk of hd_vols, which is the
                                 ; resident's table and stays there: the page
@@ -61,6 +65,8 @@ hd_rowslot:  db 0               ; a row painter's loop index
 hd_pair:     dw (CWHITE << 8) | CBLACK
 hd_line:     times 64 db 0      ; one line of text under construction
 hd_lineptr:  dw 0               ; ...and where hd_scat/hd_utoa left off
+
+%endif
 
 hd_lba:      dd 0               ; the LBA hd_chs converts, and the one hd_raw
                                 ; is carrying
@@ -79,12 +85,10 @@ hd_rawop:    db 0               ; hd_raw's direction: the LBA needs DX:AX and
 ; -----------------------------------------------------------------------------
 hd_dev_row:
     push ax
-    push dx
     mov ah, HDD_SIZE
-    mul ah
+    mul ah                      ; a BYTE multiply: AX only, DX untouched
     add ax, hd_devs
     mov di, ax
-    pop dx
     pop ax
     ret
 
@@ -97,7 +101,7 @@ hd_dev_row:
 ; The service handlers branch on CF after a row lookup, and the index they
 ; look up arrived over the tool seam (SPEC.md 52.11.5) - a mismatched tool
 ; image is exactly what the seam's validation exists for. hd_dev_row itself
-; stays unchecked because hd_dev_new must reach the row AT [hd_ndev] to fill
+; stays unchecked because hd_at_new must reach the row AT [hd_ndev] to fill
 ; it before the count is raised.
 ; -----------------------------------------------------------------------------
 %ifndef HD_TOOL                 ; the resident's service handlers are its
@@ -198,34 +202,30 @@ hd_part_load:
     pop es
     mov bx, hd_mbr
     xor ax, ax
-    xor dx, dx
+    cwd                         ; DX:AX = LBA 0
     mov cx, 1
-    mov byte [hd_rawop], 0      ; read
+    mov [hd_rawop], al          ; read
     call hd_raw
     jc .bad                     ; the READ failed: leave HMB_BAD
     cmp word [hd_mbr+510], 0xAA55
     jne .nosig
-    mov byte [hd_mbrok], HMB_OK
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.nosig:                         ; read fine, nobody has partitioned it - the
-    call hd_mbr_blank           ; blank IS the right answer, and committing it
-    mov byte [hd_mbrok], HMB_NONE   ; destroys nothing
+    mov byte [hd_mbrok], HMB_OK ; ...and CF = 0, off the compare's equal
     jmp short .out
+.nosig:                         ; read fine, nobody has partitioned it - the
+    mov al, HMB_NONE            ; blank IS the right answer, and committing it
+    jmp short .blank            ; destroys nothing
 .bad:
-    call hd_mbr_blank           ; leaves HMB_BAD: this table is a fabrication
+    mov al, HMB_BAD             ; this table is a fabrication
+.blank:
+    call hd_mbr_blank
+    mov [hd_mbrok], al
+    stc
 .out:
     pop es
     pop dx
     pop cx
     pop bx
     pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -247,7 +247,6 @@ hd_part_load:
 hd_mbr_blank:
     push ax
     push cx
-    push si
     push di
     push es
     push ds
@@ -261,7 +260,6 @@ hd_mbr_blank:
     mov byte [hd_mbrok], 0
     pop es
     pop di
-    pop si
     pop cx
     pop ax
     ret
@@ -274,12 +272,10 @@ hd_mbr_blank:
 ; -----------------------------------------------------------------------------
 hd_part_ent:
     push ax
-    push dx
     mov ah, HP_ESZ
-    mul ah
+    mul ah                      ; a BYTE multiply: AX only, DX untouched
     add ax, hd_mbr + HP_TBL
     mov si, ax
-    pop dx
     pop ax
     ret
 
@@ -414,6 +410,10 @@ hd_part_isfat:
     clc
     ret
 
+%ifdef HD_TOOL                 ; hd_win_erase, hd_scat and hd_utoa draw and
+                                ; letter, and only the tool image does either
+                                ; (SPEC.md 52.13) - so the resident leaves them
+                                ; out rather than carrying a copy nothing calls
 ; -----------------------------------------------------------------------------
 ; hd_win_erase - white-fill one of our windows' CONTENT, and nothing else
 ; in:  BX = the window; the gfx lock is HELD
@@ -554,6 +554,8 @@ hd_utoa_body:
     ret
 
 
+%endif
+
 ; -----------------------------------------------------------------------------
 ; hd_geom_ok - is a row's geometry usable? (module internal)
 ; in:  DI = the row
@@ -591,6 +593,7 @@ hd_geom_ok:
     stc
     ret
 
+%ifdef HD_TOOL                 ; the page's size column and labels
 ; -----------------------------------------------------------------------------
 ; hd_dev_mb - a device's size in whole MB
 ; in:  DI = the row
@@ -632,3 +635,4 @@ hd_dev_mb:
 hd_s_mb:     db 'M', 0
 hd_s_close:  db 'Close', 0
 hd_s_two:    db '  ', 0
+%endif

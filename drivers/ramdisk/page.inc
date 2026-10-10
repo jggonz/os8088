@@ -70,6 +70,7 @@ RP_CAP2     equ 120
 ; ONE PLACE FOR EACH RECT, which is SPEC.md 22's fm_hit discipline: the drawn
 ; control and the clickable control cannot drift, because they are the same
 ; four words read by the paint and by the hit test.
+    align 4, db 0               ; RP_BLBL/RP_ACTS below divide a rect's id
 rp_r_sbox:   dw RP_SBX, RP_SY-3, RP_SBX+RP_SBW-1, RP_SY-3+RP_FH-1
 rp_r_minus:  dw RP_MX, RP_SY-2, RP_MX+RP_MW-1, RP_SY-2+RP_FH-1
 rp_r_plus:   dw RP_PX, RP_SY-2, RP_PX+RP_MW-1, RP_SY-2+RP_FH-1
@@ -78,6 +79,13 @@ rp_r_pres:   dw 72,    RP_B0Y,  72+71,         RP_B0Y+RP_BH-1
 rp_r_load:   dw 152,   RP_B0Y,  152+63,        RP_B0Y+RP_BH-1
 rp_r_presa:  dw RP_LX, RP_B1Y,  RP_LX+95,      RP_B1Y+RP_BH-1
 rp_r_clear:  dw 106,   RP_B1Y,  106+63,        RP_B1Y+RP_BH-1
+; ...and the two Store radios' HIT bands, straight after so os88ui_bfind walks
+; all nine as one array. A radio's band is the GLYPH AND ITS LABEL, because a
+; radio's label is part of the control (SPEC.md 47 rule 2) - and a 12px target
+; on a 1bpp screen is a target most mice miss. They are not drawn from, a
+; radio being a glyph and a run rather than a rect.
+rp_r_rad0:   dw RP_RX0, RP_LY-3, RP_RX0+RP_RW0, RP_LY-3+OS88UI_GW
+rp_r_rad1:   dw RP_RX1, RP_LY-3, RP_RX1+RP_RW1, RP_LY-3+OS88UI_GW
 
 ; ...and what each BUTTON says and asks, in rp_r_minus's own order, so one
 ; table drives the full paint, the per-control repaint and nothing else. The
@@ -85,18 +93,47 @@ rp_r_clear:  dw 106,   RP_B1Y,  106+63,        RP_B1Y+RP_BH-1
 ; what every painter takes), and this is indexed off it by arithmetic rather
 ; than by a second numbering that could drift: (rect - rp_r_minus) / 8 * 4.
 ;
-; A predicate of 0 means ALWAYS LIVE, which is a claim and not an omission -
-; Mount and Load are both SPEC.md 47 rule 3's case, where the only honest test
-; is doing the thing.
-rp_blbl:
+; rp_live is ALWAYS LIVE, which is a claim and not an omission - Mount and
+; Load are both SPEC.md 47 rule 3's case, where the only honest test is doing
+; the thing. It is a predicate like the others so that every row is CALLED.
+rp_blbl:                        ; indexed rect / 2: see RP_BLBL below
     dw rp_s_minus, rp_size_ok
     dw rp_s_plus,  rp_size_ok
-    dw rp_s_mount, 0
+    dw rp_s_mount, rp_live
     dw rp_s_pres,  rp_pres_ok
-    dw rp_s_load,  0
+    dw rp_s_load,  rp_live
     dw rp_s_presa, rp_presa_ok
     dw rp_s_clear, rp_clear_ok
 RP_NBTN     equ 7
+
+; ...and what each one DOES on the release, in the same order again and indexed
+; (rect - rp_r_minus) / 4. rp_act asks the predicate above before it gets here,
+; so the greying, the refusal and the action cannot be three different tests.
+rp_acts:
+    dw rp_a_minus, rp_a_plus, rp_a_mount, rp_a_pres, rp_a_load, rp_a_presa
+    dw rp_a_clear
+
+; A rect's id halved is its row's offset in rp_blbl once the table is moved
+; down by the first rect's half, and halved again its offset in rp_acts - so
+; neither lookup subtracts anything. It needs the rects on even addresses,
+; and four-byte for the second, which eight-byte rects off a 4-aligned
+; first one are.
+RP_BLBL     equ rp_blbl - (rp_r_minus - $$) / 2
+RP_ACTS     equ rp_acts - (rp_r_minus - $$) / 4
+%if (rp_r_minus - $$) % 4 != 0
+  %error "RP_BLBL/RP_ACTS index by rect/2 and rect/4, so the rects must be 4-aligned"
+%endif
+
+rp_r_pane:   dw 0, 0, RP_PANEW-1, RP_PANEH-1    ; rp_repaint's white fill
+
+; A radio's label sits a glyph and a gap right of its glyph, which is what
+; lets rp_radio carry ONE x per radio rather than two
+%if RDL_CONV != 0 || RDL_XMS != 1
+  %error "rp_radio and the paint take RDL_CONV as zero and RDL_XMS as one"
+%endif
+%if RP_RTX0 != RP_RX0 + 16 || RP_RTX1 != RP_RX1 + 16
+  %error "rp_radio derives a label's x from its glyph's"
+%endif
 
 rp_s_page:   db 'Ram Disk', 0
 rp_s_size:   db 'Size', 0
@@ -114,7 +151,8 @@ rp_s_load:   db 'Load', 0
 rp_s_clear:  db 'Clear', 0
 rp_s_boot:   db 'Boot image: ', 0
 rp_s_noboot: db 'No boot image', 0
-rp_s_as:     db 'Mounted ', 0     ; 'Mounted D: 224K of 224K' is 23 of the 27
+rp_s_as:     db 'Mounted '        ; 'Mounted D: 224K of 224K' is 23 of the 27
+rp_s_asvol:  db '?: ', 0          ; (the letter is written in before each use)
 rp_s_free:   db 'K of ', 0       ; characters this pane holds, and the worst
                                  ; case is what has to fit: `Mounted as` and a
                                  ; spelt-out `free` made it 29, which font_str
@@ -122,23 +160,18 @@ rp_s_free:   db 'K of ', 0       ; characters this pane holds, and the worst
                                  ; and out the other side - the failure this
                                  ; file's own header names
 rp_s_notmnt: db 'Not mounted', 0
-rp_s_dotram: db '.RAM', 0
 rp_s_defnam: db 'RAMDISK.RAM', 0
+rp_s_dotram equ rp_s_defnam + 7 ; '.RAM', its tail
 
-; What went wrong, indexed by RDERR_*. RDERR_NONE's row is the empty string,
-; so the caption line simply is not drawn rather than being special-cased -
-; and RDS_ERR is READ-AND-CLEAR at the resident, so a verdict cannot outlive
-; its cause and be reported again on the next unrelated paint (SPEC.md 59.5).
-rp_errtab:
-    dw rp_e_none
-    dw rp_e_mem
-    dw rp_e_vol
-    dw rp_e_mnt
-    dw rp_e_file
-    dw rp_e_fmt
-    dw rp_e_big
-    dw rp_e_noimg
-rp_e_none:   db 0
+; What went wrong, RDERR_MEM onwards, one after another and found by counting
+; NULs (rp_paint): no table, because the strings ARE the order. RDERR_NONE has
+; no row - it is the one verdict that draws nothing, so the caption line simply
+; is not drawn - and RDS_ERR is READ-AND-CLEAR at the resident, so a verdict
+; cannot outlive its cause and be reported again on the next unrelated paint
+; (SPEC.md 59.5).
+%if RDERR_NONE != 0 || RDERR_MEM != 1 || RDERR_VOL != 2 || RDERR_MNT != 3 || RDERR_FILE != 4 || RDERR_FMT != 5 || RDERR_BIG != 6 || RDERR_NOIMG != 7 || RDERR_NERR != 8
+  %error "rp_e_mem.. are RDERR_MEM..RDERR_NOIMG in order, and RDERR_NONE is the 0 rp_size_fast ORs"
+%endif
 rp_e_mem:    db 'Not enough memory', 0
 rp_e_vol:    db 'No free drive letter', 0
 rp_e_mnt:    db 'The volume was refused', 0
@@ -155,55 +188,60 @@ rp_e_noimg:  db 'Nothing preserved yet', 0
 ; rp_paint - RDT_PAINT
 ; in:  DI = pane left, DX = pane top; the pane is white-filled and the gfx
 ;      lock is HELD (SPEC.md 31.9)
-; out: nothing
+; out: nothing (clobbers everything - rampage.asm's REGISTERS)
 ; -----------------------------------------------------------------------------
 rp_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [rp_px], di
-    mov [rp_py], dx
+    call rp_bank
+    jmp short rp_paint_at
+
+; -----------------------------------------------------------------------------
+; rp_repaint - the pane, white, then the page over it
+; in:  [rp_px] / [rp_py]
+; out: nothing (clobbers everything)
+;
+; A page draws itself UNCLIPPED and the kernel does not repaint after a click
+; returns (SPEC.md 31.9), so this is the page's own job - and the page draws
+; as if over the kernel's white pane, so the white comes first.
+; -----------------------------------------------------------------------------
+rp_repaint:
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov bx, rp_r_pane
+    call rp_rect_abs
+    call OSAPI_GFX_FILL
+                                ; ...and falls into the paint
+
+rp_paint_at:                    ; rp_repaint's way in, the origin banked
     call rp_state               ; the live state, on EVERY paint: the panel
                                 ; stays clickable under a dialog's completion
                                 ; and a mount can happen between two paints
 
-    clc
-    call rp_pen
+    call rp_pen0
     mov si, rp_s_page
     mov cx, RP_LX
     mov dx, RP_HY
     call rp_str
 
     ; --- the size row --------------------------------------------------------
-    call rp_size_ok             ; ONE predicate, shared by the greying, the
-    call rp_pen                 ; click refusal and the explanation (47 rule 2)
+    ; ONE predicate, shared by the greying, the click refusal and the
+    ; explanation (47 rule 2) - and one PEN for the row, the label, the box
+    ; and the value being one control with nothing between them that moves it
+    call rp_size_ok
+    call rp_pen
+    call rp_size_text           ; rp_line = the value, or what is being typed
     mov si, rp_s_size
     mov cx, RP_LX
     mov dx, RP_SY
     call rp_str
-
-    call rp_size_ok
-    call rp_pen
-    mov ax, RP_SBX              ; the value box
-    mov bx, RP_SY - 3
-    mov cx, RP_SBX + RP_SBW - 1
-    mov dx, RP_SY - 3 + RP_FH - 1
-    call rp_frame
-
-    call rp_size_text           ; rp_line = the value, or what is being typed
-    call rp_size_ok
-    call rp_pen
     mov si, rp_line
     mov cx, RP_STX
-    mov dx, RP_SY
     call rp_str
     mov si, rp_s_k
     mov cx, RP_SKX
     call rp_str
+    mov bx, rp_r_sbox           ; ...and the value box round it, out of the
+    call rp_rect_abs            ; very rect the click tests. LAST is free:
+    call OSAPI_GFX_FRAME        ; no pixel of the frame is a pixel of the run
 
     ; --- the store row -------------------------------------------------------
     call rp_loc_ok
@@ -212,16 +250,9 @@ rp_paint:
     mov cx, RP_LX
     mov dx, RP_LY
     call rp_str
-
-    mov al, RDL_CONV
-    mov bx, RP_RX0
-    mov si, rp_s_conv
-    mov di, RP_RTX0
+    xor bx, bx                  ; RDL_CONV
     call rp_radio
-    mov al, RDL_XMS
-    mov bx, RP_RX1
-    mov si, rp_s_xms
-    mov di, RP_RTX1
+    mov bx, RDL_XMS
     call rp_radio
 
     ; --- the buttons, ALL SEVEN out of one table -----------------------------
@@ -230,161 +261,149 @@ rp_paint:
     ; exactly as the other five do, and a control drawn from a second place
     ; is a control whose down state has to be remembered twice.
     mov bx, rp_r_minus
-    mov cx, RP_NBTN
 .btns:
+    push bx
     call rp_btn1
+    pop bx
     add bx, 8
-    loop .btns
+    cmp bx, rp_r_minus + 8 * RP_NBTN
+    jb .btns
 
     ; --- the captions --------------------------------------------------------
-    clc
-    call rp_pen
-    call rp_cap_mount
-    mov si, rp_line
-    mov cx, RP_LX
+    call rp_pen0
+    mov di, rp_line             ; 'Mounted D: 56K of 64K', or 'Not mounted'
+    mov si, rp_s_notmnt
+    cmp byte [rp_st+RDS_MNT], 0
+    je .mcap
+    mov al, [rp_st+RDS_VOL]
+    add al, 'A'
+    mov [rp_s_asvol], al        ; the string's own letter cell
+    mov si, rp_s_as
+    call rp_app
+    mov ax, [rp_st+RDS_FREEK]
+    call rp_numapp
+    mov si, rp_s_free
+    call rp_app
+    mov ax, [rp_st+RDS_KB]
+    call rp_numapp
+    mov si, rp_s_k
+.mcap:
     mov dx, RP_CAP0
-    call rp_str
+    call rp_cap
 
-    call rp_cap_boot
-    mov si, rp_line
-    mov cx, RP_LX
+                                ; 'Boot image: BACKUP.RAM', or 'No boot image'
+    mov si, rp_s_noboot
+    cmp byte [rp_st+RDS_BOOT], 0
+    je .bcap
+    mov si, rp_s_boot
+    call rp_app
+    mov si, rp_st + RDS_NAME
+.bcap:
     mov dx, RP_CAP1
-    call rp_str
+    call rp_cap
 
     mov al, [rp_st+RDS_ERR]
     mov [rp_eshown], al         ; WHAT THE GLASS IS SHOWING, and the record is
                                 ; kept here because this is the only routine
                                 ; that puts it there - menu_bcell's discipline
                                 ; (SPEC.md 12.9) at the scale of one line
-    cmp al, RDERR_NERR
-    jae .noerr
-    xor ah, ah
-    shl ax, 1
-    mov bx, ax
-    mov si, [bx+rp_errtab]
-    cmp byte [si], 0
-    je .noerr
+    dec al                      ; RDERR_NONE draws nothing, and nor does a
+    cmp al, RDERR_NERR - 1      ; number past the strings: both are out of
+    jae .noerr                  ; range now, NONE having wrapped to 0xFF
+    cbw
+    xchg cx, ax                 ; CX = how many strings to step over
+    mov si, rp_e_mem
+    jcxz .err
+.skip:
+    lodsb
+    or al, al
+    jnz .skip
+    loop .skip
+.err:
     mov cx, RP_LX
     mov dx, RP_CAP2
     call rp_str
 .noerr:
-    call rp_kbmark              ; ...and the size the field was drawn with
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp rp_kbmark               ; ...and the size the field was drawn with
+
+; rp_cap - append SI at DI, end the line, and letter rp_line at (RP_LX, DX);
+; out: DI = rp_line again
+rp_cap:
+    call rp_app
+    mov [di], al                ; the NUL - rp_app's AL
+    mov si, rp_line
+    mov di, si                  ; ...and DI back at the start, for the next
+    mov cx, RP_LX
+    jmp short rp_str
 
 ; -----------------------------------------------------------------------------
 ; rp_radio - one Store radio and its label
-; in:  AL = the RDL_* it selects, BX = the glyph's pane x, DI = the label's,
-;      SI = the label
-; out: nothing
+; in:  BX = the RDL_* it selects
+; out: nothing (clobbers everything)
 ; -----------------------------------------------------------------------------
 rp_radio:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov ah, al                  ; AH = which one this is, across the tests
     mov al, OS88UI_GRADIO
-    cmp ah, [rp_st+RDS_LOC]
+    cmp bl, [rp_st+RDS_LOC]
     jne .off
     or al, OS88UI_GON
 .off:
-    mov dl, ah                  ; ...and PRESSED if it is the one being held
-    inc dl                      ; (SPEC.md 13.8). AH is still the INDEX here
-    xor dh, dh                  ; and is about to become the disabled flag, so
-    cmp dx, [rp_down]           ; the test has to happen NOW - and a radio is
-    jne .nodn                   ; 1-BASED in the one id space [rp_down] carries,
-    or al, OS88UI_GDOWN         ; so 0 can mean "none" and a button's own id
-.nodn:                          ; can be its RECT POINTER, which no radio can
-                                ; collide with
-    push ax                     ; ...and the DISABLED flag last, because CF is
-    call rp_loc_ok              ; what carries it out of the predicate and
-    pop ax                      ; every compare above would eat it (POP and MOV
-    mov ah, 0                   ; leave the flags alone, which is what makes
-    jnc .live                   ; this ordering work at all)
-    mov ah, 1
-.live:
-    mov cx, bx
+    lea dx, [bx+1]              ; ...and PRESSED if it is the one being held
+    cmp dx, [rp_down]           ; (SPEC.md 13.8): a radio is 1-BASED in the
+    jne .nodn                   ; one id space [rp_down] carries, so 0 can
+    or al, OS88UI_GDOWN         ; mean "none" and a button's own id can be its
+.nodn:                          ; RECT POINTER, which no radio can collide with
+    mov di, RP_RX0
+    mov si, rp_s_conv
+    or bl, bl                   ; RDL_CONV
+    je .which
+    mov di, RP_RX1
+    mov si, rp_s_xms
+.which:
+    call rp_loc_ok              ; ...and DISABLED out of CF, kept for the
+    pushf                       ; label's pen too: os88ui_glyph leaves the pen
+    sbb ah, ah                  ; LIVE (its contract). AH = 0 or 0xFF
+    mov cx, di
     add cx, [rp_px]
     mov dx, RP_LY - 3
     add dx, [rp_py]
     call os88ui_glyph
-    call rp_loc_ok
+    popf
     call rp_pen
-    mov cx, di
+    lea cx, [di+16]             ; the label: RP_RTXn = RP_RXn + 16
     mov dx, RP_LY
-    call rp_str
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp short rp_str
 
 ; =============================================================================
 ; THE PREDICATES (SPEC.md 47 rule 2)
 ;
-; Each answers CF - 0 live, 1 disabled - and each is called by BOTH the paint
-; and the click, so a control that looks unavailable cannot act and one that
-; acts cannot look unavailable.
+; Each answers CF - 0 live, 1 disabled - touches nothing else, and is called
+; by BOTH the paint and the click, so a control that looks unavailable cannot
+; act and one that acts cannot look unavailable.
+;
+; RDS_MNT, RDS_XMS and RDS_BOOT are EXACTLY 0 or 1 - rd_sv_state stores them
+; that way - so `cmp byte [x], 1` IS the test: CF = 1 exactly when x is 0,
+; and a CMC makes that "exactly when x is 1".
 ; =============================================================================
 
-rp_size_ok:                     ; the store cannot be resized under a volume
-    cmp byte [rp_st+RDS_MNT], 0
-    jne .no
-    clc
-    ret
-.no:
-    stc
-    ret
-
-rp_loc_ok:                      ; ...nor moved, and a machine with no store
-    cmp byte [rp_st+RDS_MNT], 0 ; above 1MB has nowhere to move it to. A FACT
-    jne .no                     ; the code can test (47 rule 3)
-    cmp byte [rp_st+RDS_XMS], 0
-    je .no
-    clc
-    ret
-.no:
-    stc
+rp_loc_ok:                      ; a store cannot be moved under a volume, and
+    cmp byte [rp_st+RDS_XMS], 1 ; a machine with no store above 1MB has
+    jc rp_pdone                 ; nowhere to move it to. A FACT the code can
+                                ; test (47 rule 3)
+rp_size_ok:                     ; ...nor resized under one
+    cmp byte [rp_st+RDS_MNT], 1
+    cmc
+rp_pdone:
     ret
 
-rp_pres_ok:                     ; Preserve needs something to write AND
-    cmp byte [rp_st+RDS_MNT], 0 ; somewhere already chosen to write it
-    je .no
-    cmp byte [rp_st+RDS_BOOT], 0
-    je .no
-    clc
-    ret
-.no:
-    stc
-    ret
-
+rp_pres_ok:                     ; Preserve needs somewhere already chosen to
+    cmp byte [rp_st+RDS_BOOT], 1    ; write it AND something to write
+    jc rp_pdone
 rp_presa_ok:                    ; ...Preserve As only needs the volume
-    cmp byte [rp_st+RDS_MNT], 0
-    je .no
-    clc
-    ret
-.no:
-    stc
+    cmp byte [rp_st+RDS_MNT], 1
     ret
 
 rp_clear_ok:                    ; ...and Clear, an association to drop
-    cmp byte [rp_st+RDS_BOOT], 0
-    je .no
-    clc
-    ret
-.no:
-    stc
+    cmp byte [rp_st+RDS_BOOT], 1
     ret
 
 ; =============================================================================
@@ -396,102 +415,105 @@ rp_clear_ok:                    ; ...and Clear, an association to drop
 ; =============================================================================
 
 ; rp_pen - OSAPI_GFX_PEN, and the INK a run must letter in, from one CF
+; rp_pen0 - ...for a live control
 ; in:  CF = SPEC.md 47's argument (0 live, 1 disabled)
-; out: the pen set and [rp_ink] banked; every register preserved
+; out: the pen set and [rp_ink] banked; AL clobbered, CF kept
 ;
 ; A DRIVER CANNOT READ [gfx_color] BACK any more than a package can (SPEC.md
 ; 52.12): there is no OSAPI_GET_COLOR, so the ink has to be decided at the
-; branch that decides the flag. Every one of this page's seven pen sites goes
+; branch that decides the flag. Every one of this page's pen sites goes
 ; through here, so rp_str never has to ask. The FLAG stays the pen's, which is
 ; what leaves SPEC.md 6.1.12 to checkerboard a disabled caption for free.
+rp_pen0:                        ; ...or LIVE, said in one call
+    clc
 rp_pen:
-    push ax
     mov al, CBLACK
     jnc .set
     mov al, CDGRAY
 .set:
     mov [rp_ink], al
-    pop ax
     call OSAPI_GFX_PEN
     ret
 
-; rp_str - SI = a string, CX/DX = a pane-relative pen
+; rp_str  - SI = a string, CX/DX = a pane-relative pen, lettered in [rp_ink]
+; rp_stra - ...in AL instead
+; out: AX and CX clobbered; DX kept, so a row of runs sets its y once
 rp_str:
-    push ax
-    push cx
+    mov al, [rp_ink]
+rp_stra:
     push dx
     add cx, [rp_px]
     add dx, [rp_py]
-    mov al, [rp_ink]            ; AL = ink, AH = the pane's own ground
-    mov ah, CWHITE
+    mov ah, CWHITE              ; AL = ink, AH = the pane's own ground
     call OSAPI_FONT_RUN
     pop dx
-    pop cx
-    pop ax
     ret
 
-; rp_frame - AX/BX/CX/DX = a pane-relative rect
-rp_frame:
-    push ax
-    push bx
-    push cx
-    push dx
+; rp_rect_abs - BX = a pane-relative rect -> AX/BX/CX/DX in SCREEN
+; coordinates, which is what OSAPI_GFX_FRAME and _FILL take, and the same four
+; words into rp_rect, which is what the button record names
+rp_rect_abs:
+    mov ax, [bx+0]
+    mov cx, [bx+4]
+    mov dx, [bx+6]
+    mov bx, [bx+2]
     add ax, [rp_px]
     add cx, [rp_px]
     add bx, [rp_py]
     add dx, [rp_py]
-    call OSAPI_GFX_FRAME
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; rp_rect_abs - BX = a pane-relative rect -> rp_rect, in screen coordinates
-rp_rect_abs:
-    push ax
-    mov ax, [bx+0]
-    add ax, [rp_px]
     mov [rp_rect+0], ax
-    mov ax, [bx+2]
-    add ax, [rp_py]
-    mov [rp_rect+2], ax
-    mov ax, [bx+4]
-    add ax, [rp_px]
-    mov [rp_rect+4], ax
-    mov ax, [bx+6]
-    add ax, [rp_py]
-    mov [rp_rect+6], ax
-    pop ax
+    mov [rp_rect+2], bx
+    mov [rp_rect+4], cx
+    mov [rp_rect+6], dx
     ret
 
-; -----------------------------------------------------------------------------
-; rp_btn - one button, greyed from the caller's CF
-; in:  BX = its pane-relative rect, SI = its label, CF = 1 disabled
-; out: nothing
-;
-; OS88UI_FILL is set because a page is drawn over a pane the kernel white-
-; filled once and then over ITSELF on every later paint - so without it a
-; second draw's checkerboard caption lands on top of the first draw's solid
-; one and a greyed label comes out pixel-identical to a live one, which reads
-; as SPEC.md 47 rule 1 being broken when the mechanism is fine.
-; -----------------------------------------------------------------------------
+; rp_bank - bank a verb's pane origin (DI, DX), and turn the y RDT_CLICK and
+; its two siblings carry in BX into the DX every hit test takes
+rp_bank:
+    mov [rp_px], di
+    mov [rp_py], dx
+    mov dx, bx
+    ret
 
 ; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
-; A Control Panel page draws its buttons one at a time, so the record is
-; pointed at whichever rect the caller staged. The GESTURE here is the
-; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
-; release-fired; what changed is that the DRAW goes through the control.
+; A Control Panel page draws its buttons one at a time, so the record's rects
+; are rp_rect, which rp_rect_abs has just filled with whichever button this
+; is. The GESTURE here is the panel's own cp_ctl/cp_pgprobe probe (SPEC.md
+; 13.8.4), which is already release-fired; what changed is that the DRAW goes
+; through the control.
 rdp_btlbl: dw 0
 rdp_btflg: dw 0
-    OS88UI_BTNREC rdp_btrec, 0, rdp_btlbl, rdp_btflg, 1
+    OS88UI_BTNREC rdp_btrec, rp_rect, rdp_btlbl, rdp_btflg, 1
 
-rp_btn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
+; -----------------------------------------------------------------------------
+; rp_btn1 - one button, out of rp_blbl
+; in:  BX = its rect (which is its id)
+; out: nothing (clobbers everything)
+;
+; The label and the predicate come from the table rather than from the call
+; site, which is what lets the full paint and the pressed-state redraw be the
+; SAME drawing: a control repainted on a press cannot come back looking
+; different from the one the pane was drawn with, because there is one body.
+;
+; OS88UI_FILL because a page is drawn over a pane the kernel white-filled once
+; and then over ITSELF on every later paint - so without it a second draw's
+; checkerboard caption lands on top of the first draw's solid one and a greyed
+; label comes out pixel-identical to a live one, which reads as SPEC.md 47
+; rule 1 being broken when the mechanism is fine.
+; -----------------------------------------------------------------------------
+rp_btn1:
+    mov di, bx                  ; the row: /8 for the rect, *4 for the entry,
+    shr di, 1                   ; which is ONE shift and not two - two is /4,
+                                ; so `+` read its LABEL out of the predicate
+                                ; column and then CALLED the string beside it
+    mov si, [RP_BLBL+di]
+    cmp di, (rp_r_mount - $$) / 2   ; Mount's label says what it will DO,
+    jne .lbl                    ; which is the one thing a static table cannot
+    cmp byte [rp_st+RDS_MNT], 0
+    je .lbl
+    mov si, rp_s_unmnt
+.lbl:
+    call [RP_BLBL+di+2]         ; the predicate answers in CF
     mov di, OS88UI_FILL
     jnc .live
     or di, OS88UI_DIS
@@ -503,75 +525,18 @@ rp_btn:
                                 ; second numbering to keep in step. DIS
                                 ; outranks it inside the control, so a greyed
                                 ; button never says it will fire
-    call rp_rect_abs
-    mov bx, rp_rect
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [rdp_btlbl], si          ; label and DI its flags, so the record takes
-    mov [rdp_btflg], di          ; all three and the picture is identical
-    mov [rdp_btrec+OS88UI_BT_RECTS], bx
-    mov bx, rdp_btrec
+    mov [rdp_btlbl], si         ; THE ONE CONTROL (SPEC.md 20.5.1.3): the
+    mov [rdp_btflg], di         ; record takes the label and the flags, its
+    call rp_rect_abs            ; rect is rp_rect, and the picture is the
+    mov bx, rdp_btrec           ; control's own
     mov al, 1
-    call os88ui_btn
-    pop bx
-    pop ax
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; rp_btn1 - one button, out of rp_blbl
-; in:  BX = its rect (which is its id)
-; out: nothing (every register preserved, so a caller may loop on BX)
-;
-; The label and the predicate come from the table rather than from the call
-; site, which is what lets the full paint and the pressed-state redraw be the
-; SAME drawing: a control repainted on a press cannot come back looking
-; different from the one the pane was drawn with, because there is one body.
-; -----------------------------------------------------------------------------
-rp_btn1:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov ax, bx
-    sub ax, rp_r_minus          ; the row: /8 for the rect, *4 for the entry,
-    shr ax, 1                   ; which is ONE shift and not two - two is /4,
-    mov di, ax                  ; so `+` read its LABEL out of the predicate
-                                ; column and then CALLED the string beside it
-    mov si, [rp_blbl+di]
-    mov ax, [rp_blbl+di+2]
-    cmp bx, rp_r_mount          ; ...and Mount's label says what it will DO,
-    jne .lbl                    ; which is the one thing a static table cannot
-    cmp byte [rp_st+RDS_MNT], 0
-    je .lbl
-    mov si, rp_s_unmnt
-.lbl:
-    or ax, ax                   ; 0 = always live (47 rule 3)
-    jz .live
-    call ax                     ; ...otherwise the predicate answers in CF
-    jmp short .go
-.live:
-    clc
-.go:
-    call rp_btn
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call os88ui_btn             ; a CALL and not a tail jump, so that
+    ret                         ; tests/btnsites.txt's grep can see it
 
 ; -----------------------------------------------------------------------------
 ; rp_ctlpaint - redraw ONE control, in whatever state it is now in
 ; in:  BX = a control id (a rect pointer, 1 or 2 for a radio, 0 = nothing)
-; out: nothing (every register preserved)
+; out: nothing (clobbers everything)
 ;
 ; **NEVER rp_repaint.** A press has to say so within the frame it arrives in,
 ; and blanking a 221x132 pane and rebuilding forty drawing calls of it to
@@ -580,38 +545,15 @@ rp_btn1:
 ; pointer is dragged off the control and back.
 ; -----------------------------------------------------------------------------
 rp_ctlpaint:
-    or bx, bx
-    jz .out
-    push ax
-    push si
-    push di
     cmp bx, 2                   ; 1..2 is a radio and anything else is a rect
-    ja .btn
-    mov al, bl
-    dec al
-    mov si, rp_s_conv
-    mov di, RP_RTX0
-    mov bx, RP_RX0
-    cmp al, RDL_CONV
-    je .rad
-    mov si, rp_s_xms
-    mov di, RP_RTX1
-    mov bx, RP_RX1
-.rad:
-    call rp_radio
-    jmp short .done
-.btn:
-    call rp_btn1
-.done:
-    pop di
-    pop si
-    pop ax
-.out:
-    ret
+    ja rp_btn1
+    dec bx                      ; ...the RDL_* it selects
+    jns rp_radio
+    ret                         ; 0 = nothing
 
 ; -----------------------------------------------------------------------------
 ; rp_setdown - AX = the control that is now held (0 = none)
-; out: nothing (every register preserved)
+; out: nothing (clobbers everything)
 ;
 ; Draws ONLY IF THAT CHANGED, and draws the two controls that changed rather
 ; than the pane: the one going up and the one coming down. That is what makes
@@ -619,25 +561,22 @@ rp_ctlpaint:
 ; mouse's rate and the common answer is "the same one", which costs a compare.
 ; -----------------------------------------------------------------------------
 rp_setdown:
-    push ax
-    push bx
-    cmp ax, [rp_down]
-    je .out
     mov bx, [rp_down]           ; the one being let go
+    cmp ax, bx
+    je .out
     mov [rp_down], ax
+    push ax
     call rp_ctlpaint
-    mov bx, [rp_down]           ; ...and the one taking its place
-    call rp_ctlpaint
+    pop bx                      ; ...and the one taking its place
+    jmp short rp_ctlpaint
 .out:
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; rp_hit - which control is the pane-relative point in?
 ; in:  CX = x, DX = y
-; out: AX = the id (a rect pointer, 1 or 2 for a radio, 0 = none); every other
-;      register preserved
+; out: AX = the id (a rect pointer, 1 or 2 for a radio, 0 = none); BX
+;      clobbered, every other register preserved
 ;
 ; THE SIZE BOX IS NOT IN IT, and that is SPEC.md 13.6 rather than an oversight:
 ; taking the caret is a safe prefix action, so that one control keeps the
@@ -645,41 +584,96 @@ rp_setdown:
 ; which of the two it is.
 ; -----------------------------------------------------------------------------
 rp_hit:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov bx, rp_r_minus          ; the seven are contiguous and eight bytes
-    mov ax, RP_NBTN             ; each, so os88ui_bfind walks them as an array
-    call os88ui_bfind
-    or ax, ax
-    jz .rad
-    dec ax                      ; index -> the rect itself, which is the id
+    mov bx, rp_r_minus          ; the seven buttons and the two radios are
+    mov ax, RP_NBTN + 2         ; contiguous and eight bytes each, so
+    call os88ui_bfind           ; os88ui_bfind walks them as one array
+    sub ax, RP_NBTN             ; ...the radios come out 1 and 2, their ids
+    jg .out
+    add ax, RP_NBTN - 1         ; a button's index, or -1 for a miss
+    js .none
+    shl ax, 1                   ; index -> the rect itself, which is the id
     shl ax, 1
     shl ax, 1
-    shl ax, 1
-    add ax, rp_r_minus
-    jmp short .out
-.rad:
-    call rp_radio_hit
-    jc .none
-    xor ah, ah
-    inc ax                      ; 1-based, so 0 stays "none"
-    jmp short .out
+    add ax, bx
+    ret
 .none:
     xor ax, ax
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     ret
 
 ; =============================================================================
 ; CLICK
 ; =============================================================================
+
+; -----------------------------------------------------------------------------
+; rp_onup - RDT_UP: the RELEASE, which is where this page acts
+; in:  the same four registers RDT_CLICK takes
+; out: nothing
+;
+; The gesture is press-and-release ON THE SAME CONTROL. Anything else - a
+; slide off, a release on a different control - is a CANCEL and does nothing
+; but put the pressed look back.
+; -----------------------------------------------------------------------------
+rp_onup:
+    call rp_bank
+    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    call rp_onit
+    jne .cancel
+    call rp_state               ; the world, fresh - every predicate rp_act
+                                ; asks reads it, and a mount may have happened
+                                ; under the panel since the last paint
+    mov word [rp_down], 0       ; NOT rp_setdown: rp_act's paths that change
+                                ; anything repaint the pane and draw this
+                                ; control upright with them, and drawing it
+                                ; upright HERE first is the double-draw
+    mov ax, si                  ; the id - rp_state has spent AX
+    push si                     ; ...and kept across rp_act, whose dialog
+    call rp_act                 ; buttons spend SI on the name it opens with
+    pop bx
+    jc rp_ctlpaint              ; it did not repaint, so this one control owes
+    ret                         ; its own way back up
+.cancel:
+    xor ax, ax
+    jmp rp_setdown
+
+; -----------------------------------------------------------------------------
+; rp_ondrag - RDT_DRAG: the pressed control follows the pointer (SPEC.md 13.8.1)
+; in:  the same four registers again; arrives between the press and the release
+; out: nothing
+;
+; PEEK, never take: the arm is the release's to spend, and a drag that
+; consumed it would leave the release with nothing to fire.
+; -----------------------------------------------------------------------------
+rp_ondrag:
+    call rp_bank
+    call os88ui_armed
+    call rp_onit
+    je .set
+    xor ax, ax                  ; off it: nothing is down
+.set:
+    jmp rp_setdown              ; ...which draws only if that CHANGED
+
+; -----------------------------------------------------------------------------
+; rp_onit - is the point still on the control the press armed?
+; in:  AX = that control (0 = none), CX/DX = the pane-relative point
+; out: ZF = 1 yes, with SI = the control; AX, BX clobbered.
+;
+; NOTHING ARMED IS NEVER "ON IT", and that costs both callers nothing: they
+; take the off-it branch, which is rp_setdown(0) - and with nothing armed
+; nothing is held either ([rp_down] only ever holds 0 or the armed control:
+; the press sets both, the release clears both, a drag moves [rp_down]
+; between the two), so rp_setdown's own compare draws nothing.
+; -----------------------------------------------------------------------------
+rp_onit:
+    mov si, ax
+    or ax, ax
+    jnz .armed
+    inc ax                      ; ZF = 0
+    ret
+.armed:
+    call rp_hit
+    cmp ax, si
+    ret
 
 ; -----------------------------------------------------------------------------
 ; rp_click - RDT_CLICK: the PRESS, which arms and draws and does nothing else
@@ -693,42 +687,39 @@ rp_hit:
 ; think better of it. The exception is the SIZE BOX, where taking the caret is
 ; exactly a safe prefix action, so it still fires here.
 ;
-; **rp_state is NOT called here any more.** RDS_ERR is read-and-clear at the
-; resident (SPEC.md 59.5) and only a path that REPAINTS can put the verdict on
-; the glass, so asking on the press would consume a verdict nothing was going
-; to draw. The press greys and presses against the block the last PAINT read,
+; **rp_state is NOT called here.** RDS_ERR is read-and-clear at the resident
+; (SPEC.md 59.5) and only a path that REPAINTS can put the verdict on the
+; glass, so asking on the press would consume a verdict nothing was going to
+; draw. The press greys and presses against the block the last PAINT read,
 ; which is also the block the pixels it is drawing over came from - so a
 ; pressed control cannot come back looking different for a reason the user
 ; never saw.
 ; -----------------------------------------------------------------------------
 rp_click:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [rp_px], di
-    mov [rp_py], dx
-    mov [rp_cx], cx
-    mov [rp_cy], bx
-    mov dx, bx                  ; DX arrived as the pane TOP and the hit tests
-                                ; want the point: CX is already the relative x,
-                                ; and the relative y is in BX
+    call rp_bank                ; DX = the relative y; CX is already the x
     mov bx, rp_r_sbox
     call os88ui_bhit
     jnc .focus
-    call rp_edit_end            ; ANY OTHER CLICK ENDS THE EDIT, and it ends it
-                                ; by CANCELLING: a half-typed number is not an
-                                ; answer, and applying one because the user
-                                ; pressed Mount is the kind of surprise a
-                                ; caret is supposed to prevent
-    call rp_hit                 ; ...and everything else ARMS (13.7)
+    call rp_hit                 ; everything else ARMS (13.7)...
+    cmp byte [rp_edit], 0       ; ...and ENDS THE EDIT, which it ends by
+    je .arm                     ; CANCELLING: a half-typed number is not an
+    mov word [rp_edit], 0       ; answer, and applying one because the user
+    push ax                     ; pressed Mount is the kind of surprise a
+    call rp_size_draw           ; caret is supposed to prevent.
+    pop ax                      ;
+                                ; **IT REDRAWS, and that is not tidiness.**
+                                ; Ending the edit changes what the field is
+                                ; supposed to say - from `512_` back to the
+                                ; size that is really set - and this click
+                                ; may go on to draw nothing at all: dead pane
+                                ; space, or a `+` the clamp refuses
+                                ; (rp_size_fast condition 1). Left undrawn,
+                                ; that is a half-typed number stranded on the
+                                ; glass for the rest of the session, in the
+                                ; two places nobody clicks twice
+.arm:
     call os88ui_arm
-    call rp_setdown             ; ...and says so, in one control's worth of
-    jmp short .out              ; pixels
-
+    jmp rp_setdown
 .focus:
     xor ax, ax                  ; the caret takes the PRESS, so nothing is armed
     call os88ui_arm             ; and nothing is held - said rather than
@@ -738,120 +729,16 @@ rp_click:
     jc .out                     ; greyed: the volume is up, so there is nothing
     cmp byte [rp_edit], 0       ; to type into
     jne .out                    ; already editing: the click changes nothing
-    mov byte [rp_edit], 1
-    mov byte [rp_elen], 0
-    call rp_size_draw           ; ONE run, exactly as a step costs one
+    mov word [rp_edit], 1       ; the caret, and nothing typed yet (rp_elen)
+    jmp rp_size_draw            ; ONE run, exactly as a step costs one
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; rp_onup - RDT_UP: the RELEASE, which is where this page acts
-; in:  the same four registers RDT_CLICK takes
-; out: nothing
-;
-; The gesture is press-and-release ON THE SAME CONTROL. Anything else - a
-; slide off, a release on a different control - is a CANCEL and does nothing
-; but put the pressed look back.
-; -----------------------------------------------------------------------------
-rp_onup:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [rp_px], di
-    mov [rp_py], dx
-    mov [rp_cx], cx
-    mov [rp_cy], bx
-    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
-    or ax, ax
-    jz .out
-    mov si, ax                  ; SI, because CX/DX are the point below and BX
-                                ; is what rp_ctlpaint takes
-    mov cx, [rp_cx]
-    mov dx, [rp_cy]
-    call rp_hit
-    cmp ax, si
-    jne .cancel
-    call rp_state               ; the world, fresh - every predicate rp_act
-                                ; asks reads it, and a mount may have happened
-                                ; under the panel since the last paint
-    mov word [rp_down], 0       ; NOT rp_setdown: rp_act's paths that change
-                                ; anything repaint the pane and draw this
-                                ; control upright with them, and drawing it
-                                ; upright HERE first is the double-draw
-    mov ax, si
-    call rp_act
-    jnc .out                    ; it repainted, so the pane already agrees
-    mov bx, si                  ; ...it did not, so this one control owes its
-    call rp_ctlpaint            ; own way back up
-    jmp short .out
-.cancel:
-    xor ax, ax
-    call rp_setdown
-.out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; rp_ondrag - RDT_DRAG: the pressed control follows the pointer (SPEC.md 13.8.1)
-; in:  the same four registers again; arrives between the press and the release
-; out: nothing
-;
-; PEEK, never take: the arm is the release's to spend, and a drag that
-; consumed it would leave the release with nothing to fire.
-; -----------------------------------------------------------------------------
-rp_ondrag:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [rp_px], di
-    mov [rp_py], dx
-    mov dx, bx                  ; ...the pane top out, the relative y in
-    call os88ui_armed
-    or ax, ax
-    jz .out
-    mov si, ax
-    call rp_hit                 ; CX/DX = the point the pointer is at now
-    cmp ax, si
-    je .set
-    xor ax, ax                  ; off it: nothing is down
-.set:
-    call rp_setdown             ; ...which draws only if that CHANGED
-.out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; rp_act - do what the control the user released on does
 ; in:  AX = the control id, the state block FRESH
 ; out: CF = 0 the pane was repainted; CF = 1 it was not, so the caller owes
-;      this one control a redraw
+;      this one control a redraw. Clobbers everything.
 ;
 ; EVERY BRANCH THAT CHANGES ANYTHING ENDS IN A FULL PANE REPAINT, and that is
 ; affordable here in a way it would not be in a window: the pane is 221x132
@@ -860,111 +747,109 @@ rp_ondrag:
 ; state on screen can never disagree with the resident's.
 ;
 ; The CF answer is what keeps that from also being the pressed look's problem:
-; a refusal and a dialog draw nothing, and a control that drew itself down has
-; to be put back by somebody.
+; a refusal draws nothing, and a control that drew itself down has to be put
+; back by somebody. A greyed control explains itself (47 rule 5), so a refused
+; release says nothing new. A dialog that went UP answers CF = 0 like a
+; repaint: it covers the pane, and whatever takes it down repaints it.
 ; -----------------------------------------------------------------------------
 rp_act:
-    cmp ax, rp_r_minus
-    je .minus
-    cmp ax, rp_r_plus
-    je .plus
-    cmp ax, rp_r_mount
-    je .mount
-    cmp ax, rp_r_pres
-    je .preserve
-    cmp ax, rp_r_load
-    je .load
-    cmp ax, rp_r_presa
-    je .presa
-    cmp ax, rp_r_clear
-    je .clear
-    cmp ax, 2                   ; ...and 1..2 are the two Store radios
-    ja .none
-    dec ax
-    jmp short .setloc
-.none:
-    stc
-    ret
+    cmp ax, 2                   ; 1..2 are the two Store radios
+    ja .btn
+    call rp_loc_ok
+    jc rp_a_no
+    xchg bx, ax
+    dec bx                      ; BL = the RDL_* it selects
+    mov al, RSV_LOC
+    jmp short rp_a_svc
+.btn:
+    shr ax, 1
+    xchg bx, ax                 ; BX = the row's offset off RP_BLBL...
+    call [RP_BLBL+bx+2]         ; ...whose predicate goes first
+    jc rp_a_no
+    shr bx, 1                   ; ...and rp_acts is half its stride
+    jmp [RP_ACTS+bx]
 
-.minus:
-    call rp_size_ok
-    jc .no                      ; a greyed control explains itself (47 rule 5),
-    mov ax, [rp_st+RDS_KB]      ; so a refused release says nothing new
-    sub ax, RD_STEPKB
-    jmp short .setsize
-.plus:
-    call rp_size_ok
-    jc .no
-    mov ax, [rp_st+RDS_KB]
-    add ax, RD_STEPKB
-.setsize:
-    mov bx, ax                  ; BX and not AX: AL is the VERB on every RSV_*
+rp_a_minus:
+    mov bx, [rp_st+RDS_KB]
+    sub bx, RD_STEPKB
+    jmp short rp_a_size
+rp_a_plus:
+    mov bx, [rp_st+RDS_KB]
+    add bx, RD_STEPKB
+rp_a_size:                      ; BX and not AX: AL is the VERB on every RSV_*
     mov al, RSV_SIZE            ; call, so an argument that needs a whole word
     call rp_svc                 ; rides elsewhere. The RESIDENT clamps it,
                                 ; being the one that owns what a legal size is
     call rp_size_fast           ; ...and ONE call redraws the field, unless
-    jc .repaint                 ; something else on the pane moved with it
-.no:
+    jc rp_a_rep                 ; something else on the pane moved with it
+rp_a_no:
     stc                         ; the field is not the button, so either way
     ret                         ; the caller still owes the `-` or `+` its way
                                 ; back up
-.setloc:
-    push ax
-    call rp_loc_ok
-    pop ax
-    jc .no
-    mov bl, al
-    mov al, RSV_LOC
-    call rp_svc
-    jmp short .repaint
-.mount:
-    cmp byte [rp_st+RDS_MNT], 0
-    jne .unmount
-    mov al, RSV_MOUNT
-    call rp_svc
-    jmp short .repaint
-.unmount:
-    mov al, RSV_UNMOUNT
-    call rp_svc
-    jmp short .repaint
-.preserve:
-    call rp_pres_ok
-    jc .no
+rp_a_mount:                     ; Mount, or Unmount when a volume is up -
+    mov al, RSV_MOUNT           ; RDS_MNT being 0 or 1
+    add al, [rp_st+RDS_MNT]
+    jmp short rp_a_svc
+%if RSV_UNMOUNT != RSV_MOUNT + 1
+  %error "rp_a_mount adds RDS_MNT to RSV_MOUNT"
+%endif
+rp_a_pres:
     mov al, RSV_PRESERVE
     xor si, si                  ; 0 = the remembered image, in its own folder
-    call rp_svc
-    jmp short .repaint
-.presa:
-    call rp_presa_ok
-    jc .no
+    jmp short rp_a_svc
+rp_a_presa:
+    call rp_a_up
     mov si, rp_st + RDS_NAME    ; the remembered name as the default, which is
     cmp byte [si], 0            ; what a Save As should open holding
-    jne .askname
+    jne .ask
     mov si, rp_s_defnam
-.askname:
+.ask:
     mov bl, FDLG_SAVE
-    mov al, RSV_DLG
-    call rp_svc
-    stc
-    ret                         ; the dialog is modal and the answer arrives
-                                ; at rp_dlgdone: repainting under it would
-                                ; draw the page over the window just put up -
-                                ; but the BUTTON still has to come back up, or
-                                ; it sits pressed for as long as the dialog is
-                                ; on screen
-.load:
+    jmp short rp_a_dlg
+rp_a_load:
+    call rp_a_up
     xor si, si
     mov bl, FDLG_OPEN
+rp_a_dlg:
     mov al, RSV_DLG
-    call rp_svc
-    stc
-    ret
-.clear:
-    call rp_clear_ok
-    jc .no
+    call rp_svc                 ; the dialog is UP, or it was refused - and
+    clc                         ; either way the button is already upright
+    ret                         ; (rp_a_up), so this owes the caller NOTHING.
+                                ; The dialog is modal and the answer arrives
+                                ; at rp_dlgdone, which repaints; a Cancel
+                                ; takes it down by PUTTING BACK WHAT WAS
+                                ; UNDER IT - so what was under it has to be
+                                ; the button UP. Drawn after the dialog it
+                                ; would land OVER the window just put up, the
+                                ; page being unclipped (SPEC.md 31.9); not
+                                ; drawn at all, Esc put the PRESSED picture
+                                ; back for the rest of the session. And a
+                                ; refusal leaves the pane on the glass with
+                                ; the button already up, so returning CF = 1
+                                ; would draw it a second time.
+                                ;
+                                ; (It was `stc` here once, and the caller
+                                ; redrew whatever SI held - which this path
+                                ; had just pointed at a NAME, so Preserve As
+                                ; "redrew" a rect read out of 'RAMDISK.RAM'
+                                ; through a predicate read past the table,
+                                ; and Load redrew control 0, which is
+                                ; nothing. Neither put anything on the glass
+                                ; by luck rather than by design.)
+
+; rp_a_up - draw the released control UPRIGHT, before a dialog goes up over it
+; in:  BX = its RP_ACTS index, which is its id / 4 ([rp_down] is already 0)
+; out: nothing (clobbers everything)
+rp_a_up:
+    shl bx, 1
+    shl bx, 1
+    jmp rp_btn1
+
+rp_a_clear:
     mov al, RSV_CLEAR
+rp_a_svc:
     call rp_svc
-.repaint:
+rp_a_rep:
     call rp_repaint
     clc
     ret
@@ -973,7 +858,7 @@ rp_act:
 ; rp_size_fast - a size change costs the size FIELD, and nothing else
 ; in:  the resident has just taken (and CLAMPED) a new size
 ; out: CF = 0 the pane is right; CF = 1 = the caller owes a full repaint
-; clobbers: flags
+; clobbers: everything
 ;
 ; **ONE `OSAPI_FONT_RUN` AGAINST A WHOLE-PANE REPAINT**, which on this page is
 ; a fill, five buttons, two radio glyphs and about two dozen strings - some
@@ -1004,7 +889,10 @@ rp_act:
 ;      of what was drawn, which is the only thing that can answer that.
 ;   4. no NEW verdict arrived, for the same reason in the other direction.
 ;
-; Nothing else on the pane reads the size: rp_cap_mount quotes it only in the
+; 3 and 4 are one test: RDERR_NONE is 0, so the OR of the two is 0 exactly
+; when neither is a verdict.
+;
+; Nothing else on the pane reads the size: the caption quotes it only in the
 ; mounted branch, and the size cannot be changed while the volume is up
 ; (condition 2 is that same predicate). That is what makes the field the
 ; whole of the damage.
@@ -1016,77 +904,47 @@ rp_size_fast:
 %endif                          ; it was drawn changed" - a claim a screenshot
                                 ; of ONE build cannot check (the REDRAWFULL
                                 ; precedent, SPEC.md 12.9)
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     call rp_state               ; the CLAMPED size, not the one we asked for:
                                 ; the resident owns what is legal
-    cmp byte [rp_st+RDS_ERR], RDERR_NONE
-    jne .slow                   ; (4)
-    cmp byte [rp_eshown], RDERR_NONE
-    jne .slow                   ; (3)
+    mov al, [rp_st+RDS_ERR]
+    or al, [rp_eshown]
+    stc                         ; (STC leaves ZF alone)
+    jnz .out                    ; (3) and (4)
     call rp_size_ok
-    jc .slow                    ; (2)
+    jc .out                     ; (2)
     mov ax, [rp_st+RDS_KB]
     cmp ax, [rp_kbshown]
-    je .done                    ; (1) - and drawing nothing IS the answer
-    call rp_size_draw
-.done:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.slow:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
+    jne rp_size_draw            ; ...which answers CF = 0 itself (rp_kbmark)
+.out:                           ; (1) - drawing nothing IS the answer, and the
+    ret                         ; equal compare has cleared CF to say so
 
 ; -----------------------------------------------------------------------------
 ; rp_size_draw - the value box's RP_SW characters, in one opaque run
 ; in:  [rp_st+RDS_KB]
-; out: nothing; [rp_kbshown] follows the glass
+; out: nothing; [rp_kbshown] follows the glass; CF = 0 (clobbers everything)
 ;
-; The field is a FIXED RP_SW characters and rp_num right-aligns into it, so the
-; leading spaces are what erase a digit the number just lost - 224 to 8 comes
-; back as `   8` and not as `   8` over a stale `4`. That is the whole reason
-; the run's width is the field's and not the number's.
+; The field is a FIXED RP_SW characters and rp_size_text right-aligns into it,
+; so the leading spaces are what erase a digit the number just lost - 224 to 8
+; comes back as `   8` and not as `   8` over a stale `4`. That is the whole
+; reason the run's width is the field's and not the number's.
+;
+; BLACK and not [rp_ink]: live by construction - every path here has already
+; asked rp_size_ok (rp_size_fast's condition 2, and rp_click's .focus, which
+; is the only way a caret and so a key arrives).
 ; -----------------------------------------------------------------------------
 rp_size_draw:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     call rp_size_text
     mov si, rp_line
     mov cx, RP_STX
-    add cx, [rp_px]
     mov dx, RP_SY
-    add dx, [rp_py]
-    mov al, CBLACK              ; live by construction - every path here has
-    mov ah, CWHITE              ; already asked rp_size_ok (rp_size_fast's
-    call OSAPI_FONT_RUN         ; condition 2, and rp_click's .focus)
-    call rp_kbmark
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    mov al, CBLACK
+    call rp_stra
+                                ; ...and falls into the record of it
 
 ; -----------------------------------------------------------------------------
 ; rp_kbmark - record what the field now shows
 ; in:  [rp_edit], [rp_st+RDS_KB]
-; out: nothing (AX clobbered)
+; out: nothing (AX clobbered), CF = 0 - rp_size_fast returns through here
 ;
 ; **A FIELD BEING TYPED INTO SHOWS NO VALUE AT ALL, so it may not claim one.**
 ; [rp_kbshown] is the record of the GLASS (SPEC.md 62.9.11.1) and rp_size_fast
@@ -1100,7 +958,7 @@ RP_KBNONE   equ 0xFFFF
 
 rp_kbmark:
     mov ax, RP_KBNONE
-    cmp byte [rp_edit], 0
+    cmp byte [rp_edit], 0       ; ...a compare with 0, so CF = 0 from here on
     jne .put
     mov ax, [rp_st+RDS_KB]
 .put:
@@ -1109,8 +967,8 @@ rp_kbmark:
 
 ; -----------------------------------------------------------------------------
 ; rp_size_text - rp_line = what the size field should read
-; in:  [rp_edit], [rp_ebuf], [rp_st+RDS_KB]
-; out: rp_line, exactly RP_SW characters and a NUL
+; in:  [rp_edit], [rp_ebuf], [rp_elen], [rp_st+RDS_KB]
+; out: rp_line, exactly RP_SW characters and a NUL (clobbers everything)
 ;
 ; TWO STATES, and the alignment says which: a VALUE is right-aligned, and
 ; something being TYPED is left-aligned with a caret after it. That is not a
@@ -1118,57 +976,45 @@ rp_kbmark:
 ; "the machine is telling you 64" from "you have typed 6 so far", and without
 ; it a half-typed number reads as a smaller one that has already been applied.
 ;
-; Padded to the full width either way, so the run that draws it erases what the
-; last one left (SPEC.md 62.9.11.1).
+; Padded to the full width either way - the spaces go down FIRST and the text
+; over them - so the run that draws it erases what the last one left (SPEC.md
+; 62.9.11.1).
 ; -----------------------------------------------------------------------------
 rp_size_text:
-    push ax
-    push cx
-    push si
-    push di
+    mov di, rp_line
+    mov cx, RP_SW
+    mov al, ' '
+.pad:
+    mov [di], al
+    inc di
+    loop .pad
+    mov [di], cl                ; the NUL, CX having run out
     cmp byte [rp_edit], 0
     jne .typed
-    mov ax, [rp_st+RDS_KB]
-    mov cx, RP_SW
-    call rp_num                 ; right-aligned in the whole field
-    jmp short .out
+    mov ax, [rp_st+RDS_KB]      ; a value: right-aligned in the whole field,
+    jmp rp_digits               ; built backwards from its end
 .typed:
-    mov si, rp_ebuf
+    mov si, rp_elen             ; the count, and the buffer straight after it
+    lodsb
+    mov cl, al
     mov di, rp_line
-    xor cx, cx
+    jcxz .caret
 .copy:
-    cmp cl, [rp_elen]
-    jae .caret
-    mov al, [si]
+    lodsb
     mov [di], al
-    inc si
     inc di
-    inc cl
-    jmp short .copy
+    loop .copy
 .caret:
     mov byte [di], '_'          ; the caret is a character, because a field
-    inc di                      ; this small has no room for one beside the
-    inc cl                      ; text and an XOR block would have to be
-.pad:                           ; erased by something that knows where it was
-    cmp cl, RP_SW
-    jae .end
-    mov byte [di], ' '
-    inc di
-    inc cl
-    jmp short .pad
-.end:
-    mov byte [di], 0
-.out:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
+    ret                         ; this small has no room for one beside the
+                                ; text and an XOR block would have to be
+                                ; erased by something that knows where it was
 
 ; -----------------------------------------------------------------------------
 ; rp_key - RDT_KEY: a keystroke, while the size box has the caret
 ; in:  BL = ASCII, BH = the scan code; the gfx lock is HELD
-; out: CF = 0 we took it; CF = 1 we did not, and the panel drops it
+; out: CF = 0 we took it; CF = 1 we did not, and the panel drops it. AX is
+;      kept here, rd_page_key banking every other register
 ;
 ; **NOTHING IS TAKEN UNLESS THE FIELD HAS FOCUS**, which is what keeps this
 ; page from swallowing keys that belong to nobody: a Control Panel is not a
@@ -1197,198 +1043,71 @@ rp_key:
     cmp byte [rp_edit], 0
     je .no                      ; no caret: not ours
     push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    cmp bl, RP_K_ESC
+    xchg ax, bx                 ; AL = the key
+    mov si, rp_elen             ; SI = the count, the buffer one byte on
+    cmp al, RP_K_ESC
     je .cancel
-    cmp bl, RP_K_CR
+    cmp al, RP_K_CR
     je .commit
-    cmp bl, RP_K_TAB
+    cmp al, RP_K_TAB
     je .commit
-    cmp bl, RP_K_BS
+    cmp al, RP_K_BS
     je .back
-    cmp bl, '0'
-    jb .eat
-    cmp bl, '9'
-    ja .eat
-    mov al, [rp_elen]           ; a digit: append, if there is room
-    cmp al, RP_SW - 1           ; ...one short of the field, because the caret
-    jae .eat                    ; occupies a cell too
-    mov ah, 0
-    mov si, ax
-    mov [rp_ebuf+si], bl
-    inc byte [rp_elen]
-    call rp_size_draw
-    jmp short .took
+    cmp al, '0'                 ; a key the field cannot use is still OURS -
+    jb .took                    ; it landed in a text box, and passing it back
+    cmp al, '9'                 ; would only offer it to nobody
+    ja .took
+    mov bl, [si]                ; a digit: append, if there is room
+    cmp bl, RP_SW - 1           ; ...one short of the field, because the caret
+    jae .took                   ; occupies a cell too
+    mov bh, 0
+    mov [bx+si+1], al           ; rp_ebuf follows rp_elen
+    inc byte [si]
+    jmp short .draw
 .back:
-    cmp byte [rp_elen], 0
-    je .eat
-    dec byte [rp_elen]
-    call rp_size_draw
-    jmp short .took
+    cmp byte [si], 0
+    je .took
+    dec byte [si]
+    jmp short .draw
 .cancel:
-    call rp_edit_end            ; ...which redraws the field itself
-    jmp short .took
-.commit:
-    call rp_edit_value          ; AX = what was typed, 0 = nothing
+    mov byte [si], 0            ; nothing typed, and so a commit of nothing,
+.commit:                        ; which is exactly a cancel
     mov byte [rp_edit], 0
+    xor ax, ax                  ; AX = the digits typed
+    mov cl, [si]
+    mov ch, 0
+    jcxz .draw
+    inc si                      ; rp_ebuf
+    mov bx, 10
+.digit:
+    mul bx                      ; AX * 10, DX spent (rd_page_key banks it)
+    xchg dx, ax
+    lodsb                       ; a digit, and only digits are ever stored
+    sub al, '0'
+    cbw
+    add ax, dx
+    loop .digit
     or ax, ax
-    jz .redraw                  ; an empty commit is a cancel, not a 0KB store
-    mov bx, ax
+    jz .draw                    ; an empty commit is a cancel, not a 0KB store
+    xchg bx, ax
     mov al, RSV_SIZE
     call rp_svc
     call rp_state               ; ...and take the CLAMPED answer back
-.redraw:
+.draw:
     call rp_size_draw
 .took:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.eat:
-    pop di                      ; a key the field cannot use is still OURS - it
-    pop si                      ; landed in a text box, and passing it back
-    pop dx                      ; would only offer it to nobody
-    pop cx
-    pop bx
     pop ax
     clc
     ret
 .no:
     stc
-    ret
-
-; -----------------------------------------------------------------------------
-; rp_edit_end - drop the caret without applying anything, and put the field back
-; in:  nothing
-; out: nothing (all registers preserved)
-;
-; **IT REDRAWS, and that is not tidiness.** Ending the edit changes what the
-; field is supposed to say - from `512_` back to the size that is really set -
-; and the branch that ended it may go on to draw nothing at all: a click on
-; dead pane space, or a `+` the clamp refuses (rp_size_fast condition 1). Left
-; to the caller, that is a half-typed number stranded on the glass for the rest
-; of the session, and it strands it in the two places nobody clicks twice.
-;
-; A no-op when there was no caret, so rp_click may call it unconditionally.
-; -----------------------------------------------------------------------------
-rp_edit_end:
-    cmp byte [rp_edit], 0
-    je .out
-    push ax
-    mov byte [rp_edit], 0
-    mov byte [rp_elen], 0
-    call rp_size_draw
-    pop ax
-.out:
-    ret
-
-; rp_edit_value - AX = the digits typed, 0 = none
-rp_edit_value:
-    push bx
-    push cx
-    push si
-    xor ax, ax
-    xor si, si
-    mov cl, [rp_elen]
-    xor ch, ch
-    jcxz .out
-.digit:
-    mov bx, 10
-    mul bx                      ; AX * 10 - and DX is spent, which is why the
-                                ; caller has banked it
-    mov bl, [rp_ebuf+si]
-    sub bl, '0'
-    xor bh, bh
-    add ax, bx
-    inc si
-    loop .digit
-.out:
-    pop si
-    pop cx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; rp_radio_hit - did the click land on one of the two Store radios?
-; in:  CX/DX = the pane-relative click
-; out: CF = 0 and AL = the RDL_* it selects; CF = 1 = neither
-;
-; The band is the GLYPH AND ITS LABEL, because a radio's label is part of the
-; control (SPEC.md 47 rule 2) - and a 12px target on a 1bpp screen is a
-; target most mice miss.
-; -----------------------------------------------------------------------------
-rp_radio_hit:
-    cmp dx, RP_LY - 3
-    jl .no
-    cmp dx, RP_LY - 3 + OS88UI_GW
-    jg .no
-    cmp cx, RP_RX0
-    jl .no
-    cmp cx, RP_RX0 + RP_RW0
-    jg .try1
-    mov al, RDL_CONV
-    clc
-    ret
-.try1:
-    cmp cx, RP_RX1
-    jl .no
-    cmp cx, RP_RX1 + RP_RW1
-    jg .no
-    mov al, RDL_XMS
-    clc
-    ret
-.no:
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; rp_repaint - the pane, white, then the page over it
-; in:  [rp_px] / [rp_py]
-; out: nothing
-;
-; A page draws itself UNCLIPPED and the kernel does not repaint after a click
-; returns (SPEC.md 31.9), so this is the page's own job. The white fill comes
-; first because font_str is transparent and every string above would otherwise
-; land on top of the last one.
-; -----------------------------------------------------------------------------
-rp_repaint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, [rp_px]
-    mov bx, [rp_py]
-    mov cx, ax
-    add cx, RP_PANEW - 1
-    mov dx, bx
-    add dx, RP_PANEH - 1
-    call OSAPI_GFX_FILL
-    mov di, [rp_px]
-    mov dx, [rp_py]
-    call rp_paint
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; rp_dlgdone - RDT_DLGDONE: the user picked a name (SPEC.md 51.10)
 ; in:  AH = the mode it ran in, ES:DI = the chosen NUL name in KERNEL_SEG,
 ;      DX:CX = its size. The gfx lock is held and the dialog is already down
-; out: nothing
+; out: nothing; CX, DX and DI kept - rd_dlg_land banks only AX, BX, SI and BP
 ;
 ; The name is staged into OUR segment first, because everything below hands it
 ; to the resident as a pointer in this image and ES stops being KERNEL_SEG the
@@ -1399,250 +1118,88 @@ rp_repaint:
 ; nobody can tell from a document.
 ; -----------------------------------------------------------------------------
 rp_dlgdone:
-    push ax
-    push bx
     push cx
     push dx
-    push si
     push di
-    mov [rp_dlgmode], ah
-    call rp_name_stage          ; ES:DI -> rp_name
-    cmp byte [rp_dlgmode], FDLG_SAVE
-    jne .load
-    call rp_name_ext
+    mov si, rp_name             ; ES:DI -> rp_name, at most 12 characters,
+    mov cx, 12                  ; noting on the way whether there is a '.'
+    xor bx, bx
+.stage:
+    mov al, [es:di]
+    mov [si], al
+    or al, al
+    jz .staged
+    cmp al, '.'
+    jne .nodot
+    inc bx
+.nodot:
+    inc di
+    inc si
+    loop .stage
+    mov [si], cl                ; ...and the NUL after a full twelve
+.staged:                        ; SI = the NUL
+    mov al, RSV_LOAD            ; AH is still the mode
+    cmp ah, FDLG_SAVE
+    jne .go
+    or bx, bx
+    jnz .save                   ; the user named an extension: theirs wins
+    cmp cl, 12                  ; CX = 12 less the length
+    je .save                    ; an empty name is the dialog's problem, and
+                                ; the file slot's FERR_NAME is what says so
+    mov di, si
+    cmp cl, 12 - 8
+    jae .add
+    mov di, rp_name + 8         ; a stem past 8 has no room for an extension
+.add:                           ; inside an 8.3 name
+    mov si, rp_s_dotram
+    call rp_app
+    mov [di], al                ; ...and its NUL, rp_app's AL
+.save:
     mov al, RSV_PRESERVE
-    jmp short .go
-.load:
-    mov al, RSV_LOAD
 .go:
     mov si, rp_name
     call rp_svc
     call rp_repaint
     pop di
-    pop si
     pop dx
     pop cx
-    pop bx
-    pop ax
-    ret
-
-; rp_name_stage - ES:DI (KERNEL_SEG) -> rp_name, at most 12 characters
-rp_name_stage:
-    push ax
-    push cx
-    push si
-    push di
-    mov si, di
-    mov di, rp_name
-    mov cx, 12
-.next:
-    mov al, [es:si]
-    mov [di], al
-    or al, al
-    jz .out
-    inc si
-    inc di
-    loop .next
-    mov byte [di], 0
-.out:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
-
-; rp_name_ext - give rp_name a '.RAM' when it has no extension at all
-rp_name_ext:
-    push ax
-    push cx
-    push si
-    push di
-    mov si, rp_name
-    xor cx, cx
-.len:
-    mov al, [si]
-    or al, al
-    jz .done
-    cmp al, '.'
-    je .out                     ; the user named one: theirs wins
-    inc si
-    inc cx
-    jmp short .len
-.done:
-    or cx, cx
-    jz .out                     ; an empty name is the dialog's problem, and
-                                ; the file slot's FERR_NAME is what says so
-    cmp cx, 8
-    jbe .add
-    mov si, rp_name             ; a stem past 8 has no room for an extension
-    add si, 8                   ; inside an 8.3 name
-.add:
-    mov di, si
-    mov si, rp_s_dotram
-.copy:
-    mov al, [si]
-    mov [di], al
-    or al, al
-    jz .out
-    inc si
-    inc di
-    jmp short .copy
-.out:
-    pop di
-    pop si
-    pop cx
-    pop ax
     ret
 
 ; =============================================================================
 ; CAPTIONS
 ; =============================================================================
 
-; rp_cap_mount - 'Mounted D: 56K of 64K', or 'Not mounted'
-rp_cap_mount:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    mov di, rp_line
-    cmp byte [rp_st+RDS_MNT], 0
-    je .not
-    mov si, rp_s_as
-    call rp_app
-    mov al, [rp_st+RDS_VOL]
-    add al, 'A'
-    call rp_ch
-    mov al, ':'
-    call rp_ch
-    mov al, ' '
-    call rp_ch
-    mov ax, [rp_st+RDS_FREEK]
-    call rp_numapp
-    mov si, rp_s_free
-    call rp_app
-    mov ax, [rp_st+RDS_KB]
-    call rp_numapp
-    mov al, 'K'
-    call rp_ch
-    jmp short .end
-.not:
-    mov si, rp_s_notmnt
-    call rp_app
-.end:
-    mov byte [di], 0
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; rp_cap_boot - 'Boot image: BACKUP.RAM', or 'No boot image'
-rp_cap_boot:
-    push ax
-    push si
-    push di
-    mov di, rp_line
-    cmp byte [rp_st+RDS_BOOT], 0
-    je .none
-    mov si, rp_s_boot
-    call rp_app
-    mov si, rp_st + RDS_NAME
-    call rp_app
-    jmp short .end
-.none:
-    mov si, rp_s_noboot
-    call rp_app
-.end:
-    mov byte [di], 0
-    pop di
-    pop si
-    pop ax
-    ret
-
-; rp_ch - AL -> [DI], DI advances
-rp_ch:
-    mov [di], al
-    inc di
-    ret
-
-; rp_app - DS:SI -> DS:DI without the NUL; DI advances, SI is spent
+; rp_app - DS:SI -> DS:DI without the NUL; DI advances, SI is spent, AL = 0
 rp_app:
-    push ax
-.next:
-    mov al, [si]
+    lodsb
     or al, al
     jz .out
     mov [di], al
-    inc si
     inc di
-    jmp short .next
+    jmp short rp_app
 .out:
-    pop ax
-    ret
-
-; rp_num - AX = a value, CX = a field width -> rp_line, right-aligned and NUL
-rp_num:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov di, rp_line
-    add di, cx
-    mov byte [di], 0
-    dec di
-    mov bx, 10
-.digit:
-    xor dx, dx
-    div bx
-    add dl, '0'
-    mov [di], dl
-    dec di
-    dec cx
-    or ax, ax
-    jz .pad
-    or cx, cx
-    jnz .digit
-    jmp short .out
-.pad:
-    or cx, cx
-    jz .out
-    mov byte [di], ' '
-    dec di
-    dec cx
-    jmp short .pad
-.out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; rp_numapp - AX = a value, appended at DI with no padding; DI advances
+; (clobbers AX, BX, DX, SI)
 rp_numapp:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov si, rp_tmp + 6
-    mov byte [si], 0
+    push di
+    mov di, rp_tmp + 6
+    call rp_digits
+    mov si, di
+    pop di
+    jmp short rp_app
+
+; rp_digits - AX = a value, written in decimal BACKWARDS so that it ends just
+; before DI; out DI = its first digit (clobbers AX, BX, DX)
+rp_digits:
     mov bx, 10
 .digit:
-    dec si
     xor dx, dx
     div bx
     add dl, '0'
-    mov [si], dl
+    dec di
+    mov [di], dl
     or ax, ax
     jnz .digit
-    call rp_app
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret

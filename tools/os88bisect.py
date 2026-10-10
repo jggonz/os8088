@@ -399,6 +399,38 @@ def row_wants_alone(row):
     return False
 
 
+def row_wants(row, d):
+    """The artefacts the row declares (`wants=`), read off POINT `d`'s own
+    registry - the commit being sampled, not this checkout's.
+
+    ASKED FOR THE SAME REASON AS `row_wants_alone`, one layer down: the
+    instrument was manufacturing the failure it reported. Every sample is an
+    `os88test.py` of its own and os88test builds a row's declared artefacts
+    before it runs it - with `make`, in the point's ONE worktree. So `-j 4`
+    was four makes building `build/small.img` in one tree at once, and
+    `fcpsmall` came back INTERMITTENT 3/6 at two commits running: three of the
+    four packed a `.o88` while another was still writing its `.bin`
+    (`os88pkg: error: file is 0 bytes`), the artefact "would not build", and
+    the row SKIPPED - which this tool then counted as three failures. Built
+    once here, before the pool, every sample's make finds them current.
+    """
+    import importlib.util                                   # noqa: PLC0415
+    path = os.path.join(d, "tests", "suite.py")
+    try:
+        sys.path.insert(0, os.path.join(d, "tools"))
+        spec = importlib.util.spec_from_file_location("suite_at_point", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception:                                       # noqa: BLE001
+        return []
+    finally:
+        sys.path.remove(os.path.join(d, "tools"))
+    for r in list(mod.FAST) + list(mod.FULL) + list(mod.SOAK):
+        if r.name == row:
+            return list(getattr(r, "wants", ()))
+    return []
+
+
 def sample_points(row, refs, n, jobs, verbose=False):
     """Build every point, then run every (point, sample) in one pool."""
     pts = [Point(r) for r in refs]
@@ -421,6 +453,18 @@ def sample_points(row, refs, n, jobs, verbose=False):
                 p.error = str(e)[-300:]
                 print("%s  BUILD FAILED %s%s: %s" % (RED, p.sha, OFF, p.error))
 
+    # THE ROW'S DECLARED ARTEFACTS, ONCE PER POINT AND BEFORE THE POOL - see
+    # row_wants. A failure here is not a verdict either: the samples will
+    # SKIP, and a skip is reported as COULD NOT RUN below.
+    for p in pts:
+        d = dirs.get(p.sha)
+        want = row_wants(row, d) if d else []
+        if want:
+            r = subprocess.run(["make", "-s"] + want, cwd=d,
+                               capture_output=True, text=True)
+            print("  %s %s: %s" % ("prebuilt" if not r.returncode else
+                                   "COULD NOT PREBUILD", p.sha, " ".join(want)))
+
     work = [(p, dirs[p.sha]) for p in pts if p.sha in dirs for _ in range(n)]
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
         futs = {ex.submit(run_once, d, row): p for p, d in work}
@@ -431,6 +475,12 @@ def sample_points(row, refs, n, jobs, verbose=False):
             except Exception as e:                       # noqa: BLE001
                 ok, ls, secs, tail = False, ["<ERROR: %s>" % str(e)[:60]], 0, ""
             why = None if ok else could_not_run(tail, secs, row)
+            if why is None and "<SKIPPED>" in ls:
+                # A SKIP IS THE ROW NOT RUNNING, not the row failing: it was
+                # counted as a failure and reported as a RATE, which is how
+                # three skipped samples became "fcpsmall INTERMITTENT 3/6"
+                why = "the row SKIPPED - " + (
+                    re.findall(r"^SKIP\s+\S+\s+(.*)$", tail, re.M) or ["?"])[-1]
             if why is not None:
                 # NOT a failure of the row - see CANNOT_RUN above. It is
                 # recorded as the point's error so the verdict reads ERROR

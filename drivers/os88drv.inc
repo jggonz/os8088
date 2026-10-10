@@ -22,7 +22,8 @@
 ;   drivers - `ether.drv` alone had a 4,064-byte run - and it costs no decoder
 ;   and no cycles (docs/plans/O88-COMPRESSION-PLAN.md 12.6).
 ;
-;   **Put your buffers LAST if you want them off the disk.** Only the trailing
+;   **Put your buffers LAST if you want them off the disk** - OS88_STATE below
+;   is the place, and says what it does and does NOT buy. Only the trailing
 ;   run is stripped; a zeroed table with code after it still ships. The kernel
 ;   claims from the size the directory entry reported - your IMAGE, since
 ;   SPEC.md 20.13.3.1's read expands the file into the claim - and GROWS it to
@@ -318,9 +319,12 @@ DSV_PKGCALL  equ 34             ; dw: near proc reached by OSAPI_DRV_CALL -
                                 ; the integration branch. A driver's service
                                 ; table is copied by OFFSET, so two tables that
                                 ; disagree about a cell hand the kernel one
-                                ; routine where it asked for another - which is
-                                ; why every driver here pads to DSV_SIZE rather
-                                ; than ending where its last row does.
+                                ; routine where it asked for another. What
+                                ; keeps a SHORT table safe is the length byte
+                                ; at header +15, not a pad: OS88_DRIVER's
+                                ; fourth argument (below) is that length, and
+                                ; drv_publish copies exactly that many bytes
+                                ; and publishes 0 for every cell past them.
                                 ;
                                 ; WORKER-SAFE IS YOUR CLAIM, NOT THE KERNEL'S
                                 ; (SPEC.md 20.6 rule 7): the cell itself takes
@@ -595,12 +599,31 @@ FSV_SIZE     equ 30
 DRV_VER equ 9
 
 ; -----------------------------------------------------------------------------
-; OS88_DRIVER 'NAME', class, entry - open the driver and emit its 32-byte
-; header. Emits cpu 8086 / bits 16 / org 0 first, so it must be the first
-; thing after the %include. The image-size word is a forward reference that
-; OS88_DRV_END resolves.
+; OS88_DRIVER 'NAME', class, entry [, dsvlen] - open the driver and emit its
+; 32-byte header. Emits cpu 8086 / bits 16 / org 0 first, so it must be the
+; first thing after the %include. The image-size word is a forward reference
+; that OS88_DRV_END resolves.
+;
+; DSVLEN IS YOUR SERVICE TABLE'S REAL LENGTH, in bytes, and it goes in the
+; header's +15 (SPEC.md 51.2). Leave it out and it is DSV_SIZE, which is what
+; every driver had before the argument existed - so the table must then be
+; padded out to DSV_SIZE. Give it, and the table ENDS WHERE ITS LAST CELL
+; DOES: write a label after that cell and pass `my_svc_end - my_svc`. Nothing
+; past the length is read, because drv_publish zeroes the class's whole copy
+; first and then copies only as far as +15 says - so a table that stops at
+; DSV_CPDRAG publishes DSV_PKGCALL as 0 (no package door), exactly as an
+; explicit `dw 0` would. A forward reference is fine; OS88_DRV_END checks it
+; is EVEN (the copy is by words), at least 2 (0 at +15 means DSV_TAB0, a
+; pre-byte driver) and at most DSV_SIZE.
+;
+; It saves only TRAILING zero cells - a cell's offset is the ABI, so a 0 in
+; the middle of the table still has to be there. DSV_PKGCALL is the last cell
+; and every driver with a package door publishes it, so the saving is the
+; doorless drivers' (HDD.DRV's 2 bytes today), and the length is the guard
+; that makes a short table safe rather than the pad that used to be.
 ; -----------------------------------------------------------------------------
-%macro OS88_DRIVER 3
+%macro OS88_DRIVER 3-4 DSV_SIZE
+    %xdefine OS88_DSV_LEN (%4)
     cpu 8086
     bits 16
     org 0
@@ -623,14 +646,15 @@ DRV_VER equ 9
     db 0FFh, 0D5h           ; +12 THE DISPATCHER: `call bp`...
     db 0CBh                 ; +14 ...`retf`. The kernel far-calls this fixed
                             ;     offset with BP = the proc it wants.
-    db DSV_SIZE             ; +15 THE DSV_* TABLE LENGTH THIS DRIVER WAS BUILT
+    db OS88_DSV_LEN         ; +15 THE DSV_* TABLE LENGTH THIS DRIVER WAS BUILT
                             ;     WITH (SPEC.md 51.2) - the FSV word's rule one
                             ;     level up. drv_publish copies only this many
                             ;     bytes and publishes 0 for the cells past it,
                             ;     instead of reading whatever you put after
                             ;     your table. Was the dispatcher's pad byte
                             ;     (0), which the kernel reads as 28 - the
-                            ;     length every driver before it had
+                            ;     length every driver before it had. DSV_SIZE
+                            ;     unless the fourth argument says otherwise
     %strlen %%len %1
     %if %%len > 15
         %error "OS88_DRIVER: name must be at most 15 characters"
@@ -692,4 +716,178 @@ OS88_DRV_SIZE equ os88_drv_end - $$
     %if OS88_DRV_SIZE > 40 * 1024
         %error "driver too big: the image must fit DRV_MAX_KB (40KB)"
     %endif
+    %ifdef OS88_DSV_LEN
+        ; OS88_DRIVER's fourth argument, checked here because it may be a
+        ; forward reference: EVEN, 2..DSV_SIZE. A `times` of -1 is NASM's
+        ; "TIMES value -1 is negative", which is the error; 0 emits nothing.
+        times -(((OS88_DSV_LEN) & 1) | ((OS88_DSV_LEN) < 2) | ((OS88_DSV_LEN) > DSV_SIZE)) db 0
+    %endif
+    %ifdef OS88_STATE_OPEN
+OS88_STATE_LEN equ os88_drv_end - os88_state
+    %endif
+%endmacro
+
+; -----------------------------------------------------------------------------
+; OS88_STATE - "everything from here to OS88_DRV_END is zero-only state"
+;
+; Write it after your last code and data and before OS88_DRV_END, and put
+; under it every cell whose load-time value is 0 - `db 0`, `dw 0`,
+; `times n db 0`, nothing else. It defines `os88_state` and, at OS88_DRV_END,
+; OS88_STATE_LEN, for OS88_STATE_CLEAR below.
+;
+; WHAT IT BUYS IS DISK, NOT RAM, and that is worth saying because the opposite
+; is the natural reading. os88drv.py strips the image's trailing zeros into
+; header +31 and drv_bss zeroes them again at load - but the strip stops at
+; the image's own KB rung (SPEC.md 51.1.2), and the kernel claims KB of
+; image + bss either way, so a cell costs the same RAM wherever it sits. What
+; moving state here takes off is a zero run's share of the FILE, and the files
+; are LZ4 (SPEC.md 20.13.5), which codes a run of zeros in a few bytes:
+; measured over every shipped driver on 2026-10-04, cutting EVERY interior
+; zero run of 8 bytes or more saved 2-60 bytes of file per driver. So do it
+; when the state is new or the code is being touched anyway, and do not
+; churn a working driver for it.
+;
+; WHAT YOU GET AT LOAD: every byte under it is 0, whether it shipped or was
+; stripped - drv_bss zeroes the stripped part for a driver and for an overlay
+; the KERNEL loads (drv_load: SAVER, XMEM, VMMOUSE). AN OVERLAY A DRIVER LOADS
+; ITSELF is the trap: HDD.DRV reads HDDTOOL.DRV with OSAPI_FILE_READ, which
+; zeroes nothing, so a stripped tail there would arrive as whatever the heap
+; held. Such an owner must zero header +31 paragraphs past the image itself
+; before OS88_STATE means anything in its overlay.
+;
+; AND NOT AT ATTACH. A load is the only thing that zeroes state; a second
+; DRVV_ATTACH into the same image (DRVE_TWICE's case) or an in-image re-arm
+; (SOUND.DRV's tier change re-runs its Sound Blaster attach) starts from
+; whatever the last run left. OS88_STATE_CLEAR is that one fill, for a driver
+; that has such a path - and a driver that has none needs no clearing code at
+; all: its state is zero on the first instruction of attach by construction.
+; -----------------------------------------------------------------------------
+%macro OS88_STATE 0
+    %define OS88_STATE_OPEN
+os88_state:
+%endmacro
+
+; OS88_STATE_CLEAR [from, to] - zero [from, to) in DS, inline (14 bytes).
+; Defaults to the whole of OS88_STATE. Clobbers AX, CX, DI and DF (cleared);
+; ES is preserved. Not for a path that is hot: it is `rep stosb`.
+%macro OS88_STATE_CLEAR 0-2 os88_state, os88_drv_end
+    push es
+    push ds
+    pop es
+    mov di, %1
+    mov cx, (%2) - (%1)
+    xor ax, ax
+    cld
+    rep stosb
+    pop es
+%endmacro
+
+; -----------------------------------------------------------------------------
+; CLC_OR_STC .label - THE CF-RETURN TAIL IN TWO BYTES (kernel.asm's, size
+; pass 9, one assembly further out)
+;
+; The commonest exit in this tree is
+;       clc / jmp short .out / .no: stc / .out:      4 bytes, 2 + 15 cycles
+; and this is the same exit as
+;       CLC_OR_STC .no / .out:                       2 bytes, 4 cycles
+; It emits `db 0xA8` and then `.no: stc`: falling in executes `test al, 0xF9`
+; (A8 F9 - the stc is its immediate), which CLEARS CF and touches no
+; register, while a jump to .no executes the `stc`.
+;
+; THE ONE DIFFERENCE FROM `clc`: `test` also writes ZF, SF, PF and OF, where
+; `clc` writes CF alone - so it goes only where the routine answers in CF and
+; nothing reads another flag at the return. Check every caller.
+;
+; `clc / ret / .no: stc / ret` takes it too, for ONE byte - but there the
+; fall-through gets slower (the 2-byte `test` against the 1-byte `clc`, ~4
+; cycles on an 8088's fetch), so that shape is for cold paths only.
+;
+; Guarded: if os88api.inc (which this file includes) ever grows the same
+; macro for packages, this copy steps aside rather than redefining it.
+; -----------------------------------------------------------------------------
+%ifnmacro CLC_OR_STC 1
+%macro CLC_OR_STC 1
+    db 0xA8                     ; test al, imm8 - the imm8 is the stc below
+%1: stc
+%endmacro
+%endif
+
+; -----------------------------------------------------------------------------
+; OS88_ENT / OS88_RET_LADDER top - THE SHARED PROLOGUE AND THE RETURN LADDER
+; (kernel.asm's kentc_bp and kret_*, for a driver's image). OPT-IN: each emits
+; its code where you write it, once per image, so a driver that does not
+; write them pays nothing.
+;
+; OS88_ENT emits `os88_ent`, and `call os88_ent` IS `push ax / bx / cx / dx /
+; si / di / bp`: the seven words land exactly where the pushes would have put
+; them, so the routine ends `jmp os88_r_bp` (or, having pushed ES after it,
+; `jmp os88_r_es`). Every write is at or above SP, so an interrupt may land
+; anywhere in it, and no flag moves - which is what lets a routine set CF and
+; then take the ladder: `pop` does not touch the flags either. It banks all
+; seven whatever the routine touches - one prologue for every shape - so a
+; routine that answers in a REGISTER cannot take it. 18 bytes, against 4 saved
+; per routine that uses it (3 for one that pushed ax..di and gains bp). It
+; peaks ONE WORD deeper than the pushes it replaces, which matters only on a
+; worker's slice (SPEC.md 8.7) - another reason it is for UI-task code.
+;
+; OS88_RET_LADDER emits the pops from the rung you name down to `ret`:
+;       os88_r_es: pop es / os88_r_bp: pop bp / pop di /
+;       os88_r_si: pop si / pop dx / pop cx / pop bx / pop ax / ret
+; and a routine whose pushes were `ax, bx, cx, dx, si [, di, bp [, es]]`
+; ends `jmp os88_r_<last pushed>` - three bytes, or two, where it was up to
+; nine. Name the HIGHEST rung any of your routines needs; the rungs above it
+; are not emitted. Write it STANDALONE, between two routines, and never in
+; place of one routine's own pops: the stack walker sees the macro's text
+; here, not its expansion there, so an in-place ladder reads as that routine
+; falling through into whatever follows it.
+;
+; COLD CODE ONLY, both of them: the jump is ~15 cycles and the call ~100 over
+; the pushes it replaces. Nothing per-tick, per-packet, per-sector or
+; per-frame takes them.
+;
+; ONLY RUNGS SOMETHING JUMPS TO ARE LABELLED - here, in this file, for the
+; whole tree. tools/stkbalance.py reads source, not images, so a rung label
+; that no driver jumps to is walked as an ENTRY from depth 0 and the stkapps
+; row goes red with `ret at depth -N`. To use a rung that is not labelled
+; yet, add its label here in the same commit as its first `jmp`.
+; -----------------------------------------------------------------------------
+%macro OS88_ENT 0
+os88_ent:
+    ; STKBALANCE-NET: +7 - banks AX..BP on the CALLER's stack; its epilogue pops them
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp                     ; [bp][di][si][dx][cx][bx][ret]
+    mov bp, sp
+    push word [bp+12]           ; [ret][bp]...[bx][ret]
+    mov [bp+12], ax             ; ...[bx][ax]
+    mov bp, [bp]                ; BP back
+    ret
+%endmacro
+
+%macro OS88_RET_LADDER 1
+    %ifidni %1, es
+        %assign %%top 0
+    %elifidni %1, bp
+        %assign %%top 1
+    %elifidni %1, si
+        %assign %%top 3
+    %else
+        %error "OS88_RET_LADDER: the top rung is es, bp or si"
+    %endif
+    %if %%top == 0
+os88_r_es:  pop es
+    %endif
+    %if %%top <= 1
+os88_r_bp:  pop bp
+            pop di              ; UNLABELLED: no driver leaves at di yet, and
+    %endif                      ; a label nothing jumps to is an ENTRY to the
+os88_r_si:  pop si              ; stack walker (see above)
+            pop dx
+            pop cx
+            pop bx
+            pop ax
+            ret
 %endmacro

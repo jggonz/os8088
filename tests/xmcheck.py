@@ -140,7 +140,9 @@ def ovl_sym(name):
     """
     import tempfile
     src = os.path.join(ROOT, "drivers", "xmem", "xmem.asm")
-    ship = os.path.join(ROOT, "build", "xmem.bin")
+    ship = os.path.join(ROOT, os88build.at("build/xmem.bin"))   # the run's
+                                    # tree under a frozen soak, not build/
+                                    # (docs/WRITING-TESTS.md 5.4)
     if not os.path.exists(ship):
         raise SystemExit("xmcheck: no build/xmem.bin - `make` first.")
     with tempfile.TemporaryDirectory() as td:

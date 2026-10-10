@@ -151,6 +151,8 @@
 ; gates and any %assign naming an os88ui constant sit below this line. The
 ; feature defines at the top of this file are the other half of that rule -
 ; they must be ABOVE, and they are.
+%define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
+%define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
 %include "os88ui.inc"
 
 ; --- the hand-written cores (SPEC.md 73.11: the inner loop is assembly) ------

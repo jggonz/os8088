@@ -81,12 +81,7 @@ wr_hire:
 ; handle lands on a socket that is closed and not yet reissued.
 ; -----------------------------------------------------------------------------
 wr_start:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     inc byte [wr_gen]
     call wr_hclose
     mov [wr_dseg], ax
@@ -109,21 +104,11 @@ wr_start:
     mov byte [wr_wake], WW_NONE
     call wr_pathbuild
     mov byte [wr_state], WS_OPEN
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- wr_pathbuild - the prefix and what this kind asks for, into wr_path -----
 wr_pathbuild:
-    push ax
-    push cx
-    push si
-    push di
-    push es
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     mov di, wr_path
     mov si, wr_pfx
     call wr_sput
@@ -152,11 +137,6 @@ wr_pathbuild:
     call wr_sput
 .term:
     mov byte [di], 0
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop ax
     ret
 
 ; --- wr_hclose - give the handle back, whatever happened ---------------------
@@ -239,12 +219,8 @@ wr_nstep:
 .open:
     call net_find                       ; WHICH driver, and is it one of ours?
     jc .nodrv                           ; (SPEC.md 20.11.1 - a class is a
-    mov bh, NET_CLASS                   ; publication slot, not a driver)
-    mov bl, NETV_STATE
-    call OSAPI_DRV_CALL
-    jc .nodrv
-    test al, NSTF_SOCK
-    jz .nodrv
+    jz .nodrv                           ; publication slot, not a driver) -
+                                        ; and NSTF_SOCK, OS88SOCK_STATE's half
     mov bh, NET_CLASS
     mov bl, NETV_OPEN
     mov si, wr_host
@@ -277,6 +253,10 @@ wr_nstep:
 .up:
     call wr_gchk
     jc .out
+    mov word [wr_rxn], 0                ; THE REQUEST IS COMPOSED INTO wr_rxb
+                                        ; (thewire.asm's bss): whatever a
+                                        ; superseded pass banked there is gone
+                                        ; now, so the count of it goes too
     call wr_req
     mov word [wr_sent], 0
     mov byte [wr_state], WS_SEND

@@ -141,7 +141,14 @@ def main():
     ap.add_argument("--rows2", action="store_true")
     ap.add_argument("--flip", action="store_true")
     ap.add_argument("--repeat", choices=("seam", "key"))
+    ap.add_argument("--lcopy", action="store_true",
+                    help="with --flip: every frame's back page brought up "
+                    "to date by the LATCH COPY of the last record's rows "
+                    "off the glass (98.3.8.1), vp_flcw set 0, instead of "
+                    "decoding the last record again")
     a = ap.parse_args()
+    if a.lcopy and not a.flip:
+        sys.exit("vidvga8: --lcopy is a flipped play's")
     rs = 2 if a.rows2 else 1
     global H
     H //= rs
@@ -270,6 +277,8 @@ def main():
 
             # --- 3: every frame right, in its colours
             m.write(base + syms["vp_nowin"], b"\1")
+            if a.lcopy:
+                ww("vp_flcw", 0)
             stops = STOPS
             if a.repeat:                # two laps, held across each join
                 j = LOOP + 1 if a.repeat == "seam" else 1

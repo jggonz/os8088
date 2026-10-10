@@ -71,11 +71,22 @@ NS_PORT     equ 1               ; a port, but nobody home on it
 NS_LINKED   equ 2               ; a partner answered the magic
 
 ; -----------------------------------------------------------------------------
-; DSV_CPPAINT - DI = pane left, DX = pane top
+; net_pgent - THE PAGE VERBS' FRAME, written once
+; in:  called as the FIRST instruction of a DSV_CP* verb, so its return address
+;      is that verb's body; DI = pane left, DX = pane top (SPEC.md 31.1)
+; out: the body has run; every register as the kernel had it
+;
+; All four page verbs save the same seven registers and bank the same pane
+; origin before they do anything, and each used to spell that out - 23 bytes
+; a verb. So the BODIES here spend any register they like, and a body may
+; tail-jump into another verb (net_cp_up's repaint is `jmp net_cp_paint`):
+; that verb's own pgent nests inside this one and returns to it.
 ; -----------------------------------------------------------------------------
-net_cp_paint:
-    push ax
-    push bx
+net_pgent:
+    ; STKBALANCE-OK: it takes its own return address as the body to CALL, so the verb's `ret` comes back here and this `ret` goes to the verb's caller
+    pop word [net_pgbody]       ; ...taken at once, so a nested verb may
+    push ax                     ; overwrite it: this one has already been
+    push bx                     ; called by the time that can happen
     push cx
     push dx
     push si
@@ -83,6 +94,21 @@ net_cp_paint:
     push bp
     mov [net_px], di
     mov [net_py], dx
+    call [net_pgbody]
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; DSV_CPPAINT - DI = pane left, DX = pane top
+; -----------------------------------------------------------------------------
+net_cp_paint:
+    call net_pgent
 
     ; --- the heading, the same string the list row carries --------------------
     mov si, net_cpname
@@ -92,10 +118,9 @@ net_cp_paint:
     ; --- row 1: which port ---------------------------------------------------
     ; It always found one, or there would be no driver to draw this (above).
     mov si, s_port
-    mov bx, NP_Y0
-    call net_lab
+    mov bx, NP_Y0               ; ...and BX stays the row: net_txt reads it
+    call net_lab                ; and nothing below it writes it
     mov ax, [lp_base]
-    mov bx, NP_Y0
     call net_hex
 
     ; --- row 2: what state the link is in ------------------------------------
@@ -107,24 +132,20 @@ net_cp_paint:
     jne .nolink
     mov si, s_slinked
 .st:
-    mov bx, NP_Y0 + NP_ROW
     call net_val
     jmp short .row3
 .nolink:
     cmp byte [net_lost_f], 0    ; not merely absent - it DIED, and where
     je  .st
     mov si, s_slost             ; ...and WHICH COMMAND died on it. It used to
-    mov bx, NP_Y0 + NP_ROW      ; be `Lost at LBA <n>`, which is block mode's
-    call net_val                ; language - a redirector has no LBA, so the
-    mov al, [net_lastcmd]       ; number was whatever DX happened to hold -
-    or  al, al                  ; AND it was drawn at NP_VX+48, INSIDE an
-    jz  .btn                    ; 11-character string, so it overprinted the
-    mov [net_cbuf], al          ; word it was meant to follow. The field photo
-    mov byte [net_cbuf+1], 0    ; reads `Lost a2 LBA`.
-    mov si, net_cbuf
-    mov bx, NP_Y0 + NP_ROW
-    mov cx, NP_VX + 64
-    call net_txt
+    call net_val                ; be `Lost at LBA <n>`, which is block mode's
+    mov al, [net_lastcmd]       ; language - a redirector has no LBA, so the
+    or  al, al                  ; number was whatever DX happened to hold -
+    jz  .btn                    ; AND it was drawn at NP_VX+48, INSIDE an
+    mov [net_cbuf], al          ; 11-character string, so it overprinted the
+    mov si, net_cbuf            ; word it was meant to follow. The field photo
+    mov cx, NP_VX + 64          ; reads `Lost a2 LBA`. net_cbuf+1 is its NUL,
+    call net_txt                ; and nothing ever writes it
 
     ; --- row 3: what the far side is serving, when there is one --------------
     ; It used to be `Size <sectors>`, and a redirected volume HAS NO SECTORS
@@ -142,36 +163,17 @@ net_cp_paint:
     jz  .swr
     mov si, s_filesro
 .swr:
-    mov bx, NP_Y0 + 2*NP_ROW
-    mov cx, NP_VX
-    call net_txt
+    call net_val
 
     ; --- the button ----------------------------------------------------------
 .btn:
-    call net_draw_btn
-
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp net_draw_btn
 
 ; -----------------------------------------------------------------------------
 ; DSV_CPCLICK - DI = pane left, DX = pane top, CX/BX = the click
 ; -----------------------------------------------------------------------------
 net_cp_click:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [net_px], di
-    mov [net_py], dx
+    call net_pgent
 
     ; --- is it in the button? -----------------------------------------------
     ; net_bhit, which asks net_brect - the rect the PAINTER draws. It used to
@@ -187,37 +189,8 @@ net_cp_click:
     mov ax, 1
     call os88ui_arm
     mov al, 1
-    call net_setdown
+    jmp net_setdown
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; net_pane_clear - white the pane. DI = left, DX = top.
-; -----------------------------------------------------------------------------
-net_pane_clear:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, di
-    mov bx, dx
-    mov cx, di
-    add cx, NP_W
-    add dx, NP_H
-    call OSAPI_GFX_FILL
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -225,123 +198,51 @@ net_pane_clear:
 ;   net_lab: SI = string, BX = y offset            -> the label column
 ;   net_val: SI = string, BX = y offset            -> the value column
 ;   net_txt: SI = string, BX = y offset, CX = x offset
+; clobber: AX, CX, DX - every caller is a page verb, whose frame is net_pgent's
 ; -----------------------------------------------------------------------------
 net_lab:
-    push cx
     mov cx, NP_LX
-    call net_txt
-    pop cx
-    ret
-
+    jmp short net_txt
 net_val:
-    push cx
     mov cx, NP_VX
-    call net_txt
-    pop cx
-    ret
-
 net_txt:
-    push ax
-    push cx
-    push dx
     add cx, [net_px]
     mov dx, [net_py]
     add dx, bx
     mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the pane's own ground
     call OSAPI_FONT_RUN
-    pop dx
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; net_hex - AX as four hex digits in the value column. BX = y offset.
 ; -----------------------------------------------------------------------------
 net_hex:
-    push ax
-    push bx
-    push cx
-    push si
-    push bx                     ; the row, wanted again after the arithmetic
     mov si, net_buf
-    mov cx, 4
+    mov ch, 4
 .d:
-    push cx
     mov cl, 4
     rol ax, cl                  ; the top nibble down; four of these leave AX
-    pop cx                      ; exactly as it arrived
-    push ax
+    push ax                     ; exactly as it arrived
     and al, 0x0F
-    add al, '0'
-    cmp al, '9'
-    jbe .p
-    add al, 7
-.p:
+    add al, 0x90                ; 0..9 -> '0'..'9' and 10..15 -> 'A'..'F':
+    daa                         ; the decimal-adjust digit trick, which is
+    adc al, 0x40                ; the compare-and-add written as arithmetic
+    daa
     mov [si], al
     inc si
     pop ax
-    loop .d
-    mov byte [si], 0
-    pop bx
-    mov si, net_buf
-    call net_val
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; net_dec - AX as decimal in the value column. BX = y offset.
-; -----------------------------------------------------------------------------
-net_dec:
-    push cx
-    mov cx, NP_VX
-    call net_declba
-    pop cx
-    ret
-
-; -----------------------------------------------------------------------------
-; net_declba - AX as decimal at an arbitrary column. BX = y, CX = x offset.
-; -----------------------------------------------------------------------------
-net_declba:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push bx                     ; the row, wanted again after the arithmetic
-    push cx                     ; ...and the column
-    mov si, net_buf + 8
-    mov byte [si], 0
-    mov bx, 10
-    xor cx, cx
-.d:
-    xor dx, dx
-    div bx
-    add dl, '0'
-    dec si
-    mov [si], dl
-    inc cx
-    or  ax, ax
+    dec ch
     jnz .d
-    pop cx
-    pop bx
-    call net_txt
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    mov byte [si], 0
+    mov si, net_buf
+    jmp short net_val
 
 ; -----------------------------------------------------------------------------
 ; net_brect - the button's rect in SCREEN coordinates, from the pane-relative
 ;             constants above and [net_px]/[net_py]
-; out: BX -> {x1,y1,x2,y2} inclusive, os88ui_btn's own convention
+; out: BX -> {x1,y1,x2,y2} inclusive, os88ui_btn's own convention; AX spent
 ; -----------------------------------------------------------------------------
 net_brect:
-    push ax
     mov ax, [net_px]
     add ax, NP_BX
     mov [net_rc+0], ax
@@ -353,7 +254,6 @@ net_brect:
     add ax, NP_BH - 1
     mov [net_rc+6], ax
     mov bx, net_rc
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -363,21 +263,16 @@ net_brect:
 ; a feature added to the button - a pressed state, a focus ring, a different
 ; disabled treatment - reaches this page with the rest of the system, and
 ; SPEC.md 47's greying is taken once in one place instead of being remembered
-; here. It also centres the label in both axes, which is why the +8/+5 this
-; routine used to carry are gone.
+; here. It also centres the label in both axes.
 ;
 ; OS88UI_FILL, AND IT IS NOT OPTIONAL SINCE 13.8.4. It used to be left off,
-; correctly, because net_pane_clear had whited the pane on every path that
-; reached this - and a release path reaches it over a PRESSED button, whose
-; interior is black. Without the fill the "upright" redraw leaves that black
-; interior and letters a black caption onto it: measured, 147 lit pixels while
-; held and **0** after sliding off. The button does not come back up, it goes
-; invisible, which is the failure os88ui.inc's own header describes as reading
-; like SPEC.md 47 rule 1 being broken when rule 1 is fine.
-;
-; The rule generalises to every control that gains a down state: OS88UI_FILL
-; asks "can this be drawn a second time without the ground being repainted
-; first?", not "is my background white".
+; correctly, because the pane had been whited on every path that reached this
+; - and a release path reaches it over a PRESSED button, whose interior is
+; black. Without the fill the "upright" redraw leaves that black interior and
+; letters a black caption onto it: measured, 147 lit pixels while held and
+; **0** after sliding off. The rule generalises to every control that gains a
+; down state: OS88UI_FILL asks "can this be drawn a second time without the
+; ground being repainted first?", not "is my background white".
 ;
 ; IT NEVER GREYS - see the header. Both states are actions the user may take
 ; and neither has a predicate that could refuse one, which is SPEC.md 47
@@ -394,11 +289,7 @@ nu_btlbl: dw 0
 nu_btflg: dw 0
     OS88UI_BTNREC nu_btrec, 0, nu_btlbl, nu_btflg, 1
 
-net_draw_btn:
-    push ax
-    push bx
-    push si
-    push di
+net_draw_btn:                   ; clobbers AX, BX, SI, DI (a page verb's)
     call net_brect              ; BX = the rect
     mov si, s_conn
     cmp byte [net_state], NS_LINKED
@@ -406,30 +297,25 @@ net_draw_btn:
     mov si, s_disc
 .lab:
     mov di, OS88UI_FILL         ; live, no default ring - see the header on
-    cmp byte [net_down], 0      ; why the fill is not optional      ; ...except PRESSED, which every path that
-    je .up                      ; draws this button asks about, so the glass
-    mov di, OS88UI_DOWN         ; follows [net_down] on a full pane repaint as
-.up:                            ; much as on an edge (SPEC.md 13.8)
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [nu_btlbl], si          ; label and DI its flags, so the record takes
-    mov [nu_btflg], di          ; all three and the picture is identical
-    mov [nu_btrec+OS88UI_BT_RECTS], bx
+    cmp byte [net_down], 0      ; why the fill is not optional - except
+    je .up                      ; PRESSED, which every path that draws this
+    mov di, OS88UI_DOWN         ; button asks about, so the glass follows
+.up:                            ; [net_down] on a full pane repaint as much as
+                                ; on an edge (SPEC.md 13.8)
+    mov [nu_btlbl], si          ; THE ONE CONTROL (SPEC.md 20.5.1.3): the
+    mov [nu_btflg], di          ; record takes this button's label, flags and
+    mov [nu_btrec+OS88UI_BT_RECTS], bx  ; rect, and the picture is identical
     mov bx, nu_btrec
     mov al, 1
-    call os88ui_btn
-    pop bx
-    pop ax
-    pop di
-    pop si
-    pop bx
-    pop ax
-    ret
+    call os88ui_btn             ; CALLED and not jumped to, though a jump
+    ret                         ; would be a byte less: t_btnrules counts
+                                ; button call sites by their `call`, and a
+                                ; tail jump is how a caller hides from it
 
 ; -----------------------------------------------------------------------------
 ; net_bhit - is the pane-relative point in the button?
 ; in:  CX = pane-relative x, BX = pane-relative y
-; out: CF = 0 inside, CF = 1 outside; all registers preserved
+; out: CF = 0 inside, CF = 1 outside; AX, BX, CX and DX spent
 ;
 ; net_brect answers in SCREEN coordinates because that is what os88ui_btn
 ; draws in, and the page ABI hands a click PANE-relative (SPEC.md 31.1), so
@@ -437,54 +323,33 @@ net_draw_btn:
 ; asking end, where a second copy of the rect would be a second description.
 ; -----------------------------------------------------------------------------
 net_bhit:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov ax, bx                  ; AX = the pane-relative y
-    add cx, [net_px]            ; ...and both lifted to the screen
-    add ax, [net_py]
-    mov dx, ax
+    add cx, [net_px]            ; both lifted to the screen
+    mov dx, [net_py]
+    add dx, bx
     call net_brect              ; BX -> the rect; CX/DX are not touched
-    call os88ui_bhit            ; CF = 0 inside
-    pop dx                      ; (pop leaves the flags alone)
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88ui_bhit             ; CF = 0 inside
 
 ; -----------------------------------------------------------------------------
 ; net_setdown - AL = 1 if the button is drawn PRESSED, 0 if upright
 ; in:  AL as above; the gfx lock is held and [net_px]/[net_py] are current
-; out: nothing (all registers preserved)
 ;
 ; Draws only on a CHANGE, so a pointer moving inside the button it pressed
 ; costs one compare and no pixels - which is what makes an edge arriving per
 ; mouse packet affordable (SPEC.md 13.8.1).
 ; -----------------------------------------------------------------------------
 net_setdown:
-    push ax
     cmp al, [net_down]
     je .out
     mov [net_down], al
-    call net_draw_btn
+    jmp short net_draw_btn
 .out:
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; DSV_CPUP - the release (SPEC.md 13.8.4). Same arguments as DSV_CPCLICK.
 ; -----------------------------------------------------------------------------
 net_cp_up:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [net_px], di
-    mov [net_py], dx
+    call net_pgent
     call os88ui_fire            ; AX = what the press armed, and it is CLEARED
     or ax, ax
     jz .out
@@ -494,72 +359,56 @@ net_cp_up:
                                 ; whole pane, this button upright with it, and
                                 ; drawing it upright first is PERFORMANCE.md's
                                 ; double-draw with the button as the flash
-    cmp byte [net_state], NS_LINKED
-    je  .disc
+    mov bx, net_connect         ; THE STATE DECIDES BEFORE THE WAIT, as the
+    cmp byte [net_state], NS_LINKED ; button the user pressed was drawn from it
+    jne .claim
+    mov bx, net_drop
+.claim:
     call net_fclaim             ; THE WIRE, for the whole handshake: a
     jc  .redraw                 ; package's worker may be inside a socket
-    call net_connect            ; verb on it (netsock.inc), and the panel is
+    call bx                     ; verb on it (netsock.inc), and the panel is
     mov byte [net_busy], 0      ; neither of the two gates. Busy: the page
-    jmp short .redraw           ; redraws unchanged and the user clicks again
-.disc:
-    call net_fclaim
-    jc  .redraw
-    call net_drop
-    mov byte [net_busy], 0
+                                ; redraws unchanged and the user clicks again
 .redraw:
-    mov di, [net_px]
-    mov dx, [net_py]
-    call net_pane_clear
-    call net_cp_paint
-    jmp short .out
+    mov al, CWHITE              ; white the pane, then paint it - the kernel
+    call OSAPI_SET_COLOR        ; does not repaint after a click returns
+    mov ax, [net_px]            ; (SPEC.md 31.9)
+    mov di, ax
+    mov bx, [net_py]
+    mov dx, bx
+    mov cx, ax
+    add cx, NP_W
+    push dx
+    add dx, NP_H
+    call OSAPI_GFX_FILL
+    pop dx
+    jmp net_cp_paint            ; its own frame nests inside ours
 .up:
     xor al, al
-    call net_setdown
+    jmp short net_setdown
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; DSV_CPDRAG - the tracking edge (SPEC.md 13.8.1/13.8.4)
 ; -----------------------------------------------------------------------------
 net_cp_drag:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [net_px], di
-    mov [net_py], dx
+    call net_pgent
     call os88ui_armed           ; PEEK: the arm is the release's to spend
     or ax, ax
     jz .out
     call net_bhit
-    mov al, 1
-    jnc .set
-    xor al, al                  ; off it: nothing is down
-.set:
-    call net_setdown            ; ...which draws only if that CHANGED
+    sbb al, al                  ; CF = 1, off it: nothing is down (0) ...
+    inc al                      ; ...and CF = 0, on it: down (1)
+    jmp short net_setdown       ; ...which draws only if that CHANGED
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- the page's strings ------------------------------------------------------
 s_port:     db 'Port', 0
 s_state:    db 'Link', 0
+net_label   equ s_state         ; ...and the VOLUME's name is the same word,
+                                ; so it is the same bytes (net.asm)
 s_mode:     db 'Mode', 0     ; ...FOUR characters, like 'Port' and 'Link':
                                 ; net_lab and net_txt are two fixed columns
                                 ; and a longer label runs into the value
@@ -571,9 +420,10 @@ s_filesro:  db 'Files, read only', 0
 s_conn:     db 'Connect', 0
 s_disc:     db 'Disconnect', 0
 net_cbuf:   db 0,0            ; the dead command's letter, as a string
-net_buf:    db 0,0,0,0,0,0,0,0,0
+net_buf:    db 0,0,0,0,0      ; net_hex's four digits and a NUL
 net_rc:     dw 0,0,0,0       ; the button's rect, built by net_brect
 net_down:   db 0             ; 1 = it is drawn PRESSED (SPEC.md 13.8.4).
                              ; net_setdown is its one writer and net_draw_btn
                              ; is its one reader, so a repaint mid-press shows
                              ; the same thing an edge does
+net_pgbody: dw 0             ; net_pgent's: the verb body it is running

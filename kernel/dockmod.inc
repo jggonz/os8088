@@ -26,11 +26,16 @@ modk_hdr:
 ; is not a guess about the kernel's offsets, it is the kernel's own offsets.
 ; The kernel therefore stores the basic table ONCE, as dkv's rest state, and
 ; never needs a copy to restore from.
+;
+; THIS IMAGE'S HALF IS NOT A TABLE. The landing pads below are DKXPAD_LEN
+; bytes apart in DKI_* order (asserted there), so pad i is dkxf_geom plus i
+; pads and dkx_hook writes it with an `add` - SI = 0 says so. Only the
+; KERNEL's half, whose bodies are wherever they are, is a table.
 dkx_hook:
     push bx
     push si
     mov bx, cs                  ; ...this image
-    mov si, dkxf_tab
+    xor si, si                  ; ...whose pads are COUNTED, not looked up
     jmp short dkx_vset
 dkx_unhook:
     push bx
@@ -46,9 +51,14 @@ dkx_vset:
     push di
     mov di, dkv                 ; DS is KERNEL_SEG, so the WRITES are plain;
     mov cx, DKI_N               ; the source is ours and is read through CS
+    mov ax, dkxf_geom - DKXPAD_LEN
     cld
 .l:
+    add ax, DKXPAD_LEN          ; the next pad...
+    or si, si
+    jz .pad                     ; ...or, unhooking, the kernel's next body
     cs lodsw
+.pad:
     mov [di], ax
     mov [di+2], bx
     add di, 4
@@ -92,17 +102,16 @@ dock_timer_tick: dw 0           ; modular start tick; survives cancellation
 %if dock_ffc2 - dock_sx1 != 12
   %error "dkx_live_set copies seven consecutive geometry words"
 %endif
+%if dock_ffar - dock_sx1 != 14 || dock_la1 - dock_sx1 != 16 || dock_la2 - dock_sx1 != 18 || dock_a0 - dock_sx1 != 20 || dock_astep - dock_sx1 != 22 || dock_alen - dock_sx1 != 24 || dock_cap - dock_sx1 != 26
+  %error "dkx_geom writes dock_sx1 through dock_cap as one run of stosw, in this order"
+%endif
 
 dkb_tab:                        ; the KERNEL's bodies, in dock.inc's DKI_* order
     dw dkb_geom, dkb_band, db_force, db_paint, db_px_hit
     dw db_click, db_rclick, db_tile_rect, dkb_force_r, dkb_ret
     dw dkb_ret, dkb_ret, dkb_clc, dkb_clc
-dkxf_tab:                       ; ...and this image's landing pads, likewise
-    dw dkxf_geom, dkxf_band, dkxf_force, dkxf_paint, dkxf_px_hit
-    dw dkxf_click, dkxf_rclick, dkxf_slot_rect, dkxf_force_r, dkxf_drop
-    dw dkxf_pass, dkxf_hole_arm, dkxf_hole_sub, dkxf_hole_win
-%if ($ - dkxf_tab) != DKI_N * 2 || (dkxf_tab - dkb_tab) != DKI_N * 2
-  %error "dkb_tab/dkxf_tab and dock.inc's DKI_* indices disagree"
+%if ($ - dkb_tab) != DKI_N * 2
+  %error "dkb_tab and dock.inc's DKI_* indices disagree"
 %endif
 
 ; The landing pads. The kernel far-JUMPS here, so the caller's own near
@@ -110,24 +119,39 @@ dkxf_tab:                       ; ...and this image's landing pads, likewise
 ; which returns normally, and then goes home to a bare `ret` in the kernel -
 ; a far jump, because CS is this image's until it does. Nothing here touches
 ; a flag, so the CF an operation answers with arrives intact.
-%macro DKXPAD 1
-    call %1
+;
+; EVERY PAD IS DKXPAD_LEN BYTES AND THEY RUN IN DKI_* ORDER, which is the
+; whole of how dkx_hook finds them. `strict` keeps the call near whatever the
+; body's distance, and each pad refuses to assemble anywhere but at its own
+; index, so a pad of another length or a reordering is an assembly error.
+DKXPAD_LEN equ 5
+%macro DKXPAD 2
+%if ($ - dkxf_geom) != (%2 / 4) * DKXPAD_LEN
+  %error "a landing pad is not at its DKI_* index - dkx_hook counts them"
+%endif
+    call strict near %1
+%ifidn %2,DKI_HOLE_WIN
+%else                           ; the LAST pad falls into dkxf_home
     jmp short dkxf_home
+%endif
 %endmacro
-dkxf_geom:      DKXPAD dkx_geom
-dkxf_band:      DKXPAD dkx_band
-dkxf_force:     DKXPAD dkx_force
-dkxf_paint:     DKXPAD dkx_paint
-dkxf_px_hit:    DKXPAD dkx_px_hit
-dkxf_click:     DKXPAD dkx_click
-dkxf_rclick:    DKXPAD dkx_rclick
-dkxf_slot_rect: DKXPAD dkx_slot_rect
-dkxf_force_r:   DKXPAD dkx_force_r
-dkxf_drop:      DKXPAD dkx_drop
-dkxf_pass:      DKXPAD dkx_pass
-dkxf_hole_arm:  DKXPAD dkx_gfx_hole_arm
-dkxf_hole_sub:  DKXPAD dkx_hole_sub
-dkxf_hole_win:  call dkx_hole_win  ; the LAST pad falls into dkxf_home
+dkxf_geom:      DKXPAD dkx_geom, DKI_GEOM
+dkxf_band:      DKXPAD dkx_band, DKI_BAND
+dkxf_force:     DKXPAD dkx_force, DKI_FORCE
+dkxf_paint:     DKXPAD dkx_paint, DKI_PAINT
+dkxf_px_hit:    DKXPAD dkx_px_hit, DKI_PX_HIT
+dkxf_click:     DKXPAD dkx_click, DKI_CLICK
+dkxf_rclick:    DKXPAD dkx_rclick, DKI_RCLICK
+dkxf_slot_rect: DKXPAD dkx_slot_rect, DKI_SLOT_RECT
+dkxf_force_r:   DKXPAD dkx_force_r, DKI_FORCE_R
+dkxf_drop:      DKXPAD dkx_drop, DKI_DROP
+dkxf_pass:      DKXPAD dkx_pass, DKI_PASS
+dkxf_hole_arm:  DKXPAD dkx_gfx_hole_arm, DKI_HOLE_ARM
+dkxf_hole_sub:  DKXPAD dkx_hole_sub, DKI_HOLE_SUB
+dkxf_hole_win:  DKXPAD dkx_hole_win, DKI_HOLE_WIN
+%if DKI_HOLE_WIN + 4 != DKI_N * 4
+  %error "DKI_HOLE_WIN is no longer the last pad - it is the one with no jmp"
+%endif
 dkxf_home:
     jmp KERNEL_SEG:dkb_ret
 dkx_force:
@@ -254,7 +278,14 @@ dkx_geom:
     push bx
     push cx
     push dx
+    push si
+    push di
+    push es
     call dkx_drop ; discard the old geometry's clip hole
+    push cs                     ; ES:DI walks OUR geometry block in its own
+    pop es                      ; order, so every word below is one stosw
+    mov di, dock_sx1
+    cld
     mov al, [dock_cfg]
     mov ah, al
     and al, DOCK_P_MASK
@@ -265,138 +296,143 @@ dkx_geom:
     mov [dock_side], al
     and ah, DOCK_F_AUTO
     mov [cs:dock_auto], ah
-    mov byte [cs:dock_cap], INST_MAX   ; every tile fits a bottom strip (SPEC.md
-                                ; 30.5.1): 8 + 12*28 = 344 of 640
-    mov bx, [vid_pw]
-    mov dx, [vid_ph]
-    mov cx, [vid_phm1]          ; every strip ends on the primary's last row
-    mov [cs:dock_sy2], cx
-    mov [cs:dock_la2], cx          ; ...which is a side strip's along end too
+    mov cx, [vid_pwm1]
+    mov dx, [vid_phm1]          ; every strip ends on the primary's last row
+    mov si, dkx_gbot            ; ...and the orientation's constants (below)
     or al, al
     jnz .side
 
-    ; --- bottom: the geometry this module always had --------------------------
+    ; --- bottom: along 0..pw-1 (CX already), across ph-24..ph-1 (DX already)
+    mov bx, dx
+    sub bx, DOCK_H-1            ; the rule is the strip's first row...
+    lea ax, [bx+3]
+    mov [dock_c0], ax           ; ...and the tile top is rule + 3
     xor ax, ax
-    mov [cs:dock_sx1], ax
-    mov [cs:dock_la1], ax
-    mov [cs:dock_ffc2], cx         ; the field runs to the last row...
-    mov [cs:dock_ffar], cx         ; ...which is where a hidden strip's line is
-    mov ax, [vid_pwm1]
-    mov [cs:dock_sx2], ax
-    mov [cs:dock_la2], ax
-    mov ax, dx
-    sub ax, DOCK_H
-    mov [cs:dock_sy1], ax
-    mov [cs:dock_frc], ax          ; the rule is the strip's first row
-    inc ax
-    mov [cs:dock_ffc1], ax
-    inc ax
-    inc ax
-    mov [dock_c0], ax           ; tile top = rule + 3
-    mov word [cs:dock_a0], DOCK_X0
-    mov word [cs:dock_astep], DOCK_STEP
-    mov word [cs:dock_alen], DOCK_TILE_W
-    mov ax, DOCK_H
-    call .thick
-    jmp .done
+    jmp short .rect
 
-.side:
+.side:                          ; --- along MBAR_H..ph-1; across the right
+    mov si, dkx_gside           ; edge's pw-32..pw-1 or the left's 0..31
+    mov bx, cx
+    sub bx, DOCK_SW-1
+    cmp al, DOCK_P_LEFT
+    jne .r
+    xor bx, bx
+    mov cx, DOCK_SW-1
+.r:
+    xchg cx, dx                 ; DX = across end, CX = ph-1 = along end
+    lea ax, [bx+DOCK_SX]
+    mov [dock_c0], ax           ; tile left = the strip's own left + 4
     mov ax, MBAR_H
-    mov [cs:dock_sy1], ax
-    mov [cs:dock_la1], ax
-    add ax, DOCK_SY0
-    mov [cs:dock_a0], ax
-    mov word [cs:dock_astep], DOCK_SSTEP
-    mov word [cs:dock_alen], DOCK_TILE_H
-    mov ax, dx                  ; --- HOW MANY TILES THE SIDE HOLDS (SPEC.md
-    sub ax, MBAR_H + 2*DOCK_SY0 + DOCK_TILE_H   ; 30.5.1): every one on VGA,
-    jb .one                     ; eleven on Hercules and EGA, seven on CGA -
-    mov bl, DOCK_SSTEP          ; and the tiles then pack rather than keeping
-    div bl                      ; their slots (dkx_map). AX < 480 and the
-    inc al                      ; step is 24, so the quotient is a byte
+
+.rect:                          ; AX = along1, BX = across1, CX = along2,
+    call dkx_swap_side          ; DX = across2 - as x1,y1,x2,y2 for the rect
+    stosw                       ; [dock_sx1]
+    xchg ax, bx
+    stosw                       ; [dock_sy1]
+    xchg ax, bx
+    xchg ax, cx
+    stosw                       ; [dock_sx2]
+    xchg ax, cx
+    xchg ax, dx
+    stosw                       ; [dock_sy2]
+    xchg ax, dx
+    call dkx_swap_side          ; ...and back to along/across
+
+    cmp byte [dock_side], DOCK_P_LEFT
+    xchg ax, bx                 ; AX = across1, BX = along1 (flags kept)
+    je .left
+    stosw                       ; [dock_frc]  the rule is the INNER edge -
+    inc ax                      ; the first row/column
+    stosw                       ; [dock_ffc1] ...the field beside it,
+    xchg ax, dx
+    stosw                       ; [dock_ffc2] ...to the outer edge,
+    stosw                       ; [dock_ffar] where a hidden strip's line is
+    jmp short .along
+.left:                          ; left: outer edge at zero, rule at the far end
+    xchg ax, dx                 ; AX = across2, DX = across1
+    stosw                       ; [dock_frc]
+    xchg ax, dx
+    stosw                       ; [dock_ffc1] = across1
+    xchg ax, dx
+    dec ax
+    stosw                       ; [dock_ffc2] = across2 - 1
+    xchg ax, dx
+    stosw                       ; [dock_ffar] = across1
+.along:
+    xchg ax, bx
+    stosw                       ; [dock_la1]
+    xchg ax, cx
+    stosw                       ; [dock_la2]
+    cs movsw                    ; [dock_a0], [dock_astep], [dock_alen]: the
+    cs movsw                    ; orientation's constants
+    cs movsw
+
+    ; --- HOW MANY TILES THE STRIP HOLDS (SPEC.md 30.5.1), one formula on
+    ; every edge: (along end - margin - a0 - alen) / astep + 1, at least 1 -
+    ; the margin is the DOCK_SY0 the first tile stands in by - capped at
+    ; INST_MAX - every one on VGA, eleven on Hercules and EGA, seven on CGA
+    ; for a side; and the bottom's is always INST_MAX, because every primary
+    ; is at least 640 wide and 8 + 12*28 = 344. The tiles then pack rather
+    ; than keeping their slots (dkx_map).
+    sub ax, DOCK_SY0-1          ; AX = along end + 1, less the far margin
+    sub ax, [cs:si-6]           ; - a0
+    sub ax, [cs:si-2]           ; - alen
+    jnb .fit
+    xor ax, ax                  ; not even one past the first: one tile
+.fit:
+    div byte [cs:si-4]          ; AX < 720 and astep >= 24: AL is the quotient
+    inc ax
     cmp al, INST_MAX
     jbe .cap
     mov al, INST_MAX
-    jmp short .cap
-.one:
-    mov al, 1
 .cap:
-    mov [cs:dock_cap], al
-    mov bx, [vid_pw]            ; (the divide spent BX)
-    mov ax, DOCK_SW
-    call .thick                 ; AX = the reserved thickness
-    mov cx, bx
-    sub cx, DOCK_SW            ; right strip's first column
-    mov dx, [vid_pwm1]
-    cmp byte [dock_side], DOCK_P_LEFT
-    jne .srect
-    xor cx, cx                 ; left: the same cross geometry at column zero
-    mov dx, DOCK_SW - 1
-.srect:
-    mov [cs:dock_sx1], cx
-    mov [cs:dock_sx2], dx
-    mov bx, cx
-    add bx, DOCK_SX
-    mov [dock_c0], bx
-    mov [cs:dock_frc], cx         ; rule faces inward on the right strip
-    mov [cs:dock_ffar], dx
-    inc cx
-    cmp byte [dock_side], DOCK_P_LEFT
-    jne .field
-    dec cx
-    mov [cs:dock_ffar], cx        ; left: outer edge at zero, rule at the far end
-    mov [cs:dock_frc], dx
-    dec dx
-.field:
-    mov [cs:dock_ffc1], cx
-    mov [cs:dock_ffc2], dx
+    stosb                       ; [dock_cap]
 
-.done:
+    cs lodsw                    ; AX = the strip's width, which it RESERVES
+    test byte [dock_cfg], DOCK_F_AUTO
+    jz .thk                     ; ...unless it hides: then only the line
+    mov ax, 1
+.thk:
     mov [dock_thk], ax          ; (wm_dock_snap's half-a-strip test)
+    pop es
     call dkx_band
     call dkx_live_set
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dkx_ret_di
 
-.thick:                         ; AX = the strip's width -> AX = what it
-    cmp byte [cs:dock_auto], 0     ; RESERVES: all of it, or the line
-    je .tout
-    mov ax, 1
-.tout:
-    ret
+; dkx_geom's per-orientation constants, in [dock_a0]..[dock_alen] order and
+; then the reserved width: SPEC.md 30.5's table, as data
+dkx_gbot:   dw DOCK_X0, DOCK_STEP, DOCK_TILE_W, DOCK_H
+dkx_gside:  dw MBAR_H + DOCK_SY0, DOCK_SSTEP, DOCK_TILE_H, DOCK_SW
 
 dkx_band:
     push ax
     push bx
+    push cx
     push dx
-    xor ax, ax
-    mov [vid_band_x0], ax
+    mov cx, [dock_thk]
     mov bx, [vid_pw]
     mov dx, [vid_ph]
-    cmp byte [dock_side], DOCK_P_BOTTOM
-    je .bottom
-    cmp byte [dock_side], DOCK_P_LEFT
-    jne .right
-    mov ax, [dock_thk]
-    mov [vid_band_x0], ax
+    mov al, [dock_side]         ; DOCK_P_* is 0..2, so AH comes out 0
+    cbw
+    dec ax                      ; bottom -1, left 0, right 1
+    js .bottom
+    jz .left
+    sub bx, cx                  ; right: the band stops short of the strip
+    dec ax                      ; ...and starts at 0
     jmp short .done
-.right:
-    sub bx, [dock_thk]
+.left:
+    xchg ax, cx                 ; left: the band starts after it
     jmp short .done
 .bottom:
-    sub dx, [dock_thk]
+    sub dx, cx                  ; bottom: the band's rows stop above it
+    inc ax                      ; ...and it starts at 0
 .done:
+    mov [vid_band_x0], ax
     mov [vid_band_xe], bx
     mov [vid_dock_y0], dx
     sub bx, DESK_ZXOFF          ; cell 0 (SPEC.md 26.9)
     mov [vid_desk_zx], bx
-    pop dx
-    pop bx
-    pop ax
-    ret
+    jmp dkx_ret_dx
 
 ; -----------------------------------------------------------------------------
 ; dkx_live_set - the LIVE rect, rule, field and cross, from [dock_up]
@@ -410,55 +446,51 @@ dkx_band:
 ; -----------------------------------------------------------------------------
 dkx_live_set:
     push ax
+    push bx
     push cx
+    push dx
     push si
     push di
     push es
     push ds
-    push ds
-    pop es                    ; ES = the kernel's, where the LIVE block is
-    push cs
-    pop ds                    ; DS = ours, where the STRIP block is (30.5)
-    mov si, dock_sx1
+    pop es                    ; ES = the kernel's, where the LIVE block is;
+    mov si, dock_sx1          ; the STRIP block is ours, read through CS (30.5)
     mov di, dock_lx1
     mov cx, 7                 ; rect, rule, and field: identical word layouts
     cld
-    rep movsw
-    pop ds
+.copy:
+    cs lodsw
+    stosw
+    loop .copy                ; ...and CX = 0 from here on
     pop es
-    pop di
-    pop si
-    mov byte [cs:dock_hidden], 0
-    cmp byte [cs:dock_auto], 0
-    je .cross
-    cmp byte [dock_up], 0
-    jne .cross
-    inc byte [cs:dock_hidden]
+    xor ax, ax                ; hidden is "auto and not open"
+    cmp [cs:dock_auto], al
+    je .hid
+    cmp [dock_up], al
+    jne .hid
+    inc ax
+.hid:
+    mov [cs:dock_hidden], al  ; exactly 0 or 1
+    or al, al
+    jz .cross
     mov ax, [cs:dock_ffar]         ; the line: the outer edge
     mov [dock_rc], ax
     mov word [dock_fc1], 1      ; ...and no field: an empty cross
-    mov word [dock_fc2], 0
-    cmp byte [dock_side], DOCK_P_BOTTOM
+    mov [dock_fc2], cx
+    mov bx, dock_lx1            ; ...and the rect's ACROSS pair is the line:
+    cmp [dock_side], cl         ; y on the bottom strip, x on a side
     jne .sline
-    mov [dock_ly1], ax
-    mov [dock_ly2], ax
-    jmp short .cross
+    inc bx
+    inc bx
 .sline:
-    mov [dock_lx1], ax
-    mov [dock_lx2], ax
+    mov [bx], ax
+    mov [bx+4], ax
 .cross:
-    mov ax, [dock_ly1]          ; the live strip's extent ACROSS its long axis
-    mov cx, [dock_ly2]
-    cmp byte [dock_side], DOCK_P_BOTTOM
-    je .c
-    mov ax, [dock_lx1]
-    mov cx, [dock_lx2]
-.c:
-    mov [dock_lc1], ax
-    mov [dock_lc2], cx
-    pop cx
-    pop ax
-    ret
+    call dkx_live_rect          ; the live strip's extent ACROSS its long
+    call dkx_swap_side          ; axis: BX/DX, whichever edge it is on
+    mov [dock_lc1], bx
+    mov [dock_lc2], dx
+    jmp dkx_ret_di
 
 ; -----------------------------------------------------------------------------
 ; dock_apply - the SETTING moved: geometry, drive column, windows, strip
@@ -512,8 +544,12 @@ dkx_paint:
                                 ; which is a slow death nothing in the tree
                                 ; would report. See the matching `pop ax`.
     mov byte [dock_drew], 0
-    mov word [dock_px1], 07FFFh ; ...and nothing of the strip is painted YET
-    mov word [dock_px2], 08000h ; (SPEC.md 30.3.3): [dock_px1]/[dock_px2] are
+    mov ax, 07FFFh              ; ...and nothing of the strip is painted YET
+    mov cx, 08000h              ; (SPEC.md 30.3.3): [dock_px1]/[dock_px2] are
+    mov [dock_px1], ax          ; (the same two registers carry the sentinel
+    mov [dock_px2], cx          ; into `.full`'s exchange: wm_top and
+                                ; inst_win_owner preserve both, as db_paint
+                                ; already relies on)
                                 ; this pass's answer, not the last one's, and
                                 ; EMPTY is the inverted bounding box 07FFFh..
                                 ; 08000h so that dkx_px_hit's signed compares
@@ -555,8 +591,7 @@ dkx_paint:
                                 ; the window as well, and this does not depend
                                 ; on believing it. `pushf`/`popf`, never
                                 ; `cli`/`sti` - the caller's IF is its own.
-    mov ax, 07FFFh
-    mov cx, 08000h
+                                ; AX:CX = 07FFFh:08000h still, from above
     pushf
     cli
     xchg ax, [dock_dx1]
@@ -578,13 +613,12 @@ dkx_paint:
     ; [dock_dx1]/[dock_dx2] from the call above; DX comes back from gfx_hline
     ; still holding [vid_dock_y0]. The four:
     ;   dkx_px_add   "every register preserved"          (its header above)
-    ;   thm_ink/thm_bg "clobbers: nothing (flags preserved)" (vga12.inc)
+    ;   dkx_ink/dkx_bg "clobbers: nothing (flags preserved)" (below)
     ;   gfx_hline     "clobbers: flags"                   (vga12.inc)
     ;   gfx_fill      "clobbers: flags"                   (vga12.inc)
     ; Four memory reads off this path, and it is the [dock_full] path - the
     ; one somebody drawing over the strip takes.
-    push cs
-    call dkk_thm_ink                ; the rule, over the damaged span only - the
+    call dkx_ink                ; the rule, over the damaged span only - the
     mov bx, [dock_rc]           ; LINE, while the strip is hidden (SPEC.md
     mov dx, bx                  ; 30.6), and it is one fill on any edge
     call dkx_span_fill
@@ -593,8 +627,7 @@ dkx_paint:
     mov dx, [dock_fc2]          ; strip does not have (fc1 > fc2)
     cmp bx, dx
     jg .nofield
-    push cs
-    call dkk_thm_bg
+    call dkx_bg
     call dkx_span_fill
 .nofield:
 
@@ -950,8 +983,7 @@ dkx_erase_tile:
     push cx
     push dx
     call dkx_tile_rect         ; AX/BX/CX/DX = the whole tile
-    push cs
-    call dkk_thm_bg                 ; ("clobbers: nothing", so the rect survives)
+    call dkx_bg                 ; ("clobbers: nothing", so the rect survives)
     call KERNEL_SEG:cw_gfx_fill
     jmp dkx_ret_dx
 
@@ -1024,8 +1056,7 @@ dkx_draw_tile:
     mov si, ax                  ; SI = tile left for the duration...
     push bx                     ; ...and the top on the stack, popped below
 
-    push cs
-    call dkk_thm_ink                ; "clobbers: nothing (flags preserved)", so AX
+    call dkx_ink                ; "clobbers: nothing (flags preserved)", so AX
     call dkx_rect_ab           ; and BX are STILL the corner here: the 1px
     call KERNEL_SEG:cw_gfx_frame              ; tile frame IS the tile rect, and gfx_frame
                                 ; is "clobbers: flags", so the rect survives it
@@ -1047,8 +1078,7 @@ dkx_draw_tile:
 
     cmp di, [dock_act]          ; active: a second frame just inside the
     jne .mini                   ; first, which reads as a heavier border and
-    push cs
-    call dkk_thm_ink                ; costs no colour (SPEC.md 39.4). The icon
+    call dkx_ink                ; costs no colour (SPEC.md 39.4). The icon
     push bx                     ; body is at +4,+2 and 16x16, so it clears
     mov ax, si                  ; both new edges by 2px and 1px
     call dkx_mark_ab
@@ -1102,8 +1132,8 @@ dkx_hit:
     cmp al, INST_MAX            ; past the last position?
     jae .in
     call dkx_map               ; ...and which SLOT it shows (SPEC.md 30.5.1)
-    mov bl, al
-    xor bh, bh
+    cbw                         ; AL < INST_MAX, so AH = 0 and BX = the
+    xchg ax, bx                 ; position (AX = BX's old value, spent below)
     mov al, [cs:dock_pos+bx]
     cmp al, 0FFh
     je .in                      ; none
@@ -1118,20 +1148,22 @@ dkx_hit:
     ret
 
 ; -----------------------------------------------------------------------------
-; dkx_act_slot - do what tile AL's own mark says is not true yet (SPEC.md 30.4)
-; in:  AL = the slot; gfx lock held by the caller
-; out: nothing (all registers preserved)
+; dkx_click - hit-test a click against the strip (SPEC.md 30)
+; in:  CX = x, DX = y (absolute); NO lock held (takes it internally)
+; out: CF = 1 the click was consumed (anywhere in the live strip, tile or not),
+;      CF = 0 not in the dock. All registers preserved.
 ;
-; **The tile is a TOGGLE**: minimized (inverted interior) -> inst_restore;
-; ACTIVE (doubled border - this instance owns the frontmost visible window) ->
-; inst_minimize; anything else -> wm_front. The active tile used to call
-; wm_front on a window that was already frontmost, which repaints no window at
-; all (SPEC.md 11.90) - a click that consumed itself and did nothing.
+; A tile under it is ACTED ON - what its own mark says is not true yet
+; (SPEC.md 30.4). **The tile is a TOGGLE**: minimized (inverted interior) ->
+; inst_restore; ACTIVE (doubled border - this instance owns the frontmost
+; visible window) -> inst_minimize; anything else -> wm_front. The active tile
+; used to call wm_front on a window that was already frontmost, which repaints
+; no window at all (SPEC.md 11.90) - a click that consumed itself and did
+; nothing.
 ;
-; It takes a SLOT and re-resolves the record under the lock the caller holds,
-; which is where a read of a record the lock protects belongs - and it is what
-; lets SPEC.md 30.6.1's tracker call it after the strip has been put away,
-; with the record the press found possibly gone in between.
+; The act takes the SLOT dkx_hit found and re-resolves the record under the
+; lock, which is where a read of a record the lock protects belongs - the
+; lock can yield, and the record the press found can be gone in between.
 ;
 ; It asks wm_top HERE rather than reading [dock_act], which is dkx_paint's
 ; scratch - the retired dialog's fdlg_sel_bar rule about [fdlg_shown]
@@ -1139,52 +1171,13 @@ dkx_hit:
 ; inst_bind_win writes I_WIN and wm_owner together, so the two cannot
 ; disagree.
 ; -----------------------------------------------------------------------------
-dkx_act_slot:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call KERNEL_SEG:cw_inst_ptr               ; DI = the record
-    cmp byte [di+I_STATE], 1
-    jne .out                    ; gone since the press: nothing to do
-    test byte [di+I_FLAGS], 1
-    jz .front
-    push cs
-    call dkk_inst_restore           ; minimized: restore (clears bit0, wm_show)
-    jmp short .out
-.front:
-    mov cx, [di+I_WIN]          ; visible: front it - or minimize it, if it is
-    jcxz .out                   ; already the front one (SPEC.md 30.4)
-    push cs
-    call dkk_wm_top                 ; BX = the frontmost VISIBLE window, or 0
-    cmp bx, cx
-    mov bx, cx                  ; mov does not touch flags: BX = our window for
-    je .fmin                    ; whichever of the two calls is taken
-    push cs
-    call dkk_wm_front
-    jmp short .out
-.fmin:
-    push cs
-    call dkk_inst_minimize          ; sets I_FLAGS bit0 and wm_hides, so the tile
-                                ; inverts (SPEC.md 30.3)
-.out:
-    jmp dkx_ret_di
-
-; -----------------------------------------------------------------------------
-; dkx_click - hit-test a click against the strip (SPEC.md 30)
-; in:  CX = x, DX = y (absolute); NO lock held (takes it internally)
-; out: CF = 1 the click was consumed (anywhere in the live strip, tile or not),
-;      CF = 0 not in the dock. All registers preserved.
-; -----------------------------------------------------------------------------
 dkx_click:
     push ax
     push bx
     push cx
-    push dx                     ; DX IS NOT SPENT HERE - it is pushed so that
-    push di                     ; dkx_rclick can share the tail below, whose
-                                ; pop run is ax,bx,cx,dx,di for both
+    push dx                     ; THE SAME PUSH RUN IN dkx_rclick, which ends
+    push si                     ; in this routine's tail - and it is the shared
+    push di                     ; epilogue ladder's, ax..di
 
     call dkx_hit               ; DI = the live instance under the pointer
     jc .miss
@@ -1192,21 +1185,37 @@ dkx_click:
     jz .consumed                ; bare strip, gap or dead slot: consumed no-op
 
     call KERNEL_SEG:cw_gfx_lock
-    call dkx_act_slot          ; AL = the slot dkx_hit found
+    call KERNEL_SEG:cw_inst_ptr ; DI = the record of slot AL, again
+    cmp byte [di+I_STATE], 1
+    jne .unlock                 ; gone since the press: nothing to do
+    test byte [di+I_FLAGS], 1
+    jz .front
+    push cs
+    call dkk_inst_restore           ; minimized: restore (clears bit0, wm_show)
+    jmp short .unlock
+.front:
+    mov cx, [di+I_WIN]          ; visible: front it - or minimize it, if it is
+    jcxz .unlock                ; already the front one (SPEC.md 30.4)
+    push cs
+    call dkk_wm_top                 ; BX = the frontmost VISIBLE window, or 0
+    cmp bx, cx
+    mov bx, cx                  ; mov does not touch flags: BX = our window for
+    je .fmin                    ; whichever of the two calls is taken
+    call KERNEL_SEG:apic_wm_front     ; the routine's own cell is the door
+    jmp short .unlock
+.fmin:
+    call KERNEL_SEG:apic_inst_minimize ; sets I_FLAGS bit0 and wm_hides, so
+                                ; the tile inverts (SPEC.md 30.3)
+.unlock:
     call KERNEL_SEG:cw_gfx_unlock
 
 .consumed:                      ; --- THE SHARED TAIL. dkx_rclick jumps in
-    stc                         ; HERE and at `.miss`, and both push
-    jmp .out                    ; ax,bx,cx,dx,di in that order - which is now
-.miss:                          ; this label's CONTRACT, enforced by nothing
-    clc                         ; but the comment at both ends
+    stc                         ; HERE and at `.miss`, having pushed what this
+    jmp short .out              ; routine pushed, in the same order
+.miss:
+    clc
 .out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dkx_ret_di              ; pops spend no flag
 
 ; -----------------------------------------------------------------------------
 ; dkx_rclick - right-press on the strip: a tile's context menu (SPEC.md 30.2)
@@ -1217,10 +1226,17 @@ dkx_click:
 ; One item, 'Close': the close box of SPEC.md 13 reached from the dock. The
 ; strip's own background is consumed and drops NOTHING.
 ;
+; The menu is ANCHORED OFF THE STRIP, so it does not land on the tile it is
+; asking about - an open hidden strip included, which the menu draws OVER
+; (menu_drop puts the hole away while it is down): above a bottom strip, right
+; of a left one and left of a right one. menu_popup shifts and floors whatever
+; it is handed (SPEC.md 12.4), so DOCK_CTX_H and DOCK_CTX_W decide placement
+; and nothing else.
+;
 ; **The record pointer does not survive the tracker; the slot does.**
 ; menu_popup holds the button and yields (SPEC.md 12.4), so a package worker
 ; can reach inst_task_die and free the very record this menu is about. So the
-; SLOT is carried across it, and dkx_close_slot re-resolves it and re-tests
+; SLOT is carried across it, and 'Close' re-resolves it and re-tests
 ; I_STATE = 1 before anything is done.
 ;
 ; Unbilled, exactly like menu_track and fm_rclick (SPEC.md 13).
@@ -1230,6 +1246,7 @@ dkx_rclick:
     push bx                     ; order, because this routine ENDS IN ITS TAIL
     push cx
     push dx
+    push si
     push di
 
     call dkx_hit               ; DI = the live instance under the pointer
@@ -1238,31 +1255,7 @@ dkx_rclick:
     jz dkx_click.consumed      ; bare strip: consumed, and no menu
 
     call KERNEL_SEG:cw_gfx_lock
-    call dkx_ctx               ; CF = 1 nothing chosen; AL = the slot still
-    jc .rdone
-    call dkx_close_slot
-.rdone:
-    call KERNEL_SEG:cw_gfx_unlock
-    jmp dkx_click.consumed     ; ...and out through dkx_click's tail, whose
-                                ; five pops are this routine's five pushes
-
-; -----------------------------------------------------------------------------
-; dkx_ctx - drop the tile's one-item menu beside the strip (SPEC.md 30.2)
-; in:  CX = the press x, DX = the press y, AL = the slot; gfx lock held
-; out: CF = 1 nothing was chosen, CF = 0 'Close' was. Every register preserved.
-;
-; ANCHORED OFF THE STRIP, so it does not land on the tile it is asking about -
-; an open hidden strip included, which the menu draws OVER (menu_drop puts the
-; hole away while it is down):
-; above a bottom strip, right of a left one and left of a right one. menu_popup
-; shifts and floors whatever it is handed (SPEC.md 12.4), so DOCK_CTX_H and
-; DOCK_CTX_W decide placement and nothing else.
-; -----------------------------------------------------------------------------
-dkx_ctx:
-    push ax
-    push bx
-    push cx
-    push dx
+    push ax                     ; AL = the slot, across the tracker
     cmp byte [dock_side], DOCK_P_LEFT
     je .left
     ja .right
@@ -1280,34 +1273,19 @@ dkx_ctx:
     mov bx, dock_ctx_items
     mov ax, DOCK_CTX_N
     call KERNEL_SEG:cw_menu_popup             ; CF = 1 nothing chosen
-    pop dx                      ; POP spends no flag
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dkx_close_slot - 'Close' on tile AL, if its instance is still there
-; in:  AL = the slot; gfx lock held, UI task (SPEC.md 29.4)
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-dkx_close_slot:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call KERNEL_SEG:cw_inst_ptr               ; the tracker yielded: find the record again,
-    cmp byte [di+I_STATE], 1    ; and take it only if it is still live
-    jne .out
+    pop ax                      ; POP spends no flag
+    jc .rdone
+    call KERNEL_SEG:cw_inst_ptr ; 'Close': the tracker yielded, so find the
+    cmp byte [di+I_STATE], 1    ; record again and take it only if it is
+    jne .rdone                  ; still live
     mov bx, [di+I_WIN]
     or bx, bx
-    jz .out
-    push cs
-    call dkk_app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4)
-.out:
-    jmp dkx_ret_di
+    jz .rdone
+    call KERNEL_SEG:cw_app_close_win  ; in: BX; lock held, UI task (SPEC.md 29.4)
+.rdone:
+    call KERNEL_SEG:cw_gfx_unlock
+    jmp short dkx_click.consumed ; ...and out through dkx_click's tail, whose
+                                ; pops are this routine's pushes
 
 ; -----------------------------------------------------------------------------
 ; dkx_map - which instance SLOT each tile POSITION shows (SPEC.md 30.5.1)
@@ -1409,21 +1387,17 @@ dkx_map:
 ; in:  CX = instance slot; out: AX/BX/CX/DX = the tile; clobbers flags
 ; -----------------------------------------------------------------------------
 dkx_slot_rect:
-    push si
     call dkx_map
-    xor si, si
+    xor bx, bx                  ; BX is an output, so it is free to walk with
 .find:
-    cmp [cs:dock_pos+si], cl
+    cmp [cs:dock_pos+bx], cl
     je .have
-    inc si
-    cmp si, INST_MAX
-    jb .find
-    mov si, [cs:dock_cap]          ; (a byte, and the word's high half is masked)
-    and si, 0FFh
-    dec si
+    inc bx                      ; ...as far as the CAP: a position past it
+    cmp bl, [cs:dock_cap]       ; shows nothing (0FFh), so the search there
+    jb .find                    ; was never going to match
+    dec bx                      ; not shown: the last tile there is
 .have:
-    mov cx, si
-    pop si
+    mov cx, bx
     jmp dkx_tile_rect
 
 ; -----------------------------------------------------------------------------
@@ -1478,8 +1452,13 @@ dkx_pass:
     jmp short .out
 .nosv:
 %endif
-    call dkx_in_strip
-    jnc .off
+    push ds                     ; is the pointer on the strip's WHOLE rect?
+    push cs                     ; That block is OURS, so dkx_point reads it
+    pop ds                      ; through a DS it is handed
+    mov bx, dock_sx1
+    call dkx_point              ; CF = 1 off it
+    pop ds
+    jnc .off                    ; on it: the linger starts again
     mov bx, DOCK_LEAVE_T
 .count:
     mov ax, [ticks]
@@ -1492,55 +1471,47 @@ dkx_pass:
     sub ax, [cs:dock_timer_tick]
     cmp ax, bx
     jb .out
-    cmp byte [dock_up], 0
-    jne .close
-    call dkx_open
-.off:
-    mov byte [cs:dock_timer_on], 0
-    jmp short .out
-.close:
-    call KERNEL_SEG:cw_gfx_lock
-    call dkx_shut
-    call KERNEL_SEG:cw_gfx_unlock
-.out:
-    jmp dkx_ret_di
-
-; Open over windows without holding the lock between UI passes. All registers
-; preserved. Closing repaints, so neither a save-under nor stale flag is needed.
-dkx_open:
-    call KERNEL_SEG:cw_gfx_lock
+    call KERNEL_SEG:cw_gfx_lock ; the time is up: a hidden strip OPENS, an
+    cmp byte [dock_up], 0       ; open one closes - decided under the lock
+    jne .shut
+    ; --- OPEN, over windows, without holding the lock between UI passes:
+    ; live, forced, painted, and THEN the hole. Closing repaints, so neither a
+    ; save-under nor a stale flag is needed (SPEC.md 30.6.1)
     mov byte [dock_up], 1
     call dkx_live_set
     call dkx_force
     call dkx_paint
     mov word [gfx_hole], 1
-    jmp dkx_out_gfx_unlock
-
-; gfx lock held; preserve the old rect before making the hidden line live.
-dkx_shut:
-    cmp byte [dock_up], 0
-    je .ret
-    push ax
-    push bx
-    push cx
-    push dx
-    call dkx_live_rect
+    jmp short .unlock
+.close:                         ; a fullscreen window came up over it
+    call KERNEL_SEG:cw_gfx_lock
+    cmp byte [dock_up], 0       ; ...and only if it is still open
+    je .unlock
+.shut:                          ; --- CLOSE: the old rect is kept before the
+    call dkx_live_rect          ; hidden line goes live, and repainted after
     call dkx_drop
     call KERNEL_SEG:cw_wm_paint_dmg
-    jmp dkx_ret_dx
-.ret:
-    ret
+.unlock:
+    call KERNEL_SEG:cw_gfx_unlock
+.off:
+    mov byte [cs:dock_timer_on], 0
+.out:
+    jmp dkx_ret_di
 
 ; Forget without drawing: geometry changes, fsx and the saver repaint later.
+; All registers preserved; flags are not.
 dkx_drop:
-    mov byte [cs:dock_timer_on], 0
-    cmp byte [dock_up], 0
+    push ax
+    xor ax, ax
+    mov [cs:dock_timer_on], al
+    cmp [dock_up], al
     je .ret
-    mov word [gfx_hole], 0
-    mov word [wm_clip_n], 0
-    mov byte [dock_up], 0
-    jmp dkx_live_set
+    mov [gfx_hole], ax
+    mov [wm_clip_n], ax
+    mov [dock_up], al
+    call dkx_live_set
 .ret:
+    pop ax
     ret
 
 ; No region is armed. Seed the virtual desktop and subtract the dock with
@@ -1581,7 +1552,9 @@ dkx_hole_sub:
     mov ax, [dock_ly2]
     mov [wm_cl_oy2], ax
     pop ax
-    jmp dkx_out_wm_clip_subr
+    push cs
+    call dkk_wm_clip_subr
+    ret
 .no:
     clc
     ret
@@ -1607,18 +1580,6 @@ dkx_hole_win:
     clc
     ret
 
-; dkx_in_strip - CX,DX on the strip's whole rect? CF = 1 no. Preserves all.
-dkx_in_strip:
-    push bx
-    push ds                     ; the STRIP block is OURS and the hidden
-    push cs                     ; line's is the kernel's, so dkx_point reads
-    pop ds                      ; whichever DS its caller hands it
-    mov bx, dock_sx1
-    call dkx_point
-    pop ds
-    pop bx
-    ret
-
 ; CX,DX against the four consecutive words at DS:BX. CF = 1 outside;
 ; registers preserved. Used for both the hidden line and the whole strip.
 dkx_point:
@@ -1637,15 +1598,6 @@ dkx_point:
     ret
 
 
-dkx_out_gfx_unlock:
-    call KERNEL_SEG:cw_gfx_unlock
-    ret
-
-dkx_out_wm_clip_subr:
-    push cs
-    call dkk_wm_clip_subr
-    ret
-
 dkx_ret_di: pop di
 dkx_ret_si: pop si
 dkx_ret_dx: pop dx
@@ -1654,14 +1606,39 @@ dkx_ret_dx: pop dx
     pop ax
     ret
 
+; dkx_bg / dkx_ink - the chrome's background / ink pen: vga12.inc's thm_bg and
+; thm_ink, NEAR COPIES in the image (extmod.inc's ext_kind_of is the same
+; trade). Each kernel body is a byte load and a store; the far hop to it was
+; a ten-byte stub here plus `push cs` at every site, on the paint path - so
+; the copy is 5 bytes smaller and a near call instead of a far frame built by
+; hand. Same contract: [gfx_color] set, nothing else touched, FLAGS
+; PRESERVED (MOV, PUSH, POP and JMP write none - the paint sets the pen
+; between a CF-setting call and its branch).
+%ifdef OS88_THEME
+dkx_bg:
+    push ax
+    mov al, [thm_bgc]
+    jmp short dkx_pen
+dkx_ink:
+    push ax
+    mov al, [thm_inkc]
+dkx_pen:
+    mov [gfx_color], al
+    pop ax
+    ret
+%else                           ; (no theme: the pens are constants, as in
+dkx_bg:                         ; vga12.inc)
+    mov byte [gfx_color], CWHITE
+    ret
+dkx_ink:
+    mov byte [gfx_color], CBLACK
+    ret
+%endif
+
 ; Kernel routines only this module calls. `push cs` + a near call to one of
 ; these builds the far return frame; the kernel routine's near `ret` lands on
 ; cw_kretf, which returns here - so no resident cw_* shim is needed.
 dkx_kretf: dw cw_kretf
-dkk_app_close_win:
-    ; STKBALANCE-NET: -1
-    push word [cs:dkx_kretf]
-    jmp KERNEL_SEG:app_close_win
 dkk_gfx_xor_rect:
     ; STKBALANCE-NET: -1
     push word [cs:dkx_kretf]
@@ -1670,22 +1647,10 @@ dkk_inst_icon_ptr:
     ; STKBALANCE-NET: -1
     push word [cs:dkx_kretf]
     jmp KERNEL_SEG:inst_icon_ptr
-dkk_inst_minimize:
-    ; STKBALANCE-NET: -1
-    push word [cs:dkx_kretf]
-    jmp KERNEL_SEG:inst_minimize
 dkk_inst_restore:
     ; STKBALANCE-NET: -1
     push word [cs:dkx_kretf]
     jmp KERNEL_SEG:inst_restore
-dkk_thm_bg:
-    ; STKBALANCE-NET: -1
-    push word [cs:dkx_kretf]
-    jmp KERNEL_SEG:thm_bg
-dkk_thm_ink:
-    ; STKBALANCE-NET: -1
-    push word [cs:dkx_kretf]
-    jmp KERNEL_SEG:thm_ink
 dkk_wm_clip_seed:
     ; STKBALANCE-NET: -1
     push word [cs:dkx_kretf]
@@ -1694,10 +1659,6 @@ dkk_wm_clip_subr:
     ; STKBALANCE-NET: -1
     push word [cs:dkx_kretf]
     jmp KERNEL_SEG:wm_clip_subr
-dkk_wm_front:
-    ; STKBALANCE-NET: -1
-    push word [cs:dkx_kretf]
-    jmp KERNEL_SEG:wm_front
 dkk_wm_fs_vis:
     ; STKBALANCE-NET: -1
     push word [cs:dkx_kretf]

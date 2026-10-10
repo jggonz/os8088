@@ -1869,13 +1869,16 @@ dskw_rbody:
 .out:
     ret
 .isfile:
-    mov al, [dskw_raw+DSK_R_CZM]    ; **AND IF THE DIRECTORY DID NOT SAY, ASK
-    sub al, DSK_CZ_MARK             ; THE FILE** (SPEC.md 20.14.6). The hint is
-    cmp al, LZ_LZB                  ; a CACHE and a foreign tool drops it: a
-    jbe .sniffed                    ; file copied in by DOS reached the
-    call dskw_czsniff               ; application packed. A file that HAS one
-.sniffed:                           ; never gets here, so our own disks pay a
-                                    ; compare and no I/O at all
+    call dskw_czknow                ; **AND IF THE DIRECTORY DID NOT SAY, ASK
+                                    ; THE FILE** (SPEC.md 20.14.6). The hint is
+                                    ; a CACHE and a foreign tool drops it: a
+                                    ; file copied in by DOS reached the
+                                    ; application packed. A file that HAS one
+                                    ; is never sniffed, so our own disks pay a
+                                    ; compare and no I/O at all - and the
+                                    ; compare's FLAGS are the verdict `.sizes`
+                                    ; branches on below, every instruction
+                                    ; between being a `mov`
     ; --- ONE PLACEMENT FOR BOTH KINDS OF FILE (SPEC.md 20.14.2) -------------
     ; A compressed file's packed bytes are read HIGH in the caller's buffer,
     ; R = U - P above its base, and expanded downwards onto themselves - no
@@ -1903,10 +1906,8 @@ dskw_rbody:
     mov [dskw_len], ax
     mov [dskw_lenhi], dx
     mov bx, ax
-    mov cl, [dskw_raw+DSK_R_CZM]        ; the hint: the mark LESS its format,
-    sub cl, DSK_CZ_MARK                 ; so 0x5A and 0x5B pass and nothing
-    cmp cl, LZ_LZB                      ; else (SPEC.md 20.14.1)
-    ja .sizes                           ; a plain file becomes what it is.
+    ja .sizes                           ; dskw_czknow's verdict, still in the
+                                        ; flags: a plain file becomes what it is.
                                         ; P PAST 64KB IS FINE: the decoder's
                                         ; source crosses too (SPEC.md
                                         ; 20.14.5.1), and the hint's U being
@@ -2055,8 +2056,9 @@ dskw_rbody:
     mov [dskw_raw+DSK_R_CZL], ax        ; to trust - and through the
                                         ; accumulator, which is 8 bytes where
                                         ; two `mov word [m], 0` are 12
-    call dskw_czsniff                   ; to trust: the file's own header is
-    jmp .sniffed                        ; the only thing that can say
+    jmp .isfile                         ; to trust: the file's own header is
+                                        ; the only thing that can say, and
+                                        ; dskw_czknow asks it
 .fsprot:
     mov ax, FERR_PROT
 .fsfail:
@@ -3766,6 +3768,34 @@ dskw_czstamp:
     ret
 
 ; -----------------------------------------------------------------------------
+; dskw_czknow - is dskw_raw's file compressed? The hint, and the FILE when the
+;               directory did not say (SPEC.md 20.14.6)
+; in:  dskw_raw's entry as dskw_find or dskw_stat left it (DSK_R_CLUS its first
+;      cluster, or the driver handle .fsread banks there)
+; out: the flags of `cmp al, LZ_LZB` on the hint's mark less DSK_CZ_MARK, so
+;      BE = compressed and the hint in dskw_raw holds U, A = plain
+; clobbers: AL when the hint is there; AX, BX, CX, DX and ES when it sniffs
+;
+; THE ONE PLACE THE HINT IS JUDGED ON THE WAY IN: the read (dskw_rbody), its
+; redirected arm, and drv_find - which sizes every driver's and every
+; module's claim, and used to read the hint and believe its absence. A
+; driver copied onto the system disk by a host tool carries no hint, so the
+; claim was the PACKED size and the read refused it FERR_BIG: the driver
+; simply never loaded (tests/lzdrv.py --nohint). A file WITH a hint costs the
+; same one compare it always did.
+; -----------------------------------------------------------------------------
+dskw_czknow:
+    call .judge
+    jbe .out                    ; the directory said, and it said compressed
+    call dskw_czsniff           ; ...or it said nothing: ask the file, and
+.judge:                         ; judge again on whatever that wrote
+    mov al, [dskw_raw+DSK_R_CZM]    ; the mark LESS its format (SPEC.md
+    sub al, DSK_CZ_MARK             ; 20.14.1), so 0x5A and 0x5B pass
+    cmp al, LZ_LZB
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; dskw_czsniff - ask the FILE, when the directory did not say (SPEC.md 20.14.6)
 ; in:  dskw_raw's entry, with the hint already read as ABSENT, and
 ;      DSK_R_CLUS holding its first cluster or its driver handle
@@ -4777,37 +4807,11 @@ modf_hdr:
     dw MOD_STAMP                ; ...and another BUILD of this one
     dw modf_end                 ; MOD_H_IMG
     dw FM_NENT                  ; MOD_H_NENT
-    dw modf_e_probe             ; the FAR entries, never the bodies: an entry
-    dw modf_e_format            ; is reached by `call far`, so it has to end
-    dw modf_e_reach             ; in a retf, and every body below keeps the
-    dw modf_e_line              ; near `ret` cold code has always had
-
-modf_e_probe:   call dskw_fmt_probe_x
-            retf
-modf_e_format:  call dskw_format_x
-            retf
-modf_e_reach:   call dskw_fmt_reach_x
-            retf
-modf_e_line:    call dskw_fmt_line_x
-            retf
-
-; -----------------------------------------------------------------------------
-; dskw_fmt_ioerr - dskw_ioerr's six instructions, in the image
-;
-; The formatter's one call OUT that is not already a cw_* shim. Duplicated
-; rather than far-entered on docs/plans/completed/HDD-SPLIT-PLAN.md 3.2's rule: a boundary
-; crossing for two compares costs more than the eleven bytes it saves, and a
-; far entry would be a fifth thing the resident half publishes for the sake
-; of a predicate. It reads the same [dsk_ioerr] through the same DS.
-; -----------------------------------------------------------------------------
-dskw_fmt_ioerr:
-    mov ax, FERR_IO
-    cmp byte [dsk_ioerr], 0x03
-    jne .out
-    mov ax, FERR_WPROT
-.out:
-    ret
-
+    dw dskw_fmt_probe_x         ; the FAR entries ARE the bodies: each is
+    dw dskw_format_x            ; reached by `call far` and by nothing else,
+    dw dskw_fmt_reach_x         ; so each ends in the `retf` itself - a
+    dw dskw_fmt_line_x          ; `call`/`retf` thunk per entry was 16 bytes
+                                ; of image buying nothing (size pass p1)
 
 ; -----------------------------------------------------------------------------
 ; dskw_fmt_row_x - a table row's address (module-internal)
@@ -4829,6 +4833,9 @@ dskw_fmt_row_x:
 ; machine, because CLONE.DRV sized a disk image against the same rows; the
 ; cloner carries its own four (size, spt) pairs now (clo_geom_img), and
 ; nothing but this image reads a row.
+;
+; Every MEDIA byte is F0h or above, and dskw_format_x rests on it: `cbw` off
+; the media byte is what makes the FAT's two FFh bytes after it.
 ;
 ;        SPC RSVD NFATS ROOTN  TOT  MEDIA FATSZ SPT         CYL
 dskw_fmt_tab:
@@ -4890,21 +4897,28 @@ dskf_s_q:    db 'K?', 0         ; status line itself - as one line it is 44
                                 ; characters and fm_stat_line truncates at
                                 ; ([fm_cw]-12)/8 = 38 on the 320px template,
                                 ; losing 'Esc=no'
-dskf_s_k:    db 'Enter=yes  Esc=no', 0
-dskf_s_k2:   db 'Spc=size  Enter=yes  Esc=no', 0  ; ...when there IS another
-                                ; size to offer (rows 2 and 3 alone)
+dskf_s_k2:   db 'Spc=size  '    ; ...when there IS another size to offer
+dskf_s_k:    db 'Enter=yes  Esc=no', 0  ; (rows 2 and 3 alone) - and the
+                                ; plain key line is that one's TAIL, so it
+                                ; costs no bytes of its own
 dskf_s_swap: db 'Insert the disk to format, then Enter', 0   ; mode 6 step 1,
                                 ; which runs AFTER this image is loaded
 dskf_s_ok:   db 'Formatted ', 0 ; ...and the verdict, SPEC.md 59.6's own
                                 ; reasoning: a format is seconds of floppy the
                                 ; user waited for, so success speaks rather
                                 ; than only failure
+dskf_s_col:  db ':', 0         ; RIGHT BEHIND dskf_s_ok, and dskf_s_q right
+                                ; behind dskf_s_as: dskw_fmt_cat leaves SI
+                                ; past the NUL, so the line composer reaches
+                                ; each second half without loading it
 dskf_s_bad:  db 'Made 360K, not 720K', 0    ; the OUTCOME, where this said the
                                 ; cause first and the outcome last and had 40
                                 ; characters to do it in. What the user has to
                                 ; know is which disk they are now holding
                                 ; (SPEC.md 59.8)
-dskf_s_col:  db ':', 0
+%if dskf_s_col != dskf_s_ok + 11 || dskf_s_q != dskf_s_as + 6
+  %error "dskw_fmt_line_x reaches dskf_s_col and dskf_s_q by falling off the string before each"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dskw_fmt_cat - fm_scat over THIS IMAGE's strings (SPEC.md 2.8.6)
@@ -4929,40 +4943,12 @@ dskw_fmt_cat:
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_fmt_sizeable - may this volume's size be overruled? (SPEC.md 18.96.2)
-; in:  AL = the volume, [fm_fmtrow] live
-; out: CF=0 = there is another size to offer; CF=1 = there is not
-; clobbers: flags
-;
-; files.inc's `fm_fmt_sizeable` verbatim, in the image, because the LINE that
-; names the Space key and the KEY that acts on it must not disagree and only
-; one of them is resident now. Five instructions; a far entry for them would
-; be a resident byte per instruction saved.
-; -----------------------------------------------------------------------------
-dskw_fmt_sizeable:
-    cmp byte [fm_fmtrow], 2     ; the 9-sector pair, and only it
-    jb .no
-    push bx
-    mov bl, al
-    call COLD_SEG:dskf_dsk_vol_row
-    jc .nopop
-    cmp byte [bx+DV_UNIT], 2    ; ...on an EXTERNAL drive, and only there
-    jb .nopop
-    pop bx                      ; (CF = 0 from the `jb`)
-    ret
-.nopop:
-    pop bx
-.no:
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
 ; dskw_fmt_line_x - stage one of the formatter's lines (SPEC.md 2.8.6)
 ; in:  AL = which, AH = the volume (selector 2 alone), DI = the destination in
 ;      KERNEL_SEG; [fm_fmtrow], [fm_ldrv] and [fm_lmok] published by the
 ;      caller's own paint for the two that are PROMPTS
 ; out: DI -> the NUL it wrote
-; clobbers: DI (the output), flags
+; clobbers: DI (the output), flags. Returns FAR (it is the entry)
 ;
 ;   0  the confirmation's row line   'ERASE and format A: as 720K?'
 ;   1  the confirmation's key line   'Enter=yes  Esc=no' / with 'Spc=size'
@@ -4978,79 +4964,79 @@ dskw_fmt_sizeable:
 dskw_fmt_line_x:
     push ax
     push bx
-    push cx
     push si
-    mov bl, ah                  ; the VERDICT's volume comes from the caller
-                                ; and not from [fm_ldrv]: that word is a
-                                ; PAINT's snapshot, and a verdict is composed
-                                ; on a keystroke, after which any window may
-                                ; have painted (SPEC.md 22.9)
     cmp al, 1
+    jb .pr
     je .keys
-    cmp al, 2
-    je .ok
     cmp al, 3
-    je .swap
-    cmp al, 4
-    je .fell
+    mov si, dskf_s_swap         ; (`mov` writes no flag)
+    je .tail
+    mov si, dskf_s_bad
+    ja .tail
+    mov si, dskf_s_ok           ; 2: the VERDICT's volume comes from the
+    call dskw_fmt_cat           ; caller in AH and not from [fm_ldrv]: that
+    mov al, ah                  ; word is a PAINT's snapshot, and a verdict
+    add al, 'A'                 ; is composed on a keystroke, after which any
+    mov [di], al                ; window may have painted (SPEC.md 22.9).
+    inc di                      ; SI is on dskf_s_col now, laid behind it
+.tail:
+    call dskw_fmt_cat           ; ...which stores the NUL and leaves DI on it
+    pop si
+    pop bx
+    pop ax
+    retf
 
-    mov si, dskf_s_pr           ; the confirmation. The SIZE is the point of
-    cmp byte [fm_lmok], 0       ; naming it: dskw_fmt_probe cannot always tell
-    je .pr                      ; 360K media from 720K in a 1.2MB drive, and
-    mov si, dskf_s_pr2          ; this line is the one place the user can
-.pr:                            ; catch that before it costs them anything
+    ; --- 1: the key line, which names Space only where it does something
+    ; (SPEC.md 18.96.2/47). files.inc's `fm_fmt_sizeable`, verbatim and in
+    ; line: the LINE that names the key and the KEY that acts on it must not
+    ; disagree, and only one of them is resident. It was a routine of its own
+    ; here with one caller, which is a call, a ret and a push/pop of a
+    ; register for nothing
+.keys:
+    mov si, dskf_s_k
+    cmp byte [fm_fmtrow], 2     ; the 9-sector pair, and only it...
+    jb .tail
+    mov bl, [fm_ldrv]
+    call COLD_SEG:dskf_dsk_vol_row  ; (BX alone, and BX is banked)
+    jc .tail
+    cmp byte [bx+DV_UNIT], 2    ; ...on an EXTERNAL drive, and only there
+    jb .tail
+    mov si, dskf_s_k2
+    jmp short .tail
+
+    ; --- 0: the confirmation. The SIZE is the point of naming it:
+    ; dskw_fmt_probe cannot always tell 360K media from 720K in a 1.2MB
+    ; drive, and this line is the one place the user can catch that before
+    ; it costs them anything
+.pr:
+    mov al, [fm_fmtrow]
+    call dskw_fmt_row_x         ; SI = the row it is about to write
+    mov bx, [cs:si+DFMT_TOT]    ; ...in sectors, so the KB are half of it
+    mov si, dskf_s_pr
+    cmp byte [fm_lmok], 0
+    je .pr1
+    mov si, dskf_s_pr2
+.pr1:
     call dskw_fmt_cat
     mov al, [fm_ldrv]
     add al, 'A'
     mov [di], al
     inc di
     mov si, dskf_s_as
-    call dskw_fmt_cat
-    mov al, [fm_fmtrow]
-    call dskw_fmt_row_x         ; SI = the row it is about to write
-    mov ax, [cs:si+DFMT_TOT]    ; ...in sectors, so the KB are half of it
+    call dskw_fmt_cat           ; ...SI on dskf_s_q, laid behind it
+    xchg ax, bx
     shr ax, 1
     call COLD_SEG:fmf_fm_utoa   ; the one thing this image does NOT carry: a
                                 ; decimal formatter is real code and a second
-                                ; copy of it is a second thing to be wrong
-    mov si, dskf_s_q
+                                ; copy of it is a second thing to be wrong.
+                                ; It clobbers DI alone, so SI survives it
     jmp short .tail
-.keys:
-    mov si, dskf_s_k
-    push ax
-    mov al, [fm_ldrv]
-    call dskw_fmt_sizeable      ; ...and the key is named only where it does
-    pop ax                      ; something (SPEC.md 18.96.2/47)
-    jc .tail
-    mov si, dskf_s_k2
-    jmp short .tail
-.ok:
-    mov si, dskf_s_ok
-    call dskw_fmt_cat
-    mov al, bl
-    add al, 'A'
-    mov [di], al
-    inc di
-    mov si, dskf_s_col
-    jmp short .tail
-.fell:
-    mov si, dskf_s_bad
-    jmp short .tail
-.swap:
-    mov si, dskf_s_swap
-.tail:
-    call dskw_fmt_cat           ; ...which stores the NUL and leaves DI on it
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; dskw_fmt_probe_x - which of the four formats is this drive holding?
 ; in:  [disk_drive] = the volume; UI task, gfx lock held (it reads the disk)
 ; out: CF=0 with AL = a dskw_fmt_tab row; CF=1 with AX = FERR_*
-; clobbers: AX (the output), flags
+; clobbers: AX (the output), flags. Returns FAR: it is the module entry
 ;
 ; READS ONLY. That is what lets the Disk window call it before the user has
 ; agreed to anything, so the confirmation can name the size it is about to
@@ -5089,17 +5075,20 @@ dskw_fmt_probe_x:
     push di
     push es
 
-
     ; --- is it a floppy at all? (SPEC.md 18.7: DV_KIND is the TRANSPORT,
-    ;     and a BIOS unit below 80h is the MEDIUM - disk_mount's own test)
+    ;     and a BIOS unit below 80h is the MEDIUM - disk_mount's own test).
+    ;     ONE word answers both: DV_KIND is the low byte and must be
+    ;     DVK_BIOS = 0, DV_UNIT the high one and must have bit 7 clear
     mov bl, [disk_drive]
     call COLD_SEG:dskf_dsk_vol_row
     jc .noflop
-    cmp byte [bx+DV_KIND], DVK_BIOS
-    jne .noflop
-    test byte [bx+DV_UNIT], 0x80
+    mov ax, [bx+DV_KIND]
+    test ax, 0x80FF
     jnz .noflop
-    mov dl, [bx+DV_UNIT]        ; the int 13h drive, for AH=08h below
+%if DV_KIND != 0 || DV_UNIT != 1 || DVK_BIOS != 0
+  %error "dskw_fmt_probe_x reads DV_KIND and DV_UNIT as one word and tests DVK_BIOS as zero"
+%endif
+    mov dl, ah                  ; the int 13h drive, for AH=08h below
     inc byte [dsk_rah_busy]     ; the probe's reads NEVER touch §18.95's
                                 ; cache, either way: a hit would answer the
                                 ; geometry question from RAM - the previous
@@ -5107,14 +5096,14 @@ dskw_fmt_probe_x:
                                 ; a failed mount - and a fill would cache
                                 ; sectors read under a TRIAL geometry, keyed
                                 ; as if the real one had read them
-    push word [disk_spt]        ; ...and the three words .try writes, banked
-    push word [disk_heads]      ; on the stack until .got2 puts them back -
-    push word [dsk_totsec]      ; the probe leaves NO geometry behind (see
-                                ; there). After the refusals: none of them
-                                ; has aimed anything anywhere yet
+    push word [disk_spt]        ; ...and the three words dskw_fmt_geo writes,
+    push word [disk_heads]      ; banked on the stack until .got2 puts them
+    push word [dsk_totsec]      ; back - the probe leaves NO geometry behind
+                                ; (see there). After the refusals: none of
+                                ; them has aimed anything anywhere yet
 
     ; --- the DRIVE's own idea of itself, before anything is read -----------
-    ; DI = its cylinders, SI = its sectors per track. int 13h AH=08h is the
+    ; DI = its cylinders, DX = its sectors per track. int 13h AH=08h is the
     ; same question DOS's own FORMAT asks, and the answer is about the DRIVE.
     ;
     ; **A BIOS that will not answer is a 360KB machine, and that inference is
@@ -5125,53 +5114,65 @@ dskw_fmt_probe_x:
     ; GLaBIOS nor the 27 Oct 1982 IBM ROM answers it, and the 1982 ROM does
     ; not support any other format either.
     push bp                     ; AH=08h spends BX, CX, DX, DI and ES, and
-    push dx                     ; some BIOSes spend BP as well
+                                ; some BIOSes spend BP as well - and BP is
+                                ; the row walker below, so it comes back
+                                ; only at .got2. (DX is not banked round the
+                                ; call: nothing reads the unit after it)
     mov ah, 0x08
     int 0x13
-    pop dx
     jc .nogeom
     cmp ch, 0xFF                ; CH = 0FFh is not a geometry. (Tested on CH
     je .nogeom                  ; itself: the old widen-and-`inc ax` form made
                                 ; 0x0100 of it, which is not zero, so the
                                 ; guard never fired)
     mov al, cl
-    xor ah, ah                  ; AH first: the `jz` must see `and`'s flags,
-    and al, 0x3F                ; not the xor's, which are always zero
-    jz .nogeom                  ; a zero would make the descent skip every row
-    mov si, ax                  ; SI = the drive's sectors per track
-    mov al, ch                  ; CH = max cylinder low 8 (a floppy is < 256)
-    xor ah, ah
-    inc ax
-    mov di, ax                  ; DI = its cylinders
+    and ax, 0x003F              ; AH = 0 and ZF in one: a zero would make the
+    jz .nogeom                  ; descent skip every row
+    mov dx, ax                  ; DX = the drive's sectors per track
+    mov al, ch                  ; CH = max cylinder low 8 (a floppy is < 256),
+    inc ax                      ; and AH is still the `and`'s zero
+    xchg di, ax                 ; DI = its cylinders
     jmp short .geom
-.noflop:                        ; (HERE, a hop from the three tests at the top
-    mov ax, FERR_PROT           ; that jump to it, rather than past the whole
-    jmp .stcpop                 ; routine) a hard-disk partition is HDDTOOL's
+.noflop:                        ; (HERE, a hop from the tests at the top that
+    mov ax, FERR_PROT           ; jump to it, rather than past the whole
+    jmp dskw_fmt_stc            ; routine) a hard-disk partition is HDDTOOL's
                                 ; (52.2), refused BEFORE the cache bypass went
                                 ; up - and the probe's ONLY refusal now: a
                                 ; medium that nothing reads is formatted, not
                                 ; refused (SPEC.md 18.96.3)
 .nogeom:
     mov di, 40                  ; no usable answer is a 360KB machine - and
-    mov si, 9                   ; these are SET here, not left standing from
+    mov dx, 9                   ; these are SET here, not left standing from
                                 ; above: AH=08h returns ES:DI = the diskette
                                 ; parameter table even when its numbers are
                                 ; unusable, so DI does not survive the call
 .geom:
-    pop bp
 
     ; --- the MEDIUM's sectors per track: descend from the drive's ----------
+    ; How many sectors a TRACK holds is read off the MEDIUM: one read of CHS
+    ; (0,0,N) for N in 18, 15, 9, first success wins - LBA N-1 under spt = N
+    ; is exactly CHS (0,0,N), and dskw_fmt_geo aims the read at that spt.
     ; Starting at the drive's own figure rather than at 18 is what keeps a
     ; 360KB machine - the one this project is calibrated against - from
-    ; paying two doomed reads it can never need.
+    ; paying two doomed reads it can never need: a candidate ABOVE what the
+    ; drive can do is refused WITHOUT a read, because asking a 360KB drive
+    ; for 18 sectors is a guaranteed failure that costs three attempts and
+    ; two controller resets to establish.
     push ss                     ; ES = LOW_SEG, which SS always is
     pop es
-    xor cx, cx                  ; CX = the row walker, and the answer
+    xor bp, bp                  ; BP = the row walker, and the answer
 .row:
-    call .try
+    mov ax, bp
+    call dskw_fmt_row_x         ; SI = the candidate row
+    cmp [cs:si+DFMT_SPT], dx
+    ja .next                    ; more than the drive can do: no read
+    call dskw_fmt_geo           ; AX = its spt, and the read aimed by it
+    dec ax                      ; LBA spt-1 = CHS (0,0,spt) under this spt
+    call dskw_fmt_get
     jnc .got
-    inc cx
-    cmp cx, DFMT_ROWS
+.next:
+    inc bp
+    cmp bp, DFMT_ROWS
     jb .row
     ; NOTHING ANSWERED, and that is not a refusal any more (SPEC.md
     ; 18.96.3). It used to be FERR_IO - "no medium here this can read, so
@@ -5182,26 +5183,31 @@ dskw_fmt_probe_x:
     ; drive, whose HD recording nothing here can read; a disk whose ID
     ; fields are damaged; a medium formatted for another machine. What it
     ; gets is what the DRIVE makes - the same answer DOS's FORMAT gives -
-    ; so the row is chosen from SI (its sectors per track) and, for the
+    ; so the row is chosen from DX (its sectors per track) and, for the
     ; 9-sector pair, DI (its cylinders) by the code below, exactly as a
     ; readable 9-sector disk's is.
-    mov cx, 2                   ; the 9-sector pair, 720K or 360K below...
-    cmp si, 15
+    mov bp, 2                   ; the 9-sector pair, 720K or 360K below...
+    cmp dx, 15
     jb .got
-    dec cx                      ; ...1.2MB on the 5.25" HD drive...
-    cmp si, 18
+    dec bp                      ; ...1.2MB on the 5.25" HD drive...
+    cmp dx, 18
     jb .got
-    dec cx                      ; ...and 1.44MB on the 3.5" one
+    dec bp                      ; ...and 1.44MB on the 3.5" one
 .got:
 
     ; --- the row: how many CYLINDERS? ---------------------------------------
-    ; Rows 0 and 1 are 80-cylinder by construction (there is no 15- or
-    ; 18-sector 40-cylinder format), so only the 9-sector pair is in question,
-    ; and it is decided by the DRIVE: 80 cylinders only when the drive has 80
-    ; AND is not the 5.25" 1.2MB one, whose 9-sector media is undecidable and
-    ; is resolved downward to 360KB - a 360KB layout on 720KB media wastes
-    ; half a disk, where a 720KB layout on 360KB media is a volume whose
-    ; second half does not exist.
+    ; How many CYLINDERS a disk has is a property of the DRIVE and is not
+    ; readable at all: a 40-track disk in an 80-track drive answers a read of
+    ; cylinder 40 with whatever is on physical track 40 - logical track 20's
+    ; data, written at 48tpi and read at 96 - so the obvious probe returns a
+    ; confident WRONG answer and formats a 360KB disk as 720KB. Rows 0 and 1
+    ; are 80-cylinder by construction (there is no 15- or 18-sector
+    ; 40-cylinder format), so only the 9-sector pair is in question, and it
+    ; is decided by the DRIVE: 80 cylinders only when the drive has 80 AND is
+    ; not the 5.25" 1.2MB one, whose 9-sector media is undecidable and is
+    ; resolved downward to 360KB - a 360KB layout on 720KB media wastes half
+    ; a disk, where a 720KB layout on 360KB media is a volume whose second
+    ; half does not exist. AH=08h failing lands on the same safe default.
     ;
     ; **Reading cylinder 40 to settle it was tried and is WRONG** - the
     ; negative result is worth a paragraph so it is not re-derived. It looks
@@ -5215,84 +5221,27 @@ dskw_fmt_probe_x:
     ; reads sector 18 of a 9-sector track, so a probe built this way reported
     ; a 360KB disk in a 360KB drive as 1.44MB. Every test here is a read
     ; SUCCEEDING for exactly that reason.
-    mov al, cl
-    cmp cl, 2                   ; row 0 (1.44MB) or row 1 (1.2MB): done
+    ;
+    ; The cost is up to two doomed reads before the answer, and a doomed
+    ; disk_read is three attempts and two controller resets. It is bounded and
+    ; it is once per format; the alternative is trusting AH=08h about the
+    ; MEDIUM, which is the thing this routine exists to not do.
+    mov ax, bp
+    cmp al, 2                   ; row 0 (1.44MB) or row 1 (1.2MB): done
     jb .got2
     mov al, 3                   ; the 9-sector pair: 360KB unless...
     cmp di, 80                  ; ...the drive really has 80 cylinders...
     jb .got2
-    cmp si, 15                  ; ...and is not the 5.25" 1.2MB drive
+    cmp dx, 15                  ; ...and is not the 5.25" 1.2MB drive
     je .got2
     mov al, 2                   ; 720KB
 .got2:
-    pop word [dsk_totsec]       ; THE PROBE LEAVES NO GEOMETRY BEHIND: .try
-    pop word [disk_heads]       ; wrote these three to aim its reads, and they
-    pop word [disk_spt]         ; go back as they came in (the account is the
-                                ; paragraph below .try)
-.done:
+    pop bp
+    pop word [dsk_totsec]       ; THE PROBE LEAVES NO GEOMETRY BEHIND:
+    pop word [disk_heads]       ; dskw_fmt_geo wrote these three to aim its
+    pop word [disk_spt]         ; reads, and they go back as they came in
     dec byte [dsk_rah_busy]
-.clcpop:                        ; ...and the module's ONE pop run, for
-    clc                         ; dskw_format_x and dskw_fmt_reach_x too:
-    jmp short .pop6             ; they push the same six
-
-.stcpop:
-    stc
-.pop6:                          ; (a pop writes no flag)
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-    ; --- one candidate: can CHS (0,0,spt) be read? -------------------------
-    ; A local, so it may read the walker in CX and the DRIVE's spt in SI -
-    ; and SI is banked into DX first, because dskw_fmt_row_x spends SI on the
-    ; table row and the outer loop needs the drive's figure for every
-    ; candidate after this one.
-    ;
-    ; A candidate ABOVE what the drive can do is refused WITHOUT a read:
-    ; asking a 360KB drive for 18 sectors is a guaranteed failure that costs
-    ; three attempts and two controller resets to establish, and on the
-    ; machine this project is calibrated against that is both of the doomed
-    ; reads gone.
-.try:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov dx, si                  ; DX = the drive's spt, before SI becomes the
-    mov al, cl                  ; row
-    call dskw_fmt_row_x
-    mov ax, [cs:si+DFMT_SPT]
-    cmp ax, dx
-    ja .try_no
-    mov [disk_spt], ax
-    mov word [disk_heads], 2
-    mov dx, [cs:si+DFMT_TOT]    ; §18.95's read-ahead clamps its fill against
-    mov [dsk_totsec], dx        ; the volume's extent, and a failed mount
-                                ; leaves whatever the last good one set. It
-                                ; only ever shortens a fill, so a stale value
-                                ; cannot read wrong bytes - but it can make
-                                ; the probe's own surplus meaningless. .got2
-                                ; puts the caller's back, and a format's own
-                                ; mount re-derives it from the BPB regardless
-    dec ax                      ; LBA spt-1 = CHS (0,0,spt) under this spt
-    mov bx, dsk_secbuf
-    mov cx, 1
-    call COLD_SEG:dskf_disk_read
-    jmp short .try_out
-.try_no:
-    stc
-.try_out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dskw_fmt_clc            ; ...through dskw_format_x's six pops
 
     ; --- why the geometry is banked and put back (.got2) ------------------
     ; The probe writes [disk_spt]/[disk_heads] to aim its reads, and it must
@@ -5315,11 +5264,57 @@ dskw_fmt_probe_x:
     ; row's geometry itself and owes this nothing.
 
 ; -----------------------------------------------------------------------------
+; dskw_fmt_geo - aim disk_read/disk_write at a row's geometry (module-internal)
+; in:  SI = a dskw_fmt_tab row
+; out: [disk_spt] = its spt, [disk_heads] = 2, [dsk_totsec] = its extent;
+;      AX = the spt. Clobbers AX, flags.
+;
+; The probe's candidates and the format both aim this way, and it was the same
+; five instructions twice. [dsk_totsec] because §18.95's read-ahead clamps its
+; fill against the volume's extent and a failed mount leaves whatever the last
+; good one set: it only ever shortens a fill, so a stale value cannot read
+; wrong bytes - but it can make the probe's own surplus meaningless. The probe
+; puts the caller's three back; a format's own mount re-derives them from the
+; BPB regardless.
+; -----------------------------------------------------------------------------
+dskw_fmt_geo:
+    mov ax, [cs:si+DFMT_TOT]
+    mov [dsk_totsec], ax
+    mov word [disk_heads], 2
+    mov ax, [cs:si+DFMT_SPT]
+    mov [disk_spt], ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_fmt_get / dskw_fmt_put - read / write dsk_secbuf at LBA AX
+; in:  AX = LBA, ES = LOW_SEG (dsk_secbuf is .lowbss, SPEC.md 2.1)
+; out: CF as disk_read/disk_write, which clobber nothing but CF (dsk_xfer is
+;      KENT); BX = dsk_secbuf and CX = 1, the two loaded here
+;
+; dsk_secbuf is the kernel's sector scratch and this is a sector - the same
+; buffer disk_mount reads the BPB into, shared on the same terms as every
+; other write here (UI task only, SPEC.md 18.4). Nothing can rewrite it under
+; the format: dsk_xfer never touches it, and SPEC.md 18.95's cache refills
+; into its own claim ([dsk_rah_seg]). It is 512-byte aligned for SPEC.md
+; 2.1.1's reason, which is the DMA controller's rather than this routine's.
+; -----------------------------------------------------------------------------
+dskw_fmt_get:
+    mov bx, dsk_secbuf
+    mov cx, 1
+    call COLD_SEG:dskf_disk_read
+    ret
+dskw_fmt_put:
+    mov bx, dsk_secbuf
+    mov cx, 1
+    call COLD_SEG:dskf_disk_write
+    ret
+
+; -----------------------------------------------------------------------------
 ; dskw_format_x - lay a fresh FAT12 volume on the floppy in [disk_drive]
 ; in:  AL = a dskw_fmt_tab row (dskw_fmt_probe_x's answer), [disk_drive] = the
 ;      volume. UI task, gfx lock held - dskw_*'s context exactly.
 ; out: CF=0; CF=1 with AX = FERR_IO / FERR_WPROT
-; clobbers: AX (the output), flags
+; clobbers: AX (the output), flags. Returns FAR: it is the module entry
 ;
 ; **The boot sector goes FIRST and the root directory LAST**, which is the
 ; opposite of SPEC.md 52.3's order and is right for the same reason that one
@@ -5349,33 +5344,28 @@ dskw_format_x:
     push es
 
     call dskw_fmt_row_x         ; SI = the row, IN THIS IMAGE, live throughout
-    mov ax, [cs:si+DFMT_SPT]
-    mov [disk_spt], ax
-    mov word [disk_heads], 2
-    mov ax, [cs:si+DFMT_TOT]    ; ...and the extent §18.95's fill clamps to,
-    mov [dsk_totsec], ax        ; for dskw_fmt_probe_x's reason
+    call dskw_fmt_geo           ; ...and the geometry its writes are aimed by
 
     ; --- 0. every TRACK, laid down fresh (SPEC.md 18.96.3) -----------------
     call dskw_fmt_low
-    jc .ioerr
+    jc dskw_fmt_ioerr
 
     ; --- 1-3. every METADATA sector, in LBA order --------------------------
-    ; The boot sector at 0, FAT1 from 1, FAT2 from BX, the root directory
-    ; after it - ONE walk, each sector zeroed and then given what it holds.
-    ; Sector 0 of a FAT is the only one with content in it - the media byte
-    ; then all ones (entry 0), and entry 1's EOC mark - which is what a host
-    ; fsck reads back to identify the volume. The root is zeroed whole: 0x00
-    ; in a name byte is "this entry and every one after it is free", which is
-    ; what disk_mount's walk stops on. The boot sector going FIRST and the
-    ; root directory LAST is the header's order and is kept by walking up.
-    mov bx, [cs:si+DFMT_FATSZ]
-    inc bx                      ; BX = FAT2's first sector (FAT1's is 1)
+    ; The boot sector at 0, FAT1 from 1, FAT2 from FATSZ+1, the root
+    ; directory after it - ONE walk, each sector zeroed and then given what it
+    ; holds. Sector 0 of a FAT is the only one with content in it - the media
+    ; byte then all ones (entry 0), and entry 1's EOC mark - which is what a
+    ; host fsck reads back to identify the volume. The root is zeroed whole:
+    ; 0x00 in a name byte is "this entry and every one after it is free",
+    ; which is what disk_mount's walk stops on. The boot sector going FIRST
+    ; and the root directory LAST is the header's order and is kept by walking
+    ; up.
     mov ax, [cs:si+DFMT_ROOTN]
     mov cl, 4
     shr ax, cl                  ; RootDirSectors = RootEntCnt/16, and every
-    add ax, bx                  ; row here is a multiple of 16 by construction
-    add ax, bx
-    dec ax                      ; 1 + 2*FATSZ + RootDirSectors...
+    add ax, [cs:si+DFMT_FATSZ]  ; row here is a multiple of 16 by construction
+    add ax, [cs:si+DFMT_FATSZ]
+    inc ax                      ; 1 + 2*FATSZ + RootDirSectors...
     xchg dx, ax                 ; ...DX = the first sector past the root
     xor di, di                  ; DI = the LBA
 .meta:
@@ -5383,44 +5373,125 @@ dskw_format_x:
                                 ; (.lowbss, SPEC.md 2.1): every store below is
                                 ; `es:`, and without it one lands in the
                                 ; KERNEL at the same offset - which is exactly
-                                ; how a FAT once went out all zeros
+                                ; how a FAT once went out all zeros. CX = 0
+                                ; out of it, which the `mov cl` below rests on
     or di, di
     jnz .notboot
-    push bx                     ; --- the boot sector -----------------------
-    mov di, dsk_secbuf          ; Byte for byte what tools/os88disk.py's
-    mov bx, dskw_fmt_jmp        ; boot_sector() writes for a data floppy,
-    mov cx, DFMT_T1             ; which is what makes a formatted disk and a
-    call dskw_fmt_cpy           ; built image the same kind of object: the
-    mov bx, si                  ; jump, 'MSDOS5.0' and BPB_BytsPerSec; the
-    mov cl, DFMT_BPB            ; ROW, which IS the BPB from SecPerClus to
-    call dskw_fmt_cpy           ; SecPerTrk; then the heads, BootSig 0x29 and
-    mov bx, dskw_fmt_t2         ; a volume id, 'FAT12   ' and the
-    mov cl, DFMT_T2             ; not-bootable stub. Every byte past the stub
-    call dskw_fmt_cpy           ; is the zeroed scratch's.
+    mov di, dsk_secbuf          ; --- the boot sector -----------------------
+    mov bx, dskw_fmt_jmp        ; Byte for byte what tools/os88disk.py's
+    mov cl, DFMT_T1             ; boot_sector() writes for a data floppy,
+    call dskw_fmt_cpy           ; which is what makes a formatted disk and a
+    mov bx, si                  ; built image the same kind of object: the
+    mov cl, DFMT_BPB            ; jump, 'MSDOS5.0' and BPB_BytsPerSec; the
+    call dskw_fmt_cpy           ; ROW, which IS the BPB from SecPerClus to
+    mov bx, dskw_fmt_t2         ; SecPerTrk; then the heads, BootSig 0x29 and
+    mov cl, DFMT_T2             ; a volume id, 'FAT12   ' and the
+    call dskw_fmt_cpy           ; not-bootable stub. Every byte past the stub
+                                ; is the zeroed scratch's.
     mov word [es:dsk_secbuf+510], 0xAA55    ; rule 1's signature, last
-    pop bx
     xor di, di
     jmp short .put
 .notboot:
-    cmp di, 1
-    je .head                    ; FAT1's first sector...
-    cmp di, bx
-    jne .put                    ; ...or FAT2's
+    mov ax, di
+    dec ax
+    jz .head                    ; FAT1's first sector (LBA 1)...
+    cmp ax, [cs:si+DFMT_FATSZ]
+    jne .put                    ; ...or FAT2's (LBA FATSZ+1)
 .head:
     mov al, [cs:si+DFMT_MEDIA]
-    mov [es:dsk_secbuf], al
-    mov word [es:dsk_secbuf+1], 0xFFFF
+    cbw                         ; every media byte is F0h or above, so AH = FFh
+    mov [es:dsk_secbuf], ax     ; the media byte and FFh...
+    mov [es:dsk_secbuf+2], ah   ; ...and FFh: entry 0, then entry 1's EOC
 .put:
     mov ax, di
     call dskw_fmt_put
-    jc .ioerr
+    jc dskw_fmt_ioerr
     inc di
     cmp di, dx
     jb .meta
-    jmp dskw_fmt_probe_x.clcpop ; the same six pops
-.ioerr:
-    call dskw_fmt_ioerr             ; AX = FERR_IO / FERR_WPROT
-    jmp dskw_fmt_probe_x.stcpop
+dskw_fmt_clc:                   ; THE MODULE'S ONE EPILOGUE, for the probe and
+    clc                         ; dskw_fmt_reach_x too: all three are far
+    jmp short dskw_fmt_pop6     ; entries that push the same six
+dskw_fmt_ioerr:
+    mov ax, FERR_IO             ; dskw_ioerr's two compares, in the image:
+    cmp byte [dsk_ioerr], 0x03  ; a far entry for them would be a fifth
+    jne dskw_fmt_stc            ; thing the resident half publishes for the
+    mov ax, FERR_WPROT          ; sake of a predicate
+dskw_fmt_stc:
+    stc
+dskw_fmt_pop6:                  ; (a pop writes no flag)
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    retf
+
+; -----------------------------------------------------------------------------
+; dskw_fmt_reach_x - can this drive actually reach the volume just declared?
+; in:  AL = the dskw_fmt_tab row that was written, [disk_drive] = the volume,
+;      [disk_spt]/[disk_heads] still the format's (dskw_format_x leaves them)
+; out: CF=0 = the last sector was written and read back intact; CF=1 = it was
+;      not. Clobbers AX, flags. Returns FAR (it is the entry).
+;
+; SPEC.md 18.96.2. The size on the confirmation can be the USER's rather than
+; the probe's, and a 720KB pick on a 40-cylinder drive is the one wrong answer
+; that stays silent: the whole layout is boot + 6 FAT + 7 root = LBA 0..13,
+; all of it inside CYLINDER 0, so the format completes, the volume mounts and
+; the disk lies about its size until something writes past cylinder 39 - by
+; which time it is mountable, so 22.12's predicate has greyed Format Disk out
+; and there is no way back.
+;
+; **The LAST sector, not the 360KB boundary.** LBA 720 is cylinder 40, the
+; first sector a 360KB disk has not got, and it is too weak a test: plenty of
+; 40-track drives step to 41 or 42, so a probe there PASSES on exactly the
+; drive it exists to catch. No 40-cylinder mechanism reaches cylinder 79, it
+; is one seek either way, and it validates the extent the BPB just claimed.
+;
+; **It writes, and that is what makes it a POSITIVE test** (18.96.1's rule:
+; every test is a read SUCCEEDING). A bare read of cylinder 79 breaks that
+; twice - it rests on a failure, and a head stopped at track 39 can answer
+; with track 39's data. A marker written first removes both, and the buffer
+; is re-zeroed BETWEEN the write and the read so a read that never touched it
+; cannot compare equal against our own staging.
+;
+; It destroys the sector it tests, which is free here and nowhere else: the
+; only caller is a commit the user has already agreed to erase the disk for.
+; -----------------------------------------------------------------------------
+dskw_fmt_reach_x:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call dskw_fmt_row_x
+    mov dx, [cs:si+DFMT_TOT]
+    dec dx                      ; DX = the last sector the BPB now claims
+    call dskw_fmt_zero          ; ...and ES = LOW_SEG: dsk_secbuf is .lowbss
+    mov di, dsk_secbuf          ; (SPEC.md 2.1), so the marker goes in through
+    mov ax, dx                  ; ES and never through DS - dskw_format_x's
+    mov cx, 3                   ; own trap. `stos` writes ES:DI and nothing
+    rep stosw                   ; else, which is exactly the segment wanted.
+                                ; THE MARKER IS THE LBA, THREE TIMES: never 0
+                                ; (it is the last sector of a 360KB disk at
+                                ; least), so the zeroed buffer below cannot
+                                ; match it, and a seek that landed on a
+                                ; DIFFERENT track cannot match by accident.
+    call dskw_fmt_put           ; AX is that LBA for the write, too
+    jc dskw_fmt_stc
+    call dskw_fmt_zero          ; a read that never happened must not compare
+                                ; equal against what we staged for the write
+    mov ax, dx
+    call dskw_fmt_get
+    jc dskw_fmt_stc
+    mov di, dsk_secbuf          ; `scas` reads ES:DI as well - and AX is
+    mov cx, 3                   ; still the LBA: dskw_fmt_get clobbers
+    repe scasw                  ; nothing but CF, BX and CX
+    jne dskw_fmt_stc            ; the same six pops, right above
+    jmp short dskw_fmt_clc
+
 
 ;-----------------------------------------------------------------------------
 ; dskw_fmt_low - lay every track of the row in SI down fresh (SPEC.md 18.96.3)
@@ -5598,121 +5669,27 @@ dskw_fmt_low:
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_fmt_put - write the staged sector to LBA AX
-; in:  AX = LBA, dsk_secbuf staged, ES = LOW_SEG (dskw_fmt_zero leaves it)
-; out: CF as disk_write; every register but the flags preserved
-;
-; dsk_secbuf is the kernel's sector scratch and this is a sector - the same
-; buffer disk_mount reads the BPB into, shared on the same terms as every
-; other write here (UI task only, SPEC.md 18.4). Nothing can rewrite it
-; under the format: dsk_xfer never touches it, and SPEC.md 18.95's cache
-; refills into its own claim ([dsk_rah_seg]) and is only ever filled by a
-; READ, of which this half of the routine issues none.
-;
-; It is 512-byte aligned for SPEC.md 2.1.1's reason, which is the DMA
-; controller's rather than this routine's.
-; -----------------------------------------------------------------------------
-dskw_fmt_put:
-    push bx
-    push cx
-    mov bx, dsk_secbuf
-    mov cx, 1
-    call COLD_SEG:dskf_disk_write   ; (which preserves AX: dsk_xfer is KENT)
-    pop cx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
 ; dskw_fmt_zero - blank the staging sector
 ; in:  nothing
 ; out: ES = LOW_SEG, where dsk_secbuf is - and every caller's next store is
-;      into it, so ES is an OUTPUT rather than a register to bank (both callers
-;      bank the caller's ES at their own entry); DF = 0. All else preserved.
+;      into it, so ES is an OUTPUT rather than a register to bank (every
+;      caller banks the caller's ES at its own entry); DF = 0; AX = CX = 0.
+;      DI preserved, and nothing else touched.
 ; -----------------------------------------------------------------------------
 dskw_fmt_zero:
-    push ax
-    push cx
     push di
-    mov ax, LOW_SEG
-    mov es, ax
+    push ss                     ; SS is LOW_SEG, always (SPEC.md 2.1)
+    pop es
     mov di, dsk_secbuf
     xor ax, ax
     mov cx, 256
     cld
     rep stosw
     pop di
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_fmt_reach_x - can this drive actually reach the volume just declared?
-; in:  AL = the dskw_fmt_tab row that was written, [disk_drive] = the volume,
-;      [disk_spt]/[disk_heads] still the format's (dskw_format_x leaves them)
-; out: CF=0 = the last sector was written and read back intact; CF=1 = it was
-;      not. Clobbers AX, flags.
-;
-; SPEC.md 18.96.2. The size on the confirmation can be the USER's rather than
-; the probe's, and a 720KB pick on a 40-cylinder drive is the one wrong answer
-; that stays silent: the whole layout is boot + 6 FAT + 7 root = LBA 0..13,
-; all of it inside CYLINDER 0, so the format completes, the volume mounts and
-; the disk lies about its size until something writes past cylinder 39 - by
-; which time it is mountable, so 22.12's predicate has greyed Format Disk out
-; and there is no way back.
-;
-; **The LAST sector, not the 360KB boundary.** LBA 720 is cylinder 40, the
-; first sector a 360KB disk has not got, and it is too weak a test: plenty of
-; 40-track drives step to 41 or 42, so a probe there PASSES on exactly the
-; drive it exists to catch. No 40-cylinder mechanism reaches cylinder 79, it
-; is one seek either way, and it validates the extent the BPB just claimed.
-;
-; **It writes, and that is what makes it a POSITIVE test** (18.96.1's rule:
-; every test is a read SUCCEEDING). A bare read of cylinder 79 breaks that
-; twice - it rests on a failure, and a head stopped at track 39 can answer
-; with track 39's data. A marker written first removes both, and the buffer
-; is re-zeroed BETWEEN the write and the read so a read that never touched it
-; cannot compare equal against our own staging.
-;
-; It destroys the sector it tests, which is free here and nowhere else: the
-; only caller is a commit the user has already agreed to erase the disk for.
-; -----------------------------------------------------------------------------
-dskw_fmt_reach_x:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    call dskw_fmt_row_x
-    mov di, [cs:si+DFMT_TOT]
-    dec di                      ; DI = the last sector the BPB now claims
-    call dskw_fmt_zero          ; ...and ES = LOW_SEG: dsk_secbuf is .lowbss
-                                ; (SPEC.md 2.1), so the marker goes in
-    mov word [es:dsk_secbuf+0], 'o8'    ; through ES and never through DS -
-    mov word [es:dsk_secbuf+2], '8R'    ; dskw_format_x's own trap
-    mov [es:dsk_secbuf+4], di   ; ...and the LBA, so a seek that landed on a
-                                ; DIFFERENT track cannot match by accident
-    mov ax, di
-    call dskw_fmt_put
-    jc .no
-    call dskw_fmt_zero          ; a read that never happened must not compare
-                                ; equal against what we staged for the write
-    mov ax, di
-    mov bx, dsk_secbuf
-    mov cx, 1
-    call COLD_SEG:dskf_disk_read
-    jc .no
-    cmp word [es:dsk_secbuf+0], 'o8'
-    jne .no
-    cmp word [es:dsk_secbuf+2], '8R'
-    jne .no
-    cmp [es:dsk_secbuf+4], di
-    jne .no
-    jmp dskw_fmt_probe_x.clcpop ; the same six pops
-.no:
-    jmp dskw_fmt_probe_x.stcpop
 
-; -----------------------------------------------------------------------------
 ; dskw_fmt_cpy - CX bytes from CS:BX to ES:DI (module-internal)
 ; in:  BX = source IN THIS IMAGE, ES:DI = destination, CX = count, DF = 0
 ; out: BX and DI past the copy, CX = 0 - so the boot sector is three calls
@@ -5780,7 +5757,7 @@ dskw_fmt_t2:  dw 2              ; BPB_NumHeads: every row is double-sided
     db 0x16, 0xCD, 0x19
     db 0x0D, 0x0A, 'Not a bootable disk. Press any key.', 0x0D, 0x0A, 0
 DFMT_T2 equ $ - dskw_fmt_t2
-%if DFMT_T1 != DSK_B_SPC || DFMT_T1 + DFMT_BPB != DSK_B_HEADS || DFMT_T2 > 255 || DSK_B_HEADS + DFMT_T2 > 510
+%if DFMT_T1 != DSK_B_SPC || DFMT_T1 + DFMT_BPB != DSK_B_HEADS || DFMT_T2 > 255 || DFMT_T1 > 255 || DSK_B_HEADS + DFMT_T2 > 510
   %error "the boot sector is template 1, a dskw_fmt_tab row, then template 2 and the stub - contiguous, and short of the signature"
 %endif
 
@@ -5790,65 +5767,76 @@ section .text                   ; ...and back to the kernel segment for what
 section .cold                   ; ...and the RESIDENT stubs (SPEC.md 2.8.1)
 ;
 ; Four public names, unchanged, so not one call site in files.inc moved. Each
-; loads the image if it is not there and far-calls into it; each REFUSES the
-; way its body would have refused, because a caller that has to learn a new
-; failure mode is a caller that has to be found.
+; loads the image if it is not there and far-calls into it; each REFUSES with
+; CF=1 - the failure every caller already handles - and one AX for all four,
+; dskw_fmt_go's, so no caller learned a new failure mode.
 ;
 ; There is no resident dskw_fmt_row. SPEC.md 2.8.6 moved the status line's
 ; composer INTO the image as dskw_fmt_line_x, which calls dskw_fmt_row_x
 ; directly, and nothing outside the image has asked for a row since.
-; dskw_fmt_load - the four stubs' shared prologue: is the image in RAM?
-; out: CF=1 it is not. AX and every other register preserved - `pop ax` and
+; dskw_fmt_load - is the image in RAM? (fm_c_format asks this too)
+; out: CF=1 it is not. AX and every other register preserved: `pop ax` and
 ;      `ret` write no flag, so mod_need's CF reaches the caller intact
 dskw_fmt_load:
     push ax
     mov al, MOD_FMT
     call mod_need
     pop ax
+.in:
+    ret
+
+; dskw_fmt_go - the four stubs' shared prologue, which REFUSES FOR THEM
+; out: returns to the stub ONLY when the image is in RAM. When it is not, the
+;      stub's own return is dropped and this returns straight to the STUB'S
+;      CALLER with CF=1 and AX = FERR_NODISK - every stub's refusal, so not
+;      one of them carries a `jc` or a refusal tail of its own. Every other
+;      register is preserved either way; `pop` and `mov` write no flag.
+;
+; NOT for a caller that wants to hear CF and carry on - fm_c_format arms the
+; swap prompt on it, and calls dskw_fmt_load above for exactly that reason.
+;
+; FERR_NODISK is dskw_fmt_probe_x's own refusal for a medium it cannot read -
+; the nearest true thing, and the toast names the disk either way. It is now
+; dskw_fmt_reach's and dskw_fmt_line's refusal too, which costs them nothing
+; they promised: fm_fmt_reach's one caller re-loads AL on the CF=1 arm, and
+; every dskw_fmt_line site reloads AL or has AX banked round the call
+; (files.inc). THE IMAGE CANNOT BE ABSENT ON THE LINE'S PATH anyway: a prompt
+; is armed by a probe that loaded it and taken down by the fm_edit_end that
+; drops it.
+dskw_fmt_go:                    ; STKBALANCE-OK: the refusal returns past the
+    call dskw_fmt_load          ; STUB - its `pop ax` drops the stub's return,
+    jnc dskw_fmt_load.in        ; so the four stubs need no refusal of their own
+    pop ax                      ; the stub's return: its caller hears the refusal
+    mov ax, FERR_NODISK
     ret
 
 dskw_fmt_probe:
-    call dskw_fmt_load
-    jc .p_no
+    call dskw_fmt_go
     call far [FMFP + FME_PROBE*4]
     ret
-.p_no:
-    mov ax, FERR_NODISK         ; dskw_fmt_probe_x's own refusal for a medium
-    ret                         ; it cannot read - the nearest true thing, and
-                                ; the toast names the disk either way. NO stc:
-                                ; the only way in is the `jc` above, and
-                                ; `mov r16, imm16` (B8 iw) writes no flag -
-                                ; which this file already states in two
-                                ; headers for `pop ax` and `ret`
 
-dskw_format:                    ; ...AND THE SAME FIVE BYTES, so the refusal
-    call dskw_fmt_load          ; is dskw_fmt_probe's. The two routines are
-    jc dskw_fmt_probe.p_no      ; fifteen bytes apart, so the jc is short -
-    call far [FMFP + FME_FORMAT*4]  ; and their ORDER in this file is now
-    ret                         ; load-bearing
+dskw_format:
+    call dskw_fmt_go
+    call far [FMFP + FME_FORMAT*4]
+    ret
 
-dskw_fmt_reach:
-    call dskw_fmt_load
-    jc .r_no                    ; "the volume's last sector was NOT reached",
-    call far [FMFP + FME_REACH*4]   ; which is what an absent formatter has to
-.r_no:                          ; say - and CF is already set on the one way
-    ret                         ; in, so the refusal is nothing but the `ret`
-                                ; the success path was going to take anyway
+dskw_fmt_reach:                 ; "the volume's last sector was NOT reached" is
+    call dskw_fmt_go            ; what an absent formatter has to say, and the
+    call far [FMFP + FME_REACH*4]   ; refusal's CF=1 says it
+    ret
 
 ; dskw_fmt_line - the formatter's own status line (SPEC.md 2.8.6)
 ;
 ; dskw_fmt_row's twin in every respect, including the one that matters: it is
 ; called from the STATUS LINE's composer, once per repaint while a format
 ; prompt is up, and the prompt can only have been armed by a probe that
-; already loaded the image. Its refusal writes an empty string, so a line
-; composed after the image somehow went away is BLANK rather than rubbish.
+; already loaded the image. Its refusal leaves an empty string, so a line
+; composed after the image somehow went away is BLANK rather than rubbish:
+; the NUL goes down FIRST, and the image's line overwrites it from the same DI.
 dskw_fmt_line:
-    call dskw_fmt_load
-    jc .l_no
-    call far [FMFP + FME_LINE*4]
-    ret
-.l_no:
     mov byte [di], 0
+    call dskw_fmt_go
+    call far [FMFP + FME_LINE*4]
     ret
 
 ; fm_fmt_drop - the formatter is finished with (SPEC.md 2.8.3)

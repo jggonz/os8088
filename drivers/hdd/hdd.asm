@@ -45,7 +45,7 @@
 
 %include "os88drv.inc"
 
-    OS88_DRIVER 'Hard Drive', DRVC_DISK, hd_entry
+    OS88_DRIVER 'Hard Drive', DRVC_DISK, hd_entry, hd_svc_end - hd_services
 
 
 
@@ -82,70 +82,41 @@ IDE_C_INITP  equ 0x91
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; hd_entry - attach / detach (SPEC.md 51.2)
+; hd_entry - attach / ready / detach (SPEC.md 51.2)
 ; in:  AL = DRVV_*; DS = CS = ours, ES = KERNEL_SEG
 ; out: attach: CF = 0 and SI = the service table, or CF = 1 = no hardware
-;      detach: nothing
+;      ready, detach: nothing
 ;
-; ATTACH IS ALL-OR-NOTHING and this one has an easy time of it: the probe
-; writes no port that is not a read-back of a drive's own task file, claims
-; no memory, and hooks no interrupt. A window still costs a Control Panel
-; click; a mounted volume does NOT any more - it is hd_ready's, one verb
-; later, for every drive the probe found (SPEC.md 52.6.1). Detach gives all of
-; it back either way.
+; ATTACH AND READY ARE IN hd_mbr's BYTES (SPEC.md 52.13.6): each is sent once,
+; to an image read off the disk a moment before, and both have finished
+; before anything reads a partition table into those bytes. This dispatch and
+; the refusal stay out here, because DRVV_DETACH comes at any time.
 ; -----------------------------------------------------------------------------
 hd_entry:
     cmp al, DRVV_DETACH
     je hd_detach
     cmp al, DRVV_READY
-    je hd_ready
-    cmp al, DRVV_ATTACH
-    jne .refuse                 ; DRVV_TIER means nothing here: this driver
-                                ; has one tier and its refusal changes
-                                ; nothing, which is the contract (SPEC.md
-                                ; 51.2)
-    call hd_state_init
-    call hd_probe               ; fills hd_devs; CF = 1 = nothing answered
-    jc .refuse
-    mov si, hd_services
-    clc
-    ret
+    je .ready
+    cmp al, DRVV_ATTACH         ; DRVV_TIER means nothing here: this driver
+    jne .refuse                 ; has one tier and its refusal changes
+    jmp hd_attach               ; nothing, which is the contract (51.2)
+.ready:
+    jmp hd_ready
 .refuse:
     mov al, DRVE_HW             ; the reason, explicitly: attach's refusal may
     stc                         ; carry a DRVE_* now (SPEC.md 51.2), and this
     ret                         ; path is reached with AL = the verb
 
 ; -----------------------------------------------------------------------------
-; hd_ready - the kernel can take our calls now (SPEC.md 51.2.2/52.6/52.6.1)
-; in:  nothing
-; out: nothing
-;
-; The earliest point at which OSAPI_VOL_* will answer us: their fence is the
-; publication slot and attach runs before it is armed. So this - and not
-; attach - is where the settings file is read and where the drives are
-; mounted: every one the probe found, plus every one the settings said was
-; mounted last session (SPEC.md 52.6.1).
-; -----------------------------------------------------------------------------
-hd_ready:
-    call hd_tool_home           ; the current volume IS the system volume here
-                                ; and only here (SPEC.md 52.11)
-    call hd_cfg_load            ; geometry the user typed, and what was up
-    call hd_cfg_automount       ; ...and what is THERE, which is the click the
-                                ; user was going to make anyway
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
 ; hd_detach - give everything back (SPEC.md 51.2). Cannot fail.
 ; in:  nothing
 ; out: nothing
 ;
-; Volumes first, then their listing claims, then the windows - and the
-; windows LAST because a destroy repaints, and a repaint of the desktop walks
-; the volume table. The kernel frees this image the moment we return.
+; Volumes first, then the tool's windows - and the windows LAST because a
+; destroy repaints, and a repaint of the desktop walks the volume table. The
+; kernel frees this image the moment we return.
 ; -----------------------------------------------------------------------------
 hd_detach:
-    push ax
     push bx
     push cx
     call hd_cfg_mark            ; a geometry typed and not yet acted on is
@@ -158,371 +129,16 @@ hd_detach:
     mov cx, HD_MAXVOL
     mov bx, hd_vols
 .vol:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_VOL]
-    call OSAPI_VOL_DEL
-    mov byte [bx+HDV_USED], 0
-.next:
+    call hd_unmount_row         ; a no-op on a row that is not live
     add bx, HDV_SIZE
     loop .vol
-    call hd_win_close_all       ; the partitioner and the formatter
+    call hd_tool_drop           ; HDT_SHUT and then the free, in that order. A
+                                ; window of the TOOL's left on screen is a
+                                ; paint through freed memory twice over - the
+                                ; kernel releases this image the moment we
+                                ; return, and we release the tool's before that
     pop cx
     pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_state_init - zero what has to start zero (module internal)
-; in:  nothing
-; out: nothing (all registers preserved)
-;
-; A driver's data ships INSIDE its image, zero-filled on the floppy, so this
-; is only needed for the things a re-attach must reset - and a re-attach is
-; an ordinary Control Panel click.
-; -----------------------------------------------------------------------------
-hd_state_init:
-    push ax
-    push cx
-    push di
-    push es
-    push ds
-    pop es
-    cld
-    mov di, hd_devs
-    mov cx, HD_MAXDEV * HDD_SIZE
-    xor al, al
-    rep stosb
-    mov di, hd_vols
-    mov cx, HD_MAXVOL * HDV_SIZE
-    rep stosb
-    mov byte [hd_ndev], 0
-    mov byte [hd_sel], 0        ; hd_field is the PAGE's and initialises in
-    mov byte [hd_wantmnt], 0    ; the image that owns it (cppage.inc)
-    mov byte [hd_msgc], HDM_PICK
-    pop es
-    pop di
-    pop cx
-    pop ax
-    ret
-
-; =============================================================================
-; The probe (SPEC.md 52.1)
-; =============================================================================
-
-; -----------------------------------------------------------------------------
-; hd_probe - find every hard disk this machine will let us reach
-; in:  nothing
-; out: CF = 0 and [hd_ndev] > 0; CF = 1 = no hard disk at all
-; clobbers: flags
-;
-; Rung 0 first, for every drive the BIOS admits to. Rung 1 then adds any IDE
-; device the task file answers for and the BIOS did NOT already report - so a
-; machine whose BIOS knows its disk gets one row for it, not two.
-; -----------------------------------------------------------------------------
-hd_probe:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-
-    mov byte [hd_ndev], 0
-    mov byte [hd_dupd], 0       ; no rung 0 row has been paired with an IDE
-                                ; unit yet (hd_ide_dup)
-
-    ; --- rung 0: what the BIOS says -----------------------------------------
-    ; int 13h AH=08h on 80h and 81h. DL comes back as the NUMBER of fixed
-    ; disks the BIOS knows, which is the honest bound - and a card whose ROM
-    ; hooked int 13h is exactly as authoritative here as an AT BIOS.
-    ;
-    ; **AND THE BOUND IS NOW USED.** The comment above was all there was of
-    ; it: 81h was asked whatever 80h had said, and an AT BIOS answers AH=08h
-    ; for a drive it does not have with CF CLEAR and the geometry of CMOS
-    ; drive type 1 - 305 x 4 x 17, a phantom 10MB `BIOS1` under the real
-    ; disk. MR BIOS on a one-drive 286 does exactly that. So 81h is asked
-    ; only when 80h answered and counted two; a BIOS that does not answer
-    ; for 80h has no fixed disk to number from, and rung 1 finds an IDE one.
-    mov byte [hd_pdl], 0x80     ; the drive number lives in MEMORY across
-    mov byte [hd_pcnt], 0       ; the probe: hd_bios_geom answers in AX, CX
-.bios:                          ; and DX, so there is no register free to
-    mov dl, [hd_pdl]            ; hold it and the stack would have to be
-    cmp dl, 0x80                ; unwound on two paths
-    je .ask
-    mov al, dl
-    sub al, 0x80                ; AL = this drive's ordinal...
-    cmp al, [hd_pcnt]           ; ...against 80h's count, 0 if it did not
-    jae .ide                    ; answer at all
-.ask:
-    call hd_bios_geom
-    jc .bios_next
-    call hd_dev_new             ; DI = a fresh row, CF = 1 = table full
-    jc .ide
-    mov byte [di+HDD_KIND], HDK_BIOS
-    call hd_geom_store          ; AX/CX/DX -> the row, and the known flag
-    mov al, [hd_pdl]
-    mov [di+HDD_UNIT], al
-.bios_next:
-    inc byte [hd_pdl]
-    cmp byte [hd_pdl], 0x82
-    jb .bios
-
-    ; --- rung 1: the IDE task file ------------------------------------------
-    ; 16-bit bus only, and that is not caution: `in ax, dx` on an 8-bit bus is
-    ; two byte reads at the same port and the drive's high byte is lost. An
-    ; 8088 with a hard disk has a controller with a ROM, and that is rung 0.
-.ide:
-    call OSAPI_CPU_INFO         ; AL = CPU_*
-    cmp al, CPU_286
-    jb .done
-    mov bx, 0x1F0
-    call hd_ide_channel
-    mov bx, 0x170
-    call hd_ide_channel
-.done:
-    cmp byte [hd_ndev], 0
-    je .none
-    clc
-    jmp short .out
-.none:
-    stc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_bios_geom - int 13h AH=08h, decoded (module internal)
-; in:  DL = 80h or 81h
-; out: CF = 0 and CX = cylinders, DX = heads, AX = sectors/track;
-;      CF = 1 = the BIOS does not know this drive
-; clobbers: AX, CX, DX (the outputs), flags
-;
-; The returned values are MAXIMA and zero-based for the head count, which is
-; the classic off-by-one in this call. A geometry with no sectors or no heads
-; is a BIOS saying no in a way that does not set CF - some XT ROMs do exactly
-; that for the second drive - so both are tested.
-; -----------------------------------------------------------------------------
-hd_bios_geom:
-    push bx
-    push si
-    push di
-    push es
-    push dx
-    mov ah, 0x08
-    int 0x13
-    jc .no
-    mov [hd_pcnt], dl           ; the BIOS's fixed-disk COUNT, which hd_probe
-                                ; bounds 81h by - banked before DX is spent
-    ; CH = cyl low, CL bits 6-7 = cyl high, CL bits 0-5 = sectors,
-    ; DH = max head
-    mov al, cl
-    and al, 0x3F                ; AL = sectors/track
-    test al, al
-    jz .no
-    mov bl, al                  ; BL = sectors/track, banked
-    mov al, cl
-    and al, 0xC0                ; the cylinder's top two bits, in CL 6..7...
-    mov cl, 6
-    shr al, cl                  ; ...down to 0..3
-    mov ah, al                  ; AH = cylinder bits 8..9
-    mov al, ch                  ; AL = cylinder bits 0..7, so AX is the MAX
-    mov cx, ax
-    inc cx                      ; ...and the count is one more than the max
-    mov al, dh
-    inc al                      ; AX = heads, and the 0xFF case is caught HERE
-    jz .no                      ; rather than by the `test dx, dx` below: that
-    xor ah, ah                  ; sees 0x0100 and lets it through, because the
-    mov dx, ax                  ; widening had already happened
-    mov al, bl
-    xor ah, ah                  ; AX = sectors/track
-    test dx, dx
-    jz .no
-    pop bx                      ; the caller's DL, discarded: CX/DX/AX are
-    pop es                      ; the outputs
-    pop di
-    pop si
-    pop bx
-    clc
-    ret
-.no:
-    pop dx
-    pop es
-    pop di
-    pop si
-    pop bx
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_ide_channel - probe both drives on one IDE channel (module internal)
-; in:  BX = the task file's base port
-; out: nothing (rows appended to hd_devs)
-; clobbers: flags
-;
-; A drive rung 0 already reported gets NO row here - that is what SPEC.md 52.1
-; means by "for a drive the BIOS does not know", and hd_ide_dup is the test.
-; -----------------------------------------------------------------------------
-hd_ide_channel:
-    push ax
-    push cx
-    push dx
-    push di
-    xor cl, cl                  ; CL = drive 0 / 1
-.drive:
-    call hd_ide_ident           ; CF = 0 and hd_idbuf holds IDENTIFY's answer
-    jc .next
-    call hd_ide_dup             ; the BIOS's own row for this drive is the one
-    jnc .next                   ; to keep (SPEC.md 52.1)
-    call hd_dev_new
-    jc .out
-    mov byte [di+HDD_KIND], HDK_IDE
-    mov [di+HDD_UNIT], cl
-    mov [di+HDD_BASE], bx
-    mov ax, [hd_idbuf + 1*2]    ; word 1: cylinders
-    mov cx, ax
-    mov ax, [hd_idbuf + 3*2]    ; word 3: heads
-    mov dx, ax
-    mov ax, [hd_idbuf + 6*2]    ; word 6: sectors per track
-    call hd_geom_store
-    call hd_ide_setparams       ; tell the drive the geometry we will use -
-                                ; without it every read lands somewhere else
-    mov cl, [di+HDD_UNIT]
-.next:
-    inc cl
-    cmp cl, 2
-    jb .drive
-.out:
-    pop di
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_ide_dup - is the drive IDENTIFY just answered for one rung 0 already has?
-;              (module internal)
-; in:  hd_idbuf holds IDENTIFY's answer; the rung 0 rows are in hd_devs
-; out: CF = 0 yes - the BIOS reported it and this unit gets no row of its own,
-;      and that BIOS row is now SPENT; CF = 1 no
-; clobbers: flags
-;
-; The key is the GEOMETRY, because it is the only thing the two rungs both
-; answer for: a BIOS row's unit is 80h/81h and an IDE row's is 0/1 on a base
-; port the BIOS never mentions, so SPEC.md 52.6's kind+unit+base cannot pair
-; them. Heads and sectors/track must be EQUAL - int 13h reports the drive's own
-; pair for a drive it is not translating, and a drive it IS translating has a
-; geometry that is not this one's at all - while the cylinder count only has to
-; be no LARGER, because reserving the last cylinder or two for diagnostics is
-; what a BIOS drive-type table does and SeaBIOS does it too (a 65-cylinder
-; drive is 64 cylinders through AH=08h).
-;
-; **Each BIOS row is spent once**, in [hd_dupd]: two identical drives with only
-; the first in the BIOS is the case a plain scan gets wrong, and it gets it
-; wrong in the direction that LOSES a disk. What no key can tell apart is an
-; MFM drive and an unknown IDE drive of exactly the same geometry - the second
-; is then skipped rather than listed.
-;
-; Without any of this the machine whose BIOS knows its disk gets TWO rows for
-; it, and SPEC.md 52.6.1's automount then mounts every partition on it twice -
-; once through each transport, as C: and again as D:, on a desktop with two
-; icons per volume and two FAT caches over the same sectors.
-; -----------------------------------------------------------------------------
-hd_ide_dup:
-    push ax
-    push bx
-    push cx
-    push di
-    xor bl, bl
-.scan:
-    cmp bl, [hd_ndev]
-    jae .no
-    mov al, bl
-    call hd_dev_row
-    cmp byte [di+HDD_KIND], HDK_BIOS
-    jne .next
-    mov cl, bl                  ; already paired with an earlier IDE unit?
-    mov al, 1
-    shl al, cl                  ; 8086: a variable shift goes through CL
-    test [hd_dupd], al
-    jnz .next
-    mov ax, [hd_idbuf + 3*2]    ; word 3: heads
-    cmp ax, [di+HDD_HEADS]
-    jne .next
-    mov ax, [hd_idbuf + 6*2]    ; word 6: sectors per track
-    cmp ax, [di+HDD_SPT]
-    jne .next
-    mov ax, [hd_idbuf + 1*2]    ; word 1: cylinders - the BIOS may report
-    cmp [di+HDD_CYL], ax        ; fewer, never more
-    ja .next
-    mov cl, bl
-    mov al, 1
-    shl al, cl
-    or [hd_dupd], al            ; spent
-    pop di
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.next:
-    inc bl
-    jmp short .scan
-.no:
-    pop di
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_dev_new - the next free device row (module internal)
-; in:  nothing
-; out: CF = 0 and DI = the row; CF = 1 = the table is full
-; clobbers: DI (the output), flags
-; -----------------------------------------------------------------------------
-hd_dev_new:
-    push ax
-    mov al, [hd_ndev]
-    cmp al, HD_MAXDEV
-    jae .full
-    call hd_dev_row
-    inc byte [hd_ndev]
-    pop ax
-    clc
-    ret
-.full:
-    pop ax
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_geom_store - put a probed geometry in a row (module internal)
-; in:  DI = the row, CX = cylinders, DX = heads, AX = sectors/track
-; out: nothing; HDD_FLAGS bit 0 set when all three are usable
-; clobbers: flags
-;
-; A geometry is KNOWN only when every field is inside what CHS addressing can
-; carry - 1..1024 cylinders, 1..255 heads, 1..63 sectors. Anything else is
-; the user's to type in, which is an ordinary state and not a failure.
-; -----------------------------------------------------------------------------
-hd_geom_store:
-    mov [di+HDD_CYL], cx
-    mov [di+HDD_HEADS], dx
-    mov [di+HDD_SPT], ax
-    and byte [di+HDD_FLAGS], 0xFE
-    call hd_geom_ok
-    jc .out
-    or byte [di+HDD_FLAGS], 1
-.out:
     ret
 
                                 ; hd_geom_ok and hd_dev_mb MOVED to
@@ -549,17 +165,17 @@ hd_geom_store:
 ; it leaves DI = the low word - which this must never meet, the two shipping
 ; together. Everything above it - the FAT, the directory, the write path -
 ; is the floppy's code, unchanged.
+;
+; CX, SI and ES are never written here and hd_xfer keeps everything but AX,
+; so only the four this routine spends are saved.
 ; -----------------------------------------------------------------------------
 hd_blk:
     cmp al, 2                   ; SPEC.md 51.8: sub-function 2 is GEOM, which
     je hd_geom                  ; wants none of the transfer frame below
     push bx
-    push cx
     push dx
-    push si
     push di
     push bp
-    push es
     mov bp, di                  ; the LBA's high word (SPEC.md 18.7.5), before
                                 ; DI becomes the volume row below
     mov [hd_bseg], dx
@@ -592,29 +208,15 @@ hd_blk:
 
     mov al, [di+HDV_DEV]
     call hd_dev_row             ; DI = the device row
-    cmp byte [di+HDD_KIND], HDK_IDE
-    je .ide
-    call hd_bios_xfer
-    jmp short .done
-.ide:
-    call hd_ide_xfer
-.done:
-    jc .fail
-    xor al, al
-    clc
+    call hd_xfer                ; CF, and AL = 0 or the status
     jmp short .out
 .bad:
     mov al, 0x04                ; "sector not found": the honest answer for a
-.fail:                          ; handle that names no volume, and for a
-                                ; sector past the partition's end
-    stc
-.out:
-    pop es
+    stc                         ; handle that names no volume, and for a
+.out:                           ; sector past the partition's end
     pop bp
     pop di
-    pop si
     pop dx
-    pop cx
     pop bx
     ret
 
@@ -697,31 +299,38 @@ hd_vol_row:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_bios_xfer - rung 0's transfer (module internal)
+; hd_xfer - one transfer to a DEVICE, on whichever rung it is reached by
 ; in:  DI = the device row, [hd_lba], [hd_bcnt], [hd_bseg]:[hd_bofs], [hd_bop]
-; out: CF = 0 done, else CF = 1 and AL = the int 13h status
+; out: CF = 0 and AL = 0 done; CF = 1 and AL = an int 13h status byte
 ; clobbers: AX (the output), flags
 ;
-; ONE SECTOR PER CALL, exactly like disk.inc's floppy path and for the same
-; two reasons: a track boundary never matters, and a transfer that starts
-; 512-aligned can never straddle a 64KB DMA page. Three attempts with an
-; AH=00h reset between them.
+; hd_blk and hd_raw both come through here, and the two rungs share this
+; frame and its one epilogue - which is also what makes them agree about BP:
+; it is NOT in the clobber list, and a caller holding a pointer in BP across a
+; mount must get it back rather than a device row.
+;
+; RUNG 0, int 13h. A track boundary never matters and a transfer that starts
+; 512-aligned can never straddle a 64KB DMA page (hd_bios_run is the cap);
+; three attempts with an AH=00h reset between them.
 ; -----------------------------------------------------------------------------
-hd_bios_xfer:
+hd_xfer:
     push bx
     push cx
     push dx
     push si
     push bp
     push es
+    push di
     mov si, [hd_bcnt]
+    cmp byte [di+HDD_KIND], HDK_IDE
+    je hd_xfer_ide
 .run:
     or si, si
-    jz .ok
+    jz hd_xfer_ok
     call hd_chs
-    jc .fail
+    jc hd_xfer_fail4
     call hd_bios_run            ; AX = sectors this one int 13h may carry
-    jc .fail                    ; ...or none of them can: an unaligned buffer
+    jc hd_xfer_fail4            ; ...or none of them can: an unaligned buffer
     mov [hd_run], ax            ; whose next sector would straddle a DMA page
     mov bp, 3
 .attempt:
@@ -739,17 +348,18 @@ hd_bios_xfer:
 %endif                          ; install, which nothing else counts
     int 0x13
     jnc .next
-    mov [hd_status], ah
+    push ax                     ; AH = the status, across the reset
     mov ah, 0x00                ; reset the controller and try again
     mov dl, [di+HDD_UNIT]
 %ifdef INSTBENCH
     inc word [hd_bn_rst]
 %endif
     int 0x13
+    pop ax
     dec bp
     jnz .attempt
-    mov al, [hd_status]
-    jmp short .fail
+    mov al, ah
+    jmp short hd_xfer_fail
 .next:
     mov cx, [hd_run]            ; hd_buf_step is per sector, and the LBA it
 .step:                          ; walks is what hd_chs reads next time round
@@ -757,24 +367,143 @@ hd_bios_xfer:
     dec si
     loop .step
     jmp short .run
-.ok:
-    pop es
-    pop bp
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
-.fail:
-    pop es
-    pop bp
-    pop si
-    pop dx
-    pop cx
-    pop bx
+
+hd_xfer_ok:
+    xor al, al                  ; and CF = 0
+    jmp short hd_xfer_out
+hd_xfer_fail4:
+    mov al, 0x04                ; "sector not found": a CHS the geometry cannot
+hd_xfer_fail:                   ; name, or a buffer no transfer can reach
     stc
+hd_xfer_out:
+    pop di
+    pop es
+    pop bp
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
+
+; -----------------------------------------------------------------------------
+; hd_xfer_ide - rung 1's half of hd_xfer, reached by its jump and leaving by
+;               its epilogue
+;
+; ONE COMMAND PER RUN, and one DRQ handshake per sector inside it. ATA-1's
+; sector-count register is what makes that legal: the drive walks
+; sector/head/cylinder itself, so a run may cross tracks and cylinders freely
+; and the only cap is the register's 255 (0 would mean 256, which nothing
+; here asks for).
+;
+; It used to be one command per sector, on the reasoning that dsk_xfer looped
+; int 13h anyway so a run bought nothing. That stopped being true when a
+; driver-backed volume started handing the whole count to DSV_BLK in one call
+; (SPEC.md 18.7): a command is a task-file write, a BSY poll and a DRQ poll,
+; and paying that per 512 bytes is most of what a copy costs on a real drive.
+; Measured on the reference copy (docs/plans/completed/HDD-PLAN.md part 13): 1,918 commands
+; became 141.
+;
+; No DMA page bound here, unlike the BIOS rung: PIO moves every byte through
+; the CPU, and hd_buf_step carries the offset into the segment.
+;
+; The PIO loop is `in ax, dx` / `stosw` because this tree is cpu 8086 and
+; `rep insw` is a 186 instruction - a 286-and-up machine could emit its two
+; opcode bytes by hand, and that is an optimisation for a day when someone
+; has measured it.
+; -----------------------------------------------------------------------------
+hd_xfer_ide:
+    mov bp, di                  ; BP = the device row: DI is the PIO loop's
+    mov bx, [di+HDD_BASE]
+.run:
+    or si, si
+    jz hd_xfer_ok
+    mov di, bp                  ; DI = the row again, for hd_chs
+    call hd_chs                 ; the CHS of the run's FIRST sector
+    jc hd_xfer_fail4
+    cmp word [hd_head], 15      ; the task file has FOUR bits of head, and
+    ja .fail                    ; hd_chs is shared with the BIOS rung, which
+                                ; legitimately carries 255 of them in DH. An
+                                ; IDE geometry that cannot be expressed is a
+                                ; refusal here, not a silent truncation into
+                                ; the drive-select bit (SPEC.md 52.1)
+    mov cl, [di+HDD_UNIT]
+    mov ch, [hd_head]
+    call hd_ide_select
+    jc .fail
+    mov ax, si                  ; the whole remainder in one command, up to
+    cmp ax, 255                 ; what the count register holds
+    jbe .n
+    mov ax, 255
+.n:
+    mov [hd_run], ax
+    mov dx, bx
+    add dx, IDE_SCNT
+    out dx, al                  ; AL = the run: 1..255
+    inc dx                      ; IDE_SNUM
+    mov al, [hd_sec]
+    out dx, al
+    inc dx                      ; IDE_CYLL
+    mov al, [hd_cyl]
+    out dx, al
+    inc dx                      ; IDE_CYLH
+    mov al, [hd_cyl+1]
+    out dx, al
+    mov dx, bx
+    add dx, IDE_STAT
+    mov al, IDE_C_READ
+    cmp byte [hd_bop], 0
+    je .cmd
+    mov al, IDE_C_WRITE
+.cmd:
+    out dx, al
+%ifdef INSTBENCH
+    call hd_bn_hit              ; a command, not a sector: this rung hands the
+%endif                          ; whole run to the drive (SPEC.md 52.10.9)
+.sector:                        ; one DRQ handshake per sector, inside the
+    call hd_ide_drq             ; one command above
+    jc .fail
+    mov dx, bx                  ; IDE_DATA
+    mov cx, 256
+    mov es, [hd_bseg]
+    mov di, [hd_bofs]
+    cld
+    cmp byte [hd_bop], 0
+    jne .write
+.read:
+    in ax, dx                   ; 16-bit, and the reason this rung is gated
+    stosw                       ; on a 16-bit bus (SPEC.md 52.1)
+    loop .read
+    jmp short .advance
+.write:
+    mov ax, [es:di]
+    out dx, ax
+    inc di
+    inc di
+    loop .write
+.advance:
+    call hd_buf_step
+    dec si
+    dec word [hd_run]
+    jnz .sector
+                                ; The command is finished. hd_ide_drq tests ERR
+                                ; at the TOP of each sector, which catches a
+                                ; READ (a failed read never asserts DRQ) and
+                                ; catches NOTHING on a WRITE: the last sector's
+                                ; data is already shifted out and its completion
+                                ; status has never been looked at. Every write
+                                ; in this driver is one sector, so without this
+                                ; a write fault is reported to the kernel as
+                                ; success - and the commit order in SPEC.md
+                                ; 18.4.1 is only safe while a failed data write
+                                ; comes back as a failure.
+    call hd_ide_wait
+    jc .fail
+    test al, IDE_ST_ERR | IDE_ST_DWF
+    jz .run
+    mov al, 0x0A                ; "bad sector detected" - the drive said so,
+    jmp hd_xfer_fail            ; rather than our own generic 04h
+.fail:
+    jmp hd_xfer_fail4
 
 ; -----------------------------------------------------------------------------
 ; hd_bios_run - how many sectors one int 13h may carry from here (internal)
@@ -800,13 +529,43 @@ hd_bios_xfer:
 ; here folds an offset into its segment the way dskw_norm does - the caller's
 ; alignment IS the guarantee. An unaligned buffer can leave zero sectors before
 ; the page boundary, and that is a refusal (CF=1), not a forced run of one.
+;
+; THE ANSWER IS THE LAST COMPARE, `cmp ax, 1`, which borrows for zero and for
+; nothing else. It used to be a `clc` on the success path, and that `clc` was
+; NOT OPTIONAL: its absence once made every transfer on this rung fail, because
+; `cmp ax, 127` borrows for every run below 127 and neither `mov` nor `pop`
+; touches the flags (SPEC.md 52.10.7.1). A flag left over from an earlier
+; compare is not an answer - which is why the one that answers comes last.
 ; -----------------------------------------------------------------------------
 hd_bios_run:
     push cx
     push dx
+%ifndef NO_HDCYL
+%ifdef HD_CYLPROBE
+    test byte [di+HDD_FLAGS], HDF_CYLOK ; HDCYLPROBE=1: only when hd_cylprobe
+    jz .trk                     ; saw the ROM carry one call across a head
+%endif
+    test byte [di+HDD_FLAGS], 2 ; ...never on a geometry that is not the
+    jnz .trk                    ; ROM's (typed, or a saved record): the ROM
+                                ; walks heads in ITS geometry, so a run counted
+                                ; in ours reads the wrong sectors with CF = 0.
+                                ; The track was self-consistent and stays
+    cmp byte [hd_bop], 0        ; A READ runs to the CYLINDER's end (SPEC.md
+    jne .trk                    ; 18.91.5) - (heads - head) x spt, less the
+    mov ax, [di+HDD_HEADS]      ; sectors behind [hd_sec], which is 1-based.
+    sub ax, [hd_head]           ; DX is pushed. Writes keep the track
+    mul word [di+HDD_SPT]
+    sub ax, [hd_sec]
+    inc ax
+    jmp short .cyl
+.trk:
+%endif
     mov ax, [di+HDD_SPT]        ; sectors left in this track, [hd_sec] being
     sub ax, [hd_sec]            ; 1-based
     inc ax
+%ifndef NO_HDCYL
+.cyl:
+%endif
     cmp ax, si
     jbe .page
     mov ax, si
@@ -816,43 +575,23 @@ hd_bios_run:
     shl dx, cl
     add dx, [hd_bofs]           ; DX = the offset within the 64KB DMA page
     neg dx
-    jz .out                     ; a zero offset means the whole page: no cap
+    jz .cap                     ; a zero offset means the whole page: no cap
     mov cl, 9
     shr dx, cl                  ; ...as sectors
     cmp ax, dx
-    jbe .out
+    jbe .cap
     mov ax, dx
-.out:
-    or ax, ax                   ; A bound of zero cannot happen for a buffer
-    jnz .cap                    ; that is 512-aligned, which every int 13h
-                                ; target in this driver now is. It CAN happen
-                                ; for one that is not, and forcing a run of 1
-                                ; there issues exactly the straddling transfer
-                                ; the cap exists to prevent - so this is a
-                                ; refusal now, and a future misalignment fails
-                                ; visibly instead of one heap layout in 64
-    stc
-    pop dx
-    pop cx
-    ret
 .cap:
     cmp ax, 127
     jbe .done
     mov ax, 127
 .done:
-    clc                         ; NOT OPTIONAL, and its absence made every
-                                ; transfer on this rung fail. `cmp ax, 127`
-                                ; borrows for every AX below 127 - which is
-                                ; every run this driver ever issues - and
-                                ; neither `mov` nor `pop` touches the flags,
-                                ; so CF walked out of here set and the `jc`
-                                ; this routine's own CF contract added at the
-                                ; call site refused the read. The success path
-                                ; has to SAY it succeeded; a flag left over
-                                ; from the last compare is not an answer
-    pop dx
-    pop cx
-    ret
+    cmp ax, 1                   ; CF = 1 for a bound of ZERO, which cannot
+    pop dx                      ; happen for a 512-aligned buffer - every int
+    pop cx                      ; 13h target in this driver is one - and CAN
+    ret                         ; for one that is not, where forcing a run of
+                                ; 1 would issue exactly the straddling transfer
+                                ; the cap exists to prevent
 
 ; -----------------------------------------------------------------------------
 ; hd_chs_regs - [hd_cyl]/[hd_head]/[hd_sec] into int 13h's register shape
@@ -861,20 +600,16 @@ hd_bios_run:
 ; clobbers: CX, DX, flags
 ;
 ; CH = cylinder bits 0..7, CL bits 6..7 = cylinder bits 8..9, CL bits 0..5 =
-; the 1-based sector. The two high bits go up six places one shift at a time
-; because an 8086 has no shift by an immediate count.
+; the 1-based sector. hd_chs has refused any cylinder past 1,023, so the
+; high byte is 0..3 and two ROTATES put it in bits 6..7 with zeros below -
+; where six shifts and a mask used to, an 8086 having no shift by an
+; immediate count.
 ; -----------------------------------------------------------------------------
 hd_chs_regs:
     mov cx, [hd_cyl]
-    mov ch, cl                  ; CH = cylinder low 8
-    mov cl, [hd_cyl+1]          ; 0..3
-    shl cl, 1
-    shl cl, 1
-    shl cl, 1
-    shl cl, 1
-    shl cl, 1
-    shl cl, 1
-    and cl, 0xC0
+    xchg cl, ch                 ; CH = cylinder low 8, CL = bits 8..9
+    ror cl, 1
+    ror cl, 1                   ; ...into bits 6..7
     or cl, [hd_sec]
     mov dh, [hd_head]
     mov dl, [di+HDD_UNIT]
@@ -890,18 +625,12 @@ hd_chs_regs:
 ; 32 paragraphs, so a wrapped offset means a whole 64KB has been crossed.
 ; -----------------------------------------------------------------------------
 hd_buf_step:
-    push ax
     add word [hd_bofs], 512
     jnc .noseg
-    mov ax, [hd_bseg]
-    add ax, 0x1000
-    mov [hd_bseg], ax
+    add word [hd_bseg], 0x1000
 .noseg:
     add word [hd_lba], 1
-    jnc .out
-    inc word [hd_lba+2]
-.out:
-    pop ax
+    adc word [hd_lba+2], 0
     ret
 
 ; =============================================================================
@@ -982,13 +711,11 @@ hd_ide_select:
     push dx
     mov dx, bx
     add dx, IDE_DRVH
-    mov al, cl
-    shl al, 1
-    shl al, 1
-    shl al, 1
-    shl al, 1                   ; drive into bit 4
-    and al, 0x10
-    or al, 0xA0                 ; the two bits ATA-1 pins high
+    mov al, 0xA0                ; the two bits ATA-1 pins high...
+    test cl, 1
+    jz .d0
+    mov al, 0xB0                ; ...and the drive in bit 4
+.d0:
     mov ah, ch
     and ah, 0x0F                ; ...and the head in bits 0..3. MASKED: head 16
     or al, ah                   ; would set bit 4 and address the OTHER drive on
@@ -996,63 +723,7 @@ hd_ide_select:
                                 ; hd_chs refuses such a geometry before we get
                                 ; here - this is the last line, not the only one
     pop dx
-    call hd_ide_wait
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_ide_ident - IDENTIFY DEVICE into hd_idbuf (module internal)
-; in:  BX = base, CL = drive 0/1
-; out: CF = 0 and hd_idbuf holds 256 words; CF = 1 = no such drive
-; clobbers: AX, flags
-;
-; A drive that predates ATA-1 answers ABRT here, and that is not a failure -
-; it is exactly the machine the page's manual geometry exists for. It is
-; refused as a DEVICE, though: without IDENTIFY there is nothing to tell us a
-; drive is even present, and inventing one would put a row on the page for a
-; controller that is not there.
-; -----------------------------------------------------------------------------
-hd_ide_ident:
-    push cx
-    push dx
-    push di
-    push es
-    push ds
-    pop es
-    mov ch, 0
-    call hd_ide_select
-    jc .no
-    cmp al, 0xFF                ; a floating bus reads as all ones
-    je .no
-    test al, IDE_ST_DRDY
-    jz .no
-    mov dx, bx
-    add dx, IDE_STAT
-    mov al, IDE_C_IDENT
-    out dx, al
-    call hd_ide_drq
-    jc .no
-    mov dx, bx
-    add dx, IDE_DATA
-    mov di, hd_idbuf
-    mov cx, 256
-    cld
-.read:
-    in ax, dx                   ; 16-bit, and the reason this rung is gated
-    stosw                       ; on a 16-bit bus (SPEC.md 52.1)
-    loop .read
-    pop es
-    pop di
-    pop dx
-    pop cx
-    clc
-    ret
-.no:
-    pop es
-    pop di
-    pop dx
-    pop cx
-    stc
-    ret
+    jmp short hd_ide_wait
 
 ; -----------------------------------------------------------------------------
 ; hd_ide_setparams - INITIALIZE DEVICE PARAMETERS (module internal)
@@ -1068,7 +739,7 @@ hd_ide_ident:
 ; in:  DI = the device row
 ; clobbers: flags
 ;
-; INITIALIZE DEVICE PARAMETERS is issued once, from hd_ide_channel, with the
+; INITIALIZE DEVICE PARAMETERS is issued once, from hd_at_channel, with the
 ; geometry IDENTIFY reported. Anything that overwrites HDD_HEADS/HDD_SPT
 ; afterwards - the Control Panel's fields, or a geometry restored out of
 ; SYSTEM.CFG before the first paint - leaves the drive translating with one
@@ -1124,197 +795,6 @@ hd_ide_setparams:
     pop bx
     ret
 
-; -----------------------------------------------------------------------------
-; hd_ide_xfer - rung 1's transfer (module internal)
-; in:  DI = the device row, [hd_lba], [hd_bcnt], [hd_bseg]:[hd_bofs], [hd_bop]
-; out: CF = 0 done, else CF = 1 and AL = a status byte
-; clobbers: AX (the output), flags
-;
-; ONE COMMAND PER RUN, and one DRQ handshake per sector inside it. ATA-1's
-; sector-count register is what makes that legal: the drive walks
-; sector/head/cylinder itself, so a run may cross tracks and cylinders freely
-; and the only cap is the register's 255 (0 would mean 256, which nothing
-; here asks for).
-;
-; It used to be one command per sector, on the reasoning that dsk_xfer looped
-; int 13h anyway so a run bought nothing. That stopped being true when a
-; driver-backed volume started handing the whole count to DSV_BLK in one call
-; (SPEC.md 18.7): a command is a task-file write, a BSY poll and a DRQ poll,
-; and paying that per 512 bytes is most of what a copy costs on a real drive.
-; Measured on the reference copy (docs/plans/completed/HDD-PLAN.md part 13): 1,918 commands
-; became 141.
-;
-; No DMA page bound here, unlike the BIOS rung: PIO moves every byte through
-; the CPU, and hd_buf_step carries the offset into the segment.
-;
-; The PIO loop is `in ax, dx` / `stosw` because this tree is cpu 8086 and
-; `rep insw` is a 186 instruction - a 286-and-up machine could emit its two
-; opcode bytes by hand, and that is an optimisation for a day when someone
-; has measured it.
-; -----------------------------------------------------------------------------
-hd_ide_xfer:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push bp                     ; BP is NOT in this routine's clobber list, and
-                                ; hd_bios_xfer saves it - the two rungs have to
-                                ; agree or a caller holding a pointer in BP
-                                ; across a mount gets it back as a device row
-    mov si, [hd_bcnt]
-    mov bp, di                  ; BP = the device row: DI is the PIO loop's
-    mov bx, [di+HDD_BASE]
-.run:
-    or si, si
-    jz .ok
-    push bp
-    pop di                      ; DI = the row again, for hd_chs
-    call hd_chs                 ; the CHS of the run's FIRST sector
-    jc .fail
-    cmp word [hd_head], 15      ; the task file has FOUR bits of head, and
-    ja .fail                    ; hd_chs is shared with the BIOS rung, which
-                                ; legitimately carries 255 of them in DH. An
-                                ; IDE geometry that cannot be expressed is a
-                                ; refusal here, not a silent truncation into
-                                ; the drive-select bit (SPEC.md 52.1)
-    mov cl, [di+HDD_UNIT]
-    mov ch, [hd_head]
-    call hd_ide_select
-    jc .fail
-    mov ax, si                  ; the whole remainder in one command, up to
-    cmp ax, 255                 ; what the count register holds
-    jbe .n
-    mov ax, 255
-.n:
-    mov [hd_run], ax
-    mov dx, bx
-    add dx, IDE_SCNT
-    out dx, al                  ; AL = the run: 1..255
-    inc dx                      ; IDE_SNUM
-    mov al, [hd_sec]
-    out dx, al
-    inc dx                      ; IDE_CYLL
-    mov al, [hd_cyl]
-    out dx, al
-    inc dx                      ; IDE_CYLH
-    mov al, [hd_cyl+1]
-    out dx, al
-    mov dx, bx
-    add dx, IDE_STAT
-    mov al, IDE_C_READ
-    cmp byte [hd_bop], 0
-    je .cmd
-    mov al, IDE_C_WRITE
-.cmd:
-    out dx, al
-%ifdef INSTBENCH
-    call hd_bn_hit              ; a command, not a sector: this rung hands the
-%endif                          ; whole run to the drive (SPEC.md 52.10.9)
-.sector:                        ; one DRQ handshake per sector, inside the
-    call hd_ide_drq             ; one command above
-    jc .fail
-    mov dx, bx                  ; IDE_DATA
-    mov cx, 256
-    mov es, [hd_bseg]
-    mov di, [hd_bofs]
-    cld
-    cmp byte [hd_bop], 0
-    jne .write
-.read:
-    in ax, dx                   ; 16-bit, and the reason this rung is gated
-    stosw                       ; on a 16-bit bus (SPEC.md 52.1)
-    loop .read
-    jmp short .advance
-.write:
-    mov ax, [es:di]
-    out dx, ax
-    inc di
-    inc di
-    loop .write
-.advance:
-    call hd_buf_step
-    dec si
-    dec word [hd_run]
-    jnz .sector
-                                ; The command is finished. hd_ide_drq tests ERR
-                                ; at the TOP of each sector, which catches a
-                                ; READ (a failed read never asserts DRQ) and
-                                ; catches NOTHING on a WRITE: the last sector's
-                                ; data is already shifted out and its completion
-                                ; status has never been looked at. Every write
-                                ; in this driver is one sector, so without this
-                                ; a write fault is reported to the kernel as
-                                ; success - and the commit order in SPEC.md
-                                ; 18.4.1 is only safe while a failed data write
-                                ; comes back as a failure.
-    call hd_ide_wait
-    jc .fail
-    test al, IDE_ST_ERR | IDE_ST_DWF
-    jnz .failst
-    jmp .run
-.ok:
-    pop bp
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
-.failst:
-    mov al, 0x0A                ; "bad sector detected" - the drive said so,
-    jmp short .failout          ; rather than our own generic 04h
-.fail:
-    mov al, 0x04
-.failout:
-    pop bp
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    stc
-    ret
-
-; =============================================================================
-; The service table (SPEC.md 51.2)
-; =============================================================================
-hd_services:
-    dw 0                        ; DSV_CAPS    - sound's
-    dw 0                        ; DSV_FM
-    dw 0                        ; DSV_STREAM
-    dw 0                        ; DSV_TICK
-    dw 0                        ; DSV_RELINST
-    dw 0                        ; DSV_NAME
-    dw 0                        ; DSV_TONE
-    dw 0                        ; DSV_TIERS
-    dw hd_blk                   ; DSV_BLK
-    dw hd_s_page                ; DSV_CPNAME  - and so the page exists
-    dw hd_cp_paint              ; DSV_CPPAINT - a THUNK now (SPEC.md 52.13):
-    dw hd_cp_click              ; DSV_CPCLICK   the page is in HDDTOOL.DRV
-    dw hd_tool_reap             ; DSV_CPCLOSE - the panel has gone, so the disk
-                                ; tool's 11KB goes with it (SPEC.md 52.11.7)
-    dw 0                        ; DSV_FS      - a file redirector's, not ours
-    dw hd_cp_key                ; DSV_CPKEY   - the arrows move the drive
-                                ; highlight and the C/H/S field; the geometry
-                                ; itself is still set with - and + (52.4)
-    dw hd_cp_up                 ; DSV_CPUP    - the page acts on the RELEASE
-    dw hd_cp_drag               ; DSV_CPDRAG  - ...and follows the pointer
-                                ;               between the edges (13.8.4)
-    dw 0                        ; DSV_PKGCALL - no package reaches a raw sector
-    times DSV_SIZE - ($ - hd_services) db 0
-                                ; drv_publish copies DSV_SIZE bytes
-                                ; whatever this table's length is, so
-                                ; one that stops short publishes
-                                ; whatever FOLLOWS it - see
-                                ; ramdisk.asm, which did. This one is
-                                ; exact today and the pad is what
-                                ; keeps it exact when DSV_SIZE grows
-
 hd_s_page:   db 'Hard Drive', 0
 
 ; =============================================================================
@@ -1332,14 +812,10 @@ hd_vols:     times HD_MAXVOL * HDV_SIZE db 0
 hd_bseg:     dw 0               ; ...and its buffer, count and direction
 hd_bofs:     dw 0
 hd_bcnt:     dw 0
-hd_bop:      db 0
+hd_bop       equ hd_rawop       ; the direction: hdcom.inc's own byte, which
+                                ; hd_raw's callers set and hd_blk sets for
+                                ; itself - so hd_raw has nothing to copy
 hd_run:      dw 0               ; sectors in the transfer being issued
-hd_status:   db 0
-hd_pdl:      db 0               ; hd_probe's int 13h drive number
-hd_pcnt:     db 0               ; ...and how many the BIOS said it has
-hd_dupd:     db 0               ; bit n = rung 0's row n is the same drive as
-                                ; an IDE unit rung 1 has already seen, so it
-                                ; can pair with no other (hd_ide_dup)
 
 %ifdef INSTBENCH
 ; SPEC.md 52.10.9 - the DEVICE side of a transfer, which nothing else counts.
@@ -1352,25 +828,588 @@ hd_bn_cal:   dw 0               ; ...in how many commands
 hd_bn_rst:   dw 0               ; ...and controller resets, which are retries
 %endif
 
-                                ; hd_idbuf is hdsec.inc's now, and it is the
-                                ; SAME 512 BYTES as hd_mbr (SPEC.md 52.13.3)
+                                ; hd_idbuf is in hd_mbr's 512 bytes, with the
+                                ; probe that fills it (SPEC.md 52.13.6)
 
 hd_pslot:    db 0               ; the partition hd_mount is working on
 hd_wantmnt:  db 0               ; bit n = mount device n at DRVV_READY: it
                                 ; was mounted last session, or the probe
                                 ; just found it (SPEC.md 52.6.1)
-hd_selsave:  db 0               ; hd_cfg_automount's saved selection
-hd_cwd:      dw 0               ; the volume+directory the automount borrowed...
-hd_cdrv:     db 0               ; ...and must put back
-hd_cfgi:     db 0               ; hd_cfg_build's loop index and record count
-hd_cfgn:     db 0
-hd_cfgbuf:   times HDC_FBUF db 0     ; the blob, staged for OSAPI_DRV_CFG
+hd_cfgbuf    equ hd_mbr         ; the blob, staged for OSAPI_DRV_CFG: its
+                                ; first HDC_FBUF bytes, which are hd_attach's
+                                ; by the time DRVV_READY reads the blob in
+                                ; there and partition boot code - which the
+                                ; resident never reads - ever after. Its
+                                ; lifetime is one hd_cfg_mark or one
+                                ; hd_ready, and no partition table is read
+                                ; during either (SPEC.md 52.13.6)
                                 ; hd_cap MOVED to page.inc, beside the strings
                                 ; it is composed from: a built caption belongs
                                 ; to the image that letters it, exactly as a
                                 ; constant one does (hddabi.inc's HDM_*)
 
+; =============================================================================
+; hd_at_dup and hd_at_new are ATTACH-ONLY too, and they are out here for one
+; reason: the run below that IS hd_mbr is longer than 512 bytes without them,
+; and its excess would sit past the window as image anyway - while out here
+; they fill padding the window's `align 512` would otherwise spend on zeros.
+; The rule for the run below still binds them: nothing but hd_attach's own
+; tree calls them.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; hd_at_dup - is the drive IDENTIFY just answered for one rung 0 already has?
+; in:  hd_idbuf holds IDENTIFY's answer; the rung 0 rows are in hd_devs
+; out: CF = 0 yes - the BIOS reported it and this unit gets no row of its own,
+;      and that BIOS row is now SPENT; CF = 1 no
+; clobbers: AX, DX, DI, flags (BX, the base port, is kept)
+;
+; The key is the GEOMETRY, because it is the only thing the two rungs both
+; answer for: a BIOS row's unit is 80h/81h and an IDE row's is 0/1 on a base
+; port the BIOS never mentions, so SPEC.md 52.6's kind+unit+base cannot pair
+; them. Heads and sectors/track must be EQUAL - int 13h reports the drive's own
+; pair for a drive it is not translating, and a drive it IS translating has a
+; geometry that is not this one's at all - while the cylinder count only has to
+; be no LARGER, because reserving the last cylinder or two for diagnostics is
+; what a BIOS drive-type table does and SeaBIOS does it too (a 65-cylinder
+; drive is 64 cylinders through AH=08h).
+;
+; **Each BIOS row is spent once**, in [hd_dupd]: two identical drives with only
+; the first in the BIOS is the case a plain scan gets wrong, and it gets it
+; wrong in the direction that LOSES a disk. What no key can tell apart is an
+; MFM drive and an unknown IDE drive of exactly the same geometry - the second
+; is then skipped rather than listed.
+;
+; Without any of this the machine whose BIOS knows its disk gets TWO rows for
+; it, and SPEC.md 52.6.1's automount then mounts every partition on it twice -
+; once through each transport, as C: and again as D:, on a desktop with two
+; icons per volume and two FAT caches over the same sectors.
+; -----------------------------------------------------------------------------
+hd_at_dup:
+    mov dx, 0x0100              ; DL = the row index, DH = its bit in [hd_dupd]
+.scan:
+    cmp dl, [hd_ndev]
+    jae .no
+    mov al, dl
+    call hd_dev_row
+    cmp byte [di+HDD_KIND], HDK_BIOS
+    jne .next
+    test [hd_dupd], dh          ; already paired with an earlier IDE unit?
+    jnz .next
+    mov ax, [hd_idbuf + 3*2]    ; word 3: heads
+    cmp ax, [di+HDD_HEADS]
+    jne .next
+    mov ax, [hd_idbuf + 6*2]    ; word 6: sectors per track
+    cmp ax, [di+HDD_SPT]
+    jne .next
+    mov ax, [hd_idbuf + 1*2]    ; word 1: cylinders - the BIOS may report
+    cmp [di+HDD_CYL], ax        ; fewer, never more
+    ja .next
+    or [hd_dupd], dh            ; spent - and `or` leaves CF = 0
+    ret
+.next:
+    inc dx
+    shl dh, 1
+    jmp short .scan
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_at_new - the next free device row
+; in:  nothing
+; out: CF = 0 and DI = the row; CF = 1 = the table is full
+; clobbers: DI (the output), flags
+; -----------------------------------------------------------------------------
+hd_at_new:
+    push ax
+    mov al, [hd_ndev]
+    cmp al, HD_MAXDEV
+    cmc                         ; CF = 1 = full
+    jc .out
+    call hd_dev_row
+    inc byte [hd_ndev]
+    clc
+.out:
+    pop ax
+    ret
+
 %include "hdsec.inc"
+
+; =============================================================================
+; ATTACH-ONLY CODE, LAID IN hd_mbr's 512 BYTES (SPEC.md 52.13.6)
+;
+; Everything from here to hd_mbr_end runs ONCE, at DRVV_ATTACH, and the first
+; hd_part_load blanks it into a partition table. That is safe for one reason,
+; and it is the kernel's rather than ours: drv_load_row refuses a row whose
+; DRVR_SEG is already set (`.already`), so an attach is only ever sent to an
+; image dskw_read_x has just read off the disk - unticking the driver is an
+; unload, the next tick reads a fresh image, and a hibernate round trip is
+; hbm_detach/hbm_reload, a fresh image again. Nothing below may be CALLED
+; from anywhere but hd_attach's own tree, and nothing above may name a label
+; down here but hd_entry's one jump; the routines carry `hd_at_` in their
+; names for that reason.
+;
+; It is the same 512 bytes hd_idbuf used to be (52.13.3), one step further:
+; that union shared IDENTIFY's buffer with the partition table, and this
+; shares the CODE that fills IDENTIFY's buffer - which is why hd_idbuf is
+; fourteen bytes now, the three words the probe reads, and not 512.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; hd_attach - DRVV_ATTACH: find every hard disk this machine will let us reach
+; in:  AL = DRVV_ATTACH; DS = CS = ours, ES = KERNEL_SEG
+; out: CF = 0 and SI = the service table; CF = 1 and AL = DRVE_HW = no hard
+;      disk at all
+; clobbers: SI, AL (the outputs), flags
+;
+; Rung 0 first, for every drive the BIOS admits to. Rung 1 then adds any IDE
+; device the task file answers for and the BIOS did NOT already report - so a
+; machine whose BIOS knows its disk gets one row for it, not two (SPEC.md
+; 52.1).
+;
+; NOTHING IS ZEROED FIRST. hd_state_init used to clear hd_devs, hd_vols and
+; the counts for "a re-attach" - and there is no such thing: the image this
+; runs in was read off the disk a moment ago (see above), so every one of
+; them is the zero the source declares.
+;
+; ATTACH IS ALL-OR-NOTHING and this one has an easy time of it: the probe
+; writes no port that is not a read-back of a drive's own task file, claims
+; no memory, and hooks no interrupt.
+; -----------------------------------------------------------------------------
+hd_attach:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+
+    ; --- rung 0: what the BIOS says -----------------------------------------
+    ; int 13h AH=08h on 80h and 81h. DL comes back as the NUMBER of fixed
+    ; disks the BIOS knows, which is the honest bound - and a card whose ROM
+    ; hooked int 13h is exactly as authoritative here as an AT BIOS. An AT
+    ; BIOS answers AH=08h for a drive it does not have with CF CLEAR and the
+    ; geometry of CMOS drive type 1 - 305 x 4 x 17, a phantom 10MB `BIOS1`
+    ; under the real disk; MR BIOS on a one-drive 286 does exactly that. So
+    ; 81h is asked only when 80h answered and counted two; a BIOS that does
+    ; not answer for 80h has no fixed disk to number from, and rung 1 finds
+    ; an IDE one.
+    mov dl, 0x80
+    call hd_at_bios
+    cmp byte [hd_pcnt], 2
+    jb .ide
+    mov dl, 0x81
+    call hd_at_bios
+
+    ; --- rung 1: the IDE task file ------------------------------------------
+    ; 16-bit bus only, and that is not caution: `in ax, dx` on an 8-bit bus is
+    ; two byte reads at the same port and the drive's high byte is lost. An
+    ; 8088 with a hard disk has a controller with a ROM, and that is rung 0.
+.ide:
+    call OSAPI_CPU_INFO         ; AL = CPU_*
+    cmp al, CPU_286
+    jb .done
+    mov bx, 0x1F0
+    call hd_at_channel
+    mov bx, 0x170
+    call hd_at_channel
+.done:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    mov si, hd_services
+    cmp byte [hd_ndev], 1       ; CF = 1 = nothing answered
+    jnc .out
+    mov al, DRVE_HW             ; the reason, explicitly (SPEC.md 51.2)
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_at_bios - one rung 0 drive: int 13h AH=08h, decoded, and its row
+; in:  DL = 80h or 81h
+; out: a row appended to hd_devs if the BIOS knows the drive; [hd_pcnt] = the
+;      BIOS's fixed-disk COUNT whenever it answered at all
+; clobbers: AX, BX, CX, DX, DI, ES, flags - hd_attach saved them
+;
+; The returned values are MAXIMA and zero-based for the head count, which is
+; the classic off-by-one in this call. A geometry with no sectors is a BIOS
+; saying no in a way that does not set CF - some XT ROMs do exactly that for
+; the second drive - and so is DH = 0FFh, whose count of 256 the row cannot
+; carry. CH = cyl low, CL bits 6-7 = cyl high, CL bits 0-5 = sectors.
+; -----------------------------------------------------------------------------
+hd_at_bios:
+    push dx
+    mov ah, 0x08
+    int 0x13
+    pop bx                      ; BL = the drive
+    jc .out
+    mov [hd_pcnt], dl           ; the count hd_attach bounds 81h by
+    mov al, cl
+    and al, 0x3F                ; AL = sectors/track
+    jz .out
+    inc dh                      ; DH = heads; 0FFh + 1 = 256 is caught HERE
+    jz .out
+    rol cl, 1                   ; CL bits 6..7 -> bits 0..1
+    rol cl, 1
+    and cl, 3
+    xchg cl, ch                 ; CX = the cylinder MAX...
+    inc cx                      ; ...and the count is one more
+    mov dl, dh
+    xor dh, dh                  ; DX = heads
+    xor ah, ah                  ; AX = sectors/track
+    call hd_at_new              ; DI = a fresh row
+    jc .out
+    mov byte [di+HDD_KIND], HDK_BIOS
+    mov [di+HDD_UNIT], bl
+    jmp short hd_at_geom
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_at_geom - put a probed geometry in a fresh row
+; in:  DI = the row, CX = cylinders, DX = heads, AX = sectors/track
+; out: nothing; HDD_FLAGS bit 0 set when all three are usable
+; clobbers: flags
+;
+; A geometry is KNOWN only when every field is inside what CHS addressing can
+; carry - 1..1024 cylinders, 1..255 heads, 1..63 sectors. Anything else is
+; the user's to type in, which is an ordinary state and not a failure. The
+; row is fresh off hd_at_new, so its flags are already zero.
+; -----------------------------------------------------------------------------
+hd_at_geom:
+    mov [di+HDD_CYL], cx
+    mov [di+HDD_HEADS], dx
+    mov [di+HDD_SPT], ax
+    call hd_geom_ok
+    jc .out
+    or byte [di+HDD_FLAGS], 1
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_at_channel - probe both drives on one IDE channel
+; in:  BX = the task file's base port
+; out: rows appended to hd_devs
+; clobbers: AX, CX, DX, DI, ES, flags - hd_attach saved them
+;
+; A drive rung 0 already reported gets NO row here - that is what SPEC.md 52.1
+; means by "for a drive the BIOS does not know", and hd_at_dup is the test.
+; -----------------------------------------------------------------------------
+hd_at_channel:
+    xor cx, cx                  ; CL = drive 0 / 1
+.drive:
+    push cx
+    call hd_at_ident            ; CF = 0 and hd_idbuf holds IDENTIFY's answer
+    jc .next
+    call hd_at_dup              ; the BIOS's own row for this drive is the one
+    jnc .next                   ; to keep (SPEC.md 52.1)
+    call hd_at_new
+    jc .full
+    pop cx
+    push cx
+    mov byte [di+HDD_KIND], HDK_IDE
+    mov [di+HDD_UNIT], cl
+    mov [di+HDD_BASE], bx
+    mov cx, [hd_idbuf + 1*2]    ; word 1: cylinders
+    mov dx, [hd_idbuf + 3*2]    ; word 3: heads
+    mov ax, [hd_idbuf + 6*2]    ; word 6: sectors per track
+    call hd_at_geom
+    call hd_ide_setparams       ; tell the drive the geometry we will use -
+                                ; without it every read lands somewhere else
+.next:
+    pop cx
+    inc cx
+    cmp cl, 2
+    jb .drive
+    ret
+.full:
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_at_ident - IDENTIFY DEVICE: the three words the probe reads, into hd_idbuf
+; in:  BX = base, CL = drive 0/1
+; out: CF = 0 and hd_idbuf holds words 0..6; CF = 1 = no such drive
+; clobbers: AX, CX, DX, DI, ES, flags
+;
+; A drive that predates ATA-1 answers ABRT here, and that is not a failure -
+; it is exactly the machine the page's manual geometry exists for. It is
+; refused as a DEVICE, though: without IDENTIFY there is nothing to tell us a
+; drive is even present, and inventing one would put a row on the page for a
+; controller that is not there.
+;
+; ALL 256 WORDS ARE STILL READ - the drive holds DRQ until the sector is
+; drained - and the 249 nobody looks at are read into AX and dropped, which
+; is what lets hd_idbuf be 14 bytes.
+; -----------------------------------------------------------------------------
+hd_at_ident:
+    mov ch, 0
+    call hd_ide_select
+    jc .no
+    cmp al, 0xFF                ; a floating bus reads as all ones
+    je .no
+    test al, IDE_ST_DRDY
+    jz .no
+    mov dx, bx
+    add dx, IDE_STAT
+    mov al, IDE_C_IDENT
+    out dx, al
+    call hd_ide_drq
+    jc .no
+    mov dx, bx                  ; IDE_DATA
+    push ds
+    pop es
+    mov di, hd_idbuf
+    mov cx, 7
+    cld
+.read:
+    in ax, dx                   ; 16-bit, and the reason this rung is gated
+    stosw                       ; on a 16-bit bus (SPEC.md 52.1)
+    loop .read
+    mov cx, 256 - 7
+.drain:
+    in ax, dx
+    loop .drain
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ready - DRVV_READY: the kernel can take our calls now (SPEC.md
+;            51.2.2/52.6/52.6.1)
+; in:  nothing
+; out: CF = 0 (hd_cfg_automount's answer); every register preserved
+;
+; The earliest point at which OSAPI_VOL_* will answer us: their fence is the
+; publication slot and attach runs before it is armed. So this - and not
+; attach - is where the settings are read and where the drives are mounted:
+; every one the probe found, plus every one the settings said was mounted
+; last session (SPEC.md 52.6.1).
+;
+; IT IS IN hd_mbr's BYTES, LIKE ATTACH, AND IT LEAVES BY A JUMP. Everything
+; up to the jump runs before anything reads a partition table; the mount
+; that does is hd_cfg_automount's, which is out in the resident and RETURNS
+; TO THE KERNEL, because the first hd_part_load it makes blanks the bytes
+; this routine is made of. A `call` there would return into a partition
+; table.
+;
+; Three things, in this order:
+;
+;   1. THE SYSTEM VOLUME, BANKED ONCE (SPEC.md 52.11). drv_load brackets the
+;      whole load in drv_vol_bank .. drv_vol_back and sends DRVV_READY from
+;      inside that bracket (SPEC.md 51.2.2), so here and only here the
+;      current volume IS the one HDD.DRV was read from - which is where
+;      HDDTOOL.DRV is too, on a floppy machine and an installed one alike.
+;      **AND THAT SENTENCE NEEDED A KERNEL FIX TO BE TRUE** (SPEC.md 51.2.3):
+;      OSAPI_FILE_HERE answers for the CALLING INSTANCE (SPEC.md 19.2.1), a
+;      driver is not one, and ticking our row on the Drivers page is a
+;      CONTROL PANEL click - so this banked wherever the PANEL had been
+;      launched, and Format and Install went to B: for the tool with it
+;      sitting in A:. drv_call clears the stamp now, so this reads the
+;      machine, which is what it always meant to read.
+;
+;   2. THE SETTINGS BLOB (SPEC.md 52.6): geometry the user typed, and what
+;      was mounted. A blob nobody has written reads back as zeroes and a zero
+;      version is not HDC_VER, so a machine that has never saved gets the
+;      defaults - the probe's own answers and nothing mounted - and never an
+;      error. Each record is matched to a device by WHAT IT IS - kind, unit
+;      and base port - never by where it sat in the table last time.
+;
+;   3. WHAT IS THERE (SPEC.md 52.6.1): every probed device with a usable
+;      geometry is added to [hd_wantmnt] - ADDED, never replacing, so the
+;      automount can only ever attempt MORE than the settings asked for.
+;      hd_geom_ok is the page's own predicate (SPEC.md 47), so what is
+;      attempted here is exactly what the page would have let the user click.
+;
+; [hd_wantmnt] starts at the zero the image declares: this runs once, on an
+; image read a moment ago.
+; -----------------------------------------------------------------------------
+hd_ready:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    call OSAPI_FILE_HERE        ; DX = the directory, BL = its drive
+    mov [hd_tcwd], dx
+    mov [hd_tvol], bl
+
+    push ds
+    pop es
+    mov si, hd_cfgbuf
+    mov cx, HDC_FBUF
+    xor al, al                  ; get
+    call OSAPI_DRV_CFG
+    jc .found                   ; not published: impossible here, but the
+                                ; answer is the defaults either way
+    cmp cx, HDC_ENT0
+    jb .found
+    cmp byte [hd_cfgbuf], HDC_VER
+    jne .found                  ; another version's shape: the defaults, and
+                                ; the next save rewrites it in this one
+    mov cl, [hd_cfgbuf+HDC_COUNT]
+    xor ch, ch
+    jcxz .found
+    cmp cl, HD_MAXDEV
+    ja .found
+    mov si, hd_cfgbuf + HDC_ENT0
+.rec:
+    push cx
+    mov bx, 0x0100              ; BL = the device index, BH = its bit
+.scan:
+    cmp bl, [hd_ndev]
+    jae .nextrec
+    mov al, bl
+    call hd_dev_row
+    mov ax, [si+HDC_E_KIND]     ; AL = kind, AH = unit - matched by WHAT IT
+    cmp ax, [di+HDD_KIND]       ; IS, never by where it sat in the table last
+    jne .next                   ; time (cfg.inc's header)
+    mov al, [si+HDC_E_BASE]     ; the stored port, back up four bits
+    xor ah, ah
+    mov cl, 4
+    shl ax, cl
+    cmp ax, [di+HDD_BASE]
+    jne .next
+    ; --- the geometry, and ONLY when the probe could not answer -------------
+    ; This used to restore it unconditionally, reasoning that "a saved record
+    ; only exists when the user typed it in or mounted with it, and either way
+    ; it is the one that worked". That is true on ONE machine and false the
+    ; moment the file travels - and a BIOS drive's match key is
+    ; kind=BIOS/unit=80h/base=0, which is the SAME KEY ON EVERY MACHINE THERE
+    ; IS. So the geometry typed on one box was restored, silently and with
+    ; full confidence, onto a different box's drive, and every LBA then
+    ; resolved to a different physical sector (docs/FIELD-NOTES.md 33). The
+    ; probe's answer is a fact about the drive in front of us and the saved
+    ; one is a fact about wherever this file was written, so the probe wins
+    ; whenever it has one. The MOUNT bit below is untouched: which drives to
+    ; mount is a preference and travels fine; a geometry is not and does not.
+    ;
+    ; UNLESS THE RECORD SAYS THE USER TYPED IT. The +/- editor is live on
+    ; every drive, probed or not, so "the probe answered" is not the same fact
+    ; as "nobody typed one". HDC_F_TYPED is the fact itself, recorded by
+    ; hd_cfg_mark off HDD_FLAGS bit 1. The field record that travelled between
+    ; the 5150s carried flags=01 - mounted, not typed - so it still loses to
+    ; the probe and docs/FIELD-NOTES.md 33 stays fixed.
+    test byte [si+HDC_E_FLAGS], HDC_F_TYPED
+    jnz .geom                   ; the user's own answer wins...
+    test byte [di+HDD_FLAGS], 1 ; ...and where there is none, the probe's does
+    jnz .nogeom
+.geom:
+    mov ax, [si+HDC_E_CYL]
+    mov [di+HDD_CYL], ax
+    mov al, [si+HDC_E_HEADS]
+    xor ah, ah
+    mov [di+HDD_HEADS], ax
+    mov al, [si+HDC_E_SPT]
+    mov [di+HDD_SPT], ax
+    and byte [di+HDD_FLAGS], 0xFC
+    call hd_geom_ok
+    jc .nogeom
+    or byte [di+HDD_FLAGS], 3   ; bit 0 usable, AND BIT 1 - "not the BIOS's",
+                                ; which the save needs: it drops any record
+                                ; that is "probed and not mounted", so a
+                                ; restored geometry on an unmounted drive
+                                ; would otherwise erase itself at the next
+                                ; write
+    call hd_geom_push           ; the drive has to be told too: this runs before
+                                ; the first paint, so a restored geometry that
+                                ; only we know about would automount and then
+                                ; read the wrong sectors with no user present
+.nogeom:
+    test byte [si+HDC_E_FLAGS], HDC_F_MOUNT
+    jz .nextrec
+    or [hd_wantmnt], bh
+    jmp short .nextrec
+.next:
+    inc bx
+    shl bh, 1
+    jmp short .scan
+.nextrec:
+    pop cx
+    add si, HDC_ESZ
+    loop .rec
+
+.found:                         ; 3: what is THERE
+    mov bx, 0x0100              ; BL = the device index, BH = its bit
+.dev:
+    cmp bl, [hd_ndev]
+    jae .go
+    mov al, bl
+    call hd_dev_row             ; DI = the row, which is hd_geom_ok's argument
+    call hd_geom_ok
+    jc .skip
+    or [hd_wantmnt], bh
+.skip:
+    inc bx
+    shl bh, 1
+    jmp short .dev
+.go:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp hd_cfg_automount        ; NOT a call: see above
+
+; =============================================================================
+; The service table (SPEC.md 51.2) - read ONCE, by drv_publish, the moment
+; hd_attach returns, and never again: the kernel keeps its own copy. So it is
+; attach-only data and lives with the attach-only code.
+; =============================================================================
+hd_services:
+    dw 0                        ; DSV_CAPS    - sound's
+    dw 0                        ; DSV_FM
+    dw 0                        ; DSV_STREAM
+    dw 0                        ; DSV_TICK
+    dw 0                        ; DSV_RELINST
+    dw 0                        ; DSV_NAME
+    dw 0                        ; DSV_TONE
+    dw 0                        ; DSV_TIERS
+    dw hd_blk                   ; DSV_BLK
+    dw hd_s_page                ; DSV_CPNAME  - and so the page exists. The
+                                ; STRING stays resident: the panel reads it
+                                ; out of our segment whenever it lists pages
+    dw hd_cp_paint              ; DSV_CPPAINT - a THUNK now (SPEC.md 52.13):
+    dw hd_cp_click              ; DSV_CPCLICK   the page is in HDDTOOL.DRV
+    dw hd_tool_reap             ; DSV_CPCLOSE - the panel has gone, so the disk
+                                ; tool's 11KB goes with it (SPEC.md 52.11.7)
+    dw 0                        ; DSV_FS      - a file redirector's, not ours
+    dw hd_cp_key                ; DSV_CPKEY   - the arrows move the drive
+                                ; highlight and the C/H/S field; the geometry
+                                ; itself is still set with - and + (52.4)
+    dw hd_cp_up                 ; DSV_CPUP    - the page acts on the RELEASE
+    dw hd_cp_drag               ; DSV_CPDRAG  - ...and follows the pointer
+                                ;               between the edges (13.8.4)
+hd_svc_end:                     ; ...AND STOPS HERE, its length in the header
+                                ; (OS88_DRIVER's fourth argument, +15). So
+                                ; DSV_PKGCALL is published 0 without a cell
+                                ; here saying so - no package reaches a raw
+                                ; sector - and a cell added to DSV_* later is
+                                ; 0 for this driver until it writes one
+
+hd_pcnt:     db 0               ; how many fixed disks the BIOS said it has
+hd_dupd:     db 0               ; bit n = rung 0's row n is the same drive as
+                                ; an IDE unit rung 1 has already seen, so it
+                                ; can pair with no other (hd_at_dup)
+hd_idbuf:    times 7 dw 0       ; IDENTIFY's words 0..6 (hd_at_ident)
+hd_mbr_end:
+%if hd_attach != hd_mbr || hd_ready - hd_mbr < HDC_FBUF
+  %error "hd_cfgbuf is hd_mbr's first bytes: only hd_attach may be under them"
+%endif
+%if hd_mbr_end - hd_mbr < 512
+    times 512 - (hd_mbr_end - hd_mbr) db 0  ; the rest of the partition table
+%endif
 
 ; **NO os88ui.inc.** It was here for the PAGE and the page is in HDDTOOL.DRV
 ; now (SPEC.md 52.13), which was already carrying its own copy for the two

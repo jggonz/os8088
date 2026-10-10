@@ -22,12 +22,14 @@ HOW
 3. Press W. It writes STREAM.DAT, 12.5 MB, in C:'s
    root - it checks the room first and says so if
    there is not enough. The status line counts the
-   KB. It is MINUTES, and slower towards the end:
-   every 32 KB is appended at the end of the file
-   and the end is found again each time. If the
-   machine is reset part way, press W again: it
-   carries on from where it stopped. When it is done
-   its report is saved here as VDWRITE.TXT.
+   KB. W is the streaming write, the fast one; A is
+   the old append, which finds the end of the file
+   again every 32 KB and slows as it goes, for
+   comparing the two. If the machine is reset part
+   way, press W again: it carries on from where it
+   stopped. When it is done its report is saved
+   here as VDWRITE.TXT, and its "the writer" line
+   says which way it wrote.
 4. Press R. About two minutes, and the screen stays
    still for 25 s of it - it is working. The report
    is saved here as VIDDISK.TXT.

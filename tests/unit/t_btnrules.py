@@ -38,8 +38,8 @@ REGISTRY = os.path.join(ROOT, "tests", "btnsites.txt")
 
 # ...AND SO DOES A MACRO-WRAPPED CALL. kernel/fdlg.inc reaches everything
 # outside itself through `FDX <name>`, which is `call <name>` on kern_big and
-# `call COLD_SEG:xd_<name>` on kern_small, with `FDXF <name>` generating the
-# far thunk. NEITHER spelling contains `call os88ui_btn`, so the file was not
+# `call fdx_go` / `dw <name>` on kern_small (it was `call COLD_SEG:xd_<name>`
+# through a far thunk). NEITHER spelling contains `call os88ui_btn`, so the file was not
 # in the registry at all and could not be counted, let alone checked - and it
 # named os88ui_btn where it meant os88ui_kbtn, which took every button off the
 # Standard File dialog. A wrapper is how a caller hides from a grep; this

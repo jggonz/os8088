@@ -41,7 +41,21 @@ WZV_PAINT   equ 0x40            ; the verb the kernel calls to paint the icon.
 ; one is asserted where it ends. The kernel copies DSV_R_SIZE bytes with one
 ; `rep movsb` and terminates the caption itself; everything else here is
 ; trusted the way a driver's DSV table is trusted.
+;
+; **AND ONCE IT IS COPIED IT IS SCRATCH** (SPEC.md 26.7.1): the same bytes are
+; wz_buf, the stage wz_tile unpacks each quadrant's record into. That is safe
+; for three facts and each is a fact about the tree rather than a hope:
+; osapi_desk_item_x COPIES the record and never reads the driver's again (the
+; caption, the file and the name all live in desk_svc_rec from then on);
+; wz_register is called ONCE, from DRVV_READY, and the kernel sends that once
+; per attach, every attach being a fresh image read off the disk; and the
+; kernel calls the paint verb only on the driver whose registration it TOOK,
+; so a refused second driver never paints and keeps its record intact. A
+; driver that ever wants to register AGAIN on the same image - taking the zone
+; over when the other driver leaves, say - must give wz_buf storage of its own
+; first, or it hands the kernel a picture's rows as a caption.
 wz_rec:
+wz_buf:
     db 'Wire', 0                ; +0  the caption under the icon
     times 12 - ($ - wz_rec) db 0
 %if ($ - wz_rec) != 12
@@ -66,9 +80,9 @@ wz_rec:
 %if ($ - wz_rec) != 40
   %error "wirezone: the record is 40 bytes - the kernel copies DSV_R_SIZE"
 %endif
-
-wz_x:       dw 0                ; the icon's top-left, banked across
-wz_y:       dw 0                ; OSAPI_VIDEO, which answers in CX and DX
+WZ_BUF_SZ   equ 2 + 16 * 4      ; one quadrant's record at its tallest: the
+    times WZ_BUF_SZ - ($ - wz_buf) db 0     ; header, 16 mask words and 16
+                                ; data words - exactly what icon_draw_x stages
 
 ; -----------------------------------------------------------------------------
 ; wz_register / wz_withdraw - the zone appears and goes away with the driver
@@ -96,7 +110,7 @@ wz_withdraw:
 ; wz_paint - THE VERB: draw the zone's icon (SPEC.md 26.7)
 ; in:  CX = the icon's left column, DX = its top row; the gfx lock is HELD
 ;      (this is called from inside desk_paint), DS = CS = our segment
-; out: nothing
+; out: nothing; every register comes back as it came in
 ;
 ; The adapter decides the shape, exactly as the kernel's volume icons do
 ; (SPEC.md 26.4): the CGA's pixels are 2.4:1 tall, so a 32-row glyph renders
@@ -115,42 +129,96 @@ wz_paint:
     push cx
     push dx
     push si
-    mov [wz_x], cx
-    mov [wz_y], dx
-    call OSAPI_VIDEO            ; DL = VID_*; AX, BX, CX and DX are all its
-    cmp dl, VID_CGA             ; answers, which is why the origin is banked
-    je .small
-
-    mov cx, [wz_x]
-    mov dx, [wz_y]
-    mov si, wz_32tl
-    call OSAPI_ICON_DRAW
-    add cx, 16
-    mov si, wz_32tr
-    call OSAPI_ICON_DRAW
-    mov cx, [wz_x]
-    mov dx, [wz_y]
+    push di
+    push bp
+    push es
+    push cx                     ; OSAPI_VIDEO answers in AX, BX, CX and DX,
+    push dx                     ; so the origin is banked across it
+    call OSAPI_VIDEO            ; DL = VID_*
+    mov bl, dl
+    pop dx
+    pop cx
+    push ds
+    pop es                      ; wz_tile's stosw writes our own wz_buf - and
+                                ; the X stub hands ES back as it found it
+    mov si, wz_l14
+    cmp bl, VID_CGA
+    je .last                    ; the CGA: one band of 14 rows
+    mov si, wz_l32t             ; ...the rest: two bands of 16
+    push cx
+    call wz_pair
+    pop cx
     add dx, 16
-    mov si, wz_32bl
-    call OSAPI_ICON_DRAW
-    add cx, 16
-    mov si, wz_32br
-    call OSAPI_ICON_DRAW
-    jmp short .out
-.small:
-    mov cx, [wz_x]
-    mov dx, [wz_y]
-    mov si, wz_14l
-    call OSAPI_ICON_DRAW
-    add cx, 16
-    mov si, wz_14r
-    call OSAPI_ICON_DRAW
-.out:
+    mov si, wz_l32b
+.last:
+    call wz_pair
+    pop es
+    pop bp
+    pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wz_pair - one band of the picture: its left quadrant at CX, its right at
+;           CX + 16, both out of the same run list
+; wz_tile - unpack ONE quadrant's record into wz_buf, then draw it
+; in:  SI -> a run list, CX/DX = where; ES = DS; wz_tile also BP -> the
+;      half's row-word table
+; out: SI and DX kept, CX + 16 after wz_pair; AX, BX, DI, BP spent
+;
+; The record comes out byte for byte what the hand-written one was - the
+; header, `rows` mask words, `rows` data words - so OSAPI_ICON_DRAW is handed
+; exactly what it was handed before, and the pixels cannot differ. The list
+; is walked TWICE, because the data rows follow the mask rows in the record:
+; once for the masks and once for the data, DI running straight on from one
+; into the other. DF = 0 is the system contract (SPEC.md 1, 20.2), which
+; icon_draw_x's own copy rests on along this very path.
+; -----------------------------------------------------------------------------
+wz_pair:
+    mov bp, wz_tl
+    call wz_tile
+    add cx, 16
+    mov bp, wz_tr
+wz_tile:
+    push si
+    push cx
+    push dx
+    mov di, wz_buf
+    mov al, 1                   ; one word a row...
+    stosb
+    movsb                       ; ...and the list's own row count
+    mov dh, WZT_WIND            ; THE MASK PASS: a wound row's silhouette is
+.pass:                          ; the drum's, so WIND reads EDGE's word here
+    push si
+.run:
+    lodsb                       ; count << 4 | last << 3 | type
+    mov bl, al
+    and bx, 7                   ; BX = the type; BH = 0
+    cmp bl, dh
+    jne .word
+    dec bx                      ; WIND -> EDGE, the mask pass only: in the
+.word:                          ; data pass DH has bit 7 set and no type does
+    shl bx, 1
+    add bx, bp                  ; ...a word of this half's table
+    mov cl, 4
+    shr al, cl                  ; AL = the run's rows, and CF = the bit shifted
+    cbw                         ; out last: THE LAST-RUN FLAG. cbw, xchg, mov
+    xchg ax, cx                 ; and rep stosw move no flag, so it reaches the
+    mov ax, [bx]                ; `jnc` below untouched
+    rep stosw
+    jnc .run
+    pop si                      ; ...and round again for the data rows
+    xor dh, 0x80                ; 0x03 -> 0x83: the data pass, which no
+    js .pass                    ; type matches; 0x83 -> 0x03: done
+    pop dx
+    pop cx
+    mov si, wz_buf
+    call OSAPI_ICON_DRAW        ; CX and DX come back; ES and BP too, the X
+    pop si                      ; stub restores both
     ret
 
 ; =============================================================================
@@ -177,70 +245,57 @@ wz_paint:
 ;   ........################........  21..25  ...its body
 ;   ...........###....###...........  26..30  ...and its two prongs
 ;
-; Each quadrant is one 16 px column of it, `db 1, rows` then `rows` mask words
-; then `rows` data words - the plain record OSAPI_ICON_DRAW takes, bit 15 =
-; the leftmost pixel of the word.
+; PACKED (SPEC.md 26.7.1): the picture has EIGHT distinct rows and both forms
+; are made of nothing else, so each half is a table of eight words and each
+; band is a list of runs over it. A row's mask is its data - every shape here
+; is solid - except a WOUND row's, which is the drum's silhouette under the
+; winding's holes, and wz_tile substitutes that one in the mask pass. Six
+; hand-written records were 380 bytes; the tables and the lists are 56.
 ; =============================================================================
+WZT_BLANK   equ 0               ; ................
+WZT_FLANGE  equ 1               ; ..######........  ........######..
+WZT_EDGE    equ 2               ; ..##############  ##############..
+WZT_WIND    equ 3               ; ..######.#..#..#  ..#..#..######..
+WZT_CORD    equ 4               ; ..............##  ##..............
+WZT_SHOULD  equ 5               ; ...........#####  #####...........
+WZT_BODY    equ 6               ; ........########  ########........
+WZT_PRONG   equ 7               ; ...........###..  ..###...........
+%if WZT_EDGE != WZT_WIND - 1
+  %error "wirezone: wz_tile turns WIND into EDGE with one `dec`"
+%endif
 
-; --- 32 rows: VGA, EGA and Hercules -----------------------------------------
-wz_32tl:                        ; rows 0..15, columns 0..15
-    db 1, 16
-    dw 0x0000                   ;  0
-    dw 0x3F00, 0x3F00           ;  1.. 2  flange
-    dw 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF   ;  3..13 the drum's
-    dw 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF           ;        silhouette
-    dw 0x3F00, 0x3F00           ; 14..15  flange
-    dw 0x0000                   ;  0
-    dw 0x3F00, 0x3F00           ;  1.. 2  ..######................######..
-    dw 0x3FFF                   ;  3      ..############################..
-    dw 0x3F49, 0x3F49, 0x3F49, 0x3F49, 0x3F49           ;  4..12 the winding
-    dw 0x3F49, 0x3F49, 0x3F49, 0x3F49
-    dw 0x3FFF                   ; 13      ..############################..
-    dw 0x3F00, 0x3F00           ; 14..15
+wz_tl:      dw 0x0000, 0x3F00, 0x3FFF, 0x3F49, 0x0003, 0x001F, 0x00FF, 0x001C
+wz_tr:      dw 0x0000, 0x00FC, 0xFFFC, 0x24FC, 0xC000, 0xF800, 0xFF00, 0x3800
 
-wz_32tr:                        ; rows 0..15, columns 16..31
-    db 1, 16
-    dw 0x0000
-    dw 0x00FC, 0x00FC
-    dw 0xFFFC, 0xFFFC, 0xFFFC, 0xFFFC, 0xFFFC, 0xFFFC
-    dw 0xFFFC, 0xFFFC, 0xFFFC, 0xFFFC, 0xFFFC
-    dw 0x00FC, 0x00FC
-    dw 0x0000
-    dw 0x00FC, 0x00FC
-    dw 0xFFFC
-    dw 0x24FC, 0x24FC, 0x24FC, 0x24FC, 0x24FC
-    dw 0x24FC, 0x24FC, 0x24FC, 0x24FC
-    dw 0xFFFC
-    dw 0x00FC, 0x00FC
+; WZ_RUNS rows, count, type, count, type, ... - one band's run list: the row
+; count (the record's header byte), then a byte per run, count << 4 | type, with
+; bit 3 set on the last - where wz_tile's `shr al, cl` drops it into CF. The counts are checked against the rows HERE, so
+; a list that would draw a record short or long does not assemble.
+%macro WZ_RUNS 1-*
+    db %1
+  %assign %%rows %1
+  %assign %%sum 0
+  %assign %%left (%0 - 1) / 2
+  %rotate 1
+  %rep %%left
+    %assign %%left %%left - 1
+    %if (%1) < 1 || (%1) > 15
+      %error "wirezone: a run is 1..15 rows - the count is a nibble"
+    %endif
+    %assign %%sum %%sum + (%1)
+    db ((%1) << 4) | ((%%left == 0) << 3) | (%2)
+    %rotate 2
+  %endrep
+  %if %%sum != %%rows
+    %error "wirezone: a run list's counts must add up to its row count"
+  %endif
+%endmacro
 
-; The cord, the plug and the prongs are SOLID, so their mask and their data
-; are the same sixteen rows twice - which is what a filled shape looks like in
-; this format and not a mistake.
-wz_32bl:                        ; rows 16..31, columns 0..15
-    db 1, 16
-    dw 0x0003, 0x0003, 0x0003, 0x0003   ; 16..19  the cord
-    dw 0x001F                           ; 20      the shoulder
-    dw 0x00FF, 0x00FF, 0x00FF, 0x00FF, 0x00FF   ; 21..25  the body
-    dw 0x001C, 0x001C, 0x001C, 0x001C, 0x001C   ; 26..30  the prongs
-    dw 0x0000                           ; 31
-    dw 0x0003, 0x0003, 0x0003, 0x0003
-    dw 0x001F
-    dw 0x00FF, 0x00FF, 0x00FF, 0x00FF, 0x00FF
-    dw 0x001C, 0x001C, 0x001C, 0x001C, 0x001C
-    dw 0x0000
-
-wz_32br:                        ; rows 16..31, columns 16..31
-    db 1, 16
-    dw 0xC000, 0xC000, 0xC000, 0xC000
-    dw 0xF800
-    dw 0xFF00, 0xFF00, 0xFF00, 0xFF00, 0xFF00
-    dw 0x3800, 0x3800, 0x3800, 0x3800, 0x3800
-    dw 0x0000
-    dw 0xC000, 0xC000, 0xC000, 0xC000
-    dw 0xF800
-    dw 0xFF00, 0xFF00, 0xFF00, 0xFF00, 0xFF00
-    dw 0x3800, 0x3800, 0x3800, 0x3800, 0x3800
-    dw 0x0000
+; --- 32 rows: VGA, EGA and Hercules, as two bands of 16 ----------------------
+wz_l32t:    WZ_RUNS 16, 1,WZT_BLANK, 2,WZT_FLANGE, 1,WZT_EDGE, 9,WZT_WIND, \
+                        1,WZT_EDGE, 2,WZT_FLANGE
+wz_l32b:    WZ_RUNS 16, 4,WZT_CORD, 1,WZT_SHOULD, 5,WZT_BODY, 5,WZT_PRONG, \
+                        1,WZT_BLANK
 
 ; --- 14 rows: the CGA (SPEC.md 26.4) ----------------------------------------
 ; Drawn, not squashed, for ico_disk14's reason: OR-ing row pairs thickens
@@ -257,44 +312,6 @@ wz_32br:                        ; rows 16..31, columns 16..31
 ;   ...........##########...........   9      the shoulder
 ;   ........################........  10..11  the body
 ;   ...........###....###...........  12..13  the prongs
-wz_14l:                         ; columns 0..15
-    db 1, 14
-    dw 0x0000                   ;  0
-    dw 0x3F00                   ;  1
-    dw 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF   ;  2.. 5
-    dw 0x3F00                   ;  6
-    dw 0x0003, 0x0003           ;  7.. 8
-    dw 0x001F                   ;  9
-    dw 0x00FF, 0x00FF           ; 10..11
-    dw 0x001C, 0x001C           ; 12..13
-    dw 0x0000
-    dw 0x3F00
-    dw 0x3FFF
-    dw 0x3F49, 0x3F49
-    dw 0x3FFF
-    dw 0x3F00
-    dw 0x0003, 0x0003
-    dw 0x001F
-    dw 0x00FF, 0x00FF
-    dw 0x001C, 0x001C
-
-wz_14r:                         ; columns 16..31
-    db 1, 14
-    dw 0x0000
-    dw 0x00FC
-    dw 0xFFFC, 0xFFFC, 0xFFFC, 0xFFFC
-    dw 0x00FC
-    dw 0xC000, 0xC000
-    dw 0xF800
-    dw 0xFF00, 0xFF00
-    dw 0x3800, 0x3800
-    dw 0x0000
-    dw 0x00FC
-    dw 0xFFFC
-    dw 0x24FC, 0x24FC
-    dw 0xFFFC
-    dw 0x00FC
-    dw 0xC000, 0xC000
-    dw 0xF800
-    dw 0xFF00, 0xFF00
-    dw 0x3800, 0x3800
+wz_l14:     WZ_RUNS 14, 1,WZT_BLANK, 1,WZT_FLANGE, 1,WZT_EDGE, 2,WZT_WIND, \
+                        1,WZT_EDGE, 1,WZT_FLANGE, 2,WZT_CORD, 1,WZT_SHOULD, \
+                        2,WZT_BODY, 2,WZT_PRONG

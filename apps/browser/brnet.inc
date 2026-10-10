@@ -538,12 +538,8 @@ br_nstep:
                                     ; cable, RAMDISK.DRV shares the second, and
                                     ; net_find asks each for NETV_IDENT
     jc .nodrv                       ; (apps/os88sock.inc, SPEC.md 20.11.1)
-    mov bh, NET_CLASS
-    mov bl, NETV_STATE
-    call OSAPI_DRV_CALL
-    jc .nodrv
-    test al, NSTF_SOCK
-    jz .nolink
+    jz .nolink                      ; ...and NETV_STATE's NSTF_SOCK with it,
+                                    ; which is OS88SOCK_STATE's half
     mov bh, NET_CLASS
     mov bl, NETV_OPEN
     mov si, br_host

@@ -2614,7 +2614,7 @@ section .text                   ; A KERNEL RELOCATION PROC IS A NEAR PROC IN
 ; out: SI past the group's terminator
 ; clobbers: AX, CX, DI (flags)
 ;
-; ONE LOOP FOR FOUR ADDRESS SPACES, which is what makes the eleven holders of
+; ONE LOOP FOR FOUR ADDRESS SPACES, which is what makes the twelve holders of
 ; SPEC.md 66.6 cost a table row each instead of a loop each. A row is
 ; `dw base` + `db count` + `db stride`: four bytes, and a SCALAR is the row
 ; with count 1 and stride 0, so a lone kernel word costs the same four bytes it
@@ -2669,7 +2669,7 @@ mem_rr_walk:
 ; in:  BX = the base segment it WAS at, DX = the base it is at NOW
 ; out: nothing; every register preserved
 ;
-; SPEC.md 66.6 lists eleven holders and it listed four for a year. Each of the
+; SPEC.md 66.6 lists twelve holders and it listed four for a year. Each of the
 ; seven that were missing fails in a way nobody would trace back to a
 ; compaction - a stale [menu_seg] draws every bar title out of the wrong
 ; segment, a stale [fdlg_rqsp] makes the completion callback silently skip so
@@ -2744,7 +2744,7 @@ mem_region_reloc:
     pop ax
     ret
 
-; --- THE ELEVEN HOLDERS, AS ROWS (SPEC.md 66.6) ------------------------------
+; --- THE TWELVE HOLDERS, AS ROWS (SPEC.md 66.6) ------------------------------
 ; `dw base, db count, db stride`, in three groups by the segment they live in.
 ; What needs NOTHING is most of the kernel: sound grants, XMS blocks, toast
 ; ownership, the dock, the clipboard, wm_owner and every wm_about / wm_onwk /
@@ -2799,8 +2799,11 @@ mem_rr_tab:
                                 ; rule 3 names
     MEM_RR_ONE fdlg_rqsp        ; the file dialog's staleness cookie
 %ifdef KERN_BIG
-    MEM_RR_ONE drv_dlg_seg      ; kern_small's driver file-dialog slot is a
-%endif                          ; refusing stub and has no state (62.9.15)
+    MEM_RR_ROW hb_dosseg, 2, 2  ; the DOS handoff's posted region (SPEC.md
+                                ; 96.40.8) and the driver file dialog's
+                                ; image; kern_small has neither - no
+                                ; HIBER.DRV, and its dialog slot is a
+%endif                          ; refusing stub with no state (62.9.15)
     MEM_RR_ROW dskw_seg, 2, 2   ; a CALLER's segment and the advancing one,
     MEM_RR_ONE dskw_czseg       ; banked across a whole file transfer
     ; ...and the driver words that are NOT in drv_tab. Three of them are rows

@@ -384,11 +384,12 @@ mod_need:
 %ifdef OS88_SHORTCUTS
     cmp di, MOD_SETS            ; ...or the SETTINGS CORE's, which is only the
     jne .whole                  ; file's first MODS_SIZE bytes (SPEC.md 2.8.7):
-    mov ax, MODS_SIZE           ; the claim is sized for those and the read
-    mov bp, ax
-    mov byte [dskw_trunc], 1    ; stops there. MODS_SIZE is this assembly's,
-.whole:                         ; like every offset the module is called at
-%endif
+    mov ax, MODC_SIZE           ; the read stops there, but the CLAIM is the
+    mov bp, MODS_SIZE           ; WHOLE image's, so the module's bss tail
+    mov byte [dskw_trunc], 1    ; (cpc_buf) is inside it on either load. Both
+.whole:                         ; are this assembly's constants, like every
+%endif                          ; offset the module is called at - never the
+                                ; file's size, which a short file would shrink
 
     call mem_bytes_kb_x         ; -> whole KB. The size is well under 64KB,
     cmp ax, MOD_MAX_KB          ; so this cannot carry out

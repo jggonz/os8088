@@ -39,6 +39,10 @@
 
     OS88_OVERLAY 'HD Tool', HD_ABI_VER, hd_tentry
 
+; CLC_OR_STC, the shared prologue (os88_ent) and the return ladder
+; (os88_r_*) are drivers/os88drv.inc's now: this image hand-rolled all three
+; as HD_CLC_OR_STC, hd_ent and hd_r_*, and was the reason they went there.
+
 %include "hddabi.inc"
 %include "hdcom.inc"
 %include "hdsvc.inc"
@@ -63,10 +67,6 @@
 hd_tentry:
     cmp al, HDT_INIT
     je hd_tinit
-    cmp al, HDT_FORMAT
-    je hd_tfmt
-    cmp al, HDT_INSTALL
-    je hd_tinst
     cmp al, HDT_SHUT
     je hd_tshut
     cmp al, HDT_BUSY
@@ -104,36 +104,42 @@ hd_tinit:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_tfmt / hd_tinst - HDT_FORMAT / HDT_INSTALL: open a window
-; in:  the gfx lock is HELD (we are inside a Control Panel page's click)
-; out: CF = 0
-;
-; The device table is pulled over FIRST and on every open, not once at load:
-; the panel stays clickable underneath and the user can retype a geometry
-; there between one open and the next.
+; HDT_FORMAT / HDT_INSTALL are NOT DISPATCHED any more, and that is a proof
+; rather than a guess: no resident has sent either since the page moved into
+; this image (SPEC.md 52.13, HD_ABI_VER 2 -> 3) - the page's own buttons open
+; the two windows with hd_tool_open - and the resident refuses any tool whose
+; HD_ABI_VER is not its own (hd_tool_check), so no resident that can load this
+; image ever sends them. They fall to the refusal below with any other verb.
 ; -----------------------------------------------------------------------------
-hd_tfmt:
-    call hd_sync
-    call hd_tw_open
-    cmp word [hd_twin], 0       ; CF = 1 = no window went up, and the page is
-    je .no                      ; the only thing that can say so
-    clc
-    ret
-.no:
-    stc
-    ret
 
-hd_tinst:
-    call hd_sync
-    call hd_iw_open
-    cmp word [hd_iwin], 0
-    je .no
-    clc
-    ret
-.no:
-    stc
-    ret
+; -----------------------------------------------------------------------------
+; THE SHARED PROLOGUE AND THE RETURN LADDER - drivers/os88drv.inc's OS88_ENT
+; and OS88_RET_LADDER (kernel.asm's kentc_bp and kret_*, one image further
+; out). `call os88_ent` banks AX..BP; a routine ends `jmp os88_r_bp` (or,
+; having pushed ES after it, `jmp os88_r_es`). Its rule is the include's: only
+; for a routine whose outputs are FLAGS or memory, and cold code only - ~100
+; cycles a call, which nothing in this image notices: it runs while a human
+; clicks, or between int 13h transfers whose own cost is milliseconds.
+;
+; HERE AND NOT ELSEWHERE, because of the alignment tuning below: the bytes in
+; front of hdsec.inc are what is tuned, and these two are 27 of them.
+; -----------------------------------------------------------------------------
+    OS88_ENT
+    OS88_RET_LADDER es
 
+%include "hdsec.inc"
+
+; =============================================================================
+; PAST THE SECTOR BUFFERS ON PURPOSE. hdsec.inc pads to a 512 boundary in front
+; of hd_mbr, and every byte of that pad is a byte of every load of this image.
+; Code after the buffers costs no alignment, so what sits here is chosen to
+; make what is IN FRONT of them end exactly on the boundary - three routines
+; this file owns, 91 bytes, which put hd_mbrok at 511 mod 512 and the pad at
+; zero. It is a tuning, not a rule: any change above moves it, and the cure is
+; to move a routine across the buffers in one direction or the other, never to
+; pad. The claim is whole KB (HDTOOL_KB), so the tuning is worth a KB exactly
+; when it carries the image under a KB boundary - which today it does.
+; =============================================================================
 ; -----------------------------------------------------------------------------
 ; hd_tshut - HDT_SHUT: nothing of ours left on screen, nothing of ours held
 ; in:  nothing
@@ -221,7 +227,6 @@ hd_win_live:
     clc
     ret
 
-%include "hdsec.inc"
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_CHK              ; the installer's Erase box (SPEC.md 52.10.15)
@@ -230,6 +235,8 @@ hd_win_live:
                                 ; through arm/fire/armed - the record-based
                                 ; gesture half is ~226 bytes nothing here
                                 ; calls (SPEC.md 20.5.1.3.4)
+%define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
+%define OS88UI_NOGRADIO       ; check boxes only: no radio ring/dot (SPEC.md 13.15.3)
 %include "os88ui.inc"
 
     OS88_DRV_END

@@ -270,6 +270,8 @@ section .text
 ; bytecode, recalculates no cell and raises no alert - so they would be bytes
 ; of a file LOOM has to read off a floppy for a picture that never calls them.
 ; =============================================================================
+%define OS88UI_NOGEST           ; presses routed by hand: no gesture install (SPEC.md 20.5.1.3.4)
+%define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
 %include "os88ui.inc"
 %include "os88line.inc"
 %include "weave/wblob.inc"          ; reading a claim: the bundle's and the

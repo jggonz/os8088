@@ -45,17 +45,15 @@ eth_v_open:
     mov [bx+SKO_LP], ax
     mov byte [bx+SKO_ST], NSK_CONNECT
 
-    mov di, bx                  ; the name, out of their segment and into the
-    add di, SKO_HOST            ; record - bounded by the record and never by
+    lea di, [bx+SKO_HOST]       ; the name, out of their segment and into the
+                                ; record - bounded by the record and never by
     mov cx, NET_HOSTMAX - 1     ; the NUL, which came off a package
     mov si, [eth_usi]
     call usr_read
     mov byte [bx+SKO_HOST+NET_HOSTMAX-1], 0
 
-    mov si, bx
-    add si, SKO_HOST
-    mov di, bx
-    add di, SKO_RIP
+    lea si, [bx+SKO_HOST]
+    lea di, [bx+SKO_RIP]
     call ip_parse               ; a dotted quad connects at once; a NAME waits
     jnc .go                     ; for dns_timer to pick it up
     or  byte [bx+SKO_FL], SKF_RES
@@ -68,25 +66,21 @@ eth_v_open:
 .ok:
     mov al, [eth_hnd]
     xor ah, ah
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     clc
-    ret
+    jmp short .pop
 .nolink:
     mov ax, NETE_NOLINK
     jmp short .no
 .full:
     mov ax, NETE_FULL
 .no:
+    stc
+.pop:
     pop di
     pop si
     pop dx
     pop cx
     pop bx
-    stc
     ret
 
 ; --- NETV_STATUS -------------------------------------------------------------
@@ -275,6 +269,7 @@ eth_v_sktab:
     call eth_pump
     mov bp, cx                          ; the capacity, banked
     mov es, [eth_useg]
+    cld
     xor cx, cx                          ; ...and CX becomes the answer
     xor dl, dl
 .l:
@@ -284,25 +279,21 @@ eth_v_sktab:
     ja  .done                           ; a partial record is worse than none
     mov al, dl
     call sk_ptr                         ; BX = the record (CX survives it)
-    mov al, [bx+SKO_ST]
-    mov [es:di+SKI_ST], al
-    mov al, [bx+SKO_TS]
-    mov [es:di+SKI_TS], al
-    mov al, [bx+SKO_FL]
-    mov [es:di+SKI_FL], al
-    mov al, [bx+SKO_TRY]
-    mov [es:di+SKI_TRY], al
-    mov ax, [bx+SKO_LP]
-    mov [es:di+SKI_LP], ax
-    mov ax, [bx+SKO_RP]
-    mov [es:di+SKI_RP], ax
-    mov ax, [bx+SKO_RXN]
-    mov [es:di+SKI_RXN], ax
-    mov ax, [bx+SKO_TXN]
-    mov [es:di+SKI_TXN], ax
-    mov ax, [bx+SKO_RXC]                ; ...and WHICH RING, as its size (72.21)
-    mov [es:di+SKI_RXC], ax
-    add di, SKI_SZ
+    mov si, sk_ski                      ; ...and the record's fields in SKI
+.f:                                     ; order, each a WORD to ES:DI: a byte
+    lodsb                               ; field's spare half is overwritten by
+    cbw                                 ; the field after it, so DI steps one
+    push bx                             ; for those and two for the rest, and
+    add bx, ax                          ; SKI_SZ in all
+    mov ax, [bx]
+    pop bx
+    stosw
+    cmp si, sk_ski + SKI_NB
+    ja  .w
+    dec di
+.w:
+    cmp si, sk_ski_end
+    jb  .f
     add cx, SKI_SZ
     inc dl
     cmp dl, NET_SOCKS
@@ -317,48 +308,62 @@ eth_v_sktab:
     clc
     ret
 
+; the record's offsets in SKI order: the SKI_NB byte fields, then the words -
+; ST, TS, FL and TRY, then LP, RP, RXN, TXN and RXC (WHICH RING, as its
+; size - 72.21)
+SKI_NB      equ 4
+sk_ski:     db SKO_ST, SKO_TS, SKO_FL, SKO_TRY
+            db SKO_LP, SKO_RP, SKO_RXN, SKO_TXN, SKO_RXC
+sk_ski_end:
+%if SKI_ST != 0 || SKI_TS != 1 || SKI_FL != 2 || SKI_TRY != 3 || SKI_LP != 4 || SKI_RP != 6 || SKI_RXN != 8 || SKI_TXN != 10 || SKI_RXC != 12 || SKI_SZ != 14
+  %error "sk_ski writes the SKI record as four bytes and five words, in order"
+%endif
+
 ; --- NETV_CLOSE --------------------------------------------------------------
 ; in AL = a handle. The handle is theirs no more, whatever the far side says.
 eth_v_close:
     push ax
     push bx
-    call eth_pump
-    call sk_h2p
+    call sk_shut
     jc  .no
-    cmp byte [bx+SKO_TS], TS_LISTEN ; a LISTENER takes its un-accepted children
-    jne .mine                       ; with it - see sk_reap_kids, and the FTP
-    call sk_reap_kids               ; server it was found by (SPEC.md 77)
-.mine:
     or  byte [bx+SKO_FL], SKF_ORPH
     cmp byte [bx+SKO_TS], TS_ESTAB
     je  .fin
     cmp byte [bx+SKO_TS], TS_CLOSEW
     je  .fin
-    and byte [bx+SKO_FL], ~SKF_RES      ; a NAME still being looked up is
-    mov ah, [bx+SKO_IDX]                ; cancelled WITH the slot. [dns_sk]
-    cmp ah, [dns_sk]                    ; lives outside the record, so
-    jne .nores                          ; sk_alloc's mem_zero cannot reach it
-    mov byte [dns_sk], 0xFF             ; and the reply would land on whoever
-    mov word [dns_lport], 0             ; the slot went to next - dns_in writes
-.nores:                                 ; SKO_RIP and calls tcp_syn on it
     mov byte [bx+SKO_TS], TS_CLOSED     ; nothing was ever connected, or it is
     mov byte [bx+SKO_ST], NSK_FREE      ; already over: the slot goes now
     call sk_ring_put                    ; ...and the ring with it (72.21)
-    jmp short .out
+    jmp short .no
 .fin:
     or  byte [bx+SKO_FL], SKF_FIN
     mov byte [bx+SKO_ST], NSK_CLOSED    ; ...but TCP keeps the slot until the
     call tcp_kick                       ; handshake is done (tcp_abort)
-.out:
-    pop bx
-    pop ax
-    clc
-    ret
 .no:
     pop bx
     pop ax
     clc                                 ; a close of a handle that is already
     ret                                 ; gone is not an error
+
+; --- sk_shut - what NETV_CLOSE and NETV_ABORT share -------------------------
+; in:  AL = a handle. out: CF=1 = no such socket; else BX = its record, a
+;      LISTENER's un-accepted children gone with it (sk_reap_kids, and the
+;      FTP server it was found by - SPEC.md 77), and a NAME still being
+;      looked up cancelled with the slot (dns_unres). An ESTABLISHED socket
+;      is never mid-lookup, so for eth_v_close's FIN path that last is a no-op
+; clobbers: AH
+sk_shut:
+    call eth_pump
+    call sk_h2p
+    jc  .out
+    cmp byte [bx+SKO_TS], TS_LISTEN
+    jne .mine
+    call sk_reap_kids
+.mine:
+    call dns_unres
+    clc
+.out:
+    ret
 
 ; --- NETV_ABORT --------------------------------------------------------------
 ; AL = a handle: the connection is dropped and THE SLOT COMES BACK NOW
@@ -378,20 +383,9 @@ eth_v_close:
 eth_v_abort:
     push ax
     push bx
-    call eth_pump
-    call sk_h2p
+    call sk_shut
     jc  .no                             ; already gone: not an error, exactly
-    cmp byte [bx+SKO_TS], TS_LISTEN     ; as eth_v_close is not
-    jne .mine
-    call sk_reap_kids
-.mine:
-    and byte [bx+SKO_FL], ~SKF_RES      ; a name still being looked up dies
-    mov ah, [bx+SKO_IDX]                ; with the slot, and [dns_sk] lives
-    cmp ah, [dns_sk]                    ; OUTSIDE the record, so sk_alloc's
-    jne .nores                          ; mem_zero cannot reach it and the
-    mov byte [dns_sk], 0xFF             ; reply would land on whoever the slot
-    mov word [dns_lport], 0             ; went to next
-.nores:
+                                        ; as eth_v_close is not
     or  byte [bx+SKO_FL], SKF_ORPH      ; ...which is what sends tcp_abort to
     mov al, NSK_FREE                    ; its .free arm
     call tcp_abort
@@ -429,18 +423,15 @@ eth_v_addr:
                                 ; which is the caller's ES in the driver and
                                 ; the program's own DS on the DOS side
                                 ; (ethusr.inc)
-    xor ax, ax
-    pop di
-    pop si
-    pop cx
-    clc
-    ret
+    xor ax, ax                  ; (and CF=0: `xor` clears it)
+    jmp short .pop
 .none:
     mov ax, NETE_NOLINK
+    stc
+.pop:
     pop di
     pop si
     pop cx
-    stc
     ret
 
 ; --- NETV_LISTEN -------------------------------------------------------------
@@ -454,16 +445,14 @@ eth_v_listen:
     mov [bx+SKO_LP], cx
     mov byte [bx+SKO_TS], TS_LISTEN
     mov byte [bx+SKO_ST], NSK_LISTEN
-    xor ah, ah
-    pop cx
-    pop bx
-    clc
-    ret
+    xor ah, ah                  ; (and CF=0: `xor` clears it)
+    jmp short .pop
 .full:
     mov ax, NETE_FULL
+    stc
+.pop:
     pop cx
     pop bx
-    stc
     ret
 
 ; --- NETV_ACCEPT -------------------------------------------------------------
@@ -493,30 +482,25 @@ eth_v_accept:
     and byte [bx+SKO_FL], ~SKF_ACPT
     mov al, dl
     inc al
-    xor ah, ah
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
+    xor ah, ah                  ; (and CF=0: `xor` clears it)
+    jmp short .pop
 .next:
     inc dl
     loop .l
-    xor ax, ax                  ; nobody yet, which is the ORDINARY answer
-    pop si
-    pop dx
-    pop cx
+    xor ax, ax                  ; nobody yet, which is the ORDINARY answer -
+    pop si                      ; a listener polls for it every tick, so it
+    pop dx                      ; keeps its own pops rather than a jump to
+    pop cx                      ; the shared ones
     pop bx
-    clc
     ret
 .no:
     mov ax, NETE_HANDLE
+    stc
+.pop:
     pop si
     pop dx
     pop cx
     pop bx
-    stc
     ret
 
 

@@ -1201,13 +1201,13 @@ DRVM_PLUS    equ 0x8000         ; "...and the store you size on its own page",
                                 ; would be arithmetic rather than advice
 
 DRVM_IMG_SND equ 7              ; ceil(build/sound.drv   / 1024) - t_drvmem
-DRVM_IMG_HDD equ 5              ; ceil(build/hdd.drv     / 1024)   checks
-DRVM_IMG_ETH equ 19             ; ceil(build/ether.drv   / 1024)   every one
-DRVM_IMG_RAM equ 9              ; ceil(build/ramdisk.drv / 1024)   of these
-DRVM_IMG_NET equ 7              ; ceil(build/net.drv     / 1024) - SEVEN
-                                ; since SPEC.md 26.7 put the Wire's desktop
-                                ; icon in drivers/wirezone.inc, which both
-                                ; network drivers include
+DRVM_IMG_HDD equ 4              ; ceil(build/hdd.drv     / 1024)   checks
+DRVM_IMG_ETH equ 17             ; ceil(build/ether.drv   / 1024)   every one
+DRVM_IMG_RAM equ 6              ; ceil(build/ramdisk.drv / 1024)   of these
+DRVM_IMG_NET equ 5              ; ceil(build/net.drv     / 1024) - FIVE
+                                ; since SPEC.md 62.11.3's size pass, the
+                                ; Wire's desktop icon (drivers/wirezone.inc,
+                                ; SPEC.md 26.7) included
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 1024)
 DRVM_IMG_USBM equ 2             ; ceil(build/usbmouse.drv / 1024)
 
@@ -1229,13 +1229,17 @@ DRVM_ETH     equ DRVM_IMG_ETH + 14        ; THE RING POOL at its top rung, not
                                 ; pair plus three lean ones is 13,824 bytes
                                 ; where a pair per slot was 36,864. sk_claim is
                                 ; a ladder down to SK_RXCAP0 and this is its top
-DRVM_RAM     equ (DRVM_IMG_RAM + 4 + 8) | DRVM_PLUS
-                                ; RD_TABMAXKB (the chain table) + RD_EXTMAXKB
-                                ; (the bounce, which the extended store lends
-                                ; as its image block). The two paths are
-                                ; exclusive - conventional takes an arena
-                                ; instead of a bounce - so this is the larger,
-                                ; and the arena is what the '+' stands for
+DRVM_RAM     equ (DRVM_IMG_RAM + 7 + 8) | DRVM_PLUS
+                                ; RD_TABMAXKB (the directory AND the chain
+                                ; table, one claim since SPEC.md 62.9.13.1 -
+                                ; the 2,304-byte directory left the image for
+                                ; it, so a loaded idle driver is 6K and a
+                                ; mounted one is priced with its rows here) +
+                                ; RD_EXTMAXKB (the bounce, which the extended
+                                ; store lends as its image block). The two
+                                ; paths are exclusive - conventional takes an
+                                ; arena instead of a bounce - so this is the
+                                ; larger, and the arena is what the '+' is
 DRVM_VMM     equ DRVM_IMG_VMM   ; the absolute mouse claims nothing either: it
                                 ; hooks no vector, owns no port and keeps no
                                 ; buffer. The image IS the whole footprint
@@ -1285,8 +1289,8 @@ drv_memk:                       ; one word per drv_tab row, in the same order
 ; A LITERAL and not `equ DRVM_HDD`, because t_mirror compares the text when it
 ; is not a number and the SDK cannot see DRVM_HDD. The %if is what makes the
 ; literal safe, and it is the half a package could never have had.
-DRVM_CEIL_DISK equ 5            ; MIRRORED in apps/os88api.inc - t_mirror
-DRVM_CEIL_NET  equ 33           ; ...ditto
+DRVM_CEIL_DISK equ 4            ; MIRRORED in apps/os88api.inc - t_mirror
+DRVM_CEIL_NET  equ 31           ; ...ditto
 %if DRVM_CEIL_DISK != DRVM_HDD || DRVM_CEIL_NET != DRVM_ETH
   %error "a class ceiling has drifted from drv_memk - apps/os88api.inc too"
 %endif
@@ -4694,8 +4698,21 @@ drv_wcnt:   resb 1              ; live driver worker tasks: +1 inside the
                                 ; needs none of this state (SPEC.md 62.9.15)
 drv_dlg_row: resw 1             ; the row that asked for a file dialog, 0 =
                                 ; nobody (SPEC.md 51.11)
+hb_dosseg:  resw 1              ; **NOT A DRIVER WORD, AND HERE ON PURPOSE**:
+                                ; the DOS handoff's posted segment, 0 =
+                                ; nothing posted (kernel/hiber.inc, SPEC.md
+                                ; 96.40.8). It names the poster's REGION and
+                                ; is held across claims that can compact
+                                ; that region away, so mem_rr_tab has to
+                                ; patch it - and beside drv_dlg_seg the two
+                                ; are ONE row there for nothing, where a
+                                ; lone word of its own would be four bytes
+                                ; of .text on every kern_big machine
 drv_dlg_seg: resw 1             ; ...the image it was in, so a detach between
                                 ; the ask and the answer refuses
+%if drv_dlg_seg - hb_dosseg != 2
+  %error "hb_dosseg and drv_dlg_seg must stay adjacent (mem_rr_tab names them as one row)"
+%endif
 drv_dlg_cb: resw 1              ; ...and its near completion proc
 drv_dlg_mode: resb 1            ; FDLG_OPEN / FDLG_SAVE, banked across the two
                                 ; helpers that answer in AL
@@ -4805,19 +4822,16 @@ section .modc                   ; CTRL.DRV's image (SPEC.md 2.8)
 CFG_DATA   cpc
 CFG_SHARED cpc
 CFG_SAVE   cpc
-%ifdef OS88_SHORTCUTS
-section .modc                   ; IN THE IMAGE on this build: the shortcuts'
-cpc_buf:    times CFG_FBUF db 0 ; CTRL.DRV code (SPEC.md 26.8.7) leaves too
-                                ; little of the image's last KB for a BSS -
-                                ; zeros, which the 'CZ' wrap packs to nothing
-%else
-section .modcb                  ; ...and the writer's file buffer is the
-cpc_buf:    resb CFG_FBUF       ; module's own BSS (docs/plans/MODULE-
-%endif
-                                ; SELFCONTAIN-PLAN.md 3): cpc_ser fills it whole
-                                ; before a byte of it is written, so it wants
-                                ; no zeroing, and it costs the image nothing
-                                ; (kernel size pass 8). ES = CS reaches it
+section .modcb                  ; the writer's file buffer is the module's
+cpc_buf:    resb CFG_FBUF       ; own BSS (docs/plans/MODULE-SELFCONTAIN-PLAN.md
+                                ; 3): cpc_ser fills it whole before a byte of it
+                                ; is written, so it wants no zeroing, and it
+                                ; costs the image nothing (kernel size pass 8).
+                                ; ES = CS reaches it. On kern_big too, where a
+                                ; desktop gesture loads the settings CORE alone:
+                                ; mod_need claims the WHOLE image for MOD_SETS
+                                ; as well, so this tail is inside that claim on
+                                ; either load (SPEC.md 2.8.7)
 section .modc
 
 ; =============================================================================
@@ -4892,13 +4906,7 @@ cpc_fdtest:
     jnz cpc_fdret                    ; a hard disk: nothing here to ask
     cmp word [disk_heads], 2
     jne cpc_fdret
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentm_bp               ; KENT: push ax..bp (the core's own ladder)
     push es
     mov ax, [disk_spt]
     shl ax, 1                   ; 2*spt KB = four tracks
@@ -4990,15 +4998,7 @@ cpc_fdtest:
     call COLD_SEG:mmf_mem_free
 .out:
     pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.ret:
-    ret
+    jmp kretm_bp
 
 ; -----------------------------------------------------------------------------
 ; cpc_fdbs - the boot sector's Cylinder byte, made to match the setting

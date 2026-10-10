@@ -370,7 +370,13 @@ modc_e_sc:                      ; CPE_SC (SPEC.md 2.8.7): AH = the operation
 
 ; sc_m_cold - call the kernel's cold routine at BP (wm_cbd), near from here:
 ; one far entry the kernel already has, where a resident stub per routine
-; was four bytes each
+; was four bytes each. sc_m_xor and sc_m_cmark are its two routines that
+; four sites each named: the drag outline and a cell's mark
+sc_m_xor:
+    mov bp, fm_dgxor
+    jmp short sc_m_cold
+sc_m_cmark:
+    mov bp, desk_cmark
 sc_m_cold:
     call COLD_SEG:wm_cbd
 sc_m_ret:                       ; ...and sc_m_new's early refusals' `ret`
@@ -400,12 +406,9 @@ sc_m_new:
     jb sc_m_ret
     cmp cx, [vid_band_xe]
     jae sc_m_ret
-    push cx
-    push dx
-    call sc_m_row               ; AL = a free zone
-    pop dx
-    pop cx
-    jc sc_m_ret                     ; ...and the user has been told why not
+    call sc_m_row               ; AL = a free zone - and CX/DX survive it:
+    jc sc_m_ret                     ; sc_m_off, sc_m_kb and the toasts all bank
+                                    ; them. ...and the user has been told why not
     mov [cs:sc_mz], al
     mov bl, 0xFF                ; no row to leave out of the search
     call sc_m_cell              ; [cs:sc_bc] = the nearest free cell
@@ -416,8 +419,7 @@ sc_m_new:
     mov ax, [fm_dgidx]
     mov bp, fmv_get_icon
     call sc_m_cold              ; dsk_ico = its 64-byte body
-    mov al, [cs:sc_mz]
-    call sc_m_off
+    call sc_m_offz
     mov al, [fcp_cbtype]
     cmp al, 2
     jbe .kind
@@ -446,8 +448,7 @@ sc_m_new:
     mov bx, [fcp_cbcwd]
     call COLD_SEG:fcpf_fcp_goto
     jc .bad
-    mov al, [cs:sc_mz]
-    call sc_m_off
+    call sc_m_offz
     add di, SC_R_PATH - 1       ; ONE BEFORE THE FIELD, so dsk_path's leading
     mov cx, SC_PATHMAX + 1 - SC_CAPMAX  ; `\` lands on the spare byte and
     call COLD_SEG:dsk_path_x    ; the field is the path BELOW THE ROOT. The
@@ -462,8 +463,7 @@ sc_m_new:
     mov si, fcp_cbname
     mov cx, SC_CAPMAX
     rep movsb                   ; `APPS\CALC.O88` (SPEC.md 26.8.1)
-    mov al, [cs:sc_mz]
-    call sc_m_off
+    call sc_m_offz
     cmp byte [es:di+SC_R_KIND], 1
     jne .capx
     mov si, fcp_cbname          ; a PACKAGE is captioned with its header name
@@ -493,18 +493,17 @@ sc_m_new:
     ja .stem                    ; longer than the cell: the stem instead
     inc cx                      ; ...with its NUL
     lea si, [bx+16]
-    mov al, [cs:sc_mz]
     push ds                     ; the kernel's DS, for after
     push es                     ; the header's segment
-    call sc_m_off               ; ES:DI = the record
+    call sc_m_offz              ; ES:DI = the record
     pop ds                      ; DS = the header's segment
     add di, SC_R_CAP
     rep movsb
     pop ds
     jmp short .capx
 .stem:
-    mov al, [cs:sc_mz]          ; the 8.3 name up to its dot - CALC.O88 is
-    call sc_m_off               ; CALC, which a desktop should say even where
+                                ; the 8.3 name up to its dot - CALC.O88 is
+    call sc_m_offz              ; CALC, which a desktop should say even where
     add di, SC_R_CAP            ; the Disk window's listing would not
 .st:
     mov al, [es:di]
@@ -519,8 +518,8 @@ sc_m_new:
 .capx:                          ; the caption is measured at paint, as every
     jmp short .done             ; item's is (SPEC.md 26.9)
 .bad:
-    mov al, [cs:sc_mz]          ; the folder is gone or its path will not fit
-    call sc_m_off
+                                ; the folder is gone or its path will not fit
+    call sc_m_offz
     mov byte [es:di+SC_R_VOL], 0xFF
     call COLD_SEG:drvf_drv_vol_back
     mov si, sc_s_path
@@ -530,8 +529,7 @@ sc_m_new:
     mov bl, [cs:sc_mz]          ; its cell, PLACED, in the one table (SPEC.md
     xor bh, bh                  ; 26.9) - and posted, so ui_task paints it
     mov al, [cs:sc_bc]
-    mov bp, desk_cmark
-    call sc_m_cold
+    call sc_m_cmark
     or al, DSL_PIN
     mov [bx+desk_zslot], al
     jmp sc_m_save
@@ -551,11 +549,8 @@ sc_m_new:
 ; file would keep it for ever.
 ; -----------------------------------------------------------------------------
 sc_m_add:
-    push dx
-    push cx
     call sc_m_row               ; AL = a free zone, the claim grown if need be
-    pop si
-    pop dx
+    mov si, cx                  ; (DX:CX survives it, as sc_m_new says)
     jc .no                      ; ...and the user has been told why not
     mov [cs:sc_mz], al
     call sc_m_off               ; ES:DI = the row
@@ -589,8 +584,8 @@ sc_m_add:
     mov si, sc_s_room
     call sc_m_say
 .bad:
-    mov al, [cs:sc_mz]          ; the row back, unused
-    call sc_m_off
+                                ; the row back, unused
+    call sc_m_offz
     mov byte [es:di+SC_R_VOL], 0xFF
 .no:
     mov al, 0xFF
@@ -627,15 +622,14 @@ sc_m_mem:
     pop ax
     ret
 
-; sc_m_say - toast one of THIS image's strings, at CS:SI
-sc_m_say:
-    push cs
-    pop es
-    xor cx, cx
-    call KERNEL_SEG:cw_toast_show
-    ret
+; sc_m_say - toast one of THIS image's strings, at CS:SI - in ctrl.inc now,
+; beside cp_toast, its twin for a line in KERNEL_SEG (CTRL.DRV size pass 1)
 
+; sc_m_offz - sc_m_off of the zone in [cs:sc_mz], which is what seven sites
+;             loaded into AL first (CTRL.DRV size pass 1); out: AL = it too
 ; sc_m_off - AL = a zone -> ES:DI = its record. Preserves AX.
+sc_m_offz:
+    mov al, [cs:sc_mz]
 sc_m_off:
     push ax
     sub al, DESK_SC0
@@ -737,10 +731,7 @@ sc_m_row:
     pop ax
     jnc .s
     mov si, fm_s_nomem          ; the Disk window's own words
-    push ds
-    pop es
-    xor cx, cx
-    call KERNEL_SEG:cw_toast_show
+    call cp_toast
     stc
     ret
 .full:
@@ -823,8 +814,7 @@ sc_m_move:
     mov [cs:sc_mz], al
     mov bp, fm_dgmove
     call sc_m_cold
-    mov bp, fm_dgxor
-    call sc_m_cold    ; the outline is up from here on
+    call sc_m_xor    ; the outline is up from here on
 .track:
     mov di, ui_ev               ; THE RELEASE IS AN EVENT, and the mouse ISR
     call KERNEL_SEG:cw_evq_mup  ; queued it with the point it happened at -
@@ -842,15 +832,13 @@ sc_m_move:
     mov [ui_ev+EV_B], ax
     jmp short .drop
 .held:
-    mov bp, fm_dgxor
-    call sc_m_cold    ; erase at the old place...
+    call sc_m_xor    ; erase at the old place...
     call KERNEL_SEG:cw_gfx_unlock   ; ...and only then may the lock drop
     call KERNEL_SEG:cw_task_yield
     call KERNEL_SEG:cw_gfx_lock
     mov bp, fm_dgmove
     call sc_m_cold
-    mov bp, fm_dgxor
-    call sc_m_cold
+    call sc_m_xor
     mov ax, [ticks]             ; held with the outline lit (fm_drag's linger)
 .l:
     call KERNEL_SEG:cw_task_yield
@@ -858,8 +846,7 @@ sc_m_move:
     je .l
     jmp short .track
 .drop:
-    mov bp, fm_dgxor
-    call sc_m_cold
+    call sc_m_xor
     mov cx, [ui_ev+EV_A]        ; WHERE IT WAS LET GO, not where the pointer
     mov dx, [ui_ev+EV_B]        ; has wandered since (SPEC.md 26.9.5)
     mov bl, [cs:sc_mz]          ; its own cell is free to it
@@ -871,11 +858,9 @@ sc_m_move:
     and al, DSL_SLOT
     cmp al, [cs:sc_bc]
     je .ret                     ; it went nowhere: nothing to write
-    mov bp, desk_cmark
-    call sc_m_cold    ; the old cell, bare desktop or the next
+    call sc_m_cmark    ; the old cell, bare desktop or the next
     mov al, [cs:sc_bc]          ; drive to pack into it...
-    mov bp, desk_cmark
-    call sc_m_cold    ; ...and the new one
+    call sc_m_cmark    ; ...and the new one
     or al, DSL_PIN              ; PLACED, whatever it is: a drive dragged is
     mov [bx+desk_zslot], al     ; where the user put it (SPEC.md 26.9)
     jmp sc_m_save
@@ -952,8 +937,7 @@ sc_m_del:
     cmp al, DSL_GONE
     jae .kbz
     and al, DSL_SLOT
-    mov bp, desk_cmark
-    call sc_m_cold
+    call sc_m_cmark
 .kbz:
     mov cl, [sc_nrows]          ; the highest row still in use decides the KB
 .h:

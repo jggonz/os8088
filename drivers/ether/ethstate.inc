@@ -8,7 +8,9 @@
 ; bss does (SPEC.md 51); in a .COM it is ordinary uninitialised data.
 ;
 ; The ne2000 words at the top are the CARD's and a packet-driver host leaves
-; them alone - they cost 46 bytes there and keep this file one file.
+; them alone - they cost 14 bytes there and keep this file one file. (It was
+; 46 while the 32-byte PROM image lived here; ne_probe reads that into
+; eth_rxb now, which is free at the only moment it is wanted.)
 ; =============================================================================
 ; =============================================================================
 ; STATE - all of it in the image, because a driver's bss ships inside it
@@ -27,8 +29,10 @@ eth_pstart: db NE_PSTART
 eth_pstop:  db NE_PSTOP
 eth_next:   db NE_PSTART + 1    ; the page WE will read next
 eth_mac:    times 6 db 0
-eth_bcmac:  times 6 db 0xFF     ; ...and the one every broadcast goes to
-eth_prom:   times 32 db 0
+eth_bcmac:                      ; ...and the one every broadcast goes to,
+ip_bcast:   times 6 db 0xFF     ; whose first four bytes are also the IP
+                                ; broadcast address - the same six 0xFF
+                                ; bytes, read-only to both of their readers
 
 ; --- the addresses, four bytes each and always in WIRE order -----------------
 ; They are contiguous and eth_attach zeroes all sixteen in one call, so a
@@ -44,7 +48,6 @@ eth_static: db ETH_IP
             db ETH_GW
             db ETH_DNS
 %endif
-ip_bcast:   times 4 db 0xFF
 
 ; --- scratch -----------------------------------------------------------------
 eth_pr:     db 0                ; the protocol of the frame being built

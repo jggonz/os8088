@@ -224,10 +224,7 @@ sv_do_start:
                                 ; shapes past the same fish
     mov byte [sv_mode], SV_NONE
     call sv_pick                ; ...which clears the screen and inits a mode,
-    clc                         ; under the lock the kernel is already holding
-    ret
-.no:
-    stc
+    CLC_OR_STC .no              ; under the lock the kernel is already holding
     ret
 
 ; -----------------------------------------------------------------------------
@@ -243,7 +240,6 @@ sv_do_start:
 ; -----------------------------------------------------------------------------
 sv_do_stop:
     mov byte [sv_mode], SV_NONE
-    mov byte [sv_shown], 0
     cmp byte [sc_testing], 0    ; A TEST ENDED, so the kernel is owed the post
     je .out                     ; the Test button deliberately did not raise
     mov byte [sc_testing], 0    ; (SPEC.md 79.7): it re-derives [ss_idle] from
@@ -376,7 +372,16 @@ sv_lone:
 ; -----------------------------------------------------------------------------
 ; sv_pick - choose a mode and start it (SPEC.md 79.5)
 ; in:  the gfx lock is HELD (or we are inside SSV_START, which takes it)
-; out: nothing
+; out: nothing; CLOBBERS every register but DS and ES
+;
+; THE MODE PROCS DO NOT BANK REGISTERS, and neither do sv_pick, sv_step and
+; sv_clear: their only callers are sv_do_start and sv_do_frame, which return
+; straight to sv_entry - and sv_entry already banks every register the
+; overlay contract preserves (SPEC.md 79.3). Each mode's init and step used to
+; push and pop four to seven of them again, inside that, for nobody: 108
+; bytes, and six or seven pairs off every frame. What they still owe is ES, which
+; sv_secs/sv_lone read the settings block through - a mode that changes it
+; puts it back, as each always has.
 ;
 ; **IT NEVER PICKS THE ONE ALREADY RUNNING WHEN THERE IS ANOTHER**, which is
 ; not a nicety: with two modes ticked a fair coin repeats about half the time,
@@ -392,11 +397,6 @@ sv_lone:
 ; has just been seeded with the same tick twice.
 ; -----------------------------------------------------------------------------
 sv_pick:
-    push ax
-    push bx
-    push cx
-    push dx
-
     call OSAPI_RAND
     and ah, 3                   ; AH and NOT AL: the low bits of the kernel's
     mov cl, ah                  ; LCG are a counter (sv_rndn's header), and a
@@ -440,14 +440,13 @@ sv_pick:
                                 ; than running off the end of the table
 .got:
     mov [sv_mode], al
-    xor ah, ah
-    mov bx, ax
-    shl bx, 1
-    mov ax, [bx + sv_initp]     ; the mode's init proc...
     mov byte [sv_ival], SV_FTICK
-    mov byte [sv_shown], 0
     call sv_clear
-    call ax                     ; ...which may raise [sv_ival]
+    mov bl, [sv_mode]
+    mov bh, 0
+    shl bx, 1
+    call [bx + sv_initp]        ; the mode's init proc, which may raise
+                                ; [sv_ival]
 
     call OSAPI_GET_TICKS        ; the mode's own clock starts HERE and not at
     mov [sv_mt], ax             ; the session's, or the first mode of every
@@ -455,11 +454,6 @@ sv_pick:
                                 ; the load took
     call sv_secs                ; DX = its turn, in ticks
     mov [sv_mdue], dx
-
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -467,17 +461,10 @@ sv_pick:
 ; in:  the gfx lock is HELD
 ; -----------------------------------------------------------------------------
 sv_step:
-    push ax
-    push bx
-    mov al, [sv_mode]
-    xor ah, ah
-    mov bx, ax
+    mov bl, [sv_mode]
+    mov bh, 0
     shl bx, 1
-    mov ax, [bx + sv_stepp]
-    call ax
-    pop bx
-    pop ax
-    ret
+    jmp [bx + sv_stepp]         ; ...whose own ret is this one's
 
 ; -----------------------------------------------------------------------------
 ; sv_enabled - is mode AL ticked? (module internal)
@@ -544,10 +531,6 @@ sv_secs:
 ; same reason ss_stop_x's repaint does: the whole screen really did change.
 ; -----------------------------------------------------------------------------
 sv_clear:
-    push ax
-    push bx
-    push cx
-    push dx
     mov al, SV_GROUND
     call sv_pen
     xor ax, ax
@@ -557,10 +540,6 @@ sv_clear:
     mov dx, [sv_h]
     dec dx
     call OSAPI_GFX_FILL
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -784,16 +763,24 @@ sv_ry:      db 0
 %define GFXE_PT_MAX SV_PTMAX
 %include "os88gfx.inc"
 
+%define OS88UI_ARM              ; os88ui_arm/fire/armed: the press/release...
+%define OS88UI_NOGEST           ; ...and the settings window drives its own
+                                ; buttons through them (sc_click, sc_drag,
+                                ; sc_up) - the record-based gesture half is
+                                ; ~226 bytes nothing here calls (SPEC.md
+                                ; 20.5.1.3.4), hddtool's shape
+%define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
+%define OS88UI_NOGRADIO       ; check boxes only: no radio ring/dot (SPEC.md 13.15.3)
 %include "os88ui.inc"           ; the standard button, glyph and press latch
 %include "os88line.inc"         ; ...and the one-line field the two numbers use
 
 %include "svcfg.inc"            ; ...and the settings window (SPEC.md 79.7)
 
 ; =============================================================================
-; Tables and state. AN OVERLAY HAS NO BSS (drivers/os88drv.inc): zeroed data
-; is written as `db 0` and ships on the floppy, which is what buys a load path
-; with exactly one heap claim in it, made at the size the directory entry
-; already reported.
+; Tables and state. Zeroed data is written as `db 0`, and the TRAILING run of
+; it does not ship: os88drv.py takes whole paragraphs of it off the image and
+; drv_bss zeroes them again inside the one claim (drivers/os88drv.inc). The
+; mode union below is that run.
 ; =============================================================================
 
 sv_initp:   dw sv_cube_init, sv_star_init, sv_shape_init, sv_fish_init
@@ -843,10 +830,53 @@ sv_w:       dw 0                ; the screen this machine actually has
 sv_h:       dw 0
 sv_monoff:  db 0                ; 0 or 4: sv_inks' column (SPEC.md 39.4)
 sv_mode:    db SV_NONE
-sv_shown:   db 0                ; is there a previous frame to erase?
 sv_ival:    db SV_FTICK         ; ticks between frames, the mode's to raise
 sv_due:     dw 0                ; ...and the next one's deadline
 sv_mt:      dw 0                ; when this mode started
 sv_mdue:    dw 0                ; ...and how long its turn is, in ticks
+
+; =============================================================================
+; THE MODE UNION. One mode runs at a time - sv_pick clears the screen and
+; calls the new mode's init before its first frame - and every mode's init
+; writes every byte of its state that a frame reads before the frame reads
+; it. So the four state blocks are laid over one another rather than end to
+; end: each SV_*_STATE macro (in its mode's own file) is emitted at
+; sv_union, and the union is as big as the largest of them. Nothing outside
+; a mode may live here, and that is why the cube/shapes rotation scratch
+; (sv_rsa..sv_ry), the clock and the settings window's state are all above:
+; the settings window can be up while a session runs (its Test button), so
+; its bytes must survive every pick.
+;
+; The point list (GFXE_PT_BUF) is the one exception that is SHARED, by the
+; starfield and the shapes, so it sits past the larger of those two blocks
+; and is never reached by either one's own state. The cube and the sea do not
+; draw through it and may lie over it.
+;
+; It is the image's TRAILING ZERO RUN and so its bss (see above): emitted as
+; `db 0`, shipped as a header count.
+; =============================================================================
+sv_union:
+absolute sv_union
+    SV_SHAPE_STATE              ; the largest block, so it sets the size...
+sv_un_shape:
+    SV_PTS_STATE                ; ...with the shared point list after it
+sv_un_end:
+SV_UNSZ     equ sv_un_end - sv_union
+
+; ...and every other block is laid over it and ASSERTED to fit: a negative
+; reserve count is an error, so a mode that outgrows the union does
+; not assemble rather than spilling into whatever follows.
+absolute sv_union
+    SV_STAR_STATE               ; the point list's other user: under it, too
+    times sv_un_shape - $ resb 1
+absolute sv_union
+    SV_CUBE_STATE
+    times sv_un_end - $ resb 1
+absolute sv_union
+    SV_FISH_STATE
+    times sv_un_end - $ resb 1
+
+section .text
+    times SV_UNSZ db 0
 
     OS88_DRV_END

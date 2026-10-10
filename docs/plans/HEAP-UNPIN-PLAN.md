@@ -1406,7 +1406,8 @@ Ordered by how much they cost somebody who is not reading this document.
    (kernel/hiber.inc:135) is a far pointer into `HIBER.DRV`'s image, but it is
    written at step 4 of `hbm_perform` and consumed at step 6 of the same run,
    holding both the gfx lock and `[sch_lock]`. Nothing can shed the image
-   in between.
+   in between. (Moot since: nothing ever READ it - step 6 writes the wake
+   address into the pointer from `hbm_wake` directly - so the cell is deleted.)
 6. **`MC_DMA`'s meaning splits** into "must land page-safe" (kept, SPEC.md 50.3)
    and "a chip is armed on it" (moves to the driver verbs). SPEC.md 66.9 reason 2
    states them as one thing.

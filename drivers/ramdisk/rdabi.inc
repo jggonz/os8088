@@ -56,7 +56,10 @@ RD_ABI_VER   equ 2              ; bumped whenever a verb changes meaning
 ; What is NOT derived is the ceiling: RD_MAXKB is the arithmetic limit, and
 ; what a machine will actually give is asked of it (SPEC.md 62.9.10.1).
 RD_MAXEXT    equ 2048            ; chain entries, so the table is at most 4KB
-RD_TABMAXKB  equ RD_MAXEXT * 2 / 1024   ; ...which is that, in KB. Named
+RD_TABMAXKB  equ (RD_DIRB + RD_MAXEXT * 2 + 1023) / 1024   ; ...and the
+                                 ; claim it lives in at its largest, in KB:
+                                 ; 7, because the DIRECTORY shares it (RD_DIRB
+                                 ; below, SPEC.md 62.9.13.1). Named
                                  ; because it is what CONVENTIONAL memory has
                                  ; to fund for an EXTENDED store, and naming it
                                  ; is half of not confusing that gate with a
@@ -86,7 +89,7 @@ RD_FREE      equ 0xFF            ; RDE_TYPE: this row is not in use
 RDL_CONV     equ 0               ; RDC_LOC / RDS_LOC: the claim heap (SPEC.md 50)
 RDL_XMS      equ 1               ; ...or the store above 1MB (SPEC.md 41)
 
-; --- a directory row, in the resident's image --------------------------------
+; --- a directory row, in the table's claim (SPEC.md 62.9.13.1) ---------------
 ; THE HANDLE IS THE ROW INDEX PLUS ONE, which is what makes rd_row one multiply
 ; instead of a scan and 0 a natural "the root" (SPEC.md 62.9.1: it is opaque to
 ; the kernel). RDE_EXT is now the FIRST extent of a chain rather than the only
@@ -99,6 +102,13 @@ RDE_EXT      equ 2               ; dw: its first extent, or RD_NOEXT. It was a
 RDE_SIZE     equ 4               ; dd: bytes
 RDE_NAME     equ 8               ; db[16]: NUL-terminated 8.3 display name
 RDE_SZ       equ 24
+RD_DIRB      equ RD_MAXENT * RDE_SZ  ; the whole directory, 2,304 bytes. It is
+                                 ; NOT in the image: it is the first RD_DIRB
+                                 ; bytes of the chain table's claim, so it
+                                 ; exists exactly while a store does and a
+                                 ; loaded, unmounted driver does not carry it
+                                 ; (SPEC.md 62.9.13.1). A row is reached as
+                                 ; ES:index*RDE_SZ and the chain starts here
 
 ; --- the settings blob, SPEC.md 51.9.1's key 'RD' ----------------------------
 ; DRV_RBLOB_SZ bytes carried in SYSTEM.CFG by a kernel that does not know what

@@ -256,6 +256,13 @@ fsx_run:
 .nokeep:                        ; keeping nothing is not an error
 
     mov [fsx_task], dx          ; arm the freeze (SPEC.md 53.2): both bytes
+%ifdef KBD_DIAG
+    push ax                     ; KBDDIAG=1 (SPEC.md 9.8.1): the bracket's
+    mov al, 'E'                 ; edge, with its flags, AFTER the arm so the
+    mov ah, cl                  ; record says it is inside
+    call kbg_mark
+    pop ax
+%endif
                                 ; or neither, in ONE instruction - DL into
                                 ; fsx_task and DH into fsx_worker (little-
                                 ; endian, adjacent - the %if at fsx_mine). An
@@ -341,6 +348,12 @@ fsx_run:
     pop bp
 .restore:                       ; FSX_RESTORE - one path home, SPEC.md 53.6,
                                 ; ordered (its header, below, is the order)
+%ifdef KBD_DIAG
+    push ax                     ; KBDDIAG=1 (SPEC.md 9.8.1): the other edge,
+    mov ax, 'L'                 ; BEFORE the drain below empties the BIOS
+    call kbg_mark               ; buffer - a head short of the tail here is a
+    pop ax                      ; key int 16h never handed the app
+%endif
 %ifdef KERN_BIG
     call spk_off                ; a speaker ring the app left open (SPEC.md
                                 ; 34.11): channel 2 idle and channel 0 at the

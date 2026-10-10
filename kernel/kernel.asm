@@ -2711,6 +2711,10 @@ section .modf    start=MODF_START vstart=0
 section .modl    start=MODL_START vstart=0
 %ifdef KERN_BIG
 section .modh    start=MODH_START vstart=0
+section .modhb   nobits vfollows=.modh ; HIBER.DRV's own scratch: the DOS
+                                ; handoff's record copy and the pointer file's
+                                ; buffer (hiber.inc). NOT zeroed, `.modcb`'s
+                                ; terms: every cell is written before it is read
 %endif
 %ifdef FCP_MOD
   %define MOD_BSS 1             ; ...and THIS is what mod_need's zeroing hangs
@@ -3061,6 +3065,7 @@ apic_wm_create:
 apic_wm_show:
     OSAPI_RSLOT wm_show            ; 0x007C
     OSAPI_RSLOT wm_hide            ; 0x0082
+apic_wm_front:                    ; DOCK.DRV's door (SPEC.md 30.4)
     OSAPI_RSLOT wm_front           ; 0x0088
 
     OSAPI_SLOT wm_content         ; 0x008E
@@ -3276,6 +3281,7 @@ apic_wm_title_set:
                                   ;          been held empty are filled now
                                   ;          (SPEC.md 20.8), and everything
                                   ;          above them moved 24 bytes up
+apic_wm_top:                       ; EXTD.DRV's and DOCK.DRV's door (SPEC.md 39.19.6.2, 30.5)
     OSAPI_RSLOT wm_top             ; 0x01EC - out BX = the frontmost VISIBLE
                                   ;          window, 0 if none. The one thing
                                   ;          a package could not find out: it
@@ -4332,6 +4338,7 @@ api_gfx_blitp:                    ; (named: SPEC.md 5.4.3.6's walk far-calls it)
                                   ;          and a refusal costs the caller
                                   ;          nothing but the picture, so there
                                   ;          is nothing for it to act on
+apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
     OSAPI_RSLOT inst_minimize      ; 0x0413 - SEND MY OWN WINDOW TO THE DOCK
                                   ;          (SPEC.md 29.6). BX = a window of
                                   ;          yours, the gfx lock held - the
@@ -6534,6 +6541,8 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
 %include "bootprof.inc"       ; the boot phase table (SPEC.md 15.5), BOOTPROF=1
 %include "stkdiag.inc"        ; what an interrupt costs a task stack
                               ; (docs/plans/completed/STACK-SLOTS-PLAN.md), STKDIAG=1
+%include "kbddiag.inc"        ; what the keyboard sent (SPEC.md 9.8.1),
+                              ; KBDDIAG=1
 %include "moudiag.inc"        ; ...and what the identify window saw (SPEC.md
                                 ; 9.4.6), MOUDIAG=1. Both are knob-only and
                                 ; both draw on the finished desktop, because
@@ -7347,6 +7356,12 @@ cw_vid_ctx_ptr:         call vid_ctx_ptr
                     retf
 cw_vid_ctx_capture:     call vid_ctx_capture
                     retf
+; ...and EXTD.DRV's one hop that is on OSAPI_WM_DISPLAY's path (wm_disp_now's
+; one-display arm, SPEC.md 39.19.6.2). Four bytes here where the image carried
+; a twelve-byte stub of its own, and a near call + RETF where the stub built
+; the frame by hand and returned through cw_kretf
+cw_vid_disp_of:         call vid_disp_of
+                    retf
 %endif
 cw_wm_clip_clear equ apic_wm_clip_clear ; THE CELL IS THE DOOR (size pass 9)
 cw_wm_clip_rows:        call wm_clip_rows
@@ -7846,10 +7861,17 @@ kretfc_dx:        pop dx          ; below: app_about_paint_x was its last
                   pop cx          ; UNLABELLED, and it is the `dx` rung above
                   pop bx          ; that took its last caller: `kretfc_cx` had
                   pop ax          ; exactly one jump in the tree and desk.inc's
-                  retf            ; two paint entries merged onto `dx` instead.
+cold_kretf:       retf            ; two paint entries merged onto `dx` instead.
                                   ; A rung nothing jumps to is walked as an
                                   ; ENTRY from depth 0 and goes red - so the
-                                  ; label goes, per the rule above
+                                  ; label goes, per the rule above.
+                                  ; cold_kretf is NOT a rung and nothing
+                                  ; jumps to it: it is a COLD_SEG `retf` a
+                                  ; module's hand-built far frame names as
+                                  ; the near return of a cold body
+                                  ; (filecp.inc's fcpx_go, kern_small's
+                                  ; FILECP.DRV) - cw_kretf's job, one
+                                  ; segment along, for no byte
 section .text
 
 ; --- WHICH KERNEL IS THIS? (SPEC.md 57.6) ------------------------------------
@@ -8088,6 +8110,9 @@ MODL_SIZE equ modl_end - $$
 section .modh
 modh_end:
 MODH_SIZE equ modh_end - $$
+section .modhb
+modhb_end:
+MODH_BSS equ modhb_end - $$
 %endif
 
 %ifdef OS88_DRIVERS
@@ -8133,6 +8158,9 @@ MODD_SIZE equ modd_end - $$
 %ifdef KERN_BIG
  %if MODH_SIZE > MOD_MAX_KB*1024
 %error "the hibernate module is over MOD_MAX_KB - mod_need would refuse it at run time"
+ %endif
+ %if MODH_SIZE + MODH_BSS > ((MODH_SIZE + 1023) / 1024) * 1024
+%error "HIBER.DRV's bss (the DOS record and the pointer buffer) does not fit its claim's KB rounding - see MODULE-SELFCONTAIN-PLAN 3.2"
  %endif
 %endif
 %ifdef FCP_MOD

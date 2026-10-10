@@ -567,6 +567,18 @@ BENCH_PICK = (("max cycles", lambda r: r["cyc"]),
               ("median cycles", None))
 
 
+def cmd_synthxdv(a):
+    """SYNTHXDV: synth_frames() as an XDC stream (_write_xdv), 8,040 Hz
+    and 134 bytes of noise a frame - what `benchdat` reads when the owner's
+    XDC samples are not to hand, so a field disk's VIDBENCH times frames
+    built from every list kind and nothing else (make vid486)"""
+    import random
+    rnd = random.Random(486)
+    ops = [o for label, o in synth_frames()] * max(1, a.repeat)
+    _write_xdv(a.out, ops, 8040, 134, 2, rnd)
+    print("os88vid: %s, %d frames" % (a.out, len(ops)))
+
+
 def cmd_benchdat(a):
     """VIDBENCH.DAT: the frames tests/vidbench/ times, each twice - XDC's
     own packet (paragraph-aligned, so it can be far-called at seg:0) and
@@ -693,15 +705,34 @@ F_SPKPWM = 32                   # PCM8 stored as the SPEAKER's PWM counts
                                 # (98.1.1.3), made for a machine with no card
 F_SPKMUL = 64                   # ...made for PULSES A SAMPLE past one: the
 H_SPKP = 24                     # header byte says how many (98.1.1.3.1)
+F_AHEAD = 128                   # SOUND AHEAD of the picture (98.1.8): frame
+H_AHEAD = 25                    # record r carries frame r + A's sound, A the
+H_LEAD0 = 464                   # header's byte 25; u32 at 464: the START's
+AHEAD_MAX = 8000                # lead. A x abytes <= this: the player
+                                # stages a lead in its 16 KB sound ring's
+                                # tail, clear of what it queues first
+                                # (video.asm's VP_ALMAX, the same number)
+F_BIGSP = 256                   # SUPER-PACKETS PAST 32 KB (98.1.4.1): up to
+SP_BIG = 127                    # 127 sectors - a stream's, never flipped
+F_KLEADS = 512                  # THE KEYS' LEADS APART (98.1.8.1): with
+H_KLEADS = 468                  # AHEAD, key i's lead is A x abytes at the
+                                # u32 at 468 + i x that, not its entry's
+                                # tail - so a key's read is its picture's
+KLEADS_APART = True             # ...what write() does: False writes the
+                                # inline kind, every file before it (a test's)
+F_SCREEN = 1024                 # A SCREEN OF ITS OWN (98.1.3.2.1): the
+                                # rendition's byte 38 is not 0 - so a player
+                                # from before refuses it rather than playing
+                                # it in 12h at the wrong size and colours
 F_KNOWN = F_RESIDENT | F_LOOPREC | F_REPEAT | F_LIVE | F_RUNS | F_SPKPWM \
-    | F_SPKMUL
+    | F_SPKMUL | F_AHEAD | F_BIGSP | F_KLEADS | F_SCREEN
 
 # THE OPTIONS A FILE WAS MADE WITH (98.1.1.4): the header's bytes 26-31
 # point at a block the ENCODER wrote - every option it used, deflated - so
 # the encoder's window can load a .V88 and show how it was made. No player
 # reads it: it sits before the stream in a streamed file and after the
 # blocks in a resident one, where nothing the player reads by offset or
-# by sequence reaches. Byte 25 is 0, reserved
+# by sequence reaches. Byte 25 is A, with AHEAD (98.1.8)
 H_OPTS = 26                     # u32: the block's offset, 0 for none
 H_OPTSN = 30                    # u16: its length
 OPTS_MAGIC = b"V88O"
@@ -1047,6 +1078,44 @@ LAYOUT_BY_NAME = {v[3]: k for k, v in LAYOUTS.items()}
 LAYOUT_ALIASES = {"txt": "text-80x100", "text": "text-80x25"}
 
 
+# VGA4'S SCREENS (98.1.3.2.1): rendition byte 38 names the mode a VGA4
+# file plays in. 0 is mode 12h's 640 x 480, the desktop's own - the only
+# one before, and the only one a window can host. The rest are full screen
+# only, and each puts its rows 80 plane bytes apart whatever its width, so
+# every one of them is LIN80's layout and its two pages fit a plane's 64 KB:
+# name, pixels across, rows, pixel aspect
+SCR_480, SCR_320X200, SCR_320X240, SCR_640X350, SCR_640X400 = 0, 1, 2, 3, 4
+SCREENS = {
+    SCR_480: ("640x480", 640, 480, (1, 1)),
+    SCR_320X200: ("320x200", 320, 200, (5, 6)),     # mode 0Dh
+    SCR_320X240: ("320x240", 320, 240, (1, 1)),     # 0Dh on 480 lines
+    SCR_640X350: ("640x350", 640, 350, (35, 48)),   # 12h on 350 (mode 10h's)
+    SCR_640X400: ("640x400", 640, 400, (5, 6)),     # 12h on 400 lines
+}
+SCREEN_BY_NAME = {v[0]: k for k, v in SCREENS.items()}
+R_SCREEN = 38
+# a VGA4 file's own palette (98.1.3.2.1): the first 16 of the 256 entries,
+# indexed by the PIXEL'S VALUE, the four planes' bits. N colours take the
+# values PLANE_CODES[N] - each colour's bits written to a GROUP of planes,
+# so planes of one group always agree and 98.1.3.2's rule stores them as
+# one: two colours are one store a byte under 0Fh, as one bit is, and four
+# are two (03h and 0Ch) - the data is the bits the colours need
+PLANE_CODES = {
+    2: (0, 15),
+    4: (0, 3, 12, 15),
+    8: tuple((k & 1) * 9 | (k & 2) | (k & 4) for k in range(8)),
+    16: tuple(range(16)),
+}
+
+
+def plane_code(n):
+    """The pixel values N colours take (PLANE_CODES), N up to 16"""
+    for m in sorted(PLANE_CODES):
+        if n <= m:
+            return PLANE_CODES[m][:n]
+    raise V88Error("%d colours: a VGA4 file holds 16 at most" % n)
+
+
 def layout_name(n):
     """A layout's name as the command lines take it: its own, or an old
     one's, made its own - argparse's `type`, ahead of its `choices`"""
@@ -1378,7 +1447,11 @@ def band_of(ops, g):
 
 def record(ops, g, audio=b"", limit=SP_MAX * SECTOR - 4):
     """A frame record; `limit` is a super-packet's room, or a keyframe's
-    (65,535: its length is a word, and it rides in no super-packet)"""
+    (65,535: its length is a word, and it rides in no super-packet). None
+    MEASURES: the encoder's attempt at a frame, which is never written -
+    the Writer builds the record again from the ops - so one past the
+    length word comes back at its true length (its word saying 65,535)
+    for the encoder to cut, rather than ending the encode"""
     if g.planes > 1:
         # MODEX (98.1.3.1): sub-records, each its Map Mask and ten lists,
         # a 0 after the last - ops is [(mask, ops), ...]
@@ -1395,10 +1468,10 @@ def record(ops, g, audio=b"", limit=SP_MAX * SECTOR - 4):
         lists, e, s = to_lists(ops)
         y0, y1 = band_of(ops, g)
     n = REC_HDR + len(lists) + len(audio)
-    if n > limit:
+    if limit is not None and n > limit:
         raise V88Error("a record of %d bytes cannot fit %s" % (
             n, "a super-packet" if limit < 65534 else "its length word"))
-    return struct.pack("<HHH", n, y0, y1) + lists + audio
+    return struct.pack("<HHH", min(n, 65535), y0, y1) + lists + audio
 
 
 PREV_MAX = 31 * 1024             # a flipped play's copy of the last record
@@ -1475,10 +1548,24 @@ def vga4_subs(cv, prev, g):
     return [(m, spans(addr[m], msurf[m], g, gaps=False)) for m in order]
 
 
-def vga4_pack(cv, w, h, step=1):
+def vga4_xlat(palette):
+    """A VGA4 file's own sixteen (98.1.3.2.1) as the desktop's: each pixel
+    value -> the nearest of STD16 in RGB, the first of equals - what the
+    Preview's poster draws them in (98.4.5), the player's vp_v4xl"""
+    out = []
+    for i in range(16):
+        c = palette[3 * i:3 * i + 3]
+        d = [sum((c[j] - STD16[3 * k + j]) ** 2 for j in range(3))
+             for k in range(16)]
+        out.append(d.index(min(d)))
+    return bytes(out)
+
+
+def vga4_pack(cv, w, h, step=1, xlat=None):
     """The canvas as OSAPI_GFX_BLIT4 takes it - two pixels a byte, the
-    left in the high nibble - every `step`-th pixel of every `step`-th row:
-    the player's vp_v4pack, byte for byte"""
+    left in the high nibble - every `step`-th pixel of every `step`-th row,
+    through `xlat` (vga4_xlat) for a file of its own colours: the player's
+    vp_v4pack, byte for byte"""
     ow, oh = w // step, (h + step - 1) // step
     obw = (ow + 1) // 2
     out = bytearray(obw * oh)
@@ -1486,6 +1573,8 @@ def vga4_pack(cv, w, h, step=1):
         row = cv[oy * step * w:(oy * step + 1) * w]
         for ox in range(ow):
             v = row[ox * step] & 15
+            if xlat:
+                v = xlat[v]
             out[oy * obw + ox // 2] |= v << 4 if not ox & 1 else v
     return bytes(out), obw, ow, oh
 
@@ -1576,17 +1665,20 @@ def write_whole(path, data):
 
 
 H_RING = 23             # the header's byte: the ring the stream assumes
-RING_SLOTS = (0, 2, 4, 8)   # ...0 or a power of two to the player's most
+RING_MAX = 15           # ...0, or 2 to the player's most (VP_KBIG): any
+                        # count, where it was a power of two to 8 until the
+                        # player took as many slots as the machine has
+                        # (98.2.1.3.1)
 SLOT = 32768
 
 
 def ring_for(reserve):
     """The ring slots a disk reserve of `reserve` bytes needs: what it
     banks is read ahead of the slot being decoded AND of a super-packet
-    straddling into the next, so the reserve and two slots more, as a power
-    of two - None if no ring holds it (SPEC.md 98.2.1.3). It was one slot
-    more, which let --reserve 224 bank a slot an 8-slot player never has"""
-    for k in RING_SLOTS[1:]:
+    straddling into the next, so the reserve and two slots more - None if
+    no ring holds it (SPEC.md 98.2.1.3). It was one slot more, which let
+    --reserve 224 bank a slot an 8-slot player never has"""
+    for k in range(2, RING_MAX + 1):
         if (k - 2) * SLOT >= reserve:
             return k
     return None
@@ -1598,7 +1690,18 @@ class Writer:
     def __init__(self, g, rate, spf, audio_fmt, abytes, pixfmt, title="",
                  credits="", aspect=None, keysecs=KEY_SECS, palette=None,
                  rowscale=1, flip=False, loop=None, repeat=False,
-                 cgapal=None, spk=False, live=None, spkp=1):
+                 cgapal=None, spk=False, live=None, spkp=1, ahead=0,
+                 kcap=65535, spcap=SP_MAX, screen=SCR_480):
+        # `spcap`: a super-packet's sectors at most - SP_MAX, or past it
+        # (BIGSP, 98.1.4.1) up to SP_BIG for a stream played in the bracket
+        if not SP_MAX <= spcap <= SP_BIG or (spcap > SP_MAX and
+                                             live is not None):
+            raise V88Error("super-packets of %d sectors: %d to %d, and past "
+                           "%d never live (98.1.4.1)"
+                           % (spcap, SP_MAX, SP_BIG, SP_MAX))
+        self.spcap = spcap
+        # `kcap`: the largest key entry a play can read (keep_keys)
+        self.kcap = kcap
         # `live` (a TARGETS value): a STREAMED Live file (98.3.18.1) - its
         # frame records and seam carry blit runs between lists and audio
         if live is not None and (pixfmt not in (PF_MONO1, PF_VGA4)
@@ -1611,6 +1714,12 @@ class Writer:
                            "bytes")
         self.live = live
         self.opts = None                # the options block, 98.1.1.4
+        if ahead and (audio_fmt == AUD_NONE or live is not None or
+                      not 1 <= ahead <= 255 or ahead * abytes > AHEAD_MAX):
+            raise V88Error("sound ahead by %d frames: a streamed file with "
+                           "sound, 1..255 frames and at most %d bytes of it "
+                           "(98.1.8)" % (ahead, AHEAD_MAX))
+        self.ahead = ahead
         if spk and audio_fmt != AUD_PCM8:
             raise V88Error("speaker counts are PCM8's (98.1.1.3)")
         if spkp > 1 and not spk:
@@ -1651,8 +1760,15 @@ class Writer:
                            "nothing "
                            "else")
         self.cgapal = cgapal
-        if flip and g.layout != LAY_MODEX:
-            raise V88Error("page flipping is Mode X's (98.3.8)")
+        if screen not in SCREENS or (screen and (
+                pixfmt != PF_VGA4 or live is not None or
+                g.w > SCREENS[screen][1] or g.h > SCREENS[screen][2])):
+            raise V88Error("screen %r: a VGA4 file's, not Live, and the "
+                           "canvas inside it (98.1.3.2.1)" % (screen,))
+        self.screen = screen
+        if flip and not (g.layout == LAY_MODEX or screen):
+            raise V88Error("page flipping is Mode X's, or a VGA4 file's on "
+                           "a screen of its own (98.3.8)")
         self.flip = flip
         if rowscale not in (1, 2) or (rowscale > 1 and
                                       g.layout not in VGA8_LAYOUTS):
@@ -1668,11 +1784,15 @@ class Writer:
         if (pixfmt == PF_VGA4) != g.bitplanes or \
                 (pixfmt == PF_VGA4 and g.layout != LAY_LIN80):
             raise V88Error("VGA4 is LIN80's bit-planes, and nothing else's")
-        if (pixfmt == PF_VGA8) != (palette is not None) or \
-                (palette is not None and (len(palette) != PAL_BYTES or
-                                          max(palette) > 63)):
+        if (pixfmt == PF_VGA8 and palette is None) or \
+                (palette is not None and (
+                    pixfmt not in (PF_VGA8, PF_VGA4) or
+                    len(palette) != PAL_BYTES or max(palette) > 63 or
+                    (pixfmt == PF_VGA4 and (not screen or
+                                            any(palette[48:]))))):
             raise V88Error("a VGA8 file carries 768 palette bytes of 0..63, "
-                           "and no other file carries any")
+                           "a VGA4 file on a screen of its own may (its 16, "
+                           "the rest 0), and no other file carries any")
         self.palette = bytes(palette) if palette is not None else None
         self.g, self.rate, self.spf = g, rate, spf
         self.audio_fmt, self.abytes, self.pixfmt = audio_fmt, abytes, pixfmt
@@ -1698,8 +1818,10 @@ class Writer:
         if k >= FRAMES_MAX:
             raise V88Error("frame %d: a file is %d frames at most"
                            % (k, FRAMES_MAX))
-        rec = self.with_runs(record(ops, self.g), audio)
-        if self.flip and len(rec) > PREV_MAX:
+        rec = self.with_runs(record(ops, self.g,
+                                    limit=self.spcap * SECTOR - 4), audio,
+                             limit=self.spcap * SECTOR - 4)
+        if self.flip and len(rec) > PREV_MAX and self.spcap == SP_MAX:
             raise V88Error("frame %d is %d bytes, past a flipped play's %d"
                            % (k, len(rec), PREV_MAX))
         self.recs.append(rec)
@@ -1711,7 +1833,9 @@ class Writer:
             try:
                 # 65,535 is the table's length word; an ADPCM4 file's
                 # write() appends the reference byte (98.1.1.1) to every
-                # key, so its records must leave that byte room
+                # key, so its records must leave that byte room - and a
+                # key with no room for its lead (98.1.8) is write()'s to
+                # leave out, the lead being undecided until then
                 self.keys.append((k, record(
                     kop, self.g, limit=65535 - (
                         self.audio_fmt == AUD_ADPCM4)),
@@ -1735,6 +1859,42 @@ class Writer:
         struct.pack_into("<H", out, 0, n)
         return bytes(out)
 
+    def keep_keys(self, keys, lead, poster):
+        """WHICH KEYS THE TABLE KEEPS (98.1.1, 98.1.8): `keys` with each
+        entry's `lead` bytes of sound ahead behind it. The FIRST key is
+        where a colour play starts, so it is kept whatever it costs - past
+        `kcap`, the player's one read, the file then plays from the start
+        and does not seek - and if it cannot be stored at all, past the
+        entry's length word, NO key is: a later one would start the play
+        there and skip the frames before it. Every other key past `kcap`
+        or the word is left out, and a seek there lands on the one before.
+        The poster follows its key to the nearest one kept. Sets
+        `kdropped`, (frame, entry bytes) a key left out, and `kleadcost`,
+        whether the lead cost a seek the file had without it - which Auto
+        (98.2.1.3) answers by writing it in step"""
+        cap = min(65535, self.kcap)
+
+        def table(lb):
+            if not keys or keys[0][0] != self.key0 or \
+                    len(keys[0][1]) + lb > 65535:
+                return []
+            return [keys[0]] + [kk for kk in keys[1:]
+                                if len(kk[1]) + lb <= cap]
+
+        def seeks(ks, lb):
+            return len(ks) if ks and len(ks[0][1]) + lb <= self.kcap else 0
+        kept = table(lead)
+        left = set(kk[0] for kk in kept)
+        self.kdropped = [(k, len(r) + lead) for k, r, c in keys
+                         if k not in left]
+        self.kleadcost = bool(lead) and seeks(kept, lead) < seeks(table(0), 0)
+        if poster is not None and 0 <= poster < len(self.keys) and \
+                len(kept) != len(keys):
+            pk = self.keys[poster][0]
+            poster = min(range(len(kept)), key=lambda i: abs(
+                kept[i][0] - pk)) if kept else None
+        return kept, poster
+
     def write(self, path, poster=None):
         g = self.g
         if not self.recs:
@@ -1743,13 +1903,14 @@ class Writer:
         sps, where = [], []          # where[f] = (super-packet, index)
         cur, size = [], 4
         for r in self.recs:
-            if cur and size + len(r) > SP_MAX * SECTOR:
+            if cur and size + len(r) > self.spcap * SECTOR:
                 sps.append(cur)
                 cur, size = [], 4
             where.append((len(sps), len(cur)))
             cur.append(r)
             size += len(r)
         sps.append(cur)
+        sps_l = sps
         secs = [-(-(4 + sum(len(r) for r in sp)) // SECTOR) for sp in sps]
         keys = self.keys
         if self.audio_fmt == AUD_ADPCM4:
@@ -1771,6 +1932,41 @@ class Writer:
                                    "reference byte takes it past its length "
                                    "word" % (k, len(r)))
                 keys.append((k, r + bytes([ref]), c))
+        recs, A, ab, nfr = self.recs, self.ahead, self.abytes, len(self.recs)
+        leads, lead0 = {}, b""
+        # THE KEYS' LEADS APART (98.1.8.1): a table of their own, so a key
+        # is judged by its picture alone - getattr, so a Writer made before
+        # the attribute (a test's) writes them apart too
+        apart = bool(A) and getattr(self, "kleads", KLEADS_APART)
+        keys, poster = self.keep_keys(keys, 0 if apart else A * ab, poster)
+        if A:
+            # SOUND AHEAD (98.1.8): record r carries the sound of the frame
+            # A places on in PLAY ORDER - past the last frame, the lap's: a
+            # seam stands for frame L and a key's join for its own frame J,
+            # and either goes on from there, so the last A records carry
+            # what the frames after a join will want, whether the file asked
+            # for Repeat or the user presses the button
+            aud = [r[len(r) - ab:] for r in self.recs]
+            J = self.loop if self.loop is not None else \
+                (keys[0][0] if keys else None)
+
+            def sound(q):
+                if q < nfr:
+                    return aud[q]
+                if J is None:
+                    return bytes([0 if self.audio_fmt == AUD_ADPCM4
+                                  else 0x80]) * ab
+                return aud[J + (q - nfr) % (nfr - J)]
+            recs = []
+            for p, r in enumerate(self.recs):
+                n = bytearray(r[:len(r) - ab] + sound(p + A))
+                recs.append(bytes(n))
+            lead0 = b"".join(sound(q) for q in range(A))
+            for k, r, c in keys:
+                leads[k] = b"".join(sound(q) for q in range(k + 1, k + 1 + A))
+        seam_audio = self.loop_audio
+        if A and self.loop is not None:
+            seam_audio = sound(nfr + A)     # the seam is one more record
         seam = b""
         if self.loop is not None:
             # THE SEAM (98.1.1.2): the change from the last frame back to
@@ -1784,15 +1980,16 @@ class Writer:
                                % (self.loop, len(self.recs)))
             seam = self.with_runs(record(seam_ops(self.last, self.loop_surf,
                                                   g), g, limit=65535),
-                                  self.loop_audio, limit=65535)
-            if self.flip and len(seam) > PREV_MAX:
+                                  seam_audio, limit=65535)
+            if self.flip and len(seam) > PREV_MAX and self.spcap == SP_MAX:
                 raise V88Error("the seam is %d bytes, past a flipped play's "
                                "%d" % (len(seam), PREV_MAX))
         nk = len(keys)
         if nk > KEYS_MAX:
             raise V88Error("%d keyframes: %d at most" % (nk, KEYS_MAX))
         ktab = -(-16 * nk // SECTOR) * SECTOR if nk else 0
-        krec = sum(len(r) for k, r, c in keys) + len(seam)
+        krec = sum(len(r) + len(leads.get(k, b"")) for k, r, c in keys) + \
+            len(seam) + len(lead0)            # (apart or not, the same bytes)
         pal = SECTOR if self.palette else 0     # the palette: sector 1
         kbase = SECTOR + (2 * SECTOR if self.palette else 0) + ktab
         ktoff = SECTOR + (2 * SECTOR if self.palette else 0)
@@ -1807,6 +2004,10 @@ class Writer:
         for n in secs:
             spoff.append(o)
             o += n * SECTOR
+        if A:
+            sps, it = [], iter(recs)        # the same lengths, shifted sound
+            for sp in sps_l:
+                sps.append([next(it) for _ in sp])
         stream = bytearray()
         for i, sp in enumerate(sps):
             nxt = secs[i + 1] if i + 1 < len(sps) else 0
@@ -1822,9 +2023,11 @@ class Writer:
             if idx > 255:
                 raise V88Error("frame %d is record %d of its super-packet; "
                                "a keyframe can name 255" % (k + 1, idx))
-            kt += struct.pack("<IIHIBB", k, o, len(r), sp_at, sp_n, idx)
-            kr += r
-            o += len(r)
+            r2 = r if apart else r + leads.get(k, b"")  # (98.1.8: its lead
+                                                        # behind it)
+            kt += struct.pack("<IIHIBB", k, o, len(r2), sp_at, sp_n, idx)
+            kr += r2
+            o += len(r2)
         loopblk = b""
         if seam:
             spi, idx = where[self.loop + 1]
@@ -1835,6 +2038,18 @@ class Writer:
             loopblk = struct.pack(LOOP_FMT, self.loop, o, len(seam),
                                   secs[spi], idx, spoff[spi])
             kr += seam
+            o += len(seam)
+        lead0_at = 0
+        if A:
+            lead0_at = o
+            kr += lead0
+            o += len(lead0)
+        klead_at = 0
+        if apart and keys:
+            klead_at = o
+            for k, r, c in keys:
+                kr += leads[k]
+                o += len(leads[k])
         if poster is None:
             poster = next((i for i, (k, r, c) in enumerate(keys)
                            if not flat(c)), 0 if nk else 0xFFFF)
@@ -1845,7 +2060,12 @@ class Writer:
         flags = (F_LOOPREC if seam else 0) | (F_REPEAT if self.repeat else 0) \
             | (F_SPKPWM if self.spk else 0) \
             | (F_SPKMUL if self.spkp > 1 else 0) \
-            | (F_LIVE | F_RUNS if self.live is not None else 0)
+            | (F_LIVE | F_RUNS if self.live is not None else 0) \
+            | (F_AHEAD if A else 0) \
+            | (F_KLEADS if klead_at else 0) \
+            | (F_SCREEN if self.screen else 0) \
+            | (F_BIGSP if max(secs) > SP_MAX or (self.flip and max(
+                len(r) for r in self.recs + [seam]) > PREV_MAX) else 0)
         struct.pack_into("<HHIHHBBH", hdr, 4, 1, flags, len(self.recs),
                          self.rate,
                          self.spf, self.audio_fmt, 1, self.abytes)
@@ -1853,6 +2073,11 @@ class Writer:
         if self.spkp > 1:
             hdr[H_SPKP] = self.spkp
         hdr[H_RING] = getattr(self, "ring", 0)
+        if A:
+            hdr[H_AHEAD] = A
+            struct.pack_into("<I", hdr, H_LEAD0, lead0_at)
+        if klead_at:
+            struct.pack_into("<I", hdr, H_KLEADS, klead_at)
         for off, size, text in ((32, 48, self.title), (80, 96, self.credits)):
             t = text.encode("ascii", "replace")[:size - 1]
             hdr[off:off + len(t)] = t
@@ -1861,10 +2086,12 @@ class Writer:
                          ktoff if nk else 0, nk, poster, s0, secs[0],
                          max(secs), len(stream),
                          max(len(r) for r in self.recs),
-                         max((len(r) for k, r, c in keys), default=0))
-        struct.pack_into("<IBB", hdr, 224, pal,
+                         max((len(r) + (0 if apart else
+                                        len(leads.get(k, b"")))
+                              for k, r, c in keys), default=0))
+        struct.pack_into("<IBBB", hdr, 224, pal,
                          self.rowscale if self.rowscale > 1 else 0,
-                         2 if self.flip else 0)
+                         2 if self.flip else 0, self.screen)
         if self.cgapal is not None:
             hdr[192 + R_CGAPAL] = self.cgapal
         if self.live is not None:
@@ -1880,8 +2107,11 @@ class Writer:
             bytes(s0 - oat - len(opts)) + stream
         write_whole(path, out)
         return dict(bytes=len(out), keys=nk, keybytes=ktab + len(kr),
+                    flags=flags,
                     stream=len(stream), sps=len(sps), poster=poster,
-                    seam=len(seam))
+                    seam=len(seam), ahead=A, kdropped=self.kdropped,
+                    kleadcost=self.kleadcost, leadbytes=len(lead0) + sum(len(v) for v in
+                                               leads.values()))
 
 
 def blit_cost(rows, nbytes, planes=1):
@@ -2243,10 +2473,10 @@ class Reader:
             raise V88Error("%d audio bytes a frame with format %d and %d "
                            "samples" % (self.abytes, self.audio, self.spf))
         # THE RING THE STREAM ASSUMES (98.1.1): the slots of read-ahead
-        # its bursts are banked in, a power of two the player's own; 0 says
+        # its bursts are banked in, 2 to the player's most; 0 says
         # nothing, and a RESIDENT file has no ring
         self.ring = d[H_RING]
-        if self.ring not in RING_SLOTS or \
+        if self.ring == 1 or self.ring > RING_MAX or \
                 (self.ring and flags & F_RESIDENT):
             raise V88Error("a ring of %d slots%s" % (
                 self.ring, " in a RESIDENT file" if self.ring else ""))
@@ -2327,11 +2557,24 @@ class Reader:
             raise V88Error("a CGA palette byte in a %s file"
                            % PF_NAMES[self.pixfmt])
         self.g = Geom(layout, wb, h, bitplanes=self.pixfmt == PF_VGA4)
-        pal, rs, fl = struct.unpack_from("<IBB", d, self.slot + 32)
+        pal, rs, fl, scr = struct.unpack_from("<IBBB", d, self.slot + 32)
         self.rowscale = rs or 1
-        if fl not in (0, 1, 2) or (fl == 2 and layout != LAY_MODEX):
+        if scr not in SCREENS or (scr and (
+                not flags & F_SCREEN or
+                self.pixfmt != PF_VGA4 or self.resident or self.live or
+                self.g.w > SCREENS[scr][1] or h > SCREENS[scr][2])):
+            raise V88Error("a screen byte of %d (98.1.3.2.1)" % scr)
+        self.screen = scr
+        if fl not in (0, 1, 2) or (fl == 2 and not (layout == LAY_MODEX or
+                                                    scr)):
             raise V88Error("a flip byte of %d on layout %d" % (fl, layout))
         self.flip = fl == 2
+        # BIGSP (98.1.4.1): super-packets to SP_BIG sectors, in a stream
+        # played in the bracket - never RESIDENT, LIVE or flipped
+        self.spcap = SP_BIG if flags & F_BIGSP else SP_MAX
+        if flags & F_BIGSP and (self.resident or self.live):
+            raise V88Error("super-packets past 32 KB in a resident or live "
+                           "file (98.1.4.1)")
         if self.rowscale > 2 or (self.rowscale > 1 and
                                  layout not in VGA8_LAYOUTS):
             raise V88Error("a row scale of %d on layout %d" % (rs, layout))
@@ -2346,14 +2589,21 @@ class Reader:
             self.palette = d[pal:pal + PAL_BYTES]
             if max(self.palette) > 63:
                 raise V88Error("the palette holds values past the DAC's 63")
+        elif pal and self.pixfmt == PF_VGA4 and scr:
+            if pal % SECTOR or pal + PAL_BYTES > len(d):
+                raise V88Error("a VGA4 file's palette at %d does not fit"
+                               % pal)
+            self.palette = d[pal:pal + PAL_BYTES]
+            if max(self.palette[:48]) > 63 or any(self.palette[48:]):
+                raise V88Error("a VGA4 palette is 16 entries of 0..63")
         elif pal:
             raise V88Error("a palette at %d in a %s file"
                            % (pal, PF_NAMES[self.pixfmt]))
         self.aspect = (an, ad)
         if self.resident:
             self._blocks(d)
-        elif not (1 <= self.sp0n <= SP_MAX and 1 <= self.spmax <= SP_MAX) \
-                or self.sp0 % SECTOR:
+        elif not (1 <= self.sp0n <= self.spcap and
+                  1 <= self.spmax <= self.spcap) or self.sp0 % SECTOR:
             raise V88Error("first super-packet at %d, %d sectors, largest %d"
                            % (self.sp0, self.sp0n, self.spmax))
         if self.nkeys > KEYS_MAX:
@@ -2367,13 +2617,39 @@ class Reader:
         self.keys = [struct.unpack_from("<IIHIBB", d, self.ktab + 16 * i)
                      for i in range(self.nkeys)]
         self.repeat = bool(flags & F_REPEAT)
+        # SOUND AHEAD (98.1.8): A, the start's lead, and the bytes after
+        # them in the header's last sector, which are zero
+        self.ahead = d[H_AHEAD] if flags & F_AHEAD else 0
+        self.lead0at = struct.unpack_from("<I", d, H_LEAD0)[0] \
+            if flags & F_AHEAD else 0
+        if not flags & F_AHEAD and d[H_AHEAD]:
+            raise V88Error("a sound-ahead byte with no AHEAD flag")
+        if flags & F_AHEAD and (
+                not self.ahead or self.audio == AUD_NONE or self.resident
+                or self.live or self.ahead * self.abytes > AHEAD_MAX or
+                self.lead0at < SECTOR or
+                self.lead0at + self.ahead * self.abytes > len(d)):
+            raise V88Error("sound ahead by %d frames, its start's lead at %d"
+                           " (98.1.8)" % (self.ahead, self.lead0at))
+        # THE KEYS' LEADS APART (98.1.8.1): a table of A x abytes a key,
+        # with AHEAD and keys only, inside the file and past the header
+        self.kleadat = struct.unpack_from("<I", d, H_KLEADS)[0] \
+            if flags & F_KLEADS else 0
+        if flags & F_KLEADS and (
+                not flags & F_AHEAD or not self.nkeys or
+                self.kleadat < SECTOR or self.kleadat + self.nkeys *
+                self.ahead * self.abytes > len(d)):
+            raise V88Error("the keys' leads apart at %d (98.1.8.1)"
+                           % self.kleadat)
+        tail0 = H_KLEADS + 4 if flags & F_KLEADS else \
+            H_LEAD0 + 4 if flags & F_AHEAD else LOOP_AT + 16
         self.loop = None
         blk = struct.unpack_from(LOOP_FMT, d, LOOP_AT)
         if flags & F_LOOPREC and self.resident:
             # RESIDENT: the seam is each block's record after the last
             # frame's, so the loop block names only L
             if not blk[0] + 1 < self.frames or any(blk[1:]) or \
-                    any(d[LOOP_AT + 16:SECTOR]):
+                    any(d[tail0:SECTOR]):
                 raise V88Error("a resident file's loop block is L alone, "
                                "L + 1 < frames")
             self.loop = (blk[0], 0, len(self._seam), 0, 0, 0)
@@ -2381,15 +2657,17 @@ class Reader:
             L, off, n, secs, idx, spo = blk
             minrec = REC_HDR + (1 if self.g.planes > 1 else 10) + self.abytes
             if not (L + 1 < self.frames and n >= minrec and
-                    off + n <= len(d) and 1 <= secs <= SP_MAX and
+                    off + n <= len(d) and 1 <= secs <= self.spcap and
                     not spo % SECTOR and spo >= self.sp0 and
                     spo + secs * SECTOR <= len(d)):
                 raise V88Error("the loop block (from frame %d, seam %d+%d, "
                                "super-packet %d x %d, record %d) does not "
                                "fit the file" % (L, off, n, spo, secs, idx))
             self.loop = blk
-        elif any(blk) or any(d[LOOP_AT + 16:SECTOR]):
+        elif any(blk) or any(d[tail0:SECTOR]):
             raise V88Error("a loop block with no LOOPREC flag")
+        if flags & F_LOOPREC and any(d[tail0:SECTOR]):
+            raise V88Error("bytes after the loop block that are not zero")
 
     @property
     def fps(self):
@@ -2407,7 +2685,7 @@ class Reader:
         at = self.sp0 if at is None else at
         nsec = self.sp0n if nsec is None else nsec
         while nsec:
-            if not 1 <= nsec <= SP_MAX:
+            if not 1 <= nsec <= self.spcap:
                 raise V88Error("a super-packet of %d sectors" % nsec)
             sp = self.d[at:at + nsec * SECTOR]
             if len(sp) != nsec * SECTOR:
@@ -2556,6 +2834,39 @@ class Reader:
     def _audio(self, f):
         return self._aud[f * self.abytes:(f + 1) * self.abytes]
 
+    def sound(self, f):
+        """FRAME f's sound, wherever the file keeps it: the frame's own
+        record's tail, a RESIDENT file's block, or - sound ahead (98.1.8) -
+        the start's lead for the first A frames and record f - A's tail
+        after them. What a test compares a capture with, never a slice"""
+        if not self.abytes:
+            return b""
+        if self.resident:
+            return self._audio(f)
+        if getattr(self, "_aseq", None) is None:
+            tails = [rec[len(rec) - self.abytes:]
+                     for rec, _, _ in self.records()]
+            A, ab = self.ahead, self.abytes
+            lead = self.d[self.lead0at:self.lead0at + A * ab]
+            self._aseq = [lead[i * ab:(i + 1) * ab] for i in range(A)] + \
+                tails[:len(tails) - A]
+        return self._aseq[f]
+
+    def key_lead(self, i):
+        """Keyframe i's LEAD (98.1.8): frames k + 1 .. k + A's sound, the
+        entry's bytes after its record; b"" in a file without AHEAD"""
+        if not self.ahead:
+            return b""
+        L = self.ahead * self.abytes
+        if self.kleadat:                # apart (98.1.8.1)
+            return self.d[self.kleadat + i * L:self.kleadat + (i + 1) * L]
+        k, off, n, spo, spn, idx = self.keys[i]
+        return self.d[off + n - L:off + n]
+
+    def lead0(self):
+        """The start's lead: frames 0 .. A - 1's sound"""
+        return self.d[self.lead0at:self.lead0at + self.ahead * self.abytes]
+
     def after_key(self, e):
         """The records from the frame after keyframe entry `e`"""
         k, off, n, spo, spn, idx = e
@@ -2589,7 +2900,50 @@ class Reader:
         rec = self.d[off:off + n]
         if len(rec) != n or n < REC_HDR + (1 if self.g.planes > 1 else 10):
             raise V88Error("keyframe %d runs off the file" % i)
+        if self.ahead and not self.kleadat:
+            # the entry is the record AND its lead, the entry's last
+            # A x abytes bytes (98.1.8; an ADPCM4 key's reference byte is
+            # the record's last, after its length word's reach)
+            m = n - self.ahead * self.abytes
+            if m < struct.unpack_from("<H", rec, 0)[0]:
+                raise V88Error("keyframe %d: an entry of %d, a record of %d "
+                               "and a lead of %d" % (
+                                   i, n, struct.unpack_from("<H", rec, 0)[0],
+                                   self.ahead * self.abytes))
+            rec = rec[:m]
         return k, rec, spo, spn, idx
+
+
+class HeadOptions:
+    """A .V88's title, credits and stored options (98.1.1.4) ALONE, read
+    off its first sector and its options block - none of the stream,
+    which a Reader reads and a preview decodes. What the encoder window
+    fills its form from the moment a file is opened (98.2.17), so a person
+    who wants only how it was made does not wait on a preview. The same
+    checks of the block a Reader makes; form_from_file takes either"""
+
+    def __init__(self, path):
+        with open(path, "rb") as f:
+            d = f.read(SECTOR)
+            if len(d) < SECTOR or d[:4] != V88_SIG:
+                raise V88Error("not a .V88")
+            size = os.fstat(f.fileno()).st_size
+            self.title = d[32:80].split(b"\0")[0].decode("ascii", "replace")
+            self.credits = d[80:176].split(b"\0")[0].decode("ascii",
+                                                            "replace")
+            self.optsat, self.optslen = struct.unpack_from("<IH", d, H_OPTS)
+            self._blk = None
+            if self.optsat or self.optslen:
+                if self.optsat < SECTOR or not self.optslen or \
+                        self.optsat + self.optslen > size:
+                    raise V88Error("an options block of %d bytes at %d, in a "
+                                   "file of %d" % (self.optslen, self.optsat,
+                                                   size))
+                f.seek(self.optsat)
+                self._blk = f.read(self.optslen)
+
+    def options(self):
+        return None if self._blk is None else unpack_options(self._blk)
 
 
 def first_shown(r):
@@ -2747,17 +3101,37 @@ def spk_reshape(src, dst, hp=SPK_HP, drive=SPK_DRIVE, lows=SPK_LOWS,
         if len(where) != r.frames:
             raise V88Error("rendition %d: %d records for %d frames"
                            % (ri, len(where), r.frames))
-        ab = r.abytes
-        old = b"".join(bytes(d[w:w + ab]) for w in where)
+        ab, A, N = r.abytes, r.ahead, r.frames
+        # every place a frame's sound is kept: record p carries the frame A
+        # on in play order (98.1.8; A = 0 without AHEAD), and with AHEAD the
+        # start's lead and each key's hold copies too
+        J = r.loop[0] if r.loop else (r.keys[0][0] if r.keys else None)
+
+        def play(q):
+            if q < N:
+                return q
+            return None if J is None else J + (q - N) % (N - J)
+        held = [(w, play(p + A)) for p, w in enumerate(where)]
+        if A:
+            held += [(r.lead0at + i * ab, i) for i in range(A)]
+            for k, off, n, spo, spn, idx in r.keys:
+                held += [(off + n - (A - j) * ab, play(k + 1 + j))
+                         for j in range(A)]
+        if r.loop is not None:
+            L, off, m = r.loop[:3]
+            held.append((off + m - ab, play(N + A)))
+        first = {}
+        for w, f in held:
+            if f is not None:
+                first.setdefault(f, w)
+        old = b"".join(bytes(d[first[f]:first[f] + ab]) for f in range(N))
         new = spk_counts(spk_shape(spk_samples(old, r.rate, r.spkp), r.rate,
                                    hp, drive, lows=lows, rng=rng,
                                    ratio=ratio, idle=idle), r.rate,
                          r.spkp)
-        for f, w in enumerate(where):
-            d[w:w + ab] = new[f * ab:(f + 1) * ab]
-        if r.loop is not None:
-            L, off, m = r.loop[:3]
-            d[off + m - ab:off + m] = new[L * ab:(L + 1) * ab]
+        for w, f in held:
+            if f is not None:
+                d[w:w + ab] = new[f * ab:(f + 1) * ab]
     _reshape_options(d, Reader(src), dict(
         spk_shape="encoder", spk_style=style or SPK_STYLE, spk_highpass=hp,
         spk_drive=drive, spk_lows=lows, spk_range=rng, spk_ratio=ratio,
@@ -2793,18 +3167,19 @@ def _reshape_options(d, r, changed):
     struct.pack_into("<IH", d, H_OPTS, r.optsat if blob else 0, len(blob))
 
 
-def cycles_of(rec, planar=False, layout=None):
+def cycles_of(rec, planar=False, layout=None, table=None, sub=CYC_SUB):
     """The wave 0 model's cycles for one record, writing CGA's screen: the
     frame's fixed cost, a set-up per skip segment, each entry by its list,
     and an absolute entry's extra address. A MODEX record's sub-records
-    are decoded once each whatever their mask, and pay an OUT. `layout`
-    picks another decoder's constants (CYC_LAYOUT)"""
-    t = cyc_table(layout)
+    are decoded once each whatever their mask, and pay an OUT (`sub`).
+    `layout` picks another decoder's constants (CYC_LAYOUT), and `table`
+    a machine's own, in cyc_table's shape (os88venc's profile_table)"""
+    t = cyc_table(layout) if table is None else table
     if not planar:
         return _cycles_lists(rec, REC_HDR, t[0], t)[1]
     c, si = t[0], REC_HDR
     while rec[si]:
-        c += CYC_SUB
+        c += sub
         si, c = _cycles_lists(rec, si + 1, c, t)
     return c
 
@@ -3396,8 +3771,10 @@ def audio_chunks(pcm, nf, spf, afmt, keys=(), search=0, join=None):
 def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
                   keysecs=KEY_SECS, poster=None, audio_fmt=AUD_PCM8,
                   loop=None, repeat=False, resident=None, live=None,
-                  spk=False, spkp=1):
+                  spk=False, spkp=1, ahead=0, spcap=SP_MAX):
     """SPEC.md 98.2's minimal encoder: every changed byte, losslessly.
+    `ahead` carries the sound that many frames ahead (98.1.8), `spcap` packs
+    super-packets to that many sectors (BIGSP past SP_MAX, 98.1.4.1)
     `spk` stores PCM8 as the speaker's counts (98.1.1.3)
     `live` (cga, herc, vga) makes the file LIVE for that screen (98.3.10) -
     the layout must be lin80. Resident, or a stream played Live once it is
@@ -3432,7 +3809,8 @@ def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
     wr = Writer(g, rate, spf, afmt if rab else AUD_NONE, rab, PF_MONO1,
                 title=title, keysecs=keysecs, loop=loop, repeat=repeat,
                 spk=spk and bool(rab), spkp=spkp if spk and rab else 1,
-                live=TARGETS[live] if live and resident is None else None)
+                live=TARGETS[live] if live and resident is None else None,
+                ahead=ahead if rab else 0, spcap=spcap)
     surf = bytearray(65536)
     for f, path in enumerate(paths):
         w, h, cv = read_frame(path)
@@ -3461,14 +3839,16 @@ def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
 
 def encode_canvases(canvases, g, out, fps, pixfmt=PF_MONO1, palette=None,
                     title="", keysecs=KEY_SECS, poster=None, rowscale=1,
-                    flip=False, loop=None, repeat=False, cgapal=None):
+                    flip=False, loop=None, repeat=False, cgapal=None,
+                    screen=SCR_480):
     """encode_frames for canvases already in hand (bytes, g.wb a row) - the
     only way to make a VGA8 file without a video (SPEC.md 98.2): silent,
     every changed byte"""
     rate, spf = max(1, round(fps * 100)), 100
     wr = Writer(g, rate, spf, AUD_NONE, 0, pixfmt, title=title,
                 keysecs=keysecs, palette=palette, rowscale=rowscale,
-                flip=flip, loop=loop, repeat=repeat, cgapal=cgapal)
+                flip=flip, loop=loop, repeat=repeat, cgapal=cgapal,
+                screen=screen)
     surf = g.surface()
     prev = g.canvas(surf)
     for cv in canvases:
@@ -3546,7 +3926,7 @@ def cmd_spkwav(a):
     r = Reader(a.file, a.rendition)
     if not r.spk:
         raise V88Error("%s is not made for the speaker (98.1.1.3)" % a.file)
-    c = b"".join(rec[-r.abytes:] for rec, at, i in r.records())
+    c = b"".join(r.sound(f) for f in range(r.frames))
     secs = write_spk_preview(a.out, c, r.rate, r.spkp)
     print("os88vid: %s: %.1f s of the speaker line at %d Hz x %d pulse%s"
           % (a.out, secs, r.rate, r.spkp, "" if r.spkp == 1 else "s"))
@@ -3578,7 +3958,9 @@ def cmd_info(a):
         print("   %d frames at %.3f fps (%d Hz / %d), %.1f s; audio %s; "
               "PIT %d x %d" % (r.frames, r.fps, r.rate, r.spf, secs,
                                {0: "none", 1: "PCM8", 2: "ADPCM4"}[r.audio]
-                               + (" as speaker counts" if r.spk else ""),
+                               + (" as speaker counts" if r.spk else "")
+                               + (", %d frames ahead" % r.ahead
+                                  if r.ahead else ""),
                               r.pitdiv,
                                r.pitper))
         print("   canvas %d x %d%s on %s, %s, aspect %d:%d"
@@ -3587,6 +3969,13 @@ def cmd_info(a):
                          PIX_PER_BYTE[g.layout]), g.h,
                  " (each row shown twice)" if r.rowscale > 1 else "",
                  g.name, PF_NAMES[r.pixfmt], *r.aspect))
+        if r.pixfmt in (PF_VGA4, PF_VGA8) and (r.screen or r.flip):
+            print("   %s%s%s" % (
+                "screen %s, full screen; " % SCREENS[r.screen][0]
+                if r.screen else "", "two pages, flipped"
+                if r.flip else "one page",
+                "; its own 16 colours" if r.pixfmt == PF_VGA4 and
+                r.palette else ""))
         if r.pixfmt == PF_CGA4:
             print("   palette %02Xh: colours %s" % (
                 r.cgapal, " ".join(str(c) for c in cga4_colours(r.cgapal))))
@@ -3686,6 +4075,13 @@ def cmd_decode(a):
         rgb = os88txtfont.render(cv, r.g.wb, r.g.h, np.frombuffer(
             STD16, np.uint8).reshape(16, 3).astype(np.uint16) * 255 // 63)
         Image.fromarray(rgb).save(a.png)
+    elif r.pixfmt in (PF_VGA8, PF_VGA4):    # a pixel a byte, through its
+        import numpy as np                  # colours: the one-bit writer
+        from PIL import Image               # read it as bits
+        pal = np.frombuffer(r.palette or STD16,
+                            np.uint8).astype(np.uint16).reshape(-1, 3)
+        idx = np.frombuffer(cv, np.uint8).reshape(r.g.h, r.g.w)
+        Image.fromarray((pal[idx] * 255 // 63).astype(np.uint8)).save(a.png)
     else:
         write_png(a.png, r.g.wb, r.g.h, cv)
     print("os88vid: frame %d of %s -> %s" % (a.frame, a.file, a.png))
@@ -3730,12 +4126,13 @@ def verify_v88(path, against=None, rend=None):
             apply_ops(xs, ops)
             if cga.canvas(xs) != g.canvas(surf):
                 raise V88Error("frame %d differs from XDC's screen" % f)
-            if rec[len(rec) - r.abytes:] != (want_audio[f] if want_audio
-                                             else xdc_audio(pk[f], hdr)):
+            if r.sound(f) != (want_audio[f] if want_audio
+                              else xdc_audio(pk[f], hdr)):
                 raise V88Error("frame %d's audio differs from XDC's" % f)
         if f in kat:
             k, krec, spo, spk, idx = r.key(kat[f])
-            kmax = max(kmax, len(krec))
+            kmax = max(kmax, len(krec) + (0 if r.kleadat else
+                                         len(r.key_lead(kat[f]))))
             kb = g.surface()
             r.apply(kb, krec, key=True)
             if g.canvas(kb) != g.canvas(surf):
@@ -3765,14 +4162,14 @@ def verify_v88(path, against=None, rend=None):
         # 98.1.1.1: each keyframe's reference byte is the sample the decoder
         # holds at frame k+1, with its scale 0 - so a card started there with
         # it plays exactly what the continuous stream plays
-        st = adpcm4_trace(b"".join(rec[len(rec) - r.abytes:]
-                                   for rec, _, _ in r.records()))
-        for i, (k, off, n, spo, spk, idx) in enumerate(r.keys):
+        st = adpcm4_trace(b"".join(r.sound(f) for f in range(r.frames)))
+        for i in range(len(r.keys)):
+            k, krec = r.key(i)[:2]
             want = st[(k + 1) * r.abytes]
-            if (r.d[off + n - 1], 0) != want:
+            if (krec[-1], 0) != want:
                 raise V88Error("keyframe %d's ADPCM4 reference is %d; the "
                                "stream holds %d at scale %d there"
-                               % (i, r.d[off + n - 1], want[0], want[1]))
+                               % (i, krec[-1], want[0], want[1]))
     if r.resident and r.audio == AUD_ADPCM4:
         # 98.1.7.2: a RESIDENT file's lap joins EXACTLY - the stream ends in
         # the state its join continues from: the state before frame L's
@@ -3793,7 +4190,11 @@ def verify_v88(path, against=None, rend=None):
         for f, surf, rec, at, i in v88_frames(r, check=False):
             if f == L:
                 want = g.canvas(surf)
-                laud = rec[len(rec) - r.abytes:] if r.abytes else b""
+                # the seam carries frame L's sound, or - one more record in
+                # play order, sound ahead (98.1.8) - frame L + A's
+                laud = r.sound(L + r.ahead if L + r.ahead < r.frames else
+                               L + (L + r.ahead - r.frames) %
+                               (r.frames - L)) if r.abytes else b""
             if f == L + 1 and not r.resident and (spo, idx, secs) != \
                     (at, i, sp_secs[at]):
                 raise V88Error("the loop block names super-packet %d record "
@@ -3805,9 +4206,35 @@ def verify_v88(path, against=None, rend=None):
             raise V88Error("the seam does not bring the last frame back to "
                            "frame %d" % L)
         if tail != laud:
-            raise V88Error("the seam's audio is not frame %d's" % L)
-        if r.flip and n > PREV_MAX:
+            raise V88Error("the seam's audio is not frame %d's"
+                           % (L + r.ahead))
+        if r.flip and n > PREV_MAX and r.spcap == SP_MAX:
             raise V88Error("a flipped file's seam of %d bytes" % n)
+    if r.ahead:
+        # 98.1.8: every lead is the frames a play from there wants, and the
+        # last A records carry the frames after the join a lap makes
+        A, ab, N = r.ahead, r.abytes, r.frames
+        J = r.loop[0] if r.loop else (r.keys[0][0] if r.keys else None)
+
+        def want(q):
+            if q < N:
+                return r.sound(q)
+            if J is None:
+                return bytes([0 if r.audio == AUD_ADPCM4 else 0x80]) * ab
+            return r.sound(J + (q - N) % (N - J))
+        # (the start's lead is the only copy of frames 0 .. A - 1 - the
+        # tail records below repeat them when the lap's join is key 0)
+        for i, e in enumerate(r.keys):
+            k = e[0]
+            if r.key_lead(i) != b"".join(want(q)
+                                         for q in range(k + 1, k + 1 + A)):
+                raise V88Error("keyframe %d's lead is not frames %d to %d's "
+                               "sound" % (i, k + 1, k + A))
+        recs = [rec for rec, _, _ in r.records()]
+        for p in range(N - A, N):
+            if recs[p][len(recs[p]) - ab:] != want(p + A):
+                raise V88Error("record %d does not carry the sound a lap "
+                               "wants after its join" % p)
     if (rmax, kmax) != (r.rmax, r.kmax):
         raise V88Error("the largest record and keyframe are %d and %d bytes; "
                        "the header says %d and %d" % (rmax, kmax, r.rmax,
@@ -3971,8 +4398,8 @@ def selfcheck():
             expect_fail("stale keyframe", out, lambda d: swap_keys(d, r),
                         "is not the screen after frame")
             expect_fail("a ring no player has", out,
-                        lambda d: d[:H_RING] + b"\x03" + d[H_RING + 1:],
-                        "a ring of 3 slots")
+                        lambda d: d[:H_RING] + b"\x10" + d[H_RING + 1:],
+                        "a ring of 16 slots")
             if wb < LAYOUTS[LAYOUT_BY_NAME[lay]][1]:
                 # keyframe 0's record rewritten as one absolute P1 entry,
                 # aimed one byte past the canvas's first row
@@ -4056,6 +4483,147 @@ def selfcheck():
             fails.append("ADPCM4 with a seam was not refused")
         except V88Error:
             pass
+        # SOUND AHEAD (98.1.8): the same clip with and without it gives
+        # every frame the same sound, a seek from each key plays the stream's
+        # own (its lead, then the records after it - ADPCM4's reference
+        # byte included), the laps' tails verify, and a damaged lead, a byte
+        # 25 with no flag, and a writer one frame out are refused
+        acvs = _fixture_canvases(20, 40, 30, rnd)
+        apaths = []
+        for i, cv in enumerate(acvs):
+            pth = os.path.join(tmp, "a_%03d.pbm" % i)
+            _write_pbm(pth, 20, 40, cv)
+            apaths.append(pth)
+        awav = os.path.join(tmp, "ah.wav")
+        _write_wav(awav, 8000, bytes(rnd.getrandbits(8) for _ in range(9000)))
+        for afmt, lp in ((AUD_ADPCM4, None), (AUD_PCM8, 7), (AUD_PCM8, None)):
+            o0 = os.path.join(tmp, "ah0.v88")
+            o4 = os.path.join(tmp, "ah4.v88")
+            kw = dict(keysecs=0.2, audio_fmt=afmt, loop=lp,
+                      repeat=lp is not None)
+            encode_frames(apaths, o0, 30.0, awav, "herc", **kw)
+            encode_frames(apaths, o4, 30.0, awav, "herc", ahead=4, **kw)
+            what = "%s%s" % ("ADPCM4" if afmt == AUD_ADPCM4 else "PCM8",
+                             " with a seam" if lp else "")
+            try:
+                verify_v88(o4)
+                r0, r4 = Reader(o0), Reader(o4)
+                if r4.ahead != 4 or not r4.flags & F_AHEAD:
+                    fails.append("ahead %s: the header says %d" % (what,
+                                                                  r4.ahead))
+                if any(r0.sound(f) != r4.sound(f) for f in range(r0.frames)):
+                    fails.append("ahead %s: a frame's sound moved" % what)
+                for f in range(r4.frames):
+                    if decode_at(r4, f) != acvs[f]:
+                        fails.append("ahead %s: frame %d decodes wrong"
+                                     % (what, f))
+                        break
+                for i in range(r4.nkeys):
+                    k, krec, spo, spn, idx = r4.key(i)
+                    if k + 1 >= r4.frames:
+                        continue
+                    got = r4.key_lead(i) + b"".join(
+                        rr[len(rr) - r4.abytes:]
+                        for rr, _, _ in r4.records(spo, spn, idx))
+                    want = b"".join(r4.sound(f) for f in range(k + 1,
+                                                               r4.frames))
+                    if afmt == AUD_ADPCM4:
+                        got = adpcm4_decode(got, ref=krec[-1])
+                        want = adpcm4_decode(b"".join(
+                            r4.sound(f) for f in range(r4.frames)))
+                        want = want[len(want) - (r4.frames - k - 1) *
+                                    r4.spf:]
+                    if got[:len(want)] != want:
+                        fails.append("ahead %s: a seek to keyframe %d does "
+                                     "not play the stream's sound"
+                                     % (what, i))
+                        break
+            except V88Error as e:
+                fails.append("ahead %s: %s" % (what, e))
+        r4 = Reader(o4)
+        la = r4.lead0at
+        expect_fail("damaged start lead", o4, lambda d: d[:la] +
+                    bytes([d[la] ^ 0x5A]) + d[la + 1:], "lap wants")
+        kl = r4.kleadat + r4.ahead * r4.abytes     # key 1's, apart
+        expect_fail("damaged key lead", o4, lambda d: d[:kl] +
+                    bytes([d[kl] ^ 0x5A]) + d[kl + 1:], "lead is not")
+        expect_fail("keys' leads past the file", o4, lambda d: d[:H_KLEADS]
+                    + struct.pack("<I", len(d)) + d[H_KLEADS + 4:],
+                    "leads apart")
+        expect_fail("keys' leads with no AHEAD", o4, lambda d: d[:6] +
+                    struct.pack("<H", struct.unpack_from("<H", d, 6)[0] &
+                                ~F_AHEAD) + d[8:H_AHEAD] + b"\0" +
+                    d[H_AHEAD + 1:], "")
+        # ...and a file of the inline kind, every player's until 98.1.8.1,
+        # still reads: its key leads are its entries' tails
+        oi = os.path.join(tmp, "ahi.v88")
+        wi_args = dict(keysecs=0.2, audio_fmt=AUD_PCM8, ahead=4)
+        global KLEADS_APART
+        KLEADS_APART = False
+        try:
+            encode_frames(apaths, oi, 30.0, awav, "herc", **wi_args)
+        finally:
+            KLEADS_APART = True
+        try:
+            verify_v88(oi)
+            ri = Reader(oi)
+            if ri.kleadat or ri.flags & F_KLEADS or ri.nkeys < 2 or \
+                    ri.key_lead(1) != r4.key_lead(1):
+                fails.append("an inline-lead file reads its leads wrong")
+            k1, off1, n1 = ri.keys[1][:3]
+            expect_fail("damaged inline key lead", oi, lambda d:
+                        d[:off1 + n1 - 1] + bytes([d[off1 + n1 - 1] ^ 0x5A])
+                        + d[off1 + n1:], "lead is not")
+        except V88Error as e:
+            fails.append("an inline-lead file: %s" % e)
+        o0 = os.path.join(tmp, "ah0.v88")
+        expect_fail("ahead byte with no flag", o0, lambda d: d[:H_AHEAD] +
+                    b"\x04" + d[H_AHEAD + 1:], "no AHEAD flag")
+        expect_fail("ahead one frame short", o4, lambda d: d[:H_AHEAD] +
+                    b"\x03" + d[H_AHEAD + 1:], "")
+        # WHICH KEYS THE TABLE KEEPS (keep_keys): a 640 x 480 VGA4 key of
+        # ~61.7 KB is past the player's one read (61,440). A LATER one is
+        # left out and the poster moves to its neighbour; the FIRST is kept
+        # however big, the file then seeking nowhere; and a first that
+        # cannot be stored at all - 4,000 bytes of lead past the entry's
+        # word - takes every key with it, rather than let the next one
+        # start the play and skip the frames before it. With the keys'
+        # leads APART (98.1.8.1), the default, a lead costs no key at all
+        gk = Geom(LAY_LIN80, 80, 480, bitplanes=True)
+        sk, sb = gk.surface(), gk.surface()
+        for y in range(186):
+            for pl in range(4):
+                for x in range(80):
+                    sk[pl * PLANE + gk.base[y] + x] = rnd.getrandbits(8)
+        kn = len(record(keyframe_ops(sk, gk), gk, limit=1 << 30))
+        for what, seq, A, cap, want, apart in (
+                ("a later key", (sb, sb, sk, sb, sb), 0, 61440,
+                 ([0, 4], [(2, kn)], 0), True),
+                ("a later key, no cap", (sb, sb, sk, sb, sb), 0, 65535,
+                 ([0, 2, 4], [], 1), True),
+                ("the first key", (sk, sb, sb), 0, 61440,
+                 ([0, 2], [], 1), True),
+                ("the first key and its lead inline", (sk, sb, sb), 4,
+                 61440, ([], [(0, kn + 4000), (2, 7 + 4000)], 0xFFFF),
+                 False),
+                ("the first key and its lead apart", (sk, sb, sb), 4,
+                 61440, ([0, 2], [], 1), True)):
+            w = Writer(gk, 25000, 1000, AUD_PCM8, 1000, PF_VGA4, ahead=A,
+                       keysecs=0.08, kcap=cap)
+            w.kleads = apart
+            for sf in seq:
+                w.frame([], sf, b"\x80" * 1000)
+            ok = os.path.join(tmp, "kd.v88")
+            try:
+                st = w.write(ok, 1 if len(w.keys) > 1 else 0)
+                rk = Reader(ok)
+                got = ([rk.keys[i][0] for i in range(rk.nkeys)],
+                       st["kdropped"], rk.poster)
+                if got != want:
+                    fails.append("keys kept, %s (%d bytes): %r, not %r"
+                                 % (what, kn, got, want))
+            except V88Error as e:
+                fails.append("keys kept, %s (%d bytes): %s" % (what, kn, e))
         # RESIDENT (98.1.7): two renditions and a sound block round-trip,
         # and a damaged block is refused
         ws = []
@@ -4183,9 +4751,10 @@ def selfcheck():
     if not fails:
         print("os88vid --selfcheck: ok - encode, import (cga, herc, lin80), "
               "decode and verify agree, ADPCM4 carries a tone and seeks "
-              "exactly, a seam joins its laps, a resident file's blocks "
+              "exactly, a seam joins its laps, sound ahead round-trips and seeks, "
+              "a resident file's blocks "
               "round-trip, CGA4, C160, C512 and TEXT round-trip, a live "
-              "file's blit runs cover its writes, and eighteen corruptions "
+              "file's blit runs cover its writes, and twenty-two corruptions "
               "were "
               "refused")
     return 1 if fails else 0
@@ -4276,6 +4845,12 @@ def main():
                        "lists against its own programs")
     s.add_argument("files", nargs="+")
     s.add_argument("--against", help="the XDV a V88 was imported from")
+    s = sub.add_parser("synthxdv",
+                       help="a synthetic XDC stream of synth_frames(), for "
+                       "a VIDBENCH.DAT made from nothing outside the tree "
+                       "(make vid486)")
+    s.add_argument("out")
+    s.add_argument("--repeat", type=int, default=3)
     s = sub.add_parser("benchdat")
     s.add_argument("out")
     s.add_argument("files", nargs="+")
@@ -4294,6 +4869,7 @@ def main():
         return {"stat": cmd_stat, "verify": cmd_verify, "import": cmd_import,
                 "encode": cmd_encode, "info": cmd_info, "decode": cmd_decode,
                 "benchdat": cmd_benchdat, "poster": cmd_poster,
+                "synthxdv": cmd_synthxdv,
                 "title": cmd_title, "speaker": cmd_speaker,
                 "spkwav": cmd_spkwav}[a.cmd](a) or 0
     except (XdvError, V88Error) as e:

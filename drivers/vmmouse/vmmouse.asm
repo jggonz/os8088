@@ -48,6 +48,29 @@
 ; there is no resident sniff that could answer the first question anyway.
 ; The SYSTEM.CFG bit is therefore both the request and the record of it, and
 ; the Drivers page is where it is turned off again.
+;
+; --- THE WHOLE IMAGE IS 386 CODE, AND SAYING SO IS WHAT MAKES IT SMALL --------
+; The header is assembled `cpu 8086` by OS88_OVERLAY; everything after it is
+; `cpu 386`. That is not a widening of SPEC.md 41.9 rule 2 but the same fact
+; read honestly: the kernel will not READ a sector of this file below CPU_386
+; (vmm_boot_x's compare, SPEC.md 9.11.2), so there is no 8088 path through any
+; byte here to protect. The first build kept 8086 encodings everywhere but one
+; 59-byte island and paid for it in 16 bytes of result buffer, a staging
+; routine that split every 32-bit argument into two words, a word-pair compare
+; at every read of a 32-bit answer, and a push/pop frame per call. With the
+; island the whole file, an answer is read out of the register it arrived in.
+; 521 bytes went to 357 (SPEC.md 9.11.5).
+;
+; **ONE RULE CARRIES OVER FROM THE ISLAND, AND IT IS THE ONLY 386 RULE HERE:
+; THE TOP HALVES ARE NOT OURS.** sch_switch saves 16-bit registers, so a task
+; preempted with live 32-bit state - a DOS program on a 386 (SPEC.md 96) -
+; gets back whatever top halves the tasks in between left behind. vmm_poll
+; runs from task_yield, so from EVERY task, and this image spends EAX, EBX, ECX
+; and EDX whole. vmm_atom therefore saves those four whole and restores them
+; whole, and nothing outside it may touch a 32-bit register: SI, DI and BP
+; are spent below as 16-bit registers ONLY, which leaves the top halves of
+; ESI, EDI and EBP as they were. A `mov esi`, a `push ebp` or a `shr ebx` added outside
+; vmm_atom is a DOS program losing half a register at a moment nobody chose.
 ; =============================================================================
 
 %include "os88drv.inc"
@@ -55,9 +78,14 @@
 
     OS88_OVERLAY 'VMware Mouse', VMM_ABI_VER, vmm_entry
 
+    cpu 386                     ; ...and every byte after the header (above)
+
 ; --- the protocol (SPEC.md 9.11.1) -------------------------------------------
 VMM_MAGIC   equ 0x564D5868      ; 'VMXh' - EAX in, and EBX back on success
 VMM_PORT    equ 0x5658          ; 'VX'   - the backdoor port, in DX
+VMM_DEAD    equ 0xFFFF0000      ; EAX at or above this = its high half is
+                                ; 0xFFFF: an undriven port, or a backdoor that
+                                ; disabled itself (status 0xFFFF????)
 
 VMM_GETVER  equ 10              ; commands, in ECX
 VMM_DATA    equ 39
@@ -68,10 +96,11 @@ VMM_READID  equ 0x45414552      ; EBX for VMM_COMMAND: READ_ID - queues the
                                 ; version word AND clears a disabled backdoor
 VMM_ABS     equ 0x53424152      ; ...REQUEST_ABSOLUTE
 
-VMM_S_LEFT  equ 0x20            ; buttons in the status word
-VMM_S_RIGHT equ 0x10
-                                ; the RELATIVE_PACKET bit is 0x00010000,
-                                ; tested in the high word as 0x0001
+                                ; the buttons are the status word's 0x20
+                                ; (left) and 0x10 (right), and its
+                                ; RELATIVE_PACKET bit is 0x00010000 - all
+                                ; three SHIFTED out by vmm_rbody rather than
+                                ; tested, so they are written there
 
 VMM_QMIN    equ 4               ; words queued before a packet can be read
 VMM_FLUSHMX equ 64              ; ...and the BOUND on the drain below. See
@@ -91,175 +120,30 @@ VMM_P2AUX   equ 0x20            ; status bit 5: the byte in the buffer is the
 ; vmm_entry - the dispatcher's landing site
 ; in:  AL = a DRVV_*; DS = CS = ours, ES = KERNEL_SEG
 ; out: per the verb
+;
+; DRVV_ATTACH runs in two halves, and the split is the point: the backdoor
+; half under vmm_atom (interrupts off, 32-bit registers banked), then the 8042
+; half with IF back as the caller had it - vmm_p2aux waits on the BIOS TICK,
+; which does not advance under cli, so the 8042 half inside the bracket would
+; be a hang on any host that drops an ack.
 ; =============================================================================
-; Each arm is `jne` over an explicit near `jmp`, and that is not a style
-; choice: the three bodies are 300-odd bytes below this, so a bare `je` is out
-; of the 8086's +/-127 range and NASM synthesises the pair itself - at a size
-; that changed between passes and failed the assembly outright
-; (label-redef-late). Written out, it is the same four bytes an arm and it
-; converges.
 vmm_entry:
-    cmp al, DRVV_ATTACH
-    jne .nota
-    jmp vmm_attach
-.nota:
-    cmp al, DRVV_DETACH
-    jne .notd
-    jmp vmm_detach
-.notd:
     cmp al, VMMV_READ
-    jne .no
-    jmp vmm_read
+    je  vmm_read
+    cmp al, DRVV_DETACH
+    je  vmm_detach
+    cmp ax, (VMM_ABI_VER << 8) | DRVV_ATTACH
+    jne .no                     ; a verb from a newer kernel than this image,
+                                ; refused rather than run as another one - OR
+                                ; ATTACH from a kernel of another vintage (AH),
+                                ; refused loudly at load rather than quietly
+                                ; at the first poll. One compare asks both
+    mov si, vmm_probe
+    call vmm_atom               ; GETVERSION, READ_ID, ABSOLUTE, drain
+    jnc vmm_p2both              ; ...and make v86 start delivering events.
+                                ; vmm_p2both returns CF = 0
 .no:
-    stc                         ; a verb from a newer kernel than this image -
-    ret                         ; refuse it rather than run another one
-
-; -----------------------------------------------------------------------------
-; vmm_bd - one backdoor call
-;
-; in:  CX = command, [vmm_ebx] = the EBX argument
-; out: [vmm_eax]/[vmm_ebx]/[vmm_ecx]/[vmm_edx] = the four result registers;
-;      every 8086 register preserved, and the 32-bit halves with them
-; clobbers: nothing (flags restored with IF by the popf)
-;
-; **THE cli IS THE WHOLE CORRECTNESS ARGUMENT, and it is xmem.asm's, taken
-; properly this time.** The first draft ran this window with IF as the caller
-; left it and cited xmem.asm as licensing that; xmem.asm does no such thing -
-; its islands sit inside pushf/cli...popf and its own header says that window
-; is what makes them safe. The hazard is not hypothetical here: this is called
-; from task_yield, so a tick between `mov eax, VMM_MAGIC` and `in eax, dx`
-; switches tasks, and sch_switch saves 16-bit registers only. XMEM.DRV's
-; movers are 32-bit and are exactly the other tenant of a machine with memory
-; above 1MB; SeaBIOS is 16-bit code compiled from C and spends EAX freely. A
-; clobbered top half means the magic is wrong, the host does not answer, and
-; the mouse stops - intermittently, which is the worst way for it to stop.
-;
-; The window is ~20 instructions with one `in`, so the interrupt latency it
-; adds is well inside what mou_p2rd already spends.
-; -----------------------------------------------------------------------------
-cpu 386                         ; ---- 386-only island, tier 2 only ----------
-vmm_bd:
-    pushf
-    cli
-    push eax
-    push ebx
-    push ecx
-    push edx
-    mov  eax, VMM_MAGIC
-    movzx ecx, cx
-    mov  ebx, [vmm_ebx]
-    mov  edx, VMM_PORT
-    in   eax, dx
-    mov  [vmm_eax], eax
-    mov  [vmm_ebx], ebx
-    mov  [vmm_ecx], ecx
-    mov  [vmm_edx], edx
-    pop  edx
-    pop  ecx
-    pop  ebx
-    pop  eax
-    popf
-    ret
-cpu 8086                        ; ---- island closed ------------------------
-
-; -----------------------------------------------------------------------------
-; vmm_cmd - stage a 32-bit EBX argument and make one backdoor call
-; in:  CX = command, DX:AX = the EBX argument (DX high)
-; out: as vmm_bd
-; clobbers: nothing (flags)
-;
-; Three call sites staged those two words by hand and it was six lines each
-; time; this is the same six lines once.
-; -----------------------------------------------------------------------------
-vmm_cmd:
-    mov [vmm_ebx], ax
-    mov [vmm_ebx+2], dx
-    jmp short vmm_bd
-
-; -----------------------------------------------------------------------------
-; vmm_flush - read the queue to empty, discarding, in <= 6-word chunks
-;
-; in:  none.  out: nothing (all registers preserved)
-;
-; The 4-word packet framing only holds if reads start from an empty queue.
-; READ_ID queues a LONE version word, and QEMU's vmmouse disables the backdoor
-; outright if a DATA read asks for more words than are queued - so a misframed
-; read that then underflows costs the mouse for the session. Draining after
-; every enable keeps the framing honest.
-;
-; **IT IS BOUNDED, and that is a fix rather than a flourish.** "The count
-; strictly fell, so this terminates" is true of a host that behaves; this runs
-; at ATTACH, inside the boot sequence, and a host whose STATUS count does not
-; fall after a DATA read would hang the machine before it ever reached a
-; desktop. VMM_FLUSHMX passes at 6 words each is 384 words, far more than any
-; queue this protocol defines, so the bound cannot be hit by a working host.
-; -----------------------------------------------------------------------------
-vmm_flush:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov  bx, VMM_FLUSHMX        ; BX, which nothing below spends: AX and DX are
-                                ; vmm_cmd's argument and CX is its command
-.f:
-    xor  ax, ax
-    xor  dx, dx
-    mov  cx, VMM_STATUS
-    call vmm_cmd
-    mov  ax, [vmm_eax+2]
-    cmp  ax, 0xFFFF             ; disabled - the caller re-enables, nothing
-    je   .fout                  ; here to drain
-    mov  ax, [vmm_eax]          ; words queued
-    or   ax, ax
-    jz   .fout
-    cmp  ax, 6
-    jbe  .rd
-    mov  ax, 6                  ; at most 6 a call (QEMU's cap)
-.rd:
-    xor  dx, dx
-    mov  cx, VMM_DATA
-    call vmm_cmd                ; ...into vmm_eax..edx, discarded
-    dec  bx
-    jnz  .f
-.fout:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; vmm_enable - READ_ID, go ABSOLUTE, then drain (SPEC.md 9.11.1)
-;
-; in:  none.  out: nothing (all registers preserved)
-;
-; READ_ID (0x45414552) is the one command that clears QEMU's disabled state
-; (status = 0xFFFF) - REQUEST_ABSOLUTE alone is ignored while disabled - and it
-; queues a version word as a side effect. So enable is always: READ_ID,
-; REQUEST_ABSOLUTE, then vmm_flush to throw away that word and anything the
-; re-added handler queued behind it. The version is NOT read back and checked:
-; that check is a DATA read whose size can only be guessed, and guessing wrong
-; is what desyncs the framing and sticks the pointer. The GETVERSION probe in
-; vmm_attach is the gate; this path only has to not make things worse.
-; -----------------------------------------------------------------------------
-vmm_enable:
-    push ax
-    push cx
-    push dx
-    mov  ax, VMM_READID & 0xFFFF
-    mov  dx, VMM_READID >> 16
-    mov  cx, VMM_COMMAND
-    call vmm_cmd                ; READ_ID: clears 0xFFFF, re-adds the handler
-
-    mov  ax, VMM_ABS & 0xFFFF
-    mov  dx, VMM_ABS >> 16
-    mov  cx, VMM_COMMAND
-    call vmm_cmd                ; ABSOLUTE
-
-    call vmm_flush              ; ...and start the framing from empty
-    pop dx
-    pop cx
-    pop ax
+    stc
     ret
 
 ; =============================================================================
@@ -290,106 +174,39 @@ vmm_enable:
 ; talk, filter every read on status bit 5, and put both back on every exit
 ; INCLUDING the timeout ones. Best-effort about the DEVICE - a controller that
 ; stalls was already delivering - but never about the keyboard.
+;
+; All of it is 16-bit code, and must stay so: it runs outside vmm_atom, with
+; IF as the caller had it, where no top half may be touched.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; vmm_p2wait - wait for the input buffer to clear (status bit 1)
-; out: CF = 1 = it never did.  clobbers: flags
-; -----------------------------------------------------------------------------
-vmm_p2wait:
-    push ax
-    push cx
-    mov  cx, 0xFFFF
-.w:
-    in   al, VMM_P2CMD
-    test al, 0x02
-    jz   .ok
-    loop .w
-    stc
-    jmp short .out
-.ok:
-    clc
-.out:
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; vmm_p2cw / vmm_p2dw - write a controller command / a data byte
-; in:  AL = the byte.  out: CF = 1 = the buffer never cleared
-; -----------------------------------------------------------------------------
-vmm_p2cw:
-    call vmm_p2wait
-    jc   .out
-    out  VMM_P2CMD, al
-    clc
-.out:
-    ret
-
-vmm_p2dw:
-    call vmm_p2wait
-    jc   .out
-    out  VMM_P2DAT, al
-    clc
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; vmm_p2aux - read one byte that is the AUXILIARY device's
+; vmm_p2both - 0xF4 then 0xF5, each in its own bracket
+; vmm_detach - DRVV_DETACH: 0xF5 alone. Cannot fail (SPEC.md 51.2)
+; vmm_p2wake - one device command, bracketed
 ;
-; out: CF = 0 and AL = the byte; CF = 1 = it never came
-; clobbers: AX (flags)
+; in:       AL = the device command (vmm_p2wake only)
+; out:      CF = 0
+; clobbers: AX, BX, CX, ES (flags). ES is the kernel's to restore, and it
+;           does: both doors into this image, drv_stamped and vmm_dsp, pop it
 ;
-; **BIT 5, AND THAT IS THE POINT.** mou_p2rd tests OBF alone, which is correct
-; inside mou_p2_init's 0xAD window where the keyboard cannot speak. Here the
-; window is ours but the rule is worth keeping locally rather than inherited:
-; a byte without bit 5 is the keyboard's and is LEFT IN THE BUFFER, not
-; consumed - taking it is how a keystroke goes missing.
+; ONE command per bracket. Doing 0xF4 and 0xF5 in one bracket would leave the
+; aux stream enabled for the width of two acks with int 74h unhooked, and a
+; 3-byte packet queued in that window is three garbage scancodes and, if the
+; buffer fills, a starved keyboard.
 ;
-; The wait is a tick count and not a spin count, so a host that never answers
-; costs VMM_P2TMO ticks and not a wall-clock guess.
+; DETACH IS THE SECOND HALF OF vmm_p2both, literally. The backdoor itself
+; needs nothing undone - no vector, no line, no port kept - but vmm_p2both's
+; aux enable does, and for a reason beyond tidiness: a stream left enabled
+; across an int 19h warm boot is packets arriving at a kernel that has not
+; hooked int 74h, which the next BIOS reads as scancodes. So detach is "send
+; 0xF5", which is exactly the instruction vmm_p2both falls into.
 ; -----------------------------------------------------------------------------
-vmm_p2aux:
-    push bx
-    push cx
-    push es
-    mov  bx, 0x40
-    mov  es, bx
-    mov  bx, [es:0x6C]          ; the BIOS tick, low word - the deadline base
-.w:
-    in   al, VMM_P2CMD
-    test al, 0x01               ; OBF: is there anything at all?
-    jz   .tick
-    test al, VMM_P2AUX          ; ...and is it the AUX device's?
-    jz   .tick                  ; no - the KEYBOARD's. Leave it for int 09h
-    in   al, VMM_P2DAT
-    clc
-    jmp short .out
-.tick:
-    mov  cx, [es:0x6C]
-    sub  cx, bx
-    cmp  cx, VMM_P2TMO
-    jb   .w
-    stc
-.out:
-    pop es
-    pop cx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; vmm_p2wake - tell the emulated 8042 the guest wants the mouse
-; in:  AL = the device command to send (0xF4 enable / 0xF5 disable)
-; out: nothing (all registers preserved)
-;
-; ONE command, bracketed. The caller sends 0xF4 then 0xF5; doing them in one
-; bracket would leave the aux stream enabled for the width of two acks with
-; int 74h unhooked, and a 3-byte packet queued in that window is three garbage
-; scancodes and, if the buffer fills, a starved keyboard.
-; -----------------------------------------------------------------------------
+vmm_p2both:
+    mov  al, 0xF4               ; ENABLE reporting -> the host flips its own
+    call vmm_p2wake             ; mouse handler on
+vmm_detach:
+    mov  al, 0xF5               ; ...and STOP the stream: no packet, no IRQ12
 vmm_p2wake:
-    push ax
-    push bx
     mov  bl, al                 ; the device command, banked across the setup
 
     in   al, 0x21               ; --- IRQ1 masked FIRST (SPEC.md 9.9.1) ------
@@ -414,85 +231,6 @@ vmm_p2wake:
     call vmm_p2cw
     pop  ax
     out  0x21, al
-    pop  bx
-    pop  ax
-    ret
-
-; -----------------------------------------------------------------------------
-; vmm_p2both - 0xF4 then 0xF5, each in its own bracket
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-vmm_p2both:
-    push ax
-    mov  al, 0xF4               ; ENABLE reporting -> the host flips its own
-    call vmm_p2wake             ; mouse handler on
-    mov  al, 0xF5               ; ...and STOP the stream: no packet, no IRQ12
-    call vmm_p2wake
-    pop ax
-    ret
-
-; =============================================================================
-; The verbs
-; =============================================================================
-
-; -----------------------------------------------------------------------------
-; vmm_attach - DRVV_ATTACH: probe the backdoor and arm ABSOLUTE mode
-;
-; in:       AH = VMM_ABI_VER as the kernel understands it
-; out:      CF = 0 - the backdoor answered and absolute mode is armed;
-;           CF = 1 - no backdoor, AND NOTHING WAS HOOKED
-; clobbers: AX, BX, CX, DX, SI, DI (flags)
-;
-; There is nothing to detect but the backdoor itself. The GETVERSION probe
-; reads an undriven port on bare metal - 0x5658 was chosen because no hardware
-; decodes it - and EBX comes back unchanged. No v86 detection, no hypervisor
-; CPUID bit, and no [cpu_tier] test either: THE KERNEL DID THAT BEFORE IT READ
-; THIS FILE (SPEC.md 9.11.2). A machine that cannot run 386 code never gets as
-; far as loading the image, which is the whole reason the image exists.
-; -----------------------------------------------------------------------------
-vmm_attach:
-    cmp ah, VMM_ABI_VER
-    jne .no                     ; a kernel of another vintage: refuse loudly at
-                                ; load rather than quietly at the first poll
-
-    xor ax, ax                  ; --- GETVERSION ---
-    xor dx, dx
-    mov cx, VMM_GETVER
-    call vmm_cmd
-    mov ax, [vmm_ebx]
-    cmp ax, VMM_MAGIC & 0xFFFF
-    jne .no
-    mov ax, [vmm_ebx+2]
-    cmp ax, VMM_MAGIC >> 16
-    jne .no
-    mov ax, [vmm_eax+2]         ; EAX != 0xFFFFFFFF: the high half alone tells
-    cmp ax, 0xFFFF              ; an undriven port
-    je  .no
-
-    call vmm_enable             ; READ_ID / ABSOLUTE / drain
-    call vmm_p2both             ; ...and make v86 start delivering events
-    clc
-    ret
-.no:
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; vmm_detach - DRVV_DETACH: put the 8042 back. Cannot fail (SPEC.md 51.2)
-; in:  none.  out: CF = 0
-; clobbers: AX, BX, CX (flags)
-;
-; The backdoor itself needs nothing: no vector, no line, no port kept. What
-; DOES need undoing is vmm_p2both's aux enable, and it needs undoing for a
-; reason beyond tidiness - a stream left enabled across an int 19h warm boot
-; is packets arriving at a kernel that has not hooked int 74h, which the next
-; BIOS reads as scancodes.
-; -----------------------------------------------------------------------------
-vmm_detach:
-    push ax
-    mov  al, 0xF5
-    call vmm_p2wake
-    pop  ax
     clc
     ret
 
@@ -503,7 +241,7 @@ vmm_detach:
 ; out:      CF = 0 and AX = x, BX = y, CL = the buttons in mouse_btn's own two
 ;           bits, CH = 1 if this is a RELATIVE delta rather than a position;
 ;           CF = 1 = nothing queued, and the kernel stops asking this pass
-; clobbers: AX, BX, CX, DX, SI, DI (flags)
+; clobbers: DX, SI, DI, BP (flags) - and no top half: all four are kept
 ;
 ; **RAW, and the scaling is deliberately not here.** The report is 0..0xFFFF
 ; on both axes; turning that into a pixel needs [vid_w]/[vid_h], the live
@@ -519,44 +257,93 @@ vmm_detach:
 ; inside one poll. The kernel bounds how many times it asks.
 ; -----------------------------------------------------------------------------
 vmm_read:
-    xor ax, ax                  ; --- how much is queued? ---
-    xor dx, dx
-    mov cx, VMM_STATUS
-    call vmm_cmd
-    mov ax, [vmm_eax+2]         ; high half of the status word
-    cmp ax, 0xFFFF              ; 0xFFFF???? -> the backdoor disabled itself
-    je  .redo                   ; (a DATA underflow, or a v86 queue overflow)
-    mov ax, [vmm_eax]           ; low half = WORDS queued
-    cmp ax, VMM_QMIN            ; a whole 4-word packet?
-    jb  .none
+    mov si, vmm_rbody           ; ...and into the bracket
+
+; -----------------------------------------------------------------------------
+; vmm_atom - run the backdoor half of a verb: IF = 0, 32-bit registers banked
+;
+; in:  SI = the body: a near proc out CF, and SI/DI/BP if it answers in them
+; out: CF as the body left it; AX/BX/CX = the body's SI/DI/BP; IF as the
+;      caller had it
+; clobbers: DX, SI, DI, BP (flags) - and NO top half: EAX..EDX go back whole
+;
+; **THE BODY ANSWERS IN SI, DI AND BP**, the three registers the protocol does
+; not spend, so the pops can restore EAX..EDX whole and the answer is moved
+; into their LOW words after them - which is how VMMV_READ's AX/BX/CX reach
+; the kernel without a top half going with them.
+;
+; **THE cli IS THE WHOLE CORRECTNESS ARGUMENT, and it is xmem.asm's.** A tick
+; between `mov eax, VMM_MAGIC` and `in eax, dx` switches tasks, and sch_switch
+; saves 16-bit registers only; XMEM.DRV's movers are 32-bit and are exactly
+; the other tenant of a machine with memory above 1MB, and SeaBIOS is 16-bit
+; code compiled from C that spends EAX freely. A clobbered top half means the
+; magic is wrong, the host does not answer, and the mouse stops -
+; intermittently, which is the worst way for it to stop. The first build held
+; the cli across each CALL and copied the four answers to memory before
+; letting go; this holds it across the VERB, so an answer is read straight out
+; of the register it arrived in and no top half is exposed between two calls.
+; On the path a poll takes that is one STATUS and one DATA - two `in`s and
+; under forty instructions - with a re-arm or a drain only after the host has
+; misbehaved; the interrupt latency is well inside what mou_p2rd spends.
+;
+; **THE VERDICT CROSSES THE popf IN DX.** popf restores CF along with IF, so
+; the body's CF is parked as DX = 0 / 0xFFFF (`sbb`) and turned back into CF
+; after it (`neg`). DX's low word is the caller's to lose (the kernel banks
+; it), and BP likewise: both doors into this image hand it the entry in BP and
+; expect it spent (vmm_dsp's header, drv_stamped).
+; -----------------------------------------------------------------------------
+vmm_atom:
+    pushf
+    cli
+    push eax                    ; the four the protocol spends, WHOLE - the
+    push ebx                    ; top halves are some other task's (see the
+    push ecx                    ; head of the file)
+    push edx
+    call si
+    pop  edx                    ; (pop, xchg and mov all leave CF alone)
+    pop  ecx
+    pop  ebx
+    pop  eax
+    xchg ax, si                 ; ...and the answer into the low words
+    mov  bx, di
+    mov  cx, bp
+    sbb  dx, dx                 ; DX = -CF, across the popf
+    popf
+    neg  dx                     ; CF = (DX != 0) - the body's verdict again
+    ret
+
+; -----------------------------------------------------------------------------
+; vmm_rbody - VMMV_READ's body, under vmm_atom
+; out: CF as vmm_read, and SI = x, DI = y, BP = vmm_read's CX
+; clobbers: EAX..EDX (vmm_atom banks them)
+; -----------------------------------------------------------------------------
+vmm_rbody:
+    call vmm_status             ; --- how much is queued? ---
+    jae  .redo                  ; 0xFFFF???? -> the backdoor disabled itself
+                                ; (a DATA underflow, or a v86 queue overflow)
+    cmp  ax, VMM_QMIN           ; AX = WORDS queued: a whole 4-word packet?
+    jb   .ret                   ; no - and CF = 1 is already the answer
     test al, 3                  ; ...and 4-aligned. vmm_enable drains to empty
-    jnz .resync                 ; so this never fails - but a stray word would
+    jnz  .resync                ; so this never fails - but a stray word would
                                 ; misframe EVERY packet behind it, so a
                                 ; non-multiple of 4 means throw the lot away
 
-    mov ax, 4                   ; --- the packet ---
-    xor dx, dx
-    mov cx, VMM_DATA
-    call vmm_cmd
-    ; [vmm_eax] status, [vmm_ebx] x, [vmm_ecx] y, [vmm_edx] z (wheel: dropped)
-
-    xor cx, cx                  ; buttons into mouse_btn's own two bits
-    test byte [vmm_eax], VMM_S_LEFT
-    jz  .nol
-    or  cl, 0x01
-.nol:
-    test byte [vmm_eax], VMM_S_RIGHT
-    jz  .nor
-    or  cl, 0x02
-.nor:
-    mov ax, [vmm_ebx]           ; x, raw
-    mov bx, [vmm_ecx]           ; y, raw
-    test byte [vmm_eax+2], 0x01 ; RELATIVE_PACKET (0x00010000) in the high
-    jz  .out                    ; word: v86 sends these while the host pointer
-    mov ch, 1                   ; is LOCKED (the user hit "capture pointer").
-                                ; Not needed here, but it works
-.out:
-    clc
+    mov  al, 4                  ; --- the packet ---
+    call vmm_data               ; EAX status, EBX x, ECX y, EDX z (the wheel:
+                                ; dropped)
+    mov  si, bx                 ; x, raw
+    mov  di, cx                 ; y, raw
+    xor  cx, cx                 ; the buttons into mouse_btn's own two bits,
+    shr  al, 5                  ; which run the OTHER way round from the status
+    rcl  cl, 1                  ; byte's: CF = 0x10 (right) in first...
+    shr  al, 1
+    rcl  cl, 1                  ; ...then 0x20 (left) under it: CL = L | R<<1
+    shr  eax, 17                ; CF = RELATIVE_PACKET (0x00010000): v86 sends
+    adc  ch, 0                  ; these while the host pointer is LOCKED (the
+                                ; user hit "capture pointer"). Not needed
+                                ; here, but it works. CH was 0, so the adc
+                                ; carries nothing out: CF = 0, a report
+    mov  bp, cx
     ret
 
 .redo:
@@ -565,28 +352,202 @@ vmm_read:
                                 ; confirms it took. Under v86 the disable is a
                                 ; transient queue overflow; under QEMU it is a
                                 ; DATA underflow vmm_flush now prevents
-    jmp short .none
+    jmp  short .none
 .resync:
     call vmm_flush              ; misframed: drop everything and start clean on
                                 ; the next 4-word packet
 .none:
     stc
+.ret:
     ret
 
-; =============================================================================
-; State. IN THE IMAGE and written `dd 0`, because A DRIVER HAS NO BSS
-; (drivers/os88drv.inc): its zeroed data is bytes on the floppy, which buys a
-; load path with exactly one claim in it, made at the size the directory entry
-; already reported.
+; -----------------------------------------------------------------------------
+; vmm_probe - DRVV_ATTACH's backdoor half, under vmm_atom
+; out: CF = 0 - the backdoor answered and absolute mode is armed;
+;      CF = 1 - no backdoor, AND NOTHING WAS HOOKED
+; clobbers: EAX..EDX (vmm_atom banks them), SI
 ;
-; Sixteen bytes, and they are the only writable storage this image has. Both
-; halves of the protocol reach them: the 386 island writes all four as dwords
-; and the 8086 half reads them back as word pairs, which is what makes the
-; island 59 bytes rather than the whole driver.
-; =============================================================================
-vmm_eax     dd 0                ; vmm_bd's four result registers. vmm_ebx is
-vmm_ebx     dd 0                ; also the EBX *input* - the command's argument
-vmm_ecx     dd 0                ; - which is why vmm_cmd stages it there and
-vmm_edx     dd 0                ; every caller reads it back afterwards
+; There is nothing to detect but the backdoor itself. The GETVERSION probe
+; reads an undriven port on bare metal - 0x5658 was chosen because no hardware
+; decodes it - so EAX comes back all ones and EBX unchanged. No v86 detection,
+; no hypervisor CPUID bit, and no [cpu_tier] test either: THE KERNEL DID THAT
+; BEFORE IT READ THIS FILE (SPEC.md 9.11.2). A machine that cannot run 386 code
+; never gets as far as loading the image, which is the whole reason the image
+; exists.
+; -----------------------------------------------------------------------------
+vmm_probe:
+    mov  cl, VMM_GETVER
+    call vmm_bdz
+    jae  vmm_rbody.none         ; EAX's high half 0xFFFF: an undriven port
+    cmp  ebx, VMM_MAGIC
+    jne  vmm_rbody.none         ; EBX not turned into the magic: no host
+                                ; ...and on into READ_ID / ABSOLUTE / drain,
+                                ; which returns CF = 0 whatever the drain met:
+                                ; the probe is the gate, not the drain
+
+; -----------------------------------------------------------------------------
+; vmm_enable - READ_ID, go ABSOLUTE, then drain (SPEC.md 9.11.1)
+; vmm_flush  - read the queue to empty, discarding, in <= 6-word chunks
+;
+; in:  none, under vmm_atom.  out: CF = 0.  clobbers: EAX..EDX, SI
+;
+; READ_ID (0x45414552) is the one command that clears QEMU's disabled state
+; (status = 0xFFFF) - REQUEST_ABSOLUTE alone is ignored while disabled - and it
+; queues a version word as a side effect. So enable is always: READ_ID,
+; REQUEST_ABSOLUTE, then vmm_flush to throw away that word and anything the
+; re-added handler queued behind it. The version is NOT read back and checked:
+; that check is a DATA read whose size can only be guessed, and guessing wrong
+; is what desyncs the framing and sticks the pointer. The GETVERSION probe in
+; vmm_probe is the gate; this path only has to not make things worse.
+;
+; The 4-word packet framing only holds if reads start from an empty queue.
+; READ_ID queues a LONE version word, and QEMU's vmmouse disables the backdoor
+; outright if a DATA read asks for more words than are queued - so a misframed
+; read that then underflows costs the mouse for the session. Draining after
+; every enable keeps the framing honest.
+;
+; **THE DRAIN IS BOUNDED, and that is a fix rather than a flourish.** "The
+; count strictly fell, so this terminates" is true of a host that behaves; this
+; runs at ATTACH, inside the boot sequence, and a host whose STATUS count does
+; not fall after a DATA read would hang the machine before it ever reached a
+; desktop. VMM_FLUSHMX passes at 6 words each is 384 words, far more than any
+; queue this protocol defines, so the bound cannot be hit by a working host.
+; -----------------------------------------------------------------------------
+vmm_enable:
+    mov  ebx, VMM_READID
+    call vmm_cmd                ; READ_ID: clears 0xFFFF, re-adds the handler
+    mov  ebx, VMM_ABS
+    call vmm_cmd                ; ABSOLUTE, and on into the drain: the framing
+                                ; starts from empty
+vmm_flush:
+    mov  si, VMM_FLUSHMX        ; SI as a 16-bit register only (see the head)
+.f:
+    call vmm_status
+    jae  .out                   ; disabled - the caller re-enables, nothing
+                                ; here to drain
+    or   ax, ax                 ; words queued
+    jz   .out                   ; (CF = 0 on both exits above, from the cmp
+                                ; and the or)
+    cmp  ax, 6
+    jbe  .rd
+    mov  al, 6                  ; at most 6 a call (QEMU's cap) - AL alone,
+.rd:                            ; which is all vmm_data reads
+    call vmm_data               ; ...into EAX..EDX, discarded
+    dec  si
+    jnz  .f
+    clc                         ; the bound ran out: CF = 0 as on the others
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; The backdoor call, and its three ways in. Each is ONE `in eax, dx` with
+; EAX = the magic, ECX = the command and EBX its argument; the host answers in
+; all four. Under vmm_atom only: the callers read the answer out of the
+; registers, which is safe exactly because the bracket is still holding IF.
+;
+;   vmm_data    in: AL = words to read     ...EBX = AL,  ECX = VMM_DATA
+;   vmm_cmd     in: EBX = the argument     ...ECX = VMM_COMMAND
+;   vmm_status  in: none                   ...EBX = 0,   ECX = VMM_STATUS
+;   vmm_bdz     in: CL = the command       ...EBX = 0
+;   vmm_bd      in: CL = the command, EBX = its argument
+;
+; out (all): EAX..EDX = the host's four result registers, and CF = 0 when
+;            EAX's high half is 0xFFFF (`jae` = dead) - so the two callers that
+;            have to ask that, the probe and STATUS, ask it for nothing
+;
+; The command goes in as a BYTE and out as all of ECX (`movzx`): every command
+; this protocol has is under 256, and the host is handed ECX with its top
+; three bytes zero, as it always was.
+; -----------------------------------------------------------------------------
+vmm_data:
+    movzx ebx, al
+    mov  cl, VMM_DATA
+    jmp  short vmm_bd
+vmm_cmd:
+    mov  cl, VMM_COMMAND
+    jmp  short vmm_bd
+vmm_status:
+    mov  cl, VMM_STATUS
+vmm_bdz:
+    xor  ebx, ebx
+vmm_bd:
+    mov  eax, VMM_MAGIC
+    movzx ecx, cl
+    mov  edx, VMM_PORT
+    in   eax, dx
+    cmp  eax, VMM_DEAD
+    ret
+
+; -----------------------------------------------------------------------------
+; vmm_p2cw / vmm_p2dw - write a controller command / a data byte
+; in:  AL = the byte.  out: CF = 1 = the buffer never cleared
+; clobbers: CX (flags)
+; -----------------------------------------------------------------------------
+vmm_p2cw:
+    call vmm_p2wait
+    jc   .out
+    out  VMM_P2CMD, al          ; CF = 0 from vmm_p2wait, and `out` keeps it
+.out:
+    ret
+
+vmm_p2dw:
+    call vmm_p2wait
+    jc   vmm_p2cw.out
+    out  VMM_P2DAT, al
+    ret
+
+; -----------------------------------------------------------------------------
+; vmm_p2wait - wait for the input buffer to clear (status bit 1)
+; out: CF = 1 = it never did.  clobbers: CX (flags)
+;
+; 65,535 polls, as before. `test` clears CF and `loopnz` leaves the flags
+; alone, so the exit's ZF is the last poll's answer: set = clear, CF already 0.
+; -----------------------------------------------------------------------------
+vmm_p2wait:
+    push ax
+    mov  cx, 0xFFFF
+.w:
+    in   al, VMM_P2CMD
+    test al, 0x02
+    loopnz .w
+    pop  ax                     ; (pop keeps the flags)
+    jz   .ok
+    stc
+.ok:
+    ret
+
+; -----------------------------------------------------------------------------
+; vmm_p2aux - read and discard one byte that is the AUXILIARY device's
+;
+; out: nothing - the one caller takes the ack only to get it OUT of the
+;      buffer, and has no use for whether it came
+; clobbers: AX, BX, CX, ES (flags)
+;
+; **BIT 5, AND THAT IS THE POINT.** mou_p2rd tests OBF alone, which is correct
+; inside mou_p2_init's 0xAD window where the keyboard cannot speak. Here the
+; window is ours but the rule is worth keeping locally rather than inherited:
+; a byte without bit 5 is the keyboard's and is LEFT IN THE BUFFER, not
+; consumed - taking it is how a keystroke goes missing.
+;
+; The wait is a tick count and not a spin count, so a host that never answers
+; costs VMM_P2TMO ticks and not a wall-clock guess.
+; -----------------------------------------------------------------------------
+vmm_p2aux:
+    push 0x40
+    pop  es
+    mov  bx, [es:0x6C]          ; the BIOS tick, low word - the deadline base
+.w:
+    in   al, VMM_P2CMD
+    and  al, 0x01 | VMM_P2AUX   ; OBF, and is the byte the AUX device's? One
+    cmp  al, 0x01 | VMM_P2AUX   ; without bit 5 is the KEYBOARD's: leave it
+    jne  .tick                  ; for int 09h
+    in   al, VMM_P2DAT
+    ret
+.tick:
+    mov  cx, [es:0x6C]
+    sub  cx, bx
+    cmp  cx, VMM_P2TMO
+    jb   .w
+    ret
 
     OS88_DRV_END

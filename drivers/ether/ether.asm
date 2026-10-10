@@ -152,12 +152,13 @@ eth_attach:
     jc  .try
 .found:
     call sk_claim               ; THE RINGS, before the card can deliver into
-    jc  .noring                 ; them (SPEC.md 72.13). A card with no buffers
+    jc  .none                   ; them (SPEC.md 72.13). A card with no buffers
     call ne_init                ; cannot serve a socket, so this is the one
-    mov byte [eth_up], 1        ; memory failure that refuses the attach
-    mov di, eth_ip              ; a fresh attach starts with no address: a
-    mov cx, 16                  ; second one must not inherit the first's
-    call mem_zero
+    mov byte [eth_up], 1        ; memory failure that refuses the attach.
+                                ; NO ADDRESS IS CLEARED HERE: eth_ip..eth_dns
+                                ; are zero because the image was loaded a
+                                ; moment ago, and an attach is the first verb
+                                ; any image gets (os88drv.inc, OS88_STATE)
 %ifdef ETH_IP
     mov si, eth_static          ; ...unless one was baked in (SPEC.md 72.5)
     mov di, eth_ip
@@ -173,18 +174,13 @@ eth_attach:
     pop ax
     clc
     ret
-.noring:
-    mov word [eth_base], 0      ; the card is real and the memory is not: the
-    mov byte [eth_up], 0        ; Drivers page reports a refusal either way,
-    pop di                      ; and a stack with no window is not a stack
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-.none:
-    mov word [eth_base], 0
-    mov byte [eth_up], 0
+.none:                          ; ...and the card being real with the memory
+                                ; not is the same refusal: the Drivers page
+                                ; reports one either way, and a stack with no
+                                ; window is not a stack. Nothing is put back:
+                                ; a refused attach is handed straight back to
+                                ; the heap, so [eth_base] and [eth_up] are
+                                ; never read again
     pop di
     pop cx
     pop bx
@@ -246,22 +242,27 @@ eth_dhcp_wait:
     call OSAPI_GET_TICKS
     add ax, DHCP_WAIT
     mov [eth_dl], ax
-.begin:
-    call eth_claim              ; the DISCOVER is a frame like any other, so it
-    jnc .go                     ; goes out under the claim too - and a worker
-    call OSAPI_GET_TICKS        ; that holds it is milliseconds away, with the
-    sub ax, [eth_dl]            ; same deadline bounding even that
-    js  .begin
-    mov byte [dhcp_st], DH_FAIL
-    jmp short .done
-.go:
-    call dhcp_begin
-    mov byte [eth_busy], 0
+    mov byte [dhcp_st], DH_IDLE ; NOT ASKED YET: the first claim asks, and
+                                ; every one after it pumps. IDLE cannot come
+                                ; back once asked - a NAK is IDLE and a fresh
+                                ; DISCOVER inside the one pump
 .spin:
     call eth_claim              ; ONE PUMP AT A TIME and never held across the
     jc  .look                   ; spin: this is the UI task sitting here for up
-    call eth_pump               ; to DHCP_WAIT ticks, and a package's worker
-    mov byte [eth_busy], 0      ; would get NETE_BUSY for every one of them
+                                ; to DHCP_WAIT ticks, and a package's worker
+                                ; would get NETE_BUSY for every one of them.
+                                ; The DISCOVER is a frame like any other, so
+                                ; it goes out under the claim too - and a
+                                ; worker that holds it is milliseconds away,
+                                ; with the same deadline bounding even that
+    cmp byte [dhcp_st], DH_IDLE
+    jne .pump
+    call dhcp_begin
+    jmp short .rel
+.pump:
+    call eth_pump
+.rel:
+    mov byte [eth_busy], 0
 .look:
     cmp byte [dhcp_st], DH_BOUND
     je  .done
@@ -280,12 +281,7 @@ eth_dhcp_wait:
 ; DRVV_DETACH - cannot fail (SPEC.md 51.6 rule 1)
 ; -----------------------------------------------------------------------------
 eth_detach:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call os88_ent               ; push ax..di, and bp: out by ep_bp
     call wz_withdraw            ; **THE DESKTOP ICON FIRST** (SPEC.md 26.7):
                                 ; its paint verb lives in the image the kernel
                                 ; is about to free, and the zone is redrawn
@@ -310,14 +306,8 @@ eth_detach:
     mov byte [eth_busy], 0      ; ...and the flag does not outlive the driver:
                                 ; a claim left standing would refuse every
                                 ; verb of the next attach
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp ep_bp
 
 ; -----------------------------------------------------------------------------
 ; eth_dropall - every connection goes, and the peers are told
@@ -347,11 +337,7 @@ eth_dropall:
     mov byte [bx+SKO_ST], NSK_FREE
     inc dl
     loop .l
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_dx
 
 ; =============================================================================
 ; THE PACKAGE DOOR - the socket verbs (netpkg.inc)
@@ -557,10 +543,27 @@ eth_v_state:
 ; package must keep its header and icon block at fixed image offsets (SPEC.md
 ; 20.2) and a driver has neither, while ethcfg.inc's four line blocks are sized
 ; by OS88LINE_SZ and a `times` needs its constant already defined.
+%define OS88UI_ARM              ; os88ui_arm/fire/armed: the press/release
+%define OS88UI_NOGEST           ; ...and the page and the Setup window both
+                                ; drive their own buttons through those
+                                ; three, so the record-based gesture half is
+                                ; ~226 bytes nothing here calls (SPEC.md
+                                ; 20.5.1.3.4, hddtool.asm's shape)
+%define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
+%define OS88UI_NOGCHECK       ; radios only: no check picture (SPEC.md 13.15.3)
 %include "os88ui.inc"           ; the standard control (SPEC.md 20.5.1)...
 %include "os88line.inc"         ; ...and the one-line field the Setup window is
 %include "etherui.inc"
 %include "ethcfg.inc"           ; ...and the Setup window behind it (72.7)
+
+; THE SHARED PROLOGUE (drivers/os88drv.inc): `call os88_ent` is the seven
+; pushes ax..bp, so a routine that opens with it leaves through ep_bp exactly
+; as it did - inet.inc's ladder, which is the same stack shape. HERE, and not
+; beside ep_bp, because inet.inc is shared with the DOS end of the cable
+; (drivers/net/os88net.asm), which does not include os88drv.inc - and for the
+; same reason no routine in inet/tcp/dns.inc calls it. Its callers are the
+; Control Panel page and the Setup window: cold, ~100 cycles a call.
+    OS88_ENT
 
 %include "ethstate.inc"         ; ...and the state it all runs on
     OS88_DRV_END

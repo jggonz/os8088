@@ -164,6 +164,7 @@
 ;
 ; os88line.inc after os88ui.inc: it calls into that file, and its header says
 ; so. apps/browser/browser.asm is the worked example of this exact pair.
+%define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
 %include "os88ui.inc"
 %include "os88line.inc"
 

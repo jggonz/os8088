@@ -45,10 +45,10 @@ THE CHECKS, every one of them on bytes the writer did not produce:
      byte - the round trip through the user's own path, reading the volume
      Load mounted through the kernel's file layer
 
-THE EXTENDED-MEMORY STORE IS NOT EXERCISED, for SPEC.md 62.9.14's reason:
-every MartyPC machine is an 8088 and `OSAPI_XMEM_CAPS` answers 0, so the
-Store radio is greyed and this is the conventional 32KB-chunk path. The 4KB
-bounce chunk has no gate anywhere in this container.
+THE EXTENDED-MEMORY STORE IS NOT EXERCISED HERE: every MartyPC machine is an
+8088 and `OSAPI_XMEM_CAPS` answers 0, so the Store radio is greyed and this is
+the conventional 32KB-chunk path. tests/rdxms.py is that store's gate, on
+QEMU's 386, and imports this file's parser and payload so the two agree.
 
 RED CONTROL (docs/WRITING-TESTS.md 1), each a RAMDISK.DRV built from a
 private copy of drivers/ and swapped onto a copy of the system disk with
@@ -101,6 +101,9 @@ R_PRESA = (2, 72, 97, 87)
 RDI_META, RDI_CTAB = 4096, 4096
 RDI_ARENA = RDI_META + RDI_CTAB
 RD_MAXEXT, RD_CEND = 2048, 0xFFFF
+RD_DIRB = 96 * 24               # rdabi.inc: the DIRECTORY is the first RD_DIRB
+                                # bytes of [rd_dtab]'s claim and the chain table
+                                # follows it (SPEC.md 62.9.13.1)
 RDCF_BOOT = 1
 
 SRC, DOC, IMG = "SRC", "DATA.BIN", "RAMDISK.RAM"
@@ -378,7 +381,7 @@ def session(ui, a, R, data):
           "a lookup per call - every WRITE_SEQ call was COLD, so the token "
           "is not reaching the kernel (rd_itok)")
     store = m.read(dw("rd_arena") * 16, kb * 1024)
-    ctab = m.read(dw("rd_ctab") * 16, next_ * 2)
+    ctab = m.read(dw("rd_dtab") * 16 + RD_DIRB, next_ * 2)
     ui.close(cp)
 
     fl = os88flush.Flush(marty=m)
@@ -456,7 +459,7 @@ def session(ui, a, R, data):
         return
     kb2 = dw("rd_kb")
     store2 = m.read(dw("rd_arena") * 16, kb2 * 1024)
-    ctab2 = m.read(dw("rd_ctab") * 16, dw("rd_next") * 2)
+    ctab2 = m.read(dw("rd_dtab") * 16 + RD_DIRB, dw("rd_next") * 2)
     check("L", kb2 == kb and store2 == img[RDI_ARENA:],
           "the loaded store IS the file's arena (%dKB)" % kb2)
     check("L", ctab2 == img[RDI_META:RDI_META + len(ctab2)],

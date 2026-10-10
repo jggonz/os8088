@@ -457,13 +457,7 @@ wr_lzb:
 ; WW_HDR pause and writes [wr_dseg] and [wr_dmax] then.
 ; -----------------------------------------------------------------------------
 wr_arcstart:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     mov di, wr_fname                ; /wire/pkg/<STEM>.WPK
     mov si, wr_x_wpk
     call wr_stemput
@@ -479,13 +473,6 @@ wr_arcstart:
     xor cx, cx
     mov dx, WK_ARC
     call wr_start
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -494,13 +481,7 @@ wr_arcstart:
 ; out: CF = 1 and [wr_msg] said; CF = 0 and [wr_state] is back at WS_BODY
 ; -----------------------------------------------------------------------------
 wr_arcbase:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     mov ax, [wr_ahdr + WA_MAXENT]   ; --- ONE claim for every entry in turn
     add ax, 1023
     and ax, 0xFC00                  ; the capacity in BYTES, rounded up to the
@@ -550,13 +531,6 @@ wr_arcbase:
 .no:
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- wr_amkcd - make the folder named at DS:SI if it is missing, and enter it
@@ -585,13 +559,7 @@ wr_amkcd:
 ; difference over a sixty-file tree is tens of seconds of the field machine.
 ; -----------------------------------------------------------------------------
 wr_arcwrite:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     push ds
     pop es
     mov di, wr_fname                ; --- the NAME is the slot after the
@@ -661,13 +629,6 @@ wr_arcwrite:
     call wr_wrfail                  ; 'Could not write <name>' - a failure
     stc                             ; mid-tree LEAVES WHAT WAS WRITTEN (22)
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- wr_aname - SI = a NUL-TERMINATED copy of the slot at DS:SI -------------
@@ -732,13 +693,7 @@ wr_apathn:
 ; point is one of NET_SOCKS four held for nothing.
 ; -----------------------------------------------------------------------------
 wr_arcend:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     inc byte [wr_gen]
     call wr_hclose
     mov byte [wr_state], WS_DONE
@@ -758,9 +713,8 @@ wr_arcend:
                                     ; want of a file, and the file is the one
                                     ; thing this chain has just made
     call wr_pkgrun                  ; NO LOCK: it opens a window (92.5)
-    call OSAPI_GFX_LOCK
-    call wr_clip                    ; ...and the launched window is now ON TOP
-    call wr_geom                    ; of ours, which is what 92.6.1 is about
+    call wr_lockarm                 ; ...and the launched window is now ON TOP
+                                    ; of ours, which is what 92.6.1 is about
     call wr_dend
     jmp short .un
 .noprog:
@@ -768,13 +722,6 @@ wr_arcend:
     call wr_chaindone               ; the toast says which disk it landed on
 .un:
     call OSAPI_GFX_UNLOCK
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================

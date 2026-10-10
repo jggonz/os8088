@@ -78,7 +78,8 @@ so it is checked here with no Tk at all:
    other format's is greyed WITH A REASON - the speaker's two apply to
    the speaker target and to no other. What a greyed group holds stays
    off the command line: --cga-palette on the speaker target, --flip on
-   13h. With group_state answering "applies" for everything, 14 FAILS on
+   13h and on 16 colours' 640 x 480 - and Flip applies to 16 colours on a
+   Screen of their own. With group_state answering "applies" for everything, 14 FAILS on
    every target.
 15. A FILE SAYS HOW IT WAS MADE (SPEC.md 98.1.1.4, 98.2.17): every target's
    file carries its options, and LOADING it gives a form whose command line
@@ -161,19 +162,22 @@ def groups_leg():
     # what a greyed group holds is left off the command line
     tgt = lambda pre: [i for i, t in enumerate(G.TARGETS) if t[1] == pre][0]
     offs = []
-    for pre, dest, val, flag, on in (("herc-spk", "cga_palette", "1",
-                                      "--cga-palette", False),
-                                     ("cga4", "cga_palette", "1",
-                                      "--cga-palette", True),
-                                     ("vga8", "flip", "1", "--flip", False),
-                                     ("modex", "flip", "1", "--flip", True),
-                                     ("cga4", "spk_pulses", "2",
-                                      "--spk-pulses", False),
-                                     ("herc-spk", "spk_pulses", "2",
-                                      "--spk-pulses", True)):
+    for pre, sets, flag, on in (
+            ("herc-spk", {"cga_palette": "1"}, "--cga-palette", False),
+            ("cga4", {"cga_palette": "1"}, "--cga-palette", True),
+            ("vga8", {"flip": "1"}, "--flip", False),
+            ("modex", {"flip": "1"}, "--flip", True),
+            # 16 colours flip on a screen of their own (98.2.5.1), and
+            # on 12h's own 640 x 480 do not - the owner found Flip greyed
+            # with Screen at 640x400
+            ("vga4", {"flip": "1"}, "--flip", False),
+            ("vga4", {"flip": "1", "screen": "640x400"}, "--flip",
+             True),
+            ("cga4", {"spk_pulses": "2"}, "--spk-pulses", False),
+            ("herc-spk", {"spk_pulses": "2"}, "--spk-pulses", True)):
         v = G.form_start()
         v.update(G.target_fill(tgt(pre), 30.0))
-        v[dest] = val
+        v.update(sets)
         if (flag in G.argv_from("in.mp4", "o.V88", v, 30.0)) != on:
             offs.append("%s %s on %s" % (flag, "missing" if on else
                                          "left on", pre))
@@ -256,7 +260,8 @@ def options_leg():
         bad.append("15: pack_options does not round-trip")
     old = os.path.join(ROOT, "apps", "video", "os8088.v88")
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as t:
-        if G.form_from_file(vid.Reader(old)) is not None:
+        if G.form_from_file(vid.Reader(old)) is not None or \
+                G.form_from_file(vid.HeadOptions(old)) is not None:
             bad.append("15: a file with no options loaded as if it had some")
         d = bytearray(open(old, "rb").read())
         blob = vid.pack_options(doc)
@@ -268,7 +273,8 @@ def options_leg():
         open(hurt, "wb").write(bytes(d + blob))
         try:
             vid.verify_v88(good)
-            if vid.Reader(good).options() != doc:
+            if vid.Reader(good).options() != doc or \
+                    vid.HeadOptions(good).options() != doc:
                 bad.append("15: a stored record reads back differently")
         except vid.V88Error as e:
             bad.append("15: a good options block is refused: %s" % e)
@@ -280,6 +286,11 @@ def options_leg():
         try:
             vid.verify_v88(hurt)
             bad.append("15: verify_v88 passed a damaged options block")
+        except vid.V88Error:
+            pass
+        try:                            # (the window's header-only read)
+            vid.HeadOptions(hurt).options()
+            bad.append("15: the header-only read passed a damaged block")
         except vid.V88Error:
             pass
     print("   15: dictionary %s, schema %s (version %d), the mapper and the "
@@ -298,6 +309,10 @@ def roundtrip(i, label, src, out):
     if got is None:
         return ["15: %s: the file carries no options" % label]
     vals, ti, notes, name = got
+    # ...and the window's read at OPEN, the header and the block alone
+    # (98.2.17), must fill the same form as the whole file's
+    if G.form_from_file(vid.HeadOptions(out)) != got:
+        return ["15: %s: the header-only read fills another form" % label]
     stored = r.options()["o"]
     a2 = V.parser().parse_args(G.argv_from(src, out + ".2", vals))
     again = V.options_record(a2, 15.0)
@@ -382,11 +397,14 @@ def main():
                        "not the unfilled one's" % (t[0], " ".join(empty)))
     eight = [G.target_fill(i, 30.0) for i, t in enumerate(G.TARGETS)
              if t[1] in ("vga8", "modex")]
+    # ...the 486's whole picture (its profile's default, 98.2.3.5)
+    want8 = [("25", "1x1" if f["profile"] == "486" else "2x1") for f in eight]
     print("   %d targets filled; the 256-colour ones at %s fps, detail %s"
           % (len(G.TARGETS), "/".join(f["fps"] for f in eight),
              "/".join(f["detail"] for f in eight)))
-    if [(f["fps"], f["detail"]) for f in eight] != [("25", "2x1")] * 2:
-        bad.append("the 256-colour targets are not 25 fps at 2x1")
+    if len(eight) < 2 or [(f["fps"], f["detail"]) for f in eight] != want8:
+        bad.append("the 256-colour targets are not 25 fps at 2x1 (1x1 on "
+                   "the 486)")
     # --- 11: a drop
     cases = [(["C:/v/clip.mp4"], ("source", "C:/v/clip.mp4")),
              (["C:/v/OUT.V88", "x.mp4"], ("preview", "C:/v/OUT.V88")),

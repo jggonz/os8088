@@ -68,29 +68,67 @@ net_pkg:
     cmp bl, NETV_MAX
     ja  nsk_everb
     cmp byte [net_state], NS_LINKED
-    jne .nolink
+    jne nsk_nolink
     cmp byte [lp_ver], NET_VER_SOCK
-    jb  .old
-    call nsk_claim
-    jc  .busy
+    jb  nsk_old
+    call nsk_claim              ; ...and AX untouched on the way in: AL is
+    jc  nsk_busy                ; the handle for half the verbs
+    ; --- THE ABORT FRAME, the socket side's -------------------------------
+    ; BX, DX, SI and DI are the ones netpkg.inc says come back the caller's,
+    ; so they are saved here ONCE rather than by every verb, and a dead wire
+    ; anywhere below is nrb's jump to net_abort rather than a branch per
+    ; read (net.asm's verbs section has the whole argument). BX IS SAVED
+    ; BEFORE nsk_do SPENDS IT on the table index, which the per-verb pushes
+    ; could not do: the caller used to get BX back as the verb times two.
+    push bx
+    push dx
+    push si
+    push di
+    mov [net_sp], sp
+    mov word [net_abfn], nsk_fail
     call nsk_do
+net_pkpop:
+    pop di
+    pop si
+    pop dx
+    pop bx
     mov byte [net_busy], 0      ; ...a `mov` touches no flags, so the verb's
     ret                         ; own CF and AX reach the package unchanged
-.nolink:
+nsk_nolink:
     mov ax, NETE_NOLINK
-    stc
-    ret
-.old:
+    jmp short nsk_stc
+nsk_old:
     mov ax, NETE_REFUSED        ; a partner that serves files and not sockets
-    stc                         ; (netpkg.inc's NSTF_SOCK, seen from here)
-    ret
-.busy:
+    jmp short nsk_stc           ; (netpkg.inc's NSTF_SOCK, seen from here)
+nsk_busy:
     mov ax, NETE_BUSY
-    stc
-    ret
+    jmp short nsk_stc
+
+; --- the verbs' exits: each leaves THE VERB, from however deep, because it
+; puts SP back on the frame first ----------------------------------------
+nsk_refdc:                      ; ...a refusal that delivered no bytes
+    xor cx, cx
+nsk_refd:                       ; the far side refused: its own NETE_*
+    mov al, [net_sst]
+    xor ah, ah
+    jmp short nsk_err
+nsk_badh:                       ; not a handle of ours - or, for send, recv
+    mov ax, NETE_HANDLE         ; and accept, the wrong KIND: a verb on a
+nsk_err:                        ; listener and accept on anything else are
+    ; STKBALANCE-OK: leaves THE VERB from whatever depth it was reached at, by putting SP back on net_pkg's frame
+    stc                         ; the same mistake
+    mov sp, [net_sp]
+    jmp short net_pkpop
+nsk_fail:                       ; net_abort's tail: THE WIRE WENT AWAY. Drop
+    call net_lost               ; the link, forget the handles, and say so
+    call nsk_drop
+    mov ax, NETE_IO
+    jmp short nsk_err
 
 nsk_everb:
+nsk_noprof:                     ; NETV_PROF over the cable - see the table
     mov ax, NETE_VERB
+nsk_stc:
     stc
     ret
 
@@ -101,20 +139,17 @@ nsk_everb:
 ; refusal as fatal would stop working over the cable for having asked.
 nsk_ok:
     xor ax, ax
-    clc
     ret
 
 ; A TABLE AND NOT A LADDER, and the reason is the 8086 rather than taste: a
 ; `je` is a SHORT jump and the verbs are several hundred bytes below here, so
-; a compare ladder would not assemble at all. BX is free to spend - BL was the
-; verb and BH the class, and both are answered by the time we are here - and
-; BP is free for the same reason net_fgate may use it.
+; a compare ladder would not assemble at all. BX is free to spend - it is in
+; the frame - and BP is free for the same reason net_fgate may use it.
 nsk_do:
     xor bh, bh                  ; BX = the verb, bounded by net_pkg above
     shl bx, 1
-    mov bp, [nsk_tab+bx]
-    jmp bp                      ; ...and the verb's own `ret` goes to net_pkg
-
+    jmp [nsk_tab+bx]            ; ...and the verb's own `ret` comes back to
+                                ; net_pkg
 nsk_tab:
     dw nsk_ident                ; NETV_IDENT  - answered before this, and both
     dw nsk_state                ; NETV_STATE    are here so the table is
@@ -244,55 +279,58 @@ net_fclaim:
     ret
 
 ; -----------------------------------------------------------------------------
-; net_fgate - every FSV_* verb, wrapped so the wire is ours for its whole run
-; in:  BP = the verb's body; everything else is the verb's own
-; out: the verb's, or CF=1 with AX = FERR_IO when the wire never came free
+; net_fgate - every FSV_* verb, entered so the wire is ours for its whole run
+; in:  called from nfs_<verb>, so the return address IS the verb's body;
+;      every register is the verb's own
+; out: the verb's, or CF=1 with AX = FERR_IO when the wire never came free or
+;      the link is already down
 ;
 ; THE GATE IS AT THE TABLE and not inside the verbs, which is what makes it
-; auditable: net_fsv's fifteen cells point at fifteen six-byte thunks, so a
-; verb added later CANNOT be added ungated - it has no cell to be reached
-; through until one is written, and writing one is writing a thunk. Putting
-; the release inside each verb instead would have meant fifteen exits to get
-; right, three of which belong to helpers that run in the MIDDLE of a verb
-; (net_rdrun, net_rdsink, net_wrrun) and would have released the wire
-; half-way through a transfer.
+; auditable: net_fsv's fifteen cells name fifteen `call net_fgate`s, so a verb
+; added later CANNOT be added ungated - it has no cell to be reached through
+; until one is written. The RELEASE is in the tails (net_fok and its family in
+; net.asm) and never in a helper that runs in the MIDDLE of a verb, which is
+; what would have released the wire half-way through a transfer.
 ;
-; BP is free by the time we are here: drv_fs_call passes the verb in it and
-; has already spent it, and the two verbs that use BP themselves (net_read,
-; net_readat) push it.
+; IT BUILDS THE ABORT FRAME - BX, CX, DX, SI and DI, the registers every verb
+; gives back - and JUMPS to the body: the body never returns here, it leaves
+; through a tail that drops the frame (net.asm's verbs section). BP is free:
+; drv_fs_call passes the verb in it and has already spent it, and ES is
+; restored by the kernel on the way back out (drv_stamped).
+;
+; **AND THE NS_LINKED TEST IS HERE, ONCE.** net_lost cannot take the volume
+; down from where it runs (see its header), so the volume stays on the desktop
+; after a cable comes out and every click on it is another file verb - each
+; going to a wire we already know is dead, and each paying a full REPLY_TMO
+; before saying so. It is refused with FERR_IO and the link's record left
+; alone, as it always was.
 ; -----------------------------------------------------------------------------
 net_fgate:
+    ; STKBALANCE-NET: +5 - each nfs_<verb>'s `call net_fgate` arrives in its body with the five-word frame on the stack, which the verb's tail (net_fok) pops
+    ; STKBALANCE-OK: the gate takes its own return address as the verb to run and JUMPS there; its `.busy` ret returns to the gate's caller's caller
+    pop bp                      ; the verb's body follows the call
     call net_fclaim
     jc  .busy
-    call bp
-    mov byte [net_busy], 0      ; no flags: the verb's CF is the answer
-    ret
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [net_sp], sp
+    mov word [net_abfn], net_ffail
+    cmp byte [net_state], NS_LINKED
+    jne .nolink
+    jmp bp
+.nolink:
+    mov ax, FERR_IO             ; ...and NOT net_ffail: no wire was touched,
+    jmp net_ferr                ; so [net_lost_f] and [net_lastcmd] are left
+                                ; saying what the last link DIED on, if it
+                                ; died - the page reports that command, not
+                                ; the ones refused after it
 .busy:
     mov ax, FERR_IO
     stc
     ret
-
-%macro NFSGATE 1                ; one six-byte thunk per FSV_* cell
-nfs_%1:
-    mov bp, net_%1
-    jmp net_fgate
-%endmacro
-
-    NFSGATE list
-    NFSGATE chdir
-    NFSGATE stat
-    NFSGATE read
-    NFSGATE write
-    NFSGATE append
-    NFSGATE readat
-    NFSGATE delete
-    NFSGATE rename
-    NFSGATE mkdir
-    NFSGATE rmdir
-    NFSGATE dfree
-    NFSGATE enum
-    NFSGATE copy
-    NFSGATE rmtree
 
 ; -----------------------------------------------------------------------------
 ; nsk_ident - NETV_IDENT: WHICH DRIVER IS THIS? (SPEC.md 20.11.1)
@@ -344,56 +382,42 @@ nsk_state:
 
 ; -----------------------------------------------------------------------------
 ; nsk_hchk - AL = a handle a package handed us: is it one of ours?
-; out: CF=0 and BX = its row index; CF=1 and AX = NETE_HANDLE
-; clobbers: BX, flags (and AX on the failure path)
+; out: BX = its row index. A handle that is not one LEAVES THE VERB with
+;      NETE_HANDLE (nsk_badh), so a caller never tests.
+; clobbers: BX, flags
 ; -----------------------------------------------------------------------------
 nsk_hchk:
-    cmp al, 1
-    jb  .no
-    cmp al, NET_SOCKS
-    ja  .no
     mov bl, al
-    dec bl
+    dec bl                      ; 0 wraps to FF, so ONE unsigned test is
+    cmp bl, NET_SOCKS           ; both ends of 1..NET_SOCKS
+    jae nsk_badh
     xor bh, bh
     cmp byte [net_sk+bx], NSK_FREE
-    je  .no
-    clc
-    ret
-.no:
-    mov ax, NETE_HANDLE
-    stc
+    je  nsk_badh
     ret
 
 ; -----------------------------------------------------------------------------
 ; nsk_take - the far side answered with a handle: record it, or refuse
 ; in:  AL = the handle byte off the wire, AH = the state to record
-; out: CF=0 and AX = the handle; CF=1 and AX = NETE_IO for one out of range
+; out: CF=0 and AX = the handle; a handle out of range ABORTS the verb
 ;
-; EVERYTHING OFF THE WIRE IS HOSTILE (docs/plans/completed/NET-STACK-PLAN.md 8.5), and a
-; handle is the cheapest thing to get wrong: this array is NET_SOCKS bytes
-; and an unchecked index writes somewhere else in the driver's own segment.
+; EVERYTHING OFF THE WIRE IS HOSTILE (docs/plans/completed/NET-STACK-PLAN.md
+; 8.5), and a handle is the cheapest thing to get wrong: this array is
+; NET_SOCKS bytes and an unchecked index writes somewhere else in the
+; driver's own segment. A far side inventing handles is one we can no longer
+; follow, so it is the dead-wire exit: drop the link, forget the handles.
 ; -----------------------------------------------------------------------------
 nsk_take:
-    push bx
-    cmp al, 1
-    jb  .bad
-    cmp al, NET_SOCKS
-    ja  .bad
     mov bl, al
     dec bl
+    cmp bl, NET_SOCKS
+    jae .bad
     xor bh, bh
     mov [net_sk+bx], ah
-    xor ah, ah
-    pop bx
-    clc
+    xor ah, ah                  ; (CF = 0)
     ret
 .bad:
-    pop bx
-    call nsk_io                 ; a far side inventing handles is one we can
-    ret                         ; no longer follow. CALL and not jmp: every
-                                ; caller of this has a stack frame of its own
-                                ; to unwind, and a tail jump out of a helper
-                                ; would return past their pops
+    jmp net_abort
 
 ; --- nsk_drop - forget every handle. A fresh link has none and a dead one's
 ; are gone with it, so both edges come through here.
@@ -410,26 +434,21 @@ nsk_drop:
     pop bx
     ret
 
-; --- nsk_io - the wire went away mid-command. ONE exit, so every verb's
-; failure path is the same three things: drop the link, forget the handles,
-; and say so.
-nsk_io:
-    call net_lost
-    call nsk_drop
-    mov ax, NETE_IO
-    stc
-    ret
-
 ; --- nsk_cmd - the letter plus one handle byte, which is five verbs' opener
-; in:  AL = the letter, AH = the handle. out CF=1 = the wire died
+; in:  AL = the letter, AH = the handle
 nsk_cmd:
     mov [net_cmdip], al
-    call lp_sbyte
-    jc  .bad
+    call nsb
     mov al, ah
-    call lp_sbyte
-.bad:
-    ret                         ; CF is lp_sbyte's, which is the answer
+    jmp nsb
+
+; --- nsk_cmdw - the letter plus a WORD, OPEN's and LISTEN's port
+; in:  AL = the letter, CX = the word
+nsk_cmdw:
+    mov [net_cmdip], al
+    call nsb
+    mov ax, cx
+    jmp nsw
 
 ; --- nsk_cap - CX capped at NET_SKMAX, because a package may ask for anything
 nsk_cap:
@@ -441,82 +460,44 @@ nsk_cap:
 
 ; =============================================================================
 ; THE VERBS
+;
+; Each is entered from net_pkg with the frame built, so it saves nothing of
+; its own: BX, DX, SI and DI come back from the frame, a dead wire is nrb's
+; abort, and a refusal or a bad handle is a jump to one of the exits beside
+; net_pkg. What is left is the frame on the wire.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
 ; NETV_OPEN - in ES:SI = a NUL host, CX = the port; out AX = a handle
 ;
 ; The host is sent as a FIXED NET_HOSTMAX-byte field, NUL and padding
-; included. RESOLUTION IS THE FAR SIDE'S: a name goes across as a name and the
-; lookup happens inside NSK_CONNECT, which is why there is no NETV_RESOLVE.
+; included - SI STOPS ON THE NUL, so every byte after it is the NUL again.
+; RESOLUTION IS THE FAR SIDE'S: a name goes across as a name and the lookup
+; happens inside NSK_CONNECT, which is why there is no NETV_RESOLVE.
 ; -----------------------------------------------------------------------------
 nsk_open:
-    push bx
-    push dx
-    push si
-    push di
-    mov [net_sport], cx
     mov al, NW_OPEN
-    mov [net_cmdip], al
-    call lp_sbyte
-    jc  .io
-    mov ax, [net_sport]
-    call lp_sword
-    jc  .io
+    call nsk_cmdw
     mov cx, NET_HOSTMAX
-    xor dl, dl                  ; 1 once the NUL has gone by: everything after
-.name:                          ; it is padding, and the NUL itself is sent
-    xor al, al
-    or  dl, dl
-    jnz .put
+.name:
     mov al, [es:si]             ; ...THROUGH ES, which is the PACKAGE'S here
-    inc si
     or  al, al
-    jnz .put
-    mov dl, 1
+    jz  .put
+    inc si
 .put:
-    call lp_sbyte
-    jc  .io
+    call nsb
     loop .name
     mov ah, NSK_CONNECT         ; NOT connected: the far side has STARTED a
-    call nsk_reply_h            ; connection, and NETV_STATUS is how it ends
-    jmp short .out
-.io:
-    call nsk_io
-.out:
-    pop di
-    pop si
-    pop dx
-    pop bx
-    ret
+    jmp short nsk_reply_h       ; connection, and NETV_STATUS is how it ends
 
 ; -----------------------------------------------------------------------------
 ; NETV_LISTEN - in CX = a port; out AX = a listening handle
 ; -----------------------------------------------------------------------------
 nsk_listen:
-    push bx
-    push dx
-    push si
-    push di
-    mov [net_sport], cx
     mov al, NW_LISTEN
-    mov [net_cmdip], al
-    call lp_sbyte
-    jc  .io
-    mov ax, [net_sport]
-    call lp_sword
-    jc  .io
+    call nsk_cmdw
     mov ah, NSK_LISTEN
-    call nsk_reply_h
-    jmp short .out
-.io:
-    call nsk_io
-.out:
-    pop di
-    pop si
-    pop dx
-    pop bx
-    ret
+    jmp short nsk_reply_h
 
 ; -----------------------------------------------------------------------------
 ; NETV_ACCEPT - in AL = a listening handle; out AX = a NEW handle, or 0
@@ -525,98 +506,15 @@ nsk_listen:
 ; yet. A server polls this the way a client polls NETV_STATUS.
 ; -----------------------------------------------------------------------------
 nsk_accept:
-    push bx
-    push dx
-    push si
-    push di
     call nsk_hchk
-    jc  .out
     cmp byte [net_sk+bx], NSK_LISTEN
-    jne .nothand
+    jne nsk_badh                ; accept on anything but a listener
     mov ah, al
     mov al, NW_ACCEPT
     call nsk_cmd
-    jc  .io
     mov ah, NSK_UP              ; an accepted socket is connected already -
-    call nsk_reply_h            ; there is no handshake left to wait out
-    jmp short .out
-.nothand:
-    mov ax, NETE_HANDLE         ; send/recv verbs on a listener, and accept on
-    stc                         ; anything else, are the same mistake
-    jmp short .out
-.io:
-    call nsk_io
-.out:
-    pop di
-    pop si
-    pop dx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; NETV_ADDR - out ES:DI = four IP bytes; CF=1 / NETE_NOLINK if there is none
-;
-; **THE ADDRESS IS THE PARTNER'S AND THAT IS THE TRUE ANSWER**, not a stand-in
-; for one we do not have. The DOS box owns the IP, an inbound connection
-; arrives there and is forwarded down the cable, so the address an FTP client
-; must dial for a passive transfer really is the far end's
-; (docs/plans/completed/NET-STACK-PLAN.md 1.5). Reporting anything else would put an
-; unreachable quad in a 227 reply.
-;
-; Gated on NET_VER_ADDR and not on nsk_do's NET_VER_SOCK: a version-2 partner
-; serves every other verb perfectly and only this letter is new to it, and an
-; unknown letter is a hung wire rather than a refusal (nwire.inc).
-; -----------------------------------------------------------------------------
-nsk_addr:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    cmp byte [lp_ver], NET_VER_ADDR
-    jb  .old
-    mov al, NW_ADDR
-    mov [net_cmdip], al
-    call lp_sbyte
-    jc  .io
-    call lp_rbyte               ; the status...
-    jc  .io
-    mov [net_sst], al
-    mov cx, 4                   ; ...and FOUR BYTES WHATEVER IT SAID, because
-    mov bx, 0                   ; the frame is fixed (SPEC.md 62.10.1)
-.rd:
-    call lp_rbyte
-    jc  .io
-    mov [net_addr+bx], al
-    inc bx
-    loop .rd
-    cmp byte [net_sst], 0
-    jne .refused
-    mov si, net_addr            ; staged, then handed over: the four bytes are
-    mov cx, 4                   ; read one at a time off the wire and only a
-    cld                         ; whole answer is worth copying out
-    rep movsb
-    xor ax, ax
-    clc
-    jmp short .out
-.refused:
-    mov al, [net_sst]
-    xor ah, ah
-    stc
-    jmp short .out
-.old:
-    mov ax, NETE_NOLINK
-    stc
-    jmp short .out
-.io:
-    call nsk_io
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+                                ; there is no handshake left to wait out
+                                ; (falls into nsk_reply_h)
 
 ; -----------------------------------------------------------------------------
 ; nsk_reply_h - the status-plus-handle reply that OPEN, LISTEN and ACCEPT share
@@ -631,79 +529,85 @@ nsk_addr:
 ; -----------------------------------------------------------------------------
 nsk_reply_h:
     mov [net_sstate], ah        ; the state to record, banked: AH is about to
-                                ; carry a reply. IN MEMORY AND NOT IN AH -
-                                ; lp_rbyte's contract is about AL, and nothing
-                                ; says the high half survives a nibble pair
-    call lp_rbyte
-    jc  .io
+                                ; carry a reply
+    call nrb
     mov [net_sst], al           ; the far side's status
-    call lp_rbyte               ; ...and its handle, ALWAYS: the frame is fixed
-    jc  .io                     ; whatever the status said
+    call nrb                    ; ...and its handle, ALWAYS
     cmp byte [net_sst], 0
-    jne .refused
-    or  al, al
-    jz  .none                   ; ACCEPT with nobody waiting
+    jne nsk_refd
+    or  al, al                  ; (CF = 0)
+    cbw                         ; ACCEPT with nobody waiting: AX = 0
+    jz  .none
     mov ah, [net_sstate]
-    call nsk_take
-    ret
+    jmp nsk_take
 .none:
-    xor ax, ax
-    clc
-    ret
-.refused:
-    mov al, [net_sst]
-    xor ah, ah
-    stc
-    ret
-.io:
-    call nsk_io
     ret
 
 ; -----------------------------------------------------------------------------
-; NETV_STATUS - in AL = a handle; out AH = an NSK_*, CX = bytes readable now
+; NETV_ADDR - out ES:DI = four IP bytes; CF=1 / NETE_NOLINK if there is none
+;
+; **THE ADDRESS IS THE PARTNER'S AND THAT IS THE TRUE ANSWER**, not a stand-in
+; for one we do not have. The DOS box owns the IP, an inbound connection
+; arrives there and is forwarded down the cable, so the address an FTP client
+; must dial for a passive transfer really is the far end's
+; (docs/plans/completed/NET-STACK-PLAN.md 1.5).
+;
+; Gated on NET_VER_ADDR and not on NET_VER_SOCK: a version-2 partner serves
+; every other verb perfectly and only this letter is new to it, and an
+; unknown letter is a hung wire rather than a refusal (nwire.inc). CX is
+; given back as the caller had it - the one register here that is neither
+; an answer nor in the frame.
+; -----------------------------------------------------------------------------
+nsk_addr:
+    mov ax, NETE_NOLINK
+    cmp byte [lp_ver], NET_VER_ADDR
+    jb  nsk_stc
+    push cx
+    mov al, NW_ADDR
+    mov [net_cmdip], al
+    call nsb
+    call nrb                    ; the status...
+    mov [net_sst], al
+    mov si, net_addr            ; ...and FOUR BYTES WHATEVER IT SAID, because
+    mov cx, 4                   ; the frame is fixed (SPEC.md 62.10.1)
+.rd:
+    call nrb
+    mov [si], al
+    inc si
+    loop .rd
+    pop cx
+    cmp byte [net_sst], 0
+    jne nsk_refd
+    push cx
+    mov si, net_addr            ; staged, then handed over: only a whole
+    mov cx, 4                   ; answer is worth copying out
+    cld
+    rep movsb
+    pop cx
+    xor ax, ax
+    ret
+
+; -----------------------------------------------------------------------------
+; NETV_STATUS - in AL = a handle; out AH = an NSK_*, AL = the handle,
+;               CX = bytes readable now
 ; -----------------------------------------------------------------------------
 nsk_status:
-    push bx
-    push dx
-    push si
-    push di
     call nsk_hchk
-    jc  .out
-    mov [net_shnd], al
-    mov ah, al
+    mov dl, al                  ; the handle, for the answer: DX is the
+    mov ah, al                  ; frame's, so it is ours to spend
     mov al, NW_STAT
     call nsk_cmd
-    jc  .io
-    call lp_rbyte               ; status
-    jc  .io
+    call nrb                    ; status
     mov [net_sst], al
-    call lp_rbyte               ; the state
-    jc  .io
-    mov [net_sstate], al
-    call lp_rword               ; ...and how much is readable
-    jc  .io
-    mov cx, ax
+    call nrb                    ; the state
+    mov dh, al
+    call nrw                    ; ...and how much is readable
+    xchg ax, cx
     cmp byte [net_sst], 0
-    jne .refused
-    mov al, [net_sstate]
-    mov [net_sk+bx], al         ; keep our own row current, so NETV_STATE's
-    mov ah, al                  ; free count and nsk_hchk agree with the far
-    mov al, [net_shnd]          ; side without a second opinion
-    clc
-    jmp short .out
-.refused:
-    mov al, [net_sst]
-    xor ah, ah
-    stc
-    jmp short .out
-.io:
-    call nsk_io
-.out:
-    pop di
-    pop si
-    pop dx
-    pop bx
-    ret
+    jne nsk_refd
+    mov [net_sk+bx], dh         ; keep our own row current, so NETV_STATE's
+    xchg ax, dx                 ; free count and nsk_hchk agree with the far
+    ret                         ; side without a second opinion. (CF = 0)
 
 ; -----------------------------------------------------------------------------
 ; NETV_SEND - in AL = handle, ES:SI = bytes, CX = how many; out CX = taken
@@ -713,72 +617,36 @@ nsk_status:
 ; round trip per tick saying so.
 ; -----------------------------------------------------------------------------
 nsk_send:
-    push bx
-    push dx
-    push si
-    push di
     call nsk_hchk
-    jc  .out
     cmp byte [net_sk+bx], NSK_LISTEN
-    je  .nothand
+    je  nsk_badh                ; send on a listener
     call nsk_cap
-    or  cx, cx
-    jnz .go                     ; a NEAR jump, deliberately: `jcxz` is short
-    jmp .none                   ; only and .none is past the whole body loop
-.go:
+    jcxz .ok
     mov [net_slen], cx
     mov ah, al
     mov al, NW_SEND
     call nsk_cmd
-    jc  .io
-    mov ax, [net_slen]
-    call lp_sword
-    jc  .io
-    mov cx, [net_slen]
+    mov ax, cx
+    call nsw
 .body:
     mov al, [es:si]             ; ES is the PACKAGE'S
     inc si
     call lp_sbyte
-    jc  .io
+    jc  .dead
     loop .body
-    call lp_rbyte               ; status
-    jc  .io
+    call nrb                    ; status
     mov [net_sst], al
-    call lp_rword               ; ...and how many it actually took
-    jc  .io
-    mov cx, ax
+    call nrw                    ; ...and how many it actually took
+    xchg ax, cx
     cmp byte [net_sst], 0
-    jne .refused
+    jne nsk_refd
     cmp cx, [net_slen]
-    jbe .ok                     ; a far side claiming to have taken more than
-    call nsk_io                 ; it was given is one we cannot follow
-    jmp short .out
-.ok:
+    ja  .dead                   ; a far side claiming to have taken more than
+.ok:                            ; it was given is one we cannot follow
     xor ax, ax
-    clc
-    jmp short .out
-.none:
-    xor cx, cx
-    xor ax, ax
-    clc
-    jmp short .out
-.nothand:
-    mov ax, NETE_HANDLE
-    stc
-    jmp short .out
-.refused:
-    mov al, [net_sst]
-    xor ah, ah
-    stc
-    jmp short .out
-.io:
-    call nsk_io
-.out:
-    pop di
-    pop si
-    pop dx
-    pop bx
     ret
+.dead:
+    jmp net_abort
 
 ; -----------------------------------------------------------------------------
 ; NETV_RECV - in AL = handle, ES:DI = a buffer, CX = its capacity
@@ -790,76 +658,41 @@ nsk_send:
 ; than one piece.
 ; -----------------------------------------------------------------------------
 nsk_recv:
-    push bx
-    push dx
-    push si
-    push di
     call nsk_hchk
-    jc  .out
     cmp byte [net_sk+bx], NSK_LISTEN
-    je  .nothand
+    je  nsk_badh                ; recv on a listener
     call nsk_cap
-    or  cx, cx
-    jnz .go                     ; a NEAR jump, deliberately: `jcxz` is short
-    jmp .none                   ; only and .none is past the whole body loop
-.go:
-    mov [net_scap], cx
+    jcxz .ok
     mov ah, al
     mov al, NW_RECV
     call nsk_cmd
-    jc  .io
-    mov ax, [net_scap]
-    call lp_sword
-    jc  .io
-    call lp_rbyte               ; status
-    jc  .io
+    mov ax, cx
+    call nsw
+    call nrb                    ; status
     mov [net_sst], al
-    call lp_rword               ; ...and how much is coming
-    jc  .io
-    cmp ax, [net_scap]
-    jbe .len                    ; MORE THAN WE ASKED FOR is the one thing that
-    call nsk_io                 ; would write past the package's buffer, so it
-    jmp short .out              ; is refused here and not trusted anywhere
-.len:
-    mov [net_slen], ax
-    mov cx, ax
-    jcxz .rdone
+    call nrw                    ; ...and how much is coming
+    cmp ax, cx
+    ja  .dead                   ; MORE THAN WE ASKED FOR is the one thing that
+    xchg ax, cx                 ; would write past the package's buffer, so it
+    mov dx, cx                  ; is refused here and not trusted anywhere.
+    jcxz .rdone                 ; DX keeps the count: it is the frame's
 .body:
     call lp_rbyte
-    jc  .io
+    jc  .dead
     mov [es:di], al             ; ES is the PACKAGE'S
     inc di
     loop .body
 .rdone:
-    mov cx, [net_slen]
+    mov cx, dx
     cmp byte [net_sst], 0
-    jne .refused
+    jne .ref
+.ok:
     xor ax, ax
-    clc
-    jmp short .out
-.none:
-    xor cx, cx
-    xor ax, ax
-    clc
-    jmp short .out
-.nothand:
-    mov ax, NETE_HANDLE
-    stc
-    jmp short .out
-.refused:
-    mov al, [net_sst]
-    xor ah, ah
-    xor cx, cx
-    stc
-    jmp short .out
-.io:
-    call nsk_io
-.out:
-    pop di
-    pop si
-    pop dx
-    pop bx
     ret
+.ref:
+    jmp nsk_refdc
+.dead:
+    jmp net_abort
 
 ; -----------------------------------------------------------------------------
 ; NETV_CLOSE - in AL = a handle
@@ -869,33 +702,11 @@ nsk_recv:
 ; it with something it cannot use and cannot give back.
 ; -----------------------------------------------------------------------------
 nsk_close:
-    push bx
-    push dx
-    push si
-    push di
     call nsk_hchk
-    jc  .out
     mov byte [net_sk+bx], NSK_FREE
     mov ah, al
     mov al, NW_CLOSE
     call nsk_cmd
-    jc  .io
-    call lp_rbyte
-    jc  .io
+    call nrb
     xor ax, ax
-    clc
-    jmp short .out
-.io:
-    call nsk_io
-.out:
-    pop di
-    pop si
-    pop dx
-    pop bx
-    ret
-
-; --- nsk_noprof - NETV_PROF over the cable ----------------------------------
-nsk_noprof:
-    mov ax, NETE_VERB
-    stc
     ret

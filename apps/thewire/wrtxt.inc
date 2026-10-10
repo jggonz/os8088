@@ -35,10 +35,13 @@ wr_s_nodrv:  db 'Wire connection unavailable', 0
 ; --- the File menu, and the two buttons, which are the same two strings ------
 wr_m_file:   db 'File', 0
 wr_it_refr:  db 'Refresh', 0
+; ...and each GREYED spelling is the same bytes behind the MENU_DIS prefix
+; (SPEC.md 12.2): one string pointed at twice, the greyed one at ONE BYTE
+; LOWER - which wr_menufix spends, `sbb ax, 0` on the predicate's CF.
+                 db MENU_DIS
 wr_it_run:   db 'Load Program', 0
-wr_it_run0:  db MENU_DIS, 'Load Program', 0
+                 db MENU_DIS
 wr_it_add:   db 'Add to Disk...', 0
-wr_it_add0:  db MENU_DIS, 'Add to Disk...', 0
 wr_it_close: db 'Close', 0
 wr_s_run     equ wr_it_run
 wr_s_add     equ wr_it_add
@@ -121,7 +124,6 @@ wr_s_toobig: db 'That program is too big for one claim', 0
 
 ; --- progress and outcome ----------------------------------------------------
 wr_s_of:     db ' of ', 0
-wr_s_k:      db 'K', 0
 wr_s_adding: db 'Adding ', 0
 wr_s_file:   db ' file', 0
 wr_s_files:  db ' files', 0
@@ -143,7 +145,7 @@ wr_s_ldfail: db 'That program would not start (', 0
 ; is 29 cells, and this window's content is WR_CW = 384 px = 48 cells on every
 ; adapter, so the widget's clamp is nowhere near it.
 wr_ablines:  dw wr_ttl, wr_s_desc, wr_s_tag, wr_abdate, wr_ab5, wr_ab6, 0
-wr_ab5:      db 'os8088.com', 0
+wr_ab5       equ wr_def_host                    ; 'os8088.com', written once
 wr_ab6:      db 'Contributed by Jorge Gonzalez', 0
 ; ...and the one string in this file that is WRITTEN. The eight question marks
 ; are overwritten in place by wr_catck with WC_DATE's eight digits, so the card
@@ -165,6 +167,8 @@ wr_f_cat:    db 'catalog.bin', 0
 wr_x_o88:    db '.O88', 0
 wr_x_pic:    db '.PIC', 0
 wr_x_wpk:    db '.WPK', 0               ; an archive record's file (92.13)
+wr_s_k       equ wr_x_wpk + 3           ; ...whose last letter is the 'K' every
+                                        ; kilobyte figure ends in
 
 ; --- WIRE.CFG (SPEC.md 19.9, 92.4) -------------------------------------------
 wr_cfg_name: db 'WIRE.CFG', 0

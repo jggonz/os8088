@@ -24,28 +24,19 @@
 ; that was already there and the image is exactly 5,120. Nothing else moved.
 hd_mbrok:    db 0               ; HMB_*: whether hd_mbr is the DISK's table
 
-    align 512
-%ifndef HD_TOOL
-hd_idbuf:                       ; **THE SAME 512 BYTES AS hd_mbr**, on the
-                                ; resident alone (SPEC.md 52.13.3). Two
-                                ; 512-byte scratch buffers whose lifetimes
-                                ; cannot overlap: IDENTIFY's answer is read
-                                ; and spent inside hd_probe, which runs at
-                                ; DRVV_ATTACH; the partition table is read by
-                                ; hd_part_load, whose only resident caller is
-                                ; hd_mount, and the earliest mount is the
-                                ; automount at DRVV_READY - a verb later.
-                                ;
-                                ; WHAT MAKES IT SAFE RATHER THAN CLEVER is
-                                ; that the resident never WRITES a partition
-                                ; table: hd_part_write is partw.inc's and
-                                ; that file is in the tool image only. So the
-                                ; worst a crossed lifetime could do is fail a
-                                ; mount, never commit IDENTIFY's words to
-                                ; sector 0. The tool keeps them apart - it
-                                ; has no hd_idbuf at all, never probing.
-%endif
-hd_mbr:      times 512 db 0     ; the partition table being read or edited
 %ifdef HD_TOOL
+    align 512
+hd_mbr:      times 512 db 0     ; the partition table being read or edited
 hd_sec0:     times 512 db 0     ; the formatter's sector under construction
+%else
+    align 512, db 0             ; zeros, not NOPs: nothing executes the pad
+hd_mbr:                         ; THE RESIDENT'S 512 BYTES ARE LAID OVER ITS
+                                ; ATTACH-ONLY CODE (SPEC.md 52.13.6). The label
+                                ; is all this file gives it: hdd.asm follows
+                                ; the include with the probe, which runs once,
+                                ; at DRVV_ATTACH, on an image read off the disk
+                                ; a moment before - and pads the run out to
+                                ; 512 itself. hd_part_load blanks the buffer
+                                ; before every read, so what the probe leaves
+                                ; there is never seen.
 %endif

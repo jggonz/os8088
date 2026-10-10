@@ -2,8 +2,7 @@
 """Does a capsule the blit REFUSED leave a streak behind it? (SPEC.md 44.10.6.2)
 
     make && python3 tests/arkpuwipe.py                      # trigger B
-    make small && python3 tests/arkpuwipe.py --small \
-        --img build/small360.img                           # trigger A
+    make small && python3 tests/arkpuwipe.py --small       # trigger A, Hercules
 
 **IT RUNS ON VGA, AND THAT IS NOT A PREFERENCE.** `ark_scale_vel` floors
 `ARK_PUFALL` at 1 on CGA (`ark_met_sml`'s velocity scale is 37), so the strip a
@@ -77,6 +76,15 @@ import sys, os, argparse, tempfile, subprocess
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_ROOT, "tests"))
+# --small IS A DIFFERENT KERNEL TO EVERY SYMBOL READER, not just to this file:
+# dispcp and os88ui resolve through os88sym too, and resolved against the big
+# map they read wm_wins at the wrong place and see no windows at all ("a Disk
+# window showing B: did not happen ... every window: []"). So the switch is
+# tests/paint1small.py's, made before anything resolves a symbol.
+if "--small" in sys.argv:
+    import os88build as _B
+    _B.use_build("build/smallk")
+    os.environ.setdefault("OS88_DEFINES", "KERN_SMALL")
 import os88marty, os88mouse, os88sym, os88geom
 import dispcp
 from cycweb import Pkg, u16, diff, bbox, shot
@@ -108,11 +116,11 @@ def pkg_syms(src="apps/arkanoid/arkanoid.asm", incs=("apps/",)):
 def find_win(m, S, prefix, stride):
     """The window whose title starts with `prefix`, at THIS kernel's stride.
 
-    os88geom hard-codes WIN_SIZE = 34, which is kern_big's. kern_small's record
-    is 28 bytes (SPEC.md 13.7/13.9 are not in it), so every slot but 0 decodes
-    as garbage there - slot 1 reads flags 0xD0, no WF_USED, and a running app
-    is reported as "it did not launch". The first 28 bytes are the same record
-    in both, so the stride is the whole of the difference.
+    The stride is the caller's: os88geom.WIN_SIZE, which os88geom takes per
+    kernel off $OS88_DEFINES (72 on kern_big, 65 on kern_small today). A
+    literal here went stale twice - 34/28, then 72/65 - and a wrong stride
+    decodes every slot but 0 as garbage, so a running app reads as "it did
+    not launch".
     """
     import struct
     raw = m.read(S("wm_wins"), os88geom.MAX_WIN * stride)
@@ -322,14 +330,17 @@ def main():
                          "them against build/kernel.bin, which is the BIG "
                          "kernel and a different binary on purpose")
     a = ap.parse_args()
+    S = os88sym.linear          # against kern_small's map under --small
     if a.small:
-        _s = os88sym.syms(("KERN_SMALL",), check=False)
-
-        def S(name):
-            return (os88sym.segment_of(name, ("KERN_SMALL",), check=False) * 16
-                    + _s[name])
-    else:
-        S = os88sym.linear
+        # kern_small has no VGA (docs/plans/MONO-RECLAIM-PLAN.md) and CGA
+        # floors ARK_PUFALL to 1 (above), so Hercules is the only adapter the
+        # trigger-A measurement can be taken on
+        if a.machine == "os8088_xt_vga":
+            a.machine = "os8088_5150_herc_gla"
+        if a.img == "build/os8088-360.img":
+            a.img = "build/small360.img"
+        if a.apps == "build/apps360.img":
+            a.apps = "build/smallapps360.img"
 
     with os88marty.launch(a.img, apps=a.apps, machine=a.machine,
                           boot=False) as m:
@@ -344,7 +355,7 @@ def main():
         row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, entry)
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        stride = 28 if a.small else os88geom.WIN_SIZE
+        stride = os88geom.WIN_SIZE      # per kernel, off $OS88_DEFINES
         found = [None, None, None]
 
         def _up(_):

@@ -55,7 +55,8 @@ HS_STACK    equ 0x3FF0          ; the stub's stack top: under a CGA's 16KB
 ; and nothing would say so. The value is staged instead, by whoever stages the
 ; rest: the kernel writes its own, and `kern_dos` writes the one the launch
 ; block carried over. It cannot be taken from HS_WAKE either - that segment is
-; the hibernate MODULE's CS (`mov [hb_wakep + 2], cs`) and not the kernel's.
+; the hibernate MODULE's CS (`HBP_WAKE + 2` is written from it) and not the
+; kernel's.
 HS_KSEG     equ 0x0442          ; dw the resumed kernel's KERNEL_SEG. Above
                                 ; every KDS_* cell (0x0430..0x0441) so the two
                                 ; stubs' maps do not alias, though they never

@@ -120,6 +120,9 @@ SV_HP_ERASE equ 3
 ; The walk counters are WORDS, which they were not: at the old size an edge
 ; fitted a byte and at this one a chord of the outer ring on a VGA does not.
 ; What is still asserted is the model radius, because that one IS arithmetic.
+%if SV_HRMAX * 2 + 8 > 255
+ %error "svshape.inc: an edge of a figure SV_HRMAX across no longer fits sv_hln's byte"
+%endif
 %if SV_HMR > 64
  %error "svshape.inc: SV_HMR is past sv_rot3's ceiling - see its header"
 %endif
@@ -129,14 +132,6 @@ SV_HP_ERASE equ 3
 ; in:  the gfx lock is HELD and the screen has just been cleared
 ; -----------------------------------------------------------------------------
 sv_shape_init:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-
     mov byte [sv_ival], SV_HIVAL
     xor al, al
 .fig:
@@ -156,13 +151,6 @@ sv_shape_init:
     cmp al, SV_HNF
     jb .fig
 
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -170,14 +158,6 @@ sv_shape_init:
 ; in:  the gfx lock is HELD
 ; -----------------------------------------------------------------------------
 sv_shape_step:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-
     xor al, al
 .fig:
     push ax
@@ -188,14 +168,6 @@ sv_shape_step:
     cmp al, SV_HNF
     jb .fig
 
-    mov byte [sv_shown], 1
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -216,9 +188,8 @@ sv_hbase:
     mov [sv_hbv], ax
     mov ax, SV_HNE
     mul bx
-    mov [sv_hbe], ax
-    add ax, ax                  ; ...and the same base doubled, because the
-    mov [sv_hbl], ax            ; walk counters are words
+    mov [sv_hbe], ax            ; ...which the walk counters use too: a
+                                ; counter is a BYTE (sv_hln, below)
     mov ax, SV_HNE * GLS_SZ
     mul bx
     mov [sv_hbw], ax
@@ -293,9 +264,8 @@ sv_hrun:
     jae .fin
     mov bl, al
     xor bh, bh
-    add bx, bx
-    add bx, [sv_hbl]
-    cmp word [sv_hln + bx], 0
+    add bx, [sv_hbe]
+    cmp byte [sv_hln + bx], 0
     jne .front
     inc byte [sv_hci]
     jmp short .retire
@@ -325,16 +295,16 @@ sv_hrun:
     jae .spend
     mov bl, dl
     xor bh, bh
-    add bx, bx
-    add bx, [sv_hbl]
-    mov ax, [sv_hln + bx]       ; pixels this edge still owes
-    or ax, ax
+    add bx, [sv_hbe]
+    mov al, [sv_hln + bx]       ; pixels this edge still owes
+    or al, al
     jz .next
-    cmp ax, SV_HPX
+    cmp al, SV_HPX
     jbe .cap                    ; ...the last of it, and no further
-    mov ax, SV_HPX
+    mov al, SV_HPX
 .cap:
-    sub [sv_hln + bx], ax
+    sub [sv_hln + bx], al
+    cbw                         ; 1..SV_HPX, so AH = 0 - the count is a word
     mov [si], bp                ; BP is DATA here, not an address: SI does the
     mov [si+2], ax              ; addressing and BP addresses SS (SPEC.md 1)
     add si, 4
@@ -410,15 +380,11 @@ sv_hinitw:
     jae .have
     mov ax, cx
 .have:
-    inc ax
-    push ax
-    mov al, [sv_hci]            ; the counter is indexed by WORD
-    xor ah, ah
-    add ax, ax
-    add ax, [sv_hbl]
-    mov bx, ax
-    pop ax
-    mov [sv_hln + bx], ax
+    inc ax                      ; < 256 - see sv_hln
+    mov bl, [sv_hci]
+    mov bh, 0
+    add bx, [sv_hbe]
+    mov [sv_hln + bx], al
 
     mov ax, [sv_hx1]
     mov bx, [sv_hy1]
@@ -572,16 +538,12 @@ sv_hverts:
     xor bh, bh
     add bx, bx
     add bx, [sv_hkp]            ; the shape's row: ring A's pair, then B's
+    mov al, [bx + SV_HKD_RAP]   ; the phase first, while BX still names the
+    mov [sv_hlph], al           ; row - the scale's load spends BL
     mov al, SV_HMR
     mov bl, [bx + SV_HKD_RAS]
     call sv_mulsh
     mov [sv_hlrr], al
-    mov bl, [sv_hli]
-    xor bh, bh
-    add bx, bx
-    add bx, [sv_hkp]
-    mov al, [bx + SV_HKD_RAP]
-    mov [sv_hlph], al
 
     xor al, al                  ; the twist: none on ring A, the shape's own
     cmp byte [sv_hli], 0        ; half-step on ring B
@@ -828,51 +790,64 @@ sv_hkd:
     dw sv_hw_star
     db 3, 5, 8, 127,  0,  52,  0,  1,  0, SV_HSP_ZIG
 
-sv_hf:      db 0                ; the figure being worked, and its three bases
-sv_hbv:     dw 0
-sv_hbe:     dw 0
-sv_hbl:     dw 0
-sv_hbw:     dw 0
+; The mode's state is a macro emitted into saver.asm's mode union (see
+; SV_CUBE_STATE). sv_hspawn writes every per-figure field - the kind, its
+; wave table, K, the radius, the centre, the vertices, the edges and the walk
+; - for both figures before the first frame reads one, so nothing here needs
+; a load-time value.
+%macro SV_SHAPE_STATE 0
+sv_hf:      resb 1               ; the figure being worked, and its three bases
+sv_hbv:     resw 1
+sv_hbe:     resw 1
+sv_hbw:     resw 1
 
-sv_hci:     db 0                ; sv_hrun / sv_hinitw: the edge in hand
-sv_hnn:     db 0                ; ...and how many the figure has
-sv_hx1:     dw 0
-sv_hy1:     dw 0
-sv_hx2:     dw 0
-sv_hy2:     dw 0
+sv_hci:     resb 1               ; sv_hrun / sv_hinitw: the edge in hand
+sv_hnn:     resb 1               ; ...and how many the figure has
+sv_hx1:     resw 1
+sv_hy1:     resw 1
+sv_hx2:     resw 1
+sv_hy2:     resw 1
 
-sv_hcx:     dw 0                ; sv_hspawn / sv_hverts: ONE figure at a time,
-sv_hcy:     dw 0                ; which is what lets these be single copies
-sv_hrr:     dw 0                ; the radius ON THE GLASS
-sv_hkk:     db SV_HKMIN
-sv_hli:     db 0
-sv_hpi:     db 0
-sv_hwi:     db 0
-sv_hkp:     dw sv_hkd           ; the shape in hand, and its wave table
-sv_hwp:     dw sv_hw_flow
-sv_hnw:     db 6
-sv_hlph2:   db 0
-sv_hlrr:    db 0
-sv_hlph:    db 0
-sv_hltw:    db 0
-sv_hpr:     db 0
-sv_hpc:     db 0
-sv_hth:     db 0
-sv_hm:      db 0, 0, 0          ; the model vertex handed to sv_rot3
+sv_hcx:     resw 1               ; sv_hspawn / sv_hverts: ONE figure at a time,
+sv_hcy:     resw 1               ; which is what lets these be single copies
+sv_hrr:     resw 1               ; the radius ON THE GLASS
+sv_hkk:     resb 1
+sv_hli:     resb 1
+sv_hpi:     resb 1
+sv_hwi:     resb 1
+sv_hkp:     resw 1           ; the shape in hand, and its wave table
+sv_hwp:     resw 1
+sv_hnw:     resb 1
+sv_hlph2:   resb 1
+sv_hlrr:    resb 1
+sv_hlph:    resb 1
+sv_hltw:    resb 1
+sv_hpr:     resb 1
+sv_hpc:     resb 1
+sv_hth:     resb 1
+sv_hm:      resb 3             ; the model vertex handed to sv_rot3
 
-sv_hne:     times SV_HNF db 0   ; per figure
-sv_hcur:    times SV_HNF db 0
-sv_hph:     times SV_HNF db SV_HP_WAIT
-sv_hhd:     times SV_HNF db 1
-sv_hik:     times SV_HNF db SV_MAIN
+sv_hne:     resb SV_HNF       ; per figure
+sv_hcur:    resb SV_HNF
+sv_hph:     resb SV_HNF
+sv_hhd:     resb SV_HNF
+sv_hik:     resb SV_HNF
 
-sv_hvx:     times SV_HNF * SV_HNV dw 0
-sv_hvy:     times SV_HNF * SV_HNV dw 0
-sv_hea:     times SV_HNF * SV_HNE db 0
-sv_heb:     times SV_HNF * SV_HNE db 0
-sv_hln:     times SV_HNF * SV_HNE dw 0
-sv_hwk:     times SV_HNF * SV_HNE * GLS_SZ db 0
-sv_hdsc:    times SV_HACT * 2 dw 0
+sv_hvx:     resw SV_HNF * SV_HNV
+sv_hvy:     resw SV_HNF * SV_HNV
+sv_hea:     resb SV_HNF * SV_HNE
+sv_heb:     resb SV_HNF * SV_HNE
+sv_hln:     resb SV_HNF * SV_HNE    ; pixels each edge still owes. A BYTE:
+                                    ; an edge is max(|dx|, |dy|) + 1 and both
+                                    ; its ends are within sv_hrr <= SV_HRMAX
+                                    ; of the centre, so it is at most
+                                    ; 2 * SV_HRMAX + 1 (asserted at
+                                    ; SV_HRMAX). It was a word, and 96 bytes
+                                    ; of it set the size of the mode union
+sv_hwk:     resb SV_HNF * SV_HNE * GLS_SZ
+sv_hdsc:    resw SV_HACT * 2
+%endmacro
+
 ; ...and the points those descriptors step into. SV_HACT descriptors of at most
 ; SV_HPX pixels each is the exact bound, so this list is never forced to commit
 ; itself early (gfxe_pflush stays 0) - which is the one place in the tree where
@@ -889,4 +864,8 @@ SV_PTMAX    equ 64
 %if SV_PTMAX < SV_HACT * SV_HPX
  %error "SV_PTMAX is under the shapes mode's own need (SV_HACT * SV_HPX)"
 %endif
-sv_pts:     times SV_PTMAX * 2 dw 0
+; It is in the union too, at an offset past BOTH of its users' own state
+; (saver.asm), so neither mode's walk can reach it.
+%macro SV_PTS_STATE 0
+sv_pts:     resw SV_PTMAX * 2
+%endmacro

@@ -139,8 +139,14 @@ FCP_CBSZ    equ 19              ; op (1), drive (1), folder (2), type (2),
 ;             that loads the module and far-calls in.
 ;   FCPX      a call OUT of the image. Near on big. On small the image sits at
 ;             a heap address and everything it calls is at COLD_SEG, so it is
-;             `call COLD_SEG:xf_<name>` - and COLD_SEG is an assembly-time
-;             constant, which is what makes that legal with no fixup at all.
+;             `call fcpx_go` with the target in the word after it - EXTD.DRV's
+;             EXK device (extmod.inc's exk_go), one segment along: fcpx_go
+;             builds the far frame into COLD_SEG:<name>, an assembly-time
+;             constant, and the body's near `ret` lands on cold_kretf. FIVE
+;             BYTES A SITE, the same as the `call COLD_SEG:xf_<name>` it
+;             replaced, and NO resident thunk per routine: that was 35 of them,
+;             140 bytes of kern_small's `.cold`, for routines only the image
+;             ever called this way.
 ;   (a TAIL jump out is written as an explicit %ifdef at each of its four
 ;    sites, NOT as a fifth macro. It cannot stay a `jmp` on small - the
 ;    routine it lands in ends in a NEAR `ret` and the image was entered by a
@@ -148,25 +154,19 @@ FCP_CBSZ    equ 19              ; op (1), drive (1), folder (2), type (2),
 ;    tools/stkbalance.py reads SOURCE and does not expand macros, so a macro
 ;    that ENDS a path is a path it walks straight through into the next
 ;    routine's pops. The same goes for the shared epilogues below.)
-;   FCPXF     the resident far entry FCPX and FCPXJ name: `call <body> / retf`,
-;             four bytes. THEY ALL LIVE IN ONE BLOCK at the foot of this file
-;             rather than beside the bodies they wrap - `.cold` is ONE segment,
-;             so an entry here reaches disk.inc's and memory.inc's bodies with
-;             an ordinary near call, and no other kernel file is touched.
+;   (FCPXF, the resident `xf_<name>: call <name> / retf` entry, is gone: the
+;    last one, xf_fm_stage_name, was FDLG.DRV's, and fdlg.inc reaches that
+;    body through its own fdx_go now.)
 ;   ...and the shared register epilogues, same shape and same reason: a module
-;   may not `jmp kretc_cx`, so the image carries its own copies (fcpk_*).
+;   may not `jmp kretc_cx`, so the image carries its own (fcp_x5).
 ; =============================================================================
 %ifdef FCP_MOD
   %macro FCPBODY 1
 %1 %+ _x:
   %endmacro
   %macro FCPX 1
-    call COLD_SEG:xf_ %+ %1
-  %endmacro
-  %macro FCPXF 1
-xf_ %+ %1:
-    call %1
-    retf
+    call fcpx_go
+    dw %1
   %endmacro
 %else
   %macro FCPBODY 1
@@ -175,15 +175,13 @@ xf_ %+ %1:
   %macro FCPX 1
     call %1
   %endmacro
-  %macro FCPXF 1
-  %endmacro
 %endif
 
 ; THE ARMS ARE THIS WAY ROUND ON PURPOSE, and it is tools/os88ovlchk.py's
 ; requirement rather than taste: that gate reads SOURCE and cannot evaluate a
 ; %ifdef, so it files everything after the LAST `section` directive it sees.
 ; With `.cold` written second it filed this file's bodies as cold while the
-; image header and fcpk_* stayed `.modp`, and reported every jump between
+; image header and the epilogues stayed `.modp`, and reported every jump between
 ; them as a segment crossing. `.modp` last makes its model agree with the
 ; kern_small build, which is the one the check exists to protect.
 %ifndef FCP_MOD
@@ -225,22 +223,44 @@ modp_e_answer:  call fcp_answer_x
             retf
 modp_e_door:    call fcp_door_x
             retf
-%endif
 
-; --- the shared register epilogues, and they are INSIDE the image -----------
-; Byte for byte kernel.asm's kretc_dx / kretc_cx, which fall through into one
-; another there and do here too. On kern_small they MUST be local: the image is
-; entered by a FAR call, so `jmp kretc_cx` would return through a near `ret`
-; against a four-byte frame - which is why they sit BELOW the section pair and
-; not above it. On kern_big they are five bytes of duplication, and they are
-; UNCONDITIONAL rather than behind a %ifdef because both gates that read this
-; file (tools/os88ovlchk.py, tools/stkbalance.py) read SOURCE and can evaluate
-; neither.
-fcpk_dx:    pop dx
-fcpk_cx:    pop cx
-            pop bx
-            pop ax
-            ret
+; -----------------------------------------------------------------------------
+; fcpx_go - the far call FCPX names, built by hand (extmod.inc's exk_go, with
+; COLD_SEG for KERNEL_SEG): the call left the address of `dw target` on the
+; stack, and this turns that one word into a far return to just past it with
+; cold_kretf's near return on top, then RETFs into COLD_SEG:target - whose
+; near `ret` lands on cold_kretf and its `retf` back here. Every register and
+; the flags are preserved both ways (no ADD and no INC: LEA), so a body sees
+; exactly what the site handed it - BP included, which drv_fs_call takes as
+; its verb.
+;
+; It is the cost of a COLD path: ~300 cycles a hop more than the four-byte
+; resident thunk it replaced, ~60 us on a 4.77MHz 8088. The busiest sites are
+; the copy loop's, a handful per CHUNK (fcp_rdnext: dsk_bytes_secs_x,
+; dsk_read_chain_x, dsk_next_clus_x), each chunk being whole `int 13h` calls
+; at ~400 ms apiece. The frame at the body's entry is the six bytes the
+; thunk's was; the peak inside this routine is 14 above the call.
+; -----------------------------------------------------------------------------
+fcpx_go:                        ; ovlchk: builds its own far frame
+    push ax                     ; STKBALANCE-OK: a far frame built by hand, its
+    push ax                     ; four slots spent by the RETF below and by the
+    push ax                     ; target's own return through cold_kretf
+    push ax
+    push bp
+    mov bp, sp                  ; [bp+2] offset, [bp+4] segment, [bp+6] the
+    push bx                     ; near return, [bp+8] the far return's offset
+    mov bx, [bp+10]             ; and [bp+10] the call's own return, which
+    mov [bp+10], cs             ; becomes the far return's CS
+    mov word [bp+6], cold_kretf
+    mov word [bp+4], COLD_SEG
+    lea bx, [bx+2]              ; past the `dw`
+    mov [bp+8], bx
+    mov bx, [cs:bx-2]           ; ...which names the target
+    mov [bp+2], bx
+    pop bx
+    pop bp
+    retf
+%endif
 
 ; -----------------------------------------------------------------------------
 ; fcp_arm - put one of the acting window's entries on the clipboard
@@ -325,21 +345,16 @@ fcp_n13:
     FCPX dsk_ncopy
     ret
 
-; fcp_x6 / fcp_x5 - the two epilogues this module's six deepest routines
-; share.  fcp_scan, fcp_rdnext and fcp_xfer bank es,di,si,dx,cx,bx; fcp_paste,
-; fcp_answer and fcp_relink bank the same set without ES, so the two ladders
-; nest and the six-deep one costs one byte over the five-deep.
+; fcp_x5 - the epilogue of the three bodies that bank BX..DI: fcp_paste,
+; fcp_answer and fcp_door. Below them nothing banks those five at all - that
+; is fcp_run's free set - so this is the module's one save ladder.
 ;
 ; Reached by `jmp`, never `call`, so SP here is exactly what it was at the
 ; routine's own epilogue and the `ret` finds that routine's caller.  Each
-; site's flag is already set above its jump - F-filecp-2 is what left every
-; one of the six with exactly ONE pop run to replace, which is what makes this
-; a rewrite of six exits rather than of twelve.
+; site's flag is already set above its jump.
 ;
 ; The order ENDS at bx, so it is not a suffix of any other pop ladder in the
 ; kernel and the two cannot be mistaken for one another.
-fcp_x6:
-    pop es
 fcp_x5:
     pop di
     pop si
@@ -378,15 +393,16 @@ FCPBODY fcp_paste
     push dx
     push si
     push di
-    cmp byte [fcp_cbop], FCP_NONE
+    mov ah, [fcp_cbop]          ; (AH: AL is the target drive, fcp_run's)
+    test ah, ah                 ; FCP_NONE
     je .empty
     mov si, fcp_cbop            ; the clipboard record, whole, into the
     mov di, fcp_op              ; operation's (FCP_CBSZ, asserted below)
-    mov cx, FCP_CBSZ
-    FCPX dsk_ncopy
-    cmp byte [fcp_cbop], FCP_CUT
+    mov cx, FCP_CBSZ            ; ...and dsk_ncopy hands CX back, so CH = 0
+    FCPX dsk_ncopy              ; below: FCP_NONE, and [fcp_all]'s 'ask'
+    cmp ah, FCP_CUT
     jne .keep                   ; a Cut is spent by its paste - however that
-    mov byte [fcp_cbop], FCP_NONE   ; paste ends - and a Copy stays, so it can
+    mov [fcp_cbop], ch          ; paste ends - and a Copy stays, so it can
 .keep:                          ; be pasted again. It USED to be spent in
                                 ; fcp_stop, at the end; here, at the start, is
                                 ; the same moment as far as anything that
@@ -394,9 +410,12 @@ FCPBODY fcp_paste
                                 ; fcp_stop - which the door's operations end
                                 ; through too - from spending a clipboard
                                 ; that was not this operation's
-    mov byte [fcp_all], 0
+    mov [fcp_all], ch
     call fcp_run
     jmp short .out
+%if FCP_NONE != 0 || FCP_CBSZ > 255
+  %error "fcp_paste writes FCP_NONE and a zero [fcp_all] out of CH = FCP_CBSZ >> 8"
+%endif
 .empty:
     mov al, FCPS_DONE           ; nothing on the clipboard is not an error,
 .out:                           ; it is a menu item that does nothing
@@ -411,7 +430,19 @@ FCPBODY fcp_paste
 ;      the destination was the folder the entry is already in (nothing to do,
 ;      nothing written - the paste treats that as done and the door reports
 ;      it), or the FERR_* behind FCPS_ERR
-; clobbers: AX, flags (called with everything else already saved)
+; clobbers: AX, BX, CX, DX, SI, DI, flags - FCP_RUN'S FREE SET
+;
+; **EVERYTHING REACHED FROM HERE MAY CLOBBER BX, CX, DX, SI AND DI.** fcp_run
+; and fcp_step are entered from exactly three bodies - fcp_paste, fcp_answer
+; and fcp_door - and all three bank BX..DI on entry and leave through
+; fcp_x5, so nothing below them has a caller that reads one of the five
+; across a call. The routines under here therefore save only what a SIBLING
+; needs from them: fcp_scan keeps BX (the frame, which fcp_step hands on to
+; fcp_mksub), fcp_rdnext keeps DI (fcp_xfer's WRITE_SEQ token on kern_big)
+; and the rest of its set, and whatever writes ES puts it back, because the
+; three bodies do not bank ES. A routine that says "fcp_run's free set" in its
+; clobbers line is leaning on this paragraph; one that may be reached from
+; anywhere else (fcp_here, fcp_n13, fcp_unbatch) keeps its own contract.
 ;
 ; The copy buffer is NOT claimed here. It used to be, ahead of the first step,
 ; and a same-volume Cut - which fcp_relink finishes with three directory
@@ -507,7 +538,7 @@ fcp_here:
 ; -----------------------------------------------------------------------------
 ; fcp_selfchk - refuse a folder pasted into itself or into its own subtree
 ; out: CF=1 = refuse
-; clobbers: flags
+; clobbers: AX, BX, CX, DX, flags (fcp_run's free set - see fcp_run)
 ;
 ; Without it the walk creates a copy inside the directory it is reading and
 ; then finds that copy, forever - a loop bounded only by the disk filling up.
@@ -517,10 +548,6 @@ fcp_here:
 ; the two trees cannot touch.
 ; -----------------------------------------------------------------------------
 fcp_selfchk:
-    push ax
-    push bx
-    push cx
-    push dx
     cmp word [fcp_type], 2      ; only a FOLDER can contain anything
     jb .ok
     mov al, [fcp_drv]
@@ -544,128 +571,114 @@ fcp_selfchk:
     loop .up
 .bad:
     stc
-    jmp short .out
+    ret
 .ok:
     clc
-.out:
-    jmp fcpk_dx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; fcp_srcclus - the clipboard entry's own first cluster
 ; out: CF=0 with BX = it; CF=1 = it could not be looked up
-; clobbers: BX (the output), AX, flags
+; clobbers: BX (the output), AX, CX, DX, SI, flags (fcp_run's free set)
 ; -----------------------------------------------------------------------------
 fcp_srcclus:
-    push si
     FCPX fcp_gosrc
     jc .bad
     mov si, fcp_name
     FCPX dskw_stat_x            ; CF=0 with BX = first cluster, and that flag
 .bad:                           ; IS this routine's answer - no second test
-    pop si
     ret
 
 ; -----------------------------------------------------------------------------
-; fcp_clspan - the cluster size a chunk must be a multiple of (SPEC.md 22.5)
-; in:  [fcp_drv] and [fcp_ddrv], both set
-; out: [fcp_lclus]; CF=1 = a volume would not mount
-; clobbers: flags
+; fcp_claim - the copy buffer, for fcp_step's .copyit (SPEC.md 22.5, 50)
+; in:  [fcp_drv] and [fcp_ddrv], both set; [fcp_seg] = 0 (no buffer held)
+; out: CF=0 with [fcp_seg] the buffer and [fcp_chunk] the bytes one pass
+;      moves; CF=1 with AL = FERR_NODISK (a volume would not mount) or
+;      FERR_FULL (no run of heap big enough for one cluster) - in AL, because
+;      fcp_step's .fail is where it lands
+; clobbers: AX, BX, CX, DX, SI, flags (fcp_run's free set - see fcp_run)
 ;
-; **BOTH volumes, not the current one.** A chunk has to satisfy two separate
-; multiples and they belong to different disks:
+; Four steps, and they were four routines (fcp_clspan, fcp_floor, fcp_bufget,
+; fcp_chunkset) with one caller each; one body is what lets the cluster span
+; ride in SI from the first step to the last instead of in .bss.
 ;
-;   - the SOURCE's, because fcp_rdnext resumes the chain by stepping past the
-;     last cluster dsk_read_chain touched. A take that ends mid-cluster skips
-;     the rest of it, and the copy silently loses those bytes.
-;   - the DESTINATION's, because dskw_append's precondition is that the file
-;     it extends is already a whole number of clusters (SPEC.md 22.5).
+; 1. THE CLUSTER SPAN, from BOTH volumes and not the current one. A chunk has
+;    to satisfy two separate multiples and they belong to different disks:
 ;
-; Both are powers of two, so a multiple of the larger is a multiple of both.
-; This used to be `dskw_clbytes` of whichever volume happened to be current
-; when the buffer was claimed, which is right only when the two agree - and
-; they always did, because the formatter gave every partition 512-byte
-; clusters. It gives them 1KB and 2KB now (SPEC.md 52.3), so a 31MB volume
-; and a 6MB one disagree and the bug came out: a 116KB file copied from the
-; first to the second arrived 64,512 bytes long.
+;    - the SOURCE's, because fcp_rdnext resumes the chain by stepping past the
+;      last cluster dsk_read_chain touched. A take that ends mid-cluster skips
+;      the rest of it, and the copy silently loses those bytes.
+;    - the DESTINATION's, because dskw_append's precondition is that the file
+;      it extends is already a whole number of clusters (SPEC.md 22.5).
 ;
-; The root is used as the folder because a cluster size belongs to the VOLUME.
-; Two quiet switches, once per operation.
+;    Both are powers of two, so a multiple of the larger is a multiple of
+;    both. This used to be `dskw_clbytes` of whichever volume happened to be
+;    current when the buffer was claimed, which is right only when the two
+;    agree - and they always did, because the formatter gave every partition
+;    512-byte clusters. It gives them 1KB and 2KB now (SPEC.md 52.3), so a
+;    31MB volume and a 6MB one disagree and the bug came out: a 116KB file
+;    copied from the first to the second arrived 64,512 bytes long. The root
+;    is used as the folder because a cluster size belongs to the VOLUME: two
+;    quiet switches, once per operation.
+;
+; 2. THE FLOOR: FCP_MINKB, or ONE CLUSTER if that is bigger - because step 4
+;    floors the chunk to a cluster multiple and a chunk of zero clusters reads
+;    nothing at all. A 32MB FAT16 volume formatted with 32KB clusters is the
+;    case: three kilobytes of buffer would divide to a zero chunk and the copy
+;    would report success having written an empty file.
+;
+; 3. THE CLAIM, one for the whole operation, released by fcp_stop - including
+;    the end that a question is still waiting on, which is why every exit
+;    from this module goes through it. ITS BASE IS THE BUFFER: every heap
+;    claim is 512-byte aligned (kernel.asm guards 6 and 6b - HEAP_SEG % 32,
+;    every claim a whole number of KB, a DMA bump onto a 64KB page floor or a
+;    whole number of KB below one), which is the same fact the loader stands
+;    on when it reads a package image straight into its region. This used to
+;    round the base up to 32 paragraphs and keep a second word for what
+;    mem_free must be handed, behind a fallback for an unaligned base that
+;    nothing could produce.
+;
+; 4. THE CHUNK: the buffer, rounded DOWN to whole clusters - dskw_append's
+;    precondition (SPEC.md 22.5), so every append but the last lands on a
+;    cluster boundary. NEVER zero: the floor is a whole cluster, so the
+;    divide yields at least one. A zero chunk would read no bytes, which
+;    fcp_xfer cannot tell from "finished", and the copy would truncate in
+;    silence.
 ; -----------------------------------------------------------------------------
-fcp_clspan:
-    push ax
-    push bx
-    push cx
-    mov al, [fcp_drv]
+fcp_claim:
+    mov al, [fcp_drv]           ; 1. the span
     xor bx, bx
     FCPX fcp_goto
-    jc .out
+    jc .nodisk
     FCPX dskw_clbytes
-    mov cx, ax
-    mov al, [fcp_ddrv]
-    xor bx, bx
-    FCPX fcp_goto
-    jc .out
+    xchg ax, dx                 ; DX = the source's cluster bytes - in DX
+    mov al, [fcp_ddrv]          ; because fcp_goto keeps it on EVERY arm,
+    xor bx, bx                  ; where CX, SI and DI are a redirected
+    FCPX fcp_goto               ; volume's driver's (SPEC.md 19.2.2's clobber
+    jc .nodisk                  ; note)
     FCPX dskw_clbytes
-    cmp ax, cx
+    cmp dx, ax
     jae .have
-    mov ax, cx
+    xchg ax, dx                 ; DX = the larger
 .have:
-    mov [fcp_lclus], ax
-    clc
-.out:                           ; (a refusal arrives with its `jc`'s CF = 1)
-    jmp fcpk_cx
-
-; -----------------------------------------------------------------------------
-; fcp_floor - the smallest copy buffer this pair of volumes can be copied with
-; out: CX = KB
-; clobbers: CX (the output), flags
-;
-; FCP_MINKB, or ONE CLUSTER if that is bigger - because fcp_chunkset floors
-; the chunk to a cluster multiple and a chunk of zero clusters reads nothing
-; at all. A 32MB FAT16 volume formatted with 32KB clusters is the case: three
-; kilobytes of buffer would divide to a zero chunk and the copy would report
-; success having written an empty file. fcp_bufget must hand fcp_chunkset a
-; buffer of AT LEAST this many whole KB - which is why its alignment fallback
-; refuses rather than shrinking below it (it once shrank, and mem_avail
-; landing exactly here turned the shrink into that empty file).
-; -----------------------------------------------------------------------------
-fcp_floor:
-    push ax                     ; ...and NOT DX: `shr` is not `div`, and no
-    mov ax, [fcp_lclus]         ; instruction below writes DX         ; bytes per cluster, the LARGER of the two
-    FCPX mem_bytes_kb_x         ; volumes (fcp_clspan) - as KB, rounded up
-    mov cx, ax
-    cmp cx, FCP_MINKB
-    jae .out
-    mov cx, FCP_MINKB
-.out:
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; fcp_bufget / fcp_bufput - the copy buffer (SPEC.md 50)
-; out: CF=1 = the heap cannot fund even fcp_floor's minimum
-; clobbers: AX, flags
-;
-; One claim for the whole operation, taken at the start and released at the
-; end - including the end that a question is still waiting on, which is why
-; fcp_stop exists and why every exit from this module goes through it.
-; -----------------------------------------------------------------------------
-fcp_bufget:
-    push bx
-    push cx
-    push dx
-    call fcp_floor              ; CX = the smallest buffer that can work here
-    FCPX mem_avail_x              ; AX = largest free run in KB
+    mov ax, dx                  ; 2. the floor, in KB, rounded up
+    mov si, dx                  ; ...and SI carries the span to step 4
+    FCPX mem_bytes_kb_x
+    cmp ax, FCP_MINKB
+    jae .floor
+    mov ax, FCP_MINKB
+.floor:
+    xchg ax, cx                 ; CX = the smallest buffer that can work here
+    FCPX mem_avail_x            ; AX = largest free run in KB
     cmp ax, cx
-    jb .no
+    jb .full                    ; (CF = 1, the `jb`'s)
     cmp ax, FCP_MAXKB
     jbe .size
     mov ax, FCP_MAXKB
-.size:
-    mov [fcp_kb], ax
+.size:                          ; 3. the claim
     mov bx, MEM_K_COPY
-    push cx                     ; ...THE WHOLE BUFFER INSIDE ONE 64KB DMA PAGE
-    mov cx, ax                  ; (SPEC.md 22.5.1). dsk_runcap splits a run at
+    mov cx, ax                  ; ...THE WHOLE BUFFER INSIDE ONE 64KB DMA PAGE
+                                ; (SPEC.md 22.5.1). dsk_runcap splits a run at
                                 ; the page (SPEC.md 18.91), so where this
                                 ; buffer lands decides how often a chunk costs
                                 ; two int 13h instead of one - and that made
@@ -674,79 +687,47 @@ fcp_bufget:
                                 ; chunk smaller than the buffer never reaches
                                 ; the boundary at all
     FCPX mem_claim_dma_x
-    pop cx
     jnc .claimed
-    FCPX mem_claim_x              ; ...and a heap with no page-aligned run
-    jc .no                      ; still copies, exactly as it did before
-.claimed:                       ; CF=1 refused; the segment comes back in DX,
-                                ; NOT in AX - AX still holds the KB asked for
-    mov [fcp_raw], dx           ; what mem_free must be handed back...
-    mov ax, dx
-    add ax, 31                  ; ...and the 512-BYTE aligned base every
-    and ax, 0xFFE0              ; int 13h target has to have (SPEC.md 2)
-    mov [fcp_seg], ax
-    cmp ax, dx                  ; belt: guard 6b (kernel.asm) makes every
-    je .whole                   ; claim base KB-aligned, so the rounding
-                                ; never moves it and the whole claim is the
-                                ; buffer. It used to pay an unconditional KB
-                                ; here, which with mem_avail EXACTLY at
-                                ; fcp_floor took the buffer below one cluster
-                                ; and fcp_chunkset divided to a ZERO chunk -
-                                ; fcp_rdnext reads that as "file finished",
-                                ; so the copy wrote an empty destination,
-                                ; reported success, and a Cut then deleted
-                                ; the source
-    dec word [fcp_kb]           ; braces: if a future allocator ever hands
-    mov ax, [fcp_kb]            ; back an unaligned base, the KB the
-    cmp ax, cx                  ; alignment eats must not take the buffer
-    jae .whole                  ; below fcp_floor's one-cluster minimum (CX
-    call fcp_bufput             ; still holds it) - refusing outright is the
-    jmp short .no               ; honest answer, not a silent truncation
-.whole:
-    call fcp_chunkset
-    clc
-    jmp short .out
-.no:
-    xor ax, ax                  ; AX is this routine's documented clobber, and
-    mov [fcp_seg], ax           ; the accumulator store is three bytes against
-    mov [fcp_raw], ax           ; six for `mov word [mem], 0`
-    stc
-.out:
-    pop dx
-    pop cx
-    pop bx
+    FCPX mem_claim_x            ; ...and a heap with no page-aligned run
+    jc .full                    ; still copies, exactly as it did before
+.claimed:                       ; the segment comes back in DX, and AX still
+    mov [fcp_seg], dx           ; holds the KB asked for
+    mov cl, 10                  ; 4. the chunk: KB -> bytes. 64KB exactly
+    shl ax, cl                  ; wraps to 0 - the one count that does,
+    jnz .round                  ; FCP_MAXKB being the cap - and takes the
+    mov ax, FCP_MAXCH           ; largest whole-sector run below it instead
+.round:
+    xor dx, dx
+    div si
+    mul si                      ; floor(bytes / clusterbytes) * clusterbytes,
+    mov [fcp_chunk], ax         ; and CF = 0: the product fits in AX
     ret
-
-; fcp_bufput - give the copy buffer back.  clobbers: AX, flags - AX for the
-; same three-bytes-against-six reason, and neither caller minds: fcp_bufget's
-; alignment fallback re-zeroes AX at .no on the very next instruction, and
-; fcp_stop brackets its call with push ax / pop ax because AL carries the
-; FCPS_* it was handed.
-fcp_bufput:
-    push bx
-    push dx
-    mov dx, [fcp_raw]           ; the claim, not the aligned view of it
-    or dx, dx
-    jz .out
-    mov bx, MEM_K_COPY          ; mem_free takes the owner word too, and
-    FCPX mem_free_x ; refuses a base that is not this owner's
-    xor ax, ax
-    mov [fcp_raw], ax
-    mov [fcp_seg], ax
-.out:
-    pop dx
-    pop bx
+.full:
+    mov al, FERR_FULL           ; (`mov` writes no flag: CF is still 1)
+    ret
+.nodisk:
+    mov al, FERR_NODISK         ; ...and here, from the `jc`
     ret
 
 ; -----------------------------------------------------------------------------
 ; fcp_stop - end the operation, however it ended
 ; in:  AL = the FCPS_* to report
 ; out: AL unchanged
-; clobbers: flags
+; clobbers: BX, DX, flags (fcp_run's free set - see fcp_run; fcp_answer, its
+;      one caller outside it, banks the same five)
+;
+; The copy buffer goes back first. The word is cleared BEFORE mem_free is
+; asked, so it never names a freed block whatever mem_free answers, and a
+; zero is what fcp_claim's contract and this routine both read as "none".
 ; -----------------------------------------------------------------------------
 fcp_stop:
-    push ax
-    call fcp_bufput
+    xor dx, dx
+    xchg dx, [fcp_seg]          ; the buffer, and the word left 0
+    or dx, dx
+    jz .nobuf
+    mov bx, MEM_K_COPY          ; mem_free takes the owner word too, and
+    FCPX mem_free_x             ; refuses a base that is not this owner's.
+.nobuf:                         ; It preserves AX, so AL survives it
     mov byte [fcp_busy], 0
     call fcp_unbatch            ; the deferred remount is spent by the caller;
                                 ; the volume switches were quiet (SPEC.md
@@ -759,7 +740,6 @@ fcp_stop:
                                 ; (fcp_paste), because this routine ends the
                                 ; door's operations too and those own no
                                 ; clipboard to spend
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -777,22 +757,24 @@ FCPBODY fcp_answer
     cmp byte [fcp_busy], 0
     je .idle
     or al, al
-    jz .stop
+    jz .stop                    ; (AL = 0 is FCPS_DONE already)
     cmp al, 2
     jne .yes
-    mov byte [fcp_all], 1
-.yes:
-    mov byte [fcp_ovw], 1       ; the pending file may be replaced
+    mov [fcp_all], al           ; both flags are read as zero / NOT zero, so
+.yes:                           ; the answer itself is their 'yes'
+    mov [fcp_ovw], al           ; the pending file may be replaced
     call fcp_step
-    jmp short .out
-.stop:
-    mov al, FCPS_DONE           ; a stop is not a failure: what was already
-    call fcp_stop               ; copied stays, and the line says so
     jmp short .out
 .idle:
     mov al, FCPS_DONE
+    jmp short .out
+.stop:                          ; a stop is not a failure: what was already
+    call fcp_stop               ; copied stays, and the line says so
 .out:
     jmp fcp_x5
+%if FCPS_DONE != 0
+  %error "fcp_answer's stop reports FCPS_DONE out of the AL = 0 it tested"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; fcp_step - run the operation until it finishes, fails or must ask
@@ -804,18 +786,20 @@ FCPBODY fcp_answer
 ; again and nothing needs to be threaded through the event loop.
 ; -----------------------------------------------------------------------------
 fcp_step:
-    mov byte [dskw_batch], 1    ; one remount for the whole operation, spent
+    mov al, 1
+    mov [dskw_batch], al        ; one remount for the whole operation, spent
                                 ; by the caller (SPEC.md 18.4 rule 3)
     FCPX dsk_batch_begin_x  ; ...and one BPB validation per volume
                                 ; for as long as the interface stays frozen
                                 ; (SPEC.md 18.9.3). One slice is one batch: a
                                 ; question or a finish unlocks, which ends it,
-                                ; and the next slice opens another
-    cmp byte [fcp_started], 0
-    jne .walk
+                                ; and the next slice opens another. It
+                                ; preserves AX, so AL is still 1 here
+    xchg al, [fcp_started]      ; test AND set: AL = what it was
+    test al, al
+    jnz .walk
 
     ; --- the first step: the clipboard entry itself ---
-    mov byte [fcp_started], 1
     cmp byte [fcp_op], FCP_CUT  ; a same-volume move needs no data I/O at
     jne .copyit                 ; all (SPEC.md 22.6) - try that first, and
     mov al, [fcp_drv]           ; fall through to the copy engine when it
@@ -841,8 +825,7 @@ fcp_step:
                                 ; case already took
 .tree:
     call fcp_mkroot             ; create (or adopt) the folder in the target
-    jc .fail
-    mov word [fcp_depth], 0
+    jc .fail                    ; ([fcp_depth] is 0: fcp_run2 zeroed it)
     call fcp_push               ; BX = the new folder's cluster
     jc .fail
 
@@ -903,30 +886,12 @@ fcp_step:
     mov al, FCPS_ERR
     jmp fcp_stop                ; ...and the same here
 
-; fcp_claim - the copy buffer, for fcp_step's .copyit: what a chunk must be a
-; multiple of (fcp_clspan, from BOTH volumes - fcp_bufget sizes off it) and
-; then the one heap claim (SPEC.md 50).
-; out: CF=0; CF=1 with AL = FERR_NODISK (a volume would not mount) or
-;      FERR_FULL (no run of heap big enough for one cluster, fcp_floor's own
-;      refusal) - in AL, because .fail is where it lands
-; clobbers: AX, flags
-; A routine and not four inline lines because .fail is out of a short jump's
-; reach from .copyit, and `mov al, imm` writes no flag, so each answer is
-; loaded before the test that decides whether it is needed.
-fcp_claim:
-    call fcp_clspan
-    mov al, FERR_NODISK
-    jc .out
-    call fcp_bufget
-    mov al, FERR_FULL
-.out:
-    ret
-
 ; -----------------------------------------------------------------------------
 ; fcp_relink - move an entry inside ONE volume by moving its directory entry
 ; out: CF=0 = done; CF=1 with AX = 0 = not attempted (the caller falls back
 ;      to the copy engine); CF=1 with AX = FERR_* = failed past the point of
-;      no return. Preserves everything else.
+;      no return
+; clobbers: AX, BX, CX, DX, SI, DI, flags (fcp_run's free set - see fcp_run)
 ;
 ; A same-volume move needs no data I/O at all (SPEC.md 22.6): the chain is
 ; already where it belongs and only the name of it changes hands. Three
@@ -953,12 +918,6 @@ fcp_claim:
 ; the file.
 ; -----------------------------------------------------------------------------
 fcp_relink:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
     FCPX fcp_gosrc              ; the source entry, raw
     jc .no
     cmp byte [dsk_vkind], DVK_FILE
@@ -975,14 +934,18 @@ fcp_relink:
                                 ; The '..' is moot too - FSV_CHDIR answers
                                 ; the parent handle, so there is no on-disk
                                 ; link to go stale
-    mov si, fcp_name
+    mov si, fcp_name            ; ...for ALL THREE lookups below: dskw_stat,
+                                ; dskw_take_slot, dskw_ent_store and fcp_goto's
+                                ; quiet and dsk_chdir_q arms all keep SI, and
+                                ; its FSV arm is out of reach - a redirected
+                                ; volume declined above, and both ends are on
+                                ; it (fcp_step asked)
     FCPX dskw_stat_x            ; dskw_raw = its 32 bytes, BX = first cluster
     jc .no
     mov [fcp_rlclus], bx
 
     FCPX fcp_godst              ; the destination must not hold that name
     jc .no
-    mov si, fcp_name
     FCPX dskw_stat_x
     jnc .no                     ; it does: the copy path knows how to ask
     cmp ax, FERR_NOENT
@@ -996,50 +959,35 @@ fcp_relink:
     FCPX dskw_ent_store
     jc .no                      ; nothing written yet: still declinable
 
-    FCPX fcp_gosrc              ; ...and ONLY now unname the source
-    jc .half
-    mov si, fcp_name
-    call fcp_rlzap
-    jc .half
+    FCPX fcp_gosrc              ; ...and ONLY now unname the source -
+    jc .half                    ; WITHOUT freeing its chain, the one delete
+    FCPX dskw_stat_x            ; in this system that leaves the clusters
+    jc .half                    ; alone: the entry just written in the
+    mov byte [dskw_raw], 0xE5   ; destination owns them now, and dskw_delete
+    mov byte [dskw_zapnext], 0  ; would take the moved file with it. The
+    FCPX dskw_ent_store         ; stat locates it (dskw_dsec/doff and
+    jc .half                    ; dskw_raw); 0xE5 is SPEC.md 19's deleted
+                                ; marker
 
     cmp word [fcp_type], 2      ; a folder's own '..' has to follow it
     jb .done
     call fcp_rlup               ; best effort: the move has happened either
 .done:                          ; way, and a stale '..' is a wrong parent
     clc                         ; link, not a lost file
-    jmp short .pops
+    ret
 .half:
     mov ax, FERR_IO             ; past the point of no return: the entry is
-    jmp short .out              ; in the destination and the source still
-.no:                            ; names it. Reported, never retried.
-    xor ax, ax                  ; not attempted, nothing written - and `xor`
-.out:                           ; clears CF, so the `stc` below is the only
-    stc                         ; flag either error arm sets
-.pops:
-    jmp fcp_x5
-
-; -----------------------------------------------------------------------------
-; fcp_rlzap - unname an entry WITHOUT freeing its chain (module-internal)
-; in:  SI = its NUL 8.3 name, its directory current
-; out: CF=0, or CF=1 with AX = FERR_*
-; clobbers: AX, flags
-;
-; The one delete in this system that leaves the clusters alone, because they
-; are not free: the entry fcp_relink just wrote in the destination owns them
-; now. dskw_delete would free them and take the moved file with it.
-; -----------------------------------------------------------------------------
-fcp_rlzap:
-    FCPX dskw_stat_x            ; locates it: dskw_dsec/doff, and dskw_raw
-    jc .out
-    mov byte [dskw_raw], 0xE5   ; SPEC.md 19's deleted marker
-    mov byte [dskw_zapnext], 0
-    FCPX dskw_ent_store
-.out:
+    stc                         ; in the destination and the source still
+    ret                         ; names it. Reported, never retried.
+.no:
+    xor ax, ax                  ; not attempted, nothing written
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
 ; fcp_rlup - point a moved folder's own '..' at its new parent
-; out: nothing (all registers preserved); a failure is left alone
+; out: nothing; a failure is left alone
+; clobbers: AX, BX, CX, DX, flags (fcp_run's free set); ES is kept
 ;
 ; Entry 1 of a subdirectory is '..' by spec, which is the same fact
 ; dsk_dotdot rests on (SPEC.md 19.2) - and it is checked here rather than
@@ -1048,9 +996,6 @@ fcp_rlzap:
 ; the folder it used to live in.
 ; -----------------------------------------------------------------------------
 fcp_rlup:
-    push ax
-    push bx
-    push cx
     push es
     push ss                     ; ES = LOW_SEG (SPEC.md 2.1), which is what SS names
     pop es
@@ -1065,74 +1010,55 @@ fcp_rlup:
     FCPX dsk_rd1_x
     pop ax
     jc .out
-    cmp byte [es:dsk_secbuf+32], '.'
-    jne .out
-    cmp byte [es:dsk_secbuf+33], '.'
-    jne .out
+    cmp word [es:dsk_secbuf+32], '..'   ; the first TWO bytes of the name,
+    jne .out                    ; in one compare
     mov bx, [fcp_dcwd]
     mov [es:dsk_secbuf+32+DSK_R_CLUS], bx
-    push ax
 %ifdef OS88_BIGVOL
     FCPX dsk_c2arm_x            ; [dsk_c2hi] is still the folder's: the read
 %endif                          ; between spent [dsk_lbahi], not it
     FCPX dsk_wr1_x
-    pop ax
 .out:
     pop es
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; fcp_frame / fcp_push - the frame stack (module-internal)
 ; fcp_frame: out BX -> the top frame (depth >= 1 assumed)
-; fcp_push:  in BX = the new destination folder's cluster, [fcp_cclus] its
-;            source; out CF=1 = FCP_MAXD exceeded (AX = FERR_DIRFULL - the
-;            truthful shape of "this tree is deeper than we walk")
-; -----------------------------------------------------------------------------
-; fcp_faddr - the address of frame AX.  in: AX = the index; out: BX -> the
-; frame, AX = whatever BX held on the way in.  clobbers: AX, BX, DX, flags -
-; both callers save DX for `mul`'s sake anyway.
+; fcp_push:  in BX = the new destination folder's cluster, [fcp_csrc] its
+;            source; out CF=0, or CF=1 = FCP_MAXD exceeded (AX = FERR_DIRFULL -
+;            the truthful shape of "this tree is deeper than we walk")
+; clobbers: AX, BX, DX, flags - both. Every caller is fcp_step, whose own
+;      callers bank BX..DI around it, or fcp_fnames, which banks them itself;
+;      none of them reads AX or DX across the call.
 ;
-; The `xchg` is load-bearing at BOTH ends and must not be tidied into a `mov`:
-; fcp_push arrives with the new folder's cluster in BX and needs it back in
-; AX, and fcp_frame discards what it gets with its own `pop ax`.
+; fcp_frame FALLS INTO fcp_faddr, the address of frame AX: in AX = the index;
+; out BX -> the frame, AX = whatever BX held on the way in, DX = 0 (the high
+; half of a product under 64K). The `xchg` is load-bearing and must not be
+; tidied into a `mov`: fcp_push arrives with the new folder's cluster in BX
+; and needs it back in AX.
+; -----------------------------------------------------------------------------
+fcp_frame:
+    mov ax, [fcp_depth]
+    dec ax                      ; the TOP frame is fcp_push's at depth-1
 fcp_faddr:
     mov dx, FCP_FSIZE
-    mul dx                      ; DX:AX, so DX is saved by both callers
-    add ax, fcp_stack
+    mul dx                      ; DX:AX, and DX = 0: the product is tiny
+    add ax, fcp_stack           ; (no carry: CF = 0 out of here)
     xchg ax, bx
     ret
 
-fcp_frame:
-    push ax
-    push dx
-    mov ax, [fcp_depth]
-    dec ax                      ; the TOP frame is fcp_push's at depth-1
-    call fcp_faddr
-    pop dx
-    pop ax
-    ret
-
 fcp_push:
-    cmp word [fcp_depth], FCP_MAXD
-    jae .deep                   ; ...asked BEFORE anything is banked
-    push ax
-    push bx
-    push dx
     mov ax, [fcp_depth]
+    cmp ax, FCP_MAXD
+    jae .deep
+    inc word [fcp_depth]
     call fcp_faddr              ; BX -> the new frame, AX = its destination
     mov FF(FCP_FDST), ax
     mov ax, [fcp_csrc]
     mov FF(FCP_FSRC), ax
-    mov word FF(FCP_FPOS), 0
-    inc word [fcp_depth]
-    pop dx
-    pop bx
-    pop ax
-    clc
-    ret
+    mov FF(FCP_FPOS), dx        ; 0, out of the `mul` - and CF = 0 out of
+    ret                         ; fcp_faddr's `add`: no `mov` writes a flag
 .deep:
     mov ax, FERR_DIRFULL
     stc
@@ -1144,7 +1070,7 @@ fcp_push:
 ; out: CF=0 with fcp_cname / [fcp_ctype] / [fcp_csrc] set and
 ;      the frame's ordinal advanced past it; CF=1 with AX = 0 (exhausted) or
 ;      AX = FERR_IO (unreadable)
-; clobbers: AX, flags
+; clobbers: AX, CX, DX, SI, DI, flags (fcp_run's free set); BX and ES are kept
 ;
 ; The ordinal is a RAW slot number - sector*16 + slot - and re-walking to it
 ; is what buys the frame array its small size. A copy does not modify the
@@ -1158,12 +1084,8 @@ fcp_push:
 ; silently carried along, and neither is a long-name fragment.
 ; -----------------------------------------------------------------------------
 fcp_scan:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
+    push bx                     ; ...the frame, which fcp_step hands on to
+    push es                     ; fcp_mksub - and ES, for the module's callers
     mov di, bx                  ; DI -> the frame, held throughout
     push ss
     pop es
@@ -1202,19 +1124,17 @@ fcp_scan:
 .fatwalk:
     mov ax, FD(FCP_FSRC)
     FCPX dsk_dirw_start_x
-    mov ax, FD(FCP_FPOS)       ; the ordinal splits into a sector and a slot
-    mov cl, 4
-    shr ax, cl
-    mov [fcp_ssec], ax
-    mov ax, FD(FCP_FPOS)
-    and ax, 15
-    mov [fcp_sslot], ax
+    mov ax, FD(FCP_FPOS)       ; the ordinal splits into a sector and a slot,
+    mov bx, ax                  ; and both ride in REGISTERS to the end of the
+    and bx, 15                  ; walk: BX = the slot to resume at, DX = the
+    mov cl, 4                   ; whole sectors to skip. The dsk_dirw_* trio
+    shr ax, cl                  ; preserves both, and nothing else in this
+    xchg ax, dx                 ; arm writes either until .stage exits
 .skipsec:
-    cmp word [fcp_ssec], 0      ; dsk_dirw_next only computes LBAs - skipping
-    je .readsec                 ; whole sectors reads nothing
-    FCPX dsk_dirw_next_x
+    dec dx                      ; (at most 4,095, so the sign is the end)
+    js .readsec                 ; dsk_dirw_next only computes LBAs - skipping
+    FCPX dsk_dirw_next_x        ; whole sectors reads nothing
     jc .end
-    dec word [fcp_ssec]
     jmp short .skipsec
 .readsec:
     FCPX dsk_dirw_get_x ; dsk_secbuf = the sector holding the
@@ -1223,13 +1143,12 @@ fcp_scan:
                                 ; keeps the flags dsk_dirw_get_x answered)
     jmp .ioerr
 .secok:
-    mov si, dsk_secbuf
-    mov ax, [fcp_sslot]
+    mov si, bx
     mov cl, 5
-    shl ax, cl                  ; slot * 32
-    add si, ax
+    shl si, cl                  ; slot * 32
+    add si, dsk_secbuf
     mov cx, 16
-    sub cx, [fcp_sslot]         ; slots left in this sector, always >= 1
+    sub cx, bx                  ; slots left in this sector, always >= 1
 .entry:
     mov al, [es:si]
     test al, al
@@ -1251,8 +1170,7 @@ fcp_scan:
 .stage:                         ; ...and FSV_ENUM's answer arrives here too
     mov si, dsk_ent             ; SI and DI are dead from here to the `ret`
     mov di, fcp_cname           ; below - every path out of .stage is this
-    call fcp_n13                ; routine's own exit, and its outer save set
-                                ; is what restores the caller's pair.
+    call fcp_n13                ; routine's own exit.
                                 ; (dsk_ent is scratch every caller rewrites)
     mov ax, [dsk_ent+16]
     mov [fcp_ctype], ax
@@ -1263,7 +1181,7 @@ fcp_scan:
 .next:
     add si, 32
     loop .entry
-    mov word [fcp_sslot], 0     ; this sector is spent; the ordinal has kept
+    xor bx, bx                  ; this sector is spent; the ordinal has kept
     jmp .readsec                ; up with it, so the next one starts at 0
 .end:
     xor ax, ax
@@ -1273,13 +1191,15 @@ fcp_scan:
 .bad:
     stc
 .out:
-    jmp fcp_x6
+    pop es
+    pop bx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; fcp_mkroot - create (or adopt) the pasted folder in the destination
 ; out: CF=0 with BX = its first cluster and [fcp_csrc] = the source's;
 ;      CF=1 with AX = FERR_*
-; clobbers: AX, BX, flags
+; clobbers: AX, BX, CX, DX, SI, flags (fcp_run's free set - see fcp_run)
 ;
 ; "A folder that already exists is not an overwrite" (SPEC.md 22.3): if the
 ; name is there and IS a folder, it is adopted and the recursion continues
@@ -1287,8 +1207,6 @@ fcp_scan:
 ; cannot resolve, and it is reported rather than guessed at.
 ; -----------------------------------------------------------------------------
 fcp_mkroot:
-    push cx
-    push si
     call fcp_srcclus            ; BX = the source folder's own cluster
     jc .out
     mov [fcp_csrc], bx
@@ -1313,42 +1231,34 @@ fcp_mkroot:
     FCPX fcp_godst
     jc .out
     mov si, fcp_name
-    call fcp_ensure             ; ...whose CF is this routine's answer
-.out:
-    pop si
-    pop cx
-    ret
+    jmp short fcp_ensure        ; ...whose CF is this routine's answer
 .noenum:
     mov ax, FERR_PROT           ; the same honest refusal dskw_rmbody gives
-    jmp short .out              ; for the same absence (SPEC.md 62.10.4.5).
-                                ; CF is still set by the `jc .noenum` that
-                                ; is this label's only predecessor
+.out:                           ; for the same absence (SPEC.md 62.10.4.5).
+    ret                         ; CF is still set by the `jc` that got here
 
 ; -----------------------------------------------------------------------------
 ; fcp_mksub - the same, for the subdirectory fcp_scan just named
 ; in:  BX -> the top frame
 ; out: CF=0 with BX = the mirror's first cluster; CF=1 with AX = FERR_*
-; clobbers: AX, BX, flags
+; clobbers: AX, BX, CX, DX, SI, flags (fcp_run's free set - see fcp_run)
+;
+; FALLS INTO fcp_ensure, whose CF is this routine's answer.
 ; -----------------------------------------------------------------------------
 fcp_mksub:
-    push si
     mov al, [fcp_ddrv]
-    push bx
-    mov bx, FF(FCP_FDST)
-    FCPX fcp_goto
-    pop bx
-    jc .out
-    mov si, fcp_cname
-    call fcp_ensure             ; ...whose CF is this routine's answer
-.out:
-    pop si
+    mov bx, FF(FCP_FDST)        ; (BX is the output: the frame is not needed
+    FCPX fcp_goto               ; again until fcp_step asks for it)
+    jnc .go
     ret
+.go:
+    mov si, fcp_cname
 
 ; -----------------------------------------------------------------------------
 ; fcp_ensure - make SI a folder of the current directory, or adopt it
 ; in:  SI -> a NUL 8.3 name; the destination directory is current
 ; out: CF=0 with BX = its first cluster; CF=1 with AX = FERR_*
-; clobbers: AX, BX, flags
+; clobbers: AX, BX, CX, DX, flags - dskw_stat answers a size in DX:CX
 ; -----------------------------------------------------------------------------
 fcp_ensure:
     FCPX dskw_stat_x            ; CF=0: it is already there
@@ -1380,18 +1290,12 @@ fcp_ensure:
 ;      frame do. [fcp_intree] says which.
 ; out: CF=0 and [fcp_pend] = 1 when a question is owed, 0 when the file is
 ;      copied; CF=1 with AX = FERR_*
-; clobbers: AX, flags
+; clobbers: AX, BX, CX, DX, SI, DI, flags (fcp_run's free set - see fcp_run)
 ; -----------------------------------------------------------------------------
 fcp_file1:
-    push bx
-    push cx
-    push dx
-    push si                     ; ...and NOT DI: nothing here writes it, and
-    xor ax, ax                  ; every callee banks it (fcp_fnames, fcp_xfer).
-    mov [fcp_ovw], al           ; (AX is this routine's to clobber)
-                                ; or publishes preserving it (dskw_stat_x,
-                                ; fcp_goto - which four other routines in this
-                                ; file already trust across the FSV path)
+    xor ax, ax
+    mov [fcp_ovw], al
+    mov [fcp_pend], al          ; no question owed until one is found
     mov [fcp_ovwsz], ax         ; ...and it replaces nothing until proven
     mov [fcp_ovwsz+2], ax       ; otherwise (SPEC.md 22.5.2)
     call fcp_fnames             ; publish this file's source and destination
@@ -1411,66 +1315,50 @@ fcp_file1:
                                 ; along
     cmp byte [fcp_all], 0       ; file, and not something to silently remove
     jne .go                     ; "replace all" was answered earlier
-    mov byte [fcp_pend], 1      ; suspend: fcp_cname is what to ask about
-    jmp short .ok
+    inc byte [fcp_pend]         ; suspend: fcp_cname is what to ask about.
+    ret                         ; 0 -> 1, and `inc` leaves CF as the `cmp`
+                                ; above left it: 0, a compare against 0 never
+                                ; borrows
 .free:
     cmp ax, FERR_NOENT
     jne .err
 .go:
-    call fcp_xfer
-    jc .err
-    mov byte [fcp_pend], 0
-.ok:                            ; CF = 0 on both arrivals: the `jc` above
-    jmp short .out              ; not taken, and the `cmp [fcp_all], 0` (a
-                                ; compare against 0 never borrows)
+    jmp fcp_xfer                ; ...whose CF and AX are this routine's
 .clash:
     mov ax, FERR_EXIST
 .err:
     stc
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
 ; fcp_file2 - the answered half of fcp_file1: the transfer, no question
-; out: as fcp_file1
-; clobbers: AX, flags
+; out: as fcp_file1, and [fcp_pend] = 0 on EVERY path - a transfer that
+;      fails must not leave the question owed, or the next folder paste would
+;      find it at .walk and answer it with this operation's stale names
+; clobbers: as fcp_file1
 ; -----------------------------------------------------------------------------
 fcp_file2:
-    cmp byte [fcp_ovw], 0       ; answered 'no': leave the target alone.
-    je .skip                    ; NOTHING here writes BX, CX, DX, SI or DI,
-    call fcp_xfer               ; and fcp_xfer banks all five itself - so the
-    jc .out                     ; contract above is honoured directly rather
-.skip:                          ; than by saving registers nothing touches
-    mov byte [fcp_pend], 0      ; (CF = 0 both ways: the `jc` not taken, or
-.out:                           ; the `cmp [fcp_ovw], 0` EQUAL)
+    mov byte [fcp_pend], 0
+    cmp byte [fcp_ovw], 0       ; answered 'no': leave the target alone
+    je .out                     ; (CF = 0: the compare was EQUAL)
+    jmp fcp_xfer                ; ...whose CF and AX are this routine's
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
 ; fcp_fnames - publish the pending file's source and destination
-; out: fcp_fname = its name, [fcp_fsdrv]/[fcp_fsclus] the source directory,
-;      [fcp_fddrv]/[fcp_fdclus] the destination
-; clobbers: AX - its one caller, fcp_file1, clobbers AX too, and banking BX..DI
-;      in that order is what lets it leave through fcp_x5 (kernel size pass 9)
+; out: fcp_fname = its name, [fcp_fsclus] the source directory and
+;      [fcp_fdclus] the destination - on the OPERATION's two drives, [fcp_drv]
+;      and [fcp_ddrv], at every depth: a tree does not change volume on the
+;      way down, so fcp_gofs and fcp_gofd read those directly
+; clobbers: AX, BX, CX, DX, SI, DI, flags (fcp_run's free set - see fcp_run)
 ;
 ; The first step and the walk name a file differently - the clipboard entry
 ; itself versus whatever fcp_scan just found - and resolving that here means
 ; fcp_file1, fcp_file2 and the question all read one set of words.
 ; -----------------------------------------------------------------------------
 fcp_fnames:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov al, [fcp_ddrv]
-    mov [fcp_fddrv], al
-    mov al, [fcp_drv]           ; the source drive is the OPERATION's at every
-    mov [fcp_fsdrv], al         ; depth - a tree does not change volume on the
-    cmp word [fcp_depth], 0     ; way down
+    cmp word [fcp_depth], 0
     jne .intree
     mov si, fcp_name            ; the operation's entry itself
     mov ax, [fcp_cwd]
@@ -1487,36 +1375,15 @@ fcp_fnames:
     mov [fcp_fdclus], ax
 .name:
     mov di, fcp_fname           ; ...and it lands under the same name at the
-    call fcp_n13                ; other end, which is what a copy means here:
+    jmp fcp_n13                 ; other end, which is what a copy means here:
                                 ; fcp_wprep and fcp_undo read this one word
                                 ; for the destination too
-    jmp fcp_x5
-
-; -----------------------------------------------------------------------------
-; fcp_rdopen - begin a streaming read of SI in the CURRENT directory
-; out: CF=0 with the chain and the size latched; CF=1 with AX = FERR_*
-; clobbers: AX, flags
-; -----------------------------------------------------------------------------
-fcp_rdopen:
-    push bx
-    push cx
-    push dx
-    FCPX dskw_stat_x            ; BX = first cluster, DX:CX = size
-    jc .out
-    mov [fcp_rclus], bx         ; ...or, on a redirected volume, THE HANDLE
-    mov [fcp_rsz], cx           ; dskw_stat answered (SPEC.md 62.9.1)
-    mov [fcp_rszh], dx
-    xor ax, ax                  ; such a read walks an OFFSET, not a chain
-    mov [fcp_roff], ax          ; (CF = 0 from the `xor`; mov keeps it - AX
-    mov [fcp_roff+2], ax        ; is this routine's to clobber)
-.out:
-    jmp fcp_bufget.out          ; the same three pops (a pop writes no flag)
 
 ; -----------------------------------------------------------------------------
 ; fcp_rdnext - read the next chunk of that file into the copy buffer
 ; in:  the SOURCE directory is current
 ; out: CF=0 with AX = bytes read, 0 = the file is finished; CF=1 = FERR_IO
-; clobbers: AX (the output), flags
+; clobbers: AX (the output), BX, CX, DX, SI, ES, flags (fcp_run's free set); DI kept
 ;
 ; ONE dsk_read_chain call per chunk, not one disk_read per cluster. That
 ; walker already has the run coalescer (SPEC.md 18) - contiguous clusters
@@ -1547,13 +1414,10 @@ fcp_rdopen:
 ; go (dskw_append), and that is where the commit discipline lives.
 ; -----------------------------------------------------------------------------
 fcp_rdnext:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov word [fcp_rgot], 0
+    push di                     ; fcp_xfer's WRITE_SEQ token (kern_big), which
+                                ; the FSV path below spends on the offset. The
+                                ; rest is fcp_run's free set, and ES is
+                                ; fcp_xfer's to put back
     mov es, [fcp_seg]
     mov ax, [fcp_rsz]           ; take = min(what is left, one chunk)
     cmp word [fcp_rszh], 0
@@ -1563,9 +1427,9 @@ fcp_rdnext:
 .full:
     mov ax, [fcp_chunk]
 .have:
-    or ax, ax
+    mov [fcp_rgot], ax          ; stored BEFORE the test, so a finished file
+    or ax, ax                   ; leaves the 0 that .done reports
     jz .done                    ; the file is finished: 0 bytes says so
-    mov [fcp_rgot], ax
     cmp byte [dsk_vkind], DVK_FILE
     jne .fatread
 
@@ -1618,51 +1482,16 @@ fcp_rdnext:
     mov ax, FERR_IO
     stc
 .out:
-    jmp fcp_x6
+    pop di
+    ret
 
 ; fcp_took - the chunk just read is taken off what is left (SPEC.md 22.5)
-; out: CX = the take; everything else preserved, and CX is inside
-;      fcp_rdnext's own save set, which is where both callers are
+; out: CX = the take; everything else preserved - and CX is fcp_rdnext's to
+;      clobber, which is where both callers are
 fcp_took:
     mov cx, [fcp_rgot]
     sub [fcp_rsz], cx
     sbb word [fcp_rszh], 0
-    ret
-
-; -----------------------------------------------------------------------------
-; fcp_chunkset - the chunk size: the buffer, rounded DOWN to whole clusters
-; out: [fcp_chunk]; all registers preserved
-;
-; A cluster multiple is dskw_append's precondition (SPEC.md 22.5): every
-; append but the last therefore lands on a cluster boundary, so none of them
-; has to fill a partial sector inside an existing chain.
-; -----------------------------------------------------------------------------
-fcp_chunkset:
-    push ax
-    push cx
-    push dx
-    mov ax, [fcp_kb]
-    cmp ax, FCP_MAXKB
-    jb .kb
-    mov ax, FCP_MAXCH
-    jmp short .round
-.kb:
-    mov cl, 10
-    shl ax, cl
-.round:
-    mov cx, [fcp_lclus]         ; the span BOTH volumes need (fcp_clspan),
-                                ; never just the current one's
-    xor dx, dx
-    div cx
-    mul cx                      ; floor(bytes / clusterbytes) * clusterbytes
-    mov [fcp_chunk], ax         ; NEVER zero: fcp_bufget's floor is a whole
-                                ; cluster, so the divide above yields at least
-                                ; one. A zero chunk would read no bytes, which
-                                ; fcp_xfer cannot tell from "finished", and the
-                                ; copy would truncate in silence
-    pop dx
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1772,7 +1601,7 @@ fcp_undo:
 ; fcp_xfer - move one file's bytes, source directory to destination
 ; out: CF=0, or CF=1 with AX = FERR_* (FERR_BIG when it does not fit the
 ;      buffer - see the header note about dskw_write's 16-bit length)
-; clobbers: AX, flags
+; clobbers: AX, BX, CX, DX, SI, DI, flags (fcp_run's free set); ES is kept
 ;
 ; TWO VOLUME SWITCHES for a file that fits the buffer (SPEC.md 22.5), which is
 ; every app on the disk. It used to be five, and the two that went were both
@@ -1791,12 +1620,7 @@ fcp_undo:
 ; dskw_write exactly as before - it is the same call, with a length.
 ; -----------------------------------------------------------------------------
 fcp_xfer:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
+    push es                     ; (the rest is fcp_run's free set)
     FCPX fcp_gofs               ; open the source stream AND take its first
                                 ; chunk: we are here, and the alternative is
     jc .jerr                    ; coming back for it
@@ -1816,8 +1640,8 @@ fcp_xfer:
     ; than not trying (SPEC.md 62.9.8).
     cmp byte [dsk_vkind], DVK_FILE
     jne .stream
-    mov al, [fcp_fsdrv]
-    cmp al, [fcp_fddrv]
+    mov al, [fcp_drv]
+    cmp al, [fcp_ddrv]
     jne .stream
     push bp
     mov ax, [fcp_fsclus]        ; the two FOLDERS, and one name: fcp_xfer
@@ -1828,48 +1652,52 @@ fcp_xfer:
     pop bp
     jnc .fin
 .stream:
-    mov si, fcp_fname
-    call fcp_rdopen
+    mov si, fcp_fname           ; open the streaming read, in the CURRENT
+    FCPX dskw_stat_x            ; directory: BX = first cluster, DX:CX = size
     jc .err
-    mov ax, [fcp_rsz]           ; THE WHOLE FILE, banked before the first chunk
-    mov [fcp_need], ax          ; comes off it: fcp_rsz is what REMAINS, so
-    mov ax, [fcp_rszh]          ; after fcp_rdnext it is no longer the size
-    mov [fcp_need+2], ax
-    call fcp_rdnext             ; AX = bytes; 0 = the file is empty, which is
-    jc .err                     ; a real file and creates a real empty one
-    mov [fcp_flen], ax
-
-    FCPX fcp_gofd               ; create (or truncate) the destination, with
-    jc .err                     ; its first chunk already in hand
-    call fcp_room               ; ...but ASK FIRST (SPEC.md 22.5.2). Here and
-    jnc .create                 ; not earlier, because this is the first moment
-    mov ax, FERR_FULL           ; the destination volume is current - so the
-.jerr:
-    jmp short .err              ; check costs no switch of its own - and it is
-.create:                        ; still before anything has been created
+    mov [fcp_rclus], bx         ; ...or, on a redirected volume, THE HANDLE
+    mov [fcp_rsz], cx           ; dskw_stat answered (SPEC.md 62.9.1)
+    mov [fcp_rszh], dx
+    mov [fcp_need], cx          ; THE WHOLE FILE, banked before the first chunk
+    mov [fcp_need+2], dx        ; comes off it: fcp_rsz is what REMAINS, so
+                                ; after fcp_rdnext it is no longer the size
+    xor ax, ax                  ; such a read walks an OFFSET, not a chain
+    mov [fcp_roff], ax
+    mov [fcp_roff+2], ax
 %ifdef KERN_BIG
     xor di, di                  ; no WRITE_SEQ token yet: the first is COLD.
 %endif                          ; DI carries it from here: nothing in the loop
-                                ; below touches it but WRITE_SEQ itself
+                                ; below touches it but WRITE_SEQ itself, and
+                                ; fcp_rdnext banks it
+
+    ; --- ONE LOOP, and [fcp_made] says which write a chunk is -------------
+    ; The first chunk CREATES the destination (dskw_write, a truncating
+    ; create carrying its first bytes) and every later one EXTENDS it; they
+    ; used to be two copies of the read-switch-write sequence. A take of 0
+    ; bytes comes back only for an EMPTY file's first chunk - fcp_rdnext's
+    ; take is min(what is left, the chunk) and the loop goes round only while
+    ; something is left - and that creates a real empty file.
+.chunk:
+    call fcp_rdnext             ; AX = bytes; a chain that ended early says so
+    jc .err
+    mov [fcp_flen], ax
+    FCPX fcp_gofd               ; the destination, with the chunk in hand
+    jc .err
+    cmp byte [fcp_made], 0
+    jne .more
+    call fcp_room               ; ...but ASK FIRST (SPEC.md 22.5.2). Here and
+    mov ax, FERR_FULL           ; not earlier, because this is the first moment
+    jc .err                     ; the destination volume is current - so the
+                                ; check costs no switch of its own - and it is
+                                ; still before anything has been created
+                                ; (`mov` writes no flag: CF is fcp_room's)
     call fcp_wprep
     xor dx, dx                  ; DX:CX = the chunk (SPEC.md 18.4.1) - the one
     FCPX dskw_write_x           ; argument the two sites do not share
     jc .err
     mov byte [fcp_made], 1      ; ...and from HERE a failure owes a delete
-
-.chunk:
-    mov ax, [fcp_rsz]           ; the file itself says whether there is more,
-    or ax, [fcp_rszh]           ; so finishing costs no I/O at all
-    jz .fin
-    FCPX fcp_gofs
-    jc .err
-    call fcp_rdnext             ; AX = bytes; 0 cannot happen here, but a
-    jc .err                     ; chain that ended early would say it
-    or ax, ax
-    jz .fin
-    mov [fcp_flen], ax
-    FCPX fcp_gofd
-    jc .err
+    jmp short .next
+.more:
     call fcp_wprep
 %ifdef KERN_BIG
     mov al, WSQF_HELD           ; ONE HELD STREAM per file (SPEC.md 22.5.3):
@@ -1881,7 +1709,14 @@ fcp_xfer:
     FCPX dskw_append_x
 %endif
     jc .err
-    jmp .chunk
+.next:
+    mov ax, [fcp_rsz]           ; the file itself says whether there is more,
+    or ax, [fcp_rszh]           ; so finishing costs no I/O at all
+    jz .fin
+    FCPX fcp_gofs
+    jnc .chunk
+.jerr:
+    jmp short .err
 .fin:
 %ifdef KERN_BIG
     xor cx, cx                  ; THE CLOSE: the stream's link, FAT and size.
@@ -1896,12 +1731,14 @@ fcp_xfer:
     call fcp_undo               ; ...and a partial destination goes with it
     stc                         ; (SPEC.md 22.5.2). It preserves AX and the
 .out:                           ; flags, the FERR_* being on its way out
-    jmp fcp_x6
+    pop es
+    ret
 
 ; fcp_wprep - the four arguments dskw_write and dskw_append share
 ; out: ES:BX -> the chunk, CX = its length, SI -> the destination name.
-;      All four are inside fcp_xfer's own save set, which is where both
-;      callers are; the create site's `xor dx, dx` stays at the site
+;      All four are fcp_xfer's to clobber (fcp_run's free set, and ES it
+;      banks itself), which is where both callers are; the create site's
+;      `xor dx, dx` stays at the site
 fcp_wprep:
     mov es, [fcp_seg]
     xor bx, bx
@@ -1970,8 +1807,6 @@ FCPBODY fcp_door
     mov [fcp_dcwd], cx
     mov di, fcp_name            ; the staged name into the record; SI is
     call fcp_n13                ; api_name and dsk_ncopy preserves it
-    xor ax, ax
-    mov [fcp_type], ax          ; a FILE unless the entry says otherwise
     FCPX fcp_gosrc
     jc .ans                     ; AX = FERR_NODISK: the source volume would
                                 ; not mount, and that is the whole answer
@@ -1980,11 +1815,15 @@ FCPBODY fcp_door
     jc .ans                     ; ...or AX = FERR_NOENT et al., which is this
                                 ; door's answer too - the engine would find
                                 ; the same thing a directory walk later
-    test byte [dskw_raw+11], 0x10
-    jz .go
-    mov byte [fcp_type], 2      ; SPEC.md 19's folder type: the tree walk,
-.go:                            ; fcp_selfchk and fcp_rlup all key off it
-    mov byte [fcp_all], 1       ; replace without asking (see above)
+    and ax, DSKW_DIR            ; AL = the raw attribute byte: the folder
+    mov cl, 3                   ; bit, 0x10, becomes SPEC.md 19's folder type
+    shr ax, cl                  ; 2 and anything else a FILE's 0 - the tree
+    mov [fcp_type], ax          ; walk, fcp_selfchk and fcp_rlup all key off it
+    mov [fcp_all], cl           ; replace without asking (see above): any
+                                ; non-zero is 'all', and CL is 3
+%if DSKW_DIR != 0x10
+  %error "fcp_door shifts DSKW_DIR down to the folder type 2"
+%endif
     call fcp_run2
     mov al, [fcp_err]
 .ans:
@@ -2002,23 +1841,19 @@ FCPBODY fcp_door
 ; -----------------------------------------------------------------------------
 ; fcp_srcdel - a Cut's second half: remove the source, once the copy is whole
 ; out: CF=0, or CF=1 with AX = FERR_*
-; clobbers: AX, flags
+; clobbers: AX, BX, CX, DX, SI, DI, flags (fcp_run's free set - see fcp_run)
 ; -----------------------------------------------------------------------------
 fcp_srcdel:
-    push bx
-    push si
     FCPX fcp_gosrc
     jc .out
     mov si, fcp_name
     cmp word [fcp_type], 2
     jae .tree
     FCPX dskw_delete_x          ; ...and the callee's CF is this routine's
-    jmp short .out              ; answer on both arms
+.out:                           ; answer on both arms
+    ret
 .tree:
     FCPX dskw_rmtree            ; the folder AND everything under it (18.6)
-.out:
-    pop si
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2046,11 +1881,7 @@ fcp_err:    resb 1              ; FERR_* of whatever stopped us
 fcp_ddrv:   resb 1              ; the operation's target drive...
 fcp_dcwd:   resw 1              ; ...and folder
 
-fcp_raw:    resw 1              ; the copy buffer as mem_claim gave it...
-fcp_seg:    resw 1              ; ...and rounded up to a 512-byte boundary
-fcp_kb:     resw 1              ; its size in KB...
-fcp_lclus:  resw 1              ; bytes per cluster, the larger of the two
-                                ; volumes in this operation (fcp_clspan)
+fcp_seg:    resw 1              ; the copy buffer, 0 = none (fcp_claim)...
 fcp_chunk:  resw 1              ; ...and the bytes one pass moves
 
 fcp_rlclus: resw 1              ; fcp_relink: the moved entry's first cluster
@@ -2108,9 +1939,6 @@ section .bss
 section .bss                    ; ...and back, for the words that STAY: the
 %endif                          ; clipboard is resident by 3.4
 
-fcp_ssec:   resw 1              ; fcp_scan: sectors still to skip...
-fcp_sslot:  resw 1              ; ...and the slot to resume at
-
 fcp_cname:  resb 13             ; fcp_scan's answer: name... (its only writer
                                 ; is fcp_n13, `mov cx, 13` + dsk_ncopy, a BYTE
                                 ; loop that ends exactly here - which is what
@@ -2126,11 +1954,8 @@ fcp_csrc:   resw 1              ; ...and first cluster. NOT the size: it was
 fcp_fname:  resb 13             ; the pending file: name, at BOTH ends -
                                 ; files.inc reads it for the overwrite
                                 ; question, so it is resident on both builds
-fcp_fsdrv:  resb 1              ; ...source drive...
-fcp_fddrv:  resb 1              ; ...destination drive... (both `mov [x], al`
-                                ; at every site, so the alignment pad that
-                                ; used to follow was covering nothing)
-fcp_fsclus: resw 1              ; ...source folder...
+fcp_fsclus: resw 1              ; ...source folder (the drives are the
+                                ; operation's own, fcp_drv and fcp_ddrv)...
 fcp_fdclus: resw 1              ; ...destination folder...
 fcp_made:   resb 1              ; 1 = fcp_xfer has CREATED the destination, so
                                 ; a failure from here owes a delete (SPEC.md
@@ -2169,21 +1994,24 @@ section .cold
 ; source and destination.  Thirteen sites spelled out the same three
 ; instructions; the last door falls into fcp_goto rather than jumping to it.
 ; -----------------------------------------------------------------------------
+; Two pairs that share a DRIVE - the pending file's source is on the
+; clipboard entry's drive and its destination on the paste target's, at every
+; depth - so each pair loads its folder and then shares the drive load.
 fcp_gosrc:
-    mov al, [fcp_drv]
     mov bx, [fcp_cwd]
+    jmp short fcp_gos
+fcp_gofs:
+    mov bx, [fcp_fsclus]
+fcp_gos:
+    mov al, [fcp_drv]
     jmp short fcp_goto
 fcp_godst:
-    mov al, [fcp_ddrv]
     mov bx, [fcp_dcwd]
-    jmp short fcp_goto
-fcp_gofs:
-    mov al, [fcp_fsdrv]
-    mov bx, [fcp_fsclus]
-    jmp short fcp_goto
+    jmp short fcp_god
 fcp_gofd:
-    mov al, [fcp_fddrv]
     mov bx, [fcp_fdclus]
+fcp_god:
+    mov al, [fcp_ddrv]
 
 ; -----------------------------------------------------------------------------
 ; fcp_goto - make (AL = drive, BX = folder cluster) the current directory
@@ -2207,6 +2035,11 @@ fcp_gofd:
 ;
 ; The cluster is range-checked here rather than trusted, because the quiet
 ; path skips disk_mount's own .cwd_lost validation.
+;
+; Its three callees are reached with a PLAIN `call` on both builds, not FCPX:
+; this body is resident `.cold` on kern_small too, so they are near - FCPX
+; there was a far call through a resident `xf_` thunk into its own segment,
+; two bytes a site and a four-byte thunk apiece for nothing.
 ; -----------------------------------------------------------------------------
 fcp_goto:
     push dx
@@ -2229,7 +2062,7 @@ fcp_goto:
     cmp al, [disk_drive]
     jne .full
     mov dl, al                  ; **...AND IS IT STILL THE SAME DISK?** (SPEC.md
-    FCPX dsk_media_ok           ; 18.9.1.1) The compare above says only that the
+    call dsk_media_ok           ; 18.9.1.1) The compare above says only that the
     jc .full                    ; VOLUME has not changed, and a floppy is the
                                 ; thing that can be swapped under it. Without
                                 ; this the quiet arm wrote [dsk_cwd] and
@@ -2280,14 +2113,14 @@ fcp_goto:
     push bp
     mov ax, bx                  ; the handle, or 0 for the root
     mov bp, FSV_CHDIR
-    FCPX drv_fs_call
+    call drv_fs_call
     pop bp
     jc .bad
     jmp short .quiet
 .full:
     mov dl, al
     mov ax, bx
-    FCPX dsk_chdir_q_x
+    call dsk_chdir_q_x
     jnc .ok
 .ferr:
     mov ax, FERR_NODISK
@@ -2361,14 +2194,12 @@ fcp_fin:
     popf
     ret
 
-fcp_arm:
-    call fcp_load
-    jc .no
+fcp_arm:                        ; files.inc reaches this one with `jmp`, and a
+    call fcp_load               ; stub is as jumpable as the body it replaces
+    jc fcp_pfin.keep            ; the refusal is a bare `ret` (CF = 1, the
+                                ; `jc`'s), and fcp_pfin has one
     call far [FCPFP + FCPE_ARM*4]
     jmp short fcp_fin           ; CF is fcp_arm's answer and fcp_fin keeps it
-.no:                            ; (CF = 1, the `jc`'s) files.inc reaches this one
-    ret                         ; with `jmp`, and a stub is as jumpable as the
-                                ; body it replaces
 
 fcp_paste:
     call fcp_load
@@ -2398,9 +2229,8 @@ fcp_door:
     call far [FCPFP + FCPE_DOOR*4]
     jmp short fcp_fin           ; AX and CF are the answer; fcp_fin keeps both
 .no:
-    mov ax, FERR_NODISK
-    stc
-    ret
+    mov ax, FERR_NODISK         ; CF = 1 already: the `jc` is the one way in,
+    ret                         ; and `mov` writes no flag
 
 fcp_pfail:
     mov byte [fcp_err], FERR_NODISK   ; the system disk was not there to read
@@ -2409,50 +2239,6 @@ fcp_pfail:
     ret                               ; "the nearest true thing" (SPEC.md 2.8.1)
 
 
-; --- and the far entries the image calls out through (FCPXF) ----------------
-    FCPXF fcp_goto
-    FCPXF fcp_gosrc
-    FCPXF fcp_godst
-    FCPXF fcp_gofs
-    FCPXF fcp_gofd
-    FCPXF drv_fs_call
-    FCPXF drv_fs_has
-    FCPXF dsk_batch_begin_x
-    FCPXF dsk_bytes_secs_x
-%ifdef OS88_BIGVOL
-    FCPXF dsk_c2arm_x
-    FCPXF dsk_c2lba_arm_x
-%endif
-    FCPXF dsk_chdir_q_x
-    FCPXF dsk_clus2lba_x
-    FCPXF dsk_dirw_get_x
-    FCPXF dsk_dirw_next_x
-    FCPXF dsk_dirw_start_x
-    FCPXF dsk_dotdot_x
-    FCPXF dsk_media_ok
-    FCPXF dsk_ncopy
-    FCPXF dsk_next_clus_x
-    FCPXF dsk_rd1_x
-    FCPXF dsk_read_chain_x
-    FCPXF dsk_synth_x
-    FCPXF dsk_wr1_x
-    FCPXF dskw_append_x
-    FCPXF dskw_clbytes
-    FCPXF dskw_delete_x
-    FCPXF dskw_dfree_x
-    FCPXF dskw_ent_store
-    FCPXF dskw_mkdir_x
-    FCPXF dskw_rmtree
-    FCPXF dskw_stat_x
-    FCPXF dskw_sync_x
-    FCPXF dskw_take_slot
-    FCPXF dskw_write_x
-    FCPXF fm_stage_name
-    FCPXF mem_avail_x
-    FCPXF mem_bytes_kb_x
-    FCPXF mem_claim_dma_x
-    FCPXF mem_claim_x
-    FCPXF mem_free_x
 %endif
 
 section .text

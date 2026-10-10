@@ -804,6 +804,9 @@ ui_task:
     call mou_hotplug            ; a mouse plugged in after boot gets its
                                 ; reset edge (SPEC.md 9.4); one cmp per pass
                                 ; once any packet has ever arrived
+%ifdef KBD_DIAG
+    call kbg_tick               ; KBDDIAG=1 (SPEC.md 9.8.1): the panel, live
+%endif
 %ifdef MOU_DIAG
     call mdg_tick               ; MOUDIAG=1 only: KEEP the table live (SPEC.md
 %endif                          ; 9.9.6). Its irq/pkt/b0 columns count what the

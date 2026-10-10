@@ -117,31 +117,38 @@ FDE_TOP     equ 4
 ;
 ;   FDBODY  the label a body carries: `fdlg_open_x` resident, `fdlg_open_x_m`
 ;           in the image with a resident stub of the public name in front.
-;   FDX     a call OUT of the image, near on big and `call COLD_SEG:xd_<name>`
-;           on small - COLD_SEG being an assembly-time constant.
+;   FDX     a call OUT of the image, near on big and `call fdx_go` with the
+;           target in the word after it on small - filecp.inc's fcpx_go and
+;           extmod.inc's exk_go, once more: fdx_go builds the far frame into
+;           COLD_SEG:<name> (an assembly-time constant) with the body's near
+;           `ret` landing on cold_kretf. Five bytes a site, the same as the
+;           `call COLD_SEG:xd_<name>` it replaced, and no resident thunk.
 ;   FDK     a call INTO `.text` through one of the `.cold` trampolines of
 ;           SPEC.md 2.6.2: `call ct_<target>` on big, and the plain
 ;           `call KERNEL_SEG:<target>` on small.
-;   FDXF    the resident far entry FDX names, `call <body> / retf`. The prefix
-;           is `xd_` and filecp.inc's is `xf_`: both blocks share `.cold`.
-;   FDENT   bank AX..DI, restored by `jmp fdk_di`. kern_big's are kentc_di
-;           and kretc_di, both `.cold` beside this file; the image may not
-;           near-call either (a `.cold` routine is another segment to it), so
-;           it pushes its own and carries its own `fdk_di`.
+;   FDENT   bank AX..DI, restored by `jmp fdk_di` (fdlg_open, which kern_big
+;           also near-calls) or `jmp fdk_dif` (fdlg_reap, far on both).
+;           kern_big's are kentc_di, kretc_di and kretfc_di, all `.cold`
+;           beside this file; the image may not near-call any of them (a
+;           `.cold` routine is another segment to it), so it pushes its own
+;           and carries its own epilogue - ONE, ending in `retf`, because
+;           both of its users are far entries there.
+;   FDRET   the hook's return: `ret` on kern_big, where the resident
+;           fdlg_hook near-calls it, and `retf` in the image, where it is
+;           its own far entry.
 ; =============================================================================
 %ifdef FDLG_MOD
   %macro FDBODY 1
 %1 %+ _m:
   %endmacro
   %macro FDX 1
-    call COLD_SEG:xd_ %+ %1
+    call fdx_go
+    dw %1
   %endmacro
   %macro FDK 1
     call KERNEL_SEG:%1
   %endmacro
-  %macro FDXF 1
-xd_ %+ %1:
-    call %1
+  %macro FDRET 0
     retf
   %endmacro
 %else
@@ -154,7 +161,8 @@ xd_ %+ %1:
   %macro FDK 1
     call ct_ %+ %1
   %endmacro
-  %macro FDXF 1
+  %macro FDRET 0
+    ret
   %endmacro
 %endif
 ; ...and FDENT, always written `FDENT kentc_di`, whose epilogue is
@@ -170,7 +178,9 @@ xd_ %+ %1:
     call %1
   %endmacro
 %define fdk_di kretc_di        ; kern_big shares the kernel's ladder
+%define fdk_dif kretfc_di
 %else
+%define fdk_dif fdk_di         ; ...and the image's one epilogue is far
   %macro FDENT 1
     push ax
     push bx
@@ -196,25 +206,58 @@ modd_hdr:                       ; is at offset 0 because vstart is 0 and
     dw MOD_STAMP                ; ...and this build's LAYOUT
     dw modd_end                 ; MOD_H_IMG - vstart 0, so the end label IS it
     dw FD_NENT
-    dw modd_e_open              ; A FAR-RETURNING BODY IS ITS OWN ENTRY and a
-    dw modd_e_hook              ; near-returning one is wrapped: an entry is
-    dw fdlg_reap_x_m            ; reached by `call far`, so what it ends in has
-    dw fdlg_grab_x_m            ; to be a `retf`. reap/grab/top leave through
-    dw fdlg_top_x_m             ; their own; open and the hook leave near
+    dw fdlg_open_x_m            ; EVERY ENTRY IS ITS OWN BODY: each ends in a
+    dw fdlg_hook_x_m            ; `retf` here (fdk_di, FDRET), so the table
+    dw fdlg_reap_x_m            ; needs no `call body / retf` wrapper between
+    dw fdlg_grab_x_m            ; it and the code
+    dw fdlg_top_x_m
 
-modd_e_open:    call fdlg_open_x_m
-            retf
-modd_e_hook:    call fdlg_hook_x_m
-            retf
-
-; --- FDENT's epilogue: the image's own, because kretc_di is not in reach ----
+; --- the image's epilogue, because kretfc_di is not in reach ---------------
+; fdlg_ref is fdlg_open's refusal: CF=1 and out. It sits HERE, in front of
+; the body, so that the three refusals at its head are short jumps.
+fdlg_ref:   stc
 fdk_di:     pop di
             pop si
             pop dx
             pop cx
             pop bx
             pop ax
-            ret
+            retf
+
+; --- fdx_go - the far call FDX names, built by hand (filecp.inc's fcpx_go,
+; extmod.inc's exk_go): the call left the address of `dw target` on the
+; stack, and this turns that word into a far return to just past it with
+; cold_kretf's near return on top, then RETFs into COLD_SEG:target - whose
+; near `ret` lands on cold_kretf and its `retf` back here. Every register and
+; the flags are preserved both ways (no ADD and no INC: LEA). It replaced nine
+; resident `xd_` thunks and FILECP.DRV's xf_fm_stage_name, 40 bytes of
+; kern_small's `.cold`, at ~300 cycles a hop on a dialog's open, a click or a
+; commit; the frame at the body's entry is the six bytes the thunk's was, and
+; the peak inside this routine is 14 above the call.
+fdx_go:                         ; ovlchk: builds its own far frame
+    push ax                     ; STKBALANCE-OK: a far frame built by hand, its
+    push ax                     ; four slots spent by the RETF below and by the
+    push ax                     ; target's own return through cold_kretf
+    push ax
+    push bp
+    mov bp, sp                  ; [bp+2] offset, [bp+4] segment, [bp+6] the
+    push bx                     ; near return, [bp+8] the far return's offset
+    mov bx, [bp+10]             ; and [bp+10] the call's own return, which
+    mov [bp+10], cs             ; becomes the far return's CS
+    mov word [bp+6], cold_kretf
+    mov word [bp+4], COLD_SEG
+    lea bx, [bx+2]              ; past the `dw`
+    mov [bp+8], bx
+    mov bx, [cs:bx-2]           ; ...which names the target
+    mov [bp+2], bx
+    pop bx
+    pop bp
+    retf
+%endif
+
+%ifndef FDLG_MOD
+fdlg_ref:   stc                 ; kern_big's: the same refusal, in front of
+            jmp fdk_di          ; the body for the same short jumps
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -233,82 +276,74 @@ FDBODY fdlg_open_x
     FDENT kentc_di
 
     cmp word [fdlg_win], 0
-    jne .ref                    ; no dialog ever opens on top of another
+    jne fdlg_ref                ; no dialog ever opens on top of another
     mov [fdlg_rqcb], di
     mov [fdlg_rqwin], bx
     mov [fdlg_mode], al
+    mov cx, fdlg_s_topen        ; the caption fm_kinit puts on it - written
+    or al, al                   ; before the fences below, like the three
+    jz .ttl                     ; above: nothing reads any of them until
+    mov cx, fdlg_s_tsave        ; [fdlg_win] says a chooser is being built
+.ttl:
+    mov [fdlg_ttl], cx
 
     FDK cw_inst_win_owner       ; DI = the owning record, or 0; BX preserved
     or di, di
-    jz .ref
+    jz fdlg_ref
     cmp byte [di+I_STATE], 1
-    jne .ref
+    jne fdlg_ref
     mov [fdlg_rqrec], di        ; ...so from here on it is a LIVE record in
     mov ax, [di+I_SPTR]         ; inst_tab, and fdlg_hidx can never miss
     mov [fdlg_rqsp], ax
 
     xor ax, ax
     mov [fdlg_act], al          ; no answer yet
-    mov [fdlg_name], al
 %ifdef KERN_SMALL
     mov [fdlg_down], al         ; a press the last chooser never saw released
 %endif                          ; (an Escape mid-press) is not this one's
     or si, si                   ; the caller's default wins...
     jnz .setname
-    call fdlg_hidx              ; ...else the name this app last committed,
-    cmp byte [si], 1            ; CF=1 exactly when it is empty
-    jc .named
-.setname:
-    mov di, fdlg_name
-    call fdlg_cpy
-.named:
+    call fdlg_hidx              ; ...else the name this app last committed -
+.setname:                       ; which may be empty, and copying an empty
+    mov di, fdlg_name           ; name IS emptying the box: fdlg_cpy always
+    call fdlg_cpy               ; stores the NUL
     mov bx, fm_pool             ; A NEW FOLDER OR RENAME PROMPT IN ANY DISK
     mov cx, FM_NSLOT            ; WINDOW ENDS HERE: modes 1 and 2 type into
 .endp:                          ; fm_ebuf, which this chooser's box is about
-    mov al, [bx+FS_EDIT]        ; to own, and fm_edit_end spares every block
-    dec ax                      ; but the chooser's while it is up (38.5) - so
-    cmp al, 1                   ; the prompt would stay armed over the
-    ja .keepp                   ; chooser's text and its Enter rename the file
-    mov byte [bx+FS_EDIT], 0    ; to it. Modes 3-7 keep their state elsewhere
-.keepp:                         ; (a Clone's claim, a paste's buffer) and stand
-    add bx, FS_SIZE
-    loop .endp
+    cmp byte [bx+FS_EDIT], 2    ; to own, and fm_edit_end spares every block
+    ja .keepp                   ; but the chooser's while it is up (38.5) - so
+    mov byte [bx+FS_EDIT], 0    ; the prompt would stay armed over the
+.keepp:                         ; chooser's text and its Enter rename the file
+    add bx, FS_SIZE             ; to it. Modes 3-7 keep their state elsewhere
+    loop .endp                  ; (a Clone's claim, a paste's buffer) and stand.
+                                ; Mode 0 is stored as the 0 it already was
 
     call fdlg_seed              ; AL = volume, DX = folder, SI = its name|0
     mov [fdlg_sdrv], al         ; where it OPENED, so a cancel that never
     mov [fdlg_scwd], dx         ; moved records nothing (SPEC.md 38.10)
     FDX fm_seed                 ; parked for fm_kinit, as a drive icon does
 
-    mov ax, fdlg_s_topen        ; the caption fm_kinit puts on it
-    cmp byte [fdlg_mode], 0
-    je .ttl
-    mov ax, fdlg_s_tsave
-.ttl:
-    mov [fdlg_ttl], ax
-    mov word [fdlg_win], 0xFFFF ; fm_kinit adopts the window being built
+    or word [fdlg_win], -1      ; fm_kinit adopts the window being built:
+                                ; 0FFFFh, out of the 0 the fence above saw
     inc byte [inst_lkhd]        ; ...and app_launch shows it under OUR hold
     mov al, KIND_FILES          ; (0 -> 1 -> 0: no other path sets it)
     call KERNEL_SEG:cw_app_launch
     dec byte [inst_lkhd]        ; (CF is the launch's: `dec` keeps it)
     jc .fail
-    mov ax, [fdlg_win]          ; still the mark: launched, but not by
-    inc ax                      ; fm_kinit - impossible, and refused rather
-    jz .fail                    ; than trusted
+    mov bx, [fdlg_win]          ; still the mark: launched, but not by
+    inc bx                      ; fm_kinit - impossible, and refused rather
+    jz .fail                    ; than trusted. `inc` keeps the launch's CF=0
 %ifdef KERN_SMALL
-    mov bx, [fdlg_win]          ; the column's release (SPEC.md 38.3): this
-    mov word [bx+W_ONMOUSEUP], fdlg_onup ; build's Disk window has none of
+    mov word [bx+W_ONMOUSEUP-1], fdlg_onup ; the column's release (SPEC.md
+                                ; 38.3): this build's Disk window has none of
                                 ; its own, so the chooser's is ours - and
                                 ; wm_onmouseup IS this store, which kern_small
-                                ; publishes no shim for
+                                ; publishes no shim for. BX is the window + 1
 %endif
-    clc
-    jmp short .out
+    jmp fdk_di                  ; CF=0, still app_launch's
 .fail:
     and word [fdlg_win], 0
-.ref:
-    stc
-.out:
-    jmp fdk_di
+    jmp fdlg_ref
 
 ; -----------------------------------------------------------------------------
 ; fdlg_seed - where the chooser opens (SPEC.md 38.10)
@@ -347,13 +382,12 @@ fdlg_seed:
     call COLD_SEG:dwf_dskw_stat ; 38.10). A redirected volume's stat writes
     jc .root                    ; nothing, so it is the root there. SI is
     test al, 0x10               ; kept; AL = the attribute, BX = the cluster
-    jz .root                    ; a FILE called MEDIA is not the folder
-    mov dx, bx
-    pop ax
-    ret
+    jnz .got                    ; a FILE called MEDIA is not the folder
 .root:
-    xor dx, dx
+    xor bx, bx                  ; the root, and no name for the title
     xor si, si
+.got:
+    mov dx, bx
     pop ax
     ret
 %endif
@@ -380,32 +414,24 @@ fdlg_hidx:
 
 ; -----------------------------------------------------------------------------
 ; fdlg_home_dir - record where the chooser stood as the app's folder
-; in:  [fdlg_cdrv] / [fdlg_ccwd]; out: SI -> the row's inst_fname;
-; clobbers AX and BX - fdlg_close banks the BX and SI it still needs
+; in:  [fdlg_sdrv] / [fdlg_scwd], which fdlg_reap has turned from where the
+;      chooser OPENED into where it STOOD; out: SI -> the row's inst_fname;
+; clobbers AX and BX - fdlg_reap banks the BX and SI it still needs
 ;
 ; It is the instance's ACTUAL current directory (SPEC.md 19.2.1), and
 ; [inst_fpick] says the USER chose it, so the MEDIA default stops applying.
+; On a COMMIT fdlg_reap copies the name in after it as well (SPEC.md 38.10):
+; a Save As moves the app.
 ; -----------------------------------------------------------------------------
 fdlg_home_dir:
     call fdlg_hidx
-    mov al, [fdlg_cdrv]
+    mov al, [fdlg_sdrv]
     mov [inst_fdrv+bx], al
     mov byte [inst_fpick+bx], 1
     shl bx, 1
-    mov ax, [fdlg_ccwd]
+    mov ax, [fdlg_scwd]
     mov [inst_fcwd+bx], ax
     ret
-
-; ...and on a COMMIT the name as well (SPEC.md 38.10): a Save As moves the app.
-; Clobbers AX, BX, CX, SI, DI - fdlg_commit banked them
-fdlg_home_save:
-    call fdlg_home_dir          ; SI -> the row's name
-    mov di, si
-    mov si, fdlg_name
-%if INST_FNSZ - 1 != FD_NAMEMAX
-  %error "fdlg_cpy's bound is INST_FNSZ - 1's"
-%endif
-    jmp fdlg_cpy
 
 ; -----------------------------------------------------------------------------
 ; fdlg_gate - is the chooser still a USED and VISIBLE window? (SPEC.md 38.2)
@@ -418,34 +444,39 @@ fdlg_home_save:
 ; wm_paint_dmg - is what cancels a chooser that has gone, and the two filters
 ; hold everything still until it has (ZF is how they tell the cases apart).
 ; -----------------------------------------------------------------------------
+%if W_FLAGS != 0
+  %error "fdlg_gate reads bit 0 (used) and bit 1 (visible) at [bx]"
+%endif
 fdlg_gate:
     mov bx, [fdlg_win]
     or bx, bx
-    jz .none
-    mov al, [bx+W_FLAGS]
-    not al
-    test al, 3                  ; both USED and VISIBLE; CF=0
-    jz .ret
-.none:
     stc
+    jz .ret                     ; no chooser at all: CF=1 and the `or`'s ZF=1
+    mov al, [bx+W_FLAGS]
+    and al, 3
+    cmp al, 3                   ; CF=1 exactly when either bit is clear, and
+                                ; ZF=0 with it: gone
 .ret:
     ret
 
 ; -----------------------------------------------------------------------------
 ; fdlg_reap - once per UI pass while a chooser is up (SPEC.md 38.1.1, 38.6)
-; in:  nothing; the gfx lock is FREE (this is ui_task's deferred section)
+; in:  nothing; the gfx lock is FREE (this is ui_task's deferred section).
+;      Both callers test [fdlg_win] first (SPEC.md 38.1.1) and the body keeps
+;      its own test as well, for that section's reason
 ; out: nothing (all registers preserved)
 ;
 ; THE ONE PLACE A CHOOSER IS ENDED: a posted answer is acted on here, and a
 ; chooser that has gone is cancelled here - close, then for a commit the
 ; callback, all under one hold. A dead chooser's posted answer is spent with
-; it and never committed.
+; it and never committed. The close and the commit are this routine's own
+; two halves rather than procs of their own: it is their only caller, and
+; it banks every register once for both.
 ; -----------------------------------------------------------------------------
 FDBODY fdlg_reap_x
+    FDENT kentc_di
     cmp word [fdlg_win], 0
-    je .out
-    push ax
-    push bx
+    je .done
     call fdlg_gate              ; CF=1: it has gone, which is a cancel
     mov al, 0
     xchg al, [fdlg_act]         ; the posted answer, taken (CF untouched)
@@ -453,19 +484,151 @@ FDBODY fdlg_reap_x
     mov al, FDA_CANCEL
 .alive:
     or al, al
-    jz .done
+    jz .done                    ; (BX = [fdlg_win] from the gate either way)
+    push ax
     FDK cw_gfx_lock
-    call fdlg_close
+
+    ; --- THE CLOSE (SPEC.md 38.7 step 6) -------------------------------------
+    ; Records where it stood FIRST, out of a block that is still intact
+    ; whichever route got here - a close box has already torn the instance
+    ; down, and the pool block is only reused by the next launch. A failed
+    ; mount is not a folder to bring an app back to (FS_MOK), and arriving at
+    ; the seed without moving is not a choice (SPEC.md 38.10). Where it STOOD
+    ; goes over where it OPENED: nothing reads the seed after this, and the
+    ; commit below and fdlg_home_dir read the same two fields.
+    xor ax, ax                  ; BX is still the chooser, fdlg_gate's load
+    mov [fdlg_win], ax
+    mov si, ax
+    xchg si, [fdlg_blk]
+
+    cmp byte [si+FS_MOK], 0     ; a failed mount stands at the seed
+    je .kept
+    mov al, [si+FS_DRV]
+    mov dx, [si+FS_CWD]
+    cmp al, [fdlg_sdrv]
+    jne .moved
+    cmp dx, [fdlg_scwd]
+    je .kept
+.moved:
+    mov [fdlg_sdrv], al
+    mov [fdlg_scwd], dx
+    push bx                     ; (fdlg_home_dir spends BX and SI, and both
+    push si                     ; are the chooser's, wanted just below)
+    call fdlg_home_dir          ; ...moving is a statement about the location
+    pop si
+    pop bx
+.kept:
+    FDK cw_inst_win_owner       ; DI = the window's record, or 0
+    or di, di
+    jz .gone                    ; already torn down: the close box did it
+    cmp byte [di+I_STATE], 1
+    jne .gone
+    cmp [di+I_SPTR], si         ; ...and it is still the CHOOSER's: a window
+    jne .gone                   ; slot is reused, a pool block names one role
+    call KERNEL_SEG:cw_app_close_win ; frees the cache claim with the record
+.gone:
+    mov bx, [fdlg_rqwin]
+    call KERNEL_SEG:cw_menu_activate ; the bar goes back to the requester
+    call KERNEL_SEG:cw_menu_draw_bar
+    pop ax
     cmp al, FDA_COMMIT
-    jne .unlk
-    call fdlg_commit
+    je .commit
 .unlk:
     FDK cw_gfx_unlock
 .done:
-    pop bx
-    pop ax
-.out:
-    retf
+    jmp fdk_dif
+
+    ; --- THE COMMIT (SPEC.md 38.6, 38.7 step 7) ------------------------------
+.commit:
+    mov dl, [fdlg_sdrv]         ; the callback's contract: the file's volume
+    mov ax, [fdlg_scwd]         ; is mounted and its folder is current - put
+    cmp dl, [disk_drive]        ; them back if anything moved them, which
+    jne .cd                     ; costs nothing when nothing did
+    cmp ax, [dsk_cwd]
+    je .here
+.cd:
+    FDX dsk_chdir_x
+.here:
+    mov di, [fdlg_rqrec]        ; THE STALENESS TRIPLE (SPEC.md 38.6) - of a
+    cmp byte [di+I_STATE], 1    ; record fdlg_open fenced live, so never 0
+    jne .unlk
+    mov ax, [fdlg_rqwin]
+    cmp ax, [di+I_WIN]
+    jne .unlk
+    mov ax, [fdlg_rqsp]
+    cmp ax, [di+I_SPTR]
+    jne .unlk
+    push di                     ; snd_disp_set's input, below
+    call fdlg_home_dir          ; SI -> the row's name: the folder and...
+    mov di, si
+    mov si, fdlg_name           ; ...the name (SPEC.md 38.10)
+%if INST_FNSZ - 1 != FD_NAMEMAX
+  %error "fdlg_cpy's bound is INST_FNSZ - 1's"
+%endif
+    call fdlg_cpy
+
+    ; DX:CX = what OSAPI_FILE_READ will deliver for [fdlg_name] (SPEC.md
+    ; 38.6.1): 0 when there is no such file or it is a folder, the UNPACKED
+    ; size when it is compressed. dskw_stat answers the size on BOTH of its
+    ; arms - a redirected volume's by asking the driver - and only the
+    ; compression hint is a FAT volume's alone: its DVK_FILE arm writes no
+    ; dskw_raw, and nothing on a redirected volume is compressed.
+    ;
+    ; **AND IT IS dskw_czknow's JUDGEMENT, SNIFF INCLUDED** (SPEC.md
+    ; 20.14.6): a file whose hint a foreign tool dropped is READ as its
+    ; unpacked bytes, so reporting what it occupies told the application a
+    ; size the read then exceeded. One sector, once, on a commit - the one
+    ; the application's read is about to want (SPEC.md 18.95) - which is
+    ; 20.14.6.2.1's line for where a sniff belongs. ES is banked round it
+    ; (a sniff spends it, and this routine gives every register back).
+    mov si, fdlg_name
+    call COLD_SEG:dwf_dskw_stat ; CF=0: AL = attribute, DX:CX = the size
+    jc .zero                    ; no such name in this folder
+    test al, 0x10
+    jnz .zero                   ; a folder has no size to report
+    cmp byte [dsk_vkind], DVK_FILE
+    je .sized
+    push es
+%ifdef KERN_BIG
+    FDX dskw_czsize             ; drvvol.inc's, shared with drv_find
+    pop es
+%else
+    push cx                     ; (FDLG.DRV: in line, the same three steps,
+    push dx                     ; so the resident kernel carries no shared
+    FDX dskw_czknow             ; routine on this build - drvvol.inc says why)
+    pop dx
+    pop cx
+    pop es
+    ja .sized
+    mov cx, [dskw_raw+DSK_R_CZL]
+    mov dl, [dskw_raw+DSK_R_CZH]
+    mov dh, 0
+%endif
+    jmp short .sized
+.zero:
+    xor cx, cx
+    xor dx, dx
+.sized:
+    pop di                      ; the requester's record
+    mov ax, [fdlg_rqcb]
+    or ax, ax
+    jz .unlk
+    push word [snd_inst]        ; the callback is the PACKAGE's code, so its
+    call KERNEL_SEG:cw_snd_disp_set ; sound stamp is the requester's (34.3)
+    push es                     ; the callback owes us nothing (SPEC.md
+    push bp                     ; 38.6), and ES is the one register the
+    mov bp, ax                  ; kernel cannot shrug off (SPEC.md 1)
+    mov ax, [fdlg_mode]         ; AL = mode and AH = [fdlg_act], which the
+                                ; xchg at the top left 0 and nothing can post
+                                ; to a chooser that is closed. SI = its
+    mov si, [fdlg_rqwin]        ; window, DI = the name (ours - for a package
+    mov di, fdlg_name           ; DS is its own segment and this buffer is in
+                                ; the kernel's, 20.1), DX:CX = the size
+    call KERNEL_SEG:cw_wm_pkgcall
+    pop bp
+    pop es
+    pop word [snd_inst]
+    jmp .unlk
 
 ; -----------------------------------------------------------------------------
 ; fdlg_grab - a press outside the chooser is swallowed (SPEC.md 38.2)
@@ -524,152 +687,29 @@ FDBODY fdlg_top_x
     pop ax
     retf
 
-; -----------------------------------------------------------------------------
-; fdlg_close - take the chooser down (SPEC.md 38.7 step 6)
-; in:  a chooser up ([fdlg_win] non-zero - fdlg_reap's guard); the gfx lock
-;      held. out: nothing (all registers preserved)
-;
-; Records where it stood FIRST, out of a block that is still intact whichever
-; route got here - a close box has already torn the instance down, and the
-; pool block is only reused by the next launch. A failed mount is not a
-; folder to bring an app back to (FS_MOK), and arriving at the seed without
-; moving is not a choice (SPEC.md 38.10).
-; -----------------------------------------------------------------------------
-fdlg_close:
-    FDENT kentc_di
-    xor ax, ax
-    mov bx, ax
-    xchg bx, [fdlg_win]
-    mov si, ax
-    xchg si, [fdlg_blk]
-
-    mov al, [fdlg_sdrv]         ; the seed, unless the chooser really moved
-    mov dx, [fdlg_scwd]
-    cmp byte [si+FS_MOK], 0
-    je .stood
-    mov al, [si+FS_DRV]
-    mov dx, [si+FS_CWD]
-.stood:
-    mov [fdlg_cdrv], al
-    mov [fdlg_ccwd], dx
-    cmp al, [fdlg_sdrv]
-    jne .moved
-    cmp dx, [fdlg_scwd]
-    je .kept
-.moved:
-    push bx                     ; (fdlg_home_dir spends BX and SI, and both
-    push si                     ; are the chooser's, wanted just below)
-    call fdlg_home_dir          ; ...moving is a statement about the location
-    pop si
-    pop bx
-.kept:
-    FDK cw_inst_win_owner       ; DI = the window's record, or 0
-    or di, di
-    jz .gone                    ; already torn down: the close box did it
-    cmp byte [di+I_STATE], 1
-    jne .gone
-    cmp [di+I_SPTR], si         ; ...and it is still the CHOOSER's: a window
-    jne .gone                   ; slot is reused, a pool block names one role
-    call KERNEL_SEG:cw_app_close_win ; frees the cache claim with the record
-.gone:
-    mov bx, [fdlg_rqwin]
-    call KERNEL_SEG:cw_menu_activate ; the bar goes back to the requester
-    call KERNEL_SEG:cw_menu_draw_bar
-    jmp fdk_di
-
-; -----------------------------------------------------------------------------
-; fdlg_commit - the answer (SPEC.md 38.6, 38.7 step 7)
-; in:  the chooser closed by fdlg_close; the gfx lock held
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-fdlg_commit:
-    FDENT kentc_di
-    mov dl, [fdlg_cdrv]         ; the callback's contract: the file's volume
-    mov ax, [fdlg_ccwd]         ; is mounted and its folder is current - put
-    cmp dl, [disk_drive]        ; them back if anything moved them, which
-    jne .cd                     ; costs nothing when nothing did
-    cmp ax, [dsk_cwd]
-    je .here
-.cd:
-    FDX dsk_chdir_x
-.here:
-    mov di, [fdlg_rqrec]        ; THE STALENESS TRIPLE (SPEC.md 38.6) - of a
-    cmp byte [di+I_STATE], 1    ; record fdlg_open fenced live, so never 0
-    jne .out
-    mov ax, [fdlg_rqwin]
-    cmp ax, [di+I_WIN]
-    jne .out
-    mov ax, [fdlg_rqsp]
-    cmp ax, [di+I_SPTR]
-    jne .out
-    call fdlg_home_save
-    call fdlg_sizeof            ; DX:CX = what the READ will deliver
-    mov ax, [fdlg_rqcb]
-    or ax, ax
-    jz .out
-    mov di, [fdlg_rqrec]        ; snd_disp_set's input: fdlg_home_save SPENT
-    push word [snd_inst]        ; DI. The callback is the PACKAGE's code, so its
-    call KERNEL_SEG:cw_snd_disp_set ; sound stamp is the requester's (34.3)
-    push es                     ; the callback owes us nothing (SPEC.md
-    push bp                     ; 38.6), and ES is the one register the
-    mov bp, ax                  ; kernel cannot shrug off (SPEC.md 1)
-    mov al, [fdlg_mode]         ; AL = mode, SI = its window, DI = the name
-    mov ah, 0                   ; (ours - for a package DS is its own
-    mov si, [fdlg_rqwin]        ; segment and this buffer is in the
-    mov di, fdlg_name           ; kernel's, 20.1), DX:CX = the size
-    call KERNEL_SEG:cw_wm_pkgcall
-    pop bp
-    pop es
-    pop word [snd_inst]
-.out:
-    jmp fdk_di
-
-; -----------------------------------------------------------------------------
-; fdlg_sizeof - DX:CX = what OSAPI_FILE_READ will deliver for [fdlg_name]
-; (SPEC.md 38.6.1): 0 when there is no such file or it is a folder, the
-; UNPACKED size when it is compressed. dskw_stat answers the size on BOTH of
-; its arms - a redirected volume's by asking the driver - and only the
-; compression hint is a FAT volume's alone: its DVK_FILE arm writes no
-; dskw_raw, and nothing on a redirected volume is compressed.
-; Clobbers AX, BX, SI - fdlg_commit banked them.
-; -----------------------------------------------------------------------------
-fdlg_sizeof:
-    mov si, fdlg_name
-    call COLD_SEG:dwf_dskw_stat ; CF=0: AL = attribute, DX:CX = the size
-    jc .zero                    ; no such name in this folder
-    test al, 0x10
-    jnz .zero                   ; a folder has no size to report
-    cmp byte [dsk_vkind], DVK_FILE
-    je .ret
-    mov al, [dskw_raw+DSK_R_CZM] ; ...and the UNPACKED size when the hint
-    sub al, DSK_CZ_MARK         ; says it is packed (cmz_sizes' reading)
-    cmp al, LZ_LZB
-    ja .ret
-    mov cx, [dskw_raw+DSK_R_CZL]
-    mov dl, [dskw_raw+DSK_R_CZH]
-    mov dh, 0
-    ret
-.zero:
-    xor cx, cx
-    xor dx, dx
-.ret:
-    ret
-
 ; =============================================================================
 ; THE HOOK (SPEC.md 38.9): files.inc's sites, one dispatch
 ; =============================================================================
 ; in:  AL = FDH_* (already a table offset), and AH = the button for FDH_BTN
-;      and FDH_RECT. An index is never passed: every route into fm_open_sel
-;      opens FS_SEL, so the handlers read that
-; out: CF=1 the chooser took it; BX preserved, AX and the rest per handler
+;      and FDH_RECT; BX = the chooser's pool block, which the resident
+;      fdlg_hook's compare has just loaded - so EVERY HANDLER ENTERS WITH
+;      BX = [fdlg_blk] and none loads it. The one exception is FDH_UP, which
+;      kern_small's fdlg_onup raises straight from W_ONMOUSEUP. An index is
+;      never passed: every route into fm_open_sel opens FS_SEL, so the
+;      handlers read that
+; out: CF=1 the chooser took it; BP preserved (it is the dispatch register,
+;      because FDH_RECT answers in SI and DI), BX restored by fdlg_hook, AX
+;      and the rest per handler
 ; -----------------------------------------------------------------------------
 FDBODY fdlg_hook_x
-    push bx
-    mov bl, al
-    mov bh, 0                   ; every handler reads what it needs from
-    call [cs:fdlg_htab+bx]      ; the block, AH (FDH_BTN) or the layout
-    pop bx
-    ret
+    push bp
+    push ax
+    mov ah, 0
+    xchg ax, bp                 ; BP = the table offset...
+    pop ax                      ; ...and AH, the handler's argument, back
+    call [cs:fdlg_htab+bp]
+    pop bp
+    FDRET
 
 fdlg_htab:
     dw fdlg_h_arm, fdlg_h_bank, fdlg_h_pick, fdlg_h_sel
@@ -685,18 +725,17 @@ fdlg_htab:
 fdlg_h_arm:
     cmp byte [fdlg_mode], 0
     je fdlg_h_no
-    mov bx, [fdlg_blk]
     cmp byte [bx+FS_EDIT], 0
     jne fdlg_h_no
     ; fall through
 
-; fdlg_toebuf - fdlg_name into the line editor, as mode 8. AX and BX
-; clobbered; CF=0. CX is KEPT: the arrows' FDH_SEL divides by it after
+; fdlg_toebuf - fdlg_name into the line editor, as mode 8. In: BX = the
+; chooser's block. AX clobbered; CF=0. CX is KEPT: the arrows' FDH_SEL
+; divides by it after
 fdlg_toebuf:
     push si
     push di
     push cx
-    mov bx, [fdlg_blk]
     mov byte [bx+FS_EDIT], FM_ESAVE
     mov si, fdlg_name
     mov di, fm_ebuf
@@ -715,7 +754,6 @@ fdlg_h_no:
 ; goes back to fdlg_name so the next FDH_ARM restores it. CF=0, and AX, CX,
 ; SI and DI clobbered: every caller is done with them.
 fdlg_h_bank:
-    mov bx, [fdlg_blk]
     cmp byte [bx+FS_EDIT], FM_ESAVE
     jne fdlg_h_no
 fdlg_bank:
@@ -731,10 +769,10 @@ fdlg_cpy:
     ret
 
 ; fdlg_tsel - stage the chooser's selection's name as the answer
+; in:  BX = the chooser's block
 ; out: CF=1 nothing selected, or a folder (nothing taken); else fdlg_name.
-;      AX and BX clobbered
+;      AX clobbered
 fdlg_tsel:
-    mov bx, [fdlg_blk]
     mov ax, [bx+FS_SEL]
     cmp ax, [bx+FS_N]
     cmc
@@ -742,7 +780,7 @@ fdlg_tsel:
     push si
     push di
     push cx
-    FDX fm_stage_name           ; fm_name, fm_ftype
+    FDX fm_stage_name           ; fm_name, fm_ftype; every register kept
     cmp word [fm_ftype], 2
     cmc                         ; CF=1 exactly for a folder or '..'
     jc .out
@@ -801,21 +839,6 @@ fdlg_h_sel:
     clc
     ret
 
-; FDH_COMMIT - Enter in the Save form's box. CF=1 either way.
-fdlg_h_commit:
-    call fdlg_bank
-fdlg_save:
-    mov bx, [fdlg_blk]          ; a FAILED mount is nowhere to save: the
-    cmp byte [bx+FS_MOK], 0     ; commit would fall back to the folder the
-    je fdlg_beep                ; chooser opened on (fdlg_close) and write the
-                                ; file there (BX is fdlg_hook_x's to restore)
-    cmp byte [fdlg_name], 0
-    jne fdlg_post_commit
-fdlg_beep:
-    FDK cw_snd_beep             ; an empty box answers nothing
-    stc
-    ret
-
 ; FDH_KEY - DX = the key, DL the ASCII and DH the scan (fm_onkey_x's AL/AH).
 ; Escape cancels, unless some OTHER prompt is open in the chooser (a Rename, a
 ; New Folder), whose own Escape it is. Anything else is the Disk window's -
@@ -825,7 +848,6 @@ fdlg_beep:
   %error "fdlg_h_key tests FS_EDIT for 0 or FM_ESAVE with one mask"
 %endif
 fdlg_h_key:
-    mov bx, [fdlg_blk]
     test byte [bx+FS_EDIT], ~FM_ESAVE & 0xFF ; 0 (none) and 8 (the box)
     jnz fdlg_h_no               ; are ours; modes 1-7 are another prompt's,
     cmp dl, 27                  ; which owns the keyboard
@@ -843,9 +865,25 @@ fdlg_post:
     stc
     ret
 
+; FDH_COMMIT - Enter in the Save form's box. CF=1 either way.
+fdlg_h_commit:
+    call fdlg_bank
+fdlg_save:
+    cmp byte [bx+FS_MOK], 0     ; a FAILED mount is nowhere to save: the
+    je fdlg_beep                ; commit would fall back to the folder the
+                                ; chooser opened on (fdlg_reap) and write the
+                                ; file there
+    cmp byte [fdlg_name], 0
+    jne fdlg_post_commit
+fdlg_beep:
+    FDK cw_snd_beep             ; an empty box answers nothing
+    stc
+    ret
+
 ; FDH_BTN - AH = FM_BGO / FM_BCANCEL / FM_BDRIVE (kern_small's release enters
-; at fdlg_btn with it in AL). CF=1. SI is clobbered: kern_big's fm_onup
-; leaves through its own epilogue and kern_small's FDH_UP banks it.
+; at fdlg_btn with it in AL, and BX = the block as here). CF=1. SI is
+; clobbered: kern_big's fm_onup leaves through its own epilogue and
+; kern_small's FDH_UP banks it.
 fdlg_h_btn:
     mov al, ah
 fdlg_btn:
@@ -853,7 +891,6 @@ fdlg_btn:
     jne .done                   ; came before the answer acts on nothing
     cmp al, FM_BCANCEL
     je fdlg_post_cancel
-    mov bx, [fdlg_blk]
     cmp al, FM_BDRIVE
     je .drive
     cmp byte [fdlg_mode], 0
@@ -872,23 +909,15 @@ fdlg_btn:
 .save:
     call fdlg_h_bank            ; a box mid-edit is banked first, if it is
     jmp short fdlg_save         ; the box's edit that is up
-.drive:
-    call fdlg_nextvol           ; DL = the next live volume (SPEC.md 38.11)
-    FDX fm_mount
-    jmp short .paint
 
-; -----------------------------------------------------------------------------
-; fdlg_nextvol - DL = the next live volume after the chooser's own, wrapping
-; (SPEC.md 38.11). A machine with one live volume answers that volume.
-; AX clobbered.
-; -----------------------------------------------------------------------------
+; --- Drive: DL = the next live volume after the chooser's own, wrapping
+; (SPEC.md 38.11). A machine with one live volume answers that volume. BX
+; and CX are spent: every caller of the hook is done with both, and BX is
+; fdlg_hook's (or fdlg_h_up's) to restore.
 %if DVOL_MAX & (DVOL_MAX - 1)
-  %error "fdlg_nextvol wraps with a mask: DVOL_MAX must be a power of two"
+  %error "the Drive button wraps with a mask: DVOL_MAX must be a power of two"
 %endif
-fdlg_nextvol:
-    push bx
-    push cx
-    mov bx, [fdlg_blk]
+.drive:
     mov dl, [bx+FS_DRV]
     mov cx, DVOL_MAX
 .next:
@@ -899,9 +928,8 @@ fdlg_nextvol:
     xchg ax, bx                 ; BX = the row's offset in dsk_vtab
     cmp byte [dsk_vtab+bx+DV_KIND], DVK_FREE
     loope .next
-    pop cx
-    pop bx
-    ret
+    FDX fm_mount
+    jmp short .paint
 
 ; =============================================================================
 ; THE BUTTON COLUMN (SPEC.md 38.3)
@@ -941,7 +969,7 @@ fdlg_h_rect:
 
 ; fdlg_blabel - SI = button AL's label, DI = its OS88UI_* flags: the first is
 ; the default, and greyed in the Open form with nothing selected (SPEC.md 47).
-; BX clobbered: fdlg_hook_x restores it for FDH_RECT, and drawbtn banks it
+; In: BX = the chooser's block (fdlg_hook's for FDH_RECT, drawbtn's own load)
 fdlg_blabel:
     mov di, OS88UI_FILL
     mov si, fdlg_s_cancel
@@ -949,15 +977,15 @@ fdlg_blabel:
     je .out
     mov si, fdlg_s_drive
     ja .out
-    mov di, OS88UI_FILL | OS88UI_DEF
+    inc di                      ; OS88UI_FILL | OS88UI_DEF
+    inc di
     mov si, fdlg_s_save
     cmp byte [fdlg_mode], 0
     jne .out
     mov si, fdlg_s_topen
-    mov bx, [fdlg_blk]          ; (BX: both callers restore it)
     cmp word [bx+FS_SEL], 0xFFFF
     jne .out
-    or di, OS88UI_DIS
+    inc di                      ; | OS88UI_DIS
 .out:
     ret
 
@@ -967,7 +995,8 @@ fdlg_drawbtn:
     push bx
     push si
     push di
-    call fdlg_brect
+    mov bx, [fdlg_blk]          ; blabel's: two of the four callers have it
+    call fdlg_brect             ; in BX already and two do not
     call fdlg_blabel
     cmp al, FM_BGO              ; the default's flags as DRAWN, for FDH_SEL
     jne .ndef                   ; (fm_btn1 records them on kern_big)
@@ -978,7 +1007,7 @@ fdlg_drawbtn:
     or di, OS88UI_DOWN
 .up:
     mov bx, os88ui_krect
-    FDX os88ui_kbtn
+    call COLD_SEG:os88ui_btn_f  ; os88ui_kbtn's own far entry (SPEC.md 2.6)
     pop di
     pop si
     pop bx
@@ -997,7 +1026,7 @@ fdlg_h_paint:
 
 ; FDH_CLICK - kern_small's press: ARM and draw pressed, nothing more - the
 ; release fires (SPEC.md 13.7), exactly as kern_big's ids 3-5 do through
-; fm_onup_x. CF=1 a button took it. BX is fdlg_hook_x's to restore.
+; fm_onup_x. CF=1 a button took it. BX is fdlg_hook's to restore.
 fdlg_h_click:
     push cx
     push dx
@@ -1012,25 +1041,25 @@ fdlg_h_click:
     inc ax
     cmp al, FM_BDRIVE
     jbe .l
-    pop dx
-    pop cx
-    clc
-    ret
+    jmp short .none             ; CF=0, the `cmp` past FM_BDRIVE's
 .hit:
-    pop dx
-    pop cx
     mov [fdlg_down], al         ; the ARM and the pressed look are one byte:
                                 ; kern_small carries no os88ui_armw
     call fdlg_drawbtn
     stc
+.none:
+    pop dx
+    pop cx
     ret
 
 ; FDH_UP - the release, from fdlg_onup with CX/DX = the point. What was armed
 ; is SPENT first (13.7's second rule: a release anywhere disarms), the button
 ; comes back up, and it fires only if the pointer is still on it. A
-; W_ONMOUSEUP gives every register back: BX is fdlg_hook_x's to restore, AX
-; fdlg_onup's, and the rest are banked here.
+; W_ONMOUSEUP gives every register back: AX is fdlg_onup's, BP fdlg_hook_x's,
+; and the rest are banked here - BX too, because this is the one handler
+; that does not come through fdlg_hook.
 fdlg_h_up:
+    push bx
     push cx
     push dx
     push si
@@ -1041,17 +1070,18 @@ fdlg_h_up:
     jz .out
     mov bx, [fdlg_win]
     FDX fm_layout               ; the layout cache, for THIS window
-    call fdlg_drawbtn           ; up again
-    call fdlg_brect
-    mov bx, os88ui_krect
+    call fdlg_drawbtn           ; up again - and os88ui_krect is left holding
+    mov bx, os88ui_krect        ; its rect, which the hit test wants
     FDX os88ui_bhit
     jc .out                     ; slid off: thought better of
+    mov bx, [fdlg_blk]          ; what fdlg_hook hands every other handler
     call fdlg_btn
 .out:
     pop di
     pop si
     pop dx
     pop cx
+    pop bx
     clc
     ret
 %endif
@@ -1062,8 +1092,10 @@ fdlg_h_up:
 section .bss
 
 fdlg_mode:  resb 1              ; 0 = Open, 1 = Save
+fdlg_act:   resb 1              ; the posted answer: 0, FDA_COMMIT, FDA_CANCEL;
+                                ; AFTER fdlg_mode, which fdlg_reap's commit
+                                ; reads as one word with this 0 for AH
 fdlg_ttl:   resw 1              ; its caption, for fm_kinit to adopt
-fdlg_act:   resb 1              ; the posted answer: 0, FDA_COMMIT, FDA_CANCEL
 fdlg_gdis:  resw 1              ; the Open button's flags as last drawn
 fdlg_rqwin: resw 1              ; the requester's window...
 fdlg_rqcb:  resw 1              ; ...its near completion proc...
@@ -1071,10 +1103,8 @@ fdlg_rqrec: resw 1              ; ...its instance record...
 fdlg_rqsp:  resw 1              ; ...and that record's I_SPTR: the staleness
                                 ; triple of SPEC.md 38.6
 fdlg_name:  resb FD_NAMEMAX+1   ; the answer, and the Save box between edits
-fdlg_sdrv:  resb 1              ; where the chooser OPENED...
-fdlg_scwd:  resw 1
-fdlg_cdrv:  resb 1              ; ...and where it stood when it closed
-fdlg_ccwd:  resw 1
+fdlg_sdrv:  resb 1              ; where the chooser OPENED - and, from
+fdlg_scwd:  resw 1              ; fdlg_reap's close on, where it STOOD
 %ifdef KERN_SMALL
 fdlg_down:  resb 1              ; the column button drawn pressed, 0 = none
 %endif
@@ -1091,7 +1121,7 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
 ; ctrl.inc draw with it, and os88ui_btn / _arm / _armed / _fire / _krect are
 ; used by five other files between them. Moving it into FDLG.DRV would take
 ; the standard controls off every one of them, so it stays here, the image
-; far-calls in through the FDXF entries below, and tools/os88ovlchk.py's own
+; far-calls in through fdx_go (and os88ui_btn_f), and tools/os88ovlchk.py's own
 ; `EXTRA` table - which files this include as `.cold` - stays true.
 %define OS88UI_KERNEL
 %define OS88UI_SCROLL          ; SPEC.md 13.10: the Disk window's bar uses it
@@ -1101,6 +1131,9 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
                                ; kernel.asm carries it beside WM_ANIM and
                                ; OS88_THEME and says why
 %include "os88ui.inc"
+%if OS88UI_DEF != 2 || OS88UI_DIS != 1 || OS88UI_FILL & 3
+  %error "fdlg_blabel adds OS88UI_DEF and OS88UI_DIS to OS88UI_FILL with inc"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; ui_krect4 - stage a whole inclusive rect into the kernel's ONE button rect
@@ -1136,38 +1169,31 @@ fdf_fdlg_open:          call fdlg_open_x
 fdlg_hook:
     push bx
     mov bx, [fm_vp]
-    cmp bx, [fdlg_blk]
-    pop bx
+    cmp bx, [fdlg_blk]          ; ...and on a match BX IS the chooser's block,
+    clc                         ; which every handler takes (fdlg_hook_x)
     jne .no
 %ifdef FDLG_MOD
     call far [FDFP + FDE_HOOK*4]
-    ret
 %else
-    jmp fdlg_hook_x
+    call fdlg_hook_x
 %endif
 .no:
-    clc
+    pop bx
     ret
 
 %ifdef FDLG_MOD
 ; =============================================================================
 ; THE RESIDENT HALF (SPEC.md 2.8.1) - kern_small only
 ; =============================================================================
-; fdlg_load - is the image in RAM?
-; out: CF=1 it is not. AX and every other register preserved.
-fdlg_load:
-    push ax
-    mov al, MOD_FDLG
-    call mod_need
-    pop ax
-    ret
-
 ; --- fdlg_open: the ONE place a human waits, so the ONE place that loads ----
 ; Its CF=1 already means "refused - one is already up, or the table is full",
 ; and every caller treats that as "the command does nothing". A module that
 ; will not load is the same answer.
 fdlg_open_x:
-    call fdlg_load
+    push ax
+    mov al, MOD_FDLG
+    call mod_need               ; CF=1: the image is not in RAM
+    pop ax
     jc .no                      ; CF=1 already: the refusal
     call far [FDFP + FDE_OPEN*4]
 .no:
@@ -1188,13 +1214,11 @@ fdlg_reap_x:
     retf
 
 fdlg_grab_x:
-    cmp word [fdlg_win], 0
-    je .no
-    call far [FDFP + FDE_GRAB*4]
-    retf
+    cmp word [fdlg_win], 0      ; CF=0 either way, which with no chooser is
+    je .no                      ; fdlg_gate's `.none` answer: nothing to
+    call far [FDFP + FDE_GRAB*4] ; swallow, so the press passes through
 .no:
-    clc                         ; fdlg_gate's `.none` answer: nothing to
-    retf                        ; swallow, so the press passes through
+    retf
 
 fdlg_top_x:
     cmp word [fdlg_win], 0
@@ -1213,17 +1237,8 @@ fdlg_onup:
     pop ax
     ret
 
-    FDXF fm_ncpy
-    FDXF fm_seed
-    FDXF fm_stage_name
-    FDXF fm_status_only
-    FDXF fm_repaint
-    FDXF fm_mount
-    FDXF fm_open_sel
-    FDXF fm_layout
-    FDXF dsk_chdir_x
-    FDXF os88ui_kbtn            ; the column's buttons, drawn by the image
-    FDXF os88ui_bhit            ; ...and hit by it (SPEC.md 38.3)
+    ; (NO far entries for the image here any more: FDX is fdx_go, which
+    ; reaches every .cold body it names through COLD_SEG and cold_kretf)
 %endif
 
 section .text

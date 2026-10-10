@@ -1922,6 +1922,9 @@ sch_isr:
     push ds
     push cs
     pop ds
+%ifdef KBD_DIAG
+    call kbg_irq0               ; KBDDIAG=1 (SPEC.md 9.8.1): inside a bracket,
+%endif                          ; the keyboard's hardware state, each tick
 
 %ifdef KFZTRACE
     ; --- the heartbeat (SPEC.md 7/8, KFZ only) -------------------------------

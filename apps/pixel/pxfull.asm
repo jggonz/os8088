@@ -155,7 +155,7 @@ pxf_enter:
     mov [pxf_an], ax
     mov ax, [pxf_geo + bx + 6]
     mov [pxf_ad], ax
-    call far OSAPI_FONT_GLYPHS      ; DX:SI the 8x8 table, AL..AH its codes
+    call OSAPI_FONT_GLYPHS      ; DX:SI the 8x8 table, AL..AH its codes
     mov [pxf_font], si
     mov [pxf_font + 2], dx
     mov [pxf_gfirst], ax
@@ -173,7 +173,7 @@ pxf_enter:
     push ds
     pop es
     mov di, pxf_fsi
-    call far OSAPI_FSX_MODE
+    call OSAPI_FSX_MODE
     jnc .set
     mov ax, 1
     stc
@@ -186,7 +186,7 @@ pxf_enter:
     call pxf_c160
     jmp short .seed
 .desk:
-    call far OSAPI_FSX_SURF         ; THE SAME-MODE BRACKET's rect (53.7.1)
+    call OSAPI_FSX_SURF         ; THE SAME-MODE BRACKET's rect (53.7.1)
     jnc .surf
     mov ax, 1
     stc
@@ -203,14 +203,14 @@ pxf_enter:
 .probe:
     push di                         ; may the planes go straight on? (DI bit
     mov di, 0x8000 | PXF_PLW        ; 15 is BLITP's probe, nothing drawn)
-    call far OSAPI_GFX_BLITP
+    call OSAPI_GFX_BLITP
     pop di
     mov al, 0
     adc al, 0
     mov [pxf_p4], al                ; 1 = refused: packed pairs and BLIT4
 .seed:
     mov byte [pxf_altdn], 1         ; OS88_ALTENTER_SEED's thought: the press
-    call far OSAPI_MOUSE            ; that came in is still down, and so is
+    call OSAPI_MOUSE            ; that came in is still down, and so is
     mov [pxf_btn], al               ; any button
     mov ax, [pxf_W]                 ; the keys' line: the longest that fits
     mov si, pxf_hint80
@@ -222,7 +222,7 @@ pxf_enter:
     mov si, pxf_hint20
 .h:
     mov [pxf_hint], si
-    call far OSAPI_GET_TICKS
+    call OSAPI_GET_TICKS
     mov [pxf_bt0], ax
     or byte [pxf_bup], 1            ; the top band up
     call pxf_show
@@ -238,7 +238,7 @@ pxf_show:
     call pxf_zoom
     mov word [pxf_pct], 0xFFFF      ; (a next picture's line: it is here)
     call pxf_capname
-    call far OSAPI_GET_TICKS
+    call OSAPI_GET_TICKS
     mov [pxf_bt1], ax
     or byte [pxf_bup], 2
     call pxf_jfull
@@ -1849,7 +1849,7 @@ pxf_msg:
     mov byte [es:di], 0
 .z:
     pop ds
-    call far OSAPI_GET_TICKS
+    call OSAPI_GET_TICKS
     mov [pxf_bt1], ax
     or byte [pxf_bup], 2
     mov ax, [pxf_H]
@@ -2094,7 +2094,7 @@ pxf_bands:
     call pxf_mseg
     or ax, ax
     jz .out
-    call far OSAPI_GET_TICKS
+    call OSAPI_GET_TICKS
     mov bx, ax
     test byte [pxf_bup], 2
     jz .t
@@ -2137,10 +2137,10 @@ pxf_bands:
 ; zoom or a pan done here (or nothing)
 pxf_keys:
     mov al, KSC_ALT                 ; ALT+ENTER (os88alt_edge's, the part's
-    call far OSAPI_KEY_DOWN         ; own copy: a part cannot call the
+    call OSAPI_KEY_DOWN         ; own copy: a part cannot call the
     jnc .aup                        ; package's code)
     mov al, KSC_ENTER
-    call far OSAPI_KEY_DOWN
+    call OSAPI_KEY_DOWN
     jnc .aup
     cmp byte [pxf_altdn], 0
     jne .kbd
@@ -2152,7 +2152,7 @@ pxf_keys:
     mov ah, 1                       ; A KEY FIRST: with no mouse that has
     int 0x16                        ; spoken, OSAPI_MOUSE is the keyboard
     jnz .key                        ; mouse, and would take Space and the
-    call far OSAPI_MOUSE            ; arrows for itself (SPEC.md 9.6.1)
+    call OSAPI_MOUSE            ; arrows for itself (SPEC.md 9.6.1)
     mov ah, [pxf_btn]               ; AL = the buttons: a PRESS is an edge
     mov [pxf_btn], al
     not ah
@@ -2474,7 +2474,7 @@ pxf_slice:
     inc word [pxf_nren]             ; (renders finished: a test's)
     cmp byte [pxf_jkind], 0         ; a whole render: the bands' two seconds
     jne .f                          ; count from now, when they are on the
-    call far OSAPI_GET_TICKS        ; glass (the render letters them)
+    call OSAPI_GET_TICKS        ; glass (the render letters them)
     test byte [pxf_bup], 1
     jz .b1
     mov [pxf_bt0], ax
@@ -2941,11 +2941,11 @@ pxf_flush:
     jne .p4
     mov di, 0x4000 | PXF_PLW        ; the plane step (bit 14: walk a clip)
     mov bp, 4 * PXF_PLW             ; the row stride
-    call far OSAPI_GFX_BLITP
+    call OSAPI_GFX_BLITP
     jmp short .z
 .p4:
     mov bp, 320                     ; a packed row's stride
-    call far OSAPI_GFX_BLIT4
+    call OSAPI_GFX_BLIT4
 .z:
     mov byte [pxf_bandn], 0
 .x:

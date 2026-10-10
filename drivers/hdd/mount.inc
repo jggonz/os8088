@@ -51,7 +51,10 @@ hd_mount:
     call hd_part_big
     jc .big                     ; longer than any FAT16 volume: not one this
                                 ; kernel can carry (SPEC.md 18.7.5)
-    call hd_already
+    mov dl, [hd_sel]
+    mov dh, [hd_pslot]
+    mov bx, hd_vols
+    call hd_vol_find
     jnc .have                   ; this one is already mounted - by us...
     mov al, [hd_sel]            ; ...or by the KERNEL, which adopted the
     call hd_kvol                ; partition it booted from before we were
@@ -82,7 +85,11 @@ hd_mount:
 
     cmp byte [hd_nmnt], 0
     je .out                     ; the caption is whichever refusal got here
-    call hd_mount_says          ; 'Mounted n volume(s)'
+    mov byte [hd_msgc], HDM_MOUNTED ; 'Mounted n volume(s)': a CODE, and the
+                                ; count is [hd_nmnt], which the page's renderer
+                                ; reads anyway (hddabi.inc's rule about a
+                                ; caption being a pointer only in the image
+                                ; that letters it)
 .out:
     pop di
     pop si
@@ -113,6 +120,9 @@ hd_mount_one:
     push cx
     push dx
     push si
+%ifdef HD_CYLPROBE
+    call hd_cylprobe            ; may one call cross a head? (18.91.5)
+%endif
     call hd_vol_new             ; BX = a free hd_vols row
     jc .full
     mov al, [hd_sel]
@@ -123,18 +133,18 @@ hd_mount_one:
     mov [bx+HDV_BASE], ax
     mov ax, [si+HP_LBA+2]
     mov [bx+HDV_BASE+2], ax
-    mov ax, [si+HP_SECS+2]
-    mov [bx+HDV_LEN+2], ax      ; the whole length, for hd_blk's bound
+    mov dx, [si+HP_SECS+2]
+    mov [bx+HDV_LEN+2], dx      ; the whole length, for hd_blk's bound
     mov ax, [si+HP_SECS]
     mov [bx+HDV_LEN], ax
-    cmp word [si+HP_SECS+2], 0
-    je .secs
+    or dx, dx
+    jz .secs
     xor ax, ax                  ; past 32MB the length does not fit
 .secs:                          ; OSAPI_VOL_ADD's CX: say 'unknown', which
     mov [bx+HDV_SECS], ax       ; the kernel's rule 13 accepts (SPEC.md 18.7.5)
 
+    mov cx, ax                  ; = [bx+HDV_SECS]
     mov al, [bx+HDV_VOLH]       ; our own handle IS the row index
-    mov cx, [bx+HDV_SECS]
     xor dx, dx                  ; no donated listing claim: the kernel's own
                                 ; buffers, which is every volume now (22.6)
     xor si, si                  ; no label: the KERNEL derives 'HDD C'..'HDD F'
@@ -162,62 +172,130 @@ hd_mount_one:
     pop ax
     ret
 
+%ifdef HD_CYLPROBE
+; -----------------------------------------------------------------------------
+; hd_cylprobe - may ONE int 13h carry a read across a head on [hd_sel]'s
+; device? (SPEC.md 18.91.5) - the kernel's dsk_hcyl_probe, for rung 0
+; in:  SI = the partition entry being mounted, [hd_sel] = the device
+; out: the device's HDF_CYLASK set once it has been asked, HDF_CYLOK too when
+;      the answer is yes; every register preserved
+;
+; Asked of the DATA, because a ROM that does not walk the head answers a
+; wrong read with CF = 0: the partition's boot sector and the sector before
+; it - the last of the previous head - a sector a call (hd_xfer, which bounds
+; at the track while the bit is clear) and then in ONE call, into a buffer
+; whose second half was patterned first. Only a partition that starts a
+; track on head 1 or above can be asked, so one that cannot leaves the
+; device UNASKED and the next partition mounted gets the question. The
+; buffer is a 2 KB DMA claim for the moment it takes. Rung 1 (the task
+; file) needs none of this: the drive walks its own geometry.
+; -----------------------------------------------------------------------------
+hd_cylprobe:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push ds
+    mov al, [hd_sel]
+    call hd_dev_row             ; DI = the device
+    cmp byte [di+HDD_KIND], HDK_BIOS
+    jne .out
+    test byte [di+HDD_FLAGS], HDF_CYLASK
+    jnz .out
+    mov ax, [si+HP_LBA]         ; the sector before the boot sector...
+    mov dx, [si+HP_LBA+2]
+    sub ax, 1
+    sbb dx, 0
+    jc .out
+    mov [hd_lba], ax
+    mov [hd_lba+2], dx
+    call hd_chs
+    jc .out
+    mov ax, [hd_sec]            ; ...must END a track...
+    cmp ax, [di+HDD_SPT]
+    jne .out
+    mov ax, [hd_head]           ; ...that is not the cylinder's last
+    inc ax
+    cmp ax, [di+HDD_HEADS]
+    jae .out
+    or byte [di+HDD_FLAGS], HDF_CYLASK  ; asked, from here on, whatever it says
+    push dx
+    mov ax, 2
+    mov cx, ax
+    call OSAPI_MEM_CLAIM_DMA    ; DX = 2 KB, DMA-safe
+    mov si, dx
+    pop dx
+    jc .out
+    mov es, si
+    xor bx, bx                  ; THE TRUTH: two sectors, a call a track
+    mov byte [hd_rawop], 0
+    mov cx, 2
+    mov ax, [hd_lba]
+    call hd_raw                 ; (it walks hd_lba on; DX:AX is the start)
+    jc .free
+    mov [hd_lba], ax            ; THE QUESTION: the same two in one call
+    mov [hd_lba+2], dx
+    call hd_chs
+    push di
+    mov di, 1024 + 512          ; its second sector PATTERNED first: a read
+    mov ax, 0xE5A6              ; that stops short leaves this
+    mov cx, 256
+    cld
+    rep stosw
+    pop di
+    mov bx, 1024
+    mov ax, 0x0202
+    call hd_chs_regs
+    int 0x13
+    jnc .cmp
+    xor ah, ah                  ; refused: reset, and the answer is no
+    int 0x13
+    jmp short .free
+.cmp:
+    push di
+    push es
+    pop ds
+    xor si, si                  ; the two truth sectors must DIFFER, or the
+    mov di, 512                 ; comparison proves nothing...
+    mov cx, 256
+    repe cmpsw
+    mov al, 0                   ; (AL = the answer; `mov` keeps the flags)
+    je .ans
+    xor si, si                  ; ...and the one call must equal them
+    mov di, 1024
+    mov cx, 512
+    repe cmpsw
+    jne .ans
+    inc ax
+.ans:
+    pop di
+    pop ds                      ; ours again, from the frame
+    push ds
+    or al, al
+    jz .free
+    or byte [di+HDD_FLAGS], HDF_CYLOK
+.free:
+    mov dx, es
+    call OSAPI_MEM_FREE
+.out:
+    pop ds
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
+
 ; hd_lst_reloc lived here - the owner's half of a DONATED listing claim's move
 ; (SPEC.md 66.5.10.2), a by-value walk of hd_vols patching HDV_LSEG. SPEC.md
 ; 22.6 retired the donation, so this driver holds no claim on the kernel's
 ; behalf and declares nothing movable.
-
-; -----------------------------------------------------------------------------
-; hd_already - is [hd_sel]'s partition [hd_pslot] mounted already?
-; in:  nothing
-; out: CF = 0 yes, CF = 1 no
-; clobbers: flags
-; -----------------------------------------------------------------------------
-hd_already:
-    push ax
-    push bx
-    push cx
-    mov cx, HD_MAXVOL
-    mov bx, hd_vols
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_DEV]
-    cmp al, [hd_sel]
-    jne .next
-    mov al, [bx+HDV_PART]
-    cmp al, [hd_pslot]
-    je .yes
-.next:
-    add bx, HDV_SIZE
-    loop .scan
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-.yes:
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_mount_says - say 'Mounted n volume(s)' (module internal)
-; in:  [hd_nmnt]
-; out: [hd_msgc] = HDM_MOUNTED
-; clobbers: flags
-;
-; IT BUILT THE STRING and now it sets a code. The count is already in
-; [hd_nmnt] and the renderer has it, so what crossed as 32 bytes of built
-; caption crosses as one byte and a number the page was reading anyway -
-; which is the whole of hddabi.inc's rule about a caption being a pointer
-; only in the image that letters it.
-; -----------------------------------------------------------------------------
-hd_mount_says:
-    mov byte [hd_msgc], HDM_MOUNTED
-    ret
 
 ; -----------------------------------------------------------------------------
 ; hd_vol_new - the first free hd_vols row (module internal)
@@ -251,34 +329,94 @@ hd_vol_new:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_unmount - take the selected device's volume away
+; hd_vol_find - the next live hd_vols row on one device (and partition)
+; in:  BX = the row to start AT (hd_vols for the first), DL = the device
+;      index, DH = the partition slot or 0FFh for any slot
+; out: CF = 0 and BX = the row; CF = 1 = none from BX on
+; clobbers: BX (the output), flags
+;
+; ONE WALK, where there were five: hd_already, hd_vol_of, hd_dev_mounted,
+; hd_unmount and hd_unmount_part each carried their own copy of this loop,
+; and a scan that stops early in one of them is the kind of thing that stops
+; being true quietly. The two that act on EVERY match take the row back, step
+; past it and ask again.
+; -----------------------------------------------------------------------------
+hd_vol_find:
+    cmp bx, hd_vols + HD_MAXVOL * HDV_SIZE
+    jae .no
+    cmp byte [bx+HDV_USED], 0
+    je .next
+    cmp [bx+HDV_DEV], dl
+    jne .next
+    cmp dh, 0xFF                ; any slot: equal, so CF = 0 on the way out
+    je .yes
+    cmp [bx+HDV_PART], dh       ; ...and so is this one when it matches
+    je .yes
+.next:
+    add bx, HDV_SIZE
+    jmp short hd_vol_find
+.no:
+    stc
+.yes:
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_unmount - take the selected device's volumes away
 ; in:  nothing; the lock is HELD
 ; out: nothing
+;
+; EVERY volume this device has, not the first: Mount put up one icon per FAT
+; partition and Unmount is the other half of that.
 ; -----------------------------------------------------------------------------
 hd_unmount:
     push ax
-    push bx
-    push cx
-    mov cx, HD_MAXVOL
-    mov bx, hd_vols
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_DEV]
-    cmp al, [hd_sel]
-    jne .next
-    call hd_unmount_row         ; EVERY volume this device has, not the first:
-.next:                          ; Mount put up one icon per FAT partition and
-    add bx, HDV_SIZE            ; Unmount is the other half of that
-    loop .scan
+    mov al, [hd_sel]
+    mov ah, 0xFF                ; every slot
+    call hd_unmount_part
     mov byte [hd_msgc], HDM_UNMOUNTED
-    pop cx
-    pop bx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_unmount_row - drop one volume and its claim (module internal)
+; hd_unmount_part - drop every volume mounted on one partition (SPEC.md 52.12)
+; in:  AL = the device index, AH = the partition slot, or 0FFh for every slot
+;      (hd_unmount's)
+; out: AL = 1 if anything was unmounted, 0 if not; AH = the LAST kernel volume
+;      index dropped, 0FFh = none (SPEC.md 52.10.8 needs WHICH volume went and
+;      not only that one did)
+; clobbers: AX (the output), flags
+;
+; The disk tool's, until the split moved the volume table out of its reach.
+; It is the right place for it either way: hd_vols is the RESIDENT's - the
+; kernel's volume indices are registered from here and given back from here -
+; so the tool naming a partition and this doing the whole job is one crossing
+; instead of a shared table.
+;
+; EVERY row and not the first, for hd_unmount's own reason: one partition is
+; one volume today, and a scan that stops early is the kind of thing that
+; stops being true quietly.
+; -----------------------------------------------------------------------------
+hd_unmount_part:
+    push bx
+    push dx
+    mov dx, ax                  ; DL = device, DH = slot
+    mov ax, 0xFF00              ; nothing yet
+    mov bx, hd_vols
+.scan:
+    call hd_vol_find
+    jc .out
+    mov al, 1
+    mov ah, [bx+HDV_VOL]        ; read while the row is still live
+    call hd_unmount_row
+    add bx, HDV_SIZE
+    jmp short .scan
+.out:
+    pop dx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_unmount_row - drop one volume (module internal)
 ; in:  BX = the hd_vols row
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
@@ -307,92 +445,17 @@ hd_unmount_row:
 ; -----------------------------------------------------------------------------
 hd_vol_of:
     push bx
-    push cx
     push dx
     mov dx, ax                  ; DL = device, DH = slot
-    mov cx, HD_MAXVOL
     mov bx, hd_vols
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_DEV]
-    cmp al, dl
-    jne .next
-    mov al, [bx+HDV_PART]
-    cmp al, dh
-    jne .next
-    mov al, [bx+HDV_VOL]
-    jmp short .out
-.next:
-    add bx, HDV_SIZE
-    loop .scan
+    call hd_vol_find
     mov al, 0xFF
+    jc .out
+    mov al, [bx+HDV_VOL]
 .out:
     pop dx
-    pop cx
     pop bx
     ret
-
-; -----------------------------------------------------------------------------
-; hd_unmount_part - drop every volume mounted on one partition (SPEC.md 52.12)
-; in:  AL = the device index, AH = the partition slot
-; out: AL = 1 if anything was unmounted, 0 if not
-; clobbers: AX (the output), flags
-;
-; The disk tool's, until the split moved the volume table out of its reach.
-; It is the right place for it either way: hd_vols is the RESIDENT's - the
-; kernel's volume indices are registered from here and given back from here -
-; so the tool naming a partition and this doing the whole job is one crossing
-; instead of a shared table.
-;
-; EVERY row and not the first, for hd_unmount's own reason: one partition is
-; one volume today, and a scan that stops early is the kind of thing that
-; stops being true quietly.
-; -----------------------------------------------------------------------------
-hd_unmount_part:
-    push bx
-    push cx
-    push dx
-    mov dx, ax                  ; DL = device, DH = slot
-    xor al, al
-    mov ah, 0xFF                ; ...and AH = the last volume index dropped,
-    push ax                     ; 0xFF = none. The answer, built on the stack
-    mov cx, HD_MAXVOL
-    mov bx, hd_vols
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_DEV]
-    cmp al, dl
-    jne .next
-    mov al, [bx+HDV_PART]
-    cmp al, dh
-    jne .next
-    pop ax                      ; the answer FIRST, because the pop would
-    mov al, 1                   ; clobber AH, and the row is still live here:
-    mov ah, [bx+HDV_VOL]        ; SPEC.md 52.10.8 needs WHICH volume went and
-    push ax                     ; not only that one did
-    call hd_unmount_row
-.next:
-    add bx, HDV_SIZE
-    loop .scan
-    pop ax
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_win_close_all - hide the tool window (detach's obligation)
-; in:  nothing
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-hd_win_close_all:
-    call hd_tool_drop           ; HDT_SHUT and then the free, in that order. A
-    ret                         ; window of the TOOL's left on screen is a paint
-                                ; through freed memory twice over - the kernel
-                                ; releases this image the moment we return, and
-                                ; we release the tool's before that
 
 ; =============================================================================
 ; Shared helpers
@@ -407,30 +470,16 @@ hd_win_close_all:
 ;
 ; The op is in MEMORY rather than a register because the LBA needs DX:AX and
 ; the buffer needs ES:BX - the same reason DSV_BLK takes its own buffer in
-; DX:BX (SPEC.md 51.8).
+; DX:BX (SPEC.md 51.8). It is the transfer's own direction byte: hd_bop IS
+; hd_rawop in this image, so there is nothing to copy.
 ; -----------------------------------------------------------------------------
 hd_raw:
     mov [hd_lba], ax
     mov [hd_lba+2], dx
     mov [hd_bofs], bx
     mov [hd_bcnt], cx
+    mov [hd_bseg], es
     push ax
-    mov ax, es
-    mov [hd_bseg], ax
-    pop ax
-    push ax
-    mov al, [hd_rawop]
-    mov [hd_bop], al
-    pop ax
-hd_raw_op:
-    push ax
-    cmp byte [di+HDD_KIND], HDK_IDE
-    je .ide
-    call hd_bios_xfer
-    jmp short .out
-.ide:
-    call hd_ide_xfer
-.out:
+    call hd_xfer
     pop ax
     ret
-

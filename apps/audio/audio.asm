@@ -534,6 +534,7 @@ ap_s_full:    db 'Playlist is full', 0
 ap_s_dup:     db 'Already in the playlist', 0
 ap_qfile:     db 'APQUEUE.DAT', 0
 
+%define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
 %include "os88ui.inc"
     OS88_BSS AP_BSS
     align 512, db 0                ; os88_image_end on a 512 boundary, so the

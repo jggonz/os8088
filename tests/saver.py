@@ -49,10 +49,76 @@ IDLE_SOON = b"\x1c\x00"          # 28 ticks, about a second and a half
 IDLE_NEVER = b"\x00\x40"         # ...and a quarter of an hour
 
 
+PLANAR = False                   # set once in main(), off the card's own type
+VGA_BASE = 0xA0000
+_NZ = bytes([0] + [1] * 255)     # bytes.translate: any non-zero byte -> 1
+
+
+def _rgb_lit(d):
+    """Pixels of an rgb24 frame with ANY channel non-zero, at C speed.
+
+    A pixel is three bytes, so "lit" is the OR of three channels - indexing
+    one byte per pixel reads a third of the frame at a third of the stride
+    (tools/chromedown.py's warning), and taking the red byte alone calls a
+    blue pixel black. Each channel's 0/1 plane becomes one big integer and
+    the OR of the three is counted: 307,200 pixels without a Python loop.
+    """
+    t = d.translate(_NZ)
+    a = (int.from_bytes(t[0::3], "big") | int.from_bytes(t[1::3], "big")
+         | int.from_bytes(t[2::3], "big"))
+    return bin(a).count("1")
+
+
 def lit(m):
-    """(whole screen, the menu bar's rows) lit-pixel counts."""
-    w, h, rows = m.vram()
-    return sum(sum(r) for r in rows), sum(sum(r) for r in rows[:MBAR_H])
+    """(whole screen, the menu bar's rows) lit-pixel counts, ON THE GLASS.
+
+    TWO INSTRUMENTS, ONE QUESTION. On the 1bpp cards `vram` decodes SPEC.md
+    39.3's banked layout out of memory and is exact; outside a gated signal
+    memory and glass are the same picture, which is what every assertion here
+    was written against. On a VGA there is no flat framebuffer to decode -
+    mode 12h is four planes behind the Graphics Controller - so the CARD is
+    asked what it rasterised (`fbuf`) and "lit" is any pixel that is not
+    black. That is the 1bpp meaning exactly: os8088's VGA desktop is black
+    and white (measured: 166,110 white and 141,090 black of 307,200, nothing
+    else), and lit there is white.
+
+    THIS USED TO CALL `m.vram()` ON EVERY CARD, and `vram` sent anything that
+    was not a CGA down its Hercules arm - so on os8088_xt_vga it read the
+    unmapped 0xB0000, which answers zeroes rather than erroring, and the
+    boot gate reported "desktop: 0 lit" on a machine showing a desktop.
+    `vram` now refuses a planar card instead (tools/os88marty.py).
+    """
+    if not PLANAR:
+        w, h, rows = m.vram()
+        return sum(sum(r) for r in rows), sum(sum(r) for r in rows[:MBAR_H])
+    w, h, d = m.fbuf()
+    return _rgb_lit(d), _rgb_lit(d[:w * MBAR_H * 3])
+
+
+def memlit(m):
+    """Lit pixels in the card's own MEMORY - what the blanker must not touch.
+
+    On the 1bpp cards this is `lit` itself: `vram` already reads memory, so
+    the fallbacks' "framebuffer untouched" assertion is the one it always was.
+
+    ON A VGA THE GLASS CANNOT ANSWER IT. The blanker gates the signal through
+    the Attribute Controller's Color Plane Enable (SPEC.md 64.3), MartyPC
+    models that register, and so the rendered frame of a CORRECT blanker is
+    black - which is exactly what a saver that blacked the framebuffer would
+    show too. So memory is read directly: the debugger's `read` is a side-
+    effect-free PEEK (no latch load, no Read Map Select written, nothing the
+    guest can see), and MartyPC's peek answers PLANE 0. One plane is enough
+    for the one thing asked - the desktop is black and white, so white has
+    every plane set, and a blacking fill clears plane 0 with the rest - and
+    the same plane is read on both sides of the comparison, so nothing here
+    depends on which plane the peek picks.
+    """
+    if not PLANAR:
+        return lit(m)[0]
+    w = int.from_bytes(m.read(m.sym("vid_stride"), 2), "little")
+    h = int.from_bytes(m.read(m.sym("vid_h"), 2), "little")
+    b = m.read(VGA_BASE, w * h)
+    return bin(int.from_bytes(b, "big")).count("1")
 
 
 def wait(m, addr, want, limit=20.0):
@@ -82,14 +148,21 @@ def main():
     ap.add_argument("--apps", default="build/apps360.img")
     a = ap.parse_args()
 
+    global PLANAR
     bad = 0
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+        vt = m.video()["type"]
+        PLANAR = vt not in ("cga", "mda", "hercules")
         sv = m.sym("blk_sv")
         on = m.sym("blk_on")
         seg = m.sym("ss_row") + 2                   # DRVR_SEG
         desk, deskbar = lit(m)
-        print("desktop: %d lit, %d of them in the menu bar" % (desk, deskbar))
-        if desk < 1000:
+        deskmem = memlit(m)
+        print("desktop (%s, %s): %d lit, %d of them in the menu bar; "
+              "%d lit in memory"
+              % (vt, "fbuf + plane 0" if PLANAR else "vram", desk, deskbar,
+                 deskmem))
+        if desk < 1000 or deskmem < 1000:
             print("  ...that is not a desktop; the boot gate let something through")
             return 1
 
@@ -159,10 +232,25 @@ def main():
             os88marty.guest_sleep(m, 0.4)
             started = wait(m, on, 1)
             os88marty.guest_sleep(m, 1.0)
-            total, _ = lit(m)
-            ok = started and m.read(sv, 1)[0] == 0 and abs(total - desk) < 200
-            print("  %-14s blanker: blk_on=%d blk_sv=%d framebuffer lit=%d %s"
-                  % (name, m.read(on, 1)[0], m.read(sv, 1)[0], total,
+            total = memlit(m)
+            ok = (started and m.read(sv, 1)[0] == 0
+                  and abs(total - deskmem) < 200)
+            glass = ""
+            if PLANAR:
+                # ...AND ON A VGA THE GATE ITSELF IS VISIBLE, so it is asked
+                # too. MartyPC models AC 12h, so a blanker that declined to
+                # blank this card - SPEC.md 64.3's "silently declining on one
+                # adapter in three", which is how the VGA arm came to be
+                # written - leaves the desktop on the glass and is caught
+                # here, where memory alone would read it as a pass. The
+                # 1bpp legs cannot ask it the same way (MartyPC models the
+                # CGA's video-enable bit and not the mono card's; see
+                # dispsaver), so they keep the memory half alone.
+                g, _ = lit(m)
+                ok = ok and g < 50
+                glass = " glass lit=%d" % g
+            print("  %-14s blanker: blk_on=%d blk_sv=%d framebuffer lit=%d%s %s"
+                  % (name, m.read(on, 1)[0], m.read(sv, 1)[0], total, glass,
                      "" if ok else "<-- WRONG"))
             bad += not ok
             m.write(m.sym("ss_idle"), IDLE_NEVER)

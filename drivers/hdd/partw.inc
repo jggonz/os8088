@@ -19,41 +19,31 @@
 ; clobbers: AX (the output), flags
 ; -----------------------------------------------------------------------------
 hd_part_mb:
-    push bx
     push cx
     push dx
     mov ax, [si+HP_SECS]
     mov dx, [si+HP_SECS+2]
-    mov bx, ax
-    mov cl, 11                  ; 2,048 sectors to the megabyte
+    mov cl, 11
 .shift:
     shr dx, 1
-    rcr bx, 1
+    rcr ax, 1
     dec cl
     jnz .shift
-    mov ax, bx
     pop dx
     pop cx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
 ; hd_ent_end - one entry's end LBA, exclusive (module internal)
 ; in:  SI = the entry
-; out: [hd_xend] = LBA + sector count, 32-bit
-; clobbers: flags
+; out: DX:AX = LBA + sector count, 32-bit
+; clobbers: AX, DX (the output), flags
 ; -----------------------------------------------------------------------------
 hd_ent_end:
-    push ax
-    push dx
     mov ax, [si+HP_LBA]
     mov dx, [si+HP_LBA+2]
     add ax, [si+HP_SECS]
     adc dx, [si+HP_SECS+2]
-    mov [hd_xend], ax
-    mov [hd_xend+2], dx
-    pop dx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -136,10 +126,7 @@ hd_cyl_up:
 ; see. A tie keeps the EARLIER hole, which leaves the later space contiguous.
 ; -----------------------------------------------------------------------------
 hd_slot_extent:
-    push ax
-    push cx
-    push dx
-    push si
+    call os88_ent
     mov [hd_xslot], al
     call hd_part_ent
     call hd_part_used
@@ -241,19 +228,8 @@ hd_slot_extent:
     cmp ax, [di+HDD_SPT]
     jb .no                      ; less than a track: not worth a drive letter
 .big:
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    clc
-    ret
-.no:
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    stc
-    ret
+    CLC_OR_STC .no
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; hd_slot_hole - the free-slot walk with NO slot excused (SPEC.md 52.2.8)
@@ -267,10 +243,8 @@ hd_slot_extent:
 ; answer for "a new partition", whichever slot is selected.
 ; -----------------------------------------------------------------------------
 hd_slot_hole:
-    push ax                     ; hd_slot_extent's own four, which its exits
-    push cx                     ; pop
-    push dx
-    push si
+    call os88_ent                 ; hd_slot_extent's own prologue, which its
+                                ; exits unwind
     mov byte [hd_xslot], 0xFF
     jmp hd_slot_extent.fresh
 
@@ -363,10 +337,7 @@ hd_ent_fill:
 ; letter".
 ; -----------------------------------------------------------------------------
 hd_cyl_trim:
-    push ax
-    push bx
-    push cx
-    push dx
+    call os88_ent
     mov ax, [di+HDD_HEADS]
     mul word [di+HDD_SPT]
     mov cx, ax                  ; CX = sectors per cylinder (<= 16,065)
@@ -393,11 +364,7 @@ hd_cyl_trim:
 .none:
     mov word [hd_fsecs], 0
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; hd_x_bump - move the candidate out of any other entry (module internal)
@@ -406,10 +373,7 @@ hd_cyl_trim:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 hd_x_bump:
-    push ax
-    push cx
-    push dx
-    push si
+    call os88_ent
     xor cl, cl
 .slot:
     cmp cl, [hd_xslot]
@@ -426,36 +390,24 @@ hd_x_bump:
     cmp ax, [si+HP_LBA]
     jb .next
 .above:
-    call hd_ent_end
-    mov ax, [hd_xstart+2]       ; ...and below its end?
-    cmp ax, [hd_xend+2]
+    call hd_ent_end             ; DX:AX = its end - candidate below it?
+    cmp [hd_xstart+2], dx
     ja .next
     jb .hit
-    mov ax, [hd_xstart]
-    cmp ax, [hd_xend]
+    cmp [hd_xstart], ax
     jae .next
 .hit:
-    mov ax, [hd_xend]
-    mov dx, [hd_xend+2]
-    call hd_cyl_up
+    call hd_cyl_up              ; ...then past it, on a cylinder boundary
     mov [hd_xstart], ax
     mov [hd_xstart+2], dx
-    pop si
-    pop dx
-    pop cx
-    pop ax
     stc
-    ret
+    jmp os88_r_bp
 .next:
     inc cl
     cmp cl, 4
     jb .slot
-    pop si
-    pop dx
-    pop cx
-    pop ax
     clc
-    ret
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; hd_x_limit - how far the candidate may run (module internal)
@@ -465,10 +417,7 @@ hd_x_bump:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 hd_x_limit:
-    push ax
-    push cx
-    push dx
-    push si
+    call os88_ent
     call hd_dev_secs
     mov [hd_xlimit], ax
     mov [hd_xlimit+2], dx
@@ -504,11 +453,7 @@ hd_x_limit:
     inc cl
     cmp cl, 4
     jb .slot
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; hd_dev_secs - a device's total sectors
@@ -517,11 +462,9 @@ hd_x_limit:
 ; clobbers: AX, DX (the outputs), flags
 ; -----------------------------------------------------------------------------
 hd_dev_secs:
-    push bx
     mov ax, [di+HDD_HEADS]
-    mul word [di+HDD_SPT]       ; DX:AX, and DX is 0: 255*63 is 16,065
-    mul word [di+HDD_CYL]       ; ...so this is a true 32-bit product
-    pop bx
+    mul word [di+HDD_SPT]
+    mul word [di+HDD_CYL]
     ret
 
 ; -----------------------------------------------------------------------------
@@ -536,10 +479,7 @@ hd_dev_secs:
 ; wrote, which is what says "read the LBA fields instead".
 ; -----------------------------------------------------------------------------
 hd_part_chs:
-    push ax
-    push bx
-    push cx
-    push dx
+    call os88_ent
     mov ax, [si+HP_LBA]
     mov dx, [si+HP_LBA+2]
     call hd_lba_chs             ; -> [hd_cyl]/[hd_head]/[hd_sec]
@@ -547,10 +487,7 @@ hd_part_chs:
     mov [si+HP_SHEAD], al
     call hd_chs_pack            ; AX = the packed sector/cylinder pair
     mov [si+HP_SSEC], ax
-    mov ax, [si+HP_LBA]         ; the LAST sector, not one past it
-    mov dx, [si+HP_LBA+2]
-    add ax, [si+HP_SECS]
-    adc dx, [si+HP_SECS+2]
+    call hd_ent_end
     sub ax, 1
     sbb dx, 0
     call hd_lba_chs
@@ -558,11 +495,7 @@ hd_part_chs:
     mov [si+HP_EHEAD], al
     call hd_chs_pack
     mov [si+HP_ESEC], ax
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; hd_lba_chs - hd_chs against an LBA in registers (module internal)
@@ -618,10 +551,7 @@ hd_chs_pack:
 ; a user who changes their mind has changed nothing.
 ; -----------------------------------------------------------------------------
 hd_part_write:
-    push ax
-    push bx
-    push cx
-    push dx
+    call os88_ent
     push es
     push ds
     pop es
@@ -632,12 +562,7 @@ hd_part_write:
     mov cx, 1
     mov byte [hd_rawop], 1      ; write
     call hd_raw
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_es
 
 ; -----------------------------------------------------------------------------
 ; hd_mbr_stamp - our chain-loader in front of the table, when those bytes are
@@ -673,23 +598,22 @@ hd_part_write:
 ; -----------------------------------------------------------------------------
 hd_mbr_stamp:
     cmp byte [hd_mbrok], HMB_OK
-    je .out
-    push cx
-    push si
-    push di
-    push es
+    je hd_mbr_ret
+hd_mbr_code:                    ; ...and the copy itself, unconditional - the
+    call os88_ent                 ; installer's hd_inst_mbr puts it back over a
+    push es                     ; table it has just re-read
     push ds
     pop es
     cld
     mov si, hd_bootstub
     mov di, hd_mbr
-    mov cx, hd_bootstub_end - hd_bootstub
+    mov cx, HD_MBRNZ            ; the chain-loader's own bytes...
     rep movsb
-    pop es
-    pop di
-    pop si
-    pop cx
-.out:
+    mov cx, HD_MBRCODE - HD_MBRNZ   ; ...and the zeros boot/mbr.asm pads to
+    xor al, al                      ; the table with, which this image does
+    rep stosb                       ; not carry (see hd_bootstub)
+    jmp os88_r_es
+hd_mbr_ret:
     ret
 
 ; The MBR's boot code (SPEC.md 52.10.1) - a real chain-loader now: it finds
@@ -708,14 +632,24 @@ hd_mbr_stamp:
 ; tail of somebody else's boot code in front of our table; a long one would
 ; eat the table itself.
 ; -----------------------------------------------------------------------------
-hd_bootstub:
-    incbin "mbr.bin"
-hd_bootstub_end:
-
-HD_MBRCODE   equ 446            ; the space in front of the table
-%if hd_bootstub_end - hd_bootstub != HD_MBRCODE
-%error "build/mbr.bin is not 446 bytes - see boot/mbr.asm"
+; ONLY THE CODE IS CARRIED. mbr.bin is 183 bytes of loader and 263 of the
+; zeros boot/mbr.asm pads it to the table with, so the image holds the first
+; HD_MBRNZ and hd_mbr_code writes the rest as zeros - the same 446 bytes on
+; the platter, 263 fewer in every load of this image. HD_MBRNZ is the
+; Makefile's (HDBLOBDEF), cut off the built file with the trailing zeros
+; stripped - so what is not carried is zero BY CONSTRUCTION - and the same
+; line refuses a file that is not 446 bytes, which is the assertion that used
+; to live here.
+; -----------------------------------------------------------------------------
+%ifndef HD_MBRNZ
+%error "HD_MBRNZ/HD_VBREND come from the Makefile's HDBLOBDEF - build with make"
 %endif
+HD_MBRCODE   equ 446            ; the space in front of the table
+%if HD_MBRNZ > HD_MBRCODE || HD_MBRNZ < 1
+%error "HD_MBRNZ is not a prefix of the 446-byte MBR code"
+%endif
+hd_bootstub:
+    incbin "mbr.bin", 0, HD_MBRNZ
 
 ; ...and the VOLUME boot record the installer writes (SPEC.md 52.10.2), the
 ; same way and for the same reason: it is real assembly in boot/boothd.asm,
@@ -726,20 +660,51 @@ HD_MBRCODE   equ 446            ; the space in front of the table
 BOOTHD_KSECS equ 508
 BOOTHD_KOFS  equ 504             ; ...and the kernel's start in the data area,
                                 ; a dword (SPEC.md 52.10.15)
+; ...AND THE VBR THE SAME WAY: its three-byte jump, then the code from the
+; end of the BPB (62) to HD_VBREND, the last non-zero byte below the two
+; patched words. The BPB, the zeros above the code and the signature are not
+; carried: hd_vbr_code writes them. HDBLOBDEF refuses a boothd.bin whose BPB
+; or patch words are not zero, or that does not end in 55AAh - the three
+; facts that make the cut lossless.
+HD_VBRCODE   equ 62             ; where the code starts: the end of the BPB
+%if HD_VBREND <= HD_VBRCODE || HD_VBREND > BOOTHD_KOFS
+%error "HD_VBREND is not inside boothd.bin's code region"
+%endif
 hd_bootvbr:
-    incbin "boothd.bin"
+    incbin "boothd.bin", 0, 3
+    incbin "boothd.bin", HD_VBRCODE, HD_VBREND - HD_VBRCODE
 hd_bootvbr_end:
 
-%if hd_bootvbr_end - hd_bootvbr != 512
-%error "build/boothd.bin is not 512 bytes - see boot/boothd.asm"
-%endif
+; -----------------------------------------------------------------------------
+; hd_vbr_code - our VBR's code into hd_sec0, around whatever BPB is there
+; in:  hd_sec0 = the sector being built (a volume's own, or zeros)
+; out: its jump, code, zeros up to the signature and the signature are ours;
+;      bytes 3..61, the BPB, are untouched. All registers preserved
+; -----------------------------------------------------------------------------
+hd_vbr_code:
+    call os88_ent
+    push es
+    push ds
+    pop es
+    cld
+    mov si, hd_bootvbr
+    mov di, hd_sec0
+    movsw                       ; the jump...
+    movsb
+    mov di, hd_sec0 + HD_VBRCODE
+    mov cx, HD_VBREND - HD_VBRCODE
+    rep movsb                   ; ...the code...
+    mov cx, 510 - HD_VBREND
+    xor al, al
+    rep stosb                   ; ...the zeros, patch words included...
+    mov word [hd_sec0+510], 0xAA55  ; ...and the signature
+    jmp os88_r_es
 
 ; --- state this module owns (moved out of hdd.asm's data block) ---
 ; -----------------------------------------------------------------------------
 hd_xslot:    db 0               ; hd_slot_extent's scan: the slot being placed,
 hd_xstart:   dd 0               ; the candidate start,
 hd_xlimit:   dd 0               ; how far it may run,
-hd_xend:     dd 0               ; one entry's end,
 hd_xbest:    dd 0               ; and the largest hole the walk has seen
 hd_xblen:    dd 0               ; (52.2.1)
 hd_xsum:     dd 0               ; ...and every hole it saw, summed (52.2.8)

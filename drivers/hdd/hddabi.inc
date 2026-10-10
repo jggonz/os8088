@@ -46,7 +46,12 @@ HD_MAXVOL    equ 4              ; volumes mountable at once: ONE PER FAT
 HDD_KIND     equ 0              ; db: HDK_*
 HDD_UNIT     equ 1              ; db: int 13h drive (80h/81h), or 0/1 on the
                                 ; IDE channel in HDD_BASE
-HDD_FLAGS    equ 2              ; db: bit 0 = geometry known
+HDD_FLAGS    equ 2              ; db: bit 0 = geometry known, bit 1 typed by
+                                ; hand; HDF_CYLASK/HDF_CYLOK below
+HDF_CYLASK   equ 0x40           ; ...rung 0's ROM has been ASKED whether one
+                                ; int 13h may carry a read across a head
+HDF_CYLOK    equ 0x80           ; ...and it may (SPEC.md 18.91.5): hd_bios_run
+                                ; then bounds a read at the cylinder
 HDD_PAD      equ 3
 HDD_CYL      equ 4              ; dw: cylinders
 HDD_HEADS    equ 6              ; dw: heads      } 1..255

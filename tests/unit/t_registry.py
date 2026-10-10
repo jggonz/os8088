@@ -187,18 +187,6 @@ UNREGISTERED = {
     "rczex_ocr.py": "needs the RunCPM fetch and an OCR dependency",
     "proxytest.py": "drives tools/os88proxy.py against a live network",
     "proxyguitest.py": "drives the proxy GUI, needs a display",
-    "socktest.py": "needs `make socktest`, and it is MINUTES: the cable is "
-                   "stepped a nibble at a time, so a page fetch is ~13 of "
-                   "them. **AND IT DOES NOT NEED QEMU NETWORKING**, which is "
-                   "what this reason said - it runs under MartyPC with "
-                   "tests/lptlink/partner.py as the far end and real host "
-                   "sockets behind that, no NIC anywhere. Measured while "
-                   "tests/doscable.py was being written, which is the same "
-                   "arrangement one layer up and IS registered: socktest "
-                   "fetches its page correctly and then fails its own "
-                   "handle-leak assertion with `8 of 4 handles free after the "
-                   "close`, which reads as a bug in that assertion rather "
-                   "than in the wire. Nobody has been running it to notice",
 
     # --- A/B gates: each needs a SECOND kernel built with a knob, so it is a
     #     two-build session rather than a row (the knob itself is kept alive

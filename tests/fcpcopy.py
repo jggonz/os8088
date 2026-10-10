@@ -34,11 +34,22 @@ before anything is created, fcp_undo removes the partial destination, and
 disk, and FERR_FULL is reported as the harness's choice of disk rather than
 as a defect.
 
-It writes to a COPY of the apps image, never the shipped one: the paste is a
-real write and the next test to boot that image would see it.
+It never writes the shipped apps image - and it writes NO FIXED PATH either
+(docs/WRITING-TESTS.md 5.5). `os88marty.launch` already boots every floppy
+from a copy in the instance's own run directory, so the paste lands there; the
+one file this script writes itself, the flushed volume the host-side checks
+read, is keyed to the process and swept on a pass. It used to copy the apps
+image to `build/fcpcopy/apps-scratch.img` first and flush to
+`build/fcpcopy/after.img`, both shared by every copy of the row - and BOTH
+ARMS. `fcpcopy` and `fcpsmall` run in parallel lanes of a soak, so one arm's
+copyfile could land between the other's and its launch: kern_small then booted
+the 1.44MB apps disk, which its mount rule 10 refuses for its nine FAT
+sectors, and the row failed in `open_drive` with B:'s window at its root and
+FS_MOK = 0 - "front is 'Disk' (1, 0, 0); [fm_vinst] = 8419", reproduced
+exactly by booting kern_small with build/apps.img. A copy caught mid-write
+gives the same picture on either kernel (a truncated B: answers int 13h 80h).
 """
 import os
-import shutil
 import subprocess
 import sys
 
@@ -51,6 +62,7 @@ import os88mouse
 import os88sym
 import dispcp
 import os88disk
+import os88fat
 from os88geom import FERR_FULL                           # noqa: E402
 
 S = os88sym.linear
@@ -67,9 +79,10 @@ SYS_IMG = os88build.at(os.environ.get("OS88_SYSIMG", "build/os8088.img"))
 SRC_APPS = os88build.at(os.environ.get("OS88_APPSIMG", "build/apps.img"))
                                 # THE RUN'S TREE (tests/unit/t_artpath.py):
                                 # the fcpsmall arm overrides both to the small
-                                # pair, and shutil.copyfile reads SRC_APPS
-                                # itself - a use site launch() never sees
-OUT = os.path.abspath(os.path.join("build", "fcpcopy"))
+                                # pair
+OUT = os.path.abspath(os88build.at(os.path.join("build", "fcpcopy")))
+                                # ...and a path this row WRITES is its own to
+                                # resolve (docs/WRITING-TESTS.md 5.5, row 62)
 KERNEL_SEG = 0x0060
 MB_ENTSZ, MB_SEG, MB_XL, MB_XR = 12, 10, 6, 8
 BAR_Y = 8
@@ -106,9 +119,35 @@ def edit_cell(m):
 
 
 def pick_edit(m, mo, item):
+    """Pick an Edit item - and for PASTE, wait for the OPERATION, not the glass.
+
+    A paste runs inside the menu body with the gfx lock held (SPEC.md 22.3),
+    so for its whole length the screen is MORE still than when it is done, and
+    `settle` returns in the middle of it: measured, [fcp_busy] = 1 when settle
+    came back two host seconds into the folder paste, which then ran ~38 more
+    GUEST seconds. Everything this script did next was a read of a disk in
+    flight. The listing check missed MEDIA/ in SYSTEM (the window is reloaded
+    when the paste ends), and the `m.flush` landed inside a file's HELD
+    WRITE_SEQ stream - whose new clusters are allocated and linked to each
+    other but deliberately NOT to the file until the close (SPEC.md 18.4.9) -
+    so `--verify` reported them as LOST. That is 18.4.9's crash-consistent
+    state, not a leak: the same run waited out reads 0 lost clusters. It is
+    also why only kern_big ever showed it - kern_small's copy commits every
+    chunk as a plain append, so a mid-copy snapshot of it is clean.
+
+    So the wait is on the engine's own flag, [fcp_busy], on the GUEST clock
+    (os88marty.until, SPEC.md 22.3's "running or suspended"). No paste here
+    can suspend on a question - every target is new - so 1 for longer than
+    the budget is a stuck copy and says so.
+    """
     x = edit_cell(m)
     mo.menu(x, BAR_Y, x + 20, ITEM0_Y + item * ITEM_H)
     os88marty.settle(m)
+    if item == I_PASTE:
+        os88marty.until(m, lambda mm: mm.read(S("fcp_busy"), 1)[0] == 0,
+                        "the paste to finish ([fcp_busy] = 0)",
+                        guest=300.0, poll=0.5)
+        os88marty.settle(m)     # ...and the listing it reloads on the way out
 
 
 def select(m, mo, wx, wy, name):
@@ -126,6 +165,50 @@ def err(m):
 
 def names(m):
     return [n for n, _ in dispcp.listing(m, S) if n != ".."]
+
+
+def host_tree(path, folders):
+    """{relative name: bytes} under B:\\<folders...>, read off the IMAGE by
+    tools/os88fat.py's FAT12 reader - recursively, folders included as None.
+
+    A copy that wrote the wrong bytes, or the right bytes short, passes the
+    listing check and `--verify` both: the names are there and every chain is
+    reachable. This is what compares what the engine WROTE."""
+    v = os88fat.Fat12(path)
+    csz = v.spc * v.bps
+
+    def raw(off_list):
+        for o in off_list:
+            for i in range(0, csz, 32):
+                yield bytes(v.img[o + i:o + i + 32])
+
+    def body(e):
+        first, size = u16(e, 26), int.from_bytes(e[28:32], "little")
+        return b"".join(bytes(v.img[v.cluster_off(c):v.cluster_off(c) + csz])
+                        for c in v.chain(first))[:size] if first else b""
+
+    def walk(ents, pre, out):
+        for e in ents:
+            if e[0] == 0:
+                break
+            if e[0] == 0xE5 or e[11] & 0x08 or e[:1] == b".":
+                continue
+            n = pre + v.pretty(e[:11])
+            if e[11] & 0x10:
+                out[n] = None
+                walk(raw(v.cluster_off(c) for c in v.chain(u16(e, 26))),
+                     n + "\\", out)
+            else:
+                out[n] = body(e)
+        return out
+
+    ents = [e for _, _, e in v.entries()]
+    for f in folders:
+        e = [x for x in ents if v.pretty(x[:11]) == f and x[11] & 0x10]
+        if not e:
+            return None
+        ents = list(raw(v.cluster_off(c) for c in v.chain(u16(e[0], 26))))
+    return walk(ents, "", {})
 
 
 def goto_root(m, mo, wx, wy):
@@ -148,9 +231,10 @@ def main():
         # put build/smallk/ there, which is where the symbols come from.
         os88fixture.need("build/small.img", "build/smallapps.img")
     os.makedirs(OUT, exist_ok=True)
-    apps = os.path.join(OUT, "apps-scratch.img")
-    shutil.copyfile(SRC_APPS, apps)      # NEVER the shipped image
-    with os88marty.launch(SYS_IMG, apps=apps, machine=MACHINE) as m:
+    # NO SCRATCH COPY: launch() clones SRC_APPS into this instance's private
+    # run directory, and the paste writes that clone - never the shipped
+    # image, and never a file another copy of this row is cloning at the time
+    with os88marty.launch(SYS_IMG, apps=SRC_APPS, machine=MACHINE) as m:
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
@@ -164,9 +248,11 @@ def main():
         f = inner[0]
         select(m, mo, wx, wy, f)
         pick_edit(m, mo, I_COPY)
-        say("Copy: [fcp_op]=%d [fcp_name]=%r"
-            % (m.read(S("fcp_op"), 1)[0],
-               m.read(S("fcp_name"), 13).split(b"\0")[0].decode("latin1")))
+        # THE CLIPBOARD, fcp_cb*: fcp_op/fcp_name are the OPERATION record,
+        # which fcp_paste fills from this one and which reads 0/'' until then
+        say("Copy: [fcp_cbop]=%d [fcp_cbname]=%r"
+            % (m.read(S("fcp_cbop"), 1)[0],
+               m.read(S("fcp_cbname"), 13).split(b"\0")[0].decode("latin1")))
         goto_root(m, mo, wx, wy)
         pick_edit(m, mo, I_PASTE)
         e = err(m)
@@ -203,21 +289,46 @@ def main():
                 fails.append("the copied folder holds %r, the source held %r"
                              % (sorted(got), sorted(inner)))
 
-        out = os.path.join(OUT, "after.img")
+        out = os.path.join(OUT, "after-%d.img" % os.getpid())
         m.flush(1, out)
 
     # --- 3. ...and the volume it left behind, read by something else -------
     print("  --- the volume, walked by tools/os88disk.py --verify ---")
-    if os88disk.verify(out):
+    try:                        # verify EXITS on a refusal rather than
+        bad = os88disk.verify(out)  # returning, which ended this script
+    except SystemExit as e:     # there with every other FAIL unprinted
+        bad = e.code or 1
+    if bad:
         fails.append("os88disk --verify refused the volume after the copies - "
                      "the guest's own listing cannot see this class of damage, "
                      "because it is drawn from the structures that are wrong")
 
+    # --- 4. ...and what the copies HOLD, byte for byte ----------------------
+    src = host_tree(out, ["MEDIA"])
+    dst = host_tree(out, ["SYSTEM", "MEDIA"])
+    top = host_tree(out, [])
+    if src is None or dst is None:
+        fails.append("the host reader cannot find B:\\MEDIA and "
+                     "B:\\SYSTEM\\MEDIA on the flushed image")
+    else:
+        if top.get(f) != src.get(f):
+            fails.append("B:\\%s is not byte-identical to B:\\MEDIA\\%s" % (f, f))
+        for n in sorted(set(src) | set(dst)):
+            if src.get(n, b"?") != dst.get(n, b"!"):
+                fails.append("B:\\SYSTEM\\MEDIA\\%s differs from its source "
+                             "(%s bytes against %s)" % (
+                                 n, "-" if dst.get(n) is None else len(dst[n]),
+                                 "-" if src.get(n) is None else len(src[n])))
+        say("host side: %d entries under B:\\MEDIA, %d bytes, copied byte for "
+            "byte" % (len(src), sum(len(b) for b in src.values() if b)))
+
     if fails:
-        print("\nfcpcopy: %d FAILED" % len(fails))
+        print("\nfcpcopy: %d FAILED (the volume is kept: %s)"
+              % (len(fails), out))
         for x in fails:
             print("  FAIL: " + x)
         return 1
+    os.remove(out)              # per-PID, so nothing else will reclaim it
     print("\nfcpcopy: the copy engine moved a file and a folder tree, and left "
           "a sound volume - PASS on %s" % MACHINE)
     return 0

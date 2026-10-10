@@ -90,26 +90,14 @@ HIA_GLYEND   equ 128            ; ...and past its document glyph (SPEC.md
 ; user was somewhere.
 ; -----------------------------------------------------------------------------
 hd_iassoc:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call os88_ent
     push es
     call hd_ivol_bankv          ; ...the V form: hd_isrcdrv is the COPY's and
                                 ; this is not a copy
     call hd_ia_build
     call hd_ivol_back
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp os88_r_es
 
 ; -----------------------------------------------------------------------------
 ; hd_ia_build - the body of it, with the volume already banked (internal)
@@ -159,24 +147,17 @@ hd_ia_build:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 hd_ia_root:
-    push ax
-    push bx
-    push dx
+    call os88_ent
     xor dx, dx                  ; cluster 0 IS the root (SPEC.md 19.2.2)
     mov bl, [hd_idrv]
     call OSAPI_FILE_GOTO_Q      ; QUIET: no listing, no harvest (SPEC.md 18.9)
-    pop dx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; hd_ia_zero - clear the body and the counters (module internal)
 ; -----------------------------------------------------------------------------
 hd_ia_zero:
-    push ax
-    push cx
-    push di
+    call os88_ent
     push es
     mov es, [hd_iaseg]
     xor di, di
@@ -187,11 +168,7 @@ hd_ia_zero:
     mov word [hd_ianf], 0       ; the FRONT index: declaring packages, up
     mov word [hd_ianb], ASC_NAPP ; ...and the BACK one, everything else, down
     mov word [hd_iane], 0
-    pop es
-    pop di
-    pop cx
-    pop ax
-    ret
+    jmp os88_r_es
 
 ; -----------------------------------------------------------------------------
 ; hd_ia_walk - every package in the root and one level of folders (internal)
@@ -208,12 +185,7 @@ hd_ia_zero:
 ; and come back to the next entry with nothing banked but CX.
 ; -----------------------------------------------------------------------------
 hd_ia_walk:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call os88_ent
     push es
     xor cx, cx
 .next:
@@ -221,12 +193,8 @@ hd_ia_walk:
     call hd_ia_root             ; the copy and the descent below both moved us
     pop cx
     jc .out
-    push es
-    push cs
-    pop es
-    mov di, hd_iafind
-    call OSAPI_FILE_FIND_RAW    ; RAW, and that is the whole of hd_ia_row's
-    pop es                      ; key being right - see there
+    call hd_ia_find             ; RAW, and that is the whole of hd_ia_row's
+                                ; key being right - see there
     jc .out                     ; FERR_NOENT: the end of the root
     mov ax, [hd_iafind+14]
     cmp ax, OSAPI_FT_PKG
@@ -243,13 +211,17 @@ hd_ia_walk:
     call hd_ia_row              ; lives, and that is what the row records
     jmp short .next
 .out:
+    jmp os88_r_es
+
+; hd_ia_find - OSAPI_FILE_FIND_RAW of ordinal CX into hd_iafind, with ES ours
+; for the call and put back after (the walk's two levels each did it inline)
+hd_ia_find:
+    push es
+    push cs
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    mov di, hd_iafind
+    call OSAPI_FILE_FIND_RAW
+    pop es
     ret
 
 ; -----------------------------------------------------------------------------
@@ -258,11 +230,7 @@ hd_ia_walk:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 hd_ia_folder:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
+    call os88_ent
     push es
     mov [hd_iafc], ax
     xor cx, cx
@@ -273,12 +241,8 @@ hd_ia_folder:
     call OSAPI_FILE_GOTO_Q
     pop cx
     jc .out
-    push es
-    push cs
-    pop es
-    mov di, hd_iafind
-    call OSAPI_FILE_FIND_RAW
-    pop es
+    call hd_ia_find             ; RAW, and that is the whole of hd_ia_row's
+                                ; key being right - see there
     jc .out
     cmp word [hd_iafind+14], OSAPI_FT_PKG
     jne .next
@@ -286,13 +250,7 @@ hd_ia_folder:
     call hd_ia_row
     jmp short .next
 .out:
-    pop es
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_es
 
 ; -----------------------------------------------------------------------------
 ; hd_ia_row - one package: read its header, take a row, take its declarations
@@ -301,12 +259,7 @@ hd_ia_folder:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 hd_ia_row:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call os88_ent
     push es
     mov [hd_iarc], dx           ; banked: OSAPI_FILE_READ_AT answers in DX:AX
 
@@ -368,14 +321,7 @@ hd_ia_row:
     call hd_ia_emit             ; the 88 bytes
     call hd_ia_decl             ; ...and the extensions that point at them
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_es
 .outes:
     pop es
     jmp short .out
@@ -408,12 +354,8 @@ hd_ia_front:
     mov [hd_ianb], bx           ; one this front row is about to take
 .take:
     inc word [hd_ianf]
+    CLC_OR_STC .no
     pop bx
-    clc
-    ret
-.no:
-    pop bx
-    stc
     ret
 
 hd_ia_back:
@@ -425,12 +367,8 @@ hd_ia_back:
     dec bx
     mov [hd_ianb], bx
     mov ax, bx
+    CLC_OR_STC .no
     pop bx
-    clc
-    ret
-.no:
-    pop bx
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -452,12 +390,7 @@ hd_ia_back:
 ; another volume resolved.
 ; -----------------------------------------------------------------------------
 hd_ia_emit:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call os88_ent
     push es
     mov es, [hd_iaseg]
     mov al, [hd_iaix]
@@ -528,14 +461,7 @@ hd_ia_emit:
     xor ax, ax
     rep stosw
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_es
 
 ; -----------------------------------------------------------------------------
 ; hd_ia_at - ES:DI -> row AL of the body (module internal)
@@ -578,12 +504,8 @@ hd_ia_dbase:
     add ax, 16
     cmp [hd_iatake], ax
     jb .no
+    CLC_OR_STC .no
     pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -640,12 +562,8 @@ hd_ia_dok:
     cmp byte [es:si+2], '8'
     je .no
 .ok:
+    CLC_OR_STC .no
     pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -655,11 +573,7 @@ hd_ia_dok:
 ; rows and the app COUNT is not known until the walk is over.
 ; -----------------------------------------------------------------------------
 hd_ia_decl:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
+    call os88_ent
     push es
     mov es, [hd_iaseg]
     call hd_ia_dbase
@@ -677,31 +591,27 @@ hd_ia_decl:
                                 ; which is assoc_declare's own rule
     call hd_ia_dok
     jc .skip
-    mov ax, [hd_iane]
-    mov bl, 4
-    mul bl
-    add ax, HIA_EXT
-    mov di, ax
-    mov al, [es:si]             ; ES to ES: the scratch to the staging area
-    mov [es:di], al
-    mov al, [es:si+1]
-    mov [es:di+1], al
-    mov al, [es:si+2]
-    mov [es:di+2], al
+    mov di, [hd_iane]
+    shl di, 1
+    shl di, 1
+    add di, HIA_EXT             ; DI = its row: 4 bytes, ext and app index
+    push ds
+    push es
+    pop ds
+    cld
+    movsw                       ; the three bytes of the extension...
+    movsb
+    pop ds
     mov al, [hd_iaix]
-    mov [es:di+3], al
+    mov [es:di], al             ; ...and which app row it opens with
     inc word [hd_iane]
+    jmp short .next             ; (SI is past it already)
 .skip:
     add si, 3
+.next:
     loop .one
 .out:
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_es
 
 ; -----------------------------------------------------------------------------
 ; hd_ia_close - compact, head, and write the file (module internal)
@@ -711,12 +621,7 @@ hd_ia_decl:
 ; Both moves are downward, so one forward rep movsb serves each.
 ; -----------------------------------------------------------------------------
 hd_ia_close:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call os88_ent
     push es
     mov es, [hd_iaseg]
 
@@ -799,14 +704,7 @@ hd_ia_close:
     call OSAPI_FILE_WRITE_SYS   ; SPEC.md 19.6.1's one door, and this image
                                 ; already goes through it for KERNEL.SYS
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_es
 
 ; -----------------------------------------------------------------------------
 ; hd_ia_move - CX bytes from ES:SI to ES:DI, inside the claim (internal)
@@ -828,20 +726,13 @@ hd_ia_move:
 ; hd_ia_put - CX bytes from DS:SI to ES:DI (module internal)
 ; -----------------------------------------------------------------------------
 hd_ia_put:
-    push ax
-    push cx
-    push si
-    push di
+    call os88_ent
     cld
 .one:
     lodsb
     stosb
     loop .one
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
+    jmp os88_r_bp
 
 ; --- this module's data, in .text: a driver ships its bss inside its image ---
 hd_s_iamagic: db 'OS88AC'       ; ...and the NAME is hd_s_assoc, inst.inc's:

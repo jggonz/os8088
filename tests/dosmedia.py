@@ -40,7 +40,7 @@ rather than in the guest:
      an assertion of `burst <= n` that is 1 <= 1 for ever. A green row that
      tests nothing is worse than no row (docs/WRITING-TESTS.md 1).
 
-Break it on purpose: take `FCPX dsk_media_ok` out of `fcp_goto` and assertion
+Break it on purpose: take `call dsk_media_ok` out of `fcp_goto` and assertion
 1 reads 0.
 """
 import os

@@ -224,13 +224,11 @@ sk_step:
                                     ; NETV_IDENT, which is the only thing
                                     ; between this package and handing a
                                     ; hostname to a RAM disk (SPEC.md 20.11.1)
-    mov bh, NET_CLASS
-    mov bl, NETV_STATE
-    call OSAPI_DRV_CALL
-    jc  .maybe                      ; no driver at all
+                                    ; - and NETV_STATE too, OS88SOCK_STATE's
+                                    ; half, so AX is its answer and ZF=1 is
+                                    ; NSTF_SOCK clear
     mov [sk_flags], al
-    mov [sk_free], ah
-    test al, NSTF_SOCK
+    mov [sk_free], ah               ; (a mov leaves ZF alone)
     jz  .nosock
     mov bh, NET_CLASS
     mov bl, NETV_OPEN
@@ -309,6 +307,12 @@ sk_step:
     mov bh, NET_CLASS
     mov bl, NETV_CLOSE
     call OSAPI_DRV_CALL
+    mov bh, NET_CLASS               ; ...AND ASK AGAIN, which is what the
+    mov bl, NETV_STATE              ; harness's assertion 4 reads: the State
+    call OSAPI_DRV_CALL             ; line showed the count taken at OPEN, so
+    jc  .out                        ; "the handle came back" compared the
+    mov [sk_flags], al              ; free count from BEFORE the handle was
+    mov [sk_free], ah               ; taken and could not see a leak at all
     jmp short .out
 
 .maybe:
@@ -538,6 +542,7 @@ sk_sent:    dw 0
 sk_got:     dw 0
 sk_err:     dw 0
 
+%define OS88SOCK_STATE             ; ...every net_find here asks NETV_STATE too
 %include "os88sock.inc"         ; net_find (SPEC.md 72)
 
     OS88_BSS SKT_BUF

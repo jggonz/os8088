@@ -173,7 +173,9 @@ INCLUDES = [
     ("os88sock.inc", "20.11, 62.11, 72",
      "Finding the socket driver: `net_find` answers CF=1 when neither "
      "ETHER.DRV nor NET.DRV is loaded and sets `NET_CLASS` otherwise, so every "
-     "`OSAPI_DRV_CALL` after it addresses the right class. The verbs "
+     "`OSAPI_DRV_CALL` after it addresses the right class. `%define "
+     "OS88SOCK_STATE` makes it ask NETV_STATE as well (ZF=1 = no NSTF_SOCK), "
+     "for a package whose every `net_find` wants that. The verbs "
      "themselves are `drivers/net/netpkg.inc`'s."),
     ("os88gfx.inc", "5.12",
      "The EMBEDDABLE graphics library: drawing code that lives in the PACKAGE "

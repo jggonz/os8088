@@ -87,7 +87,7 @@ def u16(b, i=0):
     return struct.unpack_from("<H", b, i)[0]
 
 
-def clip(tmp, secs, rate, spk=False, spkp=1):
+def clip(tmp, secs, rate, spk=False, spkp=1, ahead=0):
     """a 40 x 100 Hercules canvas moving a block, and a sine sweep"""
     nf = int(secs * FPS)
     wb, h = 40, 100
@@ -111,7 +111,8 @@ def clip(tmp, secs, rate, spk=False, spkp=1):
     vid._write_wav(wav, rate, bytes(audio))
     out = os.path.join(tmp, "CLIP.V88")
     vid.encode_frames(paths, out, FPS, wav, "herc", "vidspk clip",
-                      audio_fmt=vid.AUD_PCM8, spk=spk, spkp=spkp)
+                      audio_fmt=vid.AUD_PCM8, spk=spk, spkp=spkp,
+                      ahead=ahead)
     vid.verify_v88(out)
     return out
 
@@ -290,6 +291,10 @@ def main():
                     help="a clip made for this many pulses a sample (SPEC.md "
                          "34.11.7): muted by default on an 8088, so M; its "
                          "writes to 42h are each count twice")
+    ap.add_argument("--ahead", type=int, default=0, metavar="A",
+                    help="the clip's sound carried A frames ahead of its "
+                    "picture (SPEC.md 98.1.8): the speaker's pulses must "
+                    "still be exact, the lead shaped as a record's piece")
     ap.add_argument("--keep", help="copy the capture here")
     ap.add_argument("--covox", action="store_true",
                     help="MartyPC's Covox machine: the clip on the DAC "
@@ -313,9 +318,9 @@ def main():
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
-        v88 = clip(tmp, a.secs, a.rate, a.counts, a.pulses)
+        v88 = clip(tmp, a.secs, a.rate, a.counts, a.pulses, a.ahead)
         r = vid.Reader(v88)
-        audio = b"".join(rec[-r.abytes:] for rec, _, _ in r.records())
+        audio = b"".join(r.sound(f) for f in range(r.frames))
         n = 1193182 // a.rate
         srate = 1193182.0 / n
         vhd = os.path.join(tmp, "spk.vhd")

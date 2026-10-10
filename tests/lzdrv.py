@@ -20,9 +20,19 @@ prove:
   * it ANSWERS - the DRVCALL package's three probes, which is
     tests/drvcall.py's own assertion re-run against a driver that arrived
     compressed.
+
+--nohint IS A HOST TOOL'S COPY OF THE DRIVER (SPEC.md 20.13.3.1, 20.14.6).
+RAMDISK.DRV's directory hint is struck on a scratch copy of the disk - what a
+driver copied on by DOS, Windows or `tools/os88fat.py add` carries - so the
+directory says what the file OCCUPIES and nothing about what it becomes. The
+claim drv_load cuts from that is the PACKED size, and until drv_find asked
+the file itself (dskw_czknow) the read refused it as FERR_BIG and the driver
+never attached: red on the kernel before, with all three assertions above
+unchanged.
 """
 import argparse
 import os
+import struct
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
@@ -55,6 +65,10 @@ def say(*a):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--adapter", default="cga", choices=sorted(MACHINE))
+    ap.add_argument("--nohint", action="store_true",
+                    help="strike RAMDISK.DRV's directory hint on a scratch "
+                         "copy first, as a host tool's copy leaves it "
+                         "(SPEC.md 20.14.6)")
     a = ap.parse_args()
     # THE PATHS AND NOT THE TARGET NAME: `Row(wants=...)` carries
     # what `make <path>` produces, and the runner builds it before
@@ -78,11 +92,53 @@ def main():
         "+%d bss" % (len(plain), len(packed), 100.0 * len(packed) / len(plain),
                      plain[31] * 16))
 
+    sysimg = strike(os88build.at("build/lzdrv360.img")) if a.nohint \
+        else "build/lzdrv360.img"
+    try:
+        return run(a, sysimg, plain)
+    finally:
+        if a.nohint:
+            os.remove(sysimg)
+
+
+def strike(src):
+    """A scratch copy of `src` with RAMDISK.DRV's hint zeroed: the three
+    cells SPEC.md 20.14.1 keeps it in, which a foreign tool writes as its own
+    (lzmod.py's `strike`, one file along)."""
+    d = bytearray(open(src, "rb").read())
+    bps = struct.unpack_from("<H", d, 11)[0]
+    res = struct.unpack_from("<H", d, 14)[0]
+    nfat, nent = d[16], struct.unpack_from("<H", d, 17)[0]
+    fsz = struct.unpack_from("<H", d, 22)[0]
+    off = (res + nfat * fsz) * bps
+    for i in range(nent):
+        e = off + i * 32
+        if d[e:e + 11] == b"RAMDISK DRV":
+            if not 0x5A <= d[e + 12] <= 0x5B:
+                sys.exit("lzdrv: RAMDISK.DRV carries no hint to strike - "
+                         "the fixture stopped compressing it")
+            d[e + 12] = d[e + 13] = d[e + 20] = d[e + 21] = 0
+            break
+    else:
+        sys.exit("lzdrv: no RAMDISK.DRV in %s to strike" % src)
+    out = os.path.abspath(os.path.join(          # ABSOLUTE: launch() maps a
+        os.path.dirname(os.path.abspath(__file__)), "..", "build",
+        "lzdrv-nohint-%d.img" % os.getpid()))    # relative build/ path into
+    open(out, "wb").write(d)                     # a frozen tree
+    say("  hint       STRUCK on a scratch copy (--nohint)")
+    return out
+
+
+def run(a, sysimg, plain):
     fails = []
-    with os88marty.launch("build/lzdrv360.img",
+    with os88marty.launch(sysimg,
                           apps="build/drvcall360.img",
                           machine=MACHINE[a.adapter]) as m:
         os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.no_saver(m)   # SPEC.md 79: a load that FAILS waits out
+                                # both limits below, which is long enough
+                                # for the saver to start - and it draws, so
+                                # the settles after them never return
         mo = os88mouse.Mouse(marty=m)
 
         # 1. tick the Ram Disk on, exactly as tests/drvcall.py does - a

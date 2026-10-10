@@ -1514,6 +1514,15 @@ fmv_load:
     ; A window whose claim was refused passes the floor listing instead and
     ; is exactly as it was. That arm is what 13.5's third commit removes,
     ; along with the floor.
+    ;
+    ; **THE STORE IS RE-CLAIMED BEFORE IT IS NAMED.** fmv_store's fmv_fit is
+    ; the retry for a window with no claim - but it runs AFTER the mount, and
+    ; the destination is read here, BEFORE it. On kern_small a shed takes the
+    ; claim (fmv_demote) and owes a re-list, so the re-list named a 0 store,
+    ; the mount went quiet, and fmv_store then re-claimed an EMPTY cache: the
+    ; window read "0 files" until Refresh, measured on the 128KB machine by
+    ; launching Gorillas over a GAMES window. Retried here, the listing lands.
+    call fmv_fit
     push ax
     push dx
     push bx

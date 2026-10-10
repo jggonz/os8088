@@ -2707,6 +2707,9 @@ kbm_isr:
     push ds
     push cs
     pop ds
+%ifdef KBD_DIAG
+    call kbg_pre                ; KBDDIAG=1 (SPEC.md 9.8.1): the 8042's status
+%endif                          ; and the BIOS buffer, before anything reads
     call sch_wake_ui            ; A KEYSTROKE WAKES THE UI TASK (SPEC.md
                                 ; 8.1.2.2). Here at the head and not after the
                                 ; chain below, because the chain is a `jmp far`
@@ -2785,9 +2788,20 @@ kbm_isr:
     mov ax, cs
     cmp [cs:kbm_old9+2], ax
     je .selfchain
+%ifdef KBD_DIAG
+    pushf                       ; KBDDIAG=1 (SPEC.md 9.8.1): CALL the ROM rather
+    call far [cs:kbm_old9]      ; than jump to it, so what it did can be read
+    push cs                     ; when it returns. Its iret restores OUR flags,
+    pop ds                      ; IF = 0, and the ROM preserves every register
+    call kbg_post
+    pop ds
+    pop ax
+    iret
+%else
     pop ds
     pop ax
     jmp far [cs:kbm_old9]       ; CS, not DS: DS is the interrupted code's again
+%endif
 .selfchain:
     mov al, 0x20                ; the EOI is the BIOS's job and there is no
     out 0x20, al                ; BIOS below us: without it IRQ1 stays in

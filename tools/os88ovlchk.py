@@ -1232,15 +1232,25 @@ def main():
     # tried: kindof() already declines to judge a mixed extent, so merging
     # turns a reported defect into an unreported one.  Each definition is
     # classified on its own and a call is refused if ANY of them disagrees.
+    #
+    # ONE SHAPE IS DECLARED RATHER THAN JUDGED: a routine whose label line
+    # carries `ovlchk: builds its own far frame` is near-called ON PURPOSE and
+    # leaves by a RETF that consumes a frame it assembled itself - extmod.inc's
+    # exk_go, whose call pushes the address of an inline `dw target` that
+    # becomes the far return. Its extent is recorded unjudged, like a mixed
+    # one, and the marker is the review rule: grep for it.
+    FRAMEB = 'ovlchk: builds its own far frame'
     rets = {}
     for f in files:
         cur, seen = None, set()
-        for sect, n, line in sections(f):
+        for sect, n, line, raw in sections_raw(f):
             m = TOPL.match(line)
             if m:
                 if cur:
                     rets.setdefault(cur, []).append(seen)
                 cur, seen = m.group(1), set()
+                if FRAMEB in raw:
+                    cur = None       # declared: not classified, not judged
             r = RETI.match(line)
             if r and cur:
                 seen.add(r.group(1).lower())

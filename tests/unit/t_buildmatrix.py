@@ -189,6 +189,13 @@ KNOBS = [
     ("bootprof",    ["BOOTPROF=1"]),
     ("mouidslow",   ["MOUIDSLOW=1"]),
     ("trackrun",    ["TRACKRUN=1"], "boot360.bin"),
+    # NOHDCYL= and HDCYLPROBE= reach HDD.DRV as well as the kernel (DRVDEF
+    # and VIDDEF both), and the driver's arms (hdd.asm, mount.inc) are the
+    # ones nothing else assembles - so the target is hdd.bin, which hangs
+    # off KERNEL.SYS through hddtool.bin and boothd.bin and so builds the
+    # knob's kernel on the way
+    ("nohdcyl",     ["NOHDCYL=1"], "hdd.bin"),
+    ("hdcylprobe",  ["HDCYLPROBE=1"], "hdd.bin"),
     # SPEC.md 18.93.1/18.93.2's instruments. BOOTMARK= puts a MARK expansion
     # into ~60 places in kmain that expand to NOTHING in every other build, so
     # nothing else assembles them; BOOTHALT= is the arm inside that macro;
@@ -254,6 +261,9 @@ KNOBS = [
     # counters go round a lap instead of saturating, so it is the kernel's and
     # the default target is right.
     ("mouround",    ["MOUROUND=1"]),
+    # `KBDDIAG=1` (SPEC.md 9.8.1) records every IRQ1 and draws the ring on the
+    # desktop; kernel-only, so the default target is right.
+    ("kbddiag",     ["KBDDIAG=1"]),
     # `DPTROM=1` (SPEC.md 18.92) TAKES BOTH ARMS, for BOOTSTOP's reason: it
     # appends -DDPT_ROM to $(VIDDEF) *and* to $(BOOTDEF), so one target
     # assembles half of it. The kernel arm is the default and the sector arm

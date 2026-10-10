@@ -235,7 +235,6 @@ hb_vol:     resb 1              ; the volume the image is (or will be) on
 hb_down:    resb 1              ; the button the press armed, 1/2, 0 = none
 hb_drvmask: resw 1              ; drv_tab rows detached before the image
 hb_sp:      resw 1              ; hbm_perform's entry SP (SPEC.md 87.4)
-hb_wakep:   resw 2              ; hbm_wake as off:seg, in the image's module
 hb_resumes: resw 1              ; how many times this machine has woken
 hb_unit:    resw 1              ; the transport facts (SPEC.md 87.5 step 1)
 hb_spt:     resw 1              ; - these FOUR are HS_UNIT..HS_NX's own order
@@ -248,8 +247,17 @@ hb_xseg:    resw 1              ; the extent list's claim, 0 = none
 ; package's region is alive until drv_shutdown, so the four bytes that say
 ; where its KDH_* record lies are all the kernel has to keep resident. A copy
 ; would be 543 bytes of every machine's RAM for a feature most never use.
-hb_dosoff:  resw 1              ; the record, in the POSTER's segment
-hb_dosseg:  resw 1              ; 0 = nothing posted
+hb_dosoff:  resw 1              ; the record, in the POSTER's segment...
+                                ; ...and `hb_dosseg`, that segment (0 =
+                                ; nothing posted), is DECLARED IN driver.inc
+                                ; beside drv_dlg_seg (SPEC.md 96.40.8). It is
+                                ; held from the post to the picture and read
+                                ; again on the wake, and three claims between
+                                ; can compact the poster's region away - the
+                                ; module's own load, step 3's extent list, and
+                                ; the wake's driver reload. So it is a holder
+                                ; mem_rr_tab patches, and there it rides
+                                ; drv_dlg_seg's row for no bytes at all
 hb_dosakb:  resw 1              ; ...and the ARENA it was given, in KB, which
                                 ; travels beside it and for its reason
                                 ; (SPEC.md 96.41.1)
@@ -559,21 +567,15 @@ hbf_onup:                       ; a release can only follow a press this
     mov al, MOD_HIBER           ; (SPEC.md 13.8.3)
     call mod_live
     pop ax
-    jc .gone
-    call far [HBFP + HBE_ONUP*4]
-    jmp short hbf_dropck        ; a tail call: its ret is ours (.gone
-                                ; stays, for the refusal above)
-.gone:
-    ret
+    jc hbf_onclick.gone         ; the refusal is a bare `ret`, and that one is
+    call far [HBFP + HBE_ONUP*4]    ; onclick's - one byte, not a copy
+    jmp short hbf_dropck        ; a tail call: its ret is ours
 
 hbf_onkey:
     call hbf_need
-    jc .gone
+    jc hbf_onclick.gone         ; ...and so is this one
     call far [HBFP + HBE_ONKEY*4]
-    jmp short hbf_dropck        ; a tail call: its ret is ours (.gone
-                                ; stays, for the refusal above)
-.gone:
-    ret
+    jmp short hbf_dropck        ; a tail call: its ret is ours
 
 hbf_kinit:
     call hbf_need
@@ -694,16 +696,45 @@ modh_e_perform: call hbm_perform
 modh_e_open:    call hbm_open
                 retf
 
+; --- near doors to the far calls this image makes most (SPEC.md 2.6): a far
+; --- call is five bytes and a near one three, so each door pays for itself by
+; --- its third site. Every one is `call far` / `ret` and preserves exactly
+; --- what the far entry does.
+hbm_kd:     call KERNEL_SEG:cw_mem_disp     ; BP = a .text body
+            ret
+hbm_cb:     call COLD_SEG:wm_cbd            ; BP = a .cold body
+            ret
+hbm_vbn:    call COLD_SEG:drvf_drv_vol_bank
+            ret
+hbm_vbk:    call COLD_SEG:drvf_drv_vol_back
+            ret
+hbm_lock:   call KERNEL_SEG:cw_gfx_lock
+            ret
+hbm_unlock: call KERNEL_SEG:cw_gfx_unlock
+            ret
+
+; hbm_post - post AL for the top of ui_task's pass, unless a restart already
+;            posted wins (SPEC.md 20.10). Clobbers flags only
+hbm_post:
+    cmp byte [ui_rebootq], 0
+    jne .out
+    mov [ui_rebootq], al
+.out:
+    ret
+
 ; --- the two names, stamped (SPEC.md 87.3): the kernel carries ONE and the
 ; --- module writes the three bytes that tell them apart. Out: SI = the name.
-hbm_nptr:
-    mov word [HB_S_EXT], 'PT'
-    mov byte [HB_S_EXT+2], 'R'
-    mov si, hb_s_ptr
-    ret
+; --- Clobbers AX and DL, which no caller holds across one of these
 hbm_nimg:
-    mov word [HB_S_EXT], 'IM'
-    mov byte [HB_S_EXT+2], 'G'
+    mov ax, 'IM'
+    mov dl, 'G'
+    jmp short hbm_nset
+hbm_nptr:
+    mov ax, 'PT'
+    mov dl, 'R'
+hbm_nset:
+    mov [HB_S_EXT], ax
+    mov [HB_S_EXT+2], dl
     mov si, hb_s_ptr
     ret
 
@@ -806,29 +837,25 @@ hbm_btnrect:
     mov [bx+2], dx
     add dx, HBW_BH - 1
     mov [bx+6], dx
-    mov cx, ax
+    xchg cx, ax                 ; CX = left
     pop ax
     cmp al, 1
-    jne .two
-    add cx, HBW_B1X
-    mov [bx], cx
-    add cx, HBW_B1W - 1
-    mov [bx+4], cx
-    mov si, hbm_s_bhib
+    mov si, hbm_s_bhib          ; button 1...
+    mov ax, HBW_B1X
+    mov dx, HBW_B1W - 1
+    je .one
+    mov si, hbm_s_bcan          ; ...or button 2
+    mov ax, HBW_B2X
+    mov dx, HBW_B2W - 1
+.one:
+    add ax, cx
+    mov [bx], ax
+    add ax, dx
+    mov [bx+4], ax
     cmp byte [hb_mode], HB_M_RESUME
     jne .out
-    mov si, hbm_s_bres
-    ret                         ; (.out is a bare `ret`)
-.two:
-    add cx, HBW_B2X
-    mov [bx], cx
-    add cx, HBW_B2W - 1
-    mov [bx+4], cx
-    mov si, hbm_s_bcan
-    cmp byte [hb_mode], HB_M_RESUME
-    jne .out
-    mov si, hbm_s_bdis
-.out:
+    add si, hbm_s_bres - hbm_s_bhib ; the RESUME face's pair, the same
+.out:                               ; distance on from each (asserted there)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -860,13 +887,7 @@ hbm_btn:
     pop di
     mov si, cp_sbuf
     call COLD_SEG:os88ui_btn_f
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp hbm_ret6
 
 ; -----------------------------------------------------------------------------
 ; hbm_hit - which button is a point in?
@@ -975,8 +996,13 @@ hbm_paint:
     mov al, 2
     call hbm_btn
 .out:
+; --- THE SHARED EPILOGUE: hbm_paint's own, and the tail every routine here
+; --- that banks the same registers in the same order jumps to (a near `jmp`,
+; --- so it costs no stack). hbm_geom pops BP first and joins it
+hbm_ret6:
     pop di
     pop si
+hbm_ret4:
     pop dx
     pop cx
     pop bx
@@ -990,23 +1016,16 @@ hbm_repaint:
     push bx
     push cx
     push dx
+    mov al, CWHITE
+    call KERNEL_SEG:HB_API_COLOR
     call hbm_origin             ; AX = left, DX = top
     mov bx, dx
     mov cx, ax
     add cx, HBW_CW - 1
-    mov dx, bx
     add dx, HBW_CH - 1
-    push ax
-    mov al, CWHITE
-    call KERNEL_SEG:HB_API_COLOR
-    pop ax
     call KERNEL_SEG:HB_API_FILL ; AX=x1, BX=y1, CX=x2, DX=y2
     call hbm_paint
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp hbm_ret4
 
 ; hbm_win - this kind's window, if it is up
 ; out: CF = 0 and SI = window ptr; CF = 1 none
@@ -1115,30 +1134,23 @@ hbm_act:
     ; --- Resume: say so, and post the restore for the top of the pass -------
     mov byte [hb_mode], HB_M_BUSY
     call hbm_repaint
-    cmp byte [ui_rebootq], 0
-    jne .out                    ; a restart already posted wins (SPEC.md 20.10)
-    mov byte [ui_rebootq], UI_RBQ_RESUME
+    mov al, UI_RBQ_RESUME
+    call hbm_post               ; ...unless a restart already stands
     jmp short .out
 .discard:
-    call COLD_SEG:drvf_drv_vol_bank
+    call hbm_vbn                   
     call hbm_forget             ; the pointer and the image go
-    call COLD_SEG:drvf_drv_vol_back
+    call hbm_vbk                   
 .close:
     mov byte [hb_mode], HB_M_GONE       ; BEFORE the close: app_close_win's
     mov bx, si                          ; KIND_HIBER hook drops the image on
     mov bp, app_close_win
-    call KERNEL_SEG:cw_mem_disp    ; every OTHER route (SPEC.md 87.1), and
+    call hbm_kd                    ; every OTHER route (SPEC.md 87.1), and
                                         ; GONE is how it knows this is not one.
                                         ; Synchronous: task-less kind; the
                                         ; thunk drops the image on the way back
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp hbm_ret6
 
 ; -----------------------------------------------------------------------------
 ; hbm_enter / hbm_root - stand in the root of [hb_vol], where BOTH files are
@@ -1147,13 +1159,13 @@ hbm_act:
 ; out: CF = the chdir's; DX preserved
 ; -----------------------------------------------------------------------------
 hbm_enter:
-    call COLD_SEG:drvf_drv_vol_bank
+    call hbm_vbn                   
 hbm_root:
     push dx
     mov dl, [hb_vol]
     xor ax, ax                  ; the root: both files live in it (87.3)
     mov bp, dsk_chdir_x         ; ...through the one far entry (SPEC.md 2.6)
-    call COLD_SEG:wm_cbd
+    call hbm_cb         
     pop dx                      ; ...and a pop does not touch the chdir's CF
     ret
 
@@ -1178,7 +1190,7 @@ hbm_root:
 hbm_findimg:
     call hbm_nimg               ; SI = the name - this build has ONE, and the
     mov bp, dskw_stat_x         ; extension is stamped on (SPEC.md 87.3)
-    call COLD_SEG:wm_cbd
+    call hbm_cb         
     ret                         ; CF, BX and DX:CX are all its answer
 
 ; -----------------------------------------------------------------------------
@@ -1311,19 +1323,9 @@ hbm_geom:
     dec ax
     cmp ax, 254
     ja .no
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
+    CLC_OR_STC .no              ; CF = 0, or (.no) CF = 1
     pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp hbm_ret6                ; pops neither touch CF
 
 ; -----------------------------------------------------------------------------
 ; hbm_arm - the Hibernate button (SPEC.md 87.2, 87.4): the disk in [hb_vol]
@@ -1338,7 +1340,7 @@ hbm_arm:
     push cx
     push dx
     push si
-    call COLD_SEG:drvf_drv_vol_bank ; the user may be standing anywhere
+    call hbm_vbn                    ; the user may be standing anywhere
     mov al, [hb_vol]
     call hbm_geom
     jc .nobios
@@ -1379,12 +1381,11 @@ hbm_arm:
     cmp ax, cx
     jb .noroom
 .room:
-    call COLD_SEG:drvf_drv_vol_back
+    call hbm_vbk                   
     mov byte [hb_mode], HB_M_BUSY
     call hbm_repaint
-    cmp byte [ui_rebootq], 0
-    jne .out                    ; a restart already posted wins (SPEC.md 20.10)
-    mov byte [ui_rebootq], UI_RBQ_HIBER
+    mov al, UI_RBQ_HIBER
+    call hbm_post               ; ...unless a restart already stands
     jmp short .out
 .nobios:
     mov si, hbm_s_nobios
@@ -1396,7 +1397,7 @@ hbm_arm:
     mov si, hbm_s_noroom        ; files that were never the problem)
 .refuse:
     call hbm_toast
-    call COLD_SEG:drvf_drv_vol_back
+    call hbm_vbk                   
 .out:
     pop si
     pop dx
@@ -1445,12 +1446,22 @@ hbm_perform:
 ; -----------------------------------------------------------------------------
 hbm_wrimg:
     push ax
-    mov [cs:hbm_dosflag], al
+    mov [cs:hbm_ptrfix + HBP_DOS], al   ; ...WHY this image exists, the one
+                                ; thing in the pointer about the occasion
+                                ; rather than the machine
     mov byte [cs:hbm_dosheld], 1    ; ...both taken below, and given back by
                                     ; neither arm
-    call COLD_SEG:drvf_drv_vol_bank ; where the user stands, for a refusal
-    call hbm_detach             ; 1. the hardware drivers go, and are noted
-    call KERNEL_SEG:cw_gfx_lock ; 2. held from here: the machine is one
+    call hbm_vbn                    ; where the user stands, for a refusal
+    mov si, hb_drvmask          ; 1. the hardware drivers go, and are noted:
+    mov byte [cs:hbm_spm], 0    ; THE HIBERNATE'S OWN SWEEP IS TODAY'S SKIP
+                                ; LIST, whatever the last suspend asked for
+                                ; (SPEC.md 51.11.4): the mask is a slot
+                                ; argument, and a hibernate is not that slot
+    xor dx, dx                  ; no third skip...
+    xor di, di                  ; ...and nobody asking where the hardware is.
+    call hbm_sweep              ; Every register but AX is this routine's to
+                                ; spend - both callers reload what they use
+    call hbm_lock               ; 2. held from here: the machine is one
     inc byte [sch_lock]         ;    instant from here on - and only NOW
     call hbm_root               ; 3. the root of the disk the boot picked:
     jc .no                      ;    the detach yields, and a task that took
@@ -1461,8 +1472,11 @@ hbm_wrimg:
                                 ;    outlived its question would otherwise
                                 ;    name the NEW image with the old session's
                                 ;    wake address (SPEC.md 87.3)
-    mov word [hb_wakep], hbm_wake   ; 4. where the restored kernel enters
-    mov [hb_wakep + 2], cs
+                                ; 4. (SPEC.md 87.4) - [hb_sp] was banked at
+                                ;    the top, and where the restored kernel
+                                ;    enters goes straight into the pointer at
+                                ;    step 6 (HBP_WAKE): the .bss copy that
+                                ;    used to be taken here was never read
     call hbm_nimg               ; 5. the image: all of memory, one write
     xor bx, bx
     mov es, bx
@@ -1470,11 +1484,13 @@ hbm_wrimg:
     mov cx, ax
     call COLD_SEG:dwf_dskw_write
     jc .no
-    call hbm_ptr_build          ; 6. the pointer, beside it
-    call hbm_nptr
-    push cs
-    pop es
-    mov bx, hbm_ptrbuf
+    call hbm_ptrfix_set         ; 6. the pointer, beside it: the fixed
+    mov word [cs:hbm_ptrfix + HBP_WAKE], hbm_wake   ; head's live fields, and
+    mov [cs:hbm_ptrfix + HBP_WAKE + 2], cs          ; the wake address. The
+    call hbm_nptr               ; file IS hbm_ptrfix - one object, written
+    push cs                     ; from where it is described rather than
+    pop es                      ; staged through a buffer (SPEC.md 87.3)
+    mov bx, hbm_ptrfix
     xor dx, dx
     mov cx, HBP_SIZE
     call COLD_SEG:dwf_dskw_write
@@ -1492,7 +1508,7 @@ hbm_hib:
     jc .fail
     call hbm_kbdrain            ; 7. a key typed during the write is not the
     mov bp, vid_reboot
-    call KERNEL_SEG:cw_mem_disp   ;    answer; text mode, the sentence, a key
+    call hbm_kd                   ;    answer; text mode, the sentence, a key
     mov si, hbm_s_off
     call hbm_tty
     xor ah, ah
@@ -1509,16 +1525,16 @@ hbm_hib:
                                     ; is a jmp and there is nothing after it
 %else
     mov bp, sched_unhook            ; ...and on this arm sched_unhook DOES
-    call KERNEL_SEG:cw_mem_disp     ; return, so it is a call through the
+    call hbm_kd                     ; return, so it is a call through the
     int 0x19                        ; kernel's generic BP trampoline and the
     jmp $                           ; int 19h is ours to issue
 %endif
 .fail:
     mov byte [cs:hbm_dosheld], 0
     dec byte [sch_lock]
-    call KERNEL_SEG:cw_gfx_unlock
+    call hbm_unlock              
     call hbm_reload             ; the drivers come back
-    call COLD_SEG:drvf_drv_vol_back
+    call hbm_vbk                   
     mov byte [hb_mode], HB_M_ASK
     mov si, hbm_s_failed
     call hbm_toast
@@ -1532,9 +1548,9 @@ hbm_winback:
     push si
     call hbm_win
     jc .out
-    call KERNEL_SEG:cw_gfx_lock
+    call hbm_lock              
     call hbm_repaint
-    call KERNEL_SEG:cw_gfx_unlock
+    call hbm_unlock              
 .out:
     pop si
     ret
@@ -1576,7 +1592,7 @@ hbm_tty:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_detach / hbm_reload - the drivers that own hardware (SPEC.md 87.4 step 2)
+; hbm_sweep / hbm_reload - the drivers that own hardware (SPEC.md 87.4 step 2)
 ; in:  nothing; UI task, NO lock held (an unload waits on its worker)
 ; out: nothing (all registers preserved); [hb_drvmask] says which rows
 ;
@@ -1585,31 +1601,6 @@ hbm_tty:
 ; rows in [hb_susp], and the same reload. ONE loop each, shared - the slot's
 ; first body was a third copy of this pair, resident.
 ; -----------------------------------------------------------------------------
-hbm_detach:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov si, hb_drvmask
-    mov byte [cs:hbm_spm], 0    ; THE HIBERNATE'S OWN SWEEP IS TODAY'S SKIP
-                                ; LIST, whatever the last suspend asked for
-                                ; (SPEC.md 51.11.4): the mask is a slot
-                                ; argument, and a hibernate is not that slot
-    xor dx, dx                  ; no third skip...
-    xor di, di                  ; ...and nobody asking where the hardware is
-    call hbm_sweep
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 ; hbm_sweep - unload every driver that owns a chip, and note the rows
 ; in:  SI = the word to note them in (cleared first); DL = one more DRVC_* to
 ;      leave standing, or 0; [cs:hbm_spm] = classes to let go of ANYWAY, bit
@@ -1751,42 +1742,6 @@ hbm_drvsusp:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_ptr_build - compose the pointer file in this image's buffer (87.3)
-; -----------------------------------------------------------------------------
-hbm_ptr_build:
-    call hbm_ptrfix_set
-    push ax
-    push cx
-    push si
-    push di
-    push es
-    push cs
-    pop es
-    cld
-    push ds                     ; the fixed head, staged from the ONE
-    push cs                     ; description of it (SPEC.md 87.3): magic,
-    pop ds                      ; build, stamp, mem_top and the adapter, all
-    mov si, hbm_ptrfix          ; twelve bytes of it, in one copy
-    mov di, hbm_ptrbuf
-    mov cx, HBP_WAKE / 2
-    rep movsw
-    pop ds
-    mov di, hbm_ptrbuf          ; ...and the wake address, this session's own
-    mov ax, [hb_wakep]
-    mov [es:di+HBP_WAKE], ax
-    mov ax, [hb_wakep + 2]
-    mov [es:di+HBP_WAKE + 2], ax
-    mov al, [cs:hbm_dosflag]    ; ...and WHY this image exists, which is the
-    mov [es:di+HBP_DOS], al     ; one thing in the file that is about the
-    mov byte [es:di+HBP_PAD], 0 ; occasion rather than the machine
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; hbm_ask - the boot-time question (SPEC.md 87.5): validate the pointer,
 ;           find the image, and open the window in HB_M_RESUME
 ; in:  [hb_vol] = the volume the probe found the pointer on; no lock
@@ -1805,8 +1760,7 @@ hbm_ask:
     cmp ax, HBP_SIZE
     jne .stale
     call hbm_ptrfix_set         ; ONE description of the fixed head, written
-    push ds                     ; by hbm_ptr_build and compared here (87.3)
-    push es
+    push ds                     ; by hbm_wrimg and compared here (87.3)
     push cs
     pop ds
     push cs
@@ -1815,8 +1769,7 @@ hbm_ask:
     mov di, hbm_ptrbuf
     mov cx, HBP_WAKE / 2
     repe cmpsw
-    pop es                      ; ...and a pop does not touch cmpsw's ZF
-    pop ds
+    pop ds                      ; ...and a pop does not touch cmpsw's ZF
     jne .stale
     call hbm_findimg            ; ...which is mounted: the pointer came from it
     jc .lost                    ; DX:CX = the image's size on the disk
@@ -1829,7 +1782,7 @@ hbm_ask:
     mov al, [hb_vol]
     call hbm_geom
     jc .nobios
-    call COLD_SEG:drvf_drv_vol_back
+    call hbm_vbk                   
     mov byte [hb_mode], HB_M_RESUME
     ; --- ...AND WHETHER TO ASK AT ALL (docs/plans/KERN-DOS-PLAN.md 8) -------
     ; An image written for a DOS handoff is not the user leaving the machine,
@@ -1840,9 +1793,8 @@ hbm_ask:
     cmp byte [cs:hbm_ptrbuf + HBP_DOS], 0
     je .askit
     call hbm_dosbda             ; the exit code, out of the BDA
-    cmp byte [ui_rebootq], 0
-    jne .out                    ; a restart already posted wins (SPEC.md 20.10)
-    mov byte [ui_rebootq], UI_RBQ_RESUME
+    mov al, UI_RBQ_RESUME
+    call hbm_post               ; ...unless a restart already stands
     jmp short .out
 .askit:
     mov byte [hb_down], 0
@@ -1865,7 +1817,7 @@ hbm_ask:
     call hbm_toast
     call hbm_forget             ; a pointer nothing can act on
 .gone:
-    call COLD_SEG:drvf_drv_vol_back
+    call hbm_vbk                   
     mov byte [hb_mode], HB_M_GONE   ; ...and the image goes back too
 .out:
     mov sp, [hb_sp]
@@ -1873,8 +1825,8 @@ hbm_ask:
 
 ; -----------------------------------------------------------------------------
 ; hbm_dosbda - the DOS program's exit code, out of the BDA (SPEC.md 96.41)
-; out: [hb_doscode] and [hb_dosakb]; the mailbox is CLEARED. Every
-;      register is preserved
+; out: [hb_doscode] and [hb_dosakb]; the mailbox is CLEARED. Clobbers AX,
+;      DI and ES, which its one caller (hbm_ask's DOS arm) holds none of
 ;
 ; `kd_leave` wrote it at `0040:00F0` before its `int 19h` and it survived the
 ; ROM's bootstrap and our own boot (docs/plans/KERN-DOS-PLAN.md 8.2). Read
@@ -1888,11 +1840,10 @@ hbm_ask:
 ; converge on the same pair. Two cells, one reader, one writer.
 ; -----------------------------------------------------------------------------
 hbm_dosbda:
-    push ax
-    push di
-    push es
-    mov word [hb_doscode], KDH_NOCODE
-    mov word [hb_dosakb], 0
+    xor ax, ax
+    mov [hb_dosakb], ax
+    dec ax
+    mov [hb_doscode], ax        ; KDH_NOCODE, asserted at hb_probe_x
     mov ax, KDB_SEG
     mov es, ax
     mov di, KDB_OFF
@@ -1908,21 +1859,17 @@ hbm_dosbda:
     mov [es:di], ax             ; spent: the magic goes, not the code, so a
     mov [es:di+2], ax           ; second reader gets nothing rather than this
 .out:
-    pop es
-    pop di
-    pop ax
     ret
 
 ; hbm_ptrfix_set - fill the two fields of the fixed head that are the running
-;                  machine's, so hbm_ptr_build and hbm_ask read ONE object
+;                  machine's, so hbm_wrimg and hbm_ask read ONE object.
+;                  Clobbers AX; the pad byte after [vid_kind] is the image's
+;                  own 0 and nothing writes it
 hbm_ptrfix_set:
-    push ax
     mov ax, [mem_top]
     mov [cs:hbm_ptrfix + HBP_MEMTOP], ax
     mov al, [vid_kind]
     mov [cs:hbm_ptrfix + HBP_VID], al
-    mov byte [cs:hbm_ptrfix + HBP_VID + 1], 0
-    pop ax
     ret
 
 ; hbm_imgsize - out: DX:AX = [mem_top] * 16, the bytes an image must have
@@ -1954,71 +1901,55 @@ hbm_res:
     call hbm_xcap               ; 2. sized for THIS volume, not the worst one
     mov bx, MEM_K_HIB
     mov bp, mem_claim_x
-    call COLD_SEG:wm_cbd ; DX = its segment
+    call hbm_cb          ; DX = its segment
     pop ax
     jc .fail
     mov [hb_xseg], dx
-    call hbm_extents            ; AX = first cluster in; [hb_nx] out
+    mov bx, [mem_top]           ; THE IMAGE'S CHAIN AS SECTOR RUNS (SPEC.md
+    mov cl, 5                   ; 87.5 step 2) is hbm_extat with nothing to
+    shr bx, cl                  ; skip and the whole image to take: paragraphs
+    xor cx, cx                  ; / 32 sectors. It had a copy of its own, the
+    call hbm_extat              ; same walk less the skip. AX = first cluster
     jc .failx
     ; 3. the panel's settings, the fresh boot's drivers go, the lock is taken,
-    ;    text mode - ui_cmd_reboot's order (SPEC.md 20.10, 31.8) -----------
-    call COLD_SEG:cpf_cp_flush_close
-    call COLD_SEG:drv_shutdown_x
-    call KERNEL_SEG:cw_gfx_lock
-    mov bp, vid_reboot
-    call KERNEL_SEG:cw_mem_disp
-    ; 4. the staging area ---------------------------------------------------
-    call hbm_stageseg           ; ES = the text framebuffer
-    push ds
-    push cs
-    pop ds
-    mov si, hbs_stub            ; the stub, to offset 0
-    mov di, HS_CODE
+    ;    text mode - ui_cmd_reboot's order (SPEC.md 20.10, 31.8) - and 4. the
+    ;    staging area: the stub, the transport words and the extents, which
+    ;    is the half hbm_dosrun's handoff shares (hbm_down)
+    mov byte [cs:hbm_dosheld], 0    ; nothing of the lock is ours yet
+    mov si, hbs_stub
     mov cx, hbs_stub_end - hbs_stub
-    rep movsb
-    pop ds
-    mov si, hb_unit             ; unit, spt, heads, extents - the stub's order
-    mov di, HS_UNIT
-    mov cx, 4
-    rep movsw
-    push ds                     ; ...and the wake address out of the pointer
-    push cs
-    pop ds
-    mov si, hbm_ptrbuf + HBP_WAKE
-    mov di, HS_WAKE
-    mov cx, 2
-    rep movsw
-    pop ds
+    call hbm_down               ; ES = the text framebuffer, DI = HS_WAKE
+%if HS_WAKE != HS_UNIT + 8
+  %error "the resume staging: hbm_down leaves DI at HS_UNIT + 8, which is to be HS_WAKE"
+%endif
+    mov ax, [cs:hbm_ptrbuf + HBP_WAKE]  ; ...and the wake address out of the
+    stosw                               ; pointer
+    mov ax, [cs:hbm_ptrbuf + HBP_WAKE + 2]
+    stosw
     mov si, clk_sec             ; the fresh boot's clock (SPEC.md 87.6): ten
     mov di, HS_CLK              ; bytes, clk_sec..clk_year, and NOT the two
     mov cx, 5                   ; display toggles after them, which are the
     rep movsw                   ; image's to keep
-    mov word [es:HS_KSEG], KERNEL_SEG   ; the segment the stub used to spell
-                                ; as a constant (kernel/hbstage.inc): it means
-                                ; something else in the other host, so it is
-                                ; staged by whoever stages
-    mov ax, [hb_doscode]        ; ...and the DOS program's exit code, if this
+    mov ax, [hb_doscode]        ; the DOS program's exit code, if this
     mov [es:HS_DOSCODE], ax     ; resume is a handoff coming home. NO STUB CODE
-    mov ax, [hb_dosakb]         ; AT ALL: hbm_wake reads this segment anyway -
-    mov [es:HS_DOSAKB], ax      ; and the arena travels in the next cell, so
-                                ; the reboot route and the live one converge
-                                ; where the CODE does (SPEC.md 96.41.1)
-    mov word [es:HS_TICK0], 0xFFFF      ; **THE CLOCK ABOVE IS ALREADY CURRENT**
-    mov word [es:HS_TICK0 + 2], 0xFFFF  ; (SPEC.md 96.49.5): a fresh boot has
-                                ; just run the ladder, so there is no elapsed
-                                ; time to add and adding one would count the
-                                ; DOS session twice. The live route stages the
-                                ; handover's own tick here instead
-    push ds
-    mov ds, [hb_xseg]           ; the extents
-    xor si, si
-    mov di, HS_EXT
-    mov cx, [es:HS_NX]
-    mov ax, cx
-    shl cx, 1
-    add cx, ax                  ; words: 3 per extent
-    rep movsw
-    pop ds
+                                ; AT ALL: hbm_wake reads this segment anyway
+%if HS_DOSAKB != HS_KSEG + 2 || HS_TICK0 != HS_DOSAKB + 2
+  %error "the resume staging stores HS_KSEG..HS_TICK0 as one run of four words"
+%endif
+    mov di, HS_KSEG             ; ...and four words in a row from here:
+    mov ax, ds                  ; the segment the stub used to spell as a
+    stosw                       ; constant (kernel/hbstage.inc) - it means
+                                ; something else in the other host, so it is
+                                ; staged by whoever stages, and DS is it here;
+    mov ax, [hb_dosakb]         ; the ARENA beside the code, so the reboot
+    stosw                       ; route and the live one converge where the
+                                ; CODE does (SPEC.md 96.41.1);
+    mov ax, 0xFFFF              ; and HS_TICK0 = -1: **THE CLOCK ABOVE IS
+    stosw                       ; ALREADY CURRENT** (SPEC.md 96.49.5) - a
+    stosw                       ; fresh boot has just run the ladder, so there
+                                ; is no elapsed time to add and adding one
+                                ; would count the DOS session twice. The live
+                                ; route stages the handover's own tick instead
     ; 5. the ROM's int 08h back, the kernel's IRQs masked, and go ----------
     jmp hbm_handover            ; **A JUMP AND NOT A CALL**: what ends that
                                 ; routine is a `retf` that is a FAR JUMP INTO
@@ -2031,10 +1962,10 @@ hbm_res:
     mov dx, [hb_xseg]
     mov bx, MEM_K_HIB
     mov bp, mem_free_x
-    call COLD_SEG:wm_cbd
+    call hbm_cb         
     mov word [hb_xseg], 0
 .fail:
-    call COLD_SEG:drvf_drv_vol_back
+    call hbm_vbk                   
     mov byte [hb_mode], HB_M_RESUME
     mov si, hbm_s_lost
     call hbm_toast
@@ -2059,13 +1990,14 @@ hbm_res:
 ; It does not come back. The machine it hands over has no kernel in it.
 ; -----------------------------------------------------------------------------
 hbm_dosrun:
+    mov byte [cs:hbm_dosheld], 0    ; module BSS is not zeroed: only hbm_wrimg
+                                    ; below may say the locks are held
     ; --- 1. the record, where the poster left it (SPEC.md 96.40) -----------
     ; It is copied into the MODULE's own data and every read of it carries a
     ; `cs:`, because DS here is KERNEL_SEG - the module runs with the kernel's
     ; data segment and its own code segment, which is what the rest of this
     ; file assumes and what makes [hb_dosseg] readable without an override.
     push ds
-    push es
     mov si, [hb_dosoff]         ; **THE OFFSET BEFORE THE SEGMENT.** Both words
                                 ; are KERNEL_SEG's, and the line below is what
                                 ; stops DS being it - so loading DS first makes
@@ -2079,161 +2011,11 @@ hbm_dosrun:
     mov di, hbm_dosrec
     mov cx, KDH_SIZE
     rep movsb
-    pop es
     pop ds
     cmp word [cs:hbm_dosrec + KDH_MAGIC], KDH_SIG & 0xFFFF
     jne .b1
     cmp word [cs:hbm_dosrec + KDH_MAGIC + 2], KDH_SIG >> 16
     jne .b1
-
-    ; --- 2. stand where DOS.O88 is, and find it -----------------------------
-    call COLD_SEG:drvf_drv_vol_bank     ; hbm_enter's first half: bank where
-    mov ax, [cs:hbm_dosrec + KDH_DIR]   ; the user stands, then stand where
-    mov dl, [cs:hbm_dosrec + KDH_VOL]   ; DOS.O88 is - a FOLDER cluster, not
-    mov bp, dsk_chdir_x                 ; hbm_root's zero, because a package
-    call COLD_SEG:wm_cbd                ; lives in APPS/ and not in the root
-    jc .b2
-    ; **THE NAME HAS TO BE IN KERNEL_SEG**, which is not what ES says: the
-    ; compare underneath is `dsk_streq`, and that reads DS:SI against DS:DI
-    ; (kernel/disk.inc) - so a name in the module's own image is read at that
-    ; offset in the KERNEL's segment and matches nothing. `api_name` is the
-    ; kernel's own 13-byte stage for exactly this question, it is exactly
-    ; KDH_NAME's length, and it is free here: it is what the N cells copy a
-    ; package's name into, and nothing is inside a package call at ui_task's
-    ; step 0. Zero resident bytes for the buffer, thirteen for the copy.
-    mov si, hbm_dosrec + KDH_NAME
-    mov di, api_name
-    mov cx, 13
-.nm:
-    mov al, [cs:si]             ; ...and BYTE BY BYTE, not `movsb`: a module's
-    mov [di], al                ; own data is CS-relative (SPEC.md 2.8.6) and
-    inc si                      ; a repeated string op with a segment override
-    inc di                      ; loses the prefix to an interrupt on an 8086
-    loop .nm
-    mov si, api_name
-    mov bp, dskw_stat_x         ; ...and BY NAME off the directory (SPEC.md
-    call COLD_SEG:wm_cbd        ; 18.4), not out of the global listing: one
-    jc .b3                      ; far call where find-then-stage was two, and
-    mov [cs:hbm_dosclus], bx    ; BX is the entry's first cluster - NOT the
-                                ; FAT record's own 26 (SPEC.md 96.37.1 item 4)
-
-    ; --- 3. the transport facts, and the extents ----------------------------
-    mov al, [cs:hbm_dosrec + KDH_VOL]
-    call hbm_geomd              ; hb_unit / hb_spt / hb_heads / hb_base
-    jc .b4
-    call hbm_xcap               ; a claim big enough for the worst case
-    mov bx, MEM_K_HIB
-    mov bp, mem_claim_x
-    call COLD_SEG:wm_cbd        ; DX = its segment
-    jc .b5
-    mov [hb_xseg], dx
-    ; **ONE RUN COVERS BOTH PARTS** (SPEC.md 96.44.5.4). The core is part 1 and
-    ; `kern_dos` is part 2; `os88pkg.py` lays parts out in TABLE ORDER, each
-    ; 512-aligned, so the core's packed bytes are immediately followed by
-    ; `kern_dos`'s and the extent list wanted is one range from KDH_COFF to the
-    ; end of KDH_PLEN. Nothing here knows that adjacency as a fact - it takes
-    ; the difference of the two offsets the box posted, so a layout that ever
-    ; put something between them would read that something too and still hand
-    ; the stub the right two streams.
-    mov ax, [cs:hbm_dosrec + KDH_PLEN]  ; the PACKED bytes, as sectors: what
-    add ax, 511                         ; the stub reads is the stream and not
-    mov cl, 9                           ; what it expands to
-    shr ax, cl
-    mov cx, [cs:hbm_dosrec + KDH_COFF]  ; CX = sectors to skip: the CORE's
-    mov bx, [cs:hbm_dosrec + KDH_POFF]  ; start, which is the lower of the two
-    sub bx, cx                          ; BX = the gap to kern_dos's stream...
-    add bx, ax                          ; ...plus kern_dos's own sectors
-    mov ax, [cs:hbm_dosclus]
-    call hbm_extat
-    jc .b6
-
-    ; --- 3b. SOMEWHERE TO COME BACK TO (docs/plans/KERN-DOS-PLAN.md 8) ------
-    ; Here and not earlier: everything above can still refuse, and an image
-    ; written for a handoff that then refuses is a hibernation the user did not
-    ; ask for. Here and not later: step 4 takes the screen and shuts the
-    ; drivers down, and the write wants the machine it is a picture OF.
-    ;
-    ; **THE POST IS STILL STANDING WHEN THE PICTURE IS TAKEN**, deliberately:
-    ; [hb_dosseg]/[hb_dosoff] are in the image, so the restored kernel knows
-    ; whose record to put the exit code in. `hbm_wake` is what spends it over
-    ; there; the zero below spends it here.
-    ;
-    ; A FAILURE IS NOT FATAL. What the user asked for is to run the program
-    ; with the whole machine, and that still happens - it is the coming back
-    ; that is lost, and `KDLF_HIBER` staying clear is what says so all the way
-    ; down to `kd_leave`.
-    call COLD_SEG:hb_pick_x     ; is there a fixed disk at all? THE predicate
-    jc .noimg                   ; (SPEC.md 87.2), so what greys, what is probed
-    mov [hb_vol], al            ; and what is written cannot disagree
-    mov al, 1                   ; HBP_DOS = 1: not the user leaving
-    call hbm_wrimg
-    jc .noimg
-    ; **THE RECORD'S COPY AND NOT THE STAGE'S**: the stage is filled at step 5,
-    ; below, out of this very record - so a bit set in the staging area here is
-    ; a bit `rep movsw` overwrites forty lines later. It read as the whole
-    ; return working and `kd_leave` posting nothing, which is a machine that
-    ; comes back with no exit code in it.
-    or word [cs:hbm_dosrec + KDH_LB + KDL_FLAGS], KDLF_HIBER
-    ; --- ...AND WHAT A LIVE RESUME NEEDS (SPEC.md 96.49) --------------------
-    ; Here and nowhere else: `hb_vol` is `hb_pick_x`'s answer four lines up
-    ; and `hb_wakep` is what `hbm_wrimg` has just written into the pointer, so
-    ; this is the one point in the handoff where all four are settled. They go
-    ; into the RECORD's copy and not the stage's, for `KDLF_HIBER`'s own
-    ; reason immediately below - step 5 copies the record over the stage.
-    mov ax, [hb_wakep]
-    mov [cs:hbm_dosrec + KDH_LB + KDL_WAKE], ax
-    mov ax, [hb_wakep + 2]
-    mov [cs:hbm_dosrec + KDH_LB + KDL_WAKE + 2], ax
-    mov word [cs:hbm_dosrec + KDH_LB + KDL_KSEG], KERNEL_SEG
-    mov al, [hb_vol]
-    mov [cs:hbm_dosrec + KDH_LB + KDL_HBVOL], al
-    push si
-    push di
-    push cx
-    mov si, clk_sec             ; the ten `hbm_wake` puts back, ours because
-    mov di, hbm_dosrec + KDH_LB + KDL_CLK   ; two of them are clk_rtc and
-    mov cx, 10                  ; clk_dirty and nothing over there can know
-.hbclk:                         ; them (kernel/clock.inc)
-    mov al, [si]
-    mov [cs:di], al
-    inc si
-    inc di
-    loop .hbclk
-    pop cx
-    pop di
-    pop si
-    ; --- ...AND THE TICK THOSE TEN BYTES WERE TRUE AT (SPEC.md 96.49.5) -----
-    ; A clock reading is worth nothing over there without the instant it was
-    ; taken: the program may run for an hour and `kern_dos` has no way to
-    ; measure one - its `cw_clk_snapshot` is a bare `retf`, and the six stores
-    ; that trusted it brought the resumed machine home at 00:00:00 00/00/0000.
-    ; 0040:006C is the only counter that runs on BOTH sides: SPEC.md 8.1's PIT
-    ; change is a MODE change so IRQ0 stays 18.2065 Hz, `sch_isr` chains the
-    ; ROM's handler every tick, and the stub restores the IVT alone and never
-    ; file sector 2 - so it is still counting when we come back. A PAIR with
-    ; the ten bytes above, and banked in the same breath for that reason.
-    push es
-    xor ax, ax
-    mov es, ax
-    mov ax, [es:0x046C]
-    mov [cs:hbm_dosrec + KDH_LB + KDL_TICK], ax
-    mov ax, [es:0x046E]
-    mov [cs:hbm_dosrec + KDH_LB + KDL_TICK + 2], ax
-    ; ...AND WHERE WE WILL LOOK FOR ALL OF IT (SPEC.md 96.49.6). `kd_stageseg`
-    ; answers out of the BDA's mode byte, which belongs to the DOS PROGRAM;
-    ; `hbm_wake` asks `[vid_kind]`. They agree when `kern_dos` STARTS - step 4
-    ; below is `vid_reboot`, which sets mode 7 on a Hercules primary and 3
-    ; elsewhere, the same split - and they stop agreeing the moment the program
-    ; calls int 10h. So the side that will BELIEVE the answer states it.
-    call hbm_stageseg           ; ES = B000 or B800
-    mov ax, es
-    mov [cs:hbm_dosrec + KDH_LB + KDL_STAGE], ax
-    pop es
-    mov word [hb_dosseg], 0     ; the post is spent HERE, and the image has it
-    jmp short .staged
-.noimg:
-    mov word [hb_dosseg], 0
-.staged:
 
     ; --- 3c. THE VOLUME TABLE, WHICH WAS HARD-CODED OVER THERE (96.46) ------
     ; `kern_dos` assumed A: and B: as BIOS units 0 and 1 and every other row
@@ -2245,21 +2027,25 @@ hbm_dosrun:
     ; table, so an index resolved against a different one is a program
     ; reading a drive that is not its own.
     ;
-    ; **HERE AND NOT AT STEP 5, WHICH IS WHERE IT USED TO BE**: step 4 calls
+    ; **BEFORE STEP 4, AND NOT AT STEP 5 WHERE IT USED TO BE**: step 4 calls
     ; `drv_shutdown_x`, and `drv_release` drops a driver's volumes on the way
     ; out - so a gather after it sees a table with every DVK_DRV row already
     ; DVK_FREE and cannot tell that from a machine that never had one. It
     ; writes the RECORD's copy of the launch block and step 5's `rep movsw`
     ; carries the lot, which is `KDLF_HIBER`'s own arrangement one field over.
     ;
-    ; SI IS THE ROW NUMBER and both offsets are scaled off it, because the
-    ; two tables have different strides: `dsk_vtab` is DV_SIZE = 16 and
-    ; `dsk_vbase` is a 4-byte side table (SPEC.md 52.10.3). Keeping one
-    ; running pointer for both is the arithmetic that gets written wrong.
-    push bx
-    push cx
-    push si
-    push di
+    ; THE TWO TABLES HAVE DIFFERENT STRIDES: `dsk_vtab` is DV_SIZE = 16 and
+    ; `dsk_vbase` is a 4-byte side table (SPEC.md 52.10.3). Keeping ONE
+    ; running pointer for both is the arithmetic that gets written wrong, so
+    ; each has its own (below), and SI is the row number the limits test.
+    ;
+    ; **AND BEFORE STEP 2, WHICH IS WHAT FREES hbm_geom**: the loop asks
+    ; `hbm_geom` of every driver row and that writes `hb_*`, which step 3 is
+    ; about to fill with DOS.O88's OWN volume for step 5 to stage. Gathering
+    ; first lets step 3 have the last word, where gathering after it had to
+    ; bank and restore all five words around the loop. Nothing in between
+    ; touches the table or the launch block: step 2 reads the record's name
+    ; and folder and step 3 its offsets, all outside KDH_LB.
     ; ...AND THE FIXED DISK'S GEOMETRY FIRST, because the loop may better it.
     ; It is the half a row alone does not buy: `dsk_boot_from_x` asks
     ; `int 13h AH=08h` once at boot and banks it, and that routine is in the
@@ -2286,38 +2072,30 @@ hbm_dosrun:
     ; as a BOOLEAN and not as the kernel's word: what the far side needs is
     ; the verdict, and a word whose meaning is "non-zero" invites the next
     ; reader to put arithmetic on it.
-    mov al, 0
-    cmp word [boot_cylrun], 0
+    xor ax, ax
+    cmp [boot_cylrun], ax
     je .nocyl
-    inc al
+    inc ax
 .nocyl:
     mov [cs:hbm_dosrec + KDH_LB + KDL_CYLRUN], al
-    ; **`hbm_geom` IS CALLED IN THE LOOP AND IT WRITES `hb_*`**, which step 3
-    ; filled with DOS.O88's OWN volume and which step 5 stages under HS_UNIT -
-    ; so without this the stub would read `kern_dos` off the wrong drive. Ten
-    ; bytes on the stack rather than a second call to put them back: a re-ask
-    ; can fail where the first did not, and its failure would be a machine
-    ; that hands over and cannot load the host it handed to.
-    push word [hb_unit]
-    push word [hb_spt]
-    push word [hb_heads]
-    push word [hb_base]
-    push word [hb_base + 2]
+    ; A ROW IS FOUR REGISTERS and every arm below only says which: AL the
+    ; kind, AH the unit, DX:CX the partition base - stored by one tail. BX
+    ; walks `dsk_vtab` and BP `dsk_vbase`, each at its own stride.
     xor si, si
+    mov bx, dsk_vtab
+    mov bp, dsk_vbase
     mov di, hbm_dosrec + KDH_LB + KDL_VTAB
 .vrow:
-    mov al, DVK_FREE
+    xor cx, cx
+    xor dx, dx
+    mov ax, DVK_FREE            ; AL = DVK_FREE, AH = unit 0, base 0
     cmp si, DVOL_MAX            ; this kernel may have FEWER rows than the
-    jae .vfree                  ; block has room for - kern_small's four -
+    jae .vput                   ; block has room for - kern_small's four -
                                 ; and the tail is FREE rather than absent
-    mov bx, si
-    mov cl, 4
-    shl bx, cl
-    add bx, dsk_vtab
     cmp byte [bx+DV_KIND], DVK_BIOS
     je .vbios
     cmp byte [bx+DV_KIND], DVK_DRV
-    jne .vfree                  ; DVK_FILE has no sectors at all (SPEC.md 62.9)
+    jne .vput                   ; DVK_FILE has no sectors at all (SPEC.md 62.9)
     ; --- A DRIVER VOLUME THE ROM CAN REACH (SPEC.md 96.46.1) ---------------
     ; The rule USED to be *"a DVK_DRV row cannot come at all - there is no
     ; driver layer on the other side"*, and that is true of the DRIVER and not
@@ -2335,86 +2113,195 @@ hbm_dosrun:
     ; back to `int 19h`, and the session came back the long way: a whole POST,
     ; a whole boot and a restore at the desktop.
     mov ax, si                  ; AL = the volume index
-    call hbm_geom               ; hb_unit / hb_spt / hb_heads / hb_base
-    jc .vfree                   ; not reachable by int 13h: FREE, as before
-    mov al, [hb_unit]
-    mov [cs:di+1], al
-    mov ax, [hb_base]
-    mov [cs:di+2], ax
-    mov ax, [hb_base + 2]
-    mov [cs:di+4], ax
+    call hbm_geom               ; hb_unit / hb_spt / hb_heads / hb_base; it
+    mov ax, DVK_FREE            ; preserves every register, and a `mov` keeps
+    jc .vput                    ; its CF: not reachable by int 13h is FREE -
+                                ; KIND 0xFF, where it used to store the ROW
+                                ; NUMBER, which kern_dos copies into DV_KIND
+                                ; verbatim (row 2 reads there as DVK_FILE)
+    mov ah, [hb_unit]
+    mov cx, [hb_base]
+    mov dx, [hb_base + 2]
     cmp word [cs:hbm_dosrec + KDH_LB + KDL_HDSPT], 0
-    jne .vdrvg                  ; a booted-from fixed disk's own stands: there
-    mov ax, [hb_spt]            ; is ONE pair for the whole table, and the
-    mov [cs:hbm_dosrec + KDH_LB + KDL_HDSPT], ax    ; volume the machine
-    mov ax, [hb_heads]                              ; booted from is the one it
-    mov [cs:hbm_dosrec + KDH_LB + KDL_HDHDS], ax    ; is most about
-.vdrvg:
-    mov al, DVK_BIOS
-    jmp short .vput
+    jne .vkind                  ; a booted-from fixed disk's own stands: there
+    push ax                     ; is ONE pair for the whole table, and the
+    mov ax, [hb_spt]            ; volume the machine booted from is the one it
+    mov [cs:hbm_dosrec + KDH_LB + KDL_HDSPT], ax    ; is most about
+    mov ax, [hb_heads]
+    mov [cs:hbm_dosrec + KDH_LB + KDL_HDHDS], ax
+    pop ax
+    jmp short .vkind
 .vbios:
-    mov al, [bx+DV_UNIT]
-    mov [cs:di+1], al
-    mov bx, si
-    shl bx, 1
-    shl bx, 1
-    add bx, dsk_vbase           ; ...and the partition base, 0 on a floppy
-    mov dx, [bx]
-    mov [cs:di+2], dx
-    mov dx, [bx+2]
-    mov [cs:di+4], dx
+    mov ah, [bx+DV_UNIT]
+    mov cx, [ds:bp]             ; ...and the partition base, 0 on a floppy
+    mov dx, [ds:bp+2]
+.vkind:
     mov al, DVK_BIOS
-    jmp short .vput
-.vfree:
-    mov byte [cs:di+1], 0
-    mov word [cs:di+2], 0
-    mov word [cs:di+4], 0
 .vput:
-    mov [cs:di], al
+    mov [cs:di], ax             ; kind, unit
+    mov [cs:di+2], cx           ; ...base
+    mov [cs:di+4], dx
+    add bx, DV_SIZE
+    add bp, 4
     add di, KDL_VROW
     inc si
     cmp si, KDL_VMAX
     jb .vrow
-    pop word [hb_base + 2]      ; ...and DOS.O88's own transport back, before
-    pop word [hb_base]          ; step 5 stages the four words under HS_UNIT
-    pop word [hb_heads]         ; out of them
-    pop word [hb_spt]
-    pop word [hb_unit]
     mov byte [cs:hbm_dosrec + KDH_LB + KDL_NVOL], KDL_VMAX
     mov al, [dsk_bootvol]
     mov [cs:hbm_dosrec + KDH_LB + KDL_BOOTV], al
-    pop di
-    pop si
-    pop cx
-    pop bx
 
-    ; --- 4. the panel, the drivers, the lock, text mode - 87.5 step 3's order
-    ; The lock and [sch_lock] may already be ours - `hbm_wrimg` takes both and
-    ; gives neither back - so this arm cannot simply take them again. **AND
-    ; `[sch_lock]` IS NOT THE WAY TO ASK**: `dsk_xfer` raises it around every
-    ; `int 13h` and `ui_task` holds it for its own reasons, so a non-zero there
-    ; means nothing about whether the image write took it. Testing it skipped
-    ; `cw_gfx_lock` on the floppy arm - where nothing had been taken at all -
-    ; and the teardown then ran unlocked. A byte this routine sets itself is
-    ; the only thing that knows.
-    call COLD_SEG:cpf_cp_flush_close
-    call COLD_SEG:drv_shutdown_x
-    cmp byte [cs:hbm_dosheld], 0
-    jne .locked                 ; hbm_wrimg's, still held
-    call KERNEL_SEG:cw_gfx_lock
-.locked:
-    mov bp, vid_reboot
-    call KERNEL_SEG:cw_mem_disp
+    ; --- 2. stand where DOS.O88 is, and find it -----------------------------
+    call hbm_vbn                        ; hbm_enter's first half: bank where
+    mov ax, [cs:hbm_dosrec + KDH_DIR]   ; the user stands, then stand where
+    mov dl, [cs:hbm_dosrec + KDH_VOL]   ; DOS.O88 is - a FOLDER cluster, not
+    mov bp, dsk_chdir_x                 ; hbm_root's zero, because a package
+    call hbm_cb                         ; lives in APPS/ and not in the root
+    jc .b2
+    ; **THE NAME HAS TO BE IN KERNEL_SEG**, which is not what ES says: the
+    ; compare underneath is `dsk_streq`, and that reads DS:SI against DS:DI
+    ; (kernel/disk.inc) - so a name in the module's own image is read at that
+    ; offset in the KERNEL's segment and matches nothing. `api_name` is the
+    ; kernel's own 13-byte stage for exactly this question, it is exactly
+    ; KDH_NAME's length, and it is free here: it is what the N cells copy a
+    ; package's name into, and nothing is inside a package call at ui_task's
+    ; step 0. Zero resident bytes for the buffer, thirteen for the copy.
+    mov si, hbm_dosrec + KDH_NAME
+    mov di, api_name
+    mov cx, 13
+.nm:
+    mov al, [cs:si]             ; ...and BYTE BY BYTE, not `movsb`: a module's
+    mov [di], al                ; own data is CS-relative (SPEC.md 2.8.6) and
+    inc si                      ; a repeated string op with a segment override
+    inc di                      ; loses the prefix to an interrupt on an 8086
+    loop .nm
+    mov si, api_name
+    mov bp, dskw_stat_x         ; ...and BY NAME off the directory (SPEC.md
+    call hbm_cb                 ; 18.4), not out of the global listing: one
+    jc .b3                      ; far call where find-then-stage was two, and
+    push bx                     ; BX is the entry's first cluster - NOT the
+                                ; FAT record's own 26 (SPEC.md 96.37.1 item 4).
+                                ; ON THE STACK until step 3's walk: every
+                                ; refusal between resets SP from [hb_sp]
 
-    ; --- 5. the staging area ------------------------------------------------
-    call hbm_stageseg           ; ES = the text framebuffer
+    ; --- 3. the transport facts, and the extents ----------------------------
+    mov al, [cs:hbm_dosrec + KDH_VOL]
+    call hbm_geomd              ; hb_unit / hb_spt / hb_heads / hb_base
+    jc .b4
+    call hbm_xcap               ; a claim big enough for the worst case
+    mov bx, MEM_K_HIB
+    mov bp, mem_claim_x
+    call hbm_cb                 ; DX = its segment
+    jc .b5
+    mov [hb_xseg], dx
+    ; **ONE RUN COVERS BOTH PARTS** (SPEC.md 96.44.5.4). The core is part 1 and
+    ; `kern_dos` is part 2; `os88pkg.py` lays parts out in TABLE ORDER, each
+    ; 512-aligned, so the core's packed bytes are immediately followed by
+    ; `kern_dos`'s and the extent list wanted is one range from KDH_COFF to the
+    ; end of KDH_PLEN. Nothing here knows that adjacency as a fact - it takes
+    ; the difference of the two offsets the box posted, so a layout that ever
+    ; put something between them would read that something too and still hand
+    ; the stub the right two streams.
+    mov ax, [cs:hbm_dosrec + KDH_PLEN]  ; the PACKED bytes, as sectors: what
+    add ax, 511                         ; the stub reads is the stream and not
+    mov cl, 9                           ; what it expands to
+    shr ax, cl
+    mov cx, [cs:hbm_dosrec + KDH_COFF]  ; CX = sectors to skip: the CORE's
+    mov bx, [cs:hbm_dosrec + KDH_POFF]  ; start, which is the lower of the two
+    sub bx, cx                          ; BX = the gap to kern_dos's stream...
+    add bx, ax                          ; ...plus kern_dos's own sectors
+    pop ax                      ; DOS.O88's first cluster, from step 2
+    call hbm_extat
+    jc .b6
+
+    ; --- 3b. SOMEWHERE TO COME BACK TO (docs/plans/KERN-DOS-PLAN.md 8) ------
+    ; Here and not earlier: everything above can still refuse, and an image
+    ; written for a handoff that then refuses is a hibernation the user did not
+    ; ask for. Here and not later: step 4 takes the screen and shuts the
+    ; drivers down, and the write wants the machine it is a picture OF.
+    ;
+    ; **THE POST IS STILL STANDING WHEN THE PICTURE IS TAKEN**, deliberately:
+    ; [hb_dosseg]/[hb_dosoff] are in the image, so the restored kernel knows
+    ; whose record to put the exit code in. `hbm_wake` is what spends it over
+    ; there; the zero below spends it here.
+    ;
+    ; A FAILURE IS NOT FATAL. What the user asked for is to run the program
+    ; with the whole machine, and that still happens - it is the coming back
+    ; that is lost, and `KDLF_HIBER` staying clear is what says so all the way
+    ; down to `kd_leave`.
+    call COLD_SEG:hb_pick_x     ; is there a fixed disk at all? THE predicate
+    jc .noimg                   ; (SPEC.md 87.2), so what greys, what is probed
+    mov [hb_vol], al            ; and what is written cannot disagree
+    mov al, 1                   ; HBP_DOS = 1: not the user leaving
+    call hbm_wrimg
+    jc .noimg
+    mov bx, hbm_dosrec + KDH_LB ; BX = the record's launch block, below
+    ; **THE RECORD'S COPY AND NOT THE STAGE'S**: the stage is filled at step 5,
+    ; below, out of this very record - so a bit set in the staging area here is
+    ; a bit `rep movsw` overwrites forty lines later. It read as the whole
+    ; return working and `kd_leave` posting nothing, which is a machine that
+    ; comes back with no exit code in it.
+    or word [cs:bx+KDL_FLAGS], KDLF_HIBER
+    ; --- ...AND WHAT A LIVE RESUME NEEDS (SPEC.md 96.49) --------------------
+    ; Here and nowhere else: `hb_vol` is `hb_pick_x`'s answer four lines up
+    ; and the wake address is what `hbm_wrimg` has just written into the
+    ; pointer, so this is the one point in the handoff where all four are
+    ; settled. They go
+    ; into the RECORD's copy and not the stage's, for `KDLF_HIBER`'s own
+    ; reason immediately below - step 5 copies the record over the stage.
+    mov word [cs:bx+KDL_WAKE], hbm_wake ; ...exactly what hbm_wrimg put in
+    mov [cs:bx+KDL_WAKE + 2], cs        ; the pointer, and from the same place
+    mov [cs:bx+KDL_KSEG], ds    ; DS IS KERNEL_SEG in this module (SPEC.md 2.8)
+    mov al, [hb_vol]
+    mov [cs:bx+KDL_HBVOL], al
+    mov si, clk_sec             ; the ten `hbm_wake` puts back, ours because
+    lea di, [bx+KDL_CLK]        ; two of them are clk_rtc and clk_dirty and
+    mov cx, 10                  ; nothing over there can know them
+.hbclk:                         ; (kernel/clock.inc)
+    mov al, [si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .hbclk
+    ; --- ...AND THE TICK THOSE TEN BYTES WERE TRUE AT (SPEC.md 96.49.5) -----
+    ; A clock reading is worth nothing over there without the instant it was
+    ; taken: the program may run for an hour and `kern_dos` has no way to
+    ; measure one - its `cw_clk_snapshot` is a bare `retf`, and the six stores
+    ; that trusted it brought the resumed machine home at 00:00:00 00/00/0000.
+    ; 0040:006C is the only counter that runs on BOTH sides: SPEC.md 8.1's PIT
+    ; change is a MODE change so IRQ0 stays 18.2065 Hz, `sch_isr` chains the
+    ; ROM's handler every tick, and the stub restores the IVT alone and never
+    ; file sector 2 - so it is still counting when we come back. A PAIR with
+    ; the ten bytes above, and banked in the same breath for that reason.
+    xor ax, ax
+    mov es, ax
+    mov ax, [es:0x046C]
+    mov [cs:bx+KDL_TICK], ax
+    mov ax, [es:0x046E]
+    mov [cs:bx+KDL_TICK + 2], ax
+    ; ...AND WHERE WE WILL LOOK FOR ALL OF IT (SPEC.md 96.49.6). `kd_stageseg`
+    ; answers out of the BDA's mode byte, which belongs to the DOS PROGRAM;
+    ; `hbm_wake` asks `[vid_kind]`. They agree when `kern_dos` STARTS - step 4
+    ; below is `vid_reboot`, which sets mode 7 on a Hercules primary and 3
+    ; elsewhere, the same split - and they stop agreeing the moment the program
+    ; calls int 10h. So the side that will BELIEVE the answer states it.
+    call hbm_stageseg           ; ES = B000 or B800
+    mov [cs:bx+KDL_STAGE], es
+.noimg:                         ; ...and the post is spent HERE on both arms,
+    mov word [hb_dosseg], 0     ; and the image (if any) has it
+
+    ; --- 4. the panel, the drivers, the lock, text mode - 87.5 step 3's order,
+    ; and the stub, the transport words and the extents into the stage: the
+    ; half the resume shares, hbm_down. The lock may already be hbm_wrimg's,
+    ; and [cs:hbm_dosheld] - this routine's own byte - is how it knows.
+    mov si, kds_stub
+    mov cx, kds_stub_end - kds_stub
+    call hbm_down               ; ES = the stage: the stub, HS_UNIT, HS_EXT
+
+    ; --- 5. the rest of the staging area -------------------------------------
     push ds
     push cs
     pop ds                      ; ...and DS the module, for the three copies
-    mov si, kds_stub            ; that come out of it
-    mov di, HS_CODE
-    mov cx, kds_stub_end - kds_stub
-    rep movsb
     mov si, hbm_dosrec + KDH_PLEN   ; the two lengths, as they lie
     mov di, KDS_PLEN
     mov cx, 4
@@ -2436,7 +2323,7 @@ hbm_dosrun:
     mov cx, KDL_SIZE / 2
     rep movsw
     pop ds
-    push bx                     ; **AND THE DRIVE THE ROM IS TO BOOT FROM**,
+    ; **AND THE DRIVE THE ROM IS TO BOOT FROM**,
     mov bl, [dsk_bootvol]       ; which is this machine's and not the
     call COLD_SEG:dskf_dsk_vol_row  ; program's: `int 19h` reads DL as it finds
     jc .nobootu                 ; it (SPEC.md 96.40.2), and A: is an empty
@@ -2444,7 +2331,6 @@ hbm_dosrun:
     xor ah, ah
     mov [es:KDS_LB + KDL_UNIT], ax
 .nobootu:
-    pop bx
     ; --- ...AND THE MOUSE, for the same reason (SPEC.md 96.45) --------------
     ; `mouse_init` spent 596 ms at boot settling which port has a mouse and
     ; which LINE it fires on, against a modem that answers in bytes whose bit
@@ -2457,9 +2343,6 @@ hbm_dosrun:
     ; which is not an index into `mou_bases` at all - so the test is the ROW
     ; and not the base, and a machine that fails it keeps 96.10's still
     ; pointer instead of being handed rubbish to drive a UART with.
-    push bx                     ; BX is step 3a's sector count and step 5 is
-                                ; inside its lifetime - the lookup above is
-                                ; bracketed for that reason and so is this
     test word [es:KDS_LB + KDL_FLAGS], KDLF_NOMOUSE
     jnz .nomouse                ; **THE USER SAID NOT TO** (SPEC.md 96.36.8),
                                 ; which is a decision and not a capability, so
@@ -2489,7 +2372,6 @@ hbm_dosrun:
     ; carried it. A driver-backed volume stops existing when `drv_shutdown_x`
     ; runs (`drv_release` drops its rows), so a gather at THIS point can only
     ; ever have seen the BIOS ones - which is the whole of the defect.
-    pop bx
     mov si, dsk_dpt             ; **THE DISKETTE PARAMETER TABLE IS OURS AND NOT
     mov di, KDS_LB + KDL_DPT    ; THE BOX'S**, so the block is patched here
     mov cx, DPT_LEN             ; rather than gathered there: `int 1Eh` names
@@ -2498,23 +2380,9 @@ hbm_dosrun:
                                 ; different offset, so without these eleven
                                 ; bytes the ROM reads kern_dos's code as an
                                 ; EOT and a gap length (SPEC.md 18.92, 96.40.1)
-    mov si, hb_unit             ; unit, spt, heads, extents - the stub's order,
-    mov di, HS_UNIT             ; and these four are the KERNEL's
-    mov cx, 4
-    rep movsw
     mov word [es:KDS_TSEG], KDS_TMPSEG  ; where the PACKED stream lands: above
                                         ; the image it expands to, so the two
                                         ; never meet
-    push ds
-    mov ds, [hb_xseg]           ; the extents
-    xor si, si
-    mov di, HS_EXT
-    mov cx, [es:HS_NX]
-    mov ax, cx
-    shl cx, 1
-    add cx, ax                  ; words: 3 per extent
-    rep movsw
-    pop ds
 
     ; --- 6. the VECTORS the ROM is about to need (SPEC.md 96.40.2) ----------
     ; `sched_unhook` is exactly this and cannot be called: it falls into
@@ -2529,9 +2397,9 @@ hbm_dosrun:
     ; KERNEL offset - which is SPEC.md 9.6.5's hard freeze one segment along,
     ; and `kd_leave` ends on `int 16h`.
     mov bp, mouse_unhook
-    call KERNEL_SEG:cw_mem_disp ; int 09h, int 0Ch/0Bh, int 74h, the UARTs
+    call hbm_kd                 ; int 09h, int 0Ch/0Bh, int 74h, the UARTs
     mov bp, snd_unhook
-    call KERNEL_SEG:cw_mem_disp ; 61h bits 0-1 back to their boot state
+    call hbm_kd                 ; 61h bits 0-1 back to their boot state
 
     ; ...and the PIT, whose divisor is the kernel's fast one (SPEC.md 8.1).
     ; The ROM counts a tick per IRQ0 whatever the rate, so a machine handed
@@ -2641,8 +2509,10 @@ hbm_geomd:
 ; in:  AX = the first cluster, CX = sectors to skip, BX = sectors to take;
 ;      [hb_xseg] = where to build
 ; out: CF=0 and [hb_nx] runs of {dd lba, dw count}; CF=1 the chain ran out
+; clobbers: AX, BX, CX, DX, SI, DI, BP, ES - its two callers (hbm_res and
+;      hbm_dosrun) hold nothing across it, so nothing is banked
 ;
-; hbm_extents is this with CX = 0 and BX from [mem_top]. THE SKIP IS THE WHOLE
+; hbm_res calls it with CX = 0 and BX from [mem_top]. THE SKIP IS THE WHOLE
 ; DIFFERENCE and it is why a part can be handed over at all: the part is a byte
 ; range of a file (docs/plans/KERN-DOS-PLAN.md §4.1.1), so the walk has to
 ; arrive at file sector N without reading anything, and N is not a cluster
@@ -2651,13 +2521,6 @@ hbm_geomd:
 ; at its edge - tests/kdpart.py does the same arithmetic on the host.
 ; -----------------------------------------------------------------------------
 hbm_extat:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
     mov es, [hb_xseg]
     xor di, di
     mov word [hb_nx], 0
@@ -2719,22 +2582,65 @@ hbm_extat:
     mov si, ax
     jmp .clus                   ; near: wm_cbd made the walk longer
 .done:
-    clc
-    jmp short .out
-.bad:
-    stc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    CLC_OR_STC .bad             ; CF = 0 done, or (.bad) CF = 1
     ret
 
-hbm_xskip:  dw 0                ; sectors still to step over
-hbm_xtake:  dw 0                ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; hbm_down - the machine stops being the kernel's: SPEC.md 87.5 steps 3-4 for
+;            a resume and 96.40 steps 4-5 for a DOS handoff, which are the same
+;            teardown in the same order and the same three copies
+; in:  SI = the stub to stage (in this image), CX = its bytes;
+;      [cs:hbm_dosheld] = 1 when hbm_wrimg already holds the gfx lock
+; out: ES = the staging segment; the stub at HS_CODE, the four transport
+;      words (hb_unit..hb_nx) at HS_UNIT, and [hb_nx] extents from [hb_xseg]
+;      at HS_EXT; DI = HS_UNIT + 8 = HS_WAKE. DS = KERNEL_SEG.
+;      Clobbers AX, BX, CX, DX, SI, BP
+; -----------------------------------------------------------------------------
+hbm_down:
+    push si
+    push cx
+    call COLD_SEG:cpf_cp_flush_close    ; the panel's settings
+    call COLD_SEG:drv_shutdown_x        ; the drivers
+    ; The lock and [sch_lock] may already be ours - `hbm_wrimg` takes both and
+    ; gives neither back - so this cannot simply take them again. **AND
+    ; `[sch_lock]` IS NOT THE WAY TO ASK**: `dsk_xfer` raises it around every
+    ; `int 13h` and `ui_task` holds it for its own reasons, so a non-zero there
+    ; means nothing about whether the image write took it. Testing it skipped
+    ; `cw_gfx_lock` on the floppy arm - where nothing had been taken at all -
+    ; and the teardown then ran unlocked. A byte the callers set is the only
+    ; thing that knows.
+    cmp byte [cs:hbm_dosheld], 0
+    jne .locked                 ; hbm_wrimg's, still held
+    call hbm_lock
+.locked:
+    mov bp, vid_reboot          ; text mode
+    call hbm_kd
+    call hbm_stageseg           ; ES = the text framebuffer
+    pop cx
+    pop si
+    push ds
+    push cs
+    pop ds
+    mov di, HS_CODE             ; the stub, to offset 0
+    rep movsb
+    pop ds
+    mov cx, [hb_nx]             ; the extents: 3 words each
+    mov ax, cx
+    shl cx, 1
+    add cx, ax
+    push ds
+    mov ds, [hb_xseg]
+    xor si, si
+    mov di, HS_EXT
+    rep movsw
+    pop ds
+    mov si, hb_unit             ; unit, spt, heads, extents - the stub's order,
+    mov di, HS_UNIT             ; and these four are the KERNEL's. LAST, so DI
+    mov cx, 4                   ; comes back at HS_WAKE for hbm_res
+    rep movsw
+    ret
+
+; -----------------------------------------------------------------------------
 ; hbm_handover - SPEC.md 87.5 step 5, and it does not come back
 ; in:  ES = the staging segment, the stub already copied to HS_CODE
 ;
@@ -2788,91 +2694,6 @@ hbm_stageseg:
     mov es, ax
     pop ax
     ret
-
-; -----------------------------------------------------------------------------
-; hbm_extents - the image's chain as absolute sector runs (SPEC.md 87.5 step 2)
-; in:  AX = the first cluster; [hb_xseg] = where to build; the volume mounted
-; out: CF = 0 and [hb_nx] runs of {dd lba, dw count, dw 0} at [hb_xseg]:0;
-;      CF = 1 the chain is broken or too fragmented
-; -----------------------------------------------------------------------------
-hbm_extents:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov es, [hb_xseg]
-    xor di, di                  ; the next entry
-    mov word [hb_nx], 0
-    mov si, ax                  ; SI = the cluster in hand
-    mov cx, [mem_top]
-    mov bl, 5
-    xchg cx, bx
-    shr bx, cl                  ; BX = sectors the image has: paragraphs / 32
-    mov cx, bx                  ; CX = sectors still to place
-.clus:
-    mov ax, si
-    mov bp, dsk_clus2lba_x
-    call COLD_SEG:wm_cbd  ; AX = its first LBA, volume-relative
-    jc .bad
-    mov dx, [dsk_c2hi]          ; ...and its high word (SPEC.md 18.7.5)
-    add ax, [hb_base]
-    adc dx, [hb_base + 2]       ; DX:AX = absolute
-    mov bl, [dsk_spc]
-    xor bh, bh                  ; BX = this cluster's sectors...
-    cmp bx, cx
-    jbe .whole
-    mov bx, cx                  ; ...capped at what the image still needs
-.whole:
-    cmp word [hb_nx], 0
-    je .new
-    cmp ax, [cs:hbm_nextlo]     ; does this cluster follow the run in hand?
-    jne .new
-    cmp dx, [cs:hbm_nexthi]
-    jne .new
-    add [es:di-2], bx           ; contiguous: the run grows
-    jmp short .grown
-.new:
-    cmp di, [cs:hbm_xlim]       ; the claim's own end, hbm_xcap's bound
-    jae .bad
-    mov [es:di], ax
-    mov [es:di+2], dx
-    mov [es:di+4], bx
-    add di, HS_XSTRIDE
-    inc word [hb_nx]
-    mov [cs:hbm_nextlo], ax
-    mov [cs:hbm_nexthi], dx
-.grown:
-    add [cs:hbm_nextlo], bx
-    adc word [cs:hbm_nexthi], 0
-    sub cx, bx
-    jz .done
-    mov ax, si
-    mov bp, dsk_next_clus_x
-    call COLD_SEG:wm_cbd ; AX = the next
-    jc .bad
-    mov si, ax
-    jmp .clus       ; near: wm_cbd made the walk longer
-.done:
-    clc
-    jmp short .out
-.bad:
-    stc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-hbm_nextlo: dw 0                ; the LBA the run in hand ends at
-hbm_nexthi: dw 0
-hbm_xlim:   dw 0                ; ...and the byte the extent list stops at
 
 ; -----------------------------------------------------------------------------
 ; hbm_xcap - the extent list's bound for THIS volume (SPEC.md 87.5 step 2).
@@ -2965,7 +2786,7 @@ hbm_wake:
     out 0x40, al
     out 0x40, al
     mov bp, sch_pit_now
-    call KERNEL_SEG:cw_mem_disp ; AX = phase, DX = [ticks]
+    call hbm_kd                 ; AX = phase, DX = [ticks]
     mov [sch_pit_last], ax
     mov [sch_pit_last + 2], dx
     ; ...AND THE SPEAKER, WHICH IS THE OTHER THING A DOS PROGRAM CAN LEAVE ON.
@@ -3044,7 +2865,7 @@ hbm_wake:
     push bx
     push cx
     mov bp, clk_tick
-    call KERNEL_SEG:cw_mem_disp
+    call hbm_kd                
     pop cx
     pop bx
     jmp short .clkcat
@@ -3058,24 +2879,27 @@ hbm_wake:
 .drop:
     push ax
     mov bp, dsk_fatw_drop
-    call COLD_SEG:wm_cbd
+    call hbm_cb         
     pop ax
     inc al
     cmp al, DVOL_MAX
     jb .drop
-    mov word [dsk_fatd0], 0xFFFF
-    mov word [dsk_fatw0], 0xFFFF
-    mov byte [dsk_mntok], 0
-    mov word [disk_nfiles], 0
-    mov byte [dsk_batch], 0
-    mov byte [dskw_batch], 0
-    mov byte [dskw_syswr], 0
-    mov byte [dskw_isdir], 0
+    xor ax, ax                  ; (AL is DVOL_MAX here, and spent)
+    mov [dsk_mntok], al
+    mov [disk_nfiles], ax
+    mov [dsk_batch], al
+    mov [dskw_batch], al
+    mov [dskw_syswr], al
+    mov [dskw_isdir], al
+    dec ax
+    mov [dsk_fatd0], ax         ; 0xFFFF: no FAT sector in either cache
+    mov [dsk_fatw0], ax
     mov bp, dsk_rah_flush
-    call COLD_SEG:wm_cbd
-    mov word [mem_pinseg], 0    ; dsk_xfer's pin, mid-transfer in the image
+    call hbm_cb
+    xor ax, ax
+    mov [mem_pinseg], ax        ; dsk_xfer's pin, mid-transfer in the image
 %ifdef OS88_BIGVOL
-    mov word [dsk_lbahi], 0     ; ...and its LBA's high word, which only its
+    mov [dsk_lbahi], ax         ; ...and its LBA's high word, which only its
 %endif                          ; .out spends (SPEC.md 18.7.5)
     ; ...AND THE EXTENT LIST THE PICTURE WAS TAKEN OVER (SPEC.md 87.6.1).
     ; `mem_pinseg` one level up: a word that was true of the machine that
@@ -3099,7 +2923,7 @@ hbm_wake:
     jz .noxs
     mov bx, MEM_K_HIB
     mov bp, mem_free_x
-    call COLD_SEG:wm_cbd
+    call hbm_cb         
     mov word [hb_xseg], 0
 .noxs:
     call KERNEL_SEG:fpg_end     ; ...and the progress widget it had up
@@ -3148,11 +2972,11 @@ hbm_wake:
     mov byte [mou_drain], 1
     mov ax, 0x040B              ; MCR: DTR|RTS|OUT2. Normally already this -
     mov bp, mou_pall            ; kern_dos set it and kd_mou_stop leaves it -
-    call KERNEL_SEG:cw_mem_disp ; so no edge and no burst; a DOS program that
+    call hbm_kd                 ; so no edge and no burst; a DOS program that
                                 ; mangled it is what the drain above is for
     mov ax, 0x0101              ; IER: RX data available only
     mov bp, mou_pall
-    call KERNEL_SEG:cw_mem_disp
+    call hbm_kd                
     ; ...AND THE LINE, WHICH IS THE OTHER HALF AND WAS MEASURED (96.45.2.1).
     ; `kd_mou_stop` masks the mouse's IRQ as well as clearing IER, and
     ; `kdentry.inc` calls it BEFORE `kd_resume` samples `HS_MASKM` - so the
@@ -3193,18 +3017,18 @@ hbm_wake:
     je .nop2
     mov al, 0xA8                ; the auxiliary interface back on - 0xA7 undone
     mov bp, mou_p2cw
-    call KERNEL_SEG:cw_mem_disp
+    call hbm_kd                
     mov al, [mou_p2cmd0]        ; ...and the command byte mou_p2_init computes,
     and al, 0xDF                ; off the same banked BIOS byte: the aux clock
     or  al, 0x02 | MOU_P2KOFF   ; on, and IRQ12 armed AT THE CONTROLLER
     mov bp, mou_p2wcmd
-    call KERNEL_SEG:cw_mem_disp
+    call hbm_kd                
     mov al, 0xD4                ; ...and 0xF4 to the DEVICE, because 0xA7 left
     mov bp, mou_p2cw            ; it unclocked and a device that is not
-    call KERNEL_SEG:cw_mem_disp ; reporting is a live line with nothing on it.
+    call hbm_kd                 ; reporting is a live line with nothing on it.
     mov al, 0xF4                ; The ACK is not collected - `mou_p2flush` is
     mov bp, mou_p2dw            ; the overlay's, both writers time out on their
-    call KERNEL_SEG:cw_mem_disp ; own, and the ISR discards a stray 0xFA anyway
+    call hbm_kd                 ; own, and the ISR discards a stray 0xFA anyway
     pushf
     cli
     in  al, 0xA1                ; IRQ12 at the SLAVE...
@@ -3220,7 +3044,7 @@ hbm_wake:
     ; 4. the desktop, the way fsx_restore gets it back (SPEC.md 53) - before
     ;    any disk work, so the progress widget has a graphics mode to draw in
     mov bp, vid_setmode
-    call KERNEL_SEG:cw_mem_disp
+    call hbm_kd                
 %ifndef BAKED_FONT
     ; 4a. ...AND THE GLYPH TABLE, which the image names BY ADDRESS (SPEC.md
     ;     6.0.1). The renderers read [font_seg]:[font_base] in a ROM, and the
@@ -3255,17 +3079,17 @@ hbm_wake:
     jc .nowin                   ; (SPEC.md 87.1), and this code IS the image
     mov bx, si
     mov bp, app_close_win
-    call KERNEL_SEG:cw_mem_disp
+    call hbm_kd                
 .nowin:
     mov bp, menu_force
-    call KERNEL_SEG:cw_mem_disp
+    call hbm_kd                
     mov bp, dock_force
-    call KERNEL_SEG:cw_mem_disp
+    call hbm_kd                
     call KERNEL_SEG:cw_wm_paint_all
     ; 5. the two files are spent, and the drivers come back -----------------
     call hbm_forget
     ; **AND A SUSPEND'S ROWS COME BACK THROUGH THIS DOOR TOO** (SPEC.md
-    ; 51.11.5). `[hb_drvmask]` is what `hbm_detach` found still MOUNTED when it
+    ; 51.11.5). `[hb_drvmask]` is what `hbm_wrimg`'s sweep found still MOUNTED when it
     ; swept, so a row `OSAPI_DRV_SUSPEND` had ALREADY unmounted is not in it -
     ; and the whole of arm 3 is exactly that shape: `dos_lbfill` suspends the
     ; sound card to build the program's BLASTER= (SPEC.md 96.44.13) long before
@@ -3344,13 +3168,13 @@ hbm_wake:
     or bx, bx
     jz .nodos
     mov bp, wm_wake
-    call KERNEL_SEG:cw_mem_disp
+    call hbm_kd                
 .nodos:
     ; 6. and the machine is the user's again --------------------------------
     mov bp, blk_wake
-    call KERNEL_SEG:cw_mem_disp
+    call hbm_kd                
     inc word [hb_resumes]
-    call KERNEL_SEG:cw_gfx_unlock
+    call hbm_unlock              
     mov byte [sch_lock], 0      ; NOT a dec: the image holds the count as the
                                 ; write left it, and dsk_xfer raises it around
                                 ; every int 13h - so it reads 2, and one down
@@ -3676,17 +3500,6 @@ kds_stub_end:
 ; MODULE DATA and not kernel bss: 543 bytes that only exist while the module
 ; is resident, which is the whole economy of osapi_dos_handoff_x keeping a far
 ; POINTER (SPEC.md 96.40).
-hbm_dosrec:     times KDH_SIZE db 0
-hbm_dosclus:    dw 0            ; DOS.O88's first cluster, across hbm_geom
-hbm_dosflag:    db 0            ; what HBP_DOS is to say, across hbm_wrimg
-hbm_dosheld:    db 0            ; 1 = hbm_wrimg took the gfx lock and [sch_lock]
-                                ; and still holds them, so step 4 must not
-hbm_swn:        db 0            ; hbm_sweep's record count, across the ask
-hbm_spm:        db 0            ; OSAPI_DRV_SUSPEND's class mask (SPEC.md
-                                ; 51.11.4), banked by hbm_drvsusp off the
-                                ; slot's own BL. MODULE data: one byte DRVC_MAX
-                                ; wide, present only while the call is in
-                                ; flight - the kernel keeps nothing at all
 hbm_s_d1:       db 'Not our handoff record', 0
 hbm_s_d2:       db 'That folder has moved', 0
 hbm_s_d3:       db 'DOS.O88 is not there now', 0
@@ -3694,12 +3507,16 @@ hbm_s_d4:       db 'The ROM cannot read it', 0
 hbm_s_d5:       db 'No room for the extents', 0
 hbm_s_d6:       db 'kern_dos too scattered', 0
 
-hbm_ptrfix:     db 'HIB1'      ; the pointer's fixed head, described ONCE
-                dw BUILD_NUM
-                dw MOD_STAMP
+hbm_ptrfix:     db 'HIB1'      ; THE POINTER FILE as hbm_wrimg writes it,
+                dw BUILD_NUM    ; and its fixed head as hbm_ask compares it -
+                dw MOD_STAMP    ; described ONCE (SPEC.md 87.3)
                 dw 0            ; [mem_top], filled by hbm_ptrfix_set
                 db 0, 0         ; ...[vid_kind], and the pad
-hbm_ptrbuf:     times HBP_SIZE db 0
+                dd 0            ; HBP_WAKE, hbm_wrimg's
+                db 0, 0         ; HBP_DOS, hbm_wrimg's; and HBP_PAD
+%if $ - hbm_ptrfix != HBP_SIZE
+  %error "hbm_ptrfix is the pointer file, HBP_SIZE bytes"
+%endif
 
 hbm_lines_ask:  dw hbm_s_a1, hbm_s_a2, hbm_s_a3, 0
 hbm_lines_busy: dw hbm_s_b1, 0
@@ -3717,10 +3534,13 @@ HBM_R1_LTR  equ $ - hbm_s_r1
 hbm_s_r2:   db 'Resume where you left off, or', 0
 hbm_s_r3:   db 'discard it and start normally?', 0
 
-hbm_s_bhib: db 'Hibernate', 0
-hbm_s_bcan: db 'Cancel', 0
-hbm_s_bres: db 'Resume', 0
-hbm_s_bdis: db 'Discard', 0
+hbm_s_bhib: db 'Hibernate', 0      ; the ASK face's two labels, then the
+hbm_s_bcan: db 'Cancel', 0, 0, 0, 0 ; RESUME face's two at one distance on
+hbm_s_bres: db 'Resume', 0, 0, 0, 0 ; from each - hbm_btnrect adds it rather
+hbm_s_bdis: db 'Discard', 0         ; than choosing between four (NULs pad)
+%if hbm_s_bdis - hbm_s_bcan != hbm_s_bres - hbm_s_bhib
+  %error "hbm_btnrect: each RESUME label is one fixed distance past its ASK label"
+%endif
 
 hbm_s_nobios: db 'Needs a BIOS hard disk', 0
 hbm_s_noroom: db 'Not enough room on disk', 0
@@ -3731,6 +3551,34 @@ hbm_s_lost:   db 'Hibernation: unreadable', 0
 hbm_s_off:  db 13, 10, 'os8088 has hibernated.', 13, 10, 13, 10
             db 'It is now safe to switch the machine off.', 13, 10
             db 'Press any key to restart it.', 13, 10, 0
+
+; --- THE IMAGE'S OWN BSS (docs/plans/MODULE-SELFCONTAIN-PLAN.md 3.1) --------
+; `nobits`, in the tail of the module's own claim: mod_need rounds the claim up
+; to whole KB and kernel.asm asserts this fits that rounding, so none of it is
+; on the floppy and none of it costs heap. **NOT ZEROED** - MOD_BSS is
+; kern_small's alone - so every cell here is written before it is read, and
+; the one flag that was relying on the image's zero (hbm_dosheld) is cleared
+; at hbm_dosrun's head. Read and written through `cs:` like the image's data:
+; the section follows `.modh` in the same claim. SCRATCH only, never state
+; that has to outlive a mod_drop (MODULE-SELFCONTAIN-PLAN 3.4) - the ptrbuf
+; carries the wake address from hbm_ask to hbm_res, and the module is never
+; dropped between those two (hb_mode stays RESUME, not GONE).
+section .modhb
+hbm_dosrec:     resb KDH_SIZE   ; the DOS handoff's record, copied out of the
+                                ; poster's segment: 561 bytes that exist only
+                                ; while the module is resident (SPEC.md 96.40)
+hbm_ptrbuf:     resb HBP_SIZE   ; the pointer file, as read or as written
+hbm_xskip:      resw 1          ; hbm_extat: sectors still to step over...
+hbm_xtake:      resw 1          ; ...and still to take
+hbm_nextlo:     resw 1          ; the LBA the run in hand ends at
+hbm_nexthi:     resw 1
+hbm_xlim:       resw 1          ; ...and the byte the extent list stops at
+hbm_dosheld:    resb 1          ; 1 = hbm_wrimg took the gfx lock and [sch_lock]
+                                ; and still holds them, so step 4 must not
+hbm_swn:        resb 1          ; hbm_sweep's record count, across the ask
+hbm_spm:        resb 1          ; OSAPI_DRV_SUSPEND's class mask (SPEC.md
+                                ; 51.11.4), banked by hbm_drvsusp off the
+                                ; slot's own BL - the kernel keeps nothing
 
 %endif                          ; --- kern_small has NO hibernate at all,
                                 ; and so no module and no mod_tab row

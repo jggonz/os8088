@@ -57,6 +57,24 @@
 ; code that was correct when it shipped.
 %include "os88ui.inc"
 
+; gb_gdn - the PRE-size-pass os88ui_gdn, lifted verbatim with the old body
+; below: os88ui_glyph decides "pressed" once now and has no such predicate,
+; so the bench carries the one its lifted routine was written against.
+; in:  DI = the banked argument word; out: ZF = 1 draw it down
+gb_gdn:
+    push ax
+    mov ax, di
+    test ax, 0xFF00             ; disabled: never drawn pressed
+    jnz .no
+    and ax, OS88UI_GDOWN
+    cmp ax, OS88UI_GDOWN        ; ZF = 1 exactly when the bit is set
+    pop ax                      ; (pop writes no flags)
+    ret
+.no:
+    or ax, ax                   ; AX's high byte is set here, so ZF = 0
+    pop ax
+    ret
+
 GB_X       equ 88                   ; the COST arms, in CONTENT px - clear of
 GB_Y       equ 20                   ; the shape grid, so the two keys never
                                     ; overdraw each other and a shape reading
@@ -431,10 +449,10 @@ gbo_glyph:
     ;
     ; The pair: white box / black picture, exchanged when the control is
     ; PRESSED, and the picture in CDGRAY when it is disabled (SPEC.md 47
-    ; rule 1). Disabled outranks down inside os88ui_gdn, so the two never
+    ; rule 1). Disabled outranks down inside gb_gdn, so the two never
     ; both apply.
     mov ax, (CBLACK << 8) | CWHITE
-    call os88ui_gdn
+    call gb_gdn
     jnz .gpair
     mov ax, (CWHITE << 8) | CBLACK
 .gpair:
@@ -513,7 +531,7 @@ gbo_glyph:
 
 .gpix:                          ; the CUT control (SPEC.md 11.3), pixel by
     UI_WHITE                    ; pixel: the box first, so a glyph can be
-    call os88ui_gdn             ; redrawn in place. [gfx_dis] does not reach a
+    call gb_gdn             ; redrawn in place. [gfx_dis] does not reach a
     jnz .box                    ; fill, so a stale one cannot tint it - and a
     UI_BLACK                    ; PRESSED glyph is that box in black, over
 .box:                           ; which the picture below goes white
@@ -532,7 +550,7 @@ gbo_glyph:
     clc
 .set:
     UI_PEN
-    call os88ui_gdn             ; ...and the picture in white if it is down,
+    call gb_gdn             ; ...and the picture in white if it is down,
     jnz .pixpen                 ; which UI_PEN has just overwritten with the
     UI_WHITE                    ; live or the disabled ink
 .pixpen:

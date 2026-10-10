@@ -148,11 +148,9 @@ PF_CLR      equ PF_N * 14 + 13  ; what prof_start zeroes: the four per-stage
 ; does not have", which is exactly true of this build and needs no new code in
 ; the ABI. A verb missing from the table entirely reads to a package as an old
 ; driver; this reads as "no profiler here", which is what NETBENCH.O88 has to
-; say to whoever is looking at an empty table.
-eth_v_prof:
-    mov ax, NETE_VERB
-    stc
-    ret
+; say to whoever is looking at an empty table. It is eth_v_none's answer to the
+; letter, so the table names that rather than a second copy of three lines.
+%define eth_v_prof    eth_v_none
 %else
 
 ; --- the brackets ------------------------------------------------------------

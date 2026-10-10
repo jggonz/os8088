@@ -36,7 +36,8 @@ row's own accounting check instead: every `call OSAPI_DRV_TASK` must resolve
 to a label or to the exit form.
 
 WHAT IT DOES NOT SEE. It walks `call`/`jmp` by NAME over the driver's own
-sources. An indirect dispatch (`call [bx]`) inside a service task's cone is
+sources, plus a routine named into SI (the shared worker loop's `call si`).
+Any other indirect dispatch (`call [bx]`) inside a service task's cone is
 invisible to it, and so is a claim made by a kernel routine the driver calls
 - neither exists today, and both would be a bigger change than this row.
 """
@@ -56,6 +57,10 @@ LOCAL = re.compile(r"^(\.[A-Za-z0-9_]+):")
 XFER = re.compile(r"^\s*(?:call|jmp)\s+(?:near\s+|short\s+)?"
                   r"([.A-Za-z_][A-Za-z0-9_.]*)\s*(?:;.*)?$")
 MOVAX = re.compile(r"^\s*mov\s+ax\s*,\s*([A-Za-z_][A-Za-z0-9_.]*)\s*(?:;.*)?$")
+# ...and a routine named into SI is an edge too: SOUND.DRV's two workers share
+# one loop that runs its pass with `call si`, and the pass is what reaches
+# everything below it
+MOVSI = re.compile(r"^\s*mov\s+si\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:;.*)?$")
 
 
 def sources(top):
@@ -101,7 +106,7 @@ def targets(lines, owner):
     """Every named call/jmp in a body, locals resolved to their owner."""
     out = set()
     for line in lines:
-        m = XFER.match(line)
+        m = XFER.match(line) or MOVSI.match(line)
         if m:
             t = m.group(1)
             out.add(owner if t.startswith(".") else t)

@@ -127,24 +127,18 @@ eth_cfg_open:
     push di
     mov al, [eth_mode]
     mov [ec_mode], al
-    mov si, eth_ip
-    mov di, ec_t0
-    call eth_ipstr
-    mov si, eth_mask
-    mov di, ec_t1
-    call eth_ipstr
-    mov si, eth_gw
-    mov di, ec_t2
-    call eth_ipstr
-    mov si, eth_dns
-    mov di, ec_t3
-    call eth_ipstr
     mov word [ec_msg], ec_s_ready
 
     xor cx, cx                  ; the four blocks: the buffer, its size, the
 .fld:                           ; text length, and the caret at the end
     call ec_blk
     mov di, [ec_bufs+bx]
+    push si                     ; ...and the text itself, from the live
+    mov si, bx                  ; address: eth_ip, eth_mask, eth_gw and
+    add si, si                  ; eth_dns are four bytes apart (ethstate.inc,
+    add si, eth_ip              ; which ec_apply's one 16-byte copy relies
+    call eth_ipstr              ; on too)
+    pop si
     mov [si+LN_BUF], di
     mov word [si+LN_MAX], EC_TLEN
     mov byte [si+LN_FOCUS], 0
@@ -178,10 +172,7 @@ eth_cfg_open:
 .out:
     pop di
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_cx
 
 ; -----------------------------------------------------------------------------
 ; ec_blk - CX = 0..EC_NF-1 -> SI = that field's line block, BX = CX * 2
@@ -212,16 +203,14 @@ ec_layout:
     call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
     mov di, ax
     mov bp, dx
-    mov dx, bp                  ; ...and DX walks down the column, which is why
-    add dx, EC_F0Y              ; there is no multiply here: an 8086 `mul`
+    lea dx, [bp+EC_F0Y]         ; ...and DX walks down the column, which is why
+                                ; there is no multiply here: an 8086 `mul`
     xor cx, cx                  ; writes DX, and DX is the thing being kept
 .f:
     call ec_blk
-    mov ax, di
-    add ax, EC_FX1
+    lea ax, [di+EC_FX1]
     mov [si+LN_X1], ax
-    mov ax, di
-    add ax, EC_FX2
+    lea ax, [di+EC_FX2]
     mov [si+LN_X2], ax
     mov [si+LN_Y1], dx
     mov ax, dx
@@ -231,63 +220,25 @@ ec_layout:
     inc cx
     cmp cx, EC_NF
     jb .f
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_si
 
 ; -----------------------------------------------------------------------------
 ; ec_paint - W_PAINT (content already white-filled, lock held)
 ; in:  SI = the window
 ; -----------------------------------------------------------------------------
 ec_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
     call ec_layout              ; DI = content left, BP = content top
 
     ; --- the mode, two radios --------------------------------------------
-    mov al, OS88UI_GRADIO
-    cmp byte [ec_mode], ECM_DHCP
-    jne .r1
-    or  al, OS88UI_GON
-.r1:
-    xor ah, ah
-    mov cx, di
-    add cx, EC_LX
-    mov dx, bp
-    add dx, EC_RY
-    call os88ui_glyph
+    mov al, ECM_DHCP
+    mov cx, EC_LX
     mov si, ec_s_auto
-    mov cx, di
-    add cx, EC_LX + OS88UI_GW + 4
-    mov dx, bp
-    add dx, EC_RY + 2
-    call ec_txt
-
-    mov al, OS88UI_GRADIO
-    cmp byte [ec_mode], ECM_MAN
-    jne .r2
-    or  al, OS88UI_GON
-.r2:
-    xor ah, ah
-    mov cx, di
-    add cx, EC_R2X
-    mov dx, bp
-    add dx, EC_RY
-    call os88ui_glyph
+    call ec_radio
+    mov al, ECM_MAN
+    mov cx, EC_R2X
     mov si, ec_s_man
-    mov cx, di
-    add cx, EC_R2X + OS88UI_GW + 4
-    mov dx, bp
-    add dx, EC_RY + 2
-    call ec_txt
+    call ec_radio
 
     ; --- the four fields, each with its label ----------------------------
     xor cx, cx
@@ -297,8 +248,7 @@ ec_paint:
     mov dx, [si+LN_Y1]          ; the label sits on the field's own top edge,
     add dx, 3                   ; so the two cannot drift apart
     mov si, [ec_labels+bx]
-    mov cx, di
-    add cx, EC_LX
+    lea cx, [di+EC_LX]
     call ec_txt
     pop cx
     push cx
@@ -311,35 +261,32 @@ ec_paint:
 
     ; --- the message line, then the two buttons --------------------------
     mov si, [ec_msg]
-    mov cx, di
-    add cx, EC_LX
-    mov dx, bp
-    add dx, EC_MSGY
+    lea cx, [di+EC_LX]
+    lea dx, [bp+EC_MSGY]
     call ec_txt
 
-    mov ax, di
-    add ax, EC_B1X
-    mov bx, bp
-    add bx, EC_BY
-    mov si, ec_s_ok
-    mov cl, EC_COK
-    call ec_btn
-    mov ax, di
-    add ax, EC_B2X
-    mov bx, bp
-    add bx, EC_BY
-    mov si, ec_s_cancel
-    mov cl, EC_CCANCEL
-    call ec_btn
+    call ec_btns
 
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_bp
+
+; --- ec_radio - one mode radio and its label -------------------------------
+; in:  AL = the ECM_* it stands for (ON when that is [ec_mode]), CX = its x
+;      offset in the content, SI = its label, DI/BP = the content origin
+; clobbers: AX, CX, DX
+ec_radio:
+    cmp al, [ec_mode]
+    mov al, OS88UI_GRADIO       ; (`mov` leaves the compare's ZF alone)
+    jne .off
+    or  al, OS88UI_GON
+.off:
+    xor ah, ah
+    add cx, di
+    lea dx, [bp+EC_RY]
+    call os88ui_glyph           ; ...which keeps every register
+    add cx, OS88UI_GW + 4       ; the label beside it, two pixels down
+    inc dx
+    inc dx
+    ; ...and fall into ec_txt
 
 ; --- ec_txt - SI = the string at (CX, DX), black ----------------------------
 ec_txt:
@@ -349,17 +296,20 @@ ec_txt:
     pop ax
     ret
 
+; --- ec_btns - Ok and Cancel, at DI/BP = the content origin ----------------
+; clobbers: AX, BX, CX, SI - both callers are inside their own full save
+ec_btns:
+    lea ax, [di+EC_B1X]
+    lea bx, [bp+EC_BY]
+    mov si, ec_s_ok
+    mov cl, EC_COK
+    call ec_btn                 ; ...which keeps AX and BX, so the second
+    add ax, EC_B2X - EC_B1X     ; button is one step along
+    mov si, ec_s_cancel
+    mov cl, EC_CCANCEL          ; ...and falls into ec_btn for it
+
 ; --- ec_btn - one button whose top-left is (AX, BX), label SI ---------------
 ; in:  AX = x, BX = y, SI = the label, CL = the control's id
-
-; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
-; A Control Panel page draws its buttons one at a time, so the record is
-; pointed at whichever rect the caller staged. The GESTURE here is the
-; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
-; release-fired; what changed is that the DRAW goes through the control.
-ec2_btlbl: dw 0
-ec2_btflg: dw 0
-ec2_btrec: dw 0, ec2_btlbl, ec2_btflg, 1, 0, 0, 0, 0
 
 ec_btn:
     push ax
@@ -381,16 +331,7 @@ ec_btn:
     or di, OS88UI_DOWN          ; SPEC.md 13.8: the pressed look is DRAWN, not
 .up:                            ; XOR-ed - a repaint between the two edges must
                                 ; agree with the glass
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [ec2_btlbl], si          ; label and DI its flags, so the record takes
-    mov [ec2_btflg], di          ; all three and the picture is identical
-    mov [ec2_btrec+OS88UI_BT_RECTS], bx
-    mov bx, ec2_btrec
-    mov al, 1
-    call os88ui_btn
-    pop bx
-    pop ax
+    call eth_btn                ; THE ONE CONTROL (etherui.inc)
     pop di
     pop si
     pop bx
@@ -402,13 +343,7 @@ ec_btn:
 ; in:  CX = x, DX = y, SI = the window
 ; -----------------------------------------------------------------------------
 ec_click:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
     mov [ec_cx], cx
     mov [ec_cy], dx
     call ec_layout              ; DI = content left, BP = content top
@@ -440,42 +375,26 @@ ec_click:
     mov ax, [ec_cx]
     sub ax, di
     cmp ax, EC_LX + 64
-    jae .man
-    mov byte [ec_mode], ECM_DHCP
-    call ec_repaint
-    jmp short .out
-.man:
+    mov bl, ECM_DHCP            ; (`mov` leaves the compare's CF alone)
+    jb  .mode
     cmp ax, EC_R2X
     jb  .out
     cmp ax, EC_R2X + 64
     jae .out
-    mov byte [ec_mode], ECM_MAN
+    mov bl, ECM_MAN
+.mode:
+    mov [ec_mode], bl
     call ec_repaint
     jmp short .out
 
     ; --- a button? -------------------------------------------------------
 .btn:
-    mov ax, [ec_cy]
-    sub ax, bp
-    cmp ax, EC_BY
-    jb  .out
-    cmp ax, EC_BY + EC_BH
-    jae .out
-    mov ax, [ec_cx]
-    sub ax, di
-    cmp ax, EC_B1X
-    jb  .out
-    cmp ax, EC_B1X + EC_BW
-    jb  .ok
-    cmp ax, EC_B2X
-    jb  .out
-    cmp ax, EC_B2X + EC_BW
-    jae .out
-    mov al, EC_CCANCEL
-    jmp short .arm
-.ok:
-    mov al, EC_COK
-.arm:                           ; **THE PRESS ONLY ARMS** (SPEC.md 13.8.3/
+    mov cx, [ec_cx]             ; the same rects the release and the drag ask
+    mov dx, [ec_cy]             ; about, so the three cannot disagree
+    call ec_bhit
+    or  al, al
+    jz  .out
+                           ; **THE PRESS ONLY ARMS** (SPEC.md 13.8.3/
     xor ah, ah                  ; 13.8.4). Both of these want the release: Ok
     call os88ui_arm             ; commits an address and Cancel throws typing
     call ec_setdown             ; away, and neither is a 13.6 control with a
@@ -483,14 +402,7 @@ ec_click:
                                 ; cancelled by sliding off, which it could not
                                 ; be while it acted on the way down
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_bp
 
 ; -----------------------------------------------------------------------------
 ; ec_setdown - AL = the button drawn PRESSED (0 = neither)
@@ -498,49 +410,20 @@ ec_click:
 ; costs one compare and no pixels (SPEC.md 13.8.1).
 ; -----------------------------------------------------------------------------
 ec_setdown:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
     cmp al, [ec_down]
     je .out
     mov [ec_down], al
     call ec_layout              ; DI = content left, BP = content top
-    mov ax, di
-    add ax, EC_B1X
-    mov bx, bp
-    add bx, EC_BY
-    mov si, ec_s_ok
-    mov cl, EC_COK
-    call ec_btn
-    mov ax, di
-    add ax, EC_B2X
-    mov bx, bp
-    add bx, EC_BY
-    mov si, ec_s_cancel
-    mov cl, EC_CCANCEL
-    call ec_btn
+    call ec_btns
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_bp
 
 ; -----------------------------------------------------------------------------
 ; ec_bhit - which button is the SCREEN point (CX,DX) in? AL = 0 for neither
 ; in:  CX = x, DX = y; DI = content left and BP = content top, from ec_layout
 ; -----------------------------------------------------------------------------
-ec_bhit:
-    push bx
-    push cx
-    push dx
+ec_bhit:                        ; (AX is all it writes)
     mov ax, dx
     sub ax, bp
     cmp ax, EC_BY
@@ -558,38 +441,49 @@ ec_bhit:
     cmp ax, EC_B2X + EC_BW
     jae .none
     mov al, EC_CCANCEL
-    jmp short .out
+    ret
 .ok:
     mov al, EC_COK
-    jmp short .out
+    ret
 .none:
     xor al, al
-.out:
-    pop dx
-    pop cx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
-; ec_up - W_ONMOUSEUP (SPEC.md 13.7): the two buttons fire HERE
+; ec_drag - W_ONDRAG (SPEC.md 13.8.2): keep what is drawn pressed equal to
+; what would fire. ec_up - W_ONMOUSEUP (SPEC.md 13.7): the two buttons fire
+; HERE. ONE BODY, because they ask the same question - is the pointer on the
+; control the press armed? - and differ only in what the answer does: a drag
+; draws it, a release fires it. CF on the way in says which, and survives the
+; pushes.
 ; in:  CX = x, DX = y (SCREEN, possibly outside the window), SI = the window
 ; -----------------------------------------------------------------------------
-ec_up:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+ec_drag:
+    CLC_OR_STC ec_up
+ec_ud:
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
+    jc  .fire
+    call os88ui_armed           ; PEEK: the arm is the release's to spend
+    xor bh, bh                  ; BH = 0: a drag. **BH AND NOT CH**: CX is
+    jmp short .got              ; the point's x, and ec_bhit reads it
+.fire:
     call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    mov bh, 1                   ; BH = 1: the release
+.got:
     or ax, ax
     jz .out
     mov bl, al
-    call ec_layout
-    call ec_bhit                ; ...against a FRESH hit at the release point
+    call ec_layout              ; (both keep BX)
+    call ec_bhit                ; ...against a FRESH hit at this point
     cmp al, bl
-    jne .cancel
+    je .hit
+    xor al, al                  ; off it: drawn up, and a release that slid
+.set:                           ; off has thought better of it and fires
+    call ec_setdown             ; nothing. Draws only if that CHANGED
+    jmp short .out
+.hit:
+    or bh, bh
+    jz .set                     ; a drag on it: drawn pressed
     mov byte [ec_down], 0       ; NOT ec_setdown: both paths below either
                                 ; repaint the window or destroy it, and drawing
                                 ; this button upright first is
@@ -600,52 +494,8 @@ ec_up:
     jmp short .out
 .ok:
     call ec_apply
-    jmp short .out
-.cancel:
-    xor al, al                  ; slid off: thought better of, nothing fires
-    call ec_setdown
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; ec_drag - W_ONDRAG (SPEC.md 13.8.2): keep what is drawn pressed equal to
-; what would fire. Same question ec_up asks, one pass early.
-; -----------------------------------------------------------------------------
-ec_drag:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    call os88ui_armed           ; PEEK: the arm is the release's to spend
-    or ax, ax
-    jz .out
-    mov bl, al
-    call ec_layout
-    call ec_bhit
-    cmp al, bl
-    je .set
-    xor al, al
-.set:
-    call ec_setdown             ; ...which draws only if that CHANGED
-.out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_bp
 
 ; --- ec_focus - CX = the field that gets it, the others lose it -------------
 ec_focus:
@@ -665,10 +515,7 @@ ec_focus:
     call ec_blk
     mov byte [si+LN_FOCUS], 1
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_cx
 
 ; --- ec_focused - out CX = which field has it (0 if none does) --------------
 ec_focused:
@@ -698,13 +545,7 @@ ec_focused:
 ; Ok (SPEC.md 20.5.1's shape, one level up).
 ; -----------------------------------------------------------------------------
 ec_key:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
     call ec_layout
     cmp al, 13
     je  .ret
@@ -734,26 +575,14 @@ ec_key:
 .esc:
     call ec_close
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_bp
 
 ; -----------------------------------------------------------------------------
 ; ec_repaint - the window's content again (the kernel does not repaint after a
 ;              callback returns, SPEC.md 31.9's rule one window over)
 ; -----------------------------------------------------------------------------
 ec_repaint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call os88_ent               ; push ax..di, and bp: out by ep_bp
     mov bx, [ec_win]
     or  bx, bx
     jz  .out
@@ -764,21 +593,13 @@ ec_repaint:
     call OSAPI_SET_COLOR
     mov ax, si
     mov bx, di
-    mov cx, si
-    add cx, EC_FW - 3           ; the content is (w-2) x (h-TITLE_H-1), so its
-    mov dx, di                  ; last column and row are these
-    add dx, EC_FH - TITLE_H - 2
+    lea cx, [si+EC_FW - 3]      ; the content is (w-2) x (h-TITLE_H-1), so its
+    lea dx, [di+EC_FH - TITLE_H - 2] ; last column and row are these
     call OSAPI_GFX_FILL
     mov si, [ec_win]
     call ec_paint
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_bp
 
 ; -----------------------------------------------------------------------------
 ; ec_close - take the window down. The close box does exactly this by itself
@@ -830,31 +651,30 @@ eth_cfg_reap:
 ; became 0.0.0.0 would look like the feature not working.
 ; -----------------------------------------------------------------------------
 ec_apply:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call os88_ent               ; push ax..di, and bp: out by ep_bp
     cmp byte [ec_mode], ECM_MAN
     jne .auto
 
-    mov si, ec_t0
-    mov di, ec_ip
+    xor bx, bx                  ; the field, times two
+    mov di, ec_ip               ; ...and where it parses to: ec_ip, ec_mask,
+.parse:                         ; ec_gw and ec_dns, four bytes apart
+    mov si, [ec_bufs+bx]
+    cmp bl, 2 * 2               ; the first two are required...
+    jb  .req
+    cmp byte [si], 0            ; ...and an EMPTY Router or Name is 0.0.0.0
+    jne .req
+    mov cx, 4
+    call mem_zero
+    jmp short .next
+.req:
     call ip_parse
-    jc  .badip
-    mov si, ec_t1
-    mov di, ec_mask
-    call ip_parse
-    jc  .badmask
-    mov si, ec_t2
-    mov di, ec_gw
-    call ec_optional
-    jc  .badgw
-    mov si, ec_t3
-    mov di, ec_dns
-    call ec_optional
-    jc  .baddns
+    jc  .bad
+.next:
+    add di, 4
+    inc bx
+    inc bx
+    cmp bl, EC_NF * 2
+    jb  .parse
 
     mov si, ec_ip               ; ...and only now does anything change
     mov di, eth_ip
@@ -882,42 +702,13 @@ ec_apply:
     mov byte [ec_dirty], 1      ; ...remembered when the PANEL closes (31.8)
     call ec_close
     jmp short .out
-.badip:
-    mov word [ec_msg], ec_s_badip
-    jmp short .say
-.badmask:
-    mov word [ec_msg], ec_s_badmask
-    jmp short .say
-.badgw:
-    mov word [ec_msg], ec_s_badgw
-    jmp short .say
-.baddns:
-    mov word [ec_msg], ec_s_baddns
-.say:
+.bad:
+    mov ax, [ec_errs+bx]        ; the field that failed names itself
+    mov [ec_msg], ax
     call ec_repaint             ; the window STAYS UP: a refusal the user
                                 ; cannot see is a window that did nothing
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; --- ec_optional - an empty field is 0.0.0.0; anything else must parse ------
-ec_optional:
-    cmp byte [si], 0
-    jne .parse
-    push cx
-    mov cx, 4
-    call mem_zero
-    pop cx
-    clc
-    ret
-.parse:
-    call ip_parse
-    ret
+    jmp ep_bp
 
 ; --- arp_flush - forget every hardware address ------------------------------
 arp_flush:
@@ -954,6 +745,19 @@ ec_vol_bank:
     pop ax
     ret
 
+; --- ec_fargs - ec_vol_bank, and ETHER.CFG's read/write arguments loaded:
+;     ES:BX = ec_fbuf, SI = the name, CX = its size, DX = 0. CF is
+;     ec_vol_bank's (1 = not there), which nothing below it writes
+ec_fargs:
+    call ec_vol_bank
+    push ds
+    pop es
+    mov si, ec_s_file
+    mov bx, ec_fbuf
+    mov cx, EC_F_SIZE
+    mov dx, 0                   ; NOT `xor`: that would clear the answer
+    ret
+
 ec_vol_back:
     push ax
     push bx
@@ -974,23 +778,14 @@ ec_vol_back:
 ;      is not one of ours, and the caller does DHCP
 ; -----------------------------------------------------------------------------
 eth_cfg_load:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call os88_ent               ; push ax..di, and bp: out by ep_bp
     push es
-    call ec_vol_bank
+    call ec_fargs               ; the volume, and the read's arguments
     jc  .back                   ; the GOTO failed - and dsk_chdir's failure path
                                 ; can move the globals it would be recovered
                                 ; from (SPEC.md 38.10), so come back anyway
-    push ds
-    pop es
-    mov si, ec_s_file
-    mov bx, ec_fbuf
-    mov cx, EC_F_SIZE           ; a version 1 file is SHORTER and the read
-    xor dx, dx                  ; answers with what it found, which is what
+                                ; a version 1 file is SHORTER and the read
+                                ; answers with what it found, which is what
     call OSAPI_FILE_READ        ; tells the two apart below
     push ax
     call ec_vol_back
@@ -1033,13 +828,7 @@ eth_cfg_load:
     stc
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_bp
 
 ; -----------------------------------------------------------------------------
 ; eth_cfg_save - write it, if anything changed (DSV_CPCLOSE)
@@ -1051,12 +840,7 @@ eth_cfg_load:
 ; setting.
 ; -----------------------------------------------------------------------------
 eth_cfg_save:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call os88_ent               ; push ax..di, and bp: out by ep_bp
     push es
     cmp byte [ec_dirty], 0
     je  .out
@@ -1070,26 +854,14 @@ eth_cfg_save:
     mov cx, 16
     call mem_copy
     call ec_buf_put
-    call ec_vol_bank
+    call ec_fargs
     jc  .back
-    push ds
-    pop es
-    mov si, ec_s_file
-    mov bx, ec_fbuf
-    mov cx, EC_F_SIZE
-    xor dx, dx
     call OSAPI_FILE_WRITE
 .back:
     call ec_vol_back
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_bp
 
 ; -----------------------------------------------------------------------------
 ; ec_buf_take / ec_buf_put - the stored rung <-> [sk_want]
@@ -1184,6 +956,7 @@ ec_s_l2:     db 'Router', 0
 ec_s_l3:     db 'Name', 0
 
 ec_labels:   dw ec_s_l0, ec_s_l1, ec_s_l2, ec_s_l3
+ec_errs:     dw ec_s_badip, ec_s_badmask, ec_s_badgw, ec_s_baddns
 ec_blks:     dw ec_f0, ec_f1, ec_f2, ec_f3
 ec_bufs:     dw ec_t0, ec_t1, ec_t2, ec_t3
 

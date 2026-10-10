@@ -764,7 +764,11 @@ def run(tag,off,code):
         audio=(g.get('musicptr'),g.get('effectptr'));g.frame(3)
         assert audio==(g.get('musicptr'),g.get('effectptr')),'muting advanced audio streams'
         g.key('KeyM');assert g.get('sound',1)==1
-        g.key('KeyX');assert g.get('rolls')==2 and g.get('roll')>0
+        # X is POLLED (OSAPI_KEY_DOWN once a game frame), so it is HELD across
+        # one: a g.key() tap is down one emulator frame, shorter than the game's,
+        # and only passed while MartyPC dropped its break (MARTYPC-PLAN 2).
+        m.key('KeyX',up=False);g.frame();m.key('KeyX',down=False);g.frame()
+        assert g.get('rolls')==2 and g.get('roll')>0
         g.bullet();g.frame();assert g.get('lives')==3,'roll failed to protect'
         # Natural gameplay, and actual guest-clock frame rate.
         g.key('KeyN');m.key('Space',up=False)

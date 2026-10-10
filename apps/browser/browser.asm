@@ -6939,9 +6939,11 @@ br_s_bad:   db 'Cannot open page', 0
 %define OS88UI_SCROLL           ; SPEC.md 13.10: the shared scroll bar - OPT IN,
                                 ; so a package that draws no bar pays none of
                                 ; its bytes
+%define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
 %include "os88ui.inc"           ; the standard button (SPEC.md 20.5.1)...
 %include "os88line.inc"         ; ...and the one-line field the bar is
 %include "brnet.inc"            ; ...and the fetch (NET-STACK-PLAN stage D)
+%define OS88SOCK_STATE             ; ...every net_find here asks NETV_STATE too
 %include "os88sock.inc"         ; ...whose driver net_find locates (SPEC.md 72)
 
 ; The loader zeroes exactly this much (SPEC.md 21 step 5), and every equ below

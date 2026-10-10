@@ -216,6 +216,8 @@ VM286VID := $(CURDIR)/vm/286-video
 VM386SND := $(CURDIR)/vm/386-sound
 # The top of the range: a 486DX2/66 and a Pentium 133, both with an SB16.
 VM486 := $(CURDIR)/vm/486
+# ...and that 486 with the Video Player's measurement disk on IDE (make vid486)
+VM486VID := $(CURDIR)/vm/486-video
 VMPENT := $(CURDIR)/vm/pentium
 # The two Frotz machines (SPEC.md 61.9). Both carry a sound card, because
 # @sound_effect is part of what is being tested, and both have the FULL 640KB:
@@ -554,6 +556,18 @@ ifneq ($(MOUROUND),)
 VIDDEF += -DMOU_DIAG -DMOU_ROUND
 endif
 
+# KBDDIAG=1 records what the KEYBOARD sends and what the ROM makes of it
+# (SPEC.md 9.8.1): every IRQ1 with the 8042's status before the ROM's int 09h
+# and its data port after, the BIOS buffer's head and tail either side, the
+# PIC's three registers - and, inside an fsx bracket, the same hardware state
+# sampled each tick. Drawn on the desktop under the menu bar, because the
+# machine it is for has no debugger. It is for docs/FIELD-NOTES.md 63: a
+# Pentium 4 whose keyboard cannot PAUSE MIDIRack's speaker play, an FSXF_RATE
+# bracket, while typing everywhere else. `make kbddiag` is the disk set.
+ifneq ($(KBDDIAG),)
+VIDDEF += -DKBD_DIAG
+endif
+
 # DOSRMARK=1 traces SPEC.md 96.49's LIVE RESUME on the glass: an info line
 # through the ROM's teletype with every number the far jump depends on, then
 # one character per stage of the stub, then one from the restored kernel
@@ -676,6 +690,30 @@ endif
 ifneq ($(TRACKRUN),)
 VIDDEF += -DTRACK_RUN
 BOOTDEF += -DTRACK_RUN
+endif
+
+# NOHDCYL=1 keeps a FIXED disk's reads at the end of the TRACK, which is what
+# shipped before SPEC.md 18.91.5: every int 13h stops at the track. The
+# default takes the cylinder's end for every fixed-disk READ, unasked for
+# now (HDCYLPROBE=1 below is the asked arm): +27% at the
+# encoder's row on the owner's ST-225 (docs/reports/VIDDISK-ST225-CYL-
+# 2026-10-07.md). The kernel (kern_big) and HDD.DRV both; the A/B, and the
+# only thing keeping the track-only arm assembling. (HDD.DRV rebuilds with
+# it: hdd.bin hangs off the kernel's stamp through hddtool.bin -> boothd.bin
+# -> KERNEL.SYS.)
+ifneq ($(NOHDCYL),)
+VIDDEF += -DNO_HDCYL
+DRVDEF += -DNO_HDCYL
+endif
+# HDCYLPROBE=1 is the CHECKED arm: the boot disk's ROM (kernel) and each
+# rung-0 disk's (HDD.DRV) asked first - a run across a head read in one call
+# against the same two sectors a call each - and the cylinder bound taken
+# only where the bytes agree. The default takes it unasked for now, at the
+# owner's word (SPEC.md 18.91.5); the kernel probe is 184 bytes against the
+# shipped boot overlay's 109 spare and fits a knob build's DSK_OVLPAD.
+ifneq ($(HDCYLPROBE),)
+VIDDEF += -DHD_CYLPROBE
+DRVDEF += -DHD_CYLPROBE
 endif
 
 # DPTROM=1 leaves int 1Eh POINTING AT THE ROM'S OWN TABLE, in stage 1, in
@@ -1884,7 +1922,7 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              SNAPAUDIT SCROLLROW QUANTUM GFXAUDIT \
                              CURFIX \
                              FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
-                             BOOTPROF STKDIAG BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG MOUROUND DOSRMARK FDDSLOW TRACKRUN SBDRAGOFF SBRATE SBRATE286 SBIDLE \
+                             BOOTPROF STKDIAG BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG MOUROUND KBDDIAG DOSRMARK FDDSLOW TRACKRUN NOHDCYL HDCYLPROBE SBDRAGOFF SBRATE SBRATE286 SBIDLE \
                              ETHPROF FTPDSLOW FTPDBG \
                              KERN_SMALL KERN_EMU FSNOSTAMP THEMEDARK TITLESNAP FONTSLOW SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL LDDIAG DRVDIAG BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOLIVESND VPDIAG NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK NOKDKBD VGADIRTY DLJUNK DPTROM COMPRESS NOKZIP,\
                              $(if $($(k)),$(k)=$($(k)))))
@@ -1949,7 +1987,7 @@ endif
 # `make` believes is current, and every image shipped from it wrong. The
 # knob roster above still carries NOKZIP, because that is what somebody asks
 # for and what a knob build has to announce.
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOFDMEDIA),-nfm$(NOFDMEDIA))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KERN_EMU),-emu$(KERN_EMU))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(MOUROUND),-mrd$(MOUROUND))$(if $(DOSRMARK),-drm$(DOSRMARK))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(SBRATE286),-sbr2$(SBRATE286))$(if $(SBIDLE),-sbi$(SBIDLE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(FONTSLOW),-fsw$(FONTSLOW))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(LDDIAG),-ldd$(LDDIAG))$(if $(DRVDIAG),-drd$(DRVDIAG))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(NOFDDPARK),-nfp$(NOFDDPARK))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PICOMEM),-pm$(PICOMEM))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(DPTROM),-dpr$(DPTROM))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))-cmp$(LZFMTS)$(if $(KZIP),-kz)
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOFDMEDIA),-nfm$(NOFDMEDIA))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KERN_EMU),-emu$(KERN_EMU))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(MOUROUND),-mrd$(MOUROUND))$(if $(KBDDIAG),-kbd$(KBDDIAG))$(if $(DOSRMARK),-drm$(DOSRMARK))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(NOHDCYL),-nhc$(NOHDCYL))$(if $(HDCYLPROBE),-hcp$(HDCYLPROBE))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(SBRATE286),-sbr2$(SBRATE286))$(if $(SBIDLE),-sbi$(SBIDLE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(FONTSLOW),-fsw$(FONTSLOW))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(LDDIAG),-ldd$(LDDIAG))$(if $(DRVDIAG),-drd$(DRVDIAG))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(NOFDDPARK),-nfp$(NOFDDPARK))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PICOMEM),-pm$(PICOMEM))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(DPTROM),-dpr$(DPTROM))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))-cmp$(LZFMTS)$(if $(KZIP),-kz)
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -2043,11 +2081,11 @@ KERNEL_SRC := kernel/kernel.asm
 # a map that described "a DIFFERENT kernel".
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
-.PHONY: stkdiag small emu kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 pc5150 xt-mfm xt-cga \
+.PHONY: stkdiag kbddiag small emu kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 pc5150 xt-mfm xt-cga \
         xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-covox xt-wire \
         286-525-z 286-525-word 286-525-cword 286-525-runcpm 286-525-c64 \
         286-525-weave 286-525-loom 286-525-all \
-        286-sound 286-video 386-sound 486 pentium \
+        286-sound 286-video 386-sound 486 486-video pentium \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
@@ -2828,6 +2866,18 @@ endif
 # a later plain `make` rebuilds them, which is the trap that stamp exists for
 # (see VIDSTAMP above) - but do not ship an image out of a tree you last built
 # this way without running `make` first.
+kbddiag:
+	$(MAKE) KBDDIAG=1
+	cp $(BUILD)/os8088.img     $(BUILD)/kbddiag144.img
+	cp $(BUILD)/os8088-720.img $(BUILD)/kbddiag720.img
+	cp $(BUILD)/os8088-360.img $(BUILD)/kbddiag360.img
+	cp $(BUILD)/os8088-120.img $(BUILD)/kbddiag120.img
+	@echo ""
+	@echo "kbddiag: FOUR system disks - 360, 720, 1.2M and 1.44M - with"
+	@echo "         SPEC.md 9.8.1's keyboard recorder. Pair one with the"
+	@echo "         ordinary apps disk of the same size: the API is unchanged."
+	@echo ""
+
 stkdiag:
 	$(MAKE) STKDIAG=1
 	cp $(BUILD)/os8088.img     $(BUILD)/stkdiag144.img
@@ -3759,13 +3809,23 @@ $(BUILD)/boothd.bin: boot/boothd.asm kernel/kernel.asm $(KERNFILE) | $(BUILD)
 # is what gives os88disk.py's sys_attr the read-only + hidden + system
 # attributes every kernel-owned file wants (SPEC.md 19.6), and what makes the
 # installer's "every *.DRV" copy pick it up (SPEC.md 52.10.4).
+#
+# HDBLOBDEF: the tool carries the two boot sectors' CODE and not their zeros
+# (drivers/hdd/partw.inc) - mbr.bin's first HD_MBRNZ bytes, and boothd.bin's
+# jump and its code up to HD_VBREND - and writes the rest itself. Both numbers
+# are cut off the BUILT files here, so what is not carried is zero by
+# construction; and the same line refuses a file that is not the shape the
+# cut assumes (446 / 512 bytes, a zero BPB and patch words, 55AAh last), so a
+# boot sector that grows a non-zero byte there fails the build instead of
+# losing it. It is ~330 bytes of every load of the tool.
+HDBLOBDEF = $$(python3 -c 'import sys; m = open(sys.argv[1], "rb").read(); v = open(sys.argv[2], "rb").read(); assert len(m) == 446 and len(v) == 512 and not any(v[3:62]) and not any(v[504:510]) and v[510:] == b"\x55\xaa", "mbr.bin/boothd.bin are not the shape drivers/hdd/partw.inc cuts"; print("-DHD_MBRNZ=%d -DHD_VBREND=%d" % (len(m.rstrip(b"\0")), len(v[:504].rstrip(b"\0"))))' $(BUILD)/mbr.bin $(BUILD)/boothd.bin)
 $(BUILD)/hddtool.bin: drivers/hdd/hddtool.asm apps/os88ui.inc drivers/hdd/hddabi.inc \
                   drivers/hdd/hdcom.inc drivers/hdd/hdsvc.inc drivers/hdd/hdsec.inc \
                   drivers/hdd/partw.inc drivers/hdd/fmt.inc drivers/hdd/tool.inc \
-                  drivers/hdd/inst.inc drivers/hdd/cppage.inc \
+                  drivers/hdd/inst.inc drivers/hdd/cppage.inc drivers/hdd/iassoc.inc \
                   drivers/os88drv.inc apps/os88api.inc apps/os88rseq.inc \
                   $(BUILD)/mbr.bin $(BUILD)/boothd.bin | $(BUILD)
-	$(NASM) -f bin -w+error $(DRVDEF) -I drivers/hdd/ -I drivers/ -I apps/ -I $(BUILD) -o $@ $<
+	$(NASM) -f bin -w+error $(DRVDEF) $(HDBLOBDEF) -I drivers/hdd/ -I drivers/ -I apps/ -I $(BUILD) -o $@ $<
 	@echo "hddtool: $(call FILESIZE,$@) bytes"
 
 # IT WAS THE ONE ARTEFACT ON THESE DISKS THAT PKGZ MUST NOT TOUCH, and the
@@ -3835,7 +3895,7 @@ $(shell mkdir -p $(BUILD); \
 $(BUILD)/net.bin: drivers/net/net.asm drivers/net/netui.inc \
                   drivers/net/netsock.inc drivers/net/netpkg.inc \
                   drivers/net/lplink.inc drivers/os88drv.inc apps/os88api.inc \
-                  apps/os88ui.inc | $(BUILD)
+                  apps/os88ui.inc drivers/wirezone.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(NETDEF) -I drivers/net/ -I drivers/ -I apps/ -o $@ $<
 	@echo "net:    $(call FILESIZE,$@) bytes"
 
@@ -4020,6 +4080,7 @@ $(BUILD)/ether.bin: drivers/ether/ether.asm drivers/ether/ne2000.inc \
                     drivers/ether/ethstate.inc drivers/ether/ethsock.inc \
                     drivers/ether/ethusr.inc \
                     drivers/net/netpkg.inc drivers/os88drv.inc \
+                    drivers/wirezone.inc \
                     apps/os88api.inc apps/os88ui.inc apps/os88line.inc \
                     | $(BUILD)
 	$(NASM) -f bin -w+error $(ETHDEF) -I drivers/ether/ -I drivers/net/ \
@@ -10341,6 +10402,50 @@ videnchd: $(VIDENC_BASE) $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 \
 	fi
 	@ls -l $(BUILD)/VIDENC-*.VHD
 
+# THE 486 MEASUREMENT DISK (SPEC.md 98.2.3.1): what a new encoder profile
+# is made from, taken the way 286-vga's was (docs/reports/VIDEO-86BOX-286-
+# 2026-09-26.md) but needing NOTHING from outside the tree - VIDBENCH's frames
+# are synth_frames() as an XDC stream, and VIDDISK writes its own stream (W).
+# A bootable IDE disk (17/15/VID486_CYLS, 31 MB - a volume is 32 MB at most
+# here, and it holds the clips and VIDDISK's 12.5 MB STREAM.DAT) with the
+# player, the same player built VPDIAG=1 as VIDEOD.O88 (the info card's
+# stream, disk and sound lines), VIDBENCH (with its planar rows: a VGA read,
+# a 12h store and the LATCH copy the flipped play takes), VIDDISK, VIDSND,
+# and the clips in VID486CLIPS=<dir> if given - and a blank 1.44MB floppy,
+# build/vid486out.img, to copy the .TXT results onto and read on the host.
+# `make 486-video` boots it in 86Box.
+VID486_CYLS ?= 250
+VID486CLIPS ?=
+$(BUILD)/videodiag.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DVP_DIAG -o $@ apps/video/video.asm
+$(BUILD)/videodiag.o88: $(BUILD)/videodiag.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/videodiag.bin -o $@
+.PHONY: vid486
+vid486: $(VIDENC_BASE) $(BUILD)/videodiag.o88 $(BUILD)/vidbench.o88 \
+	$(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88 tools/os88hdd.py tools/os88vid.py \
+	tests/vidbench/FIELD486.TXT
+	rm -rf $(BUILD)/vid486 && mkdir -p $(BUILD)/vid486
+	python3 tools/os88vid.py synthxdv $(BUILD)/vid486/SYNTH.XDV >/dev/null
+	python3 tools/os88vid.py benchdat --synth $(BUILD)/vid486/VIDBENCH.DAT \
+	    $(BUILD)/vid486/SYNTH.XDV >/dev/null
+	python3 tools/os88hdd.py \
+	    --out $(BUILD)/VID486.VHD --spt 17 --heads 15 --cyls $(VID486_CYLS) \
+	    --kernel $(BUILD)/kernel.sys --vbr $(BUILD)/boothd.bin \
+	    --mbr $(BUILD)/mbr.bin --file HDD.DRV=$(BUILD)/hdd.drv \
+	    --file HIBER.DRV=$(BUILD)/hiber.drv --file CTRL.DRV=$(BUILD)/ctrl.drv \
+	    --file SOUND.DRV=$(BUILD)/sound.drv \
+	    --file README.TXT=tests/vidbench/FIELD486.TXT \
+	    --file VIDEO.O88=$(BUILD)/video.o88 \
+	    --file VIDEOD.O88=$(BUILD)/videodiag.o88 \
+	    --file VIDBENCH.O88=$(BUILD)/vidbench.o88 \
+	    --file VIDBENCH.DAT=$(BUILD)/vid486/VIDBENCH.DAT \
+	    --file VIDDISK.O88=$(BUILD)/viddisk.o88 \
+	    --file VIDSND.O88=$(BUILD)/vidsnd.o88 \
+	    $(if $(VID486CLIPS),$(foreach v,$(wildcard $(VID486CLIPS)/*.V88),--file $(notdir $(v))=$(v)))
+	python3 tools/os88disk.py -o $(BUILD)/vid486out.img --size 1440
+	python3 tools/os88disk.py --verify $(BUILD)/vid486out.img
+	@ls -l $(BUILD)/VID486.VHD $(BUILD)/vid486out.img
+
 # THE DEMO VIDEO DISKS (SPEC.md 98.5): a whole os8088 install on a hard disk
 # with the demo videos in MEDIA/ beside a 00-VIDS.TXT that describes them -
 # what to put in a machine to show the player off. The videos are COMMITTED,
@@ -14030,6 +14135,13 @@ xt-wire: $(BUILD)/ether360.img $(BUILD)/wiredata360.img
 	@test -f $(BUILD)/VIDENC-VGA-286.VHD || { echo "286-video: needs $(BUILD)/VIDENC-VGA-286.VHD - make videnchd VIDENC=<dir with vga/>"; exit 1; }
 	@$(UNPROTECT) $(VM286VID)/86box.cfg
 	$(BOX) -P $(VM286VID) -N
+
+# The 486DX2/66 with `make vid486`'s measurement disk on IDE and its blank
+# results floppy in B: (SPEC.md 98.2.3.1)
+486-video:
+	@test -f $(BUILD)/VID486.VHD || { echo "486-video: needs $(BUILD)/VID486.VHD - make vid486"; exit 1; }
+	@$(UNPROTECT) $(VM486VID)/86box.cfg
+	$(BOX) -P $(VM486VID) -N
 
 386-sound: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM386SND)/86box.cfg

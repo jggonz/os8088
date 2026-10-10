@@ -63,20 +63,11 @@ rd_xms_here:
     push cx
     push dx
     call OSAPI_XMEM_CAPS        ; AX = KB the pool can still hand out
-    or ax, ax
-    jz .no
+    cmp ax, 1                   ; CF = 1 exactly when that is none
     pop dx
     pop cx
     pop bx
     pop ax
-    clc
-    ret
-.no:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -158,6 +149,7 @@ rd_cfg_load:
     push ax
     push cx
     push si
+    push di
     push es
     push ds
     pop es                      ; the blob comes to ES:SI, and ours is DS
@@ -170,15 +162,25 @@ rd_cfg_load:
     jne .out                    ; a version this build does not know: the
                                 ; defaults stand, and the bytes are NOT
                                 ; rewritten until something changes one
-    mov ax, [rd_blob+RDC_KB]
-    call rd_kb_clamp
-    mov [rd_kb], ax
-    mov al, [rd_blob+RDC_LOC]
+    mov si, rd_blob + RDC_KB    ; the live settings ARE the blob's layout
+    mov di, rd_kb               ; (ramdisk.asm), so this is the whole read
+    mov cx, RDC_SZ - RDC_KB
+    cld
+    rep movsb
+    mov [rd_iname+12], cl       ; CX = 0: the name is NUL-ended whatever the
+                                ; blob said, SYSTEM.CFG being a disk file
+    mov al, RDL_CONV            ; ...then the two values are VALIDATED. The
+    xchg al, [rd_loc]           ; size is clamped against the conventional
+    push ax                     ; heap, which is what [rd_loc] has always been
+    mov ax, [rd_kb]             ; at this point - a fresh image, loaded a
+    call rd_kb_clamp            ; moment ago - and the blob's own location is
+    mov [rd_kb], ax             ; put back only below
+    pop ax
     cmp al, RDL_XMS
-    jne .conv                   ; anything this build does not know is the
+    jne .out                    ; anything this build does not know is the
                                 ; conventional heap, which every machine has
     call rd_xms_here            ; ...AND SO IS `Xms` ON A MACHINE WITH NONE.
-    jnc .store                  ; A settings disk carried from a 386 to an
+    jc .out                     ; A settings disk carried from a 386 to an
                                 ; 8088 would otherwise select a store that
                                 ; cannot be claimed - and the page greys both
                                 ; radios on that machine, so there would be no
@@ -186,21 +188,10 @@ rd_cfg_load:
                                 ; control that could undo it is disabled.
                                 ; SPEC.md 39.11's `VM` key refusing an adapter
                                 ; the machine does not have, one layer down
-.conv:
-    mov al, RDL_CONV
-.store:
     mov [rd_loc], al
-    mov al, [rd_blob+RDC_FLAGS]
-    mov [rd_flags], al
-    mov al, [rd_blob+RDC_DRV]
-    mov [rd_idrv], al
-    mov ax, [rd_blob+RDC_CWD]
-    mov [rd_icwd], ax
-    mov si, rd_blob + RDC_NAME
-    mov di, rd_iname
-    call rd_ncopy
 .out:
     pop es
+    pop di
     pop si
     pop cx
     pop ax
@@ -220,24 +211,16 @@ rd_cfg_mark:
     push si
     push di
     push es
-    mov byte [rd_blob+RDC_VER], RDC_VER_V
-    mov ax, [rd_kb]
-    mov [rd_blob+RDC_KB], ax
-    mov al, [rd_loc]
-    mov [rd_blob+RDC_LOC], al
-    mov al, [rd_flags]
-    mov [rd_blob+RDC_FLAGS], al
-    mov al, [rd_idrv]
-    mov [rd_blob+RDC_DRV], al
-    mov ax, [rd_icwd]
-    mov [rd_blob+RDC_CWD], ax
-    mov si, rd_iname
-    mov di, rd_blob + RDC_NAME
-    call rd_ncopy
     push ds
     pop es
+    mov si, rd_kb               ; the live settings, which ARE the blob's
+    mov di, rd_blob + RDC_KB    ; layout from RDC_KB on (ramdisk.asm)
+    mov cx, RDC_SZ - RDC_KB
+    cld
+    rep movsb
+    mov byte [rd_blob+RDC_VER], RDC_VER_V
     mov si, rd_blob
-    mov cx, DRV_RBLOB_SZ
+    mov cl, DRV_RBLOB_SZ        ; CH is 0 after the rep
     mov al, 1                   ; write - into the kernel's copy, not the disk
     call OSAPI_DRV_CFG
     pop es
@@ -272,54 +255,30 @@ rd_mount:
     clc                         ; already up: idempotent, so the page's button
     ret                         ; can be pressed twice without a special case
 .go:
-    push bx
-    push cx
-    push dx
-    push si
-    call rd_store_get
-    jc .no
+    call rd_store_free          ; A STORE WITH NO VOLUME IS STALE, and it is
+                                ; not this Mount's: a Load that failed after
+                                ; claiming (a short arena read, no drive
+                                ; letter) leaves one behind holding the
+                                ; image's chain table and the image's
+                                ; geometry. rd_store_get would hand it back
+                                ; as it is - every extent that image used
+                                ; still marked taken under a cleared
+                                ; directory, and, if Size moved since (it is
+                                ; live while nothing is mounted), [rd_kb]
+                                ; disagreeing with the extents, so a
+                                ; Preserve walked [rd_kb] of arena past the
+                                ; end of the claim. Fresh, at the live size
+    call rd_store_get           ; CF = 1 and AL = RDERR_MEM
+    jc .out
     call rd_dir_clear
 %ifdef RDSEED
     call rd_seed_all
 %endif
-    xor al, al                  ; our own volume handle: there is one RAM disk
-    xor cx, cx                  ; no sector count - there are no sectors
-    xor dx, dx                  ; no donated listing claim: the .lowbss floor
-    mov si, rd_label
-    call OSAPI_VOL_ADD
-    jc .norow
-    mov [rd_vol], al
-    call OSAPI_VOL_MOUNT        ; AL survives: it is the volume index
-    jc .nomnt
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
-.nomnt:
-    mov al, [rd_vol]
-    call OSAPI_VOL_DEL
-    mov byte [rd_vol], 0xFF
-    call rd_store_free
-    mov al, RDERR_MNT
-    jmp short .fail
-.norow:
-    call rd_store_free
-    mov al, RDERR_VOL
-.fail:
-    pop si
-    pop dx
-    pop cx
-    pop bx
+    call rd_mount_after         ; CF = 1 and AL = RDERR_VOL / RDERR_MNT, with
+    jnc .out                    ; no row left behind - and then the store goes
+    call rd_store_free          ; too, which preserves AL
     stc
-    ret
-.no:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    stc                         ; rd_store_get's own AL = RDERR_MEM
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -330,7 +289,10 @@ rd_mount:
 ; IT DISCARDS, and that is the honest reading of "unmount a RAM disk" rather
 ; than an oversight: the memory going back is the whole point of the control,
 ; and a store kept alive behind a volume nobody can reach is neither a disk
-; nor free memory. Preserve is how anything on it survives.
+; nor free memory. Preserve is how anything on it survives - and THE DIRECTORY
+; GOES BACK WITH THE STORE, being in the chain table's claim (SPEC.md
+; 62.9.13.1), so there is no row left to clear: the next Mount clears the one
+; it claims, and a Load fills it.
 ; -----------------------------------------------------------------------------
 rd_unmount:
     push ax
@@ -341,7 +303,6 @@ rd_unmount:
     mov byte [rd_vol], 0xFF
 .out:
     call rd_store_free
-    call rd_dir_clear
     pop ax
     ret
 
@@ -373,28 +334,21 @@ rd_wbuf_get:
     push dx
     cmp byte [rd_loc], RDL_XMS
     jne .claim
-    cmp word [rd_bounce], 0
-    je .claim
-    mov word [rd_sext], RD_NOEXT
     mov ax, [rd_bounce]
-    mov [rd_wseg], ax
-    mov byte [rd_wown], 0
-    jmp short .ok
+    or ax, ax                   ; CF = 0
+    jz .claim
+    mov word [rd_sext], RD_NOEXT
+    mov [rd_wseg], ax           ; ...[rd_wown] is already 0: a loan
+    jmp short .out
 .claim:
     mov ax, RDI_META / 1024
     call OSAPI_MEM_CLAIM
-    jc .no
+    jc .out
     mov [rd_wseg], dx
-    mov byte [rd_wown], 1
-.ok:
+    mov byte [rd_wown], 1       ; (a `mov`: CF = 0 stays the answer)
+.out:
     pop dx
     pop ax
-    clc
-    ret
-.no:
-    pop dx
-    pop ax
-    stc
     ret
 
 rd_wbuf_free:
@@ -442,27 +396,12 @@ rd_blk_out:
     pop cx
     ret
 .xms:
-    push ax
-    push dx
-    push si
-    push di
-    push es
     mov word [rd_sext], RD_NOEXT
-    add ax, [rd_xbase]
-    adc dx, [rd_xbase+2]
-    mov es, [rd_bounce]
-    xor si, si
-    mov di, 1                   ; in from extended
-    call OSAPI_XMEM_COPY
-    jnc .ok
-    mov byte [rd_xerr], 1       ; (SPEC.md 62.9.10.2)
-.ok:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop ax
     mov bx, [rd_bounce]
+    push di
+    mov di, 1                   ; in from extended
+    call rd_xcopy
+    pop di
     ret
 
 ; -----------------------------------------------------------------------------
@@ -477,36 +416,11 @@ rd_blk_out:
 rd_blk_in:
     cmp byte [rd_loc], RDL_XMS
     jne .out
-    push ax
-    push dx
-    push si
-    push di
-    push es
     mov word [rd_sext], RD_NOEXT
-    add ax, [rd_xbase]
-    adc dx, [rd_xbase+2]
-    mov es, bx
-    xor si, si
+    push di
     xor di, di                  ; out to extended
-    call OSAPI_XMEM_COPY
-    jnc .ok
-    mov byte [rd_xerr], 1       ; (SPEC.md 62.9.10.2)
-.ok:
-    pop es
+    call rd_xcopy
     pop di
-    pop si
-    pop dx
-    pop ax
-.out:
-    ret
-
-; rd_chunk_sz - out AX = how many bytes one arena transfer moves
-rd_chunk_sz:
-    mov ax, RDI_CHUNK
-    cmp byte [rd_loc], RDL_XMS
-    jne .out
-    mov ax, RDI_XCHUNK          ; through the bounce, which is RDI_META or an
-                                ; extent, whichever is larger - so 4KB at a time
 .out:
     ret
 
@@ -524,41 +438,57 @@ rd_chunk_sz:
 ; are all bought for nothing.
 ; -----------------------------------------------------------------------------
 rd_here_bank:
-    push ax
-    push bx
-    push dx
-    call OSAPI_FILE_HERE        ; DX = the folder, BL = its volume
-    mov [rd_bcwd], dx
-    mov [rd_bdrv], bl
-    pop dx
-    pop bx
-    pop ax
+    push di
+    mov di, rd_bdrv
+    call rd_here_into
+    pop di
     ret
 
 rd_here_go:                     ; ...off to the image's folder
-    push ax
-    push bx
-    push dx
-    mov dx, [rd_icwd]
-    mov bl, [rd_idrv]
-    call OSAPI_FILE_GOTO_Q
-    pop dx
-    pop bx
-    pop ax
+    push di
+    mov di, rd_idrv
+    call rd_goto_q
+    pop di
     ret
 
 rd_here_back:
     pushf
+    push di
+    mov di, rd_bdrv
+    call rd_goto_q
+    pop di
+    popf
+    ret
+
+; rd_here_into - where the machine is standing (OSAPI_FILE_HERE), into the
+;                (volume byte, folder word) pair at DI
+; rd_goto_q    - ...and stand at the pair at DI again, quietly
+;
+; FOUR SUCH PAIRS, and every one is a byte followed by its word: the image's
+; ([rd_idrv]), the user's across a visit to it ([rd_bdrv]), the system
+; volume's ([rd_pvol]) and the user's across a page load ([rd_pvsav]) -
+; which ramdisk.asm asserts, the four being defined in three files.
+; Both preserve every register.
+rd_here_into:
     push ax
     push bx
     push dx
-    mov dx, [rd_bcwd]
-    mov bl, [rd_bdrv]
+    call OSAPI_FILE_HERE        ; DX = the folder, BL = its volume
+    mov [di], bl
+    mov [di+1], dx
+    jmp short rd_goto_q.out
+
+rd_goto_q:
+    push ax
+    push bx
+    push dx
+    mov bl, [di]
+    mov dx, [di+1]
     call OSAPI_FILE_GOTO_Q
+.out:
     pop dx
     pop bx
     pop ax
-    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -572,15 +502,10 @@ rd_here_back:
 ; nothing for the page to pass.
 ; -----------------------------------------------------------------------------
 rd_here_take:
-    push ax
-    push bx
-    push dx
-    call OSAPI_FILE_HERE
-    mov [rd_icwd], dx
-    mov [rd_idrv], bl
-    pop dx
-    pop bx
-    pop ax
+    push di
+    mov di, rd_idrv
+    call rd_here_into
+    pop di
     ret
 
 ; -----------------------------------------------------------------------------
@@ -597,11 +522,11 @@ rd_preserve:
     push di
     push es
     cmp byte [rd_vol], 0xFF
-    je .nomnt
+    je rd_img_emnt
     cmp byte [rd_iname], 0
-    je .noname
+    je rd_img_enoimg
     call rd_wbuf_get
-    jc .nomem
+    jc rd_img_emem
     call rd_meta_build
     mov es, [rd_wseg]           ; --- the metadata block, one write ----------
     xor bx, bx
@@ -609,85 +534,163 @@ rd_preserve:
     xor dx, dx
     mov si, rd_iname
     call OSAPI_FILE_WRITE
-    jc .nofile
+    jc rd_img_efile
     call rd_ctab_build          ; --- ...then the chain table, one append ----
     mov es, [rd_wseg]           ; ...which OPENS the image's one HELD stream
     xor bx, bx                  ; (SPEC.md 18.4.9): no lookup and no walk a
     mov cx, RDI_CTAB            ; chunk, and no FAT or directory write until
     mov word [rd_itok], 0       ; the close below. An image is useless until
     call rd_wseq                ; it is whole, so HELD's one loss is nothing
-    jc .nofile
+    jc rd_img_efile
     call rd_wbuf_free
-                                ; --- then the arena, chunk by chunk ---------
-    mov byte [rd_xerr], 0       ; ONE run, one verdict (SPEC.md 62.9.10.2)
-    mov word [rd_pos], 0
-    mov word [rd_pos+2], 0
+    call rd_chunk_first         ; --- then the arena, chunk by chunk ---------
 .chunk:
-    call rd_arena_left          ; DX:AX = bytes still to go
-    mov cx, ax
-    or cx, dx
-    jz .done
-    call rd_chunk_sz
-    mov cx, ax
-    call rd_arena_left
-    or dx, dx
-    jnz .full                   ; more than a chunk left, whatever the chunk is
-    cmp ax, cx
-    jae .full
-    mov cx, ax                  ; ...the tail, and it is a multiple of 4,096
-.full:                          ; because the store's size is (see the header)
-    mov [rd_ilen], cx           ; BANKED: a file slot's CX is an argument and
-                                ; not a documented survivor, and this is the
-                                ; count the position below advances by
-    mov ax, [rd_pos]
-    mov dx, [rd_pos+2]
+    jc .done
     call rd_blk_out             ; BX = a segment those bytes are readable in
     cmp byte [rd_xerr], 0       ; a refused copy down leaves the PREVIOUS chunk
-    jne .nofile2                ; there, and appending it is the corruption
-    mov cx, [rd_ilen]
-    mov es, bx
+    jne rd_img_efile                ; there, and appending it is the corruption
+    mov cx, [rd_ilen]           ; BANKED: a file slot's CX is an argument and
+    mov es, bx                  ; not a documented survivor
     xor bx, bx
     call rd_wseq
-    jc .nofile2
-    mov cx, [rd_ilen]
-    call rd_chunk_adv
+    jc rd_img_efile
+    call rd_chunk_next
     jmp short .chunk
 .done:
     xor cx, cx                  ; THE CLOSE: the link, the FAT and the size,
     call OSAPI_FILE_WRITE_SEQ   ; once. A failure is the disk's
-    jc .nofile2
+    jc rd_img_efile
     mov byte [rd_flags], RDCF_BOOT
     call rd_cfg_mark
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     clc
-    ret
-.nofile:
-    call rd_wbuf_free
-.nofile2:
-    mov al, RDERR_FILE
-    jmp short .fail
-.nomem:
-    mov al, RDERR_MEM
-    jmp short .fail
-.noname:
+    jmp short rd_img_out
+rd_img_emnt:                    ; (first: rd_preserve's opening test is the
+    mov al, RDERR_MNT           ; farthest jump to this block)
+    jmp short rd_img_fail
+rd_img_enoimg:
     mov al, RDERR_NOIMG
-    jmp short .fail
-.nomnt:
-    mov al, RDERR_MNT
-.fail:
-    pop es
+    jmp short rd_img_fail
+rd_img_emem:
+    mov al, RDERR_MEM
+    jmp short rd_img_fail
+rd_img_ebad:                    ; rd_load's: rd_meta_check said which
+    mov al, [rd_badcode]
+    jmp short rd_img_fail
+rd_img_efile:
+    mov al, RDERR_FILE
+rd_img_fail:                    ; AL = the RDERR_*. The 4KB block goes back if
+    call rd_wbuf_free           ; it is held, which is a no-op when it is not
+    stc                         ; ([rd_wown] is 0 outside a get/free pair) -
+                                ; so every failure can come through here
+rd_img_out:                     ; rd_preserve's and rd_load's ONE exit: their
+    pop es                      ; frames are the same six registers
     pop di
     pop si
     pop dx
     pop cx
     pop bx
-    stc
     ret
+
+; -----------------------------------------------------------------------------
+; rd_load - read [rd_iname] into the store and mount it
+; in:  nothing (the caller has set the name and the folder)
+; out: CF = 0 loaded and mounted; CF = 1 and AL = RDERR_*
+; clobbers: AL, flags
+;
+; The volume goes DOWN first, whatever happens next. A load replaces every
+; byte of the store including its size, so there is no state in which half of
+; the old volume and half of the new one are both reachable - which is the one
+; failure this could have that nothing on screen would show.
+; -----------------------------------------------------------------------------
+rd_load:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cmp byte [rd_iname], 0
+    je rd_img_enoimg
+    call rd_wbuf_get            ; the metadata first, into whatever buffer -
+    jc rd_img_emem              ; note this may be the EXTENDED path's bounce,
+                                ; which is why the store below is claimed
+                                ; AFTER the block has been read and checked
+    mov di, rd_rcur             ; a fresh cursor: the image may not be the
+    call os88_rseq_new          ; file the last Load read
+    mov cx, RDI_META
+    xor dx, dx
+    xor ax, ax
+    call rd_rblk                ; DX:AX = what arrived
+    jc rd_img_efile
+    cmp ax, RDI_META
+    jne rd_img_efile            ; a short read is not one of ours
+    call rd_meta_check
+    jc rd_img_ebad
+    mov ax, [es:RDI_KB]
+    mov [rd_want], ax           ; the size the image was made at
+
+    call rd_wbuf_free           ; ...and only now is the store touched
+    call rd_unmount
+    mov ax, [rd_want]
+    mov [rd_kb], ax
+    call rd_store_get
+    jc rd_img_emem
+    call rd_wbuf_get            ; a fresh one - on the extended path this is
+    jc rd_img_emem              ; the bounce the new store just claimed
+
+    mov cx, RDI_META            ; re-read the block: rd_wbuf_free let it go,
+    xor dx, dx                  ; and re-reading is cheaper than a second
+    xor ax, ax                  ; buffer held across the claim above
+    call rd_rblk
+    jc rd_img_efile
+    call rd_meta_apply          ; the directory, out of the block just read
+
+    mov cx, RDI_CTAB            ; ...and the CHAIN TABLE, out of its own block
+    xor dx, dx
+    mov ax, RDI_META
+    call rd_rblk
+    jc .nofile     
+    call rd_ctab_apply
+    call rd_wbuf_free
+
+    call rd_chunk_first         ; --- then the arena -------------------------
+.chunk:
+    jc .done
+    call rd_blk_out             ; the DESTINATION, by the same arithmetic that
+    push bx                     ; answers where a run is readable
+    mov es, bx
+    xor bx, bx
+    mov cx, [rd_ilen]
+    mov dx, [rd_pos+2]
+    mov ax, [rd_pos]
+    add ax, RDI_ARENA           ; the arena starts after BOTH metadata blocks
+    adc dx, 0                   ; one FAT link a chunk (SPEC.md 18.4.8.1)
+    call rd_rseq_at             ; CX is the capacity; DX:AX comes back as the
+    pop bx                      ; count, which for a whole chunk is CX
+    jc .nofile
+    cmp ax, [rd_ilen]           ; ...and a SHORT one is a truncated image, the
+    jne .nofile                ; same test the metadata block already makes -
+                                ; without it the store keeps whatever the fresh
+                                ; claim held and mounts over it
+    mov ax, [rd_pos]
+    mov dx, [rd_pos+2]
+    mov cx, [rd_ilen]
+    call rd_blk_in              ; extended: push the chunk up. Conventional it
+                                ; landed in the arena already and this is a ret
+    cmp byte [rd_xerr], 0       ; a refused copy either way means this chunk
+    jne .nofile                ; never reached the store (SPEC.md 62.9.10.2)
+    call rd_chunk_next
+    jmp short .chunk
+.done:
+    mov byte [rd_flags], RDCF_BOOT
+    call rd_cfg_mark
+    call rd_mount_after
+    jc .nomnt
+    jmp rd_img_out              ; CF = 0, and the frame is rd_preserve's
+.nomnt:
+    jmp rd_img_emnt
+.nofile:                        ; the chunk loop's refusals, which are too far
+    jmp rd_img_efile            ; down for a short jump back to the block
 
 ; rd_wseq - one HELD chunk of the image: ES:BX, CX bytes, onto [rd_iname]
 ; under [rd_itok]. out: CF/AX as OSAPI_FILE_WRITE_SEQ. clobbers: AX, SI, DI
@@ -699,18 +702,70 @@ rd_wseq:
     mov [rd_itok], di           ; (`mov`: CF stays the answer)
     ret
 
-; rd_arena_left - DX:AX = the arena bytes this preserve has not moved yet
-rd_arena_left:
+; -----------------------------------------------------------------------------
+; rd_chunk_first / rd_chunk_next - the arena's runs, for a Preserve or a Load
+; out: CF = 1 = the whole arena has moved, and DX:AX = 0, what is left of it;
+;      CF = 0 = CX = [rd_ilen] = the next run's length and DX:AX = [rd_pos] =
+;      where in the arena it starts
+; clobbers: AX, CX, DX, flags
+;
+; rd_chunk_first starts the run - [rd_pos] = 0 and [rd_xerr] clear, ONE run
+; being one verdict (SPEC.md 62.9.10.2) - and rd_chunk_next first advances
+; [rd_pos] past the run it handed out last. A run is a whole chunk, or the
+; TAIL, which is a multiple of 4,096 because the store's size is (see the
+; header). [rd_ilen] is BANKED and not left in CX alone: a file slot's CX is
+; an argument and not a documented survivor.
+;
+; THE CLOSE THAT FOLLOWS IN rd_preserve RELIES ON DX:AX = 0 HERE: it hands
+; OSAPI_FILE_WRITE_SEQ the AL the last pass left, exactly as it always has.
+; -----------------------------------------------------------------------------
+rd_chunk_first:
+    xor ax, ax
+    mov [rd_xerr], al
+    mov [rd_pos], ax
+    mov [rd_pos+2], ax
+    mov [rd_ilen], ax
+rd_chunk_next:
+    mov ax, [rd_ilen]
+    add [rd_pos], ax
+    adc word [rd_pos+2], 0
+    call rd_kb_bytes            ; DX:AX = the arena...
+    sub ax, [rd_pos]
+    sbb dx, [rd_pos+2]          ; ...less what has moved
+    mov cx, ax
+    or cx, dx
+    stc
+    jz .out                     ; nothing left
+    mov cx, RDI_CHUNK
+    cmp byte [rd_loc], RDL_XMS
+    jne .sz
+    mov cx, RDI_XCHUNK          ; through the bounce, which is RDI_META or an
+.sz:                            ; extent, whichever is larger - so 4KB a time
+    or dx, dx
+    jnz .full                   ; more than a chunk left, whatever the chunk is
+    cmp ax, cx
+    jae .full
+    mov cx, ax                  ; ...the tail
+.full:
+    mov [rd_ilen], cx
+    mov ax, [rd_pos]
+    mov dx, [rd_pos+2]
+    clc
+.out:
+    ret
+
+; rd_kb_bytes - DX:AX = [rd_kb] * 1024, the store in bytes: 16MB is far past
+; a word, and the two shifts are the whole of the arithmetic.
+; clobbers: AX, DX (the output)
+rd_kb_bytes:
+    push cx
     mov ax, [rd_kb]
     mov dx, ax
-    push cx
     mov cl, 10
     shl ax, cl
     mov cl, 6
     shr dx, cl
     pop cx
-    sub ax, [rd_pos]
-    sbb dx, [rd_pos+2]
     ret
 
 ; -----------------------------------------------------------------------------
@@ -742,55 +797,38 @@ rd_meta_build:
     mov [es:RDI_EXTB], ax       ; from the size now, so it is recorded and
     mov ax, [rd_kb]             ; adopted rather than compared (SPEC.md 62.9.10)
     mov [es:RDI_KB], ax
-    mov dx, ax                  ; the arena's byte count, in 32 bits
-    mov cl, 10
-    shl ax, cl
-    mov cl, 6
-    shr dx, cl
+    call rd_kb_bytes            ; the arena's byte count, in 32 bits
     mov [es:RDI_BYTES], ax
     mov [es:RDI_BYTES+2], dx
 
     xor dx, dx                  ; DX = live rows written
     mov di, RDI_DIR
-    mov si, rd_dir
-    xor bl, bl                  ; BL = the row index
+    push ds
+    mov ds, [rd_dtab]           ; the directory is the SOURCE of the moves
+    xor si, si                  ; below, so it is DS for the length of the
+    xor bx, bx                  ; walk (SPEC.md 62.9.13.1). BL = the row index
 .row:
-    cmp bl, RD_MAXENT
-    jae .rows
     cmp byte [si+RDE_TYPE], RD_FREE
     je .next
-    mov [es:di+RDI_E_IDX], bl
-    mov al, [si+RDE_PAR]
-    mov [es:di+RDI_E_PAR], al
-    mov al, [si+RDE_TYPE]
-    mov [es:di+RDI_E_TYPE], al
-    mov byte [es:di+RDI_E_PAD], 0
-    mov ax, [si+RDE_EXT]
-    mov [es:di+RDI_E_EXT], ax
-    mov ax, [si+RDE_SIZE]
-    mov [es:di+RDI_E_SIZE], ax
-    mov ax, [si+RDE_SIZE+2]
-    mov [es:di+RDI_E_SIZE+2], ax
-    push si
-    push di
-    add si, RDE_NAME
-    add di, RDI_E_NAME
-    mov cx, 14
-.name:
-    mov al, [si]
-    mov [es:di], al
-    inc si
-    inc di
-    loop .name
-    pop di
+    push si                     ; A RECORD IS THE ROW WITH TWO BYTES ADDED -
+    mov [es:di], bl             ; the index in front and a pad after the type
+    inc di                      ; (rdabi.inc) - so it is two string moves
+    movsw                       ; around them: PAR and TYPE...
+    inc di                      ; ...RDI_E_PAD, which the zeroed block holds...
+    mov cx, (RDI_ESZ - RDI_E_EXT) / 2
+    rep movsw                   ; ...and EXT, SIZE and the name's first 14
     pop si
-    add di, RDI_ESZ
     inc dx
 .next:
     add si, RDE_SZ
-    inc bl
-    jmp short .row
+    inc bx
+    cmp bl, RD_MAXENT
+    jb .row
+%if RDE_PAR != 0 || RDE_TYPE != 1 || RDI_E_PAR != 1 || RDI_E_TYPE != 2 || RDI_E_EXT != 4 || RDE_EXT != 2 || RDI_E_SIZE - RDI_E_EXT != RDE_SIZE - RDE_EXT || RDI_E_NAME - RDI_E_EXT != RDE_NAME - RDE_EXT || RDI_ESZ - RDI_E_NAME > RDE_SZ - RDE_NAME || (RDI_ESZ - RDI_E_EXT) & 1
+  %error "ramdisk: rd_meta_build's two moves assume the record is the row plus IDX and PAD"
+%endif
 .rows:
+    pop ds
     mov [es:RDI_NENT], dx
     pop es
     pop di
@@ -843,184 +881,23 @@ rd_ctab_build:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; rd_load - read [rd_iname] into the store and mount it
-; in:  nothing (the caller has set the name and the folder)
-; out: CF = 0 loaded and mounted; CF = 1 and AL = RDERR_*
-; clobbers: AL, flags
-;
-; The volume goes DOWN first, whatever happens next. A load replaces every
-; byte of the store including its size, so there is no state in which half of
-; the old volume and half of the new one are both reachable - which is the one
-; failure this could have that nothing on screen would show.
-; -----------------------------------------------------------------------------
-rd_load:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    cmp byte [rd_iname], 0
-    je .noname
-    call rd_wbuf_get            ; the metadata first, into whatever buffer -
-    jc .nomem                   ; note this may be the EXTENDED path's bounce,
-                                ; which is why the store below is claimed
-                                ; AFTER the block has been read and checked
+; rd_rblk    - CX bytes of the image at DX:AX into the 4KB block, [rd_wseg]:0
+; rd_rseq_at - ...or into ES:BX
+; out: os88_rseq's - CF, DX:AX = what arrived; ES = the buffer
+; clobbers: SI, DI (and BX, ES for rd_rblk)
+rd_rblk:
     mov es, [rd_wseg]
     xor bx, bx
-    mov cx, RDI_META
-    xor dx, dx
-    xor ax, ax
-    mov si, rd_iname
-    mov di, rd_rcur             ; a fresh cursor: the image may not be the
-    call os88_rseq_new          ; file the last Load read
-    call os88_rseq              ; DX:AX = what arrived
-    jc .nofile
-    cmp ax, RDI_META
-    jne .nofile                 ; a short read is not one of ours
-    call rd_meta_check
-    jc .badfmt
-    mov ax, [es:RDI_KB]
-    mov [rd_want], ax           ; the size the image was made at
-
-    call rd_wbuf_free           ; ...and only now is the store touched
-    call rd_unmount
-    mov ax, [rd_want]
-    mov [rd_kb], ax
-    call rd_store_get
-    jc .nomem2
-    call rd_wbuf_get            ; a fresh one - on the extended path this is
-    jc .nomem2                  ; the bounce the new store just claimed
-
-    mov es, [rd_wseg]           ; re-read the block: rd_wbuf_free let it go,
-    xor bx, bx                  ; and re-reading is cheaper than a second
-    mov cx, RDI_META            ; buffer held across the claim above
-    xor dx, dx
-    xor ax, ax
+rd_rseq_at:
     mov si, rd_iname
     mov di, rd_rcur
-    call os88_rseq
-    jc .nofile
-    call rd_meta_apply          ; the directory, out of the block just read
-
-    mov es, [rd_wseg]           ; ...and the CHAIN TABLE, out of its own block
-    xor bx, bx
-    mov cx, RDI_CTAB
-    xor dx, dx
-    mov ax, RDI_META
-    mov si, rd_iname
-    mov di, rd_rcur
-    call os88_rseq
-    jc .nofile
-    call rd_ctab_apply
-    call rd_wbuf_free
-
-    mov byte [rd_xerr], 0       ; ONE run, one verdict (SPEC.md 62.9.10.2)
-    mov word [rd_pos], 0        ; --- then the arena -------------------------
-    mov word [rd_pos+2], 0
-.chunk:
-    call rd_arena_left
-    mov cx, ax
-    or cx, dx
-    jz .done
-    call rd_chunk_sz
-    mov cx, ax
-    call rd_arena_left
-    or dx, dx
-    jnz .full
-    cmp ax, cx
-    jae .full
-    mov cx, ax
-.full:
-    mov [rd_ilen], cx           ; banked, for rd_preserve's reason
-    mov ax, [rd_pos]
-    mov dx, [rd_pos+2]
-    call rd_blk_out             ; the DESTINATION, by the same arithmetic that
-    push bx                     ; answers where a run is readable
-    mov es, bx
-    xor bx, bx
-    mov cx, [rd_ilen]
-    mov dx, [rd_pos+2]
-    mov ax, [rd_pos]
-    add ax, RDI_ARENA           ; the arena starts after BOTH metadata blocks
-    adc dx, 0
-    mov si, rd_iname
-    mov di, rd_rcur             ; one FAT link a chunk (SPEC.md 18.4.8.1)
-    call os88_rseq              ; CX is the capacity; DX:AX comes back as the
-    pop bx                      ; count, which for a whole chunk is CX
-    jc .nofile3
-    cmp ax, [rd_ilen]           ; ...and a SHORT one is a truncated image, the
-    jne .nofile3                ; same test the metadata block already makes -
-                                ; without it the store keeps whatever the fresh
-                                ; claim held and mounts over it
-    mov ax, [rd_pos]
-    mov dx, [rd_pos+2]
-    mov cx, [rd_ilen]
-    call rd_blk_in              ; extended: push the chunk up. Conventional it
-                                ; landed in the arena already and this is a ret
-    cmp byte [rd_xerr], 0       ; a refused copy either way means this chunk
-    jne .nofile3                ; never reached the store (SPEC.md 62.9.10.2)
-    mov cx, [rd_ilen]
-    call rd_chunk_adv
-    jmp short .chunk
-.done:
-    mov byte [rd_flags], RDCF_BOOT
-    call rd_cfg_mark
-    call rd_mount_after
-    jc .nomnt
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
-.nofile:
-    call rd_wbuf_free
-.nofile3:
-    mov al, RDERR_FILE
-    jmp short .fail
-.badfmt:
-    call rd_wbuf_free
-    mov al, [rd_badcode]
-    jmp short .fail
-.nomem:
-    mov al, RDERR_MEM
-    jmp short .fail
-.nomem2:
-    call rd_wbuf_free
-    mov al, RDERR_MEM
-    jmp short .fail
-.noname:
-    mov al, RDERR_NOIMG
-    jmp short .fail
-.nomnt:
-    mov al, RDERR_MNT
-.fail:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    stc
-    ret
-
-; rd_chunk_adv - [rd_pos] += CX
-rd_chunk_adv:
-    push ax
-    mov ax, cx
-    add [rd_pos], ax
-    adc word [rd_pos+2], 0
-    pop ax
-    ret
+    jmp os88_rseq
 
 ; -----------------------------------------------------------------------------
 ; rd_mount_after - put the volume on the desktop over a store that is ALREADY
-;                  filled (rd_load's tail)
-; out: CF = 0; CF = 1 = no volume row, or the kernel refused
+;                  filled (rd_load's tail, and rd_mount's)
+; out: CF = 0; CF = 1 and AL = RDERR_VOL (no volume row) or RDERR_MNT (the
+;      kernel refused), with the row given back
 ;
 ; rd_mount's second half, without the claim and without the directory clear -
 ; which is the whole difference, the directory having just been restored.
@@ -1029,29 +906,28 @@ rd_mount_after:
     push cx
     push dx
     push si
-    xor al, al
-    xor cx, cx
-    xor dx, dx
+    xor al, al                  ; our own volume handle: there is one RAM disk
+    xor cx, cx                  ; no sector count - there are no sectors
+    xor dx, dx                  ; no donated listing claim: the .lowbss floor
     mov si, rd_label
     call OSAPI_VOL_ADD
-    jc .no
+    jc .norow
     mov [rd_vol], al
-    call OSAPI_VOL_MOUNT
-    jc .nomnt
-    pop si
-    pop dx
-    pop cx
-    clc
-    ret
-.nomnt:
+    call OSAPI_VOL_MOUNT        ; AL survives: it is the volume index
+    jnc .out
     mov al, [rd_vol]
     call OSAPI_VOL_DEL
     mov byte [rd_vol], 0xFF
-.no:
+    mov al, RDERR_MNT
+    jmp short .fail
+.norow:
+    mov al, RDERR_VOL
+.fail:
+    stc
+.out:
     pop si
     pop dx
     pop cx
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1109,9 +985,10 @@ rd_meta_check:
     ret
 
 ; -----------------------------------------------------------------------------
-; rd_meta_apply - the block in ES -> the directory and the chain table
-; in:  ES = the block, and the store is already claimed at its size
-; out: nothing
+; rd_meta_apply - the block in ES -> the directory
+; in:  ES = the block, and the store is already claimed at its size - which is
+;      what claimed the directory too (SPEC.md 62.9.13.1)
+; out: nothing; ES = the directory
 ;
 ; THE ROW INDEX COMES OUT OF THE RECORD, which is what makes a handle survive
 ; a round trip: a handle is `row index + 1` and the parent column is a handle,
@@ -1123,78 +1000,62 @@ rd_meta_check:
 ; -----------------------------------------------------------------------------
 rd_meta_apply:
     push ax
-    push bx
     push cx
-    push dx
     push si
     push di
-    call rd_dir_clear
-    mov cx, [es:RDI_NENT]
-    jcxz .done
+    push ds
+    push es                     ; the block...
+    call rd_dir_clear           ; ...ES = the directory...
+    pop ds                      ; ...and DS = the block, so the block is read
+    mov cx, [RDI_NENT]          ; plainly and the rows through ES - and the
+    jcxz .done                  ; name is one rd_scopy, DS:SI -> ES:DI
     mov si, RDI_DIR
 .rec:
-    mov bl, [es:si+RDI_E_IDX]
-    cmp bl, RD_MAXENT
+    mov al, [si+RDI_E_IDX]
+    cmp al, RD_MAXENT
     jae .next                   ; a row this build does not have
-    xor bh, bh
-    mov ax, bx
-    push cx
-    mov cx, RDE_SZ
-    mul cx
-    pop cx
-    mov di, ax
-    add di, rd_dir
-    mov al, [es:si+RDI_E_TYPE]
+    mov ah, RDE_SZ              ; ...and the row's offset, by a byte multiply
+    mul ah
+    xchg ax, di
+    mov al, [si+RDI_E_TYPE]
     cmp al, 2
     ja .next                    ; not a type we serve
-    mov [di+RDE_TYPE], al
-    mov al, [es:si+RDI_E_PAR]
+    mov [es:di+RDE_TYPE], al
+    mov al, [si+RDI_E_PAR]
     cmp al, RD_MAXENT
     ja .drop
-    mov [di+RDE_PAR], al
-    mov ax, [es:si+RDI_E_EXT]
+    mov [es:di+RDE_PAR], al
+    mov ax, [si+RDI_E_EXT]
     cmp ax, RD_NOEXT
     je .ext
-    cmp ax, [rd_next]           ; an extent this store does not have: the record
-    jb .ext                     ; came off a DISK and is not to be believed
+    cmp ax, [cs:rd_next]        ; an extent this store does not have: the
+    jb .ext                     ; record came off a DISK and is not to be
+                                ; believed (CS: DS is the block here)
 .drop:
-    mov byte [di+RDE_TYPE], RD_FREE
+    mov byte [es:di+RDE_TYPE], RD_FREE
     jmp short .next
 .ext:
-    mov [di+RDE_EXT], ax
-    mov ax, [es:si+RDI_E_SIZE]
-    mov [di+RDE_SIZE], ax
-    mov ax, [es:si+RDI_E_SIZE+2]
-    mov [di+RDE_SIZE+2], ax
+    mov [es:di+RDE_EXT], ax
+    mov ax, [si+RDI_E_SIZE]
+    mov [es:di+RDE_SIZE], ax
+    mov ax, [si+RDI_E_SIZE+2]
+    mov [es:di+RDE_SIZE+2], ax
     push cx
     push si
-    push di
     add si, RDI_E_NAME
     add di, RDE_NAME
-    mov cx, 13
-.name:
-    mov al, [es:si]
-    mov [di], al
-    or al, al
-    jz .named
-    inc si
-    inc di
-    loop .name
-.named:
-    mov byte [di], 0            ; ...whatever the image said, ours is NUL-ended
-    pop di
+    mov cx, 13                  ; ...whatever the image said, ours is
+    call rd_scopy               ; NUL-ended: 13 characters at most, then a NUL
     pop si
     pop cx
 .next:
     add si, RDI_ESZ
     loop .rec
-.done:
-    mov byte [rd_cwd], 0
+.done:                          ; ([rd_cwd] = 0, the root: rd_dir_clear)
+    pop ds
     pop di
     pop si
-    pop dx
     pop cx
-    pop bx
     pop ax
     ret
 

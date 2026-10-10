@@ -53,10 +53,43 @@ The disk is read back with os88flush rather than by asking os8088 - the writer
 and the reader here are one FAT12 implementation, so the one bug a write can
 have that matters is the one that cannot be seen from inside (docs/FIELD-NOTES.md
 4's rule).
+
+`--glyph` IS A SECOND ROW (`lzglyph`), and its subject is the CLEAR PREFIX.
+A package's prefix is the header, the icon, the association block and - when
+flags bit 5 says so - the 16-byte DOCUMENT GLYPH (SPEC.md 54.3.2), and
+Compress and Uncompress must agree on it to the byte: the stream starts where
+the prefix ends. CALC.O88 above has no glyph (flags 0x09), so the main row
+cannot reach the glyph rung of the ladder at all. DOS.O88 and VIDEO.O88 are
+the shipped packages that have one (flags 0x2B), and they go on a scratch B:
+EXACTLY AS THE BUILD SHIPS THEM - LZ4, which is what a user has - and each is
+taken round the whole loop:
+
+  unz    Uncompress the shipped file: the result must be
+         os88pkg.image_unwrap() of it, byte for byte, and say `Uncompressed`
+  run1   ...and it must LAUNCH: a window opens, and is closed again
+  cz     Compress it: byte for byte what pkg_want() says - LZB, the same
+         prefix, flags bits 3 and 4
+  unz2   Uncompress that: the image again
+  run2   ...and it launches again
+
+RED (docs/WRITING-TESTS.md 1). `cmz_cpre` is the ONE ladder both verbs ask
+(kernel/compress.inc, which rides in CLONE.DRV), and Uncompress once carried a
+copy of it that stopped at the association block. To put that back: in a copy
+of the tree, give Uncompress's call site (the one under `.rplain`, beside the
+comment naming DOS.O88 and VIDEO.O88) `and al, 0xDF` in front of its `call
+cmz_cpre`, so that one ask sees no glyph bit; `make os8088-360.img` there, and
+run `python3 <copy>/tests/lzcomp.py --glyph` FROM that tree, so the kernel, the
+module and the symbol map all agree. Both packages then answer `Cannot expand
+this one` at `unz` with the file left as it was, `cz` answers `Already
+compressed` over the same LZ4 file, and `unz2` fails as `unz` did - six byte
+legs red. The two launch legs stay GREEN, and must: the file is left exactly
+as it shipped, which runs. Measured: 34s red, 63s green.
 """
 import argparse
 import os
+import shutil
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
@@ -295,10 +328,124 @@ def compress(m, mo, wx, wy, name, fails, quiet=30, item=FM_ICOMP):
     return ""
 
 
+GLYPHS = ("DOS.O88", "VIDEO.O88")     # the shipped packages whose flags
+                                        # carry LD_HF_GLYPH (0x2B) - checked
+                                        # in glyph(), so a build that drops
+                                        # the glyph from one stops the row
+                                        # rather than quietly testing the
+                                        # ladder's other rungs
+LD_HF_GLYPH, LD_HF_LZ = 0x20, 0x08
+
+
+def first_diff(a, b):
+    return next((k for k in range(min(len(a), len(b))) if a[k] != b[k]),
+                min(len(a), len(b)))
+
+
+def launches(ui, wx, wy, name, tag, fails):
+    """Double-click `name` and require a window; then close it, so the Disk
+    window is the one the next leg's row click lands in.
+
+    `os88ui.open` reads the entry's TYPE first, waits for the window a
+    package opens and RAISES with `ld_status`'s refusal in words when none
+    comes - which is the diagnosis this leg wants when the bytes are wrong:
+    SPEC.md 21's header checks are what a bad expansion trips."""
+    named = next((w for w in os88ui.geom.windows(ui.m, S)
+                  if (w.x, w.y) == (wx, wy) and w.visible), None)
+    try:
+        w = ui.open(name, expect="window", win=named)
+    except os88ui.UIError as e:
+        say("  %-10s BAD  %s opened no window" % (tag, name))
+        fails.append("%s: %s opened no window - %s" % (tag, name, e))
+        return
+    say("  %-10s ok   %s opened %r" % (tag, name, w.title))
+    try:
+        ui.close(w)
+    except os88ui.UIError as e:
+        fails.append("%s: %s's window would not close - %s" % (tag, name, e))
+
+
+def glyph(a):
+    """The `lzglyph` row: Uncompress, launch, Compress, Uncompress, launch,
+    on both shipped flags-0x2B packages (the docstring's last section)."""
+    ship = {n: open(os88build.at("build/%s" % n.lower()), "rb").read()
+            for n in GLYPHS}
+    for n in GLYPHS:
+        want_flags = LD_HF_GLYPH | LD_HF_LZ
+        if ship[n][3] & want_flags != want_flags:
+            sys.exit("lzglyph: build/%s has flags %#x - it must carry the "
+                     "document glyph (0x20) AND be compressed (0x08), or the "
+                     "leg it is here for tests nothing"
+                     % (n.lower(), ship[n][3]))
+    image = {n: os88pkg.image_unwrap(f) for n, f in ship.items()}
+    want = {n: pkg_want(image[n]) for n in GLYPHS}
+    for n in GLYPHS:
+        say("lzglyph: %s shipped %d bytes (flags %#x), image %d, clear prefix "
+            "%d, LZB re-pack expected %d"
+            % (n, len(ship[n]), ship[n][3], len(image[n]),
+               os88pkg.clear_prefix(image[n][3]), len(want[n])))
+
+    fails = []
+    work = tempfile.mkdtemp(prefix="lzglyph-")     # per-run: this row WRITES
+    try:                                           # its disk (main's reason)
+        disk = os88marty.scratch_disk(
+            os.path.join(work, "b.img"),
+            *[stage(work, n, ship[n]) for n in GLYPHS], size=360)
+        with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
+                         machine=MACHINE[a.adapter], verbose=False) as ui:
+            m, mo = ui.m, ui.mo
+            _UI[id(m)] = ui
+            fl = os88flush.Flush(marty=m)
+            bw = ui.open_drive("B")
+            wx, wy = bw.x, bw.y
+            for n in GLYPHS:
+                tag = n.split(".")[0].lower()
+
+                def leg(sub, item, quiet, expect, said):
+                    t = compress(m, mo, wx, wy, n, fails, quiet=quiet,
+                                 item=item)
+                    got = fl.volume(1).read(n)
+                    ok = t.startswith(said) and got == expect
+                    say("  %-10s %s  %r (%d bytes, wanted %d%s)"
+                        % (tag + "-" + sub, "ok " if ok else "BAD", t,
+                           len(got), len(expect), "" if ok else
+                           ", first difference at %d" % first_diff(got,
+                                                                   expect)))
+                    if not ok:
+                        fails.append(
+                            "%s %s: %r and %d bytes against %d, first "
+                            "difference at byte %d - the clear prefix is %d "
+                            "bytes and the glyph block is its last 16"
+                            % (n, sub, t, len(got), len(expect),
+                               first_diff(got, expect),
+                               os88pkg.clear_prefix(image[n][3])))
+
+                leg("unz", FM_IUNCOMP, 120, image[n], "Uncompressed")
+                launches(ui, wx, wy, n, tag + "-run1", fails)
+                leg("cz", FM_ICOMP, 180, want[n], "")
+                leg("unz2", FM_IUNCOMP, 120, image[n], "Uncompressed")
+                launches(ui, wx, wy, n, tag + "-run2", fails)
+            rc, why = fl.verify(1)
+            say("  fsck       %s  %s" % ("ok " if rc == 0 else "BAD", why))
+            if rc:
+                fails.append("B: does not fsck clean: %s" % why)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    for f in fails:
+        say("  FAIL: " + f)
+    say("lzglyph: %s" % ("FAILED" if fails else "ok"))
+    return 1 if fails else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--adapter", default="cga", choices=sorted(MACHINE))
+    ap.add_argument("--glyph", action="store_true",
+                    help="the lzglyph row: Uncompress/Compress round trips "
+                         "on the shipped flags-0x2B packages")
     a = ap.parse_args()
+    if a.glyph:
+        return glyph(a)
 
     for f in ("build/os8088-360.img", "build/hello.o88"):
         if not os.path.exists(os88build.at(f)):

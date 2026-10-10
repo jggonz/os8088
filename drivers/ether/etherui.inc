@@ -39,132 +39,94 @@ EU_B2X      equ 76             ; ...and the second button beside it
 EU_B3X      equ 150            ; ...and the third, which ends at 217 of the
                                ; pane's 221 - the row is full and a fourth
                                ; would have to go somewhere else
-EU_BRENEW   equ 1              ; what the press arms (os88ui_arm's token)
-EU_BSETUP   equ 2
-EU_BBUF     equ 3
+EU_BRENEW   equ 1              ; what the press arms (os88ui_arm's token) -
+EU_BSETUP   equ 2              ; and CONSECUTIVE, in eth_r1..eth_r3's order:
+EU_BBUF     equ 3              ; eth_bhit counts along them
 EU_BH       equ 16
 
 ; -----------------------------------------------------------------------------
 ; DSV_CPPAINT - DI = pane left, DX = pane top
 ; -----------------------------------------------------------------------------
 eth_cp_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [eth_px], di
-    mov [eth_py], dx
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
+    call eu_pane
 
     mov si, eth_cpname
     mov bx, EU_HY
     call eu_lab
 
-    ; --- the card ------------------------------------------------------------
+    ; --- the seven row labels, which are seven strings end to end ----------
     mov si, eu_s_card
     mov bx, EU_Y0
-    call eu_lab
+    mov cx, EU_NLAB
+.lab:
+    call eu_lab                 ; (it and FONT_RUN keep SI and CX)
+.skip:
+    inc si                      ; ...past this one's NUL to the next
+    cmp byte [si-1], 0
+    jne .skip
+    add bx, EU_ROW
+    loop .lab
+
+    ; --- the card ------------------------------------------------------------
+    mov bx, EU_Y0
     mov si, eu_s_ne1
     cmp byte [eth_word], 0
     je  .kind
     mov si, eu_s_ne2
 .kind:
-    mov bx, EU_Y0
     call eu_val
     mov ax, [eth_base]
-    mov bx, EU_Y0
     mov cx, EU_VX + 64
     call eu_hex
 
     ; --- and its address, which is a fact about the hardware -----------------
-    mov si, eu_s_mac
-    mov bx, EU_Y0 + EU_ROW
-    call eu_lab
+    add bx, EU_ROW
     call eu_macstr
     mov si, eu_buf
-    mov bx, EU_Y0 + EU_ROW
     call eu_val
 
     ; --- then the three the network gave us ----------------------------------
-    mov si, eu_s_addr
-    mov bx, EU_Y0 + EU_ROW * 2
-    call eu_lab
+    add bx, EU_ROW
     mov si, eth_ip
-    mov bx, EU_Y0 + EU_ROW * 2
     call eu_ip
-
-    mov si, eu_s_gw
-    mov bx, EU_Y0 + EU_ROW * 3
-    call eu_lab
+    add bx, EU_ROW
     mov si, eth_gw
-    mov bx, EU_Y0 + EU_ROW * 3
     call eu_ip
-
-    mov si, eu_s_dns
-    mov bx, EU_Y0 + EU_ROW * 4
-    call eu_lab
+    add bx, EU_ROW
     mov si, eth_dns
-    mov bx, EU_Y0 + EU_ROW * 4
     call eu_ip
 
     ; --- how it got there ----------------------------------------------------
-    mov si, eu_s_dhcp
-    mov bx, EU_Y0 + EU_ROW * 5
-    call eu_lab
-    mov si, eu_s_idle
+    add bx, EU_ROW
+    mov si, eu_s_manual
     cmp byte [eth_mode], ECM_MAN    ; **THE MODE, NOT THE STATE.** A manual
-    jne .dauto                      ; machine has dhcp_st = DH_BOUND so that
-    mov si, eu_s_manual             ; NETV_STATE reports a link, and a row
-    jmp short .dsay                 ; reading `Bound` there would be saying a
-.dauto:                             ; server answered when none was asked
-    mov al, [dhcp_st]
-    cmp al, DH_BOUND
-    jne .d1
-    mov si, eu_s_bound
-    jmp short .dsay
-.d1:
-    cmp al, DH_FAIL
-    jne .d2
-    mov si, eu_s_nosrv
-    jmp short .dsay
-.d2:
-    cmp al, DH_IDLE
-    je  .dsay
-    mov si, eu_s_asking
+    je  .dsay                       ; machine has dhcp_st = DH_BOUND so that
+    push bx                         ; NETV_STATE reports a link, and a row
+    mov bl, [dhcp_st]               ; reading `Bound` there would be saying a
+    xor bh, bh                      ; server answered when none was asked.
+    shl bx, 1                       ; Otherwise the STATE names its word,
+    mov si, [eu_dhs+bx]             ; one per DH_*
+    pop bx
 .dsay:
-    mov bx, EU_Y0 + EU_ROW * 5
     call eu_val
 
     ; --- and what has crossed it ---------------------------------------------
-    mov si, eu_s_rx
-    mov bx, EU_Y0 + EU_ROW * 6
-    call eu_lab
+    add bx, EU_ROW
     mov ax, [eth_nrx]
-    mov bx, EU_Y0 + EU_ROW * 6
     mov cx, EU_VX
     call eu_dec
     mov si, eu_s_tx
-    mov bx, EU_Y0 + EU_ROW * 6
     mov cx, EU_VX + 48
     call eu_txt
     mov ax, [eth_ntx]
-    mov bx, EU_Y0 + EU_ROW * 6
     mov cx, EU_VX + 80
     call eu_dec
 
     ; --- the two buttons -----------------------------------------------------
     call eth_draw_btns
 
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_bp
 
 ; -----------------------------------------------------------------------------
 ; DSV_CPCLICK - CX = pane-relative x, BX = pane-relative y, DI/DX = the pane
@@ -175,15 +137,8 @@ eth_cp_paint:
 ; perfectly.
 ; -----------------------------------------------------------------------------
 eth_cp_click:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [eth_px], di
-    mov [eth_py], dx
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
+    call eu_pane
     cmp byte [eth_up], 0
     je  .out
     call eth_bhit
@@ -205,33 +160,32 @@ eth_cp_click:
     pop ax                      ; Up because it opens a window
     call eth_setdown
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_bp
 
 ; -----------------------------------------------------------------------------
-; DSV_CPUP - the release (SPEC.md 13.8.4). Same arguments as DSV_CPCLICK.
+; DSV_CPDRAG - the tracking edge (SPEC.md 13.8.1/13.8.4), and DSV_CPUP - the
+; release (SPEC.md 13.8.4). Same arguments as DSV_CPCLICK, and ONE BODY: both
+; ask whether the pointer is on the control the press armed, and differ only
+; in what the answer does - a drag draws it, a release fires it. CF on the way
+; in says which; neither the pushes nor eu_pane write a flag.
 ; -----------------------------------------------------------------------------
-eth_cp_up:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [eth_px], di
-    mov [eth_py], dx
+eth_cp_drag:
+    CLC_OR_STC eth_cp_up
+eu_ud:
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
+    call eu_pane                ; ...after which DX is spent, so DL says which
+    mov dl, 1
+    jc  .fire
+    dec dx                      ; DL = 0: a drag
+    call os88ui_armed           ; PEEK: the arm is the release's to spend
+    jmp short .got
+.fire:
     call os88ui_fire            ; what the press armed, and it is CLEARED
+.got:
     or  ax, ax
     jz  .out
-    mov dh, al                  ; ...against a FRESH hit at the release point:
-                                ; equal and non-zero is the whole gesture, and
+    mov dh, al                  ; ...against a FRESH hit at this point: equal
+                                ; and non-zero is the whole gesture, and
                                 ; anything else is a change of mind.
                                 ; **DH AND NOT BL**: BX is the page ABI's
                                 ; PANE-RELATIVE Y (SPEC.md 31.1) and eth_bhit
@@ -240,14 +194,15 @@ eth_cp_up:
                                 ; 2 - which is off both buttons, so every
                                 ; release cancelled and `Set Up` opened
                                 ; nothing on a page that drew and armed
-                                ; perfectly. DX is dead from the [eth_py]
-                                ; store above and eth_bhit preserves it
+                                ; perfectly. eth_bhit preserves DX
     call eth_bhit
-    jc  .cancel
-    cmp al, dh
-    jne .cancel
+    jc  .off
+    cmp al, dh                  ; on a DIFFERENT button is off this one
+    jne .off
+    or  dl, dl
+    jz  .set                    ; a drag on it: drawn pressed
     cmp byte [eth_up], 0
-    je  .cancel
+    je  .off
     mov byte [eth_down], 0      ; NOT eth_setdown: every arm below repaints the
                                 ; whole pane with this button upright in it,
                                 ; and drawing it upright FIRST is
@@ -286,52 +241,17 @@ eth_cp_up:
                                 ; repainting the pane after it paints straight
                                 ; over its corner, which is what the Install
                                 ; dialog arrived doing (drivers/hdd/page.inc)
-.cancel:
-    xor al, al
-    call eth_setdown
-.out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; DSV_CPDRAG - the tracking edge (SPEC.md 13.8.1/13.8.4)
-; -----------------------------------------------------------------------------
-eth_cp_drag:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [eth_px], di
-    mov [eth_py], dx
-    call os88ui_armed           ; PEEK: the arm is the release's to spend
-    or  ax, ax
-    jz  .out
-    mov dh, al                  ; DH, for eth_cp_up's reason: BL is the low
-    call eth_bhit               ; half of the pane-relative y eth_bhit reads
-    jc  .off
-    cmp al, dh                  ; on a DIFFERENT button is off this one
-    je  .set
 .off:
-    xor al, al
-.set:
+    xor al, al                  ; off it: drawn up, and a release that slid
+.set:                           ; off has thought better of it
     call eth_setdown            ; ...which draws only if that CHANGED
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp ep_bp
+
+; --- eu_pane - bank the pane's corner, DI/DX, for everything below ---------
+eu_pane:
+    mov [eth_px], di
+    mov [eth_py], dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -346,33 +266,34 @@ eth_cp_drag:
 eth_brects:
     push ax
     push bx
-    mov ax, [eth_px]
-    add ax, EU_BX
-    mov [eth_r1], ax
+    push cx
+    push dx
+    push si
+    mov si, eu_bxs
+    mov bx, eth_r1              ; eth_r1, eth_r2, eth_r3: eight bytes apart
+    mov dx, [eth_py]
+    add dx, EU_BY
+    mov cx, 3
+.r:
+    mov al, [si]
+    inc si
+    xor ah, ah
+    add ax, [eth_px]
+    mov [bx], ax
     add ax, EU_BW - 1
-    mov [eth_r1+4], ax
-    mov ax, [eth_px]
-    add ax, EU_B2X
-    mov [eth_r2], ax
-    add ax, EU_BW - 1
-    mov [eth_r2+4], ax
-    mov ax, [eth_px]
-    add ax, EU_B3X
-    mov [eth_r3], ax
-    add ax, EU_BW - 1
-    mov [eth_r3+4], ax
-    mov ax, [eth_py]
-    add ax, EU_BY
-    mov [eth_r1+2], ax
-    mov [eth_r2+2], ax
-    mov [eth_r3+2], ax
+    mov [bx+4], ax
+    mov [bx+2], dx
+    mov ax, dx
     add ax, EU_BH - 1
-    mov [eth_r1+6], ax
-    mov [eth_r2+6], ax
-    mov [eth_r3+6], ax
-    pop bx
-    pop ax
-    ret
+    mov [bx+6], ax
+    add bx, 8
+    loop .r
+    jmp ep_si
+
+eu_bxs:     db EU_BX, EU_B2X, EU_B3X    ; Renew, Set Up, Buf - pane-relative
+%if EU_B3X > 255
+  %error "eu_bxs holds the button x offsets as bytes"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; eth_bhit - which button is the pane-relative point in?
@@ -387,22 +308,16 @@ eth_bhit:
     mov dx, bx                  ; **LIFTED TO THE SCREEN**, because the page
     add dx, [eth_py]            ; ABI hands a PANE-RELATIVE point and these
     add cx, [eth_px]            ; rects are where the painter drew
-    mov bx, eth_r1
+    mov bx, eth_r1              ; the three rects in order, and the three
+    mov al, EU_BRENEW           ; buttons' numbers with them
+.t:
     call os88ui_bhit
-    jc  .try2
-    mov al, EU_BRENEW
-    jmp short .out
-.try2:
-    mov bx, eth_r2
-    call os88ui_bhit
-    jc  .try3
-    mov al, EU_BSETUP
-    jmp short .out
-.try3:
-    mov bx, eth_r3
-    call os88ui_bhit
-    jc  .out
-    mov al, EU_BBUF
+    jnc .out
+    add bx, 8
+    inc al
+    cmp al, EU_BBUF
+    jbe .t
+    stc                         ; (AL is nobody's on a miss)
 .out:
     pop dx
     pop cx
@@ -441,7 +356,6 @@ eu_btflg: dw 0
 eu_btrec: dw 0, eu_btlbl, eu_btflg, 1, 0, 0, 0, 0
 
 eth_draw_btns:
-    push ax
     push bx
     push si
     push di
@@ -463,16 +377,7 @@ eth_draw_btns:
     jne .rdraw
     or  di, OS88UI_DOWN
 .rdraw:
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [eu_btlbl], si          ; label and DI its flags, so the record takes
-    mov [eu_btflg], di          ; all three and the picture is identical
-    mov [eu_btrec+OS88UI_BT_RECTS], bx
-    mov bx, eu_btrec
-    mov al, 1
-    call os88ui_btn
-    pop bx
-    pop ax
+    call eth_btn
     mov bx, eth_r2
     mov si, eu_s_setup
     mov di, OS88UI_FILL
@@ -480,16 +385,7 @@ eth_draw_btns:
     jne .sdraw
     or  di, OS88UI_DOWN
 .sdraw:
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [eu_btlbl], si          ; label and DI its flags, so the record takes
-    mov [eu_btflg], di          ; all three and the picture is identical
-    mov [eu_btrec+OS88UI_BT_RECTS], bx
-    mov bx, eu_btrec
-    mov al, 1
-    call os88ui_btn
-    pop bx
-    pop ax
+    call eth_btn
     mov bx, eth_r3
     call eu_bufcap              ; the caption IS the readout: whatever the
     mov di, OS88UI_FILL         ; ladder actually got, not what was asked for
@@ -502,18 +398,30 @@ eth_draw_btns:
     jne .bdraw
     or  di, OS88UI_DOWN
 .bdraw:
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [eu_btlbl], si          ; label and DI its flags, so the record takes
-    mov [eu_btflg], di          ; all three and the picture is identical
+    call eth_btn
+    pop di
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; eth_btn - THE ONE CONTROL (SPEC.md 20.5.1.3), staged: BX = the button's
+; rect, SI = its label, DI = its flags. The record takes all three and the
+; picture is os88ui_btn's. ONE staging for every button this driver draws -
+; the page's three and the Setup window's two - where there were four copies
+; of these lines and two records. The record is read-only to os88ui_btn
+; (OS88UI_BT_DOWN is the gesture half's, which OS88UI_NOGEST leaves out), so
+; one record serves both windows.
+; -----------------------------------------------------------------------------
+eth_btn:
+    push ax
+    push bx
+    mov [eu_btlbl], si
+    mov [eu_btflg], di
     mov [eu_btrec+OS88UI_BT_RECTS], bx
     mov bx, eu_btrec
     mov al, 1
     call os88ui_btn
-    pop bx
-    pop ax
-    pop di
-    pop si
     pop bx
     pop ax
     ret
@@ -533,18 +441,13 @@ eth_cp_pane:
     mov bx, [eth_py]
     mov cx, ax
     add cx, EU_W - 1
-    mov dx, bx
-    add dx, EU_H
+    lea dx, [bx+EU_H]
     call OSAPI_GFX_FILL
     mov di, [eth_px]
     mov dx, [eth_py]
     call eth_cp_paint
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_dx
 
 EU_W        equ 221             ; the pane, as ctrl.inc lays it out...
 EU_H        equ 131             ; ...and its LAST ROW: a short clear leaves a
@@ -585,67 +488,42 @@ eu_txt:
 ; --- AX as four hex digits at column CX, row BX ------------------------------
 eu_hex:
     push ax
-    push bx
-    push cx
     push si
-    push bx
-    push cx
-    mov si, eu_buf
-    mov cx, 4
-.d:
-    push cx
-    mov cl, 4
-    rol ax, cl
-    pop cx
-    push ax
-    and al, 0x0F
-    add al, '0'
-    cmp al, '9'
-    jbe .p
-    add al, 7
-.p:
-    mov [si], al
-    inc si
-    pop ax
-    loop .d
-    mov byte [si], 0
-    pop cx
-    pop bx
+    push di
+    mov di, eu_buf
+    xchg al, ah
+    call eu_hexb
+    xchg al, ah
+    call eu_hexb
+    mov byte [di], 0
     mov si, eu_buf
     call eu_txt
+    pop di
     pop si
-    pop cx
-    pop bx
     pop ax
     ret
 
 ; --- AX as decimal at column CX, row BX --------------------------------------
 eu_dec:
     push ax
-    push bx
-    push cx
     push dx
     push si
-    push bx
-    push cx
+    push di
     mov si, eu_buf + 8
     mov byte [si], 0
-    mov bx, 10
-.d:
+    mov di, 10                  ; the divisor in DI, so BX and CX - the row
+.d:                             ; and the column - are eu_txt's untouched
     xor dx, dx
-    div bx
+    div di
     add dl, '0'
     dec si
     mov [si], dl
     or  ax, ax
     jnz .d
-    pop cx
-    pop bx
     call eu_txt
+    pop di
     pop si
     pop dx
-    pop cx
-    pop bx
     pop ax
     ret
 
@@ -656,29 +534,20 @@ eu_dec:
 ; showing four zeroes reads like a machine with a very odd one.
 ; -----------------------------------------------------------------------------
 eu_ip:
-    push ax
-    push bx
-    push cx
-    push dx
     push si
     push di
     call ip_zero
+    mov di, eu_buf              ; (`mov` leaves ip_zero's ZF alone)
     jnz .have
     mov si, eu_s_none
-    call eu_val
-    jmp short .out
+    jmp short .say
 .have:
-    mov di, eu_buf
-    call eth_ipstr
-    mov si, eu_buf
+    call eth_ipstr              ; ...which keeps every register
+    mov si, di
+.say:
     call eu_val
-.out:
     pop di
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -763,6 +632,17 @@ eu_macstr:
 .b:
     mov al, [si]
     inc si
+    call eu_hexb
+    loop .b
+    mov byte [di], 0
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; --- eu_hexb - AL as two hex digits at DS:DI, DI advanced ---------------------
+eu_hexb:
     push ax
     push cx
     mov cl, 4
@@ -770,13 +650,9 @@ eu_macstr:
     pop cx
     call eu_nib
     pop ax
+    push ax
     and al, 0x0F
     call eu_nib
-    loop .b
-    mov byte [di], 0
-    pop di
-    pop si
-    pop cx
     pop ax
     ret
 
@@ -791,17 +667,26 @@ eu_nib:
     ret
 
 ; --- strings, every one of them inside the pane ------------------------------
-eu_s_card:  db 'Card', 0
-eu_s_mac:   db 'Id', 0
-eu_s_addr:  db 'Addr', 0
-eu_s_gw:    db 'Router', 0
-eu_s_dns:   db 'Name', 0
-eu_s_dhcp:  db 'Dhcp', 0
-eu_s_rx:    db 'Rx', 0
+eu_s_card:  db 'Card', 0       ; THE SEVEN ROW LABELS, in row order and end to
+            db 'Id', 0          ; end: eth_cp_paint walks them as one list
+            db 'Addr', 0
+            db 'Router', 0
+            db 'Name', 0
+            db 'Dhcp', 0
+            db 'Rx', 0
+EU_NLAB     equ 7
 eu_s_tx:    db 'Tx', 0
 eu_s_ne1:   db 'Ne1000', 0
 eu_s_ne2:   db 'Ne2000', 0
 eu_s_none:  db 'none', 0
+eu_dhs:     dw eu_s_idle        ; DH_IDLE      - the Dhcp row's word, by state
+            dw eu_s_asking      ; DH_DISCOVER
+            dw eu_s_asking      ; DH_REQUEST
+            dw eu_s_bound       ; DH_BOUND
+            dw eu_s_nosrv       ; DH_FAIL
+%if DH_IDLE != 0 || DH_DISCOVER != 1 || DH_REQUEST != 2 || DH_BOUND != 3 || DH_FAIL != 4
+  %error "eu_dhs is indexed by DH_*"
+%endif
 eu_s_idle:  db 'Off', 0
 eu_s_asking: db 'Asking', 0
 eu_s_bound: db 'Bound', 0

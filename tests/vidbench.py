@@ -48,7 +48,10 @@ NKIND = 3                       # VB_NKIND
 NRES = 8 + MAXF * NKIND         # VB_NRES
 STREAMS = ("BADAPPLE.XDV", "THUNDERC.XDV", "TRONDISC.XDV", "BBBB_BW.XDV")
 RAW = ("movsb 8000 to screen", "movsw 8000 to screen",
-       "movsb 8000 to RAM", "movsw 8000 to RAM")
+       "movsb 8000 to RAM", "movsw 8000 to RAM",
+       "movsb 8000 screen->RAM", "latch copy 8000 (VGA)",
+       "movsb 8000 to VGA 12h")
+PLANAR = RAW[5:]                # a VGA's rows alone (mode 12h for them)
 KINDS = ("XDC scr", "nat scr", "nat ram")
 MODES = {3: "CGA640", 4: "HERC", 7: "VGA12"}
 VKIND = {0: "VGA", 1: "HERC", 2: "CGA", 3: "EGA"}
@@ -190,6 +193,9 @@ def main():
     for i, lab in enumerate(RAW):
         v = us(i)
         if flg[i] in (0, ord("-")):
+            if lab in PLANAR and VKIND.get(vkind) not in ("VGA", "EGA"):
+                print("   %-24s %10s   (no VGA)" % (lab, "-"))
+                continue
             bad.append("raw row %r produced no number" % lab)
         c = v * HZ / 1e6
         print("   %-24s %10.1f %9.0f %9.2f %s" % (lab, v, c, c / 8000,

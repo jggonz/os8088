@@ -39,8 +39,9 @@ mpu_probe:
     push cx
     push dx
     push si
-    mov word [mpu_base], 0          ; (a reload asks again from nothing)
-    mov word [mpu_own], 0
+    xor ax, ax                      ; (a reload asks again from nothing)
+    mov [mpu_base], ax
+    mov [mpu_own], ax
     mov si, mpu_bases
     mov cx, 2
 .base:
@@ -231,10 +232,8 @@ mpu_v_open:                         ; SNDV_MIDOPEN: the interface is ES's
 mpu_v_write:                        ; SNDV_MIDW: ES:SI, CX bytes
     cmp word [mpu_base], 0
     je mpu_nomidi
-    push bx
-    mov bx, es
-    cmp bx, [mpu_own]
-    pop bx
+    mov ax, es                      ; (AX is the answer either way)
+    cmp ax, [mpu_own]
     je .ok
     mov ax, SNDE_NOCLAIM
     stc
@@ -270,10 +269,8 @@ mpu_v_write:                        ; SNDV_MIDW: ES:SI, CX bytes
 mpu_v_close:                        ; SNDV_MIDCLOSE: silenced and given back
     cmp word [mpu_base], 0
     je mpu_nomidi
-    push bx
-    mov bx, es
-    cmp bx, [mpu_own]
-    pop bx
+    mov ax, es                      ; (AX is the answer either way)
+    cmp ax, [mpu_own]
     jne .not
     call mpu_hush
     mov word [mpu_own], 0
@@ -291,5 +288,9 @@ mpu_detach:
 .r:
     ret
 
+; state: expanded by sound.asm at the end of the image, with the rest of the
+; driver's zeroed cells (they ship as bss there, not as file bytes)
+%macro MPU_STATE 0
 mpu_base:   dw 0                    ; the interface's data port, 0 = none
 mpu_own:    dw 0                    ; the SEGMENT of the package holding it
+%endmacro

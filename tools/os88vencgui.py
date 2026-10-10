@@ -97,6 +97,9 @@ TARGETS = [
     ("286, VGA - 256 colours, full screen", "vga8", "vga8", "286-vga"),
     ("286, VGA - Mode X, 256 colours, square pixels", "modex", None,
      "286-vga"),
+    ("486, VGA - 16 colours in the window", "vga4-mid", "vga4", "486"),
+    ("486, VGA - Mode X, 256 colours, square pixels", "modex", None,
+     "486"),
     ("Live on a CGA desktop - short, black and white, read whole", None,
      None, "5150-st225", {"live": "cga"}),
     ("Live on a Hercules desktop - short, black and white", None, None,
@@ -112,6 +115,8 @@ TARGETS = [t + ({},) if len(t) == 4 else t for t in TARGETS]
 # anything but CGA 4 colours, the PC speaker's on any other sound. An
 # option named in no group still appears, on Advanced, in "Other"
 TAB_ROWS = 10    # more options than this and a tab takes two columns
+PAL_W = 620      # the Palette panel's width: the Colour tab's
+FPAL_W = 390     # ...and the open file's, in its box
 TABS = ("Basic", "Picture", "Colour", "Sound", "Budget", "Loop and keys",
         "Advanced")
 # what the form makes, in the words a reason uses
@@ -181,6 +186,17 @@ def _greys(c):
 
 
 ALWAYS = lambda c: None
+
+
+def _ahead(c):
+    """BUFFER SOUND AHEAD (98.1.8): a streamed file's, with sound"""
+    if c["audio"] == "none":
+        return "The file has no sound to carry ahead."
+    if c["live"] or c["resident"]:
+        return ("A %s file's sound is held in memory and never waits on "
+                "the disk, so there is nothing to carry ahead."
+                % ("Live" if c["live"] else "resident"))
+    return None
 # A SPEAKER WAV (SPEC.md 86.21.1) is the sound alone: of the groups only
 # these apply to it, and the rest say so
 WAV_KEEP = ("Made for", "The clip", "Sound", "PC speaker",
@@ -197,8 +213,11 @@ GROUPS = [
     ("Picture", "Canvas", ("layout", "box", "fit"), ALWAYS),
     ("Picture", "Tone", ("gamma", "contrast", "brightness"), ALWAYS),
     ("Picture", "Grey levels", ("levels",), _greys),
-    ("Picture", "One bit", ("dither", "invert", "clip"),
+    ("Picture", "One bit", ("dither", "invert"),
      _for(("mono",), PF_WORDS["mono"])),
+    ("Picture", "Solid colours", ("clip",),
+     _for(("mono", "vga4", "cga4", "c160", "vga8"),
+          "a dithered picture - one bit, 16 colours or 256")),
     ("Picture", "A pixel held", ("stable",), _pixel_kept),
     ("Picture", "Text mode", ("text_glyphs", "text_detail", "text_sharpen",
                               "text_busy", "text_stable"),
@@ -213,17 +232,24 @@ GROUPS = [
     ("Colour", "CGA composite", ("comp_dither", "comp_stable", "comp_quick",
                                  "mix", "levels_mix"),
      _for(("cgacomp",), PF_WORDS["cgacomp"])),
-    ("Colour", "CGA composite, 512 colours",
-     ("cga_card", "c512_dither", "c512_stable", "c512_mix"),
-     _for(("c512",), PF_WORDS["c512"])),
     ("Colour", "4 and 16 colours", ("vga4_stable",),
      _for(("cga4", "c160", "c512", "vga4"),
           "CGA 4 colours, CGA 16 colours at 160 x 100, CGA composite 512 "
           "colours or 16 colours on a VGA")),
-    ("Colour", "VGA, 256 colours", ("detail", "vga8_dither", "vga8_stable",
-                                    "flip"),
+    ("Colour", "CGA composite, 512 colours",
+     ("cga_card", "c512_dither", "c512_stable", "c512_mix"),
+     _for(("c512",), PF_WORDS["c512"])),
+    ("Colour", "VGA, 256 colours", ("detail", "vga8_dither",
+                                    "vga8_stable"),
      _for(("vga8",), PF_WORDS["vga8"])),
+    # (Bands rode a group of its own, and the header that cost was what
+    # pushed the tab's right-hand column past the window's default height)
+    ("Colour", "VGA: palette, screen and pages", ("palette", "screen",
+                                                  "flip", "bands"),
+     _for(("vga8", "vga4"), "256 or 16 colours on a VGA")),
     ("Sound", "Sound", ("audio", "rate", "volume"), ALWAYS),
+    ("Sound", "Buffer sound ahead", ("buffer_sound_ahead", "ahead_frames"),
+     _ahead),
     ("Sound", "ADPCM", ("adpcm",), _sound("adpcm4", "ADPCM")),
     ("Sound", "PC speaker", ("spk_shape", "spk_pulses", "spk_preview"),
      _sound("speaker", "the PC speaker")),
@@ -231,8 +257,9 @@ GROUPS = [
      ("spk_style", "spk_highpass", "spk_ratio", "spk_range", "spk_lows",
       "spk_drive", "spk_idle"), _shaping),
     ("Budget", "The machine's budget", ("disk", "avg", "peak", "owe",
-                                        "reserve"), ALWAYS),
-    ("Budget", "When a frame is cut", ("lookahead", "error"), ALWAYS),
+                                        "reserve", "memory"), ALWAYS),
+    ("Budget", "When a frame is cut", ("lookahead", "error", "cut",
+                                       "frame_cap"), ALWAYS),
     ("Budget", "Aim: size", ("worth",),
      lambda c: None if c["aim"] == "size" else
      "This is --aim size's floor, and the aim is %s. Choose size as the Aim "
@@ -248,9 +275,19 @@ GROUPS = [
 FIELD_WHEN = {
     "text_prefer_colour": lambda c: None if c["text_colour"] == "colour"
     else "This keeps a cell's hue, and the text is mono: it has none.",
-    "flip": lambda c: None if c["layout"] == "modex" else
-    "Two pages are Mode X's, and this file is laid out as %s: mode 13h "
-    "has one page." % (c["layout"] or "lin320"),
+    "bands": lambda c: None if c["layout"] == "modex" or
+    c["pixfmt"] == "vga4" else "Bands are for a picture drawn a plane at a "
+    "time - Mode X, or 16 colours - and mode 13h is one plane.",
+    "flip": lambda c: None if c["layout"] == "modex" or (
+        c["pixfmt"] == "vga4" and c["screen"] not in ("", "640x480")) else
+    "Two pages are Mode X's, or 16 colours' on a Screen of their own "
+    "(320x200, 320x240, 640x350, 640x400) - and %s has one page."
+    % ("mode 12h's 640 x 480" if c["pixfmt"] == "vga4" else
+       "mode 13h" if c["pixfmt"] == "vga8" else
+       "this %s file" % c["pixfmt"]),
+    "screen": lambda c: None if c["pixfmt"] == "vga4" else
+    "A screen of its own is 16 colours' (Pixfmt vga4): Mode X and 13h are "
+    "screens already.",
     "comp_stable": lambda c: None if c["comp_dither"] == "diffuse" else
     "This is the diffusion's, and Comp dither is pattern.",
     "comp_quick": lambda c: None if c["comp_dither"] == "diffuse" else
@@ -265,13 +302,16 @@ FIELD_WHEN = {
     "The file has no sound.",
     "volume": lambda c: None if c["audio"] != "none" else
     "The file has no sound.",
+    "ahead_frames": lambda c: None if c["ahead"] != "off" else
+    "Buffer sound ahead is off.",
 }
 assert len({g[1] for g in GROUPS}) == len(GROUPS), "a header names a group"
 GROUP_OF = {d: g for g in GROUPS for d in g[2]}
 TAB_OF = {d: g[0] for d, g in GROUP_OF.items()}
 # the fields a group's rule reads: a change to one re-judges every group
 CONTEXT_FIELDS = ("preset", "pixfmt", "profile", "live", "layout", "audio",
-                  "text_colour", "comp_dither", "spk_shape", "aim")
+                  "text_colour", "comp_dither", "spk_shape", "aim",
+                  "resident", "buffer_sound_ahead", "screen")
 # the choices that IMPLY others (os88venc.implied): changing one refills them
 IMPLYING = ("preset", "pixfmt", "profile", "live")
 # a free-text option's COMMON values, offered in an editable list: the sound
@@ -279,7 +319,9 @@ IMPLYING = ("preset", "pixfmt", "profile", "live")
 # memory (98.1.7.2) - any other rate can still be typed. Owed time's 0 is
 # OFF, the fixed per-frame ceiling (98.2.1.1)
 SUGGEST = {"rate": ["", "22050", "11025", "8000", "5512"],
-           "owe": ["", "0", "1.6"]}
+           "owe": ["", "0", "1.6"],
+           # FREE MEMORY TO PLAY (98.2.1.3.1): rings of 8, 10 and 12 slots
+           "memory": ["", "309", "373", "437"]}
 # a free-text option that NAMES A FILE the encode writes: a Browse... beside
 # it, a Save dialog of that type, started beside the .V88 under its name
 SAVE_FILE = {"spk_preview": ("The speaker preview", ".wav",
@@ -420,7 +462,10 @@ def form_context(values):
                 "colour",
                 comp_dither=g("comp_dither") or "diffuse",
                 spk_shape=g("spk_shape") or V.SPK_ENC, aim=g("aim") or "asked",
-                live=g("live"))
+                live=g("live"), resident=g("resident") not in ("", "0",
+                                                              "False"),
+                ahead=g("buffer_sound_ahead") or "auto",
+                screen=g("screen"))
 
 
 def group_state(values):
@@ -593,7 +638,7 @@ def render(r, surf):
                           Image.BOX)
     else:                               # a pixel a byte: VGA8, VGA4, Mode X
         cv = np.frombuffer(g.canvas(surf), np.uint8).reshape(g.h, g.w)
-        pal = _rgb16() if pf == vid.PF_VGA4 else \
+        pal = _rgb16() if pf == vid.PF_VGA4 and not r.palette else \
             np.frombuffer(r.palette, np.uint8).astype(np.uint16).reshape(
                 -1, 3) * 255 // 63
         rgb = pal[cv].astype(np.uint8)
@@ -612,8 +657,9 @@ def render(r, surf):
 C16_NAMES = [V.CHOICE_HELP["cga_bg"][str(i)] for i in range(16)]
 # the fields whose change redraws the panel: the ones that pick a palette,
 # and the ones that pick which KIND of palette there is
-PAL_FIELDS = ("preset", "pixfmt", "profile", "live", "cga_palette",
-              "cga_bright", "cga_bg", "text_colour", "cga_card")
+PAL_FIELDS = ("preset", "pixfmt", "profile", "live", "palette",
+              "screen", "cga_palette", "cga_bright", "cga_bg", "text_colour",
+              "cga_card")
 
 
 def _hex(rgb):
@@ -713,6 +759,24 @@ def palette_view(values):
                 if auto else "All three fixed: this is the file's palette, "
                 "the background first.")
         out.append(("CGA, 4 colours (mode 4)", rows, note))
+    elif pf == "vga4" and V.palette_kind(g("palette"))[0] != "auto":
+        pk, pn = V.palette_kind(g("palette"))
+        codes = vid.plane_code(min(pn, 16))
+        if pk == "grey":
+            lv = V.grey_levels(min(pn, 16))
+            sw = [(_hex(v * 255 // 63 for _ in range(3)), "value %X: %d of 63"
+                   % (codes[i], v)) for i, v in enumerate(lv)]
+        else:
+            sw = []
+        out.append(("%d %s, its own" % (min(pn, 16), "greys" if pk == "grey"
+                                         else "colours"),
+                    [("loaded into the VGA's DAC", sw)] if sw else [],
+                    "A full-screen file's own palette, on a screen of its "
+                    "own (Screen): each colour's bits on a group of planes, "
+                    "so %d colours store %d bit(s) a pixel.%s" % (
+                        min(pn, 16), max(1, (min(pn, 16) - 1).bit_length()),
+                        "" if sw else " Chosen from the clip when it is "
+                        "encoded.")))
     elif pf in ("vga4", "c160"):
         out.append(("The sixteen", [("every pixel one of", _c16(range(16)))],
                     "Fixed: %s. No choice to make here." % (
@@ -752,9 +816,20 @@ def palette_view(values):
                     "Every code's flat colour, darkest first; about 450 "
                     "differ. Hover for the code."))
     elif pf in ("vga8", "modex"):
-        out.append(("256 colours", [], "Chosen from the clip itself when "
-                    "it is encoded: its palette shows below once the file "
-                    "is made, or a .V88 is opened."))
+        pk, pn = V.palette_kind(g("palette"))
+        if pk == "grey":
+            lv = V.grey_levels(pn)
+            out.append(("%d greys" % pn, [("black to white", [
+                (_hex(v * 255 // 63 for _ in range(3)), "%d: %d of 63"
+                 % (i, v)) for i, v in enumerate(lv)])],
+                "A ramp, fixed: each pixel one level, dithered between "
+                "the two round it by the one-bit Dither and held by its "
+                "Stable."))
+        else:
+            out.append(("%d colours" % (pn or 256), [], "Chosen from the "
+                        "clip itself when it is encoded: its palette shows "
+                        "under The file once it is made, or a .V88 is "
+                        "opened."))
     else:
         out.append(("Black and white", [("one bit", _c16((0, 15)))],
                     "One bit a pixel: no palette to choose."))
@@ -763,8 +838,9 @@ def palette_view(values):
 
 def file_palette(r):
     """The palette a .V88 was ENCODED with, where it was chosen from its
-    clip - CGA4's four, VGA8's 256 - as palette_view's rows: what "the
-    nearest" turned out to be. [] for a file whose colours are fixed"""
+    clip - CGA4's four, VGA8's 256, a VGA4 file's own 16 - as
+    palette_view's rows: what "the nearest" turned out to be. [] for a
+    file whose colours are fixed"""
     if r is None:
         return []
     if r.pixfmt == vid.PF_CGA4:
@@ -775,6 +851,14 @@ def file_palette(r):
         p = r.palette
         return [("its 256", [(_hex(c * 255 // 63 for c in p[i * 3:i * 3 + 3]),
                               "%d" % i) for i in range(len(p) // 3)])]
+    if r.pixfmt == vid.PF_VGA4 and r.palette:   # a screen's own, 98.1.3.2.1
+        p = r.palette               # ...the values its colours take: the
+        lit = {i for i in range(16) if any(p[3 * i:3 * i + 3])} | {0}
+        n = min(k for k in sorted(vid.PLANE_CODES)  # fewest PLANE_CODES
+                if lit <= set(vid.PLANE_CODES[k]))  # that hold them
+        return [("its %d" % n, [(_hex(c * 255 // 63 for c in
+                                      p[i * 3:i * 3 + 3]), "value %X" % i)
+                                for i in vid.PLANE_CODES[n]])]
     return []
 
 
@@ -801,9 +885,9 @@ def grid_of(n):
     """(columns, swatch width, height, gap) for a row of n swatches"""
     if n <= 16:
         return n, 22, 16, 2
-    if n <= 256:
-        return 32, 8, 8, 0
-    return 32, 4, 4, 0
+    if n <= 256:                    # (four rows of 64: a 256-colour
+        return 64, 6, 6, 0          # palette is 24 pixels tall)
+    return 64, 4, 4, 0              # (512: eight rows of 64, 32 pixels)
 
 
 def preview_frames(path, most=2000, tick=None):
@@ -865,9 +949,11 @@ def file_facts(r, path=None):
     if r.pixfmt in (vid.PF_C512, vid.PF_TEXT):
         w = g.wb // 2                   # a cell is two bytes
     out = ["'%s'" % r.title + (" - %s" % r.credits if r.credits else "")]
-    out.append("%s on %s, %d x %d%s" % (
+    out.append("%s on %s, %d x %d%s%s%s" % (
         vid.PF_NAMES[r.pixfmt], g.name, w, g.h,
-        ", each row shown twice" if r.rowscale > 1 else ""))
+        ", each row shown twice" if r.rowscale > 1 else "",
+        " on %s" % vid.SCREENS[r.screen][0] if getattr(r, "screen", 0)
+        else "", ", flipped" if getattr(r, "flip", False) else ""))
     out.append("%d frames at %.2f fps = %.1f s; sound %s" % (
         r.frames, r.fps, secs,
         "none" if not r.audio else "%s at %d Hz" % (
@@ -945,7 +1031,7 @@ DISKS = [
 DISK_LABELS = [d[0] for d in DISKS]
 # the disk a storage profile implies, until the person picks another
 DISK_OF_PROFILE = {"5150-st225": 4, "5150-picomem2": 4, "floppy": 0,
-                   "286": 6, "286-vga": 6, "lossless": 6}
+                   "286": 6, "286-vga": 6, "486": 6, "lossless": 6}
 # what a hard disk needs out of build/ to BOOT - the kernel, its boot records
 # and HDD.DRV - and what a booting one takes besides when build/ has it.
 # Without HD_BOOT (the encoder shipped to people with no os8088 tree) the disk
@@ -1310,7 +1396,7 @@ class App(object):
         self.job = 0                    # the job the window is showing: a
         self.ejob = None                # message from any other is stale
         root.title(APPNAME)
-        root.geometry("1080x760")
+        root.geometry("1080x840")      # (the Palette panel: 98.2.8.1)
         self.src = tk.StringVar()
         self.out = tk.StringVar()
         self.outtype = tk.StringVar(value=OUT_TYPES[0][0])
@@ -1452,12 +1538,15 @@ class App(object):
         self.out.trace_add("write", lambda *a: self.groups_dirty())
         self.out.trace_add("write", lambda *a: self.sync_outtype())
         # --- the palette the Colour tab's choices give, redrawn as they
-        # change: under the tab's fields, whatever the tab's note
+        # change: under the tab's fields - what the file WILL be, where the
+        # preview's column is the file that IS (the owner). The VGA groups
+        # pushed it off the window once: the window is taller now, and the
+        # tab's groups are ordered so its two columns are near one height
         self.palframe = ttk.LabelFrame(pages["Colour"], text="Palette",
-                                       padding=(6, 2, 6, 4))
+                                       padding=(6, 0, 6, 2))
         self.palframe.grid(row=2, column=0, columnspan=2, sticky="we",
-                           pady=(8, 0))
-        self.palcanvas = tk.Canvas(self.palframe, width=620, height=60,
+                           pady=(6, 0))
+        self.palcanvas = tk.Canvas(self.palframe, width=PAL_W, height=60,
                                    highlightthickness=0)
         self.palcanvas.pack(anchor="w", fill="x")
         self.paltips = {}
@@ -1522,9 +1611,11 @@ class App(object):
         fl.pack(anchor="w", fill="x")
         fi.bind("<Configure>", lambda e: fl.config(
             wraplength=max(120, e.width - 16)))
-        # the palette the file was encoded with, where its clip chose it:
-        # packed here by draw_palette when there is one
-        self.fpal = tk.Canvas(fi, width=360, height=24,
+        # the palette the file was encoded with, where its clip chose it,
+        # or its own: packed here by draw_palette when there is one. Kept
+        # short (a 256 is 24 pixels, a VGA4 file's the values it uses) so
+        # the box is never taller than the column
+        self.fpal = tk.Canvas(fi, width=FPAL_W, height=24,
                               highlightthickness=0)
         tf = ttk.Frame(fi)              # the title, changed in place
         tf.pack(fill="x", pady=(6, 0))
@@ -1603,12 +1694,13 @@ class App(object):
         secs = palette_view(vals)
         self.palframe.config(text="Palette: " + secs[0][0])
         swatch_draw(self.palcanvas, [(None,) + secs[0][1:]] + secs[1:],
-                    self.paltips)
+                    self.paltips,
+                    width=max(self.palcanvas.winfo_width(), PAL_W))
         rows = file_palette(self.reader)
         if rows:
             swatch_draw(self.fpal, [(None, [("Palette: " + ln, sw)
                                             for ln, sw in rows], None)],
-                        self.paltips, width=360)
+                        self.paltips, width=FPAL_W)
             if not self.fpal.winfo_ismapped():
                 self.fpal.pack(anchor="w", fill="x", pady=(6, 0),
                                before=self.titlef)
@@ -1863,8 +1955,17 @@ class App(object):
 
     def load_v88(self, p):
         job = self.begin()
-        self.formload = p       # ...and the form set to how it was made
         self.write("Loading %s...\n" % p)
+        # ...and the form set to how it was made AT ONCE, off the header and
+        # the options block alone (98.2.17): a long file's preview is
+        # minutes of decoding, and a person who wants only its settings
+        # should not wait on it. Set now, the form is the person's while
+        # the preview loads - the preview's end does not set it again
+        try:
+            self.apply_file_options(vid.HeadOptions(p), p)
+        except (OSError, vid.V88Error) as e:
+            self.write("Its options do not read (%s): the form is as it "
+                       "was.\n" % e)
         threading.Thread(target=self._load, args=(p, job, self.cancel),
                          daemon=True).start()
 
@@ -1967,7 +2068,6 @@ class App(object):
         cancelled and still winding down keeps ITS flag set"""
         self.job += 1
         self.busy = True
-        self.formload = None            # (load_v88 sets it after this)
         self.cancel = threading.Event()
         self.prog = ("prepare", 0, 0)
         self.gobtn.config(state="disabled")
@@ -2086,9 +2186,6 @@ class App(object):
                     self.write("\n%s. Drag the slider to see every frame as "
                                "the screen will.\n" % os.path.basename(
                                    self.cur))
-                    if getattr(self, "formload", None) == self.cur:
-                        self.apply_file_options()
-                    self.formload = None
         except queue.Empty:
             pass
         self.root.after(100, self._pump)
@@ -2143,14 +2240,15 @@ class App(object):
         self.posterbtn.config(state="disabled" if self.busy or
                               i == r.poster else "normal")
 
-    def apply_file_options(self):
+    def apply_file_options(self, r, path):
         """A .V88 LOADED (98.2.17): every field set to the option it was
         made with, the target it was made for, and what could not be
         carried over said in the log - or, for a file made before the
-        options were stored, the form left as it was, and that said"""
-        name = os.path.basename(self.cur)
+        options were stored, the form left as it was, and that said. `r`
+        is a Reader or os88vid's HeadOptions: the header alone will do"""
+        name = os.path.basename(path)
         try:
-            got = form_from_file(self.reader)
+            got = form_from_file(r)
         except vid.V88Error as e:
             self.write("\nIts options block does not read (%s): the form is "
                        "as it was.\n" % e)

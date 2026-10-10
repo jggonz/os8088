@@ -281,8 +281,13 @@ def main():
         m.pause()
         w, h, before = m.fbuf(0)
         m.run()
-        m.key("ArrowRight", down=True, up=False)    # a TURN: a strafe at the
-        m.advance(frames=120)                       # spawn meets its side wall
+        # EVERY EDGE CONFIRMED against the kernel's key map (pxslib.key_edge),
+        # and the release above all: a break code the guest never saw leaves
+        # the key HELD, and the eye then turned through the walk below - "walked
+        # south: px 896 -> 633" with py short, in the 2026-10-04 soak
+        g.key_edge("ArrowRight", True)              # a TURN: a strafe at the
+        m.run()                                     # spawn meets its side wall
+        m.advance(frames=120)
         m.run()
         f1 = g.word("px_frames")
         m.pause()
@@ -294,7 +299,8 @@ def main():
               % (f0, f1, moved, w * h))
         check(f1 > f0, "px_frames climbed (%d -> %d)" % (f0, f1))
         check(moved >= 50, "the glass changed (%d pixels)" % moved)
-        m.key("ArrowRight", down=False, up=True)
+        g.key_edge("ArrowRight", False)
+        m.run()
 
         # --- it walks ---------------------------------------------------------
         m.advance(frames=30)                        # the turn's keys drained
@@ -319,7 +325,8 @@ def main():
         check(px1 == px0, "walking south left px alone (%d -> %d)" % (px0, px1))
         check(lo <= dy <= hi, "walking south moved py by PX_SPEED a tick: +%d in "
               "%d ticks, want %d..%d" % (dy, dt, lo, hi))
-        m.key("ArrowRight", down=True, up=False)    # turning again for the
+        g.key_edge("ArrowRight", True)              # turning again for the
+        m.run()
         m.advance(frames=20)                        # flash leg below
         m.run()
 
@@ -330,7 +337,8 @@ def main():
             m.pause()
             samples.append(lit(m.fbuf(0)[2]))
             m.run()
-        m.key("ArrowRight", down=False, up=True)
+        g.key_edge("ArrowRight", False)             # confirmed, as the others
+        m.run()
         s = sorted(samples)
         med = s[len(s) // 2]
         worst, at = 100, 0

@@ -253,18 +253,14 @@ mrl_adddir:
     push dx
     push si
     push di
-    push es
     xor ax, ax
     mov [mrl_cnt], ax
     call mrl_here                   ; DX = the folder, BL = the volume
     mov [mrl_hdir], dx
     mov [mrl_hvol], bl
-    push ds
-    pop es
     xor cx, cx
 .f:
-    mov di, mrl_find
-    call OSAPI_FILE_FIND            ; CX = the next ordinal
+    call mrl_ffind                  ; CX = the next ordinal
     jc .done
     cmp word [mrl_find+14], OSAPI_FT_DIR
     jae .f                          ; a folder, or '..'
@@ -280,7 +276,6 @@ mrl_adddir:
 .done:
     call mrl_takepath
     mov ax, [mrl_cnt]
-    pop es
     pop di
     pop si
     pop dx
@@ -345,15 +340,11 @@ mrl_enter:
     push cx
     push dx
     push di
-    push es
-    push ds
-    pop es
     call OSAPI_FILE_HERE
     mov [mrl_hvol], bl
     xor cx, cx
 .f:
-    mov di, mrl_find
-    call OSAPI_FILE_FIND
+    call mrl_ffind
     jc .no
     cmp word [mrl_find+14], OSAPI_FT_DIR
     jne .f
@@ -369,7 +360,6 @@ mrl_enter:
 .no:
     stc
 .out:
-    pop es
     pop di
     pop dx
     pop cx
@@ -559,13 +549,9 @@ mrl_size:
     push bx
     push cx
     push di
-    push es
-    push ds
-    pop es
     xor cx, cx
 .f:
-    mov di, mrl_find
-    call OSAPI_FILE_FIND
+    call mrl_ffind
     jc .no
     cmp word [mrl_find+14], OSAPI_FT_DIR
     jae .f
@@ -579,10 +565,21 @@ mrl_size:
 .no:
     stc
 .out:
-    pop es
     pop di
     pop cx
     pop bx
+    ret
+
+; mrl_ffind - OSAPI_FILE_FIND of ordinal CX into mrl_find, out as that cell.
+; FIND fills ES:DI, so ES is OURS for the call and given back after - the
+; three walks above each did that inline, with DI, around one far call
+mrl_ffind:
+    push es
+    push ds
+    pop es
+    mov di, mrl_find
+    call OSAPI_FILE_FIND
+    pop es
     ret
 
 ; -----------------------------------------------------------------------------

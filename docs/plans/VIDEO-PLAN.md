@@ -2414,3 +2414,299 @@ when exiting fullscreen, of either type"*): a Space pause inside a bracket
 keeps the card halted, nothing else can run then, and its resume stays
 instant.
 
+
+### 15.12 Sound ahead of the picture (2026-10-05) - BUILT, waves 0-3, and confirmed on the 286
+
+The owner's runs of `LXLL11K.V88` (Last Exile, 320 x 180 Mode X, 11 kHz
+PCM8, a LOSSLESS encode, so nothing capped its bursts) on the 86Box mr286
+with the `VPDIAG=1` card: **the picture survives every burst and the sound
+does not, by a fraction of a second.** `Drew 2488/2488, stalls 0` on every
+run, the reader never fewer than two chunks ahead of the picture - and the
+card ran dry 11 times, all of them with its sound waiting on a record not
+yet read. The cause is structural: a frame's sound is the last bytes of its
+OWN record (98.1.3), so the sound can be queued only as far as the reader
+has read, and the card halts at a block boundary unless the whole next
+block is queued (34.5.2). In a lossless burst two 32 KB chunks are
+0.15-0.3 s of picture, and at 11 kHz a 2,048-byte block is 0.19 s.
+
+The owner's aim (2026-10-05): *"Pushing the system to the edge like this,
+and then clawing the edge a little further out, lets us make better encodes
+everywhere."* Two levers, in this order.
+
+#### 15.12.1 Smaller card blocks - BUILT (wave 0)
+
+The block the card halts on is the lead the sound needs, so it was shrunk
+by hand (`VP_BLKBPS`, assembly-time since 42faad8) and played on the
+owner's 286, same file, same drive:
+
+| card block at 11 kHz | pauses | longest | time lost (est.) |
+|---|---|---|---|
+| 2,048 (0.19 s) - shipped | 11 | 3 ticks | ~18 ticks |
+| 1,024 (0.09 s) | 7 | 2 ticks | ~14 ticks |
+| 512 (0.05 s) | 4 | < 1 tick | ~7 ticks |
+| 256 (0.02 s) | 3 | < 1 tick | ~4 ticks |
+
+("Time lost" is the play's ticks less the card's own length: the card
+plays an 11,025 Hz file at 11,111 Hz, 0.8% fast, so 1,885 nominal ticks
+are ~1,870 on the card.)
+
+**What it costs the XT**, on MartyPC's `os8088_5150_herc_hdd_sb_gla`,
+`sbl_isr` traced entry to `iret` cycle-exact over real plays of the
+Hercules demo clips (scratch instrument `blkcost.py`; the guest is stopped
+at each hit, so nothing it does is perturbed):
+
+| clip | block | IRQ/s | handler's share | the play |
+|---|---|---|---|---|
+| 07-PCM11, 11 kHz PCM8 | 2,048 | 5.4 | 0.10% | 0 stalls, 0 late |
+| | 256 | 43.1 | 0.78% | 0 stalls, 0 late |
+| 03-PCM11, 720 x 261, 3:36 | 2,048 | 5.2 | 0.09% | 0 stalls, 6 late |
+| | 256 | 42.8 | 0.77% | 0 stalls, 0 late |
+| 04-ADPCM, 5.5 kHz ADPCM4 | 512 | 5.3 | 0.10% | 0 stalls, 0 late |
+| | 256 | 10.7 | 0.19% | 0 stalls, 1 late (both runs) |
+
+**An interrupt is 864 cycles whatever its block**, so the cost is the
+rate and nothing else. At 22 kHz a 256-byte block would be 86 a second,
+~1.6%, which is why the rule should be a DURATION and not a size:
+
+- **The rule: halve the block (up to three times, `SND_OPENF_BLKSH`) while
+  it is longer than 25 ms of sound.** 256 at 11 kHz PCM8 and at 5.5 kHz,
+  512 at 22 kHz, 1,024 at 44 kHz (the 4,096 regime). No rate interrupts
+  more than ~43 times a second: at most 0.8% of a 4.77 MHz 8088. In
+  `vp_sblk` it is `bytes a second / 40` compared with the block, about
+  the size of today's doubling loop.
+- **The encoder mirrors it** (`audio_block` in `tools/os88venc.py`), and
+  that is also the only pin in the tests: `tests/vidsound.py` asserts the
+  card's block against `venc.audio_block`, so the family follows.
+- **It improves every budgeted encode at once.** The encoder holds back
+  the sound's lead from its disk reserve (98.2.1.3, `audio_lead` = the
+  block in frames, plus one): 6 frames at 11 kHz and 24 fps today, 2 at
+  256 bytes - 4 frames of refill that go back to the picture's bursts.
+- **Checked here:** every card-sound row (`vidsnd*`, `vidsound*`,
+  `vidcard`, `vidlivesnd*`) was run at 512 and at 256 and failed nothing
+  but the pinned block size - sound whole and in order, the pause
+  sample-exact, loops, seeks, F and Live.
+
+#### 15.12.2 Sound carried ahead in the file - BUILT (waves 1-3)
+
+**What shipped** (SPEC.md 98.1.8, 98.3.1, 98.2.1.3), and where it departs
+from the plan below:
+
+- **The format** as planned, with one correction found by the self-check:
+  a key's lead is the LAST A x abytes of its table entry, found from the
+  entry's end, because an ADPCM4 key's reference byte lies past the
+  record's length word. The start's lead is in the header at 464. The
+  host's bound and the player's are both **8,000** bytes (`VP_ALMAX`), so
+  the staged copy in the sound ring's tail never meets what is queued
+  first. `Reader.sound(f)` is the one accessor every host check now uses.
+- **A key-0 join** (Repeat with no seam) costs one silent frame, as it did:
+  today's player plays the key's own frame silent, and with sound ahead
+  the silent frame is the one *A* later - no worse.
+- **The player: +205 bytes** of `VIDEO.O88` (38,294 -> 38,499), no bss
+  claim and no kernel byte. `vp_lstage` copies the lead out of the ring
+  where the bracket reads ADPCM4's reference; `vp_sopen` queues it first;
+  `vp_lfloor` is the ring's reuse floor. Every file without AHEAD takes the
+  path it took.
+- **The encoder**: `--buffer-sound-ahead auto|on|off` (the window's
+  *Buffer sound ahead*, greyed with no sound, Live or resident) and
+  `--ahead-frames` (default **4**, the owner's call). Auto as planned, with
+  the owner's answer for the unmodelled case: **a lossless encode carries
+  it** - *"they picked do it all, they can afford the space"*. Options
+  record version 3.
+
+**Measured.**
+
+- **On MartyPC** (`os8088_5150_herc_hdd_sb_gla`), six rows - `vidahead`,
+  `vidaheadseek`, `vidaheadfs`, `vidaheadloop`, `vidaheadad`,
+  `vidaheadspk`: from the start, a seek, F into a paused bracket, two laps
+  through a seam, ADPCM4 from a key, and the speaker - every capture the
+  file's sound whole and in order. Broken on purpose (`vp_sopen` skipping
+  the staged lead), the capture departs from the file's sound.
+- **The encoder**, a 20 s noise-and-fractal clip that busts `286-vga`'s
+  budget (Mode X, 11 kHz): Auto carries it - 474 of 481 frames spent what
+  the in-step floor would have kept - for 20,196 bytes of leads; pixels
+  wrong 7.45% -> 7.36%, exact frames 6 -> 16, the error as seen 0.25%
+  both. **Small, because wave 0 took most of it already**: the 25 ms block
+  cut the lead the budget holds back from 6 frames to 2 at 11 kHz, and
+  sound ahead takes the last 2. A clip that fits its budget (the same
+  fractal unmixed, 229 KB/s) Auto writes in step, the stream byte for
+  byte what Off writes.
+
+**What MartyPC cannot show, and why: the case the feature is FOR.**
+`tests/vidsound.py --burst N --bsize B` makes a clip that bursts past the
+disk, and `--bigblk` hides `SND_CAP_EXTBLK` so the player takes the old
+2,048-byte block. Twelve runs on the 5150 across burst shapes found no
+regime where in step pauses the card and ahead does not: on an 8088 the
+XT-IDE's reads are CPU work like the decode, so a burst puts the PICTURE
+behind the card first (late 76-115 periods) and the reader stays ahead
+of it - or, longer, starves both alike (5 against 6 pauses at 22 frames
+of 8 KB). The owner's 286 is the other shape - a CPU fast enough that the
+picture keeps up while the sound, tied to the read frontier, does not -
+and it is there, and only there, that this is proven or refuted: play
+`LXLL11K.V88` re-encoded with `--buffer-sound-ahead on` (or Auto, which a
+lossless encode carries) against the in-step file, both on the wave 0
+player.
+
+**CONFIRMED on the owner's 286 (2026-10-05)**, `LXLL11K` re-encoded
+lossless on Auto (so carried 4 frames ahead), the `VPDIAG=1` player, the
+same 86Box mr286 and drive:
+
+| file | player | pauses | stalls | ticks (card's ~1,870) |
+|---|---|---|---|---|
+| in step | 2,048-byte blocks | 11 | 0 | 1,888 |
+| in step | 256-byte blocks (wave 0) | 2-3 | 0 | 1,873-1,874 |
+| **ahead 4** | **256-byte blocks** | **0** | 2 | **1,872** |
+
+The card never ran dry. Twice the reader fell to one chunk ahead (`Lead 1
+at f1071`) and the PICTURE waited instead - `stalls 2`, `late 0` - while
+the sound played on, and the play ended on the card's time: the trade
+15.12.2 was built to make, a shortfall the eye forgives in place of one
+the ear does not. Before sound ahead the card's pauses stopped the clock
+and so gave the reader time; with it the clock runs on, which is why the
+reader's least lead is lower (1 where it was 3) and nothing is lost for it.
+
+#### 15.12.2.1 The plan as written
+
+**The idea.** Frame record *r* carries the sound of frame *r* + *A*, so
+the sound sits *A* frames further up the stream than its picture. The card
+then has at least *A* frames queued beyond the last record read, and once
+*A* is a block of sound and more, **the card cannot wait on the stream
+unless the picture is already waiting on it too.** A disk shortfall then
+shows as the picture running late with the sound going on, and as a pause
+only after *A* frames of it - the order a viewer forgives.
+
+The streaming bandwidth is unchanged (the stream carries the same sound
+bytes, moved), and so is ADPCM4's decoder (the sound is the same sequence;
+a key's reference is still the sample at frame *k* + 1, where the sound
+still starts). What it costs is DISK SPACE, which is why it is optional.
+
+##### The file
+
+- **A flag, `AHEAD` = 128** (header +6; bits 1-64 are taken). An older
+  player refuses any bit it does not know (`V88F_KNOWN`, `F_KNOWN`), so it
+  refuses an ahead file rather than play its sound *A* frames early.
+- **Header +25: *A***, 1..255 with the flag, 0 without (it is 0 today and
+  nothing reads it). The player refuses `A x abytes > VP_RL / 2` (8 KB),
+  which is what lets it stage a lead in the sound ring's own tail (below).
+- **Records.** Frame record *r* carries frame *r* + *A*'s sound, still the
+  record's last `abytes` bytes - so `vp_afill` reads a record exactly as
+  today. **The last *A* records carry the sound of the frames that follow
+  the join a repeat would make** - frame *L*.. after a seam, frame 0..
+  after a key-0 join (whose key frame today's player leaves silent) - so a
+  lap needs no lead of its own, whether the file asked for Repeat or the
+  user pressed the button. A play that does not repeat
+  never queues them (its end check comes first).
+- **The seam** (98.1.1.2) carries frame *L* + *A*'s sound: in the record
+  order a seam is one more record, so it shifts like the rest.
+- **The LEADS: the first *A* frames of sound for every place a play
+  starts.** A play starts only at frame 0 or at a key's *k* + 1 - every
+  start, seek, F into a paused bracket, unmute in the full screen (a seek
+  here) and the restart after a posted compaction goes through `vp_spos`
+  with a key entry (the window/full-screen swap does not start anything:
+  it carries `va_pc` and the card over). So:
+  - **a key's lead** - frames *k* + 1 .. *k* + *A* - is written straight
+    after its key record, and the table entry's length covers both (one
+    read, as today; the record's own `len` says where the lead begins);
+  - **the start's lead** - frames 0 .. *A* - 1 - is written after the key
+    records, its offset at header +464 (4 bytes; 464-511 are zero today).
+- **The key read limit** (`VP_KMAXREC`, the 64 KB claim, `key_limit`)
+  now bounds record plus lead. The encoder caps *A* so the largest key
+  still fits, and refuses ahead (saying why) rather than lose seeking.
+
+What it costs, per second of video, with keys every 2 s (`--keysecs`):
+`A x abytes / 2` - at 11 kHz with *A* = 4, ~0.9 KB/s: **0.28%** of
+LXLL11K's 331 KB/s, ~0.9% of a 100 KB/s Hercules clip; at 22 kHz twice
+that. Plus *A* frames of sound once, for the start.
+
+##### The player (`VIDEO.O88`)
+
+Every existing file is *A* = 0 and takes today's path to the instruction.
+
+| piece | where | estimate |
+|---|---|---|
+| Parse: the flag, *A*, the bound, the start lead's offset | `vp_parse` | ~40 bytes |
+| Stage the lead: after the key's decode - where `.first` reads ADPCM4's reference byte today - copy the lead into the TAIL of the sound ring (`vp_aseg`, empty then), so `.fill` may overwrite the key's buffer. A play from frame 0 reads the start's lead there with one `READ_AT` | `.first`, `vp_spos` | ~60 |
+| Queue it: `vp_sopen` puts the *A* staged frames through `vp_aput` (the speaker's shaper takes each as a piece, as now), then `afr` and `aseq` start *A* frames on. `vp_acur` is unchanged - the cursor sits on record *k* + 1, which carries frame *k* + 1 + *A* | `vp_sopen` | ~40 |
+| The ring guard: the sound cursor may now be up to *A* - 1 records BEHIND the picture's (98.3.1's *"the picture may never overtake the audio cursor"* is about frames, and no longer implies records), so `vp_fill`'s and `vp_warm`'s reuse test take the lesser of the two chunks | `vp_fill`, `vp_warm` | ~30 |
+| A join: a seam's or a key's join queues nothing of its own (the tail records already queued it) and moves `afr` *A* on | `vp_afill .seam` | ~20 |
+| The info card: `sound PCM8, ahead 4` | `vp_fmt` | ~20 |
+| **Total** | | **~210 bytes of image, no bss, no kernel byte, no claim** |
+
+Out of it on purpose: RESIDENT and LIVE files (their sound is one block in
+memory, 98.1.7, and never waits on a stream - the encoder refuses ahead
+there), and nothing at all in the swap, the pause or the XMS hold. The
+staging needs no memory: the sound ring is empty until `vp_sopen`, and the
+8 KB bound keeps the staged lead clear of what `vp_aput` writes first.
+
+##### The encoder: Auto, On, Off
+
+`--sound-ahead auto|on|off` (default `auto`) and `--ahead-frames N`
+(default: the block in frames, plus one, plus two of margin - 4 at 11 kHz
+and 24 fps). In the window, one choice in the Sound group, *Sound ahead of
+the picture: Auto / On / Off*, greyed with no sound, RESIDENT or LIVE
+(98.2.8.2). The options block records both (98.2.17: `OPTS_VERSION` 3,
+a `MIGRATIONS` step that says an older file was made *off*, a new
+fingerprint for `tests/vencguitest.py`).
+
+- **On**: the encode runs with the sound's lead taken OUT of the disk
+  floor (`alead` = 0 - the file carries it instead), and `Writer.write`
+  shifts each record's sound *A* on and writes the leads. The shift is a
+  write-time step - a record is its lists plus its sound, and the length
+  word is rewritten - so the encode loop does not change.
+- **Off**: today's file, byte for byte.
+- **Auto, on a budgeted profile**: encode as On, and alongside each frame
+  ask whether the record would ALSO have fitted with the lead held back
+  (today's `disk_floor()`). The looser budget only ever widens the
+  encoder's choice, so **if no frame needed the difference, the stream
+  is exactly what Off would have made, and Auto writes Off** - the space
+  is spent only when the encode actually used it. The summary line says
+  which, and how many frames relied on it.
+- **Auto with no disk model** (`lossless`, or no `--disk`): the encoder
+  cannot know whether the reader will keep a block of sound ahead, so
+  Auto writes On whenever the file streams sound - the owner's lossless
+  encodes are exactly where this was found. **The owner's call**; the
+  alternative is Off with a line saying to choose On.
+
+##### The host tools
+
+`tools/os88vid.py`: `F_AHEAD`, `Writer.write`'s shift and leads, the
+`Reader` learning where frame *f*'s sound is (one accessor, `audio(f)`,
+that the tests use instead of slicing a record's tail), `verify_v88`
+checking every lead and the shifted stream against the unshifted sound,
+`spk_reshape` and `cmd_spkwav` through the accessor. Six test scripts
+slice `rec[-abytes:]` today and move to it: `vidsound`, `vidspk`,
+`vidspkshape`, `videnc`, `vidplay`, and `vidfmt` through `verify_v88`.
+And a streamed encode is not run through `verify_v88` today at all
+(resident ones are) - an ahead one should be.
+
+##### The gates
+
+- **Host** (soak, one package): an ahead and an unshifted encode of the
+  same clip give the same `audio(f)` for every *f*; every lead equals its
+  frames; the tail records equal the frames after each kind of join;
+  ADPCM4's key references unchanged. Broken on purpose - the writer
+  shifting by *A* - 1 - it must go red.
+- **On the machine** (MartyPC, the 5150 with SB and XT-IDE), each
+  capturing the card's output and requiring the file's sound whole and in
+  order, as `vidsound` does: a play from the start; a seek; F out and back
+  mid-play; Repeat across a seam and across a key-0 join; unmute in the
+  full screen; and the speaker, whose counts `vidspk` reads back exact.
+  Every existing `vid*` row still passes with no change but the accessor.
+- **The one the feature is for**: a burst clip on MartyPC's XT-IDE that
+  pauses the card with Off and does not with On, the same encode
+  otherwise. Without that row the feature is unproven here and only the
+  owner's 286 says it works.
+
+##### Waves
+
+0. **The 25 ms block** (15.12.1): `vp_sblk`, `audio_block`, SPEC.md
+   98.3.1, 34.5.3's paragraph, 98.2.1.3's lead figures. Small; the
+   `vid*` sound rows are its gate.
+1. **The format and the host tools**: flag, header, writer shift, leads,
+   `Reader.audio`, `verify_v88`, the six scripts on the accessor, the host
+   gate. SPEC.md 98.1.1, 98.1.3, 98.1.7 (refused there) written first.
+2. **The player**: the table above, the machine rows, the burst row.
+3. **The encoder's choice**: `--sound-ahead`, Auto's two rules, the
+   window, the options block; then the measurement the owner asked for -
+   LXLL11K-style lossless and a `286-vga` re-encode of the same clip, Off
+   against Auto: pauses on the 286, and the error as seen, to show what the
+   freed reserve does for the smearing.

@@ -1162,13 +1162,8 @@ te_step:
     call net_find                   ; WHICH DRIVER: the card's class or the
     jc .nodrv                       ; cable's, and not the RAM disk sharing the
                                     ; second (apps/os88sock.inc, SPEC.md
-                                    ; 20.11.1)
-    mov bh, NET_CLASS
-    mov bl, NETV_STATE
-    call OSAPI_DRV_CALL
-    jc .nodrv
-    test al, NSTF_SOCK
-    jz .nolink
+                                    ; 20.11.1) - and NETV_STATE with it,
+    jz .nolink                      ; which is OS88SOCK_STATE's half
     call te_split                   ; the box into a host and a port
     mov bh, NET_CLASS
     mov bl, NETV_OPEN
@@ -2059,8 +2054,10 @@ te_tpl:
     dw te_ttl, te_paint, te_onkey, te_onclick
 
 %include "os88alt.inc"          ; SPEC.md 11.2.1.1's edge, for the bracket
+%define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
 %include "os88ui.inc"
 %include "os88line.inc"
+%define OS88SOCK_STATE             ; ...every net_find here asks NETV_STATE too
 %include "os88sock.inc"         ; net_find (SPEC.md 72, SPEC.md 20.11.1)
 %define CON_FSX                     ; ...and its FULL-SCREEN renderer (70.8.13):
                                 ; the same buffer onto real text VRAM, which

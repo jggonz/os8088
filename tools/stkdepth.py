@@ -120,6 +120,50 @@ def symbols(mp):
     return out
 
 
+def epilogues(lst, syms):
+    """{label: [registers]} for every global label that is nothing but a run
+    of `pop`s and a `ret` - a SHARED EPILOGUE LADDER, entered by `jmp`.
+
+    drivers/ether/inet.inc's ep_* is the worked example: a routine that saved
+    some tail of AX..BP ends `jmp ep_<the last it pushed>` instead of its own
+    pops. Read alone, that routine pushes and never pops, so every register
+    it saved looked CLOBBERED and every `STKDEPTH-NOSAVE` that leant on it
+    failed. The run is walked in address order and straight through the
+    ladder's own labels, which is what makes ep_di's list include the pops
+    that ep_si, ep_dx and the rest also begin with."""
+    ins = []
+    for line in open(lst, errors="replace"):
+        m = re.match(r"^\s*\d+\s+([0-9A-F]{8})\s+(.*)$", line)
+        if not m:
+            continue
+        rest = m.group(2)
+        inc = re.search(r"<\d+>", rest)
+        text = rest[inc.end():] if inc else \
+            re.sub(r"^[0-9A-F\[\]<>()-]+\s*", "", rest)
+        text = text.split(";")[0].strip()
+        if text and not re.match(r"^[\w.]+:$", text):
+            text = re.sub(r"^[\w.]+:\s*", "", text)
+            ins.append((int(m.group(1), 16), text))
+    at = {}
+    for i, (addr, _t) in enumerate(ins):
+        at.setdefault(addr, i)
+    out = {}
+    for addr, name in syms.items():
+        i = at.get(addr)
+        if i is None:
+            continue
+        regs = []
+        while i < len(ins) and POP.match(ins[i][1]):
+            r = _reg(ins[i][1].split()[-1])
+            if not r:
+                break
+            regs.append(r)
+            i += 1
+        if i < len(ins) and RET.match(ins[i][1]) and regs:
+            out[name] = regs
+    return out
+
+
 def routines(lst, syms):
     """(routines, indirect sites, entry pushes, self-written regs)."""
     starts = sorted(syms)
@@ -136,6 +180,7 @@ def routines(lst, syms):
                 hi = mid - 1
         return syms.get(best)
 
+    ladder = epilogues(lst, syms)
     rout, cur, d, mx = {}, None, 0, 0
     pushes, pops, owns = {}, {}, {}          # BALANCED pushes = "saved"; a
     indirect = []                            # register written any other way
@@ -226,6 +271,11 @@ def routines(lst, syms):
             # routine's own control flow and are dropped by `deepest`, the
             # same way a `call .local` is.
             rout[cur][1].append((d, JMP.match(text).group(1), "tail"))
+            # ...and a jump into a SHARED EPILOGUE is this routine's own
+            # exit: the pops it lands on are the other half of this routine's
+            # pushes, so they count here (see `epilogues`)
+            for r in ladder.get(JMP.match(text).group(1), ()):
+                pops[cur][r] = pops[cur].get(r, 0) + 1
         elif INT.match(text):
             mx = max(mx, d + 6)
         mx = max(mx, d)

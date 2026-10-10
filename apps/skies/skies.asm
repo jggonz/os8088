@@ -3180,6 +3180,9 @@ CS_SWOOPHI equ 900              ; DOWN from the top in sink
 %define OS88UI_CHK              ; the check box (13.15), which the Settings
                                 ; page is the first user of,
 %include "os88alt.inc"          ; SPEC.md 11.2.1.1's edge, for the bracket
+%define OS88UI_NOGEST           ; presses routed by hand: no gesture install (SPEC.md 20.5.1.3.4)
+%define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
+%define OS88UI_NOGRADIO       ; check boxes only: no radio ring/dot (SPEC.md 13.15.3)
 %include "os88ui.inc"           ; of which this is the first user
 
 ; --- and the OVERLAY, at an address the worlds were assembled against ---------

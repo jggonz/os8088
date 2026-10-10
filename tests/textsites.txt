@@ -54,7 +54,10 @@
 1 apps/tamegram/tamegram.asm  # 6.6.2 case 1 - tg_str, kept for the PAUSE/GAME OVER banner alone: it lands on the matrix, which is a grid of cells. tg_run is the opaque twin every other caller takes
 
 # --- 6.6.2 case 4: the published C surface, and 6.6.2 case 5's macro bodies ---
-3 apps/os88ui.inc  # 6.6.2 case 4's other half - two of these three are UI_STR's MACRO BODIES, one per build, not call sites; the third is ui_button's UNFILLED case - a button with neither DOWN nor FILL never fills its interior, so the ground under the caption's cells is not ours to repaint. The FILLED shapes take font_run now (SPEC.md 11.96.17.1). They go when font_str does
+# apps/os88ui.inc stood here at 3 - UI_STR's two macro bodies and the button
+# caption's one invocation, for a button with neither DOWN nor FILL. No caller
+# could reach that button (os88ui_btn fills every one, SPEC.md 20.5.1.3.1), so
+# the os88ui size pass took the invocation and the macro with it: 3 -> 0.
 
 # --- backlog: three, and none of them is a conversion ------------------------
 1 kernel/wm.inc  # backlog: wm_draw_title's fifteen-call path, which is what EVERY shipping build draws. The composed bar is a KNOB (SPEC.md 5.9.6): wm_title_band is `%ifdef BAND`, so no floppy this project ships even assembles it, and this gfx_fill plus font_str_x writes every title pixel twice on chrome that redraws on every window operation. kern_small has no gfx_blit1 at all, so the conversion is owed on both builds. docs/plans/completed/TEXT-PLAN.md 6.1, Stage 7

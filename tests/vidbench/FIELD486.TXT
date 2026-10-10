@@ -1,0 +1,81 @@
+VIDEO PLAYER - 486 MEASUREMENT DISK
+===================================
+
+A bootable fixed disk: the os8088 kernel, the Video
+Player, three benches and some test clips (read
+this file on the host: the disk has no text viewer).
+What it measures becomes a new encoder target (a
+"486" profile), the way the 286-vga one was made.
+
+  17 sectors, 15 heads, 250 cylinders (31 MB), IDE.
+  In 86Box: `make 486-video`, or your own 486 with
+  this VHD on its IDE channel at that geometry and
+  no floppy in A:, so it boots the disk. Put the
+  blank floppy VID486OUT.IMG in B: - the results go
+  on it.
+
+PLEASE NOTE THE MACHINE: CPU and clock, the video
+card and its BUS (ISA 8 or 16-bit, VLB, PCI), the
+disk controller, the sound card. A VLB or PCI card is
+a different machine to an ISA one at the same clock,
+and both are worth a run if you have them.
+
+CLOSE EACH BENCH WINDOW before the next one, and all
+of them before playing a clip: each keeps its memory
+until it is closed, and the player reads ahead into
+whatever is free.
+
+1. VIDBENCH.O88 -> VIDBENCH.TXT   (R)
+     The card. Raw rows: 8,000 bytes to the screen
+     and to RAM, READ from the screen, stored in mode
+     12h, and the LATCH COPY (screen to screen, all
+     four planes a byte) the flipped player takes.
+     Then every frame of VIDBENCH.DAT decoded and
+     timed. Screen garbage while it runs is expected.
+
+2. VIDDISK.O88 -> VDWRITE.TXT, VIDDISK.TXT  (W, R)
+     The disk. W writes its own stream file,
+     STREAM.DAT, 12.5 MB - minutes, slower towards
+     the end. R then reads it back (about two
+     minutes), and the part that matters is the
+     SILENT PLAYER'S CEILING: KB/s while an
+     interrupt holds 0, 25, 50 and 75% of every
+     frame. The screen stays still for 25 s of that;
+     it is working. D deletes STREAM.DAT after.
+
+3. VIDSND.O88 -> VIDSND.TXT       (R)
+     The Sound Blaster: interrupts a frame, and the
+     disk while the sound interrupt is busy.
+
+4. THE CLIPS: double-click one. It opens in
+     VIDEOD.O88, the Video Player with more lines on
+     its info card; Space plays it. After each play
+     press i and PHOTOGRAPH THE CARD: drawn, stalls,
+     late, pauses, and the Heap / Ring / Lead / Dry
+     lines. VIDEO.O88 is the ordinary player, the same
+     without those lines.
+
+     Last Exile, 0:48 to 0:58, lossless Mode X,
+     24 fps, 22 kHz - its fastest pans and a scene
+     change:
+       LX32.V88    32 KB frames, no flip (TEARS)
+       LX32F.V88   32 KB, flipped
+       LX48F.V88   48 KB, flipped - no frame here is
+                   cut at 48, so 63.5 would play the
+                   same; it needs no clip of its own
+       LX48B.V88   48 KB, no flip, in 12 bands
+                   (tears along one line)
+     The flipped 48 needs a player from 2026-10-06
+     or later, and says so if not.
+     Zero stalls and zero late is the target; the
+     biggest frame cap that gets there is the 486's.
+
+5. THE RESULTS: open the Disk window on B:, and copy
+     VIDBENCH.TXT, VDWRITE.TXT, VIDDISK.TXT and
+     VIDSND.TXT from C: onto it (drag them).
+     Shut down, and the
+     host can read VID486OUT.IMG as a FAT floppy
+     (7-Zip, WinImage, or mount it).
+
+Nothing on the disk is changed but the .TXT results
+and VIDDISK's STREAM.DAT.

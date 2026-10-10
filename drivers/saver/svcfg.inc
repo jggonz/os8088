@@ -137,10 +137,7 @@ sv_do_cfg:
     call os88ui_arm             ; a window reopened mid-gesture must not come
 .show:                          ; up with one armed for the next release
     call OSAPI_WM_SHOW
-    clc
-    ret
-.no:
-    stc
+    CLC_OR_STC .no
     ret
 
 ; sc_seed - SI = a line block, DI = its buffer; fill in the rest
@@ -181,12 +178,7 @@ sc_layout:
     mov dx, bp
     add dx, SC_N0Y + SC_NPIT
     call sc_frect
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_si
 
 ; sc_frect - one field's rect: SI = the block, DI = content left, DX = its top
 sc_frect:
@@ -209,13 +201,7 @@ sc_frect:
 ; in:  SI = the window
 ; -----------------------------------------------------------------------------
 sc_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
     call sc_layout              ; DI = content left, BP = content top
 
     xor cx, cx                  ; --- the four check boxes
@@ -255,14 +241,7 @@ sc_paint:
 
     call sc_btns                ; --- and the two buttons
 
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_bp
 
 ; --- sc_txt - SI = the string at (CX, DX), black ----------------------------
 sc_txt:
@@ -446,13 +425,7 @@ sc_bhit:
 ; does not, so a mis-aimed press on Ok has to be cancellable by sliding off.
 ; -----------------------------------------------------------------------------
 sc_click:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
     mov [sc_cx], cx
     mov [sc_cy], dx
     call sc_layout
@@ -511,14 +484,7 @@ sc_click:
     call os88ui_arm
     call sc_setdown
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_bp
 
 ; sc_blk - CX = 0 or 1 -> SI = that field's line block
 sc_blk:
@@ -554,40 +520,21 @@ sc_focused:
 ; costs one compare and no pixels (SPEC.md 13.8.1).
 ; -----------------------------------------------------------------------------
 sc_setdown:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
     cmp al, [sc_down]
     je .out
     mov [sc_down], al
     call sc_layout
     call sc_btns
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; sc_up - W_ONMOUSEUP (SPEC.md 13.7): the two buttons fire HERE
 ; in:  CX = x, DX = y (SCREEN, possibly outside the window), SI = the window
 ; -----------------------------------------------------------------------------
 sc_up:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
     call os88ui_fire            ; AX = what the press armed, and it is CLEARED
     or ax, ax
     jz .out
@@ -614,27 +561,14 @@ sc_up:
     xor al, al                  ; slid off: thought better of, nothing fires
     call sc_setdown
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; sc_drag - W_ONDRAG (SPEC.md 13.8.2): keep what is drawn pressed equal to
 ; what would fire. The same question sc_up asks, one pass early.
 ; -----------------------------------------------------------------------------
 sc_drag:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
     call os88ui_armed           ; PEEK: the arm is the release's to spend
     or ax, ax
     jz .out
@@ -647,14 +581,7 @@ sc_drag:
 .set:
     call sc_setdown             ; ...which draws only if that CHANGED
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; sc_key - W_ONKEY: AL = ascii, AH = scan, SI = the window
@@ -664,13 +591,7 @@ sc_drag:
 ; means Ok.
 ; -----------------------------------------------------------------------------
 sc_key:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call os88_ent               ; push ax, bx, cx, dx, si, di, bp (os88drv.inc)
     call sc_layout
     cmp al, 13
     je .ret
@@ -701,14 +622,7 @@ sc_key:
 .esc:
     call sc_kill
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; sc_fields - the two fields after a focus change, and NOTHING else
@@ -786,12 +700,7 @@ sc_store:
     call sc_clamp               ; two clamps take their floor as an argument
     mov bx, [sv_pub]
     mov [es:bx + SS_P_MINS], al
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_si
 
 ; -----------------------------------------------------------------------------
 ; sc_test - show it NOW (SPEC.md 79.7)
@@ -952,8 +861,15 @@ sc_str2num:
 .out:
     ret
 
+; --- the shared prologue and return ladder (drivers/os88drv.inc) -------------
+; `call os88_ent` banks ax..bp, `jmp os88_r_bp` gives them back and returns,
+; `jmp os88_r_si` the same for a routine that pushed ax..si. Cold only - this
+; window's callbacks - and that is all that takes them.
+    OS88_ENT
+    OS88_RET_LADDER bp
+
 ; --- the window ---------------------------------------------------------------
-sc_tpl:     dw SC_X, SC_Y, SC_FW, SC_FH, sc_s_title, sc_paint, sc_key, sc_click
+sc_tpl:    dw SC_X, SC_Y, SC_FW, SC_FH, sc_s_title, sc_paint, sc_key, sc_click
 sc_s_title: db 'Screen Saver', 0
 
 sc_labels:  dw sc_s_m0, sc_s_m1, sc_s_m2, sc_s_m3

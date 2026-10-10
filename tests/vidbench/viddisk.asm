@@ -20,13 +20,20 @@
 ; milliseconds and more).
 ;
 ; W  MAKES the stream: STREAM.DAT, 12.5 MB, every dword its own offset in the
-;    file, written where R will look for it in 32 KB OSAPI_FILE_APPENDs. It
-;    checks the room first, and it RESUMES - a STREAM.DAT that is a whole
-;    number of chunks short of 12.5 MB is carried on from its end, so a write
-;    interrupted by a reset costs only what was not written. Minutes: every
-;    append walks the chain to its last cluster (SPEC.md 18.4.7.3), so it
-;    slows as the file grows. It reports its own rate (KB/s x 10, the whole
-;    write) and saves the report as VDWRITE.TXT beside the bench.
+;    file, written where R will look for it in 32 KB calls of the HELD
+;    streaming write (OSAPI_FILE_WRITE_SEQ, WSEQF_HELD, SPEC.md 18.4.9): no
+;    walk, and the FAT and the entry written once at the close. It checks the
+;    room first, and it RESUMES - a STREAM.DAT that is a whole number of
+;    chunks short of 12.5 MB is carried on from its end, so a write
+;    interrupted by a reset costs only what was not written. It reports its
+;    own rate (KB/s x 10, the whole write) and WHICH WRITER made it, and
+;    saves the report as VDWRITE.TXT beside the bench.
+; A  the same with OSAPI_FILE_APPEND, the old writer, which walks the chain
+;    to its last cluster every call (SPEC.md 18.4.7.3) and slows as the file
+;    grows: the A/B. It was W until 2026-10-07, when the owner read ~30 KB/s
+;    off the ST-225 and could not tell from the report that it was APPEND.
+;    P is WRITE_SEQ PLAIN (committed every call) and H is W again; U, I, K
+;    and F are the held stream's edge cases, for tests/viddisk.py.
 ; D  deletes STREAM.DAT again, so the disk gets its 12.5 MB back.
 ;
 ; With a STREAM.DAT, R also CHECKS the data at 12 MB, read by READ_AT and by
@@ -55,6 +62,21 @@
 ;                         a DMA controller: its completion interrupt waits.
 ;   int13 track / sector  the ROM's own int 13h on unit 80h, a whole track and
 ;                         one sector: the controller's ceiling.
+;   across a head / cyl   DOES THE ROM CARRY ONE CALL ONTO THE NEXT HEAD? The
+;                         kernel ends every fixed-disk run at the track
+;                         (SPEC.md 52.1, disk.inc's run loop), so a 32 KB
+;                         READ_SEQ is ~5 calls on a 17-sector disk and each
+;                         pays the call's set-up and half a turn. A run read
+;                         a track a call is the truth; the same run in ONE
+;                         call, into a buffer filled with a pattern first,
+;                         must checksum the same - a ROM that answers CF=0
+;                         for a short or a wrong-head read reads as WRONG
+;                         BYTES, which is the failure that would be silent in
+;                         the kernel. Across a head, then across a cylinder.
+;   N sectors one call    ...and what it buys: the same N sectors (a whole
+;   / a call a track      cylinder, or 40 KB) from sector 1 of fresh
+;                         cylinders, in one call and a call a track. Only
+;                         timed in one call when the crossing read was right.
 ;
 ; R IS READ-ONLY: it writes nothing but VIDDISK.TXT, its report, beside
 ; itself. Only W writes (STREAM.DAT and VDWRITE.TXT) and only D deletes
@@ -66,7 +88,7 @@
 
     OS88_HEADER 'VIDDISK', vk_entry
 
-VK_NRES     equ 20
+VK_NRES     equ 21
 VK_BUFKB    equ 40                  ; 32 KB chunks, and a whole track
 VK_CHUNK    equ 32768
 %ifndef VK_WSUB
@@ -111,9 +133,12 @@ vk_onkey:
     or bl, 0x20
     cmp bl, 'r'
     je .run
+    mov byte [vk_wmode], 2          ; W: THE STREAMING WRITE, HELD - the
+    cmp bl, 'w'                     ; fast path (SPEC.md 18.4.9), and what
+    je .write                       ; the field means by "writing a file"
     mov byte [vk_wmode], 0
-    cmp bl, 'w'
-    je .write
+    cmp bl, 'a'                     ; A: OSAPI_FILE_APPEND, the old writer -
+    je .write                       ; the A/B (it was W until 2026-10-07)
     inc byte [vk_wmode]             ; 'p': OSAPI_FILE_WRITE_SEQ, plain
     cmp bl, 'p'
     je .write
@@ -746,6 +771,7 @@ vk_run:
     mov si, vk_r_sec
     mov bx, 6
     call vk_row
+    call vk_mh                      ; one call across a head?
 
     mov si, vk_r_err
     mov ax, [vk_err]
@@ -1021,6 +1047,13 @@ vk_wrun:
     mov word [vk_err], 0
     mov si, vk_s_wtitle
     call bl_sline
+    mov al, [vk_wmode]              ; WHICH WRITER: a rate is nothing without
+    xor ah, ah                      ; it - the owner read 30 KB/s off W and
+    shl ax, 1                       ; could not tell it was APPEND
+    mov bx, ax
+    mov di, [vk_wpaths + bx]
+    mov si, vk_r_wpath
+    call bl_kvs
     call vk_claim
     jc .fail
     call vk_toc
@@ -1293,6 +1326,427 @@ vk_drun:
     ret
 
 %define BL_ARENA_BYTES 5000
+; --- one int 13h across a head (see the header) ---------------------------------
+VK_MHMAX    equ VK_BUFKB * 2        ; sectors the buffer holds: 80
+VK_MHPAT    equ 0xE5A6              ; what a sector the ROM did not read reads
+VK_MHCYL    equ 2                   ; the head crossing is on this cylinder,
+                                    ; the cylinder crossing at its end, and
+VK_MHTCYL   equ 6                   ; the timing rows from this one on
+VK_MHN      equ 12                  ; ...one fresh cylinder an iteration
+
+; vk_xrd - int 13h AH=2 on unit 80h: AL sectors from [vk_xc] cylinder, DH
+; head, CL sector (1-based, bits 0-5) into [vk_buf]:BX. CF and AH are the
+; ROM's. Clobbers CX
+vk_xrd:
+    push es
+    push dx
+    mov es, [vk_buf]
+    mov ch, [vk_xc]
+    mov dl, [vk_xc + 1]
+    ror dl, 1                       ; cylinder bits 8-9 into CL bits 6-7
+    ror dl, 1
+    and dl, 0xC0
+    or cl, dl
+    mov ah, 2
+    mov dl, 0x80
+    int 0x13
+    pop dx
+    pop es
+    ret
+
+; vk_xsplit - the run [vk_xc]:[vk_xh]:[vk_xs], [vk_xn] sectors, read a track
+; a call into [vk_buf]:0 - the truth a crossing read is held to. CF=1 a call
+; failed. Every register kept
+vk_xsplit:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push word [vk_xc]
+    mov bx, [vk_xbx]
+    mov dh, [vk_xh]
+    mov cl, [vk_xs]
+    mov si, [vk_xn]
+.next:
+    mov al, [vk_spt]
+    sub al, cl
+    inc al                          ; AL = the sectors left on this track
+    xor ah, ah
+    cmp ax, si
+    jbe .n
+    mov ax, si
+.n:
+    push ax
+    push cx
+    call vk_xrd
+    pop cx
+    pop ax
+    jc .out
+    sub si, ax
+    jz .out                         ; (CF clear: sub gave a result >= 0)
+    mov ah, al                      ; BX += AL x 512
+    xor al, al
+    shl ax, 1
+    add bx, ax
+    mov cl, 1                       ; the next track from its first sector
+    inc dh
+    cmp dh, [vk_heads]
+    jb .next
+    xor dh, dh
+    inc word [vk_xc]
+    jmp short .next
+.out:
+    pop word [vk_xc]
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vk_xone - the same run in ONE call. CF=1 the ROM refused, AH its status
+vk_xone:
+    push bx
+    push cx
+    push dx
+    mov bx, [vk_xbx]
+    mov al, [vk_xn]
+    mov dh, [vk_xh]
+    mov cl, [vk_xs]
+    call vk_xrd
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; vk_xsum - AX = the run's checksum, vb_sum's (s = rol(s + word)), over
+; [vk_xn] sectors at [vk_buf]:0
+vk_xsum:
+    push cx
+    push si
+    push ds
+    mov cx, [vk_xn]
+    mov ah, cl                      ; words = sectors x 256
+    xor al, al
+    mov cx, ax
+    mov si, [vk_xbx]
+    mov ds, [vk_buf]
+    xor ax, ax
+.w:
+    add ax, [si]
+    rol ax, 1
+    inc si
+    inc si
+    loop .w
+    pop ds
+    pop si
+    pop cx
+    ret
+
+; vk_xfill - the buffer's first [vk_xn] sectors, VK_MHPAT
+vk_xfill:
+    push ax
+    push cx
+    push di
+    push es
+    mov di, [vk_xbx]
+    mov es, [vk_buf]
+    mov cx, [vk_xn]
+    mov ah, cl
+    xor al, al
+    mov cx, ax
+    mov ax, VK_MHPAT
+    cld
+    rep stosw
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; vk_xcase - SI = the label: read the run both ways and say which. CF=0 the
+; one call read the truth
+vk_xcase:
+    push ax
+    push bx
+    push di
+    call vk_xsplit
+    mov di, vk_s_xsfail
+    jc .say                         ; no truth to hold it to
+    call vk_xsum
+    mov bx, ax
+    call vk_xfill
+    call vk_xone
+    mov di, vk_s_xref
+    jc .err
+    call vk_xsum
+    mov di, vk_s_xok
+    cmp ax, bx
+    je .good
+    mov di, vk_s_xbad
+.say:
+    call bl_kvs
+    stc
+    jmp short .out
+.err:
+    call bl_kvs                     ; refused, and the status on its own line
+    mov al, ah
+    xor ah, ah
+    xor dx, dx
+    push cx
+    mov cx, 9
+    mov si, vk_r_xst
+    call bl_kv
+    pop cx
+    stc
+    jmp short .out
+.good:
+    call bl_kvs
+    clc
+.out:
+    pop di
+    pop bx
+    pop ax
+    ret
+
+; the timing rows' bodies: [vk_tn] sectors from head 0 sector 1 of cylinder
+; [vk_xc], which moves on one an iteration so no track is read twice
+vk_b_tone:
+    mov ax, [vk_tn]
+    mov [vk_xn], ax
+    mov byte [vk_xh], 0
+    mov byte [vk_xs], 1
+    call vk_xone
+    jnc .ok
+    inc word [vk_err]
+.ok:
+    inc word [vk_xc]
+    ret
+vk_b_tsplit:
+    mov ax, [vk_tn]
+    mov [vk_xn], ax
+    mov byte [vk_xh], 0
+    mov byte [vk_xs], 1
+    call vk_xsplit
+    jnc .ok
+    inc word [vk_err]
+.ok:
+    inc word [vk_xc]
+    ret
+
+; vk_msweep - THE KERNEL'S OWN SHAPES (SPEC.md 18.91.5): a run from a
+; MID-TRACK sector to the cylinder's end, as dsk_xfer issues one under
+; the cylinder bound (SPEC.md 18.91.5), into the buffer at 0, 1 and 2 sectors in - VK_SWN of them, the
+; start walking the heads and the sectors. The two rows above start every
+; run at sector 1 on a 17-sector disk, so a ROM that carries a whole track
+; onto the next head and gets a run starting mid-track wrong would pass
+; them. (It was written for the owner's ST11M, whose knob install failed to
+; boot - which turned out to be the install pairing a stock boot sector with
+; the knob kernel, SPEC.md 18.91.5, and the sweep then read 48 of 48 right.)
+; Every shape is held to a track a call, as above; the first that is not
+; the same bytes is named
+VK_SWN     equ 48
+VK_SWCYL   equ 10
+vk_msweep:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor ax, ax
+    mov [vk_swn], ax
+    mov [vk_swbad], ax
+    mov [vk_swref], ax
+    mov word [vk_swf], 0xFFFF
+    xor si, si                      ; SI = the shape
+.l:
+    mov ax, si                      ; the buffer at (i mod 3) sectors in
+    xor dx, dx
+    mov cx, 3
+    div cx
+    mov di, dx                      ; DI = those sectors
+    mov ah, dl
+    xor al, al
+    shl ax, 1
+    mov [vk_xbx], ax
+    mov ax, si
+    add ax, VK_SWCYL
+    mov [vk_xc], ax                 ; a fresh cylinder each
+    mov ax, si
+    xor dx, dx
+    mov cl, [vk_heads]
+    xor ch, ch
+    div cx
+    mov [vk_xh], dl                 ; the head, i mod heads
+    mov bl, dl
+    mov ax, si
+    mov cx, 7
+    mul cx
+    xor dx, dx
+    mov cl, [vk_spt]
+    xor ch, ch
+    div cx
+    inc dx
+    mov [vk_xs], dl                 ; the sector, 1 + 7i mod spt
+    mov al, [vk_heads]              ; to the cylinder's end, as the kernel
+    sub al, bl                      ; reads: (heads - head) x spt - (s - 1)
+    mul byte [vk_spt]
+    dec dx
+    sub ax, dx
+    mov cx, VK_MHMAX                ; ...capped by the buffer
+    sub cx, di
+    cmp ax, cx
+    jbe .n
+    mov ax, cx
+.n:
+    mov [vk_xn], ax
+    call vk_xsplit
+    jc .next                        ; no truth to hold it to
+    inc word [vk_swn]
+    call vk_xsum
+    mov bx, ax
+    call vk_xfill
+    call vk_xone
+    jc .ref
+    call vk_xsum
+    cmp ax, bx
+    je .next
+    inc word [vk_swbad]
+    cmp word [vk_swf], 0xFFFF
+    jne .next
+    mov ax, [vk_xc]                 ; the first wrong one, named
+    mov [vk_swf], ax
+    mov al, [vk_xh]
+    xor ah, ah
+    mov [vk_swf + 2], ax
+    mov al, [vk_xs]
+    mov [vk_swf + 4], ax
+    mov ax, [vk_xn]
+    mov [vk_swf + 6], ax
+    jmp short .next
+.ref:
+    inc word [vk_swref]
+.next:
+    inc si
+    cmp si, VK_SWN
+    jb .l
+    mov word [vk_xbx], 0
+    xor dx, dx
+    mov cx, 9
+    mov si, vk_r_swn
+    mov ax, [vk_swn]
+    call bl_kv
+    mov si, vk_r_swbad
+    mov ax, [vk_swbad]
+    call bl_kv
+    mov si, vk_r_swref
+    mov ax, [vk_swref]
+    call bl_kv
+    cmp word [vk_swf], 0xFFFF
+    je .out
+    mov si, vk_r_swfc
+    mov ax, [vk_swf]
+    call bl_kv
+    mov si, vk_r_swfh
+    mov ax, [vk_swf + 2]
+    call bl_kv
+    mov si, vk_r_swfs
+    mov ax, [vk_swf + 4]
+    call bl_kv
+    mov si, vk_r_swfn
+    mov ax, [vk_swf + 6]
+    call bl_kv
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vk_mh - the crossing rows and the timing rows (see the header). Reads only
+vk_mh:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, vk_s_hdrx
+    call bl_sline
+    cmp byte [vk_heads], 2
+    jb .out                         ; one head: nothing to cross
+    ; K = the sectors each side of the seam: a whole track, or what half the
+    ; buffer holds
+    mov al, [vk_spt]
+    cmp al, VK_MHMAX / 2
+    jbe .k
+    mov al, VK_MHMAX / 2
+.k:
+    mov cl, al                      ; CL = K
+    mov ah, [vk_spt]
+    sub ah, al
+    inc ah
+    mov [vk_xs], ah                 ; from sector spt - K + 1...
+    xor ch, ch
+    shl cx, 1
+    mov [vk_xn], cx                 ; ...2K sectors
+    mov word [vk_xc], VK_MHCYL
+    mov byte [vk_xh], 0             ; head 0 onto head 1
+    mov si, vk_r_xhead
+    call vk_xcase
+    pushf
+    mov al, [vk_heads]
+    dec al
+    mov [vk_xh], al                 ; the last head onto the next cylinder
+    mov si, vk_r_xcyl
+    call vk_xcase
+    call vk_msweep                  ; ...and the kernel's own shapes
+    popf
+    mov byte [vk_xgood], 0          ; 1: time the one call too
+    jc .time
+    inc byte [vk_xgood]
+    ; --- the time: N = a cylinder, or the buffer, whichever is less
+.time:
+    mov al, [vk_spt]
+    mul byte [vk_heads]
+    cmp ax, VK_MHMAX
+    jbe .n
+    mov ax, VK_MHMAX
+.n:
+    mov [vk_tn], ax
+    mov si, vk_r_tn
+    xor dx, dx
+    mov cx, 9
+    call bl_kv
+    mov word [bl_n], VK_MHN
+    mov word [vk_xc], VK_MHTCYL
+    mov word [bl_body], vk_b_tsplit
+    mov si, vk_r_tsplit
+    mov bx, 19
+    call vk_row
+    cmp byte [vk_xgood], 0
+    je .skip
+    mov word [vk_xc], VK_MHTCYL     ; the same cylinders again
+    mov word [bl_body], vk_b_tone
+    mov si, vk_r_tone
+    mov bx, 20
+    call vk_row
+    jmp short .out
+.skip:
+    mov si, vk_r_tone
+    mov di, vk_s_xskip
+    call bl_kvs
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 %include "benchlib.inc"
 
 vk_tpl:
@@ -1305,6 +1759,16 @@ vk_f_txt:     db 'VIDDISK.TXT', 0
 vk_f_wtxt:    db 'VDWRITE.TXT', 0
 vk_s_title:   db 'VIDDISK - streaming off the fixed disk (VIDEO-PLAN W0 b, W2, W3)', 0
 vk_s_hint:    db 'R (or a click) runs: reads only, saves VIDDISK.TXT. No stream? W.', 0
+vk_r_wpath:   db 'the writer', 0
+vk_wpaths:    dw vk_s_wp0, vk_s_wp1, vk_s_wp2, vk_s_wp3, vk_s_wp4, vk_s_wp5
+              dw vk_s_wp6
+vk_s_wp0:     db 'A: APPEND, a walk a call', 0
+vk_s_wp1:     db 'P: WRITE_SEQ, plain', 0
+vk_s_wp2:     db 'W: WRITE_SEQ, HELD', 0
+vk_s_wp3:     db 'U: held, never closed', 0
+vk_s_wp4:     db 'I: held, another file', 0
+vk_s_wp5:     db 'K: held, deleted', 0
+vk_s_wp6:     db 'F: held, no room check', 0
 vk_s_nostr:   db 'No STREAM.DAT or (BAD)APPLE.V88 of 12 MB: press W to write one', 0
 vk_s_noc:     db 'NO C: - mount the hard disk (Control Panel), then run again', 0
 vk_s_wtitle:  db 'VIDDISK W - writing STREAM.DAT, 12.5 MB, for R to read back', 0
@@ -1361,6 +1825,25 @@ vk_r_sec:     db 'int13 one sector', 0
 vk_r_spt:     db 'sectors per track', 0
 vk_r_heads:   db 'heads', 0
 vk_r_err:     db 'errors (any row)', 0
+vk_s_hdrx:    db '-- int 13h: ONE call across a head (the kernel ends at a track) --', 0
+vk_r_xhead:   db 'one call across a head', 0
+vk_r_xcyl:    db 'one call across a cyl', 0
+vk_r_xst:     db '...the ROM said (AH)', 0
+vk_s_xok:     db 'ok - the same bytes', 0
+vk_s_xbad:    db 'WRONG BYTES - short or wrong head', 0
+vk_s_xref:    db 'refused', 0
+vk_s_xsfail:  db 'track reads failed: no answer', 0
+vk_s_xskip:   db 'not timed: the crossing read was not right', 0
+vk_r_tn:      db 'sectors timed, each way', 0
+vk_r_tsplit:  db 'N sectors, track calls', 0
+vk_r_tone:    db 'N sectors, one call', 0
+vk_r_swn:     db 'kernel shapes read', 0
+vk_r_swbad:   db '...WRONG BYTES', 0
+vk_r_swref:   db '...refused', 0
+vk_r_swfc:    db 'first wrong: cylinder', 0
+vk_r_swfh:    db '...head', 0
+vk_r_swfs:    db '...from sector', 0
+vk_r_swfn:    db '...sectors', 0
 
 vk_win:       dw 0
 vk_buf:       dw 0
@@ -1389,6 +1872,17 @@ vk_cylhi:     db 0
 vk_head:      db 0
 vk_moved:     db 0
 vk_hdrv:      db 0
+vk_xc:        dw 0              ; the crossing rows' cylinder,
+vk_xn:        dw 0              ; ...run length in sectors,
+vk_tn:        dw 0              ; ...the timing rows' length,
+vk_xh:        db 0              ; ...head,
+vk_xs:        db 0              ; ...first sector,
+vk_xgood:     db 0              ; ...and whether one call read the truth
+vk_xbx:       dw 0              ; ...the buffer offset a run reads to
+vk_swn:       dw 0              ; vk_msweep: shapes read,
+vk_swbad:     dw 0              ; ...the wrong ones,
+vk_swref:     dw 0              ; ...the refused ones,
+vk_swf:       dw 0, 0, 0, 0     ; ...and the first wrong: C, H, S, n
 vk_dchk:      db 0
               db 0
 vk_hdir:      dw 0

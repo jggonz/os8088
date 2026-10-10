@@ -3265,3 +3265,28 @@ world. Worth keeping for how it was found: the runway is exempt from Detail
 (SPEC.md 88.13.1), so a missing RUNWAY ruled out the settings and pointed at
 the cull, and the cull's only input that grows with a long session is the
 clock. `tests/skiesticks.py` sets `[ticks]` and reproduces it in 25 seconds.
+
+
+## 63. Pentium 4, USB keyboard on a USB-to-PS/2 converter: Space cannot PAUSE MIDIRack's speaker play (OPEN — instrumented: SPEC.md 9.8.1)
+
+Reported by a tester on a **Pentium 4**, keyboard USB through a USB-to-PS/2
+converter. The keyboard works on the desktop, types, and **Space RESUMES** a
+paused MIDIRack - but while MIDIRack plays through the PC speaker, Space does
+not pause it.
+
+That play is an `FSXF_RATE` bracket (SPEC.md 34.11, 105.8.3), and its key path
+is not custom: `mrk_input` polls the ROM's own `int 16h`, the same call
+`ui_task` makes on the desktop, and `kbm_isr` chains every scancode to the
+ROM's `int 09h` exactly as it does outside a bracket. Nothing masks IRQ1. What
+the bracket changes is IRQ0: the speaker's ISR owns it at the sample rate and
+chains the kernel's tick once a period, so a keystroke's `int 09h` - a long
+handler on a late-90s ROM, which `sti`s and talks to the 8042 - runs with
+thousands of nested pulses a second. No emulator here is that machine.
+
+`make kbddiag` is the disk to hand out. SPEC.md 9.8.1 says what each of the
+three possible pictures means; what to ask the tester for is: boot it, open
+MIDIRack, play on the speaker, press Space three or four times, then pause with
+a CLICK (or let the song end), touch nothing, and photograph the panel under
+the menu bar. Esc and S in the bracket are worth trying too - if they also do
+nothing, it is not about Space.
+
