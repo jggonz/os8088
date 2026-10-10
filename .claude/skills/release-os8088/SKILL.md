@@ -204,6 +204,7 @@ make loomdisk                         # loom*.img -- the same family's IDE disk,
 make runcpm-src && make runcpmdisk    # runcpm*.img
 make scribedisk paccmandisk           # scribe*.img, paccman*.img
 make 1942disk redlinedisk             # 1942*.img, redline*.img
+make midirackdisk pixeldisk           # midirack*.img, pixel*.img
 make apple2rom && make apple2disk     # apple2*.img -- apple2rom fetches the
                                       # ROM once; `make clean` spares it
 make live                             # os8088-usb.img + os8088.iso -- the live
