@@ -1419,6 +1419,8 @@ opl_init:
 
 %include "sb.inc"               ; the Sound Blaster half (SPEC.md 34.5/34.6)
 %include "mpu.inc"              ; ...and the MPU-401's MIDI out (SPEC.md 34.13)
+    OS88_PIN                    ; ...whose port the Ports view may pin
+                                ; (SPEC.md 51.9.2)
 %include "covox.inc"            ; ...and the Covox's port (SPEC.md 34.14)
 
 %ifdef PICOMEM

@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "8939601704d8f38c8030d8b68e0c546a698b86d2c74aa6ffa74f2ec19a911214",
+  "fingerprint": "92a3f9f49dd174f8f17a703767c6586fed5dbef67fc36a1ceef31fef1e9cb30e",
   "version": 9
  },
  "PKG_FMT": {
-  "fingerprint": "e1a724541e03d1c3d1d76fd9844b4120d13b96c6734227fe31824ff802927d9c",
+  "fingerprint": "e786ef0bd74bf964ad033e9168823810b6ca9861367ffdb3b867224cd6950b8a",
   "version": 8
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -21,6 +21,20 @@
    "from": null,
    "guard": "DRV_VER",
    "reason": "The lock begins at PKG_FMT 8 and DRV_VER 9, the numbers #214 set. This change adds OSAPI_LD_EVER, a constant naming an AL value OSAPI_PKG_START could already return: nothing built before it changes, so no bump.",
+   "to": 9
+  },
+  {
+   "fingerprint": "e786ef0bd74bf964ad033e9168823810b6ca9861367ffdb3b867224cd6950b8a",
+   "from": 8,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_DRV_CFG answers from DRVV_ATTACH (the drv_tab row is the fence); DRVPIN_* and OS88_PIN for the Drivers page's Ports view's port pins (SPEC.md 51.9.2). Old drivers ignore pins; a pinning driver on an older kernel reads Auto. No number moves.",
+   "to": 8
+  },
+  {
+   "fingerprint": "92a3f9f49dd174f8f17a703767c6586fed5dbef67fc36a1ceef31fef1e9cb30e",
+   "from": 9,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_DRV_CFG answers from DRVV_ATTACH (the drv_tab row is the fence); DRVPIN_* and OS88_PIN for the Drivers page's Ports view's port pins (SPEC.md 51.9.2). Old drivers ignore pins; a pinning driver on an older kernel reads Auto. No number moves.",
    "to": 9
   }
  ]

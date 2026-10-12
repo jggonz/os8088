@@ -121,6 +121,17 @@ DQ_MAXREC    equ 8              ; ...and the most one call can write
 
 DRVV_ATTACH  equ 0              ; out CF=0 and SI = your service table;
                                 ;     CF=1 = no hardware, nothing hooked
+                                ; OSAPI_DRV_CFG answers here, so a blob - a
+                                ; port pin above all - is read BEFORE the
+                                ; probe (SPEC.md 51.9.2)
+
+; A PORT PIN (SPEC.md 51.9.2): the one-byte blob the Control Panel's Ports
+; page writes for the sound row and the Ethernet row. (port - DRVPIN_BASE) / 2,
+; so every even port from 200h to 3FCh has a value and the byte means the same
+; whatever list a build offers
+DRVPIN_AUTO  equ 0              ; search, as without a pin
+DRVPIN_OFF   equ 0xFF           ; do not look at all
+DRVPIN_BASE  equ 0x200
 DRVV_DETACH  equ 1              ; out: nothing. Cannot fail.
 DRVV_READY   equ 3              ; "your services are published; the kernel can
                                 ; take your calls now". Sent ONCE, right after
@@ -865,6 +876,33 @@ os88_ent:
     mov [bp+12], ax             ; ...[bx][ax]
     mov bp, [bp]                ; BP back
     ret
+%endmacro
+
+; -----------------------------------------------------------------------------
+; OS88_PIN - emits `os88_pin`: AL = this driver's PORT PIN (SPEC.md 51.9.2),
+; DRVPIN_AUTO when it has none - including on a kernel too old to answer
+; OSAPI_DRV_CFG from ATTACH, which refuses and so reads as Auto. Every other
+; register preserved. OPT-IN, OS88_ENT's way: a driver that never pins pays
+; nothing
+; -----------------------------------------------------------------------------
+%macro OS88_PIN 0
+os88_pin:
+    push cx
+    push si
+    push es
+    push ds
+    pop es                      ; the blob's buffer is in OUR segment
+    mov si, os88_pinb
+    mov byte [si], DRVPIN_AUTO  ; ...and a refusal leaves it untouched
+    mov cx, 1
+    xor al, al                  ; read
+    call OSAPI_DRV_CFG
+    mov al, [os88_pinb]
+    pop es
+    pop si
+    pop cx
+    ret
+os88_pinb:  db 0
 %endmacro
 
 %macro OS88_RET_LADDER 1

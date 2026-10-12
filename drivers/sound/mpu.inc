@@ -28,6 +28,7 @@ MPU_DRR     equ 0x40                ; status bit 6: 1 = cannot take a byte
 MPU_DSR     equ 0x80                ; status bit 7: 1 = nothing to read
 
 mpu_bases:  dw 0x330, 0x300
+mpu_one:    dw 0                    ; ...or the ONE the Ports view pinned
 
 ; -----------------------------------------------------------------------------
 ; mpu_probe - is an MPU-401 at 330h or 300h? If so it is put in UART mode and
@@ -44,6 +45,17 @@ mpu_probe:
     mov [mpu_own], ax
     mov si, mpu_bases
     mov cx, 2
+    call os88_pin                   ; THE PORTS PAGE (SPEC.md 51.9.2): Auto
+    or al, al                       ; is the two bases above; Off is none at
+    jz .base                        ; all, with no port read; anything else is
+    cmp al, DRVPIN_OFF              ; that one port alone - still asked
+    je .none                        ; mpu_alone's question, because a pin that
+    xor ah, ah                      ; names somebody else's register is a
+    shl ax, 1                       ; mistake the bus should not pay for
+    add ax, DRVPIN_BASE
+    mov si, mpu_one
+    mov [si], ax
+    dec cx
 .base:
     mov dx, [si]
     inc dx                          ; DX = the status / command port
@@ -70,6 +82,7 @@ mpu_probe:
 .next:
     add si, 2
     loop .base
+.none:
     stc
 .out:
     pop si

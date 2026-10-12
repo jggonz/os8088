@@ -597,6 +597,12 @@ CFR_KEY     equ 0               ; one record
 CFR_VER     equ 2
 CFR_LEN     equ 3
 CFR_DAT     equ 4
+DRV_PBLOB_SZ equ 1              ; ...and the PORT PIN, the sound row's and the
+                                ; Ethernet row's (SPEC.md 51.9.2): one byte,
+                                ; (port - 200h) / 2, 0 = find it yourself and
+                                ; FFh = do not look. Two more blobs of one byte
+                                ; each rather than a field in somebody else's,
+                                ; for DRV_RBLOB_SZ's reason
 CFR_HDR     equ 4
 
 ; The settings themselves, staged in a struct that is KERNEL-PRIVATE: only
@@ -674,7 +680,13 @@ CFG_FDD     equ CFG_RBLOB + DRV_RBLOB_SZ    ; db: the Floppy page's four
                                 ; panel's module edits it here
 CFG_FDR     equ CFG_FDD + 1     ; db: ...and the READ bound, 0 Auto, 1 Track,
                                 ; 2 reserved: read as Auto (SPEC.md 31.14)
-CFG_NB      equ CFG_FDR + 1     ; ...the struct's size
+CFG_SPIN    equ CFG_FDR + 1     ; DRV_PBLOB_SZ: the sound row's blob - where
+                                ; its MPU-401 is (SPEC.md 51.9.2)
+CFG_EPIN    equ CFG_SPIN + DRV_PBLOB_SZ     ; ...and the Ethernet row's -
+                                ; where its card is. Both edited by the
+                                ; Drivers page's Ports view, read by the
+                                ; drivers AT ATTACH, before they probe
+CFG_NB      equ CFG_EPIN + DRV_PBLOB_SZ     ; ...the struct's size
 %else
 CFG_NB      equ CFG_DBLOB + DRV_BLOB_SZ     ; no RAM disk here, so no second
 %endif                          ; blob and 24 fewer bytes of settings struct
@@ -747,7 +759,11 @@ CFG_NB      equ CFG_DBLOB + DRV_BLOB_SZ     ; no RAM disk here, so no second
     dw 'FD'                     ; Floppy Drives - the Floppy page (31.14): ONE
     db 1, 2, CFG_FDD            ; record for both of its bytes, so the page
                                 ; costs one key entry and one record header
-CFG_NKEY    equ 11              ; ...and 'DK' (DOCK_OPT is kern_big's)
+    dw 'SP'                     ; Sound Port and Ethernet Port - the two port
+    db 1, DRV_PBLOB_SZ, CFG_SPIN    ; pins (51.9.2), a key each because a blob
+    dw 'EP'                     ; belongs to a ROW (51.9.1)
+    db 1, DRV_PBLOB_SZ, CFG_EPIN
+CFG_NKEY    equ 13              ; ...and 'DK' (DOCK_OPT is kern_big's)
 %else
 CFG_NKEY    equ 8               ; no 'RD' key: kern_small has no RAM disk, and
 %endif                          ; an unknown key is DROPPED rather than carried
@@ -879,7 +895,11 @@ drv_blob_map:
 %ifdef KERN_BIG
     db 3, DRV_RBLOB_SZ
     dw CFG_RBLOB                ; row 3: the RAM disk
-DRV_NBLOB   equ 2
+    db 0, DRV_PBLOB_SZ
+    dw CFG_SPIN                 ; row 0: the sound driver's MPU-401 port
+    db 2, DRV_PBLOB_SZ
+    dw CFG_EPIN                 ; row 2: the Ethernet card's port
+DRV_NBLOB   equ 4
 %else
 DRV_NBLOB   equ 1               ; no RAM disk on this build (SPEC.md 62.9.15),
 %endif                          ; so no second blob and no row to own one
@@ -2226,11 +2246,16 @@ osapi_drv_cfg_x:
     push dx
     push si
     push di
-    mov bx, es
-    call drv_pub_seg            ; a published DRIVER's slot, and nobody
-    jc .no                      ; else's - the drv_task fence exactly
-    call drv_blob_of            ; DI = this driver's blob, DX = how big it is
-    jc .no                      ; a published driver with no blob of its own
+    mov bx, es                  ; THE ROW IS THE FENCE (SPEC.md 51.9.2), and
+    call drv_blob_of            ; drv_blob_of asks it: DI = this driver's blob,
+    jc .no                      ; DX = how big. A segment no loaded row names
+                                ; - a package, a freed image - has none. It
+                                ; used to ask drv_pub_seg first, the spawn
+                                ; fence, which refuses a driver INSIDE ATTACH;
+                                ; that fence exists because a worker created
+                                ; there would outlive a refusal, and a blob
+                                ; read creates nothing. ATTACH is where a port
+                                ; pin is needed: before the probe, not after
     cmp cx, dx
     jbe .size
     or al, al

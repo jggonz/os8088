@@ -339,6 +339,13 @@ cp_dtop:    db 0                ; the FIRST DRIVER ROW SHOWN (SPEC.md 31.1.1).
                                 ; drv_tab has more, so the list scrolls; this
                                 ; is where the window into it starts. Inline
                                 ; .text data for the same reason [cp_sel] is
+%ifdef OS88_DRIVERS
+cp_dview:   db 0                ; 1 = the Drivers page is showing its PORTS
+                                ; view (SPEC.md 31.15). Back to the list on
+                                ; every page change; across a close it is
+                                ; kept, as [cp_dtop] is - a reset in cp_open_x
+                                ; would be five bytes of .cold for it
+%endif
 
 %ifdef KERN_BIG
 ; --- SPEC.md 13.8.3: the panel acts on the RELEASE ---------------------------
@@ -509,6 +516,26 @@ CPF_LX    equ CP_PMX + 2        ; label x
 CPF_BX1   equ 76                ; box left: 'Drive A:' is 64px from 4
 CPF_BX2   equ CPF_BX1 + 87      ; ...and right. 8 characters plus the arrow
 CPF_CAPY  equ CPF_R0Y + 5*CPF_ROWH + 4  ; 114: the caption
+
+; --- the Drivers page's Ports VIEW (SPEC.md 31.15), PANE-relative -----------
+; The button that swaps to it sits on the heading row, right of 'Drivers' and
+; above the first driver row's band at CP_DBY1 = 20. Then two rows of one
+; shape - a label, a value box, and the list's own two arrow cells to step it.
+CPD_PBX1  equ 148               ; the Ports / Back button
+CPD_PBX2  equ CPD_PBX1 + 47
+CPD_PBY1  equ 2
+CPD_PBY2  equ CPD_PBY1 + 15
+CP_DIDPORT equ DRV_MAX + 3      ; ...and its control id, above the arrows'
+                                ; (SPEC.md 13.8.3: ids are per page)
+CPP_R0Y   equ 24                ; row 0's box top, clear of the button
+CPP_ROWH  equ 24                ; ...and the pitch
+CPP_BH    equ CP_DSAH           ; box height = an arrow cell's, so they line up
+CPP_LX    equ CP_PMX + 2        ; label x
+CPP_BX1   equ 112               ; the value box: 'Network card:' is 104px
+CPP_BX2   equ CPP_BX1 + 43      ; from 4. Four cells and 6px of air each side
+CPP_AX1   equ CPP_BX2 + 4       ; the up cell...
+CPP_AX2   equ CPP_AX1 + CP_DSW + 2  ; ...and the down cell
+CPP_CAPY  equ CPP_R0Y + 2*CPP_ROWH + 6  ; 74: the two caption lines
 %endif
 %ifdef DOCK_OPT
 ; --- Dock page (SPEC.md 31.13), PANE-relative --------------------------------
@@ -1125,6 +1152,9 @@ cp_onclick_x:
 %ifdef DOCK_OPT
     mov [cp_lsel], al           ; ...chosen ON the list, so already in view
 %endif
+%ifdef OS88_DRIVERS
+    mov byte [cp_dview], 0      ; another page: the Drivers page comes back
+%endif                          ; as its list (SPEC.md 31.15)
     xchg al, [cp_sel]           ; AL = the record the bar is LEAVING
     call cp_r2v                 ; ...and its ordinal - CF = 1 hidden and so on
     jc .newbar                  ; no row: cannot happen while [cp_sel] is what
@@ -3379,6 +3409,316 @@ CPS cp_s_fdrv,  'Drive A:'
 CPF_LTR   equ 6                 ; ...where the letter sits in it
 CPS cp_s_frd,   'Reads:'
 CPS cp_s_fcap,  'Applies at the next restart'
+
+; =============================================================================
+; The Drivers page's Ports view (SPEC.md 31.15)
+;
+; Where the network card and the MPU-401 are, for a machine where the drivers'
+; own search finds the wrong thing or nothing: one byte each, SYSTEM.CFG's 'EP'
+; and 'SP' records - the Ethernet row's and the sound row's blobs (SPEC.md
+; 51.9.2). The page EDITS THE BYTES AND NOTHING ELSE, the Floppy page's rule:
+; each driver reads its own at ATTACH, before it touches a port, so a pick is
+; used the next time the driver loads and the caption says restart.
+;
+; ON THE DRIVERS PAGE, AND THAT IS THE POINT. A driver's own page exists only
+; while it is attached, and the machine that most needs a pinned port is the
+; one where the search FAILED - so its driver is not loaded and has no page,
+; and the Drivers page is where it says "No hardware found". A ninth static
+; page was built first and refused: nine statics and one driver page is ten
+; rows, so the list scrolled on every VGA machine with a card and the
+; Ethernet page went below the fold (SPEC.md 31.1.5).
+;
+; A pin is (port - 200h) / 2: 0 is Auto, FFh is Off, and anything else names
+; one port - which is also how the caption is built, so the page carries no
+; strings for the ports and shows whatever a SYSTEM.CFG holds, even a value
+; this build's list does not offer.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; cp_drv_pbtn - the heading row's button: 'Ports' on the list, 'Back' on the
+; view. in: DI = pane left, BP = pane top. Registers preserved
+; -----------------------------------------------------------------------------
+cp_drv_pbtn:
+    call kentm_bp
+    mov ax, CPD_PBX1
+    mov dx, CPD_PBY1
+    mov cx, CPD_PBX2
+    mov bx, CPD_PBY2
+    call cp_krect
+    CPSTAGE cp_s_dport
+    cmp byte [cp_dview], 0
+    je .lab
+    CPSTAGE cp_s_dback
+.lab:
+    mov di, OS88UI_FILL
+    mov al, CP_DIDPORT
+    call cp_dnbtn
+    call cp_bemit
+    jmp kretm_bp
+
+; cp_drv_phit - is pane-relative CX/DX on that button? CF = 0 yes
+cp_drv_phit:
+    cmp cx, CPD_PBX1
+    jl .no
+    cmp cx, CPD_PBX2
+    jg .no
+    cmp dx, CPD_PBY1
+    jl .no
+    cmp dx, CPD_PBY2
+    jg .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; cp_port_paint - the view, under the page's heading and its button
+cp_port_paint:
+    call kentm_si
+    xor bx, bx                  ; BL = the row: 0 network, 1 MIDI
+.row:
+    CPSTAGE cp_s_pnet
+    or bl, bl
+    jz .lab
+    CPSTAGE cp_s_pmid
+.lab:
+    call cp_pty                 ; DX = the row's box top
+    add dx, 3
+    lea cx, [di+CPP_LX]
+    mov byte [gfx_color], CBLACK
+    call cp_run
+    call cp_pty                 ; --- the value box's frame
+    push bx
+    mov bx, dx
+    add dx, CPP_BH - 1
+    lea ax, [di+CPP_BX1]
+    lea cx, [di+CPP_BX2]
+    call cp_penlive
+    call KERNEL_SEG:cw_gfx_frame
+    pop bx
+    call cp_pcap                ; ...what it holds
+    call cp_parrs               ; ...and the two cells that step it
+    inc bx
+    cmp bl, 2
+    jb .row
+    call cp_blbl
+    dw cp_s_fcap, CP_PMX, CPP_CAPY
+    call cp_lbl
+    dw cp_s_pnote, CP_PMX, CPP_CAPY + 10
+    jmp kretm_si
+
+; -----------------------------------------------------------------------------
+; cp_port_click - a press inside the Ports view. CX/DX = pane-relative
+;
+; An arrow cell is a SELECTING site, the Floppy box's species (cp_ctl id 0):
+; it steps on the PRESS, the way a scroll arrow does. At the end of its list
+; a cell is greyed (SPEC.md 47 rule 3: a fact), and its press does nothing.
+; -----------------------------------------------------------------------------
+cp_port_click:
+    call kentm_si
+    mov ax, dx
+    sub ax, CPP_R0Y
+    jl .done
+    mov bl, CPP_ROWH
+    div bl                      ; AL = the row, AH = where in it
+    cmp ah, CPP_BH
+    jae .done
+    cmp al, 1
+    ja .done
+    mov bl, al                  ; BL = the row, for good
+    mov dh, -1                  ; DH = the step: up...
+    cmp cx, CPP_AX1
+    jl .done
+    cmp cx, CPP_AX1 + CP_DSW - 1
+    jle .cell
+    mov dh, 1                   ; ...or down
+    cmp cx, CPP_AX2
+    jl .done
+    cmp cx, CPP_AX2 + CP_DSW - 1
+    jg .done
+.cell:
+    xor al, al
+    call cp_ctl                 ; id 0: acts on the press only
+    jc .done
+    call cp_pidx                ; AL = where the pin is in the list, AH = its
+    add al, dh                  ; length
+    cmp al, ah
+    jae .done                   ; off either end (-1 is FFh): greyed, nothing
+    call cp_plist               ; SI = the list, in the image
+    cbw
+    add si, ax
+    mov al, [cs:si]
+    call cp_ppin                ; SI = the pin's byte in drv_cfg
+    mov [si], al
+    mov byte [cp_wdirty], 1     ; remembered on close (SPEC.md 31.8)
+    call cp_pcap
+    call cp_parrs
+.done:
+    jmp kretm_si
+
+; cp_pty - row BL's box top, absolute: DX = BP + CPP_R0Y + BL*CPP_ROWH
+cp_pty:
+    push ax
+    mov al, CPP_ROWH
+    mul bl
+    add ax, bp
+    add ax, CPP_R0Y
+    xchg dx, ax
+    pop ax
+    ret
+
+; cp_ppin - SI = row BL's byte in drv_cfg. Row 0 is the Ethernet row's blob,
+; row 1 the sound row's
+cp_ppin:
+    mov si, drv_cfg + CFG_EPIN
+    or bl, bl
+    jz .o
+    mov si, drv_cfg + CFG_SPIN
+.o:
+    ret
+
+; cp_plist - SI = row BL's list of pins, in the image; CL = its length
+cp_plist:
+    mov si, cp_pnl
+    mov cl, CPP_NNL
+    or bl, bl
+    jz .o
+    mov si, cp_pml
+    mov cl, CPP_NML
+.o:
+    ret
+
+; cp_pidx - AL = where row BL's pin is in its list (0, Auto, when it is not
+; there: a value no build offers steps from the top), AH = the list's length
+cp_pidx:
+    push cx
+    push si
+    call cp_ppin
+    mov ah, [si]
+    call cp_plist
+    xor ch, ch
+    push cx
+.f:
+    cmp [cs:si], ah
+    je .hit
+    inc si
+    loop .f
+    pop ax                      ; AL = the length; not found
+    mov ah, al
+    xor al, al
+    jmp short .o
+.hit:
+    pop ax                      ; AL = the length...
+    mov ah, al
+    sub al, cl                  ; ...minus what was left = the index
+.o:
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_pcap - row BL's value, in its box: 'Auto', 'Off ' or the port
+;
+; Always FOUR cells, so one opaque run covers whatever the last caption was
+; and the box writes each pixel once (PERFORMANCE.md rule 2).
+; -----------------------------------------------------------------------------
+cp_pcap:
+    call kentm_si
+    call cp_ppin
+    mov al, [si]
+    mov si, cp_sbuf
+    mov word [si], 'Au'
+    mov word [si+2], 'to'
+    or al, al
+    jz .put
+    mov word [si], 'Of'
+    mov word [si+2], 'f '
+    cmp al, 0xFF
+    je .put
+    xor ah, ah                  ; the port: 200h + 2 * pin
+    shl ax, 1
+    add ah, 2 + '0'             ; ...whose top digit is 2 or 3
+    mov [si], ah
+    mov ah, al
+    mov cl, 4
+    shr al, cl
+    call cp_phex
+    mov [si+1], al
+    mov al, ah
+    and al, 0x0F
+    call cp_phex
+    mov ah, 'h'
+    mov [si+2], ax
+.put:
+    mov byte [si+4], 0
+    call cp_pty
+    add dx, 3
+    lea cx, [di+CPP_BX1 + 6]
+    mov byte [gfx_color], CBLACK
+    call cp_run
+    jmp kretm_si
+
+cp_phex:                        ; AL = a nibble -> its hex digit
+    add al, '0'
+    cmp al, '9'
+    jbe .o
+    add al, 'A' - '9' - 1
+.o:
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_parrs - row BL's two arrow cells, each greyed at its end of the list
+; -----------------------------------------------------------------------------
+cp_parrs:
+    call kentm_si
+    mov byte [cp_darr_dn], 0    ; cp_sbuf's tail: nothing here is held
+    call cp_pidx                ; AL = the index, AH = the length
+    dec ah
+    mov cx, ax                  ; CL = index, CH = the last index
+    call cp_pty
+    mov bx, dx                  ; BX = y1
+    add dx, CPP_BH - 1          ; DX = y2
+    lea ax, [di+CPP_AX1]
+    mov si, CP_TRI_UP
+    cmp cl, 1                   ; up is dead at the top: CF = index < 1
+    call cp_parr
+    add ax, CPP_AX2 - CPP_AX1
+    mov si, CP_TRI_DN
+    cmp cl, ch
+    cmc                         ; down is dead at the end: CF = index >= last
+    call cp_parr
+    jmp kretm_si
+
+; cp_parr - one cell at AX (x1), BX/DX (y1/y2): CF = 1 greyed, SI = the
+; triangle. Preserves every register
+cp_parr:
+    push cx
+    pushf
+    mov cx, ax
+    add cx, CP_DSW - 1
+    call cp_drv_arrfill
+    popf
+    call cp_pencf               ; the pen AND [gfx_dis] together
+    call KERNEL_SEG:cw_gfx_frame
+    call cp_drv_tri
+    call cp_penlive
+    pop cx
+    ret
+
+; The pins each row steps through, in order. Network: the NE1000/NE2000
+; jumper set, Auto first. MIDI: the MPU-401's usual bases, then Off - which
+; makes the driver look nowhere, the one answer an AUTO search cannot give.
+cp_pnl: db 0, 0x20, 0x40, 0x50, 0x60, 0x80, 0x90, 0xA0, 0xB0
+CPP_NNL equ $ - cp_pnl          ; Auto 240h 280h 2A0h 2C0h 300h 320h 340h 360h
+cp_pml: db 0, 0x80, 0x88, 0x90, 0x98, 0x99, 0x9A, 0x9B, 0xA0, 0xA8, 0xB0, 0xFF
+CPP_NML equ $ - cp_pml          ; Auto 300h 310h 320h 330h 332h 334h 336h
+                                ; 340h 350h 360h Off
+
+CPS cp_s_dport, 'Ports'
+CPS cp_s_dback, 'Back'
+CPS cp_s_pnet,  'Network card:'
+CPS cp_s_pmid,  'MIDI port:'
+CPS cp_s_pnote, 'Auto tries the usual ports'
 %endif
 ; -----------------------------------------------------------------------------
 ; cp_sched_click - a click inside the Scheduler page
@@ -5377,6 +5717,12 @@ cp_snd_click:
 ; -----------------------------------------------------------------------------
 cp_drv_paint:
     call kentm_si                ; KENT: push ax..si
+    call cp_drv_pbtn            ; the heading row's Ports / Back (31.15)
+    cmp byte [cp_dview], 0
+    je .list
+    call cp_port_paint          ; ...and the view, in place of the list
+    jmp kretm_si
+.list:
 
 
     call cp_drv_mempar              ; ...and one bit for the whole page before
@@ -5479,6 +5825,11 @@ CP_DSW    equ 14
 CP_DSX1   equ 200
 CP_DSX2   equ CP_DSX1 + CP_DSW - 1
 CP_DSAH   equ 14              ; each arrow cell is square
+%ifdef OS88_DRIVERS
+%if CPP_AX2 + CP_DSW > 221
+  %error "ctrl: the Ports view's arrows run off the pane"
+%endif
+%endif
 
 ; The MEMORY COLUMN (SPEC.md 31.6.2): roughly what a driver holds while it is
 ; doing its job, on the name's own line and right of it. It is a compile-time
@@ -5801,6 +6152,8 @@ cp_drv_ctl1:
     or al, al
     jz .out                     ; nothing was down, or nothing is: the common
                                 ; half of every edge
+    cmp al, CP_DIDPORT
+    je .pbtn
     cmp al, DRV_MAX
     ja .arrow
     dec al                      ; ids are 1-based: row 0 is id 1
@@ -5809,6 +6162,9 @@ cp_drv_ctl1:
 .arrow:
     sub al, CP_DIDUP            ; ...and the two above the rows are the arrows,
     call cp_drv_arrowx          ; in cp_drv_arrow1's own 0 = up / 1 = down
+    jmp short .out
+.pbtn:
+    call cp_drv_pbtn            ; ...and the Ports / Back button above them
 .out:
     pop ax
     ret
@@ -6089,6 +6445,21 @@ cp_drv_pane:
 ; -----------------------------------------------------------------------------
 cp_drv_click:
     call kentm_si
+
+    call cp_drv_phit            ; --- the heading row's button (SPEC.md 31.15)
+    jc .nopb
+    mov al, CP_DIDPORT          ; a control: identify on the press, act on the
+    call cp_ctl                 ; release (SPEC.md 13.8.3)
+    jc .donej
+    xor byte [cp_dview], 1      ; the list <-> the Ports view
+    call cp_drv_pane            ; ...and the whole pane: it is another view
+    jmp .done
+.nopb:
+    cmp byte [cp_dview], 0
+    je .list
+    call cp_port_click          ; the view's own arrows
+    jmp .done
+.list:
 
     cmp cx, CP_DSX1             ; ...THE ARROWS FIRST, because they share the
     jb .rows                    ; rows' y bands and only x separates them

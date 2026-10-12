@@ -1850,8 +1850,11 @@ CPU_F_X87           equ 0x08     ; an 8087/287/387 IS IN THE SOCKET, probed
 %define OSAPI_DRV_CFG       KERNEL_SEG:0x020A   ; AL = 0 read / anything else
                                  ; write, ES:SI = the driver's buffer, CX =
                                  ; bytes (<= YOUR blob's size).
-                                 ; out CF=1 = not the published driver, or a
-                                 ; WRITE past DRV_BLOB_SZ; a never-written blob
+                                 ; out CF=1 = not a loaded driver with a blob
+                                 ; of its own, or a WRITE past it. CALLABLE
+                                 ; FROM DRVV_ATTACH (SPEC.md 51.9.2): the
+                                 ; fence is the drv_tab ROW, so a port pin is
+                                 ; read before the probe; a never-written blob
                                  ; reads back as zeroes, so put a version byte
                                  ; in it and treat anything else as the
                                  ; defaults (SPEC.md 51.5). A WRITE NEVER
