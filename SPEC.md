@@ -62479,7 +62479,8 @@ drained if it comes and not required, because UART-only clones differ there.
 The intelligent mode's sequencer is not wanted and is not used. **330h, then
 300h.** The probe reads the status port FIRST and gives up on FFh - an empty
 port, DSR and DRR both "not ready" - so a machine with no interface pays two
-port reads and no timeout at boot.
+port reads and no timeout at boot. A status that is not FFh is then asked whether
+it is an MPU's at all before the RESET is written (§34.13.1).
 
 **A third reason to attach.** `snd_entry` attached when an OPL or a DSP
 answered; an MPU-401 alone now does too, and names the Control Panel's row
@@ -62505,6 +62506,27 @@ keyboard on MIDI IN, a module's active sensing - is full.
 `tools/martypc/patches/09-mpu401-uart.patch` gives MartyPC a recording
 MPU-401 (it has none) and the debug server a `midi` command, so the gate
 compares the bytes on the wire with the reference sequencer's (§105.11).
+
+#### 34.13.1 Both bases are inside other cards' windows
+
+**300h is an NE1000/NE2000's factory address and an XT-IDE's**, and base + 1
+there is a register: the 8390's CLDA0 on a read and **PSTART** on a write, so
+the probe's RESET (FFh into base + 1) moved a live card's receive ring. At boot
+nothing shows, because the sound driver is `drv_tab` row 0 and `ETHER.DRV`
+resets its card after it. A **Sound tick in the Control Panel** with the
+network up is that write into a running card, and QEMU's trace shows it, twice.
+The probe only reaches 300h when 330h was empty, so the machine is the period's
+commonest: an AdLib or a Sound Blaster Pro, which carry no MPU, beside an NE2000
+at its default address.
+
+So `mpu_alone` reads base + 3, + 5 and + 7 before anything is written. **An
+MPU-401 is two ports**: a fully decoded one leaves those floating (FFh), and a
+clone that decodes too few address lines answers its status at every odd port,
+so they read what base + 1 did. An 8390's BNRY, NCR and ISR, or a disk's
+sector count, cylinder and status, are neither, and the base is passed by
+untouched. DSR and DRR can change between reads, so only the six undefined
+bits (`and 3Fh`) are compared. **38 bytes of `SOUND.DRV`, no kernel byte**;
+`tests/netcoexist.py`'s `sndtick` arm is the gate (§72.9.1).
 
 ### 34.14 The Covox Speech Thing — a DAC on the parallel port (`SOUND.DRV`, `drivers/sound/covox.inc`, `apps/os88spk.inc`)
 
@@ -109879,6 +109901,54 @@ and that the page renders. The 5150 is where a number would land, and there is
 no number here to land.
 
 `make test ETHER=1 TESTIMG=build/ether360.img` is the machine.
+
+#### 72.9.1 The sweep shares the bus, so it reads before it writes
+
+The field reported it as *"an NE1000/NE2000 and an MPU-401 on their own ports
+and IRQs, and the network is gone; take the MPU out and it comes back"*. No
+two cards overlapped. What overlapped was the **sweep**: `eth_bases` is seven
+32-port windows, and the second one, 320h, has its remote-DMA **data port at
+330h** — the MPU-401's. An MPU's data port answers its last byte, FEh after
+the ACK to its reset, so the PROM read came back `FE:FE:FE:FE:FE:FE`: unicast,
+every pair agreeing (so "an NE2000"), neither all zero nor all ones. The
+driver attached to a card at 320h that is not there and never reached the real
+one at 340h. The ISR test before it had passed too, because a floating bus
+reads FFh and FFh has RST set.
+
+Three rules, all of them reads, and `ne_probe` writes nothing to a window
+until the first two have passed:
+
+1. **CR reading FFh is an empty window** (Linux's `ne_probe1` asks the same
+   first). FFh is STA and STP together with RD 7, which no 8390 shows. Most
+   windows on most machines end here, with no write at all.
+2. **After the reset, the ISR must show RST from a register that is there.**
+   FFh is a floating bus and is not an answer. It is polled through rather
+   than refused, because a card still held in reset may not drive the bus.
+   The reset port is the window's last (base + 1Fh), and nothing of the
+   period sits there.
+3. **Six equal PROM bytes are a port, not an address.** All zero and all ones
+   were the two cases checked, and they are two cases of this rule: a device
+   that answers one value on every read is the same lie, and the MPU's FEh
+   is that device. It replaced the zero and ones tests, and the driver came
+   out 8 bytes smaller.
+
+The second hazard was the other way round: an MPU at its other address, 300h,
+is the **first** window swept, and the old probe's register set-up went into
+its data port (`21 22 0A`). Rules 1 and 2 stop that too: CR reads the MPU's
+data (not FFh), but base + 7 floats, so the 8390's register file is never
+written. §34.13.1 is the sound driver's half.
+
+`tests/netcoexist.py` is the gate, QEMU's for §72.9's reason. QEMU has no
+MPU-401, so the MPU is `isa-debugcon` with `readback=0xfe`: one port that
+reads FEh every time and keeps every byte written to it, which is the only
+property of an MPU these probes ever met. Three arms, each failing on the
+drivers before this section: `mpu330` (card at 340h, the latch at 330h; the
+old driver bound 320h and DHCP never answered), `mpu300` (the latch at 300h;
+the old driver wrote three bytes into it) and `sndtick` (§34.13.1).
+
+**What no probe can fix is two cards decoding the same ports.** A card
+jumpered to 320h *does* own 330h–331h, and an MPU there is a real conflict:
+both answer every read. Pick 300h or 340h for the card when an MPU is at 330h.
 
 ### 72.22 The raw verbs — whole frames, for a consumer that IS a stack
 

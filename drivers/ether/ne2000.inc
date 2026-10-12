@@ -369,6 +369,16 @@ ne_dma_write:
 ; differs it is an NE1000 and the address is bytes 0..5. That is Linux's
 ; ne.c's test and it needs no signature byte, which matters because the
 ; signature is the one thing the clones disagree about.
+;
+; **NOTHING IS WRITTEN UNTIL TWO READS SAY AN 8390 COULD BE HERE** (SPEC.md
+; 72.9.1). The sweep walks seven 32-port windows, and other cards live in
+; them: an MPU-401 at 330h is the DATA PORT of a card at 320h, a Sound
+; Blaster at 240h is inside a card at 240h. So a window whose CR floats to FFh
+; is empty and is left with no write at all, and after the reset (whose port
+; is the window's last, which nothing else of the period sits on) the ISR must
+; show RST from a register that is THERE - FFh is a floating bus, which has
+; RST set too and used to pass. Only then does ne_t_setup touch the register
+; file.
 ; -----------------------------------------------------------------------------
 ne_probe:
     push ax
@@ -377,7 +387,10 @@ ne_probe:
     push dx
     push si
     push di
-    mov dx, [eth_base]
+    mov dx, [eth_base]          ; CR: FFh is no 8390 (STA and STP both set,
+    in  al, dx                  ; RD 7) and IS an empty window. Linux's
+    cmp al, 0xFF                ; ne_probe1 asks this first for the same
+    je  .none                   ; reason
     add dx, NE_RESET
     in  al, dx                  ; the reset port: reading it and writing the
     out dx, al                  ; value back is the documented reset
@@ -385,8 +398,11 @@ ne_probe:
 .settle:
     mov al, NE_ISR              ; ...bounded, because a port that never sets
     call ne_in                  ; RST is exactly what an empty slot looks like
-    test al, NE_RST
-    jnz .up
+    cmp al, 0xFF                ; ...and a FLOATING one reads FFh, RST and
+    je  .float                  ; all, so it is not an answer. Kept polling
+    test al, NE_RST             ; rather than refused outright: a card held
+    jnz .up                     ; in reset may not drive the bus yet
+.float:
     loop .settle
     jmp .none
 .up:
@@ -428,28 +444,26 @@ ne_probe:
     loop .mac
 
     ; --- is it a plausible station address? ---------------------------------
-    ; All zero and all ones are what a floating bus reads as, and bit 0 of the
-    ; first byte is the MULTICAST bit - a card's own address never has it set,
-    ; so a PROM that answers with one is not a PROM.
+    ; Bit 0 of the first byte is the MULTICAST bit - a card's own address
+    ; never has it set, so a PROM that answers with one is not a PROM.
+    ;
+    ; **SIX EQUAL BYTES ARE A PORT, NOT A PROM.** All zero and all ones are a
+    ; floating bus, and they are two cases of the rule rather than the rule:
+    ; a device that answers ONE value on every read is the same lie. The one
+    ; that was met is an MPU-401 at 330h - the DATA port of a card at 320h -
+    ; which reads its last byte, FEh after its reset's ACK, every time it is
+    ; asked: FE:FE:FE:FE:FE:FE, unicast, pairs agreeing, an "NE2000" at 320h
+    ; that swallowed the real card's attach further down the sweep.
     test byte [eth_mac], 1
     jnz .none
     mov si, eth_mac
-    mov cx, 6
-    xor bl, bl                          ; the OR of every byte
-    mov bh, 0                           ; ...and how many are 0xFF
-.chk:
+    mov cx, 5
     mov al, [si]
+.chk:
     inc si
-    or  bl, al
-    cmp al, 0xFF
-    jne .n1
-    inc bh
-.n1:
-    loop .chk
-    or  bl, bl
-    jz  .none                           ; all zero: nothing there
-    cmp bh, 6
-    je  .none                           ; all ones: a floating bus
+    cmp al, [si]
+    loopz .chk
+    je  .none                           ; all six the same: no address
     CLC_OR_STC .none
 .out:
     jmp ep_di

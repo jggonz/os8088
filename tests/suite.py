@@ -11734,6 +11734,18 @@ SOAK = [
         "find is a row nobody runs.",
         needs=("qemu",), serial=True, builds=True,
         wants=("build/brtest360.img",)),
+    Row("netcoexist", "soak", py("tests/netcoexist.py"), 90.0,
+        "SPEC.md 72.9.1 and 34.13.1: a network card and an MPU-401 in one "
+        "machine. The field lost its network the moment an MPU was added: "
+        "ETHER.DRV's sweep read 320h's 'PROM' through the MPU's data port at "
+        "330h, got FE:FE:FE:FE:FE:FE and attached to a card that is not "
+        "there. Three QEMU machines, the MPU an isa-debugcon reading FEh: the "
+        "card found at 340h past an MPU at 330h, not one byte written into an "
+        "MPU at 300h, and a Sound tick with the network up writing nothing to "
+        "the live card's base + 1 (QEMU's ne2000 trace). Every arm fails on "
+        "the drivers before the fix. QEMU by name: MartyPC has no NIC",
+        needs=("qemu",), serial=True,
+        wants=("build/ether360.img", "build/apps360.img")),
     Row("ethcfg", "soak", py("tests/ethcfg.py"), 90.0,
         "SPEC.md 72.7: the Ethernet Setup window - Manual, an address typed "
         "into its field, Ok applying it to the driver's LIVE addresses, the "

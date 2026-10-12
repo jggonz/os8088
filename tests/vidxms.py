@@ -174,7 +174,7 @@ def live_clip(tmp, loop=None):
 class Q(object):
     """One private QEMU: its own socket, pidfile and copies of both disks."""
 
-    def __init__(self, tmp, sysimg, apps, mem):
+    def __init__(self, tmp, sysimg, apps, mem, extra=()):
         self.sock = os.path.join(tmp, "qmp.sock")
         self.pid = os.path.join(tmp, "qemu.pid")
         self.pidn = None
@@ -186,7 +186,9 @@ class Q(object):
                "-drive", "file=%s,format=raw,if=floppy,index=1" % apps,
                "-display", "none",
                "-qmp", "unix:%s,server,nowait" % self.sock,
-               "-daemonize", "-pidfile", self.pid]
+               "-daemonize", "-pidfile", self.pid] + list(extra)
+        # (`extra` is more devices - tests/netcoexist.py's card and latch.
+        # -daemonize changes to /, so every path in it must be absolute)
         # KILLED BY THE PID IT WROTE, not by os88qemu.own(pidfile): the
         # pidfile is in `tmp`, which a failing run deletes on its way out
         # before atexit runs - and a teardown that cannot find the pidfile

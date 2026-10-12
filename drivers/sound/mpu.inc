@@ -50,6 +50,8 @@ mpu_probe:
     in al, dx
     cmp al, 0xFF
     je .next                        ; an empty port: nothing written
+    call mpu_alone                  ; ...and a port that is somebody else's:
+    jc .next                        ; nothing written either (SPEC.md 34.13.1)
     call mpu_waitw
     jc .next
     mov al, 0xFF                    ; RESET...
@@ -74,6 +76,49 @@ mpu_probe:
     pop dx
     pop cx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mpu_alone - DX = a candidate's status port, AL = what it just read. CF=0
+; when the ports around it look like an MPU-401's and nobody else's; CF=1
+; when a wider device answers there. AL clobbered, nothing written.
+;
+; AN MPU-401 IS TWO PORTS, and both of its bases sit inside other cards'
+; windows: 300h is an NE1000/NE2000's factory address and an XT-IDE's, whose
+; base + 1 is a REGISTER - the RESET below would land in a live network
+; card's ring set-up, which is how a Sound tick in the Control Panel took the
+; network down. So base + 3, + 5 and + 7 are read first. A two-port device
+; leaves them floating (FFh); a clone that decodes too few address lines
+; answers its STATUS at every odd port, so those read what base + 1 did. An
+; 8390's BNRY, NCR and ISR, or a disk's sector count, cylinder and status, are
+; neither. DSR and DRR can change between reads, so the six undefined bits
+; are what is compared.
+; -----------------------------------------------------------------------------
+mpu_alone:
+    push cx
+    push dx
+    mov ah, al
+    and ah, 0x3F                    ; AH = the status's constant bits
+    mov cx, 3
+.odd:
+    inc dx
+    inc dx
+    in al, dx
+    cmp al, 0xFF
+    je .nx                          ; floating: nothing here
+    and al, 0x3F
+    cmp al, ah
+    jne .other                      ; a register that is not our status
+.nx:
+    loop .odd
+    pop dx
+    pop cx
+    clc
+    ret
+.other:
+    pop dx
+    pop cx
+    stc
     ret
 
 ; mpu_waitw - DX = status: wait for DRR clear. CF=1 timed out. AL clobbered
