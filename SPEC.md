@@ -135616,7 +135616,11 @@ RECORD i, 256 bytes at 32 + 256*i
  +34  1   flags
           bit 0  WF_DISK    needs its files on a disk: an overlay, parts
                             (header flags bit 2) or sidecars. Load Program is
-                            refused with that reason; Add to Disk works.
+                            refused with that reason; Add to Disk works. On a
+                            WF_ARC record it says the TREE cannot go to a RAM
+                            disk - a version 2 archive (92.13.1), whose big
+                            file is past what a store holds in one file - and
+                            Load Program is refused with the same reason
           bit 1  WF_PIC     /wire/pic/<STEM>.PIC exists
           bit 2  WF_NEW     new on the Wire
           bit 3  WF_FLOPPY  only as a floppy image from os8088.com - its files
@@ -135719,8 +135723,17 @@ twelve sidecars, which is what moved it. **A reader from before that release
 refuses the WHOLE catalog** once one record carries more than eight, because
 the compare sits in the catalog check rather than the Add — acceptable at that
 release only because SPEC.md 20's package format 8 had already left those
-machines unable to load anything the catalog serves. A larger file gets `WF_FLOPPY` from the
-writer, which is the site's job and the verifier's check.
+machines unable to load anything the catalog serves.
+
+**A file over `WIRE_FILEMAX` is never a plain record, whatever its flags.**
+The bound above is checked on every record that is not `WF_ARC` and
+`WF_FLOPPY` does not lift it: `wr_catck` reads `WC_SIZE` before it reads a
+flag, so one such record refuses the WHOLE catalog on every Wire in the field.
+Both writers said otherwise until 92.13.1 - a larger file "gets `WF_FLOPPY`"
+- and the verifier agreed with them, so the first program to need it would
+have taken the catalog down with nothing on the host to say so. A program
+with a file past the bound is published as a **version 2 archive** (92.13.1)
+and both writers and the verifier refuse the other spelling.
 
 **A `WF_ARC` RECORD IS CHECKED BY DIFFERENT RULES AND THEY ARE NOT A
 RELAXATION**, they are the ones that are true of an archive: `WC_SIZE` is
@@ -135924,7 +135937,7 @@ File menu's items carry a `MENU_DIS` prefix from it.
 | `Select a program first` | nothing is selected |
 | `The catalog is not loaded` | no catalog, or it was refused |
 | `A transfer is already running` | the state machine is in flight |
-| `Needs its files on a disk - use Add to Disk` | `WF_DISK`, Load only |
+| `Needs its files on a disk - use Add to Disk` | `WF_DISK`, Load only - on an archive record too, where it is tested BEFORE the RAM disk decision (92.13.1) |
 | `Available as a floppy from os8088.com` | `WF_FLOPPY`, both |
 | `Needs NNNK free on the disk` | the Save completion's `OSAPI_FILE_DFREE` |
 | `Needs RAMDISK.DRV - use Add to Disk` | `WF_ARC`, Load only: no driver of the class answers `RDPV_IDENT` with `RD_SIG`, or it refuses `RDPV_STATE` (an older driver) |
@@ -136084,6 +136097,8 @@ segment register, because the bytes really are ours (§77.10).
 
 | `tests/unit/t_wire.py` (archives) | fast | `--archive` pack -> verify -> dump round trip over a fixture tree; the LZSS encoder against the reference decoder on patterned and random bytes, and the decoder's refusals (a distance past the start, a copy past the end, a short stream, trailing bytes); the `WA_*` equs in `warc.inc` compared against the packer's; the writer's refusals (a path four folders deep, a name that is not 8.3, an entry over `WIRE_FILEMAX`, a program entry that is not last, entries not grouped by folder, more than 255 entries) |
 | `tests/thewire.py` (archives) | soak | the same boot, with `RAMDISK.DRV` wanted as well (`BIT_RAM`, a `SYSTEM.CFG` of the gate's own in `build/wirecfg/`). A fixture `.WPK` the test packs with `--archive`: a `home`, three folders, six entries at depths 0..2 — a stored one, a 40,000-byte LZSS one, an empty file, a twelve-character name and `HELLO.O88` last with `WAH_PROGRAM`. Add to Disk to B: -> every file under `home/` byte-identical, read back by the FAT12 reader in that file, folders included. Load Program on it -> a third live volume appears in `dsk_vtab` and it is `DVK_FILE`, the tree lands on it, the status cell says `Loaded`, and a `HELLO` window appears. Then the clip assertion of 92.6.1: after Load Program the launched window's content is captured, the window is dragged 8px and back for a clean full repaint, and the two must agree PIXEL FOR PIXEL — they read 0 of 17,040 differing, and they do not agree at all when the buttons have been drawn into it. **The pointer is parked at a fixed spot before each capture**: the arrow is drawn into the framebuffer, so a screendump carries it, and the drag left it somewhere else — 47 differing pixels in the shape of a cursor, reported by the first version of this row as the defect it exists to catch |
+| `tests/unit/t_wire.py` (version 2) | fast | 92.13.1: a tree with an entry past `WIRE_FILEMAX` packs as version 2 with that entry STORED and the claim capped, round-trips byte for byte through both readers, and its record carries `WF_DISK`; `--verify` fails a big entry in a version 1 archive, a version 2 archive with none, an LZSS entry past the claim, and a version 2 record without `WF_DISK`; `--pack` refuses a plain record past `WIRE_FILEMAX` with or without `floppy_only` (92.2) |
+| `tests/thewire.py` (version 2) | soak | a fifth record, `BIGTREE`, whose `DATA/HUGE.BIN` is 150,000 bytes between two ordinary entries: Load Program greyed and Add to Disk not, then the chain - one `OSAPI_FILE_WRITE` and two `OSAPI_FILE_APPEND`s for the big file - and all three files compared byte for byte off the B: image. The fixture's HTTP server serves each connection on a thread of its own, as a real one does |
 
 **The picture assertion is the one nothing else can make.** §92.3 stores the
 band inverted so that one `gfx_blit1` is right on all three adapters, and an
@@ -136148,7 +136163,9 @@ HEADER, 32 bytes
           RAM disk store must hold, at the 1KB extent a store <= 2MB has
           (62.9.10). The catalog's WC_NEEDKB is a copy of it
  +14  2   largest unpacked entry, bytes, <= WIRE_FILEMAX - the ONE claim the
-          reader makes for the whole transfer
+          reader makes for the whole transfer. In a version 2 archive
+          (92.13.1) it is the largest entry CAPPED at WIRE_FILEMAX: a big
+          entry passes through the claim in pieces of that size
  +16  12  home: a folder the whole tree lands under, or all-NUL for none.
           RunCPM's is 'RUNCPM', so the tree lands the way the apps floppy
           lays it out and a later archive of a CP/M game names the same
@@ -136160,7 +136177,8 @@ ENTRY i, 64 bytes, followed at once by its BODY of `stored` bytes
  +1   1   depth d, 0..3 - how many FOLDER names precede the file name
  +2   2   zero
  +4   4   stored size - the body's bytes on the wire
- +8   4   unpacked size, 0..WIRE_FILEMAX (0 is an empty file: stored 0)
+ +8   4   unpacked size, 0..WIRE_FILEMAX (0 is an empty file: stored 0);
+          in a version 2 archive a STORED entry may be larger (92.13.1)
  +12  4   zero
  +16  48  the path: four 12-byte slots; slots 0..d-1 are folders, slot d the
           file name, slots after d all-NUL
@@ -136222,6 +136240,63 @@ what the site's build runs over what it wrote.
   with no NUL in them are refused with them.
 - **`stored` = 0 with a non-zero unpacked size is refused at the ENTRY
   HEADER**, rather than waiting for a body that never comes.
+
+#### 92.13.1 Version 2 — a file larger than the claim
+
+A program whose `.O88` is past `WIRE_FILEMAX` - PiXEL (106) is 114,684 bytes,
+a resident package with lazy parts read out of its own file (20.12) - had no
+way onto the Wire at all: a plain record over 63KB refuses the whole catalog
+(92.2), and an archive's entry was capped at the one claim. **Version 2 lifts
+the cap for one kind of entry and changes nothing else.**
+
+- **A STORED entry may be larger than `WA_MAXENT`.** Its unpacked size is a
+  dword, its stored size must EQUAL it (it is stored), and both are below
+  `WIRE_ARCMAX`. An LZSS entry keeps every version 1 bound: its
+  back-references are copies within the claim, so the whole file has to be
+  in it. The writer stores any file past `WIRE_FILEMAX` whatever LZSS would
+  have made of it - a package is LZ4-packed already (20.13) and would not
+  shrink anyway.
+- **`WA_MAXENT` is the largest entry capped at `WIRE_FILEMAX`**, and a big
+  entry passes through the claim in pieces of `[wr_dmax]` bytes: the claim's
+  capacity, the header's figure rounded up to the KB `OSAPI_MEM_CLAIM` deals
+  in.
+- **`WA_VER` is 2 exactly when an entry is past the claim**, and 1
+  otherwise. The version is not decoration: a reader from before this section
+  checks `WA_VER = 1` at the header, so it refuses a version 2 archive with
+  `That archive is not understood` **before a single file is written** -
+  measured, on `tests/thewire.py`'s fixture with main's reader: the chain
+  ends in `WS_FAIL` and nothing lands on the disk, not even the `home`
+  folder. A version 1 archive with a big entry would have landed every entry
+  before it and then refused - a half-written tree on the user's disk. Every
+  archive that needs no big entry stays version 1 and every Wire in the
+  field keeps reading it.
+- **The record carries `WF_DISK`** with `WF_ARC` and `WF_FLOPPY` (92.2), and
+  the writer derives it: a version 2 archive cannot go to a RAM disk, whose
+  largest file is `RD_FILEMAX` = 65,024 bytes (62.9), so Load Program greys
+  with `Needs its files on a disk - use Add to Disk` and Add to Disk is the
+  path. The predicate tests `WF_DISK` on an archive BEFORE the RAM disk
+  decision (92.7). A reader from before this section does not, and its Load
+  Program fetches the archive and refuses it at the header - the same
+  outcome, said later.
+
+**On the machine it is a third pause.** The worker stores a big entry's bytes
+into the claim exactly as it stores a small one's; when the claim is full and
+the entry is not, it pauses with **`WW_PIECE`** instead of `WW_ENTRY`, its
+dword remainder `[wr_abrem]` reduced by the piece. The handler writes the
+piece and puts the worker back in `WS_BODY` with the next piece's counters
+(`wr_anext`): the FIRST piece goes through `wr_arcwrite`'s whole path - the
+entry's folders, then `OSAPI_FILE_WRITE`, which creates the file - and every
+later one is **`OSAPI_FILE_APPEND`** onto it from where the instance already
+stands, `[wr_apiece]` saying which. The last piece is the entry's ordinary
+`WW_ENTRY`, appended, and the chain goes on to the next entry header as
+before. Nothing else moves: one claim, one transfer, the status cell's
+`N of M files` counting entries and the `NNK of MMK` beside it the stream.
+A failure in any piece is `Could not write <name>` and leaves the pieces
+before it on the disk, which is 92.8's rule.
+
+**What it costs**: 182 bytes of image and 7 of bss in `THEWIRE.O88` - the
+image 11,521 -> **11,703** of the 12,288 ceiling (92.11), 585 to spare - and
+no kernel byte: `OSAPI_FILE_APPEND` (18.4) is an existing cell.
 
 ### 92.14 Run from RAM — Load Program on an archive
 

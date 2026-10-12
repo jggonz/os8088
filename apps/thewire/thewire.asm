@@ -267,6 +267,8 @@ WW_HDR      equ 3               ; the archive's 32-byte header has arrived and
                                 ; the ONE claim is sized from it (92.14)
 WW_ENTRY    equ 4               ; ...and one entry's bytes are decoded and
                                 ; waiting to be written
+WW_PIECE    equ 5               ; ...or one PIECE of a big entry is, and more
+                                ; of the same file follows (92.13.1)
 
 WR_RAMSLACK equ 16              ; the KB asked for OVER the tree when a store
                                 ; is mounted for it (92.14 step 3): room for
@@ -1828,6 +1830,10 @@ wr_may:
     jnz .yes                            ; Add to Disk unpacks wherever the
                                         ; dialog points, so an archive is
                                         ; always addable (92.8)
+    test al, WF_DISK                    ; ...and a version 2 archive cannot go
+    jnz .disk                           ; to a RAM disk at all (92.13.1), which
+                                        ; is said before the RAM decision is
+                                        ; asked rather than instead of it
     xor al, al                          ; Load Program: the RAM disk decision,
     call wr_ramck                       ; ASKED and not acted on - this runs
     jc .no                              ; from the painter (92.14 steps 1..3,
@@ -2872,6 +2878,8 @@ wr_onwake:
     je .ahdr                            ; the worker has stopped and the next
     cmp al, WW_ENTRY                    ; thing to do is a claim or a file, and
     je .aent                            ; a worker may do neither (92.14)
+    cmp al, WW_PIECE                    ; ...and a third, a big entry's piece
+    je .apiece                          ; (92.13.1)
     cmp al, WW_DONE
     jne .failed
     mov al, [wr_wkind]
@@ -2919,6 +2927,12 @@ wr_onwake:
     call wr_lockarm                     ; (92.14). NO LOCK for either: a claim
     jmp short .stat                     ; and a folder are not drawing
 
+.apiece:
+    call wr_arcwrite                    ; --- one piece of a big entry: the
+    jc .wfail                           ; first creates the file, every later
+    call wr_anext                       ; one appends to it (92.13.1) - and
+    jmp short .agoon                    ; the worker goes on with the same entry
+
 .aent:
     call wr_arcwrite                    ; --- one entry: its folders, then the
     jc .wfail                           ; file, and NO LOCK for the same reason
@@ -2932,6 +2946,7 @@ wr_onwake:
     mov [wr_pnum], ax
     mov ax, [wr_an]
     mov [wr_ptot], ax
+.agoon:
     mov byte [wr_state], WS_BODY        ; **AND ONLY NOW MAY THE WORKER RUN**:
                                         ; it overwrites [wr_ehdr] with the next
                                         ; entry's header the moment it does,
@@ -3648,4 +3663,13 @@ wr_anb      equ os88_image_end + WR_B7 + 42         ; 13: one path slot, copied
                                                     ; name fills its slot with
                                                     ; no NUL, and every kernel
                                                     ; cell reads to one
-WR_BSS      equ WR_B7 + 55
+wr_abig     equ os88_image_end + WR_B7 + 55         ; byte: this entry is
+                                                    ; past the claim and comes
+                                                    ; in PIECES (92.13.1)...
+wr_apiece   equ os88_image_end + WR_B7 + 56         ; byte: ...and how many of
+                                                    ; them are written. The two
+                                                    ; ARE ADJACENT: wr_aentck
+                                                    ; clears both with one word
+wr_abrem    equ os88_image_end + WR_B7 + 58         ; dword: the big entry's
+                                                    ; bytes not yet stored
+WR_BSS      equ WR_B7 + 62

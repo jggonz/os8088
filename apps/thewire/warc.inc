@@ -1,7 +1,8 @@
 ; =============================================================================
 ; os8088 - apps/thewire/warc.inc
 ;
-; THE ARCHIVE FORMAT, version 1 (SPEC.md 92.13) - offsets and limits only.
+; THE ARCHIVE FORMAT, versions 1 and 2 (SPEC.md 92.13, 92.13.1) - offsets
+; and limits only.
 ;
 ; **EVERY EQU HERE IS MIRRORED IN tools/os88wire.py** and tests/unit/t_wire.py
 ; compares the two in the FAST tier, exactly as wcat.inc's are. The website's
@@ -27,7 +28,9 @@ WARC_HDR    equ 32
 WA_METHOD   equ 0               ; byte, WAM_*
 WA_DEPTH    equ 1               ; byte, 0..WARC_DEPTH folders before the name
 WA_STORED   equ 4               ; dword, the body's bytes on the wire
-WA_SIZE     equ 8               ; dword, the unpacked size, <= WIRE_FILEMAX
+WA_SIZE     equ 8               ; dword, the unpacked size, <= WIRE_FILEMAX -
+                                ; or, in version 2, a STORED entry past the
+                                ; claim, written in pieces (92.13.1)
 WA_PATH     equ 16              ; WARC_SLOTS slots of WARC_SLOT bytes
 WARC_ENT    equ 64
 WARC_SLOT   equ 12
@@ -44,6 +47,11 @@ WAM_LZSS    equ 1               ; SPEC.md 92.13's decoder: distance 1..4096,
 
 ; --- what the reader will hold ------------------------------------------------
 WARC_VER    equ 1
+WARC_VER2   equ 2               ; ...and the highest this reader takes: an
+                                ; archive with a STORED entry past WA_MAXENT
+                                ; (SPEC.md 92.13.1). The writer uses it ONLY
+                                ; then, so a Wire from before it refuses at
+                                ; the header and writes nothing
 WARC_NMAX   equ 255
 WARC_DISTMAX equ 4096
 WARC_LENMIN equ 3

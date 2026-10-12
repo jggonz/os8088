@@ -154,6 +154,11 @@ WAM_LZSS = 1
 
 # What the reader will hold.
 WARC_VER = 1
+# ...and the version an archive carries when an entry is past its claim
+# (SPEC.md 92.13.1): a STORED entry of any size below WIRE_ARCMAX, written in
+# pieces. The writer uses it ONLY then, so a Wire from before 92.13.1 refuses
+# such an archive at the header, before it has written a file.
+WARC_VER2 = 2
 WARC_NMAX = 255
 WARC_DISTMAX = 4096
 WARC_LENMIN = 3
@@ -333,6 +338,12 @@ def pack(manifest, pkgdir, picdir, date=None):
             # from before 92.13 does not know bit 4, greys both buttons with
             # the floppy reason, and never fetches a .O88 that is not there.
             flags |= WF_ARC | WF_FLOPPY
+            # **AND WF_DISK ON A VERSION 2 ONE** (SPEC.md 92.13.1), derived
+            # rather than declared like every other WF_DISK: an entry past
+            # the claim is past what a RAM disk store holds in one file
+            # (RD_FILEMAX), so Load Program refuses and Add to Disk is the path.
+            if ablob[WA_VER] == WARC_VER2:
+                flags |= WF_DISK
             wc_size = len(ablob)
             wc_total = ahdr["total"]
             wc_needkb = ahdr["needkb"]
@@ -372,11 +383,19 @@ def pack(manifest, pkgdir, picdir, date=None):
             for f, n in zip(files, sizes):
                 if n == 0:
                     raise Refused("%s is empty" % f)
-                if n > WIRE_FILEMAX and not (flags & WF_FLOPPY):
-                    raise Refused("%s is %d bytes, over WIRE_FILEMAX (%d), and the "
-                                  "entry is not floppy_only - the Wire moves a "
-                                  "file in ONE claim and ONE write (SPEC.md 92.2)"
-                                  % (f, n, WIRE_FILEMAX))
+                if n > WIRE_FILEMAX:
+                    # **floppy_only DOES NOT LIFT IT** (SPEC.md 92.2): the
+                    # machine's wr_catck reads WC_SIZE before any flag, so a
+                    # plain record past the bound refuses the WHOLE catalog on
+                    # every Wire in the field. A big file goes in a version 2
+                    # archive (92.13.1), which every reader can be handed.
+                    raise Refused("%s is %d bytes, over WIRE_FILEMAX (%d) - a "
+                                  "plain record moves a file in ONE claim and "
+                                  "ONE write, and one past the bound refuses "
+                                  "the whole catalog on the machine whatever "
+                                  "its flags. Publish it as an archive, which "
+                                  "writes a big file in pieces (SPEC.md 92.2, "
+                                  "92.13.1)" % (f, n, WIRE_FILEMAX))
             wc_size = sizes[0]
             wc_total = sum(sizes)
             wc_needkb = 0
@@ -591,10 +610,6 @@ def verify(blob, pkgdir=None):
                 no("%s: WF_ARC with %d sidecars, and an archive's n is 0 - "
                    "its extra files are entries in the stream (SPEC.md 92.2)"
                    % (tag, blob[o + WC_NSIDE]))
-            if flags & WF_DISK:
-                no("%s: WF_ARC with WF_DISK, and 92.2 clears bit 0 on an "
-                   "archive - the tree it unpacks IS its files on a disk, so "
-                   "Load Program is the point rather than the refusal" % tag)
             if not flags & WF_FLOPPY:
                 no("%s: WF_ARC without WF_FLOPPY. The writer sets bit 3 WITH "
                    "bit 4 (SPEC.md 92.2) so that a Wire from before 92.13 "
@@ -629,9 +644,11 @@ def verify(blob, pkgdir=None):
                 no("%s: the archive is %d bytes and WIRE_ARCMAX is %d, which "
                    "is the FIRST size refused and not the last accepted"
                    % (tag, size, WIRE_ARCMAX))
-        elif size > WIRE_FILEMAX and not flags & WF_FLOPPY:
-            no("%s: %d bytes, over WIRE_FILEMAX %d, without WF_FLOPPY"
-               % (tag, size, WIRE_FILEMAX))
+        elif size > WIRE_FILEMAX:
+            no("%s: %d bytes, over WIRE_FILEMAX %d - the machine's wr_catck "
+               "refuses the WHOLE catalog for one such record whatever its "
+               "flags, so a big file is a version 2 archive (SPEC.md 92.2, "
+               "92.13.1)" % (tag, size, WIRE_FILEMAX))
         if total < size and not arc:
             # NOT ON AN ARCHIVE: WC_SIZE is the .WPK on the wire and WC_TOTAL
             # is what it unpacks to, and a tree of many small files carries
@@ -654,7 +671,7 @@ def verify(blob, pkgdir=None):
                 no("%s: sidecar %d has no name" % (tag, j))
             sz = struct.unpack_from("<I", blob, e + WC_SCSIZE)[0]
             tot += sz
-            if sz == 0 or (sz > WIRE_FILEMAX and not flags & WF_FLOPPY):
+            if sz == 0 or sz > WIRE_FILEMAX:
                 no("%s: sidecar %s is %d bytes" % (tag, sname, sz))
             if pkgdir:
                 # THE SIDECARS ARE CROSS-CHECKED TOO, and they are the half
@@ -705,6 +722,15 @@ def verify(blob, pkgdir=None):
                            "is %d - Load Program sizes the RAM disk store on "
                            "the record and fills it from the stream"
                            % (tag, needkb, ahdr["needkb"]))
+                    v2 = ahdr["ver"] == WARC_VER2
+                    if v2 != bool(flags & WF_DISK):
+                        no("%s: the archive is version %d and WF_DISK is %s - "
+                           "the writer sets it on exactly the version 2 ones, "
+                           "whose big entry no RAM disk store can hold, so "
+                           "Load Program refuses it rather than mounting a "
+                           "store that fails at the write (SPEC.md 92.13.1)"
+                           % (tag, ahdr["ver"], "set" if flags & WF_DISK
+                              else "clear"))
                     icon_check(tag, blob[o + WC_ICON:o + WC_ICON + 64],
                                aents[-1]["data"]
                                if ahdr["flags"] & WAH_PROGRAM else None,
@@ -1119,13 +1145,12 @@ def archive(srcdir, home=None, program=None, order=None):
         arc_name(name, "the file name in %s" % "/".join(folders + (name,)))
 
         raw = open(os.path.join(srcdir, *(folders + (name,))), "rb").read()
-        if len(raw) > WIRE_FILEMAX:
-            raise Refused("%s is %d bytes and WIRE_FILEMAX is %d - the reader "
-                          "makes ONE claim for the largest entry and writes "
-                          "each file with ONE OSAPI_FILE_WRITE (SPEC.md 92.13)"
-                          % ("/".join(folders + (name,)), len(raw),
-                             WIRE_FILEMAX))
-        enc = lzss_encode(raw) if raw else b""
+        # A FILE PAST WIRE_FILEMAX IS STORED, whatever LZSS would make of it
+        # (SPEC.md 92.13.1): the reader passes it through the claim in pieces,
+        # and an LZSS back-reference is a copy WITHIN the claim, so only a
+        # stored body can be cut. It makes the archive version 2.
+        big = len(raw) > WIRE_FILEMAX
+        enc = lzss_encode(raw) if raw and not big else b""
         if enc and len(enc) < len(raw):
             method, body = WAM_LZSS, enc
         else:
@@ -1147,12 +1172,14 @@ def archive(srcdir, home=None, program=None, order=None):
 
     hdr = bytearray(WARC_HDR)
     hdr[WA_MAGIC:WA_MAGIC + 4] = AMAGIC
-    hdr[WA_VER] = WARC_VER
+    v2 = max(sizes) > WIRE_FILEMAX
+    hdr[WA_VER] = WARC_VER2 if v2 else WARC_VER
     hdr[WA_FLAGS] = WAH_PROGRAM if prog else 0
     struct.pack_into("<H", hdr, WA_N, len(ents))
     struct.pack_into("<I", hdr, WA_TOTAL, sum(sizes))
     struct.pack_into("<H", hdr, WA_NEEDKB, needkb_of(sizes))
-    struct.pack_into("<H", hdr, WA_MAXENT, max(sizes))
+    # THE CLAIM, capped: a big entry goes through it in pieces (92.13.1)
+    struct.pack_into("<H", hdr, WA_MAXENT, min(max(sizes), WIRE_FILEMAX))
     hdr[WA_HOME:WA_HOME + WARC_SLOT] = arc_slot(hometxt)
 
     out = bytearray(hdr)
@@ -1203,8 +1230,9 @@ def arc_read(blob, name="the archive", decode=True):
         no("%d bytes, shorter than the %d-byte header" % (len(blob), WARC_HDR))
     if bytes(blob[WA_MAGIC:WA_MAGIC + 4]) != AMAGIC:
         no("magic is %r and not %r" % (bytes(blob[0:4]), AMAGIC))
-    if blob[WA_VER] != WARC_VER:
-        no("format version %d and not %d" % (blob[WA_VER], WARC_VER))
+    ver = blob[WA_VER]
+    if ver not in (WARC_VER, WARC_VER2):
+        no("format version %d and not %d or %d" % (ver, WARC_VER, WARC_VER2))
     hflags = blob[WA_FLAGS]
     if hflags & ~WAH_PROGRAM:
         no("header flag bits 0x%02X, and only WAH_PROGRAM is defined"
@@ -1219,7 +1247,7 @@ def arc_read(blob, name="the archive", decode=True):
         no("the largest-entry figure is %d and WIRE_FILEMAX is %d - it is the "
            "ONE claim the reader makes for the whole transfer"
            % (maxent, WIRE_FILEMAX))
-    hdr = {"flags": hflags, "n": n,
+    hdr = {"flags": hflags, "n": n, "ver": ver,
            "total": struct.unpack_from("<I", blob, WA_TOTAL)[0],
            "needkb": struct.unpack_from("<H", blob, WA_NEEDKB)[0],
            "maxent": maxent,
@@ -1243,12 +1271,14 @@ def arc_read(blob, name="the archive", decode=True):
             no("%s has a reserved field that is not zero" % tag)
         stored = struct.unpack_from("<I", e, WA_STORED)[0]
         size = struct.unpack_from("<I", e, WA_SIZE)[0]
-        if size > WIRE_FILEMAX:
-            no("%s is %d bytes unpacked and WIRE_FILEMAX is %d"
-               % (tag, size, WIRE_FILEMAX))
-        if size > maxent:
+        if size > maxent and not (ver == WARC_VER2 and method == WAM_STORED):
+            # PAST THE CLAIM is legal for exactly one entry: STORED, in a
+            # version 2 archive, where the reader writes it in pieces of the
+            # claim (SPEC.md 92.13.1). An LZSS entry's back-references are
+            # copies within the claim, so the whole of it has to be there.
             no("%s is %d bytes and the header's largest-entry figure is %d - "
-               "the claim was made from that figure alone"
+               "the claim was made from that figure alone, and only a STORED "
+               "entry of a version 2 archive may pass it (SPEC.md 92.13.1)"
                % (tag, size, maxent))
         folders = tuple(slot(e, WA_PATH + k * WARC_SLOT,
                              "%s's folder slot %d" % (tag, k), folder=True)
@@ -1315,9 +1345,20 @@ def arc_verify(blob, name="the archive"):
                    "a 1KB extent - Load Program sizes the RAM disk on it "
                    "(SPEC.md 92.14)" % (name, hdr["needkb"],
                                         needkb_of(sizes)))
-    if hdr["maxent"] != max(sizes):
+    if hdr["maxent"] != min(max(sizes), WIRE_FILEMAX):
         bad.append("%s: the header's largest entry is %d and the largest is "
-                   "%d" % (name, hdr["maxent"], max(sizes)))
+                   "%d, capped at WIRE_FILEMAX %d (SPEC.md 92.13.1)"
+                   % (name, hdr["maxent"], max(sizes), WIRE_FILEMAX))
+    big = max(sizes) > WIRE_FILEMAX
+    if big != (hdr["ver"] == WARC_VER2):
+        # BOTH WAYS. A big entry in a version 1 archive is one a Wire from
+        # before 92.13.1 lands every file BEFORE and then refuses, leaving
+        # half a tree; a version 2 archive with no big entry is one those
+        # Wires refuse for nothing.
+        bad.append("%s: version %d with %s - the version is 2 exactly when "
+                   "an entry is past WIRE_FILEMAX (SPEC.md 92.13.1)"
+                   % (name, hdr["ver"], "an entry of %d bytes" % max(sizes)
+                      if big else "no entry past WIRE_FILEMAX"))
 
     groups, seen = [], set()
     for e in ents:
@@ -1370,7 +1411,7 @@ def arc_dump(blob, name, out=sys.stdout):
     hdr, ents = arc_read(blob, name)
     print("WPAK v%d, %d entries, %d bytes packed, %d unpacked, %d KB needed, "
           "largest %d%s%s"
-          % (WARC_VER, hdr["n"], len(blob), hdr["total"], hdr["needkb"],
+          % (hdr["ver"], hdr["n"], len(blob), hdr["total"], hdr["needkb"],
              hdr["maxent"],
              ", home %s" % hdr["home"] if hdr["home"] else ", no home",
              ", WAH_PROGRAM" if hdr["flags"] & WAH_PROGRAM else ""), file=out)

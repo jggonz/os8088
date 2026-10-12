@@ -165,7 +165,7 @@ CAT_PINS = (("WIRE_HDR", S_HDR), ("WIRE_REC", S_REC),
 ARC_PINS = (("WARC_HDR", S_AHDR), ("WARC_ENT", S_AENT),
             ("WARC_SLOT", S_ASLOT), ("WARC_SLOTS", S_ASLOTS),
             ("WARC_DEPTH", S_ADEPTH), ("WARC_NMAX", S_ANMAX),
-            ("WARC_VER", 1), ("WAH_PROGRAM", 1),
+            ("WARC_VER", 1), ("WARC_VER2", 2), ("WAH_PROGRAM", 1),
             ("WAM_STORED", 0), ("WAM_LZSS", 1),
             ("WARC_DISTMAX", S_DISTMAX), ("WARC_LENMIN", S_LENMIN),
             ("WARC_LENMAX", S_LENMAX), ("WA_TOTAL", 8), ("WA_NEEDKB", 12),
@@ -455,7 +455,7 @@ def refusals(tmp):
     r = run("--pack", os.path.join(tmp, "big.json"), "--pkgdir", tmp,
             "--out", os.path.join(tmp, "big.bin"))
     check(r.returncode != 0,
-          "--pack refuses a file over WIRE_FILEMAX without floppy_only",
+          "--pack refuses a file over WIRE_FILEMAX",
           "the Wire moves a file in ONE claim and ONE OSAPI_FILE_WRITE, so a "
           "63KB+ file has no path through the machine at all (SPEC.md 92.2)",
           got=(r.stdout + r.stderr).strip() or "exit 0")
@@ -463,11 +463,11 @@ def refusals(tmp):
     json.dump(m, open(os.path.join(tmp, "big.json"), "w"))
     r = run("--pack", os.path.join(tmp, "big.json"), "--pkgdir", tmp,
             "--out", os.path.join(tmp, "big.bin"))
-    check(r.returncode == 0, "...and accepts it WITH floppy_only",
-          "WF_FLOPPY is how the format says 'this one comes as a disk image', "
-          "and both actions then refuse with that reason rather than the "
-          "packer refusing to describe it at all",
-          got=(r.stdout + r.stderr).strip(), want="exit 0")
+    check(r.returncode != 0, "...and WITH floppy_only too",
+          "the machine's wr_catck reads WC_SIZE before any flag, so one plain "
+          "record past the bound refuses the WHOLE catalog on every Wire in "
+          "the field - a big file is a version 2 archive (SPEC.md 92.2, "
+          "92.13.1)", got=(r.stdout + r.stderr).strip() or "exit 0")
 
     notpkg = os.path.join(tmp, "notpkg.o88")
     open(notpkg, "wb").write(b"MZ" + b"\0" * 200)
@@ -785,7 +785,8 @@ def read_archive(blob):
     """SPEC.md 92.13, by hand. (header, entries); raises on any refusal."""
     assert len(blob) >= S_AHDR, "shorter than the header"
     assert blob[0:4] == S_AMAGIC, "magic %r" % blob[0:4]
-    assert blob[4] == 1, "format version %d" % blob[4]
+    ver = blob[4]
+    assert ver in (1, 2), "format version %d" % ver
     hflags = blob[5]
     assert not hflags & ~1, "header flags 0x%02X" % hflags
     n = struct.unpack_from("<H", blob, 6)[0]
@@ -817,8 +818,11 @@ def read_archive(blob):
             "entry %d has a reserved field set" % i
         stored = struct.unpack_from("<I", e, 4)[0]
         size = struct.unpack_from("<I", e, 8)[0]
-        assert size <= S_FILEMAX, "entry %d is %d bytes" % (i, size)
-        assert size <= maxent, "entry %d is over the header's largest" % i
+        # PAST THE CLAIM only as 92.13.1 allows: STORED, in version 2
+        if size > maxent:
+            assert ver == 2 and method == 0, \
+                "entry %d is %d bytes, over the header's largest %d, and is " \
+                "not a stored entry of a version 2 archive" % (i, size, maxent)
         slots = []
         for k in range(S_ASLOTS):
             s = e[16 + k * S_ASLOT:16 + (k + 1) * S_ASLOT]
@@ -852,7 +856,10 @@ def read_archive(blob):
         "to %d" % (total, sum(sizes))
     assert needkb == sum((s + 1023) // 1024 for s in sizes), \
         "the header's need-KB is %d" % needkb
-    assert maxent == max(sizes), "the header's largest is %d" % maxent
+    assert maxent == min(max(sizes), S_FILEMAX), \
+        "the header's largest is %d" % maxent
+    assert (ver == 2) == (max(sizes) > S_FILEMAX), \
+        "version %d with a largest entry of %d" % (ver, max(sizes))
     groups = []
     for e in ents:
         f = e["path"].rsplit("/", 1)[0] if e["depth"] else ""
@@ -862,7 +869,8 @@ def read_archive(blob):
     if hflags & 1:
         assert ents[-1]["depth"] == 0 and ents[-1]["path"].endswith(".O88"), \
             "WAH_PROGRAM and the last entry is %s" % ents[-1]["path"]
-    return {"flags": hflags, "n": n, "total": total, "needkb": needkb,
+    return {"flags": hflags, "n": n, "ver": ver, "total": total,
+            "needkb": needkb,
             "maxent": maxent, "home": home}, ents
 
 
@@ -1303,10 +1311,11 @@ def archive_record(tmp, wpk, mod):
                                      b[S_HDR + 34] & ~S_WF_FLOPPY),
              "a Wire from before 92.13 would fetch a <STEM>.O88 that is not "
              "published"),
-            ("WF_ARC with WF_DISK",
+            ("WF_DISK on a version 1 archive",
              lambda b: b.__setitem__(S_HDR + 34, b[S_HDR + 34] | S_WF_DISK),
-             "92.2 clears bit 0 on an archive, and Load Program is greyed on "
-             "bit 0"),
+             "the writer sets bit 0 on exactly the version 2 archives "
+             "(SPEC.md 92.13.1), and on any other Load Program is greyed for "
+             "a tree a RAM disk would have held"),
             ("a WC_NEEDKB that is not the archive's",
              lambda b: struct.pack_into("<H", b, S_HDR + 46, 1),
              "the RAM disk would be sized short and fill before the tree "
@@ -1366,6 +1375,104 @@ def archive_record(tmp, wpk, mod):
 # =============================================================================
 # THE ARCHIVE WRITER'S REFUSALS (SPEC.md 92.13)
 # =============================================================================
+def big_v2(tmp, mod, tree):
+    """SPEC.md 92.13.1: a file past WIRE_FILEMAX makes a VERSION 2 archive.
+
+    It used to be a refusal, and that refusal is what kept PiXEL (114,684
+    bytes) off the Wire. Now the writer STORES the big entry, caps the claim
+    at WIRE_FILEMAX and writes version 2 - and the verifier holds it to both
+    rules of 92.13.1 in both directions.
+    """
+    import random
+    rnd = random.Random(92131)
+    huge = bytes(rnd.randrange(256) for _ in range(2 * S_FILEMAX + 777))
+    small = b"os8088 " * 300
+    src = tree("big", {"HUGE.BIN": huge, "SMALL.TXT": small})
+    try:
+        wpk = mod.archive(src)
+    except mod.Refused as e:
+        check(False, "--archive packs a file past WIRE_FILEMAX as version 2",
+              "SPEC.md 92.13.1 lifts the cap for a STORED entry", got=str(e))
+        return
+    try:
+        hdr, ents = read_archive(wpk)
+    except AssertionError as e:
+        check(False, "the SPEC-side reader takes the version 2 archive",
+              got=str(e))
+        return
+    eq(hdr["ver"], 2, "an archive with an entry past WIRE_FILEMAX is "
+       "version 2", "a Wire from before 92.13.1 refuses version 2 at the "
+       "HEADER, before it has written a file")
+    eq(hdr["maxent"], S_FILEMAX, "...and its claim is capped at WIRE_FILEMAX",
+       "the big entry goes through the claim in pieces of that size")
+    hugent = [e for e in ents if e["path"] == "HUGE.BIN"][0]
+    eq((hugent["method"], hugent["stored"]), (0, len(huge)),
+       "...and the big entry is STORED, all of it",
+       "an LZSS back-reference is a copy within the claim, so only a stored "
+       "body can be cut into pieces")
+    eq(hugent["data"], huge, "...and it comes back byte for byte")
+    smallent = [e for e in ents if e["path"] == "SMALL.TXT"][0]
+    eq(smallent["method"], 1, "...while a small entry beside it is still LZSS",
+       "version 2 changes the big entry and nothing else")
+    check(not mod.arc_verify(wpk, "big.WPK"),
+          "--verify passes the version 2 archive",
+          got=mod.arc_verify(wpk, "big.WPK"))
+
+    # --- the version rule, both ways ----------------------------------------
+    b = bytearray(wpk)
+    b[4] = 1
+    check(bool(mod.arc_verify(bytes(b), "v1big.WPK")),
+          "--verify fails a big entry in a VERSION 1 archive",
+          "a Wire from before 92.13.1 would land every entry before it and "
+          "then refuse, leaving half a tree on the disk", got="no complaint")
+    small_only = mod.archive(tree("smallonly", {"SMALL.TXT": small}))
+    b = bytearray(small_only)
+    b[4] = 2
+    check(bool(mod.arc_verify(bytes(b), "v2small.WPK")),
+          "--verify fails a version 2 archive with no big entry",
+          "those Wires would refuse it for nothing", got="no complaint")
+    eq(small_only[4], 1, "...and the writer keeps such an archive version 1")
+
+    # --- an LZSS entry may NOT pass the claim, in either version ------------
+    b = bytearray(wpk)
+    p = S_AHDR
+    for e in ents:                          # find the big entry's header
+        if e["path"] == "HUGE.BIN":
+            break
+        p += S_AENT + e["stored"]
+    b[p] = 1                                # method LZSS, sizes unchanged
+    check(bool(mod.arc_verify(bytes(b), "lzbig.WPK")),
+          "--verify fails an LZSS entry past the claim in version 2",
+          "its back-references are copies WITHIN the claim, so the whole "
+          "file has to fit it (SPEC.md 92.13.1)", got="no complaint")
+
+    # --- the catalog record: WF_DISK derived, and cross-checked -------------
+    open(os.path.join(tmp, "BIGARC.WPK"), "wb").write(wpk)
+    man = {"date": "20261012", "entries": [
+        {"stem": "BIGARC", "title": "A big file", "kind": 0, "tier": 0,
+         "archive": {"file": "BIGARC.WPK"},
+         "description": "One file past the claim."}]}
+    try:
+        cat = mod.pack(man, tmp, tmp)
+    except mod.Refused as e:
+        check(False, "--pack takes a version 2 archive record", got=str(e))
+        return
+    flags = cat[S_HDR + 34]
+    eq(flags & (S_WF_ARC | S_WF_FLOPPY | S_WF_DISK),
+       S_WF_ARC | S_WF_FLOPPY | S_WF_DISK,
+       "a version 2 archive's record is WF_ARC, WF_FLOPPY AND WF_DISK",
+       "WF_DISK greys Load Program: no RAM disk store holds a file past "
+       "RD_FILEMAX, so Add to Disk is the path (SPEC.md 92.13.1)")
+    check(not mod.verify(cat, tmp), "--verify --pkgdir passes that catalog",
+          got=mod.verify(cat, tmp))
+    b = bytearray(cat)
+    b[S_HDR + 34] &= ~S_WF_DISK
+    check(bool(mod.verify(bytes(b), tmp)),
+          "--verify --pkgdir fails a version 2 archive record without WF_DISK",
+          "Load Program would mount a store and then fail at the big file's "
+          "write", got="no complaint")
+
+
 def archive_refusals(tmp, mod):
     root = os.path.join(tmp, "ref")
 
@@ -1422,11 +1529,7 @@ def archive_refusals(tmp, mod):
            tree("dotdir", {os.path.join("MY.DIR", "F.TXT"): b"x"}),
            "a directory entry takes no extension - tools/os88disk.py's "
            "folder83 rule, at every level")
-    refuse("an entry over WIRE_FILEMAX",
-           tree("big", {"BIG.BIN": b"\0" * (S_FILEMAX + 1)}),
-           "the reader makes ONE claim for the largest entry and writes each "
-           "file with ONE OSAPI_FILE_WRITE, so a 63KB+ file has no path "
-           "through the machine at all")
+    big_v2(tmp, mod, tree)
     refuse("a --program that is not at depth 0",
            tree("progdeep", {os.path.join("SUB", "HELLO.O88"): hello,
                              "F.TXT": b"x"}),

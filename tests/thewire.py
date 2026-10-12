@@ -23,17 +23,17 @@ be run side by side; a bound port is a gate reading the other one's answers.
 the machine asks the host for it and every byte under test is a byte this file
 chose.
 
-TWELVE ASSERTIONS.
+THIRTEEN ASSERTIONS.
 
-1. THE CATALOG ARRIVES AND IS UNDERSTOOD. `wr_n` is 4, `wr_state` is WS_DONE
+1. THE CATALOG ARRIVES AND IS UNDERSTOOD. `wr_n` is 5, `wr_state` is WS_DONE
    and `wr_nodrv` is 0 - which is the whole stack under it (ARP, a handshake,
    a GET, a windowed drain, a close) plus wr_catck having accepted every field.
 2. THE HOST SAW THE REQUEST IT EXPECTED, `GET /wire/catalog.bin HTTP/1.0` with
    a Host: header, so the path composition and WIRE.CFG both worked.
 3. THE LIST IS THE CATALOG. The scroll block's `total` - which is the machine's
-   own `wr_count`, written by the painter - is 4.
+   own `wr_count`, written by the painter - is 5.
 4. THE FILTER FILTERS. Clicking `8088/8086` leaves `wr_filter` = 1 and that
-   same count at 3, because the fixture's third entry is tier 3.
+   same count at 3, because the fixture's third and fifth entries are tier 3.
 5. THE PREDICATE GREYS THE RIGHT BUTTON. Selecting the tier-3 `WF_DISK` entry
    leaves `wr_grey` bit 0 set and bit 1 clear: Load Program refuses (its files
    must be on a disk) and Add to Disk does not.
@@ -102,6 +102,14 @@ TWELVE ASSERTIONS.
    not, so the count of dark pixels in the button column alone separates
    them; with it the region is white in both. The old kernel cannot be built
    here to show the other arm, so this is stated rather than demonstrated.
+
+13. A VERSION 2 ARCHIVE, ADDED TO DISK (SPEC.md 92.13.1). The fifth record
+   is a `.WPK` whose `DATA/HUGE.BIN` is 150,000 bytes - past `WIRE_FILEMAX`,
+   so the writer stores it and makes the archive version 2, and the record
+   carries `WF_DISK`. Load Program is greyed and Add to Disk is not; the
+   chain writes the big file as a piece through the claim and two pieces
+   appended onto it, then goes on to `ZZ/AFTER.TXT`; and after `quit` all
+   three files under `BIG/` are compared byte for byte on the host.
 
 **THE LAUNCH IS THE DESKTOP ZONE** (SPEC.md 26.7). `ETHER.DRV` registers it,
 so the ethertest-shaped disk that already asks for the driver has the icon on
@@ -183,6 +191,13 @@ FIXTURE = {
         {"stem": "TREEONE", "title": "A whole tree", "kind": 0, "tier": 0,
          "archive": {"file": "TREEONE.WPK"},
          "description": "Folders, in one stream."},
+        # A VERSION 2 ARCHIVE (SPEC.md 92.13.1): one file past the claim, so
+        # it comes through in PIECES and every one after the first is an
+        # OSAPI_FILE_APPEND. Tier 3 so the 8088/8086 filter still shows three
+        # rows - assertion 4 counts them.
+        {"stem": "BIGTREE", "title": "A big file", "kind": 0, "tier": 3,
+         "archive": {"file": "BIGTREE.WPK"},
+         "description": "One file past the claim."},
     ],
 }
 ARC_STEM = "TREEONE"
@@ -192,6 +207,11 @@ ARC_PROG = "MSEG.O88"                   # ...and the entry that carries
                                         # WAH_PROGRAM: a package with PARTS,
                                         # which is what SPEC.md 92.14.2 is
                                         # about (see fixture_tree)
+BIG_STEM = "BIGTREE"                    # the version 2 archive (92.13.1)
+BIG_HOME = "BIG"
+BIG_ROW = 4
+BIG_SIZE = 150000                       # three pieces through a 63KB claim:
+                                        # a write and two appends
 SIDECAR = "MINES.O88"                   # what BIGONE's second file is called
                                         # in /wire/pkg/ and on the disk
 XSIDE = {"WIRESC%02d.DAT" % j: (b"sidecar %02d " % j) * (20 + 7 * j)
@@ -284,7 +304,9 @@ def fixture_tree(root):
     # NON-ZERO HIGH WORD. A word there laps into a small plausible number
     # rather than failing, which is PERFORMANCE.md rule 3's failure mode and
     # invisible in any shorter fixture. They are 34,000 each rather than one
-    # of 68,000 because WIRE_FILEMAX caps ONE entry at 63KB.
+    # of 68,000 because an entry past WIRE_FILEMAX makes the archive
+    # VERSION 2 (SPEC.md 92.13.1) - BIGTREE's subject - and this one has to
+    # stay version 1, the version every Wire in the field reads.
     # The generator is an LCG so the fixture is byte-for-byte reproducible.
     for which in (1, 2):
         buf, x = bytearray(), 0x1234 + which
@@ -296,6 +318,39 @@ def fixture_tree(root):
     hello = open(os88build.at("build/hello.o88"), "rb").read()
     put("HELLO.O88", hello)
     put(ARC_PROG, open(os88build.at("build/mseg.o88"), "rb").read())
+    return want
+
+
+def fixture_big(root):
+    """The version 2 archive's tree (SPEC.md 92.13.1), and what it must hold.
+
+      README.TXT     depth 0, LZSS - an ordinary entry BEFORE the big one
+      DATA/HUGE.BIN  150,000 bytes of noise: past WIRE_FILEMAX, so the writer
+                     stores it and makes the archive version 2, and the
+                     machine writes it as a piece of 64,512 bytes, a second
+                     appended, and the last 20,976 appended
+      ZZ/AFTER.TXT   an ordinary entry AFTER it, in a folder of its own - the
+                     proof that the stream picks up at the next entry header
+                     once the pieces are done, and that the folder walk still
+                     works after a write that never moved
+    """
+    want = {}
+
+    def put(rel, data):
+        path = os.path.join(root, *rel.split("/"))
+        d = os.path.dirname(path)
+        if d and not os.path.isdir(d):
+            os.makedirs(d)
+        open(path, "wb").write(data)
+        want[rel] = data
+
+    put("README.TXT", b"A file larger than the claim, in pieces.\r\n" * 30)
+    buf, x = bytearray(), 0x9213
+    while len(buf) < BIG_SIZE:
+        x = (x * 1103515245 + 12345) & 0xFFFFFFFF
+        buf.append((x >> 16) & 0xFF)
+    put("DATA/HUGE.BIN", bytes(buf))
+    put("ZZ/AFTER.TXT", b"after the pieces\r\n" * 50)
     return want
 
 
@@ -629,34 +684,44 @@ class Server(threading.Thread):
         self.s.listen(4)
 
     def run(self):
+        # A THREAD PER CONNECTION, as any real web server is. Served one at a
+        # time, a client that stops reading mid-body - a reader refusing an
+        # archive it does not understand, which is what 92.13.1's version 2
+        # is FOR on an older Wire - holds this loop in sendall() for the whole
+        # timeout, and the machine's NEXT request is then a failure the
+        # harness made rather than one the machine did.
         while True:
             try:
                 c, _ = self.s.accept()
             except OSError:
                 return
-            c.settimeout(60)
-            try:
-                req = b""
-                while b"\r\n\r\n" not in req and len(req) < 4096:
-                    b = c.recv(1024)
-                    if not b:
-                        break
-                    req += b
-                self.asked.append(req)
-                line = req.split(b"\r\n")[0].decode("latin1", "replace")
-                path = line.split(" ")[1] if " " in line else ""
-                body = self.files.get(path)
-                if body is None:
-                    c.sendall(b"HTTP/1.0 404 Not Found\r\n"
-                              b"Content-Length: 0\r\n\r\n")
-                else:
-                    c.sendall(b"HTTP/1.0 200 OK\r\n"
-                              b"Content-Type: application/octet-stream\r\n"
-                              b"Content-Length: %d\r\n\r\n" % len(body) + body)
-            except OSError:
-                pass
-            finally:
-                c.close()
+            threading.Thread(target=self.serve, args=(c,),
+                             daemon=True).start()
+
+    def serve(self, c):
+        c.settimeout(60)
+        try:
+            req = b""
+            while b"\r\n\r\n" not in req and len(req) < 4096:
+                b = c.recv(1024)
+                if not b:
+                    break
+                req += b
+            self.asked.append(req)
+            line = req.split(b"\r\n")[0].decode("latin1", "replace")
+            path = line.split(" ")[1] if " " in line else ""
+            body = self.files.get(path)
+            if body is None:
+                c.sendall(b"HTTP/1.0 404 Not Found\r\n"
+                          b"Content-Length: 0\r\n\r\n")
+            else:
+                c.sendall(b"HTTP/1.0 200 OK\r\n"
+                          b"Content-Type: application/octet-stream\r\n"
+                          b"Content-Length: %d\r\n\r\n" % len(body) + body)
+        except OSError:
+            pass
+        finally:
+            c.close()
 
 
 # =============================================================================
@@ -775,6 +840,20 @@ def main():
     except os88wire.Refused as e:
         sys.exit("thewire: the fixture tree will not pack: %s" % e)
     open(os.path.join("build", ARC_STEM + ".WPK"), "wb").write(wpk)
+    bsrc = os.path.join(tmp, "bigtree")
+    os.makedirs(bsrc, exist_ok=True)
+    bigtree = fixture_big(bsrc)
+    try:
+        bwpk = os88wire.archive(bsrc, home=BIG_HOME)
+    except os88wire.Refused as e:
+        sys.exit("thewire: the version 2 fixture will not pack: %s" % e)
+    if bwpk[os88wire.WA_VER] != os88wire.WARC_VER2:
+        sys.exit("thewire: the big fixture packed as version %d and not 2 - "
+                 "its HUGE.BIN is past WIRE_FILEMAX, so the writer has to "
+                 "make it version 2 (SPEC.md 92.13.1)" % bwpk[os88wire.WA_VER])
+    open(os.path.join("build", BIG_STEM + ".WPK"), "wb").write(bwpk)
+    say("archive %s: %d bytes on the wire, version 2, %d entries"
+        % (BIG_STEM + ".WPK", len(bwpk), len(bigtree)))
     say("archive %s: %d bytes on the wire, %d entries, %d files unpacked"
         % (ARC_STEM + ".WPK", len(wpk), len(tree), len(tree)))
     if len(wpk) <= 0xFFFF:
@@ -797,6 +876,7 @@ def main():
               "/wire/pkg/BIGONE.O88": hello,
               **{"/wire/pkg/" + n: d for n, d in XSIDE.items()},
               "/wire/pkg/%s.WPK" % ARC_STEM: wpk,
+              "/wire/pkg/%s.WPK" % BIG_STEM: bwpk,
               "/wire/pic/HELLO.PIC": pic}
     srv = Server(served)
     srv.start()
@@ -897,8 +977,8 @@ def main():
         elif state != WS_DONE:
             no("wr_state is %d and not WS_DONE - the fetch never completed"
                % state)
-        if n != 4:
-            no("wr_n is %d and the fixture catalog has 4 records: either it "
+        if n != 5:
+            no("wr_n is %d and the fixture catalog has 5 records: either it "
                "did not arrive or wr_catck refused a field. **THE FOURTH IS "
                "AN ARCHIVE OF %d BYTES**, and a reader that bounds every "
                "record's WC_SIZE to 16 bits and WIRE_FILEMAX refuses it and "
@@ -928,8 +1008,8 @@ def main():
             return u16(m.readseg(pseg, img + off["wr_sb"] + 8, 2))
 
         say("the list shows %d of %d" % (shown(), n))
-        if shown() != 4:
-            no("the list shows %d rows over a 4-record catalog" % shown())
+        if shown() != 5:
+            no("the list shows %d rows over a 5-record catalog" % shown())
 
         # --- 3b: the catalog claim is the catalog's size, and Refresh -------
         # SPEC.md 92.2: the claim is made at WIRE_CATMAX before the length is
@@ -953,7 +1033,7 @@ def main():
         mo.run("to", str(fx), "26")         # File > Refresh, item 0
         time.sleep(0.4)
         mo.run("up")
-        os88qemu.acted(m, lambda: len(srv.asked) > nasked and w("wr_n") == 4
+        os88qemu.acted(m, lambda: len(srv.asked) > nasked and w("wr_n") == 5
                        and b("wr_state")[0] == WS_DONE,
                        secs=40, what="the refreshed catalog", poll=0.5)
         kb1 = b("wr_catkb")[0]
@@ -962,7 +1042,7 @@ def main():
         if len(srv.asked) <= nasked:
             no("File > Refresh asked the host for nothing (menu cell x %d)"
                % fx)
-        elif w("wr_n") != 4 or kb1 != kb0:
+        elif w("wr_n") != 5 or kb1 != kb0:
             no("Refresh did not land the same catalog in the same-size claim "
                "(wr_n %d, %d KB against %d)" % (w("wr_n"), kb1, kb0))
 
@@ -987,9 +1067,9 @@ def main():
                "tier-0 entries" % shown())
 
         mo.click(ox + 48 + 6, oy + 2 + 6)        # ...and back to All
-        os88qemu.acted(m, lambda: shown() == 4, secs=3, what="All",
+        os88qemu.acted(m, lambda: shown() == 5, secs=3, what="All",
                        poll=0.1)
-        if shown() != 4:
+        if shown() != 5:
             no("back on All the list shows %d rows" % shown())
 
         def rect(name):
@@ -1296,6 +1376,31 @@ def main():
                "refused), wr_s_lost (the stream ended short of its N "
                "entries) or wr_s_wrote (a file or a folder the disk refused)"
                % w("wr_msg"))
+
+        # --- 13: A VERSION 2 ARCHIVE, ADDED TO DISK (SPEC.md 92.13.1) -------
+        # Load Program greyed (WF_DISK: no RAM disk store holds a file past
+        # RD_FILEMAX) and Add to Disk not; then the chain, whose big entry is
+        # three pieces - an OSAPI_FILE_WRITE and two OSAPI_FILE_APPENDs. The
+        # bytes are compared at the bottom of this file.
+        pick(BIG_ROW)
+        grey = b("wr_grey")[0]
+        say("version 2 row: wr_sel = %d, wr_grey = %d" % (w("wr_sel"), grey))
+        if w("wr_sel") != BIG_ROW:
+            no("wr_sel is %d after clicking the version 2 archive's row"
+               % w("wr_sel"))
+        if not grey & 1:
+            no("Load Program is NOT greyed on a version 2 archive: the record "
+               "carries WF_DISK and the predicate must test it before the RAM "
+               "disk decision (SPEC.md 92.7, 92.13.1) - wr_grey = %d" % grey)
+        if grey & 2:
+            no("Add to Disk is greyed on the version 2 archive, and Add to "
+               "Disk is its only path (wr_grey = %d)" % grey)
+        if not save_to_b("09", dispcp.win_list(m, S)):
+            no("the version 2 archive's chain ended in WS_FAIL: wr_msg = %04X. "
+               "wr_s_badarc is the reader refusing version 2 or the big entry "
+               "(wr_ahdrck, wr_aentck); wr_s_wrote is a piece the disk "
+               "refused - the first is OSAPI_FILE_WRITE, the rest "
+               "OSAPI_FILE_APPEND" % w("wr_msg"))
 
         # --- 10: AN ARCHIVE, RUN FROM RAM (SPEC.md 92.14) -------------------
         vols0 = live_vols(m)
@@ -1620,6 +1725,31 @@ def main():
         else:
             say("%s/%s: %d bytes, byte-identical to what was packed"
                 % (ARC_HOME, rel, len(want)))
+
+    # --- assertion 13's other half: the version 2 tree --------------------
+    got_big = {}
+    for k, v in got.items():
+        parts = k.split("/")
+        if BIG_HOME in parts:
+            got_big["/".join(parts[parts.index(BIG_HOME) + 1:])] = v
+    say("%s/ on B: holds %r" % (BIG_HOME, sorted(got_big)))
+    for rel, want in sorted(bigtree.items()):
+        blob = got_big.get(rel.upper())
+        if blob is None:
+            no("%s/%s is nowhere on B: - the version 2 chain did not write it"
+               % (BIG_HOME, rel))
+        elif blob != want:
+            first = next((i for i in range(min(len(blob), len(want)))
+                          if blob[i] != want[i]), min(len(blob), len(want)))
+            no("%s/%s is %d bytes on B: and the source is %d; they first "
+               "differ at byte %d. The pieces are 64,512 bytes, so a first "
+               "difference at a multiple of that is a piece boundary: an "
+               "append that rewrote instead of extending, or a counter not "
+               "reset by wr_anext (SPEC.md 92.13.1)"
+               % (BIG_HOME, rel, len(blob), len(want), first))
+        else:
+            say("%s/%s: %d bytes, byte-identical to what was packed"
+                % (BIG_HOME, rel, len(want)))
 
     say("thewire: %s" % ("FAILED" if fails else "ok"))
     return 1 if fails else 0
