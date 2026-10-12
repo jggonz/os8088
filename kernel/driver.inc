@@ -4000,9 +4000,9 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 ; directory sectors, which is where a hidden + system entry can be seen at all.
 ;
 ; **dskw_stat and not drv_find**, deliberately: drv_find answers a SIZE and
-; refuses one whose high word is non-zero, and KERNEL.SYS is over 100,000 bytes
-; today - so it would start reporting that the system disk is not the system
-; disk. Existence is the question here.
+; refuses one whose high word is non-zero, and KERNEL.SYS is past 64KB today
+; (84,064 bytes on kern_big) - so it would report that the system disk is not
+; the system disk. Existence is the question here.
 %1 %+ _save:
     push bx
     push cx
@@ -4056,7 +4056,7 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 %%notsys:
     mov ax, FERR_NOENT          ; a disk, but not ours. [cp_dsave] carries it
     stc                         ; to the Drivers page, whose caption already
-    jmp short %%out             ; says 'Cannot save to the system disk' - which
+    jmp short %%out             ; says 'Not Saved: No Sys in A:' - which
 %%nodisk:                       ; is exactly the truth in this case
     mov ax, FERR_NODISK
     stc
@@ -4231,7 +4231,7 @@ ovl_fdd_apply:
 ; then - drv_boot's own mount is what writes over it. Setting DRVR_WANT is
 ; therefore a DEFAULT and not an override, and no test of "did the file exist"
 ; is needed anywhere: a SYSTEM.CFG that deserialises calls drv_want_set, which
-; overwrites all three WANT bytes with the file's bitmap, so the user's answer
+; overwrites every row's WANT byte with the file's bitmap, so the user's answer
 ; always wins. A missing or malformed file leaves the defaults standing, and
 ; on a machine with a card the default is now "load it".
 ;

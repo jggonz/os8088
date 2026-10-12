@@ -4231,6 +4231,24 @@ $(BUILD)/vmmcfg/system.cfg: | $(BUILD)
 	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
 	  (1 << 5).to_bytes(2,'little') + b'\0\0')" > $@
 
+# ...AND THE BROWSER'S, which is the same file with BIT 0 SET AS WELL: the
+# sound driver, wanted from the first boot (SPEC.md 80.7). A settings file
+# that deserialises writes every row's WANT from its bitmap (SPEC.md 51.3.1),
+# so the file above says sound is OFF in so many words - and the boot's OPL
+# sniff could not have said otherwise in v86 anyway, whose SB16 leaves the FM
+# status port at 388h unimplemented and reads 0FFh, a miss. Every visitor's
+# machine has the SB16, so the demo asks for it rather than waiting for a
+# Control Panel tick. NOT build/vmmcfg's file, for the reason this one exists
+# at all: tests/vmmouse.py boots that one in a QEMU with no card, where a
+# wanted sound row is DRVE_HW and drv_notice opens the Control Panel over the
+# desktop the gate is driving; and `make emu` pairs with whatever emulator the
+# user brings, which need not have a card either.
+$(BUILD)/webcfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/webcfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 0 | 1 << 5).to_bytes(2,'little') + b'\0\0')" > $@
+
 $(BUILD)/vmmouse.img: KMODDIR := $(EMUDIR)
 # ...AND THE KERNEL'S OWN SOURCES, which were NOT here and are the whole of
 # why the `vmmouse` row died twice in one session on an edit that had nothing
@@ -13090,8 +13108,9 @@ live: $(USBIMG) $(LIVEISO)
 # build/os8088-emu-usb.img is $(USBIMG) with three things changed and nothing
 # else: the kernel and its two boot sectors are $(EMUDIR)'s, the drivers are
 # $(EMUDRIVERS) - $(DRIVERS) plus VMMOUSE.DRV, with the on-demand kernel
-# modules cut out of THAT kernel - and the root carries `make emu`'s SYSTEM.CFG
-# with bit 5 set, so the absolute pointer is wanted from the first boot. It is
+# modules cut out of THAT kernel - and the root carries build/webcfg's
+# SYSTEM.CFG, bits 0 and 5, so the sound driver and the absolute pointer are
+# both wanted from the first boot (the file's own rule says why). It is
 # what os8088.com's live demo boots (the website's tools/release.py publishes
 # it), because v86 answers SPEC.md 9.11's backdoor and the pointer then tracks
 # the visitor's with no capture at all.
@@ -13116,11 +13135,11 @@ $(USBIMG): LIVEDRVS = $(DRIVERS)
 $(USBIMG): LIVESUB :=
 $(EMUUSBIMG): KMODDIR := $(EMUDIR)
 $(EMUUSBIMG): LIVEKDIR := $(EMUDIR)
-$(EMUUSBIMG): LIVEDRVS = $(EMUDRIVERS) $(BUILD)/vmmcfg/system.cfg
+$(EMUUSBIMG): LIVEDRVS = $(EMUDRIVERS) $(BUILD)/webcfg/system.cfg
 $(EMUUSBIMG): LIVESUB = $(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 \
                         $(EMUDIR)/mbr.bin $(EMUDIR)/boothd.bin $(EMUDIR)/boot.bin
 $(EMUUSBIMG): $(KERNEL_SRC) $(KERNEL_INC) $(BUILD)/vmmouse.drv \
-              $(BUILD)/vmmcfg/system.cfg
+              $(BUILD)/webcfg/system.cfg
 
 # THE SELECTIONS ARE "hdd" AND NOT 1440 (SPEC.md 80.6). Both fetch tools
 # price their fill in the target geometry's clusters, and this volume is

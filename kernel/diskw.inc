@@ -298,9 +298,10 @@ dskw_wrp:
 ; dskw_write_sys - dskw_write, for a file that belongs to the KERNEL
 ; in/out: dskw_write's, exactly
 ;
-; KERNEL-ONLY - there is no API slot and there must never be one, because
-; the whole point of SPEC.md 19.6 is that a package cannot make a file the
-; user can neither see nor delete. Two differences from the ordinary write,
+; KERNEL AND DRIVERS ONLY - OSAPI_FILE_WRITE_SYS (0x0280) publishes it behind
+; a caller test that refuses a package FERR_PROT (SPEC.md 19.6.1), because the
+; whole point of SPEC.md 19.6 is that a package cannot make a file the user
+; can neither see nor delete. Two differences from the ordinary write,
 ; both keyed off [dskw_syswr] and both inside dskw_commit / dskw_wbody:
 ;
 ;   1. a file it CREATES is stamped hidden + system, and

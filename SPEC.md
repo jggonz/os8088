@@ -37918,7 +37918,7 @@ place — `sys_attr` in `tools/os88disk.py` — for everything the build ships:
 |---|---|---|
 | `KERNEL.SYS` | read-only + hidden + system | deleting it unboots the disk, and it is not a document |
 | `*.DRV` | read-only + hidden + system | the same, per driver (§51) |
-| `SYSTEM.CFG` | hidden + system | written by the kernel, so **not** read-only |
+| `SYSTEM.CFG` | hidden + system | written by the kernel, so **not** read-only — and stamped the same by the build on a disk that ships one (§80.7) |
 | everything else, on either disk | archive | ordinary and **visible** — `TASKMGR.O88` (the chip menu loads it by name, §28), `README.TXT` (the manual, meant to be opened, §19.7), every package in `APPS/` and `GAMES/`, `SYSTEM/DOS/`'s tools and the faces |
 
 **Only what would unboot the disk is locked.** The last row used to be split
@@ -85409,7 +85409,7 @@ twice (bug)`, and the DMA ring count stays at **one** — the guard refuses
 where the old code orphaned.
 
 **Nothing loads that `SYSTEM.CFG` did not ask for, and no row is wanted by
-default.** Both `drv_tab` rows ship with `DRVR_WANT` = 0. The sound row used
+default.** Every `drv_tab` row ships with `DRVR_WANT` = 0. The sound row used
 to ship with 1, so a freshly built image — which carries no `SYSTEM.CFG` at
 all — read the whole 5.5KB driver off the floppy on every boot to be told
 there was no card: **27 sectors, about 6.4 seconds** at the field machine's
@@ -85486,8 +85486,8 @@ guess: it measures.
 
 **Setting `DRVR_WANT` is a DEFAULT, not an override, and no code enforces
 that** — it falls out of the order the boot already ran in. `drv_cfg_unpack`
-calls `drv_want_set`, which writes **all three** `WANT` bytes from the file's
-bitmap, so a settings file that deserialises always wins, in both directions.
+calls `drv_want_set`, which writes **every row's** `WANT` byte — all
+`DRV_MAX` of them — from the file's bitmap, so a settings file that deserialises always wins, in both directions.
 A file that says *off* on a machine with a card loads nothing; a file that
 says *on* on a machine with none still reports `DRVE_HW`, exactly as before.
 There is no "did the file exist" test anywhere, because there is nothing for
@@ -85578,9 +85578,10 @@ under it.
 
 ### 51.5 SYSTEM.CFG
 
-A small file in the system disk's root, written through the ordinary file API,
-so it is an ordinary file — deletable, copyable and readable from DOS. It
-carries the **whole Control Panel**, not just the driver list.
+A small file in the system disk's root, written through `dskw_write_sys`
+(§19.6), so it is **hidden + system**: read by name like any file, but listed
+by neither os8088's file manager nor DOS's `DIR`, and not deletable from inside
+os8088. It carries the **whole Control Panel**, not just the driver list.
 
 **Nothing in it is positional.** It was a fixed 32-byte struct, which is the
 cheapest thing that works and the wrong thing to keep: adding a setting is
@@ -85699,8 +85700,10 @@ and freeing it first would leave a claim nothing could ever name again.
 
 #### 51.5.1 It is written to the SYSTEM disk, not to whatever is in A:
 
-`drv_cfg_save` mounts drive A: and writes `SYSTEM.CFG` to it, and for a long
-time that was the whole of it — on the unexamined assumption that the disk the
+`drv_cfg_save` mounted drive A: and wrote `SYSTEM.CFG` to it — it mounts the
+**boot volume** now, `[dsk_bootvol]`, which is A: on a floppy machine and the
+installed partition on one that booted from its hard disk (§52.10.3) — and for
+a long time that was the whole of it — on the unexamined assumption that the disk the
 machine booted from is still the disk in the drive. **It is not.** A
 single-floppy machine swaps to the apps disk to launch anything (§28.3 is
 built around exactly that), and a Control Panel change made afterwards wrote
@@ -85723,18 +85726,19 @@ directory sectors — which is the only place a hidden + system entry can be
 seen at all. No marker, no write.
 
 **`dskw_stat` and not `drv_find`**, deliberately. `drv_find` answers a *size*
-and refuses one whose high word is non-zero; `KERNEL.SYS` is 63,944 bytes
-today, so the day the kernel passes 64KB that check would begin reporting that
-the system disk is not the system disk. Existence is the question here, and
+and refuses one whose high word is non-zero; `KERNEL.SYS` was 63,944 bytes
+when this was written and is past 64KB now (84,064 on `kern_big`), so that
+check would report that the system disk is not the system disk. Existence is the question here, and
 `dskw_stat` is the routine that answers it.
 
 A refusal is `FERR_NOENT`, and it joins `FERR_NODISK` in the one outcome the
-user can act on: the caption says **`'Needs the system disk in A:'`**, while a
-write that genuinely failed — full, protected, I/O — says `'Could not save the
-settings'`. Both are **27 characters**, which is the pane's limit (222px less
-`CP_PMX`); the single string they replace was thirty and painted through the
-window's right border into the desktop, unnoticed because the caption was
-almost never drawn (§31.8).
+user can act on: the caption says **`'Not Saved: No Sys in A:'`** — the drive
+letter stamped by the mount, so a hard-disk machine reads its own (§52.10.3) —
+while a write that genuinely failed — full, protected, I/O — says `'Not saved:
+disk error'`. Both are under **27 characters**, which is the pane's limit
+(222px less `CP_PMX`); the single string the first pair replaced was thirty and
+painted through the window's right border into the desktop, unnoticed because
+the caption was almost never drawn (§31.8).
 
 `[cp_wdirty]` is **kept** on this refusal like any other, so putting the
 system disk back and closing the panel again saves it — verified end to end:
@@ -119377,8 +119381,29 @@ resident line of the backdoor out of `kern_big` on purpose.
 |---|---|---|
 | kernel, `mbr.bin`, `boothd.bin` | `build/` — `kern_big` | `build/emuk/` — `kern_emu` (§9.11.7) |
 | drivers | `$(DRIVERS)` | `$(EMUDRIVERS)`: the same plus `VMMOUSE.DRV`, the on-demand kernel modules cut out of `kern_emu` |
-| `SYSTEM.CFG` | none | `make emu`'s, bit 5 set — the absolute pointer wanted from the first boot |
+| `SYSTEM.CFG` | none | `build/webcfg`'s, bits 0 and 5 set — the sound driver and the absolute pointer both wanted from the first boot |
 | the rest of the payload | `$(LIVEREST)` | `$(LIVEREST)`, the same expansion |
+
+**Bit 0 is there because the file would otherwise say sound is off.** For a
+release this row was `make emu`'s file, bit 5 alone, and the demo booted
+silent: the Sound Blaster loaded from the Drivers page on the first tick, and
+never at boot. Nothing was failing — a settings file that deserialises writes
+every row's `WANT` from its bitmap (§51.3.1), so a bitmap naming only the
+mouse is a file that asks for the mouse and declines the rest. Leaving bit 0
+to §51.3.1's sniff instead would not have helped either: v86's SB16 answers
+the FM status port at 388h with a constant `0FFh`, so the timer dance misses
+exactly as QEMU's `-device sb16` does. Every visitor's machine has the card,
+so the browser's file asks for it. `make emu` and `tests/vmmouse.py` keep
+bit 5 alone, because a QEMU without a card would answer a wanted sound row
+with `DRVE_HW` and a Control Panel opening over the desktop.
+
+The file is **hidden + system**, as §19.6's table has it and as
+`dskw_write_sys` would have made it. `os88disk.py` stamped a host-built
+`SYSTEM.CFG` as a plain archive file until this was found, on the grounds
+that only the kernel ever creates one; and because `dskw_commit` stamps those
+two bits only on a create and keeps the entry's own on a replace, every
+Control Panel save after that left it plain, listed in the Disk window and
+deletable.
 
 **One recipe, not two.** Both images are built by the one rule, parameterised
 by target-specific variables (`LIVEKDIR`, `LIVEDRVS`, `LIVESUB`), and
