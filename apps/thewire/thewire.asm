@@ -1809,6 +1809,15 @@ wr_may:
     cmp word [wr_sel], 0xFFFF
     je .nosel
     call wr_selrec
+    mov ax, [es:si+WC_PKGFMT]           ; --- IS IT FOR THIS os8088 AT ALL?
+    cmp ah, WIRE_LEVEL                  ; (SPEC.md 92.2) AH = the oldest Wire
+    ja .needw                           ; that installs it, AL = the format it
+    or al, al                           ; was built for - and OUR PKG_FMT IS
+    jz .fmtok                           ; THE KERNEL'S, or the loader would
+    cmp al, PKG_FMT                     ; not have started us. 0 is a catalog
+    ja .newer                           ; from before the bytes, which claims
+    jb .older                           ; nothing
+.fmtok:
     mov al, [es:si+WC_FLAGS]
     test al, WF_ARC                     ; **AN ARCHIVE IGNORES WF_FLOPPY**, and
     jnz .arc                            ; the writer sets that bit WITH WF_ARC
@@ -1856,6 +1865,15 @@ wr_may:
     jmp short .no
 .flop:
     mov si, wr_r_flop
+    jmp short .no
+.needw:
+    mov si, wr_r_wire
+    jmp short .no
+.newer:
+    mov si, wr_r_newer
+    jmp short .no
+.older:
+    mov si, wr_r_older
     jmp short .no
 .disk:
     mov si, wr_r_disk
@@ -3003,6 +3021,15 @@ wr_write:
     mov si, wr_savename                 ; ITEM 0 TAKES THE USER'S NAME. The
                                         ; sidecars cannot: an overlay is found
                                         ; by the name its package looks for
+    push es                             ; ...and item 0 IS the package, so
+    mov es, [wr_fseg]                   ; before it lands on anybody's disk:
+    mov ax, [es:0]                      ; an os8088 package ('O8') of another
+    mov bl, [es:2]                      ; format is one this machine's loader
+    pop es                              ; will refuse (SPEC.md 92.8). The
+    cmp ax, 0x384F                      ; catalog's WC_PKGFMT said so first;
+    jne .name                           ; this is the bytes themselves
+    cmp bl, PKG_FMT
+    jne .fmt
 .name:
     mov [wr_wname], si                  ; BANKED: on a DVK_FILE volume CX, SI
                                         ; and DI are the DRIVER's across this
@@ -3021,6 +3048,10 @@ wr_write:
     call OSAPI_FILE_WRITE
     jnc .ok
     call wr_wrfail
+    stc
+    ret
+.fmt:
+    mov word [wr_msg], wr_s_fmt
     stc
     ret
 .ok:
@@ -3146,6 +3177,9 @@ wr_pkgrun:
     call OSAPI_TOAST
     jmp short .out
 .bad:
+    mov word [wr_msg], wr_s_fmt         ; the loader's LD_EVER (SPEC.md 20.2.0)
+    cmp al, OSAPI_LD_EVER               ; in words: the one refusal here a user
+    je .out                             ; can act on
     push ds
     pop es
     xor ah, ah

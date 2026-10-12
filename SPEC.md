@@ -38657,6 +38657,63 @@ driver to every kernel that shipped — the equality test fences the kinds only
 while no number is ever reused for another kind, so a package skips the
 driver's old number and the driver takes the next one past it.
 
+**A package of another format SAYS SO: `LD_EVER`.** The refusal above is
+exact and early, and through v1.0.20261010 it read `Load failed` -
+the folded verdict of kernel size pass 4 (§21 step 10) - which is the one
+refusal a normal user actually meets and the one they can act on: a program
+copied off an older disk, or fetched for a newer system, wants a new copy or a
+new system disk. So `ld_check_hdr` asks one more question when `ld_hdr_ok`
+refuses: if the magic is `'O8'` and only the format byte differs
+(`ld_hdr_ver`), the verdict is **`LD_EVER` (6)**, which reads **`Wrong os8088
+version`** on every build, `LDDIAG` or not. Anything else `ld_hdr_ok` refuses
+is still `LD_EBAD`. A package that launches another through `OSAPI_PKG_START`
+gets 6 in AL, published as `OSAPI_LD_EVER` in `apps/os88api.inc` and held
+equal to the loader's by `t_mirror`; The Wire says it in words (§92.8).
+**Cost: 40 bytes of `kern_big`** - `.text` +23 (the string and its table
+entry), `.cold` +17 (the test) - and no rung crossed. A DRIVER of another
+`DRV_VER` is not given the same words: drivers come off the system disk with
+their kernel, and the Drivers page already says which row did not load.
+
+#### 20.2.0.1 The ABI lock - the number moves when the surface does
+
+The equality test protects exactly as well as the bumps are made, and every
+bump so far was a person noticing: kernel size pass 4's renumbering, and
+#214's two cells re-contracted at the SAME numbers, caught in review.
+`tools/abilock.py` makes the noticing a gate. Each guarded number is LOCKED in
+`tools/abi.lock.json` to a fingerprint of the surface it guards - **`PKG_FMT`
+over `apps/os88api.inc`, `DRV_VER` over that and `drivers/os88drv.inc`**, a
+driver far-calling the same table through the same SDK - and
+`tests/unit/t_abilock.py`, in the fast tier, fails every `make` whose tree
+the lock no longer describes.
+
+**The fingerprint** is every line of code in those files, comments stripped
+and whitespace collapsed (each `equ`, each `%define`, each `db`/`dw` of the
+header macros), plus each `OSAPI_*` `%define`'s CONTRACT: its own comment and
+every INDENTED comment-only line under it, because the register contract is
+written there and nowhere a tool can read it, and a contract changed at the
+same address is what an address cannot show. It leaves out comments that
+start at column 0 - the SDK's prose, which a lock firing on every sentence
+would teach people to click through - and the line defining the guarded
+number itself, so the bump is the decision rather than part of what it
+decides about. `t_abilock` proves both halves: the fingerprint moves for a
+moved cell, a re-contracted cell and a header field, and stands for a banner.
+
+**The decision the failure asks for**, written into the lock by
+`python3 tools/abilock.py --update "why"` with the reason in its `history`:
+- if anything built before the change can no longer run on this kernel - a
+  cell moved, a cell's registers or meaning changed, a header or a record
+  grew - **bump the number**, then record it;
+- if everything built before still runs - a cell added at the end, a
+  contract clarified - record it **without** a bump.
+A bump the lock was not told about fails too, so the lock never describes a
+number the tree no longer has.
+
+**What it does not cover**: a NEW package calling a cell an OLD kernel does
+not have, at the same format. The table only grows (§20.3), so that package
+far-calls past the old table's end. The Wire on that old machine would offer
+it, because the format byte matches. A per-package "highest cell used" figure
+in the catalog is the shape of the fix, and it is left for when it is needed.
+
 **The dispatcher at +12 is the header's one piece of executable code**, and
 it is what makes a package's callbacks ordinary near procs. Every
 kernel-to-package call goes far to `<this package's segment>:12` with BP
@@ -43410,7 +43467,9 @@ on entry. Steps:
     NOT a memory verdict: it is a file whose image + bss exceeds
     `APP_MAX_SIZE`, a property of the file that no RAM fixes. `make
     LDDIAG=1` restores the four reasons (`Disk error`, `Bad package`, `Too
-    large`, `Load failed`). The `Bad package` sections elsewhere in this spec
+    large`, `Load failed`). **`LD_EVER`** (§20.2.0) - an os8088 package of
+    another format - reads `Wrong os8088 version` on every build, because it
+    is the one other refusal a user can act on. The `Bad package` sections elsewhere in this spec
     describe a `LDDIAG` build, or the verdict as it read before the pass.
     Then draw nothing, with one exception: `LD_EABORT` calls
     `files_refresh` (§22), the full pass, because an entry proc that
@@ -135659,7 +135718,13 @@ RECORD i, 256 bytes at 32 + 256*i
  +112 140 description: 5 lines x 28 bytes, each NUL-terminated within its 28
           (<= 27 chars). PRE-WRAPPED BY THE WRITER; the machine wraps nothing.
           Unused lines are all-NUL.
- +252 4   zero
+ +252 1   WC_PKGFMT: the package FORMAT the record's .O88 was built for
+          (§20.2) - its header's +2, or an archive's program entry's; 0 on
+          an archive with no program, and 0 is "no claim"
+ +253 1   WC_NEEDW: the oldest Wire that can INSTALL the record - 1 for a
+          plain record or a version 1 archive, 2 for a version 2 archive
+          (92.13.1); 0 is "no claim"
+ +254 2   zero
 
 SIDECAR TABLE entry j, 16 bytes at (header +10) + 16*j
  +0   12  8.3 name, uppercase ('WEAVE.OVL'), NUL-padded when shorter and
@@ -135667,6 +135732,30 @@ SIDECAR TABLE entry j, 16 bytes at (header +10) + 16*j
           /wire/pkg/<NAME>, written beside the .O88
  +12  4   size in bytes
 ```
+
+**WC_PKGFMT and WC_NEEDW are what makes "built for another os8088" a grey
+button instead of a download.** Both are DERIVED by both writers - the format
+from the bytes being published, the level from the archive's version - and
+`--verify --pkgdir` holds each to the published file. The Wire compares
+WC_PKGFMT with ITS OWN `PKG_FMT`, which needs nothing from the kernel: a
+running package's format IS the kernel's, or the loader would not have
+started it (§20.2.0). Higher greys both buttons with `Needs a newer os8088 -
+update the system disk`, lower with `Made for an older os8088`; a WC_NEEDW
+above `WIRE_LEVEL` (2) greys them with `Needs a newer Wire - update the
+system disk`. 0 in either is a catalog from before the bytes and is not
+judged. **Every Wire released before these bytes reads none of them** - the
+reader never looked past +252 - so the bytes protect machines from the
+release that ships them onward, and the old ones keep the loader's
+`LD_EVER` (§20.2.0) as their only answer. **The Wire's checks cost 225 bytes
+of image** - the predicate's two compares, the header look before Add to
+Disk writes, the `LD_EVER` wording and four strings - 11,703 -> **11,928** of
+`THEWIRE.O88`'s 12,288 ceiling (92.11), 360 to spare, and no bss.
+
+**The release refuses a stale package.** With `--pkgdir`, `os88wire.py
+--verify` - which the release procedure runs over the published `/wire/` -
+also fails any published package whose format is not this tree's `PKG_FMT`
+(read off `apps/os88api.inc`), because every machine on the release would
+download it and be told it is the wrong version.
 
 **A twelve-character name fills its slot**, the rule 92.13's archive slots
 already follow. The Add chain copies at most twelve bytes and stops at a NUL
@@ -135940,6 +136029,9 @@ File menu's items carry a `MENU_DIS` prefix from it.
 | `Needs its files on a disk - use Add to Disk` | `WF_DISK`, Load only - on an archive record too, where it is tested BEFORE the RAM disk decision (92.13.1) |
 | `Available as a floppy from os8088.com` | `WF_FLOPPY`, both |
 | `Needs NNNK free on the disk` | the Save completion's `OSAPI_FILE_DFREE` |
+| `Needs a newer os8088 - update the system disk` | both: the record's `WC_PKGFMT` is above this Wire's `PKG_FMT` (92.2) |
+| `Made for an older os8088` | both: `WC_PKGFMT` is below it |
+| `Needs a newer Wire - update the system disk` | both: `WC_NEEDW` is above `WIRE_LEVEL` |
 | `Needs RAMDISK.DRV - use Add to Disk` | `WF_ARC`, Load only: no driver of the class answers `RDPV_IDENT` with `RD_SIG`, or it refuses `RDPV_STATE` (an older driver) |
 | `Needs NNNK free for a RAM disk` | `WF_ARC`, Load only: no store is mounted and `RDPV_STATE`'s largest possible store is under `WC_NEEDKB` rounded up to `RD_STEPKB` (92.14) |
 | `RAM disk needs NNNK more room` | `WF_ARC`, Load only: a store is mounted and its free KB is under `WC_NEEDKB` |
@@ -135978,7 +136070,8 @@ used with.
   on the wake call `OSAPI_PKG_START` with `ES:SI` = the claim, `DX:CX` = the
   length and `DI` = `<STEM>.O88`; free the claim; status `Loaded <title> from
   the Wire` and a toast. An `LD_*` refusal is said in the status cell in
-  words. The new instance's current directory is the Wire's (§19.2.1), which
+  words: `LD_EVER` (§20.2.0) as `Made for another os8088 version`, any other
+  as `That program would not start (N)`. The new instance's current directory is the Wire's (§19.2.1), which
   is why a `WF_DISK` record is refused rather than launched into a folder
   where its overlay is not.
 - **Add to Disk...** — `OSAPI_FILE_DLG` Save with `<STEM>.O88` as the default
@@ -135990,6 +136083,11 @@ used with.
   files`; a toast on the last. **A failure mid-chain leaves what was
   written** and says which file failed — there is no undo on this system
   (§22).
+  **The `.O88` is read before it is written**: if the bytes that arrived are
+  an os8088 package (`'O8'`) of another format than this Wire's, the chain
+  stops there with `Made for another os8088 version` and nothing is written.
+  `WC_PKGFMT` (92.2) said so first, for a catalog that carries it; this is
+  the bytes themselves, for one that does not.
 - **On a `WF_ARC` record, both actions run the same UNPACKER over one
   transfer** (92.13, 92.14). Load Program mounts or reuses a RAM disk, moves
   the instance's directory to its root and unpacks there; Add to Disk unpacks
@@ -136098,6 +136196,7 @@ segment register, because the bytes really are ours (§77.10).
 | `tests/unit/t_wire.py` (archives) | fast | `--archive` pack -> verify -> dump round trip over a fixture tree; the LZSS encoder against the reference decoder on patterned and random bytes, and the decoder's refusals (a distance past the start, a copy past the end, a short stream, trailing bytes); the `WA_*` equs in `warc.inc` compared against the packer's; the writer's refusals (a path four folders deep, a name that is not 8.3, an entry over `WIRE_FILEMAX`, a program entry that is not last, entries not grouped by folder, more than 255 entries) |
 | `tests/thewire.py` (archives) | soak | the same boot, with `RAMDISK.DRV` wanted as well (`BIT_RAM`, a `SYSTEM.CFG` of the gate's own in `build/wirecfg/`). A fixture `.WPK` the test packs with `--archive`: a `home`, three folders, six entries at depths 0..2 — a stored one, a 40,000-byte LZSS one, an empty file, a twelve-character name and `HELLO.O88` last with `WAH_PROGRAM`. Add to Disk to B: -> every file under `home/` byte-identical, read back by the FAT12 reader in that file, folders included. Load Program on it -> a third live volume appears in `dsk_vtab` and it is `DVK_FILE`, the tree lands on it, the status cell says `Loaded`, and a `HELLO` window appears. Then the clip assertion of 92.6.1: after Load Program the launched window's content is captured, the window is dragged 8px and back for a clean full repaint, and the two must agree PIXEL FOR PIXEL — they read 0 of 17,040 differing, and they do not agree at all when the buttons have been drawn into it. **The pointer is parked at a fixed spot before each capture**: the arrow is drawn into the framebuffer, so a screendump carries it, and the drag left it somewhere else — 47 differing pixels in the shape of a cursor, reported by the first version of this row as the defect it exists to catch |
 | `tests/unit/t_wire.py` (version 2) | fast | 92.13.1: a tree with an entry past `WIRE_FILEMAX` packs as version 2 with that entry STORED and the claim capped, round-trips byte for byte through both readers, and its record carries `WF_DISK`; `--verify` fails a big entry in a version 1 archive, a version 2 archive with none, an LZSS entry past the claim, and a version 2 record without `WF_DISK`; `--pack` refuses a plain record past `WIRE_FILEMAX` with or without `floppy_only` (92.2) |
+| `tests/thewire.py` (another os8088) | soak | two more records: NEWHELLO, whose `WC_PKGFMT` is one past ours - both buttons grey, the click says `Needs a newer os8088`, nothing is fetched; and OLDHELLO, whose bytes are the previous format under a `WC_PKGFMT` of 0 - Load Program reaches the loader's `LD_EVER` and the status cell says `Made for another os8088 version`, and Add to Disk refuses before writing, so OLDHELLO.O88 is on no disk afterwards |
 | `tests/thewire.py` (version 2) | soak | a fifth record, `BIGTREE`, whose `DATA/HUGE.BIN` is 150,000 bytes between two ordinary entries: Load Program greyed and Add to Disk not, then the chain - one `OSAPI_FILE_WRITE` and two `OSAPI_FILE_APPEND`s for the big file - and all three files compared byte for byte off the B: image. The fixture's HTTP server serves each connection on a thread of its own, as a real one does |
 
 **The picture assertion is the one nothing else can make.** §92.3 stores the

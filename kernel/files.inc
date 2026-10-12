@@ -2101,6 +2101,10 @@ fm_s_dskerr:  db 'Disk error', 0
 fm_s_toobig:  db 'Too large', 0
 fm_s_ldfail:  db 'Load failed', 0
 fm_s_nomem:   db 'Out of memory', 0
+fm_s_ldver:   db 'Wrong os8088 version', 0  ; LD_EVER (SPEC.md 20.2.0): said on
+                                            ; EVERY build, LDDIAG or not - the
+                                            ; one loader reason a user can act
+                                            ; on besides memory
 ; **THE LOADER'S VERDICTS ARE TWO TO A USER** (kernel size pass 4, the
 ; owner's call): a disk error, a file that is not a package, one too large for
 ; a segment (image + bss over APP_MAX_SIZE - a property of the FILE, which no
@@ -2117,8 +2121,8 @@ fm_stattab:   dw fm_s_empty, fm_s_dskerr, fm_s_badpkg, fm_s_toobig, fm_s_ldfail
 %else
 fm_stattab:   dw fm_s_empty, fm_s_ldfail, fm_s_ldfail, fm_s_ldfail, fm_s_ldfail
 %endif
-              dw fm_s_nomem
-LD_NSTAT      equ 6             ; LD_OK .. LD_ENOMEM. The bound toast_say
+              dw fm_s_nomem, fm_s_ldver
+LD_NSTAT      equ ($ - fm_stattab) / 2 ; LD_OK .. LD_EVER. The bound toast_say
                                 ; tests, and it is DERIVED FROM THE TABLE
                                 ; rather than typed beside the enum, because
                                 ; the table is what an out-of-range code walks

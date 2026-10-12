@@ -47,6 +47,9 @@ LD_EBAD     equ 2               ; not a valid package (entry or header)
 LD_EBIG     equ 3               ; too large (file, image or image+bss)
 LD_EABORT   equ 4               ; package entry returned CF=1
 LD_ENOMEM   equ 5               ; instance table or pool exhausted
+LD_EVER     equ 6               ; an os8088 package of ANOTHER format: the
+                                ; one refusal a normal user meets, so it is
+                                ; the one that says why (SPEC.md 20.2.0)
 
 ; --- staged directory entry field offsets (SPEC.md 19) ------------------------
 LD_DE_TYPE  equ 16              ; word: 1 = application package
@@ -372,10 +375,9 @@ ld_hdr_size:
 ld_check_hdr:
     mov al, PKG_FMT             ; magic, version, link and the dispatcher, in
     call ld_hdr_ok              ; the body the driver loader shares. v1/v2
-    jc ld_hdr_size.bad                     ; files - and any built for another API
-                                ; table (SPEC.md 20.2.0) - fail on the version:
-                                ; "Bad package", never a far call into cells
-                                ; that moved
+    jc ld_hdr_ver               ; files - and any built for another API
+                                ; table (SPEC.md 20.2.0) - fail on the version,
+                                ; never a far call into cells that moved
     mov ax, [es:si+LD_H_IMG]
     cmp ax, LD_HDR_SIZE
     jb ld_hdr_size.bad                                 ; image smaller than the header
@@ -452,6 +454,22 @@ ld_check_hdr:
                                             ; which is a refusal by the right
                                             ; route
 .out:
+    ret
+
+; --- ld_hdr_ver - ld_hdr_ok refused: is the FORMAT the reason? -------------
+; An os8088 package - the 'O8' magic - whose format byte is not ours is the
+; refusal a normal user actually meets: a program copied off an older disk, or
+; fetched for a newer system. It answers LD_EVER, which reads `Wrong os8088
+; version` on every build (SPEC.md 20.2.0), because the user can act on it.
+; Anything else ld_hdr_ok refuses stays LD_EBAD. AL is still PKG_FMT here -
+; ld_hdr_ok only reads it.
+ld_hdr_ver:
+    cmp word [es:si+LD_H_MAGIC], 0x384F
+    jne ld_hdr_size.bad
+    cmp [es:si+LD_H_VER], al
+    je ld_hdr_size.bad              ; the format is ours: something else is wrong
+    mov al, LD_EVER
+    stc
     ret
 
 ; -----------------------------------------------------------------------------

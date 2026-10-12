@@ -322,6 +322,15 @@ FAST = [
     Row("api-abi", "fast", py("tests/unit/t_api_abi.py"), 3.3,
         "the API table decoded from kernel.bin and compared with the SDK - the "
         "silent merge collision CLAUDE.md asks to be checked by hand"),
+    Row("abilock", "fast", py("tests/unit/t_abilock.py"), 0.1,
+        "SPEC.md 20.2.0.1: PKG_FMT and DRV_VER are LOCKED to a fingerprint of "
+        "the SDK surface they guard (tools/abi.lock.json), so an ABI change "
+        "cannot land without a written decision - bump the number because "
+        "what was built before can no longer run, or record why it still "
+        "can. #214's re-contracted cells were bumped because a reviewer "
+        "noticed; this is the noticing as a gate. Also proves the "
+        "fingerprint moves for a moved cell, a changed contract and a header "
+        "field, and stands for SDK prose", needs=()),
     Row("stackprose", "soak", py("tests/unit/t_stackprose.py"), 10.0,
         "a doc or comment that names the task stack's SIZE names the one the kernel has. SCH_STACK has been 1,536, 512, 256 and 384; SPEC.md 2.1 and 20.6 rule 6 followed it every time and the forty-odd places CITING them did not. That is not a typo class - docs/UPSTREAM.md's stale 256 had a session report a worker-stack contract difference between this branch and `main` that had not existed since #112, and go looking for what to adapt. os88geom guards the copies a SCRIPT retyped; this guards the ones a HUMAN did."
         "SOAK rather than fast or full: a stale comment misleads a reader, "

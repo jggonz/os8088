@@ -45,6 +45,7 @@ needs.
 import argparse
 import json
 import os
+import re
 import struct
 import sys
 import zlib
@@ -73,6 +74,13 @@ WC_TOTAL = 42
 WC_NEEDKB = 46
 WC_ICON = 48
 WC_DESC = 112
+# The package FORMAT the record's .O88 was built for, and the oldest Wire that
+# can install the record (SPEC.md 92.2). Both are DERIVED - the first is the
+# package header's +2 (an archive's program entry's), the second is 2 for a
+# version 2 archive and 1 otherwise - and 0 in either is "no claim", which is
+# what every catalog before them carries in these bytes.
+WC_PKGFMT = 252
+WC_NEEDW = 253
 WIRE_REC = 256
 WC_DESCN = 5
 WC_DESCW = 28
@@ -103,6 +111,9 @@ WIRE_CATMAX = 16384
 WIRE_FILEMAX = 64512
 WIRE_NMAX = 255
 WIRE_SCMAX = 32
+# What the Wire built from this tree installs (SPEC.md 92.2): 1 = plain records
+# and version 1 archives, 2 = version 2 archives too (92.13.1).
+WIRE_LEVEL = 2
 # 0x100000, one megabyte: the reader's sanity bound on an ARCHIVE record's
 # WC_SIZE. WIRE_FILEMAX is the wrong bound there and refusing on it is what
 # the machine did to the site's real RUNCPM record at 231,463 bytes - an
@@ -187,6 +198,29 @@ class Refused(Exception):
 O88_MAGIC = b"O8"
 O88_F_ICON = 1
 O88_F_PARTS = 4
+
+
+def pkg_fmt(blob):
+    """The package format an .o88's header claims (+2), or 0 if it is none."""
+    if len(blob) >= 3 and blob[0:2] == O88_MAGIC:
+        return blob[2]
+    return 0
+
+
+def sdk_pkgfmt():
+    """PKG_FMT as apps/os88api.inc defines it, or None outside an OS tree.
+
+    The website runs a copy of this file with no SDK beside it, so the answer
+    is optional; in the OS repository it is what a published package must
+    have been built for (SPEC.md 92.2).
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir,
+                        "apps", "os88api.inc")
+    try:
+        m = re.search(r"^PKG_FMT\s+equ\s+(\d+)", open(path).read(), re.M)
+    except OSError:
+        return None
+    return int(m.group(1)) if m else None
 
 
 def o88_header(blob, name):
@@ -347,6 +381,9 @@ def pack(manifest, pkgdir, picdir, date=None):
             wc_size = len(ablob)
             wc_total = ahdr["total"]
             wc_needkb = ahdr["needkb"]
+            wc_pkgfmt = (pkg_fmt(aents[-1]["data"])
+                         if ahdr["flags"] & WAH_PROGRAM else 0)
+            wc_needw = 2 if ahdr["ver"] == WARC_VER2 else 1
             icon = arc_icon(ahdr, aents, afile)
             if arc.get("icon"):
                 ipath = os.path.join(pkgdir, arc["icon"])
@@ -399,6 +436,8 @@ def pack(manifest, pkgdir, picdir, date=None):
             wc_size = sizes[0]
             wc_total = sum(sizes)
             wc_needkb = 0
+            wc_pkgfmt = pkg_fmt(blobs[0])
+            wc_needw = 1
             icon = icon_of(blobs[0], files[0])
 
         if picdir and os.path.exists(os.path.join(picdir, stem + ".PIC")):
@@ -447,6 +486,8 @@ def pack(manifest, pkgdir, picdir, date=None):
         struct.pack_into("<I", r, WC_SIZE, wc_size)
         struct.pack_into("<I", r, WC_TOTAL, wc_total)
         struct.pack_into("<H", r, WC_NEEDKB, wc_needkb)
+        r[WC_PKGFMT] = wc_pkgfmt
+        r[WC_NEEDW] = wc_needw
         r[WC_ICON:WC_ICON + 64] = icon
         for i, line in enumerate(lines):
             off = WC_DESC + i * WC_DESCW
@@ -499,9 +540,31 @@ def pack(manifest, pkgdir, picdir, date=None):
 # =============================================================================
 def verify(blob, pkgdir=None):
     bad = []
+    # WITH --pkgdir THIS IS THE RELEASE'S CHECK, and the release is ALSO about
+    # which kernel the packages are for: every published package must be
+    # built for this tree's PKG_FMT (SPEC.md 92.2), or the Wire hands every
+    # machine on this release a program its loader refuses.
+    sdkfmt = sdk_pkgfmt() if pkgdir else None
 
     def no(msg):
         bad.append(msg)
+
+    def fmt_check(tag, rfmt, pfmt, rneedw, needw, whose):
+        """WC_PKGFMT and WC_NEEDW against what the published bytes say."""
+        if rfmt != pfmt:
+            no("%s: WC_PKGFMT is %d and %s is format %d - the Wire greys a "
+               "record on this byte BEFORE it downloads anything, so a wrong "
+               "one refuses a program that would run or offers one that will "
+               "not (SPEC.md 92.2)" % (tag, rfmt, whose, pfmt))
+        if pfmt and sdkfmt is not None and pfmt != sdkfmt:
+            no("%s: %s is package format %d and this os8088 is %d - a STALE "
+               "package: every machine on this release would download it and "
+               "have its loader refuse it as the wrong os8088 version. "
+               "Republish it from this build (SPEC.md 92.2)"
+               % (tag, whose, pfmt, sdkfmt))
+        if rneedw != needw:
+            no("%s: WC_NEEDW is %d and the record needs a level-%d Wire - "
+               "the writer derives it (SPEC.md 92.2)" % (tag, rneedw, needw))
 
     def icon_check(tag, got, pkg, whose):
         """The record's 64 bytes against the package that owns them.
@@ -601,6 +664,9 @@ def verify(blob, pkgdir=None):
             no("%s: unknown flag bits 0x%02X" % (tag, flags))
         arc = bool(flags & WF_ARC)
         needkb = struct.unpack_from("<H", blob, o + WC_NEEDKB)[0]
+        rfmt, rneedw = blob[o + WC_PKGFMT], blob[o + WC_NEEDW]
+        if blob[o + WC_NEEDW + 1:o + WIRE_REC] != b"\0" * (WIRE_REC - WC_NEEDW - 1):
+            no("%s: the record's last bytes after WC_NEEDW are not zero" % tag)
         if arc:
             # SPEC.md 92.2's three rules for an archive record, and the third
             # is the COMPATIBILITY one: a Wire from before 92.13 does not know
@@ -723,6 +789,10 @@ def verify(blob, pkgdir=None):
                            "the record and fills it from the stream"
                            % (tag, needkb, ahdr["needkb"]))
                     v2 = ahdr["ver"] == WARC_VER2
+                    pfmt = (pkg_fmt(aents[-1]["data"])
+                            if ahdr["flags"] & WAH_PROGRAM else 0)
+                    fmt_check(tag, rfmt, pfmt, rneedw, 2 if v2 else 1,
+                              "the archive's program entry")
                     if v2 != bool(flags & WF_DISK):
                         no("%s: the archive is version %d and WF_DISK is %s - "
                            "the writer sets it on exactly the version 2 ones, "
@@ -746,6 +816,7 @@ def verify(blob, pkgdir=None):
                 if len(b) != size:
                     no("%s: WC_SIZE is %d and the file is %d"
                        % (tag, size, len(b)))
+                fmt_check(tag, rfmt, pkg_fmt(b), rneedw, 1, "the package")
                 icon_check(tag, blob[o + WC_ICON:o + WC_ICON + 64], b,
                            "the package")
     return bad
@@ -767,9 +838,9 @@ def dump(blob, out=sys.stdout):
     print("WIRE v%d, %d records, %d sidecars, %s, %d bytes"
           % (blob[WC_VER], n, scn,
              blob[WC_DATE:WC_DATE + 8].decode("latin1"), len(blob)), file=out)
-    print("%-9s %-24s %-9s %-5s %6s %7s %6s %s"
+    print("%-9s %-24s %-9s %-5s %6s %7s %6s %-5s %s"
           % ("STEM", "TITLE", "TIER", "FLAGS", "SIZE", "TOTAL", "NEEDKB",
-             "SIDECARS"), file=out)
+             "FMT/W", "SIDECARS"), file=out)
     for i in range(n):
         o = WIRE_HDR + i * WIRE_REC
         stem = blob[o:o + 8].rstrip(b" ").decode("latin1")
@@ -780,12 +851,13 @@ def dump(blob, out=sys.stdout):
         for j in range(nside):
             e = scoff + (side0 + j) * WIRE_SC
             names.append(blob[e:e + 12].split(b"\0")[0].decode("latin1"))
-        print("%-9s %-24s %-9s %-5s %6d %7d %6d %s"
+        print("%-9s %-24s %-9s %-5s %6d %7d %6d %-5s %s"
               % (stem, title.decode("latin1"), TIERS[blob[o + WC_TIER] & 3],
                  flagstr(blob[o + WC_FLAGS]),
                  struct.unpack_from("<I", blob, o + WC_SIZE)[0],
                  struct.unpack_from("<I", blob, o + WC_TOTAL)[0],
                  struct.unpack_from("<H", blob, o + WC_NEEDKB)[0],
+                 "%d/%d" % (blob[o + WC_PKGFMT], blob[o + WC_NEEDW]),
                  ",".join(names)), file=out)
         for k in range(WC_DESCN):
             d = blob[o + WC_DESC + k * WC_DESCW:

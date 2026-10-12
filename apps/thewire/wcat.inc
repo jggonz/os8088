@@ -40,6 +40,12 @@ WC_NEEDKB   equ 46              ; word, an archive's RAM disk KB (92.13's
                                 ; header figure); 0 on every other record
 WC_ICON     equ 48              ; 64: 16 mask words then 16 data words
 WC_DESC     equ 112             ; WC_DESCN lines of WC_DESCW, pre-wrapped
+WC_PKGFMT   equ 252             ; byte: the package FORMAT the record's .O88
+                                ; was built for (its header's +2, or the
+                                ; archive's program entry's); 0 = no claim
+WC_NEEDW    equ 253             ; byte: the oldest Wire that can INSTALL it,
+                                ; a WIRE_LEVEL below; 0 = no claim. The two
+                                ; are read as ONE word (SPEC.md 92.2)
 WIRE_REC    equ 256
 WC_DESCN    equ 5
 WC_DESCW    equ 28
@@ -104,6 +110,10 @@ WIRE_NMAX   equ 255             ; the format's ceiling. WIRE_CATMAX is the
                                 ; with no sidecar table at all - and it is
                                 ; what keeps WIRE_HDR + WIRE_REC*i inside 16
                                 ; bits, which the reader's addressing needs
+WIRE_LEVEL  equ 2               ; what THIS reader installs (SPEC.md 92.2):
+                                ; 1 = plain records and version 1 archives,
+                                ; 2 = version 2 archives too (92.13.1). A
+                                ; record whose WC_NEEDW is higher is greyed
 WIRE_SCMAX  equ 32              ; sidecars per record (8 before SPEC.md 92.2's
                                 ; v1.0.20261002.1 note; nothing is sized by it)
 

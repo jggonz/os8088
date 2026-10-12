@@ -76,6 +76,8 @@ S_FILEMAX = 64512
 S_SCMAX = 32                            # sidecars a record (8 before v1.0.20261002.1)
 S_DESCN, S_DESCW = 5, 28
 S_WF_DISK, S_WF_PIC, S_WF_NEW, S_WF_FLOPPY, S_WF_ARC = 1, 2, 4, 8, 16
+S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 2   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
+S_PKGFMT = 8                            # SPEC.md 20.2's format byte
 S_ARCMAX = 0x100000                 # WIRE_ARCMAX, the archive's own ceiling
 
 # --- SPEC.md 92.13, the same way ---------------------------------------------
@@ -161,6 +163,8 @@ CAT_PINS = (("WIRE_HDR", S_HDR), ("WIRE_REC", S_REC),
             ("WF_DISK", S_WF_DISK), ("WF_PIC", S_WF_PIC),
             ("WF_NEW", S_WF_NEW), ("WF_FLOPPY", S_WF_FLOPPY),
             ("WF_ARC", S_WF_ARC), ("WC_NEEDKB", 46),
+            ("WC_PKGFMT", S_PKGFMT_OFF), ("WC_NEEDW", S_NEEDW_OFF),
+            ("WIRE_LEVEL", S_LEVEL),
             ("WIRE_ARCMAX", S_ARCMAX))
 ARC_PINS = (("WARC_HDR", S_AHDR), ("WARC_ENT", S_AENT),
             ("WARC_SLOT", S_ASLOT), ("WARC_SLOTS", S_ASLOTS),
@@ -250,13 +254,16 @@ def read_catalog(blob):
              "size": struct.unpack_from("<I", blob, o + 38)[0],
              "total": struct.unpack_from("<I", blob, o + 42)[0],
              "needkb": struct.unpack_from("<H", blob, o + 46)[0],
-             "icon": blob[o + 48:o + 112]}
+             "icon": blob[o + 48:o + 112],
+             "pkgfmt": blob[o + 252], "needw": blob[o + 253]}
         # +46 WAS the record's last spare word and is now WC_NEEDKB (SPEC.md
         # 92.2): an archive's RAM disk figure, and zero on everything else.
         if not r["flags"] & S_WF_ARC:
             assert r["needkb"] == 0, "%s: WC_NEEDKB is not zero on a record "\
                 "that is not an archive" % r["stem"]
-        assert blob[o + 252:o + 256] == b"\0" * 4, "%s: +252" % r["stem"]
+        # +252 and +253 are WC_PKGFMT and WC_NEEDW (SPEC.md 92.2); the last
+        # word is still spare
+        assert blob[o + 254:o + 256] == b"\0" * 2, "%s: +254" % r["stem"]
         assert r["tier"] <= 3, "%s: tier %d" % (r["stem"], r["tier"])
         assert r["nside"] <= S_SCMAX, "%s: %d sidecars" % (r["stem"], r["nside"])
         assert r["side0"] + r["nside"] <= scn, "%s: sidecar range" % r["stem"]
@@ -357,6 +364,16 @@ def roundtrip(tmp):
           "without it would let Load Program run a program with its files "
           "nowhere, which is the one thing the flag exists to stop")
     check(not recs[0]["flags"] & S_WF_DISK, "one file is not WF_DISK")
+    hello = open(os.path.join(BUILD, "hello.o88"), "rb").read()
+    eq(recs[0]["pkgfmt"], hello[2],
+       "WC_PKGFMT is the package header's own format byte",
+       "the Wire greys a record on it BEFORE downloading, so it is copied "
+       "from the bytes and never typed (SPEC.md 92.2)")
+    eq(recs[0]["pkgfmt"], S_PKGFMT, "...and that is this tree's PKG_FMT",
+       "a fixture built from this tree is for this tree's kernel")
+    eq([r["needw"] for r in recs], [1, 1, 1],
+       "WC_NEEDW is 1 on a plain record",
+       "every Wire that knows the byte installs one")
     check(not any(r["flags"] & S_WF_PIC for r in recs),
           "no WF_PIC without a --picdir")
 
@@ -1323,11 +1340,36 @@ def archive_record(tmp, wpk, mod):
             ("a WC_TOTAL that is not the archive's",
              lambda b: struct.pack_into("<I", b, S_HDR + 42, 99),
              "Add to Disk's free-space check is decided on it"),
+            ("a WC_PKGFMT that is not the program entry's",
+             lambda b: b.__setitem__(S_HDR + S_PKGFMT_OFF, S_PKGFMT - 1),
+             "the Wire greys or offers the record on that byte before it "
+             "fetches a byte of it (SPEC.md 92.2)"),
+            ("a spare byte after WC_NEEDW that is not zero",
+             lambda b: b.__setitem__(S_HDR + 254, 1),
+             "the last word is still spare, and a reader of the next version "
+             "will give it a meaning"),
     ):
         b = bytearray(good)
         mutate(b)
         check(bool(mod.verify(bytes(b), tmp)), "--verify fails %s" % what, why,
               got="no complaint")
+    eq(blob[S_HDR + S_PKGFMT_OFF], S_PKGFMT,
+       "an archive record's WC_PKGFMT is its PROGRAM entry's format",
+       "the program is the thing the loader will judge")
+
+    # A STALE PACKAGE: published bytes built for another PKG_FMT than this
+    # tree's. Simulated by telling the verifier the SDK says 9 - the release
+    # is the moment to refuse it, not the user's machine (SPEC.md 92.2).
+    was = mod.sdk_pkgfmt
+    try:
+        mod.sdk_pkgfmt = lambda: S_PKGFMT + 1
+        stale = mod.verify(bytes(good), tmp)
+    finally:
+        mod.sdk_pkgfmt = was
+    check(any("STALE" in m for m in stale),
+          "--verify --pkgdir fails a package built for another PKG_FMT",
+          "every machine on the release would download it and be told it is "
+          "the wrong os8088 version", got=stale or "no complaint")
 
     # --- WIRE_ARCMAX, and the bound that must NOT apply ---------------------
     # An archive's WC_SIZE is a dword and an archive is the first body over
@@ -1465,6 +1507,19 @@ def big_v2(tmp, mod, tree):
        "RD_FILEMAX, so Add to Disk is the path (SPEC.md 92.13.1)")
     check(not mod.verify(cat, tmp), "--verify --pkgdir passes that catalog",
           got=mod.verify(cat, tmp))
+    eq(cat[S_HDR + S_NEEDW_OFF], 2,
+       "a version 2 archive's record needs a level-2 Wire (WC_NEEDW)",
+       "a Wire that cannot write a big file in pieces greys it instead of "
+       "fetching 180KB to refuse (SPEC.md 92.2)")
+    eq(cat[S_HDR + S_PKGFMT_OFF], 0,
+       "...and an archive with no program entry claims no format",
+       "WC_PKGFMT is the program's, and this tree has none")
+    b = bytearray(cat)
+    b[S_HDR + S_NEEDW_OFF] = 1
+    check(bool(mod.verify(bytes(b), tmp)),
+          "--verify --pkgdir fails a version 2 record whose WC_NEEDW is 1",
+          "a level-1 Wire would fetch it and refuse it at the header",
+          got="no complaint")
     b = bytearray(cat)
     b[S_HDR + 34] &= ~S_WF_DISK
     check(bool(mod.verify(bytes(b), tmp)),

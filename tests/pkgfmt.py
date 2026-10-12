@@ -9,13 +9,15 @@ by the new kernel - or the other way round - did not fault. It loaded, and
 its first `call OSAPI_*` landed in the middle of some other cell. The format
 byte is the TABLE'S now (PKG_FMT = 8), and the loader's test was always
 EQUALITY, so the fix is the number and not the check: a kernel handed a
-package of any other format answers LD_EBAD before a byte of it runs.
+package of any other format refuses it before a byte of it runs - as LD_EVER,
+`Wrong os8088 version`, since SPEC.md 20.2.0 gave the refusal its own verdict
+(LD_EBAD on kernels before that).
 
 TWO FILES, AND THE PAIR IS THE EXPERIMENT (`make pkgfmt`):
 
   1. `OLDCALC.O88` - the Calculator with its format byte put back to 3, which
      is what every package built before pass 4 carries. It must be refused
-     with LD_EBAD and nothing may open. On its own this is also what a kernel
+     with LD_EVER and nothing may open. On its own this is also what a kernel
      that refuses EVERYTHING looks like.
   2. `CALC.O88` - the same Calculator as this tree builds it. It must LOAD,
      and it is opened SECOND, so a refusal that left the machine wedged - a
@@ -48,8 +50,9 @@ SYS_IMG = args[1] if len(args) > 1 else "build/os8088-360.img"
 APPS_IMG = args[2] if len(args) > 2 else "build/pkgfmt360.img"
 S = os88sym.linear
 
-LD_OK, LD_EDISK, LD_EBAD, LD_EBIG, LD_EABORT, LD_ENOMEM = range(6)
-NAMES = ["LD_OK", "LD_EDISK", "LD_EBAD", "LD_EBIG", "LD_EABORT", "LD_ENOMEM"]
+LD_OK, LD_EDISK, LD_EBAD, LD_EBIG, LD_EABORT, LD_ENOMEM, LD_EVER = range(7)
+NAMES = ["LD_OK", "LD_EDISK", "LD_EBAD", "LD_EBIG", "LD_EABORT", "LD_ENOMEM",
+         "LD_EVER"]
 fails = []
 
 
@@ -66,7 +69,10 @@ if SWAP:
     plan = [("CALC.O88", LD_EBAD, "a format-8 package on the #197 kernel"),
             ("OLDCALC.O88", LD_OK, "that kernel's own format-3 Calculator")]
 else:
-    plan = [("OLDCALC.O88", LD_EBAD, "a format-3 package on this kernel"),
+    # LD_EVER and not LD_EBAD since SPEC.md 20.2.0's verdict of its own: an
+    # 'O8' file of another format is the refusal a user meets, so it says
+    # `Wrong os8088 version`. The #197 kernel above predates it.
+    plan = [("OLDCALC.O88", LD_EVER, "a format-3 package on this kernel"),
             ("CALC.O88", LD_OK, "this tree's own Calculator")]
 
 with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
@@ -104,6 +110,6 @@ if fails:
     for f in fails:
         print("  " + f)
     sys.exit(1)
-print("\npkgfmt: a package of another format is refused as LD_EBAD and the "
+print("\npkgfmt: a package of another format is refused by name and the "
       "machine goes on loading its own - PASS on %s%s"
       % (MACHINE, " (--swap)" if SWAP else ""))

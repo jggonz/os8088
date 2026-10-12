@@ -23,7 +23,7 @@ be run side by side; a bound port is a gate reading the other one's answers.
 the machine asks the host for it and every byte under test is a byte this file
 chose.
 
-THIRTEEN ASSERTIONS.
+SIXTEEN ASSERTIONS.
 
 1. THE CATALOG ARRIVES AND IS UNDERSTOOD. `wr_n` is 5, `wr_state` is WS_DONE
    and `wr_nodrv` is 0 - which is the whole stack under it (ARP, a handshake,
@@ -110,6 +110,14 @@ THIRTEEN ASSERTIONS.
    chain writes the big file as a piece through the claim and two pieces
    appended onto it, then goes on to `ZZ/AFTER.TXT`; and after `quit` all
    three files under `BIG/` are compared byte for byte on the host.
+
+14-16. A PACKAGE FOR ANOTHER os8088 (SPEC.md 92.2, 20.2.0). NEWHELLO's
+   catalog byte claims the next package format: both buttons grey, the click
+   says `Needs a newer os8088`, and nothing is fetched. OLDHELLO's bytes are
+   the previous format under a catalog byte of 0, so the Wire offers it: Load
+   Program reaches the loader, which answers LD_EVER, and the Wire says `Made
+   for another os8088 version`; Add to Disk reads the header it downloaded
+   and refuses before writing, so OLDHELLO.O88 is on no disk afterwards.
 
 **THE LAUNCH IS THE DESKTOP ZONE** (SPEC.md 26.7). `ETHER.DRV` registers it,
 so the ethertest-shaped disk that already asks for the driver has the icon on
@@ -198,8 +206,23 @@ FIXTURE = {
         {"stem": "BIGTREE", "title": "A big file", "kind": 0, "tier": 3,
          "archive": {"file": "BIGTREE.WPK"},
          "description": "One file past the claim."},
+        # TWO PACKAGES FOR ANOTHER os8088 (SPEC.md 92.2, 20.2.0). NEWHELLO's
+        # catalog byte claims the NEXT format, so the Wire greys it before
+        # fetching anything; OLDHELLO's bytes ARE the previous format and its
+        # catalog byte is 0 - a catalog from before the byte existed - so the
+        # Wire offers it and the second line has to catch it: the loader's
+        # LD_EVER on Load Program, and the Wire's own look at the header
+        # before Add to Disk writes it. Tier 3 for assertion 4's reason.
+        {"stem": "NEWHELLO", "title": "For a newer os8088", "kind": 0,
+         "tier": 3, "files": ["hello.o88"],
+         "description": "Built for the next format."},
+        {"stem": "OLDHELLO", "title": "For an older os8088", "kind": 0,
+         "tier": 3, "files": ["oldhello.o88"],
+         "description": "Built for the last format."},
     ],
 }
+NEW_ROW, OLD_ROW = 5, 6                 # their rows in the unfiltered list
+NREC = len(FIXTURE["entries"])
 ARC_STEM = "TREEONE"
 ARC_HOME = "TREE"                       # the folder the whole tree lands under
 ARC_ROW = 3                             # ...and its row in the unfiltered list
@@ -865,15 +888,36 @@ def main():
     for name, data in XSIDE.items():    # the packer sizes them out of build/
         open(os.path.join("build", name.lower()), "wb").write(data)
     try:
-        cat = os88wire.pack(json.load(open(man)), "build", pics)
+        hello0 = open(os88build.at("build/hello.o88"), "rb").read()
+        oldhello = hello0[:2] + bytes([hello0[2] - 1]) + hello0[3:]
+        # IN build/ ONLY FOR AS LONG AS THE PACKER READS IT: a format-7 .o88
+        # left there is one t_pkg's sweep of build/*.o88 rightly refuses
+        oldpath = os.path.join("build", "oldhello.o88")
+        open(oldpath, "wb").write(oldhello)
+        try:
+            cat = bytearray(os88wire.pack(json.load(open(man)), "build",
+                                          pics))
+        finally:
+            os.remove(oldpath)
     except os88wire.Refused as e:
         sys.exit("thewire: the fixture will not pack: %s" % e)
+    # THE TWO POKES (see FIXTURE): NEWHELLO claims the next format, OLDHELLO
+    # claims nothing - the writer derived 7 from its bytes, and 0 is what a
+    # catalog from before WC_PKGFMT carries
+    sdkfmt = os88wire.sdk_pkgfmt()
+    cat[os88wire.WIRE_HDR + NEW_ROW * os88wire.WIRE_REC
+        + os88wire.WC_PKGFMT] = sdkfmt + 1
+    cat[os88wire.WIRE_HDR + OLD_ROW * os88wire.WIRE_REC
+        + os88wire.WC_PKGFMT] = 0
+    cat = bytes(cat)
     hello = open(os88build.at("build/hello.o88"), "rb").read()
     mines = open(os88build.at("build/mines.o88"), "rb").read()
     served = {"/wire/catalog.bin": cat,
               "/wire/pkg/HELLO.O88": hello,
               "/wire/pkg/MINES.O88": mines,
               "/wire/pkg/BIGONE.O88": hello,
+              "/wire/pkg/NEWHELLO.O88": hello,
+              "/wire/pkg/OLDHELLO.O88": oldhello,
               **{"/wire/pkg/" + n: d for n, d in XSIDE.items()},
               "/wire/pkg/%s.WPK" % ARC_STEM: wpk,
               "/wire/pkg/%s.WPK" % BIG_STEM: bwpk,
@@ -977,14 +1021,14 @@ def main():
         elif state != WS_DONE:
             no("wr_state is %d and not WS_DONE - the fetch never completed"
                % state)
-        if n != 5:
-            no("wr_n is %d and the fixture catalog has 5 records: either it "
+        if n != NREC:
+            no("wr_n is %d and the fixture catalog has %d records: either it "
                "did not arrive or wr_catck refused a field. **THE FOURTH IS "
                "AN ARCHIVE OF %d BYTES**, and a reader that bounds every "
                "record's WC_SIZE to 16 bits and WIRE_FILEMAX refuses it and "
                "takes the WHOLE CATALOG down with it - which is how the "
                "site's own catalog was found broken (SPEC.md 92.2's "
-               "WIRE_ARCMAX)" % (n, len(wpk)))
+               "WIRE_ARCMAX)" % (n, NREC, len(wpk)))
 
         # --- 2: what the host was actually asked for ------------------------
         first = srv.asked[0] if srv.asked else None
@@ -1008,8 +1052,9 @@ def main():
             return u16(m.readseg(pseg, img + off["wr_sb"] + 8, 2))
 
         say("the list shows %d of %d" % (shown(), n))
-        if shown() != 5:
-            no("the list shows %d rows over a 5-record catalog" % shown())
+        if shown() != NREC:
+            no("the list shows %d rows over a %d-record catalog"
+               % (shown(), NREC))
 
         # --- 3b: the catalog claim is the catalog's size, and Refresh -------
         # SPEC.md 92.2: the claim is made at WIRE_CATMAX before the length is
@@ -1033,7 +1078,7 @@ def main():
         mo.run("to", str(fx), "26")         # File > Refresh, item 0
         time.sleep(0.4)
         mo.run("up")
-        os88qemu.acted(m, lambda: len(srv.asked) > nasked and w("wr_n") == 5
+        os88qemu.acted(m, lambda: len(srv.asked) > nasked and w("wr_n") == NREC
                        and b("wr_state")[0] == WS_DONE,
                        secs=40, what="the refreshed catalog", poll=0.5)
         kb1 = b("wr_catkb")[0]
@@ -1042,7 +1087,7 @@ def main():
         if len(srv.asked) <= nasked:
             no("File > Refresh asked the host for nothing (menu cell x %d)"
                % fx)
-        elif w("wr_n") != 5 or kb1 != kb0:
+        elif w("wr_n") != NREC or kb1 != kb0:
             no("Refresh did not land the same catalog in the same-size claim "
                "(wr_n %d, %d KB against %d)" % (w("wr_n"), kb1, kb0))
 
@@ -1067,9 +1112,9 @@ def main():
                "tier-0 entries" % shown())
 
         mo.click(ox + 48 + 6, oy + 2 + 6)        # ...and back to All
-        os88qemu.acted(m, lambda: shown() == 5, secs=3, what="All",
+        os88qemu.acted(m, lambda: shown() == NREC, secs=3, what="All",
                        poll=0.1)
-        if shown() != 5:
+        if shown() != NREC:
             no("back on All the list shows %d rows" % shown())
 
         def rect(name):
@@ -1421,12 +1466,12 @@ def main():
         # chain has started as well as after it has finished
         clk = os88qemu.Clock(m)
         os88qemu.pace(m, 0.5)
-        settled = os88qemu.acted(
+        arc_done = os88qemu.acted(
             m, lambda: (b("wr_job")[0] == 0
                         and b("wr_state")[0] in (WS_DONE, WS_FAIL)),
             secs=120, what="the archive chain", poll=0.5)
         # ...and the LAUNCH at its end: a window, if there is going to be one
-        if settled and os88qemu.acted(
+        if arc_done and os88qemu.acted(
                 m, lambda: len(dispcp.win_list(m, S)) > len(before), secs=10,
                 what="the archive's window", poll=0.25):
             os88qemu.pace(m, 1.0)       # ...and the status cell behind it
@@ -1448,7 +1493,7 @@ def main():
         # asked and the answer is the problem; `srv.asked` STANDING STILL
         # with the server thread alive means the guest never asked, so
         # neither the loader nor the host is in it.
-        if not settled and os.environ.get("WIRE_SOCKDUMP"):
+        if not arc_done and os.environ.get("WIRE_SOCKDUMP"):
             # **`WIRE_SOCKDUMP=1` IS WHY THIS ROW'S LAST FAILURE WAS FOUND**,
             # and it is kept because taking the readings was most of the work:
             # the socket the Wire is waiting on out of ETHER.DRV's own bss,
@@ -1539,7 +1584,7 @@ def main():
                            u16(m.readseg(dseg, es["eth_nrx"], 2))))
             except Exception as _e:          # noqa: BLE001
                 say("   (socket dump failed: %r)" % (_e,))
-        if not settled:
+        if not arc_done:
             no("the archive chain never finished: %.0f s after Load Program "
                "[wr_state] is %d and [wr_job] %d, where this step wants "
                "WS_DONE (%d) or WS_FAIL (%d) with the job cleared. The host "
@@ -1646,6 +1691,59 @@ def main():
             if not msg.startswith(b"Loaded"):
                 no("the status cell says %r and SPEC.md 92.14 says `Loaded "
                    "<title> from the Wire`" % msg)
+
+        def cell():
+            return m.readseg(pseg, w("wr_msg"), 48).split(b"\0")[0]
+
+        # --- 14: A PACKAGE FOR A NEWER os8088, GREYED (SPEC.md 92.2) -------
+        # The catalog's WC_PKGFMT is one past ours, so both buttons grey on
+        # it and a click says why - and nothing is fetched.
+        pick(NEW_ROW)
+        grey = b("wr_grey")[0]
+        nasked = len(srv.asked)
+        press("wr_ra")
+        os88qemu.pace(m, 1.0)
+        say("NEWHELLO: wr_grey = %d, the click says %r" % (grey, cell()))
+        if grey != 3:
+            no("a record for the NEXT package format leaves wr_grey = %d and "
+               "both buttons must grey on WC_PKGFMT (SPEC.md 92.7)" % grey)
+        if not cell().startswith(b"Needs a newer os8088"):
+            no("Load Program on it says %r and the reason is `Needs a newer "
+               "os8088 - update the system disk`" % cell())
+        if len(srv.asked) != nasked:
+            no("the refused click still fetched something - the check is "
+               "BEFORE any transfer, which is its whole point")
+
+        # --- 15: AN OLDER PACKAGE, REFUSED BY THE LOADER (SPEC.md 20.2.0) -
+        # OLDHELLO's catalog claims nothing, so the Wire offers it; its BYTES
+        # are the previous format, so OSAPI_PKG_START answers LD_EVER and the
+        # Wire says it in words instead of `(6)`.
+        pick(OLD_ROW)
+        if b("wr_grey")[0] & 1:
+            no("Load Program is greyed on OLDHELLO, whose catalog byte is 0 "
+               "and claims nothing - the loader's half is not being reached")
+        before = dispcp.win_list(m, S)
+        press("wr_ra")
+        os88qemu.pace(m, 0.5)
+        settled()
+        os88qemu.pace(m, 1.0)
+        say("OLDHELLO Load: the status cell says %r" % cell())
+        if len(dispcp.win_list(m, S)) > len(before):
+            no("a package of the previous format OPENED A WINDOW: the loader "
+               "must refuse it before a byte of it runs (SPEC.md 20.2.0)")
+        if cell() != b"Made for another os8088 version":
+            no("the status cell says %r, and the loader's LD_EVER reads `Made "
+               "for another os8088 version` in the Wire" % cell())
+
+        # --- 16: ...AND NOT WRITTEN BY ADD TO DISK (SPEC.md 92.8) ---------
+        pick(OLD_ROW)
+        save_to_b("10", dispcp.win_list(m, S))
+        say("OLDHELLO Add: wr_state = %d, the status cell says %r"
+            % (b("wr_state")[0], cell()))
+        if cell() != b"Made for another os8088 version":
+            no("Add to Disk on a package of the previous format says %r - the "
+               "Wire reads the header it downloaded and refuses before "
+               "writing it" % cell())
     finally:
         if not a.keep:
             # ...and QEMU GONE before the data disk is read back on the host:
@@ -1750,6 +1848,13 @@ def main():
         else:
             say("%s/%s: %d bytes, byte-identical to what was packed"
                 % (BIG_HOME, rel, len(want)))
+
+    # --- assertion 16's other half: OLDHELLO is on no disk ----------------
+    if any(k.split("/")[-1] == "OLDHELLO.O88" for k in got):
+        no("OLDHELLO.O88 is on B: - Add to Disk wrote a package this "
+           "machine's loader refuses (SPEC.md 92.8)")
+    else:
+        say("OLDHELLO.O88 is on no disk: refused before it was written")
 
     say("thewire: %s" % ("FAILED" if fails else "ok"))
     return 1 if fails else 0

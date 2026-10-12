@@ -1,0 +1,27 @@
+{
+ "DRV_VER": {
+  "fingerprint": "8939601704d8f38c8030d8b68e0c546a698b86d2c74aa6ffa74f2ec19a911214",
+  "version": 9
+ },
+ "PKG_FMT": {
+  "fingerprint": "e1a724541e03d1c3d1d76fd9844b4120d13b96c6734227fe31824ff802927d9c",
+  "version": 8
+ },
+ "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
+ "history": [
+  {
+   "fingerprint": "e1a724541e03d1c3d1d76fd9844b4120d13b96c6734227fe31824ff802927d9c",
+   "from": null,
+   "guard": "PKG_FMT",
+   "reason": "The lock begins at PKG_FMT 8 and DRV_VER 9, the numbers #214 set. This change adds OSAPI_LD_EVER, a constant naming an AL value OSAPI_PKG_START could already return: nothing built before it changes, so no bump.",
+   "to": 8
+  },
+  {
+   "fingerprint": "8939601704d8f38c8030d8b68e0c546a698b86d2c74aa6ffa74f2ec19a911214",
+   "from": null,
+   "guard": "DRV_VER",
+   "reason": "The lock begins at PKG_FMT 8 and DRV_VER 9, the numbers #214 set. This change adds OSAPI_LD_EVER, a constant naming an AL value OSAPI_PKG_START could already return: nothing built before it changes, so no bump.",
+   "to": 9
+  }
+ ]
+}

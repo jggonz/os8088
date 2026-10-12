@@ -97,6 +97,10 @@ wr_r_nosel:  db 'Select a program first', 0
 wr_r_nocat:  db 'The catalog is not loaded', 0
 wr_r_busy:   db 'A transfer is already running', 0
 wr_r_disk:   db 'Needs its files on a disk - use Add to Disk', 0
+wr_r_newer:  db 'Needs a newer os8088 - update the system disk', 0
+wr_r_older:  db 'Made for an older os8088', 0
+wr_r_wire:   db 'Needs a newer Wire - update the system disk', 0
+wr_s_fmt:    db 'Made for another os8088 version', 0
 wr_r_flop:   db 'Available as a floppy from os8088.com', 0
 wr_r_space:  db 'Not enough room on that disk', 0
 

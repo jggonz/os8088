@@ -728,6 +728,13 @@ whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
   cone is 155 symbols in 7 files, so a module inside it must be gated rather
   than moved. There is no entry cap (§2.8.1): a module's slot block is its
   own entry count.
+- **An ABI change is a written decision** (§20.2.0.1). `PKG_FMT` and
+  `DRV_VER` are locked in `tools/abi.lock.json` to a fingerprint of
+  `apps/os88api.inc` and `drivers/os88drv.inc`, and `make` fails when the SDK
+  moves under them. Bump the number if anything built before can no longer
+  run (a cell moved or re-contracted, a header grew), then
+  `python3 tools/abilock.py --update "why"`; if it still runs (a cell added at
+  the end, a contract clarified), the same command without the bump.
 - **A heap claim can MOVE, and the default is that it may not** (§66). A record
   is born `MC_RLOC` = 0, PINNED; `OSAPI_MEM_MOVABLE` opts one in and takes a
   relocation **proc**, not the address of the word naming the block — a holder

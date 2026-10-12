@@ -1147,6 +1147,12 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
                                  ; the new window's first paint, and the entry
                                  ; proc it calls runs with the lock free like
                                  ; every other package's.
+OSAPI_LD_EVER   equ 6            ; ...and the AL that means THAT FILE IS AN
+                                 ; os8088 PACKAGE OF ANOTHER FORMAT (SPEC.md
+                                 ; 20.2.0): built for an older or a newer
+                                 ; system. Say so in your own words; it is the
+                                 ; refusal a user can act on. kernel/loader.inc's
+                                 ; LD_EVER, held equal by t_mirror
 
 ; --- an ITEM on the desktop (SPEC.md 26.9) -----------------------------------
 ; Drives, the network driver's service icon and shortcuts are all ITEMS in one

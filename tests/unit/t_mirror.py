@@ -255,6 +255,10 @@ ALIAS = [
     ("kernel/clock.inc", "CLK_DEF_Y", "apps/dos/dos.asm", "CLK_DEF_Y"),
     ("kernel/clock.inc", "CLK_DEF_M", "apps/dos/dos.asm", "CLK_DEF_M"),
     ("kernel/clock.inc", "CLK_DEF_D", "apps/dos/dos.asm", "CLK_DEF_D"),
+    # SPEC.md 20.2.0. The loader's `wrong os8088 version` verdict, published
+    # to packages under the SDK's prefix: OSAPI_PKG_START answers it in AL,
+    # and The Wire words it rather than printing the number.
+    ("kernel/loader.inc", "LD_EVER", "apps/os88api.inc", "OSAPI_LD_EVER"),
 ]
 DEFINE = re.compile(r"^%define\s+([A-Z][A-Z0-9_]*)\s+([^\s;]+)", re.M)
 

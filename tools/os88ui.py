@@ -1252,7 +1252,9 @@ class UI:
                3: "LD_EBIG: too large (file, image, or image+bss)",
                4: "LD_EABORT: the package's entry returned CF=1 - it refused "
                   "ITSELF, and its own toast says why",
-               5: "LD_ENOMEM: the instance table or the pool is exhausted"}
+               5: "LD_ENOMEM: the instance table or the pool is exhausted",
+               6: "LD_EVER: an os8088 package of ANOTHER format - built for "
+                  "an older or a newer system (SPEC.md 20.2.0)"}
         return "ld_status = %d for %s: %s" % (
             st, name, why.get(st, "an unknown loader status"))
 
