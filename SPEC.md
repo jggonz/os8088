@@ -119326,6 +119326,15 @@ under the dialog that opens by default (§38.10). `$(MEDIA_EXTRA)` is derived
 from the category disks' own list in both `PKGZ` arms at once, and rides
 `$(LIVEPKGARGS)` with the four packages for §19.10.1's reason.
 
+**And `MEDIA/MIDI/` has MIDIRack's songs, which it had lacked.** The player and its sound bank rode `$(ALLAPPSARGS)`, the ten songs
+rode only the apps disks' `$(MIDISONGARGS)`, and nothing reached the live
+volume — so on the live USB, the live CD and os8088.com's demo (§80.7)
+MIDIRack opened on an empty playlist where every apps disk opens on ten songs
+(§105.3.1). They ride `$(LIVEPKGARGS)` too, in `MEDIA/MIDI/` because that
+folder is what `mrl_autoload` looks for: the everything-floppy carries no
+songs, and 27 clusters there would come out of RunCPM's `A/0` like everything
+else.
+
 **`$(LIVEFOLDERS)` is derived too, and is not `$(ALLAPPSFOLDERS)`.**
 `getruncpm.py --folders` prices every folder directory at a cluster, and this
 tree has folders the everything-floppy has not: `SCRIBE/`, `STORIES/` and its
@@ -119338,19 +119347,27 @@ the two fetch tools' own answers, the way `$(ALLAPPSDIRS)` is.
 not interchangeable.** Nothing in this tree had ever read the live image,
 which is why four separate gaps sat in it at once.
 
-- **PART A asks `make` what the payload lists say and needs no image**, through
-  a `print-%` target whose whole existence is this gate: a check that answered
-  by re-implementing these lists in Python would be a *second* list to keep in
+- **PART A reads what the payload lists say and needs no image**, from
+  `build/livepayload.txt`, which `all` writes out of `$(LIVEARGS)` and its
+  parts. It does not run `make`: with a knob in the environment `$(VIDSTAMP)`'s
+  rule deletes `build/kernel.bin`, so a gate that ran make would rewrite
+  `build/` under whatever runs beside it. And a check that answered by
+  re-implementing these lists in Python would be a *second* list to keep in
   step, which is the failure it is written to catch. It sweeps `apps/` and
   requires a package on the live media for every directory there, the name
   derived mechanically (uppercase, first eight characters — `solitaire` is the
   only one the truncation moves). **This is the row that fails the build on the
   day somebody adds `apps/newthing/` and does not put it on the image**, and it
-  runs in the FAST tier, where no live image exists.
+  runs in the FAST tier, where no live image exists. **It also holds the live
+  volume to every file the 1.44MB apps disk ships, in the folder that disk
+  ships it in** (`APPSARGS` in the same manifest). The package sweep could not
+  see a data file leave, which is how the songs above did; the folder is part
+  of the check because a song outside `MEDIA/MIDI/` is a song MIDIRack does
+  not find.
 - **PART B walks `build/os8088-usb.img`** when `make usb` has built one,
   because a list can name a file that never lands — a folder the recipe forgot,
   a `--select` that truncated. It checks every promised basename against the
-  FAT16 directory, every story against `getstories`' MANIFEST, every area
+  FAT16 directory, every apps-disk file at its own path, every story against `getstories`' MANIFEST, every area
   against `getcpmsw`'s `AREAS`, and every master-disk file against the fetch's
   own `A0.list`. That last one is the check that a floppy-priced selection
   cannot pass, and a truncated selection reads exactly like a working disk.
@@ -165042,7 +165059,8 @@ row and a second press within nine ticks plays it.**
 `MIDI\` beside the package, `\MEDIA\MIDI\`, `\MIDI\`, then the folder it was
 launched from. The shipped disks put them in `MEDIA\MIDI\`, so on every apps
 disk the window opens with ten songs listed and the first one loaded and
-measured. The pane's title names the folder - "Playlist (B:\MEDIA\MIDI\)", or
+measured, and so it does on the live USB, the live CD and the browser demo
+(§80.6). The pane's title names the folder - "Playlist (B:\MEDIA\MIDI\)", or
 "(MIDI\)" when the pane is too narrow for the path.
 
 ### 105.4 The dry run

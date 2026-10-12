@@ -128,6 +128,28 @@ def pkg_name(d):
     return PKG_FILE.get(d) or d[:8].upper() + ".O88"
 
 
+def files(args):
+    """The FILE arguments of an os88disk.py list: an option and the value
+    after it are not files (`--folder SYSTEM/APPDATA` rides $(APPSARGS))."""
+    out, skip = [], False
+    for a in args:
+        if skip:
+            skip = False
+        elif a.startswith("--"):
+            skip = True
+        else:
+            out.append(a)
+    return out
+
+
+def dest(arg):
+    """Where os88disk.py puts one `[FOLDER:]path` argument on the volume, as
+    the image walk spells it: `MEDIA/MIDI/BATTLE1.MID`."""
+    folder, _, path = arg.rpartition(":")
+    name = os.path.basename(path).upper()
+    return (folder.upper() + "/" + name) if folder else name
+
+
 _PAYLOAD = None
 
 
@@ -317,6 +339,26 @@ def main():
               "%s is in $(MEDIA_EXTRA) and not in $(LIVEARGS)"
               % os.path.basename(path))
 
+    # EVERYTHING THE 1.44MB APPS DISK SHIPS, IN THE FOLDER IT SHIPS IN. The
+    # sweep above is per PACKAGE, so a data file could leave without anything
+    # noticing - and MIDIRack's ten songs had: the player and its sound bank
+    # rode the live volume with MEDIA/MIDI/ absent, so it opened on an empty
+    # playlist on the live USB, the live CD and the browser demo alike. The
+    # FOLDER is part of the check because it is part of the contract:
+    # mrl_autoload looks in \MEDIA\MIDI\ (SPEC.md 105.3.1), and a song
+    # anywhere else is a song it does not find.
+    apps = mk("APPSARGS")
+    check(apps,
+          "build/livepayload.txt names no APPSARGS - the apps disk's payload "
+          "is gone or renamed, so the live media is held to nothing")
+    livedest = {dest(a) for a in files(live)}
+    for a in files(apps or []):
+        check(dest(a) in livedest,
+              "the 1.44MB apps disk ships %s and $(LIVEARGS) does not put it "
+              "there. The live volume carries everything (SPEC.md 80.6); a "
+              "file the everything-floppy cannot afford belongs on "
+              "$(LIVEPKGARGS)" % dest(a))
+
     # ==================================================================
     # PART B - the IMAGE. Only when one has been built: `make usb` needs
     # the C toolchain and three fetches, so a plain clone has none.
@@ -336,6 +378,12 @@ def main():
           "the live image holds %d entries - it was 154 before SPEC.md 80.6 "
           "and is ~420 after; a number near the first means the payload "
           "silently shrank back" % len(rows))
+
+    # ...and the apps disk's files landed where the apps disk puts them
+    for a in files(apps or []):
+        check(dest(a) in onimg,
+              "the 1.44MB apps disk ships %s and build/os8088-usb.img does "
+              "not have it there" % dest(a))
 
     # every name the list promised actually landed
     for name in sorted(named):
