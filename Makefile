@@ -13035,11 +13035,23 @@ LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS)))
 # off every floppy - and why taking it off the floppies alone was not the
 # removal anybody thought it was. tests/unit/t_retired.py reads
 # build/livepayload.txt and fails if it comes back.
+#
+# $(MIDISONGARGS) IS MIDIRACK'S TEN SONGS, in MEDIA/MIDI/ where every apps disk
+# puts them and where mrl_autoload looks (SPEC.md 105.3.1). The live volume
+# carried the player and its sound bank and not one song to play, so it
+# opened on an empty playlist - on the live USB, the live CD and the browser
+# demo, which are the three images a visitor is most likely to meet. They
+# were never on $(ALLAPPSARGS): the everything-FLOPPY carries no songs, and
+# 27 clusters there would come out of RunCPM's A/0 like everything else
+# (SPEC.md 19.10.1). Here, for that reason and the four packages', and
+# tests/unit/t_livefull.py now holds the live volume to every file the 1.44MB
+# apps disk ships, folder and all, so the next one cannot drop out this way.
 LIVEPKGDEPS := $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
-               $(SCRIBEDISK) $(MEDIA_EXTRA)
+               $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS)
 LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
-               $(addprefix MEDIA:,$(MEDIA_EXTRA))
+               $(addprefix MEDIA:,$(MEDIA_EXTRA)) \
+               $(MIDISONGARGS)
 $(if $(LIVESYSARGS),,$(error LIVESYSARGS is empty - $(SYSAPPS) and $(APPSYS) \
      no longer differ, so THEWIRE.O88 is either on every apps disk or on \
      none; SPEC.md 92.11 says it is on neither))
@@ -13232,7 +13244,8 @@ $(BUILD)/livepayload.txt: Makefile | $(BUILD)
 	   printf 'ALLAPPSARGS %s\n' $(ALLAPPSARGS); \
 	   printf 'LIVESYSARGS %s\n' $(LIVESYSARGS); \
 	   printf 'LIVEPKGARGS %s\n' $(LIVEPKGARGS); \
-	   printf 'MEDIA_EXTRA %s\n' $(MEDIA_EXTRA); } > $@.tmp
+	   printf 'MEDIA_EXTRA %s\n' $(MEDIA_EXTRA); \
+	   printf 'APPSARGS %s\n' $(APPSARGS); } > $@.tmp
 	@mv -f $@.tmp $@
 
 # Discover built images and attached floppy/USB/CD media without building.
