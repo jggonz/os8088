@@ -191,10 +191,15 @@ snd_entry:
     cmp al, DRVV_HWINFO
     je snd_hwinfo
     cmp al, DRVV_READY
-    je .nosb                    ; nothing to do: this driver keeps no settings
-                                ; blob (SPEC.md 51.9) and the probe already
-                                ; ran at ATTACH, so READY just re-answers with
-                                ; the table it built then
+    je .nocvx                   ; nothing to do: the probes already ran at
+                                ; ATTACH, so READY just re-answers with the
+                                ; table it built then. PAST ALL THREE PROBES
+                                ; and not to .nosb, which is where the MPU's
+                                ; and the Covox's begin: READY landing there
+                                ; reset the MPU-401 a second time and latched
+                                ; every printer port again on every load, and
+                                ; read the port pin a second time where it
+                                ; could only agree (SPEC.md 34.13.2)
     cmp al, DRVV_ATTACH
     jne .nohw                   ; an unknown verb REFUSES rather than probing
                                 ; hardware nobody asked about
@@ -1419,6 +1424,8 @@ opl_init:
 
 %include "sb.inc"               ; the Sound Blaster half (SPEC.md 34.5/34.6)
 %include "mpu.inc"              ; ...and the MPU-401's MIDI out (SPEC.md 34.13)
+    OS88_PIN                    ; ...whose port the Ports view may pin
+                                ; (SPEC.md 51.9.2)
 %include "covox.inc"            ; ...and the Covox's port (SPEC.md 34.14)
 
 %ifdef PICOMEM

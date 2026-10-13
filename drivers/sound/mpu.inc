@@ -28,6 +28,7 @@ MPU_DRR     equ 0x40                ; status bit 6: 1 = cannot take a byte
 MPU_DSR     equ 0x80                ; status bit 7: 1 = nothing to read
 
 mpu_bases:  dw 0x330, 0x300
+mpu_one:    dw 0                    ; ...or the ONE the Ports view pinned
 
 ; -----------------------------------------------------------------------------
 ; mpu_probe - is an MPU-401 at 330h or 300h? If so it is put in UART mode and
@@ -44,12 +45,25 @@ mpu_probe:
     mov [mpu_own], ax
     mov si, mpu_bases
     mov cx, 2
+    call os88_pin                   ; THE PORTS PAGE (SPEC.md 51.9.2): Auto
+    or al, al                       ; is the two bases above; Off is none at
+    jz .base                        ; all, with no port read; anything else is
+    cmp al, DRVPIN_OFF              ; that one port alone - still asked
+    je .none                        ; mpu_alone's question, because a pin that
+    xor ah, ah                      ; names somebody else's register is a
+    shl ax, 1                       ; mistake the bus should not pay for
+    add ax, DRVPIN_BASE
+    mov si, mpu_one
+    mov [si], ax
+    dec cx
 .base:
     mov dx, [si]
     inc dx                          ; DX = the status / command port
     in al, dx
     cmp al, 0xFF
     je .next                        ; an empty port: nothing written
+    call mpu_alone                  ; ...and a port that is somebody else's:
+    jc .next                        ; nothing written either (SPEC.md 34.13.1)
     call mpu_waitw
     jc .next
     mov al, 0xFF                    ; RESET...
@@ -68,12 +82,56 @@ mpu_probe:
 .next:
     add si, 2
     loop .base
+.none:
     stc
 .out:
     pop si
     pop dx
     pop cx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mpu_alone - DX = a candidate's status port, AL = what it just read. CF=0
+; when the ports around it look like an MPU-401's and nobody else's; CF=1
+; when a wider device answers there. AL clobbered, nothing written.
+;
+; AN MPU-401 IS TWO PORTS, and both of its bases sit inside other cards'
+; windows: 300h is an NE1000/NE2000's factory address and an XT-IDE's, whose
+; base + 1 is a REGISTER - the RESET below would land in a live network
+; card's ring set-up, which is how a Sound tick in the Control Panel took the
+; network down. So base + 3, + 5 and + 7 are read first. A two-port device
+; leaves them floating (FFh); a clone that decodes too few address lines
+; answers its STATUS at every odd port, so those read what base + 1 did. An
+; 8390's BNRY, NCR and ISR, or a disk's sector count, cylinder and status, are
+; neither. DSR and DRR can change between reads, so the six undefined bits
+; are what is compared.
+; -----------------------------------------------------------------------------
+mpu_alone:
+    push cx
+    push dx
+    mov ah, al
+    and ah, 0x3F                    ; AH = the status's constant bits
+    mov cx, 3
+.odd:
+    inc dx
+    inc dx
+    in al, dx
+    cmp al, 0xFF
+    je .nx                          ; floating: nothing here
+    and al, 0x3F
+    cmp al, ah
+    jne .other                      ; a register that is not our status
+.nx:
+    loop .odd
+    pop dx
+    pop cx
+    clc
+    ret
+.other:
+    pop dx
+    pop cx
+    stc
     ret
 
 ; mpu_waitw - DX = status: wait for DRR clear. CF=1 timed out. AL clobbered

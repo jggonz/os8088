@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "40cf338e03e3e4aabe7f8e2c286474da0fd158e6bc7987764e02c4354857f41b",
+  "fingerprint": "395279e0170b1cbddde17153f7960c49caec21793dd35b0702b7fc92ebd35ee9",
   "version": 9
  },
  "PKG_FMT": {
-  "fingerprint": "908dbc1a76f92681ab2c93303048d73abc8a58d00804851505a11eef6ec70a0c",
+  "fingerprint": "29974c7cda4f5a83617babf4e1320bcb476ba23a92d9d77c2df2cd23ac8093f1",
   "version": 8
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -24,17 +24,31 @@
    "to": 9
   },
   {
-   "fingerprint": "908dbc1a76f92681ab2c93303048d73abc8a58d00804851505a11eef6ec70a0c",
+   "fingerprint": "e786ef0bd74bf964ad033e9168823810b6ca9861367ffdb3b867224cd6950b8a",
    "from": 8,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_CLK_GET appended at 0x0467 (SPEC.md 37.96); OSAPI_DESK_ITEM's record gains the DIA mark at +3 and the remove AH = 0xFF by name (SPEC.md 107.2) - both only add meaning to inputs no earlier package passed, so nothing built before stops running: no bump",
+   "reason": "OSAPI_DRV_CFG answers from DRVV_ATTACH (the drv_tab row is the fence); DRVPIN_* and OS88_PIN for the Drivers page's Ports view's port pins (SPEC.md 51.9.2). Old drivers ignore pins; a pinning driver on an older kernel reads Auto. No number moves.",
    "to": 8
   },
   {
-   "fingerprint": "40cf338e03e3e4aabe7f8e2c286474da0fd158e6bc7987764e02c4354857f41b",
+   "fingerprint": "92a3f9f49dd174f8f17a703767c6586fed5dbef67fc36a1ceef31fef1e9cb30e",
    "from": 9,
    "guard": "DRV_VER",
-   "reason": "OSAPI_CLK_GET appended at 0x0467 (SPEC.md 37.96); OSAPI_DESK_ITEM's record gains the DIA mark at +3 and the remove AH = 0xFF by name (SPEC.md 107.2) - both only add meaning to inputs no earlier package passed, so nothing built before stops running: no bump",
+   "reason": "OSAPI_DRV_CFG answers from DRVV_ATTACH (the drv_tab row is the fence); DRVPIN_* and OS88_PIN for the Drivers page's Ports view's port pins (SPEC.md 51.9.2). Old drivers ignore pins; a pinning driver on an older kernel reads Auto. No number moves.",
+   "to": 9
+  },
+  {
+   "fingerprint": "29974c7cda4f5a83617babf4e1320bcb476ba23a92d9d77c2df2cd23ac8093f1",
+   "from": 8,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_CLK_GET appended at 0x0467 (SPEC.md 37.96); OSAPI_DESK_ITEM's record gains the DIA mark at +3 and the remove AH = 0xFF by name (SPEC.md 107.2) - both only add meaning to inputs no earlier package passed, so nothing built before stops running: no bump. Re-recorded on the merge of main's port pins (#248)",
+   "to": 8
+  },
+  {
+   "fingerprint": "395279e0170b1cbddde17153f7960c49caec21793dd35b0702b7fc92ebd35ee9",
+   "from": 9,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_CLK_GET appended at 0x0467 (SPEC.md 37.96); OSAPI_DESK_ITEM's record gains the DIA mark at +3 and the remove AH = 0xFF by name (SPEC.md 107.2) - both only add meaning to inputs no earlier package passed, so nothing built before stops running: no bump. Re-recorded on the merge of main's port pins (#248)",
    "to": 9
   }
  ]

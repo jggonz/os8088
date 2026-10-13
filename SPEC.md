@@ -60377,6 +60377,69 @@ nothing.
 **The list grew to ten rows and scrolls** (§31.1.5): the window cannot grow,
 because 151 is already the minimum that fits CGA.
 
+### 31.15 The Drivers page's Ports view — where the network card and the MPU-401 are
+
+A button on the Drivers page's heading row, `Ports`, swaps the pane from the
+driver list to two rows — a label, a value box and the list's own two arrow
+cells — and the same button, now `Back`, swaps it back:
+
+```
+Drivers                    [Back]
+Network card:  [Auto]  ^ v       Auto 240h 280h 2A0h 2C0h 300h 320h 340h 360h
+MIDI port:     [Auto]  ^ v       Auto 300h 310h 320h 330h 332h 334h 336h
+                                      340h 350h 360h Off
+Applies at the next restart
+Auto tries the usual ports
+```
+
+It exists for the field report §72.9.1 fixed: two cards each on their own
+ports, and the drivers' searches finding one where the other was. §72.9.1 and
+§34.13.1 made both searches read before they write, so Auto is safe on every
+machine this tree has met; this view is for the machine where Auto is not
+enough — a card at an address the sweep does not try, two cards where the
+sweep would take the wrong one, or an MPU-401 that should simply be left
+alone. **A pinned port is probed alone and the sweep never runs**, so nothing
+else on the bus is even read.
+
+**On the Drivers page, and that is the point.** A driver's own page exists
+only while the driver is attached (§31.9), and the machine that most needs a
+pin is the one where the search *failed* — its driver is not loaded and has
+no page, and the Drivers page is where its row says `No hardware found`, with
+the button directly above it. A ninth static page was built first and
+refused: nine statics and one driver page is ten rows, so the item list
+scrolled (§31.1.5) on every VGA machine with a network card and the Ethernet
+page went below the fold — and every gate that opens the first driver page at
+`[cp_nst]` clicked empty pane.
+
+**The button is a control** (id `DRV_MAX + 3`, above the list arrows' two):
+it identifies on the press and swaps on the release (§13.8.3), and
+`cp_drv_ctl1` redraws it pressed. `[cp_dview]` is the one resident byte. It
+goes back to the list on every page change, in CTRL.DRV's list click, and is
+kept across a close the way `[cp_dtop]` is — a reset in `cp_open_x` would be
+five bytes of `.cold` for it. It is 0 at boot, so the panel the boot notice
+opens on the Drivers page (§51.3) shows the list.
+
+**It edits two bytes and nothing else**, the Floppy page's rule (§31.14):
+SYSTEM.CFG's `EP` and `SP` records, the Ethernet row's and the sound row's
+one-byte blobs (§51.9.2). Each driver reads its own at `DRVV_ATTACH`, so a
+pick is used the next time the driver loads — a restart, or unticking and
+ticking it on the list — and the caption says restart, which is the one
+instruction that is always true. A click sets `[cp_wdirty]` (§31.8).
+
+**The captions are computed, not stored**: a pin is `(port − 200h) / 2`, so
+`Auto` is 0, `Off` is FFh and the box prints any other byte as its port. A
+value a later build offers, carried to this one in a SYSTEM.CFG, shows as
+what it is rather than as a blank; stepping from it starts at the top of the
+list. The arrows act on the press (`cp_ctl` id 0, the Floppy box's species)
+and grey at the ends of the list (§47 rule 3) — a dither on a 1bpp adapter.
+The box is always four cells, so one opaque run replaces whatever it held
+(PERFORMANCE.md rule 2).
+
+**Why not a drop-down, as Floppy has**: `menu_popup` reads its items through
+the kernel's DS (§12.4), so CTRL.DRV stages a menu into `cp_sbuf`, and 28
+bytes do not hold twelve items. Widening it is resident `.bss` for one view;
+the arrows are none. `kern_small` has none of this: there is no driver to pin.
+
 ## 32. softgfx.inc — the software renderer (§39's 1bpp driver)
 
 **What it is.** A latch-free, port-free CPU implementation of `vga12.inc`'s
@@ -62527,7 +62590,8 @@ drained if it comes and not required, because UART-only clones differ there.
 The intelligent mode's sequencer is not wanted and is not used. **330h, then
 300h.** The probe reads the status port FIRST and gives up on FFh - an empty
 port, DSR and DRR both "not ready" - so a machine with no interface pays two
-port reads and no timeout at boot.
+port reads and no timeout at boot. A status that is not FFh is then asked whether
+it is an MPU's at all before the RESET is written (§34.13.1).
 
 **A third reason to attach.** `snd_entry` attached when an OPL or a DSP
 answered; an MPU-401 alone now does too, and names the Control Panel's row
@@ -62553,6 +62617,44 @@ keyboard on MIDI IN, a module's active sensing - is full.
 `tools/martypc/patches/09-mpu401-uart.patch` gives MartyPC a recording
 MPU-401 (it has none) and the debug server a `midi` command, so the gate
 compares the bytes on the wire with the reference sequencer's (§105.11).
+
+#### 34.13.1 Both bases are inside other cards' windows
+
+**300h is an NE1000/NE2000's factory address and an XT-IDE's**, and base + 1
+there is a register: the 8390's CLDA0 on a read and **PSTART** on a write, so
+the probe's RESET (FFh into base + 1) moved a live card's receive ring. At boot
+nothing shows, because the sound driver is `drv_tab` row 0 and `ETHER.DRV`
+resets its card after it. A **Sound tick in the Control Panel** with the
+network up is that write into a running card, and QEMU's trace shows it, twice.
+The probe only reaches 300h when 330h was empty, so the machine is the period's
+commonest: an AdLib or a Sound Blaster Pro, which carry no MPU, beside an NE2000
+at its default address.
+
+So `mpu_alone` reads base + 3, + 5 and + 7 before anything is written. **An
+MPU-401 is two ports**: a fully decoded one leaves those floating (FFh), and a
+clone that decodes too few address lines answers its status at every odd port,
+so they read what base + 1 did. An 8390's BNRY, NCR and ISR, or a disk's
+sector count, cylinder and status, are neither, and the base is passed by
+untouched. DSR and DRR can change between reads, so only the six undefined
+bits (`and 3Fh`) are compared. **38 bytes of `SOUND.DRV`, no kernel byte**;
+`tests/netcoexist.py`'s `sndtick` arm is the gate (§72.9.1).
+
+#### 34.13.2 READY does not probe again
+
+`DRVV_READY` arrives straight after `DRVV_ATTACH` (§51.2.2) and `snd_entry`
+answers it with the table ATTACH built. It used to jump to `.nosb`, which was
+the end of the attach body until §34.13 put the MPU's probe there and §34.14
+the Covox's after it. So every load **reset the MPU-401 twice** and ran the
+printer-port latch test twice, and the second pass read the port pin (§51.9.2)
+again, where it could only agree with the first. READY now jumps past all
+three probes. Nothing else changes, and the image is the same size.
+
+It also made a gate weaker than it said it was. With the probe re-run at
+READY, a kernel that **refused** the pin read at ATTACH still ended up with
+the pin's answer in `mpu_base`, because READY's read succeeded. `tests/mpupin.py`'s
+300h case therefore passed on both kernels. Now that ATTACH is the only read,
+that case fails on a kernel with the old `drv_pub_seg` fence, which is what
+the row claims to prove.
 
 ### 34.14 The Covox Speech Thing — a DAC on the parallel port (`SOUND.DRV`, `drivers/sound/covox.inc`, `apps/os88spk.inc`)
 
@@ -86230,6 +86332,50 @@ round-trips its blob untouched, because the key is *known* and only its meaning
 is not (§51.5 rule 1) — so the RAM disk's remembered image survives a boot with
 its row unticked. And the size is still reserved on every machine: 24 more
 bytes of `.bss` and 28 of the file, for a feature a machine may never use.
+
+### 51.9.2 A port pin — two one-byte blobs, readable from ATTACH
+
+Rows 0 and 2 have blobs now, of one byte each: `CFG_SPIN` (key `SP`) for the
+sound driver and `CFG_EPIN` (key `EP`) for `ETHER.DRV`. The byte is a **port
+pin** — `(port − 200h) / 2`, so every even port from 200h to 3FCh has a value
+and the byte means the same whatever list a build's page offers:
+
+| pin | meaning |
+|---|---|
+| `DRVPIN_AUTO` 0 | search, exactly as without a pin |
+| `DRVPIN_OFF` FFh | do not look at all |
+| anything else | that port alone; the search never runs |
+
+**The fence is the ROW now, and that is what makes a pin worth having.** A pin
+is needed *before* the probe, and `osapi_drv_cfg` used to ask `drv_pub_seg`
+first — the spawn fence, which refuses a driver inside `DRVV_ATTACH` because a
+worker created there would outlive a refusal (§51.2.2). A blob read creates
+nothing. `drv_blob_of` already asks the right question, *which loaded row runs
+in this segment*, and `DRVR_SEG` is armed before the image is even read
+(§51.3), so the second test was the whole cost and it is gone. A package's
+segment is no row's, so it still gets `CF = 1`.
+
+A driver built before this reads no pin and searches; a pinning driver on an
+older kernel is refused at ATTACH, reads Auto and searches. So neither number
+in `abi.lock.json` moves: nothing that ran before stops running.
+
+`OS88_PIN` in `drivers/os88drv.inc` emits the one routine both drivers call,
+opt-in like `OS88_ENT`. `ETHER.DRV` probes a pinned card at its address and
+nowhere else; `SOUND.DRV`'s MPU probe takes the pinned port as a one-entry
+list, still through `mpu_alone` (§34.13.1) — a pin that names somebody else's
+register is a mistake the bus should not pay for. The Drivers page's Ports view (§31.15) is
+the only writer.
+
+What it costs is §51.9's own trade at its smallest: **two bytes of `.bss`** in
+the settings struct, two blob-map rows (8 bytes of `.text`) and, in the file,
+two records of five bytes. The key table is not resident (§51.5.3); it grows
+the boot overlay by 20 (the table and the file buffer it reads into), which
+`mem_unblob` gives back. The fence's removal saves 5 bytes of `.cold`.
+
+Measured against the tree before it, `kern_big`: `.text` +9 (the blob map and
+§31.15's `[cp_dview]`), `.bss` +2, `.cold` −5, `.ovl` +20, no rung crossed.
+The drivers: `OS88_PIN` and its two callers are 57 bytes of `ETHER.DRV` and 55
+of `SOUND.DRV`; the view is CTRL.DRV's, on demand.
 
 ### 51.10 A driver's page cannot open a file dialog, so the kernel opens it
 
@@ -109968,6 +110114,60 @@ and that the page renders. The 5150 is where a number would land, and there is
 no number here to land.
 
 `make test ETHER=1 TESTIMG=build/ether360.img` is the machine.
+
+#### 72.9.1 The sweep shares the bus, so it reads before it writes
+
+The field reported it as *"an NE1000/NE2000 and an MPU-401 on their own ports
+and IRQs, and the network is gone; take the MPU out and it comes back"*. No
+two cards overlapped. What overlapped was the **sweep**: `eth_bases` is seven
+32-port windows, and the second one, 320h, has its remote-DMA **data port at
+330h** — the MPU-401's. An MPU's data port answers its last byte, FEh after
+the ACK to its reset, so the PROM read came back `FE:FE:FE:FE:FE:FE`: unicast,
+every pair agreeing (so "an NE2000"), neither all zero nor all ones. The
+driver attached to a card at 320h that is not there and never reached the real
+one at 340h. The ISR test before it had passed too, because a floating bus
+reads FFh and FFh has RST set.
+
+Three rules, all of them reads. `ne_probe` writes nothing to a window's
+register file until the first two have passed; the one write before that is
+the reset itself, its port read and the value written back, and it is made
+only where CR has already answered:
+
+1. **CR reading FFh is an empty window** (Linux's `ne_probe1` asks the same
+   first). FFh is STA and STP together with RD 7, which no 8390 shows. Most
+   windows on most machines end here, with no write at all.
+2. **After the reset, the ISR must show RST from a register that is there.**
+   FFh is a floating bus and is not an answer. It is polled through rather
+   than refused, because a card still held in reset may not drive the bus.
+   The reset port is the window's last (base + 1Fh), and nothing of the
+   period sits there.
+3. **Six equal PROM bytes are a port, not an address.** All zero and all ones
+   were the two cases checked, and they are two cases of this rule: a device
+   that answers one value on every read is the same lie, and the MPU's FEh
+   is that device. It replaced the zero and ones tests, and the driver came
+   out 8 bytes smaller.
+
+The second hazard was the other way round: an MPU at its other address, 300h,
+is the **first** window swept, and the old probe's register set-up went into
+its data port (`21 22 0A`). Rules 1 and 2 stop that too: CR reads the MPU's
+data (not FFh), but base + 7 floats, so the 8390's register file is never
+written. §34.13.1 is the sound driver's half.
+
+`tests/netcoexist.py` is the gate, QEMU's for §72.9's reason. QEMU has no
+MPU-401, so the MPU is `isa-debugcon` with `readback=0xfe`: one port that
+reads FEh every time and keeps every byte written to it, which is the only
+property of an MPU these probes ever met. Three arms, each failing on the
+drivers before this section: `mpu330` (card at 340h, the latch at 330h; the
+old driver bound 320h and DHCP never answered), `mpu300` (the latch at 300h;
+the old driver wrote three bytes into it) and `sndtick` (§34.13.1).
+
+**What no probe can fix is two cards decoding the same ports.** A card
+jumpered to 320h *does* own 330h–331h, and an MPU there is a real conflict:
+both answer every read. Pick 300h or 340h for the card when an MPU is at 330h.
+
+**And where Auto is not enough, the Drivers page's Ports view pins it**
+(§31.15, §51.9.2): a pinned card is probed at its one address and the sweep
+never runs, which also reaches a card jumpered where the sweep does not look.
 
 ### 72.22 The raw verbs — whole frames, for a consumer that IS a stack
 

@@ -11768,6 +11768,35 @@ SOAK = [
         "find is a row nobody runs.",
         needs=("qemu",), serial=True, builds=True,
         wants=("build/brtest360.img",)),
+    Row("netcoexist", "soak", py("tests/netcoexist.py"), 90.0,
+        "SPEC.md 72.9.1 and 34.13.1: a network card and an MPU-401 in one "
+        "machine. The field lost its network the moment an MPU was added: "
+        "ETHER.DRV's sweep read 320h's 'PROM' through the MPU's data port at "
+        "330h, got FE:FE:FE:FE:FE:FE and attached to a card that is not "
+        "there. Three QEMU machines, the MPU an isa-debugcon reading FEh: the "
+        "card found at 340h past an MPU at 330h, not one byte written into an "
+        "MPU at 300h, and a Sound tick with the network up writing nothing to "
+        "the live card's base + 1 (QEMU's ne2000 trace). Every arm fails on "
+        "the drivers before the fix. A FOURTH arm is SPEC.md 31.15's Ports "
+        "view end to end: the card at 2A0h, which the sweep never tries, so "
+        "the driver is refused; the view stepped to 2A0h (one byte of "
+        "drv_cfg changes, to 50h), the panel closed, SYSTEM.CFG's 'EP' read "
+        "back on the host, a reset, and the card found and DHCP bound. QEMU "
+        "by name: MartyPC has no NIC",
+        needs=("qemu",), serial=True,
+        wants=("build/ether360.img", "build/apps360.img")),
+    Row("mpupin", "soak", py("tests/mpupin.py"), 120.0,
+        "SPEC.md 51.9.2: the MPU-401's port pin on MartyPC's recording MPU "
+        "at 330h, four boots of a copy of `make miditest`'s disk with a "
+        "different 'SP' record, mpu_base read out of SOUND.DRV's image: "
+        "Auto finds 330h, a 330h pin finds it alone, a 300h pin finds "
+        "nothing (the search that would have found 330h does not run) and "
+        "Off finds nothing with the MPU never reset and not one byte sent. "
+        "The 300h and Off cases are also the proof that OSAPI_DRV_CFG "
+        "answers from DRVV_ATTACH: refused there, both would read 330h - "
+        "true only since READY stopped re-probing (SPEC.md 34.13.2)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/midisys720.img",)),
     Row("ethcfg", "soak", py("tests/ethcfg.py"), 90.0,
         "SPEC.md 72.7: the Ethernet Setup window - Manual, an address typed "
         "into its field, Ok applying it to the driver's LIVE addresses, the "
