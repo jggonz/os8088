@@ -35,25 +35,38 @@
 ;                                       paragraph (`align 16` before
 ;                                       OS88_IMAGE_END) - the read lands at
 ;                                       offset 0 of a segment (OSAPI_FILE_READ)
-;   %define DIA_ONTICK  proc            optional: a near proc, every tick
+;   %define DIA_ONTICK  proc            optional: a near proc, every tick -
+;                                       the UI task with the gfx lock HELD on
+;                                       both kernels, no clip region armed
 ;   %define DIA_ONCLOSE proc            optional: before the row is removed
+;   %define DIA_ISOPEN  'Desk Calendar is open'   optional: the toast a SECOND
+;                                       launch is refused with (<= 24 chars,
+;                                       SPEC.md 59.10); 'Already open' if not
+;   %define DIA_DAMAGEDQ 'Replace damaged calendar?'   optional, and only with
+;                                       os88ui.inc's OS88UI_ALERT included
+;                                       first: asked before the first save
+;                                       over a damaged file (SPEC.md 107.5.2)
 ;
 ; and gets DIA_PAY (the payload, DIA_PAYLEN bytes, zero when there was no
 ; valid file) and DIA_BSS_END (the next free bss offset).
 ;
 ; ITS CALLS, at the package's own points:
 ;
-;   dia_load   the ENTRY PROC, before OSAPI_WM_CREATE: SI = the loader's name
-;              (KERNEL_SEG:SI), DI = your window template. Reads the state
-;              file and places the template. CF = 0.
-;   dia_made   after OSAPI_WM_CREATE, BX = the window: installs the timer
-;              and the close negotiator and arms the first tick.
+;   dia_load    the ENTRY PROC, before OSAPI_WM_CREATE: SI = the loader's
+;               name (KERNEL_SEG:SI), DI = your window template. CF = 1: a
+;               window of ANOTHER instance of this package is up, the user
+;               has been told, and your entry proc must return CF = 1 having
+;               done nothing else. CF = 0: the state file is read and the
+;               template placed (anchored if it was saved on another screen).
+;   dia_made    after OSAPI_WM_CREATE, BX = the window: installs the timer -
+;               or, on kern_small, the wake handler of the worker arm - and
+;               the close negotiator, and arms the first tick.
+;   dia_painted the LAST thing your W_PAINT does (lock held): on kern_small
+;               it hires the worker on the first paint; elsewhere a test.
+;   dia_touch   your payload changed: a save is owed, and the next tick
+;               makes it. Every register and the flags kept.
 ;
-; WAVE 1 (SPEC.md 107.10) SHIPS THE SUBSET tests/diaprobe needs: the state
-; file, the registration, the poll and save, the remove by name. Wave 2 adds
-; the singleton, the anchoring of a position saved on another screen, the
-; damaged-file question and kern_small's worker arm; until then a position
-; saved on a screen of another size leaves the template where it was.
+; SPEC.md 107.5 and 107.5.2 are the contract.
 ; =============================================================================
 
 %ifndef OS88DIA_INC
@@ -85,6 +98,12 @@ DIA_S_DAMAGED   equ 8           ; the file was there and was not ours
 DIA_S_DIRTY     equ 16          ; owed a save
 DIA_S_RDONLY    equ 32          ; a save was refused for good (write-protected,
                                 ; full): the state stays in memory (107.5.1)
+DIA_S_WORKER    equ 64          ; no OSAPI_WM_TIMER (kern_small): the tick is
+                                ; a worker's wake (SPEC.md 107.5.2)
+DIA_S_HIRED     equ 128         ; ...and the worker is running
+; dia_fl bits
+DIA_F_ASKING    equ 1           ; the damaged-file question is on the glass
+DIA_F_CLOSING   equ 2           ; dia_close's save: never ask from there
 DIA_BKMAX       equ 16          ; a refusal that may clear waits 1, 2, 4, 8,
                                 ; then 16 polls before the next try
 
@@ -108,18 +127,26 @@ dia_fnd     equ dia_bn + 1                                  ; the walk's FIND
                                 ; buffer - its OWN: dia_rec is the registered
                                 ; row from the first tick to the close, and
                                 ; the close removes by it (SPEC.md 107.5)
-DIA_BSS_END equ DIA_BSS + DIA_HDR_SIZE + DIA_PAYLEN + OSAPI_DI_SIZE + 13 + 2 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + OSAPI_FIND_SZ
+dia_fl      equ dia_fnd + OSAPI_FIND_SZ                     ; DIA_F_* (wave 2)
+DIA_BSS_END equ DIA_BSS + DIA_HDR_SIZE + DIA_PAYLEN + OSAPI_DI_SIZE + 13 + 2 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + OSAPI_FIND_SZ + 1
 %if OSAPI_DI_SIZE < DIA_SLACK
   %error "os88dia: dia_rec is the read's slack before it is the row"
 %endif
 
 ; -----------------------------------------------------------------------------
-; dia_load - the entry proc's half (SPEC.md 107.5)
+; dia_load - the entry proc's half (SPEC.md 107.5, 107.5.2)
 ; in:  SI = the loader's name (an offset in KERNEL_SEG), DI = the template
-; out: CF = 0; the template's x,y the saved ones when the file was valid and
-;      saved on a screen of this size. Every register but the flags kept.
+; out: CF = 1 another instance's window is up and its toast has been said:
+;      return CF = 1 from the entry proc. CF = 0 the state file is read and
+;      the template's x,y are the saved ones - anchored to the nearer edges
+;      when they were saved on a screen of another size. Every register but
+;      the flags kept.
 ; -----------------------------------------------------------------------------
 dia_load:
+    call dia_single             ; FIRST, before any I/O: a refused second
+    jnc .one                    ; launch costs no disk call
+    ret
+.one:
     push ax
     push bx
     push cx
@@ -175,22 +202,25 @@ dia_load:
     jne .bad
     test byte [dia_file+DIA_H_FLAGS], DIA_HF_POS
     jz .home
-    call OSAPI_VIDEO            ; AX = width, BX = height
-    cmp ax, [dia_file+DIA_H_SW]
-    jne .home                   ; another screen: the template stands (wave 2
-    cmp bx, [dia_file+DIA_H_SH] ; anchors it instead)
-    jne .home
     pop di                      ; the template
     push di
-    mov ax, [dia_file+DIA_H_X]
-    mov [di+WT_X], ax
-    mov ax, [dia_file+DIA_H_Y]
-    mov [di+WT_Y], ax           ; wm_create clamps it onto the glass (39.7)
+    call OSAPI_VIDEO            ; AX = width, BX = height
+    mov cx, [dia_file+DIA_H_SW]
+    mov dx, [di+WT_W]
+    mov si, [dia_file+DIA_H_X]
+    call dia_anchor             ; SI = x on this screen
+    mov [di+WT_X], si
+    mov ax, bx
+    mov cx, [dia_file+DIA_H_SH]
+    mov dx, [di+WT_H]
+    mov si, [dia_file+DIA_H_Y]
+    call dia_anchor
+    mov [di+WT_Y], si           ; wm_create clamps it onto the glass (39.7)
     jmp short .home
 .bad:
     or byte [dia_st], DIA_S_DAMAGED
     push ds                     ; DAMAGED: run empty, and never overwrite it
-    pop es                      ; silently (no save until wave 2 asks)
+    pop es                      ; silently (dia_save asks first, 107.5.2)
     mov di, dia_file
     mov cx, DIA_HDR_SIZE + DIA_PAYLEN
     xor al, al
@@ -213,6 +243,79 @@ dia_load:
     clc
     ret
 
+; dia_anchor - one axis of a saved place, onto this screen (SPEC.md 107.5.2)
+; in:  SI = the saved coordinate, CX = the screen's extent when it was saved,
+;      AX = the extent now, DX = the frame's template extent on that axis
+; out: SI = the coordinate now: unchanged when the screen is the same size or
+;      the frame's middle was in the near half, else the same distance from
+;      the FAR edge; never negative. Every other register kept
+dia_anchor:
+    cmp ax, cx
+    je .x                       ; the same screen: the saved place as it is
+    push dx
+    shr dx, 1                   ; w/2
+    add dx, si                  ; the frame's middle, then
+    push cx
+    shr cx, 1
+    cmp dx, cx                  ; ...against the old screen's
+    pop cx
+    pop dx
+    jl .x                       ; the near half: keep the distance from 0
+    sub si, cx                  ; x - oldW, then + newW: the same distance
+    add si, ax                  ; from the far edge
+    jns .x
+    xor si, si
+.x:
+    ret
+
+; dia_single - is another instance of this package up? (SPEC.md 107.5.2) Its
+; window's segment carries OUR program name at +16. CF = 1 yes, and the toast
+; is said; every register kept
+dia_single:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    xor ax, ax
+.slot:
+    push ax
+    call OSAPI_WM_OWNSEG        ; DX = the owning segment, or CF = 1 none
+    pop ax
+    jc .next
+    mov cx, ds
+    cmp dx, cx
+    je .next                    ; ours (none yet, at the entry proc - but a
+    mov es, dx                  ; caller may ask later)
+    mov si, 16                  ; +16 the program's name, 16 bytes
+    mov di, si
+    mov cx, 8
+    cld
+    repe cmpsw
+    je .found
+.next:
+    inc ax
+    cmp al, MAX_WIN
+    jb .slot
+    clc
+    jmp short .out
+.found:
+    push ds
+    pop es
+    mov si, dia_isopen
+    xor cx, cx
+    call OSAPI_TOAST            ; the entry proc's own toast: the loader then
+    stc                         ; says nothing over it (SPEC.md 20.12.4)
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; dia_made - after OSAPI_WM_CREATE: BX = the window. Installs the tick and the
 ; close negotiator; every register kept, the flags not - clear CF yourself
@@ -226,14 +329,83 @@ dia_made:
     mov ax, dia_close
     call OSAPI_WM_ONCLOSE
     mov ax, 1                   ; the first tick: the window is up by then
-    call OSAPI_WM_TIMER         ; CF = 1 on kern_small - wave 2's worker arm
+    call OSAPI_WM_TIMER         ; CF = 1: kern_small, which has no timer -
+    jnc .t                      ; the WORKER ARM (SPEC.md 107.5.2): the
+    or byte [dia_st], DIA_S_WORKER  ; first paint hires it, and its wake is
+    mov ax, dia_wake            ; the tick
+    call OSAPI_WM_ONWAKE
+.t:
     pop ax
+    ret
+
+; dia_painted - the end of the package's W_PAINT (lock held). On the worker
+; arm, hire the worker once: OSAPI_TASK_SPAWN wants the lock held and the
+; instance published, which the entry proc has neither of (apps/taskmgr's
+; rule). A refusal (the task table full) is retried by the next paint.
+; Every register and the flags kept
+dia_painted:
+    pushf
+    test byte [dia_st], DIA_S_WORKER
+    jz .r
+    test byte [dia_st], DIA_S_HIRED
+    jnz .r
+    push ax
+    push bx
+    mov ax, dia_worker
+    mov bx, [dia_win]
+    call OSAPI_TASK_SPAWN
+    jc .no
+    or byte [dia_st], DIA_S_HIRED
+    OS88_WORKER_RESTARTABLE dia_worker  ; a pass of the loop is all a restart
+.no:                            ; costs: it parks in OSAPI_TASK_ALIVE only
+    pop bx
+    pop ax
+.r:
+    popf
+    ret
+
+; dia_touch - the payload changed: owe a save, which the next tick makes.
+; Every register and the flags kept
+dia_touch:
+    pushf
+    or byte [dia_st], DIA_S_DIRTY
+    popf
+    ret
+
+; dia_worker - kern_small's tick: sleep, ask to live, kick the UI task. It
+; touches no file and no pixel (SPEC.md 20.6 rule 7); dia_wake does both
+dia_worker:
+    mov ax, DIA_TICKS
+    call OSAPI_TASK_SLEEP
+    mov bx, [dia_win]
+    call OSAPI_TASK_ALIVE       ; never comes back once the window is closing
+    call OSAPI_WM_WAKE          ; one queued per window: a busy UI task loses
+    jmp short dia_worker        ; nothing by it
+
+; dia_wake - the worker's kick (SI = the window, the UI task, NO lock): take
+; the lock so the beat - and DIA_ONTICK - sees kern_big's environment exactly
+dia_wake:
+    call OSAPI_GFX_LOCK
+    call dia_beat
+    call OSAPI_GFX_UNLOCK
     ret
 
 ; -----------------------------------------------------------------------------
 ; dia_tick - the timer (SI = the window; the UI task, the gfx lock held)
 ; -----------------------------------------------------------------------------
 dia_tick:
+    call dia_beat
+    push ax
+    push bx
+    mov bx, [dia_win]
+    mov ax, DIA_TICKS
+    call OSAPI_WM_TIMER
+    pop bx
+    pop ax
+    ret
+
+; dia_beat - one tick's work, on either arm: the UI task, the lock held
+dia_beat:
     push ax
     push bx
     push cx
@@ -241,9 +413,9 @@ dia_tick:
     push si
     push di
     push es
-    test byte [dia_st], DIA_S_TRIED
-    jnz .poll
-    or byte [dia_st], DIA_S_TRIED
+    test byte [dia_st], DIA_S_TRIED | DIA_S_WORKER
+    jnz .poll                   ; (kern_small's OSAPI_DESK_ITEM is the
+    or byte [dia_st], DIA_S_TRIED   ; refusal: its path walk would buy nothing)
     call dia_register           ; EVERY launch, whatever the state file said:
 .poll:                          ; the row is the program's (SPEC.md 107.5)
     mov ax, KERNEL_SEG          ; ES = KERNEL_SEG on entry to a callback -
@@ -279,9 +451,6 @@ dia_tick:
 .save:
     call dia_save
 .arm:
-    mov bx, [dia_win]
-    mov ax, DIA_TICKS
-    call OSAPI_WM_TIMER
     pop es
     pop di
     pop si
@@ -401,7 +570,8 @@ dia_close:
 .s:
     test byte [dia_st], DIA_S_DIRTY
     jz .out
-    call dia_save
+    or byte [dia_fl], DIA_F_CLOSING ; never ask from here: the alert would
+    call dia_save               ; die with this package (SPEC.md 107.5.2)
 .out:
     pop es
     pop di
@@ -414,13 +584,42 @@ dia_close:
     ret
 
 ; dia_save - the state file, header and payload in one write (SPEC.md
-; 107.5.1). Not over a DAMAGED file, not with no home, not once a refusal was
-; for good. A refusal that may clear keeps it owed and backs the next try off;
-; one that will not makes the state read-only for the session. Keeps every
-; register
+; 107.5.1). Not with no home, not once a refusal was for good, and not over a
+; DAMAGED file until the user has said Yes to DIA_DAMAGEDQ (107.5.2). A
+; refusal that may clear keeps it owed and backs the next try off; one that
+; will not makes the state read-only for the session. Keeps every register
 dia_save:
-    test byte [dia_st], DIA_S_NOHOME | DIA_S_DAMAGED | DIA_S_RDONLY
+    test byte [dia_st], DIA_S_NOHOME | DIA_S_RDONLY
     jnz .r
+    test byte [dia_st], DIA_S_DAMAGED
+    jz .go
+%ifdef DIA_DAMAGEDQ
+    test byte [dia_fl], DIA_F_ASKING | DIA_F_CLOSING
+    jnz .r                      ; asked already, or closing: not now
+    push ax
+    push bx
+    push si
+    push di
+    push es
+    mov ax, KERNEL_SEG          ; os88ui_ask reads our window's title out of
+    mov es, ax                  ; the record, in KERNEL_SEG
+    mov al, OS88UI_AYESNO
+    mov bx, [dia_win]
+    mov si, dia_damq
+    mov di, dia_dans
+    call os88ui_ask             ; CF = 1: another alert of ours is up - ask
+    jc .busy                    ; at a later tick
+    or byte [dia_fl], DIA_F_ASKING
+.busy:
+    pop es
+    pop di
+    pop si
+    pop bx
+    pop ax
+%endif
+.r:
+    ret
+.go:
     push ax
     push bx
     push cx
@@ -469,8 +668,24 @@ dia_save:
     pop cx
     pop bx
     pop ax
-.r:
     ret
+
+%ifdef DIA_DAMAGEDQ
+; dia_dans - the damaged-file question's answer (AL = 0 Yes, 1 No, or
+; OS88UI_ACANCEL; the lock held). Yes: the file is ours to replace, and the
+; next tick writes it whole. Anything else: read-only for the session
+dia_dans:
+    and byte [dia_fl], ~DIA_F_ASKING & 0xFF
+    or al, al
+    jnz .no
+    and byte [dia_st], ~DIA_S_DAMAGED & 0xFF
+    or byte [dia_st], DIA_S_DIRTY
+    ret
+.no:
+    or byte [dia_st], DIA_S_RDONLY
+    and byte [dia_st], ~DIA_S_DIRTY & 0xFF
+    ret
+%endif
 
 ; dia_enter - walk to SYSTEM\APPDATA on HOME's volume, having asked whether
 ; the disk in the drive is still home (SPEC.md 107.5.1). ONE full
@@ -603,6 +818,14 @@ dia_seek:
 dia_dname   db DIA_DATNAME, 0
 dia_dsys    db 'SYSTEM', 0
 dia_dapp    db 'APPDATA', 0
+%ifdef DIA_ISOPEN
+dia_isopen  db DIA_ISOPEN, 0
+%else
+dia_isopen  db 'Already open', 0
+%endif
+%ifdef DIA_DAMAGEDQ
+dia_damq    db DIA_DAMAGEDQ, 0
+%endif
 dia_cap     db DIA_CAP, 0
             times OSAPI_DI_BODY - OSAPI_DI_CAP - ($ - dia_cap) db 0
 %if ($ - dia_cap) != OSAPI_DI_BODY - OSAPI_DI_CAP

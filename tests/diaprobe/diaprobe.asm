@@ -42,6 +42,7 @@ dp_entry:
     push di
     mov di, dp_tpl
     call dia_load               ; SI = the loader's name; places the template
+    jc .out                     ; ...or another instance is up: say no
     mov si, dp_tpl
     call OSAPI_WM_CREATE
     jc .out
@@ -66,6 +67,7 @@ dp_paint:                       ; SI = the window, lock held: one opaque run
     mov si, dp_msg
     mov ax, 0x0F00              ; ink 0 on 15: two colours, every adapter
     call OSAPI_FONT_RUN
+    call dia_painted            ; kern_small: hire the worker (SPEC.md 107.5.2)
     pop si
     pop dx
     pop cx

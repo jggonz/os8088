@@ -314,7 +314,7 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 
 ## Packages, and what to read them for
 
-The tree's own worked examples. When a convention is unclear, the shortest package that uses it is usually the fastest answer. *ships* is **retired** for a package apps/RETIRED.txt retires (SPEC.md 20.16), and otherwise whether a shipped floppy carries it (the `make allapps` payload, SPEC.md 19.10); a `no` is built by its own target only.
+The tree's own worked examples. When a convention is unclear, the shortest package that uses it is usually the fastest answer. *ships* is **retired** for a package apps/RETIRED.txt retires (SPEC.md 20.16), and otherwise whether a shipped floppy carries it (the `make allapps` payload, SPEC.md 19.10, or the system disk's `SYSTEM/` and `SYSTEM/DIA/`); a `no` is built by its own target only.
 
 | package | source | SPEC | ships |
 |---|---|---|---|
@@ -333,6 +333,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | DOS | `apps/dos/dosload.asm` | §96 | no |
 | DOTDEL | `apps/dotdel/dotdel.asm` | §93 | yes |
 | DRMARCO | `apps/drmario/drmario.asm` | §100 | no |
+| Desk Calendar | `apps/deskcal/deskcal.asm` | §107.3 | yes |
 | EXCITEBIKE | `apps/excitebike/excitebike.asm` | §102 | no |
 | FONT VIEWER | `apps/fontview/fontview.asm` | §90 | yes |
 | FPTEST | `apps/fptest/fptest.asm` |  | no |
@@ -369,7 +370,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | TEXPAD | `apps/texpad/texpad.asm` | §69 | yes |
 | TRACKER | `apps/tracker/tracker.asm` | §45 | yes |
 | TaskMgr | `apps/taskmgr/taskmgr.asm` | §28 | yes |
-| The Wire | `apps/thewire/thewire.asm` | §92 | no |
+| The Wire | `apps/thewire/thewire.asm` | §92 | yes |
 | Video Player | `apps/video/video.asm` | §98 | yes |
 | WEAVE | `apps/weave/weave.asm` | `docs/WEAVE-SPEC.md` | yes |
 | WIRE | `apps/wire/wire.asm` | §78 | no |

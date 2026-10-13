@@ -27,9 +27,25 @@ were written the same afternoon. So:
      with nothing failing. (DVOL_MAX and SC_MAX are plain integers and are
      os88geom's.)
 
+  E  every shipped SYSTEM image carries SYSTEM/DIA/DESKCAL.O88, byte for
+     byte build/deskcal.o88, read by t_image's own FAT12 walker and not
+     os88disk's: the four geometries, both small system disks and emu.img
+     (when `make emu` has built it). The live media's list is t_livefull's.
+  F  and NO data image does: no apps disk, no category disk, no media disk,
+     no small apps disk carries SYSTEM/DIA or a DESKCAL.O88 - a widget
+     belongs to the BOOT volume, and its row names a path on it (SPEC.md
+     107.1, the THEWIRE rule).
+  G  the Desk Calendar's numbers are the host tool's: the payload's layout
+     (deskcal.asm's DCP_* against os88dia.py's DESKCAL_*), its own bss
+     fields the soak rows read out of a running guest (DC_BSS_*), and the
+     include's dia_st offset - each EVALUATED BY NASM from the package's
+     own source, so a moved field fails `make` rather than a soak row.
+
 **BREAK IT ON PURPOSE**: set os88dia.py's CFG_FBUF to 131 and D fails; move
 DIA_H_SW to 9 in os88dia.inc and C fails; put a 32-bit register in
-os88dia.inc and B fails.
+os88dia.inc and B fails; drop $(DIAARGS) from $(IMG360)'s recipe and E fails
+for os8088-360.img; add $(DIAARGS) to an apps disk and F fails; move
+DC_BSS_SEL in deskcal.asm and G fails.
 """
 import os
 import re
@@ -137,6 +153,70 @@ def nasm_eval(names, arm, tmp):
     return dict(zip(names, struct.unpack("<%dH" % len(names), data)))
 
 
+SYSTEM_IMAGES = ["os8088.img", "os8088-120.img", "os8088-720.img",
+                 "os8088-360.img"]
+# ON DEMAND, so read when they are there and NEWER than the package: `make`
+# builds neither the small pair (`make small`) nor emu.img (`make emu`), and
+# a tree that built one before this change would otherwise go red on an
+# image nothing rebuilt. `soak -k smallreq` is the small pair's own reader.
+OPTIONAL_SYSTEM = ["small.img", "small360.img", "emu.img"]
+DATA_IMAGES = ["apps.img", "apps120.img", "apps720.img", "apps360.img",
+               "media360.img", "office360.img", "network360.img",
+               "games360.img"]
+OPTIONAL_DATA = ["smallapps.img", "smallapps360.img"]   # `make smallapps`
+
+
+def walk(path):
+    """{'SYSTEM/DIA/DESKCAL.O88': bytes, ...} for a FAT12 floppy, through
+    t_image's walker (deliberately not os88disk's)."""
+    import t_image
+    blob = open(path, "rb").read()
+    v = t_image.Vol(blob, os.path.basename(path))
+    out = {}
+    for p, name11, attr, clus, size in v.walk():
+        nm = name11.decode("ascii", "replace")
+        name = nm[:8].strip() + ("." + nm[8:].strip() if nm[8:].strip()
+                                 else "")
+        key = p + name
+        if attr & 0x10:
+            out[key + "/"] = None
+            continue
+        data = bytearray()
+        chain, _ = v.chain(clus)
+        for c in chain:
+            lba = v.cluster_lba(c)
+            data += blob[lba * v.byts:(lba + v.spc) * v.byts]
+        out[key] = bytes(data[:size])
+    return out
+
+
+def deskcal_equs(tmp):
+    """deskcal.asm's own numbers, evaluated by NASM: the package is
+    assembled with a probe appended that emits each as a word after a
+    marker, so a value is what the BUILD computes, not what a regex reads."""
+    names = ["DCP_LEN", "DCP_VER", "DCP_NAPPT", "DCP_NTASK", "DCP_MAXAPPT",
+             "DCP_MAXTASK", "DCP_APPT0", "DCP_APPTSZ", "DCP_TASK0",
+             "DCP_TASKSZ", "DC_BSS", "DC_BSS_GRID", "DC_BSS_Y", "DC_BSS_M",
+             "DC_BSS_SEL", "DC_BSS_TY", "DC_BSS_TM", "DC_BSS_TD",
+             "dia_st - os88_image_end", "dia_file - os88_image_end",
+             "DIA_PAYLEN", "DIA_PAYVER"]
+    src = open(os.path.join(ROOT, "apps", "deskcal", "deskcal.asm")).read()
+    probe = ("\n    db 'T_DIA_PROBE'\n" +
+             "".join("    dw %s\n" % n for n in names))
+    at = src.rindex("    align 16, db 0")
+    path = os.path.join(tmp, "deskcal_probe.asm")
+    open(path, "w").write(src[:at] + probe + src[at:])
+    out = os.path.join(tmp, "deskcal_probe.bin")
+    r = subprocess.run([NASM, "-f", "bin", "-w+error", "-I", "apps/",
+                        "-I", "apps/deskcal/", "-o", out, path],
+                       capture_output=True, text=True, cwd=ROOT)
+    if r.returncode:
+        raise RuntimeError(r.stderr.strip()[-400:])
+    b = open(out, "rb").read()
+    i = b.index(b"T_DIA_PROBE") + len("T_DIA_PROBE")
+    return dict(zip(names, struct.unpack_from("<%dH" % len(names), b, i)))
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="t_dia.")
     try:
@@ -210,6 +290,81 @@ def main():
                   why="the host tool is the second reader of SYSTEM.CFG's "
                       "trailer; a stale copy disagrees with ovl_sc_load "
                       "about which files carry one, and no gate fails")
+
+        # E / F ------------------------------------------------------------
+        build = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
+        pkg = os.path.join(build, "deskcal.o88")
+        want = open(pkg, "rb").read() if os.path.exists(pkg) else None
+        check(want is not None, "build/deskcal.o88 exists",
+              why="every system disk carries it; run `make`")
+        for img in SYSTEM_IMAGES + OPTIONAL_SYSTEM:
+            p = os.path.join(build, img)
+            if not os.path.exists(p):
+                check(img in OPTIONAL_SYSTEM, "%s is missing" % img,
+                      why="`make` builds it; the row reads what was built")
+                continue
+            if (img in OPTIONAL_SYSTEM and want is not None
+                    and os.path.getmtime(p) < os.path.getmtime(pkg)):
+                print("t_dia: %s predates build/deskcal.o88 - not read "
+                      "(rebuild it with its own target)" % img)
+                continue
+            files = walk(p)
+            got = files.get("SYSTEM/DIA/DESKCAL.O88")
+            check(got is not None, "%s carries SYSTEM/DIA/DESKCAL.O88" % img,
+                  why="a DIA ships in SYSTEM\\DIA\\ on the BOOT volume "
+                      "(SPEC.md 107.1); $(DIAARGS) / $(SMALLDIAARGS) thread it "
+                      "into each system-disk recipe",
+                  got=sorted(k for k in files if k.startswith("SYSTEM/")))
+            if got is not None and want is not None:
+                check(got == want, "%s's DESKCAL.O88 is build/deskcal.o88 "
+                      "byte for byte" % img, got=len(got), want=len(want))
+        for img in DATA_IMAGES + OPTIONAL_DATA:
+            p = os.path.join(build, img)
+            if not os.path.exists(p):
+                check(img in OPTIONAL_DATA, "%s is missing" % img)
+                continue
+            bad = [k for k in walk(p) if k.startswith("SYSTEM/DIA")
+                   or k.endswith("DESKCAL.O88")]
+            check(not bad, "%s carries no DIA" % img, got=bad, want=[],
+                  why="a widget on an apps disk is a copy that is never the "
+                      "one the desktop relaunches - its row names the boot "
+                      "volume (SPEC.md 107.1, the THEWIRE rule of 92)")
+
+        # G ----------------------------------------------------------------
+        try:
+            e = deskcal_equs(tmp)
+        except (RuntimeError, ValueError) as ex:
+            e = {}
+            check(False, "deskcal.asm assembles with the probe", got=str(ex))
+        pairs = [("DCP_LEN", os88dia.DESKCAL_PAYLEN),
+                 ("DIA_PAYLEN", os88dia.DESKCAL_PAYLEN),
+                 ("DCP_VER", os88dia.DESKCAL_PAYVER),
+                 ("DIA_PAYVER", os88dia.DESKCAL_PAYVER),
+                 ("DCP_MAXAPPT", os88dia.DESKCAL_NAPPT),
+                 ("DCP_MAXTASK", os88dia.DESKCAL_NTASK),
+                 ("DCP_APPT0", os88dia.DESKCAL_APPT0),
+                 ("DCP_APPTSZ", os88dia.DESKCAL_APPT),
+                 ("DCP_TASK0", os88dia.DESKCAL_TASK0),
+                 ("DCP_TASKSZ", os88dia.DESKCAL_TASK),
+                 ("DCP_NAPPT", 0), ("DCP_NTASK", 1),
+                 ("DC_BSS", os88dia.DESKCAL_DIA_BSS),
+                 ("DC_BSS_GRID", os88dia.DESKCAL_BSS_GRID),
+                 ("DC_BSS_Y", os88dia.DESKCAL_BSS_Y),
+                 ("DC_BSS_M", os88dia.DESKCAL_BSS_M),
+                 ("DC_BSS_SEL", os88dia.DESKCAL_BSS_SEL),
+                 ("DC_BSS_TY", os88dia.DESKCAL_BSS_TY),
+                 ("DC_BSS_TM", os88dia.DESKCAL_BSS_TM),
+                 ("DC_BSS_TD", os88dia.DESKCAL_BSS_TD),
+                 ("dia_file - os88_image_end",
+                  os88dia.dia_hdr_off(os88dia.DESKCAL_DIA_BSS)),
+                 ("dia_st - os88_image_end",
+                  os88dia.dia_st_off(os88dia.DESKCAL_DIA_BSS,
+                                     os88dia.DESKCAL_PAYLEN))]
+        for name, host in pairs:
+            check(e.get(name) == host, "deskcal.asm's %s is tools/os88dia.py's"
+                  % name, got=e.get(name), want=host,
+                  why="the package and the host tool read one file and the "
+                      "soak rows read the package's bss by these offsets")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     done("t_dia")

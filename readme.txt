@@ -111,6 +111,9 @@ Programs that read and write documents put up the same box for both jobs, with a
 
 If a program will not start, the disk window says why: see section 12.
 
+DESK CALENDAR
+SYSTEM/DIA holds programs that live on the desktop. The Desk Calendar shows a month: click a day, or use the arrow keys; PgUp and PgDn change the month and T comes back to today. Drag it wherever you like. Once opened it comes back at every start, where you left it, until you close it. Only one can be open.
+
 
 ----------------------------
 6. THE CONTROL PANEL

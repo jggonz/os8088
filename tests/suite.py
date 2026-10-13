@@ -8881,6 +8881,31 @@ SOAK = [
         "row still carries the mark - kept for the next ordinary boot.",
         needs=("marty",), serial=True, timeout=900,
         wants=("build/diahiber360.img",)),
+    Row("diaregister", "soak", py("tests/diaregister.py"), 30.0,
+        "SPEC.md 107.2/107.5.2: the Desk Calendar REGISTERS itself, once, off "
+        "the SHIPPED 360KB system disk. Double-clicked out of SYSTEM\\DIA it "
+        "opens on OSAPI_CLK_GET's today, and its first tick writes ONE DIA "
+        "row (KIND 1, 'D', SYSTEM\\DIA\\DESKCAL.O88, `Calendar`); a second "
+        "double-click is refused by the package's own singleton - `Desk "
+        "Calendar is open`, LD_EABORT, no write, SYSTEM.CFG unchanged; the "
+        "close box removes the row by name and saves a 2,456-byte "
+        "DESKCAL.DAT holding its place; a reset brings nothing back.",
+        needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
+    Row("diamove", "soak", py("tests/diamove.py"), 30.0,
+        "SPEC.md 107.4/107.5: the Desk Calendar stays where it was PUT. "
+        "Opened off the shipped 360KB disk and dragged: within two polls its "
+        "state file on A: holds the new place and the 640x480 screen, and "
+        "after a RESET dia_boot relaunches it from its row and dia_load puts "
+        "it back at the dragged place, not the template's, holding no cell.",
+        needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
+    Row("deskcalgrid", "soak", py("tests/deskcalgrid.py"), 40.0,
+        "SPEC.md 107.3: the Desk Calendar's 42-byte grid, read out of the "
+        "running guest's bss, is Python calendar's for Oct 2026, Feb 2028 "
+        "(leap), Mar 2028 (by PgDn), Jan 1980 and Dec 2099 - each reached by "
+        "setting the machine's CLOCK and pressing T, so OSAPI_CLK_GET is "
+        "asserted every leg - and stepping past either end of the range is "
+        "refused while the other direction still moves.",
+        needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
     Row("curdisk", "soak", py("tests/curdisk.py"), 240.0,
         "SPEC.md 7.4: the arrow TRACKS the hand through a disk transfer. It "
         "used to freeze with the machine and then LEAVE THE SCREEN - once an "

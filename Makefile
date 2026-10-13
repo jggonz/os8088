@@ -3089,6 +3089,20 @@ EMUDIR := $(BUILD)/emuk
 SYSAPPS := $(BUILD)/taskmgr.o88 $(BUILD)/thewire.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 
+# --- ...and THE DESKTOP INTEGRATED APPLICATIONS in SYSTEM/DIA/ (SPEC.md 107) --
+# A widget belongs to the BOOT volume - the desktop configuration that
+# relaunches it is that volume's SYSTEM.CFG, and its row names a path on it -
+# so it rides every SYSTEM disk and NO apps disk, the THEWIRE rule (SPEC.md
+# 92). Threaded EXPLICITLY into each system-disk recipe, the four geometries,
+# emu.img, the small pair (SMALLDIAARGS) and the live media (LIVESYSARGS),
+# rather than folded into $(SYSAPPSARGS): that variable is restated in a dozen
+# tight 360KB GATE-disk recipes that have no room and no reason for it.
+# Measured at 360KB (`tools/os88disk.py --verify build/os8088-360.img`): 313
+# of 354 clusters in use before DESKCAL.O88 and its folder; SPEC.md 107.6 has
+# the figure after.
+DIAAPPS := $(BUILD)/deskcal.o88
+DIAARGS := $(addprefix SYSTEM/DIA:,$(DIAAPPS))
+
 # --- ...and DOS (SPEC.md 96) is in the system disk's APPS/, not SYSTEM/ ------
 # It belongs on the system disk for THE WIRE's reason one step along: a .COM
 # can be sitting on ANY floppy, so the program that runs one belongs on the
@@ -4132,10 +4146,10 @@ $(BUILD)/os88net.com: drivers/net/os88sfx.asm $(BUILD)/os88net.lz \
 	$(NASM) -f bin -w+error -I $(BUILD)/ -o $@ $<
 	@echo "os88net.com: $(call FILESIZE,$@) bytes packed - self-extracting, runs on DOS"
 
-$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(DIAAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(DIAARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER)
 
 # The 720KB 3.5" DD disk (SPEC.md 19). It is the geometry the machines
@@ -4147,10 +4161,10 @@ $(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPP
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(DIAAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(DIAARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER)
 
 # The 1.2MB 5.25" HD disk (SPEC.md 19). The geometry of the machine the 720KB
@@ -4174,10 +4188,10 @@ $(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(C
 # Its OWN boot sector, unlike the pair above it: 15 spt is a different track
 # shape, and boot/boot.asm's whole knowledge of a disk is SPT and HEADS. See
 # build/boot120.bin's rule for why that is three sectors and not four.
-$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(DIAAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 \
 		--boot $(BUILD)/boot120.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(DIAARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER)
 
 # ETHERTEST - the system disk with a SYSTEM.CFG that already asks for the
@@ -4640,10 +4654,10 @@ $(BUILD)/ftpapps.img: $(FTPDFILES) tools/os88disk.py
 # ...and this one alone takes $(COREAPPSARGS360)/$(FACESARG360) - the 354
 # clusters that geometry has do not hold MINES.O88 and JETBRAIN.F88 as well as
 # SPEC.md 70.9's parser, and §24.3 carries the arithmetic.
-$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
+$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(DIAAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS) $(SYSAPPSARGS) $(DIAARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(APPDATAFOLDER)
 
 # FMTEST: the AdLib gate package (SPEC.md 34.2/51.4). NEVER on the shipped
@@ -5210,6 +5224,19 @@ $(BUILD)/calc.bin: apps/calc/calc.asm apps/os88api.inc apps/os88ui.inc | $(BUILD
 
 $(BUILD)/calc.o88: $(BUILD)/calc.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/calc.bin -o $@
+
+# Desk Calendar (SPEC.md 107.3): the first DESKTOP INTEGRATED APPLICATION, in
+# SYSTEM/DIA/ on every system disk ($(DIAARGS) above) and on no apps disk.
+# apps/os88dia.inc is its widget half - place, state file, desktop row.
+DESKCALSRC := apps/deskcal/deskcal.asm apps/deskcal/dcdate.inc \
+              apps/deskcal/dcdraw.inc apps/os88dia.inc apps/os88ui.inc \
+              apps/os88api.inc
+$(BUILD)/deskcal.bin: $(DESKCALSRC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/deskcal/ -o $@ apps/deskcal/deskcal.asm
+	@echo "deskcal: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/deskcal.o88: $(BUILD)/deskcal.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/deskcal.bin -o $@
 
 # Browser (docs/plans/completed/BROWSER-PLAN.md): the text-and-table HTML viewer. Step 1 of
 # that document is the RENDERER, with no network in the machine - it opens a
@@ -11215,6 +11242,11 @@ SMALLAPPSARGS  = $(addprefix APPS:,$(SMALLTOOLS))
 # system-disk package is subtracted here rather than in a second list.
 SMALLSYSAPPS      = $(call SMALLSUB,,$(filter-out $(SMALLOMIT) $(SMALLOMIT_ORPHAN),$(SYSAPPS)))
 SMALLSYSAPPSARGS  = $(addprefix SYSTEM:,$(SMALLSYSAPPS))
+# SYSTEM/DIA/ rides the small system disks too (SPEC.md 24.5.1, 107.7): the
+# Desk Calendar needs no driver and has no small build, so it is the shipped
+# package - the API table is the same on both kernels (SPEC.md 20.8 rule 4)
+SMALLDIAAPPS      = $(DIAAPPS)
+SMALLDIAARGS      = $(addprefix SYSTEM/DIA:,$(SMALLDIAAPPS))
 
 # --- THE SMALL SYSTEM DISK CARRIES THE WHOLE APPS PAYLOAD (SPEC.md 24.5.6) ----
 #
@@ -11330,12 +11362,12 @@ $(BUILD)/small360.img: KMODDIR := $(SMALLDIR)
 smallsub:
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot360.bin $(SMALLDIR)/boot.bin
 
-$(BUILD)/small360.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLPKGS) \
+$(BUILD)/small360.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLDIAAPPS) $(SMALLPKGS) \
                        $$(SMALLTOOLS) $$(SMALLGAMES) $$(SMALLDATA_360) \
                        $(SYSDOC) tools/os88disk.py | smallsub
 	python3 tools/os88disk.py --fatcap 2 --kern-small -o $@ --size 360 \
 		--boot $(SMALLDIR)/boot360.bin --kernel $(SMALLDIR)/$(KERNNAME) \
-		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) \
+		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) $(SMALLDIAARGS) \
 		$(SMALLAPPSARGS) $(addprefix GAMES:,$(SMALLGAMES)) \
 		$(addprefix MEDIA:,$(SMALLDATA_360)) \
 		$(SYSDOC) $(MEDIAFOLDER) $(APPDATAFOLDER)
@@ -11345,12 +11377,12 @@ $(BUILD)/small360.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLPKGS) \
 # its kernel is $(SMALLDIR)'s, so its modules are too
 $(BUILD)/small.img: KMODDIR := $(SMALLDIR)
 
-$(BUILD)/small.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLPKGS) \
+$(BUILD)/small.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLDIAAPPS) $(SMALLPKGS) \
                     $$(SMALLTOOLS) $$(SMALLGAMES) $$(SMALLDATA) \
                     $(SYSDOC) tools/os88disk.py | smallsub
 	python3 tools/os88disk.py --fatcap 2 --kern-small -o $@ --size 1440 \
 		--boot $(SMALLDIR)/boot.bin --kernel $(SMALLDIR)/$(KERNNAME) \
-		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) \
+		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) $(SMALLDIAARGS) \
 		$(SMALLAPPSARGS) $(addprefix GAMES:,$(SMALLGAMES)) \
 		$(addprefix MEDIA:,$(SMALLDATA)) \
 		$(SYSDOC) $(MEDIAFOLDER) $(APPDATAFOLDER)
@@ -11410,13 +11442,13 @@ $(BUILD)/emu.img: KMODDIR := $(EMUDIR)
 # one feature it was built for has not been given anything. build/vmmcfg is the
 # gate's own SYSTEM.CFG with bit 5 set, which is the absolute mouse's bit and
 # not its row number (drv_cfgbit), and it is reused verbatim rather than copied.
-$(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
+$(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(DIAAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
                   $(FACES) $(FACELIC) $(BUILD)/vmmcfg/system.cfg \
                   tools/os88disk.py
 	@$(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 $(EMUDIR)/boot.bin
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(EMUDIR)/boot.bin --kernel $(EMUDIR)/$(KERNNAME) \
-		$(EMUDRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
+		$(EMUDRIVERS) $(SYSAPPSARGS) $(DIAARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(BUILD)/vmmcfg/system.cfg \
 		$(APPDATAFOLDER)
 
@@ -13068,7 +13100,8 @@ LIVEISO := $(BUILD)/os8088.iso
 # desktop whose Wire zone opened nothing. Derived as the difference between
 # the two lists, so a second SYSAPPS package lands here the day it lands
 # there and neither list is edited twice.
-LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS)))
+LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
+               $(DIAARGS)
 # THE FOUR PACKAGES THAT RIDE NO FLOPPY, AND THE DOCUMENTS MEDIA/ LACKED.
 # RECORDER (SPEC.md 35.1), HELLO (27.0), PACMAN (89) and SCRIBE (95) are built
 # by `all` and shipped nowhere, and every one of those decisions is an argument
@@ -13231,7 +13264,7 @@ $(EMUUSBIMG): $(KERNEL_SRC) $(KERNEL_INC) $(BUILD)/vmmouse.drv \
 # which is RUNCPMIMG's order and is here for its reason.
 $(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
            $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(LOGOVID) $(FACES) $(FACELIC) \
-           $(SYSAPPS) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
+           $(SYSAPPS) $(DIAAPPS) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
            $(BUILD)/zcat/live/CATALOG.TXT $(BUILD)/cpmsw.stamp \
            tools/getcpmsw.py tools/getstories.py \
            $(ALLAPPS) tools/os88disk.py

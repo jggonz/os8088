@@ -169289,9 +169289,148 @@ turns a kind above 2 into a free row, and the blob has ~26 bytes left).
 ### 107.3 The Desk Calendar (`apps/deskcal/`)
 
 The first DIA: a monthly calendar, a day's appointments, task checkboxes and
-reminders, two-colour on every adapter. It is built in the waves after the
-kernel half (§107.10) and this section is written with it; until then
-`tests/diaprobe/` is the only package that carries the mark.
+reminders, two-colour on every adapter. `DESKCAL.O88` ships in `SYSTEM\DIA\`
+on every system disk - the four geometries, `emu.img`, both small system
+disks and the live media - and on no apps disk (§107.1). Wave 2 (§107.10) is
+the window, the month and its navigation; the appointments, the tasks and the
+reminders are waves 3 and 4, and this section grows with them.
+
+```
+apps/deskcal/deskcal.asm   header, entry proc, menus, keys, clicks, the tick
+apps/deskcal/dcdate.inc    the date maths: day of week, days in a month,
+                           the grid, the 1980-2099 clamp
+apps/deskcal/dcdraw.inc    the two layouts and every draw
+```
+
+**The package.** `OS88_HEADER 'Desk Calendar', dc_entry, OS88_F_ICON`, a
+16x16 calendar-page icon (which is also the DIA row's picture, so a row
+downgraded at boot shows it, §107.4), `OSAPI_ABOUT_SET` (the SHEET/CHART
+lesson, §12.2) through `os88ui_about`, and `os88dia.inc` included last after
+`os88ui.inc`. The DIA definitions are `DIA_DATNAME 'DESKCAL.DAT'`,
+`DIA_CAP 'Calendar'`, the payload v1 below (`DIA_PAYLEN` 2,440,
+`DIA_PAYVER` 1), `DIA_ICON` 32 and `DIA_ONTICK dc_tick`.
+
+**The window** is not sizable, snaps (§11.94), and declares every promise it
+can keep:
+
+| call | why |
+|---|---|
+| `OSAPI_WM_OWNBG` | the painter writes every pixel of the content, so the kernel's white fill in front of `W_PAINT` - the first half of a double draw - is skipped (§11.90.1) |
+| `OSAPI_WM_SAVEU` AL = 3 | ON and 1BPP (§11.96.17): ink 0 on ground 15 on every adapter, so an uncover is a one-plane blit. Every draw outside `W_PAINT` arms `OSAPI_WM_CLIP_SET` first, which is what keeps the promise when the window is covered and its state changes (§11.96) |
+| `OSAPI_WM_PREFER` | 210 x 255 on VGA, EGA and Hercules; 210 x 139 on CGA |
+| `OSAPI_WM_KEEPH` | the layout is fixed rather than reflowing |
+| `OSAPI_WM_ONRESIZE` | the layout is re-chosen from the new content box after an adapter switch or a drag onto another display (§11.98) |
+
+**Two layouts, one code path.** The content is 208 pixels wide - 26 cells -
+on both. Which one is drawn is decided from the CONTENT HEIGHT the kernel
+gave the window (`OSAPI_WM_GEOM` at entry, `OSAPI_WM_ONRESIZE` after), not
+from an adapter code: 236 rows or more is TALL, anything less is COMPACT. A
+layout is a row of seven `y` values in a table:
+
+| row | TALL (208 x 236) | COMPACT (208 x 120) |
+|---|---|---|
+| header `<   October 2026   >`, 26 cells, inverse | 0 | 0 |
+| weekday names, `Su` .. `Sa` over the day fields | 12 | 9 |
+| first of six week rows | 24 | 18 |
+| week-row pitch | 10 | 9 |
+| rule | 88 | 72 |
+| the selected day's heading, `Tue 13 October 2026` | 92 | 75 |
+| the pane: agenda and tasks (waves 3, 4); blank in wave 2 | 104 | 84 |
+
+**A day field is three cells, `[m][d][d]`**: the mark cell first, then the
+day right-aligned in two. Cell 0 is a bullet (glyph 7) when the day has an
+appointment, a space when it has none. The week row is ONE opaque run of 26
+cells - two of margin, seven fields, three of margin - so the 21 cells of
+fields start at content x + 16, exactly under the weekday row's ` Su Mo Tu
+We Th Fr Sa`.
+
+- **Today** is drawn inverse: its row is three runs instead of one, the
+  middle one ink 15 on ground 0. Nothing else is carried by colour, so the
+  same picture reads on both 1bpp adapters (§39.4).
+- **The selected day** gets one `OSAPI_GFX_FRAME` on the field's own outer
+  pixels: its left and right columns are the mark cell's column 0 and the
+  second digit's column 7, which no glyph the field can hold ever sets, and
+  its top and bottom rows are in the gaps between week rows. So drawing the
+  frame, and erasing it with a white one, never touches a glyph pixel, and a
+  selection move is two frames and no re-lettering - except where the old
+  day is today, whose inverse ground the white frame cut, and which is then
+  re-run.
+- **Every pixel is written once** in a full paint: a run per text row, a
+  `gfx_fill` per gap between rows, one `gfx_hline` for the rule, one fill for
+  the blank pane. No fill lies under a run. The one primitive drawn over
+  another's pixels is the selection frame, whose two side columns are ground
+  the field's run has just laid - 16 pixels, never a glyph's.
+- **What a change costs**, in primitive calls (PERFORMANCE.md's unit): a
+  full paint is ~22 (one run per row, ~13 gap fills, the rule, the frame) and
+  two more when today is on show; a new selected day is 3 - the old frame
+  in white, the new in black, the heading - and 4 when the old day was
+  today; a new month is ~18 (header, weeks and their gaps, frame, heading);
+  an idle tick is **0**, one `OSAPI_CLK_GET` and a compare. `deskcalperf`
+  (wave 4) measures them.
+
+**Date maths** (`dcdate.inc`), all integer and 8086: the day of the week is
+Sakamoto's (as `apps/dos`'s `dos_dow`), exact over the whole range; the days
+in a month are `clk_mlen`'s mask `0x15AA` plus `year AND 3` for February,
+exact over 1901-2099; navigation is clamped to **January 1980 .. December
+2099** - the FAT date's range, which is what the payload stores - and at
+either end the arrow cell in the header is drawn as a space and the step is
+refused. The grid is 42 bytes in the package's bss, the first thing after
+its image (`DC_GRID`, offset 0): byte `i` is the day in week row `i / 7`,
+column `i % 7`, or 0. `deskcalgrid` (§107.10) reads it from the guest and
+compares it with Python's `calendar`.
+
+**Today** comes from `OSAPI_CLK_GET` (§37.96) at launch, clamped to the range
+above, and the calendar opens on today's month with today selected. The
+DIA tick (`DIA_ONTICK`, every 36 ticks) asks again, and when the DATE has
+changed moves the inverse: the old today's field and the new one are re-run,
+and the whole month is redrawn when the new today is in another month that
+is on show. The clock's own year is what `OSAPI_CLK_GET` answers, so a
+machine with no RTC opens on whatever the PIT clock says (§37.0.1).
+
+**Input**, while the calendar is the front window:
+
+| | |
+|---|---|
+| click a day | select it |
+| click `<` / `>` (header cells 0 and 25) | the previous / next month |
+| Left / Right | a day back / forward, across a month edge |
+| Up / Down | a week back / forward |
+| PgUp / PgDn, `<` / `>` (`,` / `.`) | the previous / next month; the selected day is kept, or clamped to the new month's length |
+| `T` | today |
+
+**Menus.** One, `Calendar`: Go to Today, Previous Month, Next Month. The
+application-name menu carries `About Desk Calendar` and the kernel's own
+`Close`, which goes through `os88dia.inc`'s negotiator like the close box.
+Waves 3 and 4 add New Appointment, New Task, Clear Done Tasks and a Remind
+menu, and the menus carry only what works in the wave that ships them.
+
+**The state file**, `SYSTEM\APPDATA\DESKCAL.DAT`, is §107.5's 16-byte header
+and this payload, 2,440 bytes, so the file is 2,456 bytes - five sectors, one
+read and one write:
+
+```
++0     db n_appt (0..48), n_task (0..32), lead_default, flags
++4     dw 0, 0
++8     48 x 32 B APPT, sorted by (date, time):
+         +0 dw date   FAT-packed ((y-1980)<<9 | m<<5 | d): a word compare orders it
+         +2 dw time   minute of the day, 0..1439, 0FFFFh = all day
+         +4 db flags  bit 0 REMIND, bit 1 FIRED
+         +5 db lead   minutes before
+         +6 26 B text, NUL
++1544  32 x 28 B TASK:
+         +0 db flags  bit 0 DONE, bit 1 DATED
+         +1 db 0
+         +2 dw due    packed date, valid iff DATED
+         +4 24 B text, NUL
+```
+
+Wave 2 READS it - the bullet in a day's mark cell is an appointment on that
+date - and writes it back unchanged with the window's place. A payload whose
+counts are past the table (more than 48 appointments) marks nothing.
+`tools/os88dia.py` writes and reads the same layout (`deskcal()`,
+`parse_deskcal()`), and `t_dia` holds its offsets equal to `deskcal.asm`'s.
+
+**What it costs, wave 2**: §107.6's package rows.
 
 ### 107.4 The boot relaunch: `dia_boot`, and what a failure looks like
 
@@ -169380,15 +169519,17 @@ the independent host reader and writer of both this header and the SYSTEM.CFG
 trailer's DIA row, `--selfcheck` round-trips them, and every fixture the
 gates boot is written by it.
 
-**The framework's calls**, at the package's own points (W1 ships the subset
-the probe needs; §107.10):
+**The framework's calls**, at the package's own points (§107.5.2 has the
+four that wave 2 added):
 
 | call | when | what |
 |---|---|---|
-| `dia_load` | the entry proc, before `OSAPI_WM_CREATE` | copy the 8.3 name; bank `OSAPI_FILE_HERE` ONCE - the launch folder is HOME for the session; walk to `SYSTEM\APPDATA`; read and validate the file; place the template |
-| `dia_made` | after `OSAPI_WM_CREATE` | install `OSAPI_WM_ONTIMER` and `OSAPI_WM_ONCLOSE`; arm a 1-tick timer |
-| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and saves once two polls agree; re-arms for 36 ticks |
-| `dia_close` | `W_ONCLOSE` | remove the row by name (AL = 0, AH = 0xFF); save; let the close proceed |
+| `dia_load` | the entry proc, before `OSAPI_WM_CREATE` | refuse a SECOND instance (CF = 1, §107.5.2); copy the 8.3 name; bank `OSAPI_FILE_HERE` ONCE - the launch folder is HOME for the session; walk to `SYSTEM\APPDATA`; read and validate the file; place the template, anchored when the screen differs |
+| `dia_made` | after `OSAPI_WM_CREATE` | install `OSAPI_WM_ONTIMER` and `OSAPI_WM_ONCLOSE`; arm a 1-tick timer - or, where the timer is refused (kern_small), install the wake handler for the worker arm |
+| `dia_painted` | the end of the package's `W_PAINT` | on kern_small, hire the worker (once); nothing elsewhere |
+| `dia_touch` | whenever the payload changed | owe a save; the next tick makes it |
+| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and saves once two polls agree; calls `DIA_ONTICK`; saves what is owed; re-arms for 36 ticks |
+| `dia_close` | `W_ONCLOSE` | `DIA_ONCLOSE`; remove the row by name (AL = 0, AH = 0xFF); save; let the close proceed |
 
 **The row is about the PROGRAM, not the state file**, so the first tick
 registers on every launch whatever the file said: missing, DAMAGED, or no
@@ -169447,6 +169588,55 @@ GOTO_QM    home
   nothing". The close always makes one last try that the backoff does not
   gate.
 
+#### 107.5.2 One at a time, another screen, a damaged file, and kern_small
+
+- **A DIA is a SINGLETON.** Two calendars would be two writers of one state
+  file and two registrations of one row, so `dia_load` walks the window
+  slots with `OSAPI_WM_OWNSEG` (§11.96.3.1) and, when a window belongs to a
+  segment that is not ours and whose header carries our program name at +16,
+  toasts `DIA_ISOPEN` (`Desk Calendar is open`) and answers CF = 1. The
+  entry proc returns that CF, the loader tears the launch down, and because
+  the toast is the aborting entry proc's own the loader says nothing over it
+  (`ld_said`, §20.12.4). It runs FIRST, before any I/O, so a refused second
+  launch costs no disk call. A double-click on a widget that is already up
+  is the common way here, because an autostarted one is up before the user
+  has done anything.
+- **A position saved on another screen is ANCHORED, not dropped.** Wave 1
+  left the template where it was whenever the saved width or height differed
+  from `OSAPI_VIDEO`'s. Now each axis keeps its distance from the NEARER
+  edge of the old screen: with the frame's template width `w`, `x' = x` when
+  `x + w/2 < oldW/2`, else `x' = newW - (oldW - x)`; the same for `y` with
+  the template height and the screen's height. A calendar parked at the
+  right of a 720-wide Hercules desktop opens at the right of a 640-wide CGA
+  one. Whatever is left over is `wm_fit`'s, which clamps the frame onto the
+  glass inside `wm_create` (§39.7) - so an anchor that lands below a short
+  screen's dock is pulled up rather than lost. A negative result is clamped
+  to 0 here first.
+- **A DAMAGED file is asked about, once, before it is overwritten.** Wave 1
+  never saved over one. Now the first save that is owed - a settled drag, an
+  edit - asks `DIA_DAMAGEDQ` (`Replace damaged calendar?`) through
+  `os88ui_ask` with Yes / No, when the package includes `os88ui.inc` with
+  `OS88UI_ALERT` and defines that string. **Yes** clears the damage and the
+  next tick writes a whole new file; **No**, or a dismissed alert, makes the
+  state READ-ONLY for the session (`DIA_S_RDONLY`, §107.5.1's word for it):
+  kept in memory, never written, never asked again. The question is NOT put
+  from the close - the alert is a window of the closing package's own and
+  would die with it - so a damaged file the user never answered for stays
+  exactly as it was found. A package without the alert keeps wave 1's rule.
+- **kern_small has no `OSAPI_WM_TIMER`** (its window record stops at 28
+  bytes, §13.8.2), so the tick comes from a WORKER there. `dia_made` sees the
+  timer refused (CF = 1) and installs `dia_wake` as the window's
+  `OSAPI_WM_ONWAKE` handler; the package's `W_PAINT` ends in `dia_painted`,
+  which hires the worker on the first paint - the entry proc cannot, because
+  the loader has not published the instance yet (`apps/taskmgr`'s rule,
+  §28). The worker is `OSAPI_TASK_SLEEP` 36, `OSAPI_TASK_ALIVE`,
+  `OSAPI_WM_WAKE`, round again, and touches no file (§20.6 rule 7);
+  `dia_wake` runs on the UI task WITHOUT the lock, so it polls the place,
+  takes `OSAPI_GFX_LOCK` around `DIA_ONTICK` so the application sees the
+  same environment as on kern_big, and saves after the unlock. The worker is
+  declared restartable (§66.6.2). There is no registration on kern_small,
+  whose `OSAPI_DESK_ITEM` is the refusal (§107.7).
+
 ### 107.6 What it costs
 
 The kernel half, measured by `tools/kernsize.py` against the tree it was cut
@@ -169494,6 +169684,27 @@ the FAT and its copy, the data - and what §107.5.1's walk changed is the rest:
 the W1 walk made four full remounts around one 16-byte write, **6 reads and
 6 writes, ~4.8 s**, and one full mount plus quiet stands is **2 reads**.
 First registration and close each write SYSTEM.CFG once.
+
+**The packages, wave 2** (the build's own figures):
+
+| | image | bss | on disk (lz4) |
+|---|---:|---:|---:|
+| `DESKCAL.O88` | 5,808 | 2,746 | 5,114 |
+| `DIAPROBE.O88` (never shipped) | 1,392 (wave 1: 1,120) | 194 | 1,392 |
+
+`os88dia.inc` grew ~260 bytes in wave 2 - the singleton, the anchor, the
+worker arm and `dia_touch` - plus the damaged-file question in a package that
+defines `DIA_DAMAGEDQ`. **No kernel byte moved in wave 2**: `tools/kernsize.py`
+reads `unchanged` on kern_big and kern_small, and no SDK file changed, so the
+ABI lock is untouched.
+
+**The disks.** `SYSTEM\DIA\` costs a folder's cluster and `DESKCAL.O88` five
+more. Measured with `os88disk.py --verify`: the 360 KB system disk went from
+**313 to 319 of 354 clusters** and the small 360 KB one from 262 to 268; the
+`readme.txt` paragraph that tells a user about it took one more cluster on
+each (it crossed a 1 KB boundary), so the shipped 360 KB system disk is
+**320 of 354, 34 left**. The state file is three more clusters at runtime,
+in `SYSTEM\APPDATA`, the first time the calendar is closed or moved.
 
 ### 107.7 `kern_small`
 
@@ -169579,6 +169790,47 @@ silent. The small system disks carry `SYSTEM\DIA\` too (§24.5.1).
   (§107.5).
 - **`HOME` is banked once, at the load**, not at every save: a save after a
   refused one would have banked wherever the refusal left the instance.
+- **Wave 2.** The layout is chosen from the CONTENT HEIGHT the kernel gave
+  the window, not from `OSAPI_VIDEO`'s height (the design's `BX >= 300`):
+  the same answer on every single-display machine, and the right one after a
+  drag onto another display, which only the box knows about.
+- **The day field is `[mark][d][d]`, not `dd*`**, and the mark is glyph 7
+  rather than `*`: an asterisk's middle row fills all eight columns, so a
+  frame on the field's outer column would cut it; with the mark first and a
+  glyph whose edge columns are clear, the frame and its erase never touch a
+  glyph pixel. COMPACT's week pitch is 9, not 8, for the same frame: its top
+  and bottom need a gap row to stand in.
+- **The calendar's menu carries only what works in the wave that ships
+  it**: Go to Today, Previous Month, Next Month. The design's
+  Calendar > Close is the application-name menu's own `Close` already, which
+  the kernel puts there for every package (§12.2).
+- **A package's menu set must NAME itself** (`AM_NAME` non-zero): the
+  calendar's first build passed 0 for "the instance's name" as the SDK
+  allows, and its bar came up as garbage. `menu_relayout`'s instance-name
+  fallback ends at the `.kseg` label, which sets `[menu_seg]` to 0 - the
+  KERNEL's segment - for the name AND for every menu cell after it, so the
+  titles and items are read out of kernel memory. No shipped package had hit
+  it because every one names its set. Wave 2 changes no kernel byte, so the
+  calendar names its set and the fallback is left for the owner: it is a
+  kernel defect reachable by any package (the fix is to set `[menu_seg]`
+  for the name alone).
+- **The singleton toasts and refuses; it does not raise the open one.** A
+  slot can be turned into its owner's segment (`OSAPI_WM_OWNSEG`) but not
+  into another package's window pointer, which `OSAPI_WM_FRONT` would need,
+  and the stride differs between kernels.
+- **The anchor's y uses the screen's height**, not the dock line: the header
+  records the height only, and `wm_fit` clamps the remainder above the dock.
+- **The kern_small wake takes the lock around the WHOLE beat** - the poll,
+  `DIA_ONTICK` and the save - not around `DIA_ONTICK` alone: the save then
+  runs exactly as it does in kern_big's timer callback, lock held, and one
+  body (`dia_beat`) serves both arms.
+- **The damaged-file question is the package's option** (`DIA_DAMAGEDQ` with
+  `OS88UI_ALERT`), never asked from the close, and a No is read-only for the
+  session (§107.5.2).
+- **The package's own state comes FIRST in its bss** (`DIA_BSS` = 112), so a
+  gate reads the grid at the image's end + 0; `tools/os88dia.py` names every
+  such offset and `t_dia` has NASM evaluate the package's own equates
+  against them.
 - Verified, not changed: `desk_reflow` is safe with no lock (above, §107.4),
   so the design's deferred `[desk_zdirty]` path was not needed; and
   `OSAPI_FILE_HERE`'s `BL` is `inst_fdrv`, the volume index a row's +0 holds
@@ -169589,7 +169841,7 @@ silent. The small system disks carry `SYSTEM\DIA\` too (§24.5.1).
 | wave | what | gates |
 |---|---|---|
 | 1 | the kernel half (K1-K6 below), the SDK, `tools/os88dia.py`, `tests/diaprobe/`, `make diatest` | `diaboot`, `diamiss`, `diashort`, `diahiber`; `desksc`, `deskitem`, `cfgtrip` unchanged |
-| 2 | `os88dia.inc` in full, the calendar's window, grid and navigation, the disks | `diaregister`, `diamove`, `deskcalgrid` |
+| 2 | `os88dia.inc` in full (singleton, anchoring, damaged-file question, kern_small's worker arm), the calendar's window, grid and navigation, `SYSTEM\DIA\` on every system disk | `diaregister`, `diamove`, `deskcalgrid`; `t_dia` E-G |
 | 3 | appointments and tasks | `deskcaledit`, `deskcaltask` |
 | 4 | reminders, kern_small's worker arm, measurement | `deskcalremind`, `diasmall`, `deskcalperf` |
 
@@ -169620,9 +169872,23 @@ state files `tools/os88dia.py` writes, each carrying `DIAPROBE.O88` in
 includes `os88dia.inc`, registers on its first tick, removes by name on close
 and paints one fixed label.
 
+**Wave 2's rows**, on MartyPC's VGA XT off the SHIPPED 360 KB system disk -
+no fixture, because what is on it is what a user has:
+
+| row | asserts |
+|---|---|
+| `diaregister` | double-clicked out of `SYSTEM\DIA`, the calendar opens on `OSAPI_CLK_GET`'s today and registers ONE DIA row; a second double-click is refused by the singleton (`Desk Calendar is open`, `LD_EABORT`, nothing written, SYSTEM.CFG unchanged); the close box removes the row and saves a 2,456-byte state file holding its place; a reset brings nothing back |
+| `diamove` | a drag is saved within two polls, with the 640x480 screen; after a RESET the boot relaunches it at the dragged place, holding no cell |
+| `deskcalgrid` | the 42-byte grid read out of the guest's bss is Python `calendar`'s for Oct 2026, Feb 2028, Mar 2028 (by PgDn), Jan 1980 and Dec 2099, each reached by setting the machine's clock and pressing `T`; past either end the step is refused and the other way still moves |
+
 **`t_dia`** (fast tier) is what keeps that include honest between MartyPC
 runs: it runs `tools/os88dia.py --selfcheck`, assembles `diaprobe.asm` (so
 `os88dia.inc` is assembled by every `make`, where before only `make diatest`
 did), and holds the DIA header's offsets in `os88dia.inc` equal to the host
 tool's. `t_mirror` holds the host tool's copies of `CFG_FBUF`, `DESK_SC0` and
-`DVOL_MAX` against the kernel's.
+`DVOL_MAX` against the kernel's. Wave 2 adds three legs: every shipped SYSTEM
+image carries `SYSTEM/DIA/DESKCAL.O88` byte for byte (the four geometries, and
+the small pair and `emu.img` when their own targets have built them since the
+package), NO data image carries a DIA, and the calendar's payload layout, its
+bss fields and the include's `dia_st` - evaluated by NASM from the package's
+own source - equal `tools/os88dia.py`'s.

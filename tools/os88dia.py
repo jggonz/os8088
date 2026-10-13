@@ -79,6 +79,31 @@ APPT_REMIND, APPT_FIRED = 1, 2
 TASK_DONE, TASK_DATED = 1, 2
 TIME_ALLDAY = 0xFFFF
 
+# --- where a RUNNING package keeps things, as offsets past its image ---------
+# The gates read these out of a live guest (tests/deskcalgrid.py, diaboot.py
+# and their kin); tests/unit/t_dia.py has NASM evaluate the package's own
+# equs and holds these equal, so a moved field fails `make` and not a soak.
+DESKCAL_DIA_BSS = 112           # deskcal.asm's DC_BSS: its own state first
+DESKCAL_BSS_GRID = 0            # 42 bytes, the month on show
+DESKCAL_BSS_Y = 42              # dw the year on show
+DESKCAL_BSS_M = 44              # db its month
+DESKCAL_BSS_SEL = 45            # db the selected day
+DESKCAL_BSS_TY = 46             # dw today's year
+DESKCAL_BSS_TM = 48             # db ...month
+DESKCAL_BSS_TD = 49             # db ...day
+
+
+def dia_st_off(dia_bss, paylen):
+    """os88dia.inc's dia_st, as an offset past the image: the DIA header,
+    the payload, the 128-byte row, the 13-byte name, the banked folder word
+    and its drive byte."""
+    return dia_bss + DIA_HDR_SIZE + paylen + SC_REC + 13 + 2 + 1
+
+
+def dia_hdr_off(dia_bss):
+    """The DIA header in the package's bss (os88dia.inc's dia_file)."""
+    return dia_bss
+
 
 class DiaError(ValueError):
     pass

@@ -398,8 +398,13 @@ def packages():
     """
     mk = re.sub(r"\\\n\s*", " ", read("Makefile"))
     mvars = make_vars(mk)
+    # ...OR the system disk's own SYSTEM/ and SYSTEM/DIA/ (SPEC.md 92, 107):
+    # The Wire and the Desk Calendar ride every system floppy and no apps
+    # disk, so the everything-set alone called both "built by its own target
+    # only", which is the one thing neither is
     shipped = set(re.findall(r"\$\(BUILD\)/([a-z0-9]+)\.o88",
-                             make_expand("$(ALLAPPSFILES)", mvars)))
+                             make_expand("$(ALLAPPSFILES) $(SYSAPPS) "
+                                         "$(DIAAPPS)", mvars)))
     retired = set()
     rp = os.path.join(ROOT, "apps", "RETIRED.txt")
     if os.path.exists(rp):
@@ -597,7 +602,8 @@ def build():
       "shortest package that uses it is usually the fastest answer. "
       "*ships* is **retired** for a package apps/RETIRED.txt retires "
       "(SPEC.md 20.16), and otherwise whether a shipped floppy carries it (the `make allapps` "
-      "payload, SPEC.md 19.10); a `no` is built by its own target only.")
+      "payload, SPEC.md 19.10, or the system disk's `SYSTEM/` and `SYSTEM/DIA/`); "
+      "a `no` is built by its own target only.")
     w("")
     w("| package | source | SPEC | ships |")
     w("|---|---|---|---|")
