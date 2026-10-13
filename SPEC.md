@@ -62591,6 +62591,23 @@ untouched. DSR and DRR can change between reads, so only the six undefined
 bits (`and 3Fh`) are compared. **38 bytes of `SOUND.DRV`, no kernel byte**;
 `tests/netcoexist.py`'s `sndtick` arm is the gate (§72.9.1).
 
+#### 34.13.2 READY does not probe again
+
+`DRVV_READY` arrives straight after `DRVV_ATTACH` (§51.2.2) and `snd_entry`
+answers it with the table ATTACH built. It used to jump to `.nosb`, which was
+the end of the attach body until §34.13 put the MPU's probe there and §34.14
+the Covox's after it. So every load **reset the MPU-401 twice** and ran the
+printer-port latch test twice, and the second pass read the port pin (§51.9.2)
+again, where it could only agree with the first. READY now jumps past all
+three probes. Nothing else changes, and the image is the same size.
+
+It also made a gate weaker than it said it was. With the probe re-run at
+READY, a kernel that **refused** the pin read at ATTACH still ended up with
+the pin's answer in `mpu_base`, because READY's read succeeded. `tests/mpupin.py`'s
+300h case therefore passed on both kernels. Now that ATTACH is the only read,
+that case fails on a kernel with the old `drv_pub_seg` fence, which is what
+the row claims to prove.
+
 ### 34.14 The Covox Speech Thing — a DAC on the parallel port (`SOUND.DRV`, `drivers/sound/covox.inc`, `apps/os88spk.inc`)
 
 **Eight resistors on a printer port.** The Covox Speech Thing (1986) is an

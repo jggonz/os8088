@@ -11759,7 +11759,8 @@ SOAK = [
         "nothing (the search that would have found 330h does not run) and "
         "Off finds nothing with the MPU never reset and not one byte sent. "
         "The 300h and Off cases are also the proof that OSAPI_DRV_CFG "
-        "answers from DRVV_ATTACH: refused there, both would read 330h",
+        "answers from DRVV_ATTACH: refused there, both would read 330h - "
+        "true only since READY stopped re-probing (SPEC.md 34.13.2)",
         needs=("marty", "nasm"), serial=True,
         wants=("build/midisys720.img",)),
     Row("ethcfg", "soak", py("tests/ethcfg.py"), 90.0,
