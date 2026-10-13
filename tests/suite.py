@@ -8826,6 +8826,40 @@ SOAK = [
         "holds that link is REFUSED and the row stays, and Remove takes the "
         "cell, the claim and the trailer away again.",
         needs=("marty",), timeout=600, wants=("build/deskitem360.img",)),
+    Row("diaboot", "soak", py("tests/diaboot.py"), 17.0,
+        "SPEC.md 107.4: a DESKTOP INTEGRATED APPLICATION comes back at boot. "
+        "`make diatest`'s restore disk holds one DIA row (written by "
+        "tools/os88dia.py) and DIAPROBE.DAT: the probe is up with the desktop "
+        "at (303,184), where its state file put it; its row holds NO cell; "
+        "its first tick registers it and, the row being byte-identical, "
+        "SYSTEM.CFG is the fixture to the byte; and its close box removes the "
+        "row BY NAME (AH = 0xFF) - no trailer left, the state file untouched.",
+        needs=("marty",), timeout=600, wants=("build/diarestore360.img",)),
+    Row("diamiss", "soak", py("tests/diamiss.py"), 21.0,
+        "SPEC.md 107.4: a DIA that cannot be found is a graceful failure. "
+        "ghost: a row to SYSTEM\\DIA\\GONE.O88 ahead of the probe's - the "
+        "desktop, ONE `Shortcut not found (A:)`, the missing row DOWNGRADED "
+        "in memory to a placed, captioned shortcut, and the probe behind it "
+        "still launched. bvol: a row on B: with no disk there - `(B:)`, the "
+        "same downgrade, nothing launched. SYSTEM.CFG unwritten by either.",
+        needs=("marty",), timeout=900,
+        wants=("build/diaghost360.img", "build/diabvol360.img")),
+    Row("diashort", "soak", py("tests/diashort.py"), 15.0,
+        "SPEC.md 26.8.1/107.2, the regression for +3: SPEC.md called the "
+        "byte spare and every drag-made shortcut carries `\\` there. Three "
+        "such shortcuts and no DIA row: each SHOWN in its own cell (the "
+        "table byte, and its pixels against a free cell's), each +3 still "
+        "`\\`, nothing launched - a mark tested as non-zero would hide all "
+        "three.",
+        needs=("marty",), timeout=600, wants=("build/diashort360.img",)),
+    Row("diahiber", "soak", py("tests/diahiber.py"), 15.0,
+        "SPEC.md 107.4: a pending RESUME stands the relaunch down. A hard "
+        "disk of this process's own with HIBERNAT.PTR in its root, so "
+        "hb_probe posts UI_RBQ_ASK: dia_boot is entered with [ui_rebootq] = "
+        "5, and twenty guest seconds later no DiaProbe has launched and its "
+        "row still carries the mark - kept for the next ordinary boot.",
+        needs=("marty",), serial=True, timeout=900,
+        wants=("build/diahiber360.img",)),
     Row("curdisk", "soak", py("tests/curdisk.py"), 240.0,
         "SPEC.md 7.4: the arrow TRACKS the hand through a disk transfer. It "
         "used to freeze with the machine and then LEAVE THE SCREEN - once an "

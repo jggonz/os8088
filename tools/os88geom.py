@@ -218,6 +218,9 @@ _MIRROR = {
     "DSL_GONE": ("kernel/desk.inc", 0x80),
     # kernel/desksc.inc - one LINK row, which is OSAPI_DESK_ITEM's record too
     "SC_REC": ("kernel/desksc.inc", {"big": 128}),   # OS88_SHORTCUTS: big only
+    # ...and the rows the table never exceeds - tests/desksc.py's and
+    # tools/os88dia.py's (SPEC.md 107) copies are checked against it
+    "SC_MAX": ("kernel/desk.inc", {"big": 15}),
     # kernel/disk.inc - the volume table (SPEC.md 18.7)
     # PER ARM (SPEC.md 51.0): kern_small can load no driver, so it can have no
     # DVK_DRV volume, so every volume it will ever have is one of the four

@@ -2070,6 +2070,14 @@ that row:
 the whole image is already in memory and the gesture runs in it, at the same
 offset, and leaves it loaded. Otherwise the core is loaded, run and dropped.
 
+**The core carries §107.2's DIA rules**, because the core is what writes the
+trailer they live in: `sc_m_add` stores +3 = 0 on any record that is not a
+DIA record, refuses a DIA record whose KIND is not 1, finds an existing DIA
+row by its path's final component and updates it in place or — byte-identical
+— answers its zone and writes NOTHING, and gives a DIA row no cell and no
+`desk_free` refusal; `sc_m_pdel` takes AH = 0xFF as "find the DIA row by
+name". `MODS_SIZE` grows by what that costs (§107.6) and no resident byte.
+
 **CTRL.DRV ships PLAIN on kern_big** (`os88mod.py --plain 0`). It packed to
 90%, so it costs two sectors of disk, about what the decode it no longer
 pays (~85 ms) would buy. kern_small has no shortcuts, so it has no core row,
@@ -38387,6 +38395,13 @@ folder rule with nothing to tolerate: the default is the shipping
 configuration, and the file exists so that a gate can point one machine at a
 host server (`make thewiretest`) and a user can point theirs at a mirror.
 Nothing on the machine writes it.
+
+**A DIA's state file is the fourth** (§107.5): `SYSTEM\APPDATA\DESKCAL.DAT`
+for the Desk Calendar, its window's place and the screen it was saved on
+ahead of its appointments and tasks, under a 16-byte DIA header that
+`apps/os88dia.inc` owns. It is on the widget's own volume like every other
+one here — which, a DIA living in the BOOT volume's `SYSTEM\DIA\`, is the
+system disk.
 ### 19.10 The everything set — `apps-all-N.img`, every program on as many floppies as it takes
 
 The shipped apps floppy is built in four geometries (§19) and carries the
@@ -38826,8 +38841,10 @@ jump cells and the one far cell. Its last change (C3, below) then made fifteen
 cells **inline** and took the table to **1,093 bytes**: 43 plain SLOTs and 11
 X cells hot, 95 rare cells, 15 inline cells, six jump cells and the far cell.
 `OSAPI_FILE_READ_SEQ` (18.4.8) and `OSAPI_FSX_SPK` (34.11) have since added a
-96th and a 97th rare cell, **1,105 bytes**, which is what `kernel.asm`'s length
-guard asserts from the counts.
+96th and a 97th rare cell, **1,105 bytes**; `OSAPI_FILE_WRITE_SEQ` (18.4.9) a
+98th, 1,111; and `OSAPI_CLK_GET` (§37.96, at `0x0467`) a 99th, **1,117
+bytes**, which is what `kernel.asm`'s length guard asserts from the counts.
+`osapi_table_end` is `0x046D`.
 Those counts are the tree it landed on, not a contract; `t_api_abi` prints
 the span it walked.
 
@@ -48801,6 +48818,11 @@ than derived is a list that goes stale the first time anything is swapped in
 it — which is an argument for §24.5.6's shape as much as a correction, since a
 disk that takes the WHOLE payload has no curated list to go stale.)
 
+**`SYSTEM\DIA\` rides the small system disks too** (§107.7). A DIA needs no
+driver and a few KB of heap, so none of §24.5's three grounds applies; what
+kern_small lacks is the autostart, not the widget, and a widget launched by
+hand there keeps its place and its data in its own state file.
+
 #### 24.5.3 …and the readers left with nothing to read
 
 §24.5's two data files come off because **the program that opens them is not
@@ -50617,7 +50639,7 @@ there would be nothing to keep one in.
 | 0 | 1 | the volume index (0 = A:), `0xFF` = a free row |
 | 1 | 1 | its byte of `[desk_zslot]` — in the FILE only: CTRL.DRV writes it from the table and the boot reader puts it back (§26.8.6) |
 | 2 | 1 | the kind: 0 document, 1 package, 2 folder (§19.1's type word) |
-| 3 | 1 | spare |
+| 3 | 1 | NOT spare, whatever this table said until §107: `\` (0x5C) on a shortcut dragged out of a Disk window — `sc_m_new` writes the path one byte early so `dsk_path`'s leading separator lands here — 0 on a package's link (`sc_m_add` stores it), and **`'D'`** (0x44) on a DIA row (§107.2). The DIA mark is an EQUALITY, so neither of the other two values can be read as one |
 | 4 | 45 | the entry's path BELOW THE ROOT, `APPS\CALC.O88`, NUL: `dsk_path`'s 32-byte folder path less its leading `\`, a `\` and an 8.3 name |
 | 49 | 13 | the caption, NUL |
 | 62 | 2 | `db 1, 16`: an icon record's header, so header and body ARE a record and the picture draws straight out of the claim |
@@ -50743,6 +50765,11 @@ then dispatch.
   thing. The letter is patched into the string before each toast,
   `desk_lbl_gen`'s way, and the 23 characters are exactly a toast's room. A
   package that will not load gets `ld_say_status`'s verdict.
+- **`sc_open` answers CF** (§107.4): CF = 1 iff the walk found no volume,
+  folder or file, after the toast; CF = 0 for everything else, a load the
+  loader REFUSED included (its sentence is the answer, and the target is
+  there). `desk_open`'s `jmp sc_open` ignores it; `dia_boot` is what reads
+  it, and downgrades a DIA row on CF = 1.
 
 **Remove** has three routes and one door, `SC_OP_DEL`:
 
@@ -50912,7 +50939,10 @@ The ZONE INDEX says what the item is: 0..`DVOL_MAX`−1 the volumes, `DESK_SVZ`
 = 8 the service item, `DESK_SC0` = 9 .. `DESK_NZ`−1 = 23 the shortcuts.
 kern_small has only the volumes, so its `DESK_NZ` is `DVOL_MAX`. "Is it
 live" is `desk_live`: a volume's `DV_FLAGS` bit 0, the service item's
-`[desk_svc_seg]`, a shortcut's row. `desk_owner` answers the inverse, which
+`[desk_svc_seg]`, a shortcut's row — unless that row carries §107.2's DIA
+mark, `'D'` at +3, which is a remembered WIDGET and not an icon: it is never
+live, so it holds no cell and is never painted or hit. That test has to be
+resident, on the reflow's own path, which never touches a disk. `desk_owner` answers the inverse, which
 zone a cell is showing.
 
 **A cell no screen has is DSL_SLOT itself**, 63, which `[desk_ncell]` is
@@ -50942,6 +50972,12 @@ to the reflow whatever it is. **A WISH IS A REMEMBERED CELL**: `OSAPI_DESK_ITEM`
 writes the asked-for cell as `DSL_PIN | DSL_GONE | cell` and pass 2 grants it
 if it can — "the slot you ask for, or the first available" is this routine
 and nothing new.
+
+**A DIA row is not live** (§26.9.2, §107.2), and its table byte is 0xFF, so
+the reflow never gives it a cell; rule 1's "a non-live row holds nothing" is
+the whole of its handling here. A row `dia_boot` downgrades (§107.4) loses
+its mark and so becomes live, and the reflow then places it like any new
+shortcut: the first free cell, pinned.
 
 **NOTHING HAPPENS UNTIL `[desk_ready]`.** The boot reads SYSTEM.CFG — the
 placed cells — and then the drivers add their volumes one at a time; a pass
@@ -51046,13 +51082,17 @@ SERVICE item, and anything else is a PACKAGE and adds a LINK.
                    +0   1  the volume, 0 = A:
                    +1   1  the cell it would like, 0xFF = the first free
                    +2   1  0 document, 1 package, 2 folder
+                   +3   1  'D' (OSAPI_DIA_MARK): a DIA row (§107.2) -
+                           KIND must be 1. Anything else is stored as 0
                    +4  45  the path BELOW THE ROOT, NUL
                    +49 13  the caption, NUL
                    +62  2  the kernel's - whatever is there is overwritten
                    +64 64  the 16x16 picture (§25's body form)
        AH    = (a package's remove) the zone its add returned, and ES:SI
                the record it added: the row goes only while its volume
-               and path are still that record's
+               and path are still that record's. AH = 0xFF: the DIA row
+               whose path's FINAL component is the record's (§107.2) -
+               found by name, then the same check
   out  CF = 0 AL = the item's ZONE (an add)
        CF = 1 refused: a second service item, a withdraw of somebody
               else's, a full desktop or table, no system disk, a link
@@ -51075,6 +51115,14 @@ validated: both strings are force-terminated and the picture's header is
 stamped `1, 16`, so a hostile record can mislead nobody but its own user.
 A kind above 2 or a volume past `DVOL_MAX` is refused, because those would
 send the open somewhere no code path goes.
+
+**A DIA record** (+3 = `'D'`, §107.2) is the same call with three differences
+the settings core makes: an add of a widget that already has a row is an
+UPDATE in place when its volume or path changed and a no-op that writes
+nothing when neither did; it is not refused by a full desktop and takes no
+cell (`[desk_zslot]` 0xFF); and its remove may name it by its final path
+component instead of a zone, AH = 0xFF, because a zone does not survive a
+boot. A DIA record whose KIND is not 1 is refused.
 
 **From a WINDOW CALLBACK only**, never a worker: the add loads `CTRL.DRV` and
 writes SYSTEM.CFG, and a worker may not touch a file (§20.6 rule 7).
@@ -63604,6 +63652,39 @@ without `make BOOTMARK=1`.
 
 **48 and not 40**, because `mouse.inc` owns 40 to 47 and two marks in one
 column is a row nobody can read.
+
+### 37.96 `OSAPI_CLK_GET` — the date and time a package may read
+
+Until §107 the SDK had **no date at all**: `OSAPI_GET_TICKS` is a tick count,
+the menu bar's clock is the kernel's to draw, and the `'CK'` debug block
+(§37.92) is closed to shipped code (§57.3 rule 1). A calendar needs the day.
+So one RARE cell, appended at the end of the table on both kernels:
+
+```
+OSAPI_CLK_GET   KERNEL_SEG:0x0467
+  in   nothing
+  out  CX = the year (1980..2099)    DH = the month (1..12)   DL = the day
+       BH = the hour (0..23)         BL = the minute          AH = the second
+       AL = flags: bit 0 = a hardware RTC was found (clk_rtc),
+                   bit 1 = the user chose 12-hour display (clk_h12)
+       CF = 0; every other register preserved
+```
+
+- **It reads the LIVE fields under `cli`**, two words and three bytes, and
+  deliberately does not call `clk_snapshot`: the `clk_sn_*` copy belongs to the
+  menu bar's formatters (§37), and a package refreshing it would race their
+  next format. `clk_min`/`clk_hour` and `clk_day`/`clk_mon` are read as words,
+  which the field-order assertion beside them pins.
+- **The UI task is the only writer** (the clock above), so a read from the UI
+  task — an entry proc, a window callback, an ONWAKE handler — is always
+  consistent. A worker may call it and must accept a torn read across a
+  rollover.
+- **Bit 1 is display advice, not a conversion**: the hour is always 0..23.
+- **kern_small has the cell and the body**, its `clk_rtc` is 0 (§37.0.1's PIT
+  clock), so a package there can say "clock not set".
+- A package that calls it **ships beside its own kernel**: an older kernel at
+  the same `PKG_FMT` has no 0x0467 (§20.2.0.1's open gap), which is why the
+  Desk Calendar is not offered on The Wire (§107.8).
 
 ## 38. fdlg.inc — the Standard File dialog
 
@@ -85444,6 +85525,14 @@ page. The `[cp_sel]`-before-`KIND_CTRL` precedent is the menu bar clock's
 
 A machine with **no system disk at all** is not told about drivers it never
 enabled: only a row whose `DRVR_WANT` is set counts as a failure.
+
+**`dia_boot` is the first thing kern_big's `drv_notice` does** (§107.4):
+every DIA row SYSTEM.CFG put back is launched through `sc_open`, in this
+routine's context — painted desktop, no lock, the boot disk in A: — which is
+`OSAPI_PKG_START`'s own. It goes BEFORE the Control Panel's notice so a
+driver-failure panel opens in front of the widgets rather than behind them,
+and it stands down entirely while `[ui_rebootq]` holds a resume or DOS
+question. kern_small's `drv_notice_x` is the `retf` stub and calls nothing.
 
 **`.nodisk` sits below the load loop, so the loop must JUMP OVER IT**, and
 for one release it did not. §32's double-buffering removal deleted a
@@ -168885,3 +168974,353 @@ a look apart agree, and says so when they did not - and in five runs alone
 afterwards it said so in every one, the pixels that moved the status bar's
 `Memory:` digits (the CGA's 368-390 x 165-171, the VGA's 464-486 x 475-481)
 and the menu bar's clock: the cause, seen. All five passed.
+
+## 107. Desktop Integrated Applications (`SYSTEM\DIA\`, `apps/os88dia.inc`)
+
+A **DESKTOP INTEGRATED APPLICATION** — a DIA, a widget — is a small program
+that belongs to the desktop rather than to a document: the Desk Calendar
+(§107.3) is the first. The ask was four things at once: it can be put
+anywhere on the desktop; the desktop remembers it between boots, from where
+it was last launched; a widget that cannot be found is a graceful failure and
+not a stopped boot; and it is "modularized like the dock" while changing the
+kernel as little as possible.
+
+So a DIA is **not a new kind of program**. It is an ordinary `.O88` package
+(§20) with three properties, and every one of them is a reuse:
+
+1. it ships in **`SYSTEM\DIA\`** on the boot volume — a folder, not a header
+   flag and not a registry file;
+2. it includes **`apps/os88dia.inc`**, shared as SOURCE in `os88ui.inc`'s
+   shape, which owns its position, its state file's header and its presence;
+3. while it is open, the **desktop configuration** — §26.8.6's SYSTEM.CFG
+   trailer, the one that already keeps every desktop icon — holds one **DIA
+   ROW** for it (§107.2), and the kernel relaunches it from that row at boot
+   (§107.4).
+
+**"Like the dock" is the §2.8 lesson, not its vehicle.** DOCK.DRV is an
+on-demand module: what is resident is tests and thunks, and everything that
+touches a file is read from the system disk when it is asked for. Here the
+file-writing half — add, update and remove the row, and write SYSTEM.CFG —
+goes into the module that ALREADY owns that trailer, `CTRL.DRV`'s settings
+core (§2.8.7, §26.8.7). What stays resident is a liveness test, a carry bit
+and a boot loop, which is less than one new module's plumbing would have
+cost, and a new module would have cost a disk read on every boot just to
+learn there was nothing to do. A §51 DRIVER cannot do the job at all: a
+driver attaches inside `drv_boot` before `ui_task` exists, cannot reach
+`OSAPI_PKG_START`, and its worker may not touch a file (§20.6 rule 7).
+
+The design record is the DIA design note this wave was built from; what the
+code proved it wrong about is recorded where it bound (§107.9).
+
+### 107.1 What a DIA is, and where it lives
+
+```
+A:\SYSTEM\DIA\DESKCAL.O88        the package; LZ4-packed by PKGZ like any other
+A:\SYSTEM\APPDATA\DESKCAL.DAT    its state (§19.9), written at runtime, never shipped
+```
+
+- **`SYSTEM\DIA\`** is on the BOOT volume, the THEWIRE rule (§92): a widget
+  belongs to the disk the machine booted from, so it rides no apps disk.
+- **Each DIA keeps to ONE APPDATA file.** `SYSTEM\APPDATA` holds ~14 entries
+  on a 1.44 MB or 1.2 MB root (FERR_DIRFULL, §18.5).
+- **A DIA is a normal window in this version** (§107.8): title bar, frame,
+  shadow, a dock tile, raised by a click. "Placed wherever" is a window drag;
+  §11.94's snap applies to it as to every window.
+- `apps/os88dia.inc` is the framework (§107.5): it loads the state file in the
+  entry proc — legal there, because the entry proc is stamped with its
+  instance (`kernel/loader.inc`'s note; §20.12) — places the window, and on
+  its first timer tick registers the DIA row. On close it removes the row by
+  NAME and saves.
+
+### 107.2 The DIA row
+
+A DIA row is a §26.8.1 shortcut record with two bytes pinned:
+
+| off | value | meaning |
+|---|---|---|
+| +2 (KIND) | `1` | a package — a DIA row of any other kind is refused |
+| +3 | **`'D'`** (0x44, `SC_DIA` / `OSAPI_DIA_MARK`) | the DIA MARK |
+| +1 (in memory) | `0xFF` in `[desk_zslot]` | no cell, never shown |
+
+**+3 was never spare, and the mark is an EQUALITY.** §26.8.1 called it spare,
+and every shortcut a user has ever dragged out of a Disk window carries `\`
+(0x5C) there: `sc_m_new` writes the path one byte before the field so
+`dsk_path`'s leading separator lands on it (§26.8.1 now says so). A link a
+package adds through `OSAPI_DESK_ITEM` carries whatever the package put at
++3. So a test of "+3 non-zero" would have hidden every drag-made shortcut on
+every disk at the next boot; the mark is `'D'` exactly, which neither `\` nor
+0 can be, and `sc_m_add` stores 0 at +3 of every record that is NOT a DIA
+record, so an old package's junk at +3 can never become a mark.
+
+**One row per widget, by NAME** (`sc_m_add`'s DIA arm, §2.8.7):
+
+- **add-or-update.** A DIA add first looks for a live row with the mark
+  whose path's FINAL COMPONENT equals the record's (`DESKCAL.O88`). If that
+  row is byte-identical in VOL and PATH, the add answers its zone and
+  **writes nothing** — so the widget may register on EVERY launch (it does:
+  a registration made only when the state file said "not open" goes stale
+  the first time a boot downgrades a row the package never saw). If it
+  differs, the record is copied over that row in place: **where it was LAST
+  launched from wins.** Otherwise it claims a row as any add does.
+- **no cell.** A DIA row skips the add's `desk_free` refusal (a full desktop
+  does not stop a widget being remembered) and its `[desk_zslot]` byte is
+  `0xFF`. `desk_live` answers "not live" for it (§26.9), so the reflow gives
+  it no cell and the paint and the hit test never see it.
+- **remove-by-name.** A package's remove with **AH = 0xFF** (§26.9.6) means
+  "the DIA row whose final component is my record's": the zone is found by
+  name, then the existing VOL + PATH check runs and matches. Zones renumber at
+  every boot because `ovl_sc_load` compacts the rows (§26.8.6), so a package
+  cannot hold its zone across a boot, and this is what makes the close work.
+- It shares §26.8.1's fifteen rows with the user's shortcuts. A full table
+  answers `Too many shortcuts`, the module's existing sentence: the widget
+  runs and is not remembered.
+- `SC_VER` stays 2. An OLDER kernel reads a DIA row as a plain package
+  shortcut and draws a Calendar icon in a cell, which is harmless.
+
+`'D'` is a byte in a record the kernel already copies verbatim — `ovl_sc_load`
+moves rows with `rep movsb` and `sc_m_add` with `rep movsw` — so the mark costs
+**no boot-overlay byte at all**, where a new KIND would have (`ovl_sc_load`
+turns a kind above 2 into a free row, and the blob has ~26 bytes left).
+
+### 107.3 The Desk Calendar (`apps/deskcal/`)
+
+The first DIA: a monthly calendar, a day's appointments, task checkboxes and
+reminders, two-colour on every adapter. It is built in the waves after the
+kernel half (§107.10) and this section is written with it; until then
+`tests/diaprobe/` is the only package that carries the mark.
+
+### 107.4 The boot relaunch: `dia_boot`, and what a failure looks like
+
+`dia_boot` (`kernel/desksc.inc`, `.cold`, kern_big) is the first thing the
+kern_big `drv_notice_x` does (§51.3) — after the first desktop paint, with no
+lock held, task 0 about to become `ui_task` and A: still the boot disk, which
+is exactly `OSAPI_PKG_START`'s context. It is FIRST so that a driver-failure
+Control Panel still opens in front of the widgets.
+
+```
+dia_boot:       [ui_rebootq] != 0  -> nothing (a resume or DOS question is up)
+                [sc_nrows] = 0     -> nothing (no row, no I/O)
+                for each row: +3 = 'D' and KIND = 1 ->
+                    sc_open; CF = 1 (not found) -> +3 := 0, desk_reflow
+```
+
+- **A machine with no DIA row pays one compare and a `jcxz`** and reads
+  nothing. A machine with one pays the path walk, the package read and
+  whatever the package's entry proc reads (§107.6).
+- **`sc_open` answers CF now** (§26.8.5): CF = 1 iff the walk found no
+  volume, folder or file. A load REFUSAL (memory, version) is CF = 0 — the
+  loader's own sentence has been said, and the row is KEPT for next time.
+- **A miss DOWNGRADES the row to the shortcut it is**, in memory: +3 becomes
+  0, `desk_reflow` gives it the first free cell, and it is pinned there like
+  any shortcut. The user sees ONE toast, the existing `Shortcut not found
+  (A:)` with the drive patched in, and a desktop icon captioned with the
+  widget's name — which they can double-click to try again or Delete. The
+  next SYSTEM.CFG write persists the downgrade. Several misses are several
+  icons and one toast (single slot, last wins, §59.3).
+- **`desk_reflow` with no lock is safe**: it rewrites `[desk_zslot]` and posts
+  `[desk_cdirty]` and nothing else, never draws, and runs lock-free already
+  from `desk_rowcalc_x` in kmain and from `OSAPI_DESK_ITEM`'s driver half at
+  attach. Nothing else can touch the table at this point: `ui_task` does not
+  exist yet and no package is running.
+- **A pending hibernate or DOS question stands everything down**: `hb_probe`
+  posts `UI_RBQ_ASK` (or `UI_RBQ_DOSRUN`) before this runs, and the image is
+  the session, so a Resume brings the widgets back as they were. A Discard
+  leaves them for the next boot.
+
+| case | what the user sees | the row |
+|---|---|---|
+| file deleted or renamed, `SYSTEM\DIA` gone, or a file where a folder was | `Shortcut not found (A:)` and a captioned icon in a cell | downgraded, in memory; the next SYSTEM.CFG write keeps it so |
+| launched from B:, booted with no disk in B: | the same, naming `(B:)` | the same |
+| a hard-disk install: a row recorded against A: | the same — a row's VOL is a volume index, which is existing shortcut semantics (§26.8.1) | the same |
+| load refused (memory, version) | `ld_say_status`'s sentence | KEPT |
+| state file missing / damaged / position off this screen | the package's own answers (§107.5) | — |
+| hibernate or DOS question pending | nothing is launched | — |
+
+**The boot always reaches the desktop.** Nothing on this path can stop it:
+every refusal is a toast or a downgrade.
+
+**A Restart does not close windows** (§12.3), so an open widget stays
+registered across a Restart, which is what "restore it between bootups" asks.
+A Task Manager kill also leaves the row, so a killed widget comes back at the
+next boot. Only its own close removes it.
+
+**A hostile SYSTEM.CFG can mark any package row `'D'`** and have it start at
+boot. That is accepted: SYSTEM.CFG is hidden + system on the boot disk
+(§19.6), and whoever can write it can write `KERNEL.SYS`.
+
+### 107.5 `os88dia.inc`, the DIA header and the state file
+
+The DIA's state file is `SYSTEM\APPDATA\<NAME>.DAT` on its OWN volume (§19.9's
+rule: `OSAPI_FILE_HERE`'s `BL`), reached bank, walk, act, walk back. It is a
+16-byte DIA header owned by `os88dia.inc`, then the application's payload.
+
+| off | size | field |
+|---|---|---|
+| +0 | 2 | `'DA'` |
+| +2 | 1 | header version, 1 |
+| +3 | 1 | flags: bit 0 = the position is valid |
+| +4 | 2 | the frame's x (`W_X`) |
+| +6 | 2 | the frame's y (`W_Y`) |
+| +8 | 2 | the screen's width when it was saved |
+| +10 | 2 | the screen's height when it was saved |
+| +12 | 1 | the payload's version (`DIA_PAYVER`) |
+| +13 | 1 | 0 |
+| +14 | 2 | the payload's length: must equal `DIA_PAYLEN` AND the file's size − 16 |
+
+A file that is not exactly that is refused whole — missing is "defaults",
+damaged is "run empty, never overwrite silently". **`tools/os88dia.py`** is
+the independent host reader and writer of both this header and the SYSTEM.CFG
+trailer's DIA row, `--selfcheck` round-trips them, and every fixture the
+gates boot is written by it.
+
+**The framework's calls**, at the package's own points (W1 ships the subset
+the probe needs; §107.10):
+
+| call | when | what |
+|---|---|---|
+| `dia_load` | the entry proc, before `OSAPI_WM_CREATE` | copy the 8.3 name; bank `OSAPI_FILE_HERE`; walk to `SYSTEM\APPDATA`; read and validate the file; place the template |
+| `dia_made` | after `OSAPI_WM_CREATE` | install `OSAPI_WM_ONTIMER` and `OSAPI_WM_ONCLOSE`; arm a 1-tick timer |
+| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and saves once two polls agree; re-arms for 36 ticks |
+| `dia_close` | `W_ONCLOSE` | remove the row by name (AL = 0, AH = 0xFF); save; let the close proceed |
+
+A registration that is refused (no system disk in A:, a full table,
+kern_small) leaves the widget running and unregistered; `CTRL.DRV`'s own toast
+is the only message.
+
+### 107.6 What it costs
+
+The kernel half, measured by `tools/kernsize.py` against the tree it was cut
+from (2f6a0a88), on all three shipped kernels:
+
+| | `.text` | `.cold` | `.bss` | `.ovl` | rungs left after (before) |
+|---|---:|---:|---:|---:|---|
+| kern_big | **+6** | **+116** | 0 | 0 | image 194 (200), cold 346 (462) |
+| kern_emu | +6 | +116 | 0 | 0 | image 441 (447), cold 222 (338) |
+| kern_small | **+6** | **+32** | 0 | 0 | image 315 (321), cold 65 (97) |
+| `CTRL.DRV`'s settings core (`MODS_SIZE`, on demand) | | | | | 2,492 → **2,673** bytes: 5 sectors → **6** |
+
+The `.text` is the one rare cell. kern_small's `.cold` is `osapi_clk_get_x`
+alone; kern_big's adds `desk_live`'s mark test, `sc_open`'s two carry bits
+and its folder arm's, `dia_boot` and its call. **No rung was crossed on any
+kernel.** The settings core DID cross a sector: one more sector inside a
+cylinder run is about one revolution's worth of transfer, no extra `int 13h`
+call (§18.91.1), paid on every desktop gesture's core load.
+
+Nothing else moved: no `.bss`, no boot-overlay byte, no new module, no new
+SYSTEM.CFG key, and no `PKG_FMT` or `DRV_VER` bump — `OSAPI_CLK_GET` is a
+cell appended at the end, which §20.2.0.1 records without one.
+
+**At runtime**, a machine with no DIA row pays one byte compare and a `jcxz`
+at boot. Each autostarted widget adds its path walk, its package read, its
+state file's walk and read, and on its first tick the settings core's read
+(1-2 `int 13h` calls) for a compare that writes nothing — roughly 8-10 calls,
+3-4 s on a 4.77 MHz floppy machine. First registration and close each write
+SYSTEM.CFG once.
+
+### 107.7 `kern_small`
+
+kern_small reads no SYSTEM.CFG (§51.5), has no shortcuts (`OS88_SHORTCUTS`)
+and its `OSAPI_DESK_ITEM` is the refusal, so **there is no autostart and no
+restore there**, and nothing of §107.2 or §107.4 is compiled. What it does
+have is `OSAPI_CLK_GET` (the cell is in both kernels, §20.8 rule 4; its
+`clk_rtc` is 0, the PIT clock of §37.0.1) and the whole of a DIA's own state:
+a widget launched by hand on kern_small opens where it was left, with its
+data, because both live in its state file. A registration refused there is
+silent. The small system disks carry `SYSTEM\DIA\` too (§24.5.1).
+
+### 107.8 What is not done
+
+- **A desk LAYER.** A DIA is a normal window: it opens on top, a click on a
+  covered one raises it and is swallowed (`ui.inc`'s content press), and it
+  has a dock tile. A layer behind every window, with no raise and no tile, is
+  ~100 resident bytes in hot paths (`wm_lift`, the content press, the dock's
+  tile walk, the drag cache) and waits on the owner's decision.
+- **No chrome removal**: the ten `WF_FULL` sites, a separate decision.
+- **No move notification.** The position is polled every 2 s and written once
+  two polls agree, so a power-off within ~4 s of a drag loses that drag.
+- **No shutdown hook.** Restart and power-off do not close windows; the row
+  stays, which is what restore wants, and the last edit is what the last
+  save wrote.
+- **No relaunch after a hibernate Discard**; the widgets return at the next
+  boot.
+- **Not on The Wire**: a DIA calls `OSAPI_CLK_GET` (0x0467), which an older
+  kernel at the same `PKG_FMT` does not have — the gap §20.2.0.1 names — so it
+  ships only beside its own kernel until a "highest cell used" fence exists.
+
+### 107.9 Where the code proved the design wrong
+
+- The design added `clk_hour - clk_min == 1` to `clock.inc`'s day+month
+  assertion. The first `%if` beside the fields already asserts
+  `clk_min - clk_sec == 1` and `clk_hour - clk_sec == 2`, which is the same
+  fact; `osapi_clk_get_x`'s two word reads are named in its message instead
+  of a third copy of the arithmetic.
+
+- **`dia_boot` is NEAR** (`call dia_boot`, `ret`), not the design's far
+  `dia_boot_x`: both ends are `.cold`, so the far form was two bytes of
+  call for nothing. A future far caller (a hibernate Discard's relaunch,
+  §107.8) gets a one-line thunk then.
+- **It preserves every register** (`kentc_bp` + `es`), because
+  `drv_notice_x`'s contract says it does, and it tests KIND and the mark in
+  ONE word compare.
+- **`sc_open`'s FOLDER arm needed the carry too**: it ended in a
+  `jmp fm_choose` whose flags are nobody's, so a DIA row whose path had
+  become a folder would have been downgraded at random. +2 bytes.
+- **`sc_m_add` checks a DIA record's KIND and VOLUME before it looks for the
+  row by name**, not after the copy as a plain link's are: an UPDATE writes
+  over a LIVE row, and the late refusal frees the row it wrote into.
+- **`osapi_clk_get_x` masks `clk_h12` to bit 0** (+2 bytes): `CFG_H12`
+  reaches it from SYSTEM.CFG, a file's byte.
+- **The settings core grew 181 bytes, not ~100-130**, and the design's
+  starting figure (2,447) had itself grown to 2,492 since it was measured:
+  the core is six sectors now.
+- **The fixture's place is (303,184), not (304,184)**: a snapped window
+  holds `W_X` ≡ 7 (mod 8) (§11.94), so 303 is the fixpoint a save writes
+  back.
+- **`os88dia.inc` lands in wave 1** as the subset the probe needs, rather
+  than only in wave 2, so `diaboot` can assert a RESTORED place; and
+  `DIAPROBE.O88` is built by `make diatest`, `deskitem`'s precedent, rather
+  than `make bench`.
+- **`diahiber` puts `HIBERNAT.PTR` on a HARD DISK**: `hb_pick` asks only a
+  fixed volume, so a floppy fixture cannot post the question. It asserts the
+  ordering with a breakpoint on `dia_boot` reading `[ui_rebootq]`, and not
+  what `HIBER.DRV` then makes of a pointer that is not one.
+- Verified, not changed: `desk_reflow` is safe with no lock (above, §107.4),
+  so the design's deferred `[desk_zdirty]` path was not needed; and
+  `OSAPI_FILE_HERE`'s `BL` is `inst_fdrv`, the volume index a row's +0 holds
+  — `diaboot`'s byte-identical SYSTEM.CFG is that fact measured.
+
+### 107.10 How it was built, and its gates
+
+| wave | what | gates |
+|---|---|---|
+| 1 | the kernel half (K1-K6 below), the SDK, `tools/os88dia.py`, `tests/diaprobe/`, `make diatest` | `diaboot`, `diamiss`, `diashort`, `diahiber`; `desksc`, `deskitem`, `cfgtrip` unchanged |
+| 2 | `os88dia.inc` in full, the calendar's window, grid and navigation, the disks | `diaregister`, `diamove`, `deskcalgrid` |
+| 3 | appointments and tasks | `deskcaledit`, `deskcaltask` |
+| 4 | reminders, kern_small's worker arm, measurement | `deskcalremind`, `diasmall`, `deskcalperf` |
+
+The kernel half, exactly:
+
+- **K1 `OSAPI_CLK_GET`** (§37, §20.3), a rare cell at `0x0467` on both kernels.
+- **K2** `SC_R_DIA` = 3 and `SC_DIA` = `'D'` (kernel) mirrored as
+  `OSAPI_DI_DIA` and `OSAPI_DIA_MARK` (SDK); `t_mirror` holds the pairs.
+- **K3** `desk_live` answers "not live" for a DIA row (§26.9).
+- **K4** `sc_open` answers CF (§26.8.5).
+- **K5** `dia_boot`, first in kern_big's `drv_notice_x` (§51.3).
+- **K6** `CTRL.DRV`'s settings core: `sc_m_add`'s DIA arm and +3 sanitising,
+  `sc_m_pdel`'s remove-by-name (§2.8.7, §26.9.6).
+
+**`make diatest`** builds scratch 360 KB system images whose SYSTEM.CFG and
+state files `tools/os88dia.py` writes, each carrying `DIAPROBE.O88` in
+`SYSTEM\DIA\`:
+
+| image | carries | its row |
+|---|---|---|
+| `diarestore360.img` | a DIA row to `SYSTEM\DIA\DIAPROBE.O88` and a state file placing it at (304,184) | `diaboot`: the probe is up where its state file put it, holds no cell, and SYSTEM.CFG was not written |
+| `diaghost360.img` | a DIA row to `SYSTEM\DIA\GONE.O88` ahead of the restore row | `diamiss`: `Shortcut not found (A:)`, a `GONE` icon in a cell, and the probe still launched |
+| `diabvol360.img` | a DIA row on B:, booted with no B: | `diamiss`: the same, naming `(B:)` |
+| `diashort360.img` | three drag-made shortcuts carrying `\` at +3, no DIA row | `diashort`, the regression for +3: all three drawn, nothing launched |
+| `diahiber360.img` + a hard disk holding `HIBERNAT.PTR` | the restore row | `diahiber`: the resume question is posted and no DIA is launched under it |
+
+`DIAPROBE.O88` (`tests/diaprobe/`, never shipped) is the smallest DIA: it
+includes `os88dia.inc`, registers on its first tick, removes by name on close
+and paints its own x,y.

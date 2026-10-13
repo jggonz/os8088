@@ -2180,7 +2180,7 @@ clk_hour:   resb 1              ; 0..23       |
 clk_day:    resb 1              ; 1..31       |
 clk_mon:    resb 1              ; 1..12       |
 %if clk_min - clk_sec != 1 || clk_hour - clk_sec != 2 || clk_day - clk_sec != 3 || clk_mon - clk_sec != 4
-%error "clock: ctrl.inc's clk_fld_adj finds field f at (4 or 5) - f past clk_sec"
+%error "clock: ctrl.inc's clk_fld_adj finds field f at (4 or 5) - f past clk_sec, and osapi_clk_get_x reads min+hour and day+month as words"
 %endif
 clk_rtc:    resb 1              ; 1 = a usable hardware RTC was found
 clk_dirty:  resb 1              ; 1 = the clock was set; write the RTC
@@ -2316,5 +2316,34 @@ CLK_PROBE_SPAN equ 22
 %if CLK_PROBE_SPAN > 25
   %error "clock: the probe scratch no longer fits clk_str"
 %endif
+
+; -----------------------------------------------------------------------------
+section .cold
+; -----------------------------------------------------------------------------
+; osapi_clk_get - OSAPI_CLK_GET, the date and time a package may read
+;                 (SPEC.md 37.96); far, DS = KERNEL_SEG (api_rsc)
+; out: CX = year, DH = month, DL = day, BH = hour, BL = minute, AH = second,
+;      AL = bit 0 a hardware RTC was found, bit 1 12-hour display; CF = 0
+;
+; THE LIVE FIELDS, under cli, and NOT clk_snapshot: the clk_sn_* copy is the
+; menu bar's formatters', and a package refreshing it would race their next
+; format. The UI task is the clock's only writer, so from the UI task this is
+; consistent; a worker accepts a torn read across a rollover. Two word reads
+; ride the field order the first assertion beside the fields pins.
+; -----------------------------------------------------------------------------
+osapi_clk_get_x:
+    pushf
+    cli
+    mov cx, [clk_year]
+    mov dx, [clk_day]           ; DL = day, DH = month
+    mov bx, [clk_min]           ; BL = minute, BH = hour
+    mov ah, [clk_sec]
+    mov al, [clk_h12]           ; 0 or 1 - but SYSTEM.CFG's CFG_H12 is a
+    and al, 1                   ; file's byte, so bit 0 only. clk_rtc is
+    shl al, 1                   ; only ever stored as 1, by clk_init
+    or al, [clk_rtc]
+    popf
+    clc
+    retf
 
 section .text

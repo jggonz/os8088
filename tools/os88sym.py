@@ -89,7 +89,13 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                # exactly that for XMEM.DRV, SPEC.md 41.12).
                ".modc": None, ".modf": None, ".modl": None, ".modh": None,
                ".modp": None, ".modd": None, ".modk": None, ".modx": None,
-               ".modmap": None}
+               ".modmap": None,
+               # ...and the module halves and bss sections that grew after
+               # the list was written (CTRL.DRV's panel half and buffer,
+               # SPEC.md 2.8.7; HIBER.DRV's and FDLG.DRV's bss): `--all` died
+               # on the first of them, quietly, until SPEC.md 107's wave 1
+               # ran it - the "instruments break silently" pattern
+               ".modu": None, ".modcb": None, ".modhb": None, ".modpb": None}
 # Every section either kernel emits, and the list is the UNION of both builds:
 # `.modh` is hibernate's (SPEC.md 87) and `.modp`/`.modd` are kern_small's
 # (SPEC.md 22.3.0, 38.0), so no kernel emits all six module sections and each

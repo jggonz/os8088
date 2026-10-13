@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "8939601704d8f38c8030d8b68e0c546a698b86d2c74aa6ffa74f2ec19a911214",
+  "fingerprint": "40cf338e03e3e4aabe7f8e2c286474da0fd158e6bc7987764e02c4354857f41b",
   "version": 9
  },
  "PKG_FMT": {
-  "fingerprint": "e1a724541e03d1c3d1d76fd9844b4120d13b96c6734227fe31824ff802927d9c",
+  "fingerprint": "908dbc1a76f92681ab2c93303048d73abc8a58d00804851505a11eef6ec70a0c",
   "version": 8
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -21,6 +21,20 @@
    "from": null,
    "guard": "DRV_VER",
    "reason": "The lock begins at PKG_FMT 8 and DRV_VER 9, the numbers #214 set. This change adds OSAPI_LD_EVER, a constant naming an AL value OSAPI_PKG_START could already return: nothing built before it changes, so no bump.",
+   "to": 9
+  },
+  {
+   "fingerprint": "908dbc1a76f92681ab2c93303048d73abc8a58d00804851505a11eef6ec70a0c",
+   "from": 8,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_CLK_GET appended at 0x0467 (SPEC.md 37.96); OSAPI_DESK_ITEM's record gains the DIA mark at +3 and the remove AH = 0xFF by name (SPEC.md 107.2) - both only add meaning to inputs no earlier package passed, so nothing built before stops running: no bump",
+   "to": 8
+  },
+  {
+   "fingerprint": "40cf338e03e3e4aabe7f8e2c286474da0fd158e6bc7987764e02c4354857f41b",
+   "from": 9,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_CLK_GET appended at 0x0467 (SPEC.md 37.96); OSAPI_DESK_ITEM's record gains the DIA mark at +3 and the remove AH = 0xFF by name (SPEC.md 107.2) - both only add meaning to inputs no earlier package passed, so nothing built before stops running: no bump",
    "to": 9
   }
  ]

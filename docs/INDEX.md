@@ -57,7 +57,7 @@ Read first: [§11 wm.inc — windows](../SPEC.md#11-wminc--windows); [§20 Loada
 
 ### Packages and the desktop
 
-Read first: [§21 loader.inc](../SPEC.md#21-loaderinc); [§26 desk.inc — desktop drive icons](../SPEC.md#26-deskinc--desktop-drive-icons).
+Read first: [§21 loader.inc](../SPEC.md#21-loaderinc); [§26 desk.inc — desktop drive icons](../SPEC.md#26-deskinc--desktop-drive-icons); [§107 Desktop Integrated Applications (`SYSTEM\DIA\`, `apps/os88dia.inc`)](../SPEC.md#107-desktop-integrated-applications-systemdia-appsos88diainc).
 
 | slot | call | takes |
 |---|---|---|
@@ -208,6 +208,7 @@ Read first: [§7 Concurrency model (read carefully — this is the crux)](../SPE
 | `0x009E` | `OSAPI_TASK_YIELD` | give up the time slice |
 | `0x00A6` | `OSAPI_TASK_SLEEP` | AX = ticks to sleep (18 ~ 1 second) |
 | `0x00AE` | `OSAPI_GET_TICKS` | out AX = [ticks] |
+| `0x0467` | `OSAPI_CLK_GET` | out CX = the year (1980..2099), DH = the month (1..12), DL = the day, BH = the hour (0..23), BL = the minute, AH = the second... |
 | `0x012F` | `OSAPI_TASK_SPAWN` | AX = your worker's near entry (a plain `mov ax, my_worker`... |
 | `0x0135` | `OSAPI_TASK_ALIVE` | BX = YOUR window ptr; the gfx lock must NOT be held, and it must be YOUR WORKER calling - never a window callback... |
 | `0x0318` | `OSAPI_TASK_PARK` | a DRIVER's worker parks here for a heap compaction (SPEC.md 66.5.5), the way a package's parks at OSAPI_TASK_ALIVE... |
@@ -290,6 +291,7 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 |---|---|---|
 | `apps/os88ui.inc` | §13, 75 | Buttons, check boxes, radio dots, scroll bars, group boxes, the standard alert, the standard About card and the drop-down. Opt into the alert with `%define OS88UI_ALERT`, the About card with `%define OS88UI_ABOUT`, the scroll bar with `%define OS88UI_SCROLL` and its thumb-drag half with `%define OS88UI_SBDRAG`, and the drop-down - one pick out of a short list, a Macintosh popup's gesture - with `%define OS88UI_DROP` (SPEC.md 13.14). Buttons that carry an ICON_DRAW image in place of a caption, drawn in one write with no ground fill, are `%define OS88UI_BIMG` and the `OS88UI_IMG` flag (SPEC.md 13.8.9); a button whose face the PACKAGE paints, keeping the library's press gesture, is `%define OS88UI_BOWN` and the `OS88UI_OWN` flag (SPEC.md 13.8.10); a package with no check box or radio sheds that code with `%define OS88UI_NOGLYPH`. |
 | `apps/os88alt.inc` | §11.2.1.1 | Alt+Enter, the full-screen key, for a package on SPEC.md 53's BRACKET - where no event is dispatched, so the kernel's synthesised keystroke cannot reach you and your own int 16h poll cannot see the key either. `os88alt_edge` asks the key-state map and finds the edge in it. A package on SPEC.md 11.2's LATCH needs none of this file: one `cmp ax, KEY_ALTENTER` in its W_ONKEY is both directions. Both want `OS88_ALTENTER_ARM` (apps/os88api.inc) in the entry proc, without which the chord is silently dead. |
+| `apps/os88dia.inc` | §107 | A DESKTOP INTEGRATED APPLICATION - a widget that lives in SYSTEM\DIA\ and comes back at the next boot where it was left. Its state file (SYSTEM\APPDATA, a 16-byte DIA header then your payload), its DIA row in SYSTEM.CFG's desktop trailer, registered on the first tick and removed by name on close, and a 36-tick poll that saves the window's place once a drag settles. `dia_load` in the entry proc, `dia_made` after OSAPI_WM_CREATE. |
 | `apps/os88line.inc` | §83 | A one-line text field: caret, horizontal scroll, focus, click-to-position and the editing keys. The caller owns a 20-byte block. |
 | `apps/os88text.inc` | §83 | The multi-line sibling of os88line.inc. Enter inserts a newline; no wrap, no selection, no undo. |
 | `apps/os88chart.inc` | §82 | A 4bpp offscreen canvas and all seven chart types - area, bar, column, line, pie, scatter, combination - plus a BMP writer. Shared by CHART.O88 and Sheet's chart window. |
@@ -484,6 +486,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 103 | REDLINE — CPU and graphics benchmarks (`apps/redline/`) |
 | 105 | MIDIRack — a MIDI file player (`apps/midirack/`) |
 | 106 | PiXEL — an image viewer and editor (`apps/pixel/`) |
+| 107 | Desktop Integrated Applications (`SYSTEM\DIA\`, `apps/os88dia.inc`) |
 
 ## docs/
 

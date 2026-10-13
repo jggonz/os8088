@@ -7304,6 +7304,72 @@ $(BUILD)/deskitem.o88: $(BUILD)/deskitem.bin tools/os88pkg.py
 $(BUILD)/deskitem360.img: $(BUILD)/deskitem.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/deskitem.o88
 
+# diatest: DESKTOP INTEGRATED APPLICATIONS' gate disks (SPEC.md 107.10) -
+# scratch 360KB SYSTEM disks, each the shipped one plus DIAPROBE.O88 in
+# SYSTEM\DIA\ and a SYSTEM.CFG (and a state file) that tools/os88dia.py, the
+# host's own second reader, writes. On demand, like every gate here:
+# `make diatest && python3 tests/diaboot.py` (and diamiss / diashort /
+# diahiber). DIAPROBE never ships: it is the mechanism with no application.
+#
+#   restore  a DIA row to SYSTEM\DIA\DIAPROBE.O88; DIAPROBE.DAT puts its frame
+#            at (303,184) on a 640x480 screen - 303 because a snapped window
+#            holds W_X = 7 mod 8 (SPEC.md 11.94), so the place is a fixpoint
+#   ghost    a DIA row to SYSTEM\DIA\GONE.O88 AHEAD of the restore row
+#   bvol     a DIA row on B:, for a boot with no disk in B:
+#   short    three DRAG-MADE shortcuts, `\` at +3, and no DIA row - the
+#            regression for SPEC.md 26.8.1's +3, which was never spare
+#   hiber    the restore row, and HDD.DRV wanted: tests/diahiber.py puts a
+#            HIBERNAT.PTR on a hard disk of its own, so the resume question
+#            is posted before dia_boot runs
+# ...and diarestore.img, the restore row on a 1.44MB disk for QEMU.
+DIAFIX := $(BUILD)/diafix
+DIATESTS := restore ghost bvol short hiber
+DIACFG_restore := --dia A:SYSTEM/DIA/DIAPROBE.O88=DiaProbe
+DIACFG_ghost   := --dia A:SYSTEM/DIA/GONE.O88=Gone \
+                  --dia A:SYSTEM/DIA/DIAPROBE.O88=DiaProbe
+DIACFG_bvol    := --dia B:DIAPROBE.O88=DiaProbe
+DIACFG_short   := --short 'A:SYSTEM/TASKMGR.O88=TASKMGR@1,3' \
+                  --short 'A:SYSTEM=SYSTEM@2,4' \
+                  --short 'A:README.TXT=README.TXT@0,5'
+DIACFG_hiber   := --want 2 --dia A:SYSTEM/DIA/DIAPROBE.O88=DiaProbe
+
+.PHONY: diatest
+diatest: $(foreach t,$(DIATESTS),$(BUILD)/dia$(t)360.img) $(BUILD)/diarestore.img
+	@echo "diatest: build/dia<restore|ghost|bvol|short|hiber>360.img and build/diarestore.img"
+	@echo "         Run them with: python3 tests/diaboot.py (diamiss, diashort, diahiber)"
+
+$(BUILD)/diaprobe.bin: tests/diaprobe/diaprobe.asm apps/os88dia.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/diaprobe/diaprobe.asm
+	@echo "diaprobe: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/diaprobe.o88: $(BUILD)/diaprobe.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/diaprobe.bin -o $@
+
+# ...SECONDARY, or make deletes each as the intermediate of a pattern rule and
+# rebuilds every image on the next run
+.SECONDARY: $(foreach t,$(DIATESTS),$(DIAFIX)/$(t)/system.cfg)
+$(DIAFIX)/%/system.cfg: tools/os88dia.py Makefile | $(BUILD)
+	@mkdir -p $(DIAFIX)/$*
+	python3 tools/os88dia.py cfg -o $@ $(DIACFG_$*)
+
+$(DIAFIX)/DIAPROBE.DAT: tools/os88dia.py | $(BUILD)
+	@mkdir -p $(DIAFIX)
+	python3 tools/os88dia.py dat -o $@ --x 303 --y 184 --screen 640x480
+
+$(BUILD)/dia%360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/diaprobe.o88 $(DIAFIX)/%/system.cfg $(DIAFIX)/DIAPROBE.DAT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		SYSTEM/DIA:$(BUILD)/diaprobe.o88 SYSTEM/APPDATA:$(DIAFIX)/DIAPROBE.DAT \
+		$(DIAFIX)/$*/system.cfg
+
+$(BUILD)/diarestore.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/diaprobe.o88 $(DIAFIX)/restore/system.cfg $(DIAFIX)/DIAPROBE.DAT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		SYSTEM/DIA:$(BUILD)/diaprobe.o88 SYSTEM/APPDATA:$(DIAFIX)/DIAPROBE.DAT \
+		$(DIAFIX)/restore/system.cfg
+
 # fcpapi: OSAPI_FILE_COPY's gate (SPEC.md 22.24). EVERY ANSWER IS A FILE - the
 # copies it makes and the verdict it writes - because a copy engine that goes
 # wrong strands clusters or cross-links chains, and both look fine from inside
