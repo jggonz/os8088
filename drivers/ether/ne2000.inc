@@ -370,12 +370,13 @@ ne_dma_write:
 ; ne.c's test and it needs no signature byte, which matters because the
 ; signature is the one thing the clones disagree about.
 ;
-; **NOTHING IS WRITTEN UNTIL TWO READS SAY AN 8390 COULD BE HERE** (SPEC.md
-; 72.9.1). The sweep walks seven 32-port windows, and other cards live in
-; them: an MPU-401 at 330h is the DATA PORT of a card at 320h, a Sound
+; **NO REGISTER IS WRITTEN UNTIL TWO READS SAY AN 8390 COULD BE HERE**
+; (SPEC.md 72.9.1). The sweep walks seven 32-port windows, and other cards
+; live in them: an MPU-401 at 330h is the DATA PORT of a card at 320h, a Sound
 ; Blaster at 240h is inside a card at 240h. So a window whose CR floats to FFh
-; is empty and is left with no write at all, and after the reset (whose port
-; is the window's last, which nothing else of the period sits on) the ISR must
+; is empty and is left with no write at all - not even the reset's - and after
+; the reset (whose port is the window's last, which nothing else of the period
+; sits on, and the only write made before the second read) the ISR must
 ; show RST from a register that is THERE - FFh is a floating bus, which has
 ; RST set too and used to pass. Only then does ne_t_setup touch the register
 ; file.
