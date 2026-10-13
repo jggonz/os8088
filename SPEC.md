@@ -109915,8 +109915,10 @@ driver attached to a card at 320h that is not there and never reached the real
 one at 340h. The ISR test before it had passed too, because a floating bus
 reads FFh and FFh has RST set.
 
-Three rules, all of them reads, and `ne_probe` writes nothing to a window
-until the first two have passed:
+Three rules, all of them reads. `ne_probe` writes nothing to a window's
+register file until the first two have passed; the one write before that is
+the reset itself, its port read and the value written back, and it is made
+only where CR has already answered:
 
 1. **CR reading FFh is an empty window** (Linux's `ne_probe1` asks the same
    first). FFh is STA and STP together with RD 7, which no 8390 shows. Most
