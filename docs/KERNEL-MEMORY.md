@@ -248,10 +248,10 @@ had added.
   "big": {
     "boot2": 2265,
     "bootmax": 191488,
-    "bss": 5133,
+    "bss": 5135,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 38054,
+    "cold": 38049,
     "coldpara": 2400,
     "fatpara": 288,
     "imgpara": 3104,
@@ -261,20 +261,20 @@ had added.
     "lowbss": 5598,
     "lowpara": 384,
     "minramkb": 196,
-    "ovl": 2470,
+    "ovl": 2490,
     "ovlw": 5011,
     "stk0": 512,
-    "text": 44337,
+    "text": 44346,
     "vgabuf": 336,
     "vgabufpara": 32
   },
   "emu": {
     "boot2": 2265,
     "bootmax": 191488,
-    "bss": 5133,
+    "bss": 5135,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 38178,
+    "cold": 38173,
     "coldpara": 2400,
     "fatpara": 288,
     "imgpara": 3136,
@@ -284,10 +284,10 @@ had added.
     "lowbss": 5598,
     "lowpara": 384,
     "minramkb": 196,
-    "ovl": 2476,
+    "ovl": 2496,
     "ovlw": 5011,
     "stk0": 512,
-    "text": 44602,
+    "text": 44611,
     "vgabuf": 336,
     "vgabufpara": 32
   },
@@ -684,11 +684,11 @@ there and nowhere else.
 | the file system, end to end | 28,988 | 35.2% |
 | the window system and its furniture | 22,938 | 27.8% |
 | drawing: adapters, primitives, glyphs, icons | 13,225 | 16.1% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,164 | 9.9% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,167 | 9.9% |
 | the kernel proper: API table, heap, scheduler, events | 7,273 | 8.8% |
 | the three built-in kinds | 1,443 | 1.8% |
-| the Control Panel | 360 | 0.4% |
-| **total** | **82,391** | |
+| the Control Panel | 361 | 0.4% |
+| **total** | **82,395** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -705,7 +705,7 @@ there and nowhere else.
 | `ui.inc` — the UI task and the event ladder (§13) | 2,817 | 9 | **2,826** | 56 | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 35 | 2,370 | **2,405** | 86 | — | — |
 | `assoc.inc` — file type associations (§54) | 419 | 1,941 | **2,360** | 31 | — | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 377 | 1,895 | **2,272** | 257 | — | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 385 | 1,890 | **2,275** | 259 | — | — |
 | `font.inc` — the 8×8 glyph renderer (§6) | 2,262 | — | **2,262** | 22 | 16 | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 2,045 | **2,068** | 91 | — | — |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,862 | 131 | **1,993** | 722 | — | — |
@@ -727,7 +727,7 @@ there and nowhere else.
 | `blank.inc` — the idle screen blanker (§64) | 200 | 226 | **426** | — | — | — |
 | `toast.inc` — the menu bar's transient message (§59) | 425 | — | **425** | 25 | — | — |
 | `mod.inc` — on-demand kernel modules (§2.8) | 94 | 324 | **418** | — | — | — |
-| `ctrl.inc` — the Control Panel (§31) | 132 | 228 | **360** | 28 | — | — |
+| `ctrl.inc` — the Control Panel (§31) | 133 | 228 | **361** | 28 | — | — |
 | `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 61 | 299 | **360** | 183 | — | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 242 | — | **242** | 22 | — | — |
 | `clip.inc` — the system clipboard (§55) | 175 | — | **175** | 5 | — | — |
@@ -742,12 +742,12 @@ there and nowhere else.
 | `vmmouse.inc` — the VMware absolute pointer's resident half (§9.11), `kern_emu` only | — | — | **0** | — | — | — |
 | `bootprof.inc` — the boot phase table (§15.5), `BOOTPROF=1` | — | — | **0** | — | — | — |
 | `stkdiag.inc` — what an interrupt costs a task stack (STACK-SLOTS-PLAN §10), `STKDIAG=1` | — | — | **0** | — | — | — |
-| `kbddiag.inc` — **(undescribed)** | — | — | **0** | — | — | — |
+| `kbddiag.inc` — what the keyboard sent and what the ROM made of it (§9.8.1), `KBDDIAG=1` | — | — | **0** | — | — | — |
 | `moudiag.inc` — what the identify window saw (§9.4.6), `MOUDIAG=1` | — | — | **0** | — | — | — |
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,223 | 171 | **2,394** | — | — | 434 |
-| **total** | **44,337** | **38,054** | **82,391** | **5,133** | **5,598** | **2,265** |
+| **total** | **44,346** | **38,049** | **82,395** | **5,135** | **5,598** | **2,265** |
 <!-- END generated table -->
 
 ### Reading it

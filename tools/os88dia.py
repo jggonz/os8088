@@ -52,8 +52,13 @@ DSL_PIN, DSL_GONE, DSL_SLOT = 0x40, 0x80, 0x3F
 CFG_SIG = b"O88CFG\0\0"
 CFG_GEN_V = 3
 CFG_REC0 = 10
-CFG_FBUF = 131                  # SPEC.md 2.8.7: a file this size or less
-                                # carries no trailer the boot will read
+CFG_FBUF = 141                  # SPEC.md 2.8.7: a file this size or less
+                                # carries no trailer the boot will read.
+                                # kern_big's - the only kernel that reads a
+                                # trailer - and DERIVED there (driver.inc), so
+                                # tests/unit/t_dia.py evaluates the kernel's
+                                # own expression with nasm and holds this to
+                                # it: it was 131 until #248's two pin keys
 CFG_MAXFILE = 4096              # ...and one this size or more is refused
 
 # --- SPEC.md 107.5 ------------------------------------------------------------

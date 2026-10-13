@@ -38378,7 +38378,11 @@ Four things about the convention:
   finding in its own header: the walk listed `GAMES`, found no `SYSTEM` in it,
   and the save wrote nothing at all, while the load path *appeared* to work,
   which is worse than failing. The price is that each step is a remount, which
-  is affordable exactly here.
+  is affordable exactly here. **`OSAPI_FILE_GOTO_QM` (§74.1), which came
+  later, is the quiet stand that DOES move the instance**, so a program that
+  saves often may make the FIRST step a full `OSAPI_FILE_GOTO` - the one that
+  re-reads the disk, which may have been swapped - and walk the rest with it:
+  a DIA's save does (§107.5.1), and says why the first one must stay full.
 - **`SYSTEM/` is found by walking, not assumed.** `OSAPI_FILE_FIND` (§19.7.1)
   from the root, matching `type == OSAPI_FT_DIR` — the folder is an ordinary
   visible directory, unlike the system *files* inside it (§19.6).
@@ -169304,9 +169308,11 @@ dia_boot:       [ui_rebootq] != 0  -> nothing (a resume or DOS question is up)
                     sc_open; CF = 1 (not found) -> +3 := 0, desk_reflow
 ```
 
-- **A machine with no DIA row pays one compare and a `jcxz`** and reads
-  nothing. A machine with one pays the path walk, the package read and
-  whatever the package's entry proc reads (§107.6).
+- **A machine with no DIA row reads nothing.** With no rows at all it pays
+  one byte compare (`[sc_nrows]`); with ordinary shortcuts and no DIA row,
+  one `sc_row` and one word compare per row. A machine with one pays the path
+  walk, the package read and whatever the package's entry proc reads
+  (§107.6).
 - **`sc_open` answers CF now** (§26.8.5): CF = 1 iff the walk found no
   volume, folder or file. A load REFUSAL (memory, version) is CF = 0 — the
   loader's own sentence has been said, and the row is KEPT for next time.
@@ -169351,8 +169357,9 @@ boot. That is accepted: SYSTEM.CFG is hidden + system on the boot disk
 ### 107.5 `os88dia.inc`, the DIA header and the state file
 
 The DIA's state file is `SYSTEM\APPDATA\<NAME>.DAT` on its OWN volume (§19.9's
-rule: `OSAPI_FILE_HERE`'s `BL`), reached bank, walk, act, walk back. It is a
-16-byte DIA header owned by `os88dia.inc`, then the application's payload.
+rule: `OSAPI_FILE_HERE`'s `BL`), reached bank, walk, act, walk back (§107.5.1).
+It is a 16-byte DIA header owned by `os88dia.inc`, then the application's
+payload.
 
 | off | size | field |
 |---|---|---|
@@ -169378,26 +169385,81 @@ the probe needs; §107.10):
 
 | call | when | what |
 |---|---|---|
-| `dia_load` | the entry proc, before `OSAPI_WM_CREATE` | copy the 8.3 name; bank `OSAPI_FILE_HERE`; walk to `SYSTEM\APPDATA`; read and validate the file; place the template |
+| `dia_load` | the entry proc, before `OSAPI_WM_CREATE` | copy the 8.3 name; bank `OSAPI_FILE_HERE` ONCE - the launch folder is HOME for the session; walk to `SYSTEM\APPDATA`; read and validate the file; place the template |
 | `dia_made` | after `OSAPI_WM_CREATE` | install `OSAPI_WM_ONTIMER` and `OSAPI_WM_ONCLOSE`; arm a 1-tick timer |
 | `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and saves once two polls agree; re-arms for 36 ticks |
 | `dia_close` | `W_ONCLOSE` | remove the row by name (AL = 0, AH = 0xFF); save; let the close proceed |
 
+**The row is about the PROGRAM, not the state file**, so the first tick
+registers on every launch whatever the file said: missing, DAMAGED, or no
+`SYSTEM\APPDATA` on the volume at all. A widget relaunched from a row whose
+state file had since gone bad must still be able to take that row away by
+closing, and the close removes only a row its own launch registered.
+
 A registration that is refused (no system disk in A:, a full table,
 kern_small) leaves the widget running and unregistered; `CTRL.DRV`'s own toast
-is the only message.
+is the only message. The record it registered stays in memory untouched until
+the close removes by it: the walk below has a find buffer of its own (a W1
+build used the record AS that buffer, and after the first save the close
+removed by `APPDATA`'s directory entry, matched nothing, and the widget came
+back at every boot - `diaboot`'s E leg is that case).
+
+#### 107.5.1 Saving: is this still home, and what a refusal costs
+
+A widget runs for hours while the user swaps the disk under it - at 360 KB
+that is the only way to reach another disk - so `dia_save` cannot trust
+§19.9's "the disk it was launched from, which is in the drive by
+definition". Its walk is:
+
+```
+GOTO       the volume's ROOT          a FULL mount: the disk may be another one
+GOTO_QM    home (the banked folder)   a word, inside the volume just mounted
+FIND       our own name there         IS THIS HOME? no -> not home now
+GOTO_QM    root, SYSTEM, APPDATA      words; FIND per component as §19.9
+WRITE      header + payload, one call
+GOTO_QM    home
+```
+
+- **ONE full mount, first.** `dsk_bpb_sig` cannot tell two os8088-built disks
+  of one geometry apart (§18.8.2: their boot sectors are byte-identical), so a
+  quiet mount on a swapped disk could reuse the other disk's banked FAT
+  window and the write would allocate from the wrong FAT. A full mount reads
+  this disk's own. Every step after it is in the same callback with the lock
+  held and the spindle turning, which is §18.9.3's batch argument exactly,
+  so the rest are `OSAPI_FILE_GOTO_QM` - the quiet stand that MOVES the
+  instance, which is what §19.9's reason for refusing `GOTO_Q` asked for.
+- **Home is the folder holding our own file.** A disk on which the banked
+  folder does not hold a file of the package's own name is not home, and the
+  save stays owed. Every shipped disk carries `SYSTEM\APPDATA`, so without
+  this a widget autostarted from the system disk wrote its state onto
+  whatever disk was in A: (measured: an apps disk gained
+  `SYSTEM\APPDATA\DIAPROBE.DAT`) and the system disk's copy went stale. A
+  second disk carrying the same package at the same path IS home - a copy of
+  the system disk is the one way that happens.
+- **A failed save is classified, not retried blind.** `FERR_NODISK`,
+  `FERR_IO` and "not home" may clear when the user puts the disk back: the
+  save stays owed and the next try waits 1, 2, 4, 8 and then 16 polls (2 s to
+  32 s) - a W1 build retried every poll, two reads every 2 s under the lock
+  for as long as the disk was out. Anything else - `FERR_WPROT`, `FERR_FULL`,
+  `FERR_DIRFULL`, `FERR_PROT` - will not clear by waiting, so the state goes
+  READ-ONLY for the session (`DIA_S_RDONLY`): it is kept in memory and nothing
+  is tried again, which is §19.9's "keep the state in memory and say
+  nothing". The close always makes one last try that the backoff does not
+  gate.
 
 ### 107.6 What it costs
 
 The kernel half, measured by `tools/kernsize.py` against the tree it was cut
-from (2f6a0a88), on all three shipped kernels:
+from (2f6a0a88), on all three shipped kernels; the rungs left are re-read
+after merging `main`'s port pins (#248), which spent 11 more bytes of
+kern_big's image rung on its own account:
 
 | | `.text` | `.cold` | `.bss` | `.ovl` | rungs left after (before) |
 |---|---:|---:|---:|---:|---|
-| kern_big | **+6** | **+116** | 0 | 0 | image 194 (200), cold 346 (462) |
-| kern_emu | +6 | +116 | 0 | 0 | image 441 (447), cold 222 (338) |
+| kern_big | **+6** | **+116** | 0 | 0 | image 183 (200), cold 351 (462) |
+| kern_emu | +6 | +116 | 0 | 0 | image 430 (447), cold 227 (338) |
 | kern_small | **+6** | **+32** | 0 | 0 | image 315 (321), cold 65 (97) |
-| `CTRL.DRV`'s settings core (`MODS_SIZE`, on demand) | | | | | 2,492 → **2,673** bytes: 5 sectors → **6** |
+| `CTRL.DRV`'s settings core (`MODS_SIZE`, on demand) | | | | | 2,492 → **2,673** bytes (2,683 with #248): 5 sectors → **6** |
 
 The `.text` is the one rare cell. kern_small's `.cold` is `osapi_clk_get_x`
 alone; kern_big's adds `desk_live`'s mark test, `sc_open`'s two carry bits
@@ -169410,12 +169472,28 @@ Nothing else moved: no `.bss`, no boot-overlay byte, no new module, no new
 SYSTEM.CFG key, and no `PKG_FMT` or `DRV_VER` bump — `OSAPI_CLK_GET` is a
 cell appended at the end, which §20.2.0.1 records without one.
 
-**At runtime**, a machine with no DIA row pays one byte compare and a `jcxz`
-at boot. Each autostarted widget adds its path walk, its package read, its
-state file's walk and read, and on its first tick the settings core's read
-(1-2 `int 13h` calls) for a compare that writes nothing — roughly 8-10 calls,
-3-4 s on a 4.77 MHz floppy machine. First registration and close each write
-SYSTEM.CFG once.
+**At runtime**, a machine with no DIA row reads nothing at boot (§107.4).
+What a widget costs, MEASURED on MartyPC's 4.77 MHz XT with its FDC counters
+(the probe: a 1 KB package and a 16-byte state file - the calendar adds its
+larger package and a five-sector file to the reads):
+
+| what | `int 13h` | 5150 clock | on the lock? |
+|---|---:|---:|---|
+| `dia_boot` to its return: `sc_open`'s walk, the package, `dia_load`'s walk and read | 6 reads | 2.84 s | no - kmain's tail |
+| the first tick: `OSAPI_FILE_PATH`'s `..` walk, then the settings core's read for a compare that writes nothing | 7 reads | 2.05 s | yes |
+| **a whole autostart** | **13 reads** | **~4.9 s** | |
+| a settled drag's save | 2 reads, 6 writes | ~3.2 s at PERFORMANCE.md's 400 ms a call | yes |
+| the close of a widget that owes nothing: the settings core, the row away, SYSTEM.CFG written | 8 reads, 6 writes | | yes |
+| an idle widget | 0 | 0 | |
+
+The design priced an autostart at 8-10 calls and 3-4 s and a save at "one
+write, 1-2 s"; both were short. The FIRST TICK's cost is paid on EVERY
+launch, a double-click included, because the widget registers on every one
+(§107.5). The save's writes are the file system's own - the directory entry,
+the FAT and its copy, the data - and what §107.5.1's walk changed is the rest:
+the W1 walk made four full remounts around one 16-byte write, **6 reads and
+6 writes, ~4.8 s**, and one full mount plus quiet stands is **2 reads**.
+First registration and close each write SYSTEM.CFG once.
 
 ### 107.7 `kern_small`
 
@@ -169484,6 +169562,23 @@ silent. The small system disks carry `SYSTEM\DIA\` too (§24.5.1).
   fixed volume, so a floppy fixture cannot post the question. It asserts the
   ordering with a breakpoint on `dia_boot` reading `[ui_rebootq]`, and not
   what `HIBER.DRV` then makes of a pointer that is not one.
+- **The walk is ONE full `OSAPI_FILE_GOTO` and then `OSAPI_FILE_GOTO_QM`**,
+  not a full GOTO per component as §19.9 prescribed and the design copied:
+  `GOTO_QM` (§74.1) is the quiet stand that moves the instance, which is the
+  property §19.9 refused `GOTO_Q` for lacking. 6 reads to 2 per save
+  (§107.6). The first stays full for §107.5.1's reason.
+- **A save asks whether the disk is still home** (§107.5.1), which the design
+  did not: it trusted §19.9's "in the drive by definition", which is not true
+  of a program that runs for hours across disk swaps.
+- **A failed save is classified and backed off** (§107.5.1), where the design
+  said "keep dirty, retry on the next tick, silently": that retried a
+  write-protected disk every 2 s for as long as the widget was open.
+- **The widget registers whatever its state file said**, where the design
+  skipped it with no `SYSTEM\APPDATA` and wave 1 also with a DAMAGED file:
+  a row from an earlier session could then never be removed by closing
+  (§107.5).
+- **`HOME` is banked once, at the load**, not at every save: a save after a
+  refused one would have banked wherever the refusal left the instance.
 - Verified, not changed: `desk_reflow` is safe with no lock (above, §107.4),
   so the design's deferred `[desk_zdirty]` path was not needed; and
   `OSAPI_FILE_HERE`'s `BL` is `inst_fdrv`, the volume index a row's +0 holds
@@ -169515,7 +169610,7 @@ state files `tools/os88dia.py` writes, each carrying `DIAPROBE.O88` in
 
 | image | carries | its row |
 |---|---|---|
-| `diarestore360.img` | a DIA row to `SYSTEM\DIA\DIAPROBE.O88` and a state file placing it at (304,184) | `diaboot`: the probe is up where its state file put it, holds no cell, and SYSTEM.CFG was not written |
+| `diarestore360.img` | a DIA row to `SYSTEM\DIA\DIAPROBE.O88` and a state file placing it at (303,184) | `diaboot`: the probe is up where its state file put it, holds no cell, and SYSTEM.CFG was not written; then a drag, its save, and a close that takes the row away |
 | `diaghost360.img` | a DIA row to `SYSTEM\DIA\GONE.O88` ahead of the restore row | `diamiss`: `Shortcut not found (A:)`, a `GONE` icon in a cell, and the probe still launched |
 | `diabvol360.img` | a DIA row on B:, booted with no B: | `diamiss`: the same, naming `(B:)` |
 | `diashort360.img` | three drag-made shortcuts carrying `\` at +3, no DIA row | `diashort`, the regression for +3: all three drawn, nothing launched |
@@ -169523,4 +169618,11 @@ state files `tools/os88dia.py` writes, each carrying `DIAPROBE.O88` in
 
 `DIAPROBE.O88` (`tests/diaprobe/`, never shipped) is the smallest DIA: it
 includes `os88dia.inc`, registers on its first tick, removes by name on close
-and paints its own x,y.
+and paints one fixed label.
+
+**`t_dia`** (fast tier) is what keeps that include honest between MartyPC
+runs: it runs `tools/os88dia.py --selfcheck`, assembles `diaprobe.asm` (so
+`os88dia.inc` is assembled by every `make`, where before only `make diatest`
+did), and holds the DIA header's offsets in `os88dia.inc` equal to the host
+tool's. `t_mirror` holds the host tool's copies of `CFG_FBUF`, `DESK_SC0` and
+`DVOL_MAX` against the kernel's.

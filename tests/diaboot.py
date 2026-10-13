@@ -18,15 +18,22 @@ screen. One boot on a VGA XT, and every claim is asked of the GUEST'S state:
   C  its first tick REGISTERED it - the settings core loaded and answered
      the zone - and because the row was byte-identical it WROTE NOTHING:
      SYSTEM.CFG on the guest's A: is the fixture to the byte.
-  D  its close box removes the row BY NAME (OSAPI_DESK_ITEM AH = 0xFF): the
-     table is empty, SYSTEM.CFG has no trailer, and DIAPROBE.DAT is the
-     fixture still - the window never moved, so nothing was owed.
+     And DIAPROBE.DAT is the fixture still: it opened where it was saved,
+     so nothing was owed.
+  D  a DRAG is saved: two polls agree, and DIAPROBE.DAT on the guest's A:
+     holds the new place (SPEC.md 107.5.1's walk, on the disk it came from).
+  E  ...and AFTER that save its close box still removes the row BY NAME
+     (OSAPI_DESK_ITEM AH = 0xFF): the table is empty and SYSTEM.CFG has no
+     trailer. A W1 build failed exactly here - the save's walk used the row
+     record as its find buffer, the close removed by `APPDATA`'s directory
+     entry, matched nothing, and the closed widget came back at every boot.
 
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1): take `call dia_boot` out
 of driver.inc's drv_notice_x and A fails (no probe); take K3's mark test out
 of desk_live and B fails (the row takes a cell); make sc_m_add's DIA arm skip
 sc_m_same and C fails (SYSTEM.CFG rewritten); make sc_m_pdel ignore AL = 0xFF
-and D fails (the row stays).
+and E fails (the row stays); point os88dia.inc's dia_seek back at dia_rec and
+E fails the same way.
 
 The floppy is COPIED to a scratch directory: the guest writes SYSTEM.CFG.
 """
@@ -50,7 +57,7 @@ DESK_SC0 = os88dia.DESK_SC0
 # 128-byte row, the 13-byte name, the banked folder word and drive byte, then
 # dia_st (SPEC.md 107.5)
 DIA_ST = 16 + 0 + 128 + 13 + 2 + 1
-DIA_S_TRIED, DIA_S_ROW = 1, 2
+DIA_S_TRIED, DIA_S_ROW, DIA_S_DIRTY = 1, 2, 16
 
 fails = []
 
@@ -86,6 +93,7 @@ def main():
                    "rb").read()
     fixdat = open(os.path.join(BDIR, "diafix", "DIAPROBE.DAT"), "rb").read()
     st_off = probe_image() + DIA_ST
+    hdr_off = probe_image()             # DIA_BSS 0: the header comes first
 
     with os88ui.boot(sysimg, machine="os8088_xt_vga") as ui:
         m = ui.m
@@ -121,8 +129,32 @@ def main():
         check(v.read("SYSTEM.CFG") == fixture,
               "SYSTEM.CFG is the fixture to the byte: an identical row "
               "writes nothing")
+        check(v.read("SYSTEM/APPDATA/DIAPROBE.DAT") == fixdat,
+              "DIAPROBE.DAT unchanged: it opened where it was saved")
 
-        print("D: the close box removes the row by name")
+        print("D: a drag is saved where the probe came from")
+        ui.drag_window(w, 64, 40)
+        w = ui.window("DiaProbe")
+        moved = (w.x, w.y)
+        check(moved != (303, 184), "the frame moved (%d,%d)" % moved)
+
+        def hdr():                  # the header in the probe's own bss
+            return struct.unpack("<HH", m.readseg(wseg, hdr_off + 4, 4))
+
+        def owed():
+            return hdr() != moved or st() & DIA_S_DIRTY
+        ui._wait(lambda: not owed(), "the drag's save", 120,
+                 snapshot=lambda: "dia_st = %#x, header at %r" % (st(),
+                                                                  hdr()))
+        try:
+            d = os88dia.parse_dat(volume(m, tmp).read(
+                "SYSTEM/APPDATA/DIAPROBE.DAT"), 0, 1)
+        except Exception as e:
+            d = {"pos": False, "x": None, "y": None, "err": str(e)}
+        check(d["pos"] and (d["x"], d["y"]) == moved,
+              "DIAPROBE.DAT on A: holds the new place %r (%r)" % (moved, d))
+
+        print("E: after that save, the close box removes the row by name")
         ui.close(w)
         ui.wait_toast(says="Saved", limit=90)
         check(ui._word("sc_seg") == 0, "the table's claim went with it")
@@ -130,8 +162,6 @@ def main():
         cfg = v.read("SYSTEM.CFG")
         check(not os88dia.parse_cfg(cfg)["trailer"],
               "SYSTEM.CFG has no trailer (%d bytes)" % len(cfg))
-        check(v.read("SYSTEM/APPDATA/DIAPROBE.DAT") == fixdat,
-              "DIAPROBE.DAT unchanged: the window never moved")
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("diaboot: %s" % ("PASS" if not fails else

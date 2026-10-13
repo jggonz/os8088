@@ -14,6 +14,12 @@
 ;   its TICK        a 36-tick timer that polls the window's place, saves once
 ;                   a drag has settled, and calls the application's own tick
 ;
+; A save asks first whether the disk in the drive is still HOME - the folder
+; the widget was launched from still holds a file of its own name - because a
+; widget outlives a disk swap (SPEC.md 107.5.1). A refusal that may clear
+; (no disk, an I/O error, not home) is retried on a doubling backoff; one that
+; will not (write-protected, full) makes the state read-only for the session.
+;
 ; THE CALLER DEFINES, before the %include:
 ;
 ;   %define DIA_DATNAME 'DESKCAL.DAT'   the state file's 8.3 name
@@ -77,6 +83,10 @@ DIA_S_ROW       equ 2           ; ...and was granted it
 DIA_S_NOHOME    equ 4           ; no SYSTEM\APPDATA: the state stays in memory
 DIA_S_DAMAGED   equ 8           ; the file was there and was not ours
 DIA_S_DIRTY     equ 16          ; owed a save
+DIA_S_RDONLY    equ 32          ; a save was refused for good (write-protected,
+                                ; full): the state stays in memory (107.5.1)
+DIA_BKMAX       equ 16          ; a refusal that may clear waits 1, 2, 4, 8,
+                                ; then 16 polls before the next try
 
 %if DIA_BSS % 16
   %error "os88dia: DIA_BSS must be a multiple of 16 - the read wants a paragraph"
@@ -92,9 +102,15 @@ dia_st      equ dia_hbl + 1
 dia_win     equ dia_st + 1
 dia_px      equ dia_win + 2                                 ; the last poll
 dia_py      equ dia_px + 2
-DIA_BSS_END equ DIA_BSS + DIA_HDR_SIZE + DIA_PAYLEN + OSAPI_DI_SIZE + 13 + 2 + 1 + 1 + 2 + 2 + 2
-%if OSAPI_DI_SIZE < DIA_SLACK || OSAPI_FIND_SZ > OSAPI_DI_SIZE
-  %error "os88dia: dia_rec is the read's slack and the walk's find buffer"
+dia_bk      equ dia_py + 2                                  ; the backoff, polls
+dia_bn      equ dia_bk + 1                                  ; ...still to wait
+dia_fnd     equ dia_bn + 1                                  ; the walk's FIND
+                                ; buffer - its OWN: dia_rec is the registered
+                                ; row from the first tick to the close, and
+                                ; the close removes by it (SPEC.md 107.5)
+DIA_BSS_END equ DIA_BSS + DIA_HDR_SIZE + DIA_PAYLEN + OSAPI_DI_SIZE + 13 + 2 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + OSAPI_FIND_SZ
+%if OSAPI_DI_SIZE < DIA_SLACK
+  %error "os88dia: dia_rec is the read's slack before it is the row"
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -126,6 +142,9 @@ dia_load:
     loopnz .nm
     mov byte [es:di], 0
     pop ds
+    call OSAPI_FILE_HERE        ; HOME, banked ONCE: every save comes back
+    mov [dia_hdx], dx           ; here, and asks whether this is still it
+    mov [dia_hbl], bl           ; (SPEC.md 107.5.1)
     call dia_enter              ; standing in SYSTEM\APPDATA, or CF = 1
     jc .none
     push ds
@@ -225,10 +244,8 @@ dia_tick:
     test byte [dia_st], DIA_S_TRIED
     jnz .poll
     or byte [dia_st], DIA_S_TRIED
-    test byte [dia_st], DIA_S_NOHOME | DIA_S_DAMAGED
-    jnz .poll                   ; no state to come back to: no row either
-    call dia_register
-.poll:
+    call dia_register           ; EVERY launch, whatever the state file said:
+.poll:                          ; the row is the program's (SPEC.md 107.5)
     mov ax, KERNEL_SEG          ; ES = KERNEL_SEG on entry to a callback -
     mov es, ax                  ; and the registration's ES = DS since
     mov si, [dia_win]
@@ -255,6 +272,11 @@ dia_tick:
 %endif
     test byte [dia_st], DIA_S_DIRTY
     jz .arm
+    cmp byte [dia_bn], 0
+    je .save
+    dec byte [dia_bn]           ; backing off a refusal that may clear
+    jmp short .arm
+.save:
     call dia_save
 .arm:
     mov bx, [dia_win]
@@ -391,11 +413,13 @@ dia_close:
     clc
     ret
 
-; dia_save - the state file, header and payload in one write. A refusal (the
-; disk swapped, full) keeps it owed for the next tick, silently. Not over a
-; DAMAGED file, not with no home. Keeps every register
+; dia_save - the state file, header and payload in one write (SPEC.md
+; 107.5.1). Not over a DAMAGED file, not with no home, not once a refusal was
+; for good. A refusal that may clear keeps it owed and backs the next try off;
+; one that will not makes the state read-only for the session. Keeps every
+; register
 dia_save:
-    test byte [dia_st], DIA_S_NOHOME | DIA_S_DAMAGED
+    test byte [dia_st], DIA_S_NOHOME | DIA_S_DAMAGED | DIA_S_RDONLY
     jnz .r
     push ax
     push bx
@@ -403,8 +427,8 @@ dia_save:
     push dx
     push si
     push es
-    call dia_enter
-    jc .x
+    call dia_enter              ; CF = 1: not home now - the disk is out, or
+    jc .soon                    ; another one is in
     mov word [dia_file+DIA_H_MAGIC], DIA_HDR_MAGIC
     mov byte [dia_file+DIA_H_VER], DIA_HDR_VER
     mov byte [dia_file+DIA_H_PAYVER], DIA_PAYVER
@@ -417,10 +441,27 @@ dia_save:
     mov cx, DIA_HDR_SIZE + DIA_PAYLEN
     xor dx, dx
     call OSAPI_FILE_WRITE
-    jc .l
+    call dia_leave              ; AX and the flags kept
+    jnc .ok
+    cmp ax, FERR_IO
+    jbe .soon                   ; FERR_NODISK, FERR_IO: may clear
+    or byte [dia_st], DIA_S_RDONLY  ; write-protected, full, a full folder,
+.ok:                            ; a protected name: will not, this session
     and byte [dia_st], ~DIA_S_DIRTY & 0xFF
-.l:
-    call dia_leave
+    mov byte [dia_bk], 0
+    jmp short .x
+.soon:
+    mov al, [dia_bk]            ; 1, 2, 4, 8, then 16 polls (2 s to 32 s)
+    shl al, 1
+    jnz .k
+    inc ax
+.k:
+    cmp al, DIA_BKMAX
+    jbe .s
+    mov al, DIA_BKMAX
+.s:
+    mov [dia_bk], al
+    mov [dia_bn], al
 .x:
     pop es
     pop si
@@ -431,19 +472,34 @@ dia_save:
 .r:
     ret
 
-; dia_enter - bank where we stand and walk to SYSTEM\APPDATA on OUR volume
-; (SPEC.md 19.9: bank, go, act, go back - OSAPI_FILE_GOTO, never the quiet
-; twin). out CF = 1 there is none, and we are back where we were
+; dia_enter - walk to SYSTEM\APPDATA on HOME's volume, having asked whether
+; the disk in the drive is still home (SPEC.md 107.5.1). ONE full
+; OSAPI_FILE_GOTO first - the disk may have been swapped, and only a full
+; mount re-reads its FAT (18.8.2 cannot tell two os8088 disks apart) - then
+; the quiet stand that moves the instance, a word inside the volume just
+; mounted. out CF = 1 not there, and the instance is home again
 dia_enter:
     push ax
     push bx
+    push cx
     push dx
     push si
-    call OSAPI_FILE_HERE        ; DX = our folder, BL = our volume
-    mov [dia_hdx], dx
-    mov [dia_hbl], bl
+    push di
+    mov bl, [dia_hbl]
     xor dx, dx
-    call OSAPI_FILE_GOTO        ; that volume's root
+    call OSAPI_FILE_GOTO        ; the root, mounted afresh
+    jc .fail                    ; ...and not marked: still home, nothing to
+    mov dx, [dia_hdx]           ; undo
+    call OSAPI_FILE_GOTO_QM
+    jc .no
+    mov si, dia_name
+    call dia_seek               ; IS THIS HOME? our own file in our folder
+    jc .no
+    cmp ax, OSAPI_FT_DIR
+    je .no
+    mov bl, [dia_hbl]
+    xor dx, dx
+    call OSAPI_FILE_GOTO_QM     ; the root again, a word
     jc .no
     mov si, dia_dsys
     call dia_dive
@@ -451,53 +507,79 @@ dia_enter:
     mov si, dia_dapp
     call dia_dive
     jc .no
+    pop di
     pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     clc
     ret
 .no:
     call dia_leave
+.fail:
+    pop di
     pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     stc
     ret
 
-; dia_leave - back to the banked folder; every register and the flags kept
+; dia_leave - home, quietly; every register and the flags kept
 dia_leave:
     pushf
-    push bx
-    push dx
-    mov dx, [dia_hdx]
-    mov bl, [dia_hbl]
-    call OSAPI_FILE_GOTO
-    pop dx
-    pop bx
-    popf
-    ret
-
-; dia_dive - into the folder named at SI, in the current one; CF = 1 none.
-; dia_rec is the find buffer (it is built only at the first tick)
-dia_dive:
     push ax
     push bx
     push cx
     push dx
+    push si
     push di
-    xor cx, cx
-.each:
+    mov dx, [dia_hdx]
+    mov bl, [dia_hbl]
+    call OSAPI_FILE_GOTO_QM     ; CX, SI and DI are a file driver's (os88api)
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; dia_dive - into the folder named at SI, in the current one; CF = 1 none
+dia_dive:
+    push ax
+    push bx
+    push dx
+    call dia_seek               ; DX = its first cluster
+    jc .x
+    cmp ax, OSAPI_FT_DIR
+    stc
+    jne .x                      ; a FILE of that name: not a folder
+    mov bl, [dia_hbl]
+    call OSAPI_FILE_GOTO_QM
+.x:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; dia_seek - the entry named SI in the current folder, into dia_fnd. out CF = 0
+; AX = its type (+14), DX = its first cluster (+16); CF = 1 there is none
+dia_seek:
+    push cx
+    push di
+    push es
     push ds
     pop es
-    mov di, dia_rec
+    xor cx, cx
+.each:
+    mov di, dia_fnd
     call OSAPI_FILE_FIND
-    jc .none
-    cmp word [dia_rec + 14], OSAPI_FT_DIR
-    jne .each
+    jc .out
     push si
-    mov di, dia_rec
 .c:
     mov al, [si]
     cmp al, [di]
@@ -509,24 +591,13 @@ dia_dive:
 .ne:
     pop si
     jne .each
-    mov dx, [dia_rec + 16]      ; its first cluster
-    mov bl, [dia_hbl]
-    call OSAPI_FILE_GOTO
-    jc .none
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    mov ax, [dia_fnd + 14]
+    mov dx, [dia_fnd + 16]
     clc
-    ret
-.none:
+.out:
+    pop es
     pop di
-    pop dx
     pop cx
-    pop bx
-    pop ax
-    stc
     ret
 
 dia_dname   db DIA_DATNAME, 0

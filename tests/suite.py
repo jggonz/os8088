@@ -379,6 +379,15 @@ FAST = [
     Row("mirror", "fast", py("tests/unit/t_mirror.py"), 4.5,
         "a constant written down in two files must agree in both; there is no "
         "linker here to notice"),
+    Row("dia", "fast", py("tests/unit/t_dia.py"), 0.5,
+        "SPEC.md 107.10: a DIA's shared half between MartyPC runs - "
+        "tools/os88dia.py --selfcheck, tests/diaprobe ASSEMBLED so the SDK's "
+        "os88dia.inc is built by every `make` (only `make diatest` built it), "
+        "the DIA header's offsets in the include where the host tool writes "
+        "each field, and the host tool's copies of kern_big's DERIVED "
+        "CFG_FBUF and DESK_SC0 evaluated by nasm from the kernel's own equ "
+        "chain - expressions t_mirror cannot hold, and CFG_FBUF went 131 -> "
+        "141 under #248 with nothing failing", needs=("nasm",)),
     Row("spkfxtab", "fast", py("tests/unit/t_spkfx.py"), 0.1,
         "the speaker shaper's GENERATED tables (apps/os88spkfx_t.inc) are "
         "tools/os88spkfx.py's, and the model passes its own selfcheck: a "
@@ -8832,9 +8841,21 @@ SOAK = [
         "tools/os88dia.py) and DIAPROBE.DAT: the probe is up with the desktop "
         "at (303,184), where its state file put it; its row holds NO cell; "
         "its first tick registers it and, the row being byte-identical, "
-        "SYSTEM.CFG is the fixture to the byte; and its close box removes the "
-        "row BY NAME (AH = 0xFF) - no trailer left, the state file untouched.",
+        "SYSTEM.CFG is the fixture to the byte; a drag is then saved to its "
+        "state file on A:, and AFTER that save its close box still removes the "
+        "row BY NAME (AH = 0xFF) - no trailer left. The last leg is the W1 "
+        "defect: the save's walk used the row record as its find buffer and "
+        "the closed widget came back at every boot.",
         needs=("marty",), timeout=600, wants=("build/diarestore360.img",)),
+    Row("diaswap", "soak", py("tests/diaswap.py"), 30.0,
+        "SPEC.md 107.5.1: a DIA's save asks whether the disk is still HOME. "
+        "The apps disk goes in A: under the running probe and it is dragged: "
+        "nothing is written there (every shipped disk has SYSTEM\\APPDATA, "
+        "and a W1 build wrote its state onto it), the save stays owed and is "
+        "BACKED OFF rather than re-walked every poll, and when the system "
+        "disk comes back the owed save lands there. Both floppies --verify.",
+        needs=("marty",), timeout=900,
+        wants=("build/diarestore360.img", "build/apps360.img")),
     Row("diamiss", "soak", py("tests/diamiss.py"), 21.0,
         "SPEC.md 107.4: a DIA that cannot be found is a graceful failure. "
         "ghost: a row to SYSTEM\\DIA\\GONE.O88 ahead of the probe's - the "
