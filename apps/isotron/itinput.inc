@@ -118,6 +118,8 @@ it_key:
 .turn:
     call it_turn_ok
     jc .out
+    call it_tfilt                   ; a typematic REPEAT of a held turn key is
+    jc .out                         ; dropped (SPEC.md 108.14.2); AH = its key
     call it_fifo_push
     ret
 .boost:
@@ -159,6 +161,101 @@ it_turn_ok:
     ret
 .no:
     stc
+    ret
+
+; =============================================================================
+; THE TYPEMATIC FILTER, TURNS ONLY (SPEC.md 108.14.2). A held turn key is ONE
+; turn: the keyboard's repeats (after ~500 ms, then ~10 a second on an XT) are
+; byte-identical keystrokes, and four of them would spin the player on the
+; spot into its own wall. A turn keystroke counts when
+;
+;   1. it is another key than the last turn keystroke, or
+;   2. OSAPI_KEY_DOWN saw that key UP at some sample since it (each worker
+;      wake, each bracket frame, and in W_ONKEY at the keystroke itself), or
+;   3. the last one ACCEPTED was under IT_TQUICK = 4 ticks ago (220 ms, under
+;      the SHORTEST typematic delay a keyboard can be set to - an AT's 250
+;      ms, which many AMI and Award ROMs program at POST; an XT's is ~500):
+;      a real fast re-press whose up fell between two samples - so a double
+;      tap is two turns, a U-turn, by rule 3 inside 220 ms and by rule 2
+;      after it (an up lasting a tick or more is sampled).
+;
+; Otherwise it is a repeat, and dropped (it_ndrop). The speed keys are NOT
+; filtered: a held F10 ramps the speed by its repeats, as the footage shows.
+; The tracking resets (it_treset) at every round's start and on both sides of
+; every toggle, so the first turn keystroke after either always counts.
+;
+; Every writer of it_tkey / it_tup holds the gfx lock (W_ONKEY, the worker's
+; wake) or is the bracket, which is the machine - so the two never interleave.
+; =============================================================================
+IT_TQUICK   equ 4
+
+; it_tfilt - AH = the turn keystroke's scancode. out: CF = 1 a repeat (drop
+; it). Preserves every register.
+it_tfilt:
+    push ax
+    push dx
+    mov dl, ah                      ; DL = the key
+    call OSAPI_GET_TICKS            ; AX = now
+    cmp dl, [it_tkey]
+    jne .take                       ; 1: another key
+    cmp byte [it_tup], 0
+    jne .take                       ; 2: seen up since its last keystroke
+    push ax
+    sub ax, [it_tacc]
+    cmp ax, IT_TQUICK
+    pop ax
+    jb .take                        ; 3: a fast re-press
+    inc word [it_ndrop]             ; a REPEAT
+    call .track
+    stc
+    jmp short .x
+.take:
+    mov [it_tacc], ax
+    inc word [it_nturn]
+    call .track
+    clc
+.x:
+    pop dx
+    pop ax
+    ret
+.track:                             ; this keystroke is the one tracked, and
+    mov [it_tkey], dl               ; its key is sampled at once: a tap that
+    mov byte [it_tup], 0            ; is already up by the time W_ONKEY runs
+    mov al, dl                      ; has been seen up
+    jmp short it_tsample1
+
+; it_tsample - the tracked turn key's level, once a wake (the worker) or a
+; frame (the bracket): up is remembered until the key's next keystroke.
+; ~280 cycles while a key is tracked and not yet seen up, ~30 otherwise.
+; Preserves every register (not the flags).
+it_tsample:
+    cmp byte [it_tup], 0
+    jne .out
+    push ax
+    mov al, [it_tkey]
+    or al, al
+    jz .none
+    call OSAPI_KEY_DOWN             ; no lock, no VRAM: legal from the worker
+    jc .none                        ; (kernel/mouse.inc kbd_down)
+    mov byte [it_tup], 1
+.none:
+    pop ax
+.out:
+    ret
+
+; it_tsample1 - .track's tail: AL = the key just tracked; up now -> seen up
+it_tsample1:
+    call OSAPI_KEY_DOWN
+    jc .down
+    mov byte [it_tup], 1
+.down:
+    ret
+
+; it_treset - forget the tracked key (a round's start, a toggle). Preserves
+; every register.
+it_treset:
+    mov byte [it_tkey], 0
+    mov byte [it_tup], 0
     ret
 
 ; -----------------------------------------------------------------------------
@@ -213,11 +310,24 @@ it_commands:
     cmp byte [it_state], ST_WAIT
     jne .start
     call it_round_start
-.start:
+.start:                             ; ESC BEFORE START (108): an Esc and a
+                                    ; start pending together (Esc then 1 typed
+                                    ; while the worker was busy) must end the
+                                    ; old game and START the new one - taken
+                                    ; the other way round, the new game began
+                                    ; and the same pass ended it
+    xor al, al
+    xchg al, [it_qesc]
+    or al, al
+    jz .newg
+    cmp byte [it_state], ST_TITLE
+    je .newg                        ; Esc at the title does nothing windowed
+    call it_to_title                ; ...anywhere else it ends the game
+.newg:
     xor al, al
     xchg al, [it_qstart]
     or al, al
-    jz .esc
+    jz .hold
     mov ah, al                      ; a new game: tier in bits 0-1, sound bit 7
     and al, 3
     rol ah, 1
@@ -230,14 +340,6 @@ it_commands:
     inc ah
 .seed:
     call it_game_start
-.esc:
-    xor al, al
-    xchg al, [it_qesc]
-    or al, al
-    jz .hold
-    cmp byte [it_state], ST_TITLE
-    je .hold                        ; Esc at the title does nothing windowed
-    call it_to_title                ; ...anywhere else it ends the game
 .hold:
     xor al, al
     xchg al, [it_qhold]             ; the About card: pause, never resume

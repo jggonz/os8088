@@ -189,6 +189,10 @@ it_sw_finish:
     call OSAPI_GET_TICKS
     add ax, IT_READYT
     mov [it_tend], ax
+    push si
+    mov si, it_ph_ready             ; READY's three beeps (itsnd.inc)
+    call it_snd_post
+    pop si
     cmp byte [it_fsm], 0
     je .w
     mov ax, [it_fshook]             ; (EGA's is the box: it_fs_ega_geom)

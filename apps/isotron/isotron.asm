@@ -52,6 +52,13 @@
 ; 16 colours, Hercules 1bpp at 2 x 1.5, EGA's own 640 x 350 x 16 in a same-
 ; mode bracket - with a step's one column written straight into video
 ; memory, and the game run by the bracket's own loop on the sub-tick clock.
+;
+; --- WAVE 5 -------------------------------------------------------------------
+; THE SOUND (itsnd.inc, SPEC.md 108.14.1): the speaker through OSAPI_SND_TONE,
+; one writer after the measured work - the wall's tick, the crash's falling
+; sweep, READY's beeps, the tower's chime, GAME OVER's notes - silent on every
+; way out. THE KEYS (itinput.inc, 108.14.2): a held turn key is one turn, a
+; double tap two. THE PACE (108.14.3) measured on the 5150 against the model.
 ; =============================================================================
 
 %include "os88api.inc"
@@ -713,7 +720,16 @@ it_focus_ck:
 ; -----------------------------------------------------------------------------
 it_wake:
     cmp byte [it_nomem], 0
-    jne .out
+    jne .nm
+    call it_tsample                 ; the turn key's level (itinput.inc 108.14.2)
+    call it_wake_run
+    jmp it_snd_frame                ; THE SOUND, after the measured work: the
+.nm:                                ; governor has read the hold (itsnd.inc)
+    ret
+
+; it_wake_run - the logic and the present, and the presentation governor.
+; Clobbers everything but DS.
+it_wake_run:
     mov es, [it_seg]                ; ES = the claim for the whole of the logic
     call pit_now                    ; the hold starts (os88pit.inc, 838 ns)
     mov [it_gt0], ax
@@ -874,6 +890,7 @@ it_putdec:
 %include "itwin.inc"
 %include "itfs.inc"
 %include "itsweep.inc"
+%include "itsnd.inc"
 %include "os88pit.inc"
 
 ; =============================================================================
@@ -1186,7 +1203,7 @@ it_s_nomem3: db ' KB.', 0
 ; --- the game --------------------------------------------------------------------
     BYTEV it_state
     BYTEV it_tier                   ; 1..3
-    BYTEV it_snd                    ; sound wanted (the tones are wave 5's)
+    BYTEV it_snd                    ; sound wanted (M, Game > Sound, the tier)
     BYTEV it_paused
     WORDV it_tend                   ; a timed state's end, in ticks
     WORDV it_lastt                  ; the governor's last tick
@@ -1228,6 +1245,19 @@ IT_PLAYER equ it_heads + MAXHEADS * H_SIZE
     BYTEV it_qcont
     BYTEV it_qsnd                   ; M or Game > Sound: toggle it_snd
     BYTEV it_hudp                   ; the winner's HUD line, owed 0.25 s on
+    BYTEV it_tkey                   ; THE TYPEMATIC FILTER (itinput.inc): the
+    BYTEV it_tup                    ; last turn keystroke's key, its up seen
+    WORDV it_tacc                   ; since, and when a turn was last accepted
+
+; --- the sound (itsnd.inc, SPEC.md 108.14.1): its one writer is it_snd_frame --
+    WORDV it_sphn                   ; the phrase's next row, 0 = none playing
+    WORDV it_spt0                   ; ...the tick it began
+    BYTEV it_spnew                  ; ...2: posted, it begins at the next frame
+    BYTEV it_sppri                  ; ...its priority
+    BYTEV it_sndtk                  ; a wall tick owed (it_iterate posts it)
+    BYTEV it_sndpc                  ; ...player cells to the next one
+    BYTEV it_sndlive                ; a tone of ours may be sounding...
+    WORDV it_sndexp                 ; ...until the tick its lease ends
 
 %include "ittest.inc"
 

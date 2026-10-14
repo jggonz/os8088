@@ -877,8 +877,20 @@ def perf_leg(tag, out):
         M.guest_sleep(m, 0.5)
         m.pause()
         g.put("it_pspeed", 9)
+        # AUDIBLE (SPEC.md 108.14.4): a NOFLOW game is silent, and the wake's
+        # sound is the last thing inside its hold - one OSAPI_SND_TONE a wake
+        # at boost, the wall tick's. The ceiling is gated WITH it: it_snd
+        # poked on (the M key's byte), and the calls counted, so a line that
+        # went silent again is a failure and not a better number
+        g.put("it_snd", 1)
         m.run()
+        nt0 = g.w("it_ntone")
         luna = wakes("lunatic4")
+        luna["tone_calls"] = (g.w("it_ntone") - nt0) & 0xFFFF
+        print("  lunatic4 wake, audible: %d OSAPI_SND_TONE calls over the trace"
+              % luna["tone_calls"], flush=True)
+        assert luna["tone_calls"] >= 20, "the Lunatic h4 line made %d sound calls: not " \
+            "audible" % luna["tone_calls"]
         to_title(g)
 
         # --- A ROUND'S START (SPEC.md 108.11.7): the rebuild, its wake's hold,

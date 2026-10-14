@@ -10,7 +10,7 @@ It is a native 8086 assembly remake of a 1982 IBM PC game, written from the
 game's observed rules alone: there is no original code in it, and every
 picture it draws is drawn by code.
 
-**Status: wave 4 of 6.** The rules, the computer and the pace are complete
+**Status: wave 5 of 6.** The rules, the computer and the pace are complete
 and are checked against a reference model (`tools/isotronsim.py`). The
 window shows the arena in 3D - the slab, the tower and every wall, one
 column a step - on VGA and EGA in 16 colours and on CGA and Hercules in
@@ -24,8 +24,14 @@ block letters, the crash and its score, a wait for Space, and every new
 arena SWEPT onto the screen the way the original drew it - rims and faces,
 the front face and the floor left to right, the outline last - in about a
 second and a half, the tower rising and starting again through the same
-sweep; three losses end the game on its own line. The sounds arrive in the
-next wave.
+sweep; three losses end the game on its own line. **The sounds** are the PC
+speaker's: a soft tick as your wall grows (higher while you are boosted), a
+falling sweep at every crash, three beeps before each round, a chime as the
+tower rises and four notes at the game's end - M turns them off, and a
+silent tier never makes them. A held turn key turns you ONCE; tap it twice
+for a U-turn. Windowed or full screen, the game keeps the original's pace
+on any PC - measured on an emulated 4.77 MHz XT (MartyPC) to within a
+percent.
 See SPEC.md section 108 and `docs/plans/ISOTRON-PLAN.md`.
 
 ## Keys
@@ -58,10 +64,11 @@ make isotrontest    # the host model's selfcheck, then on MartyPC seeded games
                     # against it, the canvas byte for byte and the window's
                     # picture pixel for pixel on CGA, Hercules, VGA and EGA,
                     # full screen on all four, the toggle, two displays,
-                    # and the game's flow through its own keys
+                    # the game's flow through its own keys, and the sound
+                    # (the speaker captured), the keys and the pace
 ```
 
 `ISOTRON.O88` also ships in `GAMES/` on the apps disks (and on
 `games360.img` at 360KB). It claims 63 KB for its picture and 30 KB for its
-work beside its own ~19 KB (15 KB on the disk), and says so in words when
+work beside its own ~21 KB (16 KB on the disk), and says so in words when
 the machine has less.

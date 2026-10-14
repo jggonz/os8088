@@ -25,6 +25,11 @@
 ;   it_tgo      byte  1 = start the NOFLOW game now (the worker clears it)
 ;   it_tswk     word  0, or the sweep's last due item: a sweep stops there
 ;                     until it is cleared (isotronflow's paint mid-sweep)
+;   it_tstall   byte  wave 5, isotronpace: the next PACED it_play waits this
+;                     many ticks of the BIOS clock - the lock held, the frame
+;                     not returned - before it reads the clock, and clears it
+;                     (itrules.inc it_stall): a real stall, the governor's
+;                     one-tick rule (SPEC.md 108.4.2) what follows it
 ;   it_tinn     byte  entries in it_tinput (FAST without BOT): a script of
 ;   it_tinput   8 x   (word iteration, byte key) - K_LEFT, K_RIGHT, K_BOOST,
 ;               3 B   K_NORMAL - played at that iteration of every round,
@@ -51,6 +56,11 @@
 ;   it_gover    word  games that have ended in three losses
 ;   it_nsweep   word  sweeps ended (wave 4; isotron.asm's bss, itsweep.inc)
 ;   it_nswp     word  W_PAINTs made during a sweep (itsweep.inc it_sw_paint)
+;   it_ntone    word  wave 5: OSAPI_SND_TONE calls, all told (itsnd.inc it_tone;
+;                     the mark it_tonecall / it_tonecall1 brackets the call)
+;   it_nturn    word  ...turn keystrokes the typematic filter took, and
+;   it_ndrop    word  ...the repeats it dropped (itinput.inc it_tfilt)
+;   it_nstall   word  ...forced stalls served
 ;
 ; THE BOUND COUNTERS (SPEC.md 108.10.2), kept by itcanvas.inc it_span:
 ;
@@ -100,6 +110,7 @@ IT_TINMAX    equ 8
     WORDV it_tswk
     BYTEV it_tinn
     BUFV  it_tinput, IT_TINMAX * 3
+    BYTEV it_tstall                 ; wave 5: a paced wake's forced stall
 
 ; --- outputs -----------------------------------------------------------------
     WORDV it_iter
@@ -118,3 +129,7 @@ IT_TINMAX    equ 8
     BYTEV it_maxprobe
     BYTEV it_maxspan
     WORDV it_nswp
+    WORDV it_ntone                  ; wave 5: OSAPI_SND_TONE calls (itsnd.inc)
+    WORDV it_nturn                  ; ...turn keystrokes the filter took
+    WORDV it_ndrop                  ; ...and the repeats it dropped
+    WORDV it_nstall                 ; ...forced stalls served (it_stall)

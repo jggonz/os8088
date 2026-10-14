@@ -2883,6 +2883,65 @@ SOAK = [
         "Measured ~56 s for both machines (wave 4)",
         needs=("marty", "nasm"),
         wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronsound", "soak", py("tests/isotronlive.py", "--sound"), 90.0,
+        "isoTron's SOUND on the 8088 (SPEC.md 108.14.1), MartyPC's 5150 CGA "
+        "with the speaker CAPTURED (MARTYPC_WAV) and every OSAPI_SND_TONE traced "
+        "at the package's one call site (AX, CX, DL, and the driver's CF - a "
+        "refused call fails): `1` - a real key - starts a seeded game nobody "
+        "steers; READY's 440, 440, 880 Hz at 50h on ticks 0, 3, 6, offs at 60h "
+        "on 2, 5, 8; the wall ticks 110 Hz at 40h with a one-tick lease, 165 Hz "
+        "once F10 boosts, one every 4th player cell (+-1) and never two in a "
+        "wake; the crash's 15 entries falling x15/16 from 1,400 Hz a tick apart "
+        "at 60h, then its off. M mutes a whole round (sweep, READY, play, crash: "
+        "no call) and unmutes; `A`, a SILENT tier, makes no call through a "
+        "round. A stored game played FAST by the bot through the real title: "
+        "every raise has its chime 523, 659, 784 Hz on ticks 0, 3, 6 and a reset "
+        "or the same height none, and GAME OVER its four notes on 0, 4, 8, 12. "
+        "THE GATE: port 61h & 3 = 0 and no call for a guest second after P "
+        "pauses a round with the wall ticking, and after Esc, F into full "
+        "screen and F out of it, each pressed in the middle of a crash's sweep "
+        "with eleven or more entries left - at most eight more, ONE off at 60h, "
+        "then silence; in full screen a wall tick is followed by its explicit "
+        "off a frame on. THE CAPTURE: READY's 880 Hz where the trace asked for "
+        "it (the capture's clock is the guest's), the crash's dominant frequency "
+        "tick by tick (Goertzel, tools/sndcheck.py) within 3% of the table and "
+        "FALLING (one silent window tolerated and named, every call having been "
+        "granted), silence after its off and through the muted and silent "
+        "rounds. Then the cost: one call's cycles on and off, a bracket frame's "
+        "sound with and without one (PERFORMANCE.md Set 157). Measured ~52 s "
+        "alone in a soak lane (wave 5)",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotroninput", "soak", py("tests/isotronlive.py", "--input"), 45.0,
+        "isoTron's KEYS on the 8088 (SPEC.md 108.14.2), MartyPC's 5150 CGA, every "
+        "key a real one through the 8255 and int 09h: F10 HELD ramps the speed - "
+        "sampled at every wake, p climbs 2 -> 9 through at least six values on "
+        "its typematic repeats; Del held 1.5 s with the game held still posts "
+        "exactly ONE turn and the filter counts at least five repeats dropped "
+        "(the control: the keyboard really repeated); NumLock on, keypad Ins "
+        "(AL '0', AH 52h) turns left; a DOUBLE TAP of Ins is two turns, a "
+        "U-turn; Up x3 posts three boosts (p 5) and Down F9's normal (p 2); a "
+        "toggle forgets the tracked turn key, both ways. Measured ~18 s (wave 5)",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronpace", "soak", py("tests/isotronlive.py", "--pace"), 75.0,
+        "isoTron's PACE on the 8088 (SPEC.md 108.4, 108.14.3), MartyPC's 5150 "
+        "CGA, the machine the pace is fitted to: a seeded harness round (NOFLOW, "
+        "paced, nobody steering, p = 2; a seed whose every head lives through "
+        "each window, the model says) at Rookie h1, Rookie h2 and Lunatic h1, "
+        "windowed and then in full screen - iterations per GUEST second between "
+        "two wake ends (it_wake1, it_fs_frame: the debt in (-cost, 0], so good to "
+        "one iteration) within 2% of 108.4.1's model, every head alive and p = "
+        "2 throughout; the governor's credit over the window (its iterations' "
+        "costs plus the debt's change) 768 u a BIOS tick, plus 256 a phase in "
+        "full screen, to within a tick. THE STALL: it_tstall makes one paced "
+        "wake or frame wait 10 real ticks, and it credits EXACTLY 1,536 u less "
+        "the phase the last frame had paid - its own tick and one owed, never "
+        "the ten. V = NOW after a resume (P, a guest second, P: the first wake "
+        "back credits at most a tick) and on both sides of a toggle mid-round. "
+        "Measured ~32 s (wave 5)",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
     Row("isotronperf", "soak", py("tests/isotron.py", "--perf", "all"), 720.0,
         "isoTron's windowed price on the XT (SPEC.md 108.10.3, 108.11.7; "
         "ISOTRON-PLAN section 16), MartyPC's cycle counter on the 5150 CGA, "
@@ -2893,7 +2952,10 @@ SOAK = [
         "the model's, so the sample is the same on every run), against 3,000 "
         "cycles; a paced WAKE (the lock, the steps and the "
         "present) at Rookie h1 against 22 ms on 1bpp and 30 on VGA, and at "
-        "Lunatic h4 at full boost against 35 / 50 ms - and when such a wake "
+        "Lunatic h4 at full boost against 35 / 50 ms, AUDIBLE (wave 5 fix, "
+        "SPEC.md 108.14.4: it_snd poked on, at least 20 OSAPI_SND_TONE calls "
+        "over the trace or the line fails, since the wake's sound is inside "
+        "its hold and a NOFLOW game is silent) - and when such a wake "
         "passes 45 ms, the presentation governor must have engaged after it. "
         "Then a ROUND'S START at h1 and h4: the rebuild, its wake's hold, and "
         "the whole present going out in bands - every band's hold under 50 ms "

@@ -225,6 +225,7 @@ it_fs_go:
 it_fs_main:
     cld
     OS88_ALTENTER_SEED              ; the Alt+Enter that got us here is held
+    call it_snd_quiet               ; A TOGGLE SILENCES (SPEC.md 108.14.1)
     mov byte [it_fsm], 1
     mov byte [it_fsq], 0
     mov byte [it_fsega], 0
@@ -246,6 +247,7 @@ it_fs_main:
     jc .leave                       ; nothing to show after all: home again
     call it_fs_reset
 .frame:
+    call it_tsample                 ; the turn key's up, sampled a frame
     mov ah, 1                       ; THE KEYS, drained every frame (SPEC.md
     int 0x16                        ; 67.11.2): no events are dispatched here
     jz .nokey
@@ -264,6 +266,8 @@ it_fs_main:
     call it_flow
     call it_fs_present
     IT_MARK it_fs_frame
+    call it_snd_frame               ; after the measured work (itsnd.inc)
+    IT_MARK it_fssnd1               ; (the frame's sound, priced: 108.14.4)
     mov al, FSXW_FRAME
     call OSAPI_FSX_WAIT
     call it_fs_sub                  ; one more sub-tick has passed
@@ -468,6 +472,7 @@ it_fs_reset:
     mov [it_ftail], al
     mov byte [it_kboost], 0
     mov byte [it_kf9], 0
+    call it_treset                  ; the turn keys' tracking (108.14.2)
     mov word [it_spanhk], it_span_box ; until the first whole present is out
     call it_fs_resub
     call it_clock_sync
@@ -537,6 +542,8 @@ it_fs_exit:
     mov [it_ftail], al
     mov byte [it_kboost], 0
     mov byte [it_kf9], 0
+    call it_treset                  ; the turn keys' tracking, and
+    call it_snd_quiet               ; A TOGGLE SILENCES, this way too
     ret                             ; (V = now: it_fs_go, once OSAPI_FSX_RUN is
                                     ; back - the way back is behind it)
 

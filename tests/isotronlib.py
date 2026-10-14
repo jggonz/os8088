@@ -45,13 +45,15 @@ SRC = os.path.join(ROOT, "apps", "isotron", "isotron.asm")
 INCS = (os.path.join(ROOT, "apps") + os.sep, os.path.join(ROOT, "apps", "isotron") + os.sep)
 BSS_SRCS = ("isotron.asm", "ittest.inc")
 EQU_SRCS = ("isotron.asm", "ittest.inc", "itcanvas.inc", "itwin.inc", "itfs.inc",
-            "itsweep.inc")
+            "itsweep.inc", "itinput.inc", "itsnd.inc")
 MARKS = ("it_step0", "it_step1", "it_wake0", "it_wake1", "it_frame_end",
          "it_hs0", "it_hs1", "it_worker", "it_iterate", "it_move", "it_round_end",
          "it_span", "it_present", "it_rb0", "it_rb1", "it_fdone", "it_ai1", "it_span0",
          "it_fsw0", "it_fsw1", "it_fs_frame", "it_fsx0", "it_fsback", "it_fsf0",
          "it_fr_cga", "it_fr_vga", "it_fr_herc", "it_sw0", "it_sw1", "it_rdy1",
-         "it_swp0", "it_swp1", "it_bld0", "it_bld1", "it_paint_rect", "it_paint_rect.ov")
+         "it_swp0", "it_swp1", "it_bld0", "it_bld1", "it_paint_rect", "it_paint_rect.ov",
+         "it_tonecall", "it_tonecall1", "it_ph_crash", "it_ph_ready", "it_ph_tower",
+         "it_ph_over", "it_fssnd1", "it_snd_frame")
 
 # it_tflags (ittest.inc)
 TF_FAST, TF_BOT, TF_NOFLOW, TF_HOLD, TF_SEED = 1, 2, 4, 8, 16

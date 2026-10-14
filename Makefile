@@ -14744,7 +14744,7 @@ excitebikeload: excitebikedisk $(BUILD)/os8088-360.img
 # SHIPS through APPS_GAMES; `isotrondisk` is its own floppy in all four
 # geometries, carrying the package and its README.
 .PHONY: isotron isotrondisk isotrontest
-$(BUILD)/isotron.bin: apps/isotron/isotron.asm apps/isotron/itrules.inc apps/isotron/itai.inc apps/isotron/itinput.inc apps/isotron/ittest.inc apps/isotron/itcanvas.inc apps/isotron/itwin.inc apps/isotron/itfs.inc apps/isotron/itsweep.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc apps/os88pit.inc | $(BUILD)
+$(BUILD)/isotron.bin: apps/isotron/isotron.asm apps/isotron/itrules.inc apps/isotron/itai.inc apps/isotron/itinput.inc apps/isotron/ittest.inc apps/isotron/itcanvas.inc apps/isotron/itwin.inc apps/isotron/itfs.inc apps/isotron/itsweep.inc apps/isotron/itsnd.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc apps/os88pit.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/isotron/ -l $(BUILD)/isotron.lst -o $@ $<
 
 $(BUILD)/isotron.o88: $(BUILD)/isotron.bin tools/os88pkg.py $(PKGZSTAMP)
@@ -14767,12 +14767,15 @@ $(BUILD)/isotron360.img: $(ISO_DISKFILES) tools/os88disk.py
 	python3 tools/os88disk.py --verify $@
 isotrondisk: $(BUILD)/isotron.img $(BUILD)/isotron720.img $(BUILD)/isotron120.img $(BUILD)/isotron360.img
 # The gates by hand (the isotronsim, isotronrules, isotronbound, isotronwin,
-# isotronega, isotronfs, isotrontoggle and isotrontwodisp soak rows): the host
+# isotronega, isotronfs, isotrontoggle, isotrontwodisp, isotronflow,
+# isotronsound, isotroninput and isotronpace soak rows): the host
 # model's selfcheck, then on MartyPC seeded bot games round for round against
 # the model, the canvas byte for byte after every round, the windowed picture
 # pixel for pixel on CGA, Hercules, VGA and an EGA kernel, the full-screen
 # video memory and rendering on all four, the toggle leaving the game's bytes
-# alone, and the Hercules bracket of a two-display desktop. The price
+# alone, the Hercules bracket of a two-display desktop, the flow through the
+# real keys, and (wave 5, tests/isotronlive.py) the speaker captured, the
+# typematic filter and the pace in guest seconds. The price
 # (isotronperf) is `python3 tests/isotron.py --perf all`: minutes, so not here.
 isotrontest: isotrondisk $(BUILD)/os8088-360.img
 	python3 tools/isotronsim.py --selfcheck
@@ -14784,6 +14787,9 @@ isotrontest: isotrondisk $(BUILD)/os8088-360.img
 	python3 tests/isotron.py --toggle all
 	python3 tests/isotron.py --twodisp
 	python3 tests/isotron.py --flow all
+	python3 tests/isotronlive.py --sound
+	python3 tests/isotronlive.py --input
+	python3 tests/isotronlive.py --pace
 
 # REDLINE native CPU/graphics performance lab (SPEC.md 103).
 .PHONY: redline redlinedisk redline-profile

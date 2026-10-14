@@ -9,7 +9,8 @@
 ;
 ; Register contract for the whole file: DS = the package, ES = the claim
 ; (it_seg) - the grid lives at IT_GRID in it. Nothing here calls the kernel
-; but OSAPI_GET_TICKS, so ES survives every routine.
+; but OSAPI_GET_TICKS and OSAPI_SND_TONE (itsnd.inc), neither of which
+; touches ES, so ES survives every routine.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -50,7 +51,9 @@ it_flow:
 .tok:
     inc al
     mov ah, 1
-    call it_game_start
+    mov byte [it_snd], 0            ; (silent, as its comment has always said:
+    call it_snd_label               ; a harness game is the rows', not a
+    call it_game_start              ; listener's - isotronsound uses the keys)
     ret
 .play:
     call it_play
@@ -85,17 +88,27 @@ it_flow:
     mov byte [it_qcont], 0          ; (a Space from CRASH: not GAME OVER's)
     add dx, IT_OVERT
     mov [it_tend], dx
-    ret
+    call it_snd_quiet               ; THE CRASH'S LAST ENTRY STILL HOLDS THE
+    mov si, it_ph_over              ; CHANNEL at 60h (its off row was due this
+    call it_snd_post                ; very wake, and the post would replace
+    ret                             ; it unsent): our own off frees it, or the
+                                    ; phrase's first 523 Hz at 50h is refused
+                                    ; (MEASURED: CF = 1, owner 60h). Then its
+                                    ; phrase, under the line (itsnd.inc)
 .ready:
     ; READY (108.13.2): 0.5 s with the arena drawn and nothing moving, then
     ; the round - its pace from the first wake that owes no present (it_play).
     ; The About card up (nothing is presented under it) holds READY: its
-    ; 0.5 s start again from the card's going
+    ; 0.5 s start again from the card's going - and so do its beeps, the
+    ; card being silent (it_snd_frame): posted every wake under it, the
+    ; phrase waits unbegun and starts on the first wake after
     call OSAPI_GET_TICKS
     cmp byte [it_abon], 0
     je .rd
     add ax, IT_READYT
     mov [it_tend], ax
+    mov si, it_ph_ready
+    call it_snd_post
     ret
 .rd:
     sub ax, [it_tend]
@@ -127,6 +140,7 @@ it_flow:
 ; Preserves every register.
 ; -----------------------------------------------------------------------------
 it_to_title:
+    call it_snd_quiet               ; Esc, or GAME OVER done: silence first
     mov byte [it_state], ST_TITLE
     mov byte [it_paused], 0
     mov byte [it_hudp], 0           ; (a score still owed is the title's no more)
@@ -290,6 +304,10 @@ it_play:
     call it_clock_sync              ; nothing the picture cost is owed
     jmp short .gov
 .tick:
+    cmp byte [it_tstall], 0         ; THE HARNESS'S FORCED STALL (isotronpace,
+    je .ck                          ; SPEC.md 108.14.3): the clock is read
+    call it_stall                   ; after a real wait of that many ticks
+.ck:
     call it_clock                   ; AX = u since the last wake (<= 1,536;
     add ax, [it_debt]               ; a full-screen frame's sub-ticks too)
     cmp ax, DEBT_CAP
@@ -320,6 +338,26 @@ it_play:
     ret
 .ended:
     call it_round_end
+    ret
+
+; -----------------------------------------------------------------------------
+; it_stall - the harness's forced stall (ittest.inc it_tstall): wait, really,
+; it_tstall ticks of the BIOS clock - the lock held, the frame not returned -
+; then clear it. What follows is what any stall leaves: a clock that has run
+; on. Preserves all but AX.
+; -----------------------------------------------------------------------------
+it_stall:
+    push bx
+    call OSAPI_GET_TICKS
+    mov bx, ax
+.w:
+    call OSAPI_GET_TICKS
+    sub ax, bx
+    cmp al, [it_tstall]
+    jb .w
+    mov byte [it_tstall], 0
+    inc word [it_nstall]
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -485,6 +523,7 @@ it_game_start:
     pop ax
 .seed:
     mov [it_rng], dx
+    call it_snd_quiet               ; (a game started over a crash's sweep)
     mov byte [it_h], 1
     mov byte [it_prev], WIN_NONE
     mov byte [it_lossrow], 0
@@ -546,6 +585,17 @@ it_round_start:
     call OSAPI_GET_TICKS
     mov [it_swt0], ax
     mov byte [it_swpre], 0          ; (the build emptied the grid)
+    ; THE TOWER RISES (SPEC.md 108.14.1): a raise - not a reset to 1, nor a
+    ; game's first round - has its chime while the new level sweeps in
+    cmp word [it_round], 0
+    je .built
+    mov al, [it_h]
+    cmp al, [it_hplayed]
+    jbe .built
+    push si
+    mov si, it_ph_tower
+    call it_snd_post
+    pop si
     jmp short .built
 .nf:
     call it_grid_reset
@@ -564,6 +614,8 @@ it_round_start:
     mov [it_ftail], al
     mov byte [it_kboost], 0         ; keys pressed between rounds do not carry
     mov byte [it_kf9], 0
+    call it_treset                  ; ...nor a turn key's tracking (108.14.2)
+    mov byte [it_sndpc], IT_SND_CELLS ; the wall tick's count, from the start
     mov al, [it_h]
     mov [it_hplayed], al
     ; --- the player: (108, 27) heading N --------------------------------------
@@ -778,7 +830,13 @@ it_iterate:
     mov bx, IT_PLAYER
     mov al, C_PLAYER
     call it_move
-    jnc .pl
+    jc .pdead
+    dec byte [it_sndpc]             ; THE WALL TICK every 4th player cell, a
+    jnz .pl                         ; flag the frame's sound takes once at
+    mov byte [it_sndpc], IT_SND_CELLS ; most (itsnd.inc): ~40 cycles a cell
+    mov byte [it_sndtk], 1
+    jmp short .pl
+.pdead:
     mov byte [it_winner], WIN_COMP  ; the player crashed: the computer wins NOW
     jmp short .cost
     ; --- each live computer head, in index order -----------------------------------
@@ -912,6 +970,10 @@ it_round_end:
     ret
 .shown:
     mov [it_hudp], al               ; ...the score 0.27 s into CRASH (it_flow)
+    push si
+    mov si, it_ph_crash             ; ...and the crash's falling sweep, CRASH's
+    call it_snd_post                ; whole 0.8 s (itsnd.inc)
+    pop si
     call OSAPI_GET_TICKS
     add ax, IT_CRASHT
     mov [it_tend], ax

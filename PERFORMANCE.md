@@ -14531,3 +14531,67 @@ The indirect jump is ~40 cycles a windowed head-step (2,576 -> 2,619 at Lunatic)
 
 At Lunatic's worst rate (228 head-steps a second, ISOTRON-PLAN 4.1) the full-screen steps alone cost ~19% of the XT on the
 Hercules and ~17% on the CGA (the plan's paper 24% / 21% also charged each of 54.6 frames a second ~1,500 of its own).
+
+### Set 157 — isoTron's pace and its sound on the XT (SPEC.md §108.14.3, §108.14.4)
+
+Measured 2026-10-14 on MartyPC's 4.77 MHz 8088 model `os8088_5150_cga_gla` (the machine the pace is fitted to), the package on
+`build/isotron360.img`, by `tests/isotronlive.py --pace` and `--sound` (the `isotronpace` and `isotronsound` rows; logs in the
+wave's reports, `w5-pace*.log`, `w5-sound*.log`). Numbers are guest state and MartyPC's cycle counter, never wall clock.
+
+**The pace.** A seeded harness round (NOFLOW, paced, nobody steering, p = 2), traced at every wake end (`it_wake1`) or bracket
+frame end (`it_fs_frame`) - where the debt is in (-cost, 0], so a count between two is good to one iteration - against SPEC.md
+§108.4.1's model, `768 x 18.2065 / (A + B h + C p / 6)` iterations a second:
+
+| iterations / guest s | windowed | full screen (CGA 320) | model |
+| --- | ---: | ---: | ---: |
+| Rookie h1 (2.0 s window) | 59.53 (-0.10%) | 59.55 (-0.05%) | 59.58 |
+| Rookie h2 (3.0 s) | 34.10 (+0.65%) | 33.77 (-0.34%) | 33.88 |
+| Lunatic h1 (1.0 s) | 119.71 (+0.45%) | 119.17 (+0.00%) | 119.17 |
+
+The governor's CREDIT over each window - the iterations' costs plus the debt's change - is the clock itself: 28,416 u over 37
+ticks windowed is 768 a tick exactly; in full screen 28,160 over 37 ticks, the phases' 256 each making up the difference to
+within a tick. Four runs of the row read the windowed lines identically and the full-screen ones within 0.06 of each other
+(where a window starts depends on when the host's trace comes up; the stall read 10.1 - 11.1 ticks, crediting 1,024 or 1,536 by
+the phase the frame before it had paid).
+
+**A stall** of ten ticks (`it_tstall`, the wake or the frame waiting on the BIOS clock with the lock held) credits exactly
+`1,536 - 256 x lastph` u: **1,536** windowed after 11.0 ticks, **1,024** in full screen after 10.4 (the last frame had paid
+phase 2) - its own tick and one owed; the other eight or nine are dropped and nothing bursts. **V = now**: after a guest second
+paused the first wake back credits 768 u (256 in full screen); across a toggle mid-round the first iterating frame credits 256
+and the window's first wake back 0.
+
+**The sound's price**, the call site's own marks (`it_tonecall` -> `it_tonecall1`) and a bracket frame's sound
+(`it_fs_frame` -> `it_fssnd1`), medians over a boosted round in full screen:
+
+| | cycles | at 4.77 MHz |
+| --- | ---: | ---: |
+| one `OSAPI_SND_TONE`, a tone on | 1,814 | 380 us |
+| ...a tone off | 1,521 | 319 us |
+| a bracket frame's sound, no call | 390 | 82 us |
+| ...with one call | 2,528 | 530 us |
+| the wall tick's count, a player cell | ~40 (by count) | 8 us |
+
+(Re-measured after the wave's review fixes: `it_tone` records a lease only on a grant, reading the tick before the call, and
+`it_snd_frame` tests the About card - +75 cycles a calling frame, +43 a quiet one, against the first run's 1,818 / 1,533 / 347 /
+2,453.) Set 146's 1,997 cycles a call (Excitebike's) is the same driver at a different site.
+
+**The worst case, COMPUTED from those medians** (the cost leg itself runs at Rookie, p = 5): the wall tick at Lunatic h1 full
+boost, 34 four-cell boundaries a second. Windowed, at most one call a wake, and a wake that calls spends the frame's sound with
+a call: 18.2 x ~2,530 = **~46k cycles a second, ~1.0%** of the XT. Full screen, `it_snd_frame` makes at most ONE call a frame
+and the bracket runs 54.6 frames a second: the hard bound is 54.6 x 2,528 = **~138k cycles a second, 2.9%** - at ISOTRON-PLAN
+12's 2.9% estimate - and the expected rate is under it, a tick's off being skipped once its one-tick lease has run out (~48
+calls a second, ~2.6% with the quiet frames).
+
+**Where it lands.** The head-step and the bracket's frame work keep Set 155's and Set 156's numbers: the sound is after them.
+**The windowed wake does NOT**: `it_snd_frame` is the last thing inside the wake's lock hold (`it_wake0` -> `it_wake1`), after
+the governor has read the hold, so a wake that calls grows by ~2,530 cycles (0.53 ms) and every wake by `it_tsample`'s ~30 -
+280. Set 155's wake lines were taken SILENT (a NOFLOW game is silent, `it_snd` = 0), so `isotronperf`'s Lunatic h4 full-boost
+line now pokes `it_snd` on and counts the calls (at least 20, or the row fails as no longer audible), gating the ceiling WITH
+the sound - measured 2026-10-14:
+
+| wake, Lunatic h4 full boost, audible | CGA | Hercules | VGA | ceiling |
+| --- | ---: | ---: | ---: | ---: |
+| median (most), ms | 24.5 (29.1) | 28.9 (40.2) | 34.0 (81.8, governor engaged) | 35 / 35 / 50 |
+| `OSAPI_SND_TONE` calls over the 120 wakes | 83 | 76 | 89 | |
+
+against Set 155's silent 23.0 - 23.5 / 27.3 - 27.6 / 32.8 - 35.4: about a millisecond, a call most wakes.

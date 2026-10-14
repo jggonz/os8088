@@ -169272,6 +169272,11 @@ while debt >= 0 and the round goes on:  iterate(); debt -= cost
   change - so a tick's 768 u arrive whichever way it is cut, and a moved
   tick pays only what its phases had not. **V = now on both sides of every
   toggle** (`it_clock_sync`), and after every full-screen whole present.
+- **Verified on the 5150 (wave 5, §108.14.3)**: iterations per guest second
+  within 0.65% of the model at Rookie h1, Rookie h2 and Lunatic h1 in both
+  modes; a forced stall of ten ticks credits exactly `1,536 - 256 *
+  lastph` u - its own tick and one owed, the phase a bracket frame had
+  already paid taken off - and never the ten.
 
 ### 108.5 Between rounds (wave 1; wave 4's flow is §108.13.2)
 
@@ -169282,8 +169287,9 @@ while debt >= 0 and the round goes on:  iterate(); debt -= cost
 | SWEEP, READY | the new arena going onto the glass, then 0.5 s of it standing | the sweep's end; 9 ticks |
 | GAME OVER | `THREE LOSSES IN A ROW. GAME OVER.` | 64 ticks (3.5 s), or Space: the title |
 
-The round-start beeps and the tower chime are wave 5. Esc ends a game from
-any of these and from play; at the title it does nothing in a window.
+Their sounds - the crash's sweep, READY's beeps, the tower's chime and GAME
+OVER's phrase - are §108.14.1's. Esc ends a game from any of these and from
+play; at the title it does nothing in a window.
 
 ### 108.6 The computer (wave 1)
 
@@ -169393,8 +169399,9 @@ with NumLock (AH 4Fh, 50h - which is Down - and 51h) all do.
 Extended keys are tested on **AH** before anything looks at AL, and AL is
 never case-folded first (§67.11.1); keypad Ins with NumLock on (AL = '0',
 AH = 52h) is still Ins. M (and Game > Sound) toggles the sound flag, which
-the Sound item names (wave 4); the tones it gates and the typematic filter
-on turns are wave 5.
+the Sound item names (wave 4); the tones it gates are §108.14.1, and the
+**typematic filter** that makes a held turn key ONE turn - and a double tap
+two - is §108.14.2 (wave 5).
 
 #### 108.7.2 The harness (`apps/isotron/ittest.inc`)
 
@@ -169408,7 +169415,9 @@ not the game's, so a held game stops at its next round's first iteration
 with the arena drawn; bit 4 SEED, wave 4: a game the KEYS or the menu
 start takes `it_tseed` rather than the clock, so a stored game is played
 through the real title), `it_tgo`, `it_tswk` (wave 4: 0, or the sweep's last
-due item - a sweep stops there until it is cleared), and `it_tinn` / `it_tinput`, a script of up to eight
+due item - a sweep stops there until it is cleared), `it_tstall` (wave 5: the
+next PACED `it_play` waits that many real ticks before it reads the clock -
+`isotronpace`'s forced stall, §108.14.3), and `it_tinn` / `it_tinput`, a script of up to eight
 (iteration, key) entries for a FAST game without the bot. Outputs, read
 after every round: `it_iter`, `it_round`, `it_sp`, `it_sc`, `it_h` (the
 tower now), `it_hplayed`, `it_lossrow`, `it_prev`, `it_winner`, `it_rng`,
@@ -169428,7 +169437,11 @@ and `it_fsx0` / `it_fsback` the way back (the bracket's last frame to
 `OSAPI_FSX_RUN`'s return); wave 4's `it_nsweep` (sweeps ended) and the
 marks `it_sw0` (a sweep's start: Space's wake, before anything of it) /
 `it_sw1` (its end: the outline out), `it_rdy1` (READY's end) and `it_swp0` /
-`it_swp1` around one windowed piece of it. A mark is `name equ $` emitted
+`it_swp1` around one windowed piece of it; wave 5's `it_ntone` (every
+`OSAPI_SND_TONE` call), `it_nturn` / `it_ndrop` (turn keystrokes the
+typematic filter took and dropped), `it_nstall` (stalls served) and the marks
+`it_tonecall` / `it_tonecall1` around the package's one call to the driver
+and `it_fssnd1` after a bracket frame's sound. A mark is `name equ $` emitted
 only under `-DIT_MARKS` (`IT_MARK`): it adds no byte, so that image is the
 shipped one, and without the define the symbol stays out of nasm's map,
 where `tools/stkdepth.py` would read it as a routine boundary and price a
@@ -169452,7 +169465,7 @@ where the model's `bot_input` does.
 | `isotronfs` | soak | wave 3, §108.12.9: the full-screen glass on MartyPC's 5150 CGA, 5150 Hercules and XT-VGA - video memory byte for byte (CGA, Hercules) or the rendering pixel for pixel (VGA 0Dh) against the model's presenter of the same canvas AND its text (the records the state shows, the guest's glyphs; nothing skipped), at the title and after three rounds, with two negative controls; C and back; Esc's two full-screen cases |
 | `isotrontoggle` | soak | wave 3, §108.12.9: twelve toggles mid-round by F, Alt+Enter and the menu, the game's bytes unchanged by every one and the glass right on both sides; a round toggled while it runs still the model's, and no burst after its way back; Esc's four cases |
 | `isotrontwodisp` | soak | wave 3, §108.12.9: a VGA beside a Hercules - the seam's format switch is one whole present, and the Hercules bracket leaves the VGA's mode and memory alone |
-| `isotronperf` | soak, serial | MartyPC's cycle counter on the three machines: the computer head-step's median over every computer head-step of two whole rounds of a seeded FAST game (the count held to the model's, so the sample is the same on every run), Rookie and Lunatic, against 3,000 cycles; the paced wake at Rookie h1 (22 ms 1bpp, 30 ms VGA) and at Lunatic h4 full boost (35 / 50 ms), sampled once the round's whole present is out, and a wake over 45 ms must find the governor engaged; then a ROUND'S START at h1 and h4 - the rebuild, its wake's hold, every hold that puts the whole present out in bands (each under 50 ms) and the span from the rebuild to the last band (§108.11.7); and since wave 3 the FULL SCREEN, a boot of its own a machine: F's whole present at the title and in a round against 1.5 s, its rects tiling the picture exactly once outside the text, the head-step with its span hook over the same rounds against 4,500 (CGA) / 5,000 (Hercules) / 4,000 (VGA 0Dh) cycles, the way back's first light against 1.5 s and its band holds against 50 ms; the EGA tree's presents, way back and Lunatic h4 frame (§108.12.7) |
+| `isotronperf` | soak, serial | MartyPC's cycle counter on the three machines: the computer head-step's median over every computer head-step of two whole rounds of a seeded FAST game (the count held to the model's, so the sample is the same on every run), Rookie and Lunatic, against 3,000 cycles; the paced wake at Rookie h1 (22 ms 1bpp, 30 ms VGA) and at Lunatic h4 full boost (35 / 50 ms) WITH the sound (`it_snd` poked on, at least 20 calls over the trace, §108.14.4), sampled once the round's whole present is out, and a wake over 45 ms must find the governor engaged; then a ROUND'S START at h1 and h4 - the rebuild, its wake's hold, every hold that puts the whole present out in bands (each under 50 ms) and the span from the rebuild to the last band (§108.11.7); and since wave 3 the FULL SCREEN, a boot of its own a machine: F's whole present at the title and in a round against 1.5 s, its rects tiling the picture exactly once outside the text, the head-step with its span hook over the same rounds against 4,500 (CGA) / 5,000 (Hercules) / 4,000 (VGA 0Dh) cycles, the way back's first light against 1.5 s and its band holds against 50 ms; the EGA tree's presents, way back and Lunatic h4 frame (§108.12.7) |
 | `isotronflow` | soak | wave 4, §108.13.5: the title, a stored game played through the real keys with every arena swept in and held to the model, the score's delay, WAIT and Space, the tower 1-2-3-4-1 on the glass, GAME OVER and the title, About, a paint mid-sweep, the focus pause |
 | `isotronrules` | soak | MartyPC 5150 CGA: the first stored game of each tier played FAST + BOT + NOFLOW + HOLD on the guest; after EVERY round the guest's height, winner, iterations, scores, tower, losses in a row, RNG state, checksum and head-steps equal the model's; the game ends and returns to the title; and the model with "every win raises" must disagree with what the guest played. Then a SCRIPTED game (`it_tinput`: two F10s, a right turn, a left and an F9 at fixed iterations of every round, no bot) is held to the model the same way: `it_script` POSTS each entry into the UI task's mailbox (`it_kboost`, `it_kf9`, the FIFO) as `it_key` would, so the worker's own consumer takes it. LAST, THE KEYBOARD ITSELF (HOLD only - no FAST, BOT or NOFLOW): real keystrokes through MartyPC's keyboard into `W_ONKEY`, `it_key` and `it_turn_ok`, with the worker held by `it_tpause` so each post is read before an iteration takes it - `1` starts a game; `P` pauses it and a Del while paused is refused; Space resumes; Del Ins Ins Ins leave the FIFO right-left-left (depth 3, newest dropped); F10 F10 F9 post 2 and 1; released, the speed is 4/6 and the turns are a double-tap U-turn (d = 28, heading W); Space during CRASH is kept and WAIT takes it; Esc ends a game; and a game at two losses in a row goes CRASH -> GAME OVER -> the title, a Space pressed in that third loss's CRASH NOT kept (it would cut GAME OVER's line short) and the line still up a guest second in |
 
@@ -169519,6 +169532,12 @@ where the model's `bot_input` does.
   (`OSAPI_WM_TOP` and `OSAPI_MENU_OWNER`: losing the front pauses a game,
   stickily), then under ONE gfx lock hold: the commands the UI task posted,
   the state machine and the pace governor, and the present (§108.11.4).
+  **The posts are taken in the order a player makes them**: a round whose
+  arena was just built (`it_qround`), then Esc (`it_qesc`), THEN a new game
+  (`it_qstart`) - so Esc and `1` typed while the worker was busy (the
+  title's 0.81 s build) end the old game and start the new one. Wave 5's
+  `isotroninput` found them the other way round: the new game began and the
+  same pass's Esc ended it, the `1` consumed and the state left at TITLE.
   **Every grid and canvas write happens inside a lock hold**, so a `W_PAINT`
   never sees half an iteration. Wave 1's flat debug view is gone.
 - **Disks.** `ISOTRON.O88` is in `APPS_GAMES`: `GAMES/` on the 1.44MB, 1.2MB
@@ -170784,3 +170803,186 @@ KB), and is wave 6's to settle.
 | `isotronperf` (the sweep part) | §108.13.4's table, each line under 2.2 s, on the four machines; every windowed lock hold from the trigger to a sweep's end, and every CRASH -> WAIT wake's, under 100 ms |
 | `isotronrules` (wave 4's change) | the keyboard leg's game at two losses in a row now goes CRASH, then GAME OVER, then the title; a Space in that third loss's CRASH is not kept, and GAME OVER's line is still up a guest second in |
 | `isotronsim` | the lettering's table and `IT_LOGOX/Y/S` read out of the guest's source and equal to the model's `LOGO` |
+
+### 108.14 Sound, keys and the pace (wave 5)
+
+`apps/isotron/itsnd.inc`, the typematic filter in `itinput.inc`, and the
+pace's verification. Rows: `isotronsound`, `isotroninput`, `isotronpace`
+(`tests/isotronlive.py`, §108.14.5).
+
+#### 108.14.1 The sounds (ours; the original's are not reproduced)
+
+`OSAPI_SND_TONE` only (§34.3): worker-safe, billed to this instance and
+released by `snd_release_inst` at teardown, so closing isoTron cannot leave a
+tone droning. No FM, no PCM, no driver.
+
+| event | sound | priority | calls |
+|---|---|---|---|
+| wall tick | 110 Hz, 165 Hz while boosted (p > 2), a ONE-TICK lease (CX = 1), every 4th player cell, **at most one a frame**; windowed its lease ends it at the tick, in full screen an explicit off goes out on the next frame | 40h | at most 2 a 4 cells |
+| crash | 1,400 Hz falling x15/16 a tick (1,400, 1,312, 1,230, 1,154, 1,081, 1,014, 951, 891, 835, 783, 734, 688, 645, 605, 567), 15 entries one a tick - CRASH's whole 0.8 s - each with a two-tick lease, then off | 60h | 16 |
+| round start | 440, 440, 880 Hz, two ticks on and one off, over READY's nine ticks | 50h | 6 |
+| tower rises | 523, 659, 784 Hz, three ticks each, while the raised level sweeps in (a raise only: not a reset to 1, not a game's first round) | 50h | 4 |
+| game over | 523, 392, 330, 262 Hz, four ticks each, under the line | 50h | 5 |
+
+(ISOTRON-PLAN 12 said the crash fell "to about 110 Hz"; fifteen steps of
+x15/16 from 1,400 Hz end at 567, and the fifteen steps are what is pinned.)
+
+- **Every off goes out at 60h**: an off obeys the priority compare as an on
+  does (§34.3), so an off at the tick's 40h could not silence a phrase's 50h.
+  And an off is sent **only while a tone of ours may still sound** -
+  `it_sndlive` set by a granted on, and its lease not yet out (`it_sndexp`,
+  the tick it ends): a 60h off respects no owner, and an unneeded one would
+  silence another package's 40h tone. Both are written **only on a grant**
+  (CF = 0, an on): a refused call leaves them as they were, so a lease that
+  was never ours is never trusted. The expiry is read BEFORE the call - a
+  tick landing between makes it early, which only skips an off the kernel's
+  `snd_tick` sends anyway, where late would send one into another tone.
+- **One writer.** Events only POST - a phrase pointer (`it_snd_post`), the
+  wall tick's flag (`it_sndtk`, set by `it_iterate` at every 4th player
+  cell, ~40 cycles a cell). `it_snd_frame` is the one routine that calls the
+  driver, through `it_tone`, the one call site (`it_ntone` counts it, the
+  `it_tonecall` mark is its breakpoint), and it runs **after the measured
+  work**: at the end of the worker's wake, inside its lock hold and after
+  the presentation governor has read the hold; at the end of a bracket frame,
+  after its present and before `FSXW_FRAME` (Excitebike's rule, §102.5).
+- **A phrase is a table**: a priority byte, a start byte, then (tick, Hz)
+  rows, Hz 0 an off. A frame that comes late skips to the newest row due, so
+  a stall costs notes and never stretches a phrase; a row's lease is the
+  ticks to the next row plus one. The START BYTE says when its tick 0 is:
+  the crash and GAME OVER are posted early in their wake (by the iterations,
+  by the state machine) and start at once, so the crash's off lands on
+  CRASH's last tick - before WAIT's canvas build (§108.13.2), which would
+  otherwise hold the worker for 0.3 - 0.45 s past it; READY's and the
+  tower's are posted at the end of a sweep's long hold (up to 80 ms) and
+  start at the NEXT frame - begun there, READY's first 440 Hz was MEASURED
+  at 1.06 ticks, not two.
+- **A phrase that replaces our own 60h tone frees the channel first.** GAME
+  OVER is posted on CRASH's last tick, the very wake the crash's off row is
+  due - and the post replaces the crash's phrase before that row is sent, so
+  the crash's last entry (567 Hz, a two-tick lease at 60h) still owned the
+  channel and GAME OVER's first 523 Hz at 50h was REFUSED (MEASURED: CF = 1,
+  owner 60h - 567 Hz a tick longer, three silent ticks, then 392). `it_flow`
+  calls `it_snd_quiet` before that post, so our own off goes out at 60h and
+  the 523 is granted. `isotronsound` fails on any refused call in the stored
+  game's log, the chimes and GAME OVER included - verified to fail with the
+  quiet taken out.
+- **Silence on**: pause **in play** (P, the About card and focus loss all
+  set `it_paused`, and only in `ST_PLAY`); **the About card in every state**
+  (`it_abon`, tested by `it_snd_frame` itself) - READY's beeps then wait for
+  the card to go, as READY's 0.5 s does: `it_flow` re-posts READY's phrase
+  every wake under the card and it begins on the first frame after it, so
+  they are never spent under the card; M and Game > Sound, a silent tier
+  (`it_snd` = 0: no call is made at all), Esc, a new game, both sides of
+  every toggle (`it_fs_main`'s entry and `it_fs_exit`), and close (the
+  kernel's teardown). **Focus loss outside play pauses nothing**
+  (`it_focus_ck` asks only in `ST_PLAY`), so a phrase already running there
+  plays out under another window - CRASH's 0.8 s, GAME OVER's 1.1 s, a
+  chime's 0.5 s, READY's - none longer than its own state.
+- The harness's NOFLOW games are silent (`it_snd` = 0), as wave 1's comment
+  always said; `isotronsound` plays through the real keys.
+
+#### 108.14.2 The typematic filter (turns only)
+
+A held turn key is ONE turn. A turn keystroke counts when
+
+1. it is a different key from the last turn keystroke, or
+2. `OSAPI_KEY_DOWN` saw that key UP at some sample since it - each worker
+   wake (`it_tsample`, inside the lock hold), each bracket frame, and in
+   `W_ONKEY` at the keystroke itself, so a tap already released by the time
+   it is dispatched has been seen up - or
+3. the last ACCEPTED turn was under `IT_TQUICK` = 4 ticks (220 ms) ago, under
+   the SHORTEST typematic delay a keyboard can be set to - an AT's 250 ms,
+   which many AMI and Award ROMs program at POST (an XT's is ~500 ms); 6
+   ticks (330 ms) let such a keyboard's first repeat, at ~4.6 ticks, through
+   as a second turn - a U-turn into the player's own wall: a real fast
+   re-press whose up fell between two samples.
+
+Otherwise it is a repeat and is dropped (`it_ndrop`). **A double tap is
+two turns** - by rule 3 inside 220 ms, by rule 2 after it (an up lasting a
+tick or more is sampled) - and so a U-turn. The speed keys
+are NOT filtered: a held F10 (or Up) ramps p by its repeats, as the footage
+shows. Every writer of the tracking (`it_tkey`, `it_tup`, `it_tacc`) holds
+the gfx lock (`W_ONKEY`, the worker's wake) or is the bracket, so they never
+interleave. The tracking is forgotten (`it_treset`) at every round's start
+and on both sides of every toggle, so the first turn keystroke after either
+counts - a key HELD across one gives one more turn, which is the price of a
+key map the BIOS mode set can leave stale (the bracket's entry waits only for
+F and Enter, §108.12.4). `KEY_DOWN` is a map read with no lock and no VRAM,
+legal from a worker (`kernel/mouse.inc` `kbd_down`); the filter costs ~280
+cycles a wake while a key is tracked and not yet seen up, ~30 otherwise.
+
+Keys by **AH**: keypad Ins with NumLock on (AL '0', AH 52h) is Ins; Up and
+Down are F10's and F9's twins (AH 48h, 50h).
+
+#### 108.14.3 The pace, verified
+
+§108.4's clock and governor, unchanged by this wave and now measured on the
+5150 (`isotronpace`). A seeded harness round (NOFLOW, paced, nobody steering,
+p = 2, a seed whose every head lives through each window - the model says)
+is traced at every wake end (`it_wake1`) or frame end (`it_fs_frame`), where
+the debt is in (-cost, 0], so a count between two of them is good to one
+iteration:
+
+| iterations / guest s | windowed | full screen | the model (108.4.1) |
+|---|---:|---:|---:|
+| Rookie h1 | 59.53 (-0.10%) | 59.55 (-0.05%) | 59.58 |
+| Rookie h2 | 34.10 (+0.65%) | 33.77 (-0.34%) | 33.88 |
+| Lunatic h1 | 119.71 (+0.45%) | 119.17 (+0.00%) | 119.17 |
+
+and the governor's CREDIT over each window - its iterations' costs plus the
+debt's change - equals 768 u a BIOS tick (28,416 u over 37 ticks windowed),
+plus 256 a phase in full screen, to within a tick.
+
+- **The stall.** `it_tstall` makes one paced wake (frame) wait ten real ticks
+  of the BIOS clock, the lock held, before it reads its clock. It credits
+  EXACTLY `1,536 - 256 * it_lastph` u: windowed 1,536 after 11.0 ticks, in
+  full screen 1,024 after 10.4 (the last frame had paid phase 2) - its own
+  tick and one owed, the other eight or nine dropped. A stall never bursts.
+- **V = now** after a resume (P, a guest second, P: the first wake back
+  credits 768 u windowed, 256 in full screen - one tick or one phase) and on
+  both sides of a toggle mid-round (the first iterating frame after the
+  entry's whole present credits 256 u; the window's first wake back 0).
+
+#### 108.14.4 Measured
+
+MartyPC's 5150 CGA (PERFORMANCE.md Set 157): one `OSAPI_SND_TONE` costs
+**1,814 cycles** on and **1,521** off (the call site's marks, medians); a
+bracket frame's sound **390 cycles** when it calls nothing and **2,528** when
+it calls once. The worst rate the wall tick can be asked for - Lunatic h1 at
+full boost, 34 four-cell boundaries a second - is COMPUTED from those
+medians, not measured (the cost leg runs at Rookie, p = 5): the window calls
+at most once a wake, 18.2 x ~2,530 = ~46k cycles/s, **~1.0%** of the XT;
+full screen at most once a FRAME, so 54.6 x 2,528 = ~138k cycles/s, **2.9%**,
+is a hard bound, and the expected rate is under it (a tick's off is skipped
+once its lease has run out: ~48 calls a second, ~2.6%).
+
+**The windowed wake carries the sound** - `it_snd_frame` is the last thing
+inside its lock hold, after the governor has read it - so a wake that calls
+grows by ~2,530 cycles (0.53 ms), and every wake by `it_tsample`'s ~30 -
+280. A NOFLOW harness game is silent, so `isotronperf` pokes `it_snd` on for
+its Lunatic h4 full-boost wake line and fails it unless at least 20 calls
+were made: the ceiling is gated WITH the sound. Measured: **24.5 / 28.9 /
+34.0 ms** median (CGA / Hercules / VGA; 83, 76 and 89 calls over 120 wakes)
+against the silent 23.0 - 23.5 / 27.3 - 27.6 / 32.8 - 35.4, under 35 / 35 /
+50. The head-step and the bracket's frame work are unchanged: the sound is
+after them. The image is **21,312 bytes** (+739 over wave 4: the sound ~460
+with its phrase tables, the filter ~120, the stall and the counters) and
+the bss **3,734** (+24); 16,845 bytes on the disk lz4-packed.
+
+#### 108.14.5 What is tested
+
+| row | asserts |
+|---|---|
+| `isotronsound` | MartyPC's 5150 CGA, the speaker CAPTURED (`MARTYPC_WAV`) and every `OSAPI_SND_TONE` traced at `it_tonecall` (AX, CX, DL, and the driver's CF: a refused call fails): `1` (a real key) starts a seeded game nobody steers - READY's 440/440/880 Hz at 50h on ticks 0, 3, 6 with offs at 60h on 2, 5, 8; the wall ticks 110 Hz at 40h with CX = 1, 165 Hz once F10 boosts, one every 4th player cell (+-1), never two in a wake; the crash's 15 entries a tick apart at 60h with CX = 2, then its off. M mutes a whole round (sweep, READY, play, crash: no call) and unmutes; `A`, a silent tier, makes no call through a round. A stored game played FAST by the bot through the real title: every raise has its chime on ticks 0, 3, 6 (off on 9) and a reset or the same height none; GAME OVER's four notes on 0, 4, 8, 12 (off on 16). THE GATE: port 61h & 3 = 0 and no call for a guest second after P pauses a round with the wall ticking, and after Esc, F into full screen and F out of it, each pressed at a crash's first entry - at most eight more, ONE off at 60h, then silence; in full screen a wall tick followed by its explicit off a frame on. THE CAPTURE: READY's 880 Hz where the trace asked for it (the capture's clock is the guest's), the crash tick by tick (Goertzel, `tools/sndcheck.py`) within 3% of the table and FALLING, silence after its off and through the muted and the silent rounds; then §108.14.4's costs |
+| `isotroninput` | MartyPC's 5150 CGA, real keys: F10 HELD ramps p 2 -> 9 through every value, sampled at each wake; Del held 1.5 s (the game held still) posts ONE turn and the filter counts at least five repeats dropped (the control: the keyboard repeated - 24 to 26 measured); NumLock on, keypad Ins (AL '0', AH 52h) turns left; a double tap of Ins is two turns, a U-turn; Up x3 posts three boosts (p 5) and Down F9 (p 2); a toggle forgets the tracked key, both ways |
+| `isotronpace` | §108.14.3: the six rates within 2% of the model with every head alive and p = 2; the credit 768 u a tick (+256 a phase) within a tick; the stall's exact credit; V = now after a resume and a toggle |
+
+One emulator lesson, which the rows carry: **a key sent while a `bp_trace`
+pump has MartyPC stopped can lose its release** (one `key` command carrying
+both: F stayed down in the kernel's key map and the bracket's entry, which
+waits for F's release, never ended) **or the keystroke** (Esc, once in three
+runs) - **or a byte written to the guest** (`it_tstall` read back 0 and the
+stall was never served, twice in ~12 runs). The rows send the press and the
+release as two commands a few guest ms apart (`tap`), retry a key that must
+change something (`press`), and write a poke FROM a breakpoint stop, in the
+pump's own callback.
