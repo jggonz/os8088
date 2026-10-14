@@ -1751,6 +1751,10 @@ hd_inst_sys:
     jc .nosys                   ; here, one line above the format, because
                                 ; every answer below this point is given with
                                 ; the destination already erased (52.10.8.1)
+    call hd_ivbr_get            ; ...and THE BOOT SECTOR THAT CAME WITH IT,
+    jc .novbr                   ; for the same reason: it is the one thing
+                                ; this install writes that is not a file
+                                ; copied off that disk (SPEC.md 52.10.16)
 %ifdef INSTBENCH
     call hd_bn_bank             ; SPEC.md 52.10.9: the format on its own, which
 %endif                          ; is the phase with no file in it at all
@@ -1822,6 +1826,9 @@ hd_inst_sys:
     call hd_ibuf_put            ; the user and a different half to debug. The
     stc                         ; volume is already back (SPEC.md 52.10.10 put
     jmp short .out              ; the commit AFTER hd_ivol_back)
+.novbr:                         ; ...nor on this one: a system disk too old
+    mov word [hd_imsg], hd_s_inovbr ; to carry its own boot sector, which is
+    jmp short .failed               ; installed by booting it (52.10.16)
 .nosys:                         ; NOTHING HAS BEEN ERASED on this path, which
     mov word [hd_imsg], hd_s_inosys ; is the only reason it is worth having
 .failed:
@@ -2934,6 +2941,54 @@ hd_isrc_ck_one:
     ret
 
 ; -----------------------------------------------------------------------------
+; hd_ivbr_get - the SOURCE's hard-disk boot sector into hd_vbrtpl (SPEC.md
+;               52.10.16)
+; in:  the source volume's ROOT current, which hd_isrc_ck leaves it on
+; out: CF=0 = hd_vbrtpl holds it; CF=1 = no BOOTHD.SYS there, or not one.
+;      Every register preserved
+;
+; The sector carries five constants out of the kernel it boots, so the only
+; copy that is right for the KERNEL.SYS about to be installed is the one that
+; came on the same disk. This tool's own build is irrelevant to it: on a
+; machine booted from its hard disk the tool came off C: and the kernel off
+; the floppy, and that pairing froze at "Booting HDD0" in the field.
+;
+; Asked BEFORE anything is written, so a disk that does not carry one -
+; every system disk built before 52.10.16 - is refused with the volume
+; untouched. Booting that disk and installing from it is still right, because
+; its own tool then carries its own sector. The checks are what the
+; installer RELIES on and nothing more: one sector, a signature, and the two
+; patch words empty for hd_inst_vbr to fill. A layout that moves those
+; words ships under another name (partw.inc), which is how an older tool
+; refuses it rather than patching the wrong bytes.
+; -----------------------------------------------------------------------------
+hd_ivbr_get:
+    call os88_ent
+    push es
+    push cs
+    pop es
+    mov bx, hd_vbrtpl
+    mov cx, 512
+    xor dx, dx
+    mov si, hd_s_bootsys
+    call OSAPI_FILE_READ        ; DX:AX = the file's size
+    jc .no
+    or dx, dx
+    jnz .no
+    cmp ax, 512                 ; one sector exactly - a larger file was
+    jne .no                     ; refused above, before any data moved
+    cmp word [hd_vbrtpl+510], 0xAA55
+    jne .no
+    mov ax, [hd_vbrtpl+BOOTHD_KOFS]     ; both patch words EMPTY, which the
+    or ax, [hd_vbrtpl+BOOTHD_KOFS+2]    ; build asserts of boothd.bin too
+    or ax, [hd_vbrtpl+BOOTHD_KSECS]
+    jz .out                     ; CF=0 from the OR
+.no:
+    stc
+.out:
+    jmp os88_r_es
+
+; -----------------------------------------------------------------------------
 ; hd_ifind_cx / hd_find_di - OSAPI_FILE_FIND into one of OUR buffers
 ; in:  CX = the ordinal; DI = the buffer (hd_ifind_cx sets it to hd_ifind)
 ; out: OSAPI_FILE_FIND's; DI = the buffer. ES is the kernel's again after
@@ -3999,6 +4054,8 @@ hd_s_islot:   db 'Slot ', 0
 hd_s_idash    equ hd_s_minus    ; cppage.inc's '-'
 hd_s_ik       equ hd_s_kb       ; tool.inc's 'K'
 hd_s_kernel:  db 'KERNEL.SYS', 0
+hd_s_bootsys: db 'BOOTHD.SYS', 0    ; ...and the boot sector it came with
+                                ; (SPEC.md 52.10.16)
 hd_s_cfg:     db 'SYSTEM.CFG', 0    ; ...and the two a KEPT volume keeps
 hd_s_appdata: db 'APPDATA', 0       ; (SPEC.md 52.10.15)
 hd_s_kpad:    db 'KPAD.TMP', 0      ; the allocator's pad, for one moment
@@ -4116,6 +4173,7 @@ hd_s_phid:    db 'Hidden FAT', 0    ; a FAT type with the hide bit (10h) set
     HIMSG hd_s_inomem, 'Not enough memory to copy'
     HIMSG hd_s_inomb, 'Cannot read the partition table'
     HIMSG hd_s_inosys, 'No system disk found - nothing done'
+    HIMSG hd_s_inovbr, 'Older disk: boot from it to install it'
     HIMSG hd_s_ifmt, 'Could not format that partition'
     HIMSG hd_s_imnt, 'Formatted, but it would not mount'
     HIMSG hd_s_ierr, 'Disk error - the install stopped'

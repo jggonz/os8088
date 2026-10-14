@@ -28,6 +28,11 @@ hd_mbrok:    db 0               ; HMB_*: whether hd_mbr is the DISK's table
     align 512
 hd_mbr:      times 512 db 0     ; the partition table being read or edited
 hd_sec0:     times 512 db 0     ; the formatter's sector under construction
+hd_vbrtpl:   times 512 db 0     ; the SOURCE's BOOTHD.SYS (SPEC.md 52.10.16),
+                                ; read by hd_ivbr_get and laid over hd_sec0 by
+                                ; hd_vbr_code. A file read lands here, so it
+                                ; keeps the pair's 512 alignment for their
+                                ; reason - and costs no pad, after hd_sec0
 %else
     align 512, db 0             ; zeros, not NOPs: nothing executes the pad
 hd_mbr:                         ; THE RESIDENT'S 512 BYTES ARE LAID OVER ITS

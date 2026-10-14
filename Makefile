@@ -703,8 +703,7 @@ endif
 # encoder's row on the owner's ST-225 (docs/reports/VIDDISK-ST225-CYL-
 # 2026-10-07.md). The kernel (kern_big) and HDD.DRV both; the A/B, and the
 # only thing keeping the track-only arm assembling. (HDD.DRV rebuilds with
-# it: hdd.bin hangs off the kernel's stamp through hddtool.bin -> boothd.bin
-# -> KERNEL.SYS.)
+# it: the VIDSTAMP rule deletes hdd.bin and hddtool.bin on a knob change.)
 ifneq ($(NOHDCYL),)
 VIDDEF += -DNO_HDCYL
 DRVDEF += -DNO_HDCYL
@@ -3097,6 +3096,15 @@ DRIVERS += $(BUILD)/ems.drv
 # non-default image rules override per target - which is also why DRIVERS is a
 # recursive `=` and not a `:=`.
 DRIVERS += $(KMODS) $(BIGMODS)
+# ...and the HARD-DISK BOOT SECTOR (SPEC.md 52.10.16), which is not a driver
+# either: it rides wherever HDDTOOL.DRV does, because the installer in that
+# tool writes it - and it is read off $(KMODDIR) for the modules' reason, being
+# as specific to its kernel as they are. On every kern_big system disk in all
+# four geometries, the emu disk and the live media; os88disk.py stamps it
+# hidden + system like KERNEL.SYS, so nothing lists it and a user cannot take
+# it off the disk by accident.
+HDBOOT = $(KMODDIR)/boothd.sys
+DRIVERS += $(HDBOOT)
 
 # --- ...and what the EMULATOR disks carry on top (SPEC.md 9.11.7) -------------
 # $(DRIVERS) PLUS the absolute pointer, and that direction is the point: this
@@ -3870,6 +3878,28 @@ $(BUILD)/boothd.bin: boot/boothd.asm kernel/kernel.asm $(KERNFILE) | $(BUILD)
 	 $(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$D $$KZD -o $@ $<
 	@echo "boothd: $(call FILESIZE,$@) bytes"
 
+# BOOTHD.SYS - THE SAME 512 BYTES, AS A FILE ON THE SYSTEM DISK (SPEC.md
+# 52.10.16). The installer writes a volume boot record that names five of the
+# kernel's own constants, so the copy it writes has to be the one built with
+# the KERNEL.SYS it is installing - and the only place that is true whatever
+# machine runs the install is the disk that kernel came on. hd_ivbr_get reads
+# it off the source before anything is written and refuses a disk without one.
+#
+# The shape check is the one HDBLOBDEF made while the tool carried the sector,
+# and it is what hd_ivbr_get relies on: 512 bytes, a zero BPB (the volume's
+# own is laid over it), the two patch words zero (hd_inst_vbr fills them) and
+# 55AAh last. A boot sector that grows a byte there fails the BUILD here rather
+# than an install on somebody's machine. The name is the version: a sector
+# that moves the patch words ships under another one (drivers/hdd/partw.inc).
+#
+# It rides $(DRIVERS) below as $(HDBOOT), from $(KMODDIR) and not $(BUILD) -
+# the directory of the kernel the DISK carries, which is what the modules
+# already need. That is why every image rule with a KMODDIR of its own builds
+# <dir>/boothd.sys in its sub-make.
+$(BUILD)/boothd.sys: $(BUILD)/boothd.bin
+	@python3 -c 'import sys; v = open(sys.argv[1], "rb").read(); assert len(v) == 512 and not any(v[3:62]) and not any(v[504:510]) and v[510:] == b"\x55\xaa", "boothd.bin is not the shape the installer patches (SPEC.md 52.10.16)"' $<
+	cp $< $@
+
 # HDDTOOL.DRV - the hard-disk driver's OTHER half (SPEC.md 52.11): the
 # partitioner, the formatter and the installer, which only run while somebody
 # is clicking on them and so have no business being resident. HDD.DRV reads it
@@ -3881,21 +3911,28 @@ $(BUILD)/boothd.bin: boot/boothd.asm kernel/kernel.asm $(KERNFILE) | $(BUILD)
 # attributes every kernel-owned file wants (SPEC.md 19.6), and what makes the
 # installer's "every *.DRV" copy pick it up (SPEC.md 52.10.4).
 #
-# HDBLOBDEF: the tool carries the two boot sectors' CODE and not their zeros
-# (drivers/hdd/partw.inc) - mbr.bin's first HD_MBRNZ bytes, and boothd.bin's
-# jump and its code up to HD_VBREND - and writes the rest itself. Both numbers
-# are cut off the BUILT files here, so what is not carried is zero by
-# construction; and the same line refuses a file that is not the shape the
-# cut assumes (446 / 512 bytes, a zero BPB and patch words, 55AAh last), so a
-# boot sector that grows a non-zero byte there fails the build instead of
-# losing it. It is ~330 bytes of every load of the tool.
-HDBLOBDEF = $$(python3 -c 'import sys; m = open(sys.argv[1], "rb").read(); v = open(sys.argv[2], "rb").read(); assert len(m) == 446 and len(v) == 512 and not any(v[3:62]) and not any(v[504:510]) and v[510:] == b"\x55\xaa", "mbr.bin/boothd.bin are not the shape drivers/hdd/partw.inc cuts"; print("-DHD_MBRNZ=%d -DHD_VBREND=%d" % (len(m.rstrip(b"\0")), len(v[:504].rstrip(b"\0"))))' $(BUILD)/mbr.bin $(BUILD)/boothd.bin)
+# HDBLOBDEF: the tool carries the MBR's CODE and not its zeros
+# (drivers/hdd/partw.inc) - mbr.bin's first HD_MBRNZ bytes - and writes the
+# rest itself. The number is cut off the BUILT file here, so what is not
+# carried is zero by construction; and the same line refuses a file that is
+# not 446 bytes.
+#
+# **IT CARRIES NO VOLUME BOOT RECORD ANY MORE** (SPEC.md 52.10.16), so it no
+# longer depends on boothd.bin and so on the kernel: that sector holds five of
+# the kernel's own constants, and a copy inside the tool booted the kernel the
+# TOOL was built beside rather than the one being installed - which is what a
+# machine booted from its hard disk, upgrading from a newer floppy, wrote. The
+# sector rides the system disk as BOOTHD.SYS (below) and the installer reads
+# the SOURCE's. The VIDSTAMP rule still deletes hddtool.bin and hdd.bin on a
+# knob change, so a DRVDEF knob rebuilds both without the old chain through
+# boothd.bin.
+HDBLOBDEF = $$(python3 -c 'import sys; m = open(sys.argv[1], "rb").read(); assert len(m) == 446, "mbr.bin is not the shape drivers/hdd/partw.inc cuts"; print("-DHD_MBRNZ=%d" % len(m.rstrip(b"\0")))' $(BUILD)/mbr.bin)
 $(BUILD)/hddtool.bin: drivers/hdd/hddtool.asm apps/os88ui.inc drivers/hdd/hddabi.inc \
                   drivers/hdd/hdcom.inc drivers/hdd/hdsvc.inc drivers/hdd/hdsec.inc \
                   drivers/hdd/partw.inc drivers/hdd/fmt.inc drivers/hdd/tool.inc \
                   drivers/hdd/inst.inc drivers/hdd/cppage.inc drivers/hdd/iassoc.inc \
                   drivers/os88drv.inc apps/os88api.inc apps/os88rseq.inc \
-                  $(BUILD)/mbr.bin $(BUILD)/boothd.bin | $(BUILD)
+                  $(BUILD)/mbr.bin | $(BUILD)
 	$(NASM) -f bin -w+error $(DRVDEF) $(HDBLOBDEF) -I drivers/hdd/ -I drivers/ -I apps/ -I $(BUILD) -o $@ $<
 	@echo "hddtool: $(call FILESIZE,$@) bytes"
 
@@ -4339,7 +4376,7 @@ $(BUILD)/vmmouse.img: KMODDIR := $(EMUDIR)
 # the runner's pre-build could not see it either. A parse is what it costs
 # when nothing changed.
 $(BUILD)/vmmouse.img: $(KERNEL_SRC) $(KERNEL_INC) $(EMUDRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vmmcfg/system.cfg tools/os88disk.py
-	@$(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 $(EMUDIR)/boot.bin
+	@$(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 $(EMUDIR)/boot.bin $(EMUDIR)/boothd.sys
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(EMUDIR)/boot.bin --kernel $(EMUDIR)/$(KERNNAME) \
 		$(EMUDRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
@@ -11750,7 +11787,7 @@ $(BUILD)/emu.img: KMODDIR := $(EMUDIR)
 $(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
                   $(FACES) $(FACELIC) $(BUILD)/vmmcfg/system.cfg \
                   tools/os88disk.py
-	@$(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 $(EMUDIR)/boot.bin
+	@$(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 $(EMUDIR)/boot.bin $(EMUDIR)/boothd.sys
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(EMUDIR)/boot.bin --kernel $(EMUDIR)/$(KERNNAME) \
 		$(EMUDRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
@@ -11954,7 +11991,7 @@ $$(BUILD)/font-$(1)-360.img: KMODDIR := $$(call FONTDIR,$(1))
 
 $$(BUILD)/font-$(1)-360.img: fonts/$(1).f8 $$(DRIVERS) $$(SYSAPPS) $(SYSROOT) $$(SYSDOC) \
                              tools/os88font.py tools/os88disk.py
-	@$$(MAKE) BUILD=$$(call FONTDIR,$(1)) FONT=$(1) $$(call FONTDIR,$(1))/boot360.bin
+	@$$(MAKE) BUILD=$$(call FONTDIR,$(1)) FONT=$(1) $$(call FONTDIR,$(1))/boot360.bin $$(call FONTDIR,$(1))/boothd.sys
 	python3 tools/os88disk.py -o $$@ --size 360 \
 		--boot $$(call FONTDIR,$(1))/boot360.bin \
 		--kernel $$(call FONTDIR,$(1))/$(KERNNAME) \
@@ -11966,7 +12003,7 @@ $$(BUILD)/font-$(1).img: KMODDIR := $$(call FONTDIR,$(1))
 
 $$(BUILD)/font-$(1).img: fonts/$(1).f8 $$(DRIVERS) $$(SYSAPPS) $(SYSROOT) $$(SYSDOC) \
                          tools/os88font.py tools/os88disk.py
-	@$$(MAKE) BUILD=$$(call FONTDIR,$(1)) FONT=$(1) $$(call FONTDIR,$(1))/boot.bin
+	@$$(MAKE) BUILD=$$(call FONTDIR,$(1)) FONT=$(1) $$(call FONTDIR,$(1))/boot.bin $$(call FONTDIR,$(1))/boothd.sys
 	python3 tools/os88disk.py -o $$@ --size 1440 \
 		--boot $$(call FONTDIR,$(1))/boot.bin \
 		--kernel $$(call FONTDIR,$(1))/$(KERNNAME) \
@@ -12022,8 +12059,10 @@ field: $(BUILD)/herc.img $(BUILD)/cga.img $(BUILD)/cga720.img $(BUILD)/flop1.img
 # FIELD kernel's modules - and this sub-make builds into the default $(BUILD),
 # where no rule can make them. They are not skipped: the sub-make on the next
 # line of each rule builds <dir>/kernel.bin, whose own recipe cuts <dir>'s
-# ctrl.drv, format.drv and diskops.drv out of it (SPEC.md 2.8).
-FIELDDRV = @$(MAKE) $(FIELDKNOBS) $(filter-out $(KMODS) $(BIGMODS),$(DRIVERS))
+# ctrl.drv, format.drv and diskops.drv out of it (SPEC.md 2.8). $(HDBOOT) is
+# filtered for the same reason, and that same sub-make names <dir>/boothd.sys
+# beside its boot sector (SPEC.md 52.10.16).
+FIELDDRV = @$(MAKE) $(FIELDKNOBS) $(filter-out $(KMODS) $(BIGMODS) $(HDBOOT),$(DRIVERS))
 
 # --- WHY NO FIELD BENCH DISK CARRIES DOS.O88 --------------------------------
 # It used to, and `make field` was BROKEN because of it. These five are
@@ -12055,7 +12094,7 @@ $(BUILD)/herc.img: KMODDIR := $(HERCDIR)
 $(BUILD)/herc.img: $(BUILD)/kernel.bin $(DRIVERS) \
                    $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	$(FIELDDRV)
-	@$(MAKE) BUILD=$(HERCDIR) $(FIELDKNOBS) $(HERCDIR)/boot360.bin
+	@$(MAKE) BUILD=$(HERCDIR) $(FIELDKNOBS) $(HERCDIR)/boot360.bin $(HERCDIR)/boothd.sys
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(HERCDIR)/boot360.bin --kernel $(HERCDIR)/$(KERNNAME) \
 		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
@@ -12068,7 +12107,7 @@ $(BUILD)/cga.img: KMODDIR := $(CGADIR)
 
 $(BUILD)/cga.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	$(FIELDDRV)
-	@$(MAKE) BUILD=$(CGADIR) VIDEO=cga $(FIELDKNOBS) $(CGADIR)/boot360.bin
+	@$(MAKE) BUILD=$(CGADIR) VIDEO=cga $(FIELDKNOBS) $(CGADIR)/boot360.bin $(CGADIR)/boothd.sys
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(CGADIR)/boot360.bin --kernel $(CGADIR)/$(KERNNAME) \
 		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
@@ -12090,7 +12129,7 @@ $(BUILD)/cga720.img: KMODDIR := $(CGADIR)
 
 $(BUILD)/cga720.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	$(FIELDDRV)
-	@$(MAKE) BUILD=$(CGADIR) VIDEO=cga $(FIELDKNOBS) $(CGADIR)/boot360.bin
+	@$(MAKE) BUILD=$(CGADIR) VIDEO=cga $(FIELDKNOBS) $(CGADIR)/boot360.bin $(CGADIR)/boothd.sys
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(CGADIR)/boot360.bin --kernel $(CGADIR)/$(KERNNAME) \
 		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
@@ -12115,7 +12154,7 @@ $(BUILD)/flop1.img: KMODDIR := $(F1DIR)
 
 $(BUILD)/flop1.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	$(FIELDDRV)
-	@$(MAKE) BUILD=$(F1DIR) FLOPPY1=1 $(FIELDKNOBS) $(F1DIR)/boot360.bin
+	@$(MAKE) BUILD=$(F1DIR) FLOPPY1=1 $(FIELDKNOBS) $(F1DIR)/boot360.bin $(F1DIR)/boothd.sys
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(F1DIR)/boot360.bin --kernel $(F1DIR)/$(KERNNAME) \
 		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
@@ -12141,7 +12180,7 @@ $(BUILD)/cqdiag.img: KMODDIR := $(CQDIR)
 
 $(BUILD)/cqdiag.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	$(FIELDDRV)
-	@$(MAKE) BUILD=$(CQDIR) BOOTDIAG=1 $(FIELDKNOBS) $(CQDIR)/boot360.bin
+	@$(MAKE) BUILD=$(CQDIR) BOOTDIAG=1 $(FIELDKNOBS) $(CQDIR)/boot360.bin $(CQDIR)/boothd.sys
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(CQDIR)/boot360.bin --kernel $(CQDIR)/$(KERNNAME) \
 		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
@@ -13574,7 +13613,7 @@ $(EMUUSBIMG): KMODDIR := $(EMUDIR)
 $(EMUUSBIMG): LIVEKDIR := $(EMUDIR)
 $(EMUUSBIMG): LIVEDRVS = $(EMUDRIVERS) $(BUILD)/webcfg/system.cfg
 $(EMUUSBIMG): LIVESUB = $(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 \
-                        $(EMUDIR)/mbr.bin $(EMUDIR)/boothd.bin $(EMUDIR)/boot.bin
+                        $(EMUDIR)/mbr.bin $(EMUDIR)/boothd.sys $(EMUDIR)/boot.bin
 $(EMUUSBIMG): $(KERNEL_SRC) $(KERNEL_INC) $(BUILD)/vmmouse.drv \
               $(BUILD)/webcfg/system.cfg
 

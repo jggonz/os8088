@@ -33475,7 +33475,7 @@ passed them. **That was wrong.** The disk image showed the knob
 `KERNEL.SYS` behind the STOCK boot sector, three bytes apart, all
 `BLOB_SEG` (1880h against 18C0h): the install had run from the booted
 system's `HDDTOOL.DRV`, which writes the boot sector it was built with -
-docs/plans/HANDOFF-INSTALL-FROM-SOURCE.md. None of the knob kernel ran.
+docs/plans/completed/HANDOFF-INSTALL-FROM-SOURCE.md (BUILT as §52.10.16). None of the knob kernel ran.
 
 What the wrong diagnosis left behind is still worth having: VIDDISK's
 **`vk_msweep`** issues the kernel's own shapes - 48 runs from a sector
@@ -91130,7 +91130,8 @@ The order is forced and each step is the next one's precondition:
    the apps disk the same way.
 4. **The volume boot record**, `boot/boothd.asm`'s 512 bytes with this
    volume's BPB written over the first 62 (`os88disk.py`'s split, done in the
-   driver), to volume-relative LBA 0.
+   driver), to volume-relative LBA 0 - the 512 bytes the SOURCE disk carries
+   as `BOOTHD.SYS`, not a copy inside the tool (§52.10.16).
 5. **The MBR**: §52.10.1's loader into bytes 0..445, preserving the table,
    and the chosen entry's status byte set to 80h with the other three
    cleared. **Last**, because it is the commit — every earlier step leaves a
@@ -92569,6 +92570,90 @@ the same way. Rebuild it, or clear the bit on the host
 `make`'s own artefacts and reads every class's attributes with a walker of
 its own. With the old stamp it fails on all four classes.
 
+### 52.10.16 The boot sector comes off the SOURCE disk, as `BOOTHD.SYS`
+
+**Field report**: a machine booted from its hard disk (a PicoMEM-hosted
+504MB VHD) installed a newer system disk to C:, keeping its files, and the
+next boot stopped at the BIOS's `Booting HDD0` with nothing on the screen.
+**The installed files were right**: `KERNEL.SYS` and `HDDTOOL.DRV` on C: were
+the floppy's, byte for byte. **The volume boot record was the previous
+build's.** It differed from the new kernel's in ONE byte - `call
+1880:12AA` where the new blob's decoder `kz_hd` is at `1880:12BE` - so the
+sector far-called twenty bytes short, into the middle of an instruction,
+and the machine hung at `1880:12EC` in text mode. Patching that byte on the
+host booted the same disk to the desktop (QEMU, both arms).
+
+**Why**: §52.10.2's sector carries five constants out of the kernel it
+boots - `BOOT2_SECS`, `BLOB_SEG`, `SPL_FSEG`, `KZ_RPARA` and `KZ_HD`, all
+immediates - and `HDDTOOL.DRV` carried it `incbin`'d, so it booted the
+kernel the TOOL was built beside. `HDD.DRV` reads the tool off the SYSTEM
+volume (§52.11), which on a machine booted from C: is C:. So "boot C:, put
+the new system disk in a floppy drive, Install keeping files" (§52.10.15)
+wrote the new disk's kernel behind the old disk's boot sector. Nothing
+complained: same-build installs, which is every row the tree had, cannot see
+it. docs/plans/completed/HANDOFF-INSTALL-FROM-SOURCE.md is the record of the
+first sighting (an `HDCYLRUN=1` knob kernel, `BLOB_SEG` three bytes off),
+and its rule is the one this section satisfies: **the boot sector,
+`KERNEL.SYS` and the drivers are one unit, and whatever writes the boot
+sector must take it from that unit.**
+
+**The fix**: the sector RIDES THE SYSTEM DISK, as `BOOTHD.SYS` beside
+`KERNEL.SYS` - the same 512 bytes as `build/boothd.bin`, hidden + system
+like the kernel (§19.6, `os88disk.py`'s `sys_attr` names it), on every disk
+`$(DRIVERS)` reaches: all four kern_big system-disk geometries, the emu disk,
+the field and font disks and the live media, each from its OWN kernel's
+directory (`$(KMODDIR)`, the modules' reason). `hd_ivbr_get` reads the
+SOURCE's copy into a 512-byte buffer immediately after `hd_isrc_ck` has
+found the system disk - **before anything is written**, on both the erasing
+and the keeping install - and `hd_vbr_code` lays it over the sector being
+built exactly as it laid the `incbin`'d copy. The tool contributes only what
+describes the DESTINATION: the volume's BPB, `BOOTHD_KSECS` and
+`BOOTHD_KOFS`.
+
+**What it checks is what the installer relies on, and no more**: one sector
+exactly, `55AAh` last, and the two patch words zero. A disk with no
+`BOOTHD.SYS` - every system disk built before this section - is refused with
+`Older disk: boot from it to install it` and the volume untouched, which is
+the honest answer: booted, that disk's own tool carries its own sector.
+
+**The patch offsets are an ABI between vintages now.** An installer from one
+build writes the sector from another, so `BOOTHD_KSECS` at 508, `BOOTHD_KOFS`
+at 504 and the BPB at 3..61 must not move under this name. A sector that
+moves them ships as a DIFFERENT file, so an older installer finds no
+`BOOTHD.SYS` and refuses rather than patching the wrong bytes. The build
+enforces the shape the installer relies on (the `boothd.sys` rule), as
+`HDBLOBDEF` did while the tool carried the sector.
+
+**The tool no longer depends on the kernel at all**: `hddtool.bin` drops
+`boothd.bin` from its prerequisites, and the kern_emu, field and font disks
+- which paired their own kernel with `build/`'s tool, and so with `build/`'s
+boot sector - now install a sector that boots the kernel they carry.
+
+**What it does not fix**: the RUNNING installer is the one that reads the
+file, so the first upgrade from a system built before this section is still
+written by the old tool. That one install wants the new system disk booted,
+once; every hard-disk-booted install after it is right.
+
+**What it cost**: **no kernel byte**. `HDDTOOL.DRV` **+512** bytes of image
+(16,995 -> 17,507): the 438-byte `incbin` went and its saving fell into the
+`align 512` in front of `hd_mbr`, so the new 512-byte buffer is the whole
+net - and it has to be 512-aligned itself, being a file read's target
+(§50.3). `HDTOOL_KB` 17 -> 18, the transient claim while the Drives page's
+tool is loaded. On the disk the packed tool is **321 bytes smaller** (13,737
+-> 13,416) and `BOOTHD.SYS` is one cluster, so a system disk is one cluster
+fuller in every geometry.
+
+`tests/unit/t_hdboot.py` (**fast**) reads `BOOTHD.SYS` back off every
+shipped kern_big system disk with a walker of its own and holds it to
+`build/boothd.bin` byte for byte, hidden + system. `tests/instcross.py`
+(**soak**) is the end-to-end gate: it installs a STOCK build to a hard disk,
+boots it, offers a knob build's system disk with its `BOOTHD.SYS` hidden
+(refused, the VBR and kernel untouched), then the real one with the system
+disk in B:, keeping files, and boots C: on the knob kernel. **Broken on
+purpose** (`--break`: the knob disk carries the STOCK sector, which is byte
+for byte what the old installer wrote) it names the stock sector on the disk
+and C: never reaches a desktop - the field freeze, reproduced on MartyPC.
+
 ## 52.11 Two images: the transport, and the tool
 
 `HDD.DRV` was two programs in one file. One knows how to find a hard disk,
@@ -92883,7 +92968,8 @@ technique:
   words. The image carries the code (`HD_MBRNZ`, `HD_VBREND`, cut off the
   built files by the Makefile's `HDBLOBDEF`, which also refuses a file whose
   skipped bytes are not zero) and `hd_mbr_code`/`hd_vbr_code` write the rest:
-  the same 446 and 512 bytes on the platter, 330 fewer in every load.
+  the same 446 and 512 bytes on the platter, 330 fewer in every load. (The
+  VBR half is gone since §52.10.16: the sector comes off the source disk.)
 - **The three surfaces share their strokes**: a list row with its selection
   bar (`hd_selrow`), a black-on-white run (`hd_wrun`), a frame (`hd_frame`),
   the pressed-button bookkeeping (`hd_xsd`, `hd_xover`, one body for the page,

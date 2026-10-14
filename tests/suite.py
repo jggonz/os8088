@@ -9284,6 +9284,18 @@ SOAK = [
         "the booted-from volume IN PLACE with the system disk in B:, and "
         "boots it again.",
         needs=("marty", "mtools"), serial=True, timeout=1500),
+    Row("instcross", "soak", py("tests/instcross.py"), 240.0,
+        "SPEC.md 52.10.16: an install ACROSS BUILDS from a machine booted off "
+        "its hard disk - the ordinary upgrade, and the one the field found "
+        "freezing at `Booting HDD0`: the installer wrote the boot sector built "
+        "into the HDDTOOL.DRV it was running, which on a C:-booted machine is "
+        "C:'s and not the new disk's. Stock install; boot C: and offer a knob "
+        "disk with its BOOTHD.SYS hidden (refused, nothing written); offer the "
+        "real one (the knob tree's own sector lands); boot the knob kernel "
+        "from C:. `--break` gives the knob disk the stock sector, which is "
+        "what the old installer wrote, and must fail. It ERASES the VHD and "
+        "builds knobhd's knob tree.",
+        needs=("marty",), serial=True, timeout=2400),
     Row("bigvol", "soak", py("tests/bigvol.py"), 110.0,
         "SPEC.md 18.7.5: a 321MB FAT16 volume (654/16/63, TotSec32, 8KB "
         "clusters) formatted on the HOST by mtools with a 40MB file at the "
