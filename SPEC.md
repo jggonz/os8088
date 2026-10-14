@@ -49537,6 +49537,87 @@ The loop's fix is in `DISKOPS.DRV`'s image and moves no resident byte. The two
 progress-layer fixes are 39 resident bytes on each kernel: 14 of `.text`
 (§7.5.3.2) and 25 of `.cold` (§12.8.3.2). They cross no rung.
 
+##### 22.23.6.2 Enter says the disk is NEW, even when it is the same disk
+
+**Enter at the prompt forgets everything the machine knew about the source
+drive's medium**: every chunk in §18.95's cache, and the banked signature of
+that drive's FAT window (§18.8.2). Only then does the join stand on the
+drive again, and that mount reads the root directory and the FAT off the disk
+that is in it now.
+
+Reported from the field: one floppy in B: carried the set across, a part at a
+time. Part 1 was copied onto it on another machine and joined to C:. At the
+prompt the floppy came out, `.002` was copied onto it, and it went back in.
+Enter answered `Missing FILEA.002`, and asked again, for ever.
+
+**The signature cannot tell that disk from itself.** §18.8.2 keys the cache
+and the FAT window on a sum of the boot sector, and a file written onto a
+floppy elsewhere changes its root directory and its FAT but never its boot
+sector. So the hop back to B: was a quiet mount (§18.9) that re-read LBA 0,
+signed it the same, kept the FAT window, and was served the root directory
+from the cache - the root as it was before the floppy left the drive, with no
+`.002` in it. A Disk window's Refresh would have found it, because a loud
+mount drops the cache (§18.95) and loads the FAT (§18.8.1). The join's quiet
+hop does neither, and must not in general: a hop inside the batch bracket is
+free on purpose (§22.23.6 item 1).
+
+**The prompt is the one moment the disk is KNOWN to have been touched**,
+because the join has just asked the user to touch it. So Enter pays for one
+fresh look and nothing else does. It hops to the target first, so that the
+hop back to the source is a mount even when the motor is still running
+(§18.9.1.1's predicate would otherwise skip it). It then zeroes the source
+drive's row of `dsk_fatwsig`, which `dsk_fatw_pick` reads as *owe a load*,
+and empties every record of `dsk_rah_tab`, which is `dsk_rah_flush`'s loop.
+The whole cache goes, not only the source's chunks, and the cost is a few
+misses on the target, which is a hard disk on the machine this was reported
+from.
+
+All of it is in `DISKOPS.DRV`'s image (`cmz_jfresh`). It moves no resident
+byte on either kernel. `tests/czto.py`'s `same` leg is the row. It joins with
+the same image file in B: before and after the prompt, adding `.002` to it
+between the two, and must reach `Uncompressed`. Without this section it reads
+`Missing`.
+
+**The residual is wider than the join**, and this does not close it. Any
+QUIET mount of a floppy that was written elsewhere and put back trusts the
+signature the same way: a package's `fcp_goto` (§18.9.1.1), a copy's hop. A
+loud mount, which is every navigation and every Refresh, does not.
+
+##### 22.23.6.3 Abandoning the prompt keeps `clo_free`'s contract
+
+**A click in any Disk window while the prompt is up abandons the join**, and
+that is unchanged: the click ends every armed prompt (`fm_edit_end`), the
+join's among them, and what was written is deleted. What changed is that the
+abandoning is now harmless to the kernel.
+
+`fm_edit_end` reaches the join from INSIDE its walk over the window pool. It
+sends `CLV_FREE` through `clo_call` with CX the walk's `loop` count and DI the
+block, and it relies on the answer preserving both. `clo_free` promises
+exactly that, in its header. `cmz_jdisp`'s `CLV_FREE` arm did not: it loaded
+CX with `[clo_seg]`, a segment between 6000h and 9000h, and left DI on
+`fm_onam`. The walk then stored a zero every `FS_SIZE` (69) bytes for that
+many iterations. The stride is odd and wraps the 64KB `KERNEL_SEG` dozens of
+times, so it zeroed bytes all through `.text` and `.bss`, the mouse ISR and
+the drawing code among them. Every garbage byte equal to 4 to 7 on the way
+was also taken for a prompt mode and "ended". The walk itself is `.cold` and
+survived; the machine around it did not.
+
+Reported from the field as a right-click in a second Disk window, opened on
+an empty A: to force a refresh, that froze the pointer and covered the screen
+in dots. The empty drive was beside the point: it was the first click in a
+Disk window since the prompt went up.
+
+The fix is in the image: `CLV_FREE` to the join pushes every register,
+runs the arm, and pops them, so the arm's `cmz_jerr` unwind (which returns
+to the frame `[cmz_jsp]` banked) lands inside the wrapper. No resident byte
+moves on either kernel: `kernel.bin` is byte-identical at one commit, and
+the two fixes together are +63 bytes of `DISKOPS.DRV`'s image (10,289 ->
+10,352) and +53 of its file on the floppy. `kern_small` has neither, the
+whole of §22.23.6 being `kern_big`'s. `tests/czto.py`'s `abandon` leg puts the prompt up,
+clicks a row in the Disk window, and asks that the join ended, that A: holds
+nothing of it, and that the walk's CX and DI are the same on both sides of
+its `call clo_call`.
+
 ### 22.26 The arrows move a SELECTION, and scroll only without one (`kern_big`)
 
 In a Disk window with a row selected, Up and Down move the selection one row

@@ -3034,6 +3034,27 @@ cmz_jdisp:
     jne .notline
     jmp cmz_jline
 .notline:
+    cmp dl, CLV_KEY
+    je .run
+    push ax                     ; CLV_FREE KEEPS clo_free's CONTRACT: every
+    push bx                     ; register preserved (SPEC.md 22.23.6.3).
+    push cx                     ; fm_edit_end sends it from INSIDE its walk
+    push dx                     ; over the window pool, CX the loop's count
+    push si                     ; and DI the block - and this arm left CX =
+    push di                     ; [clo_seg], so the walk zeroed a byte every
+    push bp                     ; FS_SIZE through the whole kernel segment,
+    push es                     ; tens of thousands of times. Pushed BEFORE
+    call .run                   ; .run banks [cmz_jsp], so cmz_jerr's unwind
+    pop es                      ; returns here too
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.run:
     cld
     call cmz_jload              ; the paused state - clobbers CX SI DI
     mov cx, [clo_seg]
@@ -3076,8 +3097,31 @@ cmz_jdisp:
     pop ds
     dec word [cs:cmz_jk]        ; .part moves on to the one that was missing
     call COLD_SEG:dkf_dsk_batch_begin
+    call cmz_jfresh             ; ...and it may be the SAME disk, changed
     call cmz_rearm
     jmp cmz_jloop
+
+; cmz_jfresh - Enter at the prompt: forget what the machine knew of the
+; source drive's medium (SPEC.md 22.23.6.2). A floppy written elsewhere and
+; put back signs the same (18.8.2) - its boot sector never changed - so the
+; hop back would keep its FAT window and be served the OLD root out of the
+; cache, and the part just copied onto it would be `Missing`. A failed hop
+; never returns (cmz_jerr). clobbers: BX CX, flags
+cmz_jfresh:
+    CMZ_GO dst                  ; OFF the source first: the hop back is then a
+                                ; mount however recently the motor ran, and
+                                ; this one has banked its window by now
+    mov bl, [cs:cmz_jsrcd]
+    xor bh, bh                  ; a volume this join mounted: < DVOL_MAX
+    shl bx, 1
+    mov word [dsk_fatwsig+bx], 0    ; 0 = nothing banked: dsk_fatw_pick loads
+    mov bx, dsk_rah_tab         ; ...and every cached chunk goes, which is
+    mov cx, DSK_RAH_RUNS        ; dsk_rah_flush's loop: it is .text, and this
+.chunk:                         ; is an image (DS is the kernel's)
+    and word [bx+RAH_N], 0
+    add bx, RAH_REC
+    loop .chunk
+    ret
 
 ; cmz_jline - CLV_LINE: 'Put FILEA.002 in A:' over 'Enter=ready  Esc=stop'
 ; in:  AL = 0 / 1, DI = the kernel buffer. out: DI on the NUL, CF = 0

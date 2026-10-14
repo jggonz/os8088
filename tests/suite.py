@@ -8144,7 +8144,7 @@ SOAK = [
         "the check's compare disabled in compress.inc the damaged copy "
         "joined into a wrong DMG.DAT and the row went red on it",
         needs=("marty",), wants=("build/os8088.img",)),
-    Row("czto", "soak", py("tests/czto.py"), 90.0,
+    Row("czto", "soak", py("tests/czto.py"), 115.0,
         "SPEC.md 22.23.6: File > Uncompress To... - the result goes where "
         "the Save box says and the join ASKS for each floppy it needs. The "
         "parts are on B: and the result goes to A:, and the harness swaps "
@@ -8169,8 +8169,16 @@ SOAK = [
         "pointer must be up and follow the mouse through the re-read "
         "(7.5.3.2); `arm` opens a one-sector folder with every read failing "
         "and the chrome must be up from the second failed attempt "
-        "(12.8.3.2). Each leg red without its fix. `--break` puts ANOTHER "
-        "set's SET.002 on the second disk and the row goes red. 90s "
+        "(12.8.3.2). `abandon` clicks a Disk window row while the prompt "
+        "is up, which ends the join through fm_edit_end's pool walk, and "
+        "the walk's CX and DI must survive its `call clo_call` "
+        "(22.23.6.3: the join's CLV_FREE handed CX = [clo_seg] back and "
+        "the walk zeroed bytes through the whole kernel segment). `same` "
+        "is ONE floppy changed between the parts, the second image given "
+        "the first one's boot sector, as DOS leaves it: Enter must find "
+        "SAME.002 (22.23.6.2; the old root came out of the cache). Each "
+        "leg red without its fix. `--break` puts ANOTHER "
+        "set's SET.002 on the second disk and the row goes red. 115s "
         "measured",
         needs=("marty",), wants=("build/os8088.img",)),
     Row("czdos", "soak", py("tests/czdos.py"), 11.0,
