@@ -1686,6 +1686,28 @@ FULL = [
 # single-subject gates; several are worth reading before touching their area.
 # --------------------------------------------------------------------------
 SOAK = [
+    Row("wireballphysics", "soak", py("tests/wireball.py", "--physics"), 65.0,
+        "WireBall 8088 physics: center/end contact, paddle motion, ball extent, "
+        "rally acceleration, bounded substeps and remote prediction (SPEC.md 108)",
+        needs=("marty", "nasm"),
+        wants=("build/wireball360.img", "build/os8088-360.img")),
+    Row("wireball", "soak", py("tests/wireball.py"), 65.0,
+        "WireBall: two OS instances over a serial null modem, discovery, "
+        "cross-screen pixels, remote paddle/commands, collision, scoring, "
+        "bad frames, unplug/reconnect and serial mouse restoration (SPEC.md 108)",
+        needs=("qemu", "nasm"),
+        wants=("build/wireball.img", "build/os8088.img"), timeout=240),
+    Row("wireballfront", "soak", py("tests/wireball.py", "--front"), 75.0,
+        "WireBall illustrated splash on VGA/CGA/Hercules: fitted art, "
+        "release/cancel buttons, controls, sound toggle, Practice launch and return (SPEC.md 108.4)",
+        needs=("marty", "nasm", "pil"),
+        wants=("build/wireball360.img", "build/os8088-360.img")),
+    Row("wireballmono", "soak", py("tests/wireball.py", "--mono"), 80.0,
+        "WireBall original-8250 discovery/register restoration and practice on "
+        "CGA and Hercules 8088s: native text framebuffer, "
+        "ball/paddles, controls, visible raster and desktop restoration (SPEC.md 108)",
+        needs=("marty", "nasm"),
+        wants=("build/wireball360.img", "build/os8088-360.img")),
     Row("paccman", "soak", py("tests/paccman.py"), 100.0,
         "PACCMAN's attract screen and tick path on a cycle-accurate 8088 "
         "(SPEC.md 91): the program opening on the attract screen with the "

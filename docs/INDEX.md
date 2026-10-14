@@ -376,6 +376,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | Video Player | `apps/video/video.asm` | §98 | yes |
 | WEAVE | `apps/weave/weave.asm` | `docs/WEAVE-SPEC.md` | yes |
 | WIRE | `apps/wire/wire.asm` | §78 | no |
+| WIREBALL | `apps/wireball/wireball.asm` | §108 | yes |
 | WORD | `apps/word/wdload.asm` | §68 | no |
 | WORD | `apps/word/word.asm` | §68 | yes |
 
@@ -490,6 +491,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 105 | MIDIRack — a MIDI file player (`apps/midirack/`) |
 | 106 | PiXEL — an image viewer and editor (`apps/pixel/`) |
 | 107 | EMS.DRV — expanded memory on a LIM EMS board (`drivers/ems/`) |
+| 108 | WireBall — Pong across a null modem (`apps/wireball/`) |
 
 ## docs/
 

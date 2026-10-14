@@ -307,6 +307,10 @@ squashed, and that shapes what to write:
     DOT DELIRIUM, which had moved Picture decoders to §94 and Scribe to §95 —
     the new subsection became **§95.8.6**, three citations (two in SPEC.md,
     one comment in `apps/scribe/scribe.asm`).
+  - #252: `main`'s §107 WireBall (#254) met the branch's §107 `EMS.DRV` —
+    WireBall became **§108**, 17 citations: its section and four
+    subsections, `docs/INDEX.md`'s row, the Makefile's comment, four
+    `tests/suite.py` rows and the comments in `apps/wireball/`.
 
 ## Quick reference
 

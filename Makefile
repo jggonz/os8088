@@ -12481,7 +12481,7 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
 DM_NATIVE := apps/drmario/art/native
 DM_SHIP := $(BUILD)/drmarco.o88 \
            $(addprefix $(DM_NATIVE)/,DRMARCO.VGA DRMARCO.HRC DRMARCO.CGA)
-APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
+APPS_GAMES := $(BUILD)/wireball.o88 $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
               $(BUILD)/mines.o88 $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88 \
               $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
@@ -15389,3 +15389,28 @@ xt-pixel: $(IMG360) $(BUILD)/pixel360.img
 386-pixel: $(IMG) $(BUILD)/pixel.img
 	@$(UNPROTECT) $(VM386PIXEL)/86box.cfg
 	$(BOX) -P $(VM386PIXEL) -N
+
+# WireBall: serial null-modem Pong (SPEC.md 108).
+.PHONY: wireball wireballdisk wireballtest wireball-pair
+wireball-pair:
+	python3 tools/wireball-pair.py
+wireball: $(BUILD)/wireball.o88
+$(BUILD)/wireball.bin: apps/wireball/wireball.asm apps/wireball/wblink.inc apps/wireball/wbgame.inc apps/wireball/wbsound.inc apps/wireball/wbfront.inc apps/wireball/art/wbfront.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireball.lst -o $@ $<
+$(BUILD)/wireball.o88: $(BUILD)/wireball.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+wireballdisk: $(BUILD)/wireball.img $(BUILD)/wireball720.img $(BUILD)/wireball120.img $(BUILD)/wireball360.img
+$(BUILD)/wireball.img: $(BUILD)/wireball.o88 apps/wireball/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $< apps/wireball/README.TXT
+$(BUILD)/wireball720.img: $(BUILD)/wireball.o88 apps/wireball/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 720 -o $@ $< apps/wireball/README.TXT
+$(BUILD)/wireball120.img: $(BUILD)/wireball.o88 apps/wireball/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ $< apps/wireball/README.TXT
+$(BUILD)/wireball360.img: $(BUILD)/wireball.o88 apps/wireball/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $< apps/wireball/README.TXT
+wireballtest: wireballdisk $(IMG)
+	python3 tests/wireball.py
+
+# Native WireBall art is reproducible from the committed imagegen source.
+apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront.py
+	python3 tools/wbfront.py
