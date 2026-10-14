@@ -392,7 +392,10 @@ it_outline:
 ; block letters, read square-on, in the game's projection. Wave 2's
 ; letters were strokes laid along the floor's axes, and leaned with it;
 ; on the glass they read as blocks rather than as a word. ES = the claim.
-; ~1,260 cells, one it_span each: ~0.25 s at the title. Clobbers AX..DI, BP.
+; ~1,260 cells: the last row of each glyph cell's block through it_span, the
+; three above it a TOP byte alone (it_logo_cell says why). One it_span each
+; was MEASURED at 2.11M cycles, 0.44 s at every title, where this comment
+; had said ~0.25 s; PERFORMANCE.md Set 159 has the after. Clobbers AX..DI, BP.
 ; -----------------------------------------------------------------------------
 IT_LOGOX    equ 98                  ; the word's left column and top row on
 IT_LOGOY    equ 100                 ; the glass (level 1's floor holds it and
@@ -475,8 +478,41 @@ it_logo_cell:
     jne .x                          ; (never: a pixel is one cell)
     mov dh, C_LOGO
     mov [es:si + IT_GRID], dh
+    mov ax, [it_lgyy]
+    sub ax, [it_lgy]
+    cmp ax, IT_LOGOS - 1
+    jb .top                         ; not the block's last row: TOP alone
     call it_span
 .x:
+    ret
+.top:
+    ; ONLY THE BLOCK'S LAST ROW NEEDS ITS FACE (PERFORMANCE.md Set 159): a
+    ; column's pixels come top to bottom, so every one takes it_span's fast
+    ; path, and the next one down - x the same, d one less, u one more -
+    ; writes its TOP over this one's first face row and its own face, whose
+    ; k* is at most one less (k_ring falls by exactly 1), over all the rest.
+    ; So this cell's face is never seen, and what it_span would leave of it
+    ; is the TOP byte and the column's lowest TOP: those two, here, for
+    ; three cells in four - ~1,450 cycles a cell down to ~150, the canvas
+    ; byte for byte the same (tools/isotronsim.py draws every span whole,
+    ; and the rows compare the two). The head's box is not grown: a whole
+    ; present follows every title build.
+    mov bx, [it_lgxx]               ; BX = x
+    mov dl, [it_lgyy]               ; DL = y: level 1, so it_ybase - d
+    mov [it_ctop + bx], dl          ; the column's lowest TOP so far
+    mov al, ID_TOP << 4             ; it_wide / it_wido's TOP, by x's parity
+    test bl, 1
+    jz .ev
+    mov al, ID_TOP
+.ev:
+    shl bx, 1
+    mov di, [it_xcol + bx]
+    xor dh, dh
+    add di, dx                      ; DI = x * 200 + y
+    push es
+    mov es, [it_cseg]
+    stosb
+    pop es
     ret
 
 ; -----------------------------------------------------------------------------

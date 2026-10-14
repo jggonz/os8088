@@ -169658,7 +169658,18 @@ pixel it is - d = 174 - y, u = x - d (§108.2) - placed in the grid as a
 letter's surface is wall TOPs - the glyph itself, white in the 16-colour
 looks - and its lower edges hang a LOGOF face 22 rows down, cut by the cells
 in front: block letters standing on the floor, square to the viewer, in the
-game's projection. 1,264 cells, ~0.25 s at the title.
+game's projection. 1,264 cells. **Only the last row of each glyph cell's
+block goes through `it_span`** (the closing audit, PERFORMANCE.md Set 159):
+a column's pixels are drawn top to bottom, every one on `it_span`'s fast
+path, and the next one down - x the same, d one less, u one more, so k_ring
+and k* fall by at most one - writes its TOP over this one's first face row
+and its own face over the rest, so a face above the block's last row is
+never seen. The three rows above it write their TOP byte and the column's
+lowest TOP (`it_ctop`) and nothing else; the canvas is byte for byte the
+model's, which still draws every span whole (`isotronwin` compares them).
+Measured on MartyPC's 5150: the word **0.443 s -> 0.285 s** (2.11M -> 1.36M
+cycles; the first version's comment had said ~0.25 s), the whole title
+build 0.794 -> 0.635 s, at every launch and every return to the title.
 
 Wave 2's letters were straight strokes laid along the floor's two axes
 (`u` and `d`), which on the glass lean at 45 degrees and stack their
@@ -171181,5 +171192,25 @@ plays and goes full screen and back. So `xt-isotron-ega` keeps `xt-ega`'s
 | row | asserts |
 |---|---|
 | `isotronperf` | §108.15.1: every gated line under the LOWER of its ceiling and 1.25 x its own pinned value - the head-steps, the wakes (EGA's windowed ones too), the round start's band holds, F's whole presents title and round, first light, every sweep case, the sweep and CRASH -> WAIT holds; the lines where 1.25 x the pin is above the ceiling are held to the ceiling and named there; EGA's whole present is reported. The governor never engaged at Rookie h1 |
+| `isotronload` | PERFORMANCE.md Set 159, on the 5150 CGA, 5150 Hercules and XT-VGA: the launch walked by breakpoints from the loader's entry to the title's whole present, then from the `1` key's arrival to the first wall moving, no harness flag set; and a BOT round at Rookie h1 and Lunatic h1 p 9, windowed and in the bracket, every head-step counted over two guest seconds within 3% of §108.4.1's model, with each step's price and the share of the machine the frames hold. The figures are the record; `--profile win\|fs` is the sampling instrument the audit used |
 | `isotronsmall` | MartyPC's `os8088_5150_cga_128k` on kern_small: A the loader places ISOTRON.O88 off `smallapps360.img`; B `it_nomem` = 1 with neither claim held, and - the two API cells traced across the launch - the package called `OSAPI_MEM_AVAIL` and never `OSAPI_MEM_CLAIM` (a build with the ask deleted fails here: it claims, is refused and sheds the caches, the hole growing 14 -> 32 KB); C `it_msgbuf` is `isoTron needs 63 KB and 30 KB of free memory; this machine has N KB.` with N between the claim map's largest hole and every paragraph no ordinary claim holds (14 <= 38 <= 38 KB); D that sentence's black ink over white in the CGA's video memory under its cells; E no worker, and `1` reaches `it_onkey` and posts nothing (`it_qstart` 0 - a build without `it_onkey`'s `it_nomem` guard fails here with 129) |
 | `isotroninput` | as §108.14.5, its counted taps guest-exact |
+
+#### 108.15.6 Launch to play, the rate and the machine it leaves (the closing audit)
+
+PERFORMANCE.md Set 159 is the record; `isotronload` keeps it runnable. On
+MartyPC's 4.77 MHz 5150 CGA, 5150 Hercules and XT-VGA, the shipped build:
+
+| | CGA | Hercules | XT-VGA |
+|---|---:|---:|---:|
+| double-click to the title up, taking keys | 3.06 s | 3.69 s | 4.77 s |
+| ...then `1` to the first wall moving (2.0 s of it the sweep's and READY's pace) | 2.52 s | 2.58 s | 2.72 s |
+| head-steps a guest second, Lunatic h1 p 9, windowed / full screen (model 227.7) | 228.4 / 228.3 | 228.3 / 227.3 | 229.5 / 227.8 |
+| the share of the XT that rate takes, windowed / full screen | 35% / 26% | 43% / 30% | 53% / 23% |
+
+The floppy is read before the entry proc and never again; the title's word
+draws a TOP byte alone above each glyph cell's last row (§108.9.4), which
+took the title build from 0.794 to 0.635 s. At Rookie the rate is the
+footage's - 59.5 computer and 19.8 player cells a second at h1 (§108.14.3),
+against the 5150's ~60 and ~17 - 20 - on every adapter in both modes, so
+an XT plays the original's pace with about half its time or more to spare.

@@ -118,7 +118,10 @@ make xt-pixelstein-herc # ...the same XT on a Hercules: F takes the box
 make isotrondisk # isoTron, a light-wall duel on a raised 3D slab (SPEC.md 108):
               # the package and its README in all four geometries
               # (isotron.img, isotron720/120/360.img). It is on the apps
-              # disks and games360.img too; apps/isotron/README.md
+              # disks and games360.img too; apps/isotron/README.md.
+              # `make isotrontest` runs its gates (the host model, then
+              # seeded games, pictures, toggle, flow, sound, keys and pace
+              # on MartyPC); `tests/isotron.py --perf all` is the XT audit
 make xt-isotron # 86Box: the 4.77MHz 640KB VGA XT with isotron360.img in B:
               # (double-click ISOTRON.O88; F is the 320x200x16 bracket)
 make xt-isotron-cga # ...a 640KB CGA XT: 1bpp windowed, F the 320x200x4 palette 1

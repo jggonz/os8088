@@ -14650,3 +14650,107 @@ no frame and no sound). SPEC.md §108.15.1 has the table.
 **Two more facts this set rests on**: on MartyPC's 256KB 5150 (kern_big) isoTron launches with both claims (63 + 30 KB)
 granted, plays and toggles full screen; on kern_small's 128KB floor machine it refuses in its own words with 38 KB the
 largest run (`isotronsmall`). Both are SPEC.md §108.15.3 / §108.15.4.
+
+### Set 159 — isoTron, the closing audit: launch to play, the rate against the 5150 original, and the machine it leaves (SPEC.md §108.15.6)
+
+Measured 2026-10-14 on MartyPC's 4.77 MHz 8088 models `os8088_5150_cga_gla`, `os8088_5150_herc_gla` and `os8088_xt_vga`, the
+shipped package (image 21,365 bytes, 16,904 lz4 on the disk, bss 3,734) on `build/isotron360.img` beside `os8088-360.img`, by
+`python3 tests/isotronload.py` (the new `isotronload` soak row; logs and JSON in the audit's reports, `close-perf-final-*`).
+MartyPC's cycle counter throughout, never a wall clock; host load moved nothing. Set 158 stays the authority for the gated
+lines (the head-steps over whole rounds, the wakes, F's presents, the sweeps): this set adds the three things it did not
+measure - the launch, the game's rate as a player gets it, and how much of the machine that rate leaves free.
+
+**Launch to play.** The double-clicked ISOTRON.O88 walked by breakpoints (tests/excitebike_load.py's recipe, each a stop that
+costs the guest no cycle), no harness flag set; the second half measured from the `1` key's ARRIVAL at the package
+(`it_onkey`), since the gap before the harness presses is the host's. Seconds, cumulative from the loader's entry (step in
+brackets), the shipped build:
+
+| step | CGA 5150 | Hercules 5150 | XT-VGA |
+| --- | ---: | ---: | ---: |
+| image read (30 sectors, 2 reads) + lz4-expanded, bss zeroed (`ld_start`) | 1.44 | 1.39 | 1.45 |
+| entry proc: window, both claims, menus (`it_lut_build`) | 1.47 (0.03) | 1.43 (0.03) | 1.48 (0.03) |
+| the presenters' tables | 1.56 (0.09) | 1.52 (0.09) | 1.57 (0.09) |
+| the title's canvas: the grid cleared / the slab (`it_rebuild`) | 1.60 / 1.91 (0.04 / 0.31) | 1.55 / 1.87 | 1.61 / 1.92 |
+| ...the word **isoTron** (79 glyph cells of 4 x 4 floor cells) | 2.19 (**0.285**) | 2.15 (0.285) | 2.21 (0.285) |
+| the window shown, the worker's first wake | 2.56 (0.37) | 2.56 (0.41) | 2.67 (0.46) |
+| **title up**: its whole present out (the first `W_PAINT`), taking keys | **3.06** (0.50) | **3.69** (1.13) | **4.77** (2.10) |
+| `1` -> the arena built (`it_bld0 .. it_bld1`, the worker, outside the lock) | +0.41 (0.36) | +0.41 | +0.39 |
+| the sweep: slab, tower and rims onto the glass (`it_sw0 .. it_sw1`) | +1.96 (1.55) | +2.03 (1.60) | +2.18 (1.77) |
+| READY's half second (`it_rdy1`), then the first wall moves (`it_step0`) | +2.52 | +2.58 | +2.72 |
+| **launch to play** | **5.58 s** | **6.27 s** | **7.49 s** |
+
+The floppy is 30 sectors in 2 reads before `ld_start` (~0.33 - 0.40 s of transfer, 16 ms of seek) and **nothing after it**:
+no art, no sidecar, every table built in RAM. Of the 2.5 - 2.7 s from the key, 2.0 s is PACE by design - the sweep at ~1.5 s
+(SPEC.md §108.13.3; the footage's first slab sweep is ~1.5 s) and READY's 9 ticks - and 0.36 s is the arena's canvas. The
+title's own whole present is the windowed presenter's whole picture (Set 155: ~150 cycles a 1bpp device byte, ~400 a VGA one),
+the only line where the adapters part company. Excitebike (Set 153) is 8.3 - 10.7 s to a title; isoTron is 3.1 - 4.8 s to one
+and 5.6 - 7.5 s to walls moving.
+
+**The cheap change this audit made: the title's word, 0.443 -> 0.285 s.** The first walk of the launch put **0.794 s** in
+`it_title_build` - 0.037 the grid, 0.314 the slab, **0.443 s (2.11M cycles) the word**, where its comment said ~0.25 s: 1,264
+floor cells, each a whole `it_span` at ~1,670 cycles with the loop's own bookkeeping. A column's logo pixels are drawn top to
+bottom, so every one takes `it_span`'s fast path, and the next one down (x the same, d one less, u one more: k_ring and k*
+fall by at most one) writes its TOP over this one's first face row and its own face over all the rest - a face above a glyph
+cell's last row is never seen. Now the three rows above it write the TOP byte and the column's lowest TOP (`it_ctop`) and
+return; only the block's last row runs `it_span` (`it_logo_cell`, itcanvas.inc: +51 bytes of image). **2.11M -> 1.36M cycles, the title
+build 0.794 -> 0.635 s, -0.158 s on every adapter**, at every launch and every return to the title. The canvas is byte for
+byte the model's, which still draws every span whole: `isotronwin` and `isotronflow` compare the two at the title and after a
+game over, and the sixteen `isotron*` soak rows pass on the change (`close-perf-soak1.log`). The rest of the word (~1,080
+cycles a cell on average) is the walk itself - memory-held counters and one MUL a cell in `it_logo_cell` - and drawing a
+block's four columns at once would take another ~0.1 s for a rewrite rather than a cheap change; not taken.
+
+**The rate, against the original.** A harness BOT round at Rookie h1 (the bot's one F10: p = 3) and at Lunatic h1 with p
+poked to 9 - the worst rate anywhere, SPEC.md §108.4.1 - windowed and in the full-screen bracket, audible: every head-step
+counted between two frame ends over two guest seconds of one steady state (heads, speed and state unchanged). Head-steps a
+GUEST second, against §108.4.1's model:
+
+| head-steps / s (computer a head + player) | CGA win | CGA 320x200x4 | Herc win | Herc box | VGA win | VGA 0Dh | model |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Rookie h1, p 3 | 85.7 (57.1 + 28.6) | 85.5 | 85.8 | 85.8 | 86.1 | 85.5 | 85.6 (57.1 + 28.5) |
+| Lunatic h1, p 9 | 228.4 (91.2 + 137.1) | 228.3 | 228.3 | 227.3 | 229.5 | 227.8 | 227.7 (91.1 + 136.6) |
+
+Every renderer holds the model within 0.8% (the window's ends are a frame apart, so ~1 iteration of error), and Set 157 has
+p = 2 within 0.65%: **59.5 computer cells a second and 19.8 player cells at Rookie h1, 34.1 / 11.4 at h2**. The 5150 footage
+(the timing scout's tracks) read **~60 px/s** for the computer along the back rim at a game's first round and **~17 - 20
+rows/s** for the player in depth, **~34 / 12 at h2**, and ~3x for the player after F10 (17 -> 50 rows/s; here p 2 -> 9 is
+x3.4 for the player, 19.9 -> 68.3, and slows the computer by a quarter - SPEC.md §108.4's coupling). One cell is one CGA pixel along
+the floor (E is +1 on the screen, N is +1 across and -1 down), so cells a second ARE the footage's pixels a second: isoTron on
+the XT runs the original's Rookie pace to within the footage's own reading error, on every adapter and in both modes, and
+Veteran / Lunatic are x4/3 and x2 of it by design.
+
+**What that rate leaves of the machine** - the share of the guest's cycles inside the game's frames: windowed the worker's lock
+holds (`it_wake0 .. it_wake1`: the iterations, the present and the frame's sound), in the bracket each frame's work and sound
+(`it_fsf0 .. it_fssnd1`). Everything else is the kernel's tick, the scheduler and idle:
+
+| share of the XT (hold median / most, ms) | CGA | Hercules | XT-VGA |
+| --- | ---: | ---: | ---: |
+| windowed, Rookie h1 | **24.0%** (13.3 / 15.8) | **29.5%** (16.6 / 21.0) | **50.5%** (29.4 / 36.9) |
+| windowed, Lunatic h1 p 9 | **35.2%** (19.4 / 22.8) | **42.9%** (23.7 / 30.1) | **52.6%** (29.8 / 74.0, governor) |
+| full screen, Rookie h1 | **12.3%** (2.2 / 4.4) | **14.3%** (2.5 / 5.2) | **11.1%** (2.1 / 3.8) |
+| full screen, Lunatic h1 p 9 | **25.6%** (5.0 / 6.9) | **29.5%** (5.2 / 8.1) | **22.7%** (4.5 / 5.9) |
+
+So the worst rate the game can ask for takes **a quarter to 30% of a 4.77 MHz 8088 in full screen** - Set 158 ESTIMATED 24% /
+26% / 20% (CGA / Hercules / VGA) from medians and the plan's paper frame, and this is the measurement - and 35 - 53% windowed,
+with the XT-VGA's window the only renderer near half. Its presentation governor (SPEC.md §108.11.6) engages there at Lunatic
+h1 p 9 in the round's first seconds (14.5 presents a second, the longest hold 74 ms) and the pace holds (229.5 head-steps a
+second). **The XT-VGA's windowed wake depends on where in the round it is sampled**: the first two seconds of a round read 29.4
+ms median at Rookie, 200 iterations in it reads **20.5** (`--after 200`, `close-perf-rate5-vga-after200.log`), and Set 158's
+22.3 is 120 wakes from a second in - the opening's long straight walls make tall boxes, and the VGA conversion is paid by the
+row. A step's own price in these windows (`it_step0 .. it_step1`, the move and its picture without the decision, 300 steps
+after each window) is ~1,460 - 1,500 cycles windowed on every adapter and ~2,000 - 2,900 with the bracket's span hook (CGA /
+Hercules / VGA medians 1,977 / 2,223 / 2,026 at Lunatic); Set 158's whole-round head-steps are the gated figure.
+
+**Where the time goes at the worst rate** (`tests/isotronload.py --profile win|fs`: MartyPC's flat IP sampled from the host -
+uncorrelated with the guest - 15,000 samples, bucketed by the package's labels and the kernel's): windowed CGA, 67.8% the idle
+task, the largest package item the mono row loop `it_praw1` at 3.5%, then `it_span_ud` 2.8%, `it_iterate` 2.0%, `it_move` 1.6%;
+full-screen CGA, ~77% the bracket's own wait (the frame yielding: `sch_switch`, `task_yield`, `fsx_wait`), the span hook (`it_hk_cga`, `it_hk_cga_x`) 4.1%;
+windowed XT-VGA, 53.1% idle, the colour conversion `it_praw4p.c16d` 8.6% and the kernel's `gfx_blitp` 5.9%, the pointer's
+save and restore around the lock ~2.6%. **No hot path is a cheap change**: nothing in play is over 9% of the machine, and the
+largest, the windowed VGA conversion, is the one Sets 155 and 156 already reworked (one logical row converted once into both
+its device rows, word tables).
+
+**Not changed, and why.** The title's whole present on the XT-VGA (2.10 s, one `W_PAINT` hold) is the windowed colour
+conversion of the whole picture, which Set 155 measured and pinned; banding it would add each hold's fixed part (Set 155: 3.28
+s banded against 2.18 in one hold) for no earlier first light. The arena build (0.36 s after the key) is `it_rebuild`, one
+pass over the 64,000-byte canvas at ~23 cycles a byte (Set 155 took it from 1.84M to 1.49M cycles; 1.50M here); the floor
+dots' loop is ~0.06 s of it by count. The image load (~1.4 s, 30 sectors) is the kernel's loader and its lz4 decode.

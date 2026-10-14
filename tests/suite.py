@@ -2949,6 +2949,23 @@ SOAK = [
         "Measured ~32 s (wave 5)",
         needs=("marty", "nasm"),
         wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronload", "soak", py("tests/isotronload.py"), 600.0,
+        "isoTron's LAUNCH TO PLAY and its RATE on the XT (PERFORMANCE.md Set "
+        "159), MartyPC's cycle counter on the 5150 CGA, 5150 Hercules and "
+        "XT-VGA. The launch: the double-clicked ISOTRON.O88 walked by "
+        "breakpoints (the loader's entry, ld_start, the entry proc and its "
+        "builds, the title's whole present out) and then, from the `1` key's "
+        "arrival, the arena build, the sweep, READY and the first wall moving "
+        "- no harness flag set. The rate: a BOT round at Rookie h1 and at "
+        "Lunatic h1 with p poked to 9 (the worst rate, SPEC.md 108.4.1), "
+        "windowed and in the full-screen bracket - every head-step counted "
+        "between two frame ends over two guest seconds, each step's own "
+        "price, and the share of the machine the game's frames hold. Asserts "
+        "the title and the round come up and every rate is within 3% of the "
+        "model; the figures are the record. `--profile win|fs` is the "
+        "sampling instrument the audit used, not a row",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
     Row("isotronperf", "soak", py("tests/isotron.py", "--perf", "all"), 900.0,
         "isoTron's windowed price on the XT (SPEC.md 108.10.3, 108.11.7; "
         "ISOTRON-PLAN section 16), MartyPC's cycle counter on the 5150 CGA, "
