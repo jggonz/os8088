@@ -12,8 +12,9 @@ fullscreen game runs. All UART settings are restored when you leave.
 Open WIREBALL.O88 on both computers and choose Serial Match (or press S). The
 games find one another and assign LEFT and RIGHT automatically. Each player
 has a paddle at the outside of their screen. The ball disappears through
-the inside edge and continues onto the other screen. The left computer
-keeps the score and physics; both players can pause or restart the match.
+the inside edge and continues onto the other screen. Each computer judges hits
+against its own paddle, then passes the ball to the other at the center.
+Both players can pause or restart the match.
 The match begins automatically, with a two-second delay before each serve.
 
 Up/Down or W/S   Move your paddle (hold to move)
@@ -33,18 +34,21 @@ and an instructions page. Its artwork adapts to color, CGA and Hercules.
 Paddle hits, wall bounces, points and the winner have short sound cues. The
 OS chooses the PC speaker or your configured sound driver; M mutes sound.
 
-The court uses the machine's native 80x25 text display, with block paddles
-and a square ball, on VGA, CGA, EGA or Hercules. Serial: 2400 baud, 8N1.
+The court uses pixel graphics on VGA, CGA, EGA and Hercules. VGA and lone
+Hercules adapters flip hidden VRAM pages; CGA updates small sprite spans.
+Paddles and physics move in quarter-row steps at 72.8 Hz on an XT. The small
+kernel uses an 80x25 text court. Serial: 2400 baud, 8N1.
 Standard COM1 (3F8h) and COM2 (2F8h) only; no USB serial adapters.
 
 Aim with the paddle: middle hits go flatter, end hits make steeper shots.
 Moving the paddle as you hit adds a small directional impulse. The ball
 speeds up every two returns, up to a limit, then slows for the next serve.
-Both computers must run the same version (serial protocol 2).
+Both computers must run the same version (serial protocol 3).
 
 Build: make wireball
 Application disks (all four floppy sizes): make wireballdisk
 Automated two-computer test: make wireballtest
+Pixel court, VRAM pages and 8088 frame rates: python3 tests/wireball.py --video
 CGA/Hercules 8088 test: python3 tests/wireball.py --mono
 8088 physics test: python3 tests/wireball.py --physics
 Splash/button test on all adapters: python3 tests/wireball.py --front

@@ -15003,7 +15003,7 @@ xt-pixel: $(IMG360) $(BUILD)/pixel360.img
 wireball-pair:
 	python3 tools/wireball-pair.py
 wireball: $(BUILD)/wireball.o88
-$(BUILD)/wireball.bin: apps/wireball/wireball.asm apps/wireball/wblink.inc apps/wireball/wbgame.inc apps/wireball/wbsound.inc apps/wireball/wbfront.inc apps/wireball/art/wbfront.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
+$(BUILD)/wireball.bin: apps/wireball/wireball.asm apps/wireball/wblink.inc apps/wireball/wbgame.inc apps/wireball/wbsound.inc apps/wireball/wbvideo.inc apps/wireball/wbfront.inc apps/wireball/art/wbfront.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireball.lst -o $@ $<
 $(BUILD)/wireball.o88: $(BUILD)/wireball.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@

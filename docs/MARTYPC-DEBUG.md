@@ -1248,6 +1248,13 @@ mono: `patches/03-video-dip-config.patch` adds an optional `video_dip`
 (`"mda"` / `"cga_lores"` / `"cga_hires"` / `"expansion"`); absent, nothing
 changes.
 
+`patches/12-hercules-lone-page1.patch` restores B8000h page-1 decoding for a
+**single** Hercules, gated by 3BFh bit 1. WireBall now exercises both VRAM
+pages through OSAPI_FSX_PAGE (§107.5). With the enable bit clear reads return
+FFh and writes are ignored, so the kernel's color-card probe cannot mistake
+Hercules page 1 for a second adapter. Two-card configurations retain patch
+02's page-0 aperture, regardless of card order.
+
 **A two-card config lists the card os8088 will drive FIRST.** MartyPC's
 primary is the first `[[machine.video]]` block, and `fbuf` with no `card=`
 reports the primary — with the CGA first on `_both_gla_mono` the boot gate

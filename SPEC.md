@@ -90321,8 +90321,10 @@ addresses. A bracket does not change where the cards are. The predicate is
 `vid_dual_ok` (a mono card *and* a colour card), not `[vid_ndisp]`, which
 `vid_fsx_enter` has already forced to 1 before any call can reach here; on a
 lone-Hercules XT it answers no and the page is available as advertised. Page
-**0** takes 3BFh back to 1 on its way in, so the bracket leaves the register
-as the desktop's own value rather than as whatever the last flip wanted.
+**0** keeps 3BFh = 3 on a lone Hercules, so the hidden 32KB page remains
+decoded and bit 7 can switch back from page 1. On a dual-card machine
+page 0 leaves 3BFh = 1 and page 1 refuses. The bracket's mode restore
+takes the configuration back to the desktop's 3BFh = 1 on exit.
 
 **TANK ATTACK (§85) is the consumer that asked for it**, and it is the first
 thing in this tree to page-flip at all. Its Mode X backend draws into the
@@ -169089,12 +169091,12 @@ and the menu bar's clock: the cause, seen. All five passed.
 ## 107. WireBall — Pong across a null modem (`apps/wireball/`)
 
 `WIREBALL.O88` is an 8086 package with a desktop launch panel and an exclusive
-80x25 text-mode court (§53). The desktop splash has generated CRT/cable
-artwork, Serial Match and Practice buttons, a controls page and a sound toggle.
-S starts serial play; L starts practice against an AI. The same CP437 court runs on VGA, CGA, EGA and Hercules. Up/Down or W/S
-move a four-cell paddle; P requests pause, N requests a new match, M toggles
-sound, and Escape
-returns to the desktop. First to 11 wins, without a win-by-two requirement.
+pixel court (§53), with a text fallback on `kern_small`. The desktop splash
+has generated CRT/cable artwork, Serial Match and Practice buttons, a controls page and a sound toggle.
+S starts serial play; L starts practice against an AI. Up/Down or W/S
+move a four-row paddle in quarter-row increments; P requests pause, N
+requests a new match, M toggles sound, and Escape returns to the desktop.
+First to 11 wins, without a win-by-two requirement.
 
 ### 107.1 Port lifetime
 
@@ -169105,8 +169107,11 @@ and polls at 2400 baud, 8N1, without hardware flow control. Presence is tested
 with two divisor-low-latch patterns, restoring DLL and LCR on both acceptance
 and refusal. The probe supports original 8250 UARTs, which lack the scratch
 register at base+7 (§9.5). It never hooks an
-interrupt vector or changes the kernel ABI. Each loop services both UARTs;
-transmit is nonblocking and graphics are direct VRAM cell updates. No sleeps,
+interrupt vector or changes the kernel ABI. Foreground polling decodes frames. A registered FSXF_RATE callback, with
+PIT divisor 2048 (about 582 Hz), services raw RX/TX while page selection
+waits for vertical retrace. Each port has a 64-entry byte/status ring;
+overflow or UART line errors invalidate the partial frame. UART IER stays
+zero and no IRQ3/IRQ4 handler is installed. Transmit is nonblocking; no sleeps,
 disk operations or BIOS video calls occur while the wire is active. All saved
 UART registers and the original PIC bits 3/4 are restored before the bracket
 returns, including Escape, no-port and connection-loss paths. Practice never
@@ -169114,59 +169119,76 @@ touches a UART. Use a crossed TX/RX null modem with a shared signal ground;
 COM1 and COM2 are the supported standard base addresses. Other serial devices
 on those ports should be disconnected during serial play.
 
-### 107.2 Discovery and protocol version 2
+### 107.2 Discovery and protocol version 3
 
 Each peer generates a nonzero 32-bit identity from the running PIT and the OS
 random generator. HELLO is sent on both ports until a valid peer is found.
 The first peer/port is bound; the lower unsigned identity owns the left court
-and simulates the entire match. Equal identities are regenerated. Each peer
+and serves first. Equal identities are regenerated. Each peer
 echoes the other's identity; only an addressed reply establishes a match.
-The right peer sends its paddle and command counter, and renders authoritative
-snapshots with bounded prediction between them. A three-second silence or BYE
+Each peer judges collisions on its own half of the court. The ball's current
+owner simulates motion and scoring, then grants ownership at the center with
+the full state and an incremented handoff generation. The sender freezes and
+repeats the grant until a reply acknowledges it. A grant is accepted only from
+the previous owner for the next generation; a duplicate cannot rewind the local
+ball or bounce twice. Each peer retains its local paddle when copying remote
+state. A right-side hit therefore uses the paddle the right player sees,
+rather than a delayed copy on the left PC. A three-second silence or BYE
 stops play and resumes discovery; reconnection starts a fresh match.
 
 Frames start and end with 7Eh. Payload 7Eh/7Dh is escaped as 7Dh followed by
-the byte XOR 20h. A frame is exactly 26 decoded bytes: `W B`, version 2,
+the byte XOR 20h. A frame is exactly 30 decoded bytes: `W B`, version 3,
 type (0 HELLO, 1 STATE, 2 INPUT, 3 BYE), sender identity (little endian
 32 bits), recipient identity (32 bits, zero for initial HELLO), left and
-right paddle top (bytes, 0..16), ball X and Y (little endian words, quarter
-cells, X 0..620, Y 0..76), signed velocity X/Y (bytes), scores (0..11),
+right paddle top (bytes, quarter rows, 0..64), ball X and Y (little endian words,
+quarter cells, X 0..620, Y 0..78), signed velocity X/Y (bytes), scores (0..11),
 flags (bit 0 pause, bit 1 finished), serve countdown (ticks, 0..36), command
-counter, and XOR of the preceding 25 bytes. Bounds, magic, version, checksum,
+counter, owner (0 left, 1 right), handoff generation (word), rally returns
+(0..16), and XOR of the preceding 29 bytes. Bounds, magic, version, checksum,
 peer, port and recipient are checked before applying state. An overlong,
 truncated or damaged frame is discarded at the next delimiter. UART line
 errors discard the partial frame. Full snapshots repair missed frames; input
 and command counters repeat, so packet loss does not lose pause/restart.
 STATE velocities must have `1 <= abs(VX) <= 16` and `abs(VY) <= 8`.
-Version 2 expands the velocity bounds for rally acceleration; older games
+Version 3 adds local collision ownership and handoff state; older games
 cannot join a match with this version.
 
-Simulation runs at 18.2 Hz, snapshots/input every three ticks and HELLO every
+Physics and local paddle movement advance at 72.8 Hz; timers and sound remain
+18.2 Hz, snapshots/input every three ticks and HELLO every
 18 ticks. INPUT's flags carry the latest command (1 pause, 2 new match); its
-counter is applied once and acknowledged in STATE. The court has 156 columns,
+counter is applied once and acknowledged in STATE.
+If ownership arrives before a local command was acknowledged, the new owner
+applies that command locally and rebases its request counter to the grant's
+last acknowledgment. Old-generation INPUT frames are rejected, so the command
+cannot replay when ownership later returns.
+The court has 156 columns,
 78 per monitor, and 20 playable rows. Practice uses 78 columns on one monitor.
 
 Ball motion uses four bounded substeps per tick, with quarter-cell remainders
 retained across substeps. At the maximum speed a substep spans at most one
-column or half a row. Each substep polls the UARTs and resolves wall/paddle
-collisions; wall and paddle rebounds reflect the overshoot rather than
-discarding the rest of the movement. Finite ball/paddle overlap uses the
-paddle center (top row * 4 + 6), half-height 8 and ball half-height 2.
+column or half a row. Foreground polling and the rate callback service the UARTs independently
+of motion. Each substep resolves walls, then computes the ball Y at the
+exact swept paddle X plane from its previous position and velocity.
+Overlap is judged there, including ball extents, rather than at the final
+substep Y. The remaining fraction of the substep continues along the new
+return vector. Quarter-of-quarter-cell remainders are retained through
+contact and wall reflection. The ball is 4 quarter-columns by 2 quarter-rows;
+paddles are 16 quarter-rows tall. The difference between ball top and
+paddle top + 7 has a contact radius of 9 quarter-rows.
 Contact offset selects one of eleven integer direction vectors from 0 to
 60 degrees. A moving paddle biases the offset by two quarter-row units in
-its movement direction, clamped to the same angle limit. Remote movement is
-estimated from successive INPUT positions and expires after four ticks.
-Velocity vectors account for the text court's approximately 2:1 cell aspect;
+its movement direction, clamped to the same angle limit. Both collisions use the owning player's local movement direction.
+Velocity vectors account for the court's approximately 2:1 logical cell aspect;
 no floating-point or trigonometry runs on the guest. Nominal speed begins at
 8 quarter-columns/tick and increases by 1 every two returns, capped at 16;
-each point resets the speed and chooses a gentle serve angle. Only the left
-peer resolves paddles and scoring; the right predicts bounded motion and
-uses the transmitted authoritative velocity.
+each point resets the speed and chooses a gentle serve angle. Each peer
+resolves its local paddle and scores while it owns the ball;
+ownership passes with the transmitted position and velocity at the center.
 
 Design references: [SparkFun's Analog Pong](https://cdn.sparkfun.com/assets/resources/6/2/Analog_Pong_with_Processing.pdf)
 for hit-position and paddle-motion response, and
 [Catlike Coding's Paddle Square](https://catlikecoding.com/unity/tutorials/prototypes/paddle-square/)
-for ball extents and conserving movement after a collision. The four-substep
+for ball extents and conserving movement after a collision. The swept
 integer implementation is WireBall's adaptation for the 8088.
 
 ### 107.3 Build and validation
@@ -169192,7 +169214,10 @@ setup, UART/PIC restoration, practice and controls on CGA and Hercules 8088s. Th
 `wireballfront` row validates the splash, controls and release/cancel gestures
 on all three adapters. `wireballphysics` invokes the shipped collision/motion
 routines on an 8088 and verifies aiming, motion impulse, finite overlap, speed
-limits, displacement, overshoot and receiver prediction. The serial row captures both PC speakers and checks
+limits, displacement, swept upper/lower end contact and remaining movement
+after contact on both paddles. `wireballvideo` checks native pixel coordinates,
+quarter-row controls, page counts and display/physics frame rates on VGA,
+CGA and Hercules at 4.77 MHz. The serial row captures both PC speakers and checks
 paddle/victory pitches, mute and sound release on exit. Emulator evidence
 does not measure polling margins on physical 8250 UARTs; period-machine and real
 null modem runs remain hardware validation.
@@ -169218,9 +169243,52 @@ are finite, nonblocking `OSAPI_SND_TONE` requests at priority 40h (§34).
 The OS selects the PC speaker or the user's sound-driver route. A small
 sequencer advances only on game ticks; it never sleeps, changes the PIT,
 plays blocking PCM, or delays UART polling. Pause, mute, link loss and exit
-silence only this instance's tone. The right peer derives cues from validated
+silence only this instance's tone. The remote peer derives cues from validated
 snapshot changes (score, velocity and serve countdown), without changing
 message fields or making duplicate snapshots repeat sounds.
+
+### 107.5 Pixel rendering and timing
+
+On the big kernel, FSXF_RATE supplies a 582 Hz clock. Eight periods advance
+a motion step (72.8 Hz); the main loop catches up before each refresh. It
+prepares the next display page immediately after the previous flip, rather
+than waiting for the next motion deadline and risking a missed retrace. OS ticks
+retain the original 18.2 Hz serve, sound and link deadlines. On `kern_small`,
+where rate callbacks are unavailable, WireBall retries the exclusive bracket
+without the rate flag and advances four substeps per OS tick on a text court.
+It polls both UARTs between those substeps and around text-HUD construction.
+
+VGA uses 320x240 Mode X, selecting two display pages at offsets 0 and 19200
+through OSAPI_FSX_PAGE. A lone Hercules uses 720x348 with a centered 640-pixel
+court and pages at 0 and 8000h. Page 1 is used only after OSAPI_FSX_PAGE
+approves it; dual-card Hercules remains on page 0, protecting the color
+card's B8000h aperture (§53.10). On exit page 0 is selected before restoring
+the desktop mode. CGA/EGA use 640x200 monochrome, one page, with changed
+packed sprite spans written after OSAPI_FSX_WAIT with FSXW_VSYNC.
+
+Each page caches its last paddle/ball rectangles and HUD text. Drawing erases
+only changed old rectangles, paints new ones and updates changed HUD glyphs.
+Overlapping vertical paddle movement clears the newly exposed strip and
+paints the newly covered strip, retaining the overlapping pixels in VRAM.
+Each page also caches the HUD's phase, side, scores, flags, serve-ready bit
+and port selection; unchanged state skips string building and glyph comparison.
+Mode X combines neighboring uniform pixels into one plane-mask write;
+packed mono writes preserve adjacent
+bits. One/two-byte mono sprite spans use masked byte/word operations and
+advance banked scanline addresses by addition, avoiding multiplication and
+per-byte mask branches on every row. Fractional ball coordinates contribute
+whole pixels wherever the adapter's coordinate scale permits. There is no
+full-frame copy or allocated shadow framebuffer. The
+visible rectangles use the same ball/paddle dimensions and coordinate scales
+as collision checks. The app copies ASCII 32..127 glyphs from OSAPI_FONT_GLYPHS
+before entering FSX, and clears/draws the static court before borrowing UARTs.
+The VGA/CGA raster uses two pixels per quarter-row and the Hercules raster
+four, allowing finer paddle and ball movement than the old text court.
+
+The cycle-accurate video regression requires at least 45 displayed frames/s
+and 68 physics steps/s at 4.77 MHz. The native UART rate callback keeps an
+original 8250 serviced across vertical-retrace waits; its raw queue drains
+through the ordinary frame parser in the foreground.
 
 ## 108. isoTron — a light-wall duel in a raised 3D arena (`apps/isotron/isotron.asm`)
 

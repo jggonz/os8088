@@ -14754,3 +14754,54 @@ conversion of the whole picture, which Set 155 measured and pinned; banding it w
 s banded against 2.18 in one hold) for no earlier first light. The arena build (0.36 s after the key) is `it_rebuild`, one
 pass over the 64,000-byte canvas at ~23 cycles a byte (Set 155 took it from 1.84M to 1.49M cycles; 1.50M here); the floor
 dots' loop is ~0.06 s of it by count. The image load (~1.4 s, 30 sectors) is the kernel's loader and its lz4 decode.
+
+### Set 160 — WireBall: local serial collisions and pixel movement on the XT (SPEC.md §107.5)
+
+Measured 2026-10-14 with `python3 tests/wireball.py --video`, MartyPC's
+cycle-accurate 4.77 MHz 8088, native adapter modes and the ordinary big kernel.
+The measurement starts a controlled live practice rally at X=156, Y=39,
+VX=8, VY=2 with no serve countdown, then alternates held Down/Up keys over four
+exact half-second CPU advances, with 10 ms advances to deliver each key release.
+Rates use the actual elapsed guest cycles. It includes the AI paddle and actual wall/paddle collisions;
+paused-screen frame rates are not the price of movement.
+
+| Adapter | Display frames/s | Physics steps/s | Drawing |
+| --- | ---: | ---: | --- |
+| VGA | 59.2 | 72.9 | Mode X, two VRAM pages |
+| CGA | 59.2 | 72.9 | One page, masked byte/word spans |
+| Lone Hercules | 46.0 | 72.9 | Two 32KB VRAM pages |
+| Hercules + CGA | 48.5 | 72.4 | One Hercules page; color VRAM unchanged |
+
+The renderer keeps overlapping paddle pixels, clears only
+exposed strips and paints newly covered strips. It caches each page's HUD
+state before building strings or comparing glyphs. One/two-byte mono sprite
+spans combine the end masks into byte/word operations and advance through
+scanline banks by addition instead of multiplying on every row. Mode X groups
+neighboring pixels into one plane-mask write per VRAM byte. The app draws
+ahead of retrace and advances physics separately at 72.8 Hz; fractional ball
+coordinates contribute whole pixels where the adapter scale allows it.
+
+There is no whole-frame copy or heap-backed framebuffer. Mode X and lone
+Hercules use OSAPI_FSX_PAGE; CGA and dual-card Hercules use the existing
+vertical-retrace wait followed by small writes. The latter preserves the
+second card's aperture. Original 8250 RX/TX is serviced by a 582 Hz FSXF_RATE
+callback across retrace waits, then decoded in the foreground. The small
+kernel keeps the text court and foreground UART polling.
+
+`--video` checks the complete sprite mask after movement, quarter-row paddle
+steps, page counts, UART/PIC restoration and at least 45 display frames/s and
+68 physics steps/s. CGA's exact mask is read from banked VRAM because the
+emulator raster includes red diagnostic pixels during subcycle status-port
+catch-up; sprite centers are also checked in the rendered raster. Hercules
+raster checks account for its documented (-16,+2) porch displacement. The
+Mode X raster capture is cropped to 200 logical rows in MartyPC; the separate
+two-PC QEMU serial regression captures the full 320x240 court.
+
+`--physics` measures four production collision microsteps at **18,216 CPU
+cycles**, within one 2400-baud byte period (19,886 clocks). Its swept-contact
+fixtures save both upper and lower paddle ends on both sides when the ball
+would have passed vertically by the end of the step. The real serial test
+also saves a right-side hit with a deliberately stale paddle on the left PC
+and confirms that duplicate ownership grants cannot rewind or score twice.
+These are emulator measurements; they do not replace a physical XT/null-modem
+run.
