@@ -204,6 +204,7 @@ def deskcal_equs(tmp):
              "DCA_FLAGS", "DCA_LEAD", "DCA_TEXT", "DCT_TEXT", "DCP_LEAD",
              "DCP_FLAGS", "DCA_REMIND", "DCA_FIRED", "DCT_DONE",
              "dia_st - os88_image_end", "dia_file - os88_image_end",
+             "dc_line - os88_image_end",
              "DIA_PAYLEN", "DIA_PAYVER"]
     src = open(os.path.join(ROOT, "apps", "deskcal", "deskcal.asm")).read()
     probe = ("\n    db 'T_DIA_PROBE'\n" +
@@ -378,6 +379,7 @@ def main():
                  ("DCA_REMIND", os88dia.APPT_REMIND),
                  ("DCA_FIRED", os88dia.APPT_FIRED),
                  ("DCT_DONE", os88dia.TASK_DONE),
+                 ("dc_line - os88_image_end", os88dia.DESKCAL_BSS_LINE),
                  ("dia_file - os88_image_end",
                   os88dia.dia_hdr_off(os88dia.DESKCAL_DIA_BSS)),
                  ("dia_st - os88_image_end",

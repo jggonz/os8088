@@ -34,7 +34,10 @@ needs is ten guest seconds away rather than an hour. Today is Wed 14 October
   C  ONE AT A TIME: 09:31 and 09:32 pass with Dentist's alert still up and
      Call Bob does not go off - and the save Dentist's firing owed has landed
      UNDER that alert, which holds nothing (an unanswered alert held every
-     save once, and a Restart lost them); OK, and at 09:33 it does - and only it, though
+     save once, and a Restart lost them) - and with the toast and the disk
+     widget gone, the alert's menu bar has nothing right of its app name
+     (the calendar's armed clip once kept `Cal` of its Calendar title
+     there); OK, and at 09:33 it does - and only it, though
      Quarterly is due by then too; OK, and at 09:34 Quarterly's alert reads
      `09:33 Quarterly budget review`, the prefix dropped so the user's text
      is all there (OS88UI_AMAX is 34).
@@ -66,7 +69,8 @@ toast from the entry proc again and A's second look reads `Settings Saved`;
 drop dc_stale's call
 in dc_cappt and E's Late entry goes off at once; fire this minute's moment
 silently in dc_stale and E's Right now never goes off; put dc_alert back in
-dc_tick's hold and C waits for a save that never comes.
+dc_tick's hold and C waits for a save that never comes; take the
+OSAPI_WM_CLIP_CLEAR out of dc_fire and C finds `Cal` on the alert's bar.
 """
 import os
 import shutil
@@ -109,7 +113,7 @@ def fixture():
              (TODAY, 573, "Quarterly budget review"),
              (TODAY, 576, "Typing test"),
              (TOMORROW, 0, "Midnight")]
-    return B.dat(B.deskcal(appts, lead=0), x=359, y=40, screen=(640, 480))
+    return B.dat(B.deskcal(appts, lead=0), x=335, y=40, screen=(640, 480))
 
 
 class Rem(object):
@@ -229,7 +233,8 @@ def main():
                   "the toast says %r" % txt)
             check(r.fired("Dentist") is True, "Dentist is FIRED")
             check(runs == 1, "the calendar drew ONE run, its line (%d)" % runs)
-            line = bytes(c.bss(70, 27)).split(b"\0")[0].decode("latin-1")
+            line = bytes(c.bss(B.DESKCAL_BSS_LINE, 30)).split(b"\0")[0] \
+                .decode("latin-1")
             check(line.startswith(" 09:30- Dentist"),
                   "...and the line reads %r, the mark `-`" % line)
 
@@ -245,6 +250,23 @@ def main():
                      % (c.st(), r.alert()))
             check(r.alert() == 1 and r.windows() == 2,
                   "...and the save it owed landed with the alert still up")
+            # THE ALERT'S BAR IS ITS OWN: the alert's create recomposes the
+            # bar, and dc_fire's agenda line had left the calendar's clip
+            # armed - every cell of that composition was recorded drawn and
+            # dropped, so the `Cal` of our Calendar title stayed on the bar
+            # for good (SPEC.md 107.3). With the toast and the disk widget
+            # down, everything right of the app name is ground
+            ui._wait(lambda: not ui.toast()[1] and not ui._byte("fpg_on"),
+                     "the toast and the disk widget to go", 30)
+            names = [mm for mm in ui.menus() if mm[0] == TITLE]
+            x1 = names[0][2] if names else 151
+            hx = ui._word("vid_clk_hx")
+            fw, fh, fb = m.fbuf(0)
+            inked = [(x, y) for y in range(2, 16) for x in range(x1 + 8, hx)
+                     if fb[3 * (y * fw + x)] < 128]
+            check(not inked, "the alert's bar: nothing between its app name "
+                  "and the clock (%d ink pixels%s)" % (len(inked),
+                  ", first at %r" % (inked[0],) if inked else ""))
             r.ok("Dentist's alert")
             r.clock(9, 32, 52)
             r.wait_alert("Call Bob's alert")

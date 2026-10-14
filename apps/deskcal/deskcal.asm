@@ -36,23 +36,31 @@
     OS88_ICON16_END
 
 ; --- geometry (SPEC.md 107.3) ------------------------------------------------
-DC_CELLS    equ 26              ; the content is 26 cells wide on both layouts
-DC_CW       equ DC_CELLS * 8    ; 208
-DC_TALL_CH  equ 236             ; the TALL content; anything shorter is COMPACT
-DC_COMP_CH  equ 120
+DC_CELLS    equ 29              ; the content is 29 cells wide on both layouts:
+                                ; seven 4-cell day fields `[ ][d][d][m]` and
+                                ; one cell of margin after Saturday's mark
+                                ; (SPEC.md 107.3)
+DC_CW       equ DC_CELLS * 8    ; 232
+DC_TALL_CH  equ 253             ; the TALL content; anything shorter is COMPACT
+DC_COMP_CH  equ 123
 DC_FW       equ DC_CW + 2       ; the frames: content + border, + the title bar
 DC_TALL_FH  equ DC_TALL_CH + TITLE_H + 1
 DC_COMP_FH  equ DC_COMP_CH + TITLE_H + 1
-DC_FLD0     equ 2               ; the first day field's first cell
+DC_FLD0     equ 0               ; the first day field's first cell
+DC_FLDW     equ 4               ; a day field's cells: a blank, two digits and
+                                ; the mark hard against them, ` 16*` - so the
+                                ; blank between two days is always there and
+                                ; a mark can only be read as its own day's
 DC_MARK     equ '*'             ; the mark cell's glyph: a day with an
                                 ; appointment. It must be PRINTABLE - the
                                 ; kernel keeps glyphs 32..126 and draws any
                                 ; other as a space (font.inc), which is what
                                 ; wave 2's glyph 7 did: no day ever showed
                                 ; its bullet. A star's middle row reaches
-                                ; column 0, which the selection frame stands
-                                ; on, so a marked day the frame leaves is
-                                ; re-run (dc_reselect), as today always was
+                                ; column 7, which the selection frame's right
+                                ; side stands on, so a marked day the frame
+                                ; leaves is re-run (dc_reselect), as today
+                                ; always was
 DC_GRIDN    equ 42
 
 ; --- the payload v1, what wave 2 reads of it (SPEC.md 107.3) -----------------
@@ -86,7 +94,9 @@ DCF_NOREM   equ 1               ; new appointments get no reminder
 DC_ALLDAY   equ 0FFFFh
 DC_ESZ      equ 32              ; the entry's buffer, its NUL in it: `HH:MM `
                                 ; and 25 characters
-DC_TPITCH   equ 12              ; a task row: the check box's height
+DC_TPITCH   equ 13              ; a task row: the check box's height and one
+                                ; row of ground, so stacked boxes never touch
+DC_TBOX     equ 4               ; the box's x: inset off the window's frame
 DC_AMARK    equ 6               ; an agenda line's reminder-mark cell
 DCS_APPT    equ 1               ; dc_selk: an appointment selected...
 DCS_TASK    equ 2               ; ...or a task
@@ -141,7 +151,8 @@ dc_ox       equ os88_image_end + DC_BSS_OX
 dc_oy       equ os88_image_end + DC_BSS_OY
 dc_cw       equ os88_image_end + 66     ; dw the content box
 dc_ch       equ os88_image_end + 68
-dc_line     equ os88_image_end + 70     ; 28: a row being built, and its NUL
+                                        ; 70..97 spare: dc_line's old place,
+                                        ; 28 bytes against the 29-cell row's 31
 dc_redo     equ os88_image_end + 98     ; db the next draw is a WHOLE paint: a
                                         ; menu pick took the About card down
 DC_BSS_ED   equ 99                      ; db the entry field: 0 shut, DCE_*
@@ -191,8 +202,11 @@ dc_rmsg     equ os88_image_end + DC_BSS_RMSG    ; alert's line, which it
                                         ; repaints from while it is up; the
                                         ; toast is the same from +9
 DC_RMSG_PRE equ 9                       ; `Reminder `
-DC_BSS      equ 272                     ; a multiple of 16 (os88dia.inc)
-%if 178 + DCP_APPTSZ > 210 || DC_BSS_RMSG + DC_RMSG_PRE + 6 + DCA_TMAX + 1 > DC_BSS || 220 + 2 > DC_BSS_RMSG
+dc_line     equ os88_image_end + 272    ; 32: a row being built - 29 cells,
+                                        ; its NUL, and the byte after the NUL
+                                        ; that dc_part's word read reaches
+DC_BSS      equ 304                     ; a multiple of 16 (os88dia.inc)
+%if 178 + DCP_APPTSZ > 210 || DC_BSS_RMSG + DC_RMSG_PRE + 6 + DCA_TMAX + 1 > 272 || 220 + 2 > DC_BSS_RMSG || 272 + DC_CELLS + 2 > DC_BSS
   %error "deskcal: its own bss has outgrown DC_BSS"
 %endif
 
@@ -685,9 +699,9 @@ dc_onclick:
 .grid:
     sub ax, DC_FLD0             ; the cell among the fields
     jb .xp
-    cmp ax, 21
-    jae .xp
-    mov bl, 3
+    cmp ax, 7 * DC_FLDW
+    jae .xp                     ; the margin after Saturday
+    mov bl, DC_FLDW
     div bl                      ; AL = the column
     mov cl, al
     mov ax, dx
@@ -735,8 +749,10 @@ dc_onclick:
     mov bx, dx
     sub bx, [di + DCL_PANE]
     jb .tk
-    mov cl, 3
-    shr bx, cl                  ; BX = the agenda line
+    xchg ax, bx
+    div byte [di + DCL_APITCH]  ; AL = the agenda line (a line's gap is its)
+    xchg ax, bx                 ; BL = it, AL = the cell again
+    xor bh, bh
     cmp bx, [di + DCL_AN]
     jae .tk
     mov ah, al                  ; AH = the cell
@@ -1126,12 +1142,8 @@ dc_plist:
     cmp byte [dc_pane], 0
     jne .t
     mov ax, 0x0100
-    call dc_agenda
-    mov di, [dc_lay]
-    mov bx, [di + DCL_AN]
-    mov cl, 3
-    shl bx, cl
-    add bx, [di + DCL_PANE]
+    call dc_agenda              ; every line, and the gaps between them
+    call dc_aend                ; BX = the agenda's end
     mov dx, [dc_ch]
     dec dx
     call dc_fill
@@ -1982,7 +1994,8 @@ dc_tick:
 
 ; --- the window (SPEC.md 107.3) -----------------------------------------------
 dc_tpl:
-    dw 360, 40, DC_FW, DC_TALL_FH
+    dw 336, 40, DC_FW, DC_TALL_FH    ; (335,40) under the snap: the frame and
+                                    ; its shadow end left of the drive icons
     dw dc_title, dc_paint, dc_onkey, dc_onclick
     OS88_PREFER dc_pref, DC_FW, DC_TALL_FH, DC_FW, DC_TALL_FH, DC_FW, DC_COMP_FH
 
@@ -2070,6 +2083,9 @@ dc_ab4:     db 'SYSTEM\DIA  -  SPEC.md 107', 0
 %include "os88ui.inc"
 %include "os88line.inc"
 %include "os88dia.inc"
+%if DC_TBOX + OS88UI_CKBOX != 16
+  %error "deskcal: a task's box must end where its text run's cell 2 begins (dcdraw.inc)"
+%endif
 
 %if OS88LINE_SZ != 20 || OS88UI_CK_SIZE != 12
   %error "deskcal: its bss holds a 20-byte field block and a 12-byte check box"

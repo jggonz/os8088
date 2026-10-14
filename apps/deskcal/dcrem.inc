@@ -172,6 +172,13 @@ dc_fire:
     mov bh, bl                  ; its line, `!` to `-`: one run, BEFORE the
     mov bl, DCS_APPT            ; alert exists - the clip is our window's
     call dc_selitem             ; visible region as it is now
+    call OSAPI_WM_CLIP_CLEAR    ; ...AND DISARMED before the alert is made:
+                                ; its create recomposes the menu bar under
+                                ; whatever clip is armed, and through ours -
+                                ; nowhere near the bar - every cell was
+                                ; recorded drawn and dropped, which left the
+                                ; `Cal` of our Calendar title on the alert's
+                                ; bar for good (SPEC.md 107.3)
 .said:
     mov si, dc_rmsg + DC_RMSG_PRE
     call dc_toast               ; `09:30 Dentist`: the text LAST (59.10)

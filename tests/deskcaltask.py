@@ -12,7 +12,11 @@ file is flushed off the emulated drive and parsed by tools/os88dia.py.
   A  `K` and three lines - `Buy milk`, `Call plumber`, `Post letter` - are
      three tasks in the state file, in the order typed, none done; Calendar
      > Clear Done Tasks is GREYED `Clear Done (none done)` (SPEC.md 47).
-  B  a click on Buy milk's BOX checks it: the screen differs from before in
+  B  THE BOXES SIT OFF THE FRAME AND OFF EACH OTHER: four ground columns
+     between the window's frame and every box, and a ground row under each
+     box before the next - the frame and a box once read as one 2px line,
+     and two boxes as one (SPEC.md 107.3). Then a click on Buy milk's BOX
+     checks it: the screen differs from before in
      the box's 6x6 mark and in NOTHING ELSE - not the label, not the frame,
      not another row (dc_tmark's one fill, SPEC.md 107.3) - and
      after the debounce the file has it DONE. Clear Done Tasks is live.
@@ -59,7 +63,8 @@ from deskcaledit import Cal, TITLE   # noqa: E402
 
 BDIR = os.path.join(HERE, "..", os.environ.get("OS88_BUILD", "build"))
 MACHINE = "os8088_5150_herc_gla"
-T0, TPITCH = 176, 12            # the TALL task rows (SPEC.md 107.3's table)
+T0, TPITCH = 188, 13            # the TALL task rows (SPEC.md 107.3's table)
+TBOX = 4                        # the box's x: inset off the window's frame
 TASK_DONE = os88dia.TASK_DONE
 
 fails = []
@@ -137,7 +142,7 @@ def main():
 
             def box(k):
                 ox, oy = c.origin()
-                return ox, oy + T0 + TPITCH * k
+                return ox + TBOX, oy + T0 + TPITCH * k
 
             def mark(k):
                 x, y = box(k)
@@ -168,6 +173,20 @@ def main():
             x, y = box(0)
             c.front()
             a = frame_now()
+            ox, oy = c.origin()
+            inset = [(px, py) for px in range(ox, x)
+                     for py in range(y, y + 3 * TPITCH)]
+            check(all(a[py][px] for px, py in inset),
+                  "the boxes are INSET: the %d columns between the window's "
+                  "frame and them are ground on every row" % (x - ox))
+            check(not any(a[py][x] for py in range(y, y + 12))
+                  and not any(a[py][x] for py in range(y + TPITCH,
+                                                      y + TPITCH + 12)),
+                  "...and each box's own left side is ink, %d px in" % TBOX)
+            under = [(px, y + k * TPITCH + 12) for k in (0, 1)
+                     for px in range(x, x + 12)]
+            check(all(a[py][px] for px, py in under),
+                  "stacked boxes do not TOUCH: the row under each is ground")
             check(all(a[py][px] for px, py in mark(0)),
                   "the box is empty before: its mark's pixels are ground")
             runs = os88marty.bp_count(m, run_at,
@@ -296,7 +315,7 @@ def main():
                   "Clear Done leaves four (%r)" % (got,))
             img = frame_now()
             row4 = [(px, oy + T0 + 4 * TPITCH + 2 + j)
-                    for px in range(ox + 16, ox + 16 + 24 * 8)
+                    for px in range(ox + 16, ox + 16 + 27 * 8)
                     for j in range(8)]
             ink = [p for p in row4 if not img[p[1]][p[0]]]
             check(not ink, "row 4, the old pager's, is ground (%d ink "

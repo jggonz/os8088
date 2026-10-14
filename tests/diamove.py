@@ -15,7 +15,7 @@ MartyPC's VGA XT and its 5150 CGA:
      it was saved on, and nothing is owed any more.
   C  RESET. The boot's dia_boot relaunches it from the row, dia_load reads
      the state file in the entry proc, and the window comes back AT THE
-     DRAGGED PLACE - not at the template's (359,40) - holding no desktop
+     DRAGGED PLACE - not at the template's (335,40) - holding no desktop
      cell, with nobody touching the mouse.
 
 The reset is waited out on the BIOS tick restarting rather than on settle(),
@@ -23,17 +23,18 @@ which returns during the BIOS disk probe after a warm boot on a loaded host.
 
 THE CGA LEG is the one wave 2 shipped broken: the template was the 255-row
 TALL frame, so wm_create's fit cut it to the 155-row band and clamped every
-restored y to 20 before PREFER made it 139 - the place came back at y = 20
-and the next poll saved 20 over the user's. Its drag lands at y = 24.
+restored y to 20 before PREFER made it COMPACT's - the place came back at
+y = 20 and the next poll saved 20 over the user's. Its drag lands at y = 24.
 
 `--leg anchor` (row `diaanchor`) writes DESKCAL.DAT with tools/os88dia.py
-before the boot - a place (503,88) saved on a 720x348 screen - and opens the
-calendar on the VGA XT's 640x480:
+before the boot - a place (479,68) saved on a 720x348 screen, the frame 7
+pixels off its right edge - and opens the calendar on the VGA XT's 640x480:
 
   D  each axis is ANCHORED to the old screen's nearer edge (SPEC.md
-     107.5.2): x 503 -> 423 and y 88 -> 220, both from the far edge. y 220 is
+     107.5.2): x 479 -> 399 and y 68 -> 200, both from the far edge. y 200 is
      a frame hanging over the dock, which wm_create's fit pulls up above it
-     (to 200): dia_made must give it back.
+     (to 183): dia_made must give it back. (It must also still be ON the
+     screen: 200 + 272 is 472, and a KEEPH frame is never put below 479.)
   E  nobody touched it, so NOTHING IS WRITTEN: three polls later the state
      file on A: is byte for byte the fixture, and no save is owed. A wave-2
      build saved the anchored place ~2 s after the launch.
@@ -64,7 +65,7 @@ import os88dia     # noqa: E402
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
 TITLE = "Desk Calendar"
-TEMPLATE = (359, 40)            # dc_tpl's (360,40) under the snap
+TEMPLATE = (335, 40)            # dc_tpl's (336,40) under the snap
 DIA_ST = os88dia.dia_st_off(os88dia.DESKCAL_DIA_BSS, os88dia.DESKCAL_PAYLEN)
 HDR = os88dia.dia_hdr_off(os88dia.DESKCAL_DIA_BSS)
 DIA_S_ROW, DIA_S_DIRTY = 2, 16
@@ -169,8 +170,8 @@ def move_leg(tmp, machine, template, drag, screen):
 
 
 # the anchor leg's fixture: a place saved on a Hercules-sized screen
-SAVED, SAVED_SCREEN = (503, 88), (720, 348)
-ANCHORED = (423, 220)           # 640 - (720 - 503), 480 - (348 - 88)
+SAVED, SAVED_SCREEN = (479, 68), (720, 348)    # 720 - 7 - 234
+ANCHORED = (399, 200)           # 640 - (720 - 479), 480 - (348 - 68)
 
 
 def anchor_leg(tmp):
@@ -223,11 +224,11 @@ def main(argv=None):
         if a.leg == "vga":
             move_leg(tmp, "os8088_xt_vga", TEMPLATE, (-216, 88), (640, 480))
         elif a.leg == "cga":
-            # the template's (360,40) is 36 under the snap and the 176-row
-            # dock (40 + 139 > 176); a drag 12 up lands at y = 24, which a
+            # the template's (336,40) is 33 under the snap and the 176-row
+            # dock (40 + 142 > 176); a drag 9 up lands at y = 24, which a
             # wave-2 build brought back as 20
-            move_leg(tmp, os88marty.machine("os8088_5150_cga"), (359, 36),
-                     (-216, -12),
+            move_leg(tmp, os88marty.machine("os8088_5150_cga"), (335, 33),
+                     (-216, -9),
                      (640, 200))
         else:
             anchor_leg(tmp)

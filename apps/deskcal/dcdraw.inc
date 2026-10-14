@@ -271,7 +271,7 @@ dc_head:
     pop ax
     ret
 
-; dc_wkday - ` Su Mo Tu We Th Fr Sa` over the day fields
+; dc_wkday - ` Su  Mo ... Sa` over the day fields' numbers
 dc_wkday:
     push ax
     push cx
@@ -292,7 +292,9 @@ dc_wkday:
     ret
 
 ; dc_fld - field BL (a grid index) into dc_line at its own cells, and CL = its
-; first cell. Keeps the rest
+; first cell. The field is `[ ][d][d][m]`: the blank that parts it from the
+; day before, the number, and the mark HARD AGAINST the number - ` 16*`, `  2*`
+; - so a mark can only be read as its own day's (SPEC.md 107.3). Keeps the rest
 dc_fld:
     push ax
     push bx
@@ -305,25 +307,20 @@ dc_fld:
     div bh                      ; AL = the row, AH = the column
     xor bh, bh
     mov al, ah
-    mov ah, 3
-    mul ah
+    xor ah, ah
+    shl al, 1
+    shl al, 1                   ; DC_FLDW = 4 cells a field
     add al, DC_FLD0
     mov cl, al                  ; the field's first cell
     mov di, ax
-    add di, dc_line
+    add di, dc_line + 1         ; ...and DI its number's: the blank is dc_blank's
     mov al, [dc_grid + bx]
-    mov byte [di], ' '
     or al, al
-    jz .blank
-    call dc_marked
-    jz .nm
-    mov byte [di], DC_MARK
-.nm:
-    inc di
+    jz .x                       ; no day: dc_blank's four spaces
     call dc_put2
-    jmp short .x
-.blank:
-    mov word [di + 1], '  '
+    call dc_marked
+    jz .x
+    mov byte [di], DC_MARK
 .x:
     pop di
     pop bx
@@ -371,18 +368,17 @@ dc_week:
     sub al, bl
     cmp al, 7
     jae .one                    ; not in this row
-    mov bl, al
-    mov al, 3
-    mul bl
-    add al, DC_FLD0             ; today's first cell
-    mov bl, al
-    mov cl, 0
+    shl al, 1
+    shl al, 1                   ; DC_FLDW
+    add al, DC_FLD0 + 1         ; today's first INVERSE cell: its number - the
+    mov bl, al                  ; blank before it stays ground, so the block
+    mov cl, 0                   ; is the number and its mark, `13*`
     mov ch, bl
     mov ax, DC_INK
     call dc_part
     mov cl, bl
     mov ch, bl
-    add ch, 3
+    add ch, DC_FLDW - 1
     mov ax, DC_INV
     call dc_part
     mov cl, ch
@@ -513,9 +509,11 @@ dc_dayh:
     pop ax
     ret
 
-; dc_frame - a frame round field AL (a grid index) in colour AH: the field's
-; own outer columns and the gap rows above and below it (SPEC.md 107.3), so
-; it never touches a glyph pixel. Every register kept
+; dc_frame - a frame round field AL (a grid index) in colour AH: column 1 of
+; the field's leading blank, column 7 of its mark cell, and the gap rows
+; above and below it (SPEC.md 107.3). Column 1 and not 0 keeps it a pixel off
+; the day before's mark - and off the window's own frame on a Sunday. Every
+; register kept
 dc_frame:
     push ax
     push bx
@@ -530,16 +528,17 @@ dc_frame:
     mov bl, 7
     div bl                      ; AL = the row, AH = the column
     call dc_rowy                ; DX = the row's top
-    mov bl, ah
-    mov al, 3
-    mul bl
-    add al, DC_FLD0
+    mov al, ah
     xor ah, ah
+    add al, al
+    add al, al                  ; DC_FLDW
+    add al, DC_FLD0
     mov cl, 3
     shl ax, cl
-    add ax, [dc_ox]             ; AX = the field's left
+    inc ax
+    add ax, [dc_ox]             ; AX = the field's left, plus one
     mov cx, ax
-    add cx, 3 * 8 - 1
+    add cx, DC_FLDW * 8 - 2
     add dx, [dc_oy]
     mov bx, dx
     dec bx
@@ -561,7 +560,8 @@ dc_selon:
     pop ax
     ret
 
-; dc_field - re-run field AL alone, inverse if it is today
+; dc_field - re-run field AL's number and mark alone (the frame never cuts its
+; leading blank), inverse if it is today
 dc_field:
     push ax
     push bx
@@ -575,8 +575,9 @@ dc_field:
     call dc_rowy                ; DX = its row
     call dc_blank
     call dc_fld                 ; CL = its first cell
+    inc cx                      ; ...past its blank
     mov ch, cl
-    add ch, 3
+    add ch, DC_FLDW - 1
     call dc_tidx
     cmp al, bl
     mov ax, DC_INK
@@ -621,7 +622,7 @@ dc_all:
     call dc_panes               ; the heading under the rule, and the lists
     cmp word [dc_cw], DC_CW
     jbe .w
-    mov al, CWHITE              ; a content box wider than the 26 cells -
+    mov al, CWHITE              ; a content box wider than the 29 cells -
     call OSAPI_SET_COLOR        ; never asked for, but the ground is ours
     mov ax, [dc_ox]             ; (OWNBG)
     add ax, DC_CW
@@ -701,8 +702,8 @@ dc_reselect:
 
 ; =============================================================================
 ; THE LISTS (SPEC.md 107.3): the day's agenda, the tasks, and the entry field
-; that takes a heading's place. Every line is one 26-cell run; a task row is
-; the check box's glyph and a 24-cell run from cell 2 (8-aligned, so font_run
+; that takes a heading's place. Every line is one 29-cell run; a task row is
+; the check box's glyph and a 27-cell run from cell 2 (8-aligned, so font_run
 ; takes its one-pass path - os88ui_chk's own label would sit 18 px in)
 ; =============================================================================
 
@@ -876,6 +877,35 @@ dc_tfmt:
     pop ax
     ret
 
+; dc_arowy - DX = agenda line AL's row, content-relative. Keeps the rest
+dc_arowy:
+    push ax
+    push di
+    mov di, [dc_lay]
+    mul byte [di + DCL_APITCH]
+    add ax, [di + DCL_PANE]
+    mov dx, ax
+    pop di
+    pop ax
+    ret
+
+; dc_aend - BX = the row under the agenda's LAST run: where the ground a full
+; paint lays under the list begins. Keeps the rest
+dc_aend:
+    push ax
+    push dx
+    push di
+    mov di, [dc_lay]
+    mov al, [di + DCL_AN]
+    dec ax
+    call dc_arowy
+    mov bx, dx
+    add bx, 8
+    pop di
+    pop dx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; dc_aline - agenda line AL (0..AN-1) as it is now: an appointment, the
 ; pager, or blank; inverse when it is the selected appointment. One run.
@@ -889,13 +919,8 @@ dc_aline:
     push si
     push di
     mov ah, al                  ; AH = the line
-    mov di, [dc_lay]
-    mov dl, al
-    xor dh, dh
-    mov cl, 3
-    shl dx, cl
-    add dx, [di + DCL_PANE]
-    push dx                     ; its row
+    call dc_arowy               ; DX = its row
+    push dx
     call dc_blank
     mov dx, DC_INK              ; DX = the colours, until the run
     call dc_apage
@@ -1010,6 +1035,24 @@ dc_agenda:
     cmp al, ch
     jae .x
     call dc_aline
+    or ah, ah
+    jz .n                       ; a line's own redraw: its gap is ground already
+    inc ax
+    cmp al, ch
+    je .x                       ; the last's gap is the caller's (dc_aend)
+    dec ax
+    push bx
+    push dx
+    call dc_arowy
+    mov bx, dx
+    add bx, 8                   ; THE GAP under the line, every pixel once
+    add dl, [di + DCL_APITCH]   ; (the run lays the line's own 8 rows)
+    adc dh, 0
+    dec dx                      ; ...to the next line's top
+    call dc_fill
+    pop dx
+    pop bx
+.n:
     inc ax
     jmp short .l
 .x:
@@ -1039,9 +1082,11 @@ dc_newday:
     jmp dc_menulive
 
 ; -----------------------------------------------------------------------------
-; the task rows. Row k: the box (os88ui's check glyph) at x 0..11, rows
-; y..y+11; the text a run of cells 2..25 at y + 2; the 4 columns between them
-; and the strips between rows belong to the full paint (dc_tpaint)
+; the task rows. Row k: the box (os88ui's check glyph) at x 4..15, rows
+; y..y+11 - INSET off the window's frame, and a pitch of 13 so stacked boxes
+; never touch; the text a run of cells 2..28 at y + 2, its words from cell 3;
+; the 4 columns left of the box, the row under each box and the strips
+; between the runs belong to the full paint (dc_tpaint)
 ; -----------------------------------------------------------------------------
 
 ; dc_trowy - DX = task row AL's top, content-relative. Keeps the rest
@@ -1085,6 +1130,7 @@ dc_ckaim:
     add dx, OS88UI_CKBOX - 1
     mov [dc_ck + 6], dx
     mov ax, [dc_ox]
+    add ax, DC_TBOX
     mov [dc_ck + 0], ax
     add ax, OS88UI_CKBOX - 1
     mov [dc_ck + 4], ax
@@ -1116,7 +1162,7 @@ dc_tmark:
     mov bx, dx
     add dx, OS88UI_CKBOX - 7
     mov ax, [dc_ox]
-    add ax, 3
+    add ax, DC_TBOX + 3
     mov cx, ax
     add cx, OS88UI_CKBOX - 7
     call OSAPI_GFX_FILL
@@ -1152,9 +1198,9 @@ dc_tleft:
     mov al, ah
     call dc_trowy
     mov bx, dx
-    add dx, DC_TPITCH - 1
-    xor ax, ax
-    mov cx, OS88UI_CKBOX - 1
+    add dx, OS88UI_CKBOX - 1    ; the box's own square: the row under it is
+    mov ax, DC_TBOX             ; ground for good (dc_tpaint)
+    mov cx, DC_TBOX + OS88UI_CKBOX - 1
     call dc_fillr
 .x:
     pop di
@@ -1164,7 +1210,7 @@ dc_tleft:
     pop ax
     ret
 
-; dc_ttext - task row AL's text: one run of cells 2..25, inverse for the
+; dc_ttext - task row AL's text: one run of cells 2..28, inverse for the
 ; selected task, the pager's words, or blank. Keeps every register
 dc_ttext:
     push ax
@@ -1252,9 +1298,9 @@ dc_tasks:
 .r:
     ret
 
-; dc_tpaint - the task list whole (a full paint, the clip armed): the column
-; between the boxes and the text, the strip above the first row, and each row
-; with the strip under it. Every pixel once
+; dc_tpaint - the task list whole (a full paint, the clip armed): the inset
+; left of the boxes, the strip above the first row, and each row with the
+; strip under its text and the row under its box. Every pixel once
 dc_tpaint:
     push ax
     push bx
@@ -1265,9 +1311,9 @@ dc_tpaint:
     mov bx, [di + DCL_T0]
     mov dx, [dc_ch]
     dec dx
-    mov ax, OS88UI_CKBOX
-    mov cx, 15
-    call dc_fillr               ; x 12..15, every row
+    xor ax, ax
+    mov cx, DC_TBOX - 1
+    call dc_fillr               ; x 0..3, every row: the box's inset
     mov dx, bx
     inc dx
     mov ax, 16
@@ -1279,9 +1325,20 @@ dc_tpaint:
     push ax
     call dc_trowy
     mov bx, dx
-    add bx, 10
-    add dx, DC_TPITCH + 1       ; to the next text's top (y + 13)...
+    add bx, OS88UI_CKBOX        ; the row(s) under the box...
+    add dx, DC_TPITCH - 1       ; ...to the next box's top (y + 12)...
     cmp dx, [dc_ch]
+    jb .b
+    mov dx, [dc_ch]             ; ...or the content's bottom
+    dec dx
+.b:
+    mov ax, DC_TBOX
+    mov cx, 15
+    call dc_fillr
+    mov dx, bx
+    sub bx, OS88UI_CKBOX - 10   ; the strip under the text, y + 10...
+    add dx, DC_TPITCH + 2 - OS88UI_CKBOX - 1    ; ...to the next text's top
+    cmp dx, [dc_ch]             ; (y + 14)...
     jb .s
     mov dx, [dc_ch]             ; ...or the content's bottom
     dec dx
@@ -1461,11 +1518,8 @@ dc_panes:
     call dc_tsolo
     jnc .tasks
     mov ax, 0x0100
-    call dc_agenda              ; every line
-    mov bx, [di + DCL_AN]       ; the agenda's end
-    mov cl, 3
-    shl bx, cl
-    add bx, [di + DCL_PANE]
+    call dc_agenda              ; every line, and the gaps between them
+    call dc_aend                ; BX = the agenda's end
     cmp word [di + DCL_SPLIT], 0
     jne .split
     mov dx, [dc_ch]             ; COMPACT: white to the bottom
@@ -1502,16 +1556,29 @@ DCL_PITCH   equ 6
 DCL_RULE    equ 8
 DCL_HEAD    equ 10
 DCL_PANE    equ 12              ; the agenda's first line
-DCL_AN      equ 14              ; agenda lines (pitch 8)
+DCL_AN      equ 14              ; agenda lines (pitch DCL_APITCH)
 DCL_THEAD   equ 16              ; the task heading's row
-DCL_T0      equ 18              ; the first task row (pitch 12)
+DCL_T0      equ 18              ; the first task row (pitch DC_TPITCH)
 DCL_TN      equ 20              ; task rows
 DCL_SPLIT   equ 22              ; 1: both lists on show; 0: one at a time
+DCL_APITCH  equ 24              ; db the agenda's pitch: the 8-row run and a
+                                ; GAP under it, so a descender never meets the
+                                ; next line's caps - 10 on TALL, and 9 on
+                                ; COMPACT, which keeps its four lines inside
+                                ; the 123 rows its three task rows take
 
-dc_ltall:   dw 0, 12, 24, 10, 88, 92, 104, 7, 164, 176, 5, 1
+dc_ltall:   dw 0, 12, 24, 10, 88, 92, 104, 7, 176, 188, 5, 1
+            db 10
 dc_lcomp:   dw 0, 9, 18, 9, 72, 75, 84, 4, 75, 84, 3, 0
+            db 9
+%if 188 + 5 * DC_TPITCH != DC_TALL_CH || 104 + 7 * 10 + 2 != 176 || 84 + 3 * DC_TPITCH != DC_COMP_CH || 84 + 4 * 9 > DC_COMP_CH
+  %error "deskcal: a layout's rows no longer fill its content box"
+%endif
 
-dc_s_wk:    db '   Su Mo Tu We Th Fr Sa   ', 0
+dc_s_wk:    db ' Su  Mo  Tu  We  Th  Fr  Sa  ', 0  ; over each field's number
+%if ($ - dc_s_wk - 1) != DC_CELLS
+  %error "deskcal: the weekday row is one run of DC_CELLS cells"
+%endif
 dc_s_more:  db 'more...  page ', 0
 dc_s_of:    db ' of ', 0
 dc_s_tasks: db 'Tasks', 0

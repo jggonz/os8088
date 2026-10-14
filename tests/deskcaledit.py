@@ -61,7 +61,7 @@ TITLE = "Desk Calendar"
 TODAY = (2026, 10, 14)
 DIA_ST = os88dia.dia_st_off(os88dia.DESKCAL_DIA_BSS, os88dia.DESKCAL_PAYLEN)
 DIA_S_DIRTY, DIA_S_DAMAGED = 16, 8
-PANE, PITCH = 104, 8            # the TALL agenda (SPEC.md 107.3's table)
+PANE, PITCH = 104, 10           # the TALL agenda (SPEC.md 107.3's table)
 
 fails = []
 
@@ -199,7 +199,7 @@ def appts_of(cal):
 def boot_damaged(tmp):
     pay = bytearray(os88dia.deskcal([(TODAY, 600, "Not trusted")]))
     pay[0] = 60                 # past the 48-record table
-    fixture = os88dia.dat(bytes(pay), x=359, y=40, screen=(640, 480))
+    fixture = os88dia.dat(bytes(pay), x=335, y=40, screen=(640, 480))
     img = disk_with(tmp, "damaged.img", fixture)
     with os88ui.boot(img, machine="os8088_xt_vga") as ui:
         c = Cal(ui, tmp)
@@ -285,7 +285,7 @@ def boot_damaged(tmp):
 def boot_full(tmp):
     days = [(2026, 10, d) for d in range(1, 25)]
     appts = [(d, 600 + i, "Busy %d" % i) for d in days for i in (0, 1)]
-    fixture = os88dia.dat(os88dia.deskcal(appts), x=359, y=40,
+    fixture = os88dia.dat(os88dia.deskcal(appts), x=335, y=40,
                           screen=(640, 480))
     img = disk_with(tmp, "full.img", fixture)
     with os88ui.boot(img, machine="os8088_xt_vga") as ui:

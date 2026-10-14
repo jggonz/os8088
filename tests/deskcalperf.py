@@ -144,7 +144,7 @@ def fixture():
     appts = [(TODAY, 540, "Standup"), (TODAY, 600, "Review")]
     tasks = [("Buy milk", False), ("Call plumber", True), ("Post letter",
                                                            False)]
-    return os88dia.dat(os88dia.deskcal(appts, tasks, lead=0), x=359, y=40,
+    return os88dia.dat(os88dia.deskcal(appts, tasks, lead=0), x=335, y=40,
                        screen=(640, 480))
 
 
@@ -209,11 +209,11 @@ def ui_leg(tmp, machine, label, results):
         ox, oy = c.origin()
         # the 14th is Wednesday's field in week row 2 (Oct 2026 starts on a
         # Thursday): the 15th is the next column. Field k of row w is at
-        # content x 16 + 24k, y w0 + pitch * w
-        tall = ui.window(TITLE).h > 200     # 255 against COMPACT's 139
+        # content x 32k - its number at 32k + 8 - and y w0 + pitch * w
+        tall = ui.window(TITLE).h > 200     # 272 against COMPACT's 142
         w0, pitch = (24, 10) if tall else (18, 9)
         col, row = 4, 2
-        x, y = ox + 16 + 24 * col + 12, oy + w0 + pitch * row + 4
+        x, y = ox + 32 * col + 16, oy + w0 + pitch * row + 4
         c.front()
         hits, _ = measure(m, lambda: (ui.mo.click(x, y),
                                       os88marty.guest_sleep(m, 2.0)))

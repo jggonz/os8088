@@ -8908,15 +8908,15 @@ SOAK = [
         "SPEC.md 107.3/107.5.2: diamove on the 5150's CGA, the adapter the "
         "COMPACT frame exists for. Wave 2 authored the template at the TALL "
         "frame, so wm_create's fit cut it to the 155-row band and clamped "
-        "every restored y to 20 before PREFER made it 139 - the place came "
+        "every restored y to 20 before PREFER made it 142 - the place came "
         "back at y = 20 and the next poll saved 20 over the user's. A drag "
         "to y = 24 must come back at y = 24 after a reset.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
     Row("diaanchor", "soak", py("tests/diamove.py", "--leg", "anchor"), 25.0,
         "SPEC.md 107.5.2: a place saved on ANOTHER screen. tools/os88dia.py "
-        "puts DESKCAL.DAT at (503,88) on 720x348 into the shipped disk; on "
+        "puts DESKCAL.DAT at (479,68) on 720x348 into the shipped disk; on "
         "the VGA XT's 640x480 the calendar opens anchored to the far edges "
-        "at (423,220) - a frame hanging over the dock, which wm_create's fit "
+        "at (399,200) - a frame hanging over the dock, which wm_create's fit "
         "pulls up above it and dia_made gives back - and, untouched, "
         "writes nothing: the state file is the fixture byte for byte "
         "seven guest seconds later.",
@@ -8938,7 +8938,8 @@ SOAK = [
     Row("deskcaltask", "soak", py("tests/deskcaltask.py"), 85.0,
         "SPEC.md 107.3: the Desk Calendar's TASKS on a Hercules 5150 "
         "(TALL, a readable 1bpp framebuffer). Three typed tasks are three in "
-        "the state file; a click on a box checks it and the window differs "
+        "the state file, their boxes inset 4 px off the window's frame with "
+        "a ground row between each two; a click on a box checks it and the window differs "
         "in its 6x6 mark and NOTHING ELSE, with ZERO runs through the "
         "package's own dc_run (a breakpoint counter; a selection click, two "
         "runs, is its control); Space on a selected task the same; Clear "
@@ -8965,7 +8966,9 @@ SOAK = [
         "each (a breakpoint on the cell), and ONE run, its line's mark `!` to "
         "`-`; ONE AT A TIME - two minutes pass under its alert and Call Bob "
         "waits - the save Dentist's firing owed landing UNDER its alert, "
-        "which holds nothing - then goes off alone at the next minute after "
+        "which holds nothing, and the alert's own menu bar clean right of its "
+        "name once the toast is down (the calendar's armed clip once left "
+        "`Cal` there) - then goes off alone at the next minute after "
         "OK; a 23-letter "
         "text drops the `Reminder ` prefix rather than lose a letter; nothing "
         "goes off with the entry field open; one typed for THIS minute goes "
@@ -9010,11 +9013,12 @@ SOAK = [
     Row("deskcal1bpp", "soak", py("tests/deskcal1bpp.py"), 45.0,
         "SPEC.md 107.3, 39.4, 47: the Desk Calendar on BOTH 1bpp adapters, "
         "asserted on the framebuffer's own bits (MartyPC's 5150 with a CGA, "
-        "and with a Hercules card): COMPACT 210x139 and TALL 210x255; today's "
+        "and with a Hercules card): COMPACT 234x142 and TALL 234x272; today's "
         "field mostly ink (inverse) and a plain day's mostly ground; a click "
         "on the 20th puts an unbroken ink rectangle round its field and takes "
-        "the 14th's away while the 14th stays inverse; the 20th's mark cell "
-        "carries its `*`; and with the Calendar menu held down, every item's "
+        "the 14th's away while the 14th stays inverse; the 20th's mark cell, "
+        "hard after its number, carries its `*` and the blank before its "
+        "number is ground; and with the Calendar menu held down, every item's "
         "band - the greyed `(no item)` ones included - carries ink.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
