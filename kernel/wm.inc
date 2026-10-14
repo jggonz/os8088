@@ -3388,6 +3388,10 @@ wm_show_desk:
     or byte [bx+W_FLAGS], 2
     mov si, bx
     call wm_win_rect            ; AX..DX = its frame (no shadow: chromeless)
+    mov byte [wm_dmg_npro], 1   ; ...and PROMOTES NOBODY: a desk window is
+                                ; never wm_top, so the front window is the one
+                                ; it was and its title is right (SPEC.md
+                                ; 11.103.3) - or .promote re-titles it
     call wm_paint_dmg           ; under wm_show's lock
     jmp kret_si
 %endif
@@ -3798,6 +3802,12 @@ wm_hide_b:
                                 ; of what needs saving (SPEC.md 11.2)
     and word [bx+W_FLAGS], 0xFFFD
     xchg bx, si
+%ifdef KERN_BIG
+    test byte [si+W_FLAGS+1], WF_DESK >> 8
+    jz .pd                      ; a desk window going down promotes nobody
+    mov byte [wm_dmg_npro], 1   ; either (SPEC.md 11.103.3): it was never
+.pd:                            ; wm_top
+%endif
     call wm_paint_dmg
     jmp kret_si
 
@@ -6600,8 +6610,12 @@ wm_zone_r:
 %else
 ; wm_clip_subl - subtract window BX's frame moved (1,1) - its frame and its
 ; DROP-SHADOW L, leaving the two corners no window draws - for wm_occl_l
-; (SPEC.md 11.91.6). Clobbers flags; CF = 1 overflowed.
+; (SPEC.md 11.91.6). Clobbers flags; CF = 1 overflowed. A CHROMELESS window
+; has no L (SPEC.md 11.103.1): its frame alone, or the strip beside a widget
+; is taken out of the dither and drawn by nobody.
 wm_clip_subl:
+    WM_CHROMELESS bx
+    jnz wm_clip_subf
     push ax
     mov ax, [bx+W_X]
     inc ax
@@ -6683,7 +6697,11 @@ wm_clip_subf:                   ; the two differ by ONE, on each far edge:
     jmp short wm_clip_subg
 
 wm_clip_sub:
-    push ax
+%ifdef KERN_BIG
+    WM_CHROMELESS bx            ; no shadow: the occupied rect IS the frame,
+    jnz wm_clip_subf            ; or a widget's x+w column and y+h row are
+%endif                          ; subtracted and owed by nobody (SPEC.md
+    push ax                     ; 11.103.1)
     push dx
     xor dx, dx
 wm_clip_subg:
@@ -11576,19 +11594,23 @@ wm_cbd:
 ; out: CF = 0 done / CF = 1 refused; every register preserved.
 ;   AL = 0 QUERY    the layer exists (kern_small's cell is mod_gone: CF = 1)
 ;   AL = 1 MAKE     BX = a used, HIDDEN, not-FULL, not-SIZABLE window nobody
-;                   owns yet, asked for INSIDE A PACKAGE'S ENTRY PROC:
-;                   WF_DESK|WF_NOANIM|WF_OWNBG on, WF_SAVEU|WF_1BPP off,
-;                   IF_DESK on the loading record, the z entry moved to [0]
+;                   owns yet, made by the package being loaded and asked for
+;                   INSIDE ITS ENTRY PROC: WF_DESK|WF_NOANIM|WF_OWNBG on,
+;                   WF_SAVEU|WF_1BPP off, the z entry moved to [0]. IF_DESK
+;                   is the loader's step 9's, off the window it RETURNS
 ;   AL = 2 DRAG     W2 (SPEC.md 11.103.6) - refused until then
 ;   AL = 3 RELEASE  [menu_win] = BX: the bar (and the keys) to wm_top, redrawn
 ;
 ; MAKE IS THE ENTRY PROC'S, and that is what lets it name its caller for
 ; nothing. wm_owner is published only at the loader's step 9, AFTER the entry
 ; proc returns (SPEC.md 21), so the window a package is setting up is the one
-; with NO owner, and the record it belongs to is [ld_rec] - reserved at step 5,
-; zeroed by inst_alloc, unpublished (I_STATE = 0) until step 9, which writes no
-; I_FLAGS. A window that is owned, or a call with no load in progress (the
-; record already published), is refused. Package window pointers are trusted
+; with NO owner, and the load is [ld_base] - the loading package's segment
+; from step 5 until step 9's show, 0 otherwise - so W_SEG = [ld_base] is "a
+; window THIS load's package made". [ld_rec]'s I_STATE = 0 closes the last
+; gap: step 9 publishes it before the show, whose repaint reaches the
+; package's W_PAINT. A window that is owned, another package's, or a call with
+; no load in progress is refused; the [ld_rec] test alone was satisfied by a
+; FREED record, which [ld_rec] keeps naming after any load (SPEC.md 107.9). Package window pointers are trusted
 ; here as at every wm_* cell (wm_ptr2idx's own div); the USED bit is what
 ; guarantees the window is in wm_zord, which the rotation below relies on.
 ; -----------------------------------------------------------------------------
@@ -11628,8 +11650,13 @@ osapi_wm_desk_x:
     and al, 1 | 2 | WF_FULL | WF_SIZABLE
     cmp al, 1
     jne .ref
-    mov di, [ld_rec]            ; ...inside a load: its record unpublished
-    cmp byte [di+I_STATE], 0
+    mov ax, [ld_base]           ; ...inside a load (0: none)...
+    or ax, ax
+    jz .ref
+    cmp ax, [bx+W_SEG]          ; ...by the package being loaded...
+    jne .ref
+    mov di, [ld_rec]            ; ...from its entry proc: the record is
+    cmp byte [di+I_STATE], 0    ; still unpublished
     jne .ref
     mov ax, bx
     sub ax, wm_wins
@@ -11649,7 +11676,6 @@ osapi_wm_desk_x:
     jne .rot
     and word [bx+W_FLAGS], 0FFFFh & ~(WF_SAVEU | WF_1BPP)
     or word [bx+W_FLAGS], WF_DESK | WF_NOANIM | WF_OWNBG
-    or byte [di+I_FLAGS], IF_DESK
     clc                         ; (no cli round the two stores: the window is
     jmp short .pop              ; the entry proc's own and no worker of its
                                 ; package can exist yet - SPEC.md 20.6)

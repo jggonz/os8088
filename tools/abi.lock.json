@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "cc62522a1e63c0bb3a356b6ae6c2297c64e4ff2c34de1334dcfdb2a544585f20",
+  "fingerprint": "8b2f90cf713db93c1009a9d5a82da22913d5d6bd18c6a265b38872e9f84820e6",
   "version": 9
  },
  "PKG_FMT": {
-  "fingerprint": "ae1be140fc64a540924e5dc2f3a0b1a7bda46c008feafedfc471861af708f06b",
+  "fingerprint": "e32004ffdbdc4efdf03b202f1409026353f5732baa255e34b063e54ba9c01564",
   "version": 8
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -63,6 +63,20 @@
    "from": 9,
    "guard": "DRV_VER",
    "reason": "OSAPI_WM_DESK 0x046D + OSAPI_GFX_DESK 0x0473 appended; header flag bit 6 OS88_F_DESK; WF_DESK/WF_HOVER/IF_DESK mirrors (SPEC.md 11.103) - cells added at the end and a reserved bit given a meaning, so no PKG_FMT or DRV_VER bump (SPEC.md 20.2.0.1)",
+   "to": 9
+  },
+  {
+   "fingerprint": "e32004ffdbdc4efdf03b202f1409026353f5732baa255e34b063e54ba9c01564",
+   "from": 8,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_WM_DESK's MAKE contract: refused for another package's window or outside a load, IF_DESK only when the returned window is the desk one (SPEC.md 11.103.9); no cell moved, no bump",
+   "to": 8
+  },
+  {
+   "fingerprint": "8b2f90cf713db93c1009a9d5a82da22913d5d6bd18c6a265b38872e9f84820e6",
+   "from": 9,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_WM_DESK's MAKE contract: refused for another package's window or outside a load, IF_DESK only when the returned window is the desk one (SPEC.md 11.103.9); no cell moved, no bump",
    "to": 9
   }
  ]

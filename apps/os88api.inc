@@ -354,9 +354,13 @@ CWHITE    equ 15
                                  ; (anywhere else it refuses): it
                                  ; becomes a desk window - WF_DESK, WF_NOANIM
                                  ; and WF_OWNBG on, WF_SAVEU and WF_1BPP off
-                                 ; (never ask for a save-under after), your
-                                 ; instance gets IF_DESK and no dock tile, and
-                                 ; it is put at the BOTTOM of the z-order.
+                                 ; (never ask for a save-under after), and
+                                 ; it is put at the BOTTOM of the z-order. A
+                                 ; window another package made, or one made
+                                 ; outside a load, is refused. RETURN this
+                                 ; window from the entry proc: your instance
+                                 ; gets IF_DESK and no dock tile only when
+                                 ; the window it returns is the desk one.
                                  ; Its content is its whole frame: OSAPI_WM_
                                  ; CONTENT answers (W_X, W_Y). AL = 2 DRAG:
                                  ; refused in this version. AL = 3 RELEASE,
@@ -2965,7 +2969,10 @@ WF_DESK    equ 0x0400            ; W_FLAGS bit10: a DESK window (SPEC.md
                                  ; OSAPI_WM_DESK's MAKE alone
 WF_HOVER   equ 0x0800            ; W_FLAGS bit11: the pointer is over this desk
                                  ; window (SPEC.md 11.103.7) - read it in your
-                                 ; W_ONWAKE; the kernel sets and clears it
+                                 ; W_ONWAKE; the kernel sets and clears it.
+                                 ; NOT SET YET: the hover edge is wave 2 of
+                                 ; SPEC.md 107.10, and until it lands this
+                                 ; bit reads 0 for ever
 WF_SIZABLE equ 4                 ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                 ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
 WF_NOSNAP  equ 16                ; W_FLAGS bit4: this window has OPTED OUT of

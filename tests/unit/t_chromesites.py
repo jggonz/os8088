@@ -64,6 +64,12 @@ REG = {
     ("kernel/wm.inc", "wm_draw_title", 0): (CHROMELESS, "no title bar to draw"),
     ("kernel/wm.inc", "wm_chrome_relit_x", 0): (CHROMELESS, "no boxes to have lit"),
     ("kernel/wm.inc", "wm_title_set", 0): (CHROMELESS, "a retitle draws nothing"),
+    # SHADOW GEOMETRY (SPEC.md 11.103.1): the two subtractions that walk every
+    # visible window and assumed each one draws a shadow. Unregistered, a
+    # widget's x+w column and y+h row were taken out of the dither and drawn
+    # by nobody - the one class of site that names no WF_FULL to be found by
+    ("kernel/wm.inc", "wm_clip_subl", 0): (CHROMELESS, "wm_occl_l's frame-and-L: no L to draw back, the frame alone"),
+    ("kernel/wm.inc", "wm_clip_sub", 0): (CHROMELESS, "the occupied rect is the frame: no shadow under it"),
     ("kernel/wm.inc", "wm_damage", 0): (FULLONLY, "FULL forces 'whole' because its fill ignores WF_OWNBG; a desk window is OWNBG and gets a sub-rect"),
     ("kernel/wm.inc", "wm_cov_rect", 0): (FULLONLY, "a desk window reaches its frame through wm_su_rect's own desk arm"),
     ("kernel/wm.inc", "wm_su_take", 0): (FULLONLY, "a desk window has no WF_SAVEU and never banks"),

@@ -19751,8 +19751,11 @@ snapshot's `SSI_FLAGS` - and `OSAPI_WM_DESK` is the only writer, so the
 on kern_big and kern_emu (image rungs 183 and 430 left before) and **+154**
 of `.cold` (351 and 227 before - kern_emu's is the binding one, 73 left
 after); kern_small spends the two cells' 12 bytes of `.text` and nothing
-else. No rung was crossed. **A rung crossing is a stop for the owner**, not a
-build fix (CLAUDE.md): the cut order is §107.10's.
+else. No rung was crossed. Wave 1's review fixes (§107.9) add **+28** of
+`.text` and **+18** of `.cold` on both: kern_big image 51 left, cold 179;
+kern_emu image 298, cold **55**; kern_small unchanged. **A rung crossing is a
+stop for the owner**, not a build fix (CLAUDE.md): the cut order is
+§107.10's.
 
 #### 11.103.1 The z invariant: every desk window is at the BOTTOM of `wm_zord`
 
@@ -19774,6 +19777,18 @@ ABOVE a window - `wm_obscured`, `wm_clip_set`, the damage pass's marking,
 never pays clip arithmetic for a widget. `wm_paint_all` starts at
 `wm_fs_zpos` under a fullscreen window (§11.2), so a widget under one is not
 drawn and the fullscreen window wins `wm_hit`.
+
+**The order is unchanged for them; the SHADOW is not.** Two subtractions walk
+EVERY visible window and assume each one draws a drop shadow: `wm_clip_subl`,
+which takes the frame moved (1,1) out of the desktop's dither and its zones
+(`wm_occl_l`, §11.91.6), and `wm_clip_sub`, the occupied rect
+`(x,y)..(x+w,y+h)` that `wm_clip_rect` (a desktop zone's redraw) and
+`wm_clip_occl` (a window under another) subtract. A desk window draws no
+shadow, so both now take its FRAME (`WM_CHROMELESS bx` / `jnz wm_clip_subf`,
+7 bytes each, §11.103.5). Without that, column `x+w` and row `y+h` beside a
+widget were taken out of the dither and drawn by nobody: a window dragged or
+closed off them left a permanent 1-px line of itself there, and a widget under
+another widget lost the same strip.
 
 #### 11.103.2 "Front" means the front ORDINARY window: `wm_top`
 
@@ -19819,6 +19834,15 @@ autostart runs before any application is open - and safe.
 A desk window already on the glass shown again is the same arm: one damage
 pass over its frame.
 
+**Showing or hiding a desk window PROMOTES NOBODY**: both arms store
+`[wm_dmg_npro]` = 1 before `wm_paint_dmg` (`wm_show_desk`, and a `WF_DESK`
+test in `wm_hide_b`), the one-shot `desk_cell_rect` already uses (§11.91.6).
+A desk window is never `wm_top`, so its coming or going changes no front
+window, and without the store `.promote` re-drew the front application's
+title bar and grow box - the 15-call path, a visible re-flash - whenever that
+window lay clear of the widget. 16 bytes of `.text`. W2's desk drag owes the
+same store.
+
 #### 11.103.4 Activation without a raise: the press, the keys and RELEASE
 
 - **A press on a desk window** is delivered without a raise. `wm_hit`
@@ -19838,11 +19862,13 @@ pass over its frame.
 - **Keys follow a desk window that owns the bar.** The key router asks
   `wm_top` and then `fdlg_top_x`; kern_big's body of the latter (`.cold`,
   `kernel/fdlg.inc`) gains an arm on its "no chooser" path: if `[menu_win]` is
-  a visible `WF_DESK` window, the key goes to IT (§12.6). A modal Standard
+  a `WF_DESK` window, the key goes to IT (§12.6). There is no visible test:
+  `menu_check` takes the bar off a window that is not visible at the paint
+  that hid it, so `[menu_win]` is never a hidden window (§107.9). A modal Standard
   File chooser is tested first and still takes every key (§38.2); a chooser
   gone and not yet reaped still sends the key nowhere. `desk_key_x` is already
   gated on `[menu_win]` = 0 (§26.8.5), so a widget typing never selects a
-  desktop icon. 0 resident bytes.
+  desktop icon. 16 bytes of `.cold`, which this tree counts as resident.
 - **The keys and the bar go back** on any press elsewhere (`ui.inc`'s
   `menu_activate` on every window hit and on the bare desktop), on any raise
   (`wm_raise`'s `menu_activate`), when the widget closes (`menu_check`, which
@@ -19875,6 +19901,8 @@ as CHROMELESS (it must read `test word [..+W_FLAGS], WF_FULL | WF_DESK`,
 | `wm_draw_title` | CHROMELESS | no title bar to draw |
 | `wm_chrome_relit_x` | CHROMELESS | no boxes to have lit |
 | `wm_title_set` | CHROMELESS | a retitle draws nothing (W_TITLE is still the widget's NAME, which the bar and the gates read) |
+| `wm_clip_sub` | CHROMELESS | the occupied rect `wm_clip_rect` and `wm_clip_occl` subtract is the frame: no shadow (§11.103.1) |
+| `wm_clip_subl` | CHROMELESS | `wm_occl_l`'s frame-and-L is the frame alone: no L to draw back (§11.103.1) |
 | `wm_refit` | FULL-ONLY | the latch's refit to its display |
 | `wm_raise` | FULL-ONLY | the incoming window covers the screen; a desk window is never raised |
 | `wm_snap_want` (and its assertion) | FULL-ONLY | a desk window KEEPS §11.94's snap: `W_X` = 7 mod 8, so the face at `W_X + 1` is on the byte grid (§107.11) |
@@ -19954,7 +19982,7 @@ CF answers.
 | AL | verb | in | what |
 |---|---|---|---|
 | 0 | QUERY | - | CF = 0: this kernel has the desk layer. kern_small answers CF = 1, and so does every verb |
-| 1 | MAKE | BX = your window | make it a desk window - **in your ENTRY PROC only**, between `OSAPI_WM_CREATE` and its return. **Refused (CF = 1)** for a window not in use, VISIBLE, `WF_FULL` or `WF_SIZABLE`, for a window that already HAS an owner, and with no load in progress. That is how MAKE knows its caller for nothing: `wm_owner` is published only at the loader's step 9, AFTER the entry proc returns (§21), so the window being set up is the one nobody owns yet, and its instance is the loader's `[ld_rec]` - reserved at step 5, zeroed by `inst_alloc`, unpublished (`I_STATE` = 0) until step 9, which writes no `I_FLAGS` (§107.9). Effect: `WF_DESK \| WF_NOANIM \| WF_OWNBG` on, `WF_SAVEU \| WF_1BPP` off, `IF_DESK` on that record, and the z entry ROTATED to `[0]` (each entry below it moves up one, in order) |
+| 1 | MAKE | BX = your window | make it a desk window - **in your ENTRY PROC only**, between `OSAPI_WM_CREATE` and its return. **Refused (CF = 1)** for a window not in use, VISIBLE, `WF_FULL` or `WF_SIZABLE`, for a window that already HAS an owner, with no load in progress, and for a window the loading package did not make. That is how MAKE knows its caller for nothing: `wm_owner` is published only at the loader's step 9, AFTER the entry proc returns (§21), so the window being set up is the one nobody owns yet; `[ld_base]` is the loading package's segment from step 5 until step 9's show and 0 otherwise, so `W_SEG` = `[ld_base]` (non-zero) says the window is ITS, made in this load; and the loader's `[ld_rec]` is still unpublished (`I_STATE` = 0), which a callback that step 9's own repaint reaches is not (§107.9). Effect: `WF_DESK \| WF_NOANIM \| WF_OWNBG` on, `WF_SAVEU \| WF_1BPP` off, and the z entry ROTATED to `[0]` (each entry below it moves up one, in order). **`IF_DESK` is step 9's, not MAKE's**: the loader sets it on the record when the window the entry proc RETURNS is `WF_DESK`, so an instance is tile-less exactly when its own window is a widget - a DIA that also opens an ordinary window and returns that one keeps its tile, and the window it can be minimized by |
 | 2 | DRAG | BX = your window | **W2**: post the kernel's outline drag for the press being delivered (§11.103.6); legal only inside `W_ONCLICK`. In W1 it refuses |
 | 3 | RELEASE | BX = your window | if `[menu_win]` is BX, the bar - and with it the keys - goes to `wm_top` (the front application window, or Locator) and is redrawn. From a callback, under the lock (a widget's `W_ONKEY` on Esc). CF = 0 |
 
@@ -23906,8 +23934,8 @@ is the worked example.
 (§11.103.4). A press on a desk window activates it without raising it, so
 `[menu_win]` names the widget while `wm_top` still names the application in
 front - and the key router sends keystrokes to `[menu_win]` when that window
-is visible and `WF_DESK` (kern_big's `fdlg_top_x` body, after the modal
-chooser's test). That is the only time keys follow the bar rather than the
+is `WF_DESK` (kern_big's `fdlg_top_x` body, after the modal chooser's test;
+`menu_check` already guarantees `[menu_win]` is visible, §11.103.4). That is the only time keys follow the bar rather than the
 z-order. They come back with the bar: a press anywhere else, any raise, the
 widget's close, or its own `OSAPI_WM_DESK` RELEASE. A widget asking "am I
 focused" asks THIS slot, never `wm_top`, which by §11.103.2 never names a
@@ -43733,7 +43761,12 @@ on entry. Steps:
    step 6 safe: it writes ceil(image/512)·512 ≤ need bytes, never a
    neighbour's region — and that is an invariant the carry fence is the
    whole of what enforces.)
-5. `inst_alloc` (§29) → CF → status 5. `mem_claim_hi` need KB → CF →
+5. `inst_alloc` (§29) → CF → status 5 - or, on kern_big for a package whose
+   header carries `OS88_F_DESK` (flags bit 6, §11.103.9), a scan of
+   `inst_tab` from the TOP down and `inst_alloc_di`, so a widget's record is
+   `INST_MAX - 1`. The flag rides `[ld_cfmt]` bit 3 beside the compression
+   format in bits 0-1, so that byte is TESTED by bit and never compared
+   whole. `mem_claim_hi` need KB → CF →
    status 5 (the unpublished instance record stays free). Note the
    record is not yet published, so the region is reserved only by
    single-threadedness (rule §29.2.8).
@@ -43775,7 +43808,7 @@ on entry. Steps:
    so a per-slot copy in kernel `.bss` was 768 bytes duplicating something
    that could not go away first. `inst_icon_ptr` stages one body back into
    the kernel segment when a tile is actually drawn (§25), which costs
-   nothing on any path that draws none. Then `inst_bind_win` BX, publish I_STATE = 1, **`[ld_status]`
+   nothing on any path that draws none. On kern_big, `IF_DESK` goes on the record when BX is `WF_DESK` (§11.103.9: an instance is tile-less exactly when its own window is a widget). Then `inst_bind_win` BX, publish I_STATE = 1, **`[ld_status]`
    = LD_OK and `[ld_painted]` = 1**, gfx_lock, `wm_show` BX, gfx_unlock,
    status 0. (`wm_create` failing inside the entry surfaces as CF =
    status 4.) The status is published **before** the repaint on purpose: a
@@ -170956,6 +170989,41 @@ slot) with its single note.
     DOCK.DRV grew 24 bytes, still 5 sectors. **Wave 2 inherits 73 bytes of
     kern_emu's cold rung** for the drag pick-up (~22) and the hover edge
     (~40), so its own measurement decides whether §107.10's cut order runs.
+  - **Wave 1's review fixes**, each a place the wave's own code was wrong:
+    - **The shadow subtractions take a chromeless window's FRAME**
+      (§11.103.1). §11.103.1 said every z-order reader was unchanged, and for
+      the ORDER it is - but `wm_clip_subl` (`wm_occl_l`) and `wm_clip_sub`
+      (`wm_clip_rect`, `wm_clip_occl`) walk every visible window and
+      subtracted a drop shadow a desk window never draws, so column `x+w` and
+      row `y+h` beside the probe kept a departed window's pixels. Both are
+      `WM_CHROMELESS` sites now and registered in `t_chromesites`; `deskz` E2
+      reads the strip after the Disk window closes.
+    - **A desk window's show and hide promote nobody** (§11.103.3): without
+      `[wm_dmg_npro]` the pass re-drew the front application's title bar
+      whenever that window lay clear of the widget.
+    - **MAKE's fence is `[ld_base]` and `W_SEG`**, not `[ld_rec]` alone: the
+      loader never clears `[ld_rec]`, so after any launch it names a record
+      that may be FREE (`I_STATE` = 0), and a package's later windows are
+      never bound - so MAKE from a callback succeeded or refused on somebody
+      else's launch history, and a worker's MAKE during another package's
+      load put `IF_DESK` on THAT package. `[ld_base]` is 0 outside a load and
+      names the loading package's segment inside one (§21).
+    - **`IF_DESK` is set at the loader's step 9, off the window the entry
+      proc returns**, not by MAKE: an instance whose returned window was
+      ordinary was tile-less with a minimize box, and minimizing it lost it.
+      MAKE got 4 bytes shorter and step 9 10 longer.
+    - The text: `fdlg_top_x`'s key arm has no visible test and is 16 bytes of
+      `.cold` (§11.103.4, §12.6 said otherwise), `[ld_cfmt]`'s bit 3 is
+      written down at its declaration and in §21 step 5, the SDK says
+      `WF_HOVER` is not set before wave 2, and `deskz` asks the KERNEL's
+      `wm_top` (by calling it on the paused machine) rather than
+      `tools/os88geom.py`'s mirror, which skipped desk windows by
+      construction.
+    - Measured: **+28** `.text` and **+18** `.cold` on kern_big and kern_emu,
+      0 on kern_small; no rung crossed. kern_big image **51** left, cold 179;
+      kern_emu image 298, cold **55** - so wave 2 has 55 bytes of kern_emu's
+      cold rung, not 73, against ~62 planned: §107.10's cut order is likely
+      to run there.
 
 ### 107.10 How it was built, and its gates
 

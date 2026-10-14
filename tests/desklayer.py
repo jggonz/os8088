@@ -24,8 +24,11 @@ and the framebuffer.
               the Disk window's overlapping pixels exactly as they were, and
               hands the widget the bar; a press on the Disk window takes the
               bar back; closing the Disk window gives it to LOCATOR, never to
-              the widget; and with only the widget up wm_top is 0 and Close
-              Window greys.
+              the widget, and leaves the 1-px column and row BESIDE the
+              widget (x+w, y+h) the desktop's dither - a desk window has no
+              shadow (SPEC.md 11.103.1); and with only the widget up wm_top
+              is 0 and Close Window greys. Every wm_top here is the KERNEL's
+              answer, read by calling wm_top on the paused machine.
   --leg dock  (row deskdock) the widget's instance is the TOP slot,
               INST_MAX - 1 (header flag bit 6); the dock strip draws no tile
               for it; a click where its tile would be fronts nothing and
@@ -46,7 +49,9 @@ and the framebuffer.
 out and `z` fails on wm_zcut firing under the right press; take the
 content press's WF_DESK arm out of ui.inc and `z` fails with the press
 swallowed (no W_ONCLICK, no release); take wm_top's desk test out and `z`
-fails at "Locator gets the bar"; take db_key's IF_DESK test out and `dock`
+fails at A, the kernel's own wm_top answering the widget; take
+wm_clip_subl's WM_CHROMELESS arm out and `z` fails at E2, the strip beside
+the widget left holding the Disk window's pixels; take db_key's IF_DESK test out and `dock`
 fails on the tile's pixels; take fdlg_top_x's arm out and `keys` fails with
 Note Pad's W_ONKEY entered.
 """
@@ -134,15 +139,52 @@ def zord(ui):
     return list(m.read(ui._S("wm_zord"), m.read(ui._S("wm_zn"), 1)[0]))
 
 
+REGS = ("ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "ss", "ds", "es",
+        "flags")
+
+
 def top_i(ui):
+    """wm_top's OWN answer, by CALLING it on the paused machine - not
+    tools/os88geom.py's top(), the host's re-implementation, which skips
+    WF_DESK because it was written to and would keep passing with the
+    kernel's desk test gone (the v1 review's finding). tests/drmario.py's
+    call shape: park at the routine with IF = 0 (nothing else runs), a near
+    return into wm_lift's entry, which nothing reaches with interrupts off,
+    and every register, the two stack bytes and CS:IP put back."""
+    m = ui.m
+    K = geom.KERNEL_SEG << 4
+    trap = ui._S("wm_lift")
+    m.pause()
+    saved = m.regs()
+    sp = (saved["sp"] - 2) & 0xFFFF
+    slot = (saved["ss"] << 4) + sp
+    old = bytes(m.read(slot, 2))
+    m.cmd(cmd="park", cs=geom.KERNEL_SEG, ip=ui._S("wm_top") - K)
+    for r in REGS:
+        m.setreg(r, saved[r])
+    m.setreg("ds", geom.KERNEL_SEG)
+    m.setreg("sp", sp)
+    m.setreg("flags", saved["flags"] & ~0x0300)     # IF and TF off
+    m.write(slot, struct.pack("<H", trap - K))
+    m.bp_exec(trap)
+    m.run()
+    hit = m.wait_stop(20) == "breakpoint" and m.status()["ip"] == trap - K
+    bx = m.regs()["bx"]
+    m.bp_exec()
+    m.write(slot, old)
+    m.cmd(cmd="park", cs=saved["cs"], ip=saved["ip"])
+    for r in REGS:
+        m.setreg(r, saved[r])
+    m.run()
+    if not hit:
+        raise SystemExit("the call into wm_top never returned to the trap")
+    return None if not bx else (bx + K - ui._S("wm_wins")) // geom.WIN_SIZE
+
+
+def mirror_top_i(ui):
+    """The host mirror's answer, kept beside the kernel's as a cross-check."""
     p = geom.top(ui.m)
     return None if not p else (p - ui._S("wm_wins")) // geom.WIN_SIZE
-
-
-def kernel_top(ui):
-    """wm_top's answer through the kernel's own OSAPI_WM_TOP sense: the
-    harness mirror, which skips desk windows exactly as wm_top does."""
-    return top_i(ui)
 
 
 def menu_win_i(ui):
@@ -211,7 +253,9 @@ def leg_z(ui):
     check((w.x, w.y, w.w, w.h) == (375, 184, FACE_W + 2, FACE_H),
           "the frame is (375,184) 130 x %d, chromeless: %r"
           % (FACE_H, (w.x, w.y, w.w, w.h)))
-    check(top_i(ui) is None, "with only the widget up wm_top is 0 (Locator)")
+    check(top_i(ui) is None, "with only the widget up the KERNEL's wm_top "
+          "answers 0 (Locator)")
+    check(mirror_top_i(ui) is None, "...and so does tools/os88geom.py's mirror")
     park(ui)
     fw, fh, fb = m.fbuf()
 
@@ -296,6 +340,23 @@ def leg_z(ui):
           "the bar is Locator's (its Builtins cell): %r" % (bar_names(ui),))
     check(top_i(ui) is None and TITLE in ui.titles(),
           "the widget is up and wm_top is 0")
+
+    print("E2: the strip BESIDE the widget is the desktop's again")
+    # SPEC.md 11.103.1: a desk window draws no shadow, so column x+w and row
+    # y+h are the DESKTOP's - and the dither's subtractions once took them as
+    # a shadow nobody then drew, leaving the Disk window's pixels there.
+    park(ui)
+    fw, fh, fb = m.fbuf()
+    strip = [(w.x + w.w, y) for y in range(w.y, w.y + w.h + 1)] + \
+        [(x, w.y + w.h) for x in range(w.x, w.x + w.w)]
+    covered = [(x, y) for (x, y) in strip
+               if d.x <= x <= d.x + d.w and d.y <= y <= d.y + d.h]
+    check(covered, "the Disk window had covered %d pixels of the strip "
+          "(the gesture reached it)" % len(covered))
+    bad = [(x, y) for (x, y) in strip
+           if (fb[(y * fw + x) * 3] > 128) != ((x + y) % 2 == 0)]
+    check(not bad, "column %d and row %d are the (x+y) dither (%d of %d off: "
+          "%r)" % (w.x + w.w, w.y + w.h, len(bad), len(strip), bad[:6]))
 
     print("F: with only the widget up, Close Window greys")
     cells = ui.menus()

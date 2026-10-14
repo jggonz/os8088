@@ -1275,6 +1275,12 @@ ld_start:
                                 ; its last reader was I_SIZE, just up)
     mov [di+I_ICON], ax
     pop es
+%ifdef KERN_BIG
+    test byte [bx+W_FLAGS+1], WF_DESK >> 8
+    jz .ndesk                   ; the window it RETURNS is a widget: the
+    or byte [di+I_FLAGS], IF_DESK   ; instance is tile-less (SPEC.md 11.103.9).
+.ndesk:                         ; Here and not in MAKE, so a DIA returning an
+%endif                          ; ordinary window keeps the tile it needs
     mov bp, inst_bind_win
     call ct_cw_mem_disp         ; DI = record, BX = window (from the entry)
     mov byte [di+I_STATE], 1    ; publish - the LAST record write
@@ -1847,8 +1853,12 @@ ld_img:     resw 1              ; header: image size
 ld_bss:     resw 1              ; header: bss size
 ld_ent:     resw 1              ; header: image-relative entry
 ld_need:    resw 1              ; allocated region size (512-multiple)
-ld_cfmt:    resb 1              ; SPEC.md 20.13: flags bits 3 and 4 as a number -
-                                ; 0 plain, 1 LZ4, 3 LZB (ld_check_hdr)
+ld_cfmt:    resb 1              ; SPEC.md 20.13: flags bits 3 and 4 as a number
+                                ; in bits 0-1 - 0 plain, 1 LZ4, 3 LZB
+                                ; (ld_check_hdr) - and on kern_big bit 3 is
+                                ; the header's OS88_F_DESK (LD_CFMT_KEEP), so
+                                ; the byte can read 8, 9 or 11: TEST the bits,
+                                ; never compare the byte (SPEC.md 21 step 5)
 ld_roff:    resw 1              ; where in the region step 6 put the file: 0
                                 ; uncompressed, high enough to expand
                                 ; downwards from when it is not
