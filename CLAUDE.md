@@ -870,6 +870,34 @@ host (`make`, which runs the fast tier; `make KERN_SMALL=1`;
 against the starting commit in that same pass — then `test-full` once. A soak
 row is minutes, and a per-batch rerun buys no new information.
 
+What counts, because isoTron's six waves spent **about eight of their
+nineteen hours** on emulator rows while obeying the letter of a narrower rule:
+
+- **A row is a row however it is started.** `python3 tests/<row>.py` run by
+  hand, a row launched in the background and polled with `until … sleep`, a
+  shell loop over row names and a scratch MartyPC script that measures what a
+  row measures are all soak runs. 531 direct script calls and 285 minutes of
+  polling were the larger share of those hours, and neither said `soak`.
+- **Every role in a batch is the batch.** Implementer, fixer, reviewer,
+  verifier and repairer alike: an independent verifier checks a wave on the
+  host and by LOOKING (one boot, screenshots cropped and zoomed). A boot to
+  look at the picture is not a row; re-running the rows is.
+- **A measurement is taken in the final pass, not per wave.** A wave whose
+  acceptance is a MartyPC number names the row that produces it, and the
+  final pass produces it. The one exception is a number that DECIDES a
+  design (which renderer, which table size): the agent choosing takes it
+  once, writes it in its report, and nobody re-takes it to confirm.
+- **Never wait for host load before a cycle measurement.** MartyPC's cycle
+  counter is emulated and host load cannot move it; only the rows with a
+  wall-clock budget care, and those run in the final pass anyway. isoTron's
+  agents sat in `loadavg` loops for up to eight minutes at a time.
+- **A failing final pass re-runs only what failed.** Fix, re-run the failing
+  rows, and run `test-full` again only if the fix touched code outside them.
+- **A brief does not override this.** A workflow prompt that says "run the
+  wave's tests" means the host checks and naming the rows. The workflow
+  scripts under `.claude/skills/` are written to this rule; a new one must
+  be too.
+
 Everything else is still boot `make test`, then drive it over QMP.
 
 ```

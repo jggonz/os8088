@@ -44,9 +44,13 @@ interactive session does:
 
 ```
 make                       # fast tier rides it; checkdocs too
-make test-full             # the pre-merge gate, inside its 600s budget
-python3 tools/os88test.py soak -k '<subject>*'   # the rows the change owns
+python3 tools/os88test.py soak -k '<subject>*' -k ...   # the rows the change owns, ONE call
+make test-full             # the pre-merge gate, inside its 600s budget, once
 ```
+
+This skill runs AFTER the last batch, so it is where CLAUDE.md's single soak
+pass lands: one call over every row the change's batches named, then
+`test-full`. A failing row is fixed and re-run alone, not the whole set.
 
 `make` **after every commit** and before any emulator row - the About box's
 build number is the commit count, so a commit invalidates `build/kernel.bin`
