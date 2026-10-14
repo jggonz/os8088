@@ -1425,23 +1425,27 @@ drv_init_x:
     push cx
     mov byte [drv_nerr], 0
     mov byte [drv_wcnt], 0
-    push di                     ; the driver blob starts EMPTY: -f bin zeroes
-    push es                     ; no .bss, and a garbage blob is one a driver
-    push ds                     ; would be entitled to believe (SPEC.md 51.9)
+    push di
+    push es
+    push ds
     pop es
-    mov di, drv_cfg + CFG_DBLOB
-    mov cx, DRV_BLOB_SZ
     xor ax, ax                  ; the WHOLE register, at the same two bytes:
     cld                         ; the zero is wanted below as well
-    rep stosb
-    mov di, drv_owner           ; ...and every class's services FORGOTTEN:
-    mov cx, drv_svc_end - drv_owner ; drv_owner and the drv_svc copies are
-    rep stosb                   ; one run of .bss (the %if beside them), and
-                                ; drv_fptr's segment halves ship as 0 in
+    mov di, drv_owner           ; every class's services FORGOTTEN: drv_owner
+    mov cx, drv_cfg + CFG_NB - drv_owner ; and the drv_svc copies are one run
+    rep stosb                   ; of .bss with drv_cfg (the %ifs beside them),
+                                ; and drv_fptr's segment halves ship as 0 in
                                 ; .text. This was drv_svc_clear_all, a loop
                                 ; of five far calls to drv_svc_clear through
                                 ; a thunk that existed for it alone (kernel
-                                ; size pass 9: -4 resident, -12 .ovl)
+                                ; size pass 9: -4 resident, -12 .ovl). The
+                                ; SETTINGS start empty in the same run: -f bin
+                                ; zeroes no .bss, a garbage driver blob is one
+                                ; a driver would be entitled to believe
+                                ; (SPEC.md 51.9), and a key a SYSTEM.CFG has
+                                ; no record for and _map does not seed - 'VC',
+                                ; 'FD' - must read 0, not the last session's
+                                ; byte (SPEC.md 39.28)
     pop es
     pop di
     xor cx, cx                  ; nothing is loaded on a cold boot, and .bss
@@ -5081,6 +5085,9 @@ drv_cfg:    resb CFG_NB         ; the live settings, staged (layout above).
                                 ; buffer went with the parser into the two
                                 ; images - it was 120 bytes doing nothing
                                 ; between a boot and a Control Panel click
+%if drv_cfg - drv_svc_end != 0
+  %error "driver: drv_init zeroes drv_owner..drv_cfg's end as one run"
+%endif
 
 section .text
 

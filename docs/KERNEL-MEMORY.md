@@ -281,7 +281,7 @@ had added.
     "lowbss": 5598,
     "lowpara": 384,
     "minramkb": 128,
-    "ovl": 5105,
+    "ovl": 5097,
     "stk0": 512,
     "text": 43716,
     "vgabuf": 336,

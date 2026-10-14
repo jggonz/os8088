@@ -478,17 +478,36 @@ wn_maxart:
     mov si, wnb_maxd
     test byte [di+W_FLAGS], WF_SIZABLE
     jz .out
-    mov si, wnb_max
-    cmp word [di+W_Y], MBAR_H   ; ZOOMED is DERIVED, never tracked (SPEC.md
-    jne .out                    ; 11.95): the standard state's top is the bar
-    push ax                     ; and its width the whole band, give or take
-    mov ax, [vid_band_xe]       ; the 7px a WF_SNAP origin spends
-    sub ax, [vid_band_x0]
-    sub ax, 7
-    cmp [di+W_W], ax
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [vid_band_x0]       ; ZOOMED is DERIVED, never tracked (SPEC.md
+    mov cx, [vid_band_xe]       ; 11.95): wm_zoom's standard rect - the band,
+    sub cx, ax                  ; bar to one short of the dock...
+    mov si, MBAR_H
+    mov dx, [vid_dock_y0]
+    sub dx, MBAR_H + 1
+    mov bx, di
+    EXTCALL EXT_SPAN            ; ...on the window's OWN display (39.17.2).
+                                ; NOT wm_ask_size: that calls the package,
+                                ; and a title paint must not
+    mov bx, wnb_max
+    cmp [di+W_Y], si
+    jne .std
+    sub cx, 7                   ; width and height give or take 7px: a
+    cmp [di+W_W], cx            ; WF_SNAP origin's, and a negotiator's small
+    jl .std                     ; quantum
+    sub dx, 7
+    cmp [di+W_H], dx
+    jl .std
+    mov bx, wnb_rest
+.std:
+    mov si, bx
+    pop dx
+    pop cx
+    pop bx
     pop ax
-    jl .out
-    mov si, wnb_rest
 .out:
     ret
 
@@ -665,7 +684,7 @@ wn_stick:
 .wait:
     mov ah, 1
     int 0x16
-    jz .nokey
+    jz .svc                     ; empty: still the keyboard mouse's turn
     cmp ah, 0x01                ; Esc: close
     je .k_esc
     cmp ah, 0x48                ; Up
@@ -674,6 +693,7 @@ wn_stick:
     je .k_down
     cmp ah, 0x1C                ; Enter
     je .k_enter
+.svc:                           ; keypad 5 is not in int 16h (SPEC.md 9.6.4)
     WNK kbm_pollm               ; anything else is the modal loop's (the
     jmp short .nokey            ; keyboard mouse may release or press)
 .k_esc:

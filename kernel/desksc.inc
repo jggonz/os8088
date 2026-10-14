@@ -340,8 +340,8 @@ sc_rclick_x:
 ; machine boots grey, exactly as it would with the box clear.
 ; -----------------------------------------------------------------------------
 vgcf_boot:
-    cmp byte [drv_cfg+CFG_VGC], 0
-    je .ret                     ; the box is clear: the BIOS's verdict stands
+    test byte [drv_cfg+CFG_VGC], 1
+    jz .ret                     ; the box is clear: the BIOS's verdict stands
     push ax
     mov al, MOD_SETS
     call mod_need               ; every register kept, CF = could not

@@ -2819,14 +2819,14 @@ cp_thm_click:
     push ax
 
 %ifdef KERN_BIG
-    cmp dx, CPH_BTY             ; --- the Screen Saver button, tested FIRST
-    jl .groups                  ; because it is the lowest band on the page
+    cmp cx, CPH_BTX             ; --- the Screen Saver button, claimed only
+    jl .groups                  ; INSIDE its rectangle: its rows are the Off
+    cmp cx, CPH_BTX + CPH_BTW - 1   ; radio's too, beside it (SPEC.md
+    jg .groups                  ; 76.14.10), and a press left of it is that
+    cmp dx, CPH_BTY             ; group's
+    jl .groups
     cmp dx, CPH_BTY + CPH_BTH - 1
-    jg .donej
-    cmp cx, CPH_BTX
-    jl .donej
-    cmp cx, CPH_BTX + CPH_BTW - 1
-    jg .donej
+    jg .groups
     mov al, CPH_CSAVE
     call cp_ctl                 ; ...and it FIRES ON THE RELEASE (SPEC.md
     jc .donej                   ; 13.8.3): opening a window is not a safe
@@ -4162,8 +4162,8 @@ cp_vid_fc:
     call cp_vid_fcok            ; CF = greyed...
     mov ax, OS88UI_GCHECK
     adc ah, 0                   ; ...is AH = OS88UI_DIS (1) or 0
-    cmp byte [drv_cfg+CFG_VGC], 0
-    call cp_gnz                 ; ticked when the byte is not zero
+    test byte [drv_cfg+CFG_VGC], 1
+    call cp_gnz                 ; ticked when bit 0 is set (SPEC.md 39.28)
     jmp kretm_si
 %endif
 
@@ -4293,6 +4293,7 @@ cp_vid_click:
     mov al, 5
     call cp_ctl                 ; ...and it fires on the RELEASE (13.8.3)
     jc .done
+    and byte [drv_cfg+CFG_VGC], 1   ; stored 0 or 1, whatever a record held
     xor byte [drv_cfg+CFG_VGC], 1
     mov byte [cp_wdirty], 1     ; remembered on close (SPEC.md 31.8) - `mov`
     jz .fcdraw                  ; writes no flags, so ZF is the xor's: an
@@ -4345,7 +4346,7 @@ cp_vid_click:
     call COLD_SEG:exf_sync      ; Single: the image goes AFTER the collapse
     call cp_repost              ; ...and SAY SO once (SPEC.md 13.13)
 %endif
-    jmp short .done
+    jmp .done                   ; (near on kern_big: .fc's 0/1 store, 39.28)
 
 %ifdef KERN_BIG
 .mref:                          ; EXTD.DRV refused (SPEC.md 39.19.6): the

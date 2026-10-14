@@ -2480,9 +2480,10 @@ machine.**
 What that cost is the display block above `.load`, entered on every boot rather
 than only when a record was read — so a machine with **no `SYSTEM.CFG`** applies
 `CFG_VID`, and on `kern_big` §39.19's `CFG_VDM`/`CFG_VDL`, out of a `drv_cfg`
-that nothing has deserialised into. `drv_cfg` is `.bss` and nothing zeroes
-`.bss`, so those bytes are the previous session's on a warm restart and the
-machine's power-on RAM on a cold one. It has been carried by two accidents:
+that nothing has deserialised into. `drv_cfg` is `.bss` and nothing zeroed
+`.bss`, so those bytes were the previous session's on a warm restart and the
+machine's power-on RAM on a cold one (`drv_init` zeroes the struct now, for
+§39.28's `VC` byte). It has been carried by two accidents:
 `CFG_VID` = 0 is `VID_VGA`, which `vid_switch` refuses on the adapters the
 target machine has, and the two arrangement bytes are range-checked before they
 are stored. Neither is a reason — the refusal is `vid_switch`'s job and this
@@ -62440,6 +62441,8 @@ recorded COLOUR this boot does not grey it — the verdict is per POWER-ON
 
 It is control id 5 (the rows are 0, Set Primary 1, the desktop radios 2..4),
 and like every check box in the panel it FIRES ON THE RELEASE (§13.8.3). The
+tick is bit 0 of `CFG_VGC` and the click stores 0 or 1 (§39.28), so a `VC`
+record holding any other value shows clear and the first click ticks it. The
 label is lettered by `cp_vid_paint` and the glyph by `cp_vid_ctls`, the
 Date/Time page's split, so a press edge redraws the glyph and not the words.
 The caption — "Switches now, and is kept" — is true of the tick; the un-tick
@@ -72284,7 +72287,13 @@ so a second reading a few seconds later reads the same.
 **The setting is `SYSTEM.CFG`'s `VC` key** (§51.5), one byte at ver 1,
 `CFG_VGC` in `drv_cfg`. Like `FD` (§31.14) it is **not a plain store and not
 in `_map`**: the Control Panel edits the struct byte directly and the boot
-reads it once.
+reads it once. So nothing in the settings read seeds it, and a `SYSTEM.CFG`
+with no `VC` record - every file an older kernel wrote - would leave it
+whatever `.bss` held: **`drv_init` zeroes all of `drv_cfg`** in the run that
+already forgot every class's services (the struct follows `drv_svc_end`, and
+an `%error` holds them adjacent). And the setting is **bit 0 alone**:
+`vgcf_boot` and the box's glyph test that bit, and the click stores 0 or 1,
+so a record holding any other value reads clear and cannot stick ticked.
 
 **What it does** is `cp_vgc_force`, ONE body (the `VGC_FORCE` macro, kept in
 `driver.inc` beside the settings it serves) in **`CTRL.DRV`'s settings core**
@@ -118840,9 +118849,14 @@ others would show almost nothing of itself.
 **A window that cannot be resized draws its maximize button GREYED** and
 `wn_hit` answers 1 over it, so the press is a title drag — §47 rule 3, grey a
 fact (`WF_SIZABLE`). The button's glyph is a function of the record: RESTORE
-when the window stands on the standard rect (top on the bar, width the whole
-band less a WF_SNAP origin's 7px), which is §11.95's own "derived, never
-tracked" rule, so there is no new window state at all.
+when the window stands on `wm_zoom`'s standard rect LESS THE NEGOTIATION:
+the band and bar-to-dock height `wm_zoom` starts from, carried to the
+window's own display by `EXT_SPAN` (§39.17.2, so a window zoomed on a
+secondary reads RESTORE too), the top matched exactly and the width and
+height each give or take 7px, a WF_SNAP origin's and a negotiator's small
+quantum. It does not call `wm_ask_size` as `wm_zoom` does, because that is a
+call into the package and this is a title paint. Zoomed is §11.95's
+"derived, never tracked" state, so there is no new window state at all.
 
 The held-down light (§13.8.1) is the button's FACE inverted — `wnx_crect`
 answers the interior inside both edges, so the edges stand and the face and
@@ -118947,7 +118961,11 @@ how Windows behaves.
 
 **Esc** closes it, **Up**/**Down** step the highlight over separators and
 greyed items (wrapping), **Enter** runs the highlighted item. Any other key is
-`kbm_pollm`'s, as in every modal loop, so the keyboard mouse still works.
+`kbm_pollm`'s, as in every modal loop, so the keyboard mouse still works - and
+so is a pass with the BIOS buffer EMPTY, because keypad 5 never reaches
+`int 16h` (§9.6.4): only `kbm_poll0` spends its latched press, and a press left
+latched would arrive as a click on whatever is under the pointer once the menu
+had closed. The same call spends a pending overrun beep (§9.8).
 Left/Right to the neighbouring menu wants the bar to slide between titles,
 which is phase 4 of the plan, with the bar.
 
@@ -118967,7 +118985,9 @@ back stale pixels.
 
 A fourth radio, **Windows**, under Color at pane y 66; the animation group
 moves down 16; and the **Screen Saver** button moves to the right-hand column
-beside the animation radios, whose labels are short. The control ids are 1-4
+beside the animation radios, whose labels are short. Its rows are the Off
+radio's rows too, so `cp_thm_click` claims the button only INSIDE its
+rectangle and sends any other press to the groups. The control ids are 1-4
 the theme rows, 5-6 the animation pair, 7 the button. Windows is never
 greyed on kern_big: whether `WIN95.DRV` can be read is a mount and a search,
 and §47 rule 3's only honest test is doing it — so a refusal is a toast and
