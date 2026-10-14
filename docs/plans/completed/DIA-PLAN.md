@@ -21,8 +21,8 @@ measured ones are §107.6's.
 | `dia_boot_x`, far | `dia_boot`, near (both ends `.cold`) | §107.9 |
 | a save is one full `OSAPI_FILE_GOTO` per path component | one full mount, then `OSAPI_FILE_GOTO_QM`; and it asks whether the disk is still HOME first | §107.5.1 |
 | register only on `OPEN = 0` | register on EVERY launch, whatever the state file said | §107.5 |
-| the day field `dd*`, glyph 7 as a bullet | `[mark][d][d]` with a `*` (glyph 7 is outside the kernel font) | §107.3 |
-| agenda 5 lines at pitch 10, a tab row on COMPACT | 7 / 4 lines at pitch 8, no tab row; the entry field takes a heading's place | §107.3 |
+| the day field `dd*`, glyph 7 as a bullet | `[ ][d][d][m]` with a `*` hard against the number (glyph 7 is outside the kernel font; wave 2's `[mark][d][d]` read `15*16` as either day's, so the polish pass added the blank and the window grew to 234) | §107.3, §107.9 |
+| agenda 5 lines at pitch 10, a tab row on COMPACT | 7 / 4 lines, at pitch 10 on TALL and 9 on COMPACT (wave 3's pitch 8 until the polish pass), no tab row; the entry field takes a heading's place | §107.3, §107.9 |
 | the layout chosen from `OSAPI_VIDEO`'s height | chosen from the CONTENT height the kernel gave the window | §107.3 |
 | `wm_fit` clamps "whatever is left" | the template is sized for the adapter BEFORE the create, and `dia_made` gives a pulled-up `y` back | §107.5.2 |
 | a save at the next 2 s tick | held while the user is mid-edit (`DIA_ONTICK`'s CF), so a burst is one save | §107.5 |
@@ -31,7 +31,7 @@ measured ones are §107.6's.
 | "set FIRED and dirty" | the FIRED marks owe saves the user did not cause - a launch that missed reminders, an unattended firing - and they are priced; an alert holds no save | §107.3, §107.5.2, §107.6 |
 | `deskcalremind`'s QEMU `make test-snd` + `sndcheck.py` arm | the tone asserted at `OSAPI_SND_TONE`'s registers on MartyPC, not off the speaker | §107.9 |
 | `Clock not set (no RTC)` | `No RTC - check the time` (the cell cannot say whether it was set) | §107.3 |
-| §9's `make diashot` fixture and the PR's screenshot set | not built in waves 0-4: the 1bpp pictures are `tests/deskcal1bpp.py --shots`'s, and the gates assert on pixels and on the state file instead; the set belongs to the pull request | §107.9 |
+| §9's `make diashot` fixture and the PR's screenshot set | no `make diashot`: the gates assert on pixels and on the state file, and the 1bpp pictures between sets are `tests/deskcal1bpp.py --shots`'s. The PR's set is `docs/dia/*.png`, twelve pictures made on MartyPC by a driver outside the tree and retaken after the polish pass | §107.9 |
 
 The rows that hold it: `t_dia` (fast); `diaboot`, `diamiss`, `diashort`,
 `diahiber`, `diaswap`, `diaregister`, `diamove`, `diamovecga`, `diaanchor`,

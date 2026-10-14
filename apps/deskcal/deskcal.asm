@@ -97,6 +97,8 @@ DC_ESZ      equ 32              ; the entry's buffer, its NUL in it: `HH:MM `
 DC_TPITCH   equ 13              ; a task row: the check box's height and one
                                 ; row of ground, so stacked boxes never touch
 DC_TBOX     equ 4               ; the box's x: inset off the window's frame
+DC_FIN      equ DC_TBOX         ; the entry field's inset, each side: the
+                                ; same 2-pixel line otherwise (SPEC.md 107.3)
 DC_AMARK    equ 6               ; an agenda line's reminder-mark cell
 DCS_APPT    equ 1               ; dc_selk: an appointment selected...
 DCS_TASK    equ 2               ; ...or a task
@@ -1689,6 +1691,11 @@ dc_askdel:
     je .q
     mov si, dc_s_qtask
 .q:
+    call OSAPI_WM_CLIP_CLEAR    ; the create recomposes the bar under any
+                                ; armed clip - dc_oncmd's field close or
+                                ; card repaint left ours armed - and the
+                                ; titles' cells would be recorded drawn and
+                                ; dropped, as dc_fire's were (SPEC.md 107.9)
     mov al, OS88UI_AYESNO
     mov bx, [dc_win]
     mov di, dc_delans
@@ -2085,6 +2092,10 @@ dc_ab4:     db 'SYSTEM\DIA  -  SPEC.md 107', 0
 %include "os88dia.inc"
 %if DC_TBOX + OS88UI_CKBOX != 16
   %error "deskcal: a task's box must end where its text run's cell 2 begins (dcdraw.inc)"
+%endif
+
+%if DC_FIN + LN_INSET > LN_CELL
+  %error "deskcal: the entry field's inset must leave its pen on content cell 1 (dc_frect)"
 %endif
 
 %if OS88LINE_SZ != 20 || OS88UI_CK_SIZE != 12

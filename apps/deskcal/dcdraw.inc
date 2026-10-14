@@ -124,7 +124,7 @@ dc_part:
     pop bx
     ret
 
-; dc_blank - dc_line := 26 spaces and its NUL; DI = dc_line. Keeps the rest
+; dc_blank - dc_line := DC_CELLS (29) spaces and its NUL; DI = dc_line. Keeps the rest
 dc_blank:
     push ax
     push cx
@@ -961,7 +961,7 @@ dc_aline:
     ret
 
 ; dc_afmt - appointment AL into dc_line: ` HH:MM! text`, `--:--` all day, the
-; mark `!` armed, `-` fired; 18 cells of its text. Keeps every register
+; mark `!` armed, `-` fired; DC_CELLS-8 (21) cells of its text. Keeps every register
 dc_afmt:
     push ax
     push cx
@@ -1432,7 +1432,10 @@ dc_fhead:
     ret
 
 ; dc_frect - the field's rect on the glass now (the window may have moved):
-; the content's width, from three rows above the heading to eight below
+; content x DC_FIN..DC_CW-1-DC_FIN - inset off the window's frame as the task
+; boxes are, and every column it leaves is the heading band's white - from
+; three rows above the heading to eight below. The pen is unmoved: os88line
+; rounds X1 + 3 up to the cell, 8 either way
 dc_frect:
     push ax
     call dc_fhead
@@ -1442,8 +1445,9 @@ dc_frect:
     add ax, 11
     mov [dc_ln + LN_Y2], ax
     mov ax, [dc_ox]
+    add ax, DC_FIN
     mov [dc_ln + LN_X1], ax
-    add ax, DC_CW - 1
+    add ax, DC_CW - 1 - 2 * DC_FIN
     mov [dc_ln + LN_X2], ax
     pop ax
     ret

@@ -30,6 +30,9 @@ Boot 1, a DAMAGED file (its appointment count is 60, past the table):
      (Yes, the default) takes it out of the file.
   E  a line whose text is 26 characters is REFUSED, not cut: `At most 25
      letters`, the field still open, and Esc shuts it with nothing written.
+  G  Calendar > Delete Item picked while the field is OPEN shuts it and asks
+     on a bar that is the question's own: nothing inked between its app
+     name and the clock (dc_fclose had left the clip armed, SPEC.md 107.9).
 
 Boot 2, a FULL table (48 appointments):
 
@@ -38,7 +41,8 @@ Boot 2, a FULL table (48 appointments):
 
 **BREAK IT ON PURPOSE**: make dc_parse refuse three digits and B's 08:15
 comes back all-day; take dc_check out of dc_entry and A opens the junk
-and never asks; drop the `jbe .fits` test and E's line is stored.
+and never asks; drop the `jbe .fits` test and E's line is stored; take the
+OSAPI_WM_CLIP_CLEAR out of dc_askdel and G reads 305 ink pixels.
 """
 import os
 import shutil
@@ -280,6 +284,38 @@ def boot_damaged(tmp):
         os88marty.guest_sleep(c.m, 3.0)
         check(c.raw() == before and not c.st() & DIA_S_DIRTY,
               "nothing was written")
+
+        print("G: Delete Item picked with the field OPEN asks on a clean bar")
+        # dc_oncmd shuts the field first, and dc_fclose ARMS the calendar's
+        # clip to redraw the heading; the question's create recomposes the
+        # bar under whatever clip is armed, and through ours every cell was
+        # recorded drawn and dropped - the `Calendar  Remind` titles stayed
+        # on the question's bar (SPEC.md 107.9). dc_askdel disarms first.
+        # With the toast and the disk widget down, everything right of the
+        # app name is ground
+        c.click_line(0)
+        c.key("Enter")
+        ui._wait(lambda: c.ed() != 0, "the field to open on line 0", 30)
+        os88marty.pace(c.m, 1.0)
+        ui.menu_pick("Calendar", "Delete Item")
+        ui._wait(lambda: len([w for w in ui.windows() if w.title == TITLE])
+                 == 2, "the Delete question (the field was open)", 30)
+        ui._wait(lambda: not ui.toast()[1] and not ui._byte("fpg_on"),
+                 "the toast and the disk widget to go", 30)
+        os88marty.pace(c.m, 1.0)
+        names = [mm for mm in ui.menus() if mm[0] == TITLE]
+        x1 = names[0][2] if names else 151
+        hx = ui._word("vid_clk_hx")
+        fw, fh, fb = c.m.fbuf(0)
+        inked = [(x, y) for y in range(2, 16) for x in range(x1 + 8, hx)
+                 if fb[3 * (y * fw + x)] < 128]
+        check(not inked, "the question's bar: nothing between its app name "
+              "and the clock (%d ink pixels%s)" % (len(inked),
+              ", first at %r" % (inked[0],) if inked else ""))
+        c.m.key("Escape")
+        ui._wait(lambda: len([w for w in ui.windows() if w.title == TITLE])
+                 == 1, "No to the Delete question", 30)
+        check(c.ed() == 0, "the pick shut the field (dc_ed %d)" % c.ed())
 
 
 def boot_full(tmp):

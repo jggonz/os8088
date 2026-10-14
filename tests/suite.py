@@ -8931,7 +8931,8 @@ SOAK = [
         "all-day first, the timed ones armed; Enter on a clicked line edits "
         "it in the field (09:30 Doctor, reminder kept); Del asks and Yes "
         "deletes; 26 characters are refused (`At most 25 letters`, nothing "
-        "written); and a full table of 48 greys New Appointment `(full)` and "
+        "written); Delete Item picked with the field open asks on a bar "
+        "with nothing right of the app name (SPEC.md 107.9); and a full table of 48 greys New Appointment `(full)` and "
         "answers N with `Calendar is full (48)`.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),

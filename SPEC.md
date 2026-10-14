@@ -169405,6 +169405,12 @@ of margin after Saturday's mark - exactly under the weekday row's ` Su  Mo
   except where the old day is today, whose inverse ground the white frame
   cut, or MARKED, whose star it cut, and whose number and mark are then
   re-run (the frame never touches the leading blank's glyph columns).
+  **On today the frame reads off-centre, and that is accepted**: its right
+  column is the mark cell's column 7, which is the inverse block's own last
+  column (black on black), while its left stands six ground columns short
+  of the block. Inversing the blank as well would make both sides flush at
+  no cost in calls, but would put the day before's star (its column 7,
+  middle row) against the block; which reads better is the owner's call.
 - **Every pixel is written once** in a full paint: a run per text row, a
   `gfx_fill` per gap between rows, one `gfx_hline` for the rule, and the
   lists below it (wave 3, below). No fill lies under a run. The one primitive drawn over
@@ -169494,7 +169500,12 @@ Calendar > New Appointment opens it for the selected day; `K` or New Task for
 the task list; `Enter` on a selected item opens it holding that item. The
 field takes the HEADING's place - the day heading for an appointment, the
 task heading for a task - with its frame on the rows round it (on COMPACT its
-top edge IS the rule, the same pixels), so opening it is one
+top edge IS the rule, the same pixels), INSET four columns off the window's
+frame each side (content x 4..227) as the task boxes are - at x 0..231 its
+sides and the frame read as one 2-pixel line - and the columns it leaves are
+the heading's own ground, so the inset costs no call and the pen (content
+cell 1, os88line rounding X1 + 3 up) and the 27 columns it shows are the
+same. So opening it is one
 `os88line_draw` over a heading whose first cell and gaps are already white,
 and closing it is the heading's run and the two gap rows it took. A
 keystroke is `os88line_edit`'s, which repaints the cell it changed (§83.1.1).
@@ -170078,7 +170089,7 @@ First registration and close each write SYSTEM.CFG once.
 
 | | image | bss | on disk (lz4) |
 |---|---:|---:|---:|
-| `DESKCAL.O88`, the polish pass | **13,152** | 2,941 | **11,205** - the same 11 clusters |
+| `DESKCAL.O88`, the polish pass | **13,168** (13,152 before its review: two clip clears and the field's inset are 13 bytes of code, which crossed a paragraph) | 2,941 | **11,211** (11,205) - the same 11 clusters |
 | `DESKCAL.O88`, wave 4 | 13,072 (13,056 before the completeness pass, 13,024 before the review fixes) | 2,909 | 11,141 (11,120; 11,111) |
 | `DESKCAL.O88`, wave 3 | 12,368 (12,160 before the review fixes) | 2,860 | 10,544 (10,411) |
 | `DESKCAL.O88`, wave 2 | 6,080 (5,808 before the review fixes) | 2,748 | 5,343 |
@@ -170481,6 +170492,22 @@ kern_small: the same `DESKCAL.O88` is on both kinds of system disk.
     with it, held by `t_dia`).
   - The template moved left to (336,40) - (335,40) under the snap - so the
     wider frame and its shadow still end left of the drive icons.
+  - **The Delete question had the alert's defect too**, on two paths the
+    first fix did not reach (the review of this pass, on MartyPC): a
+    Calendar > Delete Item pick while the entry field is open runs
+    `dc_fclose`, and one while the About card is up runs `dc_arm` and
+    `dc_all` - both leave the clip armed when `dc_askdel` calls
+    `os88ui_ask`, and the question's bar kept `Calendar  Remind` (305 ink
+    pixels right of its app name, against 0 with the field shut).
+    `dc_askdel` now disarms before it asks, which covers both, and
+    `dia_save` does the same before `DIA_DAMAGEDQ`'s question, which runs
+    in the same beat as `DIA_ONTICK` - the calendar's day rollover arms the
+    clip there (reasoned from the code; no row reaches that beat).
+    `deskcaledit` G is the gate, verified to read 305 with the clear taken
+    out of `dc_askdel`.
+  - **The entry field is inset as the boxes are**, content x 4..227 (§107.3):
+    it had the boxes' 2-pixel line against the frame on both sides. No call
+    and no visible column of text is spent - the pen stays on cell 1.
 
 ### 107.10 How it was built, and its gates
 
@@ -170534,7 +170561,7 @@ no fixture, because what is on it is what a user has:
 
 | row | asserts |
 |---|---|
-| `deskcaledit` | MartyPC's VGA XT, the clock at 2026-10-14. A DAMAGED state file opens empty and its first edit puts `Replace damaged calendar?` up with the file on A: the fixture byte for byte, until Yes; `9:30 Dentist`, `1230 Lunch`, `815 Gym` and `Mum's birthday` are four appointments IN ORDER, all-day first and the three timed ones armed (H:MM, HHMM and HMM each by what the guest wrote); a clicked line and Enter open the field holding `09:30 Dentist`, and `Doctor` keeps the reminder; Del asks, Yes deletes; 26 characters are refused (`At most 25 letters`, the field still open, nothing written). A second boot with 48 appointments: New Appointment greyed `(full)`, `N` answering `Calendar is full (48)` |
+| `deskcaledit` | MartyPC's VGA XT, the clock at 2026-10-14. A DAMAGED state file opens empty and its first edit puts `Replace damaged calendar?` up with the file on A: the fixture byte for byte, until Yes; `9:30 Dentist`, `1230 Lunch`, `815 Gym` and `Mum's birthday` are four appointments IN ORDER, all-day first and the three timed ones armed (H:MM, HHMM and HMM each by what the guest wrote); a clicked line and Enter open the field holding `09:30 Dentist`, and `Doctor` keeps the reminder; Del asks, Yes deletes; 26 characters are refused (`At most 25 letters`, the field still open, nothing written); Calendar > Delete Item picked with the field OPEN shuts it and asks on a bar with nothing inked between the question's app name and the clock (§107.9's polish pass; 305 ink pixels without `dc_askdel`'s clear). A second boot with 48 appointments: New Appointment greyed `(full)`, `N` answering `Calendar is full (48)` |
 | `deskcaltask` | MartyPC's Hercules 5150 (TALL, a 1bpp framebuffer it reads whole). Three typed tasks in order, their boxes four ground columns off the window's frame with a ground row under each; Clear Done greyed `(none done)`; a click on a box checks it and the window differs in the 6x6 mark and nothing else, with ZERO runs through the package's own `dc_run` (a breakpoint counter at the label a NASM map of the running image names; selecting a row, two runs, is its control); Space on the selected task the same; Clear Done Tasks leaves the unchecked one; Del and Yes empty the list; and a PAGED list (six tasks): a delete that ends paging starts the list at its top, and a pager that goes away is erased - row 4 ground, every pixel |
 
 Both are verified to fail on a broken build: a parser that refuses three

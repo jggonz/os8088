@@ -684,6 +684,9 @@ dia_save:
     push si
     push di
     push es
+    call OSAPI_WM_CLIP_CLEAR    ; DIA_ONTICK may have left a clip armed this
+                                ; beat, and the alert's create recomposes
+                                ; the bar through it (SPEC.md 107.9)
     mov ax, KERNEL_SEG          ; os88ui_ask reads our window's title out of
     mov es, ax                  ; the record, in KERNEL_SEG
     mov al, OS88UI_AYESNO
