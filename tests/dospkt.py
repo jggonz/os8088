@@ -105,11 +105,25 @@ def main():
                  "did not ask for it")
         say("dospkt: ETHER.DRV at %04X" % seg)
 
+        # **THE SEGMENT IS RE-READ ON EVERY READ.** A driver image is a
+        # movable claim (SPEC.md 66.6.3), and the DOS box's arena is exactly
+        # the claim that moves it: read once at the top, every counter below
+        # came out of the image's VACATED copy - eth_raw 199, 21,254 frames
+        # "received" against the probe's own STATS of two - which satisfied
+        # assertions 2 and 3 with garbage and failed assertion 4 on it
+        # (2026-10-14). drv_tab's row is the one place that follows a move.
+        def live():
+            s = drvseg()
+            if not s:                   # unloaded: segment 0 is the IVT,
+                fail("ETHER.DRV's drv_tab row is empty - the driver was "
+                     "unloaded under the program")    # whose bytes are never 0
+            return s
+
         def dw(name):
-            return eth.u16(m.readseg(seg, syms[name], 2))
+            return eth.u16(m.readseg(live(), syms[name], 2))
 
         def db(name):
-            return m.readseg(seg, syms[name], 1)[0]
+            return m.readseg(live(), syms[name], 1)[0]
 
         mac = m.readseg(seg, syms["eth_mac"], 6)
         say("dospkt: station address %s" % ":".join("%02X" % b for b in mac))
@@ -133,8 +147,8 @@ def main():
                        secs=60, what="a raw frame each way", poll=0.5)
         ntx, nrx = dw("eth_nrawtx"), dw("eth_nraw")
 
-        say("dospkt: raw frames out %d, in %d, claim held %d"
-            % (ntx, nrx, db("eth_raw")))
+        say("dospkt: raw frames out %d, in %d, claim held %d (ETHER.DRV at "
+            "%04X now)" % (ntx, nrx, db("eth_raw"), drvseg()))
         # The door-call count is what tells "the driver answered wrongly"
         # from "nobody is calling it", and the two are indistinguishable from
         # inside the guest. It is printed rather than asserted: the poll rate

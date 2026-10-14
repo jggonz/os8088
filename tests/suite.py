@@ -2702,11 +2702,12 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("shedrelist", "soak", py("tests/shedrelist.py"), 20.0,
         "SPEC.md 50.6: a Disk window whose listing cache the SHED took "
-        "re-lists on its next focus. On the 128KB machine Gorillas' launch "
-        "sheds the GAMES window's store; the re-list named its destination "
+        "re-lists on its next focus. On the 128KB machine Missile running and "
+        "then Gorillas' launch shed the GAMES window's store (Gorillas alone "
+        "stopped reaching the case after the 2026-10 size passes); the re-list named its destination "
         "before fmv_fit re-claimed it, so the window read 'Drive B: 0 files' "
         "until Refresh (a field report). Red with fmv_load's `call fmv_fit` "
-        "taken out: 0 of 14 entries after the raise.",
+        "taken out: 0 of 10 entries after the raise.",
         needs=("marty",), serial=True,
         wants=("build/small360.img", "build/smallapps360.img",
                "build/smallk/kernel.bin")),
